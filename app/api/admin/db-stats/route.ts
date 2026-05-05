@@ -2,18 +2,11 @@
 import { NextResponse } from 'next/server'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
-import { db } from '@/lib/db/client'
-import {
-  ohlcv,
-  screenerSnapshots,
-  hexStages,
-  tvIndicators,
-} from '@/lib/db/schema'
-import { sql } from 'drizzle-orm'
+import { execGet, isCloud } from '@/lib/db/client'
 
 export const dynamic = 'force-dynamic'
 
-const DB_PATH = path.join(process.cwd(), 'data', 'stockboard.db')
+const LOCAL_DB_PATH = path.join(process.cwd(), 'data', 'stockboard.db')
 const SNAPSHOT_DIR = path.join(process.cwd(), 'data', 'snapshots')
 
 interface TableStat {
@@ -22,21 +15,14 @@ interface TableStat {
   latestDate?: string
 }
 
-async function countTable(name: string, table: any, dateColumn?: string): Promise<TableStat> {
+async function countTable(name: string, dateColumn?: string): Promise<TableStat> {
   try {
-    const countResult = (db
-      .select({ c: sql<number>`count(*)` })
-      .from(table)
-      .all() as { c: number }[])[0]
-    const count = countResult?.c ?? 0
-
+    const countRes = await execGet<{ c: number }>(`SELECT COUNT(*) AS c FROM ${name}`)
+    const count = countRes?.c ?? 0
     let latestDate: string | undefined
     if (dateColumn && count > 0) {
-      const latest = (db
-        .select({ d: sql<string>`max(${sql.identifier(dateColumn)})` })
-        .from(table)
-        .all() as { d: string | null }[])[0]
-      latestDate = latest?.d ?? undefined
+      const r = await execGet<{ d: string | null }>(`SELECT MAX(${dateColumn}) AS d FROM ${name}`)
+      latestDate = r?.d ?? undefined
     }
     return { name, count, latestDate }
   } catch {
@@ -44,9 +30,9 @@ async function countTable(name: string, table: any, dateColumn?: string): Promis
   }
 }
 
-async function getDbSize(): Promise<number> {
+async function getLocalDbSize(): Promise<number> {
   try {
-    const stat = await fs.stat(DB_PATH)
+    const stat = await fs.stat(LOCAL_DB_PATH)
     return stat.size
   } catch {
     return 0
@@ -65,22 +51,25 @@ async function listSnapshots(): Promise<string[]> {
 export async function GET() {
   try {
     const tables: TableStat[] = await Promise.all([
-      countTable('ohlcv', ohlcv, 'date'),
-      countTable('screener_snapshots', screenerSnapshots, 'date'),
-      countTable('hex_stages', hexStages, 'date'),
-      countTable('tv_indicators', tvIndicators, 'date'),
+      countTable('ohlcv', 'date'),
+      countTable('screener_snapshots', 'date'),
+      countTable('hex_stages', 'date'),
+      countTable('tv_indicators', 'date'),
+      countTable('tv_daily_snapshots', 'date'),
+      countTable('csv_imports', 'date'),
     ])
 
     const totalCount = tables.reduce((sum, t) => sum + t.count, 0)
-    const dbSize = await getDbSize()
+    const dbSize = isCloud ? 0 : await getLocalDbSize()
     const snapshots = await listSnapshots()
 
     return NextResponse.json({
       tables,
       totalRecords: totalCount,
-      dbPath: DB_PATH,
+      dbPath: isCloud ? 'Turso (cloud)' : LOCAL_DB_PATH,
       dbSizeBytes: dbSize,
       dbSizeMB: (dbSize / 1024 / 1024).toFixed(2),
+      isCloud,
       snapshotFiles: snapshots,
       snapshotCount: snapshots.length,
     })

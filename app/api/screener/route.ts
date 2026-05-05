@@ -8,7 +8,7 @@
 // 軸内は OR、軸間は AND で絞り込む。
 
 import { NextRequest, NextResponse } from 'next/server'
-import { sqlite } from '@/lib/db/client'
+import { execAll, execGet } from '@/lib/db/client'
 import { getTickersByMarket } from '@/lib/master/tickers'
 import { calculateAllStages, type MaValues } from '@/lib/hex-stage'
 
@@ -98,17 +98,13 @@ const STAGE_PARAM_MAP: Record<string, typeof STAGE_KEYS[number]> = {
   monthly_b: 'monthly_b_stage',
 }
 
-function latestSnapshotDate(): string | null {
-  const row = sqlite
-    .prepare<unknown[], { d: string | null }>(`SELECT MAX(date) AS d FROM tv_daily_snapshots`)
-    .get()
+async function latestSnapshotDate(): Promise<string | null> {
+  const row = await execGet<{ d: string | null }>(`SELECT MAX(date) AS d FROM tv_daily_snapshots`)
   return row?.d ?? null
 }
 
-function loadSnapshotByDate(date: string): SnapshotRow[] {
-  return sqlite
-    .prepare<unknown[], SnapshotRow>(`SELECT * FROM tv_daily_snapshots WHERE date = ?`)
-    .all(date)
+async function loadSnapshotByDate(date: string): Promise<SnapshotRow[]> {
+  return execAll<SnapshotRow>(`SELECT * FROM tv_daily_snapshots WHERE date = ?`, [date])
 }
 
 function pctAngle(curr: number | null, prev: number | null): number | null {
@@ -187,7 +183,7 @@ export async function GET(request: NextRequest) {
       })
     }
 
-    const date = requestedDate ?? latestSnapshotDate()
+    const date = requestedDate ?? (await latestSnapshotDate())
     if (!date) {
       return NextResponse.json({
         results: [],
@@ -213,7 +209,7 @@ export async function GET(request: NextRequest) {
       if (stages.length > 0) stageFilter[key] = Array.from(new Set(stages)).sort()
     }
 
-    const snapshots = loadSnapshotByDate(date)
+    const snapshots = await loadSnapshotByDate(date)
     const universe = snapshots.length
     const built = snapshots
       .map(buildResultRow)

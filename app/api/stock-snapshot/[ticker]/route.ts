@@ -2,7 +2,7 @@
 // 個別銘柄の最新スナップショット情報（決算日など）を返す。
 
 import { NextResponse } from 'next/server'
-import { sqlite } from '@/lib/db/client'
+import { execGet } from '@/lib/db/client'
 
 export const dynamic = 'force-dynamic'
 
@@ -21,15 +21,14 @@ export async function GET(
   const { ticker: rawTicker } = await context.params
   const ticker = decodeURIComponent(rawTicker)
 
-  const row = sqlite
-    .prepare<unknown[], Row>(
-      `SELECT date, ticker, name, earnings_last_date, earnings_next_date
-       FROM tv_daily_snapshots
-       WHERE ticker = ?
-       ORDER BY date DESC
-       LIMIT 1`,
-    )
-    .get(ticker)
+  const row = await execGet<Row>(
+    `SELECT date, ticker, name, earnings_last_date, earnings_next_date
+     FROM tv_daily_snapshots
+     WHERE ticker = ?
+     ORDER BY date DESC
+     LIMIT 1`,
+    [ticker],
+  )
 
   if (!row) {
     return NextResponse.json({

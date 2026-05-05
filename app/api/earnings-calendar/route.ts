@@ -5,7 +5,7 @@
 //   - past: true なら過去の決算（前回決算）も含める（デフォルト false）
 
 import { NextRequest, NextResponse } from 'next/server'
-import { sqlite } from '@/lib/db/client'
+import { execAll, execGet } from '@/lib/db/client'
 import { findTicker } from '@/lib/master/tickers'
 import { calculateAllStages, type MaValues } from '@/lib/hex-stage'
 
@@ -78,9 +78,7 @@ export async function GET(request: NextRequest) {
     const daysFwd = Math.max(1, Math.min(120, Number(searchParams.get('days') ?? 30)))
     const includePast = searchParams.get('past') === 'true'
 
-    const latest = sqlite
-      .prepare<unknown[], { d: string | null }>(`SELECT MAX(date) AS d FROM tv_daily_snapshots`)
-      .get()
+    const latest = await execGet<{ d: string | null }>(`SELECT MAX(date) AS d FROM tv_daily_snapshots`)
     const baseDate = latest?.d
     if (!baseDate) {
       return NextResponse.json({
@@ -96,17 +94,16 @@ export async function GET(request: NextRequest) {
     const fromDate = today
     const toDate = offsetDate(today, daysFwd)
 
-    const rows = sqlite
-      .prepare<unknown[], SnapshotRow>(
-        `SELECT ticker, name, price, market_cap,
-                earnings_last_date, earnings_next_date,
-                sma_5d, sma_25d, sma_75d, sma_150d, sma_300d,
-                sma_5w, sma_13w, sma_25w, sma_50w, sma_100w,
-                sma_3m, sma_5m, sma_10m, sma_20m, sma_25m
-         FROM tv_daily_snapshots
-         WHERE date = ?`,
-      )
-      .all(baseDate)
+    const rows = await execAll<SnapshotRow>(
+      `SELECT ticker, name, price, market_cap,
+              earnings_last_date, earnings_next_date,
+              sma_5d, sma_25d, sma_75d, sma_150d, sma_300d,
+              sma_5w, sma_13w, sma_25w, sma_50w, sma_100w,
+              sma_3m, sma_5m, sma_10m, sma_20m, sma_25m
+       FROM tv_daily_snapshots
+       WHERE date = ?`,
+      [baseDate],
+    )
 
     const entries: EarningsEntry[] = []
     for (const r of rows) {

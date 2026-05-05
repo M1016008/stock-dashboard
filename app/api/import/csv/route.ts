@@ -4,8 +4,8 @@
 // date 未指定の場合はファイル名から自動検出、それも失敗したら今日の日付を使用。
 
 import { NextResponse } from 'next/server'
-import { sqlite } from '@/lib/db/client'
-import { parseTradingViewCsv, detectDateFromFileName } from '@/lib/csv/tradingview-parser'
+import { execAll, execBatch, execRun, ensureReady } from '@/lib/db/client'
+import { parseTradingViewCsv, detectDateFromFileName, type ParsedRow } from '@/lib/csv/tradingview-parser'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 120
@@ -23,8 +23,81 @@ function todayStr(): string {
   return new Date().toISOString().split('T')[0]
 }
 
+const UPSERT_SQL = `INSERT INTO tv_daily_snapshots (
+  date, ticker, name, price, currency, change_percent_1d, volume_1d,
+  avg_volume_10d, avg_volume_30d, market_cap, market_cap_currency,
+  per, dividend_yield_pct,
+  perf_pct_1w, perf_pct_1m, perf_pct_3m, perf_pct_6m, perf_pct_ytd,
+  sma_5d, sma_25d, sma_75d, sma_150d, sma_300d,
+  sma_5w, sma_13w, sma_25w, sma_50w, sma_100w,
+  sma_3m, sma_5m, sma_10m, sma_20m, sma_25m,
+  earnings_last_date, earnings_next_date,
+  imported_at, source_file
+) VALUES (
+  ?, ?, ?, ?, ?, ?, ?,
+  ?, ?, ?, ?,
+  ?, ?,
+  ?, ?, ?, ?, ?,
+  ?, ?, ?, ?, ?,
+  ?, ?, ?, ?, ?,
+  ?, ?, ?, ?, ?,
+  ?, ?,
+  ?, ?
+)
+ON CONFLICT(date, ticker) DO UPDATE SET
+  name=excluded.name,
+  price=excluded.price,
+  currency=excluded.currency,
+  change_percent_1d=excluded.change_percent_1d,
+  volume_1d=excluded.volume_1d,
+  avg_volume_10d=excluded.avg_volume_10d,
+  avg_volume_30d=excluded.avg_volume_30d,
+  market_cap=excluded.market_cap,
+  market_cap_currency=excluded.market_cap_currency,
+  per=excluded.per,
+  dividend_yield_pct=excluded.dividend_yield_pct,
+  perf_pct_1w=excluded.perf_pct_1w,
+  perf_pct_1m=excluded.perf_pct_1m,
+  perf_pct_3m=excluded.perf_pct_3m,
+  perf_pct_6m=excluded.perf_pct_6m,
+  perf_pct_ytd=excluded.perf_pct_ytd,
+  sma_5d=excluded.sma_5d,
+  sma_25d=excluded.sma_25d,
+  sma_75d=excluded.sma_75d,
+  sma_150d=excluded.sma_150d,
+  sma_300d=excluded.sma_300d,
+  sma_5w=excluded.sma_5w,
+  sma_13w=excluded.sma_13w,
+  sma_25w=excluded.sma_25w,
+  sma_50w=excluded.sma_50w,
+  sma_100w=excluded.sma_100w,
+  sma_3m=excluded.sma_3m,
+  sma_5m=excluded.sma_5m,
+  sma_10m=excluded.sma_10m,
+  sma_20m=excluded.sma_20m,
+  sma_25m=excluded.sma_25m,
+  earnings_last_date=excluded.earnings_last_date,
+  earnings_next_date=excluded.earnings_next_date,
+  imported_at=excluded.imported_at,
+  source_file=excluded.source_file`
+
+function rowArgs(date: string, r: ParsedRow, importedAt: string, sourceFile: string) {
+  return [
+    date, r.ticker, r.name, r.price, r.currency, r.changePercent1d, r.volume1d,
+    r.avgVolume10d, r.avgVolume30d, r.marketCap, r.marketCapCurrency,
+    r.per, r.dividendYieldPct,
+    r.perfPct1w, r.perfPct1m, r.perfPct3m, r.perfPct6m, r.perfPctYtd,
+    r.sma5d, r.sma25d, r.sma75d, r.sma150d, r.sma300d,
+    r.sma5w, r.sma13w, r.sma25w, r.sma50w, r.sma100w,
+    r.sma3m, r.sma5m, r.sma10m, r.sma20m, r.sma25m,
+    r.earningsLastDate, r.earningsNextDate,
+    importedAt, sourceFile,
+  ]
+}
+
 export async function POST(request: Request) {
   try {
+    await ensureReady()
     const formData = await request.formData()
     const files = formData.getAll('files').filter((f): f is File => f instanceof File)
     const manualDate = formData.get('date')
@@ -64,90 +137,21 @@ export async function POST(request: Request) {
 
       if (parsed.errors.length === 0 && parsed.rows.length > 0 && date) {
         const importedAt = new Date().toISOString()
-        const insert = sqlite.prepare(
-          `INSERT INTO tv_daily_snapshots (
-            date, ticker, name, price, currency, change_percent_1d, volume_1d,
-            avg_volume_10d, avg_volume_30d, market_cap, market_cap_currency,
-            per, dividend_yield_pct,
-            perf_pct_1w, perf_pct_1m, perf_pct_3m, perf_pct_6m, perf_pct_ytd,
-            sma_5d, sma_25d, sma_75d, sma_150d, sma_300d,
-            sma_5w, sma_13w, sma_25w, sma_50w, sma_100w,
-            sma_3m, sma_5m, sma_10m, sma_20m, sma_25m,
-            earnings_last_date, earnings_next_date,
-            imported_at, source_file
-          ) VALUES (
-            ?, ?, ?, ?, ?, ?, ?,
-            ?, ?, ?, ?,
-            ?, ?,
-            ?, ?, ?, ?, ?,
-            ?, ?, ?, ?, ?,
-            ?, ?, ?, ?, ?,
-            ?, ?, ?, ?, ?,
-            ?, ?,
-            ?, ?
+        // libsql の batch は暗黙的にトランザクション。500行ずつで分割。
+        const CHUNK = 500
+        for (let i = 0; i < parsed.rows.length; i += CHUNK) {
+          const slice = parsed.rows.slice(i, i + CHUNK)
+          await execBatch(
+            slice.map((r) => ({ sql: UPSERT_SQL, args: rowArgs(date!, r, importedAt, file.name) })),
           )
-          ON CONFLICT(date, ticker) DO UPDATE SET
-            name=excluded.name,
-            price=excluded.price,
-            currency=excluded.currency,
-            change_percent_1d=excluded.change_percent_1d,
-            volume_1d=excluded.volume_1d,
-            avg_volume_10d=excluded.avg_volume_10d,
-            avg_volume_30d=excluded.avg_volume_30d,
-            market_cap=excluded.market_cap,
-            market_cap_currency=excluded.market_cap_currency,
-            per=excluded.per,
-            dividend_yield_pct=excluded.dividend_yield_pct,
-            perf_pct_1w=excluded.perf_pct_1w,
-            perf_pct_1m=excluded.perf_pct_1m,
-            perf_pct_3m=excluded.perf_pct_3m,
-            perf_pct_6m=excluded.perf_pct_6m,
-            perf_pct_ytd=excluded.perf_pct_ytd,
-            sma_5d=excluded.sma_5d,
-            sma_25d=excluded.sma_25d,
-            sma_75d=excluded.sma_75d,
-            sma_150d=excluded.sma_150d,
-            sma_300d=excluded.sma_300d,
-            sma_5w=excluded.sma_5w,
-            sma_13w=excluded.sma_13w,
-            sma_25w=excluded.sma_25w,
-            sma_50w=excluded.sma_50w,
-            sma_100w=excluded.sma_100w,
-            sma_3m=excluded.sma_3m,
-            sma_5m=excluded.sma_5m,
-            sma_10m=excluded.sma_10m,
-            sma_20m=excluded.sma_20m,
-            sma_25m=excluded.sma_25m,
-            earnings_last_date=excluded.earnings_last_date,
-            earnings_next_date=excluded.earnings_next_date,
-            imported_at=excluded.imported_at,
-            source_file=excluded.source_file
-          `,
-        )
-
-        const tx = sqlite.transaction((rows: typeof parsed.rows) => {
-          for (const r of rows) {
-            insert.run(
-              date, r.ticker, r.name, r.price, r.currency, r.changePercent1d, r.volume1d,
-              r.avgVolume10d, r.avgVolume30d, r.marketCap, r.marketCapCurrency,
-              r.per, r.dividendYieldPct,
-              r.perfPct1w, r.perfPct1m, r.perfPct3m, r.perfPct6m, r.perfPctYtd,
-              r.sma5d, r.sma25d, r.sma75d, r.sma150d, r.sma300d,
-              r.sma5w, r.sma13w, r.sma25w, r.sma50w, r.sma100w,
-              r.sma3m, r.sma5m, r.sma10m, r.sma20m, r.sma25m,
-              r.earningsLastDate, r.earningsNextDate,
-              importedAt, file.name,
-            )
-          }
-        })
-        tx(parsed.rows)
-
+        }
         summary.rowsInserted = parsed.rows.length
 
-        sqlite.prepare(
+        await execRun(
           `INSERT INTO csv_imports (date, file_name, row_count, imported_at, detection_method)
            VALUES (?, ?, ?, ?, ?)`,
-        ).run(date, file.name, summary.rowsInserted, importedAt, method)
+          [date, file.name, summary.rowsInserted, importedAt, method],
+        )
       }
 
       summaries.push(summary)
@@ -165,23 +169,19 @@ export async function POST(request: Request) {
 
 export async function GET() {
   try {
-    const recent = sqlite
-      .prepare(
-        `SELECT id, date, file_name, row_count, imported_at, detection_method
-         FROM csv_imports
-         ORDER BY imported_at DESC
-         LIMIT 50`,
-      )
-      .all()
-    const summary = sqlite
-      .prepare(
-        `SELECT date, COUNT(*) AS tickers
-         FROM tv_daily_snapshots
-         GROUP BY date
-         ORDER BY date DESC
-         LIMIT 60`,
-      )
-      .all()
+    const recent = await execAll(
+      `SELECT id, date, file_name, row_count, imported_at, detection_method
+       FROM csv_imports
+       ORDER BY imported_at DESC
+       LIMIT 50`,
+    )
+    const summary = await execAll(
+      `SELECT date, COUNT(*) AS tickers
+       FROM tv_daily_snapshots
+       GROUP BY date
+       ORDER BY date DESC
+       LIMIT 60`,
+    )
     return NextResponse.json({ imports: recent, dates: summary })
   } catch (error) {
     console.error('list imports error:', error)

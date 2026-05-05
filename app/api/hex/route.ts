@@ -3,7 +3,7 @@
 // 前週/前々週のステージとSMA角度は、過去のCSVスナップショットがDBに存在すれば自動的に埋まる。
 
 import { NextRequest, NextResponse } from 'next/server'
-import { sqlite } from '@/lib/db/client'
+import { execAll, execGet } from '@/lib/db/client'
 import { findTicker, getSectorLarge } from '@/lib/master/tickers'
 import {
   calculateAllStages,
@@ -111,26 +111,21 @@ const ALL_FIELDS = `
   sma_3m, sma_5m, sma_10m, sma_20m, sma_25m
 `
 
-function loadSnapshotsForDate(date: string): SnapshotRow[] {
-  return sqlite
-    .prepare<unknown[], SnapshotRow>(`SELECT ${ALL_FIELDS} FROM tv_daily_snapshots WHERE date = ?`)
-    .all(date)
+async function loadSnapshotsForDate(date: string): Promise<SnapshotRow[]> {
+  return execAll<SnapshotRow>(`SELECT ${ALL_FIELDS} FROM tv_daily_snapshots WHERE date = ?`, [date])
 }
 
 /** date より前にある日付のうち最も近いものを返す。無ければ null。 */
-function prevDate(beforeDate: string): string | null {
-  const r = sqlite
-    .prepare<unknown[], { d: string | null }>(
-      `SELECT date AS d FROM tv_daily_snapshots WHERE date < ? GROUP BY date ORDER BY date DESC LIMIT 1`,
-    )
-    .get(beforeDate)
+async function prevDate(beforeDate: string): Promise<string | null> {
+  const r = await execGet<{ d: string | null }>(
+    `SELECT date AS d FROM tv_daily_snapshots WHERE date < ? GROUP BY date ORDER BY date DESC LIMIT 1`,
+    [beforeDate],
+  )
   return r?.d ?? null
 }
 
-function latestSnapshotDate(): string | null {
-  const row = sqlite
-    .prepare<unknown[], { d: string | null }>(`SELECT MAX(date) AS d FROM tv_daily_snapshots`)
-    .get()
+async function latestSnapshotDate(): Promise<string | null> {
+  const row = await execGet<{ d: string | null }>(`SELECT MAX(date) AS d FROM tv_daily_snapshots`)
   return row?.d ?? null
 }
 
@@ -160,7 +155,7 @@ export async function GET(request: NextRequest) {
       })
     }
 
-    const date = requestedDate ?? latestSnapshotDate()
+    const date = requestedDate ?? (await latestSnapshotDate())
     if (!date) {
       return NextResponse.json({
         success: true,
@@ -174,11 +169,11 @@ export async function GET(request: NextRequest) {
       })
     }
 
-    const current = loadSnapshotsForDate(date)
-    const prev1Date = prevDate(date)
-    const prev2Date = prev1Date ? prevDate(prev1Date) : null
-    const prev1Map = prev1Date ? indexByTicker(loadSnapshotsForDate(prev1Date)) : new Map<string, SnapshotRow>()
-    const prev2Map = prev2Date ? indexByTicker(loadSnapshotsForDate(prev2Date)) : new Map<string, SnapshotRow>()
+    const current = await loadSnapshotsForDate(date)
+    const prev1Date = await prevDate(date)
+    const prev2Date = prev1Date ? await prevDate(prev1Date) : null
+    const prev1Map = prev1Date ? indexByTicker(await loadSnapshotsForDate(prev1Date)) : new Map<string, SnapshotRow>()
+    const prev2Map = prev2Date ? indexByTicker(await loadSnapshotsForDate(prev2Date)) : new Map<string, SnapshotRow>()
 
     const rows: HexStock[] = current.map((s) => {
       const master = findTicker(s.ticker)
