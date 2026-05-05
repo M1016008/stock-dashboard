@@ -69,7 +69,7 @@ function todayStr(): string {
 }
 
 function snapshotPath(market: string): string {
-  return path.join(SNAPSHOT_DIR, `screener_v3_${market}_${todayStr()}.json`)
+  return path.join(SNAPSHOT_DIR, `screener_v4_${market}_${todayStr()}.json`)
 }
 
 async function loadSnapshot(market: string): Promise<ScreenerStockRow[] | null> {
@@ -103,13 +103,25 @@ function sma(values: number[]): number | undefined {
 
 /**
  * 直近の終値変化率（％）を計算する。
- * tradingDaysBack 営業日前の終値と、最新終値の差。
+ * 最新の取引日から calendarDaysBack 日前 (カレンダー日数) の日付を求め、
+ * その日付以前で最も新しい終値と最新終値を比較する。
+ * 祝日・連休によって営業日数が変動しても、銘柄間で比較条件が揃う。
  */
-function changeOver(history: OHLCV[], tradingDaysBack: number): number | undefined {
-  if (history.length <= tradingDaysBack) return undefined
-  const latest = history[history.length - 1]?.close
-  const past = history[history.length - 1 - tradingDaysBack]?.close
-  return pctChange(latest, past)
+function changeOver(history: OHLCV[], calendarDaysBack: number): number | undefined {
+  if (history.length < 2) return undefined
+  const latest = history[history.length - 1]
+  if (!latest) return undefined
+
+  const target = new Date(latest.date)
+  target.setUTCDate(target.getUTCDate() - calendarDaysBack)
+  const targetStr = target.toISOString().split('T')[0]
+
+  for (let i = history.length - 2; i >= 0; i--) {
+    if (history[i].date <= targetStr) {
+      return pctChange(latest.close, history[i].close)
+    }
+  }
+  return undefined
 }
 
 /**
@@ -146,8 +158,8 @@ async function fetchOne(t: MasterTicker): Promise<ScreenerStockRow | null> {
       sectorLarge: t.sectorLarge,
       price: quote.price,
       changePercent: quote.changePercent,
-      changePercentWeek: changeOver(history, 5),
-      changePercentMonth: changeOver(history, 21),
+      changePercentWeek: changeOver(history, 7),
+      changePercentMonth: changeOver(history, 30),
       volume: quote.volume,
       marketCap: quote.marketCap,
       per: fund.per,
