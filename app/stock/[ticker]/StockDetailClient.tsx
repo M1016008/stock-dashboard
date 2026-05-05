@@ -5,7 +5,6 @@ import { useEffect, useState } from 'react'
 import { MarketBadge } from '@/components/ui/MarketBadge'
 import { PriceDisplay } from '@/components/ui/PriceDisplay'
 import { TradingViewChart } from '@/components/charts/TradingViewChart'
-import { AddHoldingModal } from '@/components/portfolio/AddHoldingModal'
 import { PerformanceCard } from '@/components/stock/PerformanceCard'
 import { StageTimeline } from '@/components/stock/StageTimeline'
 import { findTicker } from '@/lib/master/tickers'
@@ -19,7 +18,6 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
   const [quote, setQuote] = useState<StockQuote | null>(null)
   const [fundamentals, setFundamentals] = useState<Fundamentals | null>(null)
   const [loading, setLoading] = useState(true)
-  const [showPortfolioModal, setShowPortfolioModal] = useState(false)
 
   const master = findTicker(ticker)
 
@@ -97,19 +95,6 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
             />
           )}
           {loading && <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>読込中...</span>}
-          <button onClick={() => setShowPortfolioModal(true)} style={{
-            padding: '6px 12px',
-            background: 'var(--accent-primary)',
-            color: '#fff',
-            border: 'none',
-            borderRadius: 'var(--radius-sm)',
-            fontSize: '11px',
-            fontFamily: 'var(--font-mono)',
-            fontWeight: 600,
-            cursor: 'pointer',
-          }}>
-            + ポートフォリオに追加
-          </button>
         </div>
       </div>
 
@@ -141,13 +126,6 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
         <StageTimeline ticker={ticker} />
       </div>
 
-      <AddHoldingModal
-        open={showPortfolioModal}
-        onClose={() => setShowPortfolioModal(false)}
-        fixedTicker={ticker}
-        fixedName={quote?.name ?? master?.name}
-        fixedMarket={market}
-      />
     </div>
   )
 }

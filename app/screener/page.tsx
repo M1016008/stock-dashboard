@@ -3,6 +3,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
+import { toTvSymbol, buildTvWatchlistText } from '@/lib/tv-format'
 
 type Market = 'JP' | 'US'
 type AxisKey = 'daily_a' | 'daily_b' | 'weekly_a' | 'weekly_b' | 'monthly_a' | 'monthly_b'
@@ -30,17 +31,43 @@ interface StockRow {
   sectorLarge: string
   price: number
   changePercent: number
+  changePercentWeek?: number
+  changePercentMonth?: number
+  volume: number
   marketCap?: number
   per?: number
   pbr?: number
   roe?: number
   dividendYield?: number
+  sma25Angle?: number
+  sma75Angle?: number
   daily_a_stage: number | null
   daily_b_stage: number | null
   weekly_a_stage: number | null
   weekly_b_stage: number | null
   monthly_a_stage: number | null
   monthly_b_stage: number | null
+}
+
+type SortKey =
+  | 'ticker'
+  | 'name'
+  | 'price'
+  | 'changePercent'
+  | 'changePercentWeek'
+  | 'changePercentMonth'
+  | 'volume'
+  | 'marketCap'
+  | 'per'
+  | 'pbr'
+  | 'roe'
+  | 'dividendYield'
+  | 'sma25Angle'
+  | 'sma75Angle'
+
+interface SortState {
+  key: SortKey
+  dir: 'asc' | 'desc'
 }
 
 export default function ScreenerPage() {
@@ -52,6 +79,8 @@ export default function ScreenerPage() {
   const [error, setError] = useState('')
   const [universe, setUniverse] = useState(0)
   const [cached, setCached] = useState(false)
+  const [sort, setSort] = useState<SortState | null>(null)
+  const [copiedTicker, setCopiedTicker] = useState<string | null>(null)
 
   const hasAnyStage = Object.values(stages).some((v) => v && v.length > 0)
 
@@ -92,6 +121,60 @@ export default function ScreenerPage() {
     }
     return parts.join(' AND ')
   }, [stages])
+
+  const sortedResults = useMemo(() => {
+    if (!sort) return results
+    const copy = [...results]
+    const dir = sort.dir === 'asc' ? 1 : -1
+    copy.sort((a, b) => {
+      const av = (a as unknown as Record<string, unknown>)[sort.key]
+      const bv = (b as unknown as Record<string, unknown>)[sort.key]
+      // null / undefined は常に末尾
+      if (av == null && bv == null) return 0
+      if (av == null) return 1
+      if (bv == null) return -1
+      if (typeof av === 'number' && typeof bv === 'number') {
+        return (av - bv) * dir
+      }
+      return String(av).localeCompare(String(bv), 'ja') * dir
+    })
+    return copy
+  }, [results, sort])
+
+  function toggleSort(key: SortKey) {
+    setSort((prev) => {
+      if (!prev || prev.key !== key) return { key, dir: 'desc' }
+      if (prev.dir === 'desc') return { key, dir: 'asc' }
+      return null
+    })
+  }
+
+  async function copyTvSymbol(ticker: string, ms: string) {
+    const sym = toTvSymbol(ticker, ms)
+    try {
+      await navigator.clipboard.writeText(sym)
+      setCopiedTicker(ticker)
+      setTimeout(() => setCopiedTicker((c) => (c === ticker ? null : c)), 1200)
+    } catch (e) {
+      console.error('clipboard write failed', e)
+    }
+  }
+
+  function downloadTvWatchlist() {
+    const symbols = sortedResults.map((r) => toTvSymbol(r.ticker, r.marketSegment))
+    const today = new Date().toISOString().split('T')[0]
+    const sectionName = `Screener_${market}_${segment ?? 'all'}_${today}`
+    const text = buildTvWatchlistText(symbols, sectionName)
+    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${sectionName}.txt`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  }
 
   return (
     <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -172,7 +255,6 @@ export default function ScreenerPage() {
           ))}
         </div>
 
-        {/* 選択中フィルタ条件表示 */}
         {hasAnyStage && (
           <div style={{
             marginTop: '12px',
@@ -188,7 +270,6 @@ export default function ScreenerPage() {
         )}
       </Section>
 
-      {/* 結果 */}
       {error && (
         <div className="card" style={{ padding: '12px', borderLeft: '3px solid var(--price-down)' }}>
           <p style={{ fontSize: '12px', color: 'var(--price-down)', margin: 0 }}>エラー: {error}</p>
@@ -211,13 +292,31 @@ export default function ScreenerPage() {
         </div>
       ) : (
         <div className="card" style={{ overflow: 'hidden' }}>
-          <div style={{ padding: '8px 12px', display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid var(--border-subtle)' }}>
+          <div style={{ padding: '8px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-subtle)', gap: '8px', flexWrap: 'wrap' }}>
             <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
-              <strong>{results.length}</strong>件 / 母集団 {universe}銘柄
+              <strong>{sortedResults.length}</strong>件 / 母集団 {universe}銘柄
               {cached && <span style={{ marginLeft: '6px', color: 'var(--accent-primary)' }}>（当日キャッシュ）</span>}
             </span>
+            <button
+              onClick={downloadTvWatchlist}
+              disabled={sortedResults.length === 0}
+              style={{
+                padding: '6px 12px',
+                fontSize: '11px',
+                background: sortedResults.length > 0 ? 'var(--accent-primary)' : 'var(--bg-surface)',
+                color: sortedResults.length > 0 ? '#fff' : 'var(--text-muted)',
+                border: `1px solid ${sortedResults.length > 0 ? 'var(--accent-primary)' : 'var(--border-base)'}`,
+                borderRadius: 'var(--radius-sm)',
+                cursor: sortedResults.length > 0 ? 'pointer' : 'not-allowed',
+                fontWeight: 600,
+                fontFamily: 'var(--font-mono)',
+              }}
+              title="TradingView の銘柄リストにインポートできる .txt をダウンロード"
+            >
+              📤 TVリストをダウンロード
+            </button>
           </div>
-          {results.length === 0 ? (
+          {sortedResults.length === 0 ? (
             <div style={{ padding: '32px', textAlign: 'center' }}>
               <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>該当する銘柄がありません</p>
             </div>
@@ -226,48 +325,87 @@ export default function ScreenerPage() {
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
                 <thead>
                   <tr style={{ background: 'var(--bg-elevated)', borderBottom: '1px solid var(--border-dim)' }}>
-                    <th style={th}>コード</th>
-                    <th style={th}>銘柄名</th>
-                    <th style={thR}>時価総額</th>
+                    <SortableTh label="コード"   sortKey="ticker"             current={sort} onClick={toggleSort} />
+                    <th style={th}>TV形式</th>
+                    <SortableTh label="銘柄名"   sortKey="name"               current={sort} onClick={toggleSort} />
+                    <SortableTh label="株価"     sortKey="price"              current={sort} onClick={toggleSort} align="right" />
+                    <SortableTh label="日%"      sortKey="changePercent"      current={sort} onClick={toggleSort} align="right" />
+                    <SortableTh label="週%"      sortKey="changePercentWeek"  current={sort} onClick={toggleSort} align="right" />
+                    <SortableTh label="月%"      sortKey="changePercentMonth" current={sort} onClick={toggleSort} align="right" />
+                    <SortableTh label="出来高"   sortKey="volume"             current={sort} onClick={toggleSort} align="right" />
+                    <SortableTh label="時価総額" sortKey="marketCap"          current={sort} onClick={toggleSort} align="right" />
                     <th style={th}>区分</th>
-                    <th style={thR}>PER</th>
-                    <th style={thR}>ROE</th>
-                    <th style={thR}>配当利回り</th>
-                    <th style={th}>ステージ (日A/B週A/B月A/B)</th>
+                    <SortableTh label="PER"      sortKey="per"                current={sort} onClick={toggleSort} align="right" />
+                    <SortableTh label="ROE"      sortKey="roe"                current={sort} onClick={toggleSort} align="right" />
+                    <SortableTh label="配当"     sortKey="dividendYield"      current={sort} onClick={toggleSort} align="right" />
+                    <SortableTh label="SMA25角"  sortKey="sma25Angle"         current={sort} onClick={toggleSort} align="right" />
+                    <SortableTh label="SMA75角"  sortKey="sma75Angle"         current={sort} onClick={toggleSort} align="right" />
+                    <th style={th}>ステージ (日A/B 週A/B 月A/B)</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {results.map((r) => (
-                    <tr key={r.ticker} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-                      <td style={td}>
-                        <Link href={`/stock/${encodeURIComponent(r.ticker)}`} style={{ color: 'var(--accent-primary)', fontFamily: 'var(--font-mono)', textDecoration: 'none', fontWeight: 600 }}>
-                          {r.ticker.replace('.T', '')}
-                        </Link>
-                      </td>
-                      <td style={td}>{r.name}</td>
-                      <td style={tdR}>{r.marketCap ? `${(r.marketCap / 1e8).toLocaleString('ja-JP', { maximumFractionDigits: 0 })} 億` : '---'}</td>
-                      <td style={td}>
-                        {r.marginType ? (
-                          <span style={{
-                            display: 'inline-block',
-                            padding: '1px 6px',
-                            fontSize: '10px',
-                            border: `1px solid ${r.marginType === '貸借' ? 'var(--accent-primary)' : 'var(--text-muted)'}`,
-                            color: r.marginType === '貸借' ? 'var(--accent-primary)' : 'var(--text-muted)',
-                            borderRadius: '2px',
-                          }}>
-                            {r.marginType}
-                          </span>
-                        ) : '---'}
-                      </td>
-                      <td style={tdR}>{r.per != null ? r.per.toFixed(1) : '---'}</td>
-                      <td style={tdR}>{r.roe != null ? `${r.roe.toFixed(1)}%` : '---'}</td>
-                      <td style={tdR}>{r.dividendYield != null ? `${r.dividendYield.toFixed(2)}%` : '---'}</td>
-                      <td style={{ ...td, fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
-                        {r.daily_a_stage ?? '-'}/{r.daily_b_stage ?? '-'} {r.weekly_a_stage ?? '-'}/{r.weekly_b_stage ?? '-'} {r.monthly_a_stage ?? '-'}/{r.monthly_b_stage ?? '-'}
-                      </td>
-                    </tr>
-                  ))}
+                  {sortedResults.map((r) => {
+                    const tv = toTvSymbol(r.ticker, r.marketSegment)
+                    const copied = copiedTicker === r.ticker
+                    return (
+                      <tr key={r.ticker} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                        <td style={td}>
+                          <Link href={`/stock/${encodeURIComponent(r.ticker)}`} style={{ color: 'var(--accent-primary)', fontFamily: 'var(--font-mono)', textDecoration: 'none', fontWeight: 600 }}>
+                            {r.ticker.replace('.T', '')}
+                          </Link>
+                        </td>
+                        <td style={td}>
+                          <button
+                            onClick={() => copyTvSymbol(r.ticker, r.marketSegment)}
+                            title={copied ? 'コピーしました' : `${tv} をクリップボードにコピー`}
+                            style={{
+                              padding: '2px 8px',
+                              fontSize: '11px',
+                              fontFamily: 'var(--font-mono)',
+                              fontWeight: 600,
+                              background: copied ? 'var(--price-up, #22c55e)' : 'var(--bg-elevated)',
+                              color: copied ? '#fff' : 'var(--text-secondary)',
+                              border: `1px solid ${copied ? 'var(--price-up, #22c55e)' : 'var(--border-base)'}`,
+                              borderRadius: 'var(--radius-sm)',
+                              cursor: 'pointer',
+                              transition: 'all 0.15s',
+                            }}
+                          >
+                            {copied ? '✓ コピー済み' : tv}
+                          </button>
+                        </td>
+                        <td style={td}>{r.name}</td>
+                        <td style={tdR}>{r.price?.toLocaleString('ja-JP', { maximumFractionDigits: 2 }) ?? '---'}</td>
+                        <td style={{ ...tdR, color: pctColor(r.changePercent) }}>{fmtPct(r.changePercent)}</td>
+                        <td style={{ ...tdR, color: pctColor(r.changePercentWeek) }}>{fmtPct(r.changePercentWeek)}</td>
+                        <td style={{ ...tdR, color: pctColor(r.changePercentMonth) }}>{fmtPct(r.changePercentMonth)}</td>
+                        <td style={tdR}>{r.volume?.toLocaleString('ja-JP') ?? '---'}</td>
+                        <td style={tdR}>{r.marketCap ? `${(r.marketCap / 1e8).toLocaleString('ja-JP', { maximumFractionDigits: 0 })} 億` : '---'}</td>
+                        <td style={td}>
+                          {r.marginType ? (
+                            <span style={{
+                              display: 'inline-block',
+                              padding: '1px 6px',
+                              fontSize: '10px',
+                              border: `1px solid ${r.marginType === '貸借' ? 'var(--accent-primary)' : 'var(--text-muted)'}`,
+                              color: r.marginType === '貸借' ? 'var(--accent-primary)' : 'var(--text-muted)',
+                              borderRadius: '2px',
+                            }}>
+                              {r.marginType}
+                            </span>
+                          ) : '---'}
+                        </td>
+                        <td style={tdR}>{r.per != null ? r.per.toFixed(1) : '---'}</td>
+                        <td style={tdR}>{r.roe != null ? `${r.roe.toFixed(1)}%` : '---'}</td>
+                        <td style={tdR}>{r.dividendYield != null ? `${r.dividendYield.toFixed(2)}%` : '---'}</td>
+                        <td style={{ ...tdR, color: pctColor(r.sma25Angle) }}>{fmtPct(r.sma25Angle)}</td>
+                        <td style={{ ...tdR, color: pctColor(r.sma75Angle) }}>{fmtPct(r.sma75Angle)}</td>
+                        <td style={{ ...td, fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
+                          {r.daily_a_stage ?? '-'}/{r.daily_b_stage ?? '-'} {r.weekly_a_stage ?? '-'}/{r.weekly_b_stage ?? '-'} {r.monthly_a_stage ?? '-'}/{r.monthly_b_stage ?? '-'}
+                        </td>
+                      </tr>
+                    )
+                  })}
                 </tbody>
               </table>
             </div>
@@ -275,6 +413,41 @@ export default function ScreenerPage() {
         </div>
       )}
     </div>
+  )
+}
+
+function fmtPct(v: number | undefined): string {
+  if (v == null || !Number.isFinite(v)) return '---'
+  const sign = v > 0 ? '+' : ''
+  return `${sign}${v.toFixed(2)}%`
+}
+
+function pctColor(v: number | undefined): string {
+  if (v == null || !Number.isFinite(v)) return 'var(--text-muted)'
+  if (v > 0) return 'var(--price-up, #22c55e)'
+  if (v < 0) return 'var(--price-down, #ef4444)'
+  return 'var(--text-secondary)'
+}
+
+function SortableTh({
+  label, sortKey, current, onClick, align = 'left',
+}: {
+  label: string
+  sortKey: SortKey
+  current: SortState | null
+  onClick: (k: SortKey) => void
+  align?: 'left' | 'right'
+}) {
+  const isActive = current?.key === sortKey
+  const arrow = isActive ? (current.dir === 'desc' ? ' ▼' : ' ▲') : ''
+  return (
+    <th
+      style={{ ...(align === 'right' ? thR : th), cursor: 'pointer', userSelect: 'none' }}
+      onClick={() => onClick(sortKey)}
+      title="クリックでソート"
+    >
+      {label}{arrow}
+    </th>
   )
 }
 

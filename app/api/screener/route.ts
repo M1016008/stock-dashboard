@@ -12,7 +12,7 @@ import path from 'node:path'
 import { getTickersByMarket, type MasterTicker } from '@/lib/master/tickers'
 import { getQuote, getFundamentals, getHistory } from '@/lib/yahoo-finance'
 import { buildMaValuesFromOhlcv, calculateAllStages } from '@/lib/hex-stage'
-import type { Fundamentals } from '@/types/stock'
+import type { Fundamentals, OHLCV } from '@/types/stock'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 300
@@ -28,11 +28,16 @@ interface ScreenerStockRow {
   sectorLarge: string
   price: number
   changePercent: number
+  changePercentWeek?: number
+  changePercentMonth?: number
+  volume: number
   marketCap?: number
   per?: number
   pbr?: number
   roe?: number
   dividendYield?: number
+  sma25Angle?: number
+  sma75Angle?: number
   daily_a_stage: number | null
   daily_b_stage: number | null
   weekly_a_stage: number | null
@@ -64,7 +69,7 @@ function todayStr(): string {
 }
 
 function snapshotPath(market: string): string {
-  return path.join(SNAPSHOT_DIR, `screener_v2_${market}_${todayStr()}.json`)
+  return path.join(SNAPSHOT_DIR, `screener_v3_${market}_${todayStr()}.json`)
 }
 
 async function loadSnapshot(market: string): Promise<ScreenerStockRow[] | null> {
@@ -85,12 +90,48 @@ async function saveSnapshot(market: string, rows: ScreenerStockRow[]): Promise<v
   }
 }
 
+function pctChange(curr: number | undefined, prev: number | undefined): number | undefined {
+  if (curr == null || prev == null || prev === 0) return undefined
+  return ((curr - prev) / prev) * 100
+}
+
+function sma(values: number[]): number | undefined {
+  if (values.length === 0) return undefined
+  const sum = values.reduce((s, v) => s + v, 0)
+  return sum / values.length
+}
+
+/**
+ * 直近の終値変化率（％）を計算する。
+ * tradingDaysBack 営業日前の終値と、最新終値の差。
+ */
+function changeOver(history: OHLCV[], tradingDaysBack: number): number | undefined {
+  if (history.length <= tradingDaysBack) return undefined
+  const latest = history[history.length - 1]?.close
+  const past = history[history.length - 1 - tradingDaysBack]?.close
+  return pctChange(latest, past)
+}
+
+/**
+ * SMA の角度（％）を計算する。
+ * 直近の SMA 値と lookback 営業日前の SMA 値の差を％で表す。
+ * window: SMA の期間（例 25, 75）。
+ * lookback: SMA を比較する期間（例 5, 10）。
+ */
+function smaAngle(history: OHLCV[], window: number, lookback: number): number | undefined {
+  if (history.length < window + lookback) return undefined
+  const closes = history.map((h) => h.close)
+  const latestSma = sma(closes.slice(closes.length - window))
+  const pastSma = sma(closes.slice(closes.length - window - lookback, closes.length - lookback))
+  return pctChange(latestSma, pastSma)
+}
+
 async function fetchOne(t: MasterTicker): Promise<ScreenerStockRow | null> {
   try {
     const [quote, fund, history] = await Promise.all([
       getQuote(t.ticker),
       getFundamentals(t.ticker).catch(() => ({} as Fundamentals)),
-      getHistory(t.ticker, '2y').catch(() => []),
+      getHistory(t.ticker, '2y').catch(() => [] as OHLCV[]),
     ])
 
     const ma = buildMaValuesFromOhlcv(history)
@@ -105,11 +146,16 @@ async function fetchOne(t: MasterTicker): Promise<ScreenerStockRow | null> {
       sectorLarge: t.sectorLarge,
       price: quote.price,
       changePercent: quote.changePercent,
+      changePercentWeek: changeOver(history, 5),
+      changePercentMonth: changeOver(history, 21),
+      volume: quote.volume,
       marketCap: quote.marketCap,
       per: fund.per,
       pbr: fund.pbr,
       roe: fund.roe,
       dividendYield: fund.dividendYield,
+      sma25Angle: smaAngle(history, 25, 5),
+      sma75Angle: smaAngle(history, 75, 10),
       daily_a_stage: stages.daily_a_stage,
       daily_b_stage: stages.daily_b_stage,
       weekly_a_stage: stages.weekly_a_stage,

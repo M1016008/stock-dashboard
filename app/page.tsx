@@ -3,15 +3,12 @@ import Link from 'next/link'
 import type { Metadata } from 'next'
 import { IndexCard } from '@/components/dashboard/IndexCard'
 import { IndicesChart } from '@/components/dashboard/IndicesChart'
-import { WatchlistPanel } from '@/components/dashboard/WatchlistPanel'
-import { PortfolioSummaryPanel } from '@/components/dashboard/PortfolioSummaryPanel'
-import { PortfolioChart } from '@/components/dashboard/PortfolioChart'
 import { HexStageSummary } from '@/components/dashboard/HexStageSummary'
 import { HighLowPreview } from '@/components/dashboard/HighLowPreview'
 
 export const metadata: Metadata = {
   title: 'ダッシュボード — StockBoard',
-  description: '日本株・米国株のリアルタイム分析。インデックス、ウォッチリスト、HEXステージ分布を一覧表示。',
+  description: '日本株・米国株のリアルタイム分析。インデックス、HEXステージ分布、新高値・新安値を一覧表示。',
 }
 
 const INDICES = [
@@ -57,28 +54,10 @@ export default function DashboardPage() {
         <IndicesChart />
       </section>
 
-      {/* 中段グリッド: ウォッチリスト + ポートフォリオサマリー + HEXステージ分布 */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1.2fr', gap: '16px' }}>
-        <section>
-          <div className="section-header">ウォッチリスト</div>
-          <WatchlistPanel />
-        </section>
-
-        <section>
-          <div className="section-header">ポートフォリオ</div>
-          <PortfolioSummaryPanel />
-        </section>
-
-        <section>
-          <div className="section-header">HEXステージ分布</div>
-          <HexStageSummary />
-        </section>
-      </div>
-
-      {/* ポートフォリオ推移チャート */}
+      {/* HEXステージ分布 */}
       <section>
-        <div className="section-header">ポートフォリオ推移</div>
-        <PortfolioChart />
+        <div className="section-header">HEXステージ分布</div>
+        <HexStageSummary />
       </section>
 
       {/* 新高値・新安値 */}

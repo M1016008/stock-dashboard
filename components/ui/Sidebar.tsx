@@ -11,7 +11,6 @@ const navItems = [
   { href: '/screener', label: 'スクリーナー', icon: '⧖' },
   { href: '/screener/history', label: 'スクリーナー履歴', icon: '📅' },
   { href: '/high-low', label: '新高値・新安値', icon: '📈' },
-  { href: '/portfolio', label: 'ポートフォリオ', icon: '💼' },
   { href: '/admin/db', label: 'DB管理', icon: '🗄' },
 ]
 
