@@ -5,8 +5,10 @@ import { useEffect, useState } from 'react'
 import { MarketBadge } from '@/components/ui/MarketBadge'
 import { PriceDisplay } from '@/components/ui/PriceDisplay'
 import { TradingViewChart } from '@/components/charts/TradingViewChart'
-import { AddHoldingModal } from '@/components/portfolio/AddHoldingModal'
 import { PerformanceCard } from '@/components/stock/PerformanceCard'
+import { NewsSection } from '@/components/stock/NewsSection'
+import { EarningsCard } from '@/components/stock/EarningsCard'
+import { WatchlistButton } from '@/components/ui/WatchlistButton'
 import { StageTimeline } from '@/components/stock/StageTimeline'
 import { findTicker } from '@/lib/master/tickers'
 import type { StockQuote, Fundamentals } from '@/types/stock'
@@ -19,7 +21,6 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
   const [quote, setQuote] = useState<StockQuote | null>(null)
   const [fundamentals, setFundamentals] = useState<Fundamentals | null>(null)
   const [loading, setLoading] = useState(true)
-  const [showPortfolioModal, setShowPortfolioModal] = useState(false)
 
   const master = findTicker(ticker)
 
@@ -63,6 +64,9 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
         flexWrap: 'wrap',
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <span style={{ fontSize: '22px', lineHeight: 1 }}>
+            <WatchlistButton ticker={ticker} size="md" />
+          </span>
           <span style={{
             fontFamily: 'var(--font-mono)',
             fontSize: '22px',
@@ -97,19 +101,6 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
             />
           )}
           {loading && <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>読込中...</span>}
-          <button onClick={() => setShowPortfolioModal(true)} style={{
-            padding: '6px 12px',
-            background: 'var(--accent-primary)',
-            color: '#fff',
-            border: 'none',
-            borderRadius: 'var(--radius-sm)',
-            fontSize: '11px',
-            fontFamily: 'var(--font-mono)',
-            fontWeight: 600,
-            cursor: 'pointer',
-          }}>
-            + ポートフォリオに追加
-          </button>
         </div>
       </div>
 
@@ -123,6 +114,9 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
         />
         <PerformanceCard ticker={ticker} />
       </div>
+
+      {/* 決算情報 */}
+      <EarningsCard ticker={ticker} />
 
       {/* TradingView チャート（メイン） */}
       <div>
@@ -141,13 +135,12 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
         <StageTimeline ticker={ticker} />
       </div>
 
-      <AddHoldingModal
-        open={showPortfolioModal}
-        onClose={() => setShowPortfolioModal(false)}
-        fixedTicker={ticker}
-        fixedName={quote?.name ?? master?.name}
-        fixedMarket={market}
-      />
+      {/* 関連ニュース */}
+      <div>
+        <div className="section-header">📰 関連ニュース</div>
+        <NewsSection ticker={ticker} />
+      </div>
+
     </div>
   )
 }

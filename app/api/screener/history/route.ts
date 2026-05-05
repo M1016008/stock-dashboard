@@ -2,9 +2,7 @@
 // screener_snapshots テーブルから過去日付の銘柄一覧を取得する。
 
 import { NextRequest, NextResponse } from 'next/server'
-import { db } from '@/lib/db/client'
-import { screenerSnapshots } from '@/lib/db/schema'
-import { eq, sql } from 'drizzle-orm'
+import { execAll } from '@/lib/db/client'
 
 export const dynamic = 'force-dynamic'
 
@@ -14,23 +12,17 @@ export async function GET(request: NextRequest) {
     const date = searchParams.get('date') // YYYY-MM-DD
 
     if (date) {
-      // 指定日のスナップショット
-      const rows = db
-        .select()
-        .from(screenerSnapshots)
-        .where(eq(screenerSnapshots.date, date))
-        .all()
+      const rows = await execAll(`SELECT * FROM screener_snapshots WHERE date = ?`, [date])
       return NextResponse.json({ date, results: rows, total: rows.length })
     }
 
-    // 利用可能な日付一覧（DESC、最新50件まで）
-    const dates = (db
-      .select({ date: screenerSnapshots.date, count: sql<number>`count(*)` })
-      .from(screenerSnapshots)
-      .groupBy(screenerSnapshots.date)
-      .orderBy(sql`${screenerSnapshots.date} desc`)
-      .limit(50)
-      .all() as { date: string; count: number }[])
+    const dates = await execAll<{ date: string; count: number }>(
+      `SELECT date, COUNT(*) AS count
+       FROM screener_snapshots
+       GROUP BY date
+       ORDER BY date DESC
+       LIMIT 50`,
+    )
 
     return NextResponse.json({ dates })
   } catch (error) {

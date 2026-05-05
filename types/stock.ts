@@ -40,13 +40,4 @@ export interface Fundamentals {
   marketSegment?: string;  // 例: "プライム"（日本株のみ）
 }
 
-export interface PortfolioHolding {
-  id: string;
-  ticker: string;
-  market: 'JP' | 'US';
-  shares: number;
-  avgCost: number;
-  currency: 'JPY' | 'USD';
-}
-
 export interface ScreenerResult extends StockQuote, Fundamentals {}

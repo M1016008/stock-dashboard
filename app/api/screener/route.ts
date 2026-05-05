@@ -1,22 +1,57 @@
 // app/api/screener/route.ts
-// マルチ軸スクリーナー API:
-//   - market: JP/US/ALL
-//   - segment: プライム/スタンダード/グロース or NYSE/NASDAQ
-//   - daily_a / daily_b / weekly_a / weekly_b / monthly_a / monthly_b: 各系統で 1..6 を指定（未指定=フィルタなし）
-// 指定された系統は全て AND で絞り込む。
+// マルチ軸スクリーナー API。
+// データソース: tv_daily_snapshots テーブル（TradingView CSV取込結果）
+//   - market: JP のみ対応（CSVは日本株想定）
+//   - segment: プライム/スタンダード/グロース（マスタから絞り込み）
+//   - daily_a / daily_b / weekly_a / weekly_b / monthly_a / monthly_b:
+//       各系統で 1..6 を指定（カンマ区切りで複数指定可、例: daily_a=1,2,3）
+// 軸内は OR、軸間は AND で絞り込む。
 
 import { NextRequest, NextResponse } from 'next/server'
-import { promises as fs } from 'node:fs'
-import path from 'node:path'
-import { getTickersByMarket, type MasterTicker } from '@/lib/master/tickers'
-import { getQuote, getFundamentals, getHistory } from '@/lib/yahoo-finance'
-import { buildMaValuesFromOhlcv, calculateAllStages } from '@/lib/hex-stage'
-import type { Fundamentals } from '@/types/stock'
+import { execAll, execGet } from '@/lib/db/client'
+import { getTickersByMarket } from '@/lib/master/tickers'
+import { calculateAllStages, type MaValues } from '@/lib/hex-stage'
 
 export const dynamic = 'force-dynamic'
-export const maxDuration = 300
+export const maxDuration = 60
 
-const SNAPSHOT_DIR = path.join(process.cwd(), 'data', 'snapshots')
+interface SnapshotRow {
+  date: string
+  ticker: string
+  name: string
+  price: number | null
+  currency: string | null
+  change_percent_1d: number | null
+  volume_1d: number | null
+  avg_volume_10d: number | null
+  avg_volume_30d: number | null
+  market_cap: number | null
+  market_cap_currency: string | null
+  per: number | null
+  dividend_yield_pct: number | null
+  perf_pct_1w: number | null
+  perf_pct_1m: number | null
+  perf_pct_3m: number | null
+  perf_pct_6m: number | null
+  perf_pct_ytd: number | null
+  sma_5d: number | null
+  sma_25d: number | null
+  sma_75d: number | null
+  sma_150d: number | null
+  sma_300d: number | null
+  sma_5w: number | null
+  sma_13w: number | null
+  sma_25w: number | null
+  sma_50w: number | null
+  sma_100w: number | null
+  sma_3m: number | null
+  sma_5m: number | null
+  sma_10m: number | null
+  sma_20m: number | null
+  sma_25m: number | null
+  earnings_last_date: string | null
+  earnings_next_date: string | null
+}
 
 interface ScreenerStockRow {
   ticker: string
@@ -25,13 +60,25 @@ interface ScreenerStockRow {
   marketSegment: string
   marginType?: string
   sectorLarge: string
-  price: number
-  changePercent: number
-  marketCap?: number
-  per?: number
-  pbr?: number
-  roe?: number
-  dividendYield?: number
+  price: number | null
+  currency: string | null
+  changePercent: number | null
+  changePercentWeek: number | null
+  changePercentMonth: number | null
+  perfPct3m: number | null
+  perfPct6m: number | null
+  perfPctYtd: number | null
+  volume: number | null
+  avgVolume10d: number | null
+  avgVolume30d: number | null
+  marketCap: number | null
+  marketCapCurrency: string | null
+  per: number | null
+  dividendYield: number | null
+  sma25Angle: number | null
+  sma75Angle: number | null
+  earningsLastDate: string | null
+  earningsNextDate: string | null
   daily_a_stage: number | null
   daily_b_stage: number | null
   weekly_a_stage: number | null
@@ -58,79 +105,81 @@ const STAGE_PARAM_MAP: Record<string, typeof STAGE_KEYS[number]> = {
   monthly_b: 'monthly_b_stage',
 }
 
-function todayStr(): string {
-  return new Date().toISOString().split('T')[0]
+async function latestSnapshotDate(): Promise<string | null> {
+  const row = await execGet<{ d: string | null }>(`SELECT MAX(date) AS d FROM tv_daily_snapshots`)
+  return row?.d ?? null
 }
 
-function snapshotPath(market: string): string {
-  return path.join(SNAPSHOT_DIR, `screener_v2_${market}_${todayStr()}.json`)
+async function loadSnapshotByDate(date: string): Promise<SnapshotRow[]> {
+  return execAll<SnapshotRow>(`SELECT * FROM tv_daily_snapshots WHERE date = ?`, [date])
 }
 
-async function loadSnapshot(market: string): Promise<ScreenerStockRow[] | null> {
-  try {
-    const buf = await fs.readFile(snapshotPath(market), 'utf-8')
-    return JSON.parse(buf) as ScreenerStockRow[]
-  } catch {
-    return null
+/**
+ * 短期SMAと長期SMAの差から「角度」を算出する。
+ * 直角三角形を考え、隣辺=長期SMA、対辺=(短期SMA-長期SMA) として
+ * 傾き = (短期 - 長期) / 長期 を求め、atan() で角度（度）に変換する。
+ *  例) 5% 上向き → atan(0.05) ≒ 2.86°
+ *      30% 上向き → atan(0.30) ≒ 16.7°
+ */
+function smaAngleDegrees(shortSma: number | null, longSma: number | null): number | null {
+  if (shortSma == null || longSma == null || longSma === 0) return null
+  const slope = (shortSma - longSma) / longSma
+  return Math.atan(slope) * (180 / Math.PI)
+}
+
+function snapshotToMaValues(s: SnapshotRow): MaValues {
+  return {
+    ma_5: s.sma_5d,
+    ma_25: s.sma_25d,
+    ma_75: s.sma_75d,
+    ma_150: s.sma_150d,
+    ma_300: s.sma_300d,
+    weekly_ma_5: s.sma_5w,
+    weekly_ma_13: s.sma_13w,
+    weekly_ma_25: s.sma_25w,
+    weekly_ma_50: s.sma_50w,
+    weekly_ma_100: s.sma_100w,
+    monthly_ma_3: s.sma_3m,
+    monthly_ma_5: s.sma_5m,
+    monthly_ma_10: s.sma_10m,
+    monthly_ma_20: s.sma_20m,
+    monthly_ma_25: s.sma_25m,
   }
 }
 
-async function saveSnapshot(market: string, rows: ScreenerStockRow[]): Promise<void> {
-  try {
-    await fs.mkdir(SNAPSHOT_DIR, { recursive: true })
-    await fs.writeFile(snapshotPath(market), JSON.stringify(rows), 'utf-8')
-  } catch (e) {
-    console.error('saveSnapshot error:', e)
+function buildResultRow(s: SnapshotRow): ScreenerStockRow | null {
+  const master = getTickersByMarket('JP').find((t) => t.ticker === s.ticker)
+  // マスタに無い銘柄も許容（CSVをそのまま使う）。区分等は不明とする。
+  const stages = calculateAllStages(snapshotToMaValues(s))
+  return {
+    ticker: s.ticker,
+    name: s.name,
+    market: 'JP',
+    marketSegment: master?.marketSegment ?? '',
+    marginType: master?.marginType,
+    sectorLarge: master?.sectorLarge ?? 'その他',
+    price: s.price,
+    currency: s.currency,
+    changePercent: s.change_percent_1d,
+    changePercentWeek: s.perf_pct_1w,
+    changePercentMonth: s.perf_pct_1m,
+    perfPct3m: s.perf_pct_3m,
+    perfPct6m: s.perf_pct_6m,
+    perfPctYtd: s.perf_pct_ytd,
+    volume: s.volume_1d,
+    avgVolume10d: s.avg_volume_10d,
+    avgVolume30d: s.avg_volume_30d,
+    marketCap: s.market_cap,
+    marketCapCurrency: s.market_cap_currency,
+    per: s.per,
+    dividendYield: s.dividend_yield_pct,
+    // SMA角度: atan で実際の角度（度）に変換
+    sma25Angle: smaAngleDegrees(s.sma_5d, s.sma_25d),
+    sma75Angle: smaAngleDegrees(s.sma_25d, s.sma_75d),
+    earningsLastDate: s.earnings_last_date,
+    earningsNextDate: s.earnings_next_date,
+    ...stages,
   }
-}
-
-async function fetchOne(t: MasterTicker): Promise<ScreenerStockRow | null> {
-  try {
-    const [quote, fund, history] = await Promise.all([
-      getQuote(t.ticker),
-      getFundamentals(t.ticker).catch(() => ({} as Fundamentals)),
-      getHistory(t.ticker, '2y').catch(() => []),
-    ])
-
-    const ma = buildMaValuesFromOhlcv(history)
-    const stages = calculateAllStages(ma)
-
-    return {
-      ticker: t.ticker,
-      name: t.name,
-      market: t.market,
-      marketSegment: t.marketSegment,
-      marginType: t.marginType,
-      sectorLarge: t.sectorLarge,
-      price: quote.price,
-      changePercent: quote.changePercent,
-      marketCap: quote.marketCap,
-      per: fund.per,
-      pbr: fund.pbr,
-      roe: fund.roe,
-      dividendYield: fund.dividendYield,
-      daily_a_stage: stages.daily_a_stage,
-      daily_b_stage: stages.daily_b_stage,
-      weekly_a_stage: stages.weekly_a_stage,
-      weekly_b_stage: stages.weekly_b_stage,
-      monthly_a_stage: stages.monthly_a_stage,
-      monthly_b_stage: stages.monthly_b_stage,
-    }
-  } catch (e) {
-    console.error(`screener fetchOne error for ${t.ticker}:`, e)
-    return null
-  }
-}
-
-async function fetchAll(tickers: MasterTicker[], concurrency = 5): Promise<ScreenerStockRow[]> {
-  const results: ScreenerStockRow[] = []
-  for (let i = 0; i < tickers.length; i += concurrency) {
-    const batch = tickers.slice(i, i + concurrency)
-    const chunk = await Promise.all(batch.map(fetchOne))
-    for (const r of chunk) if (r) results.push(r)
-    await new Promise((r) => setTimeout(r, 200))
-  }
-  return results
 }
 
 export async function GET(request: NextRequest) {
@@ -138,40 +187,70 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url)
     const market = (searchParams.get('market') ?? 'JP') as 'JP' | 'US' | 'ALL'
     const segment = searchParams.get('segment')
+    const requestedDate = searchParams.get('date')
 
-    // 6系統のステージフィルタ
-    const stageFilter: Partial<Record<typeof STAGE_KEYS[number], number>> = {}
+    if (market === 'US') {
+      return NextResponse.json({
+        results: [],
+        total: 0,
+        universe: 0,
+        date: null,
+        cached: true,
+        source: 'csv',
+        notice: 'US は CSV 未対応です（TradingView から日本株 CSV を取込中）',
+        filters: { market, segment },
+      })
+    }
+
+    const date = requestedDate ?? (await latestSnapshotDate())
+    if (!date) {
+      return NextResponse.json({
+        results: [],
+        total: 0,
+        universe: 0,
+        date: null,
+        cached: false,
+        source: 'csv',
+        notice: 'CSV未取込です。/admin/import から TradingView の CSV をインポートしてください。',
+        filters: { market, segment },
+      })
+    }
+
+    // 6系統のステージフィルタ（軸内 OR / 軸間 AND）
+    const stageFilter: Partial<Record<typeof STAGE_KEYS[number], number[]>> = {}
     for (const [param, key] of Object.entries(STAGE_PARAM_MAP)) {
-      const v = searchParams.get(param)
-      if (v) {
-        const n = Number(v)
-        if (n >= 1 && n <= 6) stageFilter[key] = n
-      }
+      const raw = searchParams.get(param)
+      if (!raw) continue
+      const stages = raw
+        .split(',')
+        .map((s) => Number(s.trim()))
+        .filter((n) => Number.isInteger(n) && n >= 1 && n <= 6)
+      if (stages.length > 0) stageFilter[key] = Array.from(new Set(stages)).sort()
     }
 
-    let rows = await loadSnapshot(market)
-    let cached = true
-    if (!rows) {
-      cached = false
-      const tickers = getTickersByMarket(market)
-      rows = await fetchAll(tickers)
-      await saveSnapshot(market, rows)
-    }
+    const snapshots = await loadSnapshotByDate(date)
+    const universe = snapshots.length
+    const built = snapshots
+      .map(buildResultRow)
+      .filter((r): r is ScreenerStockRow => r !== null)
 
-    let filtered = rows
+    let filtered = built
     if (segment) filtered = filtered.filter((r) => r.marketSegment === segment)
 
-    // ステージ AND フィルタ
-    for (const [key, val] of Object.entries(stageFilter)) {
-      filtered = filtered.filter((r) => (r as any)[key] === val)
+    for (const [key, vals] of Object.entries(stageFilter)) {
+      filtered = filtered.filter((r) => {
+        const stage = (r as unknown as Record<string, unknown>)[key]
+        return typeof stage === 'number' && (vals as number[]).includes(stage)
+      })
     }
 
     return NextResponse.json({
       results: filtered,
       total: filtered.length,
-      universe: rows.length,
-      cached,
-      date: todayStr(),
+      universe,
+      date,
+      cached: true,
+      source: 'csv',
       filters: { market, segment, ...stageFilter },
     })
   } catch (error) {
