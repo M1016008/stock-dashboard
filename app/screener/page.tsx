@@ -300,7 +300,7 @@ export default function ScreenerPage() {
             </div>
           ) : (
             <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+              <table style={{ minWidth: '2000px', borderCollapse: 'collapse', fontSize: '12px' }}>
                 <thead>
                   <tr style={{ background: 'var(--bg-elevated)', borderBottom: '1px solid var(--border-dim)' }}>
                     <th style={th}></th>
@@ -427,14 +427,21 @@ function SortableTh({
   align?: 'left' | 'right'
 }) {
   const isActive = current?.key === sortKey
-  const arrow = isActive ? (current.dir === 'desc' ? ' ▼' : ' ▲') : ''
+  const arrow = isActive
+    ? (current.dir === 'desc' ? ' ▼' : ' ▲')
+    : ' ⇅'
   return (
     <th
-      style={{ ...(align === 'right' ? thR : th), cursor: 'pointer', userSelect: 'none' }}
+      style={{
+        ...(align === 'right' ? thR : th),
+        cursor: 'pointer',
+        userSelect: 'none',
+        color: isActive ? 'var(--accent-primary)' : undefined,
+      }}
       onClick={() => onClick(sortKey)}
       title="クリックでソート"
     >
-      {label}{arrow}
+      {label}<span style={{ opacity: isActive ? 1 : 0.4, fontSize: '10px' }}>{arrow}</span>
     </th>
   )
 }
@@ -573,5 +580,5 @@ const th: React.CSSProperties = {
   whiteSpace: 'nowrap',
 }
 const thR: React.CSSProperties = { ...th, textAlign: 'right' }
-const td: React.CSSProperties = { padding: '8px 12px', fontSize: '12px', color: 'var(--text-primary)' }
+const td: React.CSSProperties = { padding: '8px 12px', fontSize: '12px', color: 'var(--text-primary)', whiteSpace: 'nowrap' }
 const tdR: React.CSSProperties = { ...td, textAlign: 'right', fontFamily: 'var(--font-mono)' }

@@ -144,8 +144,25 @@ const STATEMENTS = [
   )`,
 ]
 
+/**
+ * 既存テーブルに対する追加カラム。CREATE TABLE IF NOT EXISTS は既存テーブルを変更しないため、
+ * ここで個別に ALTER TABLE ADD COLUMN を試みる（既に存在する場合のエラーは握りつぶす）。
+ */
+const COLUMN_ADDITIONS: { sql: string }[] = [
+  { sql: `ALTER TABLE tv_daily_snapshots ADD COLUMN market_segment TEXT` },
+  { sql: `ALTER TABLE tv_daily_snapshots ADD COLUMN margin_type TEXT` },
+]
+
 export async function ensureSchema(client: Client): Promise<void> {
   for (const sql of STATEMENTS) {
     await client.execute(sql)
+  }
+  for (const { sql } of COLUMN_ADDITIONS) {
+    try {
+      await client.execute(sql)
+    } catch (e) {
+      const msg = (e as Error).message ?? ''
+      if (!/duplicate column name/i.test(msg)) throw e
+    }
   }
 }

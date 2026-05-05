@@ -98,7 +98,10 @@ export default function CsvImportPage() {
           📥 CSV取込（TradingView スクリーナー）
         </h1>
         <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
-          毎日の引け後に TradingView から書き出した TSV ファイルをドラッグ&ドロップ、または複数日分まとめてインポートできます。
+          毎日の引け後に TradingView から書き出した CSV / TSV をドラッグ&ドロップ、または複数日分まとめてインポートできます。
+        </p>
+        <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '6px', lineHeight: 1.5 }}>
+          💡 TradingView の列設定に <code>市場区分</code>（プライム/スタンダード/グロース）と <code>貸借区分</code>（貸借/信用）を追加すると、スクリーナー側でも自動表示されます。
         </p>
       </div>
 

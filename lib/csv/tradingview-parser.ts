@@ -14,6 +14,8 @@
 export interface ParsedRow {
   ticker: string             // ".T" 付き
   name: string
+  marketSegment: string | null   // プライム / スタンダード / グロース など
+  marginType: string | null      // 貸借 / 信用 など
   price: number | null
   currency: string | null
   changePercent1d: number | null
@@ -65,6 +67,11 @@ const REQUIRED_COLUMNS: string[][] = [
 const COLUMN_MAP: Record<string, keyof ParsedRow> = {
   '名称': 'name',
   '詳細': 'name',
+  '市場区分': 'marketSegment',
+  '区分': 'marketSegment',
+  '上場区分': 'marketSegment',
+  '貸借区分': 'marginType',
+  '信用区分': 'marginType',
   '価格': 'price',
   '価格 - 通貨': 'currency',
   '価格変動 % 1日': 'changePercent1d',
@@ -101,6 +108,8 @@ const COLUMN_MAP: Record<string, keyof ParsedRow> = {
 
 const STRING_COLUMNS = new Set([
   'name',
+  'marketSegment',
+  'marginType',
   'currency',
   'marketCapCurrency',
   'earningsLastDate',
@@ -246,6 +255,8 @@ export function parseTradingViewCsv(text: string): ParseResult {
     const row: ParsedRow = {
       ticker: normalizeTicker(symbol),
       name: '',
+      marketSegment: null,
+      marginType: null,
       price: null,
       currency: null,
       changePercent1d: null,
