@@ -19,8 +19,6 @@ interface SnapshotRow {
   date: string
   ticker: string
   name: string
-  market_segment: string | null
-  margin_type: string | null
   price: number | null
   change_percent_1d: number | null
   volume_1d: number | null
@@ -136,14 +134,14 @@ function snapshotToMaValues(s: SnapshotRow): MaValues {
 
 function buildResultRow(s: SnapshotRow): ScreenerStockRow | null {
   const master = getTickersByMarket('JP').find((t) => t.ticker === s.ticker)
-  // 優先順: CSV(取込時) → master(ハードコード) → 空。
+  // マスタに無い銘柄も許容（CSVをそのまま使う）。区分等は不明とする。
   const stages = calculateAllStages(snapshotToMaValues(s))
   return {
     ticker: s.ticker,
     name: s.name,
     market: 'JP',
-    marketSegment: s.market_segment ?? master?.marketSegment ?? '',
-    marginType: s.margin_type ?? master?.marginType,
+    marketSegment: master?.marketSegment ?? '',
+    marginType: master?.marginType,
     sectorLarge: master?.sectorLarge ?? 'その他',
     price: s.price,
     changePercent: s.change_percent_1d,

@@ -24,7 +24,7 @@ function todayStr(): string {
 }
 
 const UPSERT_SQL = `INSERT INTO tv_daily_snapshots (
-  date, ticker, name, market_segment, margin_type, price, currency, change_percent_1d, volume_1d,
+  date, ticker, name, price, currency, change_percent_1d, volume_1d,
   avg_volume_10d, avg_volume_30d, market_cap, market_cap_currency,
   per, dividend_yield_pct,
   perf_pct_1w, perf_pct_1m, perf_pct_3m, perf_pct_6m, perf_pct_ytd,
@@ -34,7 +34,7 @@ const UPSERT_SQL = `INSERT INTO tv_daily_snapshots (
   earnings_last_date, earnings_next_date,
   imported_at, source_file
 ) VALUES (
-  ?, ?, ?, ?, ?, ?, ?, ?, ?,
+  ?, ?, ?, ?, ?, ?, ?,
   ?, ?, ?, ?,
   ?, ?,
   ?, ?, ?, ?, ?,
@@ -46,8 +46,6 @@ const UPSERT_SQL = `INSERT INTO tv_daily_snapshots (
 )
 ON CONFLICT(date, ticker) DO UPDATE SET
   name=excluded.name,
-  market_segment=excluded.market_segment,
-  margin_type=excluded.margin_type,
   price=excluded.price,
   currency=excluded.currency,
   change_percent_1d=excluded.change_percent_1d,
@@ -85,7 +83,7 @@ ON CONFLICT(date, ticker) DO UPDATE SET
 
 function rowArgs(date: string, r: ParsedRow, importedAt: string, sourceFile: string) {
   return [
-    date, r.ticker, r.name, r.marketSegment, r.marginType, r.price, r.currency, r.changePercent1d, r.volume1d,
+    date, r.ticker, r.name, r.price, r.currency, r.changePercent1d, r.volume1d,
     r.avgVolume10d, r.avgVolume30d, r.marketCap, r.marketCapCurrency,
     r.per, r.dividendYieldPct,
     r.perfPct1w, r.perfPct1m, r.perfPct3m, r.perfPct6m, r.perfPctYtd,
