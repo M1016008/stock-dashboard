@@ -9,11 +9,6 @@ import { WatchlistButton } from '@/components/ui/WatchlistButton'
 type Market = 'JP' | 'US'
 type AxisKey = 'daily_a' | 'daily_b' | 'weekly_a' | 'weekly_b' | 'monthly_a' | 'monthly_b'
 
-const SEGMENTS: Record<Market, string[]> = {
-  JP: ['プライム', 'スタンダード', 'グロース'],
-  US: ['NYSE', 'NASDAQ'],
-}
-
 const AXES: { key: AxisKey; label: string; color: string }[] = [
   { key: 'daily_a',   label: '日足 A', color: '#ef4444' },
   { key: 'weekly_a',  label: '週足 A', color: '#22c55e' },
@@ -37,11 +32,11 @@ interface StockRow {
   volume: number
   marketCap?: number
   per?: number
-  pbr?: number
-  roe?: number
   dividendYield?: number
   sma25Angle?: number
   sma75Angle?: number
+  earningsLastDate?: string | null
+  earningsNextDate?: string | null
   daily_a_stage: number | null
   daily_b_stage: number | null
   weekly_a_stage: number | null
@@ -53,6 +48,7 @@ interface StockRow {
 type SortKey =
   | 'ticker'
   | 'name'
+  | 'marketSegment'
   | 'price'
   | 'changePercent'
   | 'changePercentWeek'
@@ -60,11 +56,11 @@ type SortKey =
   | 'volume'
   | 'marketCap'
   | 'per'
-  | 'pbr'
-  | 'roe'
   | 'dividendYield'
   | 'sma25Angle'
   | 'sma75Angle'
+  | 'earningsLastDate'
+  | 'earningsNextDate'
 
 interface SortState {
   key: SortKey
@@ -72,8 +68,6 @@ interface SortState {
 }
 
 export default function ScreenerPage() {
-  const [market, setMarket] = useState<Market>('JP')
-  const [segment, setSegment] = useState<string | null>(null)
   const [stages, setStages] = useState<Partial<Record<AxisKey, number[]>>>({})
   const [results, setResults] = useState<StockRow[]>([])
   const [loading, setLoading] = useState(false)
@@ -91,8 +85,7 @@ export default function ScreenerPage() {
     let cancelled = false
     setLoading(true)
     setError('')
-    const params = new URLSearchParams({ market })
-    if (segment) params.set('segment', segment)
+    const params = new URLSearchParams({ market: 'JP' })
     for (const [k, v] of Object.entries(stages)) {
       if (v && v.length > 0) params.set(k, v.join(','))
     }
@@ -111,7 +104,7 @@ export default function ScreenerPage() {
       .catch((e) => { if (!cancelled) setError((e as Error).message) })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [market, segment, stages])
+  }, [stages])
 
   const filterText = useMemo(() => {
     const parts: string[] = []
@@ -165,7 +158,7 @@ export default function ScreenerPage() {
   function downloadTvWatchlist() {
     const symbols = sortedResults.map((r) => toTvSymbol(r.ticker, r.marketSegment))
     const today = new Date().toISOString().split('T')[0]
-    const sectionName = `Screener_${market}_${segment ?? 'all'}_${today}`
+    const sectionName = `Screener_JP_${today}`
     const text = buildTvWatchlistText(symbols, sectionName)
     const blob = new Blob([text], { type: 'text/plain;charset=utf-8' })
     const url = URL.createObjectURL(blob)
@@ -185,33 +178,12 @@ export default function ScreenerPage() {
           スクリーナー（マルチ軸ステージフィルタ）
         </h1>
         <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
-          市場 → 区分 → 6系統のHEXステージ（AND条件）
+          取込済みの全銘柄を表示。HEXステージで絞り込み（複数系統は AND）
         </p>
       </div>
 
-      {/* Step 1: 市場 */}
-      <Section step={1} label="市場を選択">
-        <ButtonRow
-          options={[
-            { v: 'JP', label: '日本株' },
-            { v: 'US', label: '米国株' },
-          ]}
-          value={market}
-          onChange={(v) => { setMarket(v as Market); setSegment(null); setStages({}) }}
-        />
-      </Section>
-
-      {/* Step 2: 区分 */}
-      <Section step={2} label={market === 'JP' ? '東証区分を選択' : '取引所を選択'}>
-        <ButtonRow
-          options={SEGMENTS[market].map((s) => ({ v: s, label: s }))}
-          value={segment ?? ''}
-          onChange={(v) => { setSegment(v); setStages({}) }}
-        />
-      </Section>
-
-      {/* Step 3: マルチ軸ステージ */}
-      <Section step={3} label="HEXステージを選択（複数系統 AND）" disabled={!segment}>
+      {/* HEXステージ（任意の絞り込み） */}
+      <Section step={1} label="HEXステージで絞り込み（任意 / 複数系統 AND）">
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '8px' }}>
           <button
             onClick={() => setStages({})}
@@ -237,7 +209,6 @@ export default function ScreenerPage() {
               key={ax.key}
               axis={ax}
               selected={stages[ax.key] ?? []}
-              disabled={!segment}
               onToggle={(stage) => setStages((prev) => {
                 const next = { ...prev }
                 const cur = next[ax.key] ?? []
@@ -288,19 +259,9 @@ export default function ScreenerPage() {
         </div>
       )}
 
-      {!segment ? (
-        <div className="card" style={{ padding: '24px', textAlign: 'center' }}>
-          <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>市場と区分を選んでください</p>
-        </div>
-      ) : !hasAnyStage ? (
-        <div className="card" style={{ padding: '24px', textAlign: 'center' }}>
-          <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-            少なくとも1つの系統でステージを選択してください
-          </p>
-        </div>
-      ) : loading ? (
+      {loading ? (
         <div className="card" style={{ padding: '32px', textAlign: 'center' }}>
-          <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>計算中…（初回は数十秒）</p>
+          <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>計算中…</p>
         </div>
       ) : (
         <div className="card" style={{ overflow: 'hidden' }}>
@@ -343,21 +304,24 @@ export default function ScreenerPage() {
                 <thead>
                   <tr style={{ background: 'var(--bg-elevated)', borderBottom: '1px solid var(--border-dim)' }}>
                     <th style={th}></th>
-                    <SortableTh label="コード"   sortKey="ticker"             current={sort} onClick={toggleSort} />
+                    <SortableTh label="コード"     sortKey="ticker"             current={sort} onClick={toggleSort} />
                     <th style={th}>TV形式</th>
-                    <SortableTh label="銘柄名"   sortKey="name"               current={sort} onClick={toggleSort} />
-                    <SortableTh label="株価"     sortKey="price"              current={sort} onClick={toggleSort} align="right" />
-                    <SortableTh label="日%"      sortKey="changePercent"      current={sort} onClick={toggleSort} align="right" />
-                    <SortableTh label="週%"      sortKey="changePercentWeek"  current={sort} onClick={toggleSort} align="right" />
-                    <SortableTh label="月%"      sortKey="changePercentMonth" current={sort} onClick={toggleSort} align="right" />
-                    <SortableTh label="出来高"   sortKey="volume"             current={sort} onClick={toggleSort} align="right" />
-                    <SortableTh label="時価総額" sortKey="marketCap"          current={sort} onClick={toggleSort} align="right" />
-                    <th style={th}>区分</th>
-                    <SortableTh label="PER"      sortKey="per"                current={sort} onClick={toggleSort} align="right" />
-                    <SortableTh label="ROE"      sortKey="roe"                current={sort} onClick={toggleSort} align="right" />
-                    <SortableTh label="配当"     sortKey="dividendYield"      current={sort} onClick={toggleSort} align="right" />
-                    <SortableTh label="SMA25角"  sortKey="sma25Angle"         current={sort} onClick={toggleSort} align="right" />
-                    <SortableTh label="SMA75角"  sortKey="sma75Angle"         current={sort} onClick={toggleSort} align="right" />
+                    <SortableTh label="銘柄名"     sortKey="name"               current={sort} onClick={toggleSort} />
+                    <th style={th}>市場</th>
+                    <SortableTh label="東証区分"   sortKey="marketSegment"      current={sort} onClick={toggleSort} />
+                    <th style={th}>貸借/信用</th>
+                    <SortableTh label="株価"       sortKey="price"              current={sort} onClick={toggleSort} align="right" />
+                    <SortableTh label="日%"        sortKey="changePercent"      current={sort} onClick={toggleSort} align="right" />
+                    <SortableTh label="週%"        sortKey="changePercentWeek"  current={sort} onClick={toggleSort} align="right" />
+                    <SortableTh label="月%"        sortKey="changePercentMonth" current={sort} onClick={toggleSort} align="right" />
+                    <SortableTh label="出来高"     sortKey="volume"             current={sort} onClick={toggleSort} align="right" />
+                    <SortableTh label="時価総額"   sortKey="marketCap"          current={sort} onClick={toggleSort} align="right" />
+                    <SortableTh label="PER"        sortKey="per"                current={sort} onClick={toggleSort} align="right" />
+                    <SortableTh label="配当"       sortKey="dividendYield"      current={sort} onClick={toggleSort} align="right" />
+                    <SortableTh label="SMA25角"    sortKey="sma25Angle"         current={sort} onClick={toggleSort} align="right" />
+                    <SortableTh label="SMA75角"    sortKey="sma75Angle"         current={sort} onClick={toggleSort} align="right" />
+                    <SortableTh label="前回決算"   sortKey="earningsLastDate"   current={sort} onClick={toggleSort} />
+                    <SortableTh label="次回決算"   sortKey="earningsNextDate"   current={sort} onClick={toggleSort} />
                     <th style={th}>ステージ (日A/B 週A/B 月A/B)</th>
                   </tr>
                 </thead>
@@ -396,12 +360,8 @@ export default function ScreenerPage() {
                           </button>
                         </td>
                         <td style={td}>{r.name}</td>
-                        <td style={tdR}>{r.price?.toLocaleString('ja-JP', { maximumFractionDigits: 2 }) ?? '---'}</td>
-                        <td style={{ ...tdR, color: pctColor(r.changePercent) }}>{fmtPct(r.changePercent)}</td>
-                        <td style={{ ...tdR, color: pctColor(r.changePercentWeek) }}>{fmtPct(r.changePercentWeek)}</td>
-                        <td style={{ ...tdR, color: pctColor(r.changePercentMonth) }}>{fmtPct(r.changePercentMonth)}</td>
-                        <td style={tdR}>{r.volume?.toLocaleString('ja-JP') ?? '---'}</td>
-                        <td style={tdR}>{r.marketCap ? `${(r.marketCap / 1e8).toLocaleString('ja-JP', { maximumFractionDigits: 0 })} 億` : '---'}</td>
+                        <td style={td}>{r.market}</td>
+                        <td style={td}>{r.marketSegment || '---'}</td>
                         <td style={td}>
                           {r.marginType ? (
                             <span style={{
@@ -416,11 +376,18 @@ export default function ScreenerPage() {
                             </span>
                           ) : '---'}
                         </td>
+                        <td style={tdR}>{r.price?.toLocaleString('ja-JP', { maximumFractionDigits: 2 }) ?? '---'}</td>
+                        <td style={{ ...tdR, color: pctColor(r.changePercent) }}>{fmtPct(r.changePercent)}</td>
+                        <td style={{ ...tdR, color: pctColor(r.changePercentWeek) }}>{fmtPct(r.changePercentWeek)}</td>
+                        <td style={{ ...tdR, color: pctColor(r.changePercentMonth) }}>{fmtPct(r.changePercentMonth)}</td>
+                        <td style={tdR}>{r.volume?.toLocaleString('ja-JP') ?? '---'}</td>
+                        <td style={tdR}>{r.marketCap ? `${(r.marketCap / 1e8).toLocaleString('ja-JP', { maximumFractionDigits: 0 })} 億` : '---'}</td>
                         <td style={tdR}>{r.per != null ? r.per.toFixed(1) : '---'}</td>
-                        <td style={tdR}>{r.roe != null ? `${r.roe.toFixed(1)}%` : '---'}</td>
                         <td style={tdR}>{r.dividendYield != null ? `${r.dividendYield.toFixed(2)}%` : '---'}</td>
                         <td style={{ ...tdR, color: pctColor(r.sma25Angle) }}>{fmtPct(r.sma25Angle)}</td>
                         <td style={{ ...tdR, color: pctColor(r.sma75Angle) }}>{fmtPct(r.sma75Angle)}</td>
+                        <td style={{ ...td, fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{r.earningsLastDate ?? '---'}</td>
+                        <td style={{ ...td, fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>{r.earningsNextDate ?? '---'}</td>
                         <td style={{ ...td, fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
                           {r.daily_a_stage ?? '-'}/{r.daily_b_stage ?? '-'} {r.weekly_a_stage ?? '-'}/{r.weekly_b_stage ?? '-'} {r.monthly_a_stage ?? '-'}/{r.monthly_b_stage ?? '-'}
                         </td>
@@ -592,37 +559,6 @@ function Section({ step, label, disabled, children }: { step: number; label: str
         <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)' }}>{label}</span>
       </div>
       <div style={{ paddingLeft: '28px' }}>{children}</div>
-    </div>
-  )
-}
-
-interface ButtonRowProps {
-  options: { v: string; label: string }[]
-  value: string
-  onChange: (v: string) => void
-}
-function ButtonRow({ options, value, onChange }: ButtonRowProps) {
-  return (
-    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-      {options.map((o) => (
-        <button
-          key={o.v}
-          onClick={() => onChange(o.v)}
-          style={{
-            padding: '8px 16px',
-            fontSize: '12px',
-            fontFamily: 'var(--font-mono)',
-            background: value === o.v ? 'var(--accent-primary)' : 'var(--bg-surface)',
-            color: value === o.v ? '#fff' : 'var(--text-secondary)',
-            border: `1px solid ${value === o.v ? 'var(--accent-primary)' : 'var(--border-base)'}`,
-            borderRadius: 'var(--radius-sm)',
-            cursor: 'pointer',
-            fontWeight: 500,
-          }}
-        >
-          {o.label}
-        </button>
-      ))}
     </div>
   )
 }
