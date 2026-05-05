@@ -26,15 +26,22 @@ interface StockRow {
   marginType?: string
   sectorLarge: string
   price: number
+  currency?: string | null
   changePercent: number
   changePercentWeek?: number
   changePercentMonth?: number
+  perfPct3m?: number | null
+  perfPct6m?: number | null
+  perfPctYtd?: number | null
   volume: number
+  avgVolume10d?: number | null
+  avgVolume30d?: number | null
   marketCap?: number
+  marketCapCurrency?: string | null
   per?: number
   dividendYield?: number
-  sma25Angle?: number
-  sma75Angle?: number
+  sma25Angle?: number | null
+  sma75Angle?: number | null
   earningsLastDate?: string | null
   earningsNextDate?: string | null
   daily_a_stage: number | null
@@ -49,11 +56,18 @@ type SortKey =
   | 'ticker'
   | 'name'
   | 'price'
+  | 'currency'
   | 'changePercent'
   | 'changePercentWeek'
   | 'changePercentMonth'
+  | 'perfPct3m'
+  | 'perfPct6m'
+  | 'perfPctYtd'
   | 'volume'
+  | 'avgVolume10d'
+  | 'avgVolume30d'
   | 'marketCap'
+  | 'marketCapCurrency'
   | 'per'
   | 'dividendYield'
   | 'sma25Angle'
@@ -299,25 +313,32 @@ export default function ScreenerPage() {
             </div>
           ) : (
             <div style={{ overflowX: 'auto' }}>
-              <table style={{ minWidth: '1700px', borderCollapse: 'collapse', fontSize: '12px' }}>
+              <table style={{ minWidth: '2400px', borderCollapse: 'collapse', fontSize: '12px' }}>
                 <thead>
                   <tr style={{ background: 'var(--bg-elevated)', borderBottom: '1px solid var(--border-dim)' }}>
                     <th style={th}></th>
-                    <SortableTh label="コード"     sortKey="ticker"             current={sort} onClick={toggleSort} />
+                    <SortableTh label="コード"     sortKey="ticker"              current={sort} onClick={toggleSort} />
                     <th style={th}>TV形式</th>
-                    <SortableTh label="銘柄名"     sortKey="name"               current={sort} onClick={toggleSort} />
-                    <SortableTh label="株価"       sortKey="price"              current={sort} onClick={toggleSort} align="right" />
-                    <SortableTh label="日%"        sortKey="changePercent"      current={sort} onClick={toggleSort} align="right" />
-                    <SortableTh label="週%"        sortKey="changePercentWeek"  current={sort} onClick={toggleSort} align="right" />
-                    <SortableTh label="月%"        sortKey="changePercentMonth" current={sort} onClick={toggleSort} align="right" />
-                    <SortableTh label="出来高"     sortKey="volume"             current={sort} onClick={toggleSort} align="right" />
-                    <SortableTh label="時価総額"   sortKey="marketCap"          current={sort} onClick={toggleSort} align="right" />
-                    <SortableTh label="PER"        sortKey="per"                current={sort} onClick={toggleSort} align="right" />
-                    <SortableTh label="配当"       sortKey="dividendYield"      current={sort} onClick={toggleSort} align="right" />
-                    <SortableTh label="SMA25角"    sortKey="sma25Angle"         current={sort} onClick={toggleSort} align="right" />
-                    <SortableTh label="SMA75角"    sortKey="sma75Angle"         current={sort} onClick={toggleSort} align="right" />
-                    <SortableTh label="前回決算"   sortKey="earningsLastDate"   current={sort} onClick={toggleSort} />
-                    <SortableTh label="次回決算"   sortKey="earningsNextDate"   current={sort} onClick={toggleSort} />
+                    <SortableTh label="銘柄名"     sortKey="name"                current={sort} onClick={toggleSort} />
+                    <SortableTh label="株価"       sortKey="price"               current={sort} onClick={toggleSort} align="right" />
+                    <SortableTh label="通貨"       sortKey="currency"            current={sort} onClick={toggleSort} />
+                    <SortableTh label="日%"        sortKey="changePercent"       current={sort} onClick={toggleSort} align="right" />
+                    <SortableTh label="週%"        sortKey="changePercentWeek"   current={sort} onClick={toggleSort} align="right" />
+                    <SortableTh label="月%"        sortKey="changePercentMonth"  current={sort} onClick={toggleSort} align="right" />
+                    <SortableTh label="3ヶ月%"     sortKey="perfPct3m"           current={sort} onClick={toggleSort} align="right" />
+                    <SortableTh label="6ヶ月%"     sortKey="perfPct6m"           current={sort} onClick={toggleSort} align="right" />
+                    <SortableTh label="年初来%"    sortKey="perfPctYtd"          current={sort} onClick={toggleSort} align="right" />
+                    <SortableTh label="出来高"     sortKey="volume"              current={sort} onClick={toggleSort} align="right" />
+                    <SortableTh label="平均10日"   sortKey="avgVolume10d"        current={sort} onClick={toggleSort} align="right" />
+                    <SortableTh label="平均30日"   sortKey="avgVolume30d"        current={sort} onClick={toggleSort} align="right" />
+                    <SortableTh label="時価総額"   sortKey="marketCap"           current={sort} onClick={toggleSort} align="right" />
+                    <SortableTh label="時総通貨"   sortKey="marketCapCurrency"   current={sort} onClick={toggleSort} />
+                    <SortableTh label="PER"        sortKey="per"                 current={sort} onClick={toggleSort} align="right" />
+                    <SortableTh label="配当"       sortKey="dividendYield"       current={sort} onClick={toggleSort} align="right" />
+                    <SortableTh label="SMA25角"    sortKey="sma25Angle"          current={sort} onClick={toggleSort} align="right" />
+                    <SortableTh label="SMA75角"    sortKey="sma75Angle"          current={sort} onClick={toggleSort} align="right" />
+                    <SortableTh label="前回決算"   sortKey="earningsLastDate"    current={sort} onClick={toggleSort} />
+                    <SortableTh label="次回決算"   sortKey="earningsNextDate"    current={sort} onClick={toggleSort} />
                     <th style={th}>ステージ (日A/B 週A/B 月A/B)</th>
                   </tr>
                 </thead>
@@ -357,15 +378,22 @@ export default function ScreenerPage() {
                         </td>
                         <td style={td}>{r.name}</td>
                         <td style={tdR}>{r.price?.toLocaleString('ja-JP', { maximumFractionDigits: 2 }) ?? '---'}</td>
+                        <td style={td}>{r.currency ?? '---'}</td>
                         <td style={{ ...tdR, color: pctColor(r.changePercent) }}>{fmtPct(r.changePercent)}</td>
                         <td style={{ ...tdR, color: pctColor(r.changePercentWeek) }}>{fmtPct(r.changePercentWeek)}</td>
                         <td style={{ ...tdR, color: pctColor(r.changePercentMonth) }}>{fmtPct(r.changePercentMonth)}</td>
+                        <td style={{ ...tdR, color: pctColor(r.perfPct3m ?? undefined) }}>{fmtPct(r.perfPct3m ?? undefined)}</td>
+                        <td style={{ ...tdR, color: pctColor(r.perfPct6m ?? undefined) }}>{fmtPct(r.perfPct6m ?? undefined)}</td>
+                        <td style={{ ...tdR, color: pctColor(r.perfPctYtd ?? undefined) }}>{fmtPct(r.perfPctYtd ?? undefined)}</td>
                         <td style={tdR}>{r.volume?.toLocaleString('ja-JP') ?? '---'}</td>
+                        <td style={tdR}>{r.avgVolume10d != null ? r.avgVolume10d.toLocaleString('ja-JP') : '---'}</td>
+                        <td style={tdR}>{r.avgVolume30d != null ? r.avgVolume30d.toLocaleString('ja-JP') : '---'}</td>
                         <td style={tdR}>{r.marketCap ? `${(r.marketCap / 1e8).toLocaleString('ja-JP', { maximumFractionDigits: 0 })} 億` : '---'}</td>
+                        <td style={td}>{r.marketCapCurrency ?? '---'}</td>
                         <td style={tdR}>{r.per != null ? r.per.toFixed(1) : '---'}</td>
                         <td style={tdR}>{r.dividendYield != null ? `${r.dividendYield.toFixed(2)}%` : '---'}</td>
-                        <td style={{ ...tdR, color: pctColor(r.sma25Angle) }}>{fmtPct(r.sma25Angle)}</td>
-                        <td style={{ ...tdR, color: pctColor(r.sma75Angle) }}>{fmtPct(r.sma75Angle)}</td>
+                        <td style={{ ...tdR, color: pctColor(r.sma25Angle ?? undefined) }}>{fmtAngle(r.sma25Angle ?? undefined)}</td>
+                        <td style={{ ...tdR, color: pctColor(r.sma75Angle ?? undefined) }}>{fmtAngle(r.sma75Angle ?? undefined)}</td>
                         <td style={{ ...td, fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{r.earningsLastDate ?? '---'}</td>
                         <td style={{ ...td, fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>{r.earningsNextDate ?? '---'}</td>
                         <td style={{ ...td, fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
@@ -388,6 +416,12 @@ function fmtPct(v: number | undefined): string {
   if (v == null || !Number.isFinite(v)) return '---'
   const sign = v > 0 ? '+' : ''
   return `${sign}${v.toFixed(2)}%`
+}
+
+function fmtAngle(v: number | undefined): string {
+  if (v == null || !Number.isFinite(v)) return '---'
+  const sign = v > 0 ? '+' : ''
+  return `${sign}${v.toFixed(2)}°`
 }
 
 function pctColor(v: number | undefined): string {

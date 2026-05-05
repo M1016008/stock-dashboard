@@ -20,10 +20,13 @@ interface SnapshotRow {
   ticker: string
   name: string
   price: number | null
+  currency: string | null
   change_percent_1d: number | null
   volume_1d: number | null
   avg_volume_10d: number | null
+  avg_volume_30d: number | null
   market_cap: number | null
+  market_cap_currency: string | null
   per: number | null
   dividend_yield_pct: number | null
   perf_pct_1w: number | null
@@ -58,6 +61,7 @@ interface ScreenerStockRow {
   marginType?: string
   sectorLarge: string
   price: number | null
+  currency: string | null
   changePercent: number | null
   changePercentWeek: number | null
   changePercentMonth: number | null
@@ -65,7 +69,10 @@ interface ScreenerStockRow {
   perfPct6m: number | null
   perfPctYtd: number | null
   volume: number | null
+  avgVolume10d: number | null
+  avgVolume30d: number | null
   marketCap: number | null
+  marketCapCurrency: string | null
   per: number | null
   dividendYield: number | null
   sma25Angle: number | null
@@ -107,9 +114,17 @@ async function loadSnapshotByDate(date: string): Promise<SnapshotRow[]> {
   return execAll<SnapshotRow>(`SELECT * FROM tv_daily_snapshots WHERE date = ?`, [date])
 }
 
-function pctAngle(curr: number | null, prev: number | null): number | null {
-  if (curr == null || prev == null || prev === 0) return null
-  return ((curr - prev) / prev) * 100
+/**
+ * 短期SMAと長期SMAの差から「角度」を算出する。
+ * 直角三角形を考え、隣辺=長期SMA、対辺=(短期SMA-長期SMA) として
+ * 傾き = (短期 - 長期) / 長期 を求め、atan() で角度（度）に変換する。
+ *  例) 5% 上向き → atan(0.05) ≒ 2.86°
+ *      30% 上向き → atan(0.30) ≒ 16.7°
+ */
+function smaAngleDegrees(shortSma: number | null, longSma: number | null): number | null {
+  if (shortSma == null || longSma == null || longSma === 0) return null
+  const slope = (shortSma - longSma) / longSma
+  return Math.atan(slope) * (180 / Math.PI)
 }
 
 function snapshotToMaValues(s: SnapshotRow): MaValues {
@@ -144,6 +159,7 @@ function buildResultRow(s: SnapshotRow): ScreenerStockRow | null {
     marginType: master?.marginType,
     sectorLarge: master?.sectorLarge ?? 'その他',
     price: s.price,
+    currency: s.currency,
     changePercent: s.change_percent_1d,
     changePercentWeek: s.perf_pct_1w,
     changePercentMonth: s.perf_pct_1m,
@@ -151,12 +167,15 @@ function buildResultRow(s: SnapshotRow): ScreenerStockRow | null {
     perfPct6m: s.perf_pct_6m,
     perfPctYtd: s.perf_pct_ytd,
     volume: s.volume_1d,
+    avgVolume10d: s.avg_volume_10d,
+    avgVolume30d: s.avg_volume_30d,
     marketCap: s.market_cap,
+    marketCapCurrency: s.market_cap_currency,
     per: s.per,
     dividendYield: s.dividend_yield_pct,
-    // SMA角度: 短期SMAと長期SMAの差を％で表示
-    sma25Angle: pctAngle(s.sma_5d, s.sma_25d),
-    sma75Angle: pctAngle(s.sma_25d, s.sma_75d),
+    // SMA角度: atan で実際の角度（度）に変換
+    sma25Angle: smaAngleDegrees(s.sma_5d, s.sma_25d),
+    sma75Angle: smaAngleDegrees(s.sma_25d, s.sma_75d),
     earningsLastDate: s.earnings_last_date,
     earningsNextDate: s.earnings_next_date,
     ...stages,
