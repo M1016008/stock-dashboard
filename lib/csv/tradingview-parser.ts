@@ -105,12 +105,82 @@ function stripBom(s: string): string {
   return s.charCodeAt(0) === 0xfeff ? s.slice(1) : s
 }
 
-function splitLines(text: string): string[] {
-  return stripBom(text)
-    .replace(/\r\n/g, '\n')
-    .replace(/\r/g, '\n')
-    .split('\n')
-    .filter((l) => l.length > 0)
+function normalizeText(text: string): string {
+  return stripBom(text).replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+}
+
+/**
+ * 1行目を見て区切り文字を推定する。
+ * クォート外のタブとカンマの個数を比較し、多い方を採用。
+ */
+function detectDelimiter(firstLine: string): '\t' | ',' {
+  let inQuotes = false
+  let tabs = 0
+  let commas = 0
+  for (let i = 0; i < firstLine.length; i++) {
+    const c = firstLine[i]
+    if (c === '"') {
+      // 連続する "" はエスケープ。それ以外はクォート境界。
+      if (inQuotes && firstLine[i + 1] === '"') {
+        i++
+        continue
+      }
+      inQuotes = !inQuotes
+      continue
+    }
+    if (inQuotes) continue
+    if (c === '\t') tabs++
+    else if (c === ',') commas++
+  }
+  return tabs >= commas ? '\t' : ','
+}
+
+/**
+ * RFC 4180 風の CSV/TSV をパースして、行 × 列の配列を返す。
+ * - クォート (") で囲まれたフィールド内の区切り文字・改行はリテラル扱い
+ * - "" は " のエスケープ
+ */
+function parseDelimited(text: string, delimiter: string): string[][] {
+  const rows: string[][] = []
+  let row: string[] = []
+  let field = ''
+  let inQuotes = false
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]
+    if (inQuotes) {
+      if (c === '"') {
+        if (text[i + 1] === '"') {
+          field += '"'
+          i++
+        } else {
+          inQuotes = false
+        }
+      } else {
+        field += c
+      }
+    } else {
+      if (c === '"') {
+        inQuotes = true
+      } else if (c === delimiter) {
+        row.push(field)
+        field = ''
+      } else if (c === '\n') {
+        row.push(field)
+        rows.push(row)
+        row = []
+        field = ''
+      } else {
+        field += c
+      }
+    }
+  }
+  // 最後のフィールド/行を flush
+  if (field.length > 0 || row.length > 0) {
+    row.push(field)
+    rows.push(row)
+  }
+  // 完全に空の行を除外
+  return rows.filter((r) => r.length > 1 || (r.length === 1 && r[0].length > 0))
 }
 
 function parseNumber(raw: string): number | null {
@@ -128,12 +198,20 @@ function normalizeTicker(symbol: string): string {
 }
 
 export function parseTradingViewCsv(text: string): ParseResult {
-  const lines = splitLines(text)
-  if (lines.length === 0) {
+  const normalized = normalizeText(text)
+  if (normalized.length === 0) {
     return { rows: [], errors: ['ファイルが空です'], detectedColumns: [] }
   }
 
-  const header = lines[0].split('\t').map((h) => h.trim())
+  const firstLine = normalized.split('\n', 1)[0] ?? ''
+  const delimiter = detectDelimiter(firstLine)
+
+  const records = parseDelimited(normalized, delimiter)
+  if (records.length === 0) {
+    return { rows: [], errors: ['ファイルが空です'], detectedColumns: [] }
+  }
+
+  const header = records[0].map((h) => h.trim())
   const errors: string[] = []
 
   for (const req of REQUIRED_COLUMNS) {
@@ -153,8 +231,8 @@ export function parseTradingViewCsv(text: string): ParseResult {
   }
 
   const rows: ParsedRow[] = []
-  for (let i = 1; i < lines.length; i++) {
-    const cols = lines[i].split('\t')
+  for (let i = 1; i < records.length; i++) {
+    const cols = records[i]
     const symbol = cols[symbolIdx]?.trim()
     if (!symbol) continue
 
