@@ -6,6 +6,7 @@ import { MarketBadge } from '@/components/ui/MarketBadge'
 import { PriceDisplay } from '@/components/ui/PriceDisplay'
 import { TradingViewChart } from '@/components/charts/TradingViewChart'
 import { PerformanceCard } from '@/components/stock/PerformanceCard'
+import { WatchlistButton } from '@/components/ui/WatchlistButton'
 import { StageTimeline } from '@/components/stock/StageTimeline'
 import { findTicker } from '@/lib/master/tickers'
 import type { StockQuote, Fundamentals } from '@/types/stock'
@@ -61,6 +62,9 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
         flexWrap: 'wrap',
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <span style={{ fontSize: '22px', lineHeight: 1 }}>
+            <WatchlistButton ticker={ticker} size="md" />
+          </span>
           <span style={{
             fontFamily: 'var(--font-mono)',
             fontSize: '22px',

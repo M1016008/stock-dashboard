@@ -4,6 +4,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { toTvSymbol, buildTvWatchlistText } from '@/lib/tv-format'
+import { WatchlistButton } from '@/components/ui/WatchlistButton'
 
 type Market = 'JP' | 'US'
 type AxisKey = 'daily_a' | 'daily_b' | 'weekly_a' | 'weekly_b' | 'monthly_a' | 'monthly_b'
@@ -325,6 +326,7 @@ export default function ScreenerPage() {
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
                 <thead>
                   <tr style={{ background: 'var(--bg-elevated)', borderBottom: '1px solid var(--border-dim)' }}>
+                    <th style={th}></th>
                     <SortableTh label="コード"   sortKey="ticker"             current={sort} onClick={toggleSort} />
                     <th style={th}>TV形式</th>
                     <SortableTh label="銘柄名"   sortKey="name"               current={sort} onClick={toggleSort} />
@@ -349,6 +351,9 @@ export default function ScreenerPage() {
                     const copied = copiedTicker === r.ticker
                     return (
                       <tr key={r.ticker} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                        <td style={{ ...td, width: '32px' }}>
+                          <WatchlistButton ticker={r.ticker} size="sm" />
+                        </td>
                         <td style={td}>
                           <Link href={`/stock/${encodeURIComponent(r.ticker)}`} style={{ color: 'var(--accent-primary)', fontFamily: 'var(--font-mono)', textDecoration: 'none', fontWeight: 600 }}>
                             {r.ticker.replace('.T', '')}
