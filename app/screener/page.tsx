@@ -48,7 +48,6 @@ interface StockRow {
 type SortKey =
   | 'ticker'
   | 'name'
-  | 'marketSegment'
   | 'price'
   | 'changePercent'
   | 'changePercentWeek'
@@ -300,16 +299,13 @@ export default function ScreenerPage() {
             </div>
           ) : (
             <div style={{ overflowX: 'auto' }}>
-              <table style={{ minWidth: '2000px', borderCollapse: 'collapse', fontSize: '12px' }}>
+              <table style={{ minWidth: '1700px', borderCollapse: 'collapse', fontSize: '12px' }}>
                 <thead>
                   <tr style={{ background: 'var(--bg-elevated)', borderBottom: '1px solid var(--border-dim)' }}>
                     <th style={th}></th>
                     <SortableTh label="コード"     sortKey="ticker"             current={sort} onClick={toggleSort} />
                     <th style={th}>TV形式</th>
                     <SortableTh label="銘柄名"     sortKey="name"               current={sort} onClick={toggleSort} />
-                    <th style={th}>市場</th>
-                    <SortableTh label="東証区分"   sortKey="marketSegment"      current={sort} onClick={toggleSort} />
-                    <th style={th}>貸借/信用</th>
                     <SortableTh label="株価"       sortKey="price"              current={sort} onClick={toggleSort} align="right" />
                     <SortableTh label="日%"        sortKey="changePercent"      current={sort} onClick={toggleSort} align="right" />
                     <SortableTh label="週%"        sortKey="changePercentWeek"  current={sort} onClick={toggleSort} align="right" />
@@ -360,22 +356,6 @@ export default function ScreenerPage() {
                           </button>
                         </td>
                         <td style={td}>{r.name}</td>
-                        <td style={td}>{r.market}</td>
-                        <td style={td}>{r.marketSegment || '---'}</td>
-                        <td style={td}>
-                          {r.marginType ? (
-                            <span style={{
-                              display: 'inline-block',
-                              padding: '1px 6px',
-                              fontSize: '10px',
-                              border: `1px solid ${r.marginType === '貸借' ? 'var(--accent-primary)' : 'var(--text-muted)'}`,
-                              color: r.marginType === '貸借' ? 'var(--accent-primary)' : 'var(--text-muted)',
-                              borderRadius: '2px',
-                            }}>
-                              {r.marginType}
-                            </span>
-                          ) : '---'}
-                        </td>
                         <td style={tdR}>{r.price?.toLocaleString('ja-JP', { maximumFractionDigits: 2 }) ?? '---'}</td>
                         <td style={{ ...tdR, color: pctColor(r.changePercent) }}>{fmtPct(r.changePercent)}</td>
                         <td style={{ ...tdR, color: pctColor(r.changePercentWeek) }}>{fmtPct(r.changePercentWeek)}</td>
