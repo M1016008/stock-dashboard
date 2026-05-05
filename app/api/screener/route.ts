@@ -1,0 +1,184 @@
+// app/api/screener/route.ts
+// マルチ軸スクリーナー API:
+//   - market: JP/US/ALL
+//   - segment: プライム/スタンダード/グロース or NYSE/NASDAQ
+//   - daily_a / daily_b / weekly_a / weekly_b / monthly_a / monthly_b: 各系統で 1..6 を指定（未指定=フィルタなし）
+// 指定された系統は全て AND で絞り込む。
+
+import { NextRequest, NextResponse } from 'next/server'
+import { promises as fs } from 'node:fs'
+import path from 'node:path'
+import { getTickersByMarket, type MasterTicker } from '@/lib/master/tickers'
+import { getQuote, getFundamentals, getHistory } from '@/lib/yahoo-finance'
+import { buildMaValuesFromOhlcv, calculateAllStages } from '@/lib/hex-stage'
+import type { Fundamentals } from '@/types/stock'
+
+export const dynamic = 'force-dynamic'
+export const maxDuration = 300
+
+const SNAPSHOT_DIR = path.join(process.cwd(), 'data', 'snapshots')
+
+interface ScreenerStockRow {
+  ticker: string
+  name: string
+  market: 'JP' | 'US'
+  marketSegment: string
+  marginType?: string
+  sectorLarge: string
+  price: number
+  changePercent: number
+  marketCap?: number
+  per?: number
+  pbr?: number
+  roe?: number
+  dividendYield?: number
+  daily_a_stage: number | null
+  daily_b_stage: number | null
+  weekly_a_stage: number | null
+  weekly_b_stage: number | null
+  monthly_a_stage: number | null
+  monthly_b_stage: number | null
+}
+
+const STAGE_KEYS = [
+  'daily_a_stage',
+  'daily_b_stage',
+  'weekly_a_stage',
+  'weekly_b_stage',
+  'monthly_a_stage',
+  'monthly_b_stage',
+] as const
+
+const STAGE_PARAM_MAP: Record<string, typeof STAGE_KEYS[number]> = {
+  daily_a: 'daily_a_stage',
+  daily_b: 'daily_b_stage',
+  weekly_a: 'weekly_a_stage',
+  weekly_b: 'weekly_b_stage',
+  monthly_a: 'monthly_a_stage',
+  monthly_b: 'monthly_b_stage',
+}
+
+function todayStr(): string {
+  return new Date().toISOString().split('T')[0]
+}
+
+function snapshotPath(market: string): string {
+  return path.join(SNAPSHOT_DIR, `screener_v2_${market}_${todayStr()}.json`)
+}
+
+async function loadSnapshot(market: string): Promise<ScreenerStockRow[] | null> {
+  try {
+    const buf = await fs.readFile(snapshotPath(market), 'utf-8')
+    return JSON.parse(buf) as ScreenerStockRow[]
+  } catch {
+    return null
+  }
+}
+
+async function saveSnapshot(market: string, rows: ScreenerStockRow[]): Promise<void> {
+  try {
+    await fs.mkdir(SNAPSHOT_DIR, { recursive: true })
+    await fs.writeFile(snapshotPath(market), JSON.stringify(rows), 'utf-8')
+  } catch (e) {
+    console.error('saveSnapshot error:', e)
+  }
+}
+
+async function fetchOne(t: MasterTicker): Promise<ScreenerStockRow | null> {
+  try {
+    const [quote, fund, history] = await Promise.all([
+      getQuote(t.ticker),
+      getFundamentals(t.ticker).catch(() => ({} as Fundamentals)),
+      getHistory(t.ticker, '2y').catch(() => []),
+    ])
+
+    const ma = buildMaValuesFromOhlcv(history)
+    const stages = calculateAllStages(ma)
+
+    return {
+      ticker: t.ticker,
+      name: t.name,
+      market: t.market,
+      marketSegment: t.marketSegment,
+      marginType: t.marginType,
+      sectorLarge: t.sectorLarge,
+      price: quote.price,
+      changePercent: quote.changePercent,
+      marketCap: quote.marketCap,
+      per: fund.per,
+      pbr: fund.pbr,
+      roe: fund.roe,
+      dividendYield: fund.dividendYield,
+      daily_a_stage: stages.daily_a_stage,
+      daily_b_stage: stages.daily_b_stage,
+      weekly_a_stage: stages.weekly_a_stage,
+      weekly_b_stage: stages.weekly_b_stage,
+      monthly_a_stage: stages.monthly_a_stage,
+      monthly_b_stage: stages.monthly_b_stage,
+    }
+  } catch (e) {
+    console.error(`screener fetchOne error for ${t.ticker}:`, e)
+    return null
+  }
+}
+
+async function fetchAll(tickers: MasterTicker[], concurrency = 5): Promise<ScreenerStockRow[]> {
+  const results: ScreenerStockRow[] = []
+  for (let i = 0; i < tickers.length; i += concurrency) {
+    const batch = tickers.slice(i, i + concurrency)
+    const chunk = await Promise.all(batch.map(fetchOne))
+    for (const r of chunk) if (r) results.push(r)
+    await new Promise((r) => setTimeout(r, 200))
+  }
+  return results
+}
+
+export async function GET(request: NextRequest) {
+  try {
+    const { searchParams } = new URL(request.url)
+    const market = (searchParams.get('market') ?? 'JP') as 'JP' | 'US' | 'ALL'
+    const segment = searchParams.get('segment')
+
+    // 6系統のステージフィルタ
+    const stageFilter: Partial<Record<typeof STAGE_KEYS[number], number>> = {}
+    for (const [param, key] of Object.entries(STAGE_PARAM_MAP)) {
+      const v = searchParams.get(param)
+      if (v) {
+        const n = Number(v)
+        if (n >= 1 && n <= 6) stageFilter[key] = n
+      }
+    }
+
+    let rows = await loadSnapshot(market)
+    let cached = true
+    if (!rows) {
+      cached = false
+      const tickers = getTickersByMarket(market)
+      rows = await fetchAll(tickers)
+      await saveSnapshot(market, rows)
+    }
+
+    let filtered = rows
+    if (segment) filtered = filtered.filter((r) => r.marketSegment === segment)
+
+    // ステージ AND フィルタ
+    for (const [key, val] of Object.entries(stageFilter)) {
+      filtered = filtered.filter((r) => (r as any)[key] === val)
+    }
+
+    return NextResponse.json({
+      results: filtered,
+      total: filtered.length,
+      universe: rows.length,
+      cached,
+      date: todayStr(),
+      filters: { market, segment, ...stageFilter },
+    })
+  } catch (error) {
+    console.error('Screener API error:', error)
+    return NextResponse.json(
+      { error: 'Screener failed', message: (error as Error).message },
+      { status: 500 },
+    )
+  }
+}

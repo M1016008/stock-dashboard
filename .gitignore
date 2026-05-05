@@ -39,3 +39,16 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# local SQLite DB and API snapshot cache
+/data/stockboard.db
+/data/stockboard.db-journal
+/data/snapshots/
+
+# editor
+.vscode/
+.idea/
+
+# logs
+logs/
+*.log

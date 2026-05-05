@@ -1,26 +1,162 @@
-@import "tailwindcss";
+/* app/globals.css */
+/* ─── フォント読み込み ─── */
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+JP:wght@300;400;500;600&family=Space+Grotesk:wght@500;700&display=swap');
 
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ─── ライトプロフェッショナルテーマ（HEX-app と統一） ─── */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* ベースカラー（白基調） */
+  --bg-void:       #f1f5f9;   /* 最深部 = ページ全体の薄いグレー */
+  --bg-base:       #ffffff;   /* 標準背景 */
+  --bg-surface:    #ffffff;   /* カード背景 */
+  --bg-elevated:   #f8fafc;   /* hover背景 */
+  --bg-overlay:    #f1f5f9;
+
+  /* ボーダー */
+  --border-subtle: #e5e7eb;
+  --border-dim:    #d1d5db;
+  --border-base:   #cbd5e1;
+  --border-strong: #94a3b8;
+
+  /* テキスト */
+  --text-primary:   #0f172a;   /* slate-900 */
+  --text-secondary: #334155;   /* slate-700 */
+  --text-muted:     #64748b;   /* slate-500 */
+  --text-disabled:  #94a3b8;   /* slate-400 */
+
+  /* アクセント（アンバー、白背景でしっかり見える濃さ） */
+  --accent-primary: #d97706;   /* amber-600 */
+  --accent-dim:     rgba(217,119,6,0.12);
+  --accent-glow:    rgba(217,119,6,0.04);
+
+  /* 株価カラー（日本式: 陽=赤・陰=青） */
+  --price-up:       #dc2626;   /* red-600 */
+  --price-up-dim:   rgba(220,38,38,0.10);
+  --price-down:     #2563eb;   /* blue-600 */
+  --price-down-dim: rgba(37,99,235,0.10);
+  --price-neutral:  #64748b;
+
+  /* HEXステージカラー（HEX-app 配色と同期） */
+  --stage-1: #22c55e;   /* 緑   パーフェクト */
+  --stage-2: #f59e0b;   /* 橙黄 調整 */
+  --stage-3: #ef4444;   /* 赤   弱気移行 */
+  --stage-4: #ec4899;   /* ピンク リバース */
+  --stage-5: #3b82f6;   /* 青   反発兆し */
+  --stage-6: #a855f7;   /* 紫   強気移行 */
+
+  /* タイポグラフィ */
+  --font-mono:    'IBM Plex Mono', monospace;
+  --font-sans:    'IBM Plex Sans JP', 'Hiragino Sans', sans-serif;
+  --font-display: 'Space Grotesk', sans-serif;
+
+  /* スペーシング */
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --space-xl: 32px;
+
+  /* 角丸 */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+
+  /* シャドウ（白背景用に淡く） */
+  --shadow-card:     0 1px 2px rgba(15,23,42,0.04), 0 1px 3px rgba(15,23,42,0.06);
+  --shadow-elevated: 0 4px 6px rgba(15,23,42,0.05), 0 10px 15px rgba(15,23,42,0.08);
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
+* { box-sizing: border-box; margin: 0; padding: 0; }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html, body {
+  height: 100%;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--bg-void);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
 }
+
+/* 数値は常にモノスペース */
+.num, [data-price], [data-volume], [data-percent] {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+/* アクセントライン */
+.accent-line {
+  border-left: 2px solid var(--accent-primary);
+  padding-left: var(--space-sm);
+}
+
+/* セクションヘッダー */
+.section-header {
+  font-size: 10px;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border-subtle);
+  padding-bottom: 6px;
+  margin-bottom: 12px;
+  font-weight: 600;
+}
+
+/* カード */
+.card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
+}
+
+.card:hover {
+  background: var(--bg-elevated);
+}
+
+/* 価格の点滅アニメーション */
+@keyframes priceFlash {
+  0%   { background-color: transparent; }
+  20%  { background-color: var(--accent-dim); }
+  100% { background-color: transparent; }
+}
+
+.price-flash {
+  animation: priceFlash 0.2s ease-out;
+}
+
+/* 上昇・下落カラー */
+.up   { color: var(--price-up); }
+.down { color: var(--price-down); }
+.neutral { color: var(--price-neutral); }
+
+/* スクロールバー（白背景用） */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg-void);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-base);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--border-strong);
+}
+
+/* ステージカラーユーティリティ */
+.stage-1 { --stage-color: var(--stage-1); }
+.stage-2 { --stage-color: var(--stage-2); }
+.stage-3 { --stage-color: var(--stage-3); }
+.stage-4 { --stage-color: var(--stage-4); }
+.stage-5 { --stage-color: var(--stage-5); }
+.stage-6 { --stage-color: var(--stage-6); }
