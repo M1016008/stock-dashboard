@@ -88,14 +88,11 @@ export default function ScreenerPage() {
   const hasAnyStage = Object.values(stages).some((v) => v && v.length > 0)
 
   useEffect(() => {
-    if (!segment || !hasAnyStage) {
-      setResults([])
-      return
-    }
     let cancelled = false
     setLoading(true)
     setError('')
-    const params = new URLSearchParams({ market, segment })
+    const params = new URLSearchParams({ market })
+    if (segment) params.set('segment', segment)
     for (const [k, v] of Object.entries(stages)) {
       if (v && v.length > 0) params.set(k, v.join(','))
     }
@@ -114,7 +111,7 @@ export default function ScreenerPage() {
       .catch((e) => { if (!cancelled) setError((e as Error).message) })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [market, segment, stages, hasAnyStage])
+  }, [market, segment, stages])
 
   const filterText = useMemo(() => {
     const parts: string[] = []
