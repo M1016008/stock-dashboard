@@ -54,11 +54,17 @@ export interface ParseResult {
   detectedColumns: string[]
 }
 
-const REQUIRED_COLUMNS = ['シンボル', '名称', '価格']
+/** 必須カラム。各要素は「どれか1つあればOK」のエイリアス配列。 */
+const REQUIRED_COLUMNS: string[][] = [
+  ['シンボル'],
+  ['名称', '詳細'],
+  ['価格'],
+]
 
-/** カラム名 → ParsedRow のキーへのマッピング */
+/** カラム名 → ParsedRow のキーへのマッピング（同じキーに複数エイリアスを持たせる） */
 const COLUMN_MAP: Record<string, keyof ParsedRow> = {
   '名称': 'name',
+  '詳細': 'name',
   '価格': 'price',
   '価格 - 通貨': 'currency',
   '価格変動 % 1日': 'changePercent1d',
@@ -214,9 +220,10 @@ export function parseTradingViewCsv(text: string): ParseResult {
   const header = records[0].map((h) => h.trim())
   const errors: string[] = []
 
-  for (const req of REQUIRED_COLUMNS) {
-    if (!header.includes(req)) {
-      errors.push(`必須カラム "${req}" が見つかりません`)
+  for (const aliases of REQUIRED_COLUMNS) {
+    if (!aliases.some((a) => header.includes(a))) {
+      const label = aliases.length === 1 ? aliases[0] : aliases.join(' / ')
+      errors.push(`必須カラム "${label}" が見つかりません`)
     }
   }
   if (errors.length > 0) {
