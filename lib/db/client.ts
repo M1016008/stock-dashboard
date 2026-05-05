@@ -1,22 +1,30 @@
 // lib/db/client.ts
-import Database from 'better-sqlite3'
-import { drizzle } from 'drizzle-orm/better-sqlite3'
+import { createClient } from '@libsql/client'
+import { drizzle } from 'drizzle-orm/libsql'
 import * as schema from './schema'
-import path from 'path'
-import fs from 'fs'
 
-const DB_PATH = path.join(process.cwd(), 'data', 'stockboard.db')
+const url = process.env.TURSO_DATABASE_URL
+const authToken = process.env.TURSO_AUTH_TOKEN
 
-// dataディレクトリが存在しない場合は作成
-fs.mkdirSync(path.dirname(DB_PATH), { recursive: true })
+if (!url) {
+  throw new Error(
+    'TURSO_DATABASE_URL is not set. Copy .env.local.example to .env.local and fill in your Turso credentials.',
+  )
+}
 
-// シングルトンパターン（Next.jsのホットリロードで多重接続を防ぐ）
-const globalForDb = global as unknown as { db: ReturnType<typeof drizzle> }
+// libsql:// (remote) と file: (ローカル) のどちらにも対応する。
+// remote では authToken が必須、ローカルファイルでは不要。
+const isRemote = url.startsWith('libsql://') || url.startsWith('https://') || url.startsWith('wss://')
+if (isRemote && !authToken) {
+  throw new Error('TURSO_AUTH_TOKEN is required when using a remote Turso URL.')
+}
 
-export const db = globalForDb.db ?? drizzle(
-  new Database(DB_PATH, { verbose: process.env.NODE_ENV === 'development' ? console.log : undefined }),
-  { schema }
-)
+// Next.js のホットリロードで多重接続を防ぐためのシングルトン。
+const globalForDb = global as unknown as { db?: ReturnType<typeof drizzle> }
+
+export const db =
+  globalForDb.db ??
+  drizzle(createClient({ url, authToken }), { schema })
 
 if (process.env.NODE_ENV !== 'production') globalForDb.db = db
 

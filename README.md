@@ -2,7 +2,43 @@ This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-
 
 ## Getting Started
 
-First, run the development server:
+### 1. Turso (libSQL) のセットアップ
+
+このプロジェクトは Drizzle ORM + [Turso](https://turso.tech)（libSQL）をデータストアに使います。
+
+```bash
+# 1. Turso CLI のインストール（未導入の場合）
+curl -sSfL https://get.tur.so/install.sh | bash
+
+# 2. ログイン
+turso auth login
+
+# 3. データベースを作成
+turso db create stock-dashboard
+
+# 4. 接続 URL と認証トークンを取得
+turso db show stock-dashboard --url
+turso db tokens create stock-dashboard
+```
+
+取得した値を `.env.local` に設定します。
+
+```bash
+cp .env.local.example .env.local
+# エディタで TURSO_DATABASE_URL と TURSO_AUTH_TOKEN を埋める
+```
+
+### 2. 依存関係のインストールとマイグレーション
+
+```bash
+npm install
+npm run db:generate   # スキーマからマイグレーション SQL を生成
+npm run db:migrate    # Turso にマイグレーションを適用
+```
+
+> ローカル開発でクラウドに繋ぎたくない場合は `TURSO_DATABASE_URL=file:./data/stockboard.db` を使えば埋め込みの SQLite ファイルとして動作します。
+
+### 3. 開発サーバーを起動
 
 ```bash
 npm run dev
