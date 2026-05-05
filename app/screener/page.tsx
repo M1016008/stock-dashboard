@@ -313,7 +313,7 @@ export default function ScreenerPage() {
             </div>
           ) : (
             <div style={{ overflowX: 'auto' }}>
-              <table style={{ minWidth: '2400px', borderCollapse: 'collapse', fontSize: '12px' }}>
+              <table style={{ minWidth: '2500px', borderCollapse: 'collapse', fontSize: '12px' }}>
                 <thead>
                   <tr style={{ background: 'var(--bg-elevated)', borderBottom: '1px solid var(--border-dim)' }}>
                     <th style={th}></th>
@@ -339,6 +339,7 @@ export default function ScreenerPage() {
                     <SortableTh label="SMA75角"    sortKey="sma75Angle"          current={sort} onClick={toggleSort} align="right" />
                     <SortableTh label="前回決算"   sortKey="earningsLastDate"    current={sort} onClick={toggleSort} />
                     <SortableTh label="次回決算"   sortKey="earningsNextDate"    current={sort} onClick={toggleSort} />
+                    <SortableTh label="残日数"     sortKey="earningsNextDate"    current={sort} onClick={toggleSort} align="right" />
                     <th style={th}>ステージ (日A/B 週A/B 月A/B)</th>
                   </tr>
                 </thead>
@@ -396,6 +397,7 @@ export default function ScreenerPage() {
                         <td style={{ ...tdR, color: pctColor(r.sma75Angle ?? undefined) }}>{fmtAngle(r.sma75Angle ?? undefined)}</td>
                         <td style={{ ...td, fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{r.earningsLastDate ?? '---'}</td>
                         <td style={{ ...td, fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>{r.earningsNextDate ?? '---'}</td>
+                        <td style={{ ...tdR, color: daysColor(daysUntil(r.earningsNextDate)) }}>{fmtDaysUntil(r.earningsNextDate)}</td>
                         <td style={{ ...td, fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
                           {r.daily_a_stage ?? '-'}/{r.daily_b_stage ?? '-'} {r.weekly_a_stage ?? '-'}/{r.weekly_b_stage ?? '-'} {r.monthly_a_stage ?? '-'}/{r.monthly_b_stage ?? '-'}
                         </td>
@@ -422,6 +424,33 @@ function fmtAngle(v: number | undefined): string {
   if (v == null || !Number.isFinite(v)) return '---'
   const sign = v > 0 ? '+' : ''
   return `${sign}${v.toFixed(2)}°`
+}
+
+/** 次回決算日までの残日数（負なら過去）。日跨ぎは UTC 0時基準で安定化。 */
+function daysUntil(dateStr: string | null | undefined): number | null {
+  if (!dateStr) return null
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr)
+  if (!m) return null
+  const target = Date.UTC(+m[1], +m[2] - 1, +m[3])
+  const now = new Date()
+  const today = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate())
+  return Math.round((target - today) / 86400000)
+}
+
+function fmtDaysUntil(dateStr: string | null | undefined): string {
+  const d = daysUntil(dateStr)
+  if (d == null) return '---'
+  if (d === 0) return '本日'
+  if (d > 0) return `${d}日`
+  return `${d}日 (過去)`
+}
+
+function daysColor(d: number | null): string {
+  if (d == null) return 'var(--text-muted)'
+  if (d < 0) return 'var(--text-muted)'
+  if (d <= 7) return 'var(--price-down, #ef4444)'    // 1週間以内: 強調赤
+  if (d <= 30) return 'var(--accent-primary)'         // 1ヶ月以内: 強調
+  return 'var(--text-secondary)'
 }
 
 function pctColor(v: number | undefined): string {
