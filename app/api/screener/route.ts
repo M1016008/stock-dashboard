@@ -2,8 +2,9 @@
 // マルチ軸スクリーナー API:
 //   - market: JP/US/ALL
 //   - segment: プライム/スタンダード/グロース or NYSE/NASDAQ
-//   - daily_a / daily_b / weekly_a / weekly_b / monthly_a / monthly_b: 各系統で 1..6 を指定（未指定=フィルタなし）
-// 指定された系統は全て AND で絞り込む。
+//   - daily_a / daily_b / weekly_a / weekly_b / monthly_a / monthly_b:
+//       各系統で 1..6 を指定（カンマ区切りで複数指定可、例: daily_a=1,2,3）
+// 軸内は OR、軸間は AND で絞り込む。
 
 import { NextRequest, NextResponse } from 'next/server'
 import { promises as fs } from 'node:fs'
@@ -139,14 +140,16 @@ export async function GET(request: NextRequest) {
     const market = (searchParams.get('market') ?? 'JP') as 'JP' | 'US' | 'ALL'
     const segment = searchParams.get('segment')
 
-    // 6系統のステージフィルタ
-    const stageFilter: Partial<Record<typeof STAGE_KEYS[number], number>> = {}
+    // 6系統のステージフィルタ（軸内 OR / 軸間 AND）
+    const stageFilter: Partial<Record<typeof STAGE_KEYS[number], number[]>> = {}
     for (const [param, key] of Object.entries(STAGE_PARAM_MAP)) {
-      const v = searchParams.get(param)
-      if (v) {
-        const n = Number(v)
-        if (n >= 1 && n <= 6) stageFilter[key] = n
-      }
+      const raw = searchParams.get(param)
+      if (!raw) continue
+      const stages = raw
+        .split(',')
+        .map((s) => Number(s.trim()))
+        .filter((n) => Number.isInteger(n) && n >= 1 && n <= 6)
+      if (stages.length > 0) stageFilter[key] = Array.from(new Set(stages)).sort()
     }
 
     let rows = await loadSnapshot(market)
@@ -161,9 +164,12 @@ export async function GET(request: NextRequest) {
     let filtered = rows
     if (segment) filtered = filtered.filter((r) => r.marketSegment === segment)
 
-    // ステージ AND フィルタ
-    for (const [key, val] of Object.entries(stageFilter)) {
-      filtered = filtered.filter((r) => (r as any)[key] === val)
+    // ステージフィルタ: 軸内は OR、軸間は AND
+    for (const [key, vals] of Object.entries(stageFilter)) {
+      filtered = filtered.filter((r) => {
+        const stage = (r as unknown as Record<string, unknown>)[key]
+        return typeof stage === 'number' && (vals as number[]).includes(stage)
+      })
     }
 
     return NextResponse.json({

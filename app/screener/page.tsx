@@ -46,14 +46,14 @@ interface StockRow {
 export default function ScreenerPage() {
   const [market, setMarket] = useState<Market>('JP')
   const [segment, setSegment] = useState<string | null>(null)
-  const [stages, setStages] = useState<Partial<Record<AxisKey, number>>>({})
+  const [stages, setStages] = useState<Partial<Record<AxisKey, number[]>>>({})
   const [results, setResults] = useState<StockRow[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [universe, setUniverse] = useState(0)
   const [cached, setCached] = useState(false)
 
-  const hasAnyStage = Object.keys(stages).length > 0
+  const hasAnyStage = Object.values(stages).some((v) => v && v.length > 0)
 
   useEffect(() => {
     if (!segment || !hasAnyStage) {
@@ -64,7 +64,9 @@ export default function ScreenerPage() {
     setLoading(true)
     setError('')
     const params = new URLSearchParams({ market, segment })
-    for (const [k, v] of Object.entries(stages)) params.set(k, String(v))
+    for (const [k, v] of Object.entries(stages)) {
+      if (v && v.length > 0) params.set(k, v.join(','))
+    }
 
     fetch(`/api/screener?${params}`)
       .then((r) => r.json())
@@ -83,7 +85,10 @@ export default function ScreenerPage() {
   const filterText = useMemo(() => {
     const parts: string[] = []
     for (const ax of AXES) {
-      if (stages[ax.key]) parts.push(`${ax.label} = [${stages[ax.key]}]`)
+      const sel = stages[ax.key]
+      if (sel && sel.length > 0) {
+        parts.push(`${ax.label} ∈ {${[...sel].sort().join(',')}}`)
+      }
     }
     return parts.join(' AND ')
   }, [stages])
@@ -146,12 +151,21 @@ export default function ScreenerPage() {
             <AxisCard
               key={ax.key}
               axis={ax}
-              selected={stages[ax.key] ?? null}
+              selected={stages[ax.key] ?? []}
               disabled={!segment}
-              onChange={(v) => setStages((prev) => {
+              onToggle={(stage) => setStages((prev) => {
                 const next = { ...prev }
-                if (v == null) delete next[ax.key]
-                else next[ax.key] = v
+                const cur = next[ax.key] ?? []
+                const after = cur.includes(stage)
+                  ? cur.filter((s) => s !== stage)
+                  : [...cur, stage]
+                if (after.length === 0) delete next[ax.key]
+                else next[ax.key] = after
+                return next
+              })}
+              onClear={() => setStages((prev) => {
+                const next = { ...prev }
+                delete next[ax.key]
                 return next
               })}
             />
@@ -268,13 +282,16 @@ function AxisCard({
   axis,
   selected,
   disabled,
-  onChange,
+  onToggle,
+  onClear,
 }: {
   axis: { key: AxisKey; label: string; color: string }
-  selected: number | null
+  selected: number[]
   disabled?: boolean
-  onChange: (v: number | null) => void
+  onToggle: (stage: number) => void
+  onClear: () => void
 }) {
+  const sortedSelected = [...selected].sort()
   return (
     <div className="card" style={{ padding: '12px', opacity: disabled ? 0.5 : 1 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}>
@@ -286,16 +303,35 @@ function AxisCard({
           flexShrink: 0,
         }} />
         <span style={{ fontSize: '13px', fontWeight: 600 }}>{axis.label}</span>
+        {selected.length > 0 && (
+          <button
+            onClick={onClear}
+            disabled={disabled}
+            style={{
+              marginLeft: 'auto',
+              padding: '2px 6px',
+              fontSize: '10px',
+              background: 'transparent',
+              border: '1px solid var(--border-base)',
+              borderRadius: 'var(--radius-sm)',
+              cursor: disabled ? 'not-allowed' : 'pointer',
+              color: 'var(--text-muted)',
+            }}
+            title="この系統の選択をクリア"
+          >
+            ×
+          </button>
+        )}
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px' }}>
         {[1, 2, 3, 4, 5, 6].map((s) => {
-          const active = selected === s
+          const active = selected.includes(s)
           return (
             <button
               key={s}
               disabled={disabled}
-              onClick={() => onChange(active ? null : s)}
+              onClick={() => onToggle(s)}
               style={{
                 padding: '8px 0',
                 fontSize: '14px',
@@ -315,21 +351,26 @@ function AxisCard({
         })}
       </div>
 
-      <div style={{ marginTop: '8px', fontSize: '10px', color: 'var(--text-muted)' }}>
-        選択中:{' '}
-        {selected ? (
-          <span style={{
-            display: 'inline-block',
-            padding: '2px 8px',
-            background: axis.color,
-            color: '#fff',
-            borderRadius: '10px',
-            fontFamily: 'var(--font-mono)',
-            fontWeight: 600,
-            fontSize: '10px',
-          }}>
-            Stage {selected}
-          </span>
+      <div style={{ marginTop: '8px', fontSize: '10px', color: 'var(--text-muted)', display: 'flex', flexWrap: 'wrap', gap: '4px', alignItems: 'center' }}>
+        <span>選択中:</span>
+        {sortedSelected.length > 0 ? (
+          sortedSelected.map((s) => (
+            <span
+              key={s}
+              style={{
+                display: 'inline-block',
+                padding: '2px 8px',
+                background: axis.color,
+                color: '#fff',
+                borderRadius: '10px',
+                fontFamily: 'var(--font-mono)',
+                fontWeight: 600,
+                fontSize: '10px',
+              }}
+            >
+              Stage {s}
+            </span>
+          ))
         ) : (
           <span style={{ color: 'var(--text-muted)' }}>なし</span>
         )}
