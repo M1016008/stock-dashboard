@@ -1,34 +1,47 @@
 // app/api/hex/route.ts
-// HEX-app 互換 API。マスタ銘柄を Yahoo Finance から取得し、6 ステージを算出して返す。
-//
-// HEX-app 本家との違い:
-// - データソースは Yahoo Finance（Supabase ではない）
-// - 前週/前々週ステージは現状 null（SQLite に履歴蓄積後に対応予定）
-// - SMA 角度は当日 OHLCV の T-3 / T-10 / T-20 オフセットから計算
+// HEX-app 互換 API。tv_daily_snapshots（CSV取込結果）からステージを算出して返す。
+// 前週/前々週のステージとSMA角度は、過去のCSVスナップショットがDBに存在すれば自動的に埋まる。
 
 import { NextRequest, NextResponse } from 'next/server'
-import { promises as fs } from 'node:fs'
-import path from 'node:path'
-import { ALL_TICKERS, JP_TICKERS, US_TICKERS, getSectorLarge, type MasterTicker } from '@/lib/master/tickers'
-import { getQuote, getHistory } from '@/lib/yahoo-finance'
+import { sqlite } from '@/lib/db/client'
+import { findTicker, getSectorLarge } from '@/lib/master/tickers'
 import {
-  buildMaValuesFromOhlcv,
-  buildMaValuesAtOffset,
   calculateAllStages,
   calculateAngle,
+  type MaValues,
+  type StageResult,
 } from '@/lib/hex-stage'
 
 export const dynamic = 'force-dynamic'
-export const maxDuration = 300
+export const maxDuration = 60
 
-const SNAPSHOT_DIR = path.join(process.cwd(), 'data', 'snapshots')
-
-function todayStr(): string {
-  return new Date().toISOString().split('T')[0]
-}
-
-function snapshotPath(market: string): string {
-  return path.join(SNAPSHOT_DIR, `hex_${market}_${todayStr()}.json`)
+interface SnapshotRow {
+  date: string
+  ticker: string
+  name: string
+  price: number | null
+  market_cap: number | null
+  change_percent_1d: number | null
+  perf_pct_1w: number | null
+  perf_pct_1m: number | null
+  perf_pct_3m: number | null
+  perf_pct_6m: number | null
+  perf_pct_ytd: number | null
+  sma_5d: number | null
+  sma_25d: number | null
+  sma_75d: number | null
+  sma_150d: number | null
+  sma_300d: number | null
+  sma_5w: number | null
+  sma_13w: number | null
+  sma_25w: number | null
+  sma_50w: number | null
+  sma_100w: number | null
+  sma_3m: number | null
+  sma_5m: number | null
+  sma_10m: number | null
+  sma_20m: number | null
+  sma_25m: number | null
 }
 
 interface HexStock {
@@ -70,133 +83,17 @@ interface HexStock {
   prev_prev_sma_angles: { sma5: number | null; sma25: number | null; sma75: number | null; sma300: number | null }
 }
 
-async function loadSnapshot(market: string): Promise<HexStock[] | null> {
-  try {
-    const buf = await fs.readFile(snapshotPath(market), 'utf-8')
-    return JSON.parse(buf) as HexStock[]
-  } catch {
-    return null
+function snapshotToMa(s: SnapshotRow): MaValues {
+  return {
+    ma_5: s.sma_5d, ma_25: s.sma_25d, ma_75: s.sma_75d, ma_150: s.sma_150d, ma_300: s.sma_300d,
+    weekly_ma_5: s.sma_5w, weekly_ma_13: s.sma_13w, weekly_ma_25: s.sma_25w,
+    weekly_ma_50: s.sma_50w, weekly_ma_100: s.sma_100w,
+    monthly_ma_3: s.sma_3m, monthly_ma_5: s.sma_5m, monthly_ma_10: s.sma_10m,
+    monthly_ma_20: s.sma_20m, monthly_ma_25: s.sma_25m,
   }
-}
-
-async function saveSnapshot(market: string, rows: HexStock[]): Promise<void> {
-  try {
-    await fs.mkdir(SNAPSHOT_DIR, { recursive: true })
-    await fs.writeFile(snapshotPath(market), JSON.stringify(rows), 'utf-8')
-  } catch (e) {
-    console.error('saveSnapshot error:', e)
-  }
-}
-
-function selectTickers(market: 'JP' | 'US' | 'ALL'): MasterTicker[] {
-  if (market === 'JP') return JP_TICKERS
-  if (market === 'US') return US_TICKERS
-  return ALL_TICKERS
-}
-
-function pctFromHistory(ohlcv: { close: number }[], periodsBack: number): number {
-  if (ohlcv.length <= periodsBack) return 0
-  const last = ohlcv[ohlcv.length - 1]?.close
-  const prev = ohlcv[ohlcv.length - 1 - periodsBack]?.close
-  if (!last || !prev || prev === 0) return 0
-  return ((last - prev) / prev) * 100
-}
-
-async function fetchOne(t: MasterTicker): Promise<HexStock | null> {
-  try {
-    const [quote, history] = await Promise.all([
-      getQuote(t.ticker),
-      getHistory(t.ticker, '2y'),
-    ])
-
-    if (!history || history.length < 5) {
-      return null
-    }
-
-    const maNow = buildMaValuesFromOhlcv(history)
-    const stages = calculateAllStages(maNow)
-
-    const ma3 = buildMaValuesAtOffset(history, 3)
-    const ma10 = buildMaValuesAtOffset(history, 10)
-    const ma20 = buildMaValuesAtOffset(history, 20)
-
-    const smaAngles = {
-      sma5: calculateAngle(maNow.ma_5, ma3?.ma_5 ?? null, 3),
-      sma25: calculateAngle(maNow.ma_25, ma3?.ma_25 ?? null, 3),
-      sma75: calculateAngle(maNow.ma_75, ma3?.ma_75 ?? null, 3),
-      sma300: calculateAngle(maNow.ma_300, ma3?.ma_300 ?? null, 3),
-    }
-    const prevSmaAngles = {
-      sma5: calculateAngle(maNow.ma_5, ma10?.ma_5 ?? null, 10),
-      sma25: calculateAngle(maNow.ma_25, ma10?.ma_25 ?? null, 10),
-      sma75: calculateAngle(maNow.ma_75, ma10?.ma_75 ?? null, 10),
-      sma300: calculateAngle(maNow.ma_300, ma10?.ma_300 ?? null, 10),
-    }
-    const prevPrevSmaAngles = {
-      sma5: calculateAngle(maNow.ma_5, ma20?.ma_5 ?? null, 20),
-      sma25: calculateAngle(maNow.ma_25, ma20?.ma_25 ?? null, 20),
-      sma75: calculateAngle(maNow.ma_75, ma20?.ma_75 ?? null, 20),
-      sma300: calculateAngle(maNow.ma_300, ma20?.ma_300 ?? null, 20),
-    }
-
-    return {
-      code: t.ticker,
-      name: t.name,
-      sector_large: getSectorLarge(t),
-      sector_small: t.sectorSmall ?? null,
-      market_cap: quote.marketCap ?? 0,
-      price: quote.price,
-      daily_change: quote.changePercent,
-      weekly_change: pctFromHistory(history, 5),
-      monthly_change: pctFromHistory(history, 21),
-      months3_change: pctFromHistory(history, 63),
-      months6_change: pctFromHistory(history, 126),
-      ytd_change: pctFromHistory(history, 252),
-      stage: stages.daily_a_stage ?? 1,
-      stage_a: stages.daily_a_stage,
-      stage_b: stages.daily_b_stage,
-      daily_a_stage: stages.daily_a_stage,
-      daily_b_stage: stages.daily_b_stage,
-      weekly_a_stage: stages.weekly_a_stage,
-      weekly_b_stage: stages.weekly_b_stage,
-      monthly_a_stage: stages.monthly_a_stage,
-      monthly_b_stage: stages.monthly_b_stage,
-      // 履歴未蓄積のため null
-      prev_daily_a_stage: null,
-      prev_daily_b_stage: null,
-      prev_weekly_a_stage: null,
-      prev_weekly_b_stage: null,
-      prev_monthly_a_stage: null,
-      prev_monthly_b_stage: null,
-      prev_prev_daily_a_stage: null,
-      prev_prev_daily_b_stage: null,
-      prev_prev_weekly_a_stage: null,
-      prev_prev_weekly_b_stage: null,
-      prev_prev_monthly_a_stage: null,
-      prev_prev_monthly_b_stage: null,
-      sma_angles: smaAngles,
-      prev_sma_angles: prevSmaAngles,
-      prev_prev_sma_angles: prevPrevSmaAngles,
-    }
-  } catch (e) {
-    console.error(`hex fetchOne error for ${t.ticker}:`, e)
-    return null
-  }
-}
-
-async function fetchAll(tickers: MasterTicker[], concurrency = 5): Promise<HexStock[]> {
-  const results: HexStock[] = []
-  for (let i = 0; i < tickers.length; i += concurrency) {
-    const batch = tickers.slice(i, i + concurrency)
-    const chunk = await Promise.all(batch.map(fetchOne))
-    for (const r of chunk) if (r) results.push(r)
-    await new Promise((r) => setTimeout(r, 200))
-  }
-  return results
 }
 
 function applyTimeframeStage(rows: HexStock[], timeframe: 'daily' | 'weekly' | 'monthly'): HexStock[] {
-  // HEX-app の API は timeframe に応じて `stage` フィールドを上書き
   return rows.map((r) => {
     let stage = r.stage
     if (timeframe === 'weekly') stage = r.weekly_a_stage ?? r.stage
@@ -206,20 +103,151 @@ function applyTimeframeStage(rows: HexStock[], timeframe: 'daily' | 'weekly' | '
   })
 }
 
+const ALL_FIELDS = `
+  date, ticker, name, price, market_cap, change_percent_1d,
+  perf_pct_1w, perf_pct_1m, perf_pct_3m, perf_pct_6m, perf_pct_ytd,
+  sma_5d, sma_25d, sma_75d, sma_150d, sma_300d,
+  sma_5w, sma_13w, sma_25w, sma_50w, sma_100w,
+  sma_3m, sma_5m, sma_10m, sma_20m, sma_25m
+`
+
+function loadSnapshotsForDate(date: string): SnapshotRow[] {
+  return sqlite
+    .prepare<unknown[], SnapshotRow>(`SELECT ${ALL_FIELDS} FROM tv_daily_snapshots WHERE date = ?`)
+    .all(date)
+}
+
+/** date より前にある日付のうち最も近いものを返す。無ければ null。 */
+function prevDate(beforeDate: string): string | null {
+  const r = sqlite
+    .prepare<unknown[], { d: string | null }>(
+      `SELECT date AS d FROM tv_daily_snapshots WHERE date < ? GROUP BY date ORDER BY date DESC LIMIT 1`,
+    )
+    .get(beforeDate)
+  return r?.d ?? null
+}
+
+function latestSnapshotDate(): string | null {
+  const row = sqlite
+    .prepare<unknown[], { d: string | null }>(`SELECT MAX(date) AS d FROM tv_daily_snapshots`)
+    .get()
+  return row?.d ?? null
+}
+
+function indexByTicker(rows: SnapshotRow[]): Map<string, SnapshotRow> {
+  const m = new Map<string, SnapshotRow>()
+  for (const r of rows) m.set(r.ticker, r)
+  return m
+}
+
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
     const market = (searchParams.get('market') ?? 'JP') as 'JP' | 'US' | 'ALL'
     const timeframe = (searchParams.get('timeframe') ?? 'daily') as 'daily' | 'weekly' | 'monthly'
+    const requestedDate = searchParams.get('date')
 
-    let rows = await loadSnapshot(market)
-    let cached = true
-    if (!rows) {
-      cached = false
-      const tickers = selectTickers(market)
-      rows = await fetchAll(tickers)
-      await saveSnapshot(market, rows)
+    if (market === 'US') {
+      return NextResponse.json({
+        success: true,
+        data: [],
+        count: 0,
+        cached: true,
+        date: null,
+        timeframe,
+        market,
+        notice: 'US は CSV 未対応です（TradingView から日本株 CSV を取込中）',
+      })
     }
+
+    const date = requestedDate ?? latestSnapshotDate()
+    if (!date) {
+      return NextResponse.json({
+        success: true,
+        data: [],
+        count: 0,
+        cached: false,
+        date: null,
+        timeframe,
+        market,
+        notice: 'CSV未取込です。/admin/import から TradingView の CSV をインポートしてください。',
+      })
+    }
+
+    const current = loadSnapshotsForDate(date)
+    const prev1Date = prevDate(date)
+    const prev2Date = prev1Date ? prevDate(prev1Date) : null
+    const prev1Map = prev1Date ? indexByTicker(loadSnapshotsForDate(prev1Date)) : new Map<string, SnapshotRow>()
+    const prev2Map = prev2Date ? indexByTicker(loadSnapshotsForDate(prev2Date)) : new Map<string, SnapshotRow>()
+
+    const rows: HexStock[] = current.map((s) => {
+      const master = findTicker(s.ticker)
+      const stages = calculateAllStages(snapshotToMa(s))
+      const p1 = prev1Map.get(s.ticker)
+      const p2 = prev2Map.get(s.ticker)
+      const stagesPrev: StageResult = p1
+        ? calculateAllStages(snapshotToMa(p1))
+        : { daily_a_stage: null, daily_b_stage: null, weekly_a_stage: null, weekly_b_stage: null, monthly_a_stage: null, monthly_b_stage: null }
+      const stagesPrevPrev: StageResult = p2
+        ? calculateAllStages(snapshotToMa(p2))
+        : { daily_a_stage: null, daily_b_stage: null, weekly_a_stage: null, weekly_b_stage: null, monthly_a_stage: null, monthly_b_stage: null }
+
+      // SMA角度: 直近の SMA と (この snapshot に対する) 過去の SMA を比較。
+      // 期間は HEX-app と合わせる（3 / 10 / 20 営業日のオフセット）
+      const angle = (curr: number | null, past: number | null | undefined, days: number) =>
+        calculateAngle(curr, past ?? null, days)
+      const smaAngles = {
+        sma5: angle(s.sma_5d, p1?.sma_5d, 3),
+        sma25: angle(s.sma_25d, p1?.sma_25d, 3),
+        sma75: angle(s.sma_75d, p1?.sma_75d, 3),
+        sma300: angle(s.sma_300d, p1?.sma_300d, 3),
+      }
+      const prevSmaAngles = {
+        sma5: angle(s.sma_5d, p2?.sma_5d, 10),
+        sma25: angle(s.sma_25d, p2?.sma_25d, 10),
+        sma75: angle(s.sma_75d, p2?.sma_75d, 10),
+        sma300: angle(s.sma_300d, p2?.sma_300d, 10),
+      }
+
+      return {
+        code: s.ticker,
+        name: s.name,
+        sector_large: master ? getSectorLarge(master) : 'その他',
+        sector_small: master?.sectorSmall ?? null,
+        market_cap: s.market_cap ?? 0,
+        price: s.price ?? 0,
+        daily_change: s.change_percent_1d ?? 0,
+        weekly_change: s.perf_pct_1w ?? 0,
+        monthly_change: s.perf_pct_1m ?? 0,
+        months3_change: s.perf_pct_3m ?? 0,
+        months6_change: s.perf_pct_6m ?? 0,
+        ytd_change: s.perf_pct_ytd ?? 0,
+        stage: stages.daily_a_stage ?? 1,
+        stage_a: stages.daily_a_stage,
+        stage_b: stages.daily_b_stage,
+        daily_a_stage: stages.daily_a_stage,
+        daily_b_stage: stages.daily_b_stage,
+        weekly_a_stage: stages.weekly_a_stage,
+        weekly_b_stage: stages.weekly_b_stage,
+        monthly_a_stage: stages.monthly_a_stage,
+        monthly_b_stage: stages.monthly_b_stage,
+        prev_daily_a_stage: stagesPrev.daily_a_stage,
+        prev_daily_b_stage: stagesPrev.daily_b_stage,
+        prev_weekly_a_stage: stagesPrev.weekly_a_stage,
+        prev_weekly_b_stage: stagesPrev.weekly_b_stage,
+        prev_monthly_a_stage: stagesPrev.monthly_a_stage,
+        prev_monthly_b_stage: stagesPrev.monthly_b_stage,
+        prev_prev_daily_a_stage: stagesPrevPrev.daily_a_stage,
+        prev_prev_daily_b_stage: stagesPrevPrev.daily_b_stage,
+        prev_prev_weekly_a_stage: stagesPrevPrev.weekly_a_stage,
+        prev_prev_weekly_b_stage: stagesPrevPrev.weekly_b_stage,
+        prev_prev_monthly_a_stage: stagesPrevPrev.monthly_a_stage,
+        prev_prev_monthly_b_stage: stagesPrevPrev.monthly_b_stage,
+        sma_angles: smaAngles,
+        prev_sma_angles: prevSmaAngles,
+        prev_prev_sma_angles: prevSmaAngles, // データが無い場合に備えて一旦同じ値
+      }
+    })
 
     const data = applyTimeframeStage(rows, timeframe)
 
@@ -227,10 +255,11 @@ export async function GET(request: NextRequest) {
       success: true,
       data,
       count: data.length,
-      cached,
-      date: todayStr(),
+      cached: true,
+      date,
       timeframe,
       market,
+      source: 'csv',
     })
   } catch (error) {
     console.error('Hex API error:', error)

@@ -7,6 +7,7 @@ import { PriceDisplay } from '@/components/ui/PriceDisplay'
 import { TradingViewChart } from '@/components/charts/TradingViewChart'
 import { PerformanceCard } from '@/components/stock/PerformanceCard'
 import { NewsSection } from '@/components/stock/NewsSection'
+import { EarningsCard } from '@/components/stock/EarningsCard'
 import { WatchlistButton } from '@/components/ui/WatchlistButton'
 import { StageTimeline } from '@/components/stock/StageTimeline'
 import { findTicker } from '@/lib/master/tickers'
@@ -113,6 +114,9 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
         />
         <PerformanceCard ticker={ticker} />
       </div>
+
+      {/* 決算情報 */}
+      <EarningsCard ticker={ticker} />
 
       {/* TradingView チャート（メイン） */}
       <div>

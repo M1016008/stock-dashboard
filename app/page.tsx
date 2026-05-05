@@ -5,6 +5,7 @@ import { IndexCard } from '@/components/dashboard/IndexCard'
 import { IndicesChart } from '@/components/dashboard/IndicesChart'
 import { HexStageSummary } from '@/components/dashboard/HexStageSummary'
 import { HighLowPreview } from '@/components/dashboard/HighLowPreview'
+import { EarningsCalendar } from '@/components/dashboard/EarningsCalendar'
 
 export const metadata: Metadata = {
   title: 'ダッシュボード — StockBoard',
@@ -58,6 +59,12 @@ export default function DashboardPage() {
       <section>
         <div className="section-header">HEXステージ分布</div>
         <HexStageSummary />
+      </section>
+
+      {/* 決算カレンダー */}
+      <section>
+        <div className="section-header">決算カレンダー</div>
+        <EarningsCalendar defaultDays={14} />
       </section>
 
       {/* 新高値・新安値 */}

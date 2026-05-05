@@ -80,6 +80,8 @@ export default function ScreenerPage() {
   const [error, setError] = useState('')
   const [universe, setUniverse] = useState(0)
   const [cached, setCached] = useState(false)
+  const [snapshotDate, setSnapshotDate] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
   const [sort, setSort] = useState<SortState | null>(null)
   const [copiedTicker, setCopiedTicker] = useState<string | null>(null)
 
@@ -106,6 +108,8 @@ export default function ScreenerPage() {
         setResults(d.results ?? [])
         setUniverse(d.universe ?? 0)
         setCached(d.cached)
+        setSnapshotDate(d.date ?? null)
+        setNotice(d.notice ?? null)
       })
       .catch((e) => { if (!cancelled) setError((e as Error).message) })
       .finally(() => { if (!cancelled) setLoading(false) })
@@ -277,6 +281,16 @@ export default function ScreenerPage() {
         </div>
       )}
 
+      {notice && (
+        <div className="card" style={{ padding: '12px', borderLeft: '3px solid var(--accent-primary)' }}>
+          <p style={{ fontSize: '12px', color: 'var(--text-secondary)', margin: 0 }}>
+            ℹ️ {notice}
+            {' '}
+            <Link href="/admin/import" style={{ color: 'var(--accent-primary)' }}>CSV取込ページへ →</Link>
+          </p>
+        </div>
+      )}
+
       {!segment ? (
         <div className="card" style={{ padding: '24px', textAlign: 'center' }}>
           <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>市場と区分を選んでください</p>
@@ -296,7 +310,12 @@ export default function ScreenerPage() {
           <div style={{ padding: '8px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-subtle)', gap: '8px', flexWrap: 'wrap' }}>
             <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
               <strong>{sortedResults.length}</strong>件 / 母集団 {universe}銘柄
-              {cached && <span style={{ marginLeft: '6px', color: 'var(--accent-primary)' }}>（当日キャッシュ）</span>}
+              {snapshotDate && (
+                <span style={{ marginLeft: '6px', fontFamily: 'var(--font-mono)', color: 'var(--accent-primary)' }}>
+                  📅 {snapshotDate}
+                </span>
+              )}
+              {cached && <span style={{ marginLeft: '6px', color: 'var(--text-muted)' }}>（DB）</span>}
             </span>
             <button
               onClick={downloadTvWatchlist}
