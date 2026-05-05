@@ -179,8 +179,7 @@ export async function GET() {
       `SELECT date, COUNT(*) AS tickers
        FROM tv_daily_snapshots
        GROUP BY date
-       ORDER BY date DESC
-       LIMIT 60`,
+       ORDER BY date DESC`,
     )
     return NextResponse.json({ imports: recent, dates: summary })
   } catch (error) {

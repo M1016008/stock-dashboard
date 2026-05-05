@@ -273,7 +273,7 @@ export default function CsvImportPage() {
       {/* 取込済みデータの日付一覧 */}
       <div className="card" style={{ overflow: 'hidden' }}>
         <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-subtle)', fontSize: '12px', color: 'var(--text-secondary)' }}>
-          📅 取込済みの取引日（最大60日分）
+          📅 取込済みの取引日（{dates.length}日分）
         </div>
         {dates.length === 0 ? (
           <div style={{ padding: '24px', textAlign: 'center', fontSize: '12px', color: 'var(--text-muted)' }}>
