@@ -34,8 +34,6 @@ interface StockRow {
   perfPct6m?: number | null
   perfPctYtd?: number | null
   volume: number
-  avgVolume10d?: number | null
-  avgVolume30d?: number | null
   marketCap?: number
   marketCapCurrency?: string | null
   per?: number
@@ -64,8 +62,6 @@ type SortKey =
   | 'perfPct6m'
   | 'perfPctYtd'
   | 'volume'
-  | 'avgVolume10d'
-  | 'avgVolume30d'
   | 'marketCap'
   | 'marketCapCurrency'
   | 'per'
@@ -313,7 +309,7 @@ export default function ScreenerPage() {
             </div>
           ) : (
             <div style={{ overflowX: 'auto' }}>
-              <table style={{ minWidth: '2300px', borderCollapse: 'collapse', fontSize: '12px' }}>
+              <table style={{ minWidth: '2100px', borderCollapse: 'collapse', fontSize: '12px' }}>
                 <thead>
                   <tr style={{ background: 'var(--bg-elevated)', borderBottom: '1px solid var(--border-dim)' }}>
                     <th style={th}></th>
@@ -328,8 +324,6 @@ export default function ScreenerPage() {
                     <SortableTh label="6ヶ月%"     sortKey="perfPct6m"           current={sort} onClick={toggleSort} align="right" />
                     <SortableTh label="年初来%"    sortKey="perfPctYtd"          current={sort} onClick={toggleSort} align="right" />
                     <SortableTh label="出来高"     sortKey="volume"              current={sort} onClick={toggleSort} align="right" />
-                    <SortableTh label="平均10日"   sortKey="avgVolume10d"        current={sort} onClick={toggleSort} align="right" />
-                    <SortableTh label="平均30日"   sortKey="avgVolume30d"        current={sort} onClick={toggleSort} align="right" />
                     <SortableTh label="時価総額"   sortKey="marketCap"           current={sort} onClick={toggleSort} align="right" />
                     <SortableTh label="PER"        sortKey="per"                 current={sort} onClick={toggleSort} align="right" />
                     <SortableTh label="配当"       sortKey="dividendYield"       current={sort} onClick={toggleSort} align="right" />
@@ -384,8 +378,6 @@ export default function ScreenerPage() {
                         <td style={{ ...tdR, color: pctColor(r.perfPct6m ?? undefined) }}>{fmtPct(r.perfPct6m ?? undefined)}</td>
                         <td style={{ ...tdR, color: pctColor(r.perfPctYtd ?? undefined) }}>{fmtPct(r.perfPctYtd ?? undefined)}</td>
                         <td style={tdR}>{r.volume?.toLocaleString('ja-JP') ?? '---'}</td>
-                        <td style={tdR}>{r.avgVolume10d != null ? r.avgVolume10d.toLocaleString('ja-JP') : '---'}</td>
-                        <td style={tdR}>{r.avgVolume30d != null ? r.avgVolume30d.toLocaleString('ja-JP') : '---'}</td>
                         <td style={tdR}>{r.marketCap ? `${(r.marketCap / 1e8).toLocaleString('ja-JP', { maximumFractionDigits: 0 })} 億` : '---'}</td>
                         <td style={tdR}>{r.per != null ? r.per.toFixed(1) : '---'}</td>
                         <td style={tdR}>{r.dividendYield != null ? `${r.dividendYield.toFixed(2)}%` : '---'}</td>
