@@ -14,8 +14,7 @@ interface NewsItem {
 
 interface NewsResponse {
   items: NewsItem[]
-  sources: { yahoo: number; googleNews: number; finnhub: number }
-  finnhubEnabled: boolean
+  sources: { yahoo: number; googleNews: number }
 }
 
 interface Props {
@@ -73,8 +72,6 @@ export function NewsSection({ ticker }: Props) {
     )
   }
 
-  const isJP = ticker.endsWith('.T')
-
   return (
     <div className="card" style={{ overflow: 'hidden' }}>
       <div style={{
@@ -89,12 +86,6 @@ export function NewsSection({ ticker }: Props) {
         <span>{data.items.length}件</span>
         {data.sources.yahoo > 0 && <span>Yahoo: {data.sources.yahoo}</span>}
         {data.sources.googleNews > 0 && <span>Google News: {data.sources.googleNews}</span>}
-        {data.sources.finnhub > 0 && <span>Finnhub: {data.sources.finnhub}</span>}
-        {!isJP && !data.finnhubEnabled && (
-          <span style={{ color: 'var(--text-muted)' }}>
-            （Finnhub APIキー未設定: <code>FINNHUB_API_KEY</code> を <code>.env.local</code> に設定すると米国株のニュースが充実します）
-          </span>
-        )}
       </div>
       <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
         {data.items.map((n, i) => (

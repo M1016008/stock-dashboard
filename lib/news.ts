@@ -1,7 +1,7 @@
 // lib/news.ts
 // 銘柄関連ニュースの取得。複数ソースを統合する。
 //   - 日本株: yahoo-finance2.search + Google News RSS (hl=ja)
-//   - 米国株: Finnhub company-news + yahoo-finance2.search
+//   - 米国株: yahoo-finance2.search のみ
 // 結果は published 降順でマージし、URL で重複排除する。
 
 import yahooFinance from 'yahoo-finance2'
@@ -15,8 +15,6 @@ export interface NewsItem {
   imageUrl?: string
   summary?: string
 }
-
-const FINNHUB_API_KEY = process.env.FINNHUB_API_KEY ?? ''
 
 // ─────────────────────────────────────────────────────────────────
 // Yahoo Finance 経由（yahoo-finance2 の search モジュール）
@@ -121,69 +119,25 @@ function cleanText(s: string): string {
 }
 
 // ─────────────────────────────────────────────────────────────────
-// Finnhub company-news（米国株のみ。APIキー必須）
-// ─────────────────────────────────────────────────────────────────
-async function fetchFinnhubNews(ticker: string): Promise<NewsItem[]> {
-  if (!FINNHUB_API_KEY) return []
-  try {
-    const to = new Date()
-    const from = new Date()
-    from.setDate(to.getDate() - 14)
-    const url =
-      `https://finnhub.io/api/v1/company-news` +
-      `?symbol=${encodeURIComponent(ticker)}` +
-      `&from=${from.toISOString().split('T')[0]}` +
-      `&to=${to.toISOString().split('T')[0]}` +
-      `&token=${FINNHUB_API_KEY}`
-    const res = await fetch(url, { next: { revalidate: 1800 } })
-    if (!res.ok) return []
-    const data = (await res.json()) as Array<{
-      headline?: string
-      url?: string
-      source?: string
-      datetime?: number
-      image?: string
-      summary?: string
-    }>
-    return data
-      .filter((d) => d.headline && d.url)
-      .slice(0, 15)
-      .map((d) => ({
-        title: d.headline!,
-        url: d.url!,
-        source: d.source ?? 'Finnhub',
-        publishedAt: new Date((d.datetime ?? 0) * 1000).toISOString(),
-        imageUrl: d.image && d.image.length > 0 ? d.image : undefined,
-        summary: d.summary,
-      }))
-  } catch (e) {
-    console.error('fetchFinnhubNews error:', e)
-    return []
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────
 // 統合エントリポイント
 // ─────────────────────────────────────────────────────────────────
 export async function fetchStockNews(ticker: string): Promise<{
   items: NewsItem[]
-  sources: { yahoo: number; googleNews: number; finnhub: number }
-  finnhubEnabled: boolean
+  sources: { yahoo: number; googleNews: number }
 }> {
   const isJP = ticker.endsWith('.T')
   const master = findTicker(ticker)
   const queryName = master?.name ?? ticker
 
-  const [yahoo, googleNews, finnhub] = await Promise.all([
+  const [yahoo, googleNews] = await Promise.all([
     fetchYahooNews(ticker),
     isJP ? fetchGoogleNewsJa(queryName) : Promise.resolve([]),
-    !isJP ? fetchFinnhubNews(ticker) : Promise.resolve([]),
   ])
 
   // URL で重複排除
   const seen = new Set<string>()
   const merged: NewsItem[] = []
-  for (const arr of [finnhub, yahoo, googleNews]) {
+  for (const arr of [yahoo, googleNews]) {
     for (const item of arr) {
       if (seen.has(item.url)) continue
       seen.add(item.url)
@@ -198,8 +152,6 @@ export async function fetchStockNews(ticker: string): Promise<{
     sources: {
       yahoo: yahoo.length,
       googleNews: googleNews.length,
-      finnhub: finnhub.length,
     },
-    finnhubEnabled: !!FINNHUB_API_KEY,
   }
 }
