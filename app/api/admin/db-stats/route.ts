@@ -8,8 +8,6 @@ import {
   screenerSnapshots,
   hexStages,
   tvIndicators,
-  practiceSessions,
-  tradeRecords,
 } from '@/lib/db/schema'
 import { sql } from 'drizzle-orm'
 
@@ -71,8 +69,6 @@ export async function GET() {
       countTable('screener_snapshots', screenerSnapshots, 'date'),
       countTable('hex_stages', hexStages, 'date'),
       countTable('tv_indicators', tvIndicators, 'date'),
-      countTable('practice_sessions', practiceSessions),
-      countTable('trade_records', tradeRecords),
     ])
 
     const totalCount = tables.reduce((sum, t) => sum + t.count, 0)

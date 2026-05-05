@@ -102,39 +102,3 @@ export const tvIndicators = sqliteTable('tv_indicators', {
   createdAt:     text('created_at').notNull(),
 })
 
-// ─────────────────────────────────────
-// 5. トレード練習セッション
-// ─────────────────────────────────────
-export const practiceSessions = sqliteTable('practice_sessions', {
-  id:               text('id').primaryKey(),     // UUID
-  ticker:           text('ticker').notNull(),
-  market:           text('market').notNull(),
-  timeframe:        text('timeframe').notNull(),
-  replayStartDate:  text('replay_start_date').notNull(),
-  replayEndDate:    text('replay_end_date'),
-  totalPnl:         real('total_pnl').default(0),
-  totalPnlPercent:  real('total_pnl_percent').default(0),
-  winRate:          real('win_rate').default(0),
-  totalTrades:      integer('total_trades').default(0),
-  winTrades:        integer('win_trades').default(0),
-  note:             text('note'),
-  createdAt:        text('created_at').notNull(),
-  endedAt:          text('ended_at'),
-})
-
-// ─────────────────────────────────────
-// 6. トレード練習の売買記録
-// ─────────────────────────────────────
-export const tradeRecords = sqliteTable('trade_records', {
-  id:                 text('id').primaryKey(),   // UUID
-  sessionId:          text('session_id').notNull(),
-  ticker:             text('ticker').notNull(),
-  replayDate:         text('replay_date').notNull(),
-  action:             text('action').notNull(),  // "BUY" | "SELL" | "CLOSE"
-  price:              real('price').notNull(),
-  qty:                integer('qty').notNull(),
-  pnl:                real('pnl'),
-  pnlPercent:         real('pnl_percent'),
-  indicatorSnapshot:  text('indicator_snapshot'), // JSON
-  executedAt:         text('executed_at').notNull(),
-})
