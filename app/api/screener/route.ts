@@ -60,6 +60,7 @@ interface ScreenerStockRow {
   marketSegment: string
   marginType?: string
   sectorLarge: string
+  sectorSmall: string | null
   price: number | null
   currency: string | null
   changePercent: number | null
@@ -147,9 +148,26 @@ function snapshotToMaValues(s: SnapshotRow): MaValues {
   }
 }
 
-function buildResultRow(s: SnapshotRow): ScreenerStockRow | null {
+interface SectorEntry {
+  sectorLarge: string | null
+  sectorSmall: string | null
+}
+
+async function loadSectorMap(): Promise<Map<string, SectorEntry>> {
+  const rows = await execAll<{ ticker: string; sector_large: string | null; sector_small: string | null }>(
+    `SELECT ticker, sector_large, sector_small FROM sector_master`,
+  )
+  const map = new Map<string, SectorEntry>()
+  for (const r of rows) {
+    map.set(r.ticker, { sectorLarge: r.sector_large, sectorSmall: r.sector_small })
+  }
+  return map
+}
+
+function buildResultRow(s: SnapshotRow, sectorMap: Map<string, SectorEntry>): ScreenerStockRow | null {
   const master = getTickersByMarket('JP').find((t) => t.ticker === s.ticker)
-  // マスタに無い銘柄も許容（CSVをそのまま使う）。区分等は不明とする。
+  const fromDb = sectorMap.get(s.ticker)
+  // セクター情報は sector_master DB → ハードコード master → 'その他' の順で参照する。
   const stages = calculateAllStages(snapshotToMaValues(s))
   return {
     ticker: s.ticker,
@@ -157,7 +175,8 @@ function buildResultRow(s: SnapshotRow): ScreenerStockRow | null {
     market: 'JP',
     marketSegment: master?.marketSegment ?? '',
     marginType: master?.marginType,
-    sectorLarge: master?.sectorLarge ?? 'その他',
+    sectorLarge: fromDb?.sectorLarge ?? master?.sectorLarge ?? 'その他',
+    sectorSmall: fromDb?.sectorSmall ?? master?.sectorSmall ?? null,
     price: s.price,
     currency: s.currency,
     changePercent: s.change_percent_1d,
@@ -228,10 +247,13 @@ export async function GET(request: NextRequest) {
       if (stages.length > 0) stageFilter[key] = Array.from(new Set(stages)).sort()
     }
 
-    const snapshots = await loadSnapshotByDate(date)
+    const [snapshots, sectorMap] = await Promise.all([
+      loadSnapshotByDate(date),
+      loadSectorMap(),
+    ])
     const universe = snapshots.length
     const built = snapshots
-      .map(buildResultRow)
+      .map((s) => buildResultRow(s, sectorMap))
       .filter((r): r is ScreenerStockRow => r !== null)
 
     let filtered = built

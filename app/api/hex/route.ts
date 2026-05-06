@@ -172,8 +172,15 @@ export async function GET(request: NextRequest) {
     const current = await loadSnapshotsForDate(date)
     const prev1Date = await prevDate(date)
     const prev2Date = prev1Date ? await prevDate(prev1Date) : null
-    const prev1Map = prev1Date ? indexByTicker(await loadSnapshotsForDate(prev1Date)) : new Map<string, SnapshotRow>()
-    const prev2Map = prev2Date ? indexByTicker(await loadSnapshotsForDate(prev2Date)) : new Map<string, SnapshotRow>()
+    const [prev1Map, prev2Map, sectorRows] = await Promise.all([
+      prev1Date ? loadSnapshotsForDate(prev1Date).then(indexByTicker) : Promise.resolve(new Map<string, SnapshotRow>()),
+      prev2Date ? loadSnapshotsForDate(prev2Date).then(indexByTicker) : Promise.resolve(new Map<string, SnapshotRow>()),
+      execAll<{ ticker: string; sector_large: string | null; sector_small: string | null }>(
+        `SELECT ticker, sector_large, sector_small FROM sector_master`,
+      ),
+    ])
+    const sectorMap = new Map<string, { large: string | null; small: string | null }>()
+    for (const r of sectorRows) sectorMap.set(r.ticker, { large: r.sector_large, small: r.sector_small })
 
     const rows: HexStock[] = current.map((s) => {
       const master = findTicker(s.ticker)
@@ -204,11 +211,12 @@ export async function GET(request: NextRequest) {
         sma300: angle(s.sma_300d, p2?.sma_300d, 10),
       }
 
+      const fromDb = sectorMap.get(s.ticker)
       return {
         code: s.ticker,
         name: s.name,
-        sector_large: master ? getSectorLarge(master) : 'その他',
-        sector_small: master?.sectorSmall ?? null,
+        sector_large: fromDb?.large ?? (master ? getSectorLarge(master) : 'その他'),
+        sector_small: fromDb?.small ?? master?.sectorSmall ?? null,
         market_cap: s.market_cap ?? 0,
         price: s.price ?? 0,
         daily_change: s.change_percent_1d ?? 0,
