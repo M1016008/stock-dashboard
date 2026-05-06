@@ -145,9 +145,6 @@ export default function AdminDbPage() {
         <p style={{ margin: 0 }}>
           📁 DB パス: <code>{stats?.dbPath ?? '---'}</code>
         </p>
-        <p style={{ margin: '4px 0 0' }}>
-          スナップショット収集スクリプト: <code>npx tsx scripts/collect-snapshot.ts</code>
-        </p>
       </div>
     </div>
   )

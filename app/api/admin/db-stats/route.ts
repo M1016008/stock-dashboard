@@ -52,7 +52,6 @@ export async function GET() {
   try {
     const tables: TableStat[] = await Promise.all([
       countTable('ohlcv', 'date'),
-      countTable('screener_snapshots', 'date'),
       countTable('hex_stages', 'date'),
       countTable('tv_indicators', 'date'),
       countTable('tv_daily_snapshots', 'date'),

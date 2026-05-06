@@ -20,39 +20,6 @@ export const ohlcv = sqliteTable('ohlcv', {
 })
 
 // ─────────────────────────────────────
-// 2. スクリーナースナップショット履歴
-// ─────────────────────────────────────
-export const screenerSnapshots = sqliteTable('screener_snapshots', {
-  id:             integer('id').primaryKey({ autoIncrement: true }),
-  date:           text('date').notNull(),
-  code:           text('code').notNull(),
-  name:           text('name').notNull(),
-  sector33:       text('sector33'),
-  marketSegment:  text('market_segment'),
-  close:          real('close').notNull(),
-  volume:         integer('volume'),
-  changePercent:  real('change_percent'),
-  sma5:           real('sma5'),
-  sma25:          real('sma25'),
-  sma75:          real('sma75'),
-  sma5w:          real('sma5w'),
-  sma25w:         real('sma25w'),
-  rsi14:          real('rsi14'),
-  macd:           real('macd'),
-  macdSignal:     real('macd_signal'),
-  macdHistogram:  real('macd_histogram'),
-  bbUpper:        real('bb_upper'),
-  bbLower:        real('bb_lower'),
-  isYearHigh:     integer('is_year_high', { mode: 'boolean' }),
-  isYearLow:      integer('is_year_low', { mode: 'boolean' }),
-  maOrderBullish: integer('ma_order_bullish', { mode: 'boolean' }),
-  maOrderBearish: integer('ma_order_bearish', { mode: 'boolean' }),
-  goldenCross:    integer('golden_cross', { mode: 'boolean' }),
-  deadCross:      integer('dead_cross', { mode: 'boolean' }),
-  createdAt:      text('created_at').notNull(),
-})
-
-// ─────────────────────────────────────
 // 3. HEXステージ計算結果
 // ─────────────────────────────────────
 export const hexStages = sqliteTable('hex_stages', {

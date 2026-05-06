@@ -34,7 +34,6 @@ const remote = createClient({ url: REMOTE_URL, authToken: REMOTE_TOKEN })
 
 const TABLES = [
   'ohlcv',
-  'screener_snapshots',
   'hex_stages',
   'tv_indicators',
   'tv_daily_snapshots',

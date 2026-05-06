@@ -21,35 +21,6 @@ const STATEMENTS = [
     source TEXT NOT NULL,
     created_at TEXT NOT NULL
   )`,
-  `CREATE TABLE IF NOT EXISTS screener_snapshots (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    date TEXT NOT NULL,
-    code TEXT NOT NULL,
-    name TEXT NOT NULL,
-    sector33 TEXT,
-    market_segment TEXT,
-    close REAL NOT NULL,
-    volume INTEGER,
-    change_percent REAL,
-    sma5 REAL,
-    sma25 REAL,
-    sma75 REAL,
-    sma5w REAL,
-    sma25w REAL,
-    rsi14 REAL,
-    macd REAL,
-    macd_signal REAL,
-    macd_histogram REAL,
-    bb_upper REAL,
-    bb_lower REAL,
-    is_year_high INTEGER,
-    is_year_low INTEGER,
-    ma_order_bullish INTEGER,
-    ma_order_bearish INTEGER,
-    golden_cross INTEGER,
-    dead_cross INTEGER,
-    created_at TEXT NOT NULL
-  )`,
   `CREATE TABLE IF NOT EXISTS hex_stages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     date TEXT NOT NULL,
@@ -152,8 +123,16 @@ const STATEMENTS = [
   )`,
 ]
 
+/** 廃止されたテーブル。存在していれば DROP する（再実行しても無害）。 */
+const DEPRECATED_DROPS: string[] = [
+  `DROP TABLE IF EXISTS screener_snapshots`,
+]
+
 export async function ensureSchema(client: Client): Promise<void> {
   for (const sql of STATEMENTS) {
     await client.execute(sql)
+  }
+  for (const sql of DEPRECATED_DROPS) {
+    try { await client.execute(sql) } catch { /* 無視 */ }
   }
 }
