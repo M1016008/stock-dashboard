@@ -368,11 +368,15 @@ function StageMatrix({
         </span>
       </header>
 
+      {/* 横スクロール可能な内側ラッパ。狭幅の画面でも A1〜A6 が切れず表示される */}
+      <div className="overflow-x-auto">
+      <div style={{ minWidth: '760px' }}>
+
       {/* A-Stage ヘッダ行 */}
-      <div className="grid gap-1 mb-1" style={{ gridTemplateColumns: '110px repeat(6, 1fr)' }}>
+      <div className="grid gap-1 mb-1" style={{ gridTemplateColumns: '100px repeat(6, minmax(96px, 1fr))' }}>
         <div></div>
         {[1, 2, 3, 4, 5, 6].map((a) => (
-          <div key={a} className="text-center text-[10px] font-mono">
+          <div key={a} className="text-center text-[10px] font-mono whitespace-nowrap">
             <span className="font-bold" style={{ color: STAGE_BORDER_COLORS[a] }}>A{a}</span>
             <span className="text-gray-400 ml-1">{STAGE_LABELS[a]}</span>
           </div>
@@ -388,7 +392,7 @@ function StageMatrix({
               key={b}
               className="grid gap-1"
               style={{
-                gridTemplateColumns: '110px repeat(6, 1fr)',
+                gridTemplateColumns: '100px repeat(6, minmax(96px, 1fr))',
                 background: STAGE_BG_COLORS[b],
                 border: `1.5px solid ${STAGE_BORDER_COLORS[b]}`,
                 borderRadius: '6px',
@@ -445,6 +449,9 @@ function StageMatrix({
             </div>
           )
         })}
+      </div>
+
+      </div>
       </div>
     </section>
   )
