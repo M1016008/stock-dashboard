@@ -97,13 +97,17 @@ async function loadSectorMap(): Promise<Map<string, SectorRow>> {
   return m
 }
 
-function pickGroupKey(s: SectorRow | undefined, groupBy: GroupBy, snap: SnapshotRow): string {
+function pickGroupKey(s: SectorRow | undefined, groupBy: GroupBy, snap: SnapshotRow): string | null {
   if (groupBy === 'ticker') return snap.ticker
-  if (!s) return 'その他'
-  if (groupBy === 'large')    return s.sector_large ?? 'その他'
-  if (groupBy === 'sector33') return s.sector33     ?? 'その他'
-  if (groupBy === 'small')    return s.sector_small ?? 'その他'
-  return 'その他'
+  if (!s) return null
+  let v: string | null
+  if (groupBy === 'large')    v = s.sector_large
+  else if (groupBy === 'sector33') v = s.sector33
+  else if (groupBy === 'small')    v = s.sector_small
+  else v = null
+  if (v == null) return null
+  const trimmed = String(v).trim()
+  return trimmed.length > 0 ? trimmed : null
 }
 
 function pickFilterValue(s: SectorRow | undefined, field: 'large' | 'sector33' | 'small'): string | null {
@@ -188,6 +192,7 @@ export async function GET(request: NextRequest) {
       if (mcapFrom == null || mcapTo == null) continue
 
       const key = pickGroupKey(sec, groupBy, snap)
+      if (!key) continue // 業種マスタ未登録 / 空文字は集計対象外
       let g = aggs.get(key)
       if (!g) {
         g = {
