@@ -46,6 +46,21 @@ interface Coverage {
   coveragePct: number
 }
 
+interface Diagnostics {
+  snapshotDate: string | null
+  totalTickers: number
+  withSectorMaster: number
+  withSector33: number
+  withLarge: number
+  withSmall: number
+  coveragePct: { master: number; sector33: number; large: number; small: number }
+  bySector33: { label: string; n: number }[]
+  byLarge: { label: string; n: number }[]
+  bySmall: { label: string; n: number }[]
+  unmatchedSample: string[]
+  unmatchedCount: number
+}
+
 interface ApiResponse {
   fromDate: string | null
   toDate: string | null
@@ -110,6 +125,47 @@ export default function CapitalFlowPage() {
   const [data, setData] = useState<ApiResponse | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [diag, setDiag] = useState<Diagnostics | null>(null)
+  const [diagLoading, setDiagLoading] = useState(false)
+  const [diagOpen, setDiagOpen] = useState(false)
+  const [jpxFetching, setJpxFetching] = useState(false)
+  const [jpxResult, setJpxResult] = useState<string | null>(null)
+
+  const fetchDiag = async () => {
+    setDiagLoading(true)
+    try {
+      const r = await fetch('/api/capital-flow/diagnostics')
+      const j = await r.json()
+      if (r.ok) setDiag(j)
+    } finally {
+      setDiagLoading(false)
+    }
+  }
+
+  const fetchJpx = async () => {
+    setJpxFetching(true)
+    setJpxResult(null)
+    try {
+      const r = await fetch('/api/admin/sector-master?source=jpx', { method: 'POST' })
+      const j = await r.json()
+      if (!r.ok) {
+        setJpxResult(`❌ 失敗: ${j.message ?? j.error ?? r.statusText}`)
+      } else {
+        const s = j.summary
+        const cols = s?.detectedColumns ?? {}
+        setJpxResult(
+          `✅ JPX 取得成功 — 取込 ${s?.inserted ?? 0} 件 / スキップ ${s?.skipped ?? 0}\n` +
+          `検出列: 33業種=${cols.sector33 ?? '×'} / 17業種=${cols.sectorLarge ?? '×'} / 市場区分=${cols.marketSegment ?? '×'}`
+        )
+        // 診断情報を再取得 + データを再計算
+        fetchDiag()
+      }
+    } catch (e) {
+      setJpxResult(`❌ ${(e as Error).message}`)
+    } finally {
+      setJpxFetching(false)
+    }
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -170,6 +226,99 @@ export default function CapitalFlowPage() {
           流入が多い業種は緑、流出が多い業種は赤で表示します。
         </p>
       </div>
+
+      {/* JPX再取得 / 診断ボタン */}
+      <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+        <button
+          onClick={fetchJpx}
+          disabled={jpxFetching}
+          style={{
+            padding: '6px 12px', fontSize: '11px', fontWeight: 600,
+            background: jpxFetching ? 'var(--bg-elevated)' : 'var(--accent-primary)',
+            color: jpxFetching ? 'var(--text-muted)' : '#fff',
+            border: '1px solid var(--accent-primary)',
+            borderRadius: 'var(--radius-sm)',
+            cursor: jpxFetching ? 'wait' : 'pointer',
+          }}
+        >
+          {jpxFetching ? '取得中…' : '🟢 JPX 業種マスタ再取得'}
+        </button>
+        <button
+          onClick={() => { setDiagOpen((v) => !v); if (!diag) fetchDiag() }}
+          disabled={diagLoading}
+          style={{
+            padding: '6px 12px', fontSize: '11px',
+            background: diagOpen ? 'var(--bg-elevated)' : 'transparent',
+            color: 'var(--text-secondary)',
+            border: '1px solid var(--border-base)',
+            borderRadius: 'var(--radius-sm)',
+            cursor: 'pointer',
+          }}
+        >
+          🔍 業種マスタ診断 {diagOpen ? '▲' : '▼'}
+        </button>
+        {jpxResult && (
+          <span style={{
+            fontSize: '11px',
+            color: jpxResult.startsWith('❌') ? 'var(--price-down)' : 'var(--price-up)',
+            fontFamily: 'var(--font-mono)',
+            whiteSpace: 'pre-wrap',
+            background: 'var(--bg-elevated)',
+            border: '1px solid var(--border-subtle)',
+            padding: '4px 10px',
+            borderRadius: 'var(--radius-sm)',
+          }}>
+            {jpxResult}
+          </span>
+        )}
+      </div>
+
+      {/* 診断パネル */}
+      {diagOpen && diag && (
+        <div className="card" style={{ padding: '12px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          <div style={{ fontSize: '12px', fontWeight: 700 }}>
+            業種マスタ網羅状況（最新スナップショット日: {diag.snapshotDate ?? '---'}）
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '10px', fontSize: '12px' }}>
+            <DiagCard label="tv_daily_snapshots 銘柄数" value={diag.totalTickers.toLocaleString()} />
+            <DiagCard label="sector_master 紐付け済" value={`${diag.withSectorMaster.toLocaleString()} (${diag.coveragePct.master.toFixed(1)}%)`} ok={diag.coveragePct.master >= 90} />
+            <DiagCard label="33業種区分が埋まっている" value={`${diag.withSector33.toLocaleString()} (${diag.coveragePct.sector33.toFixed(1)}%)`} ok={diag.coveragePct.sector33 >= 90} />
+            <DiagCard label="17業種(大分類)が埋まっている" value={`${diag.withLarge.toLocaleString()} (${diag.coveragePct.large.toFixed(1)}%)`} ok={diag.coveragePct.large >= 90} />
+          </div>
+          {diag.coveragePct.sector33 < 90 && (
+            <div style={{ fontSize: '11px', color: '#92400e', background: '#fffbeb', border: '1px solid #fbbf24', padding: '8px 10px', borderRadius: 'var(--radius-sm)', lineHeight: 1.5 }}>
+              33業種区分の網羅率が <strong>{diag.coveragePct.sector33.toFixed(1)}%</strong> しかありません。
+              これだと「33業種区分」での集計が極端に偏ります。
+              上の <strong>「JPX 業種マスタ再取得」</strong> ボタンを押して JPX 公式から取得し直してください。
+              ボタンを押した後にこの診断を再表示すると数値が更新されます。
+            </div>
+          )}
+          <div>
+            <div style={{ fontSize: '11px', fontWeight: 600, marginBottom: '4px', color: 'var(--text-secondary)' }}>
+              33業種区分の銘柄数（上位）
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+              {diag.bySector33.slice(0, 40).map((row) => (
+                <span key={row.label} style={{
+                  padding: '2px 8px', fontSize: '11px', fontFamily: 'var(--font-mono)',
+                  background: 'var(--bg-elevated)', border: '1px solid var(--border-base)',
+                  borderRadius: '12px', color: 'var(--text-secondary)',
+                }}>
+                  {row.label}（{row.n}）
+                </span>
+              ))}
+              {diag.bySector33.length === 0 && (
+                <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>33業種区分が埋まっている銘柄が 0 件です</span>
+              )}
+            </div>
+          </div>
+          {diag.unmatchedCount > 0 && (
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+              業種マスタに未登録の銘柄: <strong>{diag.unmatchedCount.toLocaleString()}</strong> 件（例: {diag.unmatchedSample.slice(0, 10).join(', ')} ...）
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ビュータブ */}
       <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', borderBottom: '1px solid var(--border-subtle)' }}>
@@ -434,6 +583,22 @@ export default function CapitalFlowPage() {
 }
 
 // ───────────────────────────────────────────────────────────────────
+
+function DiagCard({ label, value, ok }: { label: string; value: string; ok?: boolean }) {
+  return (
+    <div style={{
+      padding: '10px 12px',
+      background: ok === false ? '#fef2f2' : ok === true ? '#f0fdf4' : 'var(--bg-elevated)',
+      border: `1px solid ${ok === false ? '#fecaca' : ok === true ? '#bbf7d0' : 'var(--border-base)'}`,
+      borderRadius: 'var(--radius-sm)',
+    }}>
+      <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '2px' }}>{label}</div>
+      <div style={{ fontFamily: 'var(--font-mono)', fontSize: '14px', fontWeight: 700, color: ok === false ? '#b91c1c' : ok === true ? '#15803d' : 'var(--text-primary)' }}>
+        {value}
+      </div>
+    </div>
+  )
+}
 
 function RankList({ title, items, flowKind }: { title: string; items: GroupResult[]; flowKind: 'in' | 'out' }) {
   const accent = flowKind === 'in' ? 'var(--price-up, #16a34a)' : 'var(--price-down, #ef4444)'
