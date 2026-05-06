@@ -13,16 +13,20 @@ export const maxDuration = 180
 // https://www.jpx.co.jp/markets/statistics-equities/misc/01.html
 const JPX_DATA_URL = 'https://www.jpx.co.jp/markets/statistics-equities/misc/tvdivq0000001vg2-att/data_j.xls'
 
-// ヘッダ行のエイリアス（途中で表記揺れがあっても拾えるように）
+// ヘッダ行のエイリアス（途中で表記揺れがあっても拾えるように）。
+// 33業種区分（JPX 由来）と 業種小分類（ユーザ CSV 由来）は別フィールドとして
+// 独立に保持する。両方が存在しない Excel ではそのカラムは null のまま。
 const COL_ALIAS: Record<string, string[]> = {
   code:          ['コード', '銘柄コード', 'ticker', 'symbol'],
   name:          ['銘柄名', '名称', 'name'],
   // JPX 公式の「市場・商品区分」やユーザ提供 Excel の「市場区分」「区分」など
   marketSegment: ['市場・商品区分', '市場区分', '区分', '上場区分'],
-  // JPX 公式は「33業種区分」、ユーザ提供 Excel は「業種細分類」「中分類」など
-  sector33:      ['33業種区分', '業種細分類', '中分類', '業種小分類', '小分類'],
-  // 17業種 / 大分類
+  // 33業種区分（JPX のみ）
+  sector33:      ['33業種区分'],
+  // 17業種 / 大分類（ユーザ CSV / JPX 17業種区分どちらでも）
   sectorLarge:   ['17業種区分', '大分類', '業種大分類', 'sector_large'],
+  // ユーザ CSV の業種小分類（業種細分類 / 中分類 / 小分類 等）
+  sectorSmall:   ['業種小分類', '業種細分類', '中分類', '小分類', 'sector_small'],
 }
 
 function findColumnIndex(header: unknown[], aliases: string[]): number {
@@ -70,6 +74,7 @@ interface ImportSummary {
     marketSegment: string | null
     sector33: string | null
     sectorLarge: string | null
+    sectorSmall: string | null
   }
   errors: string[]
 }
@@ -101,6 +106,7 @@ async function importWorkbook(buf: ArrayBuffer, fileName: string): Promise<Impor
   const marketSegmentIdx = findColumnIndex(header, COL_ALIAS.marketSegment)
   const sector33Idx      = findColumnIndex(header, COL_ALIAS.sector33)
   const sectorLargeIdx   = findColumnIndex(header, COL_ALIAS.sectorLarge)
+  const sectorSmallIdx   = findColumnIndex(header, COL_ALIAS.sectorSmall)
 
   const summary: ImportSummary = {
     fileName,
@@ -108,11 +114,12 @@ async function importWorkbook(buf: ArrayBuffer, fileName: string): Promise<Impor
     inserted: 0,
     skipped: 0,
     detectedColumns: {
-      code:          codeIdx >= 0 ? String(header[codeIdx]) : null,
-      name:          nameIdx >= 0 ? String(header[nameIdx]) : null,
+      code:          codeIdx          >= 0 ? String(header[codeIdx])          : null,
+      name:          nameIdx          >= 0 ? String(header[nameIdx])          : null,
       marketSegment: marketSegmentIdx >= 0 ? String(header[marketSegmentIdx]) : null,
-      sector33:      sector33Idx >= 0 ? String(header[sector33Idx]) : null,
-      sectorLarge:   sectorLargeIdx >= 0 ? String(header[sectorLargeIdx]) : null,
+      sector33:      sector33Idx      >= 0 ? String(header[sector33Idx])      : null,
+      sectorLarge:   sectorLargeIdx   >= 0 ? String(header[sectorLargeIdx])   : null,
+      sectorSmall:   sectorSmallIdx   >= 0 ? String(header[sectorSmallIdx])   : null,
     },
     errors: [],
   }
@@ -131,15 +138,16 @@ async function importWorkbook(buf: ArrayBuffer, fileName: string): Promise<Impor
     const name           = nameIdx          >= 0 ? (String(r[nameIdx]          ?? '').trim() || null) : null
     const sectorLarge    = sectorLargeIdx   >= 0 ? (String(r[sectorLargeIdx]   ?? '').trim() || null) : null
     const sector33       = sector33Idx      >= 0 ? (String(r[sector33Idx]      ?? '').trim() || null) : null
+    const sectorSmall    = sectorSmallIdx   >= 0 ? (String(r[sectorSmallIdx]   ?? '').trim() || null) : null
     const marketSegment  = marketSegmentIdx >= 0 ? normalizeMarketSegment(String(r[marketSegmentIdx] ?? '')) : null
 
     // 何も区分情報が無い行はスキップ（合計行や見出し行など）
-    if (!sectorLarge && !sector33 && !marketSegment) {
+    if (!sectorLarge && !sector33 && !sectorSmall && !marketSegment) {
       summary.skipped++
       continue
     }
 
-    // sector_small カラムは旧仕様で残っているので、便宜上 sector33 と同じ値を入れておく。
+    // 各カラムは独立して保存。新規アップロードで欠けている値は既存値を残す（COALESCE）。
     inserts.push({
       sql: `INSERT INTO sector_master (ticker, name, sector_large, sector_small, sector33, market_segment, updated_at, source_file)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -151,7 +159,7 @@ async function importWorkbook(buf: ArrayBuffer, fileName: string): Promise<Impor
               market_segment = COALESCE(excluded.market_segment, sector_master.market_segment),
               updated_at = excluded.updated_at,
               source_file = excluded.source_file`,
-      args: [ticker, name, sectorLarge, sector33, sector33, marketSegment, updatedAt, fileName],
+      args: [ticker, name, sectorLarge, sectorSmall, sector33, marketSegment, updatedAt, fileName],
     })
   }
 

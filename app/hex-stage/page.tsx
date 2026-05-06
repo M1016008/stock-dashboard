@@ -203,8 +203,8 @@ export default function HexStagePage() {
           </select>
         </FilterField>
 
-        {/* 33業種区分 */}
-        <FilterField label="33業種区分">
+        {/* 業種小分類 */}
+        <FilterField label="業種小分類">
           <select
             value={selectedSubCategory}
             onChange={(e) => setSelectedSubCategory(e.target.value)}

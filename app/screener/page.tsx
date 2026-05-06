@@ -57,6 +57,7 @@ interface StockRow {
   marginType?: string
   sectorLarge: string
   sectorSmall?: string | null
+  sector33?: string | null
   price: number
   currency?: string | null
   changePercent: number
@@ -87,6 +88,7 @@ interface StockRow {
 type SortKey =
   | 'ticker'
   | 'marketSegment'
+  | 'sector33'
   | 'sectorLarge'
   | 'sectorSmall'
   | 'name'
@@ -336,7 +338,7 @@ export default function ScreenerPage() {
           </label>
 
           <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: 'var(--text-muted)' }}>
-            33業種区分
+            業種小分類
             <select
               value={selectedSectorSmall}
               onChange={(e) => {
@@ -592,15 +594,16 @@ export default function ScreenerPage() {
             </div>
           ) : (
             <div style={{ overflowX: 'auto' }}>
-              <table style={{ minWidth: '2750px', borderCollapse: 'collapse', fontSize: '12px' }}>
+              <table style={{ minWidth: '2900px', borderCollapse: 'collapse', fontSize: '12px' }}>
                 <thead>
                   <tr style={{ background: 'var(--bg-elevated)', borderBottom: '1px solid var(--border-dim)' }}>
                     <th style={th}></th>
                     <SortableTh label="コード"     sortKey="ticker"              current={sort} onClick={toggleSort} />
                     <th style={th}>TV形式</th>
                     <SortableTh label="市場区分"   sortKey="marketSegment"       current={sort} onClick={toggleSort} />
+                    <SortableTh label="33業種区分" sortKey="sector33"            current={sort} onClick={toggleSort} />
                     <SortableTh label="業種大分類" sortKey="sectorLarge"         current={sort} onClick={toggleSort} />
-                    <SortableTh label="33業種区分" sortKey="sectorSmall"         current={sort} onClick={toggleSort} />
+                    <SortableTh label="業種小分類" sortKey="sectorSmall"         current={sort} onClick={toggleSort} />
                     <SortableTh label="銘柄名"     sortKey="name"                current={sort} onClick={toggleSort} />
                     <SortableTh label="株価"       sortKey="price"               current={sort} onClick={toggleSort} align="right" />
                     <SortableTh label="日%"        sortKey="changePercent"       current={sort} onClick={toggleSort} align="right" />
@@ -658,6 +661,7 @@ export default function ScreenerPage() {
                           </button>
                         </td>
                         <td style={td}>{r.marketSegment || '---'}</td>
+                        <td style={td}>{r.sector33 || '---'}</td>
                         <td style={td}>{r.sectorLarge || '---'}</td>
                         <td style={td}>{r.sectorSmall || '---'}</td>
                         <td style={td}>{r.name}</td>

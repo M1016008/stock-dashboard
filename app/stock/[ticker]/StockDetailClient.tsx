@@ -61,9 +61,10 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
     return () => { cancelled = true }
   }, [ticker])
 
-  // 表示用にマージ: sector_master(JPX) → ハードコードマスタ → quote.name の順
+  // 表示用にマージ: sector_master(JPX/CSV) → ハードコードマスタ
   const displaySectorLarge   = smaster?.sector_large   ?? hardcoded?.sectorLarge
-  const displaySector33      = smaster?.sector33       ?? smaster?.sector_small ?? hardcoded?.sectorSmall
+  const displaySectorSmall   = smaster?.sector_small   ?? hardcoded?.sectorSmall
+  const displaySector33      = smaster?.sector33       ?? null
   const displayMarketSegment = smaster?.market_segment ?? hardcoded?.marketSegment
 
   const displayCode = ticker.replace('.T', '')
@@ -102,8 +103,9 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
 
         <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
           {displayMarketSegment && <Pill label={displayMarketSegment} accent />}
-          {displaySectorLarge && <Pill label={displaySectorLarge} />}
           {displaySector33 && <Pill label={displaySector33} />}
+          {displaySectorLarge && <Pill label={displaySectorLarge} />}
+          {displaySectorSmall && <Pill label={displaySectorSmall} />}
           {hardcoded?.marginType && <Pill label={hardcoded.marginType} />}
         </div>
 
