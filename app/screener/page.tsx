@@ -9,6 +9,16 @@ import { WatchlistButton } from '@/components/ui/WatchlistButton'
 type Market = 'JP' | 'US'
 type AxisKey = 'daily_a' | 'daily_b' | 'weekly_a' | 'weekly_b' | 'monthly_a' | 'monthly_b'
 
+// 時価総額レンジ（円）。.minは含む / .maxは含まない。億単位の閾値で設計。
+const MCAP_BINS: { label: string; min: number; max: number }[] = [
+  { label: '〜100億',     min: 0,           max: 1e10 },
+  { label: '100〜500億',  min: 1e10,        max: 5e10 },
+  { label: '500〜2,000億', min: 5e10,        max: 2e11 },
+  { label: '2,000億〜1兆', min: 2e11,        max: 1e12 },
+  { label: '1兆〜5兆',    min: 1e12,        max: 5e12 },
+  { label: '5兆〜',       min: 5e12,        max: Number.POSITIVE_INFINITY },
+]
+
 const AXES: { key: AxisKey; label: string; color: string }[] = [
   { key: 'daily_a',   label: '日足 A', color: '#ef4444' },
   { key: 'weekly_a',  label: '週足 A', color: '#22c55e' },
@@ -101,6 +111,9 @@ export default function ScreenerPage() {
   const [copiedTicker, setCopiedTicker] = useState<string | null>(null)
   const [availableDates, setAvailableDates] = useState<AvailableDate[]>([])
   const [selectedDate, setSelectedDate] = useState<string | null>(null) // null = 最新
+  const [selectedSectorLarge, setSelectedSectorLarge] = useState<string>('')
+  const [selectedSectorSmall, setSelectedSectorSmall] = useState<string>('')
+  const [selectedMcapBins, setSelectedMcapBins] = useState<Set<number>>(new Set())
 
   const hasAnyStage = Object.values(stages).some((v) => v && v.length > 0)
 
@@ -154,9 +167,49 @@ export default function ScreenerPage() {
     return parts.join(' AND ')
   }, [stages])
 
+  // 業種・時価総額のクライアントサイド絞り込み
+  const filteredResults = useMemo(() => {
+    return results.filter((r) => {
+      if (selectedSectorLarge && r.sectorLarge !== selectedSectorLarge) return false
+      if (selectedSectorSmall && r.sectorSmall !== selectedSectorSmall) return false
+      if (selectedMcapBins.size > 0) {
+        const cap = r.marketCap ?? -1
+        const matched = Array.from(selectedMcapBins).some((idx) => {
+          const bin = MCAP_BINS[idx]
+          if (!bin) return false
+          return cap >= bin.min && cap < bin.max
+        })
+        if (!matched) return false
+      }
+      return true
+    })
+  }, [results, selectedSectorLarge, selectedSectorSmall, selectedMcapBins])
+
+  // セクターのドロップダウン候補
+  const sectorOptions = useMemo(() => {
+    const large: Record<string, number> = {}
+    const small: Record<string, { count: number; large: string }> = {}
+    for (const r of results) {
+      const l = r.sectorLarge || '（未分類）'
+      large[l] = (large[l] ?? 0) + 1
+      if (r.sectorSmall) {
+        const cur = small[r.sectorSmall] ?? { count: 0, large: l }
+        cur.count++
+        cur.large = l
+        small[r.sectorSmall] = cur
+      }
+    }
+    const largeArr = Object.entries(large).sort((a, b) => b[1] - a[1])
+    // 大分類が選ばれている場合は、小分類はその配下のみ
+    const smallArr = Object.entries(small)
+      .filter(([, v]) => !selectedSectorLarge || v.large === selectedSectorLarge)
+      .sort((a, b) => b[1].count - a[1].count)
+    return { largeArr, smallArr, smallMap: small }
+  }, [results, selectedSectorLarge])
+
   const sortedResults = useMemo(() => {
-    if (!sort) return results
-    const copy = [...results]
+    if (!sort) return filteredResults
+    const copy = [...filteredResults]
     const dir = sort.dir === 'asc' ? 1 : -1
     copy.sort((a, b) => {
       const av = (a as unknown as Record<string, unknown>)[sort.key]
@@ -171,7 +224,7 @@ export default function ScreenerPage() {
       return String(av).localeCompare(String(bv), 'ja') * dir
     })
     return copy
-  }, [results, sort])
+  }, [filteredResults, sort])
 
   function toggleSort(key: SortKey) {
     setSort((prev) => {
@@ -219,8 +272,89 @@ export default function ScreenerPage() {
         </p>
       </div>
 
+      {/* 業種で絞り込み */}
+      <Section step={1} label="業種で絞り込み（任意）">
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: 'var(--text-muted)' }}>
+            業種大分類
+            <select
+              value={selectedSectorLarge}
+              onChange={(e) => {
+                setSelectedSectorLarge(e.target.value)
+                setSelectedSectorSmall('') // 大分類が変わったら小分類はリセット
+              }}
+              style={mcSelectStyle}
+            >
+              <option value="">全て（{results.length}）</option>
+              {sectorOptions.largeArr.map(([cat, n]) => (
+                <option key={cat} value={cat}>{cat}（{n}）</option>
+              ))}
+            </select>
+          </label>
+
+          <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: 'var(--text-muted)' }}>
+            業種細分類
+            <select
+              value={selectedSectorSmall}
+              onChange={(e) => {
+                const v = e.target.value
+                setSelectedSectorSmall(v)
+                // 小分類を選んだら、大分類が空なら自動補完（互換性のある挙動）
+                if (v && !selectedSectorLarge) {
+                  const owner = sectorOptions.smallMap[v]?.large
+                  if (owner && owner !== '（未分類）') setSelectedSectorLarge(owner)
+                }
+              }}
+              style={mcSelectStyle}
+            >
+              <option value="">全て</option>
+              {sectorOptions.smallArr.map(([cat, v]) => (
+                <option key={cat} value={cat}>{cat}（{v.count}）</option>
+              ))}
+            </select>
+          </label>
+
+          {(selectedSectorLarge || selectedSectorSmall) && (
+            <button
+              onClick={() => { setSelectedSectorLarge(''); setSelectedSectorSmall('') }}
+              style={mcChipStyle(false)}
+            >
+              × クリア
+            </button>
+          )}
+        </div>
+      </Section>
+
+      {/* 時価総額で絞り込み */}
+      <Section step={2} label="時価総額で絞り込み（任意 / 複数選択可）">
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+          {MCAP_BINS.map((bin, idx) => {
+            const active = selectedMcapBins.has(idx)
+            return (
+              <button
+                key={bin.label}
+                onClick={() => setSelectedMcapBins((prev) => {
+                  const next = new Set(prev)
+                  if (next.has(idx)) next.delete(idx)
+                  else next.add(idx)
+                  return next
+                })}
+                style={mcChipStyle(active)}
+              >
+                {bin.label}
+              </button>
+            )
+          })}
+          {selectedMcapBins.size > 0 && (
+            <button onClick={() => setSelectedMcapBins(new Set())} style={mcChipStyle(false)}>
+              × クリア
+            </button>
+          )}
+        </div>
+      </Section>
+
       {/* HEXステージ（任意の絞り込み） */}
-      <Section step={1} label="HEXステージで絞り込み（任意 / 複数系統 AND）">
+      <Section step={3} label="HEXステージで絞り込み（任意 / 複数系統 AND）">
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '8px' }}>
           <button
             onClick={() => setStages({})}
@@ -657,6 +791,31 @@ function Section({ step, label, disabled, children }: { step: number; label: str
     </div>
   )
 }
+
+const mcSelectStyle: React.CSSProperties = {
+  padding: '5px 8px',
+  fontSize: '12px',
+  fontFamily: 'var(--font-mono)',
+  background: 'var(--bg-elevated)',
+  color: 'var(--text-primary)',
+  border: '1px solid var(--border-base)',
+  borderRadius: 'var(--radius-sm)',
+  cursor: 'pointer',
+  minWidth: '180px',
+}
+
+const mcChipStyle = (active: boolean): React.CSSProperties => ({
+  padding: '6px 12px',
+  fontSize: '11px',
+  fontFamily: 'var(--font-mono)',
+  background: active ? 'var(--accent-primary)' : 'var(--bg-elevated)',
+  color: active ? '#fff' : 'var(--text-secondary)',
+  border: `1px solid ${active ? 'var(--accent-primary)' : 'var(--border-base)'}`,
+  borderRadius: 'var(--radius-sm)',
+  cursor: 'pointer',
+  whiteSpace: 'nowrap',
+  fontWeight: active ? 600 : 400,
+})
 
 const th: React.CSSProperties = {
   padding: '8px 12px',
