@@ -9,10 +9,10 @@ import type { OHLCV } from '@/types/stock'
 import { calcSMA } from '@/lib/indicators'
 
 const INDICES = [
-  { code: '^N225', label: '日経225' },
-  { code: '^TOPX', label: 'TOPIX' },
-  { code: '^GSPC', label: 'S&P500' },
-  { code: '^IXIC', label: 'NASDAQ' },
+  { code: '^N225',  label: '日経225' },
+  { code: '^TPX',   label: 'TOPIX' },
+  { code: '1591.T', label: 'JPX日経400' },
+  { code: '1563.T', label: 'グロース250' },
 ] as const
 
 type IndexCode = typeof INDICES[number]['code']

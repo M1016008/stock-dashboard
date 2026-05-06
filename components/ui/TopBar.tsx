@@ -2,14 +2,6 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { StatusDot } from './StatusDot'
-
-const INDEX_TICKERS = [
-  { code: '^N225', label: '日経225' },
-  { code: '^TOPX', label: 'TOPIX' },
-  { code: '^GSPC', label: 'S&P500' },
-  { code: '^IXIC', label: 'NASDAQ' },
-]
 
 function Clock() {
   const [time, setTime] = useState('')
@@ -38,8 +30,8 @@ function Clock() {
   )
 }
 
-// 市場開場判定（簡易版）
-function getMarketStatus(): { tse: 'open' | 'closed'; nyse: 'open' | 'closed' } {
+// 東証の開場判定
+function getTseStatus(): 'open' | 'closed' {
   const now = new Date()
   const jst = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Tokyo' }))
   const jstHour = jst.getHours()
@@ -48,23 +40,15 @@ function getMarketStatus(): { tse: 'open' | 'closed'; nyse: 'open' | 'closed' } 
   const jstTotal = jstHour * 60 + jstMin
 
   const isWeekday = jstDay >= 1 && jstDay <= 5
-  const tseOpen = isWeekday && jstTotal >= 9 * 60 && jstTotal < 15 * 60 + 30
-
-  // NYSE: JST 22:30〜翌5:00（夏時間: 21:30〜翌4:00）
-  const nyseOpen = isWeekday && (jstTotal >= 22 * 60 + 30 || jstTotal < 5 * 60)
-
-  return {
-    tse: tseOpen ? 'open' : 'closed',
-    nyse: nyseOpen ? 'open' : 'closed',
-  }
+  return isWeekday && jstTotal >= 9 * 60 && jstTotal < 15 * 60 + 30 ? 'open' : 'closed'
 }
 
 export function TopBar() {
-  const [marketStatus, setMarketStatus] = useState<{ tse: 'open' | 'closed'; nyse: 'open' | 'closed' }>({ tse: 'closed', nyse: 'closed' })
+  const [tseStatus, setTseStatus] = useState<'open' | 'closed'>('closed')
 
   useEffect(() => {
-    setMarketStatus(getMarketStatus())
-    const timer = setInterval(() => setMarketStatus(getMarketStatus()), 60000)
+    setTseStatus(getTseStatus())
+    const timer = setInterval(() => setTseStatus(getTseStatus()), 60000)
     return () => clearInterval(timer)
   }, [])
 
@@ -100,30 +84,19 @@ export function TopBar() {
       {/* セパレータ */}
       <div style={{ width: '1px', height: '16px', background: 'var(--border-base)' }} />
 
-      {/* 市場ステータス */}
-      <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-        <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
-          東証:{' '}
-          <span style={{ color: marketStatus.tse === 'open' ? 'var(--price-up)' : 'var(--price-down)' }}>
-            {marketStatus.tse === 'open' ? '開場' : '閉場'}
-          </span>
+      {/* 東証ステータス */}
+      <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+        東証:{' '}
+        <span style={{ color: tseStatus === 'open' ? 'var(--price-up)' : 'var(--price-down)' }}>
+          {tseStatus === 'open' ? '開場' : '閉場'}
         </span>
-        <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
-          NYSE:{' '}
-          <span style={{ color: marketStatus.nyse === 'open' ? 'var(--price-up)' : 'var(--price-down)' }}>
-            {marketStatus.nyse === 'open' ? '開場' : '閉場'}
-          </span>
-        </span>
-      </div>
+      </span>
 
       {/* スペーサー */}
       <div style={{ flex: 1 }} />
 
       {/* 時計 */}
       <Clock />
-
-      {/* TV接続状態 */}
-      <StatusDot status="offline" label="TV" />
     </header>
   )
 }

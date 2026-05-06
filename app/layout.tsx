@@ -19,7 +19,7 @@ const spaceGrotesk = Space_Grotesk({
 
 export const metadata: Metadata = {
   title: 'StockBoard — 株式分析ダッシュボード',
-  description: '日本株・米国株のリアルタイム分析ダッシュボード。HEXステージ分析、スクリーナー、ポートフォリオ管理機能を搭載。',
+  description: '日本株専用の分析ダッシュボード。HEXステージ分析、スクリーナー、業種マスタ、決算カレンダーを搭載。',
   keywords: ['株式', '投資', 'ダッシュボード', 'スクリーナー', 'HEXステージ'],
 }
 

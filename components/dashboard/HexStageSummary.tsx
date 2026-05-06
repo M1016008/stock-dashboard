@@ -39,7 +39,7 @@ export function HexStageSummary() {
   const [rows, setRows] = useState<HexRow[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  const [market, setMarket] = useState<Market>('ALL')
+  const [market] = useState<Market>('JP')
   const [timeframe, setTimeframe] = useState<'daily' | 'weekly' | 'monthly'>('daily')
 
   useEffect(() => {
@@ -102,17 +102,8 @@ export function HexStageSummary() {
 
   return (
     <div className="card" style={{ padding: '12px' }}>
-      {/* 切替コントロール */}
+      {/* 切替コントロール（時間軸のみ） */}
       <div style={{ display: 'flex', gap: '8px', marginBottom: '10px', flexWrap: 'wrap' }}>
-        <ToggleGroup
-          options={[
-            { v: 'JP', label: '日本株' },
-            { v: 'US', label: '米国株' },
-            { v: 'ALL', label: '全市場' },
-          ]}
-          value={market}
-          onChange={(v) => setMarket(v as Market)}
-        />
         <ToggleGroup
           options={TIMEFRAMES.map((t) => ({ v: t.key, label: t.label }))}
           value={timeframe}
