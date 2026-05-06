@@ -9,6 +9,7 @@ const navItems = [
   { href: '/', label: 'ダッシュボード', icon: '⬜' },
   { href: '/hex-stage', label: 'HEXステージマップ', icon: '🔷' },
   { href: '/screener', label: 'スクリーナー', icon: '⧖' },
+  { href: '/capital-flow', label: 'Capital Flow', icon: '💰' },
   { href: '/watchlist', label: 'ウォッチリスト', icon: '⭐' },
   { href: '/admin/import', label: 'CSV取込', icon: '📥' },
   { href: '/admin/sector-master', label: '業種マスタ取込', icon: '🏷' },
