@@ -38,6 +38,14 @@ interface GroupResult {
   bottomContributors: Contributor[]
 }
 
+interface Coverage {
+  totalTickers: number
+  classifiedTickers: number
+  unclassifiedTickers: number
+  unclassifiedMcap: number
+  coveragePct: number
+}
+
 interface ApiResponse {
   fromDate: string | null
   toDate: string | null
@@ -45,6 +53,7 @@ interface ApiResponse {
   totalMcapTo: number
   totalDelta: number
   totalDeltaPct: number | null
+  coverage?: Coverage
   groups: GroupResult[]
   notice?: string
 }
@@ -332,11 +341,29 @@ export default function CapitalFlowPage() {
             )}
           </div>
 
-          {/* 流入 / 流出 ランキング Top10 — ビュー横断で常時表示 */}
+          {/* カバレッジ警告: sector_master の網羅率が低いと集計が偏る */}
+          {!inDrill && data.coverage && data.coverage.coveragePct < 90 && (
+            <div className="card" style={{
+              padding: '10px 12px',
+              borderLeft: '3px solid #f59e0b',
+              background: '#fffbeb',
+            }}>
+              <p style={{ fontSize: '12px', color: '#92400e', margin: 0, lineHeight: 1.5 }}>
+                ⚠️ <strong>業種マスタの網羅率: {data.coverage.coveragePct.toFixed(1)}%</strong>
+                （{data.coverage.classifiedTickers.toLocaleString()} / {data.coverage.totalTickers.toLocaleString()} 銘柄）。
+                未分類の {data.coverage.unclassifiedTickers.toLocaleString()} 銘柄は「未分類」グループに集計されています。
+                正確な業種別集計のため、<a href="/admin/sector-master" style={{ color: '#92400e', textDecoration: 'underline', fontWeight: 600 }}>
+                  業種マスタ取込
+                </a> ページで「JPX から取得」を実行してください。
+              </p>
+            </div>
+          )}
+
+          {/* 流入 / 流出 ランキング Top10 — ビュー横断で常時表示。「未分類」は除外。 */}
           {!inDrill && data.groups.length > 0 && (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '12px' }}>
-              <RankList title="📈 流入トップ 10" items={[...data.groups].sort((a, b) => b.mcapDelta - a.mcapDelta).slice(0, 10)} flowKind="in" />
-              <RankList title="📉 流出トップ 10" items={[...data.groups].sort((a, b) => a.mcapDelta - b.mcapDelta).slice(0, 10)} flowKind="out" />
+              <RankList title="📈 流入トップ 10" items={data.groups.filter((g) => g.label !== '未分類').sort((a, b) => b.mcapDelta - a.mcapDelta).slice(0, 10)} flowKind="in" />
+              <RankList title="📉 流出トップ 10" items={data.groups.filter((g) => g.label !== '未分類').sort((a, b) => a.mcapDelta - b.mcapDelta).slice(0, 10)} flowKind="out" />
             </div>
           )}
 

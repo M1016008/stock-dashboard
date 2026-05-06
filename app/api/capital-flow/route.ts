@@ -97,17 +97,17 @@ async function loadSectorMap(): Promise<Map<string, SectorRow>> {
   return m
 }
 
-function pickGroupKey(s: SectorRow | undefined, groupBy: GroupBy, snap: SnapshotRow): string | null {
+function pickGroupKey(s: SectorRow | undefined, groupBy: GroupBy, snap: SnapshotRow): string {
   if (groupBy === 'ticker') return snap.ticker
-  if (!s) return null
+  if (!s) return '未分類'
   let v: string | null
   if (groupBy === 'large')    v = s.sector_large
   else if (groupBy === 'sector33') v = s.sector33
   else if (groupBy === 'small')    v = s.sector_small
   else v = null
-  if (v == null) return null
+  if (v == null) return '未分類'
   const trimmed = String(v).trim()
-  return trimmed.length > 0 ? trimmed : null
+  return trimmed.length > 0 ? trimmed : '未分類'
 }
 
 function pickFilterValue(s: SectorRow | undefined, field: 'large' | 'sector33' | 'small'): string | null {
@@ -192,7 +192,6 @@ export async function GET(request: NextRequest) {
       if (mcapFrom == null || mcapTo == null) continue
 
       const key = pickGroupKey(sec, groupBy, snap)
-      if (!key) continue // 業種マスタ未登録 / 空文字は集計対象外
       let g = aggs.get(key)
       if (!g) {
         g = {
@@ -244,6 +243,12 @@ export async function GET(request: NextRequest) {
     // 増減額の絶対値で降順ソート
     groups.sort((a, b) => Math.abs(b.mcapDelta) - Math.abs(a.mcapDelta))
 
+    // 「未分類」が含まれているか + カバレッジ計算
+    const unclassified = groups.find((g) => g.label === '未分類')
+    const totalTickers = groups.reduce((s, g) => s + g.countTickers, 0)
+    const classifiedTickers = totalTickers - (unclassified?.countTickers ?? 0)
+    const coveragePct = totalTickers > 0 ? (classifiedTickers / totalTickers) * 100 : 100
+
     return NextResponse.json({
       fromDate,
       toDate,
@@ -255,6 +260,13 @@ export async function GET(request: NextRequest) {
       totalMcapTo,
       totalDelta: totalMcapTo - totalMcapFrom,
       totalDeltaPct: totalMcapFrom > 0 ? ((totalMcapTo - totalMcapFrom) / totalMcapFrom) * 100 : null,
+      coverage: {
+        totalTickers,
+        classifiedTickers,
+        unclassifiedTickers: unclassified?.countTickers ?? 0,
+        unclassifiedMcap: unclassified?.mcapTo ?? 0,
+        coveragePct,
+      },
       groups,
     })
   } catch (error) {
