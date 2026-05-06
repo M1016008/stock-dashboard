@@ -25,6 +25,7 @@ interface StockRow {
   marketSegment: string
   marginType?: string
   sectorLarge: string
+  sectorSmall?: string | null
   price: number
   currency?: string | null
   changePercent: number
@@ -54,6 +55,8 @@ interface StockRow {
 
 type SortKey =
   | 'ticker'
+  | 'sectorLarge'
+  | 'sectorSmall'
   | 'name'
   | 'price'
   | 'currency'
@@ -80,6 +83,11 @@ interface SortState {
   dir: 'asc' | 'desc'
 }
 
+interface AvailableDate {
+  date: string
+  tickers: number
+}
+
 export default function ScreenerPage() {
   const [stages, setStages] = useState<Partial<Record<AxisKey, number[]>>>({})
   const [results, setResults] = useState<StockRow[]>([])
@@ -91,14 +99,30 @@ export default function ScreenerPage() {
   const [notice, setNotice] = useState<string | null>(null)
   const [sort, setSort] = useState<SortState | null>(null)
   const [copiedTicker, setCopiedTicker] = useState<string | null>(null)
+  const [availableDates, setAvailableDates] = useState<AvailableDate[]>([])
+  const [selectedDate, setSelectedDate] = useState<string | null>(null) // null = 最新
 
   const hasAnyStage = Object.values(stages).some((v) => v && v.length > 0)
+
+  // 取込済み日付リストの取得
+  useEffect(() => {
+    let cancelled = false
+    fetch('/api/import/csv')
+      .then((r) => r.json())
+      .then((d) => {
+        if (cancelled) return
+        setAvailableDates(d.dates ?? [])
+      })
+      .catch(() => { /* 無視 */ })
+    return () => { cancelled = true }
+  }, [])
 
   useEffect(() => {
     let cancelled = false
     setLoading(true)
     setError('')
     const params = new URLSearchParams({ market: 'JP' })
+    if (selectedDate) params.set('date', selectedDate)
     for (const [k, v] of Object.entries(stages)) {
       if (v && v.length > 0) params.set(k, v.join(','))
     }
@@ -117,7 +141,7 @@ export default function ScreenerPage() {
       .catch((e) => { if (!cancelled) setError((e as Error).message) })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [stages])
+  }, [stages, selectedDate])
 
   const filterText = useMemo(() => {
     const parts: string[] = []
@@ -279,14 +303,35 @@ export default function ScreenerPage() {
       ) : (
         <div className="card" style={{ overflow: 'hidden' }}>
           <div style={{ padding: '8px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-subtle)', gap: '8px', flexWrap: 'wrap' }}>
-            <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
-              <strong>{sortedResults.length}</strong>件 / 母集団 {universe}銘柄
-              {snapshotDate && (
-                <span style={{ marginLeft: '6px', fontFamily: 'var(--font-mono)', color: 'var(--accent-primary)' }}>
-                  📅 {snapshotDate}
-                </span>
+            <span style={{ fontSize: '12px', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+              <span><strong>{sortedResults.length}</strong>件 / 母集団 {universe}銘柄</span>
+              {availableDates.length > 0 && (
+                <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontFamily: 'var(--font-mono)' }}>
+                  <span style={{ color: 'var(--accent-primary)' }}>📅</span>
+                  <select
+                    value={selectedDate ?? ''}
+                    onChange={(e) => setSelectedDate(e.target.value || null)}
+                    style={{
+                      padding: '3px 6px',
+                      fontSize: '12px',
+                      fontFamily: 'var(--font-mono)',
+                      background: 'var(--bg-elevated)',
+                      color: 'var(--accent-primary)',
+                      border: '1px solid var(--border-base)',
+                      borderRadius: 'var(--radius-sm)',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <option value="">最新（{availableDates[0]?.date ?? '---'}）</option>
+                    {availableDates.map((d) => (
+                      <option key={d.date} value={d.date}>
+                        {d.date}（{d.tickers}銘柄）
+                      </option>
+                    ))}
+                  </select>
+                </label>
               )}
-              {cached && <span style={{ marginLeft: '6px', color: 'var(--text-muted)' }}>（DB）</span>}
+              {cached && <span style={{ color: 'var(--text-muted)' }}>（DB）</span>}
             </span>
             <button
               onClick={downloadTvWatchlist}
@@ -313,12 +358,14 @@ export default function ScreenerPage() {
             </div>
           ) : (
             <div style={{ overflowX: 'auto' }}>
-              <table style={{ minWidth: '2300px', borderCollapse: 'collapse', fontSize: '12px' }}>
+              <table style={{ minWidth: '2600px', borderCollapse: 'collapse', fontSize: '12px' }}>
                 <thead>
                   <tr style={{ background: 'var(--bg-elevated)', borderBottom: '1px solid var(--border-dim)' }}>
                     <th style={th}></th>
                     <SortableTh label="コード"     sortKey="ticker"              current={sort} onClick={toggleSort} />
                     <th style={th}>TV形式</th>
+                    <SortableTh label="業種大分類" sortKey="sectorLarge"         current={sort} onClick={toggleSort} />
+                    <SortableTh label="業種細分類" sortKey="sectorSmall"         current={sort} onClick={toggleSort} />
                     <SortableTh label="銘柄名"     sortKey="name"                current={sort} onClick={toggleSort} />
                     <SortableTh label="株価"       sortKey="price"               current={sort} onClick={toggleSort} align="right" />
                     <SortableTh label="日%"        sortKey="changePercent"       current={sort} onClick={toggleSort} align="right" />
@@ -375,6 +422,8 @@ export default function ScreenerPage() {
                             {copied ? '✓ コピー済み' : tv}
                           </button>
                         </td>
+                        <td style={td}>{r.sectorLarge || '---'}</td>
+                        <td style={td}>{r.sectorSmall || '---'}</td>
                         <td style={td}>{r.name}</td>
                         <td style={tdR}>{r.price?.toLocaleString('ja-JP', { maximumFractionDigits: 2 }) ?? '---'}</td>
                         <td style={{ ...tdR, color: pctColor(r.changePercent) }}>{fmtPct(r.changePercent)}</td>

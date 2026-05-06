@@ -142,6 +142,14 @@ const STATEMENTS = [
     imported_at TEXT NOT NULL,
     detection_method TEXT
   )`,
+  `CREATE TABLE IF NOT EXISTS sector_master (
+    ticker TEXT PRIMARY KEY,
+    name TEXT,
+    sector_large TEXT,
+    sector_small TEXT,
+    updated_at TEXT NOT NULL,
+    source_file TEXT
+  )`,
 ]
 
 export async function ensureSchema(client: Client): Promise<void> {

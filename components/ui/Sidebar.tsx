@@ -13,6 +13,7 @@ const navItems = [
   { href: '/high-low', label: '新高値・新安値', icon: '📈' },
   { href: '/watchlist', label: 'ウォッチリスト', icon: '⭐' },
   { href: '/admin/import', label: 'CSV取込', icon: '📥' },
+  { href: '/admin/sector-master', label: '業種マスタ取込', icon: '🏷' },
   { href: '/admin/db', label: 'DB管理', icon: '🗄' },
 ]
 
