@@ -25,6 +25,7 @@ interface StockRow {
   marketSegment: string
   marginType?: string
   sectorLarge: string
+  sectorSmall?: string | null
   price: number
   currency?: string | null
   changePercent: number
@@ -54,6 +55,8 @@ interface StockRow {
 
 type SortKey =
   | 'ticker'
+  | 'sectorLarge'
+  | 'sectorSmall'
   | 'name'
   | 'price'
   | 'currency'
@@ -355,12 +358,14 @@ export default function ScreenerPage() {
             </div>
           ) : (
             <div style={{ overflowX: 'auto' }}>
-              <table style={{ minWidth: '2300px', borderCollapse: 'collapse', fontSize: '12px' }}>
+              <table style={{ minWidth: '2600px', borderCollapse: 'collapse', fontSize: '12px' }}>
                 <thead>
                   <tr style={{ background: 'var(--bg-elevated)', borderBottom: '1px solid var(--border-dim)' }}>
                     <th style={th}></th>
                     <SortableTh label="コード"     sortKey="ticker"              current={sort} onClick={toggleSort} />
                     <th style={th}>TV形式</th>
+                    <SortableTh label="業種大分類" sortKey="sectorLarge"         current={sort} onClick={toggleSort} />
+                    <SortableTh label="業種細分類" sortKey="sectorSmall"         current={sort} onClick={toggleSort} />
                     <SortableTh label="銘柄名"     sortKey="name"                current={sort} onClick={toggleSort} />
                     <SortableTh label="株価"       sortKey="price"               current={sort} onClick={toggleSort} align="right" />
                     <SortableTh label="日%"        sortKey="changePercent"       current={sort} onClick={toggleSort} align="right" />
@@ -417,6 +422,8 @@ export default function ScreenerPage() {
                             {copied ? '✓ コピー済み' : tv}
                           </button>
                         </td>
+                        <td style={td}>{r.sectorLarge || '---'}</td>
+                        <td style={td}>{r.sectorSmall || '---'}</td>
                         <td style={td}>{r.name}</td>
                         <td style={tdR}>{r.price?.toLocaleString('ja-JP', { maximumFractionDigits: 2 }) ?? '---'}</td>
                         <td style={{ ...tdR, color: pctColor(r.changePercent) }}>{fmtPct(r.changePercent)}</td>

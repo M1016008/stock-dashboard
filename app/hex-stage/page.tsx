@@ -30,7 +30,6 @@ interface Stock {
   prev_sma_angles?: { sma5: number | null; sma25: number | null; sma75: number | null; sma300: number | null }
   prev_prev_sma_angles?: { sma5: number | null; sma25: number | null; sma75: number | null; sma300: number | null }
 }
-
 type Timeframe = 'daily' | 'weekly' | 'monthly'
 
 interface AvailableDate {
@@ -62,6 +61,7 @@ export default function HexStagePage() {
 
   const [timeframe, setTimeframe] = useState<Timeframe>('daily')
   const [selectedCategory, setSelectedCategory] = useState<string>('')
+  const [selectedSubCategory, setSelectedSubCategory] = useState<string>('')
   const [availableDates, setAvailableDates] = useState<AvailableDate[]>([])
   const [selectedDate, setSelectedDate] = useState<string | null>(null) // null = 最新
   const [legendOpen, setLegendOpen] = useState(false)
@@ -101,14 +101,40 @@ export default function HexStagePage() {
     return () => { cancelled = true }
   }, [timeframe, selectedDate])
 
-  const categories = useMemo(() => {
-    return Array.from(new Set(data.map((d) => d.sector_large).filter(Boolean))).sort()
+  // 大分類 → 件数, さらに 大分類 → { 小分類: 件数 } の辞書
+  const categoryStats = useMemo(() => {
+    const large: Record<string, number> = {}
+    const small: Record<string, Record<string, number>> = {}
+    for (const d of data) {
+      const l = d.sector_large || '（未分類）'
+      large[l] = (large[l] ?? 0) + 1
+      if (d.sector_small) {
+        small[l] = small[l] ?? {}
+        small[l][d.sector_small] = (small[l][d.sector_small] ?? 0) + 1
+      }
+    }
+    return { large, small }
   }, [data])
 
+  const largeOptions = useMemo(
+    () => Object.entries(categoryStats.large).sort((a, b) => b[1] - a[1]),
+    [categoryStats],
+  )
+
+  const smallOptions = useMemo(() => {
+    if (!selectedCategory) return []
+    const m = categoryStats.small[selectedCategory]
+    if (!m) return []
+    return Object.entries(m).sort((a, b) => b[1] - a[1])
+  }, [categoryStats, selectedCategory])
+
   const filteredData = useMemo(() => {
-    if (!selectedCategory) return data
-    return data.filter((d) => d.sector_large === selectedCategory)
-  }, [data, selectedCategory])
+    return data.filter((d) => {
+      if (selectedCategory && d.sector_large !== selectedCategory) return false
+      if (selectedSubCategory && d.sector_small !== selectedSubCategory) return false
+      return true
+    })
+  }, [data, selectedCategory, selectedSubCategory])
 
   return (
     <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
@@ -170,29 +196,57 @@ export default function HexStagePage() {
         </div>
       </div>
 
-      {/* セクター・チップフィルタ */}
-      {categories.length > 0 && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-          <span style={{ fontSize: '10px', color: 'var(--text-muted)', marginRight: '4px' }}>セクター:</span>
-          <button
-            onClick={() => setSelectedCategory('')}
-            style={chipStyle(selectedCategory === '')}
-          >
-            全て（{data.length}）
-          </button>
-          {categories.map((cat) => {
-            const count = data.filter((d) => d.sector_large === cat).length
-            const active = selectedCategory === cat
-            return (
-              <button
-                key={cat}
-                onClick={() => setSelectedCategory(active ? '' : cat)}
-                style={chipStyle(active)}
-              >
-                {cat}（{count}）
-              </button>
-            )
-          })}
+      {/* セクター・ドロップダウン2段（大分類 → 小分類） */}
+      {largeOptions.length > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: 'var(--text-muted)' }}>
+            業種大分類
+            <select
+              value={selectedCategory}
+              onChange={(e) => {
+                setSelectedCategory(e.target.value)
+                setSelectedSubCategory('') // 大分類が変わったら小分類はリセット
+              }}
+              style={selectStyleNew}
+            >
+              <option value="">全て（{data.length}）</option>
+              {largeOptions.map(([cat, n]) => (
+                <option key={cat} value={cat}>{cat}（{n}）</option>
+              ))}
+            </select>
+          </label>
+
+          <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: 'var(--text-muted)' }}>
+            業種細分類
+            <select
+              value={selectedSubCategory}
+              onChange={(e) => setSelectedSubCategory(e.target.value)}
+              disabled={!selectedCategory || smallOptions.length === 0}
+              style={{ ...selectStyleNew, opacity: !selectedCategory ? 0.5 : 1 }}
+            >
+              <option value="">全て{selectedCategory ? `（${categoryStats.large[selectedCategory] ?? 0}）` : ''}</option>
+              {smallOptions.map(([cat, n]) => (
+                <option key={cat} value={cat}>{cat}（{n}）</option>
+              ))}
+            </select>
+          </label>
+
+          {(selectedCategory || selectedSubCategory) && (
+            <button
+              onClick={() => { setSelectedCategory(''); setSelectedSubCategory('') }}
+              style={{
+                padding: '3px 10px',
+                fontSize: '11px',
+                background: 'var(--bg-elevated)',
+                border: '1px solid var(--border-base)',
+                borderRadius: 'var(--radius-sm)',
+                cursor: 'pointer',
+                color: 'var(--text-muted)',
+              }}
+            >
+              × クリア
+            </button>
+          )}
         </div>
       )}
 
@@ -316,6 +370,18 @@ const segmentBtnStyle = (active: boolean): React.CSSProperties => ({
   border: 'none',
   cursor: 'pointer',
 })
+
+const selectStyleNew: React.CSSProperties = {
+  padding: '5px 8px',
+  fontSize: '12px',
+  fontFamily: 'var(--font-mono)',
+  background: 'var(--bg-elevated)',
+  color: 'var(--text-primary)',
+  border: '1px solid var(--border-base)',
+  borderRadius: 'var(--radius-sm)',
+  cursor: 'pointer',
+  minWidth: '160px',
+}
 
 const chipStyle = (active: boolean): React.CSSProperties => ({
   padding: '4px 10px',
