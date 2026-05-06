@@ -5,9 +5,22 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import { CapitalFlowTreemap } from '@/components/capital-flow/Treemap'
+import { CapitalFlowWaterfall } from '@/components/capital-flow/Waterfall'
+import { CapitalFlowSankey } from '@/components/capital-flow/SankeyFlow'
+import { CapitalFlowTimeSeries } from '@/components/capital-flow/TimeSeries'
 
 type GroupBy = 'large' | 'sector33' | 'small' | 'ticker'
 type Period = 'day' | 'week' | 'month' | 'custom'
+type ViewMode = 'rank' | 'treemap' | 'waterfall' | 'sankey' | 'timeseries'
+
+const VIEW_OPTIONS: { v: ViewMode; label: string; emoji: string }[] = [
+  { v: 'rank',       label: 'ランキング',     emoji: '📊' },
+  { v: 'treemap',    label: 'ヒートマップ',   emoji: '🟩' },
+  { v: 'waterfall',  label: 'ウォーターフォール', emoji: '💧' },
+  { v: 'sankey',     label: 'フロー図',       emoji: '🔄' },
+  { v: 'timeseries', label: '推移',           emoji: '📈' },
+]
 
 interface Contributor {
   ticker: string
@@ -82,6 +95,7 @@ function color(delta: number): string {
 }
 
 export default function CapitalFlowPage() {
+  const [view, setView] = useState<ViewMode>('rank')
   const [period, setPeriod] = useState<Period>('week')
   const [groupBy, setGroupBy] = useState<GroupBy>('large')
   const [customFrom, setCustomFrom] = useState<string>('')
@@ -150,6 +164,31 @@ export default function CapitalFlowPage() {
           時価総額の増減から業種・銘柄ごとの「資金の流れ」を可視化。
           流入が多い業種は緑、流出が多い業種は赤で表示します。
         </p>
+      </div>
+
+      {/* ビュータブ */}
+      <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', borderBottom: '1px solid var(--border-subtle)' }}>
+        {VIEW_OPTIONS.map((v) => (
+          <button
+            key={v.v}
+            onClick={() => setView(v.v)}
+            style={{
+              padding: '8px 14px',
+              fontSize: '12px',
+              fontWeight: view === v.v ? 700 : 500,
+              background: view === v.v ? '#fff' : 'transparent',
+              color: view === v.v ? 'var(--accent-primary)' : 'var(--text-secondary)',
+              border: 'none',
+              borderBottom: view === v.v ? '2px solid var(--accent-primary)' : '2px solid transparent',
+              cursor: 'pointer',
+              marginBottom: '-1px',
+              fontFamily: 'var(--font-mono)',
+            }}
+          >
+            <span style={{ marginRight: 4 }}>{v.emoji}</span>
+            {v.label}
+          </button>
+        ))}
       </div>
 
       {/* フィルタバー */}
@@ -297,59 +336,98 @@ export default function CapitalFlowPage() {
             )}
           </div>
 
-          {/* 流入 / 流出 トップ */}
-          {!inDrill && data.groups.length > 0 && (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '12px' }}>
-              <RankList title="📈 流入トップ" items={[...data.groups].sort((a, b) => b.mcapDelta - a.mcapDelta).slice(0, 5)} flowKind="in" />
-              <RankList title="📉 流出トップ" items={[...data.groups].sort((a, b) => a.mcapDelta - b.mcapDelta).slice(0, 5)} flowKind="out" />
+          {/* ビュー別の本体 */}
+          {view === 'rank' && (
+            <>
+              {!inDrill && data.groups.length > 0 && (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '12px' }}>
+                  <RankList title="📈 流入トップ" items={[...data.groups].sort((a, b) => b.mcapDelta - a.mcapDelta).slice(0, 5)} flowKind="in" />
+                  <RankList title="📉 流出トップ" items={[...data.groups].sort((a, b) => a.mcapDelta - b.mcapDelta).slice(0, 5)} flowKind="out" />
+                </div>
+              )}
+
+              <div className="card" style={{ overflow: 'hidden' }}>
+                <div style={{
+                  padding: '10px 12px',
+                  borderBottom: '1px solid var(--border-subtle)',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
+                }}>
+                  <span>{inDrill ? `${drillValue} 内の銘柄別資金フロー` : '全グループの資金フロー（変化額順）'}</span>
+                  <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                    {data.groups.length} {inDrill ? '銘柄' : 'グループ'}
+                  </span>
+                </div>
+                <div>
+                  {data.groups.map((g) => (
+                    <FlowBar
+                      key={g.label}
+                      label={g.label}
+                      count={g.countTickers}
+                      delta={g.mcapDelta}
+                      deltaPct={g.mcapDeltaPct}
+                      mcapFrom={g.mcapFrom}
+                      mcapTo={g.mcapTo}
+                      maxAbs={maxAbs}
+                      drillable={!inDrill}
+                      onDrillDown={() => {
+                        if (inDrill) return
+                        const map: Record<GroupBy, 'large' | 'sector33' | 'small' | null> = {
+                          large: 'large', sector33: 'sector33', small: 'small', ticker: null,
+                        }
+                        const f = map[groupBy]
+                        if (!f) return
+                        setDrillField(f)
+                        setDrillValue(g.label)
+                      }}
+                    />
+                  ))}
+                  {data.groups.length === 0 && (
+                    <div style={{ padding: '32px', textAlign: 'center', fontSize: '12px', color: 'var(--text-muted)' }}>
+                      該当データがありません
+                    </div>
+                  )}
+                </div>
+              </div>
+            </>
+          )}
+
+          {view === 'treemap' && data.groups.length > 0 && (
+            <div className="card" style={{ padding: '12px' }}>
+              <CapitalFlowTreemap
+                items={data.groups}
+                onClickItem={inDrill ? undefined : (label) => {
+                  const map: Record<GroupBy, 'large' | 'sector33' | 'small' | null> = {
+                    large: 'large', sector33: 'sector33', small: 'small', ticker: null,
+                  }
+                  const f = map[groupBy]
+                  if (!f) return
+                  setDrillField(f)
+                  setDrillValue(label)
+                }}
+              />
             </div>
           )}
 
-          {/* 全グループ ヨコ棒チャート */}
-          <div className="card" style={{ overflow: 'hidden' }}>
-            <div style={{
-              padding: '10px 12px',
-              borderBottom: '1px solid var(--border-subtle)',
-              fontSize: '12px',
-              fontWeight: 600,
-              display: 'flex', justifyContent: 'space-between', alignItems: 'baseline',
-            }}>
-              <span>{inDrill ? `${drillValue} 内の銘柄別資金フロー` : '全グループの資金フロー（変化額順）'}</span>
-              <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
-                {data.groups.length} {inDrill ? '銘柄' : 'グループ'}
-              </span>
+          {view === 'waterfall' && data.groups.length > 0 && (
+            <div className="card" style={{ padding: '12px' }}>
+              <CapitalFlowWaterfall items={data.groups} />
             </div>
-            <div>
-              {data.groups.map((g) => (
-                <FlowBar
-                  key={g.label}
-                  label={g.label}
-                  count={g.countTickers}
-                  delta={g.mcapDelta}
-                  deltaPct={g.mcapDeltaPct}
-                  mcapFrom={g.mcapFrom}
-                  mcapTo={g.mcapTo}
-                  maxAbs={maxAbs}
-                  drillable={!inDrill}
-                  onDrillDown={() => {
-                    if (inDrill) return
-                    const map: Record<GroupBy, 'large' | 'sector33' | 'small' | null> = {
-                      large: 'large', sector33: 'sector33', small: 'small', ticker: null,
-                    }
-                    const f = map[groupBy]
-                    if (!f) return
-                    setDrillField(f)
-                    setDrillValue(g.label)
-                  }}
-                />
-              ))}
-              {data.groups.length === 0 && (
-                <div style={{ padding: '32px', textAlign: 'center', fontSize: '12px', color: 'var(--text-muted)' }}>
-                  該当データがありません
-                </div>
-              )}
+          )}
+
+          {view === 'sankey' && data.groups.length > 0 && (
+            <div className="card" style={{ padding: '12px' }}>
+              <CapitalFlowSankey items={data.groups} />
             </div>
-          </div>
+          )}
+
+          {view === 'timeseries' && (
+            <div className="card" style={{ padding: '12px' }}>
+              {/* ドリルダウン中は ticker 単位で見せたいが時系列は業種粒度のみ対応 */}
+              <CapitalFlowTimeSeries groupBy={(groupBy === 'ticker' ? 'large' : (groupBy as 'large' | 'sector33' | 'small'))} />
+            </div>
+          )}
         </>
       )}
     </div>
