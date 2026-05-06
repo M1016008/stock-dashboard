@@ -364,7 +364,15 @@ function StageMatrix({
           <span className="text-[11px] text-gray-500">B-Stage × A-Stage</span>
         </div>
         <span className="text-[11px] text-gray-500">
-          <strong className="text-indigo-600 font-mono">{total.toLocaleString()}</strong> 銘柄
+          <strong className="text-indigo-600 font-mono">{data.length.toLocaleString()}</strong> 銘柄
+          {total < data.length && (
+            <span
+              className="ml-1.5 text-gray-400"
+              title={`${data.length - total} 銘柄は ${label} のステージが計算できないため除外（上場期間不足など）`}
+            >
+              （うち {total.toLocaleString()} 銘柄を分類）
+            </span>
+          )}
         </span>
       </header>
 
