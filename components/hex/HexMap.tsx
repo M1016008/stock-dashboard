@@ -105,6 +105,19 @@ export default function HexMap({ data }: { data: Stock[]; timeframe?: Timeframe 
   const [selectedCell, setSelectedCell] = useState<CellSelection | null>(null)
   const [selectedMarketCapRange, setSelectedMarketCapRange] = useState<string>('all')
 
+  // 選択中セルに該当するティッカー集合。他のタイムフレームのマトリクスに渡して、
+  // クロスタイムフレームで「同じ銘柄群がどのセルに分布しているか」を可視化する。
+  const selectedTickers = useMemo<Set<string>>(() => {
+    if (!selectedCell) return new Set()
+    const aField = `${selectedCell.tf}_a_stage` as keyof Stock
+    const bField = `${selectedCell.tf}_b_stage` as keyof Stock
+    return new Set(
+      data
+        .filter((d) => d[aField] === selectedCell.a && d[bField] === selectedCell.b)
+        .map((d) => d.code),
+    )
+  }, [data, selectedCell])
+
   const filterByMarketCap = (stock: Stock) => {
     const val = stock.market_cap / 100000000
     switch (selectedMarketCapRange) {
@@ -153,6 +166,8 @@ export default function HexMap({ data }: { data: Stock[]; timeframe?: Timeframe 
             timeframe={tf.key}
             label={tf.label}
             selected={selectedCell?.tf === tf.key ? selectedCell : null}
+            selectedTickers={selectedTickers}
+            crossLink={!!selectedCell && selectedCell.tf !== tf.key}
             onCellClick={(b, a, count) => onCellClick(tf.key, b, a, count)}
           />
         ))}
@@ -331,17 +346,21 @@ export default function HexMap({ data }: { data: Stock[]; timeframe?: Timeframe 
  * セル内の数値はその (B, A) 組合せに該当する銘柄数。クリックで下のテーブルを絞り込む。
  * ────────────────────────────────────────────────────────────── */
 function StageMatrix({
-  data, timeframe, label, selected, onCellClick,
+  data, timeframe, label, selected, selectedTickers, crossLink, onCellClick,
 }: {
   data: Stock[]
   timeframe: Timeframe
   label: string
   selected: CellSelection | null
+  selectedTickers: Set<string>
+  /** 他のタイムフレームでセルが選択されているとき true。クロスリンク表示モード。 */
+  crossLink: boolean
   onCellClick: (b: number, a: number, count: number) => void
 }) {
-  // matrix[b][a] = count. インデックスは 1..6 を使う
+  // matrix[b][a] = { count: そのセルの全銘柄数, sel: 選択中銘柄のうちこのセルに入る数 }
   const { matrix, total } = useMemo(() => {
-    const m: number[][] = Array.from({ length: 7 }, () => Array(7).fill(0))
+    const m: { count: number; sel: number }[][] =
+      Array.from({ length: 7 }, () => Array.from({ length: 7 }, () => ({ count: 0, sel: 0 })))
     let t = 0
     const aField = `${timeframe}_a_stage` as keyof Stock
     const bField = `${timeframe}_b_stage` as keyof Stock
@@ -350,18 +369,24 @@ function StageMatrix({
       const b = d[bField] as number | null | undefined
       if (a == null || b == null) continue
       if (a < 1 || a > 6 || b < 1 || b > 6) continue
-      m[b][a]++
+      m[b][a].count++
       t++
+      if (selectedTickers.has(d.code)) m[b][a].sel++
     }
     return { matrix: m, total: t }
-  }, [data, timeframe])
+  }, [data, timeframe, selectedTickers])
 
   return (
     <section className="bg-white border border-gray-200 rounded-lg p-3">
-      <header className="flex items-baseline justify-between mb-2">
+      <header className="flex items-baseline justify-between mb-2 flex-wrap gap-2">
         <div className="flex items-baseline gap-2">
           <h3 className="text-base font-bold text-gray-900">{label}</h3>
           <span className="text-[11px] text-gray-500">B-Stage × A-Stage</span>
+          {crossLink && (
+            <span className="text-[10px] text-indigo-600 bg-indigo-50 border border-indigo-100 px-1.5 py-0.5 rounded">
+              連動表示中（数字: 該当銘柄 / 全銘柄）
+            </span>
+          )}
         </div>
         <span className="text-[11px] text-gray-500">
           <strong className="text-indigo-600 font-mono">{data.length.toLocaleString()}</strong> 銘柄
@@ -419,38 +444,69 @@ function StageMatrix({
 
               {/* A1..A6 の細長いセル */}
               {[1, 2, 3, 4, 5, 6].map((a) => {
-                const count = matrix[b][a]
+                const cell = matrix[b][a]
+                const count = cell.count
+                const sel = cell.sel
                 const isActive = !!selected && selected.b === b && selected.a === a
                 const empty = count === 0
+                // クロスリンク表示モード（他TFで選択中）の見せ方:
+                //   - sel > 0 の場合: 強調 (該当銘柄が分布)
+                //   - sel = 0 の場合: 薄く（候補外）
+                const isCross = crossLink && sel > 0
+                const isDimmed = crossLink && sel === 0 && !empty
+                const baseColor = STAGE_BORDER_COLORS[a]
+                let bg = '#fff'
+                let fg: string = baseColor
+                let borderColor: string = baseColor
+                let opacity = 1
+                if (empty) {
+                  bg = '#fafafa'; fg = '#d1d5db'; borderColor = '#e5e7eb'
+                } else if (isActive) {
+                  bg = baseColor; fg = '#fff'; borderColor = baseColor
+                } else if (isCross) {
+                  bg = STAGE_BG_COLORS[a]; fg = baseColor; borderColor = baseColor
+                } else if (isDimmed) {
+                  opacity = 0.35
+                }
+                const titleParts: string[] = [`B${b} × A${a}: ${count} 銘柄`]
+                if (crossLink && sel > 0) titleParts.push(`連動: ${sel} 銘柄`)
                 return (
                   <button
                     key={a}
                     onClick={() => onCellClick(b, a, count)}
                     disabled={empty}
-                    title={`B${b} × A${a}: ${count} 銘柄`}
+                    title={titleParts.join(' / ')}
                     style={{
-                      background: isActive
-                        ? STAGE_BORDER_COLORS[a]
-                        : empty
-                          ? '#fafafa'
-                          : '#fff',
-                      color: isActive
-                        ? '#fff'
-                        : empty
-                          ? '#d1d5db'
-                          : STAGE_BORDER_COLORS[a],
-                      border: `1px solid ${empty ? '#e5e7eb' : STAGE_BORDER_COLORS[a]}`,
+                      background: bg,
+                      color: fg,
+                      border: `1px solid ${borderColor}`,
                       borderRadius: '4px',
-                      padding: '12px 4px',
+                      padding: '8px 4px',
                       fontFamily: 'var(--font-mono)',
-                      fontSize: '15px',
-                      fontWeight: 700,
                       cursor: empty ? 'default' : 'pointer',
-                      transition: 'transform 0.1s, box-shadow 0.1s',
-                      boxShadow: isActive ? `0 2px 8px ${STAGE_BORDER_COLORS[a]}55` : 'none',
+                      transition: 'transform 0.1s, box-shadow 0.1s, opacity 0.15s',
+                      boxShadow: isActive
+                        ? `0 2px 8px ${baseColor}55`
+                        : isCross
+                          ? `inset 0 0 0 2px ${baseColor}`
+                          : 'none',
+                      opacity,
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '2px',
+                      lineHeight: 1.1,
                     }}
                   >
-                    {count}
+                    {crossLink ? (
+                      <>
+                        <span style={{ fontSize: '15px', fontWeight: 700 }}>{sel}</span>
+                        <span style={{ fontSize: '9px', opacity: 0.7 }}>/ {count}</span>
+                      </>
+                    ) : (
+                      <span style={{ fontSize: '15px', fontWeight: 700 }}>{count}</span>
+                    )}
                   </button>
                 )
               })}
