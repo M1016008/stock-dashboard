@@ -1,6 +1,10 @@
 // lib/yahoo-finance.ts
-import yahooFinance from 'yahoo-finance2'
+import YahooFinance from 'yahoo-finance2'
 import type { StockQuote, OHLCV, Fundamentals } from '@/types/stock'
+
+// yahoo-finance2 v3 はインスタンス化が必要 (旧 v2 はシングルトンの default export だった)。
+// ライブラリの TypeScript 型と実体ズレを吸収するため any 経由でインスタンス化する。
+const yahooFinance: any = new (YahooFinance as any)()
 
 const delay = (ms: number) => new Promise(r => setTimeout(r, ms))
 
