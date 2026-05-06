@@ -3,7 +3,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import {
-  LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend,
+  ComposedChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend, Customized,
 } from 'recharts'
 import type { OHLCV } from '@/types/stock'
 import { calcSMA } from '@/lib/indicators'
@@ -18,6 +18,7 @@ const INDICES = [
 type IndexCode = typeof INDICES[number]['code']
 
 type Timeframe = 'D' | 'W' | 'M' | 'Y'
+type ChartType = 'line' | 'candle'
 
 const TIMEFRAMES: { key: Timeframe; label: string; period: '6mo' | '1y' | '2y'; group: number }[] = [
   { key: 'D', label: '日足', period: '6mo', group: 1 },
@@ -33,6 +34,9 @@ const MA_COLORS: Record<number, string> = {
   25: '#f59e0b',
   75: '#a855f7',
 }
+
+const CANDLE_UP = '#22c55e'
+const CANDLE_DOWN = '#ef4444'
 
 /** 集約: groupSize 本ずつまとめて新しい OHLCV を作る */
 function aggregate(ohlcv: OHLCV[], groupSize: number): OHLCV[] {
@@ -55,15 +59,82 @@ function aggregate(ohlcv: OHLCV[], groupSize: number): OHLCV[] {
 
 interface ChartPoint {
   date: string
+  open: number
+  high: number
+  low: number
   close: number
   ma5?: number | null
   ma25?: number | null
   ma75?: number | null
 }
 
+/**
+ * Recharts の Customized レイヤとして描く SVG ローソク足。
+ * yAxis の scale を借りて high/low/open/close の y 座標を計算。
+ */
+function CandlestickLayer(props: any) {
+  const { yAxisMap, xAxisMap, data } = props
+  if (!yAxisMap || !xAxisMap || !data || data.length === 0) return null
+  const yAxis: any = Object.values(yAxisMap)[0]
+  const xAxis: any = Object.values(xAxisMap)[0]
+  if (!yAxis?.scale || !xAxis?.scale) return null
+
+  const yScale = yAxis.scale
+  const xScale = xAxis.scale
+  const xs: number[] = data.map((d: ChartPoint) => xScale(d.date))
+  // データ間隔からローソクの幅を決める
+  const diffs: number[] = []
+  for (let i = 1; i < xs.length; i++) {
+    if (Number.isFinite(xs[i]) && Number.isFinite(xs[i - 1])) {
+      diffs.push(Math.abs(xs[i] - xs[i - 1]))
+    }
+  }
+  const minDx = diffs.length > 0 ? Math.min(...diffs) : 8
+  const candleWidth = Math.max(2, minDx * 0.7)
+
+  return (
+    <g>
+      {data.map((d: ChartPoint, i: number) => {
+        const cx = xs[i]
+        if (!Number.isFinite(cx)) return null
+        const { open, high, low, close } = d
+        if ([open, high, low, close].some((v) => v == null || !Number.isFinite(v))) return null
+        const isUp = close >= open
+        const color = isUp ? CANDLE_UP : CANDLE_DOWN
+        const yOpen = yScale(open)
+        const yClose = yScale(close)
+        const yHigh = yScale(high)
+        const yLow = yScale(low)
+        const bodyTop = Math.min(yOpen, yClose)
+        const bodyHeight = Math.max(1, Math.abs(yOpen - yClose))
+        return (
+          <g key={i}>
+            {/* ヒゲ */}
+            <line
+              x1={cx} y1={yHigh}
+              x2={cx} y2={yLow}
+              stroke={color} strokeWidth={1}
+            />
+            {/* 実体 */}
+            <rect
+              x={cx - candleWidth / 2}
+              y={bodyTop}
+              width={candleWidth}
+              height={bodyHeight}
+              fill={color}
+              stroke={color}
+            />
+          </g>
+        )
+      })}
+    </g>
+  )
+}
+
 export function IndicesChart() {
   const [code, setCode] = useState<IndexCode>('^N225')
   const [tf, setTf] = useState<Timeframe>('D')
+  const [chartType, setChartType] = useState<ChartType>('line')
   const [enabledMAs, setEnabledMAs] = useState<number[]>([5, 25])
   const [history, setHistory] = useState<OHLCV[]>([])
   const [loading, setLoading] = useState(false)
@@ -97,12 +168,29 @@ export function IndicesChart() {
 
     return agg.map((d, i) => ({
       date: d.date,
+      open: d.open,
+      high: d.high,
+      low: d.low,
       close: d.close,
       ma5: ma5[i] ?? null,
       ma25: ma25[i] ?? null,
       ma75: ma75[i] ?? null,
     }))
   }, [history, tf])
+
+  // ローソク表示時は high/low を含めた範囲で yAxis を確保する
+  const yDomain = useMemo<[number | string, number | string]>(() => {
+    if (series.length === 0 || chartType !== 'candle') return ['auto', 'auto']
+    let min = Infinity
+    let max = -Infinity
+    for (const d of series) {
+      if (d.low < min) min = d.low
+      if (d.high > max) max = d.high
+    }
+    if (!Number.isFinite(min) || !Number.isFinite(max)) return ['auto', 'auto']
+    const pad = (max - min) * 0.05 || 1
+    return [min - pad, max + pad]
+  }, [series, chartType])
 
   const stats = useMemo(() => {
     if (series.length === 0) return null
@@ -151,8 +239,34 @@ export function IndicesChart() {
         )}
       </div>
 
-      {/* タイムフレーム + MA 切替 */}
-      <div style={{ display: 'flex', gap: '8px', marginBottom: '8px', flexWrap: 'wrap' }}>
+      {/* タイムフレーム + チャート種別 + MA 切替 */}
+      <div style={{ display: 'flex', gap: '8px', marginBottom: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+        {/* チャート種別 */}
+        <div style={{ display: 'inline-flex', border: '1px solid var(--border-base)', borderRadius: 'var(--radius-sm)', overflow: 'hidden' }}>
+          {([
+            { v: 'line', label: '線' },
+            { v: 'candle', label: 'ローソク足' },
+          ] as { v: ChartType; label: string }[]).map((t) => (
+            <button
+              key={t.v}
+              onClick={() => setChartType(t.v)}
+              style={{
+                padding: '4px 10px',
+                fontSize: '10px',
+                fontFamily: 'var(--font-mono)',
+                background: chartType === t.v ? 'var(--accent-primary)' : 'transparent',
+                color: chartType === t.v ? '#fff' : 'var(--text-secondary)',
+                border: 'none',
+                cursor: 'pointer',
+                fontWeight: chartType === t.v ? 600 : 400,
+              }}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+
+        {/* タイムフレーム */}
         <div style={{ display: 'inline-flex', border: '1px solid var(--border-base)', borderRadius: 'var(--radius-sm)', overflow: 'hidden' }}>
           {TIMEFRAMES.map((t) => (
             <button
@@ -173,6 +287,7 @@ export function IndicesChart() {
           ))}
         </div>
 
+        {/* MA */}
         <div style={{ display: 'inline-flex', gap: '4px', alignItems: 'center', fontSize: '10px', color: 'var(--text-muted)' }}>
           <span>MA:</span>
           {MA_OPTIONS.map((p) => {
@@ -205,7 +320,7 @@ export function IndicesChart() {
 
       {error && <p style={{ fontSize: '11px', color: 'var(--price-down)' }}>エラー: {error}</p>}
 
-      <div style={{ height: '260px' }}>
+      <div style={{ height: '300px' }}>
         {loading ? (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
             <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>取得中...</span>
@@ -216,7 +331,7 @@ export function IndicesChart() {
           </div>
         ) : (
           <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={series} margin={{ top: 4, right: 8, left: 0, bottom: 4 }}>
+            <ComposedChart data={series} margin={{ top: 4, right: 8, left: 0, bottom: 4 }}>
               <CartesianGrid stroke="var(--border-subtle)" strokeDasharray="2 2" />
               <XAxis
                 dataKey="date"
@@ -227,7 +342,7 @@ export function IndicesChart() {
                 minTickGap={28}
               />
               <YAxis
-                domain={['auto', 'auto']}
+                domain={yDomain}
                 tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
                 tickFormatter={(v) => v.toLocaleString()}
                 axisLine={{ stroke: 'var(--border-base)' }}
@@ -241,13 +356,36 @@ export function IndicesChart() {
                   borderRadius: '4px',
                   fontSize: '11px',
                 }}
-                formatter={(v, name) => [
-                  typeof v === 'number' ? v.toLocaleString('ja-JP', { maximumFractionDigits: 2 }) : String(v ?? ''),
-                  name === 'close' ? '終値' : String(name ?? '').toUpperCase(),
-                ]}
+                formatter={(v, name) => {
+                  const num = typeof v === 'number'
+                    ? v.toLocaleString('ja-JP', { maximumFractionDigits: 2 })
+                    : String(v ?? '')
+                  const labels: Record<string, string> = {
+                    open: '始値', high: '高値', low: '安値', close: '終値',
+                    ma5: 'MA5', ma25: 'MA25', ma75: 'MA75',
+                  }
+                  return [num, labels[name as string] ?? String(name ?? '').toUpperCase()]
+                }}
               />
               <Legend wrapperStyle={{ fontSize: '10px' }} />
-              <Line type="monotone" dataKey="close" stroke="var(--text-primary)" strokeWidth={1.5} dot={false} name="終値" isAnimationActive={false} />
+
+              {/* チャート本体: 線 or ローソク足 */}
+              {chartType === 'line' && (
+                <Line
+                  type="monotone"
+                  dataKey="close"
+                  stroke="var(--text-primary)"
+                  strokeWidth={1.5}
+                  dot={false}
+                  name="終値"
+                  isAnimationActive={false}
+                />
+              )}
+              {chartType === 'candle' && (
+                <Customized component={CandlestickLayer} />
+              )}
+
+              {/* 移動平均（共通） */}
               {enabledMAs.includes(5) && (
                 <Line type="monotone" dataKey="ma5" stroke={MA_COLORS[5]} strokeWidth={1} dot={false} name="MA5" isAnimationActive={false} />
               )}
@@ -257,7 +395,7 @@ export function IndicesChart() {
               {enabledMAs.includes(75) && (
                 <Line type="monotone" dataKey="ma75" stroke={MA_COLORS[75]} strokeWidth={1} dot={false} name="MA75" isAnimationActive={false} />
               )}
-            </LineChart>
+            </ComposedChart>
           </ResponsiveContainer>
         )}
       </div>
