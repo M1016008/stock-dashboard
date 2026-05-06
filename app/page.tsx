@@ -7,7 +7,7 @@ import { EarningsCalendar } from '@/components/dashboard/EarningsCalendar'
 
 export const metadata: Metadata = {
   title: 'ダッシュボード — StockBoard',
-  description: '日本株・米国株のリアルタイム分析。インデックス、HEXステージ分布、新高値・新安値を一覧表示。',
+  description: '日本株のスクリーナー、HEXステージ分析、決算カレンダーを一覧表示。',
 }
 
 const INDICES = [
