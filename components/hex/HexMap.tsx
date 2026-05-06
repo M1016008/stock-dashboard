@@ -6,7 +6,9 @@
 import { useEffect, useRef, useState } from 'react'
 import * as d3 from 'd3'
 import { useRouter } from 'next/navigation'
-import { Search, TrendingUp, BarChart3, Copy, Check } from 'lucide-react'
+import { Search, Copy, Check } from 'lucide-react'
+import { STAGE_BG_COLORS, STAGE_BORDER_COLORS, STAGE_LABELS } from '@/lib/hex-stage'
+import { StageDots } from '@/components/ui/StageDots'
 
 interface Stock {
   code: string
@@ -88,7 +90,7 @@ export default function HexMap({
   const [hoveredStock, setHoveredStock] = useState<Stock | null>(null)
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 })
 
-  const width = 650, height = 600
+  const width = 980, height = 380
 
   useEffect(() => {
     if (!svgRef.current || !data || data.length === 0) return
@@ -97,90 +99,18 @@ export default function HexMap({
     svg.selectAll('*').remove()
     const g = svg.append('g')
 
-    const zoom = d3.zoom<SVGSVGElement, unknown>()
-      .scaleExtent([0.4, 3])
-      .on('zoom', (event) => g.attr('transform', event.transform))
-    svg.call(zoom)
-    svg.call(zoom.transform, d3.zoomIdentity.translate(25, 25).scale(0.85))
+    // 6 ステージを横一列にレイアウト（左→右、Stage 1〜6）。
+    // 強気→弱気→強気回帰 の流れを左から右に読むのが自然。
+    const padding = 20
+    const cellWidth = (width - padding * 2) / 6
+    const cellHeight = height - 60 // タイトル領域を引いた残り
+    const titleY = 30
 
-    const centerX = width / 2, centerY = height / 2
-    const stageRadius = 160, circleRadius = 72
-
-    const stagePositions = new Map<number, { x: number; y: number }>()
-    for (let stage = 1; stage <= 6; stage++) {
-      const angle = (-90 + (stage - 1) * 60) * (Math.PI / 180)
-      stagePositions.set(stage, {
-        x: centerX + stageRadius * Math.cos(angle),
-        y: centerY + stageRadius * Math.sin(angle),
-      })
-    }
-
-    const sectorList = Array.from(new Set(data.map((d) => d.sector_large).filter(Boolean)))
-    const colors = d3.range(sectorList.length).map((i) => {
-      const hue = (i / Math.max(1, sectorList.length)) * 360
-      return d3.hsl(hue, 0.7, 0.6).hex()
-    })
-    const colorScale = d3.scaleOrdinal<string>().domain(sectorList).range(colors)
-
-    const sectorAngles = [-60, 0, 60, 120, 180, -120]
-    const stageBgColor = '#f0f4ff'
-    const stageBorderColor = '#667eea'
-
-    stagePositions.forEach((pos, stage) => {
-      g.append('circle')
-        .attr('cx', pos.x).attr('cy', pos.y).attr('r', circleRadius)
-        .attr('fill', stageBgColor).attr('stroke', stageBorderColor)
-        .attr('stroke-width', 2).attr('opacity', 0.9)
-        .style('cursor', 'pointer').on('click', () => setSelectedStage(stage))
-
-      for (let sectorIdx = 0; sectorIdx < 6; sectorIdx++) {
-        const startAngle = (sectorIdx * 60 - 90) * (Math.PI / 180)
-        const x1 = pos.x + Math.cos(startAngle) * circleRadius
-        const y1 = pos.y + Math.sin(startAngle) * circleRadius
-        g.append('line')
-          .attr('x1', pos.x).attr('y1', pos.y).attr('x2', x1).attr('y2', y1)
-          .attr('stroke', '#2563eb').attr('stroke-width', 1.5).attr('opacity', 0.6)
-      }
-
-      sectorAngles.forEach((angle, idx) => {
-        const labelAngle = angle * (Math.PI / 180)
-        const labelDist = circleRadius * 0.65
-        const labelX = pos.x + Math.cos(labelAngle) * labelDist
-        const labelY = pos.y + Math.sin(labelAngle) * labelDist
-        g.append('text')
-          .attr('x', labelX).attr('y', labelY).attr('text-anchor', 'middle')
-          .attr('dominant-baseline', 'middle').attr('font-size', '18px')
-          .attr('font-weight', 'bold').attr('fill', '#667eea').attr('opacity', 0.4)
-          .text(idx + 1)
-      })
-
-      g.append('text').attr('x', pos.x).attr('y', pos.y)
-        .attr('text-anchor', 'middle').attr('dominant-baseline', 'middle')
-        .attr('font-size', '14px').attr('font-weight', 'bold').attr('fill', '#333')
-        .text(`S${stage}`).style('cursor', 'pointer').on('click', () => setSelectedStage(stage))
-
-      const count = data.filter((d) => d.stage === stage).length
-      g.append('text').attr('x', pos.x).attr('y', pos.y - circleRadius - 5)
-        .attr('text-anchor', 'middle').attr('font-size', '11px')
-        .attr('font-weight', 'bold').attr('fill', stageBorderColor)
-        .text(count)
-        .style('cursor', 'pointer').on('click', () => setSelectedStage(stage))
-    })
-
-    // データ量に応じてバブルサイズを自動調整
-    const marketCapExtent = d3.extent(data, (d) => d.market_cap) as [number, number]
-    const baseSize = data.length > 500 ? 1.3 : (data.length > 200 ? 1.7 : 2.2)
-    const maxSize = data.length > 500 ? 3.5 : (data.length > 200 ? 5 : 8)
-    const sizeScale = d3.scaleSqrt().domain(marketCapExtent).range([baseSize, maxSize])
-
-    type SimulationNode = Stock & { x: number; y: number; stageB: number; sector: number }
-
-    const sectorNodesMap = new Map<string, SimulationNode[]>()
-
+    // 銘柄ごとに timeframe に応じた stageA / stageB を決定
+    type SimulationNode = Stock & { x: number; y: number; stageA: number; stageB: number }
     const nodes: SimulationNode[] = data.map((d, idx) => {
       let stageA: number
       let stageB: number
-
       if (timeframe === 'daily') {
         stageA = d.daily_a_stage || d.stage
         stageB = d.daily_b_stage || d.stage
@@ -191,64 +121,117 @@ export default function HexMap({
         stageA = d.monthly_a_stage || d.stage
         stageB = d.monthly_b_stage || d.stage
       }
-
-      const sector = stageA >= 1 && stageA <= 6 ? stageA : (idx % 6) + 1
-      const key = `${stageB}-${sector}`
-      if (!sectorNodesMap.has(key)) sectorNodesMap.set(key, [])
-
-      const node: SimulationNode = { ...d, stageB, sector, x: 0, y: 0 }
-      sectorNodesMap.get(key)!.push(node)
-      return node
+      if (stageA < 1 || stageA > 6) stageA = (idx % 6) + 1
+      if (stageB < 1 || stageB > 6) stageB = stageA
+      return { ...d, stageA, stageB, x: 0, y: 0 }
     })
 
-    sectorNodesMap.forEach((nodesInSector, key) => {
-      const [stageB, sector] = key.split('-').map(Number)
-      const pos = stagePositions.get(stageB)
-      if (!pos) return
-      const sectorAngleDeg = sectorAngles[sector - 1]
+    // バブルサイズ（時価総額に応じて）
+    const marketCapExtent = d3.extent(data, (d) => d.market_cap) as [number, number]
+    const sizeScale = d3.scaleSqrt().domain(marketCapExtent).range([2.5, 9])
 
-      nodesInSector.sort((a, b) => b.market_cap - a.market_cap)
-      const count = nodesInSector.length
+    for (let stage = 1; stage <= 6; stage++) {
+      const cx = padding + cellWidth * (stage - 1) + cellWidth / 2
+      const cellX = padding + cellWidth * (stage - 1)
+      const cellInnerW = cellWidth - 8
 
-      nodesInSector.forEach((node, i) => {
-        const minDist = 18
-        const maxDist = circleRadius - 9
-        const distRatio = Math.sqrt((i + 1) / count)
-        const randomDist = 0.8 * distRatio + 0.2 * Math.random()
-        const distance = minDist + randomDist * (maxDist - minDist)
+      // ステージタイル（背景）
+      g.append('rect')
+        .attr('x', cellX + 4).attr('y', titleY + 30)
+        .attr('width', cellInnerW).attr('height', cellHeight - 30)
+        .attr('rx', 12).attr('ry', 12)
+        .attr('fill', STAGE_BG_COLORS[stage])
+        .attr('stroke', STAGE_BORDER_COLORS[stage])
+        .attr('stroke-width', 1.5)
+        .style('cursor', 'pointer')
+        .on('click', () => setSelectedStage((cur) => cur === stage ? 0 : stage))
 
-        const spreadFactor = 22
-        const randomAngleOffset = (Math.random() - 0.5) * 2 * spreadFactor
-        const angleDeg = sectorAngleDeg + randomAngleOffset
-        const angleRad = angleDeg * (Math.PI / 180)
+      // ステージラベル（上）
+      g.append('text')
+        .attr('x', cx).attr('y', titleY)
+        .attr('text-anchor', 'middle')
+        .attr('font-size', '18px').attr('font-weight', 700)
+        .attr('fill', STAGE_BORDER_COLORS[stage])
+        .text(`S${stage}`)
+        .style('cursor', 'pointer')
+        .on('click', () => setSelectedStage((cur) => cur === stage ? 0 : stage))
 
-        node.x = pos.x + distance * Math.cos(angleRad)
-        node.y = pos.y + distance * Math.sin(angleRad)
-      })
+      // ステージ名（小さく）
+      g.append('text')
+        .attr('x', cx).attr('y', titleY + 16)
+        .attr('text-anchor', 'middle')
+        .attr('font-size', '11px').attr('font-weight', 500)
+        .attr('fill', '#374151')
+        .text(STAGE_LABELS[stage])
+
+      // 件数（右上バッジ風）
+      const count = data.filter((d) => d.stage === stage).length
+      g.append('text')
+        .attr('x', cellX + cellInnerW).attr('y', titleY + 50)
+        .attr('text-anchor', 'end')
+        .attr('font-size', '13px').attr('font-weight', 700)
+        .attr('fill', STAGE_BORDER_COLORS[stage])
+        .text(count.toLocaleString())
+        .style('cursor', 'pointer')
+        .on('click', () => setSelectedStage((cur) => cur === stage ? 0 : stage))
+    }
+
+    // 各セルの内側にバブルを敷き詰める。stageA で属するセル決定、stageB は色の濃淡で示す。
+    const stageNodes = new Map<number, SimulationNode[]>()
+    nodes.forEach((n) => {
+      if (!stageNodes.has(n.stageA)) stageNodes.set(n.stageA, [])
+      stageNodes.get(n.stageA)!.push(n)
     })
 
-    g.selectAll('.bubble').data(nodes).enter().append('circle')
-      .attr('class', 'bubble').attr('cx', (d) => d.x).attr('cy', (d) => d.y)
-      .attr('r', (d) => sizeScale(d.market_cap))
-      .attr('fill', (d) => colorScale(d.sector_large || 'その他'))
-      .attr('fill-opacity', 0.85).attr('stroke', '#fff').attr('stroke-width', 0.8)
-      .style('cursor', 'pointer')
-      .on('click', (_e, d) => router.push(`/stock/${encodeURIComponent(d.code)}`))
-      .on('mouseover', function (event, d) {
-        d3.select(this)
-          .attr('stroke', '#333')
-          .attr('stroke-width', 2)
-          .attr('filter', 'drop-shadow(0px 4px 8px rgba(0,0,0,0.2))')
-        setHoveredStock(d)
-        setTooltipPos({ x: event.clientX, y: event.clientY })
+    stageNodes.forEach((stockList, stage) => {
+      const cellX = padding + cellWidth * (stage - 1) + 4
+      const cellY = titleY + 60
+      const cellW = cellWidth - 8
+      const cellH = cellHeight - 60
+
+      stockList.sort((a, b) => b.market_cap - a.market_cap)
+      const count = stockList.length
+
+      // 円形配置を諦めてグリッド/ジッタ配置（セル内に均等にちらす）
+      const cols = Math.max(8, Math.ceil(Math.sqrt(count * (cellW / cellH))))
+      const rows = Math.ceil(count / cols)
+      const gx = cellW / cols
+      const gy = cellH / Math.max(1, rows)
+      stockList.forEach((node, i) => {
+        const col = i % cols
+        const row = Math.floor(i / cols)
+        const jitterX = (Math.random() - 0.5) * gx * 0.8
+        const jitterY = (Math.random() - 0.5) * gy * 0.8
+        node.x = cellX + col * gx + gx / 2 + jitterX
+        node.y = cellY + row * gy + gy / 2 + jitterY
       })
-      .on('mousemove', function (event) {
-        setTooltipPos({ x: event.clientX, y: event.clientY })
-      })
-      .on('mouseout', function () {
-        d3.select(this).attr('stroke', '#fff').attr('stroke-width', 0.8).attr('filter', null)
-        setHoveredStock(null)
-      })
+
+      // バブル描画。色は stageB の境界色（stageA セル色との対比）
+      g.selectAll(`.bubble-${stage}`)
+        .data(stockList)
+        .enter()
+        .append('circle')
+        .attr('class', `bubble-${stage}`)
+        .attr('cx', (d) => d.x).attr('cy', (d) => d.y)
+        .attr('r', (d) => sizeScale(d.market_cap))
+        .attr('fill', (d) => STAGE_BORDER_COLORS[d.stageB])
+        .attr('fill-opacity', 0.7)
+        .attr('stroke', '#fff').attr('stroke-width', 0.6)
+        .style('cursor', 'pointer')
+        .on('click', (_e, d) => router.push(`/stock/${encodeURIComponent(d.code)}`))
+        .on('mouseover', function (event, d) {
+          d3.select(this).attr('stroke', '#1f2937').attr('stroke-width', 1.6).attr('fill-opacity', 1)
+          setHoveredStock(d)
+          setTooltipPos({ x: event.clientX, y: event.clientY })
+        })
+        .on('mousemove', function (event) {
+          setTooltipPos({ x: event.clientX, y: event.clientY })
+        })
+        .on('mouseout', function () {
+          d3.select(this).attr('stroke', '#fff').attr('stroke-width', 0.6).attr('fill-opacity', 0.7)
+          setHoveredStock(null)
+        })
+    })
   }, [data, router, timeframe])
 
   const [selectedMarketCapRange, setSelectedMarketCapRange] = useState<string>('all')
@@ -269,286 +252,278 @@ export default function HexMap({
     .filter((d) => (selectedStage === 0 || d.stage === selectedStage) && filterByMarketCap(d))
     .sort((a, b) => b.market_cap - a.market_cap)
 
+  const visible = stageData.filter((s) => s.code.includes(searchTerm) || s.name.includes(searchTerm))
+
+  const MARKET_CAP_RANGES: { id: string; label: string }[] = [
+    { id: 'all',      label: '全て' },
+    { id: '-50',      label: '〜50億' },
+    { id: '50-100',   label: '50〜100億' },
+    { id: '100-300',  label: '100〜300億' },
+    { id: '300-1000', label: '300〜1,000億' },
+    { id: '1000-',    label: '1,000億〜' },
+  ]
+
   return (
-    <>
-      <div className="flex gap-4 items-start relative">
-        <div>
-          <svg ref={svgRef} width={width} height={height} className="bg-white rounded-lg border border-gray-200" />
-        </div>
-        <div className="flex-1 min-w-[384px] max-w-[600px]" style={{ height: '600px' }}>
-          <div className="h-full bg-white/90 backdrop-blur-xl rounded-2xl border border-white/20 shadow grid grid-rows-[auto_auto_minmax(0,1fr)] overflow-hidden">
-            <div className="p-5 border-b border-gray-100 shrink-0">
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center gap-2.5">
-                  <div className="p-2 bg-indigo-50 text-indigo-600 rounded-lg ring-1 ring-indigo-100">
-                    <TrendingUp className="w-4 h-4" />
-                  </div>
-                  <h2 className="text-base font-bold text-gray-900 leading-tight">
-                    {selectedStage === 0 ? 'All Stages' : `Stage ${selectedStage}`}
-                  </h2>
-                </div>
-                <span className="flex items-center gap-1.5 text-xs font-bold text-indigo-600 bg-indigo-50 px-2.5 py-1 rounded-full border border-indigo-100">
-                  <BarChart3 className="w-3 h-3" />
-                  {stageData.length}
-                </span>
-              </div>
+    <div className="flex flex-col gap-4 relative">
+      {/* HEX マップ本体（横一列の6ステージ） */}
+      <div className="overflow-x-auto -mx-2 px-2">
+        <svg
+          ref={svgRef}
+          viewBox={`0 0 ${width} ${height}`}
+          preserveAspectRatio="xMidYMid meet"
+          className="block w-full h-auto"
+          style={{ minWidth: 720, maxWidth: width }}
+        />
+      </div>
 
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                <input
-                  type="text"
-                  placeholder="銘柄を検索..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="w-full pl-9 pr-4 py-2.5 bg-gray-50 hover:bg-white border border-gray-200 rounded-xl text-sm focus:bg-white focus:border-indigo-500 outline-none placeholder:text-gray-400"
-                />
-              </div>
-            </div>
-
-            <div className="px-3 pt-3 pb-1 bg-gray-50/30 shrink-0">
-              <div className="flex bg-gray-100 p-1 rounded-xl gap-0.5">
-                {[
-                  { id: 'all', label: '全銘柄' },
-                  { id: '-50', label: '-50' },
-                  { id: '50-100', label: '50-100' },
-                  { id: '100-300', label: '100-300' },
-                  { id: '300-1000', label: '300-1000' },
-                  { id: '1000-', label: '1000-' },
-                ].map((range) => {
-                  const isSelected = selectedMarketCapRange === range.id
-                  return (
-                    <button
-                      key={range.id}
-                      onClick={() => setSelectedMarketCapRange(range.id)}
-                      className={`flex-1 py-1.5 text-[11px] font-bold rounded-lg ${
-                        isSelected
-                          ? 'bg-white text-indigo-600 shadow ring-1 ring-black/5'
-                          : 'text-gray-500 hover:text-gray-700'
-                      }`}
-                    >
-                      {range.label}
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
-
-            <div className="px-3 pt-1 pb-3 bg-gray-50/30 border-b border-gray-100 shrink-0">
-              <div className="flex bg-gray-100 p-1 rounded-xl gap-0.5">
-                <button
-                  onClick={() => setSelectedStage(0)}
-                  className={`flex-1 py-1.5 text-[11px] font-bold rounded-lg ${
-                    selectedStage === 0
-                      ? 'bg-white text-indigo-600 shadow ring-1 ring-black/5'
-                      : 'text-gray-500 hover:text-gray-700'
-                  }`}
-                >
-                  ALL
-                </button>
-                {[1, 2, 3, 4, 5, 6].map((s) => (
-                  <button
-                    key={s}
-                    onClick={() => setSelectedStage(s)}
-                    className={`flex-1 py-1.5 text-[11px] font-bold rounded-lg ${
-                      selectedStage === s
-                        ? 'bg-white text-indigo-600 shadow ring-1 ring-black/5'
-                        : 'text-gray-500 hover:text-gray-700'
-                    }`}
-                  >
-                    S{s}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="p-3 space-y-2" style={{ height: 'calc(600px - 200px)', overflowY: 'auto' }}>
-              {stageData
-                .filter((s) => s.code.includes(searchTerm) || s.name.includes(searchTerm))
-                .map((s) => (
-                  <div
-                    key={s.code}
-                    onClick={() => router.push(`/stock/${encodeURIComponent(s.code)}`)}
-                    className="px-4 py-3 bg-white border-b border-gray-100 hover:bg-gray-50 cursor-pointer"
-                  >
-                    <div className="flex justify-between items-start">
-                      <div className="flex flex-col gap-1.5">
-                        <div className="flex items-center gap-2">
-                          <div
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              navigator.clipboard.writeText(s.code)
-                              setCopiedCode(s.code)
-                              setTimeout(() => setCopiedCode(null), 2000)
-                            }}
-                            className={`flex items-center gap-2 px-3 py-1.5 border text-xs font-medium rounded-full cursor-pointer transition-all ${
-                              copiedCode === s.code
-                                ? 'bg-slate-100 border-slate-200 text-slate-600'
-                                : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
-                            }`}
-                          >
-                            {copiedCode === s.code ? (
-                              <>
-                                <Check size={13} className="text-slate-500" />
-                                <span>Copied</span>
-                              </>
-                            ) : (
-                              <>
-                                <Copy size={13} className="text-gray-400" />
-                                <span>{s.code.replace('.T', '')}</span>
-                              </>
-                            )}
-                          </div>
-                          <span className="font-bold text-gray-800 text-sm">{s.name}</span>
-                        </div>
-                        <div className="text-[11px] text-gray-400 pl-0.5 flex items-center gap-1">
-                          <span>{s.sector_large}</span>
-                          {s.sector_small && (
-                            <>
-                              <span className="text-gray-300">/</span>
-                              <span>{s.sector_small}</span>
-                            </>
-                          )}
-                        </div>
-
-                        {s.sma_angles && (
-                          <div className="mt-2.5 flex flex-col gap-1">
-                            {[
-                              { label: '当日(T-3)', a: s.sma_angles },
-                              { label: '10日前', a: s.prev_sma_angles },
-                              { label: '20日前', a: s.prev_prev_sma_angles },
-                            ].map(({ label, a }) => (
-                              <div key={label} className="flex items-center gap-1.5 text-[11px] text-gray-600 bg-slate-50 border border-slate-100 rounded-lg pl-2 pr-1.5 py-2">
-                                <span className="text-gray-500 text-[10px] mr-1">{label}</span>
-                                {[
-                                  { name: '5', v: a?.sma5 },
-                                  { name: '25', v: a?.sma25 },
-                                  { name: '75', v: a?.sma75 },
-                                  { name: '300', v: a?.sma300 },
-                                ].map((m) => (
-                                  <div key={m.name} className="flex items-center gap-1 px-1">
-                                    <span className="text-gray-400 text-[10px]">SMA{m.name}</span>
-                                    <span style={getAngleStyle(m.v)}>{formatAngle(m.v)}</span>
-                                  </div>
-                                ))}
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-
-                      <div className="flex flex-col items-end gap-2.5 shrink-0">
-                        <span className="text-xl font-bold text-gray-900 leading-none">
-                          {s.price.toLocaleString()}
-                        </span>
-                        <div className="flex flex-wrap items-center justify-end gap-y-2 text-xs font-medium bg-gray-50 rounded-lg border border-gray-200 px-1 py-1.5">
-                          {[
-                            { label: '日', v: s.daily_change },
-                            { label: '週', v: s.weekly_change },
-                            { label: '月', v: s.monthly_change },
-                            { label: '3M', v: s.months3_change },
-                            { label: '6M', v: s.months6_change },
-                            { label: '年', v: s.ytd_change },
-                          ].map((p) => (
-                            <div key={p.label} className="flex items-center gap-1.5 px-2 border-r border-gray-200 last:border-0">
-                              <span className="text-gray-500 font-normal text-[10px]">{p.label}：</span>
-                              <span style={getPercentStyle(p.v)}>{formatPercent(p.v)}</span>
-                            </div>
-                          ))}
-                        </div>
-
-                        <div className="flex items-center justify-between text-xs font-medium bg-gray-50 rounded-lg border border-gray-200 px-3 py-2 w-full">
-                          <div className="flex items-center gap-3">
-                            <span className="text-gray-500 text-[10px]">日A:</span>
-                            <span className="text-indigo-600 font-bold">{s.daily_a_stage ?? '-'}</span>
-                            <span className="text-gray-500 text-[10px]">日B:</span>
-                            <span className="text-indigo-600 font-bold">{s.daily_b_stage ?? '-'}</span>
-                          </div>
-                          <div className="w-[2px] h-4 bg-black rounded-full" />
-                          <div className="flex items-center gap-3">
-                            <span className="text-gray-500 text-[10px]">週A:</span>
-                            <span className="text-indigo-600 font-bold">{s.weekly_a_stage ?? '-'}</span>
-                            <span className="text-gray-500 text-[10px]">週B:</span>
-                            <span className="text-indigo-600 font-bold">{s.weekly_b_stage ?? '-'}</span>
-                          </div>
-                          <div className="w-[2px] h-4 bg-black rounded-full" />
-                          <div className="flex items-center gap-3">
-                            <span className="text-gray-500 text-[10px]">月A:</span>
-                            <span className="text-indigo-600 font-bold">{s.monthly_a_stage ?? '-'}</span>
-                            <span className="text-gray-500 text-[10px]">月B:</span>
-                            <span className="text-indigo-600 font-bold">{s.monthly_b_stage ?? '-'}</span>
-                          </div>
-                        </div>
-
-                        <span className="font-bold text-gray-800 text-sm">
-                          {Math.round(s.market_cap / 1e8).toLocaleString()}
-                          <span className="text-[10px] font-normal text-gray-500 ml-0.5">億</span>
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-
-              {stageData.filter((s) => s.code.includes(searchTerm) || s.name.includes(searchTerm)).length === 0 && (
-                <div className="text-center py-10 px-4">
-                  <p className="text-xs text-gray-400 font-medium">
-                    "{searchTerm}" に一致する銘柄は見つかりませんでした
-                  </p>
-                </div>
-              )}
-            </div>
+      {/* 検索 + フィルタバー */}
+      <div className="flex flex-col gap-2 px-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="relative flex-1 min-w-[200px] max-w-md">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+            <input
+              type="text"
+              placeholder="コード or 銘柄名で検索..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full pl-9 pr-3 py-2 bg-white border border-gray-300 rounded-lg text-sm outline-none focus:border-indigo-500"
+            />
           </div>
+          <span className="text-xs text-gray-500">
+            <strong className="text-indigo-600 text-base font-bold">{visible.length}</strong> 件
+            {selectedStage !== 0 && <span className="ml-2">/ Stage {selectedStage}</span>}
+            {selectedMarketCapRange !== 'all' && (
+              <span className="ml-2">/ {MARKET_CAP_RANGES.find(r => r.id === selectedMarketCapRange)?.label}</span>
+            )}
+          </span>
+        </div>
+
+        {/* ステージフィルタ（カラフルなチップで分かりやすく） */}
+        <div className="flex flex-wrap gap-1.5 items-center">
+          <span className="text-[10px] text-gray-500 mr-1">ステージ:</span>
+          <button
+            onClick={() => setSelectedStage(0)}
+            className={`px-3 py-1 text-xs font-mono rounded-full border ${
+              selectedStage === 0
+                ? 'bg-indigo-600 text-white border-indigo-600'
+                : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+            }`}
+          >
+            全て
+          </button>
+          {[1, 2, 3, 4, 5, 6].map((s) => {
+            const active = selectedStage === s
+            const bg = STAGE_BG_COLORS[s]
+            const border = STAGE_BORDER_COLORS[s]
+            return (
+              <button
+                key={s}
+                onClick={() => setSelectedStage(active ? 0 : s)}
+                className="px-3 py-1 text-xs font-mono rounded-full border font-bold"
+                style={{
+                  background: active ? border : bg,
+                  color: active ? '#fff' : border,
+                  borderColor: border,
+                }}
+                title={STAGE_LABELS[s]}
+              >
+                S{s} {STAGE_LABELS[s]}
+              </button>
+            )
+          })}
+        </div>
+
+        {/* 時価総額フィルタ */}
+        <div className="flex flex-wrap gap-1.5 items-center">
+          <span className="text-[10px] text-gray-500 mr-1">時価総額:</span>
+          {MARKET_CAP_RANGES.map((range) => {
+            const active = selectedMarketCapRange === range.id
+            return (
+              <button
+                key={range.id}
+                onClick={() => setSelectedMarketCapRange(range.id)}
+                className={`px-3 py-1 text-xs font-mono rounded-full border ${
+                  active
+                    ? 'bg-indigo-600 text-white border-indigo-600'
+                    : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+                }`}
+              >
+                {range.label}
+              </button>
+            )
+          })}
+        </div>
+      </div>
+
+      {/* 銘柄テーブル */}
+      <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs" style={{ minWidth: '1400px', borderCollapse: 'collapse' }}>
+            <thead className="bg-gray-50 sticky top-0 z-10">
+              <tr style={{ borderBottom: '1px solid #e5e7eb' }}>
+                <th className="px-3 py-2 text-left font-medium text-gray-500 whitespace-nowrap">コード</th>
+                <th className="px-3 py-2 text-left font-medium text-gray-500 whitespace-nowrap">銘柄名</th>
+                <th className="px-3 py-2 text-left font-medium text-gray-500 whitespace-nowrap">セクター</th>
+                <th className="px-3 py-2 text-right font-medium text-gray-500 whitespace-nowrap">株価</th>
+                <th className="px-3 py-2 text-right font-medium text-gray-500 whitespace-nowrap">時価総額</th>
+                <th className="px-3 py-2 text-right font-medium text-gray-500 whitespace-nowrap">日%</th>
+                <th className="px-3 py-2 text-right font-medium text-gray-500 whitespace-nowrap">週%</th>
+                <th className="px-3 py-2 text-right font-medium text-gray-500 whitespace-nowrap">月%</th>
+                <th className="px-3 py-2 text-right font-medium text-gray-500 whitespace-nowrap">3M</th>
+                <th className="px-3 py-2 text-right font-medium text-gray-500 whitespace-nowrap">6M</th>
+                <th className="px-3 py-2 text-right font-medium text-gray-500 whitespace-nowrap">YTD</th>
+                <th className="px-3 py-2 text-left font-medium text-gray-500 whitespace-nowrap">ステージ (日A/B 週A/B 月A/B)</th>
+                <th className="px-3 py-2 text-right font-medium text-gray-500 whitespace-nowrap" title="SMA角度（当日 / SMA5/25/75/300）">SMA角度</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visible.map((s) => (
+                <tr
+                  key={s.code}
+                  onClick={() => router.push(`/stock/${encodeURIComponent(s.code)}`)}
+                  className="hover:bg-gray-50 cursor-pointer"
+                  style={{ borderBottom: '1px solid #f3f4f6' }}
+                >
+                  <td className="px-3 py-2 whitespace-nowrap">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        navigator.clipboard.writeText(s.code)
+                        setCopiedCode(s.code)
+                        setTimeout(() => setCopiedCode(null), 1500)
+                      }}
+                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border text-[11px] font-mono font-medium ${
+                        copiedCode === s.code
+                          ? 'bg-green-50 border-green-200 text-green-700'
+                          : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'
+                      }`}
+                      title="コードをコピー"
+                    >
+                      {copiedCode === s.code ? <Check size={11} /> : <Copy size={11} />}
+                      {s.code.replace('.T', '')}
+                    </button>
+                  </td>
+                  <td className="px-3 py-2 font-medium text-gray-900 whitespace-nowrap">{s.name}</td>
+                  <td className="px-3 py-2 text-gray-500 whitespace-nowrap">
+                    <span>{s.sector_large}</span>
+                    {s.sector_small && (
+                      <>
+                        <span className="text-gray-300 mx-1">/</span>
+                        <span>{s.sector_small}</span>
+                      </>
+                    )}
+                  </td>
+                  <td className="px-3 py-2 text-right font-mono whitespace-nowrap">{s.price.toLocaleString()}</td>
+                  <td className="px-3 py-2 text-right font-mono text-gray-600 whitespace-nowrap">
+                    {Math.round(s.market_cap / 1e8).toLocaleString()}<span className="text-[10px] text-gray-400 ml-0.5">億</span>
+                  </td>
+                  <td className="px-3 py-2 text-right font-mono whitespace-nowrap" style={getPercentStyle(s.daily_change)}>{formatPercent(s.daily_change)}</td>
+                  <td className="px-3 py-2 text-right font-mono whitespace-nowrap" style={getPercentStyle(s.weekly_change)}>{formatPercent(s.weekly_change)}</td>
+                  <td className="px-3 py-2 text-right font-mono whitespace-nowrap" style={getPercentStyle(s.monthly_change)}>{formatPercent(s.monthly_change)}</td>
+                  <td className="px-3 py-2 text-right font-mono whitespace-nowrap" style={getPercentStyle(s.months3_change)}>{formatPercent(s.months3_change)}</td>
+                  <td className="px-3 py-2 text-right font-mono whitespace-nowrap" style={getPercentStyle(s.months6_change)}>{formatPercent(s.months6_change)}</td>
+                  <td className="px-3 py-2 text-right font-mono whitespace-nowrap" style={getPercentStyle(s.ytd_change)}>{formatPercent(s.ytd_change)}</td>
+                  <td className="px-3 py-2 whitespace-nowrap">
+                    <StageDots
+                      values={[s.daily_a_stage, s.daily_b_stage, s.weekly_a_stage, s.weekly_b_stage, s.monthly_a_stage, s.monthly_b_stage]}
+                      size={18}
+                    />
+                  </td>
+                  <td className="px-3 py-2 text-right font-mono text-[11px] whitespace-nowrap" title="SMA5° / SMA25° / SMA75° / SMA300°">
+                    {s.sma_angles ? (
+                      <span className="inline-flex gap-1.5">
+                        <span style={getAngleStyle(s.sma_angles.sma5)}>{formatAngle(s.sma_angles.sma5)}</span>
+                        <span className="text-gray-300">/</span>
+                        <span style={getAngleStyle(s.sma_angles.sma25)}>{formatAngle(s.sma_angles.sma25)}</span>
+                        <span className="text-gray-300">/</span>
+                        <span style={getAngleStyle(s.sma_angles.sma75)}>{formatAngle(s.sma_angles.sma75)}</span>
+                        <span className="text-gray-300">/</span>
+                        <span style={getAngleStyle(s.sma_angles.sma300)}>{formatAngle(s.sma_angles.sma300)}</span>
+                      </span>
+                    ) : (
+                      <span className="text-gray-400">---</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+              {visible.length === 0 && (
+                <tr>
+                  <td colSpan={13} className="text-center py-10 text-xs text-gray-400">
+                    {searchTerm
+                      ? `"${searchTerm}" に一致する銘柄が見つかりませんでした`
+                      : '該当する銘柄がありません'}
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
         </div>
       </div>
 
       {hoveredStock && (
         <div
           className="fixed z-50 pointer-events-none"
-          style={{ left: tooltipPos.x + 15, top: tooltipPos.y + 15, minWidth: '220px' }}
+          style={{ left: tooltipPos.x + 15, top: tooltipPos.y + 15, minWidth: '240px', maxWidth: '300px' }}
         >
-          <div className="bg-white/95 backdrop-blur-md p-4 rounded-xl shadow-lg border border-white/20">
+          <div className="bg-white p-3 rounded-lg shadow-lg border border-gray-200">
             <div className="flex items-center justify-between mb-2">
-              <span className="text-xs font-bold text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded">
+              <span className="text-[11px] font-mono font-bold text-gray-700 bg-gray-100 px-2 py-0.5 rounded">
                 {hoveredStock.code.replace('.T', '')}
               </span>
-              <span className="text-[10px] font-bold text-white bg-indigo-500 px-2 py-0.5 rounded-full">
-                Stage {hoveredStock.stage}
+              <span
+                className="text-[10px] font-bold px-2 py-0.5 rounded-full border"
+                style={{
+                  background: STAGE_BG_COLORS[hoveredStock.stage],
+                  color: STAGE_BORDER_COLORS[hoveredStock.stage],
+                  borderColor: STAGE_BORDER_COLORS[hoveredStock.stage],
+                }}
+              >
+                S{hoveredStock.stage} {STAGE_LABELS[hoveredStock.stage]}
               </span>
             </div>
-            <h3 className="font-bold text-gray-900 text-sm mb-1">{hoveredStock.name}</h3>
-            <div className="flex items-baseline gap-2 mb-3">
-              <span className="text-lg font-bold text-gray-900">{hoveredStock.price.toLocaleString()}</span>
+            <h3 className="font-bold text-gray-900 text-sm mb-2 leading-tight">{hoveredStock.name}</h3>
+            {(hoveredStock.sector_large || hoveredStock.sector_small) && (
+              <div className="text-[10px] text-gray-500 mb-2">
+                {hoveredStock.sector_large}
+                {hoveredStock.sector_small && <> / {hoveredStock.sector_small}</>}
+              </div>
+            )}
+            <div className="flex items-baseline gap-2 mb-2 border-b border-gray-100 pb-2">
+              <span className="text-lg font-bold font-mono text-gray-900">{hoveredStock.price.toLocaleString()}</span>
               <span className="text-xs text-gray-500">{hoveredStock.code.endsWith('.T') ? '円' : '$'}</span>
+              <span className="ml-auto text-xs font-mono text-gray-600">
+                {Math.round(hoveredStock.market_cap / 1e8).toLocaleString()}<span className="text-[10px] text-gray-400 ml-0.5">億</span>
+              </span>
             </div>
-            <div className="space-y-1.5 text-xs">
-              <div className="flex justify-between">
-                <span className="text-gray-500">時価総額</span>
-                <span className="font-medium text-gray-900">
-                  {(hoveredStock.market_cap / 1e8).toLocaleString()}
-                  <span className="text-[10px] text-gray-400 ml-1">億</span>
-                </span>
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <div className="flex justify-between">
-                  <span className="text-gray-400">前日比</span>
-                  <span style={getPercentStyle(hoveredStock.daily_change)}>{formatPercent(hoveredStock.daily_change)}</span>
+            <div className="grid grid-cols-3 gap-x-3 gap-y-1 text-[11px] mb-2">
+              {[
+                { label: '日', v: hoveredStock.daily_change },
+                { label: '週', v: hoveredStock.weekly_change },
+                { label: '月', v: hoveredStock.monthly_change },
+                { label: '3M', v: hoveredStock.months3_change },
+                { label: '6M', v: hoveredStock.months6_change },
+                { label: 'YTD', v: hoveredStock.ytd_change },
+              ].map((p) => (
+                <div key={p.label} className="flex justify-between gap-1">
+                  <span className="text-gray-400 text-[10px]">{p.label}</span>
+                  <span className="font-mono" style={getPercentStyle(p.v)}>{formatPercent(p.v)}</span>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-400">週次</span>
-                  <span style={getPercentStyle(hoveredStock.weekly_change)}>{formatPercent(hoveredStock.weekly_change)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-400">月次</span>
-                  <span style={getPercentStyle(hoveredStock.monthly_change)}>{formatPercent(hoveredStock.monthly_change)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-400">年初来</span>
-                  <span style={getPercentStyle(hoveredStock.ytd_change)}>{formatPercent(hoveredStock.ytd_change)}</span>
-                </div>
-              </div>
+              ))}
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] text-gray-400">ステージ</span>
+              <StageDots
+                values={[
+                  hoveredStock.daily_a_stage, hoveredStock.daily_b_stage,
+                  hoveredStock.weekly_a_stage, hoveredStock.weekly_b_stage,
+                  hoveredStock.monthly_a_stage, hoveredStock.monthly_b_stage,
+                ]}
+                size={16}
+              />
             </div>
           </div>
         </div>
       )}
-    </>
+    </div>
   )
 }
