@@ -10,7 +10,6 @@ const navItems = [
   { href: '/hex-stage', label: 'HEXステージマップ', icon: '🔷' },
   { href: '/screener', label: 'スクリーナー', icon: '⧖' },
   { href: '/screener/history', label: 'スクリーナー履歴', icon: '📅' },
-  { href: '/high-low', label: '新高値・新安値', icon: '📈' },
   { href: '/watchlist', label: 'ウォッチリスト', icon: '⭐' },
   { href: '/admin/import', label: 'CSV取込', icon: '📥' },
   { href: '/admin/sector-master', label: '業種マスタ取込', icon: '🏷' },

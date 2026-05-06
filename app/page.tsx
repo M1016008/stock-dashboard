@@ -1,10 +1,8 @@
 // app/page.tsx
-import Link from 'next/link'
 import type { Metadata } from 'next'
 import { IndexCard } from '@/components/dashboard/IndexCard'
 import { IndicesChart } from '@/components/dashboard/IndicesChart'
 import { HexStageSummary } from '@/components/dashboard/HexStageSummary'
-import { HighLowPreview } from '@/components/dashboard/HighLowPreview'
 import { EarningsCalendar } from '@/components/dashboard/EarningsCalendar'
 
 export const metadata: Metadata = {
@@ -65,30 +63,6 @@ export default function DashboardPage() {
       <section>
         <div className="section-header">決算カレンダー</div>
         <EarningsCalendar defaultDays={14} />
-      </section>
-
-      {/* 新高値・新安値 */}
-      <section>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-          <div>
-            <div className="section-header">
-              📈 本日の新高値（年初来＋上場来）
-              <Link href="/high-low" style={{ float: 'right', color: 'var(--accent-primary)', fontSize: '10px', textDecoration: 'none' }}>
-                もっと見る→
-              </Link>
-            </div>
-            <HighLowPreview type="high" />
-          </div>
-          <div>
-            <div className="section-header">
-              📉 本日の新安値（年初来＋上場来）
-              <Link href="/high-low" style={{ float: 'right', color: 'var(--accent-primary)', fontSize: '10px', textDecoration: 'none' }}>
-                もっと見る→
-              </Link>
-            </div>
-            <HighLowPreview type="low" />
-          </div>
-        </div>
       </section>
 
     </div>
