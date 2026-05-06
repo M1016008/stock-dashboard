@@ -205,13 +205,16 @@ export default function HexMap({ data }: { data: Stock[]; timeframe?: Timeframe 
               className="w-full pl-9 pr-3 py-2 bg-white border border-gray-300 rounded-lg text-sm outline-none focus:border-indigo-500"
             />
           </div>
-          <span className="text-xs text-gray-500 flex items-center flex-wrap gap-2">
-            <span className="whitespace-nowrap">
-              <strong className="text-indigo-600 text-base font-bold">{visible.length.toLocaleString()}</strong> 件該当
+          <span className="text-[12px] text-gray-500 inline-flex items-center flex-wrap gap-2 leading-none">
+            <span className="inline-flex items-baseline gap-1 whitespace-nowrap">
+              <strong className="text-indigo-600 text-[15px] font-bold">
+                {visible.length.toLocaleString()}
+              </strong>
+              <span>件該当</span>
             </span>
             {hasSelection && (
               <>
-                <span className="text-gray-300">|</span>
+                <span className="text-gray-300 leading-none">|</span>
                 {(['daily', 'weekly', 'monthly'] as Timeframe[]).map((tf) => {
                   const n = selections[tf].size
                   if (n === 0) return null
@@ -219,15 +222,16 @@ export default function HexMap({ data }: { data: Stock[]; timeframe?: Timeframe 
                   return (
                     <span
                       key={tf}
-                      className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-full whitespace-nowrap"
+                      className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] leading-none bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-full whitespace-nowrap"
                     >
-                      {label} <strong>{n}</strong>
+                      <span>{label}</span>
+                      <strong>{n}</strong>
                     </span>
                   )
                 })}
                 <button
                   onClick={clearAllSelections}
-                  className="px-2 py-0.5 text-[10px] border border-gray-300 rounded-full hover:bg-gray-50"
+                  className="px-2.5 py-1 text-[11px] leading-none border border-gray-300 rounded-full hover:bg-gray-50"
                 >
                   × 全クリア
                 </button>
@@ -235,8 +239,10 @@ export default function HexMap({ data }: { data: Stock[]; timeframe?: Timeframe 
             )}
             {selectedMarketCapRange !== 'all' && (
               <>
-                <span className="text-gray-300">|</span>
-                <span>{MARKET_CAP_RANGES.find((r) => r.id === selectedMarketCapRange)?.label}</span>
+                <span className="text-gray-300 leading-none">|</span>
+                <span className="px-2.5 py-1 text-[11px] leading-none bg-gray-50 border border-gray-200 rounded-full">
+                  {MARKET_CAP_RANGES.find((r) => r.id === selectedMarketCapRange)?.label}
+                </span>
               </>
             )}
           </span>
@@ -244,14 +250,14 @@ export default function HexMap({ data }: { data: Stock[]; timeframe?: Timeframe 
 
         {/* 時価総額フィルタ */}
         <div className="flex flex-wrap gap-1.5 items-center">
-          <span className="text-[10px] text-gray-500 mr-1">時価総額:</span>
+          <span className="text-[11px] text-gray-500 mr-1 leading-none">時価総額</span>
           {MARKET_CAP_RANGES.map((range) => {
             const active = selectedMarketCapRange === range.id
             return (
               <button
                 key={range.id}
                 onClick={() => setSelectedMarketCapRange(range.id)}
-                className={`px-3 py-1 text-xs font-mono rounded-full border ${
+                className={`px-2.5 py-1 text-[11px] leading-none font-mono rounded-full border ${
                   active
                     ? 'bg-indigo-600 text-white border-indigo-600'
                     : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
@@ -416,39 +422,37 @@ function StageMatrix({
     <section className="bg-white border border-gray-200 rounded-lg p-3">
       <header className="flex items-center justify-between mb-3 flex-wrap gap-x-4 gap-y-2">
         {/* 左: タイトル + 選択状態チップ */}
-        <div className="flex items-center gap-3 flex-wrap">
-          <div className="flex items-baseline gap-1.5">
-            <h3 className="text-base font-bold text-gray-900">{label}</h3>
-            <span className="text-[10px] text-gray-400 font-mono">B × A</span>
-          </div>
+        <div className="flex items-center gap-2.5 flex-wrap">
+          <h3 className="text-sm font-bold text-gray-900 leading-none">{label}</h3>
           {selectedCells.size > 0 ? (
-            <span className="inline-flex items-center gap-1.5 text-[11px] text-indigo-700 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded-full">
-              <span
-                className="inline-block w-1.5 h-1.5 rounded-full bg-indigo-500"
-                aria-hidden
-              />
-              {selectedCells.size} セル選択中
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] leading-none text-indigo-700 bg-indigo-50 border border-indigo-200">
+              <span className="inline-block w-1.5 h-1.5 rounded-full bg-indigo-500" aria-hidden />
+              <span>{selectedCells.size} セル選択中</span>
               <button
                 onClick={onClearTimeframe}
-                className="text-indigo-400 hover:text-indigo-700 -mr-0.5 px-1"
+                className="text-indigo-400 hover:text-indigo-700 leading-none"
                 title={`${label} の選択をクリア`}
+                style={{ marginLeft: 2 }}
               >
                 ×
               </button>
             </span>
           ) : anySelection ? (
-            <span className="text-[11px] text-gray-500 bg-gray-50 border border-gray-200 px-2 py-0.5 rounded-full">
+            <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[11px] leading-none text-gray-500 bg-gray-50 border border-gray-200">
               連動表示
             </span>
           ) : null}
         </div>
 
         {/* 右: 銘柄合計 */}
-        <span className="text-[11px] text-gray-500 whitespace-nowrap">
-          <strong className="text-indigo-600 font-mono text-sm">{data.length.toLocaleString()}</strong> 銘柄
+        <span className="text-[11px] text-gray-500 leading-none whitespace-nowrap inline-flex items-baseline gap-1">
+          <strong className="text-indigo-600 font-mono text-[13px] font-semibold">
+            {data.length.toLocaleString()}
+          </strong>
+          <span>銘柄</span>
           {total < data.length && (
             <span
-              className="ml-1.5 text-gray-400"
+              className="text-gray-400"
               title={`${data.length - total} 銘柄は ${label} のステージが計算できないため除外`}
             >
               （分類可 {total.toLocaleString()}）
@@ -462,12 +466,16 @@ function StageMatrix({
       <div style={{ minWidth: '760px' }}>
 
       {/* A-Stage ヘッダ行 */}
-      <div className="grid gap-1 mb-1" style={{ gridTemplateColumns: '90px repeat(6, minmax(96px, 1fr))' }}>
+      <div className="grid gap-1 mb-1.5" style={{ gridTemplateColumns: '90px repeat(6, minmax(96px, 1fr))' }}>
         <div></div>
         {[1, 2, 3, 4, 5, 6].map((a) => (
-          <div key={a} className="text-center text-[10px] font-mono whitespace-nowrap">
+          <div
+            key={a}
+            className="text-center font-mono whitespace-nowrap"
+            style={{ fontSize: '11px', lineHeight: 1, color: '#6b7280' }}
+          >
             <span className="font-bold" style={{ color: STAGE_BORDER_COLORS[a] }}>A{a}</span>
-            <span className="text-gray-400 ml-1">{STAGE_LABELS[a]}</span>
+            <span style={{ marginLeft: 4, color: '#9ca3af' }}>{STAGE_LABELS[a]}</span>
           </div>
         ))}
       </div>
@@ -488,11 +496,13 @@ function StageMatrix({
           >
             {/* B-stage ラベル（左の "大きい長方形" の名札部分） */}
             <div
-              className="flex flex-col items-center justify-center text-xs font-mono leading-tight"
+              className="flex flex-col items-center justify-center font-mono leading-tight"
               style={{ color: STAGE_BORDER_COLORS[b], padding: '4px 2px' }}
             >
-              <span className="font-bold text-base">B{b}</span>
-              <span className="text-[10px] text-gray-700 mt-0.5 text-center">{STAGE_LABELS[b]}</span>
+              <span className="font-bold" style={{ fontSize: '14px', lineHeight: 1 }}>B{b}</span>
+              <span className="text-gray-700 text-center" style={{ fontSize: '10px', lineHeight: 1.2, marginTop: 3 }}>
+                {STAGE_LABELS[b]}
+              </span>
             </div>
 
             {/* A1..A6 の細長いセル */}
@@ -556,15 +566,15 @@ function StageMatrix({
                   {anySelection && !isSelected && !empty ? (
                     sel > 0 ? (
                       <>
-                        <span style={{ fontSize: '20px', fontWeight: 800 }}>{sel}</span>
-                        <span style={{ fontSize: '10px', opacity: 0.65 }}>/ {count}</span>
+                        <span style={{ fontSize: '18px', fontWeight: 700, lineHeight: 1 }}>{sel}</span>
+                        <span style={{ fontSize: '10px', opacity: 0.6, lineHeight: 1 }}>/ {count}</span>
                       </>
                     ) : (
-                      // 0件の場合は数字を出さず、薄く - のみ表示してノイズを減らす
-                      <span style={{ fontSize: '14px', fontWeight: 600, opacity: 0.5 }}>—</span>
+                      // 0件の場合は数字を出さず、薄く — のみ表示してノイズを減らす
+                      <span style={{ fontSize: '14px', fontWeight: 500, opacity: 0.4, lineHeight: 1 }}>—</span>
                     )
                   ) : (
-                    <span style={{ fontSize: '22px', fontWeight: 800 }}>{count}</span>
+                    <span style={{ fontSize: '20px', fontWeight: 700, lineHeight: 1 }}>{count}</span>
                   )}
                 </button>
               )
