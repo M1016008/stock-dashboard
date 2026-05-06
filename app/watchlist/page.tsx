@@ -11,13 +11,13 @@ import { toTvSymbol, buildTvWatchlistText } from '@/lib/tv-format'
 interface QuoteResponse {
   ticker: string
   name: string
-  market: 'JP' | 'US'
+  market: 'JP'
   price: number
   change: number
   changePercent: number
   volume: number
   marketCap?: number
-  currency: 'JPY' | 'USD'
+  currency: 'JPY'
 }
 
 export default function WatchlistPage() {

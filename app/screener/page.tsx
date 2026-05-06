@@ -7,7 +7,7 @@ import { toTvSymbol, buildTvWatchlistText } from '@/lib/tv-format'
 import { WatchlistButton } from '@/components/ui/WatchlistButton'
 import { StageDots } from '@/components/ui/StageDots'
 
-type Market = 'JP' | 'US'
+type Market = 'JP'
 type AxisKey = 'daily_a' | 'daily_b' | 'weekly_a' | 'weekly_b' | 'monthly_a' | 'monthly_b'
 
 // 時価総額レンジ（円）。.minは含む / .maxは含まない。億単位の閾値で設計。

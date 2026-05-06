@@ -56,7 +56,7 @@ interface SnapshotRow {
 interface ScreenerStockRow {
   ticker: string
   name: string
-  market: 'JP' | 'US'
+  market: 'JP'
   marketSegment: string
   marginType?: string
   sectorLarge: string
@@ -208,22 +208,9 @@ function buildResultRow(s: SnapshotRow, sectorMap: Map<string, SectorEntry>): Sc
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
-    const market = (searchParams.get('market') ?? 'JP') as 'JP' | 'US' | 'ALL'
+    // 当ダッシュボードは日本株専用。market パラメタは互換のため受け取るだけ。
     const segment = searchParams.get('segment')
     const requestedDate = searchParams.get('date')
-
-    if (market === 'US') {
-      return NextResponse.json({
-        results: [],
-        total: 0,
-        universe: 0,
-        date: null,
-        cached: true,
-        source: 'csv',
-        notice: 'US は CSV 未対応です（TradingView から日本株 CSV を取込中）',
-        filters: { market, segment },
-      })
-    }
 
     const date = requestedDate ?? (await latestSnapshotDate())
     if (!date) {
@@ -235,7 +222,7 @@ export async function GET(request: NextRequest) {
         cached: false,
         source: 'csv',
         notice: 'CSV未取込です。/admin/import から TradingView の CSV をインポートしてください。',
-        filters: { market, segment },
+        filters: { segment },
       })
     }
 
@@ -277,7 +264,7 @@ export async function GET(request: NextRequest) {
       date,
       cached: true,
       source: 'csv',
-      filters: { market, segment, ...stageFilter },
+      filters: { segment, ...stageFilter },
     })
   } catch (error) {
     console.error('Screener API error:', error)

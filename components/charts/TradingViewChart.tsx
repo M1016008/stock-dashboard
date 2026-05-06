@@ -5,26 +5,13 @@ import { useEffect, useRef, useState } from 'react'
 
 interface TradingViewChartProps {
   ticker: string
-  market: 'JP' | 'US'
   height?: number
   maLines?: number[]
 }
 
-const EXCHANGE_MAP: Record<string, string> = {
-  'AAPL': 'NASDAQ', 'MSFT': 'NASDAQ', 'TSLA': 'NASDAQ', 'NVDA': 'NASDAQ',
-  'GOOGL': 'NASDAQ', 'AMZN': 'NASDAQ', 'META': 'NASDAQ', 'NFLX': 'NASDAQ',
-  'JPM': 'NYSE', 'BAC': 'NYSE', 'GS': 'NYSE', 'WMT': 'NYSE', 'V': 'NYSE',
-  'MA': 'NYSE', 'JNJ': 'NYSE', 'PG': 'NYSE', 'HD': 'NYSE', 'DIS': 'NYSE',
-  'KO': 'NYSE', 'PFE': 'NYSE', 'XOM': 'NYSE', 'CVX': 'NYSE', 'MRK': 'NYSE',
-}
-
-function toTradingViewSymbol(ticker: string, market: 'JP' | 'US'): string {
-  if (market === 'JP') {
-    const code = ticker.replace('.T', '')
-    return `TSE:${code}`
-  }
-  const exchange = EXCHANGE_MAP[ticker] ?? 'NASDAQ'
-  return `${exchange}:${ticker}`
+function toTradingViewSymbol(ticker: string): string {
+  const code = ticker.replace('.T', '')
+  return `TSE:${code}`
 }
 
 const MA_COLORS: Record<number, string> = {
@@ -36,7 +23,6 @@ const MA_COLORS: Record<number, string> = {
 
 export function TradingViewChart({
   ticker,
-  market,
   height = 500,
   maLines = [5, 25, 75],
 }: TradingViewChartProps) {
@@ -46,7 +32,7 @@ export function TradingViewChart({
   const [selectedMAs, setSelectedMAs] = useState<number[]>(maLines)
 
   const containerId = `tv-chart-${ticker.replace(/[^a-zA-Z0-9]/g, '_')}`
-  const symbol = toTradingViewSymbol(ticker, market)
+  const symbol = toTradingViewSymbol(ticker)
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -120,7 +106,7 @@ export function TradingViewChart({
         widgetRef.current = null
       }
     }
-  }, [ticker, market, selectedMAs, containerId, symbol, height])
+  }, [ticker, selectedMAs, containerId, symbol, height])
 
   const toggleMA = (period: number) => {
     setSelectedMAs(prev =>

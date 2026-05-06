@@ -1,11 +1,13 @@
 // lib/news.ts
-// 銘柄関連ニュースの取得。複数ソースを統合する。
-//   - 日本株: yahoo-finance2.search + Google News RSS (hl=ja)
-//   - 米国株: yahoo-finance2.search のみ
-// 結果は published 降順でマージし、URL で重複排除する。
+// 銘柄関連ニュースの取得（日本株専用）。
+//   - yahoo-finance2.search + Google News RSS (hl=ja) を統合
+//   - 結果は published 降順でマージし、URL で重複排除する。
 
-import yahooFinance from 'yahoo-finance2'
+import YahooFinance from 'yahoo-finance2'
 import { findTicker } from '@/lib/master/tickers'
+
+// yahoo-finance2 v3 はインスタンス化が必要（lib/yahoo-finance.ts と同パターン）
+const yahooFinance: any = new (YahooFinance as any)()
 
 export interface NewsItem {
   title: string

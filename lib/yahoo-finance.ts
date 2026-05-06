@@ -20,8 +20,8 @@ function normalizeTicker(ticker: string): string {
 
 export async function getQuote(ticker: string): Promise<StockQuote> {
   const t = normalizeTicker(ticker)
-  const market = isJPTicker(t) ? 'JP' : 'US'
-  const currency = market === 'JP' ? 'JPY' : 'USD'
+  const market = 'JP' as const
+  const currency = 'JPY' as const
 
   try {
     // yahoo-finance2 のオーバーロード解決に難があるため any 経由で受ける
@@ -138,13 +138,6 @@ export async function getFundamentals(ticker: string): Promise<Fundamentals> {
     // 営業利益
     if (financialData?.operatingCashflow) result.operatingIncome = financialData.operatingCashflow
 
-    // 業種（米国株）
-    if (!t.endsWith('.T')) {
-      if (assetProfile && 'sector' in assetProfile) {
-        result.sectorEn = (assetProfile as any).sector ?? undefined
-        result.industry = (assetProfile as any).industry ?? undefined
-      }
-    }
   } catch (error) {
     console.error(`getFundamentals error for ${t}:`, error)
     // エラーでも空のオブジェクトを返す（エラーにしない）
@@ -155,18 +148,18 @@ export async function getFundamentals(ticker: string): Promise<Fundamentals> {
 
 export async function searchTickers(
   query: string
-): Promise<{ ticker: string; name: string; market: 'JP' | 'US' }[]> {
+): Promise<{ ticker: string; name: string; market: 'JP' }[]> {
   try {
     const result: any = await yahooFinance.search(query, { newsCount: 0, quotesCount: 10 })
     const quotes: any[] = result?.quotes ?? []
 
     return quotes
-      .filter((q) => q.quoteType === 'EQUITY')
+      .filter((q) => q.quoteType === 'EQUITY' && isJPTicker(q.symbol))
       .slice(0, 10)
       .map((q) => ({
         ticker: q.symbol as string,
         name: (q.shortname ?? q.longname ?? q.symbol) as string,
-        market: isJPTicker(q.symbol) ? 'JP' : 'US',
+        market: 'JP' as const,
       }))
   } catch (error) {
     console.error('searchTickers error:', error)

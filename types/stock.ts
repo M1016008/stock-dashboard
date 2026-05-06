@@ -1,14 +1,14 @@
 // types/stock.ts
 export interface StockQuote {
   ticker: string;
-  market: 'JP' | 'US';
+  market: 'JP';
   name: string;
   price: number;
   change: number;
   changePercent: number;
   volume: number;
   marketCap?: number;
-  currency: 'JPY' | 'USD';
+  currency: 'JPY';
   fiftyTwoWeekHigh?: number;
   fiftyTwoWeekLow?: number;
   averageDailyVolume10Day?: number;
@@ -33,11 +33,10 @@ export interface Fundamentals {
   revenue?: number;
   operatingIncome?: number;
   // 業種情報 (PHASE 9)
-  sector33?: string;       // 例: "輸送用機器"（日本株のみ）
-  sector17?: string;       // 例: "自動車・輸送機"（日本株のみ）
-  sectorEn?: string;       // 例: "Consumer Cyclical"（米国株はYahooから）
+  sector33?: string;       // 例: "輸送用機器"
+  sector17?: string;       // 例: "自動車・輸送機"
   industry?: string;       // 例: "Auto Manufacturers"
-  marketSegment?: string;  // 例: "プライム"（日本株のみ）
+  marketSegment?: string;  // 例: "プライム"
 }
 
 export interface ScreenerResult extends StockQuote, Fundamentals {}

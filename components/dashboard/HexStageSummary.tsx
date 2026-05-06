@@ -27,7 +27,7 @@ const TIMEFRAMES: { key: 'daily' | 'weekly' | 'monthly'; label: string }[] = [
   { key: 'monthly', label: '月足' },
 ]
 
-type Market = 'JP' | 'US' | 'ALL'
+type Market = 'JP'
 
 /**
  * HEXステージ分布

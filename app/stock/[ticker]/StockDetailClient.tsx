@@ -46,8 +46,6 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
     return () => { cancelled = true }
   }, [ticker])
 
-  const isJP = ticker.endsWith('.T')
-  const market = isJP ? 'JP' : 'US'
   const displayCode = ticker.replace('.T', '')
   const name = master?.name ?? quote?.name ?? '---'
 
@@ -75,7 +73,7 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
           }}>
             {displayCode}
           </span>
-          <MarketBadge market={market} />
+          <MarketBadge />
         </div>
 
         <span style={{ fontSize: '14px', color: 'var(--text-primary)', fontWeight: 600 }}>
@@ -110,7 +108,6 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
           ticker={ticker}
           quote={quote}
           fundamentals={fundamentals}
-          market={market}
         />
         <PerformanceCard ticker={ticker} />
       </div>
@@ -123,7 +120,6 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
         <div className="section-header">株価チャート（TradingView）</div>
         <TradingViewChart
           ticker={ticker}
-          market={market}
           height={520}
           maLines={[5, 25, 75]}
         />
@@ -166,15 +162,13 @@ function BasicInfoCard({
   ticker,
   quote,
   fundamentals,
-  market,
 }: {
   ticker: string
   quote: StockQuote | null
   fundamentals: Fundamentals | null
-  market: 'JP' | 'US'
 }) {
   const items = [
-    { label: '時価総額', value: quote?.marketCap ? `${(quote.marketCap / 1e8).toLocaleString('ja-JP', { maximumFractionDigits: 0 })} 億${market === 'JP' ? '円' : 'USD'}` : '---' },
+    { label: '時価総額', value: quote?.marketCap ? `${(quote.marketCap / 1e8).toLocaleString('ja-JP', { maximumFractionDigits: 0 })} 億円` : '---' },
     { label: '出来高', value: quote?.volume ? quote.volume.toLocaleString('ja-JP') : '---' },
     { label: '52週高値', value: quote?.fiftyTwoWeekHigh != null ? quote.fiftyTwoWeekHigh.toLocaleString('ja-JP') : '---' },
     { label: '52週安値', value: quote?.fiftyTwoWeekLow != null ? quote.fiftyTwoWeekLow.toLocaleString('ja-JP') : '---' },

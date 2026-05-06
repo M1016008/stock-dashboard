@@ -138,22 +138,9 @@ function indexByTicker(rows: SnapshotRow[]): Map<string, SnapshotRow> {
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
-    const market = (searchParams.get('market') ?? 'JP') as 'JP' | 'US' | 'ALL'
+    // 当ダッシュボードは日本株専用。market パラメタは互換のため受け取るだけ。
     const timeframe = (searchParams.get('timeframe') ?? 'daily') as 'daily' | 'weekly' | 'monthly'
     const requestedDate = searchParams.get('date')
-
-    if (market === 'US') {
-      return NextResponse.json({
-        success: true,
-        data: [],
-        count: 0,
-        cached: true,
-        date: null,
-        timeframe,
-        market,
-        notice: 'US は CSV 未対応です（TradingView から日本株 CSV を取込中）',
-      })
-    }
 
     const date = requestedDate ?? (await latestSnapshotDate())
     if (!date) {
@@ -164,7 +151,6 @@ export async function GET(request: NextRequest) {
         cached: false,
         date: null,
         timeframe,
-        market,
         notice: 'CSV未取込です。/admin/import から TradingView の CSV をインポートしてください。',
       })
     }
@@ -265,7 +251,6 @@ export async function GET(request: NextRequest) {
       cached: true,
       date,
       timeframe,
-      market,
       source: 'csv',
     })
   } catch (error) {
