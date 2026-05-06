@@ -212,11 +212,15 @@ export async function GET(request: NextRequest) {
       }
 
       const fromDb = sectorMap.get(s.ticker)
+      const sectorLarge = fromDb?.large ?? (master ? getSectorLarge(master) : 'その他')
+      let sectorSmall: string | null = fromDb?.small ?? master?.sectorSmall ?? null
+      // 大分類が 'その他' なら小分類も 'その他' に揃える（空欄回避）。
+      if (sectorLarge === 'その他' && !sectorSmall) sectorSmall = 'その他'
       return {
         code: s.ticker,
         name: s.name,
-        sector_large: fromDb?.large ?? (master ? getSectorLarge(master) : 'その他'),
-        sector_small: fromDb?.small ?? master?.sectorSmall ?? null,
+        sector_large: sectorLarge,
+        sector_small: sectorSmall,
         market_cap: s.market_cap ?? 0,
         price: s.price ?? 0,
         daily_change: s.change_percent_1d ?? 0,

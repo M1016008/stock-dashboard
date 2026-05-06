@@ -168,15 +168,19 @@ function buildResultRow(s: SnapshotRow, sectorMap: Map<string, SectorEntry>): Sc
   const master = getTickersByMarket('JP').find((t) => t.ticker === s.ticker)
   const fromDb = sectorMap.get(s.ticker)
   // セクター情報は sector_master DB → ハードコード master → 'その他' の順で参照する。
+  // 大分類が 'その他' に落ちた場合は小分類も 'その他' で埋める（空欄回避）。
   const stages = calculateAllStages(snapshotToMaValues(s))
+  const sectorLarge = fromDb?.sectorLarge ?? master?.sectorLarge ?? 'その他'
+  let sectorSmall = fromDb?.sectorSmall ?? master?.sectorSmall ?? null
+  if (sectorLarge === 'その他' && !sectorSmall) sectorSmall = 'その他'
   return {
     ticker: s.ticker,
     name: s.name,
     market: 'JP',
     marketSegment: master?.marketSegment ?? '',
     marginType: master?.marginType,
-    sectorLarge: fromDb?.sectorLarge ?? master?.sectorLarge ?? 'その他',
-    sectorSmall: fromDb?.sectorSmall ?? master?.sectorSmall ?? null,
+    sectorLarge,
+    sectorSmall,
     price: s.price,
     currency: s.currency,
     changePercent: s.change_percent_1d,
