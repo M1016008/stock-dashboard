@@ -3,10 +3,15 @@
 
 import { useEffect, useRef, useState } from 'react'
 
+/** TradingView ウィジェットの時間軸（D=日足, W=週足, M=月足） */
+export type TvInterval = 'D' | 'W' | 'M'
+
 interface TradingViewChartProps {
   ticker: string
   height?: number
   maLines?: number[]
+  /** 表示する時間軸。デフォルトは日足。 */
+  interval?: TvInterval
 }
 
 function toTradingViewSymbol(ticker: string): string {
@@ -25,13 +30,15 @@ export function TradingViewChart({
   ticker,
   height = 500,
   maLines = [5, 25, 75],
+  interval = 'D',
 }: TradingViewChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const widgetRef = useRef<TradingViewWidgetInstance | null>(null)
   const [loading, setLoading] = useState(true)
   const [selectedMAs, setSelectedMAs] = useState<number[]>(maLines)
 
-  const containerId = `tv-chart-${ticker.replace(/[^a-zA-Z0-9]/g, '_')}`
+  // 同一ページに複数 TradingView を貼っても DOM ID が衝突しないよう interval も含める
+  const containerId = `tv-chart-${ticker.replace(/[^a-zA-Z0-9]/g, '_')}-${interval}`
   const symbol = toTradingViewSymbol(ticker)
 
   useEffect(() => {
@@ -53,7 +60,7 @@ export function TradingViewChart({
 
       const widget = new window.TradingView.widget({
         symbol,
-        interval: 'D',
+        interval,
         timezone: 'Asia/Tokyo',
         theme: 'dark',
         style: '1',
@@ -106,7 +113,7 @@ export function TradingViewChart({
         widgetRef.current = null
       }
     }
-  }, [ticker, selectedMAs, containerId, symbol, height])
+  }, [ticker, selectedMAs, containerId, symbol, height, interval])
 
   const toggleMA = (period: number) => {
     setSelectedMAs(prev =>

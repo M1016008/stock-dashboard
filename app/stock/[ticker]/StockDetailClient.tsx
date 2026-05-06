@@ -115,14 +115,35 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
       {/* 決算情報 */}
       <EarningsCard ticker={ticker} />
 
-      {/* TradingView チャート（メイン） */}
-      <div>
-        <div className="section-header">株価チャート（TradingView）</div>
-        <TradingViewChart
-          ticker={ticker}
-          height={520}
-          maLines={[5, 25, 75]}
-        />
+      {/* TradingView チャート: 日足 / 週足 / 月足 を縦に並べて時間軸比較 */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+        <div>
+          <div className="section-header">📈 日足チャート（短期トレンド）</div>
+          <TradingViewChart
+            ticker={ticker}
+            interval="D"
+            height={420}
+            maLines={[5, 25, 75]}
+          />
+        </div>
+        <div>
+          <div className="section-header">📊 週足チャート（中期トレンド）</div>
+          <TradingViewChart
+            ticker={ticker}
+            interval="W"
+            height={420}
+            maLines={[13, 26, 52]}
+          />
+        </div>
+        <div>
+          <div className="section-header">📉 月足チャート（長期トレンド）</div>
+          <TradingViewChart
+            ticker={ticker}
+            interval="M"
+            height={420}
+            maLines={[12, 24, 60]}
+          />
+        </div>
       </div>
 
       {/* ステージ変遷 */}
