@@ -38,11 +38,6 @@ interface AvailableDate {
   tickers: number
 }
 
-const TIMEFRAMES: { v: Timeframe; label: string }[] = [
-  { v: 'daily', label: '日足' },
-  { v: 'weekly', label: '週足' },
-  { v: 'monthly', label: '月足' },
-]
 
 // HEX マップ本体と凡例で同じ色・同じラベルを使う（lib/hex-stage の正規版）
 const STAGE_DESCRIPTIONS: Record<number, string> = {
@@ -61,7 +56,9 @@ export default function HexStagePage() {
   const [cached, setCached] = useState(false)
   const [date, setDate] = useState<string | null>(null)
 
-  const [timeframe, setTimeframe] = useState<Timeframe>('daily')
+  // 3 タイムフレームのマトリクスを縦に積んで全部表示するため、
+  // ここは API を叩く際に必須の固定値だけ持つ。
+  const timeframe: Timeframe = 'daily'
   const [selectedCategory, setSelectedCategory] = useState<string>('')
   const [selectedSubCategory, setSelectedSubCategory] = useState<string>('')
   const [availableDates, setAvailableDates] = useState<AvailableDate[]>([])
@@ -187,21 +184,6 @@ export default function HexStagePage() {
             </select>
           </FilterField>
         )}
-
-        {/* 時間軸 */}
-        <FilterField label="時間軸">
-          <div style={segmentBoxStyle}>
-            {TIMEFRAMES.map((tf) => (
-              <button
-                key={tf.v}
-                onClick={() => setTimeframe(tf.v)}
-                style={segmentBtnStyle(timeframe === tf.v)}
-              >
-                {tf.label}
-              </button>
-            ))}
-          </div>
-        </FilterField>
 
         {/* 業種大分類 */}
         <FilterField label="業種大分類">
@@ -388,24 +370,6 @@ const selectInputStyle: React.CSSProperties = {
   maxWidth: '240px',
 }
 
-const segmentBoxStyle: React.CSSProperties = {
-  display: 'flex',
-  border: '1px solid var(--border-base)',
-  borderRadius: 'var(--radius-sm)',
-  overflow: 'hidden',
-  background: 'var(--bg-surface)',
-}
-
-const segmentBtnStyle = (active: boolean): React.CSSProperties => ({
-  padding: '5px 12px',
-  fontSize: '12px',
-  fontFamily: 'var(--font-mono)',
-  background: active ? 'var(--accent-primary)' : 'transparent',
-  color: active ? '#fff' : 'var(--text-secondary)',
-  border: 'none',
-  cursor: 'pointer',
-  fontWeight: active ? 600 : 400,
-})
 
 const clearBtnStyle: React.CSSProperties = {
   padding: '5px 10px',

@@ -1,10 +1,10 @@
 // components/hex/HexMap.tsx
-// 完全移植: 株式アプリ/HEX-app/frontend/components/HexMap.tsx
-// HEX-app の HexMap を stock-dashboard 用に移植。Tailwind v4 で動作。
+// HEX ステージマップ。日足 / 週足 / 月足 の 6×6 (Bステージ × Aステージ) マトリクスを縦に並べ、
+// セルをクリックすると下のテーブルがその (timeframe, B, A) 組合せの銘柄に絞り込まれる。
 
 'use client'
-import { useEffect, useRef, useState } from 'react'
-import * as d3 from 'd3'
+
+import { useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Search, Copy, Check } from 'lucide-react'
 import { STAGE_BG_COLORS, STAGE_BORDER_COLORS, STAGE_LABELS } from '@/lib/hex-stage'
@@ -49,6 +49,14 @@ interface Stock {
   prev_prev_sma_angles?: { sma5: number | null; sma25: number | null; sma75: number | null; sma300: number | null }
 }
 
+type Timeframe = 'daily' | 'weekly' | 'monthly'
+
+const TIMEFRAMES: { key: Timeframe; label: string }[] = [
+  { key: 'daily',   label: '日足' },
+  { key: 'weekly',  label: '週足' },
+  { key: 'monthly', label: '月足' },
+]
+
 const formatPercent = (val?: number) => {
   if (val === undefined || val === null) return '-'
   return `${val > 0 ? '+' : ''}${val.toFixed(2)}%`
@@ -75,165 +83,26 @@ const getAngleStyle = (angle: number | null | undefined): React.CSSProperties =>
   return { color: '#6b7280' }
 }
 
-export default function HexMap({
-  data,
-  timeframe = 'daily',
-}: {
-  data: Stock[]
-  timeframe?: 'daily' | 'weekly' | 'monthly'
-}) {
-  const svgRef = useRef<SVGSVGElement>(null)
+interface CellSelection {
+  tf: Timeframe
+  b: number
+  a: number
+}
+
+const MARKET_CAP_RANGES: { id: string; label: string }[] = [
+  { id: 'all',      label: '全て' },
+  { id: '-50',      label: '〜50億' },
+  { id: '50-100',   label: '50〜100億' },
+  { id: '100-300',  label: '100〜300億' },
+  { id: '300-1000', label: '300〜1,000億' },
+  { id: '1000-',    label: '1,000億〜' },
+]
+
+export default function HexMap({ data }: { data: Stock[]; timeframe?: Timeframe }) {
   const router = useRouter()
   const [copiedCode, setCopiedCode] = useState<string | null>(null)
-  const [selectedStage, setSelectedStage] = useState<number>(0)
   const [searchTerm, setSearchTerm] = useState('')
-  const [hoveredStock, setHoveredStock] = useState<Stock | null>(null)
-  const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 })
-
-  const width = 980, height = 380
-
-  useEffect(() => {
-    if (!svgRef.current || !data || data.length === 0) return
-
-    const svg = d3.select(svgRef.current)
-    svg.selectAll('*').remove()
-    const g = svg.append('g')
-
-    // 6 ステージを横一列にレイアウト（左→右、Stage 1〜6）。
-    // 強気→弱気→強気回帰 の流れを左から右に読むのが自然。
-    const padding = 20
-    const cellWidth = (width - padding * 2) / 6
-    const cellHeight = height - 60 // タイトル領域を引いた残り
-    const titleY = 30
-
-    // 銘柄ごとに timeframe に応じた stageA / stageB を決定
-    type SimulationNode = Stock & { x: number; y: number; stageA: number; stageB: number }
-    const nodes: SimulationNode[] = data.map((d, idx) => {
-      let stageA: number
-      let stageB: number
-      if (timeframe === 'daily') {
-        stageA = d.daily_a_stage || d.stage
-        stageB = d.daily_b_stage || d.stage
-      } else if (timeframe === 'weekly') {
-        stageA = d.weekly_a_stage || d.stage
-        stageB = d.weekly_b_stage || d.stage
-      } else {
-        stageA = d.monthly_a_stage || d.stage
-        stageB = d.monthly_b_stage || d.stage
-      }
-      if (stageA < 1 || stageA > 6) stageA = (idx % 6) + 1
-      if (stageB < 1 || stageB > 6) stageB = stageA
-      return { ...d, stageA, stageB, x: 0, y: 0 }
-    })
-
-    // バブルサイズ（時価総額に応じて）
-    const marketCapExtent = d3.extent(data, (d) => d.market_cap) as [number, number]
-    const sizeScale = d3.scaleSqrt().domain(marketCapExtent).range([2.5, 9])
-
-    for (let stage = 1; stage <= 6; stage++) {
-      const cx = padding + cellWidth * (stage - 1) + cellWidth / 2
-      const cellX = padding + cellWidth * (stage - 1)
-      const cellInnerW = cellWidth - 8
-
-      // ステージタイル（背景）
-      g.append('rect')
-        .attr('x', cellX + 4).attr('y', titleY + 30)
-        .attr('width', cellInnerW).attr('height', cellHeight - 30)
-        .attr('rx', 12).attr('ry', 12)
-        .attr('fill', STAGE_BG_COLORS[stage])
-        .attr('stroke', STAGE_BORDER_COLORS[stage])
-        .attr('stroke-width', 1.5)
-        .style('cursor', 'pointer')
-        .on('click', () => setSelectedStage((cur) => cur === stage ? 0 : stage))
-
-      // ステージラベル（上）
-      g.append('text')
-        .attr('x', cx).attr('y', titleY)
-        .attr('text-anchor', 'middle')
-        .attr('font-size', '18px').attr('font-weight', 700)
-        .attr('fill', STAGE_BORDER_COLORS[stage])
-        .text(`S${stage}`)
-        .style('cursor', 'pointer')
-        .on('click', () => setSelectedStage((cur) => cur === stage ? 0 : stage))
-
-      // ステージ名（小さく）
-      g.append('text')
-        .attr('x', cx).attr('y', titleY + 16)
-        .attr('text-anchor', 'middle')
-        .attr('font-size', '11px').attr('font-weight', 500)
-        .attr('fill', '#374151')
-        .text(STAGE_LABELS[stage])
-
-      // 件数（右上バッジ風）
-      const count = data.filter((d) => d.stage === stage).length
-      g.append('text')
-        .attr('x', cellX + cellInnerW).attr('y', titleY + 50)
-        .attr('text-anchor', 'end')
-        .attr('font-size', '13px').attr('font-weight', 700)
-        .attr('fill', STAGE_BORDER_COLORS[stage])
-        .text(count.toLocaleString())
-        .style('cursor', 'pointer')
-        .on('click', () => setSelectedStage((cur) => cur === stage ? 0 : stage))
-    }
-
-    // 各セルの内側にバブルを敷き詰める。stageA で属するセル決定、stageB は色の濃淡で示す。
-    const stageNodes = new Map<number, SimulationNode[]>()
-    nodes.forEach((n) => {
-      if (!stageNodes.has(n.stageA)) stageNodes.set(n.stageA, [])
-      stageNodes.get(n.stageA)!.push(n)
-    })
-
-    stageNodes.forEach((stockList, stage) => {
-      const cellX = padding + cellWidth * (stage - 1) + 4
-      const cellY = titleY + 60
-      const cellW = cellWidth - 8
-      const cellH = cellHeight - 60
-
-      stockList.sort((a, b) => b.market_cap - a.market_cap)
-      const count = stockList.length
-
-      // 円形配置を諦めてグリッド/ジッタ配置（セル内に均等にちらす）
-      const cols = Math.max(8, Math.ceil(Math.sqrt(count * (cellW / cellH))))
-      const rows = Math.ceil(count / cols)
-      const gx = cellW / cols
-      const gy = cellH / Math.max(1, rows)
-      stockList.forEach((node, i) => {
-        const col = i % cols
-        const row = Math.floor(i / cols)
-        const jitterX = (Math.random() - 0.5) * gx * 0.8
-        const jitterY = (Math.random() - 0.5) * gy * 0.8
-        node.x = cellX + col * gx + gx / 2 + jitterX
-        node.y = cellY + row * gy + gy / 2 + jitterY
-      })
-
-      // バブル描画。色は stageB の境界色（stageA セル色との対比）
-      g.selectAll(`.bubble-${stage}`)
-        .data(stockList)
-        .enter()
-        .append('circle')
-        .attr('class', `bubble-${stage}`)
-        .attr('cx', (d) => d.x).attr('cy', (d) => d.y)
-        .attr('r', (d) => sizeScale(d.market_cap))
-        .attr('fill', (d) => STAGE_BORDER_COLORS[d.stageB])
-        .attr('fill-opacity', 0.7)
-        .attr('stroke', '#fff').attr('stroke-width', 0.6)
-        .style('cursor', 'pointer')
-        .on('click', (_e, d) => router.push(`/stock/${encodeURIComponent(d.code)}`))
-        .on('mouseover', function (event, d) {
-          d3.select(this).attr('stroke', '#1f2937').attr('stroke-width', 1.6).attr('fill-opacity', 1)
-          setHoveredStock(d)
-          setTooltipPos({ x: event.clientX, y: event.clientY })
-        })
-        .on('mousemove', function (event) {
-          setTooltipPos({ x: event.clientX, y: event.clientY })
-        })
-        .on('mouseout', function () {
-          d3.select(this).attr('stroke', '#fff').attr('stroke-width', 0.6).attr('fill-opacity', 0.7)
-          setHoveredStock(null)
-        })
-    })
-  }, [data, router, timeframe])
-
+  const [selectedCell, setSelectedCell] = useState<CellSelection | null>(null)
   const [selectedMarketCapRange, setSelectedMarketCapRange] = useState<string>('all')
 
   const filterByMarketCap = (stock: Stock) => {
@@ -248,36 +117,49 @@ export default function HexMap({
     }
   }
 
-  const stageData = data
-    .filter((d) => (selectedStage === 0 || d.stage === selectedStage) && filterByMarketCap(d))
-    .sort((a, b) => b.market_cap - a.market_cap)
+  // セル選択 + 時価総額 + 検索 すべてで絞り込み、時価総額降順でソート
+  const visible = useMemo(() => {
+    return data
+      .filter((s) => {
+        if (selectedCell) {
+          const aField = `${selectedCell.tf}_a_stage` as keyof Stock
+          const bField = `${selectedCell.tf}_b_stage` as keyof Stock
+          if (s[aField] !== selectedCell.a) return false
+          if (s[bField] !== selectedCell.b) return false
+        }
+        if (!filterByMarketCap(s)) return false
+        if (searchTerm && !s.code.includes(searchTerm) && !s.name.includes(searchTerm)) return false
+        return true
+      })
+      .sort((a, b) => b.market_cap - a.market_cap)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, selectedCell, selectedMarketCapRange, searchTerm])
 
-  const visible = stageData.filter((s) => s.code.includes(searchTerm) || s.name.includes(searchTerm))
-
-  const MARKET_CAP_RANGES: { id: string; label: string }[] = [
-    { id: 'all',      label: '全て' },
-    { id: '-50',      label: '〜50億' },
-    { id: '50-100',   label: '50〜100億' },
-    { id: '100-300',  label: '100〜300億' },
-    { id: '300-1000', label: '300〜1,000億' },
-    { id: '1000-',    label: '1,000億〜' },
-  ]
+  const onCellClick = (tf: Timeframe, b: number, a: number, count: number) => {
+    if (count === 0) return
+    setSelectedCell((cur) =>
+      cur && cur.tf === tf && cur.b === b && cur.a === a ? null : { tf, b, a }
+    )
+  }
 
   return (
-    <div className="flex flex-col gap-4 relative">
-      {/* HEX マップ本体（横一列の6ステージ） */}
-      <div className="overflow-x-auto -mx-2 px-2">
-        <svg
-          ref={svgRef}
-          viewBox={`0 0 ${width} ${height}`}
-          preserveAspectRatio="xMidYMid meet"
-          className="block w-full h-auto"
-          style={{ minWidth: 720, maxWidth: width }}
-        />
+    <div className="flex flex-col gap-5 relative">
+      {/* 3つのタイムフレーム別マトリクスを縦に積む */}
+      <div className="flex flex-col gap-4">
+        {TIMEFRAMES.map((tf) => (
+          <StageMatrix
+            key={tf.key}
+            data={data}
+            timeframe={tf.key}
+            label={tf.label}
+            selected={selectedCell?.tf === tf.key ? selectedCell : null}
+            onCellClick={(b, a, count) => onCellClick(tf.key, b, a, count)}
+          />
+        ))}
       </div>
 
-      {/* 検索 + フィルタバー */}
-      <div className="flex flex-col gap-2 px-2">
+      {/* フィルタバー: 検索 + 時価総額 + 選択セルクリア */}
+      <div className="flex flex-col gap-2 px-2 pt-2 border-t border-gray-200">
         <div className="flex flex-wrap items-center gap-2">
           <div className="relative flex-1 min-w-[200px] max-w-md">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
@@ -291,46 +173,25 @@ export default function HexMap({
           </div>
           <span className="text-xs text-gray-500">
             <strong className="text-indigo-600 text-base font-bold">{visible.length}</strong> 件
-            {selectedStage !== 0 && <span className="ml-2">/ Stage {selectedStage}</span>}
+            {selectedCell && (
+              <>
+                <span className="ml-2">
+                  / {TIMEFRAMES.find((t) => t.key === selectedCell.tf)?.label} B{selectedCell.b}-A{selectedCell.a}
+                </span>
+                <button
+                  onClick={() => setSelectedCell(null)}
+                  className="ml-2 px-2 py-0.5 text-[10px] border border-gray-300 rounded hover:bg-gray-50"
+                >
+                  × 解除
+                </button>
+              </>
+            )}
             {selectedMarketCapRange !== 'all' && (
-              <span className="ml-2">/ {MARKET_CAP_RANGES.find(r => r.id === selectedMarketCapRange)?.label}</span>
+              <span className="ml-2">
+                / {MARKET_CAP_RANGES.find((r) => r.id === selectedMarketCapRange)?.label}
+              </span>
             )}
           </span>
-        </div>
-
-        {/* ステージフィルタ（カラフルなチップで分かりやすく） */}
-        <div className="flex flex-wrap gap-1.5 items-center">
-          <span className="text-[10px] text-gray-500 mr-1">ステージ:</span>
-          <button
-            onClick={() => setSelectedStage(0)}
-            className={`px-3 py-1 text-xs font-mono rounded-full border ${
-              selectedStage === 0
-                ? 'bg-indigo-600 text-white border-indigo-600'
-                : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
-            }`}
-          >
-            全て
-          </button>
-          {[1, 2, 3, 4, 5, 6].map((s) => {
-            const active = selectedStage === s
-            const bg = STAGE_BG_COLORS[s]
-            const border = STAGE_BORDER_COLORS[s]
-            return (
-              <button
-                key={s}
-                onClick={() => setSelectedStage(active ? 0 : s)}
-                className="px-3 py-1 text-xs font-mono rounded-full border font-bold"
-                style={{
-                  background: active ? border : bg,
-                  color: active ? '#fff' : border,
-                  borderColor: border,
-                }}
-                title={STAGE_LABELS[s]}
-              >
-                S{s} {STAGE_LABELS[s]}
-              </button>
-            )
-          })}
         </div>
 
         {/* 時価総額フィルタ */}
@@ -373,7 +234,7 @@ export default function HexMap({
                 <th className="px-3 py-2 text-right font-medium text-gray-500 whitespace-nowrap">6M</th>
                 <th className="px-3 py-2 text-right font-medium text-gray-500 whitespace-nowrap">YTD</th>
                 <th className="px-3 py-2 text-left font-medium text-gray-500 whitespace-nowrap">ステージ (日A/B 週A/B 月A/B)</th>
-                <th className="px-3 py-2 text-right font-medium text-gray-500 whitespace-nowrap" title="SMA角度（当日 / SMA5/25/75/300）">SMA角度</th>
+                <th className="px-3 py-2 text-right font-medium text-gray-500 whitespace-nowrap" title="SMA角度（SMA5/25/75/300）">SMA角度</th>
               </tr>
             </thead>
             <tbody>
@@ -459,71 +320,132 @@ export default function HexMap({
           </table>
         </div>
       </div>
-
-      {hoveredStock && (
-        <div
-          className="fixed z-50 pointer-events-none"
-          style={{ left: tooltipPos.x + 15, top: tooltipPos.y + 15, minWidth: '240px', maxWidth: '300px' }}
-        >
-          <div className="bg-white p-3 rounded-lg shadow-lg border border-gray-200">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-[11px] font-mono font-bold text-gray-700 bg-gray-100 px-2 py-0.5 rounded">
-                {hoveredStock.code.replace('.T', '')}
-              </span>
-              <span
-                className="text-[10px] font-bold px-2 py-0.5 rounded-full border"
-                style={{
-                  background: STAGE_BG_COLORS[hoveredStock.stage],
-                  color: STAGE_BORDER_COLORS[hoveredStock.stage],
-                  borderColor: STAGE_BORDER_COLORS[hoveredStock.stage],
-                }}
-              >
-                S{hoveredStock.stage} {STAGE_LABELS[hoveredStock.stage]}
-              </span>
-            </div>
-            <h3 className="font-bold text-gray-900 text-sm mb-2 leading-tight">{hoveredStock.name}</h3>
-            {(hoveredStock.sector_large || hoveredStock.sector_small) && (
-              <div className="text-[10px] text-gray-500 mb-2">
-                {hoveredStock.sector_large}
-                {hoveredStock.sector_small && <> / {hoveredStock.sector_small}</>}
-              </div>
-            )}
-            <div className="flex items-baseline gap-2 mb-2 border-b border-gray-100 pb-2">
-              <span className="text-lg font-bold font-mono text-gray-900">{hoveredStock.price.toLocaleString()}</span>
-              <span className="text-xs text-gray-500">{hoveredStock.code.endsWith('.T') ? '円' : '$'}</span>
-              <span className="ml-auto text-xs font-mono text-gray-600">
-                {Math.round(hoveredStock.market_cap / 1e8).toLocaleString()}<span className="text-[10px] text-gray-400 ml-0.5">億</span>
-              </span>
-            </div>
-            <div className="grid grid-cols-3 gap-x-3 gap-y-1 text-[11px] mb-2">
-              {[
-                { label: '日', v: hoveredStock.daily_change },
-                { label: '週', v: hoveredStock.weekly_change },
-                { label: '月', v: hoveredStock.monthly_change },
-                { label: '3M', v: hoveredStock.months3_change },
-                { label: '6M', v: hoveredStock.months6_change },
-                { label: 'YTD', v: hoveredStock.ytd_change },
-              ].map((p) => (
-                <div key={p.label} className="flex justify-between gap-1">
-                  <span className="text-gray-400 text-[10px]">{p.label}</span>
-                  <span className="font-mono" style={getPercentStyle(p.v)}>{formatPercent(p.v)}</span>
-                </div>
-              ))}
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-[10px] text-gray-400">ステージ</span>
-              <StageDots
-                values={[
-                  hoveredStock.daily_a_stage, hoveredStock.daily_b_stage,
-                  hoveredStock.weekly_a_stage, hoveredStock.weekly_b_stage,
-                  hoveredStock.monthly_a_stage, hoveredStock.monthly_b_stage,
-                ]}
-                size={16}
-              />
-            </div>
-          </div>
-        </div>
-      )}
     </div>
+  )
+}
+
+/* ─────────────────────────────────────────────────────────────────
+ * StageMatrix
+ * 1 つのタイムフレームについて、Bステージ(縦) × Aステージ(横) の 6×6 マトリクス。
+ * 各 B 行は「大きい長方形」のラベル＋6つの細長い長方形（A1〜A6 のセル）から成る。
+ * セル内の数値はその (B, A) 組合せに該当する銘柄数。クリックで下のテーブルを絞り込む。
+ * ────────────────────────────────────────────────────────────── */
+function StageMatrix({
+  data, timeframe, label, selected, onCellClick,
+}: {
+  data: Stock[]
+  timeframe: Timeframe
+  label: string
+  selected: CellSelection | null
+  onCellClick: (b: number, a: number, count: number) => void
+}) {
+  // matrix[b][a] = count. インデックスは 1..6 を使う
+  const { matrix, total } = useMemo(() => {
+    const m: number[][] = Array.from({ length: 7 }, () => Array(7).fill(0))
+    let t = 0
+    const aField = `${timeframe}_a_stage` as keyof Stock
+    const bField = `${timeframe}_b_stage` as keyof Stock
+    for (const d of data) {
+      const a = d[aField] as number | null | undefined
+      const b = d[bField] as number | null | undefined
+      if (a == null || b == null) continue
+      if (a < 1 || a > 6 || b < 1 || b > 6) continue
+      m[b][a]++
+      t++
+    }
+    return { matrix: m, total: t }
+  }, [data, timeframe])
+
+  return (
+    <section className="bg-white border border-gray-200 rounded-lg p-3">
+      <header className="flex items-baseline justify-between mb-2">
+        <div className="flex items-baseline gap-2">
+          <h3 className="text-base font-bold text-gray-900">{label}</h3>
+          <span className="text-[11px] text-gray-500">B-Stage × A-Stage</span>
+        </div>
+        <span className="text-[11px] text-gray-500">
+          <strong className="text-indigo-600 font-mono">{total.toLocaleString()}</strong> 銘柄
+        </span>
+      </header>
+
+      {/* A-Stage ヘッダ行 */}
+      <div className="grid gap-1 mb-1" style={{ gridTemplateColumns: '110px repeat(6, 1fr)' }}>
+        <div></div>
+        {[1, 2, 3, 4, 5, 6].map((a) => (
+          <div key={a} className="text-center text-[10px] font-mono">
+            <span className="font-bold" style={{ color: STAGE_BORDER_COLORS[a] }}>A{a}</span>
+            <span className="text-gray-400 ml-1">{STAGE_LABELS[a]}</span>
+          </div>
+        ))}
+      </div>
+
+      {/* B-Stage 行 */}
+      <div className="flex flex-col gap-1">
+        {[1, 2, 3, 4, 5, 6].map((b) => {
+          const rowTotal = matrix[b].slice(1, 7).reduce((s, n) => s + n, 0)
+          return (
+            <div
+              key={b}
+              className="grid gap-1"
+              style={{
+                gridTemplateColumns: '110px repeat(6, 1fr)',
+                background: STAGE_BG_COLORS[b],
+                border: `1.5px solid ${STAGE_BORDER_COLORS[b]}`,
+                borderRadius: '6px',
+                padding: '4px',
+              }}
+            >
+              {/* B-stage ラベル（左の "大きい長方形" の名札部分） */}
+              <div
+                className="flex flex-col items-center justify-center text-xs font-mono leading-tight"
+                style={{ color: STAGE_BORDER_COLORS[b], padding: '6px 4px' }}
+              >
+                <span className="font-bold text-base">B{b}</span>
+                <span className="text-[10px] text-gray-700 mt-0.5">{STAGE_LABELS[b]}</span>
+                <span className="text-[10px] text-gray-500 mt-0.5">{rowTotal} 銘柄</span>
+              </div>
+
+              {/* A1..A6 の細長いセル */}
+              {[1, 2, 3, 4, 5, 6].map((a) => {
+                const count = matrix[b][a]
+                const isActive = !!selected && selected.b === b && selected.a === a
+                const empty = count === 0
+                return (
+                  <button
+                    key={a}
+                    onClick={() => onCellClick(b, a, count)}
+                    disabled={empty}
+                    title={`B${b} × A${a}: ${count} 銘柄`}
+                    style={{
+                      background: isActive
+                        ? STAGE_BORDER_COLORS[a]
+                        : empty
+                          ? '#fafafa'
+                          : '#fff',
+                      color: isActive
+                        ? '#fff'
+                        : empty
+                          ? '#d1d5db'
+                          : STAGE_BORDER_COLORS[a],
+                      border: `1px solid ${empty ? '#e5e7eb' : STAGE_BORDER_COLORS[a]}`,
+                      borderRadius: '4px',
+                      padding: '12px 4px',
+                      fontFamily: 'var(--font-mono)',
+                      fontSize: '15px',
+                      fontWeight: 700,
+                      cursor: empty ? 'default' : 'pointer',
+                      transition: 'transform 0.1s, box-shadow 0.1s',
+                      boxShadow: isActive ? `0 2px 8px ${STAGE_BORDER_COLORS[a]}55` : 'none',
+                    }}
+                  >
+                    {count}
+                  </button>
+                )
+              })}
+            </div>
+          )
+        })}
+      </div>
+    </section>
   )
 }
