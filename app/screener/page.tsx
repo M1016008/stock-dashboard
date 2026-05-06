@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { toTvSymbol, buildTvWatchlistText } from '@/lib/tv-format'
 import { WatchlistButton } from '@/components/ui/WatchlistButton'
+import { StageDots } from '@/components/ui/StageDots'
 
 type Market = 'JP' | 'US'
 type AxisKey = 'daily_a' | 'daily_b' | 'weekly_a' | 'weekly_b' | 'monthly_a' | 'monthly_b'
@@ -17,6 +18,26 @@ const MCAP_BINS: { label: string; min: number; max: number }[] = [
   { label: '2,000億〜1兆', min: 2e11,        max: 1e12 },
   { label: '1兆〜5兆',    min: 1e12,        max: 5e12 },
   { label: '5兆〜',       min: 5e12,        max: Number.POSITIVE_INFINITY },
+]
+
+// PER レンジ（倍）。負/null は別ボタンで扱う。
+const PER_BINS: { label: string; min: number; max: number }[] = [
+  { label: '〜10',    min: 0,    max: 10 },
+  { label: '10〜15',  min: 10,   max: 15 },
+  { label: '15〜20',  min: 15,   max: 20 },
+  { label: '20〜30',  min: 20,   max: 30 },
+  { label: '30〜50',  min: 30,   max: 50 },
+  { label: '50〜',    min: 50,   max: Number.POSITIVE_INFINITY },
+]
+
+// 配当利回り（%）。
+const DY_BINS: { label: string; min: number; max: number }[] = [
+  { label: '無配 (0%)', min: 0,   max: 0.0001 },
+  { label: '〜1%',     min: 0.0001, max: 1 },
+  { label: '1〜2%',    min: 1,   max: 2 },
+  { label: '2〜3%',    min: 2,   max: 3 },
+  { label: '3〜5%',    min: 3,   max: 5 },
+  { label: '5%〜',     min: 5,   max: Number.POSITIVE_INFINITY },
 ]
 
 const AXES: { key: AxisKey; label: string; color: string }[] = [
@@ -114,6 +135,8 @@ export default function ScreenerPage() {
   const [selectedSectorLarge, setSelectedSectorLarge] = useState<string>('')
   const [selectedSectorSmall, setSelectedSectorSmall] = useState<string>('')
   const [selectedMcapBins, setSelectedMcapBins] = useState<Set<number>>(new Set())
+  const [selectedPerBins, setSelectedPerBins] = useState<Set<number>>(new Set())
+  const [selectedDyBins, setSelectedDyBins] = useState<Set<number>>(new Set())
 
   const hasAnyStage = Object.values(stages).some((v) => v && v.length > 0)
 
@@ -181,9 +204,28 @@ export default function ScreenerPage() {
         })
         if (!matched) return false
       }
+      if (selectedPerBins.size > 0) {
+        const per = r.per
+        if (per == null || per < 0) return false
+        const matched = Array.from(selectedPerBins).some((idx) => {
+          const bin = PER_BINS[idx]
+          if (!bin) return false
+          return per >= bin.min && per < bin.max
+        })
+        if (!matched) return false
+      }
+      if (selectedDyBins.size > 0) {
+        const dy = r.dividendYield ?? -1
+        const matched = Array.from(selectedDyBins).some((idx) => {
+          const bin = DY_BINS[idx]
+          if (!bin) return false
+          return dy >= bin.min && dy < bin.max
+        })
+        if (!matched) return false
+      }
       return true
     })
-  }, [results, selectedSectorLarge, selectedSectorSmall, selectedMcapBins])
+  }, [results, selectedSectorLarge, selectedSectorSmall, selectedMcapBins, selectedPerBins, selectedDyBins])
 
   // セクターのドロップダウン候補
   const sectorOptions = useMemo(() => {
@@ -353,8 +395,64 @@ export default function ScreenerPage() {
         </div>
       </Section>
 
+      {/* PER で絞り込み */}
+      <Section step={3} label="PERで絞り込み（任意 / 複数選択可、赤字銘柄は除外）">
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+          {PER_BINS.map((bin, idx) => {
+            const active = selectedPerBins.has(idx)
+            return (
+              <button
+                key={bin.label}
+                onClick={() => setSelectedPerBins((prev) => {
+                  const next = new Set(prev)
+                  if (next.has(idx)) next.delete(idx)
+                  else next.add(idx)
+                  return next
+                })}
+                style={mcChipStyle(active)}
+              >
+                {bin.label}
+              </button>
+            )
+          })}
+          {selectedPerBins.size > 0 && (
+            <button onClick={() => setSelectedPerBins(new Set())} style={mcChipStyle(false)}>
+              × クリア
+            </button>
+          )}
+        </div>
+      </Section>
+
+      {/* 配当利回りで絞り込み */}
+      <Section step={4} label="配当利回りで絞り込み（任意 / 複数選択可）">
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+          {DY_BINS.map((bin, idx) => {
+            const active = selectedDyBins.has(idx)
+            return (
+              <button
+                key={bin.label}
+                onClick={() => setSelectedDyBins((prev) => {
+                  const next = new Set(prev)
+                  if (next.has(idx)) next.delete(idx)
+                  else next.add(idx)
+                  return next
+                })}
+                style={mcChipStyle(active)}
+              >
+                {bin.label}
+              </button>
+            )
+          })}
+          {selectedDyBins.size > 0 && (
+            <button onClick={() => setSelectedDyBins(new Set())} style={mcChipStyle(false)}>
+              × クリア
+            </button>
+          )}
+        </div>
+      </Section>
+
       {/* HEXステージ（任意の絞り込み） */}
-      <Section step={3} label="HEXステージで絞り込み（任意 / 複数系統 AND）">
+      <Section step={5} label="HEXステージで絞り込み（任意 / 複数系統 AND）">
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '8px' }}>
           <button
             onClick={() => setStages({})}
@@ -508,7 +606,7 @@ export default function ScreenerPage() {
                     <SortableTh label="3ヶ月%"     sortKey="perfPct3m"           current={sort} onClick={toggleSort} align="right" />
                     <SortableTh label="6ヶ月%"     sortKey="perfPct6m"           current={sort} onClick={toggleSort} align="right" />
                     <SortableTh label="年初来%"    sortKey="perfPctYtd"          current={sort} onClick={toggleSort} align="right" />
-                    <SortableTh label="出来高"     sortKey="volume"              current={sort} onClick={toggleSort} align="right" />
+                    <SortableTh label="出来高"     sortKey="avgVolume30d"        current={sort} onClick={toggleSort} align="right" />
                     <SortableTh label="平均10日"   sortKey="avgVolume10d"        current={sort} onClick={toggleSort} align="right" />
                     <SortableTh label="平均30日"   sortKey="avgVolume30d"        current={sort} onClick={toggleSort} align="right" />
                     <SortableTh label="時価総額"   sortKey="marketCap"           current={sort} onClick={toggleSort} align="right" />
@@ -577,8 +675,10 @@ export default function ScreenerPage() {
                         <td style={{ ...td, fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{r.earningsLastDate ?? '---'}</td>
                         <td style={{ ...td, fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>{r.earningsNextDate ?? '---'}</td>
                         <td style={{ ...tdR, color: daysColor(daysUntil(r.earningsNextDate)) }}>{fmtDaysUntil(r.earningsNextDate)}</td>
-                        <td style={{ ...td, fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
-                          {r.daily_a_stage ?? '-'}/{r.daily_b_stage ?? '-'} {r.weekly_a_stage ?? '-'}/{r.weekly_b_stage ?? '-'} {r.monthly_a_stage ?? '-'}/{r.monthly_b_stage ?? '-'}
+                        <td style={{ ...td, whiteSpace: 'nowrap' }}>
+                          <StageDots
+                            values={[r.daily_a_stage, r.daily_b_stage, r.weekly_a_stage, r.weekly_b_stage, r.monthly_a_stage, r.monthly_b_stage]}
+                          />
                         </td>
                       </tr>
                     )

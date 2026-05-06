@@ -3,7 +3,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
-import { STAGE_BG_COLORS, STAGE_BORDER_COLORS } from '@/lib/hex-stage'
+import { StageDots } from '@/components/ui/StageDots'
 
 interface EarningsEntry {
   date: string
@@ -284,35 +284,6 @@ export function EarningsCalendar({ defaultDays = 14 }: { defaultDays?: DaysOptio
           )}
         </>
       )}
-    </div>
-  )
-}
-
-function StageDots({ values }: { values: (number | null)[] }) {
-  return (
-    <div style={{ display: 'flex', gap: '3px' }}>
-      {values.map((v, i) => (
-        <span
-          key={i}
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            width: '20px',
-            height: '20px',
-            fontSize: '10px',
-            fontWeight: 700,
-            fontFamily: 'var(--font-mono)',
-            background: v ? STAGE_BG_COLORS[v] : 'transparent',
-            color: v ? STAGE_BORDER_COLORS[v] : 'var(--text-muted)',
-            border: v ? `1px solid ${STAGE_BORDER_COLORS[v]}` : '1px dashed var(--border-base)',
-            borderRadius: '4px',
-          }}
-          title={v ? `Stage ${v}` : '不明'}
-        >
-          {v ?? '-'}
-        </span>
-      ))}
     </div>
   )
 }
