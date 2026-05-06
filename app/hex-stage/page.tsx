@@ -5,6 +5,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import HexMap from '@/components/hex/HexMap'
+import { STAGE_BG_COLORS, STAGE_BORDER_COLORS, STAGE_LABELS } from '@/lib/hex-stage'
 
 interface Stock {
   code: string
@@ -43,14 +44,15 @@ const TIMEFRAMES: { v: Timeframe; label: string }[] = [
   { v: 'monthly', label: '月足' },
 ]
 
-const STAGE_LEGEND: { stage: number; label: string; desc: string }[] = [
-  { stage: 1, label: '上昇初動',  desc: '底打ち反転、これから上昇に入る' },
-  { stage: 2, label: '上昇加速',  desc: '本格上昇トレンド、最も強い局面' },
-  { stage: 3, label: '上昇減速',  desc: '上昇継続だが勢いは鈍化' },
-  { stage: 4, label: '下落初動',  desc: '天井から反転、これから下落に入る' },
-  { stage: 5, label: '下落加速',  desc: '本格下落トレンド、最も弱い局面' },
-  { stage: 6, label: '下落減速',  desc: '下落継続だが勢いは鈍化' },
-]
+// HEX マップ本体と凡例で同じ色・同じラベルを使う（lib/hex-stage の正規版）
+const STAGE_DESCRIPTIONS: Record<number, string> = {
+  1: '4本のSMAが上向きで並ぶ。最も強い上昇トレンド',
+  2: 'トレンドはまだ生きているが踊り場で横ばい',
+  3: '短期SMAが先に下向き始める。弱気入りの予兆',
+  4: '4本とも下向き。最も弱い下落トレンド',
+  5: '下落は続くが短期SMAに反発の兆し',
+  6: '短期SMAが先に上向き始める。強気移行の予兆',
+}
 
 export default function HexStagePage() {
   const [data, setData] = useState<Stock[]>([])
@@ -136,52 +138,58 @@ export default function HexStagePage() {
     })
   }, [data, selectedCategory, selectedSubCategory])
 
+  const hasFilter = selectedCategory || selectedSubCategory
+
   return (
     <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-      {/* ヘッダー */}
-      <div style={{
-        borderBottom: '1px solid var(--border-subtle)',
-        paddingBottom: '12px',
-        display: 'flex',
-        alignItems: 'flex-end',
-        justifyContent: 'space-between',
-        gap: '16px',
-        flexWrap: 'wrap',
-      }}>
-        <div>
-          <h1 style={{ fontFamily: 'var(--font-display)', fontSize: '16px', fontWeight: 700 }}>
+      {/* ── 1. タイトル + サマリ ─────────────────────────── */}
+      <header style={{ borderBottom: '1px solid var(--border-subtle)', paddingBottom: '10px' }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
+          <h1 style={{ fontFamily: 'var(--font-display)', fontSize: '16px', fontWeight: 700, margin: 0 }}>
             🔷 トレンドステージマップ (HEX)
           </h1>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', marginTop: '4px', fontSize: '11px', color: 'var(--text-muted)' }}>
-            <span>
-              <span style={{ color: 'var(--accent-primary)', fontWeight: 600 }}>{filteredData.length}</span>
-              <span> 銘柄</span>
-              {selectedCategory && <span> / {selectedCategory}</span>}
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px', fontSize: '11px', color: 'var(--text-muted)', flexWrap: 'wrap' }}>
+            <span style={{ color: 'var(--accent-primary)', fontWeight: 700, fontSize: '14px', fontFamily: 'var(--font-mono)' }}>
+              {filteredData.length}
             </span>
-            {availableDates.length > 0 && (
-              <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontFamily: 'var(--font-mono)' }}>
-                <span style={{ color: 'var(--accent-primary)' }}>📅</span>
-                <select
-                  value={selectedDate ?? ''}
-                  onChange={(e) => setSelectedDate(e.target.value || null)}
-                  style={dateSelectStyle}
-                >
-                  <option value="">最新（{availableDates[0]?.date ?? '---'}）</option>
-                  {availableDates.map((d) => (
-                    <option key={d.date} value={d.date}>{d.date}（{d.tickers}銘柄）</option>
-                  ))}
-                </select>
-              </label>
-            )}
-            {date && !selectedDate && (
-              <span style={{ fontFamily: 'var(--font-mono)' }}>表示中: {date}</span>
-            )}
-            {cached && <span style={{ color: 'var(--accent-primary)' }}>（DB）</span>}
+            <span>銘柄</span>
+            {hasFilter && <span style={{ color: 'var(--text-secondary)' }}>(全{data.length}中)</span>}
+            <span style={{ color: 'var(--border-base)' }}>·</span>
+            <span style={{ fontFamily: 'var(--font-mono)' }}>{date ?? '---'}</span>
+            {cached && <span style={{ color: 'var(--text-muted)' }}>(DB)</span>}
           </div>
         </div>
+      </header>
 
-        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-          {/* 時間軸 */}
+      {/* ── 2. フィルタバー（1行に統合、レスポンシブで折返し） ─── */}
+      <div style={{
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: '8px',
+        alignItems: 'center',
+        padding: '10px 12px',
+        background: 'var(--bg-elevated)',
+        border: '1px solid var(--border-subtle)',
+        borderRadius: 'var(--radius-md)',
+      }}>
+        {/* 日付 */}
+        {availableDates.length > 0 && (
+          <FilterField label="📅 日付">
+            <select
+              value={selectedDate ?? ''}
+              onChange={(e) => setSelectedDate(e.target.value || null)}
+              style={selectInputStyle}
+            >
+              <option value="">最新（{availableDates[0]?.date ?? '---'}）</option>
+              {availableDates.map((d) => (
+                <option key={d.date} value={d.date}>{d.date}（{d.tickers}）</option>
+              ))}
+            </select>
+          </FilterField>
+        )}
+
+        {/* 時間軸 */}
+        <FilterField label="時間軸">
           <div style={segmentBoxStyle}>
             {TIMEFRAMES.map((tf) => (
               <button
@@ -193,65 +201,58 @@ export default function HexStagePage() {
               </button>
             ))}
           </div>
-        </div>
+        </FilterField>
+
+        {/* 業種大分類 */}
+        <FilterField label="業種大分類">
+          <select
+            value={selectedCategory}
+            onChange={(e) => {
+              setSelectedCategory(e.target.value)
+              setSelectedSubCategory('')
+            }}
+            style={selectInputStyle}
+          >
+            <option value="">全て（{data.length}）</option>
+            {largeOptions.map(([cat, n]) => (
+              <option key={cat} value={cat}>{cat}（{n}）</option>
+            ))}
+          </select>
+        </FilterField>
+
+        {/* 業種細分類 */}
+        <FilterField label="業種細分類">
+          <select
+            value={selectedSubCategory}
+            onChange={(e) => setSelectedSubCategory(e.target.value)}
+            disabled={!selectedCategory || smallOptions.length === 0}
+            style={{ ...selectInputStyle, opacity: !selectedCategory ? 0.5 : 1 }}
+          >
+            <option value="">全て{selectedCategory ? `（${categoryStats.large[selectedCategory] ?? 0}）` : ''}</option>
+            {smallOptions.map(([cat, n]) => (
+              <option key={cat} value={cat}>{cat}（{n}）</option>
+            ))}
+          </select>
+        </FilterField>
+
+        {hasFilter && (
+          <button
+            onClick={() => { setSelectedCategory(''); setSelectedSubCategory('') }}
+            style={clearBtnStyle}
+            title="業種フィルタをクリア"
+          >
+            × クリア
+          </button>
+        )}
       </div>
 
-      {/* セクター・ドロップダウン2段（大分類 → 小分類） */}
-      {largeOptions.length > 0 && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
-          <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: 'var(--text-muted)' }}>
-            業種大分類
-            <select
-              value={selectedCategory}
-              onChange={(e) => {
-                setSelectedCategory(e.target.value)
-                setSelectedSubCategory('') // 大分類が変わったら小分類はリセット
-              }}
-              style={selectStyleNew}
-            >
-              <option value="">全て（{data.length}）</option>
-              {largeOptions.map(([cat, n]) => (
-                <option key={cat} value={cat}>{cat}（{n}）</option>
-              ))}
-            </select>
-          </label>
-
-          <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: 'var(--text-muted)' }}>
-            業種細分類
-            <select
-              value={selectedSubCategory}
-              onChange={(e) => setSelectedSubCategory(e.target.value)}
-              disabled={!selectedCategory || smallOptions.length === 0}
-              style={{ ...selectStyleNew, opacity: !selectedCategory ? 0.5 : 1 }}
-            >
-              <option value="">全て{selectedCategory ? `（${categoryStats.large[selectedCategory] ?? 0}）` : ''}</option>
-              {smallOptions.map(([cat, n]) => (
-                <option key={cat} value={cat}>{cat}（{n}）</option>
-              ))}
-            </select>
-          </label>
-
-          {(selectedCategory || selectedSubCategory) && (
-            <button
-              onClick={() => { setSelectedCategory(''); setSelectedSubCategory('') }}
-              style={{
-                padding: '3px 10px',
-                fontSize: '11px',
-                background: 'var(--bg-elevated)',
-                border: '1px solid var(--border-base)',
-                borderRadius: 'var(--radius-sm)',
-                cursor: 'pointer',
-                color: 'var(--text-muted)',
-              }}
-            >
-              × クリア
-            </button>
-          )}
-        </div>
-      )}
-
-      {/* ステージ凡例（折りたたみ可） */}
-      <div className="card" style={{ overflow: 'hidden' }}>
+      {/* ── 3. ステージ凡例（常時インライン+折りたたみで詳細） ─── */}
+      <div style={{
+        background: 'var(--bg-elevated)',
+        border: '1px solid var(--border-subtle)',
+        borderRadius: 'var(--radius-md)',
+        overflow: 'hidden',
+      }}>
         <button
           onClick={() => setLegendOpen((o) => !o)}
           style={{
@@ -262,48 +263,64 @@ export default function HexStagePage() {
             cursor: 'pointer',
             display: 'flex',
             alignItems: 'center',
-            justifyContent: 'space-between',
+            gap: '12px',
             color: 'var(--text-secondary)',
             fontSize: '11px',
+            flexWrap: 'wrap',
+            textAlign: 'left',
           }}
         >
-          <span>📖 ステージ凡例（1〜6）</span>
-          <span style={{ color: 'var(--text-muted)' }}>{legendOpen ? '▲' : '▼'}</span>
+          <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>ステージ凡例</span>
+          <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+            {[1, 2, 3, 4, 5, 6].map((s) => (
+              <span key={s} style={legendChipStyle(s)} title={STAGE_LABELS[s]}>
+                <span style={{ fontWeight: 700 }}>{s}</span>
+                <span>{STAGE_LABELS[s]}</span>
+              </span>
+            ))}
+          </div>
+          <span style={{ marginLeft: 'auto', color: 'var(--text-muted)', fontSize: '10px' }}>
+            {legendOpen ? '▲ 閉じる' : '▼ 詳細を見る'}
+          </span>
         </button>
         {legendOpen && (
           <div style={{
             display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
-            gap: '6px',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
+            gap: '8px',
             padding: '0 12px 12px',
             fontSize: '11px',
+            borderTop: '1px solid var(--border-subtle)',
+            paddingTop: '10px',
           }}>
-            {STAGE_LEGEND.map((s) => (
-              <div key={s.stage} style={{ display: 'flex', gap: '8px', alignItems: 'flex-start' }}>
+            {[1, 2, 3, 4, 5, 6].map((s) => (
+              <div key={s} style={{ display: 'flex', gap: '8px', alignItems: 'flex-start' }}>
                 <span style={{
                   flexShrink: 0,
-                  width: '22px',
-                  height: '22px',
-                  borderRadius: '50%',
-                  background: stageColor(s.stage),
-                  color: '#fff',
+                  width: '24px',
+                  height: '24px',
+                  borderRadius: '6px',
+                  background: STAGE_BG_COLORS[s],
+                  color: STAGE_BORDER_COLORS[s],
+                  border: `1.5px solid ${STAGE_BORDER_COLORS[s]}`,
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
                   fontWeight: 700,
                   fontFamily: 'var(--font-mono)',
-                }}>{s.stage}</span>
-                <span>
-                  <strong style={{ color: 'var(--text-primary)' }}>{s.label}</strong>
-                  <span style={{ color: 'var(--text-muted)', marginLeft: '6px' }}>{s.desc}</span>
-                </span>
+                  fontSize: '12px',
+                }}>{s}</span>
+                <div style={{ lineHeight: 1.4 }}>
+                  <strong style={{ color: 'var(--text-primary)' }}>{STAGE_LABELS[s]}</strong>
+                  <div style={{ color: 'var(--text-muted)', marginTop: '2px' }}>{STAGE_DESCRIPTIONS[s]}</div>
+                </div>
               </div>
             ))}
           </div>
         )}
       </div>
 
-      {/* 状態表示 */}
+      {/* ── 4. 状態表示 ────────────────────────────────── */}
       {error && (
         <div className="card" style={{ padding: '12px', borderLeft: '3px solid var(--price-down)' }}>
           <p style={{ fontSize: '12px', color: 'var(--price-down)', margin: 0 }}>エラー: {error}</p>
@@ -322,8 +339,17 @@ export default function HexStagePage() {
         </div>
       )}
 
+      {/* ── 5. HEX マップ本体 ─────────────────────────── */}
       {!loading && !error && filteredData.length > 0 && (
-        <div className="card" style={{ padding: '12px', background: '#fff' }}>
+        <div style={{
+          background: '#fff',
+          borderRadius: 'var(--radius-md)',
+          padding: '16px',
+          boxShadow: '0 1px 3px rgba(0,0,0,0.1), 0 1px 2px rgba(0,0,0,0.06)',
+          border: '1px solid var(--border-subtle)',
+          overflowX: 'auto',
+          minWidth: 0,
+        }}>
           <HexMap data={filteredData} timeframe={timeframe} />
         </div>
       )}
@@ -331,27 +357,35 @@ export default function HexStagePage() {
   )
 }
 
-function stageColor(stage: number): string {
-  switch (stage) {
-    case 1: return '#10b981' // 緑（初動）
-    case 2: return '#16a34a' // 濃緑（加速）
-    case 3: return '#facc15' // 黄（減速）
-    case 4: return '#f97316' // 橙（下落初動）
-    case 5: return '#ef4444' // 赤（下落加速）
-    case 6: return '#a855f7' // 紫（下落減速）
-    default: return '#6b7280'
-  }
+// ── サブコンポーネント / スタイル ───────────────────────
+
+function FilterField({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <label style={{
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: '6px',
+      fontSize: '11px',
+      color: 'var(--text-muted)',
+      whiteSpace: 'nowrap',
+    }}>
+      <span>{label}</span>
+      {children}
+    </label>
+  )
 }
 
-const dateSelectStyle: React.CSSProperties = {
-  padding: '3px 6px',
-  fontSize: '11px',
+const selectInputStyle: React.CSSProperties = {
+  padding: '5px 8px',
+  fontSize: '12px',
   fontFamily: 'var(--font-mono)',
-  background: 'var(--bg-elevated)',
-  color: 'var(--accent-primary)',
+  background: 'var(--bg-surface)',
+  color: 'var(--text-primary)',
   border: '1px solid var(--border-base)',
   borderRadius: 'var(--radius-sm)',
   cursor: 'pointer',
+  minWidth: '140px',
+  maxWidth: '240px',
 }
 
 const segmentBoxStyle: React.CSSProperties = {
@@ -359,38 +393,43 @@ const segmentBoxStyle: React.CSSProperties = {
   border: '1px solid var(--border-base)',
   borderRadius: 'var(--radius-sm)',
   overflow: 'hidden',
+  background: 'var(--bg-surface)',
 }
 
 const segmentBtnStyle = (active: boolean): React.CSSProperties => ({
-  padding: '6px 14px',
+  padding: '5px 12px',
   fontSize: '12px',
   fontFamily: 'var(--font-mono)',
-  background: active ? 'var(--accent-primary)' : 'var(--bg-surface)',
+  background: active ? 'var(--accent-primary)' : 'transparent',
   color: active ? '#fff' : 'var(--text-secondary)',
   border: 'none',
   cursor: 'pointer',
+  fontWeight: active ? 600 : 400,
 })
 
-const selectStyleNew: React.CSSProperties = {
-  padding: '5px 8px',
-  fontSize: '12px',
-  fontFamily: 'var(--font-mono)',
-  background: 'var(--bg-elevated)',
-  color: 'var(--text-primary)',
+const clearBtnStyle: React.CSSProperties = {
+  padding: '5px 10px',
+  fontSize: '11px',
+  background: 'transparent',
   border: '1px solid var(--border-base)',
   borderRadius: 'var(--radius-sm)',
   cursor: 'pointer',
-  minWidth: '160px',
+  color: 'var(--text-muted)',
+  fontFamily: 'var(--font-mono)',
 }
 
-const chipStyle = (active: boolean): React.CSSProperties => ({
-  padding: '4px 10px',
-  fontSize: '11px',
-  fontFamily: 'var(--font-mono)',
-  background: active ? 'var(--accent-primary)' : 'var(--bg-elevated)',
-  color: active ? '#fff' : 'var(--text-secondary)',
-  border: `1px solid ${active ? 'var(--accent-primary)' : 'var(--border-base)'}`,
-  borderRadius: '14px',
-  cursor: 'pointer',
-  whiteSpace: 'nowrap',
-})
+function legendChipStyle(stage: number): React.CSSProperties {
+  return {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '5px',
+    padding: '2px 8px',
+    fontSize: '10px',
+    fontFamily: 'var(--font-mono)',
+    background: STAGE_BG_COLORS[stage],
+    color: STAGE_BORDER_COLORS[stage],
+    border: `1px solid ${STAGE_BORDER_COLORS[stage]}`,
+    borderRadius: '10px',
+    whiteSpace: 'nowrap',
+  }
+}
