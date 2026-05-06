@@ -473,7 +473,7 @@ export default function ScreenerPage() {
           </button>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '6px' }}>
           {AXES.map((ax) => (
             <AxisCard
               key={ax.key}
@@ -782,40 +782,20 @@ function AxisCard({
   onToggle: (stage: number) => void
   onClear: () => void
 }) {
-  const sortedSelected = [...selected].sort()
   return (
-    <div className="card" style={{ padding: '12px', opacity: disabled ? 0.5 : 1 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}>
+    <div className="card" style={{ padding: '6px 8px', opacity: disabled ? 0.5 : 1, display: 'flex', alignItems: 'center', gap: '8px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: '70px' }}>
         <span style={{
-          width: '10px',
-          height: '10px',
+          width: '8px',
+          height: '8px',
           borderRadius: '50%',
           background: axis.color,
           flexShrink: 0,
         }} />
-        <span style={{ fontSize: '13px', fontWeight: 600 }}>{axis.label}</span>
-        {selected.length > 0 && (
-          <button
-            onClick={onClear}
-            disabled={disabled}
-            style={{
-              marginLeft: 'auto',
-              padding: '2px 6px',
-              fontSize: '10px',
-              background: 'transparent',
-              border: '1px solid var(--border-base)',
-              borderRadius: 'var(--radius-sm)',
-              cursor: disabled ? 'not-allowed' : 'pointer',
-              color: 'var(--text-muted)',
-            }}
-            title="この系統の選択をクリア"
-          >
-            ×
-          </button>
-        )}
+        <span style={{ fontSize: '12px', fontWeight: 600, whiteSpace: 'nowrap' }}>{axis.label}</span>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px' }}>
+      <div style={{ display: 'flex', gap: '4px', flex: 1 }}>
         {[1, 2, 3, 4, 5, 6].map((s) => {
           const active = selected.includes(s)
           return (
@@ -824,8 +804,9 @@ function AxisCard({
               disabled={disabled}
               onClick={() => onToggle(s)}
               style={{
-                padding: '8px 0',
-                fontSize: '14px',
+                flex: 1,
+                padding: '4px 0',
+                fontSize: '12px',
                 fontWeight: 700,
                 fontFamily: 'var(--font-mono)',
                 background: active ? axis.color : 'var(--bg-elevated)',
@@ -833,7 +814,6 @@ function AxisCard({
                 border: `1px solid ${active ? axis.color : 'var(--border-base)'}`,
                 borderRadius: 'var(--radius-sm)',
                 cursor: disabled ? 'not-allowed' : 'pointer',
-                boxShadow: active ? `0 2px 8px ${axis.color}55` : 'none',
               }}
             >
               {s}
@@ -842,30 +822,24 @@ function AxisCard({
         })}
       </div>
 
-      <div style={{ marginTop: '8px', fontSize: '10px', color: 'var(--text-muted)', display: 'flex', flexWrap: 'wrap', gap: '4px', alignItems: 'center' }}>
-        <span>選択中:</span>
-        {sortedSelected.length > 0 ? (
-          sortedSelected.map((s) => (
-            <span
-              key={s}
-              style={{
-                display: 'inline-block',
-                padding: '2px 8px',
-                background: axis.color,
-                color: '#fff',
-                borderRadius: '10px',
-                fontFamily: 'var(--font-mono)',
-                fontWeight: 600,
-                fontSize: '10px',
-              }}
-            >
-              Stage {s}
-            </span>
-          ))
-        ) : (
-          <span style={{ color: 'var(--text-muted)' }}>なし</span>
-        )}
-      </div>
+      {selected.length > 0 && (
+        <button
+          onClick={onClear}
+          disabled={disabled}
+          style={{
+            padding: '2px 6px',
+            fontSize: '10px',
+            background: 'transparent',
+            border: '1px solid var(--border-base)',
+            borderRadius: 'var(--radius-sm)',
+            cursor: disabled ? 'not-allowed' : 'pointer',
+            color: 'var(--text-muted)',
+          }}
+          title="この系統の選択をクリア"
+        >
+          ×
+        </button>
+      )}
     </div>
   )
 }
