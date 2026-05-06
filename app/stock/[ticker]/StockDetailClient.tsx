@@ -24,6 +24,7 @@ interface SectorMasterRow {
   sector_small?: string | null
   sector33?: string | null
   market_segment?: string | null
+  margin_type?: string | null
 }
 
 export function StockDetailClient({ ticker }: StockDetailClientProps) {
@@ -66,6 +67,7 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
   const displaySectorSmall   = smaster?.sector_small   ?? hardcoded?.sectorSmall
   const displaySector33      = smaster?.sector33       ?? null
   const displayMarketSegment = smaster?.market_segment ?? hardcoded?.marketSegment
+  const displayMarginType    = smaster?.margin_type    ?? hardcoded?.marginType
 
   const displayCode = ticker.replace('.T', '')
   const name = smaster?.name ?? hardcoded?.name ?? quote?.name ?? '---'
@@ -102,11 +104,11 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
         </span>
 
         <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+          {displayMarginType && <Pill label={displayMarginType} />}
           {displayMarketSegment && <Pill label={displayMarketSegment} accent />}
           {displaySector33 && <Pill label={displaySector33} />}
           {displaySectorLarge && <Pill label={displaySectorLarge} />}
           {displaySectorSmall && <Pill label={displaySectorSmall} />}
-          {hardcoded?.marginType && <Pill label={hardcoded.marginType} />}
         </div>
 
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '12px' }}>

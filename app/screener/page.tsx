@@ -87,6 +87,7 @@ interface StockRow {
 
 type SortKey =
   | 'ticker'
+  | 'marginType'
   | 'marketSegment'
   | 'sector33'
   | 'sectorLarge'
@@ -594,12 +595,13 @@ export default function ScreenerPage() {
             </div>
           ) : (
             <div style={{ overflowX: 'auto' }}>
-              <table style={{ minWidth: '2900px', borderCollapse: 'collapse', fontSize: '12px' }}>
+              <table style={{ minWidth: '3000px', borderCollapse: 'collapse', fontSize: '12px' }}>
                 <thead>
                   <tr style={{ background: 'var(--bg-elevated)', borderBottom: '1px solid var(--border-dim)' }}>
                     <th style={th}></th>
                     <SortableTh label="コード"     sortKey="ticker"              current={sort} onClick={toggleSort} />
                     <th style={th}>TV形式</th>
+                    <SortableTh label="貸借/信用"  sortKey="marginType"          current={sort} onClick={toggleSort} />
                     <SortableTh label="市場区分"   sortKey="marketSegment"       current={sort} onClick={toggleSort} />
                     <SortableTh label="33業種区分" sortKey="sector33"            current={sort} onClick={toggleSort} />
                     <SortableTh label="業種大分類" sortKey="sectorLarge"         current={sort} onClick={toggleSort} />
@@ -659,6 +661,20 @@ export default function ScreenerPage() {
                           >
                             {copied ? '✓ コピー済み' : tv}
                           </button>
+                        </td>
+                        <td style={td}>
+                          {r.marginType ? (
+                            <span style={{
+                              display: 'inline-block',
+                              padding: '1px 6px',
+                              fontSize: '10px',
+                              border: `1px solid ${r.marginType === '貸借' ? 'var(--accent-primary)' : 'var(--text-muted)'}`,
+                              color: r.marginType === '貸借' ? 'var(--accent-primary)' : 'var(--text-muted)',
+                              borderRadius: '2px',
+                            }}>
+                              {r.marginType}
+                            </span>
+                          ) : '---'}
                         </td>
                         <td style={td}>{r.marketSegment || '---'}</td>
                         <td style={td}>{r.sector33 || '---'}</td>

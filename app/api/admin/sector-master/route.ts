@@ -27,6 +27,8 @@ const COL_ALIAS: Record<string, string[]> = {
   sectorLarge:   ['17業種区分', '大分類', '業種大分類', 'sector_large'],
   // ユーザ CSV の業種小分類（業種細分類 / 中分類 / 小分類 等）
   sectorSmall:   ['業種小分類', '業種細分類', '中分類', '小分類', 'sector_small'],
+  // 貸借/信用 区分（JPX 制度信用・貸借銘柄一覧 や ユーザ CSV）
+  marginType:    ['貸借信用区分', '貸借区分', '信用区分', '信用銘柄区分', '貸借融資区分', '貸借'],
 }
 
 function findColumnIndex(header: unknown[], aliases: string[]): number {
@@ -75,8 +77,20 @@ interface ImportSummary {
     sector33: string | null
     sectorLarge: string | null
     sectorSmall: string | null
+    marginType: string | null
   }
   errors: string[]
+}
+
+/** 「貸借融資銘柄」「制度信用銘柄」のような表記を「貸借」「信用」に正規化 */
+function normalizeMarginType(raw: string | null | undefined): string | null {
+  if (!raw) return null
+  const s = String(raw).trim()
+  if (!s) return null
+  if (s.includes('貸借')) return '貸借'
+  if (s.includes('信用')) return '信用'
+  if (/^(貸借|信用)$/.test(s)) return s
+  return null
 }
 
 async function importWorkbook(buf: ArrayBuffer, fileName: string): Promise<ImportSummary> {
@@ -107,6 +121,7 @@ async function importWorkbook(buf: ArrayBuffer, fileName: string): Promise<Impor
   const sector33Idx      = findColumnIndex(header, COL_ALIAS.sector33)
   const sectorLargeIdx   = findColumnIndex(header, COL_ALIAS.sectorLarge)
   const sectorSmallIdx   = findColumnIndex(header, COL_ALIAS.sectorSmall)
+  const marginTypeIdx    = findColumnIndex(header, COL_ALIAS.marginType)
 
   const summary: ImportSummary = {
     fileName,
@@ -120,6 +135,7 @@ async function importWorkbook(buf: ArrayBuffer, fileName: string): Promise<Impor
       sector33:      sector33Idx      >= 0 ? String(header[sector33Idx])      : null,
       sectorLarge:   sectorLargeIdx   >= 0 ? String(header[sectorLargeIdx])   : null,
       sectorSmall:   sectorSmallIdx   >= 0 ? String(header[sectorSmallIdx])   : null,
+      marginType:    marginTypeIdx    >= 0 ? String(header[marginTypeIdx])    : null,
     },
     errors: [],
   }
@@ -140,26 +156,28 @@ async function importWorkbook(buf: ArrayBuffer, fileName: string): Promise<Impor
     const sector33       = sector33Idx      >= 0 ? (String(r[sector33Idx]      ?? '').trim() || null) : null
     const sectorSmall    = sectorSmallIdx   >= 0 ? (String(r[sectorSmallIdx]   ?? '').trim() || null) : null
     const marketSegment  = marketSegmentIdx >= 0 ? normalizeMarketSegment(String(r[marketSegmentIdx] ?? '')) : null
+    const marginType     = marginTypeIdx    >= 0 ? normalizeMarginType(String(r[marginTypeIdx] ?? '')) : null
 
     // 何も区分情報が無い行はスキップ（合計行や見出し行など）
-    if (!sectorLarge && !sector33 && !sectorSmall && !marketSegment) {
+    if (!sectorLarge && !sector33 && !sectorSmall && !marketSegment && !marginType) {
       summary.skipped++
       continue
     }
 
     // 各カラムは独立して保存。新規アップロードで欠けている値は既存値を残す（COALESCE）。
     inserts.push({
-      sql: `INSERT INTO sector_master (ticker, name, sector_large, sector_small, sector33, market_segment, updated_at, source_file)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      sql: `INSERT INTO sector_master (ticker, name, sector_large, sector_small, sector33, market_segment, margin_type, updated_at, source_file)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(ticker) DO UPDATE SET
               name = COALESCE(excluded.name, sector_master.name),
               sector_large = COALESCE(excluded.sector_large, sector_master.sector_large),
               sector_small = COALESCE(excluded.sector_small, sector_master.sector_small),
               sector33 = COALESCE(excluded.sector33, sector_master.sector33),
               market_segment = COALESCE(excluded.market_segment, sector_master.market_segment),
+              margin_type = COALESCE(excluded.margin_type, sector_master.margin_type),
               updated_at = excluded.updated_at,
               source_file = excluded.source_file`,
-      args: [ticker, name, sectorLarge, sectorSmall, sector33, marketSegment, updatedAt, fileName],
+      args: [ticker, name, sectorLarge, sectorSmall, sector33, marketSegment, marginType, updatedAt, fileName],
     })
   }
 

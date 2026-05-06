@@ -154,6 +154,7 @@ interface SectorEntry {
   sectorSmall: string | null
   sector33: string | null
   marketSegment: string | null
+  marginType: string | null
 }
 
 async function loadSectorMap(): Promise<Map<string, SectorEntry>> {
@@ -163,8 +164,9 @@ async function loadSectorMap(): Promise<Map<string, SectorEntry>> {
     sector_small: string | null
     sector33: string | null
     market_segment: string | null
+    margin_type: string | null
   }>(
-    `SELECT ticker, sector_large, sector_small, sector33, market_segment FROM sector_master`,
+    `SELECT ticker, sector_large, sector_small, sector33, market_segment, margin_type FROM sector_master`,
   )
   const map = new Map<string, SectorEntry>()
   for (const r of rows) {
@@ -173,6 +175,7 @@ async function loadSectorMap(): Promise<Map<string, SectorEntry>> {
       sectorSmall: r.sector_small,
       sector33: r.sector33,
       marketSegment: r.market_segment,
+      marginType: r.margin_type,
     })
   }
   return map
@@ -194,7 +197,7 @@ function buildResultRow(s: SnapshotRow, sectorMap: Map<string, SectorEntry>): Sc
     name: s.name,
     market: 'JP',
     marketSegment,
-    marginType: master?.marginType,
+    marginType: fromDb?.marginType ?? master?.marginType,
     sectorLarge,
     sectorSmall,
     sector33,

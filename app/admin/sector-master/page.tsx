@@ -21,6 +21,7 @@ interface ImportSummary {
     sector33: string | null
     sectorLarge: string | null
     sectorSmall: string | null
+    marginType: string | null
   }
   errors: string[]
 }
@@ -193,6 +194,7 @@ export default function SectorMasterPage() {
             <span>コード列: <code>{summary.detectedColumns.code ?? '---'}</code></span>
             <span>銘柄名列: <code>{summary.detectedColumns.name ?? '---'}</code></span>
             <span>市場区分列: <code>{summary.detectedColumns.marketSegment ?? '---'}</code></span>
+            <span>貸借/信用列: <code>{summary.detectedColumns.marginType ?? '---'}</code></span>
             <span>33業種列: <code>{summary.detectedColumns.sector33 ?? '---'}</code></span>
             <span>業種大分類列: <code>{summary.detectedColumns.sectorLarge ?? '---'}</code></span>
             <span>業種小分類列: <code>{summary.detectedColumns.sectorSmall ?? '---'}</code></span>

@@ -24,7 +24,7 @@ export async function GET(
     let row: Record<string, unknown> | undefined
     for (const t of candidates) {
       row = await execGet(
-        `SELECT ticker, name, sector_large, sector_small, sector33, market_segment, updated_at
+        `SELECT ticker, name, sector_large, sector_small, sector33, market_segment, margin_type, updated_at
          FROM sector_master WHERE ticker = ?`,
         [t],
       )

@@ -132,6 +132,7 @@ const DEPRECATED_DROPS: string[] = [
 const ADD_COLUMN_IF_MISSING: string[] = [
   `ALTER TABLE sector_master ADD COLUMN market_segment TEXT`,
   `ALTER TABLE sector_master ADD COLUMN sector33 TEXT`,
+  `ALTER TABLE sector_master ADD COLUMN margin_type TEXT`,
 ]
 
 export async function ensureSchema(client: Client): Promise<void> {
