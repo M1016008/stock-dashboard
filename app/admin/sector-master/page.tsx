@@ -48,7 +48,10 @@ export default function SectorMasterPage() {
       fd.append('file', file)
       const res = await fetch('/api/admin/sector-master', { method: 'POST', body: fd })
       const json = await res.json()
-      if (!res.ok) throw new Error(json.error ?? json.message ?? 'failed')
+      if (!res.ok) {
+        const detail = json.message ? `${json.error ?? 'Import failed'}: ${json.message}` : (json.error ?? 'failed')
+        throw new Error(detail)
+      }
       setSummary(json.summary)
       loadStats()
     } catch (e) {
