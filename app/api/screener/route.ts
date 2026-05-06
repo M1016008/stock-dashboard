@@ -151,15 +151,25 @@ function snapshotToMaValues(s: SnapshotRow): MaValues {
 interface SectorEntry {
   sectorLarge: string | null
   sectorSmall: string | null
+  marketSegment: string | null
 }
 
 async function loadSectorMap(): Promise<Map<string, SectorEntry>> {
-  const rows = await execAll<{ ticker: string; sector_large: string | null; sector_small: string | null }>(
-    `SELECT ticker, sector_large, sector_small FROM sector_master`,
+  const rows = await execAll<{
+    ticker: string
+    sector_large: string | null
+    sector_small: string | null
+    market_segment: string | null
+  }>(
+    `SELECT ticker, sector_large, sector_small, market_segment FROM sector_master`,
   )
   const map = new Map<string, SectorEntry>()
   for (const r of rows) {
-    map.set(r.ticker, { sectorLarge: r.sector_large, sectorSmall: r.sector_small })
+    map.set(r.ticker, {
+      sectorLarge: r.sector_large,
+      sectorSmall: r.sector_small,
+      marketSegment: r.market_segment,
+    })
   }
   return map
 }
@@ -173,11 +183,12 @@ function buildResultRow(s: SnapshotRow, sectorMap: Map<string, SectorEntry>): Sc
   const sectorLarge = fromDb?.sectorLarge ?? master?.sectorLarge ?? 'その他'
   let sectorSmall = fromDb?.sectorSmall ?? master?.sectorSmall ?? null
   if (sectorLarge === 'その他' && !sectorSmall) sectorSmall = 'その他'
+  const marketSegment = fromDb?.marketSegment ?? master?.marketSegment ?? ''
   return {
     ticker: s.ticker,
     name: s.name,
     market: 'JP',
-    marketSegment: master?.marketSegment ?? '',
+    marketSegment,
     marginType: master?.marginType,
     sectorLarge,
     sectorSmall,

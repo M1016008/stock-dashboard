@@ -128,11 +128,26 @@ const DEPRECATED_DROPS: string[] = [
   `DROP TABLE IF EXISTS screener_snapshots`,
 ]
 
+/** 既存テーブルに後から追加するカラム。重複エラーは握りつぶす。 */
+const ADD_COLUMN_IF_MISSING: string[] = [
+  `ALTER TABLE sector_master ADD COLUMN market_segment TEXT`,
+  `ALTER TABLE sector_master ADD COLUMN sector33 TEXT`,
+]
+
 export async function ensureSchema(client: Client): Promise<void> {
   for (const sql of STATEMENTS) {
     await client.execute(sql)
   }
   for (const sql of DEPRECATED_DROPS) {
     try { await client.execute(sql) } catch { /* 無視 */ }
+  }
+  for (const sql of ADD_COLUMN_IF_MISSING) {
+    try { await client.execute(sql) } catch (e) {
+      const msg = (e as Error).message ?? ''
+      if (!/duplicate column name/i.test(msg)) {
+        // 致命的でないので警告のみ
+        console.warn('[migrate] ADD COLUMN warning:', msg)
+      }
+    }
   }
 }

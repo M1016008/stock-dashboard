@@ -86,6 +86,7 @@ interface StockRow {
 
 type SortKey =
   | 'ticker'
+  | 'marketSegment'
   | 'sectorLarge'
   | 'sectorSmall'
   | 'name'
@@ -591,12 +592,13 @@ export default function ScreenerPage() {
             </div>
           ) : (
             <div style={{ overflowX: 'auto' }}>
-              <table style={{ minWidth: '2600px', borderCollapse: 'collapse', fontSize: '12px' }}>
+              <table style={{ minWidth: '2750px', borderCollapse: 'collapse', fontSize: '12px' }}>
                 <thead>
                   <tr style={{ background: 'var(--bg-elevated)', borderBottom: '1px solid var(--border-dim)' }}>
                     <th style={th}></th>
                     <SortableTh label="コード"     sortKey="ticker"              current={sort} onClick={toggleSort} />
                     <th style={th}>TV形式</th>
+                    <SortableTh label="市場区分"   sortKey="marketSegment"       current={sort} onClick={toggleSort} />
                     <SortableTh label="業種大分類" sortKey="sectorLarge"         current={sort} onClick={toggleSort} />
                     <SortableTh label="業種細分類" sortKey="sectorSmall"         current={sort} onClick={toggleSort} />
                     <SortableTh label="銘柄名"     sortKey="name"                current={sort} onClick={toggleSort} />
@@ -655,6 +657,7 @@ export default function ScreenerPage() {
                             {copied ? '✓ コピー済み' : tv}
                           </button>
                         </td>
+                        <td style={td}>{r.marketSegment || '---'}</td>
                         <td style={td}>{r.sectorLarge || '---'}</td>
                         <td style={td}>{r.sectorSmall || '---'}</td>
                         <td style={td}>{r.name}</td>
