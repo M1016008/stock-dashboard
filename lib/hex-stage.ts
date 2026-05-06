@@ -197,10 +197,10 @@ export const STAGE_BORDER_COLORS: Record<number, string> = {
 }
 
 export const STAGE_LABELS: Record<number, string> = {
-  1: 'パーフェクト',
-  2: '調整',
-  3: '弱気移行',
-  4: 'リバース',
-  5: '反発兆し',
-  6: '強気移行',
+  1: '安定上昇期',
+  2: '上昇変化期①',
+  3: '下降変化期①',
+  4: '安定下降期',
+  5: '下降変化期②',
+  6: '上昇変化期②',
 }

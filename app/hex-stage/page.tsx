@@ -39,14 +39,15 @@ interface AvailableDate {
 }
 
 
-// HEX マップ本体と凡例で同じ色・同じラベルを使う（lib/hex-stage の正規版）
+// 6 段階のサイクル定義。1→2→3→4→5→6→1 の順で循環し、
+// 1/4 が「安定期」、2・3・5・6 が「変化期（転換点）」となる。
 const STAGE_DESCRIPTIONS: Record<number, string> = {
-  1: '4本のSMAが上向きで並ぶ。最も強い上昇トレンド',
-  2: 'トレンドはまだ生きているが踊り場で横ばい',
-  3: '短期SMAが先に下向き始める。弱気入りの予兆',
-  4: '4本とも下向き。最も弱い下落トレンド',
-  5: '下落は続くが短期SMAに反発の兆し',
-  6: '短期SMAが先に上向き始める。強気移行の予兆',
+  1: '上昇トレンドが安定して継続している局面（トレンド本体）',
+  2: '上昇相場の終盤を示唆。トレンドの勢いが鈍化し始める転換点',
+  3: '下降相場への入り口。トレンド転換の初動となる転換点',
+  4: '下降トレンドが安定して継続している局面（トレンド本体）',
+  5: '下降相場の終盤。下げ止まりの兆しが見え始める転換点',
+  6: '再び上昇相場へ移行する初動局面となる転換点',
 }
 
 export default function HexStagePage() {
@@ -267,14 +268,22 @@ export default function HexStagePage() {
         </button>
         {legendOpen && (
           <div style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
-            gap: '8px',
-            padding: '0 12px 12px',
+            padding: '10px 12px 12px',
             fontSize: '11px',
             borderTop: '1px solid var(--border-subtle)',
-            paddingTop: '10px',
           }}>
+            <p style={{ margin: '0 0 10px', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+              市場は 6 段階のサイクルで循環します:
+              <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-primary)', marginLeft: '6px' }}>
+                安定上昇(1) → 上昇終盤(2) → 下落入り(3) → 安定下降(4) → 下落終盤(5) → 上昇入り(6) → 1へ
+              </span>
+              。<strong>1 / 4</strong> がトレンド本体、<strong>2・3・5・6</strong> が転換点です。
+            </p>
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
+              gap: '8px',
+            }}>
             {[1, 2, 3, 4, 5, 6].map((s) => (
               <div key={s} style={{ display: 'flex', gap: '8px', alignItems: 'flex-start' }}>
                 <span style={{
@@ -298,6 +307,7 @@ export default function HexStagePage() {
                 </div>
               </div>
             ))}
+            </div>
           </div>
         )}
       </div>
