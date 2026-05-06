@@ -341,8 +341,9 @@ export default function ScreenerPage() {
               onChange={(e) => {
                 const v = e.target.value
                 setSelectedSectorSmall(v)
-                // 小分類を選んだら、大分類が空なら自動補完（互換性のある挙動）
-                if (v && !selectedSectorLarge) {
+                // 小分類を選んだら、対応する大分類も常に上書きする。
+                // 「全て」を選んだ場合は大分類はそのまま。
+                if (v) {
                   const owner = sectorOptions.smallMap[v]?.large
                   if (owner && owner !== '（未分類）') setSelectedSectorLarge(owner)
                 }
