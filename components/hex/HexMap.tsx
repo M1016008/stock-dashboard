@@ -83,11 +83,14 @@ const getAngleStyle = (angle: number | null | undefined): React.CSSProperties =>
   return { color: '#6b7280' }
 }
 
-interface CellSelection {
-  tf: Timeframe
-  b: number
-  a: number
-}
+type CellKey = string // "b-a"
+type Selections = Record<Timeframe, Set<CellKey>>
+
+const emptySelections = (): Selections => ({
+  daily: new Set(),
+  weekly: new Set(),
+  monthly: new Set(),
+})
 
 const MARKET_CAP_RANGES: { id: string; label: string }[] = [
   { id: 'all',      label: '全て' },
@@ -102,22 +105,34 @@ export default function HexMap({ data }: { data: Stock[]; timeframe?: Timeframe 
   const router = useRouter()
   const [copiedCode, setCopiedCode] = useState<string | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
-  const [selectedCell, setSelectedCell] = useState<CellSelection | null>(null)
+  const [selections, setSelections] = useState<Selections>(emptySelections)
   const [selectedMarketCapRange, setSelectedMarketCapRange] = useState<string>('all')
 
-  // 選択中セルに該当するティッカー集合。他のタイムフレームのマトリクスに渡して、
-  // クロスタイムフレームで「同じ銘柄群がどのセルに分布しているか」を可視化する。
-  const selectedTickers = useMemo<Set<string>>(() => {
-    if (!selectedCell) return new Set()
-    const aField = `${selectedCell.tf}_a_stage` as keyof Stock
-    const bField = `${selectedCell.tf}_b_stage` as keyof Stock
-    return new Set(
-      data
-        .filter((d) => d[aField] === selectedCell.a && d[bField] === selectedCell.b)
-        .map((d) => d.code),
-    )
-  }, [data, selectedCell])
+  // 選択数の合計（任意のセルが1つでも選ばれているか）
+  const totalSelectedCells = selections.daily.size + selections.weekly.size + selections.monthly.size
+  const hasSelection = totalSelectedCells > 0
 
+  // 各 TF の選択（OR 条件）に全て該当する銘柄集合を計算する。
+  // タイムフレーム間は AND（その TF に選択が無ければ無視）。
+  const filteredTickers = useMemo<Set<string>>(() => {
+    if (!hasSelection) return new Set(data.map((d) => d.code))
+    const tfs: Timeframe[] = ['daily', 'weekly', 'monthly']
+    const result = new Set<string>()
+    for (const d of data) {
+      let pass = true
+      for (const tf of tfs) {
+        const sel = selections[tf]
+        if (sel.size === 0) continue
+        const a = d[`${tf}_a_stage` as keyof Stock] as number | null | undefined
+        const b = d[`${tf}_b_stage` as keyof Stock] as number | null | undefined
+        if (a == null || b == null) { pass = false; break }
+        if (!sel.has(`${b}-${a}`)) { pass = false; break }
+      }
+      if (pass) result.add(d.code)
+    }
+    return result
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, selections, hasSelection])
   const filterByMarketCap = (stock: Stock) => {
     const val = stock.market_cap / 100000000
     switch (selectedMarketCapRange) {
@@ -130,30 +145,33 @@ export default function HexMap({ data }: { data: Stock[]; timeframe?: Timeframe 
     }
   }
 
-  // セル選択 + 時価総額 + 検索 すべてで絞り込み、時価総額降順でソート
+  // ステージ選択 + 時価総額 + 検索 すべてで絞り込み、時価総額降順でソート
   const visible = useMemo(() => {
     return data
       .filter((s) => {
-        if (selectedCell) {
-          const aField = `${selectedCell.tf}_a_stage` as keyof Stock
-          const bField = `${selectedCell.tf}_b_stage` as keyof Stock
-          if (s[aField] !== selectedCell.a) return false
-          if (s[bField] !== selectedCell.b) return false
-        }
+        if (hasSelection && !filteredTickers.has(s.code)) return false
         if (!filterByMarketCap(s)) return false
         if (searchTerm && !s.code.includes(searchTerm) && !s.name.includes(searchTerm)) return false
         return true
       })
       .sort((a, b) => b.market_cap - a.market_cap)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, selectedCell, selectedMarketCapRange, searchTerm])
+  }, [data, filteredTickers, hasSelection, selectedMarketCapRange, searchTerm])
 
-  const onCellClick = (tf: Timeframe, b: number, a: number, count: number) => {
+  const toggleCell = (tf: Timeframe, b: number, a: number, count: number) => {
     if (count === 0) return
-    setSelectedCell((cur) =>
-      cur && cur.tf === tf && cur.b === b && cur.a === a ? null : { tf, b, a }
-    )
+    const key = `${b}-${a}`
+    setSelections((cur) => {
+      const nextSet = new Set(cur[tf])
+      if (nextSet.has(key)) nextSet.delete(key)
+      else nextSet.add(key)
+      return { ...cur, [tf]: nextSet }
+    })
   }
+
+  const clearAllSelections = () => setSelections(emptySelections())
+  const clearTimeframeSelections = (tf: Timeframe) =>
+    setSelections((cur) => ({ ...cur, [tf]: new Set<CellKey>() }))
 
   return (
     <div className="flex flex-col gap-5 relative">
@@ -165,10 +183,11 @@ export default function HexMap({ data }: { data: Stock[]; timeframe?: Timeframe 
             data={data}
             timeframe={tf.key}
             label={tf.label}
-            selected={selectedCell?.tf === tf.key ? selectedCell : null}
-            selectedTickers={selectedTickers}
-            crossLink={!!selectedCell && selectedCell.tf !== tf.key}
-            onCellClick={(b, a, count) => onCellClick(tf.key, b, a, count)}
+            selectedCells={selections[tf.key]}
+            filteredTickers={filteredTickers}
+            anySelection={hasSelection}
+            onCellClick={(b, a, count) => toggleCell(tf.key, b, a, count)}
+            onClearTimeframe={() => clearTimeframeSelections(tf.key)}
           />
         ))}
       </div>
@@ -186,25 +205,36 @@ export default function HexMap({ data }: { data: Stock[]; timeframe?: Timeframe 
               className="w-full pl-9 pr-3 py-2 bg-white border border-gray-300 rounded-lg text-sm outline-none focus:border-indigo-500"
             />
           </div>
-          <span className="text-xs text-gray-500">
-            <strong className="text-indigo-600 text-base font-bold">{visible.length}</strong> 件
-            {selectedCell && (
+          <span className="text-xs text-gray-500 flex items-center flex-wrap gap-2">
+            <span>
+              <strong className="text-indigo-600 text-base font-bold">{visible.length}</strong> 件
+            </span>
+            {hasSelection && (
               <>
-                <span className="ml-2">
-                  / {TIMEFRAMES.find((t) => t.key === selectedCell.tf)?.label} B{selectedCell.b}-A{selectedCell.a}
-                </span>
+                <span>/ ステージ条件 {totalSelectedCells} セル選択中</span>
+                {(['daily', 'weekly', 'monthly'] as Timeframe[]).map((tf) => {
+                  const n = selections[tf].size
+                  if (n === 0) return null
+                  const label = TIMEFRAMES.find((t) => t.key === tf)?.label
+                  return (
+                    <span
+                      key={tf}
+                      className="px-1.5 py-0.5 text-[10px] bg-indigo-50 text-indigo-700 border border-indigo-200 rounded"
+                    >
+                      {label} {n}
+                    </span>
+                  )
+                })}
                 <button
-                  onClick={() => setSelectedCell(null)}
-                  className="ml-2 px-2 py-0.5 text-[10px] border border-gray-300 rounded hover:bg-gray-50"
+                  onClick={clearAllSelections}
+                  className="px-2 py-0.5 text-[10px] border border-gray-300 rounded hover:bg-gray-50"
                 >
-                  × 解除
+                  × 全クリア
                 </button>
               </>
             )}
             {selectedMarketCapRange !== 'all' && (
-              <span className="ml-2">
-                / {MARKET_CAP_RANGES.find((r) => r.id === selectedMarketCapRange)?.label}
-              </span>
+              <span>/ {MARKET_CAP_RANGES.find((r) => r.id === selectedMarketCapRange)?.label}</span>
             )}
           </span>
         </div>
@@ -346,18 +376,21 @@ export default function HexMap({ data }: { data: Stock[]; timeframe?: Timeframe 
  * セル内の数値はその (B, A) 組合せに該当する銘柄数。クリックで下のテーブルを絞り込む。
  * ────────────────────────────────────────────────────────────── */
 function StageMatrix({
-  data, timeframe, label, selected, selectedTickers, crossLink, onCellClick,
+  data, timeframe, label, selectedCells, filteredTickers, anySelection, onCellClick, onClearTimeframe,
 }: {
   data: Stock[]
   timeframe: Timeframe
   label: string
-  selected: CellSelection | null
-  selectedTickers: Set<string>
-  /** 他のタイムフレームでセルが選択されているとき true。クロスリンク表示モード。 */
-  crossLink: boolean
+  /** このタイムフレームで選択されているセルの "b-a" キー集合 */
+  selectedCells: Set<CellKey>
+  /** 全タイムフレーム条件を AND した結果のティッカー集合 */
+  filteredTickers: Set<string>
+  /** いずれかの TF にセル選択があるか */
+  anySelection: boolean
   onCellClick: (b: number, a: number, count: number) => void
+  onClearTimeframe: () => void
 }) {
-  // matrix[b][a] = { count: そのセルの全銘柄数, sel: 選択中銘柄のうちこのセルに入る数 }
+  // matrix[b][a] = { count: そのセルの全銘柄数, sel: フィルタ通過銘柄のうちこのセルに入る数 }
   const { matrix, total } = useMemo(() => {
     const m: { count: number; sel: number }[][] =
       Array.from({ length: 7 }, () => Array.from({ length: 7 }, () => ({ count: 0, sel: 0 })))
@@ -371,10 +404,10 @@ function StageMatrix({
       if (a < 1 || a > 6 || b < 1 || b > 6) continue
       m[b][a].count++
       t++
-      if (selectedTickers.has(d.code)) m[b][a].sel++
+      if (filteredTickers.has(d.code)) m[b][a].sel++
     }
     return { matrix: m, total: t }
-  }, [data, timeframe, selectedTickers])
+  }, [data, timeframe, filteredTickers])
 
   return (
     <section className="bg-white border border-gray-200 rounded-lg p-3">
@@ -382,9 +415,21 @@ function StageMatrix({
         <div className="flex items-baseline gap-2">
           <h3 className="text-base font-bold text-gray-900">{label}</h3>
           <span className="text-[11px] text-gray-500">B-Stage × A-Stage</span>
-          {crossLink && (
-            <span className="text-[10px] text-indigo-600 bg-indigo-50 border border-indigo-100 px-1.5 py-0.5 rounded">
-              連動表示中（数字: 該当銘柄 / 全銘柄）
+          {selectedCells.size > 0 && (
+            <span className="text-[10px] text-indigo-700 bg-indigo-50 border border-indigo-200 px-1.5 py-0.5 rounded inline-flex items-center gap-1">
+              {selectedCells.size} セル選択中
+              <button
+                onClick={onClearTimeframe}
+                className="text-indigo-500 hover:text-indigo-700"
+                title={`${label} の選択をクリア`}
+              >
+                ×
+              </button>
+            </span>
+          )}
+          {anySelection && selectedCells.size === 0 && (
+            <span className="text-[10px] text-gray-500 bg-gray-50 border border-gray-200 px-1.5 py-0.5 rounded">
+              連動表示中（該当 / 全件）
             </span>
           )}
         </div>
@@ -406,7 +451,7 @@ function StageMatrix({
       <div style={{ minWidth: '760px' }}>
 
       {/* A-Stage ヘッダ行 */}
-      <div className="grid gap-1 mb-1" style={{ gridTemplateColumns: '100px repeat(6, minmax(96px, 1fr))' }}>
+      <div className="grid gap-1 mb-1" style={{ gridTemplateColumns: '90px repeat(6, minmax(96px, 1fr))' }}>
         <div></div>
         {[1, 2, 3, 4, 5, 6].map((a) => (
           <div key={a} className="text-center text-[10px] font-mono whitespace-nowrap">
@@ -418,101 +463,98 @@ function StageMatrix({
 
       {/* B-Stage 行 */}
       <div className="flex flex-col gap-1">
-        {[1, 2, 3, 4, 5, 6].map((b) => {
-          const rowTotal = matrix[b].slice(1, 7).reduce((s, n) => s + n, 0)
-          return (
+        {[1, 2, 3, 4, 5, 6].map((b) => (
+          <div
+            key={b}
+            className="grid gap-1"
+            style={{
+              gridTemplateColumns: '90px repeat(6, minmax(96px, 1fr))',
+              background: STAGE_BG_COLORS[b],
+              border: `1.5px solid ${STAGE_BORDER_COLORS[b]}`,
+              borderRadius: '6px',
+              padding: '3px',
+            }}
+          >
+            {/* B-stage ラベル（左の "大きい長方形" の名札部分） */}
             <div
-              key={b}
-              className="grid gap-1"
-              style={{
-                gridTemplateColumns: '100px repeat(6, minmax(96px, 1fr))',
-                background: STAGE_BG_COLORS[b],
-                border: `1.5px solid ${STAGE_BORDER_COLORS[b]}`,
-                borderRadius: '6px',
-                padding: '4px',
-              }}
+              className="flex flex-col items-center justify-center text-xs font-mono leading-tight"
+              style={{ color: STAGE_BORDER_COLORS[b], padding: '4px 2px' }}
             >
-              {/* B-stage ラベル（左の "大きい長方形" の名札部分） */}
-              <div
-                className="flex flex-col items-center justify-center text-xs font-mono leading-tight"
-                style={{ color: STAGE_BORDER_COLORS[b], padding: '6px 4px' }}
-              >
-                <span className="font-bold text-base">B{b}</span>
-                <span className="text-[10px] text-gray-700 mt-0.5">{STAGE_LABELS[b]}</span>
-                <span className="text-[10px] text-gray-500 mt-0.5">{rowTotal} 銘柄</span>
-              </div>
-
-              {/* A1..A6 の細長いセル */}
-              {[1, 2, 3, 4, 5, 6].map((a) => {
-                const cell = matrix[b][a]
-                const count = cell.count
-                const sel = cell.sel
-                const isActive = !!selected && selected.b === b && selected.a === a
-                const empty = count === 0
-                // クロスリンク表示モード（他TFで選択中）の見せ方:
-                //   - sel > 0 の場合: 強調 (該当銘柄が分布)
-                //   - sel = 0 の場合: 薄く（候補外）
-                const isCross = crossLink && sel > 0
-                const isDimmed = crossLink && sel === 0 && !empty
-                const baseColor = STAGE_BORDER_COLORS[a]
-                let bg = '#fff'
-                let fg: string = baseColor
-                let borderColor: string = baseColor
-                let opacity = 1
-                if (empty) {
-                  bg = '#fafafa'; fg = '#d1d5db'; borderColor = '#e5e7eb'
-                } else if (isActive) {
-                  bg = baseColor; fg = '#fff'; borderColor = baseColor
-                } else if (isCross) {
-                  bg = STAGE_BG_COLORS[a]; fg = baseColor; borderColor = baseColor
-                } else if (isDimmed) {
-                  opacity = 0.35
-                }
-                const titleParts: string[] = [`B${b} × A${a}: ${count} 銘柄`]
-                if (crossLink && sel > 0) titleParts.push(`連動: ${sel} 銘柄`)
-                return (
-                  <button
-                    key={a}
-                    onClick={() => onCellClick(b, a, count)}
-                    disabled={empty}
-                    title={titleParts.join(' / ')}
-                    style={{
-                      background: bg,
-                      color: fg,
-                      border: `1px solid ${borderColor}`,
-                      borderRadius: '4px',
-                      padding: '8px 4px',
-                      fontFamily: 'var(--font-mono)',
-                      cursor: empty ? 'default' : 'pointer',
-                      transition: 'transform 0.1s, box-shadow 0.1s, opacity 0.15s',
-                      boxShadow: isActive
-                        ? `0 2px 8px ${baseColor}55`
-                        : isCross
-                          ? `inset 0 0 0 2px ${baseColor}`
-                          : 'none',
-                      opacity,
-                      display: 'flex',
-                      flexDirection: 'column',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: '2px',
-                      lineHeight: 1.1,
-                    }}
-                  >
-                    {crossLink ? (
-                      <>
-                        <span style={{ fontSize: '15px', fontWeight: 700 }}>{sel}</span>
-                        <span style={{ fontSize: '9px', opacity: 0.7 }}>/ {count}</span>
-                      </>
-                    ) : (
-                      <span style={{ fontSize: '15px', fontWeight: 700 }}>{count}</span>
-                    )}
-                  </button>
-                )
-              })}
+              <span className="font-bold text-base">B{b}</span>
+              <span className="text-[10px] text-gray-700 mt-0.5 text-center">{STAGE_LABELS[b]}</span>
             </div>
-          )
-        })}
+
+            {/* A1..A6 の細長いセル */}
+            {[1, 2, 3, 4, 5, 6].map((a) => {
+              const cell = matrix[b][a]
+              const count = cell.count
+              const sel = cell.sel
+              const key: CellKey = `${b}-${a}`
+              const isSelected = selectedCells.has(key)
+              const empty = count === 0
+              const baseColor = STAGE_BORDER_COLORS[a]
+
+              // 表示モード:
+              //  empty       : 灰色
+              //  isSelected  : 強調（baseColor で塗りつぶし、白文字）
+              //  anySelection: 連動モード — sel > 0 を強調、sel = 0 を薄く
+              //  通常        : セル色＋件数のみ
+              let bg = '#fff'
+              let fg: string = baseColor
+              let borderColor: string = baseColor
+              let opacity = 1
+              if (empty) {
+                bg = '#fafafa'; fg = '#d1d5db'; borderColor = '#e5e7eb'
+              } else if (isSelected) {
+                bg = baseColor; fg = '#fff'; borderColor = baseColor
+              } else if (anySelection && sel === 0) {
+                opacity = 0.3
+              } else if (anySelection && sel > 0) {
+                bg = STAGE_BG_COLORS[a]
+              }
+
+              const titleParts: string[] = [`B${b} × A${a}: ${count} 銘柄`]
+              if (anySelection) titleParts.push(`条件該当: ${sel} 銘柄`)
+
+              return (
+                <button
+                  key={a}
+                  onClick={() => onCellClick(b, a, count)}
+                  disabled={empty}
+                  title={titleParts.join(' / ')}
+                  style={{
+                    background: bg,
+                    color: fg,
+                    border: `1px solid ${borderColor}`,
+                    borderRadius: '4px',
+                    padding: '6px 4px',
+                    fontFamily: 'var(--font-mono)',
+                    cursor: empty ? 'default' : 'pointer',
+                    transition: 'box-shadow 0.1s, opacity 0.15s',
+                    boxShadow: isSelected ? `0 2px 8px ${baseColor}66, inset 0 0 0 2px ${baseColor}` : 'none',
+                    opacity,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '0px',
+                    lineHeight: 1.0,
+                    minHeight: '46px',
+                  }}
+                >
+                  {anySelection && !isSelected && !empty ? (
+                    <>
+                      <span style={{ fontSize: '20px', fontWeight: 800 }}>{sel}</span>
+                      <span style={{ fontSize: '10px', opacity: 0.65 }}>/ {count}</span>
+                    </>
+                  ) : (
+                    <span style={{ fontSize: '22px', fontWeight: 800 }}>{count}</span>
+                  )}
+                </button>
+              )
+            })}
+          </div>
+        ))}
       </div>
 
       </div>
