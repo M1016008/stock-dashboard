@@ -336,7 +336,7 @@ export default function ScreenerPage() {
           </label>
 
           <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: 'var(--text-muted)' }}>
-            業種細分類
+            33業種区分
             <select
               value={selectedSectorSmall}
               onChange={(e) => {
@@ -600,7 +600,7 @@ export default function ScreenerPage() {
                     <th style={th}>TV形式</th>
                     <SortableTh label="市場区分"   sortKey="marketSegment"       current={sort} onClick={toggleSort} />
                     <SortableTh label="業種大分類" sortKey="sectorLarge"         current={sort} onClick={toggleSort} />
-                    <SortableTh label="業種細分類" sortKey="sectorSmall"         current={sort} onClick={toggleSort} />
+                    <SortableTh label="33業種区分" sortKey="sectorSmall"         current={sort} onClick={toggleSort} />
                     <SortableTh label="銘柄名"     sortKey="name"                current={sort} onClick={toggleSort} />
                     <SortableTh label="株価"       sortKey="price"               current={sort} onClick={toggleSort} align="right" />
                     <SortableTh label="日%"        sortKey="changePercent"       current={sort} onClick={toggleSort} align="right" />

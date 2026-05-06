@@ -17,25 +17,40 @@ interface StockDetailClientProps {
   ticker: string
 }
 
+interface SectorMasterRow {
+  ticker: string
+  name?: string | null
+  sector_large?: string | null
+  sector_small?: string | null
+  sector33?: string | null
+  market_segment?: string | null
+}
+
 export function StockDetailClient({ ticker }: StockDetailClientProps) {
   const [quote, setQuote] = useState<StockQuote | null>(null)
   const [fundamentals, setFundamentals] = useState<Fundamentals | null>(null)
+  const [smaster, setSmaster] = useState<SectorMasterRow | null>(null)
   const [loading, setLoading] = useState(true)
 
-  const master = findTicker(ticker)
+  const hardcoded = findTicker(ticker)
 
   useEffect(() => {
     let cancelled = false
     async function fetchData() {
       setLoading(true)
       try {
-        const [quoteRes, fundamentalRes] = await Promise.all([
+        const [quoteRes, fundamentalRes, masterRes] = await Promise.all([
           fetch(`/api/quote/${encodeURIComponent(ticker)}`),
           fetch(`/api/fundamentals/${encodeURIComponent(ticker)}`),
+          fetch(`/api/sector-master/${encodeURIComponent(ticker)}`),
         ])
         if (cancelled) return
         if (quoteRes.ok) setQuote(await quoteRes.json())
         if (fundamentalRes.ok) setFundamentals(await fundamentalRes.json())
+        if (masterRes.ok) {
+          const j = await masterRes.json()
+          setSmaster(j.master ?? null)
+        }
       } catch (error) {
         console.error('Failed to fetch stock data:', error)
       } finally {
@@ -46,8 +61,13 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
     return () => { cancelled = true }
   }, [ticker])
 
+  // 表示用にマージ: sector_master(JPX) → ハードコードマスタ → quote.name の順
+  const displaySectorLarge   = smaster?.sector_large   ?? hardcoded?.sectorLarge
+  const displaySector33      = smaster?.sector33       ?? smaster?.sector_small ?? hardcoded?.sectorSmall
+  const displayMarketSegment = smaster?.market_segment ?? hardcoded?.marketSegment
+
   const displayCode = ticker.replace('.T', '')
-  const name = master?.name ?? quote?.name ?? '---'
+  const name = smaster?.name ?? hardcoded?.name ?? quote?.name ?? '---'
 
   return (
     <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -80,13 +100,12 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
           {name}
         </span>
 
-        {master && (
-          <div style={{ display: 'flex', gap: '6px' }}>
-            <Pill label={master.sectorLarge} />
-            <Pill label={master.marketSegment} />
-            {master.marginType && <Pill label={master.marginType} accent />}
-          </div>
-        )}
+        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+          {displayMarketSegment && <Pill label={displayMarketSegment} accent />}
+          {displaySectorLarge && <Pill label={displaySectorLarge} />}
+          {displaySector33 && <Pill label={displaySector33} />}
+          {hardcoded?.marginType && <Pill label={hardcoded.marginType} />}
+        </div>
 
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '12px' }}>
           {quote && (
