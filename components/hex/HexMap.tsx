@@ -206,12 +206,12 @@ export default function HexMap({ data }: { data: Stock[]; timeframe?: Timeframe 
             />
           </div>
           <span className="text-xs text-gray-500 flex items-center flex-wrap gap-2">
-            <span>
-              <strong className="text-indigo-600 text-base font-bold">{visible.length}</strong> 件
+            <span className="whitespace-nowrap">
+              <strong className="text-indigo-600 text-base font-bold">{visible.length.toLocaleString()}</strong> 件該当
             </span>
             {hasSelection && (
               <>
-                <span>/ ステージ条件 {totalSelectedCells} セル選択中</span>
+                <span className="text-gray-300">|</span>
                 {(['daily', 'weekly', 'monthly'] as Timeframe[]).map((tf) => {
                   const n = selections[tf].size
                   if (n === 0) return null
@@ -219,22 +219,25 @@ export default function HexMap({ data }: { data: Stock[]; timeframe?: Timeframe 
                   return (
                     <span
                       key={tf}
-                      className="px-1.5 py-0.5 text-[10px] bg-indigo-50 text-indigo-700 border border-indigo-200 rounded"
+                      className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-full whitespace-nowrap"
                     >
-                      {label} {n}
+                      {label} <strong>{n}</strong>
                     </span>
                   )
                 })}
                 <button
                   onClick={clearAllSelections}
-                  className="px-2 py-0.5 text-[10px] border border-gray-300 rounded hover:bg-gray-50"
+                  className="px-2 py-0.5 text-[10px] border border-gray-300 rounded-full hover:bg-gray-50"
                 >
                   × 全クリア
                 </button>
               </>
             )}
             {selectedMarketCapRange !== 'all' && (
-              <span>/ {MARKET_CAP_RANGES.find((r) => r.id === selectedMarketCapRange)?.label}</span>
+              <>
+                <span className="text-gray-300">|</span>
+                <span>{MARKET_CAP_RANGES.find((r) => r.id === selectedMarketCapRange)?.label}</span>
+              </>
             )}
           </span>
         </div>
@@ -411,36 +414,44 @@ function StageMatrix({
 
   return (
     <section className="bg-white border border-gray-200 rounded-lg p-3">
-      <header className="flex items-baseline justify-between mb-2 flex-wrap gap-2">
-        <div className="flex items-baseline gap-2">
-          <h3 className="text-base font-bold text-gray-900">{label}</h3>
-          <span className="text-[11px] text-gray-500">B-Stage × A-Stage</span>
-          {selectedCells.size > 0 && (
-            <span className="text-[10px] text-indigo-700 bg-indigo-50 border border-indigo-200 px-1.5 py-0.5 rounded inline-flex items-center gap-1">
+      <header className="flex items-center justify-between mb-3 flex-wrap gap-x-4 gap-y-2">
+        {/* 左: タイトル + 選択状態チップ */}
+        <div className="flex items-center gap-3 flex-wrap">
+          <div className="flex items-baseline gap-1.5">
+            <h3 className="text-base font-bold text-gray-900">{label}</h3>
+            <span className="text-[10px] text-gray-400 font-mono">B × A</span>
+          </div>
+          {selectedCells.size > 0 ? (
+            <span className="inline-flex items-center gap-1.5 text-[11px] text-indigo-700 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded-full">
+              <span
+                className="inline-block w-1.5 h-1.5 rounded-full bg-indigo-500"
+                aria-hidden
+              />
               {selectedCells.size} セル選択中
               <button
                 onClick={onClearTimeframe}
-                className="text-indigo-500 hover:text-indigo-700"
+                className="text-indigo-400 hover:text-indigo-700 -mr-0.5 px-1"
                 title={`${label} の選択をクリア`}
               >
                 ×
               </button>
             </span>
-          )}
-          {anySelection && selectedCells.size === 0 && (
-            <span className="text-[10px] text-gray-500 bg-gray-50 border border-gray-200 px-1.5 py-0.5 rounded">
-              連動表示中（該当 / 全件）
+          ) : anySelection ? (
+            <span className="text-[11px] text-gray-500 bg-gray-50 border border-gray-200 px-2 py-0.5 rounded-full">
+              連動表示
             </span>
-          )}
+          ) : null}
         </div>
-        <span className="text-[11px] text-gray-500">
-          <strong className="text-indigo-600 font-mono">{data.length.toLocaleString()}</strong> 銘柄
+
+        {/* 右: 銘柄合計 */}
+        <span className="text-[11px] text-gray-500 whitespace-nowrap">
+          <strong className="text-indigo-600 font-mono text-sm">{data.length.toLocaleString()}</strong> 銘柄
           {total < data.length && (
             <span
               className="ml-1.5 text-gray-400"
-              title={`${data.length - total} 銘柄は ${label} のステージが計算できないため除外（上場期間不足など）`}
+              title={`${data.length - total} 銘柄は ${label} のステージが計算できないため除外`}
             >
-              （うち {total.toLocaleString()} 銘柄を分類）
+              （分類可 {total.toLocaleString()}）
             </span>
           )}
         </span>
@@ -543,10 +554,15 @@ function StageMatrix({
                   }}
                 >
                   {anySelection && !isSelected && !empty ? (
-                    <>
-                      <span style={{ fontSize: '20px', fontWeight: 800 }}>{sel}</span>
-                      <span style={{ fontSize: '10px', opacity: 0.65 }}>/ {count}</span>
-                    </>
+                    sel > 0 ? (
+                      <>
+                        <span style={{ fontSize: '20px', fontWeight: 800 }}>{sel}</span>
+                        <span style={{ fontSize: '10px', opacity: 0.65 }}>/ {count}</span>
+                      </>
+                    ) : (
+                      // 0件の場合は数字を出さず、薄く - のみ表示してノイズを減らす
+                      <span style={{ fontSize: '14px', fontWeight: 600, opacity: 0.5 }}>—</span>
+                    )
                   ) : (
                     <span style={{ fontSize: '22px', fontWeight: 800 }}>{count}</span>
                   )}
