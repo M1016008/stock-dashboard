@@ -3,7 +3,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import {
-  ComposedChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend, Customized,
+  ComposedChart, Line, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend,
 } from 'recharts'
 import type { OHLCV } from '@/types/stock'
 import { calcSMA } from '@/lib/indicators'
@@ -69,64 +69,45 @@ interface ChartPoint {
 }
 
 /**
- * Recharts の Customized レイヤとして描く SVG ローソク足。
- * yAxis の scale を借りて high/low/open/close の y 座標を計算。
+ * Recharts の Bar.shape として描くローソク足。
+ * 各バーが自分の payload と yAxis を受け取れるので、
+ * high/low/open/close の y 座標を計算できる。
  */
-function CandlestickLayer(props: any) {
-  const { yAxisMap, xAxisMap, data } = props
-  if (!yAxisMap || !xAxisMap || !data || data.length === 0) return null
-  const yAxis: any = Object.values(yAxisMap)[0]
-  const xAxis: any = Object.values(xAxisMap)[0]
-  if (!yAxis?.scale || !xAxis?.scale) return null
-
+function renderCandle(props: any): React.ReactElement {
+  const { x, width, payload, yAxis } = props
+  // x: バーの左端 / width: バーの割当幅 / yAxis.scale: 値→y のスケール
+  if (!yAxis?.scale || !payload) return <g />
+  const open = Number(payload.open)
+  const high = Number(payload.high)
+  const low = Number(payload.low)
+  const close = Number(payload.close)
+  if (![open, high, low, close].every(Number.isFinite)) return <g />
   const yScale = yAxis.scale
-  const xScale = xAxis.scale
-  const xs: number[] = data.map((d: ChartPoint) => xScale(d.date))
-  // データ間隔からローソクの幅を決める
-  const diffs: number[] = []
-  for (let i = 1; i < xs.length; i++) {
-    if (Number.isFinite(xs[i]) && Number.isFinite(xs[i - 1])) {
-      diffs.push(Math.abs(xs[i] - xs[i - 1]))
-    }
-  }
-  const minDx = diffs.length > 0 ? Math.min(...diffs) : 8
-  const candleWidth = Math.max(2, minDx * 0.7)
-
+  const yOpen = yScale(open)
+  const yClose = yScale(close)
+  const yHigh = yScale(high)
+  const yLow = yScale(low)
+  const cx = x + width / 2
+  const candleWidth = Math.max(2, width * 0.7)
+  const bodyTop = Math.min(yOpen, yClose)
+  const bodyHeight = Math.max(1, Math.abs(yOpen - yClose))
+  const isUp = close >= open
+  const color = isUp ? CANDLE_UP : CANDLE_DOWN
   return (
     <g>
-      {data.map((d: ChartPoint, i: number) => {
-        const cx = xs[i]
-        if (!Number.isFinite(cx)) return null
-        const { open, high, low, close } = d
-        if ([open, high, low, close].some((v) => v == null || !Number.isFinite(v))) return null
-        const isUp = close >= open
-        const color = isUp ? CANDLE_UP : CANDLE_DOWN
-        const yOpen = yScale(open)
-        const yClose = yScale(close)
-        const yHigh = yScale(high)
-        const yLow = yScale(low)
-        const bodyTop = Math.min(yOpen, yClose)
-        const bodyHeight = Math.max(1, Math.abs(yOpen - yClose))
-        return (
-          <g key={i}>
-            {/* ヒゲ */}
-            <line
-              x1={cx} y1={yHigh}
-              x2={cx} y2={yLow}
-              stroke={color} strokeWidth={1}
-            />
-            {/* 実体 */}
-            <rect
-              x={cx - candleWidth / 2}
-              y={bodyTop}
-              width={candleWidth}
-              height={bodyHeight}
-              fill={color}
-              stroke={color}
-            />
-          </g>
-        )
-      })}
+      <line
+        x1={cx} y1={yHigh}
+        x2={cx} y2={yLow}
+        stroke={color} strokeWidth={1}
+      />
+      <rect
+        x={cx - candleWidth / 2}
+        y={bodyTop}
+        width={candleWidth}
+        height={bodyHeight}
+        fill={color}
+        stroke={color}
+      />
     </g>
   )
 }
@@ -382,19 +363,15 @@ export function IndicesChart() {
                 />
               )}
               {chartType === 'candle' && (
-                <>
-                  {/* Recharts は系列が無いと yAxis のスケールを生成しない場合があるため、
-                      透明な Line を1本置いて axisDomain を確実に確立させる */}
-                  <Line
-                    type="monotone"
-                    dataKey="close"
-                    stroke="transparent"
-                    dot={false}
-                    isAnimationActive={false}
-                    legendType="none"
-                  />
-                  <Customized component={CandlestickLayer} />
-                </>
+                // Bar.shape を使ってローソク足を描く。
+                // dataKey='close' により Recharts が yAxis ドメインも自動算出する。
+                <Bar
+                  dataKey="close"
+                  shape={renderCandle as any}
+                  isAnimationActive={false}
+                  legendType="none"
+                  fill="transparent"
+                />
               )}
 
               {/* 移動平均（共通） */}
