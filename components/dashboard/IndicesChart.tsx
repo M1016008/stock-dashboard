@@ -382,7 +382,19 @@ export function IndicesChart() {
                 />
               )}
               {chartType === 'candle' && (
-                <Customized component={CandlestickLayer} />
+                <>
+                  {/* Recharts は系列が無いと yAxis のスケールを生成しない場合があるため、
+                      透明な Line を1本置いて axisDomain を確実に確立させる */}
+                  <Line
+                    type="monotone"
+                    dataKey="close"
+                    stroke="transparent"
+                    dot={false}
+                    isAnimationActive={false}
+                    legendType="none"
+                  />
+                  <Customized component={CandlestickLayer} />
+                </>
               )}
 
               {/* 移動平均（共通） */}
