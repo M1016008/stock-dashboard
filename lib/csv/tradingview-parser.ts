@@ -71,6 +71,11 @@ const COLUMN_MAP: Record<string, keyof ParsedRow> = {
   '出来高 1日': 'volume1d',
   '平均出来高 10日': 'avgVolume10d',
   '平均出来高 30日': 'avgVolume30d',
+  // TradingView は SMA と同様 '平均出来高 (10) 1日' / '(30) 1日' で出すこともあるので別名で受ける
+  '平均出来高 (10) 1日': 'avgVolume10d',
+  '平均出来高 (30) 1日': 'avgVolume30d',
+  '平均出来高 (10日)': 'avgVolume10d',
+  '平均出来高 (30日)': 'avgVolume30d',
   '時価総額': 'marketCap',
   '時価総額 - 通貨': 'marketCapCurrency',
   'PER (株価収益率)': 'per',
@@ -98,6 +103,25 @@ const COLUMN_MAP: Record<string, keyof ParsedRow> = {
   '前回決算発表日': 'earningsLastDate',
   '次回決算発表日': 'earningsNextDate',
 }
+
+/**
+ * カラム名を比較するための正規化。
+ * - 半角/全角スペースを除去
+ * - 半角/全角の括弧を除去
+ * - 大文字小文字をそろえる
+ * これにより '平均出来高 10日' / '平均出来高(10日)' / '平均出来高 (10) 1日' のような
+ * 表記ゆれを吸収する。
+ */
+function normalizeColumnName(s: string): string {
+  return s
+    .replace(/[\s　]+/g, '')
+    .replace(/[()（）]/g, '')
+    .toLowerCase()
+}
+
+const NORMALIZED_COLUMN_MAP: Map<string, keyof ParsedRow> = new Map(
+  Object.entries(COLUMN_MAP).map(([k, v]) => [normalizeColumnName(k), v]),
+)
 
 const STRING_COLUMNS = new Set([
   'name',
@@ -232,10 +256,18 @@ export function parseTradingViewCsv(text: string): ParseResult {
 
   const symbolIdx = header.indexOf('シンボル')
   const colIndex: Partial<Record<keyof ParsedRow, number>> = {}
+  // 1) まずは厳密一致で確定（同じキーに複数の別名がある場合に最初の hit を尊重）
   for (const [csvName, key] of Object.entries(COLUMN_MAP)) {
+    if (colIndex[key] !== undefined) continue
     const idx = header.indexOf(csvName)
     if (idx >= 0) colIndex[key] = idx
   }
+  // 2) 取りこぼしたキーは、ヘッダ側を正規化してファジーに探す
+  header.forEach((h, idx) => {
+    const norm = normalizeColumnName(h)
+    const key = NORMALIZED_COLUMN_MAP.get(norm)
+    if (key && colIndex[key] === undefined) colIndex[key] = idx
+  })
 
   const rows: ParsedRow[] = []
   for (let i = 1; i < records.length; i++) {
