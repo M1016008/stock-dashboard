@@ -1,7 +1,7 @@
 // components/dashboard/IndicesChart.tsx
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type ReactElement } from 'react'
 import {
   ComposedChart, Line, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend,
 } from 'recharts'
@@ -69,47 +69,50 @@ interface ChartPoint {
 }
 
 /**
- * Recharts の Bar.shape として描くローソク足。
- * 各バーが自分の payload と yAxis を受け取れるので、
- * high/low/open/close の y 座標を計算できる。
+ * Bar.shape として描くローソク足。
+ * Recharts のバージョンによっては props.yAxis が渡らないので、
+ * props.background（チャート領域の矩形）と yDomain から y 座標を
+ * 自前で再計算する方式に切り替えている。
  */
-function renderCandle(props: any): React.ReactElement {
-  const { x, width, payload, yAxis } = props
-  // x: バーの左端 / width: バーの割当幅 / yAxis.scale: 値→y のスケール
-  if (!yAxis?.scale || !payload) return <g />
-  const open = Number(payload.open)
-  const high = Number(payload.high)
-  const low = Number(payload.low)
-  const close = Number(payload.close)
-  if (![open, high, low, close].every(Number.isFinite)) return <g />
-  const yScale = yAxis.scale
-  const yOpen = yScale(open)
-  const yClose = yScale(close)
-  const yHigh = yScale(high)
-  const yLow = yScale(low)
-  const cx = x + width / 2
-  const candleWidth = Math.max(2, width * 0.7)
-  const bodyTop = Math.min(yOpen, yClose)
-  const bodyHeight = Math.max(1, Math.abs(yOpen - yClose))
-  const isUp = close >= open
-  const color = isUp ? CANDLE_UP : CANDLE_DOWN
-  return (
-    <g>
-      <line
-        x1={cx} y1={yHigh}
-        x2={cx} y2={yLow}
-        stroke={color} strokeWidth={1}
-      />
-      <rect
-        x={cx - candleWidth / 2}
-        y={bodyTop}
-        width={candleWidth}
-        height={bodyHeight}
-        fill={color}
-        stroke={color}
-      />
-    </g>
-  )
+function makeRenderCandle(yMin: number, yMax: number) {
+  return function renderCandle(props: any): ReactElement {
+    const { x, width, payload, background } = props
+    if (!payload || !background || !Number.isFinite(yMin) || !Number.isFinite(yMax) || yMax <= yMin) {
+      return <g />
+    }
+    const open = Number(payload.open)
+    const high = Number(payload.high)
+    const low = Number(payload.low)
+    const close = Number(payload.close)
+    if (![open, high, low, close].every(Number.isFinite)) return <g />
+    const top = Number(background.y)
+    const areaH = Number(background.height)
+    if (!Number.isFinite(top) || !Number.isFinite(areaH) || areaH <= 0) return <g />
+    const yOf = (v: number) => top + ((yMax - v) / (yMax - yMin)) * areaH
+    const yOpen = yOf(open)
+    const yClose = yOf(close)
+    const yHigh = yOf(high)
+    const yLow = yOf(low)
+    const cx = Number(x) + Number(width) / 2
+    const candleWidth = Math.max(2, Number(width) * 0.7)
+    const bodyTop = Math.min(yOpen, yClose)
+    const bodyHeight = Math.max(1, Math.abs(yOpen - yClose))
+    const isUp = close >= open
+    const color = isUp ? CANDLE_UP : CANDLE_DOWN
+    return (
+      <g>
+        <line x1={cx} y1={yHigh} x2={cx} y2={yLow} stroke={color} strokeWidth={1} />
+        <rect
+          x={cx - candleWidth / 2}
+          y={bodyTop}
+          width={candleWidth}
+          height={bodyHeight}
+          fill={color}
+          stroke={color}
+        />
+      </g>
+    )
+  }
 }
 
 export function IndicesChart() {
@@ -159,19 +162,36 @@ export function IndicesChart() {
     }))
   }, [history, tf])
 
-  // ローソク表示時は high/low を含めた範囲で yAxis を確保する
-  const yDomain = useMemo<[number | string, number | string]>(() => {
-    if (series.length === 0 || chartType !== 'candle') return ['auto', 'auto']
+  // ローソク表示時は high/low を含めた範囲で yAxis を確保する。
+  // shape 描画でも同じ yMin/yMax を使うので、まず数値を確定してから domain を作る。
+  const candleBounds = useMemo<{ yMin: number; yMax: number } | null>(() => {
+    if (series.length === 0) return null
     let min = Infinity
     let max = -Infinity
     for (const d of series) {
       if (d.low < min) min = d.low
       if (d.high > max) max = d.high
+      if (typeof d.ma5  === 'number' && d.ma5  < min) min = d.ma5
+      if (typeof d.ma5  === 'number' && d.ma5  > max) max = d.ma5
+      if (typeof d.ma25 === 'number' && d.ma25 < min) min = d.ma25
+      if (typeof d.ma25 === 'number' && d.ma25 > max) max = d.ma25
+      if (typeof d.ma75 === 'number' && d.ma75 < min) min = d.ma75
+      if (typeof d.ma75 === 'number' && d.ma75 > max) max = d.ma75
     }
-    if (!Number.isFinite(min) || !Number.isFinite(max)) return ['auto', 'auto']
+    if (!Number.isFinite(min) || !Number.isFinite(max) || max <= min) return null
     const pad = (max - min) * 0.05 || 1
-    return [min - pad, max + pad]
-  }, [series, chartType])
+    return { yMin: min - pad, yMax: max + pad }
+  }, [series])
+
+  const yDomain = useMemo<[number | string, number | string]>(() => {
+    if (chartType === 'candle' && candleBounds) return [candleBounds.yMin, candleBounds.yMax]
+    return ['auto', 'auto']
+  }, [chartType, candleBounds])
+
+  const renderCandle = useMemo(() => {
+    if (!candleBounds) return null
+    return makeRenderCandle(candleBounds.yMin, candleBounds.yMax)
+  }, [candleBounds])
 
   const stats = useMemo(() => {
     if (series.length === 0) return null
@@ -362,7 +382,7 @@ export function IndicesChart() {
                   isAnimationActive={false}
                 />
               )}
-              {chartType === 'candle' && (
+              {chartType === 'candle' && renderCandle && (
                 // Bar.shape を使ってローソク足を描く。
                 // dataKey='close' により Recharts が yAxis ドメインも自動算出する。
                 <Bar
@@ -371,6 +391,7 @@ export function IndicesChart() {
                   isAnimationActive={false}
                   legendType="none"
                   fill="transparent"
+                  name="ローソク足"
                 />
               )}
 
