@@ -34,14 +34,12 @@ function fmtDate(now: Date): string {
 }
 
 function useClocks(): ClockData {
-  const [data, setData] = useState<ClockData>(() => {
-    const now = new Date()
-    return {
-      date: fmtDate(now),
-      jst: fmtTime(now, 'Asia/Tokyo'),
-      ldn: fmtTime(now, 'Europe/London'),
-      nyc: fmtTime(now, 'America/New_York'),
-    }
+  // hydration mismatch を防ぐため、初期値は空文字。クライアントマウント後に埋める。
+  const [data, setData] = useState<ClockData>({
+    date: '',
+    jst: '',
+    ldn: '',
+    nyc: '',
   })
 
   useEffect(() => {
@@ -86,7 +84,9 @@ function ClockChip({ label, time }: { label: string; time: string }) {
       lineHeight: 1,
     }}>
       <span style={{ color: 'var(--text-muted)', fontSize: '10px', letterSpacing: '0.05em' }}>{label}</span>
-      <span style={{ color: 'var(--text-secondary)' }}>{time}</span>
+      <span style={{ color: 'var(--text-secondary)' }} suppressHydrationWarning>
+        {time || '--:--:--'}
+      </span>
     </span>
   )
 }
@@ -146,8 +146,11 @@ export function TopBar() {
 
       {/* 日付 + 3地点時計 */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
-        <span style={{ fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-secondary)', lineHeight: 1 }}>
-          {clocks.date}
+        <span
+          style={{ fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-secondary)', lineHeight: 1 }}
+          suppressHydrationWarning
+        >
+          {clocks.date || '----/--/--'}
         </span>
         <span style={{ width: '1px', height: '12px', background: 'var(--border-base)' }} />
         <ClockChip label="TYO" time={clocks.jst} />
