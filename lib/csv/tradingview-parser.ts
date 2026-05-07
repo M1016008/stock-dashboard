@@ -71,7 +71,10 @@ const COLUMN_MAP: Record<string, keyof ParsedRow> = {
   '出来高 1日': 'volume1d',
   '平均出来高 10日': 'avgVolume10d',
   '平均出来高 30日': 'avgVolume30d',
-  // TradingView は SMA と同様 '平均出来高 (10) 1日' / '(30) 1日' で出すこともあるので別名で受ける
+  // TradingView は語順違い '出来高の平均 10日 / 30日' で出すことがある（実測）
+  '出来高の平均 10日': 'avgVolume10d',
+  '出来高の平均 30日': 'avgVolume30d',
+  // SMA 系と同じ書式 '(N) 1日' / '(N日)' で出すパターンも別名で受ける
   '平均出来高 (10) 1日': 'avgVolume10d',
   '平均出来高 (30) 1日': 'avgVolume30d',
   '平均出来高 (10日)': 'avgVolume10d',
