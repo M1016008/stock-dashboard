@@ -9,6 +9,18 @@ interface Stats {
   bySegment: { market_segment: string | null; n: number }[]
 }
 
+interface Diagnostics {
+  snapshotDate: string | null
+  totalTickers: number
+  withSectorMaster: number
+  withSector33: number
+  withLarge: number
+  withSmall: number
+  coveragePct: { master: number; sector33: number; large: number; small: number }
+  unmatchedSample: { ticker: string; name: string }[]
+  unmatchedCount: number
+}
+
 interface ImportSummary {
   fileName: string
   totalRows: number
@@ -32,6 +44,7 @@ export default function SectorMasterPage() {
   const [summary, setSummary] = useState<ImportSummary | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [stats, setStats] = useState<Stats | null>(null)
+  const [diag, setDiag] = useState<Diagnostics | null>(null)
 
   const loadStats = async () => {
     try {
@@ -41,7 +54,15 @@ export default function SectorMasterPage() {
     } catch { /* 無視 */ }
   }
 
-  useEffect(() => { loadStats() }, [])
+  const loadDiag = async () => {
+    try {
+      const res = await fetch('/api/capital-flow/diagnostics')
+      const json = await res.json()
+      if (res.ok) setDiag(json)
+    } catch { /* 無視 */ }
+  }
+
+  useEffect(() => { loadStats(); loadDiag() }, [])
 
   const finishImport = async (res: Response) => {
     const json = await res.json()
@@ -51,6 +72,7 @@ export default function SectorMasterPage() {
     }
     setSummary(json.summary)
     loadStats()
+    loadDiag()
   }
 
   const upload = async (file: File) => {
@@ -283,6 +305,116 @@ export default function SectorMasterPage() {
             </div>
           </>
         )}
+      </div>
+
+      {/* 網羅率 + 未分類銘柄リスト（最新スナップショット x sector_master） */}
+      <div className="card" style={{ overflow: 'hidden' }}>
+        <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-subtle)', fontSize: '12px', color: 'var(--text-secondary)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span>🔎 最新スナップショット x マスタ網羅率</span>
+          <button
+            onClick={loadDiag}
+            style={{
+              padding: '2px 8px',
+              fontSize: '10px',
+              background: 'transparent',
+              color: 'var(--text-muted)',
+              border: '1px solid var(--border-base)',
+              borderRadius: 'var(--radius-sm)',
+              cursor: 'pointer',
+            }}
+          >
+            再取得
+          </button>
+        </div>
+        {!diag || !diag.snapshotDate ? (
+          <div style={{ padding: '24px', textAlign: 'center', fontSize: '12px', color: 'var(--text-muted)' }}>
+            CSV スナップショットがありません（/admin/import から取込んでください）
+          </div>
+        ) : (
+          <>
+            <div style={{ padding: '12px', display: 'flex', gap: '16px', flexWrap: 'wrap', fontSize: '12px' }}>
+              <DiagStat label="スナップショット日"  value={diag.snapshotDate} />
+              <DiagStat label="銘柄数"             value={diag.totalTickers.toLocaleString()} />
+              <DiagStat
+                label="マスタ紐付"
+                value={`${diag.coveragePct.master.toFixed(1)}%`}
+                ok={diag.coveragePct.master >= 95}
+              />
+              <DiagStat
+                label="33業種"
+                value={`${diag.coveragePct.sector33.toFixed(1)}%`}
+                ok={diag.coveragePct.sector33 >= 90}
+              />
+              <DiagStat
+                label="17業種"
+                value={`${diag.coveragePct.large.toFixed(1)}%`}
+                ok={diag.coveragePct.large >= 90}
+              />
+            </div>
+
+            {diag.unmatchedCount === 0 ? (
+              <div style={{ borderTop: '1px solid var(--border-subtle)', padding: '12px', fontSize: '12px', color: 'var(--price-up, #22c55e)' }}>
+                ✅ 未分類銘柄なし（最新スナップショットの全銘柄がマスタに存在）
+              </div>
+            ) : (
+              <div style={{ borderTop: '1px solid var(--border-subtle)', padding: '12px' }}>
+                <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: '8px', flexWrap: 'wrap', gap: '8px' }}>
+                  <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                    ⚠️ マスタ未登録: <strong style={{ color: 'var(--price-down)' }}>{diag.unmatchedCount.toLocaleString()}</strong> 件
+                    {diag.unmatchedSample.length < diag.unmatchedCount && (
+                      <span style={{ color: 'var(--text-muted)', marginLeft: '6px' }}>
+                        （上位 {diag.unmatchedSample.length} 件を表示）
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                    JPX 公式に無い銘柄（ETF/REIT/新規上場）は手動で sector_master に追加してください
+                  </div>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '4px' }}>
+                  {diag.unmatchedSample.map((u) => (
+                    <div
+                      key={u.ticker}
+                      style={{
+                        padding: '4px 8px',
+                        fontSize: '11px',
+                        background: 'var(--bg-elevated)',
+                        border: '1px solid var(--border-base)',
+                        borderRadius: 'var(--radius-sm)',
+                        display: 'flex',
+                        gap: '8px',
+                        alignItems: 'baseline',
+                      }}
+                    >
+                      <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, color: 'var(--accent-primary)' }}>
+                        {u.ticker.replace('.T', '')}
+                      </span>
+                      <span style={{ color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {u.name || '（名称不明）'}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function DiagStat({ label, value, ok }: { label: string; value: string; ok?: boolean }) {
+  const valueColor = ok === undefined
+    ? 'var(--text-primary)'
+    : ok
+      ? 'var(--price-up, #22c55e)'
+      : 'var(--price-down)'
+  return (
+    <div>
+      <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{label}</div>
+      <div style={{ fontSize: '14px', fontFamily: 'var(--font-mono)', fontWeight: 600, color: valueColor }}>
+        {value}
       </div>
     </div>
   )

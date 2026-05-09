@@ -57,7 +57,7 @@ interface Diagnostics {
   bySector33: { label: string; n: number }[]
   byLarge: { label: string; n: number }[]
   bySmall: { label: string; n: number }[]
-  unmatchedSample: string[]
+  unmatchedSample: { ticker: string; name: string }[]
   unmatchedCount: number
 }
 
@@ -314,7 +314,7 @@ export default function CapitalFlowPage() {
           </div>
           {diag.unmatchedCount > 0 && (
             <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-              業種マスタに未登録の銘柄: <strong>{diag.unmatchedCount.toLocaleString()}</strong> 件（例: {diag.unmatchedSample.slice(0, 10).join(', ')} ...）
+              業種マスタに未登録の銘柄: <strong>{diag.unmatchedCount.toLocaleString()}</strong> 件（例: {diag.unmatchedSample.slice(0, 10).map((u) => u.ticker).join(', ')} ...）
             </div>
           )}
         </div>

@@ -9,6 +9,7 @@ export const dynamic = 'force-dynamic'
 
 interface DiagSnapshotRow {
   ticker: string
+  name: string | null
 }
 interface DiagSectorRow {
   ticker: string
@@ -29,11 +30,14 @@ export async function GET() {
       return NextResponse.json({ snapshotDate: null, totalTickers: 0, coverage: null })
     }
 
+    // 同一 ticker は最新行の name に寄せる（重複時は後勝ち）
     const tickers = await execAll<DiagSnapshotRow>(
-      `SELECT DISTINCT ticker FROM tv_daily_snapshots WHERE date = ?`,
+      `SELECT ticker, name FROM tv_daily_snapshots WHERE date = ?`,
       [latest.d],
     )
-    const allTickers = new Set(tickers.map((t) => t.ticker))
+    const tickerNameMap = new Map<string, string>()
+    for (const t of tickers) tickerNameMap.set(t.ticker, t.name ?? '')
+    const allTickers = tickerNameMap
 
     const sectorRows = await execAll<DiagSectorRow>(
       `SELECT ticker, sector_large, sector_small, sector33 FROM sector_master`,
@@ -48,12 +52,12 @@ export async function GET() {
     const sector33Counts = new Map<string, number>()
     const largeCounts = new Map<string, number>()
     const smallCounts = new Map<string, number>()
-    const unmatchedTickers: string[] = []
+    const unmatched: { ticker: string; name: string }[] = []
 
-    for (const t of allTickers) {
+    for (const [t, name] of allTickers) {
       const s = sectorMap.get(t)
       if (!s) {
-        unmatchedTickers.push(t)
+        unmatched.push({ ticker: t, name })
         continue
       }
       withSectorMaster++
@@ -84,8 +88,10 @@ export async function GET() {
       bySector33: sortByCount(sector33Counts),
       byLarge:    sortByCount(largeCounts),
       bySmall:    sortByCount(smallCounts),
-      unmatchedSample: unmatchedTickers.slice(0, 20),
-      unmatchedCount: unmatchedTickers.length,
+      // unmatchedSample は { ticker, name } の配列。
+      // capital-flow は ticker のみ必要、admin は name も使う。
+      unmatchedSample: unmatched.slice(0, 50),
+      unmatchedCount: unmatched.length,
     })
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 500 })
