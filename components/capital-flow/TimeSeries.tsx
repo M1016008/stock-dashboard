@@ -184,9 +184,9 @@ export function CapitalFlowTimeSeries({ groupBy }: Props) {
                 />
                 <Tooltip
                   contentStyle={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 4, fontSize: 11 }}
-                  formatter={(v: number | string, name) => [
-                    typeof v === 'number' ? v.toFixed(2) : String(v),
-                    name as string,
+                  formatter={(v, name) => [
+                    typeof v === 'number' ? v.toFixed(2) : String(v ?? ''),
+                    String(name ?? ''),
                   ]}
                 />
                 <Legend wrapperStyle={{ display: 'none' }} />

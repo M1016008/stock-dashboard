@@ -1,26 +1,24 @@
-// app/layout.tsx
 import type { Metadata } from 'next'
-import { IBM_Plex_Mono, Space_Grotesk } from 'next/font/google'
+import { Inter, Noto_Sans_JP } from 'next/font/google'
+import { Header } from '@/components/layout/Header'
 import './globals.css'
-import { Sidebar } from '@/components/ui/Sidebar'
-import { TopBar } from '@/components/ui/TopBar'
 
-const ibmPlexMono = IBM_Plex_Mono({
-  weight: ['400', '500', '600'],
+const inter = Inter({
   subsets: ['latin'],
-  variable: '--font-mono-next',
+  variable: '--font-sans-next',
+  display: 'swap',
 })
 
-const spaceGrotesk = Space_Grotesk({
-  weight: ['500', '700'],
+const notoJP = Noto_Sans_JP({
   subsets: ['latin'],
-  variable: '--font-display-next',
+  weight: ['400', '500', '700'],
+  variable: '--font-jp-next',
+  display: 'swap',
 })
 
 export const metadata: Metadata = {
-  title: 'StockBoard — 株式分析ダッシュボード',
-  description: '日本株専用の分析ダッシュボード。HEXステージ分析、スクリーナー、業種マスタ、決算カレンダーを搭載。',
-  keywords: ['株式', '投資', 'ダッシュボード', 'スクリーナー', 'HEXステージ'],
+  title: 'StockBoard',
+  description: '日本株のチャート構造に基づくパターンライブラリ',
 }
 
 export default function RootLayout({
@@ -29,31 +27,15 @@ export default function RootLayout({
   children: React.ReactNode
 }) {
   return (
-    <html lang="ja" className={`${ibmPlexMono.variable} ${spaceGrotesk.variable}`}>
-      <body>
-        {/* TOPBAR */}
-        <TopBar />
-
-        {/* MAIN LAYOUT */}
-        <div style={{
-          display: 'flex',
-          height: 'calc(100vh - 36px)',
-          marginTop: '36px',
-        }}>
-          {/* SIDEBAR */}
-          <Sidebar />
-
-          {/* MAIN CONTENT */}
-          <main style={{
-            marginLeft: '200px',
-            flex: 1,
-            overflowY: 'auto',
-            background: 'var(--bg-void)',
-            minHeight: '100%',
-          }}>
-            {children}
-          </main>
-        </div>
+    <html lang="ja" className={`${inter.variable} ${notoJP.variable}`}>
+      <body className="min-h-screen bg-[var(--color-surface-subtle)] font-sans text-[var(--color-text-primary)] antialiased">
+        <Header />
+        <main className="mx-auto max-w-[1440px] px-6 py-6">
+          {children}
+        </main>
+        <footer className="mx-auto max-w-[1440px] px-6 py-8 text-xs text-[var(--color-text-tertiary)]">
+          表示内容は過去データに基づく統計的観測です。投資判断は自己責任で行ってください。
+        </footer>
       </body>
     </html>
   )

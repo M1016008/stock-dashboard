@@ -39,7 +39,7 @@ export function WatchlistButton({ ticker, size = 'sm' }: Props) {
         fontSize: dim,
         lineHeight: 1,
         background: 'transparent',
-        color: active ? '#f59e0b' : 'var(--text-muted)',
+        color: active ? 'var(--color-brand-600)' : 'var(--text-muted)',
         border: 'none',
         borderRadius: 'var(--radius-sm)',
         cursor: 'pointer',

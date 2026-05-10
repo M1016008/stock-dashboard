@@ -106,7 +106,7 @@ export default function WatchlistPage() {
             ウォッチリストは空です
           </p>
           <p style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-            銘柄詳細ページやスクリーナー結果の <span style={{ color: '#f59e0b' }}>☆</span> ボタンで追加できます。
+            銘柄詳細ページやスクリーナー結果の <span style={{ color: 'var(--color-brand-600)' }}>☆</span> ボタンで追加できます。
           </p>
         </div>
       ) : (

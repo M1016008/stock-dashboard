@@ -52,3 +52,6 @@ next-env.d.ts
 # logs
 logs/
 *.log
+
+# Claude Code (local-only settings)
+/.claude/settings.local.json
