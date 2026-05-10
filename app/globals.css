@@ -1,70 +1,126 @@
 /* app/globals.css */
-/* ─── フォント読み込み ─── */
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+JP:wght@300;400;500;600&family=Space+Grotesk:wght@500;700&display=swap');
 
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+/* ─── フォント読み込み ───
+   Inter / Noto Sans JP は next/font 経由 (layout.tsx)。
+   IBM Plex Mono は数値表示 (.num, [data-price] 等) で温存するため Google CDN から読む。 */
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap');
 
-/* ─── ライトプロフェッショナルテーマ（HEX-app と統一） ─── */
+/* ─── Tailwind v4 ─── */
+@import "tailwindcss";
+
+/* ─── デザイントークン (Tailwind に通る単一の真実の源) ─── */
+@theme {
+  /* ── ブランドアクセント (旧 amber を置換) ── */
+  --color-brand-50:  #eef2ff;
+  --color-brand-100: #e0e7ff;
+  --color-brand-500: #6366f1;
+  --color-brand-600: #4f46e5;
+  --color-brand-700: #4338ca;
+
+  /* ── パターン分析アクセント ── */
+  --color-pattern-50:  #ecfeff;
+  --color-pattern-100: #cffafe;
+  --color-pattern-500: #06b6d4;
+  --color-pattern-600: #0891b2;
+  --color-pattern-700: #0e7490;
+
+  /* ── 価格 (日本式: 赤=上昇 / 青=下降、絶対変えない) ── */
+  --color-price-up:      #dc2626;
+  --color-price-up-bg:   #fef2f2;
+  --color-price-down:    #2563eb;
+  --color-price-down-bg: #eff6ff;
+  --color-price-flat:    #6b7280;
+
+  /* ── サーフェス (Modern Fintech: 白基調) ── */
+  --color-surface-base:    #ffffff;
+  --color-surface-subtle:  #fafafa;
+  --color-surface-muted:   #f5f5f5;
+  --color-border-soft:     rgba(0, 0, 0, 0.06);
+  --color-border-default:  rgba(0, 0, 0, 0.10);
+  --color-border-strong:   rgba(0, 0, 0, 0.16);
+
+  /* ── テキスト ── */
+  --color-text-primary:    #0a0a0a;
+  --color-text-secondary:  #525252;
+  --color-text-tertiary:   #a3a3a3;
+  --color-text-on-brand:   #ffffff;
+
+  /* ── 余白スケール (8px 基準) ── */
+  --spacing-card-x:   1.25rem;
+  --spacing-card-y:   1rem;
+  --spacing-section:  1.5rem;
+
+  /* ── 角丸 ── */
+  --radius-card:   0.5rem;
+  --radius-pill:   9999px;
+  --radius-badge:  0.25rem;
+
+  /* ── フォント (next/font の変数を参照、Tailwind の font-sans / font-mono クラスを生成) ── */
+  --font-sans: var(--font-sans-next), var(--font-jp-next), system-ui, -apple-system, "Hiragino Sans", "Yu Gothic", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* ─── 旧トークン互換レイヤー ───
+   既存コンポーネントが使っている --bg-*, --text-*, --accent-* 等を
+   新トークンの参照に差し替える。これで触らずに amber→indigo 移行が効く。
+   HEX ステージ色は意図的にそのまま残す。 */
 :root {
-  /* ベースカラー（白基調） */
-  --bg-void:       #f1f5f9;   /* 最深部 = ページ全体の薄いグレー */
-  --bg-base:       #ffffff;   /* 標準背景 */
-  --bg-surface:    #ffffff;   /* カード背景 */
-  --bg-elevated:   #f8fafc;   /* hover背景 */
-  --bg-overlay:    #f1f5f9;
+  /* 背景 */
+  --bg-void:     var(--color-surface-subtle);
+  --bg-base:     var(--color-surface-base);
+  --bg-surface:  var(--color-surface-base);
+  --bg-elevated: var(--color-surface-muted);
+  --bg-overlay:  var(--color-surface-muted);
 
   /* ボーダー */
-  --border-subtle: #e5e7eb;
-  --border-dim:    #d1d5db;
-  --border-base:   #cbd5e1;
-  --border-strong: #94a3b8;
+  --border-subtle: var(--color-border-soft);
+  --border-dim:    var(--color-border-default);
+  --border-base:   var(--color-border-default);
+  --border-strong: var(--color-border-strong);
 
   /* テキスト */
-  --text-primary:   #0f172a;   /* slate-900 */
-  --text-secondary: #334155;   /* slate-700 */
-  --text-muted:     #64748b;   /* slate-500 */
-  --text-disabled:  #94a3b8;   /* slate-400 */
+  --text-primary:   var(--color-text-primary);
+  --text-secondary: var(--color-text-secondary);
+  --text-muted:     var(--color-text-tertiary);
+  --text-disabled:  var(--color-text-tertiary);
 
-  /* アクセント（アンバー、白背景でしっかり見える濃さ） */
-  --accent-primary: #d97706;   /* amber-600 */
-  --accent-dim:     rgba(217,119,6,0.12);
-  --accent-glow:    rgba(217,119,6,0.04);
+  /* アクセント (旧 amber → 新 indigo) */
+  --accent-primary: var(--color-brand-600);
+  --accent-dim:     rgba(79, 70, 229, 0.12);
+  --accent-glow:    rgba(79, 70, 229, 0.04);
 
-  /* 株価カラー（日本式: 陽=赤・陰=青） */
-  --price-up:       #dc2626;   /* red-600 */
-  --price-up-dim:   rgba(220,38,38,0.10);
-  --price-down:     #2563eb;   /* blue-600 */
-  --price-down-dim: rgba(37,99,235,0.10);
-  --price-neutral:  #64748b;
+  /* 株価カラー */
+  --price-up:       var(--color-price-up);
+  --price-up-dim:   rgba(220, 38, 38, 0.10);
+  --price-down:     var(--color-price-down);
+  --price-down-dim: rgba(37, 99, 235, 0.10);
+  --price-neutral:  var(--color-price-flat);
 
-  /* HEXステージカラー（HEX-app 配色と同期） */
-  --stage-1: #22c55e;   /* 緑   パーフェクト */
-  --stage-2: #f59e0b;   /* 橙黄 調整 */
-  --stage-3: #ef4444;   /* 赤   弱気移行 */
-  --stage-4: #ec4899;   /* ピンク リバース */
-  --stage-5: #3b82f6;   /* 青   反発兆し */
-  --stage-6: #a855f7;   /* 紫   強気移行 */
+  /* HEX ステージカラー (HEX-app 配色と同期、置換しない) */
+  --stage-1: #22c55e;
+  --stage-2: #f59e0b;
+  --stage-3: #ef4444;
+  --stage-4: #ec4899;
+  --stage-5: #3b82f6;
+  --stage-6: #a855f7;
 
-  /* タイポグラフィ */
-  --font-mono:    'IBM Plex Mono', monospace;
-  --font-sans:    'IBM Plex Sans JP', 'Hiragino Sans', sans-serif;
-  --font-display: 'Space Grotesk', sans-serif;
+  /* タイポグラフィ: --font-sans / --font-mono は @theme 側で定義済み。
+     --font-display は廃止 (Inter で統一)、互換のため --font-sans を別名として残す。 */
+  --font-display: var(--font-sans);
 
-  /* スペーシング */
+  /* スペーシング (旧体系、既存コンポーネント互換) */
   --space-xs: 4px;
   --space-sm: 8px;
   --space-md: 16px;
   --space-lg: 24px;
   --space-xl: 32px;
 
-  /* 角丸 */
+  /* 角丸 (旧体系、既存コンポーネント互換) */
   --radius-sm: 4px;
   --radius-md: 6px;
   --radius-lg: 8px;
 
-  /* シャドウ（白背景用に淡く） */
+  /* シャドウ */
   --shadow-card:     0 1px 2px rgba(15,23,42,0.04), 0 1px 3px rgba(15,23,42,0.06);
   --shadow-elevated: 0 4px 6px rgba(15,23,42,0.05), 0 10px 15px rgba(15,23,42,0.08);
 }
@@ -76,12 +132,13 @@ html, body {
 }
 
 body {
-  background: var(--bg-void);
-  color: var(--text-primary);
+  background: var(--color-surface-subtle);
+  color: var(--color-text-primary);
   font-family: var(--font-sans);
   font-size: 13px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
+  font-feature-settings: "tnum" 1;
 }
 
 /* 数値は常にモノスペース */
@@ -89,6 +146,11 @@ body {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.01em;
+}
+
+/* 等幅数字ユーティリティ (Phase 1 共有コンポーネントが使用) */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
 }
 
 /* アクセントライン */
@@ -133,11 +195,11 @@ body {
 }
 
 /* 上昇・下落カラー */
-.up   { color: var(--price-up); }
-.down { color: var(--price-down); }
+.up      { color: var(--price-up); }
+.down    { color: var(--price-down); }
 .neutral { color: var(--price-neutral); }
 
-/* スクロールバー（白背景用） */
+/* スクロールバー */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
