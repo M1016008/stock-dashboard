@@ -121,6 +121,67 @@ const STATEMENTS = [
     updated_at TEXT NOT NULL,
     source_file TEXT
   )`,
+  // ─── Phase 2: 銘柄ユニバース ───
+  `CREATE TABLE IF NOT EXISTS ticker_universe (
+    ticker TEXT PRIMARY KEY,
+    name TEXT,
+    active INTEGER NOT NULL DEFAULT 1,
+    added_at INTEGER NOT NULL DEFAULT (unixepoch())
+  )`,
+  // ─── Phase 2: 日足 OHLCV 履歴 ───
+  `CREATE TABLE IF NOT EXISTS ohlcv_daily (
+    ticker TEXT NOT NULL,
+    date TEXT NOT NULL,
+    open REAL NOT NULL,
+    high REAL NOT NULL,
+    low REAL NOT NULL,
+    close REAL NOT NULL,
+    volume INTEGER NOT NULL,
+    PRIMARY KEY (ticker, date)
+  )`,
+  `CREATE INDEX IF NOT EXISTS ohlcv_date_idx ON ohlcv_daily(date)`,
+  // ─── Phase 2: 日次スナップショット (MA + ステージ) ───
+  `CREATE TABLE IF NOT EXISTS daily_snapshots (
+    ticker TEXT NOT NULL,
+    date TEXT NOT NULL,
+    ma_5 REAL,
+    ma_25 REAL,
+    ma_75 REAL,
+    ma_150 REAL,
+    ma_300 REAL,
+    weekly_ma_5 REAL,
+    weekly_ma_13 REAL,
+    weekly_ma_25 REAL,
+    weekly_ma_50 REAL,
+    weekly_ma_100 REAL,
+    monthly_ma_3 REAL,
+    monthly_ma_5 REAL,
+    monthly_ma_10 REAL,
+    monthly_ma_20 REAL,
+    monthly_ma_25 REAL,
+    daily_a_stage INTEGER,
+    daily_b_stage INTEGER,
+    weekly_a_stage INTEGER,
+    weekly_b_stage INTEGER,
+    monthly_a_stage INTEGER,
+    monthly_b_stage INTEGER,
+    computed_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (ticker, date)
+  )`,
+  `CREATE INDEX IF NOT EXISTS snapshots_date_idx ON daily_snapshots(date)`,
+  // ─── Phase 2: バッチ実行履歴 ───
+  `CREATE TABLE IF NOT EXISTS batch_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_type TEXT NOT NULL,
+    started_at INTEGER NOT NULL,
+    finished_at INTEGER,
+    status TEXT NOT NULL,
+    total_tickers INTEGER,
+    succeeded INTEGER DEFAULT 0,
+    failed INTEGER DEFAULT 0,
+    rows_inserted INTEGER DEFAULT 0,
+    error_summary TEXT
+  )`,
 ]
 
 /** 廃止されたテーブル。存在していれば DROP する（再実行しても無害）。 */
