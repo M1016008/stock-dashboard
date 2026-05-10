@@ -9,12 +9,13 @@ const yahooFinance: any = new (YahooFinance as any)()
 const delay = (ms: number) => new Promise(r => setTimeout(r, ms))
 
 function isJPTicker(ticker: string): boolean {
-  // 4桁数字ならJP、.Tで終わる場合もJP
-  return /^\d{4}$/.test(ticker) || ticker.endsWith('.T')
+  // 数字のみ (4桁通常株、5桁優先株/種類株式など) なら JP、.Tで終わる場合も JP
+  return /^\d+$/.test(ticker) || ticker.endsWith('.T')
 }
 
 function normalizeTicker(ticker: string): string {
-  if (/^\d{4}$/.test(ticker)) return `${ticker}.T`
+  // すべての数字 ticker (4桁/5桁) に .T を付与。文字列 ticker (US 等) はそのまま
+  if (/^\d+$/.test(ticker)) return `${ticker}.T`
   return ticker
 }
 
@@ -165,6 +166,42 @@ export async function searchTickers(
     console.error('searchTickers error:', error)
     return []
   }
+}
+
+/**
+ * Phase 2: 任意の期間の日足 OHLCV 履歴を取得 (バッチで使う柔軟版)
+ * @param ticker  "7203" (.T は内部で付与)、"7203.T" もそのまま受ける
+ * @param period1 取得開始日 (含む)
+ * @param period2 取得終了日 (含まない、省略時は今日)
+ *
+ * 既存の getHistory(ticker, period) は固定期間ラベル ('2y' など) のみを受け取る。
+ * バッチでは「ある日付以降の差分」を取りたいので任意 period1 を受けるバージョンが必要。
+ */
+export async function fetchHistoricalOhlcv(
+  ticker: string,
+  period1: Date,
+  period2: Date = new Date(),
+): Promise<OHLCV[]> {
+  const t = normalizeTicker(ticker)
+
+  // yahoo-finance2 v3 では historical() は deprecated、chart() を使う
+  const result: any = await yahooFinance.chart(t, {
+    period1,
+    period2,
+    interval: '1d',
+  })
+
+  const quotes: any[] = result?.quotes ?? []
+  return quotes
+    .filter((q) => q.open != null && q.close != null && q.date != null)
+    .map((q) => ({
+      date: new Date(q.date).toISOString().split('T')[0],
+      open: q.open!,
+      high: q.high ?? q.open!,
+      low: q.low ?? q.open!,
+      close: q.close!,
+      volume: q.volume ?? 0,
+    }))
 }
 
 // 複数銘柄を並列取得（レート制限対策: 100msの間隔）
