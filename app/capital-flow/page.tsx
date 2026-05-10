@@ -494,7 +494,7 @@ export default function CapitalFlowPage() {
           {!inDrill && data.coverage && data.coverage.coveragePct < 90 && (
             <div className="card" style={{
               padding: '10px 12px',
-              borderLeft: '3px solid #f59e0b',
+              borderLeft: '3px solid var(--color-brand-600)',
               background: '#fffbeb',
             }}>
               <p style={{ fontSize: '12px', color: '#92400e', margin: 0, lineHeight: 1.5 }}>
