@@ -11,6 +11,8 @@
     "db:studio": "drizzle-kit studio",
     "db:push": "drizzle-kit push",
     "db:migrate-to-turso": "tsx scripts/migrate-local-to-turso.ts",
+    "batch:ohlcv": "tsx --env-file=.env.local scripts/batch-ohlcv.ts",
+    "batch:snapshots": "tsx --env-file=.env.local scripts/batch-snapshots.ts",
     "pull": "git pull origin claude/resume-development-kvnU1",
     "sync": "git pull origin claude/resume-development-kvnU1 && npm install"
   },
@@ -37,6 +39,7 @@
     "d3": "^7.9.0",
     "drizzle-kit": "^0.31.10",
     "tailwindcss": "^4",
+    "tsx": "^4.21.0",
     "typescript": "^5"
   }
 }
