@@ -212,7 +212,7 @@ export const dailySnapshots = sqliteTable(
 // ─────────────────────────────────────
 export const batchRuns = sqliteTable('batch_runs', {
   id:            integer('id').primaryKey({ autoIncrement: true }),
-  jobType:       text('job_type').notNull(),       // 'ohlcv_fetch' | 'snapshot_compute'
+  jobType:       text('job_type').notNull(),       // 'ohlcv_fetch' | 'snapshot_compute' | 'feature_compute' | 'forward_returns' | 'pattern_stats'
   startedAt:     integer('started_at', { mode: 'timestamp' }).notNull(),
   finishedAt:    integer('finished_at', { mode: 'timestamp' }),
   status:        text('status').notNull(),          // 'running' | 'success' | 'failed' | 'partial'
@@ -222,4 +222,109 @@ export const batchRuns = sqliteTable('batch_runs', {
   rowsInserted:  integer('rows_inserted').default(0),
   errorSummary:  text('error_summary'),             // JSON 文字列、先頭10件のエラー
 })
+
+// ─────────────────────────────────────
+// 11. Phase 3: 特徴量スナップショット (3 timescale × 30+ 次元の特徴量ベクトル)
+//     daily_snapshots と (ticker, date) で対応するが timescale ごとに別行
+// ─────────────────────────────────────
+export const featureSnapshots = sqliteTable(
+  'feature_snapshots',
+  {
+    ticker:    text('ticker').notNull(),
+    date:      text('date').notNull(),
+    timescale: text('timescale').notNull(),  // 'daily' | 'weekly' | 'monthly'
+
+    // セクション A: 並び順 (12 次元)
+    // Period A: ma1-ma2, ma1-ma3, ma2-ma3 / Period B: ma3-ma4, ma3-ma5, ma4-ma5
+    bin_order_a_12: integer('bin_order_a_12'),
+    bin_order_a_13: integer('bin_order_a_13'),
+    bin_order_a_23: integer('bin_order_a_23'),
+    bin_order_b_12: integer('bin_order_b_12'),
+    bin_order_b_13: integer('bin_order_b_13'),
+    bin_order_b_23: integer('bin_order_b_23'),
+    rel_dist_a_12: real('rel_dist_a_12'),
+    rel_dist_a_13: real('rel_dist_a_13'),
+    rel_dist_a_23: real('rel_dist_a_23'),
+    rel_dist_b_12: real('rel_dist_b_12'),
+    rel_dist_b_13: real('rel_dist_b_13'),
+    rel_dist_b_23: real('rel_dist_b_23'),
+
+    // セクション B: 拡散ダイナミクス (8 次元)
+    divergence_a:          real('divergence_a'),
+    divergence_b:          real('divergence_b'),
+    divergence_a_delta:    real('divergence_a_delta'),
+    divergence_b_delta:    real('divergence_b_delta'),
+    fan_uniformity:        real('fan_uniformity'),
+    divergence_percentile: real('divergence_percentile'),
+    stage_a_age:           integer('stage_a_age'),
+    stage_b_age:           integer('stage_b_age'),
+
+    // セクション C: トレンドダイナミクス (11 次元)
+    slope_m1: real('slope_m1'), accel_m1: real('accel_m1'),
+    slope_m2: real('slope_m2'), accel_m2: real('accel_m2'),
+    slope_m3: real('slope_m3'), accel_m3: real('accel_m3'),
+    slope_m4: real('slope_m4'), accel_m4: real('accel_m4'),
+    slope_m5: real('slope_m5'), accel_m5: real('accel_m5'),
+    angle_synchrony: real('angle_synchrony'),
+
+    // セクション D: ステージ one-hot (JSON 文字列、展開で 12 次元)
+    stage_a_oh: text('stage_a_oh'),
+    stage_b_oh: text('stage_b_oh'),
+
+    computed_at: integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk:           primaryKey({ columns: [t.ticker, t.date, t.timescale] }),
+    dateIdx:      index('feat_date_idx').on(t.date),
+    timescaleIdx: index('feat_ts_idx').on(t.timescale, t.date),
+  }),
+)
+
+// ─────────────────────────────────────
+// 12. Phase 3: フォワードリターン (各 (ticker, date) で 30/60/90/180 日後の % 変化)
+// ─────────────────────────────────────
+export const forwardReturns = sqliteTable(
+  'forward_returns',
+  {
+    ticker:          text('ticker').notNull(),
+    date:            text('date').notNull(),
+    horizon_days:    integer('horizon_days').notNull(),     // 30 | 60 | 90 | 180
+    return_pct:      real('return_pct').notNull(),           // 5.2 = +5.2%
+    return_category: text('return_category').notNull(),      // 'very_up' | 'up' | 'flat' | 'down' | 'very_down'
+    end_date:        text('end_date').notNull(),             // 計算終端日
+  },
+  (t) => ({
+    pk:      primaryKey({ columns: [t.ticker, t.date, t.horizon_days] }),
+    dateIdx: index('fwd_date_idx').on(t.date),
+  }),
+)
+
+// ─────────────────────────────────────
+// 13. Phase 3: パターン統計 (6桁ステージコード × horizon ごとに集計)
+// ─────────────────────────────────────
+export const patternStats = sqliteTable(
+  'pattern_stats',
+  {
+    pattern_code: text('pattern_code').notNull(),    // "111116" 等 (日A日B週A週B月A月B)
+    horizon_days: integer('horizon_days').notNull(), // 30 | 60 | 90 | 180
+    count:        integer('count').notNull(),
+    // 分位 (p05, p25, p50, p75, p95)
+    p05: real('p05'),
+    p25: real('p25'),
+    p50: real('p50'),
+    p75: real('p75'),
+    p95: real('p95'),
+    // カテゴリ別件数
+    very_up_count:   integer('very_up_count').notNull().default(0),
+    up_count:        integer('up_count').notNull().default(0),
+    flat_count:      integer('flat_count').notNull().default(0),
+    down_count:      integer('down_count').notNull().default(0),
+    very_down_count: integer('very_down_count').notNull().default(0),
+    computed_at:     integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk:      primaryKey({ columns: [t.pattern_code, t.horizon_days] }),
+    codeIdx: index('pstat_code_idx').on(t.pattern_code),
+  }),
+)
 
