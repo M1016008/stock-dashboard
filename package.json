@@ -13,6 +13,10 @@
     "db:migrate-to-turso": "tsx scripts/migrate-local-to-turso.ts",
     "batch:ohlcv": "tsx --env-file=.env.local scripts/batch-ohlcv.ts",
     "batch:snapshots": "tsx --env-file=.env.local scripts/batch-snapshots.ts",
+    "batch:features": "tsx --env-file=.env.local scripts/batch-features.ts",
+    "batch:forward-returns": "tsx --env-file=.env.local scripts/batch-forward-returns.ts",
+    "batch:pattern-stats": "tsx --env-file=.env.local scripts/batch-pattern-stats.ts",
+    "verify:phase3": "tsx --env-file=.env.local scripts/verify-phase3.ts",
     "pull": "git pull origin claude/resume-development-kvnU1",
     "sync": "git pull origin claude/resume-development-kvnU1 && npm install"
   },
