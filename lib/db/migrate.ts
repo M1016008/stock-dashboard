@@ -233,6 +233,15 @@ const STATEMENTS = [
     PRIMARY KEY (pattern_code, horizon_days)
   )`,
   `CREATE INDEX IF NOT EXISTS pstat_code_idx ON pattern_stats(pattern_code)`,
+  // ─── Phase 4: ステージ遷移カウント (6軸 × 6 from × 6 to = 216 行) ───
+  `CREATE TABLE IF NOT EXISTS stage_transitions (
+    axis TEXT NOT NULL,
+    from_stage INTEGER NOT NULL,
+    to_stage INTEGER NOT NULL,
+    count INTEGER NOT NULL,
+    computed_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (axis, from_stage, to_stage)
+  )`,
 ]
 
 /** 廃止されたテーブル。存在していれば DROP する（再実行しても無害）。 */
