@@ -7,6 +7,7 @@ import { useEffect, useState } from 'react'
 const NAV_ITEMS = [
   { href: '/', label: 'ダッシュボード' },
   { href: '/hex-stage', label: 'HEX ステージ' },
+  { href: '/ai/transitions', label: 'パターン探索' },
   { href: '/screener', label: 'スクリーナー' },
   { href: '/capital-flow', label: '資金フロー' },
   { href: '/watchlist', label: 'ウォッチリスト' },
