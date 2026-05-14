@@ -8,9 +8,9 @@
 //   - timescale を指定して、その timescale の特徴量ベクトルだけで比較
 //   - デフォルト k = 30
 
-import { db } from './db/client'
+import { db, client } from './db/client'
 import { featureSnapshots } from './db/schema'
-import { eq, and, ne, sql } from 'drizzle-orm'
+import { eq, and } from 'drizzle-orm'
 import { cosineSimilarity } from './features'
 
 export type Timescale = 'daily' | 'weekly' | 'monthly'
@@ -36,6 +36,9 @@ export interface FindSimilarOptions {
  * @param options.excludeSelfTicker  同一銘柄を除外
  * @param options.maxDate            検索対象の最大日付 (含まない)
  */
+/** 1 ページのサイズ (メモリと速度のバランス) */
+const PAGE_SIZE = 50_000
+
 export async function findSimilarSnapshots(
   ticker: string,
   date: string,
@@ -57,30 +60,50 @@ export async function findSimilarSnapshots(
   if (queryRows.length === 0) return []
   const queryVec = featureRowToVector(queryRows[0])
 
-  // 2. 候補集合の取得 (date < cutoffDate な全行)
+  // 2. 候補をページ単位でストリーミング読み込み、top-k を維持
+  //    全行をメモリに載せると 20M 行スケールで OOM するため、libsql の raw SQL で
+  //    1 ページずつ読んで都度 cosine 計算 → top-k だけ保持。
   const cutoffDate = options.maxDate ?? date
-  const conditions = [
-    eq(featureSnapshots.timescale, timescale),
-    sql`${featureSnapshots.date} < ${cutoffDate}`,
-  ]
-  if (options.excludeSelfTicker) {
-    conditions.push(ne(featureSnapshots.ticker, ticker))
+  const excludeSelf = options.excludeSelfTicker ? 1 : 0
+
+  const topK: SimilarCase[] = []  // 類似度降順、長さ k 以下
+  let offset = 0
+
+  while (true) {
+    const sqlText = `
+      SELECT *
+      FROM feature_snapshots
+      WHERE timescale = ?
+        AND date < ?
+        ${excludeSelf ? 'AND ticker <> ?' : ''}
+      LIMIT ${PAGE_SIZE} OFFSET ${offset}
+    `
+    const args: (string | number)[] = excludeSelf
+      ? [timescale, cutoffDate, ticker]
+      : [timescale, cutoffDate]
+
+    const page = await client.execute({ sql: sqlText, args })
+    if (page.rows.length === 0) break
+
+    for (const row of page.rows) {
+      const r = row as unknown as typeof featureSnapshots.$inferSelect
+      const sim = cosineSimilarity(queryVec, featureRowToVector(r))
+
+      // top-k に挿入 (k 件未満は無条件追加、満杯なら最小値より大きい時のみ)
+      if (topK.length < k) {
+        topK.push({ ticker: r.ticker, date: r.date, similarity: sim })
+        topK.sort((a, b) => b.similarity - a.similarity)
+      } else if (sim > topK[topK.length - 1].similarity) {
+        topK[topK.length - 1] = { ticker: r.ticker, date: r.date, similarity: sim }
+        topK.sort((a, b) => b.similarity - a.similarity)
+      }
+    }
+
+    if (page.rows.length < PAGE_SIZE) break  // 最終ページ
+    offset += PAGE_SIZE
   }
 
-  const candidates = await db
-    .select()
-    .from(featureSnapshots)
-    .where(and(...conditions))
-
-  // 3. cosine 計算 & 上位 k 件
-  const scored: SimilarCase[] = []
-  for (const c of candidates) {
-    const sim = cosineSimilarity(queryVec, featureRowToVector(c))
-    scored.push({ ticker: c.ticker, date: c.date, similarity: sim })
-  }
-
-  scored.sort((a, b) => b.similarity - a.similarity)
-  return scored.slice(0, k)
+  return topK
 }
 
 /**

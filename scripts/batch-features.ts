@@ -13,7 +13,7 @@
 //   - ローリング状態 (MA 系列、拡散履歴、ステージ滞在トラッカー) を保持
 //   - チャンク 200 行で INSERT (libSQL の SQL 長制限対策)、onConflictDoNothing で冪等
 
-import { db } from '@/lib/db/client'
+import { db, client } from '@/lib/db/client'
 import { dailySnapshots, featureSnapshots, tickerUniverse, batchRuns } from '@/lib/db/schema'
 import * as F from '@/lib/features'
 import { eq, asc } from 'drizzle-orm'
@@ -85,6 +85,17 @@ interface FeatureRow {
 }
 
 async function computeFeaturesForTicker(ticker: string): Promise<number> {
+  // 既に処理済みかチェック (再開時の高速スキップ)
+  const existing = await client.execute({
+    sql: 'SELECT COUNT(*) AS c FROM feature_snapshots WHERE ticker = ? LIMIT 1',
+    args: [ticker],
+  })
+  const existingCount = Number((existing.rows[0] as unknown as { c: number }).c ?? 0)
+  if (existingCount > 0) {
+    // 既存あり: スキップ (再計算しない)
+    return 0
+  }
+
   const snapshots = await db
     .select()
     .from(dailySnapshots)
