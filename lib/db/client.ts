@@ -17,11 +17,13 @@ import fs from 'fs'
 
 const TURSO_URL = process.env.TURSO_DATABASE_URL
 const TURSO_TOKEN = process.env.TURSO_AUTH_TOKEN
+// USE_LOCAL_DB=1 で Turso を無視してローカル DB を強制 (バッチ用)
+const FORCE_LOCAL = process.env.USE_LOCAL_DB === '1'
 
 const LOCAL_DB_PATH = path.join(process.cwd(), 'data', 'stockboard.db')
 
 function buildClientUrl(): { url: string; authToken?: string; isCloud: boolean } {
-  if (TURSO_URL) {
+  if (TURSO_URL && !FORCE_LOCAL) {
     return { url: TURSO_URL, authToken: TURSO_TOKEN, isCloud: true }
   }
   // ローカルファイル。dataディレクトリを先に作る

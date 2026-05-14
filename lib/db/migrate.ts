@@ -182,6 +182,57 @@ const STATEMENTS = [
     rows_inserted INTEGER DEFAULT 0,
     error_summary TEXT
   )`,
+  // ─── Phase 3: 特徴量スナップショット (3 timescale × 30+ 次元) ───
+  `CREATE TABLE IF NOT EXISTS feature_snapshots (
+    ticker TEXT NOT NULL,
+    date TEXT NOT NULL,
+    timescale TEXT NOT NULL,
+    bin_order_a_12 INTEGER, bin_order_a_13 INTEGER, bin_order_a_23 INTEGER,
+    bin_order_b_12 INTEGER, bin_order_b_13 INTEGER, bin_order_b_23 INTEGER,
+    rel_dist_a_12 REAL, rel_dist_a_13 REAL, rel_dist_a_23 REAL,
+    rel_dist_b_12 REAL, rel_dist_b_13 REAL, rel_dist_b_23 REAL,
+    divergence_a REAL, divergence_b REAL,
+    divergence_a_delta REAL, divergence_b_delta REAL,
+    fan_uniformity REAL, divergence_percentile REAL,
+    stage_a_age INTEGER, stage_b_age INTEGER,
+    slope_m1 REAL, accel_m1 REAL,
+    slope_m2 REAL, accel_m2 REAL,
+    slope_m3 REAL, accel_m3 REAL,
+    slope_m4 REAL, accel_m4 REAL,
+    slope_m5 REAL, accel_m5 REAL,
+    angle_synchrony REAL,
+    stage_a_oh TEXT, stage_b_oh TEXT,
+    computed_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (ticker, date, timescale)
+  )`,
+  `CREATE INDEX IF NOT EXISTS feat_date_idx ON feature_snapshots(date)`,
+  `CREATE INDEX IF NOT EXISTS feat_ts_idx ON feature_snapshots(timescale, date)`,
+  // ─── Phase 3: フォワードリターン (4 horizon) ───
+  `CREATE TABLE IF NOT EXISTS forward_returns (
+    ticker TEXT NOT NULL,
+    date TEXT NOT NULL,
+    horizon_days INTEGER NOT NULL,
+    return_pct REAL NOT NULL,
+    return_category TEXT NOT NULL,
+    end_date TEXT NOT NULL,
+    PRIMARY KEY (ticker, date, horizon_days)
+  )`,
+  `CREATE INDEX IF NOT EXISTS fwd_date_idx ON forward_returns(date)`,
+  // ─── Phase 3: パターン統計 (6桁コード × horizon) ───
+  `CREATE TABLE IF NOT EXISTS pattern_stats (
+    pattern_code TEXT NOT NULL,
+    horizon_days INTEGER NOT NULL,
+    count INTEGER NOT NULL,
+    p05 REAL, p25 REAL, p50 REAL, p75 REAL, p95 REAL,
+    very_up_count INTEGER NOT NULL DEFAULT 0,
+    up_count INTEGER NOT NULL DEFAULT 0,
+    flat_count INTEGER NOT NULL DEFAULT 0,
+    down_count INTEGER NOT NULL DEFAULT 0,
+    very_down_count INTEGER NOT NULL DEFAULT 0,
+    computed_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (pattern_code, horizon_days)
+  )`,
+  `CREATE INDEX IF NOT EXISTS pstat_code_idx ON pattern_stats(pattern_code)`,
 ]
 
 /** 廃止されたテーブル。存在していれば DROP する（再実行しても無害）。 */
