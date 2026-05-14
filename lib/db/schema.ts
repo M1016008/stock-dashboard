@@ -300,6 +300,23 @@ export const forwardReturns = sqliteTable(
 )
 
 // ─────────────────────────────────────
+// 14. Phase 4: ステージ遷移カウント (6軸 × 6 from × 6 to = 216 行)
+// ─────────────────────────────────────
+export const stageTransitions = sqliteTable(
+  'stage_transitions',
+  {
+    axis:        text('axis').notNull(),        // 'daily_a' | 'daily_b' | 'weekly_a' | 'weekly_b' | 'monthly_a' | 'monthly_b'
+    from_stage:  integer('from_stage').notNull(),  // 1-6
+    to_stage:    integer('to_stage').notNull(),    // 1-6
+    count:       integer('count').notNull(),
+    computed_at: integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.axis, t.from_stage, t.to_stage] }),
+  }),
+)
+
+// ─────────────────────────────────────
 // 13. Phase 3: パターン統計 (6桁ステージコード × horizon ごとに集計)
 // ─────────────────────────────────────
 export const patternStats = sqliteTable(
