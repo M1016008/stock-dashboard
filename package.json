@@ -18,6 +18,7 @@
     "batch:pattern-stats": "tsx --env-file=.env.local scripts/batch-pattern-stats.ts",
     "batch:stage-transitions": "tsx --env-file=.env.local scripts/batch-stage-transitions.ts",
     "batch:listed-info": "tsx --env-file=.env.local scripts/batch-listed-info.ts",
+    "batch:shares-outstanding": "tsx --env-file=.env.local scripts/batch-shares-outstanding.ts",
     "verify:phase3": "tsx --env-file=.env.local scripts/verify-phase3.ts",
     "pull": "git pull origin claude/resume-development-kvnU1",
     "sync": "git pull origin claude/resume-development-kvnU1 && npm install"
@@ -27,6 +28,7 @@
     "@radix-ui/react-popover": "^1.1.15",
     "date-fns": "^4.1.0",
     "drizzle-orm": "^0.45.2",
+    "lightweight-charts": "^5.2.0",
     "lucide-react": "^1.14.0",
     "next": "16.2.4",
     "react": "19.2.4",

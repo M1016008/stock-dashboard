@@ -141,10 +141,13 @@ export const csvImports = sqliteTable('csv_imports', {
 // 7. Phase 2: 銘柄ユニバース (追跡対象銘柄マスタ)
 // ─────────────────────────────────────
 export const tickerUniverse = sqliteTable('ticker_universe', {
-  ticker:    text('ticker').primaryKey(),                                                   // "7203" など、.T サフィックスなし
-  name:      text('name'),                                                                  // 銘柄名 (任意、後で埋める)
-  active:    integer('active', { mode: 'boolean' }).notNull().default(true),
-  addedAt:   integer('added_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  ticker:             text('ticker').primaryKey(),                                          // "7203" など、.T サフィックスなし
+  name:               text('name'),                                                         // 銘柄名 (任意、後で埋める)
+  active:             integer('active', { mode: 'boolean' }).notNull().default(true),
+  addedAt:            integer('added_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  // Phase 3.6: 時価総額計算用にキャッシュ。J-Quants /fins/summary の ShOutFY 由来。
+  shares_outstanding: integer('shares_outstanding'),                                        // 発行済株式数 (株)
+  shares_updated_at:  integer('shares_updated_at', { mode: 'timestamp' }),                  // 上記の取得時刻
 })
 
 // ─────────────────────────────────────

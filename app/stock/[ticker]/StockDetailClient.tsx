@@ -4,13 +4,13 @@
 import { useEffect, useState } from 'react'
 import { MarketBadge } from '@/components/ui/MarketBadge'
 import { PriceDisplay } from '@/components/ui/PriceDisplay'
-import { TradingViewChart } from '@/components/charts/TradingViewChart'
+import { CandlestickChart } from '@/components/charts/CandlestickChart'
 import { PerformanceCard } from '@/components/stock/PerformanceCard'
 import { EarningsCard } from '@/components/stock/EarningsCard'
 import { WatchlistButton } from '@/components/ui/WatchlistButton'
 import { StageTimeline } from '@/components/stock/StageTimeline'
 import { findTicker } from '@/lib/master/tickers'
-import type { StockQuote, Fundamentals } from '@/types/stock'
+import type { StockQuote } from '@/types/stock'
 
 interface StockDetailClientProps {
   ticker: string
@@ -28,7 +28,6 @@ interface SectorMasterRow {
 
 export function StockDetailClient({ ticker }: StockDetailClientProps) {
   const [quote, setQuote] = useState<StockQuote | null>(null)
-  const [fundamentals, setFundamentals] = useState<Fundamentals | null>(null)
   const [smaster, setSmaster] = useState<SectorMasterRow | null>(null)
   const [loading, setLoading] = useState(true)
 
@@ -39,14 +38,12 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
     async function fetchData() {
       setLoading(true)
       try {
-        const [quoteRes, fundamentalRes, masterRes] = await Promise.all([
+        const [quoteRes, masterRes] = await Promise.all([
           fetch(`/api/quote/${encodeURIComponent(ticker)}`),
-          fetch(`/api/fundamentals/${encodeURIComponent(ticker)}`),
           fetch(`/api/sector-master/${encodeURIComponent(ticker)}`),
         ])
         if (cancelled) return
         if (quoteRes.ok) setQuote(await quoteRes.json())
-        if (fundamentalRes.ok) setFundamentals(await fundamentalRes.json())
         if (masterRes.ok) {
           const j = await masterRes.json()
           setSmaster(j.master ?? null)
@@ -126,11 +123,7 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
 
       {/* 基本情報 + 直近変化率 */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '12px' }}>
-        <BasicInfoCard
-          ticker={ticker}
-          quote={quote}
-          fundamentals={fundamentals}
-        />
+        <BasicInfoCard quote={quote} />
         <PerformanceCard ticker={ticker} />
       </div>
 
@@ -141,7 +134,7 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
       <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
         <div>
           <div className="section-header">📈 日足チャート（短期トレンド）</div>
-          <TradingViewChart
+          <CandlestickChart
             ticker={ticker}
             interval="D"
             height={420}
@@ -150,7 +143,7 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
         </div>
         <div>
           <div className="section-header">📊 週足チャート（中期トレンド）</div>
-          <TradingViewChart
+          <CandlestickChart
             ticker={ticker}
             interval="W"
             height={420}
@@ -159,7 +152,7 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
         </div>
         <div>
           <div className="section-header">📉 月足チャート（長期トレンド）</div>
-          <TradingViewChart
+          <CandlestickChart
             ticker={ticker}
             interval="M"
             height={420}
@@ -195,24 +188,12 @@ function Pill({ label, accent }: { label: string; accent?: boolean }) {
   )
 }
 
-function BasicInfoCard({
-  ticker,
-  quote,
-  fundamentals,
-}: {
-  ticker: string
-  quote: StockQuote | null
-  fundamentals: Fundamentals | null
-}) {
+function BasicInfoCard({ quote }: { quote: StockQuote | null }) {
   const items = [
-    { label: '時価総額', value: quote?.marketCap ? `${(quote.marketCap / 1e8).toLocaleString('ja-JP', { maximumFractionDigits: 0 })} 億円` : '---' },
+    { label: '時価総額', value: quote?.marketCap != null ? `${(quote.marketCap / 1e8).toLocaleString('ja-JP', { maximumFractionDigits: 0 })} 億円` : '---' },
     { label: '出来高', value: quote?.volume ? quote.volume.toLocaleString('ja-JP') : '---' },
-    { label: '52週高値', value: quote?.fiftyTwoWeekHigh != null ? quote.fiftyTwoWeekHigh.toLocaleString('ja-JP') : '---' },
-    { label: '52週安値', value: quote?.fiftyTwoWeekLow != null ? quote.fiftyTwoWeekLow.toLocaleString('ja-JP') : '---' },
-    { label: 'PER', value: fundamentals?.per != null ? `${fundamentals.per.toFixed(1)}x` : '---' },
-    { label: 'PBR', value: fundamentals?.pbr != null ? `${fundamentals.pbr.toFixed(2)}x` : '---' },
-    { label: 'ROE', value: fundamentals?.roe != null ? `${fundamentals.roe.toFixed(1)}%` : '---' },
-    { label: '配当利回り', value: fundamentals?.dividendYield != null ? `${fundamentals.dividendYield.toFixed(2)}%` : '---' },
+    { label: '52週高値', value: quote?.fiftyTwoWeekHigh != null ? `¥${quote.fiftyTwoWeekHigh.toLocaleString('ja-JP', { maximumFractionDigits: 1 })}` : '---' },
+    { label: '52週安値', value: quote?.fiftyTwoWeekLow != null ? `¥${quote.fiftyTwoWeekLow.toLocaleString('ja-JP', { maximumFractionDigits: 1 })}` : '---' },
   ]
 
   return (
