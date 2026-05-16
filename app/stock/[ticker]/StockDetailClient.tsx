@@ -6,7 +6,6 @@ import { MarketBadge } from '@/components/ui/MarketBadge'
 import { PriceDisplay } from '@/components/ui/PriceDisplay'
 import { TradingViewChart } from '@/components/charts/TradingViewChart'
 import { PerformanceCard } from '@/components/stock/PerformanceCard'
-import { NewsSection } from '@/components/stock/NewsSection'
 import { EarningsCard } from '@/components/stock/EarningsCard'
 import { WatchlistButton } from '@/components/ui/WatchlistButton'
 import { StageTimeline } from '@/components/stock/StageTimeline'
@@ -173,12 +172,6 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
       <div>
         <div className="section-header">ステージ変遷（週ごと）</div>
         <StageTimeline ticker={ticker} />
-      </div>
-
-      {/* 関連ニュース */}
-      <div>
-        <div className="section-header">📰 関連ニュース</div>
-        <NewsSection ticker={ticker} />
       </div>
 
     </div>

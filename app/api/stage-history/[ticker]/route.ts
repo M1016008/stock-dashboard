@@ -1,10 +1,14 @@
 // app/api/stage-history/[ticker]/route.ts
-// 指定銘柄について、過去 N 週分の各週末時点のステージを算出して返す。
-// OHLCV を週末でスライスして MA を計算 → 6ステージ判定。
+// Phase 3.5 で完全書き換え: Yahoo を呼んで都度 MA 計算する代わりに、
+// 既に計算済みの daily_snapshots から直接読み出す。
+//
+// 動作: 過去 N 週分について、各週末 (= 5 営業日刻みで遡って) のスナップショットを返す。
+// Yahoo の `getHistory` も `buildMaValuesFromOhlcv` も不要。
 
 import { NextRequest, NextResponse } from 'next/server'
-import { getHistory } from '@/lib/yahoo-finance'
-import { buildMaValuesFromOhlcv, calculateAllStages } from '@/lib/hex-stage'
+import { db } from '@/lib/db/client'
+import { dailySnapshots } from '@/lib/db/schema'
+import { asc, eq } from 'drizzle-orm'
 
 export const revalidate = 3600
 
@@ -16,7 +20,7 @@ interface StageHistoryEntry {
   weekly_b_stage: number | null
   monthly_a_stage: number | null
   monthly_b_stage: number | null
-  close: number
+  close: number | null  // 互換性のため残すが、daily_snapshots には close 列がない
 }
 
 export async function GET(
@@ -24,36 +28,43 @@ export async function GET(
   { params }: { params: Promise<{ ticker: string }> },
 ) {
   try {
-    const { ticker } = await params
-    const decoded = decodeURIComponent(ticker)
+    const { ticker: rawTicker } = await params
+    const ticker = decodeURIComponent(rawTicker).replace(/\.T$/i, '')
     const { searchParams } = new URL(request.url)
     const weeks = Math.min(Number(searchParams.get('weeks') ?? '26'), 52)
 
-    const history = await getHistory(decoded, '2y')
-    if (history.length === 0) {
-      return NextResponse.json({ ticker: decoded, history: [] })
+    // 該当銘柄の snapshot を日付昇順で全件取得
+    const all = await db
+      .select()
+      .from(dailySnapshots)
+      .where(eq(dailySnapshots.ticker, ticker))
+      .orderBy(asc(dailySnapshots.date))
+
+    if (all.length === 0) {
+      return NextResponse.json({ ticker, history: [], total: 0 })
     }
 
-    const entries: StageHistoryEntry[] = []
-    // 5営業日 = 1週、最新から weeks 週ぶん遡って各週末でスライス
+    // 末尾 weeks * 5 営業日ぶんを 5 日刻みで抽出
     const stepDays = 5
+    const entries: StageHistoryEntry[] = []
     for (let weekIdx = weeks - 1; weekIdx >= 0; weekIdx--) {
-      const offset = weekIdx * stepDays
-      if (history.length <= offset) continue
-      const sliced = history.slice(0, history.length - offset)
-      if (sliced.length < 25) continue
-      const ma = buildMaValuesFromOhlcv(sliced)
-      const stages = calculateAllStages(ma)
-      const last = sliced[sliced.length - 1]
+      const idx = all.length - 1 - weekIdx * stepDays
+      if (idx < 0) continue
+      const snap = all[idx]
       entries.push({
-        date: last.date,
-        close: last.close,
-        ...stages,
+        date:             snap.date,
+        daily_a_stage:    snap.daily_a_stage,
+        daily_b_stage:    snap.daily_b_stage,
+        weekly_a_stage:   snap.weekly_a_stage,
+        weekly_b_stage:   snap.weekly_b_stage,
+        monthly_a_stage:  snap.monthly_a_stage,
+        monthly_b_stage:  snap.monthly_b_stage,
+        close:            null,
       })
     }
 
     return NextResponse.json({
-      ticker: decoded,
+      ticker,
       history: entries,
       total: entries.length,
     })
