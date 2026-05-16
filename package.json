@@ -17,6 +17,7 @@
     "batch:forward-returns": "tsx --env-file=.env.local scripts/batch-forward-returns.ts",
     "batch:pattern-stats": "tsx --env-file=.env.local scripts/batch-pattern-stats.ts",
     "batch:stage-transitions": "tsx --env-file=.env.local scripts/batch-stage-transitions.ts",
+    "batch:listed-info": "tsx --env-file=.env.local scripts/batch-listed-info.ts",
     "verify:phase3": "tsx --env-file=.env.local scripts/verify-phase3.ts",
     "pull": "git pull origin claude/resume-development-kvnU1",
     "sync": "git pull origin claude/resume-development-kvnU1 && npm install"
@@ -32,7 +33,6 @@
     "react-dom": "19.2.4",
     "recharts": "^3.8.1",
     "xlsx": "^0.18.5",
-    "yahoo-finance2": "^3.14.0",
     "zustand": "^5.0.13"
   },
   "devDependencies": {

@@ -1,17 +1,17 @@
 // scripts/batch-ohlcv.ts
 //
-// 日足 OHLCV を取得して ohlcv_daily に蓄積するバッチ。
+// 日足 OHLCV を J-Quants API から取得して ohlcv_daily に蓄積するバッチ。
+// (Phase 3.5 で Yahoo 分岐を削除、J-Quants 一本化)
 //
 // 使い方:
-//   npm run batch:ohlcv                                  # Yahoo (デフォルト), 2 年遡及, Turso 書込
-//   SOURCE=jquants USE_LOCAL_DB=1 npm run batch:ohlcv    # J-Quants, 2008-1-1 から, ローカル DB
-//   TICKERS=7203,6758 SOURCE=jquants USE_LOCAL_DB=1 npm run batch:ohlcv   # 10 銘柄テスト
+//   USE_LOCAL_DB=1 npm run batch:ohlcv                                  # 全銘柄、差分取得
+//   TICKERS=7203,6758 USE_LOCAL_DB=1 npm run batch:ohlcv                # 銘柄絞り込み
+//   HISTORY_FROM=2016-05-13 USE_LOCAL_DB=1 npm run batch:ohlcv          # 初回フルフェッチ用
 //
 // 環境変数:
-//   SOURCE              'yahoo' (デフォルト) | 'jquants'
 //   USE_LOCAL_DB        '1' でローカル SQLite を強制 (Turso クォータ回避)
 //   TICKERS             カンマ区切りで銘柄を絞り込み (テスト用)
-//   HISTORY_FROM        ISO 日付 (YYYY-MM-DD) で取得開始日を上書き
+//   HISTORY_FROM        ISO 日付 (YYYY-MM-DD) で取得開始日を上書き (初回フェッチ時のみ意味あり)
 //
 // 動作:
 //   - 各銘柄について ohlcv_daily の最新日付を確認、それ以降の差分のみ取得 (冪等)
@@ -20,34 +20,20 @@
 
 import { db } from '@/lib/db/client'
 import { tickerUniverse, ohlcvDaily, batchRuns } from '@/lib/db/schema'
-import { fetchHistoricalOhlcv } from '@/lib/yahoo-finance'
 import { fetchJQuantsDaily } from '@/lib/jquants'
 import type { OHLCV } from '@/types/stock'
 import { eq, max, sql } from 'drizzle-orm'
-import { subYears } from 'date-fns'
 
-type Source = 'yahoo' | 'jquants'
-const SOURCE: Source = (process.env.SOURCE as Source) ?? 'yahoo'
-
-// ソース別のレートとデフォルト遡及
-const RATE_LIMIT_MS = SOURCE === 'jquants' ? 100 : 500
+const RATE_LIMIT_MS = 100
 const MAX_RETRIES = 3
-const PROGRESS_EVERY = SOURCE === 'jquants' ? 25 : 50  // J-Quants は速いので頻度上げ
+const PROGRESS_EVERY = 25
 
-// 取得開始日: HISTORY_FROM があればそれ、なければソース別デフォルト
+// 取得開始日: HISTORY_FROM があればそれ、なければ Standard プラン上限 (今日から 10 年前) を試行
 const DEFAULT_FROM_DATE: string =
   process.env.HISTORY_FROM
-  ?? (SOURCE === 'jquants' ? '2008-01-01' : subYears(new Date(), 2).toISOString().slice(0, 10))
+  ?? new Date(Date.now() - 10 * 365 * 86_400_000).toISOString().slice(0, 10)
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
-
-async function fetchByCurrent(ticker: string, fromDate: string): Promise<OHLCV[]> {
-  const from = new Date(fromDate)
-  if (SOURCE === 'jquants') {
-    return fetchJQuantsDaily(ticker, fromDate)
-  }
-  return fetchHistoricalOhlcv(ticker, from)
-}
 
 async function fetchAndStoreForTicker(ticker: string): Promise<number> {
   // 既存最新日付を確認 (差分取得のため)
@@ -63,7 +49,7 @@ async function fetchAndStoreForTicker(ticker: string): Promise<number> {
   let data: OHLCV[] = []
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
-      data = await fetchByCurrent(ticker, fromDate)
+      data = await fetchJQuantsDaily(ticker, fromDate)
       break
     } catch (err) {
       if (attempt === MAX_RETRIES) throw err
@@ -96,13 +82,13 @@ async function fetchAndStoreForTicker(ticker: string): Promise<number> {
 }
 
 async function main() {
-  console.log(`SOURCE=${SOURCE}, HISTORY_FROM=${DEFAULT_FROM_DATE}, RATE_LIMIT=${RATE_LIMIT_MS}ms`)
+  console.log(`SOURCE=jquants, HISTORY_FROM=${DEFAULT_FROM_DATE}, RATE_LIMIT=${RATE_LIMIT_MS}ms`)
 
   // 開始記録
   const [run] = await db
     .insert(batchRuns)
     .values({
-      jobType: `ohlcv_fetch:${SOURCE}`,
+      jobType: 'ohlcv_fetch:jquants',
       startedAt: new Date(),
       status: 'running',
     })
