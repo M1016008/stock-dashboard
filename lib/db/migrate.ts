@@ -254,6 +254,9 @@ const ADD_COLUMN_IF_MISSING: string[] = [
   `ALTER TABLE sector_master ADD COLUMN market_segment TEXT`,
   `ALTER TABLE sector_master ADD COLUMN sector33 TEXT`,
   `ALTER TABLE sector_master ADD COLUMN margin_type TEXT`,
+  // Phase 3.6: 時価総額計算用
+  `ALTER TABLE ticker_universe ADD COLUMN shares_outstanding INTEGER`,
+  `ALTER TABLE ticker_universe ADD COLUMN shares_updated_at INTEGER`,
 ]
 
 export async function ensureSchema(client: Client): Promise<void> {
