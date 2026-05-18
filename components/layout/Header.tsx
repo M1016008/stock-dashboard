@@ -16,7 +16,6 @@ const NAV_ITEMS = [
 ] as const
 
 const ADMIN_ITEMS = [
-  { href: '/admin/import', label: 'データ取込' },
   { href: '/admin/sector-master', label: 'セクター' },
   { href: '/admin/db', label: 'DB' },
 ] as const

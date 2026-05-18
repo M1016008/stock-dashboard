@@ -44,6 +44,8 @@ next-env.d.ts
 /data/stockboard.db
 /data/stockboard.db-journal
 /data/snapshots/
+# 独自分類 Excel (Yoshio 個人の分析資産。各人ローカルに置く)
+/data/classification.xlsx
 
 # editor
 .vscode/
