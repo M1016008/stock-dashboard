@@ -68,7 +68,7 @@ export default function HexStageMapView() {
 
   useEffect(() => {
     let cancelled = false
-    fetch('/api/hex/available-dates')
+    fetch('/api/hex/available-dates', { cache: 'no-store' })
       .then((r) => r.json())
       .then((d) => {
         if (cancelled) return
@@ -85,7 +85,7 @@ export default function HexStageMapView() {
     const params = new URLSearchParams({ timeframe })
     if (selectedDate) params.set('date', selectedDate)
 
-    fetch(`/api/hex?${params}`)
+    fetch(`/api/hex?${params}`, { cache: 'no-store' })
       .then(async (res) => {
         const json = await res.json()
         if (!res.ok) throw new Error(json.error ?? json.message ?? 'failed')

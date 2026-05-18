@@ -14,7 +14,9 @@ export const metadata: Metadata = {
   description: '476 業界 (AI / クラウド / バイオ / 半導体 等) でテーマ的に深掘り',
 }
 
-export const revalidate = 300
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
+export const fetchCache = 'force-no-store'
 
 function fmtMarketCap(v: number | null): string {
   if (v == null) return '—'

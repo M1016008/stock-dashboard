@@ -14,7 +14,9 @@ export const metadata: Metadata = {
   description: '59 大分類で市場全体の流れを把握',
 }
 
-export const revalidate = 300
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
+export const fetchCache = 'force-no-store'
 
 function cellColor(pct: number): { bg: string; color: string; muted: boolean } {
   // intensity を 0〜0.32 の rgba opacity に。±0.05 未満は中立色

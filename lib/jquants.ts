@@ -370,7 +370,7 @@ export async function fetchJQuantsWeeklyMargin(ticker: string, from?: string): P
 }
 
 // ─────────────────────────────────────
-// API: 業績発表予定 (/fins/announcement) — 14 日先まで
+// API: 決算発表予定 (/fins/announcement) — 14 日先まで
 // ─────────────────────────────────────
 
 export interface JAnnouncementRow {
@@ -386,6 +386,91 @@ export interface JAnnouncementRow {
 interface JAnnouncementResponse {
   announcement?: JAnnouncementRow[]
   pagination_key?: string
+}
+
+// ─────────────────────────────────────
+// API: 指数四本値 (/indices/bars/daily)
+//   code 例: 0000=TOPIX, 0070=東証グロース250, 0500=プライム指数,
+//            0501=スタンダード指数, 0502=グロース指数, 0503=JPXプライム150
+//   日経225 は JPX 配信外なので J-Quants では取れない (将来別ソース検討)
+// ─────────────────────────────────────
+
+export interface JIndexBarRow {
+  Date: string
+  Code: string
+  O: number | null
+  H: number | null
+  L: number | null
+  C: number | null
+}
+
+interface JIndexBarsResponse {
+  data?: JIndexBarRow[]
+  pagination_key?: string
+}
+
+export async function fetchJQuantsIndexBars(code: string, from?: string, to?: string): Promise<JIndexBarRow[]> {
+  const apiKey = getApiKey()
+  const all: JIndexBarRow[] = []
+  let paginationKey: string | undefined
+  do {
+    const params = new URLSearchParams({ code })
+    if (from) params.set('from', from)
+    if (to) params.set('to', to)
+    if (paginationKey) params.set('pagination_key', paginationKey)
+    const res = await fetch(`${BASE_URL}/indices/bars/daily?${params}`, {
+      headers: { 'x-api-key': apiKey },
+    })
+    if (!res.ok) {
+      if (res.status === 403 || res.status === 404) return []
+      throw new Error(`J-Quants indices/bars/daily 失敗: ${res.status} ${await res.text()}`)
+    }
+    const json = await res.json() as JIndexBarsResponse
+    all.push(...(json.data ?? []))
+    paginationKey = json.pagination_key
+  } while (paginationKey)
+  return all
+}
+
+// ─────────────────────────────────────
+// API: 決算発表予定 (/equities/earnings-calendar) — 14 日先まで
+// 旧 /fins/announcement は廃止または変更。/equities/earnings-calendar が現行。
+// ─────────────────────────────────────
+
+export interface JEarningsCalRow {
+  Date: string             // 発表予定日 "YYYY-MM-DD"
+  Code: string             // 5 桁コード
+  CoName?: string
+  FY?: string              // 例 "3月31日"
+  FQ?: string              // 例 "本決算" / "第1四半期"
+  SectorNm?: string
+  Section?: string
+}
+
+interface JEarningsCalResponse {
+  data?: JEarningsCalRow[]
+  pagination_key?: string
+}
+
+export async function fetchJQuantsEarningsCalendar(): Promise<JEarningsCalRow[]> {
+  const apiKey = getApiKey()
+  const all: JEarningsCalRow[] = []
+  let paginationKey: string | undefined
+  do {
+    const params = new URLSearchParams()
+    if (paginationKey) params.set('pagination_key', paginationKey)
+    const res = await fetch(`${BASE_URL}/equities/earnings-calendar${params.size > 0 ? `?${params}` : ''}`, {
+      headers: { 'x-api-key': apiKey },
+    })
+    if (!res.ok) {
+      if (res.status === 403 || res.status === 404) return []
+      throw new Error(`J-Quants earnings-calendar 失敗: ${res.status} ${await res.text()}`)
+    }
+    const json = await res.json() as JEarningsCalResponse
+    all.push(...(json.data ?? []))
+    paginationKey = json.pagination_key
+  } while (paginationKey)
+  return all
 }
 
 export async function fetchJQuantsAnnouncement(): Promise<JAnnouncementRow[]> {

@@ -24,7 +24,9 @@ export const metadata: Metadata = {
   description: '6 タイムスケールの組み合わせから過去の類似ケースを統計的に観察',
 }
 
-export const revalidate = 300
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
+export const fetchCache = 'force-no-store'
 
 const STAGE_LABEL = ['日A', '日B', '週A', '週B', '月A', '月B']
 

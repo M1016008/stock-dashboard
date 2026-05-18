@@ -6,7 +6,9 @@ import { ohlcvDaily } from '@/lib/db/schema'
 import { and, asc, eq, gte } from 'drizzle-orm'
 import type { OHLCV } from '@/types/stock'
 
-export const revalidate = 3600
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
+export const fetchCache = 'force-no-store'
 
 const PERIOD_DAYS: Record<string, number> = {
   '1mo': 30,

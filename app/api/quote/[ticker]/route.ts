@@ -7,7 +7,9 @@ import { ohlcvDaily, tickerUniverse } from '@/lib/db/schema'
 import { desc, eq } from 'drizzle-orm'
 import type { StockQuote } from '@/types/stock'
 
-export const revalidate = 60
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
+export const fetchCache = 'force-no-store'
 
 export async function GET(
   request: NextRequest,

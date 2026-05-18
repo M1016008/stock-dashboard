@@ -39,8 +39,8 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
       setLoading(true)
       try {
         const [quoteRes, masterRes] = await Promise.all([
-          fetch(`/api/quote/${encodeURIComponent(ticker)}`),
-          fetch(`/api/sector-master/${encodeURIComponent(ticker)}`),
+          fetch(`/api/quote/${encodeURIComponent(ticker)}`, { cache: 'no-store' }),
+          fetch(`/api/sector-master/${encodeURIComponent(ticker)}`, { cache: 'no-store' }),
         ])
         if (cancelled) return
         if (quoteRes.ok) setQuote(await quoteRes.json())

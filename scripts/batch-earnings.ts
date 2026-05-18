@@ -1,14 +1,14 @@
 // scripts/batch-earnings.ts
 //
-// Phase 4 B12: J-Quants /fins/announcement で業績発表予定を取得し
-// earnings_calendar テーブルに upsert。日次実行で 2 週間先まで取り込み。
+// Phase 4 B12: J-Quants /equities/earnings-calendar で決算発表予定を取得し
+// earnings_calendar テーブルに upsert。日次実行。
 //
 // 使い方:
 //   USE_LOCAL_DB=1 npm run batch:earnings
 
 import { db, client } from '@/lib/db/client'
 import { earningsCalendar, batchRuns } from '@/lib/db/schema'
-import { fetchJQuantsAnnouncement } from '@/lib/jquants'
+import { fetchJQuantsEarningsCalendar } from '@/lib/jquants'
 import { eq } from 'drizzle-orm'
 
 async function main() {
@@ -18,9 +18,9 @@ async function main() {
     .returning({ id: batchRuns.id })
   const runId = run.id
 
-  console.log('J-Quants /fins/announcement を取得中...')
+  console.log('J-Quants /equities/earnings-calendar を取得中...')
   const t0 = Date.now()
-  const rows = await fetchJQuantsAnnouncement()
+  const rows = await fetchJQuantsEarningsCalendar()
   console.log(`取得: ${rows.length} 件 (${((Date.now() - t0) / 1000).toFixed(1)}s)`)
 
   let inserted = 0
@@ -37,7 +37,7 @@ async function main() {
       args: [
         ticker,
         row.Date,
-        [row.FiscalYear, row.FiscalQuarter].filter(Boolean).join(' ') || null,
+        [row.FY, row.FQ].filter(Boolean).join(' ') || null,
       ],
     })
     inserted++

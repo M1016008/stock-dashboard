@@ -60,7 +60,7 @@ export function CandlestickChart({
     let cancelled = false
     setLoading(true)
     setError(null)
-    fetch(`/api/history/${encodeURIComponent(ticker)}?period=${PERIOD_BY_INTERVAL[interval]}`)
+    fetch(`/api/history/${encodeURIComponent(ticker)}?period=${PERIOD_BY_INTERVAL[interval]}`, { cache: 'no-store' })
       .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
       .then((rows: OHLCV[]) => {
         if (cancelled) return

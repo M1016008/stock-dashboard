@@ -326,6 +326,27 @@ export const stageTransitions = sqliteTable(
 )
 
 // ─────────────────────────────────────
+// 14b. Phase 4: 主要指数 OHLC (J-Quants /indices/bars/daily)
+//      code: 0000=TOPIX, 0070=東証グロース250, 0500=プライム, 0501=スタンダード,
+//            0502=グロース, 0503=JPXプライム150
+// ─────────────────────────────────────
+export const indicesDaily = sqliteTable(
+  'indices_daily',
+  {
+    code:  text('code').notNull(),     // J-Quants 指数コード (TOPIX=0000 等)
+    date:  text('date').notNull(),
+    open:  real('open'),
+    high:  real('high'),
+    low:   real('low'),
+    close: real('close'),
+  },
+  (t) => ({
+    pk:      primaryKey({ columns: [t.code, t.date] }),
+    dateIdx: index('indices_date_idx').on(t.date),
+  }),
+)
+
+// ─────────────────────────────────────
 // 15. Phase 4: 独自分類体系 (大分類 59 × 業種細分類 476)
 //     Yoshio さん独自の Excel から取り込む。
 // ─────────────────────────────────────
@@ -382,7 +403,7 @@ export const shortSellingPositions = sqliteTable(
 )
 
 // ─────────────────────────────────────
-// 18. Phase 4: 業績発表カレンダー (J-Quants /fins/announcement)
+// 18. Phase 4: 決算発表カレンダー (J-Quants /fins/announcement)
 // ─────────────────────────────────────
 export const earningsCalendar = sqliteTable(
   'earnings_calendar',

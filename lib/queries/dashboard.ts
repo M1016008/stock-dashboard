@@ -249,7 +249,7 @@ export async function getPatternStatsTopBottom(): Promise<PatternRankRow[]> {
   return [...top, ...bottom]
 }
 
-// ─── 業績発表カレンダー (14 日先まで) ───
+// ─── 決算発表カレンダー (14 日先まで) ───
 export interface EarningsRow {
   ticker: string
   name: string | null
@@ -337,26 +337,69 @@ export async function getCreditShortHighlights(limit = 4): Promise<CreditShortRo
   )
 }
 
-// ─── 主要指数 (Yoshio さんの ohlcv_daily 内に "^N225" 等が無いのでフォールバック) ───
+// ─── 主要指数 (J-Quants /indices/bars/daily 由来) ───
+//
+// 日経225 は JPX 配信外なので含まれない (Phase 5 で別ソース検討)
+// ドル円 / 10年JGB も同様 (為替・金利は当面「データ未接続」)
+
 export interface IndexQuote {
   label: string
-  ticker: string
+  code: string
   value: number | null
   changePct: number | null
+  note?: string  // 「データ未接続」等の補足
 }
+
+const INDEX_LIST: Array<{ code: string; label: string; format?: 'int' | 'float' }> = [
+  { code: '0000', label: 'TOPIX' },
+  { code: '0070', label: 'グロース250' },
+  { code: '0500', label: 'プライム' },
+  { code: '0501', label: 'スタンダード' },
+]
+
 export async function getDashboardIndices(): Promise<IndexQuote[]> {
-  // ticker_universe には ETF/個別株しか入っていないので、騰落レシオは自前計算で対応。
+  // 最新日 + 前日の close を一括取得
+  const latestRow = await execGet<{ d: string | null }>(
+    `SELECT MAX(date) AS d FROM indices_daily`,
+  )
+  const latest = latestRow?.d
+  const prev = latest
+    ? (await execGet<{ d: string | null }>(`SELECT MAX(date) AS d FROM indices_daily WHERE date < ?`, [latest]))?.d
+    : null
+
+  const codes = INDEX_LIST.map(i => i.code)
+  const placeholders = codes.map(() => '?').join(',')
+  const rows = latest
+    ? await execAll<{ code: string; close: number | null }>(
+        `SELECT code, close FROM indices_daily WHERE date = ? AND code IN (${placeholders})`,
+        [latest, ...codes],
+      )
+    : []
+  const prevRows = prev
+    ? await execAll<{ code: string; close: number | null }>(
+        `SELECT code, close FROM indices_daily WHERE date = ? AND code IN (${placeholders})`,
+        [prev, ...codes],
+      )
+    : []
+  const closeMap = new Map(rows.map(r => [r.code, r.close]))
+  const prevMap = new Map(prevRows.map(r => [r.code, r.close]))
+
+  const out: IndexQuote[] = INDEX_LIST.map(i => {
+    const v = closeMap.get(i.code) ?? null
+    const p = prevMap.get(i.code) ?? null
+    const changePct = v != null && p != null && p > 0 ? ((v - p) / p) * 100 : null
+    return { label: i.label, code: i.code, value: v, changePct }
+  })
+
+  // 騰落レシオ (自前計算)
   const ad = await getAdvanceDecline()
   const advRatio = ad && ad.declines > 0 ? (ad.advances / ad.declines) * 100 : null
+  out.push({ label: '騰落レシオ', code: 'ADR', value: advRatio, changePct: null })
 
-  return [
-    { label: '日経225',     ticker: '^N225',  value: null, changePct: null },
-    { label: 'TOPIX',       ticker: '^TPX',   value: null, changePct: null },
-    { label: 'グロース250', ticker: '1563',   value: null, changePct: null },
-    { label: '騰落レシオ',  ticker: 'ADR',    value: advRatio, changePct: null },
-    { label: 'ドル円',      ticker: 'USDJPY', value: null, changePct: null },
-    { label: '10年JGB',     ticker: 'JGB10',  value: null, changePct: null },
-  ]
+  // 日経225 (JPX 配信外)
+  out.push({ label: '日経225', code: 'N225', value: null, changePct: null, note: 'JPX 配信外' })
+
+  return out
 }
 
 // ─── ウォッチリスト (ローカルストレージ依存だが SSR では空の placeholder を返す) ───

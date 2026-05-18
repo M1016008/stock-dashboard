@@ -1,5 +1,5 @@
 // components/dashboard/EarningsCalendarPanel.tsx
-// Phase 4 B12: 業績発表カレンダー (earnings_calendar テーブル経由のサーバーサイド版)
+// Phase 4 B12: 決算発表カレンダー (earnings_calendar テーブル経由のサーバーサイド版)
 
 import Link from 'next/link'
 import { Card, CardHeader } from '@/components/ui/Card'
@@ -15,7 +15,7 @@ export async function EarningsCalendarPanel() {
   const rows = await getEarningsCalendar(14)
   return (
     <Card>
-      <CardHeader title="業績発表カレンダー" hint="14 日先まで" />
+      <CardHeader title="決算発表カレンダー" hint="14 日先まで" />
       {rows.length === 0 ? (
         <div className="py-6 text-center text-[11px] text-[var(--color-text-tertiary)]">
           データ未取り込み — `npm run batch:earnings` で取得してください

@@ -30,7 +30,7 @@ export function WatchlistPanel() {
     Promise.all(
       limited.map(async (t) => {
         try {
-          const res = await fetch(`/api/quote/${t}`)
+          const res = await fetch(`/api/quote/${t}`, { cache: 'no-store' })
           if (!res.ok) return null
           const q = (await res.json()) as Quote
           // 日足 A ステージは /api/snapshot/[ticker] で別途取得 (簡略化のため省略)

@@ -1,13 +1,8 @@
 // app/hex-stage/page.tsx
-// Phase 4 モック準拠 (stockboard_hex_page_mock_v2):
-//   - 6 タイムスケールタブ (?ts=)
-//   - 6 ステージカード (件数 + 先週比)
-//   - 期間タブ (?period=)
-//   - 2 列: 6×6 ステージ遷移マトリクス / 期間別件数推移 KPI
-//   - 遷移銘柄詳細テーブル (6 タイムスケール現在ステージ + 前日→本日)
-// ページ末尾に旧 HEX マップ (B×A グリッド + 銘柄一覧テーブル) を残す。
+// モック準拠 (v2) + 旧 HexMap 併存 + Suspense ストリーミング + キャッシュ無効化
 
 import type { Metadata } from 'next'
+import { Suspense } from 'react'
 import { SixStageCircleMock } from '@/components/hex/SixStageCircleMock'
 import { TransitionMatrixMock } from '@/components/hex/TransitionMatrixMock'
 import { PeriodCountTrendMock } from '@/components/hex/PeriodCountTrendMock'
@@ -21,7 +16,9 @@ export const metadata: Metadata = {
   description: 'トレンドステージ分布 + 遷移分析 + B×A グリッドで市場全体を俯瞰',
 }
 
-export const revalidate = 300
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
+export const fetchCache = 'force-no-store'
 
 const VALID_TS: Timescale[] = ['daily_a', 'daily_b', 'weekly_a', 'weekly_b', 'monthly_a', 'monthly_b']
 const VALID_PERIOD: Period[] = ['today', 'week', 'month']
@@ -40,6 +37,25 @@ const PERIOD_TABS: { key: Period; label: string }[] = [
   { key: 'month', label: '今月' },
 ]
 
+function Loading({ h = 100 }: { h?: number }) {
+  return (
+    <div
+      style={{
+        height: h,
+        background: 'var(--color-surface-subtle)',
+        borderRadius: 6,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        color: 'var(--color-text-tertiary)',
+        fontSize: 11,
+      }}
+    >
+      読込中...
+    </div>
+  )
+}
+
 export default async function HexStagePage({
   searchParams,
 }: {
@@ -56,37 +72,40 @@ export default async function HexStagePage({
         <p>市場全体のステージ分布と銘柄の循環的な動きを観察します</p>
       </div>
 
-      {/* 6 タイムスケールタブ */}
       <div className="sb-section-bd" style={{ display: 'flex', alignItems: 'center', gap: 4, paddingTop: 0 }}>
         <TabRow basePath="/hex-stage" paramKey="ts" current={ts} tabs={TS_TABS} keepKeys={['period']} />
       </div>
 
-      {/* 6 ステージカード */}
       <div className="sb-section">
         <div className="sb-hd">
           <h2>6 ステージの循環</h2>
           <span>1 → 2 → 3 → 4 → 5 → 6 → 1 のサイクル</span>
         </div>
-        <SixStageCircleMock timescale={ts} />
+        <Suspense fallback={<Loading h={130} />}>
+          <SixStageCircleMock timescale={ts} />
+        </Suspense>
       </div>
 
-      {/* ステージ変化サマリー + 期間タブ */}
       <div className="sb-section" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
         <h2 style={{ margin: '0 12px 0 0', fontSize: 14, fontWeight: 500 }}>ステージ変化サマリー</h2>
         <TabRow basePath="/hex-stage" paramKey="period" current={period} tabs={PERIOD_TABS} keepKeys={['ts']} />
       </div>
 
       <div className="sb-section" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-        <TransitionMatrixMock timescale={ts} period={period} />
-        <PeriodCountTrendMock timescale={ts} />
+        <Suspense fallback={<Loading h={300} />}>
+          <TransitionMatrixMock timescale={ts} period={period} />
+        </Suspense>
+        <Suspense fallback={<Loading h={300} />}>
+          <PeriodCountTrendMock timescale={ts} />
+        </Suspense>
       </div>
 
-      {/* 詳細テーブル */}
       <div className="sb-section">
-        <TransitionDetailTableMock timescale={ts} period={period} />
+        <Suspense fallback={<Loading h={300} />}>
+          <TransitionDetailTableMock timescale={ts} period={period} />
+        </Suspense>
       </div>
 
-      {/* 旧 HEX マップ (B×A グリッド + 銘柄テーブル) */}
       <div style={{ borderTop: '0.5px solid var(--color-border-soft)' }}>
         <div className="sb-section" style={{ paddingTop: 14 }}>
           <HexStageMapView />

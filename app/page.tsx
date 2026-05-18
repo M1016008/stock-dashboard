@@ -1,7 +1,12 @@
 // app/page.tsx
-// Phase 4 ダッシュボード再構築。Server Component で各セクションをパラレルに await。
+// Phase 4 ダッシュボード再構築 + Yoshio 要望: キャッシュ無効化 + Suspense ストリーミング
+//
+// 各セクションを Suspense で包むことで、ページを開いた瞬間にスケルトン UI が
+// 表示され、重い集計クエリが終わったセクションから順に置き換わる
+// (体感速度を維持しつつ毎回最新の DB 内容を反映)
 
 import type { Metadata } from 'next'
+import { Suspense } from 'react'
 import { PageTitle } from '@/components/layout/PageTitle'
 import { IndicesGrid } from '@/components/dashboard/IndicesGrid'
 import { StageDistributionBar } from '@/components/dashboard/StageDistributionBar'
@@ -20,13 +25,34 @@ export const metadata: Metadata = {
   description: 'J-Quants データに基づく市場サマリーとパターン統計',
 }
 
-export const revalidate = 300  // 5 分
+// Yoshio 要望: ページを開いたら毎回最新の DB を反映する (Next のキャッシュを完全無効化)
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
+export const fetchCache = 'force-no-store'
+
+function SectionFallback({ height = 80 }: { height?: number }) {
+  return (
+    <div
+      style={{
+        height,
+        background: 'var(--color-surface-subtle)',
+        borderRadius: 8,
+        border: '0.5px solid var(--color-border-soft)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        color: 'var(--color-text-tertiary)',
+        fontSize: 11,
+      }}
+    >
+      読込中...
+    </div>
+  )
+}
 
 export default async function DashboardPage() {
   const latest = await getLatestDate()
-  const subtitle = latest
-    ? `${latest} 大引け基準`
-    : 'データ未取り込み'
+  const subtitle = latest ? `${latest} 大引け基準` : 'データ未取り込み'
 
   return (
     <div className="flex flex-col gap-3.5">
@@ -35,22 +61,42 @@ export default async function DashboardPage() {
         subtitle={subtitle}
         badge="パターン統計 最新反映"
       />
-      <IndicesGrid />
-      <StageDistributionBar />
+      <Suspense fallback={<SectionFallback height={70} />}>
+        <IndicesGrid />
+      </Suspense>
+      <Suspense fallback={<SectionFallback height={70} />}>
+        <StageDistributionBar />
+      </Suspense>
       <div className="grid grid-cols-3 gap-2.5">
-        <TodayTransitionsSummary />
-        <StereoscopicSignals />
-        <NewHighVolume />
+        <Suspense fallback={<SectionFallback height={170} />}>
+          <TodayTransitionsSummary />
+        </Suspense>
+        <Suspense fallback={<SectionFallback height={170} />}>
+          <StereoscopicSignals />
+        </Suspense>
+        <Suspense fallback={<SectionFallback height={170} />}>
+          <NewHighVolume />
+        </Suspense>
       </div>
       <div className="grid grid-cols-[1.5fr_1fr] gap-3.5">
-        <SectorHeatmap />
-        <WatchlistPanel />
+        <Suspense fallback={<SectionFallback height={240} />}>
+          <SectorHeatmap />
+        </Suspense>
+        <Suspense fallback={<SectionFallback height={240} />}>
+          <WatchlistPanel />
+        </Suspense>
       </div>
       <div className="grid grid-cols-2 gap-3.5">
-        <CreditShortPanel />
-        <PatternStatsTop />
+        <Suspense fallback={<SectionFallback height={170} />}>
+          <CreditShortPanel />
+        </Suspense>
+        <Suspense fallback={<SectionFallback height={170} />}>
+          <PatternStatsTop />
+        </Suspense>
       </div>
-      <EarningsCalendarPanel />
+      <Suspense fallback={<SectionFallback height={200} />}>
+        <EarningsCalendarPanel />
+      </Suspense>
     </div>
   )
 }

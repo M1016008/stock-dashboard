@@ -242,6 +242,17 @@ const STATEMENTS = [
     computed_at INTEGER NOT NULL DEFAULT (unixepoch()),
     PRIMARY KEY (axis, from_stage, to_stage)
   )`,
+  // ─── Phase 4: 主要指数 OHLC (J-Quants /indices/bars/daily) ───
+  `CREATE TABLE IF NOT EXISTS indices_daily (
+    code TEXT NOT NULL,
+    date TEXT NOT NULL,
+    open REAL,
+    high REAL,
+    low REAL,
+    close REAL,
+    PRIMARY KEY (code, date)
+  )`,
+  `CREATE INDEX IF NOT EXISTS indices_date_idx ON indices_daily(date)`,
   // ─── Phase 4: 独自分類体系 (大分類 59 × 業種細分類 476) ───
   `CREATE TABLE IF NOT EXISTS stock_classification (
     ticker TEXT PRIMARY KEY,
@@ -273,7 +284,7 @@ const STATEMENTS = [
     PRIMARY KEY (ticker, date, reporter)
   )`,
   `CREATE INDEX IF NOT EXISTS ssp_date_idx ON short_selling_positions(date)`,
-  // ─── Phase 4: 業績発表カレンダー ───
+  // ─── Phase 4: 決算発表カレンダー ───
   `CREATE TABLE IF NOT EXISTS earnings_calendar (
     ticker TEXT NOT NULL,
     announce_date TEXT NOT NULL,
