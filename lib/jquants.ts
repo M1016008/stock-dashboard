@@ -325,3 +325,86 @@ export function computeFundamentals(
 
   return result
 }
+
+// ─────────────────────────────────────
+// API: 信用残高 (/markets/weekly_margin_interest) — 週次
+// ─────────────────────────────────────
+
+export interface JMarginRow {
+  Date: string                  // 報告基準日 "YYYY-MM-DD"
+  Code: string                  // 5 桁コード
+  ShortMarginTradeVolume?: string  // 信用売残 (株)
+  LongMarginTradeVolume?: string   // 信用買残 (株)
+  ShortNegotiableMarginTradeVolume?: string
+  LongNegotiableMarginTradeVolume?: string
+  ShortStandardizedMarginTradeVolume?: string
+  LongStandardizedMarginTradeVolume?: string
+}
+
+interface JMarginResponse {
+  weekly_margin_interest?: JMarginRow[]
+  pagination_key?: string
+}
+
+export async function fetchJQuantsWeeklyMargin(ticker: string, from?: string): Promise<JMarginRow[]> {
+  const apiKey = getApiKey()
+  const all: JMarginRow[] = []
+  let paginationKey: string | undefined
+  do {
+    const params = new URLSearchParams({ code: toJQuantsCode(ticker) })
+    if (from) params.set('from', from)
+    if (paginationKey) params.set('pagination_key', paginationKey)
+    const res = await fetch(`${BASE_URL}/markets/weekly_margin_interest?${params}`, {
+      headers: { 'x-api-key': apiKey },
+    })
+    if (!res.ok) {
+      // Standard プラン外なら 403。空配列で吸収する。
+      if (res.status === 403 || res.status === 404) return []
+      throw new Error(`J-Quants weekly_margin_interest 失敗: ${res.status} ${await res.text()}`)
+    }
+    const json = await res.json() as JMarginResponse
+    all.push(...(json.weekly_margin_interest ?? []))
+    paginationKey = json.pagination_key
+  } while (paginationKey)
+  return all
+}
+
+// ─────────────────────────────────────
+// API: 業績発表予定 (/fins/announcement) — 14 日先まで
+// ─────────────────────────────────────
+
+export interface JAnnouncementRow {
+  Date: string             // 発表日 "YYYY-MM-DD"
+  Code: string             // 5 桁コード
+  CompanyName?: string
+  FiscalYear?: string
+  SectorName?: string
+  FiscalQuarter?: string
+  Section?: string
+}
+
+interface JAnnouncementResponse {
+  announcement?: JAnnouncementRow[]
+  pagination_key?: string
+}
+
+export async function fetchJQuantsAnnouncement(): Promise<JAnnouncementRow[]> {
+  const apiKey = getApiKey()
+  const all: JAnnouncementRow[] = []
+  let paginationKey: string | undefined
+  do {
+    const params = new URLSearchParams()
+    if (paginationKey) params.set('pagination_key', paginationKey)
+    const res = await fetch(`${BASE_URL}/fins/announcement${params.size > 0 ? `?${params}` : ''}`, {
+      headers: { 'x-api-key': apiKey },
+    })
+    if (!res.ok) {
+      if (res.status === 403 || res.status === 404) return []
+      throw new Error(`J-Quants announcement 失敗: ${res.status} ${await res.text()}`)
+    }
+    const json = await res.json() as JAnnouncementResponse
+    all.push(...(json.announcement ?? []))
+    paginationKey = json.pagination_key
+  } while (paginationKey)
+  return all
+}

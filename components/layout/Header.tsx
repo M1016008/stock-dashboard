@@ -6,11 +6,13 @@ import { useEffect, useState } from 'react'
 
 const NAV_ITEMS = [
   { href: '/', label: 'ダッシュボード' },
-  { href: '/hex-stage', label: 'HEX ステージ' },
-  { href: '/ai/transitions', label: 'パターン探索' },
+  { href: '/hex-stage', label: 'HEX' },
+  { href: '/sectors', label: '業種' },
+  { href: '/industries', label: '業界' },
+  { href: '/ai/transitions', label: 'パターン' },
   { href: '/screener', label: 'スクリーナー' },
   { href: '/capital-flow', label: '資金フロー' },
-  { href: '/watchlist', label: 'ウォッチリスト' },
+  { href: '/watchlist', label: 'ウォッチ' },
 ] as const
 
 const ADMIN_ITEMS = [
@@ -122,12 +124,12 @@ export function Header() {
           <span className="text-sm font-semibold tracking-tight">StockBoard</span>
         </Link>
 
-        <nav className="flex items-center gap-1">
+        <nav className="flex items-center gap-0.5">
           {NAV_ITEMS.map((item) => (
             <Link
               key={item.href}
               href={item.href}
-              className={`rounded-md px-3 py-1.5 text-sm transition-colors ${
+              className={`rounded-md px-2.5 py-1.5 text-[12px] tracking-tight transition-colors ${
                 isActive(item.href)
                   ? 'bg-[var(--color-brand-50)] text-[var(--color-brand-700)] font-medium'
                   : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-muted)] hover:text-[var(--color-text-primary)]'
