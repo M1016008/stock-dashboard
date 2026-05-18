@@ -242,6 +242,50 @@ const STATEMENTS = [
     computed_at INTEGER NOT NULL DEFAULT (unixepoch()),
     PRIMARY KEY (axis, from_stage, to_stage)
   )`,
+  // ─── Phase 4: 独自分類体系 (大分類 59 × 業種細分類 476) ───
+  `CREATE TABLE IF NOT EXISTS stock_classification (
+    ticker TEXT PRIMARY KEY,
+    major_category TEXT NOT NULL,
+    sub_industry TEXT NOT NULL,
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_classification_major ON stock_classification(major_category)`,
+  `CREATE INDEX IF NOT EXISTS idx_classification_sub ON stock_classification(sub_industry)`,
+  // ─── Phase 4: 信用残・空売り (J-Quants /markets/weekly_margin_interest) ───
+  `CREATE TABLE IF NOT EXISTS weekly_margin_interest (
+    ticker TEXT NOT NULL,
+    date TEXT NOT NULL,
+    long_margin REAL,
+    short_margin REAL,
+    long_change REAL,
+    short_change REAL,
+    imported_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (ticker, date)
+  )`,
+  `CREATE INDEX IF NOT EXISTS wmi_date_idx ON weekly_margin_interest(date)`,
+  // ─── Phase 4: 空売り残高 ───
+  `CREATE TABLE IF NOT EXISTS short_selling_positions (
+    ticker TEXT NOT NULL,
+    date TEXT NOT NULL,
+    short_ratio REAL,
+    reporter TEXT NOT NULL DEFAULT '',
+    imported_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (ticker, date, reporter)
+  )`,
+  `CREATE INDEX IF NOT EXISTS ssp_date_idx ON short_selling_positions(date)`,
+  // ─── Phase 4: 業績発表カレンダー ───
+  `CREATE TABLE IF NOT EXISTS earnings_calendar (
+    ticker TEXT NOT NULL,
+    announce_date TEXT NOT NULL,
+    fiscal_period TEXT,
+    imported_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (ticker, announce_date)
+  )`,
+  `CREATE INDEX IF NOT EXISTS earn_date_idx ON earnings_calendar(announce_date)`,
+  // ─── Phase 4: 6 桁パターンコード検索用 expression index ───
+  `CREATE INDEX IF NOT EXISTS idx_ds_pattern_code ON daily_snapshots(
+    (CAST(daily_a_stage AS TEXT) || CAST(daily_b_stage AS TEXT) || CAST(weekly_a_stage AS TEXT) || CAST(weekly_b_stage AS TEXT) || CAST(monthly_a_stage AS TEXT) || CAST(monthly_b_stage AS TEXT))
+  )`,
 ]
 
 /** 廃止されたテーブル。存在していれば DROP する（再実行しても無害）。 */
@@ -257,6 +301,12 @@ const ADD_COLUMN_IF_MISSING: string[] = [
   // Phase 3.6: 時価総額計算用
   `ALTER TABLE ticker_universe ADD COLUMN shares_outstanding INTEGER`,
   `ALTER TABLE ticker_universe ADD COLUMN shares_updated_at INTEGER`,
+  // Phase 4: J-Quants /listed/info 由来の業種区分
+  `ALTER TABLE ticker_universe ADD COLUMN sector17_code TEXT`,
+  `ALTER TABLE ticker_universe ADD COLUMN sector17_name TEXT`,
+  `ALTER TABLE ticker_universe ADD COLUMN sector33_code TEXT`,
+  `ALTER TABLE ticker_universe ADD COLUMN sector33_name TEXT`,
+  `ALTER TABLE ticker_universe ADD COLUMN market_segment TEXT`,
 ]
 
 export async function ensureSchema(client: Client): Promise<void> {

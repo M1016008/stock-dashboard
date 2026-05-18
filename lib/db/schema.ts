@@ -148,6 +148,12 @@ export const tickerUniverse = sqliteTable('ticker_universe', {
   // Phase 3.6: 時価総額計算用にキャッシュ。J-Quants /fins/summary の ShOutFY 由来。
   shares_outstanding: integer('shares_outstanding'),                                        // 発行済株式数 (株)
   shares_updated_at:  integer('shares_updated_at', { mode: 'timestamp' }),                  // 上記の取得時刻
+  // Phase 4: J-Quants /listed/info 由来の業種区分
+  sector17_code:      text('sector17_code'),
+  sector17_name:      text('sector17_name'),
+  sector33_code:      text('sector33_code'),
+  sector33_name:      text('sector33_name'),
+  market_segment:     text('market_segment'),
 })
 
 // ─────────────────────────────────────
@@ -316,6 +322,79 @@ export const stageTransitions = sqliteTable(
   },
   (t) => ({
     pk: primaryKey({ columns: [t.axis, t.from_stage, t.to_stage] }),
+  }),
+)
+
+// ─────────────────────────────────────
+// 15. Phase 4: 独自分類体系 (大分類 59 × 業種細分類 476)
+//     Yoshio さん独自の Excel から取り込む。
+// ─────────────────────────────────────
+export const stockClassification = sqliteTable(
+  'stock_classification',
+  {
+    ticker:         text('ticker').primaryKey(),    // ticker_universe.ticker と対応
+    majorCategory:  text('major_category').notNull(),
+    subIndustry:    text('sub_industry').notNull(),
+    updatedAt:      integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    majorIdx: index('idx_classification_major').on(t.majorCategory),
+    subIdx:   index('idx_classification_sub').on(t.subIndustry),
+  }),
+)
+
+// ─────────────────────────────────────
+// 16. Phase 4: 信用残・空売り (J-Quants /markets/weekly_margin_interest)
+// ─────────────────────────────────────
+export const weeklyMarginInterest = sqliteTable(
+  'weekly_margin_interest',
+  {
+    ticker:        text('ticker').notNull(),
+    date:          text('date').notNull(),                     // 報告基準日 "YYYY-MM-DD"
+    longMargin:    real('long_margin'),                        // 信用買残 (株数)
+    shortMargin:   real('short_margin'),                       // 信用売残 (株数)
+    longChange:    real('long_change'),                        // 前週比 (株数差)
+    shortChange:   real('short_change'),
+    importedAt:    integer('imported_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk:      primaryKey({ columns: [t.ticker, t.date] }),
+    dateIdx: index('wmi_date_idx').on(t.date),
+  }),
+)
+
+// ─────────────────────────────────────
+// 17. Phase 4: 空売り残高 (J-Quants /markets/short_selling_positions)
+// ─────────────────────────────────────
+export const shortSellingPositions = sqliteTable(
+  'short_selling_positions',
+  {
+    ticker:        text('ticker').notNull(),
+    date:          text('date').notNull(),
+    shortRatio:    real('short_ratio'),    // 空売り比率 %
+    reporter:      text('reporter'),       // 報告者
+    importedAt:    integer('imported_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk:      primaryKey({ columns: [t.ticker, t.date, t.reporter] }),
+    dateIdx: index('ssp_date_idx').on(t.date),
+  }),
+)
+
+// ─────────────────────────────────────
+// 18. Phase 4: 業績発表カレンダー (J-Quants /fins/announcement)
+// ─────────────────────────────────────
+export const earningsCalendar = sqliteTable(
+  'earnings_calendar',
+  {
+    ticker:        text('ticker').notNull(),
+    announceDate:  text('announce_date').notNull(),    // "YYYY-MM-DD"
+    fiscalPeriod:  text('fiscal_period'),              // 例 "2026Q1"
+    importedAt:    integer('imported_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk:      primaryKey({ columns: [t.ticker, t.announceDate] }),
+    dateIdx: index('earn_date_idx').on(t.announceDate),
   }),
 )
 

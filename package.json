@@ -19,6 +19,9 @@
     "batch:stage-transitions": "tsx --env-file=.env.local scripts/batch-stage-transitions.ts",
     "batch:listed-info": "tsx --env-file=.env.local scripts/batch-listed-info.ts",
     "batch:shares-outstanding": "tsx --env-file=.env.local scripts/batch-shares-outstanding.ts",
+    "batch:credit-short": "tsx --env-file=.env.local scripts/batch-credit-short.ts",
+    "batch:earnings": "tsx --env-file=.env.local scripts/batch-earnings.ts",
+    "import:classification": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/import-classification.ts",
     "verify:phase3": "tsx --env-file=.env.local scripts/verify-phase3.ts",
     "pull": "git pull origin claude/resume-development-kvnU1",
     "sync": "git pull origin claude/resume-development-kvnU1 && npm install"
