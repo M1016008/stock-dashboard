@@ -153,7 +153,7 @@ export async function getSectorBreakdown(code: string, limit = 7): Promise<Secto
       WHERE (CAST(daily_a_stage AS TEXT) || CAST(daily_b_stage AS TEXT) || CAST(weekly_a_stage AS TEXT) || CAST(weekly_b_stage AS TEXT) || CAST(monthly_a_stage AS TEXT) || CAST(monthly_b_stage AS TEXT)) = ?
       LIMIT 5000
     )
-    SELECT COALESCE(tu.sector33_name, '(未分類)') AS sector_name, COUNT(*) AS count
+    SELECT COALESCE(tu.sector33_name, 'その他') AS sector_name, COUNT(*) AS count
     FROM match
     LEFT JOIN ticker_universe tu USING (ticker)
     GROUP BY tu.sector33_name

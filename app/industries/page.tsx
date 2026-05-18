@@ -26,27 +26,25 @@ export default async function IndustriesPage({
   const q = sp.q ?? ''
   const sort = sp.sort ?? 'change_desc'
 
-  const [{ rows, source }, majorList, stocks] = await Promise.all([
+  const [{ rows, classificationCount }, majorList, stocks] = await Promise.all([
     getIndustryList({ q, major: major ?? undefined, sort }),
     getMajorList(),
     selected ? getIndustryStocks(selected, 80) : Promise.resolve([]),
   ])
 
-  const sourceLabel = source === 'classification'
-    ? '業種細分類 (Yoshio 独自分類)'
-    : 'J-Quants Sector33 フォールバック'
+  const sourceLabel = classificationCount > 0
+    ? `${rows.length} 業界 · Yoshio 独自 ${classificationCount} 銘柄 + JPX フォールバック`
+    : `${rows.length} 業界 (JPX Sector33 のみ)`
 
   return (
     <div className="flex flex-col gap-3.5">
       <PageTitle
         title="業界別 (業種細分類)"
-        subtitle={source === 'classification'
-          ? '476 業界 (AI / クラウド / バイオ / 半導体 等) でテーマ的に深掘り'
-          : 'Yoshio 独自分類 (Excel) 未取り込み。J-Quants Sector33 をフォールバック表示中'}
+        subtitle="独自分類 (Excel) を優先し、未掲載銘柄は JPX Sector33 → その他 でフォールバック"
         badge={sourceLabel}
       />
       <IndustriesFilter q={q} majorFilter={major} sort={sort} majorList={majorList} />
-      <IndustriesList rows={rows} source={source} />
+      <IndustriesList rows={rows} source={classificationCount > 0 ? 'classification + JPX' : 'JPX'} />
       {selected && <IndustryStocksPanel industry={selected} rows={stocks} />}
     </div>
   )

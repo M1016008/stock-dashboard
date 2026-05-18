@@ -23,14 +23,14 @@ export default async function SectorsPage({
   const sp = await searchParams
   const selected = sp.selected ?? null
 
-  const [{ rows, source }, subRows] = await Promise.all([
+  const [{ rows, classificationCount }, subRows] = await Promise.all([
     getSectorRows(),
     selected ? getSubSectorsFor(selected) : Promise.resolve([]),
   ])
 
-  const sourceLabel = source === 'classification'
-    ? `${rows.length} 大分類 (Yoshio 独自分類)`
-    : `${rows.length} 業種 (J-Quants Sector17 フォールバック)`
+  const sourceLabel = classificationCount > 0
+    ? `${rows.length} 大分類 · Yoshio 独自 ${classificationCount} 銘柄 + JPX フォールバック`
+    : `${rows.length} 大分類 (JPX Sector17 のみ)`
 
   // Top 5 上昇 / Top 5 下落
   const sorted = [...rows].sort((a, b) => b.avg_change - a.avg_change)
@@ -41,9 +41,7 @@ export default async function SectorsPage({
     <div className="flex flex-col gap-3.5">
       <PageTitle
         title="業種別 (大分類)"
-        subtitle={source === 'classification'
-          ? '59 大分類で市場全体の流れを把握。クリックで業種細分類へドリルダウン'
-          : 'Yoshio 独自分類 (Excel) 未取り込み。J-Quants Sector17 をフォールバック表示中'}
+        subtitle="独自分類 (Excel) を優先し、未掲載銘柄は JPX Sector17 → その他 でフォールバック。クリックで業種細分類へドリルダウン"
         badge={sourceLabel}
       />
       <SectorsHeatmap rows={rows} selected={selected} />

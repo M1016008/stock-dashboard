@@ -1,10 +1,13 @@
-// lib/queries/sectors.ts — Phase 4 E /sectors ページ用集計
+// lib/queries/sectors.ts
 //
-// データソース優先順位:
-//   1. stock_classification (Yoshio 独自 Excel: 大分類 59 × 業種細分類 476)
-//   2. ticker_universe.sector17_name (フォールバック: J-Quants Sector17 = 17 業種)
+// Phase 4 業種別 (/sectors) 用集計。
 //
-// classification が空のときは Sector17 を「大分類」、Sector33 を「業種細分類」として扱う。
+// 業種分類のフォールバック規則 (銘柄ごと):
+//   1. stock_classification.major_category (Yoshio 独自分類 Excel)
+//   2. ticker_universe.sector17_name (J-Quants/JPX Sector17)
+//   3. 'その他'
+//
+// 業種細分類も同様: classification.sub_industry → Sector33 → 'その他'
 
 import { execAll, execGet } from '@/lib/db/client'
 
@@ -16,24 +19,20 @@ export interface SectorRow {
   stage_down_count: number  // Stage 4+5
 }
 
-async function hasClassification(): Promise<boolean> {
-  const r = await execGet<{ n: number }>(`SELECT COUNT(*) AS n FROM stock_classification`)
-  return (r?.n ?? 0) > 0
-}
+// 大分類フォールバック式 (Yoshio 独自 → JPX Sector17 → その他)
+const MAJOR_EXPR = `COALESCE(sc.major_category, tu.sector17_name, 'その他')`
+// 業種細分類フォールバック式 (Yoshio 独自 → JPX Sector33 → その他)
+const SUB_EXPR = `COALESCE(sc.sub_industry, tu.sector33_name, 'その他')`
 
-export async function getSectorRows(): Promise<{ rows: SectorRow[]; source: 'classification' | 'sector17' }> {
-  const useClassification = await hasClassification()
-  const source = useClassification ? 'classification' : 'sector17'
-
-  // SQL ビルド: 結合元を切り替え
-  const sectorExpr = useClassification ? 'sc.major_category' : `COALESCE(tu.sector17_name, '(未分類)')`
-  const sectorJoin = useClassification ? 'JOIN stock_classification sc ON sc.ticker = tu.ticker' : ''
-
+export async function getSectorRows(): Promise<{ rows: SectorRow[]; classificationCount: number }> {
   const latest = (await execGet<{ d: string | null }>(`SELECT MAX(date) AS d FROM ohlcv_daily`))?.d
-  if (!latest) return { rows: [], source }
+  if (!latest) return { rows: [], classificationCount: 0 }
   const prev = (await execGet<{ d: string | null }>(`SELECT MAX(date) AS d FROM ohlcv_daily WHERE date < ?`, [latest]))?.d
-  if (!prev) return { rows: [], source }
+  if (!prev) return { rows: [], classificationCount: 0 }
   const latestSnap = (await execGet<{ d: string | null }>(`SELECT MAX(date) AS d FROM daily_snapshots`))?.d ?? latest
+
+  const cntRow = await execGet<{ n: number }>(`SELECT COUNT(*) AS n FROM stock_classification`)
+  const classificationCount = cntRow?.n ?? 0
 
   const rows = await execAll<SectorRow>(
     `
@@ -41,24 +40,24 @@ export async function getSectorRows(): Promise<{ rows: SectorRow[]; source: 'cla
          y AS (SELECT ticker, close FROM ohlcv_daily WHERE date = ?),
          st AS (SELECT ticker, daily_a_stage FROM daily_snapshots WHERE date = ?)
     SELECT
-      ${sectorExpr} AS sector_name,
+      ${MAJOR_EXPR} AS sector_name,
       COUNT(*) AS n_stocks,
       AVG(100.0 * (t.close - y.close) / y.close) AS avg_change,
       SUM(CASE WHEN st.daily_a_stage IN (1, 2) THEN 1 ELSE 0 END) AS stage_up_count,
       SUM(CASE WHEN st.daily_a_stage IN (4, 5) THEN 1 ELSE 0 END) AS stage_down_count
     FROM ticker_universe tu
-    ${sectorJoin}
+    LEFT JOIN stock_classification sc ON sc.ticker = tu.ticker
     JOIN t USING (ticker)
     JOIN y USING (ticker)
     LEFT JOIN st USING (ticker)
     WHERE tu.active = 1
-    GROUP BY ${sectorExpr}
-    HAVING n_stocks >= 2
+    GROUP BY ${MAJOR_EXPR}
+    HAVING n_stocks >= 1
     ORDER BY avg_change DESC
     `,
     [latest, prev, latestSnap],
   )
-  return { rows, source }
+  return { rows, classificationCount }
 }
 
 // ─── 選択中の大分類に属する業種細分類一覧 ───
@@ -70,11 +69,6 @@ export interface SubSectorRow {
   topTickers: string  // カンマ区切り 3 銘柄
 }
 export async function getSubSectorsFor(majorCategory: string): Promise<SubSectorRow[]> {
-  const useClassification = await hasClassification()
-  const subExpr = useClassification ? 'sc.sub_industry' : `COALESCE(tu.sector33_name, '(未分類)')`
-  const sectorJoin = useClassification ? 'JOIN stock_classification sc ON sc.ticker = tu.ticker' : ''
-  const filterExpr = useClassification ? 'sc.major_category = ?' : 'tu.sector17_name = ?'
-
   const latest = (await execGet<{ d: string | null }>(`SELECT MAX(date) AS d FROM ohlcv_daily`))?.d
   if (!latest) return []
   const prev = (await execGet<{ d: string | null }>(`SELECT MAX(date) AS d FROM ohlcv_daily WHERE date < ?`, [latest]))?.d
@@ -87,18 +81,18 @@ export async function getSubSectorsFor(majorCategory: string): Promise<SubSector
          y AS (SELECT ticker, close FROM ohlcv_daily WHERE date = ?),
          st AS (SELECT ticker, daily_a_stage FROM daily_snapshots WHERE date = ?)
     SELECT
-      ${subExpr} AS sub_industry,
+      ${SUB_EXPR} AS sub_industry,
       COUNT(*) AS n_stocks,
       AVG(100.0 * (t.close - y.close) / y.close) AS avg_change,
       CAST(SUM(CASE WHEN st.daily_a_stage IN (1, 2) THEN 1 ELSE 0 END) AS REAL) / COUNT(*) AS upRatio,
       GROUP_CONCAT(tu.ticker, ',') AS topTickers
     FROM ticker_universe tu
-    ${sectorJoin}
+    LEFT JOIN stock_classification sc ON sc.ticker = tu.ticker
     JOIN t USING (ticker)
     JOIN y USING (ticker)
     LEFT JOIN st USING (ticker)
-    WHERE tu.active = 1 AND ${filterExpr}
-    GROUP BY ${subExpr}
+    WHERE tu.active = 1 AND ${MAJOR_EXPR} = ?
+    GROUP BY ${SUB_EXPR}
     HAVING n_stocks >= 1
     ORDER BY avg_change DESC
     `,

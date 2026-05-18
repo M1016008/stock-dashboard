@@ -212,7 +212,7 @@ export async function getSector33Heatmap(): Promise<SectorHeatRow[]> {
          yest AS (SELECT ticker, close FROM ohlcv_daily WHERE date = ?)
     SELECT
       tu.sector33_code AS sector_code,
-      COALESCE(tu.sector33_name, '(未分類)') AS sector_name,
+      COALESCE(tu.sector33_name, 'その他') AS sector_name,
       COUNT(*) AS n_stocks,
       AVG(100.0 * (today.close - yest.close) / yest.close) AS avg_change
     FROM ticker_universe tu

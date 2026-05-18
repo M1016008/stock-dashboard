@@ -213,6 +213,7 @@ export async function GET(request: NextRequest) {
       const u = uniMap.get(s.ticker)
       const k = klassMap.get(s.ticker)
 
+      // 銘柄ごとフォールバック: Yoshio 独自分類 → JPX Sector17/33 → 'その他'
       const sectorLarge =
         k?.major_category ??
         u?.sector17_name ??
@@ -220,7 +221,7 @@ export async function GET(request: NextRequest) {
       const sectorSmall =
         k?.sub_industry ??
         u?.sector33_name ??
-        null
+        'その他'
 
       const close = px?.close ?? 0
       const marketCap = u?.shares_outstanding && close > 0 ? close * u.shares_outstanding : 0

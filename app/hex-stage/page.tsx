@@ -1,347 +1,73 @@
 // app/hex-stage/page.tsx
 //
-// 旧 HEX マップを Phase 4 で復元したクライアントページ。
-// データソース: /api/hex (Phase 4 改修以降は J-Quants 由来データのみ)
-// 日付一覧: /api/hex/available-dates
-//
-// 別ビュー (Phase 4 ステージ遷移マトリクス) は /hex-stage/transitions に移動。
+// Phase 4 改修 + 旧 HexMap 復元の統合ページ:
+//   1. ページ上部: Phase 4 セクション (Server Component, await でロード)
+//      - 6 タイムスケールタブ
+//      - 6 ステージカード (件数 + 先週比)
+//      - 期間タブ (本日/今週/今月)
+//      - 6×6 ステージ遷移マトリクス
+//      - 期間別 遷移件数 KPI
+//      - 遷移銘柄一覧
+//   2. ページ下部: 旧 HEX マップ (Client Component)
+//      - 日足/週足/月足 × 6×6 グリッド
+//      - 業種大分類/小分類フィルタ
+//      - 銘柄テーブル (時価総額/各 perf/6軸ステージ/SMA角度)
 
-'use client'
-
-import { useEffect, useMemo, useState } from 'react'
-import Link from 'next/link'
-import HexMap from '@/components/hex/HexMap'
+import type { Metadata } from 'next'
 import { PageTitle } from '@/components/layout/PageTitle'
-import { STAGE_BG_COLORS, STAGE_BORDER_COLORS, STAGE_LABELS } from '@/lib/hex-stage'
+import { TimescaleTabs, PeriodTabs } from '@/components/hex/TimescaleTabs'
+import { SixStageCircle } from '@/components/hex/SixStageCircle'
+import { TransitionMatrix } from '@/components/hex/TransitionMatrix'
+import { PeriodCountTrend } from '@/components/hex/PeriodCountTrend'
+import { TransitionDetailTable } from '@/components/hex/TransitionDetailTable'
+import HexStageMapView from '@/components/hex/HexStageMapView'
+import type { Timescale, Period } from '@/lib/queries/hex'
 
-interface Stock {
-  code: string
-  name: string
-  sector_large: string
-  sector_small?: string | null
-  market_cap: number
-  price: number
-  daily_change?: number
-  weekly_change?: number
-  monthly_change?: number
-  months3_change?: number
-  months6_change?: number
-  ytd_change?: number
-  stage: number
-  daily_a_stage?: number | null
-  daily_b_stage?: number | null
-  weekly_a_stage?: number | null
-  weekly_b_stage?: number | null
-  monthly_a_stage?: number | null
-  monthly_b_stage?: number | null
-  sma_angles?: { sma5: number | null; sma25: number | null; sma75: number | null; sma300: number | null }
-  prev_sma_angles?: { sma5: number | null; sma25: number | null; sma75: number | null; sma300: number | null }
-  prev_prev_sma_angles?: { sma5: number | null; sma25: number | null; sma75: number | null; sma300: number | null }
+export const metadata: Metadata = {
+  title: 'HEX ステージ — StockBoard',
+  description: 'トレンドステージ分布 + 遷移分析 + B×A グリッドで市場全体を俯瞰',
 }
 
-type Timeframe = 'daily' | 'weekly' | 'monthly'
+export const revalidate = 300
 
-interface AvailableDate {
-  date: string
-  tickers: number
-}
+const VALID_TS: Timescale[] = ['daily_a', 'daily_b', 'weekly_a', 'weekly_b', 'monthly_a', 'monthly_b']
+const VALID_PERIOD: Period[] = ['today', 'week', 'month']
 
-const STAGE_DESCRIPTIONS: Record<number, string> = {
-  1: '上昇トレンドが安定して継続している局面（トレンド本体）',
-  2: '上昇相場の終盤を示唆。トレンドの勢いが鈍化し始める転換点',
-  3: '下降相場への入り口。トレンド転換の初動となる転換点',
-  4: '下降トレンドが安定して継続している局面（トレンド本体）',
-  5: '下降相場の終盤。下げ止まりの兆しが見え始める転換点',
-  6: '再び上昇相場へ移行する初動局面となる転換点',
-}
-
-export default function HexStagePage() {
-  const [data, setData] = useState<Stock[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const [date, setDate] = useState<string | null>(null)
-
-  // 3 タイムフレームのマトリクスを縦に積んで全部表示するため固定
-  const timeframe: Timeframe = 'daily'
-  const [selectedCategory, setSelectedCategory] = useState<string>('')
-  const [selectedSubCategory, setSelectedSubCategory] = useState<string>('')
-  const [availableDates, setAvailableDates] = useState<AvailableDate[]>([])
-  const [selectedDate, setSelectedDate] = useState<string | null>(null) // null = 最新
-  const [legendOpen, setLegendOpen] = useState(false)
-
-  useEffect(() => {
-    let cancelled = false
-    fetch('/api/hex/available-dates')
-      .then((r) => r.json())
-      .then((d) => {
-        if (cancelled) return
-        setAvailableDates(d.dates ?? [])
-      })
-      .catch(() => { /* 無視 */ })
-    return () => { cancelled = true }
-  }, [])
-
-  useEffect(() => {
-    let cancelled = false
-    setLoading(true)
-    setError(null)
-    const params = new URLSearchParams({ timeframe })
-    if (selectedDate) params.set('date', selectedDate)
-
-    fetch(`/api/hex?${params}`)
-      .then(async (res) => {
-        const json = await res.json()
-        if (!res.ok) throw new Error(json.error ?? json.message ?? 'failed')
-        if (cancelled) return
-        setData(json.data ?? [])
-        setDate(json.date ?? null)
-      })
-      .catch((e) => { if (!cancelled) setError((e as Error).message) })
-      .finally(() => { if (!cancelled) setLoading(false) })
-    return () => { cancelled = true }
-  }, [timeframe, selectedDate])
-
-  const categoryStats = useMemo(() => {
-    const large: Record<string, number> = {}
-    const small: Record<string, Record<string, number>> = {}
-    for (const d of data) {
-      const l = d.sector_large || '（未分類）'
-      large[l] = (large[l] ?? 0) + 1
-      if (d.sector_small) {
-        small[l] = small[l] ?? {}
-        small[l][d.sector_small] = (small[l][d.sector_small] ?? 0) + 1
-      }
-    }
-    return { large, small }
-  }, [data])
-
-  const largeOptions = useMemo(
-    () => Object.entries(categoryStats.large).sort((a, b) => b[1] - a[1]),
-    [categoryStats],
-  )
-
-  const smallOptions = useMemo(() => {
-    if (!selectedCategory) return []
-    const m = categoryStats.small[selectedCategory]
-    if (!m) return []
-    return Object.entries(m).sort((a, b) => b[1] - a[1])
-  }, [categoryStats, selectedCategory])
-
-  const filteredData = useMemo(() => {
-    return data.filter((d) => {
-      if (selectedCategory && d.sector_large !== selectedCategory) return false
-      if (selectedSubCategory && d.sector_small !== selectedSubCategory) return false
-      return true
-    })
-  }, [data, selectedCategory, selectedSubCategory])
-
-  const hasFilter = selectedCategory || selectedSubCategory
+export default async function HexStagePage({
+  searchParams,
+}: {
+  searchParams: Promise<{ ts?: string; period?: string }>
+}) {
+  const sp = await searchParams
+  const ts = (VALID_TS as string[]).includes(sp.ts ?? '') ? (sp.ts as Timescale) : 'daily_a'
+  const period = (VALID_PERIOD as string[]).includes(sp.period ?? '') ? (sp.period as Period) : 'today'
 
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col gap-3.5">
       <PageTitle
-        title="トレンドステージマップ (HEX)"
-        subtitle="6 ステージ × 3 タイムフレームのマトリクスで市場全体を俯瞰"
-        rightSlot={
-          <Link
-            href="/hex-stage/transitions"
-            className="text-[11px] text-[var(--color-pattern-700)] hover:underline"
-          >
-            ステージ遷移ビューへ →
-          </Link>
-        }
-        badge={`${filteredData.length.toLocaleString()} 銘柄${hasFilter ? ` / 全 ${data.length.toLocaleString()}` : ''}${date ? ` · ${date}` : ''}`}
+        title="HEX ステージ分析"
+        subtitle="市場全体のステージ分布と銘柄の循環的な動きを観察します"
       />
 
-      {/* ── フィルタバー ─────────────── */}
-      <div className="flex flex-wrap items-center gap-2 rounded-[8px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-3 py-2">
-        {availableDates.length > 0 && (
-          <FilterField label="📅 日付">
-            <select
-              value={selectedDate ?? ''}
-              onChange={(e) => setSelectedDate(e.target.value || null)}
-              style={selectInputStyle}
-            >
-              <option value="">最新（{availableDates[0]?.date ?? '---'}）</option>
-              {availableDates.map((d) => (
-                <option key={d.date} value={d.date}>{d.date}（{d.tickers}）</option>
-              ))}
-            </select>
-          </FilterField>
-        )}
+      {/* ── Phase 4 セクション (ステージ遷移ビュー) ─── */}
+      <TimescaleTabs current={ts} />
 
-        <FilterField label="業種大分類">
-          <select
-            value={selectedCategory}
-            onChange={(e) => {
-              setSelectedCategory(e.target.value)
-              setSelectedSubCategory('')
-            }}
-            style={selectInputStyle}
-          >
-            <option value="">全て（{data.length}）</option>
-            {largeOptions.map(([cat, n]) => (
-              <option key={cat} value={cat}>{cat}（{n}）</option>
-            ))}
-          </select>
-        </FilterField>
+      <SixStageCircle timescale={ts} />
 
-        <FilterField label="業種小分類">
-          <select
-            value={selectedSubCategory}
-            onChange={(e) => setSelectedSubCategory(e.target.value)}
-            disabled={!selectedCategory || smallOptions.length === 0}
-            style={{ ...selectInputStyle, opacity: !selectedCategory ? 0.5 : 1 }}
-          >
-            <option value="">全て{selectedCategory ? `（${categoryStats.large[selectedCategory] ?? 0}）` : ''}</option>
-            {smallOptions.map(([cat, n]) => (
-              <option key={cat} value={cat}>{cat}（{n}）</option>
-            ))}
-          </select>
-        </FilterField>
-
-        {hasFilter && (
-          <button
-            onClick={() => { setSelectedCategory(''); setSelectedSubCategory('') }}
-            style={clearBtnStyle}
-            title="業種フィルタをクリア"
-          >
-            × クリア
-          </button>
-        )}
+      <div className="flex items-center justify-between">
+        <PeriodTabs current={period} />
       </div>
 
-      {/* ── ステージ凡例 ────────────── */}
-      <div className="overflow-hidden rounded-[8px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)]">
-        <button
-          onClick={() => setLegendOpen((o) => !o)}
-          className="flex w-full items-center gap-3 px-3 py-2 text-left text-[11px]"
-        >
-          <span className="font-medium text-[var(--color-text-primary)]">ステージ凡例</span>
-          <div className="flex flex-wrap gap-1">
-            {[1, 2, 3, 4, 5, 6].map((s) => (
-              <span key={s} style={legendChipStyle(s)} title={STAGE_LABELS[s]}>
-                <span style={{ fontWeight: 600 }}>{s}</span>
-                <span>{STAGE_LABELS[s]}</span>
-              </span>
-            ))}
-          </div>
-          <span className="ml-auto text-[10px] text-[var(--color-text-tertiary)]">
-            {legendOpen ? '▲ 閉じる' : '▼ 詳細を見る'}
-          </span>
-        </button>
-        {legendOpen && (
-          <div className="border-t border-[var(--color-border-soft)] p-3 text-[11px]">
-            <p className="mb-2 leading-relaxed text-[var(--color-text-secondary)]">
-              市場は 6 段階のサイクルで循環します:{' '}
-              <span className="tabular-nums text-[var(--color-text-primary)]">
-                安定上昇(1) → 上昇終盤(2) → 下落入り(3) → 安定下降(4) → 下落終盤(5) → 上昇入り(6) → 1へ
-              </span>
-              。<strong>1 / 4</strong> がトレンド本体、<strong>2・3・5・6</strong> が転換点です。
-            </p>
-            <div className="grid grid-cols-[repeat(auto-fit,minmax(260px,1fr))] gap-2">
-              {[1, 2, 3, 4, 5, 6].map((s) => (
-                <div key={s} className="flex items-start gap-2">
-                  <span
-                    style={{
-                      flexShrink: 0,
-                      width: '24px',
-                      height: '24px',
-                      borderRadius: '6px',
-                      background: STAGE_BG_COLORS[s],
-                      color: STAGE_BORDER_COLORS[s],
-                      border: `1.5px solid ${STAGE_BORDER_COLORS[s]}`,
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      fontWeight: 600,
-                      fontSize: '12px',
-                    }}
-                  >{s}</span>
-                  <div className="leading-tight">
-                    <strong className="text-[var(--color-text-primary)]">{STAGE_LABELS[s]}</strong>
-                    <div className="mt-1 text-[var(--color-text-tertiary)]">{STAGE_DESCRIPTIONS[s]}</div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
+      <div className="grid grid-cols-2 gap-3.5">
+        <TransitionMatrix timescale={ts} period={period} />
+        <PeriodCountTrend timescale={ts} />
       </div>
 
-      {/* ── 状態表示 ────────────── */}
-      {error && (
-        <div className="rounded-[8px] border-l-2 border-[var(--color-price-down)] bg-[var(--color-surface-subtle)] p-3 text-[12px] text-[var(--color-price-down)]">
-          エラー: {error}
-        </div>
-      )}
+      <TransitionDetailTable timescale={ts} period={period} />
 
-      {loading && (
-        <div className="rounded-[8px] border border-[var(--color-border-soft)] p-12 text-center text-[12px] text-[var(--color-text-tertiary)]">
-          読み込み中…
-        </div>
-      )}
-
-      {!loading && !error && filteredData.length === 0 && (
-        <div className="rounded-[8px] border border-[var(--color-border-soft)] p-12 text-center text-[12px] text-[var(--color-text-tertiary)]">
-          該当する銘柄がありません
-        </div>
-      )}
-
-      {/* ── HEX マップ本体 ────────────── */}
-      {!loading && !error && filteredData.length > 0 && (
-        <div className="overflow-x-auto rounded-[8px] border border-[var(--color-border-soft)] bg-[var(--color-surface-base)] p-4">
-          <HexMap data={filteredData} timeframe={timeframe} />
-        </div>
-      )}
+      {/* ── 旧 HEX マップ (B×A グリッド + 銘柄テーブル) ─── */}
+      <div className="mt-3 border-t border-[var(--color-border-soft)] pt-2" />
+      <HexStageMapView />
     </div>
   )
-}
-
-function FilterField({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <label className="inline-flex items-center gap-1.5 whitespace-nowrap text-[11px] text-[var(--color-text-tertiary)]">
-      <span>{label}</span>
-      {children}
-    </label>
-  )
-}
-
-const selectInputStyle: React.CSSProperties = {
-  padding: '4px 8px',
-  fontSize: '12px',
-  fontVariantNumeric: 'tabular-nums',
-  background: 'var(--color-surface-base)',
-  color: 'var(--color-text-primary)',
-  border: '1px solid var(--color-border-default)',
-  borderRadius: '4px',
-  cursor: 'pointer',
-  minWidth: '160px',
-  maxWidth: '260px',
-}
-
-const clearBtnStyle: React.CSSProperties = {
-  padding: '4px 10px',
-  fontSize: '11px',
-  background: 'transparent',
-  border: '1px solid var(--color-border-default)',
-  borderRadius: '4px',
-  cursor: 'pointer',
-  color: 'var(--color-text-tertiary)',
-}
-
-function legendChipStyle(stage: number): React.CSSProperties {
-  return {
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: '5px',
-    padding: '2px 8px',
-    fontSize: '10px',
-    fontVariantNumeric: 'tabular-nums',
-    background: STAGE_BG_COLORS[stage],
-    color: STAGE_BORDER_COLORS[stage],
-    border: `1px solid ${STAGE_BORDER_COLORS[stage]}`,
-    borderRadius: '10px',
-    whiteSpace: 'nowrap',
-  }
 }
