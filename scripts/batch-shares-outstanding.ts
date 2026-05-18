@@ -42,12 +42,21 @@ async function main() {
   const runId = run.id
 
   const filter = process.env.TICKERS?.split(',').map(s => s.trim()).filter(Boolean)
-  const tickers: { ticker: string }[] = filter && filter.length > 0
-    ? filter.map(ticker => ({ ticker }))
-    : await db
-        .select({ ticker: tickerUniverse.ticker })
-        .from(tickerUniverse)
-        .where(eq(tickerUniverse.active, true))
+  const skipExisting = process.env.SKIP_EXISTING !== '0'  // デフォルト ON、再開時の高速化
+  let tickers: { ticker: string }[]
+  if (filter && filter.length > 0) {
+    tickers = filter.map(ticker => ({ ticker }))
+  } else {
+    // active な銘柄を取得、SKIP_EXISTING=1 (デフォルト) なら未投入分のみ
+    const allActive = await db
+      .select({ ticker: tickerUniverse.ticker, shares_outstanding: tickerUniverse.shares_outstanding })
+      .from(tickerUniverse)
+      .where(eq(tickerUniverse.active, true))
+    tickers = skipExisting
+      ? allActive.filter(r => r.shares_outstanding == null).map(r => ({ ticker: r.ticker }))
+      : allActive.map(r => ({ ticker: r.ticker }))
+    console.log(`active 銘柄: ${allActive.length}, ${skipExisting ? '未投入分: ' + tickers.length : 'all: ' + tickers.length}`)
+  }
 
   let succeeded = 0
   let failed = 0
