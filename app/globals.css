@@ -226,3 +226,296 @@ h3 {
 .stage-4 { --stage-color: var(--stage-4); }
 .stage-5 { --stage-color: var(--stage-5); }
 .stage-6 { --stage-color: var(--stage-6); }
+
+/* ─── Phase 4 モック準拠ユーティリティ (.sb-*) ───
+ * 5 ページのモック (stockboard_*_mock*.html) から共通要素を抽出。
+ * Tailwind class でなく素直な CSS で書いて、モックと同じ見た目を再現する。 */
+
+/* ステージ色 0.5/1/2/3/4/5/6 */
+.sb-s1 { background: var(--color-stage-1-bg); color: var(--color-stage-1-text); }
+.sb-s2 { background: var(--color-stage-2-bg); color: var(--color-stage-2-text); }
+.sb-s3 { background: var(--color-stage-3-bg); color: var(--color-stage-3-text); }
+.sb-s4 { background: var(--color-stage-4-bg); color: var(--color-stage-4-text); }
+.sb-s5 { background: var(--color-stage-5-bg); color: var(--color-stage-5-text); }
+.sb-s6 { background: var(--color-stage-6-bg); color: var(--color-stage-6-text); }
+
+/* ステージタグ (14px × 14px の小さい四角、内側にステージ番号) */
+.sb-ts {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  text-align: center;
+  line-height: 14px;
+  font-weight: 500;
+  font-size: 9px;
+  margin-right: 1px;
+  font-variant-numeric: tabular-nums;
+  vertical-align: middle;
+}
+.sb-ts-sel { outline: 1.5px solid var(--color-brand-600); outline-offset: 1px; }
+
+/* もう少し大きいタグ (前日→今日 の遷移など) */
+.sb-tag {
+  display: inline-block;
+  width: 13px;
+  height: 13px;
+  border-radius: 3px;
+  text-align: center;
+  line-height: 13px;
+  font-weight: 500;
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* テキスト色ヘルパ */
+.sb-r { color: var(--color-price-up); }
+.sb-b { color: var(--color-price-down); }
+.sb-t { color: var(--color-text-tertiary); }
+
+/* セクション見出し: タイトル + 右側の補助テキスト */
+.sb-hd {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.sb-hd h2,
+.sb-hd > .sb-h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+}
+.sb-hd > .sb-h2-sm {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 500;
+}
+.sb-hd > .sb-sub {
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+}
+
+/* ページ全体を包む大きなカード */
+.sb-page {
+  border: 0.5px solid var(--color-border-soft);
+  border-radius: 8px;
+  background: var(--color-surface-base);
+  overflow: hidden;
+}
+.sb-page-header {
+  border-bottom: 0.5px solid var(--color-border-soft);
+  padding: 10px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.sb-page-title {
+  padding: 18px 20px 12px;
+}
+.sb-page-title h1 {
+  margin: 0 0 2px;
+  font-size: 22px;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+}
+.sb-page-title p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--color-text-tertiary);
+}
+
+/* セクション 1 段の横余白 */
+.sb-section {
+  padding: 0 20px 14px;
+}
+.sb-section-bd {
+  padding: 0 20px 12px;
+  border-bottom: 0.5px solid var(--color-border-soft);
+  margin-bottom: 12px;
+}
+
+/* 小さなカード (テーブルラッパなど) */
+.sb-card {
+  border: 0.5px solid var(--color-border-soft);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--color-surface-base);
+}
+.sb-card-pad {
+  padding: 12px 14px;
+}
+.sb-card-pad-lg {
+  padding: 16px 20px;
+}
+
+/* テーブル: モック準拠 */
+.sb-tbl {
+  width: 100%;
+  font-size: 12px;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+  table-layout: fixed;
+}
+.sb-tbl th {
+  padding: 7px 10px;
+  text-align: left;
+  font-weight: 400;
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  background: var(--color-surface-subtle);
+  border-bottom: 0.5px solid var(--color-border-soft);
+}
+.sb-tbl td {
+  padding: 7px 10px;
+  border-bottom: 0.5px solid var(--color-border-soft);
+  vertical-align: middle;
+}
+.sb-tbl tr:last-child td { border-bottom: none; }
+.sb-tbl tr:hover td { background: var(--color-surface-subtle); }
+.sb-tbl .right { text-align: right; }
+
+/* チップ (フィルタなど) */
+.sb-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  background: var(--color-brand-50);
+  color: var(--color-brand-700);
+  border-radius: 9999px;
+  font-size: 11px;
+  font-weight: 500;
+}
+.sb-chip .sb-x { color: #a5b4fc; cursor: pointer; }
+.sb-chip-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border: 0.5px dashed var(--color-border-default);
+  color: var(--color-text-secondary);
+  border-radius: 9999px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+/* タブ (本日/今週/今月 や 6 タイムスケール) */
+.sb-tab {
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  border-radius: 6px;
+  display: inline-block;
+  text-decoration: none;
+}
+.sb-tab.sb-on,
+.sb-tab[data-on="true"] {
+  background: var(--color-brand-50);
+  color: var(--color-brand-700);
+  font-weight: 500;
+}
+
+/* ヒートマップセル */
+.sb-cell {
+  padding: 5px 6px;
+  border-radius: 4px;
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+  min-height: 38px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  text-decoration: none;
+}
+.sb-cell .sb-cell-nm {
+  color: var(--color-text-secondary);
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 9px;
+}
+.sb-cell .sb-cell-v {
+  font-weight: 500;
+  margin-top: 1px;
+  font-size: 9px;
+}
+
+/* 6×6 マトリクス */
+.sb-mx {
+  display: inline-grid;
+  grid-template-columns: 34px repeat(6, 1fr);
+  width: 100%;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  border: 0.5px solid var(--color-border-soft);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.sb-mx > div {
+  padding: 7px 4px;
+  border-right: 0.5px solid var(--color-border-soft);
+  border-bottom: 0.5px solid var(--color-border-soft);
+}
+.sb-mx > div:nth-child(7n) { border-right: none; }
+.sb-mx > div:nth-last-child(-n+7) { border-bottom: none; }
+.sb-mx .sb-mx-h {
+  background: var(--color-surface-subtle);
+  color: var(--color-text-tertiary);
+  font-size: 10px;
+}
+.sb-mx-diag { background: #f1efe8; color: var(--color-text-tertiary); }
+
+/* 検索風の表示 (input っぽいラベル枠) */
+.sb-search {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 0.5px solid var(--color-border-soft);
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  background: var(--color-surface-base);
+}
+
+/* KPI 数値ブロック */
+.sb-kpi { display: flex; flex-direction: column; gap: 4px; }
+.sb-kpi .sb-kpi-lbl { font-size: 11px; color: var(--color-text-tertiary); }
+.sb-kpi .sb-kpi-v {
+  font-size: 18px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+.sb-kpi .sb-kpi-sub {
+  font-size: 10px;
+  color: var(--color-text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ナビ */
+.sb-nav {
+  display: flex;
+  gap: 2px;
+  font-size: 12px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.sb-nav-item {
+  padding: 5px 9px;
+  color: var(--color-text-secondary);
+  border-radius: 5px;
+  text-decoration: none;
+}
+.sb-nav-item[data-on="true"],
+.sb-nav-item.sb-nav-on {
+  background: var(--color-brand-50);
+  color: var(--color-brand-700);
+  font-weight: 500;
+}
