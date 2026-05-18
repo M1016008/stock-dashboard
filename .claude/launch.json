@@ -8,6 +8,12 @@
       "port": 3000
     },
     {
+      "name": "next-prod",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "start", "--", "-p", "3001"],
+      "port": 3001
+    },
+    {
       "name": "drizzle-studio",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "db:studio"],
