@@ -1,30 +1,52 @@
 {
-  "name": "learn-ai",
+  "name": "stock-dashboard",
   "version": "0.1.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "db:studio": "drizzle-kit studio",
+    "db:push": "drizzle-kit push",
+    "db:migrate-to-turso": "tsx scripts/migrate-local-to-turso.ts",
+    "batch:ohlcv": "tsx --env-file=.env.local scripts/batch-ohlcv.ts",
+    "batch:snapshots": "tsx --env-file=.env.local scripts/batch-snapshots.ts",
+    "batch:features": "tsx --env-file=.env.local scripts/batch-features.ts",
+    "batch:forward-returns": "tsx --env-file=.env.local scripts/batch-forward-returns.ts",
+    "batch:pattern-stats": "tsx --env-file=.env.local scripts/batch-pattern-stats.ts",
+    "batch:stage-transitions": "tsx --env-file=.env.local scripts/batch-stage-transitions.ts",
+    "batch:listed-info": "tsx --env-file=.env.local scripts/batch-listed-info.ts",
+    "batch:shares-outstanding": "tsx --env-file=.env.local scripts/batch-shares-outstanding.ts",
+    "verify:phase3": "tsx --env-file=.env.local scripts/verify-phase3.ts",
+    "pull": "git pull origin claude/resume-development-kvnU1",
+    "sync": "git pull origin claude/resume-development-kvnU1 && npm install"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.96.0",
     "@libsql/client": "^0.17.3",
-    "next": "16.2.6",
-    "openai": "^6.38.0",
+    "@radix-ui/react-popover": "^1.1.15",
+    "date-fns": "^4.1.0",
+    "drizzle-orm": "^0.45.2",
+    "lightweight-charts": "^5.2.0",
+    "lucide-react": "^1.14.0",
+    "next": "16.2.4",
     "react": "19.2.4",
     "react-dom": "19.2.4",
-    "unpdf": "^1.6.2"
+    "recharts": "^3.8.1",
+    "xlsx": "^0.18.5",
+    "zustand": "^5.0.13"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
+    "@types/d3": "^7.4.3",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
-    "eslint": "^9",
-    "eslint-config-next": "16.2.6",
+    "d3": "^7.9.0",
+    "drizzle-kit": "^0.31.10",
     "tailwindcss": "^4",
+    "tsx": "^4.21.0",
     "typescript": "^5"
   }
 }
