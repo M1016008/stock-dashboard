@@ -173,8 +173,15 @@ export const ohlcvDaily = sqliteTable(
   (t) => ({
     pk:      primaryKey({ columns: [t.ticker, t.date] }),
     dateIdx: index('ohlcv_date_idx').on(t.date),
+    dateTickerIdx: index('ohlcv_date_ticker_idx').on(t.date, t.ticker),
   }),
 )
+
+export const jquantsDailyCoverage = sqliteTable('jquants_daily_coverage', {
+  date:          text('date').primaryKey(),
+  expectedRows:  integer('expected_rows').notNull(),
+  importedAt:    integer('imported_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+})
 
 // ─────────────────────────────────────
 // 9. Phase 2: 日次スナップショット (MA15本 + ステージ6種を事前計算)
@@ -213,6 +220,17 @@ export const dailySnapshots = sqliteTable(
   (t) => ({
     pk:      primaryKey({ columns: [t.ticker, t.date] }),
     dateIdx: index('snapshots_date_idx').on(t.date),
+    dateTickerIdx: index('snapshots_date_ticker_idx').on(t.date, t.ticker),
+    stagePatternIdx: index('snapshots_stage_pattern_idx').on(
+      t.daily_a_stage,
+      t.daily_b_stage,
+      t.weekly_a_stage,
+      t.weekly_b_stage,
+      t.monthly_a_stage,
+      t.monthly_b_stage,
+      t.date,
+      t.ticker,
+    ),
   }),
 )
 
@@ -447,4 +465,3 @@ export const patternStats = sqliteTable(
     codeIdx: index('pstat_code_idx').on(t.pattern_code),
   }),
 )
-

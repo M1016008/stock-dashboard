@@ -23,16 +23,16 @@ export async function TodayTransitionsSummary() {
         action={<Link href="/hex-stage" className="hover:text-[var(--color-text-secondary)]">HEX で詳細 ↗</Link>}
       />
       {!counts ? (
-        <div className="py-6 text-center text-[11px] text-[var(--color-text-tertiary)]">前日との比較データなし</div>
+        <div className="py-7 text-center text-[13px] font-medium text-[var(--color-text-tertiary)]">前日との比較データなし</div>
       ) : (
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
           {AXES.map(a => {
             const n = (counts as unknown as Record<string, number>)[a.key] ?? 0
             return (
-              <div key={a.key} className="rounded-[6px] bg-[var(--color-surface-subtle)] px-2.5 py-2">
-                <div className="text-[10px] text-[var(--color-text-tertiary)]">{a.label}</div>
-                <div className="tabular-nums text-[17px] font-medium leading-tight">{n.toLocaleString()}</div>
-                <div className="text-[10px] text-[var(--color-text-tertiary)]">銘柄が遷移</div>
+              <div key={a.key} className="rounded-[8px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-4 py-4">
+                <div className="text-[12px] font-bold text-[var(--color-text-secondary)]">{a.label}</div>
+                <div className="mt-2 tabular-nums text-[30px] font-bold leading-none">{n.toLocaleString()}</div>
+                <div className="mt-2 text-[12px] font-medium text-[var(--color-text-tertiary)]">銘柄が遷移</div>
               </div>
             )
           })}

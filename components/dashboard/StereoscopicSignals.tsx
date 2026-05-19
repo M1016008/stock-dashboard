@@ -19,10 +19,10 @@ export async function StereoscopicSignals() {
         hint="6 軸でパターン一致 (n≥20)"
       />
       {rows.length === 0 ? (
-        <div className="py-6 text-center text-[11px] text-[var(--color-text-tertiary)]">該当銘柄なし</div>
+        <div className="py-7 text-center text-[13px] font-medium text-[var(--color-text-tertiary)]">該当銘柄なし</div>
       ) : (
         <div className="divide-y divide-[var(--color-border-soft)]">
-          <div className="grid grid-cols-[44px_1fr_44px_64px] gap-2 px-1 pb-1.5 text-[10px] text-[var(--color-text-tertiary)]">
+          <div className="grid grid-cols-[58px_1fr_58px_92px] gap-3 px-2 pb-3 text-[12px] font-bold text-[var(--color-text-tertiary)]">
             <span>コード</span><span>銘柄</span><span className="text-right">n</span><span className="text-right">60日中央値</span>
           </div>
           {rows.map(r => {
@@ -31,7 +31,7 @@ export async function StereoscopicSignals() {
               <Link
                 key={r.ticker}
                 href={`/stock/${r.ticker}`}
-                className="grid grid-cols-[44px_1fr_44px_64px] gap-2 px-1 py-1.5 text-[12px] hover:bg-[var(--color-surface-subtle)]"
+                className="grid grid-cols-[58px_1fr_58px_92px] gap-3 rounded-[8px] px-2 py-2.5 text-[14px] font-medium hover:bg-[var(--color-surface-subtle)]"
               >
                 <span className="tabular-nums text-[var(--color-text-secondary)]">{r.ticker}</span>
                 <span className="truncate">{r.name ?? r.ticker}</span>

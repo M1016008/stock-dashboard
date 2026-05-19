@@ -72,7 +72,7 @@ export type Args = readonly InValue[]
 export async function execAll<T = Record<string, unknown>>(sql: string, args: Args = []): Promise<T[]> {
   await ensureReady()
   const res = await client.execute({ sql, args: args as InValue[] })
-  return res.rows as unknown as T[]
+  return res.rows.map((row) => ({ ...row })) as unknown as T[]
 }
 
 export async function execGet<T = Record<string, unknown>>(sql: string, args: Args = []): Promise<T | undefined> {

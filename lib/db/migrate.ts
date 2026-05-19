@@ -140,6 +140,12 @@ const STATEMENTS = [
     PRIMARY KEY (ticker, date)
   )`,
   `CREATE INDEX IF NOT EXISTS ohlcv_date_idx ON ohlcv_daily(date)`,
+  `CREATE INDEX IF NOT EXISTS ohlcv_date_ticker_idx ON ohlcv_daily(date, ticker)`,
+  `CREATE TABLE IF NOT EXISTS jquants_daily_coverage (
+    date TEXT PRIMARY KEY,
+    expected_rows INTEGER NOT NULL,
+    imported_at INTEGER NOT NULL DEFAULT (unixepoch())
+  )`,
   // ─── Phase 2: 日次スナップショット (MA + ステージ) ───
   `CREATE TABLE IF NOT EXISTS daily_snapshots (
     ticker TEXT NOT NULL,
@@ -169,6 +175,10 @@ const STATEMENTS = [
     PRIMARY KEY (ticker, date)
   )`,
   `CREATE INDEX IF NOT EXISTS snapshots_date_idx ON daily_snapshots(date)`,
+  `CREATE INDEX IF NOT EXISTS snapshots_date_ticker_idx ON daily_snapshots(date, ticker)`,
+  `CREATE INDEX IF NOT EXISTS snapshots_stage_pattern_idx ON daily_snapshots(
+    daily_a_stage, daily_b_stage, weekly_a_stage, weekly_b_stage, monthly_a_stage, monthly_b_stage, date, ticker
+  )`,
   // ─── Phase 2: バッチ実行履歴 ───
   `CREATE TABLE IF NOT EXISTS batch_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -11,11 +11,14 @@ import path from 'node:path'
 export const dynamic = 'force-dynamic'
 
 export async function POST() {
-  const child = spawn('npx', ['tsx', 'scripts/batch-ohlcv.ts'], {
+  const child = spawn('npx', ['tsx', '--env-file=.env.local', 'scripts/batch-ohlcv.ts'], {
     cwd: process.cwd(),
     detached: true,
     stdio: 'ignore',
-    env: process.env,  // .env.local 由来の TURSO_* を子に継承
+    env: {
+      ...process.env,
+      USE_LOCAL_DB: '1',
+    },
   })
   child.unref()
 

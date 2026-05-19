@@ -1,7 +1,7 @@
 // scripts/batch-indices.ts
 //
 // Phase 4: J-Quants /indices/bars/daily から主要指数を取得し indices_daily に保存。
-// 日経 225 は JPX 配信外なので含まれない。
+// 日経225は公式の指数コード表に存在しないため、ここには含めない。
 //
 // 使い方:
 //   USE_LOCAL_DB=1 npm run batch:indices

@@ -1,6 +1,6 @@
 // scripts/batch-credit-short.ts
 //
-// Phase 4 B10: J-Quants /markets/weekly_margin_interest を全銘柄分取得 (週次)。
+// Phase 4 B10: J-Quants /markets/margin-interest を全銘柄分取得 (週次)。
 // 1 銘柄あたり 1 リクエスト程度なので 4,000 銘柄で ~7 min。
 //
 // 使い方:
@@ -10,17 +10,73 @@
 //   TICKERS=7203,9984    対象銘柄を限定
 //   FROM_DATE=2026-01-01 from パラメータ
 
-import { db, client } from '@/lib/db/client'
+import { db, client, ensureReady } from '@/lib/db/client'
 import { weeklyMarginInterest, tickerUniverse, batchRuns } from '@/lib/db/schema'
-import { fetchJQuantsWeeklyMargin } from '@/lib/jquants'
+import { fetchJQuantsWeeklyMargin, type JMarginRow } from '@/lib/jquants'
 import { eq } from 'drizzle-orm'
 
-const RATE_LIMIT_MS = 100
-const PROGRESS_EVERY = 100
+const RATE_LIMIT_MS = Number(process.env.CREDIT_RATE_LIMIT_MS ?? 0)
+const CONCURRENCY = Math.max(1, Number(process.env.CREDIT_CONCURRENCY ?? 8))
+const PROGRESS_EVERY = Number(process.env.CREDIT_PROGRESS_EVERY ?? 200)
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 
+function numeric(value: string | number | undefined): number {
+  if (typeof value === 'number') return value
+  if (typeof value === 'string') return parseFloat(value)
+  return NaN
+}
+
+function longVolume(row: JMarginRow): number {
+  return numeric(row.LongVol ?? row.LongMarginTradeVolume)
+}
+
+function shortVolume(row: JMarginRow): number {
+  return numeric(row.ShrtVol ?? row.ShortMarginTradeVolume)
+}
+
+async function fetchAndStore(ticker: string, fromDate?: string): Promise<number> {
+  const rows = await fetchJQuantsWeeklyMargin(ticker, fromDate)
+  if (rows.length === 0) return 0
+
+  const sorted = [...rows].sort((a, b) => b.Date.localeCompare(a.Date))
+  const dedup = new Map<string, typeof sorted[number]>()
+  for (const r of sorted) dedup.set(r.Date, r)
+  const items = Array.from(dedup.values()).slice(0, 4)
+
+  let inserted = 0
+  for (let j = 0; j < items.length; j++) {
+    const cur = items[j]
+    const prev = items[j + 1]
+    const longCur = longVolume(cur)
+    const shortCur = shortVolume(cur)
+    const longPrev = prev ? longVolume(prev) : NaN
+    const shortPrev = prev ? shortVolume(prev) : NaN
+    await client.execute({
+      sql: `INSERT INTO weekly_margin_interest (ticker, date, long_margin, short_margin, long_change, short_change, imported_at)
+            VALUES (?, ?, ?, ?, ?, ?, unixepoch())
+            ON CONFLICT(ticker, date) DO UPDATE SET
+              long_margin = excluded.long_margin,
+              short_margin = excluded.short_margin,
+              long_change = excluded.long_change,
+              short_change = excluded.short_change`,
+      args: [
+        ticker,
+        cur.Date,
+        Number.isFinite(longCur) ? longCur : null,
+        Number.isFinite(shortCur) ? shortCur : null,
+        Number.isFinite(longCur) && Number.isFinite(longPrev) ? longCur - longPrev : null,
+        Number.isFinite(shortCur) && Number.isFinite(shortPrev) ? shortCur - shortPrev : null,
+      ],
+    })
+    inserted++
+  }
+  return inserted
+}
+
 async function main() {
+  await ensureReady()
+
   const [run] = await db
     .insert(batchRuns)
     .values({ jobType: 'credit_short', startedAt: new Date(), status: 'running' })
@@ -47,59 +103,39 @@ async function main() {
   const errors: string[] = []
   const startTime = Date.now()
 
-  console.log(`Credit-short fetch 開始: ${tickers.length} 銘柄 (from=${fromDate ?? 'all'})`)
+  console.log(`Credit-short fetch 開始: ${tickers.length} 銘柄 (from=${fromDate ?? 'all'}, CONCURRENCY=${CONCURRENCY})`)
 
-  for (const [i, ticker] of tickers.entries()) {
-    try {
-      const rows = await fetchJQuantsWeeklyMargin(ticker, fromDate)
-      if (rows.length > 0) {
-        // 前週分との差分は date 降順で 2 行があれば取れる
-        const sorted = [...rows].sort((a, b) => b.Date.localeCompare(a.Date))
-        const dedup = new Map<string, typeof sorted[number]>()
-        for (const r of sorted) dedup.set(r.Date, r)
-        const items = Array.from(dedup.values()).slice(0, 4)  // 直近 4 週分
+  let nextIndex = 0
+  let processed = 0
 
-        for (let j = 0; j < items.length; j++) {
-          const cur = items[j]
-          const prev = items[j + 1]
-          const longCur = parseFloat(cur.LongMarginTradeVolume ?? '')
-          const shortCur = parseFloat(cur.ShortMarginTradeVolume ?? '')
-          const longPrev = prev ? parseFloat(prev.LongMarginTradeVolume ?? '') : NaN
-          const shortPrev = prev ? parseFloat(prev.ShortMarginTradeVolume ?? '') : NaN
-          await client.execute({
-            sql: `INSERT INTO weekly_margin_interest (ticker, date, long_margin, short_margin, long_change, short_change, imported_at)
-                  VALUES (?, ?, ?, ?, ?, ?, unixepoch())
-                  ON CONFLICT(ticker, date) DO UPDATE SET
-                    long_margin = excluded.long_margin,
-                    short_margin = excluded.short_margin,
-                    long_change = excluded.long_change,
-                    short_change = excluded.short_change`,
-            args: [
-              ticker,
-              cur.Date,
-              Number.isFinite(longCur) ? longCur : null,
-              Number.isFinite(shortCur) ? shortCur : null,
-              Number.isFinite(longCur) && Number.isFinite(longPrev) ? longCur - longPrev : null,
-              Number.isFinite(shortCur) && Number.isFinite(shortPrev) ? shortCur - shortPrev : null,
-            ],
-          })
-          rowsInserted++
+  async function worker(workerId: number) {
+    while (true) {
+      const i = nextIndex++
+      const ticker = tickers[i]
+      if (!ticker) return
+      try {
+        rowsInserted += await fetchAndStore(ticker, fromDate)
+        succeeded++
+      } catch (err) {
+        failed++
+        const msg = `${ticker}: ${err instanceof Error ? err.message : String(err)}`
+        errors.push(msg)
+        console.error(`✗ worker=${workerId} ${msg}`)
+      } finally {
+        processed++
+        if (processed % PROGRESS_EVERY === 0 || processed === tickers.length) {
+          const pct = ((processed / tickers.length) * 100).toFixed(1)
+          const elapsedMin = ((Date.now() - startTime) / 60000).toFixed(1)
+          console.log(`[${processed}/${tickers.length} ${pct}%] 累計 ${rowsInserted}, 失敗 ${failed}, ${elapsedMin}min`)
         }
+        if (RATE_LIMIT_MS > 0) await sleep(RATE_LIMIT_MS)
       }
-      succeeded++
-      if ((i + 1) % PROGRESS_EVERY === 0 || i === tickers.length - 1) {
-        const pct = (((i + 1) / tickers.length) * 100).toFixed(1)
-        const elapsedMin = ((Date.now() - startTime) / 60000).toFixed(1)
-        console.log(`[${i + 1}/${tickers.length} ${pct}%] ${ticker}: ${rows.length} rows (累計 ${rowsInserted}, 失敗 ${failed}, ${elapsedMin}min)`)
-      }
-    } catch (err) {
-      failed++
-      const msg = `${ticker}: ${err instanceof Error ? err.message : String(err)}`
-      errors.push(msg)
-      console.error(`✗ ${msg}`)
     }
-    await sleep(RATE_LIMIT_MS)
   }
+
+  await Promise.all(
+    Array.from({ length: Math.min(CONCURRENCY, tickers.length) }, (_, i) => worker(i + 1)),
+  )
 
   const finalStatus = failed === 0 ? 'success' : succeeded === 0 ? 'failed' : 'partial'
   await db

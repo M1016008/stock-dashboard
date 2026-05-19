@@ -19,7 +19,7 @@ export function IndexCard({ label, ticker, note }: IndexCardProps) {
 
     async function load() {
       try {
-        const res = await fetch(`/api/quote/${encodeURIComponent(ticker)}`)
+        const res = await fetch(`/api/quote/${encodeURIComponent(ticker)}`, { cache: 'no-store' })
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
         const data: StockQuote = await res.json()
         if (!cancelled) {

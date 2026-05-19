@@ -44,7 +44,7 @@ export async function SixStageCircleMock({ timescale }: { timescale: Timescale }
                 fontSize: 22,
                 fontWeight: 500,
                 fontVariantNumeric: 'tabular-nums',
-                letterSpacing: '-0.02em',
+                letterSpacing: 0,
                 lineHeight: 1,
               }}
             >

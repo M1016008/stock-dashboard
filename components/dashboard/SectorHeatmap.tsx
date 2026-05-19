@@ -27,26 +27,28 @@ export async function SectorHeatmap() {
         hint={`${rows.length} 業種`}
       />
       {rows.length === 0 ? (
-        <div className="py-6 text-center text-[11px] text-[var(--color-text-tertiary)]">
+        <div className="py-7 text-center text-[13px] font-medium text-[var(--color-text-tertiary)]">
           業種データなし — `batch:listed-info` を実行してください
         </div>
       ) : (
-        <div className="grid grid-cols-6 gap-1">
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6">
           {rows.map(r => {
             const c = colorFor(r.avg_change ?? 0)
             return (
-              <div
+              <Link
                 key={(r.sector_code ?? '_') + r.sector_name}
-                className="flex h-[44px] flex-col justify-between rounded-[4px] px-1.5 py-1"
+                href={`/industries?sector=${encodeURIComponent(r.sector_name)}`}
+                prefetch={false}
+                className="flex min-h-[72px] flex-col justify-between rounded-[8px] border border-white/80 px-3 py-3 transition-transform hover:-translate-y-0.5"
                 style={{ backgroundColor: c.bg }}
               >
-                <span className="line-clamp-2 text-[9px] leading-tight text-[var(--color-text-secondary)]">
+                <span className="line-clamp-2 text-[12px] font-bold leading-snug text-[var(--color-text-secondary)]">
                   {r.sector_name}
                 </span>
-                <span className="tabular-nums text-[11px] font-medium" style={{ color: c.text }}>
+                <span className="mt-3 tabular-nums text-[16px] font-bold" style={{ color: c.text }}>
                   {(r.avg_change > 0 ? '+' : '') + (r.avg_change ?? 0).toFixed(2) + '%'}
                 </span>
-              </div>
+              </Link>
             )
           })}
         </div>

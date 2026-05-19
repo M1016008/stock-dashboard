@@ -1,7 +1,10 @@
 // app/api/screener/route.ts
 // マルチ軸スクリーナー API。
-// データソース: tv_daily_snapshots テーブル（TradingView CSV取込結果）
-//   - market: JP のみ対応（CSVは日本株想定）
+// データソース: J-Quants 由来の local DB
+//   - daily_snapshots: MA / HEX ステージ
+//   - ohlcv_daily: 株価、出来高、騰落率
+//   - ticker_universe / sector_master: 銘柄属性
+//   - market: JP のみ対応
 //   - segment: プライム/スタンダード/グロース（マスタから絞り込み）
 //   - daily_a / daily_b / weekly_a / weekly_b / monthly_a / monthly_b:
 //       各系統で 1..6 を指定（カンマ区切りで複数指定可、例: daily_a=1,2,3）
@@ -10,7 +13,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { execAll, execGet } from '@/lib/db/client'
 import { getTickersByMarket } from '@/lib/master/tickers'
-import { calculateAllStages, type MaValues } from '@/lib/hex-stage'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
@@ -18,17 +20,13 @@ export const maxDuration = 60
 interface SnapshotRow {
   date: string
   ticker: string
-  name: string
+  name: string | null
   price: number | null
-  currency: string | null
   change_percent_1d: number | null
   volume_1d: number | null
   avg_volume_10d: number | null
   avg_volume_30d: number | null
   market_cap: number | null
-  market_cap_currency: string | null
-  per: number | null
-  dividend_yield_pct: number | null
   perf_pct_1w: number | null
   perf_pct_1m: number | null
   perf_pct_3m: number | null
@@ -37,20 +35,14 @@ interface SnapshotRow {
   sma_5d: number | null
   sma_25d: number | null
   sma_75d: number | null
-  sma_150d: number | null
-  sma_300d: number | null
-  sma_5w: number | null
-  sma_13w: number | null
-  sma_25w: number | null
-  sma_50w: number | null
-  sma_100w: number | null
-  sma_3m: number | null
-  sma_5m: number | null
-  sma_10m: number | null
-  sma_20m: number | null
-  sma_25m: number | null
   earnings_last_date: string | null
   earnings_next_date: string | null
+  daily_a_stage: number | null
+  daily_b_stage: number | null
+  weekly_a_stage: number | null
+  weekly_b_stage: number | null
+  monthly_a_stage: number | null
+  monthly_b_stage: number | null
 }
 
 interface ScreenerStockRow {
@@ -108,12 +100,63 @@ const STAGE_PARAM_MAP: Record<string, typeof STAGE_KEYS[number]> = {
 }
 
 async function latestSnapshotDate(): Promise<string | null> {
-  const row = await execGet<{ d: string | null }>(`SELECT MAX(date) AS d FROM tv_daily_snapshots`)
+  const row = await execGet<{ d: string | null }>(`SELECT MAX(date) AS d FROM daily_snapshots`)
   return row?.d ?? null
 }
 
 async function loadSnapshotByDate(date: string): Promise<SnapshotRow[]> {
-  return execAll<SnapshotRow>(`SELECT * FROM tv_daily_snapshots WHERE date = ?`, [date])
+  return execAll<SnapshotRow>(
+    `
+    WITH
+      prev_dates AS (
+        SELECT
+          (SELECT MAX(date) FROM ohlcv_daily WHERE date < ?) AS d1,
+          (SELECT MAX(date) FROM ohlcv_daily WHERE date <= date(?, '-7 days')) AS w1,
+          (SELECT MAX(date) FROM ohlcv_daily WHERE date <= date(?, '-1 month')) AS m1,
+          (SELECT MAX(date) FROM ohlcv_daily WHERE date <= date(?, '-3 months')) AS m3,
+          (SELECT MAX(date) FROM ohlcv_daily WHERE date <= date(?, '-6 months')) AS m6,
+          (SELECT MAX(date) FROM ohlcv_daily WHERE date <= substr(?, 1, 4) || '-01-01') AS ytd
+      )
+    SELECT
+      s.date,
+      s.ticker,
+      u.name,
+      cur.close AS price,
+      CASE WHEN d1.close > 0 THEN 100.0 * (cur.close - d1.close) / d1.close END AS change_percent_1d,
+      cur.volume AS volume_1d,
+      NULL AS avg_volume_10d,
+      NULL AS avg_volume_30d,
+      CASE WHEN u.shares_outstanding IS NOT NULL THEN cur.close * u.shares_outstanding END AS market_cap,
+      CASE WHEN w1.close > 0 THEN 100.0 * (cur.close - w1.close) / w1.close END AS perf_pct_1w,
+      CASE WHEN m1.close > 0 THEN 100.0 * (cur.close - m1.close) / m1.close END AS perf_pct_1m,
+      CASE WHEN m3.close > 0 THEN 100.0 * (cur.close - m3.close) / m3.close END AS perf_pct_3m,
+      CASE WHEN m6.close > 0 THEN 100.0 * (cur.close - m6.close) / m6.close END AS perf_pct_6m,
+      CASE WHEN ytd.close > 0 THEN 100.0 * (cur.close - ytd.close) / ytd.close END AS perf_pct_ytd,
+      s.ma_5 AS sma_5d,
+      s.ma_25 AS sma_25d,
+      s.ma_75 AS sma_75d,
+      (SELECT MAX(e.announce_date) FROM earnings_calendar e WHERE e.ticker = s.ticker AND e.announce_date < s.date) AS earnings_last_date,
+      (SELECT MIN(e.announce_date) FROM earnings_calendar e WHERE e.ticker = s.ticker AND e.announce_date >= s.date) AS earnings_next_date,
+      s.daily_a_stage,
+      s.daily_b_stage,
+      s.weekly_a_stage,
+      s.weekly_b_stage,
+      s.monthly_a_stage,
+      s.monthly_b_stage
+    FROM daily_snapshots s
+    LEFT JOIN ohlcv_daily cur ON cur.ticker = s.ticker AND cur.date = s.date
+    CROSS JOIN prev_dates pd
+    LEFT JOIN ohlcv_daily d1 ON d1.ticker = s.ticker AND d1.date = pd.d1
+    LEFT JOIN ohlcv_daily w1 ON w1.ticker = s.ticker AND w1.date = pd.w1
+    LEFT JOIN ohlcv_daily m1 ON m1.ticker = s.ticker AND m1.date = pd.m1
+    LEFT JOIN ohlcv_daily m3 ON m3.ticker = s.ticker AND m3.date = pd.m3
+    LEFT JOIN ohlcv_daily m6 ON m6.ticker = s.ticker AND m6.date = pd.m6
+    LEFT JOIN ohlcv_daily ytd ON ytd.ticker = s.ticker AND ytd.date = pd.ytd
+    LEFT JOIN ticker_universe u ON u.ticker = s.ticker
+    WHERE s.date = ?
+    `,
+    [date, date, date, date, date, date, date],
+  )
 }
 
 /**
@@ -127,26 +170,6 @@ function smaAngleDegrees(shortSma: number | null, longSma: number | null): numbe
   if (shortSma == null || longSma == null || longSma === 0) return null
   const slope = (shortSma - longSma) / longSma
   return Math.atan(slope) * (180 / Math.PI)
-}
-
-function snapshotToMaValues(s: SnapshotRow): MaValues {
-  return {
-    ma_5: s.sma_5d,
-    ma_25: s.sma_25d,
-    ma_75: s.sma_75d,
-    ma_150: s.sma_150d,
-    ma_300: s.sma_300d,
-    weekly_ma_5: s.sma_5w,
-    weekly_ma_13: s.sma_13w,
-    weekly_ma_25: s.sma_25w,
-    weekly_ma_50: s.sma_50w,
-    weekly_ma_100: s.sma_100w,
-    monthly_ma_3: s.sma_3m,
-    monthly_ma_5: s.sma_5m,
-    monthly_ma_10: s.sma_10m,
-    monthly_ma_20: s.sma_20m,
-    monthly_ma_25: s.sma_25m,
-  }
 }
 
 interface SectorEntry {
@@ -186,7 +209,6 @@ function buildResultRow(s: SnapshotRow, sectorMap: Map<string, SectorEntry>): Sc
   const fromDb = sectorMap.get(s.ticker)
   // セクター情報は sector_master DB → ハードコード master → 'その他' の順で参照する。
   // 大分類が 'その他' に落ちた場合は小分類も 'その他' で埋める（空欄回避）。
-  const stages = calculateAllStages(snapshotToMaValues(s))
   const sectorLarge = fromDb?.sectorLarge ?? master?.sectorLarge ?? 'その他'
   let sectorSmall = fromDb?.sectorSmall ?? master?.sectorSmall ?? null
   if (sectorLarge === 'その他' && !sectorSmall) sectorSmall = 'その他'
@@ -194,7 +216,7 @@ function buildResultRow(s: SnapshotRow, sectorMap: Map<string, SectorEntry>): Sc
   const marketSegment = fromDb?.marketSegment ?? master?.marketSegment ?? ''
   return {
     ticker: s.ticker,
-    name: s.name,
+    name: s.name ?? master?.name ?? s.ticker,
     market: 'JP',
     marketSegment,
     marginType: fromDb?.marginType ?? master?.marginType,
@@ -202,7 +224,7 @@ function buildResultRow(s: SnapshotRow, sectorMap: Map<string, SectorEntry>): Sc
     sectorSmall,
     sector33,
     price: s.price,
-    currency: s.currency,
+    currency: 'JPY',
     changePercent: s.change_percent_1d,
     changePercentWeek: s.perf_pct_1w,
     changePercentMonth: s.perf_pct_1m,
@@ -213,15 +235,20 @@ function buildResultRow(s: SnapshotRow, sectorMap: Map<string, SectorEntry>): Sc
     avgVolume10d: s.avg_volume_10d,
     avgVolume30d: s.avg_volume_30d,
     marketCap: s.market_cap,
-    marketCapCurrency: s.market_cap_currency,
-    per: s.per,
-    dividendYield: s.dividend_yield_pct,
+    marketCapCurrency: s.market_cap == null ? null : 'JPY',
+    per: null,
+    dividendYield: null,
     // SMA角度: atan で実際の角度（度）に変換
     sma25Angle: smaAngleDegrees(s.sma_5d, s.sma_25d),
     sma75Angle: smaAngleDegrees(s.sma_25d, s.sma_75d),
     earningsLastDate: s.earnings_last_date,
     earningsNextDate: s.earnings_next_date,
-    ...stages,
+    daily_a_stage: s.daily_a_stage,
+    daily_b_stage: s.daily_b_stage,
+    weekly_a_stage: s.weekly_a_stage,
+    weekly_b_stage: s.weekly_b_stage,
+    monthly_a_stage: s.monthly_a_stage,
+    monthly_b_stage: s.monthly_b_stage,
   }
 }
 
@@ -240,8 +267,8 @@ export async function GET(request: NextRequest) {
         universe: 0,
         date: null,
         cached: false,
-        source: 'csv',
-        notice: 'CSV未取込です。/admin/import から TradingView の CSV をインポートしてください。',
+        source: 'jquants',
+        notice: 'J-Quants 由来の日次スナップショットが未作成です。最新化バッチを実行してください。',
         filters: { segment },
       })
     }
@@ -283,7 +310,7 @@ export async function GET(request: NextRequest) {
       universe,
       date,
       cached: true,
-      source: 'csv',
+      source: 'jquants',
       filters: { segment, ...stageFilter },
     })
   } catch (error) {

@@ -97,7 +97,7 @@ export default async function TransitionsPage({
             </div>
             <div style={{ textAlign: 'right' }}>
               <div className="sb-t" style={{ fontSize: 11 }}>過去出現</div>
-              <div style={{ fontSize: 22, fontWeight: 500, fontVariantNumeric: 'tabular-nums', letterSpacing: '-0.02em' }}>
+              <div style={{ fontSize: 22, fontWeight: 500, fontVariantNumeric: 'tabular-nums', letterSpacing: 0 }}>
                 {meta?.count_60d.toLocaleString() ?? '—'} 回
               </div>
               {meta?.lastDate && (

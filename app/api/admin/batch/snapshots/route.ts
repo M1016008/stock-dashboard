@@ -7,11 +7,14 @@ import path from 'node:path'
 export const dynamic = 'force-dynamic'
 
 export async function POST() {
-  const child = spawn('npx', ['tsx', 'scripts/batch-snapshots.ts'], {
+  const child = spawn('npx', ['tsx', '--env-file=.env.local', 'scripts/batch-snapshots.ts'], {
     cwd: process.cwd(),
     detached: true,
     stdio: 'ignore',
-    env: process.env,
+    env: {
+      ...process.env,
+      USE_LOCAL_DB: '1',
+    },
   })
   child.unref()
 

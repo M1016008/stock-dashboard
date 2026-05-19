@@ -25,7 +25,7 @@ export async function PeriodCountTrendMock({ timescale }: { timescale: Timescale
             <div key={r.label} style={{ marginBottom: i < rows.length - 1 ? 14 : 0 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4 }}>
                 <span style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>{r.label}</span>
-                <span style={{ fontSize: 18, fontWeight: 500, fontVariantNumeric: 'tabular-nums', letterSpacing: '-0.02em' }}>
+                <span style={{ fontSize: 18, fontWeight: 500, fontVariantNumeric: 'tabular-nums', letterSpacing: 0 }}>
                   {r.count.toLocaleString()}
                 </span>
               </div>

@@ -3,6 +3,7 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useEffect, useState } from 'react'
+import { Activity, BarChart3, Database, Settings } from 'lucide-react'
 
 const NAV_ITEMS = [
   { href: '/', label: 'ダッシュボード' },
@@ -84,10 +85,10 @@ function getTseStatus(): 'open' | 'closed' {
 
 function ClockChip({ label, time }: { label: string; time: string }) {
   return (
-    <span className="inline-flex items-baseline gap-1 tabular-nums">
-      <span className="text-[10px] tracking-wider text-[var(--color-text-tertiary)]">{label}</span>
+    <span className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-border-soft)] bg-white px-3 py-1.5 tabular-nums">
+      <span className="text-[11px] font-semibold text-[var(--color-text-tertiary)]">{label}</span>
       <span
-        className="text-[11px] text-[var(--color-text-secondary)]"
+        className="text-[12px] font-semibold text-[var(--color-text-secondary)]"
         suppressHydrationWarning
       >
         {time || '--:--:--'}
@@ -113,78 +114,80 @@ export function Header() {
   }
 
   return (
-    <header className="sticky top-0 z-30 border-b border-[var(--color-border-soft)] bg-[var(--color-surface-base)]/90 backdrop-blur">
-      {/* 上段: ロゴ + メインナビ + 管理ナビ */}
-      <div className="mx-auto flex max-w-[1440px] items-center justify-between gap-4 px-6 py-3">
-        <Link href="/" className="flex items-center gap-2">
-          <div className="flex h-7 w-7 items-center justify-center rounded-md bg-[var(--color-brand-600)] text-white">
-            <span className="text-sm font-bold">SB</span>
-          </div>
-          <span className="text-sm font-semibold tracking-tight">StockBoard</span>
-        </Link>
+    <header className="sticky top-0 z-30 border-b border-[var(--color-border-soft)] bg-white/95 backdrop-blur-xl">
+      <div className="mx-auto flex max-w-[1500px] flex-col gap-3 px-5 py-3.5 lg:px-10">
+        <div className="flex items-center justify-between gap-5">
+          <Link href="/" prefetch={false} className="flex items-center gap-2.5">
+            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[var(--color-brand-500)] text-white shadow-sm">
+              <BarChart3 size={19} strokeWidth={2.4} />
+            </div>
+            <div className="leading-tight">
+              <div className="text-[18px] font-bold">StockBoard</div>
+              <div className="hidden text-[11px] font-semibold text-[var(--color-text-tertiary)] sm:block">J-Quants Market Console</div>
+            </div>
+          </Link>
 
-        <nav className="flex items-center gap-0.5">
-          {NAV_ITEMS.map((item) => (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={`rounded-md px-2.5 py-1.5 text-[12px] tracking-tight transition-colors ${
-                isActive(item.href)
-                  ? 'bg-[var(--color-brand-50)] text-[var(--color-brand-700)] font-medium'
-                  : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-muted)] hover:text-[var(--color-text-primary)]'
-              }`}
-            >
-              {item.label}
-            </Link>
-          ))}
-        </nav>
-
-        <div className="flex items-center gap-1">
-          {ADMIN_ITEMS.map((item) => (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={`rounded-md px-2.5 py-1 text-xs transition-colors ${
-                isActive(item.href)
-                  ? 'font-medium text-[var(--color-text-primary)]'
-                  : 'text-[var(--color-text-tertiary)] hover:text-[var(--color-text-secondary)]'
-              }`}
-            >
-              {item.label}
-            </Link>
-          ))}
-        </div>
-      </div>
-
-      {/* 下段: 東証ステータス + 時計 */}
-      <div className="border-t border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)]">
-        <div className="mx-auto flex max-w-[1440px] items-center justify-between gap-4 px-6 py-1.5">
-          <span className="text-[10px] tracking-wider text-[var(--color-text-tertiary)]">
-            東証{' '}
-            <span
-              className="font-medium"
-              style={{
-                color:
-                  tseStatus === 'open'
-                    ? 'var(--color-price-up)'
-                    : 'var(--color-price-down)',
-              }}
-            >
-              {tseStatus === 'open' ? '開場' : '閉場'}
+          <div className="hidden items-center gap-2 lg:flex">
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-border-soft)] bg-white px-3 py-1.5 text-[12px] font-semibold text-[var(--color-text-secondary)] shadow-sm">
+              <Activity size={12} />
+              東証
+              <span
+                style={{
+                  color:
+                    tseStatus === 'open'
+                      ? 'var(--color-price-up)'
+                      : 'var(--color-price-down)',
+                }}
+              >
+                {tseStatus === 'open' ? '開場' : '閉場'}
+              </span>
             </span>
-          </span>
-
-          <div className="flex items-center gap-3">
             <span
-              className="tabular-nums text-[11px] text-[var(--color-text-secondary)]"
+              className="rounded-full border border-[var(--color-border-soft)] bg-white px-3 py-1.5 text-[12px] font-semibold text-[var(--color-text-secondary)] shadow-sm tabular-nums"
               suppressHydrationWarning
             >
               {clocks.date || '----/--/--'}
             </span>
-            <span className="h-3 w-px bg-[var(--color-border-default)]" />
             <ClockChip label="TYO" time={clocks.jst} />
             <ClockChip label="LDN" time={clocks.ldn} />
             <ClockChip label="NYC" time={clocks.nyc} />
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between gap-4 overflow-x-auto border-t border-[var(--color-border-soft)] pt-3">
+          <nav className="flex min-w-max items-center gap-5">
+          {NAV_ITEMS.map((item) => (
+            <Link
+              key={item.href}
+              href={item.href}
+              prefetch={false}
+              className={`relative py-1 text-[13px] font-bold transition-colors ${
+                isActive(item.href)
+                  ? 'text-[var(--color-brand-700)] after:absolute after:-bottom-3 after:left-0 after:h-[3px] after:w-full after:rounded-full after:bg-[var(--color-brand-500)]'
+                  : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]'
+              }`}
+            >
+              {item.label}
+            </Link>
+          ))}
+          </nav>
+
+          <div className="flex shrink-0 items-center gap-1">
+            {ADMIN_ITEMS.map((item) => (
+              <Link
+                key={item.href}
+                href={item.href}
+                prefetch={false}
+                className={`inline-flex h-8 items-center gap-1.5 rounded-full px-3 text-[12px] font-bold transition-colors ${
+                  isActive(item.href)
+                    ? 'bg-[var(--color-text-primary)] text-white'
+                    : 'text-[var(--color-text-tertiary)] hover:bg-[var(--color-surface-subtle)] hover:text-[var(--color-text-secondary)]'
+                }`}
+              >
+                {item.href.includes('db') ? <Database size={13} /> : <Settings size={13} />}
+                {item.label}
+              </Link>
+            ))}
           </div>
         </div>
       </div>

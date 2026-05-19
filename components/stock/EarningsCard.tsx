@@ -21,7 +21,7 @@ export function EarningsCard({ ticker }: Props) {
   useEffect(() => {
     let cancelled = false
     setLoading(true)
-    fetch(`/api/stock-snapshot/${encodeURIComponent(ticker)}`)
+    fetch(`/api/stock-snapshot/${encodeURIComponent(ticker)}`, { cache: 'no-store' })
       .then((r) => r.json())
       .then((d) => { if (!cancelled) setData(d) })
       .catch(() => {})
@@ -40,7 +40,7 @@ export function EarningsCard({ ticker }: Props) {
   if (!data || (!data.earningsLastDate && !data.earningsNextDate)) {
     return (
       <div className="card" style={{ padding: '12px', fontSize: '11px', color: 'var(--text-muted)' }}>
-        決算情報なし（CSV未取込か対象銘柄外）
+        決算情報なし（J-Quants未取得か対象銘柄外）
       </div>
     )
   }

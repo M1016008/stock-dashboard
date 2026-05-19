@@ -2,6 +2,18 @@
 
 import { execAll, execGet } from '@/lib/db/client'
 
+function stagesFromCode(code: string): number[] | null {
+  if (!/^\d{6}$/.test(code)) return null
+  const stages = code.split('').map(Number)
+  return stages.every(s => s >= 1 && s <= 6) ? stages : null
+}
+
+const STAGE_MATCH_WHERE = `
+  daily_a_stage = ? AND daily_b_stage = ?
+  AND weekly_a_stage = ? AND weekly_b_stage = ?
+  AND monthly_a_stage = ? AND monthly_b_stage = ?
+`
+
 export interface PatternMeta {
   pattern_code: string
   count_60d: number
@@ -19,6 +31,8 @@ export async function getDefaultPatternCode(): Promise<string | null> {
 }
 
 export async function getPatternMeta(code: string): Promise<PatternMeta | null> {
+  const stages = stagesFromCode(code)
+  if (!stages) return null
   const row = await execGet<{ count: number; p25: number | null; p50: number | null; p75: number | null }>(
     `SELECT count, p25, p50, p75 FROM pattern_stats WHERE pattern_code = ? AND horizon_days = 60`,
     [code],
@@ -27,13 +41,11 @@ export async function getPatternMeta(code: string): Promise<PatternMeta | null> 
   // 直近出現日
   const lastRow = await execGet<{ d: string | null }>(
     `
-    WITH match AS (
-      SELECT date FROM daily_snapshots
-      WHERE (CAST(daily_a_stage AS TEXT) || CAST(daily_b_stage AS TEXT) || CAST(weekly_a_stage AS TEXT) || CAST(weekly_b_stage AS TEXT) || CAST(monthly_a_stage AS TEXT) || CAST(monthly_b_stage AS TEXT)) = ?
-    )
-    SELECT MAX(date) AS d FROM match
+    SELECT MAX(date) AS d
+    FROM daily_snapshots
+    WHERE ${STAGE_MATCH_WHERE}
     `,
-    [code],
+    stages,
   )
   return {
     pattern_code: code,
@@ -101,19 +113,21 @@ export interface ReturnDistribution {
   p75: number | null
 }
 export async function getReturnDistribution(code: string, horizonDays = 60): Promise<ReturnDistribution> {
+  const stages = stagesFromCode(code)
+  if (!stages) return { bins: [], total: 0, p25: null, p50: null, p75: null }
   // パターン一致 (ticker, date) を絞り込み、forward_returns 値を取得
   const rows = await execAll<{ return_pct: number }>(
     `
     WITH match AS (
       SELECT ticker, date FROM daily_snapshots
-      WHERE (CAST(daily_a_stage AS TEXT) || CAST(daily_b_stage AS TEXT) || CAST(weekly_a_stage AS TEXT) || CAST(weekly_b_stage AS TEXT) || CAST(monthly_a_stage AS TEXT) || CAST(monthly_b_stage AS TEXT)) = ?
+      WHERE ${STAGE_MATCH_WHERE}
       LIMIT 20000
     )
     SELECT fr.return_pct FROM forward_returns fr
     JOIN match USING (ticker, date)
     WHERE fr.horizon_days = ?
     `,
-    [code, horizonDays],
+    [...stages, horizonDays],
   )
   const vals = rows.map(r => r.return_pct).filter(v => Number.isFinite(v))
   vals.sort((a, b) => a - b)
@@ -146,11 +160,13 @@ export interface SectorBreakdownRow {
   count: number
 }
 export async function getSectorBreakdown(code: string, limit = 7): Promise<SectorBreakdownRow[]> {
+  const stages = stagesFromCode(code)
+  if (!stages) return []
   return await execAll<SectorBreakdownRow>(
     `
     WITH match AS (
       SELECT DISTINCT ticker FROM daily_snapshots
-      WHERE (CAST(daily_a_stage AS TEXT) || CAST(daily_b_stage AS TEXT) || CAST(weekly_a_stage AS TEXT) || CAST(weekly_b_stage AS TEXT) || CAST(monthly_a_stage AS TEXT) || CAST(monthly_b_stage AS TEXT)) = ?
+      WHERE ${STAGE_MATCH_WHERE}
       LIMIT 5000
     )
     SELECT COALESCE(tu.sector33_name, 'その他') AS sector_name, COUNT(*) AS count
@@ -160,7 +176,7 @@ export async function getSectorBreakdown(code: string, limit = 7): Promise<Secto
     ORDER BY count DESC
     LIMIT ?
     `,
-    [code, limit],
+    [...stages, limit],
   )
 }
 
@@ -176,11 +192,13 @@ export interface SampleCaseRow {
   r180: number | null
 }
 export async function getSampleCases(code: string, limit = 10): Promise<SampleCaseRow[]> {
+  const stages = stagesFromCode(code)
+  if (!stages) return []
   return await execAll<SampleCaseRow>(
     `
     WITH match AS (
       SELECT ticker, date FROM daily_snapshots
-      WHERE (CAST(daily_a_stage AS TEXT) || CAST(daily_b_stage AS TEXT) || CAST(weekly_a_stage AS TEXT) || CAST(weekly_b_stage AS TEXT) || CAST(monthly_a_stage AS TEXT) || CAST(monthly_b_stage AS TEXT)) = ?
+      WHERE ${STAGE_MATCH_WHERE}
       ORDER BY date DESC
       LIMIT 200
     ),
@@ -200,6 +218,6 @@ export async function getSampleCases(code: string, limit = 10): Promise<SampleCa
     ORDER BY m.date DESC
     LIMIT ?
     `,
-    [code, limit],
+    [...stages, limit],
   )
 }

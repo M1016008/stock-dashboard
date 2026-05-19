@@ -274,29 +274,30 @@ export async function getEarningsCalendar(daysAhead = 14): Promise<EarningsRow[]
     ),
     px AS (SELECT ticker, close FROM ohlcv_daily WHERE date = ?),
     py AS (SELECT ticker, close AS prev_close FROM ohlcv_daily WHERE date = ?),
-    avgv AS (
-      SELECT ticker, AVG(volume) AS avg20
-      FROM (SELECT ticker, volume,
-                   ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY date DESC) AS rn
-            FROM ohlcv_daily) z
-      WHERE rn <= 20 GROUP BY ticker
-    ),
     st AS (SELECT ticker, daily_a_stage FROM daily_snapshots WHERE date = ?)
     SELECT cal.ticker, tu.name, cal.announce_date, cal.daysLeft,
            st.daily_a_stage,
            px.close AS price,
            CASE WHEN py.prev_close > 0 THEN 100.0 * (px.close - py.prev_close) / py.prev_close ELSE 0 END AS changePct,
-           avgv.avg20 AS avgVolume20
+           (
+             SELECT AVG(volume)
+             FROM (
+               SELECT volume
+               FROM ohlcv_daily od
+               WHERE od.ticker = cal.ticker AND od.date <= ?
+               ORDER BY od.date DESC
+               LIMIT 20
+             )
+           ) AS avgVolume20
     FROM cal
     LEFT JOIN ticker_universe tu ON tu.ticker = cal.ticker
     LEFT JOIN px USING (ticker)
     LEFT JOIN py USING (ticker)
-    LEFT JOIN avgv USING (ticker)
     LEFT JOIN st USING (ticker)
     ORDER BY cal.daysLeft ASC
     LIMIT 50
     `,
-    [latest, latest, latest, daysAhead, latest, prev ?? latest, latest],
+    [latest, latest, latest, daysAhead, latest, prev ?? latest, latest, latest],
   )
 }
 
@@ -306,13 +307,15 @@ export interface CreditShortRow {
   name: string | null
   longMargin: number | null
   longChange: number | null
+  shortMargin: number | null
+  shortChange: number | null
   shortRatio: number | null
 }
 export async function getCreditShortHighlights(limit = 4): Promise<CreditShortRow[]> {
   return await execAll<CreditShortRow>(
     `
     WITH latest_wmi AS (
-      SELECT ticker, long_margin, long_change,
+      SELECT ticker, long_margin, long_change, short_margin, short_change,
              ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY date DESC) AS rn
       FROM weekly_margin_interest
     ),
@@ -325,12 +328,16 @@ export async function getCreditShortHighlights(limit = 4): Promise<CreditShortRo
     SELECT w.ticker, tu.name,
            w.long_margin AS longMargin,
            w.long_change AS longChange,
+           w.short_margin AS shortMargin,
+           w.short_change AS shortChange,
            s.short_ratio AS shortRatio
     FROM latest_wmi w
     LEFT JOIN latest_ssp s USING (ticker)
     LEFT JOIN ticker_universe tu ON tu.ticker = w.ticker
-    WHERE w.rn = 1 AND (w.long_margin IS NOT NULL OR s.short_ratio IS NOT NULL)
-    ORDER BY ABS(COALESCE(w.long_change, 0)) DESC
+    WHERE w.rn = 1
+      AND (w.long_margin IS NOT NULL OR w.short_margin IS NOT NULL OR s.short_ratio IS NOT NULL)
+    ORDER BY
+      ABS(COALESCE(w.long_change, 0)) + ABS(COALESCE(w.short_change, 0)) DESC
     LIMIT ?
     `,
     [limit],
@@ -339,7 +346,7 @@ export async function getCreditShortHighlights(limit = 4): Promise<CreditShortRo
 
 // ─── 主要指数 (J-Quants /indices/bars/daily 由来) ───
 //
-// 日経225 は JPX 配信外なので含まれない (Phase 5 で別ソース検討)
+// 日経225 は J-Quants 公式の指数コード表に存在しないため含まれない。
 // ドル円 / 10年JGB も同様 (為替・金利は当面「データ未接続」)
 
 export interface IndexQuote {
@@ -396,8 +403,8 @@ export async function getDashboardIndices(): Promise<IndexQuote[]> {
   const advRatio = ad && ad.declines > 0 ? (ad.advances / ad.declines) * 100 : null
   out.push({ label: '騰落レシオ', code: 'ADR', value: advRatio, changePct: null })
 
-  // 日経225 (JPX 配信外)
-  out.push({ label: '日経225', code: 'N225', value: null, changePct: null, note: 'JPX 配信外' })
+  // 日経225 (J-Quants 指数四本値 API では未提供)
+  out.push({ label: '日経225', code: 'N225', value: null, changePct: null, note: 'J-Quants未提供' })
 
   return out
 }

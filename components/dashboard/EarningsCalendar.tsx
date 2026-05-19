@@ -41,7 +41,7 @@ export function EarningsCalendar({ defaultDays = 14 }: { defaultDays?: DaysOptio
   useEffect(() => {
     let cancelled = false
     setLoading(true)
-    fetch(`/api/earnings-calendar?days=${days}`)
+    fetch(`/api/earnings-calendar?days=${days}`, { cache: 'no-store' })
       .then((r) => r.json())
       .then((d) => { if (!cancelled) setData(d) })
       .catch(() => {})
@@ -126,7 +126,6 @@ export function EarningsCalendar({ defaultDays = 14 }: { defaultDays?: DaysOptio
       ) : data?.notice ? (
         <div style={{ padding: '24px', textAlign: 'center', fontSize: '12px', color: 'var(--text-muted)' }}>
           ℹ️ {data.notice}
-          {' '}<Link href="/admin/import" style={{ color: 'var(--accent-primary)' }}>取込ページ →</Link>
         </div>
       ) : calendarDates.length === 0 ? (
         <div style={{ padding: '24px', textAlign: 'center', fontSize: '12px', color: 'var(--text-muted)' }}>

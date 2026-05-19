@@ -129,7 +129,7 @@ export function IndicesChart() {
     const period = TIMEFRAMES.find((t) => t.key === tf)!.period
     setLoading(true)
     setError('')
-    fetch(`/api/history/${encodeURIComponent(code)}?period=${period}`)
+    fetch(`/api/history/${encodeURIComponent(code)}?period=${period}`, { cache: 'no-store' })
       .then((r) => r.json())
       .then((d: OHLCV[] | { error: string }) => {
         if (cancelled) return

@@ -28,7 +28,7 @@ export function TimescaleTabs({ current }: { current: string }) {
           <Link
             key={t.key}
             href={`${pathname}?${params.toString()}`}
-            className={`flex-1 rounded-[6px] px-3 py-1.5 text-center text-[12px] tracking-tight ${
+            className={`flex-1 rounded-[6px] px-3 py-1.5 text-center text-[12px] ${
               active
                 ? 'bg-[var(--color-brand-50)] text-[var(--color-brand-700)] font-medium'
                 : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-subtle)]'
@@ -60,7 +60,7 @@ export function PeriodTabs({ current }: { current: string }) {
           <Link
             key={t.key}
             href={`${pathname}?${params.toString()}`}
-            className={`rounded-[4px] px-2.5 py-1 text-[11px] tracking-tight ${
+            className={`rounded-[4px] px-2.5 py-1 text-[11px] ${
               active
                 ? 'bg-[var(--color-brand-50)] text-[var(--color-brand-700)] font-medium'
                 : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-subtle)]'

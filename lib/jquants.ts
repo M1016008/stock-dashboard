@@ -65,6 +65,23 @@ interface JBarsResponse {
   pagination_key?: string
 }
 
+function toOhlcv(row: JBarRow): OHLCV | null {
+  if (row.AdjC == null && row.C == null) return null
+  const close = row.AdjC ?? row.C!
+  const open  = row.AdjO ?? row.O ?? close
+  const high  = row.AdjH ?? row.H ?? close
+  const low   = row.AdjL ?? row.L ?? close
+  const vol   = row.AdjVo ?? row.Vo ?? 0
+  return {
+    date:   row.Date,
+    open,
+    high,
+    low,
+    close,
+    volume: Math.round(vol),
+  }
+}
+
 /**
  * 指定銘柄の日足 OHLCV を J-Quants v2 から取得する。
  * - 調整後価格 (AdjO/H/L/C) を優先 (株式分割の影響を吸収)
@@ -105,23 +122,42 @@ export async function fetchJQuantsDaily(
 
   // OHLCV 型に変換。Adj* (株式分割調整済) を優先、なければ raw を使う
   return all
-    .filter(r => r.AdjC != null || r.C != null)
-    .map(r => {
-      const close = r.AdjC ?? r.C!
-      const open  = r.AdjO ?? r.O ?? close
-      const high  = r.AdjH ?? r.H ?? close
-      const low   = r.AdjL ?? r.L ?? close
-      const vol   = r.AdjVo ?? r.Vo ?? 0
-      return {
-        date:   r.Date,
-        open,
-        high,
-        low,
-        close,
-        volume: Math.round(vol),
-      }
-    })
+    .map(toOhlcv)
+    .filter((row): row is OHLCV => row !== null)
     .sort((a, b) => a.date.localeCompare(b.date))
+}
+
+export interface JQuantsDailyByDateRow extends OHLCV {
+  ticker: string
+}
+
+export async function fetchJQuantsDailyByDate(date: string): Promise<JQuantsDailyByDateRow[]> {
+  const apiKey = getApiKey()
+  const all: JQuantsDailyByDateRow[] = []
+  let paginationKey: string | undefined
+
+  do {
+    const params = new URLSearchParams({ date })
+    if (paginationKey) params.set('pagination_key', paginationKey)
+    const res = await fetch(`${BASE_URL}/equities/bars/daily?${params}`, {
+      headers: { 'x-api-key': apiKey },
+    })
+    if (!res.ok) {
+      throw new Error(`J-Quants bars/daily date=${date} 失敗: ${res.status} ${await res.text()}`)
+    }
+    const json = await res.json() as JBarsResponse
+    for (const row of json.data ?? []) {
+      const ohlcv = toOhlcv(row)
+      if (!ohlcv) continue
+      all.push({
+        ticker: toJQuantsCode(row.Code).replace(/0$/, ''),
+        ...ohlcv,
+      })
+    }
+    paginationKey = json.pagination_key
+  } while (paginationKey)
+
+  return all.sort((a, b) => a.ticker.localeCompare(b.ticker))
 }
 
 // ─────────────────────────────────────
@@ -327,7 +363,7 @@ export function computeFundamentals(
 }
 
 // ─────────────────────────────────────
-// API: 信用残高 (/markets/weekly_margin_interest) — 週次
+// API: 信用残高 (/markets/margin-interest) — 週次
 // ─────────────────────────────────────
 
 export interface JMarginRow {
@@ -339,10 +375,16 @@ export interface JMarginRow {
   LongNegotiableMarginTradeVolume?: string
   ShortStandardizedMarginTradeVolume?: string
   LongStandardizedMarginTradeVolume?: string
+  ShrtVol?: number
+  LongVol?: number
+  ShrtNegVol?: number
+  LongNegVol?: number
+  ShrtStdVol?: number
+  LongStdVol?: number
 }
 
 interface JMarginResponse {
-  weekly_margin_interest?: JMarginRow[]
+  data?: JMarginRow[]
   pagination_key?: string
 }
 
@@ -354,16 +396,16 @@ export async function fetchJQuantsWeeklyMargin(ticker: string, from?: string): P
     const params = new URLSearchParams({ code: toJQuantsCode(ticker) })
     if (from) params.set('from', from)
     if (paginationKey) params.set('pagination_key', paginationKey)
-    const res = await fetch(`${BASE_URL}/markets/weekly_margin_interest?${params}`, {
+    const res = await fetch(`${BASE_URL}/markets/margin-interest?${params}`, {
       headers: { 'x-api-key': apiKey },
     })
     if (!res.ok) {
       // Standard プラン外なら 403。空配列で吸収する。
       if (res.status === 403 || res.status === 404) return []
-      throw new Error(`J-Quants weekly_margin_interest 失敗: ${res.status} ${await res.text()}`)
+      throw new Error(`J-Quants margin-interest 失敗: ${res.status} ${await res.text()}`)
     }
     const json = await res.json() as JMarginResponse
-    all.push(...(json.weekly_margin_interest ?? []))
+    all.push(...(json.data ?? []))
     paginationKey = json.pagination_key
   } while (paginationKey)
   return all
@@ -392,7 +434,7 @@ interface JAnnouncementResponse {
 // API: 指数四本値 (/indices/bars/daily)
 //   code 例: 0000=TOPIX, 0070=東証グロース250, 0500=プライム指数,
 //            0501=スタンダード指数, 0502=グロース指数, 0503=JPXプライム150
-//   日経225 は JPX 配信外なので J-Quants では取れない (将来別ソース検討)
+//   日経225は公式の指数コード表に存在しないため、J-Quantsでは取れない。
 // ─────────────────────────────────────
 
 export interface JIndexBarRow {

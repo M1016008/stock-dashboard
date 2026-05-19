@@ -27,7 +27,7 @@ export function TickerLink({
   }
 
   return (
-    <Link href={`/stock/${ticker}`} className={`${base} ${sizes[variant]} ${className}`}>
+    <Link href={`/stock/${ticker}`} prefetch={false} className={`${base} ${sizes[variant]} ${className}`}>
       <span className="font-medium tabular-nums">{ticker}</span>
       {showName && name && (
         <span className="text-[var(--color-text-secondary)]">{name}</span>

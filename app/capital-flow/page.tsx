@@ -134,7 +134,7 @@ export default function CapitalFlowPage() {
   const fetchDiag = async () => {
     setDiagLoading(true)
     try {
-      const r = await fetch('/api/capital-flow/diagnostics')
+      const r = await fetch('/api/capital-flow/diagnostics', { cache: 'no-store' })
       const j = await r.json()
       if (r.ok) setDiag(j)
     } finally {
@@ -146,7 +146,7 @@ export default function CapitalFlowPage() {
     setJpxFetching(true)
     setJpxResult(null)
     try {
-      const r = await fetch('/api/admin/sector-master?source=jpx', { method: 'POST' })
+      const r = await fetch('/api/admin/sector-master?source=jpx', { method: 'POST', cache: 'no-store' })
       const j = await r.json()
       if (!r.ok) {
         setJpxResult(`❌ 失敗: ${j.message ?? j.error ?? r.statusText}`)
@@ -187,7 +187,7 @@ export default function CapitalFlowPage() {
       if (customTo)   params.set('to',   customTo)
     }
 
-    fetch(`/api/capital-flow?${params}`)
+    fetch(`/api/capital-flow?${params}`, { cache: 'no-store' })
       .then(async (r) => {
         const j = await r.json()
         if (!r.ok) throw new Error(j.message ?? j.error ?? 'failed')

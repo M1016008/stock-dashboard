@@ -14,18 +14,18 @@ export async function StageDistributionBar() {
   const total = rows.reduce((a, r) => a + r.count, 0)
   if (total === 0) {
     return (
-      <div className="rounded-[8px] border border-[var(--color-border-soft)] bg-[var(--color-surface-base)] px-4 py-3 text-[12px] text-[var(--color-text-tertiary)]">
+      <div className="rounded-[8px] border border-[var(--color-border-soft)] bg-white px-6 py-5 text-[13px] font-semibold text-[var(--color-text-tertiary)]">
         ステージ分布データなし
       </div>
     )
   }
   return (
-    <div className="rounded-[8px] border border-[var(--color-border-soft)] bg-[var(--color-surface-base)] px-4 py-3">
-      <div className="mb-1.5 flex items-baseline justify-between">
-        <span className="text-[11px] text-[var(--color-text-secondary)]">日足 A ステージ分布</span>
-        <span className="tabular-nums text-[11px] text-[var(--color-text-tertiary)]">{total.toLocaleString()} 銘柄</span>
+    <div className="rounded-[8px] border border-[var(--color-border-soft)] bg-white px-6 py-5">
+      <div className="mb-4 flex items-baseline justify-between">
+        <span className="text-[17px] font-bold text-[var(--color-text-primary)]">日足 A ステージ分布</span>
+        <span className="tabular-nums text-[13px] font-bold text-[var(--color-text-secondary)]">{total.toLocaleString()} 銘柄</span>
       </div>
-      <div className="flex h-[22px] overflow-hidden rounded-[4px] border border-[var(--color-border-soft)]">
+      <div className="flex h-[42px] overflow-hidden rounded-[8px] border border-[var(--color-border-soft)]">
         {[1, 2, 3, 4, 5, 6].map(s => {
           const r = rows.find(x => x.stage === s)
           const count = r?.count ?? 0
@@ -35,7 +35,7 @@ export async function StageDistributionBar() {
             <div
               key={s}
               title={`Stage ${s} ${LABELS[s]}: ${count} (${pct.toFixed(1)}%)`}
-              className="flex items-center justify-center text-[10px] tabular-nums"
+              className="flex items-center justify-center text-[13px] font-bold tabular-nums"
               style={{
                 flexGrow: count,
                 flexBasis: 0,
@@ -48,14 +48,14 @@ export async function StageDistributionBar() {
           )
         })}
       </div>
-      <div className="mt-1.5 grid grid-cols-6 gap-1 text-[10px] tabular-nums text-[var(--color-text-tertiary)]">
+      <div className="mt-4 grid grid-cols-2 gap-2.5 text-[12px] tabular-nums text-[var(--color-text-secondary)] md:grid-cols-6">
         {[1, 2, 3, 4, 5, 6].map(s => {
           const count = rows.find(x => x.stage === s)?.count ?? 0
           return (
-            <div key={s} className="flex items-baseline gap-1">
-              <span style={{ color: `var(--color-stage-${s}-text)` }}>{s}</span>
-              <span>{LABELS[s]}</span>
-              <span className="ml-auto">{count.toLocaleString()}</span>
+            <div key={s} className="flex items-center gap-1.5 rounded-[8px] bg-[var(--color-surface-subtle)] px-2.5 py-2">
+              <span className="font-semibold" style={{ color: `var(--color-stage-${s}-text)` }}>{s}</span>
+              <span className="truncate">{LABELS[s]}</span>
+              <span className="ml-auto font-medium">{count.toLocaleString()}</span>
             </div>
           )
         })}

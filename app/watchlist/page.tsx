@@ -43,7 +43,7 @@ export default function WatchlistPage() {
       const entries = await Promise.all(
         tickers.map(async (t): Promise<[string, QuoteResponse | null]> => {
           try {
-            const res = await fetch(`/api/quote/${encodeURIComponent(t)}`)
+            const res = await fetch(`/api/quote/${encodeURIComponent(t)}`, { cache: 'no-store' })
             if (!res.ok) return [t, null]
             const data = (await res.json()) as QuoteResponse
             return [t, data]
@@ -179,7 +179,7 @@ export default function WatchlistPage() {
                         <WatchlistButton ticker={t} size="sm" />
                       </td>
                       <td style={td}>
-                        <Link href={`/stock/${encodeURIComponent(t)}`} style={{ color: 'var(--accent-primary)', fontFamily: 'var(--font-mono)', textDecoration: 'none', fontWeight: 600 }}>
+                        <Link href={`/stock/${encodeURIComponent(t)}`} prefetch={false} style={{ color: 'var(--accent-primary)', fontFamily: 'var(--font-mono)', textDecoration: 'none', fontWeight: 600 }}>
                           {t.replace('.T', '')}
                         </Link>
                       </td>

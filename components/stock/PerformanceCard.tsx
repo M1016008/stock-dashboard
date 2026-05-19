@@ -32,7 +32,7 @@ export function PerformanceCard({ ticker }: PerformanceCardProps) {
   useEffect(() => {
     let cancelled = false
     setLoading(true)
-    fetch(`/api/history/${encodeURIComponent(ticker)}?period=1y`)
+    fetch(`/api/history/${encodeURIComponent(ticker)}?period=1y`, { cache: 'no-store' })
       .then((r) => r.json())
       .then((d: OHLCV[] | { error: string }) => {
         if (cancelled || !Array.isArray(d)) return

@@ -1,4 +1,4 @@
-// middleware.ts
+// proxy.ts
 //
 // Yoshio 要望: サイトを開いたら/リロードしたら必ず最新の DB を反映するため、
 // 全レスポンスに Cache-Control: no-store を付ける。
@@ -6,7 +6,7 @@
 
 import { NextResponse, type NextRequest } from 'next/server'
 
-export function middleware(_req: NextRequest) {
+export function proxy(_req: NextRequest) {
   const res = NextResponse.next()
   res.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
   res.headers.set('Pragma', 'no-cache')

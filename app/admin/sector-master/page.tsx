@@ -70,7 +70,7 @@ export default function SectorMasterPage() {
 
   const loadStats = async () => {
     try {
-      const res = await fetch('/api/admin/sector-master')
+      const res = await fetch('/api/admin/sector-master', { cache: 'no-store' })
       const json = await res.json()
       if (res.ok) setStats(json)
     } catch { /* 無視 */ }
@@ -78,7 +78,7 @@ export default function SectorMasterPage() {
 
   const loadDiag = async () => {
     try {
-      const res = await fetch('/api/capital-flow/diagnostics')
+      const res = await fetch('/api/capital-flow/diagnostics', { cache: 'no-store' })
       const json = await res.json()
       if (res.ok) setDiag(json)
     } catch { /* 無視 */ }
@@ -103,6 +103,7 @@ export default function SectorMasterPage() {
     try {
       const res = await fetch(`/api/admin/sector-master/${encodeURIComponent(editingTicker)}`, {
         method: 'PUT',
+        cache: 'no-store',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(draft),
       })
@@ -135,7 +136,7 @@ export default function SectorMasterPage() {
     try {
       const fd = new FormData()
       fd.append('file', file)
-      await finishImport(await fetch('/api/admin/sector-master', { method: 'POST', body: fd }))
+      await finishImport(await fetch('/api/admin/sector-master', { method: 'POST', cache: 'no-store', body: fd }))
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -148,7 +149,7 @@ export default function SectorMasterPage() {
     setSummary(null)
     setError(null)
     try {
-      await finishImport(await fetch('/api/admin/sector-master?source=jpx', { method: 'POST' }))
+      await finishImport(await fetch('/api/admin/sector-master?source=jpx', { method: 'POST', cache: 'no-store' }))
     } catch (e) {
       setError((e as Error).message)
     } finally {
