@@ -35,16 +35,16 @@ export default function RootLayout({
 }) {
   return (
     <html lang="ja" className={`${inter.variable} ${notoJP.variable}`}>
-      <body className="min-h-screen bg-white font-sans text-[var(--color-text-primary)] antialiased">
+      <body className="min-h-screen bg-[var(--bg-void)] font-sans text-[var(--color-text-primary)] antialiased">
         <Suspense fallback={null}>
           <DataAutoUpdater />
           <FreshDataRefresher />
         </Suspense>
         <Header />
-        <main className="mx-auto max-w-[1500px] px-5 py-7 lg:px-10 lg:py-10">
+        <main className="mx-auto max-w-[1580px] px-4 py-5 sm:px-6 lg:px-8 lg:py-7">
           {children}
         </main>
-        <footer className="mx-auto max-w-[1500px] px-5 py-8 text-xs text-[var(--color-text-tertiary)] lg:px-10">
+        <footer className="mx-auto max-w-[1580px] px-4 pb-8 pt-3 text-[11px] text-[var(--color-text-tertiary)] sm:px-6 lg:px-8">
           表示内容は過去データに基づく統計的観測です。投資判断は自己責任で行ってください。
         </footer>
       </body>

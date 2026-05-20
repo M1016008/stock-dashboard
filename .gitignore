@@ -43,6 +43,7 @@ next-env.d.ts
 # local SQLite DB and API snapshot cache
 /data/stockboard.db
 /data/stockboard.db-journal
+/data/update-latest.lock
 /data/snapshots/
 # 独自分類 Excel (Yoshio 個人の分析資産。各人ローカルに置く)
 /data/classification.xlsx

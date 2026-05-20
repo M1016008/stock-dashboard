@@ -13,7 +13,7 @@ function fmt(v: number | null, label: string): string {
 export async function IndicesGrid() {
   const indices = await getDashboardIndices()
   return (
-    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
+    <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 2xl:grid-cols-6">
       {indices.map(idx => {
         const hasValue = idx.value != null
         const tone =
@@ -24,15 +24,15 @@ export async function IndicesGrid() {
         return (
           <div
             key={idx.code}
-            className="group rounded-[8px] border border-[var(--color-border-soft)] bg-white p-6 shadow-none transition-[border-color,box-shadow,transform] hover:-translate-y-0.5 hover:border-[var(--color-border-default)] hover:shadow-[var(--shadow-card)]"
+            className="group rounded-[var(--radius-card)] border border-[var(--color-border-soft)] bg-white px-4 py-3.5 shadow-none transition-colors hover:border-[var(--color-border-default)]"
           >
-            <div className="text-[13px] font-bold text-[var(--color-text-secondary)]">{idx.label}</div>
+            <div className="text-[11px] font-bold text-[var(--color-text-secondary)]">{idx.label}</div>
             <div
-              className="mt-3 text-[34px] font-bold leading-none tabular-nums xl:text-[36px] 2xl:text-[28px]"
+              className="mt-2 text-[23px] font-bold leading-none tabular-nums sm:text-[26px] 2xl:text-[24px]"
             >
               {hasValue ? fmt(idx.value, idx.label) : '---'}
             </div>
-            <div className={`mt-3 text-[13px] font-bold tabular-nums ${tone || 'text-[var(--color-text-tertiary)]'}`}>
+            <div className={`mt-2 text-[11px] font-bold tabular-nums ${tone || 'text-[var(--color-text-tertiary)]'}`}>
               {idx.changePct == null
                 ? <span className="sb-t">{idx.note ?? 'データ未接続'}</span>
                 : (idx.changePct > 0 ? '+' : '') + idx.changePct.toFixed(2) + '%'}

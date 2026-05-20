@@ -85,10 +85,10 @@ function getTseStatus(): 'open' | 'closed' {
 
 function ClockChip({ label, time }: { label: string; time: string }) {
   return (
-    <span className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-border-soft)] bg-white px-3 py-1.5 tabular-nums">
-      <span className="text-[11px] font-semibold text-[var(--color-text-tertiary)]">{label}</span>
+    <span className="inline-flex h-7 items-center gap-1.5 rounded-[6px] border border-[var(--color-border-soft)] bg-[var(--color-surface-field)] px-2.5 tabular-nums">
+      <span className="text-[10px] font-bold text-[var(--color-text-tertiary)]">{label}</span>
       <span
-        className="text-[12px] font-semibold text-[var(--color-text-secondary)]"
+        className="text-[11px] font-semibold text-[var(--color-text-secondary)]"
         suppressHydrationWarning
       >
         {time || '--:--:--'}
@@ -114,28 +114,63 @@ export function Header() {
   }
 
   return (
-    <header className="sticky top-0 z-30 border-b border-[var(--color-border-soft)] bg-white/95 backdrop-blur-xl">
-      <div className="mx-auto flex max-w-[1500px] flex-col gap-3 px-5 py-3.5 lg:px-10">
-        <div className="flex items-center justify-between gap-5">
-          <Link href="/" prefetch={false} className="flex items-center gap-2.5">
-            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[var(--color-brand-500)] text-white shadow-sm">
-              <BarChart3 size={19} strokeWidth={2.4} />
+    <header className="sticky top-0 z-30 border-b border-[var(--color-border-soft)] bg-white/92 backdrop-blur-xl">
+      <div className="mx-auto flex max-w-[1580px] flex-col px-4 sm:px-6 lg:px-8">
+        <div className="flex min-h-14 items-center justify-between gap-4">
+          <Link href="/" prefetch={false} className="flex shrink-0 items-center gap-2.5">
+            <div className="flex h-8 w-8 items-center justify-center rounded-[7px] bg-[var(--color-text-primary)] text-white shadow-sm">
+              <BarChart3 size={17} strokeWidth={2.4} />
             </div>
             <div className="leading-tight">
-              <div className="text-[18px] font-bold">StockBoard</div>
-              <div className="hidden text-[11px] font-semibold text-[var(--color-text-tertiary)] sm:block">J-Quants Market Console</div>
+              <div className="text-[15px] font-bold tracking-normal">StockBoard</div>
+              <div className="hidden text-[10px] font-semibold text-[var(--color-text-tertiary)] sm:block">J-Quants Market Console</div>
             </div>
           </Link>
 
-          <div className="hidden items-center gap-2 lg:flex">
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-border-soft)] bg-white px-3 py-1.5 text-[12px] font-semibold text-[var(--color-text-secondary)] shadow-sm">
+          <nav className="hidden min-w-0 flex-1 items-center gap-1 overflow-x-auto lg:flex">
+            {NAV_ITEMS.map((item) => (
+              <Link
+                key={item.href}
+                href={item.href}
+                prefetch={false}
+                className={`inline-flex h-8 shrink-0 items-center rounded-[6px] px-3 text-[12px] font-bold transition-colors ${
+                  isActive(item.href)
+                    ? 'bg-[var(--color-brand-50)] text-[var(--color-brand-700)]'
+                    : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-subtle)] hover:text-[var(--color-text-primary)]'
+                }`}
+              >
+                {item.label}
+              </Link>
+            ))}
+          </nav>
+
+          <div className="hidden shrink-0 items-center gap-1 lg:flex">
+            {ADMIN_ITEMS.map((item) => (
+              <Link
+                key={item.href}
+                href={item.href}
+                prefetch={false}
+                className={`inline-flex h-8 items-center gap-1.5 rounded-[6px] px-2.5 text-[12px] font-bold transition-colors ${
+                  isActive(item.href)
+                    ? 'bg-[var(--color-text-primary)] text-white'
+                    : 'text-[var(--color-text-tertiary)] hover:bg-[var(--color-surface-subtle)] hover:text-[var(--color-text-secondary)]'
+                }`}
+              >
+                {item.href.includes('db') ? <Database size={13} /> : <Settings size={13} />}
+                {item.label}
+              </Link>
+            ))}
+          </div>
+
+          <div className="hidden shrink-0 items-center gap-1.5 xl:flex">
+            <span className="inline-flex h-7 items-center gap-1.5 rounded-[6px] border border-[var(--color-border-soft)] bg-[var(--color-surface-field)] px-2.5 text-[11px] font-semibold text-[var(--color-text-secondary)]">
               <Activity size={12} />
               東証
               <span
                 style={{
                   color:
                     tseStatus === 'open'
-                      ? 'var(--color-price-up)'
+                      ? 'var(--color-pattern-600)'
                       : 'var(--color-price-down)',
                 }}
               >
@@ -143,7 +178,7 @@ export function Header() {
               </span>
             </span>
             <span
-              className="rounded-full border border-[var(--color-border-soft)] bg-white px-3 py-1.5 text-[12px] font-semibold text-[var(--color-text-secondary)] shadow-sm tabular-nums"
+              className="inline-flex h-7 items-center rounded-[6px] border border-[var(--color-border-soft)] bg-[var(--color-surface-field)] px-2.5 text-[11px] font-semibold text-[var(--color-text-secondary)] tabular-nums"
               suppressHydrationWarning
             >
               {clocks.date || '----/--/--'}
@@ -154,17 +189,17 @@ export function Header() {
           </div>
         </div>
 
-        <div className="flex items-center justify-between gap-4 overflow-x-auto border-t border-[var(--color-border-soft)] pt-3">
-          <nav className="flex min-w-max items-center gap-5">
+        <div className="flex items-center justify-between gap-3 overflow-x-auto border-t border-[var(--color-border-soft)] py-2 lg:hidden">
+          <nav className="flex min-w-max items-center gap-1">
           {NAV_ITEMS.map((item) => (
             <Link
               key={item.href}
               href={item.href}
               prefetch={false}
-              className={`relative py-1 text-[13px] font-bold transition-colors ${
+              className={`inline-flex h-8 items-center rounded-[6px] px-3 text-[12px] font-bold transition-colors ${
                 isActive(item.href)
-                  ? 'text-[var(--color-brand-700)] after:absolute after:-bottom-3 after:left-0 after:h-[3px] after:w-full after:rounded-full after:bg-[var(--color-brand-500)]'
-                  : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]'
+                  ? 'bg-[var(--color-brand-50)] text-[var(--color-brand-700)]'
+                  : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-subtle)] hover:text-[var(--color-text-primary)]'
               }`}
             >
               {item.label}
@@ -178,7 +213,7 @@ export function Header() {
                 key={item.href}
                 href={item.href}
                 prefetch={false}
-                className={`inline-flex h-8 items-center gap-1.5 rounded-full px-3 text-[12px] font-bold transition-colors ${
+                className={`inline-flex h-8 items-center gap-1.5 rounded-[6px] px-2.5 text-[12px] font-bold transition-colors ${
                   isActive(item.href)
                     ? 'bg-[var(--color-text-primary)] text-white'
                     : 'text-[var(--color-text-tertiary)] hover:bg-[var(--color-surface-subtle)] hover:text-[var(--color-text-secondary)]'

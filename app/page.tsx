@@ -36,7 +36,7 @@ function SectionFallback({ height = 80 }: { height?: number }) {
       style={{
         height,
         background: 'var(--color-surface-raised)',
-        borderRadius: 8,
+        borderRadius: 6,
         border: '1px solid var(--color-border-soft)',
         display: 'flex',
         alignItems: 'center',
@@ -57,7 +57,7 @@ export default async function DashboardPage() {
   const subtitle = latest ? `${latest} 大引け基準` : 'データ未取り込み'
 
   return (
-    <div className="mx-auto flex w-full max-w-[1500px] flex-col gap-6">
+    <div className="mx-auto flex w-full max-w-[1580px] flex-col gap-5">
       <PageTitle
         title="ダッシュボード"
         subtitle={subtitle}
@@ -69,7 +69,7 @@ export default async function DashboardPage() {
       <Suspense fallback={<SectionFallback height={70} />}>
         <StageDistributionBar />
       </Suspense>
-      <div className="grid grid-cols-1 gap-5 xl:grid-cols-3">
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
         <Suspense fallback={<SectionFallback height={170} />}>
           <TodayTransitionsSummary />
         </Suspense>
@@ -80,7 +80,7 @@ export default async function DashboardPage() {
           <NewHighVolume />
         </Suspense>
       </div>
-      <div className="grid grid-cols-1 gap-5 xl:grid-cols-[1.45fr_1fr]">
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.45fr_1fr]">
         <Suspense fallback={<SectionFallback height={240} />}>
           <SectorHeatmap />
         </Suspense>
@@ -88,7 +88,7 @@ export default async function DashboardPage() {
           <WatchlistPanel />
         </Suspense>
       </div>
-      <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
         <Suspense fallback={<SectionFallback height={170} />}>
           <CreditShortPanel />
         </Suspense>
