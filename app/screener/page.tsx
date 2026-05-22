@@ -598,9 +598,9 @@ export default function ScreenerPage() {
               <table style={{ minWidth: '3000px', borderCollapse: 'collapse', fontSize: '12px' }}>
                 <thead>
                   <tr style={{ background: 'var(--bg-elevated)', borderBottom: '1px solid var(--border-dim)' }}>
-                    <th style={th}></th>
+                    <th scope="col" style={th}></th>
                     <SortableTh label="コード"     sortKey="ticker"              current={sort} onClick={toggleSort} />
-                    <th style={th}>TV形式</th>
+                    <th scope="col" style={th}>TV形式</th>
                     <SortableTh label="貸借/信用"  sortKey="marginType"          current={sort} onClick={toggleSort} />
                     <SortableTh label="市場区分"   sortKey="marketSegment"       current={sort} onClick={toggleSort} />
                     <SortableTh label="33業種区分" sortKey="sector33"            current={sort} onClick={toggleSort} />
@@ -625,7 +625,7 @@ export default function ScreenerPage() {
                     <SortableTh label="前回決算"   sortKey="earningsLastDate"    current={sort} onClick={toggleSort} />
                     <SortableTh label="次回決算"   sortKey="earningsNextDate"    current={sort} onClick={toggleSort} />
                     <SortableTh label="残日数"     sortKey="earningsNextDate"    current={sort} onClick={toggleSort} align="right" />
-                    <th style={th}>ステージ (日A/B 週A/B 月A/B)</th>
+                    <th scope="col" style={th}>ステージ (日A/B 週A/B 月A/B)</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -779,6 +779,7 @@ function SortableTh({
     : ' ⇅'
   return (
     <th
+      scope="col"
       style={{
         ...(align === 'right' ? thR : th),
         cursor: 'pointer',

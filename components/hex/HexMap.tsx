@@ -4,7 +4,7 @@
 
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Search, Copy, Check } from 'lucide-react'
 import { STAGE_BG_COLORS, STAGE_BORDER_COLORS, STAGE_LABELS } from '@/lib/hex-stage'
@@ -101,12 +101,16 @@ const MARKET_CAP_RANGES: { id: string; label: string }[] = [
   { id: '1000-',    label: '1,000億〜' },
 ]
 
+// 銘柄テーブルの初期表示件数 /「もっと見る」増分。4,000+ 行の一括描画を避ける。
+const ROW_STEP = 100
+
 export default function HexMap({ data }: { data: Stock[]; timeframe?: Timeframe }) {
   const router = useRouter()
   const [copiedCode, setCopiedCode] = useState<string | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
   const [selections, setSelections] = useState<Selections>(emptySelections)
   const [selectedMarketCapRange, setSelectedMarketCapRange] = useState<string>('all')
+  const [rowLimit, setRowLimit] = useState(ROW_STEP)
 
   // 選択数の合計（任意のセルが1つでも選ばれているか）
   const totalSelectedCells = selections.daily.size + selections.weekly.size + selections.monthly.size
@@ -157,6 +161,9 @@ export default function HexMap({ data }: { data: Stock[]; timeframe?: Timeframe 
       .sort((a, b) => b.market_cap - a.market_cap)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, filteredTickers, hasSelection, selectedMarketCapRange, searchTerm])
+
+  // フィルタ変更で結果が変わったら表示件数を初期値に戻す
+  useEffect(() => { setRowLimit(ROW_STEP) }, [visible])
 
   const toggleCell = (tf: Timeframe, b: number, a: number, count: number) => {
     if (count === 0) return
@@ -276,27 +283,31 @@ export default function HexMap({ data }: { data: Stock[]; timeframe?: Timeframe 
           <table className="w-full text-xs" style={{ minWidth: '1400px', borderCollapse: 'collapse' }}>
             <thead className="bg-gray-50 sticky top-0 z-10">
               <tr style={{ borderBottom: '1px solid #e5e7eb' }}>
-                <th className="px-3 py-2 text-left font-medium text-gray-500 whitespace-nowrap">コード</th>
-                <th className="px-3 py-2 text-left font-medium text-gray-500 whitespace-nowrap">銘柄名</th>
-                <th className="px-3 py-2 text-left font-medium text-gray-500 whitespace-nowrap">セクター</th>
-                <th className="px-3 py-2 text-right font-medium text-gray-500 whitespace-nowrap">株価</th>
-                <th className="px-3 py-2 text-right font-medium text-gray-500 whitespace-nowrap">時価総額</th>
-                <th className="px-3 py-2 text-right font-medium text-gray-500 whitespace-nowrap">日%</th>
-                <th className="px-3 py-2 text-right font-medium text-gray-500 whitespace-nowrap">週%</th>
-                <th className="px-3 py-2 text-right font-medium text-gray-500 whitespace-nowrap">月%</th>
-                <th className="px-3 py-2 text-right font-medium text-gray-500 whitespace-nowrap">3M</th>
-                <th className="px-3 py-2 text-right font-medium text-gray-500 whitespace-nowrap">6M</th>
-                <th className="px-3 py-2 text-right font-medium text-gray-500 whitespace-nowrap">YTD</th>
-                <th className="px-3 py-2 text-left font-medium text-gray-500 whitespace-nowrap">ステージ (日A/B 週A/B 月A/B)</th>
-                <th className="px-3 py-2 text-right font-medium text-gray-500 whitespace-nowrap" title="SMA角度（SMA5/25/75/300）">SMA角度</th>
+                <th scope="col" className="px-3 py-2 text-left font-medium text-gray-500 whitespace-nowrap">コード</th>
+                <th scope="col" className="px-3 py-2 text-left font-medium text-gray-500 whitespace-nowrap">銘柄名</th>
+                <th scope="col" className="px-3 py-2 text-left font-medium text-gray-500 whitespace-nowrap">セクター</th>
+                <th scope="col" className="px-3 py-2 text-right font-medium text-gray-500 whitespace-nowrap">株価</th>
+                <th scope="col" className="px-3 py-2 text-right font-medium text-gray-500 whitespace-nowrap">時価総額</th>
+                <th scope="col" className="px-3 py-2 text-right font-medium text-gray-500 whitespace-nowrap">日%</th>
+                <th scope="col" className="px-3 py-2 text-right font-medium text-gray-500 whitespace-nowrap">週%</th>
+                <th scope="col" className="px-3 py-2 text-right font-medium text-gray-500 whitespace-nowrap">月%</th>
+                <th scope="col" className="px-3 py-2 text-right font-medium text-gray-500 whitespace-nowrap">3M</th>
+                <th scope="col" className="px-3 py-2 text-right font-medium text-gray-500 whitespace-nowrap">6M</th>
+                <th scope="col" className="px-3 py-2 text-right font-medium text-gray-500 whitespace-nowrap">YTD</th>
+                <th scope="col" className="px-3 py-2 text-left font-medium text-gray-500 whitespace-nowrap">ステージ (日A/B 週A/B 月A/B)</th>
+                <th scope="col" className="px-3 py-2 text-right font-medium text-gray-500 whitespace-nowrap" title="SMA角度（SMA5/25/75/300）">SMA角度</th>
               </tr>
             </thead>
             <tbody>
-              {visible.map((s) => (
+              {visible.slice(0, rowLimit).map((s) => (
                 <tr
                   key={s.code}
                   onClick={() => router.push(`/stock/${encodeURIComponent(s.code)}`)}
-                  className="hover:bg-gray-50 cursor-pointer"
+                  onKeyDown={(e) => { if (e.key === 'Enter') router.push(`/stock/${encodeURIComponent(s.code)}`) }}
+                  tabIndex={0}
+                  role="link"
+                  aria-label={`${s.name} の詳細を開く`}
+                  className="hover:bg-gray-50 focus:bg-indigo-50 cursor-pointer"
                   style={{ borderBottom: '1px solid #f3f4f6' }}
                 >
                   <td className="px-3 py-2 whitespace-nowrap">
@@ -373,6 +384,14 @@ export default function HexMap({ data }: { data: Stock[]; timeframe?: Timeframe 
             </tbody>
           </table>
         </div>
+        {visible.length > rowLimit && (
+          <button
+            onClick={() => setRowLimit((n) => n + ROW_STEP)}
+            className="w-full border-t border-gray-200 py-2.5 text-[12px] font-medium text-indigo-600 hover:bg-gray-50"
+          >
+            もっと見る（{rowLimit.toLocaleString()} / {visible.length.toLocaleString()} 件 · 残り {(visible.length - rowLimit).toLocaleString()} 件）
+          </button>
+        )}
       </div>
     </div>
   )

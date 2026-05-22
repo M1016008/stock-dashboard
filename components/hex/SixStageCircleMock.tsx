@@ -20,7 +20,7 @@ export async function SixStageCircleMock({ timescale }: { timescale: Timescale }
     return <div className="sb-card sb-card-pad sb-t" style={{ textAlign: 'center', fontSize: 12 }}>ステージ分布データなし</div>
   }
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 6 }}>
+    <div className="grid grid-cols-3 gap-1.5 sm:grid-cols-6">
       {rows.map(r => {
         const fill = STAGE_FILL[r.stage]
         const pct = total > 0 ? (r.count / total) * 100 : 0

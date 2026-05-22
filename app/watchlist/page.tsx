@@ -157,15 +157,15 @@ export default function WatchlistPage() {
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
               <thead>
                 <tr style={{ background: 'var(--bg-elevated)', borderBottom: '1px solid var(--border-dim)' }}>
-                  <th style={th}></th>
-                  <th style={th}>コード</th>
-                  <th style={th}>TV形式</th>
-                  <th style={th}>銘柄名</th>
-                  <th style={thR}>株価</th>
-                  <th style={thR}>変化額</th>
-                  <th style={thR}>変化率</th>
-                  <th style={thR}>出来高</th>
-                  <th style={thR}>時価総額</th>
+                  <th scope="col" style={th}></th>
+                  <th scope="col" style={th}>コード</th>
+                  <th scope="col" style={th}>TV形式</th>
+                  <th scope="col" style={th}>銘柄名</th>
+                  <th scope="col" style={thR}>株価</th>
+                  <th scope="col" style={thR}>変化額</th>
+                  <th scope="col" style={thR}>変化率</th>
+                  <th scope="col" style={thR}>出来高</th>
+                  <th scope="col" style={thR}>時価総額</th>
                 </tr>
               </thead>
               <tbody>

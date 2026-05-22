@@ -60,7 +60,7 @@
   /* === テキスト === */
   --color-text-primary:   #222222;
   --color-text-secondary: #555555;
-  --color-text-tertiary:  #777777;
+  --color-text-tertiary:  #666666;  /* 白背景比 5.7:1 — WCAG AA 準拠 (旧 #777 は 4.48:1 で不足) */
   --color-text-on-brand:  #ffffff;
 
   /* === 6 ステージ (HEX-app 配色、絶対変えない) === */

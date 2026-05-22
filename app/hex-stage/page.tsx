@@ -91,7 +91,7 @@ export default async function HexStagePage({
         <TabRow basePath="/hex-stage" paramKey="period" current={period} tabs={PERIOD_TABS} keepKeys={['ts']} />
       </div>
 
-      <div className="sb-section" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+      <div className="sb-section grid grid-cols-1 gap-3.5 md:grid-cols-2">
         <Suspense fallback={<Loading h={300} />}>
           <TransitionMatrixMock timescale={ts} period={period} />
         </Suspense>

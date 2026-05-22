@@ -128,7 +128,7 @@ export default async function TransitionsPage({
           <h2>フォワードリターン (出現後)</h2>
           <span>n={meta?.count_60d.toLocaleString() ?? '—'} · 中央値</span>
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8 }}>
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
           {[30, 60, 90, 180].map(h => {
             const r = horizonRows.find(x => x.horizon_days === h)
             return (
@@ -149,7 +149,7 @@ export default async function TransitionsPage({
       </div>
 
       {/* 2 列: 分布 + 業種分布 */}
-      <div className="sb-section" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+      <div className="sb-section grid grid-cols-1 gap-3.5 md:grid-cols-2">
         <div>
           <div className="sb-hd">
             <h2>{horizonDays}日後リターン分布</h2>
@@ -272,7 +272,8 @@ export default async function TransitionsPage({
           <span>直近 {samples.length} 件 · 全 {meta?.count_60d.toLocaleString() ?? '—'} 件</span>
         </div>
         <div className="sb-card">
-          <table className="sb-tbl">
+          <div className="overflow-x-auto">
+          <table className="sb-tbl" style={{ minWidth: 600 }}>
             <thead>
               <tr>
                 <th style={{ width: 80 }}>出現日</th>
@@ -311,6 +312,7 @@ export default async function TransitionsPage({
               )}
             </tbody>
           </table>
+          </div>
         </div>
         {meta && meta.count_60d > samples.length && (
           <div style={{ marginTop: 8, fontSize: 11, color: 'var(--color-text-tertiary)', textAlign: 'right' }}>

@@ -32,7 +32,8 @@ export async function TransitionDetailTableMock({ timescale, period }: { timesca
         <span>{timescale} · {total.toLocaleString()} 銘柄</span>
       </div>
       <div className="sb-card">
-        <table className="sb-tbl">
+        <div className="overflow-x-auto">
+        <table className="sb-tbl" style={{ minWidth: 600 }}>
           <thead>
             <tr>
               <th style={{ width: 44 }}>コード</th>
@@ -94,6 +95,7 @@ export async function TransitionDetailTableMock({ timescale, period }: { timesca
             )}
           </tbody>
         </table>
+        </div>
       </div>
       {total > 12 && (
         <div style={{ marginTop: 8, fontSize: 11, color: 'var(--color-text-tertiary)', textAlign: 'right' }}>

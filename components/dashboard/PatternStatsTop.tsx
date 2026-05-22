@@ -45,7 +45,8 @@ export async function PatternStatsTop() {
                 <div className="border-b border-[var(--color-border-soft)] px-3 py-2 text-[12px] font-bold text-[var(--color-text-secondary)]">
                   {kind === 'top' ? '上位パターン' : '下位パターン'}
                 </div>
-                <div className="divide-y divide-[var(--color-border-soft)]">
+                <div className="overflow-x-auto">
+                  <div className="min-w-[446px] divide-y divide-[var(--color-border-soft)]">
                   <div className="grid grid-cols-[116px_64px_70px_70px_70px] gap-2 px-3 py-2 text-[11px] font-bold text-[var(--color-text-tertiary)]">
                     <span>Pattern</span><span className="text-right">N</span><span className="text-right">10日</span><span className="text-right">20日</span><span className="text-right">30日</span>
                   </div>
@@ -62,6 +63,7 @@ export async function PatternStatsTop() {
                       <span className={`text-right tabular-nums ${tone(row.p50_30d)}`}>{fmtPct(row.p50_30d)}</span>
                     </Link>
                   ))}
+                  </div>
                 </div>
               </div>
             )
