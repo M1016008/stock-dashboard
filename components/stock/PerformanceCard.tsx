@@ -13,6 +13,14 @@ interface PerfRow {
   value: number | null
 }
 
+interface YtdInfo {
+  high: number | null
+  highDate: string | null
+  low: number | null
+  lowDate: string | null
+  returnPct: number | null
+}
+
 function pctFromHistory(ohlcv: OHLCV[], periodsBack: number): number | null {
   if (ohlcv.length <= periodsBack) return null
   const last = ohlcv[ohlcv.length - 1]?.close
@@ -21,12 +29,45 @@ function pctFromHistory(ohlcv: OHLCV[], periodsBack: number): number | null {
   return ((last - prev) / prev) * 100
 }
 
+function pctYearToDate(ohlcv: OHLCV[]): number | null {
+  const last = ohlcv[ohlcv.length - 1]
+  if (!last?.date || last.close == null) return null
+  const year = String(last.date).slice(0, 4)
+  const first = ohlcv.find((row) => String(row.date).startsWith(year) && row.close != null)
+  if (!first?.close) return null
+  return ((last.close - first.close) / first.close) * 100
+}
+
+function yearToDateInfo(ohlcv: OHLCV[]): YtdInfo {
+  const last = ohlcv[ohlcv.length - 1]
+  if (!last?.date) return { high: null, highDate: null, low: null, lowDate: null, returnPct: null }
+  const year = String(last.date).slice(0, 4)
+  const rows = ohlcv.filter((row) => String(row.date).startsWith(year))
+  const first = rows[0]
+  const high = rows.reduce<OHLCV | null>((best, row) => {
+    if (row.high == null) return best
+    return !best || row.high > best.high ? row : best
+  }, null)
+  const low = rows.reduce<OHLCV | null>((best, row) => {
+    if (row.low == null) return best
+    return !best || row.low < best.low ? row : best
+  }, null)
+  return {
+    high: high?.high ?? null,
+    highDate: high?.date ?? null,
+    low: low?.low ?? null,
+    lowDate: low?.date ?? null,
+    returnPct: first?.close && last.close ? ((last.close - first.close) / first.close) * 100 : null,
+  }
+}
+
 /**
  * 直近の変化率を一目で確認できるカード
  * 1日 / 1週 / 1ヶ月 / 3ヶ月 / 6ヶ月 / 年初来
  */
 export function PerformanceCard({ ticker }: PerformanceCardProps) {
   const [perf, setPerf] = useState<PerfRow[]>([])
+  const [ytd, setYtd] = useState<YtdInfo | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -42,8 +83,9 @@ export function PerformanceCard({ ticker }: PerformanceCardProps) {
           { label: '1ヶ月', value: pctFromHistory(d, 21) },
           { label: '3ヶ月', value: pctFromHistory(d, 63) },
           { label: '6ヶ月', value: pctFromHistory(d, 126) },
-          { label: '年初来', value: pctFromHistory(d, 252) },
+          { label: '年初来', value: pctYearToDate(d) },
         ])
+        setYtd(yearToDateInfo(d))
       })
       .catch(() => { /* ignore */ })
       .finally(() => { if (!cancelled) setLoading(false) })
@@ -51,9 +93,9 @@ export function PerformanceCard({ ticker }: PerformanceCardProps) {
   }, [ticker])
 
   return (
-    <div className="card" style={{ padding: '12px' }}>
+    <div className="card stock-performance-card">
       <div style={{ fontSize: '11px', fontWeight: 600, marginBottom: '8px' }}>直近の変化率</div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: '6px' }}>
+      <div className="stock-perf-grid">
         {perf.length === 0 && loading && (
           <div style={{ gridColumn: 'span 6', textAlign: 'center', fontSize: '11px', color: 'var(--text-muted)' }}>計算中...</div>
         )}
@@ -76,6 +118,27 @@ export function PerformanceCard({ ticker }: PerformanceCardProps) {
           )
         })}
       </div>
+      {ytd && (
+        <div className="stock-ytd-strip">
+          <div>
+            <span>年初来高値</span>
+            <strong>{ytd.high == null ? '---' : `¥${Math.round(ytd.high).toLocaleString('ja-JP')}`}</strong>
+            <small>{ytd.highDate ?? '-'}</small>
+          </div>
+          <div>
+            <span>年初来安値</span>
+            <strong>{ytd.low == null ? '---' : `¥${Math.round(ytd.low).toLocaleString('ja-JP')}`}</strong>
+            <small>{ytd.lowDate ?? '-'}</small>
+          </div>
+          <div>
+            <span>年初来騰落率</span>
+            <strong className={(ytd.returnPct ?? 0) >= 0 ? 'price-up' : 'price-down'}>
+              {ytd.returnPct == null ? '---' : `${ytd.returnPct >= 0 ? '+' : ''}${ytd.returnPct.toFixed(2)}%`}
+            </strong>
+            <small>暦年初の最初の取引日から</small>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

@@ -513,3 +513,371 @@ export const patternStats = sqliteTable(
     codeIdx: index('pstat_code_idx').on(t.pattern_code),
   }),
 )
+
+// ─────────────────────────────────────
+// 19. Phase 5: Backtest / ML-RL readiness
+// ─────────────────────────────────────
+export const weeklyOhlcv = sqliteTable(
+  'weekly_ohlcv',
+  {
+    ticker:        text('ticker').notNull(),
+    date:          text('date').notNull(),
+    weekStartDate: text('week_start_date').notNull(),
+    weekEndDate:   text('week_end_date').notNull(),
+    open:          real('open').notNull(),
+    high:          real('high').notNull(),
+    low:           real('low').notNull(),
+    close:         real('close').notNull(),
+    volume:        integer('volume').notNull(),
+    ma5:           real('ma_5'),
+    ma13:          real('ma_13'),
+    ma25:          real('ma_25'),
+    ma50:          real('ma_50'),
+    ma100:         real('ma_100'),
+    computedAt:    integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk:      primaryKey({ columns: [t.ticker, t.date] }),
+    dateIdx: index('weekly_ohlcv_date_idx').on(t.date),
+  }),
+)
+
+export const technicalSignals = sqliteTable(
+  'technical_signals',
+  {
+    ticker:          text('ticker').notNull(),
+    date:            text('date').notNull(),
+    timescale:       text('timescale').notNull(),
+    maPeriod:        integer('ma_period').notNull().default(0),
+    signalCode:      text('signal_code').notNull(),
+    signalStrength:  text('signal_strength').notNull(),
+    direction:       text('direction').notNull(),
+    label:           text('label').notNull(),
+    scoreComponent:  real('score_component'),
+    valueJson:       text('value_json'),
+    computedAt:      integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk:      primaryKey({ columns: [t.ticker, t.date, t.timescale, t.maPeriod, t.signalCode] }),
+    dateIdx: index('tech_signal_date_idx').on(t.date, t.signalCode),
+    codeIdx: index('tech_signal_code_idx').on(t.signalCode, t.date),
+    dateTickerIdx: index('tech_signal_date_ticker_idx').on(t.date, t.ticker),
+  }),
+)
+
+export const forwardExtrema = sqliteTable(
+  'forward_extrema',
+  {
+    ticker:        text('ticker').notNull(),
+    date:          text('date').notNull(),
+    horizonDays:   integer('horizon_days').notNull(),
+    returnPct:     real('return_pct'),
+    endDate:       text('end_date'),
+    maxReturnPct:  real('max_return_pct'),
+    maxReturnDate: text('max_return_date'),
+    daysToMax:     integer('days_to_max'),
+    minReturnPct:  real('min_return_pct'),
+    minReturnDate: text('min_return_date'),
+    daysToMin:     integer('days_to_min'),
+    hit10:         integer('hit_10').notNull().default(0),
+    hit20:         integer('hit_20').notNull().default(0),
+    hit40:         integer('hit_40').notNull().default(0),
+    daysTo10:      integer('days_to_10'),
+    daysTo20:      integer('days_to_20'),
+    daysTo40:      integer('days_to_40'),
+    computedAt:    integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk:          primaryKey({ columns: [t.ticker, t.date, t.horizonDays] }),
+    dateIdx:     index('fext_date_horizon_idx').on(t.date, t.horizonDays),
+    dateTickerIdx: index('fext_date_horizon_ticker_idx').on(t.date, t.horizonDays, t.ticker),
+    horizonDateIdx: index('fext_horizon_date_idx').on(t.horizonDays, t.date),
+    horizonIdx:  index('fext_horizon_max_idx').on(t.horizonDays, t.maxReturnPct),
+  }),
+)
+
+export const modelFeatures = sqliteTable(
+  'model_features',
+  {
+    ticker:         text('ticker').notNull(),
+    date:           text('date').notNull(),
+    patternCode:    text('pattern_code'),
+    dailyAStage:    integer('daily_a_stage'),
+    dailyBStage:    integer('daily_b_stage'),
+    weeklyAStage:   integer('weekly_a_stage'),
+    weeklyBStage:   integer('weekly_b_stage'),
+    monthlyAStage:  integer('monthly_a_stage'),
+    monthlyBStage:  integer('monthly_b_stage'),
+    close:          real('close'),
+    volume:         integer('volume'),
+    volumeRatio20:  real('volume_ratio_20'),
+    rangePct:       real('range_pct'),
+    atr20Pct:       real('atr20_pct'),
+    ma5PosPct:      real('ma5_pos_pct'),
+    ma25PosPct:     real('ma25_pos_pct'),
+    ma75PosPct:     real('ma75_pos_pct'),
+    maSpreadPct:    real('ma_spread_pct'),
+    relStrength20:  real('rel_strength_20'),
+    signalCodes:    text('signal_codes'),
+    featureJson:    text('feature_json'),
+    computedAt:     integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk:         primaryKey({ columns: [t.ticker, t.date] }),
+    dateIdx:    index('model_features_date_idx').on(t.date),
+    patternIdx: index('model_features_pattern_idx').on(t.patternCode, t.date),
+  }),
+)
+
+export const modelLabels = sqliteTable(
+  'model_labels',
+  {
+    ticker:       text('ticker').notNull(),
+    date:         text('date').notNull(),
+    horizonDays:  integer('horizon_days').notNull(),
+    returnPct:    real('return_pct'),
+    maxReturnPct: real('max_return_pct'),
+    minReturnPct: real('min_return_pct'),
+    daysToMax:    integer('days_to_max'),
+    hit10:        integer('hit_10').notNull().default(0),
+    hit20:        integer('hit_20').notNull().default(0),
+    hit40:        integer('hit_40').notNull().default(0),
+    rewardScore:  real('reward_score'),
+    labelJson:    text('label_json'),
+    computedAt:   integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk:      primaryKey({ columns: [t.ticker, t.date, t.horizonDays] }),
+    dateIdx: index('model_labels_date_idx').on(t.date, t.horizonDays),
+  }),
+)
+
+export const signalStats = sqliteTable(
+  'signal_stats',
+  {
+    signalCode:      text('signal_code').notNull(),
+    patternCode:     text('pattern_code').notNull(),
+    horizonDays:     integer('horizon_days').notNull(),
+    count:           integer('count').notNull(),
+    hit10Rate:       real('hit_10_rate'),
+    hit20Rate:       real('hit_20_rate'),
+    hit40Rate:       real('hit_40_rate'),
+    maxReturnP25:    real('max_return_p25'),
+    maxReturnP50:    real('max_return_p50'),
+    maxReturnP75:    real('max_return_p75'),
+    returnP50:       real('return_p50'),
+    minReturnP50:    real('min_return_p50'),
+    daysToMaxP50:    real('days_to_max_p50'),
+    computedAt:      integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk:      primaryKey({ columns: [t.signalCode, t.patternCode, t.horizonDays] }),
+    codeIdx: index('signal_stats_code_idx').on(t.signalCode, t.horizonDays, t.count),
+  }),
+)
+
+export const servingLatestSignals = sqliteTable(
+  'serving_latest_signals',
+  {
+    date:        text('date').notNull(),
+    ticker:      text('ticker').notNull(),
+    rank:        integer('rank').notNull(),
+    score:       real('score').notNull(),
+    signalCodes: text('signal_codes').notNull(),
+    summaryJson: text('summary_json').notNull(),
+    computedAt:  integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk:      primaryKey({ columns: [t.date, t.ticker] }),
+    rankIdx: index('serving_latest_rank_idx').on(t.date, t.rank),
+  }),
+)
+
+export const servingSignalStats = sqliteTable(
+  'serving_signal_stats',
+  {
+    signalCode:  text('signal_code').notNull(),
+    patternCode: text('pattern_code').notNull(),
+    horizonDays: integer('horizon_days').notNull(),
+    payloadJson: text('payload_json').notNull(),
+    computedAt:  integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.signalCode, t.patternCode, t.horizonDays] }),
+  }),
+)
+
+export const servingBacktestDates = sqliteTable('serving_backtest_dates', {
+  date:          text('date').primaryKey(),
+  totalTickers:  integer('total_tickers').notNull(),
+  signalTickers: integer('signal_tickers').notNull(),
+  computedAt:    integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+})
+
+export const servingBacktestSummaries = sqliteTable(
+  'serving_backtest_summaries',
+  {
+    date:        text('date').notNull(),
+    horizonDays: integer('horizon_days').notNull(),
+    conditionKey: text('condition_key').notNull(),
+    payloadJson:  text('payload_json').notNull(),
+    computedAt:   integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk:      primaryKey({ columns: [t.date, t.horizonDays, t.conditionKey] }),
+    dateIdx: index('serving_summary_date_idx').on(t.date, t.horizonDays),
+  }),
+)
+
+export const servingSimilarCases = sqliteTable(
+  'serving_similar_cases',
+  {
+    sourceTicker:    text('source_ticker').notNull(),
+    sourceDate:      text('source_date').notNull(),
+    rank:            integer('rank').notNull(),
+    similarTicker:   text('similar_ticker').notNull(),
+    similarDate:     text('similar_date').notNull(),
+    similarityScore: real('similarity_score').notNull(),
+    payloadJson:     text('payload_json').notNull(),
+    computedAt:      integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.sourceTicker, t.sourceDate, t.rank] }),
+  }),
+)
+
+export const servingBacktestResults = sqliteTable(
+  'serving_backtest_results',
+  {
+    date:          text('date').notNull(),
+    horizonDays:   integer('horizon_days').notNull(),
+    ticker:        text('ticker').notNull(),
+    name:          text('name'),
+    sectorLarge:   text('sector_large'),
+    sectorSmall:   text('sector_small'),
+    marketSegment: text('market_segment'),
+    patternCode:   text('pattern_code'),
+    dailyAStage:   integer('daily_a_stage'),
+    dailyBStage:   integer('daily_b_stage'),
+    weeklyAStage:  integer('weekly_a_stage'),
+    weeklyBStage:  integer('weekly_b_stage'),
+    monthlyAStage: integer('monthly_a_stage'),
+    monthlyBStage: integer('monthly_b_stage'),
+    open:          real('open'),
+    high:          real('high'),
+    low:           real('low'),
+    close:         real('close'),
+    volume:        integer('volume'),
+    volumeRatio20: real('volume_ratio_20'),
+    rangePct:      real('range_pct'),
+    atr20Pct:      real('atr20_pct'),
+    ma5PosPct:     real('ma5_pos_pct'),
+    ma25PosPct:    real('ma25_pos_pct'),
+    ma75PosPct:    real('ma75_pos_pct'),
+    signalCodes:   text('signal_codes'),
+    returnPct:     real('return_pct'),
+    maxReturnPct:  real('max_return_pct'),
+    maxReturnDate: text('max_return_date'),
+    daysToMax:     integer('days_to_max'),
+    minReturnPct:  real('min_return_pct'),
+    minReturnDate: text('min_return_date'),
+    daysToMin:     integer('days_to_min'),
+    hit10:         integer('hit_10'),
+    hit20:         integer('hit_20'),
+    hit40:         integer('hit_40'),
+    computedAt:    integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk:        primaryKey({ columns: [t.date, t.horizonDays, t.ticker] }),
+    sortIdx:   index('serving_backtest_results_sort_idx').on(t.date, t.horizonDays, t.maxReturnPct),
+    tickerIdx: index('serving_backtest_results_ticker_idx').on(t.ticker, t.date),
+  }),
+)
+
+export const servingBacktestDetails = sqliteTable(
+  'serving_backtest_details',
+  {
+    date:        text('date').notNull(),
+    horizonDays: integer('horizon_days').notNull(),
+    ticker:      text('ticker').notNull(),
+    detailJson:  text('detail_json').notNull(),
+    computedAt:  integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.date, t.horizonDays, t.ticker] }),
+  }),
+)
+
+export const servingSignalEvidence = sqliteTable(
+  'serving_signal_evidence',
+  {
+    ticker:     text('ticker').notNull(),
+    date:       text('date').notNull(),
+    signalCode: text('signal_code').notNull(),
+    label:      text('label'),
+    reasonJson: text('reason_json').notNull(),
+    computedAt: integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk:      primaryKey({ columns: [t.ticker, t.date, t.signalCode] }),
+    dateIdx: index('serving_signal_evidence_date_idx').on(t.date, t.signalCode),
+  }),
+)
+
+export const servingStockMetrics = sqliteTable('serving_stock_metrics', {
+  ticker:      text('ticker').primaryKey(),
+  asOfDate:    text('as_of_date').notNull(),
+  payloadJson: text('payload_json').notNull(),
+  computedAt:  integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+})
+
+export const servingStockMovePeriods = sqliteTable(
+  'serving_stock_move_periods',
+  {
+    ticker:        text('ticker').notNull(),
+    direction:     text('direction').notNull(),
+    rank:          integer('rank').notNull(),
+    startDate:     text('start_date').notNull(),
+    endDate:       text('end_date').notNull(),
+    returnPct:     real('return_pct').notNull(),
+    tradingDays:   integer('trading_days').notNull(),
+    stagePathJson: text('stage_path_json').notNull(),
+    payloadJson:   text('payload_json').notNull(),
+    computedAt:    integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk:        primaryKey({ columns: [t.ticker, t.direction, t.rank] }),
+    tickerIdx: index('serving_stock_move_ticker_idx').on(t.ticker, t.direction, t.rank),
+  }),
+)
+
+export const tursoSyncRuns = sqliteTable('turso_sync_runs', {
+  runId:        text('run_id').primaryKey(),
+  mode:         text('mode').notNull(),
+  status:       text('status').notNull(),
+  dryRun:       integer('dry_run').notNull().default(0),
+  startedAt:    integer('started_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  finishedAt:   integer('finished_at', { mode: 'timestamp' }),
+  summaryJson:  text('summary_json'),
+  errorMessage: text('error_message'),
+})
+
+export const tursoSyncPartitions = sqliteTable(
+  'turso_sync_partitions',
+  {
+    mode:         text('mode').notNull(),
+    tableName:    text('table_name').notNull(),
+    partitionKey: text('partition_key').notNull(),
+    rangeStart:   text('range_start'),
+    rangeEnd:     text('range_end'),
+    rowCount:     integer('row_count').notNull().default(0),
+    status:       text('status').notNull(),
+    runId:        text('run_id'),
+    syncedAt:     integer('synced_at', { mode: 'timestamp' }),
+    errorMessage: text('error_message'),
+  },
+  (t) => ({
+    pk:        primaryKey({ columns: [t.mode, t.tableName, t.partitionKey] }),
+    statusIdx: index('turso_sync_partitions_status_idx').on(t.mode, t.status, t.tableName),
+  }),
+)

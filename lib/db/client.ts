@@ -69,9 +69,30 @@ export async function ensureReady(): Promise<void> {
 
 export type Args = readonly InValue[]
 
+function isBusyError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return /SQLITE_BUSY|database is locked/i.test(message)
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function withBusyRetry<T>(fn: () => Promise<T>): Promise<T> {
+  const max = Number(process.env.SQLITE_BUSY_RETRIES ?? 8)
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fn()
+    } catch (error) {
+      if (!isBusyError(error) || attempt >= max) throw error
+      await sleep(Math.min(2500, 120 * 2 ** attempt))
+    }
+  }
+}
+
 export async function execAll<T = Record<string, unknown>>(sql: string, args: Args = []): Promise<T[]> {
   await ensureReady()
-  const res = await client.execute({ sql, args: args as InValue[] })
+  const res = await withBusyRetry(() => client.execute({ sql, args: args as InValue[] }))
   return res.rows.map((row) => ({ ...row })) as unknown as T[]
 }
 
@@ -82,13 +103,14 @@ export async function execGet<T = Record<string, unknown>>(sql: string, args: Ar
 
 export async function execRun(sql: string, args: Args = []): Promise<void> {
   await ensureReady()
-  await client.execute({ sql, args: args as InValue[] })
+  await withBusyRetry(() => client.execute({ sql, args: args as InValue[] }))
 }
 
 export async function execBatch(stmts: { sql: string; args?: Args }[]): Promise<void> {
   await ensureReady()
-  await client.batch(
+  await withBusyRetry(() => client.batch(
     stmts.map((s) => ({ sql: s.sql, args: (s.args ?? []) as InValue[] })),
+  ),
   )
 }
 

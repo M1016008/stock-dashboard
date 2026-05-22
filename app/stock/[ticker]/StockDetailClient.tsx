@@ -9,6 +9,7 @@ import { PerformanceCard } from '@/components/stock/PerformanceCard'
 import { EarningsCard } from '@/components/stock/EarningsCard'
 import { WatchlistButton } from '@/components/ui/WatchlistButton'
 import { StageTimeline } from '@/components/stock/StageTimeline'
+import { StockMovePeriods } from '@/components/stock/StockMovePeriods'
 import { findTicker } from '@/lib/master/tickers'
 import type { StockQuote } from '@/types/stock'
 
@@ -122,13 +123,16 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
       </div>
 
       {/* 基本情報 + 直近変化率 */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '12px' }}>
+      <div className="stock-info-grid">
         <BasicInfoCard quote={quote} />
         <PerformanceCard ticker={ticker} />
       </div>
 
       {/* 決算情報 */}
       <EarningsCard ticker={ticker} />
+
+      {/* 過去の大きな値動き */}
+      <StockMovePeriods ticker={ticker} />
 
       {/* TradingView チャート: 日足 / 週足 / 月足 を縦に並べて時間軸比較 */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>

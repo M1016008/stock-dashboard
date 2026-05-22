@@ -23,6 +23,7 @@ function runScript(script: string): Promise<RunResult> {
       env: {
         ...process.env,
         USE_LOCAL_DB: '1',
+        BACKTEST_RECENT_DAYS: process.env.BACKTEST_RECENT_DAYS ?? '260',
       },
     })
 
@@ -86,6 +87,20 @@ async function main() {
     }
 
     await runRequired('scripts/batch-features.ts')
+    await lock.heartbeat()
+    await runRequired('scripts/batch-weekly-ohlcv.ts')
+    await lock.heartbeat()
+    await runRequired('scripts/batch-forward-extrema.ts')
+    await lock.heartbeat()
+    await runRequired('scripts/batch-technical-signals.ts')
+    await lock.heartbeat()
+    if (process.env.BACKTEST_REBUILD_STATS === '1') {
+      await runRequired('scripts/batch-signal-stats.ts')
+      await lock.heartbeat()
+    } else {
+      console.log('Backtest signal_stats rebuild skipped (set BACKTEST_REBUILD_STATS=1 for full/stat refresh)')
+    }
+    await runRequired('scripts/build-serving-backtest.ts')
     await lock.heartbeat()
     await runRequired('scripts/build-dashboard-cache.ts')
     await lock.heartbeat()

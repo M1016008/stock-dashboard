@@ -1,7 +1,7 @@
 'use client'
 
 import { useRouter } from 'next/navigation'
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 
 const POLL_INTERVAL_MS = 30 * 1000
 const MAX_POLLS = 60
@@ -13,18 +13,29 @@ type FreshnessResponse = {
 
 export function DataAutoUpdater() {
   const router = useRouter()
+  const refreshedRef = useRef(false)
 
   useEffect(() => {
     let cancelled = false
     let pollTimer: number | undefined
 
-    async function checkAndStartUpdate() {
+    async function readFreshness(): Promise<FreshnessResponse | null> {
       try {
-        const freshness = await fetch('/api/admin/update-latest', {
+        const res = await fetch('/api/admin/update-latest', {
           cache: 'no-store',
-        }).then((res) => res.json() as Promise<FreshnessResponse>)
+        })
+        if (!res.ok) return null
+        return res.json() as Promise<FreshnessResponse>
+      } catch (err) {
+        console.warn('Data freshness monitor failed', err)
+        return null
+      }
+    }
 
-        if (cancelled || (!freshness.needsUpdate && !freshness.running)) return
+    async function checkAndStartUpdate() {
+      const freshness = await readFreshness()
+      if (cancelled || !freshness?.running) return
+      try {
         await pollUntilFresh(0)
       } catch (err) {
         console.warn('Data freshness monitor failed', err)
@@ -34,26 +45,27 @@ export function DataAutoUpdater() {
     async function pollUntilFresh(count: number) {
       if (cancelled || count >= MAX_POLLS) return
 
-      const freshness = await fetch('/api/admin/update-latest', {
-        cache: 'no-store',
-      }).then((res) => res.json() as Promise<FreshnessResponse>)
+      const freshness = await readFreshness()
+      if (!freshness) return
 
-      if (cancelled || (!freshness.needsUpdate && !freshness.running)) {
+      if (cancelled) return
+      if (!freshness.needsUpdate && !freshness.running && !refreshedRef.current) {
+        refreshedRef.current = true
         router.refresh()
         return
       }
+      if (!freshness.running) return
 
       pollTimer = window.setTimeout(async () => {
-        const latest = await fetch('/api/admin/update-latest', {
-          cache: 'no-store',
-        }).then((res) => res.json() as Promise<FreshnessResponse>)
+        const latest = await readFreshness()
 
-        if (cancelled) return
-        if (!latest.needsUpdate && !latest.running) {
+        if (cancelled || !latest) return
+        if (!latest.needsUpdate && !latest.running && !refreshedRef.current) {
+          refreshedRef.current = true
           router.refresh()
           return
         }
-        await pollUntilFresh(count + 1)
+        if (latest.running) await pollUntilFresh(count + 1)
       }, POLL_INTERVAL_MS)
     }
 
