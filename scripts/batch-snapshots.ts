@@ -17,52 +17,138 @@
 //   2年分 = 約 500 日 × 4000 銘柄 = 200万計算。約 5〜10 分目安。
 //   将来データ量が増えたら累積計算に最適化する余地あり。
 
-import { db } from '@/lib/db/client'
-import { ohlcvDaily, dailySnapshots, tickerUniverse, batchRuns } from '@/lib/db/schema'
-import { buildMaValuesFromOhlcv, calculateAllStages } from '@/lib/hex-stage'
+import { db, execAll, execGet } from '@/lib/db/client'
+import { dailySnapshots, batchRuns, computeState } from '@/lib/db/schema'
+import { calculateAllStages, type MaValues } from '@/lib/hex-stage'
 import type { OHLCV } from '@/types/stock'
-import { eq, asc, max } from 'drizzle-orm'
+import { eq, sql } from 'drizzle-orm'
 
 const MIN_DATA_POINTS = 5  // これ以下では何も計算できない (ma_5 すら出ない)
-const PROGRESS_EVERY = 50
+const CONCURRENCY = Math.max(1, Number(process.env.SNAPSHOT_CONCURRENCY ?? 4))
+const PROGRESS_EVERY = Number(process.env.SNAPSHOT_PROGRESS_EVERY ?? 200)
+const LOOKBACK_DAYS = Number(process.env.SNAPSHOT_LOOKBACK_DAYS ?? 900)
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
+
+async function withDbRetry<T>(fn: () => Promise<T>): Promise<T> {
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    try {
+      return await fn()
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      if (attempt === 5 || !/busy|locked|SQLITE_BUSY/i.test(msg)) throw err
+      await sleep(250 * attempt)
+    }
+  }
+  throw new Error('unreachable')
+}
+
+function buildClosePrefix(rows: OHLCV[]): number[] {
+  const prefix = [0]
+  for (const row of rows) {
+    prefix.push(prefix[prefix.length - 1] + row.close)
+  }
+  return prefix
+}
+
+function dailySmaAt(prefix: number[], index: number, period: number): number | null {
+  const end = index + 1
+  if (end < period) return null
+  return (prefix[end] - prefix[end - period]) / period
+}
+
+function sampledSmaAt(rows: OHLCV[], index: number, step: number, period: number): number | null {
+  const firstIndex = index - (period - 1) * step
+  if (firstIndex < 0) return null
+  let sum = 0
+  for (let i = 0; i < period; i++) {
+    sum += rows[index - i * step].close
+  }
+  return sum / period
+}
+
+function buildMaValuesAtIndex(rows: OHLCV[], prefix: number[], index: number): MaValues {
+  return {
+    ma_5: dailySmaAt(prefix, index, 5),
+    ma_25: dailySmaAt(prefix, index, 25),
+    ma_75: dailySmaAt(prefix, index, 75),
+    ma_150: dailySmaAt(prefix, index, 150),
+    ma_300: dailySmaAt(prefix, index, 300),
+    weekly_ma_5: sampledSmaAt(rows, index, 5, 5),
+    weekly_ma_13: sampledSmaAt(rows, index, 5, 13),
+    weekly_ma_25: sampledSmaAt(rows, index, 5, 25),
+    weekly_ma_50: sampledSmaAt(rows, index, 5, 50),
+    weekly_ma_100: sampledSmaAt(rows, index, 5, 100),
+    monthly_ma_3: sampledSmaAt(rows, index, 21, 3),
+    monthly_ma_5: sampledSmaAt(rows, index, 21, 5),
+    monthly_ma_10: sampledSmaAt(rows, index, 21, 10),
+    monthly_ma_20: sampledSmaAt(rows, index, 21, 20),
+    monthly_ma_25: sampledSmaAt(rows, index, 21, 25),
+  }
+}
+
+function dateDaysBefore(date: string, days: number): string {
+  const d = new Date(`${date}T00:00:00Z`)
+  d.setUTCDate(d.getUTCDate() - days)
+  return d.toISOString().slice(0, 10)
+}
+
+async function markSnapshotState(ticker: string, lastProcessedDate: string): Promise<void> {
+  await db
+    .insert(computeState)
+    .values({ jobType: 'snapshot_compute', ticker, lastProcessedDate })
+    .onConflictDoUpdate({
+      target: [computeState.jobType, computeState.ticker],
+      set: {
+        lastProcessedDate: sql`excluded.last_processed_date`,
+        updatedAt: sql`unixepoch()`,
+      },
+    })
+}
 
 async function computeSnapshotsForTicker(ticker: string): Promise<number> {
-  // この銘柄の OHLCV を全件取得 (日付昇順)
-  const rows = await db
-    .select()
-    .from(ohlcvDaily)
-    .where(eq(ohlcvDaily.ticker, ticker))
-    .orderBy(asc(ohlcvDaily.date))
+  const [state, existing] = await Promise.all([
+    execGet<{ lastProcessedDate: string | null }>(
+      `SELECT last_processed_date AS lastProcessedDate FROM compute_state WHERE job_type = 'snapshot_compute' AND ticker = ?`,
+      [ticker],
+    ),
+    execGet<{ maxDate: string | null }>(
+      `SELECT MAX(date) AS maxDate FROM daily_snapshots WHERE ticker = ?`,
+      [ticker],
+    ),
+  ])
+  const lastSnapshotDate = [state?.lastProcessedDate, existing?.maxDate]
+    .filter((date): date is string => Boolean(date))
+    .sort()
+    .at(-1) ?? null
+  const startDate = lastSnapshotDate ? dateDaysBefore(lastSnapshotDate, LOOKBACK_DAYS) : null
 
-  if (rows.length < MIN_DATA_POINTS) return 0
+  const rows = await execAll<OHLCV>(
+    `
+      SELECT date, open, high, low, close, volume
+      FROM ohlcv_daily
+      WHERE ticker = ?
+        ${startDate ? 'AND date >= ?' : ''}
+      ORDER BY date
+    `,
+    startDate ? [ticker, startDate] : [ticker],
+  )
 
-  const ohlcvData: OHLCV[] = rows.map(r => ({
-    date:   r.date,
-    open:   r.open,
-    high:   r.high,
-    low:    r.low,
-    close:  r.close,
-    volume: r.volume,
-  }))
-
-  // 既存スナップショット最新日付を確認 (差分計算)
-  const existing = await db
-    .select({ maxDate: max(dailySnapshots.date) })
-    .from(dailySnapshots)
-    .where(eq(dailySnapshots.ticker, ticker))
-
-  const lastSnapshotDate = existing[0]?.maxDate ?? null
+  if (rows.length < MIN_DATA_POINTS) {
+    const latestOhlcvDate = rows[rows.length - 1]?.date
+    if (latestOhlcvDate) await markSnapshotState(ticker, latestOhlcvDate)
+    return 0
+  }
+  const closePrefix = buildClosePrefix(rows)
 
   // 各日に対してスナップショットを計算
   type SnapshotRow = typeof dailySnapshots.$inferInsert
   const newSnapshots: SnapshotRow[] = []
-  for (let i = 0; i < ohlcvData.length; i++) {
-    const date = ohlcvData[i].date
+  for (let i = 0; i < rows.length; i++) {
+    const date = rows[i].date
     if (lastSnapshotDate && date <= lastSnapshotDate) continue
     if (i + 1 < MIN_DATA_POINTS) continue
 
-    const slice = ohlcvData.slice(0, i + 1)
-    const ma = buildMaValuesFromOhlcv(slice)
+    const ma = buildMaValuesAtIndex(rows, closePrefix, i)
     const stages = calculateAllStages(ma)
 
     newSnapshots.push({
@@ -73,15 +159,28 @@ async function computeSnapshotsForTicker(ticker: string): Promise<number> {
     })
   }
 
-  if (newSnapshots.length === 0) return 0
+  if (newSnapshots.length === 0) {
+    const latestOhlcvDate = rows[rows.length - 1]?.date
+    if (latestOhlcvDate && (!lastSnapshotDate || latestOhlcvDate > lastSnapshotDate)) {
+      await markSnapshotState(ticker, latestOhlcvDate)
+    }
+    return 0
+  }
 
   // チャンク分割で INSERT (libSQL の SQL長制限対策)
   const CHUNK = 200
   for (let i = 0; i < newSnapshots.length; i += CHUNK) {
-    await db
-      .insert(dailySnapshots)
-      .values(newSnapshots.slice(i, i + CHUNK))
-      .onConflictDoNothing()  // 既存日付は触らない (冪等)
+    await withDbRetry(() =>
+      db
+        .insert(dailySnapshots)
+        .values(newSnapshots.slice(i, i + CHUNK))
+        .onConflictDoNothing(),  // 既存日付は触らない (冪等)
+    )
+  }
+
+  const latestDate = newSnapshots[newSnapshots.length - 1]?.date
+  if (latestDate) {
+    await markSnapshotState(ticker, latestDate)
   }
 
   return newSnapshots.length
@@ -99,17 +198,28 @@ async function main() {
 
   const runId = run.id
 
-  // 対象銘柄
+  // 対象銘柄。通常実行では OHLCV が snapshot より新しい銘柄だけに絞る。
   const tickerFilter = process.env.TICKERS?.split(',').map(s => s.trim()).filter(Boolean)
   let tickers: { ticker: string }[]
   if (tickerFilter && tickerFilter.length > 0) {
     tickers = tickerFilter.map(ticker => ({ ticker }))
     console.log(`TICKERS env で絞り込み: ${tickers.length} 銘柄`)
   } else {
-    tickers = await db
-      .select({ ticker: tickerUniverse.ticker })
-      .from(tickerUniverse)
-      .where(eq(tickerUniverse.active, true))
+    tickers = await execAll<{ ticker: string }>(`
+      SELECT u.ticker
+      FROM ticker_universe u
+      WHERE u.active = 1
+        AND (
+          SELECT MAX(o.date)
+          FROM ohlcv_daily o
+          WHERE o.ticker = u.ticker
+        ) > COALESCE((
+          SELECT MAX(s.date)
+          FROM daily_snapshots s
+          WHERE s.ticker = u.ticker
+        ), '')
+      ORDER BY u.ticker
+    `)
   }
 
   let succeeded = 0
@@ -117,26 +227,40 @@ async function main() {
   let rowsInserted = 0
   const errors: string[] = []
 
-  console.log(`Snapshot 計算開始: ${tickers.length} 銘柄`)
+  console.log(`Snapshot 計算開始: ${tickers.length} 銘柄 (CONCURRENCY=${CONCURRENCY})`)
   const startTime = Date.now()
+  let nextIndex = 0
+  let processed = 0
 
-  for (const [i, { ticker }] of tickers.entries()) {
-    try {
-      const count = await computeSnapshotsForTicker(ticker)
-      succeeded++
-      rowsInserted += count
-      if ((i + 1) % PROGRESS_EVERY === 0 || i === tickers.length - 1) {
-        const pct = (((i + 1) / tickers.length) * 100).toFixed(1)
-        const elapsedMin = ((Date.now() - startTime) / 60000).toFixed(1)
-        console.log(`[${i + 1}/${tickers.length} ${pct}%] ${ticker}: +${count} snapshots (累計 ${rowsInserted}, 失敗 ${failed}, 経過 ${elapsedMin}min)`)
+  async function worker(workerId: number) {
+    while (true) {
+      const i = nextIndex++
+      const item = tickers[i]
+      if (!item) return
+      const { ticker } = item
+      try {
+        const count = await computeSnapshotsForTicker(ticker)
+        succeeded++
+        rowsInserted += count
+      } catch (err) {
+        failed++
+        const msg = `${ticker}: ${err instanceof Error ? err.message : String(err)}`
+        errors.push(msg)
+        console.error(`✗ worker=${workerId} ${msg}`)
+      } finally {
+        processed++
+        if (processed % PROGRESS_EVERY === 0 || processed === tickers.length) {
+          const pct = ((processed / tickers.length) * 100).toFixed(1)
+          const elapsedMin = ((Date.now() - startTime) / 60000).toFixed(1)
+          console.log(`[${processed}/${tickers.length} ${pct}%] 累計 ${rowsInserted} snapshots / 成功 ${succeeded} / 失敗 ${failed} / 経過 ${elapsedMin}min`)
+        }
       }
-    } catch (err) {
-      failed++
-      const msg = `${ticker}: ${err instanceof Error ? err.message : String(err)}`
-      errors.push(msg)
-      console.error(`✗ ${msg}`)
     }
   }
+
+  await Promise.all(
+    Array.from({ length: Math.min(CONCURRENCY, tickers.length) }, (_, i) => worker(i + 1)),
+  )
 
   const finalStatus =
     failed === 0 ? 'success' :

@@ -5,6 +5,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import { PageTitle } from '@/components/layout/PageTitle'
 import { CapitalFlowWaterfall } from '@/components/capital-flow/Waterfall'
 import { CapitalFlowTimeSeries } from '@/components/capital-flow/TimeSeries'
 
@@ -12,10 +13,10 @@ type GroupBy = 'large' | 'sector33' | 'small' | 'ticker'
 type Period = 'day' | 'week' | 'month' | 'custom'
 type ViewMode = 'rank' | 'waterfall' | 'timeseries'
 
-const VIEW_OPTIONS: { v: ViewMode; label: string; emoji: string }[] = [
-  { v: 'rank',       label: 'ランキング',         emoji: '📊' },
-  { v: 'waterfall',  label: 'ウォーターフォール', emoji: '💧' },
-  { v: 'timeseries', label: '推移',               emoji: '📈' },
+const VIEW_OPTIONS: { v: ViewMode; label: string }[] = [
+  { v: 'rank',       label: 'ランキング' },
+  { v: 'waterfall',  label: 'ウォーターフォール' },
+  { v: 'timeseries', label: '推移' },
 ]
 
 interface Contributor {
@@ -134,7 +135,7 @@ export default function CapitalFlowPage() {
   const fetchDiag = async () => {
     setDiagLoading(true)
     try {
-      const r = await fetch('/api/capital-flow/diagnostics')
+      const r = await fetch('/api/capital-flow/diagnostics', { cache: 'no-store' })
       const j = await r.json()
       if (r.ok) setDiag(j)
     } finally {
@@ -146,22 +147,22 @@ export default function CapitalFlowPage() {
     setJpxFetching(true)
     setJpxResult(null)
     try {
-      const r = await fetch('/api/admin/sector-master?source=jpx', { method: 'POST' })
+      const r = await fetch('/api/admin/sector-master?source=jpx', { method: 'POST', cache: 'no-store' })
       const j = await r.json()
       if (!r.ok) {
-        setJpxResult(`❌ 失敗: ${j.message ?? j.error ?? r.statusText}`)
+        setJpxResult(`失敗: ${j.message ?? j.error ?? r.statusText}`)
       } else {
         const s = j.summary
         const cols = s?.detectedColumns ?? {}
         setJpxResult(
-          `✅ JPX 取得成功 — 取込 ${s?.inserted ?? 0} 件 / スキップ ${s?.skipped ?? 0}\n` +
+          `JPX 取得成功 — 取込 ${s?.inserted ?? 0} 件 / スキップ ${s?.skipped ?? 0}\n` +
           `検出列: 33業種=${cols.sector33 ?? '×'} / 17業種=${cols.sectorLarge ?? '×'} / 市場区分=${cols.marketSegment ?? '×'}`
         )
         // 診断情報を再取得 + データを再計算
         fetchDiag()
       }
     } catch (e) {
-      setJpxResult(`❌ ${(e as Error).message}`)
+      setJpxResult(`失敗: ${(e as Error).message}`)
     } finally {
       setJpxFetching(false)
     }
@@ -187,7 +188,7 @@ export default function CapitalFlowPage() {
       if (customTo)   params.set('to',   customTo)
     }
 
-    fetch(`/api/capital-flow?${params}`)
+    fetch(`/api/capital-flow?${params}`, { cache: 'no-store' })
       .then(async (r) => {
         const j = await r.json()
         if (!r.ok) throw new Error(j.message ?? j.error ?? 'failed')
@@ -215,58 +216,39 @@ export default function CapitalFlowPage() {
   const inDrill = !!(drillField && drillValue)
 
   return (
-    <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-      {/* ヘッダ */}
-      <div style={{ borderBottom: '1px solid var(--border-subtle)', paddingBottom: '10px' }}>
-        <h1 style={{ fontFamily: 'var(--font-display)', fontSize: '16px', fontWeight: 700, margin: 0 }}>
-          💰 Capital Flow Map
-        </h1>
-        <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px', lineHeight: 1.5 }}>
-          時価総額の増減から業種・銘柄ごとの「資金の流れ」を可視化。
-          流入が多い業種は緑、流出が多い業種は赤で表示します。
-        </p>
-      </div>
+    <div className="flex flex-col gap-5">
+      <PageTitle
+        title="資金フロー"
+        subtitle="時価総額の増減から、業種・銘柄ごとの資金の流れを可視化します。"
+        badge="Capital Flow"
+      />
 
       {/* JPX再取得 / 診断ボタン */}
-      <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+      <div className="flex flex-wrap items-center gap-2">
         <button
           onClick={fetchJpx}
           disabled={jpxFetching}
-          style={{
-            padding: '6px 12px', fontSize: '11px', fontWeight: 600,
-            background: jpxFetching ? 'var(--bg-elevated)' : 'var(--accent-primary)',
-            color: jpxFetching ? 'var(--text-muted)' : '#fff',
-            border: '1px solid var(--accent-primary)',
-            borderRadius: 'var(--radius-sm)',
-            cursor: jpxFetching ? 'wait' : 'pointer',
-          }}
+          className="h-8 rounded-[6px] border border-[var(--color-brand-600)] bg-[var(--color-brand-600)] px-3 text-[11px] font-bold text-white disabled:cursor-wait disabled:border-[var(--color-border-default)] disabled:bg-[var(--color-surface-muted)] disabled:text-[var(--color-text-tertiary)]"
         >
-          {jpxFetching ? '取得中…' : '🟢 JPX 業種マスタ再取得'}
+          {jpxFetching ? '取得中…' : 'JPX 業種マスタ再取得'}
         </button>
         <button
           onClick={() => { setDiagOpen((v) => !v); if (!diag) fetchDiag() }}
           disabled={diagLoading}
-          style={{
-            padding: '6px 12px', fontSize: '11px',
-            background: diagOpen ? 'var(--bg-elevated)' : 'transparent',
-            color: 'var(--text-secondary)',
-            border: '1px solid var(--border-base)',
-            borderRadius: 'var(--radius-sm)',
-            cursor: 'pointer',
-          }}
+          className="h-8 rounded-[6px] border border-[var(--color-border-default)] px-3 text-[11px] font-bold text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-subtle)]"
         >
-          🔍 業種マスタ診断 {diagOpen ? '▲' : '▼'}
+          業種マスタ診断 {diagOpen ? '▲' : '▼'}
         </button>
         {jpxResult && (
           <span style={{
             fontSize: '11px',
-            color: jpxResult.startsWith('❌') ? 'var(--price-down)' : 'var(--price-up)',
+            color: jpxResult.startsWith('失敗') ? 'var(--price-down)' : 'var(--price-up)',
             fontFamily: 'var(--font-mono)',
             whiteSpace: 'pre-wrap',
             background: 'var(--bg-elevated)',
             border: '1px solid var(--border-subtle)',
             padding: '4px 10px',
-            borderRadius: 'var(--radius-sm)',
+            borderRadius: '6px',
           }}>
             {jpxResult}
           </span>
@@ -321,7 +303,7 @@ export default function CapitalFlowPage() {
       )}
 
       {/* ビュータブ */}
-      <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', borderBottom: '1px solid var(--border-subtle)' }}>
+      <div className="flex flex-wrap gap-1 border-b border-[var(--color-border-soft)]">
         {VIEW_OPTIONS.map((v) => (
           <button
             key={v.v}
@@ -330,16 +312,15 @@ export default function CapitalFlowPage() {
               padding: '8px 14px',
               fontSize: '12px',
               fontWeight: view === v.v ? 700 : 500,
-              background: view === v.v ? '#fff' : 'transparent',
+              background: view === v.v ? 'var(--color-brand-50)' : 'transparent',
               color: view === v.v ? 'var(--accent-primary)' : 'var(--text-secondary)',
               border: 'none',
               borderBottom: view === v.v ? '2px solid var(--accent-primary)' : '2px solid transparent',
               cursor: 'pointer',
               marginBottom: '-1px',
-              fontFamily: 'var(--font-mono)',
+              borderRadius: '6px 6px 0 0',
             }}
           >
-            <span style={{ marginRight: 4 }}>{v.emoji}</span>
             {v.label}
           </button>
         ))}
@@ -421,12 +402,12 @@ export default function CapitalFlowPage() {
           <span style={{
             display: 'inline-flex', alignItems: 'center', gap: '6px',
             fontSize: '11px', padding: '4px 10px',
-            background: 'rgba(217,119,6,0.1)',
+            background: 'var(--color-brand-50)',
             border: '1px solid var(--accent-primary)',
-            borderRadius: '20px',
+            borderRadius: '6px',
             color: 'var(--accent-primary)',
           }}>
-            🔍 {drillValue} の銘柄
+            {drillValue} の銘柄
             <button
               onClick={() => { setDrillField(null); setDrillValue(null) }}
               style={{
@@ -460,7 +441,7 @@ export default function CapitalFlowPage() {
           <div className="card" style={{ padding: '14px 16px' }}>
             {data.notice ? (
               <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: 0 }}>
-                ⚠ {data.notice}
+                {data.notice}
               </p>
             ) : (
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '20px', alignItems: 'baseline' }}>
@@ -498,7 +479,7 @@ export default function CapitalFlowPage() {
               background: '#fffbeb',
             }}>
               <p style={{ fontSize: '12px', color: '#92400e', margin: 0, lineHeight: 1.5 }}>
-                ⚠️ <strong>業種マスタの網羅率: {data.coverage.coveragePct.toFixed(1)}%</strong>
+                <strong>業種マスタの網羅率: {data.coverage.coveragePct.toFixed(1)}%</strong>
                 （{data.coverage.classifiedTickers.toLocaleString()} / {data.coverage.totalTickers.toLocaleString()} 銘柄）。
                 未分類の {data.coverage.unclassifiedTickers.toLocaleString()} 銘柄は「未分類」グループに集計されています。
                 正確な業種別集計のため、<a href="/admin/sector-master" style={{ color: '#92400e', textDecoration: 'underline', fontWeight: 600 }}>
@@ -511,8 +492,8 @@ export default function CapitalFlowPage() {
           {/* 流入 / 流出 ランキング Top10 — ビュー横断で常時表示。「未分類」は除外。 */}
           {!inDrill && data.groups.length > 0 && (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '12px' }}>
-              <RankList title="📈 流入トップ 10" items={data.groups.filter((g) => g.label !== '未分類').sort((a, b) => b.mcapDelta - a.mcapDelta).slice(0, 10)} flowKind="in" />
-              <RankList title="📉 流出トップ 10" items={data.groups.filter((g) => g.label !== '未分類').sort((a, b) => a.mcapDelta - b.mcapDelta).slice(0, 10)} flowKind="out" />
+              <RankList title="流入トップ 10" items={data.groups.filter((g) => g.label !== '未分類').sort((a, b) => b.mcapDelta - a.mcapDelta).slice(0, 10)} flowKind="in" />
+              <RankList title="流出トップ 10" items={data.groups.filter((g) => g.label !== '未分類').sort((a, b) => a.mcapDelta - b.mcapDelta).slice(0, 10)} flowKind="out" />
             </div>
           )}
 

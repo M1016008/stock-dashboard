@@ -55,9 +55,9 @@ export default function AdminDbPage() {
     setError('')
     try {
       const [s, r, u] = await Promise.all([
-        fetch('/api/admin/db-stats').then(r => r.ok ? r.json() : Promise.reject(r)),
-        fetch('/api/admin/batch/runs').then(r => r.ok ? r.json() : Promise.reject(r)),
-        fetch('/api/admin/universe').then(r => r.ok ? r.json() : Promise.reject(r)),
+        fetch('/api/admin/db-stats', { cache: 'no-store' }).then(r => r.ok ? r.json() : Promise.reject(r)),
+        fetch('/api/admin/batch/runs', { cache: 'no-store' }).then(r => r.ok ? r.json() : Promise.reject(r)),
+        fetch('/api/admin/universe', { cache: 'no-store' }).then(r => r.ok ? r.json() : Promise.reject(r)),
       ])
       setStats(s)
       setRuns(r.runs ?? [])
@@ -81,7 +81,7 @@ export default function AdminDbPage() {
   const triggerBatch = async (kind: 'ohlcv' | 'snapshots') => {
     setBatchBusy(kind)
     try {
-      const res = await fetch(`/api/admin/batch/${kind}`, { method: 'POST' })
+      const res = await fetch(`/api/admin/batch/${kind}`, { method: 'POST', cache: 'no-store' })
       if (!res.ok) throw new Error(await res.text())
       // 数秒待ってから一覧更新 (起動直後だと running 行がまだ無い)
       setTimeout(loadAll, 1500)
@@ -98,6 +98,7 @@ export default function AdminDbPage() {
     try {
       const res = await fetch('/api/admin/universe', {
         method: 'POST',
+        cache: 'no-store',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ tickers: addText }),
       })
@@ -115,6 +116,7 @@ export default function AdminDbPage() {
     try {
       await fetch(`/api/admin/universe/${ticker}`, {
         method: 'PATCH',
+        cache: 'no-store',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ active }),
       })

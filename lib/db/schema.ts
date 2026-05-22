@@ -148,6 +148,12 @@ export const tickerUniverse = sqliteTable('ticker_universe', {
   // Phase 3.6: 時価総額計算用にキャッシュ。J-Quants /fins/summary の ShOutFY 由来。
   shares_outstanding: integer('shares_outstanding'),                                        // 発行済株式数 (株)
   shares_updated_at:  integer('shares_updated_at', { mode: 'timestamp' }),                  // 上記の取得時刻
+  // Phase 4: J-Quants /listed/info 由来の業種区分
+  sector17_code:      text('sector17_code'),
+  sector17_name:      text('sector17_name'),
+  sector33_code:      text('sector33_code'),
+  sector33_name:      text('sector33_name'),
+  market_segment:     text('market_segment'),
 })
 
 // ─────────────────────────────────────
@@ -167,8 +173,63 @@ export const ohlcvDaily = sqliteTable(
   (t) => ({
     pk:      primaryKey({ columns: [t.ticker, t.date] }),
     dateIdx: index('ohlcv_date_idx').on(t.date),
+    dateTickerIdx: index('ohlcv_date_ticker_idx').on(t.date, t.ticker),
   }),
 )
+
+export const jquantsDailyCoverage = sqliteTable('jquants_daily_coverage', {
+  date:          text('date').primaryKey(),
+  expectedRows:  integer('expected_rows').notNull(),
+  importedAt:    integer('imported_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+})
+
+export const updateLocks = sqliteTable('update_locks', {
+  jobType:        text('job_type').primaryKey(),
+  status:         text('status').notNull(),
+  owner:          text('owner'),
+  startedAt:      integer('started_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  heartbeatAt:    integer('heartbeat_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  leaseExpiresAt: integer('lease_expires_at', { mode: 'timestamp' }).notNull(),
+})
+
+export const jquantsSyncRuns = sqliteTable(
+  'jquants_sync_runs',
+  {
+    id:             integer('id').primaryKey({ autoIncrement: true }),
+    targetDate:     text('target_date').notNull(),
+    apiType:        text('api_type').notNull(),
+    expectedRows:   integer('expected_rows').notNull().default(0),
+    importedRows:   integer('imported_rows').notNull().default(0),
+    missingTickers: text('missing_tickers'),
+    status:         text('status').notNull(),
+    startedAt:      integer('started_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+    finishedAt:     integer('finished_at', { mode: 'timestamp' }),
+    errorSummary:   text('error_summary'),
+  },
+  (t) => ({
+    targetIdx: index('jquants_sync_target_idx').on(t.targetDate, t.apiType),
+  }),
+)
+
+export const computeState = sqliteTable(
+  'compute_state',
+  {
+    jobType:           text('job_type').notNull(),
+    ticker:            text('ticker').notNull(),
+    lastProcessedDate: text('last_processed_date'),
+    updatedAt:         integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.jobType, t.ticker] }),
+    jobDateIdx: index('compute_state_job_date_idx').on(t.jobType, t.lastProcessedDate),
+  }),
+)
+
+export const dashboardCache = sqliteTable('dashboard_cache', {
+  date:        text('date').primaryKey(),
+  payloadJson: text('payload_json').notNull(),
+  computedAt:  integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+})
 
 // ─────────────────────────────────────
 // 9. Phase 2: 日次スナップショット (MA15本 + ステージ6種を事前計算)
@@ -207,6 +268,17 @@ export const dailySnapshots = sqliteTable(
   (t) => ({
     pk:      primaryKey({ columns: [t.ticker, t.date] }),
     dateIdx: index('snapshots_date_idx').on(t.date),
+    dateTickerIdx: index('snapshots_date_ticker_idx').on(t.date, t.ticker),
+    stagePatternIdx: index('snapshots_stage_pattern_idx').on(
+      t.daily_a_stage,
+      t.daily_b_stage,
+      t.weekly_a_stage,
+      t.weekly_b_stage,
+      t.monthly_a_stage,
+      t.monthly_b_stage,
+      t.date,
+      t.ticker,
+    ),
   }),
 )
 
@@ -320,6 +392,100 @@ export const stageTransitions = sqliteTable(
 )
 
 // ─────────────────────────────────────
+// 14b. Phase 4: 主要指数 OHLC (J-Quants /indices/bars/daily)
+//      code: 0000=TOPIX, 0070=東証グロース250, 0500=プライム, 0501=スタンダード,
+//            0502=グロース, 0503=JPXプライム150
+// ─────────────────────────────────────
+export const indicesDaily = sqliteTable(
+  'indices_daily',
+  {
+    code:  text('code').notNull(),     // J-Quants 指数コード (TOPIX=0000 等)
+    date:  text('date').notNull(),
+    open:  real('open'),
+    high:  real('high'),
+    low:   real('low'),
+    close: real('close'),
+  },
+  (t) => ({
+    pk:      primaryKey({ columns: [t.code, t.date] }),
+    dateIdx: index('indices_date_idx').on(t.date),
+  }),
+)
+
+// ─────────────────────────────────────
+// 15. Phase 4: 独自分類体系 (大分類 59 × 業種細分類 476)
+//     Yoshio さん独自の Excel から取り込む。
+// ─────────────────────────────────────
+export const stockClassification = sqliteTable(
+  'stock_classification',
+  {
+    ticker:         text('ticker').primaryKey(),    // ticker_universe.ticker と対応
+    majorCategory:  text('major_category').notNull(),
+    subIndustry:    text('sub_industry').notNull(),
+    updatedAt:      integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    majorIdx: index('idx_classification_major').on(t.majorCategory),
+    subIdx:   index('idx_classification_sub').on(t.subIndustry),
+  }),
+)
+
+// ─────────────────────────────────────
+// 16. Phase 4: 信用残・空売り (J-Quants /markets/weekly_margin_interest)
+// ─────────────────────────────────────
+export const weeklyMarginInterest = sqliteTable(
+  'weekly_margin_interest',
+  {
+    ticker:        text('ticker').notNull(),
+    date:          text('date').notNull(),                     // 報告基準日 "YYYY-MM-DD"
+    longMargin:    real('long_margin'),                        // 信用買残 (株数)
+    shortMargin:   real('short_margin'),                       // 信用売残 (株数)
+    longChange:    real('long_change'),                        // 前週比 (株数差)
+    shortChange:   real('short_change'),
+    importedAt:    integer('imported_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk:      primaryKey({ columns: [t.ticker, t.date] }),
+    dateIdx: index('wmi_date_idx').on(t.date),
+  }),
+)
+
+// ─────────────────────────────────────
+// 17. Phase 4: 空売り残高 (J-Quants /markets/short_selling_positions)
+// ─────────────────────────────────────
+export const shortSellingPositions = sqliteTable(
+  'short_selling_positions',
+  {
+    ticker:        text('ticker').notNull(),
+    date:          text('date').notNull(),
+    shortRatio:    real('short_ratio'),    // 空売り比率 %
+    reporter:      text('reporter'),       // 報告者
+    importedAt:    integer('imported_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk:      primaryKey({ columns: [t.ticker, t.date, t.reporter] }),
+    dateIdx: index('ssp_date_idx').on(t.date),
+  }),
+)
+
+// ─────────────────────────────────────
+// 18. Phase 4: 決算発表カレンダー (J-Quants /fins/announcement)
+// ─────────────────────────────────────
+export const earningsCalendar = sqliteTable(
+  'earnings_calendar',
+  {
+    ticker:        text('ticker').notNull(),
+    announceDate:  text('announce_date').notNull(),    // "YYYY-MM-DD"
+    fiscalPeriod:  text('fiscal_period'),              // 例 "2026Q1"
+    importedAt:    integer('imported_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk:      primaryKey({ columns: [t.ticker, t.announceDate] }),
+    dateIdx: index('earn_date_idx').on(t.announceDate),
+  }),
+)
+
+// ─────────────────────────────────────
 // 13. Phase 3: パターン統計 (6桁ステージコード × horizon ごとに集計)
 // ─────────────────────────────────────
 export const patternStats = sqliteTable(
@@ -348,3 +514,370 @@ export const patternStats = sqliteTable(
   }),
 )
 
+// ─────────────────────────────────────
+// 19. Phase 5: Backtest / ML-RL readiness
+// ─────────────────────────────────────
+export const weeklyOhlcv = sqliteTable(
+  'weekly_ohlcv',
+  {
+    ticker:        text('ticker').notNull(),
+    date:          text('date').notNull(),
+    weekStartDate: text('week_start_date').notNull(),
+    weekEndDate:   text('week_end_date').notNull(),
+    open:          real('open').notNull(),
+    high:          real('high').notNull(),
+    low:           real('low').notNull(),
+    close:         real('close').notNull(),
+    volume:        integer('volume').notNull(),
+    ma5:           real('ma_5'),
+    ma13:          real('ma_13'),
+    ma25:          real('ma_25'),
+    ma50:          real('ma_50'),
+    ma100:         real('ma_100'),
+    computedAt:    integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk:      primaryKey({ columns: [t.ticker, t.date] }),
+    dateIdx: index('weekly_ohlcv_date_idx').on(t.date),
+  }),
+)
+
+export const technicalSignals = sqliteTable(
+  'technical_signals',
+  {
+    ticker:          text('ticker').notNull(),
+    date:            text('date').notNull(),
+    timescale:       text('timescale').notNull(),
+    maPeriod:        integer('ma_period').notNull().default(0),
+    signalCode:      text('signal_code').notNull(),
+    signalStrength:  text('signal_strength').notNull(),
+    direction:       text('direction').notNull(),
+    label:           text('label').notNull(),
+    scoreComponent:  real('score_component'),
+    valueJson:       text('value_json'),
+    computedAt:      integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk:      primaryKey({ columns: [t.ticker, t.date, t.timescale, t.maPeriod, t.signalCode] }),
+    dateIdx: index('tech_signal_date_idx').on(t.date, t.signalCode),
+    codeIdx: index('tech_signal_code_idx').on(t.signalCode, t.date),
+    dateTickerIdx: index('tech_signal_date_ticker_idx').on(t.date, t.ticker),
+  }),
+)
+
+export const forwardExtrema = sqliteTable(
+  'forward_extrema',
+  {
+    ticker:        text('ticker').notNull(),
+    date:          text('date').notNull(),
+    horizonDays:   integer('horizon_days').notNull(),
+    returnPct:     real('return_pct'),
+    endDate:       text('end_date'),
+    maxReturnPct:  real('max_return_pct'),
+    maxReturnDate: text('max_return_date'),
+    daysToMax:     integer('days_to_max'),
+    minReturnPct:  real('min_return_pct'),
+    minReturnDate: text('min_return_date'),
+    daysToMin:     integer('days_to_min'),
+    hit10:         integer('hit_10').notNull().default(0),
+    hit20:         integer('hit_20').notNull().default(0),
+    hit40:         integer('hit_40').notNull().default(0),
+    daysTo10:      integer('days_to_10'),
+    daysTo20:      integer('days_to_20'),
+    daysTo40:      integer('days_to_40'),
+    computedAt:    integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk:          primaryKey({ columns: [t.ticker, t.date, t.horizonDays] }),
+    dateIdx:     index('fext_date_horizon_idx').on(t.date, t.horizonDays),
+    dateTickerIdx: index('fext_date_horizon_ticker_idx').on(t.date, t.horizonDays, t.ticker),
+    horizonDateIdx: index('fext_horizon_date_idx').on(t.horizonDays, t.date),
+    horizonIdx:  index('fext_horizon_max_idx').on(t.horizonDays, t.maxReturnPct),
+  }),
+)
+
+export const modelFeatures = sqliteTable(
+  'model_features',
+  {
+    ticker:         text('ticker').notNull(),
+    date:           text('date').notNull(),
+    patternCode:    text('pattern_code'),
+    dailyAStage:    integer('daily_a_stage'),
+    dailyBStage:    integer('daily_b_stage'),
+    weeklyAStage:   integer('weekly_a_stage'),
+    weeklyBStage:   integer('weekly_b_stage'),
+    monthlyAStage:  integer('monthly_a_stage'),
+    monthlyBStage:  integer('monthly_b_stage'),
+    close:          real('close'),
+    volume:         integer('volume'),
+    volumeRatio20:  real('volume_ratio_20'),
+    rangePct:       real('range_pct'),
+    atr20Pct:       real('atr20_pct'),
+    ma5PosPct:      real('ma5_pos_pct'),
+    ma25PosPct:     real('ma25_pos_pct'),
+    ma75PosPct:     real('ma75_pos_pct'),
+    maSpreadPct:    real('ma_spread_pct'),
+    relStrength20:  real('rel_strength_20'),
+    signalCodes:    text('signal_codes'),
+    featureJson:    text('feature_json'),
+    computedAt:     integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk:         primaryKey({ columns: [t.ticker, t.date] }),
+    dateIdx:    index('model_features_date_idx').on(t.date),
+    patternIdx: index('model_features_pattern_idx').on(t.patternCode, t.date),
+  }),
+)
+
+export const modelLabels = sqliteTable(
+  'model_labels',
+  {
+    ticker:       text('ticker').notNull(),
+    date:         text('date').notNull(),
+    horizonDays:  integer('horizon_days').notNull(),
+    returnPct:    real('return_pct'),
+    maxReturnPct: real('max_return_pct'),
+    minReturnPct: real('min_return_pct'),
+    daysToMax:    integer('days_to_max'),
+    hit10:        integer('hit_10').notNull().default(0),
+    hit20:        integer('hit_20').notNull().default(0),
+    hit40:        integer('hit_40').notNull().default(0),
+    rewardScore:  real('reward_score'),
+    labelJson:    text('label_json'),
+    computedAt:   integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk:      primaryKey({ columns: [t.ticker, t.date, t.horizonDays] }),
+    dateIdx: index('model_labels_date_idx').on(t.date, t.horizonDays),
+  }),
+)
+
+export const signalStats = sqliteTable(
+  'signal_stats',
+  {
+    signalCode:      text('signal_code').notNull(),
+    patternCode:     text('pattern_code').notNull(),
+    horizonDays:     integer('horizon_days').notNull(),
+    count:           integer('count').notNull(),
+    hit10Rate:       real('hit_10_rate'),
+    hit20Rate:       real('hit_20_rate'),
+    hit40Rate:       real('hit_40_rate'),
+    maxReturnP25:    real('max_return_p25'),
+    maxReturnP50:    real('max_return_p50'),
+    maxReturnP75:    real('max_return_p75'),
+    returnP50:       real('return_p50'),
+    minReturnP50:    real('min_return_p50'),
+    daysToMaxP50:    real('days_to_max_p50'),
+    computedAt:      integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk:      primaryKey({ columns: [t.signalCode, t.patternCode, t.horizonDays] }),
+    codeIdx: index('signal_stats_code_idx').on(t.signalCode, t.horizonDays, t.count),
+  }),
+)
+
+export const servingLatestSignals = sqliteTable(
+  'serving_latest_signals',
+  {
+    date:        text('date').notNull(),
+    ticker:      text('ticker').notNull(),
+    rank:        integer('rank').notNull(),
+    score:       real('score').notNull(),
+    signalCodes: text('signal_codes').notNull(),
+    summaryJson: text('summary_json').notNull(),
+    computedAt:  integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk:      primaryKey({ columns: [t.date, t.ticker] }),
+    rankIdx: index('serving_latest_rank_idx').on(t.date, t.rank),
+  }),
+)
+
+export const servingSignalStats = sqliteTable(
+  'serving_signal_stats',
+  {
+    signalCode:  text('signal_code').notNull(),
+    patternCode: text('pattern_code').notNull(),
+    horizonDays: integer('horizon_days').notNull(),
+    payloadJson: text('payload_json').notNull(),
+    computedAt:  integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.signalCode, t.patternCode, t.horizonDays] }),
+  }),
+)
+
+export const servingBacktestDates = sqliteTable('serving_backtest_dates', {
+  date:          text('date').primaryKey(),
+  totalTickers:  integer('total_tickers').notNull(),
+  signalTickers: integer('signal_tickers').notNull(),
+  computedAt:    integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+})
+
+export const servingBacktestSummaries = sqliteTable(
+  'serving_backtest_summaries',
+  {
+    date:        text('date').notNull(),
+    horizonDays: integer('horizon_days').notNull(),
+    conditionKey: text('condition_key').notNull(),
+    payloadJson:  text('payload_json').notNull(),
+    computedAt:   integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk:      primaryKey({ columns: [t.date, t.horizonDays, t.conditionKey] }),
+    dateIdx: index('serving_summary_date_idx').on(t.date, t.horizonDays),
+  }),
+)
+
+export const servingSimilarCases = sqliteTable(
+  'serving_similar_cases',
+  {
+    sourceTicker:    text('source_ticker').notNull(),
+    sourceDate:      text('source_date').notNull(),
+    rank:            integer('rank').notNull(),
+    similarTicker:   text('similar_ticker').notNull(),
+    similarDate:     text('similar_date').notNull(),
+    similarityScore: real('similarity_score').notNull(),
+    payloadJson:     text('payload_json').notNull(),
+    computedAt:      integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.sourceTicker, t.sourceDate, t.rank] }),
+  }),
+)
+
+export const servingBacktestResults = sqliteTable(
+  'serving_backtest_results',
+  {
+    date:          text('date').notNull(),
+    horizonDays:   integer('horizon_days').notNull(),
+    ticker:        text('ticker').notNull(),
+    name:          text('name'),
+    sectorLarge:   text('sector_large'),
+    sectorSmall:   text('sector_small'),
+    marketSegment: text('market_segment'),
+    patternCode:   text('pattern_code'),
+    dailyAStage:   integer('daily_a_stage'),
+    dailyBStage:   integer('daily_b_stage'),
+    weeklyAStage:  integer('weekly_a_stage'),
+    weeklyBStage:  integer('weekly_b_stage'),
+    monthlyAStage: integer('monthly_a_stage'),
+    monthlyBStage: integer('monthly_b_stage'),
+    open:          real('open'),
+    high:          real('high'),
+    low:           real('low'),
+    close:         real('close'),
+    volume:        integer('volume'),
+    volumeRatio20: real('volume_ratio_20'),
+    rangePct:      real('range_pct'),
+    atr20Pct:      real('atr20_pct'),
+    ma5PosPct:     real('ma5_pos_pct'),
+    ma25PosPct:    real('ma25_pos_pct'),
+    ma75PosPct:    real('ma75_pos_pct'),
+    signalCodes:   text('signal_codes'),
+    returnPct:     real('return_pct'),
+    maxReturnPct:  real('max_return_pct'),
+    maxReturnDate: text('max_return_date'),
+    daysToMax:     integer('days_to_max'),
+    minReturnPct:  real('min_return_pct'),
+    minReturnDate: text('min_return_date'),
+    daysToMin:     integer('days_to_min'),
+    hit10:         integer('hit_10'),
+    hit20:         integer('hit_20'),
+    hit40:         integer('hit_40'),
+    computedAt:    integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk:        primaryKey({ columns: [t.date, t.horizonDays, t.ticker] }),
+    sortIdx:   index('serving_backtest_results_sort_idx').on(t.date, t.horizonDays, t.maxReturnPct),
+    tickerIdx: index('serving_backtest_results_ticker_idx').on(t.ticker, t.date),
+  }),
+)
+
+export const servingBacktestDetails = sqliteTable(
+  'serving_backtest_details',
+  {
+    date:        text('date').notNull(),
+    horizonDays: integer('horizon_days').notNull(),
+    ticker:      text('ticker').notNull(),
+    detailJson:  text('detail_json').notNull(),
+    computedAt:  integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.date, t.horizonDays, t.ticker] }),
+  }),
+)
+
+export const servingSignalEvidence = sqliteTable(
+  'serving_signal_evidence',
+  {
+    ticker:     text('ticker').notNull(),
+    date:       text('date').notNull(),
+    signalCode: text('signal_code').notNull(),
+    label:      text('label'),
+    reasonJson: text('reason_json').notNull(),
+    computedAt: integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk:      primaryKey({ columns: [t.ticker, t.date, t.signalCode] }),
+    dateIdx: index('serving_signal_evidence_date_idx').on(t.date, t.signalCode),
+  }),
+)
+
+export const servingStockMetrics = sqliteTable('serving_stock_metrics', {
+  ticker:      text('ticker').primaryKey(),
+  asOfDate:    text('as_of_date').notNull(),
+  payloadJson: text('payload_json').notNull(),
+  computedAt:  integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+})
+
+export const servingStockMovePeriods = sqliteTable(
+  'serving_stock_move_periods',
+  {
+    ticker:        text('ticker').notNull(),
+    direction:     text('direction').notNull(),
+    rank:          integer('rank').notNull(),
+    startDate:     text('start_date').notNull(),
+    endDate:       text('end_date').notNull(),
+    returnPct:     real('return_pct').notNull(),
+    tradingDays:   integer('trading_days').notNull(),
+    stagePathJson: text('stage_path_json').notNull(),
+    payloadJson:   text('payload_json').notNull(),
+    computedAt:    integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk:        primaryKey({ columns: [t.ticker, t.direction, t.rank] }),
+    tickerIdx: index('serving_stock_move_ticker_idx').on(t.ticker, t.direction, t.rank),
+  }),
+)
+
+export const tursoSyncRuns = sqliteTable('turso_sync_runs', {
+  runId:        text('run_id').primaryKey(),
+  mode:         text('mode').notNull(),
+  status:       text('status').notNull(),
+  dryRun:       integer('dry_run').notNull().default(0),
+  startedAt:    integer('started_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  finishedAt:   integer('finished_at', { mode: 'timestamp' }),
+  summaryJson:  text('summary_json'),
+  errorMessage: text('error_message'),
+})
+
+export const tursoSyncPartitions = sqliteTable(
+  'turso_sync_partitions',
+  {
+    mode:         text('mode').notNull(),
+    tableName:    text('table_name').notNull(),
+    partitionKey: text('partition_key').notNull(),
+    rangeStart:   text('range_start'),
+    rangeEnd:     text('range_end'),
+    rowCount:     integer('row_count').notNull().default(0),
+    status:       text('status').notNull(),
+    runId:        text('run_id'),
+    syncedAt:     integer('synced_at', { mode: 'timestamp' }),
+    errorMessage: text('error_message'),
+  },
+  (t) => ({
+    pk:        primaryKey({ columns: [t.mode, t.tableName, t.partitionKey] }),
+    statusIdx: index('turso_sync_partitions_status_idx').on(t.mode, t.status, t.tableName),
+  }),
+)

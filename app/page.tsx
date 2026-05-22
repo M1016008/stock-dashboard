@@ -1,75 +1,82 @@
 // app/page.tsx
+// Phase 4 ダッシュボード再構築 + Yoshio 要望: キャッシュ無効化 + Suspense ストリーミング
+//
+// 各セクションを Suspense で包むことで、ページを開いた瞬間にスケルトン UI が
+// 表示され、重い集計クエリが終わったセクションから順に置き換わる
+// (体感速度を維持しつつ毎回最新の DB 内容を反映)
+
 import type { Metadata } from 'next'
-import { IndexCard } from '@/components/dashboard/IndexCard'
-import { IndicesChart } from '@/components/dashboard/IndicesChart'
-import { HexStageSummary } from '@/components/dashboard/HexStageSummary'
-import { EarningsCalendar } from '@/components/dashboard/EarningsCalendar'
+import { Suspense } from 'react'
+import { PageTitle } from '@/components/layout/PageTitle'
+import { StereoscopicSignals } from '@/components/dashboard/StereoscopicSignals'
+import { NewHighVolume } from '@/components/dashboard/NewHighVolume'
+import { SectorHeatmap } from '@/components/dashboard/SectorHeatmap'
+import { CreditShortPanel } from '@/components/dashboard/CreditShortPanel'
+import { PatternStatsTop } from '@/components/dashboard/PatternStatsTop'
+import { EarningsCalendarPanel } from '@/components/dashboard/EarningsCalendarPanel'
+import { getCachedLatestDate } from '@/lib/queries/dashboard-cache'
 
 export const metadata: Metadata = {
   title: 'ダッシュボード — StockBoard',
-  description: '日本株のスクリーナー、HEXステージ分析、決算カレンダーを一覧表示。',
+  description: 'J-Quants データに基づく市場サマリーとパターン統計',
 }
 
-// 日本市場の主要指数。Yahoo Finance で取得可能なものを採用。
-//   - 日経225 (^N225): 日本を代表する 225 銘柄の株価平均型指数
-//   - TOPIX (^TPX):    東証一部全銘柄を対象とした時価総額加重平均
-//   - JPX日経400:      JPX-Nikkei400 連動 ETF (1591.T) を代用
-//   - グロース250:     東証グロース市場250 連動 ETF (1563.T) を代用
-const INDICES = [
-  { label: '日経225',     ticker: '^N225',  note: '指数' },
-  { label: 'TOPIX',       ticker: '^TPX',   note: '指数' },
-  { label: 'JPX日経400',  ticker: '1591.T', note: 'ETF' },
-  { label: 'グロース250', ticker: '1563.T', note: 'ETF' },
-] as const
+// Yoshio 要望: ページを開いたら毎回最新の DB を反映する (Next のキャッシュを完全無効化)
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
+export const fetchCache = 'force-no-store'
 
-export default function DashboardPage() {
+function SectionFallback({ height = 80 }: { height?: number }) {
   return (
-    <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+    <div
+      style={{
+        height,
+        background: 'var(--color-surface-raised)',
+        borderRadius: 6,
+        border: '1px solid var(--color-border-soft)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        color: 'var(--color-text-tertiary)',
+        fontSize: 13,
+        fontWeight: 600,
+        boxShadow: 'none',
+      }}
+    >
+      読込中...
+    </div>
+  )
+}
 
-      {/* ページヘッダー */}
-      <div style={{ borderBottom: '1px solid var(--border-subtle)', paddingBottom: '12px' }}>
-        <h1 style={{
-          fontFamily: 'var(--font-display)',
-          fontSize: '16px',
-          fontWeight: 700,
-          color: 'var(--text-primary)',
-          letterSpacing: '0.02em',
-        }}>
-          ダッシュボード
-        </h1>
-        <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
-          日本株専用サマリー
-        </p>
-      </div>
+export default async function DashboardPage() {
+  const latest = await getCachedLatestDate()
+  const subtitle = latest ? `${latest} 大引け基準` : 'データ未取り込み'
 
-      {/* インデックスカード行 */}
-      <section>
-        <div className="section-header">主要指数</div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '8px' }}>
-          {INDICES.map((idx) => (
-            <IndexCard key={idx.ticker} {...idx} />
-          ))}
-        </div>
-      </section>
-
-      {/* 主要指数チャート */}
-      <section>
-        <div className="section-header">指数チャート（日/週/月/年足、移動平均切替可）</div>
-        <IndicesChart />
-      </section>
-
-      {/* HEXステージ分布 */}
-      <section>
-        <div className="section-header">HEXステージ分布</div>
-        <HexStageSummary />
-      </section>
-
-      {/* 決算カレンダー */}
-      <section>
-        <div className="section-header">決算カレンダー</div>
-        <EarningsCalendar defaultDays={14} />
-      </section>
-
+  return (
+    <div className="mx-auto flex w-full max-w-[1580px] flex-col gap-5">
+      <PageTitle
+        title="ダッシュボード"
+        subtitle={subtitle}
+        badge="パターン統計 最新反映"
+      />
+      <Suspense fallback={<SectionFallback height={360} />}>
+        <StereoscopicSignals />
+      </Suspense>
+      <Suspense fallback={<SectionFallback height={420} />}>
+        <NewHighVolume />
+      </Suspense>
+      <Suspense fallback={<SectionFallback height={260} />}>
+        <PatternStatsTop />
+      </Suspense>
+      <Suspense fallback={<SectionFallback height={420} />}>
+        <CreditShortPanel />
+      </Suspense>
+      <Suspense fallback={<SectionFallback height={240} />}>
+        <SectorHeatmap />
+      </Suspense>
+      <Suspense fallback={<SectionFallback height={200} />}>
+        <EarningsCalendarPanel />
+      </Suspense>
     </div>
   )
 }

@@ -43,7 +43,7 @@ export function StageTimeline({ ticker }: StageTimelineProps) {
     let cancelled = false
     setLoading(true)
     setError('')
-    fetch(`/api/stage-history/${encodeURIComponent(ticker)}?weeks=${weeks}`)
+    fetch(`/api/stage-history/${encodeURIComponent(ticker)}?weeks=${weeks}`, { cache: 'no-store' })
       .then((r) => r.json())
       .then((d) => {
         if (cancelled) return

@@ -43,7 +43,7 @@ export default function WatchlistPage() {
       const entries = await Promise.all(
         tickers.map(async (t): Promise<[string, QuoteResponse | null]> => {
           try {
-            const res = await fetch(`/api/quote/${encodeURIComponent(t)}`)
+            const res = await fetch(`/api/quote/${encodeURIComponent(t)}`, { cache: 'no-store' })
             if (!res.ok) return [t, null]
             const data = (await res.json()) as QuoteResponse
             return [t, data]
@@ -157,15 +157,15 @@ export default function WatchlistPage() {
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
               <thead>
                 <tr style={{ background: 'var(--bg-elevated)', borderBottom: '1px solid var(--border-dim)' }}>
-                  <th style={th}></th>
-                  <th style={th}>コード</th>
-                  <th style={th}>TV形式</th>
-                  <th style={th}>銘柄名</th>
-                  <th style={thR}>株価</th>
-                  <th style={thR}>変化額</th>
-                  <th style={thR}>変化率</th>
-                  <th style={thR}>出来高</th>
-                  <th style={thR}>時価総額</th>
+                  <th scope="col" style={th}></th>
+                  <th scope="col" style={th}>コード</th>
+                  <th scope="col" style={th}>TV形式</th>
+                  <th scope="col" style={th}>銘柄名</th>
+                  <th scope="col" style={thR}>株価</th>
+                  <th scope="col" style={thR}>変化額</th>
+                  <th scope="col" style={thR}>変化率</th>
+                  <th scope="col" style={thR}>出来高</th>
+                  <th scope="col" style={thR}>時価総額</th>
                 </tr>
               </thead>
               <tbody>
@@ -179,7 +179,7 @@ export default function WatchlistPage() {
                         <WatchlistButton ticker={t} size="sm" />
                       </td>
                       <td style={td}>
-                        <Link href={`/stock/${encodeURIComponent(t)}`} style={{ color: 'var(--accent-primary)', fontFamily: 'var(--font-mono)', textDecoration: 'none', fontWeight: 600 }}>
+                        <Link href={`/stock/${encodeURIComponent(t)}`} prefetch={false} style={{ color: 'var(--accent-primary)', fontFamily: 'var(--font-mono)', textDecoration: 'none', fontWeight: 600 }}>
                           {t.replace('.T', '')}
                         </Link>
                       </td>

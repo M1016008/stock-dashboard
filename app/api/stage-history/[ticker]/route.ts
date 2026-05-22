@@ -10,7 +10,9 @@ import { db } from '@/lib/db/client'
 import { dailySnapshots } from '@/lib/db/schema'
 import { asc, eq } from 'drizzle-orm'
 
-export const revalidate = 3600
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
+export const fetchCache = 'force-no-store'
 
 interface StageHistoryEntry {
   date: string

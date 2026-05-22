@@ -65,6 +65,23 @@ interface JBarsResponse {
   pagination_key?: string
 }
 
+function toOhlcv(row: JBarRow): OHLCV | null {
+  if (row.AdjC == null && row.C == null) return null
+  const close = row.AdjC ?? row.C!
+  const open  = row.AdjO ?? row.O ?? close
+  const high  = row.AdjH ?? row.H ?? close
+  const low   = row.AdjL ?? row.L ?? close
+  const vol   = row.AdjVo ?? row.Vo ?? 0
+  return {
+    date:   row.Date,
+    open,
+    high,
+    low,
+    close,
+    volume: Math.round(vol),
+  }
+}
+
 /**
  * 指定銘柄の日足 OHLCV を J-Quants v2 から取得する。
  * - 調整後価格 (AdjO/H/L/C) を優先 (株式分割の影響を吸収)
@@ -105,23 +122,42 @@ export async function fetchJQuantsDaily(
 
   // OHLCV 型に変換。Adj* (株式分割調整済) を優先、なければ raw を使う
   return all
-    .filter(r => r.AdjC != null || r.C != null)
-    .map(r => {
-      const close = r.AdjC ?? r.C!
-      const open  = r.AdjO ?? r.O ?? close
-      const high  = r.AdjH ?? r.H ?? close
-      const low   = r.AdjL ?? r.L ?? close
-      const vol   = r.AdjVo ?? r.Vo ?? 0
-      return {
-        date:   r.Date,
-        open,
-        high,
-        low,
-        close,
-        volume: Math.round(vol),
-      }
-    })
+    .map(toOhlcv)
+    .filter((row): row is OHLCV => row !== null)
     .sort((a, b) => a.date.localeCompare(b.date))
+}
+
+export interface JQuantsDailyByDateRow extends OHLCV {
+  ticker: string
+}
+
+export async function fetchJQuantsDailyByDate(date: string): Promise<JQuantsDailyByDateRow[]> {
+  const apiKey = getApiKey()
+  const all: JQuantsDailyByDateRow[] = []
+  let paginationKey: string | undefined
+
+  do {
+    const params = new URLSearchParams({ date })
+    if (paginationKey) params.set('pagination_key', paginationKey)
+    const res = await fetch(`${BASE_URL}/equities/bars/daily?${params}`, {
+      headers: { 'x-api-key': apiKey },
+    })
+    if (!res.ok) {
+      throw new Error(`J-Quants bars/daily date=${date} 失敗: ${res.status} ${await res.text()}`)
+    }
+    const json = await res.json() as JBarsResponse
+    for (const row of json.data ?? []) {
+      const ohlcv = toOhlcv(row)
+      if (!ohlcv) continue
+      all.push({
+        ticker: toJQuantsCode(row.Code).replace(/0$/, ''),
+        ...ohlcv,
+      })
+    }
+    paginationKey = json.pagination_key
+  } while (paginationKey)
+
+  return all.sort((a, b) => a.ticker.localeCompare(b.ticker))
 }
 
 // ─────────────────────────────────────
@@ -324,4 +360,178 @@ export function computeFundamentals(
   }
 
   return result
+}
+
+// ─────────────────────────────────────
+// API: 信用残高 (/markets/margin-interest) — 週次
+// ─────────────────────────────────────
+
+export interface JMarginRow {
+  Date: string                  // 報告基準日 "YYYY-MM-DD"
+  Code: string                  // 5 桁コード
+  ShortMarginTradeVolume?: string  // 信用売残 (株)
+  LongMarginTradeVolume?: string   // 信用買残 (株)
+  ShortNegotiableMarginTradeVolume?: string
+  LongNegotiableMarginTradeVolume?: string
+  ShortStandardizedMarginTradeVolume?: string
+  LongStandardizedMarginTradeVolume?: string
+  ShrtVol?: number
+  LongVol?: number
+  ShrtNegVol?: number
+  LongNegVol?: number
+  ShrtStdVol?: number
+  LongStdVol?: number
+}
+
+interface JMarginResponse {
+  data?: JMarginRow[]
+  pagination_key?: string
+}
+
+export async function fetchJQuantsWeeklyMargin(ticker: string, from?: string): Promise<JMarginRow[]> {
+  const apiKey = getApiKey()
+  const all: JMarginRow[] = []
+  let paginationKey: string | undefined
+  do {
+    const params = new URLSearchParams({ code: toJQuantsCode(ticker) })
+    if (from) params.set('from', from)
+    if (paginationKey) params.set('pagination_key', paginationKey)
+    const res = await fetch(`${BASE_URL}/markets/margin-interest?${params}`, {
+      headers: { 'x-api-key': apiKey },
+    })
+    if (!res.ok) {
+      // Standard プラン外なら 403。空配列で吸収する。
+      if (res.status === 403 || res.status === 404) return []
+      throw new Error(`J-Quants margin-interest 失敗: ${res.status} ${await res.text()}`)
+    }
+    const json = await res.json() as JMarginResponse
+    all.push(...(json.data ?? []))
+    paginationKey = json.pagination_key
+  } while (paginationKey)
+  return all
+}
+
+// ─────────────────────────────────────
+// API: 決算発表予定 (/fins/announcement) — 14 日先まで
+// ─────────────────────────────────────
+
+export interface JAnnouncementRow {
+  Date: string             // 発表日 "YYYY-MM-DD"
+  Code: string             // 5 桁コード
+  CompanyName?: string
+  FiscalYear?: string
+  SectorName?: string
+  FiscalQuarter?: string
+  Section?: string
+}
+
+interface JAnnouncementResponse {
+  announcement?: JAnnouncementRow[]
+  pagination_key?: string
+}
+
+// ─────────────────────────────────────
+// API: 指数四本値 (/indices/bars/daily)
+//   code 例: 0000=TOPIX, 0070=東証グロース250, 0500=プライム指数,
+//            0501=スタンダード指数, 0502=グロース指数, 0503=JPXプライム150
+//   日経225は公式の指数コード表に存在しないため、J-Quantsでは取れない。
+// ─────────────────────────────────────
+
+export interface JIndexBarRow {
+  Date: string
+  Code: string
+  O: number | null
+  H: number | null
+  L: number | null
+  C: number | null
+}
+
+interface JIndexBarsResponse {
+  data?: JIndexBarRow[]
+  pagination_key?: string
+}
+
+export async function fetchJQuantsIndexBars(code: string, from?: string, to?: string): Promise<JIndexBarRow[]> {
+  const apiKey = getApiKey()
+  const all: JIndexBarRow[] = []
+  let paginationKey: string | undefined
+  do {
+    const params = new URLSearchParams({ code })
+    if (from) params.set('from', from)
+    if (to) params.set('to', to)
+    if (paginationKey) params.set('pagination_key', paginationKey)
+    const res = await fetch(`${BASE_URL}/indices/bars/daily?${params}`, {
+      headers: { 'x-api-key': apiKey },
+    })
+    if (!res.ok) {
+      if (res.status === 403 || res.status === 404) return []
+      throw new Error(`J-Quants indices/bars/daily 失敗: ${res.status} ${await res.text()}`)
+    }
+    const json = await res.json() as JIndexBarsResponse
+    all.push(...(json.data ?? []))
+    paginationKey = json.pagination_key
+  } while (paginationKey)
+  return all
+}
+
+// ─────────────────────────────────────
+// API: 決算発表予定 (/equities/earnings-calendar) — 14 日先まで
+// 旧 /fins/announcement は廃止または変更。/equities/earnings-calendar が現行。
+// ─────────────────────────────────────
+
+export interface JEarningsCalRow {
+  Date: string             // 発表予定日 "YYYY-MM-DD"
+  Code: string             // 5 桁コード
+  CoName?: string
+  FY?: string              // 例 "3月31日"
+  FQ?: string              // 例 "本決算" / "第1四半期"
+  SectorNm?: string
+  Section?: string
+}
+
+interface JEarningsCalResponse {
+  data?: JEarningsCalRow[]
+  pagination_key?: string
+}
+
+export async function fetchJQuantsEarningsCalendar(): Promise<JEarningsCalRow[]> {
+  const apiKey = getApiKey()
+  const all: JEarningsCalRow[] = []
+  let paginationKey: string | undefined
+  do {
+    const params = new URLSearchParams()
+    if (paginationKey) params.set('pagination_key', paginationKey)
+    const res = await fetch(`${BASE_URL}/equities/earnings-calendar${params.size > 0 ? `?${params}` : ''}`, {
+      headers: { 'x-api-key': apiKey },
+    })
+    if (!res.ok) {
+      if (res.status === 403 || res.status === 404) return []
+      throw new Error(`J-Quants earnings-calendar 失敗: ${res.status} ${await res.text()}`)
+    }
+    const json = await res.json() as JEarningsCalResponse
+    all.push(...(json.data ?? []))
+    paginationKey = json.pagination_key
+  } while (paginationKey)
+  return all
+}
+
+export async function fetchJQuantsAnnouncement(): Promise<JAnnouncementRow[]> {
+  const apiKey = getApiKey()
+  const all: JAnnouncementRow[] = []
+  let paginationKey: string | undefined
+  do {
+    const params = new URLSearchParams()
+    if (paginationKey) params.set('pagination_key', paginationKey)
+    const res = await fetch(`${BASE_URL}/fins/announcement${params.size > 0 ? `?${params}` : ''}`, {
+      headers: { 'x-api-key': apiKey },
+    })
+    if (!res.ok) {
+      if (res.status === 403 || res.status === 404) return []
+      throw new Error(`J-Quants announcement 失敗: ${res.status} ${await res.text()}`)
+    }
+    const json = await res.json() as JAnnouncementResponse
+    all.push(...(json.announcement ?? []))
+    paginationKey = json.pagination_key
+  } while (paginationKey)
+  return all
 }

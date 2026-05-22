@@ -6,7 +6,9 @@ import { ohlcvDaily } from '@/lib/db/schema'
 import { and, asc, eq, gte } from 'drizzle-orm'
 import type { OHLCV } from '@/types/stock'
 
-export const revalidate = 3600
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
+export const fetchCache = 'force-no-store'
 
 const PERIOD_DAYS: Record<string, number> = {
   '1mo': 30,
@@ -17,6 +19,7 @@ const PERIOD_DAYS: Record<string, number> = {
   '5y':  1825,
   '10y': 3650,
 }
+const PERIOD_KEYS = [...Object.keys(PERIOD_DAYS), 'all']
 
 export async function GET(
   request: NextRequest,
@@ -29,19 +32,20 @@ export async function GET(
     const period = searchParams.get('period') ?? '1y'
 
     const days = PERIOD_DAYS[period]
-    if (!days) {
+    if (!days && period !== 'all') {
       return NextResponse.json(
-        { error: `Invalid period. Must be one of: ${Object.keys(PERIOD_DAYS).join(', ')}` },
+        { error: `Invalid period. Must be one of: ${PERIOD_KEYS.join(', ')}` },
         { status: 400 },
       )
     }
-
-    const since = new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10)
+    const safeDays = days ?? PERIOD_DAYS['1y']
 
     const rows = await db
       .select()
       .from(ohlcvDaily)
-      .where(and(eq(ohlcvDaily.ticker, ticker), gte(ohlcvDaily.date, since)))
+      .where(period === 'all'
+        ? eq(ohlcvDaily.ticker, ticker)
+        : and(eq(ohlcvDaily.ticker, ticker), gte(ohlcvDaily.date, new Date(Date.now() - safeDays * 86_400_000).toISOString().slice(0, 10))))
       .orderBy(asc(ohlcvDaily.date))
 
     const history: OHLCV[] = rows.map(r => ({

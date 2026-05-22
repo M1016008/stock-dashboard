@@ -33,6 +33,11 @@ async function main() {
       ticker,
       name: info.CoName,
       active: true,
+      sector17_code: info.S17,
+      sector17_name: info.S17Nm,
+      sector33_code: info.S33,
+      sector33_name: info.S33Nm,
+      market_segment: info.MktNm,
     }
   })
 
@@ -53,8 +58,13 @@ async function main() {
       .onConflictDoUpdate({
         target: tickerUniverse.ticker,
         set: {
-          name:   sql`excluded.name`,
-          active: sql`excluded.active`,
+          name:           sql`excluded.name`,
+          active:         sql`excluded.active`,
+          sector17_code:  sql`excluded.sector17_code`,
+          sector17_name:  sql`excluded.sector17_name`,
+          sector33_code:  sql`excluded.sector33_code`,
+          sector33_name:  sql`excluded.sector33_name`,
+          market_segment: sql`excluded.market_segment`,
         },
       })
     inserted += chunk.length

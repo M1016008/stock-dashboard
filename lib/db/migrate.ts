@@ -140,6 +140,46 @@ const STATEMENTS = [
     PRIMARY KEY (ticker, date)
   )`,
   `CREATE INDEX IF NOT EXISTS ohlcv_date_idx ON ohlcv_daily(date)`,
+  `CREATE INDEX IF NOT EXISTS ohlcv_date_ticker_idx ON ohlcv_daily(date, ticker)`,
+  `CREATE TABLE IF NOT EXISTS jquants_daily_coverage (
+    date TEXT PRIMARY KEY,
+    expected_rows INTEGER NOT NULL,
+    imported_at INTEGER NOT NULL DEFAULT (unixepoch())
+  )`,
+  `CREATE TABLE IF NOT EXISTS update_locks (
+    job_type TEXT PRIMARY KEY,
+    status TEXT NOT NULL,
+    owner TEXT,
+    started_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    heartbeat_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    lease_expires_at INTEGER NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS jquants_sync_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    target_date TEXT NOT NULL,
+    api_type TEXT NOT NULL,
+    expected_rows INTEGER NOT NULL DEFAULT 0,
+    imported_rows INTEGER NOT NULL DEFAULT 0,
+    missing_tickers TEXT,
+    status TEXT NOT NULL,
+    started_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    finished_at INTEGER,
+    error_summary TEXT
+  )`,
+  `CREATE INDEX IF NOT EXISTS jquants_sync_target_idx ON jquants_sync_runs(target_date, api_type)`,
+  `CREATE TABLE IF NOT EXISTS compute_state (
+    job_type TEXT NOT NULL,
+    ticker TEXT NOT NULL,
+    last_processed_date TEXT,
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (job_type, ticker)
+  )`,
+  `CREATE INDEX IF NOT EXISTS compute_state_job_date_idx ON compute_state(job_type, last_processed_date)`,
+  `CREATE TABLE IF NOT EXISTS dashboard_cache (
+    date TEXT PRIMARY KEY,
+    payload_json TEXT NOT NULL,
+    computed_at INTEGER NOT NULL DEFAULT (unixepoch())
+  )`,
   // ─── Phase 2: 日次スナップショット (MA + ステージ) ───
   `CREATE TABLE IF NOT EXISTS daily_snapshots (
     ticker TEXT NOT NULL,
@@ -169,6 +209,10 @@ const STATEMENTS = [
     PRIMARY KEY (ticker, date)
   )`,
   `CREATE INDEX IF NOT EXISTS snapshots_date_idx ON daily_snapshots(date)`,
+  `CREATE INDEX IF NOT EXISTS snapshots_date_ticker_idx ON daily_snapshots(date, ticker)`,
+  `CREATE INDEX IF NOT EXISTS snapshots_stage_pattern_idx ON daily_snapshots(
+    daily_a_stage, daily_b_stage, weekly_a_stage, weekly_b_stage, monthly_a_stage, monthly_b_stage, date, ticker
+  )`,
   // ─── Phase 2: バッチ実行履歴 ───
   `CREATE TABLE IF NOT EXISTS batch_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -242,6 +286,336 @@ const STATEMENTS = [
     computed_at INTEGER NOT NULL DEFAULT (unixepoch()),
     PRIMARY KEY (axis, from_stage, to_stage)
   )`,
+  // ─── Phase 4: 主要指数 OHLC (J-Quants /indices/bars/daily) ───
+  `CREATE TABLE IF NOT EXISTS indices_daily (
+    code TEXT NOT NULL,
+    date TEXT NOT NULL,
+    open REAL,
+    high REAL,
+    low REAL,
+    close REAL,
+    PRIMARY KEY (code, date)
+  )`,
+  `CREATE INDEX IF NOT EXISTS indices_date_idx ON indices_daily(date)`,
+  // ─── Phase 4: 独自分類体系 (大分類 59 × 業種細分類 476) ───
+  `CREATE TABLE IF NOT EXISTS stock_classification (
+    ticker TEXT PRIMARY KEY,
+    major_category TEXT NOT NULL,
+    sub_industry TEXT NOT NULL,
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_classification_major ON stock_classification(major_category)`,
+  `CREATE INDEX IF NOT EXISTS idx_classification_sub ON stock_classification(sub_industry)`,
+  // ─── Phase 4: 信用残・空売り (J-Quants /markets/weekly_margin_interest) ───
+  `CREATE TABLE IF NOT EXISTS weekly_margin_interest (
+    ticker TEXT NOT NULL,
+    date TEXT NOT NULL,
+    long_margin REAL,
+    short_margin REAL,
+    long_change REAL,
+    short_change REAL,
+    imported_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (ticker, date)
+  )`,
+  `CREATE INDEX IF NOT EXISTS wmi_date_idx ON weekly_margin_interest(date)`,
+  `CREATE INDEX IF NOT EXISTS wmi_ticker_date_idx ON weekly_margin_interest(ticker, date)`,
+  // ─── Phase 4: 空売り残高 ───
+  `CREATE TABLE IF NOT EXISTS short_selling_positions (
+    ticker TEXT NOT NULL,
+    date TEXT NOT NULL,
+    short_ratio REAL,
+    reporter TEXT NOT NULL DEFAULT '',
+    imported_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (ticker, date, reporter)
+  )`,
+  `CREATE INDEX IF NOT EXISTS ssp_date_idx ON short_selling_positions(date)`,
+  `CREATE INDEX IF NOT EXISTS ssp_ticker_date_idx ON short_selling_positions(ticker, date)`,
+  // ─── Phase 4: 決算発表カレンダー ───
+  `CREATE TABLE IF NOT EXISTS earnings_calendar (
+    ticker TEXT NOT NULL,
+    announce_date TEXT NOT NULL,
+    fiscal_period TEXT,
+    imported_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (ticker, announce_date)
+  )`,
+  `CREATE INDEX IF NOT EXISTS earn_date_idx ON earnings_calendar(announce_date)`,
+  // ─── Phase 4: 6 桁パターンコード検索用 expression index ───
+  `CREATE INDEX IF NOT EXISTS idx_ds_pattern_code ON daily_snapshots(
+    (CAST(daily_a_stage AS TEXT) || CAST(daily_b_stage AS TEXT) || CAST(weekly_a_stage AS TEXT) || CAST(weekly_b_stage AS TEXT) || CAST(monthly_a_stage AS TEXT) || CAST(monthly_b_stage AS TEXT))
+  )`,
+  // ─── Phase 5: Backtest / ML-RL readiness ───
+  `CREATE TABLE IF NOT EXISTS weekly_ohlcv (
+    ticker TEXT NOT NULL,
+    date TEXT NOT NULL,
+    week_start_date TEXT NOT NULL,
+    week_end_date TEXT NOT NULL,
+    open REAL NOT NULL,
+    high REAL NOT NULL,
+    low REAL NOT NULL,
+    close REAL NOT NULL,
+    volume INTEGER NOT NULL,
+    ma_5 REAL,
+    ma_13 REAL,
+    ma_25 REAL,
+    ma_50 REAL,
+    ma_100 REAL,
+    computed_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (ticker, date)
+  )`,
+  `CREATE INDEX IF NOT EXISTS weekly_ohlcv_date_idx ON weekly_ohlcv(date)`,
+  `CREATE TABLE IF NOT EXISTS technical_signals (
+    ticker TEXT NOT NULL,
+    date TEXT NOT NULL,
+    timescale TEXT NOT NULL,
+    ma_period INTEGER NOT NULL DEFAULT 0,
+    signal_code TEXT NOT NULL,
+    signal_strength TEXT NOT NULL,
+    direction TEXT NOT NULL,
+    label TEXT NOT NULL,
+    score_component REAL,
+    value_json TEXT,
+    computed_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (ticker, date, timescale, ma_period, signal_code)
+  )`,
+  `CREATE INDEX IF NOT EXISTS tech_signal_date_idx ON technical_signals(date, signal_code)`,
+  `CREATE INDEX IF NOT EXISTS tech_signal_code_idx ON technical_signals(signal_code, date)`,
+  `CREATE INDEX IF NOT EXISTS tech_signal_date_ticker_idx ON technical_signals(date, ticker)`,
+  `CREATE TABLE IF NOT EXISTS forward_extrema (
+    ticker TEXT NOT NULL,
+    date TEXT NOT NULL,
+    horizon_days INTEGER NOT NULL,
+    return_pct REAL,
+    end_date TEXT,
+    max_return_pct REAL,
+    max_return_date TEXT,
+    days_to_max INTEGER,
+    min_return_pct REAL,
+    min_return_date TEXT,
+    days_to_min INTEGER,
+    hit_10 INTEGER NOT NULL DEFAULT 0,
+    hit_20 INTEGER NOT NULL DEFAULT 0,
+    hit_40 INTEGER NOT NULL DEFAULT 0,
+    days_to_10 INTEGER,
+    days_to_20 INTEGER,
+    days_to_40 INTEGER,
+    computed_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (ticker, date, horizon_days)
+  )`,
+  `CREATE INDEX IF NOT EXISTS fext_date_horizon_idx ON forward_extrema(date, horizon_days)`,
+  `CREATE INDEX IF NOT EXISTS fext_date_horizon_ticker_idx ON forward_extrema(date, horizon_days, ticker)`,
+  `CREATE INDEX IF NOT EXISTS fext_horizon_date_idx ON forward_extrema(horizon_days, date)`,
+  `CREATE INDEX IF NOT EXISTS fext_horizon_max_idx ON forward_extrema(horizon_days, max_return_pct)`,
+  `CREATE TABLE IF NOT EXISTS model_features (
+    ticker TEXT NOT NULL,
+    date TEXT NOT NULL,
+    pattern_code TEXT,
+    daily_a_stage INTEGER,
+    daily_b_stage INTEGER,
+    weekly_a_stage INTEGER,
+    weekly_b_stage INTEGER,
+    monthly_a_stage INTEGER,
+    monthly_b_stage INTEGER,
+    close REAL,
+    volume INTEGER,
+    volume_ratio_20 REAL,
+    range_pct REAL,
+    atr20_pct REAL,
+    ma5_pos_pct REAL,
+    ma25_pos_pct REAL,
+    ma75_pos_pct REAL,
+    ma_spread_pct REAL,
+    rel_strength_20 REAL,
+    signal_codes TEXT,
+    feature_json TEXT,
+    computed_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (ticker, date)
+  )`,
+  `CREATE INDEX IF NOT EXISTS model_features_date_idx ON model_features(date)`,
+  `CREATE INDEX IF NOT EXISTS model_features_pattern_idx ON model_features(pattern_code, date)`,
+  `CREATE TABLE IF NOT EXISTS model_labels (
+    ticker TEXT NOT NULL,
+    date TEXT NOT NULL,
+    horizon_days INTEGER NOT NULL,
+    return_pct REAL,
+    max_return_pct REAL,
+    min_return_pct REAL,
+    days_to_max INTEGER,
+    hit_10 INTEGER NOT NULL DEFAULT 0,
+    hit_20 INTEGER NOT NULL DEFAULT 0,
+    hit_40 INTEGER NOT NULL DEFAULT 0,
+    reward_score REAL,
+    label_json TEXT,
+    computed_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (ticker, date, horizon_days)
+  )`,
+  `CREATE INDEX IF NOT EXISTS model_labels_date_idx ON model_labels(date, horizon_days)`,
+  `CREATE TABLE IF NOT EXISTS signal_stats (
+    signal_code TEXT NOT NULL,
+    pattern_code TEXT NOT NULL,
+    horizon_days INTEGER NOT NULL,
+    count INTEGER NOT NULL,
+    hit_10_rate REAL,
+    hit_20_rate REAL,
+    hit_40_rate REAL,
+    max_return_p25 REAL,
+    max_return_p50 REAL,
+    max_return_p75 REAL,
+    return_p50 REAL,
+    min_return_p50 REAL,
+    days_to_max_p50 REAL,
+    computed_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (signal_code, pattern_code, horizon_days)
+  )`,
+  `CREATE INDEX IF NOT EXISTS signal_stats_code_idx ON signal_stats(signal_code, horizon_days, count)`,
+  `CREATE TABLE IF NOT EXISTS serving_latest_signals (
+    date TEXT NOT NULL,
+    ticker TEXT NOT NULL,
+    rank INTEGER NOT NULL,
+    score REAL NOT NULL,
+    signal_codes TEXT NOT NULL,
+    summary_json TEXT NOT NULL,
+    computed_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (date, ticker)
+  )`,
+  `CREATE INDEX IF NOT EXISTS serving_latest_rank_idx ON serving_latest_signals(date, rank)`,
+  `CREATE TABLE IF NOT EXISTS serving_signal_stats (
+    signal_code TEXT NOT NULL,
+    pattern_code TEXT NOT NULL,
+    horizon_days INTEGER NOT NULL,
+    payload_json TEXT NOT NULL,
+    computed_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (signal_code, pattern_code, horizon_days)
+  )`,
+  `CREATE TABLE IF NOT EXISTS serving_backtest_dates (
+    date TEXT PRIMARY KEY,
+    total_tickers INTEGER NOT NULL,
+    signal_tickers INTEGER NOT NULL,
+    computed_at INTEGER NOT NULL DEFAULT (unixepoch())
+  )`,
+  `CREATE TABLE IF NOT EXISTS serving_backtest_summaries (
+    date TEXT NOT NULL,
+    horizon_days INTEGER NOT NULL,
+    condition_key TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    computed_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (date, horizon_days, condition_key)
+  )`,
+  `CREATE INDEX IF NOT EXISTS serving_summary_date_idx ON serving_backtest_summaries(date, horizon_days)`,
+  `CREATE TABLE IF NOT EXISTS serving_similar_cases (
+    source_ticker TEXT NOT NULL,
+    source_date TEXT NOT NULL,
+    rank INTEGER NOT NULL,
+    similar_ticker TEXT NOT NULL,
+    similar_date TEXT NOT NULL,
+    similarity_score REAL NOT NULL,
+    payload_json TEXT NOT NULL,
+    computed_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (source_ticker, source_date, rank)
+  )`,
+  `CREATE TABLE IF NOT EXISTS serving_backtest_results (
+    date TEXT NOT NULL,
+    horizon_days INTEGER NOT NULL,
+    ticker TEXT NOT NULL,
+    name TEXT,
+    sector_large TEXT,
+    sector_small TEXT,
+    market_segment TEXT,
+    pattern_code TEXT,
+    daily_a_stage INTEGER,
+    daily_b_stage INTEGER,
+    weekly_a_stage INTEGER,
+    weekly_b_stage INTEGER,
+    monthly_a_stage INTEGER,
+    monthly_b_stage INTEGER,
+    open REAL,
+    high REAL,
+    low REAL,
+    close REAL,
+    volume INTEGER,
+    volume_ratio_20 REAL,
+    range_pct REAL,
+    atr20_pct REAL,
+    ma5_pos_pct REAL,
+    ma25_pos_pct REAL,
+    ma75_pos_pct REAL,
+    signal_codes TEXT,
+    return_pct REAL,
+    max_return_pct REAL,
+    max_return_date TEXT,
+    days_to_max INTEGER,
+    min_return_pct REAL,
+    min_return_date TEXT,
+    days_to_min INTEGER,
+    hit_10 INTEGER,
+    hit_20 INTEGER,
+    hit_40 INTEGER,
+    computed_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (date, horizon_days, ticker)
+  )`,
+  `CREATE INDEX IF NOT EXISTS serving_backtest_results_sort_idx ON serving_backtest_results(date, horizon_days, max_return_pct)`,
+  `CREATE INDEX IF NOT EXISTS serving_backtest_results_ticker_idx ON serving_backtest_results(ticker, date)`,
+  `CREATE TABLE IF NOT EXISTS serving_backtest_details (
+    date TEXT NOT NULL,
+    horizon_days INTEGER NOT NULL,
+    ticker TEXT NOT NULL,
+    detail_json TEXT NOT NULL,
+    computed_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (date, horizon_days, ticker)
+  )`,
+  `CREATE TABLE IF NOT EXISTS serving_signal_evidence (
+    ticker TEXT NOT NULL,
+    date TEXT NOT NULL,
+    signal_code TEXT NOT NULL,
+    label TEXT,
+    reason_json TEXT NOT NULL,
+    computed_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (ticker, date, signal_code)
+  )`,
+  `CREATE INDEX IF NOT EXISTS serving_signal_evidence_date_idx ON serving_signal_evidence(date, signal_code)`,
+  `CREATE TABLE IF NOT EXISTS serving_stock_metrics (
+    ticker TEXT PRIMARY KEY,
+    as_of_date TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    computed_at INTEGER NOT NULL DEFAULT (unixepoch())
+  )`,
+  `CREATE TABLE IF NOT EXISTS serving_stock_move_periods (
+    ticker TEXT NOT NULL,
+    direction TEXT NOT NULL,
+    rank INTEGER NOT NULL,
+    start_date TEXT NOT NULL,
+    end_date TEXT NOT NULL,
+    return_pct REAL NOT NULL,
+    trading_days INTEGER NOT NULL,
+    stage_path_json TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    computed_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (ticker, direction, rank)
+  )`,
+  `CREATE INDEX IF NOT EXISTS serving_stock_move_ticker_idx ON serving_stock_move_periods(ticker, direction, rank)`,
+  `CREATE TABLE IF NOT EXISTS turso_sync_runs (
+    run_id TEXT PRIMARY KEY,
+    mode TEXT NOT NULL,
+    status TEXT NOT NULL,
+    dry_run INTEGER NOT NULL DEFAULT 0,
+    started_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    finished_at INTEGER,
+    summary_json TEXT,
+    error_message TEXT
+  )`,
+  `CREATE TABLE IF NOT EXISTS turso_sync_partitions (
+    mode TEXT NOT NULL,
+    table_name TEXT NOT NULL,
+    partition_key TEXT NOT NULL,
+    range_start TEXT,
+    range_end TEXT,
+    row_count INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL,
+    run_id TEXT,
+    synced_at INTEGER,
+    error_message TEXT,
+    PRIMARY KEY (mode, table_name, partition_key)
+  )`,
+  `CREATE INDEX IF NOT EXISTS turso_sync_partitions_status_idx ON turso_sync_partitions(mode, status, table_name)`,
 ]
 
 /** 廃止されたテーブル。存在していれば DROP する（再実行しても無害）。 */
@@ -257,6 +631,12 @@ const ADD_COLUMN_IF_MISSING: string[] = [
   // Phase 3.6: 時価総額計算用
   `ALTER TABLE ticker_universe ADD COLUMN shares_outstanding INTEGER`,
   `ALTER TABLE ticker_universe ADD COLUMN shares_updated_at INTEGER`,
+  // Phase 4: J-Quants /listed/info 由来の業種区分
+  `ALTER TABLE ticker_universe ADD COLUMN sector17_code TEXT`,
+  `ALTER TABLE ticker_universe ADD COLUMN sector17_name TEXT`,
+  `ALTER TABLE ticker_universe ADD COLUMN sector33_code TEXT`,
+  `ALTER TABLE ticker_universe ADD COLUMN sector33_name TEXT`,
+  `ALTER TABLE ticker_universe ADD COLUMN market_segment TEXT`,
 ]
 
 export async function ensureSchema(client: Client): Promise<void> {

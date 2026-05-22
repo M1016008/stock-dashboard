@@ -58,15 +58,15 @@ interface StockRow {
   sectorLarge: string
   sectorSmall?: string | null
   sector33?: string | null
-  price: number
+  price: number | null
   currency?: string | null
-  changePercent: number
+  changePercent: number | null
   changePercentWeek?: number
   changePercentMonth?: number
   perfPct3m?: number | null
   perfPct6m?: number | null
   perfPctYtd?: number | null
-  volume: number
+  volume: number | null
   avgVolume10d?: number | null
   avgVolume30d?: number | null
   marketCap?: number
@@ -144,10 +144,10 @@ export default function ScreenerPage() {
 
   const hasAnyStage = Object.values(stages).some((v) => v && v.length > 0)
 
-  // 取込済み日付リストの取得
+  // J-Quants 由来のスナップショット日付リストの取得
   useEffect(() => {
     let cancelled = false
-    fetch('/api/import/csv')
+    fetch('/api/hex/available-dates', { cache: 'no-store' })
       .then((r) => r.json())
       .then((d) => {
         if (cancelled) return
@@ -167,7 +167,7 @@ export default function ScreenerPage() {
       if (v && v.length > 0) params.set(k, v.join(','))
     }
 
-    fetch(`/api/screener?${params}`)
+    fetch(`/api/screener?${params}`, { cache: 'no-store' })
       .then((r) => r.json())
       .then((d) => {
         if (cancelled) return
@@ -271,6 +271,7 @@ export default function ScreenerPage() {
     })
     return copy
   }, [filteredResults, sort])
+  const displayedResults = useMemo(() => sortedResults.slice(0, 500), [sortedResults])
 
   function toggleSort(key: SortKey) {
     setSort((prev) => {
@@ -308,16 +309,13 @@ export default function ScreenerPage() {
   }
 
   return (
-    <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-      <div style={{ borderBottom: '1px solid var(--border-subtle)', paddingBottom: '12px' }}>
-        <h1 style={{ fontFamily: 'var(--font-display)', fontSize: '16px', fontWeight: 700 }}>
-          スクリーナー（マルチ軸ステージフィルタ）
-        </h1>
-        <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
-          取込済みの全銘柄を表示。HEXステージで絞り込み（複数系統は AND）
-        </p>
+    <div className="sb-page">
+      <div className="sb-page-title">
+        <h1>スクリーナー（マルチ軸ステージフィルタ）</h1>
+        <p>J-Quants由来の最新スナップショットを表示。HEXステージで絞り込み（複数系統は AND）</p>
       </div>
 
+      <div style={{ padding: '14px 16px 16px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
       {/* 業種で絞り込み */}
       <Section step={1} label="業種で絞り込み（任意）">
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
@@ -506,7 +504,7 @@ export default function ScreenerPage() {
           <div style={{
             marginTop: '12px',
             padding: '8px 12px',
-            background: 'rgba(217,119,6,0.06)',
+            background: 'var(--color-brand-50)',
             border: '1px solid var(--accent-dim)',
             borderRadius: 'var(--radius-sm)',
             fontSize: '11px',
@@ -516,7 +514,6 @@ export default function ScreenerPage() {
           </div>
         )}
       </Section>
-
       {error && (
         <div className="card" style={{ padding: '12px', borderLeft: '3px solid var(--price-down)' }}>
           <p style={{ fontSize: '12px', color: 'var(--price-down)', margin: 0 }}>エラー: {error}</p>
@@ -527,8 +524,6 @@ export default function ScreenerPage() {
         <div className="card" style={{ padding: '12px', borderLeft: '3px solid var(--accent-primary)' }}>
           <p style={{ fontSize: '12px', color: 'var(--text-secondary)', margin: 0 }}>
             ℹ️ {notice}
-            {' '}
-            <Link href="/admin/import" style={{ color: 'var(--accent-primary)' }}>CSV取込ページへ →</Link>
           </p>
         </div>
       )}
@@ -542,6 +537,11 @@ export default function ScreenerPage() {
           <div style={{ padding: '8px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-subtle)', gap: '8px', flexWrap: 'wrap' }}>
             <span style={{ fontSize: '12px', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
               <span><strong>{sortedResults.length}</strong>件 / 母集団 {universe}銘柄</span>
+              {sortedResults.length > displayedResults.length && (
+                <span style={{ color: 'var(--text-muted)' }}>
+                  表示は先頭 {displayedResults.length} 件
+                </span>
+              )}
               {availableDates.length > 0 && (
                 <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontFamily: 'var(--font-mono)' }}>
                   <span style={{ color: 'var(--accent-primary)' }}>📅</span>
@@ -598,9 +598,9 @@ export default function ScreenerPage() {
               <table style={{ minWidth: '3000px', borderCollapse: 'collapse', fontSize: '12px' }}>
                 <thead>
                   <tr style={{ background: 'var(--bg-elevated)', borderBottom: '1px solid var(--border-dim)' }}>
-                    <th style={th}></th>
+                    <th scope="col" style={th}></th>
                     <SortableTh label="コード"     sortKey="ticker"              current={sort} onClick={toggleSort} />
-                    <th style={th}>TV形式</th>
+                    <th scope="col" style={th}>TV形式</th>
                     <SortableTh label="貸借/信用"  sortKey="marginType"          current={sort} onClick={toggleSort} />
                     <SortableTh label="市場区分"   sortKey="marketSegment"       current={sort} onClick={toggleSort} />
                     <SortableTh label="33業種区分" sortKey="sector33"            current={sort} onClick={toggleSort} />
@@ -625,11 +625,11 @@ export default function ScreenerPage() {
                     <SortableTh label="前回決算"   sortKey="earningsLastDate"    current={sort} onClick={toggleSort} />
                     <SortableTh label="次回決算"   sortKey="earningsNextDate"    current={sort} onClick={toggleSort} />
                     <SortableTh label="残日数"     sortKey="earningsNextDate"    current={sort} onClick={toggleSort} align="right" />
-                    <th style={th}>ステージ (日A/B 週A/B 月A/B)</th>
+                    <th scope="col" style={th}>ステージ (日A/B 週A/B 月A/B)</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {sortedResults.map((r) => {
+                  {displayedResults.map((r) => {
                     const tv = toTvSymbol(r.ticker, r.marketSegment)
                     const copied = copiedTicker === r.ticker
                     return (
@@ -645,7 +645,7 @@ export default function ScreenerPage() {
                         <td style={td}>
                           <button
                             onClick={() => copyTvSymbol(r.ticker, r.marketSegment)}
-                            title={copied ? 'コピーしました' : `${tv} をクリップボードにコピー`}
+                          title={copied ? 'コピーしました' : `${tv} をクリップボードにコピー`}
                             style={{
                               padding: '2px 8px',
                               fontSize: '11px',
@@ -682,9 +682,9 @@ export default function ScreenerPage() {
                         <td style={td}>{r.sectorSmall || '---'}</td>
                         <td style={td}>{r.name}</td>
                         <td style={tdR}>{r.price?.toLocaleString('ja-JP', { maximumFractionDigits: 2 }) ?? '---'}</td>
-                        <td style={{ ...tdR, color: pctColor(r.changePercent) }}>{fmtPct(r.changePercent)}</td>
-                        <td style={{ ...tdR, color: pctColor(r.changePercentWeek) }}>{fmtPct(r.changePercentWeek)}</td>
-                        <td style={{ ...tdR, color: pctColor(r.changePercentMonth) }}>{fmtPct(r.changePercentMonth)}</td>
+                        <td style={{ ...tdR, color: pctColor(r.changePercent ?? undefined) }}>{fmtPct(r.changePercent ?? undefined)}</td>
+                        <td style={{ ...tdR, color: pctColor(r.changePercentWeek ?? undefined) }}>{fmtPct(r.changePercentWeek ?? undefined)}</td>
+                        <td style={{ ...tdR, color: pctColor(r.changePercentMonth ?? undefined) }}>{fmtPct(r.changePercentMonth ?? undefined)}</td>
                         <td style={{ ...tdR, color: pctColor(r.perfPct3m ?? undefined) }}>{fmtPct(r.perfPct3m ?? undefined)}</td>
                         <td style={{ ...tdR, color: pctColor(r.perfPct6m ?? undefined) }}>{fmtPct(r.perfPct6m ?? undefined)}</td>
                         <td style={{ ...tdR, color: pctColor(r.perfPctYtd ?? undefined) }}>{fmtPct(r.perfPctYtd ?? undefined)}</td>
@@ -713,6 +713,7 @@ export default function ScreenerPage() {
           )}
         </div>
       )}
+      </div>
     </div>
   )
 }
@@ -778,6 +779,7 @@ function SortableTh({
     : ' ⇅'
   return (
     <th
+      scope="col"
       style={{
         ...(align === 'right' ? thR : th),
         cursor: 'pointer',

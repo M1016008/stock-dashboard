@@ -56,7 +56,7 @@ export function CapitalFlowTimeSeries({ groupBy }: Props) {
     let cancelled = false
     setLoading(true)
     setError(null)
-    fetch(`/api/capital-flow/timeseries?groupBy=${groupBy}&days=${days}`)
+    fetch(`/api/capital-flow/timeseries?groupBy=${groupBy}&days=${days}`, { cache: 'no-store' })
       .then(async (r) => {
         const j = await r.json()
         if (!r.ok) throw new Error(j.message ?? j.error ?? 'failed')

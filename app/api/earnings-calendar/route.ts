@@ -86,7 +86,7 @@ export async function GET(request: NextRequest) {
         snapshotDate: null,
         from: null,
         to: null,
-        notice: 'CSV未取込です。/admin/import から TradingView の CSV をインポートしてください。',
+        notice: 'J-Quants 由来の決算カレンダーまたは日次データが未取得です。最新化バッチを実行してください。',
       })
     }
 

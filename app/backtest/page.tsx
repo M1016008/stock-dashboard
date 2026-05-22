@@ -1,0 +1,944 @@
+'use client'
+
+import { Fragment, useEffect, useMemo, useState } from 'react'
+import Link from 'next/link'
+import {
+  Activity,
+  BarChart3,
+  CalendarDays,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  DatabaseZap,
+  Filter,
+  LineChart,
+  Search,
+  Sigma,
+  Target,
+} from 'lucide-react'
+import { StageDots } from '@/components/ui/StageDots'
+import { BacktestHighlightChart, type HighlightChartPoint } from '@/components/charts/BacktestHighlightChart'
+
+type DateOption = {
+  date: string
+  total_tickers: number
+  signal_tickers: number
+}
+
+type BacktestResult = {
+  date: string
+  ticker: string
+  name: string | null
+  sector_large: string | null
+  sector_small: string | null
+  market_segment: string | null
+  pattern_code: string | null
+  daily_a_stage: number | null
+  daily_b_stage: number | null
+  weekly_a_stage: number | null
+  weekly_b_stage: number | null
+  monthly_a_stage: number | null
+  monthly_b_stage: number | null
+  open: number | null
+  high: number | null
+  low: number | null
+  close: number | null
+  volume: number | null
+  volume_ratio_20: number | null
+  range_pct: number | null
+  atr20_pct: number | null
+  ma5_pos_pct: number | null
+  ma25_pos_pct: number | null
+  ma75_pos_pct: number | null
+  signal_codes: string[]
+  horizon_days: number | null
+  return_pct: number | null
+  max_return_pct: number | null
+  max_return_date: string | null
+  days_to_max: number | null
+  min_return_pct: number | null
+  min_return_date: string | null
+  days_to_min: number | null
+  hit_10: number | null
+  hit_20: number | null
+  hit_40: number | null
+}
+
+type QueryResponse = {
+  date: string | null
+  horizon: number
+  results: BacktestResult[]
+  summary: {
+    count: number
+    withOutcome: number
+    hit10Rate: number | null
+    hit20Rate: number | null
+    hit40Rate: number | null
+    avgMaxReturnPct: number | null
+    avgMinReturnPct: number | null
+    avgDaysToMax: number | null
+  }
+  notice?: string
+}
+
+type LatestSignal = {
+  ticker: string
+  rank: number
+  score: number
+  signalCodes: string[]
+  summary: {
+    name?: string
+    sectorLarge?: string
+    close?: number
+    volumeRatio20?: number
+    patternCode?: string
+  }
+}
+
+type SignalStat = {
+  signalCode: string
+  patternCode: string
+  horizonDays: number
+  payload: {
+    count?: number
+    hit_10_rate?: number | null
+    hit_20_rate?: number | null
+    hit_40_rate?: number | null
+    max_return_p50?: number | null
+    days_to_max_p50?: number | null
+  }
+}
+
+type SimilarCase = {
+  rank: number
+  ticker: string
+  name: string | null
+  date: string
+  similarity: number | null
+  payload: {
+    max_return_pct?: number | null
+    days_to_max?: number | null
+    return_pct?: number | null
+  }
+}
+
+type BacktestDetail = {
+  source: string
+  move: 'up' | 'down'
+  basis: {
+    date: string
+    close: number | null
+    volume: number | null
+    volumeRatio20: number | null
+    patternCode: string | null
+    signalCodes: string[]
+  } | null
+  outcome: {
+    horizonDays: number
+    returnPct: number | null
+    maxReturnPct: number | null
+    maxReturnDate: string | null
+    daysToMax: number | null
+    minReturnPct: number | null
+    minReturnDate: string | null
+    daysToMin: number | null
+    upStagePath: Array<{ date: string; code: string }>
+    downStagePath: Array<{ date: string; code: string }>
+  } | null
+  evidence: Array<{
+    signalCode: string
+    label?: string | null
+    reason?: string
+    basis?: Record<string, unknown>
+  }>
+  movePeriod: {
+    direction: 'up' | 'down'
+    startDate: string
+    endDate: string | null
+    startPrice: number | null
+    endPrice: number | null
+    returnPct: number | null
+    tradingDays: number | null
+  } | null
+  chartSeries: HighlightChartPoint[]
+  selectedStagePath: Array<{ date: string; code: string }>
+  volumeSummary: {
+    preAverage: number | null
+    startVolume: number | null
+    endVolume: number | null
+    periodAverage: number | null
+    maxVolume: number | null
+    maxVolumeDate: string | null
+    firstPhaseRatio: number | null
+    periodRatio: number | null
+    comment: string
+  } | null
+  maAnalysis: {
+    maOrder: string
+    sma5CrossUpDate: string | null
+    daysHeldAboveSma5: number | null
+    recentHighDate: string | null
+    recentHigh: number | null
+    distanceToRecentHighPct: number | null
+    facts: string[]
+  } | null
+  similarPatternStats: {
+    sampleSize: number
+    upRate: number | null
+    downRate: number | null
+    avgMaxReturnPct: number | null
+    avgMinReturnPct: number | null
+    cases: Array<{
+      ticker: string
+      date: string
+      patternCode: string | null
+      maxReturnPct: number | null
+      minReturnPct: number | null
+      daysToMax: number | null
+    }>
+  } | null
+  analysisComment: {
+    source: 'openai' | 'template'
+    summary: string
+    evidence: string[]
+    watchPoints: string[]
+    riskNotes: string[]
+    similarPatternComment: string
+  } | null
+}
+
+type CoverageInfo = {
+  horizon: number
+  market: { startDate: string | null; endDate: string | null; days: number }
+  indices: { startDate: string | null; endDate: string | null; days: number }
+  feature: { startDate: string | null; endDate: string | null; days: number }
+  backtest: { startDate: string | null; endDate: string | null; days: number; label: string }
+  excluded: { days: number; reasons: string[] }
+}
+
+const HORIZONS = [5, 20, 30, 40, 60, 90, 180]
+const EMPTY_RESULTS: BacktestResult[] = []
+
+const SIGNAL_OPTIONS = [
+  { code: 'pullback_candidate', label: '押し目候補' },
+  { code: 'pre_breakout', label: 'ブレイク直前' },
+  { code: 'volatility_squeeze', label: 'ボラ収縮' },
+  { code: 'stage_improvement_setup', label: '好転予兆' },
+  { code: 'higher_timeframe_alignment', label: '上位足一致' },
+  { code: 'high_breakout_continuation', label: '高値継続' },
+  { code: 'ma_cross_up_daily_25', label: '日25MA上抜け' },
+  { code: 'ma_upper_touch_daily_25', label: '日25MA上タッチ' },
+  { code: 'ma_cross_up_weekly_13', label: '週13MA上抜け' },
+  { code: 'ma_upper_touch_weekly_13', label: '週13MA上タッチ' },
+]
+
+const RETURN_PRESETS = [
+  { key: 'all', label: '全て', metric: 'max', min: null, max: null, target: null },
+  { key: 'up10', label: '+10%以上', metric: 'max', min: 10, max: null, target: 10 },
+  { key: 'up20', label: '+20%以上', metric: 'max', min: 20, max: null, target: 20 },
+  { key: 'up40', label: '+40%以上', metric: 'max', min: 40, max: null, target: 40 },
+  { key: 'down5', label: '期間 -5%未満', metric: 'period', min: null, max: -5, target: null },
+  { key: 'down5to8', label: '期間 -5%〜-8%', metric: 'period', min: -8, max: -5, target: null },
+] as const
+
+const WEEKDAYS = ['日', '月', '火', '水', '木', '金', '土']
+
+type CalendarCell = {
+  key: string
+  day: number | null
+  date: string | null
+  option: DateOption | null
+}
+
+function fmtPct(value: number | null | undefined, digits = 1): string {
+  if (value == null || !Number.isFinite(value)) return '-'
+  return `${value >= 0 ? '+' : ''}${value.toFixed(digits)}%`
+}
+
+function fmtNum(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return '-'
+  return Math.round(value).toLocaleString('ja-JP')
+}
+
+function monthKey(date: string): string {
+  return date.slice(0, 7)
+}
+
+function monthLabel(month: string): string {
+  const [year, rawMonth] = month.split('-')
+  return `${year}年${Number(rawMonth)}月`
+}
+
+function shiftMonth(month: string, delta: number): string {
+  const [year, rawMonth] = month.split('-').map(Number)
+  const date = new Date(year, rawMonth - 1 + delta, 1)
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
+}
+
+function buildCalendarCells(month: string, dateMap: Map<string, DateOption>): CalendarCell[] {
+  const [year, rawMonth] = month.split('-').map(Number)
+  const firstDay = new Date(year, rawMonth - 1, 1).getDay()
+  const daysInMonth = new Date(year, rawMonth, 0).getDate()
+  const cells: CalendarCell[] = []
+
+  for (let i = 0; i < firstDay; i += 1) {
+    cells.push({ key: `blank-${i}`, day: null, date: null, option: null })
+  }
+  for (let day = 1; day <= daysInMonth; day += 1) {
+    const date = `${month}-${String(day).padStart(2, '0')}`
+    cells.push({ key: date, day, date, option: dateMap.get(date) ?? null })
+  }
+  while (cells.length % 7 !== 0) {
+    cells.push({ key: `blank-tail-${cells.length}`, day: null, date: null, option: null })
+  }
+  return cells
+}
+
+function compactSignal(code: string): string {
+  const labels: Record<string, string> = {
+    pullback_candidate: '押し目',
+    pre_breakout: '直前',
+    volatility_squeeze: '収縮',
+    stage_improvement_setup: '好転',
+    higher_timeframe_alignment: '上位一致',
+    high_breakout_continuation: '高値継続',
+  }
+  if (labels[code]) return labels[code]
+  if (code.includes('ma_cross_up')) return 'MA上抜け'
+  if (code.includes('ma_upper_touch')) return 'MA上タッチ'
+  if (code.includes('ma_cross_down')) return 'MA下割れ'
+  if (code.includes('ma_lower_touch')) return 'MA下タッチ'
+  if (code.includes('ma_touch')) return 'MA接触'
+  return code
+}
+
+function stagePathText(path: Array<{ date: string; code: string }>): string {
+  if (path.length === 0) return '-'
+  return path.map((item) => item.code).join(' → ')
+}
+
+export default function BacktestPage() {
+  const [dates, setDates] = useState<DateOption[]>([])
+  const [selectedDate, setSelectedDate] = useState('')
+  const [calendarMonth, setCalendarMonth] = useState('')
+  const [horizon, setHorizon] = useState(40)
+  const [preset, setPreset] = useState<typeof RETURN_PRESETS[number]['key']>('all')
+  const [selectedSignals, setSelectedSignals] = useState<Set<string>>(new Set())
+  const [query, setQuery] = useState<QueryResponse | null>(null)
+  const [latestSignals, setLatestSignals] = useState<LatestSignal[]>([])
+  const [signalStats, setSignalStats] = useState<SignalStat[]>([])
+  const [similarCases, setSimilarCases] = useState<SimilarCase[]>([])
+  const [expandedKey, setExpandedKey] = useState('')
+  const [details, setDetails] = useState<Record<string, BacktestDetail>>({})
+  const [coverage, setCoverage] = useState<CoverageInfo | null>(null)
+  const [detailLoading, setDetailLoading] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+    fetch(`/api/backtest/dates?horizon=${horizon}`, { cache: 'no-store' })
+      .then((res) => res.json())
+      .then((data) => {
+        if (cancelled) return
+        const nextDates: DateOption[] = data.dates ?? []
+        setDates(nextDates)
+        const firstDate = nextDates[0]?.date || ''
+        setSelectedDate((current) => nextDates.some((item) => item.date === current) ? current : firstDate)
+        setCalendarMonth((current) => {
+          if (current && nextDates.some((item) => monthKey(item.date) === current)) return current
+          return firstDate ? monthKey(firstDate) : ''
+        })
+      })
+      .catch((err) => setError((err as Error).message))
+    return () => { cancelled = true }
+  }, [horizon])
+
+  useEffect(() => {
+    let cancelled = false
+    fetch(`/api/backtest/coverage?horizon=${horizon}`, { cache: 'no-store' })
+      .then((res) => res.json())
+      .then((data) => {
+        if (cancelled || data.error) return
+        setCoverage(data)
+      })
+      .catch(() => { if (!cancelled) setCoverage(null) })
+    return () => { cancelled = true }
+  }, [horizon])
+
+  useEffect(() => {
+    if (!selectedDate) return
+    let cancelled = false
+    setLoading(true)
+    setError('')
+
+    const activePreset = RETURN_PRESETS.find((item) => item.key === preset) ?? RETURN_PRESETS[0]
+    const params = new URLSearchParams({
+      date: selectedDate,
+      horizon: String(horizon),
+      limit: '350',
+      sort: 'maxReturn',
+      returnMetric: activePreset.metric,
+    })
+    if (activePreset.min != null) params.set('returnMin', String(activePreset.min))
+    if (activePreset.max != null) params.set('returnMax', String(activePreset.max))
+    if (activePreset.target != null) params.set('targetPct', String(activePreset.target))
+    if (selectedSignals.size > 0) params.set('signals', Array.from(selectedSignals).join(','))
+
+    fetch(`/api/backtest/query?${params}`, { cache: 'no-store' })
+      .then((res) => res.json())
+      .then((data) => {
+        if (cancelled) return
+        if (data.error) throw new Error(data.message ?? data.error)
+        setQuery(data)
+      })
+      .catch((err) => { if (!cancelled) setError((err as Error).message) })
+      .finally(() => { if (!cancelled) setLoading(false) })
+
+    fetch(`/api/backtest/signals?date=${selectedDate}&limit=40`, { cache: 'no-store' })
+      .then((res) => res.json())
+      .then((data) => {
+        if (cancelled) return
+        setLatestSignals(data.latest ?? [])
+        setSignalStats(data.stats ?? [])
+      })
+      .catch(() => { /* query result is primary */ })
+
+    return () => { cancelled = true }
+  }, [selectedDate, horizon, preset, selectedSignals])
+
+  const summary = query?.summary
+  const rows = query?.results ?? EMPTY_RESULTS
+  const activePreset = RETURN_PRESETS.find((item) => item.key === preset) ?? RETURN_PRESETS[0]
+  const dateMap = useMemo(() => new Map(dates.map((item) => [item.date, item])), [dates])
+  const availableMonths = useMemo(() => {
+    const months = new Set(dates.map((item) => monthKey(item.date)))
+    return Array.from(months).sort((a, b) => b.localeCompare(a))
+  }, [dates])
+  const calendarCells = useMemo(
+    () => calendarMonth ? buildCalendarCells(calendarMonth, dateMap) : [],
+    [calendarMonth, dateMap],
+  )
+  const selectedDateInfo = selectedDate ? dateMap.get(selectedDate) : undefined
+  const monthIndex = availableMonths.indexOf(calendarMonth)
+  const newerMonth = monthIndex > 0 ? availableMonths[monthIndex - 1] : ''
+  const olderMonth = monthIndex >= 0 && monthIndex < availableMonths.length - 1 ? availableMonths[monthIndex + 1] : ''
+
+  const sectorCounts = useMemo(() => {
+    const map = new Map<string, number>()
+    for (const row of rows) {
+      const key = row.sector_large ?? 'その他'
+      map.set(key, (map.get(key) ?? 0) + 1)
+    }
+    return Array.from(map.entries()).sort((a, b) => b[1] - a[1]).slice(0, 8)
+  }, [rows])
+
+  useEffect(() => {
+    const first = rows[0]
+    if (!first) {
+      setSimilarCases([])
+      return
+    }
+    let cancelled = false
+    fetch(`/api/backtest/similar?ticker=${first.ticker}&date=${first.date}`, { cache: 'no-store' })
+      .then((res) => res.json())
+      .then((data) => {
+        if (cancelled) return
+        setSimilarCases(data.cases ?? [])
+      })
+      .catch(() => { if (!cancelled) setSimilarCases([]) })
+    return () => { cancelled = true }
+  }, [rows])
+
+  function toggleSignal(code: string) {
+    setSelectedSignals((prev) => {
+      const next = new Set(prev)
+      if (next.has(code)) next.delete(code)
+      else next.add(code)
+      return next
+    })
+  }
+
+  function chooseDate(date: string) {
+    setSelectedDate(date)
+    setCalendarMonth(monthKey(date))
+  }
+
+  function detailKey(row: BacktestResult): string {
+    return `${row.ticker}-${row.date}-${row.horizon_days ?? horizon}`
+  }
+
+  function toggleDetail(row: BacktestResult) {
+    const key = detailKey(row)
+    setExpandedKey((current) => current === key ? '' : key)
+    if (details[key]) return
+    setDetailLoading(key)
+    const params = new URLSearchParams({
+      ticker: row.ticker,
+      date: row.date,
+      horizon: String(row.horizon_days ?? horizon),
+      move: activePreset.key.startsWith('down') ? 'down' : 'up',
+    })
+    fetch(`/api/backtest/detail?${params}`, { cache: 'no-store' })
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.error) throw new Error(data.message ?? data.error)
+        setDetails((current) => ({ ...current, [key]: data }))
+      })
+      .catch((err) => setError((err as Error).message))
+      .finally(() => setDetailLoading((current) => current === key ? '' : current))
+  }
+
+  return (
+    <div className="sb-page">
+      <div className="sb-page-title">
+        <h1>過去検証・シグナル分析</h1>
+        <p>ステージ、ローソク足、移動平均線、出来高を組み合わせ、過去の上昇到達率を検証します。</p>
+      </div>
+
+      <div className="backtest-shell">
+        <section className="backtest-toolbar calendar-mode">
+          <div className="bt-calendar-card">
+            <div className="bt-calendar-head">
+              <div>
+                <CalendarDays size={16} />
+                <span>検証日カレンダー</span>
+                <strong>{selectedDate || '-'}</strong>
+              </div>
+              <div className="bt-calendar-actions">
+                <button type="button" disabled={!olderMonth} onClick={() => setCalendarMonth(olderMonth)} aria-label="前月">
+                  <ChevronLeft size={15} />
+                </button>
+                <select value={calendarMonth} onChange={(e) => setCalendarMonth(e.target.value)} aria-label="月を選択">
+                  {availableMonths.map((month) => (
+                    <option key={month} value={month}>{monthLabel(month)}</option>
+                  ))}
+                </select>
+                <button type="button" disabled={!newerMonth} onClick={() => setCalendarMonth(newerMonth)} aria-label="次月">
+                  <ChevronRight size={15} />
+                </button>
+              </div>
+            </div>
+            <div className="bt-weekdays">
+              {WEEKDAYS.map((day) => <span key={day}>{day}</span>)}
+            </div>
+            <div className="bt-calendar-grid">
+              {calendarCells.map((cell) => {
+                if (!cell.date || !cell.day) return <div key={cell.key} className="bt-day empty" />
+                const date = cell.date
+                const active = selectedDate === date
+                return (
+                  <button
+                    key={cell.key}
+                    type="button"
+                    className="bt-day"
+                    data-active={active}
+                    data-available={Boolean(cell.option)}
+                    disabled={!cell.option}
+                    title={cell.option ? `${date} / ${cell.option.total_tickers.toLocaleString('ja-JP')}銘柄` : date}
+                    onClick={() => chooseDate(date)}
+                  >
+                    <span>{cell.day}</span>
+                    {cell.option && <small>{Math.round(cell.option.total_tickers / 100) / 10}k</small>}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+
+          <div className="bt-filter-stack">
+            <div className="bt-control">
+              <Target size={15} />
+              <span>期間</span>
+              <select value={horizon} onChange={(e) => setHorizon(Number(e.target.value))}>
+                {HORIZONS.map((value) => (
+                  <option key={value} value={value}>{value}営業日</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="bt-control wide">
+              <Filter size={15} />
+              <span>条件</span>
+              <select value={preset} onChange={(e) => setPreset(e.target.value as typeof preset)}>
+                {RETURN_PRESETS.map((item) => (
+                  <option key={item.key} value={item.key}>{item.label}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="bt-date-meta">
+              <span>検証可能日数</span>
+              <strong>{(coverage?.backtest.days ?? dates.length).toLocaleString('ja-JP')}日</strong>
+              <p>
+                選択日: {selectedDateInfo ? `${selectedDateInfo.total_tickers.toLocaleString('ja-JP')}銘柄 / シグナル${selectedDateInfo.signal_tickers.toLocaleString('ja-JP')}件` : '-'}
+              </p>
+              {coverage && (
+                <p>
+                  DB内市場期間: {coverage.market.startDate ?? '-'}〜{coverage.market.endDate ?? '-'} / 市場日数 {coverage.market.days.toLocaleString('ja-JP')}日
+                </p>
+              )}
+            </div>
+          </div>
+        </section>
+
+        <section className="bt-signal-strip">
+          {SIGNAL_OPTIONS.map((item) => {
+            const active = selectedSignals.has(item.code)
+            return (
+              <button
+                key={item.code}
+                type="button"
+                className="bt-chip"
+                data-active={active}
+                onClick={() => toggleSignal(item.code)}
+              >
+                {item.label}
+              </button>
+            )
+          })}
+          {selectedSignals.size > 0 && (
+            <button className="bt-chip ghost" type="button" onClick={() => setSelectedSignals(new Set())}>
+              クリア
+            </button>
+          )}
+        </section>
+
+        {error && <div className="bt-alert">エラー: {error}</div>}
+        {query?.notice && <div className="bt-alert">{query.notice}</div>}
+
+        <section className="bt-summary-grid">
+          <MetricCard icon={Search} label="抽出銘柄" value={summary?.count?.toLocaleString('ja-JP') ?? '-'} sub={activePreset.label} />
+          <MetricCard icon={Target} label="40%到達率" value={fmtPct(summary?.hit40Rate == null ? null : summary.hit40Rate * 100)} sub={`${horizon}営業日内`} tone="red" />
+          <MetricCard icon={LineChart} label="平均最大上昇" value={fmtPct(summary?.avgMaxReturnPct)} sub={`平均到達 ${summary?.avgDaysToMax?.toFixed(1) ?? '-'}日`} tone="red" />
+          <MetricCard icon={Activity} label="平均最大下落" value={fmtPct(summary?.avgMinReturnPct)} sub="リスク確認" tone="blue" />
+        </section>
+
+        <div className="bt-main-grid">
+          <section className="sb-card">
+            <div className="bt-card-head">
+              <div>
+                <h2>検証結果</h2>
+                <p>{selectedDate || '-'} 時点から {horizon} 営業日内の到達率分析</p>
+              </div>
+              {loading && <span className="bt-loading">更新中</span>}
+            </div>
+            <div className="bt-table-wrap">
+              <table className="sb-tbl bt-table">
+                <thead>
+                  <tr>
+                    <th style={{ width: 86 }}>コード</th>
+                    <th style={{ width: 190 }}>銘柄</th>
+                    <th style={{ width: 126 }}>ステージ</th>
+                    <th style={{ width: 170 }}>シグナル</th>
+                    <th className="right" style={{ width: 100 }}>基準日終値</th>
+                    <th className="right" style={{ width: 108 }}>基準日出来高</th>
+                    <th className="right" style={{ width: 82 }}>出来高倍率</th>
+                    <th className="right" style={{ width: 82 }}>MA25乖離</th>
+                    <th className="right" style={{ width: 92 }}>最大上昇</th>
+                    <th className="right" style={{ width: 84 }}>到達日数</th>
+                    <th className="right" style={{ width: 92 }}>期間騰落</th>
+                    <th className="right" style={{ width: 92 }}>最大下落</th>
+                    <th style={{ width: 70 }}>根拠</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.length === 0 && (
+                    <tr>
+                      <td colSpan={13} style={{ textAlign: 'center', padding: '28px', color: 'var(--color-text-tertiary)' }}>
+                        該当する検証結果がありません
+                      </td>
+                    </tr>
+                  )}
+                  {rows.map((row) => {
+                    const key = detailKey(row)
+                    const detail = details[key]
+                    const expanded = expandedKey === key
+                    return (
+                      <Fragment key={key}>
+                        <tr>
+                          <td>
+                            <Link href={`/stock/${row.ticker}`} className="bt-code">{row.ticker}</Link>
+                          </td>
+                          <td>
+                            <div className="bt-name">{row.name ?? row.ticker}</div>
+                            <div className="bt-sub">{row.sector_large ?? 'その他'} / {row.market_segment ?? '-'}</div>
+                          </td>
+                          <td>
+                            <StageDots
+                              size={18}
+                              values={[
+                                row.daily_a_stage,
+                                row.daily_b_stage,
+                                row.weekly_a_stage,
+                                row.weekly_b_stage,
+                                row.monthly_a_stage,
+                                row.monthly_b_stage,
+                              ]}
+                            />
+                          </td>
+                          <td>
+                            <div className="bt-tags">
+                              {row.signal_codes.slice(0, 3).map((code) => (
+                                <span key={code}>{compactSignal(code)}</span>
+                              ))}
+                              {row.signal_codes.length > 3 && <span>+{row.signal_codes.length - 3}</span>}
+                            </div>
+                          </td>
+                          <td className="right">{fmtNum(row.close)}</td>
+                          <td className="right">{fmtNum(row.volume)}</td>
+                          <td className="right">{row.volume_ratio_20 == null ? '-' : `${row.volume_ratio_20.toFixed(2)}x`}</td>
+                          <td className="right">{fmtPct(row.ma25_pos_pct)}</td>
+                          <td className="right price-up">{fmtPct(row.max_return_pct)}</td>
+                          <td className="right">{row.days_to_max ?? '-'}</td>
+                          <td className={`right ${(row.return_pct ?? 0) >= 0 ? 'price-up' : 'price-down'}`}>{fmtPct(row.return_pct)}</td>
+                          <td className="right price-down">{fmtPct(row.min_return_pct)}</td>
+                          <td>
+                            <button
+                              type="button"
+                              className="bt-detail-btn"
+                              data-open={expanded}
+                              onClick={() => toggleDetail(row)}
+                            >
+                              <ChevronDown size={14} />
+                              {detailLoading === key ? '読込' : '詳細'}
+                            </button>
+                          </td>
+                        </tr>
+                        {expanded && (
+                          <tr className="bt-detail-row">
+                            <td colSpan={13}>
+                              {!detail && <div className="bt-detail-box">根拠データを読み込んでいます。</div>}
+                              {detail && (
+                                <div className="bt-detail-box">
+                                  <div className="bt-detail-topline">
+                                    <strong>
+                                      {detail.movePeriod?.startDate ?? row.date}から{detail.movePeriod?.endDate ?? '-'}までに、
+                                      株価が{fmtPct(detail.movePeriod?.returnPct)}動きました。
+                                    </strong>
+                                    <span>{detail.outcome?.horizonDays ?? horizon}営業日内 / {detail.move === 'down' ? '下落局面' : '上昇局面'}を表示</span>
+                                  </div>
+
+                                  <div className="bt-detail-grid rich">
+                                    <div>
+                                      <h3>対象期間</h3>
+                                      <dl>
+                                        <div><dt>開始日</dt><dd>{detail.movePeriod?.startDate ?? row.date}</dd></div>
+                                        <div><dt>終了日</dt><dd>{detail.movePeriod?.endDate ?? '-'}</dd></div>
+                                        <div><dt>開始価格</dt><dd>{fmtNum(detail.movePeriod?.startPrice)}円</dd></div>
+                                        <div><dt>終了価格</dt><dd>{fmtNum(detail.movePeriod?.endPrice)}円</dd></div>
+                                        <div><dt>株価変動</dt><dd className={detail.move === 'down' ? 'price-down' : 'price-up'}>{fmtPct(detail.movePeriod?.returnPct)}</dd></div>
+                                        <div><dt>営業日数</dt><dd>{detail.movePeriod?.tradingDays ?? '-'}日</dd></div>
+                                      </dl>
+                                    </div>
+                                    <div>
+                                      <h3>出来高とステージ</h3>
+                                      <dl>
+                                        <div><dt>出来高推移</dt><dd>{detail.volumeSummary?.comment ?? '-'}</dd></div>
+                                        <div><dt>期間平均</dt><dd>{fmtNum(detail.volumeSummary?.periodAverage)}</dd></div>
+                                        <div><dt>最大出来高</dt><dd>{fmtNum(detail.volumeSummary?.maxVolume)} / {detail.volumeSummary?.maxVolumeDate ?? '-'}</dd></div>
+                                        <div><dt>6桁ステージ</dt><dd>{stagePathText(detail.selectedStagePath ?? [])}</dd></div>
+                                      </dl>
+                                    </div>
+                                  </div>
+
+                                  <BacktestHighlightChart
+                                    series={detail.chartSeries ?? []}
+                                    highlightStart={detail.movePeriod?.startDate ?? row.date}
+                                    highlightEnd={detail.movePeriod?.endDate ?? null}
+                                    direction={detail.move}
+                                    startPrice={detail.movePeriod?.startPrice}
+                                    endPrice={detail.movePeriod?.endPrice}
+                                    returnPct={detail.movePeriod?.returnPct}
+                                  />
+
+                                  {detail.analysisComment && (
+                                    <div className="bt-insight-grid">
+                                      <div className="bt-insight-main">
+                                        <h3>この値動きから読めること</h3>
+                                        <p>{detail.analysisComment.summary}</p>
+                                        <ul>
+                                          {detail.analysisComment.evidence.map((item) => <li key={item}>{item}</li>)}
+                                        </ul>
+                                      </div>
+                                      <div>
+                                        <h3>次に見るポイント</h3>
+                                        <ul>
+                                          {detail.analysisComment.watchPoints.map((item) => <li key={item}>{item}</li>)}
+                                        </ul>
+                                        <h3>注意点</h3>
+                                        <ul>
+                                          {detail.analysisComment.riskNotes.map((item) => <li key={item}>{item}</li>)}
+                                        </ul>
+                                      </div>
+                                    </div>
+                                  )}
+
+                                  <div className="bt-similar-box">
+                                    <h3>類似パターン比較</h3>
+                                    <p>{detail.analysisComment?.similarPatternComment ?? '類似パターンはまだ十分に蓄積されていません。'}</p>
+                                    <div className="bt-similar-metrics">
+                                      <span>事例 {detail.similarPatternStats?.sampleSize ?? 0}件</span>
+                                      <span>10%超え {fmtPct(detail.similarPatternStats?.upRate == null ? null : detail.similarPatternStats.upRate * 100)}</span>
+                                      <span>5%下落 {fmtPct(detail.similarPatternStats?.downRate == null ? null : detail.similarPatternStats.downRate * 100)}</span>
+                                      <span>平均最大上昇 {fmtPct(detail.similarPatternStats?.avgMaxReturnPct)}</span>
+                                      <span>平均最大下落 {fmtPct(detail.similarPatternStats?.avgMinReturnPct)}</span>
+                                    </div>
+                                    {(detail.similarPatternStats?.cases ?? []).length > 0 && (
+                                      <div className="bt-similar-cases">
+                                        {(detail.similarPatternStats?.cases ?? []).slice(0, 6).map((item) => (
+                                          <Link key={`${item.ticker}-${item.date}`} href={`/stock/${item.ticker}`}>
+                                            {item.ticker} <small>{item.date}</small> <b>{fmtPct(item.maxReturnPct)}</b>
+                                          </Link>
+                                        ))}
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                              )}
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <aside className="bt-side">
+            <section className="sb-card bt-side-card">
+              <div className="bt-card-head compact">
+                <div>
+                  <h2>注目シグナル</h2>
+                  <p>Turso配信用ランキング</p>
+                </div>
+                <DatabaseZap size={17} />
+              </div>
+              <div className="bt-rank-list">
+                {latestSignals.slice(0, 8).map((item) => (
+                  <div className="bt-rank" key={item.ticker}>
+                    <span className="bt-rank-no">{item.rank}</span>
+                    <div>
+                      <Link href={`/stock/${item.ticker}`}>{item.ticker} {item.summary.name ?? ''}</Link>
+                      <p>{item.signalCodes.slice(0, 3).map(compactSignal).join(' / ')}</p>
+                    </div>
+                    <strong>{item.score.toFixed(1)}</strong>
+                  </div>
+                ))}
+                {latestSignals.length === 0 && <p className="bt-empty">配信用ランキングは未作成です</p>}
+              </div>
+            </section>
+
+            <section className="sb-card bt-side-card">
+              <div className="bt-card-head compact">
+                <div>
+                  <h2>業種分布</h2>
+                  <p>抽出結果の偏り</p>
+                </div>
+                <BarChart3 size={17} />
+              </div>
+              <div className="bt-sector-bars">
+                {sectorCounts.map(([sector, count]) => (
+                  <div key={sector}>
+                    <span>{sector}</span>
+                    <div><i style={{ width: `${Math.max(8, (count / Math.max(1, rows.length)) * 100)}%` }} /></div>
+                    <b>{count}</b>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <section className="sb-card bt-side-card">
+              <div className="bt-card-head compact">
+                <div>
+                  <h2>類似局面</h2>
+                  <p>先頭銘柄に近い過去事例</p>
+                </div>
+                <Search size={17} />
+              </div>
+              <div className="bt-rank-list">
+                {similarCases.slice(0, 6).map((item) => (
+                  <div className="bt-rank" key={`${item.ticker}-${item.date}`}>
+                    <span className="bt-rank-no">{item.rank}</span>
+                    <div>
+                      <Link href={`/stock/${item.ticker}`}>{item.ticker} {item.name ?? ''}</Link>
+                      <p>{item.date} / 最大 {fmtPct(item.payload.max_return_pct)}</p>
+                    </div>
+                    <strong>{item.payload.days_to_max ?? '-'}</strong>
+                  </div>
+                ))}
+                {similarCases.length === 0 && <p className="bt-empty">類似局面データは未作成です</p>}
+              </div>
+            </section>
+
+            <section className="sb-card bt-side-card">
+              <div className="bt-card-head compact">
+                <div>
+                  <h2>シグナル勝率</h2>
+                  <p>{'N>=40 / 40営業日'}</p>
+                </div>
+                <Target size={17} />
+              </div>
+              <div className="bt-rank-list">
+                {signalStats.slice(0, 6).map((item, index) => (
+                  <div className="bt-rank" key={`${item.signalCode}-${item.patternCode}-${item.horizonDays}`}>
+                    <span className="bt-rank-no">{index + 1}</span>
+                    <div>
+                      <strong style={{ color: 'var(--color-brand-900)', textAlign: 'left' }}>{compactSignal(item.signalCode)}</strong>
+                      <p>N={item.payload.count ?? '-'} / 平均最大 {fmtPct(item.payload.max_return_p50)}</p>
+                    </div>
+                    <strong>{fmtPct(item.payload.hit_40_rate == null ? null : item.payload.hit_40_rate * 100, 0)}</strong>
+                  </div>
+                ))}
+                {signalStats.length === 0 && <p className="bt-empty">勝率統計は未作成です</p>}
+              </div>
+            </section>
+
+            <section className="sb-card bt-side-card">
+              <div className="bt-card-head compact">
+                <div>
+                  <h2>ML/RLデータ</h2>
+                  <p>特徴量とラベルを分離保存</p>
+                </div>
+                <Sigma size={17} />
+              </div>
+              <div className="bt-ml-note">
+                <span>model_features</span>
+                <span>model_labels</span>
+                <span>forward_extrema</span>
+                <span>serving_*</span>
+              </div>
+            </section>
+          </aside>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function MetricCard({
+  icon: Icon,
+  label,
+  value,
+  sub,
+  tone = 'neutral',
+}: {
+  icon: typeof Search
+  label: string
+  value: string
+  sub: string
+  tone?: 'neutral' | 'red' | 'blue'
+}) {
+  return (
+    <div className="bt-metric" data-tone={tone}>
+      <Icon size={18} />
+      <div>
+        <span>{label}</span>
+        <strong>{value}</strong>
+        <p>{sub}</p>
+      </div>
+    </div>
+  )
+}
