@@ -3,17 +3,32 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useEffect, useState } from 'react'
-import { Activity, BarChart3, Database, Settings } from 'lucide-react'
+import {
+  Activity,
+  BarChart3,
+  Building2,
+  ChartCandlestick,
+  ChartNoAxesCombined,
+  Database,
+  Hexagon,
+  Landmark,
+  LayoutDashboard,
+  Network,
+  Search,
+  Settings,
+  Star,
+  type LucideIcon,
+} from 'lucide-react'
 
 const NAV_ITEMS = [
-  { href: '/', label: 'ダッシュボード' },
-  { href: '/hex-stage', label: 'HEX' },
-  { href: '/sectors', label: '業種' },
-  { href: '/industries', label: '業界' },
-  { href: '/ai/transitions', label: 'パターン' },
-  { href: '/screener', label: 'スクリーナー' },
-  { href: '/capital-flow', label: '資金フロー' },
-  { href: '/watchlist', label: 'ウォッチ' },
+  { href: '/', label: 'ダッシュボード', icon: LayoutDashboard },
+  { href: '/hex-stage', label: 'HEX', icon: Hexagon },
+  { href: '/sectors', label: '業種', icon: Building2 },
+  { href: '/industries', label: '業界', icon: Network },
+  { href: '/ai/transitions', label: 'パターン', icon: ChartCandlestick },
+  { href: '/screener', label: 'スクリーナー', icon: Search },
+  { href: '/capital-flow', label: '資金フロー', icon: ChartNoAxesCombined },
+  { href: '/watchlist', label: 'ウォッチ', icon: Star },
 ] as const
 
 const ADMIN_ITEMS = [
@@ -85,14 +100,28 @@ function getTseStatus(): 'open' | 'closed' {
 
 function ClockChip({ label, time }: { label: string; time: string }) {
   return (
-    <span className="inline-flex h-7 items-center gap-1.5 rounded-[6px] border border-[var(--color-border-soft)] bg-[var(--color-surface-field)] px-2.5 tabular-nums">
-      <span className="text-[10px] font-bold text-[var(--color-text-tertiary)]">{label}</span>
+    <span className="inline-flex h-6 items-center gap-1.5 rounded-[3px] border border-[var(--color-border-default)] bg-white px-2 tabular-nums">
+      <span className="text-[10px] font-bold text-[var(--color-brand-700)]">{label}</span>
       <span
-        className="text-[11px] font-semibold text-[var(--color-text-secondary)]"
+        className="text-[11px] font-semibold text-[var(--color-text-primary)]"
         suppressHydrationWarning
       >
         {time || '--:--:--'}
       </span>
+    </span>
+  )
+}
+
+function NavIcon({ icon: Icon, active }: { icon: LucideIcon; active: boolean }) {
+  return (
+    <span
+      className={`inline-flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-[2px] border bg-white ${
+        active
+          ? 'border-white text-[var(--color-market-red)]'
+          : 'border-[#b4c9e6] text-[var(--color-brand-700)]'
+      }`}
+    >
+      <Icon size={14} strokeWidth={2.25} />
     </span>
   )
 }
@@ -114,56 +143,21 @@ export function Header() {
   }
 
   return (
-    <header className="sticky top-0 z-30 border-b border-[var(--color-border-soft)] bg-white/92 backdrop-blur-xl">
-      <div className="mx-auto flex max-w-[1580px] flex-col px-4 sm:px-6 lg:px-8">
-        <div className="flex min-h-14 items-center justify-between gap-4">
+    <header className="sticky top-0 z-30 border-b border-[var(--color-border-strong)] bg-white shadow-[0_1px_3px_rgba(16,32,52,0.12)]">
+      <div className="border-b border-[var(--color-border-default)] bg-[var(--color-surface-subtle)]">
+        <div className="mx-auto flex min-h-10 max-w-[1580px] items-center justify-between gap-3 px-4 sm:px-6 lg:px-8">
           <Link href="/" prefetch={false} className="flex shrink-0 items-center gap-2.5">
-            <div className="flex h-8 w-8 items-center justify-center rounded-[7px] bg-[var(--color-text-primary)] text-white shadow-sm">
-              <BarChart3 size={17} strokeWidth={2.4} />
+            <div className="flex h-7 w-7 items-center justify-center rounded-[3px] bg-[var(--color-brand-800)] text-white shadow-sm">
+              <BarChart3 size={16} strokeWidth={2.5} />
             </div>
             <div className="leading-tight">
-              <div className="text-[15px] font-bold tracking-normal">StockBoard</div>
-              <div className="hidden text-[10px] font-semibold text-[var(--color-text-tertiary)] sm:block">J-Quants Market Console</div>
+              <div className="text-[16px] font-bold tracking-normal text-[var(--color-brand-900)]">StockBoard</div>
+              <div className="hidden text-[10px] font-bold text-[var(--color-text-tertiary)] sm:block">J-Quants Market Console</div>
             </div>
           </Link>
 
-          <nav className="hidden min-w-0 flex-1 items-center gap-1 overflow-x-auto lg:flex">
-            {NAV_ITEMS.map((item) => (
-              <Link
-                key={item.href}
-                href={item.href}
-                prefetch={false}
-                className={`inline-flex h-8 shrink-0 items-center rounded-[6px] px-3 text-[12px] font-bold transition-colors ${
-                  isActive(item.href)
-                    ? 'bg-[var(--color-brand-50)] text-[var(--color-brand-700)]'
-                    : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-subtle)] hover:text-[var(--color-text-primary)]'
-                }`}
-              >
-                {item.label}
-              </Link>
-            ))}
-          </nav>
-
-          <div className="hidden shrink-0 items-center gap-1 lg:flex">
-            {ADMIN_ITEMS.map((item) => (
-              <Link
-                key={item.href}
-                href={item.href}
-                prefetch={false}
-                className={`inline-flex h-8 items-center gap-1.5 rounded-[6px] px-2.5 text-[12px] font-bold transition-colors ${
-                  isActive(item.href)
-                    ? 'bg-[var(--color-text-primary)] text-white'
-                    : 'text-[var(--color-text-tertiary)] hover:bg-[var(--color-surface-subtle)] hover:text-[var(--color-text-secondary)]'
-                }`}
-              >
-                {item.href.includes('db') ? <Database size={13} /> : <Settings size={13} />}
-                {item.label}
-              </Link>
-            ))}
-          </div>
-
-          <div className="hidden shrink-0 items-center gap-1.5 xl:flex">
-            <span className="inline-flex h-7 items-center gap-1.5 rounded-[6px] border border-[var(--color-border-soft)] bg-[var(--color-surface-field)] px-2.5 text-[11px] font-semibold text-[var(--color-text-secondary)]">
+          <div className="hidden shrink-0 items-center gap-1.5 lg:flex">
+            <span className="inline-flex h-6 items-center gap-1.5 rounded-[3px] border border-[var(--color-border-default)] bg-white px-2 text-[11px] font-bold text-[var(--color-text-secondary)]">
               <Activity size={12} />
               東証
               <span
@@ -178,45 +172,92 @@ export function Header() {
               </span>
             </span>
             <span
-              className="inline-flex h-7 items-center rounded-[6px] border border-[var(--color-border-soft)] bg-[var(--color-surface-field)] px-2.5 text-[11px] font-semibold text-[var(--color-text-secondary)] tabular-nums"
+              className="inline-flex h-6 items-center rounded-[3px] border border-[var(--color-border-default)] bg-white px-2 text-[11px] font-semibold text-[var(--color-text-primary)] tabular-nums"
               suppressHydrationWarning
             >
               {clocks.date || '----/--/--'}
             </span>
             <ClockChip label="TYO" time={clocks.jst} />
-            <ClockChip label="LDN" time={clocks.ldn} />
-            <ClockChip label="NYC" time={clocks.nyc} />
+            <div className="hidden items-center gap-1.5 xl:flex">
+              <ClockChip label="LDN" time={clocks.ldn} />
+              <ClockChip label="NYC" time={clocks.nyc} />
+            </div>
           </div>
         </div>
+      </div>
 
-        <div className="flex items-center justify-between gap-3 overflow-x-auto border-t border-[var(--color-border-soft)] py-2 lg:hidden">
-          <nav className="flex min-w-max items-center gap-1">
-          {NAV_ITEMS.map((item) => (
-            <Link
-              key={item.href}
-              href={item.href}
-              prefetch={false}
-              className={`inline-flex h-8 items-center rounded-[6px] px-3 text-[12px] font-bold transition-colors ${
-                isActive(item.href)
-                  ? 'bg-[var(--color-brand-50)] text-[var(--color-brand-700)]'
-                  : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-subtle)] hover:text-[var(--color-text-primary)]'
-              }`}
-            >
-              {item.label}
-            </Link>
-          ))}
+      <div className="bg-[var(--color-brand-800)]">
+        <div className="mx-auto flex min-h-12 max-w-[1580px] items-center justify-between gap-4 px-4 py-1.5 sm:px-6 lg:px-8">
+          <nav className="hidden min-w-0 flex-1 items-center gap-2 overflow-x-auto lg:flex">
+            {NAV_ITEMS.map((item) => {
+              const active = isActive(item.href)
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  prefetch={false}
+                  className={`inline-flex h-9 shrink-0 items-center gap-2.5 rounded-[2px] border px-4 text-[13px] font-bold leading-none transition-colors ${
+                    active
+                      ? 'border-[var(--color-market-red-dark)] bg-[var(--color-market-red)] text-white shadow-[inset_0_-2px_0_rgba(0,0,0,0.16)]'
+                      : 'border-[#2a71b8] bg-[#075aa7] text-white hover:border-[#9fc0e5] hover:bg-[#0c67bd]'
+                  }`}
+                >
+                  <NavIcon icon={item.icon} active={active} />
+                  <span className="whitespace-nowrap">{item.label}</span>
+                </Link>
+              )
+            })}
           </nav>
 
-          <div className="flex shrink-0 items-center gap-1">
+          <div className="hidden shrink-0 items-center gap-1 lg:flex">
             {ADMIN_ITEMS.map((item) => (
               <Link
                 key={item.href}
                 href={item.href}
                 prefetch={false}
-                className={`inline-flex h-8 items-center gap-1.5 rounded-[6px] px-2.5 text-[12px] font-bold transition-colors ${
+                className={`inline-flex h-7 items-center gap-1.5 rounded-[3px] border px-2.5 text-[11px] font-bold transition-colors ${
                   isActive(item.href)
-                    ? 'bg-[var(--color-text-primary)] text-white'
-                    : 'text-[var(--color-text-tertiary)] hover:bg-[var(--color-surface-subtle)] hover:text-[var(--color-text-secondary)]'
+                    ? 'border-white bg-white text-[var(--color-brand-800)]'
+                    : 'border-white/20 text-white/82 hover:bg-white/10 hover:text-white'
+                }`}
+              >
+                {item.href.includes('db') ? <Database size={13} /> : <Settings size={13} />}
+                {item.label}
+              </Link>
+            ))}
+          </div>
+
+          <nav className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto lg:hidden">
+            {NAV_ITEMS.map((item) => {
+              const active = isActive(item.href)
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  prefetch={false}
+                  className={`inline-flex h-9 shrink-0 items-center gap-2.5 rounded-[2px] border px-3.5 text-[12px] font-bold leading-none transition-colors ${
+                    active
+                      ? 'border-[var(--color-market-red-dark)] bg-[var(--color-market-red)] text-white'
+                      : 'border-[#2a71b8] bg-[#075aa7] text-white hover:border-[#9fc0e5] hover:bg-[#0c67bd]'
+                  }`}
+                >
+                  <NavIcon icon={item.icon} active={active} />
+                  <span className="whitespace-nowrap">{item.label}</span>
+                </Link>
+              )
+            })}
+          </nav>
+
+          <div className="flex shrink-0 items-center gap-1 lg:hidden">
+            {ADMIN_ITEMS.map((item) => (
+              <Link
+                key={item.href}
+                href={item.href}
+                prefetch={false}
+                className={`inline-flex h-7 items-center gap-1.5 rounded-[3px] border px-2.5 text-[11px] font-bold transition-colors ${
+                  isActive(item.href)
+                    ? 'border-white bg-white text-[var(--color-brand-800)]'
+                    : 'border-white/20 text-white/82 hover:bg-white/10 hover:text-white'
                 }`}
               >
                 {item.href.includes('db') ? <Database size={13} /> : <Settings size={13} />}

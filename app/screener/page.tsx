@@ -309,16 +309,13 @@ export default function ScreenerPage() {
   }
 
   return (
-    <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-      <div style={{ borderBottom: '1px solid var(--border-subtle)', paddingBottom: '12px' }}>
-        <h1 style={{ fontFamily: 'var(--font-display)', fontSize: '16px', fontWeight: 700 }}>
-          スクリーナー（マルチ軸ステージフィルタ）
-        </h1>
-        <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
-          J-Quants由来の最新スナップショットを表示。HEXステージで絞り込み（複数系統は AND）
-        </p>
+    <div className="sb-page">
+      <div className="sb-page-title">
+        <h1>スクリーナー（マルチ軸ステージフィルタ）</h1>
+        <p>J-Quants由来の最新スナップショットを表示。HEXステージで絞り込み（複数系統は AND）</p>
       </div>
 
+      <div style={{ padding: '14px 16px 16px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
       {/* 業種で絞り込み */}
       <Section step={1} label="業種で絞り込み（任意）">
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
@@ -716,6 +713,7 @@ export default function ScreenerPage() {
           )}
         </div>
       )}
+      </div>
     </div>
   )
 }
