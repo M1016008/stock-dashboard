@@ -504,7 +504,7 @@ export default function ScreenerPage() {
           <div style={{
             marginTop: '12px',
             padding: '8px 12px',
-            background: 'rgba(217,119,6,0.06)',
+            background: 'var(--color-brand-50)',
             border: '1px solid var(--accent-dim)',
             borderRadius: 'var(--radius-sm)',
             fontSize: '11px',
