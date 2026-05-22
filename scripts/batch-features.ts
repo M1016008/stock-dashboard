@@ -13,10 +13,10 @@
 //   - ローリング状態 (MA 系列、拡散履歴、ステージ滞在トラッカー) を保持
 //   - チャンク 200 行で INSERT (libSQL の SQL 長制限対策)、onConflictDoNothing で冪等
 
-import { db, client } from '@/lib/db/client'
-import { dailySnapshots, featureSnapshots, tickerUniverse, batchRuns } from '@/lib/db/schema'
+import { db, execAll, execGet } from '@/lib/db/client'
+import { featureSnapshots, batchRuns, computeState } from '@/lib/db/schema'
 import * as F from '@/lib/features'
-import { eq, asc } from 'drizzle-orm'
+import { eq, sql } from 'drizzle-orm'
 
 type Timescale = 'daily' | 'weekly' | 'monthly'
 
@@ -31,6 +31,7 @@ const QUADRATIC_WINDOW: Record<Timescale, number> = {
 const HISTORICAL_PERCENTILE_LOOKBACK = 250
 
 const PROGRESS_EVERY = 50
+const LOOKBACK_DAYS = Number(process.env.FEATURE_LOOKBACK_DAYS ?? 900)
 
 // timescale ごとの MA カラム名 (daily_snapshots 上)
 const MA_COLUMNS: Record<Timescale, readonly [string, string, string, string, string]> = {
@@ -84,23 +85,52 @@ interface FeatureRow {
   stage_b_oh: string | null
 }
 
-async function computeFeaturesForTicker(ticker: string): Promise<number> {
-  // 既に処理済みかチェック (再開時の高速スキップ)
-  const existing = await client.execute({
-    sql: 'SELECT COUNT(*) AS c FROM feature_snapshots WHERE ticker = ? LIMIT 1',
-    args: [ticker],
-  })
-  const existingCount = Number((existing.rows[0] as unknown as { c: number }).c ?? 0)
-  if (existingCount > 0) {
-    // 既存あり: スキップ (再計算しない)
-    return 0
-  }
+function dateDaysBefore(date: string, days: number): string {
+  const d = new Date(`${date}T00:00:00Z`)
+  d.setUTCDate(d.getUTCDate() - days)
+  return d.toISOString().slice(0, 10)
+}
 
-  const snapshots = await db
-    .select()
-    .from(dailySnapshots)
-    .where(eq(dailySnapshots.ticker, ticker))
-    .orderBy(asc(dailySnapshots.date))
+async function markFeatureState(ticker: string, lastProcessedDate: string): Promise<void> {
+  await db
+    .insert(computeState)
+    .values({ jobType: 'feature_compute', ticker, lastProcessedDate })
+    .onConflictDoUpdate({
+      target: [computeState.jobType, computeState.ticker],
+      set: {
+        lastProcessedDate: sql`excluded.last_processed_date`,
+        updatedAt: sql`unixepoch()`,
+      },
+    })
+}
+
+async function computeFeaturesForTicker(ticker: string): Promise<number> {
+  const [state, existing] = await Promise.all([
+    execGet<{ lastProcessedDate: string | null }>(
+      `SELECT last_processed_date AS lastProcessedDate FROM compute_state WHERE job_type = 'feature_compute' AND ticker = ?`,
+      [ticker],
+    ),
+    execGet<{ maxDate: string | null }>(
+      `SELECT MAX(date) AS maxDate FROM feature_snapshots WHERE ticker = ?`,
+      [ticker],
+    ),
+  ])
+  const lastFeatureDate = [state?.lastProcessedDate, existing?.maxDate]
+    .filter((date): date is string => Boolean(date))
+    .sort()
+    .at(-1) ?? null
+  const startDate = lastFeatureDate ? dateDaysBefore(lastFeatureDate, LOOKBACK_DAYS) : null
+
+  const snapshots = await execAll<Record<string, number | string | null>>(
+    `
+      SELECT *
+      FROM daily_snapshots
+      WHERE ticker = ?
+        ${startDate ? 'AND date >= ?' : ''}
+      ORDER BY date
+    `,
+    startDate ? [ticker, startDate] : [ticker],
+  )
 
   if (snapshots.length === 0) return 0
 
@@ -122,7 +152,7 @@ async function computeFeaturesForTicker(ticker: string): Promise<number> {
     let stageBRun: { stage: number | null; startIdx: number } = { stage: null, startIdx: 0 }
 
     for (let i = 0; i < snapshots.length; i++) {
-      const snap = snapshots[i] as unknown as Record<string, number | string | null>
+      const snap = snapshots[i]
       const mas: (number | null)[] = maCols.map(col => snap[col] as number | null)
 
       // 系列に追加 (null なら追加せず — 古いデータが計算可能性を持つよう、indexは進める)
@@ -195,10 +225,13 @@ async function computeFeaturesForTicker(ticker: string): Promise<number> {
       const stageBOh = stageB != null
         ? JSON.stringify([1, 2, 3, 4, 5, 6].map(s => (s === stageB ? 1 : 0)))
         : null
+      const snapDate = snap.date as string
+
+      if (lastFeatureDate && snapDate <= lastFeatureDate) continue
 
       features.push({
         ticker,
-        date: snap.date as string,
+        date: snapDate,
         timescale,
         bin_order_a_12: binOrderA12,
         bin_order_a_13: binOrderA13,
@@ -237,7 +270,13 @@ async function computeFeaturesForTicker(ticker: string): Promise<number> {
     }
   }
 
-  if (features.length === 0) return 0
+  if (features.length === 0) {
+    const latestSnapshotDate = snapshots[snapshots.length - 1]?.date
+    if (typeof latestSnapshotDate === 'string') {
+      await markFeatureState(ticker, latestSnapshotDate)
+    }
+    return 0
+  }
 
   // チャンク INSERT
   const CHUNK = 200
@@ -246,6 +285,11 @@ async function computeFeaturesForTicker(ticker: string): Promise<number> {
       .insert(featureSnapshots)
       .values(features.slice(i, i + CHUNK))
       .onConflictDoNothing()
+  }
+
+  const latestDate = features[features.length - 1]?.date
+  if (latestDate) {
+    await markFeatureState(ticker, latestDate)
   }
 
   return features.length
@@ -261,10 +305,30 @@ async function main() {
   const filter = process.env.TICKERS?.split(',').map(s => s.trim()).filter(Boolean)
   const tickers: { ticker: string }[] = filter && filter.length > 0
     ? filter.map(ticker => ({ ticker }))
-    : await db
-        .select({ ticker: tickerUniverse.ticker })
-        .from(tickerUniverse)
-        .where(eq(tickerUniverse.active, true))
+    : await execAll<{ ticker: string }>(`
+        SELECT u.ticker
+        FROM ticker_universe u
+        WHERE u.active = 1
+          AND (
+            SELECT MAX(s.date)
+            FROM daily_snapshots s
+            WHERE s.ticker = u.ticker
+          ) > COALESCE(
+            (
+              SELECT cs.last_processed_date
+              FROM compute_state cs
+              WHERE cs.job_type = 'feature_compute'
+                AND cs.ticker = u.ticker
+            ),
+            (
+              SELECT MAX(f.date)
+              FROM feature_snapshots f
+              WHERE f.ticker = u.ticker
+            ),
+            ''
+          )
+        ORDER BY u.ticker
+      `)
 
   let succeeded = 0
   let failed = 0

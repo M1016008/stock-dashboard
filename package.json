@@ -23,7 +23,9 @@
     "batch:credit-short": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/batch-credit-short.ts",
     "batch:earnings": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/batch-earnings.ts",
     "batch:indices": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/batch-indices.ts",
+    "batch:dashboard-cache": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/build-dashboard-cache.ts",
     "import:classification": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/import-classification.ts",
+    "sync:turso:optimized": "tsx --env-file=.env.local scripts/sync-optimized-to-turso.ts",
     "verify:phase3": "tsx --env-file=.env.local scripts/verify-phase3.ts",
     "pull": "git pull origin claude/resume-development-kvnU1",
     "sync": "git pull origin claude/resume-development-kvnU1 && npm install"

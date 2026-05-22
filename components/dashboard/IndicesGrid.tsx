@@ -2,7 +2,7 @@
 // Phase 4 B3: 6 列の指数カード行。indices_daily 由来 (TOPIX/グロース250/プライム/スタンダード)
 // + 騰落レシオ (自前計算) + 日経225 (J-Quants 指数四本値 API では未提供)
 
-import { getDashboardIndices } from '@/lib/queries/dashboard'
+import { getCachedDashboardIndices } from '@/lib/queries/dashboard-cache'
 
 function fmt(v: number | null, label: string): string {
   if (v == null || !Number.isFinite(v)) return '---'
@@ -11,7 +11,7 @@ function fmt(v: number | null, label: string): string {
 }
 
 export async function IndicesGrid() {
-  const indices = await getDashboardIndices()
+  const indices = await getCachedDashboardIndices()
   return (
     <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 2xl:grid-cols-6">
       {indices.map(idx => {

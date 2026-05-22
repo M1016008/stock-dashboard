@@ -3,23 +3,12 @@
 import { useRouter } from 'next/navigation'
 import { useEffect } from 'react'
 
-const ATTEMPT_KEY = 'stockboard:lastAutoUpdateAttempt'
-const ATTEMPT_INTERVAL_MS = 30 * 60 * 1000
 const POLL_INTERVAL_MS = 30 * 1000
 const MAX_POLLS = 60
 
 type FreshnessResponse = {
   needsUpdate: boolean
   running: boolean
-}
-
-function recentlyAttempted(): boolean {
-  const last = Number(window.localStorage.getItem(ATTEMPT_KEY) ?? 0)
-  return Number.isFinite(last) && Date.now() - last < ATTEMPT_INTERVAL_MS
-}
-
-function markAttempted() {
-  window.localStorage.setItem(ATTEMPT_KEY, String(Date.now()))
 }
 
 export function DataAutoUpdater() {
@@ -31,29 +20,14 @@ export function DataAutoUpdater() {
 
     async function checkAndStartUpdate() {
       try {
-        if (recentlyAttempted()) {
-          await pollUntilFresh(0)
-          return
-        }
-
         const freshness = await fetch('/api/admin/update-latest', {
           cache: 'no-store',
         }).then((res) => res.json() as Promise<FreshnessResponse>)
 
-        if (cancelled || !freshness.needsUpdate) return
-        if (freshness.running) {
-          await pollUntilFresh(0)
-          return
-        }
-
-        markAttempted()
-        await fetch('/api/admin/update-latest', {
-          method: 'POST',
-          cache: 'no-store',
-        })
+        if (cancelled || (!freshness.needsUpdate && !freshness.running)) return
         await pollUntilFresh(0)
       } catch (err) {
-        console.warn('Data auto update check failed', err)
+        console.warn('Data freshness monitor failed', err)
       }
     }
 
@@ -64,8 +38,10 @@ export function DataAutoUpdater() {
         cache: 'no-store',
       }).then((res) => res.json() as Promise<FreshnessResponse>)
 
-      if (cancelled || !freshness.needsUpdate) return
-      if (!freshness.running) return
+      if (cancelled || (!freshness.needsUpdate && !freshness.running)) {
+        router.refresh()
+        return
+      }
 
       pollTimer = window.setTimeout(async () => {
         const latest = await fetch('/api/admin/update-latest', {
@@ -73,13 +49,11 @@ export function DataAutoUpdater() {
         }).then((res) => res.json() as Promise<FreshnessResponse>)
 
         if (cancelled) return
-        if (!latest.needsUpdate) {
+        if (!latest.needsUpdate && !latest.running) {
           router.refresh()
           return
         }
-        if (latest.running) {
-          await pollUntilFresh(count + 1)
-        }
+        await pollUntilFresh(count + 1)
       }, POLL_INTERVAL_MS)
     }
 

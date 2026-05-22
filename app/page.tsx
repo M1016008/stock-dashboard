@@ -8,17 +8,13 @@
 import type { Metadata } from 'next'
 import { Suspense } from 'react'
 import { PageTitle } from '@/components/layout/PageTitle'
-import { IndicesGrid } from '@/components/dashboard/IndicesGrid'
-import { StageDistributionBar } from '@/components/dashboard/StageDistributionBar'
-import { TodayTransitionsSummary } from '@/components/dashboard/TodayTransitionsSummary'
 import { StereoscopicSignals } from '@/components/dashboard/StereoscopicSignals'
 import { NewHighVolume } from '@/components/dashboard/NewHighVolume'
 import { SectorHeatmap } from '@/components/dashboard/SectorHeatmap'
-import { WatchlistPanel } from '@/components/dashboard/WatchlistPanel'
 import { CreditShortPanel } from '@/components/dashboard/CreditShortPanel'
 import { PatternStatsTop } from '@/components/dashboard/PatternStatsTop'
 import { EarningsCalendarPanel } from '@/components/dashboard/EarningsCalendarPanel'
-import { getLatestDate } from '@/lib/queries/dashboard'
+import { getCachedLatestDate } from '@/lib/queries/dashboard-cache'
 
 export const metadata: Metadata = {
   title: 'ダッシュボード — StockBoard',
@@ -53,7 +49,7 @@ function SectionFallback({ height = 80 }: { height?: number }) {
 }
 
 export default async function DashboardPage() {
-  const latest = await getLatestDate()
+  const latest = await getCachedLatestDate()
   const subtitle = latest ? `${latest} 大引け基準` : 'データ未取り込み'
 
   return (
@@ -63,39 +59,21 @@ export default async function DashboardPage() {
         subtitle={subtitle}
         badge="パターン統計 最新反映"
       />
-      <Suspense fallback={<SectionFallback height={70} />}>
-        <IndicesGrid />
+      <Suspense fallback={<SectionFallback height={360} />}>
+        <StereoscopicSignals />
       </Suspense>
-      <Suspense fallback={<SectionFallback height={70} />}>
-        <StageDistributionBar />
+      <Suspense fallback={<SectionFallback height={420} />}>
+        <NewHighVolume />
       </Suspense>
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
-        <Suspense fallback={<SectionFallback height={170} />}>
-          <TodayTransitionsSummary />
-        </Suspense>
-        <Suspense fallback={<SectionFallback height={170} />}>
-          <StereoscopicSignals />
-        </Suspense>
-        <Suspense fallback={<SectionFallback height={170} />}>
-          <NewHighVolume />
-        </Suspense>
-      </div>
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.45fr_1fr]">
-        <Suspense fallback={<SectionFallback height={240} />}>
-          <SectorHeatmap />
-        </Suspense>
-        <Suspense fallback={<SectionFallback height={240} />}>
-          <WatchlistPanel />
-        </Suspense>
-      </div>
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-        <Suspense fallback={<SectionFallback height={170} />}>
-          <CreditShortPanel />
-        </Suspense>
-        <Suspense fallback={<SectionFallback height={170} />}>
-          <PatternStatsTop />
-        </Suspense>
-      </div>
+      <Suspense fallback={<SectionFallback height={260} />}>
+        <PatternStatsTop />
+      </Suspense>
+      <Suspense fallback={<SectionFallback height={420} />}>
+        <CreditShortPanel />
+      </Suspense>
+      <Suspense fallback={<SectionFallback height={240} />}>
+        <SectorHeatmap />
+      </Suspense>
       <Suspense fallback={<SectionFallback height={200} />}>
         <EarningsCalendarPanel />
       </Suspense>

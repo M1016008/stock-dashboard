@@ -3,7 +3,7 @@
 
 import Link from 'next/link'
 import { Card, CardHeader } from '@/components/ui/Card'
-import { getTodayTransitionCounts } from '@/lib/queries/dashboard'
+import { getCachedTodayTransitionCounts } from '@/lib/queries/dashboard-cache'
 
 const AXES = [
   { key: 'daily_a',   label: '日足 A' },
@@ -15,7 +15,7 @@ const AXES = [
 ] as const
 
 export async function TodayTransitionsSummary() {
-  const counts = await getTodayTransitionCounts()
+  const counts = await getCachedTodayTransitionCounts()
   return (
     <Card size="sm">
       <CardHeader

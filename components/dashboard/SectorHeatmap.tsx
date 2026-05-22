@@ -3,7 +3,7 @@
 
 import Link from 'next/link'
 import { Card, CardHeader } from '@/components/ui/Card'
-import { getSector33Heatmap } from '@/lib/queries/dashboard'
+import { getCachedSector33Heatmap } from '@/lib/queries/dashboard-cache'
 
 function colorFor(pct: number): { bg: string; text: string } {
   // -3% ~ +3% を 0.05 ~ 0.30 opacity に
@@ -18,7 +18,7 @@ function colorFor(pct: number): { bg: string; text: string } {
 }
 
 export async function SectorHeatmap() {
-  const rows = await getSector33Heatmap()
+  const rows = await getCachedSector33Heatmap()
   return (
     <Card>
       <CardHeader

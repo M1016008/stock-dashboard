@@ -2,7 +2,7 @@
 // Phase 4 B4: 横長積み上げバー (高さ 22px、角丸 4px、ボーダー 0.5px)
 //   日足 A の 6 ステージを比例幅で並べる + 下に小ラベル。
 
-import { getStageDistribution } from '@/lib/queries/dashboard'
+import { getCachedStageDistributionDailyA } from '@/lib/queries/dashboard-cache'
 
 const LABELS: Record<number, string> = {
   1: '安定上昇', 2: '上昇変化①', 3: '下降変化①',
@@ -10,7 +10,7 @@ const LABELS: Record<number, string> = {
 }
 
 export async function StageDistributionBar() {
-  const rows = await getStageDistribution('daily_a_stage')
+  const rows = await getCachedStageDistributionDailyA()
   const total = rows.reduce((a, r) => a + r.count, 0)
   if (total === 0) {
     return (

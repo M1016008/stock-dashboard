@@ -146,6 +146,40 @@ const STATEMENTS = [
     expected_rows INTEGER NOT NULL,
     imported_at INTEGER NOT NULL DEFAULT (unixepoch())
   )`,
+  `CREATE TABLE IF NOT EXISTS update_locks (
+    job_type TEXT PRIMARY KEY,
+    status TEXT NOT NULL,
+    owner TEXT,
+    started_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    heartbeat_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    lease_expires_at INTEGER NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS jquants_sync_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    target_date TEXT NOT NULL,
+    api_type TEXT NOT NULL,
+    expected_rows INTEGER NOT NULL DEFAULT 0,
+    imported_rows INTEGER NOT NULL DEFAULT 0,
+    missing_tickers TEXT,
+    status TEXT NOT NULL,
+    started_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    finished_at INTEGER,
+    error_summary TEXT
+  )`,
+  `CREATE INDEX IF NOT EXISTS jquants_sync_target_idx ON jquants_sync_runs(target_date, api_type)`,
+  `CREATE TABLE IF NOT EXISTS compute_state (
+    job_type TEXT NOT NULL,
+    ticker TEXT NOT NULL,
+    last_processed_date TEXT,
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (job_type, ticker)
+  )`,
+  `CREATE INDEX IF NOT EXISTS compute_state_job_date_idx ON compute_state(job_type, last_processed_date)`,
+  `CREATE TABLE IF NOT EXISTS dashboard_cache (
+    date TEXT PRIMARY KEY,
+    payload_json TEXT NOT NULL,
+    computed_at INTEGER NOT NULL DEFAULT (unixepoch())
+  )`,
   // ─── Phase 2: 日次スナップショット (MA + ステージ) ───
   `CREATE TABLE IF NOT EXISTS daily_snapshots (
     ticker TEXT NOT NULL,
@@ -284,6 +318,7 @@ const STATEMENTS = [
     PRIMARY KEY (ticker, date)
   )`,
   `CREATE INDEX IF NOT EXISTS wmi_date_idx ON weekly_margin_interest(date)`,
+  `CREATE INDEX IF NOT EXISTS wmi_ticker_date_idx ON weekly_margin_interest(ticker, date)`,
   // ─── Phase 4: 空売り残高 ───
   `CREATE TABLE IF NOT EXISTS short_selling_positions (
     ticker TEXT NOT NULL,
@@ -294,6 +329,7 @@ const STATEMENTS = [
     PRIMARY KEY (ticker, date, reporter)
   )`,
   `CREATE INDEX IF NOT EXISTS ssp_date_idx ON short_selling_positions(date)`,
+  `CREATE INDEX IF NOT EXISTS ssp_ticker_date_idx ON short_selling_positions(ticker, date)`,
   // ─── Phase 4: 決算発表カレンダー ───
   `CREATE TABLE IF NOT EXISTS earnings_calendar (
     ticker TEXT NOT NULL,

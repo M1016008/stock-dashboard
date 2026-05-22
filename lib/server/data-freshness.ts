@@ -1,14 +1,19 @@
 import { execAll, execGet } from '@/lib/db/client'
+import { getActiveUpdateLocks } from '@/lib/server/update-lock'
 
 const UPDATE_JOB_TYPES = [
   'update_latest',
   'ohlcv_fetch:jquants',
   'snapshot_compute',
+  'feature_compute',
   'indices',
   'earnings_calendar',
+  'dashboard_cache',
 ]
 const RUNNING_JOB_TTL_SECONDS = 6 * 60 * 60
 const MIN_COVERAGE_RATIO = 1
+const MIN_SNAPSHOT_OHLCV_ROWS = 5
+const JQUANTS_DAILY_READY_MINUTES = 16 * 60 + 30
 
 type MaxDateRow = {
   maxDate: string | null
@@ -18,6 +23,16 @@ export type RunningJob = {
   id: number
   jobType: string
   startedAt: string | number | Date
+  source?: 'batch_runs' | 'update_locks'
+}
+
+export type LastRun = {
+  id: number
+  jobType: string
+  status: string
+  startedAt: string | number | Date
+  finishedAt: string | number | Date | null
+  errorSummary: string | null
 }
 
 export type DataFreshness = {
@@ -26,6 +41,7 @@ export type DataFreshness = {
   latestSnapshotDate: string | null
   latestIndexDate: string | null
   latestEarningsDate: string | null
+  latestDashboardCacheDate: string | null
   activeTickerCount: number
   staleOhlcvTickerCount: number
   staleSnapshotTickerCount: number
@@ -35,19 +51,22 @@ export type DataFreshness = {
   baselineSnapshotCount: number
   needsOhlcvUpdate: boolean
   needsSnapshotUpdate: boolean
+  needsDashboardCacheUpdate: boolean
   needsUpdate: boolean
   running: boolean
   runningJobs: RunningJob[]
+  lastRun: LastRun | null
   checkedAt: string
 }
 
-function jstParts(date: Date): { year: number; month: number; day: number; hour: number } {
+function jstParts(date: Date): { year: number; month: number; day: number; hour: number; minute: number } {
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone: 'Asia/Tokyo',
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
     hour: '2-digit',
+    minute: '2-digit',
     hourCycle: 'h23',
   }).formatToParts(date)
 
@@ -57,6 +76,7 @@ function jstParts(date: Date): { year: number; month: number; day: number; hour:
     month: get('month'),
     day: get('day'),
     hour: get('hour'),
+    minute: get('minute'),
   }
 }
 
@@ -79,10 +99,11 @@ export function expectedLatestTradingDate(now = new Date()): string {
   const parts = jstParts(now)
   const jstDate = new Date(Date.UTC(parts.year, parts.month - 1, parts.day))
   const weekday = jstDate.getUTCDay()
+  const minuteOfDay = parts.hour * 60 + parts.minute
 
   if (weekday === 0) return formatDate(previousWeekday(jstDate))
   if (weekday === 6) return formatDate(previousWeekday(jstDate))
-  if (parts.hour < 18) return formatDate(previousWeekday(jstDate))
+  if (minuteOfDay < JQUANTS_DAILY_READY_MINUTES) return formatDate(previousWeekday(jstDate))
   return formatDate(jstDate)
 }
 
@@ -93,11 +114,21 @@ async function maxDate(tableName: string, columnName: string): Promise<string | 
 
 async function dateCoverage(tableName: string): Promise<{ latestCount: number; baselineCount: number }> {
   const rows = await execAll<{ date: string; count: number }>(`
-    SELECT date, COUNT(*) AS count
-    FROM ${tableName}
-    GROUP BY date
-    ORDER BY date DESC
-    LIMIT 5
+    WITH recent_dates AS (
+      SELECT DISTINCT date
+      FROM ${tableName}
+      ORDER BY date DESC
+      LIMIT 5
+    )
+    SELECT
+      rd.date,
+      (
+        SELECT COUNT(*)
+        FROM ${tableName} t
+        WHERE t.date = rd.date
+      ) AS count
+    FROM recent_dates rd
+    ORDER BY rd.date DESC
   `)
   const latestCount = Number(rows[0]?.count ?? 0)
   const baselineCount = Math.max(...rows.map(r => Number(r.count ?? 0)), latestCount)
@@ -111,8 +142,10 @@ export async function getDataFreshness(now = new Date()): Promise<DataFreshness>
     latestSnapshotDate,
     latestIndexDate,
     latestEarningsDate,
+    latestDashboardCacheDate,
     ohlcvCoverage,
     snapshotCoverage,
+    snapshotEligibleCoverage,
     jquantsCoverage,
     tickerCoverage,
   ] = await Promise.all([
@@ -120,8 +153,33 @@ export async function getDataFreshness(now = new Date()): Promise<DataFreshness>
     maxDate('daily_snapshots', 'date'),
     maxDate('indices_daily', 'date'),
     maxDate('earnings_calendar', 'announce_date'),
+    maxDate('dashboard_cache', 'date'),
     dateCoverage('ohlcv_daily'),
     dateCoverage('daily_snapshots'),
+    execGet<{ eligibleSnapshotRows: number }>(
+      `
+        SELECT COUNT(*) AS eligibleSnapshotRows
+        FROM ticker_universe u
+        WHERE u.active = 1
+          AND EXISTS (
+            SELECT 1
+            FROM ohlcv_daily o
+            WHERE o.ticker = u.ticker
+              AND o.date = ?
+          )
+          AND (
+            SELECT COUNT(*)
+            FROM (
+              SELECT 1
+              FROM ohlcv_daily h
+              WHERE h.ticker = u.ticker
+                AND h.date <= ?
+              LIMIT ?
+            )
+          ) >= ?
+      `,
+      [expectedTradingDate, expectedTradingDate, MIN_SNAPSHOT_OHLCV_ROWS, MIN_SNAPSHOT_OHLCV_ROWS],
+    ),
     execGet<{ expectedRows: number }>(
       `SELECT expected_rows AS expectedRows FROM jquants_daily_coverage WHERE date = ?`,
       [expectedTradingDate],
@@ -135,32 +193,92 @@ export async function getDataFreshness(now = new Date()): Promise<DataFreshness>
         SELECT
           COUNT(*) AS activeTickerCount,
           SUM(CASE
-            WHEN COALESCE((SELECT MAX(o.date) FROM ohlcv_daily o WHERE o.ticker = u.ticker), '') < ?
+            WHEN NOT EXISTS (
+              SELECT 1
+              FROM ohlcv_daily o
+              WHERE o.ticker = u.ticker
+                AND o.date = ?
+            )
             THEN 1 ELSE 0
           END) AS staleOhlcvTickerCount,
           SUM(CASE
-            WHEN COALESCE((SELECT MAX(s.date) FROM daily_snapshots s WHERE s.ticker = u.ticker), '') < ?
+            WHEN EXISTS (
+              SELECT 1
+              FROM ohlcv_daily o
+              WHERE o.ticker = u.ticker
+                AND o.date = ?
+            )
+            AND (
+              SELECT COUNT(*)
+              FROM (
+                SELECT 1
+                FROM ohlcv_daily h
+                WHERE h.ticker = u.ticker
+                  AND h.date <= ?
+                LIMIT ?
+              )
+            ) >= ?
+            AND NOT EXISTS (
+              SELECT 1
+              FROM daily_snapshots s
+              WHERE s.ticker = u.ticker
+                AND s.date = ?
+            )
             THEN 1 ELSE 0
           END) AS staleSnapshotTickerCount
         FROM ticker_universe u
         WHERE u.active = 1
       `,
-      [expectedTradingDate, expectedTradingDate],
+      [
+        expectedTradingDate,
+        expectedTradingDate,
+        expectedTradingDate,
+        MIN_SNAPSHOT_OHLCV_ROWS,
+        MIN_SNAPSHOT_OHLCV_ROWS,
+        expectedTradingDate,
+      ],
     ),
   ])
 
   const placeholders = UPDATE_JOB_TYPES.map(() => '?').join(', ')
-  const runningJobs = await execAll<RunningJob>(
-    `
-      SELECT id, job_type AS jobType, started_at AS startedAt
-      FROM batch_runs
-      WHERE status = 'running'
-        AND job_type IN (${placeholders})
-        AND started_at >= unixepoch() - ?
-      ORDER BY id DESC
-    `,
-    [...UPDATE_JOB_TYPES, RUNNING_JOB_TTL_SECONDS],
-  )
+  const [batchRunningJobs, activeLocks, lastRun] = await Promise.all([
+    execAll<RunningJob>(
+      `
+        SELECT id, job_type AS jobType, started_at AS startedAt, 'batch_runs' AS source
+        FROM batch_runs
+        WHERE status = 'running'
+          AND job_type IN (${placeholders})
+          AND started_at >= unixepoch() - ?
+        ORDER BY id DESC
+      `,
+      [...UPDATE_JOB_TYPES, RUNNING_JOB_TTL_SECONDS],
+    ),
+    getActiveUpdateLocks(UPDATE_JOB_TYPES),
+    execGet<LastRun>(
+      `
+        SELECT
+          id,
+          job_type AS jobType,
+          status,
+          started_at AS startedAt,
+          finished_at AS finishedAt,
+          error_summary AS errorSummary
+        FROM batch_runs
+        WHERE job_type IN (${placeholders})
+        ORDER BY id DESC
+        LIMIT 1
+      `,
+      UPDATE_JOB_TYPES,
+    ),
+  ])
+
+  const lockRunningJobs: RunningJob[] = activeLocks.map((lock, index) => ({
+    id: -1 - index,
+    jobType: lock.jobType,
+    startedAt: lock.startedAt,
+    source: 'update_locks',
+  }))
+  const runningJobs = [...lockRunningJobs, ...batchRunningJobs]
 
   const activeTickerCount = Number(tickerCoverage?.activeTickerCount ?? 0)
   const staleOhlcvTickerCount = Number(tickerCoverage?.staleOhlcvTickerCount ?? activeTickerCount)
@@ -168,7 +286,10 @@ export async function getDataFreshness(now = new Date()): Promise<DataFreshness>
   const latestOhlcvCount = ohlcvCoverage.latestCount
   const baselineOhlcvCount = Number(jquantsCoverage?.expectedRows ?? ohlcvCoverage.baselineCount)
   const latestSnapshotCount = snapshotCoverage.latestCount
-  const baselineSnapshotCount = Number(jquantsCoverage?.expectedRows ?? snapshotCoverage.baselineCount)
+  const eligibleSnapshotRows = Number(snapshotEligibleCoverage?.eligibleSnapshotRows ?? 0)
+  const baselineSnapshotCount = eligibleSnapshotRows > 0
+    ? eligibleSnapshotRows
+    : Number(jquantsCoverage?.expectedRows ?? snapshotCoverage.baselineCount)
   const ohlcvCoverageFresh =
     baselineOhlcvCount === 0 || latestOhlcvCount >= Math.floor(baselineOhlcvCount * MIN_COVERAGE_RATIO)
   const snapshotCoverageFresh =
@@ -183,6 +304,9 @@ export async function getDataFreshness(now = new Date()): Promise<DataFreshness>
     || (!!latestOhlcvDate && latestSnapshotDate < latestOhlcvDate)
     || latestSnapshotDate < expectedTradingDate
     || !snapshotCoverageFresh
+  const needsDashboardCacheUpdate =
+    !!latestSnapshotDate
+    && (!latestDashboardCacheDate || latestDashboardCacheDate < latestSnapshotDate)
 
   return {
     expectedTradingDate,
@@ -190,6 +314,7 @@ export async function getDataFreshness(now = new Date()): Promise<DataFreshness>
     latestSnapshotDate,
     latestIndexDate,
     latestEarningsDate,
+    latestDashboardCacheDate,
     activeTickerCount,
     staleOhlcvTickerCount,
     staleSnapshotTickerCount,
@@ -199,9 +324,11 @@ export async function getDataFreshness(now = new Date()): Promise<DataFreshness>
     baselineSnapshotCount,
     needsOhlcvUpdate,
     needsSnapshotUpdate,
-    needsUpdate: needsOhlcvUpdate || needsSnapshotUpdate,
+    needsDashboardCacheUpdate,
+    needsUpdate: needsOhlcvUpdate || needsSnapshotUpdate || needsDashboardCacheUpdate,
     running: runningJobs.length > 0,
     runningJobs,
+    lastRun: lastRun ?? null,
     checkedAt: now.toISOString(),
   }
 }

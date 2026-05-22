@@ -4,44 +4,15 @@
 // J-Quants 差分取得 → スナップショット計算を、重複起動しないようロックして順番に実行する。
 
 import { spawn } from 'node:child_process'
-import fs from 'node:fs'
-import path from 'node:path'
 import { eq } from 'drizzle-orm'
 import { db } from '@/lib/db/client'
 import { batchRuns } from '@/lib/db/schema'
 import { getDataFreshness } from '@/lib/server/data-freshness'
-
-const LOCK_PATH = path.join(process.cwd(), 'data', 'update-latest.lock')
-const STALE_LOCK_MS = 6 * 60 * 60 * 1000
+import { acquireUpdateLock } from '@/lib/server/update-lock'
 
 type RunResult = {
   code: number | null
   signal: NodeJS.Signals | null
-}
-
-function acquireLock(): () => void {
-  fs.mkdirSync(path.dirname(LOCK_PATH), { recursive: true })
-
-  try {
-    const stat = fs.statSync(LOCK_PATH)
-    if (Date.now() - stat.mtimeMs > STALE_LOCK_MS) {
-      fs.unlinkSync(LOCK_PATH)
-    }
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
-  }
-
-  const fd = fs.openSync(LOCK_PATH, 'wx')
-  fs.writeFileSync(fd, `${process.pid}\n${new Date().toISOString()}\n`)
-  fs.closeSync(fd)
-
-  return () => {
-    try {
-      fs.unlinkSync(LOCK_PATH)
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
-    }
-  }
 }
 
 function runScript(script: string): Promise<RunResult> {
@@ -69,7 +40,12 @@ async function runRequired(script: string) {
 }
 
 async function main() {
-  const releaseLock = acquireLock()
+  const lock = await acquireUpdateLock('update_latest')
+  if (!lock) {
+    console.log('Latest data update skipped: update_latest lock is already active')
+    return
+  }
+
   const [run] = await db
     .insert(batchRuns)
     .values({
@@ -87,13 +63,16 @@ async function main() {
 
     // 軽量な補助データは毎回同期する。主画面の鮮度に直接関わる OHLCV / snapshot は必要時のみ。
     await runRequired('scripts/batch-indices.ts')
+    await lock.heartbeat()
     await runRequired('scripts/batch-earnings.ts')
+    await lock.heartbeat()
 
     const before = await getDataFreshness()
     console.log('Freshness before:', before)
 
     if (before.needsOhlcvUpdate) {
       await runRequired('scripts/batch-ohlcv.ts')
+      await lock.heartbeat()
     } else {
       console.log('OHLCV is already fresh')
     }
@@ -101,9 +80,15 @@ async function main() {
     const afterOhlcv = await getDataFreshness()
     if (afterOhlcv.needsSnapshotUpdate) {
       await runRequired('scripts/batch-snapshots.ts')
+      await lock.heartbeat()
     } else {
       console.log('Snapshots are already fresh')
     }
+
+    await runRequired('scripts/batch-features.ts')
+    await lock.heartbeat()
+    await runRequired('scripts/build-dashboard-cache.ts')
+    await lock.heartbeat()
 
     const after = await getDataFreshness()
     console.log('Freshness after:', after)
@@ -131,7 +116,7 @@ async function main() {
       .where(eq(batchRuns.id, runId))
     throw err
   } finally {
-    releaseLock()
+    await lock.release()
   }
 }
 

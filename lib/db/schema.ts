@@ -183,6 +183,54 @@ export const jquantsDailyCoverage = sqliteTable('jquants_daily_coverage', {
   importedAt:    integer('imported_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
 })
 
+export const updateLocks = sqliteTable('update_locks', {
+  jobType:        text('job_type').primaryKey(),
+  status:         text('status').notNull(),
+  owner:          text('owner'),
+  startedAt:      integer('started_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  heartbeatAt:    integer('heartbeat_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  leaseExpiresAt: integer('lease_expires_at', { mode: 'timestamp' }).notNull(),
+})
+
+export const jquantsSyncRuns = sqliteTable(
+  'jquants_sync_runs',
+  {
+    id:             integer('id').primaryKey({ autoIncrement: true }),
+    targetDate:     text('target_date').notNull(),
+    apiType:        text('api_type').notNull(),
+    expectedRows:   integer('expected_rows').notNull().default(0),
+    importedRows:   integer('imported_rows').notNull().default(0),
+    missingTickers: text('missing_tickers'),
+    status:         text('status').notNull(),
+    startedAt:      integer('started_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+    finishedAt:     integer('finished_at', { mode: 'timestamp' }),
+    errorSummary:   text('error_summary'),
+  },
+  (t) => ({
+    targetIdx: index('jquants_sync_target_idx').on(t.targetDate, t.apiType),
+  }),
+)
+
+export const computeState = sqliteTable(
+  'compute_state',
+  {
+    jobType:           text('job_type').notNull(),
+    ticker:            text('ticker').notNull(),
+    lastProcessedDate: text('last_processed_date'),
+    updatedAt:         integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.jobType, t.ticker] }),
+    jobDateIdx: index('compute_state_job_date_idx').on(t.jobType, t.lastProcessedDate),
+  }),
+)
+
+export const dashboardCache = sqliteTable('dashboard_cache', {
+  date:        text('date').primaryKey(),
+  payloadJson: text('payload_json').notNull(),
+  computedAt:  integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+})
+
 // ─────────────────────────────────────
 // 9. Phase 2: 日次スナップショット (MA15本 + ステージ6種を事前計算)
 //    NULL 可。クールドスタート期間 (履歴不足) では計算できないため。

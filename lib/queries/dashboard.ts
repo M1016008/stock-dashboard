@@ -5,6 +5,7 @@
 // 重い集計が出てきたら結果テーブル化を検討。
 
 import { execAll, execGet } from '@/lib/db/client'
+import { percentile } from '@/lib/features'
 
 // ─── 最新営業日 ───
 export async function getLatestDate(): Promise<string | null> {
@@ -100,42 +101,93 @@ export async function getTodayTransitionCounts(): Promise<TransitionCount | null
 export interface StereoscopicRow {
   ticker: string
   name: string | null
+  sectorName: string | null
+  marketSegment: string | null
+  patternCode: string
   patternCount: number
+  price: number | null
+  changePct: number | null
+  volumeRatio30: number | null
+  daily_a_stage: number | null
+  daily_b_stage: number | null
+  weekly_a_stage: number | null
+  weekly_b_stage: number | null
+  monthly_a_stage: number | null
+  monthly_b_stage: number | null
+  p50_30d: number | null
   p50_60d: number | null
+  p50_90d: number | null
 }
-export async function getStereoscopicSignals(limit = 6): Promise<StereoscopicRow[]> {
+export async function getStereoscopicSignals(limit = 12): Promise<StereoscopicRow[]> {
   const latest = await getLatestDate()
   if (!latest) return []
+  const prev = await getPrevDate(latest)
   return await execAll<StereoscopicRow>(
     `
     WITH today AS (
-      SELECT ticker,
-             daily_a_stage   || daily_b_stage   ||
-             weekly_a_stage  || weekly_b_stage  ||
-             monthly_a_stage || monthly_b_stage AS code
+      SELECT
+        s.ticker,
+        printf('%d%d%d%d%d%d',
+          s.daily_a_stage, s.daily_b_stage,
+          s.weekly_a_stage, s.weekly_b_stage,
+          s.monthly_a_stage, s.monthly_b_stage
+        ) AS code,
+        s.daily_a_stage,
+        s.daily_b_stage,
+        s.weekly_a_stage,
+        s.weekly_b_stage,
+        s.monthly_a_stage,
+        s.monthly_b_stage,
+        px.close AS price,
+        py.close AS prev_close,
+        px.volume,
+        (
+          SELECT AVG(volume)
+          FROM (
+            SELECT volume
+            FROM ohlcv_daily od
+            WHERE od.ticker = s.ticker AND od.date <= ?
+            ORDER BY od.date DESC
+            LIMIT 30
+          )
+        ) AS avg_volume_30
       FROM daily_snapshots
-      WHERE date = ?
+      s
+      LEFT JOIN ohlcv_daily px ON px.ticker = s.ticker AND px.date = s.date
+      LEFT JOIN ohlcv_daily py ON py.ticker = s.ticker AND py.date = ?
+      WHERE s.date = ?
         AND daily_a_stage IS NOT NULL AND daily_b_stage IS NOT NULL
         AND weekly_a_stage IS NOT NULL AND weekly_b_stage IS NOT NULL
         AND monthly_a_stage IS NOT NULL AND monthly_b_stage IS NOT NULL
-    ),
-    joined AS (
-      SELECT t.ticker, t.code, p.count, p.p50
-      FROM today t
-      JOIN pattern_stats p ON p.pattern_code = t.code AND p.horizon_days = 60
-      WHERE p.count >= 20
     )
     SELECT
-      j.ticker,
+      t.ticker,
       tu.name,
-      j.count AS patternCount,
-      j.p50   AS p50_60d
-    FROM joined j
-    LEFT JOIN ticker_universe tu ON tu.ticker = j.ticker
-    ORDER BY j.p50 DESC
+      tu.sector33_name AS sectorName,
+      tu.market_segment AS marketSegment,
+      t.code AS patternCode,
+      p30.count AS patternCount,
+      t.price,
+      CASE WHEN t.prev_close > 0 THEN 100.0 * (t.price - t.prev_close) / t.prev_close END AS changePct,
+      CASE WHEN t.avg_volume_30 > 0 THEN CAST(t.volume AS REAL) / t.avg_volume_30 END AS volumeRatio30,
+      t.daily_a_stage,
+      t.daily_b_stage,
+      t.weekly_a_stage,
+      t.weekly_b_stage,
+      t.monthly_a_stage,
+      t.monthly_b_stage,
+      p30.p50 AS p50_30d,
+      p60.p50 AS p50_60d,
+      p90.p50 AS p50_90d
+    FROM today t
+    JOIN pattern_stats p30 ON p30.pattern_code = t.code AND p30.horizon_days = 30 AND p30.count >= 40
+    LEFT JOIN pattern_stats p60 ON p60.pattern_code = t.code AND p60.horizon_days = 60
+    LEFT JOIN pattern_stats p90 ON p90.pattern_code = t.code AND p90.horizon_days = 90
+    LEFT JOIN ticker_universe tu ON tu.ticker = t.ticker
+    ORDER BY p30.p50 DESC, changePct DESC
     LIMIT ?
     `,
-    [latest, limit],
+    [latest, prev ?? latest, latest, limit],
   )
 }
 
@@ -143,16 +195,28 @@ export async function getStereoscopicSignals(limit = 6): Promise<StereoscopicRow
 export interface NewHighVolumeRow {
   ticker: string
   name: string | null
-  type: '新高値' | '新安値' | '量' | string
+  category: 'newHighs' | 'newLows' | 'volumeSpikes'
+  sectorName: string | null
+  type: string
+  price: number | null
   changePct: number
+  volume: number | null
+  volumeRatio: number | null
+  daily_a_stage: number | null
+  daily_b_stage: number | null
 }
-export async function getNewHighVolume(limit = 6): Promise<NewHighVolumeRow[]> {
+export type MarketMovers = {
+  newHighs: NewHighVolumeRow[]
+  newLows: NewHighVolumeRow[]
+  volumeSpikes: NewHighVolumeRow[]
+}
+export async function getMarketMovers(): Promise<MarketMovers> {
   const latest = await getLatestDate()
-  if (!latest) return []
+  if (!latest) return { newHighs: [], newLows: [], volumeSpikes: [] }
   const prev = await getPrevDate(latest)
-  if (!prev) return []
+  if (!prev) return { newHighs: [], newLows: [], volumeSpikes: [] }
   // 軽量版: 当日行 + 過去 252 営業日の MAX/MIN を別クエリで結合 (ROW_NUMBER を回避)
-  return await execAll<NewHighVolumeRow>(
+  const rows = await execAll<NewHighVolumeRow>(
     `
     WITH today AS (
       SELECT ticker, close, high, low, volume FROM ohlcv_daily WHERE date = ?
@@ -165,33 +229,79 @@ export async function getNewHighVolume(limit = 6): Promise<NewHighVolumeRow[]> {
       FROM ohlcv_daily
       WHERE date BETWEEN date(?, '-1 year') AND date(?, '-1 day')
       GROUP BY ticker
-    ),
-    tagged AS (
-      SELECT today.ticker, today.close, today.volume,
-             yest.yc,
-             CASE
-               WHEN today.high >= hist.h252 THEN '新高値'
-               WHEN today.low  <= hist.l252 THEN '新安値'
-               WHEN hist.avgVol > 0 AND CAST(today.volume AS REAL)/hist.avgVol >= 2.0
-                 THEN CAST(ROUND(CAST(today.volume AS REAL)/hist.avgVol, 1) AS TEXT) || 'x量'
-             END AS type
+    )
+    SELECT * FROM (
+      SELECT
+        'newHighs' AS category,
+        today.ticker,
+        tu.name,
+        tu.sector33_name AS sectorName,
+        '新高値' AS type,
+        today.close AS price,
+        CASE WHEN yest.yc > 0 THEN 100.0 * (today.close - yest.yc) / yest.yc ELSE 0 END AS changePct,
+        today.volume,
+        CASE WHEN hist.avgVol > 0 THEN CAST(today.volume AS REAL) / hist.avgVol END AS volumeRatio,
+        s.daily_a_stage,
+        s.daily_b_stage
       FROM today
       JOIN hist USING (ticker)
       JOIN yest USING (ticker)
+      LEFT JOIN ticker_universe tu ON tu.ticker = today.ticker
+      LEFT JOIN daily_snapshots s ON s.ticker = today.ticker AND s.date = ?
+      WHERE today.high >= hist.h252
+      UNION ALL
+      SELECT
+        'newLows' AS category,
+        today.ticker,
+        tu.name,
+        tu.sector33_name AS sectorName,
+        '新安値' AS type,
+        today.close AS price,
+        CASE WHEN yest.yc > 0 THEN 100.0 * (today.close - yest.yc) / yest.yc ELSE 0 END AS changePct,
+        today.volume,
+        CASE WHEN hist.avgVol > 0 THEN CAST(today.volume AS REAL) / hist.avgVol END AS volumeRatio,
+        s.daily_a_stage,
+        s.daily_b_stage
+      FROM today
+      JOIN hist USING (ticker)
+      JOIN yest USING (ticker)
+      LEFT JOIN ticker_universe tu ON tu.ticker = today.ticker
+      LEFT JOIN daily_snapshots s ON s.ticker = today.ticker AND s.date = ?
+      WHERE today.low <= hist.l252
+      UNION ALL
+      SELECT
+        'volumeSpikes' AS category,
+        today.ticker,
+        tu.name,
+        tu.sector33_name AS sectorName,
+        CAST(ROUND(CAST(today.volume AS REAL) / hist.avgVol, 1) AS TEXT) || 'x量' AS type,
+        today.close AS price,
+        CASE WHEN yest.yc > 0 THEN 100.0 * (today.close - yest.yc) / yest.yc ELSE 0 END AS changePct,
+        today.volume,
+        CASE WHEN hist.avgVol > 0 THEN CAST(today.volume AS REAL) / hist.avgVol END AS volumeRatio,
+        s.daily_a_stage,
+        s.daily_b_stage
+      FROM today
+      JOIN hist USING (ticker)
+      JOIN yest USING (ticker)
+      LEFT JOIN ticker_universe tu ON tu.ticker = today.ticker
+      LEFT JOIN daily_snapshots s ON s.ticker = today.ticker AND s.date = ?
+      WHERE hist.avgVol > 0 AND CAST(today.volume AS REAL) / hist.avgVol >= 2.0
     )
-    SELECT
-      t.ticker,
-      tu.name,
-      t.type,
-      CASE WHEN t.yc > 0 THEN 100.0 * (t.close - t.yc) / t.yc ELSE 0 END AS changePct
-    FROM tagged t
-    LEFT JOIN ticker_universe tu ON tu.ticker = t.ticker
-    WHERE t.type IS NOT NULL
-    ORDER BY ABS(changePct) DESC
-    LIMIT ?
+    ORDER BY category, ABS(changePct) DESC, COALESCE(volumeRatio, 0) DESC
     `,
-    [latest, prev, latest, latest, limit],
+    [latest, prev, latest, latest, latest, latest, latest],
   )
+  return {
+    newHighs: rows.filter((row) => row.category === 'newHighs'),
+    newLows: rows.filter((row) => row.category === 'newLows'),
+    volumeSpikes: rows.filter((row) => row.category === 'volumeSpikes'),
+  }
+}
+
+export async function getNewHighVolume(limit = 6): Promise<NewHighVolumeRow[]> {
+  const movers = await getMarketMovers()
+  return [...movers.newHighs, ...movers.newLows, ...movers.volumeSpikes].slice(0, limit)
 }
 
 // ─── 33 業種ヒートマップ ───
@@ -230,23 +340,76 @@ export async function getSector33Heatmap(): Promise<SectorHeatRow[]> {
 export interface PatternRankRow {
   pattern_code: string
   count: number
-  p50: number
+  p50_10d: number | null
+  p50_20d: number | null
+  p50_30d: number | null
   kind: 'top' | 'bottom'
 }
+type PatternSeedRow = {
+  pattern_code: string
+  count: number
+  p50_30d: number
+  kind: 'top' | 'bottom'
+}
+async function medianForPattern(patternCode: string, horizonDays: 10 | 20): Promise<number | null> {
+  const offset = horizonDays - 1
+  const rows = await execAll<{ returnPct: number | null }>(
+    `
+      SELECT
+        CASE
+          WHEN px.close > 0 AND future.close IS NOT NULL
+          THEN 100.0 * (future.close - px.close) / px.close
+        END AS returnPct
+      FROM daily_snapshots s
+      JOIN ohlcv_daily px ON px.ticker = s.ticker AND px.date = s.date
+      LEFT JOIN ohlcv_daily future ON future.ticker = s.ticker
+        AND future.date = (
+          SELECT f.date
+          FROM ohlcv_daily f
+          WHERE f.ticker = s.ticker AND f.date > s.date
+          ORDER BY f.date
+          LIMIT 1 OFFSET ${offset}
+        )
+      WHERE (
+          CAST(s.daily_a_stage AS TEXT) || CAST(s.daily_b_stage AS TEXT) ||
+          CAST(s.weekly_a_stage AS TEXT) || CAST(s.weekly_b_stage AS TEXT) ||
+          CAST(s.monthly_a_stage AS TEXT) || CAST(s.monthly_b_stage AS TEXT)
+        ) = ?
+        AND s.daily_a_stage IS NOT NULL AND s.daily_b_stage IS NOT NULL
+        AND s.weekly_a_stage IS NOT NULL AND s.weekly_b_stage IS NOT NULL
+        AND s.monthly_a_stage IS NOT NULL AND s.monthly_b_stage IS NOT NULL
+    `,
+    [patternCode],
+  )
+  const values = rows
+    .map((row) => row.returnPct)
+    .filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
+  return values.length >= 40 ? percentile(values, 50) : null
+}
 export async function getPatternStatsTopBottom(): Promise<PatternRankRow[]> {
-  const top = await execAll<PatternRankRow>(
-    `SELECT pattern_code, count, p50, 'top' AS kind
+  const top = await execAll<PatternSeedRow>(
+    `SELECT pattern_code, count, p50 AS p50_30d, 'top' AS kind
      FROM pattern_stats
-     WHERE horizon_days = 60 AND count >= 20
-     ORDER BY p50 DESC LIMIT 3`,
+     WHERE horizon_days = 30 AND count >= 40
+     ORDER BY p50 DESC LIMIT 5`,
   )
-  const bottom = await execAll<PatternRankRow>(
-    `SELECT pattern_code, count, p50, 'bottom' AS kind
+  const bottom = await execAll<PatternSeedRow>(
+    `SELECT pattern_code, count, p50 AS p50_30d, 'bottom' AS kind
      FROM pattern_stats
-     WHERE horizon_days = 60 AND count >= 20
-     ORDER BY p50 ASC LIMIT 2`,
+     WHERE horizon_days = 30 AND count >= 40
+     ORDER BY p50 ASC LIMIT 5`,
   )
-  return [...top, ...bottom]
+  const seeds = [...top, ...bottom]
+  return await Promise.all(
+    seeds.map(async (row) => ({
+      pattern_code: row.pattern_code,
+      count: row.count,
+      p50_10d: await medianForPattern(row.pattern_code, 10),
+      p50_20d: await medianForPattern(row.pattern_code, 20),
+      p50_30d: row.p50_30d,
+      kind: row.kind,
+    })),
+  )
 }
 
 // ─── 決算発表カレンダー (14 日先まで) ───
@@ -256,9 +419,16 @@ export interface EarningsRow {
   announce_date: string
   daysLeft: number
   daily_a_stage: number | null
+  daily_b_stage: number | null
+  weekly_a_stage: number | null
+  weekly_b_stage: number | null
+  monthly_a_stage: number | null
+  monthly_b_stage: number | null
   price: number | null
   changePct: number | null
-  avgVolume20: number | null
+  avgVolume10: number | null
+  avgVolume30: number | null
+  avgVolume60: number | null
 }
 export async function getEarningsCalendar(daysAhead = 14): Promise<EarningsRow[]> {
   const latest = await getLatestDate()
@@ -274,9 +444,14 @@ export async function getEarningsCalendar(daysAhead = 14): Promise<EarningsRow[]
     ),
     px AS (SELECT ticker, close FROM ohlcv_daily WHERE date = ?),
     py AS (SELECT ticker, close AS prev_close FROM ohlcv_daily WHERE date = ?),
-    st AS (SELECT ticker, daily_a_stage FROM daily_snapshots WHERE date = ?)
+    st AS (SELECT * FROM daily_snapshots WHERE date = ?)
     SELECT cal.ticker, tu.name, cal.announce_date, cal.daysLeft,
            st.daily_a_stage,
+           st.daily_b_stage,
+           st.weekly_a_stage,
+           st.weekly_b_stage,
+           st.monthly_a_stage,
+           st.monthly_b_stage,
            px.close AS price,
            CASE WHEN py.prev_close > 0 THEN 100.0 * (px.close - py.prev_close) / py.prev_close ELSE 0 END AS changePct,
            (
@@ -286,9 +461,29 @@ export async function getEarningsCalendar(daysAhead = 14): Promise<EarningsRow[]
                FROM ohlcv_daily od
                WHERE od.ticker = cal.ticker AND od.date <= ?
                ORDER BY od.date DESC
-               LIMIT 20
+               LIMIT 10
              )
-           ) AS avgVolume20
+           ) AS avgVolume10,
+           (
+             SELECT AVG(volume)
+             FROM (
+               SELECT volume
+               FROM ohlcv_daily od
+               WHERE od.ticker = cal.ticker AND od.date <= ?
+               ORDER BY od.date DESC
+               LIMIT 30
+             )
+           ) AS avgVolume30,
+           (
+             SELECT AVG(volume)
+             FROM (
+               SELECT volume
+               FROM ohlcv_daily od
+               WHERE od.ticker = cal.ticker AND od.date <= ?
+               ORDER BY od.date DESC
+               LIMIT 60
+             )
+           ) AS avgVolume60
     FROM cal
     LEFT JOIN ticker_universe tu ON tu.ticker = cal.ticker
     LEFT JOIN px USING (ticker)
@@ -297,7 +492,7 @@ export async function getEarningsCalendar(daysAhead = 14): Promise<EarningsRow[]
     ORDER BY cal.daysLeft ASC
     LIMIT 50
     `,
-    [latest, latest, latest, daysAhead, latest, prev ?? latest, latest, latest],
+    [latest, latest, latest, daysAhead, latest, prev ?? latest, latest, latest, latest, latest],
   )
 }
 
@@ -305,14 +500,41 @@ export async function getEarningsCalendar(daysAhead = 14): Promise<EarningsRow[]
 export interface CreditShortRow {
   ticker: string
   name: string | null
+  sectorName: string | null
+  marketSegment: string | null
+  price: number | null
+  changePct: number | null
   longMargin: number | null
   longChange: number | null
   shortMargin: number | null
   shortChange: number | null
   shortRatio: number | null
+  daily_a_stage: number | null
+  daily_b_stage: number | null
 }
-export async function getCreditShortHighlights(limit = 4): Promise<CreditShortRow[]> {
-  return await execAll<CreditShortRow>(
+export interface CreditShortSectorRow {
+  sectorName: string
+  tickerCount: number
+  longMargin: number
+  longChange: number
+  shortMargin: number
+  shortChange: number
+  shortRatio: number | null
+  pressureScore: number
+}
+export interface CreditShortDashboard {
+  asOf: string | null
+  sectorRows: CreditShortSectorRow[]
+  stockRows: CreditShortRow[]
+}
+export async function getCreditShortDashboard(): Promise<CreditShortDashboard> {
+  const latest = await getLatestDate()
+  const prev = latest ? await getPrevDate(latest) : null
+  const latestWmi = (await execGet<{ d: string | null }>(
+    `SELECT MAX(date) AS d FROM weekly_margin_interest`,
+  ))?.d ?? null
+
+  const stockRows = await execAll<CreditShortRow>(
     `
     WITH latest_wmi AS (
       SELECT ticker, long_margin, long_change, short_margin, short_change,
@@ -322,26 +544,89 @@ export async function getCreditShortHighlights(limit = 4): Promise<CreditShortRo
     latest_ssp AS (
       SELECT ticker, MAX(short_ratio) AS short_ratio
       FROM short_selling_positions
-      WHERE date >= date('now', '-30 days')
+      WHERE date >= date('now', '-60 days')
       GROUP BY ticker
-    )
-    SELECT w.ticker, tu.name,
+    ),
+    px AS (SELECT ticker, close FROM ohlcv_daily WHERE date = ?),
+    py AS (SELECT ticker, close AS prev_close FROM ohlcv_daily WHERE date = ?),
+    st AS (SELECT ticker, daily_a_stage, daily_b_stage FROM daily_snapshots WHERE date = ?)
+    SELECT w.ticker,
+           tu.name,
+           tu.sector33_name AS sectorName,
+           tu.market_segment AS marketSegment,
+           px.close AS price,
+           CASE WHEN py.prev_close > 0 THEN 100.0 * (px.close - py.prev_close) / py.prev_close END AS changePct,
            w.long_margin AS longMargin,
            w.long_change AS longChange,
            w.short_margin AS shortMargin,
            w.short_change AS shortChange,
-           s.short_ratio AS shortRatio
+           COALESCE(
+             s.short_ratio,
+             CASE
+               WHEN COALESCE(w.long_margin, 0) + COALESCE(w.short_margin, 0) > 0
+               THEN 100.0 * COALESCE(w.short_margin, 0) / (COALESCE(w.long_margin, 0) + COALESCE(w.short_margin, 0))
+             END
+           ) AS shortRatio,
+           st.daily_a_stage,
+           st.daily_b_stage
     FROM latest_wmi w
     LEFT JOIN latest_ssp s USING (ticker)
     LEFT JOIN ticker_universe tu ON tu.ticker = w.ticker
+    LEFT JOIN px USING (ticker)
+    LEFT JOIN py USING (ticker)
+    LEFT JOIN st USING (ticker)
     WHERE w.rn = 1
       AND (w.long_margin IS NOT NULL OR w.short_margin IS NOT NULL OR s.short_ratio IS NOT NULL)
     ORDER BY
-      ABS(COALESCE(w.long_change, 0)) + ABS(COALESCE(w.short_change, 0)) DESC
-    LIMIT ?
+      ABS(COALESCE(w.short_change, 0)) DESC,
+      COALESCE(shortRatio, 0) DESC
+    LIMIT 16
     `,
-    [limit],
+    [latest ?? '', prev ?? latest ?? '', latest ?? ''],
   )
+
+  const sectorRows = await execAll<CreditShortSectorRow>(
+    `
+    WITH latest_wmi AS (
+      SELECT ticker, long_margin, long_change, short_margin, short_change,
+             ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY date DESC) AS rn
+      FROM weekly_margin_interest
+    ),
+    base AS (
+      SELECT
+        COALESCE(tu.sector33_name, 'その他') AS sectorName,
+        w.ticker,
+        COALESCE(w.long_margin, 0) AS longMargin,
+        COALESCE(w.long_change, 0) AS longChange,
+        COALESCE(w.short_margin, 0) AS shortMargin,
+        COALESCE(w.short_change, 0) AS shortChange
+      FROM latest_wmi w
+      LEFT JOIN ticker_universe tu ON tu.ticker = w.ticker
+      WHERE w.rn = 1
+    )
+    SELECT
+      sectorName,
+      COUNT(*) AS tickerCount,
+      SUM(longMargin) AS longMargin,
+      SUM(longChange) AS longChange,
+      SUM(shortMargin) AS shortMargin,
+      SUM(shortChange) AS shortChange,
+      CASE
+        WHEN SUM(longMargin) + SUM(shortMargin) > 0
+        THEN 100.0 * SUM(shortMargin) / (SUM(longMargin) + SUM(shortMargin))
+      END AS shortRatio,
+      ABS(SUM(shortChange)) + ABS(SUM(longChange)) AS pressureScore
+    FROM base
+    GROUP BY sectorName
+    ORDER BY pressureScore DESC
+    LIMIT 8
+    `,
+  )
+
+  return { asOf: latestWmi, sectorRows, stockRows }
+}
+export async function getCreditShortHighlights(limit = 4): Promise<CreditShortRow[]> {
+  return (await getCreditShortDashboard()).stockRows.slice(0, limit)
 }
 
 // ─── 主要指数 (J-Quants /indices/bars/daily 由来) ───

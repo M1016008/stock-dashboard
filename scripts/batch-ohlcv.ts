@@ -19,7 +19,7 @@
 //   - 失敗銘柄は batch_runs.error_summary に記録、バッチは続行
 
 import { db, execAll } from '@/lib/db/client'
-import { ohlcvDaily, batchRuns, jquantsDailyCoverage } from '@/lib/db/schema'
+import { ohlcvDaily, batchRuns, jquantsDailyCoverage, jquantsSyncRuns } from '@/lib/db/schema'
 import { fetchJQuantsDaily, fetchJQuantsDailyByDate, type JQuantsDailyByDateRow } from '@/lib/jquants'
 import { expectedLatestTradingDate } from '@/lib/server/data-freshness'
 import type { OHLCV } from '@/types/stock'
@@ -36,6 +36,7 @@ const DEFAULT_FROM_DATE: string =
   ?? new Date(Date.now() - 10 * 365 * 86_400_000).toISOString().slice(0, 10)
 const TARGET_DATE = process.env.OHLCV_TARGET_DATE ?? expectedLatestTradingDate()
 const USE_DATE_BULK = process.env.OHLCV_USE_DATE_BULK !== '0'
+const ENABLE_MISSING_FALLBACK = process.env.OHLCV_ENABLE_MISSING_FALLBACK === '1'
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 
@@ -157,6 +158,7 @@ async function main() {
     `, [TARGET_DATE])
   }
 
+  const initialTickerCount = tickers.length
   let succeeded = 0
   let failed = 0
   let rowsInserted = 0
@@ -166,11 +168,26 @@ async function main() {
   const startTime = Date.now()
 
   if (USE_DATE_BULK && !tickerFilter && TARGET_DATE) {
+    const [syncRun] = await db
+      .insert(jquantsSyncRuns)
+      .values({
+        targetDate: TARGET_DATE,
+        apiType: 'equities/bars/daily:date',
+        status: 'running',
+      })
+      .returning({ id: jquantsSyncRuns.id })
+
     try {
       console.log(`J-Quants date bulk fetch: ${TARGET_DATE}`)
       const rows = await fetchJQuantsDailyByDate(TARGET_DATE)
       const inserted = await storeRows(rows)
+      const rowTickerSet = new Set(rows.map(r => r.ticker))
+      const missingTickers = tickers
+        .filter(t => !rowTickerSet.has(t.ticker))
+        .map(t => t.ticker)
+
       rowsInserted += inserted
+      succeeded += Math.max(0, tickers.length - missingTickers.length)
       await db
         .insert(jquantsDailyCoverage)
         .values({ date: TARGET_DATE, expectedRows: rows.length })
@@ -181,10 +198,32 @@ async function main() {
             importedAt: sql`unixepoch()`,
           },
         })
+      await db
+        .update(jquantsSyncRuns)
+        .set({
+          expectedRows: rows.length,
+          importedRows: inserted,
+          missingTickers: JSON.stringify(missingTickers),
+          status: 'success',
+          finishedAt: new Date(),
+        })
+        .where(eq(jquantsSyncRuns.id, syncRun.id))
       console.log(`J-Quants date bulk 完了: expected=${rows.length}, stored=${inserted}`)
-      tickers = tickers.filter(t => !rows.some(r => r.ticker === t.ticker))
+      tickers = tickers.filter(t => !rowTickerSet.has(t.ticker))
+      if (tickers.length > 0 && !ENABLE_MISSING_FALLBACK) {
+        console.log(`missing ${tickers.length} tickers after date bulk; per-ticker fallback is disabled`)
+        tickers = []
+      }
     } catch (err) {
       console.warn(`J-Quants date bulk をスキップ: ${err instanceof Error ? err.message : String(err)}`)
+      await db
+        .update(jquantsSyncRuns)
+        .set({
+          status: 'failed',
+          finishedAt: new Date(),
+          errorSummary: err instanceof Error ? err.message : String(err),
+        })
+        .where(eq(jquantsSyncRuns.id, syncRun.id))
     }
   }
   let nextIndex = 0
@@ -232,7 +271,7 @@ async function main() {
     .set({
       finishedAt: new Date(),
       status: finalStatus,
-      totalTickers: tickers.length,
+      totalTickers: initialTickerCount,
       succeeded,
       failed,
       rowsInserted,
