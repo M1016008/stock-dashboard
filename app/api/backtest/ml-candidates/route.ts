@@ -80,11 +80,13 @@ async function servingCandidates(date: string, direction: MlDirection | 'both', 
   const args = direction === 'both' ? [date] : [date, direction]
   const rows = await execAll<CandidateRow>(
     `
-    SELECT as_of_date, direction, rank, ticker, name, sector_large, candidate_score, model_name,
-           feature_json, reason_json, explanation_json
-    FROM serving_ml_candidates
-    WHERE ${where}
-    ORDER BY direction, rank
+    SELECT c.as_of_date, c.direction, c.rank, c.ticker, COALESCE(c.name, u.name) AS name,
+           COALESCE(u.sector17_name, c.sector_large) AS sector_large,
+           c.candidate_score, c.model_name, c.feature_json, c.reason_json, c.explanation_json
+    FROM serving_ml_candidates c
+    LEFT JOIN ticker_universe u ON u.ticker = c.ticker
+    WHERE ${where.replaceAll('as_of_date', 'c.as_of_date').replaceAll('direction', 'c.direction')}
+    ORDER BY c.direction, c.rank
     LIMIT ?
     `,
     [...args, direction === 'both' ? limit * 2 : limit],
@@ -95,7 +97,7 @@ async function servingCandidates(date: string, direction: MlDirection | 'both', 
 async function fallbackCandidates(date: string, direction: MlDirection | 'both', limit: number) {
   const rows = await execAll<FeatureRow>(
     `
-    SELECT f.ticker, f.date, f.feature_json, u.name, sm.sector_large
+    SELECT f.ticker, f.date, f.feature_json, u.name, COALESCE(u.sector17_name, sm.sector_large) AS sector_large
     FROM ml_feature_vectors f
     LEFT JOIN ticker_universe u ON u.ticker = f.ticker
     LEFT JOIN sector_master sm ON sm.ticker = f.ticker

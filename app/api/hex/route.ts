@@ -21,6 +21,10 @@ interface HexStock {
   name: string
   sector_large: string
   sector_small: string | null
+  sector17_name: string | null
+  sector33_name: string | null
+  market_segment: string | null
+  margin_type: string | null
   market_cap: number
   price: number
   daily_change: number
@@ -87,6 +91,8 @@ interface UniRow {
   shares_outstanding: number | null
   sector17_name: string | null
   sector33_name: string | null
+  market_segment: string | null
+  margin_type: string | null
 }
 
 interface ClassRow {
@@ -191,7 +197,7 @@ export async function GET(request: NextRequest) {
       // 念のため変数として残す
       Promise.resolve(null),
       execAll<UniRow>(
-        `SELECT ticker, name, shares_outstanding, sector17_name, sector33_name
+        `SELECT ticker, name, shares_outstanding, sector17_name, sector33_name, market_segment, margin_type
          FROM ticker_universe WHERE active = 1`,
       ),
       execAll<ClassRow>(
@@ -215,12 +221,12 @@ export async function GET(request: NextRequest) {
 
       // 銘柄ごとフォールバック: Yoshio 独自分類 → JPX Sector17/33 → 'その他'
       const sectorLarge =
-        k?.major_category ??
         u?.sector17_name ??
+        k?.major_category ??
         'その他'
       const sectorSmall =
-        k?.sub_industry ??
         u?.sector33_name ??
+        k?.sub_industry ??
         'その他'
 
       const close = px?.close ?? 0
@@ -257,6 +263,10 @@ export async function GET(request: NextRequest) {
         name: u?.name ?? s.ticker,
         sector_large: sectorLarge,
         sector_small: sectorSmall,
+        sector17_name: u?.sector17_name ?? null,
+        sector33_name: u?.sector33_name ?? null,
+        market_segment: u?.market_segment ?? null,
+        margin_type: u?.margin_type ?? null,
         market_cap: marketCap,
         price: close,
         daily_change: px?.perf_1d ?? 0,

@@ -251,7 +251,10 @@ async function main() {
   const args = TICKER_LIMIT > 0 ? [TICKER_LIMIT] : []
   const tickers = await execAll<TickerRow>(
     `
-    SELECT u.ticker, u.name, sm.market_segment, sm.sector_large, sm.sector_small
+    SELECT u.ticker, u.name,
+           COALESCE(u.market_segment, sm.market_segment) AS market_segment,
+           COALESCE(u.sector17_name, sm.sector_large) AS sector_large,
+           COALESCE(u.sector33_name, sm.sector_small) AS sector_small
     FROM ticker_universe u
     LEFT JOIN sector_master sm ON sm.ticker = u.ticker
     WHERE EXISTS (SELECT 1 FROM ohlcv_daily o WHERE o.ticker = u.ticker)

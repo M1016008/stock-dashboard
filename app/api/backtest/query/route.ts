@@ -10,7 +10,10 @@ type BacktestRow = {
   name: string | null
   sector_large: string | null
   sector_small: string | null
+  sector17_name: string | null
+  sector33_name: string | null
   market_segment: string | null
+  margin_type: string | null
   pattern_code: string | null
   daily_a_stage: number | null
   daily_b_stage: number | null
@@ -153,6 +156,8 @@ export async function GET(request: NextRequest) {
     const returnColumn = returnMetric === 'period' ? 'fe.return_pct' : 'fe.max_return_pct'
     const targetPct = numParam(searchParams, 'targetPct')
     const sector = searchParams.get('sector')?.trim()
+    const sector17 = searchParams.get('sector17')?.trim()
+    const sector33 = searchParams.get('sector33')?.trim()
     const signalFilter = (searchParams.get('signals') ?? '')
       .split(',')
       .map((value) => value.trim())
@@ -176,8 +181,16 @@ export async function GET(request: NextRequest) {
       where.push(`fe.hit_${targetPct} = 1`)
     }
     if (sector) {
-      where.push('(sm.sector_large = ? OR sm.sector_small = ? OR sm.sector33 = ?)')
-      ;(args as unknown[]).push(sector, sector, sector)
+      where.push('(sm.sector_large = ? OR sm.sector_small = ? OR sm.sector33 = ? OR u.sector17_name = ? OR u.sector33_name = ?)')
+      ;(args as unknown[]).push(sector, sector, sector, sector, sector)
+    }
+    if (sector17) {
+      where.push('u.sector17_name = ?')
+      ;(args as unknown[]).push(sector17)
+    }
+    if (sector33) {
+      where.push('u.sector33_name = ?')
+      ;(args as unknown[]).push(sector33)
     }
     for (const [param, col] of Object.entries(STAGE_PARAMS)) {
       const vals = intList(searchParams.get(param))
@@ -208,8 +221,16 @@ export async function GET(request: NextRequest) {
         servingWhere.push(`sr.hit_${targetPct} = 1`)
       }
       if (sector) {
-        servingWhere.push('(sr.sector_large = ? OR sr.sector_small = ?)')
-        ;(servingArgs as unknown[]).push(sector, sector)
+        servingWhere.push('(sr.sector_large = ? OR sr.sector_small = ? OR u.sector17_name = ? OR u.sector33_name = ?)')
+        ;(servingArgs as unknown[]).push(sector, sector, sector, sector)
+      }
+      if (sector17) {
+        servingWhere.push('u.sector17_name = ?')
+        ;(servingArgs as unknown[]).push(sector17)
+      }
+      if (sector33) {
+        servingWhere.push('u.sector33_name = ?')
+        ;(servingArgs as unknown[]).push(sector33)
       }
       const servingStageCols: Record<string, string> = {
         daily_a: 'sr.daily_a_stage',
@@ -237,9 +258,12 @@ export async function GET(request: NextRequest) {
           sr.date,
           sr.ticker,
           sr.name,
-          sr.sector_large,
-          sr.sector_small,
-          sr.market_segment,
+          COALESCE(sr.sector_large, u.sector17_name) AS sector_large,
+          COALESCE(sr.sector_small, u.sector33_name) AS sector_small,
+          u.sector17_name,
+          u.sector33_name,
+          COALESCE(sr.market_segment, u.market_segment) AS market_segment,
+          u.margin_type,
           sr.pattern_code,
           sr.daily_a_stage,
           sr.daily_b_stage,
@@ -271,6 +295,7 @@ export async function GET(request: NextRequest) {
           sr.hit_20,
           sr.hit_40
         FROM serving_backtest_results sr
+        LEFT JOIN ticker_universe u ON u.ticker = sr.ticker
         WHERE ${servingWhere.join(' AND ')}
         ORDER BY ${servingSort}
         LIMIT ?
@@ -293,6 +318,8 @@ export async function GET(request: NextRequest) {
           returnMetric,
           targetPct,
           sector,
+          sector17,
+          sector33,
           signals: signalFilter,
         },
       })
@@ -304,9 +331,12 @@ export async function GET(request: NextRequest) {
         mf.date,
         mf.ticker,
         u.name,
-        sm.sector_large,
-        sm.sector_small,
-        sm.market_segment,
+        COALESCE(sm.sector_large, u.sector17_name) AS sector_large,
+        COALESCE(sm.sector_small, u.sector33_name) AS sector_small,
+        u.sector17_name,
+        u.sector33_name,
+        COALESCE(sm.market_segment, u.market_segment) AS market_segment,
+        u.margin_type,
         mf.pattern_code,
         mf.daily_a_stage,
         mf.daily_b_stage,
@@ -363,6 +393,8 @@ export async function GET(request: NextRequest) {
         returnMetric,
         targetPct,
         sector,
+        sector17,
+        sector33,
         signals: signalFilter,
       },
     })

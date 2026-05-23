@@ -148,7 +148,9 @@ async function buildLatestSignals(date: string): Promise<void> {
   const rows = await execAll<LatestFeature>(
     `
     SELECT
-      mf.date, mf.ticker, u.name, sm.sector_large, sm.sector_small,
+      mf.date, mf.ticker, u.name,
+      COALESCE(u.sector17_name, sm.sector_large) AS sector_large,
+      COALESCE(u.sector33_name, sm.sector_small) AS sector_small,
       mf.close, mf.volume, mf.volume_ratio_20, mf.range_pct, mf.atr20_pct,
       mf.ma25_pos_pct, mf.pattern_code, mf.signal_codes
     FROM model_features mf
@@ -469,9 +471,9 @@ async function buildBacktestResults(dates: string[]): Promise<void> {
         fe.horizon_days,
         mf.ticker,
         u.name,
-        sm.sector_large,
-        sm.sector_small,
-        sm.market_segment,
+        COALESCE(u.sector17_name, sm.sector_large) AS sector_large,
+        COALESCE(u.sector33_name, sm.sector_small) AS sector_small,
+        COALESCE(u.market_segment, sm.market_segment) AS market_segment,
         mf.pattern_code,
         mf.daily_a_stage,
         mf.daily_b_stage,

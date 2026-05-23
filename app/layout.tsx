@@ -41,10 +41,10 @@ export default function RootLayout({
           <FreshDataRefresher />
         </Suspense>
         <Header />
-        <main className="mx-auto max-w-[1580px] px-4 py-5 sm:px-6 lg:px-8 lg:py-7">
+        <main className="mx-auto w-full max-w-[1480px] px-5 py-5 sm:px-8 lg:px-10 lg:py-7 xl:px-12">
           {children}
         </main>
-        <footer className="mx-auto max-w-[1580px] px-4 pb-8 pt-3 text-[11px] text-[var(--color-text-tertiary)] sm:px-6 lg:px-8">
+        <footer className="mx-auto w-full max-w-[1480px] px-5 pb-8 pt-3 text-[11px] text-[var(--color-text-tertiary)] sm:px-8 lg:px-10 xl:px-12">
           表示内容は過去データに基づく統計的観測です。投資判断は自己責任で行ってください。
         </footer>
       </body>

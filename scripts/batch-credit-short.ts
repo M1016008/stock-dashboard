@@ -13,10 +13,12 @@
 import { db, client, ensureReady } from '@/lib/db/client'
 import { weeklyMarginInterest, tickerUniverse, batchRuns } from '@/lib/db/schema'
 import { fetchJQuantsWeeklyMargin, type JMarginRow } from '@/lib/jquants'
-import { eq } from 'drizzle-orm'
+import { and, eq, inArray } from 'drizzle-orm'
 
-const RATE_LIMIT_MS = Number(process.env.CREDIT_RATE_LIMIT_MS ?? 0)
-const CONCURRENCY = Math.max(1, Number(process.env.CREDIT_CONCURRENCY ?? 8))
+const RATE_LIMIT_MS = Number(process.env.CREDIT_RATE_LIMIT_MS ?? 350)
+const CONCURRENCY = Math.max(1, Number(process.env.CREDIT_CONCURRENCY ?? 2))
+const MAX_RETRIES = Math.max(0, Number(process.env.CREDIT_MAX_RETRIES ?? 4))
+const RETRY_BASE_MS = Number(process.env.CREDIT_RETRY_BASE_MS ?? 1200)
 const PROGRESS_EVERY = Number(process.env.CREDIT_PROGRESS_EVERY ?? 200)
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
@@ -35,8 +37,25 @@ function shortVolume(row: JMarginRow): number {
   return numeric(row.ShrtVol ?? row.ShortMarginTradeVolume)
 }
 
+function isRateLimit(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return /\b429\b|Rate limit/i.test(message)
+}
+
+async function fetchMarginWithRetry(ticker: string, fromDate?: string): Promise<JMarginRow[]> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await fetchJQuantsWeeklyMargin(ticker, fromDate)
+    } catch (error) {
+      if (!isRateLimit(error) || attempt >= MAX_RETRIES) throw error
+      const wait = RETRY_BASE_MS * 2 ** attempt + Math.floor(Math.random() * 350)
+      await sleep(wait)
+    }
+  }
+}
+
 async function fetchAndStore(ticker: string, fromDate?: string): Promise<number> {
-  const rows = await fetchJQuantsWeeklyMargin(ticker, fromDate)
+  const rows = await fetchMarginWithRetry(ticker, fromDate)
   if (rows.length === 0) return 0
 
   const sorted = [...rows].sort((a, b) => b.Date.localeCompare(a.Date))
@@ -93,7 +112,10 @@ async function main() {
     const rows = await db
       .select({ ticker: tickerUniverse.ticker })
       .from(tickerUniverse)
-      .where(eq(tickerUniverse.active, true))
+      .where(and(
+        eq(tickerUniverse.active, true),
+        inArray(tickerUniverse.margin_type, ['貸借', '信用']),
+      ))
     tickers = rows.map(r => r.ticker)
   }
 
@@ -103,7 +125,7 @@ async function main() {
   const errors: string[] = []
   const startTime = Date.now()
 
-  console.log(`Credit-short fetch 開始: ${tickers.length} 銘柄 (from=${fromDate ?? 'all'}, CONCURRENCY=${CONCURRENCY})`)
+  console.log(`Credit-short fetch 開始: ${tickers.length} 銘柄 (from=${fromDate ?? 'all'}, CONCURRENCY=${CONCURRENCY}, RATE_LIMIT_MS=${RATE_LIMIT_MS}, RETRIES=${MAX_RETRIES})`)
 
   let nextIndex = 0
   let processed = 0

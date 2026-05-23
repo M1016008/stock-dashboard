@@ -15,7 +15,9 @@ type RunResult = {
   signal: NodeJS.Signals | null
 }
 
-function runScript(script: string): Promise<RunResult> {
+type EnvOverrides = Record<string, string | undefined>
+
+function runScript(script: string, envOverrides: EnvOverrides = {}): Promise<RunResult> {
   return new Promise((resolve, reject) => {
     const child = spawn('npx', ['tsx', '--env-file=.env.local', script], {
       cwd: process.cwd(),
@@ -24,6 +26,7 @@ function runScript(script: string): Promise<RunResult> {
         ...process.env,
         USE_LOCAL_DB: '1',
         BACKTEST_RECENT_DAYS: process.env.BACKTEST_RECENT_DAYS ?? '260',
+        ...envOverrides,
       },
     })
 
@@ -32,9 +35,9 @@ function runScript(script: string): Promise<RunResult> {
   })
 }
 
-async function runRequired(script: string) {
+async function runRequired(script: string, envOverrides: EnvOverrides = {}) {
   console.log(`\n▶ ${script}`)
-  const result = await runScript(script)
+  const result = await runScript(script, envOverrides)
   if (result.code !== 0) {
     throw new Error(`${script} failed: code=${result.code}, signal=${result.signal ?? 'none'}`)
   }
@@ -63,16 +66,24 @@ async function main() {
     console.log('Latest data update started')
 
     // 軽量な補助データは毎回同期する。主画面の鮮度に直接関わる OHLCV / snapshot は必要時のみ。
+    await runRequired('scripts/batch-listed-info.ts')
+    await lock.heartbeat()
     await runRequired('scripts/batch-indices.ts')
     await lock.heartbeat()
     await runRequired('scripts/batch-earnings.ts')
+    await lock.heartbeat()
+    await runRequired('scripts/batch-credit-short.ts')
+    await lock.heartbeat()
+    await runRequired('scripts/build-serving-margin.ts')
     await lock.heartbeat()
 
     const before = await getDataFreshness()
     console.log('Freshness before:', before)
 
     if (before.needsOhlcvUpdate) {
-      await runRequired('scripts/batch-ohlcv.ts')
+      await runRequired('scripts/batch-ohlcv.ts', { POST_OHLCV_REFRESH: '0' })
+      await lock.heartbeat()
+      await runRequired('scripts/refresh-after-ohlcv.ts', { REFRESH_AFTER_OHLCV_SKIP_LOCK: '1' })
       await lock.heartbeat()
     } else {
       console.log('OHLCV is already fresh')

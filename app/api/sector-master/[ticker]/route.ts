@@ -24,9 +24,42 @@ export async function GET(
     let row: Record<string, unknown> | undefined
     for (const t of candidates) {
       row = await execGet(
-        `SELECT ticker, name, sector_large, sector_small, sector33, market_segment, margin_type, updated_at
-         FROM sector_master WHERE ticker = ?`,
-        [t],
+        `
+        SELECT
+          COALESCE(sm.ticker, tu.ticker) AS ticker,
+          COALESCE(sm.name, tu.name) AS name,
+          COALESCE(tu.sector17_name, sm.sector_large) AS sector_large,
+          COALESCE(sm.sector_small, tu.sector33_name) AS sector_small,
+          COALESCE(tu.sector33_name, sm.sector33) AS sector33,
+          COALESCE(tu.market_segment, sm.market_segment) AS market_segment,
+          COALESCE(tu.margin_type, sm.margin_type) AS margin_type,
+          sm.updated_at,
+          tu.sector17_code,
+          tu.sector17_name,
+          tu.sector33_code,
+          tu.sector33_name
+        FROM ticker_universe tu
+        LEFT JOIN sector_master sm ON sm.ticker = tu.ticker OR sm.ticker = tu.ticker || '.T'
+        WHERE tu.ticker = REPLACE(?, '.T', '')
+        UNION ALL
+        SELECT
+          sm.ticker,
+          sm.name,
+          sm.sector_large,
+          sm.sector_small,
+          sm.sector33,
+          sm.market_segment,
+          sm.margin_type,
+          sm.updated_at,
+          NULL AS sector17_code,
+          sm.sector_large AS sector17_name,
+          NULL AS sector33_code,
+          sm.sector33 AS sector33_name
+        FROM sector_master sm
+        WHERE sm.ticker = ?
+        LIMIT 1
+        `,
+        [t, t],
       )
       if (row) break
     }

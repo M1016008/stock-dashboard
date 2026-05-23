@@ -9,6 +9,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import HexMap from '@/components/hex/HexMap'
+import { MarketDateCalendar } from '@/components/ui/MarketDateCalendar'
 import { STAGE_BG_COLORS, STAGE_BORDER_COLORS, STAGE_LABELS } from '@/lib/hex-stage'
 
 interface Stock {
@@ -16,6 +17,10 @@ interface Stock {
   name: string
   sector_large: string
   sector_small?: string | null
+  sector17_name?: string | null
+  sector33_name?: string | null
+  market_segment?: string | null
+  margin_type?: string | null
   market_cap: number
   price: number
   daily_change?: number
@@ -68,7 +73,7 @@ export default function HexStageMapView() {
 
   useEffect(() => {
     let cancelled = false
-    fetch('/api/hex/available-dates', { cache: 'no-store' })
+    fetch('/api/hex/available-dates?limit=5000', { cache: 'no-store' })
       .then((r) => r.json())
       .then((d) => {
         if (cancelled) return
@@ -146,21 +151,16 @@ export default function HexStageMapView() {
       {/* ── フィルタバー ─────────────── */}
       <div className="flex flex-wrap items-center gap-2 rounded-[8px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-3 py-2">
         {availableDates.length > 0 && (
-          <FilterField label="📅 日付">
-            <select
-              value={selectedDate ?? ''}
-              onChange={(e) => setSelectedDate(e.target.value || null)}
-              style={selectInputStyle}
-            >
-              <option value="">最新（{availableDates[0]?.date ?? '---'}）</option>
-              {availableDates.map((d) => (
-                <option key={d.date} value={d.date}>{d.date}（{d.tickers}）</option>
-              ))}
-            </select>
-          </FilterField>
+          <MarketDateCalendar
+            dates={availableDates}
+            value={selectedDate}
+            onChange={setSelectedDate}
+            label="マップ日付"
+            compact
+          />
         )}
 
-        <FilterField label="業種大分類">
+        <FilterField label="17業種">
           <select
             value={selectedCategory}
             onChange={(e) => {
@@ -176,7 +176,7 @@ export default function HexStageMapView() {
           </select>
         </FilterField>
 
-        <FilterField label="業種小分類">
+        <FilterField label="33業種">
           <select
             value={selectedSubCategory}
             onChange={(e) => setSelectedSubCategory(e.target.value)}

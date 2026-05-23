@@ -6,12 +6,13 @@
 // 使い方:
 //   USE_LOCAL_DB=1 npm run batch:listed-info
 
-import { db } from '@/lib/db/client'
+import { db, ensureReady } from '@/lib/db/client'
 import { tickerUniverse, batchRuns } from '@/lib/db/schema'
 import { fetchJQuantsListedInfo, toJQuantsCode } from '@/lib/jquants'
 import { eq, sql } from 'drizzle-orm'
 
 async function main() {
+  await ensureReady()
   const [run] = await db
     .insert(batchRuns)
     .values({ jobType: 'listed_info_sync', startedAt: new Date(), status: 'running' })
@@ -38,6 +39,8 @@ async function main() {
       sector33_code: info.S33,
       sector33_name: info.S33Nm,
       market_segment: info.MktNm,
+      margin_code: info.Mrgn,
+      margin_type: info.MrgnNm,
     }
   })
 
@@ -65,6 +68,8 @@ async function main() {
           sector33_code:  sql`excluded.sector33_code`,
           sector33_name:  sql`excluded.sector33_name`,
           market_segment: sql`excluded.market_segment`,
+          margin_code:    sql`excluded.margin_code`,
+          margin_type:    sql`excluded.margin_type`,
         },
       })
     inserted += chunk.length

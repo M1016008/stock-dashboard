@@ -1,46 +1,58 @@
 // scripts/batch-pattern-stats.ts
 //
-// Phase 3: daily_snapshots × forward_returns を JOIN し、6 桁パターンコード (日A日B週A週B月A月B)
-// ごとに horizon 別の統計 (件数、p05/25/50/75/95、カテゴリ別件数) を集計して pattern_stats に保存。
+// daily_snapshots × forward_returns をJOINし、6桁パターンコード
+// (日A日B週A週B月A月B) ごとに horizon 別の統計を保存する。
 //
 // 使い方:
 //   USE_LOCAL_DB=1 npx tsx --env-file=.env.local scripts/batch-pattern-stats.ts
-//
-// 動作:
-//   - SQLite はパーセンタイル直接サポートなし → JS 側で計算
-//   - SQL で raw return_pct と category を全件取得 (大量だが 1 ティッカーずつではないので速い)
-//   - JS 側でパターンコード × horizon ごとにグルーピング、パーセンタイル算出
-//   - pattern_stats を全削除 → 再 INSERT (冪等、シンプル)
+//   PATTERN_STAT_HORIZONS=2,3,4,5,10,15 USE_LOCAL_DB=1 npx tsx --env-file=.env.local scripts/batch-pattern-stats.ts
 
 import { db, client } from '@/lib/db/client'
-import { patternStats, batchRuns } from '@/lib/db/schema'
-import { percentile } from '@/lib/features'
+import { batchRuns } from '@/lib/db/schema'
 import { eq } from 'drizzle-orm'
 
-const HORIZONS = [30, 60, 90, 180] as const
+const DEFAULT_HORIZONS = [2, 3, 4, 5, 10, 15, 30, 60, 90, 180]
 
-async function aggregate(): Promise<number> {
-  console.log('既存 pattern_stats 削除...')
-  await db.delete(patternStats)
+function parseHorizons(value: string | undefined, fallback: number[]): number[] {
+  const source = value?.trim() ? value : fallback.join(',')
+  const horizons = [...new Set(
+    source
+      .split(',')
+      .map((part) => Number(part.trim()))
+      .filter((n) => Number.isInteger(n) && n > 0),
+  )].sort((a, b) => a - b)
+  if (horizons.length === 0) {
+    throw new Error('PATTERN_STAT_HORIZONS に有効な営業日数がありません')
+  }
+  return horizons
+}
 
-  // horizon ごとに処理して OOM 回避
-  const allStatsRecords: Array<typeof patternStats.$inferInsert> = []
-  for (const horizon of HORIZONS) {
-    console.log(`\n=== horizon=${horizon}d 集計開始 ===`)
-    const t0 = Date.now()
+const HORIZONS = parseHorizons(process.env.PATTERN_STAT_HORIZONS, DEFAULT_HORIZONS)
 
-    const result = await client.execute({
-      sql: `
+async function ensureIndexes() {
+  await client.execute(`
+    CREATE INDEX IF NOT EXISTS fwd_horizon_ticker_date_idx
+    ON forward_returns(horizon_days, ticker, date)
+  `)
+}
+
+async function aggregateHorizon(horizon: number): Promise<number> {
+  const result = await client.execute({
+    sql: `
+      INSERT INTO pattern_stats
+        (pattern_code, horizon_days, count, p05, p25, p50, p75, p95,
+         very_up_count, up_count, flat_count, down_count, very_down_count)
+      WITH base AS (
         SELECT
           printf('%d%d%d%d%d%d',
             s.daily_a_stage, s.daily_b_stage,
             s.weekly_a_stage, s.weekly_b_stage,
             s.monthly_a_stage, s.monthly_b_stage
           ) AS pattern_code,
-          f.return_pct AS return_pct,
-          f.return_category AS category
-        FROM daily_snapshots s
-        INNER JOIN forward_returns f
+          f.return_pct,
+          f.return_category
+        FROM forward_returns f
+        INNER JOIN daily_snapshots s
           ON s.ticker = f.ticker AND s.date = f.date
         WHERE f.horizon_days = ?
           AND s.daily_a_stage IS NOT NULL
@@ -49,67 +61,56 @@ async function aggregate(): Promise<number> {
           AND s.weekly_b_stage IS NOT NULL
           AND s.monthly_a_stage IS NOT NULL
           AND s.monthly_b_stage IS NOT NULL
-      `,
-      args: [horizon],
-    })
+      ),
+      ranked AS (
+        SELECT
+          pattern_code,
+          return_pct,
+          return_category,
+          COUNT(*) OVER (PARTITION BY pattern_code) AS n,
+          ROW_NUMBER() OVER (PARTITION BY pattern_code ORDER BY return_pct) AS rn
+        FROM base
+      )
+      SELECT
+        pattern_code,
+        ? AS horizon_days,
+        MAX(n) AS count,
+        MAX(CASE WHEN rn = CAST(ROUND((n - 1) * 0.05) AS INTEGER) + 1 THEN return_pct END) AS p05,
+        MAX(CASE WHEN rn = CAST(ROUND((n - 1) * 0.25) AS INTEGER) + 1 THEN return_pct END) AS p25,
+        MAX(CASE WHEN rn = CAST(ROUND((n - 1) * 0.50) AS INTEGER) + 1 THEN return_pct END) AS p50,
+        MAX(CASE WHEN rn = CAST(ROUND((n - 1) * 0.75) AS INTEGER) + 1 THEN return_pct END) AS p75,
+        MAX(CASE WHEN rn = CAST(ROUND((n - 1) * 0.95) AS INTEGER) + 1 THEN return_pct END) AS p95,
+        SUM(CASE WHEN return_category = 'very_up' THEN 1 ELSE 0 END) AS very_up_count,
+        SUM(CASE WHEN return_category = 'up' THEN 1 ELSE 0 END) AS up_count,
+        SUM(CASE WHEN return_category = 'flat' THEN 1 ELSE 0 END) AS flat_count,
+        SUM(CASE WHEN return_category = 'down' THEN 1 ELSE 0 END) AS down_count,
+        SUM(CASE WHEN return_category = 'very_down' THEN 1 ELSE 0 END) AS very_down_count
+      FROM ranked
+      GROUP BY pattern_code
+    `,
+    args: [horizon, horizon],
+  })
+  return Number(result.rowsAffected ?? 0)
+}
 
-    console.log(`  JOIN 取得: ${result.rows.length.toLocaleString()} 行 (${((Date.now() - t0) / 1000).toFixed(1)}s)`)
+async function aggregate(): Promise<number> {
+  console.log(`既存 pattern_stats 削除: horizons=${HORIZONS.join(',')}`)
+  await ensureIndexes()
+  await client.execute({
+    sql: `DELETE FROM pattern_stats WHERE horizon_days IN (${HORIZONS.map(() => '?').join(', ')})`,
+    args: HORIZONS,
+  })
 
-    // pattern_code → returns[] にグルーピング
-    const buckets = new Map<string, number[]>()
-    const categories = new Map<string, { very_up: number; up: number; flat: number; down: number; very_down: number }>()
-
-    for (const r of result.rows as unknown as Array<{ pattern_code: string; return_pct: number; category: string }>) {
-      let bucket = buckets.get(r.pattern_code)
-      if (!bucket) {
-        bucket = []
-        buckets.set(r.pattern_code, bucket)
-        categories.set(r.pattern_code, { very_up: 0, up: 0, flat: 0, down: 0, very_down: 0 })
-      }
-      bucket.push(r.return_pct)
-      const cats = categories.get(r.pattern_code)!
-      if (r.category in cats) {
-        cats[r.category as keyof typeof cats]++
-      }
-    }
-
-    console.log(`  バケット数: ${buckets.size.toLocaleString()}`)
-
-    for (const [patternCode, returns] of buckets.entries()) {
-      const cats = categories.get(patternCode)!
-      allStatsRecords.push({
-        pattern_code: patternCode,
-        horizon_days: horizon,
-        count: returns.length,
-        p05: percentile(returns, 5),
-        p25: percentile(returns, 25),
-        p50: percentile(returns, 50),
-        p75: percentile(returns, 75),
-        p95: percentile(returns, 95),
-        very_up_count:   cats.very_up,
-        up_count:        cats.up,
-        flat_count:      cats.flat,
-        down_count:      cats.down,
-        very_down_count: cats.very_down,
-      })
-    }
-
-    // GC ヒント (大きな Map を捨てる)
-    buckets.clear()
-    categories.clear()
-    if (global.gc) global.gc()
+  let rowsInserted = 0
+  for (const horizon of HORIZONS) {
+    console.log(`\n=== horizon=${horizon}d 集計開始 ===`)
+    const t0 = Date.now()
+    const inserted = await aggregateHorizon(horizon)
+    rowsInserted += inserted
+    console.log(`  集計INSERT: ${inserted.toLocaleString()} パターン (${((Date.now() - t0) / 1000).toFixed(1)}s)`)
   }
 
-  console.log(`\n統計レコード総数: ${allStatsRecords.length.toLocaleString()}`)
-  console.log('pattern_stats に INSERT...')
-
-  // チャンク INSERT
-  const CHUNK = 500
-  for (let i = 0; i < allStatsRecords.length; i += CHUNK) {
-    await db.insert(patternStats).values(allStatsRecords.slice(i, i + CHUNK))
-  }
-
-  return allStatsRecords.length
+  return rowsInserted
 }
 
 async function main() {

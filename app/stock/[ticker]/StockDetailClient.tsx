@@ -3,6 +3,7 @@
 
 import { useEffect, useState } from 'react'
 import { MarketBadge } from '@/components/ui/MarketBadge'
+import { MarginBadges } from '@/components/ui/MarginBadges'
 import { PriceDisplay } from '@/components/ui/PriceDisplay'
 import { CandlestickChart } from '@/components/charts/CandlestickChart'
 import { PerformanceCard } from '@/components/stock/PerformanceCard'
@@ -27,9 +28,30 @@ interface SectorMasterRow {
   margin_type?: string | null
 }
 
+interface StockMarginInfo {
+  latest: {
+    marginType: string | null
+    asOfDate: string | null
+    longMargin: number | null
+    shortMargin: number | null
+    longChange: number | null
+    shortChange: number | null
+    creditRatio: number | null
+    shortRatio: number | null
+  } | null
+  history: Array<{
+    date: string
+    longMargin: number | null
+    shortMargin: number | null
+    longChange: number | null
+    shortChange: number | null
+  }>
+}
+
 export function StockDetailClient({ ticker }: StockDetailClientProps) {
   const [quote, setQuote] = useState<StockQuote | null>(null)
   const [smaster, setSmaster] = useState<SectorMasterRow | null>(null)
+  const [marginInfo, setMarginInfo] = useState<StockMarginInfo | null>(null)
   const [loading, setLoading] = useState(true)
 
   const hardcoded = findTicker(ticker)
@@ -39,9 +61,10 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
     async function fetchData() {
       setLoading(true)
       try {
-        const [quoteRes, masterRes] = await Promise.all([
+        const [quoteRes, masterRes, marginRes] = await Promise.all([
           fetch(`/api/quote/${encodeURIComponent(ticker)}`, { cache: 'no-store' }),
           fetch(`/api/sector-master/${encodeURIComponent(ticker)}`, { cache: 'no-store' }),
+          fetch(`/api/stock-margin/${encodeURIComponent(ticker)}`, { cache: 'no-store' }),
         ])
         if (cancelled) return
         if (quoteRes.ok) setQuote(await quoteRes.json())
@@ -49,6 +72,7 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
           const j = await masterRes.json()
           setSmaster(j.master ?? null)
         }
+        if (marginRes.ok) setMarginInfo(await marginRes.json())
       } catch (error) {
         console.error('Failed to fetch stock data:', error)
       } finally {
@@ -102,10 +126,10 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
 
         <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
           {displayMarginType && <Pill label={displayMarginType} />}
-          {displayMarketSegment && <Pill label={displayMarketSegment} accent />}
-          {displaySector33 && <Pill label={displaySector33} />}
-          {displaySectorLarge && <Pill label={displaySectorLarge} />}
-          {displaySectorSmall && <Pill label={displaySectorSmall} />}
+          {displayMarketSegment && <Pill label={`市場: ${displayMarketSegment}`} accent />}
+          {displaySectorLarge && <Pill label={`17業種: ${displaySectorLarge}`} />}
+          {displaySector33 && <Pill label={`33業種: ${displaySector33}`} />}
+          {displaySectorSmall && displaySectorSmall !== displaySector33 && <Pill label={`分類: ${displaySectorSmall}`} />}
         </div>
 
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '12px' }}>
@@ -126,6 +150,7 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
       <div className="stock-info-grid">
         <BasicInfoCard quote={quote} />
         <PerformanceCard ticker={ticker} />
+        <MarginInfoCard info={marginInfo} fallbackType={displayMarginType} />
       </div>
 
       {/* 決算情報 */}
@@ -171,6 +196,59 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
         <StageTimeline ticker={ticker} />
       </div>
 
+    </div>
+  )
+}
+
+function fmtShares(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(value)) return '---'
+  if (Math.abs(value) >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}百万株`
+  return `${Math.round(value).toLocaleString('ja-JP')}株`
+}
+
+function fmtChange(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(value)) return '---'
+  return `${value > 0 ? '+' : ''}${Math.round(value).toLocaleString('ja-JP')}株`
+}
+
+function MarginInfoCard({ info, fallbackType }: { info: StockMarginInfo | null; fallbackType?: string | null }) {
+  const latest = info?.latest
+  const latestHistory = info?.history?.[0]
+  return (
+    <div className="card" style={{ padding: '12px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', marginBottom: '8px' }}>
+        <div style={{ fontSize: '11px', fontWeight: 600 }}>貸借/信用</div>
+        <MarginBadges
+          marginType={latest?.marginType ?? fallbackType}
+          creditRatio={latest?.creditRatio ?? null}
+          shortRatio={latest?.shortRatio ?? null}
+          compact
+        />
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '4px 8px' }}>
+        <InfoLine label="基準週" value={latest?.asOfDate ?? latestHistory?.date ?? '---'} />
+        <InfoLine label="信用倍率" value={latest?.creditRatio == null ? '---' : `${latest.creditRatio.toFixed(2)}倍`} />
+        <InfoLine label="買残" value={fmtShares(latest?.longMargin ?? latestHistory?.longMargin)} />
+        <InfoLine label="売残" value={fmtShares(latest?.shortMargin ?? latestHistory?.shortMargin)} />
+        <InfoLine label="買残増減" value={fmtChange(latest?.longChange ?? latestHistory?.longChange)} />
+        <InfoLine label="売残増減" value={fmtChange(latest?.shortChange ?? latestHistory?.shortChange)} />
+      </div>
+    </div>
+  )
+}
+
+function InfoLine({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={{
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'baseline',
+      padding: '4px 0',
+      borderBottom: '1px solid var(--border-subtle)',
+      gap: '8px',
+    }}>
+      <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{label}</span>
+      <span style={{ fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-primary)', textAlign: 'right' }}>{value}</span>
     </div>
   )
 }

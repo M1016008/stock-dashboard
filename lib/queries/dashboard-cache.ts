@@ -1,11 +1,11 @@
-import { execGet, execRun } from '@/lib/db/client'
+import { execAll, execGet, execRun } from '@/lib/db/client'
 import {
-  getCreditShortDashboard,
   getDashboardIndices,
-  getEarningsCalendar,
+  getEarningsCalendarDashboard,
   getLatestDate,
   getMarketMovers,
   getPatternStatsTopBottom,
+  getSector17Heatmap,
   getSector33Heatmap,
   getStageDistribution,
   getStereoscopicSignals,
@@ -25,8 +25,9 @@ export type DashboardCachePayload = {
   latestDate: string
   stereoscopicSignals: StereoscopicRow[]
   marketMovers: MarketMovers
+  sector17Heatmap?: SectorHeatRow[]
   sector33Heatmap: SectorHeatRow[]
-  creditShortDashboard: CreditShortDashboard
+  creditShortDashboard?: CreditShortDashboard
   patternStatsTopBottom: PatternRankRow[]
   earningsCalendar: EarningsRow[]
   computedAt: string
@@ -35,6 +36,11 @@ export type DashboardCachePayload = {
 type DashboardCacheRow = {
   date: string
   payloadJson: string
+}
+
+export interface DashboardAvailableDate {
+  date: string
+  tickers: number
 }
 
 function parsePayload(row: DashboardCacheRow | undefined): DashboardCachePayload | null {
@@ -62,25 +68,25 @@ export async function buildDashboardCache(date?: string): Promise<DashboardCache
   const [
     stereoscopicSignals,
     marketMovers,
+    sector17Heatmap,
     sector33Heatmap,
-    creditShortDashboard,
     patternStatsTopBottom,
     earningsCalendar,
   ] = await Promise.all([
-    getStereoscopicSignals(12),
-    getMarketMovers(),
-    getSector33Heatmap(),
-    getCreditShortDashboard(),
+    getStereoscopicSignals(12, latestDate),
+    getMarketMovers(latestDate),
+    getSector17Heatmap(latestDate),
+    getSector33Heatmap(latestDate),
     getPatternStatsTopBottom(),
-    getEarningsCalendar(14),
+    getEarningsCalendarDashboard(120, latestDate).then((data) => data.rows),
   ])
 
   const payload: DashboardCachePayload = {
     latestDate,
     stereoscopicSignals,
     marketMovers,
+    sector17Heatmap,
     sector33Heatmap,
-    creditShortDashboard,
     patternStatsTopBottom,
     earningsCalendar,
     computedAt: new Date().toISOString(),
@@ -100,49 +106,64 @@ export async function buildDashboardCache(date?: string): Promise<DashboardCache
   return payload
 }
 
-export async function getDashboardPayload(): Promise<DashboardCachePayload | null> {
-  const latestDate = await getLatestDate()
+export async function getDashboardPayload(date?: string | null): Promise<DashboardCachePayload | null> {
+  const latestDate = date ?? await getLatestDate()
   if (!latestDate) return null
   const cached = await readDashboardCache(latestDate)
   return cached ?? buildDashboardCache(latestDate)
 }
 
-export async function getCachedLatestDate(): Promise<string | null> {
-  return (await getDashboardPayload())?.latestDate ?? null
+export async function getCachedLatestDate(date?: string | null): Promise<string | null> {
+  return (await getDashboardPayload(date))?.latestDate ?? null
+}
+
+export async function getDashboardAvailableDates(limit = 5000): Promise<DashboardAvailableDate[]> {
+  return execAll<DashboardAvailableDate>(
+    `SELECT date, COUNT(*) AS tickers
+     FROM daily_snapshots
+     GROUP BY date
+     ORDER BY date DESC
+     LIMIT ?`,
+    [limit],
+  )
 }
 
 export async function getCachedDashboardIndices(): Promise<IndexQuote[]> {
   return getDashboardIndices()
 }
 
-export async function getCachedStageDistributionDailyA(): Promise<StageCountRow[]> {
-  return getStageDistribution('daily_a_stage')
+export async function getCachedStageDistributionDailyA(date?: string | null): Promise<StageCountRow[]> {
+  return getStageDistribution('daily_a_stage', date)
 }
 
-export async function getCachedTodayTransitionCounts(): Promise<TransitionCount | null> {
-  return getTodayTransitionCounts()
+export async function getCachedTodayTransitionCounts(date?: string | null): Promise<TransitionCount | null> {
+  return getTodayTransitionCounts(date)
 }
 
-export async function getCachedStereoscopicSignals(): Promise<StereoscopicRow[]> {
-  return (await getDashboardPayload())?.stereoscopicSignals ?? []
+export async function getCachedStereoscopicSignals(date?: string | null): Promise<StereoscopicRow[]> {
+  return (await getDashboardPayload(date))?.stereoscopicSignals ?? []
 }
 
-export async function getCachedMarketMovers(): Promise<MarketMovers> {
-  return (await getDashboardPayload())?.marketMovers ?? { newHighs: [], newLows: [], volumeSpikes: [] }
+export async function getCachedMarketMovers(date?: string | null): Promise<MarketMovers> {
+  return (await getDashboardPayload(date))?.marketMovers ?? { newHighs: [], newLows: [], volumeSpikes: [] }
 }
 
-export async function getCachedSector33Heatmap(): Promise<SectorHeatRow[]> {
-  return (await getDashboardPayload())?.sector33Heatmap ?? []
+export async function getCachedSector33Heatmap(date?: string | null): Promise<SectorHeatRow[]> {
+  return (await getDashboardPayload(date))?.sector33Heatmap ?? []
 }
 
-export async function getCachedCreditShortDashboard(): Promise<CreditShortDashboard> {
-  return (await getDashboardPayload())?.creditShortDashboard ?? { asOf: null, sectorRows: [], stockRows: [] }
+export async function getCachedSector17Heatmap(date?: string | null): Promise<SectorHeatRow[]> {
+  return (await getDashboardPayload(date))?.sector17Heatmap ?? await getSector17Heatmap(date ?? undefined)
 }
 
-export async function getCachedPatternStatsTopBottom(): Promise<PatternRankRow[]> {
-  return (await getDashboardPayload())?.patternStatsTopBottom ?? []
+export async function getCachedCreditShortDashboard(date?: string | null): Promise<CreditShortDashboard> {
+  return (await getDashboardPayload(date))?.creditShortDashboard ?? { asOf: null, sectorRows: [], stockRows: [] }
 }
 
-export async function getCachedEarningsCalendar(): Promise<EarningsRow[]> {
-  return (await getDashboardPayload())?.earningsCalendar ?? []
+export async function getCachedPatternStatsTopBottom(date?: string | null): Promise<PatternRankRow[]> {
+  return (await getDashboardPayload(date))?.patternStatsTopBottom ?? []
+}
+
+export async function getCachedEarningsCalendar(date?: string | null): Promise<EarningsRow[]> {
+  return (await getDashboardPayload(date))?.earningsCalendar ?? []
 }

@@ -3,6 +3,8 @@
 
 import Link from 'next/link'
 import { Card, CardHeader } from '@/components/ui/Card'
+import { IndustryBadges } from '@/components/ui/IndustryBadges'
+import { MarginBadges } from '@/components/ui/MarginBadges'
 import { StageTag } from '@/components/ui/StageTag'
 import { getCachedStereoscopicSignals } from '@/lib/queries/dashboard-cache'
 
@@ -21,8 +23,8 @@ function tone(v: number | null) {
   return v > 0 ? 'text-[var(--color-price-up)]' : v < 0 ? 'text-[var(--color-price-down)]' : 'text-[var(--color-text-secondary)]'
 }
 
-export async function StereoscopicSignals() {
-  const rows = await getCachedStereoscopicSignals()
+export async function StereoscopicSignals({ date }: { date?: string | null }) {
+  const rows = await getCachedStereoscopicSignals(date)
   return (
     <Card>
       <CardHeader
@@ -30,15 +32,28 @@ export async function StereoscopicSignals() {
         hint="6軸ステージ一致 / N≧40 / 30日中央値順"
         action={<Link href="/ai/transitions" className="hover:text-[var(--color-text-secondary)]">分析へ ↗</Link>}
       />
+      <div className="mb-4 rounded-[6px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-3 py-3 text-[12px] font-medium leading-relaxed text-[var(--color-text-secondary)]">
+        <p>
+          6軸ステージ一致は、日足A・日足B・週足A・週足B・月足A・月足Bの6つのステージを
+          <span className="mx-1 font-mono font-bold text-[var(--color-brand-800)]">112334</span>
+          のような1つの組み合わせとして見ます。N≧40は、過去に同じ組み合わせが40件以上あり、統計として最低限の件数があるという意味です。
+          30日中央値順は、その組み合わせが出た後の30営業日リターンの中央値が高い順に並べています。
+        </p>
+        <p className="mt-2">
+          現在の銘柄が、過去に上がりやすかったステージ構成へ入っているかを素早く確認するための入口です。
+          候補銘柄を拾った後は、個別ページで移動平均線、出来高、直近高値との距離を確認すると使いやすくなります。
+        </p>
+      </div>
       {rows.length === 0 ? (
         <div className="py-7 text-center text-[13px] font-medium text-[var(--color-text-tertiary)]">該当銘柄なし</div>
       ) : (
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[1080px] text-[13px]">
+          <table className="w-full min-w-[1260px] text-[13px]">
             <thead>
               <tr className="text-left text-[11px] font-bold text-[var(--color-text-tertiary)]">
                 <th className="pb-3 pl-2 pr-3">銘柄</th>
-                <th className="pb-3 pr-3">業種</th>
+                <th className="pb-3 pr-3">貸借/信用</th>
+                <th className="pb-3 pr-3">J-Quants業種</th>
                 <th className="pb-3 pr-3 text-right">株価</th>
                 <th className="pb-3 pr-3 text-right">前日比</th>
                 <th className="pb-3 pr-3 text-right">出来高比</th>
@@ -55,9 +70,23 @@ export async function StereoscopicSignals() {
                   <td className="py-3 pl-2 pr-3">
                     <Link href={`/stock/${row.ticker}`} className="font-bold tabular-nums hover:underline">{row.ticker}</Link>
                     <div className="mt-1 max-w-[210px] truncate text-[12px] font-semibold">{row.name ?? row.ticker}</div>
-                    <div className="mt-1 text-[10px] font-semibold text-[var(--color-text-tertiary)]">pattern {row.patternCode}</div>
                   </td>
-                  <td className="py-3 pr-3 text-[12px] font-semibold text-[var(--color-text-secondary)]">{row.sectorName ?? 'その他'}</td>
+                  <td className="py-3 pr-3">
+                    <MarginBadges
+                      marginType={row.marginType}
+                      creditRatio={row.creditRatio}
+                      shortRatio={row.shortRatio}
+                      compact
+                    />
+                  </td>
+                  <td className="py-3 pr-3">
+                    <IndustryBadges
+                      sector17={row.sector17Name}
+                      sector33={row.sector33Name ?? row.sectorName}
+                      marketSegment={row.marketSegment}
+                      compact
+                    />
+                  </td>
                   <td className="py-3 pr-3 text-right tabular-nums font-semibold">{fmtPrice(row.price)}</td>
                   <td className={`py-3 pr-3 text-right tabular-nums font-semibold ${tone(row.changePct)}`}>{fmtPct(row.changePct)}</td>
                   <td className="py-3 pr-3 text-right tabular-nums text-[var(--color-text-secondary)]">{row.volumeRatio30 == null ? '---' : row.volumeRatio30.toFixed(1) + 'x'}</td>

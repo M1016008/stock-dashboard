@@ -14,6 +14,7 @@ type FreshnessResponse = {
 export function DataAutoUpdater() {
   const router = useRouter()
   const refreshedRef = useRef(false)
+  const startedRef = useRef(false)
 
   useEffect(() => {
     let cancelled = false
@@ -32,9 +33,26 @@ export function DataAutoUpdater() {
       }
     }
 
+    async function startUpdate(): Promise<void> {
+      if (startedRef.current) return
+      startedRef.current = true
+      try {
+        await fetch('/api/admin/update-latest', {
+          method: 'POST',
+          cache: 'no-store',
+        })
+      } catch (err) {
+        console.warn('Data freshness repair failed', err)
+      }
+    }
+
     async function checkAndStartUpdate() {
       const freshness = await readFreshness()
-      if (cancelled || !freshness?.running) return
+      if (cancelled || !freshness) return
+      if (!freshness.running && freshness.needsUpdate) {
+        await startUpdate()
+      }
+      if (cancelled || (!freshness.running && !freshness.needsUpdate)) return
       try {
         await pollUntilFresh(0)
       } catch (err) {
@@ -54,7 +72,14 @@ export function DataAutoUpdater() {
         router.refresh()
         return
       }
-      if (!freshness.running) return
+      if (!freshness.running) {
+        if (freshness.needsUpdate && startedRef.current) {
+          pollTimer = window.setTimeout(() => {
+            void pollUntilFresh(count + 1)
+          }, POLL_INTERVAL_MS)
+        }
+        return
+      }
 
       pollTimer = window.setTimeout(async () => {
         const latest = await readFreshness()
@@ -66,6 +91,7 @@ export function DataAutoUpdater() {
           return
         }
         if (latest.running) await pollUntilFresh(count + 1)
+        if (!latest.running && latest.needsUpdate && startedRef.current) await pollUntilFresh(count + 1)
       }, POLL_INTERVAL_MS)
     }
 

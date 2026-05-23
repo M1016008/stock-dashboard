@@ -1,9 +1,10 @@
 // components/dashboard/SectorHeatmap.tsx
-// Phase 4 B8: 33 業種ヒートマップ (J-Quants Sector33 ベース)
+// Phase 4 B8: 17/33 業種ヒートマップ (J-Quants Sector17/33 ベース)
 
 import Link from 'next/link'
 import { Card, CardHeader } from '@/components/ui/Card'
-import { getCachedSector33Heatmap } from '@/lib/queries/dashboard-cache'
+import { getCachedSector17Heatmap, getCachedSector33Heatmap } from '@/lib/queries/dashboard-cache'
+import type { SectorHeatRow } from '@/lib/queries/dashboard'
 
 function colorFor(pct: number): { bg: string; text: string } {
   // -3% ~ +3% を 0.05 ~ 0.30 opacity に
@@ -17,18 +18,25 @@ function colorFor(pct: number): { bg: string; text: string } {
   return { bg: 'var(--color-surface-muted)', text: 'var(--color-text-secondary)' }
 }
 
-export async function SectorHeatmap() {
-  const rows = await getCachedSector33Heatmap()
+function HeatmapCard({
+  rows,
+  title,
+  emptyText,
+}: {
+  rows: SectorHeatRow[]
+  title: string
+  emptyText: string
+}) {
   return (
     <Card>
       <CardHeader
-        title="33 業種ヒートマップ"
-        action={<Link href="/sectors" className="hover:text-[var(--color-text-secondary)]">大分類で見る ↗</Link>}
+        title={title}
+        action={<Link href="/sectors" className="hover:text-[var(--color-text-secondary)]">業種ページへ ↗</Link>}
         hint={`${rows.length} 業種`}
       />
       {rows.length === 0 ? (
         <div className="py-7 text-center text-[13px] font-medium text-[var(--color-text-tertiary)]">
-          業種データなし — `batch:listed-info` を実行してください
+          {emptyText}
         </div>
       ) : (
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6">
@@ -54,5 +62,27 @@ export async function SectorHeatmap() {
         </div>
       )}
     </Card>
+  )
+}
+
+export async function Sector17Heatmap({ date }: { date?: string | null }) {
+  const rows = await getCachedSector17Heatmap(date)
+  return (
+    <HeatmapCard
+      rows={rows}
+      title="17 業種ヒートマップ"
+      emptyText="17業種データなし — `batch:listed-info` を実行してください"
+    />
+  )
+}
+
+export async function SectorHeatmap({ date }: { date?: string | null }) {
+  const rows = await getCachedSector33Heatmap(date)
+  return (
+    <HeatmapCard
+      rows={rows}
+      title="33 業種ヒートマップ"
+      emptyText="33業種データなし — `batch:listed-info` を実行してください"
+    />
   )
 }

@@ -3,7 +3,7 @@
 // ローカル ticker_universe を ticker または name の LIKE で検索する。
 
 import { NextRequest, NextResponse } from 'next/server'
-import { db } from '@/lib/db/client'
+import { db, ensureReady } from '@/lib/db/client'
 import { tickerUniverse } from '@/lib/db/schema'
 import { and, eq, like, or } from 'drizzle-orm'
 
@@ -19,11 +19,16 @@ export async function GET(request: NextRequest) {
 
     const escaped = q.replace(/[%_]/g, m => '\\' + m)
     const pattern = `%${escaped}%`
+    await ensureReady()
 
     const rows = await db
       .select({
         ticker: tickerUniverse.ticker,
         name:   tickerUniverse.name,
+        sector17Name: tickerUniverse.sector17_name,
+        sector33Name: tickerUniverse.sector33_name,
+        marketSegment: tickerUniverse.market_segment,
+        marginType: tickerUniverse.margin_type,
       })
       .from(tickerUniverse)
       .where(and(
@@ -37,6 +42,10 @@ export async function GET(request: NextRequest) {
         ticker: r.ticker,
         name:   r.name ?? r.ticker,
         market: 'JP' as const,
+        sector17Name: r.sector17Name,
+        sector33Name: r.sector33Name,
+        marketSegment: r.marketSegment,
+        marginType: r.marginType,
       })),
     )
   } catch (error) {

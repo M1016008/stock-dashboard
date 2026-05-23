@@ -5,6 +5,7 @@ const UPDATE_JOB_TYPES = [
   'update_latest',
   'ohlcv_fetch:jquants',
   'snapshot_compute',
+  'post_ohlcv_refresh',
   'feature_compute',
   'indices',
   'earnings_calendar',

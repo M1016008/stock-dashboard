@@ -154,6 +154,8 @@ export const tickerUniverse = sqliteTable('ticker_universe', {
   sector33_code:      text('sector33_code'),
   sector33_name:      text('sector33_name'),
   market_segment:     text('market_segment'),
+  margin_code:        text('margin_code'),
+  margin_type:        text('margin_type'),
 })
 
 // ─────────────────────────────────────
@@ -371,6 +373,7 @@ export const forwardReturns = sqliteTable(
   (t) => ({
     pk:      primaryKey({ columns: [t.ticker, t.date, t.horizon_days] }),
     dateIdx: index('fwd_date_idx').on(t.date),
+    horizonTickerDateIdx: index('fwd_horizon_ticker_date_idx').on(t.horizon_days, t.ticker, t.date),
   }),
 )
 
@@ -450,6 +453,26 @@ export const weeklyMarginInterest = sqliteTable(
   }),
 )
 
+export const servingMarginLatest = sqliteTable(
+  'serving_margin_latest',
+  {
+    ticker:      text('ticker').primaryKey(),
+    asOfDate:    text('as_of_date').notNull(),
+    marginType:  text('margin_type'),
+    longMargin:  real('long_margin'),
+    shortMargin: real('short_margin'),
+    longChange:  real('long_change'),
+    shortChange: real('short_change'),
+    creditRatio: real('credit_ratio'),
+    shortRatio:  real('short_ratio'),
+    computedAt:  integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    dateIdx: index('serving_margin_latest_date_idx').on(t.asOfDate),
+    typeIdx: index('serving_margin_latest_type_idx').on(t.marginType, t.asOfDate),
+  }),
+)
+
 // ─────────────────────────────────────
 // 17. Phase 4: 空売り残高 (J-Quants /markets/short_selling_positions)
 // ─────────────────────────────────────
@@ -477,6 +500,11 @@ export const earningsCalendar = sqliteTable(
     ticker:        text('ticker').notNull(),
     announceDate:  text('announce_date').notNull(),    // "YYYY-MM-DD"
     fiscalPeriod:  text('fiscal_period'),              // 例 "2026Q1"
+    companyName:   text('company_name'),
+    sectorName:    text('sector_name'),
+    marketSegment: text('market_segment'),
+    source:        text('source'),
+    sourceUrl:     text('source_url'),
     importedAt:    integer('imported_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
   },
   (t) => ({

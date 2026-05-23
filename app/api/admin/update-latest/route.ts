@@ -16,13 +16,6 @@ export async function GET() {
 }
 
 export async function POST() {
-  if (!process.env.JQUANTS_API_KEY) {
-    return NextResponse.json(
-      { started: false, error: 'JQUANTS_API_KEY is not set' },
-      { status: 412 },
-    )
-  }
-
   const freshness = await getDataFreshness()
   if (freshness.running) {
     return NextResponse.json({ started: false, running: true, freshness })
@@ -31,7 +24,17 @@ export async function POST() {
     return NextResponse.json({ started: false, running: false, freshness })
   }
 
-  const child = spawn('npx', ['tsx', '--env-file=.env.local', 'scripts/update-latest.ts'], {
+  const repairOnly = !freshness.needsOhlcvUpdate
+    && (freshness.needsSnapshotUpdate || freshness.needsDashboardCacheUpdate)
+  if (!repairOnly && !process.env.JQUANTS_API_KEY) {
+    return NextResponse.json(
+      { started: false, error: 'JQUANTS_API_KEY is not set', freshness },
+      { status: 412 },
+    )
+  }
+
+  const script = repairOnly ? 'scripts/refresh-after-ohlcv.ts' : 'scripts/update-latest.ts'
+  const child = spawn('npx', ['tsx', '--env-file=.env.local', script], {
     cwd: process.cwd(),
     detached: true,
     stdio: 'ignore',
@@ -45,7 +48,8 @@ export async function POST() {
   return NextResponse.json({
     started: true,
     pid: child.pid,
-    script: path.join('scripts', 'update-latest.ts'),
+    script: path.join(script),
+    repairOnly,
     freshness,
   })
 }

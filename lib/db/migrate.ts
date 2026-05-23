@@ -262,6 +262,7 @@ const STATEMENTS = [
     PRIMARY KEY (ticker, date, horizon_days)
   )`,
   `CREATE INDEX IF NOT EXISTS fwd_date_idx ON forward_returns(date)`,
+  `CREATE INDEX IF NOT EXISTS fwd_horizon_ticker_date_idx ON forward_returns(horizon_days, ticker, date)`,
   // ─── Phase 3: パターン統計 (6桁コード × horizon) ───
   `CREATE TABLE IF NOT EXISTS pattern_stats (
     pattern_code TEXT NOT NULL,
@@ -319,6 +320,20 @@ const STATEMENTS = [
   )`,
   `CREATE INDEX IF NOT EXISTS wmi_date_idx ON weekly_margin_interest(date)`,
   `CREATE INDEX IF NOT EXISTS wmi_ticker_date_idx ON weekly_margin_interest(ticker, date)`,
+  `CREATE TABLE IF NOT EXISTS serving_margin_latest (
+    ticker TEXT PRIMARY KEY,
+    as_of_date TEXT NOT NULL,
+    margin_type TEXT,
+    long_margin REAL,
+    short_margin REAL,
+    long_change REAL,
+    short_change REAL,
+    credit_ratio REAL,
+    short_ratio REAL,
+    computed_at INTEGER NOT NULL DEFAULT (unixepoch())
+  )`,
+  `CREATE INDEX IF NOT EXISTS serving_margin_latest_date_idx ON serving_margin_latest(as_of_date)`,
+  `CREATE INDEX IF NOT EXISTS serving_margin_latest_type_idx ON serving_margin_latest(margin_type, as_of_date)`,
   // ─── Phase 4: 空売り残高 ───
   `CREATE TABLE IF NOT EXISTS short_selling_positions (
     ticker TEXT NOT NULL,
@@ -335,6 +350,11 @@ const STATEMENTS = [
     ticker TEXT NOT NULL,
     announce_date TEXT NOT NULL,
     fiscal_period TEXT,
+    company_name TEXT,
+    sector_name TEXT,
+    market_segment TEXT,
+    source TEXT,
+    source_url TEXT,
     imported_at INTEGER NOT NULL DEFAULT (unixepoch()),
     PRIMARY KEY (ticker, announce_date)
   )`,
@@ -701,6 +721,14 @@ const ADD_COLUMN_IF_MISSING: string[] = [
   `ALTER TABLE ticker_universe ADD COLUMN sector33_code TEXT`,
   `ALTER TABLE ticker_universe ADD COLUMN sector33_name TEXT`,
   `ALTER TABLE ticker_universe ADD COLUMN market_segment TEXT`,
+  `ALTER TABLE ticker_universe ADD COLUMN margin_code TEXT`,
+  `ALTER TABLE ticker_universe ADD COLUMN margin_type TEXT`,
+  // Phase 4: J-Quants + JPX 公式決算予定の表示補完
+  `ALTER TABLE earnings_calendar ADD COLUMN company_name TEXT`,
+  `ALTER TABLE earnings_calendar ADD COLUMN sector_name TEXT`,
+  `ALTER TABLE earnings_calendar ADD COLUMN market_segment TEXT`,
+  `ALTER TABLE earnings_calendar ADD COLUMN source TEXT`,
+  `ALTER TABLE earnings_calendar ADD COLUMN source_url TEXT`,
 ]
 
 export async function ensureSchema(client: Client): Promise<void> {

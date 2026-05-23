@@ -77,7 +77,8 @@ async function models(): Promise<Map<MlDirection, ModelRow>> {
 async function features(date: string): Promise<FeatureRow[]> {
   return execAll<FeatureRow>(
     `
-    SELECT f.ticker, f.date, f.feature_json, f.vector_json, u.name, sm.sector_large
+    SELECT f.ticker, f.date, f.feature_json, f.vector_json, u.name,
+           COALESCE(u.sector17_name, sm.sector_large) AS sector_large
     FROM ml_feature_vectors f
     LEFT JOIN ticker_universe u ON u.ticker = f.ticker
     LEFT JOIN sector_master sm ON sm.ticker = f.ticker

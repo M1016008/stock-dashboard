@@ -255,11 +255,13 @@ async function maCandidateAnalysis(limit = 6): Promise<MaCandidateAnalysis> {
   }
   const rows = await execAll<CandidateRow>(
     `
-    SELECT as_of_date, direction, rank, ticker, name, sector_large, candidate_score,
-           feature_json, reason_json, explanation_json
-    FROM serving_ml_candidates
-    WHERE as_of_date = ? AND rank <= ?
-    ORDER BY direction, rank
+    SELECT c.as_of_date, c.direction, c.rank, c.ticker, COALESCE(c.name, u.name) AS name,
+           COALESCE(u.sector17_name, c.sector_large) AS sector_large,
+           c.candidate_score, c.feature_json, c.reason_json, c.explanation_json
+    FROM serving_ml_candidates c
+    LEFT JOIN ticker_universe u ON u.ticker = c.ticker
+    WHERE c.as_of_date = ? AND c.rank <= ?
+    ORDER BY c.direction, c.rank
     `,
     [latest.date, limit],
   )

@@ -1,5 +1,5 @@
 // app/api/admin/batch/ohlcv/route.ts
-// バックグラウンドで OHLCV フェッチバッチを起動する。
+// バックグラウンドで OHLCV フェッチ + スナップショット/画面キャッシュ更新を起動する。
 // 子プロセスとして spawn し、Next の HTTP タイムアウトを越えても継続できるよう detached + unref()。
 //
 // レスポンスはすぐ返り、進行状況は GET /api/admin/batch/runs をポーリングして確認する。
@@ -11,7 +11,8 @@ import path from 'node:path'
 export const dynamic = 'force-dynamic'
 
 export async function POST() {
-  const child = spawn('npx', ['tsx', '--env-file=.env.local', 'scripts/batch-ohlcv.ts'], {
+  const script = 'scripts/batch-ohlcv.ts'
+  const child = spawn('npx', ['tsx', '--env-file=.env.local', script], {
     cwd: process.cwd(),
     detached: true,
     stdio: 'ignore',
@@ -25,6 +26,6 @@ export async function POST() {
   return NextResponse.json({
     started: true,
     pid: child.pid,
-    script: path.join('scripts', 'batch-ohlcv.ts'),
+    script: path.join(script),
   })
 }

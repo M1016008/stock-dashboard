@@ -134,7 +134,7 @@
   --shadow-elevated: 0 14px 34px rgba(16,32,52,0.16);
 }
 
-* { box-sizing: border-box; margin: 0; padding: 0; }
+* { box-sizing: border-box; }
 
 html, body { height: 100%; }
 
@@ -147,6 +147,29 @@ body {
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   font-feature-settings: 'tnum' 1, 'cv11' 1;
+}
+
+.site-shell {
+  width: min(100%, 1480px);
+  margin-inline: auto;
+  padding-inline: 20px;
+}
+
+.dashboard-shell {
+  width: min(100%, 1420px);
+  margin-inline: auto;
+}
+
+@media (min-width: 640px) {
+  .site-shell { padding-inline: 32px; }
+}
+
+@media (min-width: 1024px) {
+  .site-shell { padding-inline: 40px; }
+}
+
+@media (min-width: 1280px) {
+  .site-shell { padding-inline: 48px; }
 }
 
 ::selection {
@@ -217,7 +240,7 @@ h3 {
 
 .stock-info-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr) minmax(0, 1fr);
   gap: 12px;
 }
 .stock-performance-card {
@@ -967,6 +990,17 @@ main td {
 .bt-chip.ghost {
   border-left-color: var(--color-border-default);
   color: var(--color-text-tertiary);
+}
+.bt-inline-select {
+  min-height: 26px;
+  max-width: 240px;
+  padding: 4px 9px;
+  border: 1px solid var(--color-border-default);
+  border-radius: 3px;
+  background: var(--color-surface-field);
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  font-weight: 700;
 }
 .bt-alert {
   border: 1px solid var(--color-market-red);

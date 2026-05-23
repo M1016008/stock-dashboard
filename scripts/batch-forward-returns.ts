@@ -1,74 +1,77 @@
 // scripts/batch-forward-returns.ts
 //
-// Phase 3: 各 (ticker, date) について 30/60/90/180 営業日後の % 変化を計算して forward_returns に保存。
+// Phase 3: 各 (ticker, date) について指定営業日後の % 変化を計算して forward_returns に保存。
 //
 // 使い方:
 //   USE_LOCAL_DB=1 npx tsx --env-file=.env.local scripts/batch-forward-returns.ts
+//   FORWARD_RETURN_HORIZONS=2,3,4,5,10,15 USE_LOCAL_DB=1 npx tsx --env-file=.env.local scripts/batch-forward-returns.ts
 //   TICKERS=7203 USE_LOCAL_DB=1 npx tsx --env-file=.env.local scripts/batch-forward-returns.ts
 
-import { db } from '@/lib/db/client'
-import { ohlcvDaily, forwardReturns, tickerUniverse, batchRuns } from '@/lib/db/schema'
-import { categorizeReturn } from '@/lib/features'
-import { eq, asc } from 'drizzle-orm'
+import { db, client } from '@/lib/db/client'
+import { tickerUniverse, batchRuns } from '@/lib/db/schema'
+import { eq } from 'drizzle-orm'
 
-const HORIZONS = [30, 60, 90, 180] as const
-const PROGRESS_EVERY = 100
+const DEFAULT_HORIZONS = [2, 3, 4, 5, 10, 15, 30, 60, 90, 180]
 
-async function computeForwardReturnsForTicker(ticker: string): Promise<number> {
-  const ohlcv = await db
-    .select({ date: ohlcvDaily.date, close: ohlcvDaily.close })
-    .from(ohlcvDaily)
-    .where(eq(ohlcvDaily.ticker, ticker))
-    .orderBy(asc(ohlcvDaily.date))
+function parseHorizons(value: string | undefined, fallback: number[]): number[] {
+  const source = value?.trim() ? value : fallback.join(',')
+  const horizons = [...new Set(
+    source
+      .split(',')
+      .map((part) => Number(part.trim()))
+      .filter((n) => Number.isInteger(n) && n > 0),
+  )].sort((a, b) => a - b)
+  if (horizons.length === 0) {
+    throw new Error('FORWARD_RETURN_HORIZONS に有効な営業日数がありません')
+  }
+  return horizons
+}
 
-  if (ohlcv.length < Math.min(...HORIZONS) + 1) return 0
+const HORIZONS = parseHorizons(process.env.FORWARD_RETURN_HORIZONS, DEFAULT_HORIZONS)
 
-  const records: Array<{
-    ticker: string
-    date: string
-    horizon_days: number
-    return_pct: number
-    return_category: string
-    end_date: string
-  }> = []
+async function computeForwardReturnsForHorizon(horizon: number, tickers: string[] | null): Promise<number> {
+  const tickerWhere = tickers?.length
+    ? `WHERE ticker IN (${tickers.map(() => '?').join(', ')})`
+    : ''
+  const args: Array<string | number> = [horizon, horizon, horizon, horizon, ...(tickers ?? [])]
 
-  for (let i = 0; i < ohlcv.length; i++) {
-    const currentClose = ohlcv[i].close
-    if (currentClose === 0 || currentClose == null) continue
-
-    for (const h of HORIZONS) {
-      const futureIdx = i + h
-      if (futureIdx >= ohlcv.length) continue  // 未来データなし、スキップ
-
-      const futureClose = ohlcv[futureIdx].close
-      if (futureClose === 0 || futureClose == null) continue
-
-      const returnPct = ((futureClose - currentClose) / currentClose) * 100
-      const category = categorizeReturn(returnPct)
-
-      records.push({
+  const result = await client.execute({
+    sql: `
+      INSERT OR IGNORE INTO forward_returns
+        (ticker, date, horizon_days, return_pct, return_category, end_date)
+      SELECT
         ticker,
-        date: ohlcv[i].date,
-        horizon_days: h,
-        return_pct: returnPct,
-        return_category: category,
-        end_date: ohlcv[futureIdx].date,
-      })
-    }
-  }
+        date,
+        ? AS horizon_days,
+        return_pct,
+        CASE
+          WHEN return_pct > 10 THEN 'very_up'
+          WHEN return_pct > 5 THEN 'up'
+          WHEN return_pct >= -5 THEN 'flat'
+          WHEN return_pct >= -10 THEN 'down'
+          ELSE 'very_down'
+        END AS return_category,
+        future_date AS end_date
+      FROM (
+        SELECT
+          ticker,
+          date,
+          close,
+          LEAD(date, ?) OVER (PARTITION BY ticker ORDER BY date) AS future_date,
+          LEAD(close, ?) OVER (PARTITION BY ticker ORDER BY date) AS future_close,
+          100.0 * (LEAD(close, ?) OVER (PARTITION BY ticker ORDER BY date) - close) / close AS return_pct
+        FROM ohlcv_daily
+        ${tickerWhere}
+      )
+      WHERE close > 0
+        AND future_close > 0
+        AND future_date IS NOT NULL
+        AND return_pct IS NOT NULL
+    `,
+    args,
+  })
 
-  if (records.length === 0) return 0
-
-  // チャンク INSERT (forward_returns は列数が少ないので chunk 大きめ)
-  const CHUNK = 500
-  for (let i = 0; i < records.length; i += CHUNK) {
-    await db
-      .insert(forwardReturns)
-      .values(records.slice(i, i + CHUNK))
-      .onConflictDoNothing()
-  }
-
-  return records.length
+  return Number(result.rowsAffected ?? 0)
 }
 
 async function main() {
@@ -85,28 +88,27 @@ async function main() {
         .select({ ticker: tickerUniverse.ticker })
         .from(tickerUniverse)
         .where(eq(tickerUniverse.active, true))
+  const tickerFilter = filter && filter.length > 0 ? filter : null
 
   let succeeded = 0
   let failed = 0
   let rowsInserted = 0
   const errors: string[] = []
 
-  console.log(`Forward returns 計算開始: ${tickers.length} 銘柄`)
+  console.log(`Forward returns 計算開始: ${tickers.length} 銘柄 / horizons=${HORIZONS.join(',')}`)
   const startTime = Date.now()
 
-  for (const [i, { ticker }] of tickers.entries()) {
+  for (const [i, horizon] of HORIZONS.entries()) {
     try {
-      const count = await computeForwardReturnsForTicker(ticker)
+      const count = await computeForwardReturnsForHorizon(horizon, tickerFilter)
       succeeded++
       rowsInserted += count
-      if ((i + 1) % PROGRESS_EVERY === 0 || i === tickers.length - 1) {
-        const pct = (((i + 1) / tickers.length) * 100).toFixed(1)
-        const elapsedMin = ((Date.now() - startTime) / 60000).toFixed(1)
-        console.log(`[${i + 1}/${tickers.length} ${pct}%] ${ticker}: +${count} (累計 ${rowsInserted}, 失敗 ${failed}, 経過 ${elapsedMin}min)`)
-      }
+      const pct = (((i + 1) / HORIZONS.length) * 100).toFixed(1)
+      const elapsedMin = ((Date.now() - startTime) / 60000).toFixed(1)
+      console.log(`[${i + 1}/${HORIZONS.length} ${pct}%] ${horizon}営業日: +${count.toLocaleString()} (累計 ${rowsInserted.toLocaleString()}, 失敗 ${failed}, 経過 ${elapsedMin}min)`)
     } catch (err) {
       failed++
-      const msg = `${ticker}: ${err instanceof Error ? err.message : String(err)}`
+      const msg = `${horizon}営業日: ${err instanceof Error ? err.message : String(err)}`
       errors.push(msg)
       console.error(`✗ ${msg}`)
     }

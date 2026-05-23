@@ -79,7 +79,7 @@ export default function SectorMasterPage() {
 
   const loadDiag = async () => {
     try {
-      const res = await fetch('/api/capital-flow/diagnostics', { cache: 'no-store' })
+      const res = await fetch('/api/admin/sector-master/diagnostics', { cache: 'no-store' })
       const json = await res.json()
       if (res.ok) setDiag(json)
     } catch { /* 無視 */ }

@@ -308,6 +308,7 @@ function specsFor(modes: Set<string>): CopySpec[] {
       { mode: 'baseline', table: 'pattern_stats', partition: 'all', where: 'count >= 40', label: 'pattern_stats N>=40' },
       { mode: 'baseline', table: 'weekly_margin_interest', partition: 'date', dateColumn: 'date', latestDates: 180 },
       { mode: 'baseline', table: 'short_selling_positions', partition: 'date', dateColumn: 'date', latestDates: 180 },
+      { mode: 'baseline', table: 'serving_margin_latest', partition: 'all' },
       { mode: 'baseline', table: 'earnings_calendar', partition: 'date', dateColumn: 'announce_date', latestDates: 240 },
       { mode: 'baseline', table: 'serving_stock_metrics', partition: 'all' },
       { mode: 'baseline', table: 'serving_stock_move_periods', partition: 'all' },

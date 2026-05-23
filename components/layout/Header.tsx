@@ -8,7 +8,6 @@ import {
   BarChart3,
   Building2,
   ChartCandlestick,
-  ChartNoAxesCombined,
   Database,
   FlaskConical,
   Hexagon,
@@ -29,7 +28,6 @@ const NAV_ITEMS = [
   { href: '/ai/transitions', label: 'パターン', icon: ChartCandlestick },
   { href: '/backtest', label: '検証', icon: FlaskConical },
   { href: '/screener', label: 'スクリーナー', icon: Search },
-  { href: '/capital-flow', label: '資金フロー', icon: ChartNoAxesCombined },
   { href: '/watchlist', label: 'ウォッチ', icon: Star },
 ] as const
 
@@ -147,7 +145,7 @@ export function Header() {
   return (
     <header className="sticky top-0 z-30 border-b border-[var(--color-border-strong)] bg-white shadow-[0_1px_3px_rgba(16,32,52,0.12)]">
       <div className="border-b border-[var(--color-border-default)] bg-[var(--color-surface-subtle)]">
-        <div className="mx-auto flex min-h-10 max-w-[1580px] items-center justify-between gap-3 px-4 sm:px-6 lg:px-8">
+        <div className="mx-auto flex min-h-10 w-full max-w-[1480px] items-center justify-between gap-3 px-5 sm:px-8 lg:px-10 xl:px-12">
           <Link href="/" prefetch={false} className="flex shrink-0 items-center gap-2.5">
             <div className="flex h-7 w-7 items-center justify-center rounded-[3px] bg-[var(--color-brand-800)] text-white shadow-sm">
               <BarChart3 size={16} strokeWidth={2.5} />
@@ -189,7 +187,7 @@ export function Header() {
       </div>
 
       <div className="bg-[var(--color-brand-800)]">
-        <div className="mx-auto flex min-h-12 max-w-[1580px] items-center justify-between gap-4 px-4 py-1.5 sm:px-6 lg:px-8">
+        <div className="mx-auto flex min-h-12 w-full max-w-[1480px] items-center justify-between gap-4 px-5 py-1.5 sm:px-8 lg:px-10 xl:px-12">
           <nav className="hidden min-w-0 flex-1 items-center gap-2 overflow-x-auto lg:flex">
             {NAV_ITEMS.map((item) => {
               const active = isActive(item.href)

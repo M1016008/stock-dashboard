@@ -3,6 +3,8 @@
 
 import Link from 'next/link'
 import { Card, CardHeader } from '@/components/ui/Card'
+import { IndustryBadges } from '@/components/ui/IndustryBadges'
+import { MarginBadges } from '@/components/ui/MarginBadges'
 import { StageTag } from '@/components/ui/StageTag'
 import { getCachedMarketMovers } from '@/lib/queries/dashboard-cache'
 import type { NewHighVolumeRow } from '@/lib/queries/dashboard'
@@ -26,6 +28,36 @@ function laneTone(kind: 'high' | 'low' | 'volume') {
   if (kind === 'high') return 'text-[var(--color-price-up)] bg-[var(--color-price-up-bg)]'
   if (kind === 'low') return 'text-[var(--color-price-down)] bg-[var(--color-price-down-bg)]'
   return 'text-[var(--color-pattern-700)] bg-[var(--color-pattern-50)]'
+}
+
+function stageValues(row: NewHighVolumeRow) {
+  const stages = [
+    row.daily_a_stage,
+    row.daily_b_stage,
+    row.weekly_a_stage,
+    row.weekly_b_stage,
+    row.monthly_a_stage,
+    row.monthly_b_stage,
+  ]
+  return stages.every((stage) => typeof stage === 'number') ? stages : null
+}
+
+function StageCodeTags({ row }: { row: NewHighVolumeRow }) {
+  const stages = stageValues(row)
+  if (!stages) {
+    return (
+      <span className="font-mono text-[11px] font-bold tracking-normal text-[var(--color-text-tertiary)]">
+        ------
+      </span>
+    )
+  }
+  return (
+    <span className="flex items-center justify-end gap-0.5">
+      {stages.map((stage, index) => (
+        <StageTag key={`${row.ticker}-${index}-${stage}`} stage={stage} size="xs" />
+      ))}
+    </span>
+  )
 }
 
 function MoverLane({
@@ -54,12 +86,15 @@ function MoverLane({
         <div className="px-3 py-8 text-center text-[13px] font-medium text-[var(--color-text-tertiary)]">該当なし</div>
       ) : (
         <div className="max-h-[520px] overflow-auto">
-          <div className="grid grid-cols-[58px_1fr_72px_64px_56px] gap-2 px-3 py-2 text-[11px] font-bold text-[var(--color-text-tertiary)]">
+          <div className="grid min-w-[800px] grid-cols-[58px_minmax(160px,1fr)_72px_178px_70px_64px_58px_96px] gap-2 px-3 py-2 text-[11px] font-bold text-[var(--color-text-tertiary)]">
             <span>コード</span>
             <span>銘柄</span>
+            <span>貸借</span>
+            <span>J-Quants業種</span>
             <span className="text-right">株価</span>
             <span className="text-right">前日比</span>
             <span className="text-right">出来高</span>
+            <span className="text-right">6軸</span>
           </div>
           <div className="divide-y divide-[var(--color-border-soft)]">
             {rows.map((row) => {
@@ -69,20 +104,28 @@ function MoverLane({
                   key={`${row.category}-${row.ticker}`}
                   href={`/stock/${row.ticker}`}
                   prefetch={false}
-                  className="grid grid-cols-[58px_1fr_72px_64px_56px] items-center gap-2 px-3 py-2.5 text-[13px] font-medium hover:bg-white"
+                  className="grid min-w-[800px] grid-cols-[58px_minmax(160px,1fr)_72px_178px_70px_64px_58px_96px] items-center gap-2 px-3 py-2.5 text-[13px] font-medium hover:bg-white"
                 >
                   <span className="tabular-nums text-[var(--color-text-secondary)]">{row.ticker}</span>
                   <span className="min-w-0">
                     <span className="block truncate font-semibold">{row.name ?? row.ticker}</span>
-                    <span className="mt-1 flex items-center gap-1.5 text-[10px] font-semibold text-[var(--color-text-tertiary)]">
-                      <StageTag stage={row.daily_a_stage} size="xs" />
-                      <StageTag stage={row.daily_b_stage} size="xs" />
-                      <span className="truncate">{row.sectorName ?? 'その他'}</span>
-                    </span>
                   </span>
+                  <MarginBadges
+                    marginType={row.marginType}
+                    creditRatio={row.creditRatio}
+                    shortRatio={row.shortRatio}
+                    compact
+                  />
+                  <IndustryBadges
+                    sector17={row.sector17Name}
+                    sector33={row.sector33Name ?? row.sectorName}
+                    marketSegment={row.marketSegment}
+                    compact
+                  />
                   <span className="text-right tabular-nums">{fmtPrice(row.price)}</span>
                   <span className={`text-right tabular-nums ${tone}`}>{fmtPct(row.changePct)}</span>
                   <span className="text-right tabular-nums text-[var(--color-text-secondary)]">{fmtRatio(row.volumeRatio)}</span>
+                  <StageCodeTags row={row} />
                 </Link>
               )
             })}
@@ -93,8 +136,8 @@ function MoverLane({
   )
 }
 
-export async function NewHighVolume() {
-  const movers = await getCachedMarketMovers()
+export async function NewHighVolume({ date }: { date?: string | null }) {
+  const movers = await getCachedMarketMovers(date)
   return (
     <Card>
       <CardHeader title="新高値・新安値・出来高急増" hint="252日レンジ / 出来高30日平均比" />

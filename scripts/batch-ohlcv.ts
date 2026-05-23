@@ -18,6 +18,7 @@
 //   - エラー発生時は MAX_RETRIES 回まで指数バックオフ
 //   - 失敗銘柄は batch_runs.error_summary に記録、バッチは続行
 
+import { spawn } from 'node:child_process'
 import { db, execAll } from '@/lib/db/client'
 import { ohlcvDaily, batchRuns, jquantsDailyCoverage, jquantsSyncRuns } from '@/lib/db/schema'
 import { fetchJQuantsDaily, fetchJQuantsDailyByDate, type JQuantsDailyByDateRow } from '@/lib/jquants'
@@ -39,6 +40,40 @@ const USE_DATE_BULK = process.env.OHLCV_USE_DATE_BULK !== '0'
 const ENABLE_MISSING_FALLBACK = process.env.OHLCV_ENABLE_MISSING_FALLBACK === '1'
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
+
+type RunResult = {
+  code: number | null
+  signal: NodeJS.Signals | null
+}
+
+function runScript(script: string): Promise<RunResult> {
+  return new Promise((resolve, reject) => {
+    const child = spawn('npx', ['tsx', '--env-file=.env.local', script], {
+      cwd: process.cwd(),
+      stdio: 'inherit',
+      env: {
+        ...process.env,
+        USE_LOCAL_DB: '1',
+      },
+    })
+
+    child.on('error', reject)
+    child.on('close', (code, signal) => resolve({ code, signal }))
+  })
+}
+
+async function refreshAfterOhlcv(): Promise<void> {
+  if (process.env.POST_OHLCV_REFRESH === '0') {
+    console.log('Post-OHLCV refresh skipped: POST_OHLCV_REFRESH=0')
+    return
+  }
+
+  console.log('\n▶ scripts/refresh-after-ohlcv.ts')
+  const result = await runScript('scripts/refresh-after-ohlcv.ts')
+  if (result.code !== 0) {
+    throw new Error(`scripts/refresh-after-ohlcv.ts failed: code=${result.code}, signal=${result.signal ?? 'none'}`)
+  }
+}
 
 async function withDbRetry<T>(fn: () => Promise<T>): Promise<T> {
   for (let attempt = 1; attempt <= 5; attempt++) {
@@ -260,11 +295,24 @@ async function main() {
     Array.from({ length: Math.min(CONCURRENCY, tickers.length) }, (_, i) => worker(i + 1)),
   )
 
-  // 終了記録
-  const finalStatus =
+  let postRefreshError: string | null = null
+  const fetchStatus =
     failed === 0 ? 'success' :
     succeeded === 0 ? 'failed' :
     'partial'
+
+  if (fetchStatus !== 'failed') {
+    try {
+      await refreshAfterOhlcv()
+    } catch (err) {
+      postRefreshError = err instanceof Error ? err.message : String(err)
+      errors.push(`post_ohlcv_refresh: ${postRefreshError}`)
+      console.error(`Post-OHLCV refresh failed: ${postRefreshError}`)
+    }
+  }
+
+  // 終了記録。後段更新が失敗した場合、OHLCV取得だけ成功しても success にはしない。
+  const finalStatus = postRefreshError && fetchStatus === 'success' ? 'partial' : fetchStatus
 
   await db
     .update(batchRuns)
@@ -280,6 +328,9 @@ async function main() {
     .where(eq(batchRuns.id, runId))
 
   console.log(`完了: ${succeeded} 成功 / ${failed} 失敗 / 計 ${rowsInserted} 行 / ステータス: ${finalStatus}`)
+  if (postRefreshError) {
+    throw new Error(`OHLCV fetched but post-refresh failed: ${postRefreshError}`)
+  }
 }
 
 main().catch(err => {

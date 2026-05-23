@@ -37,6 +37,10 @@ interface SnapshotRow {
   sma_75d: number | null
   earnings_last_date: string | null
   earnings_next_date: string | null
+  sector17_name: string | null
+  sector33_name: string | null
+  market_segment: string | null
+  margin_type: string | null
   daily_a_stage: number | null
   daily_b_stage: number | null
   weekly_a_stage: number | null
@@ -54,6 +58,8 @@ interface ScreenerStockRow {
   sectorLarge: string
   sectorSmall: string | null
   sector33: string | null
+  sector17Name: string | null
+  sector33Name: string | null
   price: number | null
   currency: string | null
   changePercent: number | null
@@ -137,6 +143,10 @@ async function loadSnapshotByDate(date: string): Promise<SnapshotRow[]> {
       s.ma_75 AS sma_75d,
       (SELECT MAX(e.announce_date) FROM earnings_calendar e WHERE e.ticker = s.ticker AND e.announce_date < s.date) AS earnings_last_date,
       (SELECT MIN(e.announce_date) FROM earnings_calendar e WHERE e.ticker = s.ticker AND e.announce_date >= s.date) AS earnings_next_date,
+      u.sector17_name,
+      u.sector33_name,
+      u.market_segment,
+      u.margin_type,
       s.daily_a_stage,
       s.daily_b_stage,
       s.weekly_a_stage,
@@ -207,22 +217,23 @@ async function loadSectorMap(): Promise<Map<string, SectorEntry>> {
 function buildResultRow(s: SnapshotRow, sectorMap: Map<string, SectorEntry>): ScreenerStockRow | null {
   const master = getTickersByMarket('JP').find((t) => t.ticker === s.ticker)
   const fromDb = sectorMap.get(s.ticker)
-  // セクター情報は sector_master DB → ハードコード master → 'その他' の順で参照する。
-  // 大分類が 'その他' に落ちた場合は小分類も 'その他' で埋める（空欄回避）。
-  const sectorLarge = fromDb?.sectorLarge ?? master?.sectorLarge ?? 'その他'
-  let sectorSmall = fromDb?.sectorSmall ?? master?.sectorSmall ?? null
+  // J-Quants 17/33業種を第一参照にする。sector_master の独自分類は補助。
+  const sectorLarge = s.sector17_name ?? fromDb?.sectorLarge ?? master?.sectorLarge ?? 'その他'
+  let sectorSmall = fromDb?.sectorSmall ?? s.sector33_name ?? master?.sectorSmall ?? null
   if (sectorLarge === 'その他' && !sectorSmall) sectorSmall = 'その他'
-  const sector33 = fromDb?.sector33 ?? null
-  const marketSegment = fromDb?.marketSegment ?? master?.marketSegment ?? ''
+  const sector33 = s.sector33_name ?? fromDb?.sector33 ?? null
+  const marketSegment = s.market_segment ?? fromDb?.marketSegment ?? master?.marketSegment ?? ''
   return {
     ticker: s.ticker,
     name: s.name ?? master?.name ?? s.ticker,
     market: 'JP',
     marketSegment,
-    marginType: fromDb?.marginType ?? master?.marginType,
+    marginType: s.margin_type ?? fromDb?.marginType ?? master?.marginType,
     sectorLarge,
     sectorSmall,
     sector33,
+    sector17Name: s.sector17_name,
+    sector33Name: s.sector33_name,
     price: s.price,
     currency: 'JPY',
     changePercent: s.change_percent_1d,

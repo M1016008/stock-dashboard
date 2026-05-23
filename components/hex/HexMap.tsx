@@ -8,6 +8,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Search, Copy, Check } from 'lucide-react'
 import { STAGE_BG_COLORS, STAGE_BORDER_COLORS, STAGE_LABELS } from '@/lib/hex-stage'
+import { MarginBadges } from '@/components/ui/MarginBadges'
 import { StageDots } from '@/components/ui/StageDots'
 
 interface Stock {
@@ -19,6 +20,10 @@ interface Stock {
   stage_a?: number | null
   stage_b?: number | null
   sector_small?: string | null
+  sector17_name?: string | null
+  sector33_name?: string | null
+  market_segment?: string | null
+  margin_type?: string | null
   price: number
   daily_change?: number
   weekly_change?: number
@@ -280,12 +285,13 @@ export default function HexMap({ data }: { data: Stock[]; timeframe?: Timeframe 
       {/* 銘柄テーブル */}
       <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full text-xs" style={{ minWidth: '1400px', borderCollapse: 'collapse' }}>
+          <table className="w-full text-xs" style={{ minWidth: '1480px', borderCollapse: 'collapse' }}>
             <thead className="bg-gray-50 sticky top-0 z-10">
               <tr style={{ borderBottom: '1px solid #e5e7eb' }}>
                 <th scope="col" className="px-3 py-2 text-left font-medium text-gray-500 whitespace-nowrap">コード</th>
                 <th scope="col" className="px-3 py-2 text-left font-medium text-gray-500 whitespace-nowrap">銘柄名</th>
-                <th scope="col" className="px-3 py-2 text-left font-medium text-gray-500 whitespace-nowrap">セクター</th>
+                <th scope="col" className="px-3 py-2 text-left font-medium text-gray-500 whitespace-nowrap">貸借/信用</th>
+                <th scope="col" className="px-3 py-2 text-left font-medium text-gray-500 whitespace-nowrap">J-Quants業種</th>
                 <th scope="col" className="px-3 py-2 text-right font-medium text-gray-500 whitespace-nowrap">株価</th>
                 <th scope="col" className="px-3 py-2 text-right font-medium text-gray-500 whitespace-nowrap">時価総額</th>
                 <th scope="col" className="px-3 py-2 text-right font-medium text-gray-500 whitespace-nowrap">日%</th>
@@ -330,12 +336,21 @@ export default function HexMap({ data }: { data: Stock[]; timeframe?: Timeframe 
                     </button>
                   </td>
                   <td className="px-3 py-2 font-medium text-gray-900 whitespace-nowrap">{s.name}</td>
+                  <td className="px-3 py-2 whitespace-nowrap">
+                    <MarginBadges marginType={s.margin_type} compact />
+                  </td>
                   <td className="px-3 py-2 text-gray-500 whitespace-nowrap">
-                    <span>{s.sector_large}</span>
-                    {s.sector_small && (
+                    {s.market_segment && (
+                      <>
+                        <span>{s.market_segment}</span>
+                        <span className="text-gray-300 mx-1">/</span>
+                      </>
+                    )}
+                    <span>17: {s.sector17_name ?? s.sector_large}</span>
+                    {(s.sector33_name ?? s.sector_small) && (
                       <>
                         <span className="text-gray-300 mx-1">/</span>
-                        <span>{s.sector_small}</span>
+                        <span>33: {s.sector33_name ?? s.sector_small}</span>
                       </>
                     )}
                   </td>
@@ -374,7 +389,7 @@ export default function HexMap({ data }: { data: Stock[]; timeframe?: Timeframe 
               ))}
               {visible.length === 0 && (
                 <tr>
-                  <td colSpan={13} className="text-center py-10 text-xs text-gray-400">
+                  <td colSpan={14} className="text-center py-10 text-xs text-gray-400">
                     {searchTerm
                       ? `"${searchTerm}" に一致する銘柄が見つかりませんでした`
                       : '該当する銘柄がありません'}

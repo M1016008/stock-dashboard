@@ -10,11 +10,11 @@ import { Suspense } from 'react'
 import { PageTitle } from '@/components/layout/PageTitle'
 import { StereoscopicSignals } from '@/components/dashboard/StereoscopicSignals'
 import { NewHighVolume } from '@/components/dashboard/NewHighVolume'
-import { SectorHeatmap } from '@/components/dashboard/SectorHeatmap'
-import { CreditShortPanel } from '@/components/dashboard/CreditShortPanel'
+import { Sector17Heatmap, SectorHeatmap } from '@/components/dashboard/SectorHeatmap'
 import { PatternStatsTop } from '@/components/dashboard/PatternStatsTop'
 import { EarningsCalendarPanel } from '@/components/dashboard/EarningsCalendarPanel'
-import { getCachedLatestDate } from '@/lib/queries/dashboard-cache'
+import { DashboardDateSelector } from '@/components/dashboard/DashboardDateSelector'
+import { getCachedLatestDate, getDashboardAvailableDates } from '@/lib/queries/dashboard-cache'
 
 export const metadata: Metadata = {
   title: 'ダッシュボード — StockBoard',
@@ -48,34 +48,48 @@ function SectionFallback({ height = 80 }: { height?: number }) {
   )
 }
 
-export default async function DashboardPage() {
-  const latest = await getCachedLatestDate()
-  const subtitle = latest ? `${latest} 大引け基準` : 'データ未取り込み'
+export default async function DashboardPage({
+  searchParams,
+}: {
+  searchParams?: Promise<{ date?: string | string[] }>
+}) {
+  const sp = searchParams ? await searchParams : {}
+  const requested = typeof sp.date === 'string' ? sp.date : null
+  const availableDates = await getDashboardAvailableDates()
+  const latestAvailable = availableDates[0]?.date ?? null
+  const requestedExists = Boolean(requested && availableDates.some((d) => d.date === requested))
+  const selectedDate = requestedExists && requested !== latestAvailable ? requested : null
+  const targetDate = requestedExists ? requested : latestAvailable
+  const latest = await getCachedLatestDate(targetDate)
+  const subtitle = latest
+    ? `${latest} 大引け基準${selectedDate ? '（過去日表示）' : ''}`
+    : 'データ未取り込み'
 
   return (
-    <div className="mx-auto flex w-full max-w-[1580px] flex-col gap-5">
+    <div className="mx-auto flex w-full max-w-[1420px] flex-col gap-5">
       <PageTitle
         title="ダッシュボード"
         subtitle={subtitle}
         badge="パターン統計 最新反映"
       />
+      <DashboardDateSelector dates={availableDates} selectedDate={selectedDate} />
       <Suspense fallback={<SectionFallback height={360} />}>
-        <StereoscopicSignals />
+        <StereoscopicSignals date={latest} />
       </Suspense>
       <Suspense fallback={<SectionFallback height={420} />}>
-        <NewHighVolume />
+        <NewHighVolume date={latest} />
       </Suspense>
       <Suspense fallback={<SectionFallback height={260} />}>
         <PatternStatsTop />
       </Suspense>
-      <Suspense fallback={<SectionFallback height={420} />}>
-        <CreditShortPanel />
+      <Suspense fallback={<SectionFallback height={240} />}>
+        <Sector17Heatmap date={latest} />
       </Suspense>
       <Suspense fallback={<SectionFallback height={240} />}>
-        <SectorHeatmap />
+        <SectorHeatmap date={latest} />
       </Suspense>
       <Suspense fallback={<SectionFallback height={200} />}>
-        <EarningsCalendarPanel />
+        <EarningsCalendarPanel date={latest} />
       </Suspense>
     </div>
   )

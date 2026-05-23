@@ -16,6 +16,8 @@ import {
   Sigma,
   Target,
 } from 'lucide-react'
+import { IndustryBadges } from '@/components/ui/IndustryBadges'
+import { MarginBadges } from '@/components/ui/MarginBadges'
 import { StageDots } from '@/components/ui/StageDots'
 import { BacktestHighlightChart, type HighlightChartPoint } from '@/components/charts/BacktestHighlightChart'
 
@@ -31,7 +33,10 @@ type BacktestResult = {
   name: string | null
   sector_large: string | null
   sector_small: string | null
+  sector17_name: string | null
+  sector33_name: string | null
   market_segment: string | null
+  margin_type: string | null
   pattern_code: string | null
   daily_a_stage: number | null
   daily_b_stage: number | null
@@ -342,6 +347,8 @@ export default function BacktestPage() {
   const [calendarMonth, setCalendarMonth] = useState('')
   const [horizon, setHorizon] = useState(40)
   const [preset, setPreset] = useState<typeof RETURN_PRESETS[number]['key']>('all')
+  const [selectedSector17, setSelectedSector17] = useState('')
+  const [selectedSector33, setSelectedSector33] = useState('')
   const [selectedSignals, setSelectedSignals] = useState<Set<string>>(new Set())
   const [query, setQuery] = useState<QueryResponse | null>(null)
   const [latestSignals, setLatestSignals] = useState<LatestSignal[]>([])
@@ -403,6 +410,8 @@ export default function BacktestPage() {
     if (activePreset.min != null) params.set('returnMin', String(activePreset.min))
     if (activePreset.max != null) params.set('returnMax', String(activePreset.max))
     if (activePreset.target != null) params.set('targetPct', String(activePreset.target))
+    if (selectedSector17) params.set('sector17', selectedSector17)
+    if (selectedSector33) params.set('sector33', selectedSector33)
     if (selectedSignals.size > 0) params.set('signals', Array.from(selectedSignals).join(','))
 
     fetch(`/api/backtest/query?${params}`, { cache: 'no-store' })
@@ -425,7 +434,7 @@ export default function BacktestPage() {
       .catch(() => { /* query result is primary */ })
 
     return () => { cancelled = true }
-  }, [selectedDate, horizon, preset, selectedSignals])
+  }, [selectedDate, horizon, preset, selectedSignals, selectedSector17, selectedSector33])
 
   const summary = query?.summary
   const rows = query?.results ?? EMPTY_RESULTS
@@ -447,11 +456,28 @@ export default function BacktestPage() {
   const sectorCounts = useMemo(() => {
     const map = new Map<string, number>()
     for (const row of rows) {
-      const key = row.sector_large ?? 'その他'
+      const key = row.sector17_name ?? row.sector_large ?? 'その他'
       map.set(key, (map.get(key) ?? 0) + 1)
     }
     return Array.from(map.entries()).sort((a, b) => b[1] - a[1]).slice(0, 8)
   }, [rows])
+  const sector17Options = useMemo(() => {
+    const map = new Map<string, number>()
+    for (const row of rows) {
+      const key = row.sector17_name
+      if (key) map.set(key, (map.get(key) ?? 0) + 1)
+    }
+    return Array.from(map.entries()).sort((a, b) => b[1] - a[1])
+  }, [rows])
+  const sector33Options = useMemo(() => {
+    const map = new Map<string, number>()
+    for (const row of rows) {
+      if (selectedSector17 && row.sector17_name !== selectedSector17) continue
+      const key = row.sector33_name
+      if (key) map.set(key, (map.get(key) ?? 0) + 1)
+    }
+    return Array.from(map.entries()).sort((a, b) => b[1] - a[1])
+  }, [rows, selectedSector17])
 
   useEffect(() => {
     let cancelled = false
@@ -605,6 +631,44 @@ export default function BacktestPage() {
           </div>
         </section>
 
+        <section className="bt-signal-strip" aria-label="J-Quants業種フィルタ">
+          <span className="bt-chip ghost">J-Quants業種</span>
+          <select
+            className="bt-inline-select"
+            value={selectedSector17}
+            onChange={(e) => {
+              setSelectedSector17(e.target.value)
+              setSelectedSector33('')
+            }}
+            aria-label="17業種分類で絞り込み"
+          >
+            <option value="">17業種すべて</option>
+            {sector17Options.map(([sector, count]) => (
+              <option key={sector} value={sector}>{sector}（{count}）</option>
+            ))}
+          </select>
+          <select
+            className="bt-inline-select"
+            value={selectedSector33}
+            onChange={(e) => setSelectedSector33(e.target.value)}
+            aria-label="33業種分類で絞り込み"
+          >
+            <option value="">33業種すべて</option>
+            {sector33Options.map(([sector, count]) => (
+              <option key={sector} value={sector}>{sector}（{count}）</option>
+            ))}
+          </select>
+          {(selectedSector17 || selectedSector33) && (
+            <button
+              className="bt-chip ghost"
+              type="button"
+              onClick={() => { setSelectedSector17(''); setSelectedSector33('') }}
+            >
+              業種クリア
+            </button>
+          )}
+        </section>
+
         <section className="bt-signal-strip">
           {SIGNAL_OPTIONS.map((item) => {
             const active = selectedSignals.has(item.code)
@@ -686,7 +750,15 @@ export default function BacktestPage() {
                           </td>
                           <td>
                             <div className="bt-name">{row.name ?? row.ticker}</div>
-                            <div className="bt-sub">{row.sector_large ?? 'その他'} / {row.market_segment ?? '-'}</div>
+                            <div className="bt-sub">
+                              <MarginBadges marginType={row.margin_type} compact />
+                              <IndustryBadges
+                                sector17={row.sector17_name ?? row.sector_large}
+                                sector33={row.sector33_name ?? row.sector_small}
+                                marketSegment={row.market_segment}
+                                compact
+                              />
+                            </div>
                           </td>
                           <td>
                             <StageDots
