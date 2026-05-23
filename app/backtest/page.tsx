@@ -109,16 +109,28 @@ type SignalStat = {
   }
 }
 
-type SimilarCase = {
-  rank: number
+type MlCandidate = {
+  asOfDate: string
+  direction: 'up' | 'down'
   ticker: string
   name: string | null
-  date: string
-  similarity: number | null
-  payload: {
-    max_return_pct?: number | null
-    days_to_max?: number | null
-    return_pct?: number | null
+  sectorLarge: string | null
+  rank: number
+  close: number | null
+  confidenceLabel: string
+  stageCode: string | null
+  maOrder: string | null
+  reason: {
+    stage?: string
+    maAngle?: string
+    maDistance?: string
+    pricePosition?: string
+    mlEvidence?: string
+  }
+  explanation?: {
+    summary?: string
+    watchPoints?: string[]
+    riskNotes?: string[]
   }
 }
 
@@ -197,12 +209,19 @@ type BacktestDetail = {
       daysToMax: number | null
     }>
   } | null
+  maCandidateAnalysis: {
+    asOfDate: string | null
+    up: MlCandidate[]
+    down: MlCandidate[]
+    comment: string
+  } | null
   analysisComment: {
     source: 'openai' | 'template'
     summary: string
     evidence: string[]
     watchPoints: string[]
     riskNotes: string[]
+    candidateComment: string
     similarPatternComment: string
   } | null
 }
@@ -327,7 +346,8 @@ export default function BacktestPage() {
   const [query, setQuery] = useState<QueryResponse | null>(null)
   const [latestSignals, setLatestSignals] = useState<LatestSignal[]>([])
   const [signalStats, setSignalStats] = useState<SignalStat[]>([])
-  const [similarCases, setSimilarCases] = useState<SimilarCase[]>([])
+  const [candidateMode, setCandidateMode] = useState<'both' | 'up' | 'down'>('both')
+  const [mlCandidates, setMlCandidates] = useState<MlCandidate[]>([])
   const [expandedKey, setExpandedKey] = useState('')
   const [details, setDetails] = useState<Record<string, BacktestDetail>>({})
   const [coverage, setCoverage] = useState<CoverageInfo | null>(null)
@@ -434,21 +454,16 @@ export default function BacktestPage() {
   }, [rows])
 
   useEffect(() => {
-    const first = rows[0]
-    if (!first) {
-      setSimilarCases([])
-      return
-    }
     let cancelled = false
-    fetch(`/api/backtest/similar?ticker=${first.ticker}&date=${first.date}`, { cache: 'no-store' })
+    fetch(`/api/backtest/ml-candidates?direction=${candidateMode}&limit=10`, { cache: 'no-store' })
       .then((res) => res.json())
       .then((data) => {
         if (cancelled) return
-        setSimilarCases(data.cases ?? [])
+        setMlCandidates(Array.isArray(data.candidates) ? data.candidates : [])
       })
-      .catch(() => { if (!cancelled) setSimilarCases([]) })
+      .catch(() => { if (!cancelled) setMlCandidates([]) })
     return () => { cancelled = true }
-  }, [rows])
+  }, [candidateMode])
 
   function toggleSignal(code: string) {
     setSelectedSignals((prev) => {
@@ -489,11 +504,19 @@ export default function BacktestPage() {
       .finally(() => setDetailLoading((current) => current === key ? '' : current))
   }
 
+  function candidatesFor(detail: BacktestDetail): MlCandidate[] {
+    const up = detail.maCandidateAnalysis?.up ?? []
+    const down = detail.maCandidateAnalysis?.down ?? []
+    if (candidateMode === 'up') return up
+    if (candidateMode === 'down') return down
+    return [...up.slice(0, 4), ...down.slice(0, 4)]
+  }
+
   return (
     <div className="sb-page">
       <div className="sb-page-title">
         <h1>過去検証・シグナル分析</h1>
-        <p>ステージ、ローソク足、移動平均線、出来高を組み合わせ、過去の上昇到達率を検証します。</p>
+        <p>6桁ステージと移動平均線の形から、過去検証と現在の候補銘柄をつなげて確認します。</p>
       </div>
 
       <div className="backtest-shell">
@@ -654,6 +677,7 @@ export default function BacktestPage() {
                     const key = detailKey(row)
                     const detail = details[key]
                     const expanded = expandedKey === key
+                    const detailCandidates = detail ? candidatesFor(detail) : []
                     return (
                       <Fragment key={key}>
                         <tr>
@@ -732,11 +756,11 @@ export default function BacktestPage() {
                                       </dl>
                                     </div>
                                     <div>
-                                      <h3>出来高とステージ</h3>
+                                      <h3>MA構造とステージ</h3>
                                       <dl>
-                                        <div><dt>出来高推移</dt><dd>{detail.volumeSummary?.comment ?? '-'}</dd></div>
-                                        <div><dt>期間平均</dt><dd>{fmtNum(detail.volumeSummary?.periodAverage)}</dd></div>
-                                        <div><dt>最大出来高</dt><dd>{fmtNum(detail.volumeSummary?.maxVolume)} / {detail.volumeSummary?.maxVolumeDate ?? '-'}</dd></div>
+                                        <div><dt>MA並び</dt><dd>{detail.maAnalysis?.maOrder ?? '-'}</dd></div>
+                                        <div><dt>5日MA維持</dt><dd>{detail.maAnalysis?.daysHeldAboveSma5 ?? '-'}営業日</dd></div>
+                                        <div><dt>直近高値距離</dt><dd>{fmtPct(detail.maAnalysis?.distanceToRecentHighPct)}</dd></div>
                                         <div><dt>6桁ステージ</dt><dd>{stagePathText(detail.selectedStagePath ?? [])}</dd></div>
                                       </dl>
                                     </div>
@@ -747,6 +771,7 @@ export default function BacktestPage() {
                                     highlightStart={detail.movePeriod?.startDate ?? row.date}
                                     highlightEnd={detail.movePeriod?.endDate ?? null}
                                     direction={detail.move}
+                                    stagePath={detail.selectedStagePath}
                                     startPrice={detail.movePeriod?.startPrice}
                                     endPrice={detail.movePeriod?.endPrice}
                                     returnPct={detail.movePeriod?.returnPct}
@@ -774,24 +799,40 @@ export default function BacktestPage() {
                                     </div>
                                   )}
 
-                                  <div className="bt-similar-box">
-                                    <h3>類似パターン比較</h3>
-                                    <p>{detail.analysisComment?.similarPatternComment ?? '類似パターンはまだ十分に蓄積されていません。'}</p>
-                                    <div className="bt-similar-metrics">
-                                      <span>事例 {detail.similarPatternStats?.sampleSize ?? 0}件</span>
-                                      <span>10%超え {fmtPct(detail.similarPatternStats?.upRate == null ? null : detail.similarPatternStats.upRate * 100)}</span>
-                                      <span>5%下落 {fmtPct(detail.similarPatternStats?.downRate == null ? null : detail.similarPatternStats.downRate * 100)}</span>
-                                      <span>平均最大上昇 {fmtPct(detail.similarPatternStats?.avgMaxReturnPct)}</span>
-                                      <span>平均最大下落 {fmtPct(detail.similarPatternStats?.avgMinReturnPct)}</span>
+                                  <div className="bt-similar-box bt-ml-candidate-box">
+                                    <div className="bt-candidate-head">
+                                      <div>
+                                        <h3>現在のMA候補</h3>
+                                        <p>{detail.analysisComment?.candidateComment ?? detail.maCandidateAnalysis?.comment ?? 'ML候補はまだ生成されていません。'}</p>
+                                      </div>
+                                      <div className="bt-candidate-toggle" aria-label="候補方向">
+                                        <button type="button" data-active={candidateMode === 'both'} onClick={() => setCandidateMode('both')}>両方</button>
+                                        <button type="button" data-active={candidateMode === 'up'} onClick={() => setCandidateMode('up')}>上昇</button>
+                                        <button type="button" data-active={candidateMode === 'down'} onClick={() => setCandidateMode('down')}>下落</button>
+                                      </div>
                                     </div>
-                                    {(detail.similarPatternStats?.cases ?? []).length > 0 && (
-                                      <div className="bt-similar-cases">
-                                        {(detail.similarPatternStats?.cases ?? []).slice(0, 6).map((item) => (
-                                          <Link key={`${item.ticker}-${item.date}`} href={`/stock/${item.ticker}`}>
-                                            {item.ticker} <small>{item.date}</small> <b>{fmtPct(item.maxReturnPct)}</b>
+                                    {detailCandidates.length > 0 ? (
+                                      <div className="bt-candidate-grid">
+                                        {detailCandidates.map((item) => (
+                                          <Link key={`${item.direction}-${item.ticker}`} href={`/stock/${item.ticker}`} className="bt-candidate-card" data-direction={item.direction}>
+                                            <div>
+                                              <span>{item.direction === 'up' ? '上昇候補' : '下落警戒'} #{item.rank}</span>
+                                              <strong>{item.ticker} {item.name ?? ''}</strong>
+                                              <small>{item.sectorLarge ?? '-'} / {item.confidenceLabel}</small>
+                                            </div>
+                                            <dl>
+                                              <div><dt>6ステージ</dt><dd>{item.stageCode ?? '-'}</dd></div>
+                                              <div><dt>MA並び</dt><dd>{item.maOrder ?? '-'}</dd></div>
+                                              <div><dt>MA角度</dt><dd>{item.reason.maAngle ?? '-'}</dd></div>
+                                              <div><dt>MA距離</dt><dd>{item.reason.maDistance ?? '-'}</dd></div>
+                                              <div><dt>株価位置</dt><dd>{item.reason.pricePosition ?? '-'}</dd></div>
+                                              <div><dt>ML根拠</dt><dd>{item.reason.mlEvidence ?? '-'}</dd></div>
+                                            </dl>
                                           </Link>
                                         ))}
                                       </div>
+                                    ) : (
+                                      <p className="bt-empty">ML候補は未作成です。batch:ml-candidates 実行後に表示されます。</p>
                                     )}
                                   </div>
                                 </div>
@@ -853,23 +894,28 @@ export default function BacktestPage() {
             <section className="sb-card bt-side-card">
               <div className="bt-card-head compact">
                 <div>
-                  <h2>類似局面</h2>
-                  <p>先頭銘柄に近い過去事例</p>
+                  <h2>現在のMA候補</h2>
+                  <p>最新日の6ステージ・MA形状</p>
                 </div>
                 <Search size={17} />
               </div>
+              <div className="bt-candidate-toggle side" aria-label="候補方向">
+                <button type="button" data-active={candidateMode === 'both'} onClick={() => setCandidateMode('both')}>両方</button>
+                <button type="button" data-active={candidateMode === 'up'} onClick={() => setCandidateMode('up')}>上昇</button>
+                <button type="button" data-active={candidateMode === 'down'} onClick={() => setCandidateMode('down')}>下落</button>
+              </div>
               <div className="bt-rank-list">
-                {similarCases.slice(0, 6).map((item) => (
-                  <div className="bt-rank" key={`${item.ticker}-${item.date}`}>
+                {mlCandidates.slice(0, 8).map((item) => (
+                  <div className="bt-rank" key={`${item.direction}-${item.ticker}`}>
                     <span className="bt-rank-no">{item.rank}</span>
                     <div>
                       <Link href={`/stock/${item.ticker}`}>{item.ticker} {item.name ?? ''}</Link>
-                      <p>{item.date} / 最大 {fmtPct(item.payload.max_return_pct)}</p>
+                      <p>{item.direction === 'up' ? '上昇候補' : '下落警戒'} / {item.stageCode ?? '-'} / {item.confidenceLabel}</p>
                     </div>
-                    <strong>{item.payload.days_to_max ?? '-'}</strong>
+                    <strong>{item.maOrder?.split(' > ')[0] ?? '-'}</strong>
                   </div>
                 ))}
-                {similarCases.length === 0 && <p className="bt-empty">類似局面データは未作成です</p>}
+                {mlCandidates.length === 0 && <p className="bt-empty">ML候補データは未作成です</p>}
               </div>
             </section>
 

@@ -1,12 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { execAll, execGet } from '@/lib/db/client'
 import {
-  buildChartWindow,
+  buildChartWindowWithMa,
   buildMaAnalysis,
   buildMovePeriod,
   buildTemplateComment,
   buildVolumeSummary,
   type AnalysisComment,
+  type MaCandidateAnalysis,
+  type MlCandidate,
   type MoveDirection,
   type OhlcvPoint,
   type SimilarPatternStats,
@@ -51,6 +53,19 @@ type SimilarRow = {
   max_return_pct: number | null
   min_return_pct: number | null
   days_to_max: number | null
+}
+
+type CandidateRow = {
+  as_of_date: string
+  direction: 'up' | 'down'
+  rank: number
+  ticker: string
+  name: string | null
+  sector_large: string | null
+  candidate_score: number
+  feature_json: string
+  reason_json: string
+  explanation_json: string
 }
 
 function parseJson<T>(value: string | null | undefined, fallback: T): T {
@@ -186,15 +201,76 @@ function extractOutputText(payload: unknown): string | null {
 function normalizeComment(value: unknown, fallback: AnalysisComment, source: AnalysisComment['source']): AnalysisComment {
   if (!value || typeof value !== 'object') return fallback
   const raw = value as Partial<Omit<AnalysisComment, 'source'>>
+  const candidateComment = typeof raw.candidateComment === 'string' && raw.candidateComment.trim()
+    ? raw.candidateComment
+    : fallback.candidateComment
   return {
     source,
     summary: typeof raw.summary === 'string' && raw.summary.trim() ? raw.summary : fallback.summary,
     evidence: Array.isArray(raw.evidence) ? raw.evidence.filter((item): item is string => typeof item === 'string').slice(0, 5) : fallback.evidence,
     watchPoints: Array.isArray(raw.watchPoints) ? raw.watchPoints.filter((item): item is string => typeof item === 'string').slice(0, 5) : fallback.watchPoints,
     riskNotes: Array.isArray(raw.riskNotes) ? raw.riskNotes.filter((item): item is string => typeof item === 'string').slice(0, 4) : fallback.riskNotes,
+    candidateComment,
     similarPatternComment: typeof raw.similarPatternComment === 'string' && raw.similarPatternComment.trim()
       ? raw.similarPatternComment
-      : fallback.similarPatternComment,
+      : candidateComment,
+  }
+}
+
+function candidateFromRow(row: CandidateRow): MlCandidate {
+  const feature = parseJson<Record<string, unknown>>(row.feature_json, {})
+  const reason = parseJson<MlCandidate['reason']>(row.reason_json, {
+    stage: '',
+    maAngle: '',
+    maDistance: '',
+    pricePosition: '',
+    mlEvidence: '',
+  })
+  const explanation = parseJson<{ confidenceLabel?: string; watchPoints?: string[] }>(row.explanation_json, {})
+  return {
+    ticker: row.ticker,
+    name: row.name,
+    sectorLarge: row.sector_large,
+    direction: row.direction,
+    rank: row.rank,
+    asOfDate: row.as_of_date,
+    close: typeof feature.close === 'number' ? feature.close : null,
+    confidenceLabel: explanation.confidenceLabel ?? '要確認',
+    stageCode: typeof feature.stageCode === 'string' ? feature.stageCode : null,
+    maOrder: typeof feature.maOrder === 'string' ? feature.maOrder : null,
+    reason,
+    watchPoints: Array.isArray(explanation.watchPoints) ? explanation.watchPoints.filter((item): item is string => typeof item === 'string').slice(0, 3) : [],
+  }
+}
+
+async function maCandidateAnalysis(limit = 6): Promise<MaCandidateAnalysis> {
+  const latest = await execGet<{ date: string | null }>(`SELECT MAX(as_of_date) AS date FROM serving_ml_candidates`)
+  if (!latest?.date) {
+    return {
+      asOfDate: null,
+      up: [],
+      down: [],
+      comment: '最新データのMA候補はまだ生成されていません。batch:ml-features、batch:ml-train、batch:ml-candidates の順に実行すると表示されます。',
+    }
+  }
+  const rows = await execAll<CandidateRow>(
+    `
+    SELECT as_of_date, direction, rank, ticker, name, sector_large, candidate_score,
+           feature_json, reason_json, explanation_json
+    FROM serving_ml_candidates
+    WHERE as_of_date = ? AND rank <= ?
+    ORDER BY direction, rank
+    `,
+    [latest.date, limit],
+  )
+  const candidates = rows.map(candidateFromRow)
+  const up = candidates.filter((item) => item.direction === 'up')
+  const down = candidates.filter((item) => item.direction === 'down')
+  return {
+    asOfDate: latest.date,
+    up,
+    down,
+    comment: `${latest.date}時点の最新データから、6桁ステージとMA形状を基準に上昇候補${up.length}件、下落警戒${down.length}件を抽出しています。`,
   }
 }
 
@@ -217,7 +293,7 @@ async function analysisComment(facts: Record<string, unknown>, fallback: Analysi
             content: [
               {
                 type: 'input_text',
-                text: 'あなたは日本株の検証画面向け分析コメントを作るアシスタントです。渡されたJSON内の事実だけを使い、投資判断を断定せず、次に確認すべき点を小学生にも分かる平易な日本語で返してください。数値や日付を新しく作らないでください。',
+                text: 'あなたは日本株の検証画面向け分析コメントを作るアシスタントです。渡されたJSON内の事実だけを使い、投資判断を断定せず、次に確認すべき点を小学生にも分かる平易な日本語で返してください。出来高よりも6桁ステージ、MAの角度、MA同士の距離、株価とMAの位置、最新ML候補の根拠を優先してください。数値や日付を新しく作らないでください。',
               },
             ],
           },
@@ -239,12 +315,13 @@ async function analysisComment(facts: Record<string, unknown>, fallback: Analysi
             schema: {
               type: 'object',
               additionalProperties: false,
-              required: ['summary', 'evidence', 'watchPoints', 'riskNotes', 'similarPatternComment'],
+              required: ['summary', 'evidence', 'watchPoints', 'riskNotes', 'candidateComment', 'similarPatternComment'],
               properties: {
                 summary: { type: 'string' },
                 evidence: { type: 'array', items: { type: 'string' } },
                 watchPoints: { type: 'array', items: { type: 'string' } },
                 riskNotes: { type: 'array', items: { type: 'string' } },
+                candidateComment: { type: 'string' },
                 similarPatternComment: { type: 'string' },
               },
             },
@@ -376,6 +453,7 @@ export async function GET(request: NextRequest) {
     const volumeSummary = result ? buildVolumeSummary(history, result.date, selectedEndDate) : null
     const maAnalysis = result ? buildMaAnalysis(history, result.date) : null
     const similarStats = result ? await similarPatternStats(result) : null
+    const candidates = await maCandidateAnalysis()
     const fallbackComment = result && movePeriod && volumeSummary && maAnalysis && similarStats
       ? buildTemplateComment({
         ticker,
@@ -384,6 +462,7 @@ export async function GET(request: NextRequest) {
         volume: volumeSummary,
         ma: maAnalysis,
         similar: similarStats,
+        candidates,
       })
       : null
     const aiComment = fallbackComment
@@ -393,9 +472,8 @@ export async function GET(request: NextRequest) {
         horizonDays: horizon,
         movePeriod,
         stagePath: selectedStagePath,
-        volumeSummary,
         maAnalysis,
-        similarStats,
+        maCandidateAnalysis: candidates,
       }, fallbackComment)
       : null
 
@@ -427,11 +505,12 @@ export async function GET(request: NextRequest) {
         downStagePath,
       } : null,
       movePeriod,
-      chartSeries: result ? buildChartWindow(history, result.date, selectedEndDate) : [],
+      chartSeries: result ? buildChartWindowWithMa(history, result.date, selectedEndDate) : [],
       selectedStagePath,
       volumeSummary,
       maAnalysis,
       similarPatternStats: similarStats,
+      maCandidateAnalysis: candidates,
       analysisComment: aiComment,
       evidence: evidence.map((row) => ({
         signalCode: row.signal_code,

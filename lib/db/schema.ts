@@ -851,6 +851,95 @@ export const servingStockMovePeriods = sqliteTable(
   }),
 )
 
+export const mlFeatureVectors = sqliteTable(
+  'ml_feature_vectors',
+  {
+    ticker:      text('ticker').notNull(),
+    date:        text('date').notNull(),
+    stageCode:   text('stage_code'),
+    featureJson: text('feature_json').notNull(),
+    vectorJson:  text('vector_json').notNull(),
+    computedAt:  integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk:      primaryKey({ columns: [t.ticker, t.date] }),
+    dateIdx: index('ml_feature_vectors_date_idx').on(t.date),
+  }),
+)
+
+export const mlTrainingLabels = sqliteTable(
+  'ml_training_labels',
+  {
+    ticker:       text('ticker').notNull(),
+    date:         text('date').notNull(),
+    horizonDays:  integer('horizon_days').notNull(),
+    returnPct:    real('return_pct'),
+    maxReturnPct: real('max_return_pct'),
+    minReturnPct: real('min_return_pct'),
+    upLabel:      integer('up_label').notNull().default(0),
+    downLabel:    integer('down_label').notNull().default(0),
+    rewardScore:  real('reward_score'),
+    labelJson:    text('label_json'),
+    computedAt:   integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk:      primaryKey({ columns: [t.ticker, t.date, t.horizonDays] }),
+    dateIdx: index('ml_training_labels_date_idx').on(t.date, t.horizonDays),
+  }),
+)
+
+export const mlModels = sqliteTable('ml_models', {
+  modelName:        text('model_name').primaryKey(),
+  modelType:        text('model_type').notNull(),
+  direction:        text('direction').notNull(),
+  horizonDays:      integer('horizon_days').notNull(),
+  featureNamesJson: text('feature_names_json').notNull(),
+  weightsJson:      text('weights_json').notNull(),
+  intercept:        real('intercept').notNull().default(0),
+  metricsJson:      text('metrics_json').notNull(),
+  trainedAt:        integer('trained_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+})
+
+export const rlTrainingStates = sqliteTable(
+  'rl_training_states',
+  {
+    ticker:        text('ticker').notNull(),
+    date:          text('date').notNull(),
+    horizonDays:   integer('horizon_days').notNull(),
+    action:        text('action').notNull(),
+    stateJson:     text('state_json').notNull(),
+    reward:        real('reward'),
+    nextStateJson: text('next_state_json'),
+    computedAt:    integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk:      primaryKey({ columns: [t.ticker, t.date, t.horizonDays, t.action] }),
+    dateIdx: index('rl_training_states_date_idx').on(t.date, t.horizonDays),
+  }),
+)
+
+export const servingMlCandidates = sqliteTable(
+  'serving_ml_candidates',
+  {
+    asOfDate:        text('as_of_date').notNull(),
+    direction:       text('direction').notNull(),
+    rank:            integer('rank').notNull(),
+    ticker:          text('ticker').notNull(),
+    name:            text('name'),
+    sectorLarge:     text('sector_large'),
+    candidateScore:  real('candidate_score').notNull(),
+    modelName:       text('model_name'),
+    featureJson:     text('feature_json').notNull(),
+    reasonJson:      text('reason_json').notNull(),
+    explanationJson: text('explanation_json').notNull(),
+    computedAt:      integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk:      primaryKey({ columns: [t.asOfDate, t.direction, t.ticker] }),
+    rankIdx: index('serving_ml_candidates_rank_idx').on(t.asOfDate, t.direction, t.rank),
+  }),
+)
+
 export const tursoSyncRuns = sqliteTable('turso_sync_runs', {
   runId:        text('run_id').primaryKey(),
   mode:         text('mode').notNull(),

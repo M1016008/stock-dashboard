@@ -66,7 +66,7 @@ export function StockMovePeriods({ ticker }: { ticker: string }) {
       <div className="stock-move-head">
         <div>
           <h2>過去の上昇・下落局面</h2>
-          <p>大きく動いた期間と、その間の出来高・6桁ステージ遷移を確認します。</p>
+          <p>大きく動いた期間を、4本の移動平均線と6桁ステージ遷移で確認します。</p>
         </div>
       </div>
       <div className="stock-move-list">
@@ -88,16 +88,16 @@ export function StockMovePeriods({ ticker }: { ticker: string }) {
                     開始価格は{fmtNum(move.startPrice)}円、終了価格は{fmtNum(move.endPrice)}円です。
                   </p>
                   <dl>
-                    <div><dt>出来高</dt><dd>{move.volumeSummary?.comment ?? '-'}</dd></div>
-                    <div><dt>期間平均出来高</dt><dd>{fmtNum(move.volumeSummary?.periodAverage)}</dd></div>
-                    <div><dt>最大出来高</dt><dd>{fmtNum(move.volumeSummary?.maxVolume)} / {move.volumeSummary?.maxVolumeDate ?? '-'}</dd></div>
                     <div><dt>ステージ遷移</dt><dd>{stagePathText(move.stagePath)}</dd></div>
+                    <div><dt>チャート表示</dt><dd>5日・25日・75日・200日MAと対象期間を重ねて表示します。</dd></div>
+                    <div><dt>参考出来高</dt><dd>{move.volumeSummary?.comment ?? '-'}</dd></div>
                   </dl>
                   <BacktestHighlightChart
                     series={move.chartSeries}
                     highlightStart={move.startDate}
                     highlightEnd={move.endDate}
                     direction={move.direction}
+                    stagePath={move.stagePath}
                     startPrice={move.startPrice}
                     endPrice={move.endPrice}
                     returnPct={move.returnPct}

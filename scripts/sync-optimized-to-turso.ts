@@ -324,6 +324,7 @@ function specsFor(modes: Set<string>): CopySpec[] {
       { mode: 'backtest', table: 'serving_backtest_details', partition: 'date', dateColumn: 'date' },
       { mode: 'backtest', table: 'serving_signal_evidence', partition: 'date', dateColumn: 'date' },
       { mode: 'backtest', table: 'serving_similar_cases', partition: 'date', dateColumn: 'source_date' },
+      { mode: 'backtest', table: 'serving_ml_candidates', partition: 'date', dateColumn: 'as_of_date' },
     )
   }
 

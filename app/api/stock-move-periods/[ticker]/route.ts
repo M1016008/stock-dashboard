@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { execAll } from '@/lib/db/client'
 import {
-  buildChartWindow,
+  buildChartWindowWithMa,
   buildVolumeSummary,
   pct,
   type MoveDirection,
@@ -203,7 +203,7 @@ export async function GET(
       return {
         ...move,
         stagePath: path,
-        chartSeries: buildChartWindow(history, move.startDate, move.endDate),
+        chartSeries: buildChartWindowWithMa(history, move.startDate, move.endDate),
         volumeSummary: buildVolumeSummary(history, move.startDate, move.endDate),
       }
     }))
