@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "dev:check": "tsx scripts/check-local-dev.ts",
     "build": "next build",
     "start": "next start",
     "db:generate": "drizzle-kit generate",
