@@ -26,6 +26,18 @@ export async function resolveTradingDate(date?: string | null): Promise<string |
   return row?.d ?? await getLatestDate()
 }
 
+function isIsoDate(value: string | null | undefined): value is string {
+  return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)
+}
+
+async function resolveMarketDateOnOrBefore(date: string): Promise<string | null> {
+  const row = await execGet<{ d: string | null }>(
+    `SELECT MAX(date) AS d FROM daily_snapshots WHERE date <= ?`,
+    [date],
+  )
+  return row?.d ?? await getLatestDate()
+}
+
 // ─── 1 営業日前 (前日) ───
 export async function getPrevDate(latest: string): Promise<string | null> {
   const row = await execGet<{ d: string | null }>(
@@ -401,64 +413,6 @@ export async function getNewHighVolume(limit = 6, date?: string | null): Promise
   return [...movers.newHighs, ...movers.newLows, ...movers.volumeSpikes].slice(0, limit)
 }
 
-// ─── 17/33 業種ヒートマップ ───
-export interface SectorHeatRow {
-  sector_code: string | null
-  sector_name: string
-  n_stocks: number
-  avg_change: number
-}
-
-export async function getSector17Heatmap(date?: string | null): Promise<SectorHeatRow[]> {
-  const latest = await resolveTradingDate(date)
-  if (!latest) return []
-  const prev = await getPrevDate(latest)
-  if (!prev) return []
-  return await execAll<SectorHeatRow>(
-    `
-    WITH today AS (SELECT ticker, close FROM ohlcv_daily WHERE date = ?),
-         yest AS (SELECT ticker, close FROM ohlcv_daily WHERE date = ?)
-    SELECT
-      tu.sector17_code AS sector_code,
-      COALESCE(tu.sector17_name, 'その他') AS sector_name,
-      COUNT(*) AS n_stocks,
-      AVG(100.0 * (today.close - yest.close) / yest.close) AS avg_change
-    FROM ticker_universe tu
-    JOIN today USING (ticker)
-    JOIN yest  USING (ticker)
-    WHERE tu.active = 1 AND tu.sector17_name IS NOT NULL
-    GROUP BY tu.sector17_code, tu.sector17_name
-    ORDER BY avg_change DESC
-    `,
-    [latest, prev],
-  )
-}
-
-export async function getSector33Heatmap(date?: string | null): Promise<SectorHeatRow[]> {
-  const latest = await resolveTradingDate(date)
-  if (!latest) return []
-  const prev = await getPrevDate(latest)
-  if (!prev) return []
-  return await execAll<SectorHeatRow>(
-    `
-    WITH today AS (SELECT ticker, close FROM ohlcv_daily WHERE date = ?),
-         yest AS (SELECT ticker, close FROM ohlcv_daily WHERE date = ?)
-    SELECT
-      tu.sector33_code AS sector_code,
-      COALESCE(tu.sector33_name, 'その他') AS sector_name,
-      COUNT(*) AS n_stocks,
-      AVG(100.0 * (today.close - yest.close) / yest.close) AS avg_change
-    FROM ticker_universe tu
-    JOIN today USING (ticker)
-    JOIN yest  USING (ticker)
-    WHERE tu.active = 1 AND tu.sector33_name IS NOT NULL
-    GROUP BY tu.sector33_code, tu.sector33_name
-    ORDER BY avg_change DESC
-    `,
-    [latest, prev],
-  )
-}
-
 // ─── パターン統計トップ/ボトム ───
 export interface PatternRankRow {
   pattern_code: string
@@ -565,9 +519,11 @@ export interface EarningsCalendarDashboard {
   windowEnd: string | null
 }
 export async function getEarningsCalendar(daysAhead = 14, date?: string | null): Promise<EarningsRow[]> {
-  const latest = await resolveTradingDate(date)
-  if (!latest) return []
-  const prev = await getPrevDate(latest)
+  const anchorDate = isIsoDate(date) ? date : await getLatestDate()
+  if (!anchorDate) return []
+  const marketDate = await resolveMarketDateOnOrBefore(anchorDate)
+  if (!marketDate) return []
+  const prev = await getPrevDate(marketDate)
   const rows = await execAll<EarningsRowBase>(
     `
     WITH cal AS (
@@ -642,9 +598,9 @@ export async function getEarningsCalendar(daysAhead = 14, date?: string | null):
     ORDER BY cal.daysLeft ASC
     LIMIT 50
     `,
-    [latest, latest, latest, daysAhead, latest, prev ?? latest, latest, latest, latest, latest],
+    [anchorDate, anchorDate, anchorDate, daysAhead, marketDate, prev ?? marketDate, marketDate, marketDate, marketDate, marketDate],
   )
-  return withEarningsSignals(rows, latest)
+  return withEarningsSignals(rows, marketDate)
 }
 
 async function getRecentEarningsCalendarRows(baseDate: string, prevDate: string | null, limit = 20): Promise<EarningsRow[]> {
@@ -805,7 +761,13 @@ async function getLatestImportedEarningsCalendarRows(baseDate: string, prevDate:
   return withEarningsSignals(rows, baseDate)
 }
 
-async function getCompletedEarningsCalendarRows(baseDate: string, prevDate: string | null, daysBack = 14, limit = 80): Promise<EarningsRow[]> {
+async function getCompletedEarningsCalendarRows(
+  anchorDate: string,
+  marketDate: string,
+  prevDate: string | null,
+  daysBack = 14,
+  limit = 80,
+): Promise<EarningsRow[]> {
   const rows = await execAll<EarningsRowBase>(
     `
     WITH cal AS (
@@ -892,22 +854,22 @@ async function getCompletedEarningsCalendarRows(baseDate: string, prevDate: stri
     ORDER BY cal.announce_date DESC, cal.ticker
     `,
     [
-      baseDate,
-      baseDate,
+      anchorDate,
+      anchorDate,
       daysBack,
-      baseDate,
+      anchorDate,
       limit,
-      baseDate,
-      prevDate ?? baseDate,
-      baseDate,
-      baseDate,
-      baseDate,
-      baseDate,
-      baseDate,
-      baseDate,
+      marketDate,
+      prevDate ?? marketDate,
+      marketDate,
+      marketDate,
+      marketDate,
+      marketDate,
+      marketDate,
+      marketDate,
     ],
   )
-  return withEarningsSignals(rows, baseDate)
+  return withEarningsSignals(rows, marketDate)
 }
 
 function earningsDateRange(rows: EarningsRow[], fallbackStart: string | null, fallbackEnd: string | null) {
@@ -916,9 +878,19 @@ function earningsDateRange(rows: EarningsRow[], fallbackStart: string | null, fa
   return { start: dates[0] ?? fallbackStart, end: dates[dates.length - 1] ?? fallbackEnd }
 }
 
-export async function getEarningsCalendarDashboard(daysAhead = 14, date?: string | null): Promise<EarningsCalendarDashboard> {
-  const latest = await resolveTradingDate(date)
-  if (!latest) {
+export interface EarningsCalendarDashboardOptions {
+  preferLatestImport?: boolean
+}
+
+export async function getEarningsCalendarDashboard(
+  daysAhead = 14,
+  date?: string | null,
+  options: EarningsCalendarDashboardOptions = {},
+): Promise<EarningsCalendarDashboard> {
+  const anchorDate = isIsoDate(date) ? date : await getLatestDate()
+  const marketDate = anchorDate ? await resolveMarketDateOnOrBefore(anchorDate) : null
+  const preferLatestImport = options.preferLatestImport ?? true
+  if (!anchorDate || !marketDate) {
     return {
       rows: [],
       completedRows: [],
@@ -934,7 +906,7 @@ export async function getEarningsCalendarDashboard(daysAhead = 14, date?: string
     }
   }
 
-  const prev = await getPrevDate(latest)
+  const prev = await getPrevDate(marketDate)
   const meta = await execGet<{ latestAnnounceDate: string | null; latestImportedAt: number | null; total: number }>(
     `SELECT MAX(NULLIF(announce_date, '')) AS latestAnnounceDate,
             MAX(imported_at) AS latestImportedAt,
@@ -955,7 +927,7 @@ export async function getEarningsCalendarDashboard(daysAhead = 14, date?: string
   )
   const windowEndRow = await execGet<{ d: string | null }>(
     `SELECT date(?, '+' || ? || ' days') AS d`,
-    [latest, daysAhead],
+    [anchorDate, daysAhead],
   )
   const windowEnd = windowEndRow?.d ?? null
   const total = Number(meta?.total ?? 0)
@@ -971,18 +943,39 @@ export async function getEarningsCalendarDashboard(daysAhead = 14, date?: string
       latestImportedAt,
       totalRows: total,
       lastRun: lastRun ?? null,
-      windowStart: latest,
+      windowStart: anchorDate,
       windowEnd,
     }
   }
 
   try {
+    const completedRows = await getCompletedEarningsCalendarRows(anchorDate, marketDate, prev, 14, 80)
+
+    if (!preferLatestImport) {
+      const rows = await getEarningsCalendar(daysAhead, anchorDate)
+      const latestAnnounceDate = meta?.latestAnnounceDate ?? null
+      return {
+        rows,
+        completedRows,
+        referenceRows: [],
+        status: rows.length > 0 || completedRows.length > 0 ? 'ok' : 'none',
+        message: rows.length > 0
+          ? `${anchorDate} を基準に、当日から${daysAhead}日先までの決算予定と発表後2週間の値動きを表示しています。`
+          : `${anchorDate} を基準にした表示対象期間の決算予定はありません。発表済み銘柄がある場合は下段に表示します。`,
+        latestAnnounceDate,
+        latestImportedAt,
+        totalRows: total,
+        lastRun: lastRun ?? null,
+        windowStart: anchorDate,
+        windowEnd,
+      }
+    }
+
     const lastInserted = lastRun?.rowsInserted == null ? null : Number(lastRun.rowsInserted)
-    const completedRows = await getCompletedEarningsCalendarRows(latest, prev, 14, 80)
-    const latestImportRows = lastInserted === 0 ? [] : await getLatestImportedEarningsCalendarRows(latest, prev, 80)
+    const latestImportRows = lastInserted === 0 ? [] : await getLatestImportedEarningsCalendarRows(anchorDate, prev, 80)
 
     if (lastInserted === 0) {
-      const referenceRows = await getRecentEarningsCalendarRows(latest, prev, 20)
+      const referenceRows = await getRecentEarningsCalendarRows(anchorDate, prev, 20)
       return {
         rows: [],
         completedRows,
@@ -993,13 +986,13 @@ export async function getEarningsCalendarDashboard(daysAhead = 14, date?: string
         latestImportedAt,
         totalRows: total,
         lastRun: lastRun ?? null,
-        windowStart: latest,
+        windowStart: anchorDate,
         windowEnd,
       }
     }
 
     if (latestImportRows.length > 0) {
-      const range = earningsDateRange(latestImportRows, latest, windowEnd)
+      const range = earningsDateRange(latestImportRows, anchorDate, windowEnd)
       return {
         rows: latestImportRows,
         completedRows,
@@ -1015,7 +1008,7 @@ export async function getEarningsCalendarDashboard(daysAhead = 14, date?: string
       }
     }
 
-    const rows = await getEarningsCalendar(daysAhead, latest)
+    const rows = await getEarningsCalendar(daysAhead, anchorDate)
     if (rows.length > 0) {
       return {
         rows,
@@ -1027,14 +1020,14 @@ export async function getEarningsCalendarDashboard(daysAhead = 14, date?: string
         latestImportedAt,
         totalRows: total,
         lastRun: lastRun ?? null,
-        windowStart: latest,
+        windowStart: anchorDate,
         windowEnd,
       }
     }
 
     const latestAnnounceDate = meta?.latestAnnounceDate ?? null
-    const stale = Boolean(latestAnnounceDate && latestAnnounceDate < latest)
-    const referenceRows = stale ? await getRecentEarningsCalendarRows(latest, prev, 20) : []
+    const stale = Boolean(latestAnnounceDate && latestAnnounceDate < anchorDate)
+    const referenceRows = stale ? await getRecentEarningsCalendarRows(anchorDate, prev, 20) : []
     return {
       rows: [],
       completedRows,
@@ -1047,7 +1040,7 @@ export async function getEarningsCalendarDashboard(daysAhead = 14, date?: string
       latestImportedAt,
       totalRows: total,
       lastRun: lastRun ?? null,
-      windowStart: latest,
+      windowStart: anchorDate,
       windowEnd,
     }
   } catch (error) {
@@ -1061,7 +1054,7 @@ export async function getEarningsCalendarDashboard(daysAhead = 14, date?: string
       latestImportedAt,
       totalRows: total,
       lastRun: lastRun ?? null,
-      windowStart: latest,
+      windowStart: anchorDate,
       windowEnd,
     }
   }

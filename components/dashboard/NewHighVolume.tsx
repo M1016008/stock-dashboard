@@ -9,6 +9,8 @@ import { StageTag } from '@/components/ui/StageTag'
 import { getCachedMarketMovers } from '@/lib/queries/dashboard-cache'
 import type { NewHighVolumeRow } from '@/lib/queries/dashboard'
 
+const MAX_INITIAL_ROWS_PER_LANE = 40
+
 function fmtPct(v: number | null | undefined) {
   if (v == null) return '---'
   return (v >= 0 ? '+' : '') + v.toFixed(2) + '%'
@@ -71,6 +73,8 @@ function MoverLane({
   rows: NewHighVolumeRow[]
   kind: 'high' | 'low' | 'volume'
 }) {
+  const visibleRows = rows.slice(0, MAX_INITIAL_ROWS_PER_LANE)
+  const hiddenCount = Math.max(0, rows.length - visibleRows.length)
   return (
     <div className="min-h-[360px] rounded-[8px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)]">
       <div className="flex items-baseline justify-between border-b border-[var(--color-border-soft)] px-3 py-3">
@@ -97,7 +101,7 @@ function MoverLane({
             <span className="text-right">6軸</span>
           </div>
           <div className="divide-y divide-[var(--color-border-soft)]">
-            {rows.map((row) => {
+            {visibleRows.map((row) => {
               const tone = row.changePct > 0 ? 'text-[var(--color-price-up)]' : row.changePct < 0 ? 'text-[var(--color-price-down)]' : ''
               return (
                 <Link
@@ -129,6 +133,11 @@ function MoverLane({
                 </Link>
               )
             })}
+            {hiddenCount > 0 && (
+              <div className="px-3 py-3 text-center text-[11px] font-bold text-[var(--color-text-tertiary)]">
+                初期表示は上位 {MAX_INITIAL_ROWS_PER_LANE} 件です。全 {rows.length.toLocaleString()} 件中、残り {hiddenCount.toLocaleString()} 件は条件を絞って確認してください。
+              </div>
+            )}
           </div>
         </div>
       )}

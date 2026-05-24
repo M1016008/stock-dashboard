@@ -10,9 +10,7 @@ import { Suspense } from 'react'
 import { PageTitle } from '@/components/layout/PageTitle'
 import { StereoscopicSignals } from '@/components/dashboard/StereoscopicSignals'
 import { NewHighVolume } from '@/components/dashboard/NewHighVolume'
-import { Sector17Heatmap, SectorHeatmap } from '@/components/dashboard/SectorHeatmap'
 import { PatternStatsTop } from '@/components/dashboard/PatternStatsTop'
-import { EarningsCalendarPanel } from '@/components/dashboard/EarningsCalendarPanel'
 import { DashboardDateSelector } from '@/components/dashboard/DashboardDateSelector'
 import { getCachedLatestDate, getDashboardAvailableDates } from '@/lib/queries/dashboard-cache'
 
@@ -81,15 +79,6 @@ export default async function DashboardPage({
       </Suspense>
       <Suspense fallback={<SectionFallback height={260} />}>
         <PatternStatsTop />
-      </Suspense>
-      <Suspense fallback={<SectionFallback height={240} />}>
-        <Sector17Heatmap date={latest} />
-      </Suspense>
-      <Suspense fallback={<SectionFallback height={240} />}>
-        <SectorHeatmap date={latest} />
-      </Suspense>
-      <Suspense fallback={<SectionFallback height={200} />}>
-        <EarningsCalendarPanel date={latest} />
       </Suspense>
     </div>
   )

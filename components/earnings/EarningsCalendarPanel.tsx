@@ -1,4 +1,4 @@
-// components/dashboard/EarningsCalendarPanel.tsx
+// components/earnings/EarningsCalendarPanel.tsx
 // 決算発表予定銘柄を、株価・平均出来高・6軸ステージ込みの一覧で表示する。
 
 import Link from 'next/link'
@@ -106,8 +106,19 @@ function SignalBadges({ labels, codes }: { labels: string[] | undefined; codes: 
   )
 }
 
-function EarningsTable({ rows, mode = 'upcoming' }: { rows: EarningsRows; mode?: 'upcoming' | 'completed' }) {
+function EarningsTable({
+  rows,
+  mode = 'upcoming',
+  maxRows = 40,
+}: {
+  rows: EarningsRows
+  mode?: 'upcoming' | 'completed'
+  maxRows?: number
+}) {
   const completed = mode === 'completed'
+  const visibleRows = rows.slice(0, maxRows)
+  const hiddenCount = Math.max(0, rows.length - visibleRows.length)
+  const colSpan = completed ? 14 : 13
   return (
     <div className="overflow-x-auto">
       <table className={`w-full text-[12px] ${completed ? 'min-w-[1700px]' : 'min-w-[1620px]'}`}>
@@ -130,7 +141,7 @@ function EarningsTable({ rows, mode = 'upcoming' }: { rows: EarningsRows; mode?:
           </tr>
         </thead>
         <tbody className="divide-y divide-[var(--color-border-soft)]">
-          {rows.map((row) => (
+          {visibleRows.map((row) => (
             <tr key={row.ticker + row.announce_date} className="hover:bg-[var(--color-surface-subtle)]">
               <td className={`py-3 pl-2 pr-3 tabular-nums ${row.daysLeft === 0 ? 'font-bold text-[var(--color-price-up)]' : 'text-[var(--color-text-secondary)]'}`}>
                 <div>{dayLabel(row.daysLeft)}</div>
@@ -190,14 +201,27 @@ function EarningsTable({ rows, mode = 'upcoming' }: { rows: EarningsRows; mode?:
               </td>
             </tr>
           ))}
+          {hiddenCount > 0 && (
+            <tr>
+              <td colSpan={colSpan} className="py-3 text-center text-[11px] font-bold text-[var(--color-text-tertiary)]">
+                初期表示は上位 {maxRows} 件です。全 {rows.length.toLocaleString()} 件中、残り {hiddenCount.toLocaleString()} 件は条件を絞って確認してください。
+              </td>
+            </tr>
+          )}
         </tbody>
       </table>
     </div>
   )
 }
 
-export async function EarningsCalendarPanel({ date }: { date?: string | null }) {
-  const data = await getEarningsCalendarDashboard(14, date)
+export async function EarningsCalendarPanel({
+  date,
+  preferLatestImport = true,
+}: {
+  date?: string | null
+  preferLatestImport?: boolean
+}) {
+  const data = await getEarningsCalendarDashboard(14, date, { preferLatestImport })
   const rows = data.rows
   const upcomingGroups = dayBucket(rows)
   const completedRows = data.completedRows
@@ -240,11 +264,11 @@ export async function EarningsCalendarPanel({ date }: { date?: string | null }) 
                     {group.label}
                   </div>
                   <div className="text-[11px] font-semibold text-[var(--color-text-tertiary)]">
-                    {group.rows.length.toLocaleString()}銘柄
+                  {group.rows.length.toLocaleString()}銘柄
                   </div>
                 </div>
                 <div className="p-3">
-                  <EarningsTable rows={group.rows} />
+                  <EarningsTable rows={group.rows} maxRows={40} />
                 </div>
               </section>
             ))}
@@ -256,7 +280,7 @@ export async function EarningsCalendarPanel({ date }: { date?: string | null }) 
           <div className="mb-2 text-[12px] font-bold text-[var(--color-text-secondary)]">
             最新取得分（参考）
           </div>
-          <EarningsTable rows={data.referenceRows} />
+          <EarningsTable rows={data.referenceRows} maxRows={20} />
         </div>
       )}
       {completedRows.length > 0 && (
@@ -272,7 +296,7 @@ export async function EarningsCalendarPanel({ date }: { date?: string | null }) 
               {completedRows.length.toLocaleString()}銘柄
             </span>
           </div>
-          <EarningsTable rows={completedRows} mode="completed" />
+          <EarningsTable rows={completedRows} mode="completed" maxRows={30} />
         </div>
       )}
     </Card>
