@@ -464,8 +464,15 @@ async function buildBacktestResults(dates: string[]): Promise<void> {
   const totalChunks = Math.ceil(dates.length / RESULT_DATE_CHUNK)
   for (let i = 0; i < dates.length; i += RESULT_DATE_CHUNK) {
     const chunkDates = dates.slice(i, i + RESULT_DATE_CHUNK)
-    const rows = await execAll<BacktestServingRow>(
+    await execRun(
       `
+      INSERT OR REPLACE INTO serving_backtest_results
+        (date, horizon_days, ticker, name, sector_large, sector_small, market_segment,
+         pattern_code, daily_a_stage, daily_b_stage, weekly_a_stage, weekly_b_stage,
+         monthly_a_stage, monthly_b_stage, open, high, low, close, volume,
+         volume_ratio_20, range_pct, atr20_pct, ma5_pos_pct, ma25_pos_pct, ma75_pos_pct,
+         signal_codes, return_pct, max_return_pct, max_return_date, days_to_max,
+         min_return_pct, min_return_date, days_to_min, hit_10, hit_20, hit_40, computed_at)
       SELECT
         mf.date,
         fe.horizon_days,
@@ -502,7 +509,8 @@ async function buildBacktestResults(dates: string[]): Promise<void> {
         fe.days_to_min,
         fe.hit_10,
         fe.hit_20,
-        fe.hit_40
+        fe.hit_40,
+        unixepoch()
       FROM model_features mf
       INNER JOIN forward_extrema fe ON fe.ticker = mf.ticker AND fe.date = mf.date
       LEFT JOIN ohlcv_daily o ON o.ticker = mf.ticker AND o.date = mf.date
@@ -512,29 +520,11 @@ async function buildBacktestResults(dates: string[]): Promise<void> {
       `,
       chunkDates,
     )
-    for (let j = 0; j < rows.length; j += CHUNK) {
-      await execBatch(rows.slice(j, j + CHUNK).map((row) => ({
-        sql: `
-          INSERT OR REPLACE INTO serving_backtest_results
-            (date, horizon_days, ticker, name, sector_large, sector_small, market_segment,
-             pattern_code, daily_a_stage, daily_b_stage, weekly_a_stage, weekly_b_stage,
-             monthly_a_stage, monthly_b_stage, open, high, low, close, volume,
-             volume_ratio_20, range_pct, atr20_pct, ma5_pos_pct, ma25_pos_pct, ma75_pos_pct,
-             signal_codes, return_pct, max_return_pct, max_return_date, days_to_max,
-             min_return_pct, min_return_date, days_to_min, hit_10, hit_20, hit_40, computed_at)
-          VALUES (${Array.from({ length: 36 }, () => '?').join(', ')}, unixepoch())
-        `,
-        args: [
-          row.date, row.horizon_days, row.ticker, row.name, row.sector_large, row.sector_small, row.market_segment,
-          row.pattern_code, row.daily_a_stage, row.daily_b_stage, row.weekly_a_stage, row.weekly_b_stage,
-          row.monthly_a_stage, row.monthly_b_stage, row.open, row.high, row.low, row.close, row.volume,
-          row.volume_ratio_20, row.range_pct, row.atr20_pct, row.ma5_pos_pct, row.ma25_pos_pct, row.ma75_pos_pct,
-          row.signal_codes, row.return_pct, row.max_return_pct, row.max_return_date, row.days_to_max,
-          row.min_return_pct, row.min_return_date, row.days_to_min, row.hit_10, row.hit_20, row.hit_40,
-        ],
-      })))
-      inserted += Math.min(CHUNK, rows.length - j)
-    }
+    const countRow = await execGet<{ count: number }>(
+      `SELECT COUNT(*) AS count FROM serving_backtest_results WHERE date IN (${chunkDates.map(() => '?').join(', ')})`,
+      chunkDates,
+    )
+    inserted += Number(countRow?.count ?? 0)
 
     const chunkNo = Math.floor(i / RESULT_DATE_CHUNK) + 1
     if (chunkNo % 10 === 0 || chunkNo === totalChunks) {
@@ -744,7 +734,9 @@ async function main() {
   console.log('serving build complete')
 }
 
-main().catch((error) => {
-  console.error('build-serving-backtest failed:', error)
-  process.exit(1)
-})
+main()
+  .then(() => process.exit(0))
+  .catch((error) => {
+    console.error('build-serving-backtest failed:', error)
+    process.exit(1)
+  })

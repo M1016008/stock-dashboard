@@ -43,6 +43,10 @@ async function runRequired(script: string, envOverrides: EnvOverrides = {}) {
   }
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
 async function main() {
   const lock = await acquireUpdateLock('update_latest')
   if (!lock) {
@@ -61,6 +65,7 @@ async function main() {
 
   const runId = run.id
   let rowsInserted = 0
+  let dailyMlError: string | null = null
 
   try {
     console.log('Latest data update started')
@@ -113,6 +118,45 @@ async function main() {
     }
     await runRequired('scripts/build-serving-backtest.ts')
     await lock.heartbeat()
+
+    if (process.env.SKIP_DAILY_ML === '1') {
+      console.log('Daily ML refresh skipped (SKIP_DAILY_ML=1)')
+    } else {
+      try {
+        await runRequired('scripts/batch-ml-features.ts', {
+          ML_RECENT_DAYS: process.env.ML_DAILY_RECENT_DAYS ?? '260',
+          ML_MIN_HISTORY_DAYS: process.env.ML_DAILY_MIN_HISTORY_DAYS ?? '200',
+        })
+        await lock.heartbeat()
+        await runRequired('scripts/batch-ml-labels.ts')
+        await lock.heartbeat()
+        await runRequired('scripts/batch-ml-outcomes.ts')
+        await lock.heartbeat()
+        await runRequired('scripts/batch-ml-train.ts', {
+          ML_TRAIN_START_DATE: process.env.ML_DAILY_TRAIN_START_DATE ?? '2008-05-07',
+          ML_TRAIN_SAMPLE_MODE: process.env.ML_DAILY_TRAIN_SAMPLE_MODE ?? 'yearly',
+          ML_TRAIN_LABEL_SOURCE: process.env.ML_DAILY_TRAIN_LABEL_SOURCE ?? 'extrema',
+          ML_TRAIN_LIMIT: process.env.ML_DAILY_TRAIN_LIMIT ?? process.env.ML_TRAIN_LIMIT ?? '80000',
+        })
+        await lock.heartbeat()
+        await runRequired('scripts/batch-ml-candidates.ts')
+        await lock.heartbeat()
+        await runRequired('scripts/batch-ml-predict.ts')
+        await lock.heartbeat()
+        if (process.env.ML_DAILY_EVALUATE === '1') {
+          await runRequired('scripts/batch-ml-evaluate.ts')
+          await lock.heartbeat()
+        } else {
+          console.log('Daily ML walk-forward evaluation skipped (set ML_DAILY_EVALUATE=1 for weekly/manual evaluation)')
+        }
+        await runRequired('scripts/build-serving-ml-insights.ts')
+        await lock.heartbeat()
+      } catch (err) {
+        dailyMlError = errorMessage(err)
+        console.error('Daily ML refresh failed; continuing dashboard cache rebuild:', dailyMlError)
+      }
+    }
+
     await runRequired('scripts/build-dashboard-cache.ts')
     await lock.heartbeat()
 
@@ -124,10 +168,13 @@ async function main() {
       .update(batchRuns)
       .set({
         finishedAt: new Date(),
-        status: after.needsUpdate ? 'partial' : 'success',
+        status: after.needsUpdate || dailyMlError ? 'partial' : 'success',
         succeeded: 1,
+        failed: dailyMlError ? 1 : 0,
         rowsInserted,
-        errorSummary: after.needsUpdate ? JSON.stringify(after) : null,
+        errorSummary: after.needsUpdate || dailyMlError
+          ? JSON.stringify({ freshness: after.needsUpdate ? after : null, dailyMlError })
+          : null,
       })
       .where(eq(batchRuns.id, runId))
   } catch (err) {
@@ -137,7 +184,7 @@ async function main() {
         finishedAt: new Date(),
         status: 'failed',
         failed: 1,
-        errorSummary: err instanceof Error ? err.message : String(err),
+        errorSummary: errorMessage(err),
       })
       .where(eq(batchRuns.id, runId))
     throw err

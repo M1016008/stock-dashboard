@@ -493,6 +493,187 @@ export interface EarningsRow extends EarningsSignalDecoration {
 }
 type EarningsRowBase = Omit<EarningsRow, keyof EarningsSignalDecoration>
 
+export type EarningsVolumeCondition = '' | 'volume_spike' | 'above_avg' | 'volume_10k' | 'volume_100k'
+
+export interface EarningsCalendarFilters {
+  marketSegment?: string | null
+  sector17?: string | null
+  sector33?: string | null
+  stageCode?: string | null
+  dailyPattern?: string | null
+  volumeCondition?: EarningsVolumeCondition | null
+  priceMin?: number | null
+  priceMax?: number | null
+  signal?: string | null
+  limit?: number | null
+}
+
+export interface EarningsFilterOption {
+  value: string
+  label: string
+  count: number
+}
+
+export interface EarningsFilterOptions {
+  marketSegments: EarningsFilterOption[]
+  sector17: EarningsFilterOption[]
+  sector33: EarningsFilterOption[]
+  stageCodes: EarningsFilterOption[]
+  dailyPatterns: EarningsFilterOption[]
+  signals: EarningsFilterOption[]
+}
+
+export interface EarningsScopeSummary {
+  scopeDate: string | null
+  totalCount: number
+  filteredCount: number
+  displayedCount: number
+  displayLimit: number
+  hasMore: boolean
+  exactDate: boolean
+}
+
+const DEFAULT_EARNINGS_DISPLAY_LIMIT = 20
+const MAX_EARNINGS_DISPLAY_LIMIT = 1000
+
+function clampDisplayLimit(value: number | null | undefined): number {
+  if (value == null || !Number.isFinite(value)) return DEFAULT_EARNINGS_DISPLAY_LIMIT
+  return Math.min(MAX_EARNINGS_DISPLAY_LIMIT, Math.max(1, Math.floor(value)))
+}
+
+function emptyFilterOptions(): EarningsFilterOptions {
+  return {
+    marketSegments: [],
+    sector17: [],
+    sector33: [],
+    stageCodes: [],
+    dailyPatterns: [],
+    signals: [],
+  }
+}
+
+function emptyScopeSummary(date: string | null, limit: number, exactDate: boolean): EarningsScopeSummary {
+  return {
+    scopeDate: date,
+    totalCount: 0,
+    filteredCount: 0,
+    displayedCount: 0,
+    displayLimit: limit,
+    hasMore: false,
+    exactDate,
+  }
+}
+
+function stageCodeFor(row: EarningsRow): string | null {
+  const values = [
+    row.daily_a_stage,
+    row.daily_b_stage,
+    row.weekly_a_stage,
+    row.weekly_b_stage,
+    row.monthly_a_stage,
+    row.monthly_b_stage,
+  ]
+  if (!values.every((value) => typeof value === 'number')) return null
+  return values.join('')
+}
+
+function dailyPatternFor(row: EarningsRow): string | null {
+  if (typeof row.daily_a_stage !== 'number' || typeof row.daily_b_stage !== 'number') return null
+  return `${row.daily_a_stage}${row.daily_b_stage}`
+}
+
+function cleanFilterValue(value: string | null | undefined): string | null {
+  const trimmed = value?.trim()
+  return trimmed ? trimmed : null
+}
+
+function matchesVolumeCondition(row: EarningsRow, condition: EarningsVolumeCondition | null | undefined): boolean {
+  if (!condition) return true
+  const volume = row.avgVolume10
+  if (volume == null) return false
+  if (condition === 'volume_10k') return volume >= 10_000
+  if (condition === 'volume_100k') return volume >= 100_000
+  if (row.avgVolume30 == null || row.avgVolume30 <= 0) return false
+  if (condition === 'above_avg') return volume >= row.avgVolume30
+  if (condition === 'volume_spike') return volume >= row.avgVolume30 * 1.5
+  return true
+}
+
+function filterEarningsRows(rows: EarningsRow[], filters: EarningsCalendarFilters): EarningsRow[] {
+  const marketSegment = cleanFilterValue(filters.marketSegment)
+  const sector17 = cleanFilterValue(filters.sector17)
+  const sector33 = cleanFilterValue(filters.sector33)
+  const stageCode = cleanFilterValue(filters.stageCode)
+  const dailyPattern = cleanFilterValue(filters.dailyPattern)
+  const signal = cleanFilterValue(filters.signal)
+  const priceMin = filters.priceMin
+  const priceMax = filters.priceMax
+
+  return rows.filter((row) => {
+    if (marketSegment && row.marketSegment !== marketSegment) return false
+    if (sector17 && row.sector17Name !== sector17) return false
+    if (sector33 && row.sector33Name !== sector33) return false
+    if (stageCode && stageCodeFor(row) !== stageCode) return false
+    if (dailyPattern && dailyPatternFor(row) !== dailyPattern) return false
+    if (!matchesVolumeCondition(row, filters.volumeCondition)) return false
+    if (priceMin != null && (row.price == null || row.price < priceMin)) return false
+    if (priceMax != null && (row.price == null || row.price > priceMax)) return false
+    if (signal && !(row.signalLabels ?? []).includes(signal)) return false
+    return true
+  })
+}
+
+function countedOptions(values: Array<string | null | undefined>, labelFor?: (value: string) => string): EarningsFilterOption[] {
+  const counts = new Map<string, number>()
+  for (const value of values) {
+    const key = cleanFilterValue(value)
+    if (!key) continue
+    counts.set(key, (counts.get(key) ?? 0) + 1)
+  }
+  return Array.from(counts.entries())
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'ja'))
+    .map(([value, count]) => ({
+      value,
+      label: labelFor ? labelFor(value) : value,
+      count,
+    }))
+}
+
+function buildEarningsFilterOptions(rows: EarningsRow[]): EarningsFilterOptions {
+  return {
+    marketSegments: countedOptions(rows.map((row) => row.marketSegment)),
+    sector17: countedOptions(rows.map((row) => row.sector17Name)),
+    sector33: countedOptions(rows.map((row) => row.sector33Name)),
+    stageCodes: countedOptions(rows.map(stageCodeFor)),
+    dailyPatterns: countedOptions(rows.map(dailyPatternFor), (value) => `日足${value[0]}/${value[1]}`),
+    signals: countedOptions(rows.flatMap((row) => row.signalLabels ?? [])),
+  }
+}
+
+function applyEarningsScope(
+  rows: EarningsRow[],
+  filters: EarningsCalendarFilters,
+  date: string | null,
+  exactDate: boolean,
+): { rows: EarningsRow[]; filterOptions: EarningsFilterOptions; scope: EarningsScopeSummary } {
+  const limit = clampDisplayLimit(filters.limit)
+  const filtered = filterEarningsRows(rows, filters)
+  const displayed = filtered.slice(0, limit)
+  return {
+    rows: displayed,
+    filterOptions: buildEarningsFilterOptions(rows),
+    scope: {
+      scopeDate: date,
+      totalCount: rows.length,
+      filteredCount: filtered.length,
+      displayedCount: displayed.length,
+      displayLimit: limit,
+      hasMore: filtered.length > displayed.length,
+      exactDate,
+    },
+  }
+}
+
 async function withEarningsSignals(rows: EarningsRowBase[], baseDate: string | null): Promise<EarningsRow[]> {
   const decorations = await loadEarningsSignalDecorations(rows.map((row) => row.ticker), baseDate)
   return attachEarningsSignalDecorations(rows, decorations)
@@ -509,6 +690,9 @@ export interface EarningsCalendarDashboard {
   rows: EarningsRow[]
   completedRows: EarningsRow[]
   referenceRows: EarningsRow[]
+  filterOptions: EarningsFilterOptions
+  scope: EarningsScopeSummary
+  filters: EarningsCalendarFilters
   status: EarningsCalendarStatus
   message: string
   latestAnnounceDate: string | null
@@ -518,19 +702,38 @@ export interface EarningsCalendarDashboard {
   windowStart: string | null
   windowEnd: string | null
 }
-export async function getEarningsCalendar(daysAhead = 14, date?: string | null): Promise<EarningsRow[]> {
+
+interface EarningsCalendarQueryOptions {
+  exactDate?: boolean
+  limit?: number | null
+}
+
+export async function getEarningsCalendar(
+  daysAhead = 14,
+  date?: string | null,
+  queryOptions: EarningsCalendarQueryOptions = {},
+): Promise<EarningsRow[]> {
   const anchorDate = isIsoDate(date) ? date : await getLatestDate()
   if (!anchorDate) return []
   const marketDate = await resolveMarketDateOnOrBefore(anchorDate)
   if (!marketDate) return []
   const prev = await getPrevDate(marketDate)
+  const exactDate = queryOptions.exactDate ?? false
+  const limitSql = queryOptions.limit == null ? '' : 'LIMIT ?'
+  const calWhere = exactDate
+    ? `announce_date = ?`
+    : `announce_date BETWEEN ? AND date(?, '+' || ? || ' days')`
+  const calArgs: Array<string | number> = exactDate
+    ? [anchorDate]
+    : [anchorDate, anchorDate, daysAhead]
+  const limitArgs: Array<string | number> = queryOptions.limit == null ? [] : [queryOptions.limit]
   const rows = await execAll<EarningsRowBase>(
     `
     WITH cal AS (
       SELECT ticker, announce_date, company_name, sector_name, market_segment, source,
              CAST(julianday(announce_date) - julianday(?) AS INTEGER) AS daysLeft
       FROM earnings_calendar
-      WHERE announce_date BETWEEN ? AND date(?, '+' || ? || ' days')
+      WHERE ${calWhere}
     ),
     px AS (SELECT ticker, close FROM ohlcv_daily WHERE date = ?),
     py AS (SELECT ticker, close AS prev_close FROM ohlcv_daily WHERE date = ?),
@@ -596,9 +799,9 @@ export async function getEarningsCalendar(daysAhead = 14, date?: string | null):
     LEFT JOIN py USING (ticker)
     LEFT JOIN st USING (ticker)
     ORDER BY cal.daysLeft ASC
-    LIMIT 50
+    ${limitSql}
     `,
-    [anchorDate, anchorDate, anchorDate, daysAhead, marketDate, prev ?? marketDate, marketDate, marketDate, marketDate, marketDate],
+    [anchorDate, ...calArgs, marketDate, prev ?? marketDate, marketDate, marketDate, marketDate, marketDate, ...limitArgs],
   )
   return withEarningsSignals(rows, marketDate)
 }
@@ -880,6 +1083,7 @@ function earningsDateRange(rows: EarningsRow[], fallbackStart: string | null, fa
 
 export interface EarningsCalendarDashboardOptions {
   preferLatestImport?: boolean
+  filters?: EarningsCalendarFilters
 }
 
 export async function getEarningsCalendarDashboard(
@@ -890,11 +1094,17 @@ export async function getEarningsCalendarDashboard(
   const anchorDate = isIsoDate(date) ? date : await getLatestDate()
   const marketDate = anchorDate ? await resolveMarketDateOnOrBefore(anchorDate) : null
   const preferLatestImport = options.preferLatestImport ?? true
+  const filters = options.filters ?? {}
+  const exactDate = !preferLatestImport && isIsoDate(date)
+  const displayLimit = clampDisplayLimit(filters.limit)
   if (!anchorDate || !marketDate) {
     return {
       rows: [],
       completedRows: [],
       referenceRows: [],
+      filterOptions: emptyFilterOptions(),
+      scope: emptyScopeSummary(anchorDate ?? null, displayLimit, exactDate),
+      filters,
       status: 'empty',
       message: '株価データ未取り込みのため、決算発表銘柄を判定できません。',
       latestAnnounceDate: null,
@@ -930,6 +1140,7 @@ export async function getEarningsCalendarDashboard(
     [anchorDate, daysAhead],
   )
   const windowEnd = windowEndRow?.d ?? null
+  const displayWindowEnd = exactDate ? anchorDate : windowEnd
   const total = Number(meta?.total ?? 0)
   const latestImportedAt = meta?.latestImportedAt == null ? null : Number(meta.latestImportedAt)
   if (total === 0) {
@@ -937,6 +1148,9 @@ export async function getEarningsCalendarDashboard(
       rows: [],
       completedRows: [],
       referenceRows: [],
+      filterOptions: emptyFilterOptions(),
+      scope: emptyScopeSummary(anchorDate, displayLimit, exactDate),
+      filters,
       status: 'empty',
       message: '決算カレンダーが未取得です。J-Quants決算予定の取得バッチを確認してください。',
       latestAnnounceDate: null,
@@ -944,7 +1158,7 @@ export async function getEarningsCalendarDashboard(
       totalRows: total,
       lastRun: lastRun ?? null,
       windowStart: anchorDate,
-      windowEnd,
+      windowEnd: displayWindowEnd,
     }
   }
 
@@ -952,22 +1166,26 @@ export async function getEarningsCalendarDashboard(
     const completedRows = await getCompletedEarningsCalendarRows(anchorDate, marketDate, prev, 14, 80)
 
     if (!preferLatestImport) {
-      const rows = await getEarningsCalendar(daysAhead, anchorDate)
+      const allRows = await getEarningsCalendar(daysAhead, anchorDate, { exactDate, limit: null })
+      const scoped = applyEarningsScope(allRows, filters, anchorDate, exactDate)
       const latestAnnounceDate = meta?.latestAnnounceDate ?? null
       return {
-        rows,
+        rows: scoped.rows,
         completedRows,
         referenceRows: [],
-        status: rows.length > 0 || completedRows.length > 0 ? 'ok' : 'none',
-        message: rows.length > 0
-          ? `${anchorDate} を基準に、当日から${daysAhead}日先までの決算予定と発表後2週間の値動きを表示しています。`
-          : `${anchorDate} を基準にした表示対象期間の決算予定はありません。発表済み銘柄がある場合は下段に表示します。`,
+        filterOptions: scoped.filterOptions,
+        scope: scoped.scope,
+        filters,
+        status: allRows.length > 0 || completedRows.length > 0 ? 'ok' : 'none',
+        message: exactDate
+          ? `${anchorDate} の決算発表銘柄を表示しています。条件で絞り込むと、該当銘柄だけに絞れます。`
+          : `${anchorDate} を基準に、当日から${daysAhead}日先までの決算予定と発表後2週間の値動きを表示しています。`,
         latestAnnounceDate,
         latestImportedAt,
         totalRows: total,
         lastRun: lastRun ?? null,
         windowStart: anchorDate,
-        windowEnd,
+        windowEnd: displayWindowEnd,
       }
     }
 
@@ -980,6 +1198,9 @@ export async function getEarningsCalendarDashboard(
         rows: [],
         completedRows,
         referenceRows,
+        filterOptions: emptyFilterOptions(),
+        scope: emptyScopeSummary(anchorDate, displayLimit, false),
+        filters,
         status: 'none',
         message: 'J-Quants最新取得は0件でした。このAPIは翌営業日に決算発表が行われる銘柄を返すため、翌営業日の開示予定がない場合は空になります。',
         latestAnnounceDate: meta?.latestAnnounceDate ?? null,
@@ -987,16 +1208,20 @@ export async function getEarningsCalendarDashboard(
         totalRows: total,
         lastRun: lastRun ?? null,
         windowStart: anchorDate,
-        windowEnd,
+        windowEnd: displayWindowEnd,
       }
     }
 
     if (latestImportRows.length > 0) {
       const range = earningsDateRange(latestImportRows, anchorDate, windowEnd)
+      const scoped = applyEarningsScope(latestImportRows, filters, range.start, false)
       return {
-        rows: latestImportRows,
+        rows: scoped.rows,
         completedRows,
         referenceRows: [],
+        filterOptions: scoped.filterOptions,
+        scope: scoped.scope,
+        filters,
         status: 'ok',
         message: 'J-Quants翌営業日APIとJPX公式Excelを統合した最新取得分です。J-Quantsで分からない月次予定はJPX公式の決算発表予定Excelから補完しています。',
         latestAnnounceDate: meta?.latestAnnounceDate ?? null,
@@ -1008,12 +1233,16 @@ export async function getEarningsCalendarDashboard(
       }
     }
 
-    const rows = await getEarningsCalendar(daysAhead, anchorDate)
-    if (rows.length > 0) {
+    const fallbackRows = await getEarningsCalendar(daysAhead, anchorDate, { limit: null })
+    if (fallbackRows.length > 0) {
+      const scoped = applyEarningsScope(fallbackRows, filters, anchorDate, false)
       return {
-        rows,
+        rows: scoped.rows,
         completedRows,
         referenceRows: [],
+        filterOptions: scoped.filterOptions,
+        scope: scoped.scope,
+        filters,
         status: 'ok',
         message: 'J-Quants決算予定の取得済みデータから、表示対象期間に該当する銘柄を表示しています。',
         latestAnnounceDate: meta?.latestAnnounceDate ?? null,
@@ -1021,7 +1250,7 @@ export async function getEarningsCalendarDashboard(
         totalRows: total,
         lastRun: lastRun ?? null,
         windowStart: anchorDate,
-        windowEnd,
+        windowEnd: displayWindowEnd,
       }
     }
 
@@ -1032,6 +1261,9 @@ export async function getEarningsCalendarDashboard(
       rows: [],
       completedRows,
       referenceRows,
+      filterOptions: emptyFilterOptions(),
+      scope: emptyScopeSummary(anchorDate, displayLimit, false),
+      filters,
       status: stale ? 'stale' : 'none',
       message: stale
         ? `J-Quants決算予定のDB内最新日は ${latestAnnounceDate} です。最新取得バッチの状態を確認してください。`
@@ -1041,13 +1273,16 @@ export async function getEarningsCalendarDashboard(
       totalRows: total,
       lastRun: lastRun ?? null,
       windowStart: anchorDate,
-      windowEnd,
+      windowEnd: displayWindowEnd,
     }
   } catch (error) {
     return {
       rows: [],
       completedRows: [],
       referenceRows: [],
+      filterOptions: emptyFilterOptions(),
+      scope: emptyScopeSummary(anchorDate, displayLimit, exactDate),
+      filters,
       status: 'error',
       message: `決算カレンダーの取得に失敗しました: ${error instanceof Error ? error.message : String(error)}`,
       latestAnnounceDate: meta?.latestAnnounceDate ?? null,
@@ -1055,7 +1290,7 @@ export async function getEarningsCalendarDashboard(
       totalRows: total,
       lastRun: lastRun ?? null,
       windowStart: anchorDate,
-      windowEnd,
+      windowEnd: displayWindowEnd,
     }
   }
 }

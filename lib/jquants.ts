@@ -411,6 +411,27 @@ export async function fetchJQuantsWeeklyMargin(ticker: string, from?: string): P
   return all
 }
 
+export async function fetchJQuantsWeeklyMarginByDate(date: string): Promise<JMarginRow[]> {
+  const apiKey = getApiKey()
+  const all: JMarginRow[] = []
+  let paginationKey: string | undefined
+  do {
+    const params = new URLSearchParams({ date })
+    if (paginationKey) params.set('pagination_key', paginationKey)
+    const res = await fetch(`${BASE_URL}/markets/margin-interest?${params}`, {
+      headers: { 'x-api-key': apiKey },
+    })
+    if (!res.ok) {
+      if (res.status === 403 || res.status === 404) return []
+      throw new Error(`J-Quants margin-interest(date) 失敗: ${res.status} ${await res.text()}`)
+    }
+    const json = await res.json() as JMarginResponse
+    all.push(...(json.data ?? []))
+    paginationKey = json.pagination_key
+  } while (paginationKey)
+  return all
+}
+
 // ─────────────────────────────────────
 // API: 決算発表予定 (/fins/announcement) — 14 日先まで
 // ─────────────────────────────────────

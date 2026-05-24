@@ -2,7 +2,7 @@
 //
 // 日足・週足 MA シグナル、複合シグナル、ML/RL 用 model_features を生成する。
 
-import { execAll, execRun } from '@/lib/db/client'
+import { execAll, execGet, execRun } from '@/lib/db/client'
 import {
   deriveCompositeSignals,
   evaluateMaSignals,
@@ -100,6 +100,14 @@ async function tickers(): Promise<string[]> {
   if (filter && filter.length > 0) return filter
   const rows = await execAll<{ ticker: string }>(`SELECT ticker FROM ticker_universe WHERE active = 1 ORDER BY ticker`)
   return rows.map((row) => row.ticker)
+}
+
+async function latestModelFeatureDate(ticker: string): Promise<string | null> {
+  const row = await execGet<{ maxDate: string | null }>(
+    `SELECT MAX(date) AS maxDate FROM model_features WHERE ticker = ?`,
+    [ticker],
+  )
+  return row?.maxDate ?? null
 }
 
 function computeDailySignals(ticker: string, rows: DailyRow[], startIndex: number): Map<string, SignalRecord[]> {
@@ -365,7 +373,7 @@ async function main() {
   console.log(`technical_signals/model_features build: ${codes.length} tickers, recent_days=${RECENT_DAYS || 'all'}`)
 
   for (const [index, ticker] of codes.entries()) {
-    const [daily, weekly] = await Promise.all([
+    const [daily, weekly, lastModelDate] = await Promise.all([
       execAll<DailyRow>(
         `
         SELECT
@@ -383,24 +391,39 @@ async function main() {
         `SELECT date, open, high, low, close, volume, ma_5, ma_13, ma_25 FROM weekly_ohlcv WHERE ticker = ? ORDER BY date`,
         [ticker],
       ),
+      latestModelFeatureDate(ticker),
     ])
 
-    const startIndex = RECENT_DAYS > 0 ? Math.max(0, daily.length - RECENT_DAYS) : 0
+    let startIndex = RECENT_DAYS > 0 ? Math.max(0, daily.length - RECENT_DAYS) : 0
+    if (lastModelDate) {
+      const nextIndex = daily.findIndex((row) => row.date > lastModelDate)
+      if (nextIndex < 0) {
+        if ((index + 1) % PROGRESS_EVERY === 0 || index === codes.length - 1) {
+          const elapsed = ((Date.now() - started) / 60000).toFixed(1)
+          console.log(`[${index + 1}/${codes.length}] ${ticker}: already fresh (${lastModelDate}), totalSignals=${signalCount}, elapsed=${elapsed}m`)
+        }
+        continue
+      }
+      startIndex = Math.max(1, nextIndex)
+    }
     const dailyByDate = computeDailySignals(ticker, daily, startIndex)
     const weeklyByDate = computeWeeklySignals(ticker, weekly)
     const dailySignals = Array.from(dailyByDate.values()).flat()
     const weeklySignals = Array.from(weeklyByDate.values()).flat()
     const { features, compositeSignals } = buildFeatures(ticker, daily, dailyByDate, weeklyByDate, startIndex)
     const allSignals = [...dailySignals, ...weeklySignals, ...compositeSignals]
+    const newSignals = lastModelDate
+      ? allSignals.filter((signal) => signal.date > lastModelDate)
+      : allSignals
 
-    await insertSignals(allSignals)
+    await insertSignals(newSignals)
     await insertFeatures(features)
-    signalCount += allSignals.length
+    signalCount += newSignals.length
     featureCount += features.length
 
     if ((index + 1) % PROGRESS_EVERY === 0 || index === codes.length - 1) {
       const elapsed = ((Date.now() - started) / 60000).toFixed(1)
-      console.log(`[${index + 1}/${codes.length}] ${ticker}: signals=${allSignals.length}, features=${features.length}, totalSignals=${signalCount}, elapsed=${elapsed}m`)
+      console.log(`[${index + 1}/${codes.length}] ${ticker}: signals=${newSignals.length}, features=${features.length}, totalSignals=${signalCount}, elapsed=${elapsed}m`)
     }
   }
 

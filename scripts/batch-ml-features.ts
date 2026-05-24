@@ -29,7 +29,12 @@ type LabelRow = {
 
 const CHUNK = Number(process.env.ML_BATCH_CHUNK ?? 500)
 const RECENT_DAYS = Number(process.env.ML_RECENT_DAYS ?? 260)
+const MIN_HISTORY_DAYS = Number(process.env.ML_MIN_HISTORY_DAYS ?? (RECENT_DAYS > 0 ? 200 : 1))
+const START_DATE = process.env.ML_START_DATE?.trim() || null
+const END_DATE = process.env.ML_END_DATE?.trim() || null
 const TICKER_LIMIT = Number(process.env.ML_TICKER_LIMIT ?? 0)
+const TICKER_START = process.env.ML_TICKER_START?.trim() || null
+const TICKER_END = process.env.ML_TICKER_END?.trim() || null
 const HORIZONS = (process.env.ML_HORIZONS ?? '20,40,60,90')
   .split(',')
   .map((value) => Number(value.trim()))
@@ -106,8 +111,22 @@ function maxHigh(rows: Row[], from: number, to: number): { date: string | null; 
 }
 
 async function tickers(): Promise<string[]> {
+  const where: string[] = []
+  const args: string[] = []
+  if (TICKER_START) {
+    where.push(`ticker >= ?`)
+    args.push(TICKER_START)
+  }
+  if (TICKER_END) {
+    where.push(`ticker <= ?`)
+    args.push(TICKER_END)
+  }
+  const whereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : ''
   const limitSql = TICKER_LIMIT > 0 ? ` LIMIT ${TICKER_LIMIT}` : ''
-  const rows = await execAll<{ ticker: string }>(`SELECT ticker FROM ohlcv_daily GROUP BY ticker ORDER BY ticker${limitSql}`)
+  const rows = await execAll<{ ticker: string }>(
+    `SELECT ticker FROM ohlcv_daily ${whereSql} GROUP BY ticker ORDER BY ticker${limitSql}`,
+    args,
+  )
   return rows.map((row) => row.ticker)
 }
 
@@ -154,7 +173,7 @@ async function labels(ticker: string): Promise<Map<string, LabelRow[]>> {
 
 async function buildTicker(ticker: string): Promise<{ features: number; labels: number; states: number }> {
   const rows = await history(ticker)
-  if (rows.length < 220) return { features: 0, labels: 0, states: 0 }
+  if (rows.length < Math.max(1, MIN_HISTORY_DAYS)) return { features: 0, labels: 0, states: 0 }
   const labelMap = await labels(ticker)
   const ma5 = smaSeries(rows, 5)
   const ma25 = smaSeries(rows, 25)
@@ -164,7 +183,10 @@ async function buildTicker(ticker: string): Promise<{ features: number; labels: 
   const daysAbove5: number[] = []
   let currentAbove = 0
 
-  const firstIndex = RECENT_DAYS > 0 ? Math.max(199, rows.length - RECENT_DAYS) : 199
+  const minHistoryIndex = Math.max(0, MIN_HISTORY_DAYS - 1)
+  const recentIndex = RECENT_DAYS > 0 ? Math.max(minHistoryIndex, rows.length - RECENT_DAYS) : minHistoryIndex
+  const startDateIndex = START_DATE ? rows.findIndex((row) => row.date >= START_DATE) : -1
+  const firstIndex = Math.max(recentIndex, startDateIndex >= 0 ? startDateIndex : 0)
   const featureStmts: Array<{ sql: string; args: Array<string | number | null> }> = []
   const labelStmts: Array<{ sql: string; args: Array<string | number | null> }> = []
   const stateStmts: Array<{ sql: string; args: Array<string | number | null> }> = []
@@ -177,6 +199,7 @@ async function buildTicker(ticker: string): Promise<{ features: number; labels: 
 
   for (let i = firstIndex; i < rows.length; i += 1) {
     const row = rows[i]
+    if (END_DATE && row.date > END_DATE) break
     const sma = { sma5: ma5[i] ?? null, sma25: ma25[i] ?? null, sma75: ma75[i] ?? null, sma200: ma200[i] ?? null }
     const priorHigh = maxHigh(rows, i - 60, i - 1)
     const recentHigh = maxHigh(rows, i - 60, i)
@@ -279,7 +302,10 @@ async function main() {
   let labelCount = 0
   let stateCount = 0
   const started = Date.now()
-  console.log(`ml feature build: tickers=${codes.length}, recent_days=${RECENT_DAYS || 'all'}, horizons=${HORIZONS.join('/')}`)
+  console.log(
+    `ml feature build: tickers=${codes.length}, recent_days=${RECENT_DAYS || 'all'}, min_history_days=${MIN_HISTORY_DAYS}, start=${START_DATE ?? '-'}, end=${END_DATE ?? '-'}, horizons=${HORIZONS.join('/')}`,
+  )
+  if (TICKER_START || TICKER_END) console.log(`ml feature ticker range: ${TICKER_START ?? '-'}..${TICKER_END ?? '-'}`)
 
   for (const [index, ticker] of codes.entries()) {
     const result = await buildTicker(ticker)
@@ -293,7 +319,9 @@ async function main() {
   }
 }
 
-main().catch((error) => {
+main().then(() => {
+  process.exit(0)
+}).catch((error) => {
   console.error(error)
   process.exit(1)
 })

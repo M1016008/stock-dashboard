@@ -4,7 +4,7 @@ import { EarningsCalendarPanel } from '@/components/earnings/EarningsCalendarPan
 import { EarningsDateCalendar } from '@/components/earnings/EarningsDateCalendar'
 import { PageTitle } from '@/components/layout/PageTitle'
 import { getEarningsDateCounts } from '@/lib/queries/earnings-calendar'
-import { getLatestDate } from '@/lib/queries/dashboard'
+import { getLatestDate, type EarningsCalendarFilters, type EarningsVolumeCondition } from '@/lib/queries/dashboard'
 
 export const metadata: Metadata = {
   title: '決算 — StockBoard',
@@ -35,16 +35,50 @@ function isMonth(value: string | undefined): value is string {
   return typeof value === 'string' && /^\d{4}-\d{2}$/.test(value)
 }
 
+function parseNumberParam(value: string | undefined): number | null {
+  if (!value?.trim()) return null
+  const n = Number(value)
+  return Number.isFinite(n) ? n : null
+}
+
+function parseLimit(value: string | undefined): number | null {
+  if (!value?.trim()) return null
+  const n = Number(value)
+  return Number.isInteger(n) && n > 0 ? n : null
+}
+
+function parseVolumeCondition(value: string | undefined): EarningsVolumeCondition | null {
+  if (
+    value === 'volume_spike' ||
+    value === 'above_avg' ||
+    value === 'volume_10k' ||
+    value === 'volume_100k'
+  ) return value
+  return null
+}
+
 export default async function EarningsPage({
   searchParams,
 }: {
-  searchParams?: Promise<{ date?: string | string[]; month?: string | string[] }>
+  searchParams?: Promise<Record<string, string | string[] | undefined>>
 }) {
   const sp = searchParams ? await searchParams : {}
   const requestedDate = firstParam(sp.date)
   const requestedMonth = firstParam(sp.month)
   const selectedDate = isIsoDate(requestedDate) ? requestedDate : null
   const displayMonth = isMonth(requestedMonth) ? requestedMonth : null
+  const filters: EarningsCalendarFilters = {
+    marketSegment: firstParam(sp.market) ?? null,
+    sector17: firstParam(sp.sector17) ?? null,
+    sector33: firstParam(sp.sector33) ?? null,
+    stageCode: firstParam(sp.stageCode) ?? null,
+    dailyPattern: firstParam(sp.dailyPattern) ?? null,
+    volumeCondition: parseVolumeCondition(firstParam(sp.volume)),
+    priceMin: parseNumberParam(firstParam(sp.priceMin)),
+    priceMax: parseNumberParam(firstParam(sp.priceMax)),
+    signal: firstParam(sp.signal) ?? null,
+    limit: parseLimit(firstParam(sp.limit)),
+  }
   const [latest, counts] = await Promise.all([
     getLatestDate(),
     getEarningsDateCounts(),
@@ -68,7 +102,12 @@ export default async function EarningsPage({
         latestDate={latest}
       />
       <Suspense fallback={<EarningsFallback />}>
-        <EarningsCalendarPanel date={panelDate} preferLatestImport={!selectedDate} />
+        <EarningsCalendarPanel
+          date={panelDate}
+          month={displayMonth ?? (selectedDate ? selectedDate.slice(0, 7) : undefined)}
+          preferLatestImport={!selectedDate}
+          filters={filters}
+        />
       </Suspense>
     </div>
   )

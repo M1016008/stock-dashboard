@@ -89,6 +89,7 @@ async function features(date: string): Promise<FeatureRow[]> {
 }
 
 async function buildDirection(date: string, direction: MlDirection, rows: FeatureRow[], model: ModelRow | undefined): Promise<number> {
+  const runId = `${date}:${HORIZON}:${direction}:${model?.model_name ?? 'heuristic_fallback'}`
   const ranked = rows
     .map((row) => {
       const profile = parseJson<MlFeatureProfile | null>(row.feature_json, null)
@@ -100,30 +101,76 @@ async function buildDirection(date: string, direction: MlDirection, rows: Featur
     .slice(0, LIMIT)
 
   await execRun(`DELETE FROM serving_ml_candidates WHERE as_of_date = ? AND direction = ?`, [date, direction])
-  await execBatch(ranked.map((item, index) => {
+  await execRun(
+    `
+    INSERT OR REPLACE INTO ml_prediction_runs
+      (run_id, as_of_date, horizon_days, direction, model_name, model_type, prediction_count, source, status, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch())
+    `,
+    [
+      runId,
+      date,
+      HORIZON,
+      direction,
+      model?.model_name ?? 'heuristic_fallback',
+      model ? 'logistic_regression_v1' : 'heuristic_fallback',
+      ranked.length,
+      'batch-ml-candidates',
+      'success',
+    ],
+  )
+  await execBatch(ranked.flatMap((item, index) => {
     const explanation = buildCandidateExplanation(item.profile, direction, item.score)
     const vector = featureVector(item.profile)
-    return {
-      sql: `
-        INSERT OR REPLACE INTO serving_ml_candidates
-          (as_of_date, direction, rank, ticker, name, sector_large, candidate_score,
-           model_name, feature_json, reason_json, explanation_json, computed_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch())
-      `,
-      args: [
-        date,
-        direction,
-        index + 1,
-        item.row.ticker,
-        item.row.name,
-        item.row.sector_large,
-        Number(item.score.toFixed(6)),
-        model?.model_name ?? 'heuristic_fallback',
-        JSON.stringify({ ...item.profile, vector, featureNames: ML_FEATURE_NAMES }),
-        JSON.stringify(explanation.mesh),
-        JSON.stringify(explanation),
-      ],
-    }
+    const featureJson = JSON.stringify({ ...item.profile, vector, featureNames: ML_FEATURE_NAMES })
+    const reasonJson = JSON.stringify(explanation.mesh)
+    const explanationJson = JSON.stringify(explanation)
+    const score = Number(item.score.toFixed(6))
+    const rank = index + 1
+    return [
+      {
+        sql: `
+          INSERT OR REPLACE INTO serving_ml_candidates
+            (as_of_date, direction, rank, ticker, name, sector_large, candidate_score,
+             model_name, feature_json, reason_json, explanation_json, computed_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch())
+        `,
+        args: [
+          date,
+          direction,
+          rank,
+          item.row.ticker,
+          item.row.name,
+          item.row.sector_large,
+          score,
+          model?.model_name ?? 'heuristic_fallback',
+          featureJson,
+          reasonJson,
+          explanationJson,
+        ],
+      },
+      {
+        sql: `
+          INSERT OR REPLACE INTO ml_predictions
+            (as_of_date, horizon_days, direction, ticker, run_id, rank, score,
+             model_name, feature_json, reason_json, explanation_json, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch())
+        `,
+        args: [
+          date,
+          HORIZON,
+          direction,
+          item.row.ticker,
+          runId,
+          rank,
+          score,
+          model?.model_name ?? 'heuristic_fallback',
+          featureJson,
+          reasonJson,
+          explanationJson,
+        ],
+      },
+    ]
   }))
   return ranked.length
 }
@@ -140,7 +187,9 @@ async function main() {
   console.log(`ml candidates ${date}: up=${up}, down=${down}, rows=${rows.length}, horizon=${HORIZON}`)
 }
 
-main().catch((error) => {
+main().then(() => {
+  process.exit(0)
+}).catch((error) => {
   console.error(error)
   process.exit(1)
 })

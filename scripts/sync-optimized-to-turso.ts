@@ -319,6 +319,7 @@ function specsFor(modes: Set<string>): CopySpec[] {
     specs.push(
       { mode: 'backtest', table: 'serving_latest_signals', partition: 'date', dateColumn: 'date' },
       { mode: 'backtest', table: 'serving_signal_stats', partition: 'all' },
+      { mode: 'backtest', table: 'signal_return_stats', partition: 'all', where: 'count >= 40', label: 'signal_return_stats N>=40' },
       { mode: 'backtest', table: 'serving_backtest_dates', partition: 'all' },
       { mode: 'backtest', table: 'serving_backtest_summaries', partition: 'date', dateColumn: 'date' },
       { mode: 'backtest', table: 'serving_backtest_results', partition: 'date', dateColumn: 'date' },
@@ -326,6 +327,10 @@ function specsFor(modes: Set<string>): CopySpec[] {
       { mode: 'backtest', table: 'serving_signal_evidence', partition: 'date', dateColumn: 'date' },
       { mode: 'backtest', table: 'serving_similar_cases', partition: 'date', dateColumn: 'source_date' },
       { mode: 'backtest', table: 'serving_ml_candidates', partition: 'date', dateColumn: 'as_of_date' },
+      { mode: 'backtest', table: 'serving_current_similars', partition: 'date', dateColumn: 'as_of_date' },
+      { mode: 'backtest', table: 'serving_ml_sector_rankings', partition: 'date', dateColumn: 'as_of_date' },
+      { mode: 'backtest', table: 'serving_ml_performance', partition: 'date', dateColumn: 'as_of_date' },
+      { mode: 'backtest', table: 'ml_model_evaluations', partition: 'date', dateColumn: 'evaluation_date' },
     )
   }
 

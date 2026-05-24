@@ -139,6 +139,85 @@ type MlCandidate = {
   }
 }
 
+type CurrentSimilarInsight = {
+  asOfDate: string
+  baseTicker: string
+  rank: number
+  similarTicker: string
+  similarityScore: number
+  baseDirection: 'up' | 'down' | null
+  similarDirection: 'up' | 'down' | null
+  payload: {
+    base?: {
+      name?: string | null
+      stageCode?: string | null
+      maOrder?: string | null
+    }
+    similar?: {
+      name?: string | null
+      stageCode?: string | null
+      maOrder?: string | null
+    }
+  }
+  reason: Record<string, string>
+}
+
+type MlSectorRanking = {
+  asOfDate: string
+  sectorType: '17' | '33'
+  sectorName: string
+  direction: 'up' | 'down'
+  candidateCount: number
+  avgScore: number | null
+  representativeTickers: Array<{ ticker: string; rank?: number; score?: number }>
+}
+
+type MlPerformance = {
+  asOfDate: string
+  direction: 'up' | 'down'
+  horizonDays: number
+  sectorType: string
+  sectorName: string
+  sampleCount: number
+  upRate: number | null
+  downRate: number | null
+  medianReturnPct: number | null
+  avgReturnPct: number | null
+  payload?: {
+    mode?: string
+    modelName?: string | null
+    precisionAt20?: number | null
+    precisionAt50?: number | null
+    precisionAt80?: number | null
+    hitRate?: number | null
+    maxDrawdownPct?: number | null
+    metrics?: {
+      accuracy?: number
+      positiveRate?: number
+    }
+  }
+}
+
+type MlModelStatus = {
+  latestFeatureDate: string | null
+  latestPredictionDate: string | null
+  latestEvaluationDate: string | null
+  models: Array<{
+    modelName: string
+    modelType: string
+    direction: 'up' | 'down'
+    horizonDays: number
+    trainedAt: number | string | null
+    metrics: {
+      trainStartDate?: string
+      trainEndDate?: string
+      samples?: number
+      accuracy?: number
+      positiveRate?: number
+    }
+  }>
+}
+
 type BacktestDetail = {
   source: string
   move: 'up' | 'down'
@@ -355,6 +434,11 @@ export default function BacktestPage() {
   const [signalStats, setSignalStats] = useState<SignalStat[]>([])
   const [candidateMode, setCandidateMode] = useState<'both' | 'up' | 'down'>('both')
   const [mlCandidates, setMlCandidates] = useState<MlCandidate[]>([])
+  const [mlCandidateNotice, setMlCandidateNotice] = useState('')
+  const [currentSimilars, setCurrentSimilars] = useState<CurrentSimilarInsight[]>([])
+  const [mlSectorRankings, setMlSectorRankings] = useState<MlSectorRanking[]>([])
+  const [mlPerformance, setMlPerformance] = useState<MlPerformance[]>([])
+  const [mlModelStatus, setMlModelStatus] = useState<MlModelStatus | null>(null)
   const [expandedKey, setExpandedKey] = useState('')
   const [details, setDetails] = useState<Record<string, BacktestDetail>>({})
   const [coverage, setCoverage] = useState<CoverageInfo | null>(null)
@@ -486,8 +570,40 @@ export default function BacktestPage() {
       .then((data) => {
         if (cancelled) return
         setMlCandidates(Array.isArray(data.candidates) ? data.candidates : [])
+        setMlCandidateNotice(typeof data.notice === 'string' ? data.notice : '')
       })
-      .catch(() => { if (!cancelled) setMlCandidates([]) })
+      .catch(() => {
+        if (!cancelled) {
+          setMlCandidates([])
+          setMlCandidateNotice('ML候補データを取得できませんでした。')
+        }
+      })
+    return () => { cancelled = true }
+  }, [candidateMode])
+
+  useEffect(() => {
+    let cancelled = false
+    Promise.all([
+      fetch('/api/ml/current-similars?limit=12', { cache: 'no-store' }).then((res) => res.json()),
+      fetch(`/api/ml/sector-rankings?direction=${candidateMode}&limit=12`, { cache: 'no-store' }).then((res) => res.json()),
+      fetch(`/api/ml/performance?direction=${candidateMode}&sectorType=all&limit=12`, { cache: 'no-store' }).then((res) => res.json()),
+      fetch('/api/ml/model-status', { cache: 'no-store' }).then((res) => res.json()),
+    ])
+      .then(([similarData, sectorData, performanceData, statusData]) => {
+        if (cancelled) return
+        setCurrentSimilars(Array.isArray(similarData.similars) ? similarData.similars : [])
+        setMlSectorRankings(Array.isArray(sectorData.rankings) ? sectorData.rankings : [])
+        setMlPerformance(Array.isArray(performanceData.performance) ? performanceData.performance : [])
+        setMlModelStatus(statusData && !statusData.error ? statusData : null)
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setCurrentSimilars([])
+          setMlSectorRankings([])
+          setMlPerformance([])
+          setMlModelStatus(null)
+        }
+      })
     return () => { cancelled = true }
   }, [candidateMode])
 
@@ -967,7 +1083,7 @@ export default function BacktestPage() {
               <div className="bt-card-head compact">
                 <div>
                   <h2>現在のMA候補</h2>
-                  <p>最新日の6ステージ・MA形状</p>
+                  <p>{mlCandidateNotice || '最新日の6ステージ・MA形状'}</p>
                 </div>
                 <Search size={17} />
               </div>
@@ -988,6 +1104,99 @@ export default function BacktestPage() {
                   </div>
                 ))}
                 {mlCandidates.length === 0 && <p className="bt-empty">ML候補データは未作成です</p>}
+              </div>
+            </section>
+
+            <section className="sb-card bt-side-card">
+              <div className="bt-card-head compact">
+                <div>
+                  <h2>現在類似銘柄</h2>
+                  <p>最新データでMA形状と6ステージが近い銘柄</p>
+                </div>
+                <LineChart size={17} />
+              </div>
+              <div className="bt-rank-list">
+                {currentSimilars.slice(0, 6).map((item) => (
+                  <div className="bt-rank" key={`${item.baseTicker}-${item.similarTicker}-${item.rank}`}>
+                    <span className="bt-rank-no">{item.rank}</span>
+                    <div>
+                      <Link href={`/stock/${item.baseTicker}`}>{item.baseTicker}</Link>
+                      <p>
+                        → <Link href={`/stock/${item.similarTicker}`}>{item.similarTicker}</Link>
+                        {' / '}
+                        {item.payload.similar?.stageCode ?? '-'}
+                      </p>
+                    </div>
+                    <strong>{Math.round(item.similarityScore * 100)}%</strong>
+                  </div>
+                ))}
+                {currentSimilars.length === 0 && <p className="bt-empty">現在類似データは未作成です</p>}
+              </div>
+            </section>
+
+            <section className="sb-card bt-side-card">
+              <div className="bt-card-head compact">
+                <div>
+                  <h2>ML業種ランキング</h2>
+                  <p>上昇/下落候補が集まる17・33業種</p>
+                </div>
+                <BarChart3 size={17} />
+              </div>
+              <div className="bt-rank-list">
+                {mlSectorRankings.slice(0, 7).map((item, index) => (
+                  <div className="bt-rank" key={`${item.sectorType}-${item.direction}-${item.sectorName}`}>
+                    <span className="bt-rank-no">{index + 1}</span>
+                    <div>
+                      <strong style={{ color: 'var(--color-brand-900)', textAlign: 'left' }}>
+                        {item.sectorType}業種: {item.sectorName}
+                      </strong>
+                      <p>
+                        {item.direction === 'up' ? '上昇候補' : '下落警戒'} {item.candidateCount}件
+                        {item.representativeTickers.length > 0 ? ` / ${item.representativeTickers.slice(0, 3).map((row) => row.ticker).join(', ')}` : ''}
+                      </p>
+                    </div>
+                    <strong>{item.avgScore == null ? '-' : Math.round(item.avgScore * 100)}</strong>
+                  </div>
+                ))}
+                {mlSectorRankings.length === 0 && <p className="bt-empty">ML業種ランキングは未作成です</p>}
+              </div>
+            </section>
+
+            <section className="sb-card bt-side-card">
+              <div className="bt-card-head compact">
+                <div>
+                  <h2>MLモデル成績</h2>
+                  <p>学習モデルが過去データ上で抽出した候補群</p>
+                </div>
+                <Sigma size={17} />
+              </div>
+              <div className="bt-rank-list">
+                {mlPerformance.filter((item) => item.sectorType === 'all').slice(0, 6).map((item) => {
+                  const mainRate = item.direction === 'up' ? item.upRate : item.downRate
+                  const accuracy = item.payload?.metrics?.accuracy
+                  const precision = item.payload?.precisionAt20
+                  return (
+                    <div className="bt-rank" key={`${item.direction}-${item.horizonDays}-${item.sectorName}`}>
+                      <span className="bt-rank-no">{item.horizonDays}</span>
+                      <div>
+                        <strong style={{ color: 'var(--color-brand-900)', textAlign: 'left' }}>
+                          {item.direction === 'up' ? '上昇候補' : '下落警戒'} / {item.horizonDays}営業日
+                        </strong>
+                        <p>
+                          N={item.sampleCount.toLocaleString()}
+                          {' / '}
+                          {precision == null
+                            ? item.medianReturnPct == null
+                              ? `学習精度 ${accuracy == null ? '-' : `${Math.round(accuracy * 100)}%`}`
+                              : `中央値 ${fmtPct(item.medianReturnPct)}`
+                            : `上位20的中 ${Math.round(precision * 100)}%`}
+                        </p>
+                      </div>
+                      <strong>{mainRate == null ? (precision == null ? (accuracy == null ? '-' : `${Math.round(accuracy * 100)}%`) : `${Math.round(precision * 100)}%`) : `${Math.round(mainRate * 100)}%`}</strong>
+                    </div>
+                  )
+                })}
+                {mlPerformance.length === 0 && <p className="bt-empty">モデル成績は未作成です</p>}
               </div>
             </section>
 
@@ -1023,10 +1232,29 @@ export default function BacktestPage() {
                 <Sigma size={17} />
               </div>
               <div className="bt-ml-note">
-                <span>model_features</span>
-                <span>model_labels</span>
-                <span>forward_extrema</span>
-                <span>serving_*</span>
+                <span>特徴量 {mlModelStatus?.latestFeatureDate ?? '-'}</span>
+                <span>予測 {mlModelStatus?.latestPredictionDate ?? '-'}</span>
+                <span>評価 {mlModelStatus?.latestEvaluationDate ?? '-'}</span>
+                <span>モデル {mlModelStatus?.models.length ?? 0}世代</span>
+              </div>
+              <div className="bt-rank-list" style={{ marginTop: 12 }}>
+                {(mlModelStatus?.models ?? []).slice(0, 4).map((model) => (
+                  <div className="bt-rank" key={model.modelName}>
+                    <span className="bt-rank-no">{model.horizonDays}</span>
+                    <div>
+                      <strong style={{ color: 'var(--color-brand-900)', textAlign: 'left' }}>
+                        {model.direction === 'up' ? '上昇' : '下落'}モデル
+                      </strong>
+                      <p>
+                        {model.metrics.trainStartDate ?? '2008-05-07'}〜{model.metrics.trainEndDate ?? '-'}
+                        {' / '}
+                        N={Number(model.metrics.samples ?? 0).toLocaleString()}
+                      </p>
+                    </div>
+                    <strong>{model.metrics.accuracy == null ? '-' : `${Math.round(model.metrics.accuracy * 100)}%`}</strong>
+                  </div>
+                ))}
+                {!mlModelStatus?.models?.length && <p className="bt-empty">モデル状態は未作成です</p>}
               </div>
             </section>
           </aside>

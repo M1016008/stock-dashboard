@@ -11,6 +11,7 @@ import { EarningsCard } from '@/components/stock/EarningsCard'
 import { WatchlistButton } from '@/components/ui/WatchlistButton'
 import { StageTimeline } from '@/components/stock/StageTimeline'
 import { StockMovePeriods } from '@/components/stock/StockMovePeriods'
+import { StockMlInsights } from '@/components/stock/StockMlInsights'
 import { findTicker } from '@/lib/master/tickers'
 import type { StockQuote } from '@/types/stock'
 
@@ -58,26 +59,30 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
 
   useEffect(() => {
     let cancelled = false
+    let pending = 3
+    const done = () => {
+      pending -= 1
+      if (!cancelled && pending <= 0) setLoading(false)
+    }
     async function fetchData() {
       setLoading(true)
-      try {
-        const [quoteRes, masterRes, marginRes] = await Promise.all([
-          fetch(`/api/quote/${encodeURIComponent(ticker)}`, { cache: 'no-store' }),
-          fetch(`/api/sector-master/${encodeURIComponent(ticker)}`, { cache: 'no-store' }),
-          fetch(`/api/stock-margin/${encodeURIComponent(ticker)}`, { cache: 'no-store' }),
-        ])
-        if (cancelled) return
-        if (quoteRes.ok) setQuote(await quoteRes.json())
-        if (masterRes.ok) {
-          const j = await masterRes.json()
-          setSmaster(j.master ?? null)
-        }
-        if (marginRes.ok) setMarginInfo(await marginRes.json())
-      } catch (error) {
-        console.error('Failed to fetch stock data:', error)
-      } finally {
-        if (!cancelled) setLoading(false)
-      }
+      fetch(`/api/quote/${encodeURIComponent(ticker)}`, { cache: 'no-store' })
+        .then((res) => res.ok ? res.json() : null)
+        .then((data) => { if (!cancelled && data) setQuote(data) })
+        .catch((error) => console.error('Failed to fetch quote:', error))
+        .finally(done)
+
+      fetch(`/api/sector-master/${encodeURIComponent(ticker)}`, { cache: 'no-store' })
+        .then((res) => res.ok ? res.json() : null)
+        .then((data) => { if (!cancelled) setSmaster(data?.master ?? null) })
+        .catch((error) => console.error('Failed to fetch sector master:', error))
+        .finally(done)
+
+      fetch(`/api/stock-margin/${encodeURIComponent(ticker)}`, { cache: 'no-store' })
+        .then((res) => res.ok ? res.json() : null)
+        .then((data) => { if (!cancelled && data) setMarginInfo(data) })
+        .catch((error) => console.error('Failed to fetch stock margin:', error))
+        .finally(done)
     }
     fetchData()
     return () => { cancelled = true }
@@ -158,6 +163,9 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
 
       {/* 過去の大きな値動き */}
       <StockMovePeriods ticker={ticker} />
+
+      {/* 最新ML類似候補 */}
+      <StockMlInsights ticker={ticker} />
 
       {/* TradingView チャート: 日足 / 週足 / 月足 を縦に並べて時間軸比較 */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>

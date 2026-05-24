@@ -25,7 +25,15 @@ export async function POST() {
   }
 
   const repairOnly = !freshness.needsOhlcvUpdate
-    && (freshness.needsSnapshotUpdate || freshness.needsDashboardCacheUpdate)
+    && (
+      freshness.needsSnapshotUpdate
+      || freshness.needsDashboardCacheUpdate
+      || freshness.needsFeatureUpdate
+      || freshness.needsModelFeatureUpdate
+      || freshness.needsMlFeatureUpdate
+      || freshness.needsMlCandidateUpdate
+      || freshness.needsMlPredictionUpdate
+    )
   if (!repairOnly && !process.env.JQUANTS_API_KEY) {
     return NextResponse.json(
       { started: false, error: 'JQUANTS_API_KEY is not set', freshness },

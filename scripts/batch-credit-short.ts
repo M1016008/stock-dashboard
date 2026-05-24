@@ -1,18 +1,21 @@
 // scripts/batch-credit-short.ts
 //
-// Phase 4 B10: J-Quants /markets/margin-interest を全銘柄分取得 (週次)。
-// 1 銘柄あたり 1 リクエスト程度なので 4,000 銘柄で ~7 min。
+// Phase 4 B10: J-Quants /markets/margin-interest を取得 (週次)。
+// 標準は date 指定の一括取得。銘柄別取得は補修用に残す。
 //
 // 使い方:
 //   USE_LOCAL_DB=1 npm run batch:credit-short
 //
 // 環境変数:
-//   TICKERS=7203,9984    対象銘柄を限定
-//   FROM_DATE=2026-01-01 from パラメータ
+//   CREDIT_FETCH_MODE=ticker  銘柄別取得に切替
+//   TICKERS=7203,9984         銘柄別取得の対象銘柄
+//   FROM_DATE=2026-01-01      銘柄別取得の from パラメータ
+//   MARGIN_DATE=2026-05-15    date 一括取得の日付を固定
+//   CREDIT_HISTORY_WEEKS=4    date 自動取得時に保存する直近週数
 
 import { db, client, ensureReady } from '@/lib/db/client'
 import { weeklyMarginInterest, tickerUniverse, batchRuns } from '@/lib/db/schema'
-import { fetchJQuantsWeeklyMargin, type JMarginRow } from '@/lib/jquants'
+import { fetchJQuantsWeeklyMargin, fetchJQuantsWeeklyMarginByDate, type JMarginRow } from '@/lib/jquants'
 import { and, eq, inArray } from 'drizzle-orm'
 
 const RATE_LIMIT_MS = Number(process.env.CREDIT_RATE_LIMIT_MS ?? 350)
@@ -20,6 +23,9 @@ const CONCURRENCY = Math.max(1, Number(process.env.CREDIT_CONCURRENCY ?? 2))
 const MAX_RETRIES = Math.max(0, Number(process.env.CREDIT_MAX_RETRIES ?? 4))
 const RETRY_BASE_MS = Number(process.env.CREDIT_RETRY_BASE_MS ?? 1200)
 const PROGRESS_EVERY = Number(process.env.CREDIT_PROGRESS_EVERY ?? 200)
+const FETCH_MODE = (process.env.CREDIT_FETCH_MODE ?? 'date').trim()
+const DATE_LOOKBACK_DAYS = Math.max(1, Number(process.env.CREDIT_DATE_LOOKBACK_DAYS ?? 45))
+const HISTORY_WEEKS = Math.max(1, Number(process.env.CREDIT_HISTORY_WEEKS ?? 4))
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 
@@ -35,6 +41,11 @@ function longVolume(row: JMarginRow): number {
 
 function shortVolume(row: JMarginRow): number {
   return numeric(row.ShrtVol ?? row.ShortMarginTradeVolume)
+}
+
+function normalizeCode(code: string): string {
+  const trimmed = code.trim()
+  return trimmed.length === 5 && trimmed.endsWith('0') ? trimmed.slice(0, 4) : trimmed
 }
 
 function isRateLimit(error: unknown): boolean {
@@ -93,6 +104,120 @@ async function fetchAndStore(ticker: string, fromDate?: string): Promise<number>
   return inserted
 }
 
+async function latestOhlcvDate(): Promise<string | null> {
+  const row = await client.execute(`SELECT MAX(date) AS date FROM ohlcv_daily`)
+  return (row.rows[0]?.date as string | null | undefined) ?? null
+}
+
+function addDays(date: string, delta: number): string {
+  const d = new Date(`${date}T00:00:00+09:00`)
+  d.setDate(d.getDate() + delta)
+  return d.toISOString().slice(0, 10)
+}
+
+async function resolveMarginDates(): Promise<Array<{ date: string; rows: JMarginRow[] }>> {
+  const fixed = process.env.MARGIN_DATE?.trim()
+  if (fixed) return [{ date: fixed, rows: await fetchJQuantsWeeklyMarginByDate(fixed) }]
+
+  const latest = await latestOhlcvDate()
+  if (!latest) return []
+  const found: Array<{ date: string; rows: JMarginRow[] }> = []
+  for (let i = 0; i <= DATE_LOOKBACK_DAYS; i += 1) {
+    const date = addDays(latest, -i)
+    const rows = await fetchJQuantsWeeklyMarginByDate(date)
+    if (rows.length > 0) {
+      found.push({ date, rows })
+      if (found.length >= HISTORY_WEEKS) return found
+    }
+    if (RATE_LIMIT_MS > 0) await sleep(Math.min(RATE_LIMIT_MS, 1000))
+  }
+  return found
+}
+
+async function storeDateRows(rows: JMarginRow[]): Promise<number> {
+  const dedup = new Map<string, JMarginRow>()
+  for (const row of rows) {
+    if (!row.Code || !row.Date) continue
+    dedup.set(`${normalizeCode(row.Code)}\t${row.Date}`, row)
+  }
+  let inserted = 0
+  const CHUNK = 300
+  const items = Array.from(dedup.values())
+  for (let i = 0; i < items.length; i += CHUNK) {
+    const chunk = items.slice(i, i + CHUNK)
+    await client.batch(chunk.map((row) => {
+      const ticker = normalizeCode(row.Code)
+      const longCur = longVolume(row)
+      const shortCur = shortVolume(row)
+      return {
+        sql: `INSERT INTO weekly_margin_interest (ticker, date, long_margin, short_margin, long_change, short_change, imported_at)
+              VALUES (?, ?, ?, ?, NULL, NULL, unixepoch())
+              ON CONFLICT(ticker, date) DO UPDATE SET
+                long_margin = excluded.long_margin,
+                short_margin = excluded.short_margin,
+                imported_at = excluded.imported_at`,
+        args: [
+          ticker,
+          row.Date,
+          Number.isFinite(longCur) ? longCur : null,
+          Number.isFinite(shortCur) ? shortCur : null,
+        ],
+      }
+    }))
+    inserted += chunk.length
+  }
+
+  const dates = Array.from(new Set(items.map((row) => row.Date))).sort()
+  for (const date of dates) {
+    await client.execute({
+      sql: `
+        UPDATE weekly_margin_interest
+        SET
+          long_change = CASE
+            WHEN (
+              SELECT prev.long_margin
+              FROM weekly_margin_interest prev
+              WHERE prev.ticker = weekly_margin_interest.ticker
+                AND prev.date < weekly_margin_interest.date
+              ORDER BY prev.date DESC
+              LIMIT 1
+            ) IS NULL THEN NULL
+            ELSE long_margin - (
+              SELECT prev.long_margin
+              FROM weekly_margin_interest prev
+              WHERE prev.ticker = weekly_margin_interest.ticker
+                AND prev.date < weekly_margin_interest.date
+              ORDER BY prev.date DESC
+              LIMIT 1
+            )
+          END,
+          short_change = CASE
+            WHEN (
+              SELECT prev.short_margin
+              FROM weekly_margin_interest prev
+              WHERE prev.ticker = weekly_margin_interest.ticker
+                AND prev.date < weekly_margin_interest.date
+              ORDER BY prev.date DESC
+              LIMIT 1
+            ) IS NULL THEN NULL
+            ELSE short_margin - (
+              SELECT prev.short_margin
+              FROM weekly_margin_interest prev
+              WHERE prev.ticker = weekly_margin_interest.ticker
+                AND prev.date < weekly_margin_interest.date
+              ORDER BY prev.date DESC
+              LIMIT 1
+            )
+          END
+        WHERE date = ?
+      `,
+      args: [date],
+    })
+  }
+
+  return inserted
+}
+
 async function main() {
   await ensureReady()
 
@@ -101,6 +226,28 @@ async function main() {
     .values({ jobType: 'credit_short', startedAt: new Date(), status: 'running' })
     .returning({ id: batchRuns.id })
   const runId = run.id
+
+  if (FETCH_MODE !== 'ticker') {
+    const dateRows = await resolveMarginDates()
+    const rows = dateRows.flatMap((item) => item.rows)
+    const dates = dateRows.map((item) => item.date)
+    console.log(`Credit-short date fetch: dates=${dates.join(',') || '-'}, rows=${rows.length.toLocaleString()}`)
+    const rowsInserted = await storeDateRows(rows)
+    await db
+      .update(batchRuns)
+      .set({
+        finishedAt: new Date(),
+        status: rowsInserted > 0 ? 'success' : 'empty',
+        totalTickers: rows.length,
+        succeeded: rows.length,
+        failed: 0,
+        rowsInserted,
+        errorSummary: rowsInserted > 0 ? null : JSON.stringify({ message: 'J-Quants margin-interest returned no rows', dates }),
+      })
+      .where(eq(batchRuns.id, runId))
+    console.log(`完了: ${rowsInserted.toLocaleString()} 行 / ${rows.length.toLocaleString()} レコード / dates=${dates.join(',') || '-'}`)
+    return
+  }
 
   const fromDate = process.env.FROM_DATE
   const filter = process.env.TICKERS?.split(',').map(s => s.trim()).filter(Boolean)

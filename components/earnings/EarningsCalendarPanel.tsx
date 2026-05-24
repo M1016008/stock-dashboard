@@ -6,10 +6,11 @@ import { Card, CardHeader } from '@/components/ui/Card'
 import { IndustryBadges } from '@/components/ui/IndustryBadges'
 import { MarginBadges } from '@/components/ui/MarginBadges'
 import { StageTag } from '@/components/ui/StageTag'
-import { getEarningsCalendarDashboard } from '@/lib/queries/dashboard'
+import { getEarningsCalendarDashboard, type EarningsCalendarFilters } from '@/lib/queries/dashboard'
 
 type EarningsDashboard = Awaited<ReturnType<typeof getEarningsCalendarDashboard>>
 type EarningsRows = EarningsDashboard['rows']
+type EarningsFilterOptions = EarningsDashboard['filterOptions']
 
 function fmtVol(v: number | null) {
   if (v == null) return '---'
@@ -25,6 +26,16 @@ function fmtPrice(v: number | null) {
 function fmtPct(v: number | null | undefined) {
   if (v == null || !Number.isFinite(v)) return '---'
   return `${v > 0 ? '+' : ''}${v.toFixed(2)}%`
+}
+
+function fmtRate(v: number | null | undefined) {
+  if (v == null || !Number.isFinite(v)) return null
+  return `${Math.round(v * 100)}%`
+}
+
+function fmtSignalDate(v: string | null | undefined) {
+  if (!v) return '発生日未確認'
+  return `${v.slice(5, 7)}/${v.slice(8, 10)}発生`
 }
 
 function tone(v: number | null) {
@@ -106,6 +117,284 @@ function SignalBadges({ labels, codes }: { labels: string[] | undefined; codes: 
   )
 }
 
+function SignalStatChip({ stat }: { stat: EarningsRows[number]['signalDetails'][number]['stats'][number] }) {
+  if (stat.source === 'missing' || stat.count == null) {
+    return (
+      <span className="rounded-[4px] border border-[var(--color-border-soft)] bg-white px-1.5 py-[2px] text-[10px] font-bold text-[var(--color-text-tertiary)]">
+        {stat.periodLabel} 統計未生成
+      </span>
+    )
+  }
+
+  const upRate = fmtRate(stat.upRate)
+  const downRate = fmtRate(stat.downRate)
+  const bearish = stat.downRate != null && stat.upRate != null && stat.downRate > stat.upRate
+  const direction = bearish ? `下落${downRate}` : upRate ? `上昇${upRate}` : '中央値'
+  const color = bearish ? 'text-[var(--color-price-down)]' : 'text-[var(--color-price-up)]'
+  return (
+    <span
+      className="rounded-[4px] border border-[var(--color-border-soft)] bg-white px-1.5 py-[2px] text-[10px] font-bold tabular-nums text-[var(--color-text-secondary)]"
+      title={`N=${stat.count.toLocaleString()} / ${stat.horizonDays}営業日後`}
+    >
+      {stat.periodLabel} <span className={color}>{direction}</span> / {fmtPct(stat.medianReturnPct)}
+    </span>
+  )
+}
+
+function SignalDetails({ details }: { details: EarningsRows[number]['signalDetails'] | undefined }) {
+  const rows = details ?? []
+  if (rows.length === 0) return null
+  return (
+    <div className="mt-2 space-y-1.5">
+      {rows.map((detail) => (
+        <div
+          key={`${detail.label}-${detail.code}`}
+          className="rounded-[6px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-2 py-1.5"
+        >
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] font-bold leading-snug">
+            <span className="text-[var(--color-text-primary)]">{detail.label}</span>
+            <span className="tabular-nums text-[var(--color-text-tertiary)]">
+              {fmtSignalDate(detail.triggerDate)}
+              {detail.elapsedTradingDays == null ? '' : `・${detail.elapsedTradingDays}営業日経過`}
+            </span>
+          </div>
+          <div className="mt-1 flex flex-wrap gap-1">
+            {detail.stats.map((stat) => (
+              <SignalStatChip key={`${detail.code}-${stat.horizonDays}`} stat={stat} />
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function MlInsightNote({ insight }: { insight: EarningsRows[number]['mlInsight'] | undefined }) {
+  if (!insight) return null
+  const tone = insight.direction === 'up' ? 'text-[var(--color-price-up)]' : 'text-[var(--color-price-down)]'
+  const label = insight.direction === 'up' ? '上昇候補' : '下落警戒'
+  return (
+    <div className="mt-2 rounded-[6px] border border-[var(--color-border-soft)] bg-white px-2 py-1.5 text-[10px] font-semibold leading-relaxed text-[var(--color-text-secondary)]">
+      <div className={`mb-1 font-bold ${tone}`}>
+        ML: {label} / {insight.confidenceLabel}
+      </div>
+      <p>{insight.summary}</p>
+      {insight.watchPoints.length > 0 && (
+        <p className="mt-1 text-[var(--color-text-tertiary)]">
+          確認: {insight.watchPoints.slice(0, 2).join(' / ')}
+        </p>
+      )}
+    </div>
+  )
+}
+
+function compactFilterValue(value: string | number | null | undefined): string | null {
+  if (value == null) return null
+  const text = String(value).trim()
+  return text ? text : null
+}
+
+function earningsHref({
+  date,
+  month,
+  filters,
+  limit,
+}: {
+  date?: string | null
+  month?: string | null
+  filters: EarningsCalendarFilters
+  limit?: number | null
+}) {
+  const sp = new URLSearchParams()
+  if (date) sp.set('date', date)
+  if (month) sp.set('month', month)
+  const pairs: Array<[string, string | number | null | undefined]> = [
+    ['market', filters.marketSegment],
+    ['sector17', filters.sector17],
+    ['sector33', filters.sector33],
+    ['stageCode', filters.stageCode],
+    ['dailyPattern', filters.dailyPattern],
+    ['volume', filters.volumeCondition],
+    ['priceMin', filters.priceMin],
+    ['priceMax', filters.priceMax],
+    ['signal', filters.signal],
+    ['limit', limit ?? filters.limit],
+  ]
+  for (const [key, value] of pairs) {
+    const text = compactFilterValue(value)
+    if (text) sp.set(key, text)
+  }
+  const query = sp.toString()
+  return query ? `/earnings?${query}` : '/earnings'
+}
+
+function SelectField({
+  label,
+  name,
+  value,
+  options,
+}: {
+  label: string
+  name: string
+  value: string | null | undefined
+  options: EarningsFilterOptions[keyof EarningsFilterOptions]
+}) {
+  return (
+    <label className="flex min-w-0 flex-col gap-1 text-[11px] font-bold text-[var(--color-text-tertiary)]">
+      {label}
+      <select
+        name={name}
+        defaultValue={value ?? ''}
+        className="h-9 rounded-[6px] border border-[var(--color-border-default)] bg-white px-2 text-[12px] font-semibold text-[var(--color-text-primary)]"
+      >
+        <option value="">すべて</option>
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}（{option.count}）
+          </option>
+        ))}
+      </select>
+    </label>
+  )
+}
+
+function EarningsScopeControls({
+  data,
+  date,
+  month,
+}: {
+  data: EarningsDashboard
+  date?: string | null
+  month?: string | null
+}) {
+  const filters = data.filters
+  const scope = data.scope
+  const options = data.filterOptions
+  const nextLimit = Math.min(scope.displayLimit + 20, Math.max(scope.filteredCount, scope.displayLimit + 20))
+  const resetHref = earningsHref({ date, month, filters: {}, limit: null })
+  const moreHref = earningsHref({ date, month, filters, limit: nextLimit })
+
+  return (
+    <section className="mb-4 rounded-[8px] border border-[var(--color-border-default)] bg-white p-3">
+      <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+        <div className="rounded-[7px] bg-[var(--color-surface-subtle)] px-3 py-2">
+          <div className="text-[10px] font-bold text-[var(--color-text-tertiary)]">対象日</div>
+          <div className="mt-1 text-[15px] font-bold tabular-nums text-[var(--color-brand-900)]">{scope.scopeDate ?? '最新基準'}</div>
+        </div>
+        <div className="rounded-[7px] bg-[var(--color-surface-subtle)] px-3 py-2">
+          <div className="text-[10px] font-bold text-[var(--color-text-tertiary)]">全体件数</div>
+          <div className="mt-1 text-[15px] font-bold tabular-nums text-[var(--color-brand-900)]">{scope.totalCount.toLocaleString()}件</div>
+        </div>
+        <div className="rounded-[7px] bg-[var(--color-surface-subtle)] px-3 py-2">
+          <div className="text-[10px] font-bold text-[var(--color-text-tertiary)]">絞り込み後</div>
+          <div className="mt-1 text-[15px] font-bold tabular-nums text-[var(--color-brand-900)]">{scope.filteredCount.toLocaleString()}件</div>
+        </div>
+        <div className="rounded-[7px] bg-[var(--color-surface-subtle)] px-3 py-2">
+          <div className="text-[10px] font-bold text-[var(--color-text-tertiary)]">表示中</div>
+          <div className="mt-1 text-[15px] font-bold tabular-nums text-[var(--color-brand-900)]">{scope.displayedCount.toLocaleString()}件</div>
+        </div>
+      </div>
+
+      <form action="/earnings" className="mt-3 grid gap-3">
+        {date && <input type="hidden" name="date" value={date} />}
+        {month && <input type="hidden" name="month" value={month} />}
+        <div className="grid gap-2 md:grid-cols-4 xl:grid-cols-8">
+          <SelectField label="市場区分" name="market" value={filters.marketSegment} options={options.marketSegments} />
+          <SelectField label="17業種" name="sector17" value={filters.sector17} options={options.sector17} />
+          <SelectField label="33業種" name="sector33" value={filters.sector33} options={options.sector33} />
+          <label className="flex min-w-0 flex-col gap-1 text-[11px] font-bold text-[var(--color-text-tertiary)]">
+            6桁ステージ
+            <input
+              name="stageCode"
+              list="earnings-stage-code-options"
+              defaultValue={filters.stageCode ?? ''}
+              placeholder="例: 111111"
+              className="h-9 rounded-[6px] border border-[var(--color-border-default)] bg-white px-2 text-[12px] font-semibold text-[var(--color-text-primary)]"
+            />
+            <datalist id="earnings-stage-code-options">
+              {options.stageCodes.map((option) => <option key={option.value} value={option.value}>{option.count}件</option>)}
+            </datalist>
+          </label>
+          <SelectField label="日足A/B" name="dailyPattern" value={filters.dailyPattern} options={options.dailyPatterns} />
+          <label className="flex min-w-0 flex-col gap-1 text-[11px] font-bold text-[var(--color-text-tertiary)]">
+            出来高
+            <select
+              name="volume"
+              defaultValue={filters.volumeCondition ?? ''}
+              className="h-9 rounded-[6px] border border-[var(--color-border-default)] bg-white px-2 text-[12px] font-semibold text-[var(--color-text-primary)]"
+            >
+              <option value="">すべて</option>
+              <option value="volume_spike">出来高急増</option>
+              <option value="above_avg">平均出来高以上</option>
+              <option value="volume_10k">1万株以上</option>
+              <option value="volume_100k">10万株以上</option>
+            </select>
+          </label>
+          <SelectField label="シグナル" name="signal" value={filters.signal} options={options.signals} />
+          <label className="flex min-w-0 flex-col gap-1 text-[11px] font-bold text-[var(--color-text-tertiary)]">
+            表示件数
+            <select
+              name="limit"
+              defaultValue={String(scope.displayLimit)}
+              className="h-9 rounded-[6px] border border-[var(--color-border-default)] bg-white px-2 text-[12px] font-semibold text-[var(--color-text-primary)]"
+            >
+              {[20, 40, 80, 160, 320, 640, 1000].map((value) => (
+                <option key={value} value={value}>{value}件</option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <div className="grid gap-2 md:grid-cols-[repeat(2,minmax(0,160px))_1fr]">
+          <label className="flex min-w-0 flex-col gap-1 text-[11px] font-bold text-[var(--color-text-tertiary)]">
+            株価下限
+            <input
+              name="priceMin"
+              inputMode="numeric"
+              defaultValue={filters.priceMin ?? ''}
+              placeholder="以上"
+              className="h-9 rounded-[6px] border border-[var(--color-border-default)] bg-white px-2 text-[12px] font-semibold text-[var(--color-text-primary)]"
+            />
+          </label>
+          <label className="flex min-w-0 flex-col gap-1 text-[11px] font-bold text-[var(--color-text-tertiary)]">
+            株価上限
+            <input
+              name="priceMax"
+              inputMode="numeric"
+              defaultValue={filters.priceMax ?? ''}
+              placeholder="以下"
+              className="h-9 rounded-[6px] border border-[var(--color-border-default)] bg-white px-2 text-[12px] font-semibold text-[var(--color-text-primary)]"
+            />
+          </label>
+          <div className="flex flex-wrap items-end justify-end gap-2">
+            <Link
+              href={resetHref}
+              className="inline-flex h-9 items-center rounded-[6px] border border-[var(--color-border-default)] bg-white px-3 text-[12px] font-bold text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-subtle)]"
+              prefetch={false}
+            >
+              リセット
+            </Link>
+            <button
+              type="submit"
+              className="inline-flex h-9 items-center rounded-[6px] border border-[var(--color-brand-800)] bg-[var(--color-brand-800)] px-4 text-[12px] font-bold text-white"
+            >
+              絞り込む
+            </button>
+            {scope.hasMore && (
+              <Link
+                href={moreHref}
+                className="inline-flex h-9 items-center rounded-[6px] border border-[var(--color-brand-200)] bg-[var(--color-brand-50)] px-3 text-[12px] font-bold text-[var(--color-brand-800)] hover:bg-white"
+                prefetch={false}
+              >
+                さらに表示
+              </Link>
+            )}
+          </div>
+        </div>
+      </form>
+    </section>
+  )
+}
+
 function EarningsTable({
   rows,
   mode = 'upcoming',
@@ -121,7 +410,7 @@ function EarningsTable({
   const colSpan = completed ? 14 : 13
   return (
     <div className="overflow-x-auto">
-      <table className={`w-full text-[12px] ${completed ? 'min-w-[1700px]' : 'min-w-[1620px]'}`}>
+      <table className={`w-full text-[12px] ${completed ? 'min-w-[1960px]' : 'min-w-[1860px]'}`}>
         <thead>
           <tr className="text-left text-[11px] font-bold text-[var(--color-text-tertiary)]">
             <th className="pb-3 pl-2 pr-3">発表</th>
@@ -170,6 +459,8 @@ function EarningsTable({
               </td>
               <td className="py-3 pr-4 align-top">
                 <SignalBadges labels={row.signalLabels} codes={row.signalCodes} />
+                <SignalDetails details={row.signalDetails} />
+                <MlInsightNote insight={row.mlInsight} />
               </td>
               {completed && (
                 <td className={`py-3 pr-3 text-right tabular-nums font-bold ${tone(row.postEarningsChangePct)}`}>
@@ -216,12 +507,16 @@ function EarningsTable({
 
 export async function EarningsCalendarPanel({
   date,
+  month,
   preferLatestImport = true,
+  filters,
 }: {
   date?: string | null
+  month?: string | null
   preferLatestImport?: boolean
+  filters?: EarningsCalendarFilters
 }) {
-  const data = await getEarningsCalendarDashboard(14, date, { preferLatestImport })
+  const data = await getEarningsCalendarDashboard(14, date, { preferLatestImport, filters })
   const rows = data.rows
   const upcomingGroups = dayBucket(rows)
   const completedRows = data.completedRows
@@ -231,7 +526,7 @@ export async function EarningsCalendarPanel({
         title="決算発表銘柄"
         hint={data.windowStart && data.windowEnd ? `${data.windowStart}〜${data.windowEnd} / J-Quants + JPX公式` : 'J-Quants + JPX公式'}
       />
-      {rows.length === 0 ? (
+      {rows.length === 0 && data.scope.totalCount === 0 ? (
         <div className="rounded-[6px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-4 py-6 text-center">
           <div className="text-[13px] font-bold text-[var(--color-text-secondary)]">
             {data.status === 'error' ? 'データ取得失敗' : data.status === 'stale' ? '決算カレンダー未更新' : data.status === 'empty' ? 'データ未取り込み' : '該当銘柄なし'}
@@ -256,6 +551,7 @@ export async function EarningsCalendarPanel({
               DB件数: {data.totalRows.toLocaleString()}件 / 最新取得: {fmtRunTime(data.latestImportedAt)} / 最終バッチ: {data.lastRun?.status ?? '---'}・{data.lastRun?.rowsInserted ?? 0}件・{fmtRunTime(data.lastRun?.finishedAt)}
             </div>
           </div>
+          <EarningsScopeControls data={data} date={date} month={month} />
           <div className="space-y-4">
             {upcomingGroups.map((group) => (
               <section key={group.key} className="rounded-[8px] border border-[var(--color-border-soft)] bg-white">
@@ -268,10 +564,15 @@ export async function EarningsCalendarPanel({
                   </div>
                 </div>
                 <div className="p-3">
-                  <EarningsTable rows={group.rows} maxRows={40} />
+                  <EarningsTable rows={group.rows} maxRows={data.scope.displayLimit} />
                 </div>
               </section>
             ))}
+            {data.scope.filteredCount === 0 && data.scope.totalCount > 0 && (
+              <div className="rounded-[8px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-4 py-8 text-center text-[13px] font-bold text-[var(--color-text-tertiary)]">
+                現在の絞り込み条件に該当する銘柄はありません。
+              </div>
+            )}
           </div>
         </>
       )}

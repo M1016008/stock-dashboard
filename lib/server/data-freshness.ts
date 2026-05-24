@@ -7,10 +7,14 @@ const UPDATE_JOB_TYPES = [
   'snapshot_compute',
   'post_ohlcv_refresh',
   'feature_compute',
+  'technical_signals',
+  'ml_features',
+  'serving_backtest',
   'indices',
   'earnings_calendar',
   'dashboard_cache',
 ]
+const LOCK_MANAGED_JOB_TYPES = new Set(['update_latest', 'post_ohlcv_refresh'])
 const RUNNING_JOB_TTL_SECONDS = 6 * 60 * 60
 const MIN_COVERAGE_RATIO = 1
 const MIN_SNAPSHOT_OHLCV_ROWS = 5
@@ -43,6 +47,11 @@ export type DataFreshness = {
   latestIndexDate: string | null
   latestEarningsDate: string | null
   latestDashboardCacheDate: string | null
+  latestFeatureDate: string | null
+  latestModelFeatureDate: string | null
+  latestMlFeatureDate: string | null
+  latestMlCandidateDate: string | null
+  latestMlPredictionDate: string | null
   activeTickerCount: number
   staleOhlcvTickerCount: number
   staleSnapshotTickerCount: number
@@ -53,6 +62,11 @@ export type DataFreshness = {
   needsOhlcvUpdate: boolean
   needsSnapshotUpdate: boolean
   needsDashboardCacheUpdate: boolean
+  needsFeatureUpdate: boolean
+  needsModelFeatureUpdate: boolean
+  needsMlFeatureUpdate: boolean
+  needsMlCandidateUpdate: boolean
+  needsMlPredictionUpdate: boolean
   needsUpdate: boolean
   running: boolean
   runningJobs: RunningJob[]
@@ -144,6 +158,11 @@ export async function getDataFreshness(now = new Date()): Promise<DataFreshness>
     latestIndexDate,
     latestEarningsDate,
     latestDashboardCacheDate,
+    latestFeatureDate,
+    latestModelFeatureDate,
+    latestMlFeatureDate,
+    latestMlCandidateDate,
+    latestMlPredictionDate,
     ohlcvCoverage,
     snapshotCoverage,
     snapshotEligibleCoverage,
@@ -155,6 +174,11 @@ export async function getDataFreshness(now = new Date()): Promise<DataFreshness>
     maxDate('indices_daily', 'date'),
     maxDate('earnings_calendar', 'announce_date'),
     maxDate('dashboard_cache', 'date'),
+    maxDate('feature_snapshots', 'date'),
+    maxDate('model_features', 'date'),
+    maxDate('ml_feature_vectors', 'date'),
+    maxDate('serving_ml_candidates', 'as_of_date'),
+    maxDate('ml_predictions', 'as_of_date'),
     dateCoverage('ohlcv_daily'),
     dateCoverage('daily_snapshots'),
     execGet<{ eligibleSnapshotRows: number }>(
@@ -279,7 +303,12 @@ export async function getDataFreshness(now = new Date()): Promise<DataFreshness>
     startedAt: lock.startedAt,
     source: 'update_locks',
   }))
-  const runningJobs = [...lockRunningJobs, ...batchRunningJobs]
+  const activeLockJobTypes = new Set(activeLocks.map((lock) => lock.jobType))
+  const reliableBatchRunningJobs = batchRunningJobs.filter((job) => {
+    if (!LOCK_MANAGED_JOB_TYPES.has(job.jobType)) return true
+    return activeLockJobTypes.has(job.jobType)
+  })
+  const runningJobs = [...lockRunningJobs, ...reliableBatchRunningJobs]
 
   const activeTickerCount = Number(tickerCoverage?.activeTickerCount ?? 0)
   const staleOhlcvTickerCount = Number(tickerCoverage?.staleOhlcvTickerCount ?? activeTickerCount)
@@ -308,6 +337,21 @@ export async function getDataFreshness(now = new Date()): Promise<DataFreshness>
   const needsDashboardCacheUpdate =
     !!latestSnapshotDate
     && (!latestDashboardCacheDate || latestDashboardCacheDate < latestSnapshotDate)
+  const needsFeatureUpdate =
+    !!latestSnapshotDate
+    && (!latestFeatureDate || latestFeatureDate < latestSnapshotDate)
+  const needsModelFeatureUpdate =
+    !!latestSnapshotDate
+    && (!latestModelFeatureDate || latestModelFeatureDate < latestSnapshotDate)
+  const needsMlFeatureUpdate =
+    !!latestSnapshotDate
+    && (!latestMlFeatureDate || latestMlFeatureDate < latestSnapshotDate)
+  const needsMlCandidateUpdate =
+    !!latestMlFeatureDate
+    && (!latestMlCandidateDate || latestMlCandidateDate < latestMlFeatureDate)
+  const needsMlPredictionUpdate =
+    !!latestMlCandidateDate
+    && (!latestMlPredictionDate || latestMlPredictionDate < latestMlCandidateDate)
 
   return {
     expectedTradingDate,
@@ -316,6 +360,11 @@ export async function getDataFreshness(now = new Date()): Promise<DataFreshness>
     latestIndexDate,
     latestEarningsDate,
     latestDashboardCacheDate,
+    latestFeatureDate,
+    latestModelFeatureDate,
+    latestMlFeatureDate,
+    latestMlCandidateDate,
+    latestMlPredictionDate,
     activeTickerCount,
     staleOhlcvTickerCount,
     staleSnapshotTickerCount,
@@ -326,7 +375,20 @@ export async function getDataFreshness(now = new Date()): Promise<DataFreshness>
     needsOhlcvUpdate,
     needsSnapshotUpdate,
     needsDashboardCacheUpdate,
-    needsUpdate: needsOhlcvUpdate || needsSnapshotUpdate || needsDashboardCacheUpdate,
+    needsFeatureUpdate,
+    needsModelFeatureUpdate,
+    needsMlFeatureUpdate,
+    needsMlCandidateUpdate,
+    needsMlPredictionUpdate,
+    needsUpdate:
+      needsOhlcvUpdate
+      || needsSnapshotUpdate
+      || needsDashboardCacheUpdate
+      || needsFeatureUpdate
+      || needsModelFeatureUpdate
+      || needsMlFeatureUpdate
+      || needsMlCandidateUpdate
+      || needsMlPredictionUpdate,
     running: runningJobs.length > 0,
     runningJobs,
     lastRun: lastRun ?? null,

@@ -20,9 +20,13 @@ export async function GET(request: NextRequest) {
         SELECT 1 FROM serving_backtest_summaries s
         WHERE s.date = serving_backtest_dates.date AND s.horizon_days = ?
       )
+        AND EXISTS (
+          SELECT 1 FROM serving_backtest_results r
+          WHERE r.date = serving_backtest_dates.date AND r.horizon_days = ?
+        )
       ORDER BY date DESC
       `,
-      [horizon],
+      [horizon, horizon],
     )
     if (serving.length > 0) {
       return NextResponse.json({ dates: serving, source: 'serving_backtest_dates', count: serving.length, horizon })

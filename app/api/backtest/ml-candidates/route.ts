@@ -33,6 +33,20 @@ type FeatureRow = {
   sector_large: string | null
 }
 
+type EvaluationRow = {
+  evaluation_date: string
+  direction: MlDirection
+  horizon_days: number
+  sample_count: number
+  precision_at_20: number | null
+  precision_at_50: number | null
+  precision_at_80: number | null
+  hit_rate: number | null
+  median_return_pct: number | null
+  avg_return_pct: number | null
+  max_drawdown_pct: number | null
+}
+
 function parseJson<T>(value: string | null | undefined, fallback: T): T {
   try {
     return value ? JSON.parse(value) as T : fallback
@@ -73,6 +87,37 @@ async function latestServingDate(): Promise<string | null> {
 
 async function latestFeatureDate(): Promise<string | null> {
   return (await execGet<{ date: string | null }>(`SELECT MAX(date) AS date FROM ml_feature_vectors`))?.date ?? null
+}
+
+async function modelEvaluations(horizon: number): Promise<Record<string, unknown>> {
+  const latest = (await execGet<{ date: string | null }>(
+    `SELECT MAX(evaluation_date) AS date FROM ml_model_evaluations WHERE horizon_days = ?`,
+    [horizon],
+  ))?.date
+  if (!latest) return {}
+  const rows = await execAll<EvaluationRow>(
+    `
+    SELECT evaluation_date, direction, horizon_days, sample_count,
+           precision_at_20, precision_at_50, precision_at_80, hit_rate,
+           median_return_pct, avg_return_pct, max_drawdown_pct
+    FROM ml_model_evaluations
+    WHERE evaluation_date = ? AND horizon_days = ?
+    ORDER BY direction ASC
+    `,
+    [latest, horizon],
+  )
+  return Object.fromEntries(rows.map((row) => [row.direction, {
+    evaluationDate: row.evaluation_date,
+    horizonDays: row.horizon_days,
+    sampleCount: row.sample_count,
+    precisionAt20: row.precision_at_20,
+    precisionAt50: row.precision_at_50,
+    precisionAt80: row.precision_at_80,
+    hitRate: row.hit_rate,
+    medianReturnPct: row.median_return_pct,
+    avgReturnPct: row.avg_return_pct,
+    maxDrawdownPct: row.max_drawdown_pct,
+  }]))
 }
 
 async function servingCandidates(date: string, direction: MlDirection | 'both', limit: number) {
@@ -140,30 +185,53 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url)
     const direction = boundedDirection(searchParams.get('direction'))
     const limit = Math.min(50, Math.max(1, Number(searchParams.get('limit') ?? 12)))
+    const horizon = Math.max(1, Number(searchParams.get('horizon') ?? searchParams.get('horizonDays') ?? 40))
     const requestedDate = searchParams.get('date')?.trim() || null
-    const servingDate = requestedDate ?? await latestServingDate()
+    const [servingDate, featureDate, evaluations] = await Promise.all([
+      requestedDate ?? latestServingDate(),
+      requestedDate ?? latestFeatureDate(),
+      modelEvaluations(horizon),
+    ])
     if (servingDate) {
       const candidates = await servingCandidates(servingDate, direction, limit)
       if (candidates.length > 0) {
-        return NextResponse.json({ asOfDate: servingDate, direction, source: 'serving_ml_candidates', candidates })
+        const stale = !requestedDate && featureDate != null && featureDate > servingDate
+        return NextResponse.json({
+          asOfDate: servingDate,
+          latestFeatureDate: featureDate,
+          stale,
+          direction,
+          horizonDays: horizon,
+          source: 'serving_ml_candidates',
+          modelEvaluations: evaluations,
+          candidates,
+          notice: stale ? `ML候補は前回更新日時点(${servingDate})です。最新特徴量は${featureDate}まであります。` : undefined,
+        })
       }
     }
 
-    const featureDate = requestedDate ?? await latestFeatureDate()
     if (!featureDate) {
       return NextResponse.json({
         asOfDate: null,
-        direction,
-        source: 'none',
-        candidates: [],
-        notice: 'ML特徴量が未作成です。batch:ml-features を実行してください。',
+        latestFeatureDate: null,
+      stale: false,
+      direction,
+      horizonDays: horizon,
+      source: 'none',
+      modelEvaluations: evaluations,
+      candidates: [],
+      notice: 'ML特徴量が未作成です。batch:ml-features を実行してください。',
       })
     }
     const candidates = await fallbackCandidates(featureDate, direction, limit)
     return NextResponse.json({
       asOfDate: featureDate,
+      latestFeatureDate: featureDate,
+      stale: false,
       direction,
+      horizonDays: horizon,
       source: 'ml_feature_vectors_fallback',
+      modelEvaluations: evaluations,
       candidates,
       notice: candidates.length === 0 ? 'ML候補データが未作成です。batch:ml-candidates を実行してください。' : undefined,
     })

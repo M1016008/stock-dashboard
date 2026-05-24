@@ -19,8 +19,18 @@ type FreshnessSummary = {
   expectedTradingDate: string
   latestOhlcvDate: string | null
   latestSnapshotDate: string | null
+  latestFeatureDate: string | null
+  latestModelFeatureDate: string | null
+  latestMlFeatureDate: string | null
+  latestMlCandidateDate: string | null
+  latestMlPredictionDate: string | null
   latestDashboardCacheDate: string | null
   needsSnapshotUpdate: boolean
+  needsFeatureUpdate: boolean
+  needsModelFeatureUpdate: boolean
+  needsMlFeatureUpdate: boolean
+  needsMlCandidateUpdate: boolean
+  needsMlPredictionUpdate: boolean
   needsDashboardCacheUpdate: boolean
 }
 
@@ -29,13 +39,25 @@ function summarizeFreshness(freshness: Awaited<ReturnType<typeof getDataFreshnes
     expectedTradingDate: freshness.expectedTradingDate,
     latestOhlcvDate: freshness.latestOhlcvDate,
     latestSnapshotDate: freshness.latestSnapshotDate,
+    latestFeatureDate: freshness.latestFeatureDate,
+    latestModelFeatureDate: freshness.latestModelFeatureDate,
+    latestMlFeatureDate: freshness.latestMlFeatureDate,
+    latestMlCandidateDate: freshness.latestMlCandidateDate,
+    latestMlPredictionDate: freshness.latestMlPredictionDate,
     latestDashboardCacheDate: freshness.latestDashboardCacheDate,
     needsSnapshotUpdate: freshness.needsSnapshotUpdate,
+    needsFeatureUpdate: freshness.needsFeatureUpdate,
+    needsModelFeatureUpdate: freshness.needsModelFeatureUpdate,
+    needsMlFeatureUpdate: freshness.needsMlFeatureUpdate,
+    needsMlCandidateUpdate: freshness.needsMlCandidateUpdate,
+    needsMlPredictionUpdate: freshness.needsMlPredictionUpdate,
     needsDashboardCacheUpdate: freshness.needsDashboardCacheUpdate,
   }
 }
 
-function runScript(script: string): Promise<RunResult> {
+type EnvOverrides = Record<string, string | undefined>
+
+function runScript(script: string, envOverrides: EnvOverrides = {}): Promise<RunResult> {
   return new Promise((resolve, reject) => {
     const child = spawn('npx', ['tsx', '--env-file=.env.local', script], {
       cwd: process.cwd(),
@@ -43,6 +65,8 @@ function runScript(script: string): Promise<RunResult> {
       env: {
         ...process.env,
         USE_LOCAL_DB: '1',
+        BACKTEST_RECENT_DAYS: process.env.BACKTEST_RECENT_DAYS ?? '260',
+        ...envOverrides,
       },
     })
 
@@ -51,9 +75,9 @@ function runScript(script: string): Promise<RunResult> {
   })
 }
 
-async function runRequired(script: string): Promise<void> {
+async function runRequired(script: string, envOverrides: EnvOverrides = {}): Promise<void> {
   console.log(`\n▶ ${script}`)
-  const result = await runScript(script)
+  const result = await runScript(script, envOverrides)
   if (result.code !== 0) {
     throw new Error(`${script} failed: code=${result.code}, signal=${result.signal ?? 'none'}`)
   }
@@ -95,7 +119,67 @@ async function main(): Promise<void> {
     }
 
     const afterSnapshots = await getDataFreshness()
-    if (afterSnapshots.needsDashboardCacheUpdate) {
+    if (afterSnapshots.needsFeatureUpdate) {
+      await runRequired('scripts/batch-features.ts')
+      await lock?.heartbeat()
+    } else {
+      console.log('Feature snapshots are already fresh after OHLCV fetch')
+    }
+
+    const afterFeatures = await getDataFreshness()
+    let rebuiltModelFeatures = false
+    if (afterFeatures.needsModelFeatureUpdate) {
+      await runRequired('scripts/batch-weekly-ohlcv.ts')
+      await lock?.heartbeat()
+      await runRequired('scripts/batch-technical-signals.ts')
+      await lock?.heartbeat()
+      await runRequired('scripts/build-serving-backtest.ts')
+      await lock?.heartbeat()
+      rebuiltModelFeatures = true
+    } else {
+      console.log('Model features and technical signals are already fresh after OHLCV fetch')
+    }
+
+    const afterModelFeatures = await getDataFreshness()
+    if (afterModelFeatures.needsMlFeatureUpdate) {
+      await runRequired('scripts/batch-ml-features.ts', {
+        ML_RECENT_DAYS: process.env.ML_DAILY_RECENT_DAYS ?? '260',
+        ML_MIN_HISTORY_DAYS: process.env.ML_DAILY_MIN_HISTORY_DAYS ?? '200',
+      })
+      await lock?.heartbeat()
+      await runRequired('scripts/batch-ml-labels.ts')
+      await lock?.heartbeat()
+      await runRequired('scripts/batch-ml-outcomes.ts')
+      await lock?.heartbeat()
+      await runRequired('scripts/batch-ml-train.ts', {
+        ML_TRAIN_START_DATE: process.env.ML_DAILY_TRAIN_START_DATE ?? '2008-05-07',
+        ML_TRAIN_SAMPLE_MODE: process.env.ML_DAILY_TRAIN_SAMPLE_MODE ?? 'yearly',
+        ML_TRAIN_LABEL_SOURCE: process.env.ML_DAILY_TRAIN_LABEL_SOURCE ?? 'extrema',
+        ML_TRAIN_LIMIT: process.env.ML_DAILY_TRAIN_LIMIT ?? process.env.ML_TRAIN_LIMIT ?? '80000',
+      })
+      await lock?.heartbeat()
+      await runRequired('scripts/batch-ml-candidates.ts')
+      await lock?.heartbeat()
+      await runRequired('scripts/batch-ml-predict.ts')
+      await lock?.heartbeat()
+      await runRequired('scripts/build-serving-ml-insights.ts')
+      await lock?.heartbeat()
+    } else {
+      console.log('ML feature vectors and candidates are already fresh after OHLCV fetch')
+    }
+
+    const afterMl = await getDataFreshness()
+    if (afterMl.needsMlCandidateUpdate || afterMl.needsMlPredictionUpdate) {
+      await runRequired('scripts/batch-ml-candidates.ts')
+      await lock?.heartbeat()
+      await runRequired('scripts/batch-ml-predict.ts')
+      await lock?.heartbeat()
+      await runRequired('scripts/build-serving-ml-insights.ts')
+      await lock?.heartbeat()
+    }
+
+    const beforeCache = await getDataFreshness()
+    if (beforeCache.needsDashboardCacheUpdate || rebuiltModelFeatures) {
       await runRequired('scripts/build-dashboard-cache.ts')
       await lock?.heartbeat()
     } else {
@@ -105,8 +189,16 @@ async function main(): Promise<void> {
     const after = await getDataFreshness()
     console.log('Post-OHLCV freshness after:', summarizeFreshness(after))
 
-    if (after.needsSnapshotUpdate || after.needsDashboardCacheUpdate) {
-      throw new Error('Post-OHLCV refresh did not complete snapshot/cache freshness')
+    if (
+      after.needsSnapshotUpdate
+      || after.needsFeatureUpdate
+      || after.needsModelFeatureUpdate
+      || after.needsMlFeatureUpdate
+      || after.needsMlCandidateUpdate
+      || after.needsMlPredictionUpdate
+      || after.needsDashboardCacheUpdate
+    ) {
+      throw new Error('Post-OHLCV refresh did not complete snapshot/feature/cache freshness')
     }
 
     await db

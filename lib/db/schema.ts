@@ -590,6 +590,7 @@ export const technicalSignals = sqliteTable(
     dateIdx: index('tech_signal_date_idx').on(t.date, t.signalCode),
     codeIdx: index('tech_signal_code_idx').on(t.signalCode, t.date),
     dateTickerIdx: index('tech_signal_date_ticker_idx').on(t.date, t.ticker),
+    tickerCodeDateIdx: index('tech_signal_ticker_code_date_idx').on(t.ticker, t.signalCode, t.date),
   }),
 )
 
@@ -654,6 +655,7 @@ export const modelFeatures = sqliteTable(
     pk:         primaryKey({ columns: [t.ticker, t.date] }),
     dateIdx:    index('model_features_date_idx').on(t.date),
     patternIdx: index('model_features_pattern_idx').on(t.patternCode, t.date),
+    tickerDateIdx: index('model_features_ticker_date_idx').on(t.ticker, t.date),
   }),
 )
 
@@ -701,6 +703,24 @@ export const signalStats = sqliteTable(
   (t) => ({
     pk:      primaryKey({ columns: [t.signalCode, t.patternCode, t.horizonDays] }),
     codeIdx: index('signal_stats_code_idx').on(t.signalCode, t.horizonDays, t.count),
+  }),
+)
+
+export const signalReturnStats = sqliteTable(
+  'signal_return_stats',
+  {
+    signalCode:      text('signal_code').notNull(),
+    horizonDays:     integer('horizon_days').notNull(),
+    count:           integer('count').notNull(),
+    upRate:          real('up_rate'),
+    downRate:        real('down_rate'),
+    medianReturnPct: real('median_return_pct'),
+    avgReturnPct:    real('avg_return_pct'),
+    computedAt:      integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk:      primaryKey({ columns: [t.signalCode, t.horizonDays] }),
+    codeIdx: index('signal_return_stats_code_idx').on(t.signalCode, t.horizonDays, t.count),
   }),
 )
 
@@ -928,6 +948,101 @@ export const mlModels = sqliteTable('ml_models', {
   trainedAt:        integer('trained_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
 })
 
+export const mlPredictionRuns = sqliteTable(
+  'ml_prediction_runs',
+  {
+    runId:           text('run_id').primaryKey(),
+    asOfDate:        text('as_of_date').notNull(),
+    horizonDays:     integer('horizon_days').notNull(),
+    direction:       text('direction').notNull(),
+    modelName:       text('model_name'),
+    modelType:       text('model_type').notNull().default('logistic_regression_v1'),
+    predictionCount: integer('prediction_count').notNull().default(0),
+    source:          text('source').notNull().default('batch'),
+    status:          text('status').notNull().default('success'),
+    createdAt:       integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    dateIdx: index('ml_prediction_runs_date_idx').on(t.asOfDate, t.horizonDays, t.direction),
+  }),
+)
+
+export const mlPredictions = sqliteTable(
+  'ml_predictions',
+  {
+    asOfDate:        text('as_of_date').notNull(),
+    horizonDays:     integer('horizon_days').notNull(),
+    direction:       text('direction').notNull(),
+    ticker:          text('ticker').notNull(),
+    runId:           text('run_id').notNull(),
+    rank:            integer('rank').notNull(),
+    score:           real('score').notNull(),
+    modelName:       text('model_name'),
+    featureJson:     text('feature_json').notNull(),
+    reasonJson:      text('reason_json').notNull(),
+    explanationJson: text('explanation_json').notNull(),
+    createdAt:       integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk:        primaryKey({ columns: [t.asOfDate, t.horizonDays, t.direction, t.ticker] }),
+    rankIdx:   index('ml_predictions_rank_idx').on(t.asOfDate, t.horizonDays, t.direction, t.rank),
+    tickerIdx: index('ml_predictions_ticker_idx').on(t.ticker, t.asOfDate),
+  }),
+)
+
+export const mlPredictionOutcomes = sqliteTable(
+  'ml_prediction_outcomes',
+  {
+    asOfDate:      text('as_of_date').notNull(),
+    horizonDays:   integer('horizon_days').notNull(),
+    direction:     text('direction').notNull(),
+    ticker:        text('ticker').notNull(),
+    score:         real('score').notNull(),
+    rank:          integer('rank').notNull(),
+    returnPct:     real('return_pct'),
+    maxReturnPct:  real('max_return_pct'),
+    minReturnPct:  real('min_return_pct'),
+    hitLabel:      integer('hit_label').notNull().default(0),
+    missLabel:     integer('miss_label').notNull().default(0),
+    outcomeJson:   text('outcome_json').notNull(),
+    evaluatedAt:   integer('evaluated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk:        primaryKey({ columns: [t.asOfDate, t.horizonDays, t.direction, t.ticker] }),
+    dateIdx:   index('ml_prediction_outcomes_date_idx').on(t.asOfDate, t.horizonDays, t.direction),
+    tickerIdx: index('ml_prediction_outcomes_ticker_idx').on(t.ticker, t.asOfDate),
+  }),
+)
+
+export const mlModelEvaluations = sqliteTable(
+  'ml_model_evaluations',
+  {
+    evaluationId:        text('evaluation_id').primaryKey(),
+    modelName:           text('model_name'),
+    modelType:           text('model_type').notNull(),
+    direction:           text('direction').notNull(),
+    horizonDays:         integer('horizon_days').notNull(),
+    evaluationDate:      text('evaluation_date').notNull(),
+    trainStartDate:      text('train_start_date'),
+    trainEndDate:        text('train_end_date'),
+    validationStartDate: text('validation_start_date'),
+    validationEndDate:   text('validation_end_date'),
+    sampleCount:         integer('sample_count').notNull().default(0),
+    precisionAt20:       real('precision_at_20'),
+    precisionAt50:       real('precision_at_50'),
+    precisionAt80:       real('precision_at_80'),
+    hitRate:             real('hit_rate'),
+    medianReturnPct:     real('median_return_pct'),
+    avgReturnPct:        real('avg_return_pct'),
+    maxDrawdownPct:      real('max_drawdown_pct'),
+    metricsJson:         text('metrics_json').notNull(),
+    createdAt:           integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    latestIdx: index('ml_model_evaluations_latest_idx').on(t.evaluationDate, t.direction, t.horizonDays),
+  }),
+)
+
 export const rlTrainingStates = sqliteTable(
   'rl_training_states',
   {
@@ -965,6 +1080,68 @@ export const servingMlCandidates = sqliteTable(
   (t) => ({
     pk:      primaryKey({ columns: [t.asOfDate, t.direction, t.ticker] }),
     rankIdx: index('serving_ml_candidates_rank_idx').on(t.asOfDate, t.direction, t.rank),
+  }),
+)
+
+export const servingCurrentSimilars = sqliteTable(
+  'serving_current_similars',
+  {
+    asOfDate:         text('as_of_date').notNull(),
+    baseTicker:       text('base_ticker').notNull(),
+    rank:             integer('rank').notNull(),
+    similarTicker:    text('similar_ticker').notNull(),
+    similarityScore:  real('similarity_score').notNull(),
+    baseDirection:    text('base_direction'),
+    similarDirection: text('similar_direction'),
+    payloadJson:      text('payload_json').notNull(),
+    reasonJson:       text('reason_json').notNull(),
+    computedAt:       integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk:         primaryKey({ columns: [t.asOfDate, t.baseTicker, t.rank] }),
+    baseIdx:    index('serving_current_similars_base_idx').on(t.asOfDate, t.baseTicker),
+    scoreIdx:   index('serving_current_similars_score_idx').on(t.asOfDate, t.similarityScore),
+    similarIdx: index('serving_current_similars_similar_idx').on(t.asOfDate, t.similarTicker),
+  }),
+)
+
+export const servingMlSectorRankings = sqliteTable(
+  'serving_ml_sector_rankings',
+  {
+    asOfDate:                  text('as_of_date').notNull(),
+    sectorType:                text('sector_type').notNull(),
+    sectorName:                text('sector_name').notNull(),
+    direction:                 text('direction').notNull(),
+    candidateCount:            integer('candidate_count').notNull().default(0),
+    avgScore:                  real('avg_score'),
+    representativeTickersJson: text('representative_tickers_json').notNull(),
+    computedAt:                integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk:      primaryKey({ columns: [t.asOfDate, t.sectorType, t.sectorName, t.direction] }),
+    rankIdx: index('serving_ml_sector_rankings_rank_idx').on(t.asOfDate, t.sectorType, t.direction, t.candidateCount),
+  }),
+)
+
+export const servingMlPerformance = sqliteTable(
+  'serving_ml_performance',
+  {
+    asOfDate:        text('as_of_date').notNull(),
+    direction:       text('direction').notNull(),
+    horizonDays:     integer('horizon_days').notNull(),
+    sectorType:      text('sector_type').notNull().default('all'),
+    sectorName:      text('sector_name').notNull().default('ALL'),
+    sampleCount:     integer('sample_count').notNull().default(0),
+    upRate:          real('up_rate'),
+    downRate:        real('down_rate'),
+    medianReturnPct: real('median_return_pct'),
+    avgReturnPct:    real('avg_return_pct'),
+    payloadJson:     text('payload_json').notNull(),
+    computedAt:      integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk:      primaryKey({ columns: [t.asOfDate, t.direction, t.horizonDays, t.sectorType, t.sectorName] }),
+    perfIdx: index('serving_ml_performance_rank_idx').on(t.asOfDate, t.direction, t.horizonDays, t.sampleCount),
   }),
 )
 

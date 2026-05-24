@@ -400,6 +400,7 @@ const STATEMENTS = [
   `CREATE INDEX IF NOT EXISTS tech_signal_date_idx ON technical_signals(date, signal_code)`,
   `CREATE INDEX IF NOT EXISTS tech_signal_code_idx ON technical_signals(signal_code, date)`,
   `CREATE INDEX IF NOT EXISTS tech_signal_date_ticker_idx ON technical_signals(date, ticker)`,
+  `CREATE INDEX IF NOT EXISTS tech_signal_ticker_code_date_idx ON technical_signals(ticker, signal_code, date)`,
   `CREATE TABLE IF NOT EXISTS forward_extrema (
     ticker TEXT NOT NULL,
     date TEXT NOT NULL,
@@ -452,6 +453,7 @@ const STATEMENTS = [
   )`,
   `CREATE INDEX IF NOT EXISTS model_features_date_idx ON model_features(date)`,
   `CREATE INDEX IF NOT EXISTS model_features_pattern_idx ON model_features(pattern_code, date)`,
+  `CREATE INDEX IF NOT EXISTS model_features_ticker_date_idx ON model_features(ticker, date)`,
   `CREATE TABLE IF NOT EXISTS model_labels (
     ticker TEXT NOT NULL,
     date TEXT NOT NULL,
@@ -487,6 +489,18 @@ const STATEMENTS = [
     PRIMARY KEY (signal_code, pattern_code, horizon_days)
   )`,
   `CREATE INDEX IF NOT EXISTS signal_stats_code_idx ON signal_stats(signal_code, horizon_days, count)`,
+  `CREATE TABLE IF NOT EXISTS signal_return_stats (
+    signal_code TEXT NOT NULL,
+    horizon_days INTEGER NOT NULL,
+    count INTEGER NOT NULL,
+    up_rate REAL,
+    down_rate REAL,
+    median_return_pct REAL,
+    avg_return_pct REAL,
+    computed_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (signal_code, horizon_days)
+  )`,
+  `CREATE INDEX IF NOT EXISTS signal_return_stats_code_idx ON signal_return_stats(signal_code, horizon_days, count)`,
   `CREATE TABLE IF NOT EXISTS serving_latest_signals (
     date TEXT NOT NULL,
     ticker TEXT NOT NULL,
@@ -648,6 +662,78 @@ const STATEMENTS = [
     metrics_json TEXT NOT NULL,
     trained_at INTEGER NOT NULL DEFAULT (unixepoch())
   )`,
+  `CREATE INDEX IF NOT EXISTS ml_models_latest_idx ON ml_models(horizon_days, direction, trained_at)`,
+  `CREATE TABLE IF NOT EXISTS ml_prediction_runs (
+    run_id TEXT PRIMARY KEY,
+    as_of_date TEXT NOT NULL,
+    horizon_days INTEGER NOT NULL,
+    direction TEXT NOT NULL,
+    model_name TEXT,
+    model_type TEXT NOT NULL,
+    prediction_count INTEGER NOT NULL DEFAULT 0,
+    source TEXT NOT NULL DEFAULT 'batch',
+    status TEXT NOT NULL DEFAULT 'success',
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  )`,
+  `CREATE INDEX IF NOT EXISTS ml_prediction_runs_date_idx ON ml_prediction_runs(as_of_date, horizon_days, direction)`,
+  `CREATE TABLE IF NOT EXISTS ml_predictions (
+    as_of_date TEXT NOT NULL,
+    horizon_days INTEGER NOT NULL,
+    direction TEXT NOT NULL,
+    ticker TEXT NOT NULL,
+    run_id TEXT NOT NULL,
+    rank INTEGER NOT NULL,
+    score REAL NOT NULL,
+    model_name TEXT,
+    feature_json TEXT NOT NULL,
+    reason_json TEXT NOT NULL,
+    explanation_json TEXT NOT NULL,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (as_of_date, horizon_days, direction, ticker)
+  )`,
+  `CREATE INDEX IF NOT EXISTS ml_predictions_rank_idx ON ml_predictions(as_of_date, horizon_days, direction, rank)`,
+  `CREATE INDEX IF NOT EXISTS ml_predictions_ticker_idx ON ml_predictions(ticker, as_of_date)`,
+  `CREATE TABLE IF NOT EXISTS ml_prediction_outcomes (
+    as_of_date TEXT NOT NULL,
+    horizon_days INTEGER NOT NULL,
+    direction TEXT NOT NULL,
+    ticker TEXT NOT NULL,
+    score REAL NOT NULL,
+    rank INTEGER NOT NULL,
+    return_pct REAL,
+    max_return_pct REAL,
+    min_return_pct REAL,
+    hit_label INTEGER NOT NULL DEFAULT 0,
+    miss_label INTEGER NOT NULL DEFAULT 0,
+    outcome_json TEXT NOT NULL,
+    evaluated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (as_of_date, horizon_days, direction, ticker)
+  )`,
+  `CREATE INDEX IF NOT EXISTS ml_prediction_outcomes_date_idx ON ml_prediction_outcomes(as_of_date, horizon_days, direction)`,
+  `CREATE INDEX IF NOT EXISTS ml_prediction_outcomes_ticker_idx ON ml_prediction_outcomes(ticker, as_of_date)`,
+  `CREATE TABLE IF NOT EXISTS ml_model_evaluations (
+    evaluation_id TEXT PRIMARY KEY,
+    model_name TEXT,
+    model_type TEXT NOT NULL,
+    direction TEXT NOT NULL,
+    horizon_days INTEGER NOT NULL,
+    evaluation_date TEXT NOT NULL,
+    train_start_date TEXT,
+    train_end_date TEXT,
+    validation_start_date TEXT,
+    validation_end_date TEXT,
+    sample_count INTEGER NOT NULL DEFAULT 0,
+    precision_at_20 REAL,
+    precision_at_50 REAL,
+    precision_at_80 REAL,
+    hit_rate REAL,
+    median_return_pct REAL,
+    avg_return_pct REAL,
+    max_drawdown_pct REAL,
+    metrics_json TEXT NOT NULL,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  )`,
+  `CREATE INDEX IF NOT EXISTS ml_model_evaluations_latest_idx ON ml_model_evaluations(evaluation_date, direction, horizon_days)`,
   `CREATE TABLE IF NOT EXISTS rl_training_states (
     ticker TEXT NOT NULL,
     date TEXT NOT NULL,
@@ -676,6 +762,50 @@ const STATEMENTS = [
     PRIMARY KEY (as_of_date, direction, ticker)
   )`,
   `CREATE INDEX IF NOT EXISTS serving_ml_candidates_rank_idx ON serving_ml_candidates(as_of_date, direction, rank)`,
+  `CREATE TABLE IF NOT EXISTS serving_current_similars (
+    as_of_date TEXT NOT NULL,
+    base_ticker TEXT NOT NULL,
+    rank INTEGER NOT NULL,
+    similar_ticker TEXT NOT NULL,
+    similarity_score REAL NOT NULL,
+    base_direction TEXT,
+    similar_direction TEXT,
+    payload_json TEXT NOT NULL,
+    reason_json TEXT NOT NULL,
+    computed_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (as_of_date, base_ticker, rank)
+  )`,
+  `CREATE INDEX IF NOT EXISTS serving_current_similars_base_idx ON serving_current_similars(as_of_date, base_ticker)`,
+  `CREATE INDEX IF NOT EXISTS serving_current_similars_score_idx ON serving_current_similars(as_of_date, similarity_score)`,
+  `CREATE INDEX IF NOT EXISTS serving_current_similars_similar_idx ON serving_current_similars(as_of_date, similar_ticker)`,
+  `CREATE TABLE IF NOT EXISTS serving_ml_sector_rankings (
+    as_of_date TEXT NOT NULL,
+    sector_type TEXT NOT NULL,
+    sector_name TEXT NOT NULL,
+    direction TEXT NOT NULL,
+    candidate_count INTEGER NOT NULL DEFAULT 0,
+    avg_score REAL,
+    representative_tickers_json TEXT NOT NULL,
+    computed_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (as_of_date, sector_type, sector_name, direction)
+  )`,
+  `CREATE INDEX IF NOT EXISTS serving_ml_sector_rankings_rank_idx ON serving_ml_sector_rankings(as_of_date, sector_type, direction, candidate_count)`,
+  `CREATE TABLE IF NOT EXISTS serving_ml_performance (
+    as_of_date TEXT NOT NULL,
+    direction TEXT NOT NULL,
+    horizon_days INTEGER NOT NULL,
+    sector_type TEXT NOT NULL DEFAULT 'all',
+    sector_name TEXT NOT NULL DEFAULT 'ALL',
+    sample_count INTEGER NOT NULL DEFAULT 0,
+    up_rate REAL,
+    down_rate REAL,
+    median_return_pct REAL,
+    avg_return_pct REAL,
+    payload_json TEXT NOT NULL,
+    computed_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (as_of_date, direction, horizon_days, sector_type, sector_name)
+  )`,
+  `CREATE INDEX IF NOT EXISTS serving_ml_performance_rank_idx ON serving_ml_performance(as_of_date, direction, horizon_days, sample_count)`,
   `CREATE TABLE IF NOT EXISTS turso_sync_runs (
     run_id TEXT PRIMARY KEY,
     mode TEXT NOT NULL,
@@ -731,15 +861,37 @@ const ADD_COLUMN_IF_MISSING: string[] = [
   `ALTER TABLE earnings_calendar ADD COLUMN source_url TEXT`,
 ]
 
+function isBusy(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return /SQLITE_BUSY|database is locked/i.test(message)
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function executeSchemaSql(client: Client, sql: string): Promise<void> {
+  const max = Number(process.env.SQLITE_BUSY_RETRIES ?? 8)
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await client.execute(sql)
+      return
+    } catch (error) {
+      if (!isBusy(error) || attempt >= max) throw error
+      await sleep(Math.min(2500, 120 * 2 ** attempt))
+    }
+  }
+}
+
 export async function ensureSchema(client: Client): Promise<void> {
   for (const sql of STATEMENTS) {
-    await client.execute(sql)
+    await executeSchemaSql(client, sql)
   }
   for (const sql of DEPRECATED_DROPS) {
-    try { await client.execute(sql) } catch { /* 無視 */ }
+    try { await executeSchemaSql(client, sql) } catch { /* 無視 */ }
   }
   for (const sql of ADD_COLUMN_IF_MISSING) {
-    try { await client.execute(sql) } catch (e) {
+    try { await executeSchemaSql(client, sql) } catch (e) {
       const msg = (e as Error).message ?? ''
       if (!/duplicate column name/i.test(msg)) {
         // 致命的でないので警告のみ
