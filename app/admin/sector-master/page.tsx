@@ -58,8 +58,7 @@ interface ImportSummary {
 }
 
 export default function SectorMasterPage() {
-  const [dragOver, setDragOver] = useState(false)
-  const [working, setWorking] = useState<'idle' | 'upload' | 'jpx'>('idle')
+  const [working, setWorking] = useState<'idle' | 'jpx'>('idle')
   const [summary, setSummary] = useState<ImportSummary | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [stats, setStats] = useState<Stats | null>(null)
@@ -130,21 +129,6 @@ export default function SectorMasterPage() {
     loadDiag()
   }
 
-  const upload = async (file: File) => {
-    setWorking('upload')
-    setSummary(null)
-    setError(null)
-    try {
-      const fd = new FormData()
-      fd.append('file', file)
-      await finishImport(await fetch('/api/admin/sector-master', { method: 'POST', cache: 'no-store', body: fd }))
-    } catch (e) {
-      setError((e as Error).message)
-    } finally {
-      setWorking('idle')
-    }
-  }
-
   const fetchJpx = async () => {
     setWorking('jpx')
     setSummary(null)
@@ -161,8 +145,8 @@ export default function SectorMasterPage() {
   return (
     <div className="flex flex-col gap-5">
       <PageTitle
-        title="セクターマスター"
-        subtitle="JPX公式データを基準に、市場区分・33業種・17業種・銘柄名を管理します。"
+        title="業種マスター管理"
+        subtitle="JPX公式データを基準に、市場区分・33業種・17業種・銘柄名を診断・補完します。"
         badge="Admin"
       />
 
@@ -183,42 +167,6 @@ export default function SectorMasterPage() {
         >
           {working === 'jpx' ? '取得中…' : 'JPX から取得'}
         </button>
-      </div>
-
-      {/* ドロップ */}
-      <div
-        onDragOver={(e) => { e.preventDefault(); setDragOver(true) }}
-        onDragLeave={() => setDragOver(false)}
-        onDrop={(e) => {
-          e.preventDefault()
-          setDragOver(false)
-          const file = e.dataTransfer.files[0]
-          if (file) upload(file)
-        }}
-        className="rounded-[var(--radius-card)] border border-dashed p-8 text-center transition-colors"
-        style={{
-          borderColor: dragOver ? 'var(--color-brand-600)' : 'var(--color-border-default)',
-          background: dragOver ? 'rgba(41,98,255,0.06)' : 'var(--color-surface-base)',
-        }}
-      >
-        <p className="mb-2 text-[13px] font-semibold text-[var(--color-text-secondary)]">
-          {working === 'upload' ? 'アップロード中…' : '手元の .xlsx をドラッグ&ドロップで取込み'}
-        </p>
-        <p className="text-[11px] font-medium text-[var(--color-text-tertiary)]">または</p>
-        <label className="mt-3 inline-flex h-8 cursor-pointer items-center rounded-[6px] border border-[var(--color-border-default)] bg-[var(--color-surface-field)] px-3 text-[12px] font-bold text-[var(--color-text-secondary)] transition-colors hover:bg-white">
-          ファイルを選択
-          <input
-            type="file"
-            accept=".xlsx,.xls"
-            disabled={working !== 'idle'}
-            onChange={(e) => {
-              const f = e.target.files?.[0]
-              if (f) upload(f)
-              e.target.value = ''
-            }}
-            style={{ display: 'none' }}
-          />
-        </label>
       </div>
 
       {/* エラー */}

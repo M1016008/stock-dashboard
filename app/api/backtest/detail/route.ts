@@ -82,6 +82,11 @@ function compactSignals(signalCodes: string | null): string[] {
   return signalCodes.split(',').map((code) => code.trim()).filter(Boolean)
 }
 
+function normalizeSignalLabel(signalCode: string, label: string | null): string | null {
+  if (signalCode.includes('ma_cross_down')) return label?.replace('MA下割れ', 'MA下抜け') ?? 'MA下抜け'
+  return label
+}
+
 function stageCode(row: StageRow): string {
   const values = [
     row.daily_a_stage,
@@ -423,11 +428,11 @@ export async function GET(request: NextRequest) {
       )
       evidence = fallbackEvidence.map((row) => ({
         signal_code: row.signal_code,
-        label: row.label,
+        label: normalizeSignalLabel(row.signal_code, row.label),
         reason_json: JSON.stringify({
-          label: row.label,
-          reason: row.label
-            ? `${row.label}の条件を${date}時点で満たしたため抽出しました。`
+          label: normalizeSignalLabel(row.signal_code, row.label),
+          reason: normalizeSignalLabel(row.signal_code, row.label)
+            ? `${normalizeSignalLabel(row.signal_code, row.label)}の条件を${date}時点で満たしたため抽出しました。`
             : `${row.signal_code}の条件を${date}時点で満たしたため抽出しました。`,
           basis: {
             timescale: row.timescale,
@@ -516,7 +521,7 @@ export async function GET(request: NextRequest) {
       analysisComment: aiComment,
       evidence: evidence.map((row) => ({
         signalCode: row.signal_code,
-        label: row.label,
+        label: normalizeSignalLabel(row.signal_code, row.label),
         ...parseJson(row.reason_json, {}),
       })),
     })

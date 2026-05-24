@@ -9,13 +9,10 @@ import {
   Building2,
   CalendarDays,
   ChartCandlestick,
-  Database,
   FlaskConical,
   Hexagon,
-  Landmark,
   LayoutDashboard,
   Search,
-  Settings,
   Star,
   type LucideIcon,
 } from 'lucide-react'
@@ -29,11 +26,6 @@ const NAV_ITEMS = [
   { href: '/earnings', label: '決算', icon: CalendarDays },
   { href: '/screener', label: 'スクリーナー', icon: Search },
   { href: '/watchlist', label: 'ウォッチ', icon: Star },
-] as const
-
-const ADMIN_ITEMS = [
-  { href: '/admin/sector-master', label: 'セクター' },
-  { href: '/admin/db', label: 'DB' },
 ] as const
 
 interface ClockData {
@@ -209,24 +201,6 @@ export function Header() {
             })}
           </nav>
 
-          <div className="hidden shrink-0 items-center gap-1 lg:flex">
-            {ADMIN_ITEMS.map((item) => (
-              <Link
-                key={item.href}
-                href={item.href}
-                prefetch={false}
-                className={`inline-flex h-7 items-center gap-1.5 rounded-[3px] border px-2.5 text-[11px] font-bold transition-colors ${
-                  isActive(item.href)
-                    ? 'border-white bg-white text-[var(--color-brand-800)]'
-                    : 'border-white/20 text-white/82 hover:bg-white/10 hover:text-white'
-                }`}
-              >
-                {item.href.includes('db') ? <Database size={13} /> : <Settings size={13} />}
-                {item.label}
-              </Link>
-            ))}
-          </div>
-
           <nav className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto lg:hidden">
             {NAV_ITEMS.map((item) => {
               const active = isActive(item.href)
@@ -247,24 +221,6 @@ export function Header() {
               )
             })}
           </nav>
-
-          <div className="flex shrink-0 items-center gap-1 lg:hidden">
-            {ADMIN_ITEMS.map((item) => (
-              <Link
-                key={item.href}
-                href={item.href}
-                prefetch={false}
-                className={`inline-flex h-7 items-center gap-1.5 rounded-[3px] border px-2.5 text-[11px] font-bold transition-colors ${
-                  isActive(item.href)
-                    ? 'border-white bg-white text-[var(--color-brand-800)]'
-                    : 'border-white/20 text-white/82 hover:bg-white/10 hover:text-white'
-                }`}
-              >
-                {item.href.includes('db') ? <Database size={13} /> : <Settings size={13} />}
-                {item.label}
-              </Link>
-            ))}
-          </div>
         </div>
       </div>
     </header>

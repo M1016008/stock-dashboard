@@ -4,7 +4,13 @@ import { EarningsCalendarPanel } from '@/components/earnings/EarningsCalendarPan
 import { EarningsDateCalendar } from '@/components/earnings/EarningsDateCalendar'
 import { PageTitle } from '@/components/layout/PageTitle'
 import { getEarningsDateCounts } from '@/lib/queries/earnings-calendar'
-import { getLatestDate, type EarningsCalendarFilters, type EarningsVolumeCondition } from '@/lib/queries/dashboard'
+import {
+  getLatestDate,
+  type EarningsCalendarFilters,
+  type EarningsSortDir,
+  type EarningsSortKey,
+  type EarningsVolumeCondition,
+} from '@/lib/queries/dashboard'
 
 export const metadata: Metadata = {
   title: '決算 — StockBoard',
@@ -57,6 +63,32 @@ function parseVolumeCondition(value: string | undefined): EarningsVolumeConditio
   return null
 }
 
+function parseSortKey(value: string | undefined): EarningsSortKey | null {
+  if (
+    value === 'daysLeft' ||
+    value === 'announceDate' ||
+    value === 'ticker' ||
+    value === 'name' ||
+    value === 'market' ||
+    value === 'sector17' ||
+    value === 'sector33' ||
+    value === 'price' ||
+    value === 'changePct' ||
+    value === 'avgVolume10' ||
+    value === 'avgVolume30' ||
+    value === 'avgVolume60' ||
+    value === 'signalCount' ||
+    value === 'stageCode' ||
+    value === 'postEarningsChangePct'
+  ) return value
+  return null
+}
+
+function parseSortDir(value: string | undefined): EarningsSortDir | null {
+  if (value === 'asc' || value === 'desc') return value
+  return null
+}
+
 export default async function EarningsPage({
   searchParams,
 }: {
@@ -77,6 +109,8 @@ export default async function EarningsPage({
     priceMin: parseNumberParam(firstParam(sp.priceMin)),
     priceMax: parseNumberParam(firstParam(sp.priceMax)),
     signal: firstParam(sp.signal) ?? null,
+    sortBy: parseSortKey(firstParam(sp.sort)),
+    sortDir: parseSortDir(firstParam(sp.dir)),
     limit: parseLimit(firstParam(sp.limit)),
   }
   const [latest, counts] = await Promise.all([

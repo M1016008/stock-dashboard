@@ -1,10 +1,10 @@
 // app/api/admin/sector-master/route.ts
-// Excel (.xlsx / .xls) を受け取り、コード/銘柄名/市場区分/33業種/業種小分類 を sector_master に保存する。
-// アップロード経由のほか、JPX 公式の data_j.xls を直接フェッチして取り込む POST?source=jpx もサポート。
+// JPX公式 data_j.xls を取得し、コード/銘柄名/市場区分/33業種/17業種を sector_master に保存する。
+// 手元Excelアップロードはデータ正規化方針と衝突するため受け付けない。
 
 import { NextResponse } from 'next/server'
 import * as XLSX from 'xlsx'
-import { execAll, execBatch, execRun, ensureReady } from '@/lib/db/client'
+import { execAll, execBatch, ensureReady } from '@/lib/db/client'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 180
@@ -13,21 +13,20 @@ export const maxDuration = 180
 // https://www.jpx.co.jp/markets/statistics-equities/misc/01.html
 const JPX_DATA_URL = 'https://www.jpx.co.jp/markets/statistics-equities/misc/tvdivq0000001vg2-att/data_j.xls'
 
-// ヘッダ行のエイリアス（途中で表記揺れがあっても拾えるように）。
-// 33業種区分（JPX 由来）と 業種小分類（ユーザ CSV 由来）は別フィールドとして
-// 独立に保持する。両方が存在しない Excel ではそのカラムは null のまま。
+// ヘッダ行のエイリアス（JPX側の表記揺れを拾えるようにする）。
+// 33業種区分と17業種区分は独立に保持する。
 const COL_ALIAS: Record<string, string[]> = {
   code:          ['コード', '銘柄コード', 'ticker', 'symbol'],
   name:          ['銘柄名', '名称', 'name'],
-  // JPX 公式の「市場・商品区分」やユーザ提供 Excel の「市場区分」「区分」など
+  // JPX 公式の「市場・商品区分」
   marketSegment: ['市場・商品区分', '市場区分', '区分', '上場区分'],
   // 33業種区分（JPX のみ）
   sector33:      ['33業種区分'],
-  // 17業種 / 大分類（ユーザ CSV / JPX 17業種区分どちらでも）
+  // 17業種 / 大分類
   sectorLarge:   ['17業種区分', '大分類', '業種大分類', 'sector_large'],
-  // ユーザ CSV の業種小分類（業種細分類 / 中分類 / 小分類 等）
+  // 補助分類
   sectorSmall:   ['業種小分類', '業種細分類', '中分類', '小分類', 'sector_small'],
-  // 貸借/信用 区分（JPX 制度信用・貸借銘柄一覧 や ユーザ CSV）
+  // 貸借/信用 区分
   marginType:    ['貸借信用区分', '貸借区分', '信用区分', '信用銘柄区分', '貸借融資区分', '貸借'],
 }
 
@@ -164,7 +163,7 @@ async function importWorkbook(buf: ArrayBuffer, fileName: string): Promise<Impor
       continue
     }
 
-    // 各カラムは独立して保存。新規アップロードで欠けている値は既存値を残す（COALESCE）。
+    // 各カラムは独立して保存。JPX側で欠けている値は既存値を残す（COALESCE）。
     inserts.push({
       sql: `INSERT INTO sector_master (ticker, name, sector_large, sector_small, sector33, market_segment, margin_type, updated_at, source_file)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -212,15 +211,13 @@ export async function POST(request: Request) {
       return NextResponse.json({ summary, source: 'jpx', url: JPX_DATA_URL })
     }
 
-    // 通常: ユーザがアップロードした Excel
-    const formData = await request.formData()
-    const file = formData.get('file')
-    if (!(file instanceof File)) {
-      return NextResponse.json({ error: 'ファイルが指定されていません' }, { status: 400 })
-    }
-    const buf = await file.arrayBuffer()
-    const summary = await importWorkbook(buf, file.name)
-    return NextResponse.json({ summary })
+    return NextResponse.json(
+      {
+        error: 'Manual upload disabled',
+        message: '業種マスターはJPX公式取得を正とするため、手元Excelアップロードは受け付けていません。POST ?source=jpx を使用してください。',
+      },
+      { status: 410 },
+    )
   } catch (error) {
     console.error('Sector master import error:', error)
     return NextResponse.json(
@@ -251,6 +248,3 @@ export async function GET() {
     return NextResponse.json({ error: (error as Error).message }, { status: 500 })
   }
 }
-
-// 任意の execRun 等の未使用 import を抑制
-void execRun

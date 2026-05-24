@@ -136,9 +136,9 @@ export default function AdminDbPage() {
     <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
       <div style={headerRow}>
         <div>
-          <h1 style={{ fontFamily: 'var(--font-display)', fontSize: '16px', fontWeight: 700 }}>🗄 DB管理</h1>
+          <h1 style={{ fontFamily: 'var(--font-display)', fontSize: '16px', fontWeight: 700 }}>運用ステータス</h1>
           <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
-            データベース状態 / Phase 2 バッチ実行 / 銘柄ユニバース管理
+            データベース状態 / バッチ履歴 / 銘柄ユニバース管理
           </p>
         </div>
         <button onClick={loadAll} style={refreshBtn} disabled={loading}>
@@ -159,10 +159,10 @@ export default function AdminDbPage() {
         <SummaryCard label="ユニバース" value={universe ? String(universe.active) : '---'} unit={`/ ${universe?.total ?? 0} active`} />
       </div>
 
-      {/* ★ Phase 2: バッチ実行 ★ */}
+      {/* データ更新バッチ */}
       <section className="card" style={{ overflow: 'hidden' }}>
         <div style={{ ...sectionHead }}>
-          <span style={{ fontSize: '12px', fontWeight: 600 }}>Phase 2: バッチ実行</span>
+          <span style={{ fontSize: '12px', fontWeight: 600 }}>データ更新バッチ</span>
           <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
             実行中はポーリング (5秒)
           </span>
@@ -226,10 +226,10 @@ export default function AdminDbPage() {
         </div>
       </section>
 
-      {/* ★ Phase 2: 銘柄ユニバース管理 ★ */}
+      {/* 銘柄ユニバース管理 */}
       <section className="card" style={{ overflow: 'hidden' }}>
         <div style={sectionHead}>
-          <span style={{ fontSize: '12px', fontWeight: 600 }}>Phase 2: 銘柄ユニバース ({universe?.total.toLocaleString() ?? '-'} 件 / active {universe?.active.toLocaleString() ?? '-'})</span>
+          <span style={{ fontSize: '12px', fontWeight: 600 }}>銘柄ユニバース ({universe?.total.toLocaleString() ?? '-'} 件 / active {universe?.active.toLocaleString() ?? '-'})</span>
         </div>
         <div style={{ padding: '12px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
           {/* 追加 */}

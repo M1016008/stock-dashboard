@@ -46,6 +46,7 @@ const HORIZONS = parseHorizons()
 const RECENT_DAYS = envInt('BACKTEST_RECENT_DAYS', 260, 0)
 const DATE_CHUNK = envInt('SIGNAL_RETURN_DATE_CHUNK', 10, 1)
 const MIN_N = envInt('SIGNAL_RETURN_MIN_N', 20, 1)
+const prevDateByDate = new Map<string, string | null>()
 
 function keyFor(signalCode: string, horizonDays: number): string {
   return `${signalCode}\t${horizonDays}`
@@ -78,22 +79,65 @@ async function loadTargetDates(): Promise<string[]> {
   return rows.map((row) => row.date)
 }
 
+async function loadPrevDates(targetDates: string[]): Promise<void> {
+  prevDateByDate.clear()
+  if (targetDates.length === 0) return
+  const maxDate = targetDates.reduce((max, date) => date > max ? date : max, targetDates[0])
+  const minDate = targetDates.reduce((min, date) => date < min ? date : min, targetDates[0])
+  const rows = await execAll<TargetDateRow>(
+    `
+    SELECT DISTINCT date
+    FROM daily_snapshots
+    WHERE date <= ?
+      AND date >= (
+        SELECT COALESCE(MAX(date), ?)
+        FROM daily_snapshots
+        WHERE date < ?
+      )
+    ORDER BY date ASC
+    `,
+    [maxDate, minDate, minDate],
+  )
+  let prev: string | null = null
+  const targetSet = new Set(targetDates)
+  for (const row of rows) {
+    if (targetSet.has(row.date)) prevDateByDate.set(row.date, prev)
+    prev = row.date
+  }
+}
+
 async function loadChunkReturns(dates: string[]): Promise<ReturnRow[]> {
   if (dates.length === 0) return []
-  const datePlaceholders = dates.map(() => '?').join(', ')
   const horizonPlaceholders = HORIZONS.map(() => '?').join(', ')
+  const selectedValues = dates.map(() => '(?, ?)').join(', ')
+  const selectedArgs = dates.flatMap((date) => [date, prevDateByDate.get(date) ?? null])
   return execAll<ReturnRow>(
     `
-    SELECT ts.signal_code, fr.horizon_days, fr.return_pct
-    FROM technical_signals ts
+    WITH selected_dates(date, prev_date) AS (
+      VALUES ${selectedValues}
+    ),
+    signal_starts AS (
+      SELECT ts.ticker, ts.date, ts.signal_code
+      FROM technical_signals ts
+      JOIN selected_dates sd ON sd.date = ts.date
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM technical_signals prev INDEXED BY tech_signal_ticker_code_date_idx
+        WHERE prev.ticker = ts.ticker
+          AND prev.signal_code = ts.signal_code
+          AND prev.date = sd.prev_date
+      )
+      GROUP BY ts.ticker, ts.date, ts.signal_code
+    )
+    SELECT ss.signal_code, fr.horizon_days, fr.return_pct
+    FROM signal_starts ss
     INNER JOIN forward_returns fr INDEXED BY sqlite_autoindex_forward_returns_1
-      ON fr.ticker = ts.ticker
-     AND fr.date = ts.date
+      ON fr.ticker = ss.ticker
+     AND fr.date = ss.date
      AND fr.horizon_days IN (${horizonPlaceholders})
-    WHERE ts.date IN (${datePlaceholders})
-      AND fr.return_pct IS NOT NULL
+    WHERE fr.return_pct IS NOT NULL
     `,
-    [...HORIZONS, ...dates],
+    [...selectedArgs, ...HORIZONS],
   )
 }
 
@@ -183,6 +227,7 @@ async function main() {
     console.log('signal_return_stats skipped: no technical_signals dates')
     return
   }
+  await loadPrevDates(dates)
 
   const accumulators = new Map<string, Accumulator>()
   const totalChunks = Math.ceil(dates.length / DATE_CHUNK)

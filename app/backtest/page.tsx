@@ -409,7 +409,7 @@ function compactSignal(code: string): string {
   if (labels[code]) return labels[code]
   if (code.includes('ma_cross_up')) return 'MA上抜け'
   if (code.includes('ma_upper_touch')) return 'MA上タッチ'
-  if (code.includes('ma_cross_down')) return 'MA下割れ'
+  if (code.includes('ma_cross_down')) return 'MA下抜け'
   if (code.includes('ma_lower_touch')) return 'MA下タッチ'
   if (code.includes('ma_touch')) return 'MA接触'
   return code

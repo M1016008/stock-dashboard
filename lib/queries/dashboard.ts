@@ -494,6 +494,23 @@ export interface EarningsRow extends EarningsSignalDecoration {
 type EarningsRowBase = Omit<EarningsRow, keyof EarningsSignalDecoration>
 
 export type EarningsVolumeCondition = '' | 'volume_spike' | 'above_avg' | 'volume_10k' | 'volume_100k'
+export type EarningsSortKey =
+  | 'daysLeft'
+  | 'announceDate'
+  | 'ticker'
+  | 'name'
+  | 'market'
+  | 'sector17'
+  | 'sector33'
+  | 'price'
+  | 'changePct'
+  | 'avgVolume10'
+  | 'avgVolume30'
+  | 'avgVolume60'
+  | 'signalCount'
+  | 'stageCode'
+  | 'postEarningsChangePct'
+export type EarningsSortDir = 'asc' | 'desc'
 
 export interface EarningsCalendarFilters {
   marketSegment?: string | null
@@ -505,6 +522,8 @@ export interface EarningsCalendarFilters {
   priceMin?: number | null
   priceMax?: number | null
   signal?: string | null
+  sortBy?: EarningsSortKey | null
+  sortDir?: EarningsSortDir | null
   limit?: number | null
 }
 
@@ -623,6 +642,117 @@ function filterEarningsRows(rows: EarningsRow[], filters: EarningsCalendarFilter
   })
 }
 
+function compareNullableNumber(a: number | null | undefined, b: number | null | undefined) {
+  const av = a == null || !Number.isFinite(a) ? null : a
+  const bv = b == null || !Number.isFinite(b) ? null : b
+  if (av == null && bv == null) return 0
+  if (av == null) return 1
+  if (bv == null) return -1
+  return av - bv
+}
+
+function compareNullableText(a: string | null | undefined, b: string | null | undefined) {
+  const av = cleanFilterValue(a)
+  const bv = cleanFilterValue(b)
+  if (!av && !bv) return 0
+  if (!av) return 1
+  if (!bv) return -1
+  return av.localeCompare(bv, 'ja')
+}
+
+function earningsSortDirection(filters: EarningsCalendarFilters): EarningsSortDir {
+  return filters.sortDir === 'desc' ? 'desc' : 'asc'
+}
+
+function compareEarningsRows(a: EarningsRow, b: EarningsRow, sortBy: EarningsSortKey): number {
+  switch (sortBy) {
+    case 'announceDate':
+      return compareNullableText(a.announce_date, b.announce_date)
+    case 'ticker':
+      return compareNullableText(a.ticker, b.ticker)
+    case 'name':
+      return compareNullableText(a.name, b.name)
+    case 'market':
+      return compareNullableText(a.marketSegment, b.marketSegment)
+    case 'sector17':
+      return compareNullableText(a.sector17Name, b.sector17Name)
+    case 'sector33':
+      return compareNullableText(a.sector33Name, b.sector33Name)
+    case 'price':
+      return compareNullableNumber(a.price, b.price)
+    case 'changePct':
+      return compareNullableNumber(a.changePct, b.changePct)
+    case 'avgVolume10':
+      return compareNullableNumber(a.avgVolume10, b.avgVolume10)
+    case 'avgVolume30':
+      return compareNullableNumber(a.avgVolume30, b.avgVolume30)
+    case 'avgVolume60':
+      return compareNullableNumber(a.avgVolume60, b.avgVolume60)
+    case 'signalCount':
+      return compareNullableNumber(a.signalLabels?.length ?? 0, b.signalLabels?.length ?? 0)
+    case 'stageCode':
+      return compareNullableText(stageCodeFor(a), stageCodeFor(b))
+    case 'postEarningsChangePct':
+      return compareNullableNumber(a.postEarningsChangePct, b.postEarningsChangePct)
+    case 'daysLeft':
+    default:
+      return compareNullableNumber(a.daysLeft, b.daysLeft)
+  }
+}
+
+function earningsSortValueMissing(row: EarningsRow, sortBy: EarningsSortKey): boolean {
+  switch (sortBy) {
+    case 'announceDate':
+      return !cleanFilterValue(row.announce_date)
+    case 'ticker':
+      return !cleanFilterValue(row.ticker)
+    case 'name':
+      return !cleanFilterValue(row.name)
+    case 'market':
+      return !cleanFilterValue(row.marketSegment)
+    case 'sector17':
+      return !cleanFilterValue(row.sector17Name)
+    case 'sector33':
+      return !cleanFilterValue(row.sector33Name)
+    case 'stageCode':
+      return !stageCodeFor(row)
+    case 'price':
+      return row.price == null || !Number.isFinite(row.price)
+    case 'changePct':
+      return row.changePct == null || !Number.isFinite(row.changePct)
+    case 'avgVolume10':
+      return row.avgVolume10 == null || !Number.isFinite(row.avgVolume10)
+    case 'avgVolume30':
+      return row.avgVolume30 == null || !Number.isFinite(row.avgVolume30)
+    case 'avgVolume60':
+      return row.avgVolume60 == null || !Number.isFinite(row.avgVolume60)
+    case 'postEarningsChangePct':
+      return row.postEarningsChangePct == null || !Number.isFinite(row.postEarningsChangePct)
+    case 'signalCount':
+    case 'daysLeft':
+    default:
+      return false
+  }
+}
+
+function sortEarningsRows(rows: EarningsRow[], filters: EarningsCalendarFilters): EarningsRow[] {
+  const sortBy = filters.sortBy ?? 'daysLeft'
+  const direction = earningsSortDirection(filters) === 'desc' ? -1 : 1
+  return [...rows].sort((a, b) => {
+    const aMissing = earningsSortValueMissing(a, sortBy)
+    const bMissing = earningsSortValueMissing(b, sortBy)
+    if (aMissing && !bMissing) return 1
+    if (!aMissing && bMissing) return -1
+
+    const primary = compareEarningsRows(a, b, sortBy)
+    if (primary !== 0) return primary * direction
+
+    const dateTie = compareNullableText(a.announce_date, b.announce_date)
+    if (dateTie !== 0) return dateTie
+    return compareNullableText(a.ticker, b.ticker)
+  })
+}
+
 function countedOptions(values: Array<string | null | undefined>, labelFor?: (value: string) => string): EarningsFilterOption[] {
   const counts = new Map<string, number>()
   for (const value of values) {
@@ -658,7 +788,8 @@ function applyEarningsScope(
 ): { rows: EarningsRow[]; filterOptions: EarningsFilterOptions; scope: EarningsScopeSummary } {
   const limit = clampDisplayLimit(filters.limit)
   const filtered = filterEarningsRows(rows, filters)
-  const displayed = filtered.slice(0, limit)
+  const sorted = sortEarningsRows(filtered, filters)
+  const displayed = sorted.slice(0, limit)
   return {
     rows: displayed,
     filterOptions: buildEarningsFilterOptions(rows),

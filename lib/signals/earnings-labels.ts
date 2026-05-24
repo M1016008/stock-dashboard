@@ -233,14 +233,63 @@ async function loadTechnicalTriggerDates(
   const rows = await forTickerChunks<TriggerRow>(tickers, (placeholders, args) =>
     execAll<TriggerRow>(
       `
-      SELECT ticker, signal_code, MAX(date) AS trigger_date
-      FROM technical_signals
-      WHERE date <= ?
-        AND ticker IN (${placeholders})
-        AND signal_code IN (${codePlaceholders})
-      GROUP BY ticker, signal_code
+      WITH date_idx AS (
+        SELECT date, ROW_NUMBER() OVER (ORDER BY date) - 1 AS idx
+        FROM (
+          SELECT DISTINCT date
+          FROM daily_snapshots
+          WHERE date <= ?
+          ORDER BY date
+        )
+      ),
+      signal_days AS (
+        SELECT ts.ticker, ts.signal_code, ts.date, di.idx
+        FROM technical_signals ts
+        JOIN date_idx di ON di.date = ts.date
+        WHERE ts.date <= ?
+          AND ts.ticker IN (${placeholders})
+          AND ts.signal_code IN (${codePlaceholders})
+        GROUP BY ts.ticker, ts.signal_code, ts.date, di.idx
+      ),
+      streak_marks AS (
+        SELECT ticker, signal_code, date, idx,
+               CASE
+                 WHEN idx - LAG(idx) OVER (PARTITION BY ticker, signal_code ORDER BY idx) = 1 THEN 0
+                 ELSE 1
+               END AS is_new_streak
+        FROM signal_days
+      ),
+      streaks AS (
+        SELECT ticker, signal_code, date, idx,
+               SUM(is_new_streak) OVER (
+                 PARTITION BY ticker, signal_code
+                 ORDER BY idx
+                 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+               ) AS streak_id
+        FROM streak_marks
+      ),
+      latest AS (
+        SELECT ticker, signal_code, MAX(idx) AS latest_idx
+        FROM streaks
+        GROUP BY ticker, signal_code
+      ),
+      latest_streak AS (
+        SELECT s.ticker, s.signal_code, s.streak_id
+        FROM streaks s
+        JOIN latest l
+          ON l.ticker = s.ticker
+         AND l.signal_code = s.signal_code
+         AND l.latest_idx = s.idx
+      )
+      SELECT s.ticker, s.signal_code, MIN(s.date) AS trigger_date
+      FROM streaks s
+      JOIN latest_streak ls
+        ON ls.ticker = s.ticker
+       AND ls.signal_code = s.signal_code
+       AND ls.streak_id = s.streak_id
+      GROUP BY s.ticker, s.signal_code
       `,
-      [baseDate, ...args, ...codes],
+      [baseDate, baseDate, ...args, ...codes],
     ))
   for (const row of rows) {
     if (row.trigger_date) out.set(detailKey(row.ticker, row.signal_code), row.trigger_date)
@@ -259,22 +308,56 @@ async function loadModelTriggerDates(
   const rows = await forTickerChunks<ModelTriggerRow>(tickers, (placeholders, args) =>
     execAll<ModelTriggerRow>(
       `
-      SELECT ticker, date, signal_codes
-      FROM model_features
-      WHERE date <= ?
-        AND ticker IN (${placeholders})
-        AND signal_codes IS NOT NULL
-        AND signal_codes <> ''
-      ORDER BY date DESC
+      WITH date_idx AS (
+        SELECT date, ROW_NUMBER() OVER (ORDER BY date) - 1 AS idx
+        FROM (
+          SELECT DISTINCT date
+          FROM daily_snapshots
+          WHERE date <= ?
+          ORDER BY date
+        )
+      ),
+      bounds AS (
+        SELECT MAX(idx) AS max_idx FROM date_idx
+      )
+      SELECT mf.ticker, mf.date, mf.signal_codes
+      FROM model_features mf
+      JOIN date_idx di ON di.date = mf.date
+      CROSS JOIN bounds b
+      WHERE mf.date <= ?
+        AND di.idx >= b.max_idx - 260
+        AND mf.ticker IN (${placeholders})
+      ORDER BY mf.ticker, mf.date DESC
       `,
-      [baseDate, ...args],
+      [baseDate, baseDate, ...args],
     ))
+  const rowsByTicker = new Map<string, ModelTriggerRow[]>()
   for (const row of rows) {
-    for (const code of splitSignalCodes(row.signal_codes)) {
-      if (!codeSet.has(code)) continue
-      const key = detailKey(row.ticker, code)
-      const current = out.get(key)
-      if (!current || row.date > current) out.set(key, row.date)
+    const key = normalizeSignalTicker(row.ticker)
+    const group = rowsByTicker.get(key) ?? []
+    group.push(row)
+    rowsByTicker.set(key, group)
+  }
+
+  for (const [ticker, tickerRows] of rowsByTicker) {
+    const sortedRows = tickerRows.sort((a, b) => b.date.localeCompare(a.date))
+    const latestByCode = new Map<string, string>()
+    for (const row of sortedRows) {
+      for (const code of splitSignalCodes(row.signal_codes)) {
+        if (!codeSet.has(code)) continue
+        if (!latestByCode.has(code)) latestByCode.set(code, row.date)
+      }
+    }
+
+    for (const [code, latest] of latestByCode) {
+      let triggerDate = latest
+      for (const row of sortedRows) {
+        if (row.date > latest) continue
+        const rowCodes = new Set(splitSignalCodes(row.signal_codes))
+        if (!rowCodes.has(code)) break
+        triggerDate = row.date
+      }
+      out.set(detailKey(ticker, code), triggerDate)
     }
   }
   return out

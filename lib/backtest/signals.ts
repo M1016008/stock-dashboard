@@ -66,7 +66,7 @@ export const SIGNAL_LABELS: Record<string, string> = {
   ma_touch: 'MA接触',
   ma_cross_up: 'MA上抜け',
   ma_upper_touch: 'MA上タッチ',
-  ma_cross_down: 'MA下割れ',
+  ma_cross_down: 'MA下抜け',
   ma_lower_touch: 'MA下タッチ',
   pullback_candidate: '押し目候補',
   pre_breakout: 'ブレイク直前',
@@ -175,7 +175,7 @@ export function evaluateMaSignals(input: MaSignalInput): SignalRecord[] {
         signalCode: `ma_cross_down_${codeSuffix}`,
         signalStrength: 'strong',
         direction: 'bearish',
-        label: `${timescale === 'daily' ? '日足' : '週足'}${maPeriod}MA下割れ`,
+        label: `${timescale === 'daily' ? '日足' : '週足'}${maPeriod}MA下抜け`,
         scoreComponent: -1,
         valueJson,
       })

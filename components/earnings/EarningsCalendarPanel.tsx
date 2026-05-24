@@ -6,11 +6,34 @@ import { Card, CardHeader } from '@/components/ui/Card'
 import { IndustryBadges } from '@/components/ui/IndustryBadges'
 import { MarginBadges } from '@/components/ui/MarginBadges'
 import { StageTag } from '@/components/ui/StageTag'
-import { getEarningsCalendarDashboard, type EarningsCalendarFilters } from '@/lib/queries/dashboard'
+import {
+  getEarningsCalendarDashboard,
+  type EarningsCalendarFilters,
+  type EarningsSortDir,
+  type EarningsSortKey,
+} from '@/lib/queries/dashboard'
 
 type EarningsDashboard = Awaited<ReturnType<typeof getEarningsCalendarDashboard>>
 type EarningsRows = EarningsDashboard['rows']
 type EarningsFilterOptions = EarningsDashboard['filterOptions']
+
+const SORT_OPTIONS: Array<{ value: EarningsSortKey; label: string }> = [
+  { value: 'daysLeft', label: '発表日が近い順' },
+  { value: 'announceDate', label: '発表日' },
+  { value: 'ticker', label: 'コード' },
+  { value: 'name', label: '銘柄名' },
+  { value: 'market', label: '市場区分' },
+  { value: 'sector17', label: '17業種' },
+  { value: 'sector33', label: '33業種' },
+  { value: 'stageCode', label: '6桁ステージ' },
+  { value: 'signalCount', label: 'シグナル数' },
+  { value: 'price', label: '現在株価' },
+  { value: 'changePct', label: '前日比' },
+  { value: 'avgVolume10', label: '10日平均出来高' },
+  { value: 'avgVolume30', label: '30日平均出来高' },
+  { value: 'avgVolume60', label: '60日平均出来高' },
+  { value: 'postEarningsChangePct', label: '決算後騰落' },
+]
 
 function fmtVol(v: number | null) {
   if (v == null) return '---'
@@ -218,6 +241,8 @@ function earningsHref({
     ['priceMin', filters.priceMin],
     ['priceMax', filters.priceMax],
     ['signal', filters.signal],
+    ['sort', filters.sortBy],
+    ['dir', filters.sortDir],
     ['limit', limit ?? filters.limit],
   ]
   for (const [key, value] of pairs) {
@@ -332,6 +357,29 @@ function EarningsScopeControls({
           </label>
           <SelectField label="シグナル" name="signal" value={filters.signal} options={options.signals} />
           <label className="flex min-w-0 flex-col gap-1 text-[11px] font-bold text-[var(--color-text-tertiary)]">
+            並び替え
+            <select
+              name="sort"
+              defaultValue={filters.sortBy ?? 'daysLeft'}
+              className="h-9 rounded-[6px] border border-[var(--color-border-default)] bg-white px-2 text-[12px] font-semibold text-[var(--color-text-primary)]"
+            >
+              {SORT_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </label>
+          <label className="flex min-w-0 flex-col gap-1 text-[11px] font-bold text-[var(--color-text-tertiary)]">
+            順序
+            <select
+              name="dir"
+              defaultValue={filters.sortDir ?? 'asc'}
+              className="h-9 rounded-[6px] border border-[var(--color-border-default)] bg-white px-2 text-[12px] font-semibold text-[var(--color-text-primary)]"
+            >
+              <option value="asc">昇順</option>
+              <option value="desc">降順</option>
+            </select>
+          </label>
+          <label className="flex min-w-0 flex-col gap-1 text-[11px] font-bold text-[var(--color-text-tertiary)]">
             表示件数
             <select
               name="limit"
@@ -385,13 +433,66 @@ function EarningsScopeControls({
                 className="inline-flex h-9 items-center rounded-[6px] border border-[var(--color-brand-200)] bg-[var(--color-brand-50)] px-3 text-[12px] font-bold text-[var(--color-brand-800)] hover:bg-white"
                 prefetch={false}
               >
-                さらに表示
+                表示件数を20件増やす
               </Link>
             )}
           </div>
         </div>
+        {scope.hasMore && (
+          <div className="text-[11px] font-semibold text-[var(--color-text-tertiary)]">
+            件数が多い日は初期表示を絞っています。必要に応じて表示件数を増やすか、条件で絞り込んでください。
+          </div>
+        )}
       </form>
     </section>
+  )
+}
+
+function nextSortDir(filters: EarningsCalendarFilters, key: EarningsSortKey): EarningsSortDir {
+  const currentKey = filters.sortBy ?? 'daysLeft'
+  const currentDir = filters.sortDir ?? 'asc'
+  if (currentKey === key && currentDir === 'asc') return 'desc'
+  return 'asc'
+}
+
+function SortableTh({
+  label,
+  sortKey,
+  date,
+  month,
+  filters,
+  className = '',
+  align = 'left',
+}: {
+  label: string
+  sortKey: EarningsSortKey
+  date?: string | null
+  month?: string | null
+  filters: EarningsCalendarFilters
+  className?: string
+  align?: 'left' | 'right'
+}) {
+  const active = (filters.sortBy ?? 'daysLeft') === sortKey
+  const dir = active ? (filters.sortDir ?? 'asc') : 'asc'
+  const href = earningsHref({
+    date,
+    month,
+    filters: { ...filters, sortBy: sortKey, sortDir: nextSortDir(filters, sortKey) },
+    limit: filters.limit ?? null,
+  })
+  const arrow = active ? (dir === 'asc' ? '↑' : '↓') : '↕'
+  return (
+    <th className={`${className} ${align === 'right' ? 'text-right' : 'text-left'}`}>
+      <Link
+        href={href}
+        className={`inline-flex items-center gap-1 rounded-[4px] px-1 py-0.5 hover:bg-[var(--color-surface-subtle)] ${active ? 'text-[var(--color-brand-800)]' : ''}`}
+        prefetch={false}
+        title={`${label}で並び替え`}
+      >
+        <span>{label}</span>
+        <span className="text-[10px]">{arrow}</span>
+      </Link>
+    </th>
   )
 }
 
@@ -399,10 +500,16 @@ function EarningsTable({
   rows,
   mode = 'upcoming',
   maxRows = 40,
+  date,
+  month,
+  filters,
 }: {
   rows: EarningsRows
   mode?: 'upcoming' | 'completed'
   maxRows?: number
+  date?: string | null
+  month?: string | null
+  filters: EarningsCalendarFilters
 }) {
   const completed = mode === 'completed'
   const visibleRows = rows.slice(0, maxRows)
@@ -413,18 +520,18 @@ function EarningsTable({
       <table className={`w-full text-[12px] ${completed ? 'min-w-[1960px]' : 'min-w-[1860px]'}`}>
         <thead>
           <tr className="text-left text-[11px] font-bold text-[var(--color-text-tertiary)]">
-            <th className="pb-3 pl-2 pr-3">発表</th>
-            <th className="pb-3 pr-3">銘柄名</th>
+            <SortableTh label="発表" sortKey="daysLeft" date={date} month={month} filters={filters} className="pb-3 pl-2 pr-3" />
+            <SortableTh label="銘柄名" sortKey="ticker" date={date} month={month} filters={filters} className="pb-3 pr-3" />
             <th className="pb-3 pr-3">貸借/信用</th>
-            <th className="pb-3 pr-3">J-Quants業種</th>
-            <th className="pb-3 pr-4">シグナル</th>
-            {completed && <th className="pb-3 pr-3 text-right">決算後</th>}
-            <th className="pb-3 pr-3 text-right">現在株価</th>
-            <th className="pb-3 pr-3 text-right">前日比</th>
-            <th className="pb-3 pr-3 text-right">10日平均</th>
-            <th className="pb-3 pr-3 text-right">30日平均</th>
-            <th className="pb-3 pr-3 text-right">60日平均</th>
-            <th className="pb-3 pr-3">日足A/B</th>
+            <SortableTh label="J-Quants業種" sortKey="sector33" date={date} month={month} filters={filters} className="pb-3 pr-3" />
+            <SortableTh label="シグナル" sortKey="signalCount" date={date} month={month} filters={filters} className="pb-3 pr-4" />
+            {completed && <SortableTh label="決算後" sortKey="postEarningsChangePct" date={date} month={month} filters={filters} className="pb-3 pr-3" align="right" />}
+            <SortableTh label="現在株価" sortKey="price" date={date} month={month} filters={filters} className="pb-3 pr-3" align="right" />
+            <SortableTh label="前日比" sortKey="changePct" date={date} month={month} filters={filters} className="pb-3 pr-3" align="right" />
+            <SortableTh label="10日平均" sortKey="avgVolume10" date={date} month={month} filters={filters} className="pb-3 pr-3" align="right" />
+            <SortableTh label="30日平均" sortKey="avgVolume30" date={date} month={month} filters={filters} className="pb-3 pr-3" align="right" />
+            <SortableTh label="60日平均" sortKey="avgVolume60" date={date} month={month} filters={filters} className="pb-3 pr-3" align="right" />
+            <SortableTh label="日足A/B" sortKey="stageCode" date={date} month={month} filters={filters} className="pb-3 pr-3" />
             <th className="pb-3 pr-3">週足A/B</th>
             <th className="pb-3 pr-2">月足A/B</th>
           </tr>
@@ -495,7 +602,7 @@ function EarningsTable({
           {hiddenCount > 0 && (
             <tr>
               <td colSpan={colSpan} className="py-3 text-center text-[11px] font-bold text-[var(--color-text-tertiary)]">
-                初期表示は上位 {maxRows} 件です。全 {rows.length.toLocaleString()} 件中、残り {hiddenCount.toLocaleString()} 件は条件を絞って確認してください。
+                初期表示は {maxRows} 件です。全 {rows.length.toLocaleString()} 件中、残り {hiddenCount.toLocaleString()} 件は表示件数を増やすか条件を絞って確認してください。
               </td>
             </tr>
           )}
@@ -564,7 +671,13 @@ export async function EarningsCalendarPanel({
                   </div>
                 </div>
                 <div className="p-3">
-                  <EarningsTable rows={group.rows} maxRows={data.scope.displayLimit} />
+                  <EarningsTable
+                    rows={group.rows}
+                    maxRows={data.scope.displayLimit}
+                    date={date}
+                    month={month}
+                    filters={data.filters}
+                  />
                 </div>
               </section>
             ))}
@@ -581,7 +694,7 @@ export async function EarningsCalendarPanel({
           <div className="mb-2 text-[12px] font-bold text-[var(--color-text-secondary)]">
             最新取得分（参考）
           </div>
-          <EarningsTable rows={data.referenceRows} maxRows={20} />
+          <EarningsTable rows={data.referenceRows} maxRows={20} date={date} month={month} filters={data.filters} />
         </div>
       )}
       {completedRows.length > 0 && (
@@ -597,7 +710,7 @@ export async function EarningsCalendarPanel({
               {completedRows.length.toLocaleString()}銘柄
             </span>
           </div>
-          <EarningsTable rows={completedRows} mode="completed" maxRows={30} />
+          <EarningsTable rows={completedRows} mode="completed" maxRows={30} date={date} month={month} filters={data.filters} />
         </div>
       )}
     </Card>
