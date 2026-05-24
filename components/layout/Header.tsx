@@ -23,6 +23,7 @@ const NAV_ITEMS = [
   { href: '/sectors', label: '業種', icon: Building2 },
   { href: '/ai/transitions', label: 'パターン', icon: ChartCandlestick },
   { href: '/backtest', label: '検証', icon: FlaskConical },
+  { href: '/ai/ma-lens', label: 'AI Lens', icon: Activity },
   { href: '/earnings', label: '決算', icon: CalendarDays },
   { href: '/screener', label: 'スクリーナー', icon: Search },
   { href: '/watchlist', label: 'ウォッチ', icon: Star },

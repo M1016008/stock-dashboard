@@ -90,7 +90,6 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
 
   // 表示用にマージ: sector_master(JPX/CSV) → ハードコードマスタ
   const displaySectorLarge   = smaster?.sector_large   ?? hardcoded?.sectorLarge
-  const displaySectorSmall   = smaster?.sector_small   ?? hardcoded?.sectorSmall
   const displaySector33      = smaster?.sector33       ?? null
   const displayMarketSegment = smaster?.market_segment ?? hardcoded?.marketSegment
   const displayMarginType    = smaster?.margin_type    ?? hardcoded?.marginType
@@ -134,7 +133,6 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
           {displayMarketSegment && <Pill label={`市場: ${displayMarketSegment}`} accent />}
           {displaySectorLarge && <Pill label={`17業種: ${displaySectorLarge}`} />}
           {displaySector33 && <Pill label={`33業種: ${displaySector33}`} />}
-          {displaySectorSmall && displaySectorSmall !== displaySector33 && <Pill label={`分類: ${displaySectorSmall}`} />}
         </div>
 
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '12px' }}>

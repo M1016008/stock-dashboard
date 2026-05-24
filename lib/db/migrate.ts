@@ -75,8 +75,6 @@ const STATEMENTS = [
     avg_volume_30d INTEGER,
     market_cap REAL,
     market_cap_currency TEXT,
-    per REAL,
-    dividend_yield_pct REAL,
     perf_pct_1w REAL,
     perf_pct_1m REAL,
     perf_pct_3m REAL,
@@ -424,6 +422,7 @@ const STATEMENTS = [
   )`,
   `CREATE INDEX IF NOT EXISTS fext_date_horizon_idx ON forward_extrema(date, horizon_days)`,
   `CREATE INDEX IF NOT EXISTS fext_date_horizon_ticker_idx ON forward_extrema(date, horizon_days, ticker)`,
+  `CREATE INDEX IF NOT EXISTS fext_date_horizon_max_return_idx ON forward_extrema(date, horizon_days, max_return_pct DESC)`,
   `CREATE INDEX IF NOT EXISTS fext_horizon_date_idx ON forward_extrema(horizon_days, date)`,
   `CREATE INDEX IF NOT EXISTS fext_horizon_max_idx ON forward_extrema(horizon_days, max_return_pct)`,
   `CREATE TABLE IF NOT EXISTS model_features (
@@ -587,6 +586,7 @@ const STATEMENTS = [
     PRIMARY KEY (date, horizon_days, ticker)
   )`,
   `CREATE INDEX IF NOT EXISTS serving_backtest_results_sort_idx ON serving_backtest_results(date, horizon_days, max_return_pct)`,
+  `CREATE INDEX IF NOT EXISTS serving_backtest_results_horizon_date_idx ON serving_backtest_results(horizon_days, date DESC)`,
   `CREATE INDEX IF NOT EXISTS serving_backtest_results_ticker_idx ON serving_backtest_results(ticker, date)`,
   `CREATE TABLE IF NOT EXISTS serving_backtest_details (
     date TEXT NOT NULL,

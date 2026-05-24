@@ -26,6 +26,10 @@ function tone(v: number | null | undefined) {
   return v > 0 ? 'text-[var(--color-price-up)]' : v < 0 ? 'text-[var(--color-price-down)]' : ''
 }
 
+function stockHref(ticker: string) {
+  return `/stock/${encodeURIComponent(ticker)}`
+}
+
 export async function CreditShortPanel() {
   const data = await getCachedCreditShortDashboard()
   return (
@@ -82,8 +86,15 @@ export async function CreditShortPanel() {
                 {data.stockRows.map((row) => (
                   <tr key={row.ticker} className="hover:bg-[var(--color-surface-subtle)]">
                     <td className="px-3 py-2.5">
-                      <Link href={`/stock/${row.ticker}`} className="font-bold tabular-nums hover:underline">{row.ticker}</Link>
-                      <div className="mt-1 max-w-[180px] truncate text-[12px] font-semibold">{row.name ?? row.ticker}</div>
+                      <Link
+                        href={stockHref(row.ticker)}
+                        prefetch={false}
+                        className="block max-w-[200px] rounded-[4px] px-1 py-0.5 hover:bg-white hover:shadow-sm"
+                        aria-label={`${row.ticker} ${row.name ?? ''} の個別銘柄ページへ移動`}
+                      >
+                        <span className="block font-bold tabular-nums text-[var(--color-brand-800)] hover:underline">{row.ticker}</span>
+                        <span className="mt-1 block truncate text-[12px] font-semibold text-[var(--color-text-primary)]">{row.name ?? row.ticker}</span>
+                      </Link>
                     </td>
                     <td className="px-3 py-2.5 text-[12px] font-semibold text-[var(--color-text-secondary)]">{row.sectorName ?? 'その他'}</td>
                     <td className="px-3 py-2.5 text-right tabular-nums">

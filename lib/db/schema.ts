@@ -88,8 +88,6 @@ export const tvDailySnapshots = sqliteTable(
     avgVolume30d:        integer('avg_volume_30d'),
     marketCap:           real('market_cap'),
     marketCapCurrency:   text('market_cap_currency'),
-    per:                 real('per'),
-    dividendYieldPct:    real('dividend_yield_pct'),
     perfPct1w:           real('perf_pct_1w'),
     perfPct1m:           real('perf_pct_1m'),
     perfPct3m:           real('perf_pct_3m'),
@@ -620,6 +618,7 @@ export const forwardExtrema = sqliteTable(
     pk:          primaryKey({ columns: [t.ticker, t.date, t.horizonDays] }),
     dateIdx:     index('fext_date_horizon_idx').on(t.date, t.horizonDays),
     dateTickerIdx: index('fext_date_horizon_ticker_idx').on(t.date, t.horizonDays, t.ticker),
+    dateHorizonMaxReturnIdx: index('fext_date_horizon_max_return_idx').on(t.date, t.horizonDays, t.maxReturnPct),
     horizonDateIdx: index('fext_horizon_date_idx').on(t.horizonDays, t.date),
     horizonIdx:  index('fext_horizon_max_idx').on(t.horizonDays, t.maxReturnPct),
   }),
@@ -838,6 +837,7 @@ export const servingBacktestResults = sqliteTable(
   (t) => ({
     pk:        primaryKey({ columns: [t.date, t.horizonDays, t.ticker] }),
     sortIdx:   index('serving_backtest_results_sort_idx').on(t.date, t.horizonDays, t.maxReturnPct),
+    horizonDateIdx: index('serving_backtest_results_horizon_date_idx').on(t.horizonDays, t.date),
     tickerIdx: index('serving_backtest_results_ticker_idx').on(t.ticker, t.date),
   }),
 )

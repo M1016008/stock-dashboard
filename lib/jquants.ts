@@ -238,13 +238,6 @@ export interface JFinsSummaryRow {
   Eq: string                 // 自己資本
   EqAR: string               // 自己資本比率
   BPS: string                // 1株あたり純資産
-  Div1Q: string              // 期別配当
-  Div2Q: string
-  Div3Q: string
-  DivFY: string              // 期末配当
-  DivAnn: string             // 年間配当
-  FDivAnn: string            // 予想年間配当
-  PayoutRatioAnn: string     // 配当性向
   ShOutFY: string            // 期末発行済株式数
   TrShFY: string             // 期末自己株式数
   AvgSh: string              // 期中平均株式数
@@ -284,14 +277,12 @@ export async function fetchJQuantsFinsSummary(ticker: string): Promise<JFinsSumm
 }
 
 // ─────────────────────────────────────
-// 派生: PER / PBR / ROE / 配当利回り を計算して返す
+// 派生: PBR / ROE などを計算して返す
 // ─────────────────────────────────────
 
 export interface FundamentalsResult {
-  per?: number           // current_price / EPS_annual
   pbr?: number           // current_price / BPS
   roe?: number           // NP / Eq * 100  (%)
-  dividendYield?: number // DivAnn / current_price * 100  (%)
   eps?: number           // 1 株純利益 (円)
   bps?: number           // 1 株純資産 (円)
   netProfit?: number     // 純利益 (円)
@@ -303,7 +294,7 @@ export interface FundamentalsResult {
 }
 
 /**
- * 財務サマリ + 現在価格から PER/PBR/ROE/配当利回りを計算。
+ * 財務サマリ + 現在価格から PBR/ROE などを計算。
  * - 通期 (FY) の最新レコードを優先、なければ直近の四半期を使う。
  * - 値が空欄のフィールドは undefined にする。
  */
@@ -336,7 +327,6 @@ export function computeFundamentals(
   const bps      = num(latest.BPS)
   const np       = num(latest.NP)
   const eq       = num(latest.Eq)
-  const divAnn   = num(latest.DivAnn) ?? num(latest.FDivAnn)
   const shOut    = num(latest.ShOutFY)
 
   const result: FundamentalsResult = {
@@ -350,9 +340,7 @@ export function computeFundamentals(
   }
 
   if (currentPrice != null && currentPrice > 0) {
-    if (eps != null && eps > 0)    result.per = currentPrice / eps
     if (bps != null && bps > 0)    result.pbr = currentPrice / bps
-    if (divAnn != null)            result.dividendYield = (divAnn / currentPrice) * 100
   }
 
   if (np != null && eq != null && eq > 0) {

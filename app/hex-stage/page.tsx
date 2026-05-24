@@ -5,7 +5,6 @@ import type { Metadata } from 'next'
 import { Suspense } from 'react'
 import { SixStageCircleMock } from '@/components/hex/SixStageCircleMock'
 import { TransitionMatrixMock } from '@/components/hex/TransitionMatrixMock'
-import { PeriodCountTrendMock } from '@/components/hex/PeriodCountTrendMock'
 import { TransitionDetailTableMock } from '@/components/hex/TransitionDetailTableMock'
 import HexStageMapView from '@/components/hex/HexStageMapView'
 import { TabRow } from '@/components/ui/TabRow'
@@ -91,12 +90,9 @@ export default async function HexStagePage({
         <TabRow basePath="/hex-stage" paramKey="period" current={period} tabs={PERIOD_TABS} keepKeys={['ts']} />
       </div>
 
-      <div className="sb-section grid grid-cols-1 gap-3.5 md:grid-cols-2">
+      <div className="sb-section">
         <Suspense fallback={<Loading h={300} />}>
           <TransitionMatrixMock timescale={ts} period={period} />
-        </Suspense>
-        <Suspense fallback={<Loading h={300} />}>
-          <PeriodCountTrendMock timescale={ts} />
         </Suspense>
       </div>
 

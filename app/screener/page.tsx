@@ -6,6 +6,7 @@ import Link from 'next/link'
 import { toTvSymbol, buildTvWatchlistText } from '@/lib/tv-format'
 import { WatchlistButton } from '@/components/ui/WatchlistButton'
 import { StageDots } from '@/components/ui/StageDots'
+import { MarketDateCalendar } from '@/components/ui/MarketDateCalendar'
 
 type Market = 'JP'
 type AxisKey = 'daily_a' | 'daily_b' | 'weekly_a' | 'weekly_b' | 'monthly_a' | 'monthly_b'
@@ -20,25 +21,7 @@ const MCAP_BINS: { label: string; min: number; max: number }[] = [
   { label: '5兆〜',       min: 5e12,        max: Number.POSITIVE_INFINITY },
 ]
 
-// PER レンジ（倍）。負/null は別ボタンで扱う。
-const PER_BINS: { label: string; min: number; max: number }[] = [
-  { label: '〜10',    min: 0,    max: 10 },
-  { label: '10〜15',  min: 10,   max: 15 },
-  { label: '15〜20',  min: 15,   max: 20 },
-  { label: '20〜30',  min: 20,   max: 30 },
-  { label: '30〜50',  min: 30,   max: 50 },
-  { label: '50〜',    min: 50,   max: Number.POSITIVE_INFINITY },
-]
-
-// 配当利回り（%）。
-const DY_BINS: { label: string; min: number; max: number }[] = [
-  { label: '無配 (0%)', min: 0,   max: 0.0001 },
-  { label: '〜1%',     min: 0.0001, max: 1 },
-  { label: '1〜2%',    min: 1,   max: 2 },
-  { label: '2〜3%',    min: 2,   max: 3 },
-  { label: '3〜5%',    min: 3,   max: 5 },
-  { label: '5%〜',     min: 5,   max: Number.POSITIVE_INFINITY },
-]
+const MARGIN_FILTER_ORDER = ['貸借', '信用', 'その他', '未設定']
 
 const AXES: { key: AxisKey; label: string; color: string }[] = [
   { key: 'daily_a',   label: '日足 A', color: '#ef4444' },
@@ -56,7 +39,6 @@ interface StockRow {
   marketSegment: string
   marginType?: string
   sectorLarge: string
-  sectorSmall?: string | null
   sector33?: string | null
   sector17Name?: string | null
   sector33Name?: string | null
@@ -71,14 +53,21 @@ interface StockRow {
   volume: number | null
   avgVolume10d?: number | null
   avgVolume30d?: number | null
-  marketCap?: number
+  marketCap?: number | null
   marketCapCurrency?: string | null
-  per?: number
-  dividendYield?: number
+  marketCapStatus?: 'calculated' | 'not_applicable' | 'shares_missing' | 'price_missing'
+  sma5Angle?: number | null
   sma25Angle?: number | null
   sma75Angle?: number | null
+  sma200Angle?: number | null
   earningsLastDate?: string | null
+  earningsLastDateKind?: 'reported' | 'not_applicable' | 'not_collected' | 'unverified'
+  earningsLastDateSource?: string | null
+  earningsLastFiscalPeriod?: string | null
   earningsNextDate?: string | null
+  earningsNextDateKind?: 'confirmed' | 'estimated' | 'not_announced' | 'not_applicable' | 'no_history'
+  earningsNextDateSource?: string | null
+  earningsNextFiscalPeriod?: string | null
   daily_a_stage: number | null
   daily_b_stage: number | null
   weekly_a_stage: number | null
@@ -93,7 +82,6 @@ type SortKey =
   | 'marketSegment'
   | 'sector33'
   | 'sectorLarge'
-  | 'sectorSmall'
   | 'name'
   | 'price'
   | 'currency'
@@ -108,12 +96,14 @@ type SortKey =
   | 'avgVolume30d'
   | 'marketCap'
   | 'marketCapCurrency'
-  | 'per'
-  | 'dividendYield'
+  | 'sma5Angle'
   | 'sma25Angle'
   | 'sma75Angle'
+  | 'sma200Angle'
   | 'earningsLastDate'
+  | 'earningsLastElapsedDays'
   | 'earningsNextDate'
+  | 'earningsNextBusinessDays'
 
 interface SortState {
   key: SortKey
@@ -134,22 +124,26 @@ export default function ScreenerPage() {
   const [cached, setCached] = useState(false)
   const [snapshotDate, setSnapshotDate] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
-  const [sort, setSort] = useState<SortState | null>(null)
+  const [sort, setSort] = useState<SortState | null>({ key: 'marketCap', dir: 'desc' })
   const [copiedTicker, setCopiedTicker] = useState<string | null>(null)
   const [availableDates, setAvailableDates] = useState<AvailableDate[]>([])
   const [selectedDate, setSelectedDate] = useState<string | null>(null) // null = 最新
   const [selectedSectorLarge, setSelectedSectorLarge] = useState<string>('')
-  const [selectedSectorSmall, setSelectedSectorSmall] = useState<string>('')
+  const [selectedSector33, setSelectedSector33] = useState<string>('')
+  const [selectedMarginType, setSelectedMarginType] = useState<string>('')
   const [selectedMcapBins, setSelectedMcapBins] = useState<Set<number>>(new Set())
-  const [selectedPerBins, setSelectedPerBins] = useState<Set<number>>(new Set())
-  const [selectedDyBins, setSelectedDyBins] = useState<Set<number>>(new Set())
+  const referenceDate = snapshotDate ?? selectedDate
+  const tradingDates = useMemo(
+    () => availableDates.map((item) => item.date).filter(Boolean).sort(),
+    [availableDates],
+  )
 
   const hasAnyStage = Object.values(stages).some((v) => v && v.length > 0)
 
   // J-Quants 由来のスナップショット日付リストの取得
   useEffect(() => {
     let cancelled = false
-    fetch('/api/hex/available-dates', { cache: 'no-store' })
+    fetch('/api/hex/available-dates?limit=10000', { cache: 'no-store' })
       .then((r) => r.json())
       .then((d) => {
         if (cancelled) return
@@ -179,9 +173,14 @@ export default function ScreenerPage() {
         setCached(d.cached)
         setSnapshotDate(d.date ?? null)
         setNotice(d.notice ?? null)
+        setLoading(false)
       })
-      .catch((e) => { if (!cancelled) setError((e as Error).message) })
-      .finally(() => { if (!cancelled) setLoading(false) })
+      .catch((e) => {
+        if (!cancelled) {
+          setError((e as Error).message)
+          setLoading(false)
+        }
+      })
     return () => { cancelled = true }
   }, [stages, selectedDate])
 
@@ -200,7 +199,8 @@ export default function ScreenerPage() {
   const filteredResults = useMemo(() => {
     return results.filter((r) => {
       if (selectedSectorLarge && r.sectorLarge !== selectedSectorLarge) return false
-      if (selectedSectorSmall && r.sectorSmall !== selectedSectorSmall) return false
+      if (selectedSector33 && (r.sector33 ?? r.sector33Name) !== selectedSector33) return false
+      if (selectedMarginType && (r.marginType ?? '未設定') !== selectedMarginType) return false
       if (selectedMcapBins.size > 0) {
         const cap = r.marketCap ?? -1
         const matched = Array.from(selectedMcapBins).some((idx) => {
@@ -210,49 +210,46 @@ export default function ScreenerPage() {
         })
         if (!matched) return false
       }
-      if (selectedPerBins.size > 0) {
-        const per = r.per
-        if (per == null || per < 0) return false
-        const matched = Array.from(selectedPerBins).some((idx) => {
-          const bin = PER_BINS[idx]
-          if (!bin) return false
-          return per >= bin.min && per < bin.max
-        })
-        if (!matched) return false
-      }
-      if (selectedDyBins.size > 0) {
-        const dy = r.dividendYield ?? -1
-        const matched = Array.from(selectedDyBins).some((idx) => {
-          const bin = DY_BINS[idx]
-          if (!bin) return false
-          return dy >= bin.min && dy < bin.max
-        })
-        if (!matched) return false
-      }
       return true
     })
-  }, [results, selectedSectorLarge, selectedSectorSmall, selectedMcapBins, selectedPerBins, selectedDyBins])
+  }, [results, selectedSectorLarge, selectedSector33, selectedMarginType, selectedMcapBins])
+
+  const marginOptions = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const r of results) {
+      const key = r.marginType?.trim() || '未設定'
+      counts.set(key, (counts.get(key) ?? 0) + 1)
+    }
+    return Array.from(counts.entries())
+      .sort(([a], [b]) => {
+        const ai = MARGIN_FILTER_ORDER.indexOf(a)
+        const bi = MARGIN_FILTER_ORDER.indexOf(b)
+        if (ai !== -1 || bi !== -1) return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi)
+        return a.localeCompare(b, 'ja')
+      })
+  }, [results])
 
   // セクターのドロップダウン候補
   const sectorOptions = useMemo(() => {
     const large: Record<string, number> = {}
-    const small: Record<string, { count: number; large: string }> = {}
+    const sector33: Record<string, { count: number; large: string }> = {}
     for (const r of results) {
       const l = r.sectorLarge || '（未分類）'
       large[l] = (large[l] ?? 0) + 1
-      if (r.sectorSmall) {
-        const cur = small[r.sectorSmall] ?? { count: 0, large: l }
+      const s33 = r.sector33 ?? r.sector33Name
+      if (s33) {
+        const cur = sector33[s33] ?? { count: 0, large: l }
         cur.count++
         cur.large = l
-        small[r.sectorSmall] = cur
+        sector33[s33] = cur
       }
     }
     const largeArr = Object.entries(large).sort((a, b) => b[1] - a[1])
     // 大分類が選ばれている場合は、小分類はその配下のみ
-    const smallArr = Object.entries(small)
+    const sector33Arr = Object.entries(sector33)
       .filter(([, v]) => !selectedSectorLarge || v.large === selectedSectorLarge)
       .sort((a, b) => b[1].count - a[1].count)
-    return { largeArr, smallArr, smallMap: small }
+    return { largeArr, sector33Arr, sector33Map: sector33 }
   }, [results, selectedSectorLarge])
 
   const sortedResults = useMemo(() => {
@@ -260,8 +257,8 @@ export default function ScreenerPage() {
     const copy = [...filteredResults]
     const dir = sort.dir === 'asc' ? 1 : -1
     copy.sort((a, b) => {
-      const av = (a as unknown as Record<string, unknown>)[sort.key]
-      const bv = (b as unknown as Record<string, unknown>)[sort.key]
+      const av = sortValue(a, sort.key, referenceDate, tradingDates)
+      const bv = sortValue(b, sort.key, referenceDate, tradingDates)
       // null / undefined は常に末尾
       if (av == null && bv == null) return 0
       if (av == null) return 1
@@ -272,8 +269,14 @@ export default function ScreenerPage() {
       return String(av).localeCompare(String(bv), 'ja') * dir
     })
     return copy
-  }, [filteredResults, sort])
+  }, [filteredResults, sort, referenceDate, tradingDates])
   const displayedResults = useMemo(() => sortedResults.slice(0, 500), [sortedResults])
+  const marketCapCoverage = useMemo(() => {
+    const calculated = filteredResults.filter((r) => r.marketCap != null && r.marketCap > 0).length
+    const notApplicable = filteredResults.filter((r) => r.marketCapStatus === 'not_applicable').length
+    const missing = filteredResults.length - calculated - notApplicable
+    return { calculated, notApplicable, missing }
+  }, [filteredResults])
 
   function toggleSort(key: SortKey) {
     setSort((prev) => {
@@ -327,7 +330,7 @@ export default function ScreenerPage() {
               value={selectedSectorLarge}
               onChange={(e) => {
                 setSelectedSectorLarge(e.target.value)
-                setSelectedSectorSmall('') // 大分類が変わったら小分類はリセット
+                setSelectedSector33('') // 17業種が変わったら33業種はリセット
               }}
               style={mcSelectStyle}
             >
@@ -341,29 +344,29 @@ export default function ScreenerPage() {
           <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: 'var(--text-muted)' }}>
             33業種
             <select
-              value={selectedSectorSmall}
+              value={selectedSector33}
               onChange={(e) => {
                 const v = e.target.value
-                setSelectedSectorSmall(v)
-                // 小分類を選んだら、対応する大分類も常に上書きする。
+                setSelectedSector33(v)
+                // 33業種を選んだら、対応する17業種も常に上書きする。
                 // 「全て」を選んだ場合は大分類はそのまま。
                 if (v) {
-                  const owner = sectorOptions.smallMap[v]?.large
+                  const owner = sectorOptions.sector33Map[v]?.large
                   if (owner && owner !== '（未分類）') setSelectedSectorLarge(owner)
                 }
               }}
               style={mcSelectStyle}
             >
               <option value="">全て</option>
-              {sectorOptions.smallArr.map(([cat, v]) => (
+              {sectorOptions.sector33Arr.map(([cat, v]) => (
                 <option key={cat} value={cat}>{cat}（{v.count}）</option>
               ))}
             </select>
           </label>
 
-          {(selectedSectorLarge || selectedSectorSmall) && (
+          {(selectedSectorLarge || selectedSector33) && (
             <button
-              onClick={() => { setSelectedSectorLarge(''); setSelectedSectorSmall('') }}
+              onClick={() => { setSelectedSectorLarge(''); setSelectedSector33('') }}
               style={mcChipStyle(false)}
             >
               × クリア
@@ -372,8 +375,29 @@ export default function ScreenerPage() {
         </div>
       </Section>
 
+      {/* 貸借/信用で絞り込み */}
+      <Section step={2} label="貸借/信用で絞り込み（任意）">
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+          <button
+            onClick={() => setSelectedMarginType('')}
+            style={mcChipStyle(selectedMarginType === '')}
+          >
+            全て（{results.length.toLocaleString('ja-JP')}）
+          </button>
+          {marginOptions.map(([type, count]) => (
+            <button
+              key={type}
+              onClick={() => setSelectedMarginType((current) => current === type ? '' : type)}
+              style={mcChipStyle(selectedMarginType === type)}
+            >
+              {type}（{count.toLocaleString('ja-JP')}）
+            </button>
+          ))}
+        </div>
+      </Section>
+
       {/* 時価総額で絞り込み */}
-      <Section step={2} label="時価総額で絞り込み（任意 / 複数選択可）">
+      <Section step={3} label="時価総額で絞り込み（任意 / 複数選択可）">
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
           {MCAP_BINS.map((bin, idx) => {
             const active = selectedMcapBins.has(idx)
@@ -400,64 +424,8 @@ export default function ScreenerPage() {
         </div>
       </Section>
 
-      {/* PER で絞り込み */}
-      <Section step={3} label="PERで絞り込み（任意 / 複数選択可、赤字銘柄は除外）">
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-          {PER_BINS.map((bin, idx) => {
-            const active = selectedPerBins.has(idx)
-            return (
-              <button
-                key={bin.label}
-                onClick={() => setSelectedPerBins((prev) => {
-                  const next = new Set(prev)
-                  if (next.has(idx)) next.delete(idx)
-                  else next.add(idx)
-                  return next
-                })}
-                style={mcChipStyle(active)}
-              >
-                {bin.label}
-              </button>
-            )
-          })}
-          {selectedPerBins.size > 0 && (
-            <button onClick={() => setSelectedPerBins(new Set())} style={mcChipStyle(false)}>
-              × クリア
-            </button>
-          )}
-        </div>
-      </Section>
-
-      {/* 配当利回りで絞り込み */}
-      <Section step={4} label="配当利回りで絞り込み（任意 / 複数選択可）">
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-          {DY_BINS.map((bin, idx) => {
-            const active = selectedDyBins.has(idx)
-            return (
-              <button
-                key={bin.label}
-                onClick={() => setSelectedDyBins((prev) => {
-                  const next = new Set(prev)
-                  if (next.has(idx)) next.delete(idx)
-                  else next.add(idx)
-                  return next
-                })}
-                style={mcChipStyle(active)}
-              >
-                {bin.label}
-              </button>
-            )
-          })}
-          {selectedDyBins.size > 0 && (
-            <button onClick={() => setSelectedDyBins(new Set())} style={mcChipStyle(false)}>
-              × クリア
-            </button>
-          )}
-        </div>
-      </Section>
-
       {/* HEXステージ（任意の絞り込み） */}
-      <Section step={5} label="HEXステージで絞り込み（任意 / 複数系統 AND）">
+      <Section step={4} label="HEXステージで絞り込み（任意 / 複数系統 AND）">
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '8px' }}>
           <button
             onClick={() => setStages({})}
@@ -530,7 +498,7 @@ export default function ScreenerPage() {
         </div>
       )}
 
-      {loading ? (
+      {loading && results.length === 0 ? (
         <div className="card" style={{ padding: '32px', textAlign: 'center' }}>
           <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>計算中…</p>
         </div>
@@ -539,36 +507,25 @@ export default function ScreenerPage() {
           <div style={{ padding: '8px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-subtle)', gap: '8px', flexWrap: 'wrap' }}>
             <span style={{ fontSize: '12px', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
               <span><strong>{sortedResults.length}</strong>件 / 母集団 {universe}銘柄</span>
+              <span style={{ color: 'var(--text-muted)' }}>
+                時価総額 {marketCapCoverage.calculated.toLocaleString()}件算出
+                {marketCapCoverage.notApplicable > 0 ? ` / ${marketCapCoverage.notApplicable.toLocaleString()}件対象外` : ''}
+                {marketCapCoverage.missing > 0 ? ` / ${marketCapCoverage.missing.toLocaleString()}件未取得` : ''}
+              </span>
               {sortedResults.length > displayedResults.length && (
                 <span style={{ color: 'var(--text-muted)' }}>
                   表示は先頭 {displayedResults.length} 件
                 </span>
               )}
               {availableDates.length > 0 && (
-                <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontFamily: 'var(--font-mono)' }}>
-                  <span style={{ color: 'var(--accent-primary)' }}>📅</span>
-                  <select
-                    value={selectedDate ?? ''}
-                    onChange={(e) => setSelectedDate(e.target.value || null)}
-                    style={{
-                      padding: '3px 6px',
-                      fontSize: '12px',
-                      fontFamily: 'var(--font-mono)',
-                      background: 'var(--bg-elevated)',
-                      color: 'var(--accent-primary)',
-                      border: '1px solid var(--border-base)',
-                      borderRadius: 'var(--radius-sm)',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    <option value="">最新（{availableDates[0]?.date ?? '---'}）</option>
-                    {availableDates.map((d) => (
-                      <option key={d.date} value={d.date}>
-                        {d.date}（{d.tickers}銘柄）
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                <MarketDateCalendar
+                  dates={availableDates}
+                  value={selectedDate}
+                  onChange={setSelectedDate}
+                  label="スクリーナー日付"
+                  align="left"
+                  compact
+                />
               )}
               {cached && <span style={{ color: 'var(--text-muted)' }}>（DB）</span>}
             </span>
@@ -597,7 +554,7 @@ export default function ScreenerPage() {
             </div>
           ) : (
             <div style={{ overflowX: 'auto' }}>
-              <table style={{ minWidth: '3000px', borderCollapse: 'collapse', fontSize: '12px' }}>
+              <table style={{ minWidth: '2850px', borderCollapse: 'collapse', fontSize: '12px' }}>
                 <thead>
                   <tr style={{ background: 'var(--bg-elevated)', borderBottom: '1px solid var(--border-dim)' }}>
                     <th scope="col" style={th}></th>
@@ -608,7 +565,6 @@ export default function ScreenerPage() {
                     <SortableTh label="市場区分"   sortKey="marketSegment"       current={sort} onClick={toggleSort} />
                     <SortableTh label="33業種" sortKey="sector33"            current={sort} onClick={toggleSort} />
                     <SortableTh label="17業種" sortKey="sectorLarge"         current={sort} onClick={toggleSort} />
-                    <SortableTh label="補助分類" sortKey="sectorSmall"         current={sort} onClick={toggleSort} />
                     <SortableTh label="株価"       sortKey="price"               current={sort} onClick={toggleSort} align="right" />
                     <SortableTh label="日%"        sortKey="changePercent"       current={sort} onClick={toggleSort} align="right" />
                     <SortableTh label="週%"        sortKey="changePercentWeek"   current={sort} onClick={toggleSort} align="right" />
@@ -616,17 +572,18 @@ export default function ScreenerPage() {
                     <SortableTh label="3ヶ月%"     sortKey="perfPct3m"           current={sort} onClick={toggleSort} align="right" />
                     <SortableTh label="6ヶ月%"     sortKey="perfPct6m"           current={sort} onClick={toggleSort} align="right" />
                     <SortableTh label="年初来%"    sortKey="perfPctYtd"          current={sort} onClick={toggleSort} align="right" />
-                    <SortableTh label="出来高"     sortKey="avgVolume30d"        current={sort} onClick={toggleSort} align="right" />
+                    <SortableTh label="出来高"     sortKey="volume"              current={sort} onClick={toggleSort} align="right" />
                     <SortableTh label="平均10日"   sortKey="avgVolume10d"        current={sort} onClick={toggleSort} align="right" />
                     <SortableTh label="平均30日"   sortKey="avgVolume30d"        current={sort} onClick={toggleSort} align="right" />
                     <SortableTh label="時価総額"   sortKey="marketCap"           current={sort} onClick={toggleSort} align="right" />
-                    <SortableTh label="PER"        sortKey="per"                 current={sort} onClick={toggleSort} align="right" />
-                    <SortableTh label="配当"       sortKey="dividendYield"       current={sort} onClick={toggleSort} align="right" />
+                    <SortableTh label="SMA5角度"   sortKey="sma5Angle"           current={sort} onClick={toggleSort} align="right" />
                     <SortableTh label="SMA25角度"  sortKey="sma25Angle"          current={sort} onClick={toggleSort} align="right" />
                     <SortableTh label="SMA75角度"  sortKey="sma75Angle"          current={sort} onClick={toggleSort} align="right" />
+                    <SortableTh label="SMA200角度" sortKey="sma200Angle"         current={sort} onClick={toggleSort} align="right" />
                     <SortableTh label="前回決算"   sortKey="earningsLastDate"    current={sort} onClick={toggleSort} />
+                    <SortableTh label="前回から"   sortKey="earningsLastElapsedDays" current={sort} onClick={toggleSort} align="right" />
                     <SortableTh label="次回決算"   sortKey="earningsNextDate"    current={sort} onClick={toggleSort} />
-                    <SortableTh label="残日数"     sortKey="earningsNextDate"    current={sort} onClick={toggleSort} align="right" />
+                    <SortableTh label="残営業日"   sortKey="earningsNextBusinessDays" current={sort} onClick={toggleSort} align="right" />
                     <th scope="col" style={th}>ステージ (日A/B 週A/B 月A/B)</th>
                   </tr>
                 </thead>
@@ -634,6 +591,10 @@ export default function ScreenerPage() {
                   {displayedResults.map((r) => {
                     const tv = toTvSymbol(r.ticker, r.marketSegment)
                     const copied = copiedTicker === r.ticker
+                    const lastElapsedDays = daysSince(r.earningsLastDate, referenceDate)
+                    const nextBusinessDays = businessDaysUntil(r.earningsNextDate, referenceDate, tradingDates)
+                    const lastEarnings = earningsLastDisplay(r)
+                    const nextEarnings = earningsNextDisplay(r)
                     return (
                       <tr key={r.ticker} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
                         <td style={{ ...td, width: '32px' }}>
@@ -682,7 +643,6 @@ export default function ScreenerPage() {
                         <td style={td}>{r.marketSegment || '---'}</td>
                         <td style={td}>{r.sector33 || '---'}</td>
                         <td style={td}>{r.sectorLarge || '---'}</td>
-                        <td style={td}>{r.sectorSmall || '---'}</td>
                         <td style={tdR}>{r.price?.toLocaleString('ja-JP', { maximumFractionDigits: 2 }) ?? '---'}</td>
                         <td style={{ ...tdR, color: pctColor(r.changePercent ?? undefined) }}>{fmtPct(r.changePercent ?? undefined)}</td>
                         <td style={{ ...tdR, color: pctColor(r.changePercentWeek ?? undefined) }}>{fmtPct(r.changePercentWeek ?? undefined)}</td>
@@ -693,14 +653,70 @@ export default function ScreenerPage() {
                         <td style={tdR}>{r.volume?.toLocaleString('ja-JP') ?? '---'}</td>
                         <td style={tdR}>{r.avgVolume10d != null ? r.avgVolume10d.toLocaleString('ja-JP') : '---'}</td>
                         <td style={tdR}>{r.avgVolume30d != null ? r.avgVolume30d.toLocaleString('ja-JP') : '---'}</td>
-                        <td style={tdR}>{r.marketCap ? `${(r.marketCap / 1e8).toLocaleString('ja-JP', { maximumFractionDigits: 0 })} 億` : '---'}</td>
-                        <td style={tdR}>{r.per != null ? r.per.toFixed(1) : '---'}</td>
-                        <td style={tdR}>{r.dividendYield != null ? `${r.dividendYield.toFixed(2)}%` : '---'}</td>
+                        <td style={tdR}>{fmtMarketCap(r)}</td>
+                        <td style={{ ...tdR, color: pctColor(r.sma5Angle ?? undefined) }}>{fmtAngleWithTrend(r.sma5Angle ?? undefined)}</td>
                         <td style={{ ...tdR, color: pctColor(r.sma25Angle ?? undefined) }}>{fmtAngle(r.sma25Angle ?? undefined)}</td>
                         <td style={{ ...tdR, color: pctColor(r.sma75Angle ?? undefined) }}>{fmtAngle(r.sma75Angle ?? undefined)}</td>
-                        <td style={{ ...td, fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{r.earningsLastDate ?? '---'}</td>
-                        <td style={{ ...td, fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>{r.earningsNextDate ?? '---'}</td>
-                        <td style={{ ...tdR, color: daysColor(daysUntil(r.earningsNextDate)) }}>{fmtDaysUntil(r.earningsNextDate)}</td>
+                        <td style={{ ...tdR, minWidth: '74px', color: sma200Tone(r.sma200Angle ?? undefined) }}>{fmtLongSmaAngle(r.sma200Angle ?? undefined)}</td>
+                        <td style={{ ...td, minWidth: '112px', whiteSpace: 'nowrap' }}>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', alignItems: 'flex-start' }}>
+                            <span style={{
+                              fontFamily: r.earningsLastDate ? 'var(--font-mono)' : undefined,
+                              fontSize: '11px',
+                              color: r.earningsLastDate ? 'var(--text-secondary)' : lastEarnings.color,
+                              fontWeight: r.earningsLastDate ? 500 : 700,
+                            }}>
+                              {r.earningsLastDate ?? lastEarnings.label}
+                            </span>
+                            <span
+                              title={lastEarnings.title}
+                              style={{
+                                display: 'inline-block',
+                                padding: '1px 5px',
+                                borderRadius: '2px',
+                                border: `1px solid ${lastEarnings.border}`,
+                                color: lastEarnings.color,
+                                background: lastEarnings.background,
+                                fontSize: '10px',
+                                lineHeight: 1.25,
+                                fontWeight: 700,
+                              }}
+                            >
+                              {lastEarnings.badge}
+                            </span>
+                          </div>
+                        </td>
+                        <td style={{ ...tdR, color: lastElapsedDays == null ? lastEarnings.color : elapsedDaysColor(lastElapsedDays) }}>
+                          {lastElapsedDays == null ? lastEarnings.label : fmtDaysSince(lastElapsedDays)}
+                        </td>
+                        <td style={{ ...td, minWidth: '116px', whiteSpace: 'nowrap' }}>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', alignItems: 'flex-start' }}>
+                            <span style={{
+                              fontFamily: r.earningsNextDate ? 'var(--font-mono)' : undefined,
+                              fontSize: '11px',
+                              color: r.earningsNextDate ? 'var(--text-secondary)' : 'var(--text-muted)',
+                            }}>
+                              {r.earningsNextDate ?? nextEarnings.label}
+                            </span>
+                            <span
+                              title={nextEarnings.title}
+                              style={{
+                                display: 'inline-block',
+                                padding: '1px 5px',
+                                borderRadius: '2px',
+                                border: `1px solid ${nextEarnings.border}`,
+                                color: nextEarnings.color,
+                                background: nextEarnings.background,
+                                fontSize: '10px',
+                                lineHeight: 1.25,
+                                fontWeight: 700,
+                              }}
+                            >
+                              {nextEarnings.badge}
+                            </span>
+                          </div>
+                        </td>
+                        <td style={{ ...tdR, color: daysColor(nextBusinessDays) }}>{fmtBusinessDaysUntil(nextBusinessDays)}</td>
                         <td style={{ ...td, whiteSpace: 'nowrap' }}>
                           <StageDots
                             values={[r.daily_a_stage, r.daily_b_stage, r.weekly_a_stage, r.weekly_b_stage, r.monthly_a_stage, r.monthly_b_stage]}
@@ -732,23 +748,245 @@ function fmtAngle(v: number | undefined): string {
   return `${sign}${v.toFixed(2)}°`
 }
 
-/** 次回決算日までの残日数（負なら過去）。日跨ぎは UTC 0時基準で安定化。 */
-function daysUntil(dateStr: string | null | undefined): number | null {
+function fmtAngleWithTrend(v: number | undefined): string {
+  if (v == null || !Number.isFinite(v)) return '---'
+  return fmtAngle(v)
+}
+
+function fmtLongSmaAngle(v: number | undefined): string {
+  if (v == null || !Number.isFinite(v)) return '---'
+  const label = Math.abs(v) < 0.05 ? '横ばい' : v > 0 ? '上向き' : '下向き'
+  return `${label} ${fmtAngle(v)}`
+}
+
+function sma200Tone(v: number | undefined): string {
+  if (v == null || !Number.isFinite(v)) return 'var(--text-muted)'
+  if (Math.abs(v) < 0.05) return 'var(--text-secondary)'
+  return pctColor(v)
+}
+
+function fmtMarketCap(row: StockRow): string {
+  if (row.marketCap != null && row.marketCap > 0) {
+    return `${(row.marketCap / 1e8).toLocaleString('ja-JP', { maximumFractionDigits: 0 })} 億`
+  }
+  if (row.marketCapStatus === 'not_applicable') return '対象外'
+  if (row.marketCapStatus === 'shares_missing') return '未取得'
+  if (row.marketCapStatus === 'price_missing') return '株価なし'
+  return '未取得'
+}
+
+function earningsNextDisplay(row: StockRow): {
+  label: string
+  badge: string
+  title: string
+  color: string
+  border: string
+  background: string
+} {
+  const source = earningsSourceLabel(row.earningsNextDateSource)
+  const fiscal = row.earningsNextFiscalPeriod ? ` / ${row.earningsNextFiscalPeriod}` : ''
+  switch (row.earningsNextDateKind) {
+    case 'confirmed':
+      return {
+        label: row.earningsNextDate ?? '公式予定',
+        badge: source ? `公式 ${source}` : '公式予定',
+        title: `公式ソースから取得した決算発表予定です${fiscal}。`,
+        color: 'var(--accent-primary)',
+        border: 'var(--accent-primary)',
+        background: 'var(--bg-elevated)',
+      }
+    case 'estimated':
+      return {
+        label: row.earningsNextDate ?? '推定',
+        badge: '推定',
+        title: '公式予定が未公表のため、直近の決算発表日から約3か月後として推定しています。確定日は決算ページで公式取得後に置き換わります。',
+        color: 'var(--text-secondary)',
+        border: 'var(--border-base)',
+        background: 'var(--bg-surface)',
+      }
+    case 'not_applicable':
+      return {
+        label: '対象外',
+        badge: '対象外',
+        title: 'ETF、REIT、投資法人など、通常の事業会社決算予定として扱わない銘柄です。',
+        color: 'var(--text-muted)',
+        border: 'var(--border-subtle)',
+        background: 'var(--bg-elevated)',
+      }
+    case 'not_announced':
+      return {
+        label: '未公表',
+        badge: '公式予定なし',
+        title: '過去の決算履歴はありますが、基準日以降の公式予定はまだDBにありません。',
+        color: 'var(--text-muted)',
+        border: 'var(--border-subtle)',
+        background: 'var(--bg-elevated)',
+      }
+    case 'no_history':
+    default:
+      return {
+        label: '未取得',
+        badge: '履歴なし',
+        title: 'この銘柄の決算発表予定・履歴がDBにありません。JPX公式またはJ-Quants取得後に反映されます。',
+        color: 'var(--text-muted)',
+        border: 'var(--border-subtle)',
+        background: 'var(--bg-elevated)',
+      }
+  }
+}
+
+function earningsLastDisplay(row: StockRow): {
+  label: string
+  badge: string
+  title: string
+  color: string
+  border: string
+  background: string
+} {
+  const source = earningsSourceLabel(row.earningsLastDateSource)
+  const fiscal = row.earningsLastFiscalPeriod ? ` / ${row.earningsLastFiscalPeriod}` : ''
+  switch (row.earningsLastDateKind) {
+    case 'reported':
+      return {
+        label: row.earningsLastDate ?? '前回決算',
+        badge: source ? source : '実績',
+        title: `J-Quants等から取得した決算発表実績です${fiscal}。`,
+        color: 'var(--accent-primary)',
+        border: 'var(--accent-primary)',
+        background: 'var(--bg-elevated)',
+      }
+    case 'not_applicable':
+      return {
+        label: '対象外',
+        badge: '対象外',
+        title: 'ETF、REIT、投資法人など、通常の事業会社決算として扱わない銘柄です。',
+        color: 'var(--text-muted)',
+        border: 'var(--border-subtle)',
+        background: 'var(--bg-elevated)',
+      }
+    case 'unverified':
+      return {
+        label: '未検証',
+        badge: '未検証',
+        title: '表示中の日付が、DBに保存済みのJ-Quants決算実績より古いため、前回決算を検証できません。',
+        color: 'var(--text-muted)',
+        border: 'var(--border-subtle)',
+        background: 'var(--bg-elevated)',
+      }
+    case 'not_collected':
+    default:
+      return {
+        label: '未取得',
+        badge: '未取得',
+        title: '普通株ですが、J-Quants fins/summary 由来の決算実績がまだDBにありません。補完バッチの対象です。',
+        color: 'var(--text-muted)',
+        border: 'var(--border-subtle)',
+        background: 'var(--bg-elevated)',
+      }
+  }
+}
+
+function earningsSourceLabel(source: string | null | undefined): string | null {
+  if (source === 'jquants_fins_summary') return 'JQ実績'
+  if (source === 'jpx') return 'JPX'
+  if (source === 'jquants') return 'JQ'
+  return null
+}
+
+function sortValue(row: StockRow, key: SortKey, referenceDate: string | null, tradingDates: string[]): unknown {
+  if (key === 'earningsLastElapsedDays') return daysSince(row.earningsLastDate, referenceDate)
+  if (key === 'earningsNextBusinessDays') return businessDaysUntil(row.earningsNextDate, referenceDate, tradingDates)
+  return (row as unknown as Record<string, unknown>)[key]
+}
+
+function parseDateUtc(dateStr: string | null | undefined): number | null {
   if (!dateStr) return null
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr)
   if (!m) return null
-  const target = Date.UTC(+m[1], +m[2] - 1, +m[3])
-  const now = new Date()
-  const today = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate())
-  return Math.round((target - today) / 86400000)
+  return Date.UTC(+m[1], +m[2] - 1, +m[3])
 }
 
-function fmtDaysUntil(dateStr: string | null | undefined): string {
-  const d = daysUntil(dateStr)
+function referenceDateUtc(referenceDate: string | null): number {
+  const parsed = parseDateUtc(referenceDate)
+  if (parsed != null) return parsed
+  const now = new Date()
+  return Date.UTC(now.getFullYear(), now.getMonth(), now.getDate())
+}
+
+function referenceDateIso(referenceDate: string | null): string {
+  const parsed = parseDateUtc(referenceDate)
+  const base = parsed ?? referenceDateUtc(null)
+  return formatIsoUtc(base)
+}
+
+function formatIsoUtc(time: number): string {
+  const d = new Date(time)
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`
+}
+
+function addDaysUtc(time: number, days: number): number {
+  return time + days * 86400000
+}
+
+function isWeekdayUtc(time: number): boolean {
+  const day = new Date(time).getUTCDay()
+  return day >= 1 && day <= 5
+}
+
+/** 前回決算日から基準日までの経過日数。基準日は表示中のスナップショット日付。 */
+function daysSince(dateStr: string | null | undefined, referenceDate: string | null): number | null {
+  const target = parseDateUtc(dateStr)
+  if (target == null) return null
+  return Math.round((referenceDateUtc(referenceDate) - target) / 86400000)
+}
+
+/** 次回決算日までの残営業日数。DB内取引日を優先し、将来未収録分は平日換算する。 */
+function businessDaysUntil(dateStr: string | null | undefined, referenceDate: string | null, tradingDates: string[]): number | null {
+  const target = parseDateUtc(dateStr)
+  if (target == null) return null
+  const from = referenceDateIso(referenceDate)
+  const to = formatIsoUtc(target)
+  if (from === to) return 0
+  if (to < from) return -countBusinessDaysForward(to, from, tradingDates)
+  return countBusinessDaysForward(from, to, tradingDates)
+}
+
+function countBusinessDaysForward(fromExclusive: string, toInclusive: string, tradingDates: string[]): number {
+  let count = tradingDates.filter((date) => date > fromExclusive && date <= toInclusive).length
+  const latestTradingDate = tradingDates[tradingDates.length - 1]
+  const fallbackStart = latestTradingDate && latestTradingDate > fromExclusive ? latestTradingDate : fromExclusive
+  if (toInclusive > fallbackStart) {
+    const start = parseDateUtc(fallbackStart)
+    const end = parseDateUtc(toInclusive)
+    if (start != null && end != null) {
+      for (let time = addDaysUtc(start, 1); time <= end; time = addDaysUtc(time, 1)) {
+        if (isWeekdayUtc(time)) count += 1
+      }
+    }
+  }
+  return count
+}
+
+function fmtDaysSince(d: number | null): string {
   if (d == null) return '---'
   if (d === 0) return '本日'
-  if (d > 0) return `${d}日`
-  return `${d}日 (過去)`
+  if (d > 0) return `${d}日経過`
+  return `${Math.abs(d)}日後`
+}
+
+function fmtBusinessDaysUntil(d: number | null): string {
+  if (d == null) return '---'
+  if (d === 0) return '本日'
+  if (d > 0) return `${d}営業日`
+  return `${d}営業日 (過去)`
+}
+
+function elapsedDaysColor(d: number | null): string {
+  if (d == null) return 'var(--text-muted)'
+  if (d < 0) return 'var(--accent-primary)'
+  if (d <= 14) return 'var(--accent-primary)'
+  if (d <= 45) return 'var(--text-secondary)'
+  return 'var(--text-muted)'
 }
 
 function daysColor(d: number | null): string {

@@ -52,6 +52,9 @@ interface Stock {
   sma_angles?: { sma5: number | null; sma25: number | null; sma75: number | null; sma300: number | null }
   prev_sma_angles?: { sma5: number | null; sma25: number | null; sma75: number | null; sma300: number | null }
   prev_prev_sma_angles?: { sma5: number | null; sma25: number | null; sma75: number | null; sma300: number | null }
+  ml_candidate_direction?: 'up' | 'down' | null
+  ml_candidate_rank?: number | null
+  ml_candidate_summary?: string | null
 }
 
 type Timeframe = 'daily' | 'weekly' | 'monthly'
@@ -76,16 +79,49 @@ const getPercentStyle = (val?: number | string): React.CSSProperties => {
   return { color: '#6b7280' }
 }
 
-const formatAngle = (angle: number | null | undefined) => {
-  if (angle === null || angle === undefined) return '―'
-  return `${angle > 0 ? '+' : ''}${angle}°`
+type FlowTone = 'up' | 'down' | 'flat'
+
+function angleFlow(angle: number | null | undefined, prev: number | null | undefined) {
+  if (angle == null || !Number.isFinite(angle)) return { label: '未計算', tone: 'flat' as FlowTone, pct: '-' }
+  const pct = `${angle > 0 ? '+' : ''}${angle.toFixed(2)}%`
+  const direction = angle > 0.08 ? '上向き' : angle < -0.08 ? '下向き' : '横ばい'
+  const delta = prev == null || !Number.isFinite(prev) ? null : angle - prev
+  if (delta == null || Math.abs(delta) < 0.04) {
+    return {
+      label: direction === '横ばい' ? '横ばい維持' : `${direction}維持`,
+      tone: direction === '上向き' ? 'up' as FlowTone : direction === '下向き' ? 'down' as FlowTone : 'flat' as FlowTone,
+      pct,
+    }
+  }
+  if (delta > 0) {
+    return {
+      label: direction === '下向き' ? '下げ鈍化' : direction === '横ばい' ? '上向き化' : '上向き加速',
+      tone: direction === '下向き' ? 'flat' as FlowTone : 'up' as FlowTone,
+      pct,
+    }
+  }
+  return {
+    label: direction === '上向き' ? '上げ鈍化' : direction === '横ばい' ? '下向き化' : '下向き加速',
+    tone: direction === '上向き' ? 'flat' as FlowTone : 'down' as FlowTone,
+    pct,
+  }
 }
 
-const getAngleStyle = (angle: number | null | undefined): React.CSSProperties => {
-  if (angle === null || angle === undefined) return { color: '#9ca3af' }
-  if (angle > 0) return { color: '#16a34a', fontWeight: 'bold' }
-  if (angle < 0) return { color: '#ef4444', fontWeight: 'bold' }
-  return { color: '#6b7280' }
+function maAlignmentLabel(stock: Stock) {
+  const values = [stock.sma_angles?.sma5, stock.sma_angles?.sma25, stock.sma_angles?.sma75]
+  const up = values.filter((v) => v != null && v > 0.08).length
+  const down = values.filter((v) => v != null && v < -0.08).length
+  if (up >= 3) return { label: '短中長の上向きが揃う', tone: 'up' as FlowTone }
+  if (down >= 3) return { label: '短中長の下向きが揃う', tone: 'down' as FlowTone }
+  if (up >= 2) return { label: '上向き優勢', tone: 'up' as FlowTone }
+  if (down >= 2) return { label: '下向き優勢', tone: 'down' as FlowTone }
+  return { label: '方向確認中', tone: 'flat' as FlowTone }
+}
+
+function flowToneClass(tone: FlowTone) {
+  if (tone === 'up') return 'border-green-200 bg-green-50 text-green-700'
+  if (tone === 'down') return 'border-red-200 bg-red-50 text-red-700'
+  return 'border-gray-200 bg-gray-50 text-gray-600'
 }
 
 type CellKey = string // "b-a"
@@ -285,7 +321,7 @@ export default function HexMap({ data }: { data: Stock[]; timeframe?: Timeframe 
       {/* 銘柄テーブル */}
       <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full text-xs" style={{ minWidth: '1480px', borderCollapse: 'collapse' }}>
+          <table className="w-full text-xs" style={{ minWidth: '1620px', borderCollapse: 'collapse' }}>
             <thead className="bg-gray-50 sticky top-0 z-10">
               <tr style={{ borderBottom: '1px solid #e5e7eb' }}>
                 <th scope="col" className="px-3 py-2 text-left font-medium text-gray-500 whitespace-nowrap">コード</th>
@@ -301,7 +337,7 @@ export default function HexMap({ data }: { data: Stock[]; timeframe?: Timeframe 
                 <th scope="col" className="px-3 py-2 text-right font-medium text-gray-500 whitespace-nowrap">6M</th>
                 <th scope="col" className="px-3 py-2 text-right font-medium text-gray-500 whitespace-nowrap">YTD</th>
                 <th scope="col" className="px-3 py-2 text-left font-medium text-gray-500 whitespace-nowrap">ステージ (日A/B 週A/B 月A/B)</th>
-                <th scope="col" className="px-3 py-2 text-right font-medium text-gray-500 whitespace-nowrap" title="SMA角度（SMA5/25/75/300）">SMA角度</th>
+                <th scope="col" className="px-3 py-2 text-left font-medium text-gray-500 whitespace-nowrap" title="SMAの傾きが、前回から加速しているか鈍化しているかを表示">MAの流れ / ML示唆</th>
               </tr>
             </thead>
             <tbody>
@@ -370,20 +406,8 @@ export default function HexMap({ data }: { data: Stock[]; timeframe?: Timeframe 
                       size={18}
                     />
                   </td>
-                  <td className="px-3 py-2 text-right font-mono text-[11px] whitespace-nowrap" title="SMA5° / SMA25° / SMA75° / SMA300°">
-                    {s.sma_angles ? (
-                      <span className="inline-flex gap-1.5">
-                        <span style={getAngleStyle(s.sma_angles.sma5)}>{formatAngle(s.sma_angles.sma5)}</span>
-                        <span className="text-gray-300">/</span>
-                        <span style={getAngleStyle(s.sma_angles.sma25)}>{formatAngle(s.sma_angles.sma25)}</span>
-                        <span className="text-gray-300">/</span>
-                        <span style={getAngleStyle(s.sma_angles.sma75)}>{formatAngle(s.sma_angles.sma75)}</span>
-                        <span className="text-gray-300">/</span>
-                        <span style={getAngleStyle(s.sma_angles.sma300)}>{formatAngle(s.sma_angles.sma300)}</span>
-                      </span>
-                    ) : (
-                      <span className="text-gray-400">---</span>
-                    )}
+                  <td className="px-3 py-2 text-left text-[11px] whitespace-nowrap">
+                    <MaFlowCell stock={s} />
                   </td>
                 </tr>
               ))}
@@ -407,6 +431,50 @@ export default function HexMap({ data }: { data: Stock[]; timeframe?: Timeframe 
             もっと見る（{rowLimit.toLocaleString()} / {visible.length.toLocaleString()} 件 · 残り {(visible.length - rowLimit).toLocaleString()} 件）
           </button>
         )}
+      </div>
+    </div>
+  )
+}
+
+function MaFlowCell({ stock }: { stock: Stock }) {
+  const alignment = maAlignmentLabel(stock)
+  const flows = [
+    ['5日', angleFlow(stock.sma_angles?.sma5, stock.prev_sma_angles?.sma5)],
+    ['25日', angleFlow(stock.sma_angles?.sma25, stock.prev_sma_angles?.sma25)],
+    ['75日', angleFlow(stock.sma_angles?.sma75, stock.prev_sma_angles?.sma75)],
+    ['300日', angleFlow(stock.sma_angles?.sma300, stock.prev_sma_angles?.sma300)],
+  ] as const
+  const mlTone = stock.ml_candidate_direction === 'up' ? 'up' : stock.ml_candidate_direction === 'down' ? 'down' : 'flat'
+  const mlLabel = stock.ml_candidate_direction === 'up'
+    ? `ML上昇候補 #${stock.ml_candidate_rank}`
+    : stock.ml_candidate_direction === 'down'
+      ? `ML下落警戒 #${stock.ml_candidate_rank}`
+      : 'ML候補外'
+
+  return (
+    <div className="flex min-w-[310px] flex-col gap-1.5">
+      <div className="flex flex-wrap gap-1">
+        <span className={`rounded-full border px-2 py-[2px] text-[10px] font-semibold ${flowToneClass(alignment.tone)}`}>
+          {alignment.label}
+        </span>
+        <span className={`rounded-full border px-2 py-[2px] text-[10px] font-semibold ${flowToneClass(mlTone)}`}>
+          {mlLabel}
+        </span>
+      </div>
+      <div className="grid grid-cols-4 gap-1">
+        {flows.map(([name, flow]) => (
+          <span
+            key={name}
+            className={`rounded-[5px] border px-1.5 py-1 text-center leading-tight ${flowToneClass(flow.tone)}`}
+            title={`${name}MA変化率 ${flow.pct}`}
+          >
+            <b className="block text-[10px]">{name}</b>
+            <span className="text-[9px]">{flow.label}</span>
+          </span>
+        ))}
+      </div>
+      <div className="max-w-[430px] truncate text-[10px] leading-4 text-gray-500" title={stock.ml_candidate_summary ?? undefined}>
+        {stock.ml_candidate_summary ?? '傾きの加速/鈍化と、次のステージ更新を確認します。'}
       </div>
     </div>
   )

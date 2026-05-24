@@ -25,11 +25,9 @@ export interface OHLCV {
 }
 
 export interface Fundamentals {
-  per?: number;
   pbr?: number;
   roe?: number;
   eps?: number;
-  dividendYield?: number;
   revenue?: number;
   operatingIncome?: number;
   // 業種情報 (PHASE 9)

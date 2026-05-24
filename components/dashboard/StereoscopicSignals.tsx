@@ -23,6 +23,10 @@ function tone(v: number | null) {
   return v > 0 ? 'text-[var(--color-price-up)]' : v < 0 ? 'text-[var(--color-price-down)]' : 'text-[var(--color-text-secondary)]'
 }
 
+function stockHref(ticker: string) {
+  return `/stock/${encodeURIComponent(ticker)}`
+}
+
 export async function StereoscopicSignals({ date }: { date?: string | null }) {
   const rows = await getCachedStereoscopicSignals(date)
   return (
@@ -68,8 +72,19 @@ export async function StereoscopicSignals({ date }: { date?: string | null }) {
               {rows.map((row) => (
                 <tr key={row.ticker} className="hover:bg-[var(--color-surface-subtle)]">
                   <td className="py-3 pl-2 pr-3">
-                    <Link href={`/stock/${row.ticker}`} className="font-bold tabular-nums hover:underline">{row.ticker}</Link>
-                    <div className="mt-1 max-w-[210px] truncate text-[12px] font-semibold">{row.name ?? row.ticker}</div>
+                    <Link
+                      href={stockHref(row.ticker)}
+                      prefetch={false}
+                      className="block max-w-[230px] rounded-[4px] px-1 py-0.5 hover:bg-white hover:shadow-sm"
+                      aria-label={`${row.ticker} ${row.name ?? ''} の個別銘柄ページへ移動`}
+                    >
+                      <span className="block font-bold tabular-nums text-[var(--color-brand-800)] hover:underline">
+                        {row.ticker}
+                      </span>
+                      <span className="mt-1 block truncate text-[12px] font-semibold text-[var(--color-text-primary)]">
+                        {row.name ?? row.ticker}
+                      </span>
+                    </Link>
                   </td>
                   <td className="py-3 pr-3">
                     <MarginBadges

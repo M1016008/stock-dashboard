@@ -77,6 +77,8 @@ async function main() {
     await lock.heartbeat()
     await runRequired('scripts/batch-earnings.ts')
     await lock.heartbeat()
+    await runRequired('scripts/batch-earnings-history.ts', { EARNINGS_HISTORY_LIMIT: process.env.EARNINGS_HISTORY_LIMIT ?? '40' })
+    await lock.heartbeat()
     await runRequired('scripts/batch-credit-short.ts')
     await lock.heartbeat()
     await runRequired('scripts/build-serving-margin.ts')

@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { CalendarDays, ChevronLeft, ChevronRight, RotateCcw } from 'lucide-react'
+import { CalendarDays, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, RotateCcw } from 'lucide-react'
 
 export interface MarketDateOption {
   date: string
@@ -76,6 +76,16 @@ export function MarketDateCalendar({
   }, [open])
 
   const monthIndex = month ? months.indexOf(month) : -1
+  const canPrevMonth = monthIndex > 0
+  const canNextMonth = monthIndex >= 0 && monthIndex < months.length - 1
+  const canPrevYear = monthIndex > 0
+  const canNextYear = monthIndex >= 0 && monthIndex < months.length - 1
+
+  const moveMonth = (delta: number) => {
+    if (monthIndex < 0) return
+    const nextIndex = Math.min(Math.max(monthIndex + delta, 0), months.length - 1)
+    setMonth(months[nextIndex] ?? month)
+  }
   const grid = useMemo(() => {
     if (!month) return []
     const blanks = Array.from({ length: firstDayOfWeek(month) }, () => null)
@@ -111,31 +121,49 @@ export function MarketDateCalendar({
           <div className="mb-3 flex items-center justify-between gap-2">
             <button
               type="button"
-              onClick={() => monthIndex > 0 && setMonth(months[monthIndex - 1])}
-              disabled={monthIndex <= 0}
+              onClick={() => moveMonth(-12)}
+              disabled={!canPrevYear}
+              className="inline-flex h-8 w-8 items-center justify-center rounded-[5px] border border-[var(--color-border-soft)] text-[var(--color-text-secondary)] disabled:opacity-35"
+              aria-label="前年"
+              title="前年"
+            >
+              <ChevronsLeft size={16} />
+            </button>
+            <button
+              type="button"
+              onClick={() => moveMonth(-1)}
+              disabled={!canPrevMonth}
               className="inline-flex h-8 w-8 items-center justify-center rounded-[5px] border border-[var(--color-border-soft)] text-[var(--color-text-secondary)] disabled:opacity-35"
               aria-label="前の月"
+              title="前の月"
             >
               <ChevronLeft size={16} />
             </button>
-            <select
-              value={month}
-              onChange={(e) => setMonth(e.target.value)}
-              className="h-8 flex-1 rounded-[5px] border border-[var(--color-border-default)] bg-white px-2 text-center text-[13px] font-bold tabular-nums"
-              aria-label="月を選択"
+            <div
+              className="flex h-8 flex-1 items-center justify-center rounded-[5px] border border-[var(--color-border-default)] bg-white px-2 text-center text-[13px] font-bold tabular-nums text-[var(--color-text-primary)]"
+              aria-live="polite"
             >
-              {months.map((m) => (
-                <option key={m} value={m}>{monthLabel(m)}</option>
-              ))}
-            </select>
+              {month ? monthLabel(month) : '---'}
+            </div>
             <button
               type="button"
-              onClick={() => monthIndex >= 0 && monthIndex < months.length - 1 && setMonth(months[monthIndex + 1])}
-              disabled={monthIndex < 0 || monthIndex >= months.length - 1}
+              onClick={() => moveMonth(1)}
+              disabled={!canNextMonth}
               className="inline-flex h-8 w-8 items-center justify-center rounded-[5px] border border-[var(--color-border-soft)] text-[var(--color-text-secondary)] disabled:opacity-35"
               aria-label="次の月"
+              title="次の月"
             >
               <ChevronRight size={16} />
+            </button>
+            <button
+              type="button"
+              onClick={() => moveMonth(12)}
+              disabled={!canNextYear}
+              className="inline-flex h-8 w-8 items-center justify-center rounded-[5px] border border-[var(--color-border-soft)] text-[var(--color-text-secondary)] disabled:opacity-35"
+              aria-label="翌年"
+              title="翌年"
+            >
+              <ChevronsRight size={16} />
             </button>
           </div>
 
@@ -155,6 +183,7 @@ export function MarketDateCalendar({
                   type="button"
                   disabled={!enabled}
                   onClick={() => selectDate(latest ? null : date)}
+                  aria-label={`${date}を選択`}
                   title={info ? `${date} / ${info.tickers?.toLocaleString('ja-JP') ?? '-'}銘柄` : `${date} データなし`}
                   className={`flex h-9 flex-col items-center justify-center rounded-[5px] border text-[11px] font-bold tabular-nums ${
                     selected

@@ -6,11 +6,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { execAll, execGet } from '@/lib/db/client'
-import {
-  attachEarningsSignalDecorations,
-  loadEarningsSignalDecorations,
-  type EarningsSignalDecoration,
-} from '@/lib/signals/earnings-labels'
+import type { EarningsSignalDecoration } from '@/lib/signals/earnings-labels'
 
 export const dynamic = 'force-dynamic'
 
@@ -43,6 +39,17 @@ export interface EarningsEntry extends EarningsSignalDecoration {
   monthly_b_stage: number | null
 }
 type EarningsEntryBase = Omit<EarningsEntry, keyof EarningsSignalDecoration>
+
+function withEmptySignalDecoration(entry: EarningsEntryBase): EarningsEntry {
+  return {
+    ...entry,
+    signalLabels: [],
+    signalCodes: [],
+    signalDetails: [],
+    mlDirection: null,
+    mlInsight: null,
+  }
+}
 
 export async function GET(request: NextRequest) {
   try {
@@ -138,11 +145,9 @@ export async function GET(request: NextRequest) {
     )
 
     entries.sort((a, b) => a.date.localeCompare(b.date) || a.ticker.localeCompare(b.ticker))
-    const signalDecorations = await loadEarningsSignalDecorations(entries.map((entry) => entry.ticker), baseDate)
-    const decoratedEntries = attachEarningsSignalDecorations(entries, signalDecorations)
 
     return NextResponse.json({
-      entries: decoratedEntries,
+      entries: entries.map(withEmptySignalDecoration),
       snapshotDate: baseDate,
       from: fromDate,
       to: toDate,

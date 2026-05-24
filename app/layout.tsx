@@ -1,23 +1,9 @@
 import type { Metadata } from 'next'
-import { Inter, Noto_Sans_JP } from 'next/font/google'
 import { Suspense } from 'react'
 import { Header } from '@/components/layout/Header'
 import { DataAutoUpdater } from '@/components/layout/DataAutoUpdater'
 import { FreshDataRefresher } from '@/components/layout/FreshDataRefresher'
 import './globals.css'
-
-const inter = Inter({
-  subsets: ['latin'],
-  variable: '--font-sans-next',
-  display: 'swap',
-})
-
-const notoJP = Noto_Sans_JP({
-  subsets: ['latin'],
-  weight: ['400', '500', '700'],
-  variable: '--font-jp-next',
-  display: 'swap',
-})
 
 export const metadata: Metadata = {
   title: 'StockBoard',
@@ -34,7 +20,7 @@ export default function RootLayout({
   children: React.ReactNode
 }) {
   return (
-    <html lang="ja" className={`${inter.variable} ${notoJP.variable}`}>
+    <html lang="ja">
       <body className="min-h-screen bg-[var(--bg-void)] font-sans text-[var(--color-text-primary)] antialiased">
         <Suspense fallback={null}>
           <DataAutoUpdater />

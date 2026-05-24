@@ -27,16 +27,29 @@ interface SnapshotRow {
   avg_volume_10d: number | null
   avg_volume_30d: number | null
   market_cap: number | null
+  shares_outstanding: number | null
   perf_pct_1w: number | null
   perf_pct_1m: number | null
   perf_pct_3m: number | null
   perf_pct_6m: number | null
   perf_pct_ytd: number | null
   sma_5d: number | null
+  sma_5d_prev: number | null
   sma_25d: number | null
   sma_75d: number | null
+  sma_200d: number | null
+  sma_200d_prev: number | null
   earnings_last_date: string | null
+  earnings_last_source: string | null
+  earnings_last_fiscal_period: string | null
   earnings_next_date: string | null
+  earnings_next_source: string | null
+  earnings_next_fiscal_period: string | null
+  earnings_calendar_count: number | null
+  earnings_latest_known_date: string | null
+  earnings_summary_count: number | null
+  earnings_summary_earliest_date: string | null
+  earnings_summary_global_earliest_date: string | null
   sector17_name: string | null
   sector33_name: string | null
   market_segment: string | null
@@ -56,7 +69,6 @@ interface ScreenerStockRow {
   marketSegment: string
   marginType?: string
   sectorLarge: string
-  sectorSmall: string | null
   sector33: string | null
   sector17Name: string | null
   sector33Name: string | null
@@ -73,12 +85,19 @@ interface ScreenerStockRow {
   avgVolume30d: number | null
   marketCap: number | null
   marketCapCurrency: string | null
-  per: number | null
-  dividendYield: number | null
+  marketCapStatus: 'calculated' | 'not_applicable' | 'shares_missing' | 'price_missing'
+  sma5Angle: number | null
   sma25Angle: number | null
   sma75Angle: number | null
+  sma200Angle: number | null
   earningsLastDate: string | null
+  earningsLastDateKind: 'reported' | 'not_applicable' | 'not_collected' | 'unverified'
+  earningsLastDateSource: string | null
+  earningsLastFiscalPeriod: string | null
   earningsNextDate: string | null
+  earningsNextDateKind: 'confirmed' | 'estimated' | 'not_announced' | 'not_applicable' | 'no_history'
+  earningsNextDateSource: string | null
+  earningsNextFiscalPeriod: string | null
   daily_a_stage: number | null
   daily_b_stage: number | null
   weekly_a_stage: number | null
@@ -121,7 +140,19 @@ async function loadSnapshotByDate(date: string): Promise<SnapshotRow[]> {
           (SELECT MAX(date) FROM ohlcv_daily WHERE date <= date(?, '-1 month')) AS m1,
           (SELECT MAX(date) FROM ohlcv_daily WHERE date <= date(?, '-3 months')) AS m3,
           (SELECT MAX(date) FROM ohlcv_daily WHERE date <= date(?, '-6 months')) AS m6,
-          (SELECT MAX(date) FROM ohlcv_daily WHERE date <= substr(?, 1, 4) || '-01-01') AS ytd
+          (SELECT MAX(date) FROM ohlcv_daily WHERE date <= substr(?, 1, 4) || '-01-01') AS ytd,
+          (
+            SELECT date
+            FROM (
+              SELECT DISTINCT date
+              FROM ohlcv_daily
+              WHERE date <= ?
+              ORDER BY date DESC
+              LIMIT 21
+            )
+            ORDER BY date ASC
+            LIMIT 1
+          ) AS d20
       )
     SELECT
       s.date,
@@ -130,19 +161,98 @@ async function loadSnapshotByDate(date: string): Promise<SnapshotRow[]> {
       cur.close AS price,
       CASE WHEN d1.close > 0 THEN 100.0 * (cur.close - d1.close) / d1.close END AS change_percent_1d,
       cur.volume AS volume_1d,
-      NULL AS avg_volume_10d,
-      NULL AS avg_volume_30d,
+      (
+        SELECT ROUND(AVG(volume))
+        FROM (
+          SELECT od.volume
+          FROM ohlcv_daily od
+          WHERE od.ticker = s.ticker AND od.date <= s.date
+          ORDER BY od.date DESC
+          LIMIT 10
+        )
+      ) AS avg_volume_10d,
+      (
+        SELECT ROUND(AVG(volume))
+        FROM (
+          SELECT od.volume
+          FROM ohlcv_daily od
+          WHERE od.ticker = s.ticker AND od.date <= s.date
+          ORDER BY od.date DESC
+          LIMIT 30
+        )
+      ) AS avg_volume_30d,
       CASE WHEN u.shares_outstanding IS NOT NULL THEN cur.close * u.shares_outstanding END AS market_cap,
+      u.shares_outstanding,
       CASE WHEN w1.close > 0 THEN 100.0 * (cur.close - w1.close) / w1.close END AS perf_pct_1w,
       CASE WHEN m1.close > 0 THEN 100.0 * (cur.close - m1.close) / m1.close END AS perf_pct_1m,
       CASE WHEN m3.close > 0 THEN 100.0 * (cur.close - m3.close) / m3.close END AS perf_pct_3m,
       CASE WHEN m6.close > 0 THEN 100.0 * (cur.close - m6.close) / m6.close END AS perf_pct_6m,
       CASE WHEN ytd.close > 0 THEN 100.0 * (cur.close - ytd.close) / ytd.close END AS perf_pct_ytd,
       s.ma_5 AS sma_5d,
+      prev_s.ma_5 AS sma_5d_prev,
       s.ma_25 AS sma_25d,
       s.ma_75 AS sma_75d,
-      (SELECT MAX(e.announce_date) FROM earnings_calendar e WHERE e.ticker = s.ticker AND e.announce_date < s.date) AS earnings_last_date,
+      (
+        SELECT CASE WHEN COUNT(*) >= 200 THEN AVG(close) END
+        FROM (
+          SELECT od.close
+          FROM ohlcv_daily od
+          WHERE od.ticker = s.ticker AND od.date <= s.date
+          ORDER BY od.date DESC
+          LIMIT 200
+        )
+      ) AS sma_200d,
+      (
+        SELECT CASE WHEN COUNT(*) >= 200 THEN AVG(close) END
+        FROM (
+          SELECT od.close
+          FROM ohlcv_daily od
+          WHERE od.ticker = s.ticker AND od.date <= pd.d20
+          ORDER BY od.date DESC
+          LIMIT 200
+        )
+      ) AS sma_200d_prev,
+      (
+        SELECT e.announce_date
+        FROM earnings_calendar e
+        WHERE e.ticker = s.ticker AND e.announce_date < s.date
+        ORDER BY CASE WHEN e.source = 'jquants_fins_summary' THEN 0 ELSE 1 END, e.announce_date DESC
+        LIMIT 1
+      ) AS earnings_last_date,
+      (
+        SELECT e.source
+        FROM earnings_calendar e
+        WHERE e.ticker = s.ticker AND e.announce_date < s.date
+        ORDER BY CASE WHEN e.source = 'jquants_fins_summary' THEN 0 ELSE 1 END, e.announce_date DESC
+        LIMIT 1
+      ) AS earnings_last_source,
+      (
+        SELECT e.fiscal_period
+        FROM earnings_calendar e
+        WHERE e.ticker = s.ticker AND e.announce_date < s.date
+        ORDER BY CASE WHEN e.source = 'jquants_fins_summary' THEN 0 ELSE 1 END, e.announce_date DESC
+        LIMIT 1
+      ) AS earnings_last_fiscal_period,
       (SELECT MIN(e.announce_date) FROM earnings_calendar e WHERE e.ticker = s.ticker AND e.announce_date >= s.date) AS earnings_next_date,
+      (
+        SELECT e.source
+        FROM earnings_calendar e
+        WHERE e.ticker = s.ticker AND e.announce_date >= s.date
+        ORDER BY e.announce_date ASC
+        LIMIT 1
+      ) AS earnings_next_source,
+      (
+        SELECT e.fiscal_period
+        FROM earnings_calendar e
+        WHERE e.ticker = s.ticker AND e.announce_date >= s.date
+        ORDER BY e.announce_date ASC
+        LIMIT 1
+      ) AS earnings_next_fiscal_period,
+      (SELECT COUNT(*) FROM earnings_calendar e WHERE e.ticker = s.ticker) AS earnings_calendar_count,
+      (SELECT MAX(e.announce_date) FROM earnings_calendar e WHERE e.ticker = s.ticker) AS earnings_latest_known_date,
+      (SELECT COUNT(*) FROM earnings_calendar e WHERE e.ticker = s.ticker AND e.source = 'jquants_fins_summary') AS earnings_summary_count,
+      (SELECT MIN(e.announce_date) FROM earnings_calendar e WHERE e.ticker = s.ticker AND e.source = 'jquants_fins_summary') AS earnings_summary_earliest_date,
+      (SELECT MIN(e.announce_date) FROM earnings_calendar e WHERE e.source = 'jquants_fins_summary') AS earnings_summary_global_earliest_date,
       u.sector17_name,
       u.sector33_name,
       u.market_segment,
@@ -163,9 +273,10 @@ async function loadSnapshotByDate(date: string): Promise<SnapshotRow[]> {
     LEFT JOIN ohlcv_daily m6 ON m6.ticker = s.ticker AND m6.date = pd.m6
     LEFT JOIN ohlcv_daily ytd ON ytd.ticker = s.ticker AND ytd.date = pd.ytd
     LEFT JOIN ticker_universe u ON u.ticker = s.ticker
+    LEFT JOIN daily_snapshots prev_s ON prev_s.ticker = s.ticker AND prev_s.date = pd.d1
     WHERE s.date = ?
     `,
-    [date, date, date, date, date, date, date],
+    [date, date, date, date, date, date, date, date],
   )
 }
 
@@ -182,9 +293,14 @@ function smaAngleDegrees(shortSma: number | null, longSma: number | null): numbe
   return Math.atan(slope) * (180 / Math.PI)
 }
 
+function smaChangeAngleDegrees(currentSma: number | null, previousSma: number | null): number | null {
+  if (currentSma == null || previousSma == null || previousSma === 0) return null
+  const slope = (currentSma - previousSma) / previousSma
+  return Math.atan(slope) * (180 / Math.PI)
+}
+
 interface SectorEntry {
   sectorLarge: string | null
-  sectorSmall: string | null
   sector33: string | null
   marketSegment: string | null
   marginType: string | null
@@ -194,18 +310,16 @@ async function loadSectorMap(): Promise<Map<string, SectorEntry>> {
   const rows = await execAll<{
     ticker: string
     sector_large: string | null
-    sector_small: string | null
     sector33: string | null
     market_segment: string | null
     margin_type: string | null
   }>(
-    `SELECT ticker, sector_large, sector_small, sector33, market_segment, margin_type FROM sector_master`,
+    `SELECT ticker, sector_large, sector33, market_segment, margin_type FROM sector_master`,
   )
   const map = new Map<string, SectorEntry>()
   for (const r of rows) {
     map.set(r.ticker, {
       sectorLarge: r.sector_large,
-      sectorSmall: r.sector_small,
       sector33: r.sector33,
       marketSegment: r.market_segment,
       marginType: r.margin_type,
@@ -217,12 +331,13 @@ async function loadSectorMap(): Promise<Map<string, SectorEntry>> {
 function buildResultRow(s: SnapshotRow, sectorMap: Map<string, SectorEntry>): ScreenerStockRow | null {
   const master = getTickersByMarket('JP').find((t) => t.ticker === s.ticker)
   const fromDb = sectorMap.get(s.ticker)
-  // J-Quants 17/33業種を第一参照にする。sector_master の独自分類は補助。
+  // J-Quants 17/33業種を第一参照にする。
   const sectorLarge = s.sector17_name ?? fromDb?.sectorLarge ?? master?.sectorLarge ?? 'その他'
-  let sectorSmall = fromDb?.sectorSmall ?? s.sector33_name ?? master?.sectorSmall ?? null
-  if (sectorLarge === 'その他' && !sectorSmall) sectorSmall = 'その他'
   const sector33 = s.sector33_name ?? fromDb?.sector33 ?? null
   const marketSegment = s.market_segment ?? fromDb?.marketSegment ?? master?.marketSegment ?? ''
+  const marketCapStatus = resolveMarketCapStatus(s, marketSegment, sectorLarge, sector33)
+  const lastEarnings = resolveLastEarningsDate(s, marketSegment, sectorLarge, sector33)
+  const nextEarnings = resolveNextEarningsDate(s, marketSegment, sectorLarge, sector33)
   return {
     ticker: s.ticker,
     name: s.name ?? master?.name ?? s.ticker,
@@ -230,7 +345,6 @@ function buildResultRow(s: SnapshotRow, sectorMap: Map<string, SectorEntry>): Sc
     marketSegment,
     marginType: s.margin_type ?? fromDb?.marginType ?? master?.marginType,
     sectorLarge,
-    sectorSmall,
     sector33,
     sector17Name: s.sector17_name,
     sector33Name: s.sector33_name,
@@ -247,13 +361,20 @@ function buildResultRow(s: SnapshotRow, sectorMap: Map<string, SectorEntry>): Sc
     avgVolume30d: s.avg_volume_30d,
     marketCap: s.market_cap,
     marketCapCurrency: s.market_cap == null ? null : 'JPY',
-    per: null,
-    dividendYield: null,
+    marketCapStatus,
     // SMA角度: atan で実際の角度（度）に変換
+    sma5Angle: smaChangeAngleDegrees(s.sma_5d, s.sma_5d_prev),
     sma25Angle: smaAngleDegrees(s.sma_5d, s.sma_25d),
     sma75Angle: smaAngleDegrees(s.sma_25d, s.sma_75d),
-    earningsLastDate: s.earnings_last_date,
-    earningsNextDate: s.earnings_next_date,
+    sma200Angle: smaChangeAngleDegrees(s.sma_200d, s.sma_200d_prev),
+    earningsLastDate: lastEarnings.earningsLastDate,
+    earningsLastDateKind: lastEarnings.earningsLastDateKind,
+    earningsLastDateSource: lastEarnings.earningsLastDateSource,
+    earningsLastFiscalPeriod: lastEarnings.earningsLastFiscalPeriod,
+    earningsNextDate: nextEarnings.earningsNextDate,
+    earningsNextDateKind: nextEarnings.earningsNextDateKind,
+    earningsNextDateSource: nextEarnings.earningsNextDateSource,
+    earningsNextFiscalPeriod: nextEarnings.earningsNextFiscalPeriod,
     daily_a_stage: s.daily_a_stage,
     daily_b_stage: s.daily_b_stage,
     weekly_a_stage: s.weekly_a_stage,
@@ -261,6 +382,162 @@ function buildResultRow(s: SnapshotRow, sectorMap: Map<string, SectorEntry>): Sc
     monthly_a_stage: s.monthly_a_stage,
     monthly_b_stage: s.monthly_b_stage,
   }
+}
+
+function resolveLastEarningsDate(
+  s: SnapshotRow,
+  marketSegment: string,
+  sectorLarge: string | null,
+  sector33: string | null,
+): Pick<ScreenerStockRow, 'earningsLastDate' | 'earningsLastDateKind' | 'earningsLastDateSource' | 'earningsLastFiscalPeriod'> {
+  if (s.earnings_last_date) {
+    return {
+      earningsLastDate: s.earnings_last_date,
+      earningsLastDateKind: 'reported',
+      earningsLastDateSource: s.earnings_last_source,
+      earningsLastFiscalPeriod: s.earnings_last_fiscal_period,
+    }
+  }
+
+  if (isFundLike(s, marketSegment, sectorLarge, sector33)) {
+    return {
+      earningsLastDate: null,
+      earningsLastDateKind: 'not_applicable',
+      earningsLastDateSource: null,
+      earningsLastFiscalPeriod: null,
+    }
+  }
+
+  if (
+    (s.earnings_summary_global_earliest_date != null && s.date < s.earnings_summary_global_earliest_date) ||
+    (
+      Number(s.earnings_summary_count ?? 0) > 0 &&
+      s.earnings_summary_earliest_date != null &&
+      s.date < s.earnings_summary_earliest_date
+    )
+  ) {
+    return {
+      earningsLastDate: null,
+      earningsLastDateKind: 'unverified',
+      earningsLastDateSource: null,
+      earningsLastFiscalPeriod: null,
+    }
+  }
+
+  return {
+    earningsLastDate: null,
+    earningsLastDateKind: 'not_collected',
+    earningsLastDateSource: null,
+    earningsLastFiscalPeriod: null,
+  }
+}
+
+function resolveNextEarningsDate(
+  s: SnapshotRow,
+  marketSegment: string,
+  sectorLarge: string | null,
+  sector33: string | null,
+): Pick<ScreenerStockRow, 'earningsNextDate' | 'earningsNextDateKind' | 'earningsNextDateSource' | 'earningsNextFiscalPeriod'> {
+  if (s.earnings_next_date) {
+    return {
+      earningsNextDate: s.earnings_next_date,
+      earningsNextDateKind: 'confirmed',
+      earningsNextDateSource: s.earnings_next_source,
+      earningsNextFiscalPeriod: s.earnings_next_fiscal_period,
+    }
+  }
+
+  if (isFundLike(s, marketSegment, sectorLarge, sector33)) {
+    return {
+      earningsNextDate: null,
+      earningsNextDateKind: 'not_applicable',
+      earningsNextDateSource: null,
+      earningsNextFiscalPeriod: null,
+    }
+  }
+
+  const estimated = estimateNextQuarterlyDate(s.earnings_last_date ?? s.earnings_latest_known_date, s.date)
+  if (estimated) {
+    return {
+      earningsNextDate: estimated,
+      earningsNextDateKind: 'estimated',
+      earningsNextDateSource: 'estimated_from_previous_earnings',
+      earningsNextFiscalPeriod: null,
+    }
+  }
+
+  return {
+    earningsNextDate: null,
+    earningsNextDateKind: Number(s.earnings_calendar_count ?? 0) > 0 ? 'not_announced' : 'no_history',
+    earningsNextDateSource: null,
+    earningsNextFiscalPeriod: null,
+  }
+}
+
+function estimateNextQuarterlyDate(lastKnownDate: string | null, referenceDate: string): string | null {
+  if (!lastKnownDate || !/^\d{4}-\d{2}-\d{2}$/.test(lastKnownDate)) return null
+  let candidate = lastKnownDate
+  for (let i = 0; i < 8; i++) {
+    candidate = nextWeekday(addMonthsClamped(candidate, 3))
+    if (candidate > referenceDate) return candidate
+  }
+  return null
+}
+
+function addMonthsClamped(dateStr: string, months: number): string {
+  const [year, month, day] = dateStr.split('-').map(Number)
+  const targetMonthIndex = month - 1 + months
+  const targetYear = year + Math.floor(targetMonthIndex / 12)
+  const targetMonth = ((targetMonthIndex % 12) + 12) % 12
+  const lastDay = new Date(Date.UTC(targetYear, targetMonth + 1, 0)).getUTCDate()
+  const clampedDay = Math.min(day, lastDay)
+  return `${targetYear}-${String(targetMonth + 1).padStart(2, '0')}-${String(clampedDay).padStart(2, '0')}`
+}
+
+function nextWeekday(dateStr: string): string {
+  let time = Date.parse(`${dateStr}T00:00:00.000Z`)
+  if (!Number.isFinite(time)) return dateStr
+  for (let i = 0; i < 3; i++) {
+    const day = new Date(time).getUTCDay()
+    if (day >= 1 && day <= 5) {
+      const d = new Date(time)
+      return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`
+    }
+    time += 86400000
+  }
+  return dateStr
+}
+
+function isFundLike(
+  s: SnapshotRow,
+  marketSegment: string,
+  sectorLarge: string | null,
+  sector33: string | null,
+): boolean {
+  const text = `${s.name ?? ''} ${marketSegment} ${sectorLarge ?? ''} ${sector33 ?? ''}`.toLowerCase()
+  return (
+    marketSegment === 'その他' ||
+    text.includes('etf') ||
+    text.includes('ｅｔｆ') ||
+    text.includes('上場投信') ||
+    text.includes('投資法人') ||
+    text.includes('reit') ||
+    text.includes('リート') ||
+    text.includes('優先株式')
+  )
+}
+
+function resolveMarketCapStatus(
+  s: SnapshotRow,
+  marketSegment: string,
+  sectorLarge: string | null,
+  sector33: string | null,
+): ScreenerStockRow['marketCapStatus'] {
+  if (s.market_cap != null && s.market_cap > 0) return 'calculated'
+  if (s.price == null || s.price <= 0) return 'price_missing'
+
+  if (isFundLike(s, marketSegment, sectorLarge, sector33)) return 'not_applicable'
+  return 'shares_missing'
 }
 
 export async function GET(request: NextRequest) {

@@ -57,6 +57,9 @@ interface HexStock {
   sma_angles: { sma5: number | null; sma25: number | null; sma75: number | null; sma300: number | null }
   prev_sma_angles: { sma5: number | null; sma25: number | null; sma75: number | null; sma300: number | null }
   prev_prev_sma_angles: { sma5: number | null; sma25: number | null; sma75: number | null; sma300: number | null }
+  ml_candidate_direction: 'up' | 'down' | null
+  ml_candidate_rank: number | null
+  ml_candidate_summary: string | null
 }
 
 interface SnapshotRow {
@@ -101,6 +104,13 @@ interface ClassRow {
   sub_industry: string
 }
 
+interface MlCandidateRow {
+  ticker: string
+  direction: 'up' | 'down'
+  rank: number
+  explanation_json: string | null
+}
+
 /** 日付より前の最近営業日 */
 async function prevSnapshotDate(beforeDate: string): Promise<string | null> {
   const r = await execGet<{ d: string | null }>(
@@ -138,6 +148,16 @@ function smaAngle(curr: number | null, past: number | null): number | null {
   return ratio * 100
 }
 
+function parseMlSummary(raw: string | null): string | null {
+  if (!raw) return null
+  try {
+    const parsed = JSON.parse(raw) as { summary?: string; watchPoints?: string[] }
+    return parsed.summary ?? parsed.watchPoints?.[0] ?? null
+  } catch {
+    return null
+  }
+}
+
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
@@ -161,7 +181,7 @@ export async function GET(request: NextRequest) {
     const prev2 = prev1 ? await prevSnapshotDate(prev1) : null
 
     // 並列ロード
-    const [curr, prev1Snap, prev2Snap, prices, prices1Y, uni, klass] = await Promise.all([
+    const [curr, prev1Snap, prev2Snap, prices, prices1Y, uni, klass, mlCandidates] = await Promise.all([
       loadSnapshots(date),
       prev1 ? loadSnapshots(prev1) : Promise.resolve([] as SnapshotRow[]),
       prev2 ? loadSnapshots(prev2) : Promise.resolve([] as SnapshotRow[]),
@@ -203,6 +223,20 @@ export async function GET(request: NextRequest) {
       execAll<ClassRow>(
         `SELECT ticker, major_category, sub_industry FROM stock_classification`,
       ),
+      execAll<MlCandidateRow>(
+        `
+        WITH d AS (
+          SELECT MAX(as_of_date) AS as_of_date
+          FROM serving_ml_candidates
+          WHERE as_of_date <= ?
+        )
+        SELECT ticker, direction, rank, explanation_json
+        FROM serving_ml_candidates
+        WHERE as_of_date = (SELECT as_of_date FROM d)
+          AND rank <= 160
+        `,
+        [date],
+      ),
     ])
     void prices1Y
 
@@ -211,6 +245,17 @@ export async function GET(request: NextRequest) {
     const priceMap = indexByTicker(prices)
     const uniMap = indexByTicker(uni)
     const klassMap = indexByTicker(klass)
+    const mlMap = new Map<string, { direction: 'up' | 'down'; rank: number; summary: string | null }>()
+    for (const row of mlCandidates) {
+      const existing = mlMap.get(row.ticker)
+      if (!existing || row.rank < existing.rank) {
+        mlMap.set(row.ticker, {
+          direction: row.direction,
+          rank: row.rank,
+          summary: parseMlSummary(row.explanation_json),
+        })
+      }
+    }
 
     const rows: HexStock[] = curr.map((s) => {
       const p1 = prev1Map.get(s.ticker)
@@ -218,6 +263,7 @@ export async function GET(request: NextRequest) {
       const px = priceMap.get(s.ticker)
       const u = uniMap.get(s.ticker)
       const k = klassMap.get(s.ticker)
+      const ml = mlMap.get(s.ticker)
 
       // 銘柄ごとフォールバック: Yoshio 独自分類 → JPX Sector17/33 → 'その他'
       const sectorLarge =
@@ -299,6 +345,9 @@ export async function GET(request: NextRequest) {
         sma_angles: smaAngles,
         prev_sma_angles: prevSmaAngles,
         prev_prev_sma_angles: prevSmaAngles,
+        ml_candidate_direction: ml?.direction ?? null,
+        ml_candidate_rank: ml?.rank ?? null,
+        ml_candidate_summary: ml?.summary ?? null,
       }
     })
 

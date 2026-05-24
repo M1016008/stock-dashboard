@@ -32,6 +32,10 @@ function laneTone(kind: 'high' | 'low' | 'volume') {
   return 'text-[var(--color-pattern-700)] bg-[var(--color-pattern-50)]'
 }
 
+function stockHref(ticker: string) {
+  return `/stock/${encodeURIComponent(ticker)}`
+}
+
 function stageValues(row: NewHighVolumeRow) {
   const stages = [
     row.daily_a_stage,
@@ -106,11 +110,12 @@ function MoverLane({
               return (
                 <Link
                   key={`${row.category}-${row.ticker}`}
-                  href={`/stock/${row.ticker}`}
+                  href={stockHref(row.ticker)}
                   prefetch={false}
-                  className="grid min-w-[800px] grid-cols-[58px_minmax(160px,1fr)_72px_178px_70px_64px_58px_96px] items-center gap-2 px-3 py-2.5 text-[13px] font-medium hover:bg-white"
+                  className="grid min-w-[800px] grid-cols-[58px_minmax(160px,1fr)_72px_178px_70px_64px_58px_96px] items-center gap-2 px-3 py-2.5 text-[13px] font-medium hover:bg-white hover:shadow-sm"
+                  aria-label={`${row.ticker} ${row.name ?? ''} の個別銘柄ページへ移動`}
                 >
-                  <span className="tabular-nums text-[var(--color-text-secondary)]">{row.ticker}</span>
+                  <span className="tabular-nums font-bold text-[var(--color-brand-800)]">{row.ticker}</span>
                   <span className="min-w-0">
                     <span className="block truncate font-semibold">{row.name ?? row.ticker}</span>
                   </span>

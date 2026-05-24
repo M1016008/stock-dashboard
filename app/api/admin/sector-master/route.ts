@@ -24,7 +24,7 @@ const COL_ALIAS: Record<string, string[]> = {
   sector33:      ['33業種区分'],
   // 17業種 / 大分類
   sectorLarge:   ['17業種区分', '大分類', '業種大分類', 'sector_large'],
-  // 補助分類
+  // 任意の小分類
   sectorSmall:   ['業種小分類', '業種細分類', '中分類', '小分類', 'sector_small'],
   // 貸借/信用 区分
   marginType:    ['貸借信用区分', '貸借区分', '信用区分', '信用銘柄区分', '貸借融資区分', '貸借'],
