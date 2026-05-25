@@ -915,6 +915,25 @@ export const mlFeatureVectors = sqliteTable(
   }),
 )
 
+export const mlFeatureVectorsV2 = sqliteTable(
+  'ml_feature_vectors_v2',
+  {
+    ticker:      text('ticker').notNull(),
+    date:        text('date').notNull(),
+    featureSet:  text('feature_set').notNull(),
+    version:     integer('version').notNull().default(1),
+    stageCode:   text('stage_code'),
+    featureJson: text('feature_json').notNull(),
+    vectorJson:  text('vector_json').notNull(),
+    computedAt:  integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk:            primaryKey({ columns: [t.ticker, t.date, t.featureSet] }),
+    dateIdx:       index('ml_feature_vectors_v2_date_idx').on(t.featureSet, t.date),
+    tickerDateIdx: index('ml_feature_vectors_v2_ticker_date_idx').on(t.ticker, t.date),
+  }),
+)
+
 export const mlTrainingLabels = sqliteTable(
   'ml_training_labels',
   {
@@ -933,6 +952,31 @@ export const mlTrainingLabels = sqliteTable(
   (t) => ({
     pk:      primaryKey({ columns: [t.ticker, t.date, t.horizonDays] }),
     dateIdx: index('ml_training_labels_date_idx').on(t.date, t.horizonDays),
+  }),
+)
+
+export const mlShortLabels = sqliteTable(
+  'ml_short_labels',
+  {
+    ticker:       text('ticker').notNull(),
+    date:         text('date').notNull(),
+    horizonDays:  integer('horizon_days').notNull(),
+    returnPct:    real('return_pct'),
+    maxReturnPct: real('max_return_pct'),
+    minReturnPct: real('min_return_pct'),
+    upLabel:      integer('up_label').notNull().default(0),
+    downLabel:    integer('down_label').notNull().default(0),
+    waitLabel:    integer('wait_label').notNull().default(0),
+    rewardLong:   real('reward_long'),
+    rewardShort:  real('reward_short'),
+    rewardWait:   real('reward_wait'),
+    labelJson:    text('label_json').notNull(),
+    computedAt:   integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk:         primaryKey({ columns: [t.ticker, t.date, t.horizonDays] }),
+    dateIdx:    index('ml_short_labels_date_idx').on(t.date, t.horizonDays),
+    horizonIdx: index('ml_short_labels_horizon_idx').on(t.horizonDays, t.date),
   }),
 )
 
@@ -1061,6 +1105,24 @@ export const rlTrainingStates = sqliteTable(
   }),
 )
 
+export const rlTrainingStatesV2 = sqliteTable(
+  'rl_training_states_v2',
+  {
+    ticker:        text('ticker').notNull(),
+    date:          text('date').notNull(),
+    horizonDays:   integer('horizon_days').notNull(),
+    action:        text('action').notNull(),
+    stateJson:     text('state_json').notNull(),
+    reward:        real('reward'),
+    nextStateJson: text('next_state_json'),
+    computedAt:    integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk:      primaryKey({ columns: [t.ticker, t.date, t.horizonDays, t.action] }),
+    dateIdx: index('rl_training_states_v2_date_idx').on(t.date, t.horizonDays),
+  }),
+)
+
 export const servingMlCandidates = sqliteTable(
   'serving_ml_candidates',
   {
@@ -1080,6 +1142,30 @@ export const servingMlCandidates = sqliteTable(
   (t) => ({
     pk:      primaryKey({ columns: [t.asOfDate, t.direction, t.ticker] }),
     rankIdx: index('serving_ml_candidates_rank_idx').on(t.asOfDate, t.direction, t.rank),
+  }),
+)
+
+export const servingMlPhysicsCandidates = sqliteTable(
+  'serving_ml_physics_candidates',
+  {
+    asOfDate:        text('as_of_date').notNull(),
+    direction:       text('direction').notNull(),
+    horizonDays:     integer('horizon_days').notNull(),
+    rank:            integer('rank').notNull(),
+    ticker:          text('ticker').notNull(),
+    name:            text('name'),
+    sectorLarge:     text('sector_large'),
+    candidateScore:  real('candidate_score').notNull(),
+    modelName:       text('model_name'),
+    featureJson:     text('feature_json').notNull(),
+    reasonJson:      text('reason_json').notNull(),
+    explanationJson: text('explanation_json').notNull(),
+    computedAt:      integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk:        primaryKey({ columns: [t.asOfDate, t.direction, t.horizonDays, t.ticker] }),
+    rankIdx:   index('serving_ml_physics_candidates_rank_idx').on(t.asOfDate, t.horizonDays, t.direction, t.rank),
+    tickerIdx: index('serving_ml_physics_candidates_ticker_idx').on(t.ticker, t.asOfDate),
   }),
 )
 

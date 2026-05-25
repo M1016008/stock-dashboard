@@ -34,6 +34,11 @@ export type EarningsSignalDecoration = {
   } | null
 }
 
+export type EarningsSignalDecorationOptions = {
+  includeDetails?: boolean
+  includeMlInsight?: boolean
+}
+
 type DecorationDraft = {
   codes: Set<string>
   labels: Map<string, number>
@@ -476,7 +481,7 @@ async function latestDate(table: string, column: string, baseDate: string | null
   const where = baseDate ? `WHERE ${column} <= ?` : ''
   const args = baseDate ? [baseDate] : []
   const row = await execGet<{ date: string | null }>(
-    `SELECT MAX(${column}) AS date FROM ${table} ${where}`,
+    `SELECT ${column} AS date FROM ${table} ${where} ORDER BY ${column} DESC LIMIT 1`,
     args,
   )
   return row?.date ?? null
@@ -499,9 +504,12 @@ async function forTickerChunks<T>(
 export async function loadEarningsSignalDecorations(
   tickers: Iterable<string>,
   baseDate: string | null,
+  options: EarningsSignalDecorationOptions = {},
 ): Promise<Map<string, EarningsSignalDecoration>> {
   const keys = Array.from(new Set(Array.from(tickers).map(normalizeSignalTicker).filter(Boolean)))
   if (keys.length === 0) return new Map()
+  const includeDetails = options.includeDetails ?? true
+  const includeMlInsight = options.includeMlInsight ?? includeDetails
 
   const [technicalDate, modelDate, servingSignalDate, mlDate] = await Promise.all([
     latestDate('technical_signals', 'date', baseDate),
@@ -574,26 +582,28 @@ export async function loadEarningsSignalDecorations(
       if (row.candidate_score > draft.mlScore) {
         draft.mlDirection = row.direction
         draft.mlScore = row.candidate_score
-        const explanation = parseJson<{
-          confidenceLabel?: unknown
-          summary?: unknown
-          watchPoints?: unknown
-          riskNotes?: unknown
-        }>(row.explanation_json, {})
-        draft.mlInsight = {
-          direction: row.direction,
-          confidenceLabel: typeof explanation.confidenceLabel === 'string' ? explanation.confidenceLabel : '要確認',
-          summary: typeof explanation.summary === 'string'
-            ? explanation.summary
-            : row.direction === 'up'
-              ? '6ステージとMA形状から上昇候補として抽出されています。'
-              : '6ステージとMA形状から下落警戒として抽出されています。',
-          watchPoints: Array.isArray(explanation.watchPoints)
-            ? explanation.watchPoints.filter((item): item is string => typeof item === 'string').slice(0, 3)
-            : [],
-          riskNotes: Array.isArray(explanation.riskNotes)
-            ? explanation.riskNotes.filter((item): item is string => typeof item === 'string').slice(0, 2)
-            : [],
+        if (includeMlInsight) {
+          const explanation = parseJson<{
+            confidenceLabel?: unknown
+            summary?: unknown
+            watchPoints?: unknown
+            riskNotes?: unknown
+          }>(row.explanation_json, {})
+          draft.mlInsight = {
+            direction: row.direction,
+            confidenceLabel: typeof explanation.confidenceLabel === 'string' ? explanation.confidenceLabel : '要確認',
+            summary: typeof explanation.summary === 'string'
+              ? explanation.summary
+              : row.direction === 'up'
+                ? '6ステージとMA形状から上昇候補として抽出されています。'
+                : '6ステージとMA形状から下落警戒として抽出されています。',
+            watchPoints: Array.isArray(explanation.watchPoints)
+              ? explanation.watchPoints.filter((item): item is string => typeof item === 'string').slice(0, 3)
+              : [],
+            riskNotes: Array.isArray(explanation.riskNotes)
+              ? explanation.riskNotes.filter((item): item is string => typeof item === 'string').slice(0, 2)
+              : [],
+          }
         }
       }
       addSignalCode(draft, `ml_candidate_${row.direction}`)
@@ -604,6 +614,21 @@ export async function loadEarningsSignalDecorations(
   const allCodes = Array.from(new Set(
     Array.from(draftMap.values()).flatMap((draft) => Array.from(draft.codes)),
   )).sort()
+
+  if (!includeDetails) {
+    const result = new Map<string, EarningsSignalDecoration>()
+    for (const [ticker, draft] of draftMap) {
+      result.set(ticker, {
+        signalLabels: orderedLabels(draft),
+        signalCodes: Array.from(draft.codes).sort(),
+        signalDetails: [],
+        mlDirection: draft.mlDirection,
+        mlInsight: includeMlInsight ? draft.mlInsight : null,
+      })
+    }
+    return result
+  }
+
   const effectiveBaseDate = technicalDate ?? modelDate ?? servingSignalDate ?? mlDate ?? baseDate
   const [technicalTriggers, modelTriggers, tradingDateIndex, signalStats] = await Promise.all([
     loadTechnicalTriggerDates(keys, allCodes, effectiveBaseDate),

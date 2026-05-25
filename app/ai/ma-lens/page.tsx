@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import { Suspense } from 'react'
 import { PageTitle } from '@/components/layout/PageTitle'
 import { Card, CardHeader } from '@/components/ui/Card'
 import { execAll, execGet } from '@/lib/db/client'
@@ -11,6 +12,13 @@ import {
   type CandidateReason,
   type MlFeatureProfile,
 } from '@/lib/backtest/ml'
+import {
+  ML_PHYSICS_FEATURE_SET,
+  type PhysicsCandidateExplanation,
+  type PhysicsCandidateReason,
+  type PhysicsDirection,
+  type PhysicsFeatureProfile,
+} from '@/lib/backtest/ml-physics'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -67,6 +75,7 @@ type EvaluationRow = {
   hit_rate: number | null
   median_return_pct: number | null
   avg_return_pct: number | null
+  max_drawdown_pct: number | null
 }
 
 type SimilarRow = {
@@ -79,6 +88,34 @@ type SimilarRow = {
   similar_direction: Direction | null
   payload_json: string
   reason_json: string
+}
+
+type PhysicsCandidateRow = {
+  as_of_date: string
+  direction: PhysicsDirection
+  horizon_days: number
+  rank: number
+  ticker: string
+  name: string | null
+  sector_large: string | null
+  candidate_score: number
+  model_name: string | null
+  feature_json: string
+  reason_json: string
+  explanation_json: string
+}
+
+type ParsedPhysicsCandidate = PhysicsCandidateRow & {
+  profile: PhysicsFeatureProfile | null
+  reason: Partial<PhysicsCandidateReason>
+  explanation: Partial<PhysicsCandidateExplanation>
+}
+
+type PhysicsStatus = {
+  latestDate: string | null
+  rowsLatest: number
+  candidateDate: string | null
+  candidateRowsLatest: number
 }
 
 type SimilarPayload = {
@@ -129,6 +166,37 @@ type PullbackLensRow = {
   profile: MlFeatureProfile
   reasons: string[]
   watchPoints: string[]
+}
+
+type MarginRow = {
+  ticker: string
+  margin_type: string | null
+  long_margin: number | null
+  short_margin: number | null
+  long_change: number | null
+  short_change: number | null
+  credit_ratio: number | null
+  short_ratio: number | null
+}
+
+type LongShortDecisionRow = {
+  ticker: string
+  name: string | null
+  sector_large: string | null
+  profile: MlFeatureProfile | null
+  up: ParsedCandidate | null
+  down: ParsedCandidate | null
+  margin: MarginRow | null
+  longEdge: number
+  shortEdge: number
+  decision: 'long' | 'short' | 'wait'
+  expectation: string
+  entryTrigger: string
+  invalidation: string
+  profitPlan: string
+  stopPlan: string
+  squeezeRisk: '低' | '中' | '高'
+  squeezeReason: string
 }
 
 const MA_KEYS: MaKey[] = ['sma5', 'sma25', 'sma75', 'sma200']
@@ -195,6 +263,18 @@ function fmtRatio(value: number | null | undefined): string {
   return `${Math.round(value * 100)}%`
 }
 
+function fmtScore(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return '-'
+  return value.toFixed(2)
+}
+
+function fmtShares(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return '-'
+  if (Math.abs(value) >= 100_000_000) return `${(value / 100_000_000).toFixed(1)}億株`
+  if (Math.abs(value) >= 10_000) return `${(value / 10_000).toFixed(1)}万株`
+  return `${Math.round(value).toLocaleString('ja-JP')}株`
+}
+
 function fmtCount(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(value)) return '-'
   return Math.round(value).toLocaleString('ja-JP')
@@ -214,6 +294,18 @@ function fmtUnix(seconds: number | null | undefined): string {
 
 function directionLabel(direction: Direction | null | undefined): string {
   return direction === 'down' ? '下落警戒' : '上昇候補'
+}
+
+function physicsDirectionLabel(direction: PhysicsDirection | null | undefined): string {
+  if (direction === 'down') return '下落候補'
+  if (direction === 'wait') return '見送り候補'
+  return '上昇候補'
+}
+
+function physicsTone(direction: PhysicsDirection | null | undefined): 'red' | 'blue' | 'neutral' {
+  if (direction === 'down') return 'blue'
+  if (direction === 'wait') return 'neutral'
+  return 'red'
 }
 
 function slopeText(value: number | null | undefined): string {
@@ -246,6 +338,66 @@ function gapInterpretation(profile: MlFeatureProfile | null): string {
 
 function slopeValue(value: number | null | undefined): number {
   return finite(value) ? value : 0
+}
+
+function signedDistance(value: number | null | undefined): number {
+  return finite(value) ? value : 0
+}
+
+function isBullishMa(profile: MlFeatureProfile | null): boolean {
+  if (!profile) return false
+  return profile.maOrder.replace(/\s/g, '').startsWith('5日>25日')
+}
+
+function isBearishMa(profile: MlFeatureProfile | null): boolean {
+  if (!profile) return false
+  return profile.maOrder.replace(/\s/g, '').startsWith('200日>75日') || profile.maOrder.replace(/\s/g, '').endsWith('25日>5日')
+}
+
+function maMomentum(profile: MlFeatureProfile | null): number {
+  if (!profile) return 0
+  return (
+    slopeValue(profile.slopes10.sma5) * 0.34 +
+    slopeValue(profile.slopes10.sma25) * 0.32 +
+    slopeValue(profile.slopes10.sma75) * 0.22 +
+    slopeValue(profile.slopes10.sma200) * 0.12
+  ) / 10
+}
+
+function longEdgeScore(up: ParsedCandidate | null, down: ParsedCandidate | null, profile: MlFeatureProfile | null): number {
+  const upScore = up?.candidate_score ?? 0
+  const downScore = down?.candidate_score ?? 0
+  const upsideRoom = profile?.distanceToRecentHighPct != null && profile.distanceToRecentHighPct < 0
+    ? clamp(Math.abs(profile.distanceToRecentHighPct) / 40, 0, 0.28)
+    : 0
+  const maBonus = isBullishMa(profile) ? 0.14 : 0
+  const supportBonus = profile && signedDistance(profile.pricePosition.sma25) >= -3 ? 0.06 : 0
+  return clamp(upScore - downScore * 0.55 + maMomentum(profile) * 0.18 + upsideRoom + maBonus + supportBonus, -1, 1)
+}
+
+function shortEdgeScore(up: ParsedCandidate | null, down: ParsedCandidate | null, profile: MlFeatureProfile | null, margin: MarginRow | null): number {
+  const upScore = up?.candidate_score ?? 0
+  const downScore = down?.candidate_score ?? 0
+  const maBonus = isBearishMa(profile) ? 0.16 : 0
+  const weakPrice = profile && signedDistance(profile.pricePosition.sma25) < -2 ? 0.1 : 0
+  const squeezePenalty = squeezeRiskScore(profile, margin) * 0.22
+  return clamp(downScore - upScore * 0.55 - maMomentum(profile) * 0.18 + maBonus + weakPrice - squeezePenalty, -1, 1)
+}
+
+function squeezeRiskScore(profile: MlFeatureProfile | null, margin: MarginRow | null): number {
+  const shortRatio = margin?.short_ratio ?? 0
+  const shortChange = margin?.short_change ?? 0
+  const longChange = margin?.long_change ?? 0
+  const recoveringShortMa = profile ? signedDistance(profile.pricePosition.sma5) > 0 && slopeValue(profile.slopes5.sma5) > 0 : false
+  const midSlopeImproving = profile ? slopeValue(profile.slopes10.sma25) > -0.2 : false
+  const crowdedShort = shortRatio >= 45 || shortChange > Math.max(50_000, Math.abs(longChange) * 1.2)
+  return clamp((crowdedShort ? 0.38 : 0) + (recoveringShortMa ? 0.34 : 0) + (midSlopeImproving ? 0.18 : 0) + (isBullishMa(profile) ? 0.1 : 0), 0, 1)
+}
+
+function squeezeRiskLabel(score: number): '低' | '中' | '高' {
+  if (score >= 0.62) return '高'
+  if (score >= 0.32) return '中'
+  return '低'
 }
 
 function pullbackVerdictLabel(verdict: PullbackLensRow['verdict']): string {
@@ -453,7 +605,7 @@ async function loadStatus(): Promise<Status> {
 async function loadCandidates(): Promise<ParsedCandidate[]> {
   const rows = await execAll<CandidateRow>(
     `
-    WITH latest AS (SELECT MAX(as_of_date) AS date FROM serving_ml_candidates)
+    WITH latest AS (SELECT as_of_date AS date FROM serving_ml_candidates WHERE as_of_date IS NOT NULL ORDER BY as_of_date DESC LIMIT 1)
     SELECT c.as_of_date, c.direction, c.rank, c.ticker, c.name, c.sector_large,
            c.candidate_score, c.model_name, c.feature_json, c.reason_json, c.explanation_json
     FROM serving_ml_candidates c
@@ -470,6 +622,42 @@ async function loadCandidates(): Promise<ParsedCandidate[]> {
   }))
 }
 
+async function loadCandidatePool(): Promise<ParsedCandidate[]> {
+  const rows = await execAll<CandidateRow>(
+    `
+    WITH latest AS (SELECT as_of_date AS date FROM serving_ml_candidates WHERE as_of_date IS NOT NULL ORDER BY as_of_date DESC LIMIT 1)
+    SELECT c.as_of_date, c.direction, c.rank, c.ticker, c.name, c.sector_large,
+           c.candidate_score, c.model_name, c.feature_json, c.reason_json, c.explanation_json
+    FROM serving_ml_candidates c
+    INNER JOIN latest l ON l.date = c.as_of_date
+    WHERE c.rank <= 80
+    ORDER BY c.ticker ASC, CASE c.direction WHEN 'up' THEN 0 ELSE 1 END
+    `,
+  )
+  return rows.map((row) => ({
+    ...row,
+    profile: parseJson<MlFeatureProfile | null>(row.feature_json, null),
+    reason: parseJson<Partial<CandidateReason>>(row.reason_json, {}),
+    explanation: parseJson<Partial<CandidateExplanation>>(row.explanation_json, {}),
+  }))
+}
+
+async function loadMarginRows(tickers: string[]): Promise<Map<string, MarginRow>> {
+  const unique = Array.from(new Set(tickers.filter(Boolean)))
+  if (unique.length === 0) return new Map()
+  const placeholders = unique.map(() => '?').join(',')
+  const rows = await execAll<MarginRow>(
+    `
+    SELECT ticker, margin_type, long_margin, short_margin, long_change, short_change,
+           credit_ratio, short_ratio
+    FROM serving_margin_latest
+    WHERE ticker IN (${placeholders})
+    `,
+    unique,
+  )
+  return new Map(rows.map((row) => [row.ticker, row]))
+}
+
 async function loadModels(): Promise<ModelRow[]> {
   return execAll<ModelRow>(
     `
@@ -479,15 +667,55 @@ async function loadModels(): Promise<ModelRow[]> {
     INNER JOIN (
       SELECT direction, horizon_days, MAX(trained_at) AS trained_at
       FROM ml_models
+      WHERE model_type = 'logistic_regression_v1'
+        AND direction IN ('up', 'down')
       GROUP BY direction, horizon_days
     ) latest
       ON latest.direction = m.direction
      AND latest.horizon_days = m.horizon_days
      AND latest.trained_at = m.trained_at
+    WHERE m.model_type = 'logistic_regression_v1'
+      AND m.direction IN ('up', 'down')
     ORDER BY m.horizon_days ASC, CASE m.direction WHEN 'up' THEN 0 ELSE 1 END
     LIMIT 12
     `,
   )
+}
+
+async function loadPhysicsStatus(): Promise<PhysicsStatus> {
+  const latestDate = await latestColumnDate('ml_feature_vectors_v2', 'date')
+  const candidateDate = await latestColumnDate('serving_ml_physics_candidates', 'as_of_date')
+  const [rowsLatest, candidateRowsLatest] = await Promise.all([
+    latestDate
+      ? countRows(`SELECT COUNT(*) AS count FROM ml_feature_vectors_v2 WHERE feature_set = ? AND date = ?`, [ML_PHYSICS_FEATURE_SET, latestDate])
+      : Promise.resolve(0),
+    candidateDate
+      ? countRows(`SELECT COUNT(*) AS count FROM serving_ml_physics_candidates WHERE as_of_date = ?`, [candidateDate])
+      : Promise.resolve(0),
+  ])
+  return { latestDate, rowsLatest, candidateDate, candidateRowsLatest }
+}
+
+async function loadPhysicsCandidates(horizonDays = 10): Promise<ParsedPhysicsCandidate[]> {
+  const rows = await execAll<PhysicsCandidateRow>(
+    `
+    WITH latest AS (SELECT as_of_date AS date FROM serving_ml_physics_candidates WHERE as_of_date IS NOT NULL ORDER BY as_of_date DESC LIMIT 1)
+    SELECT c.as_of_date, c.direction, c.horizon_days, c.rank, c.ticker, c.name, c.sector_large,
+           c.candidate_score, c.model_name, c.feature_json, c.reason_json, c.explanation_json
+    FROM serving_ml_physics_candidates c
+    INNER JOIN latest l ON l.date = c.as_of_date
+    WHERE c.horizon_days = ?
+      AND c.rank <= 8
+    ORDER BY CASE c.direction WHEN 'up' THEN 0 WHEN 'down' THEN 1 ELSE 2 END, c.rank ASC
+    `,
+    [horizonDays],
+  )
+  return rows.map((row) => ({
+    ...row,
+    profile: parseJson<PhysicsFeatureProfile | null>(row.feature_json, null),
+    reason: parseJson<Partial<PhysicsCandidateReason>>(row.reason_json, {}),
+    explanation: parseJson<Partial<PhysicsCandidateExplanation>>(row.explanation_json, {}),
+  }))
 }
 
 async function loadPullbackLens(models: ModelRow[]): Promise<PullbackLensRow[]> {
@@ -495,7 +723,7 @@ async function loadPullbackLens(models: ModelRow[]): Promise<PullbackLensRow[]> 
   const downModel = latestModel(models, 'down', 40)
   const rows = await execAll<PullbackFeatureRow>(
     `
-    WITH latest AS (SELECT MAX(date) AS date FROM ml_feature_vectors)
+    WITH latest AS (SELECT date FROM ml_feature_vectors WHERE date IS NOT NULL ORDER BY date DESC LIMIT 1)
     SELECT f.ticker, f.date, f.feature_json, f.vector_json,
            COALESCE(u.name, sm.name) AS name,
            COALESCE(u.sector17_name, sm.sector_large) AS sector_large
@@ -549,10 +777,10 @@ async function loadPullbackLens(models: ModelRow[]): Promise<PullbackLensRow[]> 
 async function loadEvaluations(): Promise<EvaluationRow[]> {
   return execAll<EvaluationRow>(
     `
-    WITH latest AS (SELECT MAX(evaluation_date) AS date FROM ml_model_evaluations)
+    WITH latest AS (SELECT evaluation_date AS date FROM ml_model_evaluations WHERE evaluation_date IS NOT NULL ORDER BY evaluation_date DESC LIMIT 1)
     SELECT evaluation_date, model_name, direction, horizon_days, sample_count,
            precision_at_20, precision_at_50, precision_at_80, hit_rate,
-           median_return_pct, avg_return_pct
+           median_return_pct, avg_return_pct, max_drawdown_pct
     FROM ml_model_evaluations e
     INNER JOIN latest l ON l.date = e.evaluation_date
     ORDER BY horizon_days ASC, CASE direction WHEN 'up' THEN 0 ELSE 1 END
@@ -561,10 +789,23 @@ async function loadEvaluations(): Promise<EvaluationRow[]> {
   )
 }
 
+async function loadEvaluationTimeline(): Promise<EvaluationRow[]> {
+  return execAll<EvaluationRow>(
+    `
+    SELECT evaluation_date, model_name, direction, horizon_days, sample_count,
+           precision_at_20, precision_at_50, precision_at_80, hit_rate,
+           median_return_pct, avg_return_pct, max_drawdown_pct
+    FROM ml_model_evaluations
+    ORDER BY evaluation_date DESC, horizon_days ASC, CASE direction WHEN 'up' THEN 0 ELSE 1 END
+    LIMIT 24
+    `,
+  )
+}
+
 async function loadSimilarRows(): Promise<SimilarRow[]> {
   return execAll<SimilarRow>(
     `
-    WITH latest AS (SELECT MAX(as_of_date) AS date FROM serving_current_similars)
+    WITH latest AS (SELECT as_of_date AS date FROM serving_current_similars WHERE as_of_date IS NOT NULL ORDER BY as_of_date DESC LIMIT 1)
     SELECT s.as_of_date, s.base_ticker, s.rank, s.similar_ticker, s.similarity_score,
            s.base_direction, s.similar_direction, s.payload_json, s.reason_json
     FROM serving_current_similars s
@@ -574,6 +815,124 @@ async function loadSimilarRows(): Promise<SimilarRow[]> {
     LIMIT 10
     `,
   )
+}
+
+function byTickerAndDirection(candidates: ParsedCandidate[]): Map<string, { up: ParsedCandidate | null; down: ParsedCandidate | null }> {
+  const map = new Map<string, { up: ParsedCandidate | null; down: ParsedCandidate | null }>()
+  for (const candidate of candidates) {
+    const current = map.get(candidate.ticker) ?? { up: null, down: null }
+    if (candidate.direction === 'up') current.up = candidate
+    else current.down = candidate
+    map.set(candidate.ticker, current)
+  }
+  return map
+}
+
+function representativeProfile(up: ParsedCandidate | null, down: ParsedCandidate | null): MlFeatureProfile | null {
+  return up?.profile ?? down?.profile ?? null
+}
+
+function entryTrigger(direction: Direction, profile: MlFeatureProfile | null): string {
+  if (!profile) return '特徴量生成後に判定します。'
+  if (direction === 'up') {
+    if (signedDistance(profile.pricePosition.sma5) < 0) return '終値で5日MAを回復し、翌日も5日MA上を維持できるかを確認します。'
+    if (signedDistance(profile.pricePosition.sma25) < 0) return '25日MA回復、または25日MAを抵抗線にしない値動きを確認します。'
+    if (profile.distanceToRecentHighPct != null && profile.distanceToRecentHighPct > -5) return '直近高値を更新し、5日MAの上で引けるかを確認します。'
+    return '5日MA上を維持しながら、25日MAの角度が上向きを保つかを確認します。'
+  }
+  if (signedDistance(profile.pricePosition.sma5) > 0) return '終値で5日MAを再び下回り、戻りが失敗したことを確認します。'
+  if (signedDistance(profile.pricePosition.sma25) > -2) return '25日MA付近で上値が止まり、5日MAが下向きに戻るかを確認します。'
+  return '5日MAを回復できず、25日MAとの差が縮まらないことを確認します。'
+}
+
+function invalidationRule(direction: Direction, profile: MlFeatureProfile | null): string {
+  if (!profile) return '特徴量未生成のため未判定です。'
+  if (direction === 'up') {
+    if (signedDistance(profile.pricePosition.sma25) >= 0) return '終値で25日MAを明確に割る場合は、買い優勢の前提を外します。'
+    return '5日MA回復に失敗し、25日MAも下向きへ変わる場合は見送りにします。'
+  }
+  if (signedDistance(profile.pricePosition.sma25) <= 0) return '終値で25日MAを回復して維持する場合は、空売り前提を外します。'
+  return '5日MAと25日MAを同時に回復する場合は、踏み上げリスクを優先します。'
+}
+
+function profitPlan(direction: Direction, profile: MlFeatureProfile | null): string {
+  if (!profile) return '価格目標は特徴量生成後に判定します。'
+  if (direction === 'up') {
+    if (profile.recentHigh != null && profile.distanceToRecentHighPct != null && profile.distanceToRecentHighPct < 0) {
+      return `第1目標は直近高値${Math.round(profile.recentHigh).toLocaleString('ja-JP')}円付近、余力があれば高値更新後の5日MA維持を見ます。`
+    }
+    return '直近高値更新後、5日MAを割らない限り利益を伸ばし、25日MAの角度鈍化で一部利確を検討します。'
+  }
+  if (signedDistance(profile.pricePosition.sma25) > 0 && profile.sma.sma25 != null) {
+    return `第1目標は25日MA${Math.round(profile.sma.sma25).toLocaleString('ja-JP')}円付近、割り込めば75日MA方向を確認します。`
+  }
+  if (profile.sma.sma75 != null) return `第1目標は75日MA${Math.round(profile.sma.sma75).toLocaleString('ja-JP')}円付近、戻りが弱ければ下落継続を見ます。`
+  return '5日MAを回復できない間は下落継続を見ます。'
+}
+
+function stopPlan(direction: Direction, profile: MlFeatureProfile | null): string {
+  if (!profile) return '撤退条件は特徴量生成後に判定します。'
+  if (direction === 'up') {
+    if (profile.sma.sma25 != null) return `終値で25日MA${Math.round(profile.sma.sma25).toLocaleString('ja-JP')}円を明確に下回る場合は撤退を検討します。`
+    return '終値で5日MAを割り、翌日も回復できない場合は撤退を検討します。'
+  }
+  if (profile.sma.sma25 != null) return `終値で25日MA${Math.round(profile.sma.sma25).toLocaleString('ja-JP')}円を回復する場合は買い戻しを検討します。`
+  return '終値で5日MAを回復し、5日MAが上向きへ転じる場合は買い戻しを検討します。'
+}
+
+function squeezeReason(profile: MlFeatureProfile | null, margin: MarginRow | null, risk: '低' | '中' | '高'): string {
+  if (!profile && !margin) return '貸借/信用またはMA特徴量が不足しているため、踏み上げリスクは保守的に確認します。'
+  const parts: string[] = []
+  if (margin?.short_ratio != null) parts.push(`売残比率${fmtPct(margin.short_ratio, 0)}`)
+  if (margin?.short_change != null) parts.push(`売残増減${fmtShares(margin.short_change)}`)
+  if (profile && signedDistance(profile.pricePosition.sma5) > 0) parts.push('株価が5日MA上')
+  if (profile && slopeValue(profile.slopes5.sma5) > 0) parts.push('5日MAが上向き')
+  if (parts.length === 0) return `踏み上げリスクは${risk}です。売残集中と短期MA回復を継続確認します。`
+  return `踏み上げリスクは${risk}です。${parts.join('、')}を確認しています。`
+}
+
+function buildLongShortRows(candidates: ParsedCandidate[], marginMap: Map<string, MarginRow>): LongShortDecisionRow[] {
+  const grouped = byTickerAndDirection(candidates)
+  return Array.from(grouped.entries()).map(([ticker, pair]) => {
+    const profile = representativeProfile(pair.up, pair.down)
+    const margin = marginMap.get(ticker) ?? null
+    const longEdge = longEdgeScore(pair.up, pair.down, profile)
+    const shortEdge = shortEdgeScore(pair.up, pair.down, profile, margin)
+    const decision: LongShortDecisionRow['decision'] =
+      longEdge >= shortEdge + 0.18 && longEdge > 0.25
+        ? 'long'
+        : shortEdge >= longEdge + 0.18 && shortEdge > 0.25
+          ? 'short'
+          : 'wait'
+    const squeezeScore = squeezeRiskScore(profile, margin)
+    const squeezeRisk = squeezeRiskLabel(squeezeScore)
+    const direction: Direction = decision === 'short' ? 'down' : 'up'
+    return {
+      ticker,
+      name: pair.up?.name ?? pair.down?.name ?? null,
+      sector_large: pair.up?.sector_large ?? pair.down?.sector_large ?? null,
+      profile,
+      up: pair.up,
+      down: pair.down,
+      margin,
+      longEdge,
+      shortEdge,
+      decision,
+      expectation:
+        decision === 'long'
+          ? '買い期待が売りリスクを上回ります。5日/25日MAの維持を条件に上昇側を優先して確認します。'
+          : decision === 'short'
+            ? '売り期待が買い戻しリスクを上回ります。短期MAを回復できない戻り売り形状として確認します。'
+            : '買いと売りの根拠が拮抗しています。条件成立まで待つ前提で扱います。',
+      entryTrigger: entryTrigger(direction, profile),
+      invalidation: invalidationRule(direction, profile),
+      profitPlan: profitPlan(direction, profile),
+      stopPlan: stopPlan(direction, profile),
+      squeezeRisk,
+      squeezeReason: squeezeReason(profile, margin, squeezeRisk),
+    }
+  }).filter((row) => row.profile || row.up || row.down)
+    .sort((a, b) => Math.max(b.longEdge, b.shortEdge) - Math.max(a.longEdge, a.shortEdge) || (a.up?.rank ?? a.down?.rank ?? 999) - (b.up?.rank ?? b.down?.rank ?? 999))
 }
 
 function featureImportance(model: ModelRow): FeatureImportance[] {
@@ -838,6 +1197,349 @@ function PullbackLensPanel({ rows }: { rows: PullbackLensRow[] }) {
   )
 }
 
+function DecisionBadge({ decision }: { decision: LongShortDecisionRow['decision'] }) {
+  if (decision === 'long') return <Pill tone="red">買い優勢</Pill>
+  if (decision === 'short') return <Pill tone="blue">売り優勢</Pill>
+  return <Pill>見送り</Pill>
+}
+
+function EdgeMeter({ label, value, tone }: { label: string; value: number; tone: 'red' | 'blue' }) {
+  const normalized = clamp((value + 1) / 2, 0, 1)
+  return (
+    <div>
+      <div className="mb-1 flex items-center justify-between gap-2 text-[11px] font-bold text-[var(--color-text-secondary)]">
+        <span>{label}</span>
+        <span className="tabular-nums">{fmtScore(value)}</span>
+      </div>
+      <div className="h-1.5 overflow-hidden rounded-full bg-slate-100">
+        <div className={`h-full rounded-full ${tone === 'red' ? 'bg-red-500' : 'bg-blue-500'}`} style={{ width: `${normalized * 100}%` }} />
+      </div>
+    </div>
+  )
+}
+
+function DecisionMiniCard({ row, mode }: { row: LongShortDecisionRow; mode: 'expectation' | 'entry' | 'exit' | 'squeeze' }) {
+  const direction: Direction = row.decision === 'short' || mode === 'squeeze' ? 'down' : 'up'
+  return (
+    <div className="rounded-[4px] border border-[var(--color-border-default)] bg-white p-3 shadow-sm">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <DecisionBadge decision={row.decision} />
+            {mode === 'squeeze' && (
+              <span className={`inline-flex items-center rounded-[3px] border px-2 py-1 text-[11px] font-bold ${
+                row.squeezeRisk === '高'
+                  ? 'border-blue-300 bg-blue-50 text-blue-700'
+                  : row.squeezeRisk === '中'
+                    ? 'border-amber-300 bg-amber-50 text-amber-700'
+                    : 'border-slate-200 bg-slate-50 text-slate-600'
+              }`}>
+                踏み上げ{row.squeezeRisk}
+              </span>
+            )}
+          </div>
+          <Link href={`/stock/${row.ticker}`} prefetch={false} className="mt-2 inline-flex text-[15px] font-bold text-[var(--color-brand-900)] hover:text-[var(--color-market-red)]">
+            {row.ticker} {row.name ?? ''}
+          </Link>
+          <div className="mt-1 text-[11px] font-semibold text-[var(--color-text-tertiary)]">{row.sector_large ?? '業種未設定'}</div>
+        </div>
+        <StageCode code={row.profile?.stageCode} />
+      </div>
+
+      <div className="mt-3 grid gap-3 sm:grid-cols-2">
+        <EdgeMeter label="買い期待" value={row.longEdge} tone="red" />
+        <EdgeMeter label="売り期待" value={row.shortEdge} tone="blue" />
+      </div>
+
+      <div className="mt-3 grid gap-2 text-[12px] font-semibold leading-relaxed text-[var(--color-text-secondary)]">
+        {mode === 'expectation' && <p>{row.expectation}</p>}
+        {mode === 'entry' && (
+          <>
+            <p><span className="font-bold text-[var(--color-brand-900)]">待ち条件:</span> {row.entryTrigger}</p>
+            <p><span className="font-bold text-[var(--color-brand-900)]">無効条件:</span> {row.invalidation}</p>
+          </>
+        )}
+        {mode === 'exit' && (
+          <>
+            <p><span className="font-bold text-[var(--color-brand-900)]">{direction === 'up' ? '利確目安' : '買い戻し目安'}:</span> {row.profitPlan}</p>
+            <p><span className="font-bold text-[var(--color-brand-900)]">撤退条件:</span> {row.stopPlan}</p>
+          </>
+        )}
+        {mode === 'squeeze' && (
+          <>
+            <p>{row.squeezeReason}</p>
+            <div className="flex flex-wrap gap-1.5">
+              <Pill>信用倍率 {row.margin?.credit_ratio == null ? '-' : `${row.margin.credit_ratio.toFixed(2)}倍`}</Pill>
+              <Pill>売残 {fmtShares(row.margin?.short_margin)}</Pill>
+              <Pill>売残増減 {fmtShares(row.margin?.short_change)}</Pill>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function ExpectedValuePanel({ rows }: { rows: LongShortDecisionRow[] }) {
+  const longRows = rows.filter((row) => row.decision === 'long').sort((a, b) => b.longEdge - a.longEdge).slice(0, 6)
+  const shortRows = rows.filter((row) => row.decision === 'short').sort((a, b) => b.shortEdge - a.shortEdge).slice(0, 6)
+  return (
+    <Card size="lg">
+      <CardHeader
+        title="期待値ランキング"
+        hint="上昇候補と下落警戒を同じ土俵で比較し、勝率だけでなく逆方向リスクとMA形状を含めて並べます。"
+      />
+      <div className="grid gap-4 xl:grid-cols-2">
+        <div>
+          <div className="mb-2 text-[14px] font-bold text-red-700">買い期待値 上位</div>
+          <div className="grid gap-2">
+            {longRows.length > 0 ? longRows.map((row) => <DecisionMiniCard key={`long-ev-${row.ticker}`} row={row} mode="expectation" />) : (
+              <div className="text-[12px] font-semibold text-[var(--color-text-tertiary)]">買い優勢が明確な候補はありません。</div>
+            )}
+          </div>
+        </div>
+        <div>
+          <div className="mb-2 text-[14px] font-bold text-blue-700">空売り期待値 上位</div>
+          <div className="grid gap-2">
+            {shortRows.length > 0 ? shortRows.map((row) => <DecisionMiniCard key={`short-ev-${row.ticker}`} row={row} mode="expectation" />) : (
+              <div className="text-[12px] font-semibold text-[var(--color-text-tertiary)]">売り優勢が明確な候補はありません。</div>
+            )}
+          </div>
+        </div>
+      </div>
+    </Card>
+  )
+}
+
+function EntryWaitPanel({ rows }: { rows: LongShortDecisionRow[] }) {
+  const selected = rows
+    .filter((row) => row.decision !== 'wait' || Math.max(row.longEdge, row.shortEdge) > 0.2)
+    .sort((a, b) => Math.max(b.longEdge, b.shortEdge) - Math.max(a.longEdge, a.shortEdge))
+    .slice(0, 8)
+  return (
+    <Card size="lg">
+      <CardHeader
+        title="エントリー待ち条件"
+        hint="候補をすぐ売買するのではなく、5日/25日MAと直近高値・安値の条件成立を待つための確認リストです。"
+      />
+      <div className="grid gap-2 lg:grid-cols-2">
+        {selected.map((row) => <DecisionMiniCard key={`entry-${row.ticker}`} row={row} mode="entry" />)}
+      </div>
+    </Card>
+  )
+}
+
+function ExitOptimizerPanel({ rows }: { rows: LongShortDecisionRow[] }) {
+  const selected = rows
+    .filter((row) => row.decision !== 'wait')
+    .sort((a, b) => Math.max(b.longEdge, b.shortEdge) - Math.max(a.longEdge, a.shortEdge))
+    .slice(0, 8)
+  return (
+    <Card size="lg">
+      <CardHeader
+        title="利確・損切り最適化"
+        hint="過去ML候補の方向性に対して、直近高値・主要MAを使った出口条件を明示します。"
+      />
+      <div className="grid gap-2 lg:grid-cols-2">
+        {selected.map((row) => <DecisionMiniCard key={`exit-${row.ticker}`} row={row} mode="exit" />)}
+      </div>
+    </Card>
+  )
+}
+
+function SqueezeRiskPanel({ rows }: { rows: LongShortDecisionRow[] }) {
+  const selected = rows
+    .filter((row) => row.down || row.decision === 'short')
+    .sort((a, b) => {
+      const riskOrder = { 高: 2, 中: 1, 低: 0 } as const
+      return riskOrder[b.squeezeRisk] - riskOrder[a.squeezeRisk] || b.shortEdge - a.shortEdge
+    })
+    .slice(0, 8)
+  return (
+    <Card size="lg">
+      <CardHeader
+        title="踏み上げリスク判定"
+        hint="空売り候補に対し、売残の偏りと短期MA回復を組み合わせ、急反発リスクを分けて表示します。"
+      />
+      <div className="grid gap-2 lg:grid-cols-2">
+        {selected.map((row) => <DecisionMiniCard key={`squeeze-${row.ticker}`} row={row} mode="squeeze" />)}
+      </div>
+    </Card>
+  )
+}
+
+function LongShortComparisonPanel({ rows }: { rows: LongShortDecisionRow[] }) {
+  const selected = rows.slice(0, 16)
+  return (
+    <Card size="lg">
+      <CardHeader
+        title="ロング / ショート比較"
+        hint="同一銘柄を買い目線・売り目線の両方で評価し、買い優勢・売り優勢・見送りに分けます。"
+      />
+      <div className="overflow-x-auto">
+        <table className="min-w-[880px] w-full border-collapse text-left text-[12px]">
+          <thead>
+            <tr className="border-b border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] text-[11px] font-bold text-[var(--color-text-secondary)]">
+              <th className="px-3 py-2">銘柄</th>
+              <th className="px-3 py-2">判定</th>
+              <th className="px-3 py-2">6桁</th>
+              <th className="px-3 py-2 text-right">買い期待</th>
+              <th className="px-3 py-2 text-right">売り期待</th>
+              <th className="px-3 py-2">MA並び</th>
+              <th className="px-3 py-2">確認ポイント</th>
+            </tr>
+          </thead>
+          <tbody>
+            {selected.map((row) => (
+              <tr key={`ls-${row.ticker}`} className="border-b border-[var(--color-border-subtle)] align-top">
+                <td className="px-3 py-2">
+                  <Link href={`/stock/${row.ticker}`} prefetch={false} className="font-bold text-[var(--color-brand-900)] hover:text-[var(--color-market-red)]">
+                    {row.ticker} {row.name ?? ''}
+                  </Link>
+                  <div className="mt-1 text-[11px] font-semibold text-[var(--color-text-tertiary)]">{row.sector_large ?? '業種未設定'}</div>
+                </td>
+                <td className="px-3 py-2"><DecisionBadge decision={row.decision} /></td>
+                <td className="px-3 py-2"><StageCode code={row.profile?.stageCode} /></td>
+                <td className="px-3 py-2 text-right font-bold tabular-nums text-red-700">{fmtScore(row.longEdge)}</td>
+                <td className="px-3 py-2 text-right font-bold tabular-nums text-blue-700">{fmtScore(row.shortEdge)}</td>
+                <td className="px-3 py-2 font-semibold">{row.profile?.maOrder ?? '-'}</td>
+                <td className="px-3 py-2 font-semibold leading-relaxed text-[var(--color-text-secondary)]">
+                  {row.decision === 'short' ? row.entryTrigger : row.decision === 'long' ? row.entryTrigger : row.expectation}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  )
+}
+
+function regimeText(value: string | null | undefined): string {
+  const map: Record<string, string> = {
+    up_acceleration: '上昇加速',
+    up_deceleration: '上昇鈍化',
+    down_acceleration: '下落加速',
+    down_deceleration: '下落鈍化',
+    sideways: '横ばい',
+    compression: '収縮',
+    up_expansion: '上方向拡散',
+    down_expansion: '下方向拡散',
+    neutral: '中立',
+    bullish_turn: '上向き転換',
+    bearish_turn: '下向き転換',
+    rebound_watch: '反発候補',
+    breakdown_watch: '崩れ候補',
+    none: '転換なし',
+  }
+  return value ? map[value] ?? value : '-'
+}
+
+function PhysicsCandidateCard({ candidate }: { candidate: ParsedPhysicsCandidate }) {
+  const profile = candidate.profile
+  const tone = physicsTone(candidate.direction)
+  return (
+    <Card size="sm" className="h-full">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <Pill tone={tone}>{physicsDirectionLabel(candidate.direction)}</Pill>
+            <Pill>{candidate.horizon_days}営業日</Pill>
+            <span className="text-[11px] font-bold text-[var(--color-text-tertiary)]">#{candidate.rank}</span>
+          </div>
+          <Link href={`/stock/${candidate.ticker}`} prefetch={false} className="mt-2 inline-flex text-[16px] font-bold text-[var(--color-brand-900)] hover:text-[var(--color-market-red)]">
+            {candidate.ticker} {candidate.name ?? ''}
+          </Link>
+          <div className="mt-1 text-[11px] font-semibold text-[var(--color-text-tertiary)]">{candidate.sector_large ?? '業種未設定'} / {fmtDate(candidate.as_of_date)}</div>
+        </div>
+        <div className="text-right">
+          <div className="text-[10px] font-bold text-[var(--color-text-tertiary)]">短期形状</div>
+          <div className="text-[18px] font-bold tabular-nums text-[var(--color-brand-900)]">{fmtRatio(candidate.candidate_score)}</div>
+        </div>
+      </div>
+
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <StageCode code={profile?.stageCode} />
+        <Pill>{profile?.maOrder ?? 'MA並び未生成'}</Pill>
+      </div>
+
+      <div className="mt-3 grid gap-2 sm:grid-cols-3">
+        <div className="rounded-[4px] border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-2.5 py-2">
+          <div className="text-[10px] font-bold text-[var(--color-text-tertiary)]">流れ</div>
+          <div className="mt-1 text-[12px] font-bold text-[var(--color-brand-900)]">{regimeText(profile?.regimes.trend)}</div>
+        </div>
+        <div className="rounded-[4px] border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-2.5 py-2">
+          <div className="text-[10px] font-bold text-[var(--color-text-tertiary)]">距離</div>
+          <div className="mt-1 text-[12px] font-bold text-[var(--color-brand-900)]">{regimeText(profile?.regimes.spread)}</div>
+        </div>
+        <div className="rounded-[4px] border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-2.5 py-2">
+          <div className="text-[10px] font-bold text-[var(--color-text-tertiary)]">転換</div>
+          <div className="mt-1 text-[12px] font-bold text-[var(--color-brand-900)]">{regimeText(profile?.regimes.turn)}</div>
+        </div>
+      </div>
+
+      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        <Pill>5SMA速度 {fmtPct(profile?.velocities.sma5.d5)}</Pill>
+        <Pill>5SMA加速度 {fmtPct(profile?.accelerations.sma5.d5)}</Pill>
+        <Pill>5-25距離 {fmtPct(profile?.gaps.sma5To25Pct)}</Pill>
+        <Pill>距離変化 {fmtPct(profile?.gapVelocity.sma5To25D5)}</Pill>
+      </div>
+
+      {candidate.explanation.summary && (
+        <p className="mt-3 text-[12px] font-semibold leading-relaxed text-[var(--color-text-secondary)]">{candidate.explanation.summary}</p>
+      )}
+
+      <div className="mt-3 grid gap-1.5">
+        {(['velocity', 'acceleration', 'distance', 'pricePosition', 'regime'] as const).map((key) => (
+          candidate.reason[key] ? (
+            <div key={key} className="rounded-[4px] border border-[var(--color-border-default)] bg-white px-2.5 py-2 text-[11px] font-semibold leading-relaxed text-[var(--color-text-secondary)]">
+              {candidate.reason[key]}
+            </div>
+          ) : null
+        ))}
+      </div>
+    </Card>
+  )
+}
+
+function PhysicsLensPanel({ status, rows }: { status: PhysicsStatus; rows: ParsedPhysicsCandidate[] }) {
+  const groups: Array<{ direction: PhysicsDirection; title: string; body: string }> = [
+    { direction: 'up', title: '短期上昇候補', body: 'SMA速度・加速度・距離拡大が上方向に揃いやすい形です。' },
+    { direction: 'down', title: '短期下落候補', body: 'SMA下向き加速、戻り失敗、距離の下方向拡大を重視します。' },
+    { direction: 'wait', title: '見送り候補', body: '方向感より横ばい・収縮・逆行リスクが強く、条件待ちに寄せる形です。' },
+  ]
+  return (
+    <Card size="lg">
+      <CardHeader
+        title="チャート物理 v2"
+        hint={`SMAの速度・加速度・距離変化で1〜2週間の形状を読む短期MLです。特徴量 ${fmtCount(status.rowsLatest)}件 / 候補 ${fmtCount(status.candidateRowsLatest)}件`}
+      />
+      {rows.length === 0 ? (
+        <div className="rounded-[4px] border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] p-3 text-[12px] font-semibold text-[var(--color-text-secondary)]">
+          ma_physics_v2 の候補はまだ生成されていません。`npm run batch:ml-physics-features && npm run batch:ml-short-labels && npm run batch:ml-physics-train && npm run batch:ml-physics-candidates` で生成できます。
+        </div>
+      ) : (
+        <div className="grid gap-4 xl:grid-cols-3">
+          {groups.map((group) => {
+            const items = rows.filter((row) => row.direction === group.direction).slice(0, 4)
+            return (
+              <div key={group.direction} className="space-y-3">
+                <div>
+                  <div className={`text-[14px] font-bold ${group.direction === 'down' ? 'text-blue-700' : group.direction === 'wait' ? 'text-slate-700' : 'text-red-700'}`}>{group.title}</div>
+                  <p className="mt-1 text-[12px] font-semibold leading-relaxed text-[var(--color-text-secondary)]">{group.body}</p>
+                </div>
+                <div className="grid gap-3">
+                  {items.map((candidate) => <PhysicsCandidateCard key={`${candidate.direction}-${candidate.horizon_days}-${candidate.ticker}`} candidate={candidate} />)}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </Card>
+  )
+}
+
 function ModelCard({ model }: { model: ModelRow }) {
   const metrics = parseJson<Record<string, unknown>>(model.metrics_json, {})
   const items = featureImportance(model)
@@ -891,6 +1593,7 @@ function EvaluationTable({ rows }: { rows: EvaluationRow[] }) {
             <th className="px-3 py-2 text-right">Hit Rate</th>
             <th className="px-3 py-2 text-right">中央値</th>
             <th className="px-3 py-2 text-right">平均</th>
+            <th className="px-3 py-2 text-right">最大逆行</th>
           </tr>
         </thead>
         <tbody>
@@ -904,11 +1607,73 @@ function EvaluationTable({ rows }: { rows: EvaluationRow[] }) {
               <td className="px-3 py-2 text-right tabular-nums">{fmtRatio(row.hit_rate)}</td>
               <td className="px-3 py-2 text-right tabular-nums">{fmtPct(row.median_return_pct)}</td>
               <td className="px-3 py-2 text-right tabular-nums">{fmtPct(row.avg_return_pct)}</td>
+              <td className="px-3 py-2 text-right tabular-nums">{fmtPct(row.max_drawdown_pct)}</td>
             </tr>
           ))}
         </tbody>
       </table>
     </div>
+  )
+}
+
+function ModelMonitoringPanel({ rows }: { rows: EvaluationRow[] }) {
+  if (rows.length === 0) {
+    return (
+      <Card size="lg">
+        <CardHeader title="モデル精度の時系列モニタリング" hint="日次予測の答え合わせを蓄積し、モデル劣化を検知します。" />
+        <div className="text-[12px] font-semibold text-[var(--color-text-tertiary)]">評価履歴はまだ生成されていません。</div>
+      </Card>
+    )
+  }
+  const dates = Array.from(new Set(rows.map((row) => row.evaluation_date)))
+  const latestDate = dates[0]
+  const hasTimeline = dates.length >= 2
+  const latestRows = rows.filter((row) => row.evaluation_date === latestDate)
+  const priorRows = rows.filter((row) => row.evaluation_date !== latestDate)
+  return (
+    <Card size="lg">
+      <CardHeader
+        title="モデル精度の時系列モニタリング"
+        hint="買いモデルと空売りモデルを別々に答え合わせし、精度低下時は候補の信頼度を下げて扱います。"
+      />
+      <div className="grid gap-3 lg:grid-cols-3">
+        {latestRows.map((row) => (
+          <div key={`monitor-${row.evaluation_date}-${row.direction}-${row.horizon_days}`} className="rounded-[4px] border border-[var(--color-border-default)] bg-white p-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <Pill tone={row.direction === 'up' ? 'red' : 'blue'}>{directionLabel(row.direction)}</Pill>
+              <Pill>{row.horizon_days}営業日</Pill>
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-2 text-[11px] font-bold text-[var(--color-text-secondary)]">
+              <div>
+                <div className="text-[10px] text-[var(--color-text-tertiary)]">Precision@20</div>
+                <div className="text-[18px] tabular-nums text-[var(--color-brand-900)]">{fmtRatio(row.precision_at_20)}</div>
+              </div>
+              <div>
+                <div className="text-[10px] text-[var(--color-text-tertiary)]">中央値</div>
+                <div className={`text-[18px] tabular-nums ${(row.median_return_pct ?? 0) >= 0 ? 'text-red-700' : 'text-blue-700'}`}>{fmtPct(row.median_return_pct)}</div>
+              </div>
+              <div>
+                <div className="text-[10px] text-[var(--color-text-tertiary)]">Hit Rate</div>
+                <div className="text-[16px] tabular-nums text-[var(--color-brand-900)]">{fmtRatio(row.hit_rate)}</div>
+              </div>
+              <div>
+                <div className="text-[10px] text-[var(--color-text-tertiary)]">最大逆行</div>
+                <div className="text-[16px] tabular-nums text-blue-700">{fmtPct(row.max_drawdown_pct)}</div>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="mt-3 rounded-[4px] border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] p-3 text-[12px] font-semibold leading-relaxed text-[var(--color-text-secondary)]">
+        {hasTimeline
+          ? `評価日は${dates.length}点あります。直近のPrecision@20や中央値リターンが過去評価から悪化していないかを確認し、悪化時は候補の採用数を絞ります。`
+          : '現時点では評価日が1点のみです。日次予測と答え合わせが蓄積されると、モデル劣化や相場環境別の得意不得意を時系列で確認できます。'}
+        {priorRows.length > 0 && ` 過去評価履歴は${priorRows.length}行あります。`}
+      </div>
+      <div className="mt-3">
+        <EvaluationTable rows={rows.slice(0, 12)} />
+      </div>
+    </Card>
   )
 }
 
@@ -944,20 +1709,88 @@ function SimilarPanel({ rows }: { rows: SimilarRow[] }) {
   )
 }
 
-export default async function MaLensPage() {
-  const [status, candidates, models, evaluations, similars] = await Promise.all([
-    loadStatus(),
-    loadCandidates(),
+function LazySectionFallback({ title }: { title: string }) {
+  return (
+    <Card size="lg">
+      <CardHeader title={title} hint="表示に必要なデータを分割して読み込んでいます。" />
+      <div className="rounded-[4px] border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] p-4 text-[12px] font-semibold text-[var(--color-text-secondary)]">
+        読み込み中...
+      </div>
+    </Card>
+  )
+}
+
+async function PullbackLensSection() {
+  const models = await loadModels()
+  const pullbackRows = await loadPullbackLens(models)
+  return <PullbackLensPanel rows={pullbackRows} />
+}
+
+async function DecisionPanelsSection() {
+  const candidatePool = await loadCandidatePool()
+  const marginMap = await loadMarginRows(candidatePool.map((candidate) => candidate.ticker))
+  const decisionRows = buildLongShortRows(candidatePool, marginMap)
+  return (
+    <>
+      <ExpectedValuePanel rows={decisionRows} />
+
+      <section className="grid gap-5 xl:grid-cols-2">
+        <EntryWaitPanel rows={decisionRows} />
+        <ExitOptimizerPanel rows={decisionRows} />
+      </section>
+
+      <section className="grid gap-5 xl:grid-cols-2">
+        <SqueezeRiskPanel rows={decisionRows} />
+        <LongShortComparisonPanel rows={decisionRows} />
+      </section>
+    </>
+  )
+}
+
+async function ModelKnowledgeSection() {
+  const [models, evaluations, evaluationTimeline, similars] = await Promise.all([
     loadModels(),
     loadEvaluations(),
+    loadEvaluationTimeline(),
     loadSimilarRows(),
   ])
-  const pullbackRows = await loadPullbackLens(models)
+  const focusModels = models.filter((model) => model.horizon_days === 40).slice(0, 2)
+  const fallbackModels = focusModels.length > 0 ? focusModels : models.slice(0, 2)
+  return (
+    <>
+      <Card size="lg">
+        <CardHeader
+          title="モデルが重視している特徴"
+          hint="ロジスティック回帰モデルの重みから、上昇候補・下落警戒の判定で効いている特徴を表示します。"
+        />
+        <div className="grid gap-3 lg:grid-cols-2">
+          {fallbackModels.map((model) => <ModelCard key={model.model_name} model={model} />)}
+        </div>
+      </Card>
+
+      <Card size="lg">
+        <CardHeader
+          title="現在のMA形状が近い銘柄"
+          hint="最新日の候補銘柄同士を、6桁ステージ・MA角度・MA距離・株価位置の特徴量距離で比較します。"
+        />
+        <SimilarPanel rows={similars} />
+      </Card>
+
+      <ModelMonitoringPanel rows={evaluationTimeline.length > 0 ? evaluationTimeline : evaluations} />
+    </>
+  )
+}
+
+export default async function MaLensPage() {
+  const [status, candidates, physicsStatus, physicsCandidates] = await Promise.all([
+    loadStatus(),
+    loadCandidates(),
+    loadPhysicsStatus(),
+    loadPhysicsCandidates(10),
+  ])
 
   const upCandidates = candidates.filter((candidate) => candidate.direction === 'up')
   const downCandidates = candidates.filter((candidate) => candidate.direction === 'down')
-  const focusModels = models.filter((model) => model.horizon_days === 40).slice(0, 2)
-  const fallbackModels = focusModels.length > 0 ? focusModels : models.slice(0, 2)
 
   return (
     <div className="space-y-5">
@@ -983,7 +1816,15 @@ export default async function MaLensPage() {
         <FeatureInputGrid />
       </Card>
 
-      <PullbackLensPanel rows={pullbackRows} />
+      <Suspense fallback={<LazySectionFallback title="押し目 Lens" />}>
+        <PullbackLensSection />
+      </Suspense>
+
+      <PhysicsLensPanel status={physicsStatus} rows={physicsCandidates} />
+
+      <Suspense fallback={<LazySectionFallback title="期待値・エントリー/出口条件" />}>
+        <DecisionPanelsSection />
+      </Suspense>
 
       <section className="grid gap-5 xl:grid-cols-2">
         <div className="space-y-3">
@@ -1000,31 +1841,9 @@ export default async function MaLensPage() {
         </div>
       </section>
 
-      <Card size="lg">
-        <CardHeader
-          title="モデルが重視している特徴"
-          hint="ロジスティック回帰モデルの重みから、上昇候補・下落警戒の判定で効いている特徴を表示します。"
-        />
-        <div className="grid gap-3 lg:grid-cols-2">
-          {fallbackModels.map((model) => <ModelCard key={model.model_name} model={model} />)}
-        </div>
-      </Card>
-
-      <Card size="lg">
-        <CardHeader
-          title="現在のMA形状が近い銘柄"
-          hint="最新日の候補銘柄同士を、6桁ステージ・MA角度・MA距離・株価位置の特徴量距離で比較します。"
-        />
-        <SimilarPanel rows={similars} />
-      </Card>
-
-      <Card size="lg">
-        <CardHeader
-          title="モデル精度の確認"
-          hint="候補抽出は過去データの検証結果とセットで確認します。数値は売買判断ではなく、モデルの現在地です。"
-        />
-        <EvaluationTable rows={evaluations} />
-      </Card>
+      <Suspense fallback={<LazySectionFallback title="モデル知識・類似形状・精度モニタリング" />}>
+        <ModelKnowledgeSection />
+      </Suspense>
     </div>
   )
 }

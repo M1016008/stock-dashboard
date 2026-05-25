@@ -9,6 +9,7 @@ import {
   attachEarningsSignalDecorations,
   loadEarningsSignalDecorations,
   type EarningsSignalDecoration,
+  type EarningsSignalDecorationOptions,
 } from '@/lib/signals/earnings-labels'
 
 // ─── 最新営業日 ───
@@ -805,8 +806,13 @@ function applyEarningsScope(
   }
 }
 
-async function withEarningsSignals(rows: EarningsRowBase[], baseDate: string | null): Promise<EarningsRow[]> {
-  const decorations = await loadEarningsSignalDecorations(rows.map((row) => row.ticker), baseDate)
+async function withEarningsSignals(
+  rows: EarningsRowBase[],
+  baseDate: string | null,
+  options: EarningsSignalDecorationOptions = {},
+): Promise<EarningsRow[]> {
+  if (rows.length === 0) return []
+  const decorations = await loadEarningsSignalDecorations(rows.map((row) => row.ticker), baseDate, options)
   return attachEarningsSignalDecorations(rows, decorations)
 }
 
@@ -837,6 +843,7 @@ export interface EarningsCalendarDashboard {
 interface EarningsCalendarQueryOptions {
   exactDate?: boolean
   limit?: number | null
+  signalMode?: 'none' | 'labels' | 'details'
 }
 
 export async function getEarningsCalendar(
@@ -934,7 +941,13 @@ export async function getEarningsCalendar(
     `,
     [anchorDate, ...calArgs, marketDate, prev ?? marketDate, marketDate, marketDate, marketDate, marketDate, ...limitArgs],
   )
-  return withEarningsSignals(rows, marketDate)
+  if (queryOptions.signalMode === 'none') {
+    return attachEarningsSignalDecorations(rows, new Map())
+  }
+  return withEarningsSignals(rows, marketDate, {
+    includeDetails: queryOptions.signalMode !== 'labels',
+    includeMlInsight: queryOptions.signalMode !== 'labels',
+  })
 }
 
 async function getRecentEarningsCalendarRows(baseDate: string, prevDate: string | null, limit = 20): Promise<EarningsRow[]> {
@@ -1297,11 +1310,12 @@ export async function getEarningsCalendarDashboard(
     const completedRows = await getCompletedEarningsCalendarRows(anchorDate, marketDate, prev, 14, 80)
 
     if (!preferLatestImport) {
-      const allRows = await getEarningsCalendar(daysAhead, anchorDate, { exactDate, limit: null })
+      const allRows = await getEarningsCalendar(daysAhead, anchorDate, { exactDate, limit: null, signalMode: 'labels' })
       const scoped = applyEarningsScope(allRows, filters, anchorDate, exactDate)
+      const displayedRows = await withEarningsSignals(scoped.rows, marketDate)
       const latestAnnounceDate = meta?.latestAnnounceDate ?? null
       return {
-        rows: scoped.rows,
+        rows: displayedRows,
         completedRows,
         referenceRows: [],
         filterOptions: scoped.filterOptions,
@@ -1364,11 +1378,12 @@ export async function getEarningsCalendarDashboard(
       }
     }
 
-    const fallbackRows = await getEarningsCalendar(daysAhead, anchorDate, { limit: null })
+    const fallbackRows = await getEarningsCalendar(daysAhead, anchorDate, { limit: null, signalMode: 'labels' })
     if (fallbackRows.length > 0) {
       const scoped = applyEarningsScope(fallbackRows, filters, anchorDate, false)
+      const displayedRows = await withEarningsSignals(scoped.rows, marketDate)
       return {
-        rows: scoped.rows,
+        rows: displayedRows,
         completedRows,
         referenceRows: [],
         filterOptions: scoped.filterOptions,

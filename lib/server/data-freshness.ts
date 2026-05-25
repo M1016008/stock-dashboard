@@ -15,7 +15,7 @@ const UPDATE_JOB_TYPES = [
   'dashboard_cache',
 ]
 const LOCK_MANAGED_JOB_TYPES = new Set(['update_latest', 'post_ohlcv_refresh'])
-const RUNNING_JOB_TTL_SECONDS = 6 * 60 * 60
+const RUNNING_JOB_TTL_SECONDS = 45 * 60
 const MIN_COVERAGE_RATIO = 1
 const MIN_SNAPSHOT_OHLCV_ROWS = 5
 const JQUANTS_DAILY_READY_MINUTES = 16 * 60 + 30

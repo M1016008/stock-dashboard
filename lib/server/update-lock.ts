@@ -1,6 +1,6 @@
 import { client, ensureReady, execAll, execGet } from '@/lib/db/client'
 
-export const DEFAULT_UPDATE_LOCK_LEASE_SECONDS = 6 * 60 * 60
+export const DEFAULT_UPDATE_LOCK_LEASE_SECONDS = 45 * 60
 
 export type UpdateLockSnapshot = {
   jobType: string

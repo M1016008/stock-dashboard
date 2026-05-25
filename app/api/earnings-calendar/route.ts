@@ -5,6 +5,7 @@
 //   - past: true なら過去の決算（前回決算）も含める（デフォルト false）
 
 import { NextRequest, NextResponse } from 'next/server'
+import { gzipSync } from 'zlib'
 import { execAll, execGet } from '@/lib/db/client'
 import type { EarningsSignalDecoration } from '@/lib/signals/earnings-labels'
 
@@ -51,6 +52,19 @@ function withEmptySignalDecoration(entry: EarningsEntryBase): EarningsEntry {
   }
 }
 
+function jsonResponse(request: NextRequest, payload: unknown, init?: ResponseInit): NextResponse {
+  const json = JSON.stringify(payload)
+  const headers = new Headers(init?.headers)
+  headers.set('content-type', 'application/json; charset=utf-8')
+  const acceptEncoding = request.headers.get('accept-encoding') ?? ''
+  if (json.length > 1024 && /\bgzip\b/i.test(acceptEncoding)) {
+    headers.set('content-encoding', 'gzip')
+    headers.set('vary', 'Accept-Encoding')
+    return new NextResponse(gzipSync(json), { ...init, headers })
+  }
+  return new NextResponse(json, { ...init, headers })
+}
+
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
@@ -60,7 +74,7 @@ export async function GET(request: NextRequest) {
     const latest = await execGet<{ d: string | null }>(`SELECT MAX(date) AS d FROM daily_snapshots`)
     const baseDate = latest?.d
     if (!baseDate) {
-      return NextResponse.json({
+      return jsonResponse(request, {
         entries: [],
         snapshotDate: null,
         from: null,
@@ -146,7 +160,7 @@ export async function GET(request: NextRequest) {
 
     entries.sort((a, b) => a.date.localeCompare(b.date) || a.ticker.localeCompare(b.ticker))
 
-    return NextResponse.json({
+    return jsonResponse(request, {
       entries: entries.map(withEmptySignalDecoration),
       snapshotDate: baseDate,
       from: fromDate,
@@ -154,7 +168,8 @@ export async function GET(request: NextRequest) {
     })
   } catch (error) {
     console.error('earnings-calendar error:', error)
-    return NextResponse.json(
+    return jsonResponse(
+      request,
       { error: 'Failed', message: (error as Error).message },
       { status: 500 },
     )

@@ -636,6 +636,19 @@ const STATEMENTS = [
     PRIMARY KEY (ticker, date)
   )`,
   `CREATE INDEX IF NOT EXISTS ml_feature_vectors_date_idx ON ml_feature_vectors(date)`,
+  `CREATE TABLE IF NOT EXISTS ml_feature_vectors_v2 (
+    ticker TEXT NOT NULL,
+    date TEXT NOT NULL,
+    feature_set TEXT NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1,
+    stage_code TEXT,
+    feature_json TEXT NOT NULL,
+    vector_json TEXT NOT NULL,
+    computed_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (ticker, date, feature_set)
+  )`,
+  `CREATE INDEX IF NOT EXISTS ml_feature_vectors_v2_date_idx ON ml_feature_vectors_v2(feature_set, date)`,
+  `CREATE INDEX IF NOT EXISTS ml_feature_vectors_v2_ticker_date_idx ON ml_feature_vectors_v2(ticker, date)`,
   `CREATE TABLE IF NOT EXISTS ml_training_labels (
     ticker TEXT NOT NULL,
     date TEXT NOT NULL,
@@ -651,6 +664,25 @@ const STATEMENTS = [
     PRIMARY KEY (ticker, date, horizon_days)
   )`,
   `CREATE INDEX IF NOT EXISTS ml_training_labels_date_idx ON ml_training_labels(date, horizon_days)`,
+  `CREATE TABLE IF NOT EXISTS ml_short_labels (
+    ticker TEXT NOT NULL,
+    date TEXT NOT NULL,
+    horizon_days INTEGER NOT NULL,
+    return_pct REAL,
+    max_return_pct REAL,
+    min_return_pct REAL,
+    up_label INTEGER NOT NULL DEFAULT 0,
+    down_label INTEGER NOT NULL DEFAULT 0,
+    wait_label INTEGER NOT NULL DEFAULT 0,
+    reward_long REAL,
+    reward_short REAL,
+    reward_wait REAL,
+    label_json TEXT NOT NULL,
+    computed_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (ticker, date, horizon_days)
+  )`,
+  `CREATE INDEX IF NOT EXISTS ml_short_labels_date_idx ON ml_short_labels(date, horizon_days)`,
+  `CREATE INDEX IF NOT EXISTS ml_short_labels_horizon_idx ON ml_short_labels(horizon_days, date)`,
   `CREATE TABLE IF NOT EXISTS ml_models (
     model_name TEXT PRIMARY KEY,
     model_type TEXT NOT NULL,
@@ -746,6 +778,18 @@ const STATEMENTS = [
     PRIMARY KEY (ticker, date, horizon_days, action)
   )`,
   `CREATE INDEX IF NOT EXISTS rl_training_states_date_idx ON rl_training_states(date, horizon_days)`,
+  `CREATE TABLE IF NOT EXISTS rl_training_states_v2 (
+    ticker TEXT NOT NULL,
+    date TEXT NOT NULL,
+    horizon_days INTEGER NOT NULL,
+    action TEXT NOT NULL,
+    state_json TEXT NOT NULL,
+    reward REAL,
+    next_state_json TEXT,
+    computed_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (ticker, date, horizon_days, action)
+  )`,
+  `CREATE INDEX IF NOT EXISTS rl_training_states_v2_date_idx ON rl_training_states_v2(date, horizon_days)`,
   `CREATE TABLE IF NOT EXISTS serving_ml_candidates (
     as_of_date TEXT NOT NULL,
     direction TEXT NOT NULL,
@@ -762,6 +806,24 @@ const STATEMENTS = [
     PRIMARY KEY (as_of_date, direction, ticker)
   )`,
   `CREATE INDEX IF NOT EXISTS serving_ml_candidates_rank_idx ON serving_ml_candidates(as_of_date, direction, rank)`,
+  `CREATE TABLE IF NOT EXISTS serving_ml_physics_candidates (
+    as_of_date TEXT NOT NULL,
+    direction TEXT NOT NULL,
+    horizon_days INTEGER NOT NULL,
+    rank INTEGER NOT NULL,
+    ticker TEXT NOT NULL,
+    name TEXT,
+    sector_large TEXT,
+    candidate_score REAL NOT NULL,
+    model_name TEXT,
+    feature_json TEXT NOT NULL,
+    reason_json TEXT NOT NULL,
+    explanation_json TEXT NOT NULL,
+    computed_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (as_of_date, direction, horizon_days, ticker)
+  )`,
+  `CREATE INDEX IF NOT EXISTS serving_ml_physics_candidates_rank_idx ON serving_ml_physics_candidates(as_of_date, horizon_days, direction, rank)`,
+  `CREATE INDEX IF NOT EXISTS serving_ml_physics_candidates_ticker_idx ON serving_ml_physics_candidates(ticker, as_of_date)`,
   `CREATE TABLE IF NOT EXISTS serving_current_similars (
     as_of_date TEXT NOT NULL,
     base_ticker TEXT NOT NULL,

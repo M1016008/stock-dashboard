@@ -106,6 +106,11 @@ interface ScreenerStockRow {
   monthly_b_stage: number | null
 }
 
+type ScreenerSortKey =
+  | keyof ScreenerStockRow
+  | 'earningsLastElapsedDays'
+  | 'earningsNextBusinessDays'
+
 const STAGE_KEYS = [
   'daily_a_stage',
   'daily_b_stage',
@@ -540,12 +545,124 @@ function resolveMarketCapStatus(
   return 'shares_missing'
 }
 
+function numParam(searchParams: URLSearchParams, key: string): number | null {
+  const raw = searchParams.get(key)
+  if (!raw) return null
+  const value = Number(raw)
+  return Number.isFinite(value) ? value : null
+}
+
+function stringSetParam(searchParams: URLSearchParams, key: string): Set<string> {
+  return new Set(
+    (searchParams.get(key) ?? '')
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean),
+  )
+}
+
+function parseDateUtc(dateStr: string | null | undefined): number | null {
+  if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return null
+  const [year, month, day] = dateStr.split('-').map(Number)
+  return Date.UTC(year, month - 1, day)
+}
+
+function daysSince(dateStr: string | null | undefined, referenceDate: string): number | null {
+  const date = parseDateUtc(dateStr)
+  const ref = parseDateUtc(referenceDate)
+  if (date == null || ref == null) return null
+  return Math.round((ref - date) / 86400000)
+}
+
+function isWeekdayUtc(time: number): boolean {
+  const day = new Date(time).getUTCDay()
+  return day >= 1 && day <= 5
+}
+
+function businessDaysUntil(dateStr: string | null | undefined, referenceDate: string): number | null {
+  const date = parseDateUtc(dateStr)
+  const ref = parseDateUtc(referenceDate)
+  if (date == null || ref == null) return null
+  if (date === ref) return 0
+  const direction = date > ref ? 1 : -1
+  let count = 0
+  for (let time = ref + direction * 86400000; direction > 0 ? time <= date : time >= date; time += direction * 86400000) {
+    if (isWeekdayUtc(time)) count += direction
+  }
+  return count
+}
+
+const SORT_KEYS = new Set<ScreenerSortKey>([
+  'ticker',
+  'marginType',
+  'marketSegment',
+  'sector33',
+  'sectorLarge',
+  'name',
+  'price',
+  'currency',
+  'changePercent',
+  'changePercentWeek',
+  'changePercentMonth',
+  'perfPct3m',
+  'perfPct6m',
+  'perfPctYtd',
+  'volume',
+  'avgVolume10d',
+  'avgVolume30d',
+  'marketCap',
+  'marketCapCurrency',
+  'sma5Angle',
+  'sma25Angle',
+  'sma75Angle',
+  'sma200Angle',
+  'earningsLastDate',
+  'earningsLastElapsedDays',
+  'earningsNextDate',
+  'earningsNextBusinessDays',
+])
+
+function sortValue(row: ScreenerStockRow, key: ScreenerSortKey, referenceDate: string): unknown {
+  if (key === 'earningsLastElapsedDays') return daysSince(row.earningsLastDate, referenceDate)
+  if (key === 'earningsNextBusinessDays') return businessDaysUntil(row.earningsNextDate, referenceDate)
+  return row[key as keyof ScreenerStockRow]
+}
+
+function compareNullable(a: unknown, b: unknown, dir: 1 | -1): number {
+  if (a == null && b == null) return 0
+  if (a == null) return 1
+  if (b == null) return -1
+  if (typeof a === 'number' && typeof b === 'number') {
+    if (!Number.isFinite(a) && !Number.isFinite(b)) return 0
+    if (!Number.isFinite(a)) return 1
+    if (!Number.isFinite(b)) return -1
+    return (a - b) * dir
+  }
+  return String(a).localeCompare(String(b), 'ja') * dir
+}
+
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
     // 当ダッシュボードは日本株専用。market パラメタは互換のため受け取るだけ。
     const segment = searchParams.get('segment')
     const requestedDate = searchParams.get('date')
+    const marginTypes = stringSetParam(searchParams, 'marginType')
+    const sector17 = searchParams.get('sector17')?.trim()
+    const sector33 = searchParams.get('sector33')?.trim()
+    const marketCapMin = numParam(searchParams, 'marketCapMin')
+    const marketCapMax = numParam(searchParams, 'marketCapMax')
+    const priceMin = numParam(searchParams, 'priceMin')
+    const priceMax = numParam(searchParams, 'priceMax')
+    const volumeMin = numParam(searchParams, 'volumeMin')
+    const volumeMax = numParam(searchParams, 'volumeMax')
+    const rawLimit = numParam(searchParams, 'limit')
+    const rawOffset = numParam(searchParams, 'offset')
+    const limit = rawLimit == null ? null : Math.min(5000, Math.max(1, Math.floor(rawLimit)))
+    const offset = rawOffset == null ? 0 : Math.max(0, Math.floor(rawOffset))
+    const requestedSort = searchParams.get('sort') as ScreenerSortKey | null
+    const sortKey = requestedSort && SORT_KEYS.has(requestedSort) ? requestedSort : null
+    const sortDir: 1 | -1 = searchParams.get('dir') === 'asc' ? 1 : -1
 
     const date = requestedDate ?? (await latestSnapshotDate())
     if (!date) {
@@ -584,6 +701,21 @@ export async function GET(request: NextRequest) {
 
     let filtered = built
     if (segment) filtered = filtered.filter((r) => r.marketSegment === segment)
+    if (marginTypes.size > 0) {
+      filtered = filtered.filter((r) => marginTypes.has(r.marginType?.trim() || '未設定'))
+    }
+    if (sector17) {
+      filtered = filtered.filter((r) => r.sectorLarge === sector17 || r.sector17Name === sector17)
+    }
+    if (sector33) {
+      filtered = filtered.filter((r) => r.sector33 === sector33 || r.sector33Name === sector33)
+    }
+    if (marketCapMin != null) filtered = filtered.filter((r) => (r.marketCap ?? -Infinity) >= marketCapMin)
+    if (marketCapMax != null) filtered = filtered.filter((r) => (r.marketCap ?? Infinity) <= marketCapMax)
+    if (priceMin != null) filtered = filtered.filter((r) => (r.price ?? -Infinity) >= priceMin)
+    if (priceMax != null) filtered = filtered.filter((r) => (r.price ?? Infinity) <= priceMax)
+    if (volumeMin != null) filtered = filtered.filter((r) => (r.volume ?? -Infinity) >= volumeMin)
+    if (volumeMax != null) filtered = filtered.filter((r) => (r.volume ?? Infinity) <= volumeMax)
 
     for (const [key, vals] of Object.entries(stageFilter)) {
       filtered = filtered.filter((r) => {
@@ -592,14 +724,39 @@ export async function GET(request: NextRequest) {
       })
     }
 
+    const sorted = sortKey
+      ? [...filtered].sort((a, b) => {
+          const primary = compareNullable(sortValue(a, sortKey, date), sortValue(b, sortKey, date), sortDir)
+          if (primary !== 0) return primary
+          return a.ticker.localeCompare(b.ticker)
+        })
+      : filtered
+    const paged = limit == null ? sorted.slice(offset) : sorted.slice(offset, offset + limit)
+
     return NextResponse.json({
-      results: filtered,
+      results: paged,
       total: filtered.length,
       universe,
       date,
       cached: true,
       source: 'jquants',
-      filters: { segment, ...stageFilter },
+      filters: {
+        segment,
+        marginType: Array.from(marginTypes),
+        sector17,
+        sector33,
+        marketCapMin,
+        marketCapMax,
+        priceMin,
+        priceMax,
+        volumeMin,
+        volumeMax,
+        sort: sortKey,
+        dir: sortKey ? (sortDir === 1 ? 'asc' : 'desc') : null,
+        limit,
+        offset,
+        ...stageFilter,
+      },
     })
   } catch (error) {
     console.error('Screener API error:', error)

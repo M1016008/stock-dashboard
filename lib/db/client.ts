@@ -37,6 +37,7 @@ const cfg = buildClientUrl()
 const globalForDb = global as unknown as {
   libsql?: Client
   schemaReady?: Promise<void>
+  sqlitePragmasReady?: Promise<void>
 }
 
 export const client: Client =
@@ -48,11 +49,29 @@ if (process.env.NODE_ENV !== 'production') globalForDb.libsql = client
 export const db = drizzle(client, { schema })
 export const isCloud = cfg.isCloud
 
+async function ensureLocalSqlitePragmas(): Promise<void> {
+  if (cfg.isCloud) return
+  if (!globalForDb.sqlitePragmasReady) {
+    globalForDb.sqlitePragmasReady = Promise.resolve()
+      .then(async () => {
+        await client.execute('PRAGMA journal_mode=WAL')
+        await client.execute('PRAGMA synchronous=NORMAL')
+        await client.execute('PRAGMA busy_timeout=60000')
+      })
+      .catch((e) => {
+        delete globalForDb.sqlitePragmasReady
+        throw e
+      })
+  }
+  await globalForDb.sqlitePragmasReady
+}
+
 /**
  * スキーマ初期化を 1 回だけ走らせる。
  * 各 API ルートで `await ensureReady()` を呼ぶことでテーブル存在を担保する。
  */
 export async function ensureReady(): Promise<void> {
+  await ensureLocalSqlitePragmas()
   if (!globalForDb.schemaReady) {
     globalForDb.schemaReady = ensureSchema(client).catch((e) => {
       // 失敗時はキャッシュをクリアして次回再試行できるようにする

@@ -10,6 +10,7 @@
 // 出力: HexMap が期待する Stock[] 形 + date / count
 
 import { NextRequest, NextResponse } from 'next/server'
+import { gzipSync } from 'zlib'
 import { execAll, execGet } from '@/lib/db/client'
 
 export const dynamic = 'force-dynamic'
@@ -111,6 +112,20 @@ interface MlCandidateRow {
   explanation_json: string | null
 }
 
+function jsonResponse(request: NextRequest, payload: unknown): NextResponse {
+  const json = JSON.stringify(payload)
+  const headers = new Headers({
+    'content-type': 'application/json; charset=utf-8',
+  })
+  const acceptEncoding = request.headers.get('accept-encoding') ?? ''
+  if (json.length > 1024 && /\bgzip\b/i.test(acceptEncoding)) {
+    headers.set('content-encoding', 'gzip')
+    headers.set('vary', 'Accept-Encoding')
+    return new NextResponse(gzipSync(json), { headers })
+  }
+  return new NextResponse(json, { headers })
+}
+
 /** 日付より前の最近営業日 */
 async function prevSnapshotDate(beforeDate: string): Promise<string | null> {
   const r = await execGet<{ d: string | null }>(
@@ -163,10 +178,11 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url)
     const timeframe = (searchParams.get('timeframe') ?? 'daily') as 'daily' | 'weekly' | 'monthly'
     const requestedDate = searchParams.get('date')
+    const view = searchParams.get('view')
 
     const date = requestedDate ?? (await latestSnapshotDate())
     if (!date) {
-      return NextResponse.json({
+      return jsonResponse(request, {
         success: true,
         data: [],
         count: 0,
@@ -174,6 +190,40 @@ export async function GET(request: NextRequest) {
         date: null,
         timeframe,
         notice: 'OHLCV データ未取り込み。npm run batch:ohlcv を先に実行してください。',
+      })
+    }
+
+    if (view === 'summary') {
+      const rows = await execAll<{
+        code: string
+        sector_large: string | null
+        daily_a_stage: number | null
+        weekly_a_stage: number | null
+        monthly_a_stage: number | null
+      }>(
+        `
+        SELECT
+          ds.ticker AS code,
+          COALESCE(tu.sector17_name, sc.major_category, 'その他') AS sector_large,
+          ds.daily_a_stage,
+          ds.weekly_a_stage,
+          ds.monthly_a_stage
+        FROM daily_snapshots ds
+        LEFT JOIN ticker_universe tu ON tu.ticker = ds.ticker
+        LEFT JOIN stock_classification sc ON sc.ticker = ds.ticker
+        WHERE ds.date = ?
+        `,
+        [date],
+      )
+      return jsonResponse(request, {
+        success: true,
+        data: rows,
+        count: rows.length,
+        cached: true,
+        date,
+        timeframe,
+        source: 'jquants',
+        view,
       })
     }
 
@@ -351,7 +401,7 @@ export async function GET(request: NextRequest) {
       }
     })
 
-    return NextResponse.json({
+    return jsonResponse(request, {
       success: true,
       data: rows,
       count: rows.length,

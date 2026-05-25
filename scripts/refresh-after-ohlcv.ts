@@ -89,6 +89,7 @@ async function main(): Promise<void> {
     return
   }
 
+  const criticalOnly = process.env.REFRESH_AFTER_OHLCV_CRITICAL_ONLY === '1'
   const skipLock = process.env.REFRESH_AFTER_OHLCV_SKIP_LOCK === '1'
   const lock = skipLock ? null : await acquireUpdateLock('post_ohlcv_refresh')
   if (!skipLock && !lock) {
@@ -133,15 +134,21 @@ async function main(): Promise<void> {
       await lock?.heartbeat()
       await runRequired('scripts/batch-technical-signals.ts')
       await lock?.heartbeat()
-      await runRequired('scripts/build-serving-backtest.ts')
-      await lock?.heartbeat()
+      if (criticalOnly) {
+        console.log('serving backtest build skipped in critical-only refresh')
+      } else {
+        await runRequired('scripts/build-serving-backtest.ts')
+        await lock?.heartbeat()
+      }
       rebuiltModelFeatures = true
     } else {
       console.log('Model features and technical signals are already fresh after OHLCV fetch')
     }
 
     const afterModelFeatures = await getDataFreshness()
-    if (afterModelFeatures.needsMlFeatureUpdate) {
+    if (criticalOnly) {
+      console.log('ML refresh skipped in critical-only refresh')
+    } else if (afterModelFeatures.needsMlFeatureUpdate) {
       await runRequired('scripts/batch-ml-features.ts', {
         ML_RECENT_DAYS: process.env.ML_DAILY_RECENT_DAYS ?? '260',
         ML_MIN_HISTORY_DAYS: process.env.ML_DAILY_MIN_HISTORY_DAYS ?? '200',
@@ -164,6 +171,29 @@ async function main(): Promise<void> {
       await lock?.heartbeat()
       await runRequired('scripts/build-serving-ml-insights.ts')
       await lock?.heartbeat()
+      await runRequired('scripts/batch-forward-extrema.ts', {
+        FORWARD_EXTREMA_HORIZONS: process.env.ML_PHYSICS_EXTREMA_HORIZONS ?? '10,15',
+        BACKTEST_RECENT_DAYS: process.env.ML_PHYSICS_EXTREMA_RECENT_DAYS ?? process.env.BACKTEST_RECENT_DAYS ?? '260',
+        FORWARD_EXTREMA_WRITE_MODEL_LABELS: '0',
+      })
+      await lock?.heartbeat()
+      await runRequired('scripts/batch-ml-physics-features.ts', {
+        ML_PHYSICS_RECENT_DAYS: process.env.ML_PHYSICS_DAILY_RECENT_DAYS ?? '260',
+        ML_PHYSICS_MIN_HISTORY_DAYS: process.env.ML_PHYSICS_DAILY_MIN_HISTORY_DAYS ?? '220',
+      })
+      await lock?.heartbeat()
+      await runRequired('scripts/batch-ml-short-labels.ts', {
+        ML_SHORT_WRITE_RL_STATES: process.env.ML_SHORT_DAILY_WRITE_RL_STATES ?? '0',
+      })
+      await lock?.heartbeat()
+      await runRequired('scripts/batch-ml-physics-train.ts', {
+        ML_PHYSICS_TRAIN_START_DATE: process.env.ML_PHYSICS_DAILY_TRAIN_START_DATE ?? '2008-05-07',
+        ML_PHYSICS_TRAIN_SAMPLE_MODE: process.env.ML_PHYSICS_DAILY_TRAIN_SAMPLE_MODE ?? 'yearly',
+        ML_PHYSICS_TRAIN_LIMIT: process.env.ML_PHYSICS_DAILY_TRAIN_LIMIT ?? process.env.ML_PHYSICS_TRAIN_LIMIT ?? '120000',
+      })
+      await lock?.heartbeat()
+      await runRequired('scripts/batch-ml-physics-candidates.ts')
+      await lock?.heartbeat()
     } else {
       console.log('ML feature vectors and candidates are already fresh after OHLCV fetch')
     }
@@ -175,6 +205,8 @@ async function main(): Promise<void> {
       await runRequired('scripts/batch-ml-predict.ts')
       await lock?.heartbeat()
       await runRequired('scripts/build-serving-ml-insights.ts')
+      await lock?.heartbeat()
+      await runRequired('scripts/batch-ml-physics-candidates.ts')
       await lock?.heartbeat()
     }
 
@@ -193,10 +225,12 @@ async function main(): Promise<void> {
       after.needsSnapshotUpdate
       || after.needsFeatureUpdate
       || after.needsModelFeatureUpdate
-      || after.needsMlFeatureUpdate
-      || after.needsMlCandidateUpdate
-      || after.needsMlPredictionUpdate
       || after.needsDashboardCacheUpdate
+      || (!criticalOnly && (
+        after.needsMlFeatureUpdate
+        || after.needsMlCandidateUpdate
+        || after.needsMlPredictionUpdate
+      ))
     ) {
       throw new Error('Post-OHLCV refresh did not complete snapshot/feature/cache freshness')
     }

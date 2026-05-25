@@ -46,7 +46,7 @@ export function HexStageSummary() {
     let cancelled = false
     setLoading(true)
     setError('')
-    fetch(`/api/hex?market=${market}&timeframe=daily`, { cache: 'no-store' })
+    fetch(`/api/hex?market=${market}&timeframe=daily&view=summary`, { cache: 'no-store' })
       .then((r) => r.json())
       .then((d) => {
         if (cancelled) return
