@@ -1,5 +1,6 @@
 'use client'
 
+import { useState } from 'react'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { MarketDateCalendar, type MarketDateOption } from '@/components/ui/MarketDateCalendar'
 
@@ -12,6 +13,27 @@ export function DashboardDateSelector({ dates, selectedDate }: Props) {
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
+  const [loadedDates, setLoadedDates] = useState(dates)
+  const [loadedAll, setLoadedAll] = useState(false)
+  const [loading, setLoading] = useState(false)
+
+  const loadAllDates = async () => {
+    if (loadedAll || loading) return
+    setLoading(true)
+    try {
+      const res = await fetch('/api/dashboard/dates?limit=10000', { cache: 'no-store' })
+      if (!res.ok) throw new Error(`dashboard dates failed: ${res.status}`)
+      const json = await res.json() as { dates?: MarketDateOption[] }
+      if (Array.isArray(json.dates) && json.dates.length > 0) {
+        setLoadedDates(json.dates)
+        setLoadedAll(true)
+      }
+    } catch (error) {
+      console.warn(error)
+    } finally {
+      setLoading(false)
+    }
+  }
 
   const updateDate = (date: string | null) => {
     const params = new URLSearchParams(searchParams.toString())
@@ -29,7 +51,15 @@ export function DashboardDateSelector({ dates, selectedDate }: Props) {
           初期表示は最新日です。過去日を選ぶと、その日の市場状況・ステージ・シグナルへ切り替わります。
         </div>
       </div>
-      <MarketDateCalendar dates={dates} value={selectedDate} onChange={updateDate} label="ダッシュボード日付" align="right" />
+      <MarketDateCalendar
+        dates={loadedDates}
+        value={selectedDate}
+        onChange={updateDate}
+        label="ダッシュボード日付"
+        align="right"
+        loading={loading}
+        onOpen={loadAllDates}
+      />
     </div>
   )
 }

@@ -1,0 +1,1 @@
+export const MIN_DISPLAY_SIMILARITY_SCORE = 0.9

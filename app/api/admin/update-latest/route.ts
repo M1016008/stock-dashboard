@@ -33,6 +33,9 @@ export async function POST() {
       || freshness.needsMlFeatureUpdate
       || freshness.needsMlCandidateUpdate
       || freshness.needsMlPredictionUpdate
+      || freshness.needsMlPhysicsFeatureUpdate
+      || freshness.needsMlPhysicsCandidateUpdate
+      || freshness.needsMlSimilarUpdate
     )
   if (!repairOnly && !process.env.JQUANTS_API_KEY) {
     return NextResponse.json(

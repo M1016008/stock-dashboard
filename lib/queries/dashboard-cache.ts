@@ -118,6 +118,20 @@ export async function getDashboardAvailableDates(limit = 5000): Promise<Dashboar
   )
 }
 
+export async function getDashboardDateOption(date: string | null | undefined): Promise<DashboardAvailableDate | null> {
+  if (!date) return null
+  const row = await execGet<DashboardAvailableDate>(
+    `
+      SELECT date, NULL AS tickers
+      FROM daily_snapshots
+      WHERE date = ?
+      LIMIT 1
+    `,
+    [date],
+  )
+  return row ?? null
+}
+
 export async function getCachedDashboardIndices(): Promise<IndexQuote[]> {
   return getDashboardIndices()
 }

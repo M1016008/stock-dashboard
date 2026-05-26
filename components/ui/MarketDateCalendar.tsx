@@ -16,6 +16,8 @@ interface Props {
   align?: 'left' | 'right'
   compact?: boolean
   className?: string
+  loading?: boolean
+  onOpen?: () => void
 }
 
 const WEEKDAYS = ['日', '月', '火', '水', '木', '金', '土']
@@ -51,6 +53,8 @@ export function MarketDateCalendar({
   align = 'left',
   compact = false,
   className = '',
+  loading = false,
+  onOpen,
 }: Props) {
   const [open, setOpen] = useState(false)
   const [month, setMonth] = useState('')
@@ -102,7 +106,11 @@ export function MarketDateCalendar({
     <div ref={rootRef} className={`relative inline-flex ${className}`}>
       <button
         type="button"
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => setOpen((v) => {
+          const next = !v
+          if (next) onOpen?.()
+          return next
+        })}
         className={`inline-flex items-center gap-2 rounded-[6px] border border-[var(--color-border-default)] bg-white font-bold text-[var(--color-text-primary)] shadow-sm transition-colors hover:border-[var(--color-brand-300)] ${
           compact ? 'h-8 px-2.5 text-[12px]' : 'h-10 px-3 text-[13px]'
         }`}
@@ -202,7 +210,7 @@ export function MarketDateCalendar({
 
           <div className="mt-3 flex items-center justify-between gap-2 border-t border-[var(--color-border-soft)] pt-3">
             <span className="text-[11px] font-semibold text-[var(--color-text-tertiary)]">
-              点がある日だけ選択できます
+              {loading ? '日付を読み込み中...' : '点がある日だけ選択できます'}
             </span>
             <button
               type="button"

@@ -2,7 +2,9 @@
 // 決算発表予定銘柄を、株価・平均出来高・6軸ステージ込みの一覧で表示する。
 
 import Link from 'next/link'
+import { Fragment } from 'react'
 import { Card, CardHeader } from '@/components/ui/Card'
+import { EarningsStockChartDisclosure } from '@/components/earnings/EarningsStockChartDisclosure'
 import { IndustryBadges } from '@/components/ui/IndustryBadges'
 import { MarginBadges } from '@/components/ui/MarginBadges'
 import { StageTag } from '@/components/ui/StageTag'
@@ -165,7 +167,7 @@ function SignalStatChip({ stat }: { stat: EarningsRows[number]['signalDetails'][
 }
 
 function SignalDetails({ details }: { details: EarningsRows[number]['signalDetails'] | undefined }) {
-  const rows = details ?? []
+  const rows = (details ?? []).filter((detail) => detail.label !== 'ボラ収縮' && detail.label !== 'MA上タッチ')
   if (rows.length === 0) return null
   return (
     <div className="mt-2 space-y-1.5">
@@ -244,6 +246,7 @@ function earningsHref({
     ['sort', filters.sortBy],
     ['dir', filters.sortDir],
     ['limit', limit ?? filters.limit],
+    ['completed', filters.completed ? '1' : null],
   ]
   for (const [key, value] of pairs) {
     const text = compactFilterValue(value)
@@ -323,6 +326,7 @@ function EarningsScopeControls({
       <form action="/earnings" className="mt-3 grid gap-3">
         {date && <input type="hidden" name="date" value={date} />}
         {month && <input type="hidden" name="month" value={month} />}
+        {filters.completed && <input type="hidden" name="completed" value="1" />}
         <div className="grid gap-2 md:grid-cols-4 xl:grid-cols-8">
           <SelectField label="市場区分" name="market" value={filters.marketSegment} options={options.marketSegments} />
           <SelectField label="17業種" name="sector17" value={filters.sector17} options={options.sector17} />
@@ -538,66 +542,74 @@ function EarningsTable({
         </thead>
         <tbody className="divide-y divide-[var(--color-border-soft)]">
           {visibleRows.map((row) => (
-            <tr key={row.ticker + row.announce_date} className="hover:bg-[var(--color-surface-subtle)]">
-              <td className={`py-3 pl-2 pr-3 tabular-nums ${row.daysLeft === 0 ? 'font-bold text-[var(--color-price-up)]' : 'text-[var(--color-text-secondary)]'}`}>
-                <div>{dayLabel(row.daysLeft)}</div>
-                <div className="mt-1 text-[11px] font-semibold text-[var(--color-text-tertiary)]">{row.announce_date.slice(5)}</div>
-                <div className="mt-1 text-[10px] font-bold text-[var(--color-brand-700)]">{sourceLabel(row.source)}</div>
-              </td>
-              <td className="py-3 pr-3">
-                <Link href={`/stock/${row.ticker}`} className="font-bold tabular-nums hover:underline">{row.ticker}</Link>
-                <div className="mt-1 max-w-[260px] truncate font-semibold">{row.name ?? row.ticker}</div>
-              </td>
-              <td className="py-3 pr-3">
-                <MarginBadges
-                  marginType={row.marginType}
-                  creditRatio={row.creditRatio}
-                  shortRatio={row.shortRatio}
-                  compact={completed}
-                />
-              </td>
-              <td className="py-3 pr-3">
-                <IndustryBadges
-                  sector17={row.sector17Name}
-                  sector33={row.sector33Name}
-                  marketSegment={row.marketSegment}
-                  compact
-                />
-              </td>
-              <td className="py-3 pr-4 align-top">
-                <SignalBadges labels={row.signalLabels} codes={row.signalCodes} />
-                <SignalDetails details={row.signalDetails} />
-                <MlInsightNote insight={row.mlInsight} />
-              </td>
-              {completed && (
-                <td className={`py-3 pr-3 text-right tabular-nums font-bold ${tone(row.postEarningsChangePct)}`}>
-                  <div>{fmtPct(row.postEarningsChangePct)}</div>
-                  <div className="mt-1 text-[10px] font-semibold text-[var(--color-text-tertiary)]">
-                    {row.postEarningsBaseDate ? `${row.postEarningsBaseDate.slice(5)}比` : '基準なし'}
-                    {row.postEarningsTradingDays != null ? ` / ${row.postEarningsTradingDays}営業日` : ''}
-                  </div>
-                  <div className="mt-1 text-[10px] font-semibold text-[var(--color-text-tertiary)]">
-                    基準 {fmtPrice(row.postEarningsBasePrice)}
-                  </div>
+            <Fragment key={row.ticker + row.announce_date}>
+              <tr className="hover:bg-[var(--color-surface-subtle)]">
+                <td className={`py-3 pl-2 pr-3 tabular-nums ${row.daysLeft === 0 ? 'font-bold text-[var(--color-price-up)]' : 'text-[var(--color-text-secondary)]'}`}>
+                  <div>{dayLabel(row.daysLeft)}</div>
+                  <div className="mt-1 text-[11px] font-semibold text-[var(--color-text-tertiary)]">{row.announce_date.slice(5)}</div>
+                  <div className="mt-1 text-[10px] font-bold text-[var(--color-brand-700)]">{sourceLabel(row.source)}</div>
                 </td>
-              )}
-              <td className="py-3 pr-3 text-right tabular-nums font-semibold">{fmtPrice(row.price)}</td>
-              <td className={`py-3 pr-3 text-right tabular-nums font-semibold ${tone(row.changePct)}`}>
-                {row.changePct == null ? '---' : (row.changePct > 0 ? '+' : '') + row.changePct.toFixed(2) + '%'}
-              </td>
-              <td className="py-3 pr-3 text-right tabular-nums text-[var(--color-text-secondary)]">{fmtVol(row.avgVolume10)}</td>
-              <td className="py-3 pr-3 text-right tabular-nums text-[var(--color-text-secondary)]">{fmtVol(row.avgVolume30)}</td>
-              <td className="py-3 pr-3 text-right tabular-nums text-[var(--color-text-secondary)]">{fmtVol(row.avgVolume60)}</td>
-              <td className="py-3 pr-3">
-                <div className="flex items-center gap-1"><StageTag stage={row.daily_a_stage} size="xs" /><StageTag stage={row.daily_b_stage} size="xs" /></div>
-              </td>
-              <td className="py-3 pr-3">
-                <div className="flex items-center gap-1"><StageTag stage={row.weekly_a_stage} size="xs" /><StageTag stage={row.weekly_b_stage} size="xs" /></div>
-              </td>
-              <td className="py-3 pr-2">
-                <div className="flex items-center gap-1"><StageTag stage={row.monthly_a_stage} size="xs" /><StageTag stage={row.monthly_b_stage} size="xs" /></div>
-              </td>
-            </tr>
+                <td className="py-3 pr-3">
+                  <Link href={`/stock/${row.ticker}`} className="font-bold tabular-nums hover:underline">{row.ticker}</Link>
+                  <div className="mt-1 max-w-[260px] truncate font-semibold">{row.name ?? row.ticker}</div>
+                </td>
+                <td className="py-3 pr-3">
+                  <MarginBadges
+                    marginType={row.marginType}
+                    creditRatio={row.creditRatio}
+                    shortRatio={row.shortRatio}
+                    compact={completed}
+                  />
+                </td>
+                <td className="py-3 pr-3">
+                  <IndustryBadges
+                    sector17={row.sector17Name}
+                    sector33={row.sector33Name}
+                    marketSegment={row.marketSegment}
+                    compact
+                  />
+                </td>
+                <td className="py-3 pr-4 align-top">
+                  <SignalBadges labels={row.signalLabels} codes={row.signalCodes} />
+                  <SignalDetails details={row.signalDetails} />
+                  <MlInsightNote insight={row.mlInsight} />
+                </td>
+                {completed && (
+                  <td className={`py-3 pr-3 text-right tabular-nums font-bold ${tone(row.postEarningsChangePct)}`}>
+                    <div>{fmtPct(row.postEarningsChangePct)}</div>
+                    <div className="mt-1 text-[10px] font-semibold text-[var(--color-text-tertiary)]">
+                      {row.postEarningsBaseDate ? `${row.postEarningsBaseDate.slice(5)}比` : '基準なし'}
+                      {row.postEarningsTradingDays != null ? ` / ${row.postEarningsTradingDays}営業日` : ''}
+                    </div>
+                    <div className="mt-1 text-[10px] font-semibold text-[var(--color-text-tertiary)]">
+                      基準 {fmtPrice(row.postEarningsBasePrice)}
+                    </div>
+                  </td>
+                )}
+                <td className="py-3 pr-3 text-right tabular-nums font-semibold">{fmtPrice(row.price)}</td>
+                <td className={`py-3 pr-3 text-right tabular-nums font-semibold ${tone(row.changePct)}`}>
+                  {row.changePct == null ? '---' : (row.changePct > 0 ? '+' : '') + row.changePct.toFixed(2) + '%'}
+                </td>
+                <td className="py-3 pr-3 text-right tabular-nums text-[var(--color-text-secondary)]">{fmtVol(row.avgVolume10)}</td>
+                <td className="py-3 pr-3 text-right tabular-nums text-[var(--color-text-secondary)]">{fmtVol(row.avgVolume30)}</td>
+                <td className="py-3 pr-3 text-right tabular-nums text-[var(--color-text-secondary)]">{fmtVol(row.avgVolume60)}</td>
+                <td className="py-3 pr-3">
+                  <div className="flex items-center gap-1"><StageTag stage={row.daily_a_stage} size="xs" /><StageTag stage={row.daily_b_stage} size="xs" /></div>
+                </td>
+                <td className="py-3 pr-3">
+                  <div className="flex items-center gap-1"><StageTag stage={row.weekly_a_stage} size="xs" /><StageTag stage={row.weekly_b_stage} size="xs" /></div>
+                </td>
+                <td className="py-3 pr-2">
+                  <div className="flex items-center gap-1"><StageTag stage={row.monthly_a_stage} size="xs" /><StageTag stage={row.monthly_b_stage} size="xs" /></div>
+                </td>
+              </tr>
+              <EarningsStockChartDisclosure
+                ticker={row.ticker}
+                name={row.name}
+                announceDate={row.announce_date}
+                colSpan={colSpan}
+              />
+            </Fragment>
           ))}
           {hiddenCount > 0 && (
             <tr>
@@ -617,13 +629,20 @@ export async function EarningsCalendarPanel({
   month,
   preferLatestImport = true,
   filters,
+  includeCompleted = false,
 }: {
   date?: string | null
   month?: string | null
   preferLatestImport?: boolean
   filters?: EarningsCalendarFilters
+  includeCompleted?: boolean
 }) {
-  const data = await getEarningsCalendarDashboard(14, date, { preferLatestImport, filters })
+  const effectiveFilters = { ...(filters ?? {}), completed: includeCompleted }
+  const data = await getEarningsCalendarDashboard(14, date, {
+    preferLatestImport,
+    filters: effectiveFilters,
+    includeCompleted,
+  })
   const rows = data.rows
   const upcomingGroups = dayBucket(rows)
   const completedRows = data.completedRows
@@ -711,6 +730,25 @@ export async function EarningsCalendarPanel({
             </span>
           </div>
           <EarningsTable rows={completedRows} mode="completed" maxRows={30} date={date} month={month} filters={data.filters} />
+        </div>
+      )}
+      {!includeCompleted && (
+        <div className="mt-5 rounded-[8px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-4 py-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="text-[13px] font-bold text-[var(--color-text-primary)]">発表後2週間の値動き</div>
+              <div className="mt-1 text-[11px] font-semibold leading-relaxed text-[var(--color-text-tertiary)]">
+                初期表示を軽くするため、この詳細テーブルは必要な時だけ読み込みます。
+              </div>
+            </div>
+            <Link
+              href={earningsHref({ date, month, filters: { ...data.filters, completed: true }, limit: data.filters.limit ?? null })}
+              prefetch={false}
+              className="inline-flex h-9 items-center rounded-[6px] border border-[var(--color-brand-200)] bg-white px-3 text-[12px] font-bold text-[var(--color-brand-800)] hover:bg-[var(--color-brand-50)]"
+            >
+              発表後データを読み込む
+            </Link>
+          </div>
         </div>
       )}
     </Card>

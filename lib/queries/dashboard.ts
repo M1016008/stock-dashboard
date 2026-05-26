@@ -526,6 +526,7 @@ export interface EarningsCalendarFilters {
   sortBy?: EarningsSortKey | null
   sortDir?: EarningsSortDir | null
   limit?: number | null
+  completed?: boolean | null
 }
 
 export interface EarningsFilterOption {
@@ -1228,6 +1229,7 @@ function earningsDateRange(rows: EarningsRow[], fallbackStart: string | null, fa
 export interface EarningsCalendarDashboardOptions {
   preferLatestImport?: boolean
   filters?: EarningsCalendarFilters
+  includeCompleted?: boolean
 }
 
 export async function getEarningsCalendarDashboard(
@@ -1239,6 +1241,7 @@ export async function getEarningsCalendarDashboard(
   const marketDate = anchorDate ? await resolveMarketDateOnOrBefore(anchorDate) : null
   const preferLatestImport = options.preferLatestImport ?? true
   const filters = options.filters ?? {}
+  const includeCompleted = options.includeCompleted ?? false
   const exactDate = !preferLatestImport && isIsoDate(date)
   const displayLimit = clampDisplayLimit(filters.limit)
   if (!anchorDate || !marketDate) {
@@ -1307,7 +1310,9 @@ export async function getEarningsCalendarDashboard(
   }
 
   try {
-    const completedRows = await getCompletedEarningsCalendarRows(anchorDate, marketDate, prev, 14, 80)
+    const completedRows = includeCompleted
+      ? await getCompletedEarningsCalendarRows(anchorDate, marketDate, prev, 14, 80)
+      : []
 
     if (!preferLatestImport) {
       const allRows = await getEarningsCalendar(daysAhead, anchorDate, { exactDate, limit: null, signalMode: 'labels' })

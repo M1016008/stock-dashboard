@@ -76,7 +76,28 @@ async function main() {
         'daysToMax', days_to_max,
         'daysToMin', days_to_min,
         'maxReturnDate', max_return_date,
-        'minReturnDate', min_return_date
+        'minReturnDate', min_return_date,
+        'stopLoss3Hit', CASE WHEN COALESCE(min_return_pct, 999999) <= -3 THEN 1 ELSE 0 END,
+        'stopLoss5Hit', CASE WHEN COALESCE(min_return_pct, 999999) <= -5 THEN 1 ELSE 0 END,
+        'drawdownBeforeTarget',
+          CASE
+            WHEN COALESCE(max_return_pct, -999999) >= up_target
+             AND COALESCE(days_to_min, 999999) < COALESCE(days_to_max, 999999)
+            THEN min_return_pct
+            ELSE NULL
+          END,
+        'failedPullback',
+          CASE
+            WHEN COALESCE(max_return_pct, -999999) < up_target
+             AND COALESCE(min_return_pct, 999999) <= down_target
+            THEN 1 ELSE 0
+          END,
+        'overheatedReversal',
+          CASE
+            WHEN COALESCE(max_return_pct, -999999) >= up_target
+             AND COALESCE(min_return_pct, 999999) <= down_target
+            THEN 1 ELSE 0
+          END
       ) AS label_json,
       unixepoch()
     FROM base

@@ -3,6 +3,8 @@
 //
 // 接続先は環境変数で切替:
 //   - TURSO_DATABASE_URL が設定されていれば Turso (cloud)
+//   - USE_LOCAL_DB=1 の場合は Turso を無視してローカルファイル
+//   - STOCKBOARD_DB_PATH があればその SQLite を使う
 //   - 未設定なら ./data/stockboard.db (ローカルファイル)
 //
 // すべての DB アクセスは非同期 (await) で行う。
@@ -20,15 +22,18 @@ const TURSO_TOKEN = process.env.TURSO_AUTH_TOKEN
 // USE_LOCAL_DB=1 で Turso を無視してローカル DB を強制 (バッチ用)
 const FORCE_LOCAL = process.env.USE_LOCAL_DB === '1'
 
-const LOCAL_DB_PATH = path.join(process.cwd(), 'data', 'stockboard.db')
+const configuredLocalDbPath = process.env.STOCKBOARD_DB_PATH || process.env.LOCAL_DB_PATH
+export const localDbPath = configuredLocalDbPath
+  ? path.resolve(configuredLocalDbPath)
+  : path.join(process.cwd(), 'data', 'stockboard.db')
 
 function buildClientUrl(): { url: string; authToken?: string; isCloud: boolean } {
   if (TURSO_URL && !FORCE_LOCAL) {
     return { url: TURSO_URL, authToken: TURSO_TOKEN, isCloud: true }
   }
   // ローカルファイル。dataディレクトリを先に作る
-  fs.mkdirSync(path.dirname(LOCAL_DB_PATH), { recursive: true })
-  return { url: `file:${LOCAL_DB_PATH}`, isCloud: false }
+  fs.mkdirSync(path.dirname(localDbPath), { recursive: true })
+  return { url: `file:${localDbPath}`, isCloud: false }
 }
 
 const cfg = buildClientUrl()

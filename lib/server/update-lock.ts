@@ -29,6 +29,7 @@ export async function acquireUpdateLock(
   leaseSeconds = DEFAULT_UPDATE_LOCK_LEASE_SECONDS,
 ): Promise<UpdateLockHandle | null> {
   await ensureReady()
+  await cleanupExpiredUpdateLocks()
   const owner = makeOwner(jobType)
   const result = await client.execute({
     sql: `
@@ -118,6 +119,7 @@ export async function getUpdateLock(jobType: string): Promise<UpdateLockSnapshot
 }
 
 export async function getActiveUpdateLocks(jobTypes?: readonly string[]): Promise<UpdateLockSnapshot[]> {
+  await cleanupExpiredUpdateLocks(jobTypes)
   const where = jobTypes && jobTypes.length > 0
     ? `AND job_type IN (${jobTypes.map(() => '?').join(', ')})`
     : ''
@@ -148,4 +150,25 @@ export async function getActiveUpdateLocks(jobTypes?: readonly string[]): Promis
     jobTypes ?? [],
   )
   return rows.map((row) => ({ ...row, active: true }))
+}
+
+export async function cleanupExpiredUpdateLocks(jobTypes?: readonly string[]): Promise<number> {
+  await ensureReady()
+  const where = jobTypes && jobTypes.length > 0
+    ? `AND job_type IN (${jobTypes.map(() => '?').join(', ')})`
+    : ''
+  const result = await client.execute({
+    sql: `
+      UPDATE update_locks
+      SET status = 'idle',
+          owner = NULL,
+          heartbeat_at = unixepoch(),
+          lease_expires_at = unixepoch()
+      WHERE status = 'running'
+        AND lease_expires_at <= unixepoch()
+        ${where}
+    `,
+    args: [...(jobTypes ?? [])],
+  })
+  return Number(result.rowsAffected ?? 0)
 }

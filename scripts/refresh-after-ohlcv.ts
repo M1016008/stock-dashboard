@@ -24,6 +24,9 @@ type FreshnessSummary = {
   latestMlFeatureDate: string | null
   latestMlCandidateDate: string | null
   latestMlPredictionDate: string | null
+  latestMlPhysicsFeatureDate: string | null
+  latestMlPhysicsCandidateDate: string | null
+  latestMlSimilarDate: string | null
   latestDashboardCacheDate: string | null
   needsSnapshotUpdate: boolean
   needsFeatureUpdate: boolean
@@ -31,6 +34,9 @@ type FreshnessSummary = {
   needsMlFeatureUpdate: boolean
   needsMlCandidateUpdate: boolean
   needsMlPredictionUpdate: boolean
+  needsMlPhysicsFeatureUpdate: boolean
+  needsMlPhysicsCandidateUpdate: boolean
+  needsMlSimilarUpdate: boolean
   needsDashboardCacheUpdate: boolean
 }
 
@@ -44,6 +50,9 @@ function summarizeFreshness(freshness: Awaited<ReturnType<typeof getDataFreshnes
     latestMlFeatureDate: freshness.latestMlFeatureDate,
     latestMlCandidateDate: freshness.latestMlCandidateDate,
     latestMlPredictionDate: freshness.latestMlPredictionDate,
+    latestMlPhysicsFeatureDate: freshness.latestMlPhysicsFeatureDate,
+    latestMlPhysicsCandidateDate: freshness.latestMlPhysicsCandidateDate,
+    latestMlSimilarDate: freshness.latestMlSimilarDate,
     latestDashboardCacheDate: freshness.latestDashboardCacheDate,
     needsSnapshotUpdate: freshness.needsSnapshotUpdate,
     needsFeatureUpdate: freshness.needsFeatureUpdate,
@@ -51,6 +60,9 @@ function summarizeFreshness(freshness: Awaited<ReturnType<typeof getDataFreshnes
     needsMlFeatureUpdate: freshness.needsMlFeatureUpdate,
     needsMlCandidateUpdate: freshness.needsMlCandidateUpdate,
     needsMlPredictionUpdate: freshness.needsMlPredictionUpdate,
+    needsMlPhysicsFeatureUpdate: freshness.needsMlPhysicsFeatureUpdate,
+    needsMlPhysicsCandidateUpdate: freshness.needsMlPhysicsCandidateUpdate,
+    needsMlSimilarUpdate: freshness.needsMlSimilarUpdate,
     needsDashboardCacheUpdate: freshness.needsDashboardCacheUpdate,
   }
 }
@@ -146,9 +158,16 @@ async function main(): Promise<void> {
     }
 
     const afterModelFeatures = await getDataFreshness()
+    const needsAnyMlRefresh =
+      afterModelFeatures.needsMlFeatureUpdate
+      || afterModelFeatures.needsMlCandidateUpdate
+      || afterModelFeatures.needsMlPredictionUpdate
+      || afterModelFeatures.needsMlPhysicsFeatureUpdate
+      || afterModelFeatures.needsMlPhysicsCandidateUpdate
+      || afterModelFeatures.needsMlSimilarUpdate
     if (criticalOnly) {
       console.log('ML refresh skipped in critical-only refresh')
-    } else if (afterModelFeatures.needsMlFeatureUpdate) {
+    } else if (needsAnyMlRefresh) {
       await runRequired('scripts/batch-ml-features.ts', {
         ML_RECENT_DAYS: process.env.ML_DAILY_RECENT_DAYS ?? '260',
         ML_MIN_HISTORY_DAYS: process.env.ML_DAILY_MIN_HISTORY_DAYS ?? '200',
@@ -169,12 +188,14 @@ async function main(): Promise<void> {
       await lock?.heartbeat()
       await runRequired('scripts/batch-ml-predict.ts')
       await lock?.heartbeat()
-      await runRequired('scripts/build-serving-ml-insights.ts')
-      await lock?.heartbeat()
       await runRequired('scripts/batch-forward-extrema.ts', {
         FORWARD_EXTREMA_HORIZONS: process.env.ML_PHYSICS_EXTREMA_HORIZONS ?? '10,15',
         BACKTEST_RECENT_DAYS: process.env.ML_PHYSICS_EXTREMA_RECENT_DAYS ?? process.env.BACKTEST_RECENT_DAYS ?? '260',
         FORWARD_EXTREMA_WRITE_MODEL_LABELS: '0',
+      })
+      await lock?.heartbeat()
+      await runRequired('scripts/batch-ml-context-features.ts', {
+        ML_CONTEXT_RECENT_DAYS: process.env.ML_CONTEXT_DAILY_RECENT_DAYS ?? '260',
       })
       await lock?.heartbeat()
       await runRequired('scripts/batch-ml-physics-features.ts', {
@@ -183,7 +204,7 @@ async function main(): Promise<void> {
       })
       await lock?.heartbeat()
       await runRequired('scripts/batch-ml-short-labels.ts', {
-        ML_SHORT_WRITE_RL_STATES: process.env.ML_SHORT_DAILY_WRITE_RL_STATES ?? '0',
+        ML_SHORT_WRITE_RL_STATES: process.env.ML_SHORT_DAILY_WRITE_RL_STATES ?? '1',
       })
       await lock?.heartbeat()
       await runRequired('scripts/batch-ml-physics-train.ts', {
@@ -194,19 +215,38 @@ async function main(): Promise<void> {
       await lock?.heartbeat()
       await runRequired('scripts/batch-ml-physics-candidates.ts')
       await lock?.heartbeat()
+      await runRequired('scripts/build-serving-ml-insights.ts')
+      await lock?.heartbeat()
+      await runRequired('scripts/batch-ml-similarity-evaluate.ts')
+      await lock?.heartbeat()
+      await runRequired('scripts/batch-ml-rl-policy.ts')
+      await lock?.heartbeat()
+      await runRequired('scripts/batch-ml-feature-health.ts')
+      await lock?.heartbeat()
     } else {
       console.log('ML feature vectors and candidates are already fresh after OHLCV fetch')
     }
 
     const afterMl = await getDataFreshness()
-    if (afterMl.needsMlCandidateUpdate || afterMl.needsMlPredictionUpdate) {
+    if (
+      afterMl.needsMlCandidateUpdate
+      || afterMl.needsMlPredictionUpdate
+      || afterMl.needsMlSimilarUpdate
+      || afterMl.needsMlPhysicsCandidateUpdate
+    ) {
       await runRequired('scripts/batch-ml-candidates.ts')
       await lock?.heartbeat()
       await runRequired('scripts/batch-ml-predict.ts')
       await lock?.heartbeat()
+      await runRequired('scripts/batch-ml-physics-candidates.ts')
+      await lock?.heartbeat()
       await runRequired('scripts/build-serving-ml-insights.ts')
       await lock?.heartbeat()
-      await runRequired('scripts/batch-ml-physics-candidates.ts')
+      await runRequired('scripts/batch-ml-similarity-evaluate.ts')
+      await lock?.heartbeat()
+      await runRequired('scripts/batch-ml-rl-policy.ts')
+      await lock?.heartbeat()
+      await runRequired('scripts/batch-ml-feature-health.ts')
       await lock?.heartbeat()
     }
 
@@ -230,6 +270,9 @@ async function main(): Promise<void> {
         after.needsMlFeatureUpdate
         || after.needsMlCandidateUpdate
         || after.needsMlPredictionUpdate
+        || after.needsMlPhysicsFeatureUpdate
+        || after.needsMlPhysicsCandidateUpdate
+        || after.needsMlSimilarUpdate
       ))
     ) {
       throw new Error('Post-OHLCV refresh did not complete snapshot/feature/cache freshness')

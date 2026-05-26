@@ -19,6 +19,7 @@ import {
   type PhysicsDirection,
   type PhysicsFeatureProfile,
 } from '@/lib/backtest/ml-physics'
+import { MIN_DISPLAY_SIMILARITY_SCORE } from '@/lib/ml/similarity-threshold'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -811,9 +812,11 @@ async function loadSimilarRows(): Promise<SimilarRow[]> {
     FROM serving_current_similars s
     INNER JOIN latest l ON l.date = s.as_of_date
     WHERE s.rank = 1
+      AND s.similarity_score >= ?
     ORDER BY s.similarity_score DESC
     LIMIT 10
     `,
+    [MIN_DISPLAY_SIMILARITY_SCORE],
   )
 }
 
@@ -974,9 +977,17 @@ function FeatureInputGrid() {
       title: '株価位置',
       body: '終値が各MAのどちら側にいるか、5日MAの上を何日維持したか、直近高値までの距離を組み合わせます。',
     },
+    {
+      title: '地合い/業種',
+      body: '市場全体の短期トレンド、17業種/33業種の強弱、業種内順位を補助軸にし、同じ形でも追い風か逆風かを分けます。',
+    },
+    {
+      title: '時間経過/リスク',
+      body: 'ステージ継続日数、5日SMA上抜けからの経過、最大下落率や失敗パターンを使い、初動か伸び切りかを確認します。',
+    },
   ]
   return (
-    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
       {groups.map((group) => (
         <div key={group.title} className="rounded-[4px] border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] p-3">
           <div className="text-[13px] font-bold text-[var(--color-brand-900)]">{group.title}</div>
@@ -1490,7 +1501,7 @@ function PhysicsCandidateCard({ candidate }: { candidate: ParsedPhysicsCandidate
       )}
 
       <div className="mt-3 grid gap-1.5">
-        {(['velocity', 'acceleration', 'distance', 'pricePosition', 'regime'] as const).map((key) => (
+        {(['velocity', 'acceleration', 'distance', 'pricePosition', 'regime', 'context', 'timing', 'risk'] as const).map((key) => (
           candidate.reason[key] ? (
             <div key={key} className="rounded-[4px] border border-[var(--color-border-default)] bg-white px-2.5 py-2 text-[11px] font-semibold leading-relaxed text-[var(--color-text-secondary)]">
               {candidate.reason[key]}
@@ -1679,7 +1690,7 @@ function ModelMonitoringPanel({ rows }: { rows: EvaluationRow[] }) {
 
 function SimilarPanel({ rows }: { rows: SimilarRow[] }) {
   if (rows.length === 0) {
-    return <div className="text-[12px] font-semibold text-[var(--color-text-tertiary)]">現在のMA形状類似データはまだ生成されていません。</div>
+    return <div className="text-[12px] font-semibold text-[var(--color-text-tertiary)]">類似度90%以上のMA形状類似データはありません。</div>
   }
   return (
     <div className="grid gap-2 lg:grid-cols-2">

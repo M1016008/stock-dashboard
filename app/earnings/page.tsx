@@ -112,6 +112,7 @@ export default async function EarningsPage({
     sortBy: parseSortKey(firstParam(sp.sort)),
     sortDir: parseSortDir(firstParam(sp.dir)),
     limit: parseLimit(firstParam(sp.limit)),
+    completed: firstParam(sp.completed) === '1',
   }
   const [latest, counts] = await Promise.all([
     getLatestDate(),
@@ -141,6 +142,7 @@ export default async function EarningsPage({
           month={displayMonth ?? (selectedDate ? selectedDate.slice(0, 7) : undefined)}
           preferLatestImport={!selectedDate}
           filters={filters}
+          includeCompleted={filters.completed === true}
         />
       </Suspense>
     </div>

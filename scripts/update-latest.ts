@@ -235,7 +235,9 @@ async function main() {
         } else {
           console.log('Daily ML walk-forward evaluation skipped (set ML_DAILY_EVALUATE=1 for weekly/manual evaluation)')
         }
-        await runRequired('scripts/build-serving-ml-insights.ts', {}, heartbeat)
+        await runRequired('scripts/batch-ml-context-features.ts', {
+          ML_CONTEXT_RECENT_DAYS: process.env.ML_CONTEXT_DAILY_RECENT_DAYS ?? '260',
+        }, heartbeat)
         await lock.heartbeat()
         await runRequired('scripts/batch-ml-physics-features.ts', {
           ML_PHYSICS_RECENT_DAYS: process.env.ML_PHYSICS_DAILY_RECENT_DAYS ?? '260',
@@ -243,7 +245,7 @@ async function main() {
         }, heartbeat)
         await lock.heartbeat()
         await runRequired('scripts/batch-ml-short-labels.ts', {
-          ML_SHORT_WRITE_RL_STATES: process.env.ML_SHORT_DAILY_WRITE_RL_STATES ?? '0',
+          ML_SHORT_WRITE_RL_STATES: process.env.ML_SHORT_DAILY_WRITE_RL_STATES ?? '1',
         }, heartbeat)
         await lock.heartbeat()
         await runRequired('scripts/batch-ml-physics-train.ts', {
@@ -253,6 +255,14 @@ async function main() {
         }, heartbeat)
         await lock.heartbeat()
         await runRequired('scripts/batch-ml-physics-candidates.ts', {}, heartbeat)
+        await lock.heartbeat()
+        await runRequired('scripts/build-serving-ml-insights.ts', {}, heartbeat)
+        await lock.heartbeat()
+        await runRequired('scripts/batch-ml-similarity-evaluate.ts', {}, heartbeat)
+        await lock.heartbeat()
+        await runRequired('scripts/batch-ml-rl-policy.ts', {}, heartbeat)
+        await lock.heartbeat()
+        await runRequired('scripts/batch-ml-feature-health.ts', {}, heartbeat)
         await lock.heartbeat()
         if (process.env.ML_PHYSICS_DAILY_EVALUATE === '1') {
           await runRequired('scripts/batch-ml-physics-evaluate.ts', {}, heartbeat)

@@ -10,7 +10,7 @@ import path from 'node:path'
 import crypto from 'node:crypto'
 import { ensureSchema } from '@/lib/db/migrate'
 
-const LOCAL_DB = path.join(process.cwd(), 'data', 'stockboard.db')
+const LOCAL_DB = process.env.STOCKBOARD_DB_PATH || process.env.LOCAL_DB_PATH || path.join(process.cwd(), 'data', 'stockboard.db')
 const REMOTE_URL = process.env.TURSO_DATABASE_URL
 const REMOTE_TOKEN = process.env.TURSO_AUTH_TOKEN
 
@@ -327,10 +327,14 @@ function specsFor(modes: Set<string>): CopySpec[] {
       { mode: 'backtest', table: 'serving_signal_evidence', partition: 'date', dateColumn: 'date' },
       { mode: 'backtest', table: 'serving_similar_cases', partition: 'date', dateColumn: 'source_date' },
       { mode: 'backtest', table: 'serving_ml_candidates', partition: 'date', dateColumn: 'as_of_date' },
+      { mode: 'backtest', table: 'serving_ml_physics_candidates', partition: 'date', dateColumn: 'as_of_date' },
       { mode: 'backtest', table: 'serving_current_similars', partition: 'date', dateColumn: 'as_of_date' },
       { mode: 'backtest', table: 'serving_ml_sector_rankings', partition: 'date', dateColumn: 'as_of_date' },
       { mode: 'backtest', table: 'serving_ml_performance', partition: 'date', dateColumn: 'as_of_date' },
       { mode: 'backtest', table: 'ml_model_evaluations', partition: 'date', dateColumn: 'evaluation_date' },
+      { mode: 'backtest', table: 'ml_similarity_evaluations', partition: 'date', dateColumn: 'as_of_date' },
+      { mode: 'backtest', table: 'ml_rl_policy_evaluations', partition: 'date', dateColumn: 'evaluation_date' },
+      { mode: 'backtest', table: 'ml_feature_health_checks', partition: 'date', dateColumn: 'check_date' },
     )
   }
 

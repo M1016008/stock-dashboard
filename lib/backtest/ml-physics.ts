@@ -1,5 +1,5 @@
 export const ML_PHYSICS_FEATURE_SET = 'ma_physics_v2'
-export const ML_PHYSICS_VERSION = 1
+export const ML_PHYSICS_VERSION = 2
 
 export const ML_PHYSICS_FEATURE_NAMES = [
   'stageDailyA',
@@ -58,6 +58,18 @@ export const ML_PHYSICS_FEATURE_NAMES = [
   'distanceToRecentLow',
   'brokeRecentHigh',
   'brokeRecentLow',
+  'marketReturn5',
+  'marketReturn20',
+  'marketAboveSma25Rate',
+  'sector17Return5',
+  'sector17RankPct',
+  'sector33Return5',
+  'sector33RankPct',
+  'stageCodeAge',
+  'dailyAStageAge',
+  'dailyBStageAge',
+  'daysSinceCrossUpSma5',
+  'daysSinceTouchSma25',
   'upAccelerationRegime',
   'downAccelerationRegime',
   'compressionRegime',
@@ -124,6 +136,22 @@ export type PhysicsFeatureProfile = {
   distanceToRecentLowPct: number | null
   brokeRecentHigh: boolean
   brokeRecentLow: boolean
+  context?: {
+    marketReturn5: number | null
+    marketReturn20: number | null
+    marketAboveSma25Rate: number | null
+    sector17Return5: number | null
+    sector17RankPct: number | null
+    sector33Return5: number | null
+    sector33RankPct: number | null
+  }
+  timeSince?: {
+    stageCodeAge: number | null
+    dailyAStageAge: number | null
+    dailyBStageAge: number | null
+    daysSinceCrossUpSma5: number | null
+    daysSinceTouchSma25: number | null
+  }
   regimes: {
     trend: 'up_acceleration' | 'up_deceleration' | 'down_acceleration' | 'down_deceleration' | 'sideways'
     spread: 'compression' | 'up_expansion' | 'down_expansion' | 'neutral'
@@ -138,6 +166,9 @@ export type PhysicsCandidateReason = {
   distance: string
   pricePosition: string
   regime: string
+  context: string
+  timing: string
+  risk: string
 }
 
 export type PhysicsCandidateExplanation = {
@@ -242,6 +273,18 @@ export function physicsFeatureVector(profile: PhysicsFeatureProfile): number[] {
     clip(profile.distanceToRecentLowPct, 30),
     profile.brokeRecentHigh ? 1 : 0,
     profile.brokeRecentLow ? 1 : 0,
+    clip(profile.context?.marketReturn5, 8),
+    clip(profile.context?.marketReturn20, 12),
+    clip(profile.context?.marketAboveSma25Rate == null ? null : profile.context.marketAboveSma25Rate - 50, 50),
+    clip(profile.context?.sector17Return5, 10),
+    clip(profile.context?.sector17RankPct == null ? null : 50 - profile.context.sector17RankPct, 50),
+    clip(profile.context?.sector33Return5, 10),
+    clip(profile.context?.sector33RankPct == null ? null : 50 - profile.context.sector33RankPct, 50),
+    Math.max(0, Math.min(1, (profile.timeSince?.stageCodeAge ?? 0) / 40)),
+    Math.max(0, Math.min(1, (profile.timeSince?.dailyAStageAge ?? 0) / 40)),
+    Math.max(0, Math.min(1, (profile.timeSince?.dailyBStageAge ?? 0) / 40)),
+    Math.max(0, Math.min(1, (profile.timeSince?.daysSinceCrossUpSma5 ?? 999) / 40)),
+    Math.max(0, Math.min(1, (profile.timeSince?.daysSinceTouchSma25 ?? 999) / 40)),
     profile.regimes.trend === 'up_acceleration' ? 1 : 0,
     profile.regimes.trend === 'down_acceleration' ? 1 : 0,
     profile.regimes.spread === 'compression' ? 1 : 0,
@@ -275,6 +318,9 @@ export function buildPhysicsExplanation(
     distance: `5-25距離は${fmtPct(profile.gaps.sma5To25Pct)}、距離変化は5日${fmtPct(profile.gapVelocity.sma5To25D5)}です。`,
     pricePosition: `終値は5日SMA比${fmtPct(profile.pricePosition.sma5)}、25日SMA比${fmtPct(profile.pricePosition.sma25)}です。`,
     regime: `流れは ${profile.regimes.trend} / 距離状態は ${profile.regimes.spread} / 転換兆候は ${profile.regimes.turn} です。`,
+    context: `市場5日騰落は${fmtPct(profile.context?.marketReturn5)}、17業種5日騰落は${fmtPct(profile.context?.sector17Return5)}、業種内順位は${fmtPct(profile.context?.sector17RankPct)}です。`,
+    timing: `6桁ステージ継続は${profile.timeSince?.stageCodeAge ?? '-'}営業日、5日SMA上抜けから${profile.timeSince?.daysSinceCrossUpSma5 ?? '-'}営業日です。`,
+    risk: `損切り確認点は、5日SMA速度の失速、25日SMAの下向き転換、5-25距離の急縮小です。`,
   }
   const summary =
     direction === 'up'
@@ -304,4 +350,3 @@ export function buildPhysicsExplanation(
     confidenceLabel: physicsConfidenceLabel(score),
   }
 }
-

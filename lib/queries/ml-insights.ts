@@ -1,4 +1,6 @@
 import { execAll, execGet } from '@/lib/db/client'
+import { ML_PHYSICS_FEATURE_SET } from '@/lib/backtest/ml-physics'
+import { MIN_DISPLAY_SIMILARITY_SCORE } from '@/lib/ml/similarity-threshold'
 
 export type MlDirectionFilter = 'up' | 'down' | 'both'
 
@@ -48,15 +50,47 @@ export type MlPerformance = {
 
 export type MlModelStatus = {
   latestFeatureDate: string | null
+  latestPhysicsFeatureDate: string | null
   latestPredictionDate: string | null
   latestEvaluationDate: string | null
+  healthChecks: Array<{
+    checkKey: string
+    status: string
+    expectedDate: string | null
+    actualDate: string | null
+    expectedCount: number | null
+    actualCount: number | null
+  }>
+  similarityEvaluations: Array<{
+    asOfDate: string
+    horizonDays: number
+    pairCount: number
+    upRate: number | null
+    downRate: number | null
+    medianReturnPct: number | null
+    maxDrawdownPct: number | null
+  }>
   models: Array<{
     modelName: string
     modelType: string
-    direction: 'up' | 'down'
+    direction: 'up' | 'down' | 'wait'
     horizonDays: number
     metrics: Record<string, unknown>
     trainedAt: number | string | null
+  }>
+  rlPolicyEvaluations: Array<{
+    evaluationDate: string
+    policyName: string
+    policyType: string
+    horizonDays: number
+    sampleCount: number
+    winRate: number | null
+    oracleMatchRate: number | null
+    avgReward: number | null
+    medianReward: number | null
+    avgReturnPct: number | null
+    maxDrawdownPct: number | null
+    metrics: Record<string, unknown>
   }>
   evaluations: MlPerformance[]
 }
@@ -162,6 +196,32 @@ async function latestDate(table: string): Promise<string | null> {
   return (await execGet<{ date: string | null }>(`SELECT MAX(as_of_date) AS date FROM ${table}`))?.date ?? null
 }
 
+async function latestCompleteSimilarDate(): Promise<string | null> {
+  const row = await execGet<{ date: string | null }>(
+    `
+    WITH similar_dates AS (
+      SELECT as_of_date, COUNT(DISTINCT base_ticker) AS base_count
+      FROM serving_current_similars
+      GROUP BY as_of_date
+    ),
+    feature_dates AS (
+      SELECT date, COUNT(*) AS feature_count
+      FROM ml_feature_vectors_v2
+      WHERE feature_set = ?
+      GROUP BY date
+    )
+    SELECT s.as_of_date AS date
+    FROM similar_dates s
+    INNER JOIN feature_dates f ON f.date = s.as_of_date
+    WHERE s.base_count >= CAST(f.feature_count * 0.85 AS INTEGER)
+    ORDER BY s.as_of_date DESC
+    LIMIT 1
+    `,
+    [ML_PHYSICS_FEATURE_SET],
+  )
+  return row?.date ?? await latestDate('serving_current_similars')
+}
+
 async function latestColumnDate(table: string, column: string): Promise<string | null> {
   return (await execGet<{ date: string | null }>(`SELECT MAX(${column}) AS date FROM ${table}`))?.date ?? null
 }
@@ -171,22 +231,23 @@ export async function getCurrentSimilars(params: {
   date?: string | null
   limit?: number
 } = {}): Promise<{ asOfDate: string | null; rows: CurrentSimilarInsight[] }> {
-  const asOfDate = params.date ?? await latestDate('serving_current_similars')
+  const asOfDate = params.date ?? await latestCompleteSimilarDate()
   if (!asOfDate) return { asOfDate: null, rows: [] }
   const limit = Math.min(200, Math.max(1, params.limit ?? 20))
   const ticker = params.ticker?.trim()
   const where = ticker ? 'as_of_date = ? AND base_ticker = ?' : 'as_of_date = ?'
   const args: Array<string | number> = ticker ? [asOfDate, ticker] : [asOfDate]
+  const filteredWhere = `${where} AND similarity_score >= ?`
   const rows = await execAll<SimilarRow>(
     `
     SELECT as_of_date, base_ticker, rank, similar_ticker, similarity_score,
            base_direction, similar_direction, payload_json, reason_json
     FROM serving_current_similars
-    WHERE ${where}
+    WHERE ${filteredWhere}
     ORDER BY ${ticker ? 'rank ASC' : 'similarity_score DESC, base_ticker ASC, rank ASC'}
     LIMIT ?
     `,
-    [...args, limit],
+    [...args, MIN_DISPLAY_SIMILARITY_SCORE, limit],
   )
   return {
     asOfDate,
@@ -360,8 +421,9 @@ export async function getMlPerformance(params: {
 }
 
 export async function getMlModelStatus(): Promise<MlModelStatus> {
-  const [latestFeatureDate, latestPredictionDate, latestEvaluationDate, modelRows, evaluations] = await Promise.all([
+  const [latestFeatureDate, latestPhysicsFeatureDate, latestPredictionDate, latestEvaluationDate, modelRows, evaluations, healthRows, similarityRows, rlPolicyRows] = await Promise.all([
     latestColumnDate('ml_feature_vectors', 'date'),
+    latestColumnDate('ml_feature_vectors_v2', 'date'),
     latestColumnDate('ml_predictions', 'as_of_date'),
     latestColumnDate('ml_model_evaluations', 'evaluation_date'),
     execAll<ModelRow>(
@@ -379,18 +441,113 @@ export async function getMlModelStatus(): Promise<MlModelStatus> {
       `,
     ),
     getMlPerformance({ limit: 12 }),
+    execAll<{
+      check_key: string
+      status: string
+      expected_date: string | null
+      actual_date: string | null
+      expected_count: number | null
+      actual_count: number | null
+    }>(
+      `
+      WITH latest AS (
+        SELECT MAX(check_date) AS check_date FROM ml_feature_health_checks
+      )
+      SELECT check_key, status, expected_date, actual_date, expected_count, actual_count
+      FROM ml_feature_health_checks h
+      INNER JOIN latest l ON l.check_date = h.check_date
+      ORDER BY check_key
+      `,
+    ),
+    execAll<{
+      as_of_date: string
+      horizon_days: number
+      pair_count: number
+      up_rate: number | null
+      down_rate: number | null
+      median_return_pct: number | null
+      max_drawdown_pct: number | null
+    }>(
+      `
+      WITH latest AS (
+        SELECT MAX(as_of_date) AS as_of_date FROM ml_similarity_evaluations
+      )
+      SELECT e.as_of_date, e.horizon_days, e.pair_count, e.up_rate, e.down_rate, e.median_return_pct, e.max_drawdown_pct
+      FROM ml_similarity_evaluations e
+      INNER JOIN latest l ON l.as_of_date = e.as_of_date
+      ORDER BY e.horizon_days
+      `,
+    ),
+    execAll<{
+      evaluation_date: string
+      policy_name: string
+      policy_type: string
+      horizon_days: number
+      sample_count: number
+      win_rate: number | null
+      oracle_match_rate: number | null
+      avg_reward: number | null
+      median_reward: number | null
+      avg_return_pct: number | null
+      max_drawdown_pct: number | null
+      metrics_json: string
+    }>(
+      `
+      WITH latest AS (
+        SELECT MAX(evaluation_date) AS evaluation_date FROM ml_rl_policy_evaluations
+      )
+      SELECT e.evaluation_date, e.policy_name, e.policy_type, e.horizon_days, e.sample_count,
+             e.win_rate, e.oracle_match_rate, e.avg_reward, e.median_reward,
+             e.avg_return_pct, e.max_drawdown_pct, e.metrics_json
+      FROM ml_rl_policy_evaluations e
+      INNER JOIN latest l ON l.evaluation_date = e.evaluation_date
+      ORDER BY e.horizon_days ASC, e.policy_name ASC
+      `,
+    ),
   ])
   return {
     latestFeatureDate,
+    latestPhysicsFeatureDate,
     latestPredictionDate,
     latestEvaluationDate,
+    healthChecks: healthRows.map((row) => ({
+      checkKey: row.check_key,
+      status: row.status,
+      expectedDate: row.expected_date,
+      actualDate: row.actual_date,
+      expectedCount: row.expected_count == null ? null : Number(row.expected_count),
+      actualCount: row.actual_count == null ? null : Number(row.actual_count),
+    })),
+    similarityEvaluations: similarityRows.map((row) => ({
+      asOfDate: row.as_of_date,
+      horizonDays: Number(row.horizon_days),
+      pairCount: Number(row.pair_count),
+      upRate: row.up_rate == null ? null : Number(row.up_rate),
+      downRate: row.down_rate == null ? null : Number(row.down_rate),
+      medianReturnPct: row.median_return_pct == null ? null : Number(row.median_return_pct),
+      maxDrawdownPct: row.max_drawdown_pct == null ? null : Number(row.max_drawdown_pct),
+    })),
     models: modelRows.map((row) => ({
       modelName: row.model_name,
       modelType: row.model_type,
-      direction: row.direction === 'down' ? 'down' : 'up',
+      direction: row.direction === 'down' ? 'down' : row.direction === 'wait' ? 'wait' : 'up',
       horizonDays: Number(row.horizon_days),
       metrics: parseJson(row.metrics_json, {}),
       trainedAt: row.trained_at,
+    })),
+    rlPolicyEvaluations: rlPolicyRows.map((row) => ({
+      evaluationDate: row.evaluation_date,
+      policyName: row.policy_name,
+      policyType: row.policy_type,
+      horizonDays: Number(row.horizon_days),
+      sampleCount: Number(row.sample_count),
+      winRate: row.win_rate == null ? null : Number(row.win_rate),
+      oracleMatchRate: row.oracle_match_rate == null ? null : Number(row.oracle_match_rate),
+      avgReward: row.avg_reward == null ? null : Number(row.avg_reward),
+      medianReward: row.median_reward == null ? null : Number(row.median_reward),
+      avgReturnPct: row.avg_return_pct == null ? null : Number(row.avg_return_pct),
+      maxDrawdownPct: row.max_drawdown_pct == null ? null : Number(row.max_drawdown_pct),
+      metrics: parseJson(row.metrics_json, {}),
     })),
     evaluations: evaluations.rows,
   }

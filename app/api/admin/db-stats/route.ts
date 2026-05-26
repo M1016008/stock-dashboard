@@ -2,11 +2,10 @@
 import { NextResponse } from 'next/server'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
-import { execGet, isCloud } from '@/lib/db/client'
+import { execGet, isCloud, localDbPath } from '@/lib/db/client'
 
 export const dynamic = 'force-dynamic'
 
-const LOCAL_DB_PATH = path.join(process.cwd(), 'data', 'stockboard.db')
 const SNAPSHOT_DIR = path.join(process.cwd(), 'data', 'snapshots')
 
 interface TableStat {
@@ -32,7 +31,7 @@ async function countTable(name: string, dateColumn?: string): Promise<TableStat>
 
 async function getLocalDbSize(): Promise<number> {
   try {
-    const stat = await fs.stat(LOCAL_DB_PATH)
+    const stat = await fs.stat(localDbPath)
     return stat.size
   } catch {
     return 0
@@ -65,7 +64,7 @@ export async function GET() {
     return NextResponse.json({
       tables,
       totalRecords: totalCount,
-      dbPath: isCloud ? 'Turso (cloud)' : LOCAL_DB_PATH,
+      dbPath: isCloud ? 'Turso (cloud)' : localDbPath,
       dbSizeBytes: dbSize,
       dbSizeMB: (dbSize / 1024 / 1024).toFixed(2),
       isCloud,

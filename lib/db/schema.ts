@@ -1123,6 +1123,35 @@ export const rlTrainingStatesV2 = sqliteTable(
   }),
 )
 
+export const mlRlPolicyEvaluations = sqliteTable(
+  'ml_rl_policy_evaluations',
+  {
+    evaluationId:        text('evaluation_id').primaryKey(),
+    policyName:          text('policy_name').notNull(),
+    policyType:          text('policy_type').notNull(),
+    horizonDays:         integer('horizon_days').notNull(),
+    evaluationDate:      text('evaluation_date').notNull(),
+    startDate:           text('start_date'),
+    endDate:             text('end_date'),
+    sampleCount:         integer('sample_count').notNull().default(0),
+    longCount:           integer('long_count').notNull().default(0),
+    shortCount:          integer('short_count').notNull().default(0),
+    waitCount:           integer('wait_count').notNull().default(0),
+    winRate:             real('win_rate'),
+    oracleMatchRate:     real('oracle_match_rate'),
+    avgReward:           real('avg_reward'),
+    medianReward:        real('median_reward'),
+    avgReturnPct:        real('avg_return_pct'),
+    maxDrawdownPct:      real('max_drawdown_pct'),
+    actionBreakdownJson: text('action_breakdown_json').notNull(),
+    metricsJson:         text('metrics_json').notNull(),
+    createdAt:           integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    latestIdx: index('ml_rl_policy_evaluations_latest_idx').on(t.evaluationDate, t.horizonDays, t.policyName),
+  }),
+)
+
 export const servingMlCandidates = sqliteTable(
   'serving_ml_candidates',
   {
@@ -1228,6 +1257,77 @@ export const servingMlPerformance = sqliteTable(
   (t) => ({
     pk:      primaryKey({ columns: [t.asOfDate, t.direction, t.horizonDays, t.sectorType, t.sectorName] }),
     perfIdx: index('serving_ml_performance_rank_idx').on(t.asOfDate, t.direction, t.horizonDays, t.sampleCount),
+  }),
+)
+
+export const mlMarketContextFeatures = sqliteTable('ml_market_context_features', {
+  date:                 text('date').primaryKey(),
+  marketReturn5:        real('market_return_5'),
+  marketReturn20:       real('market_return_20'),
+  marketAboveSma25Rate: real('market_above_sma25_rate'),
+  marketAboveSma75Rate: real('market_above_sma75_rate'),
+  advancersRate5:       real('advancers_rate_5'),
+  sampleCount:          integer('sample_count').notNull().default(0),
+  payloadJson:          text('payload_json').notNull(),
+  computedAt:           integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+})
+
+export const mlSectorContextFeatures = sqliteTable(
+  'ml_sector_context_features',
+  {
+    date:             text('date').notNull(),
+    sectorType:       text('sector_type').notNull(),
+    sectorName:       text('sector_name').notNull(),
+    return5:          real('return_5'),
+    return20:         real('return_20'),
+    aboveSma25Rate:   real('above_sma25_rate'),
+    rankPct:          real('rank_pct'),
+    sampleCount:      integer('sample_count').notNull().default(0),
+    payloadJson:      text('payload_json').notNull(),
+    computedAt:       integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk:      primaryKey({ columns: [t.date, t.sectorType, t.sectorName] }),
+    rankIdx: index('ml_sector_context_features_rank_idx').on(t.date, t.sectorType, t.rankPct),
+  }),
+)
+
+export const mlSimilarityEvaluations = sqliteTable(
+  'ml_similarity_evaluations',
+  {
+    asOfDate:        text('as_of_date').notNull(),
+    horizonDays:     integer('horizon_days').notNull(),
+    source:          text('source').notNull(),
+    baseCount:       integer('base_count').notNull().default(0),
+    pairCount:       integer('pair_count').notNull().default(0),
+    upRate:          real('up_rate'),
+    downRate:        real('down_rate'),
+    medianReturnPct: real('median_return_pct'),
+    avgReturnPct:    real('avg_return_pct'),
+    maxDrawdownPct:  real('max_drawdown_pct'),
+    payloadJson:     text('payload_json').notNull(),
+    computedAt:      integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.asOfDate, t.horizonDays, t.source] }),
+  }),
+)
+
+export const mlFeatureHealthChecks = sqliteTable(
+  'ml_feature_health_checks',
+  {
+    checkDate:     text('check_date').notNull(),
+    checkKey:      text('check_key').notNull(),
+    status:        text('status').notNull(),
+    expectedDate:  text('expected_date'),
+    actualDate:    text('actual_date'),
+    expectedCount: integer('expected_count'),
+    actualCount:   integer('actual_count'),
+    payloadJson:   text('payload_json').notNull(),
+    computedAt:    integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.checkDate, t.checkKey] }),
   }),
 )
 

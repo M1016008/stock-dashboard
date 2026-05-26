@@ -19,7 +19,7 @@ import fs from 'node:fs'
 
 const TURSO_URL = process.env.TURSO_DATABASE_URL
 const TURSO_TOKEN = process.env.TURSO_AUTH_TOKEN
-const LOCAL_DB = path.join(process.cwd(), 'data', 'stockboard.db')
+const LOCAL_DB = process.env.STOCKBOARD_DB_PATH || process.env.LOCAL_DB_PATH || path.join(process.cwd(), 'data', 'stockboard.db')
 
 if (!TURSO_URL) {
   console.error('TURSO_DATABASE_URL が未設定です。.env.local が読まれていない可能性。')

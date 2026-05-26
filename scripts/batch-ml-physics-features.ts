@@ -23,6 +23,32 @@ type Row = {
   monthly_b_stage: number | null
 }
 
+type TickerMeta = {
+  sector17Name: string
+  sector33Name: string
+}
+
+type MarketContextRow = {
+  date: string
+  market_return_5: number | null
+  market_return_20: number | null
+  market_above_sma25_rate: number | null
+}
+
+type SectorContextRow = {
+  date: string
+  sector_type: string
+  sector_name: string
+  return_5: number | null
+  return_20: number | null
+  rank_pct: number | null
+}
+
+type ContextMaps = {
+  market: Map<string, MarketContextRow>
+  sector: Map<string, SectorContextRow>
+}
+
 const CHUNK = Number(process.env.ML_PHYSICS_BATCH_CHUNK ?? 500)
 const RECENT_DAYS = Number(process.env.ML_PHYSICS_RECENT_DAYS ?? 260)
 const MIN_HISTORY_DAYS = Number(process.env.ML_PHYSICS_MIN_HISTORY_DAYS ?? (RECENT_DAYS > 0 ? 220 : 1))
@@ -201,6 +227,29 @@ async function tickers(): Promise<string[]> {
   return rows.map((row) => row.ticker)
 }
 
+async function tickerMeta(): Promise<Map<string, TickerMeta>> {
+  const rows = await execAll<{ ticker: string; sector17_name: string | null; sector33_name: string | null }>(
+    `SELECT ticker, sector17_name, sector33_name FROM ticker_universe`,
+  )
+  return new Map(rows.map((row) => [row.ticker, {
+    sector17Name: row.sector17_name?.trim() || '未分類',
+    sector33Name: row.sector33_name?.trim() || '未分類',
+  }]))
+}
+
+async function loadContextMaps(): Promise<ContextMaps> {
+  const marketRows = await execAll<MarketContextRow>(
+    `SELECT date, market_return_5, market_return_20, market_above_sma25_rate FROM ml_market_context_features`,
+  )
+  const sectorRows = await execAll<SectorContextRow>(
+    `SELECT date, sector_type, sector_name, return_5, return_20, rank_pct FROM ml_sector_context_features`,
+  )
+  return {
+    market: new Map(marketRows.map((row) => [row.date, row])),
+    sector: new Map(sectorRows.map((row) => [`${row.date}\t${row.sector_type}\t${row.sector_name}`, row])),
+  }
+}
+
 async function history(ticker: string): Promise<Row[]> {
   return execAll<Row>(
     `
@@ -224,7 +273,7 @@ async function history(ticker: string): Promise<Row[]> {
   )
 }
 
-async function buildTicker(ticker: string): Promise<number> {
+async function buildTicker(ticker: string, contexts: ContextMaps, meta: TickerMeta | undefined): Promise<number> {
   const rows = await history(ticker)
   if (rows.length < Math.max(1, MIN_HISTORY_DAYS)) return 0
   const ma5 = smaSeries(rows, 5)
@@ -241,11 +290,37 @@ async function buildTicker(ticker: string): Promise<number> {
   const daysAbove25: number[] = []
   let above5 = 0
   let above25 = 0
+  const stageCodeAges: number[] = []
+  const dailyAAges: number[] = []
+  const dailyBAges: number[] = []
+  const daysSinceCrossUp5: Array<number | null> = []
+  const daysSinceTouch25: Array<number | null> = []
+  let stageAge = 0
+  let dailyAAge = 0
+  let dailyBAge = 0
+  let lastStageCode: string | null = null
+  let lastDailyA: number | null = null
+  let lastDailyB: number | null = null
+  let lastCrossUp5Index: number | null = null
+  let lastTouch25Index: number | null = null
   for (let i = 0; i < rows.length; i += 1) {
     above5 = finite(rows[i].close) && finite(ma5[i]) && rows[i].close! >= ma5[i]! ? above5 + 1 : 0
     above25 = finite(rows[i].close) && finite(ma25[i]) && rows[i].close! >= ma25[i]! ? above25 + 1 : 0
     daysAbove5[i] = above5
     daysAbove25[i] = above25
+    stageAge = stageCodes[i] === lastStageCode ? stageAge + 1 : 1
+    dailyAAge = rows[i].daily_a_stage === lastDailyA ? dailyAAge + 1 : 1
+    dailyBAge = rows[i].daily_b_stage === lastDailyB ? dailyBAge + 1 : 1
+    lastStageCode = stageCodes[i]
+    lastDailyA = rows[i].daily_a_stage
+    lastDailyB = rows[i].daily_b_stage
+    stageCodeAges[i] = stageAge
+    dailyAAges[i] = dailyAAge
+    dailyBAges[i] = dailyBAge
+    if (crossUp(rows[i], rows[i - 1], ma5[i], ma5[i - 1])) lastCrossUp5Index = i
+    if (touch(rows[i], ma25[i])) lastTouch25Index = i
+    daysSinceCrossUp5[i] = lastCrossUp5Index == null ? null : i - lastCrossUp5Index
+    daysSinceTouch25[i] = lastTouch25Index == null ? null : i - lastTouch25Index
   }
 
   const minHistoryIndex = Math.max(0, MIN_HISTORY_DAYS - 1)
@@ -273,6 +348,9 @@ async function buildTicker(ticker: string): Promise<number> {
     const bundleWidthVelocity5 = round(diff(bundleWidths[i], bundleWidths[i - 5]))
     const priceToSma5 = round(pct(ma5[i], row.close))
     const priceToSma25 = round(pct(ma25[i], row.close))
+    const marketContext = contexts.market.get(row.date)
+    const sector17Context = contexts.sector.get(`${row.date}\t17\t${meta?.sector17Name ?? '未分類'}`)
+    const sector33Context = contexts.sector.get(`${row.date}\t33\t${meta?.sector33Name ?? '未分類'}`)
 
     const profile: PhysicsFeatureProfile = {
       ticker,
@@ -354,6 +432,22 @@ async function buildTicker(ticker: string): Promise<number> {
       distanceToRecentLowPct: round(pct(recentLow.value, row.close)),
       brokeRecentHigh: finite(priorHigh.value) && finite(row.close) ? row.close > priorHigh.value : false,
       brokeRecentLow: finite(priorLow.value) && finite(row.close) ? row.close < priorLow.value : false,
+      context: {
+        marketReturn5: marketContext?.market_return_5 ?? null,
+        marketReturn20: marketContext?.market_return_20 ?? null,
+        marketAboveSma25Rate: marketContext?.market_above_sma25_rate ?? null,
+        sector17Return5: sector17Context?.return_5 ?? null,
+        sector17RankPct: sector17Context?.rank_pct ?? null,
+        sector33Return5: sector33Context?.return_5 ?? null,
+        sector33RankPct: sector33Context?.rank_pct ?? null,
+      },
+      timeSince: {
+        stageCodeAge: stageCodeAges[i] ?? null,
+        dailyAStageAge: dailyAAges[i] ?? null,
+        dailyBStageAge: dailyBAges[i] ?? null,
+        daysSinceCrossUpSma5: daysSinceCrossUp5[i] ?? null,
+        daysSinceTouchSma25: daysSinceTouch25[i] ?? null,
+      },
       regimes: classifyRegimes({
         maOrder: order,
         sma5Velocity5,
@@ -386,7 +480,7 @@ async function buildTicker(ticker: string): Promise<number> {
 
 async function main() {
   await execRun(`DELETE FROM ml_feature_vectors_v2 WHERE feature_set = ? AND 1 = 0`, [ML_PHYSICS_FEATURE_SET])
-  const codes = await tickers()
+  const [codes, contexts, metaByTicker] = await Promise.all([tickers(), loadContextMaps(), tickerMeta()])
   let featureCount = 0
   const started = Date.now()
   console.log(
@@ -394,7 +488,7 @@ async function main() {
   )
   if (TICKER_START || TICKER_END) console.log(`ml physics ticker range: ${TICKER_START ?? '-'}..${TICKER_END ?? '-'}`)
   for (const [index, ticker] of codes.entries()) {
-    featureCount += await buildTicker(ticker)
+    featureCount += await buildTicker(ticker, contexts, metaByTicker.get(ticker))
     if ((index + 1) % 100 === 0 || index === codes.length - 1) {
       const elapsed = ((Date.now() - started) / 60000).toFixed(1)
       console.log(`ml physics ${index + 1}/${codes.length}: features=${featureCount.toLocaleString()} elapsed=${elapsed}m`)
@@ -408,4 +502,3 @@ main()
     console.error(error)
     process.exit(1)
   })
-

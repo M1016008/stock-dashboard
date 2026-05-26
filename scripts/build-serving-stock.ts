@@ -178,8 +178,13 @@ async function buildTicker(ticker: TickerRow): Promise<Array<{ sql: string; args
     ...detectMovePeriods(history, 'down'),
   ]
 
-  const statements: Array<{ sql: string; args: Array<string | number | null> }> = [{
-    sql: `
+  const statements: Array<{ sql: string; args: Array<string | number | null> }> = [
+    {
+      sql: `DELETE FROM serving_stock_move_periods WHERE ticker = ?`,
+      args: [ticker.ticker],
+    },
+    {
+      sql: `
       INSERT OR REPLACE INTO serving_stock_metrics
         (ticker, as_of_date, payload_json, computed_at)
       VALUES (?, ?, ?, unixepoch())
@@ -216,7 +221,8 @@ async function buildTicker(ticker: TickerRow): Promise<Array<{ sql: string; args
         stageCode: stageCode(stages[stages.length - 1]),
       }),
     ],
-  }]
+    },
+  ]
 
   for (const direction of ['up', 'down'] as const) {
     let rank = 1
@@ -264,8 +270,6 @@ async function main() {
     args,
   )
   console.log(`serving stock build: tickers=${tickers.length}`)
-  await execRun(`DELETE FROM serving_stock_metrics`)
-  await execRun(`DELETE FROM serving_stock_move_periods`)
 
   let buffered: Array<{ sql: string; args: Array<string | number | null> }> = []
   for (const [index, ticker] of tickers.entries()) {

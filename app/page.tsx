@@ -12,7 +12,8 @@ import { StereoscopicSignals } from '@/components/dashboard/StereoscopicSignals'
 import { NewHighVolume } from '@/components/dashboard/NewHighVolume'
 import { PatternStatsTop } from '@/components/dashboard/PatternStatsTop'
 import { DashboardDateSelector } from '@/components/dashboard/DashboardDateSelector'
-import { getCachedLatestDate, getDashboardAvailableDates } from '@/lib/queries/dashboard-cache'
+import { getLatestDate } from '@/lib/queries/dashboard'
+import { getDashboardDateOption } from '@/lib/queries/dashboard-cache'
 
 export const metadata: Metadata = {
   title: 'ダッシュボード — StockBoard',
@@ -53,15 +54,21 @@ export default async function DashboardPage({
 }) {
   const sp = searchParams ? await searchParams : {}
   const requested = typeof sp.date === 'string' ? sp.date : null
-  const availableDates = await getDashboardAvailableDates()
-  const latestAvailable = availableDates[0]?.date ?? null
-  const requestedExists = Boolean(requested && availableDates.some((d) => d.date === requested))
+  const [latestAvailable, requestedDateOption] = await Promise.all([
+    getLatestDate(),
+    getDashboardDateOption(requested),
+  ])
+  const requestedExists = Boolean(requestedDateOption)
   const selectedDate = requestedExists && requested !== latestAvailable ? requested : null
   const targetDate = requestedExists ? requested : latestAvailable
-  const latest = await getCachedLatestDate(targetDate)
+  const latest = targetDate
   const subtitle = latest
     ? `${latest} 大引け基準${selectedDate ? '（過去日表示）' : ''}`
     : 'データ未取り込み'
+  const initialDates = [
+    latestAvailable ? { date: latestAvailable } : null,
+    selectedDate && selectedDate !== latestAvailable ? { date: selectedDate } : null,
+  ].filter((date): date is { date: string } => date != null)
 
   return (
     <div className="mx-auto flex w-full max-w-[1420px] flex-col gap-5">
@@ -70,7 +77,7 @@ export default async function DashboardPage({
         subtitle={subtitle}
         badge="パターン統計 最新反映"
       />
-      <DashboardDateSelector dates={availableDates} selectedDate={selectedDate} />
+      <DashboardDateSelector dates={initialDates} selectedDate={selectedDate} />
       <Suspense fallback={<SectionFallback height={360} />}>
         <StereoscopicSignals date={latest} />
       </Suspense>

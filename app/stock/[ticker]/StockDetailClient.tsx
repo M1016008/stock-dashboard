@@ -159,11 +159,11 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
       {/* 決算情報 */}
       <EarningsCard ticker={ticker} />
 
-      {/* 過去の大きな値動き */}
-      <StockMovePeriods ticker={ticker} />
-
-      {/* 最新ML類似候補 */}
-      <StockMlInsights ticker={ticker} />
+      {/* ステージ変遷 */}
+      <div>
+        <div className="section-header">ステージ変遷（週ごと）</div>
+        <StageTimeline ticker={ticker} />
+      </div>
 
       {/* TradingView チャート: 日足 / 週足 / 月足 を縦に並べて時間軸比較 */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -196,11 +196,11 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
         </div>
       </div>
 
-      {/* ステージ変遷 */}
-      <div>
-        <div className="section-header">ステージ変遷（週ごと）</div>
-        <StageTimeline ticker={ticker} />
-      </div>
+      {/* 過去の大きな値動き */}
+      <StockMovePeriods ticker={ticker} />
+
+      {/* 最新ML類似候補 */}
+      <StockMlInsights ticker={ticker} />
 
     </div>
   )

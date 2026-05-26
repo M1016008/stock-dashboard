@@ -4,6 +4,8 @@
 
 import { execAll, execBatch, execGet, execRun } from '@/lib/db/client'
 import { dot, sigmoid, type MlDirection, type MlFeatureProfile } from '@/lib/backtest/ml'
+import { ML_PHYSICS_FEATURE_SET, type PhysicsDirection, type PhysicsFeatureProfile } from '@/lib/backtest/ml-physics'
+import { physicsSimilarity, physicsSimilarityScore } from '@/lib/ml/physics-similarity'
 
 type FeatureRow = {
   ticker: string
@@ -19,12 +21,14 @@ type FeatureRow = {
 
 type CandidateRow = {
   as_of_date: string
-  direction: MlDirection
+  direction: MlDirection | PhysicsDirection
   rank: number
   ticker: string
   candidate_score: number
   explanation_json: string
 }
+
+type DirectionalCandidateRow = CandidateRow & { direction: MlDirection }
 
 type ModelRow = {
   model_name: string
@@ -55,7 +59,7 @@ type ScoredPerformanceRow = {
 }
 
 const SIMILAR_LIMIT = Math.max(1, Number(process.env.ML_SIMILAR_LIMIT ?? 5))
-const SIMILAR_BASE_LIMIT = Math.max(20, Number(process.env.ML_SIMILAR_BASE_LIMIT ?? 240))
+const SIMILAR_BASE_LIMIT = Number(process.env.ML_SIMILAR_BASE_LIMIT ?? 0)
 const PERFORMANCE_PER_YEAR_LIMIT = Math.max(100, Number(process.env.ML_PERFORMANCE_PER_YEAR_LIMIT ?? 900))
 const PERFORMANCE_TOP_LIMIT = Math.max(500, Number(process.env.ML_PERFORMANCE_TOP_LIMIT ?? 8000))
 const PERFORMANCE_MIN_SECTOR_N = Math.max(10, Number(process.env.ML_PERFORMANCE_MIN_SECTOR_N ?? 20))
@@ -85,7 +89,10 @@ function fmtPct(value: number | null | undefined, digits = 1): string {
 }
 
 function latestDate(): Promise<string | null> {
-  return execGet<{ date: string | null }>(`SELECT MAX(date) AS date FROM ml_feature_vectors`)
+  return execGet<{ date: string | null }>(
+    `SELECT MAX(date) AS date FROM ml_feature_vectors_v2 WHERE feature_set = ?`,
+    [ML_PHYSICS_FEATURE_SET],
+  )
     .then((row) => row?.date ?? null)
 }
 
@@ -94,11 +101,12 @@ async function loadLatestFeatures(date: string): Promise<FeatureRow[]> {
     `
     SELECT f.ticker, f.date, f.stage_code, f.feature_json, f.vector_json,
            u.name, u.market_segment, u.sector17_name, u.sector33_name
-    FROM ml_feature_vectors f
+    FROM ml_feature_vectors_v2 f
     LEFT JOIN ticker_universe u ON u.ticker = f.ticker
-    WHERE f.date = ?
+    WHERE f.feature_set = ?
+      AND f.date = ?
     `,
-    [date],
+    [ML_PHYSICS_FEATURE_SET, date],
   )
 }
 
@@ -106,12 +114,13 @@ async function loadCandidates(date: string): Promise<CandidateRow[]> {
   return execAll<CandidateRow>(
     `
     SELECT as_of_date, direction, rank, ticker, candidate_score, explanation_json
-    FROM serving_ml_candidates
+    FROM serving_ml_physics_candidates
     WHERE as_of_date = ?
+      AND horizon_days = ?
     ORDER BY direction, rank
     LIMIT ?
     `,
-    [date, SIMILAR_BASE_LIMIT],
+    [date, Number(process.env.ML_SIMILAR_PHYSICS_HORIZON ?? 10), Math.max(1, Number(process.env.ML_SIMILAR_CANDIDATE_LIMIT ?? 2000))],
   )
 }
 
@@ -149,7 +158,7 @@ function stageSimilarity(a: string | null | undefined, b: string | null | undefi
   return same / 6
 }
 
-function summarizeProfile(profile: MlFeatureProfile | null): Record<string, unknown> {
+function summarizeProfile(profile: Partial<MlFeatureProfile & PhysicsFeatureProfile> | null): Record<string, unknown> {
   if (!profile) return {}
   return {
     close: profile.close,
@@ -157,26 +166,20 @@ function summarizeProfile(profile: MlFeatureProfile | null): Record<string, unkn
     maOrder: profile.maOrder,
     slopes5: profile.slopes5,
     slopes10: profile.slopes10,
+    velocities: profile.velocities,
+    accelerations: profile.accelerations,
     gaps: profile.gaps,
+    gapVelocity: profile.gapVelocity,
+    gapAcceleration: profile.gapAcceleration,
     pricePosition: profile.pricePosition,
     daysHeldAboveSma5: profile.daysHeldAboveSma5,
+    daysAboveSma5: profile.daysAboveSma5,
+    daysAboveSma25: profile.daysAboveSma25,
     distanceToRecentHighPct: profile.distanceToRecentHighPct,
-  }
-}
-
-function explainSimilarity(base: MlFeatureProfile | null, similar: MlFeatureProfile | null, score: number): Record<string, string> {
-  const baseStage = base?.stageCode ?? '------'
-  const similarStage = similar?.stageCode ?? '------'
-  const stageRate = Math.round(stageSimilarity(baseStage, similarStage) * 100)
-  const baseSlope = base?.slopes10.sma25
-  const similarSlope = similar?.slopes10.sma25
-  const baseGap = base?.gaps.sma5To25Pct
-  const similarGap = similar?.gaps.sma5To25Pct
-  return {
-    stage: `6桁ステージは ${baseStage} と ${similarStage} で、6軸の一致度は約${stageRate}%です。`,
-    maAngle: `25日MAの10日変化率は基準銘柄が${fmtPct(baseSlope)}、候補銘柄が${fmtPct(similarSlope)}です。`,
-    maDistance: `5日-25日MAの距離は基準銘柄が${fmtPct(baseGap)}、候補銘柄が${fmtPct(similarGap)}です。`,
-    pricePosition: `株価と5日/25日MAの位置関係を含む特徴量距離から、類似度${Math.round(score * 100)}%として抽出しました。`,
+    distanceToRecentLowPct: profile.distanceToRecentLowPct,
+    regimes: profile.regimes,
+    context: profile.context,
+    timeSince: profile.timeSince,
   }
 }
 
@@ -185,7 +188,7 @@ async function buildCurrentSimilars(date: string, features: FeatureRow[], candid
     .map((row) => ({
       row,
       vector: parseJson<number[]>(row.vector_json, []),
-      profile: parseJson<MlFeatureProfile | null>(row.feature_json, null),
+      profile: parseJson<PhysicsFeatureProfile | null>(row.feature_json, null),
     }))
     .filter((item) => item.vector.length > 0)
   const featureByTicker = new Map(featureItems.map((item) => [item.row.ticker, item]))
@@ -196,22 +199,38 @@ async function buildCurrentSimilars(date: string, features: FeatureRow[], candid
   }
 
   await execRun(`DELETE FROM serving_current_similars WHERE as_of_date = ?`, [date])
-  const stmts = Array.from(bestCandidateByTicker.values()).flatMap((candidate) => {
-    const base = featureByTicker.get(candidate.ticker)
-    if (!base) return []
-    const ranked = featureItems
-      .filter((item) => item.row.ticker !== candidate.ticker)
-      .map((item) => {
-        const distance = vectorDistance(base.vector, item.vector)
-        const stageBoost = 0.12 * stageSimilarity(base.profile?.stageCode, item.profile?.stageCode)
-        const score = Math.min(0.999, Math.max(0, (1 / (1 + distance)) * 0.88 + stageBoost))
-        const similarCandidate = bestCandidateByTicker.get(item.row.ticker)
-        return { item, score, similarCandidate }
-      })
-      .sort((a, b) => b.score - a.score)
-      .slice(0, SIMILAR_LIMIT)
+  const baseItems = SIMILAR_BASE_LIMIT > 0
+    ? Array.from(bestCandidateByTicker.values())
+        .map((candidate) => featureByTicker.get(candidate.ticker))
+        .filter((item): item is (typeof featureItems)[number] => Boolean(item))
+        .slice(0, SIMILAR_BASE_LIMIT)
+    : featureItems
+  const stmts = baseItems.flatMap((base) => {
+    const candidate = bestCandidateByTicker.get(base.row.ticker)
+    const ranked: Array<{ item: (typeof featureItems)[number]; score: number; similarCandidate: CandidateRow | undefined }> = []
+    for (const item of featureItems) {
+      if (item.row.ticker === base.row.ticker) continue
+      const score = physicsSimilarityScore(base.profile ?? {}, item.profile ?? {}, base.row.stage_code, item.row.stage_code)
+      const entry = { item, score, similarCandidate: bestCandidateByTicker.get(item.row.ticker) }
+      if (ranked.length < SIMILAR_LIMIT) {
+        ranked.push(entry)
+        continue
+      }
+      let lowestIndex = 0
+      for (let i = 1; i < ranked.length; i += 1) {
+        if (ranked[i].score < ranked[lowestIndex].score) lowestIndex = i
+      }
+      if (score > ranked[lowestIndex].score) ranked[lowestIndex] = entry
+    }
+    ranked.sort((a, b) => b.score - a.score)
 
     return ranked.map((similar, index) => {
+      const reason = physicsSimilarity(
+        base.profile ?? {},
+        similar.item.profile ?? {},
+        base.row.stage_code,
+        similar.item.row.stage_code,
+      ).reason
       const payload = {
         base: {
           ticker: base.row.ticker,
@@ -219,8 +238,8 @@ async function buildCurrentSimilars(date: string, features: FeatureRow[], candid
           marketSegment: base.row.market_segment,
           sector17Name: base.row.sector17_name,
           sector33Name: base.row.sector33_name,
-          direction: candidate.direction,
-          score: round(candidate.candidate_score, 4),
+          direction: candidate?.direction ?? null,
+          score: candidate ? round(candidate.candidate_score, 4) : null,
           ...summarizeProfile(base.profile),
         },
         similar: {
@@ -243,14 +262,14 @@ async function buildCurrentSimilars(date: string, features: FeatureRow[], candid
         `,
         args: [
           date,
-          candidate.ticker,
+          base.row.ticker,
           index + 1,
           similar.item.row.ticker,
           round(similar.score, 6),
-          candidate.direction,
+          candidate?.direction ?? null,
           similar.similarCandidate?.direction ?? null,
           JSON.stringify(payload),
-          JSON.stringify(explainSimilarity(base.profile, similar.item.profile, similar.score)),
+          JSON.stringify(reason),
         ],
       }
     })
@@ -268,6 +287,9 @@ async function buildSectorRankings(date: string, candidates: CandidateRow[]): Pr
     scores: number[]
     reps: Array<{ ticker: string; rank: number; score: number; direction: MlDirection }>
   }
+  const directionalCandidates = candidates.filter((candidate): candidate is DirectionalCandidateRow =>
+    candidate.direction === 'up' || candidate.direction === 'down',
+  )
   const rows = await execAll<{
     ticker: string
     sector17_name: string | null
@@ -276,13 +298,13 @@ async function buildSectorRankings(date: string, candidates: CandidateRow[]): Pr
     `
     SELECT ticker, sector17_name, sector33_name
     FROM ticker_universe
-    WHERE ticker IN (${candidates.map(() => '?').join(',') || "''"})
+    WHERE ticker IN (${directionalCandidates.map(() => '?').join(',') || "''"})
     `,
-    candidates.map((candidate) => candidate.ticker),
+    directionalCandidates.map((candidate) => candidate.ticker),
   )
   const sectorByTicker = new Map(rows.map((row) => [row.ticker, row]))
   const groups = new Map<string, Group>()
-  function add(candidate: CandidateRow, sectorType: '17' | '33', sectorName: string | null) {
+  function add(candidate: DirectionalCandidateRow, sectorType: '17' | '33', sectorName: string | null) {
     const normalized = sectorName?.trim() || 'その他'
     const key = `${sectorType}\t${normalized}\t${candidate.direction}`
     let group = groups.get(key)
@@ -290,15 +312,16 @@ async function buildSectorRankings(date: string, candidates: CandidateRow[]): Pr
       group = { asOfDate: date, sectorType, sectorName: normalized, direction: candidate.direction, scores: [], reps: [] }
       groups.set(key, group)
     }
-    group.scores.push(candidate.candidate_score)
-    group.reps.push({
+    const target = group
+    target.scores.push(candidate.candidate_score)
+    target.reps.push({
       ticker: candidate.ticker,
       rank: candidate.rank,
       score: round(candidate.candidate_score, 4) ?? 0,
       direction: candidate.direction,
     })
   }
-  for (const candidate of candidates) {
+  for (const candidate of directionalCandidates) {
     const sectors = sectorByTicker.get(candidate.ticker)
     add(candidate, '17', sectors?.sector17_name ?? null)
     add(candidate, '33', sectors?.sector33_name ?? null)

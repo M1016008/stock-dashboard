@@ -15,7 +15,7 @@ import { createClient } from '@libsql/client'
 import path from 'path'
 import fs from 'fs'
 
-const LOCAL_DB = path.join(process.cwd(), 'data', 'stockboard.db')
+const LOCAL_DB = process.env.STOCKBOARD_DB_PATH || process.env.LOCAL_DB_PATH || path.join(process.cwd(), 'data', 'stockboard.db')
 const REMOTE_URL = process.env.TURSO_DATABASE_URL
 const REMOTE_TOKEN = process.env.TURSO_AUTH_TOKEN
 

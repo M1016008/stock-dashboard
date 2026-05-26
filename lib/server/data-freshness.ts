@@ -9,6 +9,13 @@ const UPDATE_JOB_TYPES = [
   'feature_compute',
   'technical_signals',
   'ml_features',
+  'ml_context_features',
+  'ml_physics_features',
+  'ml_physics_candidates',
+  'ml_current_similars',
+  'ml_similarity_evaluate',
+  'ml_rl_policy',
+  'ml_feature_health',
   'serving_backtest',
   'indices',
   'earnings_calendar',
@@ -52,6 +59,10 @@ export type DataFreshness = {
   latestMlFeatureDate: string | null
   latestMlCandidateDate: string | null
   latestMlPredictionDate: string | null
+  latestMlPhysicsFeatureDate: string | null
+  latestMlPhysicsCandidateDate: string | null
+  latestMlSimilarDate: string | null
+  latestMlRlPolicyDate: string | null
   activeTickerCount: number
   staleOhlcvTickerCount: number
   staleSnapshotTickerCount: number
@@ -67,6 +78,10 @@ export type DataFreshness = {
   needsMlFeatureUpdate: boolean
   needsMlCandidateUpdate: boolean
   needsMlPredictionUpdate: boolean
+  needsMlPhysicsFeatureUpdate: boolean
+  needsMlPhysicsCandidateUpdate: boolean
+  needsMlSimilarUpdate: boolean
+  needsMlRlPolicyUpdate: boolean
   needsUpdate: boolean
   running: boolean
   runningJobs: RunningJob[]
@@ -163,6 +178,10 @@ export async function getDataFreshness(now = new Date()): Promise<DataFreshness>
     latestMlFeatureDate,
     latestMlCandidateDate,
     latestMlPredictionDate,
+    latestMlPhysicsFeatureDate,
+    latestMlPhysicsCandidateDate,
+    latestMlSimilarDate,
+    latestMlRlPolicyDate,
     ohlcvCoverage,
     snapshotCoverage,
     snapshotEligibleCoverage,
@@ -179,6 +198,10 @@ export async function getDataFreshness(now = new Date()): Promise<DataFreshness>
     maxDate('ml_feature_vectors', 'date'),
     maxDate('serving_ml_candidates', 'as_of_date'),
     maxDate('ml_predictions', 'as_of_date'),
+    maxDate('ml_feature_vectors_v2', 'date'),
+    maxDate('serving_ml_physics_candidates', 'as_of_date'),
+    maxDate('serving_current_similars', 'as_of_date'),
+    maxDate('ml_rl_policy_evaluations', 'evaluation_date'),
     dateCoverage('ohlcv_daily'),
     dateCoverage('daily_snapshots'),
     execGet<{ eligibleSnapshotRows: number }>(
@@ -352,6 +375,18 @@ export async function getDataFreshness(now = new Date()): Promise<DataFreshness>
   const needsMlPredictionUpdate =
     !!latestMlCandidateDate
     && (!latestMlPredictionDate || latestMlPredictionDate < latestMlCandidateDate)
+  const needsMlPhysicsFeatureUpdate =
+    !!latestSnapshotDate
+    && (!latestMlPhysicsFeatureDate || latestMlPhysicsFeatureDate < latestSnapshotDate)
+  const needsMlPhysicsCandidateUpdate =
+    !!latestMlPhysicsFeatureDate
+    && (!latestMlPhysicsCandidateDate || latestMlPhysicsCandidateDate < latestMlPhysicsFeatureDate)
+  const needsMlSimilarUpdate =
+    !!latestMlPhysicsFeatureDate
+    && (!latestMlSimilarDate || latestMlSimilarDate < latestMlPhysicsFeatureDate)
+  const needsMlRlPolicyUpdate =
+    !!latestMlPhysicsFeatureDate
+    && (!latestMlRlPolicyDate || latestMlRlPolicyDate < latestMlPhysicsFeatureDate)
 
   return {
     expectedTradingDate,
@@ -365,6 +400,10 @@ export async function getDataFreshness(now = new Date()): Promise<DataFreshness>
     latestMlFeatureDate,
     latestMlCandidateDate,
     latestMlPredictionDate,
+    latestMlPhysicsFeatureDate,
+    latestMlPhysicsCandidateDate,
+    latestMlSimilarDate,
+    latestMlRlPolicyDate,
     activeTickerCount,
     staleOhlcvTickerCount,
     staleSnapshotTickerCount,
@@ -380,6 +419,10 @@ export async function getDataFreshness(now = new Date()): Promise<DataFreshness>
     needsMlFeatureUpdate,
     needsMlCandidateUpdate,
     needsMlPredictionUpdate,
+    needsMlPhysicsFeatureUpdate,
+    needsMlPhysicsCandidateUpdate,
+    needsMlSimilarUpdate,
+    needsMlRlPolicyUpdate,
     needsUpdate:
       needsOhlcvUpdate
       || needsSnapshotUpdate
@@ -388,7 +431,11 @@ export async function getDataFreshness(now = new Date()): Promise<DataFreshness>
       || needsModelFeatureUpdate
       || needsMlFeatureUpdate
       || needsMlCandidateUpdate
-      || needsMlPredictionUpdate,
+      || needsMlPredictionUpdate
+      || needsMlPhysicsFeatureUpdate
+      || needsMlPhysicsCandidateUpdate
+      || needsMlSimilarUpdate
+      || needsMlRlPolicyUpdate,
     running: runningJobs.length > 0,
     runningJobs,
     lastRun: lastRun ?? null,

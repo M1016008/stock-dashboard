@@ -3,7 +3,6 @@ import path from 'node:path'
 
 const root = process.cwd()
 const envPath = path.join(root, '.env.local')
-const dbPath = path.join(root, 'data', 'stockboard.db')
 const nodeModulesPath = path.join(root, 'node_modules')
 
 function parseEnv(filePath: string): Record<string, string> {
@@ -30,6 +29,7 @@ function formatBytes(bytes: number): string {
 }
 
 const env = parseEnv(envPath)
+const dbPath = env.STOCKBOARD_DB_PATH || env.LOCAL_DB_PATH || path.join(root, 'data', 'stockboard.db')
 const problems: string[] = []
 const warnings: string[] = []
 
