@@ -262,6 +262,8 @@ async function main() {
         await lock.heartbeat()
         await runRequired('scripts/batch-ml-rl-policy.ts', {}, heartbeat)
         await lock.heartbeat()
+        await runRequired('scripts/build-historical-universe.ts', {}, heartbeat)
+        await lock.heartbeat()
         await runRequired('scripts/batch-ml-feature-health.ts', {}, heartbeat)
         await lock.heartbeat()
         if (process.env.ML_PHYSICS_DAILY_EVALUATE === '1') {

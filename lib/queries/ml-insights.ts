@@ -197,29 +197,45 @@ async function latestDate(table: string): Promise<string | null> {
 }
 
 async function latestCompleteSimilarDate(): Promise<string | null> {
+  const latestSimilar = await latestDate('serving_current_similars')
+  if (!latestSimilar) return null
+  const counts = await execGet<{ base_count: number; feature_count: number }>(
+    `
+    SELECT
+      (SELECT COUNT(DISTINCT base_ticker) FROM serving_current_similars WHERE as_of_date = ?) AS base_count,
+      (SELECT COUNT(*) FROM ml_feature_vectors_v2 WHERE feature_set = ? AND date = ?) AS feature_count
+    `,
+    [latestSimilar, ML_PHYSICS_FEATURE_SET, latestSimilar],
+  )
+  const baseCount = Number(counts?.base_count ?? 0)
+  const featureCount = Number(counts?.feature_count ?? 0)
+  if (featureCount === 0 || baseCount >= Math.floor(featureCount * 0.85)) return latestSimilar
+
   const row = await execGet<{ date: string | null }>(
     `
-    WITH similar_dates AS (
-      SELECT as_of_date, COUNT(DISTINCT base_ticker) AS base_count
+    WITH candidate_dates AS (
+      SELECT DISTINCT as_of_date
       FROM serving_current_similars
-      GROUP BY as_of_date
-    ),
-    feature_dates AS (
-      SELECT date, COUNT(*) AS feature_count
-      FROM ml_feature_vectors_v2
-      WHERE feature_set = ?
-      GROUP BY date
+      WHERE as_of_date < ?
+      ORDER BY as_of_date DESC
+      LIMIT 20
     )
-    SELECT s.as_of_date AS date
-    FROM similar_dates s
-    INNER JOIN feature_dates f ON f.date = s.as_of_date
-    WHERE s.base_count >= CAST(f.feature_count * 0.85 AS INTEGER)
-    ORDER BY s.as_of_date DESC
+    SELECT c.as_of_date AS date
+    FROM candidate_dates c
+    WHERE
+      (SELECT COUNT(DISTINCT base_ticker) FROM serving_current_similars WHERE as_of_date = c.as_of_date)
+      >=
+      CAST((
+        SELECT COUNT(*)
+        FROM ml_feature_vectors_v2
+        WHERE feature_set = ? AND date = c.as_of_date
+      ) * 0.85 AS INTEGER)
+    ORDER BY c.as_of_date DESC
     LIMIT 1
     `,
-    [ML_PHYSICS_FEATURE_SET],
+    [latestSimilar, ML_PHYSICS_FEATURE_SET],
   )
-  return row?.date ?? await latestDate('serving_current_similars')
+  return row?.date ?? latestSimilar
 }
 
 async function latestColumnDate(table: string, column: string): Promise<string | null> {

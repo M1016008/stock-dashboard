@@ -156,6 +156,54 @@ export const tickerUniverse = sqliteTable('ticker_universe', {
   margin_type:        text('margin_type'),
 })
 
+export const historicalUniverse = sqliteTable(
+  'historical_universe',
+  {
+    ticker:                    text('ticker').primaryKey(),
+    name:                      text('name'),
+    firstTradeDate:            text('first_trade_date').notNull(),
+    lastTradeDate:             text('last_trade_date').notNull(),
+    tradingDays:               integer('trading_days').notNull().default(0),
+    latestOhlcvDate:           text('latest_ohlcv_date').notNull(),
+    isLatestMember:            integer('is_latest_member', { mode: 'boolean' }).notNull().default(false),
+    status:                    text('status').notNull(),
+    missingFromTickerUniverse: integer('missing_from_ticker_universe', { mode: 'boolean' }).notNull().default(false),
+    marketSegment:             text('market_segment'),
+    sector17Code:              text('sector17_code'),
+    sector17Name:              text('sector17_name'),
+    sector33Code:              text('sector33_code'),
+    sector33Name:              text('sector33_name'),
+    marginType:                text('margin_type'),
+    ohlcvRows:                 integer('ohlcv_rows').notNull().default(0),
+    mlPhysicsV2Rows:           integer('ml_physics_v2_rows').notNull().default(0),
+    hasMlPhysicsV2:            integer('has_ml_physics_v2', { mode: 'boolean' }).notNull().default(false),
+    source:                    text('source').notNull().default('ohlcv_daily'),
+    payloadJson:               text('payload_json').notNull().default('{}'),
+    computedAt:                integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    statusIdx: index('historical_universe_status_idx').on(t.status, t.lastTradeDate),
+    latestIdx: index('historical_universe_latest_idx').on(t.isLatestMember, t.lastTradeDate),
+  }),
+)
+
+export const historicalUniverseAudits = sqliteTable('historical_universe_audits', {
+  id:                         integer('id').primaryKey({ autoIncrement: true }),
+  runStartedAt:               integer('run_started_at', { mode: 'timestamp' }).notNull(),
+  latestOhlcvDate:            text('latest_ohlcv_date'),
+  ohlcvTickerCount:           integer('ohlcv_ticker_count').notNull().default(0),
+  latestMemberCount:          integer('latest_member_count').notNull().default(0),
+  historicalOnlyCount:        integer('historical_only_count').notNull().default(0),
+  missingTickerUniverseCount: integer('missing_ticker_universe_count').notNull().default(0),
+  mlFeatureCompleteCount:     integer('ml_feature_complete_count').notNull().default(0),
+  mlFeatureIncompleteCount:   integer('ml_feature_incomplete_count').notNull().default(0),
+  ohlcvRowCount:              integer('ohlcv_row_count').notNull().default(0),
+  mlFeatureRowCount:          integer('ml_feature_row_count').notNull().default(0),
+  status:                     text('status').notNull(),
+  payloadJson:                text('payload_json').notNull(),
+  computedAt:                 integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+})
+
 // ─────────────────────────────────────
 // 8. Phase 2: 日足 OHLCV 履歴 (Yahoo Finance 由来、Phase 2 の単一ソース)
 // ─────────────────────────────────────

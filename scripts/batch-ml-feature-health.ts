@@ -71,6 +71,43 @@ async function main() {
     payload: { featureSet: ML_PHYSICS_FEATURE_SET },
   })
 
+  const historicalUniverseDate = await maxDate('historical_universe', 'latest_ohlcv_date')
+  const historicalUniverseCount = (await execGet<{ count: number }>(
+    `SELECT COUNT(*) AS count FROM historical_universe`,
+  ))?.count ?? null
+  const historicalUniverseExpectedCount = (await execGet<{ count: number }>(
+    `SELECT COUNT(*) AS count FROM (SELECT ticker FROM ohlcv_daily GROUP BY ticker)`,
+  ))?.count ?? null
+  const historicalUniversePayload = await execGet<{
+    current_count: number
+    historical_only_count: number
+    missing_ticker_universe_count: number
+    ml_incomplete_count: number
+  }>(
+    `
+    SELECT
+      SUM(CASE WHEN is_latest_member = 1 THEN 1 ELSE 0 END) AS current_count,
+      SUM(CASE WHEN is_latest_member = 0 THEN 1 ELSE 0 END) AS historical_only_count,
+      SUM(missing_from_ticker_universe) AS missing_ticker_universe_count,
+      SUM(CASE WHEN has_ml_physics_v2 = 0 THEN 1 ELSE 0 END) AS ml_incomplete_count
+    FROM historical_universe
+    `,
+  )
+  checks.push({
+    key: 'historical_universe',
+    expectedDate,
+    actualDate: historicalUniverseDate,
+    expectedCount: historicalUniverseExpectedCount,
+    actualCount: historicalUniverseCount,
+    payload: {
+      source: 'ohlcv_daily distinct ticker',
+      currentCount: Number(historicalUniversePayload?.current_count ?? 0),
+      historicalOnlyCount: Number(historicalUniversePayload?.historical_only_count ?? 0),
+      missingTickerUniverseCount: Number(historicalUniversePayload?.missing_ticker_universe_count ?? 0),
+      mlIncompleteCount: Number(historicalUniversePayload?.ml_incomplete_count ?? 0),
+    },
+  })
+
   const similarDate = await maxDate('serving_current_similars', 'as_of_date')
   const similarBases = similarDate
     ? (await execGet<{ count: number }>(
@@ -107,13 +144,15 @@ async function main() {
     payload: { expectedFrom: 'ml_short_labels.max(date)' },
   })
 
-  const rlPolicyDate = await maxDate('ml_rl_policy_evaluations', 'evaluation_date')
+  const rlPolicyDataDate = await maxDate('ml_rl_policy_evaluations', 'end_date')
+  const rlPolicyRunDate = await maxDate('ml_rl_policy_evaluations', 'evaluation_date')
   checks.push({
     key: 'ml_rl_policy_evaluations',
-    expectedDate: new Date().toISOString().slice(0, 10),
-    actualDate: rlPolicyDate,
+    expectedDate: rlStateDate,
+    actualDate: rlPolicyDataDate,
     expectedCount: null,
-    actualCount: await countRows('ml_rl_policy_evaluations', 'evaluation_date', rlPolicyDate),
+    actualCount: await countRows('ml_rl_policy_evaluations', 'end_date', rlPolicyDataDate),
+    payload: { expectedFrom: 'rl_training_states_v2.max(date)', latestEvaluationRunDate: rlPolicyRunDate },
   })
 
   const checkDate = new Date().toISOString().slice(0, 10)

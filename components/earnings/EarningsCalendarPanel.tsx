@@ -53,16 +53,6 @@ function fmtPct(v: number | null | undefined) {
   return `${v > 0 ? '+' : ''}${v.toFixed(2)}%`
 }
 
-function fmtRate(v: number | null | undefined) {
-  if (v == null || !Number.isFinite(v)) return null
-  return `${Math.round(v * 100)}%`
-}
-
-function fmtSignalDate(v: string | null | undefined) {
-  if (!v) return '発生日未確認'
-  return `${v.slice(5, 7)}/${v.slice(8, 10)}発生`
-}
-
 function tone(v: number | null) {
   if (v == null) return ''
   return v > 0 ? 'text-[var(--color-price-up)]' : v < 0 ? 'text-[var(--color-price-down)]' : ''
@@ -137,58 +127,6 @@ function SignalBadges({ labels, codes }: { labels: string[] | undefined; codes: 
         >
           {label}
         </span>
-      ))}
-    </div>
-  )
-}
-
-function SignalStatChip({ stat }: { stat: EarningsRows[number]['signalDetails'][number]['stats'][number] }) {
-  if (stat.source === 'missing' || stat.count == null) {
-    return (
-      <span className="rounded-[4px] border border-[var(--color-border-soft)] bg-white px-1.5 py-[2px] text-[10px] font-bold text-[var(--color-text-tertiary)]">
-        {stat.periodLabel} 統計未生成
-      </span>
-    )
-  }
-
-  const upRate = fmtRate(stat.upRate)
-  const downRate = fmtRate(stat.downRate)
-  const bearish = stat.downRate != null && stat.upRate != null && stat.downRate > stat.upRate
-  const direction = bearish ? `下落${downRate}` : upRate ? `上昇${upRate}` : '中央値'
-  const color = bearish ? 'text-[var(--color-price-down)]' : 'text-[var(--color-price-up)]'
-  return (
-    <span
-      className="rounded-[4px] border border-[var(--color-border-soft)] bg-white px-1.5 py-[2px] text-[10px] font-bold tabular-nums text-[var(--color-text-secondary)]"
-      title={`N=${stat.count.toLocaleString()} / ${stat.horizonDays}営業日後`}
-    >
-      {stat.periodLabel} <span className={color}>{direction}</span> / {fmtPct(stat.medianReturnPct)}
-    </span>
-  )
-}
-
-function SignalDetails({ details }: { details: EarningsRows[number]['signalDetails'] | undefined }) {
-  const rows = (details ?? []).filter((detail) => detail.label !== 'ボラ収縮' && detail.label !== 'MA上タッチ')
-  if (rows.length === 0) return null
-  return (
-    <div className="mt-2 space-y-1.5">
-      {rows.map((detail) => (
-        <div
-          key={`${detail.label}-${detail.code}`}
-          className="rounded-[6px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-2 py-1.5"
-        >
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] font-bold leading-snug">
-            <span className="text-[var(--color-text-primary)]">{detail.label}</span>
-            <span className="tabular-nums text-[var(--color-text-tertiary)]">
-              {fmtSignalDate(detail.triggerDate)}
-              {detail.elapsedTradingDays == null ? '' : `・${detail.elapsedTradingDays}営業日経過`}
-            </span>
-          </div>
-          <div className="mt-1 flex flex-wrap gap-1">
-            {detail.stats.map((stat) => (
-              <SignalStatChip key={`${detail.code}-${stat.horizonDays}`} stat={stat} />
-            ))}
-          </div>
-        </div>
       ))}
     </div>
   )
@@ -571,7 +509,6 @@ function EarningsTable({
                 </td>
                 <td className="py-3 pr-4 align-top">
                   <SignalBadges labels={row.signalLabels} codes={row.signalCodes} />
-                  <SignalDetails details={row.signalDetails} />
                   <MlInsightNote insight={row.mlInsight} />
                 </td>
                 {completed && (

@@ -1171,12 +1171,12 @@ export default function BacktestPage() {
                 <Sigma size={17} />
               </div>
               <div className="bt-rank-list">
-                {mlPerformance.filter((item) => item.sectorType === 'all').slice(0, 6).map((item) => {
+                {mlPerformance.filter((item) => item.sectorType === 'all').slice(0, 6).map((item, index) => {
                   const mainRate = item.direction === 'up' ? item.upRate : item.downRate
                   const accuracy = item.payload?.metrics?.accuracy
                   const precision = item.payload?.precisionAt20
                   return (
-                    <div className="bt-rank" key={`${item.direction}-${item.horizonDays}-${item.sectorName}`}>
+                    <div className="bt-rank" key={`${item.asOfDate}-${item.direction}-${item.horizonDays}-${item.sectorName}-${item.payload?.modelName ?? index}`}>
                       <span className="bt-rank-no">{item.horizonDays}</span>
                       <div>
                         <strong style={{ color: 'var(--color-brand-900)', textAlign: 'left' }}>

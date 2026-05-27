@@ -1310,8 +1310,11 @@ export async function getEarningsCalendarDashboard(
   }
 
   try {
-    const completedRows = includeCompleted
+    const completedRawRows = includeCompleted
       ? await getCompletedEarningsCalendarRows(anchorDate, marketDate, prev, 14, 80)
+      : []
+    const completedRows = includeCompleted
+      ? applyEarningsScope(completedRawRows, filters, anchorDate, true).rows
       : []
 
     if (!preferLatestImport) {

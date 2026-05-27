@@ -1,56 +1,18 @@
 // app/api/earnings-calendar/route.ts
-// 決算カレンダー API。J-Quants/JPX公式から取り込んだ earnings_calendar を返す。
-// クエリ:
-//   - days: 何日後までを範囲に含めるか（デフォルト 30）
-//   - past: true なら過去の決算（前回決算）も含める（デフォルト false）
+// 決算ページと同じクエリ経路で、日付・絞り込み・ソート・limitを反映した決算データを返す。
 
 import { NextRequest, NextResponse } from 'next/server'
 import { gzipSync } from 'zlib'
-import { execAll, execGet } from '@/lib/db/client'
-import type { EarningsSignalDecoration } from '@/lib/signals/earnings-labels'
+import {
+  getEarningsCalendarDashboard,
+  type EarningsCalendarFilters,
+  type EarningsRow,
+  type EarningsSortDir,
+  type EarningsSortKey,
+  type EarningsVolumeCondition,
+} from '@/lib/queries/dashboard'
 
 export const dynamic = 'force-dynamic'
-
-export interface EarningsEntry extends EarningsSignalDecoration {
-  date: string
-  daysLeft: number
-  kind: 'upcoming' | 'completed'
-  ticker: string
-  displayCode: string
-  name: string
-  sectorLarge: string | null
-  marketSegment: string | null
-  marginType: string | null
-  marginAsOfDate: string | null
-  longMargin: number | null
-  shortMargin: number | null
-  creditRatio: number | null
-  shortRatio: number | null
-  price: number | null
-  marketCap: number | null
-  postEarningsBaseDate: string | null
-  postEarningsBasePrice: number | null
-  postEarningsChangePct: number | null
-  postEarningsTradingDays: number | null
-  daily_a_stage: number | null
-  daily_b_stage: number | null
-  weekly_a_stage: number | null
-  weekly_b_stage: number | null
-  monthly_a_stage: number | null
-  monthly_b_stage: number | null
-}
-type EarningsEntryBase = Omit<EarningsEntry, keyof EarningsSignalDecoration>
-
-function withEmptySignalDecoration(entry: EarningsEntryBase): EarningsEntry {
-  return {
-    ...entry,
-    signalLabels: [],
-    signalCodes: [],
-    signalDetails: [],
-    mlDirection: null,
-    mlInsight: null,
-  }
-}
 
 function jsonResponse(request: NextRequest, payload: unknown, init?: ResponseInit): NextResponse {
   const json = JSON.stringify(payload)
@@ -65,106 +27,123 @@ function jsonResponse(request: NextRequest, payload: unknown, init?: ResponseIni
   return new NextResponse(json, { ...init, headers })
 }
 
+function isIsoDate(value: string | null): value is string {
+  return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)
+}
+
+function parseNumberParam(value: string | null): number | null {
+  if (!value?.trim()) return null
+  const n = Number(value)
+  return Number.isFinite(n) ? n : null
+}
+
+function parseLimit(value: string | null): number | null {
+  if (!value?.trim()) return null
+  const n = Number(value)
+  return Number.isInteger(n) && n > 0 ? n : null
+}
+
+function parseVolumeCondition(value: string | null): EarningsVolumeCondition | null {
+  if (
+    value === 'volume_spike' ||
+    value === 'above_avg' ||
+    value === 'volume_10k' ||
+    value === 'volume_100k'
+  ) return value
+  return null
+}
+
+function parseSortKey(value: string | null): EarningsSortKey | null {
+  if (
+    value === 'daysLeft' ||
+    value === 'announceDate' ||
+    value === 'ticker' ||
+    value === 'name' ||
+    value === 'market' ||
+    value === 'sector17' ||
+    value === 'sector33' ||
+    value === 'price' ||
+    value === 'changePct' ||
+    value === 'avgVolume10' ||
+    value === 'avgVolume30' ||
+    value === 'avgVolume60' ||
+    value === 'signalCount' ||
+    value === 'stageCode' ||
+    value === 'postEarningsChangePct'
+  ) return value
+  return null
+}
+
+function parseSortDir(value: string | null): EarningsSortDir | null {
+  return value === 'asc' || value === 'desc' ? value : null
+}
+
+function normalizeRow(row: EarningsRow) {
+  return {
+    ...row,
+    date: row.announce_date,
+    displayCode: row.ticker,
+    sectorLarge: row.sector17Name,
+    sectorName: row.sector33Name,
+    dailyPattern: row.daily_a_stage != null && row.daily_b_stage != null
+      ? `${row.daily_a_stage}${row.daily_b_stage}`
+      : null,
+    stageCode: [
+      row.daily_a_stage,
+      row.daily_b_stage,
+      row.weekly_a_stage,
+      row.weekly_b_stage,
+      row.monthly_a_stage,
+      row.monthly_b_stage,
+    ].every((value) => typeof value === 'number')
+      ? `${row.daily_a_stage}${row.daily_b_stage}${row.weekly_a_stage}${row.weekly_b_stage}${row.monthly_a_stage}${row.monthly_b_stage}`
+      : null,
+  }
+}
+
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
-    const daysFwd = Math.max(1, Math.min(120, Number(searchParams.get('days') ?? 30)))
-    const includePast = searchParams.get('past') === 'true'
-
-    const latest = await execGet<{ d: string | null }>(`SELECT MAX(date) AS d FROM daily_snapshots`)
-    const baseDate = latest?.d
-    if (!baseDate) {
-      return jsonResponse(request, {
-        entries: [],
-        snapshotDate: null,
-        from: null,
-        to: null,
-        notice: 'J-Quants 由来の決算カレンダーまたは日次データが未取得です。最新化バッチを実行してください。',
-      })
+    const dateParam = searchParams.get('date')
+    const selectedDate = isIsoDate(dateParam) ? dateParam : null
+    const daysFwd = Math.max(1, Math.min(120, Number(searchParams.get('days') ?? 14)))
+    const filters: EarningsCalendarFilters = {
+      marketSegment: searchParams.get('market') ?? null,
+      sector17: searchParams.get('sector17') ?? null,
+      sector33: searchParams.get('sector33') ?? null,
+      stageCode: searchParams.get('stageCode') ?? null,
+      dailyPattern: searchParams.get('dailyPattern') ?? null,
+      volumeCondition: parseVolumeCondition(searchParams.get('volume')),
+      priceMin: parseNumberParam(searchParams.get('priceMin')),
+      priceMax: parseNumberParam(searchParams.get('priceMax')),
+      signal: searchParams.get('signal') ?? null,
+      sortBy: parseSortKey(searchParams.get('sort')),
+      sortDir: parseSortDir(searchParams.get('dir')),
+      limit: parseLimit(searchParams.get('limit')),
+      completed: searchParams.get('completed') === '1' || searchParams.get('completed') === 'true',
     }
-
-    const range = await execGet<{ fromDate: string; toDate: string }>(
-      `
-      SELECT
-        ${includePast ? `date(?, '-' || ? || ' days')` : '?'} AS fromDate,
-        date(?, '+' || ? || ' days') AS toDate
-      `,
-      includePast ? [baseDate, daysFwd, baseDate, daysFwd] : [baseDate, baseDate, daysFwd],
-    )
-    const fromDate = range?.fromDate ?? baseDate
-    const toDate = range?.toDate ?? baseDate
-
-    const entries = await execAll<EarningsEntryBase>(
-      `
-      WITH cal AS (
-        SELECT ticker, announce_date, company_name, sector_name, market_segment,
-               CAST(julianday(announce_date) - julianday(?) AS INTEGER) AS daysLeft
-        FROM earnings_calendar
-        WHERE announce_date BETWEEN ? AND ?
-      ),
-      px AS (SELECT ticker, close FROM ohlcv_daily WHERE date = ?),
-      st AS (SELECT * FROM daily_snapshots WHERE date = ?),
-      first_trade AS (
-        SELECT cal.ticker, MIN(od.date) AS base_date
-        FROM cal
-        JOIN ohlcv_daily od ON od.ticker = cal.ticker AND od.date >= cal.announce_date AND od.date <= ?
-        WHERE cal.announce_date < ?
-        GROUP BY cal.ticker
-      ),
-      first_px AS (
-        SELECT ft.ticker, ft.base_date, od.close AS base_close
-        FROM first_trade ft
-        LEFT JOIN ohlcv_daily od ON od.ticker = ft.ticker AND od.date = ft.base_date
-      )
-      SELECT
-        cal.announce_date AS date,
-        cal.daysLeft,
-        CASE WHEN cal.announce_date < ? THEN 'completed' ELSE 'upcoming' END AS kind,
-        cal.ticker,
-        cal.ticker AS displayCode,
-        COALESCE(tu.name, cal.company_name, cal.ticker) AS name,
-        COALESCE(tu.sector17_name, cal.sector_name) AS sectorLarge,
-        COALESCE(tu.market_segment, cal.market_segment) AS marketSegment,
-        COALESCE(tu.margin_type, sml.margin_type) AS marginType,
-        sml.as_of_date AS marginAsOfDate,
-        sml.long_margin AS longMargin,
-        sml.short_margin AS shortMargin,
-        sml.credit_ratio AS creditRatio,
-        sml.short_ratio AS shortRatio,
-        px.close AS price,
-        CASE WHEN tu.shares_outstanding IS NOT NULL AND px.close IS NOT NULL THEN tu.shares_outstanding * px.close END AS marketCap,
-        fp.base_date AS postEarningsBaseDate,
-        fp.base_close AS postEarningsBasePrice,
-        CASE WHEN fp.base_close > 0 THEN 100.0 * (px.close - fp.base_close) / fp.base_close END AS postEarningsChangePct,
-        (
-          SELECT COUNT(*) - 1
-          FROM ohlcv_daily od
-          WHERE od.ticker = cal.ticker AND fp.base_date IS NOT NULL AND od.date BETWEEN fp.base_date AND ?
-        ) AS postEarningsTradingDays,
-        st.daily_a_stage,
-        st.daily_b_stage,
-        st.weekly_a_stage,
-        st.weekly_b_stage,
-        st.monthly_a_stage,
-        st.monthly_b_stage
-      FROM cal
-      LEFT JOIN ticker_universe tu ON tu.ticker = cal.ticker
-      LEFT JOIN serving_margin_latest sml ON sml.ticker = cal.ticker
-      LEFT JOIN px USING (ticker)
-      LEFT JOIN st USING (ticker)
-      LEFT JOIN first_px fp USING (ticker)
-      ORDER BY cal.announce_date ASC, cal.ticker
-      `,
-      [baseDate, fromDate, toDate, baseDate, baseDate, baseDate, baseDate, baseDate, baseDate],
-    )
-
-    entries.sort((a, b) => a.date.localeCompare(b.date) || a.ticker.localeCompare(b.ticker))
+    const dashboard = await getEarningsCalendarDashboard(daysFwd, selectedDate, {
+      preferLatestImport: !selectedDate,
+      filters,
+      includeCompleted: filters.completed === true,
+    })
 
     return jsonResponse(request, {
-      entries: entries.map(withEmptySignalDecoration),
-      snapshotDate: baseDate,
-      from: fromDate,
-      to: toDate,
+      entries: dashboard.rows.map(normalizeRow),
+      completedEntries: dashboard.completedRows.map(normalizeRow),
+      referenceEntries: dashboard.referenceRows.map(normalizeRow),
+      snapshotDate: dashboard.scope.scopeDate,
+      from: dashboard.windowStart,
+      to: dashboard.windowEnd,
+      status: dashboard.status,
+      message: dashboard.message,
+      latestAnnounceDate: dashboard.latestAnnounceDate,
+      latestImportedAt: dashboard.latestImportedAt,
+      totalRows: dashboard.totalRows,
+      scope: dashboard.scope,
+      filterOptions: dashboard.filterOptions,
+      filters: dashboard.filters,
+      lastRun: dashboard.lastRun,
     })
   } catch (error) {
     console.error('earnings-calendar error:', error)

@@ -6,6 +6,7 @@ import { ML_PHYSICS_FEATURE_SET } from '@/lib/backtest/ml-physics'
 import { buildChartWindowWithMa, type OhlcvPoint, type StagePoint } from '@/lib/backtest/detail-analysis'
 import { physicsSimilarity } from '@/lib/ml/physics-similarity'
 import { MIN_DISPLAY_SIMILARITY_SCORE } from '@/lib/ml/similarity-threshold'
+import { analyzePhysicsProfile } from '@/lib/ml/physics-analysis'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 30
@@ -42,6 +43,12 @@ type FallbackResult = {
   rows: Array<Record<string, unknown>>
   context: FeatureContext | null
   source: FeatureContext['source'] | 'none'
+}
+
+type BaseProfileResult = {
+  asOfDate: string
+  base: FeatureItem
+  source: FeatureContext['source']
 }
 
 type CasePoolRow = FeatureRow & {
@@ -227,6 +234,45 @@ async function loadFeatureContext(ticker: string, requestedDate: string | null):
     const base = items.find((item) => item.row.ticker === ticker)
     if (base) {
       return { asOfDate: legacyDate, base, items, source: 'ml_feature_vectors_fallback' }
+    }
+  }
+
+  return null
+}
+
+async function loadBaseFeatureProfile(ticker: string, requestedDate: string | null): Promise<BaseProfileResult | null> {
+  for (const table of ['ml_feature_vectors_v2', 'ml_feature_vectors'] as const) {
+    const date = await latestFeatureDateForTicker(table, ticker, requestedDate)
+    if (!date) continue
+
+    const featureSetClause = table === 'ml_feature_vectors_v2' ? 'f.feature_set = ? AND ' : ''
+    const args: string[] = table === 'ml_feature_vectors_v2'
+      ? [ML_PHYSICS_FEATURE_SET, ticker, date]
+      : [ticker, date]
+    const row = await execGet<FeatureRow>(
+      `
+      SELECT f.ticker, f.date, f.stage_code, f.feature_json, f.vector_json,
+             u.name, u.market_segment, u.sector17_name, u.sector33_name
+      FROM ${table} f
+      LEFT JOIN ticker_universe u ON u.ticker = f.ticker
+      WHERE ${featureSetClause}f.ticker = ?
+        AND f.date = ?
+      LIMIT 1
+      `,
+      args,
+    )
+    if (!row) continue
+
+    return {
+      asOfDate: date,
+      base: {
+        row,
+        vector: parseJson<number[]>(row.vector_json, []),
+        profile: parseJson<AnyProfile | null>(row.feature_json, null),
+      },
+      source: table === 'ml_feature_vectors_v2'
+        ? 'ml_feature_vectors_v2_fallback'
+        : 'ml_feature_vectors_fallback',
     }
   }
 
@@ -513,6 +559,7 @@ async function buildCaseStudies(context: FeatureContext) {
   return Promise.all(selected.map(async ({ row, profile, score }, index) => {
     const evolution = await loadCaseEvolution(row.ticker, row.date)
     const narrative = buildCaseNarrative(row, score, evolution)
+    const caseAnalysis = analyzePhysicsProfile(profile)
     const endPoint = evolution.find((point) => point.afterDays === 15) ?? evolution[evolution.length - 1]
     const startPoint = evolution[0]
     const caseReturnPct = row.h15_return_pct ?? row.h10_return_pct ?? row.h5_return_pct
@@ -530,6 +577,8 @@ async function buildCaseStudies(context: FeatureContext) {
       maOrder: profileMaOrder(profile),
       sector17Name: row.sector17_name,
       sector33Name: row.sector33_name,
+      physicsStatus: caseAnalysis.physicsStatus,
+      pullbackVerdict: caseAnalysis.pullbackVerdict,
       returns: {
         week1: row.h5_return_pct,
         week2: row.h10_return_pct,
@@ -559,22 +608,31 @@ export async function GET(request: NextRequest) {
     const ticker = searchParams.get('ticker')?.replace(/\.T$/i, '').trim() || null
     const date = searchParams.get('date')?.trim() || null
     const limit = Math.min(100, Math.max(1, Number(searchParams.get('limit') ?? (ticker ? 8 : 20))))
+    const includeCases = searchParams.get('includeCases') === '1'
+    const allowFallbackScan = includeCases || searchParams.get('fallback') === '1'
     const result = await getCurrentSimilars({ ticker, date, limit })
-    const fallback = ticker ? await fallbackTickerSimilars(ticker, date, limit) : null
+    const fallback = ticker && allowFallbackScan ? await fallbackTickerSimilars(ticker, date, limit) : null
+    const baseProfile = ticker ? await loadBaseFeatureProfile(ticker, date) : null
     const finalResult = ticker && result.rows.length === 0 && fallback
       ? fallback
       : result
-    const caseStudies = ticker && fallback?.context ? await buildCaseStudies(fallback.context) : []
+    const caseStudies = includeCases && ticker && fallback?.context ? await buildCaseStudies(fallback.context) : []
+    const physicsAnalysis = ticker && (fallback?.context || baseProfile)
+      ? analyzePhysicsProfile((fallback?.context?.base ?? baseProfile?.base)?.profile ?? null)
+      : null
 
     return NextResponse.json({
       asOfDate: finalResult.asOfDate,
-      featureAsOfDate: fallback?.context?.asOfDate ?? finalResult.asOfDate,
+      featureAsOfDate: fallback?.context?.asOfDate ?? baseProfile?.asOfDate ?? finalResult.asOfDate,
       ticker,
+      physicsAnalysis,
       minSimilarityScore: MIN_DISPLAY_SIMILARITY_SCORE,
       count: finalResult.rows.length,
       similars: finalResult.rows,
       caseStudies,
-      source: result.rows.length > 0 ? 'serving_current_similars' : fallback?.source ?? 'none',
+      source: result.rows.length > 0
+        ? 'serving_current_similars'
+        : fallback?.source ?? (baseProfile ? `${baseProfile.source}_profile` : 'none'),
     })
   } catch (error) {
     console.error('current similars API error:', error)

@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { useEffect, useState } from 'react'
 import { StageTag } from '@/components/ui/StageTag'
 import { BacktestHighlightChart, type HighlightChartPoint, type StageMarkerPoint } from '@/components/charts/BacktestHighlightChart'
+import type { PhysicsAnalysis, PhysicsStatus } from '@/lib/ml/physics-analysis'
 
 type SimilarInsight = {
   rank: number
@@ -33,6 +34,8 @@ type CaseStudy = {
   sector17Name: string | null
   sector33Name: string | null
   pattern: string
+  physicsStatus?: PhysicsStatus
+  pullbackVerdict?: string
   stagePath: string[]
   summary: string
   maComment: string
@@ -73,6 +76,7 @@ type ApiResponse = {
   asOfDate: string | null
   featureAsOfDate: string | null
   source: string | null
+  physicsAnalysis: PhysicsAnalysis | null
   similars: SimilarInsight[]
   caseStudies: CaseStudy[]
   predictions: Array<{
@@ -123,12 +127,73 @@ function trendLabel(value: string | null | undefined) {
   }
 }
 
+function statusColor(status: string | null | undefined) {
+  if (status === '上昇加速' || status === '上昇継続' || status === '押し目形成' || status === '反発準備') return 'rgba(220, 38, 38, 0.08)'
+  if (status === '下落加速' || status === '失速警戒') return 'rgba(37, 99, 235, 0.08)'
+  if (status === '過熱注意') return 'rgba(245, 158, 11, 0.12)'
+  return 'var(--surface-muted)'
+}
+
+function MiniMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={{ border: '1px solid var(--border-subtle)', borderRadius: 8, background: 'white', padding: 8 }}>
+      <div style={{ fontSize: 10, fontWeight: 800, color: 'var(--text-muted)' }}>{label}</div>
+      <div style={{ marginTop: 3, fontSize: 12, fontWeight: 900, color: 'var(--text-primary)' }}>{value}</div>
+    </div>
+  )
+}
+
+function PhysicsAnalysisPanel({ analysis }: { analysis: PhysicsAnalysis }) {
+  return (
+    <div style={{
+      border: '1px solid var(--border-subtle)',
+      borderRadius: 8,
+      background: statusColor(analysis.physicsStatus),
+      padding: 10,
+      display: 'grid',
+      gap: 8,
+    }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 800, color: 'var(--text-muted)' }}>物理ステータス</div>
+          <div style={{ marginTop: 3, fontSize: 16, fontWeight: 900, color: 'var(--text-primary)' }}>{analysis.physicsStatus}</div>
+        </div>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'flex-start', justifyContent: 'flex-end' }}>
+          <span style={{ border: '1px solid var(--border-subtle)', borderRadius: 999, background: 'white', padding: '4px 8px', fontSize: 11, fontWeight: 800 }}>{analysis.momentumLabel}</span>
+          <span style={{ border: '1px solid var(--border-subtle)', borderRadius: 999, background: 'white', padding: '4px 8px', fontSize: 11, fontWeight: 800 }}>{analysis.distanceLabel}</span>
+          <span style={{ border: '1px solid var(--border-subtle)', borderRadius: 999, background: 'white', padding: '4px 8px', fontSize: 11, fontWeight: 800 }}>{analysis.pullbackVerdict}</span>
+        </div>
+      </div>
+      <p style={{ margin: 0, fontSize: 12, lineHeight: 1.65, fontWeight: 700, color: 'var(--text-secondary)' }}>{analysis.summary}</p>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(118px, 1fr))', gap: 6 }}>
+        <MiniMetric label="5SMA速度" value={fmtPct(analysis.metrics.sma5Velocity5)} />
+        <MiniMetric label="5SMA加速度" value={fmtPct(analysis.metrics.sma5Acceleration5)} />
+        <MiniMetric label="5-25距離" value={fmtPct(analysis.metrics.gap5To25Pct)} />
+        <MiniMetric label="距離変化" value={fmtPct(analysis.metrics.gap5To25Velocity5)} />
+      </div>
+      <div style={{ display: 'grid', gap: 4 }}>
+        {analysis.watchPoints.map((point) => (
+          <div key={point} style={{ fontSize: 11, lineHeight: 1.55, fontWeight: 700, color: 'var(--text-secondary)' }}>
+            {point}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 export function StockMlInsights({ ticker }: { ticker: string }) {
   const [data, setData] = useState<ApiResponse | null>(null)
+  const [caseStudies, setCaseStudies] = useState<CaseStudy[]>([])
+  const [casesLoading, setCasesLoading] = useState(false)
+  const [casesLoaded, setCasesLoaded] = useState(false)
 
   useEffect(() => {
     let cancelled = false
     const code = encodeURIComponent(ticker.replace(/\.T$/i, ''))
+    setCaseStudies([])
+    setCasesLoaded(false)
+    setCasesLoading(false)
     Promise.all([
       fetch(`/api/ml/current-similars?ticker=${code}&limit=6`, { cache: 'no-store' }).then((res) => res.json()),
       fetch(`/api/ml/prediction-history?ticker=${code}&limit=8`, { cache: 'no-store' }).then((res) => res.json()),
@@ -139,21 +204,37 @@ export function StockMlInsights({ ticker }: { ticker: string }) {
             asOfDate: similarJson.asOfDate ?? null,
             featureAsOfDate: similarJson.featureAsOfDate ?? similarJson.asOfDate ?? null,
             source: similarJson.source ?? null,
+            physicsAnalysis: similarJson.physicsAnalysis ?? null,
             similars: Array.isArray(similarJson.similars) ? similarJson.similars : [],
-            caseStudies: Array.isArray(similarJson.caseStudies) ? similarJson.caseStudies : [],
+            caseStudies: [],
             predictions: Array.isArray(historyJson.rows) ? historyJson.rows : [],
           })
         }
       })
       .catch(() => {
-        if (!cancelled) setData({ asOfDate: null, featureAsOfDate: null, source: null, similars: [], caseStudies: [], predictions: [] })
+        if (!cancelled) setData({ asOfDate: null, featureAsOfDate: null, source: null, physicsAnalysis: null, similars: [], caseStudies: [], predictions: [] })
       })
     return () => { cancelled = true }
   }, [ticker])
 
   const rows = data?.similars ?? []
-  const caseStudies = data?.caseStudies ?? []
   const predictions = data?.predictions ?? []
+  const loadCaseStudies = () => {
+    if (casesLoading || casesLoaded) return
+    setCasesLoading(true)
+    const code = encodeURIComponent(ticker.replace(/\.T$/i, ''))
+    fetch(`/api/ml/current-similars?ticker=${code}&limit=6&includeCases=1`, { cache: 'no-store' })
+      .then((res) => res.json())
+      .then((json) => {
+        setCaseStudies(Array.isArray(json.caseStudies) ? json.caseStudies : [])
+        setCasesLoaded(true)
+      })
+      .catch(() => {
+        setCaseStudies([])
+        setCasesLoaded(true)
+      })
+      .finally(() => setCasesLoading(false))
+  }
 
   return (
     <div className="card" style={{ padding: 12 }}>
@@ -168,6 +249,7 @@ export function StockMlInsights({ ticker }: { ticker: string }) {
         {!data && Array.from({ length: 3 }).map((_, index) => (
           <div key={index} style={{ minHeight: 56, border: '1px solid var(--border-subtle)', borderRadius: 8, background: 'var(--surface-muted)' }} />
         ))}
+        {data?.physicsAnalysis && <PhysicsAnalysisPanel analysis={data.physicsAnalysis} />}
         {data && rows.length === 0 && (
           <div style={{
             border: '1px solid var(--border-subtle)',
@@ -214,6 +296,33 @@ export function StockMlInsights({ ticker }: { ticker: string }) {
             </div>
           )
         })}
+        {data && (
+          <div style={{ marginTop: 4, borderTop: '1px solid var(--border-subtle)', paddingTop: 10 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text-primary)' }}>
+                  過去ケーススタディ
+                </div>
+                <div style={{ marginTop: 2, fontSize: 10, fontWeight: 700, color: 'var(--text-muted)' }}>
+                  チャート付きの重い分析は必要な時だけ読み込みます
+                </div>
+              </div>
+              {!casesLoaded && (
+                <button
+                  type="button"
+                  onClick={loadCaseStudies}
+                  disabled={casesLoading}
+                  className="rounded-full border border-[var(--color-border-soft)] bg-white px-3 py-1.5 text-[11px] font-bold text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-subtle)] disabled:opacity-60"
+                >
+                  {casesLoading ? '読み込み中...' : 'ケースを表示'}
+                </button>
+              )}
+              {casesLoaded && caseStudies.length === 0 && (
+                <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)' }}>類似度90%以上の過去ケースはありません</span>
+              )}
+            </div>
+          </div>
+        )}
         {caseStudies.length > 0 && (
           <div style={{ marginTop: 4, borderTop: '1px solid var(--border-subtle)', paddingTop: 10 }}>
             <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
@@ -241,7 +350,7 @@ export function StockMlInsights({ ticker }: { ticker: string }) {
                         {study.ticker} {study.name ?? ''}
                       </Link>
                       <div style={{ marginTop: 3, fontSize: 11, fontWeight: 800, color: 'var(--text-muted)' }}>
-                        {study.caseDate} / {study.pattern} / 類似度 {Math.round(study.similarityScore * 100)}%
+                        {study.caseDate} / {study.pattern} / {study.physicsStatus ?? '物理判定なし'} / 類似度 {Math.round(study.similarityScore * 100)}%
                       </div>
                     </div>
                     <div style={{ display: 'grid', gap: 3, justifyItems: 'end', fontSize: 10, fontWeight: 800, color: 'var(--text-muted)' }}>
@@ -252,6 +361,11 @@ export function StockMlInsights({ ticker }: { ticker: string }) {
                   <div style={{ marginTop: 8, display: 'grid', gap: 6 }}>
                     <p style={{ margin: 0, fontSize: 11, lineHeight: 1.6, color: 'var(--text-secondary)' }}>{study.summary}</p>
                     <p style={{ margin: 0, fontSize: 11, lineHeight: 1.6, color: 'var(--text-secondary)' }}>{study.maComment}</p>
+                    {study.pullbackVerdict && (
+                      <p style={{ margin: 0, fontSize: 11, lineHeight: 1.6, color: 'var(--text-secondary)', fontWeight: 800 }}>
+                        押し目判定: {study.pullbackVerdict}
+                      </p>
+                    )}
                     <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', fontSize: 10, fontWeight: 800 }}>
                       <span style={{ border: '1px solid var(--border-subtle)', borderRadius: 999, padding: '3px 7px', background: 'white' }}>1週 {fmtPct(study.returns.week1)}</span>
                       <span style={{ border: '1px solid var(--border-subtle)', borderRadius: 999, padding: '3px 7px', background: 'white' }}>2週 {fmtPct(study.returns.week2)}</span>

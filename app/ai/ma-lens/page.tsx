@@ -20,6 +20,13 @@ import {
   type PhysicsFeatureProfile,
 } from '@/lib/backtest/ml-physics'
 import { MIN_DISPLAY_SIMILARITY_SCORE } from '@/lib/ml/similarity-threshold'
+import {
+  analyzePhysicsProfile,
+  physicsStatusTone,
+  type PhysicsAnalysis,
+  type PhysicsStatus as PhysicsStatusLabel,
+  type PullbackVerdict,
+} from '@/lib/ml/physics-analysis'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -110,13 +117,27 @@ type ParsedPhysicsCandidate = PhysicsCandidateRow & {
   profile: PhysicsFeatureProfile | null
   reason: Partial<PhysicsCandidateReason>
   explanation: Partial<PhysicsCandidateExplanation>
+  analysis: PhysicsAnalysis
 }
 
-type PhysicsStatus = {
+type PhysicsDataStatus = {
   latestDate: string | null
   rowsLatest: number
   candidateDate: string | null
   candidateRowsLatest: number
+}
+
+type PhysicsFeatureRow = {
+  ticker: string
+  date: string
+  feature_json: string
+  name: string | null
+  sector_large: string | null
+}
+
+type ParsedPhysicsFlowRow = PhysicsFeatureRow & {
+  profile: PhysicsFeatureProfile | null
+  analysis: PhysicsAnalysis
 }
 
 type SimilarPayload = {
@@ -555,6 +576,82 @@ function Pill({ children, tone = 'neutral' }: { children: React.ReactNode; tone?
   return <span className={`inline-flex items-center rounded-[3px] border px-2 py-1 text-[11px] font-bold ${cls}`}>{children}</span>
 }
 
+function physicsBadgeClass(status: PhysicsStatusLabel | PullbackVerdict | null | undefined): string {
+  if (!status) return 'border-slate-200 bg-slate-50 text-slate-600'
+  const tone = physicsStatusTone(status as PhysicsStatusLabel)
+  if (status === '上昇加速' || status === '上昇継続' || status === '押し目形成' || status === '反発準備' || status === '本物の押し目に近い') {
+    return 'border-red-200 bg-red-50 text-red-700'
+  }
+  if (status === '下落加速' || status === '失速警戒' || status === '下落途中の一時反発' || status === '反発は弱い') {
+    return 'border-blue-200 bg-blue-50 text-blue-700'
+  }
+  if (status === '過熱注意' || tone === 'amber') return 'border-amber-200 bg-amber-50 text-amber-700'
+  return 'border-slate-200 bg-slate-50 text-slate-600'
+}
+
+function PhysicsBadge({ children, status }: { children: React.ReactNode; status: PhysicsStatusLabel | PullbackVerdict | null | undefined }) {
+  return (
+    <span className={`inline-flex items-center rounded-[3px] border px-2 py-1 text-[11px] font-bold ${physicsBadgeClass(status)}`}>
+      {children}
+    </span>
+  )
+}
+
+function PhysicsMiniMetric({ label, value }: { label: string; value: number | null | undefined }) {
+  const cls = !finite(value)
+    ? 'text-[var(--color-text-tertiary)]'
+    : value > 0
+      ? 'text-red-700'
+      : value < 0
+        ? 'text-blue-700'
+        : 'text-[var(--color-text-secondary)]'
+  return (
+    <div className="rounded-[4px] border border-[var(--color-border-default)] bg-white px-2.5 py-2">
+      <div className="text-[10px] font-bold text-[var(--color-text-tertiary)]">{label}</div>
+      <div className={`mt-1 text-[13px] font-bold tabular-nums ${cls}`}>{fmtPct(value)}</div>
+    </div>
+  )
+}
+
+function physicsStrength(row: ParsedPhysicsFlowRow): number {
+  const m = row.analysis.metrics
+  return (
+    slopeValue(m.sma5Velocity5) * 0.34 +
+    slopeValue(m.sma25Velocity5) * 0.24 +
+    slopeValue(m.sma5Acceleration5) * 0.22 +
+    slopeValue(m.gap5To25Velocity5) * 0.14 +
+    slopeValue(m.gap25To75Velocity5) * 0.06
+  )
+}
+
+function PhysicsFlowMiniCard({ row }: { row: ParsedPhysicsFlowRow }) {
+  const m = row.analysis.metrics
+  return (
+    <div className="rounded-[4px] border border-[var(--color-border-default)] bg-white p-3 shadow-sm">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <PhysicsBadge status={row.analysis.physicsStatus}>{row.analysis.physicsStatus}</PhysicsBadge>
+            <PhysicsBadge status={row.analysis.pullbackVerdict}>{row.analysis.pullbackVerdict}</PhysicsBadge>
+          </div>
+          <Link href={`/stock/${row.ticker}`} prefetch={false} className="mt-2 inline-flex text-[15px] font-bold text-[var(--color-brand-900)] hover:text-[var(--color-market-red)]">
+            {row.ticker} {row.name ?? ''}
+          </Link>
+          <div className="mt-1 text-[11px] font-semibold text-[var(--color-text-tertiary)]">{row.sector_large ?? '業種未設定'} / {fmtDate(row.date)}</div>
+        </div>
+        <StageCode code={row.profile?.stageCode} />
+      </div>
+      <p className="mt-3 text-[12px] font-semibold leading-relaxed text-[var(--color-text-secondary)]">{row.analysis.summary}</p>
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        <PhysicsMiniMetric label="5SMA速度" value={m.sma5Velocity5} />
+        <PhysicsMiniMetric label="5SMA加速度" value={m.sma5Acceleration5} />
+        <PhysicsMiniMetric label="5-25距離" value={m.gap5To25Pct} />
+        <PhysicsMiniMetric label="距離変化" value={m.gap5To25Velocity5} />
+      </div>
+    </div>
+  )
+}
+
 async function latestColumnDate(table: string, column: string): Promise<string | null> {
   const row = await execGet<{ date: string | null }>(
     `SELECT ${column} AS date FROM ${table} WHERE ${column} IS NOT NULL ORDER BY ${column} DESC LIMIT 1`,
@@ -631,7 +728,7 @@ async function loadCandidatePool(): Promise<ParsedCandidate[]> {
            c.candidate_score, c.model_name, c.feature_json, c.reason_json, c.explanation_json
     FROM serving_ml_candidates c
     INNER JOIN latest l ON l.date = c.as_of_date
-    WHERE c.rank <= 80
+    WHERE c.rank <= 8
     ORDER BY c.ticker ASC, CASE c.direction WHEN 'up' THEN 0 ELSE 1 END
     `,
   )
@@ -683,8 +780,11 @@ async function loadModels(): Promise<ModelRow[]> {
   )
 }
 
-async function loadPhysicsStatus(): Promise<PhysicsStatus> {
-  const latestDate = await latestColumnDate('ml_feature_vectors_v2', 'date')
+async function loadPhysicsStatus(): Promise<PhysicsDataStatus> {
+  const latestDate = (await execGet<{ date: string | null }>(
+    `SELECT MAX(date) AS date FROM ml_feature_vectors_v2 WHERE feature_set = ?`,
+    [ML_PHYSICS_FEATURE_SET],
+  ))?.date ?? null
   const candidateDate = await latestColumnDate('serving_ml_physics_candidates', 'as_of_date')
   const [rowsLatest, candidateRowsLatest] = await Promise.all([
     latestDate
@@ -711,12 +811,49 @@ async function loadPhysicsCandidates(horizonDays = 10): Promise<ParsedPhysicsCan
     `,
     [horizonDays],
   )
-  return rows.map((row) => ({
-    ...row,
-    profile: parseJson<PhysicsFeatureProfile | null>(row.feature_json, null),
-    reason: parseJson<Partial<PhysicsCandidateReason>>(row.reason_json, {}),
-    explanation: parseJson<Partial<PhysicsCandidateExplanation>>(row.explanation_json, {}),
-  }))
+  return rows.map((row) => {
+    const profile = parseJson<PhysicsFeatureProfile | null>(row.feature_json, null)
+    return {
+      ...row,
+      profile,
+      reason: parseJson<Partial<PhysicsCandidateReason>>(row.reason_json, {}),
+      explanation: parseJson<Partial<PhysicsCandidateExplanation>>(row.explanation_json, {}),
+      analysis: analyzePhysicsProfile(profile),
+    }
+  })
+}
+
+async function loadPhysicsFlowRows(): Promise<ParsedPhysicsFlowRow[]> {
+  const rows = await execAll<PhysicsFeatureRow>(
+    `
+    WITH latest AS (
+      SELECT date
+      FROM ml_feature_vectors_v2
+      WHERE feature_set = ?
+        AND date IS NOT NULL
+      ORDER BY date DESC
+      LIMIT 1
+    )
+    SELECT f.ticker, f.date, f.feature_json,
+           COALESCE(u.name, sm.name) AS name,
+           COALESCE(u.sector17_name, sm.sector_large) AS sector_large
+    FROM ml_feature_vectors_v2 f
+    INNER JOIN latest l ON l.date = f.date
+    LEFT JOIN ticker_universe u ON u.ticker = f.ticker
+    LEFT JOIN sector_master sm ON sm.ticker = f.ticker
+    WHERE f.feature_set = ?
+      AND f.feature_json IS NOT NULL
+    `,
+    [ML_PHYSICS_FEATURE_SET, ML_PHYSICS_FEATURE_SET],
+  )
+  return rows.map((row) => {
+    const profile = parseJson<PhysicsFeatureProfile | null>(row.feature_json, null)
+    return {
+      ...row,
+      profile,
+      analysis: analyzePhysicsProfile(profile),
+    }
+  })
 }
 
 async function loadPullbackLens(models: ModelRow[]): Promise<PullbackLensRow[]> {
@@ -1472,6 +1609,8 @@ function PhysicsCandidateCard({ candidate }: { candidate: ParsedPhysicsCandidate
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <StageCode code={profile?.stageCode} />
         <Pill>{profile?.maOrder ?? 'MA並び未生成'}</Pill>
+        <PhysicsBadge status={candidate.analysis.physicsStatus}>{candidate.analysis.physicsStatus}</PhysicsBadge>
+        <PhysicsBadge status={candidate.analysis.pullbackVerdict}>{candidate.analysis.pullbackVerdict}</PhysicsBadge>
       </div>
 
       <div className="mt-3 grid gap-2 sm:grid-cols-3">
@@ -1499,6 +1638,10 @@ function PhysicsCandidateCard({ candidate }: { candidate: ParsedPhysicsCandidate
       {candidate.explanation.summary && (
         <p className="mt-3 text-[12px] font-semibold leading-relaxed text-[var(--color-text-secondary)]">{candidate.explanation.summary}</p>
       )}
+      <div className="mt-3 rounded-[4px] border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] p-3">
+        <div className="text-[12px] font-bold text-[var(--color-brand-900)]">物理ステータスの読み</div>
+        <p className="mt-1 text-[12px] font-semibold leading-relaxed text-[var(--color-text-secondary)]">{candidate.analysis.summary}</p>
+      </div>
 
       <div className="mt-3 grid gap-1.5">
         {(['velocity', 'acceleration', 'distance', 'pricePosition', 'regime', 'context', 'timing', 'risk'] as const).map((key) => (
@@ -1513,7 +1656,7 @@ function PhysicsCandidateCard({ candidate }: { candidate: ParsedPhysicsCandidate
   )
 }
 
-function PhysicsLensPanel({ status, rows }: { status: PhysicsStatus; rows: ParsedPhysicsCandidate[] }) {
+function PhysicsLensPanel({ status, rows }: { status: PhysicsDataStatus; rows: ParsedPhysicsCandidate[] }) {
   const groups: Array<{ direction: PhysicsDirection; title: string; body: string }> = [
     { direction: 'up', title: '短期上昇候補', body: 'SMA速度・加速度・距離拡大が上方向に揃いやすい形です。' },
     { direction: 'down', title: '短期下落候補', body: 'SMA下向き加速、戻り失敗、距離の下方向拡大を重視します。' },
@@ -1548,6 +1691,233 @@ function PhysicsLensPanel({ status, rows }: { status: PhysicsStatus; rows: Parse
         </div>
       )}
     </Card>
+  )
+}
+
+const PHYSICS_STATUS_ORDER: PhysicsStatusLabel[] = [
+  '上昇加速',
+  '上昇継続',
+  '押し目形成',
+  '反発準備',
+  '過熱注意',
+  '失速警戒',
+  '下落加速',
+  '見送り',
+  '算出待ち',
+]
+
+function isPositivePhysicsStatus(status: PhysicsStatusLabel): boolean {
+  return status === '上昇加速' || status === '上昇継続' || status === '押し目形成' || status === '反発準備'
+}
+
+function isRiskPhysicsStatus(status: PhysicsStatusLabel): boolean {
+  return status === '過熱注意' || status === '失速警戒' || status === '下落加速'
+}
+
+function topRowsForStatus(rows: ParsedPhysicsFlowRow[], status: PhysicsStatusLabel, limit = 3): ParsedPhysicsFlowRow[] {
+  return rows
+    .filter((row) => row.analysis.physicsStatus === status)
+    .sort((a, b) => {
+      const aScore = physicsStrength(a)
+      const bScore = physicsStrength(b)
+      if (isPositivePhysicsStatus(status)) return bScore - aScore || a.ticker.localeCompare(b.ticker)
+      if (isRiskPhysicsStatus(status)) return aScore - bScore || a.ticker.localeCompare(b.ticker)
+      return Math.abs(bScore) - Math.abs(aScore) || a.ticker.localeCompare(b.ticker)
+    })
+    .slice(0, limit)
+}
+
+function PhysicsFlowMapPanel({ rows }: { rows: ParsedPhysicsFlowRow[] }) {
+  const total = rows.length
+  return (
+    <Card size="lg">
+      <CardHeader
+        title="MA Flow Map"
+        hint="最新日の全銘柄を、SMAの速度・加速度・距離変化・6桁ステージから物理状態へ分類します。"
+      />
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+        {PHYSICS_STATUS_ORDER.map((status) => {
+          const count = rows.filter((row) => row.analysis.physicsStatus === status).length
+          const pct = total > 0 ? count / total : 0
+          const examples = topRowsForStatus(rows, status)
+          return (
+            <div key={status} className={`rounded-[4px] border p-3 ${physicsBadgeClass(status)}`}>
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="text-[14px] font-bold">{status}</div>
+                  <div className="mt-1 text-[11px] font-semibold opacity-80">
+                    {fmtCount(count)}件 / {fmtRatio(pct)}
+                  </div>
+                </div>
+                <div className="text-right text-[10px] font-bold opacity-70">物理状態</div>
+              </div>
+              <div className="mt-3 grid gap-1.5">
+                {examples.length > 0 ? examples.map((row) => (
+                  <Link
+                    key={`${status}-${row.ticker}`}
+                    href={`/stock/${row.ticker}`}
+                    prefetch={false}
+                    className="flex items-center justify-between gap-2 rounded-[3px] bg-white/70 px-2 py-1 text-[11px] font-bold hover:bg-white"
+                  >
+                    <span className="truncate">{row.ticker} {row.name ?? ''}</span>
+                    <span className="tabular-nums">{fmtPct(row.analysis.metrics.sma5Velocity5)}</span>
+                  </Link>
+                )) : (
+                  <div className="rounded-[3px] bg-white/70 px-2 py-1 text-[11px] font-bold opacity-70">該当なし</div>
+                )}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </Card>
+  )
+}
+
+function PhysicsPullbackQualityPanel({ rows }: { rows: ParsedPhysicsFlowRow[] }) {
+  const healthy = rows
+    .filter((row) => row.analysis.pullbackVerdict === '本物の押し目に近い')
+    .sort((a, b) => physicsStrength(b) - physicsStrength(a))
+    .slice(0, 8)
+  const falsePullback = rows
+    .filter((row) => row.analysis.pullbackVerdict === '下落途中の一時反発' || row.analysis.pullbackVerdict === '反発は弱い')
+    .sort((a, b) => physicsStrength(a) - physicsStrength(b))
+    .slice(0, 8)
+  return (
+    <Card size="lg">
+      <CardHeader
+        title="押し目の本物/偽物判定"
+        hint="押し目に見える形を、25日SMAの向き、5日SMAの再加速、MA距離の縮小/再拡大から分けます。"
+      />
+      <div className="grid gap-4 xl:grid-cols-2">
+        <div>
+          <div className="mb-2 text-[14px] font-bold text-red-700">本物の押し目に近い</div>
+          <div className="grid gap-2">
+            {healthy.length > 0 ? healthy.map((row) => <PhysicsFlowMiniCard key={`healthy-${row.ticker}`} row={row} />) : (
+              <div className="text-[12px] font-semibold text-[var(--color-text-tertiary)]">条件に合う銘柄はありません。</div>
+            )}
+          </div>
+        </div>
+        <div>
+          <div className="mb-2 text-[14px] font-bold text-blue-700">押し目風の下落注意</div>
+          <div className="grid gap-2">
+            {falsePullback.length > 0 ? falsePullback.map((row) => <PhysicsFlowMiniCard key={`false-${row.ticker}`} row={row} />) : (
+              <div className="text-[12px] font-semibold text-[var(--color-text-tertiary)]">条件に合う銘柄はありません。</div>
+            )}
+          </div>
+        </div>
+      </div>
+    </Card>
+  )
+}
+
+function PhysicsAccelerationPanel({ rows }: { rows: ParsedPhysicsFlowRow[] }) {
+  const up = rows
+    .filter((row) => row.analysis.physicsStatus === '上昇加速' || row.analysis.physicsStatus === '反発準備')
+    .sort((a, b) => physicsStrength(b) - physicsStrength(a))
+    .slice(0, 10)
+  const down = rows
+    .filter((row) => row.analysis.physicsStatus === '下落加速' || row.analysis.physicsStatus === '失速警戒')
+    .sort((a, b) => physicsStrength(a) - physicsStrength(b))
+    .slice(0, 10)
+  return (
+    <Card size="lg">
+      <CardHeader
+        title="加速度・失速ランキング"
+        hint="短期SMAの急な角度変化とMA距離の拡大/縮小から、流れが強まった銘柄と弱まった銘柄を並べます。"
+      />
+      <div className="grid gap-4 xl:grid-cols-2">
+        <div className="space-y-2">
+          <div className="text-[14px] font-bold text-red-700">上向き加速</div>
+          {up.map((row) => <PhysicsFlowMiniCard key={`accel-up-${row.ticker}`} row={row} />)}
+        </div>
+        <div className="space-y-2">
+          <div className="text-[14px] font-bold text-blue-700">失速・下落加速</div>
+          {down.map((row) => <PhysicsFlowMiniCard key={`accel-down-${row.ticker}`} row={row} />)}
+        </div>
+      </div>
+    </Card>
+  )
+}
+
+function PhysicsDistanceRiskPanel({ rows }: { rows: ParsedPhysicsFlowRow[] }) {
+  const overheat = rows
+    .filter((row) => row.analysis.physicsStatus === '過熱注意')
+    .sort((a, b) => Math.abs(slopeValue(b.analysis.metrics.gap5To25Pct)) - Math.abs(slopeValue(a.analysis.metrics.gap5To25Pct)))
+    .slice(0, 6)
+  const wait = rows
+    .filter((row) => row.analysis.physicsStatus === '見送り' || row.analysis.physicsStatus === '算出待ち')
+    .sort((a, b) => Math.abs(physicsStrength(a)) - Math.abs(physicsStrength(b)))
+    .slice(0, 6)
+  return (
+    <section className="grid gap-5 xl:grid-cols-2">
+      <Card size="lg">
+        <CardHeader
+          title="過熱・反落リスク"
+          hint="5日SMAと25日SMAの距離が広がりすぎ、距離変化が急な銘柄を先に確認します。"
+        />
+        <div className="grid gap-2">
+          {overheat.length > 0 ? overheat.map((row) => <PhysicsFlowMiniCard key={`overheat-${row.ticker}`} row={row} />) : (
+            <div className="text-[12px] font-semibold text-[var(--color-text-tertiary)]">過熱注意に該当する銘柄はありません。</div>
+          )}
+        </div>
+      </Card>
+      <Card size="lg">
+        <CardHeader
+          title="見送り・条件待ち"
+          hint="方向感が弱い、またはSMA距離が収束中で、無理に候補化しない方がよい銘柄です。"
+        />
+        <div className="grid gap-2">
+          {wait.length > 0 ? wait.map((row) => <PhysicsFlowMiniCard key={`wait-${row.ticker}`} row={row} />) : (
+            <div className="text-[12px] font-semibold text-[var(--color-text-tertiary)]">見送り分類の銘柄はありません。</div>
+          )}
+        </div>
+      </Card>
+    </section>
+  )
+}
+
+function PhysicsLearningGuidePanel() {
+  const items = [
+    ['速度', 'SMAそのものがどちらへ動いているかを見ます。5日だけでなく25日も同じ方向なら、短期の動きが中期へ伝わり始めています。'],
+    ['加速度', 'SMAの角度が急に変わったかを見ます。短期SMAの加速度が先に変わり、次に25日SMAへ波及するかを確認します。'],
+    ['距離', '5-25、25-75、75-200の距離で、上方向の拡散、収束、過熱、下方向の拡散を分けます。'],
+    ['6桁ステージ', '日足A/B・週足A/B・月足A/Bを1セットにし、短期だけの反発か、上位足も支える形かを確認します。'],
+    ['地合い', '同じ形でも市場全体・業種の追い風があるかで結果が変わるため、物理特徴量に補助軸として含めます。'],
+    ['失敗パターン', '押し目に見えても25日SMAが下向き、5-25距離が下方向に広がる形は下落途中の反発として警戒します。'],
+    ['次の行動', '候補は売買指示ではなく、5日SMA維持、25日SMAの向き、距離の再拡大/急縮小を確認するための優先順位です。'],
+  ] as const
+  return (
+    <Card size="lg">
+      <CardHeader
+        title="AIが学習しているチャート物理"
+        hint="予測結果だけではなく、なぜその形を候補・警戒・見送りに分けたのかを7つの軸で確認します。"
+      />
+      <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-7">
+        {items.map(([title, body], index) => (
+          <div key={title} className="rounded-[4px] border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] p-3">
+            <div className="text-[10px] font-bold text-[var(--color-text-tertiary)]">#{index + 1}</div>
+            <div className="mt-1 text-[13px] font-bold text-[var(--color-brand-900)]">{title}</div>
+            <p className="mt-2 text-[11px] font-semibold leading-relaxed text-[var(--color-text-secondary)]">{body}</p>
+          </div>
+        ))}
+      </div>
+    </Card>
+  )
+}
+
+async function PhysicsFlowSection() {
+  const rows = await loadPhysicsFlowRows()
+  return (
+    <>
+      <PhysicsLearningGuidePanel />
+      <PhysicsFlowMapPanel rows={rows} />
+      <section className="grid gap-5 2xl:grid-cols-2">
+        <PhysicsPullbackQualityPanel rows={rows} />
+        <PhysicsAccelerationPanel rows={rows} />
+      </section>
+      <PhysicsDistanceRiskPanel rows={rows} />
+    </>
   )
 }
 
@@ -1792,16 +2162,22 @@ async function ModelKnowledgeSection() {
   )
 }
 
-export default async function MaLensPage() {
+export default async function MaLensPage({
+  searchParams,
+}: {
+  searchParams?: Promise<Record<string, string | string[] | undefined>>
+}) {
+  const sp = searchParams ? await searchParams : {}
+  const detailMode = (Array.isArray(sp.deep) ? sp.deep[0] : sp.deep) === '1'
   const [status, candidates, physicsStatus, physicsCandidates] = await Promise.all([
     loadStatus(),
-    loadCandidates(),
+    detailMode ? loadCandidates() : Promise.resolve([]),
     loadPhysicsStatus(),
     loadPhysicsCandidates(10),
   ])
 
-  const upCandidates = candidates.filter((candidate) => candidate.direction === 'up')
-  const downCandidates = candidates.filter((candidate) => candidate.direction === 'down')
+  const upCandidates = candidates.filter((candidate) => candidate.direction === 'up').slice(0, 8)
+  const downCandidates = candidates.filter((candidate) => candidate.direction === 'down').slice(0, 8)
 
   return (
     <div className="space-y-5">
@@ -1811,9 +2187,10 @@ export default async function MaLensPage() {
         badge={`ML基準日 ${fmtDate(status.latestCandidateDate ?? status.latestFeatureDate)}`}
       />
 
-      <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+      <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
         <StatTile label="特徴量期間" value={`${fmtDate(status.firstFeatureDate)}〜${fmtDate(status.latestFeatureDate)}`} sub="2008年以降のML入力" />
         <StatTile label="最新特徴量" value={fmtCount(status.featureRowsLatest)} sub="最新日に生成済みの銘柄数" />
+        <StatTile label="物理特徴量" value={fmtCount(physicsStatus.rowsLatest)} sub={`ma_physics_v2 ${fmtDate(physicsStatus.latestDate)}`} />
         <StatTile label="教師ラベル" value={fmtDate(status.latestLabelDate)} sub={`${fmtCount(status.labelRowsLatest)}件 / 40営業日`} />
         <StatTile label="最新候補" value={fmtCount(status.candidateRowsLatest)} sub="上昇候補・下落警戒" />
         <StatTile label="モデル世代" value={fmtCount(status.modelCount)} sub="保存済みモデル数" />
@@ -1827,34 +2204,69 @@ export default async function MaLensPage() {
         <FeatureInputGrid />
       </Card>
 
-      <Suspense fallback={<LazySectionFallback title="押し目 Lens" />}>
-        <PullbackLensSection />
-      </Suspense>
+      {!detailMode && (
+        <Card size="lg">
+          <CardHeader
+            title="詳細分析を開く"
+            hint="初期表示を軽くするため、全銘柄フロー・押し目Lens・期待値詳細・モデル知識は必要な時に読み込みます。"
+          />
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="max-w-[760px] text-[12px] font-semibold leading-relaxed text-[var(--color-text-secondary)]">
+              この画面の基本情報と最新候補はすぐ確認できます。全銘柄を横断する重い分析を確認する場合だけ、詳細モードに切り替えてください。
+            </p>
+            <Link
+              href="/ai/ma-lens?deep=1"
+              prefetch={false}
+              className="rounded-full border border-[var(--color-border-soft)] bg-white px-4 py-2 text-[12px] font-bold text-[var(--color-brand-900)] hover:bg-[var(--color-surface-subtle)]"
+            >
+              詳細分析を表示
+            </Link>
+          </div>
+        </Card>
+      )}
+
+      {detailMode && (
+        <Suspense fallback={<LazySectionFallback title="チャート物理インテリジェンス" />}>
+          <PhysicsFlowSection />
+        </Suspense>
+      )}
+
+      {detailMode && (
+        <Suspense fallback={<LazySectionFallback title="押し目 Lens" />}>
+          <PullbackLensSection />
+        </Suspense>
+      )}
 
       <PhysicsLensPanel status={physicsStatus} rows={physicsCandidates} />
 
-      <Suspense fallback={<LazySectionFallback title="期待値・エントリー/出口条件" />}>
-        <DecisionPanelsSection />
-      </Suspense>
+      {detailMode && (
+        <Suspense fallback={<LazySectionFallback title="期待値・エントリー/出口条件" />}>
+          <DecisionPanelsSection />
+        </Suspense>
+      )}
 
-      <section className="grid gap-5 xl:grid-cols-2">
-        <div className="space-y-3">
-          <CardHeader title="現在の上昇候補" hint="最新データ上で、MA形状と6桁ステージが上向き候補として抽出された銘柄です。" />
-          <div className="grid gap-3">
-            {upCandidates.map((candidate) => <CandidateCard key={`${candidate.direction}-${candidate.ticker}`} candidate={candidate} />)}
+      {detailMode && (
+        <section className="grid gap-5 xl:grid-cols-2">
+          <div className="space-y-3">
+            <CardHeader title="現在の上昇候補" hint="最新データ上で、MA形状と6桁ステージが上向き候補として抽出された銘柄です。" />
+            <div className="grid gap-3">
+              {upCandidates.map((candidate) => <CandidateCard key={`${candidate.direction}-${candidate.ticker}`} candidate={candidate} />)}
+            </div>
           </div>
-        </div>
-        <div className="space-y-3">
-          <CardHeader title="現在の下落警戒" hint="短期線の崩れ、MA距離の縮小、株価位置の弱さなどを含めて抽出された銘柄です。" />
-          <div className="grid gap-3">
-            {downCandidates.map((candidate) => <CandidateCard key={`${candidate.direction}-${candidate.ticker}`} candidate={candidate} />)}
+          <div className="space-y-3">
+            <CardHeader title="現在の下落警戒" hint="短期線の崩れ、MA距離の縮小、株価位置の弱さなどを含めて抽出された銘柄です。" />
+            <div className="grid gap-3">
+              {downCandidates.map((candidate) => <CandidateCard key={`${candidate.direction}-${candidate.ticker}`} candidate={candidate} />)}
+            </div>
           </div>
-        </div>
-      </section>
+        </section>
+      )}
 
-      <Suspense fallback={<LazySectionFallback title="モデル知識・類似形状・精度モニタリング" />}>
-        <ModelKnowledgeSection />
-      </Suspense>
+      {detailMode && (
+        <Suspense fallback={<LazySectionFallback title="モデル知識・類似形状・精度モニタリング" />}>
+          <ModelKnowledgeSection />
+        </Suspense>
+      )}
     </div>
   )
 }

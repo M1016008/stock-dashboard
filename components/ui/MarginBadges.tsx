@@ -3,6 +3,7 @@ type MarginBadgesProps = {
   creditRatio?: number | null
   shortRatio?: number | null
   compact?: boolean
+  emptyLabel?: string
 }
 
 function fmtRatio(value: number | null | undefined, suffix = 'x') {
@@ -10,12 +11,16 @@ function fmtRatio(value: number | null | undefined, suffix = 'x') {
   return `${value.toFixed(1)}${suffix}`
 }
 
-export function MarginBadges({ marginType, creditRatio, shortRatio, compact = false }: MarginBadgesProps) {
+export function MarginBadges({ marginType, creditRatio, shortRatio, compact = false, emptyLabel = '未取得' }: MarginBadgesProps) {
   const type = marginType?.trim() || null
   const credit = fmtRatio(creditRatio)
   const short = shortRatio == null || !Number.isFinite(shortRatio) ? null : `${shortRatio.toFixed(1)}%`
   if (!type && !credit && !short) {
-    return <span className="text-[11px] font-semibold text-[var(--color-text-tertiary)]">---</span>
+    return (
+      <span className="rounded-full border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-2 py-0.5 text-[11px] font-bold leading-tight text-[var(--color-text-tertiary)] whitespace-nowrap">
+        {emptyLabel}
+      </span>
+    )
   }
   const typeTone = type === '貸借'
     ? 'border-[rgba(37,99,235,0.22)] bg-[var(--color-brand-50)] text-[var(--color-brand-800)]'
