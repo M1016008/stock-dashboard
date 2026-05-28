@@ -2060,7 +2060,7 @@ function ModelMonitoringPanel({ rows }: { rows: EvaluationRow[] }) {
 
 function SimilarPanel({ rows }: { rows: SimilarRow[] }) {
   if (rows.length === 0) {
-    return <div className="text-[12px] font-semibold text-[var(--color-text-tertiary)]">類似度90%以上のMA形状類似データはありません。</div>
+    return <div className="text-[12px] font-semibold text-[var(--color-text-tertiary)]">類似度80%以上のMA形状類似データはありません。</div>
   }
   return (
     <div className="grid gap-2 lg:grid-cols-2">

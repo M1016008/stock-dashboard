@@ -25,6 +25,7 @@ interface CandlestickChartProps {
   height?: number
   maLines?: number[]
   interval?: TvInterval
+  market?: 'JP' | 'US'
 }
 
 // 取得期間 (interval 別に必要 OHLCV 日数の目安)
@@ -47,6 +48,7 @@ export function CandlestickChart({
   height = 500,
   maLines = [5, 25, 75],
   interval = 'D',
+  market = 'JP',
 }: CandlestickChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
@@ -60,7 +62,8 @@ export function CandlestickChart({
     let cancelled = false
     setLoading(true)
     setError(null)
-    fetch(`/api/history/${encodeURIComponent(ticker)}?period=${PERIOD_BY_INTERVAL[interval]}`, { cache: 'no-store' })
+    const basePath = market === 'US' ? '/api/us/history' : '/api/history'
+    fetch(`${basePath}/${encodeURIComponent(ticker)}?period=${PERIOD_BY_INTERVAL[interval]}`, { cache: 'no-store' })
       .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
       .then((rows: OHLCV[]) => {
         if (cancelled) return
@@ -73,7 +76,7 @@ export function CandlestickChart({
         setLoading(false)
       })
     return () => { cancelled = true }
-  }, [ticker, interval])
+  }, [ticker, interval, market])
 
   // 日足 → 週足/月足に集約 + MA 計算用に整形
   const { candles, mas } = useMemo(() => {

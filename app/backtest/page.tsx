@@ -1130,7 +1130,7 @@ export default function BacktestPage() {
                     <strong>{Math.round(item.similarityScore * 100)}%</strong>
                   </div>
                 ))}
-                {currentSimilars.length === 0 && <p className="bt-empty">類似度90%以上の現在類似データはありません</p>}
+                {currentSimilars.length === 0 && <p className="bt-empty">類似度80%以上の現在類似データはありません</p>}
               </div>
             </section>
 

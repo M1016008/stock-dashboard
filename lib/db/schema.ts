@@ -225,6 +225,148 @@ export const ohlcvDaily = sqliteTable(
   }),
 )
 
+export const marketUniverse = sqliteTable(
+  'market_universe',
+  {
+    market:            text('market').notNull(),
+    ticker:            text('ticker').notNull(),
+    name:              text('name'),
+    active:            integer('active', { mode: 'boolean' }).notNull().default(true),
+    exchange:          text('exchange'),
+    currency:          text('currency'),
+    assetType:         text('asset_type'),
+    sector:            text('sector'),
+    industry:          text('industry'),
+    startDate:         text('start_date'),
+    endDate:           text('end_date'),
+    sharesOutstanding: integer('shares_outstanding'),
+    source:            text('source').notNull(),
+    sourcePayloadJson: text('source_payload_json').notNull().default('{}'),
+    updatedAt:         integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.market, t.ticker] }),
+    activeIdx: index('market_universe_market_active_idx').on(t.market, t.active, t.ticker),
+    nameIdx: index('market_universe_market_name_idx').on(t.market, t.name),
+  }),
+)
+
+export const marketClassifications = sqliteTable(
+  'market_classifications',
+  {
+    market:        text('market').notNull(),
+    ticker:        text('ticker').notNull(),
+    taxonomy:      text('taxonomy').notNull(),
+    effectiveFrom: text('effective_from').notNull().default('0000-01-01'),
+    effectiveTo:   text('effective_to'),
+    sectorCode:    text('sector_code'),
+    sectorName:    text('sector_name'),
+    industryCode:  text('industry_code'),
+    industryName:  text('industry_name'),
+    source:        text('source').notNull(),
+    confidence:    real('confidence').notNull().default(1),
+    rawJson:       text('raw_json').notNull().default('{}'),
+    updatedAt:     integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.market, t.ticker, t.taxonomy, t.effectiveFrom] }),
+    taxonomySectorIdx: index('market_classifications_taxonomy_sector_idx').on(t.market, t.taxonomy, t.sectorName, t.ticker),
+    taxonomyIndustryIdx: index('market_classifications_taxonomy_industry_idx').on(t.market, t.taxonomy, t.industryName, t.ticker),
+    tickerIdx: index('market_classifications_ticker_idx').on(t.market, t.ticker),
+  }),
+)
+
+export const marketOhlcvDaily = sqliteTable(
+  'market_ohlcv_daily',
+  {
+    market:      text('market').notNull(),
+    ticker:      text('ticker').notNull(),
+    date:        text('date').notNull(),
+    open:        real('open').notNull(),
+    high:        real('high').notNull(),
+    low:         real('low').notNull(),
+    close:       real('close').notNull(),
+    adjClose:    real('adj_close'),
+    volume:      integer('volume').notNull(),
+    divCash:     real('div_cash'),
+    splitFactor: real('split_factor'),
+    source:      text('source').notNull(),
+    importedAt:  integer('imported_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.market, t.ticker, t.date] }),
+    dateIdx: index('market_ohlcv_market_date_idx').on(t.market, t.date),
+    tickerDateIdx: index('market_ohlcv_market_ticker_date_idx').on(t.market, t.ticker, t.date),
+  }),
+)
+
+export const marketDailySnapshots = sqliteTable(
+  'market_daily_snapshots',
+  {
+    market:          text('market').notNull(),
+    ticker:          text('ticker').notNull(),
+    date:            text('date').notNull(),
+    ma_5:            real('ma_5'),
+    ma_25:           real('ma_25'),
+    ma_75:           real('ma_75'),
+    ma_150:          real('ma_150'),
+    ma_300:          real('ma_300'),
+    weekly_ma_5:     real('weekly_ma_5'),
+    weekly_ma_13:    real('weekly_ma_13'),
+    weekly_ma_25:    real('weekly_ma_25'),
+    weekly_ma_50:    real('weekly_ma_50'),
+    weekly_ma_100:   real('weekly_ma_100'),
+    monthly_ma_3:    real('monthly_ma_3'),
+    monthly_ma_5:    real('monthly_ma_5'),
+    monthly_ma_10:   real('monthly_ma_10'),
+    monthly_ma_20:   real('monthly_ma_20'),
+    monthly_ma_25:   real('monthly_ma_25'),
+    daily_a_stage:   integer('daily_a_stage'),
+    daily_b_stage:   integer('daily_b_stage'),
+    weekly_a_stage:  integer('weekly_a_stage'),
+    weekly_b_stage:  integer('weekly_b_stage'),
+    monthly_a_stage: integer('monthly_a_stage'),
+    monthly_b_stage: integer('monthly_b_stage'),
+    computedAt:      integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.market, t.ticker, t.date] }),
+    dateIdx: index('market_snapshots_market_date_idx').on(t.market, t.date),
+    stageIdx: index('market_snapshots_market_stage_idx').on(
+      t.market,
+      t.daily_a_stage,
+      t.daily_b_stage,
+      t.weekly_a_stage,
+      t.weekly_b_stage,
+      t.monthly_a_stage,
+      t.monthly_b_stage,
+      t.date,
+      t.ticker,
+    ),
+  }),
+)
+
+export const marketDataRuns = sqliteTable(
+  'market_data_runs',
+  {
+    id:            integer('id').primaryKey({ autoIncrement: true }),
+    market:        text('market').notNull(),
+    jobType:       text('job_type').notNull(),
+    status:        text('status').notNull(),
+    startedAt:     integer('started_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+    finishedAt:    integer('finished_at', { mode: 'timestamp' }),
+    totalTickers:  integer('total_tickers').notNull().default(0),
+    succeeded:     integer('succeeded').notNull().default(0),
+    failed:        integer('failed').notNull().default(0),
+    rowsInserted:  integer('rows_inserted').notNull().default(0),
+    errorSummary:  text('error_summary'),
+    payloadJson:   text('payload_json').notNull().default('{}'),
+  },
+  (t) => ({
+    latestIdx: index('market_data_runs_latest_idx').on(t.market, t.jobType, t.startedAt),
+  }),
+)
+
 export const jquantsDailyCoverage = sqliteTable('jquants_daily_coverage', {
   date:          text('date').primaryKey(),
   expectedRows:  integer('expected_rows').notNull(),

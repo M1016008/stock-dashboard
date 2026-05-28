@@ -45,6 +45,10 @@ next-env.d.ts
 /data/stockboard.db-journal
 /data/stockboard.db-shm
 /data/stockboard.db-wal
+/data/stockboard-us.db
+/data/stockboard-us.db-journal
+/data/stockboard-us.db-shm
+/data/stockboard-us.db-wal
 /data/update-latest.lock
 /data/snapshots/
 # 独自分類 Excel (Yoshio 個人の分析資産。各人ローカルに置く)

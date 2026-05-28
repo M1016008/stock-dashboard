@@ -10,6 +10,7 @@ import {
   CalendarDays,
   ChartCandlestick,
   FlaskConical,
+  Globe2,
   Hexagon,
   LayoutDashboard,
   Search,
@@ -27,6 +28,13 @@ const NAV_ITEMS = [
   { href: '/earnings', label: '決算', icon: CalendarDays },
   { href: '/screener', label: 'スクリーナー', icon: Search },
   { href: '/watchlist', label: 'ウォッチ', icon: Star },
+] as const
+
+const US_NAV_ITEMS = [
+  { href: '/us', label: 'US概要', icon: LayoutDashboard },
+  { href: '/us/screener', label: 'USスクリーナー', icon: Search },
+  { href: '/us/stock/AAPL', label: 'AAPL', icon: ChartCandlestick },
+  { href: '/ai/ma-lens', label: 'AI Lens', icon: Activity },
 ] as const
 
 interface ClockData {
@@ -91,6 +99,17 @@ function getTseStatus(): 'open' | 'closed' {
   return isWeekday && jstTotal >= 9 * 60 && jstTotal < 15 * 60 + 30 ? 'open' : 'closed'
 }
 
+function getNyseStatus(): 'open' | 'closed' {
+  const now = new Date()
+  const ny = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }))
+  const hour = ny.getHours()
+  const min = ny.getMinutes()
+  const day = ny.getDay()
+  const total = hour * 60 + min
+  const isWeekday = day >= 1 && day <= 5
+  return isWeekday && total >= 9 * 60 + 30 && total < 16 * 60 ? 'open' : 'closed'
+}
+
 function ClockChip({ label, time }: { label: string; time: string }) {
   return (
     <span className="inline-flex h-6 items-center gap-1.5 rounded-[3px] border border-[var(--color-border-default)] bg-white px-2 tabular-nums">
@@ -121,17 +140,21 @@ function NavIcon({ icon: Icon, active }: { icon: LucideIcon; active: boolean }) 
 
 export function Header() {
   const pathname = usePathname()
-  const [tseStatus, setTseStatus] = useState<'open' | 'closed'>('closed')
+  const isUsArea = pathname.startsWith('/us')
+  const navItems = isUsArea ? US_NAV_ITEMS : NAV_ITEMS
+  const [marketStatus, setMarketStatus] = useState<'open' | 'closed'>('closed')
   const clocks = useClocks()
 
   useEffect(() => {
-    setTseStatus(getTseStatus())
-    const t = setInterval(() => setTseStatus(getTseStatus()), 60000)
+    const getStatus = isUsArea ? getNyseStatus : getTseStatus
+    setMarketStatus(getStatus())
+    const t = setInterval(() => setMarketStatus(getStatus()), 60000)
     return () => clearInterval(t)
-  }, [])
+  }, [isUsArea])
 
   const isActive = (href: string) => {
     if (href === '/') return pathname === '/'
+    if (href === '/us') return pathname === '/us'
     return pathname.startsWith(href)
   }
 
@@ -139,29 +162,66 @@ export function Header() {
     <header className="sticky top-0 z-30 border-b border-[var(--color-border-strong)] bg-white shadow-[0_1px_3px_rgba(16,32,52,0.12)]">
       <div className="border-b border-[var(--color-border-default)] bg-[var(--color-surface-subtle)]">
         <div className="mx-auto flex min-h-10 w-full max-w-[1480px] items-center justify-between gap-3 px-5 sm:px-8 lg:px-10 xl:px-12">
-          <Link href="/" prefetch={false} className="flex shrink-0 items-center gap-2.5">
+          <Link href={isUsArea ? '/us' : '/'} prefetch={false} className="flex shrink-0 items-center gap-2.5">
             <div className="flex h-7 w-7 items-center justify-center rounded-[3px] bg-[var(--color-brand-800)] text-white shadow-sm">
               <BarChart3 size={16} strokeWidth={2.5} />
             </div>
             <div className="leading-tight">
               <div className="text-[16px] font-bold tracking-normal text-[var(--color-brand-900)]">StockBoard</div>
-              <div className="hidden text-[10px] font-bold text-[var(--color-text-tertiary)] sm:block">J-Quants Market Console</div>
+              <div className="hidden text-[10px] font-bold text-[var(--color-text-tertiary)] sm:block">
+                {isUsArea ? 'Tiingo US Market Console' : 'J-Quants Market Console'}
+              </div>
             </div>
           </Link>
+
+          <div className="hidden shrink-0 items-center gap-1 rounded-[4px] border border-[var(--color-border-default)] bg-white p-1 md:flex">
+            <Globe2 size={13} className="ml-1 text-[var(--color-text-tertiary)]" />
+            <Link
+              href="/"
+              prefetch={false}
+              className={`rounded-[3px] px-2 py-1 text-[11px] font-bold ${!isUsArea ? 'bg-[var(--color-brand-800)] text-white' : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-subtle)]'}`}
+            >
+              日本株
+            </Link>
+            <Link
+              href="/us"
+              prefetch={false}
+              className={`rounded-[3px] px-2 py-1 text-[11px] font-bold ${isUsArea ? 'bg-[var(--color-brand-800)] text-white' : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-subtle)]'}`}
+            >
+              米国株
+            </Link>
+          </div>
+
+          <div className="flex shrink-0 items-center gap-1 rounded-[4px] border border-[var(--color-border-default)] bg-white p-1 md:hidden">
+            <Link
+              href="/"
+              prefetch={false}
+              className={`rounded-[3px] px-2 py-1 text-[11px] font-bold ${!isUsArea ? 'bg-[var(--color-brand-800)] text-white' : 'text-[var(--color-text-secondary)]'}`}
+            >
+              JP
+            </Link>
+            <Link
+              href="/us"
+              prefetch={false}
+              className={`rounded-[3px] px-2 py-1 text-[11px] font-bold ${isUsArea ? 'bg-[var(--color-brand-800)] text-white' : 'text-[var(--color-text-secondary)]'}`}
+            >
+              US
+            </Link>
+          </div>
 
           <div className="hidden shrink-0 items-center gap-1.5 lg:flex">
             <span className="inline-flex h-6 items-center gap-1.5 rounded-[3px] border border-[var(--color-border-default)] bg-white px-2 text-[11px] font-bold text-[var(--color-text-secondary)]">
               <Activity size={12} />
-              東証
+              {isUsArea ? 'NYSE' : '東証'}
               <span
                 style={{
                   color:
-                    tseStatus === 'open'
+                    marketStatus === 'open'
                       ? 'var(--color-pattern-600)'
                       : 'var(--color-price-down)',
                 }}
               >
-                {tseStatus === 'open' ? '開場' : '閉場'}
+                {marketStatus === 'open' ? '開場' : '閉場'}
               </span>
             </span>
             <span
@@ -182,7 +242,7 @@ export function Header() {
       <div className="bg-[var(--color-brand-800)]">
         <div className="mx-auto flex min-h-12 w-full max-w-[1480px] items-center justify-between gap-4 px-5 py-1.5 sm:px-8 lg:px-10 xl:px-12">
           <nav className="hidden min-w-0 flex-1 items-center gap-2 overflow-x-auto lg:flex">
-            {NAV_ITEMS.map((item) => {
+            {navItems.map((item) => {
               const active = isActive(item.href)
               return (
                 <Link
@@ -203,7 +263,7 @@ export function Header() {
           </nav>
 
           <nav className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto lg:hidden">
-            {NAV_ITEMS.map((item) => {
+            {navItems.map((item) => {
               const active = isActive(item.href)
               return (
                 <Link

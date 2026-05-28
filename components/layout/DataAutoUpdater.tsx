@@ -1,6 +1,6 @@
 'use client'
 
-import { useRouter } from 'next/navigation'
+import { usePathname, useRouter } from 'next/navigation'
 import { useEffect, useRef } from 'react'
 
 const POLL_INTERVAL_MS = 30 * 1000
@@ -13,10 +13,12 @@ type FreshnessResponse = {
 
 export function DataAutoUpdater() {
   const router = useRouter()
+  const pathname = usePathname()
   const refreshedRef = useRef(false)
   const startedRef = useRef(false)
 
   useEffect(() => {
+    if (pathname.startsWith('/us')) return
     let cancelled = false
     let pollTimer: number | undefined
 
@@ -101,7 +103,7 @@ export function DataAutoUpdater() {
       cancelled = true
       if (pollTimer) window.clearTimeout(pollTimer)
     }
-  }, [router])
+  }, [pathname, router])
 
   return null
 }

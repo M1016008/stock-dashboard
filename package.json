@@ -14,6 +14,8 @@
     "db:migrate-to-turso": "tsx scripts/migrate-local-to-turso.ts",
     "batch:update-latest": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/update-latest.ts",
     "auto-update:install": "tsx --env-file=.env.local scripts/install-local-auto-update.ts",
+    "batch:us-update-latest": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/update-us-latest.ts",
+    "auto-update-us:install": "tsx --env-file=.env.local scripts/install-local-us-auto-update.ts",
     "auto-ml:install": "tsx --env-file=.env.local scripts/install-local-ml-learning.ts",
     "batch:ohlcv": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/batch-ohlcv.ts",
     "batch:ohlcv:fetch-only": "USE_LOCAL_DB=1 POST_OHLCV_REFRESH=0 tsx --env-file=.env.local scripts/batch-ohlcv.ts",
@@ -67,6 +69,13 @@
     "batch:ml-daily": "ML_RECENT_DAYS=260 ML_MIN_HISTORY_DAYS=200 npm run batch:ml-features && npm run batch:ml-labels && npm run batch:ml-outcomes && npm run batch:ml-train && npm run batch:ml-candidates && npm run batch:ml-predict && npm run batch:forward-extrema:short-recent && ML_CONTEXT_RECENT_DAYS=260 npm run batch:ml-context-features && ML_PHYSICS_RECENT_DAYS=260 ML_PHYSICS_MIN_HISTORY_DAYS=220 npm run batch:ml-physics-features && ML_SHORT_WRITE_RL_STATES=1 npm run batch:ml-short-labels && npm run batch:ml-physics-train && npm run batch:ml-physics-candidates && npm run batch:ml-insights && npm run batch:ml-similarity-evaluate && npm run batch:ml-rl-policy && npm run batch:historical-universe && npm run batch:ml-feature-health",
     "batch:ml-weekly-train": "npm run batch:historical-universe && npm run batch:forward-returns:ml && npm run batch:forward-extrema:short && ML_TRAIN_START_DATE=2008-05-07 ML_TRAIN_SAMPLE_MODE=yearly ML_TRAIN_LABEL_SOURCE=extrema npm run batch:ml-train && npm run batch:ml-candidates && npm run batch:ml-predict && npm run batch:ml-evaluate && ML_CONTEXT_RECENT_DAYS=0 ML_CONTEXT_START_DATE=2008-05-07 npm run batch:ml-context-features && ML_SHORT_WRITE_RL_STATES=1 npm run batch:ml-short-labels && ML_PHYSICS_TRAIN_START_DATE=2008-05-07 ML_PHYSICS_TRAIN_SAMPLE_MODE=yearly npm run batch:ml-physics-train && npm run batch:ml-physics-candidates && npm run batch:ml-insights && npm run batch:ml-physics-evaluate && npm run batch:ml-similarity-evaluate && ML_RL_RECENT_DAYS=0 npm run batch:ml-rl-policy && npm run batch:ml-feature-health",
     "batch:ml-full": "npm run batch:forward-returns:ml && npm run batch:forward-extrema:short && ML_RECENT_DAYS=0 ML_MIN_HISTORY_DAYS=1 ML_START_DATE=2008-05-07 npm run batch:ml-features && npm run batch:ml-labels && ML_TRAIN_START_DATE=2008-05-07 ML_TRAIN_SAMPLE_MODE=yearly ML_TRAIN_LABEL_SOURCE=extrema npm run batch:ml-train && npm run batch:ml-candidates && npm run batch:ml-predict && ML_CONTEXT_RECENT_DAYS=0 ML_CONTEXT_START_DATE=2008-05-07 npm run batch:ml-context-features && ML_PHYSICS_RECENT_DAYS=0 ML_PHYSICS_MIN_HISTORY_DAYS=1 ML_PHYSICS_START_DATE=2008-05-07 npm run batch:ml-physics-features && npm run batch:historical-universe && ML_SHORT_WRITE_RL_STATES=1 npm run batch:ml-short-labels && ML_PHYSICS_TRAIN_START_DATE=2008-05-07 ML_PHYSICS_TRAIN_SAMPLE_MODE=yearly npm run batch:ml-physics-train && npm run batch:ml-physics-candidates && npm run batch:ml-insights && npm run batch:ml-similarity-evaluate && ML_RL_RECENT_DAYS=0 npm run batch:ml-rl-policy && npm run batch:ml-feature-health",
+    "batch:us-universe": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/batch-us-universe.ts",
+    "batch:us-ohlcv": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/batch-us-ohlcv.ts",
+    "batch:us-snapshots": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/build-us-snapshots.ts",
+    "batch:us-analytics-db": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/build-us-analytics-db.ts",
+    "batch:us-full": "npm run batch:us-universe && npm run batch:us-classifications && npm run batch:us-ohlcv && npm run batch:us-snapshots && npm run batch:us-analytics-db",
+    "batch:us-backfill-all": "US_INCLUDE_INACTIVE=1 US_HISTORY_FROM=1900-01-01 npm run batch:us-universe && US_INCLUDE_INACTIVE=1 npm run batch:us-classifications && US_INCLUDE_INACTIVE=1 US_HISTORY_FROM=1900-01-01 US_OHLCV_CONCURRENCY=3 US_OHLCV_RATE_LIMIT_MS=250 npm run batch:us-ohlcv && US_INCLUDE_INACTIVE=1 US_SNAPSHOT_REBUILD=1 npm run batch:us-snapshots && US_ANALYTICS_LIMIT=0 npm run batch:us-analytics-db",
+    "batch:us-ml-full": "US_INCLUDE_INACTIVE=1 npm run batch:us-classifications && npm run batch:us-analytics-db && USE_LOCAL_DB=1 STOCKBOARD_DB_PATH=${US_ANALYTICS_DB_PATH:-data/stockboard-us.db} npm run batch:ml-full",
     "batch:signal-stats:full": "USE_LOCAL_DB=1 BACKTEST_RECENT_DAYS=0 SIGNAL_STATS_LIMIT_GROUPS=0 SIGNAL_STATS_DATE_CHUNK=20 tsx --env-file=.env.local scripts/batch-signal-stats.ts",
     "batch:serving-backtest:full": "USE_LOCAL_DB=1 SERVING_DATE_LIMIT=0 SERVING_SUMMARY_DATE_CHUNK=40 tsx --env-file=.env.local scripts/build-serving-backtest.ts",
     "batch:backtest-foundation": "npm run batch:weekly-ohlcv && npm run batch:forward-extrema && npm run batch:technical-signals && npm run batch:signal-stats && npm run batch:signal-return-stats && npm run batch:serving-backtest && npm run batch:serving-stock && npm run batch:ml-features && npm run batch:ml-train && npm run batch:ml-candidates && npm run batch:ml-insights",
@@ -75,7 +84,8 @@
     "sync:turso:optimized": "tsx --env-file=.env.local scripts/sync-optimized-to-turso.ts",
     "verify:phase3": "tsx --env-file=.env.local scripts/verify-phase3.ts",
     "pull": "git pull origin claude/resume-development-kvnU1",
-    "sync": "git pull origin claude/resume-development-kvnU1 && npm install"
+    "sync": "git pull origin claude/resume-development-kvnU1 && npm install",
+    "batch:us-classifications": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/batch-us-classifications-sec.ts"
   },
   "dependencies": {
     "@libsql/client": "^0.17.3",

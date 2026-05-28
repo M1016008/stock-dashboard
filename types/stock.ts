@@ -1,14 +1,14 @@
 // types/stock.ts
 export interface StockQuote {
   ticker: string;
-  market: 'JP';
+  market: 'JP' | 'US';
   name: string;
   price: number;
   change: number;
   changePercent: number;
   volume: number;
   marketCap?: number;
-  currency: 'JPY';
+  currency: 'JPY' | 'USD';
   fiftyTwoWeekHigh?: number;
   fiftyTwoWeekLow?: number;
   averageDailyVolume10Day?: number;
@@ -22,6 +22,7 @@ export interface OHLCV {
   low: number;
   close: number;
   volume: number;
+  adjustedClose?: number | null;
 }
 
 export interface Fundamentals {

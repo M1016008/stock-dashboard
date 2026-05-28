@@ -116,6 +116,25 @@ function stageTags(code: string | null | undefined) {
   )
 }
 
+function similarityBand(score: number) {
+  if (score >= 0.9) {
+    return {
+      label: '強い類似',
+      description: '90%以上',
+      border: 'rgba(20, 184, 166, 0.34)',
+      background: 'rgba(20, 184, 166, 0.08)',
+      color: '#0f766e',
+    }
+  }
+  return {
+    label: '参考類似',
+    description: '80〜90%',
+    border: 'rgba(37, 99, 235, 0.24)',
+    background: 'rgba(37, 99, 235, 0.07)',
+    color: '#1d4ed8',
+  }
+}
+
 function trendLabel(value: string | null | undefined) {
   switch (value) {
     case 'up_acceleration': return '上向き加速'
@@ -243,6 +262,7 @@ export function StockMlInsights({ ticker }: { ticker: string }) {
       </div>
       <p style={{ margin: '0 0 10px', fontSize: 12, fontWeight: 600, color: 'var(--text-muted)', lineHeight: 1.6 }}>
         最新データ上で、6桁ステージと5/25/75/200日MAの角度・距離感が近い銘柄です。
+        90%以上は強い類似、80〜90%は参考類似として表示します。
         {data?.featureAsOfDate ? ` ML特徴量基準日: ${data.featureAsOfDate}` : data?.asOfDate ? ` 基準日: ${data.asOfDate}` : ''}
       </p>
       <div style={{ display: 'grid', gap: 8 }}>
@@ -260,18 +280,19 @@ export function StockMlInsights({ ticker }: { ticker: string }) {
             fontWeight: 700,
             color: 'var(--text-muted)',
           }}>
-            類似度90%以上のML類似候補は現在ありません。ML特徴量が未生成、または十分に近いMA形状がない場合は表示しません。
+            類似度80%以上のML類似候補は現在ありません。ML特徴量が未生成、または十分に近いMA形状がない場合は表示しません。
           </div>
         )}
         {data && rows.map((row) => {
           const direction = row.similarDirection === 'up' ? '上昇候補' : row.similarDirection === 'down' ? '下落警戒' : '近似形状'
+          const band = similarityBand(row.similarityScore)
           return (
             <div
               key={`${row.similarTicker}-${row.rank}`}
               style={{
-                border: '1px solid var(--border-subtle)',
+                border: `1px solid ${band.border}`,
                 borderRadius: 8,
-                background: 'white',
+                background: band.background,
                 padding: 10,
               }}
             >
@@ -284,8 +305,21 @@ export function StockMlInsights({ ticker }: { ticker: string }) {
                     {direction} / 類似度 {Math.round(row.similarityScore * 100)}% / {stageTags(row.payload.similar?.stageCode)}
                   </div>
                 </div>
-                <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)' }}>
-                  {row.payload.similar?.sector17Name ?? '業種なし'}
+                <div style={{ display: 'grid', justifyItems: 'end', gap: 4 }}>
+                  <span style={{
+                    border: `1px solid ${band.border}`,
+                    borderRadius: 999,
+                    background: 'white',
+                    padding: '3px 8px',
+                    fontSize: 10,
+                    fontWeight: 900,
+                    color: band.color,
+                  }}>
+                    {band.label}
+                  </span>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)' }}>
+                    {row.payload.similar?.sector17Name ?? '業種なし'}
+                  </span>
                 </div>
               </div>
               <div style={{ marginTop: 8, display: 'grid', gap: 4, fontSize: 11, lineHeight: 1.55, color: 'var(--text-secondary)' }}>
@@ -318,7 +352,7 @@ export function StockMlInsights({ ticker }: { ticker: string }) {
                 </button>
               )}
               {casesLoaded && caseStudies.length === 0 && (
-                <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)' }}>類似度90%以上の過去ケースはありません</span>
+                <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)' }}>類似度80%以上の過去ケースはありません</span>
               )}
             </div>
           </div>
