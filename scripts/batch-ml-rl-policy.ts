@@ -21,6 +21,19 @@ type StateActionRow = {
   feature_json: string
 }
 
+type LabelStateRow = {
+  ticker: string
+  date: string
+  horizon_days: number
+  return_pct: number | null
+  max_return_pct: number | null
+  min_return_pct: number | null
+  reward_long: number | null
+  reward_short: number | null
+  reward_wait: number | null
+  feature_json: string
+}
+
 type State = {
   ticker: string
   date: string
@@ -41,9 +54,13 @@ type PolicyResult = {
   evaluationDate: string
   startDate: string | null
   endDate: string | null
-  rewards: number[]
-  returns: number[]
-  drawdowns: number[]
+  sampleCount: number
+  positiveCount: number
+  rewardSum: number
+  rewardBuckets: Map<number, number>
+  returnSum: number
+  returnCount: number
+  maxDrawdownPct: number | null
   actionCounts: Record<Action, number>
   oracleMatches: number
 }
@@ -56,6 +73,7 @@ const RECENT_DAYS = Number(process.env.ML_RL_RECENT_DAYS ?? 520)
 const START_DATE = process.env.ML_RL_START_DATE?.trim() || null
 const END_DATE = process.env.ML_RL_END_DATE?.trim() || null
 const LIMIT_STATES = Number(process.env.ML_RL_LIMIT_STATES ?? 0)
+const PAGE_DATES = Math.max(1, Number(process.env.ML_RL_PAGE_DATES ?? 20))
 
 function parseJson<T>(value: string, fallback: T): T {
   try {
@@ -82,6 +100,26 @@ function median(values: number[]): number | null {
 
 function avg(values: number[]): number | null {
   return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null
+}
+
+function medianFromBuckets(buckets: Map<number, number>, sampleCount: number): number | null {
+  if (sampleCount === 0) return null
+  const midpoint = Math.floor((sampleCount - 1) / 2)
+  const midpoint2 = Math.floor(sampleCount / 2)
+  let seen = 0
+  let first: number | null = null
+  let second: number | null = null
+  for (const [bucket, count] of [...buckets.entries()].sort((a, b) => a[0] - b[0])) {
+    const nextSeen = seen + count
+    if (first === null && midpoint < nextSeen) first = bucket / 100
+    if (second === null && midpoint2 < nextSeen) {
+      second = bucket / 100
+      break
+    }
+    seen = nextSeen
+  }
+  if (first === null || second === null) return null
+  return (first + second) / 2
 }
 
 function pctBucket(value: number | null | undefined, low: number, high: number): 'low' | 'mid' | 'high' | 'unknown' {
@@ -163,13 +201,22 @@ function selectedDrawdown(state: State, action: Action): number | null {
 function pushEvaluation(result: PolicyResult, state: State, action: Action) {
   const reward = state.rewards[action]
   if (!finite(reward)) return
-  result.rewards.push(reward)
+  result.sampleCount += 1
+  result.positiveCount += reward > 0 ? 1 : 0
+  result.rewardSum += reward
+  const rewardBucket = Math.round(reward * 100)
+  result.rewardBuckets.set(rewardBucket, (result.rewardBuckets.get(rewardBucket) ?? 0) + 1)
   result.actionCounts[action] += 1
   if (action === oracleAction(state)) result.oracleMatches += 1
   const ret = selectedReturn(state, action)
-  if (finite(ret)) result.returns.push(ret)
+  if (finite(ret)) {
+    result.returnSum += ret
+    result.returnCount += 1
+  }
   const drawdown = selectedDrawdown(state, action)
-  if (finite(drawdown)) result.drawdowns.push(drawdown)
+  if (finite(drawdown)) {
+    result.maxDrawdownPct = result.maxDrawdownPct === null ? drawdown : Math.min(result.maxDrawdownPct, drawdown)
+  }
 }
 
 async function cutoffDate(): Promise<string | null> {
@@ -266,7 +313,7 @@ async function loadStates(horizon: number, startDate: string | null): Promise<St
 }
 
 function describeActionBreakdown(result: PolicyResult): Record<string, unknown> {
-  const total = Math.max(1, result.rewards.length)
+  const total = Math.max(1, result.sampleCount)
   return {
     long: result.actionCounts.long_entry,
     short: result.actionCounts.short_entry,
@@ -278,18 +325,17 @@ function describeActionBreakdown(result: PolicyResult): Record<string, unknown> 
 }
 
 function metrics(result: PolicyResult): Record<string, unknown> {
-  const sampleCount = result.rewards.length
-  const positive = result.rewards.filter((value) => value > 0).length
+  const sampleCount = result.sampleCount
   return {
     featureSet: ML_PHYSICS_FEATURE_SET,
     recentDays: RECENT_DAYS,
     sampleCount,
-    winRate: sampleCount ? round(positive / sampleCount, 4) : null,
+    winRate: sampleCount ? round(result.positiveCount / sampleCount, 4) : null,
     oracleMatchRate: sampleCount ? round(result.oracleMatches / sampleCount, 4) : null,
-    avgReward: round(avg(result.rewards), 4),
-    medianReward: round(median(result.rewards), 4),
-    avgReturnPct: round(avg(result.returns), 4),
-    maxDrawdownPct: round(result.drawdowns.length ? Math.min(...result.drawdowns) : null, 4),
+    avgReward: round(sampleCount ? result.rewardSum / sampleCount : null, 4),
+    medianReward: round(medianFromBuckets(result.rewardBuckets, sampleCount), 4),
+    avgReturnPct: round(result.returnCount ? result.returnSum / result.returnCount : null, 4),
+    maxDrawdownPct: round(result.maxDrawdownPct, 4),
     actionShape: describeActionBreakdown(result),
   }
 }
@@ -302,9 +348,13 @@ function makeResult(policyName: string, policyType: string, horizon: number, eva
     evaluationDate,
     startDate,
     endDate,
-    rewards: [],
-    returns: [],
-    drawdowns: [],
+    sampleCount: 0,
+    positiveCount: 0,
+    rewardSum: 0,
+    rewardBuckets: new Map(),
+    returnSum: 0,
+    returnCount: 0,
+    maxDrawdownPct: null,
     actionCounts: { long_entry: 0, short_entry: 0, wait: 0 },
     oracleMatches: 0,
   }
@@ -318,30 +368,130 @@ function stateBucket(profile: PhysicsFeatureProfile): string {
   return `${trend}|${spread}|sma5:${sma5Speed}|gap:${gapFlow}`
 }
 
+function stateFromLabelRow(row: LabelStateRow): State | null {
+  const profile = parseJson<PhysicsFeatureProfile | null>(row.feature_json, null)
+  if (!profile) return null
+  if (!finite(row.reward_long) || !finite(row.reward_short) || !finite(row.reward_wait)) return null
+  return {
+    ticker: row.ticker,
+    date: row.date,
+    horizonDays: row.horizon_days,
+    profile,
+    returns: {
+      returnPct: row.return_pct,
+      maxReturnPct: row.max_return_pct,
+      minReturnPct: row.min_return_pct,
+    },
+    rewards: {
+      long_entry: row.reward_long,
+      short_entry: row.reward_short,
+      wait: row.reward_wait,
+    },
+  }
+}
+
+async function loadDateBatch(horizon: number, startDate: string | null, beforeDate: string | null): Promise<string[]> {
+  const where = ['horizon_days = ?']
+  const args: Array<string | number> = [horizon]
+  if (startDate) {
+    where.push('date >= ?')
+    args.push(startDate)
+  }
+  if (END_DATE) {
+    where.push('date <= ?')
+    args.push(END_DATE)
+  }
+  if (beforeDate) {
+    where.push('date < ?')
+    args.push(beforeDate)
+  }
+  const rows = await execAll<{ date: string }>(
+    `
+    SELECT DISTINCT date
+    FROM ml_short_labels
+    WHERE ${where.join(' AND ')}
+    ORDER BY date DESC
+    LIMIT ?
+    `,
+    [...args, PAGE_DATES],
+  )
+  return rows.map((row) => row.date)
+}
+
+async function loadLabelStates(horizon: number, dates: string[]): Promise<LabelStateRow[]> {
+  if (dates.length === 0) return []
+  const placeholders = dates.map(() => '?').join(', ')
+  return execAll<LabelStateRow>(
+    `
+    SELECT
+      l.ticker,
+      l.date,
+      l.horizon_days,
+      l.return_pct,
+      l.max_return_pct,
+      l.min_return_pct,
+      l.reward_long,
+      l.reward_short,
+      l.reward_wait,
+      f.feature_json
+    FROM ml_short_labels l
+    INNER JOIN ml_feature_vectors_v2 f
+      ON f.ticker = l.ticker
+     AND f.date = l.date
+     AND f.feature_set = ?
+    WHERE l.horizon_days = ?
+      AND l.date IN (${placeholders})
+      AND l.reward_long IS NOT NULL
+      AND l.reward_short IS NOT NULL
+      AND l.reward_wait IS NOT NULL
+    ORDER BY l.date DESC, l.ticker
+    `,
+    [ML_PHYSICS_FEATURE_SET, horizon, ...dates],
+  )
+}
+
 async function evaluateHorizon(horizon: number, startDate: string | null): Promise<PolicyResult[]> {
-  const states = await loadStates(horizon, startDate)
-  const dates = states.map((state) => state.date).sort()
-  const actualStart = dates[0] ?? startDate
-  const actualEnd = END_DATE ?? dates.at(-1) ?? null
   const evaluationDate = new Date().toISOString().slice(0, 10)
-  const rule = makeResult('physics_rule_policy_v1', 'offline_contextual_bandit', horizon, evaluationDate, actualStart, actualEnd)
-  const oracle = makeResult('oracle_upper_bound', 'offline_oracle_benchmark', horizon, evaluationDate, actualStart, actualEnd)
-  const wait = makeResult('always_wait', 'baseline', horizon, evaluationDate, actualStart, actualEnd)
+  const rule = makeResult('physics_rule_policy_v1', 'offline_contextual_bandit', horizon, evaluationDate, startDate, END_DATE)
+  const oracle = makeResult('oracle_upper_bound', 'offline_oracle_benchmark', horizon, evaluationDate, startDate, END_DATE)
+  const wait = makeResult('always_wait', 'baseline', horizon, evaluationDate, startDate, END_DATE)
   const buckets = new Map<string, { total: number; long: number; short: number; wait: number }>()
 
-  for (const state of states) {
-    const chosen = policyAction(state.profile)
-    const best = oracleAction(state)
-    pushEvaluation(rule, state, chosen)
-    pushEvaluation(oracle, state, best)
-    pushEvaluation(wait, state, 'wait')
-    const bucket = stateBucket(state.profile)
-    const current = buckets.get(bucket) ?? { total: 0, long: 0, short: 0, wait: 0 }
-    current.total += 1
-    current.long += best === 'long_entry' ? 1 : 0
-    current.short += best === 'short_entry' ? 1 : 0
-    current.wait += best === 'wait' ? 1 : 0
-    buckets.set(bucket, current)
+  let beforeDate: string | null = null
+  let actualStart: string | null = null
+  let actualEnd: string | null = null
+  let batchCount = 0
+  for (;;) {
+    const dates = await loadDateBatch(horizon, startDate, beforeDate)
+    if (dates.length === 0) break
+    const rows = await loadLabelStates(horizon, dates)
+    for (const row of rows) {
+      if (LIMIT_STATES > 0 && rule.sampleCount >= LIMIT_STATES) break
+      const state = stateFromLabelRow(row)
+      if (!state) continue
+      if (actualStart === null) actualStart = state.date
+      else if (state.date < actualStart) actualStart = state.date
+      if (actualEnd === null) actualEnd = state.date
+      else if (state.date > actualEnd) actualEnd = state.date
+      const chosen = policyAction(state.profile)
+      const best = oracleAction(state)
+      pushEvaluation(rule, state, chosen)
+      pushEvaluation(oracle, state, best)
+      pushEvaluation(wait, state, 'wait')
+      const bucket = stateBucket(state.profile)
+      const current = buckets.get(bucket) ?? { total: 0, long: 0, short: 0, wait: 0 }
+      current.total += 1
+      current.long += best === 'long_entry' ? 1 : 0
+      current.short += best === 'short_entry' ? 1 : 0
+      current.wait += best === 'wait' ? 1 : 0
+      buckets.set(bucket, current)
+    }
+    batchCount += 1
+    beforeDate = dates.at(-1) ?? null
+    if (batchCount % 10 === 0) {
+      console.log(`ml rl policy horizon=${horizon}: batches=${batchCount}, states=${rule.sampleCount.toLocaleString()}, cursor<${beforeDate ?? '-'}`)
+    }
+    if (!beforeDate || (LIMIT_STATES > 0 && rule.sampleCount >= LIMIT_STATES)) break
   }
 
   const bucketSummary = [...buckets.entries()]
@@ -356,6 +506,8 @@ async function evaluateHorizon(horizon: number, startDate: string | null): Promi
     }))
 
   for (const result of [rule, oracle, wait]) {
+    result.startDate = actualStart ?? startDate
+    result.endDate = END_DATE ?? actualEnd
     ;(result as PolicyResult & { bucketSummary?: unknown }).bucketSummary = bucketSummary
   }
   return [rule, oracle, wait]
@@ -391,7 +543,7 @@ async function main() {
           result.evaluationDate,
           result.startDate,
           result.endDate,
-          result.rewards.length,
+          result.sampleCount,
           result.actionCounts.long_entry,
           result.actionCounts.short_entry,
           result.actionCounts.wait,
@@ -406,7 +558,7 @@ async function main() {
         ],
       })
     }
-    console.log(`ml rl policy horizon=${horizon}: states=${results[0]?.rewards.length ?? 0}, start=${results[0]?.startDate ?? '-'}`)
+    console.log(`ml rl policy horizon=${horizon}: states=${results[0]?.sampleCount ?? 0}, start=${results[0]?.startDate ?? '-'}`)
   }
   await execBatch(statements)
   console.log(`ml rl policy complete: horizons=${HORIZONS.join('/')}, recent_days=${RECENT_DAYS || 'all'}, start=${startDate ?? '-'}`)

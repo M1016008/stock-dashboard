@@ -32,13 +32,27 @@ function xmlEscape(value: string): string {
     .replaceAll("'", '&apos;')
 }
 
-function calendar(hour: number, minute: number): string {
+function calendar(hour: number, minute: number, weekday: number): string {
   return [
     '    <dict>',
+    `      <key>Weekday</key><integer>${weekday}</integer>`,
     `      <key>Hour</key><integer>${hour}</integer>`,
     `      <key>Minute</key><integer>${minute}</integer>`,
     '    </dict>',
   ].join('\n')
+}
+
+function marketCloseRetrySchedule(): string {
+  // launchd Weekday: 1=Monday ... 6=Saturday, 0/7=Sunday.
+  // Tue-Sat JST corresponds to Mon-Fri US closes. 06:30 JST is after both
+  // daylight-saving (05:00 JST close) and standard-time (06:00 JST close).
+  const weekdays = [2, 3, 4, 5, 6]
+  const times = [
+    [6, 30],
+    [7, 30],
+    [8, 30],
+  ] as const
+  return weekdays.flatMap((weekday) => times.map(([hour, minute]) => calendar(hour, minute, weekday))).join('\n')
 }
 
 fs.mkdirSync(launchAgentsDir, { recursive: true })
@@ -50,6 +64,7 @@ const command = [
   'export USE_LOCAL_DB=1',
   'export SQLITE_BUSY_RETRIES=40',
   'export UPDATE_CHILD_TIMEOUT_MINUTES=360',
+  `export US_ANALYTICS_DB_PATH=${JSON.stringify(process.env.US_ANALYTICS_DB_PATH?.trim() || '/Volumes/OWC Express 1M2 80G/stockboard-data/us/stockboard-us.db')}`,
   'export US_DAILY_OHLCV_CONCURRENCY=${US_DAILY_OHLCV_CONCURRENCY:-2}',
   'export US_DAILY_OHLCV_RATE_LIMIT_MS=${US_DAILY_OHLCV_RATE_LIMIT_MS:-350}',
   'export US_DAILY_SNAPSHOT_CONCURRENCY=${US_DAILY_SNAPSHOT_CONCURRENCY:-2}',
@@ -73,9 +88,7 @@ const plist = `<?xml version="1.0" encoding="UTF-8"?>
   </array>
   <key>StartCalendarInterval</key>
   <array>
-${calendar(9, 30)}
-${calendar(12, 30)}
-${calendar(15, 30)}
+${marketCloseRetrySchedule()}
   </array>
   <key>StandardOutPath</key>
   <string>${xmlEscape(path.join(logDir, 'us-update-latest.log'))}</string>
@@ -99,5 +112,5 @@ execFileSync('launchctl', ['bootstrap', `gui/${uid}`, plistPath], { stdio: 'inhe
 execFileSync('launchctl', ['enable', `gui/${uid}/${label}`], { stdio: 'inherit' })
 
 console.log(`launchd registered: ${plistPath}`)
-console.log('schedule: every day 09:30, 12:30, 15:30 JST')
+console.log('schedule: Tue-Sat 06:30, 07:30, 08:30 JST')
 console.log(`logs: ${path.join(logDir, 'us-update-latest.log')}`)

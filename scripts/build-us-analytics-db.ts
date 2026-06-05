@@ -3,24 +3,151 @@
 
 import path from 'node:path'
 import fs from 'node:fs'
+import { spawnSync } from 'node:child_process'
 import { createClient, type Client } from '@libsql/client'
-import { execAll } from '@/lib/db/client'
+import { execAll, localDbPath } from '@/lib/db/client'
 import { ensureSchema } from '@/lib/db/migrate'
 import { US_SEC_SIC_TAXONOMY } from '@/lib/us-classification'
 
-const TARGET_PATH = path.resolve(process.env.US_ANALYTICS_DB_PATH ?? 'data/stockboard-us.db')
+const configuredTargetPath = process.env.US_ANALYTICS_DB_PATH?.trim()
+const TARGET_PATH = path.resolve(configuredTargetPath || 'data/stockboard-us.db')
 const LIMIT = Number(process.env.US_ANALYTICS_LIMIT ?? 0)
-const COPY_CHUNK = Math.max(1, Number(process.env.US_ANALYTICS_CHUNK ?? 50))
+const requestedCopyChunk = Math.max(1, Number(process.env.US_ANALYTICS_CHUNK ?? 10))
+const maxCopyChunk = Math.max(1, Number(process.env.US_ANALYTICS_MAX_CHUNK ?? 10))
+const COPY_CHUNK = Math.min(requestedCopyChunk, maxCopyChunk)
+const BATCH_CHUNK = Math.max(25, Math.min(Number(process.env.US_ANALYTICS_BATCH_CHUNK ?? 100), 200))
+const NATIVE_COPY = process.env.US_ANALYTICS_NATIVE_COPY !== '0'
+const NATIVE_COPY_CHUNK = Math.max(25, Math.min(Number(process.env.US_ANALYTICS_NATIVE_CHUNK ?? 500), 1000))
 
 async function run(client: Client, sql: string, args: Array<string | number | null> = []) {
   await client.execute({ sql, args })
 }
 
 async function batch(client: Client, statements: Array<{ sql: string; args: Array<string | number | null> }>) {
-  const CHUNK = 500
-  for (let i = 0; i < statements.length; i += CHUNK) {
-    await client.batch(statements.slice(i, i + CHUNK))
+  for (let i = 0; i < statements.length; i += BATCH_CHUNK) {
+    await client.batch(statements.slice(i, i + BATCH_CHUNK))
   }
+}
+
+function assertSafeTarget() {
+  const fullRun = LIMIT === 0
+  const allowLocalFallback = process.env.US_ANALYTICS_ALLOW_LOCAL === '1'
+
+  if (fullRun && !configuredTargetPath && !allowLocalFallback) {
+    throw new Error(
+      'US_ANALYTICS_DB_PATH is required for a full US analytics build. '
+      + 'Set it to the external SSD path before running, or set US_ANALYTICS_ALLOW_LOCAL=1 for an intentional small local test.',
+    )
+  }
+
+  const defaultLocalPath = path.resolve('data/stockboard-us.db')
+  if (fullRun && TARGET_PATH === defaultLocalPath && !allowLocalFallback) {
+    throw new Error(
+      `Refusing full US analytics build on the local fallback DB: ${defaultLocalPath}. `
+      + 'Use US_ANALYTICS_DB_PATH on the external SSD.',
+    )
+  }
+
+  const sourceDbPath = process.env.STOCKBOARD_DB_PATH ? path.resolve(process.env.STOCKBOARD_DB_PATH) : null
+  if (sourceDbPath && sourceDbPath === TARGET_PATH) {
+    throw new Error(
+      `US analytics target must not be the same file as STOCKBOARD_DB_PATH: ${TARGET_PATH}`,
+    )
+  }
+}
+
+function sqlLiteral(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`
+}
+
+function runSqlite(dbPath: string, sql: string): string {
+  const result = spawnSync('sqlite3', ['-batch', dbPath], {
+    input: sql,
+    encoding: 'utf8',
+    maxBuffer: 1024 * 1024 * 32,
+  })
+  if (result.error) throw result.error
+  if (result.status !== 0) {
+    throw new Error(
+      `sqlite3 failed (${result.status}): ${result.stderr || result.stdout || 'no output'}`,
+    )
+  }
+  return result.stdout
+}
+
+function nativeCopyChunk(sourcePath: string, chunk: string[]): { ohlcvRows: number; snapshotRows: number } {
+  const values = chunk.map((ticker) => `(${sqlLiteral(ticker)})`).join(',\n')
+  const output = runSqlite(TARGET_PATH, `
+.bail on
+PRAGMA busy_timeout = 60000;
+PRAGMA synchronous = NORMAL;
+PRAGMA temp_store = MEMORY;
+ATTACH DATABASE ${sqlLiteral(sourcePath)} AS src;
+CREATE TEMP TABLE copy_tickers (ticker TEXT PRIMARY KEY);
+INSERT INTO copy_tickers (ticker) VALUES
+${values};
+BEGIN IMMEDIATE;
+INSERT OR REPLACE INTO ohlcv_daily (ticker, date, open, high, low, close, volume)
+  SELECT m.ticker, m.date, m.open, m.high, m.low, m.close, m.volume
+  FROM copy_tickers t
+  JOIN src.market_ohlcv_daily m INDEXED BY market_ohlcv_market_ticker_date_idx
+    ON m.market = 'US'
+   AND m.ticker = t.ticker;
+INSERT OR REPLACE INTO daily_snapshots (
+  ticker, date, ma_5, ma_25, ma_75, ma_150, ma_300,
+  weekly_ma_5, weekly_ma_13, weekly_ma_25, weekly_ma_50, weekly_ma_100,
+  monthly_ma_3, monthly_ma_5, monthly_ma_10, monthly_ma_20, monthly_ma_25,
+  daily_a_stage, daily_b_stage, weekly_a_stage, weekly_b_stage, monthly_a_stage, monthly_b_stage,
+  computed_at
+)
+  SELECT
+    m.ticker, m.date, m.ma_5, m.ma_25, m.ma_75, m.ma_150, m.ma_300,
+    m.weekly_ma_5, m.weekly_ma_13, m.weekly_ma_25, m.weekly_ma_50, m.weekly_ma_100,
+    m.monthly_ma_3, m.monthly_ma_5, m.monthly_ma_10, m.monthly_ma_20, m.monthly_ma_25,
+    m.daily_a_stage, m.daily_b_stage, m.weekly_a_stage, m.weekly_b_stage, m.monthly_a_stage, m.monthly_b_stage,
+    unixepoch()
+  FROM copy_tickers t
+  JOIN src.market_daily_snapshots m INDEXED BY sqlite_autoindex_market_daily_snapshots_1
+    ON m.market = 'US'
+   AND m.ticker = t.ticker;
+INSERT OR REPLACE INTO us_analytics_copy_state (ticker, status, ohlcv_rows, snapshot_rows, updated_at)
+  SELECT
+    t.ticker,
+    'done',
+    COALESCE((SELECT COUNT(*) FROM ohlcv_daily o WHERE o.ticker = t.ticker), 0),
+    COALESCE((SELECT COUNT(*) FROM daily_snapshots d WHERE d.ticker = t.ticker), 0),
+    unixepoch()
+  FROM copy_tickers t;
+COMMIT;
+SELECT 'copied|' ||
+  COALESCE((SELECT SUM(ohlcv_rows) FROM us_analytics_copy_state WHERE ticker IN (SELECT ticker FROM copy_tickers)), 0) ||
+  '|' ||
+  COALESCE((SELECT SUM(snapshot_rows) FROM us_analytics_copy_state WHERE ticker IN (SELECT ticker FROM copy_tickers)), 0);
+DETACH DATABASE src;
+`)
+  const line = output.trim().split(/\r?\n/).find((row) => row.startsWith('copied|'))
+  const [, ohlcvRows, snapshotRows] = (line ?? 'copied|0|0').split('|')
+  return {
+    ohlcvRows: Number(ohlcvRows ?? 0),
+    snapshotRows: Number(snapshotRows ?? 0),
+  }
+}
+
+function nativeCopyPending(pendingTickers: string[], doneSize: number): boolean {
+  const sourcePath = localDbPath
+  if (!NATIVE_COPY || !fs.existsSync(sourcePath)) return false
+  let copied = 0
+  let snapshotsCopied = 0
+  for (let i = 0; i < pendingTickers.length; i += NATIVE_COPY_CHUNK) {
+    const chunk = pendingTickers.slice(i, i + NATIVE_COPY_CHUNK)
+    const result = nativeCopyChunk(sourcePath, chunk)
+    copied += result.ohlcvRows
+    snapshotsCopied += result.snapshotRows
+    console.log(
+      `[${Math.min(i + NATIVE_COPY_CHUNK, pendingTickers.length)}/${pendingTickers.length}] native copied ohlcv=${copied} snapshots=${snapshotsCopied} skipped=${doneSize}`,
+    )
+  }
+  return true
 }
 
 async function ensureTarget(client: Client) {
@@ -62,6 +189,11 @@ async function ensureTarget(client: Client) {
 }
 
 async function main() {
+  assertSafeTarget()
+  console.log(`US analytics target: ${TARGET_PATH}`)
+  console.log(
+    `US analytics chunks: tickers=${COPY_CHUNK}, statements=${BATCH_CHUNK}, native=${NATIVE_COPY ? NATIVE_COPY_CHUNK : 'off'}`,
+  )
   fs.mkdirSync(path.dirname(TARGET_PATH), { recursive: true })
   const target = createClient({ url: `file:${TARGET_PATH}` })
   await ensureTarget(target)
@@ -130,6 +262,12 @@ async function main() {
   })
   const done = new Set(doneRows.rows.map((row) => String(row.ticker)))
   const pendingTickers = tickers.filter((ticker) => !done.has(ticker))
+  if (nativeCopyPending(pendingTickers, done.size)) {
+    console.log(
+      `US analytics DB ready: ${TARGET_PATH}, universe=${universe.length}, copied via native SQLite, skipped=${done.size}`,
+    )
+    return
+  }
   let copied = 0
   let snapshotsCopied = 0
   for (let i = 0; i < pendingTickers.length; i += COPY_CHUNK) {

@@ -44,6 +44,7 @@ type MovePeriod = {
 
 const CHUNK = 250
 const TICKER_LIMIT = Number(process.env.SERVING_STOCK_LIMIT ?? 0)
+const TICKER_FILTER = process.env.SERVING_STOCK_TICKER?.trim()
 const UP_THRESHOLD = Number(process.env.SERVING_STOCK_UP_THRESHOLD ?? 30)
 const DOWN_THRESHOLD = Number(process.env.SERVING_STOCK_DOWN_THRESHOLD ?? -20)
 const MAX_PERIODS = Number(process.env.SERVING_STOCK_PERIODS ?? 5)
@@ -254,7 +255,10 @@ async function buildTicker(ticker: TickerRow): Promise<Array<{ sql: string; args
 
 async function main() {
   const limitSql = TICKER_LIMIT > 0 ? `LIMIT ?` : ''
-  const args = TICKER_LIMIT > 0 ? [TICKER_LIMIT] : []
+  const filterSql = TICKER_FILTER ? `AND u.ticker = ?` : ''
+  const args: Array<string | number> = []
+  if (TICKER_FILTER) args.push(TICKER_FILTER)
+  if (TICKER_LIMIT > 0) args.push(TICKER_LIMIT)
   const tickers = await execAll<TickerRow>(
     `
     SELECT u.ticker, u.name,
@@ -264,6 +268,7 @@ async function main() {
     FROM ticker_universe u
     LEFT JOIN sector_master sm ON sm.ticker = u.ticker
     WHERE EXISTS (SELECT 1 FROM ohlcv_daily o WHERE o.ticker = u.ticker)
+      ${filterSql}
     ORDER BY u.ticker
     ${limitSql}
     `,

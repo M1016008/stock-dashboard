@@ -20,23 +20,23 @@ export async function POST() {
   if (freshness.running) {
     return NextResponse.json({ started: false, running: true, freshness })
   }
-  if (!freshness.needsUpdate) {
-    return NextResponse.json({ started: false, running: false, freshness })
+  const needsCriticalRepair =
+    freshness.needsSnapshotUpdate
+    || freshness.needsDashboardCacheUpdate
+    || freshness.needsFeatureUpdate
+    || freshness.needsModelFeatureUpdate
+  const needsCriticalUpdate = freshness.needsOhlcvUpdate || needsCriticalRepair
+
+  if (!needsCriticalUpdate) {
+    return NextResponse.json({
+      started: false,
+      running: false,
+      nonCriticalStale: freshness.needsUpdate,
+      freshness,
+    })
   }
 
-  const repairOnly = !freshness.needsOhlcvUpdate
-    && (
-      freshness.needsSnapshotUpdate
-      || freshness.needsDashboardCacheUpdate
-      || freshness.needsFeatureUpdate
-      || freshness.needsModelFeatureUpdate
-      || freshness.needsMlFeatureUpdate
-      || freshness.needsMlCandidateUpdate
-      || freshness.needsMlPredictionUpdate
-      || freshness.needsMlPhysicsFeatureUpdate
-      || freshness.needsMlPhysicsCandidateUpdate
-      || freshness.needsMlSimilarUpdate
-    )
+  const repairOnly = !freshness.needsOhlcvUpdate && needsCriticalRepair
   if (!repairOnly && !process.env.JQUANTS_API_KEY) {
     return NextResponse.json(
       { started: false, error: 'JQUANTS_API_KEY is not set', freshness },
@@ -52,6 +52,11 @@ export async function POST() {
     env: {
       ...process.env,
       USE_LOCAL_DB: '1',
+      UPDATE_LATEST_CRITICAL_ONLY: '1',
+      REFRESH_AFTER_OHLCV_CRITICAL_ONLY: '1',
+      SKIP_DAILY_ML: '1',
+      SKIP_SERVING_BACKTEST: '1',
+      BACKTEST_REBUILD_STATS: '0',
     },
   })
   child.unref()

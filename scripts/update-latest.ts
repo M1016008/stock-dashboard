@@ -172,110 +172,114 @@ async function main() {
       throw new Error('Critical market data refresh did not reach the expected trading date')
     }
 
-    const optionalScripts: Array<[string, string, EnvOverrides]> = [
-      ['indices', 'scripts/batch-indices.ts', {}],
-      ['earnings-calendar', 'scripts/batch-earnings.ts', {}],
-      ['earnings-history', 'scripts/batch-earnings-history.ts', { EARNINGS_HISTORY_LIMIT: process.env.EARNINGS_HISTORY_LIMIT ?? '40' }],
-      ['credit-short', 'scripts/batch-credit-short.ts', {}],
-      ['serving-margin', 'scripts/build-serving-margin.ts', {}],
-      ['forward-extrema', 'scripts/batch-forward-extrema.ts', {}],
-      ['forward-extrema-short', 'scripts/batch-forward-extrema.ts', {
-        FORWARD_EXTREMA_HORIZONS: process.env.ML_PHYSICS_EXTREMA_HORIZONS ?? '10,15',
-        BACKTEST_RECENT_DAYS: process.env.ML_PHYSICS_EXTREMA_RECENT_DAYS ?? process.env.BACKTEST_RECENT_DAYS ?? '260',
-        FORWARD_EXTREMA_WRITE_MODEL_LABELS: '0',
-      }],
-      ['serving-backtest', 'scripts/build-serving-backtest.ts', {}],
-    ]
+    if (process.env.UPDATE_LATEST_CRITICAL_ONLY === '1') {
+      console.log('Optional market data and ML refresh skipped (UPDATE_LATEST_CRITICAL_ONLY=1)')
+    } else {
+      const optionalScripts: Array<[string, string, EnvOverrides]> = [
+        ['indices', 'scripts/batch-indices.ts', {}],
+        ['earnings-calendar', 'scripts/batch-earnings.ts', {}],
+        ['earnings-history', 'scripts/batch-earnings-history.ts', { EARNINGS_HISTORY_LIMIT: process.env.EARNINGS_HISTORY_LIMIT ?? '40' }],
+        ['credit-short', 'scripts/batch-credit-short.ts', {}],
+        ['serving-margin', 'scripts/build-serving-margin.ts', {}],
+        ['forward-extrema', 'scripts/batch-forward-extrema.ts', {}],
+        ['forward-extrema-short', 'scripts/batch-forward-extrema.ts', {
+          FORWARD_EXTREMA_HORIZONS: process.env.ML_PHYSICS_EXTREMA_HORIZONS ?? '10,15',
+          BACKTEST_RECENT_DAYS: process.env.ML_PHYSICS_EXTREMA_RECENT_DAYS ?? process.env.BACKTEST_RECENT_DAYS ?? '260',
+          FORWARD_EXTREMA_WRITE_MODEL_LABELS: '0',
+        }],
+        ['serving-backtest', 'scripts/build-serving-backtest.ts', {}],
+      ]
 
-    for (const [label, script, env] of optionalScripts) {
-      if (label === 'serving-backtest' && process.env.SKIP_SERVING_BACKTEST === '1') {
-        console.log('serving-backtest skipped (SKIP_SERVING_BACKTEST=1)')
-        continue
+      for (const [label, script, env] of optionalScripts) {
+        if (label === 'serving-backtest' && process.env.SKIP_SERVING_BACKTEST === '1') {
+          console.log('serving-backtest skipped (SKIP_SERVING_BACKTEST=1)')
+          continue
+        }
+        const error = await runOptional(label, script, env, heartbeat)
+        if (error) optionalErrors.push(error)
+        await lock.heartbeat()
       }
-      const error = await runOptional(label, script, env, heartbeat)
-      if (error) optionalErrors.push(error)
-      await lock.heartbeat()
-    }
 
-    if (process.env.BACKTEST_REBUILD_STATS === '1') {
-      const error = await runOptional('signal-stats', 'scripts/batch-signal-stats.ts', {}, heartbeat)
-      if (error) optionalErrors.push(error)
-      await lock.heartbeat()
-    } else {
-      console.log('Backtest signal_stats rebuild skipped (set BACKTEST_REBUILD_STATS=1 for full/stat refresh)')
-    }
+      if (process.env.BACKTEST_REBUILD_STATS === '1') {
+        const error = await runOptional('signal-stats', 'scripts/batch-signal-stats.ts', {}, heartbeat)
+        if (error) optionalErrors.push(error)
+        await lock.heartbeat()
+      } else {
+        console.log('Backtest signal_stats rebuild skipped (set BACKTEST_REBUILD_STATS=1 for full/stat refresh)')
+      }
 
-    if (process.env.SKIP_DAILY_ML === '1') {
-      console.log('Daily ML refresh skipped (SKIP_DAILY_ML=1)')
-    } else {
-      try {
-        await runRequired('scripts/batch-ml-features.ts', {
-          ML_RECENT_DAYS: process.env.ML_DAILY_RECENT_DAYS ?? '260',
-          ML_MIN_HISTORY_DAYS: process.env.ML_DAILY_MIN_HISTORY_DAYS ?? '200',
-        }, heartbeat)
-        await lock.heartbeat()
-        await runRequired('scripts/batch-ml-labels.ts', {}, heartbeat)
-        await lock.heartbeat()
-        await runRequired('scripts/batch-ml-outcomes.ts', {}, heartbeat)
-        await lock.heartbeat()
-        await runRequired('scripts/batch-ml-train.ts', {
-          ML_TRAIN_START_DATE: process.env.ML_DAILY_TRAIN_START_DATE ?? '2008-05-07',
-          ML_TRAIN_SAMPLE_MODE: process.env.ML_DAILY_TRAIN_SAMPLE_MODE ?? 'yearly',
-          ML_TRAIN_LABEL_SOURCE: process.env.ML_DAILY_TRAIN_LABEL_SOURCE ?? 'extrema',
-          ML_TRAIN_LIMIT: process.env.ML_DAILY_TRAIN_LIMIT ?? process.env.ML_TRAIN_LIMIT ?? '80000',
-        }, heartbeat)
-        await lock.heartbeat()
-        await runRequired('scripts/batch-ml-candidates.ts', {}, heartbeat)
-        await lock.heartbeat()
-        await runRequired('scripts/batch-ml-predict.ts', {}, heartbeat)
-        await lock.heartbeat()
-        if (process.env.ML_DAILY_EVALUATE === '1') {
-          await runRequired('scripts/batch-ml-evaluate.ts', {}, heartbeat)
+      if (process.env.SKIP_DAILY_ML === '1') {
+        console.log('Daily ML refresh skipped (SKIP_DAILY_ML=1)')
+      } else {
+        try {
+          await runRequired('scripts/batch-ml-features.ts', {
+            ML_RECENT_DAYS: process.env.ML_DAILY_RECENT_DAYS ?? '260',
+            ML_MIN_HISTORY_DAYS: process.env.ML_DAILY_MIN_HISTORY_DAYS ?? '200',
+          }, heartbeat)
           await lock.heartbeat()
-        } else {
-          console.log('Daily ML walk-forward evaluation skipped (set ML_DAILY_EVALUATE=1 for weekly/manual evaluation)')
-        }
-        await runRequired('scripts/batch-ml-context-features.ts', {
-          ML_CONTEXT_RECENT_DAYS: process.env.ML_CONTEXT_DAILY_RECENT_DAYS ?? '260',
-        }, heartbeat)
-        await lock.heartbeat()
-        await runRequired('scripts/batch-ml-physics-features.ts', {
-          ML_PHYSICS_RECENT_DAYS: process.env.ML_PHYSICS_DAILY_RECENT_DAYS ?? '260',
-          ML_PHYSICS_MIN_HISTORY_DAYS: process.env.ML_PHYSICS_DAILY_MIN_HISTORY_DAYS ?? '220',
-        }, heartbeat)
-        await lock.heartbeat()
-        await runRequired('scripts/batch-ml-short-labels.ts', {
-          ML_SHORT_WRITE_RL_STATES: process.env.ML_SHORT_DAILY_WRITE_RL_STATES ?? '1',
-        }, heartbeat)
-        await lock.heartbeat()
-        await runRequired('scripts/batch-ml-physics-train.ts', {
-          ML_PHYSICS_TRAIN_START_DATE: process.env.ML_PHYSICS_DAILY_TRAIN_START_DATE ?? '2008-05-07',
-          ML_PHYSICS_TRAIN_SAMPLE_MODE: process.env.ML_PHYSICS_DAILY_TRAIN_SAMPLE_MODE ?? 'yearly',
-          ML_PHYSICS_TRAIN_LIMIT: process.env.ML_PHYSICS_DAILY_TRAIN_LIMIT ?? process.env.ML_PHYSICS_TRAIN_LIMIT ?? '120000',
-        }, heartbeat)
-        await lock.heartbeat()
-        await runRequired('scripts/batch-ml-physics-candidates.ts', {}, heartbeat)
-        await lock.heartbeat()
-        await runRequired('scripts/build-serving-ml-insights.ts', {}, heartbeat)
-        await lock.heartbeat()
-        await runRequired('scripts/batch-ml-similarity-evaluate.ts', {}, heartbeat)
-        await lock.heartbeat()
-        await runRequired('scripts/batch-ml-rl-policy.ts', {}, heartbeat)
-        await lock.heartbeat()
-        await runRequired('scripts/build-historical-universe.ts', {}, heartbeat)
-        await lock.heartbeat()
-        await runRequired('scripts/batch-ml-feature-health.ts', {}, heartbeat)
-        await lock.heartbeat()
-        if (process.env.ML_PHYSICS_DAILY_EVALUATE === '1') {
-          await runRequired('scripts/batch-ml-physics-evaluate.ts', {}, heartbeat)
+          await runRequired('scripts/batch-ml-labels.ts', {}, heartbeat)
           await lock.heartbeat()
-        } else {
-          console.log('Daily ML physics walk-forward evaluation skipped (set ML_PHYSICS_DAILY_EVALUATE=1 for weekly/manual evaluation)')
+          await runRequired('scripts/batch-ml-outcomes.ts', {}, heartbeat)
+          await lock.heartbeat()
+          await runRequired('scripts/batch-ml-train.ts', {
+            ML_TRAIN_START_DATE: process.env.ML_DAILY_TRAIN_START_DATE ?? '2008-05-07',
+            ML_TRAIN_SAMPLE_MODE: process.env.ML_DAILY_TRAIN_SAMPLE_MODE ?? 'yearly',
+            ML_TRAIN_LABEL_SOURCE: process.env.ML_DAILY_TRAIN_LABEL_SOURCE ?? 'extrema',
+            ML_TRAIN_LIMIT: process.env.ML_DAILY_TRAIN_LIMIT ?? process.env.ML_TRAIN_LIMIT ?? '80000',
+          }, heartbeat)
+          await lock.heartbeat()
+          await runRequired('scripts/batch-ml-candidates.ts', {}, heartbeat)
+          await lock.heartbeat()
+          await runRequired('scripts/batch-ml-predict.ts', {}, heartbeat)
+          await lock.heartbeat()
+          if (process.env.ML_DAILY_EVALUATE === '1') {
+            await runRequired('scripts/batch-ml-evaluate.ts', {}, heartbeat)
+            await lock.heartbeat()
+          } else {
+            console.log('Daily ML walk-forward evaluation skipped (set ML_DAILY_EVALUATE=1 for weekly/manual evaluation)')
+          }
+          await runRequired('scripts/batch-ml-context-features.ts', {
+            ML_CONTEXT_RECENT_DAYS: process.env.ML_CONTEXT_DAILY_RECENT_DAYS ?? '260',
+          }, heartbeat)
+          await lock.heartbeat()
+          await runRequired('scripts/batch-ml-physics-features.ts', {
+            ML_PHYSICS_RECENT_DAYS: process.env.ML_PHYSICS_DAILY_RECENT_DAYS ?? '260',
+            ML_PHYSICS_MIN_HISTORY_DAYS: process.env.ML_PHYSICS_DAILY_MIN_HISTORY_DAYS ?? '220',
+          }, heartbeat)
+          await lock.heartbeat()
+          await runRequired('scripts/batch-ml-short-labels.ts', {
+            ML_SHORT_WRITE_RL_STATES: process.env.ML_SHORT_DAILY_WRITE_RL_STATES ?? '1',
+          }, heartbeat)
+          await lock.heartbeat()
+          await runRequired('scripts/batch-ml-physics-train.ts', {
+            ML_PHYSICS_TRAIN_START_DATE: process.env.ML_PHYSICS_DAILY_TRAIN_START_DATE ?? '2008-05-07',
+            ML_PHYSICS_TRAIN_SAMPLE_MODE: process.env.ML_PHYSICS_DAILY_TRAIN_SAMPLE_MODE ?? 'yearly',
+            ML_PHYSICS_TRAIN_LIMIT: process.env.ML_PHYSICS_DAILY_TRAIN_LIMIT ?? process.env.ML_PHYSICS_TRAIN_LIMIT ?? '120000',
+          }, heartbeat)
+          await lock.heartbeat()
+          await runRequired('scripts/batch-ml-physics-candidates.ts', {}, heartbeat)
+          await lock.heartbeat()
+          await runRequired('scripts/build-serving-ml-insights.ts', {}, heartbeat)
+          await lock.heartbeat()
+          await runRequired('scripts/batch-ml-similarity-evaluate.ts', {}, heartbeat)
+          await lock.heartbeat()
+          await runRequired('scripts/batch-ml-rl-policy.ts', {}, heartbeat)
+          await lock.heartbeat()
+          await runRequired('scripts/build-historical-universe.ts', {}, heartbeat)
+          await lock.heartbeat()
+          await runRequired('scripts/batch-ml-feature-health.ts', {}, heartbeat)
+          await lock.heartbeat()
+          if (process.env.ML_PHYSICS_DAILY_EVALUATE === '1') {
+            await runRequired('scripts/batch-ml-physics-evaluate.ts', {}, heartbeat)
+            await lock.heartbeat()
+          } else {
+            console.log('Daily ML physics walk-forward evaluation skipped (set ML_PHYSICS_DAILY_EVALUATE=1 for weekly/manual evaluation)')
+          }
+        } catch (err) {
+          const mlError = `daily-ml: ${errorMessage(err)}`
+          optionalErrors.push(mlError)
+          console.error('Daily ML refresh failed; dashboard freshness is already protected:', mlError)
         }
-      } catch (err) {
-        const mlError = `daily-ml: ${errorMessage(err)}`
-        optionalErrors.push(mlError)
-        console.error('Daily ML refresh failed; dashboard freshness is already protected:', mlError)
       }
     }
 

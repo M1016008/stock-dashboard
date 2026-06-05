@@ -16,10 +16,16 @@ US業種分類をSEC EDGARから補完する場合、SEC向けのUser-Agentを�
 SEC_USER_AGENT="StockBoard/1.0 contact@example.com"
 ```
 
-必要に応じて外部SSD上のUS専用分析DBを指定できます。
+US専用分析DBは外部SSD上に明示します。全件ビルドでは `US_ANALYTICS_DB_PATH` 未指定を拒否します。
 
 ```bash
 US_ANALYTICS_DB_PATH=/Volumes/<SSD名>/stockboard/stockboard-us.db
+```
+
+小さなローカル検証だけ例外的に `data/stockboard-us.db` を使う場合は、件数制限を付けたうえで明示的に許可します。
+
+```bash
+US_ANALYTICS_ALLOW_LOCAL=1 US_ANALYTICS_LIMIT=100 npm run batch:us-analytics-db
 ```
 
 ## 初回同期
@@ -35,6 +41,7 @@ npm run batch:us-full
 - `batch:us-ohlcv`: Tiingo EODを `market_ohlcv_daily(market='US')` に保存
 - `batch:us-snapshots`: US用ステージ/MAを `market_daily_snapshots(market='US')` に生成
 - `batch:us-analytics-db`: 既存MLパイプライン互換のUS専用SQLiteを生成
+- `batch:us-analytics-validate`: US専用SQLiteのコピー済み件数・銘柄数・行数を検証
 
 上場廃止銘柄を含む取得可能な全期間バックフィルは以下を使います。
 
@@ -65,8 +72,9 @@ npm run auto-update-us:install
 1. TiingoのUS銘柄ユニバース更新
 2. Tiingo EOD差分取得
 3. `market_daily_snapshots` のUSステージ/MA更新
-4. US専用分析DB (`US_ANALYTICS_DB_PATH` または `data/stockboard-us.db`) への差分反映
-5. US専用DBを使った `batch:ml-daily`
+4. US専用分析DB (`US_ANALYTICS_DB_PATH`) への差分反映
+5. US専用分析DBの全件性検証
+6. US専用DBを使った `batch:ml-daily`
 
 初回フルバックフィルや全期間MLなどの重い処理が動いている場合、日次更新は自動でスキップします。データが既に最新候補日まで入っている場合もTiingo取得はスキップし、必要な後続処理だけを確認します。
 

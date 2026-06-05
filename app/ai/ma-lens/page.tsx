@@ -2,6 +2,7 @@ import Link from 'next/link'
 import { Suspense } from 'react'
 import { PageTitle } from '@/components/layout/PageTitle'
 import { Card, CardHeader } from '@/components/ui/Card'
+import { HistoricalPatternSearchPanel } from '@/components/ai/HistoricalPatternSearchPanel'
 import { execAll, execGet } from '@/lib/db/client'
 import {
   dot,
@@ -2202,6 +2203,14 @@ export default async function MaLensPage({
           hint="一時点の価格だけではなく、MAの角度・距離・株価位置を時系列の流れとして特徴量化します。"
         />
         <FeatureInputGrid />
+      </Card>
+
+      <Card size="lg">
+        <CardHeader
+          title="過去パターン検索"
+          hint="任意期間のMA形状と6桁ステージの流れを基準に、現在市場の類似銘柄を探します。"
+        />
+        <HistoricalPatternSearchPanel latestFeatureDate={physicsStatus.latestDate} />
       </Card>
 
       {!detailMode && (

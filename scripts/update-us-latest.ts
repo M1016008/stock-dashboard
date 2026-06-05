@@ -176,6 +176,11 @@ async function main() {
     const beforeSnapshots = await latestUsSnapshotDate()
     console.log(`US latest update started: expected=${expected}, ohlcv=${beforeOhlcv ?? '-'}, snapshots=${beforeSnapshots ?? '-'}`)
 
+    const usAnalyticsDbPath = process.env.US_ANALYTICS_DB_PATH?.trim()
+    if (!usAnalyticsDbPath) {
+      throw new Error('US_ANALYTICS_DB_PATH is required for US latest update. Point it at the external SSD analytics DB before running.')
+    }
+
     await runNpm('batch:us-universe', {
       US_INCLUDE_INACTIVE: process.env.US_DAILY_INCLUDE_INACTIVE ?? '0',
       UPDATE_CHILD_TIMEOUT_MINUTES: process.env.US_UNIVERSE_TIMEOUT_MINUTES ?? '30',
@@ -198,6 +203,17 @@ async function main() {
     }
 
     const afterOhlcv = await latestUsOhlcvDate()
+    if (!afterOhlcv) {
+      console.log('US latest update stopped: OHLCV is still empty after fetch')
+      return
+    }
+    if (afterOhlcv < expected && process.env.US_ALLOW_STALE_DAILY_UPDATE !== '1') {
+      console.log(
+        `US latest update stopped: Tiingo EOD is not available yet (latest=${afterOhlcv}, expected=${expected}); downstream snapshots/analytics/ML skipped`,
+      )
+      return
+    }
+
     const latestSnapshots = await latestUsSnapshotDate()
     if (afterOhlcv && (latestSnapshots == null || latestSnapshots < afterOhlcv || process.env.US_FORCE_SNAPSHOT_REFRESH === '1')) {
       await runNpm('batch:us-snapshots', {
@@ -211,8 +227,15 @@ async function main() {
     }
 
     await runNpm('batch:us-analytics-db', {
+      US_ANALYTICS_DB_PATH: usAnalyticsDbPath,
       US_ANALYTICS_LIMIT: process.env.US_DAILY_ANALYTICS_LIMIT ?? '0',
       UPDATE_CHILD_TIMEOUT_MINUTES: process.env.US_ANALYTICS_TIMEOUT_MINUTES ?? '240',
+    }, heartbeat)
+    await lock.heartbeat()
+
+    await runNpm('batch:us-analytics-validate', {
+      US_ANALYTICS_DB_PATH: usAnalyticsDbPath,
+      UPDATE_CHILD_TIMEOUT_MINUTES: process.env.US_ANALYTICS_VALIDATE_TIMEOUT_MINUTES ?? '30',
     }, heartbeat)
     await lock.heartbeat()
 
@@ -220,7 +243,7 @@ async function main() {
       console.log('US daily ML skipped (US_SKIP_DAILY_ML=1)')
     } else {
       await runNpm('batch:ml-daily', {
-        STOCKBOARD_DB_PATH: process.env.US_ANALYTICS_DB_PATH ?? 'data/stockboard-us.db',
+        STOCKBOARD_DB_PATH: usAnalyticsDbPath,
         ML_DAILY_TRAIN_LIMIT: process.env.US_ML_DAILY_TRAIN_LIMIT ?? '80000',
         ML_PHYSICS_DAILY_TRAIN_LIMIT: process.env.US_ML_PHYSICS_DAILY_TRAIN_LIMIT ?? '120000',
         UPDATE_CHILD_TIMEOUT_MINUTES: process.env.US_ML_DAILY_TIMEOUT_MINUTES ?? '360',
