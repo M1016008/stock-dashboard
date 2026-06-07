@@ -1,10 +1,17 @@
 // scripts/batch-ml-physics-evaluate.ts
 //
-// ma_physics_v2 の短期モデルをウォークフォワード検証する。
+// 現行 ma_physics 特徴量セットの短期モデルをウォークフォワード検証する。
 
 import { execAll, execBatch, execGet } from '@/lib/db/client'
 import { dot, sigmoid } from '@/lib/backtest/ml'
-import { ML_PHYSICS_FEATURE_NAMES, ML_PHYSICS_FEATURE_SET, type PhysicsDirection } from '@/lib/backtest/ml-physics'
+import {
+  ML_PHYSICS_FEATURE_NAMES,
+  ML_PHYSICS_DEFAULT_HORIZON_LIST,
+  ML_PHYSICS_FEATURE_SET,
+  ML_PHYSICS_MODEL_TYPE,
+  ML_PHYSICS_VERSION,
+  type PhysicsDirection,
+} from '@/lib/backtest/ml-physics'
 
 type LabeledRow = {
   date: string
@@ -25,7 +32,7 @@ type ScoredRow = {
   minReturnPct: number | null
 }
 
-const HORIZONS = (process.env.ML_PHYSICS_HORIZONS ?? '5,10,15')
+const HORIZONS = (process.env.ML_PHYSICS_HORIZONS ?? ML_PHYSICS_DEFAULT_HORIZON_LIST)
   .split(',')
   .map((value) => Number(value.trim()))
   .filter((value) => Number.isFinite(value) && value > 0)
@@ -165,7 +172,7 @@ async function evaluateFold(horizon: number, year: number): Promise<Array<{ sql:
       }))
       .sort((a, b) => b.score - a.score)
     const summary = summarize(scored)
-    const modelName = `walkforward_physics_${direction}_h${horizon}_${year}`
+    const modelName = `walkforward_physics_v${ML_PHYSICS_VERSION}_${direction}_h${horizon}_${year}`
     statements.push({
       sql: `
         INSERT OR REPLACE INTO ml_model_evaluations
@@ -178,7 +185,7 @@ async function evaluateFold(horizon: number, year: number): Promise<Array<{ sql:
       args: [
         `${modelName}:${validationStart}:${validationEnd}`,
         modelName,
-        'logistic_regression_physics_v2_walkforward',
+        `${ML_PHYSICS_MODEL_TYPE}_walkforward`,
         direction,
         horizon,
         validationEnd.slice(0, 10),
@@ -234,4 +241,3 @@ main()
     console.error(error)
     process.exit(1)
   })
-

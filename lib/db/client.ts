@@ -77,6 +77,7 @@ async function ensureLocalSqlitePragmas(): Promise<void> {
  */
 export async function ensureReady(): Promise<void> {
   await ensureLocalSqlitePragmas()
+  if (process.env.SKIP_SCHEMA_ENSURE === '1') return
   if (!globalForDb.schemaReady) {
     globalForDb.schemaReady = ensureSchema(client).catch((e) => {
       // 失敗時はキャッシュをクリアして次回再試行できるようにする

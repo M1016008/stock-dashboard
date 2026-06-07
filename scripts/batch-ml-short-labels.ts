@@ -1,42 +1,58 @@
 // scripts/batch-ml-short-labels.ts
 //
-// forward_extrema から、5/10/15営業日の短期MLラベルとRL用 state/action/reward を作る。
+// forward_extrema から、短期〜月足目線のMLラベルとRL用 state/action/reward を作る。
 
-import { execRun } from '@/lib/db/client'
-import { ML_PHYSICS_FEATURE_SET } from '@/lib/backtest/ml-physics'
+import { execAll, execRun } from '@/lib/db/client'
+import { ML_PHYSICS_DEFAULT_HORIZON_LIST, ML_PHYSICS_FEATURE_SET } from '@/lib/backtest/ml-physics'
 
-const HORIZONS = (process.env.ML_SHORT_HORIZONS ?? '5,10,15')
+const HORIZONS = (process.env.ML_SHORT_HORIZONS ?? ML_PHYSICS_DEFAULT_HORIZON_LIST)
   .split(',')
   .map((value) => Number(value.trim()))
   .filter((value) => Number.isFinite(value) && value > 0)
 const START_DATE = process.env.ML_SHORT_LABEL_START_DATE?.trim() || null
 const END_DATE = process.env.ML_SHORT_LABEL_END_DATE?.trim() || null
 const WRITE_RL_STATES = process.env.ML_SHORT_WRITE_RL_STATES !== '0'
+const DATE_CHUNK_DAYS = Number(process.env.ML_SHORT_LABEL_DATE_CHUNK_DAYS ?? 0)
 
 function horizonPlaceholders(): string {
   return HORIZONS.map(() => '?').join(', ')
 }
 
-async function main() {
-  if (HORIZONS.length === 0) {
-    console.log('ml short labels: no horizons')
-    return
-  }
+function addDays(date: string, days: number): string {
+  const next = new Date(`${date}T00:00:00Z`)
+  next.setUTCDate(next.getUTCDate() + days)
+  return next.toISOString().slice(0, 10)
+}
 
+function minDate(a: string, b: string): string {
+  return a <= b ? a : b
+}
+
+async function syncLabelsForRange(startDate: string | null, endDate: string | null): Promise<void> {
   const where = [`fe.horizon_days IN (${horizonPlaceholders()})`]
   const args: Array<string | number> = [...HORIZONS]
-  if (START_DATE) {
+  if (startDate) {
     where.push('fe.date >= ?')
-    args.push(START_DATE)
+    args.push(startDate)
   }
-  if (END_DATE) {
+  if (endDate) {
     where.push('fe.date <= ?')
-    args.push(END_DATE)
+    args.push(endDate)
   }
 
   await execRun(
     `
-    INSERT OR REPLACE INTO ml_short_labels
+    DELETE FROM ml_short_labels
+    WHERE horizon_days IN (${horizonPlaceholders()})
+      ${startDate ? 'AND date >= ?' : ''}
+      ${endDate ? 'AND date <= ?' : ''}
+    `,
+    [...HORIZONS, ...(startDate ? [startDate] : []), ...(endDate ? [endDate] : [])],
+  )
+
+  await execRun(
+    `
+    INSERT INTO ml_short_labels
       (ticker, date, horizon_days, return_pct, max_return_pct, min_return_pct,
        up_label, down_label, wait_label, reward_long, reward_short, reward_wait,
        label_json, computed_at)
@@ -46,12 +62,22 @@ async function main() {
         CASE
           WHEN fe.horizon_days <= 5 THEN 4.0
           WHEN fe.horizon_days <= 10 THEN 6.0
-          ELSE 8.0
+          WHEN fe.horizon_days <= 15 THEN 8.0
+          WHEN fe.horizon_days <= 20 THEN 10.0
+          WHEN fe.horizon_days <= 40 THEN 15.0
+          WHEN fe.horizon_days <= 60 THEN 20.0
+          WHEN fe.horizon_days <= 90 THEN 25.0
+          ELSE 30.0
         END AS up_target,
         CASE
           WHEN fe.horizon_days <= 5 THEN -3.0
           WHEN fe.horizon_days <= 10 THEN -5.0
-          ELSE -7.0
+          WHEN fe.horizon_days <= 15 THEN -7.0
+          WHEN fe.horizon_days <= 20 THEN -8.0
+          WHEN fe.horizon_days <= 40 THEN -12.0
+          WHEN fe.horizon_days <= 60 THEN -15.0
+          WHEN fe.horizon_days <= 90 THEN -20.0
+          ELSE -25.0
         END AS down_target
       FROM forward_extrema fe
       WHERE ${where.join(' AND ')}
@@ -104,6 +130,59 @@ async function main() {
     `,
     args,
   )
+}
+
+async function labelDateBounds(): Promise<{ minDate: string; maxDate: string } | null> {
+  const where = [`horizon_days IN (${horizonPlaceholders()})`]
+  const args: Array<string | number> = [...HORIZONS]
+  if (START_DATE) {
+    where.push('date >= ?')
+    args.push(START_DATE)
+  }
+  if (END_DATE) {
+    where.push('date <= ?')
+    args.push(END_DATE)
+  }
+  const rows = await execAll<{ minDate: string | null; maxDate: string | null }>(
+    `SELECT MIN(date) AS minDate, MAX(date) AS maxDate FROM forward_extrema WHERE ${where.join(' AND ')}`,
+    args,
+  )
+  const row = rows[0]
+  if (!row?.minDate || !row.maxDate) return null
+  return { minDate: row.minDate, maxDate: row.maxDate }
+}
+
+async function main() {
+  if (HORIZONS.length === 0) {
+    console.log('ml short labels: no horizons')
+    return
+  }
+
+  if (DATE_CHUNK_DAYS > 0) {
+    if (WRITE_RL_STATES) {
+      throw new Error('ML_SHORT_LABEL_DATE_CHUNK_DAYS currently requires ML_SHORT_WRITE_RL_STATES=0')
+    }
+    const bounds = await labelDateBounds()
+    if (!bounds) {
+      console.log('ml short labels: no forward_extrema rows')
+      return
+    }
+    let cursor = bounds.minDate
+    let chunks = 0
+    while (cursor <= bounds.maxDate) {
+      const chunkEnd = minDate(addDays(cursor, DATE_CHUNK_DAYS - 1), bounds.maxDate)
+      await syncLabelsForRange(cursor, chunkEnd)
+      chunks += 1
+      console.log(`ml short labels chunk ${chunks}: horizons=${HORIZONS.join('/')}, start=${cursor}, end=${chunkEnd}`)
+      cursor = addDays(chunkEnd, 1)
+    }
+    console.log(
+      `ml short labels synced: horizons=${HORIZONS.join('/')}, start=${bounds.minDate}, end=${bounds.maxDate}, chunks=${chunks}, rl_states=off`,
+    )
+    return
+  }
+
+  await syncLabelsForRange(START_DATE, END_DATE)
 
   if (WRITE_RL_STATES) {
     const actions = [

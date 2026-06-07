@@ -187,7 +187,7 @@ async function existingHorizonEvents(
       fe.days_to_min,
       NULL AS pattern_start_date,
       fe.date AS pattern_end_date
-    FROM forward_extrema fe
+    FROM forward_extrema fe INDEXED BY fext_horizon_date_idx
     INNER JOIN ml_feature_vectors_v2 f
       ON f.feature_set = ?
      AND f.ticker = fe.ticker

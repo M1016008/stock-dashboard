@@ -5,7 +5,7 @@
 // 未来情報を最新候補生成へ直接混ぜない。
 
 import { execAll, execBatch, execGet, execRun } from '@/lib/db/client'
-import { ML_PHYSICS_FEATURE_SET, type PhysicsFeatureProfile } from '@/lib/backtest/ml-physics'
+import { ML_PHYSICS_DEFAULT_HORIZON_LIST, ML_PHYSICS_FEATURE_SET, type PhysicsFeatureProfile } from '@/lib/backtest/ml-physics'
 
 type Action = 'long_entry' | 'short_entry' | 'wait'
 
@@ -65,7 +65,7 @@ type PolicyResult = {
   oracleMatches: number
 }
 
-const HORIZONS = (process.env.ML_RL_HORIZONS ?? '5,10,15')
+const HORIZONS = (process.env.ML_RL_HORIZONS ?? ML_PHYSICS_DEFAULT_HORIZON_LIST)
   .split(',')
   .map((value) => Number(value.trim()))
   .filter((value) => Number.isFinite(value) && value > 0)

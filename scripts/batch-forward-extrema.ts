@@ -3,7 +3,7 @@
 // 指定日から各 horizon 内に「どこまで上がったか / 下がったか」を計算する。
 // forward_returns は終端日の騰落率だけなので、到達率分析と ML/RL ラベル用に別テーブルへ保存する。
 
-import { execAll, execRun } from '@/lib/db/client'
+import { execAll, execBatch } from '@/lib/db/client'
 import { HORIZONS as DEFAULT_HORIZONS, TARGET_PCTS } from '@/lib/backtest/signals'
 
 type Bar = {
@@ -53,6 +53,8 @@ function parseHorizons(value: string | undefined): number[] {
 }
 
 const HORIZONS = parseHorizons(process.env.FORWARD_EXTREMA_HORIZONS)
+const HORIZON_SET = new Set(HORIZONS)
+const MAX_HORIZON = Math.max(...HORIZONS)
 
 async function tickers(): Promise<string[]> {
   const filter = process.env.TICKERS?.split(',').map((value) => value.trim()).filter(Boolean)
@@ -86,67 +88,89 @@ function computeTicker(ticker: string, bars: Bar[]): ExtremaRow[] {
     if (!base || !Number.isFinite(base.close) || base.close <= 0) continue
     if (END_DATE && base.date > END_DATE) break
 
-    for (const horizon of HORIZONS) {
-      const endIndex = i + horizon
-      if (endIndex >= bars.length) continue
-      const future = bars.slice(i + 1, endIndex + 1)
-      if (future.length !== horizon) continue
+    let maxReturnPct = Number.NEGATIVE_INFINITY
+    let minReturnPct = Number.POSITIVE_INFINITY
+    let maxReturnDate = ''
+    let minReturnDate = ''
+    let daysToMax = 0
+    let daysToMin = 0
+    const targetDays: Record<number, number | null> = { 10: null, 20: null, 40: null }
+    const maxFutureDays = Math.min(MAX_HORIZON, bars.length - i - 1)
 
-      let maxReturnPct = Number.NEGATIVE_INFINITY
-      let minReturnPct = Number.POSITIVE_INFINITY
-      let maxReturnDate = ''
-      let minReturnDate = ''
-      let daysToMax = 0
-      let daysToMin = 0
-      const targetDays: Record<number, number | null> = { 10: null, 20: null, 40: null }
-
-      for (const [offset, bar] of future.entries()) {
-        const day = offset + 1
-        const highReturn = ((bar.high - base.close) / base.close) * 100
-        const lowReturn = ((bar.low - base.close) / base.close) * 100
-        if (highReturn > maxReturnPct) {
-          maxReturnPct = highReturn
-          maxReturnDate = bar.date
-          daysToMax = day
-        }
-        if (lowReturn < minReturnPct) {
-          minReturnPct = lowReturn
-          minReturnDate = bar.date
-          daysToMin = day
-        }
-        for (const target of TARGET_PCTS) {
-          if (targetDays[target] == null && highReturn >= target) targetDays[target] = day
-        }
+    for (let day = 1; day <= maxFutureDays; day++) {
+      const bar = bars[i + day]
+      const highReturn = ((bar.high - base.close) / base.close) * 100
+      const lowReturn = ((bar.low - base.close) / base.close) * 100
+      if (highReturn > maxReturnPct) {
+        maxReturnPct = highReturn
+        maxReturnDate = bar.date
+        daysToMax = day
+      }
+      if (lowReturn < minReturnPct) {
+        minReturnPct = lowReturn
+        minReturnDate = bar.date
+        daysToMin = day
+      }
+      for (const target of TARGET_PCTS) {
+        if (targetDays[target] == null && highReturn >= target) targetDays[target] = day
       }
 
-      const end = bars[endIndex]
-      const returnPct = ((end.close - base.close) / base.close) * 100
-      records.push({
-        ticker,
-        date: base.date,
-        horizon_days: horizon,
-        return_pct: returnPct,
-        end_date: end.date,
-        max_return_pct: maxReturnPct,
-        max_return_date: maxReturnDate,
-        days_to_max: daysToMax,
-        min_return_pct: minReturnPct,
-        min_return_date: minReturnDate,
-        days_to_min: daysToMin,
-        hit_10: targetDays[10] == null ? 0 : 1,
-        hit_20: targetDays[20] == null ? 0 : 1,
-        hit_40: targetDays[40] == null ? 0 : 1,
-        days_to_10: targetDays[10],
-        days_to_20: targetDays[20],
-        days_to_40: targetDays[40],
-      })
+      if (HORIZON_SET.has(day)) {
+        const returnPct = ((bar.close - base.close) / base.close) * 100
+        records.push({
+          ticker,
+          date: base.date,
+          horizon_days: day,
+          return_pct: returnPct,
+          end_date: bar.date,
+          max_return_pct: maxReturnPct,
+          max_return_date: maxReturnDate,
+          days_to_max: daysToMax,
+          min_return_pct: minReturnPct,
+          min_return_date: minReturnDate,
+          days_to_min: daysToMin,
+          hit_10: targetDays[10] == null ? 0 : 1,
+          hit_20: targetDays[20] == null ? 0 : 1,
+          hit_40: targetDays[40] == null ? 0 : 1,
+          days_to_10: targetDays[10],
+          days_to_20: targetDays[20],
+          days_to_40: targetDays[40],
+        })
+      }
     }
   }
 
   return records
 }
 
-async function insertRows(rows: ExtremaRow[]): Promise<void> {
+async function insertRows(ticker: string, rows: ExtremaRow[]): Promise<void> {
+  if (rows.length === 0) return
+  const statements: Parameters<typeof execBatch>[0] = []
+  const horizonPlaceholders = HORIZONS.map(() => '?').join(', ')
+  const minDate = rows[0].date
+  const maxDate = rows[rows.length - 1].date
+
+  statements.push({
+    sql: `
+      DELETE FROM forward_extrema
+      WHERE ticker = ?
+        AND horizon_days IN (${horizonPlaceholders})
+        AND date BETWEEN ? AND ?
+    `,
+    args: [ticker, ...HORIZONS, minDate, maxDate],
+  })
+  if (WRITE_MODEL_LABELS) {
+    statements.push({
+      sql: `
+        DELETE FROM model_labels
+        WHERE ticker = ?
+          AND horizon_days IN (${horizonPlaceholders})
+          AND date BETWEEN ? AND ?
+      `,
+      args: [ticker, ...HORIZONS, minDate, maxDate],
+    })
+  }
+
   for (let i = 0; i < rows.length; i += CHUNK) {
     const chunk = rows.slice(i, i + CHUNK)
     const extremaArgs: Array<string | number | null> = []
@@ -173,15 +197,15 @@ async function insertRows(rows: ExtremaRow[]): Promise<void> {
       return `(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch())`
     }).join(', ')
 
-    await execRun(
-      `
-      INSERT OR REPLACE INTO forward_extrema
+    statements.push({
+      sql: `
+      INSERT INTO forward_extrema
         (ticker, date, horizon_days, return_pct, end_date, max_return_pct, max_return_date, days_to_max,
          min_return_pct, min_return_date, days_to_min, hit_10, hit_20, hit_40, days_to_10, days_to_20, days_to_40, computed_at)
       VALUES ${extremaValues}
       `,
-      extremaArgs,
-    )
+      args: extremaArgs,
+    })
 
     if (WRITE_MODEL_LABELS) {
       const labelArgs: Array<string | number | null> = []
@@ -211,17 +235,19 @@ async function insertRows(rows: ExtremaRow[]): Promise<void> {
         return `(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch())`
       }).join(', ')
 
-      await execRun(
-        `
-        INSERT OR REPLACE INTO model_labels
+      statements.push({
+        sql: `
+        INSERT INTO model_labels
           (ticker, date, horizon_days, return_pct, max_return_pct, min_return_pct, days_to_max,
            hit_10, hit_20, hit_40, reward_score, label_json, computed_at)
         VALUES ${labelValues}
         `,
-        labelArgs,
-      )
+        args: labelArgs,
+      })
     }
   }
+
+  if (statements.length > 0) await execBatch(statements)
 }
 
 async function main() {
@@ -239,7 +265,7 @@ async function main() {
       [ticker],
     )
     const rows = computeTicker(ticker, bars)
-    await insertRows(rows)
+    await insertRows(ticker, rows)
     total += rows.length
 
     if ((index + 1) % PROGRESS_EVERY === 0 || index === codes.length - 1) {

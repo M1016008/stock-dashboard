@@ -4,7 +4,12 @@
 
 import { execAll, execBatch, execGet, execRun } from '@/lib/db/client'
 import { dot, sigmoid, type MlDirection, type MlFeatureProfile } from '@/lib/backtest/ml'
-import { ML_PHYSICS_FEATURE_SET, type PhysicsDirection, type PhysicsFeatureProfile } from '@/lib/backtest/ml-physics'
+import {
+  ML_PHYSICS_DEFAULT_HORIZON_LIST,
+  ML_PHYSICS_FEATURE_SET,
+  type PhysicsDirection,
+  type PhysicsFeatureProfile,
+} from '@/lib/backtest/ml-physics'
 import { physicsSimilarity, physicsSimilarityScore } from '@/lib/ml/physics-similarity'
 
 type FeatureRow = {
@@ -21,6 +26,7 @@ type FeatureRow = {
 
 type CandidateRow = {
   as_of_date: string
+  horizon_days: number
   direction: MlDirection | PhysicsDirection
   rank: number
   ticker: string
@@ -64,6 +70,10 @@ const PERFORMANCE_PER_YEAR_LIMIT = Math.max(100, Number(process.env.ML_PERFORMAN
 const PERFORMANCE_TOP_LIMIT = Math.max(500, Number(process.env.ML_PERFORMANCE_TOP_LIMIT ?? 8000))
 const PERFORMANCE_MIN_SECTOR_N = Math.max(10, Number(process.env.ML_PERFORMANCE_MIN_SECTOR_N ?? 20))
 const PERFORMANCE_MODE = (process.env.ML_PERFORMANCE_MODE ?? 'metrics').trim()
+const PHYSICS_INSIGHT_HORIZONS = (process.env.ML_SIMILAR_PHYSICS_HORIZONS ?? process.env.ML_SIMILAR_PHYSICS_HORIZON ?? ML_PHYSICS_DEFAULT_HORIZON_LIST)
+  .split(',')
+  .map((value) => Number(value.trim()))
+  .filter((value) => Number.isFinite(value) && value > 0)
 
 function parseJson<T>(value: string | null | undefined, fallback: T): T {
   try {
@@ -111,16 +121,17 @@ async function loadLatestFeatures(date: string): Promise<FeatureRow[]> {
 }
 
 async function loadCandidates(date: string): Promise<CandidateRow[]> {
+  const horizons = PHYSICS_INSIGHT_HORIZONS.length > 0 ? PHYSICS_INSIGHT_HORIZONS : [10]
   return execAll<CandidateRow>(
     `
-    SELECT as_of_date, direction, rank, ticker, candidate_score, explanation_json
+    SELECT as_of_date, horizon_days, direction, rank, ticker, candidate_score, explanation_json
     FROM serving_ml_physics_candidates
     WHERE as_of_date = ?
-      AND horizon_days = ?
+      AND horizon_days IN (${horizons.map(() => '?').join(', ')})
     ORDER BY direction, rank
     LIMIT ?
     `,
-    [date, Number(process.env.ML_SIMILAR_PHYSICS_HORIZON ?? 10), Math.max(1, Number(process.env.ML_SIMILAR_CANDIDATE_LIMIT ?? 2000))],
+    [date, ...horizons, Math.max(1, Number(process.env.ML_SIMILAR_CANDIDATE_LIMIT ?? 4000))],
   )
 }
 

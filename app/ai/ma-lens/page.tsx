@@ -14,6 +14,7 @@ import {
   type MlFeatureProfile,
 } from '@/lib/backtest/ml'
 import {
+  ML_PHYSICS_DEFAULT_HORIZONS,
   ML_PHYSICS_FEATURE_SET,
   type PhysicsCandidateExplanation,
   type PhysicsCandidateReason,
@@ -34,6 +35,8 @@ export const revalidate = 0
 
 type Direction = 'up' | 'down'
 type MaKey = 'sma5' | 'sma25' | 'sma75' | 'sma200'
+
+const PHYSICS_LENS_HORIZONS = [10, 40, 90, 180]
 
 type Status = {
   firstFeatureDate: string | null
@@ -798,7 +801,9 @@ async function loadPhysicsStatus(): Promise<PhysicsDataStatus> {
   return { latestDate, rowsLatest, candidateDate, candidateRowsLatest }
 }
 
-async function loadPhysicsCandidates(horizonDays = 10): Promise<ParsedPhysicsCandidate[]> {
+async function loadPhysicsCandidates(horizonDays = PHYSICS_LENS_HORIZONS): Promise<ParsedPhysicsCandidate[]> {
+  const horizons = Array.isArray(horizonDays) ? horizonDays : [horizonDays]
+  const placeholders = horizons.map(() => '?').join(', ')
   const rows = await execAll<PhysicsCandidateRow>(
     `
     WITH latest AS (SELECT as_of_date AS date FROM serving_ml_physics_candidates WHERE as_of_date IS NOT NULL ORDER BY as_of_date DESC LIMIT 1)
@@ -806,11 +811,11 @@ async function loadPhysicsCandidates(horizonDays = 10): Promise<ParsedPhysicsCan
            c.candidate_score, c.model_name, c.feature_json, c.reason_json, c.explanation_json
     FROM serving_ml_physics_candidates c
     INNER JOIN latest l ON l.date = c.as_of_date
-    WHERE c.horizon_days = ?
-      AND c.rank <= 8
-    ORDER BY CASE c.direction WHEN 'up' THEN 0 WHEN 'down' THEN 1 ELSE 2 END, c.rank ASC
+    WHERE c.horizon_days IN (${placeholders})
+      AND c.rank <= 6
+    ORDER BY c.horizon_days ASC, CASE c.direction WHEN 'up' THEN 0 WHEN 'down' THEN 1 ELSE 2 END, c.rank ASC
     `,
-    [horizonDays],
+    horizons,
   )
   return rows.map((row) => {
     const profile = parseJson<PhysicsFeatureProfile | null>(row.feature_json, null)
@@ -1658,33 +1663,54 @@ function PhysicsCandidateCard({ candidate }: { candidate: ParsedPhysicsCandidate
 }
 
 function PhysicsLensPanel({ status, rows }: { status: PhysicsDataStatus; rows: ParsedPhysicsCandidate[] }) {
+  const physicsVersionLabel = ML_PHYSICS_FEATURE_SET.endsWith('_v3') ? 'v3' : 'v2'
+  const sections = [
+    { title: '短期', horizonDays: 10, body: '日足の速度・加速度に、週足/月足の支援や抵抗を重ねた短期候補です。' },
+    { title: '週足', horizonDays: 40, body: '週足トレンドが効く数週間〜約2か月の候補です。' },
+    { title: '月足', horizonDays: 90, body: '月足の方向性まで見た約3〜4か月の候補です。' },
+    { title: '長期月足', horizonDays: 180, body: '半年規模で、月足の土台や大きな崩れを重視する候補です。' },
+  ]
   const groups: Array<{ direction: PhysicsDirection; title: string; body: string }> = [
-    { direction: 'up', title: '短期上昇候補', body: 'SMA速度・加速度・距離拡大が上方向に揃いやすい形です。' },
-    { direction: 'down', title: '短期下落候補', body: 'SMA下向き加速、戻り失敗、距離の下方向拡大を重視します。' },
+    { direction: 'up', title: '上昇候補', body: 'SMA速度・加速度・距離拡大が上方向に揃いやすい形です。' },
+    { direction: 'down', title: '下落候補', body: 'SMA下向き加速、戻り失敗、距離の下方向拡大を重視します。' },
     { direction: 'wait', title: '見送り候補', body: '方向感より横ばい・収縮・逆行リスクが強く、条件待ちに寄せる形です。' },
   ]
   return (
     <Card size="lg">
       <CardHeader
-        title="チャート物理 v2"
-        hint={`SMAの速度・加速度・距離変化で1〜2週間の形状を読む短期MLです。特徴量 ${fmtCount(status.rowsLatest)}件 / 候補 ${fmtCount(status.candidateRowsLatest)}件`}
+        title={`チャート物理 ${physicsVersionLabel}`}
+        hint={`SMAの速度・加速度・距離変化、週足/月足の整列で短期〜月足の形状を読むMLです。学習horizon ${ML_PHYSICS_DEFAULT_HORIZONS.join('/')}営業日 / 特徴量 ${fmtCount(status.rowsLatest)}件 / 候補 ${fmtCount(status.candidateRowsLatest)}件`}
       />
       {rows.length === 0 ? (
         <div className="rounded-[4px] border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] p-3 text-[12px] font-semibold text-[var(--color-text-secondary)]">
-          ma_physics_v2 の候補はまだ生成されていません。`npm run batch:ml-physics-features && npm run batch:ml-short-labels && npm run batch:ml-physics-train && npm run batch:ml-physics-candidates` で生成できます。
+          {ML_PHYSICS_FEATURE_SET} の候補はまだ生成されていません。`npm run batch:ml-physics-features && npm run batch:ml-short-labels && npm run batch:ml-physics-train && npm run batch:ml-physics-candidates` で生成できます。
         </div>
       ) : (
-        <div className="grid gap-4 xl:grid-cols-3">
-          {groups.map((group) => {
-            const items = rows.filter((row) => row.direction === group.direction).slice(0, 4)
+        <div className="space-y-5">
+          {sections.map((section) => {
+            const sectionRows = rows.filter((row) => row.horizon_days === section.horizonDays)
+            if (sectionRows.length === 0) return null
             return (
-              <div key={group.direction} className="space-y-3">
-                <div>
-                  <div className={`text-[14px] font-bold ${group.direction === 'down' ? 'text-blue-700' : group.direction === 'wait' ? 'text-slate-700' : 'text-red-700'}`}>{group.title}</div>
-                  <p className="mt-1 text-[12px] font-semibold leading-relaxed text-[var(--color-text-secondary)]">{group.body}</p>
+              <div key={section.horizonDays} className="space-y-3">
+                <div className="border-l-4 border-[var(--color-market-red)] pl-3">
+                  <div className="text-[14px] font-bold text-[var(--color-brand-900)]">{section.title} {section.horizonDays}営業日</div>
+                  <p className="mt-1 text-[12px] font-semibold leading-relaxed text-[var(--color-text-secondary)]">{section.body}</p>
                 </div>
-                <div className="grid gap-3">
-                  {items.map((candidate) => <PhysicsCandidateCard key={`${candidate.direction}-${candidate.horizon_days}-${candidate.ticker}`} candidate={candidate} />)}
+                <div className="grid gap-4 xl:grid-cols-3">
+                  {groups.map((group) => {
+                    const items = sectionRows.filter((row) => row.direction === group.direction).slice(0, 3)
+                    return (
+                      <div key={`${section.horizonDays}-${group.direction}`} className="space-y-3">
+                        <div>
+                          <div className={`text-[14px] font-bold ${group.direction === 'down' ? 'text-blue-700' : group.direction === 'wait' ? 'text-slate-700' : 'text-red-700'}`}>{group.title}</div>
+                          <p className="mt-1 text-[12px] font-semibold leading-relaxed text-[var(--color-text-secondary)]">{group.body}</p>
+                        </div>
+                        <div className="grid gap-3">
+                          {items.map((candidate) => <PhysicsCandidateCard key={`${candidate.direction}-${candidate.horizon_days}-${candidate.ticker}`} candidate={candidate} />)}
+                        </div>
+                      </div>
+                    )
+                  })}
                 </div>
               </div>
             )
@@ -2174,7 +2200,7 @@ export default async function MaLensPage({
     loadStatus(),
     detailMode ? loadCandidates() : Promise.resolve([]),
     loadPhysicsStatus(),
-    loadPhysicsCandidates(10),
+    loadPhysicsCandidates(),
   ])
 
   const upCandidates = candidates.filter((candidate) => candidate.direction === 'up').slice(0, 8)
@@ -2191,7 +2217,7 @@ export default async function MaLensPage({
       <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
         <StatTile label="特徴量期間" value={`${fmtDate(status.firstFeatureDate)}〜${fmtDate(status.latestFeatureDate)}`} sub="2008年以降のML入力" />
         <StatTile label="最新特徴量" value={fmtCount(status.featureRowsLatest)} sub="最新日に生成済みの銘柄数" />
-        <StatTile label="物理特徴量" value={fmtCount(physicsStatus.rowsLatest)} sub={`ma_physics_v2 ${fmtDate(physicsStatus.latestDate)}`} />
+        <StatTile label="物理特徴量" value={fmtCount(physicsStatus.rowsLatest)} sub={`${ML_PHYSICS_FEATURE_SET} ${fmtDate(physicsStatus.latestDate)}`} />
         <StatTile label="教師ラベル" value={fmtDate(status.latestLabelDate)} sub={`${fmtCount(status.labelRowsLatest)}件 / 40営業日`} />
         <StatTile label="最新候補" value={fmtCount(status.candidateRowsLatest)} sub="上昇候補・下落警戒" />
         <StatTile label="モデル世代" value={fmtCount(status.modelCount)} sub="保存済みモデル数" />
@@ -2205,7 +2231,7 @@ export default async function MaLensPage({
         <FeatureInputGrid />
       </Card>
 
-      <Card size="lg">
+      <Card id="historical-pattern-search" size="lg" className="scroll-mt-28">
         <CardHeader
           title="過去パターン検索"
           hint="任意期間のMA形状と6桁ステージの流れを基準に、現在市場の類似銘柄を探します。"

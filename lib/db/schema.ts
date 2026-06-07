@@ -421,6 +421,12 @@ export const dashboardCache = sqliteTable('dashboard_cache', {
   computedAt:  integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
 })
 
+export const servingDailySnapshotDates = sqliteTable('serving_daily_snapshot_dates', {
+  date:       text('date').primaryKey(),
+  tickers:    integer('tickers').notNull(),
+  computedAt: integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+})
+
 // ─────────────────────────────────────
 // 9. Phase 2: 日次スナップショット (MA15本 + ステージ6種を事前計算)
 //    NULL 可。クールドスタート期間 (履歴不足) では計算できないため。
@@ -1120,6 +1126,7 @@ export const mlFeatureVectorsV2 = sqliteTable(
   (t) => ({
     pk:            primaryKey({ columns: [t.ticker, t.date, t.featureSet] }),
     dateIdx:       index('ml_feature_vectors_v2_date_idx').on(t.featureSet, t.date),
+    dateOnlyIdx:   index('ml_feature_vectors_v2_date_only_idx').on(t.date),
     tickerDateIdx: index('ml_feature_vectors_v2_ticker_date_idx').on(t.ticker, t.date),
   }),
 )

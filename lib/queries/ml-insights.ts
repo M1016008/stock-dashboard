@@ -3,6 +3,7 @@ import { ML_PHYSICS_FEATURE_SET } from '@/lib/backtest/ml-physics'
 import { MIN_DISPLAY_SIMILARITY_SCORE } from '@/lib/ml/similarity-threshold'
 
 export type MlDirectionFilter = 'up' | 'down' | 'both'
+export type MlObjectiveVariant = 'enhanced' | 'baseline' | 'all'
 
 export type CurrentSimilarInsight = {
   asOfDate: string
@@ -21,6 +22,7 @@ export type CurrentSimilarInsight = {
 
 export type MlSectorRanking = {
   asOfDate: string
+  horizonDays: number
   sectorType: '17' | '33'
   sectorName: string
   direction: 'up' | 'down'
@@ -34,6 +36,21 @@ export type MlSectorRanking = {
   }>
 }
 
+export type MlSectorCandidate = {
+  asOfDate: string
+  direction: 'up' | 'down'
+  rank: number
+  ticker: string
+  name: string | null
+  sector17Name: string
+  sector33Name: string
+  candidateScore: number
+  modelName: string | null
+  close: number | null
+  stageCode: string | null
+  maOrder: string | null
+}
+
 export type MlPerformance = {
   asOfDate: string
   direction: 'up' | 'down'
@@ -45,6 +62,36 @@ export type MlPerformance = {
   downRate: number | null
   medianReturnPct: number | null
   avgReturnPct: number | null
+  payload: Record<string, unknown>
+}
+
+export type MlObjectiveValidation = {
+  evaluationDate: string
+  modelName: string | null
+  modelType: string
+  variant: Exclude<MlObjectiveVariant, 'all'>
+  direction: 'up' | 'down'
+  horizonDays: number
+  split: 'validation' | 'test'
+  trainStartDate: string | null
+  trainEndDate: string | null
+  validationStartDate: string | null
+  validationEndDate: string | null
+  sampleCount: number
+  targetPct: number | null
+  baselineHitRate: number | null
+  top20HitRate: number | null
+  top60HitRate: number | null
+  top80HitRate: number | null
+  top60AdverseRate: number | null
+  top60AvgReturnPct: number | null
+  top60MedianReturnPct: number | null
+  top60AvgDirectionalReturnPct: number | null
+  top60MaxDrawdownPct: number | null
+  liftTop60VsBaseline: number | null
+  liftTop60PctPoint: number | null
+  sectors17Top60: Array<Record<string, unknown>>
+  sectors33Top60: Array<Record<string, unknown>>
   payload: Record<string, unknown>
 }
 
@@ -128,12 +175,26 @@ type SimilarRow = {
 
 type SectorRankingRow = {
   as_of_date: string
+  horizon_days: number
   sector_type: string
   sector_name: string
   direction: string
   candidate_count: number
   avg_score: number | null
   representative_tickers_json: string
+}
+
+type SectorCandidateRow = {
+  as_of_date: string
+  direction: string
+  rank: number
+  ticker: string
+  name: string | null
+  sector17_name: string | null
+  sector33_name: string | null
+  candidate_score: number
+  model_name: string | null
+  feature_json: string
 }
 
 type PerformanceRow = {
@@ -167,6 +228,13 @@ type EvaluationRow = {
   metrics_json: string
 }
 
+type ObjectiveEvaluationRow = EvaluationRow & {
+  train_start_date: string | null
+  train_end_date: string | null
+  validation_start_date: string | null
+  validation_end_date: string | null
+}
+
 type ModelRow = {
   model_name: string
   model_type: string
@@ -184,8 +252,23 @@ function parseJson<T>(value: string | null | undefined, fallback: T): T {
   }
 }
 
+function numberFrom(value: unknown): number | null {
+  const n = Number(value)
+  return Number.isFinite(n) ? n : null
+}
+
+function arrayFrom(value: unknown): Array<Record<string, unknown>> {
+  return Array.isArray(value)
+    ? value.filter((item): item is Record<string, unknown> => item != null && typeof item === 'object' && !Array.isArray(item))
+    : []
+}
+
 function normalizeDirection(value: string | null): MlDirectionFilter {
   return value === 'up' || value === 'down' || value === 'both' ? value : 'both'
+}
+
+function normalizeObjectiveVariant(value: string | null | undefined): MlObjectiveVariant {
+  return value === 'baseline' || value === 'all' ? value : 'enhanced'
 }
 
 function dirOrNull(value: string | null): 'up' | 'down' | null {
@@ -285,37 +368,75 @@ export async function getMlSectorRankings(params: {
   sectorType?: '17' | '33' | 'all'
   direction?: MlDirectionFilter
   date?: string | null
+  horizonDays?: number | null
   limit?: number
 } = {}): Promise<{ asOfDate: string | null; rows: MlSectorRanking[] }> {
-  const asOfDate = params.date ?? await latestDate('serving_ml_sector_rankings')
+  const asOfDate = params.date ?? await latestDate('serving_ml_physics_candidates')
   if (!asOfDate) return { asOfDate: null, rows: [] }
   const sectorType = params.sectorType ?? 'all'
   const direction = normalizeDirection(params.direction ?? 'both')
-  const limit = Math.min(200, Math.max(1, params.limit ?? 20))
-  const where: string[] = ['as_of_date = ?']
+  const limit = Math.min(2000, Math.max(1, params.limit ?? 1000))
+  const where: string[] = ['c.as_of_date = ?', `c.direction IN ('up', 'down')`]
   const args: Array<string | number> = [asOfDate]
-  if (sectorType !== 'all') {
-    where.push('sector_type = ?')
-    args.push(sectorType)
-  }
   if (direction !== 'both') {
-    where.push('direction = ?')
+    where.push('c.direction = ?')
     args.push(direction)
+  }
+  if (params.horizonDays) {
+    where.push('c.horizon_days = ?')
+    args.push(params.horizonDays)
+  }
+  const sectorQueries: string[] = []
+  if (sectorType === 'all' || sectorType === '17') {
+    sectorQueries.push(`
+      SELECT
+        c.as_of_date,
+        c.horizon_days,
+        '17' AS sector_type,
+        COALESCE(NULLIF(TRIM(u.sector17_name), ''), 'その他') AS sector_name,
+        c.direction,
+        COUNT(*) AS candidate_count,
+        AVG(c.candidate_score) AS avg_score,
+        json_group_array(json_object('ticker', c.ticker, 'rank', c.rank, 'score', c.candidate_score, 'direction', c.direction)) AS representative_tickers_json
+      FROM serving_ml_physics_candidates c
+      LEFT JOIN ticker_universe u ON u.ticker = c.ticker
+      WHERE ${where.join(' AND ')}
+      GROUP BY c.as_of_date, c.horizon_days, c.direction, COALESCE(NULLIF(TRIM(u.sector17_name), ''), 'その他')
+    `)
+  }
+  if (sectorType === 'all' || sectorType === '33') {
+    sectorQueries.push(`
+      SELECT
+        c.as_of_date,
+        c.horizon_days,
+        '33' AS sector_type,
+        COALESCE(NULLIF(TRIM(u.sector33_name), ''), 'その他') AS sector_name,
+        c.direction,
+        COUNT(*) AS candidate_count,
+        AVG(c.candidate_score) AS avg_score,
+        json_group_array(json_object('ticker', c.ticker, 'rank', c.rank, 'score', c.candidate_score, 'direction', c.direction)) AS representative_tickers_json
+      FROM serving_ml_physics_candidates c
+      LEFT JOIN ticker_universe u ON u.ticker = c.ticker
+      WHERE ${where.join(' AND ')}
+      GROUP BY c.as_of_date, c.horizon_days, c.direction, COALESCE(NULLIF(TRIM(u.sector33_name), ''), 'その他')
+    `)
   }
   const rows = await execAll<SectorRankingRow>(
     `
-    SELECT as_of_date, sector_type, sector_name, direction, candidate_count, avg_score, representative_tickers_json
-    FROM serving_ml_sector_rankings
-    WHERE ${where.join(' AND ')}
-    ORDER BY direction ASC, sector_type ASC, candidate_count DESC, avg_score DESC
+    SELECT *
+    FROM (
+      ${sectorQueries.join('\nUNION ALL\n')}
+    )
+    ORDER BY horizon_days ASC, direction ASC, sector_type ASC, candidate_count DESC, avg_score DESC
     LIMIT ?
     `,
-    [...args, limit],
+    [...sectorQueries.flatMap(() => args), limit],
   )
   return {
     asOfDate,
     rows: rows.map((row) => ({
       asOfDate: row.as_of_date,
+      horizonDays: Number(row.horizon_days),
       sectorType: row.sector_type === '33' ? '33' : '17',
       sectorName: row.sector_name,
       direction: row.direction === 'down' ? 'down' : 'up',
@@ -323,6 +444,71 @@ export async function getMlSectorRankings(params: {
       avgScore: row.avg_score == null ? null : Number(row.avg_score),
       representativeTickers: parseJson(row.representative_tickers_json, []),
     })),
+  }
+}
+
+export async function getMlSectorCandidates(params: {
+  sectorType: '17' | '33'
+  sectorName: string
+  direction: 'up' | 'down'
+  date?: string | null
+  horizonDays?: number | null
+  limit?: number
+}): Promise<{ asOfDate: string | null; rows: MlSectorCandidate[] }> {
+  const sectorName = params.sectorName.trim()
+  if (!sectorName) return { asOfDate: null, rows: [] }
+  const asOfDate = params.date ?? await latestDate('serving_ml_physics_candidates')
+  if (!asOfDate) return { asOfDate: null, rows: [] }
+  const horizonDays = Math.max(1, Number(params.horizonDays ?? process.env.ML_SIMILAR_PHYSICS_HORIZON ?? 10))
+  const limit = Math.min(500, Math.max(1, params.limit ?? 200))
+  const rows = await execAll<SectorCandidateRow>(
+    `
+    SELECT
+      c.as_of_date,
+      c.direction,
+      c.rank,
+      c.ticker,
+      COALESCE(c.name, u.name) AS name,
+      COALESCE(NULLIF(TRIM(u.sector17_name), ''), 'その他') AS sector17_name,
+      COALESCE(NULLIF(TRIM(u.sector33_name), ''), 'その他') AS sector33_name,
+      c.candidate_score,
+      c.model_name,
+      c.feature_json
+    FROM serving_ml_physics_candidates c
+    LEFT JOIN ticker_universe u ON u.ticker = c.ticker
+    WHERE c.as_of_date = ?
+      AND c.horizon_days = ?
+      AND c.direction = ?
+      AND (
+        CASE
+          WHEN ? = '33' THEN COALESCE(NULLIF(TRIM(u.sector33_name), ''), 'その他')
+          ELSE COALESCE(NULLIF(TRIM(u.sector17_name), ''), 'その他')
+        END
+      ) = ?
+    ORDER BY c.rank ASC
+    LIMIT ?
+    `,
+    [asOfDate, horizonDays, params.direction, params.sectorType, sectorName, limit],
+  )
+  return {
+    asOfDate,
+    rows: rows.map((row) => {
+      const feature = parseJson<Record<string, unknown>>(row.feature_json, {})
+      return {
+        asOfDate: row.as_of_date,
+        direction: row.direction === 'down' ? 'down' : 'up',
+        rank: Number(row.rank),
+        ticker: row.ticker,
+        name: row.name,
+        sector17Name: row.sector17_name ?? 'その他',
+        sector33Name: row.sector33_name ?? 'その他',
+        candidateScore: Number(row.candidate_score),
+        modelName: row.model_name,
+        close: typeof feature.close === 'number' ? feature.close : null,
+        stageCode: typeof feature.stageCode === 'string' ? feature.stageCode : null,
+        maOrder: typeof feature.maOrder === 'string' ? feature.maOrder : null,
+      }
+    }),
   }
 }
 
@@ -433,6 +619,100 @@ export async function getMlPerformance(params: {
       avgReturnPct: row.avg_return_pct == null ? null : Number(row.avg_return_pct),
       payload: parseJson(row.payload_json, {}),
     })),
+  }
+}
+
+export async function getMlObjectiveValidation(params: {
+  direction?: MlDirectionFilter
+  horizonDays?: number | null
+  split?: 'validation' | 'test' | 'all'
+  variant?: MlObjectiveVariant
+  limit?: number
+} = {}): Promise<{ rows: MlObjectiveValidation[] }> {
+  const direction = normalizeDirection(params.direction ?? 'both')
+  const split = params.split ?? 'all'
+  const requestedVariant = normalizeObjectiveVariant(params.variant)
+  const limit = Math.min(500, Math.max(1, params.limit ?? 80))
+  const where: string[] = [`model_type LIKE '%objective%holdout%'`]
+  const args: Array<string | number> = []
+  if (direction !== 'both') {
+    where.push('direction = ?')
+    args.push(direction)
+  }
+  if (params.horizonDays) {
+    where.push('horizon_days = ?')
+    args.push(params.horizonDays)
+  }
+
+  const rows = await execAll<ObjectiveEvaluationRow>(
+    `
+    SELECT evaluation_date, model_name, model_type, direction, horizon_days,
+           train_start_date, train_end_date, validation_start_date, validation_end_date,
+           sample_count, precision_at_20, precision_at_50, precision_at_80, hit_rate,
+           median_return_pct, avg_return_pct, max_drawdown_pct, metrics_json
+    FROM ml_model_evaluations
+    WHERE ${where.join(' AND ')}
+    ORDER BY horizon_days ASC, direction ASC, validation_start_date ASC, created_at DESC
+    LIMIT ?
+    `,
+    [...args, limit],
+  )
+
+  const deduped = new Map<string, ObjectiveEvaluationRow>()
+  const variantByKey = new Map<string, Exclude<MlObjectiveVariant, 'all'>>()
+  for (const row of rows) {
+    const metrics = parseJson<Record<string, unknown>>(row.metrics_json, {})
+    const rowSplit = metrics.split === 'test' ? 'test' : metrics.split === 'validation' ? 'validation' : null
+    const variant: Exclude<MlObjectiveVariant, 'all'> =
+      metrics.variant === 'enhanced' || row.model_type.includes('objective_enhanced_holdout')
+        ? 'enhanced'
+        : 'baseline'
+    if (!rowSplit || (split !== 'all' && rowSplit !== split)) continue
+    if (requestedVariant !== 'all' && variant !== requestedVariant) continue
+    const key = `${variant}\t${row.horizon_days}\t${row.direction}\t${rowSplit}`
+    if (!deduped.has(key)) {
+      deduped.set(key, row)
+      variantByKey.set(key, variant)
+    }
+  }
+
+  return {
+    rows: Array.from(deduped.entries()).map(([key, row]) => {
+      const metrics = parseJson<Record<string, unknown>>(row.metrics_json, {})
+      const rowSplit = metrics.split === 'test' ? 'test' : 'validation'
+      const baseline = metrics.baseline as Record<string, unknown> | undefined
+      const top60 = metrics.top60 as Record<string, unknown> | undefined
+      const variant = variantByKey.get(key) ?? 'baseline'
+      return {
+        evaluationDate: row.evaluation_date,
+        modelName: row.model_name,
+        modelType: row.model_type,
+        variant,
+        direction: row.direction === 'down' ? 'down' : 'up',
+        horizonDays: Number(row.horizon_days),
+        split: rowSplit,
+        trainStartDate: row.train_start_date,
+        trainEndDate: row.train_end_date,
+        validationStartDate: row.validation_start_date,
+        validationEndDate: row.validation_end_date,
+        sampleCount: Number(row.sample_count),
+        targetPct: numberFrom(metrics.targetPct),
+        baselineHitRate: numberFrom(baseline?.hitRate ?? row.hit_rate),
+        top20HitRate: numberFrom((metrics.top20 as Record<string, unknown> | undefined)?.hitRate ?? row.precision_at_20),
+        top60HitRate: numberFrom(top60?.hitRate ?? row.precision_at_50),
+        top80HitRate: numberFrom((metrics.top80 as Record<string, unknown> | undefined)?.hitRate ?? row.precision_at_80),
+        top60AdverseRate: numberFrom(top60?.adverseRate),
+        top60AvgReturnPct: numberFrom(top60?.avgReturnPct ?? row.avg_return_pct),
+        top60MedianReturnPct: numberFrom(top60?.medianReturnPct ?? row.median_return_pct),
+        top60AvgDirectionalReturnPct: numberFrom(top60?.avgDirectionalReturnPct),
+        top60MaxDrawdownPct: numberFrom(top60?.maxDrawdownPct ?? row.max_drawdown_pct),
+        liftTop60VsBaseline: numberFrom(metrics.liftTop60VsBaseline),
+        liftTop60PctPoint: numberFrom(metrics.liftTop60PctPoint),
+        sectors17Top60: arrayFrom(metrics.sectors17Top60),
+        sectors33Top60: arrayFrom(metrics.sectors33Top60),
+        payload: metrics,
+      }
+    }),
   }
 }
 

@@ -1,7 +1,19 @@
-export const ML_PHYSICS_FEATURE_SET = 'ma_physics_v2'
-export const ML_PHYSICS_VERSION = 2
+export const ML_PHYSICS_FEATURE_SET_V2 = 'ma_physics_v2'
+export const ML_PHYSICS_FEATURE_SET_V3 = 'ma_physics_v3'
 
-export const ML_PHYSICS_FEATURE_NAMES = [
+const configuredPhysicsFeatureSet = process.env.ML_PHYSICS_FEATURE_SET?.trim()
+
+export const ML_PHYSICS_FEATURE_SET =
+  configuredPhysicsFeatureSet === ML_PHYSICS_FEATURE_SET_V2
+    ? ML_PHYSICS_FEATURE_SET_V2
+    : ML_PHYSICS_FEATURE_SET_V3
+export const ML_PHYSICS_VERSION = ML_PHYSICS_FEATURE_SET === ML_PHYSICS_FEATURE_SET_V3 ? 3 : 2
+export const ML_PHYSICS_MODEL_TYPE =
+  ML_PHYSICS_VERSION >= 3 ? 'logistic_regression_physics_v3' : 'logistic_regression_physics_v2'
+export const ML_PHYSICS_DEFAULT_HORIZONS = [5, 10, 15, 20, 40, 60, 90, 180] as const
+export const ML_PHYSICS_DEFAULT_HORIZON_LIST = ML_PHYSICS_DEFAULT_HORIZONS.join(',')
+
+export const ML_PHYSICS_BASE_FEATURE_NAMES = [
   'stageDailyA',
   'stageDailyB',
   'stageWeeklyA',
@@ -76,8 +88,60 @@ export const ML_PHYSICS_FEATURE_NAMES = [
   'expansionRegime',
 ] as const
 
+export const ML_PHYSICS_V3_FEATURE_NAMES = [
+  'weeklyOrderBullish',
+  'weeklyOrderBearish',
+  'monthlyOrderBullish',
+  'monthlyOrderBearish',
+  'weeklyMa5Velocity5',
+  'weeklyMa13Velocity5',
+  'weeklyMa25Velocity10',
+  'weeklyMa5Acceleration5',
+  'weeklyGap5To13',
+  'weeklyGap13To25',
+  'weeklyGap25To50',
+  'weeklyGap5To13Velocity5',
+  'weeklyBundleWidthPct',
+  'weeklyPriceToMa5',
+  'weeklyPriceToMa13',
+  'monthlyMa3Velocity21',
+  'monthlyMa5Velocity21',
+  'monthlyMa10Velocity21',
+  'monthlyMa3Acceleration21',
+  'monthlyGap3To5',
+  'monthlyGap5To10',
+  'monthlyGap10To20',
+  'monthlyGap3To5Velocity21',
+  'monthlyBundleWidthPct',
+  'monthlyPriceToMa3',
+  'monthlyPriceToMa5',
+  'dailyWeeklyBullishAlignment',
+  'dailyWeeklyBearishAlignment',
+  'weeklyMonthlyBullishAlignment',
+  'weeklyMonthlyBearishAlignment',
+  'upperTimeframeSupport',
+  'upperTimeframeResistance',
+] as const
+
+export const ML_PHYSICS_FEATURE_NAMES: readonly string[] =
+  ML_PHYSICS_VERSION >= 3
+    ? [...ML_PHYSICS_BASE_FEATURE_NAMES, ...ML_PHYSICS_V3_FEATURE_NAMES]
+    : ML_PHYSICS_BASE_FEATURE_NAMES
+
 export type PhysicsDirection = 'up' | 'down' | 'wait'
 export type PhysicsMaKey = 'sma5' | 'sma25' | 'sma75' | 'sma200'
+export type PhysicsUpperMaKey = 'ma5' | 'ma13' | 'ma25' | 'ma50' | 'ma100' | 'ma3' | 'ma10' | 'ma20'
+
+export type PhysicsUpperTimeframeProfile = {
+  maOrder: string
+  ma: Record<string, number | null>
+  velocities: Record<string, { d5: number | null; d10: number | null; d21: number | null }>
+  accelerations: Record<string, { d5: number | null; d21: number | null }>
+  gaps: Record<string, number | null>
+  gapVelocity: Record<string, { d5: number | null; d21: number | null }>
+  pricePosition: Record<string, number | null>
+  bundleWidthPct: number | null
+}
 
 export type PhysicsFeatureProfile = {
   ticker: string
@@ -152,6 +216,18 @@ export type PhysicsFeatureProfile = {
     daysSinceCrossUpSma5: number | null
     daysSinceTouchSma25: number | null
   }
+  multiTimeframe?: {
+    weekly: PhysicsUpperTimeframeProfile
+    monthly: PhysicsUpperTimeframeProfile
+    alignment: {
+      dailyWeeklyBullish: number
+      dailyWeeklyBearish: number
+      weeklyMonthlyBullish: number
+      weeklyMonthlyBearish: number
+      upperSupport: number
+      upperResistance: number
+    }
+  }
   regimes: {
     trend: 'up_acceleration' | 'up_deceleration' | 'down_acceleration' | 'down_deceleration' | 'sideways'
     spread: 'compression' | 'up_expansion' | 'down_expansion' | 'neutral'
@@ -214,9 +290,24 @@ function maOrderScores(maOrder: string): { bullish: number; bearish: number } {
   }
 }
 
+function upperOrderScores(
+  maOrder: string | null | undefined,
+  bullishLabels: string[],
+  bearishLabels: string[],
+): { bullish: number; bearish: number } {
+  const normalized = (maOrder ?? '').replace(/\s/g, '')
+  const bullish = bullishLabels.join('>')
+  const bearish = bearishLabels.join('>')
+  const bearishTail = `${bearishLabels[bearishLabels.length - 2]}>${bearishLabels[bearishLabels.length - 1]}`
+  return {
+    bullish: normalized === bullish ? 1 : normalized.startsWith(`${bullishLabels[0]}>${bullishLabels[1]}`) ? 0.6 : 0,
+    bearish: normalized === bearish ? 1 : normalized.startsWith(`${bearishLabels[0]}>${bearishLabels[1]}`) || normalized.endsWith(bearishTail) ? 0.6 : 0,
+  }
+}
+
 export function physicsFeatureVector(profile: PhysicsFeatureProfile): number[] {
   const order = maOrderScores(profile.maOrder)
-  return [
+  const base = [
     stageNum(profile.stageCode, 0) / 10,
     stageNum(profile.stageCode, 1) / 10,
     stageNum(profile.stageCode, 2) / 10,
@@ -290,6 +381,47 @@ export function physicsFeatureVector(profile: PhysicsFeatureProfile): number[] {
     profile.regimes.spread === 'compression' ? 1 : 0,
     profile.regimes.spread === 'up_expansion' || profile.regimes.spread === 'down_expansion' ? 1 : 0,
   ]
+  if (ML_PHYSICS_VERSION < 3) return base
+
+  const weekly = profile.multiTimeframe?.weekly
+  const monthly = profile.multiTimeframe?.monthly
+  const weeklyOrder = upperOrderScores(weekly?.maOrder, ['5週', '13週', '25週', '50週', '100週'], ['100週', '50週', '25週', '13週', '5週'])
+  const monthlyOrder = upperOrderScores(monthly?.maOrder, ['3か月', '5か月', '10か月', '20か月', '25か月'], ['25か月', '20か月', '10か月', '5か月', '3か月'])
+  return [
+    ...base,
+    weeklyOrder.bullish,
+    weeklyOrder.bearish,
+    monthlyOrder.bullish,
+    monthlyOrder.bearish,
+    clip(weekly?.velocities.ma5?.d5, 10),
+    clip(weekly?.velocities.ma13?.d5, 8),
+    clip(weekly?.velocities.ma25?.d10, 8),
+    clip(weekly?.accelerations.ma5?.d5, 7),
+    clip(weekly?.gaps.ma5To13Pct, 18),
+    clip(weekly?.gaps.ma13To25Pct, 18),
+    clip(weekly?.gaps.ma25To50Pct, 22),
+    clip(weekly?.gapVelocity.ma5To13?.d5, 8),
+    clip(weekly?.bundleWidthPct, 35),
+    clip(weekly?.pricePosition.ma5, 18),
+    clip(weekly?.pricePosition.ma13, 22),
+    clip(monthly?.velocities.ma3?.d21, 12),
+    clip(monthly?.velocities.ma5?.d21, 10),
+    clip(monthly?.velocities.ma10?.d21, 8),
+    clip(monthly?.accelerations.ma3?.d21, 8),
+    clip(monthly?.gaps.ma3To5Pct, 18),
+    clip(monthly?.gaps.ma5To10Pct, 18),
+    clip(monthly?.gaps.ma10To20Pct, 22),
+    clip(monthly?.gapVelocity.ma3To5?.d21, 8),
+    clip(monthly?.bundleWidthPct, 40),
+    clip(monthly?.pricePosition.ma3, 22),
+    clip(monthly?.pricePosition.ma5, 28),
+    profile.multiTimeframe?.alignment.dailyWeeklyBullish ?? 0,
+    profile.multiTimeframe?.alignment.dailyWeeklyBearish ?? 0,
+    profile.multiTimeframe?.alignment.weeklyMonthlyBullish ?? 0,
+    profile.multiTimeframe?.alignment.weeklyMonthlyBearish ?? 0,
+    profile.multiTimeframe?.alignment.upperSupport ?? 0,
+    profile.multiTimeframe?.alignment.upperResistance ?? 0,
+  ]
 }
 
 function fmtPct(value: number | null | undefined, digits = 1): string {
@@ -311,6 +443,13 @@ export function buildPhysicsExplanation(
   horizonDays: number,
 ): PhysicsCandidateExplanation {
   const directionText = direction === 'up' ? '上昇候補' : direction === 'down' ? '下落候補' : '見送り候補'
+  const weekly = profile.multiTimeframe?.weekly
+  const monthly = profile.multiTimeframe?.monthly
+  const upperSupport = profile.multiTimeframe?.alignment.upperSupport ?? 0
+  const upperResistance = profile.multiTimeframe?.alignment.upperResistance ?? 0
+  const upperText = weekly || monthly
+    ? `週足は ${weekly?.maOrder || '-'}、月足は ${monthly?.maOrder || '-'}、上位足支援${upperSupport.toFixed(2)} / 抵抗${upperResistance.toFixed(2)}です。`
+    : '上位足MAの詳細特徴量は未生成です。'
   const mesh: PhysicsCandidateReason = {
     maOrder: `SMA並びは ${profile.maOrder || '-'} です。`,
     velocity: `5日SMA速度は1日${fmtPct(profile.velocities.sma5.d1)}、5日${fmtPct(profile.velocities.sma5.d5)}、25日SMA速度は5日${fmtPct(profile.velocities.sma25.d5)}です。`,
@@ -318,7 +457,7 @@ export function buildPhysicsExplanation(
     distance: `5-25距離は${fmtPct(profile.gaps.sma5To25Pct)}、距離変化は5日${fmtPct(profile.gapVelocity.sma5To25D5)}です。`,
     pricePosition: `終値は5日SMA比${fmtPct(profile.pricePosition.sma5)}、25日SMA比${fmtPct(profile.pricePosition.sma25)}です。`,
     regime: `流れは ${profile.regimes.trend} / 距離状態は ${profile.regimes.spread} / 転換兆候は ${profile.regimes.turn} です。`,
-    context: `市場5日騰落は${fmtPct(profile.context?.marketReturn5)}、17業種5日騰落は${fmtPct(profile.context?.sector17Return5)}、業種内順位は${fmtPct(profile.context?.sector17RankPct)}です。`,
+    context: `市場5日騰落は${fmtPct(profile.context?.marketReturn5)}、17業種5日騰落は${fmtPct(profile.context?.sector17Return5)}、業種内順位は${fmtPct(profile.context?.sector17RankPct)}です。${upperText}`,
     timing: `6桁ステージ継続は${profile.timeSince?.stageCodeAge ?? '-'}営業日、5日SMA上抜けから${profile.timeSince?.daysSinceCrossUpSma5 ?? '-'}営業日です。`,
     risk: `損切り確認点は、5日SMA速度の失速、25日SMAの下向き転換、5-25距離の急縮小です。`,
   }

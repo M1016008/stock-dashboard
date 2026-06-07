@@ -2,13 +2,14 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   Activity,
   BarChart3,
   Building2,
   CalendarDays,
   ChartCandlestick,
+  ChevronDown,
   FlaskConical,
   Globe2,
   Hexagon,
@@ -18,17 +19,58 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 
+type NavLinkItem = {
+  href: string
+  label: string
+  description?: string
+  icon: LucideIcon
+  includeInGroupActive?: boolean
+}
+
+type NavEntry =
+  | (NavLinkItem & { kind: 'link' })
+  | {
+      kind: 'menu'
+      id: string
+      label: string
+      icon: LucideIcon
+      items: readonly NavLinkItem[]
+    }
+
 const NAV_ITEMS = [
-  { href: '/', label: 'ダッシュボード', icon: LayoutDashboard },
-  { href: '/hex-stage', label: 'HEX', icon: Hexagon },
-  { href: '/sectors', label: '業種', icon: Building2 },
-  { href: '/ai/transitions', label: 'パターン', icon: ChartCandlestick },
-  { href: '/backtest', label: '検証', icon: FlaskConical },
-  { href: '/ai/ma-lens', label: 'AI Lens', icon: Activity },
-  { href: '/earnings', label: '決算', icon: CalendarDays },
-  { href: '/screener', label: 'スクリーナー', icon: Search },
-  { href: '/watchlist', label: 'ウォッチ', icon: Star },
-] as const
+  { kind: 'link', href: '/', label: 'ダッシュボード', icon: LayoutDashboard },
+  {
+    kind: 'menu',
+    id: 'discover',
+    label: '探す',
+    icon: Search,
+    items: [
+      { href: '/screener', label: 'スクリーナー', description: '条件で銘柄を抽出', icon: Search },
+      { href: '/hex-stage', label: 'HEXステージ', description: '6ステージの分布と遷移', icon: Hexagon },
+      { href: '/sectors', label: '業種分析', description: '17/33業種の強弱', icon: Building2 },
+      {
+        href: '/ai/ma-lens#historical-pattern-search',
+        label: '過去パターン検索',
+        description: '過去の形に近い現在銘柄',
+        icon: ChartCandlestick,
+        includeInGroupActive: false,
+      },
+    ],
+  },
+  {
+    kind: 'menu',
+    id: 'ai-analysis',
+    label: 'AI分析',
+    icon: Activity,
+    items: [
+      { href: '/ai/ma-lens', label: 'AI Lens', description: 'MA形状・物理特徴量・類似候補', icon: Activity },
+      { href: '/ai/transitions', label: 'パターン遷移', description: '過去パターンの遷移分析', icon: ChartCandlestick },
+      { href: '/backtest', label: '過去検証', description: 'シグナルと期待値を検証', icon: FlaskConical },
+    ],
+  },
+  { kind: 'link', href: '/earnings', label: '決算', icon: CalendarDays },
+  { kind: 'link', href: '/watchlist', label: 'ウォッチ', icon: Star },
+] as const satisfies readonly NavEntry[]
 
 const US_NAV_ITEMS = [
   { href: '/us', label: 'US概要', icon: LayoutDashboard },
@@ -138,10 +180,16 @@ function NavIcon({ icon: Icon, active }: { icon: LucideIcon; active: boolean }) 
   )
 }
 
+function hrefPath(href: string): string {
+  return href.split(/[?#]/)[0] || '/'
+}
+
 export function Header() {
   const pathname = usePathname()
   const isUsArea = pathname.startsWith('/us')
   const navItems = isUsArea ? US_NAV_ITEMS : NAV_ITEMS
+  const navRef = useRef<HTMLDivElement>(null)
+  const [openMenu, setOpenMenu] = useState<string | null>(null)
   const [marketStatus, setMarketStatus] = useState<'open' | 'closed'>('closed')
   const clocks = useClocks()
 
@@ -152,10 +200,123 @@ export function Header() {
     return () => clearInterval(t)
   }, [isUsArea])
 
+  useEffect(() => {
+    const onPointerDown = (event: PointerEvent) => {
+      if (!navRef.current?.contains(event.target as Node)) setOpenMenu(null)
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpenMenu(null)
+    }
+    document.addEventListener('pointerdown', onPointerDown)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [])
+
   const isActive = (href: string) => {
-    if (href === '/') return pathname === '/'
-    if (href === '/us') return pathname === '/us'
-    return pathname.startsWith(href)
+    const path = hrefPath(href)
+    if (path === '/') return pathname === '/'
+    if (path === '/us') return pathname === '/us'
+    return pathname === path || pathname.startsWith(`${path}/`)
+  }
+
+  const isEntryActive = (entry: NavEntry | (typeof US_NAV_ITEMS)[number]) => {
+    if ('kind' in entry && entry.kind === 'menu') {
+      return entry.items.some((item) => item.includeInGroupActive !== false && isActive(item.href))
+    }
+    return isActive(entry.href)
+  }
+
+  const renderNavEntry = (entry: NavEntry | (typeof US_NAV_ITEMS)[number], compact = false) => {
+    const active = isEntryActive(entry)
+    const baseClasses = `inline-flex h-9 shrink-0 items-center gap-2.5 rounded-[2px] border ${compact ? 'px-3.5 text-[12px]' : 'px-4 text-[13px]'} font-bold leading-none transition-colors ${
+      active
+        ? 'border-[var(--color-market-red-dark)] bg-[var(--color-market-red)] text-white shadow-[inset_0_-2px_0_rgba(0,0,0,0.16)]'
+        : 'border-[#2a71b8] bg-[#075aa7] text-white hover:border-[#9fc0e5] hover:bg-[#0c67bd]'
+    }`
+
+    if (!('kind' in entry) || entry.kind === 'link') {
+      return (
+        <Link
+          key={entry.href}
+          href={entry.href}
+          prefetch={false}
+          className={baseClasses}
+          onClick={() => setOpenMenu(null)}
+        >
+          <NavIcon icon={entry.icon} active={active} />
+          <span className="whitespace-nowrap">{entry.label}</span>
+        </Link>
+      )
+    }
+
+    const menuOpen = openMenu === entry.id
+    return (
+      <div
+        key={entry.id}
+        className="relative shrink-0"
+        onMouseEnter={() => setOpenMenu(entry.id)}
+        onMouseLeave={() => setOpenMenu(null)}
+      >
+        <button
+          type="button"
+          className={baseClasses}
+          data-testid={`nav-menu-${entry.id}`}
+          aria-haspopup="menu"
+          aria-expanded={menuOpen}
+          onClick={() => setOpenMenu(menuOpen ? null : entry.id)}
+        >
+          <NavIcon icon={entry.icon} active={active || menuOpen} />
+          <span className="whitespace-nowrap">{entry.label}</span>
+          <ChevronDown
+            size={14}
+            strokeWidth={2.4}
+            className={`transition-transform ${menuOpen ? 'rotate-180' : ''}`}
+          />
+        </button>
+
+        {menuOpen && (
+          <div
+            role="menu"
+            data-testid={`nav-menu-panel-${entry.id}`}
+            className="absolute left-0 top-full z-50 w-[280px] rounded-[4px] border border-[var(--color-border-strong)] bg-white p-1.5 text-[var(--color-text-primary)] shadow-[0_14px_36px_rgba(16,32,52,0.24)]"
+          >
+            {entry.items.map((item) => {
+              const itemActive = isActive(item.href)
+              const ItemIcon = item.icon
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  prefetch={false}
+                  role="menuitem"
+                  className={`flex min-h-[54px] items-center gap-3 rounded-[3px] border px-3 py-2 text-left transition-colors ${
+                    itemActive
+                      ? 'border-[var(--color-market-red)] bg-[var(--color-surface-subtle)] text-[var(--color-brand-900)]'
+                      : 'border-transparent hover:border-[var(--color-border-default)] hover:bg-[var(--color-surface-subtle)]'
+                  }`}
+                  onClick={() => setOpenMenu(null)}
+                >
+                  <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-[3px] border border-[var(--color-border-default)] bg-white text-[var(--color-brand-800)]">
+                    <ItemIcon size={16} strokeWidth={2.3} />
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block text-[13px] font-black leading-tight">{item.label}</span>
+                    {item.description && (
+                      <span className="mt-1 block text-[11px] font-semibold leading-snug text-[var(--color-text-tertiary)]">
+                        {item.description}
+                      </span>
+                    )}
+                  </span>
+                </Link>
+              )
+            })}
+          </div>
+        )}
+      </div>
+    )
   }
 
   return (
@@ -231,7 +392,7 @@ export function Header() {
               {clocks.date || '----/--/--'}
             </span>
             <ClockChip label="TYO" time={clocks.jst} />
-            <div className="hidden items-center gap-1.5 xl:flex">
+            <div className="flex items-center gap-1.5">
               <ClockChip label="LDN" time={clocks.ldn} />
               <ClockChip label="NYC" time={clocks.nyc} />
             </div>
@@ -240,47 +401,13 @@ export function Header() {
       </div>
 
       <div className="bg-[var(--color-brand-800)]">
-        <div className="mx-auto flex min-h-12 w-full max-w-[1480px] items-center justify-between gap-4 px-5 py-1.5 sm:px-8 lg:px-10 xl:px-12">
-          <nav className="hidden min-w-0 flex-1 items-center gap-2 overflow-x-auto lg:flex">
-            {navItems.map((item) => {
-              const active = isActive(item.href)
-              return (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  prefetch={false}
-                  className={`inline-flex h-9 shrink-0 items-center gap-2.5 rounded-[2px] border px-4 text-[13px] font-bold leading-none transition-colors ${
-                    active
-                      ? 'border-[var(--color-market-red-dark)] bg-[var(--color-market-red)] text-white shadow-[inset_0_-2px_0_rgba(0,0,0,0.16)]'
-                      : 'border-[#2a71b8] bg-[#075aa7] text-white hover:border-[#9fc0e5] hover:bg-[#0c67bd]'
-                  }`}
-                >
-                  <NavIcon icon={item.icon} active={active} />
-                  <span className="whitespace-nowrap">{item.label}</span>
-                </Link>
-              )
-            })}
+        <div ref={navRef} className="mx-auto flex min-h-12 w-full max-w-[1480px] items-center justify-between gap-4 px-5 py-1.5 sm:px-8 lg:px-10 xl:px-12">
+          <nav className="hidden min-w-0 flex-1 items-center gap-2 overflow-visible lg:flex">
+            {navItems.map((item) => renderNavEntry(item))}
           </nav>
 
-          <nav className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto lg:hidden">
-            {navItems.map((item) => {
-              const active = isActive(item.href)
-              return (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  prefetch={false}
-                  className={`inline-flex h-9 shrink-0 items-center gap-2.5 rounded-[2px] border px-3.5 text-[12px] font-bold leading-none transition-colors ${
-                    active
-                      ? 'border-[var(--color-market-red-dark)] bg-[var(--color-market-red)] text-white'
-                      : 'border-[#2a71b8] bg-[#075aa7] text-white hover:border-[#9fc0e5] hover:bg-[#0c67bd]'
-                  }`}
-                >
-                  <NavIcon icon={item.icon} active={active} />
-                  <span className="whitespace-nowrap">{item.label}</span>
-                </Link>
-              )
-            })}
+          <nav className="flex min-w-0 flex-1 flex-wrap items-center gap-2 overflow-visible lg:hidden">
+            {navItems.map((item) => renderNavEntry(item, true))}
           </nav>
         </div>
       </div>

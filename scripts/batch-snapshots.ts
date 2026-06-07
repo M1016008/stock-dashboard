@@ -17,7 +17,7 @@
 //   2年分 = 約 500 日 × 4000 銘柄 = 200万計算。約 5〜10 分目安。
 //   将来データ量が増えたら累積計算に最適化する余地あり。
 
-import { db, execAll, execGet } from '@/lib/db/client'
+import { db, execAll, execGet, execRun } from '@/lib/db/client'
 import { dailySnapshots, batchRuns, computeState } from '@/lib/db/schema'
 import { calculateAllStages, type MaValues } from '@/lib/hex-stage'
 import type { OHLCV } from '@/types/stock'
@@ -92,6 +92,40 @@ function dateDaysBefore(date: string, days: number): string {
   return d.toISOString().slice(0, 10)
 }
 
+type SnapshotComputeResult = {
+  count: number
+  dates: string[]
+}
+
+async function refreshSnapshotDateCache(dates: Iterable<string>): Promise<void> {
+  const uniqueDates = Array.from(new Set(dates)).sort()
+  if (uniqueDates.length === 0) return
+
+  await execRun(`
+    CREATE TABLE IF NOT EXISTS serving_daily_snapshot_dates (
+      date TEXT PRIMARY KEY,
+      tickers INTEGER NOT NULL,
+      computed_at INTEGER NOT NULL DEFAULT (unixepoch())
+    )
+  `)
+
+  const CHUNK = 200
+  for (let i = 0; i < uniqueDates.length; i += CHUNK) {
+    const chunk = uniqueDates.slice(i, i + CHUNK)
+    const placeholders = chunk.map(() => '?').join(', ')
+    await execRun(
+      `
+        INSERT OR REPLACE INTO serving_daily_snapshot_dates (date, tickers, computed_at)
+        SELECT date, COUNT(*) AS tickers, unixepoch()
+        FROM daily_snapshots
+        WHERE date IN (${placeholders})
+        GROUP BY date
+      `,
+      chunk,
+    )
+  }
+}
+
 async function markSnapshotState(ticker: string, lastProcessedDate: string): Promise<void> {
   await db
     .insert(computeState)
@@ -105,7 +139,7 @@ async function markSnapshotState(ticker: string, lastProcessedDate: string): Pro
     })
 }
 
-async function computeSnapshotsForTicker(ticker: string): Promise<number> {
+async function computeSnapshotsForTicker(ticker: string): Promise<SnapshotComputeResult> {
   const [state, existing] = await Promise.all([
     execGet<{ lastProcessedDate: string | null }>(
       `SELECT last_processed_date AS lastProcessedDate FROM compute_state WHERE job_type = 'snapshot_compute' AND ticker = ?`,
@@ -136,7 +170,7 @@ async function computeSnapshotsForTicker(ticker: string): Promise<number> {
   if (rows.length < MIN_DATA_POINTS) {
     const latestOhlcvDate = rows[rows.length - 1]?.date
     if (latestOhlcvDate) await markSnapshotState(ticker, latestOhlcvDate)
-    return 0
+    return { count: 0, dates: [] }
   }
   const closePrefix = buildClosePrefix(rows)
 
@@ -164,7 +198,7 @@ async function computeSnapshotsForTicker(ticker: string): Promise<number> {
     if (latestOhlcvDate && (!lastSnapshotDate || latestOhlcvDate > lastSnapshotDate)) {
       await markSnapshotState(ticker, latestOhlcvDate)
     }
-    return 0
+    return { count: 0, dates: [] }
   }
 
   // チャンク分割で INSERT (libSQL の SQL長制限対策)
@@ -183,7 +217,10 @@ async function computeSnapshotsForTicker(ticker: string): Promise<number> {
     await markSnapshotState(ticker, latestDate)
   }
 
-  return newSnapshots.length
+  return {
+    count: newSnapshots.length,
+    dates: newSnapshots.map((snapshot) => snapshot.date),
+  }
 }
 
 async function main() {
@@ -226,6 +263,7 @@ async function main() {
   let failed = 0
   let rowsInserted = 0
   const errors: string[] = []
+  const touchedSnapshotDates = new Set<string>()
 
   console.log(`Snapshot 計算開始: ${tickers.length} 銘柄 (CONCURRENCY=${CONCURRENCY})`)
   const startTime = Date.now()
@@ -239,9 +277,10 @@ async function main() {
       if (!item) return
       const { ticker } = item
       try {
-        const count = await computeSnapshotsForTicker(ticker)
+        const result = await computeSnapshotsForTicker(ticker)
         succeeded++
-        rowsInserted += count
+        rowsInserted += result.count
+        for (const date of result.dates) touchedSnapshotDates.add(date)
       } catch (err) {
         failed++
         const msg = `${ticker}: ${err instanceof Error ? err.message : String(err)}`
@@ -261,6 +300,8 @@ async function main() {
   await Promise.all(
     Array.from({ length: Math.min(CONCURRENCY, tickers.length) }, (_, i) => worker(i + 1)),
   )
+
+  await refreshSnapshotDateCache(touchedSnapshotDates)
 
   const finalStatus =
     failed === 0 ? 'success' :

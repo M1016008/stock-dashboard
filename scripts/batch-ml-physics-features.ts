@@ -8,6 +8,7 @@ import {
   ML_PHYSICS_VERSION,
   physicsFeatureVector,
   type PhysicsFeatureProfile,
+  type PhysicsUpperTimeframeProfile,
 } from '@/lib/backtest/ml-physics'
 
 type Row = {
@@ -21,6 +22,16 @@ type Row = {
   weekly_b_stage: number | null
   monthly_a_stage: number | null
   monthly_b_stage: number | null
+  weekly_ma_5: number | null
+  weekly_ma_13: number | null
+  weekly_ma_25: number | null
+  weekly_ma_50: number | null
+  weekly_ma_100: number | null
+  monthly_ma_3: number | null
+  monthly_ma_5: number | null
+  monthly_ma_10: number | null
+  monthly_ma_20: number | null
+  monthly_ma_25: number | null
 }
 
 type TickerMeta = {
@@ -49,6 +60,19 @@ type ContextMaps = {
   sector: Map<string, SectorContextRow>
 }
 
+type UpperMaSpec = {
+  key: string
+  label: string
+}
+
+type UpperGapSpec = {
+  key: string
+  shortKey: string
+  longKey: string
+}
+
+type UpperSeriesMap = Record<string, Array<number | null>>
+
 const CHUNK = Number(process.env.ML_PHYSICS_BATCH_CHUNK ?? 500)
 const RECENT_DAYS = Number(process.env.ML_PHYSICS_RECENT_DAYS ?? 260)
 const MIN_HISTORY_DAYS = Number(process.env.ML_PHYSICS_MIN_HISTORY_DAYS ?? (RECENT_DAYS > 0 ? 220 : 1))
@@ -57,6 +81,31 @@ const END_DATE = process.env.ML_PHYSICS_END_DATE?.trim() || null
 const TICKER_LIMIT = Number(process.env.ML_PHYSICS_TICKER_LIMIT ?? 0)
 const TICKER_START = process.env.ML_PHYSICS_TICKER_START?.trim() || null
 const TICKER_END = process.env.ML_PHYSICS_TICKER_END?.trim() || null
+
+const WEEKLY_MA_SPECS: UpperMaSpec[] = [
+  { key: 'ma5', label: '5週' },
+  { key: 'ma13', label: '13週' },
+  { key: 'ma25', label: '25週' },
+  { key: 'ma50', label: '50週' },
+  { key: 'ma100', label: '100週' },
+]
+const WEEKLY_GAP_SPECS: UpperGapSpec[] = [
+  { key: 'ma5To13', shortKey: 'ma5', longKey: 'ma13' },
+  { key: 'ma13To25', shortKey: 'ma13', longKey: 'ma25' },
+  { key: 'ma25To50', shortKey: 'ma25', longKey: 'ma50' },
+]
+const MONTHLY_MA_SPECS: UpperMaSpec[] = [
+  { key: 'ma3', label: '3か月' },
+  { key: 'ma5', label: '5か月' },
+  { key: 'ma10', label: '10か月' },
+  { key: 'ma20', label: '20か月' },
+  { key: 'ma25', label: '25か月' },
+]
+const MONTHLY_GAP_SPECS: UpperGapSpec[] = [
+  { key: 'ma3To5', shortKey: 'ma3', longKey: 'ma5' },
+  { key: 'ma5To10', shortKey: 'ma5', longKey: 'ma10' },
+  { key: 'ma10To20', shortKey: 'ma10', longKey: 'ma20' },
+]
 
 function round(value: number | null | undefined, digits = 2): number | null {
   if (value == null || !Number.isFinite(value)) return null
@@ -121,6 +170,141 @@ function maOrder(sma: PhysicsFeatureProfile['sma']): string {
     .sort((a, b) => b.value - a.value)
     .map((item) => item.label)
     .join(' > ') || '-'
+}
+
+function maOrderFromValues(items: Array<{ label: string; value: number | null | undefined }>): string {
+  return items
+    .filter((item): item is { label: string; value: number } => finite(item.value))
+    .sort((a, b) => b.value - a.value)
+    .map((item) => item.label)
+    .join(' > ') || '-'
+}
+
+function upperGapAt(series: UpperSeriesMap, spec: UpperGapSpec, index: number): number | null {
+  return gap(series[spec.shortKey]?.[index], series[spec.longKey]?.[index])
+}
+
+function buildUpperTimeframeProfile(
+  series: UpperSeriesMap,
+  index: number,
+  close: number | null | undefined,
+  maSpecs: UpperMaSpec[],
+  gapSpecs: UpperGapSpec[],
+): PhysicsUpperTimeframeProfile {
+  const ma: Record<string, number | null> = {}
+  const velocities: PhysicsUpperTimeframeProfile['velocities'] = {}
+  const accelerations: PhysicsUpperTimeframeProfile['accelerations'] = {}
+  const gaps: PhysicsUpperTimeframeProfile['gaps'] = {}
+  const gapVelocity: PhysicsUpperTimeframeProfile['gapVelocity'] = {}
+  const pricePosition: PhysicsUpperTimeframeProfile['pricePosition'] = {}
+
+  for (const spec of maSpecs) {
+    const values = series[spec.key] ?? []
+    const current = values[index] ?? null
+    ma[spec.key] = current
+    velocities[spec.key] = {
+      d5: round(pct(values[index - 5], current)),
+      d10: round(pct(values[index - 10], current)),
+      d21: round(pct(values[index - 21], current)),
+    }
+    accelerations[spec.key] = {
+      d5: round(diff(pct(values[index - 5], current), pct(values[index - 10], values[index - 5]))),
+      d21: round(diff(pct(values[index - 21], current), pct(values[index - 42], values[index - 21]))),
+    }
+    pricePosition[spec.key] = round(pct(current, close))
+  }
+
+  for (const spec of gapSpecs) {
+    const current = upperGapAt(series, spec, index)
+    gaps[`${spec.key}Pct`] = current
+    gapVelocity[spec.key] = {
+      d5: round(diff(current, upperGapAt(series, spec, index - 5))),
+      d21: round(diff(current, upperGapAt(series, spec, index - 21))),
+    }
+  }
+
+  return {
+    maOrder: maOrderFromValues(maSpecs.map((spec) => ({ label: spec.label, value: ma[spec.key] }))),
+    ma,
+    velocities,
+    accelerations,
+    gaps,
+    gapVelocity,
+    pricePosition,
+    bundleWidthPct: bundleWidthPct(finite(close) ? close : null, maSpecs.map((spec) => ma[spec.key] ?? null)),
+  }
+}
+
+function normalizedOrder(value: string): string {
+  return value.replace(/\s/g, '')
+}
+
+function isDailyBullish(order: string): boolean {
+  return normalizedOrder(order).startsWith('5日>25日')
+}
+
+function isDailyBearish(order: string): boolean {
+  const normalized = normalizedOrder(order)
+  return normalized.startsWith('200日>75日') || normalized.endsWith('25日>5日')
+}
+
+function isUpperBullish(order: string, first: string, second: string): boolean {
+  return normalizedOrder(order).startsWith(`${first}>${second}`)
+}
+
+function isUpperBearish(order: string, first: string, second: string, tailFirst: string, tailSecond: string): boolean {
+  const normalized = normalizedOrder(order)
+  return normalized.startsWith(`${first}>${second}`) || normalized.endsWith(`${tailFirst}>${tailSecond}`)
+}
+
+function ratioScore(values: Array<boolean | null | undefined>): number {
+  const valid = values.filter((value): value is boolean => value != null)
+  if (valid.length === 0) return 0
+  return round(valid.filter(Boolean).length / valid.length, 3) ?? 0
+}
+
+function positive(value: number | null | undefined): boolean | null {
+  return finite(value) ? value > 0 : null
+}
+
+function negative(value: number | null | undefined): boolean | null {
+  return finite(value) ? value < 0 : null
+}
+
+function buildUpperAlignment(
+  dailyOrder: string,
+  weekly: PhysicsUpperTimeframeProfile,
+  monthly: PhysicsUpperTimeframeProfile,
+): NonNullable<PhysicsFeatureProfile['multiTimeframe']>['alignment'] {
+  const dailyBullish = isDailyBullish(dailyOrder)
+  const dailyBearish = isDailyBearish(dailyOrder)
+  const weeklyBullish = isUpperBullish(weekly.maOrder, '5週', '13週')
+  const weeklyBearish = isUpperBearish(weekly.maOrder, '100週', '50週', '13週', '5週')
+  const monthlyBullish = isUpperBullish(monthly.maOrder, '3か月', '5か月')
+  const monthlyBearish = isUpperBearish(monthly.maOrder, '25か月', '20か月', '5か月', '3か月')
+
+  return {
+    dailyWeeklyBullish: dailyBullish && weeklyBullish ? 1 : dailyBullish || weeklyBullish ? 0.5 : 0,
+    dailyWeeklyBearish: dailyBearish && weeklyBearish ? 1 : dailyBearish || weeklyBearish ? 0.5 : 0,
+    weeklyMonthlyBullish: weeklyBullish && monthlyBullish ? 1 : weeklyBullish || monthlyBullish ? 0.5 : 0,
+    weeklyMonthlyBearish: weeklyBearish && monthlyBearish ? 1 : weeklyBearish || monthlyBearish ? 0.5 : 0,
+    upperSupport: ratioScore([
+      weeklyBullish,
+      monthlyBullish,
+      positive(weekly.pricePosition.ma5),
+      positive(weekly.pricePosition.ma13),
+      positive(monthly.pricePosition.ma3),
+      positive(monthly.pricePosition.ma5),
+    ]),
+    upperResistance: ratioScore([
+      weeklyBearish,
+      monthlyBearish,
+      negative(weekly.pricePosition.ma5),
+      negative(weekly.pricePosition.ma13),
+      negative(monthly.pricePosition.ma3),
+      negative(monthly.pricePosition.ma5),
+    ]),
+  }
 }
 
 function extrema(rows: Row[], from: number, to: number, type: 'high' | 'low'): { date: string | null; value: number | null } {
@@ -263,7 +447,17 @@ async function history(ticker: string): Promise<Row[]> {
       d.weekly_a_stage,
       d.weekly_b_stage,
       d.monthly_a_stage,
-      d.monthly_b_stage
+      d.monthly_b_stage,
+      d.weekly_ma_5,
+      d.weekly_ma_13,
+      d.weekly_ma_25,
+      d.weekly_ma_50,
+      d.weekly_ma_100,
+      d.monthly_ma_3,
+      d.monthly_ma_5,
+      d.monthly_ma_10,
+      d.monthly_ma_20,
+      d.monthly_ma_25
     FROM ohlcv_daily o
     LEFT JOIN daily_snapshots d ON d.ticker = o.ticker AND d.date = o.date
     WHERE o.ticker = ?
@@ -280,6 +474,20 @@ async function buildTicker(ticker: string, contexts: ContextMaps, meta: TickerMe
   const ma25 = smaSeries(rows, 25)
   const ma75 = smaSeries(rows, 75)
   const ma200 = smaSeries(rows, 200)
+  const weeklySeries: UpperSeriesMap = {
+    ma5: rows.map((row) => row.weekly_ma_5),
+    ma13: rows.map((row) => row.weekly_ma_13),
+    ma25: rows.map((row) => row.weekly_ma_25),
+    ma50: rows.map((row) => row.weekly_ma_50),
+    ma100: rows.map((row) => row.weekly_ma_100),
+  }
+  const monthlySeries: UpperSeriesMap = {
+    ma3: rows.map((row) => row.monthly_ma_3),
+    ma5: rows.map((row) => row.monthly_ma_5),
+    ma10: rows.map((row) => row.monthly_ma_10),
+    ma20: rows.map((row) => row.monthly_ma_20),
+    ma25: rows.map((row) => row.monthly_ma_25),
+  }
   const stageCodes = rows.map(stageCode)
   const bundleWidths = rows.map((row, i) => bundleWidthPct(row.close, [ma5[i], ma25[i], ma75[i], ma200[i]]))
   const gap5To25 = rows.map((_, i) => gap(ma5[i], ma25[i]))
@@ -351,6 +559,8 @@ async function buildTicker(ticker: string, contexts: ContextMaps, meta: TickerMe
     const marketContext = contexts.market.get(row.date)
     const sector17Context = contexts.sector.get(`${row.date}\t17\t${meta?.sector17Name ?? '未分類'}`)
     const sector33Context = contexts.sector.get(`${row.date}\t33\t${meta?.sector33Name ?? '未分類'}`)
+    const weeklyProfile = buildUpperTimeframeProfile(weeklySeries, i, row.close, WEEKLY_MA_SPECS, WEEKLY_GAP_SPECS)
+    const monthlyProfile = buildUpperTimeframeProfile(monthlySeries, i, row.close, MONTHLY_MA_SPECS, MONTHLY_GAP_SPECS)
 
     const profile: PhysicsFeatureProfile = {
       ticker,
@@ -447,6 +657,11 @@ async function buildTicker(ticker: string, contexts: ContextMaps, meta: TickerMe
         dailyBStageAge: dailyBAges[i] ?? null,
         daysSinceCrossUpSma5: daysSinceCrossUp5[i] ?? null,
         daysSinceTouchSma25: daysSinceTouch25[i] ?? null,
+      },
+      multiTimeframe: {
+        weekly: weeklyProfile,
+        monthly: monthlyProfile,
+        alignment: buildUpperAlignment(order, weeklyProfile, monthlyProfile),
       },
       regimes: classifyRegimes({
         maOrder: order,

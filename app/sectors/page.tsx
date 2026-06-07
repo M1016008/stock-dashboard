@@ -1,6 +1,8 @@
 import type { Metadata } from 'next'
 import { getSectorAnalysisBoard, type SectorHeatmapRow, type SectorPeriodSummary } from '@/lib/queries/sectors'
-import { getMlSectorRankings, type MlSectorRanking } from '@/lib/queries/ml-insights'
+import { getMlObjectiveValidation, getMlSectorRankings } from '@/lib/queries/ml-insights'
+import { MlObjectiveValidationBoard } from '@/components/sectors/MlObjectiveValidationBoard'
+import { MlSectorRankingBoard } from '@/components/sectors/MlSectorRankingBoard'
 
 export const metadata: Metadata = {
   title: '業種分析 — StockBoard',
@@ -37,64 +39,6 @@ function colorFor(pct: number): { bg: string; text: string; border: string } {
     text: 'var(--color-text-secondary)',
     border: 'var(--color-border-soft)',
   }
-}
-
-function directionLabel(direction: 'up' | 'down') {
-  return direction === 'up' ? '上昇候補' : '下落警戒'
-}
-
-function MlSectorRankingBoard({ rows }: { rows: MlSectorRanking[] }) {
-  const top17 = rows.filter((row) => row.sectorType === '17').slice(0, 8)
-  const top33 = rows.filter((row) => row.sectorType === '33').slice(0, 8)
-  const blocks = [
-    { title: '17業種 ML候補集中', rows: top17 },
-    { title: '33業種 ML候補集中', rows: top33 },
-  ]
-  return (
-    <section className="rounded-[10px] border border-[var(--color-border-default)] bg-white p-4 shadow-[var(--shadow-card)]">
-      <div className="mb-3 border-b-2 border-[var(--color-brand-700)] bg-[var(--color-surface-subtle)] px-3 py-2">
-        <div className="border-l-4 border-[var(--color-market-red)] pl-2">
-          <h2 className="text-[14px] font-bold text-[var(--color-brand-900)]">ML業種候補ランキング</h2>
-          <p className="mt-1 text-[11px] font-semibold text-[var(--color-text-tertiary)]">
-            最新の6ステージ・MA形状モデルで、上昇候補/下落警戒がどの業種に集まっているかを確認します。
-          </p>
-        </div>
-      </div>
-      <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
-        {blocks.map((block) => (
-          <div key={block.title} className="rounded-[8px] border border-[var(--color-border-soft)]">
-            <div className="border-b border-[var(--color-border-soft)] px-3 py-2 text-[13px] font-bold text-[var(--color-text-primary)]">
-              {block.title}
-            </div>
-            <div className="divide-y divide-[var(--color-border-soft)]">
-              {block.rows.map((row, index) => (
-                <div key={`${row.sectorType}-${row.direction}-${row.sectorName}`} className="grid grid-cols-[36px_1fr_auto] items-center gap-2 px-3 py-2 text-[12px]">
-                  <span className="font-bold tabular-nums text-[var(--color-text-tertiary)]">{index + 1}</span>
-                  <div className="min-w-0">
-                    <div className="truncate font-bold text-[var(--color-text-primary)]">{row.sectorName}</div>
-                    <div className="mt-0.5 truncate text-[11px] font-semibold text-[var(--color-text-tertiary)]">
-                      {directionLabel(row.direction)} / {row.representativeTickers.slice(0, 4).map((item) => item.ticker).join(', ') || '代表銘柄なし'}
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <div className="font-bold tabular-nums text-[var(--color-brand-900)]">{row.candidateCount}件</div>
-                    <div className="text-[10px] font-bold tabular-nums text-[var(--color-text-tertiary)]">
-                      {row.avgScore == null ? '-' : `${Math.round(row.avgScore * 100)}%`}
-                    </div>
-                  </div>
-                </div>
-              ))}
-              {block.rows.length === 0 && (
-                <div className="px-3 py-4 text-center text-[12px] font-semibold text-[var(--color-text-tertiary)]">
-                  ML業種ランキングは未作成です
-                </div>
-              )}
-            </div>
-          </div>
-        ))}
-      </div>
-    </section>
-  )
 }
 
 function HeatmapGrid({
@@ -288,9 +232,10 @@ function ClassificationSection({
 }
 
 export default async function SectorsPage() {
-  const [board, mlRankingData] = await Promise.all([
+  const [board, mlRankingData, objectiveValidationData] = await Promise.all([
     getSectorAnalysisBoard(),
-    getMlSectorRankings({ limit: 40 }),
+    getMlSectorRankings({ limit: 1000 }),
+    getMlObjectiveValidation({ limit: 80 }),
   ])
   const latestDate = board.latestDate
 
@@ -320,7 +265,8 @@ export default async function SectorsPage() {
         </div>
       ) : (
         <div className="space-y-7">
-          <MlSectorRankingBoard rows={mlRankingData.rows} />
+          <MlSectorRankingBoard rows={mlRankingData.rows} asOfDate={mlRankingData.asOfDate} />
+          <MlObjectiveValidationBoard rows={objectiveValidationData.rows} />
           <ClassificationSection
             title="17業種ヒートマップ・ランキング"
             description="市場全体を17業種にまとめ、本日・今週・今月の大きな資金の向きを確認します。"

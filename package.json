@@ -63,6 +63,7 @@
     "batch:ml-physics-train": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/batch-ml-physics-train.ts",
     "batch:ml-physics-candidates": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/batch-ml-physics-candidates.ts",
     "batch:ml-physics-evaluate": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/batch-ml-physics-evaluate.ts",
+    "batch:ml-objective-validation": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/batch-ml-objective-validation.ts",
     "batch:ml-similarity-evaluate": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/batch-ml-similarity-evaluate.ts",
     "batch:ml-rl-policy": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/batch-ml-rl-policy.ts",
     "batch:ml-feature-health": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/batch-ml-feature-health.ts",

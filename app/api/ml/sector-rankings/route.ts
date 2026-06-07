@@ -19,7 +19,7 @@ export async function GET(request: NextRequest) {
       sectorType: sectorType(searchParams.get('sectorType')),
       direction: direction(searchParams.get('direction')),
       date: searchParams.get('date')?.trim() || null,
-      limit: Math.min(100, Math.max(1, Number(searchParams.get('limit') ?? 30))),
+      limit: Math.min(1000, Math.max(1, Number(searchParams.get('limit') ?? 300))),
     })
     return NextResponse.json({
       asOfDate: result.asOfDate,

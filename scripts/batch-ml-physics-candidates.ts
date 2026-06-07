@@ -1,12 +1,14 @@
 // scripts/batch-ml-physics-candidates.ts
 //
-// 最新日の ma_physics_v2 特徴量から、短期の上昇/下落/見送り候補を生成する。
+// 最新日の ma_physics 特徴量から、短期の上昇/下落/見送り候補を生成する。
 
 import { execAll, execBatch, execGet, execRun } from '@/lib/db/client'
 import { dot, sigmoid } from '@/lib/backtest/ml'
 import {
   ML_PHYSICS_FEATURE_SET,
   ML_PHYSICS_FEATURE_NAMES,
+  ML_PHYSICS_DEFAULT_HORIZON_LIST,
+  ML_PHYSICS_MODEL_TYPE,
   buildPhysicsExplanation,
   type PhysicsDirection,
   type PhysicsFeatureProfile,
@@ -30,7 +32,7 @@ type ModelRow = {
 }
 
 const LIMIT = Number(process.env.ML_PHYSICS_CANDIDATE_LIMIT ?? 60)
-const HORIZONS = (process.env.ML_PHYSICS_HORIZONS ?? '5,10,15')
+const HORIZONS = (process.env.ML_PHYSICS_HORIZONS ?? ML_PHYSICS_DEFAULT_HORIZON_LIST)
   .split(',')
   .map((value) => Number(value.trim()))
   .filter((value) => Number.isFinite(value) && value > 0)
@@ -100,14 +102,15 @@ async function models(): Promise<Map<string, ModelRow>> {
     INNER JOIN (
       SELECT direction, horizon_days, MAX(trained_at) AS trained_at
       FROM ml_models
-      WHERE model_type = 'logistic_regression_physics_v2'
+      WHERE model_type = ?
       GROUP BY direction, horizon_days
     ) latest
       ON latest.direction = m.direction
      AND latest.horizon_days = m.horizon_days
      AND latest.trained_at = m.trained_at
-    WHERE m.model_type = 'logistic_regression_physics_v2'
+    WHERE m.model_type = ?
     `,
+    [ML_PHYSICS_MODEL_TYPE, ML_PHYSICS_MODEL_TYPE],
   )
   return new Map(rows.map((row) => [`${row.horizon_days}:${row.direction}`, row]))
 }
@@ -189,4 +192,3 @@ main()
     console.error(error)
     process.exit(1)
   })
-

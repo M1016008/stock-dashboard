@@ -323,6 +323,11 @@ const STATEMENTS = [
     payload_json TEXT NOT NULL,
     computed_at INTEGER NOT NULL DEFAULT (unixepoch())
   )`,
+  `CREATE TABLE IF NOT EXISTS serving_daily_snapshot_dates (
+    date TEXT PRIMARY KEY,
+    tickers INTEGER NOT NULL,
+    computed_at INTEGER NOT NULL DEFAULT (unixepoch())
+  )`,
   // ─── Phase 2: 日次スナップショット (MA + ステージ) ───
   `CREATE TABLE IF NOT EXISTS daily_snapshots (
     ticker TEXT NOT NULL,
@@ -793,6 +798,7 @@ const STATEMENTS = [
     PRIMARY KEY (ticker, date, feature_set)
   )`,
   `CREATE INDEX IF NOT EXISTS ml_feature_vectors_v2_date_idx ON ml_feature_vectors_v2(feature_set, date)`,
+  `CREATE INDEX IF NOT EXISTS ml_feature_vectors_v2_date_only_idx ON ml_feature_vectors_v2(date)`,
   `CREATE INDEX IF NOT EXISTS ml_feature_vectors_v2_ticker_date_idx ON ml_feature_vectors_v2(ticker, date)`,
   `CREATE TABLE IF NOT EXISTS ml_training_labels (
     ticker TEXT NOT NULL,
