@@ -38,9 +38,21 @@ const PERIOD_BY_INTERVAL: Record<TvInterval, string> = {
 // MA カラー (Yoshio の好みに合わせて TradingView 旧版と近い色味)
 const MA_COLORS: Record<number, string> = {
   5:   '#e5e7eb',  // 薄いグレー (白基調)
+  12:  '#e5e7eb',
+  13:  '#e5e7eb',
+  24:  '#f59e0b',
   25:  '#f59e0b',  // amber (HEX ステージ色と整合)
+  26:  '#f59e0b',
+  52:  '#3b82f6',
+  60:  '#3b82f6',
   75:  '#3b82f6',  // blue
   200: '#a855f7',  // purple
+}
+
+const MA_COLOR_FALLBACKS = ['#e5e7eb', '#f59e0b', '#3b82f6', '#a855f7', '#10b981']
+
+function maColor(period: number, index = 0): string {
+  return MA_COLORS[period] ?? MA_COLOR_FALLBACKS[index % MA_COLOR_FALLBACKS.length]
 }
 
 export function CandlestickChart({
@@ -56,6 +68,11 @@ export function CandlestickChart({
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [selectedMAs, setSelectedMAs] = useState<number[]>(maLines)
+  const maLinesKey = maLines.join(',')
+
+  useEffect(() => {
+    setSelectedMAs(maLines)
+  }, [maLinesKey])
 
   // データフェッチ
   useEffect(() => {
@@ -82,20 +99,7 @@ export function CandlestickChart({
   const { candles, mas } = useMemo(() => {
     if (!data || data.length === 0) return { candles: [], mas: {} as Record<number, { time: UTCTimestamp; value: number }[]> }
 
-    const groupBy = interval === 'D' ? 1 : interval === 'W' ? 5 : 21
-    const grouped: OHLCV[] = []
-    for (let i = 0; i < data.length; i += groupBy) {
-      const slice = data.slice(i, i + groupBy)
-      if (slice.length === 0) continue
-      grouped.push({
-        date:   slice[slice.length - 1].date,
-        open:   slice[0].open,
-        high:   Math.max(...slice.map(d => d.high)),
-        low:    Math.min(...slice.map(d => d.low)),
-        close:  slice[slice.length - 1].close,
-        volume: slice.reduce((s, d) => s + d.volume, 0),
-      })
-    }
+    const grouped = aggregateOhlcv(data, interval)
 
     const candles = grouped.map(d => ({
       time:  dateToTime(d.date),
@@ -165,9 +169,9 @@ export function CandlestickChart({
 
     // MA 各種
     const maSeriesRefs: ISeriesApi<'Line'>[] = []
-    for (const period of selectedMAs) {
+    for (const [index, period] of selectedMAs.entries()) {
       const series = chart.addSeries(LineSeries, {
-        color:     MA_COLORS[period] ?? '#9ca3af',
+        color:     maColor(period, index),
         lineWidth: 1,
         priceLineVisible: false,
         lastValueVisible: false,
@@ -213,7 +217,7 @@ export function CandlestickChart({
         marginBottom: '8px',
       }}>
         <span style={{ fontSize: '10px', color: 'var(--text-muted)', letterSpacing: '0.08em' }}>MA:</span>
-        {[5, 25, 75, 200].map(period => (
+        {maLines.map((period, index) => (
           <label key={period} style={{
             display: 'flex',
             alignItems: 'center',
@@ -226,9 +230,9 @@ export function CandlestickChart({
               type="checkbox"
               checked={selectedMAs.includes(period)}
               onChange={() => toggleMA(period)}
-              style={{ accentColor: MA_COLORS[period] }}
+              style={{ accentColor: maColor(period, index) }}
             />
-            <span style={{ color: MA_COLORS[period] }}>{period}</span>
+            <span style={{ color: maColor(period, index) }}>{period}</span>
           </label>
         ))}
       </div>
@@ -259,6 +263,50 @@ export function CandlestickChart({
 }
 
 // ─── ヘルパー ───
+
+function aggregateOhlcv(rows: OHLCV[], interval: TvInterval): OHLCV[] {
+  if (interval === 'D') return rows
+
+  const grouped: OHLCV[] = []
+  let currentKey: string | null = null
+  let current: OHLCV | null = null
+
+  for (const row of rows) {
+    const key = interval === 'W' ? weekKey(row.date) : row.date.slice(0, 7)
+    if (key !== currentKey) {
+      if (current) grouped.push(current)
+      currentKey = key
+      current = { ...row }
+      continue
+    }
+
+    if (!current) {
+      current = { ...row }
+      continue
+    }
+
+    current = {
+      date: row.date,
+      open: current.open,
+      high: Math.max(current.high, row.high),
+      low: Math.min(current.low, row.low),
+      close: row.close,
+      volume: current.volume + row.volume,
+      adjustedClose: row.adjustedClose ?? current.adjustedClose,
+    }
+  }
+
+  if (current) grouped.push(current)
+  return grouped
+}
+
+function weekKey(isoDate: string): string {
+  const date = new Date(`${isoDate}T00:00:00Z`)
+  const day = date.getUTCDay()
+  const daysFromMonday = day === 0 ? 6 : day - 1
+  date.setUTCDate(date.getUTCDate() - daysFromMonday)
+  return date.toISOString().slice(0, 10)
+}
 
 function dateToTime(isoDate: string): UTCTimestamp {
   // lightweight-charts は UNIX timestamp (秒) または "YYYY-MM-DD" 文字列を受ける。

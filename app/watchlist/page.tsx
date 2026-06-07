@@ -1,12 +1,14 @@
 // app/watchlist/page.tsx
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
+import { useSearchParams } from 'next/navigation'
 import { useWatchlistStore } from '@/lib/watchlist-store'
 import { WatchlistButton } from '@/components/ui/WatchlistButton'
 import { findTicker } from '@/lib/master/tickers'
 import { toTvSymbol, buildTvWatchlistText } from '@/lib/tv-format'
+import { getUniverseFilterMeta, isTickerInUniverse, parseUniverseFilter, UNIVERSE_FILTER_PARAM } from '@/lib/market-universe'
 
 interface QuoteResponse {
   ticker: string
@@ -21,8 +23,15 @@ interface QuoteResponse {
 }
 
 export default function WatchlistPage() {
+  const searchParams = useSearchParams()
+  const activeUniverse = parseUniverseFilter(searchParams.get(UNIVERSE_FILTER_PARAM))
+  const activeUniverseMeta = getUniverseFilterMeta(activeUniverse)
   const [mounted, setMounted] = useState(false)
   const tickers = useWatchlistStore((s) => s.tickers)
+  const visibleTickers = useMemo(
+    () => tickers.filter((ticker) => isTickerInUniverse(ticker, activeUniverse)),
+    [tickers, activeUniverse],
+  )
   const clear = useWatchlistStore((s) => s.clear)
   const [quotes, setQuotes] = useState<Record<string, QuoteResponse | null>>({})
   const [loading, setLoading] = useState(false)
@@ -33,7 +42,7 @@ export default function WatchlistPage() {
 
   useEffect(() => {
     if (!mounted) return
-    if (tickers.length === 0) {
+    if (visibleTickers.length === 0) {
       setQuotes({})
       return
     }
@@ -41,7 +50,7 @@ export default function WatchlistPage() {
     setLoading(true)
     const fetchAll = async () => {
       const entries = await Promise.all(
-        tickers.map(async (t): Promise<[string, QuoteResponse | null]> => {
+        visibleTickers.map(async (t): Promise<[string, QuoteResponse | null]> => {
           try {
             const res = await fetch(`/api/quote/${encodeURIComponent(t)}`, { cache: 'no-store' })
             if (!res.ok) return [t, null]
@@ -64,10 +73,10 @@ export default function WatchlistPage() {
       cancelled = true
       clearInterval(id)
     }
-  }, [mounted, tickers])
+  }, [mounted, visibleTickers])
 
   function downloadTvWatchlist() {
-    const symbols = tickers.map((t) => {
+    const symbols = visibleTickers.map((t) => {
       const m = findTicker(t)
       return toTvSymbol(t, m?.marketSegment)
     })
@@ -93,6 +102,7 @@ export default function WatchlistPage() {
         </h1>
         <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
           お気に入り銘柄の株価と騰落率（60秒ごとに自動更新）
+          {activeUniverseMeta ? ` / ${activeUniverseMeta.shortLabel}表示中` : ''}
         </p>
       </div>
 
@@ -109,11 +119,22 @@ export default function WatchlistPage() {
             銘柄詳細ページやスクリーナー結果の <span style={{ color: 'var(--color-brand-600)' }}>☆</span> ボタンで追加できます。
           </p>
         </div>
+      ) : visibleTickers.length === 0 ? (
+        <div className="card" style={{ padding: '32px', textAlign: 'center' }}>
+          <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '8px' }}>
+            {activeUniverseMeta?.shortLabel ?? '指定フィルター'}に該当するウォッチ銘柄はありません
+          </p>
+          <p style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+            ヘッダーのフィルターを解除すると、保存済みの全ウォッチ銘柄を表示できます。
+          </p>
+        </div>
       ) : (
         <div className="card" style={{ overflow: 'hidden' }}>
           <div style={{ padding: '8px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-subtle)', gap: '8px', flexWrap: 'wrap' }}>
             <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
-              <strong>{tickers.length}</strong>銘柄
+              <strong>{visibleTickers.length}</strong>銘柄
+              {activeUniverseMeta && <span style={{ marginLeft: '6px', color: 'var(--color-market-red)', fontWeight: 700 }}>{activeUniverseMeta.shortLabel}</span>}
+              {activeUniverseMeta && visibleTickers.length !== tickers.length && <span style={{ marginLeft: '6px', color: 'var(--text-muted)' }}>保存済み {tickers.length}銘柄中</span>}
               {loading && <span style={{ marginLeft: '6px', color: 'var(--text-muted)' }}>更新中…</span>}
             </span>
             <div style={{ display: 'flex', gap: '8px' }}>
@@ -169,7 +190,7 @@ export default function WatchlistPage() {
                 </tr>
               </thead>
               <tbody>
-                {tickers.map((t) => {
+                {visibleTickers.map((t) => {
                   const q = quotes[t]
                   const m = findTicker(t)
                   const tv = toTvSymbol(t, m?.marketSegment)

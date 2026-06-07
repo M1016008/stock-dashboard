@@ -11,6 +11,7 @@ import {
   type EarningsSignalDecoration,
   type EarningsSignalDecorationOptions,
 } from '@/lib/signals/earnings-labels'
+import { filterRowsByUniverse, type UniverseFilterValue } from '@/lib/market-universe'
 
 // ─── 最新営業日 ───
 export async function getLatestDate(): Promise<string | null> {
@@ -527,6 +528,7 @@ export interface EarningsCalendarFilters {
   sortDir?: EarningsSortDir | null
   limit?: number | null
   completed?: boolean | null
+  universe?: UniverseFilterValue
 }
 
 export interface EarningsFilterOption {
@@ -630,7 +632,7 @@ function filterEarningsRows(rows: EarningsRow[], filters: EarningsCalendarFilter
   const priceMin = filters.priceMin
   const priceMax = filters.priceMax
 
-  return rows.filter((row) => {
+  return filterRowsByUniverse(rows, filters.universe ?? null).filter((row) => {
     if (marketSegment && row.marketSegment !== marketSegment) return false
     if (sector17 && row.sector17Name !== sector17) return false
     if (sector33 && row.sector33Name !== sector33) return false

@@ -26,7 +26,9 @@ export default function RootLayout({
           <DataAutoUpdater />
           <FreshDataRefresher />
         </Suspense>
-        <Header />
+        <Suspense fallback={null}>
+          <Header />
+        </Suspense>
         <main className="mx-auto w-full max-w-[1480px] px-5 py-5 sm:px-8 lg:px-10 lg:py-7 xl:px-12">
           {children}
         </main>

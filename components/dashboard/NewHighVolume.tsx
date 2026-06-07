@@ -8,6 +8,7 @@ import { MarginBadges } from '@/components/ui/MarginBadges'
 import { StageTag } from '@/components/ui/StageTag'
 import { getCachedMarketMovers } from '@/lib/queries/dashboard-cache'
 import type { NewHighVolumeRow } from '@/lib/queries/dashboard'
+import { filterRowsByUniverse, getUniverseFilterMeta, type UniverseFilterValue } from '@/lib/market-universe'
 
 const MAX_INITIAL_ROWS_PER_LANE = 40
 
@@ -150,11 +151,23 @@ function MoverLane({
   )
 }
 
-export async function NewHighVolume({ date }: { date?: string | null }) {
-  const movers = await getCachedMarketMovers(date)
+export async function NewHighVolume({
+  date,
+  universe = null,
+}: {
+  date?: string | null
+  universe?: UniverseFilterValue
+}) {
+  const rawMovers = await getCachedMarketMovers(date)
+  const movers = {
+    newHighs: filterRowsByUniverse(rawMovers.newHighs, universe),
+    newLows: filterRowsByUniverse(rawMovers.newLows, universe),
+    volumeSpikes: filterRowsByUniverse(rawMovers.volumeSpikes, universe),
+  }
+  const universeMeta = getUniverseFilterMeta(universe)
   return (
     <Card>
-      <CardHeader title="新高値・新安値・出来高急増" hint="252日レンジ / 出来高30日平均比" />
+      <CardHeader title="新高値・新安値・出来高急増" hint={`${universeMeta ? `${universeMeta.shortLabel} / ` : ''}252日レンジ / 出来高30日平均比`} />
       <div className="grid grid-cols-1 gap-3 xl:grid-cols-3">
         <MoverLane title="新高値" hint="252日高値を更新" rows={movers.newHighs} kind="high" />
         <MoverLane title="新安値" hint="252日安値を更新" rows={movers.newLows} kind="low" />

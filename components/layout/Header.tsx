@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { usePathname } from 'next/navigation'
+import { usePathname, useSearchParams } from 'next/navigation'
 import { useEffect, useRef, useState } from 'react'
 import {
   Activity,
@@ -14,10 +14,18 @@ import {
   Globe2,
   Hexagon,
   LayoutDashboard,
+  ListFilter,
   Search,
   Star,
   type LucideIcon,
 } from 'lucide-react'
+import {
+  addUniverseToHref,
+  getUniverseFilterMeta,
+  parseUniverseFilter,
+  UNIVERSE_FILTER_PARAM,
+  type UniverseFilterId,
+} from '@/lib/market-universe'
 
 type NavLinkItem = {
   href: string
@@ -46,6 +54,7 @@ const NAV_ITEMS = [
     icon: Search,
     items: [
       { href: '/screener', label: 'スクリーナー', description: '条件で銘柄を抽出', icon: Search },
+      { href: '/stage-screener', label: 'ステージスクリーナー', description: '日足・週足・月足の行列で抽出', icon: Hexagon },
       { href: '/hex-stage', label: 'HEXステージ', description: '6ステージの分布と遷移', icon: Hexagon },
       { href: '/sectors', label: '業種分析', description: '17/33業種の強弱', icon: Building2 },
       {
@@ -186,12 +195,17 @@ function hrefPath(href: string): string {
 
 export function Header() {
   const pathname = usePathname()
+  const searchParams = useSearchParams()
   const isUsArea = pathname.startsWith('/us')
   const navItems = isUsArea ? US_NAV_ITEMS : NAV_ITEMS
   const navRef = useRef<HTMLDivElement>(null)
   const [openMenu, setOpenMenu] = useState<string | null>(null)
   const [marketStatus, setMarketStatus] = useState<'open' | 'closed'>('closed')
   const clocks = useClocks()
+  const activeUniverse = isUsArea
+    ? null
+    : parseUniverseFilter(searchParams.get(UNIVERSE_FILTER_PARAM))
+  const activeUniverseMeta = getUniverseFilterMeta(activeUniverse)
 
   useEffect(() => {
     const getStatus = isUsArea ? getNyseStatus : getTseStatus
@@ -229,6 +243,19 @@ export function Header() {
     return isActive(entry.href)
   }
 
+  const scopedHref = (href: string) => {
+    return isUsArea ? href : addUniverseToHref(href, activeUniverse)
+  }
+
+  const universeToggleHref = (filter: UniverseFilterId) => {
+    const params = new URLSearchParams(searchParams.toString())
+    const current = parseUniverseFilter(params.get(UNIVERSE_FILTER_PARAM))
+    if (current === filter) params.delete(UNIVERSE_FILTER_PARAM)
+    else params.set(UNIVERSE_FILTER_PARAM, filter)
+    const query = params.toString()
+    return query ? `${pathname}?${query}` : pathname
+  }
+
   const renderNavEntry = (entry: NavEntry | (typeof US_NAV_ITEMS)[number], compact = false) => {
     const active = isEntryActive(entry)
     const baseClasses = `inline-flex h-9 shrink-0 items-center gap-2.5 rounded-[2px] border ${compact ? 'px-3.5 text-[12px]' : 'px-4 text-[13px]'} font-bold leading-none transition-colors ${
@@ -241,7 +268,7 @@ export function Header() {
       return (
         <Link
           key={entry.href}
-          href={entry.href}
+          href={scopedHref(entry.href)}
           prefetch={false}
           className={baseClasses}
           onClick={() => setOpenMenu(null)}
@@ -289,7 +316,7 @@ export function Header() {
               return (
                 <Link
                   key={item.href}
-                  href={item.href}
+                  href={scopedHref(item.href)}
                   prefetch={false}
                   role="menuitem"
                   className={`flex min-h-[54px] items-center gap-3 rounded-[3px] border px-3 py-2 text-left transition-colors ${
@@ -323,7 +350,7 @@ export function Header() {
     <header className="sticky top-0 z-30 border-b border-[var(--color-border-strong)] bg-white shadow-[0_1px_3px_rgba(16,32,52,0.12)]">
       <div className="border-b border-[var(--color-border-default)] bg-[var(--color-surface-subtle)]">
         <div className="mx-auto flex min-h-10 w-full max-w-[1480px] items-center justify-between gap-3 px-5 sm:px-8 lg:px-10 xl:px-12">
-          <Link href={isUsArea ? '/us' : '/'} prefetch={false} className="flex shrink-0 items-center gap-2.5">
+          <Link href={isUsArea ? '/us' : scopedHref('/')} prefetch={false} className="flex shrink-0 items-center gap-2.5">
             <div className="flex h-7 w-7 items-center justify-center rounded-[3px] bg-[var(--color-brand-800)] text-white shadow-sm">
               <BarChart3 size={16} strokeWidth={2.5} />
             </div>
@@ -338,7 +365,7 @@ export function Header() {
           <div className="hidden shrink-0 items-center gap-1 rounded-[4px] border border-[var(--color-border-default)] bg-white p-1 md:flex">
             <Globe2 size={13} className="ml-1 text-[var(--color-text-tertiary)]" />
             <Link
-              href="/"
+              href={scopedHref('/')}
               prefetch={false}
               className={`rounded-[3px] px-2 py-1 text-[11px] font-bold ${!isUsArea ? 'bg-[var(--color-brand-800)] text-white' : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-subtle)]'}`}
             >
@@ -353,14 +380,46 @@ export function Header() {
             </Link>
           </div>
 
+          {!isUsArea && (
+            <Link
+              href={universeToggleHref('nikkei225')}
+              prefetch={false}
+              aria-pressed={activeUniverse === 'nikkei225'}
+              className={`hidden h-8 shrink-0 items-center gap-1.5 rounded-[4px] border px-2.5 text-[11px] font-bold transition-colors md:inline-flex ${
+                activeUniverse === 'nikkei225'
+                  ? 'border-[var(--color-market-red)] bg-white text-[var(--color-market-red)] shadow-sm'
+                  : 'border-[var(--color-border-default)] bg-white text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-subtle)]'
+              }`}
+              title={activeUniverseMeta ? `${activeUniverseMeta.label}フィルターを解除` : '日経225採用銘柄だけに絞り込み'}
+            >
+              <ListFilter size={13} strokeWidth={2.4} />
+              <span>{activeUniverseMeta?.shortLabel ?? '日経225'}</span>
+            </Link>
+          )}
+
           <div className="flex shrink-0 items-center gap-1 rounded-[4px] border border-[var(--color-border-default)] bg-white p-1 md:hidden">
             <Link
-              href="/"
+              href={scopedHref('/')}
               prefetch={false}
               className={`rounded-[3px] px-2 py-1 text-[11px] font-bold ${!isUsArea ? 'bg-[var(--color-brand-800)] text-white' : 'text-[var(--color-text-secondary)]'}`}
             >
               JP
             </Link>
+            {!isUsArea && (
+              <Link
+                href={universeToggleHref('nikkei225')}
+                prefetch={false}
+                aria-pressed={activeUniverse === 'nikkei225'}
+                className={`rounded-[3px] px-2 py-1 text-[11px] font-bold ${
+                  activeUniverse === 'nikkei225'
+                    ? 'bg-[var(--color-market-red)] text-white'
+                    : 'text-[var(--color-text-secondary)]'
+                }`}
+                title={activeUniverseMeta ? `${activeUniverseMeta.label}フィルターを解除` : '日経225採用銘柄だけに絞り込み'}
+              >
+                N225
+              </Link>
+            )}
             <Link
               href="/us"
               prefetch={false}

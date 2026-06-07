@@ -3,6 +3,7 @@ import { execAll, execGet } from '@/lib/db/client'
 import { ML_PHYSICS_FEATURE_SET, type PhysicsFeatureProfile } from '@/lib/backtest/ml-physics'
 import { buildChartWindowWithMa, type OhlcvPoint, type StagePoint } from '@/lib/backtest/detail-analysis'
 import { physicsSimilarity, physicsSimilarityScore, stageSimilarity } from '@/lib/ml/physics-similarity'
+import { filterRowsByUniverse, parseUniverseFilter, UNIVERSE_FILTER_PARAM } from '@/lib/market-universe'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 30
@@ -380,6 +381,7 @@ export async function GET(request: NextRequest) {
     const asOfDate = dateParam(searchParams.get('asOfDate'))
     const rawLimit = positiveInteger(searchParams.get('limit'))
     const limit = Math.min(MAX_LIMIT, Math.max(1, rawLimit ?? 30))
+    const universeFilter = parseUniverseFilter(searchParams.get(UNIVERSE_FILTER_PARAM))
 
     const base = await loadFeatureSequence(ticker, startDate, endDate)
     if (base.length < MIN_PATTERN_DAYS) {
@@ -396,10 +398,13 @@ export async function GET(request: NextRequest) {
     if (currentDates.length !== base.length) return badRequest('current feature history is too short', 422)
 
     const baseLast = base[base.length - 1]
-    const filteredLatestRows = await loadLatestMarketRows(currentEndDate, profileStage(baseLast.profile, baseLast.stage_code))
+    const filteredLatestRows = filterRowsByUniverse(
+      await loadLatestMarketRows(currentEndDate, profileStage(baseLast.profile, baseLast.stage_code)),
+      universeFilter,
+    )
     const latestRows = filteredLatestRows.length >= Math.max(limit * 3, 60)
       ? filteredLatestRows
-      : await loadLatestMarketRows(currentEndDate)
+      : filterRowsByUniverse(await loadLatestMarketRows(currentEndDate), universeFilter)
     const candidateTickers = candidateTickerPool(base[base.length - 1], latestRows, limit)
     const marketRows = await loadMarketRows(currentDates[0], currentEndDate, candidateTickers)
     const matches = rankMarket(base, marketRows, currentDates, limit)
@@ -416,6 +421,7 @@ export async function GET(request: NextRequest) {
       requestedStartDate: startDate,
       requestedEndDate: endDate,
       asOfDate: currentEndDate,
+      filters: { universe: universeFilter },
       currentStartDate: currentDates[0],
       currentEndDate,
       count: matches.length,

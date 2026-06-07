@@ -1,4 +1,5 @@
 import { execAll, execGet } from '@/lib/db/client'
+import { type UniverseFilterValue, universeSqlCondition } from '@/lib/market-universe'
 
 export type SectorClassification = '17' | '33'
 export type SectorPeriod = 'today' | 'week' | 'month'
@@ -25,6 +26,7 @@ export interface SectorPeriodSummary {
 export interface SectorAnalysisBoard {
   latestDate: string | null
   periods: SectorPeriodSummary[]
+  universe: UniverseFilterValue
 }
 
 const PERIODS: Array<{ period: SectorPeriod; label: string; description: string }> = [
@@ -98,8 +100,10 @@ export async function getSectorHeatmapRows(
   classification: SectorClassification,
   latestDate: string,
   baseDate: string,
+  universeFilter: UniverseFilterValue = null,
 ): Promise<SectorHeatmapRow[]> {
   const cols = sectorColumns(classification)
+  const universe = universeSqlCondition('tu.ticker', universeFilter)
   return execAll<SectorHeatmapRow>(
     `
       WITH latest_px AS (
@@ -125,6 +129,7 @@ export async function getSectorHeatmapRows(
         JOIN base_px ON base_px.ticker = tu.ticker
         WHERE tu.active = 1
           AND ${cols.hasName}
+          ${universe.sql ? `AND ${universe.sql}` : ''}
       )
       SELECT
         sector_code,
@@ -137,21 +142,21 @@ export async function getSectorHeatmapRows(
       GROUP BY sector_code, sector_name
       ORDER BY avg_change DESC
     `,
-    [latestDate, baseDate],
+    [latestDate, baseDate, ...universe.params],
   )
 }
 
-export async function getSectorAnalysisBoard(): Promise<SectorAnalysisBoard> {
+export async function getSectorAnalysisBoard(universeFilter: UniverseFilterValue = null): Promise<SectorAnalysisBoard> {
   const latestDate = await getLatestPriceDate()
-  if (!latestDate) return { latestDate: null, periods: [] }
+  if (!latestDate) return { latestDate: null, periods: [], universe: universeFilter }
 
   const periods: SectorPeriodSummary[] = []
   for (const periodMeta of PERIODS) {
     const baseDate = await resolveBaseDate(periodMeta.period, latestDate)
     if (!baseDate) continue
     const [rows17, rows33] = await Promise.all([
-      getSectorHeatmapRows('17', latestDate, baseDate),
-      getSectorHeatmapRows('33', latestDate, baseDate),
+      getSectorHeatmapRows('17', latestDate, baseDate, universeFilter),
+      getSectorHeatmapRows('33', latestDate, baseDate, universeFilter),
     ])
     periods.push({
       ...periodMeta,
@@ -162,5 +167,5 @@ export async function getSectorAnalysisBoard(): Promise<SectorAnalysisBoard> {
     })
   }
 
-  return { latestDate, periods }
+  return { latestDate, periods, universe: universeFilter }
 }

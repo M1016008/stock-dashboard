@@ -1,6 +1,7 @@
 // lib/queries/transitions.ts — Phase 4 D /ai/transitions ページ用
 
 import { execAll, execGet } from '@/lib/db/client'
+import { type UniverseFilterValue, universeSqlCondition } from '@/lib/market-universe'
 
 function stagesFromCode(code: string): number[] | null {
   if (!/^\d{6}$/.test(code)) return null
@@ -159,14 +160,20 @@ export interface SectorBreakdownRow {
   sector_name: string
   count: number
 }
-export async function getSectorBreakdown(code: string, limit = 7): Promise<SectorBreakdownRow[]> {
+export async function getSectorBreakdown(
+  code: string,
+  limit = 7,
+  universeFilter: UniverseFilterValue = null,
+): Promise<SectorBreakdownRow[]> {
   const stages = stagesFromCode(code)
   if (!stages) return []
+  const universe = universeSqlCondition('ticker', universeFilter)
   return await execAll<SectorBreakdownRow>(
     `
     WITH match AS (
       SELECT DISTINCT ticker FROM daily_snapshots
       WHERE ${STAGE_MATCH_WHERE}
+        ${universe.sql ? `AND ${universe.sql}` : ''}
       LIMIT 5000
     )
     SELECT COALESCE(tu.sector33_name, 'その他') AS sector_name, COUNT(*) AS count
@@ -176,7 +183,7 @@ export async function getSectorBreakdown(code: string, limit = 7): Promise<Secto
     ORDER BY count DESC
     LIMIT ?
     `,
-    [...stages, limit],
+    [...stages, ...universe.params, limit],
   )
 }
 
@@ -191,33 +198,56 @@ export interface SampleCaseRow {
   r90: number | null
   r180: number | null
 }
-export async function getSampleCases(code: string, limit = 10): Promise<SampleCaseRow[]> {
+export async function getSampleCases(
+  code: string,
+  limit = 10,
+  universeFilter: UniverseFilterValue = null,
+): Promise<SampleCaseRow[]> {
   const stages = stagesFromCode(code)
   if (!stages) return []
+
+  const maxReturnDate = await execGet<{ date: string | null }>(
+    `SELECT MAX(date) AS date FROM forward_returns WHERE horizon_days = 180`,
+  )
+  if (!maxReturnDate?.date) return []
+
+  const safeLimit = Math.max(1, Math.min(limit, 100))
+  const scanLimit = Math.min(Math.max(safeLimit * 50, 500), 5000)
+  const universe = universeSqlCondition('ticker', universeFilter)
+
   return await execAll<SampleCaseRow>(
     `
     WITH match AS (
       SELECT ticker, date FROM daily_snapshots
       WHERE ${STAGE_MATCH_WHERE}
-      ORDER BY date DESC
-      LIMIT 200
+        ${universe.sql ? `AND ${universe.sql}` : ''}
+        AND date <= ?
+      ORDER BY date DESC, ticker ASC
+      LIMIT ?
     ),
-    r AS (
-      SELECT ticker, date, horizon_days, return_pct FROM forward_returns
+    raw AS (
+      SELECT m.ticker, tu.name, m.date,
+             tu.sector33_name AS sector,
+             MAX(CASE WHEN fr.horizon_days = 30  THEN fr.return_pct END) AS r30,
+             MAX(CASE WHEN fr.horizon_days = 60  THEN fr.return_pct END) AS r60,
+             MAX(CASE WHEN fr.horizon_days = 90  THEN fr.return_pct END) AS r90,
+             MAX(CASE WHEN fr.horizon_days = 180 THEN fr.return_pct END) AS r180
+      FROM match m
+      LEFT JOIN forward_returns fr
+        ON fr.ticker = m.ticker
+       AND fr.date = m.date
+       AND fr.horizon_days IN (30, 60, 90, 180)
+      LEFT JOIN ticker_universe tu ON tu.ticker = m.ticker
+      GROUP BY m.ticker, m.date
     )
-    SELECT m.ticker, tu.name, m.date,
-           tu.sector33_name AS sector,
-           MAX(CASE WHEN r.horizon_days = 30  THEN r.return_pct END) AS r30,
-           MAX(CASE WHEN r.horizon_days = 60  THEN r.return_pct END) AS r60,
-           MAX(CASE WHEN r.horizon_days = 90  THEN r.return_pct END) AS r90,
-           MAX(CASE WHEN r.horizon_days = 180 THEN r.return_pct END) AS r180
-    FROM match m
-    LEFT JOIN r USING (ticker, date)
-    LEFT JOIN ticker_universe tu ON tu.ticker = m.ticker
-    GROUP BY m.ticker, m.date
-    ORDER BY m.date DESC
+    SELECT * FROM raw
+    WHERE r30 IS NOT NULL
+      AND r60 IS NOT NULL
+      AND r90 IS NOT NULL
+      AND r180 IS NOT NULL
+    ORDER BY date DESC, ticker ASC
     LIMIT ?
     `,
-    [...stages, limit],
+    [...stages, ...universe.params, maxReturnDate.date, scanLimit, safeLimit],
   )
 }

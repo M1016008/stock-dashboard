@@ -2,9 +2,11 @@
 
 import Link from 'next/link'
 import { useMemo, useState } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { ArrowRight, Loader2, Search, SlidersHorizontal, TrendingDown, TrendingUp } from 'lucide-react'
 import { StageTag } from '@/components/ui/StageTag'
 import { BacktestHighlightChart, type HighlightChartPoint, type StageMarkerPoint } from '@/components/charts/BacktestHighlightChart'
+import { getUniverseFilterMeta, parseUniverseFilter, UNIVERSE_FILTER_PARAM } from '@/lib/market-universe'
 
 type Direction = 'up' | 'down'
 type Mode = 'manual' | 'events'
@@ -159,6 +161,9 @@ function Metric({ label, value }: { label: string; value: string }) {
 }
 
 export function HistoricalPatternSearchPanel({ latestFeatureDate }: { latestFeatureDate: string | null }) {
+  const searchParams = useSearchParams()
+  const activeUniverse = parseUniverseFilter(searchParams.get(UNIVERSE_FILTER_PARAM))
+  const activeUniverseMeta = getUniverseFilterMeta(activeUniverse)
   const defaultEnd = latestFeatureDate ?? ''
   const defaultStart = defaultEnd ? subtractCalendarDays(defaultEnd, 28) : ''
   const [mode, setMode] = useState<Mode>('manual')
@@ -189,6 +194,7 @@ export function HistoricalPatternSearchPanel({ latestFeatureDate }: { latestFeat
         thresholdPct,
         startDate: eventStartDate,
         endDate: eventEndDate,
+        universe: activeUniverse,
         limit: 12,
       })
       const res = await fetch(`/api/ml/pattern-events?${query}`, { cache: 'no-store' })
@@ -217,6 +223,7 @@ export function HistoricalPatternSearchPanel({ latestFeatureDate }: { latestFeat
         ticker: nextTicker,
         startDate: nextStart,
         endDate: nextEnd,
+        universe: activeUniverse,
         limit: 24,
       })
       const res = await fetch(`/api/ml/pattern-search?${query}`, { cache: 'no-store' })
@@ -257,6 +264,11 @@ export function HistoricalPatternSearchPanel({ latestFeatureDate }: { latestFeat
           {direction === 'up' ? <TrendingUp className="h-3.5 w-3.5" /> : <TrendingDown className="h-3.5 w-3.5" />}
           条件ケース
         </button>
+        {activeUniverseMeta && (
+          <span className="inline-flex items-center rounded-full border border-[var(--color-market-red)] bg-[var(--color-price-up-bg)] px-2.5 py-1 text-[11px] font-bold text-[var(--color-market-red)]">
+            {activeUniverseMeta.shortLabel}
+          </span>
+        )}
       </div>
 
       {mode === 'manual' && (

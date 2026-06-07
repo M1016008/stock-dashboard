@@ -323,7 +323,7 @@ export function StockMlInsights({ ticker }: { ticker: string }) {
                 </div>
               </div>
               <div style={{ marginTop: 8, display: 'grid', gap: 4, fontSize: 11, lineHeight: 1.55, color: 'var(--text-secondary)' }}>
-                {['stage', 'maAngle', 'maAcceleration', 'maDistance', 'maDistanceFlow', 'pricePosition', 'context', 'risk'].map((key) => (
+                {['stage', 'maAngle', 'maAcceleration', 'maDistance', 'maDistanceFlow', 'upperTimeframe', 'pricePosition', 'context', 'risk'].map((key) => (
                   row.reason[key] ? <span key={key}>{row.reason[key]}</span> : null
                 ))}
               </div>

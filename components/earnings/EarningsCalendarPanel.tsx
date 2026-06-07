@@ -185,6 +185,7 @@ function earningsHref({
     ['dir', filters.sortDir],
     ['limit', limit ?? filters.limit],
     ['completed', filters.completed ? '1' : null],
+    ['universe', filters.universe],
   ]
   for (const [key, value] of pairs) {
     const text = compactFilterValue(value)
@@ -265,6 +266,7 @@ function EarningsScopeControls({
         {date && <input type="hidden" name="date" value={date} />}
         {month && <input type="hidden" name="month" value={month} />}
         {filters.completed && <input type="hidden" name="completed" value="1" />}
+        {filters.universe && <input type="hidden" name="universe" value={filters.universe} />}
         <div className="grid gap-2 md:grid-cols-4 xl:grid-cols-8">
           <SelectField label="市場区分" name="market" value={filters.marketSegment} options={options.marketSegments} />
           <SelectField label="17業種" name="sector17" value={filters.sector17} options={options.sector17} />

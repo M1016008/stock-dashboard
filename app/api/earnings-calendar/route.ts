@@ -11,6 +11,7 @@ import {
   type EarningsSortKey,
   type EarningsVolumeCondition,
 } from '@/lib/queries/dashboard'
+import { parseUniverseFilter, UNIVERSE_FILTER_PARAM } from '@/lib/market-universe'
 
 export const dynamic = 'force-dynamic'
 
@@ -121,6 +122,7 @@ export async function GET(request: NextRequest) {
       sortDir: parseSortDir(searchParams.get('dir')),
       limit: parseLimit(searchParams.get('limit')),
       completed: searchParams.get('completed') === '1' || searchParams.get('completed') === 'true',
+      universe: parseUniverseFilter(searchParams.get(UNIVERSE_FILTER_PARAM)),
     }
     const dashboard = await getEarningsCalendarDashboard(daysFwd, selectedDate, {
       preferLatestImport: !selectedDate,

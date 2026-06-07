@@ -3,6 +3,7 @@ import { getSectorAnalysisBoard, type SectorHeatmapRow, type SectorPeriodSummary
 import { getMlObjectiveValidation, getMlSectorRankings } from '@/lib/queries/ml-insights'
 import { MlObjectiveValidationBoard } from '@/components/sectors/MlObjectiveValidationBoard'
 import { MlSectorRankingBoard } from '@/components/sectors/MlSectorRankingBoard'
+import { getUniverseFilterMeta, parseUniverseFilter } from '@/lib/market-universe'
 
 export const metadata: Metadata = {
   title: '業種分析 — StockBoard',
@@ -231,9 +232,16 @@ function ClassificationSection({
   )
 }
 
-export default async function SectorsPage() {
+export default async function SectorsPage({
+  searchParams,
+}: {
+  searchParams?: Promise<{ universe?: string | string[] }>
+}) {
+  const sp = searchParams ? await searchParams : {}
+  const universeFilter = parseUniverseFilter(sp.universe)
+  const universeMeta = getUniverseFilterMeta(universeFilter)
   const [board, mlRankingData, objectiveValidationData] = await Promise.all([
-    getSectorAnalysisBoard(),
+    getSectorAnalysisBoard(universeFilter),
     getMlSectorRankings({ limit: 1000 }),
     getMlObjectiveValidation({ limit: 80 }),
   ])
@@ -254,6 +262,7 @@ export default async function SectorsPage() {
         <span className="sb-tab sb-on">本日</span>
         <span className="sb-tab sb-on">今週</span>
         <span className="sb-tab sb-on">今月</span>
+        {universeMeta && <span className="sb-tab sb-on">{universeMeta.shortLabel}</span>}
         <span className="sb-t" style={{ marginLeft: 'auto', fontSize: 11 }}>
           基準日: {latestDate ?? '---'}
         </span>

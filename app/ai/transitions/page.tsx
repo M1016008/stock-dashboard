@@ -18,6 +18,7 @@ import {
   getSectorBreakdown,
   getSampleCases,
 } from '@/lib/queries/transitions'
+import { getUniverseFilterMeta, parseUniverseFilter } from '@/lib/market-universe'
 
 export const metadata: Metadata = {
   title: 'パターン遷移分析 — StockBoard',
@@ -42,20 +43,22 @@ function fmtPct(v: number | null, decimals = 1): string {
 export default async function TransitionsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ code?: string; horizon?: string }>
+  searchParams: Promise<{ code?: string; horizon?: string; universe?: string | string[] }>
 }) {
   const sp = await searchParams
   const fallback = await getDefaultPatternCode()
   const code = /^\d{6}$/.test(sp.code ?? '') ? sp.code! : (fallback ?? '111111')
   const horizonDays = sp.horizon && /^\d+$/.test(sp.horizon) ? parseInt(sp.horizon, 10) : 60
+  const universeFilter = parseUniverseFilter(sp.universe)
+  const universeMeta = getUniverseFilterMeta(universeFilter)
 
   const [meta, horizonRows, top, dist, sectors, samples] = await Promise.all([
     getPatternMeta(code),
     getHorizonStats(code),
     getTopPatterns(12),
     getReturnDistribution(code, horizonDays),
-    getSectorBreakdown(code, 7),
-    getSampleCases(code, 10),
+    getSectorBreakdown(code, 7, universeFilter),
+    getSampleCases(code, 10, universeFilter),
   ])
 
   const stages = code.split('').map(c => parseInt(c, 10))
@@ -66,7 +69,10 @@ export default async function TransitionsPage({
     <div className="sb-page">
       <div className="sb-page-title">
         <h1>パターン遷移分析</h1>
-        <p>6 タイムスケールの組み合わせから過去の類似ケースを統計的に観察します</p>
+        <p>
+          6 タイムスケールの組み合わせから過去の類似ケースを統計的に観察します
+          {universeMeta ? `（${universeMeta.shortLabel}フィルター中）` : ''}
+        </p>
         <div style={{ marginTop: 10 }}>
           <PatternSearchMock currentCode={code} topPatterns={top} />
         </div>
@@ -269,7 +275,7 @@ export default async function TransitionsPage({
       <div className="sb-section">
         <div className="sb-hd">
           <h2>過去のサンプルケース</h2>
-          <span>直近 {samples.length} 件 · 全 {meta?.count_60d.toLocaleString() ?? '—'} 件</span>
+          <span>+180日まで計算済み {samples.length} 件 · 統計対象 {meta?.count_60d.toLocaleString() ?? '—'} 件</span>
         </div>
         <div className="sb-card">
           <div className="overflow-x-auto">
@@ -316,7 +322,7 @@ export default async function TransitionsPage({
         </div>
         {meta && meta.count_60d > samples.length && (
           <div style={{ marginTop: 8, fontSize: 11, color: 'var(--color-text-tertiary)', textAlign: 'right' }}>
-            残り {(meta.count_60d - samples.length).toLocaleString()} 件 ↗
+            上表はリターンが確定済みの代表ケースです
           </div>
         )}
       </div>

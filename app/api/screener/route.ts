@@ -12,6 +12,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { execAll, execGet } from '@/lib/db/client'
+import { filterRowsByUniverse, parseUniverseFilter, UNIVERSE_FILTER_PARAM } from '@/lib/market-universe'
 import { getTickersByMarket } from '@/lib/master/tickers'
 
 export const dynamic = 'force-dynamic'
@@ -646,6 +647,7 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url)
     // 当ダッシュボードは日本株専用。market パラメタは互換のため受け取るだけ。
     const segment = searchParams.get('segment')
+    const universeFilter = parseUniverseFilter(searchParams.get(UNIVERSE_FILTER_PARAM))
     const requestedDate = searchParams.get('date')
     const marginTypes = stringSetParam(searchParams, 'marginType')
     const sector17 = searchParams.get('sector17')?.trim()
@@ -674,7 +676,7 @@ export async function GET(request: NextRequest) {
         cached: false,
         source: 'jquants',
         notice: 'J-Quants 由来の日次スナップショットが未作成です。最新化バッチを実行してください。',
-        filters: { segment },
+        filters: { segment, universe: universeFilter },
       })
     }
 
@@ -699,7 +701,7 @@ export async function GET(request: NextRequest) {
       .map((s) => buildResultRow(s, sectorMap))
       .filter((r): r is ScreenerStockRow => r !== null)
 
-    let filtered = built
+    let filtered = filterRowsByUniverse(built, universeFilter)
     if (segment) filtered = filtered.filter((r) => r.marketSegment === segment)
     if (marginTypes.size > 0) {
       filtered = filtered.filter((r) => marginTypes.has(r.marginType?.trim() || '未設定'))
@@ -742,6 +744,7 @@ export async function GET(request: NextRequest) {
       source: 'jquants',
       filters: {
         segment,
+        universe: universeFilter,
         marginType: Array.from(marginTypes),
         sector17,
         sector33,

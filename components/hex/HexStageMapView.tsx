@@ -8,9 +8,11 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import { useSearchParams } from 'next/navigation'
 import HexMap from '@/components/hex/HexMap'
 import { MarketDateCalendar } from '@/components/ui/MarketDateCalendar'
 import { STAGE_BG_COLORS, STAGE_BORDER_COLORS, STAGE_LABELS } from '@/lib/hex-stage'
+import { getUniverseFilterMeta, parseUniverseFilter, UNIVERSE_FILTER_PARAM } from '@/lib/market-universe'
 
 interface Stock {
   code: string
@@ -61,6 +63,9 @@ const STAGE_DESCRIPTIONS: Record<number, string> = {
 }
 
 export default function HexStageMapView() {
+  const searchParams = useSearchParams()
+  const activeUniverse = parseUniverseFilter(searchParams.get(UNIVERSE_FILTER_PARAM))
+  const activeUniverseMeta = getUniverseFilterMeta(activeUniverse)
   const [data, setData] = useState<Stock[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -91,6 +96,7 @@ export default function HexStageMapView() {
     setLoading(true)
     setError(null)
     const params = new URLSearchParams({ timeframe })
+    if (activeUniverse) params.set(UNIVERSE_FILTER_PARAM, activeUniverse)
     if (selectedDate) params.set('date', selectedDate)
 
     fetch(`/api/hex?${params}`, { cache: 'no-store' })
@@ -104,7 +110,7 @@ export default function HexStageMapView() {
       .catch((e) => { if (!cancelled) setError((e as Error).message) })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [timeframe, selectedDate])
+  }, [timeframe, selectedDate, activeUniverse])
 
   const categoryStats = useMemo(() => {
     const large: Record<string, number> = {}
@@ -147,7 +153,7 @@ export default function HexStageMapView() {
       <div className="flex items-baseline justify-between gap-3 pt-2">
         <h2>トレンドステージマップ</h2>
         <span className="text-[11px] text-[var(--color-text-tertiary)] tabular-nums">
-          {filteredData.length.toLocaleString()} 銘柄{hasFilter ? ` / 全 ${data.length.toLocaleString()}` : ''}{date ? ` · ${date}` : ''}
+          {filteredData.length.toLocaleString()} 銘柄{hasFilter ? ` / 全 ${data.length.toLocaleString()}` : ''}{activeUniverseMeta ? ` · ${activeUniverseMeta.shortLabel}` : ''}{date ? ` · ${date}` : ''}
         </span>
       </div>
 

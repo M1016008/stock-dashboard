@@ -11,6 +11,7 @@ import {
   type EarningsSortKey,
   type EarningsVolumeCondition,
 } from '@/lib/queries/dashboard'
+import { getUniverseFilterMeta, parseUniverseFilter } from '@/lib/market-universe'
 
 export const metadata: Metadata = {
   title: '決算 — StockBoard',
@@ -99,6 +100,8 @@ export default async function EarningsPage({
   const requestedMonth = firstParam(sp.month)
   const selectedDate = isIsoDate(requestedDate) ? requestedDate : null
   const displayMonth = isMonth(requestedMonth) ? requestedMonth : null
+  const universeFilter = parseUniverseFilter(sp.universe)
+  const universeMeta = getUniverseFilterMeta(universeFilter)
   const filters: EarningsCalendarFilters = {
     marketSegment: firstParam(sp.market) ?? null,
     sector17: firstParam(sp.sector17) ?? null,
@@ -113,6 +116,7 @@ export default async function EarningsPage({
     sortDir: parseSortDir(firstParam(sp.dir)),
     limit: parseLimit(firstParam(sp.limit)),
     completed: firstParam(sp.completed) === '1',
+    universe: universeFilter,
   }
   const [latest, counts] = await Promise.all([
     getLatestDate(),
@@ -128,7 +132,7 @@ export default async function EarningsPage({
       <PageTitle
         title="決算"
         subtitle={subtitle}
-        badge="JPX公式 + J-Quants"
+        badge={universeMeta ? `${universeMeta.shortLabel} / JPX公式 + J-Quants` : 'JPX公式 + J-Quants'}
       />
       <EarningsDateCalendar
         counts={counts}

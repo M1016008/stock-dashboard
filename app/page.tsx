@@ -14,6 +14,7 @@ import { PatternStatsTop } from '@/components/dashboard/PatternStatsTop'
 import { DashboardDateSelector } from '@/components/dashboard/DashboardDateSelector'
 import { getLatestDate } from '@/lib/queries/dashboard'
 import { getDashboardDateOption } from '@/lib/queries/dashboard-cache'
+import { getUniverseFilterMeta, parseUniverseFilter } from '@/lib/market-universe'
 
 export const metadata: Metadata = {
   title: 'ダッシュボード — StockBoard',
@@ -50,10 +51,12 @@ function SectionFallback({ height = 80 }: { height?: number }) {
 export default async function DashboardPage({
   searchParams,
 }: {
-  searchParams?: Promise<{ date?: string | string[] }>
+  searchParams?: Promise<{ date?: string | string[]; universe?: string | string[] }>
 }) {
   const sp = searchParams ? await searchParams : {}
   const requested = typeof sp.date === 'string' ? sp.date : null
+  const universeFilter = parseUniverseFilter(sp.universe)
+  const universeMeta = getUniverseFilterMeta(universeFilter)
   const [latestAvailable, requestedDateOption] = await Promise.all([
     getLatestDate(),
     getDashboardDateOption(requested),
@@ -75,14 +78,14 @@ export default async function DashboardPage({
       <PageTitle
         title="ダッシュボード"
         subtitle={subtitle}
-        badge="パターン統計 最新反映"
+        badge={universeMeta ? `${universeMeta.shortLabel} / パターン統計 最新反映` : 'パターン統計 最新反映'}
       />
       <DashboardDateSelector dates={initialDates} selectedDate={selectedDate} />
       <Suspense fallback={<SectionFallback height={360} />}>
-        <StereoscopicSignals date={latest} />
+        <StereoscopicSignals date={latest} universe={universeFilter} />
       </Suspense>
       <Suspense fallback={<SectionFallback height={420} />}>
-        <NewHighVolume date={latest} />
+        <NewHighVolume date={latest} universe={universeFilter} />
       </Suspense>
       <Suspense fallback={<SectionFallback height={260} />}>
         <PatternStatsTop />

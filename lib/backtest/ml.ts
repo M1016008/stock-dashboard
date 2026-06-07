@@ -57,6 +57,7 @@ export type CandidateReason = {
   stage: string
   maAngle: string
   maDistance: string
+  upperTimeframe?: string
   pricePosition: string
   mlEvidence: string
 }

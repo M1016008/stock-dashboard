@@ -12,6 +12,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { gzipSync } from 'zlib'
 import { execAll, execGet } from '@/lib/db/client'
+import { filterRowsByUniverse, parseUniverseFilter, universeSqlCondition, UNIVERSE_FILTER_PARAM } from '@/lib/market-universe'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
@@ -179,6 +180,7 @@ export async function GET(request: NextRequest) {
     const timeframe = (searchParams.get('timeframe') ?? 'daily') as 'daily' | 'weekly' | 'monthly'
     const requestedDate = searchParams.get('date')
     const view = searchParams.get('view')
+    const universeFilter = parseUniverseFilter(searchParams.get(UNIVERSE_FILTER_PARAM))
 
     const date = requestedDate ?? (await latestSnapshotDate())
     if (!date) {
@@ -189,11 +191,13 @@ export async function GET(request: NextRequest) {
         cached: false,
         date: null,
         timeframe,
+        filters: { universe: universeFilter },
         notice: 'OHLCV データ未取り込み。npm run batch:ohlcv を先に実行してください。',
       })
     }
 
     if (view === 'summary') {
+      const universe = universeSqlCondition('ds.ticker', universeFilter)
       const rows = await execAll<{
         code: string
         sector_large: string | null
@@ -212,8 +216,9 @@ export async function GET(request: NextRequest) {
         LEFT JOIN ticker_universe tu ON tu.ticker = ds.ticker
         LEFT JOIN stock_classification sc ON sc.ticker = ds.ticker
         WHERE ds.date = ?
+        ${universe.sql ? `AND ${universe.sql}` : ''}
         `,
-        [date],
+        [date, ...universe.params],
       )
       return jsonResponse(request, {
         success: true,
@@ -224,6 +229,7 @@ export async function GET(request: NextRequest) {
         timeframe,
         source: 'jquants',
         view,
+        filters: { universe: universeFilter },
       })
     }
 
@@ -231,7 +237,7 @@ export async function GET(request: NextRequest) {
     const prev2 = prev1 ? await prevSnapshotDate(prev1) : null
 
     // 並列ロード
-    const [curr, prev1Snap, prev2Snap, prices, prices1Y, uni, klass, mlCandidates] = await Promise.all([
+    const [currAll, prev1Snap, prev2Snap, prices, prices1Y, uni, klass, mlCandidates] = await Promise.all([
       loadSnapshots(date),
       prev1 ? loadSnapshots(prev1) : Promise.resolve([] as SnapshotRow[]),
       prev2 ? loadSnapshots(prev2) : Promise.resolve([] as SnapshotRow[]),
@@ -289,6 +295,7 @@ export async function GET(request: NextRequest) {
       ),
     ])
     void prices1Y
+    const curr = filterRowsByUniverse(currAll, universeFilter)
 
     const prev1Map = indexByTicker(prev1Snap)
     const prev2Map = indexByTicker(prev2Snap)
@@ -409,6 +416,7 @@ export async function GET(request: NextRequest) {
       date,
       timeframe,
       source: 'jquants',
+      filters: { universe: universeFilter },
     })
   } catch (error) {
     console.error('Hex API error:', error)

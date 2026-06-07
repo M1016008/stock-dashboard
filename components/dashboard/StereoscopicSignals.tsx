@@ -7,6 +7,12 @@ import { IndustryBadges } from '@/components/ui/IndustryBadges'
 import { MarginBadges } from '@/components/ui/MarginBadges'
 import { StageTag } from '@/components/ui/StageTag'
 import { getCachedStereoscopicSignals } from '@/lib/queries/dashboard-cache'
+import {
+  addUniverseToHref,
+  filterRowsByUniverse,
+  getUniverseFilterMeta,
+  type UniverseFilterValue,
+} from '@/lib/market-universe'
 
 function fmtPct(v: number | null) {
   if (v == null) return '---'
@@ -27,14 +33,22 @@ function stockHref(ticker: string) {
   return `/stock/${encodeURIComponent(ticker)}`
 }
 
-export async function StereoscopicSignals({ date }: { date?: string | null }) {
-  const rows = await getCachedStereoscopicSignals(date)
+export async function StereoscopicSignals({
+  date,
+  universe = null,
+}: {
+  date?: string | null
+  universe?: UniverseFilterValue
+}) {
+  const rawRows = await getCachedStereoscopicSignals(date)
+  const rows = filterRowsByUniverse(rawRows, universe)
+  const universeMeta = getUniverseFilterMeta(universe)
   return (
     <Card>
       <CardHeader
         title="立体的類似シグナル"
-        hint="6軸ステージ一致 / N≧40 / 30日中央値順"
-        action={<Link href="/ai/transitions" className="hover:text-[var(--color-text-secondary)]">分析へ ↗</Link>}
+        hint={`${universeMeta ? `${universeMeta.shortLabel} / ` : ''}6軸ステージ一致 / N≧40 / 30日中央値順`}
+        action={<Link href={addUniverseToHref('/ai/transitions', universe)} className="hover:text-[var(--color-text-secondary)]">分析へ ↗</Link>}
       />
       <div className="mb-4 rounded-[6px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-3 py-3 text-[12px] font-medium leading-relaxed text-[var(--color-text-secondary)]">
         <p>

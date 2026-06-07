@@ -29,6 +29,13 @@ import {
   type PhysicsStatus as PhysicsStatusLabel,
   type PullbackVerdict,
 } from '@/lib/ml/physics-analysis'
+import {
+  addUniverseToHref,
+  filterRowsByUniverse,
+  getUniverseFilterMeta,
+  parseUniverseFilter,
+  type UniverseFilterValue,
+} from '@/lib/market-universe'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -1201,7 +1208,7 @@ function CandidateCard({ candidate }: { candidate: ParsedCandidate }) {
           <p className="text-[12px] font-semibold leading-relaxed text-[var(--color-text-secondary)]">{candidate.explanation.summary}</p>
         )}
         <div className="grid gap-2">
-          {(['stage', 'maAngle', 'maDistance', 'pricePosition', 'mlEvidence'] as const).map((key) => (
+          {(['stage', 'maAngle', 'maDistance', 'upperTimeframe', 'pricePosition', 'mlEvidence'] as const).map((key) => (
             candidate.reason[key] ? (
               <div key={key} className="rounded-[4px] border border-[var(--color-border-default)] bg-white px-2.5 py-2 text-[11px] font-semibold leading-relaxed text-[var(--color-text-secondary)]">
                 {candidate.reason[key]}
@@ -1933,8 +1940,8 @@ function PhysicsLearningGuidePanel() {
   )
 }
 
-async function PhysicsFlowSection() {
-  const rows = await loadPhysicsFlowRows()
+async function PhysicsFlowSection({ universe = null }: { universe?: UniverseFilterValue }) {
+  const rows = filterRowsByUniverse(await loadPhysicsFlowRows(), universe)
   return (
     <>
       <PhysicsLearningGuidePanel />
@@ -2128,14 +2135,14 @@ function LazySectionFallback({ title }: { title: string }) {
   )
 }
 
-async function PullbackLensSection() {
+async function PullbackLensSection({ universe = null }: { universe?: UniverseFilterValue }) {
   const models = await loadModels()
-  const pullbackRows = await loadPullbackLens(models)
+  const pullbackRows = filterRowsByUniverse(await loadPullbackLens(models), universe)
   return <PullbackLensPanel rows={pullbackRows} />
 }
 
-async function DecisionPanelsSection() {
-  const candidatePool = await loadCandidatePool()
+async function DecisionPanelsSection({ universe = null }: { universe?: UniverseFilterValue }) {
+  const candidatePool = filterRowsByUniverse(await loadCandidatePool(), universe)
   const marginMap = await loadMarginRows(candidatePool.map((candidate) => candidate.ticker))
   const decisionRows = buildLongShortRows(candidatePool, marginMap)
   return (
@@ -2155,13 +2162,14 @@ async function DecisionPanelsSection() {
   )
 }
 
-async function ModelKnowledgeSection() {
+async function ModelKnowledgeSection({ universe = null }: { universe?: UniverseFilterValue }) {
   const [models, evaluations, evaluationTimeline, similars] = await Promise.all([
     loadModels(),
     loadEvaluations(),
     loadEvaluationTimeline(),
     loadSimilarRows(),
   ])
+  const scopedSimilars = filterRowsByUniverse(similars, universe, (row) => row.base_ticker)
   const focusModels = models.filter((model) => model.horizon_days === 40).slice(0, 2)
   const fallbackModels = focusModels.length > 0 ? focusModels : models.slice(0, 2)
   return (
@@ -2181,7 +2189,7 @@ async function ModelKnowledgeSection() {
           title="現在のMA形状が近い銘柄"
           hint="最新日の候補銘柄同士を、6桁ステージ・MA角度・MA距離・株価位置の特徴量距離で比較します。"
         />
-        <SimilarPanel rows={similars} />
+        <SimilarPanel rows={scopedSimilars} />
       </Card>
 
       <ModelMonitoringPanel rows={evaluationTimeline.length > 0 ? evaluationTimeline : evaluations} />
@@ -2196,12 +2204,16 @@ export default async function MaLensPage({
 }) {
   const sp = searchParams ? await searchParams : {}
   const detailMode = (Array.isArray(sp.deep) ? sp.deep[0] : sp.deep) === '1'
-  const [status, candidates, physicsStatus, physicsCandidates] = await Promise.all([
+  const universeFilter = parseUniverseFilter(sp.universe)
+  const universeMeta = getUniverseFilterMeta(universeFilter)
+  const [status, rawCandidates, physicsStatus, rawPhysicsCandidates] = await Promise.all([
     loadStatus(),
     detailMode ? loadCandidates() : Promise.resolve([]),
     loadPhysicsStatus(),
     loadPhysicsCandidates(),
   ])
+  const candidates = filterRowsByUniverse(rawCandidates, universeFilter)
+  const physicsCandidates = filterRowsByUniverse(rawPhysicsCandidates, universeFilter)
 
   const upCandidates = candidates.filter((candidate) => candidate.direction === 'up').slice(0, 8)
   const downCandidates = candidates.filter((candidate) => candidate.direction === 'down').slice(0, 8)
@@ -2211,7 +2223,7 @@ export default async function MaLensPage({
       <PageTitle
         title="AI Lens"
         subtitle="6桁ステージと移動平均線の角度・距離・位置を、機械学習がどう読んでいるかを可視化します。"
-        badge={`ML基準日 ${fmtDate(status.latestCandidateDate ?? status.latestFeatureDate)}`}
+        badge={`${universeMeta ? `${universeMeta.shortLabel} / ` : ''}ML基準日 ${fmtDate(status.latestCandidateDate ?? status.latestFeatureDate)}`}
       />
 
       <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
@@ -2250,7 +2262,7 @@ export default async function MaLensPage({
               この画面の基本情報と最新候補はすぐ確認できます。全銘柄を横断する重い分析を確認する場合だけ、詳細モードに切り替えてください。
             </p>
             <Link
-              href="/ai/ma-lens?deep=1"
+              href={addUniverseToHref('/ai/ma-lens?deep=1', universeFilter)}
               prefetch={false}
               className="rounded-full border border-[var(--color-border-soft)] bg-white px-4 py-2 text-[12px] font-bold text-[var(--color-brand-900)] hover:bg-[var(--color-surface-subtle)]"
             >
@@ -2262,13 +2274,13 @@ export default async function MaLensPage({
 
       {detailMode && (
         <Suspense fallback={<LazySectionFallback title="チャート物理インテリジェンス" />}>
-          <PhysicsFlowSection />
+          <PhysicsFlowSection universe={universeFilter} />
         </Suspense>
       )}
 
       {detailMode && (
         <Suspense fallback={<LazySectionFallback title="押し目 Lens" />}>
-          <PullbackLensSection />
+          <PullbackLensSection universe={universeFilter} />
         </Suspense>
       )}
 
@@ -2276,7 +2288,7 @@ export default async function MaLensPage({
 
       {detailMode && (
         <Suspense fallback={<LazySectionFallback title="期待値・エントリー/出口条件" />}>
-          <DecisionPanelsSection />
+          <DecisionPanelsSection universe={universeFilter} />
         </Suspense>
       )}
 
@@ -2299,7 +2311,7 @@ export default async function MaLensPage({
 
       {detailMode && (
         <Suspense fallback={<LazySectionFallback title="モデル知識・類似形状・精度モニタリング" />}>
-          <ModelKnowledgeSection />
+          <ModelKnowledgeSection universe={universeFilter} />
         </Suspense>
       )}
     </div>

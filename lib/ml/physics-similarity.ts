@@ -1,4 +1,4 @@
-import type { PhysicsFeatureProfile } from '@/lib/backtest/ml-physics'
+import type { PhysicsFeatureProfile, PhysicsUpperTimeframeProfile } from '@/lib/backtest/ml-physics'
 
 export type PhysicsSimilarityComponent = {
   key: string
@@ -15,6 +15,8 @@ export type PhysicsSimilarityResult = {
 
 type MaybeProfile = Partial<PhysicsFeatureProfile> & Record<string, any>
 type ContextProfile = Record<string, number | null | undefined>
+type MaybeUpperProfile = Partial<PhysicsUpperTimeframeProfile> & Record<string, any>
+type UpperTimeframeKey = 'weekly' | 'monthly'
 
 function finite(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value)
@@ -76,6 +78,22 @@ function maOrderSimilarity(a: MaybeProfile, b: MaybeProfile): number {
   const topSame = aParts[0] === bParts[0] ? 0.35 : 0
   const bottomSame = aParts.at(-1) === bParts.at(-1) ? 0.2 : 0
   const pairSame = aParts.slice(0, 3).filter((part, index) => part === bParts[index]).length / 3
+  return Math.max(0, Math.min(1, topSame + bottomSame + pairSame * 0.45))
+}
+
+function upperOrderSimilarity(a: MaybeUpperProfile | null | undefined, b: MaybeUpperProfile | null | undefined): number {
+  const av = typeof a?.maOrder === 'string' ? a.maOrder.replace(/\s/g, '') : ''
+  const bv = typeof b?.maOrder === 'string' ? b.maOrder.replace(/\s/g, '') : ''
+  if (!av || !bv || av === '-' || bv === '-') return 0.5
+  if (av === bv) return 1
+  const aParts = av.split('>')
+  const bParts = bv.split('>')
+  const topSame = aParts[0] === bParts[0] ? 0.35 : 0
+  const bottomSame = aParts.at(-1) === bParts.at(-1) ? 0.2 : 0
+  const compareLength = Math.min(3, aParts.length, bParts.length)
+  const pairSame = compareLength > 0
+    ? aParts.slice(0, compareLength).filter((part, index) => part === bParts[index]).length / compareLength
+    : 0
   return Math.max(0, Math.min(1, topSame + bottomSame + pairSame * 0.45))
 }
 
@@ -155,6 +173,63 @@ function pricePositionScore(a: MaybeProfile, b: MaybeProfile): number {
   ])
 }
 
+function upperProfile(profile: MaybeProfile, key: UpperTimeframeKey): MaybeUpperProfile | null {
+  const value = profile.multiTimeframe?.[key]
+  return value && typeof value === 'object' ? value as MaybeUpperProfile : null
+}
+
+function upperTimeframeScore(a: MaybeProfile, b: MaybeProfile, key: UpperTimeframeKey): number {
+  const au = upperProfile(a, key)
+  const bu = upperProfile(b, key)
+  if (!au || !bu) return 0.5
+
+  if (key === 'weekly') {
+    return avg([
+      upperOrderSimilarity(au, bu),
+      closeness(au.velocities?.ma5?.d5, bu.velocities?.ma5?.d5, 10),
+      closeness(au.velocities?.ma13?.d5, bu.velocities?.ma13?.d5, 8),
+      closeness(au.velocities?.ma25?.d10, bu.velocities?.ma25?.d10, 8),
+      closeness(au.accelerations?.ma5?.d5, bu.accelerations?.ma5?.d5, 7),
+      closeness(au.gaps?.ma5To13Pct, bu.gaps?.ma5To13Pct, 18),
+      closeness(au.gaps?.ma13To25Pct, bu.gaps?.ma13To25Pct, 18),
+      closeness(au.gaps?.ma25To50Pct, bu.gaps?.ma25To50Pct, 22),
+      closeness(au.gapVelocity?.ma5To13?.d5, bu.gapVelocity?.ma5To13?.d5, 8),
+      closeness(au.bundleWidthPct, bu.bundleWidthPct, 35),
+      closeness(au.pricePosition?.ma5, bu.pricePosition?.ma5, 18),
+      closeness(au.pricePosition?.ma13, bu.pricePosition?.ma13, 22),
+    ])
+  }
+
+  return avg([
+    upperOrderSimilarity(au, bu),
+    closeness(au.velocities?.ma3?.d21, bu.velocities?.ma3?.d21, 12),
+    closeness(au.velocities?.ma5?.d21, bu.velocities?.ma5?.d21, 10),
+    closeness(au.velocities?.ma10?.d21, bu.velocities?.ma10?.d21, 8),
+    closeness(au.accelerations?.ma3?.d21, bu.accelerations?.ma3?.d21, 8),
+    closeness(au.gaps?.ma3To5Pct, bu.gaps?.ma3To5Pct, 18),
+    closeness(au.gaps?.ma5To10Pct, bu.gaps?.ma5To10Pct, 18),
+    closeness(au.gaps?.ma10To20Pct, bu.gaps?.ma10To20Pct, 22),
+    closeness(au.gapVelocity?.ma3To5?.d21, bu.gapVelocity?.ma3To5?.d21, 8),
+    closeness(au.bundleWidthPct, bu.bundleWidthPct, 40),
+    closeness(au.pricePosition?.ma3, bu.pricePosition?.ma3, 22),
+    closeness(au.pricePosition?.ma5, bu.pricePosition?.ma5, 28),
+  ])
+}
+
+function upperAlignmentScore(a: MaybeProfile, b: MaybeProfile): number {
+  const aa = a.multiTimeframe?.alignment
+  const ba = b.multiTimeframe?.alignment
+  if (!aa || !ba) return 0.5
+  return avg([
+    closeness(aa.dailyWeeklyBullish, ba.dailyWeeklyBullish, 1),
+    closeness(aa.dailyWeeklyBearish, ba.dailyWeeklyBearish, 1),
+    closeness(aa.weeklyMonthlyBullish, ba.weeklyMonthlyBullish, 1),
+    closeness(aa.weeklyMonthlyBearish, ba.weeklyMonthlyBearish, 1),
+    closeness(aa.upperSupport, ba.upperSupport, 1),
+    closeness(aa.upperResistance, ba.upperResistance, 1),
+  ])
+}
+
 function component(key: string, label: string, score: number, weight: number): PhysicsSimilarityComponent {
   return { key, label, score: Math.max(0, Math.min(1, score)), weight }
 }
@@ -168,15 +243,18 @@ function physicsSimilarityComponents(
   const baseStage = stageCode(base, fallbackStageBase)
   const similarStage = stageCode(similar, fallbackStageSimilar)
   return [
-    component('stage', '6桁ステージ', stageSimilarity(baseStage, similarStage), 0.14),
-    component('maOrder', 'SMA並び', maOrderSimilarity(base, similar), 0.08),
-    component('velocity', 'SMA速度', profileVelocityScore(base, similar), 0.2),
-    component('acceleration', 'SMA加速度', profileAccelerationScore(base, similar), 0.16),
-    component('distance', 'SMA間距離', profileDistanceScore(base, similar), 0.14),
-    component('distanceFlow', '距離変化', profileDistanceFlowScore(base, similar), 0.12),
-    component('pricePosition', '株価位置', pricePositionScore(base, similar), 0.08),
-    component('regime', '収束/拡散レジーム', regimeSimilarity(base, similar), 0.04),
-    component('context', '地合い/業種', contextSimilarity(base, similar), 0.04),
+    component('stage', '6桁ステージ', stageSimilarity(baseStage, similarStage), 0.11),
+    component('maOrder', '日足SMA並び', maOrderSimilarity(base, similar), 0.06),
+    component('velocity', '日足SMA速度', profileVelocityScore(base, similar), 0.14),
+    component('acceleration', '日足SMA加速度', profileAccelerationScore(base, similar), 0.11),
+    component('distance', '日足SMA間距離', profileDistanceScore(base, similar), 0.1),
+    component('distanceFlow', '日足距離変化', profileDistanceFlowScore(base, similar), 0.08),
+    component('pricePosition', '日足株価位置', pricePositionScore(base, similar), 0.06),
+    component('weekly', '週足MA形状', upperTimeframeScore(base, similar, 'weekly'), 0.12),
+    component('monthly', '月足MA形状', upperTimeframeScore(base, similar, 'monthly'), 0.1),
+    component('upperAlignment', '上位足整合性', upperAlignmentScore(base, similar), 0.06),
+    component('regime', '収束/拡散レジーム', regimeSimilarity(base, similar), 0.03),
+    component('context', '地合い/業種', contextSimilarity(base, similar), 0.03),
   ]
 }
 
@@ -221,15 +299,20 @@ export function explainPhysicsSimilarity(
   const stageRate = Math.round(stageSimilarity(baseStage, similarStage) * 100)
   const baseContext = contextOf(base)
   const similarContext = contextOf(similar)
+  const baseWeekly = upperProfile(base, 'weekly')
+  const similarWeekly = upperProfile(similar, 'weekly')
+  const baseMonthly = upperProfile(base, 'monthly')
+  const similarMonthly = upperProfile(similar, 'monthly')
   return {
     stage: `6桁ステージは ${baseStage ?? '------'} と ${similarStage ?? '------'} で、6軸の一致度は約${stageRate}%です。`,
     maAngle: `5日SMA速度は基準が1日${pct(base.velocities?.sma5?.d1)}・5日${pct(base.velocities?.sma5?.d5)}、候補が1日${pct(similar.velocities?.sma5?.d1)}・5日${pct(similar.velocities?.sma5?.d5)}です。`,
     maAcceleration: `短期SMAの急変は、5日SMA加速度が基準${pct(base.accelerations?.sma5?.d5)}、候補${pct(similar.accelerations?.sma5?.d5)}です。`,
     maDistance: `5-25距離は基準${pct(base.gaps?.sma5To25Pct)}・候補${pct(similar.gaps?.sma5To25Pct)}、25-75距離は基準${pct(base.gaps?.sma25To75Pct)}・候補${pct(similar.gaps?.sma25To75Pct)}です。`,
     maDistanceFlow: `距離変化は5-25の5日変化が基準${pct(base.gapVelocity?.sma5To25D5)}、候補${pct(similar.gapVelocity?.sma5To25D5)}です。`,
+    upperTimeframe: `週足はMA順が基準「${baseWeekly?.maOrder ?? '-'}」・候補「${similarWeekly?.maOrder ?? '-'}」、月足は基準「${baseMonthly?.maOrder ?? '-'}」・候補「${similarMonthly?.maOrder ?? '-'}」です。週足/月足の速度・距離・価格位置も類似度に反映しています。`,
     pricePosition: `株価位置は5日SMA比が基準${pct(base.pricePosition?.sma5)}・候補${pct(similar.pricePosition?.sma5)}、25日SMA比が基準${pct(base.pricePosition?.sma25)}・候補${pct(similar.pricePosition?.sma25)}です。`,
     context: `地合いは市場25日SMA上銘柄比率が基準${pct(baseContext.marketAboveSma25Rate)}・候補${pct(similarContext.marketAboveSma25Rate)}、17業種5日騰落が基準${pct(baseContext.sector17Return5)}・候補${pct(similarContext.sector17Return5)}です。`,
-    risk: `類似度はSMA速度・加速度・距離変化・6桁ステージを重視して${Math.round(score * 100)}%です。失敗条件は5日SMA速度の失速、25日SMAの下向き転換、5-25距離の急縮小です。`,
+    risk: `類似度は日足SMA速度・加速度・距離変化に、週足/月足MA形状と上位足整合性を重ねて${Math.round(score * 100)}%です。失敗条件は5日SMA速度の失速、25日SMAの下向き転換、上位足の支援低下です。`,
   }
 }
 

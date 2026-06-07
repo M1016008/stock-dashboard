@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { execAll } from '@/lib/db/client'
 import { ML_PHYSICS_FEATURE_SET } from '@/lib/backtest/ml-physics'
+import { parseUniverseFilter, universeSqlCondition, UNIVERSE_FILTER_PARAM, type UniverseFilterValue } from '@/lib/market-universe'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 30
@@ -136,6 +137,7 @@ async function existingHorizonEvents(
   startDate: string | null,
   endDate: string | null,
   limit: number,
+  universeFilter: UniverseFilterValue,
 ) {
   const patternRows = patternRowsForHorizon(horizonDays)
   const maxCalendarDays = maxCalendarDaysForHorizon(horizonDays)
@@ -148,6 +150,11 @@ async function existingHorizonEvents(
   if (endDate) {
     where.push('fe.date <= ?')
     args.push(endDate)
+  }
+  const universe = universeSqlCondition('fe.ticker', universeFilter)
+  if (universe.sql) {
+    where.push(universe.sql)
+    args.push(...universe.params)
   }
   if (directionValue === 'up') {
     where.push('fe.max_return_pct >= ?')
@@ -210,6 +217,7 @@ async function arbitraryHorizonEvents(
   startDate: string | null,
   endDate: string | null,
   limit: number,
+  universeFilter: UniverseFilterValue,
 ) {
   const patternRows = patternRowsForHorizon(horizonDays)
   const maxCalendarDays = maxCalendarDaysForHorizon(horizonDays)
@@ -224,6 +232,8 @@ async function arbitraryHorizonEvents(
     dateWhere.push('f.date <= ?')
     args.push(endDate)
   }
+  const universe = universeSqlCondition('f.ticker', universeFilter)
+  args.push(...universe.params)
   args.push(thresholdPct, thresholdPct, -thresholdPct, -thresholdPct, horizonDays)
   args.push(directionValue === 'up' ? thresholdPct : -thresholdPct, limit)
 
@@ -257,6 +267,7 @@ async function arbitraryHorizonEvents(
         AND f.date <= (SELECT date FROM valid_cutoff)
         AND COALESCE(u.market_segment, '') <> 'その他'
         ${dateWhere.length > 0 ? `AND ${dateWhere.join(' AND ')}` : ''}
+        ${universe.sql ? `AND ${universe.sql}` : ''}
       ORDER BY f.date DESC, f.ticker
       LIMIT ${scanLimit}
     ),
@@ -347,10 +358,11 @@ export async function GET(request: NextRequest) {
 
     const rawLimit = positiveInteger(searchParams.get('limit'))
     const limit = Math.min(MAX_LIMIT, Math.max(1, rawLimit ?? 40))
+    const universeFilter = parseUniverseFilter(searchParams.get(UNIVERSE_FILTER_PARAM))
     const source = EXISTING_HORIZONS.has(horizonDays) ? 'forward_extrema' : 'ohlcv_ondemand'
     const events = source === 'forward_extrema'
-      ? await existingHorizonEvents(directionValue, horizonDays, thresholdPct, startDate, endDate, limit)
-      : await arbitraryHorizonEvents(directionValue, horizonDays, thresholdPct, startDate, endDate, limit)
+      ? await existingHorizonEvents(directionValue, horizonDays, thresholdPct, startDate, endDate, limit, universeFilter)
+      : await arbitraryHorizonEvents(directionValue, horizonDays, thresholdPct, startDate, endDate, limit, universeFilter)
 
     return NextResponse.json({
       direction: directionValue,
@@ -359,6 +371,7 @@ export async function GET(request: NextRequest) {
       startDate,
       endDate,
       source,
+      filters: { universe: universeFilter },
       count: events.length,
       events,
     })

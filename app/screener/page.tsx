@@ -3,10 +3,12 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
+import { useSearchParams } from 'next/navigation'
 import { toTvSymbol, buildTvWatchlistText } from '@/lib/tv-format'
 import { WatchlistButton } from '@/components/ui/WatchlistButton'
 import { StageDots } from '@/components/ui/StageDots'
 import { MarketDateCalendar } from '@/components/ui/MarketDateCalendar'
+import { getUniverseFilterMeta, parseUniverseFilter, UNIVERSE_FILTER_PARAM } from '@/lib/market-universe'
 
 type Market = 'JP'
 type AxisKey = 'daily_a' | 'daily_b' | 'weekly_a' | 'weekly_b' | 'monthly_a' | 'monthly_b'
@@ -116,6 +118,9 @@ interface AvailableDate {
 }
 
 export default function ScreenerPage() {
+  const searchParams = useSearchParams()
+  const activeUniverse = parseUniverseFilter(searchParams.get(UNIVERSE_FILTER_PARAM))
+  const activeUniverseMeta = getUniverseFilterMeta(activeUniverse)
   const [stages, setStages] = useState<Partial<Record<AxisKey, number[]>>>({})
   const [results, setResults] = useState<StockRow[]>([])
   const [loading, setLoading] = useState(false)
@@ -158,6 +163,7 @@ export default function ScreenerPage() {
     setLoading(true)
     setError('')
     const params = new URLSearchParams({ market: 'JP' })
+    if (activeUniverse) params.set(UNIVERSE_FILTER_PARAM, activeUniverse)
     if (selectedDate) params.set('date', selectedDate)
     for (const [k, v] of Object.entries(stages)) {
       if (v && v.length > 0) params.set(k, v.join(','))
@@ -182,7 +188,7 @@ export default function ScreenerPage() {
         }
       })
     return () => { cancelled = true }
-  }, [stages, selectedDate])
+  }, [stages, selectedDate, activeUniverse])
 
   const filterText = useMemo(() => {
     const parts: string[] = []
@@ -507,6 +513,11 @@ export default function ScreenerPage() {
           <div style={{ padding: '8px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-subtle)', gap: '8px', flexWrap: 'wrap' }}>
             <span style={{ fontSize: '12px', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
               <span><strong>{sortedResults.length}</strong>件 / 母集団 {universe}銘柄</span>
+              {activeUniverseMeta && (
+                <span className="rounded-full border border-[var(--color-market-red)] bg-[var(--color-price-up-bg)] px-2 py-0.5 text-[11px] font-bold text-[var(--color-market-red)]">
+                  {activeUniverseMeta.shortLabel}
+                </span>
+              )}
               <span style={{ color: 'var(--text-muted)' }}>
                 時価総額 {marketCapCoverage.calculated.toLocaleString()}件算出
                 {marketCapCoverage.notApplicable > 0 ? ` / ${marketCapCoverage.notApplicable.toLocaleString()}件対象外` : ''}
