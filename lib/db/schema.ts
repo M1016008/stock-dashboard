@@ -296,6 +296,7 @@ export const marketOhlcvDaily = sqliteTable(
   (t) => ({
     pk: primaryKey({ columns: [t.market, t.ticker, t.date] }),
     dateIdx: index('market_ohlcv_market_date_idx').on(t.market, t.date),
+    dateTickerIdx: index('market_ohlcv_market_date_ticker_idx').on(t.market, t.date, t.ticker),
     tickerDateIdx: index('market_ohlcv_market_ticker_date_idx').on(t.market, t.ticker, t.date),
   }),
 )
@@ -332,6 +333,7 @@ export const marketDailySnapshots = sqliteTable(
   (t) => ({
     pk: primaryKey({ columns: [t.market, t.ticker, t.date] }),
     dateIdx: index('market_snapshots_market_date_idx').on(t.market, t.date),
+    dateTickerIdx: index('market_snapshots_market_date_ticker_idx').on(t.market, t.date, t.ticker),
     stageIdx: index('market_snapshots_market_stage_idx').on(
       t.market,
       t.daily_a_stage,

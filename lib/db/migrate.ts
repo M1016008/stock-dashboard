@@ -236,6 +236,7 @@ const STATEMENTS = [
     PRIMARY KEY (market, ticker, date)
   )`,
   `CREATE INDEX IF NOT EXISTS market_ohlcv_market_date_idx ON market_ohlcv_daily(market, date)`,
+  `CREATE INDEX IF NOT EXISTS market_ohlcv_market_date_ticker_idx ON market_ohlcv_daily(market, date, ticker)`,
   `CREATE INDEX IF NOT EXISTS market_ohlcv_market_ticker_date_idx ON market_ohlcv_daily(market, ticker, date)`,
   `CREATE TABLE IF NOT EXISTS market_daily_snapshots (
     market TEXT NOT NULL,
@@ -266,6 +267,7 @@ const STATEMENTS = [
     PRIMARY KEY (market, ticker, date)
   )`,
   `CREATE INDEX IF NOT EXISTS market_snapshots_market_date_idx ON market_daily_snapshots(market, date)`,
+  `CREATE INDEX IF NOT EXISTS market_snapshots_market_date_ticker_idx ON market_daily_snapshots(market, date, ticker)`,
   `CREATE INDEX IF NOT EXISTS market_snapshots_market_stage_idx ON market_daily_snapshots(
     market, daily_a_stage, daily_b_stage, weekly_a_stage, weekly_b_stage, monthly_a_stage, monthly_b_stage, date, ticker
   )`,
