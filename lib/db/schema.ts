@@ -369,6 +369,49 @@ export const marketDataRuns = sqliteTable(
   }),
 )
 
+export const sectorEtfHoldings = sqliteTable(
+  'sector_etf_holdings',
+  {
+    id:            integer('id').primaryKey({ autoIncrement: true }),
+    etfTicker:     text('etf_ticker').notNull(),
+    holdingTicker: text('holding_ticker').notNull(),
+    holdingName:   text('holding_name').notNull(),
+    weightPct:     real('weight_pct'),
+    shares:        real('shares'),
+    marketValue:   real('market_value'),
+    asOfDate:      text('as_of_date'),
+    source:        text('source').notNull(),
+    sourceUrl:     text('source_url'),
+    rawJson:       text('raw_json').notNull().default('{}'),
+    updatedAt:     integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    etfWeightIdx: index('sector_etf_holdings_etf_weight_idx').on(t.etfTicker, t.weightPct),
+    holdingTickerIdx: index('sector_etf_holdings_ticker_idx').on(t.holdingTicker),
+    asOfIdx: index('sector_etf_holdings_as_of_idx').on(t.etfTicker, t.asOfDate),
+  }),
+)
+
+export const sectorEtfHoldingRuns = sqliteTable(
+  'sector_etf_holding_runs',
+  {
+    id:            integer('id').primaryKey({ autoIncrement: true }),
+    etfTicker:     text('etf_ticker').notNull(),
+    source:        text('source').notNull(),
+    status:        text('status').notNull(),
+    startedAt:     integer('started_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+    finishedAt:    integer('finished_at', { mode: 'timestamp' }),
+    holdingsCount: integer('holdings_count').notNull().default(0),
+    errorSummary:  text('error_summary'),
+    sourceUrl:     text('source_url'),
+    payloadJson:   text('payload_json').notNull().default('{}'),
+  },
+  (t) => ({
+    latestIdx: index('sector_etf_holding_runs_latest_idx').on(t.etfTicker, t.startedAt),
+    statusIdx: index('sector_etf_holding_runs_status_idx').on(t.status, t.startedAt),
+  }),
+)
+
 export const jquantsDailyCoverage = sqliteTable('jquants_daily_coverage', {
   date:          text('date').primaryKey(),
   expectedRows:  integer('expected_rows').notNull(),

@@ -11,6 +11,7 @@ import {
   ChartCandlestick,
   ChevronDown,
   FlaskConical,
+  Gem,
   Globe2,
   Hexagon,
   LayoutDashboard,
@@ -57,6 +58,7 @@ const NAV_ITEMS = [
       { href: '/stage-screener', label: 'ステージスクリーナー', description: '日足・週足・月足の行列で抽出', icon: Hexagon },
       { href: '/hex-stage', label: 'HEXステージ', description: '6ステージの分布と遷移', icon: Hexagon },
       { href: '/sectors', label: '業種分析', description: '17/33業種の強弱', icon: Building2 },
+      { href: '/sector-etfs', label: '業界ETF分析', description: 'ETFで業界・テーマを確認', icon: ChartCandlestick },
       {
         href: '/ai/ma-lens#historical-pattern-search',
         label: '過去パターン検索',
@@ -86,6 +88,14 @@ const US_NAV_ITEMS = [
   { href: '/us/screener', label: 'USスクリーナー', icon: Search },
   { href: '/us/stock/AAPL', label: 'AAPL', icon: ChartCandlestick },
   { href: '/ai/ma-lens', label: 'AI Lens', icon: Activity },
+] as const
+
+const COMMODITY_NAV_ITEMS = [
+  { href: '/commodities', label: '概要', icon: LayoutDashboard },
+  { href: '/commodities/screener', label: 'スクリーナー', icon: Search },
+  { href: '/commodities/jp/1540', label: '金 JP', icon: Gem },
+  { href: '/commodities/jp/1671', label: '原油 JP', icon: ChartCandlestick },
+  { href: '/commodities/us/GLD', label: 'Gold US', icon: ChartCandlestick },
 ] as const
 
 interface ClockData {
@@ -196,23 +206,27 @@ function hrefPath(href: string): string {
 export function Header() {
   const pathname = usePathname()
   const searchParams = useSearchParams()
-  const isUsArea = pathname.startsWith('/us')
-  const navItems = isUsArea ? US_NAV_ITEMS : NAV_ITEMS
+  const area = pathname.startsWith('/commodities') ? 'commodities' : pathname.startsWith('/us') ? 'us' : 'jp'
+  const isUsArea = area === 'us'
+  const isCommodityArea = area === 'commodities'
+  const navItems = isCommodityArea ? COMMODITY_NAV_ITEMS : isUsArea ? US_NAV_ITEMS : NAV_ITEMS
   const navRef = useRef<HTMLDivElement>(null)
   const [openMenu, setOpenMenu] = useState<string | null>(null)
   const [marketStatus, setMarketStatus] = useState<'open' | 'closed'>('closed')
   const clocks = useClocks()
-  const activeUniverse = isUsArea
-    ? null
-    : parseUniverseFilter(searchParams.get(UNIVERSE_FILTER_PARAM))
+  const activeUniverse = area === 'jp' ? parseUniverseFilter(searchParams.get(UNIVERSE_FILTER_PARAM)) : null
   const activeUniverseMeta = getUniverseFilterMeta(activeUniverse)
 
   useEffect(() => {
-    const getStatus = isUsArea ? getNyseStatus : getTseStatus
+    const getStatus = () => {
+      if (area === 'us') return getNyseStatus()
+      if (area === 'commodities') return getTseStatus() === 'open' || getNyseStatus() === 'open' ? 'open' : 'closed'
+      return getTseStatus()
+    }
     setMarketStatus(getStatus())
     const t = setInterval(() => setMarketStatus(getStatus()), 60000)
     return () => clearInterval(t)
-  }, [isUsArea])
+  }, [area])
 
   useEffect(() => {
     const onPointerDown = (event: PointerEvent) => {
@@ -236,7 +250,7 @@ export function Header() {
     return pathname === path || pathname.startsWith(`${path}/`)
   }
 
-  const isEntryActive = (entry: NavEntry | (typeof US_NAV_ITEMS)[number]) => {
+  const isEntryActive = (entry: NavEntry | (typeof US_NAV_ITEMS)[number] | (typeof COMMODITY_NAV_ITEMS)[number]) => {
     if ('kind' in entry && entry.kind === 'menu') {
       return entry.items.some((item) => item.includeInGroupActive !== false && isActive(item.href))
     }
@@ -244,7 +258,7 @@ export function Header() {
   }
 
   const scopedHref = (href: string) => {
-    return isUsArea ? href : addUniverseToHref(href, activeUniverse)
+    return area === 'jp' ? addUniverseToHref(href, activeUniverse) : href
   }
 
   const universeToggleHref = (filter: UniverseFilterId) => {
@@ -256,7 +270,7 @@ export function Header() {
     return query ? `${pathname}?${query}` : pathname
   }
 
-  const renderNavEntry = (entry: NavEntry | (typeof US_NAV_ITEMS)[number], compact = false) => {
+  const renderNavEntry = (entry: NavEntry | (typeof US_NAV_ITEMS)[number] | (typeof COMMODITY_NAV_ITEMS)[number], compact = false) => {
     const active = isEntryActive(entry)
     const baseClasses = `inline-flex h-9 shrink-0 items-center gap-2.5 rounded-[2px] border ${compact ? 'px-3.5 text-[12px]' : 'px-4 text-[13px]'} font-bold leading-none transition-colors ${
       active
@@ -350,14 +364,14 @@ export function Header() {
     <header className="sticky top-0 z-30 border-b border-[var(--color-border-strong)] bg-white shadow-[0_1px_3px_rgba(16,32,52,0.12)]">
       <div className="border-b border-[var(--color-border-default)] bg-[var(--color-surface-subtle)]">
         <div className="mx-auto flex min-h-10 w-full max-w-[1480px] items-center justify-between gap-3 px-5 sm:px-8 lg:px-10 xl:px-12">
-          <Link href={isUsArea ? '/us' : scopedHref('/')} prefetch={false} className="flex shrink-0 items-center gap-2.5">
+          <Link href={isCommodityArea ? '/commodities' : isUsArea ? '/us' : scopedHref('/')} prefetch={false} className="flex shrink-0 items-center gap-2.5">
             <div className="flex h-7 w-7 items-center justify-center rounded-[3px] bg-[var(--color-brand-800)] text-white shadow-sm">
               <BarChart3 size={16} strokeWidth={2.5} />
             </div>
             <div className="leading-tight">
               <div className="text-[16px] font-bold tracking-normal text-[var(--color-brand-900)]">StockBoard</div>
               <div className="hidden text-[10px] font-bold text-[var(--color-text-tertiary)] sm:block">
-                {isUsArea ? 'Tiingo US Market Console' : 'J-Quants Market Console'}
+                {isCommodityArea ? 'Commodity ETF Console' : isUsArea ? 'Tiingo US Market Console' : 'J-Quants Market Console'}
               </div>
             </div>
           </Link>
@@ -367,7 +381,7 @@ export function Header() {
             <Link
               href={scopedHref('/')}
               prefetch={false}
-              className={`rounded-[3px] px-2 py-1 text-[11px] font-bold ${!isUsArea ? 'bg-[var(--color-brand-800)] text-white' : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-subtle)]'}`}
+              className={`rounded-[3px] px-2 py-1 text-[11px] font-bold ${area === 'jp' ? 'bg-[var(--color-brand-800)] text-white' : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-subtle)]'}`}
             >
               日本株
             </Link>
@@ -378,9 +392,16 @@ export function Header() {
             >
               米国株
             </Link>
+            <Link
+              href="/commodities"
+              prefetch={false}
+              className={`rounded-[3px] px-2 py-1 text-[11px] font-bold ${isCommodityArea ? 'bg-[var(--color-brand-800)] text-white' : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-subtle)]'}`}
+            >
+              コモディティ
+            </Link>
           </div>
 
-          {!isUsArea && (
+          {area === 'jp' && (
             <Link
               href={universeToggleHref('nikkei225')}
               prefetch={false}
@@ -401,11 +422,11 @@ export function Header() {
             <Link
               href={scopedHref('/')}
               prefetch={false}
-              className={`rounded-[3px] px-2 py-1 text-[11px] font-bold ${!isUsArea ? 'bg-[var(--color-brand-800)] text-white' : 'text-[var(--color-text-secondary)]'}`}
+              className={`rounded-[3px] px-2 py-1 text-[11px] font-bold ${area === 'jp' ? 'bg-[var(--color-brand-800)] text-white' : 'text-[var(--color-text-secondary)]'}`}
             >
               JP
             </Link>
-            {!isUsArea && (
+            {area === 'jp' && (
               <Link
                 href={universeToggleHref('nikkei225')}
                 prefetch={false}
@@ -427,12 +448,19 @@ export function Header() {
             >
               US
             </Link>
+            <Link
+              href="/commodities"
+              prefetch={false}
+              className={`rounded-[3px] px-2 py-1 text-[11px] font-bold ${isCommodityArea ? 'bg-[var(--color-brand-800)] text-white' : 'text-[var(--color-text-secondary)]'}`}
+            >
+              COM
+            </Link>
           </div>
 
           <div className="hidden shrink-0 items-center gap-1.5 lg:flex">
             <span className="inline-flex h-6 items-center gap-1.5 rounded-[3px] border border-[var(--color-border-default)] bg-white px-2 text-[11px] font-bold text-[var(--color-text-secondary)]">
               <Activity size={12} />
-              {isUsArea ? 'NYSE' : '東証'}
+              {isCommodityArea ? '商品ETF' : isUsArea ? 'NYSE' : '東証'}
               <span
                 style={{
                   color:

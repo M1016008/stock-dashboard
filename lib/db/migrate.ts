@@ -286,6 +286,37 @@ const STATEMENTS = [
     payload_json TEXT NOT NULL DEFAULT '{}'
   )`,
   `CREATE INDEX IF NOT EXISTS market_data_runs_latest_idx ON market_data_runs(market, job_type, started_at)`,
+  `CREATE TABLE IF NOT EXISTS sector_etf_holdings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    etf_ticker TEXT NOT NULL,
+    holding_ticker TEXT NOT NULL,
+    holding_name TEXT NOT NULL,
+    weight_pct REAL,
+    shares REAL,
+    market_value REAL,
+    as_of_date TEXT,
+    source TEXT NOT NULL,
+    source_url TEXT,
+    raw_json TEXT NOT NULL DEFAULT '{}',
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+  )`,
+  `CREATE INDEX IF NOT EXISTS sector_etf_holdings_etf_weight_idx ON sector_etf_holdings(etf_ticker, weight_pct)`,
+  `CREATE INDEX IF NOT EXISTS sector_etf_holdings_ticker_idx ON sector_etf_holdings(holding_ticker)`,
+  `CREATE INDEX IF NOT EXISTS sector_etf_holdings_as_of_idx ON sector_etf_holdings(etf_ticker, as_of_date)`,
+  `CREATE TABLE IF NOT EXISTS sector_etf_holding_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    etf_ticker TEXT NOT NULL,
+    source TEXT NOT NULL,
+    status TEXT NOT NULL,
+    started_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    finished_at INTEGER,
+    holdings_count INTEGER NOT NULL DEFAULT 0,
+    error_summary TEXT,
+    source_url TEXT,
+    payload_json TEXT NOT NULL DEFAULT '{}'
+  )`,
+  `CREATE INDEX IF NOT EXISTS sector_etf_holding_runs_latest_idx ON sector_etf_holding_runs(etf_ticker, started_at)`,
+  `CREATE INDEX IF NOT EXISTS sector_etf_holding_runs_status_idx ON sector_etf_holding_runs(status, started_at)`,
   `CREATE TABLE IF NOT EXISTS jquants_daily_coverage (
     date TEXT PRIMARY KEY,
     expected_rows INTEGER NOT NULL,
