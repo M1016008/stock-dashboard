@@ -19,11 +19,10 @@
 
 import { db, execAll, execGet, execRun } from '@/lib/db/client'
 import { dailySnapshots, batchRuns, computeState } from '@/lib/db/schema'
-import { calculateAllStages, type MaValues } from '@/lib/hex-stage'
+import { buildSnapshotCalculations, MIN_SNAPSHOT_DATA_POINTS } from '@/lib/snapshots/continuous-ma'
 import type { OHLCV } from '@/types/stock'
 import { eq, sql } from 'drizzle-orm'
 
-const MIN_DATA_POINTS = 5  // これ以下では何も計算できない (ma_5 すら出ない)
 const CONCURRENCY = Math.max(1, Number(process.env.SNAPSHOT_CONCURRENCY ?? 4))
 const PROGRESS_EVERY = Number(process.env.SNAPSHOT_PROGRESS_EVERY ?? 200)
 const LOOKBACK_DAYS = Number(process.env.SNAPSHOT_LOOKBACK_DAYS ?? 900)
@@ -40,50 +39,6 @@ async function withDbRetry<T>(fn: () => Promise<T>): Promise<T> {
     }
   }
   throw new Error('unreachable')
-}
-
-function buildClosePrefix(rows: OHLCV[]): number[] {
-  const prefix = [0]
-  for (const row of rows) {
-    prefix.push(prefix[prefix.length - 1] + row.close)
-  }
-  return prefix
-}
-
-function dailySmaAt(prefix: number[], index: number, period: number): number | null {
-  const end = index + 1
-  if (end < period) return null
-  return (prefix[end] - prefix[end - period]) / period
-}
-
-function sampledSmaAt(rows: OHLCV[], index: number, step: number, period: number): number | null {
-  const firstIndex = index - (period - 1) * step
-  if (firstIndex < 0) return null
-  let sum = 0
-  for (let i = 0; i < period; i++) {
-    sum += rows[index - i * step].close
-  }
-  return sum / period
-}
-
-function buildMaValuesAtIndex(rows: OHLCV[], prefix: number[], index: number): MaValues {
-  return {
-    ma_5: dailySmaAt(prefix, index, 5),
-    ma_25: dailySmaAt(prefix, index, 25),
-    ma_75: dailySmaAt(prefix, index, 75),
-    ma_150: dailySmaAt(prefix, index, 150),
-    ma_300: dailySmaAt(prefix, index, 300),
-    weekly_ma_5: sampledSmaAt(rows, index, 5, 5),
-    weekly_ma_13: sampledSmaAt(rows, index, 5, 13),
-    weekly_ma_25: sampledSmaAt(rows, index, 5, 25),
-    weekly_ma_50: sampledSmaAt(rows, index, 5, 50),
-    weekly_ma_100: sampledSmaAt(rows, index, 5, 100),
-    monthly_ma_3: sampledSmaAt(rows, index, 21, 3),
-    monthly_ma_5: sampledSmaAt(rows, index, 21, 5),
-    monthly_ma_10: sampledSmaAt(rows, index, 21, 10),
-    monthly_ma_20: sampledSmaAt(rows, index, 21, 20),
-    monthly_ma_25: sampledSmaAt(rows, index, 21, 25),
-  }
 }
 
 function dateDaysBefore(date: string, days: number): string {
@@ -167,29 +122,23 @@ async function computeSnapshotsForTicker(ticker: string): Promise<SnapshotComput
     startDate ? [ticker, startDate] : [ticker],
   )
 
-  if (rows.length < MIN_DATA_POINTS) {
+  if (rows.length < MIN_SNAPSHOT_DATA_POINTS) {
     const latestOhlcvDate = rows[rows.length - 1]?.date
     if (latestOhlcvDate) await markSnapshotState(ticker, latestOhlcvDate)
     return { count: 0, dates: [] }
   }
-  const closePrefix = buildClosePrefix(rows)
 
   // 各日に対してスナップショットを計算
   type SnapshotRow = typeof dailySnapshots.$inferInsert
   const newSnapshots: SnapshotRow[] = []
-  for (let i = 0; i < rows.length; i++) {
-    const date = rows[i].date
+  for (const calculation of buildSnapshotCalculations(rows)) {
+    const { date, activeDays: _activeDays, segmentStartDate: _segmentStartDate, ...snapshotValues } = calculation
     if (lastSnapshotDate && date <= lastSnapshotDate) continue
-    if (i + 1 < MIN_DATA_POINTS) continue
-
-    const ma = buildMaValuesAtIndex(rows, closePrefix, i)
-    const stages = calculateAllStages(ma)
 
     newSnapshots.push({
       ticker,
       date,
-      ...ma,
-      ...stages,
+      ...snapshotValues,
     })
   }
 

@@ -496,6 +496,7 @@ export interface EarningsRow extends EarningsSignalDecoration {
 type EarningsRowBase = Omit<EarningsRow, keyof EarningsSignalDecoration>
 
 export type EarningsVolumeCondition = '' | 'volume_spike' | 'above_avg' | 'volume_10k' | 'volume_100k'
+export type EarningsAverageVolumeWindow = 10 | 30 | 60
 export type EarningsSortKey =
   | 'daysLeft'
   | 'announceDate'
@@ -518,9 +519,13 @@ export interface EarningsCalendarFilters {
   marketSegment?: string | null
   sector17?: string | null
   sector33?: string | null
+  marginType?: string | null
   stageCode?: string | null
   dailyPattern?: string | null
   volumeCondition?: EarningsVolumeCondition | null
+  avgVolumeWindow?: EarningsAverageVolumeWindow | null
+  avgVolumeMin?: number | null
+  avgVolumeMax?: number | null
   priceMin?: number | null
   priceMax?: number | null
   signal?: string | null
@@ -541,6 +546,7 @@ export interface EarningsFilterOptions {
   marketSegments: EarningsFilterOption[]
   sector17: EarningsFilterOption[]
   sector33: EarningsFilterOption[]
+  marginTypes: EarningsFilterOption[]
   stageCodes: EarningsFilterOption[]
   dailyPatterns: EarningsFilterOption[]
   signals: EarningsFilterOption[]
@@ -569,6 +575,7 @@ function emptyFilterOptions(): EarningsFilterOptions {
     marketSegments: [],
     sector17: [],
     sector33: [],
+    marginTypes: [],
     stageCodes: [],
     dailyPatterns: [],
     signals: [],
@@ -622,10 +629,28 @@ function matchesVolumeCondition(row: EarningsRow, condition: EarningsVolumeCondi
   return true
 }
 
+function averageVolumeFor(row: EarningsRow, window: EarningsAverageVolumeWindow | null | undefined): number | null {
+  if (window === 10) return row.avgVolume10
+  if (window === 60) return row.avgVolume60
+  return row.avgVolume30
+}
+
+function matchesAverageVolumeRange(row: EarningsRow, filters: EarningsCalendarFilters): boolean {
+  const min = filters.avgVolumeMin
+  const max = filters.avgVolumeMax
+  if (min == null && max == null) return true
+  const value = averageVolumeFor(row, filters.avgVolumeWindow)
+  if (value == null || !Number.isFinite(value)) return false
+  if (min != null && value < min) return false
+  if (max != null && value > max) return false
+  return true
+}
+
 function filterEarningsRows(rows: EarningsRow[], filters: EarningsCalendarFilters): EarningsRow[] {
   const marketSegment = cleanFilterValue(filters.marketSegment)
   const sector17 = cleanFilterValue(filters.sector17)
   const sector33 = cleanFilterValue(filters.sector33)
+  const marginType = cleanFilterValue(filters.marginType)
   const stageCode = cleanFilterValue(filters.stageCode)
   const dailyPattern = cleanFilterValue(filters.dailyPattern)
   const signal = cleanFilterValue(filters.signal)
@@ -636,9 +661,11 @@ function filterEarningsRows(rows: EarningsRow[], filters: EarningsCalendarFilter
     if (marketSegment && row.marketSegment !== marketSegment) return false
     if (sector17 && row.sector17Name !== sector17) return false
     if (sector33 && row.sector33Name !== sector33) return false
+    if (marginType && row.marginType !== marginType) return false
     if (stageCode && stageCodeFor(row) !== stageCode) return false
     if (dailyPattern && dailyPatternFor(row) !== dailyPattern) return false
     if (!matchesVolumeCondition(row, filters.volumeCondition)) return false
+    if (!matchesAverageVolumeRange(row, filters)) return false
     if (priceMin != null && (row.price == null || row.price < priceMin)) return false
     if (priceMax != null && (row.price == null || row.price > priceMax)) return false
     if (signal && !(row.signalLabels ?? []).includes(signal)) return false
@@ -778,6 +805,7 @@ function buildEarningsFilterOptions(rows: EarningsRow[]): EarningsFilterOptions 
     marketSegments: countedOptions(rows.map((row) => row.marketSegment)),
     sector17: countedOptions(rows.map((row) => row.sector17Name)),
     sector33: countedOptions(rows.map((row) => row.sector33Name)),
+    marginTypes: countedOptions(rows.map((row) => row.marginType)),
     stageCodes: countedOptions(rows.map(stageCodeFor)),
     dailyPatterns: countedOptions(rows.map(dailyPatternFor), (value) => `日足${value[0]}/${value[1]}`),
     signals: countedOptions(rows.flatMap((row) => row.signalLabels ?? [])),

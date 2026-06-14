@@ -239,7 +239,8 @@ function runHeavyMlChain(heartbeat: () => Promise<void>): Promise<RunResult> {
     const timeoutMinutes = numberEnv('UPDATE_CHILD_TIMEOUT_MINUTES', 720)
     let timedOut = false
 
-    activeChild = spawn('npm', ['run', 'batch:ml-weekly-train'], {
+    const npmScript = process.env.ML_LEARNING_NPM_SCRIPT?.trim() || 'batch:ml-daily'
+    activeChild = spawn('npm', ['run', npmScript], {
       cwd: process.cwd(),
       stdio: 'inherit',
       env: {
@@ -350,7 +351,7 @@ async function main(): Promise<void> {
 
     const result = await runHeavyMlChain(() => lock.heartbeat())
     if (result.code !== 0) {
-      throw new Error(`batch:ml-weekly-train failed: code=${result.code}, signal=${result.signal ?? 'none'}`)
+      throw new Error(`${process.env.ML_LEARNING_NPM_SCRIPT?.trim() || 'batch:ml-daily'} failed: code=${result.code}, signal=${result.signal ?? 'none'}`)
     }
     if (shutdownSignal) {
       throw new Error(`ML learning interrupted: ${shutdownSignal}`)

@@ -29,6 +29,61 @@ export interface SectorAnalysisBoard {
   universe: UniverseFilterValue
 }
 
+export type SectorConstituentSortKey =
+  | 'ticker'
+  | 'name'
+  | 'price'
+  | 'changePct'
+  | 'volume'
+  | 'avgVolume30'
+  | 'avgVolume60'
+  | 'marginType'
+  | 'stageCode'
+  | 'marketSegment'
+
+export type SectorConstituentSortDir = 'asc' | 'desc'
+
+export interface SectorConstituentRow {
+  ticker: string
+  name: string | null
+  marketSegment: string | null
+  marginType: string | null
+  sector17Name: string | null
+  sector33Name: string | null
+  price: number | null
+  changePct: number | null
+  volume: number | null
+  avgVolume30: number | null
+  avgVolume60: number | null
+  stageCode: string | null
+  dailyAStage: number | null
+  dailyBStage: number | null
+  weeklyAStage: number | null
+  weeklyBStage: number | null
+  monthlyAStage: number | null
+  monthlyBStage: number | null
+}
+
+export interface SectorConstituentSummary {
+  totalCount: number
+  marginTypeCounts: Array<{ marginType: string; count: number }>
+  avgChangePct: number | null
+  totalVolume: number
+  avgVolume30: number | null
+}
+
+export interface SectorConstituentResult {
+  classification: SectorClassification
+  sectorName: string
+  latestDate: string
+  baseDate: string
+  sortKey: SectorConstituentSortKey
+  sortDir: SectorConstituentSortDir
+  marginType: string | null
+  rows: SectorConstituentRow[]
+  summary: SectorConstituentSummary
+}
+
 const PERIODS: Array<{ period: SectorPeriod; label: string; description: string }> = [
   { period: 'today', label: '本日', description: '前営業日終値比' },
   { period: 'week', label: '今週', description: '直近5営業日前比' },
@@ -168,4 +223,212 @@ export async function getSectorAnalysisBoard(universeFilter: UniverseFilterValue
   }
 
   return { latestDate, periods, universe: universeFilter }
+}
+
+function normalizeSortKey(value: string | null | undefined): SectorConstituentSortKey {
+  if (
+    value === 'ticker' ||
+    value === 'name' ||
+    value === 'price' ||
+    value === 'changePct' ||
+    value === 'volume' ||
+    value === 'avgVolume30' ||
+    value === 'avgVolume60' ||
+    value === 'marginType' ||
+    value === 'stageCode' ||
+    value === 'marketSegment'
+  ) {
+    return value
+  }
+  return 'changePct'
+}
+
+function normalizeSortDir(value: string | null | undefined): SectorConstituentSortDir {
+  return value === 'asc' ? 'asc' : 'desc'
+}
+
+function constituentOrderBy(sortKey: SectorConstituentSortKey, sortDir: SectorConstituentSortDir): string {
+  const dir = sortDir === 'asc' ? 'ASC' : 'DESC'
+  const nulls = sortDir === 'asc' ? 'ASC' : 'DESC'
+  const orderMap: Record<SectorConstituentSortKey, string> = {
+    ticker: `ticker ${dir}`,
+    name: `name ${dir}, ticker ASC`,
+    price: `price IS NULL ASC, price ${dir}, ticker ASC`,
+    changePct: `changePct IS NULL ASC, changePct ${dir}, ticker ASC`,
+    volume: `volume IS NULL ASC, volume ${dir}, ticker ASC`,
+    avgVolume30: `avgVolume30 IS NULL ASC, avgVolume30 ${dir}, ticker ASC`,
+    avgVolume60: `avgVolume60 IS NULL ASC, avgVolume60 ${dir}, ticker ASC`,
+    marginType: `marginType IS NULL ASC, marginType ${dir}, ticker ASC`,
+    stageCode: `stageCode IS NULL ASC, stageCode ${dir}, ticker ASC`,
+    marketSegment: `marketSegment IS NULL ASC, marketSegment ${dir}, ticker ASC`,
+  }
+  return orderMap[sortKey] ?? `changePct IS NULL ${nulls}, changePct ${dir}, ticker ASC`
+}
+
+export function normalizeSectorConstituentSort(
+  sortKey?: string | null,
+  sortDir?: string | null,
+): { sortKey: SectorConstituentSortKey; sortDir: SectorConstituentSortDir } {
+  return {
+    sortKey: normalizeSortKey(sortKey),
+    sortDir: normalizeSortDir(sortDir),
+  }
+}
+
+export async function getSectorConstituents({
+  classification,
+  sectorName,
+  latestDate,
+  baseDate,
+  sortKey,
+  sortDir,
+  marginType,
+  universeFilter = null,
+  limit = 1000,
+}: {
+  classification: SectorClassification
+  sectorName: string
+  latestDate: string
+  baseDate: string
+  sortKey?: string | null
+  sortDir?: string | null
+  marginType?: string | null
+  universeFilter?: UniverseFilterValue
+  limit?: number
+}): Promise<SectorConstituentResult> {
+  const normalized = normalizeSectorConstituentSort(sortKey, sortDir)
+  const cols = sectorColumns(classification)
+  const universe = universeSqlCondition('tu.ticker', universeFilter)
+  const cleanMarginType = marginType?.trim() || null
+  const maxRows = Math.min(1000, Math.max(1, Math.floor(limit)))
+  const params: Array<string | number> = [latestDate, baseDate, latestDate, latestDate, latestDate, sectorName]
+  if (cleanMarginType) params.push(cleanMarginType)
+  params.push(...universe.params)
+  params.push(maxRows)
+
+  const rows = await execAll<SectorConstituentRow>(
+    `
+      WITH latest_px AS (
+        SELECT ticker, close, volume
+        FROM ohlcv_daily
+        WHERE date = ?
+      ),
+      base_px AS (
+        SELECT ticker, close
+        FROM ohlcv_daily
+        WHERE date = ?
+      ),
+      latest_snap AS (
+        SELECT
+          ticker,
+          daily_a_stage,
+          daily_b_stage,
+          weekly_a_stage,
+          weekly_b_stage,
+          monthly_a_stage,
+          monthly_b_stage
+        FROM daily_snapshots
+        WHERE date = ?
+      )
+      SELECT
+        tu.ticker AS ticker,
+        tu.name AS name,
+        tu.market_segment AS marketSegment,
+        tu.margin_type AS marginType,
+        tu.sector17_name AS sector17Name,
+        tu.sector33_name AS sector33Name,
+        latest_px.close AS price,
+        CASE
+          WHEN base_px.close > 0 THEN 100.0 * (latest_px.close - base_px.close) / base_px.close
+        END AS changePct,
+        latest_px.volume AS volume,
+        (
+          SELECT ROUND(AVG(volume))
+          FROM (
+            SELECT od.volume
+            FROM ohlcv_daily od
+            WHERE od.ticker = tu.ticker AND od.date <= ?
+            ORDER BY od.date DESC
+            LIMIT 30
+          )
+        ) AS avgVolume30,
+        (
+          SELECT ROUND(AVG(volume))
+          FROM (
+            SELECT od.volume
+            FROM ohlcv_daily od
+            WHERE od.ticker = tu.ticker AND od.date <= ?
+            ORDER BY od.date DESC
+            LIMIT 60
+          )
+        ) AS avgVolume60,
+        CASE
+          WHEN latest_snap.daily_a_stage IS NOT NULL
+            AND latest_snap.daily_b_stage IS NOT NULL
+            AND latest_snap.weekly_a_stage IS NOT NULL
+            AND latest_snap.weekly_b_stage IS NOT NULL
+            AND latest_snap.monthly_a_stage IS NOT NULL
+            AND latest_snap.monthly_b_stage IS NOT NULL
+          THEN
+            CAST(latest_snap.daily_a_stage AS TEXT) ||
+            CAST(latest_snap.daily_b_stage AS TEXT) ||
+            CAST(latest_snap.weekly_a_stage AS TEXT) ||
+            CAST(latest_snap.weekly_b_stage AS TEXT) ||
+            CAST(latest_snap.monthly_a_stage AS TEXT) ||
+            CAST(latest_snap.monthly_b_stage AS TEXT)
+        END AS stageCode,
+        latest_snap.daily_a_stage AS dailyAStage,
+        latest_snap.daily_b_stage AS dailyBStage,
+        latest_snap.weekly_a_stage AS weeklyAStage,
+        latest_snap.weekly_b_stage AS weeklyBStage,
+        latest_snap.monthly_a_stage AS monthlyAStage,
+        latest_snap.monthly_b_stage AS monthlyBStage
+      FROM ticker_universe tu
+      JOIN latest_px ON latest_px.ticker = tu.ticker
+      JOIN base_px ON base_px.ticker = tu.ticker
+      LEFT JOIN latest_snap ON latest_snap.ticker = tu.ticker
+      WHERE tu.active = 1
+        AND ${cols.hasName}
+        AND ${cols.name} = ?
+        ${cleanMarginType ? 'AND COALESCE(NULLIF(tu.margin_type, \'\'), \'未設定\') = ?' : ''}
+        ${universe.sql ? `AND ${universe.sql}` : ''}
+      ORDER BY ${constituentOrderBy(normalized.sortKey, normalized.sortDir)}
+      LIMIT ?
+    `,
+    params,
+  )
+
+  const totalCount = rows.length
+  const totalVolume = rows.reduce((sum, row) => sum + (row.volume ?? 0), 0)
+  const avgChangeValues = rows.map((row) => row.changePct).filter((value): value is number => value != null && Number.isFinite(value))
+  const avgVolumeValues = rows.map((row) => row.avgVolume30).filter((value): value is number => value != null && Number.isFinite(value))
+  const marginCounts = new Map<string, number>()
+  for (const row of rows) {
+    const key = row.marginType?.trim() || '未設定'
+    marginCounts.set(key, (marginCounts.get(key) ?? 0) + 1)
+  }
+
+  return {
+    classification,
+    sectorName,
+    latestDate,
+    baseDate,
+    sortKey: normalized.sortKey,
+    sortDir: normalized.sortDir,
+    marginType: cleanMarginType,
+    rows,
+    summary: {
+      totalCount,
+      marginTypeCounts: Array.from(marginCounts.entries())
+        .map(([type, count]) => ({ marginType: type, count }))
+        .sort((a, b) => b.count - a.count || a.marginType.localeCompare(b.marginType, 'ja')),
+      avgChangePct: avgChangeValues.length > 0
+        ? avgChangeValues.reduce((sum, value) => sum + value, 0) / avgChangeValues.length
+        : null,
+      totalVolume,
+      avgVolume30: avgVolumeValues.length > 0
+        ? avgVolumeValues.reduce((sum, value) => sum + value, 0) / avgVolumeValues.length
+        : null,
+    },
+  }
 }

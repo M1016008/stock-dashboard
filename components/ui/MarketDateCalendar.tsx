@@ -106,11 +106,11 @@ export function MarketDateCalendar({
     <div ref={rootRef} className={`relative inline-flex ${className}`}>
       <button
         type="button"
-        onClick={() => setOpen((v) => {
-          const next = !v
+        onClick={() => {
+          const next = !open
+          setOpen(next)
           if (next) onOpen?.()
-          return next
-        })}
+        }}
         className={`inline-flex items-center gap-2 rounded-[6px] border border-[var(--color-border-default)] bg-white font-bold text-[var(--color-text-primary)] shadow-sm transition-colors hover:border-[var(--color-brand-300)] ${
           compact ? 'h-8 px-2.5 text-[12px]' : 'h-10 px-3 text-[13px]'
         }`}

@@ -11,6 +11,7 @@ const HORIZONS = (process.env.ML_SHORT_HORIZONS ?? ML_PHYSICS_DEFAULT_HORIZON_LI
   .filter((value) => Number.isFinite(value) && value > 0)
 const START_DATE = process.env.ML_SHORT_LABEL_START_DATE?.trim() || null
 const END_DATE = process.env.ML_SHORT_LABEL_END_DATE?.trim() || null
+const RECENT_DAYS = Number(process.env.ML_SHORT_LABEL_RECENT_DAYS ?? 0)
 const WRITE_RL_STATES = process.env.ML_SHORT_WRITE_RL_STATES !== '0'
 const DATE_CHUNK_DAYS = Number(process.env.ML_SHORT_LABEL_DATE_CHUNK_DAYS ?? 0)
 
@@ -152,6 +153,24 @@ async function labelDateBounds(): Promise<{ minDate: string; maxDate: string } |
   return { minDate: row.minDate, maxDate: row.maxDate }
 }
 
+async function recentStartDate(): Promise<string | null> {
+  if (!Number.isFinite(RECENT_DAYS) || RECENT_DAYS <= 0) return null
+  const rows = await execAll<{ date: string | null }>(
+    `
+    SELECT MIN(date) AS date
+    FROM (
+      SELECT DISTINCT date
+      FROM forward_extrema
+      WHERE horizon_days IN (${horizonPlaceholders()})
+      ORDER BY date DESC
+      LIMIT ?
+    )
+    `,
+    [...HORIZONS, RECENT_DAYS],
+  )
+  return rows[0]?.date ?? null
+}
+
 async function main() {
   if (HORIZONS.length === 0) {
     console.log('ml short labels: no horizons')
@@ -182,7 +201,10 @@ async function main() {
     return
   }
 
-  await syncLabelsForRange(START_DATE, END_DATE)
+  const effectiveStartDate = START_DATE ?? await recentStartDate()
+  const effectiveEndDate = END_DATE
+
+  await syncLabelsForRange(effectiveStartDate, effectiveEndDate)
 
   if (WRITE_RL_STATES) {
     const actions = [
@@ -213,16 +235,22 @@ async function main() {
         FROM ml_feature_vectors_v2 f
         INNER JOIN ml_short_labels l ON l.ticker = f.ticker AND l.date = f.date
         WHERE f.feature_set = ? AND l.horizon_days IN (${horizonPlaceholders()})
-          ${START_DATE ? 'AND l.date >= ?' : ''}
-          ${END_DATE ? 'AND l.date <= ?' : ''}
+          ${effectiveStartDate ? 'AND l.date >= ?' : ''}
+          ${effectiveEndDate ? 'AND l.date <= ?' : ''}
         `,
-        [action, ML_PHYSICS_FEATURE_SET, ...HORIZONS, ...(START_DATE ? [START_DATE] : []), ...(END_DATE ? [END_DATE] : [])],
+        [
+          action,
+          ML_PHYSICS_FEATURE_SET,
+          ...HORIZONS,
+          ...(effectiveStartDate ? [effectiveStartDate] : []),
+          ...(effectiveEndDate ? [effectiveEndDate] : []),
+        ],
       )
     }
   }
 
   console.log(
-    `ml short labels synced: horizons=${HORIZONS.join('/')}, start=${START_DATE ?? '-'}, end=${END_DATE ?? '-'}, rl_states=${WRITE_RL_STATES ? 'on' : 'off'}`,
+    `ml short labels synced: horizons=${HORIZONS.join('/')}, start=${effectiveStartDate ?? '-'}, end=${effectiveEndDate ?? '-'}, recent_days=${RECENT_DAYS || '-'}, rl_states=${WRITE_RL_STATES ? 'on' : 'off'}`,
   )
 }
 

@@ -1,5 +1,5 @@
 // components/earnings/EarningsCalendarPanel.tsx
-// 決算発表予定銘柄を、株価・平均出来高・6軸ステージ込みの一覧で表示する。
+// 決算発表予定銘柄を、株価・平均出来高・6ステージ込みの一覧で表示する。
 
 import Link from 'next/link'
 import { Fragment } from 'react'
@@ -7,7 +7,7 @@ import { Card, CardHeader } from '@/components/ui/Card'
 import { EarningsStockChartDisclosure } from '@/components/earnings/EarningsStockChartDisclosure'
 import { IndustryBadges } from '@/components/ui/IndustryBadges'
 import { MarginBadges } from '@/components/ui/MarginBadges'
-import { StageTag } from '@/components/ui/StageTag'
+import { StageDots } from '@/components/ui/StageDots'
 import {
   getEarningsCalendarDashboard,
   type EarningsCalendarFilters,
@@ -151,6 +151,45 @@ function MlInsightNote({ insight }: { insight: EarningsRows[number]['mlInsight']
   )
 }
 
+function stageValues(row: EarningsRows[number]) {
+  return [
+    row.daily_a_stage,
+    row.daily_b_stage,
+    row.weekly_a_stage,
+    row.weekly_b_stage,
+    row.monthly_a_stage,
+    row.monthly_b_stage,
+  ]
+}
+
+function stagePairLabel(a: number | null, b: number | null) {
+  return `${a ?? '-'}${b ?? '-'}`
+}
+
+function stageCodeLabel(row: EarningsRows[number]) {
+  const values = stageValues(row)
+  if (values.every((value) => typeof value === 'number')) return values.join('')
+  return '------'
+}
+
+function SixStageCell({ row }: { row: EarningsRows[number] }) {
+  return (
+    <div className="min-w-[150px] space-y-1">
+      <div className="flex items-center gap-2">
+        <span className="font-mono text-[12px] font-bold tabular-nums text-[var(--color-brand-900)]">
+          {stageCodeLabel(row)}
+        </span>
+      </div>
+      <StageDots values={stageValues(row)} size={18} />
+      <div className="flex flex-wrap gap-1 text-[10px] font-semibold text-[var(--color-text-tertiary)]">
+        <span>日 {stagePairLabel(row.daily_a_stage, row.daily_b_stage)}</span>
+        <span>週 {stagePairLabel(row.weekly_a_stage, row.weekly_b_stage)}</span>
+        <span>月 {stagePairLabel(row.monthly_a_stage, row.monthly_b_stage)}</span>
+      </div>
+    </div>
+  )
+}
+
 function compactFilterValue(value: string | number | null | undefined): string | null {
   if (value == null) return null
   const text = String(value).trim()
@@ -175,9 +214,13 @@ function earningsHref({
     ['market', filters.marketSegment],
     ['sector17', filters.sector17],
     ['sector33', filters.sector33],
+    ['marginType', filters.marginType],
     ['stageCode', filters.stageCode],
     ['dailyPattern', filters.dailyPattern],
     ['volume', filters.volumeCondition],
+    ['avgVolumeWindow', filters.avgVolumeWindow],
+    ['avgVolumeMin', filters.avgVolumeMin],
+    ['avgVolumeMax', filters.avgVolumeMax],
     ['priceMin', filters.priceMin],
     ['priceMax', filters.priceMax],
     ['signal', filters.signal],
@@ -267,10 +310,11 @@ function EarningsScopeControls({
         {month && <input type="hidden" name="month" value={month} />}
         {filters.completed && <input type="hidden" name="completed" value="1" />}
         {filters.universe && <input type="hidden" name="universe" value={filters.universe} />}
-        <div className="grid gap-2 md:grid-cols-4 xl:grid-cols-8">
+        <div className="grid gap-2 md:grid-cols-4 xl:grid-cols-9">
           <SelectField label="市場区分" name="market" value={filters.marketSegment} options={options.marketSegments} />
           <SelectField label="17業種" name="sector17" value={filters.sector17} options={options.sector17} />
           <SelectField label="33業種" name="sector33" value={filters.sector33} options={options.sector33} />
+          <SelectField label="貸借/信用" name="marginType" value={filters.marginType} options={options.marginTypes} />
           <label className="flex min-w-0 flex-col gap-1 text-[11px] font-bold text-[var(--color-text-tertiary)]">
             6桁ステージ
             <input
@@ -336,7 +380,39 @@ function EarningsScopeControls({
             </select>
           </label>
         </div>
-        <div className="grid gap-2 md:grid-cols-[repeat(2,minmax(0,160px))_1fr]">
+        <div className="grid gap-2 md:grid-cols-3 xl:grid-cols-[repeat(5,minmax(0,160px))_1fr]">
+          <label className="flex min-w-0 flex-col gap-1 text-[11px] font-bold text-[var(--color-text-tertiary)]">
+            平均出来高期間
+            <select
+              name="avgVolumeWindow"
+              defaultValue={String(filters.avgVolumeWindow ?? 30)}
+              className="h-9 rounded-[6px] border border-[var(--color-border-default)] bg-white px-2 text-[12px] font-semibold text-[var(--color-text-primary)]"
+            >
+              <option value="10">10日平均</option>
+              <option value="30">30日平均</option>
+              <option value="60">60日平均</option>
+            </select>
+          </label>
+          <label className="flex min-w-0 flex-col gap-1 text-[11px] font-bold text-[var(--color-text-tertiary)]">
+            平均出来高下限
+            <input
+              name="avgVolumeMin"
+              inputMode="numeric"
+              defaultValue={filters.avgVolumeMin ?? ''}
+              placeholder="以上"
+              className="h-9 rounded-[6px] border border-[var(--color-border-default)] bg-white px-2 text-[12px] font-semibold text-[var(--color-text-primary)]"
+            />
+          </label>
+          <label className="flex min-w-0 flex-col gap-1 text-[11px] font-bold text-[var(--color-text-tertiary)]">
+            平均出来高上限
+            <input
+              name="avgVolumeMax"
+              inputMode="numeric"
+              defaultValue={filters.avgVolumeMax ?? ''}
+              placeholder="以下"
+              className="h-9 rounded-[6px] border border-[var(--color-border-default)] bg-white px-2 text-[12px] font-semibold text-[var(--color-text-primary)]"
+            />
+          </label>
           <label className="flex min-w-0 flex-col gap-1 text-[11px] font-bold text-[var(--color-text-tertiary)]">
             株価下限
             <input
@@ -458,10 +534,10 @@ function EarningsTable({
   const completed = mode === 'completed'
   const visibleRows = rows.slice(0, maxRows)
   const hiddenCount = Math.max(0, rows.length - visibleRows.length)
-  const colSpan = completed ? 14 : 13
+  const colSpan = completed ? 12 : 11
   return (
     <div className="overflow-x-auto">
-      <table className={`w-full text-[12px] ${completed ? 'min-w-[1960px]' : 'min-w-[1860px]'}`}>
+      <table className={`w-full text-[12px] ${completed ? 'min-w-[1740px]' : 'min-w-[1640px]'}`}>
         <thead>
           <tr className="text-left text-[11px] font-bold text-[var(--color-text-tertiary)]">
             <SortableTh label="発表" sortKey="daysLeft" date={date} month={month} filters={filters} className="pb-3 pl-2 pr-3" />
@@ -475,9 +551,7 @@ function EarningsTable({
             <SortableTh label="10日平均" sortKey="avgVolume10" date={date} month={month} filters={filters} className="pb-3 pr-3" align="right" />
             <SortableTh label="30日平均" sortKey="avgVolume30" date={date} month={month} filters={filters} className="pb-3 pr-3" align="right" />
             <SortableTh label="60日平均" sortKey="avgVolume60" date={date} month={month} filters={filters} className="pb-3 pr-3" align="right" />
-            <SortableTh label="日足A/B" sortKey="stageCode" date={date} month={month} filters={filters} className="pb-3 pr-3" />
-            <th className="pb-3 pr-3">週足A/B</th>
-            <th className="pb-3 pr-2">月足A/B</th>
+            <SortableTh label="6ステージ" sortKey="stageCode" date={date} month={month} filters={filters} className="pb-3 pr-2" />
           </tr>
         </thead>
         <tbody className="divide-y divide-[var(--color-border-soft)]">
@@ -532,14 +606,8 @@ function EarningsTable({
                 <td className="py-3 pr-3 text-right tabular-nums text-[var(--color-text-secondary)]">{fmtVol(row.avgVolume10)}</td>
                 <td className="py-3 pr-3 text-right tabular-nums text-[var(--color-text-secondary)]">{fmtVol(row.avgVolume30)}</td>
                 <td className="py-3 pr-3 text-right tabular-nums text-[var(--color-text-secondary)]">{fmtVol(row.avgVolume60)}</td>
-                <td className="py-3 pr-3">
-                  <div className="flex items-center gap-1"><StageTag stage={row.daily_a_stage} size="xs" /><StageTag stage={row.daily_b_stage} size="xs" /></div>
-                </td>
-                <td className="py-3 pr-3">
-                  <div className="flex items-center gap-1"><StageTag stage={row.weekly_a_stage} size="xs" /><StageTag stage={row.weekly_b_stage} size="xs" /></div>
-                </td>
                 <td className="py-3 pr-2">
-                  <div className="flex items-center gap-1"><StageTag stage={row.monthly_a_stage} size="xs" /><StageTag stage={row.monthly_b_stage} size="xs" /></div>
+                  <SixStageCell row={row} />
                 </td>
               </tr>
               <EarningsStockChartDisclosure

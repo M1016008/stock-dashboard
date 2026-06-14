@@ -3,6 +3,7 @@ import { Suspense } from 'react'
 import { Header } from '@/components/layout/Header'
 import { DataAutoUpdater } from '@/components/layout/DataAutoUpdater'
 import { FreshDataRefresher } from '@/components/layout/FreshDataRefresher'
+import { AssistantDrawer } from '@/components/assistant/AssistantDrawer'
 import './globals.css'
 
 export const metadata: Metadata = {
@@ -35,6 +36,7 @@ export default function RootLayout({
         <footer className="mx-auto w-full max-w-[1480px] px-5 pb-8 pt-3 text-[11px] text-[var(--color-text-tertiary)] sm:px-8 lg:px-10 xl:px-12">
           表示内容は過去データに基づく統計的観測です。投資判断は自己責任で行ってください。
         </footer>
+        <AssistantDrawer />
       </body>
     </html>
   )

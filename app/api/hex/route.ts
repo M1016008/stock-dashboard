@@ -141,12 +141,43 @@ async function latestSnapshotDate(): Promise<string | null> {
   return row?.d ?? null
 }
 
+async function resolveSnapshotDate(requestedDate: string | null): Promise<string | null> {
+  if (requestedDate && /^\d{4}-\d{2}-\d{2}$/.test(requestedDate)) {
+    const row = await execGet<{ d: string | null }>(
+      `SELECT MAX(date) AS d FROM daily_snapshots WHERE date <= ?`,
+      [requestedDate],
+    )
+    if (row?.d) return row.d
+  }
+  return latestSnapshotDate()
+}
+
 async function loadSnapshots(date: string): Promise<SnapshotRow[]> {
   return execAll<SnapshotRow>(
-    `SELECT ticker, date,
-            daily_a_stage, daily_b_stage, weekly_a_stage, weekly_b_stage, monthly_a_stage, monthly_b_stage,
-            ma_5, ma_25, ma_75, ma_300
-     FROM daily_snapshots WHERE date = ?`,
+    `
+    SELECT ticker, date,
+           daily_a_stage, daily_b_stage, weekly_a_stage, weekly_b_stage, monthly_a_stage, monthly_b_stage,
+           ma_5, ma_25, ma_75, ma_300
+    FROM (
+      SELECT
+        ticker,
+        date,
+        daily_a_stage,
+        daily_b_stage,
+        weekly_a_stage,
+        weekly_b_stage,
+        monthly_a_stage,
+        monthly_b_stage,
+        ma_5,
+        ma_25,
+        ma_75,
+        ma_300,
+        ROW_NUMBER() OVER (PARTITION BY ticker, date ORDER BY computed_at DESC) AS rn
+      FROM daily_snapshots
+      WHERE date = ?
+    )
+    WHERE rn = 1
+    `,
     [date],
   )
 }
@@ -182,7 +213,7 @@ export async function GET(request: NextRequest) {
     const view = searchParams.get('view')
     const universeFilter = parseUniverseFilter(searchParams.get(UNIVERSE_FILTER_PARAM))
 
-    const date = requestedDate ?? (await latestSnapshotDate())
+    const date = await resolveSnapshotDate(requestedDate)
     if (!date) {
       return jsonResponse(request, {
         success: true,

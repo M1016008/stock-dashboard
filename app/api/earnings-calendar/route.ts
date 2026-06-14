@@ -5,6 +5,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { gzipSync } from 'zlib'
 import {
   getEarningsCalendarDashboard,
+  type EarningsAverageVolumeWindow,
   type EarningsCalendarFilters,
   type EarningsRow,
   type EarningsSortDir,
@@ -34,8 +35,15 @@ function isIsoDate(value: string | null): value is string {
 
 function parseNumberParam(value: string | null): number | null {
   if (!value?.trim()) return null
-  const n = Number(value)
+  const n = Number(value.replace(/,/g, ''))
   return Number.isFinite(n) ? n : null
+}
+
+function parseAverageVolumeWindow(value: string | null): EarningsAverageVolumeWindow | null {
+  if (value === '10') return 10
+  if (value === '30') return 30
+  if (value === '60') return 60
+  return null
 }
 
 function parseLimit(value: string | null): number | null {
@@ -112,9 +120,13 @@ export async function GET(request: NextRequest) {
       marketSegment: searchParams.get('market') ?? null,
       sector17: searchParams.get('sector17') ?? null,
       sector33: searchParams.get('sector33') ?? null,
+      marginType: searchParams.get('marginType') ?? null,
       stageCode: searchParams.get('stageCode') ?? null,
       dailyPattern: searchParams.get('dailyPattern') ?? null,
       volumeCondition: parseVolumeCondition(searchParams.get('volume')),
+      avgVolumeWindow: parseAverageVolumeWindow(searchParams.get('avgVolumeWindow')),
+      avgVolumeMin: parseNumberParam(searchParams.get('avgVolumeMin')),
+      avgVolumeMax: parseNumberParam(searchParams.get('avgVolumeMax')),
       priceMin: parseNumberParam(searchParams.get('priceMin')),
       priceMax: parseNumberParam(searchParams.get('priceMax')),
       signal: searchParams.get('signal') ?? null,

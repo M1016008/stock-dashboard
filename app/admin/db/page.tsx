@@ -7,11 +7,13 @@ interface TableStat {
   name: string
   count: number
   latestDate?: string
+  estimated?: boolean
 }
 
 interface DbStats {
   tables: TableStat[]
   totalRecords: number
+  totalRecordsEstimated?: boolean
   dbPath: string
   dbSizeBytes: number
   dbSizeMB: string
@@ -154,7 +156,11 @@ export default function AdminDbPage() {
 
       {/* サマリーカード */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px' }}>
-        <SummaryCard label="総レコード数" value={stats?.totalRecords?.toLocaleString() ?? '---'} unit="件" />
+        <SummaryCard
+          label="総レコード数"
+          value={stats?.totalRecords?.toLocaleString() ?? '---'}
+          unit={stats?.totalRecordsEstimated ? '件 (概算含む)' : '件'}
+        />
         <SummaryCard label="DB容量" value={stats?.dbSizeMB ?? '---'} unit="MB" />
         <SummaryCard label="ユニバース" value={universe ? String(universe.active) : '---'} unit={`/ ${universe?.total ?? 0} active`} />
       </div>
@@ -298,6 +304,9 @@ export default function AdminDbPage() {
       <div className="card" style={{ overflow: 'hidden' }}>
         <div style={sectionHead}>
           <span style={{ fontSize: '12px', fontWeight: 600 }}>テーブル別レコード数</span>
+          <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+            大規模テーブルはANALYZE統計の概算値を表示
+          </span>
         </div>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
           <thead>
@@ -311,7 +320,10 @@ export default function AdminDbPage() {
             {stats?.tables.map((t) => (
               <tr key={t.name} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
                 <td style={{ ...cellStyle, color: 'var(--accent-primary)' }}>{t.name}</td>
-                <td style={cellStyleR}>{t.count.toLocaleString()}</td>
+                <td style={cellStyleR}>
+                  {t.count.toLocaleString()}
+                  {t.estimated && <span style={estimateBadge}>概算</span>}
+                </td>
                 <td style={{ ...cellStyleR, color: 'var(--text-muted)' }}>{t.latestDate ?? '---'}</td>
               </tr>
             ))}
@@ -491,4 +503,15 @@ const inputStyle: React.CSSProperties = {
   borderRadius: 'var(--radius-sm)',
   background: 'var(--bg-base)',
   color: 'var(--text-primary)',
+}
+
+const estimateBadge: React.CSSProperties = {
+  display: 'inline-block',
+  marginLeft: '6px',
+  padding: '1px 5px',
+  borderRadius: '3px',
+  border: '1px solid var(--border-base)',
+  color: 'var(--text-muted)',
+  fontSize: '10px',
+  fontFamily: 'var(--font-sans)',
 }

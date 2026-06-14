@@ -10,6 +10,7 @@ const HORIZONS = (process.env.ML_HORIZONS ?? '20,40,60,90')
   .filter((value) => Number.isFinite(value) && value > 0)
 const START_DATE = process.env.ML_LABEL_START_DATE?.trim() || null
 const END_DATE = process.env.ML_LABEL_END_DATE?.trim() || null
+const RECENT_DAYS = Number(process.env.ML_LABEL_RECENT_DAYS ?? 0)
 
 async function main() {
   if (HORIZONS.length === 0) {
@@ -21,6 +22,21 @@ async function main() {
   if (START_DATE) {
     where.push('fe.date >= ?')
     args.push(START_DATE)
+  }
+  if (!START_DATE && Number.isFinite(RECENT_DAYS) && RECENT_DAYS > 0) {
+    where.push(`
+      fe.date >= (
+        SELECT MIN(date)
+        FROM (
+          SELECT DISTINCT date
+          FROM forward_extrema
+          WHERE horizon_days IN (${HORIZONS.map(() => '?').join(', ')})
+          ORDER BY date DESC
+          LIMIT ?
+        )
+      )
+    `)
+    args.push(...HORIZONS, RECENT_DAYS)
   }
   if (END_DATE) {
     where.push('fe.date <= ?')
@@ -55,7 +71,7 @@ async function main() {
     `,
     args,
   )
-  console.log(`ml labels synced: horizons=${HORIZONS.join('/')}, start=${START_DATE ?? '-'}, end=${END_DATE ?? '-'}`)
+  console.log(`ml labels synced: horizons=${HORIZONS.join('/')}, start=${START_DATE ?? '-'}, end=${END_DATE ?? '-'}, recent_days=${RECENT_DAYS || '-'}`)
 }
 
 main()

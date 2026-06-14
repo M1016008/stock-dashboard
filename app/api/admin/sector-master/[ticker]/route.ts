@@ -1,6 +1,6 @@
 // app/api/admin/sector-master/[ticker]/route.ts
 // 単一銘柄のマスタ手動補完用エンドポイント。
-// JPX 公式の data_j.xls に載らない銘柄（A サフィックスの新規上場、ETF、REIT 等）を
+// J-Quants マスターで補完できない銘柄（A サフィックスの新規上場、ETF、REIT 等）を
 // 1件ずつ埋めるための UI から呼ばれる想定。
 
 import { NextResponse } from 'next/server'

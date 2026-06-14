@@ -23,14 +23,19 @@ export async function GET() {
     await ensureReady()
 
     const latest = await execGet<{ d: string | null }>(
-      `SELECT MAX(date) AS d FROM tv_daily_snapshots`,
+      `SELECT MAX(date) AS d FROM daily_snapshots`,
     )
     if (!latest?.d) {
       return NextResponse.json({ snapshotDate: null, totalTickers: 0, coverage: null })
     }
 
     const tickers = await execAll<DiagSnapshotRow>(
-      `SELECT ticker, name FROM tv_daily_snapshots WHERE date = ?`,
+      `
+      SELECT s.ticker, COALESCE(u.name, s.ticker) AS name
+      FROM daily_snapshots s
+      LEFT JOIN ticker_universe u ON u.ticker = s.ticker
+      WHERE s.date = ?
+      `,
       [latest.d],
     )
     const tickerNameMap = new Map<string, string>()
@@ -40,23 +45,33 @@ export async function GET() {
     const sectorRows = await execAll<DiagSectorRow>(
       `SELECT
          ticker,
-         sector_large,
-         sector_small,
-         sector33
-       FROM sector_master
-       UNION ALL
-       SELECT
-         ticker,
          sector17_name AS sector_large,
          sector33_name AS sector_small,
          sector33_name AS sector33
        FROM ticker_universe
-       WHERE active = 1`,
+       WHERE active = 1
+       UNION ALL
+       SELECT
+         ticker,
+         sector_large,
+         sector_small,
+         sector33
+       FROM sector_master`,
     )
     const sectorMap = new Map<string, DiagSectorRow>()
     for (const r of sectorRows) {
       const ticker = r.ticker.replace(/\.T$/, '')
-      sectorMap.set(ticker, { ...r, ticker })
+      const existing = sectorMap.get(ticker)
+      if (!existing) {
+        sectorMap.set(ticker, { ...r, ticker })
+        continue
+      }
+      sectorMap.set(ticker, {
+        ...existing,
+        sector_large: existing.sector_large?.trim() ? existing.sector_large : r.sector_large,
+        sector_small: existing.sector_small?.trim() ? existing.sector_small : r.sector_small,
+        sector33: existing.sector33?.trim() ? existing.sector33 : r.sector33,
+      })
     }
 
     let withSectorMaster = 0

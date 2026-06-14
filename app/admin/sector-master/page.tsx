@@ -40,27 +40,7 @@ const EMPTY_DRAFT: EditDraft = {
   name: '', sector_large: '', sector_small: '', sector33: '', market_segment: '', margin_type: '',
 }
 
-interface ImportSummary {
-  fileName: string
-  totalRows: number
-  inserted: number
-  skipped: number
-  detectedColumns: {
-    code: string | null
-    name: string | null
-    marketSegment: string | null
-    sector33: string | null
-    sectorLarge: string | null
-    sectorSmall: string | null
-    marginType: string | null
-  }
-  errors: string[]
-}
-
 export default function SectorMasterPage() {
-  const [working, setWorking] = useState<'idle' | 'jpx'>('idle')
-  const [summary, setSummary] = useState<ImportSummary | null>(null)
-  const [error, setError] = useState<string | null>(null)
   const [stats, setStats] = useState<Stats | null>(null)
   const [diag, setDiag] = useState<Diagnostics | null>(null)
   const [editingTicker, setEditingTicker] = useState<string | null>(null)
@@ -118,86 +98,13 @@ export default function SectorMasterPage() {
     }
   }
 
-  const finishImport = async (res: Response) => {
-    const json = await res.json()
-    if (!res.ok) {
-      const detail = json.message ? `${json.error ?? 'Import failed'}: ${json.message}` : (json.error ?? 'failed')
-      throw new Error(detail)
-    }
-    setSummary(json.summary)
-    loadStats()
-    loadDiag()
-  }
-
-  const fetchJpx = async () => {
-    setWorking('jpx')
-    setSummary(null)
-    setError(null)
-    try {
-      await finishImport(await fetch('/api/admin/sector-master?source=jpx', { method: 'POST', cache: 'no-store' }))
-    } catch (e) {
-      setError((e as Error).message)
-    } finally {
-      setWorking('idle')
-    }
-  }
-
   return (
     <div className="flex flex-col gap-5">
       <PageTitle
         title="業種マスター管理"
-        subtitle="JPX公式データを基準に、市場区分・33業種・17業種・銘柄名を診断・補完します。"
+        subtitle="J-Quants 銘柄マスターを基準に、市場区分・33業種・17業種・貸借属性を診断・補完します。"
         badge="Admin"
       />
-
-      {/* JPX 自動取得ボタン */}
-      <div className="card flex flex-wrap items-center gap-4 p-4">
-        <div className="min-w-[240px] flex-1">
-          <div className="mb-1 text-[14px] font-bold">
-            JPX 公式から自動取得
-          </div>
-          <div className="text-[12px] font-medium text-[var(--color-text-tertiary)]">
-            <code>data_j.xls</code> を <code>jpx.co.jp</code> から直接ダウンロードして全銘柄を更新します。
-          </div>
-        </div>
-        <button
-          onClick={fetchJpx}
-          disabled={working !== 'idle'}
-          className="h-9 rounded-[6px] border border-[var(--color-brand-600)] bg-[var(--color-brand-600)] px-4 text-[12px] font-bold text-white transition-colors disabled:cursor-wait disabled:border-[var(--color-border-default)] disabled:bg-[var(--color-surface-muted)] disabled:text-[var(--color-text-tertiary)]"
-        >
-          {working === 'jpx' ? '取得中…' : 'JPX から取得'}
-        </button>
-      </div>
-
-      {/* エラー */}
-      {error && (
-        <div className="card border-l-2 border-l-[var(--color-price-down)] p-3">
-          <p className="m-0 text-[12px] font-semibold text-[var(--color-price-down)]">エラー: {error}</p>
-        </div>
-      )}
-
-      {/* 取込結果 */}
-      {summary && (
-        <div className="card p-4">
-          <div className="mb-2 text-[13px] font-bold">
-            {summary.fileName}
-          </div>
-          <div style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
-            <span>合計 <strong>{summary.totalRows}</strong> 行</span>
-            <span style={{ color: 'var(--price-up, #22c55e)' }}>取込 <strong>{summary.inserted}</strong> 件</span>
-            <span style={{ color: 'var(--text-muted)' }}>スキップ {summary.skipped} 件</span>
-          </div>
-          <div style={{ marginTop: '8px', fontSize: '11px', color: 'var(--text-muted)', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '4px' }}>
-            <span>コード列: <code>{summary.detectedColumns.code ?? '---'}</code></span>
-            <span>銘柄名列: <code>{summary.detectedColumns.name ?? '---'}</code></span>
-            <span>市場区分列: <code>{summary.detectedColumns.marketSegment ?? '---'}</code></span>
-            <span>貸借/信用列: <code>{summary.detectedColumns.marginType ?? '---'}</code></span>
-            <span>33業種列: <code>{summary.detectedColumns.sector33 ?? '---'}</code></span>
-            <span>業種大分類列: <code>{summary.detectedColumns.sectorLarge ?? '---'}</code></span>
-            <span>業種小分類列: <code>{summary.detectedColumns.sectorSmall ?? '---'}</code></span>
-          </div>
-        </div>
-      )}
 
       {/* 現在の登録状況 */}
       <div className="card overflow-hidden">
@@ -335,7 +242,7 @@ export default function SectorMasterPage() {
                     )}
                   </div>
                   <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
-                    JPX 公式に無い銘柄（ETF/REIT/新規上場）は手動で sector_master に追加してください
+                    J-Quants マスターで補完できない銘柄（ETF/REIT/新規上場など）は手動で sector_master に追加してください
                   </div>
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '4px' }}>

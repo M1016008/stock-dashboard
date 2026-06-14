@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { isPlaceholderOpenAIKey } from '@/lib/assistant/config'
 import { execAll, execGet } from '@/lib/db/client'
 import {
   buildChartWindowWithMa,
@@ -283,7 +284,7 @@ async function maCandidateAnalysis(limit = 6): Promise<MaCandidateAnalysis> {
 
 async function analysisComment(facts: Record<string, unknown>, fallback: AnalysisComment): Promise<AnalysisComment> {
   const apiKey = process.env.OPENAI_API_KEY
-  if (!apiKey) return fallback
+  if (!apiKey || isPlaceholderOpenAIKey(apiKey)) return fallback
 
   try {
     const response = await fetch('https://api.openai.com/v1/responses', {
@@ -293,7 +294,7 @@ async function analysisComment(facts: Record<string, unknown>, fallback: Analysi
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: process.env.OPENAI_ANALYSIS_MODEL ?? 'gpt-4o-mini',
+        model: process.env.OPENAI_ANALYSIS_MODEL ?? 'gpt-5.4-mini',
         input: [
           {
             role: 'system',

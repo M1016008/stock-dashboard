@@ -8,7 +8,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import { useSearchParams } from 'next/navigation'
+import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import HexMap from '@/components/hex/HexMap'
 import { MarketDateCalendar } from '@/components/ui/MarketDateCalendar'
 import { STAGE_BG_COLORS, STAGE_BORDER_COLORS, STAGE_LABELS } from '@/lib/hex-stage'
@@ -63,9 +63,12 @@ const STAGE_DESCRIPTIONS: Record<number, string> = {
 }
 
 export default function HexStageMapView() {
+  const router = useRouter()
+  const pathname = usePathname()
   const searchParams = useSearchParams()
   const activeUniverse = parseUniverseFilter(searchParams.get(UNIVERSE_FILTER_PARAM))
   const activeUniverseMeta = getUniverseFilterMeta(activeUniverse)
+  const selectedDate = searchParams.get('date')
   const [data, setData] = useState<Stock[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -76,8 +79,15 @@ export default function HexStageMapView() {
   const [selectedCategory, setSelectedCategory] = useState<string>('')
   const [selectedSubCategory, setSelectedSubCategory] = useState<string>('')
   const [availableDates, setAvailableDates] = useState<AvailableDate[]>([])
-  const [selectedDate, setSelectedDate] = useState<string | null>(null) // null = 最新
   const [legendOpen, setLegendOpen] = useState(false)
+
+  const updateDate = (nextDate: string | null) => {
+    const params = new URLSearchParams(searchParams.toString())
+    if (nextDate) params.set('date', nextDate)
+    else params.delete('date')
+    const query = params.toString()
+    router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false })
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -163,7 +173,7 @@ export default function HexStageMapView() {
           <MarketDateCalendar
             dates={availableDates}
             value={selectedDate}
-            onChange={setSelectedDate}
+            onChange={updateDate}
             label="マップ日付"
             compact
           />

@@ -32,7 +32,7 @@ function fmtVol(v: number | null) {
 }
 
 export async function TransitionDetailTable({ timescale, period }: { timescale: Timescale; period: Period }) {
-  const rows = await getTransitionDetail(timescale, period, 30)
+  const rows = await getTransitionDetail(timescale, period, null, 30)
   return (
     <Card>
       <CardHeader title="遷移銘柄一覧" hint={`${period} · ${rows.length} 件`} />

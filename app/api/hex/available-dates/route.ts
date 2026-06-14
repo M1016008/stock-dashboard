@@ -21,7 +21,7 @@ export async function GET(request: NextRequest) {
 
   if (rows.length === 0) {
     rows = await execAll<{ date: string; tickers: number }>(
-      `SELECT date, COUNT(*) AS tickers
+      `SELECT date, COUNT(DISTINCT ticker) AS tickers
        FROM daily_snapshots
        GROUP BY date
        ORDER BY date DESC

@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { useMemo, useState } from 'react'
 import { ChevronDown, ExternalLink } from 'lucide-react'
 import type { MlSectorCandidate, MlSectorRanking } from '@/lib/queries/ml-insights'
+import { StageTag } from '@/components/ui/StageTag'
 
 type CandidateResponse = {
   asOfDate: string | null
@@ -15,6 +16,22 @@ type CandidateResponse = {
 
 function directionLabel(direction: 'up' | 'down') {
   return direction === 'up' ? '上昇候補' : '下落警戒'
+}
+
+function directionTone(direction: 'up' | 'down') {
+  return direction === 'up'
+    ? {
+        text: 'text-[var(--color-price-up)]',
+        border: 'border-[rgba(220,38,38,0.24)]',
+        bg: 'bg-[rgba(220,38,38,0.05)]',
+        accent: 'bg-[rgba(220,38,38,0.72)]',
+      }
+    : {
+        text: 'text-[var(--color-price-down)]',
+        border: 'border-[rgba(37,99,235,0.24)]',
+        bg: 'bg-[rgba(37,99,235,0.05)]',
+        accent: 'bg-[rgba(37,99,235,0.72)]',
+      }
 }
 
 function fmtScore(value: number | null | undefined) {
@@ -35,6 +52,26 @@ function horizonLabel(days: number) {
 
 function keyFor(row: MlSectorRanking) {
   return `${row.asOfDate}:${row.horizonDays}:${row.sectorType}:${row.direction}:${row.sectorName}`
+}
+
+function StageCode({ code }: { code: string | null | undefined }) {
+  if (!code) {
+    return <span className="text-[11px] font-bold text-[var(--color-text-tertiary)]">------</span>
+  }
+  return (
+    <span className="inline-flex items-center gap-0.5" aria-label={`6桁ステージ ${code}`}>
+      {code.split('').slice(0, 6).map((digit, index) => {
+        const stage = Number(digit)
+        return (
+          <StageTag
+            key={`${digit}-${index}`}
+            stage={Number.isFinite(stage) ? stage : null}
+            size="xs"
+          />
+        )
+      })}
+    </span>
+  )
 }
 
 export function MlSectorRankingBoard({
@@ -127,9 +164,12 @@ export function MlSectorRankingBoard({
             </div>
             <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
               {section.blocks.map((block) => (
-                <div key={`${section.title}-${block.title}`} className="rounded-[8px] border border-[var(--color-border-soft)]">
+                <div key={`${section.title}-${block.title}`} className="overflow-hidden rounded-[8px] border border-[var(--color-border-soft)]">
                   <div className="border-b border-[var(--color-border-soft)] px-3 py-2 text-[13px] font-bold text-[var(--color-text-primary)]">
-                    {block.title}
+                    <span className="inline-flex items-center gap-2">
+                      <span className={`h-4 w-1 rounded-full ${block.title.includes('下落') ? 'bg-[rgba(37,99,235,0.72)]' : 'bg-[rgba(220,38,38,0.72)]'}`} />
+                      {block.title}
+                    </span>
                   </div>
                   <div className="divide-y divide-[var(--color-border-soft)]">
                     {block.rows.map((row, index) => {
@@ -138,12 +178,15 @@ export function MlSectorRankingBoard({
                       const candidates = candidateMap[key] ?? []
                       const loading = loadingKey === key
                       const error = errors[key]
+                      const tone = directionTone(row.direction)
                       return (
                         <div key={key}>
                           <button
                             type="button"
-                            className={`grid w-full grid-cols-[36px_1fr_auto] items-center gap-2 px-3 py-2 text-left text-[12px] transition-colors hover:bg-[var(--color-surface-subtle)] ${
-                              open ? 'bg-[var(--color-surface-subtle)]' : ''
+                            className={`grid w-full grid-cols-[36px_1fr_auto] items-center gap-2 border-l-4 px-3 py-2 text-left text-[12px] transition-colors hover:bg-[var(--color-surface-subtle)] ${
+                              open ? tone.bg : ''
+                            } ${tone.border} ${
+                              open ? '' : 'border-l-transparent'
                             }`}
                             aria-expanded={open}
                             onClick={() => void toggle(row)}
@@ -152,12 +195,12 @@ export function MlSectorRankingBoard({
                             <span className="min-w-0">
                               <span className="block truncate font-bold text-[var(--color-text-primary)]">{row.sectorName}</span>
                               <span className="mt-0.5 block truncate text-[11px] font-semibold text-[var(--color-text-tertiary)]">
-                                {horizonLabel(row.horizonDays)} / {directionLabel(row.direction)} / {row.representativeTickers.slice(0, 4).map((item) => item.ticker).join(', ') || '代表銘柄なし'}
+                                {horizonLabel(row.horizonDays)} / <span className={tone.text}>{directionLabel(row.direction)}</span> / {row.representativeTickers.slice(0, 4).map((item) => item.ticker).join(', ') || '代表銘柄なし'}
                               </span>
                             </span>
                             <span className="flex items-center gap-2 text-right">
                               <span>
-                                <span className="block font-bold tabular-nums text-[var(--color-brand-900)]">{row.candidateCount}件</span>
+                                <span className={`block font-bold tabular-nums ${tone.text}`}>{row.candidateCount}件</span>
                                 <span className="block text-[10px] font-bold tabular-nums text-[var(--color-text-tertiary)]">
                                   {fmtScore(row.avgScore)}
                                 </span>
@@ -223,8 +266,8 @@ export function MlSectorRankingBoard({
                                               <td className="py-2 pr-2 text-right tabular-nums text-[var(--color-text-secondary)]">
                                                 {fmtPrice(candidate.close)}
                                               </td>
-                                              <td className="py-2 pr-2 font-mono text-[var(--color-text-secondary)]">
-                                                {candidate.stageCode ?? '-'}
+                                              <td className="py-2 pr-2">
+                                                <StageCode code={candidate.stageCode} />
                                               </td>
                                               <td className="py-2 text-[var(--color-text-secondary)]">
                                                 {candidate.maOrder ?? '-'}

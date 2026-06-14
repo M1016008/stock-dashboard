@@ -4,6 +4,7 @@ import { ML_PHYSICS_FEATURE_SET, type PhysicsFeatureProfile } from '@/lib/backte
 import { buildChartWindowWithMa, type OhlcvPoint, type StagePoint } from '@/lib/backtest/detail-analysis'
 import { physicsSimilarity, physicsSimilarityScore, stageSimilarity } from '@/lib/ml/physics-similarity'
 import { filterRowsByUniverse, parseUniverseFilter, UNIVERSE_FILTER_PARAM } from '@/lib/market-universe'
+import { readServingCache, stableCacheKey, writeServingCache } from '@/lib/api/serving-cache'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 30
@@ -58,6 +59,11 @@ type RankedMatch = {
 const MIN_PATTERN_DAYS = 5
 const MAX_PATTERN_DAYS = 90
 const MAX_LIMIT = 100
+const CACHE_TTL_MS = 5 * 60 * 1000
+const CACHE_MAX_ENTRIES = 50
+const CACHE_NAMESPACE = 'ml_pattern_search_v1'
+
+const searchCache = new Map<string, { generatedAt: number; payload: unknown }>()
 
 function badRequest(message: string, status = 400) {
   return NextResponse.json({ error: 'invalid_request', message }, { status })
@@ -382,6 +388,31 @@ export async function GET(request: NextRequest) {
     const rawLimit = positiveInteger(searchParams.get('limit'))
     const limit = Math.min(MAX_LIMIT, Math.max(1, rawLimit ?? 30))
     const universeFilter = parseUniverseFilter(searchParams.get(UNIVERSE_FILTER_PARAM))
+    const cacheIdentity = {
+      ticker,
+      startDate,
+      endDate,
+      asOfDate,
+      limit,
+      universeFilter,
+    }
+    const cacheKey = JSON.stringify(cacheIdentity)
+    const cached = searchCache.get(cacheKey)
+    if (cached && Date.now() - cached.generatedAt < CACHE_TTL_MS) {
+      return NextResponse.json({
+        ...(cached.payload as Record<string, unknown>),
+        cache: { hit: true, generatedAt: new Date(cached.generatedAt).toISOString() },
+      })
+    }
+    const storedKey = stableCacheKey(cacheIdentity)
+    const stored = await readServingCache<Record<string, unknown>>(CACHE_NAMESPACE, storedKey, CACHE_TTL_MS)
+    if (stored) {
+      searchCache.set(cacheKey, { generatedAt: stored.generatedAt, payload: stored.payload })
+      return NextResponse.json({
+        ...stored.payload,
+        cache: { hit: true, generatedAt: new Date(stored.generatedAt).toISOString(), store: 'db' },
+      })
+    }
 
     const base = await loadFeatureSequence(ticker, startDate, endDate)
     if (base.length < MIN_PATTERN_DAYS) {
@@ -416,7 +447,8 @@ export async function GET(request: NextRequest) {
       loadReferenceChart(ticker, referenceStart, referenceEnd),
     ])
 
-    return NextResponse.json({
+    const generatedAt = Date.now()
+    const payload = {
       ticker,
       requestedStartDate: startDate,
       requestedEndDate: endDate,
@@ -451,7 +483,16 @@ export async function GET(request: NextRequest) {
         },
       },
       matches,
-    })
+      cache: { hit: false, generatedAt: new Date(generatedAt).toISOString() },
+    }
+    searchCache.set(cacheKey, { generatedAt, payload })
+    await writeServingCache(CACHE_NAMESPACE, storedKey, payload, CACHE_TTL_MS, generatedAt)
+    if (searchCache.size > CACHE_MAX_ENTRIES) {
+      const firstKey = searchCache.keys().next().value
+      if (firstKey) searchCache.delete(firstKey)
+    }
+
+    return NextResponse.json(payload)
   } catch (error) {
     console.error('pattern search API error:', error)
     return NextResponse.json(

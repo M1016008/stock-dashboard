@@ -505,9 +505,7 @@ export default function ScreenerPage() {
       )}
 
       {loading && results.length === 0 ? (
-        <div className="card" style={{ padding: '32px', textAlign: 'center' }}>
-          <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>計算中…</p>
-        </div>
+        <ScreenerLoadingSkeleton />
       ) : (
         <div className="card" style={{ overflow: 'hidden' }}>
           <div style={{ padding: '8px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-subtle)', gap: '8px', flexWrap: 'wrap' }}>
@@ -742,6 +740,39 @@ export default function ScreenerPage() {
           )}
         </div>
       )}
+      </div>
+    </div>
+  )
+}
+
+function ScreenerLoadingSkeleton() {
+  return (
+    <div className="card" style={{ overflow: 'hidden' }}>
+      <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--border-subtle)' }}>
+        <div style={{ ...skeletonBlock, width: '180px', height: '14px' }} />
+      </div>
+      <div style={{ padding: '10px 12px', display: 'grid', gap: '8px' }}>
+        {Array.from({ length: 8 }).map((_, index) => (
+          <div
+            key={index}
+            style={{
+              display: 'grid',
+              gridTemplateColumns: '70px minmax(130px, 1fr) 90px 80px 120px',
+              gap: '10px',
+              alignItems: 'center',
+              minWidth: 0,
+            }}
+          >
+            <div style={{ ...skeletonBlock, height: '12px' }} />
+            <div style={{ ...skeletonBlock, height: '12px', width: `${70 + (index % 3) * 8}%` }} />
+            <div style={{ ...skeletonBlock, height: '12px' }} />
+            <div style={{ ...skeletonBlock, height: '12px' }} />
+            <div style={{ ...skeletonBlock, height: '12px' }} />
+          </div>
+        ))}
+      </div>
+      <div style={{ padding: '0 12px 12px', fontSize: '11px', color: 'var(--text-muted)' }}>
+        初回表示用データを段階ロード中です。
       </div>
     </div>
   )
@@ -1167,6 +1198,13 @@ const mcChipStyle = (active: boolean): React.CSSProperties => ({
   whiteSpace: 'nowrap',
   fontWeight: active ? 600 : 400,
 })
+
+const skeletonBlock: React.CSSProperties = {
+  width: '100%',
+  borderRadius: '4px',
+  background: 'linear-gradient(90deg, var(--bg-elevated), var(--bg-surface), var(--bg-elevated))',
+  border: '1px solid var(--border-subtle)',
+}
 
 const th: React.CSSProperties = {
   padding: '8px 12px',

@@ -3,6 +3,7 @@
 
 import { STAGE_BG_COLORS, STAGE_BORDER_COLORS, STAGE_LABELS } from '@/lib/hex-stage'
 import { getTransitionMatrix, type Timescale, type Period } from '@/lib/queries/hex'
+import type { UniverseFilterValue } from '@/lib/market-universe'
 
 const STAGES = [1, 2, 3, 4, 5, 6] as const
 
@@ -10,6 +11,7 @@ const PERIOD_LABEL: Record<Period, string> = {
   today: '本日',
   week: '今週',
   month: '今月',
+  to_latest: '現在まで',
 }
 
 const TIMESCALE_LABEL: Record<Timescale, string> = {
@@ -44,8 +46,18 @@ const RELATION_META: Record<Relation, { label: string; rgb: string; text: string
   },
 }
 
-export async function TransitionMatrixMock({ timescale, period }: { timescale: Timescale; period: Period }) {
-  const cells = await getTransitionMatrix(timescale, period)
+export async function TransitionMatrixMock({
+  timescale,
+  period,
+  universe = null,
+  asOfDate = null,
+}: {
+  timescale: Timescale
+  period: Period
+  universe?: UniverseFilterValue
+  asOfDate?: string | null
+}) {
+  const cells = await getTransitionMatrix(timescale, period, universe, asOfDate)
   const max = cells.reduce((m, c) => Math.max(m, c.count), 0)
   const total = cells.reduce((a, c) => a + c.count, 0)
   const get = (from: number, to: number) =>

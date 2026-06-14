@@ -6,6 +6,7 @@ import { PageTitle } from '@/components/layout/PageTitle'
 import { getEarningsDateCounts } from '@/lib/queries/earnings-calendar'
 import {
   getLatestDate,
+  type EarningsAverageVolumeWindow,
   type EarningsCalendarFilters,
   type EarningsSortDir,
   type EarningsSortKey,
@@ -44,8 +45,15 @@ function isMonth(value: string | undefined): value is string {
 
 function parseNumberParam(value: string | undefined): number | null {
   if (!value?.trim()) return null
-  const n = Number(value)
+  const n = Number(value.replace(/,/g, ''))
   return Number.isFinite(n) ? n : null
+}
+
+function parseAverageVolumeWindow(value: string | undefined): EarningsAverageVolumeWindow | null {
+  if (value === '10') return 10
+  if (value === '30') return 30
+  if (value === '60') return 60
+  return null
 }
 
 function parseLimit(value: string | undefined): number | null {
@@ -106,9 +114,13 @@ export default async function EarningsPage({
     marketSegment: firstParam(sp.market) ?? null,
     sector17: firstParam(sp.sector17) ?? null,
     sector33: firstParam(sp.sector33) ?? null,
+    marginType: firstParam(sp.marginType) ?? null,
     stageCode: firstParam(sp.stageCode) ?? null,
     dailyPattern: firstParam(sp.dailyPattern) ?? null,
     volumeCondition: parseVolumeCondition(firstParam(sp.volume)),
+    avgVolumeWindow: parseAverageVolumeWindow(firstParam(sp.avgVolumeWindow)),
+    avgVolumeMin: parseNumberParam(firstParam(sp.avgVolumeMin)),
+    avgVolumeMax: parseNumberParam(firstParam(sp.avgVolumeMax)),
     priceMin: parseNumberParam(firstParam(sp.priceMin)),
     priceMax: parseNumberParam(firstParam(sp.priceMax)),
     signal: firstParam(sp.signal) ?? null,

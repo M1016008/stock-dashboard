@@ -77,6 +77,7 @@ const NAV_ITEMS = [
       { href: '/ai/ma-lens', label: 'AI Lens', description: 'MA形状・物理特徴量・類似候補', icon: Activity },
       { href: '/ai/transitions', label: 'パターン遷移', description: '過去パターンの遷移分析', icon: ChartCandlestick },
       { href: '/backtest', label: '過去検証', description: 'シグナルと期待値を検証', icon: FlaskConical },
+      { href: '/trade/workbench', label: '売買候補', description: '根拠つき注文案の下書き', icon: FlaskConical },
     ],
   },
   { kind: 'link', href: '/earnings', label: '決算', icon: CalendarDays },
