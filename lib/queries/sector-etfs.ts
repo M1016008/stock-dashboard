@@ -69,6 +69,21 @@ export interface SectorEtfHolding {
   source: string
   sourceUrl: string | null
   updatedAt: number | null
+  price: number | null
+  prevClose: number | null
+  changePct: number | null
+  stages: SectorEtfStages
+  stageCode: string | null
+  previousDailyAStage: number | null
+  dailyStageTransition: string | null
+  maOrderDaily: string | null
+  maOrderWeekly: string | null
+  maOrderMonthly: string | null
+  maAngles: SectorEtfMaAngles
+  trendLabel: '上昇' | '横ばい' | '下落' | '判定不足'
+  contributionPctPoint: number | null
+  contributionSharePct: number | null
+  contributionAmount: number | null
 }
 
 export interface SectorEtfBoard {
@@ -194,6 +209,32 @@ function maTrendLabel(angles: SectorEtfMaAngles, stages: SectorEtfStages): strin
   if (upCount > downCount) return '上向き'
   if (downCount > upCount) return '下向き'
   return '中立'
+}
+
+function holdingTrendLabel(
+  stages: SectorEtfStages,
+  angles: SectorEtfMaAngles,
+  changePct: number | null,
+): SectorEtfHolding['trendLabel'] {
+  const dailyDirections = [angles.daily5, angles.daily25, angles.daily75].map(directionFromAngle)
+  const upCount = dailyDirections.filter((direction) => direction === 'up').length
+  const downCount = dailyDirections.filter((direction) => direction === 'down').length
+  if (stages.dailyA == null && changePct == null && upCount === 0 && downCount === 0) return '判定不足'
+  if ((changePct ?? 0) >= 3 && upCount >= 1) return '上昇'
+  if ((changePct ?? 0) <= -3 && downCount >= 1) return '下落'
+  if ((stages.dailyA === 1 || stages.dailyA === 6) && upCount >= 2) return '上昇'
+  if ((stages.dailyA === 3 || stages.dailyA === 4) && downCount >= 2) return '下落'
+  if ((changePct ?? 0) > 1 && upCount >= 1) return '上昇'
+  if ((changePct ?? 0) < -1 && downCount >= 1) return '下落'
+  return '横ばい'
+}
+
+function stageTransitionLabel(previous: number | null, current: number | null): string | null {
+  if (current == null && previous == null) return null
+  if (current == null) return `${previous ?? '-'}→-`
+  if (previous == null) return `-→${current}`
+  if (previous === current) return `${current}維持`
+  return `${previous}→${current}`
 }
 
 function buildMetric(
@@ -395,6 +436,184 @@ async function loadMetrics(tickers: readonly string[]): Promise<SectorEtfMetric[
     ))
 }
 
+async function enrichHoldings(
+  holdings: SectorEtfHolding[],
+  metric: SectorEtfMetric,
+): Promise<SectorEtfHolding[]> {
+  const analyzableTickers = Array.from(
+    new Set(
+      holdings
+        .map((holding) => normalizeTicker(holding.holdingTicker))
+        .filter((ticker) => /^\d{4}[A-Z]?$/.test(ticker)),
+    ),
+  )
+  if (analyzableTickers.length === 0) {
+    return holdings.map((holding) => ({
+      ...holding,
+      price: null,
+      prevClose: null,
+      changePct: null,
+      stages: {
+        dailyA: null,
+        dailyB: null,
+        weeklyA: null,
+        weeklyB: null,
+        monthlyA: null,
+        monthlyB: null,
+      },
+      stageCode: null,
+      previousDailyAStage: null,
+      dailyStageTransition: null,
+      maOrderDaily: null,
+      maOrderWeekly: null,
+      maOrderMonthly: null,
+      maAngles: {
+        daily5: null,
+        daily25: null,
+        daily75: null,
+        weekly5: null,
+        weekly13: null,
+        weekly25: null,
+        monthly3: null,
+        monthly5: null,
+        monthly10: null,
+      },
+      trendLabel: '判定不足',
+      contributionPctPoint: null,
+      contributionSharePct: null,
+      contributionAmount: null,
+    }))
+  }
+
+  const placeholders = inClause(analyzableTickers)
+  const [priceRows, snapshotRows] = await Promise.all([
+    execAll<PriceRankRow>(
+      `
+        SELECT ticker, date, close, rn
+        FROM (
+          SELECT
+            ticker,
+            date,
+            close,
+            ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY date DESC) AS rn
+          FROM ohlcv_daily
+          WHERE ticker IN (${placeholders})
+        )
+        WHERE rn <= 2
+      `,
+      analyzableTickers,
+    ),
+    execAll<SnapshotRankRow>(
+      `
+        SELECT *
+        FROM (
+          SELECT
+            ticker,
+            date,
+            ma_5, ma_25, ma_75, ma_150, ma_300,
+            weekly_ma_5, weekly_ma_13, weekly_ma_25, weekly_ma_50, weekly_ma_100,
+            monthly_ma_3, monthly_ma_5, monthly_ma_10, monthly_ma_20, monthly_ma_25,
+            daily_a_stage, daily_b_stage, weekly_a_stage, weekly_b_stage, monthly_a_stage, monthly_b_stage,
+            ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY date DESC) AS rn
+          FROM daily_snapshots
+          WHERE ticker IN (${placeholders})
+        )
+        WHERE rn <= 6
+      `,
+      analyzableTickers,
+    ),
+  ])
+
+  const pricesByTicker = new Map<string, PriceRankRow[]>()
+  const snapshotsByTicker = new Map<string, SnapshotRankRow[]>()
+  for (const row of priceRows) {
+    const list = pricesByTicker.get(row.ticker) ?? []
+    list.push(row)
+    pricesByTicker.set(row.ticker, list)
+  }
+  for (const row of snapshotRows) {
+    const list = snapshotsByTicker.get(row.ticker) ?? []
+    list.push(row)
+    snapshotsByTicker.set(row.ticker, list)
+  }
+
+  return holdings.map((holding) => {
+    const ticker = normalizeTicker(holding.holdingTicker)
+    const prices = pricesByTicker.get(ticker) ?? []
+    const snapshots = snapshotsByTicker.get(ticker) ?? []
+    const latestPrice = prices.find((row) => Number(row.rn) === 1)
+    const prevPrice = prices.find((row) => Number(row.rn) === 2)
+    const latestSnapshot = snapshots.find((row) => Number(row.rn) === 1)
+    const previousSnapshot = snapshots.find((row) => Number(row.rn) === 2)
+    const angleBase = [...snapshots].reverse().find((row) => Number(row.rn) > 1) ?? null
+    const angleDays = angleBase ? Math.max(1, Number(angleBase.rn) - 1) : 1
+    const price = toNumber(latestPrice?.close)
+    const prevClose = toNumber(prevPrice?.close)
+    const changePct = price != null && prevClose != null && prevClose > 0
+      ? ((price - prevClose) / prevClose) * 100
+      : null
+    const stages: SectorEtfStages = {
+      dailyA: toNumber(latestSnapshot?.daily_a_stage),
+      dailyB: toNumber(latestSnapshot?.daily_b_stage),
+      weeklyA: toNumber(latestSnapshot?.weekly_a_stage),
+      weeklyB: toNumber(latestSnapshot?.weekly_b_stage),
+      monthlyA: toNumber(latestSnapshot?.monthly_a_stage),
+      monthlyB: toNumber(latestSnapshot?.monthly_b_stage),
+    }
+    const maAngles: SectorEtfMaAngles = {
+      daily5: calculateAngle(toNumber(latestSnapshot?.ma_5), toNumber(angleBase?.ma_5), angleDays),
+      daily25: calculateAngle(toNumber(latestSnapshot?.ma_25), toNumber(angleBase?.ma_25), angleDays),
+      daily75: calculateAngle(toNumber(latestSnapshot?.ma_75), toNumber(angleBase?.ma_75), angleDays),
+      weekly5: calculateAngle(toNumber(latestSnapshot?.weekly_ma_5), toNumber(angleBase?.weekly_ma_5), angleDays),
+      weekly13: calculateAngle(toNumber(latestSnapshot?.weekly_ma_13), toNumber(angleBase?.weekly_ma_13), angleDays),
+      weekly25: calculateAngle(toNumber(latestSnapshot?.weekly_ma_25), toNumber(angleBase?.weekly_ma_25), angleDays),
+      monthly3: calculateAngle(toNumber(latestSnapshot?.monthly_ma_3), toNumber(angleBase?.monthly_ma_3), angleDays),
+      monthly5: calculateAngle(toNumber(latestSnapshot?.monthly_ma_5), toNumber(angleBase?.monthly_ma_5), angleDays),
+      monthly10: calculateAngle(toNumber(latestSnapshot?.monthly_ma_10), toNumber(angleBase?.monthly_ma_10), angleDays),
+    }
+    const contributionPctPoint = holding.weightPct != null && changePct != null
+      ? (holding.weightPct / 100) * changePct
+      : null
+    const contributionSharePct = contributionPctPoint != null && metric.changePct != null && Math.abs(metric.changePct) > 0.0001
+      ? (contributionPctPoint / metric.changePct) * 100
+      : null
+    const contributionAmount = contributionPctPoint != null && metric.prevClose != null
+      ? metric.prevClose * (contributionPctPoint / 100)
+      : null
+
+    return {
+      ...holding,
+      price,
+      prevClose,
+      changePct,
+      stages,
+      stageCode: stageCode(stages),
+      previousDailyAStage: toNumber(previousSnapshot?.daily_a_stage),
+      dailyStageTransition: stageTransitionLabel(toNumber(previousSnapshot?.daily_a_stage), stages.dailyA),
+      maOrderDaily: orderedLabel([
+        ['5日', toNumber(latestSnapshot?.ma_5)],
+        ['25日', toNumber(latestSnapshot?.ma_25)],
+        ['75日', toNumber(latestSnapshot?.ma_75)],
+      ]),
+      maOrderWeekly: orderedLabel([
+        ['5週', toNumber(latestSnapshot?.weekly_ma_5)],
+        ['13週', toNumber(latestSnapshot?.weekly_ma_13)],
+        ['25週', toNumber(latestSnapshot?.weekly_ma_25)],
+      ]),
+      maOrderMonthly: orderedLabel([
+        ['3月', toNumber(latestSnapshot?.monthly_ma_3)],
+        ['5月', toNumber(latestSnapshot?.monthly_ma_5)],
+        ['10月', toNumber(latestSnapshot?.monthly_ma_10)],
+      ]),
+      maAngles,
+      trendLabel: holdingTrendLabel(stages, maAngles, changePct),
+      contributionPctPoint,
+      contributionSharePct,
+      contributionAmount,
+    }
+  })
+}
+
 export async function getSectorEtfBoard(): Promise<SectorEtfBoard> {
   const tickers = SECTOR_ETF_CATALOG.map((item) => item.ticker)
   const metrics = await loadMetrics(tickers)
@@ -466,9 +685,10 @@ export async function getSectorEtfDetail(rawTicker: string): Promise<SectorEtfDe
       [catalog.ticker, latest.as_of_date, latest.as_of_date],
     )
     : []
+  const enrichedHoldings = await enrichHoldings(holdings, metric)
   return {
     metric,
-    holdings,
+    holdings: enrichedHoldings,
     sourceGuide: getSectorEtfSourceGuide(catalog.provider),
   }
 }

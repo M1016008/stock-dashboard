@@ -1,7 +1,7 @@
 // scripts/install-local-ml-learning.ts
 //
-// ローカルMacの launchd に、重いML再学習/検証ジョブを週次で登録する。
-// 日次は update-latest が軽量再学習、週次は2008年以降の広い検証を担当する。
+// ローカルMacの launchd に、重いML再学習/検証ジョブを日次で登録する。
+// update-latest の日次更新後に、2008年以降の広い学習・検証を実行する。
 
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -23,6 +23,8 @@ const pathEnv = [
   '/usr/sbin',
   '/sbin',
 ].join(':')
+const scheduleHour = Number(process.env.ML_LEARNING_HOUR ?? '3')
+const scheduleMinute = Number(process.env.ML_LEARNING_MINUTE ?? '0')
 
 function xmlEscape(value: string): string {
   return value
@@ -33,6 +35,22 @@ function xmlEscape(value: string): string {
     .replaceAll("'", '&apos;')
 }
 
+function calendar(hour: number, minute: number, weekday: number): string {
+  return [
+    '    <dict>',
+    `      <key>Weekday</key><integer>${weekday}</integer>`,
+    `      <key>Hour</key><integer>${hour}</integer>`,
+    `      <key>Minute</key><integer>${minute}</integer>`,
+    '    </dict>',
+  ].join('\n')
+}
+
+function weekdaySchedule(): string {
+  // launchd Weekday: 1=Monday ... 6=Saturday, 0/7=Sunday.
+  // Japanese exchange holidays are handled inside scripts/run-ml-learning.ts.
+  return [1, 2, 3, 4, 5].map((weekday) => calendar(scheduleHour, scheduleMinute, weekday)).join('\n')
+}
+
 fs.mkdirSync(launchAgentsDir, { recursive: true })
 fs.mkdirSync(logDir, { recursive: true })
 
@@ -40,9 +58,9 @@ const command = [
   `cd ${JSON.stringify(cwd)}`,
   `export PATH=${JSON.stringify(pathEnv)}`,
   'export USE_LOCAL_DB=1',
-  'export SQLITE_BUSY_RETRIES=30',
-  'export UPDATE_CHILD_TIMEOUT_MINUTES=240',
-  'npm run batch:ml-weekly-train',
+  'export SQLITE_BUSY_RETRIES=240',
+  'export UPDATE_CHILD_TIMEOUT_MINUTES=720',
+  'npm run batch:ml-learning-daily',
 ].join(' && ')
 
 const plist = `<?xml version="1.0" encoding="UTF-8"?>
@@ -61,11 +79,9 @@ const plist = `<?xml version="1.0" encoding="UTF-8"?>
     <string>${xmlEscape(command)}</string>
   </array>
   <key>StartCalendarInterval</key>
-  <dict>
-    <key>Weekday</key><integer>6</integer>
-    <key>Hour</key><integer>18</integer>
-    <key>Minute</key><integer>30</integer>
-  </dict>
+  <array>
+${weekdaySchedule()}
+  </array>
   <key>StandardOutPath</key>
   <string>${xmlEscape(path.join(logDir, 'ml-learning.log'))}</string>
   <key>StandardErrorPath</key>
@@ -88,5 +104,5 @@ execFileSync('launchctl', ['bootstrap', `gui/${uid}`, plistPath], { stdio: 'inhe
 execFileSync('launchctl', ['enable', `gui/${uid}/${label}`], { stdio: 'inherit' })
 
 console.log(`launchd registered: ${plistPath}`)
-console.log('schedule: every Saturday 18:30 JST')
+console.log(`schedule: Mon-Fri ${String(scheduleHour).padStart(2, '0')}:${String(scheduleMinute).padStart(2, '0')} JST; JP exchange holidays are skipped by the wrapper`)
 console.log(`logs: ${path.join(logDir, 'ml-learning.log')}`)

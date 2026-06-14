@@ -17,6 +17,7 @@
     "batch:us-update-latest": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/update-us-latest.ts",
     "auto-update-us:install": "tsx --env-file=.env.local scripts/install-local-us-auto-update.ts",
     "auto-ml:install": "tsx --env-file=.env.local scripts/install-local-ml-learning.ts",
+    "batch:ml-learning-daily": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/run-ml-learning.ts",
     "batch:ohlcv": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/batch-ohlcv.ts",
     "batch:ohlcv:fetch-only": "USE_LOCAL_DB=1 POST_OHLCV_REFRESH=0 tsx --env-file=.env.local scripts/batch-ohlcv.ts",
     "batch:post-ohlcv-refresh": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/refresh-after-ohlcv.ts",

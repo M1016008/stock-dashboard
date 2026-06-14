@@ -36,9 +36,20 @@ function fmtPct(value: number | null | undefined) {
   return `${value > 0 ? '+' : ''}${value.toFixed(2)}%`
 }
 
-function fmtNumber(value: number | null | undefined) {
+function fmtPctPoint(value: number | null | undefined) {
   if (value == null || !Number.isFinite(value)) return '---'
-  return Math.round(value).toLocaleString('ja-JP')
+  return `${value > 0 ? '+' : ''}${value.toFixed(2)}pt`
+}
+
+function fmtAngle(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(value)) return '---'
+  return `${value > 0 ? '+' : ''}${value}°`
+}
+
+function fmtContributionAmount(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(value)) return '---'
+  const sign = value > 0 ? '+' : value < 0 ? '-' : ''
+  return `${sign}¥${Math.abs(value).toLocaleString('ja-JP', { maximumFractionDigits: 2 })}`
 }
 
 function pctTone(value: number | null | undefined) {
@@ -46,6 +57,13 @@ function pctTone(value: number | null | undefined) {
   if (value > 0) return 'text-[var(--color-price-up)]'
   if (value < 0) return 'text-[var(--color-price-down)]'
   return 'text-[var(--color-text-secondary)]'
+}
+
+function trendTone(label: SectorEtfHolding['trendLabel']) {
+  if (label === '上昇') return 'border-[var(--color-price-up)] bg-emerald-50 text-[var(--color-price-up)]'
+  if (label === '下落') return 'border-[var(--color-price-down)] bg-red-50 text-[var(--color-price-down)]'
+  if (label === '横ばい') return 'border-[var(--color-border-default)] bg-white text-[var(--color-text-secondary)]'
+  return 'border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] text-[var(--color-text-tertiary)]'
 }
 
 function canLinkHolding(ticker: string) {
@@ -70,18 +88,118 @@ function HoldingName({ holding }: { holding: SectorEtfHolding }) {
   )
 }
 
-function HoldingsTable({ rows, compact = false }: { rows: SectorEtfHolding[]; compact?: boolean }) {
+function ContributionSummary({ holdings }: { holdings: SectorEtfHolding[] }) {
+  const ranked = holdings.filter((holding) => holding.contributionPctPoint != null)
+  const leaders = [...ranked]
+    .filter((holding) => (holding.contributionPctPoint ?? 0) > 0)
+    .sort((a, b) => (b.contributionPctPoint ?? 0) - (a.contributionPctPoint ?? 0))
+    .slice(0, 5)
+  const laggards = [...ranked]
+    .filter((holding) => (holding.contributionPctPoint ?? 0) < 0)
+    .sort((a, b) => (a.contributionPctPoint ?? 0) - (b.contributionPctPoint ?? 0))
+    .slice(0, 5)
+  const blocks = [
+    { title: '上昇寄与', rows: leaders, empty: '上昇寄与は未算出' },
+    { title: '下落寄与', rows: laggards, empty: '下落寄与は未算出' },
+  ]
+  return (
+    <div className="mb-3 grid grid-cols-1 gap-3 lg:grid-cols-2">
+      {blocks.map((block) => (
+        <div key={block.title} className="rounded-[8px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] p-3">
+          <div className="text-[11px] font-bold text-[var(--color-text-tertiary)]">{block.title}</div>
+          {block.rows.length > 0 ? (
+            <div className="mt-2 space-y-2">
+              {block.rows.map((holding) => (
+                <div key={`${block.title}-${holding.id}`} className="flex items-center justify-between gap-3 rounded-[6px] bg-white px-2 py-2">
+                  <div className="min-w-0">
+                    <div className="truncate text-[12px] font-bold text-[var(--color-text-primary)]">
+                      {holding.holdingTicker} {holding.holdingName}
+                    </div>
+                    <div className="text-[10px] font-semibold text-[var(--color-text-tertiary)]">
+                      組入 {fmtPct(holding.weightPct)} / 騰落 {fmtPct(holding.changePct)}
+                    </div>
+                  </div>
+                  <div className={`shrink-0 text-right font-mono text-[12px] font-bold ${pctTone(holding.contributionPctPoint)}`}>
+                    {fmtPctPoint(holding.contributionPctPoint)}
+                    <div className="text-[10px] font-semibold">{fmtContributionAmount(holding.contributionAmount)}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="mt-2 rounded-[6px] bg-white px-3 py-4 text-center text-[12px] font-bold text-[var(--color-text-tertiary)]">
+              {block.empty}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function StageCell({ holding }: { holding: SectorEtfHolding }) {
+  const values = [
+    holding.stages.dailyA,
+    holding.stages.dailyB,
+    holding.stages.weeklyA,
+    holding.stages.weeklyB,
+    holding.stages.monthlyA,
+    holding.stages.monthlyB,
+  ]
+  if (holding.stageCode == null) return <span className="text-[var(--color-text-tertiary)]">---</span>
+  return (
+    <div className="space-y-1">
+      <StageDots values={values} size={18} />
+      <div className="font-mono text-[11px] font-bold text-[var(--color-brand-900)]">{holding.stageCode}</div>
+    </div>
+  )
+}
+
+function MaHoldingCell({ holding }: { holding: SectorEtfHolding }) {
+  const angles = [
+    ['5日', holding.maAngles.daily5],
+    ['25日', holding.maAngles.daily25],
+    ['75日', holding.maAngles.daily75],
+  ] as const
+  return (
+    <div className="space-y-1">
+      <div className="max-w-[210px] truncate text-[11px] font-bold text-[var(--color-text-primary)]">
+        {holding.maOrderDaily ?? 'MA不足'}
+      </div>
+      <div className="flex flex-wrap gap-1">
+        {angles.map(([label, angle]) => (
+          <span
+            key={`${holding.id}-${label}`}
+            className={`rounded-[3px] border border-[var(--color-border-soft)] bg-white px-1.5 py-0.5 font-mono text-[10px] font-bold ${pctTone(angle)}`}
+          >
+            {label} {fmtAngle(angle)}
+          </span>
+        ))}
+      </div>
+      <div className="max-w-[210px] truncate text-[10px] font-semibold text-[var(--color-text-tertiary)]">
+        週 {holding.maOrderWeekly ?? '-'} / 月 {holding.maOrderMonthly ?? '-'}
+      </div>
+    </div>
+  )
+}
+
+function HoldingsTable({ rows }: { rows: SectorEtfHolding[] }) {
   return (
     <div className="overflow-x-auto">
-      <table className="w-full min-w-[720px] text-[12px]">
+      <table className="w-full min-w-[1480px] text-[12px]">
         <thead>
           <tr className="border-b border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] text-left text-[10px] font-bold text-[var(--color-text-tertiary)]">
             <th className="py-2 pl-3 pr-2">順位</th>
             <th className="py-2 pr-2">コード</th>
             <th className="py-2 pr-2">構成銘柄</th>
             <th className="py-2 pr-2 text-right">組入比率</th>
-            <th className="py-2 pr-2 text-right">株数</th>
-            <th className="py-2 pr-3 text-right">評価額</th>
+            <th className="py-2 pr-2 text-right">騰落率</th>
+            <th className="py-2 pr-2">6ステージ</th>
+            <th className="py-2 pr-2">直近遷移</th>
+            <th className="py-2 pr-2 text-right">ETF寄与</th>
+            <th className="py-2 pr-2 text-right">寄与幅</th>
+            <th className="py-2 pr-2">トレンド</th>
+            <th className="py-2 pr-3">MA並び・角度</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-[var(--color-border-soft)]">
@@ -99,11 +217,34 @@ function HoldingsTable({ rows, compact = false }: { rows: SectorEtfHolding[]; co
               <td className="py-2 pr-2 text-right font-mono font-bold text-[var(--color-brand-900)]">
                 {fmtPct(holding.weightPct)}
               </td>
-              <td className="py-2 pr-2 text-right font-mono text-[var(--color-text-secondary)]">
-                {compact ? '---' : fmtNumber(holding.shares)}
+              <td className={`py-2 pr-2 text-right font-mono font-bold ${pctTone(holding.changePct)}`}>
+                {fmtPct(holding.changePct)}
+                <div className="text-[10px] font-semibold text-[var(--color-text-tertiary)]">
+                  {fmtPrice(holding.price)}
+                </div>
               </td>
-              <td className="py-2 pr-3 text-right font-mono text-[var(--color-text-secondary)]">
-                {compact ? '---' : fmtNumber(holding.marketValue)}
+              <td className="py-2 pr-2">
+                <StageCell holding={holding} />
+              </td>
+              <td className="py-2 pr-2 font-mono text-[12px] font-bold text-[var(--color-text-primary)]">
+                {holding.dailyStageTransition ?? '---'}
+              </td>
+              <td className={`py-2 pr-2 text-right font-mono font-bold ${pctTone(holding.contributionPctPoint)}`}>
+                {fmtPctPoint(holding.contributionPctPoint)}
+                <div className="text-[10px] font-semibold text-[var(--color-text-tertiary)]">
+                  {holding.contributionSharePct == null ? 'ETF比 ---' : `ETF比 ${fmtPct(holding.contributionSharePct)}`}
+                </div>
+              </td>
+              <td className={`py-2 pr-2 text-right font-mono font-bold ${pctTone(holding.contributionAmount)}`}>
+                {fmtContributionAmount(holding.contributionAmount)}
+              </td>
+              <td className="py-2 pr-2">
+                <span className={`inline-flex rounded-full border px-2 py-1 text-[11px] font-bold ${trendTone(holding.trendLabel)}`}>
+                  {holding.trendLabel}
+                </span>
+              </td>
+              <td className="py-2 pr-3">
+                <MaHoldingCell holding={holding} />
               </td>
             </tr>
           ))}
@@ -239,12 +380,13 @@ export default async function SectorEtfDetailPage({ params }: PageProps) {
 
         <Card size="sm" inset>
           <CardHeader
-            title="構成銘柄・組入比率"
-            hint={holdings.length > 0 ? `${metric.holdings.asOfDate ?? '日付不明'} · 上位20件を表示` : '構成銘柄未取得'}
+            title="構成銘柄・組入比率・寄与分析"
+            hint={holdings.length > 0 ? `${metric.holdings.asOfDate ?? '日付不明'} · 寄与は組入比率と直近騰落率から概算` : '構成銘柄未取得'}
           />
           <div className="px-3 pb-3">
             {topHoldings.length > 0 ? (
               <>
+                <ContributionSummary holdings={holdings} />
                 <HoldingsTable rows={topHoldings} />
                 {holdings.length > topHoldings.length && (
                   <details className="mt-3 rounded-[8px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)]">
@@ -252,7 +394,7 @@ export default async function SectorEtfDetailPage({ params }: PageProps) {
                       全{holdings.length.toLocaleString()}件を表示
                     </summary>
                     <div className="p-3">
-                      <HoldingsTable rows={holdings} compact />
+                      <HoldingsTable rows={holdings} />
                     </div>
                   </details>
                 )}
