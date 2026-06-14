@@ -52,6 +52,18 @@ async function main() {
       date: await maxDate(`SELECT MAX(as_of_date) AS date FROM serving_ml_physics_candidates`),
     },
     {
+      key: 'serving_current_similars',
+      date: await maxDate(`SELECT MAX(as_of_date) AS date FROM serving_current_similars`),
+    },
+    {
+      key: 'serving_ml_candidates',
+      date: await maxDate(`SELECT MAX(as_of_date) AS date FROM serving_ml_candidates`),
+    },
+    {
+      key: 'ml_predictions',
+      date: await maxDate(`SELECT MAX(as_of_date) AS date FROM ml_predictions`),
+    },
+    {
       key: 'ml_feature_health_checks',
       date: await maxDate(`SELECT MAX(check_date) AS date FROM ml_feature_health_checks`),
     },
