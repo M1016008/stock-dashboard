@@ -32,6 +32,11 @@ function pctTone(value: number | null | undefined) {
   return 'text-[var(--color-text-secondary)]'
 }
 
+function fmtScore(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(value)) return '---'
+  return value.toFixed(2)
+}
+
 function sourceBadge(metric: SectorEtfMetric) {
   if (metric.holdings.count > 0) {
     return `${metric.holdings.asOfDate ?? '日付不明'} · ${metric.holdings.count.toLocaleString()}件`
@@ -79,6 +84,18 @@ function EtfCard({ metric }: { metric: SectorEtfMetric }) {
           <div className="font-bold text-[var(--color-text-tertiary)]">前日比</div>
           <div className={`mt-1 font-mono text-[15px] font-bold ${pctTone(metric.changePct)}`}>
             {fmtPct(metric.changePct)}
+          </div>
+        </div>
+        <div className="rounded-[6px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-2 py-1.5">
+          <div className="font-bold text-[var(--color-text-tertiary)]">PMS</div>
+          <div className={`mt-1 font-mono text-[15px] font-bold ${pctTone(metric.physicalMomentum.pms)}`}>
+            {fmtScore(metric.physicalMomentum.pms)}
+          </div>
+        </div>
+        <div className="rounded-[6px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-2 py-1.5">
+          <div className="font-bold text-[var(--color-text-tertiary)]">PFS/PES</div>
+          <div className="mt-1 font-mono text-[12px] font-bold text-[var(--color-text-primary)]">
+            {fmtScore(metric.physicalMomentum.pfs)} / {fmtScore(metric.physicalMomentum.pes)}
           </div>
         </div>
       </div>

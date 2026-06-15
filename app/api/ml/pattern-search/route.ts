@@ -21,6 +21,15 @@ type FeatureRow = {
   market_segment: string | null
   sector17_name: string | null
   sector33_name: string | null
+  velocity: number | null
+  acceleration: number | null
+  momentum: number | null
+  force: number | null
+  ma_angle_avg: number | null
+  energy: number | null
+  physical_momentum_score: number | null
+  physical_force_score: number | null
+  physical_energy_score: number | null
 }
 
 type FeaturePoint = FeatureRow & {
@@ -124,6 +133,15 @@ function metric(profile: AnyProfile | null, key: string): number | null {
     case 'priceToSma25': return finite(profile.pricePosition?.sma25) ? profile.pricePosition.sma25 : null
     case 'bundleWidthPct': return finite(profile.bundleWidthPct) ? profile.bundleWidthPct : null
     case 'bundleWidthVelocity5': return finite(profile.bundleWidthVelocity5) ? profile.bundleWidthVelocity5 : null
+    case 'physicalVelocity': return finite(profile.physicalMomentum?.velocity) ? profile.physicalMomentum.velocity : null
+    case 'physicalAcceleration': return finite(profile.physicalMomentum?.acceleration) ? profile.physicalMomentum.acceleration : null
+    case 'physicalMomentum': return finite(profile.physicalMomentum?.momentum) ? profile.physicalMomentum.momentum : null
+    case 'physicalForce': return finite(profile.physicalMomentum?.force) ? profile.physicalMomentum.force : null
+    case 'physicalMaAngleAvg': return finite(profile.physicalMomentum?.maAngleAvg) ? profile.physicalMomentum.maAngleAvg : null
+    case 'physicalEnergy': return finite(profile.physicalMomentum?.energy) ? profile.physicalMomentum.energy : null
+    case 'physicalMomentumScore': return finite(profile.physicalMomentum?.pms) ? profile.physicalMomentum.pms : null
+    case 'physicalForceScore': return finite(profile.physicalMomentum?.pfs) ? profile.physicalMomentum.pfs : null
+    case 'physicalEnergyScore': return finite(profile.physicalMomentum?.pes) ? profile.physicalMomentum.pes : null
     default: return null
   }
 }
@@ -154,6 +172,12 @@ function trajectoryScore(base: FeaturePoint[], candidate: FeaturePoint[]): numbe
     { key: 'priceToSma25', scale: 14 },
     { key: 'bundleWidthPct', scale: 16 },
     { key: 'bundleWidthVelocity5', scale: 8 },
+    { key: 'physicalVelocity', scale: 0.18 },
+    { key: 'physicalAcceleration', scale: 0.08 },
+    { key: 'physicalMaAngleAvg', scale: 0.10 },
+    { key: 'physicalMomentumScore', scale: 2.5 },
+    { key: 'physicalForceScore', scale: 2.5 },
+    { key: 'physicalEnergyScore', scale: 2.5 },
   ]
   return average(specs.map((spec) => closeness(delta(base, spec.key), delta(candidate, spec.key), spec.scale)))
 }
@@ -176,6 +200,15 @@ function summarizeProfile(row: FeaturePoint) {
     gap5To25Pct: metric(row.profile, 'gap5To25Pct'),
     gap5To25Velocity5: metric(row.profile, 'gap5To25Velocity5'),
     priceToSma25: metric(row.profile, 'priceToSma25'),
+    physicalVelocity: metric(row.profile, 'physicalVelocity'),
+    physicalAcceleration: metric(row.profile, 'physicalAcceleration'),
+    physicalMomentum: metric(row.profile, 'physicalMomentum'),
+    physicalForce: metric(row.profile, 'physicalForce'),
+    physicalMaAngleAvg: metric(row.profile, 'physicalMaAngleAvg'),
+    physicalEnergy: metric(row.profile, 'physicalEnergy'),
+    physicalMomentumScore: metric(row.profile, 'physicalMomentumScore'),
+    physicalForceScore: metric(row.profile, 'physicalForceScore'),
+    physicalEnergyScore: metric(row.profile, 'physicalEnergyScore'),
   }
 }
 
@@ -186,13 +219,35 @@ function stagePath(sequence: FeaturePoint[]): StagePoint[] {
     .filter((point, index, arr) => index === 0 || arr[index - 1]?.code !== point.code)
 }
 
+function toFeaturePoint(row: FeatureRow): FeaturePoint {
+  const profile = parseJson<AnyProfile | null>(row.feature_json, null)
+  if (!profile) return { ...row, profile }
+
+  profile.physicalMomentum = {
+    velocity: row.velocity,
+    acceleration: row.acceleration,
+    momentum: row.momentum,
+    force: row.force,
+    maAngleAvg: row.ma_angle_avg,
+    energy: row.energy,
+    pms: row.physical_momentum_score,
+    pfs: row.physical_force_score,
+    pes: row.physical_energy_score,
+  }
+
+  return { ...row, profile }
+}
+
 async function loadFeatureSequence(ticker: string, startDate: string, endDate: string): Promise<FeaturePoint[]> {
   const rows = await execAll<FeatureRow>(
     `
     SELECT f.ticker, f.date, f.stage_code, f.feature_json, f.vector_json,
-           u.name, u.market_segment, u.sector17_name, u.sector33_name
+           u.name, u.market_segment, u.sector17_name, u.sector33_name,
+           pm.velocity, pm.acceleration, pm.momentum, pm.force, pm.ma_angle_avg, pm.energy,
+           pm.physical_momentum_score, pm.physical_force_score, pm.physical_energy_score
     FROM ml_feature_vectors_v2 f
     LEFT JOIN ticker_universe u ON u.ticker = f.ticker
+    LEFT JOIN physical_momentum_metrics pm ON pm.market = 'JP' AND pm.symbol = f.ticker AND pm.date = f.date
     WHERE f.feature_set = ?
       AND f.ticker = ?
       AND f.date >= ?
@@ -201,7 +256,7 @@ async function loadFeatureSequence(ticker: string, startDate: string, endDate: s
     `,
     [ML_PHYSICS_FEATURE_SET, ticker, startDate, endDate],
   )
-  return rows.map((row) => ({ ...row, profile: parseJson<AnyProfile | null>(row.feature_json, null) }))
+  return rows.map(toFeaturePoint)
 }
 
 async function latestFeatureDate(asOfDate: string | null): Promise<string | null> {
@@ -238,9 +293,12 @@ async function loadLatestMarketRows(endDate: string, stageCodeFilter?: string | 
   const rows = await execAll<FeatureRow>(
     `
     SELECT f.ticker, f.date, f.stage_code, f.feature_json, f.vector_json,
-           u.name, u.market_segment, u.sector17_name, u.sector33_name
+           u.name, u.market_segment, u.sector17_name, u.sector33_name,
+           pm.velocity, pm.acceleration, pm.momentum, pm.force, pm.ma_angle_avg, pm.energy,
+           pm.physical_momentum_score, pm.physical_force_score, pm.physical_energy_score
     FROM ml_feature_vectors_v2 f
     LEFT JOIN ticker_universe u ON u.ticker = f.ticker
+    LEFT JOIN physical_momentum_metrics pm ON pm.market = 'JP' AND pm.symbol = f.ticker AND pm.date = f.date
     WHERE f.feature_set = ?
       AND f.date = ?
       ${dailyStage ? 'AND substr(f.stage_code, 1, 1) = ?' : ''}
@@ -248,7 +306,7 @@ async function loadLatestMarketRows(endDate: string, stageCodeFilter?: string | 
     `,
     dailyStage ? [ML_PHYSICS_FEATURE_SET, endDate, dailyStage] : [ML_PHYSICS_FEATURE_SET, endDate],
   )
-  return rows.map((row) => ({ ...row, profile: parseJson<AnyProfile | null>(row.feature_json, null) }))
+  return rows.map(toFeaturePoint)
 }
 
 async function loadMarketRows(startDate: string, endDate: string, tickers: string[]): Promise<FeaturePoint[]> {
@@ -257,9 +315,12 @@ async function loadMarketRows(startDate: string, endDate: string, tickers: strin
   const rows = await execAll<FeatureRow>(
     `
     SELECT f.ticker, f.date, f.stage_code, f.feature_json, f.vector_json,
-           u.name, u.market_segment, u.sector17_name, u.sector33_name
+           u.name, u.market_segment, u.sector17_name, u.sector33_name,
+           pm.velocity, pm.acceleration, pm.momentum, pm.force, pm.ma_angle_avg, pm.energy,
+           pm.physical_momentum_score, pm.physical_force_score, pm.physical_energy_score
     FROM ml_feature_vectors_v2 f
     LEFT JOIN ticker_universe u ON u.ticker = f.ticker
+    LEFT JOIN physical_momentum_metrics pm ON pm.market = 'JP' AND pm.symbol = f.ticker AND pm.date = f.date
     WHERE f.feature_set = ?
       AND f.date >= ?
       AND f.date <= ?
@@ -268,7 +329,7 @@ async function loadMarketRows(startDate: string, endDate: string, tickers: strin
     `,
     [ML_PHYSICS_FEATURE_SET, startDate, endDate, ...tickers],
   )
-  return rows.map((row) => ({ ...row, profile: parseJson<AnyProfile | null>(row.feature_json, null) }))
+  return rows.map(toFeaturePoint)
 }
 
 async function loadOutcomes(ticker: string, date: string): Promise<OutcomeRow[]> {

@@ -11,6 +11,9 @@ export interface SectorHeatmapRow {
   avg_change: number
   advancing_count: number
   declining_count: number
+  avg_pms: number | null
+  avg_pfs: number | null
+  avg_pes: number | null
 }
 
 export interface SectorPeriodSummary {
@@ -40,6 +43,9 @@ export type SectorConstituentSortKey =
   | 'marginType'
   | 'stageCode'
   | 'marketSegment'
+  | 'pms'
+  | 'pfs'
+  | 'pes'
 
 export type SectorConstituentSortDir = 'asc' | 'desc'
 
@@ -62,6 +68,9 @@ export interface SectorConstituentRow {
   weeklyBStage: number | null
   monthlyAStage: number | null
   monthlyBStage: number | null
+  pms: number | null
+  pfs: number | null
+  pes: number | null
 }
 
 export interface SectorConstituentSummary {
@@ -70,6 +79,9 @@ export interface SectorConstituentSummary {
   avgChangePct: number | null
   totalVolume: number
   avgVolume30: number | null
+  avgPms: number | null
+  avgPfs: number | null
+  avgPes: number | null
 }
 
 export interface SectorConstituentResult {
@@ -178,10 +190,14 @@ export async function getSectorHeatmapRows(
           ${cols.name} AS sector_name,
           CASE
             WHEN base_px.close > 0 THEN 100.0 * (latest_px.close - base_px.close) / base_px.close
-          END AS change_pct
+          END AS change_pct,
+          pm.physical_momentum_score AS pms,
+          pm.physical_force_score AS pfs,
+          pm.physical_energy_score AS pes
         FROM ticker_universe tu
         JOIN latest_px ON latest_px.ticker = tu.ticker
         JOIN base_px ON base_px.ticker = tu.ticker
+        LEFT JOIN physical_momentum_metrics pm ON pm.market = 'JP' AND pm.symbol = tu.ticker AND pm.date = ?
         WHERE tu.active = 1
           AND ${cols.hasName}
           ${universe.sql ? `AND ${universe.sql}` : ''}
@@ -192,12 +208,15 @@ export async function getSectorHeatmapRows(
         COUNT(*) AS n_stocks,
         COALESCE(AVG(change_pct), 0) AS avg_change,
         SUM(CASE WHEN change_pct > 0 THEN 1 ELSE 0 END) AS advancing_count,
-        SUM(CASE WHEN change_pct < 0 THEN 1 ELSE 0 END) AS declining_count
+        SUM(CASE WHEN change_pct < 0 THEN 1 ELSE 0 END) AS declining_count,
+        AVG(pms) AS avg_pms,
+        AVG(pfs) AS avg_pfs,
+        AVG(pes) AS avg_pes
       FROM priced
       GROUP BY sector_code, sector_name
       ORDER BY avg_change DESC
     `,
-    [latestDate, baseDate, ...universe.params],
+    [latestDate, baseDate, latestDate, ...universe.params],
   )
 }
 
@@ -236,7 +255,10 @@ function normalizeSortKey(value: string | null | undefined): SectorConstituentSo
     value === 'avgVolume60' ||
     value === 'marginType' ||
     value === 'stageCode' ||
-    value === 'marketSegment'
+    value === 'marketSegment' ||
+    value === 'pms' ||
+    value === 'pfs' ||
+    value === 'pes'
   ) {
     return value
   }
@@ -261,6 +283,9 @@ function constituentOrderBy(sortKey: SectorConstituentSortKey, sortDir: SectorCo
     marginType: `marginType IS NULL ASC, marginType ${dir}, ticker ASC`,
     stageCode: `stageCode IS NULL ASC, stageCode ${dir}, ticker ASC`,
     marketSegment: `marketSegment IS NULL ASC, marketSegment ${dir}, ticker ASC`,
+    pms: `pms IS NULL ASC, pms ${dir}, ticker ASC`,
+    pfs: `pfs IS NULL ASC, pfs ${dir}, ticker ASC`,
+    pes: `pes IS NULL ASC, pes ${dir}, ticker ASC`,
   }
   return orderMap[sortKey] ?? `changePct IS NULL ${nulls}, changePct ${dir}, ticker ASC`
 }
@@ -301,7 +326,7 @@ export async function getSectorConstituents({
   const universe = universeSqlCondition('tu.ticker', universeFilter)
   const cleanMarginType = marginType?.trim() || null
   const maxRows = Math.min(1000, Math.max(1, Math.floor(limit)))
-  const params: Array<string | number> = [latestDate, baseDate, latestDate, latestDate, latestDate, sectorName]
+  const params: Array<string | number> = [latestDate, baseDate, latestDate, latestDate, latestDate, latestDate, sectorName]
   if (cleanMarginType) params.push(cleanMarginType)
   params.push(...universe.params)
   params.push(maxRows)
@@ -382,11 +407,15 @@ export async function getSectorConstituents({
         latest_snap.weekly_a_stage AS weeklyAStage,
         latest_snap.weekly_b_stage AS weeklyBStage,
         latest_snap.monthly_a_stage AS monthlyAStage,
-        latest_snap.monthly_b_stage AS monthlyBStage
+        latest_snap.monthly_b_stage AS monthlyBStage,
+        pm.physical_momentum_score AS pms,
+        pm.physical_force_score AS pfs,
+        pm.physical_energy_score AS pes
       FROM ticker_universe tu
       JOIN latest_px ON latest_px.ticker = tu.ticker
       JOIN base_px ON base_px.ticker = tu.ticker
       LEFT JOIN latest_snap ON latest_snap.ticker = tu.ticker
+      LEFT JOIN physical_momentum_metrics pm ON pm.market = 'JP' AND pm.symbol = tu.ticker AND pm.date = ?
       WHERE tu.active = 1
         AND ${cols.hasName}
         AND ${cols.name} = ?
@@ -402,6 +431,9 @@ export async function getSectorConstituents({
   const totalVolume = rows.reduce((sum, row) => sum + (row.volume ?? 0), 0)
   const avgChangeValues = rows.map((row) => row.changePct).filter((value): value is number => value != null && Number.isFinite(value))
   const avgVolumeValues = rows.map((row) => row.avgVolume30).filter((value): value is number => value != null && Number.isFinite(value))
+  const pmsValues = rows.map((row) => row.pms).filter((value): value is number => value != null && Number.isFinite(value))
+  const pfsValues = rows.map((row) => row.pfs).filter((value): value is number => value != null && Number.isFinite(value))
+  const pesValues = rows.map((row) => row.pes).filter((value): value is number => value != null && Number.isFinite(value))
   const marginCounts = new Map<string, number>()
   for (const row of rows) {
     const key = row.marginType?.trim() || '未設定'
@@ -428,6 +460,15 @@ export async function getSectorConstituents({
       totalVolume,
       avgVolume30: avgVolumeValues.length > 0
         ? avgVolumeValues.reduce((sum, value) => sum + value, 0) / avgVolumeValues.length
+        : null,
+      avgPms: pmsValues.length > 0
+        ? pmsValues.reduce((sum, value) => sum + value, 0) / pmsValues.length
+        : null,
+      avgPfs: pfsValues.length > 0
+        ? pfsValues.reduce((sum, value) => sum + value, 0) / pfsValues.length
+        : null,
+      avgPes: pesValues.length > 0
+        ? pesValues.reduce((sum, value) => sum + value, 0) / pesValues.length
         : null,
     },
   }

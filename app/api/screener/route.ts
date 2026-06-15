@@ -61,6 +61,13 @@ interface SnapshotRow {
   weekly_b_stage: number | null
   monthly_a_stage: number | null
   monthly_b_stage: number | null
+  physical_momentum_score: number | null
+  physical_force_score: number | null
+  physical_energy_score: number | null
+  physical_momentum_rank: number | null
+  physical_momentum_prev_score: number | null
+  physical_acceleration: number | null
+  physical_force: number | null
 }
 
 interface ScreenerStockRow {
@@ -105,6 +112,13 @@ interface ScreenerStockRow {
   weekly_b_stage: number | null
   monthly_a_stage: number | null
   monthly_b_stage: number | null
+  physicalMomentumScore: number | null
+  physicalForceScore: number | null
+  physicalEnergyScore: number | null
+  physicalMomentumRank: number | null
+  physicalMomentumTrend: 'rising' | 'falling' | 'flat' | null
+  physicalAcceleration: number | null
+  physicalForce: number | null
 }
 
 type ScreenerSortKey =
@@ -151,14 +165,28 @@ async function loadSnapshotByDate(date: string): Promise<SnapshotRow[]> {
             SELECT date
             FROM (
               SELECT DISTINCT date
-              FROM ohlcv_daily
-              WHERE date <= ?
-              ORDER BY date DESC
-              LIMIT 21
-            )
-            ORDER BY date ASC
-            LIMIT 1
-          ) AS d20
+          FROM ohlcv_daily
+          WHERE date <= ?
+          ORDER BY date DESC
+          LIMIT 21
+        )
+        ORDER BY date ASC
+        LIMIT 1
+      ) AS d20
+      ),
+      pms_ranked AS (
+        SELECT
+          symbol,
+          physical_momentum_score,
+          physical_force_score,
+          physical_energy_score,
+          acceleration,
+          force,
+          RANK() OVER (ORDER BY physical_momentum_score DESC) AS physical_momentum_rank
+        FROM physical_momentum_metrics
+        WHERE market = 'JP'
+          AND date = ?
+          AND physical_momentum_score IS NOT NULL
       )
     SELECT
       s.date,
@@ -268,7 +296,14 @@ async function loadSnapshotByDate(date: string): Promise<SnapshotRow[]> {
       s.weekly_a_stage,
       s.weekly_b_stage,
       s.monthly_a_stage,
-      s.monthly_b_stage
+      s.monthly_b_stage,
+      pm.physical_momentum_score,
+      pm.physical_force_score,
+      pm.physical_energy_score,
+      pm.physical_momentum_rank,
+      pm_prev.physical_momentum_score AS physical_momentum_prev_score,
+      pm.acceleration AS physical_acceleration,
+      pm.force AS physical_force
     FROM daily_snapshots s
     LEFT JOIN ohlcv_daily cur ON cur.ticker = s.ticker AND cur.date = s.date
     CROSS JOIN prev_dates pd
@@ -280,9 +315,11 @@ async function loadSnapshotByDate(date: string): Promise<SnapshotRow[]> {
     LEFT JOIN ohlcv_daily ytd ON ytd.ticker = s.ticker AND ytd.date = pd.ytd
     LEFT JOIN ticker_universe u ON u.ticker = s.ticker
     LEFT JOIN daily_snapshots prev_s ON prev_s.ticker = s.ticker AND prev_s.date = pd.d1
+    LEFT JOIN pms_ranked pm ON pm.symbol = s.ticker
+    LEFT JOIN physical_momentum_metrics pm_prev ON pm_prev.market = 'JP' AND pm_prev.symbol = s.ticker AND pm_prev.date = pd.d1
     WHERE s.date = ?
     `,
-    [date, date, date, date, date, date, date, date],
+    [date, date, date, date, date, date, date, date, date],
   )
 }
 
@@ -387,6 +424,20 @@ function buildResultRow(s: SnapshotRow, sectorMap: Map<string, SectorEntry>): Sc
     weekly_b_stage: s.weekly_b_stage,
     monthly_a_stage: s.monthly_a_stage,
     monthly_b_stage: s.monthly_b_stage,
+    physicalMomentumScore: s.physical_momentum_score,
+    physicalForceScore: s.physical_force_score,
+    physicalEnergyScore: s.physical_energy_score,
+    physicalMomentumRank: s.physical_momentum_rank,
+    physicalMomentumTrend:
+      s.physical_momentum_score == null || s.physical_momentum_prev_score == null
+        ? null
+        : s.physical_momentum_score > s.physical_momentum_prev_score
+          ? 'rising'
+          : s.physical_momentum_score < s.physical_momentum_prev_score
+            ? 'falling'
+            : 'flat',
+    physicalAcceleration: s.physical_acceleration,
+    physicalForce: s.physical_force,
   }
 }
 
@@ -617,6 +668,10 @@ const SORT_KEYS = new Set<ScreenerSortKey>([
   'sma25Angle',
   'sma75Angle',
   'sma200Angle',
+  'physicalMomentumScore',
+  'physicalForceScore',
+  'physicalEnergyScore',
+  'physicalMomentumRank',
   'earningsLastDate',
   'earningsLastElapsedDays',
   'earningsNextDate',
@@ -658,6 +713,13 @@ export async function GET(request: NextRequest) {
     const priceMax = numParam(searchParams, 'priceMax')
     const volumeMin = numParam(searchParams, 'volumeMin')
     const volumeMax = numParam(searchParams, 'volumeMax')
+    const pmsMin = numParam(searchParams, 'pmsMin')
+    const pfsMin = numParam(searchParams, 'pfsMin')
+    const pesMin = numParam(searchParams, 'pesMin')
+    const accelerationPositive = searchParams.get('accelerationPositive') === '1'
+    const forcePositive = searchParams.get('forcePositive') === '1'
+    const stage23Candidate = searchParams.get('stage23Candidate') === '1'
+    const pmsTrend = searchParams.get('pmsTrend')
     const rawLimit = numParam(searchParams, 'limit')
     const rawOffset = numParam(searchParams, 'offset')
     const limit = rawLimit == null ? null : Math.min(5000, Math.max(1, Math.floor(rawLimit)))
@@ -718,6 +780,21 @@ export async function GET(request: NextRequest) {
     if (priceMax != null) filtered = filtered.filter((r) => (r.price ?? Infinity) <= priceMax)
     if (volumeMin != null) filtered = filtered.filter((r) => (r.volume ?? -Infinity) >= volumeMin)
     if (volumeMax != null) filtered = filtered.filter((r) => (r.volume ?? Infinity) <= volumeMax)
+    if (pmsMin != null) filtered = filtered.filter((r) => (r.physicalMomentumScore ?? -Infinity) >= pmsMin)
+    if (pfsMin != null) filtered = filtered.filter((r) => (r.physicalForceScore ?? -Infinity) >= pfsMin)
+    if (pesMin != null) filtered = filtered.filter((r) => (r.physicalEnergyScore ?? -Infinity) >= pesMin)
+    if (accelerationPositive) filtered = filtered.filter((r) => (r.physicalAcceleration ?? -Infinity) > 0)
+    if (forcePositive) filtered = filtered.filter((r) => (r.physicalForce ?? -Infinity) > 0)
+    if (pmsTrend === 'rising' || pmsTrend === 'falling') {
+      filtered = filtered.filter((r) => r.physicalMomentumTrend === pmsTrend)
+    }
+    if (stage23Candidate) {
+      filtered = filtered.filter((r) => (
+        (r.daily_a_stage === 2 || r.daily_a_stage === 3)
+        && (r.physicalMomentumScore ?? -Infinity) > 0
+        && (r.physicalForceScore ?? -Infinity) > 0
+      ))
+    }
 
     for (const [key, vals] of Object.entries(stageFilter)) {
       filtered = filtered.filter((r) => {
@@ -754,6 +831,13 @@ export async function GET(request: NextRequest) {
         priceMax,
         volumeMin,
         volumeMax,
+        pmsMin,
+        pfsMin,
+        pesMin,
+        accelerationPositive,
+        forcePositive,
+        stage23Candidate,
+        pmsTrend,
         sort: sortKey,
         dir: sortKey ? (sortDir === 1 ? 'asc' : 'desc') : null,
         limit,

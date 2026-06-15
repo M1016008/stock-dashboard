@@ -45,7 +45,19 @@ function fmtVol(value: number | null | undefined) {
   return value.toLocaleString('ja-JP')
 }
 
+function fmtScore(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(value)) return '---'
+  return value.toFixed(2)
+}
+
 function toneForPct(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(value)) return 'text-[var(--color-text-secondary)]'
+  if (value > 0) return 'text-[var(--color-price-up)]'
+  if (value < 0) return 'text-[var(--color-price-down)]'
+  return 'text-[var(--color-text-secondary)]'
+}
+
+function toneForScore(value: number | null | undefined) {
   if (value == null || !Number.isFinite(value)) return 'text-[var(--color-text-secondary)]'
   if (value > 0) return 'text-[var(--color-price-up)]'
   if (value < 0) return 'text-[var(--color-price-down)]'
@@ -222,11 +234,16 @@ function HeatmapGrid({
               <span className="text-[10px] font-bold text-[var(--color-text-tertiary)] tabular-nums">
                 {row.n_stocks.toLocaleString()}銘柄
               </span>
-              <span
-                className="rounded-full px-2 py-0.5 text-[16px] font-bold tabular-nums"
-                style={{ color: c.text, backgroundColor: positive || negative ? c.soft : 'transparent' }}
-              >
-                {fmtPct(row.avg_change)}
+              <span className="flex flex-col items-end gap-1">
+                <span
+                  className="rounded-full px-2 py-0.5 text-[16px] font-bold tabular-nums"
+                  style={{ color: c.text, backgroundColor: positive || negative ? c.soft : 'transparent' }}
+                >
+                  {fmtPct(row.avg_change)}
+                </span>
+                <span className={`text-[10px] font-bold tabular-nums ${toneForScore(row.avg_pms)}`}>
+                  PMS {fmtScore(row.avg_pms)}
+                </span>
               </span>
             </div>
             <BreadthBar row={row} />
@@ -261,6 +278,7 @@ function RankingTable({
               <th className="py-2 pl-3 pr-2">順位</th>
               <th className="py-2 pr-2">業種</th>
               <th className="py-2 pr-2 text-right">騰落率</th>
+              <th className="py-2 pr-2 text-right">PMS</th>
               <th className="py-2 pr-2 text-right">銘柄数</th>
               <th className="py-2 pr-3 text-right">上昇/下落</th>
             </tr>
@@ -284,6 +302,9 @@ function RankingTable({
                   <td className={`py-2 pr-2 text-right font-bold tabular-nums ${tone}`}>
                     {fmtPct(row.avg_change)}
                   </td>
+                  <td className={`py-2 pr-2 text-right font-bold tabular-nums ${toneForScore(row.avg_pms)}`}>
+                    {fmtScore(row.avg_pms)}
+                  </td>
                   <td className="py-2 pr-2 text-right text-[var(--color-text-secondary)] tabular-nums">
                     {row.n_stocks.toLocaleString()}
                   </td>
@@ -303,7 +324,7 @@ function RankingTable({
             })}
             {rows.length === 0 && (
               <tr>
-                <td colSpan={5} className="py-4 text-center text-[var(--color-text-tertiary)]">
+                <td colSpan={6} className="py-4 text-center text-[var(--color-text-tertiary)]">
                   データなし
                 </td>
               </tr>
@@ -352,6 +373,12 @@ function ClassificationPeriodCard({
   const totalStocks = rows.reduce((sum, row) => sum + row.n_stocks, 0)
   const totalAdvancing = rows.reduce((sum, row) => sum + row.advancing_count, 0)
   const totalDeclining = rows.reduce((sum, row) => sum + row.declining_count, 0)
+  const pmsValues = rows.map((row) => row.avg_pms).filter((value): value is number => value != null && Number.isFinite(value))
+  const pfsValues = rows.map((row) => row.avg_pfs).filter((value): value is number => value != null && Number.isFinite(value))
+  const pesValues = rows.map((row) => row.avg_pes).filter((value): value is number => value != null && Number.isFinite(value))
+  const avgPms = pmsValues.length > 0 ? pmsValues.reduce((sum, value) => sum + value, 0) / pmsValues.length : null
+  const avgPfs = pfsValues.length > 0 ? pfsValues.reduce((sum, value) => sum + value, 0) / pfsValues.length : null
+  const avgPes = pesValues.length > 0 ? pesValues.reduce((sum, value) => sum + value, 0) / pesValues.length : null
   return (
     <section className="rounded-[10px] border border-[var(--color-border-default)] bg-white p-4 shadow-[var(--shadow-card)]">
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3 border-b-2 border-[var(--color-brand-700)] bg-[var(--color-surface-subtle)] px-3 py-2">
@@ -373,6 +400,9 @@ function ClassificationPeriodCard({
         <SectorStatPill label="下落業種" value={`${negativeSectorCount}`} tone="down" />
         <SectorStatPill label="銘柄数" value={totalStocks.toLocaleString()} />
         <SectorStatPill label="上昇/下落" value={`${totalAdvancing.toLocaleString()} / ${totalDeclining.toLocaleString()}`} />
+        <SectorStatPill label="平均PMS" value={fmtScore(avgPms)} tone={avgPms == null ? 'neutral' : avgPms >= 0 ? 'up' : 'down'} />
+        <SectorStatPill label="平均PFS" value={fmtScore(avgPfs)} tone={avgPfs == null ? 'neutral' : avgPfs >= 0 ? 'up' : 'down'} />
+        <SectorStatPill label="平均PES" value={fmtScore(avgPes)} tone={avgPes == null ? 'neutral' : avgPes >= 0 ? 'up' : 'down'} />
       </div>
 
       <HeatmapGrid
@@ -562,6 +592,24 @@ function SectorConstituentBoard({
             ))}
           </div>
         </div>
+        <div className="rounded-[8px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-3 py-2">
+          <div className="text-[10px] font-bold text-[var(--color-text-tertiary)]">平均PMS</div>
+          <div className={`mt-1 text-[18px] font-bold tabular-nums ${toneForScore(result.summary.avgPms)}`}>
+            {fmtScore(result.summary.avgPms)}
+          </div>
+        </div>
+        <div className="rounded-[8px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-3 py-2">
+          <div className="text-[10px] font-bold text-[var(--color-text-tertiary)]">平均PFS</div>
+          <div className={`mt-1 text-[18px] font-bold tabular-nums ${toneForScore(result.summary.avgPfs)}`}>
+            {fmtScore(result.summary.avgPfs)}
+          </div>
+        </div>
+        <div className="rounded-[8px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-3 py-2">
+          <div className="text-[10px] font-bold text-[var(--color-text-tertiary)]">平均PES</div>
+          <div className={`mt-1 text-[18px] font-bold tabular-nums ${toneForScore(result.summary.avgPes)}`}>
+            {fmtScore(result.summary.avgPes)}
+          </div>
+        </div>
       </div>
 
       <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -577,7 +625,7 @@ function SectorConstituentBoard({
       </div>
 
       <div className="mt-3 overflow-x-auto">
-        <table className="w-full min-w-[1120px] text-[12px]">
+        <table className="w-full min-w-[1320px] text-[12px]">
           <thead>
             <tr className="text-left text-[10px] font-bold text-[var(--color-text-tertiary)]">
               <th className="py-2 pl-2 pr-3"><SortLink label="コード" sortKey="ticker" current={result} baseParams={baseParams} /></th>
@@ -589,6 +637,9 @@ function SectorConstituentBoard({
               <th className="py-2 pr-3 text-right"><SortLink label="出来高" sortKey="volume" current={result} baseParams={baseParams} align="right" /></th>
               <th className="py-2 pr-3 text-right"><SortLink label="30日平均" sortKey="avgVolume30" current={result} baseParams={baseParams} align="right" /></th>
               <th className="py-2 pr-3 text-right"><SortLink label="60日平均" sortKey="avgVolume60" current={result} baseParams={baseParams} align="right" /></th>
+              <th className="py-2 pr-3 text-right"><SortLink label="PMS" sortKey="pms" current={result} baseParams={baseParams} align="right" /></th>
+              <th className="py-2 pr-3 text-right"><SortLink label="PFS" sortKey="pfs" current={result} baseParams={baseParams} align="right" /></th>
+              <th className="py-2 pr-3 text-right"><SortLink label="PES" sortKey="pes" current={result} baseParams={baseParams} align="right" /></th>
               <th className="py-2 pr-2"><SortLink label="6ステージ" sortKey="stageCode" current={result} baseParams={baseParams} /></th>
             </tr>
           </thead>
@@ -625,6 +676,15 @@ function SectorConstituentBoard({
                 <td className="py-2 pr-3 text-right tabular-nums text-[var(--color-text-secondary)]">
                   {fmtVol(row.avgVolume60)}
                 </td>
+                <td className={`py-2 pr-3 text-right font-bold tabular-nums ${toneForScore(row.pms)}`}>
+                  {fmtScore(row.pms)}
+                </td>
+                <td className={`py-2 pr-3 text-right font-bold tabular-nums ${toneForScore(row.pfs)}`}>
+                  {fmtScore(row.pfs)}
+                </td>
+                <td className={`py-2 pr-3 text-right font-bold tabular-nums ${toneForScore(row.pes)}`}>
+                  {fmtScore(row.pes)}
+                </td>
                 <td className="py-2 pr-2">
                   <StageCode code={row.stageCode} />
                 </td>
@@ -632,7 +692,7 @@ function SectorConstituentBoard({
             ))}
             {result.rows.length === 0 && (
               <tr>
-                <td colSpan={10} className="py-6 text-center text-[12px] font-bold text-[var(--color-text-tertiary)]">
+                <td colSpan={13} className="py-6 text-center text-[12px] font-bold text-[var(--color-text-tertiary)]">
                   条件に合う銘柄はありません。
                 </td>
               </tr>

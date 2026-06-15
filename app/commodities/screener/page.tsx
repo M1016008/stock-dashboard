@@ -56,6 +56,11 @@ function pctTone(value: number | null | undefined) {
   return 'text-[var(--color-text-secondary)]'
 }
 
+function fmtScore(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(value)) return '---'
+  return value.toFixed(2)
+}
+
 function metricHref(metric: CommodityMetric) {
   return `/commodities/${metric.marketSlug}/${encodeURIComponent(metric.ticker)}`
 }
@@ -167,6 +172,9 @@ export default async function CommodityScreenerPage({ searchParams }: PageProps)
               <option value="changePct">1日騰落率</option>
               <option value="ytd">YTD</option>
               <option value="price">価格</option>
+              <option value="pms">PMS</option>
+              <option value="pfs">PFS</option>
+              <option value="pes">PES</option>
               <option value="stageCode">6桁ステージ</option>
               <option value="ticker">コード</option>
             </select>
@@ -196,7 +204,7 @@ export default async function CommodityScreenerPage({ searchParams }: PageProps)
       </form>
 
       <div className="overflow-x-auto rounded-[8px] border border-[var(--color-border-default)] bg-white shadow-[var(--shadow-card)]">
-        <table className="w-full min-w-[1180px] border-collapse text-left text-[12px]">
+        <table className="w-full min-w-[1280px] border-collapse text-left text-[12px]">
           <thead>
             <tr className="border-b border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] text-[11px] font-bold text-[var(--color-text-secondary)]">
               <th className="px-3 py-2">銘柄</th>
@@ -210,6 +218,7 @@ export default async function CommodityScreenerPage({ searchParams }: PageProps)
               <th className="px-3 py-2 text-right">20日</th>
               <th className="px-3 py-2 text-right">60日</th>
               <th className="px-3 py-2 text-right">YTD</th>
+              <th className="px-3 py-2 text-right">PMS</th>
               <th className="px-3 py-2">ML</th>
             </tr>
           </thead>
@@ -236,12 +245,13 @@ export default async function CommodityScreenerPage({ searchParams }: PageProps)
                 <td className={`px-3 py-2 text-right font-mono font-bold ${pctTone(metric.returns.day20)}`}>{fmtPct(metric.returns.day20)}</td>
                 <td className={`px-3 py-2 text-right font-mono font-bold ${pctTone(metric.returns.day60)}`}>{fmtPct(metric.returns.day60)}</td>
                 <td className={`px-3 py-2 text-right font-mono font-bold ${pctTone(metric.returns.ytd)}`}>{fmtPct(metric.returns.ytd)}</td>
+                <td className={`px-3 py-2 text-right font-mono font-bold ${pctTone(metric.physicalMomentum.pms)}`}>{fmtScore(metric.physicalMomentum.pms)}</td>
                 <td className="px-3 py-2 text-[11px] font-bold text-[var(--color-text-secondary)]">{metric.ml.label}</td>
               </tr>
             ))}
             {result.rows.length === 0 && (
               <tr>
-                <td colSpan={12} className="px-3 py-10 text-center text-[12px] font-bold text-[var(--color-text-tertiary)]">
+                <td colSpan={13} className="px-3 py-10 text-center text-[12px] font-bold text-[var(--color-text-tertiary)]">
                   条件に合うコモディティETF/ETNがありません。
                 </td>
               </tr>

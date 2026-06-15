@@ -55,6 +55,11 @@ export interface SectorEtfMetric extends SectorEtfCatalogItem {
   maAngles: SectorEtfMaAngles
   maTrendLabel: string
   holdings: SectorEtfHoldingStatus
+  physicalMomentum: {
+    pms: number | null
+    pfs: number | null
+    pes: number | null
+  }
 }
 
 export interface SectorEtfHolding {
@@ -165,6 +170,13 @@ interface UniverseNameRow {
   name: string | null
 }
 
+interface PhysicalMomentumMetricRow {
+  ticker: string
+  pms: number | null
+  pfs: number | null
+  pes: number | null
+}
+
 function normalizeTicker(ticker: string): string {
   return ticker.trim().toUpperCase().replace(/\.T$/i, '')
 }
@@ -244,6 +256,7 @@ function buildMetric(
   snapshots: SnapshotRankRow[],
   holdingStatus?: HoldingStatusRow,
   latestRun?: HoldingRunRow,
+  physicalMomentum?: PhysicalMomentumMetricRow,
 ): SectorEtfMetric {
   const latestPrice = prices.find((row) => Number(row.rn) === 1)
   const prevPrice = prices.find((row) => Number(row.rn) === 2)
@@ -310,13 +323,18 @@ function buildMetric(
       lastRunStatus: latestRun?.status ?? null,
       lastRunError: latestRun?.error_summary ?? null,
     },
+    physicalMomentum: {
+      pms: physicalMomentum?.pms ?? null,
+      pfs: physicalMomentum?.pfs ?? null,
+      pes: physicalMomentum?.pes ?? null,
+    },
   }
 }
 
 async function loadMetrics(tickers: readonly string[]): Promise<SectorEtfMetric[]> {
   if (tickers.length === 0) return []
   const placeholders = inClause(tickers)
-  const [priceRows, snapshotRows, holdingRows, runRows, nameRows] = await Promise.all([
+  const [priceRows, snapshotRows, holdingRows, runRows, nameRows, physicalRows] = await Promise.all([
     execAll<PriceRankRow>(
       `
         SELECT ticker, date, close, rn
@@ -404,12 +422,33 @@ async function loadMetrics(tickers: readonly string[]): Promise<SectorEtfMetric[
       `SELECT ticker, name FROM ticker_universe WHERE ticker IN (${placeholders})`,
       tickers,
     ),
+    execAll<PhysicalMomentumMetricRow>(
+      `
+        WITH latest AS (
+          SELECT symbol, MAX(date) AS date
+          FROM physical_momentum_metrics
+          WHERE market = 'JP'
+            AND symbol IN (${placeholders})
+          GROUP BY symbol
+        )
+        SELECT
+          pm.symbol AS ticker,
+          pm.physical_momentum_score AS pms,
+          pm.physical_force_score AS pfs,
+          pm.physical_energy_score AS pes
+        FROM physical_momentum_metrics pm
+        JOIN latest ON latest.symbol = pm.symbol AND latest.date = pm.date
+        WHERE pm.market = 'JP'
+      `,
+      tickers,
+    ),
   ])
   const pricesByTicker = new Map<string, PriceRankRow[]>()
   const snapshotsByTicker = new Map<string, SnapshotRankRow[]>()
   const holdingsByTicker = new Map<string, HoldingStatusRow>()
   const runsByTicker = new Map<string, HoldingRunRow>()
   const namesByTicker = new Map<string, string | null>()
+  const physicalByTicker = new Map<string, PhysicalMomentumMetricRow>()
   for (const row of priceRows) {
     const list = pricesByTicker.get(row.ticker) ?? []
     list.push(row)
@@ -423,6 +462,7 @@ async function loadMetrics(tickers: readonly string[]): Promise<SectorEtfMetric[
   for (const row of holdingRows) holdingsByTicker.set(row.etf_ticker, row)
   for (const row of runRows) runsByTicker.set(row.etf_ticker, row)
   for (const row of nameRows) namesByTicker.set(row.ticker, row.name)
+  for (const row of physicalRows) physicalByTicker.set(row.ticker, row)
 
   return SECTOR_ETF_CATALOG
     .filter((item) => tickers.includes(item.ticker))
@@ -433,6 +473,7 @@ async function loadMetrics(tickers: readonly string[]): Promise<SectorEtfMetric[
       snapshotsByTicker.get(item.ticker) ?? [],
       holdingsByTicker.get(item.ticker),
       runsByTicker.get(item.ticker),
+      physicalByTicker.get(item.ticker),
     ))
 }
 

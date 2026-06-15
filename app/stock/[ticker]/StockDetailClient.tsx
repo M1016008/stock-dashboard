@@ -1,7 +1,7 @@
 // app/stock/[ticker]/StockDetailClient.tsx
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { CSSProperties } from 'react'
 import { MarketBadge } from '@/components/ui/MarketBadge'
 import { MarginBadges } from '@/components/ui/MarginBadges'
@@ -217,6 +217,8 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
       {/* 決算情報 */}
       <EarningsCard ticker={ticker} />
 
+      <PhysicalMomentumSection ticker={ticker} />
+
       {/* ステージ変遷 */}
       <div>
         <div className="section-header">ステージ変遷</div>
@@ -293,6 +295,232 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
 
     </div>
   )
+}
+
+interface PhysicalMomentumApiRow {
+  date: string
+  velocity: number | null
+  acceleration: number | null
+  momentum: number | null
+  force: number | null
+  ma5Angle: number | null
+  ma25Angle: number | null
+  ma75Angle: number | null
+  ma200Angle: number | null
+  maAngleAvg: number | null
+  energy: number | null
+  physicalMomentumScore: number | null
+  physicalForceScore: number | null
+  physicalEnergyScore: number | null
+}
+
+interface PhysicalMomentumResponse {
+  latest: PhysicalMomentumApiRow | null
+  history: PhysicalMomentumApiRow[]
+  rank: number | null
+  totalRanked: number
+  trend: 'rising' | 'falling' | 'flat' | null
+}
+
+function PhysicalMomentumSection({ ticker }: { ticker: string }) {
+  const [data, setData] = useState<PhysicalMomentumResponse | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    setError('')
+    fetch(`/api/physical-momentum/${encodeURIComponent(ticker)}?market=JP&limit=260`, { cache: 'no-store' })
+      .then((res) => res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`)))
+      .then((payload) => {
+        if (!cancelled) setData(payload)
+      })
+      .catch((e) => {
+        if (!cancelled) setError((e as Error).message)
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => { cancelled = true }
+  }, [ticker])
+
+  const latest = data?.latest ?? null
+
+  return (
+    <div className="card" style={physicalCardStyle}>
+      <div style={physicalHeaderStyle}>
+        <div>
+          <div className="section-header" style={{ margin: 0 }}>Physical Momentum</div>
+          <div style={physicalSubTextStyle}>
+            速度・加速度・運動量・力・エネルギー・MA角度を横断Zスコア化した共通指標です。
+          </div>
+        </div>
+        {latest && (
+          <span style={physicalDateBadgeStyle}>
+            {latest.date}
+          </span>
+        )}
+      </div>
+
+      {loading ? (
+        <p style={summaryEmptyStyle}>PMSを読込中...</p>
+      ) : error ? (
+        <p style={{ ...summaryEmptyStyle, color: 'var(--price-down)' }}>PMS取得エラー: {error}</p>
+      ) : !latest ? (
+        <p style={summaryEmptyStyle}>PMS未計算です。`npm run batch:physical-momentum` 実行後に表示されます。</p>
+      ) : (
+        <>
+          <div style={physicalScoreGridStyle}>
+            <PhysicalScoreCard
+              label="PMS"
+              value={latest.physicalMomentumScore}
+              sub={data?.rank && data.totalRanked ? `市場順位 ${data.rank}/${data.totalRanked}` : '市場順位 -'}
+              trend={data?.trend ?? null}
+            />
+            <PhysicalScoreCard
+              label="PFS"
+              value={latest.physicalForceScore}
+              sub="初動検出: Force + Acceleration"
+              trend={null}
+            />
+            <PhysicalScoreCard
+              label="PES"
+              value={latest.physicalEnergyScore}
+              sub="ブレイクアウト: Energy + Momentum"
+              trend={null}
+            />
+            <PhysicalScoreCard
+              label="MA角度"
+              value={latest.maAngleAvg}
+              sub="5/25/75/200MA平均"
+              trend={null}
+              valueFormatter={fmtAngleDeg}
+            />
+          </div>
+
+          <div style={physicalBodyGridStyle}>
+            <div style={physicalBreakdownGridStyle}>
+              <PhysicalBreakdown label="Velocity" value={fmtPctValue(latest.velocity)} />
+              <PhysicalBreakdown label="Acceleration" value={fmtDecimal(latest.acceleration, 4)} />
+              <PhysicalBreakdown label="Momentum" value={fmtCompact(latest.momentum)} />
+              <PhysicalBreakdown label="Force" value={fmtCompact(latest.force)} />
+              <PhysicalBreakdown label="Energy" value={fmtCompact(latest.energy)} />
+              <PhysicalBreakdown label="MA角度平均" value={fmtAngleDeg(latest.maAngleAvg)} />
+            </div>
+            <PhysicalMomentumSparkline history={data?.history ?? []} />
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+function PhysicalScoreCard({
+  label,
+  value,
+  sub,
+  trend,
+  valueFormatter = fmtScore,
+}: {
+  label: string
+  value: number | null
+  sub: string
+  trend: 'rising' | 'falling' | 'flat' | null
+  valueFormatter?: (value: number | null | undefined) => string
+}) {
+  const tone = value == null ? 'var(--text-muted)' : value >= 0 ? 'var(--price-up)' : 'var(--price-down)'
+  return (
+    <div style={physicalScoreCardStyle}>
+      <span>{label}</span>
+      <strong style={{ color: tone }}>{valueFormatter(value)}</strong>
+      <small>
+        {trend === 'rising' ? '上昇中 / ' : trend === 'falling' ? '低下中 / ' : trend === 'flat' ? '横ばい / ' : ''}
+        {sub}
+      </small>
+    </div>
+  )
+}
+
+function PhysicalBreakdown({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={physicalBreakdownStyle}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  )
+}
+
+function PhysicalMomentumSparkline({ history }: { history: PhysicalMomentumApiRow[] }) {
+  const chart = useMemo(() => {
+    const points = history
+      .filter((row) => row.physicalMomentumScore != null && Number.isFinite(row.physicalMomentumScore))
+      .slice(-160)
+    if (points.length < 2) return null
+    const values = points.map((row) => row.physicalMomentumScore as number)
+    const min = Math.min(...values)
+    const max = Math.max(...values)
+    const span = max - min || 1
+    const width = 420
+    const height = 128
+    const polyline = points
+      .map((row, index) => {
+        const x = (index / (points.length - 1)) * width
+        const y = height - (((row.physicalMomentumScore as number) - min) / span) * height
+        return `${x.toFixed(1)},${y.toFixed(1)}`
+      })
+      .join(' ')
+    return { polyline, min, max, width, height, firstDate: points[0].date, lastDate: points[points.length - 1].date }
+  }, [history])
+
+  if (!chart) {
+    return <div style={physicalSparklineEmptyStyle}>PMS時系列はまだ不足しています。</div>
+  }
+
+  return (
+    <div style={physicalSparklineBoxStyle}>
+      <div style={physicalSparklineHeaderStyle}>
+        <strong>PMS時系列</strong>
+        <span>{chart.firstDate} → {chart.lastDate}</span>
+      </div>
+      <svg viewBox={`0 0 ${chart.width} ${chart.height}`} role="img" aria-label="PMS時系列チャート" style={{ width: '100%', height: '128px' }}>
+        <line x1="0" x2={chart.width} y1={chart.height / 2} y2={chart.height / 2} stroke="var(--border-subtle)" strokeDasharray="4 4" />
+        <polyline points={chart.polyline} fill="none" stroke="var(--accent-primary)" strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" />
+      </svg>
+      <div style={physicalSparklineScaleStyle}>
+        <span>{fmtScore(chart.min)}</span>
+        <span>{fmtScore(chart.max)}</span>
+      </div>
+    </div>
+  )
+}
+
+function fmtScore(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return '-'
+  return value.toFixed(2)
+}
+
+function fmtDecimal(value: number | null | undefined, digits = 2): string {
+  if (value == null || !Number.isFinite(value)) return '-'
+  return value.toFixed(digits)
+}
+
+function fmtPctValue(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return '-'
+  return `${value >= 0 ? '+' : ''}${(value * 100).toFixed(2)}%`
+}
+
+function fmtCompact(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return '-'
+  return new Intl.NumberFormat('ja-JP', {
+    notation: 'compact',
+    maximumFractionDigits: 2,
+  }).format(value)
+}
+
+function fmtAngleDeg(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return '-'
+  return `${((value * 180) / Math.PI).toFixed(2)}°`
 }
 
 type StageKey =
@@ -629,6 +857,111 @@ function isoDaysBefore(isoDate: string, days: number): string {
   const date = new Date(`${isoDate}T00:00:00Z`)
   date.setUTCDate(date.getUTCDate() - days)
   return date.toISOString().slice(0, 10)
+}
+
+const physicalCardStyle: CSSProperties = {
+  padding: '14px',
+}
+
+const physicalHeaderStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'flex-start',
+  justifyContent: 'space-between',
+  gap: '12px',
+  flexWrap: 'wrap',
+  marginBottom: '10px',
+}
+
+const physicalSubTextStyle: CSSProperties = {
+  marginTop: '4px',
+  color: 'var(--text-muted)',
+  fontSize: '11px',
+}
+
+const physicalDateBadgeStyle: CSSProperties = {
+  border: '1px solid var(--border-base)',
+  borderRadius: 'var(--radius-sm)',
+  background: 'var(--bg-elevated)',
+  color: 'var(--text-secondary)',
+  fontFamily: 'var(--font-mono)',
+  fontSize: '11px',
+  fontWeight: 700,
+  padding: '4px 8px',
+}
+
+const physicalScoreGridStyle: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+  gap: '8px',
+  marginBottom: '10px',
+}
+
+const physicalScoreCardStyle: CSSProperties = {
+  border: '1px solid var(--border-subtle)',
+  borderRadius: 'var(--radius-sm)',
+  background: 'var(--bg-elevated)',
+  padding: '10px',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: '4px',
+}
+
+const physicalBodyGridStyle: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(min(280px, 100%), 1fr))',
+  gap: '10px',
+}
+
+const physicalBreakdownGridStyle: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(126px, 1fr))',
+  gap: '6px',
+}
+
+const physicalBreakdownStyle: CSSProperties = {
+  border: '1px solid var(--border-subtle)',
+  borderRadius: 'var(--radius-sm)',
+  background: '#fff',
+  padding: '7px 8px',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: '3px',
+}
+
+const physicalSparklineBoxStyle: CSSProperties = {
+  border: '1px solid var(--border-subtle)',
+  borderRadius: 'var(--radius-sm)',
+  background: '#fff',
+  padding: '8px',
+  minWidth: 0,
+}
+
+const physicalSparklineHeaderStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'baseline',
+  justifyContent: 'space-between',
+  gap: '8px',
+  color: 'var(--text-secondary)',
+  fontSize: '11px',
+  marginBottom: '4px',
+}
+
+const physicalSparklineScaleStyle: CSSProperties = {
+  display: 'flex',
+  justifyContent: 'space-between',
+  color: 'var(--text-muted)',
+  fontFamily: 'var(--font-mono)',
+  fontSize: '10px',
+}
+
+const physicalSparklineEmptyStyle: CSSProperties = {
+  ...physicalSparklineBoxStyle,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  color: 'var(--text-muted)',
+  fontSize: '11px',
+  minHeight: '150px',
 }
 
 const calendarCardStyle: CSSProperties = {

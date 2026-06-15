@@ -44,6 +44,9 @@ interface Stock {
   ml_candidate_direction?: 'up' | 'down' | null
   ml_candidate_rank?: number | null
   ml_candidate_summary?: string | null
+  physical_momentum_score?: number | null
+  physical_force_score?: number | null
+  physical_energy_score?: number | null
 }
 
 type Timeframe = 'daily' | 'weekly' | 'monthly'
@@ -157,6 +160,15 @@ export default function HexStageMapView() {
   }, [data, selectedCategory, selectedSubCategory])
 
   const hasFilter = selectedCategory || selectedSubCategory
+  const stageMomentumStats = useMemo(() => {
+    return [1, 2, 3, 4, 5, 6].map((stage) => {
+      const rows = filteredData.filter((row) => row.stage === stage && row.physical_momentum_score != null && Number.isFinite(row.physical_momentum_score))
+      const avg = rows.length > 0
+        ? rows.reduce((sum, row) => sum + (row.physical_momentum_score ?? 0), 0) / rows.length
+        : null
+      return { stage, avg, count: rows.length }
+    })
+  }, [filteredData])
 
   return (
     <div className="flex flex-col gap-3">
@@ -165,6 +177,27 @@ export default function HexStageMapView() {
         <span className="text-[11px] text-[var(--color-text-tertiary)] tabular-nums">
           {filteredData.length.toLocaleString()} 銘柄{hasFilter ? ` / 全 ${data.length.toLocaleString()}` : ''}{activeUniverseMeta ? ` · ${activeUniverseMeta.shortLabel}` : ''}{date ? ` · ${date}` : ''}
         </span>
+      </div>
+
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(118px,1fr))] gap-2">
+        {stageMomentumStats.map(({ stage, avg, count }) => (
+          <div
+            key={stage}
+            className="rounded-[8px] border bg-white px-3 py-2"
+            style={{
+              borderColor: STAGE_BORDER_COLORS[stage],
+              background: STAGE_BG_COLORS[stage],
+            }}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[10px] font-semibold text-[var(--color-text-tertiary)]">Stage {stage}</span>
+              <span className="text-[10px] tabular-nums text-[var(--color-text-tertiary)]">{count}</span>
+            </div>
+            <div className="mt-1 text-[14px] font-bold tabular-nums" style={{ color: avg == null ? 'var(--color-text-tertiary)' : avg >= 0 ? 'var(--color-market-red)' : 'var(--color-market-blue)' }}>
+              平均PMS {avg == null ? '-' : avg.toFixed(2)}
+            </div>
+          </div>
+        ))}
       </div>
 
       {/* ── フィルタバー ─────────────── */}

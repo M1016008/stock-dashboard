@@ -35,6 +35,11 @@ function pctTone(value: number | null | undefined) {
   return 'text-[var(--color-text-secondary)]'
 }
 
+function fmtScore(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(value)) return '---'
+  return value.toFixed(2)
+}
+
 function SummaryTile({ label, value, hint }: { label: string; value: string; hint: string }) {
   return (
     <div className="rounded-[8px] border border-[var(--color-border-default)] bg-white px-4 py-3 shadow-[var(--shadow-card)]">
@@ -92,6 +97,12 @@ function CommodityCard({ metric }: { metric: CommodityMetric }) {
           <div className="font-bold text-[var(--color-text-tertiary)]">20日</div>
           <div className={`mt-1 font-mono text-[14px] font-bold ${pctTone(metric.returns.day20)}`}>
             {fmtPct(metric.returns.day20)}
+          </div>
+        </div>
+        <div className="rounded-[6px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-2 py-1.5">
+          <div className="font-bold text-[var(--color-text-tertiary)]">PMS</div>
+          <div className={`mt-1 font-mono text-[14px] font-bold ${pctTone(metric.physicalMomentum.pms)}`}>
+            {fmtScore(metric.physicalMomentum.pms)}
           </div>
         </div>
       </div>

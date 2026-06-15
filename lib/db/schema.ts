@@ -348,6 +348,42 @@ export const marketDailySnapshots = sqliteTable(
   }),
 )
 
+export const physicalMomentumMetrics = sqliteTable(
+  'physical_momentum_metrics',
+  {
+    market:                text('market').notNull().default('JP'),
+    symbol:                text('symbol').notNull(),
+    date:                  text('date').notNull(),
+    velocity:              real('velocity'),
+    acceleration:          real('acceleration'),
+    momentum:              real('momentum'),
+    force:                 real('force'),
+    ma5Angle:              real('ma5_angle'),
+    ma25Angle:             real('ma25_angle'),
+    ma75Angle:             real('ma75_angle'),
+    ma200Angle:            real('ma200_angle'),
+    maAngleAvg:            real('ma_angle_avg'),
+    energy:                real('energy'),
+    zVelocity:             real('z_velocity'),
+    zAcceleration:         real('z_acceleration'),
+    zMomentum:             real('z_momentum'),
+    zForce:                real('z_force'),
+    zMaAngleAvg:           real('z_ma_angle_avg'),
+    zEnergy:               real('z_energy'),
+    physicalMomentumScore: real('physical_momentum_score'),
+    physicalForceScore:    real('physical_force_score'),
+    physicalEnergyScore:   real('physical_energy_score'),
+    createdAt:             integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+    updatedAt:             integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk:            primaryKey({ columns: [t.market, t.symbol, t.date] }),
+    marketDateIdx: index('physical_momentum_market_date_idx').on(t.market, t.date),
+    scoreIdx:      index('physical_momentum_market_score_idx').on(t.market, t.date, t.physicalMomentumScore),
+    symbolDateIdx: index('physical_momentum_symbol_date_idx').on(t.market, t.symbol, t.date),
+  }),
+)
+
 export const marketDataRuns = sqliteTable(
   'market_data_runs',
   {

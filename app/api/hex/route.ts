@@ -62,6 +62,9 @@ interface HexStock {
   ml_candidate_direction: 'up' | 'down' | null
   ml_candidate_rank: number | null
   ml_candidate_summary: string | null
+  physical_momentum_score: number | null
+  physical_force_score: number | null
+  physical_energy_score: number | null
 }
 
 interface SnapshotRow {
@@ -111,6 +114,13 @@ interface MlCandidateRow {
   direction: 'up' | 'down'
   rank: number
   explanation_json: string | null
+}
+
+interface PhysicalMomentumRow {
+  ticker: string
+  physical_momentum_score: number | null
+  physical_force_score: number | null
+  physical_energy_score: number | null
 }
 
 function jsonResponse(request: NextRequest, payload: unknown): NextResponse {
@@ -235,6 +245,7 @@ export async function GET(request: NextRequest) {
         daily_a_stage: number | null
         weekly_a_stage: number | null
         monthly_a_stage: number | null
+        physical_momentum_score: number | null
       }>(
         `
         SELECT
@@ -242,10 +253,12 @@ export async function GET(request: NextRequest) {
           COALESCE(tu.sector17_name, sc.major_category, 'その他') AS sector_large,
           ds.daily_a_stage,
           ds.weekly_a_stage,
-          ds.monthly_a_stage
+          ds.monthly_a_stage,
+          pm.physical_momentum_score
         FROM daily_snapshots ds
         LEFT JOIN ticker_universe tu ON tu.ticker = ds.ticker
         LEFT JOIN stock_classification sc ON sc.ticker = ds.ticker
+        LEFT JOIN physical_momentum_metrics pm ON pm.market = 'JP' AND pm.symbol = ds.ticker AND pm.date = ds.date
         WHERE ds.date = ?
         ${universe.sql ? `AND ${universe.sql}` : ''}
         `,
@@ -268,7 +281,7 @@ export async function GET(request: NextRequest) {
     const prev2 = prev1 ? await prevSnapshotDate(prev1) : null
 
     // 並列ロード
-    const [currAll, prev1Snap, prev2Snap, prices, prices1Y, uni, klass, mlCandidates] = await Promise.all([
+    const [currAll, prev1Snap, prev2Snap, prices, prices1Y, uni, klass, mlCandidates, physicalMomentum] = await Promise.all([
       loadSnapshots(date),
       prev1 ? loadSnapshots(prev1) : Promise.resolve([] as SnapshotRow[]),
       prev2 ? loadSnapshots(prev2) : Promise.resolve([] as SnapshotRow[]),
@@ -324,6 +337,19 @@ export async function GET(request: NextRequest) {
         `,
         [date],
       ),
+      execAll<PhysicalMomentumRow>(
+        `
+        SELECT
+          symbol AS ticker,
+          physical_momentum_score,
+          physical_force_score,
+          physical_energy_score
+        FROM physical_momentum_metrics
+        WHERE market = 'JP'
+          AND date = ?
+        `,
+        [date],
+      ),
     ])
     void prices1Y
     const curr = filterRowsByUniverse(currAll, universeFilter)
@@ -333,6 +359,7 @@ export async function GET(request: NextRequest) {
     const priceMap = indexByTicker(prices)
     const uniMap = indexByTicker(uni)
     const klassMap = indexByTicker(klass)
+    const physicalMap = indexByTicker(physicalMomentum)
     const mlMap = new Map<string, { direction: 'up' | 'down'; rank: number; summary: string | null }>()
     for (const row of mlCandidates) {
       const existing = mlMap.get(row.ticker)
@@ -352,6 +379,7 @@ export async function GET(request: NextRequest) {
       const u = uniMap.get(s.ticker)
       const k = klassMap.get(s.ticker)
       const ml = mlMap.get(s.ticker)
+      const pm = physicalMap.get(s.ticker)
 
       // 銘柄ごとフォールバック: Yoshio 独自分類 → JPX Sector17/33 → 'その他'
       const sectorLarge =
@@ -436,6 +464,9 @@ export async function GET(request: NextRequest) {
         ml_candidate_direction: ml?.direction ?? null,
         ml_candidate_rank: ml?.rank ?? null,
         ml_candidate_summary: ml?.summary ?? null,
+        physical_momentum_score: pm?.physical_momentum_score ?? null,
+        physical_force_score: pm?.physical_force_score ?? null,
+        physical_energy_score: pm?.physical_energy_score ?? null,
       }
     })
 

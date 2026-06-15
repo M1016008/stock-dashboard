@@ -88,6 +88,11 @@ export interface CommodityMetric extends CommodityInstrument {
   maTrendLabel: string
   ml: CommodityMlStatus
   physics: CommodityPhysicsSummary
+  physicalMomentum: {
+    pms: number | null
+    pfs: number | null
+    pes: number | null
+  }
   freshness: {
     isStale: boolean
     latestPriceDate: string | null
@@ -206,6 +211,14 @@ interface SimilarRow {
   ticker: string
   similarCount: number
   latestSimilarDate: string | null
+}
+
+interface PhysicalMomentumMetricRow {
+  market: CommodityMarket
+  ticker: string
+  pms: number | null
+  pfs: number | null
+  pes: number | null
 }
 
 function key(market: CommodityMarket, ticker: string) {
@@ -482,6 +495,31 @@ async function loadSimilarRows(tickers: readonly string[]): Promise<SimilarRow[]
   return []
 }
 
+async function loadPhysicalMomentumRows(market: CommodityMarket, tickers: readonly string[]): Promise<PhysicalMomentumMetricRow[]> {
+  if (tickers.length === 0) return []
+  const placeholders = inClause(tickers)
+  return execAll<PhysicalMomentumMetricRow>(
+    `
+      WITH latest AS (
+        SELECT market, symbol, MAX(date) AS date
+        FROM physical_momentum_metrics
+        WHERE market = ?
+          AND symbol IN (${placeholders})
+        GROUP BY market, symbol
+      )
+      SELECT
+        pm.market AS market,
+        pm.symbol AS ticker,
+        pm.physical_momentum_score AS pms,
+        pm.physical_force_score AS pfs,
+        pm.physical_energy_score AS pes
+      FROM physical_momentum_metrics pm
+      JOIN latest ON latest.market = pm.market AND latest.symbol = pm.symbol AND latest.date = pm.date
+    `,
+    [market, ...tickers],
+  )
+}
+
 function buildMetric(
   item: CommodityInstrument,
   dbName: string | null,
@@ -490,6 +528,7 @@ function buildMetric(
   snapshots: SnapshotRankRow[],
   feature: FeatureRow | undefined,
   similar: SimilarRow | undefined,
+  physicalMomentum: PhysicalMomentumMetricRow | undefined,
 ): CommodityMetric {
   const latestPrice = prices.find((row) => Number(row.rn) === 1)
   const prevPrice = prices.find((row) => Number(row.rn) === 2)
@@ -588,6 +627,11 @@ function buildMetric(
           source: featureCount > 0 ? 'jp_stock_ml_reference' : 'not_ready',
         },
     physics,
+    physicalMomentum: {
+      pms: physicalMomentum?.pms ?? null,
+      pfs: physicalMomentum?.pfs ?? null,
+      pes: physicalMomentum?.pes ?? null,
+    },
     freshness: {
       isStale: warnings.some((warning) => warning.includes('鮮度') || warning.includes('未取得') || warning.includes('未生成')),
       latestPriceDate: priceDate,
@@ -611,6 +655,8 @@ async function loadMetrics(items: readonly CommodityInstrument[]): Promise<Commo
     usNames,
     featureRows,
     similarRows,
+    jpPhysicalRows,
+    usPhysicalRows,
   ] = await Promise.all([
     loadPriceRows('JP', jpTickers),
     loadPriceRows('US', usTickers),
@@ -620,6 +666,8 @@ async function loadMetrics(items: readonly CommodityInstrument[]): Promise<Commo
     loadNameRows('US', usTickers),
     loadFeatureRows(jpTickers),
     loadSimilarRows(jpTickers),
+    loadPhysicalMomentumRows('JP', jpTickers),
+    loadPhysicalMomentumRows('US', usTickers),
   ])
 
   const pricesByKey = new Map<string, PriceHistoryRow[]>()
@@ -627,6 +675,7 @@ async function loadMetrics(items: readonly CommodityInstrument[]): Promise<Commo
   const namesByKey = new Map<string, NameRow>()
   const featuresByTicker = new Map<string, FeatureRow>()
   const similarsByTicker = new Map<string, SimilarRow>()
+  const physicalByKey = new Map<string, PhysicalMomentumMetricRow>()
 
   for (const row of [...jpPrices, ...usPrices]) {
     const list = pricesByKey.get(key(row.market, row.ticker)) ?? []
@@ -641,6 +690,7 @@ async function loadMetrics(items: readonly CommodityInstrument[]): Promise<Commo
   for (const row of [...jpNames, ...usNames]) namesByKey.set(key(row.market, row.ticker), row)
   for (const row of featureRows) featuresByTicker.set(row.ticker, row)
   for (const row of similarRows) similarsByTicker.set(row.ticker, row)
+  for (const row of [...jpPhysicalRows, ...usPhysicalRows]) physicalByKey.set(key(row.market, row.ticker), row)
 
   return items.map((item) => {
     const nameRow = namesByKey.get(key(item.market, item.ticker))
@@ -652,6 +702,7 @@ async function loadMetrics(items: readonly CommodityInstrument[]): Promise<Commo
       snapshotsByKey.get(key(item.market, item.ticker)) ?? [],
       item.market === 'JP' ? featuresByTicker.get(item.ticker) : undefined,
       item.market === 'JP' ? similarsByTicker.get(item.ticker) : undefined,
+      physicalByKey.get(key(item.market, item.ticker)),
     )
   })
 }
@@ -732,6 +783,9 @@ function metricSortValue(metric: CommodityMetric, sort: string): string | number
     stageCode: metric.stageCode,
     maTrend: metric.maTrendLabel,
     ml: metric.ml.available ? 1 : 0,
+    pms: metric.physicalMomentum.pms,
+    pfs: metric.physicalMomentum.pfs,
+    pes: metric.physicalMomentum.pes,
   }
   return values[sort] ?? values.return20
 }

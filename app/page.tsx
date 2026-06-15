@@ -11,6 +11,7 @@ import { PageTitle } from '@/components/layout/PageTitle'
 import { StereoscopicSignals } from '@/components/dashboard/StereoscopicSignals'
 import { NewHighVolume } from '@/components/dashboard/NewHighVolume'
 import { PatternStatsTop } from '@/components/dashboard/PatternStatsTop'
+import { PhysicalMomentumMarket } from '@/components/dashboard/PhysicalMomentumMarket'
 import { DashboardDateSelector } from '@/components/dashboard/DashboardDateSelector'
 import { getLatestDate } from '@/lib/queries/dashboard'
 import { getDashboardDateOption } from '@/lib/queries/dashboard-cache'
@@ -81,6 +82,9 @@ export default async function DashboardPage({
         badge={universeMeta ? `${universeMeta.shortLabel} / パターン統計 最新反映` : 'パターン統計 最新反映'}
       />
       <DashboardDateSelector dates={initialDates} selectedDate={selectedDate} />
+      <Suspense fallback={<SectionFallback height={150} />}>
+        <PhysicalMomentumMarket universe={universeFilter} />
+      </Suspense>
       <Suspense fallback={<SectionFallback height={360} />}>
         <StereoscopicSignals date={latest} universe={universeFilter} />
       </Suspense>

@@ -1,0 +1,540 @@
+// scripts/batch-physical-momentum.ts
+//
+// Physical Momentum Score (PMS) を市場横断で計算する。
+// 通常運用は直近営業日だけを再計算し、必要時は PMS_RECENT_DAYS=0 で全期間をバックフィルする。
+
+import { execAll, execBatch, execGet, execRun } from '@/lib/db/client'
+import {
+  PHYSICAL_MOMENTUM_LOOKBACK_DAYS,
+  composePhysicalMomentumScores,
+  computePhysicalMomentumRawRows,
+  meanAndStd,
+  zScore,
+  type PhysicalMomentumRawKey,
+  type PhysicalMomentumRawRow,
+} from '@/lib/physical-momentum'
+
+type Market = 'JP' | 'US' | string
+
+type PriceRow = {
+  date: string
+  close: number | null
+  volume: number | null
+}
+
+type MetricRow = PhysicalMomentumRawRow & {
+  symbol: string
+}
+
+type DbMetricRow = {
+  symbol: string
+  velocity: number | null
+  acceleration: number | null
+  momentum: number | null
+  force: number | null
+  maAngleAvg: number | null
+  energy: number | null
+}
+
+const LOOKBACK_DAYS = Number(process.env.PMS_LOOKBACK_DAYS ?? PHYSICAL_MOMENTUM_LOOKBACK_DAYS)
+const RECENT_DAYS = Number(process.env.PMS_RECENT_DAYS ?? 320)
+const START_DATE = process.env.PMS_START_DATE?.trim() || null
+const END_DATE = process.env.PMS_END_DATE?.trim() || null
+const MARKETS = (process.env.PMS_MARKETS ?? 'JP')
+  .split(',')
+  .map((value) => value.trim().toUpperCase())
+  .filter(Boolean)
+const TICKER_FILTER = new Set(
+  (process.env.PMS_TICKERS ?? '')
+    .split(',')
+    .map((value) => value.trim().toUpperCase().replace(/\.T$/, ''))
+    .filter(Boolean),
+)
+const TICKER_LIMIT = Number(process.env.PMS_TICKER_LIMIT ?? 0)
+const CHUNK = Number(process.env.PMS_BATCH_CHUNK ?? 400)
+const LOG_EVERY = Number(process.env.PMS_LOG_EVERY ?? 250)
+
+const RAW_KEYS: PhysicalMomentumRawKey[] = [
+  'velocity',
+  'acceleration',
+  'momentum',
+  'force',
+  'maAngleAvg',
+  'energy',
+]
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value)
+}
+
+function dbNumber(value: number | null | undefined): number | null {
+  return isFiniteNumber(value) ? value : null
+}
+
+function dateDaysBefore(date: string, days: number): string {
+  const d = new Date(`${date}T00:00:00Z`)
+  d.setUTCDate(d.getUTCDate() - days)
+  return d.toISOString().slice(0, 10)
+}
+
+function sourceTable(market: Market): {
+  latestSql: string
+  datesSql: (hasStart: boolean, recentDays: number) => string
+  tickersSql: string
+  rowsSql: (hasWarmup: boolean) => string
+} {
+  if (market === 'JP') {
+    return {
+      latestSql: 'SELECT MAX(date) AS latestDate FROM ohlcv_daily',
+      datesSql: (hasStart, recentDays) => `
+        SELECT date
+        FROM (
+          SELECT DISTINCT date
+          FROM ohlcv_daily
+          WHERE date <= ?
+            ${hasStart ? 'AND date >= ?' : ''}
+          ORDER BY date DESC
+          ${recentDays > 0 ? 'LIMIT ?' : ''}
+        )
+        ORDER BY date
+      `,
+      tickersSql: `
+        SELECT DISTINCT ticker AS symbol
+        FROM ohlcv_daily
+        WHERE date BETWEEN ? AND ?
+        ORDER BY ticker
+      `,
+      rowsSql: (hasWarmup) => `
+        SELECT date, close, volume
+        FROM ohlcv_daily
+        WHERE ticker = ?
+          AND date <= ?
+          ${hasWarmup ? 'AND date >= ?' : ''}
+        ORDER BY date
+      `,
+    }
+  }
+
+  return {
+    latestSql: 'SELECT MAX(date) AS latestDate FROM market_ohlcv_daily WHERE market = ?',
+    datesSql: (hasStart, recentDays) => `
+      SELECT date
+      FROM (
+        SELECT DISTINCT date
+        FROM market_ohlcv_daily
+        WHERE market = ?
+          AND date <= ?
+          ${hasStart ? 'AND date >= ?' : ''}
+        ORDER BY date DESC
+        ${recentDays > 0 ? 'LIMIT ?' : ''}
+      )
+      ORDER BY date
+    `,
+    tickersSql: `
+      SELECT DISTINCT ticker AS symbol
+      FROM market_ohlcv_daily
+      WHERE market = ?
+        AND date BETWEEN ? AND ?
+      ORDER BY ticker
+    `,
+    rowsSql: (hasWarmup) => `
+      SELECT date, close, volume
+      FROM market_ohlcv_daily
+      WHERE market = ?
+        AND ticker = ?
+        AND date <= ?
+        ${hasWarmup ? 'AND date >= ?' : ''}
+      ORDER BY date
+    `,
+  }
+}
+
+async function ensurePhysicalMomentumSchema(): Promise<void> {
+  await execRun(`
+    CREATE TABLE IF NOT EXISTS physical_momentum_metrics (
+      market TEXT NOT NULL DEFAULT 'JP',
+      symbol TEXT NOT NULL,
+      date TEXT NOT NULL,
+      velocity REAL,
+      acceleration REAL,
+      momentum REAL,
+      force REAL,
+      ma5_angle REAL,
+      ma25_angle REAL,
+      ma75_angle REAL,
+      ma200_angle REAL,
+      ma_angle_avg REAL,
+      energy REAL,
+      z_velocity REAL,
+      z_acceleration REAL,
+      z_momentum REAL,
+      z_force REAL,
+      z_ma_angle_avg REAL,
+      z_energy REAL,
+      physical_momentum_score REAL,
+      physical_force_score REAL,
+      physical_energy_score REAL,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      PRIMARY KEY (market, symbol, date)
+    )
+  `)
+  await execRun('CREATE INDEX IF NOT EXISTS physical_momentum_market_date_idx ON physical_momentum_metrics(market, date)')
+  await execRun('CREATE INDEX IF NOT EXISTS physical_momentum_market_score_idx ON physical_momentum_metrics(market, date, physical_momentum_score)')
+  await execRun('CREATE INDEX IF NOT EXISTS physical_momentum_symbol_date_idx ON physical_momentum_metrics(market, symbol, date)')
+}
+
+async function startRun(): Promise<number | null> {
+  try {
+    const row = await execGet<{ id: number }>(
+      `
+        INSERT INTO batch_runs (job_type, started_at, status, total_tickers, succeeded, failed, rows_inserted)
+        VALUES ('physical_momentum', unixepoch(), 'running', 0, 0, 0, 0)
+        RETURNING id
+      `,
+    )
+    return row?.id ?? null
+  } catch {
+    return null
+  }
+}
+
+async function finishRun(
+  id: number | null,
+  status: 'success' | 'failed',
+  payload: { totalTickers: number; succeeded: number; failed: number; rowsInserted: number; errorSummary?: string | null },
+): Promise<void> {
+  if (!id) return
+  await execRun(
+    `
+      UPDATE batch_runs
+      SET finished_at = unixepoch(),
+          status = ?,
+          total_tickers = ?,
+          succeeded = ?,
+          failed = ?,
+          rows_inserted = ?,
+          error_summary = ?
+      WHERE id = ?
+    `,
+    [
+      status,
+      payload.totalTickers,
+      payload.succeeded,
+      payload.failed,
+      payload.rowsInserted,
+      payload.errorSummary ?? null,
+      id,
+    ],
+  )
+}
+
+async function latestDateForMarket(market: Market): Promise<string | null> {
+  const source = sourceTable(market)
+  const row = await execGet<{ latestDate: string | null }>(
+    source.latestSql,
+    market === 'JP' ? [] : [market],
+  )
+  return row?.latestDate ?? null
+}
+
+async function processingDatesForMarket(market: Market, endDate: string): Promise<string[]> {
+  const source = sourceTable(market)
+  const hasStart = Boolean(START_DATE)
+  const sql = source.datesSql(hasStart, RECENT_DAYS)
+  const args =
+    market === 'JP'
+      ? [
+          endDate,
+          ...(hasStart ? [START_DATE] : []),
+          ...(RECENT_DAYS > 0 ? [RECENT_DAYS] : []),
+        ]
+      : [
+          market,
+          endDate,
+          ...(hasStart ? [START_DATE] : []),
+          ...(RECENT_DAYS > 0 ? [RECENT_DAYS] : []),
+        ]
+  const rows = await execAll<{ date: string }>(sql, args)
+  return rows.map((row) => row.date)
+}
+
+async function tickersForMarket(market: Market, startDate: string, endDate: string): Promise<string[]> {
+  const source = sourceTable(market)
+  const rows = await execAll<{ symbol: string }>(
+    source.tickersSql,
+    market === 'JP' ? [startDate, endDate] : [market, startDate, endDate],
+  )
+  const tickers = rows
+    .map((row) => row.symbol)
+    .filter((symbol) => TICKER_FILTER.size === 0 || TICKER_FILTER.has(symbol.toUpperCase()))
+  return TICKER_LIMIT > 0 ? tickers.slice(0, TICKER_LIMIT) : tickers
+}
+
+async function priceRowsForTicker(
+  market: Market,
+  symbol: string,
+  endDate: string,
+  warmupStartDate: string | null,
+): Promise<PriceRow[]> {
+  const source = sourceTable(market)
+  const hasWarmup = Boolean(warmupStartDate)
+  return execAll<PriceRow>(
+    source.rowsSql(hasWarmup),
+    market === 'JP'
+      ? [symbol, endDate, ...(hasWarmup ? [warmupStartDate] : [])]
+      : [market, symbol, endDate, ...(hasWarmup ? [warmupStartDate] : [])],
+  )
+}
+
+async function insertRawMetrics(market: Market, rows: MetricRow[]): Promise<void> {
+  for (let i = 0; i < rows.length; i += CHUNK) {
+    const chunk = rows.slice(i, i + CHUNK)
+    await execBatch(chunk.map((row) => ({
+      sql: `
+        INSERT INTO physical_momentum_metrics (
+          market, symbol, date,
+          velocity, acceleration, momentum, force,
+          ma5_angle, ma25_angle, ma75_angle, ma200_angle, ma_angle_avg, energy,
+          z_velocity, z_acceleration, z_momentum, z_force, z_ma_angle_avg, z_energy,
+          physical_momentum_score, physical_force_score, physical_energy_score,
+          created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, unixepoch(), unixepoch())
+        ON CONFLICT(market, symbol, date) DO UPDATE SET
+          velocity = excluded.velocity,
+          acceleration = excluded.acceleration,
+          momentum = excluded.momentum,
+          force = excluded.force,
+          ma5_angle = excluded.ma5_angle,
+          ma25_angle = excluded.ma25_angle,
+          ma75_angle = excluded.ma75_angle,
+          ma200_angle = excluded.ma200_angle,
+          ma_angle_avg = excluded.ma_angle_avg,
+          energy = excluded.energy,
+          z_velocity = NULL,
+          z_acceleration = NULL,
+          z_momentum = NULL,
+          z_force = NULL,
+          z_ma_angle_avg = NULL,
+          z_energy = NULL,
+          physical_momentum_score = NULL,
+          physical_force_score = NULL,
+          physical_energy_score = NULL,
+          updated_at = unixepoch()
+      `,
+      args: [
+        market,
+        row.symbol,
+        row.date,
+        dbNumber(row.velocity),
+        dbNumber(row.acceleration),
+        dbNumber(row.momentum),
+        dbNumber(row.force),
+        dbNumber(row.ma5Angle),
+        dbNumber(row.ma25Angle),
+        dbNumber(row.ma75Angle),
+        dbNumber(row.ma200Angle),
+        dbNumber(row.maAngleAvg),
+        dbNumber(row.energy),
+      ],
+    })))
+  }
+}
+
+async function normalizeMarketDate(market: Market, date: string): Promise<void> {
+  const rows = await execAll<DbMetricRow>(
+    `
+      SELECT
+        symbol,
+        velocity,
+        acceleration,
+        momentum,
+        force,
+        ma_angle_avg AS maAngleAvg,
+        energy
+      FROM physical_momentum_metrics
+      WHERE market = ?
+        AND date = ?
+    `,
+    [market, date],
+  )
+
+  if (rows.length === 0) return
+
+  const stats = Object.fromEntries(
+    RAW_KEYS.map((key) => [key, meanAndStd(rows.map((row) => row[key]))]),
+  ) as Record<PhysicalMomentumRawKey, { mean: number | null; std: number | null }>
+
+  for (let i = 0; i < rows.length; i += CHUNK) {
+    const chunk = rows.slice(i, i + CHUNK)
+    await execBatch(chunk.map((row) => {
+      const zVelocity = zScore(row.velocity, stats.velocity.mean, stats.velocity.std)
+      const zAcceleration = zScore(row.acceleration, stats.acceleration.mean, stats.acceleration.std)
+      const zMomentum = zScore(row.momentum, stats.momentum.mean, stats.momentum.std)
+      const zForce = zScore(row.force, stats.force.mean, stats.force.std)
+      const zMaAngleAvg = zScore(row.maAngleAvg, stats.maAngleAvg.mean, stats.maAngleAvg.std)
+      const zEnergy = zScore(row.energy, stats.energy.mean, stats.energy.std)
+      const scores = composePhysicalMomentumScores({
+        zVelocity,
+        zAcceleration,
+        zMomentum,
+        zForce,
+        zMaAngleAvg,
+        zEnergy,
+      })
+
+      return {
+        sql: `
+          UPDATE physical_momentum_metrics
+          SET z_velocity = ?,
+              z_acceleration = ?,
+              z_momentum = ?,
+              z_force = ?,
+              z_ma_angle_avg = ?,
+              z_energy = ?,
+              physical_momentum_score = ?,
+              physical_force_score = ?,
+              physical_energy_score = ?,
+              updated_at = unixepoch()
+          WHERE market = ?
+            AND symbol = ?
+            AND date = ?
+        `,
+        args: [
+          dbNumber(zVelocity),
+          dbNumber(zAcceleration),
+          dbNumber(zMomentum),
+          dbNumber(zForce),
+          dbNumber(zMaAngleAvg),
+          dbNumber(zEnergy),
+          dbNumber(scores.physicalMomentumScore),
+          dbNumber(scores.physicalForceScore),
+          dbNumber(scores.physicalEnergyScore),
+          market,
+          row.symbol,
+          date,
+        ],
+      }
+    }))
+  }
+}
+
+async function deleteExistingMetrics(market: Market, startDate: string, endDate: string, tickers: string[]): Promise<void> {
+  if (TICKER_FILTER.size === 0) {
+    await execRun(
+      'DELETE FROM physical_momentum_metrics WHERE market = ? AND date BETWEEN ? AND ?',
+      [market, startDate, endDate],
+    )
+    return
+  }
+
+  for (let i = 0; i < tickers.length; i += CHUNK) {
+    const chunk = tickers.slice(i, i + CHUNK)
+    if (chunk.length === 0) continue
+    const placeholders = chunk.map(() => '?').join(',')
+    await execRun(
+      `
+        DELETE FROM physical_momentum_metrics
+        WHERE market = ?
+          AND date BETWEEN ? AND ?
+          AND symbol IN (${placeholders})
+      `,
+      [market, startDate, endDate, ...chunk],
+    )
+  }
+}
+
+async function processMarket(market: Market): Promise<{ totalTickers: number; succeeded: number; failed: number; rowsInserted: number }> {
+  const latestDate = END_DATE ?? await latestDateForMarket(market)
+  if (!latestDate) {
+    console.log(`[${market}] skipped: no OHLCV data`)
+    return { totalTickers: 0, succeeded: 0, failed: 0, rowsInserted: 0 }
+  }
+
+  const dates = await processingDatesForMarket(market, latestDate)
+  if (dates.length === 0) {
+    console.log(`[${market}] skipped: no processing dates`)
+    return { totalTickers: 0, succeeded: 0, failed: 0, rowsInserted: 0 }
+  }
+
+  const startDate = dates[0]
+  const endDate = dates[dates.length - 1]
+  const warmupStartDate = RECENT_DAYS > 0 ? dateDaysBefore(startDate, 560) : null
+  const tickers = await tickersForMarket(market, startDate, endDate)
+
+  console.log(`[${market}] ${tickers.length} symbols, ${dates.length} dates (${startDate} -> ${endDate})`)
+
+  await deleteExistingMetrics(market, startDate, endDate, tickers)
+
+  let succeeded = 0
+  let failed = 0
+  let rowsInserted = 0
+
+  for (const [index, symbol] of tickers.entries()) {
+    try {
+      const prices = await priceRowsForTicker(market, symbol, endDate, warmupStartDate)
+      const rawRows = computePhysicalMomentumRawRows(prices, LOOKBACK_DAYS)
+        .filter((row) => row.date >= startDate && row.date <= endDate)
+        .map((row) => ({ ...row, symbol }))
+
+      if (rawRows.length > 0) {
+        await insertRawMetrics(market, rawRows)
+        rowsInserted += rawRows.length
+      }
+      succeeded += 1
+    } catch (error) {
+      failed += 1
+      console.error(`[${market}] ${symbol} failed:`, error instanceof Error ? error.message : error)
+    }
+
+    if ((index + 1) % LOG_EVERY === 0) {
+      console.log(`[${market}] processed ${index + 1}/${tickers.length}, rows=${rowsInserted}`)
+    }
+  }
+
+  for (const [index, date] of dates.entries()) {
+    await normalizeMarketDate(market, date)
+    if ((index + 1) % 50 === 0) {
+      console.log(`[${market}] normalized ${index + 1}/${dates.length} dates`)
+    }
+  }
+
+  return { totalTickers: tickers.length, succeeded, failed, rowsInserted }
+}
+
+async function main(): Promise<void> {
+  await ensurePhysicalMomentumSchema()
+  const runId = await startRun()
+  let totalTickers = 0
+  let succeeded = 0
+  let failed = 0
+  let rowsInserted = 0
+
+  try {
+    for (const market of MARKETS) {
+      const result = await processMarket(market)
+      totalTickers += result.totalTickers
+      succeeded += result.succeeded
+      failed += result.failed
+      rowsInserted += result.rowsInserted
+    }
+
+    await finishRun(runId, 'success', { totalTickers, succeeded, failed, rowsInserted })
+    console.log(`Physical momentum complete: markets=${MARKETS.join(',')}, tickers=${totalTickers}, rows=${rowsInserted}, failed=${failed}`)
+  } catch (error) {
+    await finishRun(runId, 'failed', {
+      totalTickers,
+      succeeded,
+      failed,
+      rowsInserted,
+      errorSummary: error instanceof Error ? error.message : String(error),
+    })
+    throw error
+  }
+}
+
+main().catch((error) => {
+  console.error('Fatal:', error)
+  process.exit(1)
+})

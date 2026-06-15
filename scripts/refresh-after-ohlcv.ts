@@ -131,6 +131,11 @@ async function main(): Promise<void> {
       console.log('Snapshots are already fresh after OHLCV fetch')
     }
 
+    await runRequired('scripts/batch-physical-momentum.ts', {
+      PMS_RECENT_DAYS: process.env.PMS_DAILY_RECENT_DAYS ?? '320',
+    })
+    await lock?.heartbeat()
+
     const afterSnapshots = await getDataFreshness()
     if (afterSnapshots.needsFeatureUpdate) {
       await runRequired('scripts/batch-features.ts')

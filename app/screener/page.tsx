@@ -76,6 +76,13 @@ interface StockRow {
   weekly_b_stage: number | null
   monthly_a_stage: number | null
   monthly_b_stage: number | null
+  physicalMomentumScore?: number | null
+  physicalForceScore?: number | null
+  physicalEnergyScore?: number | null
+  physicalMomentumRank?: number | null
+  physicalMomentumTrend?: 'rising' | 'falling' | 'flat' | null
+  physicalAcceleration?: number | null
+  physicalForce?: number | null
 }
 
 type SortKey =
@@ -102,6 +109,10 @@ type SortKey =
   | 'sma25Angle'
   | 'sma75Angle'
   | 'sma200Angle'
+  | 'physicalMomentumScore'
+  | 'physicalForceScore'
+  | 'physicalEnergyScore'
+  | 'physicalMomentumRank'
   | 'earningsLastDate'
   | 'earningsLastElapsedDays'
   | 'earningsNextDate'
@@ -137,6 +148,13 @@ export default function ScreenerPage() {
   const [selectedSector33, setSelectedSector33] = useState<string>('')
   const [selectedMarginType, setSelectedMarginType] = useState<string>('')
   const [selectedMcapBins, setSelectedMcapBins] = useState<Set<number>>(new Set())
+  const [pmsMin, setPmsMin] = useState('')
+  const [pfsMin, setPfsMin] = useState('')
+  const [pesMin, setPesMin] = useState('')
+  const [accelerationPositive, setAccelerationPositive] = useState(false)
+  const [forcePositive, setForcePositive] = useState(false)
+  const [stage23Candidate, setStage23Candidate] = useState(false)
+  const [pmsTrend, setPmsTrend] = useState('')
   const referenceDate = snapshotDate ?? selectedDate
   const tradingDates = useMemo(
     () => availableDates.map((item) => item.date).filter(Boolean).sort(),
@@ -165,6 +183,13 @@ export default function ScreenerPage() {
     const params = new URLSearchParams({ market: 'JP' })
     if (activeUniverse) params.set(UNIVERSE_FILTER_PARAM, activeUniverse)
     if (selectedDate) params.set('date', selectedDate)
+    if (pmsMin.trim()) params.set('pmsMin', pmsMin.trim())
+    if (pfsMin.trim()) params.set('pfsMin', pfsMin.trim())
+    if (pesMin.trim()) params.set('pesMin', pesMin.trim())
+    if (accelerationPositive) params.set('accelerationPositive', '1')
+    if (forcePositive) params.set('forcePositive', '1')
+    if (stage23Candidate) params.set('stage23Candidate', '1')
+    if (pmsTrend) params.set('pmsTrend', pmsTrend)
     for (const [k, v] of Object.entries(stages)) {
       if (v && v.length > 0) params.set(k, v.join(','))
     }
@@ -188,7 +213,7 @@ export default function ScreenerPage() {
         }
       })
     return () => { cancelled = true }
-  }, [stages, selectedDate, activeUniverse])
+  }, [stages, selectedDate, activeUniverse, pmsMin, pfsMin, pesMin, accelerationPositive, forcePositive, stage23Candidate, pmsTrend])
 
   const filterText = useMemo(() => {
     const parts: string[] = []
@@ -430,8 +455,53 @@ export default function ScreenerPage() {
         </div>
       </Section>
 
+      {/* Physical Momentumで絞り込み */}
+      <Section step={4} label="Physical Momentumで絞り込み（任意）">
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '8px', alignItems: 'end' }}>
+          <MomentumNumberInput label="PMS >=" value={pmsMin} onChange={setPmsMin} placeholder="例: 1.0" />
+          <MomentumNumberInput label="PFS >=" value={pfsMin} onChange={setPfsMin} placeholder="例: 0.8" />
+          <MomentumNumberInput label="PES >=" value={pesMin} onChange={setPesMin} placeholder="例: 0.8" />
+          <label style={momentumSelectLabelStyle}>
+            PMS方向
+            <select value={pmsTrend} onChange={(event) => setPmsTrend(event.target.value)} style={mcSelectStyle}>
+              <option value="">全て</option>
+              <option value="rising">上昇中</option>
+              <option value="falling">低下中</option>
+            </select>
+          </label>
+        </div>
+        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '8px' }}>
+          <button type="button" onClick={() => setAccelerationPositive((v) => !v)} style={mcChipStyle(accelerationPositive)}>
+            Acceleration &gt; 0
+          </button>
+          <button type="button" onClick={() => setForcePositive((v) => !v)} style={mcChipStyle(forcePositive)}>
+            Force &gt; 0
+          </button>
+          <button type="button" onClick={() => setStage23Candidate((v) => !v)} style={mcChipStyle(stage23Candidate)}>
+            Stage2→3候補
+          </button>
+          {(pmsMin || pfsMin || pesMin || accelerationPositive || forcePositive || stage23Candidate || pmsTrend) && (
+            <button
+              type="button"
+              onClick={() => {
+                setPmsMin('')
+                setPfsMin('')
+                setPesMin('')
+                setAccelerationPositive(false)
+                setForcePositive(false)
+                setStage23Candidate(false)
+                setPmsTrend('')
+              }}
+              style={mcChipStyle(false)}
+            >
+              × クリア
+            </button>
+          )}
+        </div>
+      </Section>
+
       {/* HEXステージ（任意の絞り込み） */}
-      <Section step={4} label="HEXステージで絞り込み（任意 / 複数系統 AND）">
+      <Section step={5} label="HEXステージで絞り込み（任意 / 複数系統 AND）">
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '8px' }}>
           <button
             onClick={() => setStages({})}
@@ -563,7 +633,7 @@ export default function ScreenerPage() {
             </div>
           ) : (
             <div style={{ overflowX: 'auto' }}>
-              <table style={{ minWidth: '2850px', borderCollapse: 'collapse', fontSize: '12px' }}>
+              <table style={{ minWidth: '3200px', borderCollapse: 'collapse', fontSize: '12px' }}>
                 <thead>
                   <tr style={{ background: 'var(--bg-elevated)', borderBottom: '1px solid var(--border-dim)' }}>
                     <th scope="col" style={th}></th>
@@ -589,6 +659,10 @@ export default function ScreenerPage() {
                     <SortableTh label="SMA25角度"  sortKey="sma25Angle"          current={sort} onClick={toggleSort} align="right" />
                     <SortableTh label="SMA75角度"  sortKey="sma75Angle"          current={sort} onClick={toggleSort} align="right" />
                     <SortableTh label="SMA200角度" sortKey="sma200Angle"         current={sort} onClick={toggleSort} align="right" />
+                    <SortableTh label="PMS"        sortKey="physicalMomentumScore" current={sort} onClick={toggleSort} align="right" />
+                    <SortableTh label="PFS"        sortKey="physicalForceScore"  current={sort} onClick={toggleSort} align="right" />
+                    <SortableTh label="PES"        sortKey="physicalEnergyScore" current={sort} onClick={toggleSort} align="right" />
+                    <SortableTh label="PMS順位"     sortKey="physicalMomentumRank" current={sort} onClick={toggleSort} align="right" />
                     <SortableTh label="前回決算"   sortKey="earningsLastDate"    current={sort} onClick={toggleSort} />
                     <SortableTh label="前回から"   sortKey="earningsLastElapsedDays" current={sort} onClick={toggleSort} align="right" />
                     <SortableTh label="次回決算"   sortKey="earningsNextDate"    current={sort} onClick={toggleSort} />
@@ -667,6 +741,15 @@ export default function ScreenerPage() {
                         <td style={{ ...tdR, color: pctColor(r.sma25Angle ?? undefined) }}>{fmtAngle(r.sma25Angle ?? undefined)}</td>
                         <td style={{ ...tdR, color: pctColor(r.sma75Angle ?? undefined) }}>{fmtAngle(r.sma75Angle ?? undefined)}</td>
                         <td style={{ ...tdR, minWidth: '74px', color: sma200Tone(r.sma200Angle ?? undefined) }}>{fmtLongSmaAngle(r.sma200Angle ?? undefined)}</td>
+                        <td style={{ ...tdR, color: scoreColor(r.physicalMomentumScore) }}>
+                          {fmtScore(r.physicalMomentumScore)}
+                          <span style={{ marginLeft: '4px', color: 'var(--text-muted)', fontSize: '10px' }}>
+                            {pmsTrendSymbol(r.physicalMomentumTrend)}
+                          </span>
+                        </td>
+                        <td style={{ ...tdR, color: scoreColor(r.physicalForceScore) }}>{fmtScore(r.physicalForceScore)}</td>
+                        <td style={{ ...tdR, color: scoreColor(r.physicalEnergyScore) }}>{fmtScore(r.physicalEnergyScore)}</td>
+                        <td style={tdR}>{r.physicalMomentumRank != null ? r.physicalMomentumRank.toLocaleString('ja-JP') : '---'}</td>
                         <td style={{ ...td, minWidth: '112px', whiteSpace: 'nowrap' }}>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', alignItems: 'flex-start' }}>
                             <span style={{
@@ -782,6 +865,25 @@ function fmtPct(v: number | undefined): string {
   if (v == null || !Number.isFinite(v)) return '---'
   const sign = v > 0 ? '+' : ''
   return `${sign}${v.toFixed(2)}%`
+}
+
+function fmtScore(v: number | null | undefined): string {
+  if (v == null || !Number.isFinite(v)) return '---'
+  return v.toFixed(2)
+}
+
+function scoreColor(v: number | null | undefined): string {
+  if (v == null || !Number.isFinite(v)) return 'var(--text-muted)'
+  if (v > 0) return 'var(--price-up)'
+  if (v < 0) return 'var(--price-down)'
+  return 'var(--text-secondary)'
+}
+
+function pmsTrendSymbol(trend: StockRow['physicalMomentumTrend']): string {
+  if (trend === 'rising') return '↑'
+  if (trend === 'falling') return '↓'
+  if (trend === 'flat') return '→'
+  return ''
 }
 
 function fmtAngle(v: number | undefined): string {
@@ -1174,6 +1276,32 @@ function Section({ step, label, disabled, children }: { step: number; label: str
   )
 }
 
+function MomentumNumberInput({
+  label,
+  value,
+  onChange,
+  placeholder,
+}: {
+  label: string
+  value: string
+  onChange: (value: string) => void
+  placeholder: string
+}) {
+  return (
+    <label style={momentumSelectLabelStyle}>
+      {label}
+      <input
+        type="number"
+        step="0.1"
+        value={value}
+        placeholder={placeholder}
+        onChange={(event) => onChange(event.target.value)}
+        style={momentumInputStyle}
+      />
+    </label>
+  )
+}
+
 const mcSelectStyle: React.CSSProperties = {
   padding: '5px 8px',
   fontSize: '12px',
@@ -1184,6 +1312,22 @@ const mcSelectStyle: React.CSSProperties = {
   borderRadius: 'var(--radius-sm)',
   cursor: 'pointer',
   minWidth: '180px',
+}
+
+const momentumSelectLabelStyle: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: '4px',
+  fontSize: '11px',
+  color: 'var(--text-muted)',
+  fontWeight: 600,
+}
+
+const momentumInputStyle: React.CSSProperties = {
+  ...mcSelectStyle,
+  minWidth: 0,
+  width: '100%',
+  cursor: 'text',
 }
 
 const mcChipStyle = (active: boolean): React.CSSProperties => ({
