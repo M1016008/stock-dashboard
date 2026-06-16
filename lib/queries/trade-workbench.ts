@@ -129,6 +129,7 @@ export interface TradeWorkbenchCandidate {
   orderDraft: TradeWorkbenchOrderDraft
   nextEarningsDate: string | null
   nextEarningsFiscalPeriod: string | null
+  nextEarningsSource: string | null
 }
 
 export interface TradeWorkbenchSummary {
@@ -209,6 +210,8 @@ type RawCandidateRow = {
   classic_down_model: string | null
   next_earnings_date: string | null
   next_earnings_fiscal_period: string | null
+  last_earnings_date: string | null
+  last_earnings_fiscal_period: string | null
 }
 
 type SignalReturnRow = {
@@ -419,6 +422,63 @@ function maState(row: RawCandidateRow) {
   return { order, angle, dailyShortSlopePct, dailyMiddleSlopePct, priceVsMa25Pct }
 }
 
+function resolveTradeNextEarnings(row: RawCandidateRow): {
+  date: string | null
+  fiscalPeriod: string | null
+  source: string | null
+} {
+  if (row.next_earnings_date) {
+    return {
+      date: row.next_earnings_date,
+      fiscalPeriod: row.next_earnings_fiscal_period,
+      source: 'earnings_calendar',
+    }
+  }
+
+  const estimated = estimateNextQuarterlyDate(row.last_earnings_date, row.price_date)
+  if (!estimated) return { date: null, fiscalPeriod: null, source: null }
+
+  return {
+    date: estimated,
+    fiscalPeriod: null,
+    source: 'estimated_from_previous_earnings',
+  }
+}
+
+function estimateNextQuarterlyDate(lastKnownDate: string | null, referenceDate: string | null): string | null {
+  if (!lastKnownDate || !referenceDate || !/^\d{4}-\d{2}-\d{2}$/.test(lastKnownDate)) return null
+  let candidate = lastKnownDate
+  for (let i = 0; i < 8; i++) {
+    candidate = nextWeekday(addMonthsClamped(candidate, 3))
+    if (candidate > referenceDate) return candidate
+  }
+  return null
+}
+
+function addMonthsClamped(dateStr: string, months: number): string {
+  const [year, month, day] = dateStr.split('-').map(Number)
+  const targetMonthIndex = month - 1 + months
+  const targetYear = year + Math.floor(targetMonthIndex / 12)
+  const targetMonth = ((targetMonthIndex % 12) + 12) % 12
+  const lastDay = new Date(Date.UTC(targetYear, targetMonth + 1, 0)).getUTCDate()
+  const clampedDay = Math.min(day, lastDay)
+  return `${targetYear}-${String(targetMonth + 1).padStart(2, '0')}-${String(clampedDay).padStart(2, '0')}`
+}
+
+function nextWeekday(dateStr: string): string {
+  let time = Date.parse(`${dateStr}T00:00:00.000Z`)
+  if (!Number.isFinite(time)) return dateStr
+  for (let i = 0; i < 3; i++) {
+    const day = new Date(time).getUTCDay()
+    if (day >= 1 && day <= 5) {
+      const d = new Date(time)
+      return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`
+    }
+    time += 86_400_000
+  }
+  return dateStr
+}
+
 function placeholders(length: number): string {
   return Array.from({ length }, () => '?').join(', ')
 }
@@ -515,7 +575,9 @@ async function fetchRows(horizonDays: number, limit: number): Promise<RawCandida
       c_down.candidate_score AS classic_down_score,
       c_down.model_name AS classic_down_model,
       earn.announce_date AS next_earnings_date,
-      earn.fiscal_period AS next_earnings_fiscal_period
+      earn.fiscal_period AS next_earnings_fiscal_period,
+      last_earn.announce_date AS last_earnings_date,
+      last_earn.fiscal_period AS last_earnings_fiscal_period
     FROM candidate_tickers ct
     LEFT JOIN ticker_universe u ON u.ticker = ct.ticker
     LEFT JOIN serving_margin_latest m ON m.ticker = ct.ticker
@@ -582,6 +644,14 @@ async function fetchRows(horizonDays: number, limit: number): Promise<RawCandida
        FROM earnings_calendar e2
        WHERE e2.ticker = ct.ticker
          AND e2.announce_date >= (SELECT price_date FROM dates)
+     )
+    LEFT JOIN earnings_calendar last_earn
+      ON last_earn.ticker = ct.ticker
+     AND last_earn.announce_date = (
+       SELECT MAX(e3.announce_date)
+       FROM earnings_calendar e3
+       WHERE e3.ticker = ct.ticker
+         AND e3.announce_date <= (SELECT price_date FROM dates)
      )
     WHERE u.market_segment IN ('プライム', 'スタンダード', 'グロース')
     ORDER BY
@@ -890,6 +960,7 @@ function makeDecision(params: {
   const patternDownScore = patternDownEdgeScore(patternEvidence)
   const modelUpScore = modelMetricScore(objectiveUp, 'up')
   const modelDownRisk = modelMetricScore(objectiveDown, 'down')
+  const nextEarnings = resolveTradeNextEarnings(row)
   const maBonus =
     ma.order === '短期 > 中期 > 長期'
       ? 8
@@ -898,8 +969,8 @@ function makeDecision(params: {
         : ma.angle === '短期線下向き'
           ? -8
           : 0
-  const nearEarningsRisk = row.next_earnings_date && row.price_date
-    ? Math.max(0, 10 - Math.ceil((Date.parse(`${row.next_earnings_date}T00:00:00Z`) - Date.parse(`${row.price_date}T00:00:00Z`)) / 86_400_000))
+  const nearEarningsRisk = nextEarnings.date && row.price_date
+    ? Math.max(0, 10 - Math.ceil((Date.parse(`${nextEarnings.date}T00:00:00Z`) - Date.parse(`${row.price_date}T00:00:00Z`)) / 86_400_000))
     : 0
   const longScore = clamp(
     24
@@ -1012,8 +1083,9 @@ function makeDecision(params: {
   if (ma.angle === '短期線下向き') {
     riskNotes.push('短期MA角度が下向きです。注文案を出す場合も終値回復を条件にします。')
   }
-  if (row.next_earnings_date) {
-    riskNotes.push(`次回決算予定が${row.next_earnings_date}です。決算跨ぎを避けるか、数量を落とす前提で確認します。`)
+  if (nextEarnings.date) {
+    const sourceLabel = nextEarnings.source === 'estimated_from_previous_earnings' ? '推定' : '公式予定'
+    riskNotes.push(`次回決算${sourceLabel}が${nextEarnings.date}です。決算跨ぎを避けるか、数量を落とす前提で確認します。`)
   }
 
   const nextChecks = [
@@ -1162,6 +1234,7 @@ function toCandidate(params: {
   const objectiveUp = objectiveMap.get(`up|${horizonDays}`) ?? null
   const objectiveDown = objectiveMap.get(`down|${horizonDays}`) ?? null
   const ma = maState(row)
+  const nextEarnings = resolveTradeNextEarnings(row)
   const decision = makeDecision({
     row,
     stages,
@@ -1235,8 +1308,9 @@ function toCandidate(params: {
     },
     decision,
     orderDraft,
-    nextEarningsDate: row.next_earnings_date,
-    nextEarningsFiscalPeriod: row.next_earnings_fiscal_period,
+    nextEarningsDate: nextEarnings.date,
+    nextEarningsFiscalPeriod: nextEarnings.fiscalPeriod,
+    nextEarningsSource: nextEarnings.source,
   }
 }
 

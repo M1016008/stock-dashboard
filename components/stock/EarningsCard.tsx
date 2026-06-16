@@ -8,6 +8,10 @@ interface SnapshotInfo {
   date: string | null
   earningsLastDate: string | null
   earningsNextDate: string | null
+  earningsLastSource?: string | null
+  earningsLastFiscalPeriod?: string | null
+  earningsNextSource?: string | null
+  earningsNextFiscalPeriod?: string | null
 }
 
 interface Props {
@@ -51,6 +55,9 @@ export function EarningsCard({ ticker }: Props) {
         <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '2px' }}>前回決算日</div>
         <div style={{ fontSize: '14px', fontFamily: 'var(--font-mono)', fontWeight: 600, color: 'var(--text-primary)' }}>
           {formatJapaneseDate(data.earningsLastDate)}
+          {data.earningsLastSource && (
+            <SourceBadge source={data.earningsLastSource} fiscalPeriod={data.earningsLastFiscalPeriod} />
+          )}
           {daysSinceLast != null && daysSinceLast >= 0 && (
             <span style={{ marginLeft: '8px', fontSize: '11px', color: 'var(--text-secondary)' }}>
               前回決算から: {daysSinceLast}日経過
@@ -62,6 +69,9 @@ export function EarningsCard({ ticker }: Props) {
         <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '2px' }}>次回決算日</div>
         <div style={{ fontSize: '14px', fontFamily: 'var(--font-mono)', fontWeight: 600, color: 'var(--accent-primary)' }}>
           {formatJapaneseDate(data.earningsNextDate)}
+          {data.earningsNextSource && (
+            <SourceBadge source={data.earningsNextSource} fiscalPeriod={data.earningsNextFiscalPeriod} />
+          )}
           {daysToNext != null && (
             <span style={{ marginLeft: '8px', fontSize: '11px', color: daysToNext <= 7 ? 'var(--price-down, #ef4444)' : 'var(--text-secondary)' }}>
               決算まで: {daysToNext === 0 ? '本日' : daysToNext > 0 ? `あと${daysToNext}日` : `${-daysToNext}日経過`}
@@ -75,6 +85,35 @@ export function EarningsCard({ ticker }: Props) {
         </div>
       )}
     </div>
+  )
+}
+
+function SourceBadge({ source, fiscalPeriod }: { source: string | null | undefined; fiscalPeriod: string | null | undefined }) {
+  const label =
+    source === 'jpx' ? 'JPX公式'
+      : source === 'jquants' ? 'J-Quants予定'
+        : source === 'jquants_fins_summary' ? 'JQ実績'
+          : source === 'estimated_from_previous_earnings' ? '推定'
+            : source
+  return (
+    <span
+      title={fiscalPeriod ?? undefined}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        marginLeft: '8px',
+        border: '1px solid var(--border-subtle)',
+        borderRadius: '999px',
+        background: 'var(--bg-elevated)',
+        color: 'var(--text-muted)',
+        fontFamily: 'var(--font-mono)',
+        fontSize: '10px',
+        fontWeight: 700,
+        padding: '2px 6px',
+      }}
+    >
+      {label ?? '取得'}
+    </span>
   )
 }
 

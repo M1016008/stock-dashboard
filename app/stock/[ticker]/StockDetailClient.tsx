@@ -346,6 +346,11 @@ function PhysicalMomentumSection({ ticker }: { ticker: string }) {
   }, [ticker])
 
   const latest = data?.latest ?? null
+  const previous = latest
+    ? [...(data?.history ?? [])].reverse().find((row) => row.date < latest.date) ?? null
+    : null
+  const fieldInsight = latest ? buildMaFieldInsight(latest, previous) : null
+  const insight = latest ? buildPhysicalMomentumInsight(latest, data?.rank ?? null, data?.totalRanked ?? 0, data?.trend ?? null, fieldInsight) : null
 
   return (
     <div className="card" style={physicalCardStyle}>
@@ -353,7 +358,7 @@ function PhysicalMomentumSection({ ticker }: { ticker: string }) {
         <div>
           <div className="section-header" style={{ margin: 0 }}>Physical Momentum</div>
           <div style={physicalSubTextStyle}>
-            速度・加速度・運動量・力・エネルギー・MA角度を横断Zスコア化した共通指標です。
+            市場平均との差で、いまの値動きの「力の向き・拡散/収縮・運動エネルギー」を読む共通スコアです。
           </div>
         </div>
         {latest && (
@@ -371,42 +376,68 @@ function PhysicalMomentumSection({ ticker }: { ticker: string }) {
         <p style={summaryEmptyStyle}>PMS未計算です。`npm run batch:physical-momentum` 実行後に表示されます。</p>
       ) : (
         <>
+          {insight && (
+            <div style={physicalHeroStyle}>
+              <div style={physicalHeroMainStyle}>
+                <div style={physicalHeroLabelStyle}>総合判定</div>
+                <div style={{ ...physicalHeroTitleStyle, color: insight.color }}>{insight.label}</div>
+                <p style={physicalHeroDescriptionStyle}>{insight.description}</p>
+                <div style={physicalReasonListStyle}>
+                  {insight.reasons.map((reason) => (
+                    <span key={reason} style={physicalReasonPillStyle}>{reason}</span>
+                  ))}
+                </div>
+              </div>
+              <PhysicalMomentumGauge
+                value={latest.physicalMomentumScore}
+                rank={data?.rank ?? null}
+                total={data?.totalRanked ?? 0}
+                trend={data?.trend ?? null}
+              />
+            </div>
+          )}
+
           <div style={physicalScoreGridStyle}>
             <PhysicalScoreCard
               label="PMS"
+              title="総合運動状態"
               value={latest.physicalMomentumScore}
               sub={data?.rank && data.totalRanked ? `市場順位 ${data.rank}/${data.totalRanked}` : '市場順位 -'}
+              guide="物理量を銘柄横断で標準化した総合点"
               trend={data?.trend ?? null}
             />
             <PhysicalScoreCard
               label="PFS"
+              title="力の変化"
               value={latest.physicalForceScore}
-              sub="初動検出: Force + Acceleration"
+              sub={physicalSignalText(latest.physicalForceScore, 'force')}
+              guide="Force と Acceleration。力が増えているかを見る"
               trend={null}
             />
             <PhysicalScoreCard
               label="PES"
+              title="運動エネルギー"
               value={latest.physicalEnergyScore}
-              sub="ブレイクアウト: Energy + Momentum"
+              sub={physicalSignalText(latest.physicalEnergyScore, 'energy')}
+              guide="Energy と Momentum。力が蓄積/放出されているかを見る"
               trend={null}
-            />
-            <PhysicalScoreCard
-              label="MA角度"
-              value={latest.maAngleAvg}
-              sub="5/25/75/200MA平均"
-              trend={null}
-              valueFormatter={fmtAngleDeg}
             />
           </div>
 
           <div style={physicalBodyGridStyle}>
-            <div style={physicalBreakdownGridStyle}>
-              <PhysicalBreakdown label="Velocity" value={fmtPctValue(latest.velocity)} />
-              <PhysicalBreakdown label="Acceleration" value={fmtDecimal(latest.acceleration, 4)} />
-              <PhysicalBreakdown label="Momentum" value={fmtCompact(latest.momentum)} />
-              <PhysicalBreakdown label="Force" value={fmtCompact(latest.force)} />
-              <PhysicalBreakdown label="Energy" value={fmtCompact(latest.energy)} />
-              <PhysicalBreakdown label="MA角度平均" value={fmtAngleDeg(latest.maAngleAvg)} />
+            <PhysicalMaFieldMap latest={latest} previous={previous} />
+            <div style={physicalBreakdownPanelStyle}>
+              <div style={physicalMiniHeaderStyle}>
+                <strong>内訳</strong>
+                <span>数値は補足。まずは力場とPMS/PFS/PESを見ます。</span>
+              </div>
+              <div style={physicalBreakdownGridStyle}>
+                <PhysicalBreakdown label="速度" help="20営業日前からの変化率" value={fmtPctValue(latest.velocity)} tone={latest.velocity} />
+                <PhysicalBreakdown label="加速度" help="速度の変化" value={fmtDecimal(latest.acceleration, 4)} tone={latest.acceleration} />
+                <PhysicalBreakdown label="運動量" help="出来高 × 速度" value={fmtCompact(latest.momentum)} tone={latest.momentum} />
+                <PhysicalBreakdown label="力" help="出来高 × 加速度" value={fmtCompact(latest.force)} tone={latest.force} />
+                <PhysicalBreakdown label="運動エネルギー" help="出来高 × 速度^2" value={fmtCompact(latest.energy)} tone={latest.energy} />
+              </div>
             </div>
             <PhysicalMomentumSparkline history={data?.history ?? []} />
           </div>
@@ -418,35 +449,134 @@ function PhysicalMomentumSection({ ticker }: { ticker: string }) {
 
 function PhysicalScoreCard({
   label,
+  title,
   value,
   sub,
+  guide,
   trend,
   valueFormatter = fmtScore,
 }: {
   label: string
+  title: string
   value: number | null
   sub: string
+  guide: string
   trend: 'rising' | 'falling' | 'flat' | null
   valueFormatter?: (value: number | null | undefined) => string
 }) {
   const tone = value == null ? 'var(--text-muted)' : value >= 0 ? 'var(--price-up)' : 'var(--price-down)'
+  const pct = scoreBarPercent(value)
   return (
     <div style={physicalScoreCardStyle}>
-      <span>{label}</span>
-      <strong style={{ color: tone }}>{valueFormatter(value)}</strong>
-      <small>
+      <div style={physicalScoreTopStyle}>
+        <span style={physicalScoreLabelStyle}>{label}</span>
+        <strong style={{ color: tone }}>{valueFormatter(value)}</strong>
+      </div>
+      <div style={physicalScoreTitleStyle}>{title}</div>
+      <div style={physicalMeterTrackStyle}>
+        <span style={{ ...physicalMeterFillStyle, width: `${pct}%`, background: tone }} />
+      </div>
+      <small style={physicalScoreSubStyle}>
         {trend === 'rising' ? '上昇中 / ' : trend === 'falling' ? '低下中 / ' : trend === 'flat' ? '横ばい / ' : ''}
         {sub}
       </small>
+      <span style={physicalScoreGuideStyle}>{guide}</span>
     </div>
   )
 }
 
-function PhysicalBreakdown({ label, value }: { label: string; value: string }) {
+function PhysicalMomentumGauge({
+  value,
+  rank,
+  total,
+  trend,
+}: {
+  value: number | null
+  rank: number | null
+  total: number
+  trend: PhysicalMomentumResponse['trend']
+}) {
+  const pct = scoreBarPercent(value)
+  const tone = value == null ? 'var(--text-muted)' : value >= 0 ? 'var(--price-up)' : 'var(--price-down)'
+  const fillLeft = value == null || !Number.isFinite(value) ? 50 : value >= 0 ? 50 : pct
+  const fillWidth = value == null || !Number.isFinite(value) ? 0 : Math.abs(pct - 50)
+  const rankText = rank && total ? `市場 ${rank.toLocaleString('ja-JP')}位 / ${total.toLocaleString('ja-JP')}銘柄` : '市場順位 -'
+  return (
+    <div style={physicalGaugeStyle}>
+      <div style={physicalGaugeValueRowStyle}>
+        <span>PMS</span>
+        <strong style={{ color: tone }}>{fmtScore(value)}</strong>
+      </div>
+      <div style={physicalGaugeTrackStyle}>
+        <span style={physicalGaugeZeroStyle} />
+        <span style={{ ...physicalGaugeFillStyle, left: `${fillLeft}%`, width: `${fillWidth}%`, background: tone }} />
+      </div>
+      <div style={physicalGaugeScaleStyle}>
+        <span>弱い -2</span>
+        <span>平均 0</span>
+        <span>強い +2</span>
+      </div>
+      <div style={physicalGaugeMetaStyle}>
+        <span>{rankText}</span>
+        <b>{trend === 'rising' ? '上昇中' : trend === 'falling' ? '低下中' : trend === 'flat' ? '横ばい' : '方向未判定'}</b>
+      </div>
+    </div>
+  )
+}
+
+function PhysicalBreakdown({ label, help, value, tone }: { label: string; help: string; value: string; tone?: number | null }) {
+  const color = tone == null || !Number.isFinite(tone) ? 'var(--text-primary)' : tone >= 0 ? 'var(--price-up)' : 'var(--price-down)'
   return (
     <div style={physicalBreakdownStyle}>
       <span>{label}</span>
-      <strong>{value}</strong>
+      <strong style={{ color }}>{value}</strong>
+      <small>{help}</small>
+    </div>
+  )
+}
+
+function PhysicalMaFieldMap({ latest, previous }: { latest: PhysicalMomentumApiRow; previous: PhysicalMomentumApiRow | null }) {
+  const field = buildMaFieldInsight(latest, previous)
+  const angles = [
+    { label: '5MA', value: latest.ma5Angle },
+    { label: '25MA', value: latest.ma25Angle },
+    { label: '75MA', value: latest.ma75Angle },
+    { label: '200MA', value: latest.ma200Angle },
+  ]
+
+  return (
+    <div style={physicalFieldPanelStyle}>
+      <div style={physicalMiniHeaderStyle}>
+        <strong>MA力場</strong>
+        <span>平均ではなく、短期から長期への力の伝わり方を見ます。</span>
+      </div>
+      <div style={physicalFieldSummaryStyle}>
+        <strong style={{ color: field.color }}>{field.label}</strong>
+        <span>{field.description}</span>
+      </div>
+      <div style={physicalFieldMetaStyle}>
+        <span>角度幅 {field.spreadDeg == null ? '-' : `${field.spreadDeg.toFixed(1)}°`}</span>
+        <span>{field.spreadChangeDeg == null ? '変化 -' : `前回比 ${field.spreadChangeDeg >= 0 ? '+' : ''}${field.spreadChangeDeg.toFixed(1)}°`}</span>
+      </div>
+      <div style={physicalAngleRowsStyle}>
+        {angles.map((angle) => {
+          const deg = angleDeg(angle.value)
+          const tone = deg == null ? 'var(--text-muted)' : deg >= 0 ? 'var(--price-up)' : 'var(--price-down)'
+          const pct = angleBarPercent(deg)
+          const left = deg == null ? 50 : deg >= 0 ? 50 : pct
+          const width = deg == null ? 0 : Math.abs(pct - 50)
+          return (
+            <div key={angle.label} style={physicalAngleRowStyle}>
+              <span>{angle.label}</span>
+              <div style={physicalAngleTrackStyle}>
+                <i style={physicalAngleZeroStyle} />
+                <b style={{ ...physicalAngleFillStyle, left: `${left}%`, width: `${width}%`, background: tone }} />
+              </div>
+              <strong style={{ color: tone }}>{deg == null ? '-' : `${deg.toFixed(1)}°`}</strong>
+            </div>
+          )
+        })}
+      </div>
     </div>
   )
 }
@@ -470,7 +600,10 @@ function PhysicalMomentumSparkline({ history }: { history: PhysicalMomentumApiRo
         return `${x.toFixed(1)},${y.toFixed(1)}`
       })
       .join(' ')
-    return { polyline, min, max, width, height, firstDate: points[0].date, lastDate: points[points.length - 1].date }
+    const zeroY = min <= 0 && max >= 0
+      ? height - ((0 - min) / span) * height
+      : null
+    return { polyline, min, max, width, height, zeroY, firstDate: points[0].date, lastDate: points[points.length - 1].date }
   }, [history])
 
   if (!chart) {
@@ -480,11 +613,13 @@ function PhysicalMomentumSparkline({ history }: { history: PhysicalMomentumApiRo
   return (
     <div style={physicalSparklineBoxStyle}>
       <div style={physicalSparklineHeaderStyle}>
-        <strong>PMS時系列</strong>
+        <strong>PMS推移</strong>
         <span>{chart.firstDate} → {chart.lastDate}</span>
       </div>
       <svg viewBox={`0 0 ${chart.width} ${chart.height}`} role="img" aria-label="PMS時系列チャート" style={{ width: '100%', height: '128px' }}>
-        <line x1="0" x2={chart.width} y1={chart.height / 2} y2={chart.height / 2} stroke="var(--border-subtle)" strokeDasharray="4 4" />
+        {chart.zeroY != null && (
+          <line x1="0" x2={chart.width} y1={chart.zeroY} y2={chart.zeroY} stroke="var(--border-subtle)" strokeDasharray="4 4" />
+        )}
         <polyline points={chart.polyline} fill="none" stroke="var(--accent-primary)" strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" />
       </svg>
       <div style={physicalSparklineScaleStyle}>
@@ -493,6 +628,172 @@ function PhysicalMomentumSparkline({ history }: { history: PhysicalMomentumApiRo
       </div>
     </div>
   )
+}
+
+interface PhysicalMaFieldInsight {
+  label: string
+  description: string
+  color: string
+  spreadDeg: number | null
+  spreadChangeDeg: number | null
+}
+
+function buildMaFieldInsight(latest: PhysicalMomentumApiRow, previous: PhysicalMomentumApiRow | null): PhysicalMaFieldInsight {
+  const latestAngles = [latest.ma5Angle, latest.ma25Angle, latest.ma75Angle, latest.ma200Angle]
+    .map(angleDeg)
+    .filter((value): value is number => value != null)
+  const previousAngles = previous
+    ? [previous.ma5Angle, previous.ma25Angle, previous.ma75Angle, previous.ma200Angle]
+      .map(angleDeg)
+      .filter((value): value is number => value != null)
+    : []
+
+  if (latestAngles.length < 3) {
+    return {
+      label: 'MA力場未判定',
+      description: 'MA角度データが不足しています。',
+      color: 'var(--text-muted)',
+      spreadDeg: null,
+      spreadChangeDeg: null,
+    }
+  }
+
+  const ma5 = angleDeg(latest.ma5Angle)
+  const ma25 = angleDeg(latest.ma25Angle)
+  const ma75 = angleDeg(latest.ma75Angle)
+  const ma200 = angleDeg(latest.ma200Angle)
+  const shortAvg = averageFinite([ma5, ma25])
+  const longAvg = averageFinite([ma75, ma200])
+  const positive = latestAngles.filter((value) => value > 0.2).length
+  const negative = latestAngles.filter((value) => value < -0.2).length
+  const spreadDeg = angularSpread(latestAngles)
+  const previousSpread = previousAngles.length >= 3 ? angularSpread(previousAngles) : null
+  const spreadChangeDeg = spreadDeg != null && previousSpread != null ? spreadDeg - previousSpread : null
+
+  let label = '力場は中立'
+  let description = '短期線と長期線の向きがまだ揃っていません。価格の力がどちらへ伝わるか確認する局面です。'
+  let color = 'var(--text-secondary)'
+
+  if (shortAvg != null && longAvg != null && shortAvg > 0.2 && longAvg > 0.2 && positive >= 3) {
+    label = '上方向へ力が拡散'
+    description = '短期線だけでなく長期線側にも上向きの力が伝わっています。上位足との整合を確認したい状態です。'
+    color = 'var(--price-up)'
+  } else if (shortAvg != null && longAvg != null && shortAvg < -0.2 && longAvg < -0.2 && negative >= 3) {
+    label = '下方向へ力が拡散'
+    description = '短期線から長期線側まで下向きの力が広がっています。反発よりも下落継続リスクを優先確認します。'
+    color = 'var(--price-down)'
+  } else if (shortAvg != null && longAvg != null && shortAvg > 0.2 && longAvg < -0.2) {
+    label = '短期上向き・長期収縮'
+    description = '短期には上向きの力がありますが、長期線はまだ下向きです。力が長期側へ拡散するかが焦点です。'
+    color = 'var(--price-up)'
+  } else if (shortAvg != null && longAvg != null && shortAvg < -0.2 && longAvg > 0.2) {
+    label = '短期調整・長期残存'
+    description = '短期線は下向きですが、長期線には上向きの力が残っています。一時調整か崩れ始めかを確認します。'
+    color = 'var(--price-down)'
+  } else if (spreadChangeDeg != null && spreadChangeDeg >= 5) {
+    label = '力場が拡散中'
+    description = 'MA角度の幅が広がっています。力が一方向へ揃うか、ねじれとして分散するかを確認します。'
+    color = positive >= negative ? 'var(--price-up)' : 'var(--price-down)'
+  } else if (spreadChangeDeg != null && spreadChangeDeg <= -5) {
+    label = '力場が収縮中'
+    description = 'MA角度の幅が狭まっています。方向感はいったん圧縮され、次の拡散方向を待つ局面です。'
+    color = 'var(--text-secondary)'
+  } else if (positive > 0 && negative > 0) {
+    label = '力場がねじれ'
+    description = '短期・中期・長期の向きが混在しています。単純な上昇/下落ではなく、時間軸ごとの力の差を見ます。'
+    color = 'var(--text-secondary)'
+  }
+
+  return { label, description, color, spreadDeg, spreadChangeDeg }
+}
+
+function angleDeg(value: number | null | undefined): number | null {
+  if (value == null || !Number.isFinite(value)) return null
+  return (value * 180) / Math.PI
+}
+
+function averageFinite(values: Array<number | null>): number | null {
+  const finite = values.filter((value): value is number => value != null && Number.isFinite(value))
+  if (finite.length === 0) return null
+  return finite.reduce((sum, value) => sum + value, 0) / finite.length
+}
+
+function angularSpread(values: number[]): number | null {
+  if (values.length === 0) return null
+  return Math.max(...values) - Math.min(...values)
+}
+
+function angleBarPercent(value: number | null): number {
+  if (value == null || !Number.isFinite(value)) return 50
+  const clipped = Math.max(-75, Math.min(75, value))
+  return ((clipped + 75) / 150) * 100
+}
+
+function buildPhysicalMomentumInsight(
+  latest: PhysicalMomentumApiRow,
+  rank: number | null,
+  total: number,
+  trend: PhysicalMomentumResponse['trend'],
+  field: PhysicalMaFieldInsight | null,
+) {
+  const pms = latest.physicalMomentumScore
+  const pfs = latest.physicalForceScore
+  const pes = latest.physicalEnergyScore
+  const color = pms == null ? 'var(--text-muted)' : pms >= 0 ? 'var(--price-up)' : 'var(--price-down)'
+  let label = '中立'
+  let description = '市場平均に近い運動状態です。力場の拡散/収縮、PFS、PES、ステージ判定を併せて確認します。'
+  if (pms != null && pms >= 2) {
+    label = '強い上向きの力'
+    description = '総合運動状態が市場平均を大きく上回っています。力が長期側へ拡散しているか、短期だけの過熱かをMA力場で確認します。'
+  } else if (pms != null && pms >= 1) {
+    label = '上向きの力が優勢'
+    description = '市場平均より明確に強い運動状態です。PFSがプラスなら力が増加中、PESがプラスならエネルギーが残っています。'
+  } else if (pms != null && pms >= 0.35) {
+    label = 'やや上向き'
+    description = '市場平均よりやや強い状態です。短期の力が長期側へ伝わっているか、MA力場で確認します。'
+  } else if (pms != null && pms <= -2) {
+    label = '強い下向きの力'
+    description = '総合運動状態が市場平均を大きく下回っています。下向きの力が長期側へ拡散しているかを優先確認します。'
+  } else if (pms != null && pms <= -1) {
+    label = '下向きの力が優勢'
+    description = '市場平均より弱い運動状態です。PFSもマイナスなら、下向きの力がまだ残っている可能性があります。'
+  } else if (pms != null && pms <= -0.35) {
+    label = 'やや下向き'
+    description = '市場平均よりやや弱い状態です。力が収縮して反転準備に入っているのか、下方向へ拡散中なのかを確認します。'
+  }
+
+  const reasons = [
+    `PMS ${fmtScore(pms)}`,
+    trend === 'rising' ? 'PMS上昇中' : trend === 'falling' ? 'PMS低下中' : 'PMS横ばい',
+    rank && total ? `市場上位 ${Math.max(1, Math.round((rank / total) * 100))}%` : '順位未取得',
+    physicalSignalText(pfs, 'force'),
+    physicalSignalText(pes, 'energy'),
+    field?.label ?? 'MA力場未判定',
+  ]
+
+  return { label, description, color, reasons }
+}
+
+function physicalSignalText(value: number | null | undefined, kind: 'force' | 'energy'): string {
+  if (value == null || !Number.isFinite(value)) return kind === 'force' ? '力の変化未判定' : 'エネルギー未判定'
+  if (kind === 'force') {
+    if (value >= 1) return '上向きの力が強い'
+    if (value >= 0.35) return '上向きの力あり'
+    if (value <= -1) return '下向きの力が強い'
+    if (value <= -0.35) return '下向きの力あり'
+    return '力の変化は中立'
+  }
+  if (value >= 1) return '運動エネルギーが高い'
+  if (value >= 0.35) return '運動エネルギーあり'
+  if (value <= -1) return '運動エネルギーが弱い'
+  if (value <= -0.35) return '運動エネルギーはやや弱い'
+  return '運動エネルギーは中立'
+}
+
+function scoreBarPercent(value: number | null | undefined): number {
+  if (value == null || !Number.isFinite(value)) return 50
+  const clipped = Math.max(-2.5, Math.min(2.5, value))
+  return ((clipped + 2.5) / 5) * 100
 }
 
 function fmtScore(value: number | null | undefined): string {
@@ -516,11 +817,6 @@ function fmtCompact(value: number | null | undefined): string {
     notation: 'compact',
     maximumFractionDigits: 2,
   }).format(value)
-}
-
-function fmtAngleDeg(value: number | null | undefined): string {
-  if (value == null || !Number.isFinite(value)) return '-'
-  return `${((value * 180) / Math.PI).toFixed(2)}°`
 }
 
 type StageKey =
@@ -889,6 +1185,125 @@ const physicalDateBadgeStyle: CSSProperties = {
   padding: '4px 8px',
 }
 
+const physicalHeroStyle: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(min(260px, 100%), 1fr))',
+  gap: '10px',
+  alignItems: 'stretch',
+  border: '1px solid var(--border-subtle)',
+  borderRadius: 'var(--radius-sm)',
+  background: 'linear-gradient(180deg, #fff, var(--bg-elevated))',
+  padding: '12px',
+  marginBottom: '10px',
+}
+
+const physicalHeroMainStyle: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: '6px',
+  minWidth: 0,
+}
+
+const physicalHeroLabelStyle: CSSProperties = {
+  color: 'var(--text-muted)',
+  fontSize: '10px',
+  fontWeight: 700,
+}
+
+const physicalHeroTitleStyle: CSSProperties = {
+  fontSize: '22px',
+  fontWeight: 800,
+  lineHeight: 1.15,
+}
+
+const physicalHeroDescriptionStyle: CSSProperties = {
+  margin: 0,
+  color: 'var(--text-secondary)',
+  fontSize: '12px',
+  lineHeight: 1.65,
+}
+
+const physicalReasonListStyle: CSSProperties = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: '6px',
+}
+
+const physicalReasonPillStyle: CSSProperties = {
+  border: '1px solid var(--border-subtle)',
+  borderRadius: '999px',
+  background: '#fff',
+  color: 'var(--text-secondary)',
+  fontSize: '10px',
+  fontWeight: 700,
+  padding: '4px 8px',
+}
+
+const physicalGaugeStyle: CSSProperties = {
+  border: '1px solid var(--border-subtle)',
+  borderRadius: 'var(--radius-sm)',
+  background: '#fff',
+  padding: '10px',
+  display: 'flex',
+  flexDirection: 'column',
+  justifyContent: 'center',
+  gap: '8px',
+  minWidth: 0,
+}
+
+const physicalGaugeValueRowStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'baseline',
+  justifyContent: 'space-between',
+  gap: '8px',
+}
+
+const physicalGaugeTrackStyle: CSSProperties = {
+  position: 'relative',
+  height: '10px',
+  borderRadius: '999px',
+  background: 'var(--bg-surface)',
+  border: '1px solid var(--border-subtle)',
+  overflow: 'hidden',
+}
+
+const physicalGaugeFillStyle: CSSProperties = {
+  position: 'absolute',
+  left: 0,
+  top: 0,
+  bottom: 0,
+  borderRadius: '999px',
+  opacity: 0.85,
+}
+
+const physicalGaugeZeroStyle: CSSProperties = {
+  position: 'absolute',
+  left: '50%',
+  top: 0,
+  bottom: 0,
+  width: '1px',
+  background: 'var(--text-muted)',
+  opacity: 0.5,
+  zIndex: 1,
+}
+
+const physicalGaugeScaleStyle: CSSProperties = {
+  display: 'flex',
+  justifyContent: 'space-between',
+  color: 'var(--text-muted)',
+  fontFamily: 'var(--font-mono)',
+  fontSize: '9px',
+}
+
+const physicalGaugeMetaStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'baseline',
+  justifyContent: 'space-between',
+  gap: '8px',
+  color: 'var(--text-secondary)',
+  fontSize: '10px',
+}
+
 const physicalScoreGridStyle: CSSProperties = {
   display: 'grid',
   gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
@@ -903,13 +1318,147 @@ const physicalScoreCardStyle: CSSProperties = {
   padding: '10px',
   display: 'flex',
   flexDirection: 'column',
-  gap: '4px',
+  gap: '6px',
+}
+
+const physicalScoreTopStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'baseline',
+  justifyContent: 'space-between',
+  gap: '8px',
+}
+
+const physicalScoreLabelStyle: CSSProperties = {
+  color: 'var(--text-muted)',
+  fontFamily: 'var(--font-mono)',
+  fontSize: '10px',
+  fontWeight: 800,
+}
+
+const physicalScoreTitleStyle: CSSProperties = {
+  color: 'var(--text-primary)',
+  fontSize: '12px',
+  fontWeight: 800,
+}
+
+const physicalMeterTrackStyle: CSSProperties = {
+  height: '5px',
+  borderRadius: '999px',
+  background: 'var(--bg-surface)',
+  overflow: 'hidden',
+}
+
+const physicalMeterFillStyle: CSSProperties = {
+  display: 'block',
+  height: '100%',
+  borderRadius: '999px',
+  opacity: 0.82,
+}
+
+const physicalScoreSubStyle: CSSProperties = {
+  color: 'var(--text-secondary)',
+  fontSize: '10px',
+  lineHeight: 1.4,
+}
+
+const physicalScoreGuideStyle: CSSProperties = {
+  color: 'var(--text-muted)',
+  fontSize: '10px',
+  lineHeight: 1.45,
 }
 
 const physicalBodyGridStyle: CSSProperties = {
   display: 'grid',
   gridTemplateColumns: 'repeat(auto-fit, minmax(min(280px, 100%), 1fr))',
   gap: '10px',
+}
+
+const physicalBreakdownPanelStyle: CSSProperties = {
+  border: '1px solid var(--border-subtle)',
+  borderRadius: 'var(--radius-sm)',
+  background: '#fff',
+  padding: '8px',
+}
+
+const physicalFieldPanelStyle: CSSProperties = {
+  border: '1px solid var(--border-subtle)',
+  borderRadius: 'var(--radius-sm)',
+  background: '#fff',
+  padding: '8px',
+  minWidth: 0,
+}
+
+const physicalMiniHeaderStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'baseline',
+  justifyContent: 'space-between',
+  gap: '8px',
+  color: 'var(--text-secondary)',
+  fontSize: '11px',
+  marginBottom: '8px',
+}
+
+const physicalFieldSummaryStyle: CSSProperties = {
+  border: '1px solid var(--border-subtle)',
+  borderRadius: 'var(--radius-sm)',
+  background: 'var(--bg-elevated)',
+  padding: '8px',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: '4px',
+  marginBottom: '8px',
+}
+
+const physicalFieldMetaStyle: CSSProperties = {
+  display: 'flex',
+  justifyContent: 'space-between',
+  gap: '8px',
+  color: 'var(--text-muted)',
+  fontFamily: 'var(--font-mono)',
+  fontSize: '10px',
+  marginBottom: '8px',
+}
+
+const physicalAngleRowsStyle: CSSProperties = {
+  display: 'grid',
+  gap: '6px',
+}
+
+const physicalAngleRowStyle: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: '42px minmax(0, 1fr) 58px',
+  alignItems: 'center',
+  gap: '8px',
+  color: 'var(--text-secondary)',
+  fontFamily: 'var(--font-mono)',
+  fontSize: '10px',
+}
+
+const physicalAngleTrackStyle: CSSProperties = {
+  position: 'relative',
+  height: '7px',
+  borderRadius: '999px',
+  background: 'var(--bg-surface)',
+  overflow: 'hidden',
+}
+
+const physicalAngleZeroStyle: CSSProperties = {
+  position: 'absolute',
+  left: '50%',
+  top: 0,
+  bottom: 0,
+  width: '1px',
+  background: 'var(--text-muted)',
+  opacity: 0.5,
+  zIndex: 1,
+}
+
+const physicalAngleFillStyle: CSSProperties = {
+  position: 'absolute',
+  top: 0,
+  bottom: 0,
+  borderRadius: '999px',
+  opacity: 0.82,
 }
 
 const physicalBreakdownGridStyle: CSSProperties = {
@@ -921,7 +1470,7 @@ const physicalBreakdownGridStyle: CSSProperties = {
 const physicalBreakdownStyle: CSSProperties = {
   border: '1px solid var(--border-subtle)',
   borderRadius: 'var(--radius-sm)',
-  background: '#fff',
+  background: 'var(--bg-elevated)',
   padding: '7px 8px',
   display: 'flex',
   flexDirection: 'column',

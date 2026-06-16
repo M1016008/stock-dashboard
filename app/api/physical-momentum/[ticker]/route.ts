@@ -66,6 +66,7 @@ export async function GET(request: NextRequest, context: RouteContext) {
       FROM physical_momentum_metrics
       WHERE market = ?
         AND symbol = ?
+        AND physical_momentum_score IS NOT NULL
       ORDER BY date DESC
       LIMIT 1
     `,
@@ -110,12 +111,13 @@ export async function GET(request: NextRequest, context: RouteContext) {
           FROM physical_momentum_metrics
           WHERE market = ?
             AND symbol = ?
+            AND date <= ?
           ORDER BY date DESC
           LIMIT ?
         )
         ORDER BY date
       `,
-      [market, ticker, limit],
+      [market, ticker, latest.date, limit],
     ),
     execGet<{ rank: number | null; totalRanked: number }>(
       `
