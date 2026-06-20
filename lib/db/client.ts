@@ -59,9 +59,15 @@ async function ensureLocalSqlitePragmas(): Promise<void> {
   if (!globalForDb.sqlitePragmasReady) {
     globalForDb.sqlitePragmasReady = Promise.resolve()
       .then(async () => {
-        await client.execute('PRAGMA journal_mode=WAL')
         await client.execute('PRAGMA synchronous=NORMAL')
         await client.execute('PRAGMA busy_timeout=60000')
+        const journalMode = await client.execute('PRAGMA journal_mode')
+        const mode = String(
+          journalMode.rows[0]?.journal_mode
+          ?? journalMode.rows[0]?.['journal_mode']
+          ?? '',
+        ).toLowerCase()
+        if (mode !== 'wal') await client.execute('PRAGMA journal_mode=WAL')
       })
       .catch((e) => {
         delete globalForDb.sqlitePragmasReady

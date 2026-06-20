@@ -4,6 +4,7 @@ import { NIKKEI225_TICKERS, parseUniverseFilter, universeSqlCondition } from '@/
 import { getCurrentSimilars } from '@/lib/queries/ml-insights'
 import { buildShortTermCheck } from '@/lib/short-term-check'
 import type {
+  AssistantModelEvidence,
   AssistantPlannedToolCall,
   AssistantResultRow,
   AssistantToolResult,
@@ -83,6 +84,17 @@ type VectorRow = {
   sector33_name: string | null
 }
 
+type ModelEvaluationRow = {
+  evaluation_date: string
+  direction: 'up' | 'down'
+  horizon_days: number
+  sample_count: number
+  precision_at_20: number | null
+  precision_at_50: number | null
+  hit_rate: number | null
+  metrics_json: string
+}
+
 function normalizeTicker(value: unknown): string | null {
   if (typeof value !== 'string') return null
   const ticker = value.trim().toUpperCase().replace(/\.T$/i, '')
@@ -125,6 +137,16 @@ function fmtPct(value: number | null | undefined): string {
   return `${value >= 0 ? '+' : ''}${value.toFixed(1)}%`
 }
 
+function fmtRate(value: number | null | undefined): string {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '-'
+  return `${Math.round(value * 100)}%`
+}
+
+function fmtLift(value: number | null | undefined): string {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '-'
+  return value.toFixed(2)
+}
+
 function parseJson<T>(value: string | null | undefined, fallback: T): T {
   if (!value) return fallback
   try {
@@ -147,13 +169,81 @@ function vectorDistance(a: number[], b: number[]): number {
   return used === 0 ? Number.POSITIVE_INFINITY : Math.sqrt(sum / used)
 }
 
+function numberFrom(value: unknown): number | null {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+function readRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined
+}
+
+function evidenceFromEvaluation(row: ModelEvaluationRow): AssistantModelEvidence {
+  const metrics = parseJson<Record<string, unknown>>(row.metrics_json, {})
+  const baseline = readRecord(metrics.baseline)
+  const top60 = readRecord(metrics.top60)
+  return {
+    direction: row.direction === 'down' ? 'down' : 'up',
+    horizonDays: Number(row.horizon_days),
+    evaluationDate: row.evaluation_date,
+    sampleCount: Number(row.sample_count),
+    baselineHitRate: numberFrom(baseline?.hitRate ?? row.hit_rate),
+    top60HitRate: numberFrom(top60?.hitRate ?? row.precision_at_50),
+    top60AdverseRate: numberFrom(top60?.adverseRate),
+    top60AvgDirectionalReturnPct: numberFrom(top60?.avgDirectionalReturnPct),
+    liftTop60VsBaseline: numberFrom(metrics.liftTop60VsBaseline),
+    split: typeof metrics.split === 'string' ? metrics.split : null,
+  }
+}
+
+async function fetchObjectiveEvidenceForHorizon(horizonDays: number): Promise<Map<'up' | 'down', AssistantModelEvidence>> {
+  const rows = await execAll<ModelEvaluationRow>(
+    `
+    SELECT evaluation_date, direction, horizon_days, sample_count,
+           precision_at_20, precision_at_50, hit_rate, metrics_json
+    FROM ml_model_evaluations
+    WHERE direction IN ('up', 'down')
+      AND horizon_days = ?
+      AND model_type LIKE '%objective%holdout%'
+      AND (model_type LIKE '%enhanced%' OR metrics_json LIKE '%"variant":"enhanced"%')
+    ORDER BY direction ASC,
+             CASE WHEN metrics_json LIKE '%"split":"test"%' THEN 0 ELSE 1 END ASC,
+             evaluation_date DESC,
+             created_at DESC
+    `,
+    [horizonDays],
+  )
+  const map = new Map<'up' | 'down', AssistantModelEvidence>()
+  for (const row of rows) {
+    const direction = row.direction === 'down' ? 'down' : 'up'
+    if (!map.has(direction)) map.set(direction, evidenceFromEvaluation(row))
+  }
+  return map
+}
+
+function evidenceSummary(evidence: AssistantModelEvidence): string {
+  const direction = evidence.direction === 'down' ? '下落' : '上昇'
+  const parts = [
+    `${direction}${evidence.horizonDays}日`,
+    `top60 ${fmtRate(evidence.top60HitRate)}`,
+    `lift ${fmtLift(evidence.liftTop60VsBaseline)}`,
+    evidence.top60AdverseRate == null ? null : `逆行 ${fmtRate(evidence.top60AdverseRate)}`,
+  ].filter(Boolean)
+  return parts.join(' ')
+}
+
 function stockHref(ticker: string): string {
   return `/stock/${encodeURIComponent(ticker)}`
 }
 
-function rowFromOverview(row: StockOverviewRow): AssistantResultRow {
+function rowFromOverview(row: StockOverviewRow, evidenceMap?: Map<'up' | 'down', AssistantModelEvidence>): AssistantResultRow {
   const code = stageCode(row)
   const changePct = pctChange(row.close, row.prev_close)
+  const upEvidence = row.physics_up_rank ? evidenceMap?.get('up') ?? null : null
+  const downEvidence = row.physics_down_rank ? evidenceMap?.get('down') ?? null : null
+  const modelEvidence = [upEvidence, downEvidence].filter((item): item is AssistantModelEvidence => Boolean(item))
   const shortTerm = buildShortTermCheck({
     stages: {
       dailyA: row.daily_a_stage,
@@ -178,6 +268,8 @@ function rowFromOverview(row: StockOverviewRow): AssistantResultRow {
     row.physical_force_score != null ? `PFS ${row.physical_force_score.toFixed(2)}` : null,
     row.physics_up_rank ? `物理ML上昇#${row.physics_up_rank}` : null,
     row.physics_down_rank ? `物理ML下落#${row.physics_down_rank}` : null,
+    ...modelEvidence.map((item) => `過去検証 ${evidenceSummary(item)}`),
+    row.ml_similar_count ? `類似ML ${row.ml_similar_count}件/最高${fmtRate(row.ml_top_similarity)}` : null,
     row.avg_volume_30d ? `30日平均出来高 ${Math.round(row.avg_volume_30d).toLocaleString()}` : null,
   ].filter(Boolean)
   return {
@@ -200,6 +292,10 @@ function rowFromOverview(row: StockOverviewRow): AssistantResultRow {
     physicalEnergyScore: row.physical_energy_score,
     shortTermCheckLabel: shortTerm.label,
     shortTermCheckScore: shortTerm.score,
+    mlEvidenceSummary: row.ml_similar_count
+      ? `ML類似 ${row.ml_similar_count}件、上昇類似${row.ml_up_count ?? 0}件、下落類似${row.ml_down_count ?? 0}件、最高類似度${fmtRate(row.ml_top_similarity)}`
+      : null,
+    modelEvidence,
     reason: reasonParts.join(' / ') || null,
   }
 }
@@ -255,10 +351,12 @@ export async function getStockOverview(call: AssistantPlannedToolCall): Promise<
   if (!ticker) {
     return { tool: 'get_stock_overview', title: '個別銘柄分析', summary: '銘柄コードが不足しています。', rows: [] }
   }
-  const [snapshotDate, physicsDate, classicDate] = await Promise.all([
+  const horizonDays = Number(call.horizonDays ?? 20)
+  const [snapshotDate, physicsDate, classicDate, evidenceMap] = await Promise.all([
     latestSnapshotDate(),
     latestPhysicsDate(),
     latestClassicMlDate(),
+    fetchObjectiveEvidenceForHorizon(horizonDays),
   ])
   if (!snapshotDate) {
     return { tool: 'get_stock_overview', title: '個別銘柄分析', summary: '日次スナップショットが未作成です。', rows: [] }
@@ -358,9 +456,9 @@ export async function getStockOverview(call: AssistantPlannedToolCall): Promise<
       snapshotDate,
       snapshotDate,
       physicsDate ?? '',
-      Number(call.horizonDays ?? 20),
+      horizonDays,
       physicsDate ?? '',
-      Number(call.horizonDays ?? 20),
+      horizonDays,
       classicDate ?? '',
       classicDate ?? '',
       ticker,
@@ -369,7 +467,7 @@ export async function getStockOverview(call: AssistantPlannedToolCall): Promise<
   if (!row) {
     return { tool: 'get_stock_overview', title: '個別銘柄分析', summary: `${ticker} は見つかりませんでした。`, rows: [] }
   }
-  const result = rowFromOverview(row)
+  const result = rowFromOverview(row, evidenceMap)
   const directionNote = row.physics_down_rank && (!row.physics_up_rank || row.physics_down_rank < row.physics_up_rank)
     ? `下落警戒の物理ML順位が強めです。`
     : row.physics_up_rank
@@ -381,22 +479,23 @@ export async function getStockOverview(call: AssistantPlannedToolCall): Promise<
     summary: `${row.name ?? ticker} は ${snapshotDate} 時点で ${result.stageCode ?? 'ステージ未判定'}。${directionNote}`,
     href: stockHref(ticker),
     rows: [result],
-    meta: { snapshotDate, physicsDate, classicDate },
+    meta: { snapshotDate, physicsDate, classicDate, horizonDays },
   }
 }
 
 export async function screenJpStocks(call: AssistantPlannedToolCall): Promise<AssistantToolResult> {
-  const [snapshotDate, physicsDate, classicDate] = await Promise.all([
+  const horizonDays = Number(call.horizonDays ?? 20)
+  const [snapshotDate, physicsDate, classicDate, evidenceMap] = await Promise.all([
     latestSnapshotDate(),
     latestPhysicsDate(),
     latestClassicMlDate(),
+    fetchObjectiveEvidenceForHorizon(horizonDays),
   ])
   if (!snapshotDate) {
     return { tool: 'screen_jp_stocks', title: 'スクリーニング', summary: '日次スナップショットが未作成です。', rows: [] }
   }
 
   const direction = call.direction === 'down' ? 'down' : call.direction === 'neutral' ? 'neutral' : 'up'
-  const horizonDays = Number(call.horizonDays ?? 20)
   const limit = clampLimit(call.limit, 10, 30)
   const where: string[] = ['ds.date = ?', 'u.active = 1', "COALESCE(u.market_segment, '') <> 'その他'"]
   const args: Array<string | number> = [snapshotDate]
@@ -582,7 +681,7 @@ export async function screenJpStocks(call: AssistantPlannedToolCall): Promise<As
   hrefParams.set('dir', 'desc')
   const title = direction === 'down' ? '下落警戒候補' : direction === 'up' ? '上昇候補' : 'スクリーニング候補'
   const mappedRows = rows.map((row) => ({
-    ...rowFromOverview(row),
+    ...rowFromOverview(row, evidenceMap),
     rank: direction === 'down' ? row.physics_down_rank : row.physics_up_rank,
     direction,
     score: direction === 'down' ? row.physics_down_score : row.physics_up_score,

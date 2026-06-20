@@ -9,7 +9,9 @@ export const fetchCache = 'force-no-store'
 export async function GET(request: NextRequest) {
   try {
     const limit = Number(request.nextUrl.searchParams.get('limit') ?? 8)
-    const overview = await getTradeScenarioOverview(Number.isFinite(limit) ? limit : 8)
+    const date = request.nextUrl.searchParams.get('date')
+    const asOfDate = date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : null
+    const overview = await getTradeScenarioOverview(Number.isFinite(limit) ? limit : 8, asOfDate)
     return NextResponse.json({ ok: true, ...overview })
   } catch (error) {
     console.error('Trade scenario overview API error:', error)

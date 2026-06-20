@@ -1,12 +1,15 @@
 import { NIKKEI225_TICKERS, UNIVERSE_FILTER_PARAM } from './market-universe'
 
 export type MarketMomentumGroupId =
+  | 'all'
   | 'nikkei225'
   | 'prime'
   | 'standard'
   | 'growth'
   | 'other'
   | 'unclassified'
+
+export type MarketMomentumRankId = 'initial' | 'strong' | 'weak'
 
 export type MarketMomentumGroupMeta = {
   id: MarketMomentumGroupId
@@ -17,6 +20,12 @@ export type MarketMomentumGroupMeta = {
 }
 
 export const MARKET_MOMENTUM_GROUPS: Record<MarketMomentumGroupId, MarketMomentumGroupMeta> = {
+  all: {
+    id: 'all',
+    label: '全市場',
+    shortLabel: '全市場',
+    description: 'PMS算出済みの日本株全体から、初動・強い勢い・弱含みを確認します。',
+  },
   nikkei225: {
     id: 'nikkei225',
     label: '日経225',
@@ -61,6 +70,7 @@ export const MARKET_MOMENTUM_GROUPS: Record<MarketMomentumGroupId, MarketMomentu
 }
 
 export const MARKET_MOMENTUM_GROUP_ORDER: MarketMomentumGroupId[] = [
+  'all',
   'nikkei225',
   'prime',
   'standard',
@@ -71,29 +81,51 @@ export const MARKET_MOMENTUM_GROUP_ORDER: MarketMomentumGroupId[] = [
 
 export function parseMarketMomentumGroup(value: unknown): MarketMomentumGroupId {
   const raw = Array.isArray(value) ? value[0] : value
-  if (typeof raw !== 'string') return 'nikkei225'
+  if (typeof raw !== 'string') return 'all'
   const normalized = raw.trim().toLowerCase().replace(/[_\s-]+/g, '')
+  if (normalized === 'all' || normalized === 'jp' || normalized === 'market') return 'all'
   if (normalized === 'nikkei225' || normalized === 'n225' || normalized === 'nikkei') return 'nikkei225'
   if (normalized === 'prime' || raw.includes('プライム')) return 'prime'
   if (normalized === 'standard' || raw.includes('スタンダード')) return 'standard'
   if (normalized === 'growth' || raw.includes('グロース')) return 'growth'
   if (normalized === 'other' || raw.includes('その他')) return 'other'
   if (normalized === 'unclassified' || raw.includes('未分類')) return 'unclassified'
-  return 'nikkei225'
+  return 'all'
 }
 
-export function marketMomentumHref(group: MarketMomentumGroupId): string {
-  return `/market-momentum?group=${group}`
+function appendDateParam(sp: URLSearchParams, date?: string | null) {
+  if (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) sp.set('date', date)
 }
 
-export function marketMomentumHrefForSegment(label: string, code?: string | null): string {
-  if (code === 'nikkei225' || label.includes('日経225')) return marketMomentumHref('nikkei225')
-  if (label.includes('プライム')) return marketMomentumHref('prime')
-  if (label.includes('スタンダード')) return marketMomentumHref('standard')
-  if (label.includes('グロース')) return marketMomentumHref('growth')
-  if (label.includes('その他')) return marketMomentumHref('other')
-  if (label.includes('未分類')) return marketMomentumHref('unclassified')
-  return marketMomentumHref('nikkei225')
+export function marketMomentumHref(group: MarketMomentumGroupId, date?: string | null): string {
+  const sp = new URLSearchParams({ group })
+  appendDateParam(sp, date)
+  return `/market-momentum?${sp.toString()}`
+}
+
+export function parseMarketMomentumRank(value: unknown): MarketMomentumRankId {
+  const raw = Array.isArray(value) ? value[0] : value
+  if (typeof raw !== 'string') return 'initial'
+  const normalized = raw.trim().toLowerCase().replace(/[_\s-]+/g, '')
+  if (normalized === 'strong' || normalized === 'pms' || raw.includes('強い')) return 'strong'
+  if (normalized === 'weak' || normalized === 'down' || raw.includes('弱い') || raw.includes('失速')) return 'weak'
+  return 'initial'
+}
+
+export function marketMomentumRankingHref(group: MarketMomentumGroupId, rank: MarketMomentumRankId, date?: string | null): string {
+  const sp = new URLSearchParams({ group, rank })
+  appendDateParam(sp, date)
+  return `/market-momentum?${sp.toString()}#stock-list`
+}
+
+export function marketMomentumHrefForSegment(label: string, code?: string | null, date?: string | null): string {
+  if (code === 'nikkei225' || label.includes('日経225')) return marketMomentumHref('nikkei225', date)
+  if (label.includes('プライム')) return marketMomentumHref('prime', date)
+  if (label.includes('スタンダード')) return marketMomentumHref('standard', date)
+  if (label.includes('グロース')) return marketMomentumHref('growth', date)
+  if (label.includes('その他')) return marketMomentumHref('other', date)
+  if (label.includes('未分類')) return marketMomentumHref('unclassified', date)
+  return marketMomentumHref('all', date)
 }
 
 export function screenerHrefForMarketMomentumGroup(
@@ -119,6 +151,12 @@ export function marketMomentumGroupSql(
   symbolColumn: string,
   marketSegmentExpression: string,
 ): { sql: string; params: string[] } {
+  if (group === 'all') {
+    return {
+      sql: '1 = 1',
+      params: [],
+    }
+  }
   if (group === 'nikkei225') {
     return {
       sql: `${symbolColumn} IN (${NIKKEI225_TICKERS.map(() => '?').join(', ')})`,

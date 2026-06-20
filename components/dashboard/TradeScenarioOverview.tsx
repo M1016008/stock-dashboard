@@ -159,8 +159,8 @@ function SummaryTile({ label, value, tone }: { label: string; value: number; ton
   )
 }
 
-export async function TradeScenarioOverview() {
-  const overview = await getTradeScenarioOverview(6)
+export async function TradeScenarioOverview({ date = null }: { date?: string | null }) {
+  const overview = await getTradeScenarioOverview(6, date)
   const { summary, items } = overview
 
   return (

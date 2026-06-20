@@ -49,6 +49,16 @@ function formatScore(value: number | null | undefined): string {
   return value >= 0 ? `+${value.toFixed(2)}` : value.toFixed(2)
 }
 
+function formatRate(value: number | null | undefined): string {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '-'
+  return `${Math.round(value * 100)}%`
+}
+
+function formatLift(value: number | null | undefined): string {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '-'
+  return value.toFixed(2)
+}
+
 function openAiStatusLabel(response: AssistantChatResponse): string {
   if (response.source === 'openai') return `OpenAI / ${response.model}`
   const status = response.openai
@@ -99,6 +109,29 @@ function ResultRowCard({ row }: { row: AssistantResultRow }) {
             {row.shortTermCheckLabel && <span>{row.shortTermCheckLabel}</span>}
           </div>
           {row.reason && <p className="mt-2 line-clamp-2 text-[11px] leading-relaxed text-[var(--color-text-tertiary)]">{row.reason}</p>}
+          {(row.modelEvidence?.length || row.mlEvidenceSummary) && (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {row.modelEvidence?.map((evidence) => (
+                <span
+                  key={`${row.ticker}-${evidence.direction}-${evidence.horizonDays}`}
+                  className={`rounded-[3px] border px-2 py-1 text-[10px] font-black ${
+                    evidence.direction === 'down'
+                      ? 'border-[rgba(30,64,175,0.28)] bg-[var(--color-price-down-bg)] text-[var(--color-price-down)]'
+                      : 'border-[rgba(185,28,28,0.28)] bg-[var(--color-price-up-bg)] text-[var(--color-price-up)]'
+                  }`}
+                  title={`評価日 ${evidence.evaluationDate ?? '-'} / サンプル ${evidence.sampleCount?.toLocaleString() ?? '-'}`}
+                >
+                  過去検証 {evidence.direction === 'down' ? '下落' : '上昇'}{evidence.horizonDays}日 top60 {formatRate(evidence.top60HitRate)} lift {formatLift(evidence.liftTop60VsBaseline)}
+                  {evidence.top60AdverseRate != null ? ` 逆行 ${formatRate(evidence.top60AdverseRate)}` : ''}
+                </span>
+              ))}
+              {row.mlEvidenceSummary && (
+                <span className="rounded-[3px] border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-2 py-1 text-[10px] font-black text-[var(--color-text-secondary)]">
+                  {row.mlEvidenceSummary}
+                </span>
+              )}
+            </div>
+          )}
         </div>
         {row.href && <ChevronRight size={16} className="mt-1 shrink-0 text-[var(--color-text-tertiary)]" />}
       </div>

@@ -95,8 +95,23 @@ export interface AssistantResultRow {
   physicalEnergyScore?: number | null
   shortTermCheckLabel?: string | null
   shortTermCheckScore?: number | null
+  mlEvidenceSummary?: string | null
+  modelEvidence?: AssistantModelEvidence[]
   direction?: string | null
   reason?: string | null
+}
+
+export interface AssistantModelEvidence {
+  direction: 'up' | 'down'
+  horizonDays: number
+  evaluationDate?: string | null
+  sampleCount?: number | null
+  baselineHitRate?: number | null
+  top60HitRate?: number | null
+  top60AdverseRate?: number | null
+  top60AvgDirectionalReturnPct?: number | null
+  liftTop60VsBaseline?: number | null
+  split?: string | null
 }
 
 export interface AssistantToolResult {

@@ -4,7 +4,7 @@ import { readServingCache, writeServingCache } from '@/lib/api/serving-cache'
 
 export const dynamic = 'force-dynamic'
 
-const CACHE_TTL_MS = 10 * 60 * 1000
+const CACHE_TTL_MS = 6 * 60 * 60 * 1000
 const CACHE_NAMESPACE = 'backtest_coverage_v1'
 
 type CoveragePayload = {

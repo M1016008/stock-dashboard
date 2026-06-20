@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { usePathname, useSearchParams } from 'next/navigation'
+import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { useEffect, useRef, useState } from 'react'
 import {
   Activity,
@@ -21,6 +21,7 @@ import {
   Star,
   type LucideIcon,
 } from 'lucide-react'
+import { COMMODITY_INSTRUMENTS } from '@/lib/commodities'
 import {
   addUniverseToHref,
   getUniverseFilterMeta,
@@ -28,6 +29,8 @@ import {
   UNIVERSE_FILTER_PARAM,
   type UniverseFilterId,
 } from '@/lib/market-universe'
+
+type HeaderArea = 'jp' | 'us' | 'commodities'
 
 type NavLinkItem = {
   href: string
@@ -207,6 +210,288 @@ function hrefPath(href: string): string {
   return href.split(/[?#]/)[0] || '/'
 }
 
+type SearchApiResult = {
+  ticker: string
+  name: string
+  market: 'JP' | 'US'
+  sector17Name?: string | null
+  sector33Name?: string | null
+  marketSegment?: string | null
+  marginType?: string | null
+  exchange?: string | null
+  sectorName?: string | null
+  industryName?: string | null
+  assetType?: string | null
+}
+
+type QuickSearchResult = {
+  key: string
+  ticker: string
+  name: string
+  market: 'JP' | 'US' | 'COMMODITY'
+  href: string
+  badge: string
+  meta?: string | null
+}
+
+const COMMODITY_SEARCH_RESULTS: QuickSearchResult[] = COMMODITY_INSTRUMENTS.map((item) => ({
+  key: `COMMODITY:${item.marketSlug}:${item.ticker}`,
+  ticker: item.ticker,
+  name: item.shortName || item.name,
+  market: 'COMMODITY',
+  href: `/commodities/${item.marketSlug}/${encodeURIComponent(item.ticker)}`,
+  badge: item.market === 'JP' ? '商品JP' : '商品US',
+  meta: `${item.commodity} / ${item.productType}`,
+}))
+
+function normalizeTickerQuery(value: string): string {
+  return value.trim().replace(/\.T$/i, '').toUpperCase()
+}
+
+function searchResultHref(result: SearchApiResult): string {
+  const ticker = encodeURIComponent(result.ticker)
+  return result.market === 'US' ? `/us/stock/${ticker}` : `/stock/${ticker}`
+}
+
+function searchResultBadge(result: SearchApiResult): string {
+  return result.market === 'US' ? 'US' : 'JP'
+}
+
+function searchResultMeta(result: SearchApiResult): string | null {
+  if (result.market === 'US') {
+    return [result.exchange, result.sectorName, result.industryName].filter(Boolean).join(' / ') || null
+  }
+  return [result.marketSegment, result.sector17Name, result.marginType].filter(Boolean).join(' / ') || null
+}
+
+function areaPriority(area: HeaderArea, result: QuickSearchResult): number {
+  if (area === 'commodities') return result.market === 'COMMODITY' ? 0 : result.market === 'JP' ? 1 : 2
+  if (area === 'us') return result.market === 'US' ? 0 : result.market === 'COMMODITY' ? 1 : 2
+  return result.market === 'JP' ? 0 : result.market === 'COMMODITY' ? 1 : 2
+}
+
+function sortQuickSearchResults(area: HeaderArea, query: string, results: QuickSearchResult[]): QuickSearchResult[] {
+  const normalized = normalizeTickerQuery(query)
+  return [...results]
+    .sort((a, b) => {
+      const aExact = normalizeTickerQuery(a.ticker) === normalized ? 0 : 1
+      const bExact = normalizeTickerQuery(b.ticker) === normalized ? 0 : 1
+      if (aExact !== bExact) return aExact - bExact
+      const aPrefix = normalizeTickerQuery(a.ticker).startsWith(normalized) ? 0 : 1
+      const bPrefix = normalizeTickerQuery(b.ticker).startsWith(normalized) ? 0 : 1
+      if (aPrefix !== bPrefix) return aPrefix - bPrefix
+      const aArea = areaPriority(area, a)
+      const bArea = areaPriority(area, b)
+      if (aArea !== bArea) return aArea - bArea
+      return a.ticker.localeCompare(b.ticker)
+    })
+    .slice(0, 8)
+}
+
+function fallbackSearchHref(query: string, area: HeaderArea): string | null {
+  const normalized = normalizeTickerQuery(query)
+  if (!normalized) return null
+
+  const commodity = COMMODITY_SEARCH_RESULTS.find((result) => normalizeTickerQuery(result.ticker) === normalized)
+  if (area === 'commodities' && commodity) return commodity.href
+  if (/^\d{4}[A-Z]?$/.test(normalized)) return `/stock/${encodeURIComponent(normalized)}`
+  if (/^[A-Z][A-Z0-9.-]{0,9}$/.test(normalized)) return `/us/stock/${encodeURIComponent(normalized)}`
+  return null
+}
+
+function TickerQuickSearch({ area }: { area: HeaderArea }) {
+  const router = useRouter()
+  const rootRef = useRef<HTMLDivElement>(null)
+  const requestIdRef = useRef(0)
+  const [query, setQuery] = useState('')
+  const [results, setResults] = useState<QuickSearchResult[]>([])
+  const [activeIndex, setActiveIndex] = useState(0)
+  const [open, setOpen] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    const onPointerDown = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false)
+    }
+    document.addEventListener('pointerdown', onPointerDown)
+    return () => document.removeEventListener('pointerdown', onPointerDown)
+  }, [])
+
+  useEffect(() => {
+    const normalized = query.trim()
+    const currentRequestId = requestIdRef.current + 1
+    requestIdRef.current = currentRequestId
+
+    if (!normalized) {
+      setResults([])
+      setLoading(false)
+      setError(null)
+      setActiveIndex(0)
+      return
+    }
+
+    const controller = new AbortController()
+    const timer = window.setTimeout(async () => {
+      setLoading(true)
+      setError(null)
+      try {
+        const params = new URLSearchParams({ q: normalized })
+        const [jpResponse, usResponse] = await Promise.all([
+          fetch(`/api/search?${params.toString()}`, { cache: 'no-store', signal: controller.signal }),
+          fetch(`/api/us/search?${params.toString()}`, { cache: 'no-store', signal: controller.signal }),
+        ])
+
+        const jpRows = jpResponse.ok ? ((await jpResponse.json()) as SearchApiResult[]) : []
+        const usRows = usResponse.ok ? ((await usResponse.json()) as SearchApiResult[]) : []
+        const commodityRows = COMMODITY_SEARCH_RESULTS.filter((result) => {
+          const q = normalized.toLowerCase()
+          return (
+            result.ticker.toLowerCase().includes(q) ||
+            result.name.toLowerCase().includes(q) ||
+            (result.meta ?? '').toLowerCase().includes(q)
+          )
+        })
+        const mappedRows: QuickSearchResult[] = [...jpRows, ...usRows].map((row) => ({
+          key: `${row.market}:${row.ticker}`,
+          ticker: row.ticker,
+          name: row.name ?? row.ticker,
+          market: row.market,
+          href: searchResultHref(row),
+          badge: searchResultBadge(row),
+          meta: searchResultMeta(row),
+        }))
+
+        if (requestIdRef.current !== currentRequestId) return
+        setResults(sortQuickSearchResults(area, normalized, [...commodityRows, ...mappedRows]))
+        setActiveIndex(0)
+      } catch (fetchError) {
+        if ((fetchError as Error).name === 'AbortError') return
+        if (requestIdRef.current !== currentRequestId) return
+        setResults([])
+        setError('検索に失敗しました')
+      } finally {
+        if (requestIdRef.current === currentRequestId) setLoading(false)
+      }
+    }, 180)
+
+    return () => {
+      window.clearTimeout(timer)
+      controller.abort()
+    }
+  }, [area, query])
+
+  const navigateTo = (href: string) => {
+    setOpen(false)
+    setQuery('')
+    setResults([])
+    router.push(href)
+  }
+
+  const submitCurrent = () => {
+    const target = results[activeIndex] ?? results[0]
+    if (target) {
+      navigateTo(target.href)
+      return
+    }
+    const fallback = fallbackSearchHref(query, area)
+    if (fallback) navigateTo(fallback)
+  }
+
+  return (
+    <div ref={rootRef} className="relative order-last w-full sm:order-none sm:min-w-[220px] sm:flex-1 md:max-w-[380px] xl:max-w-[460px]">
+      <form
+        role="search"
+        className="relative"
+        onSubmit={(event) => {
+          event.preventDefault()
+          submitCurrent()
+        }}
+      >
+        <Search
+          size={14}
+          strokeWidth={2.3}
+          className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--color-text-tertiary)]"
+        />
+        <input
+          value={query}
+          onChange={(event) => {
+            setQuery(event.target.value)
+            setOpen(true)
+          }}
+          onFocus={() => setOpen(true)}
+          onKeyDown={(event) => {
+            if (event.key === 'ArrowDown') {
+              event.preventDefault()
+              setOpen(true)
+              setActiveIndex((current) => Math.min(current + 1, Math.max(results.length - 1, 0)))
+            } else if (event.key === 'ArrowUp') {
+              event.preventDefault()
+              setActiveIndex((current) => Math.max(current - 1, 0))
+            } else if (event.key === 'Escape') {
+              setOpen(false)
+            } else if (event.key === 'Enter') {
+              event.preventDefault()
+              submitCurrent()
+            }
+          }}
+          placeholder="コード/銘柄名で検索"
+          aria-label="銘柄コード検索"
+          aria-expanded={open && !!query.trim()}
+          className="h-8 w-full rounded-[4px] border border-[var(--color-border-default)] bg-white py-1 pl-8 pr-3 text-[12px] font-semibold text-[var(--color-text-primary)] outline-none transition-colors placeholder:text-[var(--color-text-tertiary)] focus:border-[var(--color-brand-700)] focus:ring-2 focus:ring-[rgba(37,99,235,0.16)]"
+        />
+      </form>
+
+      {open && query.trim() && (
+        <div className="absolute left-0 right-0 top-[calc(100%+6px)] z-[70] overflow-hidden rounded-[5px] border border-[var(--color-border-strong)] bg-white shadow-[0_18px_42px_rgba(16,32,52,0.22)]">
+          <div className="border-b border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-3 py-2 text-[10px] font-bold text-[var(--color-text-tertiary)]">
+            Enterで候補へ移動
+          </div>
+          {loading && (
+            <div className="px-3 py-3 text-[12px] font-semibold text-[var(--color-text-secondary)]">検索中...</div>
+          )}
+          {!loading && error && (
+            <div className="px-3 py-3 text-[12px] font-semibold text-[var(--color-price-down)]">{error}</div>
+          )}
+          {!loading && !error && results.length === 0 && (
+            <div className="px-3 py-3 text-[12px] font-semibold text-[var(--color-text-secondary)]">
+              候補が見つかりません
+            </div>
+          )}
+          {!loading &&
+            !error &&
+            results.map((result, index) => (
+              <button
+                key={result.key}
+                type="button"
+                className={`flex w-full items-center gap-2 px-3 py-2.5 text-left transition-colors ${
+                  index === activeIndex ? 'bg-[var(--color-surface-subtle)]' : 'bg-white hover:bg-[var(--color-surface-subtle)]'
+                }`}
+                onMouseEnter={() => setActiveIndex(index)}
+                onClick={() => navigateTo(result.href)}
+              >
+                <span className="inline-flex h-6 min-w-12 items-center justify-center rounded-[3px] border border-[var(--color-border-default)] bg-white px-1.5 text-[11px] font-black text-[var(--color-brand-900)]">
+                  {result.ticker}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[12px] font-bold text-[var(--color-text-primary)]">{result.name}</span>
+                  {result.meta && (
+                    <span className="mt-0.5 block truncate text-[10px] font-semibold text-[var(--color-text-tertiary)]">
+                      {result.meta}
+                    </span>
+                  )}
+                </span>
+                <span className="shrink-0 rounded-[3px] bg-[var(--color-brand-50)] px-1.5 py-0.5 text-[10px] font-black text-[var(--color-brand-800)]">
+                  {result.badge}
+                </span>
+              </button>
+            ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function Header() {
   const pathname = usePathname()
   const searchParams = useSearchParams()
@@ -367,7 +652,7 @@ export function Header() {
   return (
     <header className="sticky top-0 z-30 border-b border-[var(--color-border-strong)] bg-white shadow-[0_1px_3px_rgba(16,32,52,0.12)]">
       <div className="border-b border-[var(--color-border-default)] bg-[var(--color-surface-subtle)]">
-        <div className="mx-auto flex min-h-10 w-full max-w-[1480px] items-center justify-between gap-3 px-5 sm:px-8 lg:px-10 xl:px-12">
+        <div className="mx-auto flex min-h-10 w-full max-w-[1480px] flex-wrap items-center justify-between gap-2 px-5 py-1.5 sm:px-8 lg:flex-nowrap lg:px-10 xl:px-12">
           <Link href={isCommodityArea ? '/commodities' : isUsArea ? '/us' : scopedHref('/')} prefetch={false} className="flex shrink-0 items-center gap-2.5">
             <div className="flex h-7 w-7 items-center justify-center rounded-[3px] bg-[var(--color-brand-800)] text-white shadow-sm">
               <BarChart3 size={16} strokeWidth={2.5} />
@@ -404,6 +689,8 @@ export function Header() {
               コモディティ
             </Link>
           </div>
+
+          <TickerQuickSearch area={area} />
 
           {area === 'jp' && (
             <Link

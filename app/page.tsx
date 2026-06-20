@@ -65,9 +65,9 @@ export default async function DashboardPage({
   const requestedExists = Boolean(requestedDateOption)
   const selectedDate = requestedExists && requested !== latestAvailable ? requested : null
   const targetDate = requestedExists ? requested : latestAvailable
-  const latest = targetDate
-  const subtitle = latest
-    ? `${latest} 大引け基準${selectedDate ? '（過去日表示）' : ''}`
+  const dashboardDate = targetDate
+  const subtitle = dashboardDate
+    ? `${dashboardDate} 大引け基準${selectedDate ? '（過去日表示）' : ''}`
     : 'データ未取り込み'
   const initialDates = [
     latestAvailable ? { date: latestAvailable } : null,
@@ -79,20 +79,20 @@ export default async function DashboardPage({
       <PageTitle
         title="ダッシュボード"
         subtitle={subtitle}
-        badge={universeMeta ? `${universeMeta.shortLabel} / 最新データ反映` : '最新データ反映'}
+        badge={universeMeta ? `${universeMeta.shortLabel} / ${selectedDate ? '過去日表示' : '最新データ反映'}` : selectedDate ? '過去日表示' : '最新データ反映'}
       />
       <DashboardDateSelector dates={initialDates} selectedDate={selectedDate} />
       <Suspense fallback={<SectionFallback height={300} />}>
-        <TradeScenarioOverview />
+        <TradeScenarioOverview date={dashboardDate} />
       </Suspense>
       <Suspense fallback={<SectionFallback height={150} />}>
-        <PhysicalMomentumMarket universe={universeFilter} />
+        <PhysicalMomentumMarket date={dashboardDate} universe={universeFilter} />
       </Suspense>
       <Suspense fallback={<SectionFallback height={360} />}>
-        <StereoscopicSignals date={latest} universe={universeFilter} />
+        <StereoscopicSignals date={dashboardDate} universe={universeFilter} />
       </Suspense>
       <Suspense fallback={<SectionFallback height={420} />}>
-        <NewHighVolume date={latest} universe={universeFilter} />
+        <NewHighVolume date={dashboardDate} universe={universeFilter} />
       </Suspense>
     </div>
   )

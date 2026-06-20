@@ -1,7 +1,11 @@
 import Link from 'next/link'
 import { execAll, execGet } from '@/lib/db/client'
 import { NIKKEI225_TICKERS, type UniverseFilterValue, universeSqlCondition } from '@/lib/market-universe'
-import { marketMomentumHrefForSegment } from '@/lib/market-momentum-groups'
+import {
+  marketMomentumHrefForSegment,
+  marketMomentumRankingHref,
+  type MarketMomentumGroupId,
+} from '@/lib/market-momentum-groups'
 import { StageTag } from '@/components/ui/StageTag'
 
 type MomentumSummaryRow = {
@@ -160,23 +164,26 @@ function buildSectorsHref(params: Record<string, string | number | null | undefi
   return `/sectors${query ? `?${query}` : ''}#sector-stocks`
 }
 
-function buildScreenerHref(params: Record<string, string | number | null | undefined>) {
-  const sp = new URLSearchParams()
-  for (const [key, value] of Object.entries(params)) {
-    if (value != null && String(value).trim() !== '') sp.set(key, String(value))
-  }
-  const query = sp.toString()
-  return `/screener${query ? `?${query}` : ''}`
+function groupFromUniverse(universe: UniverseFilterValue): MarketMomentumGroupId {
+  return universe === 'nikkei225' ? 'nikkei225' : 'all'
 }
 
-export async function PhysicalMomentumMarket({ universe = null }: { universe?: UniverseFilterValue }) {
+export async function PhysicalMomentumMarket({
+  date = null,
+  universe = null,
+}: {
+  date?: string | null
+  universe?: UniverseFilterValue
+}) {
   const universeSql = universeSqlCondition('pm.symbol', universe)
+  const dateParams = date ? [date] : []
   const nikkei225Placeholders = NIKKEI225_TICKERS.map(() => '?').join(', ')
   const commonLatest = `
     WITH latest AS (
       SELECT MAX(date) AS date
       FROM physical_momentum_metrics
       WHERE market = 'JP'
+        ${date ? 'AND date <= ?' : ''}
     )
   `
   const aggregateSelect = `
@@ -228,7 +235,7 @@ export async function PhysicalMomentumMarket({ universe = null }: { universe?: U
         WHERE pm.physical_momentum_score IS NOT NULL
           ${universeSql.sql ? `AND ${universeSql.sql}` : ''}
       `,
-      universeSql.params,
+      [...dateParams, ...universeSql.params],
     ),
     execGet<MomentumGroupRow>(
       `
@@ -243,7 +250,7 @@ export async function PhysicalMomentumMarket({ universe = null }: { universe?: U
           AND pm.symbol IN (${nikkei225Placeholders})
           ${universeSql.sql ? `AND ${universeSql.sql}` : ''}
       `,
-      [...NIKKEI225_TICKERS, ...universeSql.params],
+      [...dateParams, ...NIKKEI225_TICKERS, ...universeSql.params],
     ),
     execAll<MomentumGroupRow>(
       `
@@ -259,7 +266,7 @@ export async function PhysicalMomentumMarket({ universe = null }: { universe?: U
           ${universeSql.sql ? `AND ${universeSql.sql}` : ''}
         GROUP BY label
       `,
-      universeSql.params,
+      [...dateParams, ...universeSql.params],
     ),
     execAll<MomentumGroupRow>(
       `
@@ -277,7 +284,7 @@ export async function PhysicalMomentumMarket({ universe = null }: { universe?: U
         HAVING count >= 10
         ORDER BY 100.0 * positivePms / count DESC
       `,
-      universeSql.params,
+      [...dateParams, ...universeSql.params],
     ),
     execAll<MomentumRankingRow>(
       `
@@ -286,7 +293,7 @@ export async function PhysicalMomentumMarket({ universe = null }: { universe?: U
         ORDER BY pm.physical_force_score DESC, pm.physical_momentum_score DESC, pm.symbol
         LIMIT 8
       `,
-      universeSql.params,
+      [...dateParams, ...universeSql.params],
     ),
     execAll<MomentumRankingRow>(
       `
@@ -295,7 +302,7 @@ export async function PhysicalMomentumMarket({ universe = null }: { universe?: U
         ORDER BY pm.physical_momentum_score DESC, pm.physical_force_score DESC, pm.symbol
         LIMIT 8
       `,
-      universeSql.params,
+      [...dateParams, ...universeSql.params],
     ),
     execAll<MomentumRankingRow>(
       `
@@ -304,7 +311,7 @@ export async function PhysicalMomentumMarket({ universe = null }: { universe?: U
         ORDER BY pm.physical_momentum_score ASC, pm.physical_force_score ASC, pm.symbol
         LIMIT 8
       `,
-      universeSql.params,
+      [...dateParams, ...universeSql.params],
     ),
   ])
 
@@ -326,6 +333,7 @@ export async function PhysicalMomentumMarket({ universe = null }: { universe?: U
     const br = ratio(b.positivePms, b.count) ?? -1
     return br - ar
   })
+  const rankingGroup = groupFromUniverse(universe)
 
   return (
     <section className="rounded-[8px] border border-[var(--color-border-default)] bg-white p-4 shadow-[var(--shadow-card)]">
@@ -415,7 +423,7 @@ export async function PhysicalMomentumMarket({ universe = null }: { universe?: U
             rows={initialRows}
             scoreKey="pfs"
             scoreLabel="PFS"
-            href={buildScreenerHref({ sort: 'physicalForceScore', dir: 'desc', pfsMin: 0 })}
+            href={marketMomentumRankingHref(rankingGroup, 'initial', date)}
             tone="warning"
           />
           <MomentumRankingPanel
@@ -424,7 +432,7 @@ export async function PhysicalMomentumMarket({ universe = null }: { universe?: U
             rows={strongRows}
             scoreKey="pms"
             scoreLabel="PMS"
-            href={buildScreenerHref({ sort: 'physicalMomentumScore', dir: 'desc', pmsMin: 0 })}
+            href={marketMomentumRankingHref(rankingGroup, 'strong', date)}
             tone="up"
           />
           <MomentumRankingPanel
@@ -433,7 +441,7 @@ export async function PhysicalMomentumMarket({ universe = null }: { universe?: U
             rows={weakRows}
             scoreKey="pms"
             scoreLabel="PMS"
-            href={buildScreenerHref({ sort: 'physicalMomentumScore', dir: 'asc' })}
+            href={marketMomentumRankingHref(rankingGroup, 'weak', date)}
             tone="down"
           />
         </div>
@@ -446,7 +454,7 @@ export async function PhysicalMomentumMarket({ universe = null }: { universe?: U
         />
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-5">
           {sortedSegments.map((segment) => (
-            <MarketSegmentTile key={segment.label} row={segment} />
+            <MarketSegmentTile key={segment.label} row={segment} date={date} />
           ))}
         </div>
       </div>
@@ -599,12 +607,12 @@ function SectionLabel({ title, description }: { title: string; description: stri
   )
 }
 
-function MarketSegmentTile({ row }: { row: MomentumGroupRow }) {
+function MarketSegmentTile({ row, date }: { row: MomentumGroupRow; date?: string | null }) {
   const pmsPlus = ratio(row.positivePms, row.count)
   const pfsPlus = ratio(row.positivePfs, row.count)
   const reading = groupReading(row)
   const width = pmsPlus == null || !Number.isFinite(pmsPlus) ? 0 : Math.max(0, Math.min(100, pmsPlus))
-  const href = marketMomentumHrefForSegment(row.label, row.code)
+  const href = marketMomentumHrefForSegment(row.label, row.code, date)
   return (
     <Link
       href={href}

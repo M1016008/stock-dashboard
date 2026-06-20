@@ -607,7 +607,7 @@ export default function ScreenerPage() {
           </button>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '6px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 172px), 1fr))', gap: '6px' }}>
           {AXES.map((ax) => (
             <AxisCard
               key={ax.key}
@@ -1358,8 +1358,8 @@ function AxisCard({
   onClear: () => void
 }) {
   return (
-    <div className="card" style={{ padding: '6px 8px', opacity: disabled ? 0.5 : 1, display: 'flex', alignItems: 'center', gap: '8px' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: '70px' }}>
+    <div className="card" style={{ padding: '6px 8px', opacity: disabled ? 0.5 : 1, display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '5px', minWidth: '58px' }}>
         <span style={{
           width: '8px',
           height: '8px',
@@ -1370,7 +1370,7 @@ function AxisCard({
         <span style={{ fontSize: '12px', fontWeight: 600, whiteSpace: 'nowrap' }}>{axis.label}</span>
       </div>
 
-      <div style={{ display: 'flex', gap: '4px', flex: 1 }}>
+      <div style={{ display: 'flex', gap: '3px', flex: 1, minWidth: 0 }}>
         {[1, 2, 3, 4, 5, 6].map((s) => {
           const active = selected.includes(s)
           return (

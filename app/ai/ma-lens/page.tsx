@@ -3,6 +3,7 @@ import { Suspense } from 'react'
 import { PageTitle } from '@/components/layout/PageTitle'
 import { Card, CardHeader } from '@/components/ui/Card'
 import { HistoricalPatternSearchPanel } from '@/components/ai/HistoricalPatternSearchPanel'
+import { PatternStatsTop } from '@/components/dashboard/PatternStatsTop'
 import { execAll, execGet } from '@/lib/db/client'
 import {
   dot,
@@ -2250,6 +2251,10 @@ export default async function MaLensPage({
         />
         <HistoricalPatternSearchPanel latestFeatureDate={physicsStatus.latestDate} />
       </Card>
+
+      <Suspense fallback={<LazySectionFallback title="パターン統計" />}>
+        <PatternStatsTop />
+      </Suspense>
 
       {!detailMode && (
         <Card size="lg">

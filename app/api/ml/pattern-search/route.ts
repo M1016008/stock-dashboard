@@ -68,7 +68,7 @@ type RankedMatch = {
 const MIN_PATTERN_DAYS = 5
 const MAX_PATTERN_DAYS = 90
 const MAX_LIMIT = 100
-const CACHE_TTL_MS = 5 * 60 * 1000
+const CACHE_TTL_MS = 60 * 60 * 1000
 const CACHE_MAX_ENTRIES = 50
 const CACHE_NAMESPACE = 'ml_pattern_search_v1'
 

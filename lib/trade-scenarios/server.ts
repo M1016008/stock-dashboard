@@ -155,18 +155,28 @@ async function getAnchorRow(market: string, ticker: string, anchorDate: string |
   )
 }
 
-async function getFutureRows(market: string, ticker: string, anchorDate: string, horizonDays: number): Promise<TradeScenarioPriceRow[]> {
+async function getFutureRows(
+  market: string,
+  ticker: string,
+  anchorDate: string,
+  horizonDays: number,
+  asOfDate?: string | null,
+): Promise<TradeScenarioPriceRow[]> {
   if (market !== 'JP') return []
+  const dateFilter = asOfDate ? 'AND date <= ?' : ''
   return execAll<TradeScenarioPriceRow>(
     `
       SELECT date, high, low, close
       FROM ohlcv_daily
       WHERE ticker = ?
         AND date > ?
+        ${dateFilter}
       ORDER BY date
       LIMIT ?
     `,
-    [ticker, anchorDate, Math.max(1, Math.floor(horizonDays || 20))],
+    asOfDate
+      ? [ticker, anchorDate, asOfDate, Math.max(1, Math.floor(horizonDays || 20))]
+      : [ticker, anchorDate, Math.max(1, Math.floor(horizonDays || 20))],
   )
 }
 
@@ -282,8 +292,8 @@ function scenarioPriority(
   return { priority: 40, priorityLabel: '確認済み', priorityTone: 'neutral' }
 }
 
-async function rowToOverviewItem(row: ScenarioDbRow): Promise<TradeScenarioOverviewItem> {
-  const futureRows = await getFutureRows(row.market, row.ticker, row.anchor_date, row.horizon_days)
+async function rowToOverviewItem(row: ScenarioDbRow, asOfDate?: string | null): Promise<TradeScenarioOverviewItem> {
+  const futureRows = await getFutureRows(row.market, row.ticker, row.anchor_date, row.horizon_days, asOfDate)
   const latestFuture = futureRows.length > 0 ? futureRows[futureRows.length - 1] : null
   const outcome = evaluateTradeScenario({
     direction: row.direction,
@@ -342,18 +352,21 @@ export async function listTradeScenarios(input: { ticker: string; market?: strin
   }))
 }
 
-export async function getTradeScenarioOverview(limit = 8): Promise<TradeScenarioOverview> {
+export async function getTradeScenarioOverview(limit = 8, asOfDate?: string | null): Promise<TradeScenarioOverview> {
   await ensureTradeScenarioSchema()
+  const dateFilter = asOfDate ? 'AND anchor_date <= ?' : ''
   const rows = await execAll<ScenarioDbRow>(
     `
       SELECT *
       FROM trade_scenarios
       WHERE status <> 'archived'
+        ${dateFilter}
       ORDER BY updated_at DESC
       LIMIT 120
     `,
+    asOfDate ? [asOfDate] : [],
   )
-  const overviewItems = await Promise.all(rows.map(rowToOverviewItem))
+  const overviewItems = await Promise.all(rows.map((row) => rowToOverviewItem(row, asOfDate)))
   const sorted = overviewItems.sort((a, b) => {
     if (b.priority !== a.priority) return b.priority - a.priority
     return b.updatedAt.localeCompare(a.updatedAt)

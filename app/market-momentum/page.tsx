@@ -6,11 +6,14 @@ import { execAll, execGet } from '@/lib/db/client'
 import {
   MARKET_MOMENTUM_GROUP_ORDER,
   MARKET_MOMENTUM_GROUPS,
+  marketMomentumRankingHref,
   marketMomentumGroupSql,
   marketMomentumHref,
   parseMarketMomentumGroup,
+  parseMarketMomentumRank,
   screenerHrefForMarketMomentumGroup,
   type MarketMomentumGroupId,
+  type MarketMomentumRankId,
 } from '@/lib/market-momentum-groups'
 
 export const metadata: Metadata = {
@@ -110,17 +113,59 @@ function statusClass(tone: 'up' | 'down' | 'warning' | 'neutral'): string {
   return 'border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] text-[var(--color-text-secondary)]'
 }
 
-async function getMarketMomentumData(group: MarketMomentumGroupId) {
+function rankMeta(rank: MarketMomentumRankId): {
+  label: string
+  description: string
+  orderBy: string
+  score: 'PFS' | 'PMS'
+  tone: 'up' | 'down' | 'warning'
+} {
+  if (rank === 'strong') {
+    return {
+      label: '強い勢いランキング全件',
+      description: 'PMS順。すでに市場内で勢いが強い銘柄を上から確認します。',
+      orderBy: 'pm.physical_momentum_score DESC, pm.physical_force_score DESC, pm.symbol',
+      score: 'PMS',
+      tone: 'up',
+    }
+  }
+  if (rank === 'weak') {
+    return {
+      label: '弱い/失速ランキング全件',
+      description: 'PMS逆順。弱含み・失速警戒候補を上から確認します。',
+      orderBy: 'pm.physical_momentum_score ASC, pm.physical_force_score ASC, pm.symbol',
+      score: 'PMS',
+      tone: 'down',
+    }
+  }
+  return {
+    label: '動き出しランキング全件',
+    description: 'PFS順。短期の力が出始めている候補を上から確認します。',
+    orderBy: 'pm.physical_force_score DESC, pm.physical_momentum_score DESC, pm.symbol',
+    score: 'PFS',
+    tone: 'warning',
+  }
+}
+
+function validDateParam(value: unknown): string | null {
+  const raw = Array.isArray(value) ? value[0] : value
+  return typeof raw === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : null
+}
+
+async function getMarketMomentumData(group: MarketMomentumGroupId, rank: MarketMomentumRankId, date: string | null) {
   const groupSql = marketMomentumGroupSql(
     group,
     'pm.symbol',
     "COALESCE(NULLIF(tu.market_segment, ''), '未分類')",
   )
+  const selectedRank = rankMeta(rank)
+  const dateParams = date ? [date] : []
   const commonLatest = `
     WITH latest AS (
       SELECT MAX(date) AS date
       FROM physical_momentum_metrics
       WHERE market = 'JP'
+        ${date ? 'AND date <= ?' : ''}
     )
   `
   const aggregateSelect = `
@@ -177,7 +222,7 @@ async function getMarketMomentumData(group: MarketMomentumGroupId) {
         WHERE pm.physical_momentum_score IS NOT NULL
           AND ${groupSql.sql}
       `,
-      groupSql.params,
+      [...dateParams, ...groupSql.params],
     ),
     execAll<StockMomentumRow>(
       `
@@ -186,7 +231,7 @@ async function getMarketMomentumData(group: MarketMomentumGroupId) {
         ORDER BY pm.physical_force_score DESC, pm.physical_momentum_score DESC, pm.symbol
         LIMIT 12
       `,
-      groupSql.params,
+      [...dateParams, ...groupSql.params],
     ),
     execAll<StockMomentumRow>(
       `
@@ -195,7 +240,7 @@ async function getMarketMomentumData(group: MarketMomentumGroupId) {
         ORDER BY pm.physical_momentum_score DESC, pm.physical_force_score DESC, pm.symbol
         LIMIT 12
       `,
-      groupSql.params,
+      [...dateParams, ...groupSql.params],
     ),
     execAll<StockMomentumRow>(
       `
@@ -204,16 +249,16 @@ async function getMarketMomentumData(group: MarketMomentumGroupId) {
         ORDER BY pm.physical_momentum_score ASC, pm.physical_force_score ASC, pm.symbol
         LIMIT 12
       `,
-      groupSql.params,
+      [...dateParams, ...groupSql.params],
     ),
     execAll<StockMomentumRow>(
       `
         ${commonLatest}
         ${rowsSelect}
-        ORDER BY pm.physical_force_score DESC, pm.physical_momentum_score DESC, pm.symbol
+        ORDER BY ${selectedRank.orderBy}
         LIMIT 500
       `,
-      groupSql.params,
+      [...dateParams, ...groupSql.params],
     ),
   ])
 
@@ -328,13 +373,19 @@ function RankingPanel({
   )
 }
 
-function StockListTable({ rows }: { rows: StockMomentumRow[] }) {
+function StockListTable({
+  rows,
+  rank,
+}: {
+  rows: StockMomentumRow[]
+  rank: ReturnType<typeof rankMeta>
+}) {
   return (
-    <div className="overflow-hidden rounded-[8px] border border-[var(--color-border-soft)] bg-white">
-      <div className="border-b border-[var(--color-border-soft)] px-3 py-2">
-        <h2 className="text-[13px] font-bold text-[var(--color-brand-900)]">銘柄リスト</h2>
-        <p className="mt-1 text-[10px] font-semibold text-[var(--color-text-tertiary)]">
-          PFS順に最大500件を表示します。PMS算出済み銘柄について、ステージ、貸借、出来高、PMS/PFS/PESを同じ行で確認できます。
+    <div id="stock-list" className="scroll-mt-24 overflow-hidden rounded-[8px] border border-[var(--color-border-soft)] bg-white">
+      <div className={`border-b px-3 py-2 ${statusClass(rank.tone)}`}>
+        <h2 className="text-[13px] font-bold">{rank.label}</h2>
+        <p className="mt-1 text-[10px] font-semibold opacity-80">
+          {rank.description} 最大500件を表示し、ステージ、貸借、出来高、PMS/PFS/PESを同じ行で確認できます。
         </p>
       </div>
       <div className="overflow-x-auto">
@@ -400,7 +451,7 @@ function StockListTable({ rows }: { rows: StockMomentumRow[] }) {
   )
 }
 
-function GroupTabs({ active }: { active: MarketMomentumGroupId }) {
+function GroupTabs({ active, date }: { active: MarketMomentumGroupId; date: string | null }) {
   return (
     <div className="flex gap-2 overflow-x-auto pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
       {MARKET_MOMENTUM_GROUP_ORDER.filter((id) => id !== 'unclassified').map((id) => {
@@ -409,7 +460,7 @@ function GroupTabs({ active }: { active: MarketMomentumGroupId }) {
         return (
           <Link
             key={id}
-            href={marketMomentumHref(id)}
+            href={marketMomentumHref(id, date)}
             prefetch={false}
             className={`shrink-0 rounded-full border px-3 py-1.5 text-[12px] font-bold ${
               selected
@@ -428,12 +479,15 @@ function GroupTabs({ active }: { active: MarketMomentumGroupId }) {
 export default async function MarketMomentumPage({
   searchParams,
 }: {
-  searchParams: Promise<{ group?: string | string[] }>
+  searchParams: Promise<{ group?: string | string[]; rank?: string | string[]; date?: string | string[] }>
 }) {
   const sp = await searchParams
   const groupId = parseMarketMomentumGroup(sp.group)
+  const rankId = parseMarketMomentumRank(sp.rank)
+  const requestedDate = validDateParam(sp.date)
   const group = MARKET_MOMENTUM_GROUPS[groupId]
-  const { summary, initialRows, strongRows, weakRows, allRows } = await getMarketMomentumData(groupId)
+  const activeRank = rankMeta(rankId)
+  const { summary, initialRows, strongRows, weakRows, allRows } = await getMarketMomentumData(groupId, rankId, requestedDate)
   const count = Number(summary?.count ?? 0)
   const pmsPlus = ratio(summary?.positivePms ?? 0, count)
   const pfsPlus = ratio(summary?.positivePfs ?? 0, count)
@@ -453,7 +507,7 @@ export default async function MarketMomentumPage({
         }
       />
 
-      <GroupTabs active={groupId} />
+      <GroupTabs active={groupId} date={requestedDate} />
 
       <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
         <SummaryTile label="PMSプラス" value={fmtRatio(pmsPlus)} sub={`${(summary?.positivePms ?? 0).toLocaleString('ja-JP')} / ${count.toLocaleString('ja-JP')}銘柄`} tone="up" />
@@ -468,10 +522,19 @@ export default async function MarketMomentumPage({
             初動はPFS、勢いはPMS、値動きの熱量はPESで見ます。ここでは投資判断を確定するのではなく、次にチャートで確認すべき銘柄を絞り込むための一覧として使います。
           </p>
           <div className="flex flex-wrap gap-2">
-            <Link href={screenerHrefForMarketMomentumGroup(groupId, { sort: 'physicalForceScore', dir: 'desc', pfsMin: 0 })} prefetch={false} className="rounded-full border border-[var(--color-border-soft)] bg-white px-2.5 py-1 text-[10px] font-bold text-[var(--color-brand-800)] hover:bg-[var(--color-surface-subtle)]">
+            <Link href={marketMomentumRankingHref(groupId, 'initial', requestedDate)} prefetch={false} className={`rounded-full border px-2.5 py-1 text-[10px] font-bold ${rankId === 'initial' ? statusClass('warning') : 'border-[var(--color-border-soft)] bg-white text-[var(--color-brand-800)] hover:bg-[var(--color-surface-subtle)]'}`}>
+              動き出し全件
+            </Link>
+            <Link href={marketMomentumRankingHref(groupId, 'strong', requestedDate)} prefetch={false} className={`rounded-full border px-2.5 py-1 text-[10px] font-bold ${rankId === 'strong' ? statusClass('up') : 'border-[var(--color-border-soft)] bg-white text-[var(--color-brand-800)] hover:bg-[var(--color-surface-subtle)]'}`}>
+              強い勢い全件
+            </Link>
+            <Link href={marketMomentumRankingHref(groupId, 'weak', requestedDate)} prefetch={false} className={`rounded-full border px-2.5 py-1 text-[10px] font-bold ${rankId === 'weak' ? statusClass('down') : 'border-[var(--color-border-soft)] bg-white text-[var(--color-brand-800)] hover:bg-[var(--color-surface-subtle)]'}`}>
+              弱い勢い全件
+            </Link>
+            <Link href={screenerHrefForMarketMomentumGroup(groupId, { date: requestedDate, sort: 'physicalForceScore', dir: 'desc', pfsMin: 0 })} prefetch={false} className="rounded-full border border-[var(--color-border-soft)] bg-white px-2.5 py-1 text-[10px] font-bold text-[var(--color-brand-800)] hover:bg-[var(--color-surface-subtle)]">
               スクリーナーで開く
             </Link>
-            <Link href="/hex-stage" prefetch={false} className="rounded-full border border-[var(--color-border-soft)] bg-white px-2.5 py-1 text-[10px] font-bold text-[var(--color-brand-800)] hover:bg-[var(--color-surface-subtle)]">
+            <Link href={`/hex-stage${requestedDate ? `?date=${requestedDate}` : ''}`} prefetch={false} className="rounded-full border border-[var(--color-border-soft)] bg-white px-2.5 py-1 text-[10px] font-bold text-[var(--color-brand-800)] hover:bg-[var(--color-surface-subtle)]">
               HEXで見る
             </Link>
           </div>
@@ -505,7 +568,7 @@ export default async function MarketMomentumPage({
         />
       </div>
 
-      <StockListTable rows={allRows} />
+      <StockListTable rows={allRows} rank={activeRank} />
     </div>
   )
 }
