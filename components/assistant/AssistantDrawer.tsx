@@ -101,14 +101,15 @@ function ResultRowCard({ row }: { row: AssistantResultRow }) {
                 {formatPct(row.changePct)}
               </span>
             )}
-            {row.avgVolume30d != null && <span>平均出来高 {formatNumber(row.avgVolume30d)}</span>}
+            {row.avgVolume20d != null && <span>20日平均出来高 {formatNumber(row.avgVolume20d)}</span>}
+            {row.avgVolume20d == null && row.avgVolume30d != null && <span>平均出来高 {formatNumber(row.avgVolume30d)}</span>}
             {row.marginType && <span>{row.marginType}</span>}
             {row.rank != null && <span>#{row.rank}</span>}
             {row.physicalMomentumScore != null && <span>PMS {formatScore(row.physicalMomentumScore)}</span>}
             {row.physicalForceScore != null && <span>PFS {formatScore(row.physicalForceScore)}</span>}
             {row.shortTermCheckLabel && <span>{row.shortTermCheckLabel}</span>}
           </div>
-          {row.reason && <p className="mt-2 line-clamp-2 text-[11px] leading-relaxed text-[var(--color-text-tertiary)]">{row.reason}</p>}
+          {row.reason && <p className="mt-2 line-clamp-4 text-[11px] leading-relaxed text-[var(--color-text-tertiary)]">{row.reason}</p>}
           {(row.modelEvidence?.length || row.mlEvidenceSummary) && (
             <div className="mt-2 flex flex-wrap gap-1.5">
               {row.modelEvidence?.map((evidence) => (
@@ -138,7 +139,14 @@ function ResultRowCard({ row }: { row: AssistantResultRow }) {
     </div>
   )
   return row.href ? (
-    <Link href={row.href} prefetch={false} className="block">
+    <Link
+      href={row.href}
+      prefetch={false}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="block"
+      title="別タブで開く"
+    >
       {content}
     </Link>
   ) : content
@@ -196,6 +204,8 @@ export function AssistantResponseCard({ response, onRun }: { response: Assistant
               key={`${action.label}-${action.href}`}
               href={action.href}
               prefetch={false}
+              target="_blank"
+              rel="noopener noreferrer"
               className="inline-flex items-center gap-1.5 rounded-[4px] border border-[var(--color-brand-600)] bg-white px-3 py-2 text-[11px] font-black text-[var(--color-brand-800)] hover:bg-[var(--color-surface-subtle)]"
             >
               {action.label}

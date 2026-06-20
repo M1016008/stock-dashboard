@@ -27,7 +27,7 @@ export function isPlaceholderOpenAIKey(value: string): boolean {
 
 export function getAssistantOpenAIConfig(): AssistantOpenAIConfig {
   const enabled = process.env.OPENAI_ASSISTANT_ENABLED !== '0'
-  const model = process.env.OPENAI_ASSISTANT_MODEL ?? process.env.OPENAI_ANALYSIS_MODEL ?? DEFAULT_ASSISTANT_MODEL
+  const model = DEFAULT_ASSISTANT_MODEL
   const rawKey = process.env.OPENAI_API_KEY?.trim() ?? ''
 
   if (!enabled) {

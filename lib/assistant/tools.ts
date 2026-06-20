@@ -53,6 +53,50 @@ type StockOverviewRow = SearchRow & {
 
 type ScreenRow = StockOverviewRow
 
+type WeeklyBearishBreakRow = SearchRow & {
+  date: string | null
+  close: number | null
+  prev_close: number | null
+  volume: number | null
+  avg_volume_20d: number | null
+  daily_a_stage: number | null
+  daily_b_stage: number | null
+  weekly_a_stage: number | null
+  weekly_b_stage: number | null
+  monthly_a_stage: number | null
+  monthly_b_stage: number | null
+  week_start: string
+  week_end: string
+  week_open: number
+  week_high: number
+  week_low: number
+  week_close: number
+  week_volume: number
+  ma5: number
+  ma10: number
+  ma25: number
+  prev_week_close: number | null
+  prev_ma5: number | null
+  prev_ma10: number | null
+  prev_ma25: number | null
+  ma5_slope_pct: number | null
+  ma10_slope_pct: number | null
+  ma25_slope_pct: number | null
+  physics_up_rank: number | null
+  physics_up_score: number | null
+  physics_down_rank: number | null
+  physics_down_score: number | null
+  physical_momentum_score: number | null
+  physical_force_score: number | null
+  physical_energy_score: number | null
+  physical_momentum_prev_score: number | null
+  ml_up_count: number | null
+  ml_down_count: number | null
+  ml_similar_count: number | null
+  ml_top_similarity: number | null
+  bearish_score: number | null
+}
+
 type EarningsRow = {
   ticker: string
   name: string | null
@@ -145,6 +189,16 @@ function fmtRate(value: number | null | undefined): string {
 function fmtLift(value: number | null | undefined): string {
   if (typeof value !== 'number' || !Number.isFinite(value)) return '-'
   return value.toFixed(2)
+}
+
+function fmtPrice(value: number | null | undefined): string {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '-'
+  return value.toLocaleString(undefined, { maximumFractionDigits: value >= 100 ? 1 : 2 })
+}
+
+function fmtVolume(value: number | null | undefined): string {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '-'
+  return Math.round(value).toLocaleString()
 }
 
 function parseJson<T>(value: string | null | undefined, fallback: T): T {
@@ -296,6 +350,79 @@ function rowFromOverview(row: StockOverviewRow, evidenceMap?: Map<'up' | 'down',
       ? `ML類似 ${row.ml_similar_count}件、上昇類似${row.ml_up_count ?? 0}件、下落類似${row.ml_down_count ?? 0}件、最高類似度${fmtRate(row.ml_top_similarity)}`
       : null,
     modelEvidence,
+    reason: reasonParts.join(' / ') || null,
+  }
+}
+
+function rowFromWeeklyBearishBreak(row: WeeklyBearishBreakRow, evidenceMap?: Map<'up' | 'down', AssistantModelEvidence>): AssistantResultRow {
+  const code = stageCode(row)
+  const weeklyChangePct = pctChange(row.week_close, row.week_open)
+  const downEvidence = row.physics_down_rank ? evidenceMap?.get('down') ?? null : null
+  const modelEvidence = [downEvidence].filter((item): item is AssistantModelEvidence => Boolean(item))
+  const maCrossText = [
+    `5週線 ${fmtPrice(row.ma5)}`,
+    `10週線 ${fmtPrice(row.ma10)}`,
+    `25週線 ${fmtPrice(row.ma25)}`,
+  ].join(' / ')
+  const slopeText = [
+    `5週 ${fmtPct(row.ma5_slope_pct)}`,
+    `10週 ${fmtPct(row.ma10_slope_pct)}`,
+    `25週 ${fmtPct(row.ma25_slope_pct)}`,
+  ].join(' / ')
+  const momentumTrend = row.physical_momentum_score != null && row.physical_momentum_prev_score != null
+    ? row.physical_momentum_score < row.physical_momentum_prev_score
+      ? 'PMS低下'
+      : 'PMS横ばい以上'
+    : null
+  const reasonParts = [
+    `週足陰線 ${row.week_start}〜${row.week_end}: 始値 ${fmtPrice(row.week_open)} → 終値 ${fmtPrice(row.week_close)} (${fmtPct(weeklyChangePct)})`,
+    `高値/始値側が5週・10週線上、終値が両線下: ${maCrossText}`,
+    `20日平均出来高 ${fmtVolume(row.avg_volume_20d)}株`,
+    `週MA傾き ${slopeText}`,
+    row.physical_momentum_score != null ? `PMS ${row.physical_momentum_score.toFixed(2)}` : null,
+    row.physical_force_score != null ? `PFS ${row.physical_force_score.toFixed(2)}` : null,
+    momentumTrend,
+    row.physics_down_rank ? `物理ML下落#${row.physics_down_rank}` : null,
+    row.physics_up_rank ? `物理ML上昇#${row.physics_up_rank}` : null,
+    ...modelEvidence.map((item) => `過去検証 ${evidenceSummary(item)}`),
+    row.ml_similar_count ? `類似ML 下落${row.ml_down_count ?? 0}件/上昇${row.ml_up_count ?? 0}件` : null,
+  ].filter(Boolean)
+
+  return {
+    ticker: row.ticker,
+    name: row.name,
+    href: stockHref(row.ticker),
+    date: row.week_end,
+    price: row.week_close,
+    changePct: weeklyChangePct,
+    volume: row.week_volume,
+    avgVolume20d: row.avg_volume_20d,
+    stageCode: code,
+    sector17Name: row.sector17_name,
+    sector33Name: row.sector33_name,
+    marketSegment: row.market_segment,
+    marginType: row.margin_type,
+    rank: row.physics_down_rank,
+    score: row.bearish_score,
+    physicalMomentumScore: row.physical_momentum_score,
+    physicalForceScore: row.physical_force_score,
+    physicalEnergyScore: row.physical_energy_score,
+    weeklyDate: row.week_end,
+    weeklyOpen: row.week_open,
+    weeklyHigh: row.week_high,
+    weeklyLow: row.week_low,
+    weeklyClose: row.week_close,
+    weeklyMa5: row.ma5,
+    weeklyMa10: row.ma10,
+    weeklyMa25: row.ma25,
+    weeklyMa5SlopePct: row.ma5_slope_pct,
+    weeklyMa10SlopePct: row.ma10_slope_pct,
+    weeklyMa25SlopePct: row.ma25_slope_pct,
+    mlEvidenceSummary: row.ml_similar_count
+      ? `ML類似 ${row.ml_similar_count}件、下落類似${row.ml_down_count ?? 0}件、上昇類似${row.ml_up_count ?? 0}件、最高類似度${fmtRate(row.ml_top_similarity)}`
+      : null,
+    modelEvidence,
+    direction: 'down',
     reason: reasonParts.join(' / ') || null,
   }
 }
@@ -702,6 +829,262 @@ export async function screenJpStocks(call: AssistantPlannedToolCall): Promise<As
   }
 }
 
+export async function scanWeeklyBearishMaBreaks(call: AssistantPlannedToolCall): Promise<AssistantToolResult> {
+  const horizonDays = Number(call.horizonDays ?? 20)
+  const limit = clampLimit(call.limit, 20, 30)
+  const minAvgVolume = Number(call.minAvgVolume ?? 1_000_000)
+  const [snapshotDate, physicsDate, evidenceMap] = await Promise.all([
+    latestSnapshotDate(),
+    latestPhysicsDate(),
+    fetchObjectiveEvidenceForHorizon(horizonDays),
+  ])
+  if (!snapshotDate) {
+    return {
+      tool: 'scan_weekly_bearish_ma_breaks',
+      title: '週足陰線 5/10週線下抜け',
+      summary: '日次スナップショットが未作成です。',
+      rows: [],
+    }
+  }
+
+  const liquidWhere: string[] = [
+    'a.avg_volume_20d >= ?',
+    'u.active = 1',
+    "COALESCE(u.market_segment, '') <> 'その他'",
+  ]
+  const args: Array<string | number> = [Number.isFinite(minAvgVolume) && minAvgVolume > 0 ? minAvgVolume : 1_000_000]
+  const universe = universeSqlCondition('a.ticker', parseUniverseFilter(call.universe))
+  if (universe.sql) {
+    liquidWhere.push(universe.sql)
+    args.push(...universe.params)
+  }
+
+  const rows = await execAll<WeeklyBearishBreakRow>(
+    `
+    WITH latest AS (
+      SELECT MAX(date) AS latest_date FROM ohlcv_daily
+    ),
+    recent_volume AS (
+      SELECT od.ticker, od.volume,
+             ROW_NUMBER() OVER (PARTITION BY od.ticker ORDER BY od.date DESC) AS rn
+      FROM ohlcv_daily od, latest
+      WHERE od.date <= latest.latest_date
+        AND od.date >= date(latest.latest_date, '-70 day')
+    ),
+    avg20 AS (
+      SELECT ticker, AVG(volume) AS avg_volume_20d
+      FROM recent_volume
+      WHERE rn <= 20
+      GROUP BY ticker
+    ),
+    liquid AS (
+      SELECT a.ticker, a.avg_volume_20d
+      FROM avg20 a
+      INNER JOIN ticker_universe u ON u.ticker = a.ticker
+      WHERE ${liquidWhere.join(' AND ')}
+    ),
+    weekly_source AS (
+      SELECT od.ticker, od.date, od.open, od.high, od.low, od.close, od.volume,
+             strftime('%Y-%W', od.date) AS week_key,
+             ROW_NUMBER() OVER (PARTITION BY od.ticker, strftime('%Y-%W', od.date) ORDER BY od.date ASC) AS rn_open,
+             ROW_NUMBER() OVER (PARTITION BY od.ticker, strftime('%Y-%W', od.date) ORDER BY od.date DESC) AS rn_close
+      FROM ohlcv_daily od
+      INNER JOIN liquid l ON l.ticker = od.ticker
+      INNER JOIN latest ON 1 = 1
+      WHERE od.date <= latest.latest_date
+        AND od.date >= date(latest.latest_date, '-460 day')
+    ),
+    weekly AS (
+      SELECT ticker,
+             week_key,
+             MIN(date) AS week_start,
+             MAX(date) AS week_end,
+             MAX(CASE WHEN rn_open = 1 THEN open END) AS week_open,
+             MAX(high) AS week_high,
+             MIN(low) AS week_low,
+             MAX(CASE WHEN rn_close = 1 THEN close END) AS week_close,
+             SUM(volume) AS week_volume
+      FROM weekly_source
+      GROUP BY ticker, week_key
+    ),
+    weekly_ma AS (
+      SELECT *,
+             AVG(week_close) OVER (PARTITION BY ticker ORDER BY week_end ROWS BETWEEN 4 PRECEDING AND CURRENT ROW) AS ma5,
+             AVG(week_close) OVER (PARTITION BY ticker ORDER BY week_end ROWS BETWEEN 9 PRECEDING AND CURRENT ROW) AS ma10,
+             AVG(week_close) OVER (PARTITION BY ticker ORDER BY week_end ROWS BETWEEN 24 PRECEDING AND CURRENT ROW) AS ma25
+      FROM weekly
+    ),
+    lagged AS (
+      SELECT *,
+             LAG(week_close) OVER (PARTITION BY ticker ORDER BY week_end) AS prev_week_close,
+             LAG(ma5) OVER (PARTITION BY ticker ORDER BY week_end) AS prev_ma5,
+             LAG(ma10) OVER (PARTITION BY ticker ORDER BY week_end) AS prev_ma10,
+             LAG(ma25) OVER (PARTITION BY ticker ORDER BY week_end) AS prev_ma25
+      FROM weekly_ma
+    ),
+    current_week AS (
+      SELECT *
+      FROM (
+        SELECT *,
+               ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY week_end DESC) AS rn
+        FROM lagged
+        WHERE ma25 IS NOT NULL
+      )
+      WHERE rn = 1
+    ),
+    base AS (
+      SELECT w.*,
+             l.avg_volume_20d,
+             ((w.ma5 - w.prev_ma5) / NULLIF(w.prev_ma5, 0)) * 100 AS ma5_slope_pct,
+             ((w.ma10 - w.prev_ma10) / NULLIF(w.prev_ma10, 0)) * 100 AS ma10_slope_pct,
+             ((w.ma25 - w.prev_ma25) / NULLIF(w.prev_ma25, 0)) * 100 AS ma25_slope_pct
+      FROM current_week w
+      INNER JOIN liquid l ON l.ticker = w.ticker
+      WHERE w.week_close < w.week_open
+        AND w.week_close < w.ma5
+        AND w.week_close < w.ma10
+        AND w.week_high >= w.ma5
+        AND w.week_high >= w.ma10
+        AND w.prev_week_close >= w.prev_ma5 * 0.995
+        AND w.prev_week_close >= w.prev_ma10 * 0.995
+    ),
+    prev_dates AS (
+      SELECT od.ticker, MAX(od.date) AS prev_date
+      FROM ohlcv_daily od
+      WHERE od.date < ?
+      GROUP BY od.ticker
+    ),
+    latest_similar_date AS (
+      SELECT MAX(as_of_date) AS d
+      FROM serving_current_similars
+    ),
+    ml_summary AS (
+      SELECT
+        base_ticker,
+        SUM(CASE WHEN similar_direction = 'up' THEN 1 ELSE 0 END) AS ml_up_count,
+        SUM(CASE WHEN similar_direction = 'down' THEN 1 ELSE 0 END) AS ml_down_count,
+        COUNT(*) AS ml_similar_count,
+        MAX(similarity_score) AS ml_top_similarity
+      FROM serving_current_similars
+      WHERE as_of_date = (SELECT d FROM latest_similar_date)
+      GROUP BY base_ticker
+    )
+    SELECT
+      u.ticker,
+      u.name,
+      u.sector17_name,
+      u.sector33_name,
+      u.market_segment,
+      u.margin_type,
+      ds.date,
+      od.close,
+      prev.close AS prev_close,
+      od.volume,
+      b.avg_volume_20d,
+      ds.daily_a_stage,
+      ds.daily_b_stage,
+      ds.weekly_a_stage,
+      ds.weekly_b_stage,
+      ds.monthly_a_stage,
+      ds.monthly_b_stage,
+      b.week_start,
+      b.week_end,
+      b.week_open,
+      b.week_high,
+      b.week_low,
+      b.week_close,
+      b.week_volume,
+      b.ma5,
+      b.ma10,
+      b.ma25,
+      b.prev_week_close,
+      b.prev_ma5,
+      b.prev_ma10,
+      b.prev_ma25,
+      b.ma5_slope_pct,
+      b.ma10_slope_pct,
+      b.ma25_slope_pct,
+      p_up.rank AS physics_up_rank,
+      p_up.candidate_score AS physics_up_score,
+      p_down.rank AS physics_down_rank,
+      p_down.candidate_score AS physics_down_score,
+      pm.physical_momentum_score,
+      pm.physical_force_score,
+      pm.physical_energy_score,
+      pm_prev.physical_momentum_score AS physical_momentum_prev_score,
+      ms.ml_up_count,
+      ms.ml_down_count,
+      ms.ml_similar_count,
+      ms.ml_top_similarity,
+      (
+        CASE WHEN p_down.rank IS NOT NULL THEN 25.0 + 60.0 / (p_down.rank + 5) ELSE 0 END
+        - CASE WHEN p_up.rank IS NOT NULL THEN 45.0 / (p_up.rank + 5) ELSE 0 END
+        + CASE WHEN pm.physical_force_score < 0 THEN MIN(18.0, ABS(pm.physical_force_score) * 4.0) ELSE 0 END
+        + CASE WHEN pm.physical_momentum_score < 0 THEN MIN(14.0, ABS(pm.physical_momentum_score) * 3.0) ELSE 0 END
+        + CASE WHEN pm.physical_momentum_score < pm_prev.physical_momentum_score THEN 6 ELSE 0 END
+        + CASE WHEN b.ma5_slope_pct < 0 THEN 5 ELSE 0 END
+        + CASE WHEN b.ma10_slope_pct < 0 THEN 5 ELSE 0 END
+        + CASE WHEN b.ma25_slope_pct < 0 THEN 4 ELSE 0 END
+        + CASE WHEN b.week_close < b.ma25 THEN 4 ELSE 0 END
+        + CASE WHEN b.week_open > 0 THEN ((b.week_open - b.week_close) / b.week_open) * 30 ELSE 0 END
+      ) AS bearish_score
+    FROM base b
+    INNER JOIN ticker_universe u ON u.ticker = b.ticker
+    LEFT JOIN daily_snapshots ds ON ds.ticker = b.ticker AND ds.date = ?
+    LEFT JOIN ohlcv_daily od ON od.ticker = b.ticker AND od.date = ds.date
+    LEFT JOIN prev_dates pd ON pd.ticker = b.ticker
+    LEFT JOIN ohlcv_daily prev ON prev.ticker = b.ticker AND prev.date = pd.prev_date
+    LEFT JOIN physical_momentum_metrics pm
+      ON pm.market = 'JP' AND pm.symbol = b.ticker AND pm.date = ds.date
+    LEFT JOIN physical_momentum_metrics pm_prev
+      ON pm_prev.market = 'JP' AND pm_prev.symbol = b.ticker AND pm_prev.date = pd.prev_date
+    LEFT JOIN ml_summary ms ON ms.base_ticker = b.ticker
+    LEFT JOIN serving_ml_physics_candidates p_down
+      ON p_down.ticker = b.ticker AND p_down.as_of_date = ? AND p_down.horizon_days = ? AND p_down.direction = 'down'
+    LEFT JOIN serving_ml_physics_candidates p_up
+      ON p_up.ticker = b.ticker AND p_up.as_of_date = ? AND p_up.horizon_days = ? AND p_up.direction = 'up'
+    ORDER BY bearish_score DESC,
+             COALESCE(p_down.rank, 9999) ASC,
+             pm.physical_force_score ASC,
+             b.avg_volume_20d DESC,
+             b.ticker ASC
+    LIMIT ?
+    `,
+    [
+      ...args,
+      snapshotDate,
+      snapshotDate,
+      physicsDate ?? '',
+      horizonDays,
+      physicsDate ?? '',
+      horizonDays,
+      limit,
+    ],
+  )
+
+  const params = new URLSearchParams()
+  params.set('avgVolumeWindow', '20')
+  params.set('avgVolumeMin', String(Math.floor(Number.isFinite(minAvgVolume) && minAvgVolume > 0 ? minAvgVolume : 1_000_000)))
+  params.set('sort', 'physicalForceScore')
+  params.set('dir', 'asc')
+  params.set('limit', String(limit))
+  if (call.universe) params.set('universe', call.universe)
+  return {
+    tool: 'scan_weekly_bearish_ma_breaks',
+    title: '週足陰線 5/10週線下抜け',
+    summary: `${snapshotDate} 時点で、20日平均出来高 ${fmtVolume(Number.isFinite(minAvgVolume) && minAvgVolume > 0 ? minAvgVolume : 1_000_000)}株以上、週足陰線、5週線・10週線を終値で下抜けた候補を ${rows.length} 件抽出しました。`,
+    href: `/screener?${params.toString()}`,
+    rows: rows.map((row) => rowFromWeeklyBearishBreak(row, evidenceMap)),
+    meta: {
+      snapshotDate,
+      physicsDate,
+      horizonDays,
+      minAvgVolume,
+      weeklyRule: 'bearish candle closes below weekly MA5 and MA10 after trading at or above both averages',
+    },
+  }
+}
+
 export async function getMlSimilars(call: AssistantPlannedToolCall): Promise<AssistantToolResult> {
   const ticker = normalizeTicker(call.ticker)
   if (!ticker) {
@@ -916,6 +1299,8 @@ export async function runAssistantTool(call: AssistantPlannedToolCall): Promise<
       return getStockOverview(call)
     case 'screen_jp_stocks':
       return screenJpStocks(call)
+    case 'scan_weekly_bearish_ma_breaks':
+      return scanWeeklyBearishMaBreaks(call)
     case 'get_ml_similars':
       return getMlSimilars(call)
     case 'get_earnings_candidates':
@@ -945,6 +1330,10 @@ export function describeResults(results: AssistantToolResult[]): string {
   const totalRows = results.reduce((sum, result) => sum + result.rows.length, 0)
   if (results.length === 0) return '条件に合う機能を特定できませんでした。銘柄コードや条件を少し具体化してください。'
   if (totalRows === 0) return results.map((result) => result.summary).join(' ')
+  if (results.some((result) => result.tool === 'scan_weekly_bearish_ma_breaks')) {
+    const titles = results.map((result) => `${result.title}${result.rows.length ? ` ${result.rows.length}件` : ''}`).join('、')
+    return `${titles}をDBから取得して表示しました。根拠は週足陰線、5週線・10週線の下抜け、20日平均出来高、週MA傾き、PMS/PFS、物理ML下落順位を確認してください。`
+  }
   const titles = results.map((result) => `${result.title}${result.rows.length ? ` ${result.rows.length}件` : ''}`).join('、')
   return `${titles}をDBから取得して表示しました。候補の根拠は各カードの6ステージ、短期チェック、PMS/PFS、物理ML順位、出来高、決算日を確認してください。`
 }
@@ -954,10 +1343,12 @@ export const assistantToolDescriptions = `
 - search_stocks: 銘柄名またはコードを検索する。
 - get_stock_overview: 1銘柄の6ステージ、価格、出来高、PMS/PFS、短期チェック、ML候補状況を確認する。
 - screen_jp_stocks: 日本株を6ステージ、物理ML上昇/下落、日経225、貸借、出来高、PMS/PFS/PES、PMS上昇/低下、短期チェックで抽出する。
+- scan_weekly_bearish_ma_breaks: 日本株の週足ローソク足が陰線で、5週移動平均線と10週移動平均線を上から下へ割り込む下落候補を抽出する。平均出来高20日、週足MA傾き、PMS/PFS、物理ML下落順位を併用する。週足/陰線/5週/10週/割り込み/下抜け/弱含み/下落基調が指定された場合はこのツールを優先する。
 - get_ml_similars: 指定銘柄に似た現在銘柄をML類似で探す。
 - get_earnings_candidates: 近い決算予定銘柄を抽出する。
 日経225指定は universe=nikkei225。貸借指定は marginType=貸借。空売り/下落警戒は direction=down。上昇候補は direction=up。
 初動/動き出し/勢いは pfsMin=0, pmsTrend=rising, sort=pfs を優先。PMSが強い候補は sort=pms。短期ラベル重視は sort=short_term。
+週足陰線が5週線・10週線を上から下へ割り込む、という条件は screen_jp_stocks ではなく scan_weekly_bearish_ma_breaks を使う。
 曖昧な「良さそう」「おすすめ」だけなら、上昇/下落/初動/決算/対象市場を聞き返す。
 日経225の候補数は ${NIKKEI225_TICKERS.length}。
 `

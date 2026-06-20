@@ -2,6 +2,7 @@ export type AssistantToolName =
   | 'search_stocks'
   | 'get_stock_overview'
   | 'screen_jp_stocks'
+  | 'scan_weekly_bearish_ma_breaks'
   | 'get_ml_similars'
   | 'get_earnings_candidates'
 
@@ -82,6 +83,7 @@ export interface AssistantResultRow {
   price?: number | null
   changePct?: number | null
   volume?: number | null
+  avgVolume20d?: number | null
   avgVolume30d?: number | null
   stageCode?: string | null
   sector17Name?: string | null
@@ -93,6 +95,17 @@ export interface AssistantResultRow {
   physicalMomentumScore?: number | null
   physicalForceScore?: number | null
   physicalEnergyScore?: number | null
+  weeklyDate?: string | null
+  weeklyOpen?: number | null
+  weeklyHigh?: number | null
+  weeklyLow?: number | null
+  weeklyClose?: number | null
+  weeklyMa5?: number | null
+  weeklyMa10?: number | null
+  weeklyMa25?: number | null
+  weeklyMa5SlopePct?: number | null
+  weeklyMa10SlopePct?: number | null
+  weeklyMa25SlopePct?: number | null
   shortTermCheckLabel?: string | null
   shortTermCheckScore?: number | null
   mlEvidenceSummary?: string | null

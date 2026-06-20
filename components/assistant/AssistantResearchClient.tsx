@@ -33,6 +33,14 @@ interface AssistantChatEntry {
   response?: AssistantChatResponse
 }
 
+const RESEARCH_SESSION_STORAGE_KEY = 'stockboard.aiResearch.session.v1'
+
+interface StoredAssistantResearchSession {
+  messages?: AssistantChatEntry[]
+  input?: string
+  savedAt?: number
+}
+
 const PROMPT_GROUPS = [
   {
     title: '初動候補',
@@ -66,6 +74,44 @@ function marketFromPath(pathname: string): AssistantPageContext['market'] {
   return 'JP'
 }
 
+function readStoredSession(): StoredAssistantResearchSession | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const raw = window.sessionStorage.getItem(RESEARCH_SESSION_STORAGE_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as StoredAssistantResearchSession
+    if (!parsed || typeof parsed !== 'object') return null
+    return parsed
+  } catch {
+    return null
+  }
+}
+
+function writeStoredSession(session: StoredAssistantResearchSession): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.sessionStorage.setItem(
+      RESEARCH_SESSION_STORAGE_KEY,
+      JSON.stringify({
+        ...session,
+        messages: session.messages?.slice(-24),
+        savedAt: Date.now(),
+      }),
+    )
+  } catch {
+    // 保存失敗は会話機能そのものを止めない。
+  }
+}
+
+function clearStoredSession(): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.sessionStorage.removeItem(RESEARCH_SESSION_STORAGE_KEY)
+  } catch {
+    // no-op
+  }
+}
+
 function AssistantMessage({ item, onRun }: { item: AssistantChatEntry; onRun: (message: string) => void }) {
   if (item.role === 'user') {
     return (
@@ -96,6 +142,7 @@ export function AssistantResearchClient() {
   const [error, setError] = useState<string | null>(null)
   const [messages, setMessages] = useState<AssistantChatEntry[]>([])
   const [assistantStatus, setAssistantStatus] = useState<AssistantStatusResponse | null>(null)
+  const [storageReady, setStorageReady] = useState(false)
 
   const context = useMemo<AssistantPageContext>(() => ({
     pathname,
@@ -117,6 +164,25 @@ export function AssistantResearchClient() {
       })
     return () => { cancelled = true }
   }, [])
+
+  useEffect(() => {
+    const stored = readStoredSession()
+    if (stored?.messages?.length) setMessages(stored.messages.slice(-24))
+    if (typeof stored?.input === 'string') setInput(stored.input)
+    setStorageReady(true)
+  }, [])
+
+  useEffect(() => {
+    if (!storageReady) return
+    writeStoredSession({ messages, input })
+  }, [input, messages, storageReady])
+
+  const clearConversation = () => {
+    clearStoredSession()
+    setMessages([])
+    setInput('')
+    setError(null)
+  }
 
   const run = async (message: string) => {
     const text = message.trim()
@@ -236,9 +302,26 @@ export function AssistantResearchClient() {
         <section className="rounded-[8px] border border-[var(--color-border-strong)] bg-[var(--color-surface-subtle)]">
           <div className="border-b border-[var(--color-border-default)] bg-white p-4">
             <form onSubmit={onSubmit} className="space-y-3">
-              <div className="flex items-center gap-2 text-[13px] font-black text-[var(--color-text-primary)]">
-                <Search size={16} />
-                探したい条件を入力
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2 text-[13px] font-black text-[var(--color-text-primary)]">
+                  <Search size={16} />
+                  探したい条件を入力
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-bold text-[var(--color-text-tertiary)]">
+                    会話はこのタブ内に自動保存
+                  </span>
+                  {messages.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={clearConversation}
+                      title="この画面の会話履歴だけを消して、新しい相談を始めます"
+                      className="rounded-[4px] border border-[var(--color-border-default)] bg-white px-2 py-1 text-[10px] font-black text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-subtle)]"
+                    >
+                      新しい会話
+                    </button>
+                  )}
+                </div>
               </div>
               <div className="flex flex-col gap-2 md:flex-row md:items-end">
                 <textarea

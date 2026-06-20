@@ -26,6 +26,7 @@ const TOOL_NAMES: AssistantToolName[] = [
   'search_stocks',
   'get_stock_overview',
   'screen_jp_stocks',
+  'scan_weekly_bearish_ma_breaks',
   'get_ml_similars',
   'get_earnings_candidates',
 ]
@@ -92,7 +93,48 @@ function buildClarificationPlan(intent: string, questions: string[], interpreted
   }
 }
 
+function isWeeklyBearishMaBreakRequest(message: string): boolean {
+  const hasWeekly = /週足|週\s*足|weekly/i.test(message)
+  const hasBearishCandle = /陰線|弱含み|弱い|下落|悪化|売り|ショート|下方向/.test(message)
+  const hasMa5 = /(5|５)\s*週|週\s*(5|５)|5w|ma5/i.test(message)
+  const hasMa10 = /(10|１０)\s*週|週\s*(10|１０)|10w|ma10/i.test(message)
+  const hasBreak = /割り込|割れ|下抜|下回|上から下|下へ割/.test(message)
+  return hasWeekly && hasBearishCandle && hasMa5 && hasMa10 && hasBreak
+}
+
+function buildWeeklyBearishMaBreakPlan(message: string, context: AssistantPageContext): AssistantPlan | null {
+  if (!isWeeklyBearishMaBreakRequest(message)) return null
+  const universe = /日経\s*225|nikkei|n225/i.test(message) || context.universe === 'nikkei225' ? 'nikkei225' : null
+  const minAvgVolume = volumeThresholdFromText(message) ?? 1_000_000
+  const limit = numberFromText(message, [/([0-9]{1,2})\s*件/]) ?? 20
+  return {
+    intent: '週足の陰線が5週線・10週線を上から下へ割り込む下落候補を、専用スキャンで抽出します。',
+    responseType: 'results',
+    interpretedConditions: [
+      '日本株',
+      '週足',
+      '陰線',
+      '5週移動平均線を上から下へ割り込み',
+      '10週移動平均線を上から下へ割り込み',
+      `20日平均出来高 ${Math.round(minAvgVolume).toLocaleString()}以上`,
+      'PMS/PFSと物理ML下落候補を優先',
+      ...(universe ? ['日経225'] : []),
+    ],
+    toolCalls: [{
+      tool: 'scan_weekly_bearish_ma_breaks',
+      direction: 'down',
+      universe,
+      minAvgVolume,
+      limit,
+      horizonDays: /60/.test(message) ? 60 : 20,
+    }],
+  }
+}
+
 function fallbackPlan(message: string, context: AssistantPageContext): AssistantPlan {
+  const weeklyBearishPlan = buildWeeklyBearishMaBreakPlan(message, context)
+  if (weeklyBearishPlan) return weeklyBearishPlan
+
   const lower = message.toLowerCase()
   const contextTicker = tickerFromContext(context)
   const explicitTicker = normalizeTicker(message.match(/\b([0-9]{4}|[0-9]{3}A|[A-Z]{1,5})\b/i)?.[1])
@@ -163,6 +205,22 @@ function fallbackPlan(message: string, context: AssistantPageContext): Assistant
   }
 }
 
+function enforceSpecializedPlan(message: string, context: AssistantPageContext, plan: AssistantPlan): AssistantPlan {
+  const weeklyBearishPlan = buildWeeklyBearishMaBreakPlan(message, context)
+  if (!weeklyBearishPlan) return plan
+  if (plan.toolCalls.some((call) => call.tool === 'scan_weekly_bearish_ma_breaks')) {
+    return {
+      ...plan,
+      responseType: 'results',
+      interpretedConditions: Array.from(new Set([
+        ...(weeklyBearishPlan.interpretedConditions ?? []),
+        ...(plan.interpretedConditions ?? []),
+      ])).slice(0, 8),
+    }
+  }
+  return weeklyBearishPlan
+}
+
 function normalizePlan(value: unknown, fallback: AssistantPlan): AssistantPlan {
   if (!value || typeof value !== 'object') return fallback
   const raw = value as Partial<AssistantPlan>
@@ -227,6 +285,7 @@ async function planWithOpenAI(message: string, context: AssistantPageContext, hi
                   'ユーザーの自然文から、登録済みツールを最大4つ選びます。結果は必ずStockBoardのDB/API取得結果を根拠にします。',
                   '条件が曖昧で候補抽出の軸が決まらない場合は responseType=clarify とし、ツールを呼ばず、1〜3個だけ確認質問を返してください。',
                   '抽象語は具体条件へ翻訳します。例: 初動=PFS/PMS上昇とステージ好転、勢い=PMS/PFS重視、弱い=下落警戒またはPMS低下。',
+                  '週足の陰線が5週移動平均線・10週移動平均線を上から下へ割り込む条件は、必ず scan_weekly_bearish_ma_breaks を使ってください。screen_jp_stocks で代替しないでください。',
                   '十分に条件がある場合は responseType=results とし、interpretedConditions に解釈した条件を短く入れてください。',
                   'DB更新、管理画面操作、発注、バッチ実行は絶対に選ばないでください。',
                   '日本株中心の初期MVPです。US株/コモディティは明示された場合、未対応であることが分かる形で日本株ツールに無理に混ぜないでください。',
@@ -375,7 +434,31 @@ function clarificationMessage(plan: AssistantPlan): string {
 export async function runAssistantChat(message: string, context: AssistantPageContext, history: AssistantConversationMessage[] = []): Promise<AssistantChatResponse> {
   const trimmed = message.trim()
   const fallback = fallbackPlan(trimmed, context)
-  const { plan, source, model, openai } = await planWithOpenAI(trimmed, context, history, fallback)
+  const deterministicPlan = buildWeeklyBearishMaBreakPlan(trimmed, context)
+  if (deterministicPlan) {
+    const config = getAssistantOpenAIConfig()
+    const openai = assistantOpenAIStatusFromConfig(config)
+    const results: AssistantToolResult[] = []
+    for (const call of deterministicPlan.toolCalls) {
+      results.push(await runAssistantTool(call))
+    }
+    return {
+      responseType: 'results',
+      message: describeResults(results),
+      source: 'fallback',
+      model: config.model,
+      openai,
+      context,
+      interpretedConditions: deterministicPlan.interpretedConditions ?? [],
+      clarificationQuestions: [],
+      toolsUsed: Array.from(new Set(results.map((result) => result.tool))),
+      sections: results,
+      actions: buildNavigateActions(results),
+      followups: followupsForResults(results),
+    }
+  }
+  const { plan: rawPlan, source, model, openai } = await planWithOpenAI(trimmed, context, history, fallback)
+  const plan = enforceSpecializedPlan(trimmed, context, rawPlan)
 
   if (plan.responseType === 'clarify') {
     const questions = plan.clarificationQuestions ?? []
