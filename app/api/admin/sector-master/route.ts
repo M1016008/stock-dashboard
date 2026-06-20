@@ -3,18 +3,13 @@
 // 銘柄マスターの自動更新は J-Quants /equities/master を使う batch:listed-info に統一済み。
 
 import { NextResponse } from 'next/server'
+import { adminWriteDisabledResponse } from '@/lib/admin-write-disabled'
 import { execAll, ensureReady } from '@/lib/db/client'
 
 export const dynamic = 'force-dynamic'
 
 export async function POST() {
-  return NextResponse.json(
-    {
-      error: 'Sector master import retired',
-      message: '業種マスターの自動更新は J-Quants の batch:listed-info に統一済みです。JPX公式Excelの手動取得は廃止しました。',
-    },
-    { status: 410 },
-  )
+  return adminWriteDisabledResponse('業種マスター手動更新')
 }
 
 export async function GET() {

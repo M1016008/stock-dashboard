@@ -1,7 +1,6 @@
 import type { Metadata } from 'next'
 import { Suspense } from 'react'
 import { Header } from '@/components/layout/Header'
-import { DataAutoUpdater } from '@/components/layout/DataAutoUpdater'
 import { FreshDataRefresher } from '@/components/layout/FreshDataRefresher'
 import { AssistantDrawer } from '@/components/assistant/AssistantDrawer'
 import './globals.css'
@@ -24,7 +23,6 @@ export default function RootLayout({
     <html lang="ja">
       <body className="min-h-screen bg-[var(--bg-void)] font-sans text-[var(--color-text-primary)] antialiased">
         <Suspense fallback={null}>
-          <DataAutoUpdater />
           <FreshDataRefresher />
         </Suspense>
         <Suspense fallback={null}>

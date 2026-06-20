@@ -48,9 +48,6 @@ export default function AdminDbPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [universeFilter, setUniverseFilter] = useState('')
-  const [addText, setAddText] = useState('')
-  const [adding, setAdding] = useState(false)
-  const [batchBusy, setBatchBusy] = useState<'ohlcv' | 'snapshots' | null>(null)
 
   const loadAll = useCallback(async () => {
     setLoading(true)
@@ -80,54 +77,6 @@ export default function AdminDbPage() {
     return () => clearInterval(interval)
   }, [loadAll]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const triggerBatch = async (kind: 'ohlcv' | 'snapshots') => {
-    setBatchBusy(kind)
-    try {
-      const res = await fetch(`/api/admin/batch/${kind}`, { method: 'POST', cache: 'no-store' })
-      if (!res.ok) throw new Error(await res.text())
-      // 数秒待ってから一覧更新 (起動直後だと running 行がまだ無い)
-      setTimeout(loadAll, 1500)
-    } catch (e: any) {
-      setError(`バッチ起動失敗: ${e?.message ?? e}`)
-    } finally {
-      setTimeout(() => setBatchBusy(null), 1500)
-    }
-  }
-
-  const submitAdd = async () => {
-    if (!addText.trim()) return
-    setAdding(true)
-    try {
-      const res = await fetch('/api/admin/universe', {
-        method: 'POST',
-        cache: 'no-store',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ tickers: addText }),
-      })
-      if (!res.ok) throw new Error(await res.text())
-      setAddText('')
-      await loadAll()
-    } catch (e: any) {
-      setError(`追加失敗: ${e?.message ?? e}`)
-    } finally {
-      setAdding(false)
-    }
-  }
-
-  const toggleActive = async (ticker: string, active: boolean) => {
-    try {
-      await fetch(`/api/admin/universe/${ticker}`, {
-        method: 'PATCH',
-        cache: 'no-store',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ active }),
-      })
-      await loadAll()
-    } catch (e: any) {
-      setError(`更新失敗: ${e?.message ?? e}`)
-    }
-  }
-
   const filteredUniverse = (universe?.items ?? []).filter(it => {
     if (!universeFilter) return false  // 未入力時は表示しない (4165 行は重い)
     const q = universeFilter.toLowerCase()
@@ -140,7 +89,7 @@ export default function AdminDbPage() {
         <div>
           <h1 style={{ fontFamily: 'var(--font-display)', fontSize: '16px', fontWeight: 700 }}>運用ステータス</h1>
           <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
-            データベース状態 / バッチ履歴 / 銘柄ユニバース管理
+            データベース状態 / バッチ履歴 / 銘柄ユニバース確認（読み取り専用）
           </p>
         </div>
         <button onClick={loadAll} style={refreshBtn} disabled={loading}>
@@ -170,28 +119,12 @@ export default function AdminDbPage() {
         <div style={{ ...sectionHead }}>
           <span style={{ fontSize: '12px', fontWeight: 600 }}>データ更新バッチ</span>
           <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
-            実行中はポーリング (5秒)
+            起動操作はCLI/定期バッチに集約
           </span>
         </div>
         <div style={{ padding: '12px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-            <button
-              onClick={() => triggerBatch('ohlcv')}
-              disabled={batchBusy !== null || runs.some(r => r.jobType === 'ohlcv_fetch' && r.status === 'running')}
-              style={primaryBtn}
-            >
-              {batchBusy === 'ohlcv' ? '起動中...' : 'OHLCV 取得実行'}
-            </button>
-            <button
-              onClick={() => triggerBatch('snapshots')}
-              disabled={batchBusy !== null || runs.some(r => r.jobType === 'snapshot_compute' && r.status === 'running')}
-              style={primaryBtn}
-            >
-              {batchBusy === 'snapshots' ? '起動中...' : 'スナップショット計算実行'}
-            </button>
-            <span style={{ fontSize: '10px', color: 'var(--text-muted)', alignSelf: 'center' }}>
-              ※ 4000 銘柄フル実行は OHLCV 約 30〜40 分、スナップショット 約 5〜10 分
-            </span>
+          <div style={readOnlyNoteStyle}>
+            手動実行ボタンは誤操作防止のため停止しました。J-Quants更新、スナップショット計算、ML更新は定期ジョブまたはCLIから実行してください。
           </div>
 
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '11px' }}>
@@ -236,23 +169,13 @@ export default function AdminDbPage() {
       <section className="card" style={{ overflow: 'hidden' }}>
         <div style={sectionHead}>
           <span style={{ fontSize: '12px', fontWeight: 600 }}>銘柄ユニバース ({universe?.total.toLocaleString() ?? '-'} 件 / active {universe?.active.toLocaleString() ?? '-'})</span>
+          <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>読み取り専用</span>
         </div>
         <div style={{ padding: '12px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-          {/* 追加 */}
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-start' }}>
-            <textarea
-              value={addText}
-              onChange={(e) => setAddText(e.target.value)}
-              placeholder="銘柄コード (4桁数字、改行 or カンマ区切り)&#10;7203&#10;6758&#10;9984"
-              style={textareaStyle}
-              rows={4}
-            />
-            <button onClick={submitAdd} disabled={adding || !addText.trim()} style={primaryBtn}>
-              {adding ? '追加中...' : '追加'}
-            </button>
+          <div style={readOnlyNoteStyle}>
+            銘柄の追加・active切替は画面から停止しました。正規マスターはJ-Quants銘柄マスターと定期バッチで管理します。
           </div>
 
-          {/* 検索 + 一覧 */}
           <div>
             <input
               type="text"
@@ -281,16 +204,13 @@ export default function AdminDbPage() {
                     <td style={{ ...cellStyle, color: 'var(--color-brand-700)' }}>{it.ticker}</td>
                     <td style={cellStyle}>{it.name ?? '-'}</td>
                     <td style={cellStyleR}>
-                      <button
-                        onClick={() => toggleActive(it.ticker, !it.active)}
-                        style={{
-                          ...toggleBtn,
-                          color: it.active ? 'var(--color-brand-600)' : 'var(--text-muted)',
-                          borderColor: it.active ? 'var(--color-brand-600)' : 'var(--border-base)',
-                        }}
-                      >
+                      <span style={{
+                        ...toggleBtn,
+                        color: it.active ? 'var(--color-brand-600)' : 'var(--text-muted)',
+                        borderColor: it.active ? 'var(--color-brand-600)' : 'var(--border-base)',
+                      }}>
                         {it.active ? '● ON' : '○ OFF'}
-                      </button>
+                      </span>
                     </td>
                   </tr>
                 ))}
@@ -441,25 +361,23 @@ const refreshBtn: React.CSSProperties = {
   color: 'var(--text-secondary)',
 }
 
-const primaryBtn: React.CSSProperties = {
-  padding: '6px 14px',
-  background: 'var(--color-brand-600)',
-  border: 'none',
-  borderRadius: 'var(--radius-sm)',
-  fontSize: '12px',
-  fontWeight: 500,
-  cursor: 'pointer',
-  color: 'white',
-}
-
 const toggleBtn: React.CSSProperties = {
   padding: '2px 8px',
   background: 'transparent',
   border: '1px solid',
   borderRadius: 'var(--radius-sm)',
   fontSize: '10px',
-  cursor: 'pointer',
   fontFamily: 'var(--font-mono)',
+}
+
+const readOnlyNoteStyle: React.CSSProperties = {
+  padding: '8px 10px',
+  border: '1px solid var(--color-border-soft)',
+  borderRadius: 'var(--radius-sm)',
+  background: 'var(--color-surface-subtle)',
+  color: 'var(--text-secondary)',
+  fontSize: '11px',
+  lineHeight: 1.6,
 }
 
 const headStyle: React.CSSProperties = {
@@ -481,18 +399,6 @@ const cellStyle: React.CSSProperties = {
 }
 
 const cellStyleR: React.CSSProperties = { ...cellStyle, textAlign: 'right' }
-
-const textareaStyle: React.CSSProperties = {
-  flex: 1,
-  fontFamily: 'var(--font-mono)',
-  fontSize: '12px',
-  padding: '6px 8px',
-  border: '1px solid var(--border-base)',
-  borderRadius: 'var(--radius-sm)',
-  background: 'var(--bg-base)',
-  color: 'var(--text-primary)',
-  resize: 'vertical',
-}
 
 const inputStyle: React.CSSProperties = {
   width: '100%',
