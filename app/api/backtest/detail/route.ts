@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { isPlaceholderOpenAIKey } from '@/lib/assistant/config'
+import { DEFAULT_ASSISTANT_MODEL, isPlaceholderOpenAIKey } from '@/lib/assistant/config'
 import { execAll, execGet } from '@/lib/db/client'
 import {
   buildChartWindowWithMa,
@@ -294,7 +294,7 @@ async function analysisComment(facts: Record<string, unknown>, fallback: Analysi
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: process.env.OPENAI_ANALYSIS_MODEL ?? 'gpt-5.4-mini',
+        model: DEFAULT_ASSISTANT_MODEL,
         input: [
           {
             role: 'system',
