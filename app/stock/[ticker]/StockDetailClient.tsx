@@ -1,7 +1,7 @@
 // app/stock/[ticker]/StockDetailClient.tsx
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
 import type { CSSProperties } from 'react'
 import { MarketBadge } from '@/components/ui/MarketBadge'
 import { MarginBadges } from '@/components/ui/MarginBadges'
@@ -13,8 +13,10 @@ import { WatchlistButton } from '@/components/ui/WatchlistButton'
 import { StageTimeline, type StageRangeSelection } from '@/components/stock/StageTimeline'
 import { StockMovePeriods } from '@/components/stock/StockMovePeriods'
 import { StockMlInsights } from '@/components/stock/StockMlInsights'
+import { TradeScenarioNotebook } from '@/components/stock/TradeScenarioNotebook'
 import { findTicker } from '@/lib/master/tickers'
-import { STAGE_BORDER_COLORS } from '@/lib/hex-stage'
+import { STAGE_BG_COLORS, STAGE_BORDER_COLORS, STAGE_LABELS } from '@/lib/hex-stage'
+import { buildShortTermCheck, type ShortTermCheckTone } from '@/lib/short-term-check'
 import type { StockQuote } from '@/types/stock'
 
 interface StockDetailClientProps {
@@ -209,15 +211,27 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
 
       {/* 基本情報 + 直近変化率 */}
       <div className="stock-info-grid">
-        <BasicInfoCard quote={quote} />
-        <PerformanceCard ticker={ticker} />
-        <MarginInfoCard info={marginInfo} fallbackType={displayMarginType} />
+        <BasicInfoCard ticker={ticker} quote={quote} />
+        <MarketSnapshotCard ticker={ticker} marginInfo={marginInfo} fallbackType={displayMarginType} />
       </div>
 
       {/* 決算情報 */}
       <EarningsCard ticker={ticker} />
 
       <PhysicalMomentumSection ticker={ticker} />
+
+      <TradeScenarioNotebook
+        ticker={ticker}
+        name={name}
+        quote={quote}
+        selectedRange={selectedRange}
+        context={{
+          marketSegment: displayMarketSegment,
+          marginType: displayMarginType,
+          sector17: displaySectorLarge,
+          sector33: displaySector33,
+        }}
+      />
 
       {/* ステージ変遷 */}
       <div>
@@ -379,7 +393,7 @@ function PhysicalMomentumSection({ ticker }: { ticker: string }) {
           {insight && (
             <div style={physicalHeroStyle}>
               <div style={physicalHeroMainStyle}>
-                <div style={physicalHeroLabelStyle}>総合判定</div>
+                <div style={physicalHeroLabelStyle}>運動状態レポート</div>
                 <div style={{ ...physicalHeroTitleStyle, color: insight.color }}>{insight.label}</div>
                 <p style={physicalHeroDescriptionStyle}>{insight.description}</p>
                 <div style={physicalReasonListStyle}>
@@ -399,30 +413,35 @@ function PhysicalMomentumSection({ ticker }: { ticker: string }) {
 
           <div style={physicalScoreGridStyle}>
             <PhysicalScoreCard
-              label="PMS"
-              title="総合運動状態"
+              label="総合の力"
+              code="PMS"
+              title="市場平均との差"
               value={latest.physicalMomentumScore}
               sub={data?.rank && data.totalRanked ? `市場順位 ${data.rank}/${data.totalRanked}` : '市場順位 -'}
-              guide="物理量を銘柄横断で標準化した総合点"
+              guide="速度・加速度・力・熱量を標準化して、現在の強弱を一つにまとめた点"
               trend={data?.trend ?? null}
             />
             <PhysicalScoreCard
-              label="PFS"
-              title="力の変化"
+              label="力の増減"
+              code="PFS"
+              title="初動/失速"
               value={latest.physicalForceScore}
               sub={physicalSignalText(latest.physicalForceScore, 'force')}
-              guide="Force と Acceleration。力が増えているかを見る"
+              guide="加速度とForce。上向き/下向きの力が増えているかを見る"
               trend={null}
             />
             <PhysicalScoreCard
-              label="PES"
-              title="運動エネルギー"
+              label="動きの熱量"
+              code="PES"
+              title="蓄積/過熱"
               value={latest.physicalEnergyScore}
               sub={physicalSignalText(latest.physicalEnergyScore, 'energy')}
-              guide="Energy と Momentum。力が蓄積/放出されているかを見る"
+              guide="Energy と Momentum。値動きにどれだけ熱量が乗っているかを見る"
               trend={null}
             />
           </div>
+
+          <PhysicalActionPoints latest={latest} trend={data?.trend ?? null} field={fieldInsight} />
 
           <div style={physicalBodyGridStyle}>
             <PhysicalMaFieldMap latest={latest} previous={previous} />
@@ -449,6 +468,7 @@ function PhysicalMomentumSection({ ticker }: { ticker: string }) {
 
 function PhysicalScoreCard({
   label,
+  code,
   title,
   value,
   sub,
@@ -457,6 +477,7 @@ function PhysicalScoreCard({
   valueFormatter = fmtScore,
 }: {
   label: string
+  code: string
   title: string
   value: number | null
   sub: string
@@ -469,7 +490,10 @@ function PhysicalScoreCard({
   return (
     <div style={physicalScoreCardStyle}>
       <div style={physicalScoreTopStyle}>
-        <span style={physicalScoreLabelStyle}>{label}</span>
+        <span style={physicalScoreLabelWrapStyle}>
+          <span style={physicalScoreLabelStyle}>{label}</span>
+          <span style={physicalScoreCodeStyle}>{code}</span>
+        </span>
         <strong style={{ color: tone }}>{valueFormatter(value)}</strong>
       </div>
       <div style={physicalScoreTitleStyle}>{title}</div>
@@ -543,6 +567,16 @@ function PhysicalMaFieldMap({ latest, previous }: { latest: PhysicalMomentumApiR
     { label: '75MA', value: latest.ma75Angle },
     { label: '200MA', value: latest.ma200Angle },
   ]
+  const angleNodes = angles.map((angle) => {
+    const deg = angleDeg(angle.value)
+    return {
+      ...angle,
+      deg,
+      arrow: angleDirectionArrow(deg),
+      labelText: angleDirectionLabel(deg),
+      color: angleDirectionColor(deg),
+    }
+  })
 
   return (
     <div style={physicalFieldPanelStyle}>
@@ -557,6 +591,21 @@ function PhysicalMaFieldMap({ latest, previous }: { latest: PhysicalMomentumApiR
       <div style={physicalFieldMetaStyle}>
         <span>角度幅 {field.spreadDeg == null ? '-' : `${field.spreadDeg.toFixed(1)}°`}</span>
         <span>{field.spreadChangeDeg == null ? '変化 -' : `前回比 ${field.spreadChangeDeg >= 0 ? '+' : ''}${field.spreadChangeDeg.toFixed(1)}°`}</span>
+      </div>
+      <div style={physicalFieldFlowStyle}>
+        {angleNodes.map((node, index) => (
+          <Fragment key={node.label}>
+            <div style={{ ...physicalFieldNodeStyle, borderColor: node.color }}>
+              <span style={physicalFieldNodeLabelStyle}>{node.label}</span>
+              <strong style={{ ...physicalFieldNodeArrowStyle, color: node.color }}>{node.arrow}</strong>
+              <span style={physicalFieldNodeMetaStyle}>{node.labelText}</span>
+              <small style={physicalFieldNodeDegreeStyle}>{node.deg == null ? '-' : `${node.deg.toFixed(1)}°`}</small>
+            </div>
+            {index < angleNodes.length - 1 && (
+              <span style={physicalFieldConnectorStyle}>→</span>
+            )}
+          </Fragment>
+        ))}
       </div>
       <div style={physicalAngleRowsStyle}>
         {angles.map((angle) => {
@@ -586,45 +635,225 @@ function PhysicalMomentumSparkline({ history }: { history: PhysicalMomentumApiRo
     const points = history
       .filter((row) => row.physicalMomentumScore != null && Number.isFinite(row.physicalMomentumScore))
       .slice(-160)
-    if (points.length < 2) return null
-    const values = points.map((row) => row.physicalMomentumScore as number)
-    const min = Math.min(...values)
-    const max = Math.max(...values)
-    const span = max - min || 1
-    const width = 420
-    const height = 128
+    if (points.length === 0) return null
+    const scoreMin = -2.5
+    const scoreMax = 2.5
+    const span = scoreMax - scoreMin
+    const width = 520
+    const height = 184
+    const pad = { left: 40, right: 58, top: 18, bottom: 26 }
+    const innerWidth = width - pad.left - pad.right
+    const innerHeight = height - pad.top - pad.bottom
+    const yFor = (value: number) => {
+      const clipped = Math.max(scoreMin, Math.min(scoreMax, value))
+      return pad.top + ((scoreMax - clipped) / span) * innerHeight
+    }
+    const xFor = (index: number) => pad.left + (points.length === 1 ? innerWidth : (index / (points.length - 1)) * innerWidth)
     const polyline = points
       .map((row, index) => {
-        const x = (index / (points.length - 1)) * width
-        const y = height - (((row.physicalMomentumScore as number) - min) / span) * height
+        const x = xFor(index)
+        const y = yFor(row.physicalMomentumScore as number)
         return `${x.toFixed(1)},${y.toFixed(1)}`
       })
       .join(' ')
-    const zeroY = min <= 0 && max >= 0
-      ? height - ((0 - min) / span) * height
-      : null
-    return { polyline, min, max, width, height, zeroY, firstDate: points[0].date, lastDate: points[points.length - 1].date }
+    const latest = points[points.length - 1]
+    const first = points[0]
+    const latestScore = latest.physicalMomentumScore as number
+    const firstScore = first.physicalMomentumScore as number
+    const prev = points.length >= 2 ? points[points.length - 2] : null
+    const prevScore = prev?.physicalMomentumScore ?? null
+    const point20 = points.length >= 21 ? points[points.length - 21] : null
+    const point60 = points.length >= 61 ? points[points.length - 61] : null
+    return {
+      points,
+      polyline,
+      width,
+      height,
+      pad,
+      innerWidth,
+      innerHeight,
+      scoreMin,
+      scoreMax,
+      yFor,
+      xFor,
+      latest,
+      latestScore,
+      firstDate: first.date,
+      lastDate: latest.date,
+      latestX: xFor(points.length - 1),
+      latestY: yFor(latestScore),
+      deltaAll: latestScore - firstScore,
+      deltaPrev: prevScore == null ? null : latestScore - prevScore,
+      delta20: point20?.physicalMomentumScore == null ? null : latestScore - point20.physicalMomentumScore,
+      delta60: point60?.physicalMomentumScore == null ? null : latestScore - point60.physicalMomentumScore,
+    }
   }, [history])
 
   if (!chart) {
     return <div style={physicalSparklineEmptyStyle}>PMS時系列はまだ不足しています。</div>
   }
 
+  const sparse = chart.points.length < 20
+  const directionDelta = chart.delta20 ?? chart.delta60 ?? chart.deltaAll
+  const trendLabel = trendLabelFromDelta(directionDelta)
+  const latestTone = chart.latestScore >= 0 ? 'var(--price-up)' : 'var(--price-down)'
+  const latestLabelX = chart.latestX > chart.width - 96 ? chart.latestX - 92 : chart.latestX + 8
+  const latestLabelAnchor = chart.latestX > chart.width - 96 ? 'end' : 'start'
+
   return (
     <div style={physicalSparklineBoxStyle}>
       <div style={physicalSparklineHeaderStyle}>
-        <strong>PMS推移</strong>
+        <div>
+          <strong>PMS推移</strong>
+          <small style={physicalTrendHeaderNoteStyle}>固定スケールで市場平均との差を表示</small>
+        </div>
         <span>{chart.firstDate} → {chart.lastDate}</span>
       </div>
-      <svg viewBox={`0 0 ${chart.width} ${chart.height}`} role="img" aria-label="PMS時系列チャート" style={{ width: '100%', height: '128px' }}>
-        {chart.zeroY != null && (
-          <line x1="0" x2={chart.width} y1={chart.zeroY} y2={chart.zeroY} stroke="var(--border-subtle)" strokeDasharray="4 4" />
-        )}
-        <polyline points={chart.polyline} fill="none" stroke="var(--accent-primary)" strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" />
-      </svg>
-      <div style={physicalSparklineScaleStyle}>
-        <span>{fmtScore(chart.min)}</span>
-        <span>{fmtScore(chart.max)}</span>
+      {sparse ? (
+        <div style={physicalSparseTrendStyle}>
+          <div style={physicalSparseTrendMainStyle}>
+            <strong style={{ color: latestTone }}>{scoreLevelLabel(chart.latestScore)}</strong>
+            <span>
+              PMS履歴が{chart.points.length}営業日分だけなので、推移チャートとしてはまだ弱いです。
+              最新値と直近変化を中心に見てください。
+            </span>
+          </div>
+          <div style={physicalSparsePointRowStyle}>
+            {chart.points.map((point) => {
+              const score = point.physicalMomentumScore ?? 0
+              return (
+                <span
+                  key={point.date}
+                  style={{
+                    ...physicalSparsePointStyle,
+                    background: score >= 0 ? 'rgba(220, 38, 38, 0.12)' : 'rgba(37, 99, 235, 0.12)',
+                    color: score >= 0 ? 'var(--price-up)' : 'var(--price-down)',
+                    borderColor: score >= 0 ? 'rgba(220, 38, 38, 0.28)' : 'rgba(37, 99, 235, 0.28)',
+                  }}
+                >
+                  {fmtScore(score)}
+                </span>
+              )
+            })}
+          </div>
+        </div>
+      ) : (
+        <svg viewBox={`0 0 ${chart.width} ${chart.height}`} role="img" aria-label="PMS時系列チャート" style={physicalTrendSvgStyle}>
+          <rect
+            x={chart.pad.left}
+            y={chart.pad.top}
+            width={chart.innerWidth}
+            height={chart.yFor(1) - chart.pad.top}
+            fill="rgba(220, 38, 38, 0.07)"
+            rx="4"
+          />
+          <rect
+            x={chart.pad.left}
+            y={chart.yFor(-1)}
+            width={chart.innerWidth}
+            height={chart.pad.top + chart.innerHeight - chart.yFor(-1)}
+            fill="rgba(37, 99, 235, 0.07)"
+            rx="4"
+          />
+          {[-2, -1, 0, 1, 2].map((line) => (
+            <g key={line}>
+              <line
+                x1={chart.pad.left}
+                x2={chart.pad.left + chart.innerWidth}
+                y1={chart.yFor(line)}
+                y2={chart.yFor(line)}
+                stroke={line === 0 ? 'var(--text-muted)' : 'var(--border-subtle)'}
+                strokeDasharray={line === 0 ? '4 4' : undefined}
+                opacity={line === 0 ? 0.62 : 0.8}
+              />
+              <text
+                x={chart.pad.left - 8}
+                y={chart.yFor(line) + 3}
+                textAnchor="end"
+                fontSize="10"
+                fill="var(--text-muted)"
+                fontFamily="var(--font-mono)"
+              >
+                {line > 0 ? `+${line}` : line}
+              </text>
+            </g>
+          ))}
+          <polyline
+            points={chart.polyline}
+            fill="none"
+            stroke={latestTone}
+            strokeWidth="3"
+            strokeLinejoin="round"
+            strokeLinecap="round"
+          />
+          <circle cx={chart.latestX} cy={chart.latestY} r="4.8" fill="#fff" stroke={latestTone} strokeWidth="2.6" />
+          <text
+            x={latestLabelX}
+            y={Math.max(16, chart.latestY - 7)}
+            textAnchor={latestLabelAnchor}
+            fontSize="11"
+            fontWeight="800"
+            fill={latestTone}
+            fontFamily="var(--font-mono)"
+          >
+            {fmtScore(chart.latestScore)}
+          </text>
+          <text x={chart.pad.left} y={chart.height - 5} fontSize="10" fill="var(--text-muted)" fontFamily="var(--font-mono)">
+            {chart.firstDate}
+          </text>
+          <text x={chart.pad.left + chart.innerWidth} y={chart.height - 5} textAnchor="end" fontSize="10" fill="var(--text-muted)" fontFamily="var(--font-mono)">
+            {chart.lastDate}
+          </text>
+        </svg>
+      )}
+      <div style={physicalTrendLegendStyle}>
+        <span><i style={{ ...physicalTrendLegendMarkerStyle, background: 'rgba(220, 38, 38, 0.16)' }} /> +1以上: 市場より強い</span>
+        <span><i style={{ ...physicalTrendLegendMarkerStyle, background: 'rgba(37, 99, 235, 0.16)' }} /> -1以下: 市場より弱い</span>
+        <span><i style={{ ...physicalTrendLegendMarkerStyle, background: 'var(--text-muted)' }} /> 0: 市場平均</span>
+      </div>
+      <div style={physicalTrendSummaryGridStyle}>
+        <PhysicalTrendChip label="最新" value={fmtScore(chart.latestScore)} tone={chart.latestScore} />
+        <PhysicalTrendChip label="全期間" value={formatDelta(chart.deltaAll)} tone={chart.deltaAll} />
+        <PhysicalTrendChip label="20日変化" value={formatDelta(chart.delta20)} tone={chart.delta20} />
+        <PhysicalTrendChip label="直近方向" value={trendLabel} tone={directionDelta} />
+      </div>
+    </div>
+  )
+}
+
+function PhysicalTrendChip({ label, value, tone }: { label: string; value: string; tone: number | null | undefined }) {
+  const color = tone == null || !Number.isFinite(tone) ? 'var(--text-primary)' : tone >= 0 ? 'var(--price-up)' : 'var(--price-down)'
+  return (
+    <div style={physicalTrendChipStyle}>
+      <span>{label}</span>
+      <strong style={{ color }}>{value}</strong>
+    </div>
+  )
+}
+
+function PhysicalActionPoints({
+  latest,
+  trend,
+  field,
+}: {
+  latest: PhysicalMomentumApiRow
+  trend: PhysicalMomentumResponse['trend']
+  field: PhysicalMaFieldInsight | null
+}) {
+  const points = buildPhysicalActionPoints(latest, trend, field)
+  return (
+    <div style={physicalActionPanelStyle}>
+      <div style={physicalMiniHeaderStyle}>
+        <strong>次に見る確認ポイント</strong>
+        <span>売買判断の前に、力の向きが継続するかを確認します。</span>
+      </div>
+      <div style={physicalActionListStyle}>
+        {points.map((point, index) => (
+          <div key={point} style={physicalActionItemStyle}>
+            <span style={physicalActionIndexStyle}>{index + 1}</span>
+            <span>{point}</span>
+          </div>
+        ))}
       </div>
     </div>
   )
@@ -729,6 +958,29 @@ function angleBarPercent(value: number | null): number {
   return ((clipped + 75) / 150) * 100
 }
 
+function angleDirectionArrow(value: number | null): string {
+  if (value == null || !Number.isFinite(value)) return '-'
+  if (value >= 1.2) return '↗'
+  if (value <= -1.2) return '↘'
+  return '→'
+}
+
+function angleDirectionLabel(value: number | null): string {
+  if (value == null || !Number.isFinite(value)) return '未判定'
+  if (value >= 3) return '上向き強'
+  if (value >= 1.2) return '上向き'
+  if (value <= -3) return '下向き強'
+  if (value <= -1.2) return '下向き'
+  return '横ばい'
+}
+
+function angleDirectionColor(value: number | null): string {
+  if (value == null || !Number.isFinite(value)) return 'var(--text-muted)'
+  if (value >= 1.2) return 'var(--price-up)'
+  if (value <= -1.2) return 'var(--price-down)'
+  return 'var(--text-secondary)'
+}
+
 function buildPhysicalMomentumInsight(
   latest: PhysicalMomentumApiRow,
   rank: number | null,
@@ -774,6 +1026,68 @@ function buildPhysicalMomentumInsight(
   return { label, description, color, reasons }
 }
 
+function buildPhysicalActionPoints(
+  latest: PhysicalMomentumApiRow,
+  trend: PhysicalMomentumResponse['trend'],
+  field: PhysicalMaFieldInsight | null,
+): string[] {
+  const points: string[] = []
+  const pms = latest.physicalMomentumScore
+  const pfs = latest.physicalForceScore
+  const pes = latest.physicalEnergyScore
+
+  if (pms != null && Number.isFinite(pms)) {
+    if (pms >= 1) {
+      points.push('PMSは市場平均より強い状態です。次はPFSがプラスを維持し、力が失速していないかを確認します。')
+    } else if (pms <= -1) {
+      points.push('PMSは市場平均より弱い状態です。反発を見る前に、PFSのマイナスが止まるかを確認します。')
+    } else {
+      points.push('PMSは市場平均付近です。単独では判断せず、PFSとMA力場の向きが揃うかを確認します。')
+    }
+  }
+
+  if (pfs != null && Number.isFinite(pfs)) {
+    if (pfs >= 0.35) {
+      points.push('PFSがプラスなので、短期の押し目後も上向きの力が再加速するかを見ます。')
+    } else if (pfs <= -0.35) {
+      points.push('PFSがマイナスなので、短期反発があっても下向きの力が残っていないかを見ます。')
+    } else {
+      points.push('PFSは中立です。初動判断は急がず、加速度が上下どちらへ傾くかを待ちます。')
+    }
+  }
+
+  if (pes != null && Number.isFinite(pes)) {
+    if (pes >= 1) {
+      points.push('PESが高いため、強さと同時に過熱もあります。上髭や急失速の有無を確認します。')
+    } else if (pes <= -0.35) {
+      points.push('PESが弱いため、値動きの熱量は不足気味です。反転には出来高を伴う力の回復が必要です。')
+    }
+  }
+
+  if (field?.label.includes('上方向')) {
+    points.push('MA力場は上方向です。5MA/25MAの力が75MA/200MAへ伝わり続けるかを確認します。')
+  } else if (field?.label.includes('下方向')) {
+    points.push('MA力場は下方向です。短期線の反発だけでなく、長期線側の下向き拡散が止まるかを確認します。')
+  } else if (field?.label.includes('収縮')) {
+    points.push('MA力場は収縮中です。次に上へ拡散するか、下へ拡散するかが重要です。')
+  } else if (field?.label.includes('ねじれ')) {
+    points.push('MA力場がねじれています。日足だけでなく週足・月足の向きと矛盾していないかを確認します。')
+  }
+
+  if (trend === 'rising') {
+    points.push('PMS推移は改善中です。直近高値更新時にPFSが落ちないかを見ます。')
+  } else if (trend === 'falling') {
+    points.push('PMS推移は低下中です。買い判断ではなく、低下が止まる証拠を優先します。')
+  }
+
+  if (points.length === 0) {
+    points.push('PMSデータが不足しています。まずは6ステージ、MA力場、直近チャートの方向を併せて確認します。')
+  }
+
+  const unique = Array.from(new Set(points))
+  return unique.slice(0, 4)
+}
+
 function physicalSignalText(value: number | null | undefined, kind: 'force' | 'energy'): string {
   if (value == null || !Number.isFinite(value)) return kind === 'force' ? '力の変化未判定' : 'エネルギー未判定'
   if (kind === 'force') {
@@ -799,6 +1113,27 @@ function scoreBarPercent(value: number | null | undefined): number {
 function fmtScore(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(value)) return '-'
   return value.toFixed(2)
+}
+
+function formatDelta(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return '-'
+  return `${value >= 0 ? '+' : ''}${value.toFixed(2)}`
+}
+
+function trendLabelFromDelta(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return '判定保留'
+  if (value >= 0.35) return '改善'
+  if (value <= -0.35) return '悪化'
+  return '横ばい'
+}
+
+function scoreLevelLabel(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return 'PMS未判定'
+  if (value >= 1) return '市場より強い'
+  if (value >= 0.35) return 'やや強い'
+  if (value <= -1) return '市場より弱い'
+  if (value <= -0.35) return 'やや弱い'
+  return '市場平均付近'
 }
 
 function fmtDecimal(value: number | null | undefined, digits = 2): string {
@@ -1328,11 +1663,28 @@ const physicalScoreTopStyle: CSSProperties = {
   gap: '8px',
 }
 
+const physicalScoreLabelWrapStyle: CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: '5px',
+  minWidth: 0,
+}
+
 const physicalScoreLabelStyle: CSSProperties = {
+  color: 'var(--text-primary)',
+  fontSize: '11px',
+  fontWeight: 800,
+}
+
+const physicalScoreCodeStyle: CSSProperties = {
+  border: '1px solid var(--border-subtle)',
+  borderRadius: '999px',
+  background: '#fff',
   color: 'var(--text-muted)',
   fontFamily: 'var(--font-mono)',
-  fontSize: '10px',
+  fontSize: '9px',
   fontWeight: 800,
+  padding: '1px 5px',
 }
 
 const physicalScoreTitleStyle: CSSProperties = {
@@ -1365,6 +1717,49 @@ const physicalScoreGuideStyle: CSSProperties = {
   color: 'var(--text-muted)',
   fontSize: '10px',
   lineHeight: 1.45,
+}
+
+const physicalActionPanelStyle: CSSProperties = {
+  border: '1px solid var(--border-subtle)',
+  borderRadius: 'var(--radius-sm)',
+  background: 'linear-gradient(180deg, #fff 0%, var(--bg-elevated) 100%)',
+  padding: '10px',
+  marginBottom: '10px',
+}
+
+const physicalActionListStyle: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(min(220px, 100%), 1fr))',
+  gap: '7px',
+}
+
+const physicalActionItemStyle: CSSProperties = {
+  border: '1px solid var(--border-subtle)',
+  borderRadius: 'var(--radius-sm)',
+  background: '#fff',
+  color: 'var(--text-secondary)',
+  display: 'grid',
+  gridTemplateColumns: '22px minmax(0, 1fr)',
+  gap: '7px',
+  alignItems: 'start',
+  fontSize: '11px',
+  lineHeight: 1.55,
+  padding: '8px',
+}
+
+const physicalActionIndexStyle: CSSProperties = {
+  width: '20px',
+  height: '20px',
+  borderRadius: '999px',
+  background: 'var(--bg-elevated)',
+  border: '1px solid var(--border-subtle)',
+  color: 'var(--text-primary)',
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  fontFamily: 'var(--font-mono)',
+  fontSize: '10px',
+  fontWeight: 800,
 }
 
 const physicalBodyGridStyle: CSSProperties = {
@@ -1417,6 +1812,59 @@ const physicalFieldMetaStyle: CSSProperties = {
   fontFamily: 'var(--font-mono)',
   fontSize: '10px',
   marginBottom: '8px',
+}
+
+const physicalFieldFlowStyle: CSSProperties = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: '5px',
+  marginBottom: '9px',
+}
+
+const physicalFieldNodeStyle: CSSProperties = {
+  minWidth: '64px',
+  flex: '1 1 64px',
+  border: '1px solid var(--border-subtle)',
+  borderRadius: 'var(--radius-sm)',
+  background: 'var(--bg-elevated)',
+  padding: '7px 6px',
+  display: 'grid',
+  justifyItems: 'center',
+  gap: '2px',
+}
+
+const physicalFieldNodeLabelStyle: CSSProperties = {
+  color: 'var(--text-muted)',
+  fontFamily: 'var(--font-mono)',
+  fontSize: '9px',
+  fontWeight: 800,
+}
+
+const physicalFieldNodeArrowStyle: CSSProperties = {
+  fontSize: '18px',
+  lineHeight: 1,
+}
+
+const physicalFieldNodeMetaStyle: CSSProperties = {
+  color: 'var(--text-secondary)',
+  fontSize: '9px',
+  fontWeight: 800,
+  whiteSpace: 'nowrap',
+}
+
+const physicalFieldNodeDegreeStyle: CSSProperties = {
+  color: 'var(--text-muted)',
+  fontFamily: 'var(--font-mono)',
+  fontSize: '9px',
+}
+
+const physicalFieldConnectorStyle: CSSProperties = {
+  color: 'var(--text-muted)',
+  fontSize: '11px',
+  textAlign: 'center',
+  opacity: 0.72,
 }
 
 const physicalAngleRowsStyle: CSSProperties = {
@@ -1492,7 +1940,92 @@ const physicalSparklineHeaderStyle: CSSProperties = {
   gap: '8px',
   color: 'var(--text-secondary)',
   fontSize: '11px',
-  marginBottom: '4px',
+  marginBottom: '8px',
+}
+
+const physicalTrendHeaderNoteStyle: CSSProperties = {
+  display: 'block',
+  marginTop: '2px',
+  color: 'var(--text-muted)',
+  fontSize: '10px',
+  fontWeight: 600,
+}
+
+const physicalTrendSvgStyle: CSSProperties = {
+  width: '100%',
+  height: '184px',
+  display: 'block',
+  border: '1px solid var(--border-subtle)',
+  borderRadius: 'var(--radius-sm)',
+  background: 'linear-gradient(180deg, #fff 0%, var(--bg-elevated) 100%)',
+}
+
+const physicalTrendLegendStyle: CSSProperties = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: '6px 10px',
+  marginTop: '7px',
+  color: 'var(--text-muted)',
+  fontSize: '10px',
+  lineHeight: 1.4,
+}
+
+const physicalTrendLegendMarkerStyle: CSSProperties = {
+  display: 'inline-block',
+  width: '9px',
+  height: '9px',
+  borderRadius: '2px',
+  marginRight: '4px',
+  verticalAlign: '-1px',
+}
+
+const physicalTrendSummaryGridStyle: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
+  gap: '6px',
+  marginTop: '8px',
+}
+
+const physicalTrendChipStyle: CSSProperties = {
+  border: '1px solid var(--border-subtle)',
+  borderRadius: 'var(--radius-sm)',
+  background: 'var(--bg-elevated)',
+  padding: '6px 7px',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: '2px',
+  minWidth: 0,
+}
+
+const physicalSparseTrendStyle: CSSProperties = {
+  border: '1px solid var(--border-subtle)',
+  borderRadius: 'var(--radius-sm)',
+  background: 'linear-gradient(180deg, #fff 0%, var(--bg-elevated) 100%)',
+  padding: '10px',
+}
+
+const physicalSparseTrendMainStyle: CSSProperties = {
+  display: 'grid',
+  gap: '4px',
+  color: 'var(--text-secondary)',
+  fontSize: '11px',
+  lineHeight: 1.55,
+}
+
+const physicalSparsePointRowStyle: CSSProperties = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: '5px',
+  marginTop: '9px',
+}
+
+const physicalSparsePointStyle: CSSProperties = {
+  border: '1px solid var(--border-subtle)',
+  borderRadius: '999px',
+  padding: '4px 7px',
+  fontFamily: 'var(--font-mono)',
+  fontSize: '10px',
+  fontWeight: 800,
 }
 
 const physicalSparklineScaleStyle: CSSProperties = {
@@ -1686,11 +2219,38 @@ function fmtChange(value: number | null | undefined) {
   return `${value > 0 ? '+' : ''}${Math.round(value).toLocaleString('ja-JP')}株`
 }
 
-function MarginInfoCard({ info, fallbackType }: { info: StockMarginInfo | null; fallbackType?: string | null }) {
+function MarketSnapshotCard({
+  ticker,
+  marginInfo,
+  fallbackType,
+}: {
+  ticker: string
+  marginInfo: StockMarginInfo | null
+  fallbackType?: string | null
+}) {
+  return (
+    <div className="card" style={marketSnapshotCardStyle}>
+      <div style={marketSnapshotGridStyle}>
+        <PerformanceCard ticker={ticker} embedded />
+        <MarginInfoCard info={marginInfo} fallbackType={fallbackType} embedded />
+      </div>
+    </div>
+  )
+}
+
+function MarginInfoCard({
+  info,
+  fallbackType,
+  embedded = false,
+}: {
+  info: StockMarginInfo | null
+  fallbackType?: string | null
+  embedded?: boolean
+}) {
   const latest = info?.latest
   const latestHistory = info?.history?.[0]
   return (
-    <div className="card" style={{ padding: '12px' }}>
+    <div className={embedded ? '' : 'card'} style={embedded ? marginEmbeddedStyle : { padding: '12px' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', marginBottom: '8px' }}>
         <div style={{ fontSize: '11px', fontWeight: 600 }}>貸借/信用</div>
         <MarginBadges
@@ -1710,6 +2270,22 @@ function MarginInfoCard({ info, fallbackType }: { info: StockMarginInfo | null; 
       </div>
     </div>
   )
+}
+
+const marketSnapshotCardStyle: CSSProperties = {
+  padding: '12px',
+}
+
+const marketSnapshotGridStyle: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: '10px',
+}
+
+const marginEmbeddedStyle: CSSProperties = {
+  minWidth: 0,
+  borderTop: '1px solid var(--border-subtle)',
+  paddingTop: '10px',
 }
 
 function InfoLine({ label, value }: { label: string; value: string }) {
@@ -1745,17 +2321,75 @@ function Pill({ label, accent }: { label: string; accent?: boolean }) {
   )
 }
 
-function BasicInfoCard({ quote }: { quote: StockQuote | null }) {
+type BasicMlSimilar = {
+  similarDirection: 'up' | 'down' | null
+  similarityScore: number
+}
+
+type BasicMlResponse = {
+  asOfDate?: string | null
+  featureAsOfDate?: string | null
+  count?: number
+  similars?: BasicMlSimilar[]
+  physicsAnalysis?: {
+    physicsStatus?: string | null
+    pullbackVerdict?: string | null
+    summary?: string | null
+  } | null
+}
+
+function BasicInfoCard({ ticker, quote }: { ticker: string; quote: StockQuote | null }) {
+  const [latestStage, setLatestStage] = useState<SummaryStageEntry | null>(null)
+  const [physical, setPhysical] = useState<PhysicalMomentumResponse | null>(null)
+  const [ml, setMl] = useState<BasicMlResponse | null>(null)
+  const [summaryLoading, setSummaryLoading] = useState(true)
+
+  useEffect(() => {
+    let cancelled = false
+    const code = ticker.replace(/\.T$/i, '')
+    setSummaryLoading(true)
+
+    Promise.allSettled([
+      fetch(`/api/stage-history/${encodeURIComponent(code)}?granularity=daily&count=1`, { cache: 'no-store' }).then((res) => res.ok ? res.json() : null),
+      fetch(`/api/physical-momentum/${encodeURIComponent(code)}?market=JP&limit=40`, { cache: 'no-store' }).then((res) => res.ok ? res.json() : null),
+      fetch(`/api/ml/current-similars?ticker=${encodeURIComponent(code)}&limit=6`, { cache: 'no-store' }).then((res) => res.ok ? res.json() : null),
+    ])
+      .then(([stageResult, physicalResult, mlResult]) => {
+        if (cancelled) return
+        if (stageResult.status === 'fulfilled') {
+          const history = Array.isArray(stageResult.value?.history) ? stageResult.value.history : []
+          setLatestStage(history[history.length - 1] ?? null)
+        } else {
+          setLatestStage(null)
+        }
+        setPhysical(physicalResult.status === 'fulfilled' ? physicalResult.value as PhysicalMomentumResponse | null : null)
+        setMl(mlResult.status === 'fulfilled' ? mlResult.value as BasicMlResponse | null : null)
+      })
+      .finally(() => {
+        if (!cancelled) setSummaryLoading(false)
+      })
+
+    return () => { cancelled = true }
+  }, [ticker])
+
   const items = [
     { label: '時価総額', value: quote?.marketCap != null ? `${(quote.marketCap / 1e8).toLocaleString('ja-JP', { maximumFractionDigits: 0 })} 億円` : '---' },
     { label: '出来高', value: quote?.volume ? quote.volume.toLocaleString('ja-JP') : '---' },
     { label: '52週高値', value: quote?.fiftyTwoWeekHigh != null ? `¥${quote.fiftyTwoWeekHigh.toLocaleString('ja-JP', { maximumFractionDigits: 1 })}` : '---' },
     { label: '52週安値', value: quote?.fiftyTwoWeekLow != null ? `¥${quote.fiftyTwoWeekLow.toLocaleString('ja-JP', { maximumFractionDigits: 1 })}` : '---' },
   ]
+  const decision = buildBasicDecisionSummary(latestStage, physical, ml, quote)
 
   return (
     <div className="card" style={{ padding: '12px' }}>
-      <div style={{ fontSize: '11px', fontWeight: 600, marginBottom: '8px' }}>基本情報</div>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '8px', marginBottom: '8px' }}>
+        <div style={{ fontSize: '11px', fontWeight: 600 }}>基本情報</div>
+        {latestStage?.date && (
+          <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
+            基準日 {latestStage.date}
+          </span>
+        )}
+      </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '4px 8px' }}>
         {items.map(({ label, value }) => (
           <div key={label} style={{
@@ -1770,6 +2404,247 @@ function BasicInfoCard({ quote }: { quote: StockQuote | null }) {
           </div>
         ))}
       </div>
+
+      <div style={basicStageBlockStyle}>
+        <div style={basicSubHeaderStyle}>
+          <strong>6ステージ</strong>
+          <span>{summaryLoading ? '読込中' : latestStage ? buildStageCode(latestStage) : '未取得'}</span>
+        </div>
+        {latestStage ? (
+          <div style={basicStageGridStyle}>
+            {SUMMARY_STAGE_KEYS.map(({ key, label }) => (
+              <SixStageCell key={key} label={label} stage={latestStage[key]} />
+            ))}
+          </div>
+        ) : (
+          <p style={basicMutedTextStyle}>{summaryLoading ? '最新ステージを確認しています。' : '最新ステージデータがありません。'}</p>
+        )}
+      </div>
+
+      <div style={{ ...basicDecisionStyle, borderColor: decision.border, background: decision.background }}>
+        <div style={basicDecisionHeaderStyle}>
+          <span style={basicDecisionLabelStyle}>短期チェック</span>
+          <strong style={{ color: decision.color }}>{decision.label}</strong>
+        </div>
+        <p style={basicDecisionDescriptionStyle}>{decision.description}</p>
+        <div style={basicReasonRowStyle}>
+          {decision.reasons.map((reason) => (
+            <span key={reason} style={basicReasonPillStyle}>{reason}</span>
+          ))}
+        </div>
+        {decision.mlText && (
+          <div style={basicMlLineStyle}>
+            <span>ML類似</span>
+            <b>{decision.mlText}</b>
+          </div>
+        )}
+      </div>
     </div>
   )
+}
+
+function SixStageCell({ label, stage }: { label: string; stage: number | null }) {
+  const validStage = normalizeStage(stage)
+  const color = validStage ? STAGE_BORDER_COLORS[validStage] : 'var(--border-base)'
+  const bg = validStage ? STAGE_BG_COLORS[validStage] : 'var(--bg-elevated)'
+  const title = validStage ? STAGE_LABELS[validStage] : '未判定'
+  return (
+    <div title={`${label}: ${title}`} style={{ ...basicStageCellStyle, borderColor: color, background: bg }}>
+      <span style={basicStageCellLabelStyle}>{label}</span>
+      <strong style={{ ...basicStageCellNumberStyle, color }}>{validStage ?? '-'}</strong>
+      <small style={basicStageCellTextStyle}>{validStage ? shortStageLabel(validStage) : '不足'}</small>
+    </div>
+  )
+}
+
+function buildStageCode(row: SummaryStageEntry | null): string {
+  if (!row) return '------'
+  return SUMMARY_STAGE_KEYS.map(({ key }) => normalizeStage(row[key]) ?? '-').join('')
+}
+
+function normalizeStage(stage: number | null | undefined): number | null {
+  if (stage == null || !Number.isFinite(stage)) return null
+  const rounded = Math.round(stage)
+  return rounded >= 1 && rounded <= 6 ? rounded : null
+}
+
+function shortStageLabel(stage: number): string {
+  if (stage === 1) return '安定上昇'
+  if (stage === 2) return '調整'
+  if (stage === 3) return '弱気移行'
+  if (stage === 4) return '安定下降'
+  if (stage === 5) return '反発兆し'
+  return '強気初期'
+}
+
+function buildBasicDecisionSummary(
+  stage: SummaryStageEntry | null,
+  physical: PhysicalMomentumResponse | null,
+  ml: BasicMlResponse | null,
+  quote: StockQuote | null,
+) {
+  const latestPhysical = physical?.latest ?? null
+  const similars = Array.isArray(ml?.similars) ? ml.similars : []
+  const upCount = similars.filter((row) => row.similarDirection === 'up').length
+  const downCount = similars.filter((row) => row.similarDirection === 'down').length
+  const topSimilarity = similars.reduce((max, row) => Math.max(max, Number(row.similarityScore) || 0), 0)
+  const check = buildShortTermCheck({
+    stages: stage ? {
+      dailyA: stage.daily_a_stage,
+      dailyB: stage.daily_b_stage,
+      weeklyA: stage.weekly_a_stage,
+      weeklyB: stage.weekly_b_stage,
+      monthlyA: stage.monthly_a_stage,
+      monthlyB: stage.monthly_b_stage,
+    } : null,
+    physicalMomentumScore: latestPhysical?.physicalMomentumScore,
+    physicalForceScore: latestPhysical?.physicalForceScore,
+    changePercent: quote?.changePercent,
+    mlUpCount: upCount,
+    mlDownCount: downCount,
+    mlSimilarCount: similars.length,
+    mlTopSimilarity: topSimilarity || null,
+    physicsStatus: ml?.physicsAnalysis?.physicsStatus ?? null,
+  })
+  const style = shortTermToneStyle(check.tone)
+
+  return {
+    ...check,
+    ...style,
+  }
+}
+
+function shortTermToneStyle(tone: ShortTermCheckTone) {
+  if (tone === 'bullish') {
+    return { color: 'var(--price-up)', border: 'rgba(22, 163, 74, 0.32)', background: 'rgba(22, 163, 74, 0.07)' }
+  }
+  if (tone === 'positive') {
+    return { color: '#0f766e', border: 'rgba(20, 184, 166, 0.3)', background: 'rgba(20, 184, 166, 0.07)' }
+  }
+  if (tone === 'bearish') {
+    return { color: 'var(--price-down)', border: 'rgba(37, 99, 235, 0.3)', background: 'rgba(37, 99, 235, 0.07)' }
+  }
+  if (tone === 'weak') {
+    return { color: '#1d4ed8', border: 'rgba(37, 99, 235, 0.24)', background: 'rgba(37, 99, 235, 0.06)' }
+  }
+  return { color: 'var(--text-secondary)', border: 'var(--border-subtle)', background: 'var(--bg-elevated)' }
+}
+
+const basicStageBlockStyle: CSSProperties = {
+  marginTop: '10px',
+  paddingTop: '10px',
+  borderTop: '1px solid var(--border-subtle)',
+}
+
+const basicSubHeaderStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'baseline',
+  justifyContent: 'space-between',
+  gap: '8px',
+  marginBottom: '6px',
+  color: 'var(--text-primary)',
+  fontSize: '11px',
+}
+
+const basicStageGridStyle: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(6, minmax(0, 1fr))',
+  gap: '4px',
+}
+
+const basicStageCellStyle: CSSProperties = {
+  minWidth: 0,
+  border: '1px solid var(--border-subtle)',
+  borderRadius: '6px',
+  padding: '5px 3px',
+  display: 'grid',
+  justifyItems: 'center',
+  gap: '1px',
+}
+
+const basicStageCellLabelStyle: CSSProperties = {
+  color: 'var(--text-muted)',
+  fontSize: '9px',
+  fontWeight: 800,
+  lineHeight: 1,
+}
+
+const basicStageCellNumberStyle: CSSProperties = {
+  fontFamily: 'var(--font-mono)',
+  fontSize: '16px',
+  lineHeight: 1.05,
+}
+
+const basicStageCellTextStyle: CSSProperties = {
+  maxWidth: '100%',
+  color: 'var(--text-secondary)',
+  fontSize: '8px',
+  fontWeight: 700,
+  lineHeight: 1.1,
+  whiteSpace: 'nowrap',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+}
+
+const basicMutedTextStyle: CSSProperties = {
+  margin: 0,
+  color: 'var(--text-muted)',
+  fontSize: '10px',
+  lineHeight: 1.5,
+}
+
+const basicDecisionStyle: CSSProperties = {
+  marginTop: '10px',
+  border: '1px solid var(--border-subtle)',
+  borderRadius: '8px',
+  padding: '9px',
+}
+
+const basicDecisionHeaderStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'baseline',
+  justifyContent: 'space-between',
+  gap: '8px',
+}
+
+const basicDecisionLabelStyle: CSSProperties = {
+  color: 'var(--text-muted)',
+  fontSize: '10px',
+  fontWeight: 800,
+}
+
+const basicDecisionDescriptionStyle: CSSProperties = {
+  margin: '6px 0 0',
+  color: 'var(--text-secondary)',
+  fontSize: '10px',
+  lineHeight: 1.55,
+  fontWeight: 650,
+}
+
+const basicReasonRowStyle: CSSProperties = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: '4px',
+  marginTop: '7px',
+}
+
+const basicReasonPillStyle: CSSProperties = {
+  border: '1px solid var(--border-subtle)',
+  borderRadius: '999px',
+  background: '#fff',
+  color: 'var(--text-secondary)',
+  padding: '2px 6px',
+  fontSize: '9px',
+  fontWeight: 800,
+}
+
+const basicMlLineStyle: CSSProperties = {
+  marginTop: '7px',
+  display: 'flex',
+  justifyContent: 'space-between',
+  gap: '8px',
+  borderTop: '1px solid var(--border-subtle)',
+  paddingTop: '6px',
+  color: 'var(--text-muted)',
+  fontSize: '10px',
 }

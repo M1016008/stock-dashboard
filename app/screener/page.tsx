@@ -9,6 +9,7 @@ import { WatchlistButton } from '@/components/ui/WatchlistButton'
 import { StageDots } from '@/components/ui/StageDots'
 import { MarketDateCalendar } from '@/components/ui/MarketDateCalendar'
 import { getUniverseFilterMeta, parseUniverseFilter, UNIVERSE_FILTER_PARAM } from '@/lib/market-universe'
+import { SHORT_TERM_CHECK_LABELS, type ShortTermCheckLabel } from '@/lib/short-term-check'
 
 type Market = 'JP'
 type AxisKey = 'daily_a' | 'daily_b' | 'weekly_a' | 'weekly_b' | 'monthly_a' | 'monthly_b'
@@ -83,6 +84,10 @@ interface StockRow {
   physicalMomentumTrend?: 'rising' | 'falling' | 'flat' | null
   physicalAcceleration?: number | null
   physicalForce?: number | null
+  shortTermCheckLabel: ShortTermCheckLabel
+  shortTermCheckScore: number
+  shortTermCheckReasons?: string[]
+  shortTermCheckMlText?: string
 }
 
 type SortKey =
@@ -113,6 +118,7 @@ type SortKey =
   | 'physicalForceScore'
   | 'physicalEnergyScore'
   | 'physicalMomentumRank'
+  | 'shortTermCheckScore'
   | 'earningsLastDate'
   | 'earningsLastElapsedDays'
   | 'earningsNextDate'
@@ -121,6 +127,56 @@ type SortKey =
 interface SortState {
   key: SortKey
   dir: 'asc' | 'desc'
+}
+
+const SORT_KEY_VALUES: readonly SortKey[] = [
+  'ticker',
+  'marginType',
+  'marketSegment',
+  'sector33',
+  'sectorLarge',
+  'name',
+  'price',
+  'currency',
+  'changePercent',
+  'changePercentWeek',
+  'changePercentMonth',
+  'perfPct3m',
+  'perfPct6m',
+  'perfPctYtd',
+  'volume',
+  'avgVolume10d',
+  'avgVolume30d',
+  'marketCap',
+  'marketCapCurrency',
+  'sma5Angle',
+  'sma25Angle',
+  'sma75Angle',
+  'sma200Angle',
+  'physicalMomentumScore',
+  'physicalForceScore',
+  'physicalEnergyScore',
+  'physicalMomentumRank',
+  'shortTermCheckScore',
+  'earningsLastDate',
+  'earningsLastElapsedDays',
+  'earningsNextDate',
+  'earningsNextBusinessDays',
+]
+
+function isSortKey(value: string | null): value is SortKey {
+  return SORT_KEY_VALUES.includes(value as SortKey)
+}
+
+function initialSortState(searchParams: ReturnType<typeof useSearchParams>): SortState {
+  const requested = searchParams.get('sort')
+  if (isSortKey(requested)) {
+    return {
+      key: requested,
+      dir: searchParams.get('dir') === 'asc' ? 'asc' : 'desc',
+    }
+  }
+  return { key: 'marketCap', dir: 'desc' }
 }
 
 interface AvailableDate {
@@ -140,21 +196,22 @@ export default function ScreenerPage() {
   const [cached, setCached] = useState(false)
   const [snapshotDate, setSnapshotDate] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
-  const [sort, setSort] = useState<SortState | null>({ key: 'marketCap', dir: 'desc' })
+  const [sort, setSort] = useState<SortState | null>(() => initialSortState(searchParams))
   const [copiedTicker, setCopiedTicker] = useState<string | null>(null)
   const [availableDates, setAvailableDates] = useState<AvailableDate[]>([])
   const [selectedDate, setSelectedDate] = useState<string | null>(null) // null = 最新
   const [selectedSectorLarge, setSelectedSectorLarge] = useState<string>('')
   const [selectedSector33, setSelectedSector33] = useState<string>('')
   const [selectedMarginType, setSelectedMarginType] = useState<string>('')
+  const [selectedShortTermCheck, setSelectedShortTermCheck] = useState<string>('')
   const [selectedMcapBins, setSelectedMcapBins] = useState<Set<number>>(new Set())
-  const [pmsMin, setPmsMin] = useState('')
-  const [pfsMin, setPfsMin] = useState('')
-  const [pesMin, setPesMin] = useState('')
-  const [accelerationPositive, setAccelerationPositive] = useState(false)
-  const [forcePositive, setForcePositive] = useState(false)
-  const [stage23Candidate, setStage23Candidate] = useState(false)
-  const [pmsTrend, setPmsTrend] = useState('')
+  const [pmsMin, setPmsMin] = useState(() => searchParams.get('pmsMin') ?? '')
+  const [pfsMin, setPfsMin] = useState(() => searchParams.get('pfsMin') ?? '')
+  const [pesMin, setPesMin] = useState(() => searchParams.get('pesMin') ?? '')
+  const [accelerationPositive, setAccelerationPositive] = useState(() => searchParams.get('accelerationPositive') === '1')
+  const [forcePositive, setForcePositive] = useState(() => searchParams.get('forcePositive') === '1')
+  const [stage23Candidate, setStage23Candidate] = useState(() => searchParams.get('stage23Candidate') === '1')
+  const [pmsTrend, setPmsTrend] = useState(() => searchParams.get('pmsTrend') ?? '')
   const referenceDate = snapshotDate ?? selectedDate
   const tradingDates = useMemo(
     () => availableDates.map((item) => item.date).filter(Boolean).sort(),
@@ -232,6 +289,7 @@ export default function ScreenerPage() {
       if (selectedSectorLarge && r.sectorLarge !== selectedSectorLarge) return false
       if (selectedSector33 && (r.sector33 ?? r.sector33Name) !== selectedSector33) return false
       if (selectedMarginType && (r.marginType ?? '未設定') !== selectedMarginType) return false
+      if (selectedShortTermCheck && r.shortTermCheckLabel !== selectedShortTermCheck) return false
       if (selectedMcapBins.size > 0) {
         const cap = r.marketCap ?? -1
         const matched = Array.from(selectedMcapBins).some((idx) => {
@@ -243,7 +301,15 @@ export default function ScreenerPage() {
       }
       return true
     })
-  }, [results, selectedSectorLarge, selectedSector33, selectedMarginType, selectedMcapBins])
+  }, [results, selectedSectorLarge, selectedSector33, selectedMarginType, selectedShortTermCheck, selectedMcapBins])
+
+  const shortTermOptions = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const r of results) {
+      counts.set(r.shortTermCheckLabel, (counts.get(r.shortTermCheckLabel) ?? 0) + 1)
+    }
+    return SHORT_TERM_CHECK_LABELS.map((label) => [label, counts.get(label) ?? 0] as const)
+  }, [results])
 
   const marginOptions = useMemo(() => {
     const counts = new Map<string, number>()
@@ -455,8 +521,28 @@ export default function ScreenerPage() {
         </div>
       </Section>
 
+      <Section step={4} label="短期チェックで絞り込み（任意）">
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+          <button
+            onClick={() => setSelectedShortTermCheck('')}
+            style={mcChipStyle(selectedShortTermCheck === '')}
+          >
+            全て（{results.length.toLocaleString('ja-JP')}）
+          </button>
+          {shortTermOptions.map(([label, count]) => (
+            <button
+              key={label}
+              onClick={() => setSelectedShortTermCheck((current) => current === label ? '' : label)}
+              style={shortTermFilterChipStyle(label, selectedShortTermCheck === label)}
+            >
+              {label}（{count.toLocaleString('ja-JP')}）
+            </button>
+          ))}
+        </div>
+      </Section>
+
       {/* Physical Momentumで絞り込み */}
-      <Section step={4} label="Physical Momentumで絞り込み（任意）">
+      <Section step={5} label="Physical Momentumで絞り込み（任意）">
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '8px', alignItems: 'end' }}>
           <MomentumNumberInput label="PMS >=" value={pmsMin} onChange={setPmsMin} placeholder="例: 1.0" />
           <MomentumNumberInput label="PFS >=" value={pfsMin} onChange={setPfsMin} placeholder="例: 0.8" />
@@ -501,7 +587,7 @@ export default function ScreenerPage() {
       </Section>
 
       {/* HEXステージ（任意の絞り込み） */}
-      <Section step={5} label="HEXステージで絞り込み（任意 / 複数系統 AND）">
+      <Section step={6} label="HEXステージで絞り込み（任意 / 複数系統 AND）">
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '8px' }}>
           <button
             onClick={() => setStages({})}
@@ -633,13 +719,14 @@ export default function ScreenerPage() {
             </div>
           ) : (
             <div style={{ overflowX: 'auto' }}>
-              <table style={{ minWidth: '3200px', borderCollapse: 'collapse', fontSize: '12px' }}>
+              <table style={{ minWidth: '3340px', borderCollapse: 'collapse', fontSize: '12px' }}>
                 <thead>
                   <tr style={{ background: 'var(--bg-elevated)', borderBottom: '1px solid var(--border-dim)' }}>
                     <th scope="col" style={th}></th>
                     <SortableTh label="コード"     sortKey="ticker"              current={sort} onClick={toggleSort} />
                     <th scope="col" style={th}>TV形式</th>
                     <SortableTh label="銘柄名"     sortKey="name"                current={sort} onClick={toggleSort} />
+                    <SortableTh label="短期チェック" sortKey="shortTermCheckScore" current={sort} onClick={toggleSort} />
                     <SortableTh label="貸借/信用"  sortKey="marginType"          current={sort} onClick={toggleSort} />
                     <SortableTh label="市場区分"   sortKey="marketSegment"       current={sort} onClick={toggleSort} />
                     <SortableTh label="33業種" sortKey="sector33"            current={sort} onClick={toggleSort} />
@@ -709,6 +796,9 @@ export default function ScreenerPage() {
                           </button>
                         </td>
                         <td style={td}>{r.name}</td>
+                        <td style={td}>
+                          <ShortTermCheckBadge row={r} />
+                        </td>
                         <td style={td}>
                           {r.marginType ? (
                             <span style={{
@@ -884,6 +974,82 @@ function pmsTrendSymbol(trend: StockRow['physicalMomentumTrend']): string {
   if (trend === 'falling') return '↓'
   if (trend === 'flat') return '→'
   return ''
+}
+
+function shortTermTone(label: ShortTermCheckLabel) {
+  switch (label) {
+    case '強気優勢':
+      return {
+        color: 'var(--price-up)',
+        border: 'rgba(220, 38, 38, 0.28)',
+        background: 'rgba(220, 38, 38, 0.07)',
+      }
+    case '好転候補':
+      return {
+        color: '#0f766e',
+        border: 'rgba(20, 184, 166, 0.3)',
+        background: 'rgba(20, 184, 166, 0.07)',
+      }
+    case '下落警戒':
+      return {
+        color: 'var(--price-down)',
+        border: 'rgba(37, 99, 235, 0.3)',
+        background: 'rgba(37, 99, 235, 0.07)',
+      }
+    case '弱含み注意':
+      return {
+        color: '#1d4ed8',
+        border: 'rgba(37, 99, 235, 0.22)',
+        background: 'rgba(37, 99, 235, 0.05)',
+      }
+    default:
+      return {
+        color: 'var(--text-secondary)',
+        border: 'var(--border-base)',
+        background: 'var(--bg-elevated)',
+      }
+  }
+}
+
+function shortTermFilterChipStyle(label: ShortTermCheckLabel, active: boolean): React.CSSProperties {
+  const tone = shortTermTone(label)
+  return {
+    ...mcChipStyle(false),
+    background: active ? tone.color : tone.background,
+    color: active ? '#fff' : tone.color,
+    border: `1px solid ${active ? tone.color : tone.border}`,
+    fontWeight: 700,
+  }
+}
+
+function ShortTermCheckBadge({ row }: { row: StockRow }) {
+  const tone = shortTermTone(row.shortTermCheckLabel)
+  const title = [
+    `スコア ${row.shortTermCheckScore.toFixed(2)}`,
+    ...(row.shortTermCheckReasons ?? []),
+    row.shortTermCheckMlText ? `ML類似: ${row.shortTermCheckMlText}` : null,
+  ].filter(Boolean).join(' / ')
+  return (
+    <span
+      title={title}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: '5px',
+        border: `1px solid ${tone.border}`,
+        background: tone.background,
+        color: tone.color,
+        borderRadius: '999px',
+        padding: '3px 8px',
+        fontSize: '11px',
+        fontWeight: 800,
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {row.shortTermCheckLabel}
+      <small style={{ fontFamily: 'var(--font-mono)', opacity: 0.8 }}>{row.shortTermCheckScore.toFixed(1)}</small>
+    </span>
+  )
 }
 
 function fmtAngle(v: number | undefined): string {

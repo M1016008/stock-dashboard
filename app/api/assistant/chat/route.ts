@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { runAssistantChat } from '@/lib/assistant/router'
-import type { AssistantPageContext } from '@/lib/assistant/types'
+import type { AssistantConversationMessage, AssistantPageContext } from '@/lib/assistant/types'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
@@ -63,6 +63,21 @@ function normalizeContext(value: unknown): AssistantPageContext {
   }
 }
 
+function normalizeHistory(value: unknown): AssistantConversationMessage[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .map((item): AssistantConversationMessage | null => {
+      if (!item || typeof item !== 'object') return null
+      const raw = item as Record<string, unknown>
+      const role = raw.role === 'user' || raw.role === 'assistant' ? raw.role : null
+      const content = typeof raw.content === 'string' ? raw.content.trim().slice(0, 800) : ''
+      if (!role || !content) return null
+      return { role, content }
+    })
+    .filter((item): item is AssistantConversationMessage => item !== null)
+    .slice(-8)
+}
+
 export async function POST(request: NextRequest) {
   try {
     const rate = checkRateLimit(request)
@@ -78,7 +93,7 @@ export async function POST(request: NextRequest) {
         },
       )
     }
-    const body = await request.json().catch(() => null) as { message?: unknown; context?: unknown } | null
+    const body = await request.json().catch(() => null) as { message?: unknown; context?: unknown; history?: unknown } | null
     const message = typeof body?.message === 'string' ? body.message.trim() : ''
     if (!message) {
       return NextResponse.json({ error: 'message_required', message: '質問または指示を入力してください。' }, { status: 400 })
@@ -86,7 +101,7 @@ export async function POST(request: NextRequest) {
     if (message.length > 1200) {
       return NextResponse.json({ error: 'message_too_long', message: '入力は1200文字以内にしてください。' }, { status: 400 })
     }
-    const response = await runAssistantChat(message, normalizeContext(body?.context))
+    const response = await runAssistantChat(message, normalizeContext(body?.context), normalizeHistory(body?.history))
     return NextResponse.json(response)
   } catch (error) {
     console.error('assistant chat error:', error)

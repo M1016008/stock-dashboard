@@ -384,6 +384,39 @@ export const physicalMomentumMetrics = sqliteTable(
   }),
 )
 
+export const tradeScenarios = sqliteTable(
+  'trade_scenarios',
+  {
+    id:                text('id').primaryKey(),
+    ticker:            text('ticker').notNull(),
+    market:            text('market').notNull().default('JP'),
+    name:              text('name'),
+    direction:         text('direction').notNull(),
+    status:            text('status').notNull().default('open'),
+    confidence:        text('confidence').notNull().default('medium'),
+    anchorDate:        text('anchor_date').notNull(),
+    anchorClose:       real('anchor_close'),
+    horizonDays:       integer('horizon_days').notNull(),
+    entryPlanPrice:    real('entry_plan_price'),
+    targetPrice:       real('target_price'),
+    stopLossPrice:     real('stop_loss_price'),
+    thesis:            text('thesis').notNull(),
+    invalidation:      text('invalidation'),
+    reviewMemo:        text('review_memo'),
+    selectedStartDate: text('selected_start_date'),
+    selectedEndDate:   text('selected_end_date'),
+    sourceRangeLabel:  text('source_range_label'),
+    contextJson:       text('context_json').notNull().default('{}'),
+    createdAt:         text('created_at').notNull(),
+    updatedAt:         text('updated_at').notNull(),
+  },
+  (t) => ({
+    tickerUpdatedIdx: index('trade_scenarios_ticker_updated_idx').on(t.market, t.ticker, t.updatedAt),
+    statusIdx:        index('trade_scenarios_status_idx').on(t.status, t.updatedAt),
+    anchorIdx:        index('trade_scenarios_anchor_idx').on(t.market, t.ticker, t.anchorDate),
+  }),
+)
+
 export const marketDataRuns = sqliteTable(
   'market_data_runs',
   {

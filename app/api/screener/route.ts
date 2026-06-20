@@ -14,6 +14,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { execAll, execGet } from '@/lib/db/client'
 import { filterRowsByUniverse, parseUniverseFilter, UNIVERSE_FILTER_PARAM } from '@/lib/market-universe'
 import { getTickersByMarket } from '@/lib/master/tickers'
+import { buildShortTermCheck, type ShortTermCheckLabel } from '@/lib/short-term-check'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
@@ -68,6 +69,10 @@ interface SnapshotRow {
   physical_momentum_prev_score: number | null
   physical_acceleration: number | null
   physical_force: number | null
+  ml_up_count: number | null
+  ml_down_count: number | null
+  ml_similar_count: number | null
+  ml_top_similarity: number | null
 }
 
 interface ScreenerStockRow {
@@ -119,6 +124,10 @@ interface ScreenerStockRow {
   physicalMomentumTrend: 'rising' | 'falling' | 'flat' | null
   physicalAcceleration: number | null
   physicalForce: number | null
+  shortTermCheckLabel: ShortTermCheckLabel
+  shortTermCheckScore: number
+  shortTermCheckReasons: string[]
+  shortTermCheckMlText: string
 }
 
 type ScreenerSortKey =
@@ -187,6 +196,21 @@ async function loadSnapshotByDate(date: string): Promise<SnapshotRow[]> {
         WHERE market = 'JP'
           AND date = ?
           AND physical_momentum_score IS NOT NULL
+      ),
+      latest_similar_date AS (
+        SELECT MAX(as_of_date) AS d
+        FROM serving_current_similars
+      ),
+      ml_summary AS (
+        SELECT
+          base_ticker,
+          SUM(CASE WHEN similar_direction = 'up' THEN 1 ELSE 0 END) AS ml_up_count,
+          SUM(CASE WHEN similar_direction = 'down' THEN 1 ELSE 0 END) AS ml_down_count,
+          COUNT(*) AS ml_similar_count,
+          MAX(similarity_score) AS ml_top_similarity
+        FROM serving_current_similars
+        WHERE as_of_date = (SELECT d FROM latest_similar_date)
+        GROUP BY base_ticker
       )
     SELECT
       s.date,
@@ -303,7 +327,11 @@ async function loadSnapshotByDate(date: string): Promise<SnapshotRow[]> {
       pm.physical_momentum_rank,
       pm_prev.physical_momentum_score AS physical_momentum_prev_score,
       pm.acceleration AS physical_acceleration,
-      pm.force AS physical_force
+      pm.force AS physical_force,
+      ms.ml_up_count,
+      ms.ml_down_count,
+      ms.ml_similar_count,
+      ms.ml_top_similarity
     FROM daily_snapshots s
     LEFT JOIN ohlcv_daily cur ON cur.ticker = s.ticker AND cur.date = s.date
     CROSS JOIN prev_dates pd
@@ -317,6 +345,7 @@ async function loadSnapshotByDate(date: string): Promise<SnapshotRow[]> {
     LEFT JOIN daily_snapshots prev_s ON prev_s.ticker = s.ticker AND prev_s.date = pd.d1
     LEFT JOIN pms_ranked pm ON pm.symbol = s.ticker
     LEFT JOIN physical_momentum_metrics pm_prev ON pm_prev.market = 'JP' AND pm_prev.symbol = s.ticker AND pm_prev.date = pd.d1
+    LEFT JOIN ml_summary ms ON ms.base_ticker = s.ticker
     WHERE s.date = ?
     `,
     [date, date, date, date, date, date, date, date, date],
@@ -381,6 +410,23 @@ function buildResultRow(s: SnapshotRow, sectorMap: Map<string, SectorEntry>): Sc
   const marketCapStatus = resolveMarketCapStatus(s, marketSegment, sectorLarge, sector33)
   const lastEarnings = resolveLastEarningsDate(s, marketSegment, sectorLarge, sector33)
   const nextEarnings = resolveNextEarningsDate(s, marketSegment, sectorLarge, sector33)
+  const shortTermCheck = buildShortTermCheck({
+    stages: {
+      dailyA: s.daily_a_stage,
+      dailyB: s.daily_b_stage,
+      weeklyA: s.weekly_a_stage,
+      weeklyB: s.weekly_b_stage,
+      monthlyA: s.monthly_a_stage,
+      monthlyB: s.monthly_b_stage,
+    },
+    physicalMomentumScore: s.physical_momentum_score,
+    physicalForceScore: s.physical_force_score,
+    changePercent: s.change_percent_1d,
+    mlUpCount: s.ml_up_count,
+    mlDownCount: s.ml_down_count,
+    mlSimilarCount: s.ml_similar_count,
+    mlTopSimilarity: s.ml_top_similarity,
+  })
   return {
     ticker: s.ticker,
     name: s.name ?? master?.name ?? s.ticker,
@@ -438,6 +484,10 @@ function buildResultRow(s: SnapshotRow, sectorMap: Map<string, SectorEntry>): Sc
             : 'flat',
     physicalAcceleration: s.physical_acceleration,
     physicalForce: s.physical_force,
+    shortTermCheckLabel: shortTermCheck.label,
+    shortTermCheckScore: shortTermCheck.score,
+    shortTermCheckReasons: shortTermCheck.reasons,
+    shortTermCheckMlText: shortTermCheck.mlText,
   }
 }
 
@@ -672,6 +722,8 @@ const SORT_KEYS = new Set<ScreenerSortKey>([
   'physicalForceScore',
   'physicalEnergyScore',
   'physicalMomentumRank',
+  'shortTermCheckLabel',
+  'shortTermCheckScore',
   'earningsLastDate',
   'earningsLastElapsedDays',
   'earningsNextDate',
@@ -720,6 +772,7 @@ export async function GET(request: NextRequest) {
     const forcePositive = searchParams.get('forcePositive') === '1'
     const stage23Candidate = searchParams.get('stage23Candidate') === '1'
     const pmsTrend = searchParams.get('pmsTrend')
+    const shortTermChecks = stringSetParam(searchParams, 'shortTermCheck')
     const rawLimit = numParam(searchParams, 'limit')
     const rawOffset = numParam(searchParams, 'offset')
     const limit = rawLimit == null ? null : Math.min(5000, Math.max(1, Math.floor(rawLimit)))
@@ -795,6 +848,9 @@ export async function GET(request: NextRequest) {
         && (r.physicalForceScore ?? -Infinity) > 0
       ))
     }
+    if (shortTermChecks.size > 0) {
+      filtered = filtered.filter((r) => shortTermChecks.has(r.shortTermCheckLabel))
+    }
 
     for (const [key, vals] of Object.entries(stageFilter)) {
       filtered = filtered.filter((r) => {
@@ -838,6 +894,7 @@ export async function GET(request: NextRequest) {
         forcePositive,
         stage23Candidate,
         pmsTrend,
+        shortTermCheck: Array.from(shortTermChecks),
         sort: sortKey,
         dir: sortKey ? (sortDir === 1 ? 'asc' : 'desc') : null,
         limit,

@@ -7,6 +7,8 @@
     "dev:check": "tsx scripts/check-local-dev.ts",
     "build": "next build",
     "test:pms": "tsx scripts/test-physical-momentum.ts",
+    "test:chart-drill": "tsx scripts/test-chart-drill.ts",
+    "test:trade-scenarios": "tsx scripts/test-trade-scenarios.ts",
     "start": "next start",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",

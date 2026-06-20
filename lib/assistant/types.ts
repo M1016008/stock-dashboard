@@ -7,6 +7,15 @@ export type AssistantToolName =
 
 export type AssistantSource = 'openai' | 'fallback'
 
+export type AssistantResponseType = 'clarify' | 'results'
+
+export type AssistantConversationRole = 'user' | 'assistant'
+
+export interface AssistantConversationMessage {
+  role: AssistantConversationRole
+  content: string
+}
+
 export type AssistantOpenAIStatusReason =
   | 'disabled'
   | 'missing_api_key'
@@ -45,14 +54,23 @@ export interface AssistantPlannedToolCall {
   horizonDays?: number | null
   daysAhead?: number | null
   marginType?: string | null
+  marketSegment?: string | null
   minAvgVolume?: number | null
+  pmsMin?: number | null
+  pfsMin?: number | null
+  pesMin?: number | null
+  pmsTrend?: 'rising' | 'falling' | null
+  shortTermCheck?: string | null
   stageCode?: string | null
   sector17?: string | null
-  sort?: 'ml' | 'volume' | 'change' | 'earnings_date' | null
+  sort?: 'ml' | 'volume' | 'change' | 'earnings_date' | 'pms' | 'pfs' | 'short_term' | null
 }
 
 export interface AssistantPlan {
   intent: string
+  responseType?: AssistantResponseType
+  clarificationQuestions?: string[]
+  interpretedConditions?: string[]
   toolCalls: AssistantPlannedToolCall[]
 }
 
@@ -72,6 +90,11 @@ export interface AssistantResultRow {
   marginType?: string | null
   rank?: number | null
   score?: number | null
+  physicalMomentumScore?: number | null
+  physicalForceScore?: number | null
+  physicalEnergyScore?: number | null
+  shortTermCheckLabel?: string | null
+  shortTermCheckScore?: number | null
   direction?: string | null
   reason?: string | null
 }
@@ -92,11 +115,14 @@ export interface AssistantAction {
 }
 
 export interface AssistantChatResponse {
+  responseType: AssistantResponseType
   message: string
   source: AssistantSource
   model: string | null
   openai: AssistantOpenAIStatus
   context: AssistantPageContext
+  interpretedConditions: string[]
+  clarificationQuestions: string[]
   toolsUsed: AssistantToolName[]
   sections: AssistantToolResult[]
   actions: AssistantAction[]

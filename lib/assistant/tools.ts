@@ -2,6 +2,7 @@ import { execAll, execGet } from '@/lib/db/client'
 import { ML_PHYSICS_FEATURE_SET } from '@/lib/backtest/ml-physics'
 import { NIKKEI225_TICKERS, parseUniverseFilter, universeSqlCondition } from '@/lib/market-universe'
 import { getCurrentSimilars } from '@/lib/queries/ml-insights'
+import { buildShortTermCheck } from '@/lib/short-term-check'
 import type {
   AssistantPlannedToolCall,
   AssistantResultRow,
@@ -39,6 +40,14 @@ type StockOverviewRow = SearchRow & {
   physics_down_score: number | null
   classic_up_rank: number | null
   classic_down_rank: number | null
+  physical_momentum_score: number | null
+  physical_force_score: number | null
+  physical_energy_score: number | null
+  physical_momentum_prev_score: number | null
+  ml_up_count: number | null
+  ml_down_count: number | null
+  ml_similar_count: number | null
+  ml_top_similarity: number | null
 }
 
 type ScreenRow = StockOverviewRow
@@ -145,8 +154,28 @@ function stockHref(ticker: string): string {
 function rowFromOverview(row: StockOverviewRow): AssistantResultRow {
   const code = stageCode(row)
   const changePct = pctChange(row.close, row.prev_close)
+  const shortTerm = buildShortTermCheck({
+    stages: {
+      dailyA: row.daily_a_stage,
+      dailyB: row.daily_b_stage,
+      weeklyA: row.weekly_a_stage,
+      weeklyB: row.weekly_b_stage,
+      monthlyA: row.monthly_a_stage,
+      monthlyB: row.monthly_b_stage,
+    },
+    physicalMomentumScore: row.physical_momentum_score,
+    physicalForceScore: row.physical_force_score,
+    changePercent: changePct,
+    mlUpCount: row.ml_up_count,
+    mlDownCount: row.ml_down_count,
+    mlSimilarCount: row.ml_similar_count,
+    mlTopSimilarity: row.ml_top_similarity,
+  })
   const reasonParts = [
     code ? `6桁ステージ ${code}` : null,
+    shortTerm.label ? `短期 ${shortTerm.label}` : null,
+    row.physical_momentum_score != null ? `PMS ${row.physical_momentum_score.toFixed(2)}` : null,
+    row.physical_force_score != null ? `PFS ${row.physical_force_score.toFixed(2)}` : null,
     row.physics_up_rank ? `物理ML上昇#${row.physics_up_rank}` : null,
     row.physics_down_rank ? `物理ML下落#${row.physics_down_rank}` : null,
     row.avg_volume_30d ? `30日平均出来高 ${Math.round(row.avg_volume_30d).toLocaleString()}` : null,
@@ -166,6 +195,11 @@ function rowFromOverview(row: StockOverviewRow): AssistantResultRow {
     marketSegment: row.market_segment,
     marginType: row.margin_type,
     score: row.physics_up_score ?? row.physics_down_score ?? null,
+    physicalMomentumScore: row.physical_momentum_score,
+    physicalForceScore: row.physical_force_score,
+    physicalEnergyScore: row.physical_energy_score,
+    shortTermCheckLabel: shortTerm.label,
+    shortTermCheckScore: shortTerm.score,
     reason: reasonParts.join(' / ') || null,
   }
 }
@@ -243,6 +277,21 @@ export async function getStockOverview(call: AssistantPlannedToolCall): Promise<
         ORDER BY date DESC
         LIMIT 30
       )
+    ),
+    latest_similar_date AS (
+      SELECT MAX(as_of_date) AS d
+      FROM serving_current_similars
+    ),
+    ml_summary AS (
+      SELECT
+        base_ticker,
+        SUM(CASE WHEN similar_direction = 'up' THEN 1 ELSE 0 END) AS ml_up_count,
+        SUM(CASE WHEN similar_direction = 'down' THEN 1 ELSE 0 END) AS ml_down_count,
+        COUNT(*) AS ml_similar_count,
+        MAX(similarity_score) AS ml_top_similarity
+      FROM serving_current_similars
+      WHERE as_of_date = (SELECT d FROM latest_similar_date)
+      GROUP BY base_ticker
     )
     SELECT
       u.ticker,
@@ -271,13 +320,26 @@ export async function getStockOverview(call: AssistantPlannedToolCall): Promise<
       p_down.rank AS physics_down_rank,
       p_down.candidate_score AS physics_down_score,
       c_up.rank AS classic_up_rank,
-      c_down.rank AS classic_down_rank
+      c_down.rank AS classic_down_rank,
+      pm.physical_momentum_score,
+      pm.physical_force_score,
+      pm.physical_energy_score,
+      pm_prev.physical_momentum_score AS physical_momentum_prev_score,
+      ms.ml_up_count,
+      ms.ml_down_count,
+      ms.ml_similar_count,
+      ms.ml_top_similarity
     FROM ticker_universe u
     LEFT JOIN daily_snapshots ds ON ds.ticker = u.ticker AND ds.date = ?
     LEFT JOIN ohlcv_daily od ON od.ticker = u.ticker AND od.date = ds.date
     LEFT JOIN prev_date pd ON 1 = 1
     LEFT JOIN ohlcv_daily prev ON prev.ticker = u.ticker AND prev.date = pd.date
     LEFT JOIN avg_volume ON 1 = 1
+    LEFT JOIN physical_momentum_metrics pm
+      ON pm.market = 'JP' AND pm.symbol = u.ticker AND pm.date = ds.date
+    LEFT JOIN physical_momentum_metrics pm_prev
+      ON pm_prev.market = 'JP' AND pm_prev.symbol = u.ticker AND pm_prev.date = pd.date
+    LEFT JOIN ml_summary ms ON ms.base_ticker = u.ticker
     LEFT JOIN serving_ml_physics_candidates p_up
       ON p_up.ticker = u.ticker AND p_up.as_of_date = ? AND p_up.horizon_days = ? AND p_up.direction = 'up'
     LEFT JOIN serving_ml_physics_candidates p_down
@@ -347,6 +409,10 @@ export async function screenJpStocks(call: AssistantPlannedToolCall): Promise<As
     where.push('u.margin_type = ?')
     args.push(call.marginType.trim())
   }
+  if (call.marketSegment?.trim()) {
+    where.push('u.market_segment = ?')
+    args.push(call.marketSegment.trim())
+  }
   if (call.sector17?.trim()) {
     where.push('u.sector17_name = ?')
     args.push(call.sector17.trim())
@@ -365,10 +431,31 @@ export async function screenJpStocks(call: AssistantPlannedToolCall): Promise<As
     where.push('avg_volume.avg_volume_30d >= ?')
     args.push(minAvgVolume)
   }
+  const pmsMin = Number(call.pmsMin ?? Number.NaN)
+  const pfsMin = Number(call.pfsMin ?? Number.NaN)
+  const pesMin = Number(call.pesMin ?? Number.NaN)
+  if (Number.isFinite(pmsMin)) {
+    where.push('pm.physical_momentum_score >= ?')
+    args.push(pmsMin)
+  }
+  if (Number.isFinite(pfsMin)) {
+    where.push('pm.physical_force_score >= ?')
+    args.push(pfsMin)
+  }
+  if (Number.isFinite(pesMin)) {
+    where.push('pm.physical_energy_score >= ?')
+    args.push(pesMin)
+  }
+  if (call.pmsTrend === 'rising') where.push('pm.physical_momentum_score > pm_prev.physical_momentum_score')
+  if (call.pmsTrend === 'falling') where.push('pm.physical_momentum_score < pm_prev.physical_momentum_score')
   if (direction === 'up') where.push('p_up.rank IS NOT NULL')
   if (direction === 'down') where.push('p_down.rank IS NOT NULL')
 
-  const orderBy = direction === 'down'
+  const orderBy = call.sort === 'pfs'
+    ? 'pm.physical_force_score DESC, pm.physical_momentum_score DESC, avg_volume.avg_volume_30d DESC'
+    : call.sort === 'pms'
+      ? 'pm.physical_momentum_score DESC, pm.physical_force_score DESC, avg_volume.avg_volume_30d DESC'
+      : direction === 'down'
     ? 'p_down.rank ASC, p_down.candidate_score DESC, avg_volume.avg_volume_30d DESC'
     : direction === 'up'
       ? 'p_up.rank ASC, p_up.candidate_score DESC, avg_volume.avg_volume_30d DESC'
@@ -385,7 +472,7 @@ export async function screenJpStocks(call: AssistantPlannedToolCall): Promise<As
       GROUP BY ticker
     ),
     avg_volume AS (
-      SELECT ticker, AVG(volume) AS avg_volume_30d
+        SELECT ticker, AVG(volume) AS avg_volume_30d
       FROM (
         SELECT ticker, volume, ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY date DESC) AS rn
         FROM ohlcv_daily
@@ -393,6 +480,21 @@ export async function screenJpStocks(call: AssistantPlannedToolCall): Promise<As
       )
       WHERE rn <= 30
       GROUP BY ticker
+    ),
+    latest_similar_date AS (
+      SELECT MAX(as_of_date) AS d
+      FROM serving_current_similars
+    ),
+    ml_summary AS (
+      SELECT
+        base_ticker,
+        SUM(CASE WHEN similar_direction = 'up' THEN 1 ELSE 0 END) AS ml_up_count,
+        SUM(CASE WHEN similar_direction = 'down' THEN 1 ELSE 0 END) AS ml_down_count,
+        COUNT(*) AS ml_similar_count,
+        MAX(similarity_score) AS ml_top_similarity
+      FROM serving_current_similars
+      WHERE as_of_date = (SELECT d FROM latest_similar_date)
+      GROUP BY base_ticker
     )
     SELECT
       u.ticker,
@@ -421,13 +523,26 @@ export async function screenJpStocks(call: AssistantPlannedToolCall): Promise<As
       p_down.rank AS physics_down_rank,
       p_down.candidate_score AS physics_down_score,
       c_up.rank AS classic_up_rank,
-      c_down.rank AS classic_down_rank
+      c_down.rank AS classic_down_rank,
+      pm.physical_momentum_score,
+      pm.physical_force_score,
+      pm.physical_energy_score,
+      pm_prev.physical_momentum_score AS physical_momentum_prev_score,
+      ms.ml_up_count,
+      ms.ml_down_count,
+      ms.ml_similar_count,
+      ms.ml_top_similarity
     FROM daily_snapshots ds
     INNER JOIN ticker_universe u ON u.ticker = ds.ticker
     LEFT JOIN ohlcv_daily od ON od.ticker = ds.ticker AND od.date = ds.date
     LEFT JOIN prev_dates pd ON pd.ticker = ds.ticker
     LEFT JOIN ohlcv_daily prev ON prev.ticker = ds.ticker AND prev.date = pd.prev_date
     LEFT JOIN avg_volume ON avg_volume.ticker = ds.ticker
+    LEFT JOIN physical_momentum_metrics pm
+      ON pm.market = 'JP' AND pm.symbol = ds.ticker AND pm.date = ds.date
+    LEFT JOIN physical_momentum_metrics pm_prev
+      ON pm_prev.market = 'JP' AND pm_prev.symbol = ds.ticker AND pm_prev.date = pd.prev_date
+    LEFT JOIN ml_summary ms ON ms.base_ticker = ds.ticker
     LEFT JOIN serving_ml_physics_candidates p_up
       ON p_up.ticker = ds.ticker AND p_up.as_of_date = ? AND p_up.horizon_days = ? AND p_up.direction = 'up'
     LEFT JOIN serving_ml_physics_candidates p_down
@@ -457,21 +572,33 @@ export async function screenJpStocks(call: AssistantPlannedToolCall): Promise<As
   hrefParams.set('limit', String(limit))
   if (call.universe) hrefParams.set('universe', call.universe)
   if (call.marginType) hrefParams.set('marginType', call.marginType)
+  if (call.marketSegment) hrefParams.set('segment', call.marketSegment)
   if (minAvgVolume > 0) hrefParams.set('volumeMin', String(Math.floor(minAvgVolume)))
-  hrefParams.set('sort', call.sort === 'volume' ? 'avgVolume30d' : 'volume')
+  if (Number.isFinite(pmsMin)) hrefParams.set('pmsMin', String(pmsMin))
+  if (Number.isFinite(pfsMin)) hrefParams.set('pfsMin', String(pfsMin))
+  if (Number.isFinite(pesMin)) hrefParams.set('pesMin', String(pesMin))
+  if (call.pmsTrend) hrefParams.set('pmsTrend', call.pmsTrend)
+  hrefParams.set('sort', call.sort === 'pfs' ? 'physicalForceScore' : call.sort === 'pms' ? 'physicalMomentumScore' : call.sort === 'short_term' ? 'shortTermCheckScore' : call.sort === 'volume' ? 'avgVolume30d' : 'volume')
   hrefParams.set('dir', 'desc')
   const title = direction === 'down' ? '下落警戒候補' : direction === 'up' ? '上昇候補' : 'スクリーニング候補'
+  const mappedRows = rows.map((row) => ({
+    ...rowFromOverview(row),
+    rank: direction === 'down' ? row.physics_down_rank : row.physics_up_rank,
+    direction,
+    score: direction === 'down' ? row.physics_down_score : row.physics_up_score,
+  }))
+  const filteredRows = call.shortTermCheck
+    ? mappedRows.filter((row) => row.shortTermCheckLabel === call.shortTermCheck)
+    : mappedRows
+  const finalRows = call.sort === 'short_term'
+    ? [...filteredRows].sort((a, b) => (b.shortTermCheckScore ?? -Infinity) - (a.shortTermCheckScore ?? -Infinity)).slice(0, limit)
+    : filteredRows
   return {
     tool: 'screen_jp_stocks',
     title,
-    summary: `${snapshotDate} 時点で ${title} を ${rows.length} 件抽出しました。${call.universe ? '日経225に限定しています。' : ''}`,
+    summary: `${snapshotDate} 時点で ${title} を ${finalRows.length} 件抽出しました。${call.universe ? '日経225に限定しています。' : ''}`,
     href: `/screener?${hrefParams.toString()}`,
-    rows: rows.map((row) => ({
-      ...rowFromOverview(row),
-      rank: direction === 'down' ? row.physics_down_rank : row.physics_up_rank,
-      direction,
-      score: direction === 'down' ? row.physics_down_score : row.physics_up_score,
-    })),
+    rows: finalRows,
     meta: { snapshotDate, physicsDate, classicDate, horizonDays },
   }
 }
@@ -720,16 +847,18 @@ export function describeResults(results: AssistantToolResult[]): string {
   if (results.length === 0) return '条件に合う機能を特定できませんでした。銘柄コードや条件を少し具体化してください。'
   if (totalRows === 0) return results.map((result) => result.summary).join(' ')
   const titles = results.map((result) => `${result.title}${result.rows.length ? ` ${result.rows.length}件` : ''}`).join('、')
-  return `${titles}を表示しました。候補の根拠は各カードのステージ、物理ML順位、出来高、決算日を確認してください。`
+  return `${titles}をDBから取得して表示しました。候補の根拠は各カードの6ステージ、短期チェック、PMS/PFS、物理ML順位、出来高、決算日を確認してください。`
 }
 
 export const assistantToolDescriptions = `
 利用可能ツール:
 - search_stocks: 銘柄名またはコードを検索する。
-- get_stock_overview: 1銘柄の6ステージ、価格、出来高、ML候補状況を確認する。
-- screen_jp_stocks: 日本株を6ステージ、物理ML上昇/下落、日経225、貸借、出来高で抽出する。
+- get_stock_overview: 1銘柄の6ステージ、価格、出来高、PMS/PFS、短期チェック、ML候補状況を確認する。
+- screen_jp_stocks: 日本株を6ステージ、物理ML上昇/下落、日経225、貸借、出来高、PMS/PFS/PES、PMS上昇/低下、短期チェックで抽出する。
 - get_ml_similars: 指定銘柄に似た現在銘柄をML類似で探す。
 - get_earnings_candidates: 近い決算予定銘柄を抽出する。
 日経225指定は universe=nikkei225。貸借指定は marginType=貸借。空売り/下落警戒は direction=down。上昇候補は direction=up。
+初動/動き出し/勢いは pfsMin=0, pmsTrend=rising, sort=pfs を優先。PMSが強い候補は sort=pms。短期ラベル重視は sort=short_term。
+曖昧な「良さそう」「おすすめ」だけなら、上昇/下落/初動/決算/対象市場を聞き返す。
 日経225の候補数は ${NIKKEI225_TICKERS.length}。
 `

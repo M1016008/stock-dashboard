@@ -240,8 +240,9 @@ h3 {
 
 .stock-info-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr) minmax(0, 1fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
+  align-items: start;
 }
 .stock-performance-card {
   padding: 12px;

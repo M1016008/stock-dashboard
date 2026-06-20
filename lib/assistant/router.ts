@@ -1,5 +1,6 @@
 import type {
   AssistantChatResponse,
+  AssistantConversationMessage,
   AssistantPageContext,
   AssistantPlan,
   AssistantOpenAIStatus,
@@ -73,34 +74,82 @@ function volumeThresholdFromText(text: string): number | null {
   return match[2]?.startsWith('万') ? value * 10000 : value
 }
 
+function shortTextList(value: unknown, maxItems: number): string[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .map((item) => typeof item === 'string' ? item.trim() : '')
+    .filter(Boolean)
+    .slice(0, maxItems)
+}
+
+function buildClarificationPlan(intent: string, questions: string[], interpretedConditions: string[] = []): AssistantPlan {
+  return {
+    intent,
+    responseType: 'clarify',
+    clarificationQuestions: questions.slice(0, 3),
+    interpretedConditions,
+    toolCalls: [],
+  }
+}
+
 function fallbackPlan(message: string, context: AssistantPageContext): AssistantPlan {
   const lower = message.toLowerCase()
   const contextTicker = tickerFromContext(context)
-  const ticker = normalizeTicker(message.match(/\b([0-9]{4}|[0-9]{3}A|[A-Z]{1,5})\b/i)?.[1]) ?? contextTicker
+  const explicitTicker = normalizeTicker(message.match(/\b([0-9]{4}|[0-9]{3}A|[A-Z]{1,5})\b/i)?.[1])
+  const ticker = explicitTicker ?? contextTicker
   const wantsSimilar = /似た|類似|同じ形|近い/.test(message)
   const wantsEarnings = /決算|発表/.test(message)
   const wantsDown = /下落|悪化|警戒|空売り|ショート|売り/.test(message)
-  const wantsUp = /上昇|好転|買い|強い|押し目/.test(message)
+  const wantsUp = /上昇|好転|買い|強い|押し目|初動|動き出し|勢い/.test(message)
   const wantsSearch = /探して|検索|どこ|銘柄/.test(message)
+  const wantsMomentum = /PMS|PFS|PES|物理|初動|動き出し|勢い|モメンタム/i.test(message)
+  const wantsShortTerm = /短期|強気優勢|好転候補|下落警戒/.test(message)
   const universe = /日経\s*225|nikkei|n225/i.test(message) || context.universe === 'nikkei225' ? 'nikkei225' : null
   const marginType = /貸借/.test(message) ? '貸借' : /信用/.test(message) ? '信用' : null
   const minAvgVolume = volumeThresholdFromText(message)
   const limit = numberFromText(message, [/([0-9]{1,2})\s*件/]) ?? 10
   const calls: AssistantPlannedToolCall[] = []
+  const interpretedConditions: string[] = []
+
+  if (
+    !explicitTicker &&
+    /良さそう|おすすめ|有望|何かない|いい銘柄|候補を出して|探して/.test(message) &&
+    !wantsUp &&
+    !wantsDown &&
+    !wantsEarnings &&
+    !wantsMomentum &&
+    !wantsShortTerm
+  ) {
+    return buildClarificationPlan(
+      '銘柄候補を出すには、まず探し方を少しだけ具体化した方がデータに基づいた結果になります。',
+      [
+        '上昇候補、下落警戒、初動、決算前、どの観点で探しますか？',
+        '対象は全市場、日経225、貸借銘柄、特定業種のどれにしますか？',
+        '短期なら20営業日、中期なら60営業日のどちらを重視しますか？',
+      ],
+    )
+  }
 
   if (ticker && wantsSimilar) calls.push({ tool: 'get_ml_similars', ticker, limit })
   if (ticker && !wantsSimilar && !wantsEarnings && !wantsSearch) calls.push({ tool: 'get_stock_overview', ticker })
   if (wantsEarnings) calls.push({ tool: 'get_earnings_candidates', daysAhead: 14, universe, marginType, minAvgVolume, limit, sort: 'earnings_date' })
-  if (wantsDown || wantsUp || /スクリーナ|候補|抽出|条件/.test(message)) {
+  if (wantsDown || wantsUp || wantsMomentum || wantsShortTerm || /スクリーナ|候補|抽出|条件/.test(message)) {
+    const direction = wantsDown ? 'down' : wantsUp ? 'up' : 'neutral'
+    if (universe) interpretedConditions.push('日経225')
+    if (marginType) interpretedConditions.push(marginType)
+    if (minAvgVolume) interpretedConditions.push(`平均出来高 ${Math.round(minAvgVolume).toLocaleString()}以上`)
+    if (wantsMomentum) interpretedConditions.push('PMS/PFSを重視')
     calls.push({
       tool: 'screen_jp_stocks',
-      direction: wantsDown ? 'down' : wantsUp ? 'up' : 'neutral',
+      direction,
       universe,
       marginType,
       minAvgVolume,
+      pfsMin: wantsMomentum && !wantsDown ? 0 : null,
+      pmsTrend: wantsMomentum && !wantsDown ? 'rising' : null,
       limit,
       horizonDays: /60/.test(message) ? 60 : /40/.test(message) ? 40 : 20,
-      sort: wantsDown || wantsUp ? 'ml' : 'volume',
+      sort: wantsMomentum ? 'pfs' : wantsShortTerm ? 'short_term' : wantsDown || wantsUp ? 'ml' : 'volume',
     })
   }
   if (ticker && calls.length === 0) calls.push({ tool: 'search_stocks', query: ticker, limit: 8 })
@@ -108,6 +157,8 @@ function fallbackPlan(message: string, context: AssistantPageContext): Assistant
 
   return {
     intent: lower.includes('us') ? 'US株は初期MVPでは日本株中心の読み取りにフォールバックします。' : '自然文から読み取り専用ツールを選択しました。',
+    responseType: 'results',
+    interpretedConditions,
     toolCalls: calls.slice(0, 4),
   }
 }
@@ -116,6 +167,7 @@ function normalizePlan(value: unknown, fallback: AssistantPlan): AssistantPlan {
   if (!value || typeof value !== 'object') return fallback
   const raw = value as Partial<AssistantPlan>
   const toolCalls = Array.isArray(raw.toolCalls) ? raw.toolCalls : []
+  const responseType = raw.responseType === 'clarify' ? 'clarify' : 'results'
   const normalized = toolCalls
     .filter((call): call is AssistantPlannedToolCall => {
       if (!call || typeof call !== 'object') return false
@@ -130,14 +182,18 @@ function normalizePlan(value: unknown, fallback: AssistantPlan): AssistantPlan {
       direction: (call.direction === 'down' || call.direction === 'neutral' || call.direction === 'up')
         ? call.direction
         : null,
+      pmsTrend: call.pmsTrend === 'rising' || call.pmsTrend === 'falling' ? call.pmsTrend : null,
     } satisfies AssistantPlannedToolCall))
   return {
     intent: typeof raw.intent === 'string' && raw.intent.trim() ? raw.intent : fallback.intent,
-    toolCalls: normalized.length > 0 ? normalized : fallback.toolCalls,
+    responseType: responseType === 'clarify' ? 'clarify' : 'results',
+    clarificationQuestions: shortTextList(raw.clarificationQuestions, 3),
+    interpretedConditions: shortTextList(raw.interpretedConditions, 8),
+    toolCalls: responseType === 'clarify' ? [] : normalized.length > 0 ? normalized : fallback.toolCalls,
   }
 }
 
-async function planWithOpenAI(message: string, context: AssistantPageContext, fallback: AssistantPlan): Promise<{ plan: AssistantPlan; source: AssistantSource; model: string | null; openai: AssistantOpenAIStatus }> {
+async function planWithOpenAI(message: string, context: AssistantPageContext, history: AssistantConversationMessage[], fallback: AssistantPlan): Promise<{ plan: AssistantPlan; source: AssistantSource; model: string | null; openai: AssistantOpenAIStatus }> {
   const config = getAssistantOpenAIConfig()
   if (!config.apiKey || !config.model) {
     return {
@@ -168,9 +224,13 @@ async function planWithOpenAI(message: string, context: AssistantPageContext, fa
                 type: 'input_text',
                 text: [
                   'あなたはStockBoardの読み取り専用AIルーターです。',
-                  'ユーザーの自然文から、登録済みツールを最大4つ選びます。',
+                  'ユーザーの自然文から、登録済みツールを最大4つ選びます。結果は必ずStockBoardのDB/API取得結果を根拠にします。',
+                  '条件が曖昧で候補抽出の軸が決まらない場合は responseType=clarify とし、ツールを呼ばず、1〜3個だけ確認質問を返してください。',
+                  '抽象語は具体条件へ翻訳します。例: 初動=PFS/PMS上昇とステージ好転、勢い=PMS/PFS重視、弱い=下落警戒またはPMS低下。',
+                  '十分に条件がある場合は responseType=results とし、interpretedConditions に解釈した条件を短く入れてください。',
                   'DB更新、管理画面操作、発注、バッチ実行は絶対に選ばないでください。',
-                  '日本株中心の初期MVPです。US株/コモディティは明示された場合でも、まず検索や日本株ツールに限定して安全に返します。',
+                  '日本株中心の初期MVPです。US株/コモディティは明示された場合、未対応であることが分かる形で日本株ツールに無理に混ぜないでください。',
+                  'DBにない事実や未取得の数値は推測しないでください。',
                   assistantToolDescriptions,
                 ].join('\n'),
               },
@@ -181,7 +241,7 @@ async function planWithOpenAI(message: string, context: AssistantPageContext, fa
             content: [
               {
                 type: 'input_text',
-                text: JSON.stringify({ message, pageContext: context }),
+                text: JSON.stringify({ message, pageContext: context, recentConversation: history }),
               },
             ],
           },
@@ -195,6 +255,17 @@ async function planWithOpenAI(message: string, context: AssistantPageContext, fa
               type: 'object',
               properties: {
                 intent: { type: 'string' },
+                responseType: { type: 'string', enum: ['clarify', 'results'] },
+                clarificationQuestions: {
+                  type: 'array',
+                  maxItems: 3,
+                  items: { type: 'string' },
+                },
+                interpretedConditions: {
+                  type: 'array',
+                  maxItems: 8,
+                  items: { type: 'string' },
+                },
                 toolCalls: {
                   type: 'array',
                   maxItems: 4,
@@ -210,17 +281,23 @@ async function planWithOpenAI(message: string, context: AssistantPageContext, fa
                       horizonDays: { type: ['number', 'null'] },
                       daysAhead: { type: ['number', 'null'] },
                       marginType: { type: ['string', 'null'] },
+                      marketSegment: { type: ['string', 'null'] },
                       minAvgVolume: { type: ['number', 'null'] },
+                      pmsMin: { type: ['number', 'null'] },
+                      pfsMin: { type: ['number', 'null'] },
+                      pesMin: { type: ['number', 'null'] },
+                      pmsTrend: { type: ['string', 'null'], enum: ['rising', 'falling', null] },
+                      shortTermCheck: { type: ['string', 'null'] },
                       stageCode: { type: ['string', 'null'] },
                       sector17: { type: ['string', 'null'] },
-                      sort: { type: ['string', 'null'], enum: ['ml', 'volume', 'change', 'earnings_date', null] },
+                      sort: { type: ['string', 'null'], enum: ['ml', 'volume', 'change', 'earnings_date', 'pms', 'pfs', 'short_term', null] },
                     },
                     required: ['tool'],
                     additionalProperties: false,
                   },
                 },
               },
-              required: ['intent', 'toolCalls'],
+              required: ['intent', 'responseType', 'toolCalls'],
               additionalProperties: false,
             },
           },
@@ -288,21 +365,52 @@ function followupsForResults(results: AssistantToolResult[]): string[] {
   return base
 }
 
-export async function runAssistantChat(message: string, context: AssistantPageContext): Promise<AssistantChatResponse> {
+function clarificationMessage(plan: AssistantPlan): string {
+  const lead = plan.intent || '条件を少し具体化すると、DBに基づいた候補を出しやすくなります。'
+  const questions = plan.clarificationQuestions ?? []
+  if (questions.length === 0) return lead
+  return `${lead} ${questions.join(' ')}`
+}
+
+export async function runAssistantChat(message: string, context: AssistantPageContext, history: AssistantConversationMessage[] = []): Promise<AssistantChatResponse> {
   const trimmed = message.trim()
   const fallback = fallbackPlan(trimmed, context)
-  const { plan, source, model, openai } = await planWithOpenAI(trimmed, context, fallback)
+  const { plan, source, model, openai } = await planWithOpenAI(trimmed, context, history, fallback)
+
+  if (plan.responseType === 'clarify') {
+    const questions = plan.clarificationQuestions ?? []
+    return {
+      responseType: 'clarify',
+      message: clarificationMessage(plan),
+      source,
+      model,
+      openai,
+      context,
+      interpretedConditions: plan.interpretedConditions ?? [],
+      clarificationQuestions: questions,
+      toolsUsed: [],
+      sections: [],
+      actions: [],
+      followups: questions.length > 0
+        ? questions
+        : ['上昇候補で探して', '下落警戒で探して', '初動重視で探して'],
+    }
+  }
+
   const results: AssistantToolResult[] = []
   for (const call of plan.toolCalls) {
     results.push(await runAssistantTool(call))
   }
   const actions = buildNavigateActions(results)
   return {
+    responseType: 'results',
     message: describeResults(results),
     source,
     model,
     openai,
     context,
+    interpretedConditions: plan.interpretedConditions ?? [],
+    clarificationQuestions: [],
     toolsUsed: Array.from(new Set(results.map((result) => result.tool))),
     sections: results,
     actions,

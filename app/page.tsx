@@ -10,8 +10,8 @@ import { Suspense } from 'react'
 import { PageTitle } from '@/components/layout/PageTitle'
 import { StereoscopicSignals } from '@/components/dashboard/StereoscopicSignals'
 import { NewHighVolume } from '@/components/dashboard/NewHighVolume'
-import { PatternStatsTop } from '@/components/dashboard/PatternStatsTop'
 import { PhysicalMomentumMarket } from '@/components/dashboard/PhysicalMomentumMarket'
+import { TradeScenarioOverview } from '@/components/dashboard/TradeScenarioOverview'
 import { DashboardDateSelector } from '@/components/dashboard/DashboardDateSelector'
 import { getLatestDate } from '@/lib/queries/dashboard'
 import { getDashboardDateOption } from '@/lib/queries/dashboard-cache'
@@ -19,7 +19,7 @@ import { getUniverseFilterMeta, parseUniverseFilter } from '@/lib/market-univers
 
 export const metadata: Metadata = {
   title: 'ダッシュボード — StockBoard',
-  description: 'J-Quants データに基づく市場サマリーとパターン統計',
+  description: 'J-Quants データに基づく市場サマリーと注目銘柄の確認',
 }
 
 // Yoshio 要望: ページを開いたら毎回最新の DB を反映する (Next のキャッシュを完全無効化)
@@ -79,9 +79,12 @@ export default async function DashboardPage({
       <PageTitle
         title="ダッシュボード"
         subtitle={subtitle}
-        badge={universeMeta ? `${universeMeta.shortLabel} / パターン統計 最新反映` : 'パターン統計 最新反映'}
+        badge={universeMeta ? `${universeMeta.shortLabel} / 最新データ反映` : '最新データ反映'}
       />
       <DashboardDateSelector dates={initialDates} selectedDate={selectedDate} />
+      <Suspense fallback={<SectionFallback height={300} />}>
+        <TradeScenarioOverview />
+      </Suspense>
       <Suspense fallback={<SectionFallback height={150} />}>
         <PhysicalMomentumMarket universe={universeFilter} />
       </Suspense>
@@ -90,9 +93,6 @@ export default async function DashboardPage({
       </Suspense>
       <Suspense fallback={<SectionFallback height={420} />}>
         <NewHighVolume date={latest} universe={universeFilter} />
-      </Suspense>
-      <Suspense fallback={<SectionFallback height={260} />}>
-        <PatternStatsTop />
       </Suspense>
     </div>
   )

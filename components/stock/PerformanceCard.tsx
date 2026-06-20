@@ -6,6 +6,7 @@ import type { OHLCV } from '@/types/stock'
 
 interface PerformanceCardProps {
   ticker: string
+  embedded?: boolean
 }
 
 interface PerfRow {
@@ -65,7 +66,7 @@ function yearToDateInfo(ohlcv: OHLCV[]): YtdInfo {
  * 直近の変化率を一目で確認できるカード
  * 1日 / 1週 / 1ヶ月 / 3ヶ月 / 6ヶ月 / 年初来
  */
-export function PerformanceCard({ ticker }: PerformanceCardProps) {
+export function PerformanceCard({ ticker, embedded = false }: PerformanceCardProps) {
   const [perf, setPerf] = useState<PerfRow[]>([])
   const [ytd, setYtd] = useState<YtdInfo | null>(null)
   const [loading, setLoading] = useState(true)
@@ -73,6 +74,8 @@ export function PerformanceCard({ ticker }: PerformanceCardProps) {
   useEffect(() => {
     let cancelled = false
     setLoading(true)
+    setPerf([])
+    setYtd(null)
     fetch(`/api/history/${encodeURIComponent(ticker)}?period=1y`, { cache: 'no-store' })
       .then((r) => r.json())
       .then((d: OHLCV[] | { error: string }) => {
@@ -93,7 +96,7 @@ export function PerformanceCard({ ticker }: PerformanceCardProps) {
   }, [ticker])
 
   return (
-    <div className="card stock-performance-card">
+    <div className={embedded ? '' : 'card stock-performance-card'} style={embedded ? { minWidth: 0 } : undefined}>
       <div style={{ fontSize: '11px', fontWeight: 600, marginBottom: '8px' }}>直近の変化率</div>
       <div className="stock-perf-grid">
         {perf.length === 0 && loading && (
