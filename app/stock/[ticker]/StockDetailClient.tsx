@@ -13,6 +13,7 @@ import { WatchlistButton } from '@/components/ui/WatchlistButton'
 import { StageTimeline, type StageRangeSelection } from '@/components/stock/StageTimeline'
 import { StockMovePeriods } from '@/components/stock/StockMovePeriods'
 import { StockMlInsights } from '@/components/stock/StockMlInsights'
+import { ScenarioProjectionChart } from '@/components/stock/ScenarioProjectionChart'
 import { TradeScenarioNotebook } from '@/components/stock/TradeScenarioNotebook'
 import { findTicker } from '@/lib/master/tickers'
 import { STAGE_BG_COLORS, STAGE_BORDER_COLORS, STAGE_LABELS } from '@/lib/hex-stage'
@@ -304,6 +305,8 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
       {/* 過去の大きな値動き */}
       <StockMovePeriods ticker={ticker} />
 
+      <ScenarioProjectionChart ticker={ticker} name={name} />
+
       {/* 最新ML類似候補 */}
       <StockMlInsights ticker={ticker} />
 
@@ -336,25 +339,91 @@ interface PhysicalMomentumResponse {
   trend: 'rising' | 'falling' | 'flat' | null
 }
 
+interface PhysicalPlanCandidate {
+  asOfDate: string
+  direction: 'up' | 'down' | 'wait'
+  rank: number
+  score: number
+  modelName: string | null
+}
+
+interface PhysicalPlanHorizon {
+  label: string
+  horizonDays: number
+  description: string
+  statusLabel: string
+  targetDirection: 'up' | 'down' | 'wait' | null
+  hitRate: number | null
+  baseRate: number | null
+  lift: number | null
+  confidenceScore: number | null
+  confidenceLabel: string
+  sampleCount: number | null
+  adverseRate: number | null
+  avgReturnPct: number | null
+  avgMaxReturnPct: number | null
+  avgMinReturnPct: number | null
+  medianReturnPct: number | null
+  evaluationDate: string | null
+  candidates: PhysicalPlanCandidate[]
+  suggestion: {
+    tone: 'positive' | 'negative' | 'neutral' | 'warning'
+    stance: string
+    headline: string
+    summary: string
+    checklist: string[]
+    invalidation: string
+  }
+}
+
+interface PhysicalPlanResponse {
+  ok: boolean
+  available: boolean
+  ticker: string
+  featureSet?: string
+  featureAsOfDate?: string | null
+  note?: string
+  horizons: PhysicalPlanHorizon[]
+}
+
 function PhysicalMomentumSection({ ticker }: { ticker: string }) {
   const [data, setData] = useState<PhysicalMomentumResponse | null>(null)
+  const [plan, setPlan] = useState<PhysicalPlanResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [planLoading, setPlanLoading] = useState(true)
+  const [planError, setPlanError] = useState('')
 
   useEffect(() => {
     let cancelled = false
     setLoading(true)
     setError('')
-    fetch(`/api/physical-momentum/${encodeURIComponent(ticker)}?market=JP&limit=260`, { cache: 'no-store' })
-      .then((res) => res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`)))
-      .then((payload) => {
-        if (!cancelled) setData(payload)
-      })
-      .catch((e) => {
-        if (!cancelled) setError((e as Error).message)
+    setPlanLoading(true)
+    setPlanError('')
+    Promise.allSettled([
+      fetch(`/api/physical-momentum/${encodeURIComponent(ticker)}?market=JP&limit=260`, { cache: 'no-store' })
+        .then((res) => res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))),
+      fetch(`/api/stock-physical-plan/${encodeURIComponent(ticker)}`, { cache: 'no-store' })
+        .then((res) => res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))),
+    ])
+      .then(([momentumResult, planResult]) => {
+        if (cancelled) return
+        if (momentumResult.status === 'fulfilled') {
+          setData(momentumResult.value)
+        } else {
+          setError((momentumResult.reason as Error).message)
+        }
+        if (planResult.status === 'fulfilled') {
+          setPlan(planResult.value)
+        } else {
+          setPlanError((planResult.reason as Error).message)
+        }
       })
       .finally(() => {
-        if (!cancelled) setLoading(false)
+        if (!cancelled) {
+          setLoading(false)
+          setPlanLoading(false)
+        }
       })
     return () => { cancelled = true }
   }, [ticker])
@@ -442,6 +511,8 @@ function PhysicalMomentumSection({ ticker }: { ticker: string }) {
           </div>
 
           <PhysicalActionPoints latest={latest} trend={data?.trend ?? null} field={fieldInsight} />
+
+          <PhysicalTradePlanCards loading={planLoading} error={planError} plan={plan} />
 
           <div style={physicalBodyGridStyle}>
             <PhysicalMaFieldMap latest={latest} previous={previous} />
@@ -859,6 +930,138 @@ function PhysicalActionPoints({
   )
 }
 
+function PhysicalTradePlanCards({
+  loading,
+  error,
+  plan,
+}: {
+  loading: boolean
+  error: string
+  plan: PhysicalPlanResponse | null
+}) {
+  if (loading) {
+    return (
+      <div style={physicalTradePlanPanelStyle}>
+        <div style={physicalMiniHeaderStyle}>
+          <strong>短期・中期・長期プラン</strong>
+          <span>統計と物理MLを確認中...</span>
+        </div>
+        <div style={physicalTradePlanGridStyle}>
+          {['短期', '中期', '長期'].map((label) => (
+            <div key={label} style={{ ...physicalTradePlanCardStyle, minHeight: 154, background: 'var(--surface-muted)' }} />
+          ))}
+        </div>
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div style={physicalTradePlanPanelStyle}>
+        <div style={physicalMiniHeaderStyle}>
+          <strong>短期・中期・長期プラン</strong>
+          <span style={{ color: 'var(--price-down)' }}>取得エラー: {error}</span>
+        </div>
+      </div>
+    )
+  }
+
+  if (!plan?.available || plan.horizons.length === 0) {
+    return (
+      <div style={physicalTradePlanPanelStyle}>
+        <div style={physicalMiniHeaderStyle}>
+          <strong>短期・中期・長期プラン</strong>
+          <span>物理ML特徴量が不足しています</span>
+        </div>
+        <p style={summaryEmptyStyle}>現時点では時間軸別の統計解釈を作れません。</p>
+      </div>
+    )
+  }
+
+  return (
+    <div style={physicalTradePlanPanelStyle}>
+      <div style={physicalMiniHeaderStyle}>
+        <strong>短期・中期・長期の観察プラン</strong>
+        <span>{plan.featureAsOfDate ? `特徴量 ${plan.featureAsOfDate}` : '特徴量日付 -'}</span>
+      </div>
+      <div style={physicalTradePlanGridStyle}>
+        {plan.horizons.map((horizon) => (
+          <PhysicalTradePlanCard key={`${horizon.label}-${horizon.horizonDays}`} horizon={horizon} />
+        ))}
+      </div>
+      <p style={physicalTradePlanNoteStyle}>
+        {plan.note ?? 'この表示は現在形状と過去検証統計から作る観察メモです。売買を断定するものではありません。'}
+      </p>
+    </div>
+  )
+}
+
+function PhysicalTradePlanCard({ horizon }: { horizon: PhysicalPlanHorizon }) {
+  const tone = tradePlanToneStyle(horizon.suggestion.tone)
+  const topCandidates = horizon.candidates
+    .slice()
+    .sort((a, b) => a.rank - b.rank)
+    .slice(0, 3)
+  return (
+    <div style={{ ...physicalTradePlanCardStyle, borderColor: tone.border, background: tone.background }}>
+      <div style={physicalTradePlanTopStyle}>
+        <div>
+          <span style={physicalTradePlanLabelStyle}>{horizon.label}</span>
+          <strong style={{ ...physicalTradePlanHeadlineStyle, color: tone.color }}>{horizon.suggestion.headline}</strong>
+        </div>
+        <span style={{ ...physicalTradePlanBadgeStyle, borderColor: tone.border, color: tone.color }}>
+          {horizon.horizonDays}営業日
+        </span>
+      </div>
+      <p style={physicalTradePlanStanceStyle}>{horizon.suggestion.stance}</p>
+      <p style={physicalTradePlanSummaryStyle}>{horizon.suggestion.summary}</p>
+      <div style={physicalTradePlanMetricGridStyle}>
+        <PhysicalPlanMetric label="的中率" value={fmtRate(horizon.hitRate)} sub={`base ${fmtRate(horizon.baseRate)}`} />
+        <PhysicalPlanMetric label="lift" value={fmtLift(horizon.lift)} sub={`信頼 ${horizon.confidenceLabel}`} />
+        <PhysicalPlanMetric label="平均順行" value={fmtPctRaw(horizon.avgMaxReturnPct)} sub={`逆行 ${fmtPctRaw(horizon.avgMinReturnPct)}`} />
+      </div>
+      <div style={physicalTradePlanCandidatesStyle}>
+        {topCandidates.length > 0 ? topCandidates.map((candidate) => (
+          <span key={`${candidate.direction}-${candidate.rank}`} style={physicalTradePlanCandidatePillStyle}>
+            {directionLabelJa(candidate.direction)} #{candidate.rank}
+          </span>
+        )) : (
+          <span style={physicalTradePlanCandidatePillStyle}>物理ML上位外</span>
+        )}
+        {horizon.sampleCount != null && (
+          <span style={physicalTradePlanCandidatePillStyle}>検証 n={horizon.sampleCount.toLocaleString('ja-JP')}</span>
+        )}
+      </div>
+      <div style={physicalTradePlanChecklistStyle}>
+        {horizon.suggestion.checklist.slice(0, 3).map((item) => (
+          <div key={item} style={physicalTradePlanCheckItemStyle}>
+            <span style={{ ...physicalTradePlanDotStyle, background: tone.color }} />
+            <span>{item}</span>
+          </div>
+        ))}
+      </div>
+      <div style={physicalTradePlanInvalidationStyle}>
+        <strong>崩れる条件</strong>
+        <span>{horizon.suggestion.invalidation}</span>
+      </div>
+      <div style={physicalTradePlanFooterStyle}>
+        <span>{horizon.description}</span>
+        <span>{horizon.evaluationDate ? `検証 ${horizon.evaluationDate}` : '検証日 -'}</span>
+      </div>
+    </div>
+  )
+}
+
+function PhysicalPlanMetric({ label, value, sub }: { label: string; value: string; sub: string }) {
+  return (
+    <div style={physicalTradePlanMetricStyle}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+      <small>{sub}</small>
+    </div>
+  )
+}
+
 interface PhysicalMaFieldInsight {
   label: string
   description: string
@@ -1102,6 +1305,40 @@ function physicalSignalText(value: number | null | undefined, kind: 'force' | 'e
   if (value <= -1) return '運動エネルギーが弱い'
   if (value <= -0.35) return '運動エネルギーはやや弱い'
   return '運動エネルギーは中立'
+}
+
+function fmtRate(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return '-'
+  return `${(value * 100).toFixed(0)}%`
+}
+
+function fmtLift(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return '-'
+  return `${value.toFixed(2)}x`
+}
+
+function fmtPctRaw(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return '-'
+  return `${value >= 0 ? '+' : ''}${value.toFixed(1)}%`
+}
+
+function directionLabelJa(direction: 'up' | 'down' | 'wait'): string {
+  if (direction === 'up') return '上昇'
+  if (direction === 'down') return '下落'
+  return '見送り'
+}
+
+function tradePlanToneStyle(tone: PhysicalPlanHorizon['suggestion']['tone']) {
+  if (tone === 'positive') {
+    return { color: 'var(--price-up)', border: 'rgba(22, 163, 74, 0.34)', background: 'rgba(22, 163, 74, 0.06)' }
+  }
+  if (tone === 'negative') {
+    return { color: 'var(--price-down)', border: 'rgba(37, 99, 235, 0.34)', background: 'rgba(37, 99, 235, 0.06)' }
+  }
+  if (tone === 'warning') {
+    return { color: '#b45309', border: 'rgba(245, 158, 11, 0.36)', background: 'rgba(245, 158, 11, 0.08)' }
+  }
+  return { color: 'var(--text-secondary)', border: 'var(--border-subtle)', background: 'var(--bg-elevated)' }
 }
 
 function scoreBarPercent(value: number | null | undefined): number {
@@ -1760,6 +1997,160 @@ const physicalActionIndexStyle: CSSProperties = {
   fontFamily: 'var(--font-mono)',
   fontSize: '10px',
   fontWeight: 800,
+}
+
+const physicalTradePlanPanelStyle: CSSProperties = {
+  border: '1px solid var(--border-subtle)',
+  borderRadius: 'var(--radius-sm)',
+  background: '#fff',
+  padding: '10px',
+  marginBottom: '10px',
+}
+
+const physicalTradePlanGridStyle: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(min(260px, 100%), 1fr))',
+  gap: '8px',
+}
+
+const physicalTradePlanCardStyle: CSSProperties = {
+  border: '1px solid var(--border-subtle)',
+  borderRadius: 'var(--radius-sm)',
+  padding: '10px',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: '8px',
+  minWidth: 0,
+}
+
+const physicalTradePlanTopStyle: CSSProperties = {
+  display: 'flex',
+  justifyContent: 'space-between',
+  gap: '8px',
+  alignItems: 'flex-start',
+}
+
+const physicalTradePlanLabelStyle: CSSProperties = {
+  display: 'block',
+  color: 'var(--text-muted)',
+  fontSize: '10px',
+  fontWeight: 900,
+  marginBottom: '3px',
+}
+
+const physicalTradePlanHeadlineStyle: CSSProperties = {
+  display: 'block',
+  fontSize: '14px',
+  fontWeight: 900,
+  lineHeight: 1.35,
+}
+
+const physicalTradePlanBadgeStyle: CSSProperties = {
+  border: '1px solid var(--border-subtle)',
+  borderRadius: '999px',
+  background: '#fff',
+  fontFamily: 'var(--font-mono)',
+  fontSize: '10px',
+  fontWeight: 900,
+  padding: '3px 7px',
+  whiteSpace: 'nowrap',
+}
+
+const physicalTradePlanStanceStyle: CSSProperties = {
+  margin: 0,
+  color: 'var(--text-primary)',
+  fontSize: '12px',
+  fontWeight: 900,
+  lineHeight: 1.45,
+}
+
+const physicalTradePlanSummaryStyle: CSSProperties = {
+  margin: 0,
+  color: 'var(--text-secondary)',
+  fontSize: '11px',
+  lineHeight: 1.6,
+}
+
+const physicalTradePlanMetricGridStyle: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+  gap: '5px',
+}
+
+const physicalTradePlanMetricStyle: CSSProperties = {
+  border: '1px solid var(--border-subtle)',
+  borderRadius: '7px',
+  background: '#fff',
+  padding: '7px',
+  display: 'grid',
+  gap: '2px',
+  minWidth: 0,
+}
+
+const physicalTradePlanCandidatesStyle: CSSProperties = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: '5px',
+}
+
+const physicalTradePlanCandidatePillStyle: CSSProperties = {
+  border: '1px solid var(--border-subtle)',
+  borderRadius: '999px',
+  background: '#fff',
+  color: 'var(--text-secondary)',
+  fontSize: '10px',
+  fontWeight: 800,
+  padding: '3px 7px',
+}
+
+const physicalTradePlanChecklistStyle: CSSProperties = {
+  display: 'grid',
+  gap: '5px',
+}
+
+const physicalTradePlanCheckItemStyle: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: '8px minmax(0, 1fr)',
+  gap: '6px',
+  alignItems: 'start',
+  color: 'var(--text-secondary)',
+  fontSize: '11px',
+  lineHeight: 1.5,
+}
+
+const physicalTradePlanDotStyle: CSSProperties = {
+  width: '6px',
+  height: '6px',
+  borderRadius: '999px',
+  marginTop: '6px',
+  opacity: 0.85,
+}
+
+const physicalTradePlanInvalidationStyle: CSSProperties = {
+  borderTop: '1px solid var(--border-subtle)',
+  paddingTop: '7px',
+  display: 'grid',
+  gap: '3px',
+  color: 'var(--text-secondary)',
+  fontSize: '11px',
+  lineHeight: 1.5,
+}
+
+const physicalTradePlanFooterStyle: CSSProperties = {
+  display: 'flex',
+  justifyContent: 'space-between',
+  gap: '8px',
+  flexWrap: 'wrap',
+  color: 'var(--text-muted)',
+  fontSize: '10px',
+  lineHeight: 1.4,
+}
+
+const physicalTradePlanNoteStyle: CSSProperties = {
+  margin: '8px 0 0',
+  color: 'var(--text-muted)',
+  fontSize: '10px',
+  lineHeight: 1.5,
 }
 
 const physicalBodyGridStyle: CSSProperties = {

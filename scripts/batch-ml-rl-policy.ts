@@ -450,8 +450,7 @@ async function loadLabelStates(horizon: number, dates: string[]): Promise<LabelS
   )
 }
 
-async function evaluateHorizon(horizon: number, startDate: string | null): Promise<PolicyResult[]> {
-  const evaluationDate = new Date().toISOString().slice(0, 10)
+async function evaluateHorizon(horizon: number, startDate: string | null, evaluationDate: string): Promise<PolicyResult[]> {
   const rule = makeResult('physics_rule_policy_v1', 'offline_contextual_bandit', horizon, evaluationDate, startDate, END_DATE)
   const oracle = makeResult('oracle_upper_bound', 'offline_oracle_benchmark', horizon, evaluationDate, startDate, END_DATE)
   const wait = makeResult('always_wait', 'baseline', horizon, evaluationDate, startDate, END_DATE)
@@ -519,10 +518,23 @@ async function main() {
     return
   }
   await execRun(`SELECT 1`)
+  const evaluationDate = new Date().toISOString().slice(0, 10)
+  const horizonPlaceholders = HORIZONS.map(() => '?').join(', ')
+  const policyNames = ['physics_rule_policy_v1', 'oracle_upper_bound', 'always_wait']
+  const policyPlaceholders = policyNames.map(() => '?').join(', ')
+  await execRun(
+    `
+    DELETE FROM ml_rl_policy_evaluations
+    WHERE evaluation_date = ?
+      AND horizon_days IN (${horizonPlaceholders})
+      AND policy_name IN (${policyPlaceholders})
+    `,
+    [evaluationDate, ...HORIZONS, ...policyNames],
+  )
   const startDate = await cutoffDate()
   const statements: Array<{ sql: string; args: Array<string | number | null> }> = []
   for (const horizon of HORIZONS) {
-    const results = await evaluateHorizon(horizon, startDate)
+    const results = await evaluateHorizon(horizon, startDate, evaluationDate)
     for (const result of results) {
       const m = metrics(result)
       const actionBreakdown = describeActionBreakdown(result)

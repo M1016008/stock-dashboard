@@ -155,6 +155,45 @@ async function main() {
     payload: { expectedFrom: 'rl_training_states_v2.max(date)', latestEvaluationRunDate: rlPolicyRunDate },
   })
 
+  const physicsStatusHorizons = [5, 10, 20, 40, 60, 90]
+  for (const horizon of physicsStatusHorizons) {
+    const latestPhysicsStatusLabelDate = await execGet<{ date: string | null }>(
+      `SELECT MAX(date) AS date FROM ml_short_labels WHERE horizon_days = ?`,
+      [horizon],
+    ).then((row) => row?.date ?? null)
+    const physicsStatusEvaluationDataDate = await maxDate(
+      'ml_physics_status_evaluations',
+      'end_date',
+      'WHERE feature_set = ? AND horizon_days = ?',
+      [ML_PHYSICS_FEATURE_SET, horizon],
+    )
+    const physicsStatusEvaluationRunDate = await maxDate(
+      'ml_physics_status_evaluations',
+      'evaluation_date',
+      'WHERE feature_set = ? AND horizon_days = ?',
+      [ML_PHYSICS_FEATURE_SET, horizon],
+    )
+    checks.push({
+      key: `ml_physics_status_evaluations_h${horizon}`,
+      expectedDate: latestPhysicsStatusLabelDate,
+      actualDate: physicsStatusEvaluationDataDate,
+      expectedCount: null,
+      actualCount: await countRows(
+        'ml_physics_status_evaluations',
+        'end_date',
+        physicsStatusEvaluationDataDate,
+        'AND feature_set = ? AND horizon_days = ?',
+        [ML_PHYSICS_FEATURE_SET, horizon],
+      ),
+      payload: {
+        expectedFrom: `ml_short_labels.max(date) for horizon ${horizon}`,
+        featureSet: ML_PHYSICS_FEATURE_SET,
+        horizonDays: horizon,
+        latestEvaluationRunDate: physicsStatusEvaluationRunDate,
+      },
+    })
+  }
+
   const checkDate = new Date().toISOString().slice(0, 10)
   await execBatch(checks.map((check) => ({
     sql: `

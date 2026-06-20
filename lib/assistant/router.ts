@@ -27,6 +27,7 @@ const TOOL_NAMES: AssistantToolName[] = [
   'get_stock_overview',
   'screen_jp_stocks',
   'scan_weekly_bearish_ma_breaks',
+  'find_historical_anchor_similars',
   'get_ml_similars',
   'get_earnings_candidates',
 ]
@@ -73,6 +74,34 @@ function volumeThresholdFromText(text: string): number | null {
   const value = Number(match[1].replace(/,/g, ''))
   if (!Number.isFinite(value)) return null
   return match[2]?.startsWith('万') ? value * 10000 : value
+}
+
+function isoDateFromText(text: string): string | null {
+  const iso = text.match(/\b(20[0-9]{2})[-/](0?[1-9]|1[0-2])[-/](0?[1-9]|[12][0-9]|3[01])\b/)
+  if (iso) {
+    const [, year, month, day] = iso
+    return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`
+  }
+  const jp = text.match(/(20[0-9]{2})\s*年\s*(0?[1-9]|1[0-2])\s*月\s*(0?[1-9]|[12][0-9]|3[01])\s*日/)
+  if (jp) {
+    const [, year, month, day] = jp
+    return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`
+  }
+  return null
+}
+
+function lookbackTradingDaysFromText(text: string): number {
+  const explicit = numberFromText(text, [/([0-9]{1,3})\s*営業日/])
+  if (explicit) return Math.min(180, Math.max(10, Math.round(explicit)))
+  if (/2\s*[〜~\-－から〜]*\s*3\s*(?:か月|ヶ月|カ月|ケ月|月)/.test(text)) return 60
+  const months = numberFromText(text, [/([0-9]{1,2})\s*(?:か月|ヶ月|カ月|ケ月)/])
+  if (months) return Math.min(180, Math.max(10, Math.round(months * 20)))
+  return 60
+}
+
+function anchorTickerFromText(text: string, context: AssistantPageContext): string | null {
+  if (/三井\s*(?:E|Ｅ)\s*[&＆]\s*(?:S|Ｓ)|三井\s*Ｅ＆Ｓ|三井\s*E&S/i.test(text)) return '7003'
+  return normalizeTicker(text.match(/\b([0-9]{4}|[0-9]{3}A|[A-Z]{1,5})\b/i)?.[1]) ?? tickerFromContext(context)
 }
 
 function shortTextList(value: unknown, maxItems: number): string[] {
@@ -131,7 +160,50 @@ function buildWeeklyBearishMaBreakPlan(message: string, context: AssistantPageCo
   }
 }
 
+function isHistoricalAnchorSimilarRequest(message: string, context: AssistantPageContext): boolean {
+  const anchorTicker = anchorTickerFromText(message, context)
+  const wantsSimilar = /似た|類似|同じ形|近い|近似|形状/.test(message)
+  const hasHistoricalAnchor = /下落前|上昇前|急落前|急騰前|以前|前の|過去|当時|形成していた|アンカー/.test(message)
+  const hasCurrentCompare = /現在|今|直近|足元/.test(message) || /銘柄を抽出|銘柄を探/.test(message)
+  return Boolean(anchorTicker && wantsSimilar && hasHistoricalAnchor && hasCurrentCompare)
+}
+
+function buildHistoricalAnchorSimilarPlan(message: string, context: AssistantPageContext): AssistantPlan | null {
+  if (!isHistoricalAnchorSimilarRequest(message, context)) return null
+  const anchorTicker = anchorTickerFromText(message, context)
+  if (!anchorTicker) return null
+  const anchorEndDate = isoDateFromText(message) ?? (anchorTicker === '7003' ? '2026-05-11' : null)
+  const lookbackTradingDays = lookbackTradingDaysFromText(message)
+  const limit = numberFromText(message, [/([0-9]{1,2})\s*件/]) ?? 20
+  return {
+    intent: '過去の下落前期間をアンカーにし、現在の物理特徴量ベクトルが近い銘柄を形状類似優先で抽出します。',
+    responseType: 'results',
+    interpretedConditions: [
+      `${anchorTicker}過去アンカー`,
+      anchorEndDate ? `${anchorEndDate}以前` : 'アンカー終了日未指定',
+      `約${lookbackTradingDays}営業日`,
+      '現在形状との類似',
+      '形状類似優先',
+      '下落リスク情報は補助表示',
+    ],
+    toolCalls: [{
+      tool: 'find_historical_anchor_similars',
+      anchorTicker,
+      anchorEndDate,
+      lookbackTradingDays,
+      market: 'JP',
+      excludeAnchorTicker: true,
+      limit,
+      direction: 'down',
+      horizonDays: 20,
+    }],
+  }
+}
+
 function fallbackPlan(message: string, context: AssistantPageContext): AssistantPlan {
+  const historicalAnchorPlan = buildHistoricalAnchorSimilarPlan(message, context)
+  if (historicalAnchorPlan) return historicalAnchorPlan
+
   const weeklyBearishPlan = buildWeeklyBearishMaBreakPlan(message, context)
   if (weeklyBearishPlan) return weeklyBearishPlan
 
@@ -206,6 +278,21 @@ function fallbackPlan(message: string, context: AssistantPageContext): Assistant
 }
 
 function enforceSpecializedPlan(message: string, context: AssistantPageContext, plan: AssistantPlan): AssistantPlan {
+  const historicalAnchorPlan = buildHistoricalAnchorSimilarPlan(message, context)
+  if (historicalAnchorPlan) {
+    if (plan.toolCalls.some((call) => call.tool === 'find_historical_anchor_similars')) {
+      return {
+        ...plan,
+        responseType: 'results',
+        interpretedConditions: Array.from(new Set([
+          ...(historicalAnchorPlan.interpretedConditions ?? []),
+          ...(plan.interpretedConditions ?? []),
+        ])).slice(0, 8),
+      }
+    }
+    return historicalAnchorPlan
+  }
+
   const weeklyBearishPlan = buildWeeklyBearishMaBreakPlan(message, context)
   if (!weeklyBearishPlan) return plan
   if (plan.toolCalls.some((call) => call.tool === 'scan_weekly_bearish_ma_breaks')) {
@@ -232,16 +319,27 @@ function normalizePlan(value: unknown, fallback: AssistantPlan): AssistantPlan {
       return TOOL_NAMES.includes((call as AssistantPlannedToolCall).tool)
     })
     .slice(0, 4)
-    .map((call) => ({
-      ...call,
-      limit: call.limit == null ? null : Math.min(30, Math.max(1, Number(call.limit))),
-      ticker: normalizeTicker(call.ticker) ?? call.ticker ?? null,
-      universe: call.universe === 'nikkei225' ? 'nikkei225' : null,
-      direction: (call.direction === 'down' || call.direction === 'neutral' || call.direction === 'up')
-        ? call.direction
-        : null,
-      pmsTrend: call.pmsTrend === 'rising' || call.pmsTrend === 'falling' ? call.pmsTrend : null,
-    } satisfies AssistantPlannedToolCall))
+    .map((call) => {
+      const limit = Number(call.limit)
+      const lookbackTradingDays = Number(call.lookbackTradingDays)
+      return {
+        ...call,
+        limit: call.limit == null || !Number.isFinite(limit) ? null : Math.min(30, Math.max(1, Math.floor(limit))),
+        ticker: normalizeTicker(call.ticker) ?? call.ticker ?? null,
+        anchorTicker: normalizeTicker(call.anchorTicker) ?? null,
+        anchorEndDate: typeof call.anchorEndDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(call.anchorEndDate) ? call.anchorEndDate : null,
+        lookbackTradingDays: call.lookbackTradingDays == null || !Number.isFinite(lookbackTradingDays)
+          ? null
+          : Math.min(180, Math.max(10, Math.round(lookbackTradingDays))),
+        market: call.market === 'US' || call.market === 'COMMODITY' ? call.market : call.market === 'JP' ? 'JP' : null,
+        excludeAnchorTicker: typeof call.excludeAnchorTicker === 'boolean' ? call.excludeAnchorTicker : null,
+        universe: call.universe === 'nikkei225' ? 'nikkei225' : null,
+        direction: (call.direction === 'down' || call.direction === 'neutral' || call.direction === 'up')
+          ? call.direction
+          : null,
+        pmsTrend: call.pmsTrend === 'rising' || call.pmsTrend === 'falling' ? call.pmsTrend : null,
+      } satisfies AssistantPlannedToolCall
+    })
   return {
     intent: typeof raw.intent === 'string' && raw.intent.trim() ? raw.intent : fallback.intent,
     responseType: responseType === 'clarify' ? 'clarify' : 'results',
@@ -286,6 +384,7 @@ async function planWithOpenAI(message: string, context: AssistantPageContext, hi
                   '条件が曖昧で候補抽出の軸が決まらない場合は responseType=clarify とし、ツールを呼ばず、1〜3個だけ確認質問を返してください。',
                   '抽象語は具体条件へ翻訳します。例: 初動=PFS/PMS上昇とステージ好転、勢い=PMS/PFS重視、弱い=下落警戒またはPMS低下。',
                   '週足の陰線が5週移動平均線・10週移動平均線を上から下へ割り込む条件は、必ず scan_weekly_bearish_ma_breaks を使ってください。screen_jp_stocks で代替しないでください。',
+                  '過去の特定銘柄・特定日以前・2〜3か月・下落前形状・現在銘柄との類似を探す条件は、必ず find_historical_anchor_similars を使ってください。get_ml_similars で代替しないでください。',
                   '十分に条件がある場合は responseType=results とし、interpretedConditions に解釈した条件を短く入れてください。',
                   'DB更新、管理画面操作、発注、バッチ実行は絶対に選ばないでください。',
                   '日本株中心の初期MVPです。US株/コモディティは明示された場合、未対応であることが分かる形で日本株ツールに無理に混ぜないでください。',
@@ -334,6 +433,11 @@ async function planWithOpenAI(message: string, context: AssistantPageContext, hi
                       tool: { type: 'string', enum: TOOL_NAMES },
                       query: { type: ['string', 'null'] },
                       ticker: { type: ['string', 'null'] },
+                      anchorTicker: { type: ['string', 'null'] },
+                      anchorEndDate: { type: ['string', 'null'] },
+                      lookbackTradingDays: { type: ['number', 'null'] },
+                      market: { type: ['string', 'null'], enum: ['JP', 'US', 'COMMODITY', null] },
+                      excludeAnchorTicker: { type: ['boolean', 'null'] },
                       direction: { type: ['string', 'null'], enum: ['up', 'down', 'neutral', null] },
                       universe: { type: ['string', 'null'], enum: ['nikkei225', null] },
                       limit: { type: ['number', 'null'] },
@@ -434,7 +538,7 @@ function clarificationMessage(plan: AssistantPlan): string {
 export async function runAssistantChat(message: string, context: AssistantPageContext, history: AssistantConversationMessage[] = []): Promise<AssistantChatResponse> {
   const trimmed = message.trim()
   const fallback = fallbackPlan(trimmed, context)
-  const deterministicPlan = buildWeeklyBearishMaBreakPlan(trimmed, context)
+  const deterministicPlan = buildHistoricalAnchorSimilarPlan(trimmed, context) ?? buildWeeklyBearishMaBreakPlan(trimmed, context)
   if (deterministicPlan) {
     const config = getAssistantOpenAIConfig()
     const openai = assistantOpenAIStatusFromConfig(config)

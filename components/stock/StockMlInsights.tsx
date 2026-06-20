@@ -153,6 +153,49 @@ function statusColor(status: string | null | undefined) {
   return 'var(--surface-muted)'
 }
 
+function mlReadingTone(direction: 'up' | 'down' | 'mixed' | 'none') {
+  if (direction === 'up') return { color: 'var(--price-up)', border: 'rgba(22, 163, 74, 0.3)', background: 'rgba(22, 163, 74, 0.06)' }
+  if (direction === 'down') return { color: 'var(--price-down)', border: 'rgba(37, 99, 235, 0.3)', background: 'rgba(37, 99, 235, 0.06)' }
+  if (direction === 'mixed') return { color: '#b45309', border: 'rgba(245, 158, 11, 0.32)', background: 'rgba(245, 158, 11, 0.08)' }
+  return { color: 'var(--text-secondary)', border: 'var(--border-subtle)', background: 'var(--surface-muted)' }
+}
+
+function buildMlReading(rows: SimilarInsight[], analysis: PhysicsAnalysis | null) {
+  const strong = rows.filter((row) => row.similarityScore >= 0.9).length
+  const up = rows.filter((row) => row.similarDirection === 'up').length
+  const down = rows.filter((row) => row.similarDirection === 'down').length
+  const direction =
+    rows.length === 0 ? 'none' :
+    up > down ? 'up' :
+    down > up ? 'down' :
+    'mixed'
+  const tone = mlReadingTone(direction)
+  const label =
+    direction === 'up' ? '類似形状は上方向寄り' :
+    direction === 'down' ? '類似形状は下方向寄り' :
+    direction === 'mixed' ? '類似形状は強弱混在' :
+    '類似形状は未検出'
+  const agreement =
+    !analysis ? '物理ステータス未取得' :
+    direction === 'up' && ['上昇加速', '上昇継続', '押し目形成', '反発準備'].includes(analysis.physicsStatus) ? '物理ステータスとも整合' :
+    direction === 'down' && ['失速警戒', '下落加速', '過熱注意'].includes(analysis.physicsStatus) ? '物理ステータスとも整合' :
+    direction === 'mixed' ? '物理ステータスで最終確認' :
+    '物理ステータスと差分あり'
+  return {
+    ...tone,
+    label,
+    details: [
+      `強い類似 ${strong}件`,
+      `上昇寄り ${up}件`,
+      `下落寄り ${down}件`,
+      agreement,
+    ],
+    hint: rows.length > 0
+      ? 'まず90%以上の候補を優先し、次に物理ステータスと短期/中期/長期プランが同じ方向を示しているかを確認します。'
+      : '現在は近い形状が少ないため、類似候補より6ステージと物理ステータスの確認を優先します。',
+  }
+}
+
 function MiniMetric({ label, value }: { label: string; value: string }) {
   return (
     <div style={{ border: '1px solid var(--border-subtle)', borderRadius: 8, background: 'white', padding: 8 }}>
@@ -238,6 +281,7 @@ export function StockMlInsights({ ticker }: { ticker: string }) {
 
   const rows = data?.similars ?? []
   const predictions = data?.predictions ?? []
+  const mlReading = data ? buildMlReading(rows, data.physicsAnalysis) : null
   const loadCaseStudies = () => {
     if (casesLoading || casesLoaded) return
     setCasesLoading(true)
@@ -270,6 +314,41 @@ export function StockMlInsights({ ticker }: { ticker: string }) {
           <div key={index} style={{ minHeight: 56, border: '1px solid var(--border-subtle)', borderRadius: 8, background: 'var(--surface-muted)' }} />
         ))}
         {data?.physicsAnalysis && <PhysicsAnalysisPanel analysis={data.physicsAnalysis} />}
+        {mlReading && (
+          <div style={{
+            border: `1px solid ${mlReading.border}`,
+            borderRadius: 8,
+            background: mlReading.background,
+            padding: 10,
+            display: 'grid',
+            gap: 7,
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+              <strong style={{ fontSize: 13, color: mlReading.color }}>{mlReading.label}</strong>
+              <span style={{ fontSize: 10, fontWeight: 800, color: 'var(--text-muted)' }}>
+                ML類似候補の読み方
+              </span>
+            </div>
+            <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+              {mlReading.details.map((detail) => (
+                <span key={detail} style={{
+                  border: '1px solid var(--border-subtle)',
+                  borderRadius: 999,
+                  background: 'white',
+                  padding: '3px 7px',
+                  fontSize: 10,
+                  fontWeight: 800,
+                  color: 'var(--text-secondary)',
+                }}>
+                  {detail}
+                </span>
+              ))}
+            </div>
+            <p style={{ margin: 0, fontSize: 11, lineHeight: 1.55, color: 'var(--text-secondary)', fontWeight: 700 }}>
+              {mlReading.hint}
+            </p>
+          </div>
+        )}
         {data && rows.length === 0 && (
           <div style={{
             border: '1px solid var(--border-subtle)',

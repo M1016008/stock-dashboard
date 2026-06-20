@@ -194,7 +194,7 @@ async function main(): Promise<void> {
       await runRequired('scripts/batch-ml-predict.ts')
       await lock?.heartbeat()
       await runRequired('scripts/batch-forward-extrema.ts', {
-        FORWARD_EXTREMA_HORIZONS: process.env.ML_PHYSICS_EXTREMA_HORIZONS ?? '10,15',
+        FORWARD_EXTREMA_HORIZONS: process.env.ML_PHYSICS_EXTREMA_HORIZONS ?? '5,10,15,20,40,60,90',
         BACKTEST_RECENT_DAYS: process.env.ML_PHYSICS_EXTREMA_RECENT_DAYS ?? process.env.BACKTEST_RECENT_DAYS ?? '260',
         FORWARD_EXTREMA_WRITE_MODEL_LABELS: '0',
       })

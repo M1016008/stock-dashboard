@@ -3,6 +3,7 @@ export type AssistantToolName =
   | 'get_stock_overview'
   | 'screen_jp_stocks'
   | 'scan_weekly_bearish_ma_breaks'
+  | 'find_historical_anchor_similars'
   | 'get_ml_similars'
   | 'get_earnings_candidates'
 
@@ -49,6 +50,11 @@ export interface AssistantPlannedToolCall {
   tool: AssistantToolName
   query?: string | null
   ticker?: string | null
+  anchorTicker?: string | null
+  anchorEndDate?: string | null
+  lookbackTradingDays?: number | null
+  market?: 'JP' | 'US' | 'COMMODITY' | null
+  excludeAnchorTicker?: boolean | null
   direction?: 'up' | 'down' | 'neutral' | null
   universe?: 'nikkei225' | null
   limit?: number | null

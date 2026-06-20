@@ -10,6 +10,7 @@ import { StageDots } from '@/components/ui/StageDots'
 import { MarketDateCalendar } from '@/components/ui/MarketDateCalendar'
 import { getUniverseFilterMeta, parseUniverseFilter, UNIVERSE_FILTER_PARAM } from '@/lib/market-universe'
 import { SHORT_TERM_CHECK_LABELS, type ShortTermCheckLabel } from '@/lib/short-term-check'
+import type { PhysicsStatus } from '@/lib/ml/physics-analysis'
 
 type Market = 'JP'
 type AxisKey = 'daily_a' | 'daily_b' | 'weekly_a' | 'weekly_b' | 'monthly_a' | 'monthly_b'
@@ -25,6 +26,19 @@ const MCAP_BINS: { label: string; min: number; max: number }[] = [
 ]
 
 const MARGIN_FILTER_ORDER = ['貸借', '信用', 'その他', '未設定']
+const PHYSICAL_STATUS_LABELS: PhysicsStatus[] = [
+  '上昇加速',
+  '上昇継続',
+  '押し目形成',
+  '反発準備',
+  '過熱注意',
+  '失速警戒',
+  '下落加速',
+  '見送り',
+  '算出待ち',
+]
+const PHYSICAL_STATUS_HORIZONS = [5, 10, 20, 40, 60, 90] as const
+type PhysicalStatusHorizon = typeof PHYSICAL_STATUS_HORIZONS[number]
 
 const AXES: { key: AxisKey; label: string; color: string }[] = [
   { key: 'daily_a',   label: '日足 A', color: '#ef4444' },
@@ -84,6 +98,17 @@ interface StockRow {
   physicalMomentumTrend?: 'rising' | 'falling' | 'flat' | null
   physicalAcceleration?: number | null
   physicalForce?: number | null
+  physicalStatusLabel: PhysicsStatus
+  physicalStatusScore?: number | null
+  physicalStatusSourceDate?: string | null
+  physicalStatusTargetDirection?: 'up' | 'down' | 'wait' | null
+  physicalStatusHitRate?: number | null
+  physicalStatusBaseRate?: number | null
+  physicalStatusLift?: number | null
+  physicalStatusConfidence?: number | null
+  physicalStatusSampleCount?: number | null
+  physicalStatusHorizonDays?: number | null
+  physicalStatusEvaluationDate?: string | null
   shortTermCheckLabel: ShortTermCheckLabel
   shortTermCheckScore: number
   shortTermCheckReasons?: string[]
@@ -118,6 +143,10 @@ type SortKey =
   | 'physicalForceScore'
   | 'physicalEnergyScore'
   | 'physicalMomentumRank'
+  | 'physicalStatusScore'
+  | 'physicalStatusConfidence'
+  | 'physicalStatusHitRate'
+  | 'physicalStatusLift'
   | 'shortTermCheckScore'
   | 'earningsLastDate'
   | 'earningsLastElapsedDays'
@@ -157,6 +186,10 @@ const SORT_KEY_VALUES: readonly SortKey[] = [
   'physicalForceScore',
   'physicalEnergyScore',
   'physicalMomentumRank',
+  'physicalStatusScore',
+  'physicalStatusConfidence',
+  'physicalStatusHitRate',
+  'physicalStatusLift',
   'shortTermCheckScore',
   'earningsLastDate',
   'earningsLastElapsedDays',
@@ -166,6 +199,13 @@ const SORT_KEY_VALUES: readonly SortKey[] = [
 
 function isSortKey(value: string | null): value is SortKey {
   return SORT_KEY_VALUES.includes(value as SortKey)
+}
+
+function parsePhysicalStatusHorizon(value: string | null): PhysicalStatusHorizon {
+  const parsed = Number(value)
+  return PHYSICAL_STATUS_HORIZONS.includes(parsed as PhysicalStatusHorizon)
+    ? parsed as PhysicalStatusHorizon
+    : 20
 }
 
 function initialSortState(searchParams: ReturnType<typeof useSearchParams>): SortState {
@@ -204,6 +244,7 @@ export default function ScreenerPage() {
   const [selectedSector33, setSelectedSector33] = useState<string>('')
   const [selectedMarginType, setSelectedMarginType] = useState<string>('')
   const [selectedShortTermCheck, setSelectedShortTermCheck] = useState<string>('')
+  const [selectedPhysicalStatus, setSelectedPhysicalStatus] = useState<string>(() => searchParams.get('physicalStatus') ?? '')
   const [selectedMcapBins, setSelectedMcapBins] = useState<Set<number>>(new Set())
   const [pmsMin, setPmsMin] = useState(() => searchParams.get('pmsMin') ?? '')
   const [pfsMin, setPfsMin] = useState(() => searchParams.get('pfsMin') ?? '')
@@ -212,6 +253,9 @@ export default function ScreenerPage() {
   const [forcePositive, setForcePositive] = useState(() => searchParams.get('forcePositive') === '1')
   const [stage23Candidate, setStage23Candidate] = useState(() => searchParams.get('stage23Candidate') === '1')
   const [pmsTrend, setPmsTrend] = useState(() => searchParams.get('pmsTrend') ?? '')
+  const [selectedPhysicalStatusHorizon, setSelectedPhysicalStatusHorizon] = useState<PhysicalStatusHorizon>(() => (
+    parsePhysicalStatusHorizon(searchParams.get('physicalStatusHorizon'))
+  ))
   const referenceDate = snapshotDate ?? selectedDate
   const tradingDates = useMemo(
     () => availableDates.map((item) => item.date).filter(Boolean).sort(),
@@ -247,6 +291,7 @@ export default function ScreenerPage() {
     if (forcePositive) params.set('forcePositive', '1')
     if (stage23Candidate) params.set('stage23Candidate', '1')
     if (pmsTrend) params.set('pmsTrend', pmsTrend)
+    params.set('physicalStatusHorizon', String(selectedPhysicalStatusHorizon))
     for (const [k, v] of Object.entries(stages)) {
       if (v && v.length > 0) params.set(k, v.join(','))
     }
@@ -270,7 +315,7 @@ export default function ScreenerPage() {
         }
       })
     return () => { cancelled = true }
-  }, [stages, selectedDate, activeUniverse, pmsMin, pfsMin, pesMin, accelerationPositive, forcePositive, stage23Candidate, pmsTrend])
+  }, [stages, selectedDate, activeUniverse, pmsMin, pfsMin, pesMin, accelerationPositive, forcePositive, stage23Candidate, pmsTrend, selectedPhysicalStatusHorizon])
 
   const filterText = useMemo(() => {
     const parts: string[] = []
@@ -290,6 +335,7 @@ export default function ScreenerPage() {
       if (selectedSector33 && (r.sector33 ?? r.sector33Name) !== selectedSector33) return false
       if (selectedMarginType && (r.marginType ?? '未設定') !== selectedMarginType) return false
       if (selectedShortTermCheck && r.shortTermCheckLabel !== selectedShortTermCheck) return false
+      if (selectedPhysicalStatus && r.physicalStatusLabel !== selectedPhysicalStatus) return false
       if (selectedMcapBins.size > 0) {
         const cap = r.marketCap ?? -1
         const matched = Array.from(selectedMcapBins).some((idx) => {
@@ -301,7 +347,7 @@ export default function ScreenerPage() {
       }
       return true
     })
-  }, [results, selectedSectorLarge, selectedSector33, selectedMarginType, selectedShortTermCheck, selectedMcapBins])
+  }, [results, selectedSectorLarge, selectedSector33, selectedMarginType, selectedShortTermCheck, selectedPhysicalStatus, selectedMcapBins])
 
   const shortTermOptions = useMemo(() => {
     const counts = new Map<string, number>()
@@ -309,6 +355,14 @@ export default function ScreenerPage() {
       counts.set(r.shortTermCheckLabel, (counts.get(r.shortTermCheckLabel) ?? 0) + 1)
     }
     return SHORT_TERM_CHECK_LABELS.map((label) => [label, counts.get(label) ?? 0] as const)
+  }, [results])
+
+  const physicalStatusOptions = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const r of results) {
+      counts.set(r.physicalStatusLabel, (counts.get(r.physicalStatusLabel) ?? 0) + 1)
+    }
+    return PHYSICAL_STATUS_LABELS.map((label) => [label, counts.get(label) ?? 0] as const)
   }, [results])
 
   const marginOptions = useMemo(() => {
@@ -556,6 +610,55 @@ export default function ScreenerPage() {
             </select>
           </label>
         </div>
+        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '8px', alignItems: 'center' }}>
+          <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 700, marginRight: '2px' }}>
+            物理状態
+          </span>
+          <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 700, marginLeft: '6px' }}>
+            検証期間
+          </span>
+          {PHYSICAL_STATUS_HORIZONS.map((horizon) => (
+            <button
+              key={horizon}
+              type="button"
+              onClick={() => setSelectedPhysicalStatusHorizon(horizon)}
+              style={mcChipStyle(selectedPhysicalStatusHorizon === horizon)}
+              title={
+                horizon === 5
+                  ? '超短期の初動・急失速を見ます'
+                  : horizon === 10
+                    ? '初動が本物か、短期で確認します'
+                    : horizon === 20
+                      ? '標準の短期〜1か月目線です'
+                      : '中期の答え合わせです'
+              }
+            >
+              {horizon}営業日
+            </button>
+          ))}
+        </div>
+        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '8px', alignItems: 'center' }}>
+          <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 700, marginRight: '2px' }}>
+            ラベル
+          </span>
+          <button
+            type="button"
+            onClick={() => setSelectedPhysicalStatus('')}
+            style={mcChipStyle(selectedPhysicalStatus === '')}
+          >
+            全て（{results.length.toLocaleString('ja-JP')}）
+          </button>
+          {physicalStatusOptions.map(([label, count]) => (
+            <button
+              key={label}
+              type="button"
+              onClick={() => setSelectedPhysicalStatus((current) => current === label ? '' : label)}
+              style={physicalStatusFilterChipStyle(label, selectedPhysicalStatus === label)}
+            >
+              {label}（{count.toLocaleString('ja-JP')}）
+            </button>
+          ))}
+        </div>
         <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '8px' }}>
           <button type="button" onClick={() => setAccelerationPositive((v) => !v)} style={mcChipStyle(accelerationPositive)}>
             Acceleration &gt; 0
@@ -566,7 +669,7 @@ export default function ScreenerPage() {
           <button type="button" onClick={() => setStage23Candidate((v) => !v)} style={mcChipStyle(stage23Candidate)}>
             Stage2→3候補
           </button>
-          {(pmsMin || pfsMin || pesMin || accelerationPositive || forcePositive || stage23Candidate || pmsTrend) && (
+          {(pmsMin || pfsMin || pesMin || accelerationPositive || forcePositive || stage23Candidate || pmsTrend || selectedPhysicalStatus) && (
             <button
               type="button"
               onClick={() => {
@@ -577,6 +680,7 @@ export default function ScreenerPage() {
                 setForcePositive(false)
                 setStage23Candidate(false)
                 setPmsTrend('')
+                setSelectedPhysicalStatus('')
               }}
               style={mcChipStyle(false)}
             >
@@ -719,7 +823,7 @@ export default function ScreenerPage() {
             </div>
           ) : (
             <div style={{ overflowX: 'auto' }}>
-              <table style={{ minWidth: '3340px', borderCollapse: 'collapse', fontSize: '12px' }}>
+              <table style={{ minWidth: '3480px', borderCollapse: 'collapse', fontSize: '12px' }}>
                 <thead>
                   <tr style={{ background: 'var(--bg-elevated)', borderBottom: '1px solid var(--border-dim)' }}>
                     <th scope="col" style={th}></th>
@@ -727,6 +831,7 @@ export default function ScreenerPage() {
                     <th scope="col" style={th}>TV形式</th>
                     <SortableTh label="銘柄名"     sortKey="name"                current={sort} onClick={toggleSort} />
                     <SortableTh label="短期チェック" sortKey="shortTermCheckScore" current={sort} onClick={toggleSort} />
+                    <SortableTh label="物理状態"   sortKey="physicalStatusScore" current={sort} onClick={toggleSort} />
                     <SortableTh label="貸借/信用"  sortKey="marginType"          current={sort} onClick={toggleSort} />
                     <SortableTh label="市場区分"   sortKey="marketSegment"       current={sort} onClick={toggleSort} />
                     <SortableTh label="33業種" sortKey="sector33"            current={sort} onClick={toggleSort} />
@@ -798,6 +903,9 @@ export default function ScreenerPage() {
                         <td style={td}>{r.name}</td>
                         <td style={td}>
                           <ShortTermCheckBadge row={r} />
+                        </td>
+                        <td style={td}>
+                          <PhysicalStatusBadge row={r} />
                         </td>
                         <td style={td}>
                           {r.marginType ? (
@@ -962,6 +1070,16 @@ function fmtScore(v: number | null | undefined): string {
   return v.toFixed(2)
 }
 
+function fmtRate(v: number | null | undefined): string {
+  if (v == null || !Number.isFinite(v)) return '---'
+  return `${(v * 100).toFixed(0)}%`
+}
+
+function fmtLift(v: number | null | undefined): string {
+  if (v == null || !Number.isFinite(v)) return '---'
+  return `${v.toFixed(2)}x`
+}
+
 function scoreColor(v: number | null | undefined): string {
   if (v == null || !Number.isFinite(v)) return 'var(--text-muted)'
   if (v > 0) return 'var(--price-up)'
@@ -1048,6 +1166,107 @@ function ShortTermCheckBadge({ row }: { row: StockRow }) {
     >
       {row.shortTermCheckLabel}
       <small style={{ fontFamily: 'var(--font-mono)', opacity: 0.8 }}>{row.shortTermCheckScore.toFixed(1)}</small>
+    </span>
+  )
+}
+
+function physicalStatusTone(label: PhysicsStatus) {
+  switch (label) {
+    case '上昇加速':
+    case '上昇継続':
+      return {
+        color: 'var(--price-up)',
+        border: 'rgba(220, 38, 38, 0.28)',
+        background: 'rgba(220, 38, 38, 0.07)',
+      }
+    case '押し目形成':
+    case '反発準備':
+      return {
+        color: '#0f766e',
+        border: 'rgba(20, 184, 166, 0.3)',
+        background: 'rgba(20, 184, 166, 0.07)',
+      }
+    case '下落加速':
+      return {
+        color: 'var(--price-down)',
+        border: 'rgba(37, 99, 235, 0.32)',
+        background: 'rgba(37, 99, 235, 0.08)',
+      }
+    case '失速警戒':
+      return {
+        color: '#1d4ed8',
+        border: 'rgba(37, 99, 235, 0.24)',
+        background: 'rgba(37, 99, 235, 0.06)',
+      }
+    case '過熱注意':
+      return {
+        color: '#b45309',
+        border: 'rgba(245, 158, 11, 0.34)',
+        background: 'rgba(245, 158, 11, 0.1)',
+      }
+    default:
+      return {
+        color: 'var(--text-secondary)',
+        border: 'var(--border-base)',
+        background: 'var(--bg-elevated)',
+      }
+  }
+}
+
+function physicalStatusFilterChipStyle(label: PhysicsStatus, active: boolean): React.CSSProperties {
+  const tone = physicalStatusTone(label)
+  return {
+    ...mcChipStyle(false),
+    background: active ? tone.color : tone.background,
+    color: active ? '#fff' : tone.color,
+    border: `1px solid ${active ? tone.color : tone.border}`,
+    fontWeight: 700,
+  }
+}
+
+function PhysicalStatusBadge({ row }: { row: StockRow }) {
+  const tone = physicalStatusTone(row.physicalStatusLabel)
+  const source = row.physicalStatusSourceDate ? `特徴量日付 ${row.physicalStatusSourceDate}` : '特徴量未取得'
+  const score = row.physicalStatusScore != null && Number.isFinite(row.physicalStatusScore)
+    ? ` / 並び替えスコア ${row.physicalStatusScore.toFixed(1)}`
+    : ''
+  const target = row.physicalStatusTargetDirection === 'up'
+    ? '上昇'
+    : row.physicalStatusTargetDirection === 'down'
+      ? '下落'
+      : row.physicalStatusTargetDirection === 'wait'
+        ? '見送り'
+        : '未検証'
+  const calibration = row.physicalStatusHitRate != null
+    ? ` / 過去検証 ${row.physicalStatusHorizonDays ?? '-'}営業日 ${target}: 的中${fmtRate(row.physicalStatusHitRate)} base${fmtRate(row.physicalStatusBaseRate)} lift${fmtLift(row.physicalStatusLift)} 信頼${row.physicalStatusConfidence?.toFixed(0) ?? '-'} n=${row.physicalStatusSampleCount ?? '-'} 評価日${row.physicalStatusEvaluationDate ?? '-'}`
+    : ' / 過去検証は次回ML日次後に反映'
+  return (
+    <span
+      title={`${source}${score}${calibration}`}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: '5px',
+        border: `1px solid ${tone.border}`,
+        background: tone.background,
+        color: tone.color,
+        borderRadius: '999px',
+        padding: '3px 8px',
+        fontSize: '11px',
+        fontWeight: 800,
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {row.physicalStatusLabel}
+      {row.physicalStatusHitRate != null && Number.isFinite(row.physicalStatusHitRate) ? (
+        <small style={{ fontFamily: 'var(--font-mono)', opacity: 0.82 }}>
+          {fmtRate(row.physicalStatusHitRate)}
+        </small>
+      ) : row.physicalStatusScore != null && Number.isFinite(row.physicalStatusScore) && (
+        <small style={{ fontFamily: 'var(--font-mono)', opacity: 0.78 }}>
+          {row.physicalStatusScore.toFixed(0)}
+        </small>
+      )}
     </span>
   )
 }

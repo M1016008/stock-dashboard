@@ -15,6 +15,8 @@ import { execAll, execGet } from '@/lib/db/client'
 import { filterRowsByUniverse, parseUniverseFilter, UNIVERSE_FILTER_PARAM } from '@/lib/market-universe'
 import { getTickersByMarket } from '@/lib/master/tickers'
 import { buildShortTermCheck, type ShortTermCheckLabel } from '@/lib/short-term-check'
+import { ML_PHYSICS_FEATURE_SET, type PhysicsFeatureProfile } from '@/lib/backtest/ml-physics'
+import { analyzePhysicsProfile, type PhysicsStatus } from '@/lib/ml/physics-analysis'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
@@ -69,6 +71,8 @@ interface SnapshotRow {
   physical_momentum_prev_score: number | null
   physical_acceleration: number | null
   physical_force: number | null
+  physics_feature_json: string | null
+  physics_feature_date: string | null
   ml_up_count: number | null
   ml_down_count: number | null
   ml_similar_count: number | null
@@ -124,10 +128,33 @@ interface ScreenerStockRow {
   physicalMomentumTrend: 'rising' | 'falling' | 'flat' | null
   physicalAcceleration: number | null
   physicalForce: number | null
+  physicalStatusLabel: PhysicsStatus
+  physicalStatusScore: number | null
+  physicalStatusSourceDate: string | null
+  physicalStatusTargetDirection: 'up' | 'down' | 'wait' | null
+  physicalStatusHitRate: number | null
+  physicalStatusBaseRate: number | null
+  physicalStatusLift: number | null
+  physicalStatusConfidence: number | null
+  physicalStatusSampleCount: number | null
+  physicalStatusHorizonDays: number | null
+  physicalStatusEvaluationDate: string | null
   shortTermCheckLabel: ShortTermCheckLabel
   shortTermCheckScore: number
   shortTermCheckReasons: string[]
   shortTermCheckMlText: string
+}
+
+type PhysicsStatusCalibration = {
+  statusLabel: PhysicsStatus
+  targetDirection: 'up' | 'down' | 'wait'
+  horizonDays: number
+  sampleCount: number
+  hitRate: number | null
+  baseRate: number | null
+  lift: number | null
+  confidenceScore: number | null
+  evaluationDate: string
 }
 
 type ScreenerSortKey =
@@ -152,6 +179,8 @@ const STAGE_PARAM_MAP: Record<string, typeof STAGE_KEYS[number]> = {
   monthly_a: 'monthly_a_stage',
   monthly_b: 'monthly_b_stage',
 }
+
+const PHYSICAL_STATUS_HORIZONS = [5, 10, 20, 40, 60, 90] as const
 
 async function latestSnapshotDate(): Promise<string | null> {
   const row = await execGet<{ d: string | null }>(`SELECT MAX(date) AS d FROM daily_snapshots`)
@@ -196,6 +225,12 @@ async function loadSnapshotByDate(date: string): Promise<SnapshotRow[]> {
         WHERE market = 'JP'
           AND date = ?
           AND physical_momentum_score IS NOT NULL
+      ),
+      latest_physics_feature AS (
+        SELECT MAX(date) AS date
+        FROM ml_feature_vectors_v2
+        WHERE feature_set = ?
+          AND date <= ?
       ),
       latest_similar_date AS (
         SELECT MAX(as_of_date) AS d
@@ -328,6 +363,8 @@ async function loadSnapshotByDate(date: string): Promise<SnapshotRow[]> {
       pm_prev.physical_momentum_score AS physical_momentum_prev_score,
       pm.acceleration AS physical_acceleration,
       pm.force AS physical_force,
+      mf.feature_json AS physics_feature_json,
+      mf.date AS physics_feature_date,
       ms.ml_up_count,
       ms.ml_down_count,
       ms.ml_similar_count,
@@ -345,10 +382,12 @@ async function loadSnapshotByDate(date: string): Promise<SnapshotRow[]> {
     LEFT JOIN daily_snapshots prev_s ON prev_s.ticker = s.ticker AND prev_s.date = pd.d1
     LEFT JOIN pms_ranked pm ON pm.symbol = s.ticker
     LEFT JOIN physical_momentum_metrics pm_prev ON pm_prev.market = 'JP' AND pm_prev.symbol = s.ticker AND pm_prev.date = pd.d1
+    LEFT JOIN latest_physics_feature lpf ON 1 = 1
+    LEFT JOIN ml_feature_vectors_v2 mf ON mf.ticker = s.ticker AND mf.date = lpf.date AND mf.feature_set = ?
     LEFT JOIN ml_summary ms ON ms.base_ticker = s.ticker
     WHERE s.date = ?
     `,
-    [date, date, date, date, date, date, date, date, date],
+    [date, date, date, date, date, date, date, date, ML_PHYSICS_FEATURE_SET, date, ML_PHYSICS_FEATURE_SET, date],
   )
 }
 
@@ -400,7 +439,109 @@ async function loadSectorMap(): Promise<Map<string, SectorEntry>> {
   return map
 }
 
-function buildResultRow(s: SnapshotRow, sectorMap: Map<string, SectorEntry>): ScreenerStockRow | null {
+function parsePhysicalStatusHorizon(value: string | null): number {
+  const parsed = Number(value ?? process.env.SCREENER_PHYSICS_STATUS_HORIZON ?? 20)
+  return PHYSICAL_STATUS_HORIZONS.includes(parsed as typeof PHYSICAL_STATUS_HORIZONS[number]) ? parsed : 20
+}
+
+async function loadPhysicsStatusCalibration(horizonDays: number): Promise<Map<PhysicsStatus, PhysicsStatusCalibration>> {
+  const rows = await execAll<{
+    status_label: string
+    target_direction: 'up' | 'down' | 'wait'
+    horizon_days: number
+    sample_count: number
+    hit_rate: number | null
+    base_rate: number | null
+    lift: number | null
+    confidence_score: number | null
+    evaluation_date: string
+  }>(
+    `
+    WITH latest AS (
+      SELECT MAX(evaluation_date) AS evaluation_date
+      FROM ml_physics_status_evaluations
+      WHERE feature_set = ?
+        AND horizon_days = ?
+    )
+    SELECT
+      e.status_label,
+      e.target_direction,
+      e.horizon_days,
+      e.sample_count,
+      e.hit_rate,
+      e.base_rate,
+      e.lift,
+      e.confidence_score,
+      e.evaluation_date
+    FROM ml_physics_status_evaluations e
+    INNER JOIN latest l ON l.evaluation_date = e.evaluation_date
+    WHERE e.feature_set = ?
+      AND e.horizon_days = ?
+    `,
+    [ML_PHYSICS_FEATURE_SET, horizonDays, ML_PHYSICS_FEATURE_SET, horizonDays],
+  ).catch((error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error)
+    if (message.includes('no such table')) return []
+    throw error
+  })
+
+  const map = new Map<PhysicsStatus, PhysicsStatusCalibration>()
+  for (const row of rows) {
+    map.set(row.status_label as PhysicsStatus, {
+      statusLabel: row.status_label as PhysicsStatus,
+      targetDirection: row.target_direction,
+      horizonDays: Number(row.horizon_days),
+      sampleCount: Number(row.sample_count ?? 0),
+      hitRate: row.hit_rate,
+      baseRate: row.base_rate,
+      lift: row.lift,
+      confidenceScore: row.confidence_score,
+      evaluationDate: row.evaluation_date,
+    })
+  }
+  return map
+}
+
+const PHYSICAL_STATUS_SCORE_BASE: Record<Exclude<PhysicsStatus, '算出待ち'>, number> = {
+  上昇加速: 40,
+  上昇継続: 30,
+  押し目形成: 20,
+  反発準備: 14,
+  過熱注意: 6,
+  見送り: 0,
+  失速警戒: -24,
+  下落加速: -40,
+}
+
+function parsePhysicsProfile(value: string | null): Partial<PhysicsFeatureProfile> | null {
+  if (!value) return null
+  try {
+    const parsed = JSON.parse(value)
+    return parsed && typeof parsed === 'object' ? parsed as Partial<PhysicsFeatureProfile> : null
+  } catch {
+    return null
+  }
+}
+
+function clampScore(value: number | null | undefined, maxAbs = 5): number {
+  if (value == null || !Number.isFinite(value)) return 0
+  return Math.max(-maxAbs, Math.min(maxAbs, value))
+}
+
+function physicalStatusSortScore(
+  status: PhysicsStatus,
+  pms: number | null,
+  pfs: number | null,
+): number | null {
+  if (status === '算出待ち') return null
+  return PHYSICAL_STATUS_SCORE_BASE[status] + clampScore(pms) + clampScore(pfs)
+}
+
+function buildResultRow(
+  s: SnapshotRow,
+  sectorMap: Map<string, SectorEntry>,
+  physicsStatusCalibration: Map<PhysicsStatus, PhysicsStatusCalibration>,
+): ScreenerStockRow | null {
   const master = getTickersByMarket('JP').find((t) => t.ticker === s.ticker)
   const fromDb = sectorMap.get(s.ticker)
   // J-Quants 17/33業種を第一参照にする。
@@ -427,6 +568,8 @@ function buildResultRow(s: SnapshotRow, sectorMap: Map<string, SectorEntry>): Sc
     mlSimilarCount: s.ml_similar_count,
     mlTopSimilarity: s.ml_top_similarity,
   })
+  const physicsAnalysis = analyzePhysicsProfile(parsePhysicsProfile(s.physics_feature_json))
+  const statusCalibration = physicsStatusCalibration.get(physicsAnalysis.physicsStatus) ?? null
   return {
     ticker: s.ticker,
     name: s.name ?? master?.name ?? s.ticker,
@@ -484,6 +627,21 @@ function buildResultRow(s: SnapshotRow, sectorMap: Map<string, SectorEntry>): Sc
             : 'flat',
     physicalAcceleration: s.physical_acceleration,
     physicalForce: s.physical_force,
+    physicalStatusLabel: physicsAnalysis.physicsStatus,
+    physicalStatusScore: physicalStatusSortScore(
+      physicsAnalysis.physicsStatus,
+      s.physical_momentum_score,
+      s.physical_force_score,
+    ),
+    physicalStatusSourceDate: s.physics_feature_date,
+    physicalStatusTargetDirection: statusCalibration?.targetDirection ?? null,
+    physicalStatusHitRate: statusCalibration?.hitRate ?? null,
+    physicalStatusBaseRate: statusCalibration?.baseRate ?? null,
+    physicalStatusLift: statusCalibration?.lift ?? null,
+    physicalStatusConfidence: statusCalibration?.confidenceScore ?? null,
+    physicalStatusSampleCount: statusCalibration?.sampleCount ?? null,
+    physicalStatusHorizonDays: statusCalibration?.horizonDays ?? null,
+    physicalStatusEvaluationDate: statusCalibration?.evaluationDate ?? null,
     shortTermCheckLabel: shortTermCheck.label,
     shortTermCheckScore: shortTermCheck.score,
     shortTermCheckReasons: shortTermCheck.reasons,
@@ -722,6 +880,11 @@ const SORT_KEYS = new Set<ScreenerSortKey>([
   'physicalForceScore',
   'physicalEnergyScore',
   'physicalMomentumRank',
+  'physicalStatusLabel',
+  'physicalStatusScore',
+  'physicalStatusConfidence',
+  'physicalStatusHitRate',
+  'physicalStatusLift',
   'shortTermCheckLabel',
   'shortTermCheckScore',
   'earningsLastDate',
@@ -772,6 +935,8 @@ export async function GET(request: NextRequest) {
     const forcePositive = searchParams.get('forcePositive') === '1'
     const stage23Candidate = searchParams.get('stage23Candidate') === '1'
     const pmsTrend = searchParams.get('pmsTrend')
+    const physicalStatusHorizon = parsePhysicalStatusHorizon(searchParams.get('physicalStatusHorizon'))
+    const physicalStatuses = stringSetParam(searchParams, 'physicalStatus')
     const shortTermChecks = stringSetParam(searchParams, 'shortTermCheck')
     const rawLimit = numParam(searchParams, 'limit')
     const rawOffset = numParam(searchParams, 'offset')
@@ -807,13 +972,14 @@ export async function GET(request: NextRequest) {
       if (stages.length > 0) stageFilter[key] = Array.from(new Set(stages)).sort()
     }
 
-    const [snapshots, sectorMap] = await Promise.all([
+    const [snapshots, sectorMap, physicsStatusCalibration] = await Promise.all([
       loadSnapshotByDate(date),
       loadSectorMap(),
+      loadPhysicsStatusCalibration(physicalStatusHorizon),
     ])
     const universe = snapshots.length
     const built = snapshots
-      .map((s) => buildResultRow(s, sectorMap))
+      .map((s) => buildResultRow(s, sectorMap, physicsStatusCalibration))
       .filter((r): r is ScreenerStockRow => r !== null)
 
     let filtered = filterRowsByUniverse(built, universeFilter)
@@ -847,6 +1013,9 @@ export async function GET(request: NextRequest) {
         && (r.physicalMomentumScore ?? -Infinity) > 0
         && (r.physicalForceScore ?? -Infinity) > 0
       ))
+    }
+    if (physicalStatuses.size > 0) {
+      filtered = filtered.filter((r) => physicalStatuses.has(r.physicalStatusLabel))
     }
     if (shortTermChecks.size > 0) {
       filtered = filtered.filter((r) => shortTermChecks.has(r.shortTermCheckLabel))
@@ -894,6 +1063,8 @@ export async function GET(request: NextRequest) {
         forcePositive,
         stage23Candidate,
         pmsTrend,
+        physicalStatusHorizon,
+        physicalStatus: Array.from(physicalStatuses),
         shortTermCheck: Array.from(shortTermChecks),
         sort: sortKey,
         dir: sortKey ? (sortDir === 1 ? 'asc' : 'desc') : null,

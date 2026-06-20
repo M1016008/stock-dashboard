@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import type { StockQuote } from '@/types/stock'
 import type {
@@ -121,6 +121,16 @@ export function TradeScenarioNotebook({
     hasSelectedRange && selectedRange ? `根拠範囲: ${selectedRange.startDate} → ${selectedRange.endDate}` : null,
   ].filter(Boolean) as string[], [context, hasSelectedRange, selectedRange])
 
+  const reload = useCallback(async () => {
+    const res = await fetch(`/api/trade/scenarios?ticker=${encodeURIComponent(ticker)}&market=JP`, { cache: 'no-store' })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const payload = await res.json()
+    setScenarios(payload.scenarios ?? [])
+    const drafts: Record<string, string> = {}
+    for (const scenario of payload.scenarios ?? []) drafts[scenario.id] = scenario.reviewMemo ?? ''
+    setReviewDrafts(drafts)
+  }, [ticker])
+
   useEffect(() => {
     if (!quote?.price) return
     setForm((prev) => {
@@ -133,19 +143,22 @@ export function TradeScenarioNotebook({
     let cancelled = false
     setLoading(true)
     setError('')
-    fetch(`/api/trade/scenarios?ticker=${encodeURIComponent(ticker)}&market=JP`, { cache: 'no-store' })
-      .then((res) => res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`)))
-      .then((payload) => {
-        if (cancelled) return
-        setScenarios(payload.scenarios ?? [])
-        const drafts: Record<string, string> = {}
-        for (const scenario of payload.scenarios ?? []) drafts[scenario.id] = scenario.reviewMemo ?? ''
-        setReviewDrafts(drafts)
-      })
+    reload()
       .catch((e) => { if (!cancelled) setError((e as Error).message) })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [ticker])
+  }, [reload])
+
+  useEffect(() => {
+    function onScenarioSaved(event: Event) {
+      const detail = (event as CustomEvent<{ ticker?: string; market?: string }>).detail
+      if (detail?.market && detail.market !== 'JP') return
+      if (detail?.ticker && detail.ticker !== ticker) return
+      reload().catch((e) => setError((e as Error).message))
+    }
+    window.addEventListener('trade-scenario-saved', onScenarioSaved)
+    return () => window.removeEventListener('trade-scenario-saved', onScenarioSaved)
+  }, [reload, ticker])
 
   function setDirection(direction: TradeScenarioDirection) {
     setForm((prev) => {
@@ -169,13 +182,6 @@ export function TradeScenarioNotebook({
       }
       return { ...prev, direction, targetPrice: '', stopLossPrice: '' }
     })
-  }
-
-  async function reload() {
-    const res = await fetch(`/api/trade/scenarios?ticker=${encodeURIComponent(ticker)}&market=JP`, { cache: 'no-store' })
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    const payload = await res.json()
-    setScenarios(payload.scenarios ?? [])
   }
 
   async function createScenario() {

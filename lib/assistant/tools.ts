@@ -128,6 +128,31 @@ type VectorRow = {
   sector33_name: string | null
 }
 
+type HistoricalAnchorSimilarRow = SearchRow & {
+  date: string
+  stage_code: string | null
+  vector_json: string
+  feature_json: string | null
+  close: number | null
+  volume: number | null
+  daily_a_stage: number | null
+  daily_b_stage: number | null
+  weekly_a_stage: number | null
+  weekly_b_stage: number | null
+  monthly_a_stage: number | null
+  monthly_b_stage: number | null
+  physical_momentum_score: number | null
+  physical_force_score: number | null
+  physical_energy_score: number | null
+  physical_momentum_prev_score: number | null
+  physics_down_rank: number | null
+  physics_down_score: number | null
+  ml_up_count: number | null
+  ml_down_count: number | null
+  ml_similar_count: number | null
+  ml_top_similarity: number | null
+}
+
 type ModelEvaluationRow = {
   evaluation_date: string
   direction: 'up' | 'down'
@@ -223,6 +248,21 @@ function vectorDistance(a: number[], b: number[]): number {
   return used === 0 ? Number.POSITIVE_INFINITY : Math.sqrt(sum / used)
 }
 
+function averageVectors(vectors: number[][]): number[] {
+  const width = vectors.reduce((max, vector) => Math.max(max, vector.length), 0)
+  const sums = new Array<number>(width).fill(0)
+  const counts = new Array<number>(width).fill(0)
+  for (const vector of vectors) {
+    for (let i = 0; i < width; i += 1) {
+      const value = vector[i]
+      if (!Number.isFinite(value)) continue
+      sums[i] += value
+      counts[i] += 1
+    }
+  }
+  return sums.map((sum, i) => counts[i] > 0 ? sum / counts[i] : Number.NaN)
+}
+
 function numberFrom(value: unknown): number | null {
   const parsed = Number(value)
   return Number.isFinite(parsed) ? parsed : null
@@ -232,6 +272,60 @@ function readRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
     : undefined
+}
+
+function readNestedNumber(value: unknown, path: string[]): number | null {
+  let current: unknown = value
+  for (const key of path) {
+    const record = readRecord(current)
+    if (!record || !(key in record)) return null
+    current = record[key]
+  }
+  return numberFrom(current)
+}
+
+function clampTradingDays(value: unknown, fallback = 60): number {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return fallback
+  return Math.min(180, Math.max(10, Math.round(n)))
+}
+
+function isoDateOrNull(value: unknown): string | null {
+  return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : null
+}
+
+function historicalCommonPoints(feature: Record<string, unknown>, anchorFeature?: Record<string, unknown>): string[] {
+  const points: string[] = []
+  const stage = typeof feature.stageCode === 'string' ? feature.stageCode : null
+  if (stage) points.push(`6桁ステージ ${stage}`)
+
+  const sma5Velocity = readNestedNumber(feature, ['velocities', 'sma5', 'd5'])
+  const sma25Velocity = readNestedNumber(feature, ['velocities', 'sma25', 'd5'])
+  const sma75Velocity = readNestedNumber(feature, ['velocities', 'sma75', 'd5'])
+  if (sma5Velocity != null && sma5Velocity < 0) points.push('5日線低下')
+  if (sma25Velocity != null && sma25Velocity < 0) points.push('25日線低下')
+  if (sma75Velocity != null && sma75Velocity < 0) points.push('75日線鈍化/低下')
+
+  const priceToSma5 = readNestedNumber(feature, ['pricePosition', 'sma5'])
+  const priceToSma25 = readNestedNumber(feature, ['pricePosition', 'sma25'])
+  if (priceToSma5 != null && priceToSma5 < 0) points.push('価格が5日線下')
+  if (priceToSma25 != null && priceToSma25 < 0) points.push('価格が25日線下')
+
+  const bundleVelocity5 = numberFrom(feature.bundleWidthVelocity5)
+  const bundleVelocity10 = numberFrom(feature.bundleWidthVelocity10)
+  if ((bundleVelocity5 != null && bundleVelocity5 < 0) || (bundleVelocity10 != null && bundleVelocity10 < 0)) {
+    points.push('MA束収縮')
+  }
+
+  const shortGapVelocity = readNestedNumber(feature, ['gapVelocity', 'sma5To25D5'])
+  if (shortGapVelocity != null && shortGapVelocity < 0) points.push('短期線が中期線へ収縮')
+
+  const anchorStage = anchorFeature && typeof anchorFeature.stageCode === 'string' ? anchorFeature.stageCode : null
+  if (anchorStage && stage && stage.slice(0, 2) === anchorStage.slice(0, 2)) {
+    points.push('日足ステージ構造が近い')
+  }
+
+  return Array.from(new Set(points)).slice(0, 5)
 }
 
 function evidenceFromEvaluation(row: ModelEvaluationRow): AssistantModelEvidence {
@@ -1085,6 +1179,274 @@ export async function scanWeeklyBearishMaBreaks(call: AssistantPlannedToolCall):
   }
 }
 
+export async function findHistoricalAnchorSimilars(call: AssistantPlannedToolCall): Promise<AssistantToolResult> {
+  const anchorTicker = normalizeTicker(call.anchorTicker ?? call.ticker)
+  if (!anchorTicker) {
+    return {
+      tool: 'find_historical_anchor_similars',
+      title: '過去アンカー類似検索',
+      summary: 'アンカーにする銘柄コードが不足しています。',
+      rows: [],
+    }
+  }
+
+  const anchorEndDate = isoDateOrNull(call.anchorEndDate) ?? (anchorTicker === '7003' ? '2026-05-11' : null)
+  if (!anchorEndDate) {
+    return {
+      tool: 'find_historical_anchor_similars',
+      title: `${anchorTicker} 過去アンカー類似`,
+      summary: 'アンカー終了日が不足しています。例: 2026-05-11 のように指定してください。',
+      rows: [],
+    }
+  }
+
+  const lookbackTradingDays = clampTradingDays(call.lookbackTradingDays, 60)
+  const limit = clampLimit(call.limit, 20, 30)
+  const horizonDays = Number.isFinite(Number(call.horizonDays)) ? Math.round(Number(call.horizonDays)) : 20
+  const excludeAnchorTicker = call.excludeAnchorTicker !== false
+  const anchorRows = await execAll<VectorRow>(
+    `
+    SELECT *
+    FROM (
+      SELECT
+        f.ticker,
+        f.date,
+        f.stage_code,
+        f.vector_json,
+        f.feature_json,
+        u.name,
+        u.sector17_name,
+        u.sector33_name
+      FROM ml_feature_vectors_v2 f
+      LEFT JOIN ticker_universe u ON u.ticker = f.ticker
+      WHERE f.feature_set = ?
+        AND f.ticker = ?
+        AND f.date <= ?
+      ORDER BY f.date DESC
+      LIMIT ?
+    )
+    ORDER BY date ASC
+    `,
+    [ML_PHYSICS_FEATURE_SET, anchorTicker, anchorEndDate, lookbackTradingDays],
+  )
+  const anchorVectors = anchorRows
+    .map((row) => parseJson<number[]>(row.vector_json, []))
+    .filter((vector) => vector.some((value) => Number.isFinite(value)))
+  const anchorVector = averageVectors(anchorVectors)
+  const anchorStartDate = anchorRows[0]?.date ?? null
+  const anchorActualEndDate = anchorRows[anchorRows.length - 1]?.date ?? anchorEndDate
+  const anchorLatestFeature = parseJson<Record<string, unknown>>(anchorRows[anchorRows.length - 1]?.feature_json, {})
+
+  if (anchorRows.length < Math.min(20, lookbackTradingDays) || anchorVector.length === 0 || !anchorVector.some((value) => Number.isFinite(value))) {
+    return {
+      tool: 'find_historical_anchor_similars',
+      title: `${anchorTicker} 過去アンカー類似`,
+      summary: `${anchorTicker} の ${anchorEndDate} 以前に、アンカーとして使える物理特徴量が不足しています。アンカー特徴量不足です。`,
+      href: stockHref(anchorTicker),
+      rows: [],
+      meta: {
+        anchorTicker,
+        anchorEndDate,
+        lookbackTradingDays,
+        anchorRows: anchorRows.length,
+        featureSet: ML_PHYSICS_FEATURE_SET,
+      },
+    }
+  }
+
+  const latestDate = (await execGet<{ date: string | null }>(
+    `
+    SELECT MAX(date) AS date
+    FROM ml_feature_vectors_v2
+    WHERE feature_set = ?
+    `,
+    [ML_PHYSICS_FEATURE_SET],
+  ))?.date ?? null
+  if (!latestDate) {
+    return {
+      tool: 'find_historical_anchor_similars',
+      title: `${anchorTicker} 過去アンカー類似`,
+      summary: '比較対象となる現在の物理特徴量がまだ生成されていません。',
+      rows: [],
+      meta: { anchorTicker, anchorEndDate, lookbackTradingDays, featureSet: ML_PHYSICS_FEATURE_SET },
+    }
+  }
+
+  const [evidence20, evidence60, candidates] = await Promise.all([
+    fetchObjectiveEvidenceForHorizon(20),
+    fetchObjectiveEvidenceForHorizon(60),
+    execAll<HistoricalAnchorSimilarRow>(
+      `
+      WITH latest_physics_date AS (
+        SELECT MAX(as_of_date) AS d FROM serving_ml_physics_candidates
+      ),
+      latest_similar_date AS (
+        SELECT MAX(as_of_date) AS d FROM serving_current_similars
+      ),
+      ml_summary AS (
+        SELECT
+          base_ticker,
+          SUM(CASE WHEN similar_direction = 'up' THEN 1 ELSE 0 END) AS ml_up_count,
+          SUM(CASE WHEN similar_direction = 'down' THEN 1 ELSE 0 END) AS ml_down_count,
+          COUNT(*) AS ml_similar_count,
+          MAX(similarity_score) AS ml_top_similarity
+        FROM serving_current_similars
+        WHERE as_of_date = (SELECT d FROM latest_similar_date)
+        GROUP BY base_ticker
+      )
+      SELECT
+        f.ticker,
+        f.date,
+        f.stage_code,
+        f.vector_json,
+        f.feature_json,
+        u.name,
+        u.sector17_name,
+        u.sector33_name,
+        u.market_segment,
+        u.margin_type,
+        od.close,
+        od.volume,
+        ds.daily_a_stage,
+        ds.daily_b_stage,
+        ds.weekly_a_stage,
+        ds.weekly_b_stage,
+        ds.monthly_a_stage,
+        ds.monthly_b_stage,
+        pm.physical_momentum_score,
+        pm.physical_force_score,
+        pm.physical_energy_score,
+        pm_prev.physical_momentum_score AS physical_momentum_prev_score,
+        p_down.rank AS physics_down_rank,
+        p_down.candidate_score AS physics_down_score,
+        ms.ml_up_count,
+        ms.ml_down_count,
+        ms.ml_similar_count,
+        ms.ml_top_similarity
+      FROM ml_feature_vectors_v2 f
+      LEFT JOIN ticker_universe u ON u.ticker = f.ticker
+      LEFT JOIN ohlcv_daily od ON od.ticker = f.ticker AND od.date = f.date
+      LEFT JOIN daily_snapshots ds ON ds.ticker = f.ticker AND ds.date = f.date
+      LEFT JOIN physical_momentum_metrics pm
+        ON pm.market = 'JP' AND pm.symbol = f.ticker AND pm.date = f.date
+      LEFT JOIN physical_momentum_metrics pm_prev
+        ON pm_prev.market = 'JP'
+       AND pm_prev.symbol = f.ticker
+       AND pm_prev.date = (
+          SELECT MAX(prev_pm.date)
+          FROM physical_momentum_metrics prev_pm
+          WHERE prev_pm.market = 'JP'
+            AND prev_pm.symbol = f.ticker
+            AND prev_pm.date < f.date
+       )
+      LEFT JOIN serving_ml_physics_candidates p_down
+        ON p_down.as_of_date = (SELECT d FROM latest_physics_date)
+       AND p_down.ticker = f.ticker
+       AND p_down.direction = 'down'
+       AND p_down.horizon_days = ?
+      LEFT JOIN ml_summary ms ON ms.base_ticker = f.ticker
+      WHERE f.feature_set = ?
+        AND f.date = ?
+        AND (? = 0 OR f.ticker <> ?)
+        AND COALESCE(u.active, 1) = 1
+        AND COALESCE(u.market_segment, '') <> 'その他'
+      LIMIT 8000
+      `,
+      [horizonDays, ML_PHYSICS_FEATURE_SET, latestDate, excludeAnchorTicker ? 1 : 0, anchorTicker],
+    ),
+  ])
+
+  const downEvidence = [evidence20.get('down'), evidence60.get('down')]
+    .filter((item): item is AssistantModelEvidence => Boolean(item))
+
+  const ranked = candidates
+    .map((row) => {
+      const vector = parseJson<number[]>(row.vector_json, [])
+      const distance = vectorDistance(anchorVector, vector)
+      const score = Number.isFinite(distance) ? 1 / (1 + distance) : 0
+      const feature = parseJson<Record<string, unknown>>(row.feature_json, {})
+      return { row, distance, score, feature }
+    })
+    .filter((item) => item.score > 0)
+    .sort((a, b) => {
+      const similarity = b.score - a.score
+      if (Math.abs(similarity) > 0.000001) return similarity
+      const aRank = a.row.physics_down_rank ?? 999999
+      const bRank = b.row.physics_down_rank ?? 999999
+      if (aRank !== bRank) return aRank - bRank
+      return (a.row.physical_force_score ?? 999999) - (b.row.physical_force_score ?? 999999)
+    })
+    .slice(0, limit)
+
+  const rows: AssistantResultRow[] = ranked.map((item, index) => {
+    const row = item.row
+    const code = stageCode(row) ?? (typeof item.feature.stageCode === 'string' ? item.feature.stageCode : row.stage_code)
+    const commonPoints = historicalCommonPoints(item.feature, anchorLatestFeature)
+    const pmsTrend = row.physical_momentum_score != null && row.physical_momentum_prev_score != null
+      ? row.physical_momentum_score < row.physical_momentum_prev_score
+        ? 'PMS低下'
+        : 'PMS横ばい以上'
+      : null
+    const reasonParts = [
+      `7003当時との形状類似 ${Math.round(item.score * 100)}%`,
+      `距離 ${item.distance.toFixed(3)}`,
+      commonPoints.length ? `共通点: ${commonPoints.join(' / ')}` : null,
+      row.physical_momentum_score != null ? `PMS ${row.physical_momentum_score.toFixed(2)}` : null,
+      row.physical_force_score != null ? `PFS ${row.physical_force_score.toFixed(2)}` : null,
+      pmsTrend,
+      row.physics_down_rank ? `物理ML下落#${row.physics_down_rank}` : null,
+      ...downEvidence.map((evidence) => `過去検証 ${evidenceSummary(evidence)}`),
+    ].filter(Boolean)
+    return {
+      ticker: row.ticker,
+      name: row.name,
+      href: stockHref(row.ticker),
+      date: row.date,
+      price: row.close,
+      volume: row.volume,
+      stageCode: code,
+      sector17Name: row.sector17_name,
+      sector33Name: row.sector33_name,
+      marketSegment: row.market_segment,
+      marginType: row.margin_type,
+      rank: index + 1,
+      score: item.score,
+      physicalMomentumScore: row.physical_momentum_score,
+      physicalForceScore: row.physical_force_score,
+      physicalEnergyScore: row.physical_energy_score,
+      mlEvidenceSummary: `アンカー ${anchorStartDate}〜${anchorActualEndDate} / ${anchorRows.length}営業日 / 形状類似優先${row.ml_similar_count ? ` / 現在ML類似 下落${row.ml_down_count ?? 0}件・上昇${row.ml_up_count ?? 0}件` : ''}`,
+      modelEvidence: downEvidence,
+      direction: 'down',
+      reason: reasonParts.join(' / '),
+    }
+  })
+
+  const params = new URLSearchParams({
+    anchorTicker,
+    anchorEndDate,
+    lookbackTradingDays: String(lookbackTradingDays),
+    mode: 'historical-anchor',
+  })
+  return {
+    tool: 'find_historical_anchor_similars',
+    title: `${anchorTicker} 下落前アンカー類似`,
+    summary: `${anchorTicker} の ${anchorStartDate}〜${anchorActualEndDate}（${anchorRows.length}営業日）を平均した物理特徴量に近い現在銘柄を ${rows.length} 件抽出しました。ランキングは形状類似優先で、下落リスク情報は補助表示です。`,
+    href: `/ai/research?${params.toString()}`,
+    rows,
+    meta: {
+      anchorTicker,
+      anchorStartDate,
+      anchorEndDate: anchorActualEndDate,
+      requestedAnchorEndDate: anchorEndDate,
+      lookbackTradingDays,
+      latestDate,
+      ranking: 'shape_similarity_first',
+      featureSet: ML_PHYSICS_FEATURE_SET,
+      excludedAnchorTicker: excludeAnchorTicker,
+    },
+  }
+}
+
 export async function getMlSimilars(call: AssistantPlannedToolCall): Promise<AssistantToolResult> {
   const ticker = normalizeTicker(call.ticker)
   if (!ticker) {
@@ -1301,6 +1663,8 @@ export async function runAssistantTool(call: AssistantPlannedToolCall): Promise<
       return screenJpStocks(call)
     case 'scan_weekly_bearish_ma_breaks':
       return scanWeeklyBearishMaBreaks(call)
+    case 'find_historical_anchor_similars':
+      return findHistoricalAnchorSimilars(call)
     case 'get_ml_similars':
       return getMlSimilars(call)
     case 'get_earnings_candidates':
@@ -1334,6 +1698,10 @@ export function describeResults(results: AssistantToolResult[]): string {
     const titles = results.map((result) => `${result.title}${result.rows.length ? ` ${result.rows.length}件` : ''}`).join('、')
     return `${titles}をDBから取得して表示しました。根拠は週足陰線、5週線・10週線の下抜け、20日平均出来高、週MA傾き、PMS/PFS、物理ML下落順位を確認してください。`
   }
+  if (results.some((result) => result.tool === 'find_historical_anchor_similars')) {
+    const titles = results.map((result) => `${result.title}${result.rows.length ? ` ${result.rows.length}件` : ''}`).join('、')
+    return `${titles}をDBから取得して表示しました。ランキングはアンカー期間全体の物理特徴量との形状類似を優先し、PMS/PFS低下、物理ML下落順位、過去検証は補助根拠として確認してください。`
+  }
   const titles = results.map((result) => `${result.title}${result.rows.length ? ` ${result.rows.length}件` : ''}`).join('、')
   return `${titles}をDBから取得して表示しました。候補の根拠は各カードの6ステージ、短期チェック、PMS/PFS、物理ML順位、出来高、決算日を確認してください。`
 }
@@ -1344,11 +1712,13 @@ export const assistantToolDescriptions = `
 - get_stock_overview: 1銘柄の6ステージ、価格、出来高、PMS/PFS、短期チェック、ML候補状況を確認する。
 - screen_jp_stocks: 日本株を6ステージ、物理ML上昇/下落、日経225、貸借、出来高、PMS/PFS/PES、PMS上昇/低下、短期チェックで抽出する。
 - scan_weekly_bearish_ma_breaks: 日本株の週足ローソク足が陰線で、5週移動平均線と10週移動平均線を上から下へ割り込む下落候補を抽出する。平均出来高20日、週足MA傾き、PMS/PFS、物理ML下落順位を併用する。週足/陰線/5週/10週/割り込み/下抜け/弱含み/下落基調が指定された場合はこのツールを優先する。
+- find_historical_anchor_similars: 指定銘柄の過去期間をアンカーにし、その期間全体の物理特徴量ベクトル平均と現在の各銘柄ベクトルを比較して類似銘柄を探す。例: 7003、2026-05-11以前、2〜3か月、下落前、現在形状が類似。過去アンカー/以前/当時/下落前/現在の形状類似が指定された場合はこのツールを優先し、get_ml_similars で代替しない。
 - get_ml_similars: 指定銘柄に似た現在銘柄をML類似で探す。
 - get_earnings_candidates: 近い決算予定銘柄を抽出する。
 日経225指定は universe=nikkei225。貸借指定は marginType=貸借。空売り/下落警戒は direction=down。上昇候補は direction=up。
 初動/動き出し/勢いは pfsMin=0, pmsTrend=rising, sort=pfs を優先。PMSが強い候補は sort=pms。短期ラベル重視は sort=short_term。
 週足陰線が5週線・10週線を上から下へ割り込む、という条件は screen_jp_stocks ではなく scan_weekly_bearish_ma_breaks を使う。
+過去の特定銘柄の下落前形状と現在銘柄の類似、という条件は get_ml_similars ではなく find_historical_anchor_similars を使う。
 曖昧な「良さそう」「おすすめ」だけなら、上昇/下落/初動/決算/対象市場を聞き返す。
 日経225の候補数は ${NIKKEI225_TICKERS.length}。
 `

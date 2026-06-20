@@ -1463,6 +1463,38 @@ export const mlRlPolicyEvaluations = sqliteTable(
   }),
 )
 
+export const mlPhysicsStatusEvaluations = sqliteTable(
+  'ml_physics_status_evaluations',
+  {
+    evaluationId:    text('evaluation_id').primaryKey(),
+    evaluationDate:  text('evaluation_date').notNull(),
+    featureSet:      text('feature_set').notNull(),
+    statusLabel:     text('status_label').notNull(),
+    targetDirection: text('target_direction').notNull(),
+    horizonDays:     integer('horizon_days').notNull(),
+    startDate:       text('start_date'),
+    endDate:         text('end_date'),
+    sampleCount:     integer('sample_count').notNull().default(0),
+    hitCount:        integer('hit_count').notNull().default(0),
+    adverseCount:    integer('adverse_count').notNull().default(0),
+    hitRate:         real('hit_rate'),
+    baseRate:        real('base_rate'),
+    lift:            real('lift'),
+    confidenceScore: real('confidence_score'),
+    medianReturnPct: real('median_return_pct'),
+    avgReturnPct:    real('avg_return_pct'),
+    avgMaxReturnPct: real('avg_max_return_pct'),
+    avgMinReturnPct: real('avg_min_return_pct'),
+    adverseRate:     real('adverse_rate'),
+    metricsJson:     text('metrics_json').notNull(),
+    createdAt:       integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    latestIdx: index('ml_physics_status_evaluations_latest_idx').on(t.evaluationDate, t.horizonDays, t.statusLabel),
+    statusIdx: index('ml_physics_status_evaluations_status_idx').on(t.statusLabel, t.horizonDays, t.evaluationDate),
+  }),
+)
+
 export const servingMlCandidates = sqliteTable(
   'serving_ml_candidates',
   {
