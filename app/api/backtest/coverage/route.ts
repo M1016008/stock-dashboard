@@ -117,7 +117,9 @@ export async function GET(request: NextRequest) {
       cache: { hit: false, generatedAt: new Date(generatedAt).toISOString() },
     }
     coverageCache.set(safeHorizon, { generatedAt, payload })
-    await writeServingCache(CACHE_NAMESPACE, String(safeHorizon), payload, CACHE_TTL_MS, generatedAt)
+    writeServingCache(CACHE_NAMESPACE, String(safeHorizon), payload, CACHE_TTL_MS, generatedAt).catch((error) => {
+      console.warn('Failed to write backtest coverage cache:', error)
+    })
 
     return NextResponse.json(payload)
   } catch (error) {

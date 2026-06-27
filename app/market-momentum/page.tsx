@@ -101,7 +101,8 @@ function statusFor(row: StockMomentumRow): { label: string; tone: 'up' | 'down' 
   const pfs = row.pfs ?? 0
   if (pfs >= 1 && pms >= 0) return { label: '初動あり', tone: 'warning' }
   if (pms >= 1) return { label: '強い勢い', tone: 'up' }
-  if (pms <= -1 || pfs <= -0.8) return { label: '弱い/失速', tone: 'down' }
+  if (pms > 0 && pfs < 0) return { label: '失速', tone: 'down' }
+  if (pms <= -1 || pfs <= -0.8) return { label: '下落警戒', tone: 'down' }
   if (pfs > 0 && pms > 0) return { label: '前向き', tone: 'up' }
   return { label: '中立', tone: 'neutral' }
 }
@@ -120,19 +121,28 @@ function rankMeta(rank: MarketMomentumRankId): {
   score: 'PFS' | 'PMS'
   tone: 'up' | 'down' | 'warning'
 } {
-  if (rank === 'strong') {
+  if (rank === 'continuation' || rank === 'strong') {
     return {
-      label: '強い勢いランキング全件',
-      description: 'PMS順。すでに市場内で勢いが強い銘柄を上から確認します。',
+      label: '継続ランキング全件',
+      description: 'PMS順。すでに勢いがあり、PFSも崩れていない銘柄を上から確認します。',
       orderBy: 'pm.physical_momentum_score DESC, pm.physical_force_score DESC, pm.symbol',
       score: 'PMS',
       tone: 'up',
     }
   }
-  if (rank === 'weak') {
+  if (rank === 'stall') {
     return {
-      label: '弱い/失速ランキング全件',
-      description: 'PMS逆順。弱含み・失速警戒候補を上から確認します。',
+      label: '失速ランキング全件',
+      description: 'PMSは残っていても、PFSが悪化し始めた銘柄を確認します。',
+      orderBy: 'pm.physical_force_score ASC, pm.physical_momentum_score DESC, pm.symbol',
+      score: 'PFS',
+      tone: 'down',
+    }
+  }
+  if (rank === 'drop' || rank === 'weak') {
+    return {
+      label: '下落警戒ランキング全件',
+      description: 'PMS/PFS逆順。弱含み・下落警戒候補を上から確認します。',
       orderBy: 'pm.physical_momentum_score ASC, pm.physical_force_score ASC, pm.symbol',
       score: 'PMS',
       tone: 'down',
@@ -209,7 +219,7 @@ async function getMarketMomentumData(group: MarketMomentumGroupId, rank: MarketM
       AND ${groupSql.sql}
   `
 
-  const [summary, initialRows, strongRows, weakRows, allRows] = await Promise.all([
+  const [summary, initialRows, continuationRows, stallRows, dropRows, allRows] = await Promise.all([
     execGet<SummaryRow>(
       `
         ${commonLatest}
@@ -246,6 +256,17 @@ async function getMarketMomentumData(group: MarketMomentumGroupId, rank: MarketM
       `
         ${commonLatest}
         ${rowsSelect}
+          AND pm.physical_momentum_score > 0
+          AND pm.physical_force_score < 0
+        ORDER BY pm.physical_force_score ASC, pm.physical_momentum_score DESC, pm.symbol
+        LIMIT 12
+      `,
+      [...dateParams, ...groupSql.params],
+    ),
+    execAll<StockMomentumRow>(
+      `
+        ${commonLatest}
+        ${rowsSelect}
         ORDER BY pm.physical_momentum_score ASC, pm.physical_force_score ASC, pm.symbol
         LIMIT 12
       `,
@@ -265,8 +286,9 @@ async function getMarketMomentumData(group: MarketMomentumGroupId, rank: MarketM
   return {
     summary,
     initialRows,
-    strongRows,
-    weakRows,
+    continuationRows,
+    stallRows,
+    dropRows,
     allRows,
   }
 }
@@ -487,7 +509,7 @@ export default async function MarketMomentumPage({
   const requestedDate = validDateParam(sp.date)
   const group = MARKET_MOMENTUM_GROUPS[groupId]
   const activeRank = rankMeta(rankId)
-  const { summary, initialRows, strongRows, weakRows, allRows } = await getMarketMomentumData(groupId, rankId, requestedDate)
+  const { summary, initialRows, continuationRows, stallRows, dropRows, allRows } = await getMarketMomentumData(groupId, rankId, requestedDate)
   const count = Number(summary?.count ?? 0)
   const pmsPlus = ratio(summary?.positivePms ?? 0, count)
   const pfsPlus = ratio(summary?.positivePfs ?? 0, count)
@@ -525,11 +547,14 @@ export default async function MarketMomentumPage({
             <Link href={marketMomentumRankingHref(groupId, 'initial', requestedDate)} prefetch={false} className={`rounded-full border px-2.5 py-1 text-[10px] font-bold ${rankId === 'initial' ? statusClass('warning') : 'border-[var(--color-border-soft)] bg-white text-[var(--color-brand-800)] hover:bg-[var(--color-surface-subtle)]'}`}>
               動き出し全件
             </Link>
-            <Link href={marketMomentumRankingHref(groupId, 'strong', requestedDate)} prefetch={false} className={`rounded-full border px-2.5 py-1 text-[10px] font-bold ${rankId === 'strong' ? statusClass('up') : 'border-[var(--color-border-soft)] bg-white text-[var(--color-brand-800)] hover:bg-[var(--color-surface-subtle)]'}`}>
-              強い勢い全件
+            <Link href={marketMomentumRankingHref(groupId, 'continuation', requestedDate)} prefetch={false} className={`rounded-full border px-2.5 py-1 text-[10px] font-bold ${rankId === 'continuation' ? statusClass('up') : 'border-[var(--color-border-soft)] bg-white text-[var(--color-brand-800)] hover:bg-[var(--color-surface-subtle)]'}`}>
+              継続全件
             </Link>
-            <Link href={marketMomentumRankingHref(groupId, 'weak', requestedDate)} prefetch={false} className={`rounded-full border px-2.5 py-1 text-[10px] font-bold ${rankId === 'weak' ? statusClass('down') : 'border-[var(--color-border-soft)] bg-white text-[var(--color-brand-800)] hover:bg-[var(--color-surface-subtle)]'}`}>
-              弱い勢い全件
+            <Link href={marketMomentumRankingHref(groupId, 'stall', requestedDate)} prefetch={false} className={`rounded-full border px-2.5 py-1 text-[10px] font-bold ${rankId === 'stall' ? statusClass('down') : 'border-[var(--color-border-soft)] bg-white text-[var(--color-brand-800)] hover:bg-[var(--color-surface-subtle)]'}`}>
+              失速全件
+            </Link>
+            <Link href={marketMomentumRankingHref(groupId, 'drop', requestedDate)} prefetch={false} className={`rounded-full border px-2.5 py-1 text-[10px] font-bold ${rankId === 'drop' ? statusClass('down') : 'border-[var(--color-border-soft)] bg-white text-[var(--color-brand-800)] hover:bg-[var(--color-surface-subtle)]'}`}>
+              下落警戒全件
             </Link>
             <Link href={screenerHrefForMarketMomentumGroup(groupId, { date: requestedDate, sort: 'physicalForceScore', dir: 'desc', pfsMin: 0 })} prefetch={false} className="rounded-full border border-[var(--color-border-soft)] bg-white px-2.5 py-1 text-[10px] font-bold text-[var(--color-brand-800)] hover:bg-[var(--color-surface-subtle)]">
               スクリーナーで開く
@@ -541,7 +566,7 @@ export default async function MarketMomentumPage({
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-3 xl:grid-cols-3">
+      <div className="grid grid-cols-1 gap-3 xl:grid-cols-4">
         <RankingPanel
           title="初動あり"
           badge="PFS順: 力が出始めている候補"
@@ -551,17 +576,25 @@ export default async function MarketMomentumPage({
           tone="warning"
         />
         <RankingPanel
-          title="強い勢い"
-          badge="PMS順: 既に勢いが強い候補"
-          rows={strongRows}
+          title="継続"
+          badge="PMS順: 勢いが続いている候補"
+          rows={continuationRows}
           scoreKey="pms"
           scoreLabel="PMS"
           tone="up"
         />
         <RankingPanel
-          title="弱い/失速"
+          title="失速"
+          badge="PFS悪化: 勢いの鈍化候補"
+          rows={stallRows}
+          scoreKey="pfs"
+          scoreLabel="PFS"
+          tone="down"
+        />
+        <RankingPanel
+          title="下落警戒"
           badge="PMS逆順: 弱含み・警戒候補"
-          rows={weakRows}
+          rows={dropRows}
           scoreKey="pms"
           scoreLabel="PMS"
           tone="down"

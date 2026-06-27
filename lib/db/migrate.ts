@@ -328,6 +328,17 @@ const STATEMENTS = [
   `CREATE INDEX IF NOT EXISTS trade_scenarios_ticker_updated_idx ON trade_scenarios(market, ticker, updated_at)`,
   `CREATE INDEX IF NOT EXISTS trade_scenarios_status_idx ON trade_scenarios(status, updated_at)`,
   `CREATE INDEX IF NOT EXISTS trade_scenarios_anchor_idx ON trade_scenarios(market, ticker, anchor_date)`,
+  `CREATE TABLE IF NOT EXISTS api_serving_cache (
+    namespace TEXT NOT NULL,
+    cache_key TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    generated_at_ms INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (namespace, cache_key)
+  )`,
+  `CREATE INDEX IF NOT EXISTS api_serving_cache_expires_idx
+    ON api_serving_cache(namespace, expires_at)`,
   `CREATE TABLE IF NOT EXISTS market_data_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     market TEXT NOT NULL,
@@ -890,6 +901,7 @@ const STATEMENTS = [
   `CREATE INDEX IF NOT EXISTS ml_feature_vectors_v2_date_idx ON ml_feature_vectors_v2(feature_set, date)`,
   `CREATE INDEX IF NOT EXISTS ml_feature_vectors_v2_date_only_idx ON ml_feature_vectors_v2(date)`,
   `CREATE INDEX IF NOT EXISTS ml_feature_vectors_v2_ticker_date_idx ON ml_feature_vectors_v2(ticker, date)`,
+  `CREATE INDEX IF NOT EXISTS ml_feature_vectors_v2_feature_ticker_date_idx ON ml_feature_vectors_v2(feature_set, ticker, date)`,
   `CREATE TABLE IF NOT EXISTS ml_training_labels (
     ticker TEXT NOT NULL,
     date TEXT NOT NULL,

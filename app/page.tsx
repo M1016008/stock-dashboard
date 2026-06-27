@@ -8,8 +8,8 @@
 import type { Metadata } from 'next'
 import { Suspense } from 'react'
 import { PageTitle } from '@/components/layout/PageTitle'
-import { StereoscopicSignals } from '@/components/dashboard/StereoscopicSignals'
-import { NewHighVolume } from '@/components/dashboard/NewHighVolume'
+import { AiResearchShortcuts } from '@/components/dashboard/AiResearchShortcuts'
+import { DashboardEarningsAlerts } from '@/components/dashboard/DashboardEarningsAlerts'
 import { PhysicalMomentumMarket } from '@/components/dashboard/PhysicalMomentumMarket'
 import { TradeScenarioOverview } from '@/components/dashboard/TradeScenarioOverview'
 import { DashboardDateSelector } from '@/components/dashboard/DashboardDateSelector'
@@ -89,10 +89,10 @@ export default async function DashboardPage({
         <PhysicalMomentumMarket date={dashboardDate} universe={universeFilter} />
       </Suspense>
       <Suspense fallback={<SectionFallback height={360} />}>
-        <StereoscopicSignals date={dashboardDate} universe={universeFilter} />
+        <DashboardEarningsAlerts date={dashboardDate} universe={universeFilter} />
       </Suspense>
-      <Suspense fallback={<SectionFallback height={420} />}>
-        <NewHighVolume date={dashboardDate} universe={universeFilter} />
+      <Suspense fallback={<SectionFallback height={220} />}>
+        <AiResearchShortcuts date={dashboardDate} universe={universeFilter} />
       </Suspense>
     </div>
   )

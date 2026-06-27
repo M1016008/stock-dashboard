@@ -15,6 +15,7 @@ import { StockMovePeriods } from '@/components/stock/StockMovePeriods'
 import { StockMlInsights } from '@/components/stock/StockMlInsights'
 import { ScenarioProjectionChart } from '@/components/stock/ScenarioProjectionChart'
 import { TradeScenarioNotebook } from '@/components/stock/TradeScenarioNotebook'
+import { StockScenarioAiPanel } from '@/components/stock/StockScenarioAiPanel'
 import { findTicker } from '@/lib/master/tickers'
 import { STAGE_BG_COLORS, STAGE_BORDER_COLORS, STAGE_LABELS } from '@/lib/hex-stage'
 import { buildShortTermCheck, type ShortTermCheckTone } from '@/lib/short-term-check'
@@ -66,8 +67,15 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
   const [marginInfo, setMarginInfo] = useState<StockMarginInfo | null>(null)
   const [loading, setLoading] = useState(true)
   const [selectedRange, setSelectedRange] = useState<StockSelectedRange | null>(null)
+  const [analysisDate, setAnalysisDate] = useState<string | null>(null)
 
   const hardcoded = findTicker(ticker)
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const date = params.get('date')
+    setAnalysisDate(date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : null)
+  }, [ticker])
 
   useEffect(() => {
     let cancelled = false
@@ -153,6 +161,17 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
     setSelectedRange(null)
   }, [])
 
+  const updateAnalysisDate = useCallback((date: string | null) => {
+    setAnalysisDate(date)
+    const url = new URL(window.location.href)
+    if (date) {
+      url.searchParams.set('date', date)
+    } else {
+      url.searchParams.delete('date')
+    }
+    window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`)
+  }, [])
+
   const shouldSyncChartRange = useCallback((interval: TvInterval) => {
     if (!selectedRange) return false
     return selectedRange.source !== 'chart' || selectedRange.sourceInterval !== interval
@@ -219,7 +238,9 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
       {/* 決算情報 */}
       <EarningsCard ticker={ticker} />
 
-      <PhysicalMomentumSection ticker={ticker} />
+      <PhysicalMomentumSection ticker={ticker} analysisDate={analysisDate} />
+
+      <AnalysisDateControl analysisDate={analysisDate} onChange={updateAnalysisDate} />
 
       <TradeScenarioNotebook
         ticker={ticker}
@@ -305,12 +326,73 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
       {/* 過去の大きな値動き */}
       <StockMovePeriods ticker={ticker} />
 
-      <ScenarioProjectionChart ticker={ticker} name={name} />
+      <ScenarioProjectionChart ticker={ticker} name={name} analysisDate={analysisDate} />
+
+      <StockScenarioAiPanel ticker={ticker} name={name} analysisDate={analysisDate} />
 
       {/* 最新ML類似候補 */}
       <StockMlInsights ticker={ticker} />
 
     </div>
+  )
+}
+
+function AnalysisDateControl({
+  analysisDate,
+  onChange,
+}: {
+  analysisDate: string | null
+  onChange: (date: string | null) => void
+}) {
+  const [draft, setDraft] = useState(analysisDate ?? '')
+
+  useEffect(() => {
+    setDraft(analysisDate ?? '')
+  }, [analysisDate])
+
+  const applyDraft = useCallback((next: string) => {
+    setDraft(next)
+    onChange(next || null)
+  }, [onChange])
+
+  return (
+    <section className="card" style={analysisDateCardStyle}>
+      <div>
+        <div className="section-header" style={analysisDateTitleStyle}>シナリオ・AI分析基準日</div>
+        <p style={analysisDateSubTextStyle}>
+          日付を指定すると、その日付以前の価格・物理特徴量・ML候補だけでシナリオとAI回答を再構成します。
+          未指定なら最新データで分析します。
+        </p>
+      </div>
+      <div style={analysisDateControlsStyle}>
+        <label style={analysisDateInputLabelStyle}>
+          基準日
+          <input
+            type="date"
+            value={draft}
+            onInput={(event) => applyDraft((event.target as HTMLInputElement).value)}
+            onChange={(event) => applyDraft(event.target.value)}
+            style={analysisDateInputStyle}
+          />
+        </label>
+        <button type="button" onClick={() => onChange(draft || null)} style={analysisDateApplyButtonStyle}>
+          反映
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setDraft('')
+            onChange(null)
+          }}
+          style={analysisDateClearButtonStyle}
+        >
+          最新に戻す
+        </button>
+      </div>
+      <div style={analysisDateBadgeStyle}>
+        現在: {analysisDate ? `${analysisDate}時点` : '最新時点'}
+      </div>
+    </section>
   )
 }
 
@@ -347,6 +429,20 @@ interface PhysicalPlanCandidate {
   modelName: string | null
 }
 
+interface PhysicalPlanLevel {
+  label: string
+  value: number | null
+  distancePct: number | null
+}
+
+interface PhysicalPlanLevels {
+  baseDate: string
+  close: number
+  support: PhysicalPlanLevel
+  resistance: PhysicalPlanLevel
+  breakdown: PhysicalPlanLevel
+}
+
 interface PhysicalPlanHorizon {
   label: string
   horizonDays: number
@@ -366,6 +462,7 @@ interface PhysicalPlanHorizon {
   medianReturnPct: number | null
   evaluationDate: string | null
   candidates: PhysicalPlanCandidate[]
+  levels: PhysicalPlanLevels | null
   suggestion: {
     tone: 'positive' | 'negative' | 'neutral' | 'warning'
     stance: string
@@ -382,11 +479,13 @@ interface PhysicalPlanResponse {
   ticker: string
   featureSet?: string
   featureAsOfDate?: string | null
+  requestedDate?: string | null
+  priceAsOfDate?: string | null
   note?: string
   horizons: PhysicalPlanHorizon[]
 }
 
-function PhysicalMomentumSection({ ticker }: { ticker: string }) {
+function PhysicalMomentumSection({ ticker, analysisDate }: { ticker: string; analysisDate: string | null }) {
   const [data, setData] = useState<PhysicalMomentumResponse | null>(null)
   const [plan, setPlan] = useState<PhysicalPlanResponse | null>(null)
   const [loading, setLoading] = useState(true)
@@ -400,10 +499,11 @@ function PhysicalMomentumSection({ ticker }: { ticker: string }) {
     setError('')
     setPlanLoading(true)
     setPlanError('')
+    const planParams = analysisDate ? `?date=${encodeURIComponent(analysisDate)}` : ''
     Promise.allSettled([
       fetch(`/api/physical-momentum/${encodeURIComponent(ticker)}?market=JP&limit=260`, { cache: 'no-store' })
         .then((res) => res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))),
-      fetch(`/api/stock-physical-plan/${encodeURIComponent(ticker)}`, { cache: 'no-store' })
+      fetch(`/api/stock-physical-plan/${encodeURIComponent(ticker)}${planParams}`, { cache: 'no-store' })
         .then((res) => res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))),
     ])
       .then(([momentumResult, planResult]) => {
@@ -426,7 +526,7 @@ function PhysicalMomentumSection({ ticker }: { ticker: string }) {
         }
       })
     return () => { cancelled = true }
-  }, [ticker])
+  }, [ticker, analysisDate])
 
   const latest = data?.latest ?? null
   const previous = latest
@@ -1014,6 +1114,7 @@ function PhysicalTradePlanCard({ horizon }: { horizon: PhysicalPlanHorizon }) {
         </span>
       </div>
       <p style={physicalTradePlanStanceStyle}>{horizon.suggestion.stance}</p>
+      <PhysicalPlanLevelStrip levels={horizon.levels} />
       <p style={physicalTradePlanSummaryStyle}>{horizon.suggestion.summary}</p>
       <div style={physicalTradePlanMetricGridStyle}>
         <PhysicalPlanMetric label="的中率" value={fmtRate(horizon.hitRate)} sub={`base ${fmtRate(horizon.baseRate)}`} />
@@ -1048,6 +1149,42 @@ function PhysicalTradePlanCard({ horizon }: { horizon: PhysicalPlanHorizon }) {
         <span>{horizon.description}</span>
         <span>{horizon.evaluationDate ? `検証 ${horizon.evaluationDate}` : '検証日 -'}</span>
       </div>
+    </div>
+  )
+}
+
+function PhysicalPlanLevelStrip({ levels }: { levels: PhysicalPlanLevels | null }) {
+  if (!levels) return null
+  return (
+    <div style={physicalTradePlanLevelGridStyle}>
+      <PhysicalPlanLevelChip label="基準" level={{ label: levels.baseDate, value: levels.close, distancePct: 0 }} tone="base" />
+      <PhysicalPlanLevelChip label="支持/反発" level={levels.support} tone="support" />
+      <PhysicalPlanLevelChip label="抵抗/反落" level={levels.resistance} tone="resistance" />
+      <PhysicalPlanLevelChip label="割れ注意" level={levels.breakdown} tone="breakdown" />
+    </div>
+  )
+}
+
+function PhysicalPlanLevelChip({
+  label,
+  level,
+  tone,
+}: {
+  label: string
+  level: PhysicalPlanLevel
+  tone: 'base' | 'support' | 'resistance' | 'breakdown'
+}) {
+  const color =
+    tone === 'support' ? 'var(--price-up)'
+      : tone === 'resistance' || tone === 'breakdown' ? 'var(--price-down)'
+        : 'var(--text-primary)'
+  return (
+    <div style={physicalTradePlanLevelChipStyle}>
+      <span style={physicalTradePlanLevelLabelStyle}>{label}</span>
+      <strong style={{ ...physicalTradePlanLevelValueStyle, color }}>{fmtPrice(level.value)}</strong>
+      <small style={physicalTradePlanLevelSubStyle}>
+        {level.label}{level.distancePct != null ? ` ${fmtPct(level.distancePct)}` : ''}
+      </small>
     </div>
   )
 }
@@ -1727,6 +1864,84 @@ function isoDaysBefore(isoDate: string, days: number): string {
   return date.toISOString().slice(0, 10)
 }
 
+const analysisDateCardStyle: CSSProperties = {
+  padding: 14,
+  display: 'flex',
+  gap: 12,
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  flexWrap: 'wrap',
+}
+
+const analysisDateTitleStyle: CSSProperties = {
+  margin: 0,
+  fontSize: 16,
+}
+
+const analysisDateSubTextStyle: CSSProperties = {
+  margin: '4px 0 0',
+  color: 'var(--text-secondary)',
+  fontSize: 12,
+  lineHeight: 1.6,
+}
+
+const analysisDateControlsStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'end',
+  gap: 8,
+  flexWrap: 'wrap',
+}
+
+const analysisDateInputLabelStyle: CSSProperties = {
+  display: 'grid',
+  gap: 4,
+  color: 'var(--text-muted)',
+  fontSize: 11,
+  fontWeight: 900,
+}
+
+const analysisDateInputStyle: CSSProperties = {
+  border: '1px solid var(--border-subtle)',
+  borderRadius: 8,
+  padding: '8px 10px',
+  fontSize: 13,
+  color: 'var(--text-primary)',
+  background: '#fff',
+}
+
+const analysisDateApplyButtonStyle: CSSProperties = {
+  border: '1px solid var(--accent-primary)',
+  borderRadius: 8,
+  background: 'var(--accent-primary)',
+  color: '#fff',
+  fontSize: 12,
+  fontWeight: 900,
+  padding: '9px 12px',
+  cursor: 'pointer',
+}
+
+const analysisDateClearButtonStyle: CSSProperties = {
+  border: '1px solid var(--border-subtle)',
+  borderRadius: 8,
+  background: '#fff',
+  color: 'var(--text-secondary)',
+  fontSize: 12,
+  fontWeight: 900,
+  padding: '9px 12px',
+  cursor: 'pointer',
+}
+
+const analysisDateBadgeStyle: CSSProperties = {
+  border: '1px solid rgba(37, 99, 235, 0.22)',
+  borderRadius: 999,
+  background: 'rgba(37, 99, 235, 0.06)',
+  color: 'var(--accent-primary)',
+  fontSize: 12,
+  fontWeight: 900,
+  padding: '7px 10px',
+  whiteSpace: 'nowrap',
+}
+
 const physicalCardStyle: CSSProperties = {
   padding: '14px',
 }
@@ -2069,6 +2284,48 @@ const physicalTradePlanSummaryStyle: CSSProperties = {
   color: 'var(--text-secondary)',
   fontSize: '11px',
   lineHeight: 1.6,
+}
+
+const physicalTradePlanLevelGridStyle: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+  gap: '5px',
+}
+
+const physicalTradePlanLevelChipStyle: CSSProperties = {
+  border: '1px solid var(--border-subtle)',
+  borderRadius: '7px',
+  background: 'rgba(255,255,255,0.72)',
+  padding: '6px',
+  display: 'grid',
+  gap: '2px',
+  minWidth: 0,
+}
+
+const physicalTradePlanLevelLabelStyle: CSSProperties = {
+  color: 'var(--text-muted)',
+  fontSize: '9px',
+  fontWeight: 900,
+  lineHeight: 1.2,
+  whiteSpace: 'nowrap',
+}
+
+const physicalTradePlanLevelValueStyle: CSSProperties = {
+  fontFamily: 'var(--font-mono)',
+  fontSize: '13px',
+  fontWeight: 900,
+  lineHeight: 1.2,
+  whiteSpace: 'nowrap',
+}
+
+const physicalTradePlanLevelSubStyle: CSSProperties = {
+  color: 'var(--text-muted)',
+  fontSize: '9px',
+  fontWeight: 700,
+  lineHeight: 1.25,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
 }
 
 const physicalTradePlanMetricGridStyle: CSSProperties = {

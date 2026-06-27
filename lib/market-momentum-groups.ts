@@ -9,7 +9,7 @@ export type MarketMomentumGroupId =
   | 'other'
   | 'unclassified'
 
-export type MarketMomentumRankId = 'initial' | 'strong' | 'weak'
+export type MarketMomentumRankId = 'initial' | 'continuation' | 'stall' | 'drop' | 'strong' | 'weak'
 
 export type MarketMomentumGroupMeta = {
   id: MarketMomentumGroupId
@@ -107,8 +107,9 @@ export function parseMarketMomentumRank(value: unknown): MarketMomentumRankId {
   const raw = Array.isArray(value) ? value[0] : value
   if (typeof raw !== 'string') return 'initial'
   const normalized = raw.trim().toLowerCase().replace(/[_\s-]+/g, '')
-  if (normalized === 'strong' || normalized === 'pms' || raw.includes('強い')) return 'strong'
-  if (normalized === 'weak' || normalized === 'down' || raw.includes('弱い') || raw.includes('失速')) return 'weak'
+  if (normalized === 'continuation' || normalized === 'continue' || normalized === 'strong' || normalized === 'pms' || raw.includes('継続') || raw.includes('強い')) return 'continuation'
+  if (normalized === 'stall' || normalized === 'slowdown' || raw.includes('失速')) return 'stall'
+  if (normalized === 'drop' || normalized === 'weak' || normalized === 'down' || raw.includes('下落') || raw.includes('弱い')) return 'drop'
   return 'initial'
 }
 

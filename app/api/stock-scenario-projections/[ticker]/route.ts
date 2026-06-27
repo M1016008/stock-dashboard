@@ -28,6 +28,12 @@ function parsePositiveInt(value: string | null, fallback: number, max: number): 
   return Math.min(Math.floor(parsed), max)
 }
 
+function parseAsOfDate(value: string | null): string | null {
+  if (!value) return null
+  const trimmed = value.trim()
+  return /^\d{4}-\d{2}-\d{2}$/.test(trimmed) ? trimmed : null
+}
+
 function extractOutputText(payload: unknown): string | null {
   const root = payload as { output_text?: unknown; output?: Array<{ content?: Array<{ text?: unknown }> }> }
   if (typeof root.output_text === 'string') return root.output_text
@@ -155,8 +161,9 @@ export async function GET(request: NextRequest, context: RouteContext) {
     const defaultHorizon = defaultProjectionHorizon(interval)
     const horizonDays = parsePositiveInt(request.nextUrl.searchParams.get('horizonDays'), defaultHorizon, 180)
     const limit = parsePositiveInt(request.nextUrl.searchParams.get('limit'), 8, 8)
+    const asOfDate = parseAsOfDate(request.nextUrl.searchParams.get('date'))
     const llmEnabled = request.nextUrl.searchParams.get('llm') !== '0' && process.env.SCENARIO_PROJECTION_LLM_ENABLED !== '0'
-    const projection = await buildStockScenarioProjection({ ticker, interval, horizonDays, limit })
+    const projection = await buildStockScenarioProjection({ ticker, interval, horizonDays, limit, asOfDate })
     if (!projection) {
       return NextResponse.json({ ok: true, ticker, interval, horizonDays, scenarios: [], message: '価格データがありません。' })
     }

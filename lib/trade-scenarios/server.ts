@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto'
-import { execAll, execBatch, execGet, execRun } from '@/lib/db/client'
+import { execAll, execGet, execRun } from '@/lib/db/client'
 import { evaluateTradeScenario } from './scoring'
 import type {
   TradeScenario,
@@ -85,37 +85,9 @@ function isoNow(): string {
 }
 
 export async function ensureTradeScenarioSchema(): Promise<void> {
-  await execBatch([
-    {
-      sql: `CREATE TABLE IF NOT EXISTS trade_scenarios (
-        id TEXT PRIMARY KEY,
-        ticker TEXT NOT NULL,
-        market TEXT NOT NULL DEFAULT 'JP',
-        name TEXT,
-        direction TEXT NOT NULL,
-        status TEXT NOT NULL DEFAULT 'open',
-        confidence TEXT NOT NULL DEFAULT 'medium',
-        anchor_date TEXT NOT NULL,
-        anchor_close REAL,
-        horizon_days INTEGER NOT NULL,
-        entry_plan_price REAL,
-        target_price REAL,
-        stop_loss_price REAL,
-        thesis TEXT NOT NULL,
-        invalidation TEXT,
-        review_memo TEXT,
-        selected_start_date TEXT,
-        selected_end_date TEXT,
-        source_range_label TEXT,
-        context_json TEXT NOT NULL DEFAULT '{}',
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      )`,
-    },
-    { sql: `CREATE INDEX IF NOT EXISTS trade_scenarios_ticker_updated_idx ON trade_scenarios(market, ticker, updated_at)` },
-    { sql: `CREATE INDEX IF NOT EXISTS trade_scenarios_status_idx ON trade_scenarios(status, updated_at)` },
-    { sql: `CREATE INDEX IF NOT EXISTS trade_scenarios_anchor_idx ON trade_scenarios(market, ticker, anchor_date)` },
-  ])
+  // The table is created by the app-wide schema migration in lib/db/migrate.ts.
+  // Keeping this function as a no-op avoids write locks during read-only page
+  // rendering while preserving the public helper used by create/update flows.
 }
 
 async function getAnchorRow(market: string, ticker: string, anchorDate: string | null): Promise<AnchorRow | undefined> {

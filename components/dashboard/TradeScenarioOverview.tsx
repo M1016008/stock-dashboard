@@ -166,7 +166,7 @@ export async function TradeScenarioOverview({ date = null }: { date?: string | n
   return (
     <Card size="lg" className="border-[var(--color-brand-700)]">
       <CardHeader
-        title="売買シナリオ検証"
+        title="売買シナリオ進捗"
         hint="個別銘柄で保存した仮説の現在地。目標到達・撤退条件・期限間近を優先表示します。"
       />
 

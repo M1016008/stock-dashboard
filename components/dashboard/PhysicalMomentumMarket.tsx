@@ -223,7 +223,7 @@ export async function PhysicalMomentumMarket({
     WHERE pm.physical_momentum_score IS NOT NULL
       ${universeSql.sql ? `AND ${universeSql.sql}` : ''}
   `
-  const [row, nikkei225Row, segmentRows, sectorRows, initialRows, strongRows, weakRows] = await Promise.all([
+  const [row, nikkei225Row, segmentRows, sectorRows, initialRows, continuationRows, stallRows, dropRows] = await Promise.all([
     execGet<MomentumSummaryRow>(
       `
         ${commonLatest}
@@ -300,6 +300,17 @@ export async function PhysicalMomentumMarket({
         ${commonLatest}
         ${rankingSelect}
         ORDER BY pm.physical_momentum_score DESC, pm.physical_force_score DESC, pm.symbol
+        LIMIT 8
+      `,
+      [...dateParams, ...universeSql.params],
+    ),
+    execAll<MomentumRankingRow>(
+      `
+        ${commonLatest}
+        ${rankingSelect}
+          AND pm.physical_momentum_score > 0
+          AND pm.physical_force_score < 0
+        ORDER BY pm.physical_force_score ASC, pm.physical_momentum_score DESC, pm.symbol
         LIMIT 8
       `,
       [...dateParams, ...universeSql.params],
@@ -413,12 +424,12 @@ export async function PhysicalMomentumMarket({
 
       <div className="mt-4 border-t border-[var(--color-border-soft)] pt-4">
         <SectionLabel
-          title="銘柄ランキング"
-          description="比率だけでなく、実際にどの銘柄が動いているかを確認します。コードを押すと個別銘柄ページへ移動します。"
+          title="初動 / 継続 / 失速 / 下落警戒ランキング"
+          description="初動はPFS、継続はPMS、失速はPMSが残る中でのPFS悪化、下落警戒はPMS/PFSの弱さで分けます。"
         />
-        <div className="grid grid-cols-1 gap-3 xl:grid-cols-3">
+        <div className="grid grid-cols-1 gap-3 xl:grid-cols-4">
           <MomentumRankingPanel
-            title="動き出しランキング"
+            title="初動"
             badge="PFS順"
             rows={initialRows}
             scoreKey="pfs"
@@ -427,21 +438,30 @@ export async function PhysicalMomentumMarket({
             tone="warning"
           />
           <MomentumRankingPanel
-            title="強い勢いランキング"
+            title="継続"
             badge="PMS順"
-            rows={strongRows}
+            rows={continuationRows}
             scoreKey="pms"
             scoreLabel="PMS"
-            href={marketMomentumRankingHref(rankingGroup, 'strong', date)}
+            href={marketMomentumRankingHref(rankingGroup, 'continuation', date)}
             tone="up"
           />
           <MomentumRankingPanel
-            title="弱い勢いランキング"
+            title="失速"
+            badge="PFS悪化"
+            rows={stallRows}
+            scoreKey="pfs"
+            scoreLabel="PFS"
+            href={marketMomentumRankingHref(rankingGroup, 'stall', date)}
+            tone="down"
+          />
+          <MomentumRankingPanel
+            title="下落警戒"
             badge="PMS逆順"
-            rows={weakRows}
+            rows={dropRows}
             scoreKey="pms"
             scoreLabel="PMS"
-            href={marketMomentumRankingHref(rankingGroup, 'weak', date)}
+            href={marketMomentumRankingHref(rankingGroup, 'drop', date)}
             tone="down"
           />
         </div>

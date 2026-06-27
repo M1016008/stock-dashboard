@@ -36,6 +36,13 @@ type FeaturePoint = FeatureRow & {
   profile: AnyProfile | null
 }
 
+type FeatureCandidateRow = {
+  ticker: string
+  date: string
+  stage_code: string | null
+  vector_json: string
+}
+
 type OutcomeRow = {
   horizon_days: number
   return_pct: number | null
@@ -68,9 +75,12 @@ type RankedMatch = {
 const MIN_PATTERN_DAYS = 5
 const MAX_PATTERN_DAYS = 90
 const MAX_LIMIT = 100
-const CACHE_TTL_MS = 60 * 60 * 1000
+const CACHE_TTL_MS = Number(process.env.PATTERN_SEARCH_CACHE_TTL_MS ?? 6 * 60 * 60 * 1000)
 const CACHE_MAX_ENTRIES = 50
 const CACHE_NAMESPACE = 'ml_pattern_search_v1'
+const CANDIDATE_POOL_MIN = 80
+const CANDIDATE_POOL_MAX = 300
+const CANDIDATE_POOL_MULTIPLIER = Number(process.env.PATTERN_SEARCH_CANDIDATE_MULTIPLIER ?? 10)
 
 const searchCache = new Map<string, { generatedAt: number; payload: unknown }>()
 
@@ -86,8 +96,38 @@ function parseJson<T>(value: string | null | undefined, fallback: T): T {
   }
 }
 
+function parseVector(value: string | null | undefined): number[] {
+  try {
+    const parsed = value ? JSON.parse(value) : null
+    if (!Array.isArray(parsed)) return []
+    return parsed
+      .map((item) => Number(item))
+      .filter((item) => Number.isFinite(item))
+  } catch {
+    return []
+  }
+}
+
 function finite(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value)
+}
+
+function vectorSimilarity(a: number[], b: number[]): number {
+  const length = Math.min(a.length, b.length)
+  if (length === 0) return 0
+  let dot = 0
+  let normA = 0
+  let normB = 0
+  for (let i = 0; i < length; i += 1) {
+    const av = a[i] ?? 0
+    const bv = b[i] ?? 0
+    dot += av * bv
+    normA += av * av
+    normB += bv * bv
+  }
+  if (normA <= 0 || normB <= 0) return 0
+  const cosine = dot / (Math.sqrt(normA) * Math.sqrt(normB))
+  return Math.max(0, Math.min(1, (cosine + 1) / 2))
 }
 
 function dateParam(value: string | null): string | null {
@@ -245,7 +285,7 @@ async function loadFeatureSequence(ticker: string, startDate: string, endDate: s
            u.name, u.market_segment, u.sector17_name, u.sector33_name,
            pm.velocity, pm.acceleration, pm.momentum, pm.force, pm.ma_angle_avg, pm.energy,
            pm.physical_momentum_score, pm.physical_force_score, pm.physical_energy_score
-    FROM ml_feature_vectors_v2 f
+    FROM ml_feature_vectors_v2 AS f INDEXED BY ml_feature_vectors_v2_feature_ticker_date_idx
     LEFT JOIN ticker_universe u ON u.ticker = f.ticker
     LEFT JOIN physical_momentum_metrics pm ON pm.market = 'JP' AND pm.symbol = f.ticker AND pm.date = f.date
     WHERE f.feature_set = ?
@@ -265,7 +305,7 @@ async function latestFeatureDate(asOfDate: string | null): Promise<string | null
   return (await execGet<{ date: string | null }>(
     `
     SELECT MAX(date) AS date
-    FROM ml_feature_vectors_v2
+    FROM ml_feature_vectors_v2 INDEXED BY ml_feature_vectors_v2_date_idx
     WHERE feature_set = ?
       ${asOfDate ? 'AND date <= ?' : ''}
     `,
@@ -277,7 +317,7 @@ async function featureDatesEndingAt(endDate: string, count: number): Promise<str
   const rows = await execAll<{ date: string }>(
     `
     SELECT DISTINCT date
-    FROM ml_feature_vectors_v2
+    FROM ml_feature_vectors_v2 INDEXED BY ml_feature_vectors_v2_date_idx
     WHERE feature_set = ?
       AND date <= ?
     ORDER BY date DESC
@@ -290,23 +330,44 @@ async function featureDatesEndingAt(endDate: string, count: number): Promise<str
 
 async function loadLatestMarketRows(endDate: string, stageCodeFilter?: string | null): Promise<FeaturePoint[]> {
   const dailyStage = stageCodeFilter?.[0] ?? null
+  const dailyStageUpper = dailyStage ? String(Number(dailyStage) + 1) : null
   const rows = await execAll<FeatureRow>(
     `
     SELECT f.ticker, f.date, f.stage_code, f.feature_json, f.vector_json,
            u.name, u.market_segment, u.sector17_name, u.sector33_name,
            pm.velocity, pm.acceleration, pm.momentum, pm.force, pm.ma_angle_avg, pm.energy,
            pm.physical_momentum_score, pm.physical_force_score, pm.physical_energy_score
-    FROM ml_feature_vectors_v2 f
+    FROM ml_feature_vectors_v2 AS f INDEXED BY ml_feature_vectors_v2_date_idx
     LEFT JOIN ticker_universe u ON u.ticker = f.ticker
     LEFT JOIN physical_momentum_metrics pm ON pm.market = 'JP' AND pm.symbol = f.ticker AND pm.date = f.date
     WHERE f.feature_set = ?
       AND f.date = ?
-      ${dailyStage ? 'AND substr(f.stage_code, 1, 1) = ?' : ''}
+      ${dailyStage && dailyStageUpper ? 'AND f.stage_code >= ? AND f.stage_code < ?' : ''}
     ORDER BY f.ticker
     `,
-    dailyStage ? [ML_PHYSICS_FEATURE_SET, endDate, dailyStage] : [ML_PHYSICS_FEATURE_SET, endDate],
+    dailyStage && dailyStageUpper
+      ? [ML_PHYSICS_FEATURE_SET, endDate, dailyStage, dailyStageUpper]
+      : [ML_PHYSICS_FEATURE_SET, endDate],
   )
   return rows.map(toFeaturePoint)
+}
+
+async function loadLatestCandidateRows(endDate: string, stageCodeFilter?: string | null): Promise<FeatureCandidateRow[]> {
+  const dailyStage = stageCodeFilter?.[0] ?? null
+  const dailyStageUpper = dailyStage ? String(Number(dailyStage) + 1) : null
+  return execAll<FeatureCandidateRow>(
+    `
+    SELECT f.ticker, f.date, f.stage_code, f.vector_json
+    FROM ml_feature_vectors_v2 AS f INDEXED BY ml_feature_vectors_v2_date_idx
+    WHERE f.feature_set = ?
+      AND f.date = ?
+      ${dailyStage && dailyStageUpper ? 'AND f.stage_code >= ? AND f.stage_code < ?' : ''}
+    ORDER BY f.ticker
+    `,
+    dailyStage && dailyStageUpper
+      ? [ML_PHYSICS_FEATURE_SET, endDate, dailyStage, dailyStageUpper]
+      : [ML_PHYSICS_FEATURE_SET, endDate],
+  )
 }
 
 async function loadMarketRows(startDate: string, endDate: string, tickers: string[]): Promise<FeaturePoint[]> {
@@ -318,7 +379,7 @@ async function loadMarketRows(startDate: string, endDate: string, tickers: strin
            u.name, u.market_segment, u.sector17_name, u.sector33_name,
            pm.velocity, pm.acceleration, pm.momentum, pm.force, pm.ma_angle_avg, pm.energy,
            pm.physical_momentum_score, pm.physical_force_score, pm.physical_energy_score
-    FROM ml_feature_vectors_v2 f
+    FROM ml_feature_vectors_v2 AS f INDEXED BY ml_feature_vectors_v2_feature_ticker_date_idx
     LEFT JOIN ticker_universe u ON u.ticker = f.ticker
     LEFT JOIN physical_momentum_metrics pm ON pm.market = 'JP' AND pm.symbol = f.ticker AND pm.date = f.date
     WHERE f.feature_set = ?
@@ -418,17 +479,18 @@ function rankMarket(base: FeaturePoint[], marketRows: FeaturePoint[], currentDat
     .map((row, index) => ({ ...row, rank: index + 1 }) as RankedMatch & { rank: number })
 }
 
-function candidateTickerPool(baseLast: FeaturePoint, latestRows: FeaturePoint[], limit: number): string[] {
-  const poolSize = Math.min(500, Math.max(120, limit * 25))
+function candidateTickerPool(baseLast: FeaturePoint, latestRows: FeatureCandidateRow[], limit: number): string[] {
+  const poolSize = Math.min(
+    CANDIDATE_POOL_MAX,
+    Math.max(CANDIDATE_POOL_MIN, limit * CANDIDATE_POOL_MULTIPLIER),
+  )
+  const baseVector = parseVector(baseLast.vector_json)
+  const baseStage = profileStage(baseLast.profile, baseLast.stage_code)
   return latestRows
     .map((row) => ({
       ticker: row.ticker,
-      score: physicsSimilarityScore(
-        baseLast.profile ?? {},
-        row.profile ?? {},
-        baseLast.stage_code,
-        row.stage_code,
-      ),
+      score: vectorSimilarity(baseVector, parseVector(row.vector_json)) * 0.86
+        + stageSimilarity(baseStage, row.stage_code) * 0.14,
     }))
     .sort((a, b) => b.score - a.score)
     .slice(0, poolSize)
@@ -438,6 +500,16 @@ function candidateTickerPool(baseLast: FeaturePoint, latestRows: FeaturePoint[],
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
+    const debug = searchParams.get('debug') === '1'
+    const startedAt = Date.now()
+    let lastTimingAt = startedAt
+    const timings: Array<{ step: string; ms: number; totalMs: number }> = []
+    const mark = (step: string) => {
+      if (!debug) return
+      const now = Date.now()
+      timings.push({ step, ms: now - lastTimingAt, totalMs: now - startedAt })
+      lastTimingAt = now
+    }
     const ticker = searchParams.get('ticker')?.replace(/\.T$/i, '').trim()
     const startDate = dateParam(searchParams.get('startDate'))
     const endDate = dateParam(searchParams.get('endDate'))
@@ -449,13 +521,19 @@ export async function GET(request: NextRequest) {
     const rawLimit = positiveInteger(searchParams.get('limit'))
     const limit = Math.min(MAX_LIMIT, Math.max(1, rawLimit ?? 30))
     const universeFilter = parseUniverseFilter(searchParams.get(UNIVERSE_FILTER_PARAM))
+    const currentEndDate = await latestFeatureDate(asOfDate)
+    if (!currentEndDate) return badRequest('current feature date is not available', 422)
+    mark('latest_feature_date')
+
     const cacheIdentity = {
       ticker,
       startDate,
       endDate,
       asOfDate,
+      currentEndDate,
       limit,
       universeFilter,
+      featureSet: ML_PHYSICS_FEATURE_SET,
     }
     const cacheKey = JSON.stringify(cacheIdentity)
     const cached = searchCache.get(cacheKey)
@@ -463,6 +541,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({
         ...(cached.payload as Record<string, unknown>),
         cache: { hit: true, generatedAt: new Date(cached.generatedAt).toISOString() },
+        ...(debug ? { debug: { timings } } : {}),
       })
     }
     const storedKey = stableCacheKey(cacheIdentity)
@@ -472,8 +551,10 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({
         ...stored.payload,
         cache: { hit: true, generatedAt: new Date(stored.generatedAt).toISOString(), store: 'db' },
+        ...(debug ? { debug: { timings } } : {}),
       })
     }
+    mark('cache_lookup')
 
     const base = await loadFeatureSequence(ticker, startDate, endDate)
     if (base.length < MIN_PATTERN_DAYS) {
@@ -482,24 +563,27 @@ export async function GET(request: NextRequest) {
     if (base.length > MAX_PATTERN_DAYS) {
       return badRequest(`pattern must include at most ${MAX_PATTERN_DAYS} feature dates`, 422)
     }
-
-    const currentEndDate = await latestFeatureDate(asOfDate)
-    if (!currentEndDate) return badRequest('current feature date is not available', 422)
+    mark('load_base_sequence')
 
     const currentDates = await featureDatesEndingAt(currentEndDate, base.length)
     if (currentDates.length !== base.length) return badRequest('current feature history is too short', 422)
+    mark('load_current_dates')
 
     const baseLast = base[base.length - 1]
     const filteredLatestRows = filterRowsByUniverse(
-      await loadLatestMarketRows(currentEndDate, profileStage(baseLast.profile, baseLast.stage_code)),
+      await loadLatestCandidateRows(currentEndDate, profileStage(baseLast.profile, baseLast.stage_code)),
       universeFilter,
     )
     const latestRows = filteredLatestRows.length >= Math.max(limit * 3, 60)
       ? filteredLatestRows
-      : filterRowsByUniverse(await loadLatestMarketRows(currentEndDate), universeFilter)
+      : filterRowsByUniverse(await loadLatestCandidateRows(currentEndDate), universeFilter)
+    mark('load_latest_candidates')
     const candidateTickers = candidateTickerPool(base[base.length - 1], latestRows, limit)
+    mark('rank_candidate_pool')
     const marketRows = await loadMarketRows(currentDates[0], currentEndDate, candidateTickers)
+    mark('load_candidate_sequences')
     const matches = rankMarket(base, marketRows, currentDates, limit)
+    mark('rank_candidate_sequences')
     const referenceStart = base[0].date
     const referenceEnd = base[base.length - 1].date
     const referenceLast = base[base.length - 1]
@@ -507,6 +591,7 @@ export async function GET(request: NextRequest) {
       loadOutcomes(ticker, referenceEnd),
       loadReferenceChart(ticker, referenceStart, referenceEnd),
     ])
+    mark('load_reference_context')
 
     const generatedAt = Date.now()
     const payload = {
@@ -547,13 +632,18 @@ export async function GET(request: NextRequest) {
       cache: { hit: false, generatedAt: new Date(generatedAt).toISOString() },
     }
     searchCache.set(cacheKey, { generatedAt, payload })
-    await writeServingCache(CACHE_NAMESPACE, storedKey, payload, CACHE_TTL_MS, generatedAt)
+    writeServingCache(CACHE_NAMESPACE, storedKey, payload, CACHE_TTL_MS, generatedAt).catch((error) => {
+      console.warn('Failed to write pattern search cache:', error)
+    })
     if (searchCache.size > CACHE_MAX_ENTRIES) {
       const firstKey = searchCache.keys().next().value
       if (firstKey) searchCache.delete(firstKey)
     }
 
-    return NextResponse.json(payload)
+    return NextResponse.json({
+      ...payload,
+      ...(debug ? { debug: { timings } } : {}),
+    })
   } catch (error) {
     console.error('pattern search API error:', error)
     return NextResponse.json(

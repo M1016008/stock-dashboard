@@ -1242,6 +1242,7 @@ export const mlFeatureVectorsV2 = sqliteTable(
     dateIdx:       index('ml_feature_vectors_v2_date_idx').on(t.featureSet, t.date),
     dateOnlyIdx:   index('ml_feature_vectors_v2_date_only_idx').on(t.date),
     tickerDateIdx: index('ml_feature_vectors_v2_ticker_date_idx').on(t.ticker, t.date),
+    featureTickerDateIdx: index('ml_feature_vectors_v2_feature_ticker_date_idx').on(t.featureSet, t.ticker, t.date),
   }),
 )
 

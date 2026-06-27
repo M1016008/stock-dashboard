@@ -787,34 +787,39 @@ function buildScenarios(input: {
     }))
 }
 
-async function loadOhlcv(ticker: string): Promise<OHLCV[]> {
+async function loadOhlcv(ticker: string, asOfDate?: string | null): Promise<OHLCV[]> {
+  const dateFilter = asOfDate ? 'AND date <= ?' : ''
   const rows = await execAll<RawOhlcvRow>(
     `
       SELECT date, open, high, low, close, volume
       FROM ohlcv_daily
       WHERE ticker = ?
+        ${dateFilter}
       ORDER BY date
     `,
-    [ticker],
+    asOfDate ? [ticker, asOfDate] : [ticker],
   )
   return rows.map(toOhlcv)
 }
 
-async function loadFeature(ticker: string): Promise<FeatureRow | null> {
+async function loadFeature(ticker: string, asOfDate?: string | null): Promise<FeatureRow | null> {
+  const dateFilter = asOfDate ? 'AND date <= ?' : ''
   return (await execGet<FeatureRow>(
     `
       SELECT date, feature_json AS featureJson, stage_code AS stageCode
       FROM ml_feature_vectors_v2
       WHERE feature_set = ?
         AND ticker = ?
+        ${dateFilter}
       ORDER BY date DESC
       LIMIT 1
     `,
-    [ML_PHYSICS_FEATURE_SET, ticker],
+    asOfDate ? [ML_PHYSICS_FEATURE_SET, ticker, asOfDate] : [ML_PHYSICS_FEATURE_SET, ticker],
   )) ?? null
 }
 
-async function loadMomentum(ticker: string): Promise<MomentumRow | null> {
+async function loadMomentum(ticker: string, asOfDate?: string | null): Promise<MomentumRow | null> {
+  const dateFilter = asOfDate ? 'AND date <= ?' : ''
   return (await execGet<MomentumRow>(
     `
       SELECT
@@ -825,10 +830,11 @@ async function loadMomentum(ticker: string): Promise<MomentumRow | null> {
       FROM physical_momentum_metrics
       WHERE market = 'JP'
         AND symbol = ?
+        ${dateFilter}
       ORDER BY date DESC
       LIMIT 1
     `,
-    [ticker],
+    asOfDate ? [ticker, asOfDate] : [ticker],
   ).catch((error: unknown) => {
     const message = error instanceof Error ? error.message : String(error)
     if (message.includes('no such table')) return null
@@ -836,7 +842,8 @@ async function loadMomentum(ticker: string): Promise<MomentumRow | null> {
   })) ?? null
 }
 
-async function loadCalibration(status: PhysicsStatus, horizonDays: number): Promise<CalibrationRow | null> {
+async function loadCalibration(status: PhysicsStatus, horizonDays: number, asOfDate?: string | null): Promise<CalibrationRow | null> {
+  const dateFilter = asOfDate ? 'AND evaluation_date <= ?' : ''
   return (await execGet<CalibrationRow>(
     `
       SELECT
@@ -853,10 +860,11 @@ async function loadCalibration(status: PhysicsStatus, horizonDays: number): Prom
       WHERE feature_set = ?
         AND status_label = ?
         AND horizon_days = ?
+        ${dateFilter}
       ORDER BY evaluation_date DESC
       LIMIT 1
     `,
-    [ML_PHYSICS_FEATURE_SET, status, horizonDays],
+    asOfDate ? [ML_PHYSICS_FEATURE_SET, status, horizonDays, asOfDate] : [ML_PHYSICS_FEATURE_SET, status, horizonDays],
   ).catch((error: unknown) => {
     const message = error instanceof Error ? error.message : String(error)
     if (message.includes('no such table')) return null
@@ -864,13 +872,15 @@ async function loadCalibration(status: PhysicsStatus, horizonDays: number): Prom
   })) ?? null
 }
 
-async function loadPhysicsCandidates(ticker: string, horizonDays: number): Promise<PhysicsCandidateRow[]> {
+async function loadPhysicsCandidates(ticker: string, horizonDays: number, asOfDate?: string | null): Promise<PhysicsCandidateRow[]> {
+  const dateFilter = asOfDate ? 'AND as_of_date <= ?' : ''
   return execAll<PhysicsCandidateRow>(
     `
       WITH latest AS (
         SELECT MAX(as_of_date) AS as_of_date
         FROM serving_ml_physics_candidates
         WHERE horizon_days = ?
+          ${dateFilter}
       )
       SELECT
         c.as_of_date AS asOfDate,
@@ -883,7 +893,7 @@ async function loadPhysicsCandidates(ticker: string, horizonDays: number): Promi
         AND c.ticker = ?
       ORDER BY c.rank
     `,
-    [horizonDays, horizonDays, ticker],
+    asOfDate ? [horizonDays, asOfDate, horizonDays, ticker] : [horizonDays, horizonDays, ticker],
   ).catch((error: unknown) => {
     const message = error instanceof Error ? error.message : String(error)
     if (message.includes('no such table')) return []
@@ -906,6 +916,7 @@ export async function buildStockScenarioProjection(params: {
   interval: ScenarioInterval
   horizonDays?: number | null
   limit?: number | null
+  asOfDate?: string | null
 }): Promise<ProjectionResponse | null> {
   const ticker = normalizeTicker(params.ticker)
   const interval = params.interval
@@ -913,10 +924,11 @@ export async function buildStockScenarioProjection(params: {
     ? Math.max(1, Math.min(180, Math.floor(params.horizonDays)))
     : defaultProjectionHorizon(interval)
   const limit = Math.max(1, Math.min(MAX_LIMIT, Math.floor(params.limit ?? DEFAULT_LIMIT)))
+  const asOfDate = params.asOfDate && /^\d{4}-\d{2}-\d{2}$/.test(params.asOfDate) ? params.asOfDate : null
   const [ohlcv, feature, momentum] = await Promise.all([
-    loadOhlcv(ticker),
-    loadFeature(ticker),
-    loadMomentum(ticker),
+    loadOhlcv(ticker, asOfDate),
+    loadFeature(ticker, asOfDate),
+    loadMomentum(ticker, asOfDate),
   ])
   if (ohlcv.length === 0) return null
 
@@ -929,8 +941,8 @@ export async function buildStockScenarioProjection(params: {
   const profile = parseJson<Record<string, unknown> | null>(feature?.featureJson, null)
   const analysis = analyzePhysicsProfile(profile)
   const [calibration, candidates] = await Promise.all([
-    loadCalibration(analysis.physicsStatus, horizonDays),
-    loadPhysicsCandidates(ticker, horizonDays),
+    loadCalibration(analysis.physicsStatus, horizonDays, asOfDate),
+    loadPhysicsCandidates(ticker, horizonDays, asOfDate),
   ])
 
   const ma = Object.fromEntries(MA_PERIODS.map((period) => [String(period), simpleMa(chartCandles, period)]))

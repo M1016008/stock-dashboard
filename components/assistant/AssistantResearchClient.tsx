@@ -1,6 +1,6 @@
 'use client'
 
-import { FormEvent, useEffect, useMemo, useState } from 'react'
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { usePathname, useSearchParams } from 'next/navigation'
 import {
   Bot,
@@ -319,6 +319,7 @@ export function AssistantResearchClient() {
   const [saveNotice, setSaveNotice] = useState<string | null>(null)
   const [researchMode, setResearchMode] = useState<ResearchMode>('chat')
   const [anchorForm, setAnchorForm] = useState<HistoricalAnchorFormState>(DEFAULT_ANCHOR_FORM)
+  const initialPromptKeyRef = useRef<string | null>(null)
 
   const context = useMemo<AssistantPageContext>(() => ({
     pathname,
@@ -434,7 +435,7 @@ export function AssistantResearchClient() {
     setSaveNotice('保存した会話を削除しました')
   }
 
-  const run = async (message: string) => {
+  const run = async (message: string, options: { reset?: boolean } = {}) => {
     const text = message.trim()
     if (!text || loading) return
     setInput('')
@@ -446,10 +447,17 @@ export function AssistantResearchClient() {
       role: 'user',
       content: text,
     }
-    const history: AssistantConversationMessage[] = messages
+    const historySource = options.reset ? [] : messages
+    const history: AssistantConversationMessage[] = historySource
       .map((item) => ({ role: item.role, content: item.content }))
       .slice(-10)
-    setMessages((prev) => [...prev, userEntry])
+    if (options.reset) {
+      clearStoredSession()
+      setActiveSavedConversationId(null)
+      setMessages([userEntry])
+    } else {
+      setMessages((prev) => [...prev, userEntry])
+    }
 
     try {
       const res = await fetch('/api/assistant/chat', {
@@ -480,6 +488,28 @@ export function AssistantResearchClient() {
     event.preventDefault()
     void run(input)
   }
+
+  useEffect(() => {
+    if (!storageReady) return
+    const prompt = searchParams.get('prompt')?.trim()
+    if (!prompt) return
+    const autoRun = searchParams.get('autoRun') === '1'
+    const reset = searchParams.get('reset') === '1'
+    const key = `${autoRun ? 'run' : 'fill'}:${reset ? 'reset' : 'keep'}:${prompt}`
+    if (initialPromptKeyRef.current === key) return
+    initialPromptKeyRef.current = key
+    setResearchMode('chat')
+    if (autoRun) {
+      void run(prompt, { reset })
+      return
+    }
+    if (reset) {
+      clearStoredSession()
+      setMessages([])
+      setActiveSavedConversationId(null)
+    }
+    setInput(prompt)
+  }, [searchParams, storageReady])
 
   const runHistoricalAnchorSearch = () => {
     const prompt = buildHistoricalAnchorPrompt(sanitizeAnchorForm(anchorForm))

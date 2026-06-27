@@ -17,6 +17,7 @@ import { getTickersByMarket } from '@/lib/master/tickers'
 import { buildShortTermCheck, type ShortTermCheckLabel } from '@/lib/short-term-check'
 import { ML_PHYSICS_FEATURE_SET, type PhysicsFeatureProfile } from '@/lib/backtest/ml-physics'
 import { analyzePhysicsProfile, type PhysicsStatus } from '@/lib/ml/physics-analysis'
+import { readServingCache, stableCacheKey, writeServingCache } from '@/lib/api/serving-cache'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
@@ -78,6 +79,43 @@ interface SnapshotRow {
   ml_similar_count: number | null
   ml_top_similarity: number | null
 }
+
+type BaseSnapshotRow = Omit<
+  SnapshotRow,
+  | 'physical_momentum_score'
+  | 'physical_force_score'
+  | 'physical_energy_score'
+  | 'physical_momentum_rank'
+  | 'physical_momentum_prev_score'
+  | 'physical_acceleration'
+  | 'physical_force'
+  | 'physics_feature_json'
+  | 'physics_feature_date'
+  | 'ml_up_count'
+  | 'ml_down_count'
+  | 'ml_similar_count'
+  | 'ml_top_similarity'
+> & {
+  previous_ohlcv_date: string | null
+}
+
+type PmsMetricEntry = Pick<
+  SnapshotRow,
+  | 'physical_momentum_score'
+  | 'physical_force_score'
+  | 'physical_energy_score'
+  | 'physical_momentum_rank'
+  | 'physical_momentum_prev_score'
+  | 'physical_acceleration'
+  | 'physical_force'
+>
+
+type PhysicsFeatureEntry = Pick<SnapshotRow, 'physics_feature_json' | 'physics_feature_date'>
+
+type MlSummaryEntry = Pick<
+  SnapshotRow,
+  'ml_up_count' | 'ml_down_count' | 'ml_similar_count' | 'ml_top_similarity'
+>
 
 interface ScreenerStockRow {
   ticker: string
@@ -181,6 +219,9 @@ const STAGE_PARAM_MAP: Record<string, typeof STAGE_KEYS[number]> = {
 }
 
 const PHYSICAL_STATUS_HORIZONS = [5, 10, 20, 40, 60, 90] as const
+const JP_TICKER_MASTER_MAP = new Map(getTickersByMarket('JP').map((ticker) => [ticker.ticker, ticker]))
+const SCREENER_BUILT_ROWS_CACHE_TTL_MS = Number(process.env.SCREENER_BUILT_ROWS_CACHE_TTL_MS ?? 6 * 60 * 60 * 1000)
+const SCREENER_BUILT_ROWS_CACHE_NAMESPACE = 'screener_built_rows_v1'
 
 async function latestSnapshotDate(): Promise<string | null> {
   const row = await execGet<{ d: string | null }>(`SELECT MAX(date) AS d FROM daily_snapshots`)
@@ -188,7 +229,42 @@ async function latestSnapshotDate(): Promise<string | null> {
 }
 
 async function loadSnapshotByDate(date: string): Promise<SnapshotRow[]> {
-  return execAll<SnapshotRow>(
+  const baseRows = await loadBaseSnapshotRows(date)
+  if (baseRows.length === 0) return []
+
+  const previousDate = baseRows[0]?.previous_ohlcv_date ?? null
+  const [pmsMap, physicsFeatureMap, mlSummaryMap] = await Promise.all([
+    loadPmsMetricsByDate(date, previousDate),
+    loadLatestPhysicsFeaturesByDate(date),
+    loadMlSummaryMap(),
+  ])
+
+  return baseRows.map((row) => {
+    const pms = pmsMap.get(row.ticker)
+    const physicsFeature = physicsFeatureMap.get(row.ticker)
+    const mlSummary = mlSummaryMap.get(row.ticker)
+
+    return {
+      ...row,
+      physical_momentum_score: pms?.physical_momentum_score ?? null,
+      physical_force_score: pms?.physical_force_score ?? null,
+      physical_energy_score: pms?.physical_energy_score ?? null,
+      physical_momentum_rank: pms?.physical_momentum_rank ?? null,
+      physical_momentum_prev_score: pms?.physical_momentum_prev_score ?? null,
+      physical_acceleration: pms?.physical_acceleration ?? null,
+      physical_force: pms?.physical_force ?? null,
+      physics_feature_json: physicsFeature?.physics_feature_json ?? null,
+      physics_feature_date: physicsFeature?.physics_feature_date ?? null,
+      ml_up_count: mlSummary?.ml_up_count ?? null,
+      ml_down_count: mlSummary?.ml_down_count ?? null,
+      ml_similar_count: mlSummary?.ml_similar_count ?? null,
+      ml_top_similarity: mlSummary?.ml_top_similarity ?? null,
+    }
+  })
+}
+
+async function loadBaseSnapshotRows(date: string): Promise<BaseSnapshotRow[]> {
+  return execAll<BaseSnapshotRow>(
     `
     WITH
       prev_dates AS (
@@ -211,44 +287,10 @@ async function loadSnapshotByDate(date: string): Promise<SnapshotRow[]> {
         ORDER BY date ASC
         LIMIT 1
       ) AS d20
-      ),
-      pms_ranked AS (
-        SELECT
-          symbol,
-          physical_momentum_score,
-          physical_force_score,
-          physical_energy_score,
-          acceleration,
-          force,
-          RANK() OVER (ORDER BY physical_momentum_score DESC) AS physical_momentum_rank
-        FROM physical_momentum_metrics
-        WHERE market = 'JP'
-          AND date = ?
-          AND physical_momentum_score IS NOT NULL
-      ),
-      latest_physics_feature AS (
-        SELECT MAX(date) AS date
-        FROM ml_feature_vectors_v2
-        WHERE feature_set = ?
-          AND date <= ?
-      ),
-      latest_similar_date AS (
-        SELECT MAX(as_of_date) AS d
-        FROM serving_current_similars
-      ),
-      ml_summary AS (
-        SELECT
-          base_ticker,
-          SUM(CASE WHEN similar_direction = 'up' THEN 1 ELSE 0 END) AS ml_up_count,
-          SUM(CASE WHEN similar_direction = 'down' THEN 1 ELSE 0 END) AS ml_down_count,
-          COUNT(*) AS ml_similar_count,
-          MAX(similarity_score) AS ml_top_similarity
-        FROM serving_current_similars
-        WHERE as_of_date = (SELECT d FROM latest_similar_date)
-        GROUP BY base_ticker
       )
     SELECT
       s.date,
+      pd.d1 AS previous_ohlcv_date,
       s.ticker,
       u.name,
       cur.close AS price,
@@ -355,20 +397,7 @@ async function loadSnapshotByDate(date: string): Promise<SnapshotRow[]> {
       s.weekly_a_stage,
       s.weekly_b_stage,
       s.monthly_a_stage,
-      s.monthly_b_stage,
-      pm.physical_momentum_score,
-      pm.physical_force_score,
-      pm.physical_energy_score,
-      pm.physical_momentum_rank,
-      pm_prev.physical_momentum_score AS physical_momentum_prev_score,
-      pm.acceleration AS physical_acceleration,
-      pm.force AS physical_force,
-      mf.feature_json AS physics_feature_json,
-      mf.date AS physics_feature_date,
-      ms.ml_up_count,
-      ms.ml_down_count,
-      ms.ml_similar_count,
-      ms.ml_top_similarity
+      s.monthly_b_stage
     FROM daily_snapshots s
     LEFT JOIN ohlcv_daily cur ON cur.ticker = s.ticker AND cur.date = s.date
     CROSS JOIN prev_dates pd
@@ -380,15 +409,154 @@ async function loadSnapshotByDate(date: string): Promise<SnapshotRow[]> {
     LEFT JOIN ohlcv_daily ytd ON ytd.ticker = s.ticker AND ytd.date = pd.ytd
     LEFT JOIN ticker_universe u ON u.ticker = s.ticker
     LEFT JOIN daily_snapshots prev_s ON prev_s.ticker = s.ticker AND prev_s.date = pd.d1
-    LEFT JOIN pms_ranked pm ON pm.symbol = s.ticker
-    LEFT JOIN physical_momentum_metrics pm_prev ON pm_prev.market = 'JP' AND pm_prev.symbol = s.ticker AND pm_prev.date = pd.d1
-    LEFT JOIN latest_physics_feature lpf ON 1 = 1
-    LEFT JOIN ml_feature_vectors_v2 mf ON mf.ticker = s.ticker AND mf.date = lpf.date AND mf.feature_set = ?
-    LEFT JOIN ml_summary ms ON ms.base_ticker = s.ticker
     WHERE s.date = ?
     `,
-    [date, date, date, date, date, date, date, date, ML_PHYSICS_FEATURE_SET, date, ML_PHYSICS_FEATURE_SET, date],
+    [date, date, date, date, date, date, date, date],
   )
+}
+
+async function loadPmsMetricsByDate(
+  date: string,
+  previousDate: string | null,
+): Promise<Map<string, PmsMetricEntry>> {
+  const [currentRows, previousRows] = await Promise.all([
+    execAll<{
+      symbol: string
+      physical_momentum_score: number | null
+      physical_force_score: number | null
+      physical_energy_score: number | null
+      acceleration: number | null
+      force: number | null
+    }>(
+      `
+      SELECT
+        symbol,
+        physical_momentum_score,
+        physical_force_score,
+        physical_energy_score,
+        acceleration,
+        force
+      FROM physical_momentum_metrics
+      WHERE market = 'JP'
+        AND date = ?
+      ORDER BY physical_momentum_score IS NULL ASC, physical_momentum_score DESC
+      `,
+      [date],
+    ),
+    previousDate
+      ? execAll<{ symbol: string; physical_momentum_score: number | null }>(
+          `
+          SELECT symbol, physical_momentum_score
+          FROM physical_momentum_metrics
+          WHERE market = 'JP'
+            AND date = ?
+          `,
+          [previousDate],
+        )
+      : Promise.resolve([]),
+  ])
+
+  const previousScoreMap = new Map<string, number | null>()
+  for (const row of previousRows) {
+    previousScoreMap.set(row.symbol, row.physical_momentum_score)
+  }
+
+  const map = new Map<string, PmsMetricEntry>()
+  let seen = 0
+  let rank = 0
+  let lastScore: number | null = null
+  for (const row of currentRows) {
+    seen += 1
+    const score = row.physical_momentum_score
+    let currentRank: number | null = null
+    if (score != null && Number.isFinite(score)) {
+      if (lastScore == null || score !== lastScore) {
+        rank = seen
+        lastScore = score
+      }
+      currentRank = rank
+    }
+
+    map.set(row.symbol, {
+      physical_momentum_score: row.physical_momentum_score,
+      physical_force_score: row.physical_force_score,
+      physical_energy_score: row.physical_energy_score,
+      physical_momentum_rank: currentRank,
+      physical_momentum_prev_score: previousScoreMap.get(row.symbol) ?? null,
+      physical_acceleration: row.acceleration,
+      physical_force: row.force,
+    })
+  }
+  return map
+}
+
+async function loadLatestPhysicsFeaturesByDate(date: string): Promise<Map<string, PhysicsFeatureEntry>> {
+  const latest = await execGet<{ date: string | null }>(
+    `
+    SELECT MAX(date) AS date
+    FROM ml_feature_vectors_v2
+    WHERE feature_set = ?
+      AND date <= ?
+    `,
+    [ML_PHYSICS_FEATURE_SET, date],
+  )
+  if (!latest?.date) return new Map()
+
+  const rows = await execAll<{ ticker: string; date: string; feature_json: string | null }>(
+    `
+    SELECT ticker, date, feature_json
+    FROM ml_feature_vectors_v2
+    WHERE feature_set = ?
+      AND date = ?
+    `,
+    [ML_PHYSICS_FEATURE_SET, latest.date],
+  )
+
+  const map = new Map<string, PhysicsFeatureEntry>()
+  for (const row of rows) {
+    map.set(row.ticker, {
+      physics_feature_json: row.feature_json,
+      physics_feature_date: row.date,
+    })
+  }
+  return map
+}
+
+async function loadMlSummaryMap(): Promise<Map<string, MlSummaryEntry>> {
+  const rows = await execAll<{
+    base_ticker: string
+    ml_up_count: number | null
+    ml_down_count: number | null
+    ml_similar_count: number | null
+    ml_top_similarity: number | null
+  }>(
+    `
+    WITH latest_similar_date AS (
+      SELECT MAX(as_of_date) AS d
+      FROM serving_current_similars
+    )
+    SELECT
+      base_ticker,
+      SUM(CASE WHEN similar_direction = 'up' THEN 1 ELSE 0 END) AS ml_up_count,
+      SUM(CASE WHEN similar_direction = 'down' THEN 1 ELSE 0 END) AS ml_down_count,
+      COUNT(*) AS ml_similar_count,
+      MAX(similarity_score) AS ml_top_similarity
+    FROM serving_current_similars
+    WHERE as_of_date = (SELECT d FROM latest_similar_date)
+    GROUP BY base_ticker
+    `,
+  )
+
+  const map = new Map<string, MlSummaryEntry>()
+  for (const row of rows) {
+    map.set(row.base_ticker, {
+      ml_up_count: row.ml_up_count,
+      ml_down_count: row.ml_down_count,
+      ml_similar_count: row.ml_similar_count,
+      ml_top_similarity: row.ml_top_similarity,
+    })
+  }
+  return map
 }
 
 /**
@@ -542,7 +710,7 @@ function buildResultRow(
   sectorMap: Map<string, SectorEntry>,
   physicsStatusCalibration: Map<PhysicsStatus, PhysicsStatusCalibration>,
 ): ScreenerStockRow | null {
-  const master = getTickersByMarket('JP').find((t) => t.ticker === s.ticker)
+  const master = JP_TICKER_MASTER_MAP.get(s.ticker)
   const fromDb = sectorMap.get(s.ticker)
   // J-Quants 17/33業種を第一参照にする。
   const sectorLarge = s.sector17_name ?? fromDb?.sectorLarge ?? master?.sectorLarge ?? 'その他'
@@ -912,6 +1080,107 @@ function compareNullable(a: unknown, b: unknown, dir: 1 | -1): number {
   return String(a).localeCompare(String(b), 'ja') * dir
 }
 
+type BuiltRowsCacheEntry = {
+  rows: ScreenerStockRow[]
+  universe: number
+  createdAt: number
+}
+
+type BuiltRowsStoredPayload = {
+  rows: ScreenerStockRow[]
+  universe: number
+}
+
+type BuiltRowsResult = BuiltRowsCacheEntry & {
+  cacheHit: boolean
+  cacheAgeMs: number
+}
+
+const globalForScreener = globalThis as typeof globalThis & {
+  __stockBoardScreenerBuiltRowsCache?: Map<string, BuiltRowsCacheEntry>
+}
+
+function getBuiltRowsCache(): Map<string, BuiltRowsCacheEntry> {
+  if (!globalForScreener.__stockBoardScreenerBuiltRowsCache) {
+    globalForScreener.__stockBoardScreenerBuiltRowsCache = new Map()
+  }
+  return globalForScreener.__stockBoardScreenerBuiltRowsCache
+}
+
+async function loadBuiltRows(date: string, physicalStatusHorizon: number): Promise<BuiltRowsResult> {
+  const cache = getBuiltRowsCache()
+  const key = `${date}:${physicalStatusHorizon}:${ML_PHYSICS_FEATURE_SET}`
+  const now = Date.now()
+  const cached = cache.get(key)
+  if (cached && now - cached.createdAt <= SCREENER_BUILT_ROWS_CACHE_TTL_MS) {
+    return {
+      ...cached,
+      cacheHit: true,
+      cacheAgeMs: now - cached.createdAt,
+    }
+  }
+
+  const storedKey = stableCacheKey({
+    date,
+    physicalStatusHorizon,
+    featureSet: ML_PHYSICS_FEATURE_SET,
+  })
+  const stored = await readServingCache<BuiltRowsStoredPayload>(
+    SCREENER_BUILT_ROWS_CACHE_NAMESPACE,
+    storedKey,
+    SCREENER_BUILT_ROWS_CACHE_TTL_MS,
+  )
+  if (stored) {
+    const entry: BuiltRowsCacheEntry = {
+      rows: stored.payload.rows,
+      universe: stored.payload.universe,
+      createdAt: stored.generatedAt,
+    }
+    cache.set(key, entry)
+    return {
+      ...entry,
+      cacheHit: true,
+      cacheAgeMs: now - stored.generatedAt,
+    }
+  }
+
+  const [snapshots, sectorMap, physicsStatusCalibration] = await Promise.all([
+    loadSnapshotByDate(date),
+    loadSectorMap(),
+    loadPhysicsStatusCalibration(physicalStatusHorizon),
+  ])
+  const rows = snapshots
+    .map((s) => buildResultRow(s, sectorMap, physicsStatusCalibration))
+    .filter((r): r is ScreenerStockRow => r !== null)
+  const entry: BuiltRowsCacheEntry = {
+    rows,
+    universe: snapshots.length,
+    createdAt: now,
+  }
+  cache.set(key, entry)
+  writeServingCache(
+    SCREENER_BUILT_ROWS_CACHE_NAMESPACE,
+    storedKey,
+    { rows, universe: snapshots.length },
+    SCREENER_BUILT_ROWS_CACHE_TTL_MS,
+    now,
+  ).catch((error) => {
+    console.warn('Failed to write screener built rows cache:', error)
+  })
+
+  if (cache.size > 8) {
+    const oldestKey = [...cache.entries()]
+      .sort((a, b) => a[1].createdAt - b[1].createdAt)[0]?.[0]
+    if (oldestKey) cache.delete(oldestKey)
+  }
+
+  return {
+    ...entry,
+    cacheHit: false,
+    cacheAgeMs: 0,
+  }
+}
+
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
@@ -972,15 +1241,9 @@ export async function GET(request: NextRequest) {
       if (stages.length > 0) stageFilter[key] = Array.from(new Set(stages)).sort()
     }
 
-    const [snapshots, sectorMap, physicsStatusCalibration] = await Promise.all([
-      loadSnapshotByDate(date),
-      loadSectorMap(),
-      loadPhysicsStatusCalibration(physicalStatusHorizon),
-    ])
-    const universe = snapshots.length
-    const built = snapshots
-      .map((s) => buildResultRow(s, sectorMap, physicsStatusCalibration))
-      .filter((r): r is ScreenerStockRow => r !== null)
+    const builtRows = await loadBuiltRows(date, physicalStatusHorizon)
+    const universe = builtRows.universe
+    const built = builtRows.rows
 
     let filtered = filterRowsByUniverse(built, universeFilter)
     if (segment) filtered = filtered.filter((r) => r.marketSegment === segment)
@@ -1043,6 +1306,11 @@ export async function GET(request: NextRequest) {
       universe,
       date,
       cached: true,
+      serverCache: {
+        hit: builtRows.cacheHit,
+        ageMs: builtRows.cacheAgeMs,
+        ttlMs: SCREENER_BUILT_ROWS_CACHE_TTL_MS,
+      },
       source: 'jquants',
       filters: {
         segment,

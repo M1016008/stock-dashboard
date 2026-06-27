@@ -101,6 +101,7 @@ interface ProjectionResponse {
 interface ScenarioProjectionChartProps {
   ticker: string
   name: string
+  analysisDate?: string | null
 }
 
 interface ScenarioEndpointLabel {
@@ -385,7 +386,7 @@ function ScenarioCanvas({ data }: { data: ProjectionResponse }) {
   )
 }
 
-export function ScenarioProjectionChart({ ticker, name }: ScenarioProjectionChartProps) {
+export function ScenarioProjectionChart({ ticker, name, analysisDate }: ScenarioProjectionChartProps) {
   const [activeTab, setActiveTab] = useState(TABS[0])
   const [data, setData] = useState<ProjectionResponse | null>(null)
   const [loading, setLoading] = useState(true)
@@ -399,7 +400,13 @@ export function ScenarioProjectionChart({ ticker, name }: ScenarioProjectionChar
     setLoading(true)
     setError('')
     setMessage('')
-    fetch(`/api/stock-scenario-projections/${encodeURIComponent(ticker)}?interval=${activeTab.interval}&horizonDays=${activeTab.horizonDays}&limit=8`, { cache: 'no-store' })
+    const params = new URLSearchParams({
+      interval: activeTab.interval,
+      horizonDays: String(activeTab.horizonDays),
+      limit: '8',
+    })
+    if (analysisDate) params.set('date', analysisDate)
+    fetch(`/api/stock-scenario-projections/${encodeURIComponent(ticker)}?${params.toString()}`, { cache: 'no-store' })
       .then((res) => res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`)))
       .then((payload) => {
         if (!cancelled) setData(payload)
@@ -411,7 +418,7 @@ export function ScenarioProjectionChart({ ticker, name }: ScenarioProjectionChar
         if (!cancelled) setLoading(false)
       })
     return () => { cancelled = true }
-  }, [ticker, activeTab])
+  }, [ticker, activeTab, analysisDate])
 
   const topScenario = data?.scenarios[0] ?? null
   const sourceText = useMemo(() => {
@@ -462,6 +469,7 @@ export function ScenarioProjectionChart({ ticker, name }: ScenarioProjectionChar
             upperGuidePrice: scenario.upperGuidePrice,
             lowerGuidePrice: scenario.lowerGuidePrice,
             sourceDates: data.sourceDates,
+            analysisDate,
           },
         },
       }
@@ -489,6 +497,7 @@ export function ScenarioProjectionChart({ ticker, name }: ScenarioProjectionChar
           <div className="section-header" style={headerTitleStyle}>シナリオチャート</div>
           <p style={subTextStyle}>
             既存データ、物理モメンタム、MA状態、ML候補から複数の値動きシナリオを点線で可視化します。
+            {analysisDate ? ` 基準日は${analysisDate}以前のデータに固定しています。` : ''}
           </p>
         </div>
         <span style={badgeStyle}>予測断定ではありません</span>
