@@ -13,8 +13,10 @@ import {
   type UTCTimestamp,
 } from 'lightweight-charts'
 import type { OHLCV } from '@/types/stock'
+import type { MarketCode } from '@/lib/markets'
+import type { ChartIntervalCode } from '@/lib/timeframes'
 
-type ScenarioInterval = 'D' | 'W' | 'M'
+type ScenarioInterval = ChartIntervalCode
 type ProjectionDirection = 'up' | 'down' | 'range'
 type SummaryDirection = ProjectionDirection | 'mixed'
 
@@ -102,6 +104,7 @@ interface ScenarioProjectionChartProps {
   ticker: string
   name: string
   analysisDate?: string | null
+  market?: MarketCode
 }
 
 interface ScenarioEndpointLabel {
@@ -117,13 +120,23 @@ interface ScenarioEndpointLabel {
 
 const TABS: Array<{ interval: ScenarioInterval; label: string; horizonDays: number; note: string }> = [
   { interval: 'D', label: '日足', horizonDays: 5, note: '5営業日' },
+  { interval: '2D', label: '2日足', horizonDays: 10, note: '10営業日' },
   { interval: 'W', label: '週足', horizonDays: 20, note: '20営業日' },
+  { interval: '2W', label: '2週足', horizonDays: 40, note: '40営業日' },
   { interval: 'M', label: '月足', horizonDays: 60, note: '60営業日' },
+  { interval: '2M', label: '2ヶ月足', horizonDays: 120, note: '120営業日' },
 ]
 
 const MA_COLORS: Record<string, string> = {
+  '3': '#10b981',
   '5': '#e5e7eb',
+  '12': '#f59e0b',
+  '13': '#f59e0b',
+  '24': '#3b82f6',
   '25': '#f59e0b',
+  '26': '#3b82f6',
+  '52': '#a855f7',
+  '60': '#a855f7',
   '75': '#3b82f6',
   '200': '#a855f7',
 }
@@ -132,8 +145,11 @@ function dateToTime(date: string): UTCTimestamp {
   return Math.floor(new Date(`${date}T00:00:00Z`).getTime() / 1000) as UTCTimestamp
 }
 
-function fmtYen(value: number | null | undefined): string {
+function fmtPrice(value: number | null | undefined, market: MarketCode = 'JP'): string {
   if (value == null || !Number.isFinite(value)) return '-'
+  if (market === 'US') {
+    return `$${value.toLocaleString('en-US', { maximumFractionDigits: 2 })}`
+  }
   return `${value.toLocaleString('ja-JP', { maximumFractionDigits: 1 })}円`
 }
 
@@ -228,7 +244,7 @@ function buildDirectionSummary(data: ProjectionResponse) {
   }
 }
 
-function ScenarioCanvas({ data }: { data: ProjectionResponse }) {
+function ScenarioCanvas({ data, market }: { data: ProjectionResponse; market: MarketCode }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const [endpointLabels, setEndpointLabels] = useState<ScenarioEndpointLabel[]>([])
@@ -380,13 +396,13 @@ function ScenarioCanvas({ data }: { data: ProjectionResponse }) {
         </div>
       ))}
       <div style={chartOverlayBadgeStyle}>
-        点線は将来シナリオ / 基準 {data.baseDate} {fmtYen(data.basePrice)}
+        点線は将来シナリオ / 基準 {data.baseDate} {fmtPrice(data.basePrice, market)}
       </div>
     </div>
   )
 }
 
-export function ScenarioProjectionChart({ ticker, name, analysisDate }: ScenarioProjectionChartProps) {
+export function ScenarioProjectionChart({ ticker, name, analysisDate, market = 'JP' }: ScenarioProjectionChartProps) {
   const [activeTab, setActiveTab] = useState(TABS[0])
   const [data, setData] = useState<ProjectionResponse | null>(null)
   const [loading, setLoading] = useState(true)
@@ -401,6 +417,7 @@ export function ScenarioProjectionChart({ ticker, name, analysisDate }: Scenario
     setError('')
     setMessage('')
     const params = new URLSearchParams({
+      market,
       interval: activeTab.interval,
       horizonDays: String(activeTab.horizonDays),
       limit: '8',
@@ -418,7 +435,7 @@ export function ScenarioProjectionChart({ ticker, name, analysisDate }: Scenario
         if (!cancelled) setLoading(false)
       })
     return () => { cancelled = true }
-  }, [ticker, activeTab, analysisDate])
+  }, [ticker, activeTab, analysisDate, market])
 
   const topScenario = data?.scenarios[0] ?? null
   const sourceText = useMemo(() => {
@@ -440,7 +457,7 @@ export function ScenarioProjectionChart({ ticker, name, analysisDate }: Scenario
     try {
       const body = {
         ticker,
-        market: 'JP',
+        market,
         name,
         direction: toTradeDirection(scenario.direction),
         confidence: scenario.score >= 70 ? 'high' : scenario.score >= 50 ? 'medium' : 'low',
@@ -482,7 +499,7 @@ export function ScenarioProjectionChart({ ticker, name, analysisDate }: Scenario
       if (!res.ok) throw new Error(payload.message ?? payload.error ?? `HTTP ${res.status}`)
       setSavedIds((prev) => new Set([...prev, scenario.id]))
       setMessage('売買シナリオノートに保存しました。')
-      window.dispatchEvent(new CustomEvent('trade-scenario-saved', { detail: { ticker, scenarioId: payload.scenario?.id } }))
+      window.dispatchEvent(new CustomEvent('trade-scenario-saved', { detail: { ticker, market, scenarioId: payload.scenario?.id } }))
     } catch (e) {
       setError((e as Error).message)
     } finally {
@@ -539,7 +556,7 @@ export function ScenarioProjectionChart({ ticker, name, analysisDate }: Scenario
                   </div>
                 )}
               </div>
-              <ScenarioCanvas data={data} />
+              <ScenarioCanvas data={data} market={market} />
               <div style={legendStyle}>
                 <span><i style={{ background: '#dc2626' }} />上昇</span>
                 <span><i style={{ background: '#f59e0b' }} />横ばい</span>
@@ -577,10 +594,10 @@ export function ScenarioProjectionChart({ ticker, name, analysisDate }: Scenario
                       ))}
                     </div>
                     <div style={metricGridStyle}>
-                      <Metric label="目標" value={fmtYen(scenario.targetPrice)} />
-                      <Metric label="撤退" value={fmtYen(scenario.stopPrice)} />
-                      <Metric label="上値" value={fmtYen(scenario.upperGuidePrice)} />
-                      <Metric label="下値" value={fmtYen(scenario.lowerGuidePrice)} />
+                      <Metric label="目標" value={fmtPrice(scenario.targetPrice, market)} />
+                      <Metric label="撤退" value={fmtPrice(scenario.stopPrice, market)} />
+                      <Metric label="上値" value={fmtPrice(scenario.upperGuidePrice, market)} />
+                      <Metric label="下値" value={fmtPrice(scenario.lowerGuidePrice, market)} />
                     </div>
                     <div style={evidenceRowStyle}>
                       {scenario.evidence.slice(0, 4).map((item) => (

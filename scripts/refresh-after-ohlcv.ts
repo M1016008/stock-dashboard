@@ -183,10 +183,10 @@ async function main(): Promise<void> {
       await runRequired('scripts/batch-ml-outcomes.ts')
       await lock?.heartbeat()
       await runRequired('scripts/batch-ml-train.ts', {
-        ML_TRAIN_START_DATE: process.env.ML_DAILY_TRAIN_START_DATE ?? '2008-05-07',
-        ML_TRAIN_SAMPLE_MODE: process.env.ML_DAILY_TRAIN_SAMPLE_MODE ?? 'yearly',
+        ML_TRAIN_START_DATE: process.env.ML_DAILY_TRAIN_START_DATE ?? '1900-01-01',
+        ML_TRAIN_SAMPLE_MODE: process.env.ML_DAILY_TRAIN_SAMPLE_MODE ?? 'all_paged',
         ML_TRAIN_LABEL_SOURCE: process.env.ML_DAILY_TRAIN_LABEL_SOURCE ?? 'extrema',
-        ML_TRAIN_LIMIT: process.env.ML_DAILY_TRAIN_LIMIT ?? process.env.ML_TRAIN_LIMIT ?? '80000',
+        ML_TRAIN_LIMIT: process.env.ML_DAILY_TRAIN_LIMIT ?? process.env.ML_TRAIN_LIMIT ?? '0',
       })
       await lock?.heartbeat()
       await runRequired('scripts/batch-ml-candidates.ts')
@@ -213,9 +213,9 @@ async function main(): Promise<void> {
       })
       await lock?.heartbeat()
       await runRequired('scripts/batch-ml-physics-train.ts', {
-        ML_PHYSICS_TRAIN_START_DATE: process.env.ML_PHYSICS_DAILY_TRAIN_START_DATE ?? '2008-05-07',
-        ML_PHYSICS_TRAIN_SAMPLE_MODE: process.env.ML_PHYSICS_DAILY_TRAIN_SAMPLE_MODE ?? 'yearly',
-        ML_PHYSICS_TRAIN_LIMIT: process.env.ML_PHYSICS_DAILY_TRAIN_LIMIT ?? process.env.ML_PHYSICS_TRAIN_LIMIT ?? '120000',
+        ML_PHYSICS_TRAIN_START_DATE: process.env.ML_PHYSICS_DAILY_TRAIN_START_DATE ?? '1900-01-01',
+        ML_PHYSICS_TRAIN_SAMPLE_MODE: process.env.ML_PHYSICS_DAILY_TRAIN_SAMPLE_MODE ?? 'all_paged',
+        ML_PHYSICS_TRAIN_LIMIT: process.env.ML_PHYSICS_DAILY_TRAIN_LIMIT ?? process.env.ML_PHYSICS_TRAIN_LIMIT ?? '0',
       })
       await lock?.heartbeat()
       await runRequired('scripts/batch-ml-physics-candidates.ts')

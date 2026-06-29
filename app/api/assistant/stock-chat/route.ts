@@ -8,6 +8,7 @@ import {
   type ScenarioInterval,
 } from '@/lib/stock-scenarios/projections'
 import { findTicker } from '@/lib/master/tickers'
+import { normalizeMarket, normalizeTickerForMarket, type MarketCode } from '@/lib/markets'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -17,6 +18,7 @@ const STOCK_CHAT_HISTORY_LIMIT = 8
 
 type StockChatBody = {
   ticker?: unknown
+  market?: unknown
   name?: unknown
   message?: unknown
   analysisDate?: unknown
@@ -53,6 +55,7 @@ type StockChatResponse = {
   openai: AssistantOpenAIStatus
   context: {
     ticker: string
+    market: MarketCode
     name: string | null
     analysisDate: string | null
     projections: StockChatProjectionSummary[]
@@ -60,9 +63,9 @@ type StockChatResponse = {
   followups: string[]
 }
 
-function normalizeTicker(value: unknown): string | null {
+function normalizeTicker(value: unknown, market: MarketCode): string | null {
   if (typeof value !== 'string') return null
-  const ticker = value.trim().toUpperCase().replace(/\.T$/i, '')
+  const ticker = normalizeTickerForMarket(value, market)
   return /^[0-9A-Z]{1,8}$/.test(ticker) ? ticker : null
 }
 
@@ -124,16 +127,20 @@ function projectionSummary(projection: ProjectionResponse): StockChatProjectionS
   }
 }
 
-async function loadProjectionContext(ticker: string, analysisDate: string | null): Promise<StockChatProjectionSummary[]> {
+async function loadProjectionContext(ticker: string, market: MarketCode, analysisDate: string | null): Promise<StockChatProjectionSummary[]> {
   const projectionInputs: Array<{ interval: ScenarioInterval; horizonDays: number }> = [
     { interval: 'D', horizonDays: 5 },
+    { interval: '2D', horizonDays: 10 },
     { interval: 'W', horizonDays: 20 },
+    { interval: '2W', horizonDays: 40 },
     { interval: 'M', horizonDays: 60 },
+    { interval: '2M', horizonDays: 120 },
   ]
   const projections = await Promise.all(
     projectionInputs.map((input) => (
       buildStockScenarioProjection({
         ticker,
+        market,
         interval: input.interval,
         horizonDays: input.horizonDays,
         limit: 6,
@@ -152,8 +159,15 @@ function directionLabel(direction: string): string {
   return '横ばい'
 }
 
+function formatPrice(value: number | null | undefined, market: MarketCode): string {
+  if (value == null || !Number.isFinite(value)) return '-'
+  if (market === 'US') return `$${value.toLocaleString('en-US', { maximumFractionDigits: 2 })}`
+  return `${value.toLocaleString('ja-JP', { maximumFractionDigits: 1 })}円`
+}
+
 function localAnswer(input: {
   ticker: string
+  market: MarketCode
   name: string | null
   analysisDate: string | null
   question: string
@@ -176,7 +190,7 @@ function localAnswer(input: {
   return [
     `結論: ${input.analysisDate ? `${input.analysisDate}時点では` : '現時点では'}、最上位は「${top.label}」です。方向は${directionLabel(top.direction)}、スコアは${top.score}/100です。`,
     `根拠: 物理状態は${primary.statusLabel}、PMS ${stats.pms ?? '-'} / PFS ${stats.pfs ?? '-'} / PES ${stats.pes ?? '-'}。スコア内訳は${parts || '未算出'}です。`,
-    `シナリオ: 目標目処は${top.targetPrice ?? '-'}円、撤退/失効条件は「${top.invalidation}」。`,
+    `シナリオ: 目標目処は${formatPrice(top.targetPrice, input.market)}、撤退/失効条件は「${top.invalidation}」。`,
     `注意点: これは${primary.baseDate}までの価格、物理モメンタム、MA状態、物理ML候補、過去検証からの読み取りです。将来の値動きを断定するものではありません。`,
     `次に見るべき点: ${top.evidence.slice(0, 3).join(' / ') || 'MA付近の反応、出来高、PFSの変化'}。`,
   ].join('\n')
@@ -184,6 +198,7 @@ function localAnswer(input: {
 
 async function answerWithOpenAI(input: {
   ticker: string
+  market: MarketCode
   name: string | null
   analysisDate: string | null
   question: string
@@ -237,6 +252,7 @@ async function answerWithOpenAI(input: {
                 type: 'input_text',
                 text: JSON.stringify({
                   ticker: input.ticker,
+                  market: input.market,
                   name: input.name,
                   analysisDate: input.analysisDate,
                   question: input.question,
@@ -287,7 +303,8 @@ async function answerWithOpenAI(input: {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json().catch(() => null) as StockChatBody | null
-    const ticker = normalizeTicker(body?.ticker)
+    const market = normalizeMarket(typeof body?.market === 'string' ? body.market : null)
+    const ticker = normalizeTicker(body?.ticker, market)
     const question = typeof body?.message === 'string' ? body.message.trim() : ''
     if (!ticker) {
       return NextResponse.json({ error: 'ticker_required', message: '銘柄コードが必要です。' }, { status: 400 })
@@ -300,11 +317,11 @@ export async function POST(request: NextRequest) {
     }
 
     const analysisDate = normalizeDate(body?.analysisDate)
-    const fallbackName = findTicker(ticker)?.name ?? null
+    const fallbackName = market === 'JP' ? findTicker(ticker)?.name ?? null : null
     const name = typeof body?.name === 'string' && body.name.trim() ? body.name.trim().slice(0, 80) : fallbackName
     const history = normalizeHistory(body?.history)
-    const projections = await loadProjectionContext(ticker, analysisDate)
-    const answered = await answerWithOpenAI({ ticker, name, analysisDate, question, history, projections })
+    const projections = await loadProjectionContext(ticker, market, analysisDate)
+    const answered = await answerWithOpenAI({ ticker, market, name, analysisDate, question, history, projections })
 
     const response: StockChatResponse = {
       ok: true,
@@ -314,6 +331,7 @@ export async function POST(request: NextRequest) {
       openai: answered.openai,
       context: {
         ticker,
+        market,
         name,
         analysisDate,
         projections,

@@ -3,7 +3,7 @@
 // Daily safety net for JP ML freshness. It detects stale/partial serving data
 // against the latest price date and repairs only the missing lightweight pieces.
 
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { execAll, execGet, execRun } from '@/lib/db/client'
 import { ML_PHYSICS_FEATURE_SET } from '@/lib/backtest/ml-physics'
 import { acquireUpdateLock, getActiveUpdateLocks } from '@/lib/server/update-lock'
@@ -32,6 +32,11 @@ type LockRow = {
   heartbeat_at: number
 }
 
+type ProcessRow = {
+  pid: number
+  command: string
+}
+
 const JOB_TYPE = 'ml_freshness_guard'
 const BLOCKING_LOCKS = ['update_latest', 'post_ohlcv_refresh', 'ml_learning', 'us_update_latest']
 const MIN_COVERAGE_PCT = Number(process.env.ML_FRESHNESS_MIN_COVERAGE_PCT ?? 0.85)
@@ -39,6 +44,13 @@ const MIN_PHYSICS_CANDIDATES = Number(process.env.ML_FRESHNESS_MIN_PHYSICS_CANDI
 const DRY_RUN = process.env.DRY_RUN === '1'
 const REPAIR = process.env.ML_FRESHNESS_GUARD_REPAIR !== '0'
 const STALE_LOCK_MINUTES = envNumber('ML_FRESHNESS_STALE_LOCK_MINUTES', 30)
+const ACTIVE_ML_PROCESS_PATTERNS = [
+  'npm run batch:ml-',
+  'npm run batch:us-ml-',
+  'scripts/batch-ml-',
+  'scripts/run-ml-learning.ts',
+  'scripts/batch-physical-momentum',
+]
 
 function nowSeconds(): number {
   return Math.floor(Date.now() / 1000)
@@ -62,6 +74,24 @@ function pidExists(pid: number): boolean {
   } catch {
     return false
   }
+}
+
+function activeMlProcesses(): ProcessRow[] {
+  const result = spawnSync('ps', ['-axo', 'pid=,command='], { encoding: 'utf8' })
+  if (result.error || result.status !== 0) return []
+  return result.stdout
+    .split('\n')
+    .map((line) => {
+      const trimmed = line.trim()
+      const match = /^(\d+)\s+(.+)$/.exec(trimmed)
+      if (!match) return null
+      return { pid: Number(match[1]), command: match[2] }
+    })
+    .filter((row): row is ProcessRow => {
+      if (!row || row.pid === process.pid || row.command.includes('scripts/guard-ml-freshness.ts')) return false
+      if (!row.command.includes('stock-dashboard')) return false
+      return ACTIVE_ML_PROCESS_PATTERNS.some((pattern) => row.command.includes(pattern))
+    })
 }
 
 async function maxDate(sql: string, args: Array<string | number> = []): Promise<string | null> {
@@ -229,8 +259,10 @@ async function repair(checks: FreshnessCheck[]): Promise<string[]> {
     })
     actions.push('batch:ml-physics-features')
     await runRequired('batch:ml-physics-features', {
-      ML_PHYSICS_RECENT_DAYS: process.env.ML_PHYSICS_RECENT_DAYS ?? '260',
-      ML_PHYSICS_MIN_HISTORY_DAYS: process.env.ML_PHYSICS_MIN_HISTORY_DAYS ?? '220',
+      ML_PHYSICS_RECENT_DAYS: process.env.ML_PHYSICS_RECENT_DAYS ?? '1',
+      ML_PHYSICS_MIN_HISTORY_DAYS: process.env.ML_PHYSICS_MIN_HISTORY_DAYS ?? '1',
+      ML_PHYSICS_HISTORY_LOOKBACK_DAYS: process.env.ML_PHYSICS_HISTORY_LOOKBACK_DAYS ?? '520',
+      ML_PHYSICS_MISSING_ONLY_DATE: process.env.ML_PHYSICS_MISSING_ONLY_DATE ?? 'latest',
     })
   }
 
@@ -292,6 +324,14 @@ async function clearStaleLocalLocks(jobTypes: readonly string[]): Promise<string
   return cleared
 }
 
+async function clearStaleOwnLock(): Promise<string[]> {
+  const cleared = await clearStaleLocalLocks([JOB_TYPE])
+  if (cleared.length > 0) {
+    console.log(`[ml-freshness-guard] cleared stale own lock before acquire: ${cleared.join(', ')}`)
+  }
+  return cleared
+}
+
 async function recordRun(status: string, startedAt: number, actions: string[], errorSummary: string | null): Promise<void> {
   await execRun(
     `
@@ -325,6 +365,7 @@ async function main() {
   process.env.USE_LOCAL_DB = process.env.USE_LOCAL_DB ?? '1'
   process.env.SQLITE_BUSY_RETRIES = process.env.SQLITE_BUSY_RETRIES ?? '240'
   const startedAt = nowSeconds()
+  await clearStaleOwnLock()
   const lock = await acquireUpdateLock(JOB_TYPE, envNumber('ML_FRESHNESS_GUARD_LOCK_SECONDS', 6 * 60 * 60))
   if (!lock) {
     console.log('[ml-freshness-guard] skipped: guard lock is already active')
@@ -355,6 +396,17 @@ async function main() {
       const summary = activeLocks.map((row) => `${row.jobType}@${new Date(row.heartbeatAt * 1000).toISOString()}`).join(', ')
       console.log(`[ml-freshness-guard] skipped: active writer/ML locks observed: ${summary}`)
       await recordRun('success', startedAt, actions, `skipped: active locks ${summary}`)
+      return
+    }
+
+    const activeProcesses = activeMlProcesses()
+    if (activeProcesses.length > 0) {
+      const summary = activeProcesses
+        .slice(0, 5)
+        .map((row) => `${row.pid}:${row.command.slice(0, 140)}`)
+        .join(' | ')
+      console.log(`[ml-freshness-guard] skipped: active ML process observed: ${summary}`)
+      await recordRun('success', startedAt, actions, `skipped: active ML process ${summary}`)
       return
     }
 

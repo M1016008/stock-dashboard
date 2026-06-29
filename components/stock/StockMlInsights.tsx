@@ -109,9 +109,30 @@ function stageTags(code: string | null | undefined) {
   if (!code) return <span style={{ color: 'var(--text-muted)' }}>------</span>
   return (
     <span style={{ display: 'inline-flex', gap: 2, verticalAlign: 'middle' }}>
-      {code.split('').slice(0, 6).map((char, index) => (
-        <StageTag key={`${char}-${index}`} stage={Number(char)} size="xs" />
-      ))}
+      {code.split('').slice(0, 6).map((char, index) => {
+        const stage = Number(char)
+        return Number.isFinite(stage) && stage >= 1 && stage <= 6
+          ? <StageTag key={`${char}-${index}`} stage={stage} size="xs" />
+          : (
+            <span
+              key={`${char}-${index}`}
+              style={{
+                display: 'inline-grid',
+                placeItems: 'center',
+                width: 16,
+                height: 16,
+                borderRadius: 999,
+                border: '1px solid var(--border-subtle)',
+                color: 'var(--text-muted)',
+                background: 'white',
+                fontSize: 10,
+                fontWeight: 900,
+              }}
+            >
+              -
+            </span>
+          )
+      })}
     </span>
   )
 }
@@ -126,12 +147,21 @@ function similarityBand(score: number) {
       color: '#0f766e',
     }
   }
+  if (score >= 0.8) {
+    return {
+      label: '参考類似',
+      description: '80〜90%',
+      border: 'rgba(37, 99, 235, 0.24)',
+      background: 'rgba(37, 99, 235, 0.07)',
+      color: '#1d4ed8',
+    }
+  }
   return {
-    label: '参考類似',
-    description: '80〜90%',
-    border: 'rgba(37, 99, 235, 0.24)',
-    background: 'rgba(37, 99, 235, 0.07)',
-    color: '#1d4ed8',
+    label: '低確信の近似',
+    description: '55〜80%',
+    border: 'rgba(245, 158, 11, 0.3)',
+    background: 'rgba(245, 158, 11, 0.08)',
+    color: '#b45309',
   }
 }
 
@@ -153,19 +183,23 @@ function statusColor(status: string | null | undefined) {
   return 'var(--surface-muted)'
 }
 
-function mlReadingTone(direction: 'up' | 'down' | 'mixed' | 'none') {
+function mlReadingTone(direction: 'up' | 'down' | 'mixed' | 'neutral' | 'none') {
   if (direction === 'up') return { color: 'var(--price-up)', border: 'rgba(22, 163, 74, 0.3)', background: 'rgba(22, 163, 74, 0.06)' }
   if (direction === 'down') return { color: 'var(--price-down)', border: 'rgba(37, 99, 235, 0.3)', background: 'rgba(37, 99, 235, 0.06)' }
   if (direction === 'mixed') return { color: '#b45309', border: 'rgba(245, 158, 11, 0.32)', background: 'rgba(245, 158, 11, 0.08)' }
+  if (direction === 'neutral') return { color: '#64748b', border: 'rgba(100, 116, 139, 0.28)', background: 'rgba(100, 116, 139, 0.07)' }
   return { color: 'var(--text-secondary)', border: 'var(--border-subtle)', background: 'var(--surface-muted)' }
 }
 
 function buildMlReading(rows: SimilarInsight[], analysis: PhysicsAnalysis | null) {
   const strong = rows.filter((row) => row.similarityScore >= 0.9).length
+  const reference = rows.filter((row) => row.similarityScore >= 0.8 && row.similarityScore < 0.9).length
+  const weak = rows.filter((row) => row.similarityScore < 0.8).length
   const up = rows.filter((row) => row.similarDirection === 'up').length
   const down = rows.filter((row) => row.similarDirection === 'down').length
   const direction =
     rows.length === 0 ? 'none' :
+    up + down === 0 ? 'neutral' :
     up > down ? 'up' :
     down > up ? 'down' :
     'mixed'
@@ -174,24 +208,30 @@ function buildMlReading(rows: SimilarInsight[], analysis: PhysicsAnalysis | null
     direction === 'up' ? '類似形状は上方向寄り' :
     direction === 'down' ? '類似形状は下方向寄り' :
     direction === 'mixed' ? '類似形状は強弱混在' :
+    direction === 'neutral' ? '近い形状はあるが方向は未確定' :
     '類似形状は未検出'
   const agreement =
     !analysis ? '物理ステータス未取得' :
     direction === 'up' && ['上昇加速', '上昇継続', '押し目形成', '反発準備'].includes(analysis.physicsStatus) ? '物理ステータスとも整合' :
     direction === 'down' && ['失速警戒', '下落加速', '過熱注意'].includes(analysis.physicsStatus) ? '物理ステータスとも整合' :
     direction === 'mixed' ? '物理ステータスで最終確認' :
+    direction === 'neutral' ? '方向ラベル未付与' :
     '物理ステータスと差分あり'
   return {
     ...tone,
     label,
     details: [
       `強い類似 ${strong}件`,
+      `参考類似 ${reference}件`,
+      `低確信 ${weak}件`,
       `上昇寄り ${up}件`,
       `下落寄り ${down}件`,
       agreement,
     ],
     hint: rows.length > 0
-      ? 'まず90%以上の候補を優先し、次に物理ステータスと短期/中期/長期プランが同じ方向を示しているかを確認します。'
+      ? weak > 0 && strong + reference === 0
+        ? '強い類似はないため、候補は「形が少し近い」程度に留め、物理ステータス・支持線/抵抗線・短期/中期/長期プランを主判断にします。'
+        : 'まず90%以上の候補を優先し、次に物理ステータスと短期/中期/長期プランが同じ方向を示しているかを確認します。'
       : '現在は近い形状が少ないため、類似候補より6ステージと物理ステータスの確認を優先します。',
   }
 }
@@ -306,7 +346,7 @@ export function StockMlInsights({ ticker }: { ticker: string }) {
       </div>
       <p style={{ margin: '0 0 10px', fontSize: 12, fontWeight: 600, color: 'var(--text-muted)', lineHeight: 1.6 }}>
         最新データ上で、6桁ステージと5/25/75/200日MAの角度・距離感が近い銘柄です。
-        90%以上は強い類似、80〜90%は参考類似として表示します。
+        90%以上は強い類似、80〜90%は参考類似、80%未満は「低確信の近似」として慎重に表示します。
         {data?.featureAsOfDate ? ` ML特徴量基準日: ${data.featureAsOfDate}` : data?.asOfDate ? ` 基準日: ${data.asOfDate}` : ''}
       </p>
       <div style={{ display: 'grid', gap: 8 }}>
@@ -359,7 +399,7 @@ export function StockMlInsights({ ticker }: { ticker: string }) {
             fontWeight: 700,
             color: 'var(--text-muted)',
           }}>
-            類似度80%以上のML類似候補は現在ありません。ML特徴量が未生成、または十分に近いMA形状がない場合は表示しません。
+            ML類似候補は現在ありません。ML特徴量が未生成、または十分に近いMA形状がない場合は表示しません。
           </div>
         )}
         {data && rows.map((row) => {

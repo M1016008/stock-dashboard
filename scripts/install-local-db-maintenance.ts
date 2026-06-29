@@ -1,14 +1,14 @@
-// scripts/install-local-ml-learning.ts
+// scripts/install-local-db-maintenance.ts
 //
-// ローカルMacの launchd に、日次ML serving更新ジョブを登録する。
-// 重い全期間再学習は weekly governance に寄せ、ここでは最新特徴量・候補・予測・RL/物理状態を早朝に更新する。
+// Register a local launchd job for safe DB maintenance. The job is intentionally
+// conservative: it skips WAL truncation whenever another process has a DB open.
 
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-const label = 'com.stockboard.ml-learning'
+const label = 'com.stockboard.db-maintenance'
 const cwd = process.cwd()
 const home = os.homedir()
 const launchAgentsDir = path.join(home, 'Library', 'LaunchAgents')
@@ -23,8 +23,9 @@ const pathEnv = [
   '/usr/sbin',
   '/sbin',
 ].join(':')
-const scheduleHour = Number(process.env.ML_LEARNING_HOUR ?? '3')
-const scheduleMinute = Number(process.env.ML_LEARNING_MINUTE ?? '0')
+
+const scheduleHour = Number(process.env.DB_MAINT_HOUR ?? '10')
+const scheduleMinute = Number(process.env.DB_MAINT_MINUTE ?? '30')
 
 function xmlEscape(value: string): string {
   return value
@@ -45,10 +46,12 @@ function calendar(hour: number, minute: number, weekday: number): string {
   ].join('\n')
 }
 
-function weekdaySchedule(): string {
+function dailySchedule(): string {
   // launchd Weekday: 1=Monday ... 6=Saturday, 0/7=Sunday.
-  // Japanese exchange holidays are handled inside scripts/run-ml-learning.ts.
-  return [1, 2, 3, 4, 5].map((weekday) => calendar(scheduleHour, scheduleMinute, weekday)).join('\n')
+  // Run every day; the script itself skips unsafe checkpoints when writers/readers are active.
+  return [1, 2, 3, 4, 5, 6, 0]
+    .map((weekday) => calendar(scheduleHour, scheduleMinute, weekday))
+    .join('\n')
 }
 
 fs.mkdirSync(launchAgentsDir, { recursive: true })
@@ -58,9 +61,11 @@ const command = [
   `cd ${JSON.stringify(cwd)}`,
   `export PATH=${JSON.stringify(pathEnv)}`,
   'export USE_LOCAL_DB=1',
-  'export SQLITE_BUSY_RETRIES=240',
-  'export UPDATE_CHILD_TIMEOUT_MINUTES=1440',
-  'npm run batch:ml-learning-daily',
+  'export DB_MAINT_TARGETS=${DB_MAINT_TARGETS:-jp,us}',
+  'export DB_MAINT_CHECK_MODE=${DB_MAINT_CHECK_MODE:-smoke}',
+  'export DB_MAINT_STALE_BATCH_TTL_HOURS=${DB_MAINT_STALE_BATCH_TTL_HOURS:-6}',
+  `export US_ANALYTICS_DB_PATH=${JSON.stringify(process.env.US_ANALYTICS_DB_PATH?.trim() || '/Volumes/OWC Express 1M2 80G/stockboard-data/us/stockboard-us.db')}`,
+  'npm run db:maintenance',
 ].join(' && ')
 
 const plist = `<?xml version="1.0" encoding="UTF-8"?>
@@ -80,12 +85,12 @@ const plist = `<?xml version="1.0" encoding="UTF-8"?>
   </array>
   <key>StartCalendarInterval</key>
   <array>
-${weekdaySchedule()}
+${dailySchedule()}
   </array>
   <key>StandardOutPath</key>
-  <string>${xmlEscape(path.join(logDir, 'ml-learning.log'))}</string>
+  <string>${xmlEscape(path.join(logDir, 'db-maintenance.log'))}</string>
   <key>StandardErrorPath</key>
-  <string>${xmlEscape(path.join(logDir, 'ml-learning.err'))}</string>
+  <string>${xmlEscape(path.join(logDir, 'db-maintenance.err'))}</string>
   <key>RunAtLoad</key>
   <false/>
 </dict>
@@ -97,12 +102,12 @@ fs.writeFileSync(plistPath, plist)
 try {
   execFileSync('launchctl', ['bootout', `gui/${uid}`, plistPath], { stdio: 'ignore' })
 } catch {
-  // 未登録なら問題なし。
+  // Not registered yet.
 }
 
 execFileSync('launchctl', ['bootstrap', `gui/${uid}`, plistPath], { stdio: 'inherit' })
 execFileSync('launchctl', ['enable', `gui/${uid}/${label}`], { stdio: 'inherit' })
 
 console.log(`launchd registered: ${plistPath}`)
-console.log(`schedule: Mon-Fri ${String(scheduleHour).padStart(2, '0')}:${String(scheduleMinute).padStart(2, '0')} JST; JP exchange holidays are skipped by the wrapper`)
-console.log(`logs: ${path.join(logDir, 'ml-learning.log')}`)
+console.log(`schedule: daily ${String(scheduleHour).padStart(2, '0')}:${String(scheduleMinute).padStart(2, '0')} JST`)
+console.log(`logs: ${path.join(logDir, 'db-maintenance.log')}`)

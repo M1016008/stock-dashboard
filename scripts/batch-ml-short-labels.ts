@@ -14,6 +14,7 @@ const END_DATE = process.env.ML_SHORT_LABEL_END_DATE?.trim() || null
 const RECENT_DAYS = Number(process.env.ML_SHORT_LABEL_RECENT_DAYS ?? 0)
 const WRITE_RL_STATES = process.env.ML_SHORT_WRITE_RL_STATES !== '0'
 const DATE_CHUNK_DAYS = Number(process.env.ML_SHORT_LABEL_DATE_CHUNK_DAYS ?? 0)
+const SKIP_LABEL_SYNC = process.env.ML_SHORT_SKIP_LABEL_SYNC === '1'
 
 function horizonPlaceholders(): string {
   return HORIZONS.map(() => '?').join(', ')
@@ -177,7 +178,7 @@ async function main() {
     return
   }
 
-  if (DATE_CHUNK_DAYS > 0) {
+  if (DATE_CHUNK_DAYS > 0 && !SKIP_LABEL_SYNC) {
     if (WRITE_RL_STATES) {
       throw new Error('ML_SHORT_LABEL_DATE_CHUNK_DAYS currently requires ML_SHORT_WRITE_RL_STATES=0')
     }
@@ -204,7 +205,11 @@ async function main() {
   const effectiveStartDate = START_DATE ?? await recentStartDate()
   const effectiveEndDate = END_DATE
 
-  await syncLabelsForRange(effectiveStartDate, effectiveEndDate)
+  if (SKIP_LABEL_SYNC) {
+    console.log(`ml short labels: label sync skipped, using existing labels for horizons=${HORIZONS.join('/')}`)
+  } else {
+    await syncLabelsForRange(effectiveStartDate, effectiveEndDate)
+  }
 
   if (WRITE_RL_STATES) {
     const actions = [
@@ -235,15 +240,15 @@ async function main() {
         FROM ml_feature_vectors_v2 f
         INNER JOIN ml_short_labels l ON l.ticker = f.ticker AND l.date = f.date
         WHERE f.feature_set = ? AND l.horizon_days IN (${horizonPlaceholders()})
-          ${effectiveStartDate ? 'AND l.date >= ?' : ''}
-          ${effectiveEndDate ? 'AND l.date <= ?' : ''}
+          ${effectiveStartDate ? 'AND l.date >= ? AND f.date >= ?' : ''}
+          ${effectiveEndDate ? 'AND l.date <= ? AND f.date <= ?' : ''}
         `,
         [
           action,
           ML_PHYSICS_FEATURE_SET,
           ...HORIZONS,
-          ...(effectiveStartDate ? [effectiveStartDate] : []),
-          ...(effectiveEndDate ? [effectiveEndDate] : []),
+          ...(effectiveStartDate ? [effectiveStartDate, effectiveStartDate] : []),
+          ...(effectiveEndDate ? [effectiveEndDate, effectiveEndDate] : []),
         ],
       )
     }

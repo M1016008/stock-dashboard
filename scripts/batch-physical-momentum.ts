@@ -44,6 +44,8 @@ const MARKETS = (process.env.PMS_MARKETS ?? 'JP')
   .split(',')
   .map((value) => value.trim().toUpperCase())
   .filter(Boolean)
+const OUTPUT_MARKET = process.env.PMS_OUTPUT_MARKET?.trim().toUpperCase() || null
+const RUN_JOB_TYPE = process.env.PMS_RUN_JOB_TYPE?.trim() || 'physical_momentum'
 const TICKER_FILTER = new Set(
   (process.env.PMS_TICKERS ?? '')
     .split(',')
@@ -75,6 +77,17 @@ function dateDaysBefore(date: string, days: number): string {
   const d = new Date(`${date}T00:00:00Z`)
   d.setUTCDate(d.getUTCDate() - days)
   return d.toISOString().slice(0, 10)
+}
+
+function outputMarketFor(sourceMarket: Market): Market {
+  return OUTPUT_MARKET || sourceMarket
+}
+
+function logLabelFor(sourceMarket: Market): string {
+  const outputMarket = outputMarketFor(sourceMarket)
+  return outputMarket === sourceMarket
+    ? sourceMarket
+    : `${outputMarket} source=${sourceMarket}-compatible`
 }
 
 function sourceTable(market: Market): {
@@ -181,6 +194,8 @@ async function ensurePhysicalMomentumSchema(): Promise<void> {
   `)
   await execRun('CREATE INDEX IF NOT EXISTS physical_momentum_market_date_idx ON physical_momentum_metrics(market, date)')
   await execRun('CREATE INDEX IF NOT EXISTS physical_momentum_market_score_idx ON physical_momentum_metrics(market, date, physical_momentum_score)')
+  await execRun('CREATE INDEX IF NOT EXISTS physical_momentum_market_force_score_idx ON physical_momentum_metrics(market, date, physical_force_score)')
+  await execRun('CREATE INDEX IF NOT EXISTS physical_momentum_market_energy_score_idx ON physical_momentum_metrics(market, date, physical_energy_score)')
   await execRun('CREATE INDEX IF NOT EXISTS physical_momentum_symbol_date_idx ON physical_momentum_metrics(market, symbol, date)')
 }
 
@@ -189,9 +204,10 @@ async function startRun(): Promise<number | null> {
     const row = await execGet<{ id: number }>(
       `
         INSERT INTO batch_runs (job_type, started_at, status, total_tickers, succeeded, failed, rows_inserted)
-        VALUES ('physical_momentum', unixepoch(), 'running', 0, 0, 0, 0)
+        VALUES (?, unixepoch(), 'running', 0, 0, 0, 0)
         RETURNING id
       `,
+      [RUN_JOB_TYPE],
     )
     return row?.id ?? null
   } catch {
@@ -446,15 +462,17 @@ async function deleteExistingMetrics(market: Market, startDate: string, endDate:
 }
 
 async function processMarket(market: Market): Promise<{ totalTickers: number; succeeded: number; failed: number; rowsInserted: number }> {
+  const metricMarket = outputMarketFor(market)
+  const logLabel = logLabelFor(market)
   const latestDate = END_DATE ?? await latestDateForMarket(market)
   if (!latestDate) {
-    console.log(`[${market}] skipped: no OHLCV data`)
+    console.log(`[${logLabel}] skipped: no OHLCV data`)
     return { totalTickers: 0, succeeded: 0, failed: 0, rowsInserted: 0 }
   }
 
   const dates = await processingDatesForMarket(market, latestDate)
   if (dates.length === 0) {
-    console.log(`[${market}] skipped: no processing dates`)
+    console.log(`[${logLabel}] skipped: no processing dates`)
     return { totalTickers: 0, succeeded: 0, failed: 0, rowsInserted: 0 }
   }
 
@@ -463,9 +481,9 @@ async function processMarket(market: Market): Promise<{ totalTickers: number; su
   const warmupStartDate = RECENT_DAYS > 0 ? dateDaysBefore(startDate, 560) : null
   const tickers = await tickersForMarket(market, startDate, endDate)
 
-  console.log(`[${market}] ${tickers.length} symbols, ${dates.length} dates (${startDate} -> ${endDate})`)
+  console.log(`[${logLabel}] ${tickers.length} symbols, ${dates.length} dates (${startDate} -> ${endDate})`)
 
-  await deleteExistingMetrics(market, startDate, endDate, tickers)
+  await deleteExistingMetrics(metricMarket, startDate, endDate, tickers)
 
   let succeeded = 0
   let failed = 0
@@ -479,24 +497,24 @@ async function processMarket(market: Market): Promise<{ totalTickers: number; su
         .map((row) => ({ ...row, symbol }))
 
       if (rawRows.length > 0) {
-        await insertRawMetrics(market, rawRows)
+        await insertRawMetrics(metricMarket, rawRows)
         rowsInserted += rawRows.length
       }
       succeeded += 1
     } catch (error) {
       failed += 1
-      console.error(`[${market}] ${symbol} failed:`, error instanceof Error ? error.message : error)
+      console.error(`[${logLabel}] ${symbol} failed:`, error instanceof Error ? error.message : error)
     }
 
     if ((index + 1) % LOG_EVERY === 0) {
-      console.log(`[${market}] processed ${index + 1}/${tickers.length}, rows=${rowsInserted}`)
+      console.log(`[${logLabel}] processed ${index + 1}/${tickers.length}, rows=${rowsInserted}`)
     }
   }
 
   for (const [index, date] of dates.entries()) {
-    await normalizeMarketDate(market, date)
+    await normalizeMarketDate(metricMarket, date)
     if ((index + 1) % 50 === 0) {
-      console.log(`[${market}] normalized ${index + 1}/${dates.length} dates`)
+      console.log(`[${logLabel}] normalized ${index + 1}/${dates.length} dates`)
     }
   }
 
@@ -521,7 +539,7 @@ async function main(): Promise<void> {
     }
 
     await finishRun(runId, 'success', { totalTickers, succeeded, failed, rowsInserted })
-    console.log(`Physical momentum complete: markets=${MARKETS.join(',')}, tickers=${totalTickers}, rows=${rowsInserted}, failed=${failed}`)
+    console.log(`Physical momentum complete: source_markets=${MARKETS.join(',')}, output_market=${OUTPUT_MARKET ?? 'source'}, tickers=${totalTickers}, rows=${rowsInserted}, failed=${failed}`)
   } catch (error) {
     await finishRun(runId, 'failed', {
       totalTickers,
@@ -534,7 +552,9 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((error) => {
-  console.error('Fatal:', error)
-  process.exit(1)
-})
+main()
+  .then(() => process.exit(0))
+  .catch((error) => {
+    console.error('Fatal:', error)
+    process.exit(1)
+  })

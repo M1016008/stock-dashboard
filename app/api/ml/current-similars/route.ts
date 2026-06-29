@@ -5,7 +5,7 @@ import type { MlFeatureProfile } from '@/lib/backtest/ml'
 import { ML_PHYSICS_FEATURE_SET } from '@/lib/backtest/ml-physics'
 import { buildChartWindowWithMa, type OhlcvPoint, type StagePoint } from '@/lib/backtest/detail-analysis'
 import { physicsSimilarity } from '@/lib/ml/physics-similarity'
-import { MIN_DISPLAY_SIMILARITY_SCORE } from '@/lib/ml/similarity-threshold'
+import { LOW_CONFIDENCE_SIMILARITY_SCORE, MIN_DISPLAY_SIMILARITY_SCORE } from '@/lib/ml/similarity-threshold'
 import { analyzePhysicsProfile } from '@/lib/ml/physics-analysis'
 
 export const dynamic = 'force-dynamic'
@@ -626,7 +626,10 @@ export async function GET(request: NextRequest) {
       featureAsOfDate: fallback?.context?.asOfDate ?? baseProfile?.asOfDate ?? finalResult.asOfDate,
       ticker,
       physicsAnalysis,
-      minSimilarityScore: MIN_DISPLAY_SIMILARITY_SCORE,
+      minSimilarityScore: finalResult.rows.some((row) => Number(row.similarityScore) < MIN_DISPLAY_SIMILARITY_SCORE)
+        ? LOW_CONFIDENCE_SIMILARITY_SCORE
+        : MIN_DISPLAY_SIMILARITY_SCORE,
+      referenceSimilarityScore: MIN_DISPLAY_SIMILARITY_SCORE,
       count: finalResult.rows.length,
       similars: finalResult.rows,
       caseStudies,

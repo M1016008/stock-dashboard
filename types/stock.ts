@@ -7,6 +7,10 @@ export interface StockQuote {
   change: number;
   changePercent: number;
   volume: number;
+  priceDate?: string;
+  previousPriceDate?: string;
+  priceQualityWarning?: string;
+  isPriceDiscontinuous?: boolean;
   marketCap?: number;
   currency: 'JPY' | 'USD';
   fiftyTwoWeekHigh?: number;

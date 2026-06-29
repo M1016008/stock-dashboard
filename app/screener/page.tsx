@@ -219,6 +219,13 @@ function initialSortState(searchParams: ReturnType<typeof useSearchParams>): Sor
   return { key: 'marketCap', dir: 'desc' }
 }
 
+function parseUrlLimit(value: string | null): number | null {
+  if (!value) return null
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed) || parsed <= 0) return null
+  return Math.min(5000, Math.max(1, Math.floor(parsed)))
+}
+
 interface AvailableDate {
   date: string
   tickers: number
@@ -228,6 +235,7 @@ export default function ScreenerPage() {
   const searchParams = useSearchParams()
   const activeUniverse = parseUniverseFilter(searchParams.get(UNIVERSE_FILTER_PARAM))
   const activeUniverseMeta = getUniverseFilterMeta(activeUniverse)
+  const requestedLimit = parseUrlLimit(searchParams.get('limit'))
   const [stages, setStages] = useState<Partial<Record<AxisKey, number[]>>>({})
   const [results, setResults] = useState<StockRow[]>([])
   const [loading, setLoading] = useState(false)
@@ -291,6 +299,7 @@ export default function ScreenerPage() {
     if (forcePositive) params.set('forcePositive', '1')
     if (stage23Candidate) params.set('stage23Candidate', '1')
     if (pmsTrend) params.set('pmsTrend', pmsTrend)
+    if (requestedLimit != null) params.set('limit', String(requestedLimit))
     params.set('physicalStatusHorizon', String(selectedPhysicalStatusHorizon))
     for (const [k, v] of Object.entries(stages)) {
       if (v && v.length > 0) params.set(k, v.join(','))
@@ -315,7 +324,7 @@ export default function ScreenerPage() {
         }
       })
     return () => { cancelled = true }
-  }, [stages, selectedDate, activeUniverse, pmsMin, pfsMin, pesMin, accelerationPositive, forcePositive, stage23Candidate, pmsTrend, selectedPhysicalStatusHorizon])
+  }, [stages, selectedDate, activeUniverse, pmsMin, pfsMin, pesMin, accelerationPositive, forcePositive, stage23Candidate, pmsTrend, selectedPhysicalStatusHorizon, requestedLimit])
 
   const filterText = useMemo(() => {
     const parts: string[] = []
@@ -421,7 +430,8 @@ export default function ScreenerPage() {
     })
     return copy
   }, [filteredResults, sort, referenceDate, tradingDates])
-  const displayedResults = useMemo(() => sortedResults.slice(0, 500), [sortedResults])
+  const displayLimit = requestedLimit ?? 500
+  const displayedResults = useMemo(() => sortedResults.slice(0, Math.min(500, displayLimit)), [sortedResults, displayLimit])
   const marketCapCoverage = useMemo(() => {
     const calculated = filteredResults.filter((r) => r.marketCap != null && r.marketCap > 0).length
     const notApplicable = filteredResults.filter((r) => r.marketCapStatus === 'not_applicable').length

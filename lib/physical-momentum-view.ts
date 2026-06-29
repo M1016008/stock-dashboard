@@ -23,6 +23,7 @@ export interface PhysicalMomentumView {
   stance: string
   summary: string
   primaryAction: string
+  shortAction: string
   avoid: string
   risk: string
   badges: string[]
@@ -66,9 +67,10 @@ export function buildPhysicalMomentumView(input: PhysicalMomentumViewInput): Phy
   let tone: PhysicalMomentumTone = 'neutral'
   let label = '方向待ち'
   let stance = '決め打ちせず、力の向きが揃うまで待つ'
-  let summary = 'PMSは単独では売買判断にしません。PFS、PES、MA力場の向きが同じ方向へ揃うかを確認します。'
+  let summary = 'PMSは上昇予測ではなく、直近20営業日の方向と値幅・出来高を合成した状態量です。足元の向きはPFS、過熱感はPESで分けて確認します。'
   let primaryAction = '終値が短期線のどちら側で安定するか、PFSが上下どちらへ傾くかを待ちます。'
-  let avoid = 'PMSだけを見て高値追い/安値拾いを決めないでください。'
+  let shortAction = '空売りは急がず、短期線割れとPFSマイナス拡大が揃うまで待ちます。'
+  let avoid = 'PMSが高いだけで高値追い、PMSが低いだけで安値拾いを決めないでください。'
   let risk = '方向感が弱いときは、短期の上下振れで判断がぶれやすい状態です。'
 
   if (strongPms && forceUp && !trendDown) {
@@ -77,14 +79,25 @@ export function buildPhysicalMomentumView(input: PhysicalMomentumViewInput): Phy
     stance = '押し目が浅いなら継続監視'
     summary = '総合の力と短期の力が同じ上方向です。次はこの力がMA力場の長期側へ伝わるかを見ます。'
     primaryAction = '高値更新時にPFSが落ちず、5MA/25MA上で終値が残るかを確認します。'
+    shortAction = '空売りは優先しません。高値更新失敗、5MA割れ、PFSマイナス化が揃ってから候補にします。'
     avoid = highEnergy ? '熱量が高いため、上髭や急なPFS低下が出た高値追いは避けます。' : '出来高やPFSが伴わない上抜けだけで追いかけないでください。'
     risk = highEnergy ? '強さと同時に過熱もあります。PESが急低下すると反落に変わりやすいです。' : 'PFSがマイナス化すると、上方向の力が一時的に途切れます。'
+  } else if (strongPms && highEnergy && forceDown) {
+    tone = 'warning'
+    label = '急伸後の失速警戒'
+    stance = '新規追いかけは避け、支持線確認'
+    summary = 'PMSの高さは直近20営業日の大きな上昇と熱量の名残です。一方でPFSは下向きなので、いま強いというより「大きく動いた後に力が抜け始めた」状態です。'
+    primaryAction = '直近安値、5MA/25MA、前回出来高急増日の終値付近で下げ止まるかを確認します。PFSがプラスへ戻るまで追撃は控えめです。'
+    shortAction = '支持線や25MAを終値で割り、PFSマイナスが続くなら空売り候補。5MA回復なら売り目線は弱めます。'
+    avoid = 'PMS上位だけを理由に買い増ししないでください。PESが高い局面は、反対方向へ振れた時の値幅も大きくなります。'
+    risk = '支持線を割ってPFS低下が続くと、急伸分の巻き戻しが起きやすいです。'
   } else if (strongPms && (forceDown || trendDown)) {
     tone = 'warning'
     label = '強いが短期冷却'
     stance = '追わずに下げ止まり待ち'
-    summary = '総合の強さは残っていますが、短期の力は低下しています。上昇トレンドの押し目か、過熱終了かの分岐です。'
+    summary = '直近20営業日ベースの勢いは残っていますが、短期の力は低下しています。上昇トレンドの押し目か、過熱終了かの分岐です。'
     primaryAction = '5MA/25MA付近で下げ止まり、PFSが再びプラスへ戻るかを確認します。'
+    shortAction = '25MA割れ後に戻りが弱く、PFS低下が続くなら空売り候補。25MA回復なら見送ります。'
     avoid = 'PMSが高いだけで高値追いしないでください。短期の力が戻る前の買い増しは慎重です。'
     risk = 'PFS低下が続くと、強い銘柄でも短期の反落が深くなります。'
   } else if (weakPms && forceDown) {
@@ -93,6 +106,7 @@ export function buildPhysicalMomentumView(input: PhysicalMomentumViewInput): Phy
     stance = '反発買いより戻りの弱さを確認'
     summary = '総合の力も短期の力も下方向です。反発を取りに行くより、下向きの力が止まる証拠を優先します。'
     primaryAction = '25MA回復、PFSのマイナス縮小、安値切り上げが揃うまで待ちます。'
+    shortAction = '戻りが25MA/75MAで止まり、PFSマイナスが再拡大するなら空売り候補です。'
     avoid = '値ごろ感だけの逆張りは避けます。戻りが弱い場合は下落継続を優先します。'
     risk = '下方向の力が長期側へ拡散すると、反発が一時的になりやすいです。'
   } else if (weakPms && forceUp) {
@@ -101,6 +115,7 @@ export function buildPhysicalMomentumView(input: PhysicalMomentumViewInput): Phy
     stance = '小さく観察、反転確認待ち'
     summary = '総合ではまだ弱い一方、短期の力は戻り始めています。下落途中の一時反発か、本格反転かを分けて見ます。'
     primaryAction = 'PFSプラスが続き、PMSが改善方向へ転じるかを確認します。'
+    shortAction = '空売りは戻り待ち。25MA/75MAで反発が止まり、PFSが再びマイナス化するかを見ます。'
     avoid = 'PMSが弱いままの大きな買いは避けます。反発初期は失速しやすいです。'
     risk = '25MAや75MA付近で戻りが止まると、再び下方向へ傾きやすいです。'
   } else if (!weakPms && !strongPms && forceUp) {
@@ -109,6 +124,7 @@ export function buildPhysicalMomentumView(input: PhysicalMomentumViewInput): Phy
     stance = '候補として監視'
     summary = '総合の力はまだ中立ですが、短期の力が先に上向いています。初動候補として、PMSへの波及を待つ局面です。'
     primaryAction = 'PFSプラスが続き、PMSが0から+側へ抜けるかを確認します。'
+    shortAction = '空売りは優先しません。PFS失速、短期線割れ、安値割れが揃えば売り目線に切り替えます。'
     avoid = '初動だけで大きく張らず、6ステージ改善やMA力場の上向き化を待ちます。'
     risk = 'PFSだけの一過性反発なら、数日で失速しやすいです。'
   } else if (!weakPms && !strongPms && forceDown) {
@@ -117,6 +133,7 @@ export function buildPhysicalMomentumView(input: PhysicalMomentumViewInput): Phy
     stance = '買い急がず様子見'
     summary = '総合の力は中立ですが、短期の力は下向きです。上昇よりも失速・下抜けの確認を優先します。'
     primaryAction = 'PFSのマイナス縮小、終値の短期線回復、出来高を伴う反発を待ちます。'
+    shortAction = '短期線回復に失敗し、直近安値を終値で割るなら空売り候補として見ます。'
     avoid = '下向きの力が残る間は、反発一本で追いかけないでください。'
     risk = '中立圏から下方向へPMSが崩れると、弱含みへ移行します。'
   } else if (highEnergy) {
@@ -125,6 +142,7 @@ export function buildPhysicalMomentumView(input: PhysicalMomentumViewInput): Phy
     stance = '上下どちらへ熱量が出るか確認'
     summary = '値動きの熱量はありますが、PMS/PFSの方向が明確ではありません。抜け方向を確認してから判断します。'
     primaryAction = '上抜けならPFS維持、下抜けならPFSマイナス拡大を確認します。'
+    shortAction = 'レンジ下抜けとPFSマイナス拡大が揃うなら空売り候補。レンジ内は急がないで見ます。'
     avoid = '方向がない高ボラだけで売買判断しないでください。'
     risk = '熱量があるため、反対方向へ動いたときの振れ幅も大きくなりやすいです。'
   } else if (lowEnergy) {
@@ -133,6 +151,7 @@ export function buildPhysicalMomentumView(input: PhysicalMomentumViewInput): Phy
     stance = '材料待ち'
     summary = '値動きの熱量が不足しています。反転やブレイクには、PFSと出来高の改善が必要です。'
     primaryAction = '出来高増加、PFS改善、MA力場の拡散方向を待ちます。'
+    shortAction = '空売りも急ぎません。出来高増を伴う安値割れまで待ちます。'
     avoid = '動きが乏しい状態で無理に方向を決めないでください。'
     risk = '薄い反発や小幅な下げは、だましになりやすいです。'
   }
@@ -147,12 +166,13 @@ export function buildPhysicalMomentumView(input: PhysicalMomentumViewInput): Phy
     risk = '長期側には上向きの力が残ります。売り方向は反発リスクも確認してください。'
   } else if (fieldCompression) {
     primaryAction = `${primaryAction} 併せて、収縮後に上/下どちらへ力場が拡散するかを見ます。`
+    shortAction = `${shortAction} 収縮後に下方向へ拡散するかも確認します。`
   }
 
   const badges = [
-    `PMS ${fmtScore(pms)}`,
-    `PFS ${fmtScore(pfs)}`,
-    `PES ${fmtScore(pes)}`,
+    `PMS累積 ${fmtScore(pms)}`,
+    `PFS足元 ${fmtScore(pfs)}`,
+    `PES熱量 ${fmtScore(pes)}`,
     trendUp ? 'PMS改善中' : trendDown ? 'PMS低下中' : trend === 'flat' ? 'PMS横ばい' : null,
     rankBadge(input.rank, input.total),
     fieldLabel || null,
@@ -160,10 +180,11 @@ export function buildPhysicalMomentumView(input: PhysicalMomentumViewInput): Phy
 
   const checks: PhysicalMomentumCheck[] = [
     { label: '今の姿勢', text: stance, tone },
-    { label: '確認条件', text: primaryAction, tone },
+    { label: '買い目線', text: primaryAction, tone },
+    { label: '空売り目線', text: shortAction, tone: tone === 'up' ? 'neutral' : tone === 'neutral' ? 'warning' : 'down' },
     { label: '避けること', text: avoid, tone: tone === 'down' ? 'down' : 'warning' },
     { label: 'リスク', text: risk, tone: tone === 'up' ? 'warning' : tone },
   ]
 
-  return { tone, label, stance, summary, primaryAction, avoid, risk, badges, checks }
+  return { tone, label, stance, summary, primaryAction, shortAction, avoid, risk, badges, checks }
 }

@@ -4,7 +4,7 @@
 
 import { execRun } from '@/lib/db/client'
 
-const HORIZONS = (process.env.ML_HORIZONS ?? '20,40,60,90')
+const HORIZONS = (process.env.ML_HORIZONS ?? '5,10,20,40,60,90')
   .split(',')
   .map((value) => Number(value.trim()))
   .filter((value) => Number.isFinite(value) && value > 0)

@@ -63,6 +63,7 @@ async function models(): Promise<Map<MlDirection, ModelRow>> {
     SELECT model_name, direction, horizon_days, weights_json, intercept
     FROM ml_models
     WHERE horizon_days = ?
+      AND model_type = 'logistic_regression_v1'
     ORDER BY trained_at DESC
     `,
     [HORIZON],

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
+import type { MarketCode } from '@/lib/markets'
 import type { StockQuote } from '@/types/stock'
 import type {
   TradeScenario,
@@ -19,6 +20,7 @@ interface DateRange {
 interface TradeScenarioNotebookProps {
   ticker: string
   name: string
+  market?: MarketCode
   quote: StockQuote | null
   selectedRange: DateRange | null
   context?: Record<string, string | null | undefined>
@@ -66,8 +68,9 @@ function initialForm(price: number | null | undefined): ScenarioFormState {
   }
 }
 
-function fmtYen(value: number | null | undefined): string {
+function fmtMoney(value: number | null | undefined, market: MarketCode = 'JP'): string {
   if (value == null || !Number.isFinite(value)) return '-'
+  if (market === 'US') return `$${value.toLocaleString('en-US', { maximumFractionDigits: 2 })}`
   return `${value.toLocaleString('ja-JP', { maximumFractionDigits: 1 })}円`
 }
 
@@ -101,6 +104,7 @@ function riskRewardText(form: ScenarioFormState): string {
 export function TradeScenarioNotebook({
   ticker,
   name,
+  market = 'JP',
   quote,
   selectedRange,
   context,
@@ -115,21 +119,22 @@ export function TradeScenarioNotebook({
 
   const hasSelectedRange = Boolean(selectedRange?.startDate && selectedRange?.endDate)
   const contextItems = useMemo(() => [
+    `市場: ${market === 'US' ? '米国株' : '日本株'}`,
     context?.marketSegment ? `市場: ${context.marketSegment}` : null,
     context?.marginType ? `信用区分: ${context.marginType}` : null,
     context?.sector17 ? `17業種: ${context.sector17}` : null,
     hasSelectedRange && selectedRange ? `根拠範囲: ${selectedRange.startDate} → ${selectedRange.endDate}` : null,
-  ].filter(Boolean) as string[], [context, hasSelectedRange, selectedRange])
+  ].filter(Boolean) as string[], [context, hasSelectedRange, selectedRange, market])
 
   const reload = useCallback(async () => {
-    const res = await fetch(`/api/trade/scenarios?ticker=${encodeURIComponent(ticker)}&market=JP`, { cache: 'no-store' })
+    const res = await fetch(`/api/trade/scenarios?ticker=${encodeURIComponent(ticker)}&market=${encodeURIComponent(market)}`, { cache: 'no-store' })
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const payload = await res.json()
     setScenarios(payload.scenarios ?? [])
     const drafts: Record<string, string> = {}
     for (const scenario of payload.scenarios ?? []) drafts[scenario.id] = scenario.reviewMemo ?? ''
     setReviewDrafts(drafts)
-  }, [ticker])
+  }, [ticker, market])
 
   useEffect(() => {
     if (!quote?.price) return
@@ -152,13 +157,13 @@ export function TradeScenarioNotebook({
   useEffect(() => {
     function onScenarioSaved(event: Event) {
       const detail = (event as CustomEvent<{ ticker?: string; market?: string }>).detail
-      if (detail?.market && detail.market !== 'JP') return
+      if (detail?.market && detail.market !== market) return
       if (detail?.ticker && detail.ticker !== ticker) return
       reload().catch((e) => setError((e as Error).message))
     }
     window.addEventListener('trade-scenario-saved', onScenarioSaved)
     return () => window.removeEventListener('trade-scenario-saved', onScenarioSaved)
-  }, [reload, ticker])
+  }, [reload, ticker, market])
 
   function setDirection(direction: TradeScenarioDirection) {
     setForm((prev) => {
@@ -194,7 +199,7 @@ export function TradeScenarioNotebook({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ticker,
-          market: 'JP',
+          market,
           name,
           direction: form.direction,
           confidence: form.confidence,
@@ -365,6 +370,7 @@ export function TradeScenarioNotebook({
                 <ScenarioCard
                   key={scenario.id}
                   scenario={scenario}
+                  market={market}
                   reviewValue={reviewDrafts[scenario.id] ?? ''}
                   onReviewChange={(value) => setReviewDrafts((prev) => ({ ...prev, [scenario.id]: value }))}
                   onSaveReview={() => updateScenario(scenario.id, { status: 'reviewed', reviewMemo: reviewDrafts[scenario.id] ?? '' })}
@@ -390,12 +396,14 @@ function Label({ label, children }: { label: string; children: ReactNode }) {
 
 function ScenarioCard({
   scenario,
+  market,
   reviewValue,
   onReviewChange,
   onSaveReview,
   onArchive,
 }: {
   scenario: TradeScenario
+  market: MarketCode
   reviewValue: string
   onReviewChange: (value: string) => void
   onSaveReview: () => void
@@ -416,16 +424,16 @@ function ScenarioCard({
       </div>
 
       <div style={scenarioMetricGridStyle}>
-        <Metric label="基準終値" value={fmtYen(scenario.anchorClose)} />
+        <Metric label="基準終値" value={fmtMoney(scenario.anchorClose, market)} />
         <Metric label="最大上昇" value={fmtPct(outcome.maxRisePct)} tone={outcome.maxRisePct} />
         <Metric label="最大下落" value={fmtPct(outcome.maxDrawdownPct)} tone={outcome.maxDrawdownPct} />
         <Metric label="終値変化" value={fmtPct(outcome.endReturnPct)} tone={outcome.endReturnPct} />
       </div>
 
       <div style={scenarioPlanStyle}>
-        <span>想定 {fmtYen(scenario.entryPlanPrice)}</span>
-        <span>目標 {fmtYen(scenario.targetPrice)}</span>
-        <span>撤退 {fmtYen(scenario.stopLossPrice)}</span>
+        <span>想定 {fmtMoney(scenario.entryPlanPrice, market)}</span>
+        <span>目標 {fmtMoney(scenario.targetPrice, market)}</span>
+        <span>撤退 {fmtMoney(scenario.stopLossPrice, market)}</span>
       </div>
 
       <p style={scenarioNoteStyle}>{outcome.note}</p>

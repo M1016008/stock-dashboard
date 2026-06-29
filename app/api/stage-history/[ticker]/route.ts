@@ -6,9 +6,10 @@
 // Yahoo の `getHistory` も `buildMaValuesFromOhlcv` も不要。
 
 import { NextRequest, NextResponse } from 'next/server'
-import { db } from '@/lib/db/client'
+import { db, execAll } from '@/lib/db/client'
 import { dailySnapshots, ohlcvDaily } from '@/lib/db/schema'
 import { getActiveSegmentStart, REQUIRED_ACTIVE_DAYS, stageWithEnoughHistory } from '@/lib/snapshots/continuous-ma'
+import { normalizeMarket, normalizeTickerForMarket } from '@/lib/markets'
 import { asc, eq } from 'drizzle-orm'
 
 export const dynamic = 'force-dynamic'
@@ -39,7 +40,27 @@ interface StageHistoryEntry {
 }
 
 type Granularity = 'daily' | 'weekly' | 'monthly'
-type SnapshotRow = typeof dailySnapshots.$inferSelect
+type SnapshotRow = Pick<typeof dailySnapshots.$inferSelect,
+  | 'date'
+  | 'ma_5'
+  | 'ma_25'
+  | 'ma_75'
+  | 'ma_300'
+  | 'weekly_ma_5'
+  | 'weekly_ma_13'
+  | 'weekly_ma_25'
+  | 'monthly_ma_3'
+  | 'monthly_ma_5'
+  | 'monthly_ma_10'
+  | 'monthly_ma_20'
+  | 'monthly_ma_25'
+  | 'daily_a_stage'
+  | 'daily_b_stage'
+  | 'weekly_a_stage'
+  | 'weekly_b_stage'
+  | 'monthly_a_stage'
+  | 'monthly_b_stage'
+>
 
 const GRANULARITIES = new Set<Granularity>(['daily', 'weekly', 'monthly'])
 const DEFAULT_COUNTS: Record<Granularity, number> = {
@@ -127,8 +148,9 @@ export async function GET(
 ) {
   try {
     const { ticker: rawTicker } = await params
-    const ticker = decodeURIComponent(rawTicker).replace(/\.T$/i, '')
     const { searchParams } = new URL(request.url)
+    const market = normalizeMarket(searchParams.get('market'))
+    const ticker = normalizeTickerForMarket(rawTicker, market)
     const granularity = parseGranularity(searchParams.get('granularity'))
     const rawStartDate = searchParams.get('startDate')
     const rawEndDate = searchParams.get('endDate')
@@ -149,11 +171,61 @@ export async function GET(
     )
 
     // 該当銘柄の snapshot を日付昇順で全件取得
-    const all = await db
-      .select()
-      .from(dailySnapshots)
-      .where(eq(dailySnapshots.ticker, ticker))
-      .orderBy(asc(dailySnapshots.date))
+    const all: SnapshotRow[] = market === 'US'
+      ? await execAll<SnapshotRow>(
+        `
+          SELECT
+            date,
+            ma_5,
+            ma_25,
+            ma_75,
+            ma_300,
+            weekly_ma_5,
+            weekly_ma_13,
+            weekly_ma_25,
+            monthly_ma_3,
+            monthly_ma_5,
+            monthly_ma_10,
+            monthly_ma_20,
+            monthly_ma_25,
+            daily_a_stage,
+            daily_b_stage,
+            weekly_a_stage,
+            weekly_b_stage,
+            monthly_a_stage,
+            monthly_b_stage
+          FROM market_daily_snapshots
+          WHERE market = 'US'
+            AND ticker = ?
+          ORDER BY date
+        `,
+        [ticker],
+      )
+      : await db
+        .select({
+          date: dailySnapshots.date,
+          ma_5: dailySnapshots.ma_5,
+          ma_25: dailySnapshots.ma_25,
+          ma_75: dailySnapshots.ma_75,
+          ma_300: dailySnapshots.ma_300,
+          weekly_ma_5: dailySnapshots.weekly_ma_5,
+          weekly_ma_13: dailySnapshots.weekly_ma_13,
+          weekly_ma_25: dailySnapshots.weekly_ma_25,
+          monthly_ma_3: dailySnapshots.monthly_ma_3,
+          monthly_ma_5: dailySnapshots.monthly_ma_5,
+          monthly_ma_10: dailySnapshots.monthly_ma_10,
+          monthly_ma_20: dailySnapshots.monthly_ma_20,
+          monthly_ma_25: dailySnapshots.monthly_ma_25,
+          daily_a_stage: dailySnapshots.daily_a_stage,
+          daily_b_stage: dailySnapshots.daily_b_stage,
+          weekly_a_stage: dailySnapshots.weekly_a_stage,
+          weekly_b_stage: dailySnapshots.weekly_b_stage,
+          monthly_a_stage: dailySnapshots.monthly_a_stage,
+          monthly_b_stage: dailySnapshots.monthly_b_stage,
+        })
+        .from(dailySnapshots)
+        .where(eq(dailySnapshots.ticker, ticker))
+        .orderBy(asc(dailySnapshots.date))
 
     if (all.length === 0) {
       return NextResponse.json({ ticker, history: [], total: 0 })
@@ -161,11 +233,22 @@ export async function GET(
 
     // コード再利用・再上場などで長い空白がある銘柄は、直近の連続データだけで表示する。
     // 例: 5016 は 2010 年から 2025 年まで大きなギャップがあり、旧データを混ぜると長期MAが過大に埋まる。
-    const priceRows = await db
-      .select({ date: ohlcvDaily.date, close: ohlcvDaily.close })
-      .from(ohlcvDaily)
-      .where(eq(ohlcvDaily.ticker, ticker))
-      .orderBy(asc(ohlcvDaily.date))
+    const priceRows = market === 'US'
+      ? await execAll<{ date: string; close: number }>(
+        `
+          SELECT date, close
+          FROM market_ohlcv_daily
+          WHERE market = 'US'
+            AND ticker = ?
+          ORDER BY date
+        `,
+        [ticker],
+      )
+      : await db
+        .select({ date: ohlcvDaily.date, close: ohlcvDaily.close })
+        .from(ohlcvDaily)
+        .where(eq(ohlcvDaily.ticker, ticker))
+        .orderBy(asc(ohlcvDaily.date))
 
     const priceDates = priceRows.map((row) => ({ date: row.date }))
     const closeByDate = new Map(priceRows.map((row) => [row.date, row.close]))
@@ -198,6 +281,7 @@ export async function GET(
 
     return NextResponse.json({
       ticker,
+      market,
       history: entries,
       total: entries.length,
       granularity,

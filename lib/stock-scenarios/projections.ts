@@ -1,9 +1,18 @@
 import { execAll, execGet } from '@/lib/db/client'
+import { execUsAnalyticsAll, execUsAnalyticsGet, hasUsAnalyticsDb } from '@/lib/db/us-analytics'
 import { ML_PHYSICS_FEATURE_SET } from '@/lib/backtest/ml-physics'
 import { analyzePhysicsProfile, type PhysicsAnalysis, type PhysicsStatus } from '@/lib/ml/physics-analysis'
+import { normalizeMarket, type MarketCode } from '@/lib/markets'
+import {
+  defaultMaLinesForInterval,
+  intervalToSpec,
+  parseInterval,
+  resampleOhlcv,
+  type ChartIntervalCode,
+} from '@/lib/timeframes'
 import type { OHLCV } from '@/types/stock'
 
-export type ScenarioInterval = 'D' | 'W' | 'M'
+export type ScenarioInterval = ChartIntervalCode
 export type ProjectionDirection = 'up' | 'down' | 'range'
 export type ProjectionScenarioType =
   | 'continuation'
@@ -133,10 +142,11 @@ type PhysicsCandidateRow = {
 
 const DEFAULT_LIMIT = 8
 const MAX_LIMIT = 8
-const MA_PERIODS = [5, 25, 75, 200] as const
+const SCENARIO_STATS_MA_PERIODS = [5, 25, 75, 200] as const
 
-function normalizeTicker(value: string): string {
-  return value.trim().toUpperCase().replace(/\.T$/i, '')
+function normalizeTicker(value: string, market: MarketCode = 'JP'): string {
+  const cleaned = value.trim().toUpperCase()
+  return market === 'JP' ? cleaned.replace(/\.T$/i, '') : cleaned.replace(/\s+/g, '')
 }
 
 function finite(value: unknown): value is number {
@@ -352,35 +362,7 @@ function toOhlcv(row: RawOhlcvRow): OHLCV {
 }
 
 function aggregateOhlcv(rows: OHLCV[], interval: ScenarioInterval): OHLCV[] {
-  if (interval === 'D') return rows
-  const grouped: OHLCV[] = []
-  let currentKey: string | null = null
-  let current: OHLCV | null = null
-  for (const row of rows) {
-    const key = interval === 'W' ? weekKey(row.date) : row.date.slice(0, 7)
-    if (key !== currentKey) {
-      if (current) grouped.push(current)
-      currentKey = key
-      current = { ...row }
-    } else if (current) {
-      current.high = Math.max(current.high, row.high)
-      current.low = Math.min(current.low, row.low)
-      current.close = row.close
-      current.volume += row.volume
-      current.date = row.date
-    }
-  }
-  if (current) grouped.push(current)
-  return grouped
-}
-
-function weekKey(date: string): string {
-  const d = new Date(`${date}T00:00:00Z`)
-  const day = d.getUTCDay() || 7
-  d.setUTCDate(d.getUTCDate() + 4 - day)
-  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1))
-  const weekNo = Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7)
-  return `${d.getUTCFullYear()}-${String(weekNo).padStart(2, '0')}`
+  return resampleOhlcv(rows, intervalToSpec(interval))
 }
 
 function simpleMa(rows: OHLCV[], period: number): ProjectionPoint[] {
@@ -421,25 +403,50 @@ function recentLow(rows: OHLCV[], lookback: number): number | null {
 
 function addFutureDate(date: string, interval: ScenarioInterval, step: number): string {
   const d = new Date(`${date}T00:00:00Z`)
-  if (interval === 'D') {
+  const spec = intervalToSpec(interval)
+  const multiplier = Math.max(1, Math.floor(spec.multiplier))
+  const totalSteps = Math.max(1, step) * multiplier
+  if (spec.timeframe === 'day') {
     let added = 0
-    while (added < step) {
+    while (added < totalSteps) {
       d.setUTCDate(d.getUTCDate() + 1)
       const day = d.getUTCDay()
       if (day !== 0 && day !== 6) added += 1
     }
-  } else if (interval === 'W') {
-    d.setUTCDate(d.getUTCDate() + 7 * step)
+  } else if (spec.timeframe === 'week') {
+    d.setUTCDate(d.getUTCDate() + 7 * totalSteps)
   } else {
-    d.setUTCMonth(d.getUTCMonth() + step)
+    d.setUTCMonth(d.getUTCMonth() + totalSteps)
   }
   return d.toISOString().slice(0, 10)
 }
 
 function futurePointCount(interval: ScenarioInterval, horizonDays: number): number {
-  if (interval === 'D') return Math.max(2, Math.min(8, horizonDays))
-  if (interval === 'W') return Math.max(2, Math.min(8, Math.ceil(horizonDays / 5)))
-  return Math.max(2, Math.min(8, Math.ceil(horizonDays / 20)))
+  const spec = intervalToSpec(interval)
+  if (spec.timeframe === 'day') return Math.max(2, Math.min(8, Math.ceil(horizonDays / spec.multiplier)))
+  if (spec.timeframe === 'week') return Math.max(2, Math.min(8, Math.ceil(horizonDays / (5 * spec.multiplier))))
+  return Math.max(2, Math.min(8, Math.ceil(horizonDays / (20 * spec.multiplier))))
+}
+
+function visibleBarsForInterval(interval: ScenarioInterval): number {
+  const spec = intervalToSpec(interval)
+  if (spec.timeframe === 'day') return spec.multiplier === 1 ? 180 : 140
+  if (spec.timeframe === 'week') return spec.multiplier === 1 ? 156 : 120
+  return spec.multiplier === 1 ? 120 : 90
+}
+
+function lookbackBarsForInterval(interval: ScenarioInterval): number {
+  const spec = intervalToSpec(interval)
+  if (spec.timeframe === 'day') return Math.max(8, Math.ceil(20 / spec.multiplier))
+  if (spec.timeframe === 'week') return Math.max(6, Math.ceil(12 / spec.multiplier))
+  return Math.max(4, Math.ceil(8 / spec.multiplier))
+}
+
+function maPeriodsForInterval(interval: ScenarioInterval): number[] {
+  return Array.from(new Set([
+    ...defaultMaLinesForInterval(interval),
+    ...SCENARIO_STATS_MA_PERIODS,
+  ])).sort((a, b) => a - b)
 }
 
 function makePath(baseDate: string, basePrice: number, target: number, interval: ScenarioInterval, horizonDays: number, curve = 1): ProjectionPoint[] {
@@ -526,14 +533,21 @@ function makeScenario(args: {
   }
 }
 
-function localNarrative(scenario: ProjectionScenario): string {
+function formatScenarioPrice(value: number | null | undefined, market: MarketCode): string {
+  if (!finite(value)) return '-'
+  if (market === 'US') return `$${value.toLocaleString('en-US', { maximumFractionDigits: 2 })}`
+  return `${value.toLocaleString('ja-JP', { maximumFractionDigits: 1 })}円`
+}
+
+function localNarrative(scenario: ProjectionScenario, market: MarketCode): string {
   const directionText = scenario.direction === 'up' ? '上方向' : scenario.direction === 'down' ? '下方向' : '横ばい'
-  const targetText = finite(scenario.targetPrice) ? `目処は${scenario.targetPrice?.toLocaleString('ja-JP')}円付近` : '目処は未判定'
+  const targetText = finite(scenario.targetPrice) ? `目処は${formatScenarioPrice(scenario.targetPrice, market)}付近` : '目処は未判定'
   const evidence = scenario.evidence.slice(0, 3).join('、')
   return `${directionText}のシナリオです。${targetText}。根拠は${evidence || '現在形状とMA位置'}です。失効条件は「${scenario.invalidation}」。`
 }
 
 function buildScenarios(input: {
+  market: MarketCode
   interval: ScenarioInterval
   horizonDays: number
   baseDate: string
@@ -553,7 +567,7 @@ function buildScenarios(input: {
     ma200: number | null
   }
 }): ProjectionScenario[] {
-  const { interval, horizonDays, baseDate, basePrice, status, analysis, calibration, candidates, momentum, stats } = input
+  const { market, interval, horizonDays, baseDate, basePrice, status, analysis, calibration, candidates, momentum, stats } = input
   const atr = stats.atrPct ?? 2.5
   const upPctFromCalib =
     finite(calibration?.avgMaxReturnPct) && (calibration?.avgMaxReturnPct ?? 0) > 0
@@ -596,10 +610,11 @@ function buildScenarios(input: {
       direction,
     })
     if (adjustment !== 0) {
+      const boundedAdjustment = clamp(adjustment, -14, 14)
       parts.push({
         key: 'scenario_shape',
         label: '形状補正',
-        value: round(adjustment, 1) ?? adjustment,
+        value: round(boundedAdjustment, 1) ?? boundedAdjustment,
         max: 14,
         detail: adjustmentDetail || '支持線・抵抗線・収縮/拡散の位置関係',
       })
@@ -690,7 +705,7 @@ function buildScenarios(input: {
       stopPrice: null,
       upperGuidePrice: rangeUp,
       lowerGuidePrice: rangeDown,
-      reboundLine: `${round(rangeDown, 1)}〜${round(rangeUp, 1)}円`,
+      reboundLine: `${formatScenarioPrice(rangeDown, market)}〜${formatScenarioPrice(rangeUp, market)}`,
       invalidation: 'レンジ上限または下限を終値で連続して抜ける場合',
       thesis: 'モメンタムが中立化し、MA付近で方向感を待つシナリオ。',
       evidence: [...commonEvidence, candidateEvidence(candidates, 'range') ?? '', `想定レンジ幅 約±${atr.toFixed(1)}%`],
@@ -776,7 +791,7 @@ function buildScenarios(input: {
   ]
 
   const sorted = scenarios
-    .map((scenario) => ({ ...scenario, narrative: localNarrative(scenario) }))
+    .map((scenario) => ({ ...scenario, narrative: localNarrative(scenario, market) }))
     .sort((a, b) => b.score - a.score)
   const scoreTotal = sorted.reduce((sum, scenario) => sum + Math.max(1, scenario.score), 0)
   return sorted
@@ -787,8 +802,22 @@ function buildScenarios(input: {
     }))
 }
 
-async function loadOhlcv(ticker: string, asOfDate?: string | null): Promise<OHLCV[]> {
+async function loadOhlcv(ticker: string, market: MarketCode, asOfDate?: string | null): Promise<OHLCV[]> {
   const dateFilter = asOfDate ? 'AND date <= ?' : ''
+  if (market === 'US') {
+    const rows = await execAll<RawOhlcvRow>(
+      `
+        SELECT date, open, high, low, close, volume
+        FROM market_ohlcv_daily
+        WHERE market = 'US'
+          AND ticker = ?
+          ${dateFilter}
+        ORDER BY date
+      `,
+      asOfDate ? [ticker, asOfDate] : [ticker],
+    )
+    return rows.map(toOhlcv)
+  }
   const rows = await execAll<RawOhlcvRow>(
     `
       SELECT date, open, high, low, close, volume
@@ -802,9 +831,10 @@ async function loadOhlcv(ticker: string, asOfDate?: string | null): Promise<OHLC
   return rows.map(toOhlcv)
 }
 
-async function loadFeature(ticker: string, asOfDate?: string | null): Promise<FeatureRow | null> {
+async function loadFeature(ticker: string, market: MarketCode, asOfDate?: string | null): Promise<FeatureRow | null> {
   const dateFilter = asOfDate ? 'AND date <= ?' : ''
-  return (await execGet<FeatureRow>(
+  const get = market === 'US' && hasUsAnalyticsDb() ? execUsAnalyticsGet : execGet
+  const row = (await get<FeatureRow>(
     `
       SELECT date, feature_json AS featureJson, stage_code AS stageCode
       FROM ml_feature_vectors_v2
@@ -815,12 +845,21 @@ async function loadFeature(ticker: string, asOfDate?: string | null): Promise<Fe
       LIMIT 1
     `,
     asOfDate ? [ML_PHYSICS_FEATURE_SET, ticker, asOfDate] : [ML_PHYSICS_FEATURE_SET, ticker],
-  )) ?? null
+  ).catch((error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error)
+    if (message.includes('no such table') || message.includes('US analytics DB not found')) return null
+    throw error
+  })) ?? null
+  return row
 }
 
-async function loadMomentum(ticker: string, asOfDate?: string | null): Promise<MomentumRow | null> {
+async function loadMomentum(ticker: string, market: MarketCode, asOfDate?: string | null): Promise<MomentumRow | null> {
   const dateFilter = asOfDate ? 'AND date <= ?' : ''
-  return (await execGet<MomentumRow>(
+  const useUsAnalytics = market === 'US' && hasUsAnalyticsDb()
+  const get = useUsAnalytics ? execUsAnalyticsGet : execGet
+  const dbMarkets = useUsAnalytics ? ['US', 'JP'] : [market]
+  const placeholders = dbMarkets.map(() => '?').join(', ')
+  return (await get<MomentumRow>(
     `
       SELECT
         date,
@@ -828,23 +867,29 @@ async function loadMomentum(ticker: string, asOfDate?: string | null): Promise<M
         physical_force_score AS physicalForceScore,
         physical_energy_score AS physicalEnergyScore
       FROM physical_momentum_metrics
-      WHERE market = 'JP'
+      WHERE market IN (${placeholders})
         AND symbol = ?
         ${dateFilter}
-      ORDER BY date DESC
+      ORDER BY CASE market WHEN ? THEN 0 ELSE 1 END, date DESC
       LIMIT 1
     `,
-    asOfDate ? [ticker, asOfDate] : [ticker],
+    asOfDate ? [...dbMarkets, ticker, asOfDate, market] : [...dbMarkets, ticker, market],
   ).catch((error: unknown) => {
     const message = error instanceof Error ? error.message : String(error)
-    if (message.includes('no such table')) return null
+    if (message.includes('no such table') || message.includes('US analytics DB not found')) return null
     throw error
   })) ?? null
 }
 
-async function loadCalibration(status: PhysicsStatus, horizonDays: number, asOfDate?: string | null): Promise<CalibrationRow | null> {
+async function loadCalibration(
+  status: PhysicsStatus,
+  horizonDays: number,
+  asOfDate?: string | null,
+  market: MarketCode = 'JP',
+): Promise<CalibrationRow | null> {
   const dateFilter = asOfDate ? 'AND evaluation_date <= ?' : ''
-  return (await execGet<CalibrationRow>(
+  const get = market === 'US' && hasUsAnalyticsDb() ? execUsAnalyticsGet : execGet
+  return (await get<CalibrationRow>(
     `
       SELECT
         evaluation_date AS evaluationDate,
@@ -867,14 +912,20 @@ async function loadCalibration(status: PhysicsStatus, horizonDays: number, asOfD
     asOfDate ? [ML_PHYSICS_FEATURE_SET, status, horizonDays, asOfDate] : [ML_PHYSICS_FEATURE_SET, status, horizonDays],
   ).catch((error: unknown) => {
     const message = error instanceof Error ? error.message : String(error)
-    if (message.includes('no such table')) return null
+    if (message.includes('no such table') || message.includes('US analytics DB not found')) return null
     throw error
   })) ?? null
 }
 
-async function loadPhysicsCandidates(ticker: string, horizonDays: number, asOfDate?: string | null): Promise<PhysicsCandidateRow[]> {
+async function loadPhysicsCandidates(
+  ticker: string,
+  horizonDays: number,
+  asOfDate?: string | null,
+  market: MarketCode = 'JP',
+): Promise<PhysicsCandidateRow[]> {
   const dateFilter = asOfDate ? 'AND as_of_date <= ?' : ''
-  return execAll<PhysicsCandidateRow>(
+  const all = market === 'US' && hasUsAnalyticsDb() ? execUsAnalyticsAll : execAll
+  return all<PhysicsCandidateRow>(
     `
       WITH latest AS (
         SELECT MAX(as_of_date) AS as_of_date
@@ -896,29 +947,34 @@ async function loadPhysicsCandidates(ticker: string, horizonDays: number, asOfDa
     asOfDate ? [horizonDays, asOfDate, horizonDays, ticker] : [horizonDays, horizonDays, ticker],
   ).catch((error: unknown) => {
     const message = error instanceof Error ? error.message : String(error)
-    if (message.includes('no such table')) return []
+    if (message.includes('no such table') || message.includes('US analytics DB not found')) return []
     throw error
   })
 }
 
 export function normalizeProjectionInterval(value: string | null | undefined): ScenarioInterval {
-  return value === 'W' || value === 'M' ? value : 'D'
+  return parseInterval(value) ?? 'D'
 }
 
 export function defaultProjectionHorizon(interval: ScenarioInterval): number {
+  if (interval === '2D') return 10
   if (interval === 'W') return 20
+  if (interval === '2W') return 40
   if (interval === 'M') return 60
+  if (interval === '2M') return 120
   return 5
 }
 
 export async function buildStockScenarioProjection(params: {
   ticker: string
+  market?: MarketCode | string | null
   interval: ScenarioInterval
   horizonDays?: number | null
   limit?: number | null
   asOfDate?: string | null
 }): Promise<ProjectionResponse | null> {
-  const ticker = normalizeTicker(params.ticker)
+  const market = normalizeMarket(params.market)
+  const ticker = normalizeTicker(params.ticker, market)
   const interval = params.interval
   const horizonDays = params.horizonDays && Number.isFinite(params.horizonDays)
     ? Math.max(1, Math.min(180, Math.floor(params.horizonDays)))
@@ -926,14 +982,14 @@ export async function buildStockScenarioProjection(params: {
   const limit = Math.max(1, Math.min(MAX_LIMIT, Math.floor(params.limit ?? DEFAULT_LIMIT)))
   const asOfDate = params.asOfDate && /^\d{4}-\d{2}-\d{2}$/.test(params.asOfDate) ? params.asOfDate : null
   const [ohlcv, feature, momentum] = await Promise.all([
-    loadOhlcv(ticker, asOfDate),
-    loadFeature(ticker, asOfDate),
-    loadMomentum(ticker, asOfDate),
+    loadOhlcv(ticker, market, asOfDate),
+    loadFeature(ticker, market, asOfDate),
+    loadMomentum(ticker, market, asOfDate),
   ])
   if (ohlcv.length === 0) return null
 
   const grouped = aggregateOhlcv(ohlcv, interval)
-  const visibleBars = interval === 'D' ? 180 : interval === 'W' ? 156 : 120
+  const visibleBars = visibleBarsForInterval(interval)
   const chartCandles = grouped.slice(-visibleBars)
   const latest = grouped[grouped.length - 1]
   if (!latest || !finite(latest.close)) return null
@@ -941,21 +997,23 @@ export async function buildStockScenarioProjection(params: {
   const profile = parseJson<Record<string, unknown> | null>(feature?.featureJson, null)
   const analysis = analyzePhysicsProfile(profile)
   const [calibration, candidates] = await Promise.all([
-    loadCalibration(analysis.physicsStatus, horizonDays, asOfDate),
-    loadPhysicsCandidates(ticker, horizonDays, asOfDate),
+    loadCalibration(analysis.physicsStatus, horizonDays, asOfDate, market),
+    loadPhysicsCandidates(ticker, horizonDays, asOfDate, market),
   ])
 
-  const ma = Object.fromEntries(MA_PERIODS.map((period) => [String(period), simpleMa(chartCandles, period)]))
+  const ma = Object.fromEntries(maPeriodsForInterval(interval).map((period) => [String(period), simpleMa(chartCandles, period)]))
+  const lookback = lookbackBarsForInterval(interval)
   const stats = {
-    atrPct: atrPct(grouped, interval === 'D' ? 20 : 12),
-    recentHigh: recentHigh(grouped, interval === 'D' ? 20 : 12),
-    recentLow: recentLow(grouped, interval === 'D' ? 20 : 12),
+    atrPct: atrPct(grouped, lookback),
+    recentHigh: recentHigh(grouped, lookback),
+    recentLow: recentLow(grouped, lookback),
     ma5: latestMa(grouped, 5),
     ma25: latestMa(grouped, 25),
     ma75: latestMa(grouped, 75),
     ma200: latestMa(grouped, 200),
   }
   const scenarios = buildScenarios({
+    market,
     interval,
     horizonDays,
     baseDate: latest.date,

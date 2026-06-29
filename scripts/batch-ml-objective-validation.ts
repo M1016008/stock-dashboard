@@ -77,7 +77,7 @@ const MARKET_ABOVE_SMA25_INDEX = ML_PHYSICS_FEATURE_NAMES.indexOf('marketAboveSm
 const DEFAULT_HORIZONS = ML_PHYSICS_DEFAULT_HORIZON_LIST
   .split(',')
   .map((value) => Number(value.trim()))
-  .filter((value) => Number.isFinite(value) && value >= 20)
+  .filter((value) => Number.isFinite(value) && value > 0)
   .join(',')
 
 const HORIZONS = (process.env.ML_OBJECTIVE_HORIZONS ?? DEFAULT_HORIZONS)
@@ -86,7 +86,7 @@ const HORIZONS = (process.env.ML_OBJECTIVE_HORIZONS ?? DEFAULT_HORIZONS)
   .filter((value) => Number.isFinite(value) && value > 0)
 const DIRECTIONS: Direction[] = ['up', 'down']
 
-const TRAIN_START_DATE = process.env.ML_OBJECTIVE_TRAIN_START_DATE?.trim() || '2008-05-07'
+const TRAIN_START_DATE = process.env.ML_OBJECTIVE_TRAIN_START_DATE?.trim() || '1900-01-01'
 const TRAIN_END_DATE = process.env.ML_OBJECTIVE_TRAIN_END_DATE?.trim() || '2021-12-31'
 const VALIDATION_START_DATE = process.env.ML_OBJECTIVE_VALIDATION_START_DATE?.trim() || '2022-01-01'
 const VALIDATION_END_DATE = process.env.ML_OBJECTIVE_VALIDATION_END_DATE?.trim() || '2023-12-31'

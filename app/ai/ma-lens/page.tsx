@@ -1671,7 +1671,11 @@ function PhysicsCandidateCard({ candidate }: { candidate: ParsedPhysicsCandidate
 }
 
 function PhysicsLensPanel({ status, rows }: { status: PhysicsDataStatus; rows: ParsedPhysicsCandidate[] }) {
-  const physicsVersionLabel = ML_PHYSICS_FEATURE_SET.endsWith('_v3') ? 'v3' : 'v2'
+  const physicsVersionLabel = ML_PHYSICS_FEATURE_SET.endsWith('_v4')
+    ? 'v4'
+    : ML_PHYSICS_FEATURE_SET.endsWith('_v3')
+      ? 'v3'
+      : 'v2'
   const sections = [
     { title: '短期', horizonDays: 10, body: '日足の速度・加速度に、週足/月足の支援や抵抗を重ねた短期候補です。' },
     { title: '週足', horizonDays: 40, body: '週足トレンドが効く数週間〜約2か月の候補です。' },

@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import type { MarketCode } from '@/lib/markets'
 import type { CSSProperties } from 'react'
 
 type ChatRole = 'user' | 'assistant'
@@ -17,6 +18,7 @@ interface StockScenarioAiPanelProps {
   ticker: string
   name: string
   analysisDate?: string | null
+  market?: MarketCode
 }
 
 type StockChatApiResponse = {
@@ -43,8 +45,8 @@ function messageId(role: ChatRole): string {
   return `${role}-${Date.now()}-${Math.random().toString(16).slice(2)}`
 }
 
-function storageKey(ticker: string, analysisDate: string | null | undefined): string {
-  return `stockboard:stock-ai-chat:${ticker}:${analysisDate || 'latest'}`
+function storageKey(ticker: string, market: MarketCode, analysisDate: string | null | undefined): string {
+  return `stockboard:stock-ai-chat:${market}:${ticker}:${analysisDate || 'latest'}`
 }
 
 function sourceLabel(message: ChatMessage): string {
@@ -53,14 +55,14 @@ function sourceLabel(message: ChatMessage): string {
   return message.role === 'user' ? 'あなた' : 'AI'
 }
 
-export function StockScenarioAiPanel({ ticker, name, analysisDate }: StockScenarioAiPanelProps) {
+export function StockScenarioAiPanel({ ticker, name, analysisDate, market = 'JP' }: StockScenarioAiPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [followups, setFollowups] = useState<string[]>(QUICK_PROMPTS.slice(1))
 
-  const key = useMemo(() => storageKey(ticker, analysisDate), [ticker, analysisDate])
+  const key = useMemo(() => storageKey(ticker, market, analysisDate), [ticker, market, analysisDate])
   const contextLabel = analysisDate ? `${analysisDate}時点` : '最新時点'
 
   useEffect(() => {
@@ -100,6 +102,7 @@ export function StockScenarioAiPanel({ ticker, name, analysisDate }: StockScenar
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ticker,
+          market,
           name,
           analysisDate,
           message: content,

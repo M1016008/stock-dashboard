@@ -242,11 +242,11 @@ async function main() {
     if (process.env.US_SKIP_DAILY_ML === '1') {
       console.log('US daily ML skipped (US_SKIP_DAILY_ML=1)')
     } else {
-      await runNpm('batch:ml-daily', {
+      await runNpm('batch:us-ml-daily', {
         STOCKBOARD_DB_PATH: usAnalyticsDbPath,
         ML_DAILY_TRAIN_LIMIT: process.env.US_ML_DAILY_TRAIN_LIMIT ?? '80000',
         ML_PHYSICS_DAILY_TRAIN_LIMIT: process.env.US_ML_PHYSICS_DAILY_TRAIN_LIMIT ?? '120000',
-        UPDATE_CHILD_TIMEOUT_MINUTES: process.env.US_ML_DAILY_TIMEOUT_MINUTES ?? '360',
+        UPDATE_CHILD_TIMEOUT_MINUTES: process.env.US_ML_DAILY_TIMEOUT_MINUTES ?? '1440',
       }, heartbeat)
       await lock.heartbeat()
     }

@@ -1,6 +1,6 @@
 // scripts/run-ml-learning.ts
 //
-// 重いJP ML再学習/検証の日次実行ラッパー。
+// JP MLの日次serving更新/週次全量再学習の実行ラッパー。
 // launchd から直接長い npm chain を起動せず、DB更新ロックの待機と二重起動防止を行う。
 
 import { spawn, type ChildProcess } from 'node:child_process'

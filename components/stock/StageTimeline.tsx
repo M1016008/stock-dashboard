@@ -3,6 +3,7 @@
 
 import { useEffect, useState } from 'react'
 import { STAGE_BORDER_COLORS, STAGE_LABELS } from '@/lib/hex-stage'
+import type { MarketCode } from '@/lib/markets'
 
 interface StageEntry {
   date: string
@@ -28,6 +29,7 @@ export interface StageRangeSelection extends DateRange {
 
 interface StageTimelineProps {
   ticker: string
+  market?: MarketCode
   selectedRange?: DateRange | null
   onStageRangeSelect?: (selection: StageRangeSelection) => void
 }
@@ -85,7 +87,7 @@ const DEFAULT_COUNTS: Record<Granularity, number> = {
  * 行: 日足A/B、週足A/B、月足A/B
  * 列: 日毎 / 週毎 / 月毎の日付
  */
-export function StageTimeline({ ticker, selectedRange, onStageRangeSelect }: StageTimelineProps) {
+export function StageTimeline({ ticker, market = 'JP', selectedRange, onStageRangeSelect }: StageTimelineProps) {
   const [entries, setEntries] = useState<StageEntry[]>([])
   const [activeStartDate, setActiveStartDate] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -100,6 +102,7 @@ export function StageTimeline({ ticker, selectedRange, onStageRangeSelect }: Sta
     setLoading(true)
     setError('')
     const params = new URLSearchParams({
+      market,
       granularity,
       count: String(count),
     })
@@ -114,7 +117,7 @@ export function StageTimeline({ ticker, selectedRange, onStageRangeSelect }: Sta
       .catch((e) => { if (!cancelled) setError((e as Error).message) })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [ticker, granularity, count])
+  }, [ticker, market, granularity, count])
 
   function selectGranularity(next: Granularity) {
     setGranularity(next)

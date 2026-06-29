@@ -216,12 +216,12 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
           historyPeriod="all"
           showTimeframeSelector
           maLinesByInterval={{
-            D: [5, 25, 75],
-            '2D': [5, 25, 75],
-            W: [13, 26, 52],
-            '2W': [13, 26, 52],
-            M: [12, 24, 60],
-            '2M': [12, 24, 60],
+            D: [3, 5, 25, 75],
+            '2D': [3, 5, 25, 75],
+            W: [3, 13, 26, 52],
+            '2W': [3, 13, 26, 52],
+            M: [3, 12, 24, 60],
+            '2M': [3, 12, 24, 60],
           }}
         />
       </div>
@@ -444,7 +444,7 @@ function PhysicalMomentumSection({ ticker, analysisDate }: { ticker: string; ana
         <div>
           <div className="section-header" style={{ margin: 0 }}>Physical Momentum</div>
           <div style={physicalSubTextStyle}>
-            市場平均との差で、いまの値動きの「力の向き・拡散/収縮・運動エネルギー」を読む共通スコアです。
+            PMSは買い/売りの予測ではなく、直近20営業日の累積運動量です。足元の向きはPFS、過熱や大値幅はPESで分けて見ます。
           </div>
         </div>
         {latest && (
@@ -465,9 +465,12 @@ function PhysicalMomentumSection({ ticker, analysisDate }: { ticker: string; ana
           {insight && (
             <div style={physicalHeroStyle}>
               <div style={physicalHeroMainStyle}>
-                <div style={physicalHeroLabelStyle}>運動状態レポート</div>
+                <div style={{ ...physicalHeroLabelStyle, color: insight.color }}>結論</div>
                 <div style={{ ...physicalHeroTitleStyle, color: insight.color }}>{insight.label}</div>
                 <p style={physicalHeroDescriptionStyle}>{insight.description}</p>
+              </div>
+              <div style={physicalReasonPanelStyle}>
+                <div style={physicalReasonPanelTitleStyle}>根拠</div>
                 <div style={physicalReasonListStyle}>
                   {insight.reasons.map((reason) => (
                     <span key={reason} style={physicalReasonPillStyle}>{reason}</span>
@@ -485,16 +488,16 @@ function PhysicalMomentumSection({ ticker, analysisDate }: { ticker: string; ana
 
           <div style={physicalScoreGridStyle}>
             <PhysicalScoreCard
-              label="総合の力"
+              label="20日累積の動き"
               code="PMS"
-              title="市場平均との差"
+              title="方向+熱量の合成"
               value={latest.physicalMomentumScore}
               sub={data?.rank && data.totalRanked ? `市場順位 ${data.rank}/${data.totalRanked}` : '市場順位 -'}
-              guide="速度・加速度・力・熱量を標準化して、現在の強弱を一つにまとめた点"
+              guide="高い=買いではなく、20営業日で大きく動いた状態。足元の向きはPFSで確認"
               trend={data?.trend ?? null}
             />
             <PhysicalScoreCard
-              label="力の増減"
+              label="足元の力"
               code="PFS"
               title="初動/失速"
               value={latest.physicalForceScore}
@@ -505,10 +508,10 @@ function PhysicalMomentumSection({ ticker, analysisDate }: { ticker: string; ana
             <PhysicalScoreCard
               label="動きの熱量"
               code="PES"
-              title="蓄積/過熱"
+              title="値幅/過熱"
               value={latest.physicalEnergyScore}
               sub={physicalSignalText(latest.physicalEnergyScore, 'energy')}
-              guide="Energy と Momentum。値動きにどれだけ熱量が乗っているかを見る"
+              guide="高いほど大きく動いた状態。方向ではなく、過熱・巻き戻しリスクも含めて見る"
               trend={null}
             />
           </div>
@@ -919,7 +922,7 @@ function PhysicalActionPoints({
     <div style={physicalActionPanelStyle}>
       <div style={physicalMiniHeaderStyle}>
         <strong>だから、どう見る？</strong>
-        <span>数字ではなく、次の行動条件に変換しています。</span>
+        <span>買い目線と空売り目線を分けて、次に確認する条件だけを表示します。</span>
       </div>
       <div style={physicalActionListStyle}>
         {points.map((point, index) => (
@@ -1021,7 +1024,6 @@ function PhysicalTradePlanCard({ horizon }: { horizon: PhysicalPlanHorizon }) {
       </div>
       <p style={physicalTradePlanStanceStyle}>{horizon.suggestion.stance}</p>
       <PhysicalPlanLevelStrip levels={horizon.levels} />
-      <p style={physicalTradePlanSummaryStyle}>{horizon.suggestion.summary}</p>
       <div style={physicalTradePlanMetricGridStyle}>
         <PhysicalPlanMetric label="的中率" value={fmtRate(horizon.hitRate)} sub={`base ${fmtRate(horizon.baseRate)}`} />
         <PhysicalPlanMetric label="lift" value={fmtLift(horizon.lift)} sub={`信頼 ${horizon.confidenceLabel}`} />
@@ -1040,7 +1042,7 @@ function PhysicalTradePlanCard({ horizon }: { horizon: PhysicalPlanHorizon }) {
         )}
       </div>
       <div style={physicalTradePlanChecklistStyle}>
-        {horizon.suggestion.checklist.slice(0, 3).map((item) => (
+        {horizon.suggestion.checklist.slice(0, 2).map((item) => (
           <div key={item} style={physicalTradePlanCheckItemStyle}>
             <span style={{ ...physicalTradePlanDotStyle, background: tone.color }} />
             <span>{item}</span>
@@ -1052,7 +1054,6 @@ function PhysicalTradePlanCard({ horizon }: { horizon: PhysicalPlanHorizon }) {
         <span>{horizon.suggestion.invalidation}</span>
       </div>
       <div style={physicalTradePlanFooterStyle}>
-        <span>{horizon.description}</span>
         <span>{horizon.evaluationDate ? `検証 ${horizon.evaluationDate}` : '検証日 -'}</span>
       </div>
     </div>
@@ -1559,7 +1560,7 @@ const physicalDateBadgeStyle: CSSProperties = {
 
 const physicalHeroStyle: CSSProperties = {
   display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(min(260px, 100%), 1fr))',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(min(240px, 100%), 1fr))',
   gap: '10px',
   alignItems: 'stretch',
   border: '1px solid var(--border-subtle)',
@@ -1577,13 +1578,18 @@ const physicalHeroMainStyle: CSSProperties = {
 }
 
 const physicalHeroLabelStyle: CSSProperties = {
+  alignSelf: 'flex-start',
+  border: '1px solid currentColor',
+  borderRadius: '999px',
+  background: '#fff',
   color: 'var(--text-muted)',
   fontSize: '10px',
-  fontWeight: 700,
+  fontWeight: 800,
+  padding: '3px 8px',
 }
 
 const physicalHeroTitleStyle: CSSProperties = {
-  fontSize: '22px',
+  fontSize: '24px',
   fontWeight: 800,
   lineHeight: 1.15,
 }
@@ -1593,6 +1599,21 @@ const physicalHeroDescriptionStyle: CSSProperties = {
   color: 'var(--text-secondary)',
   fontSize: '12px',
   lineHeight: 1.65,
+}
+
+const physicalReasonPanelStyle: CSSProperties = {
+  border: '1px solid var(--border-subtle)',
+  borderRadius: 'var(--radius-sm)',
+  background: 'rgba(255,255,255,0.72)',
+  padding: '10px',
+  minWidth: 0,
+}
+
+const physicalReasonPanelTitleStyle: CSSProperties = {
+  color: 'var(--text-muted)',
+  fontSize: '10px',
+  fontWeight: 800,
+  marginBottom: '8px',
 }
 
 const physicalReasonListStyle: CSSProperties = {

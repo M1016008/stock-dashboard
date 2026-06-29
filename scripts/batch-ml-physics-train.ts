@@ -41,7 +41,7 @@ const HORIZONS = (process.env.ML_PHYSICS_HORIZONS ?? ML_PHYSICS_DEFAULT_HORIZON_
   .map((value) => Number(value.trim()))
   .filter((value) => Number.isFinite(value) && value > 0)
 const LIMIT = Number(process.env.ML_PHYSICS_TRAIN_LIMIT ?? 120000)
-const START_DATE = process.env.ML_PHYSICS_TRAIN_START_DATE?.trim() || '2008-05-07'
+const START_DATE = process.env.ML_PHYSICS_TRAIN_START_DATE?.trim() || '1900-01-01'
 const END_DATE = process.env.ML_PHYSICS_TRAIN_END_DATE?.trim() || null
 const SAMPLE_MODE = (process.env.ML_PHYSICS_TRAIN_SAMPLE_MODE ?? 'yearly').trim()
 const ALL_PAGED_MODE = SAMPLE_MODE === 'all_paged'

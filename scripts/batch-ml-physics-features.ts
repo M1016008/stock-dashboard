@@ -10,12 +10,16 @@ import {
   type PhysicsFeatureProfile,
   type PhysicsUpperTimeframeProfile,
 } from '@/lib/backtest/ml-physics'
+import { resampleOhlcv } from '@/lib/timeframes'
+import type { OHLCV } from '@/types/stock'
 
 type Row = {
   date: string
+  open: number | null
   close: number | null
   high: number | null
   low: number | null
+  volume: number | null
   daily_a_stage: number | null
   daily_b_stage: number | null
   weekly_a_stage: number | null
@@ -81,6 +85,9 @@ const END_DATE = process.env.ML_PHYSICS_END_DATE?.trim() || null
 const TICKER_LIMIT = Number(process.env.ML_PHYSICS_TICKER_LIMIT ?? 0)
 const TICKER_START = process.env.ML_PHYSICS_TICKER_START?.trim() || null
 const TICKER_END = process.env.ML_PHYSICS_TICKER_END?.trim() || null
+const DEFAULT_RECENT_HISTORY_LOOKBACK = Math.max(520, RECENT_DAYS + 260, RECENT_DAYS + MIN_HISTORY_DAYS + 80)
+const HISTORY_LOOKBACK_DAYS = Number(process.env.ML_PHYSICS_HISTORY_LOOKBACK_DAYS ?? (RECENT_DAYS > 0 ? DEFAULT_RECENT_HISTORY_LOOKBACK : 0))
+const MISSING_ONLY_DATE = process.env.ML_PHYSICS_MISSING_ONLY_DATE?.trim() || null
 
 const WEEKLY_MA_SPECS: UpperMaSpec[] = [
   { key: 'ma5', label: '5週' },
@@ -102,6 +109,41 @@ const MONTHLY_MA_SPECS: UpperMaSpec[] = [
   { key: 'ma25', label: '25か月' },
 ]
 const MONTHLY_GAP_SPECS: UpperGapSpec[] = [
+  { key: 'ma3To5', shortKey: 'ma3', longKey: 'ma5' },
+  { key: 'ma5To10', shortKey: 'ma5', longKey: 'ma10' },
+  { key: 'ma10To20', shortKey: 'ma10', longKey: 'ma20' },
+]
+const TWO_DAY_MA_SPECS: UpperMaSpec[] = [
+  { key: 'ma5', label: '5本' },
+  { key: 'ma25', label: '25本' },
+  { key: 'ma75', label: '75本' },
+  { key: 'ma200', label: '200本' },
+]
+const TWO_DAY_GAP_SPECS: UpperGapSpec[] = [
+  { key: 'ma5To25', shortKey: 'ma5', longKey: 'ma25' },
+  { key: 'ma25To75', shortKey: 'ma25', longKey: 'ma75' },
+  { key: 'ma75To200', shortKey: 'ma75', longKey: 'ma200' },
+]
+const TWO_WEEK_MA_SPECS: UpperMaSpec[] = [
+  { key: 'ma5', label: '5本' },
+  { key: 'ma13', label: '13本' },
+  { key: 'ma25', label: '25本' },
+  { key: 'ma50', label: '50本' },
+  { key: 'ma100', label: '100本' },
+]
+const TWO_WEEK_GAP_SPECS: UpperGapSpec[] = [
+  { key: 'ma5To13', shortKey: 'ma5', longKey: 'ma13' },
+  { key: 'ma13To25', shortKey: 'ma13', longKey: 'ma25' },
+  { key: 'ma25To50', shortKey: 'ma25', longKey: 'ma50' },
+]
+const TWO_MONTH_MA_SPECS: UpperMaSpec[] = [
+  { key: 'ma3', label: '3本' },
+  { key: 'ma5', label: '5本' },
+  { key: 'ma10', label: '10本' },
+  { key: 'ma20', label: '20本' },
+  { key: 'ma25', label: '25本' },
+]
+const TWO_MONTH_GAP_SPECS: UpperGapSpec[] = [
   { key: 'ma3To5', shortKey: 'ma3', longKey: 'ma5' },
   { key: 'ma5To10', shortKey: 'ma5', longKey: 'ma10' },
   { key: 'ma10To20', shortKey: 'ma10', longKey: 'ma20' },
@@ -233,6 +275,62 @@ function buildUpperTimeframeProfile(
     pricePosition,
     bundleWidthPct: bundleWidthPct(finite(close) ? close : null, maSpecs.map((spec) => ma[spec.key] ?? null)),
   }
+}
+
+function smaOhlcvSeries(rows: OHLCV[], period: number): Array<number | null> {
+  const out: Array<number | null> = []
+  let sum = 0
+  let valid = 0
+  for (let i = 0; i < rows.length; i += 1) {
+    const close = rows[i]?.close
+    if (finite(close)) {
+      sum += close
+      valid += 1
+    }
+    if (i >= period) {
+      const oldClose = rows[i - period]?.close
+      if (finite(oldClose)) {
+        sum -= oldClose
+        valid -= 1
+      }
+    }
+    out.push(i >= period - 1 && valid === period ? round(sum / period, 2) : null)
+  }
+  return out
+}
+
+function buildResampledProfilesByDate(
+  dailyRows: OHLCV[],
+  spec: { timeframe: 'day' | 'week' | 'month'; multiplier: number },
+  maSpecs: UpperMaSpec[],
+  gapSpecs: UpperGapSpec[],
+): Map<string, PhysicsUpperTimeframeProfile> {
+  const candles = resampleOhlcv(dailyRows, spec)
+  const series: UpperSeriesMap = {}
+  for (const maSpec of maSpecs) {
+    const period = Number(maSpec.key.replace(/^ma/, ''))
+    series[maSpec.key] = Number.isFinite(period) ? smaOhlcvSeries(candles, period) : []
+  }
+  const map = new Map<string, PhysicsUpperTimeframeProfile>()
+  for (let i = 0; i < candles.length; i += 1) {
+    const candle = candles[i]
+    map.set(candle.date, buildUpperTimeframeProfile(series, i, candle.close, maSpecs, gapSpecs))
+  }
+  return map
+}
+
+function alignProfilesToDailyDates(
+  rows: Row[],
+  profilesByDate: Map<string, PhysicsUpperTimeframeProfile>,
+): Array<PhysicsUpperTimeframeProfile | undefined> {
+  const out: Array<PhysicsUpperTimeframeProfile | undefined> = []
+  let latest: PhysicsUpperTimeframeProfile | undefined
+  for (const row of rows) {
+    const profile = profilesByDate.get(row.date)
+    if (profile) latest = profile
+    out.push(latest)
+  }
+  return out
 }
 
 function normalizedOrder(value: string): string {
@@ -392,6 +490,41 @@ function classifyRegimes(args: {
 }
 
 async function tickers(): Promise<string[]> {
+  if (MISSING_ONLY_DATE) {
+    const date = MISSING_ONLY_DATE === 'latest'
+      ? (await execAll<{ date: string | null }>(`SELECT MAX(date) AS date FROM daily_snapshots`))[0]?.date
+      : MISSING_ONLY_DATE
+    if (!date) return []
+    const where: string[] = [
+      `d.date = ?`,
+      `f.ticker IS NULL`,
+    ]
+    const args: string[] = [ML_PHYSICS_FEATURE_SET, date]
+    if (TICKER_START) {
+      where.push(`d.ticker >= ?`)
+      args.push(TICKER_START)
+    }
+    if (TICKER_END) {
+      where.push(`d.ticker <= ?`)
+      args.push(TICKER_END)
+    }
+    const limitSql = TICKER_LIMIT > 0 ? ` LIMIT ${TICKER_LIMIT}` : ''
+    const rows = await execAll<{ ticker: string }>(
+      `
+      SELECT d.ticker
+      FROM daily_snapshots d
+      LEFT JOIN ml_feature_vectors_v2 f
+        ON f.ticker = d.ticker
+       AND f.date = d.date
+       AND f.feature_set = ?
+      WHERE ${where.join(' AND ')}
+      ORDER BY d.ticker${limitSql}
+      `,
+      args,
+    )
+    return rows.map((row) => row.ticker)
+  }
+
   const where: string[] = []
   const args: string[] = []
   if (TICKER_START) {
@@ -435,13 +568,61 @@ async function loadContextMaps(): Promise<ContextMaps> {
 }
 
 async function history(ticker: string): Promise<Row[]> {
+  const dateWhere: string[] = [`o.ticker = ?`]
+  const args: Array<string | number> = [ticker]
+  if (END_DATE) {
+    dateWhere.push(`o.date <= ?`)
+    args.push(END_DATE)
+  }
+  if (HISTORY_LOOKBACK_DAYS > 0) {
+    return execAll<Row>(
+      `
+      SELECT *
+      FROM (
+        SELECT
+          o.date,
+          o.open,
+          o.close,
+          o.high,
+          o.low,
+          o.volume,
+          d.daily_a_stage,
+          d.daily_b_stage,
+          d.weekly_a_stage,
+          d.weekly_b_stage,
+          d.monthly_a_stage,
+          d.monthly_b_stage,
+          d.weekly_ma_5,
+          d.weekly_ma_13,
+          d.weekly_ma_25,
+          d.weekly_ma_50,
+          d.weekly_ma_100,
+          d.monthly_ma_3,
+          d.monthly_ma_5,
+          d.monthly_ma_10,
+          d.monthly_ma_20,
+          d.monthly_ma_25
+        FROM ohlcv_daily o
+        LEFT JOIN daily_snapshots d ON d.ticker = o.ticker AND d.date = o.date
+        WHERE ${dateWhere.join(' AND ')}
+        ORDER BY o.date DESC
+        LIMIT ?
+      )
+      ORDER BY date
+      `,
+      [...args, HISTORY_LOOKBACK_DAYS],
+    )
+  }
+
   return execAll<Row>(
     `
     SELECT
       o.date,
+      o.open,
       o.close,
       o.high,
       o.low,
+      o.volume,
       d.daily_a_stage,
       d.daily_b_stage,
       d.weekly_a_stage,
@@ -488,6 +669,28 @@ async function buildTicker(ticker: string, contexts: ContextMaps, meta: TickerMe
     ma20: rows.map((row) => row.monthly_ma_20),
     ma25: rows.map((row) => row.monthly_ma_25),
   }
+  const dailyOhlcv: OHLCV[] = rows
+    .filter((row) => finite(row.open) && finite(row.high) && finite(row.low) && finite(row.close))
+    .map((row) => ({
+      date: row.date,
+      open: row.open as number,
+      high: row.high as number,
+      low: row.low as number,
+      close: row.close as number,
+      volume: finite(row.volume) ? row.volume as number : 0,
+    }))
+  const twoDayProfiles = alignProfilesToDailyDates(
+    rows,
+    buildResampledProfilesByDate(dailyOhlcv, { timeframe: 'day', multiplier: 2 }, TWO_DAY_MA_SPECS, TWO_DAY_GAP_SPECS),
+  )
+  const twoWeekProfiles = alignProfilesToDailyDates(
+    rows,
+    buildResampledProfilesByDate(dailyOhlcv, { timeframe: 'week', multiplier: 2 }, TWO_WEEK_MA_SPECS, TWO_WEEK_GAP_SPECS),
+  )
+  const twoMonthProfiles = alignProfilesToDailyDates(
+    rows,
+    buildResampledProfilesByDate(dailyOhlcv, { timeframe: 'month', multiplier: 2 }, TWO_MONTH_MA_SPECS, TWO_MONTH_GAP_SPECS),
+  )
   const stageCodes = rows.map(stageCode)
   const bundleWidths = rows.map((row, i) => bundleWidthPct(row.close, [ma5[i], ma25[i], ma75[i], ma200[i]]))
   const gap5To25 = rows.map((_, i) => gap(ma5[i], ma25[i]))
@@ -661,6 +864,9 @@ async function buildTicker(ticker: string, contexts: ContextMaps, meta: TickerMe
       multiTimeframe: {
         weekly: weeklyProfile,
         monthly: monthlyProfile,
+        twoDay: twoDayProfiles[i],
+        twoWeek: twoWeekProfiles[i],
+        twoMonth: twoMonthProfiles[i],
         alignment: buildUpperAlignment(order, weeklyProfile, monthlyProfile),
       },
       regimes: classifyRegimes({
@@ -699,7 +905,7 @@ async function main() {
   let featureCount = 0
   const started = Date.now()
   console.log(
-    `ml physics features: tickers=${codes.length}, recent_days=${RECENT_DAYS || 'all'}, min_history_days=${MIN_HISTORY_DAYS}, start=${START_DATE ?? '-'}, end=${END_DATE ?? '-'}`,
+    `ml physics features: tickers=${codes.length}, recent_days=${RECENT_DAYS || 'all'}, min_history_days=${MIN_HISTORY_DAYS}, history_lookback_days=${HISTORY_LOOKBACK_DAYS || 'all'}, missing_only_date=${MISSING_ONLY_DATE ?? '-'}, start=${START_DATE ?? '-'}, end=${END_DATE ?? '-'}`,
   )
   if (TICKER_START || TICKER_END) console.log(`ml physics ticker range: ${TICKER_START ?? '-'}..${TICKER_END ?? '-'}`)
   for (const [index, ticker] of codes.entries()) {

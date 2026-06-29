@@ -6,6 +6,7 @@ import {
   type ProjectionResponse,
 } from '@/lib/stock-scenarios/projections'
 import { getAssistantOpenAIConfig } from '@/lib/assistant/config'
+import { normalizeMarket } from '@/lib/markets'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -158,12 +159,13 @@ export async function GET(request: NextRequest, context: RouteContext) {
   try {
     const { ticker } = await context.params
     const interval = normalizeProjectionInterval(request.nextUrl.searchParams.get('interval'))
+    const market = normalizeMarket(request.nextUrl.searchParams.get('market'))
     const defaultHorizon = defaultProjectionHorizon(interval)
     const horizonDays = parsePositiveInt(request.nextUrl.searchParams.get('horizonDays'), defaultHorizon, 180)
     const limit = parsePositiveInt(request.nextUrl.searchParams.get('limit'), 8, 8)
     const asOfDate = parseAsOfDate(request.nextUrl.searchParams.get('date'))
     const llmEnabled = request.nextUrl.searchParams.get('llm') !== '0' && process.env.SCENARIO_PROJECTION_LLM_ENABLED !== '0'
-    const projection = await buildStockScenarioProjection({ ticker, interval, horizonDays, limit, asOfDate })
+    const projection = await buildStockScenarioProjection({ ticker, market, interval, horizonDays, limit, asOfDate })
     if (!projection) {
       return NextResponse.json({ ok: true, ticker, interval, horizonDays, scenarios: [], message: '価格データがありません。' })
     }

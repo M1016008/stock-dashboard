@@ -91,7 +91,43 @@ export async function ensureTradeScenarioSchema(): Promise<void> {
 }
 
 async function getAnchorRow(market: string, ticker: string, anchorDate: string | null): Promise<AnchorRow | undefined> {
-  if (market !== 'JP') return undefined
+  if (market === 'US') {
+    const dateFilter = anchorDate ? 'AND o.date <= ?' : ''
+    const args = anchorDate ? [ticker, anchorDate] : [ticker]
+    return execGet<AnchorRow>(
+      `
+        SELECT
+          o.date,
+          o.close,
+          o.high,
+          o.low,
+          ds.daily_a_stage,
+          ds.daily_b_stage,
+          ds.weekly_a_stage,
+          ds.weekly_b_stage,
+          ds.monthly_a_stage,
+          ds.monthly_b_stage,
+          pm.physical_momentum_score,
+          pm.physical_force_score,
+          pm.physical_energy_score
+        FROM market_ohlcv_daily o
+        LEFT JOIN market_daily_snapshots ds
+          ON ds.market = 'US'
+         AND ds.ticker = o.ticker
+         AND ds.date = o.date
+        LEFT JOIN physical_momentum_metrics pm
+          ON pm.market = 'US'
+         AND pm.symbol = o.ticker
+         AND pm.date = o.date
+        WHERE o.market = 'US'
+          AND o.ticker = ?
+          ${dateFilter}
+        ORDER BY o.date DESC
+        LIMIT 1
+      `,
+      args,
+    )
+  }
   const dateFilter = anchorDate ? 'AND o.date <= ?' : ''
   const args = anchorDate ? [ticker, anchorDate] : [ticker]
   return execGet<AnchorRow>(
@@ -134,8 +170,24 @@ async function getFutureRows(
   horizonDays: number,
   asOfDate?: string | null,
 ): Promise<TradeScenarioPriceRow[]> {
-  if (market !== 'JP') return []
   const dateFilter = asOfDate ? 'AND date <= ?' : ''
+  if (market === 'US') {
+    return execAll<TradeScenarioPriceRow>(
+      `
+        SELECT date, high, low, close
+        FROM market_ohlcv_daily
+        WHERE market = 'US'
+          AND ticker = ?
+          AND date > ?
+          ${dateFilter}
+        ORDER BY date
+        LIMIT ?
+      `,
+      asOfDate
+        ? [ticker, anchorDate, asOfDate, Math.max(1, Math.floor(horizonDays || 20))]
+        : [ticker, anchorDate, Math.max(1, Math.floor(horizonDays || 20))],
+    )
+  }
   return execAll<TradeScenarioPriceRow>(
     `
       SELECT date, high, low, close

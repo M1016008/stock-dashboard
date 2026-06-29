@@ -91,11 +91,31 @@ const NAV_ITEMS = [
 ] as const satisfies readonly NavEntry[]
 
 const US_NAV_ITEMS = [
-  { href: '/us', label: 'US概要', icon: LayoutDashboard },
-  { href: '/us/screener', label: 'USスクリーナー', icon: Search },
-  { href: '/us/stock/AAPL', label: 'AAPL', icon: ChartCandlestick },
-  { href: '/ai/ma-lens', label: 'AI Lens', icon: Activity },
-] as const
+  { kind: 'link', href: '/us', label: 'US概要', icon: LayoutDashboard },
+  {
+    kind: 'menu',
+    id: 'us-discover',
+    label: '探す',
+    icon: Search,
+    items: [
+      { href: '/us/screener', label: 'USスクリーナー', description: '米国株を条件で抽出', icon: Search },
+      { href: '/ai/research?market=US', label: 'AI銘柄リサーチ', description: '米国株も自然言語で探索', icon: MessageSquareText },
+      { href: '/chart-drill?market=US', label: 'チャートドリル', description: 'US過去チャートで初動練習', icon: ChartCandlestick },
+    ],
+  },
+  {
+    kind: 'menu',
+    id: 'us-analysis',
+    label: '分析',
+    icon: Activity,
+    items: [
+      { href: '/ai/ma-lens', label: 'AI Lens', description: 'MA形状・物理特徴量を横断確認', icon: Activity },
+      { href: '/ai/transitions', label: 'パターン遷移', description: '過去パターンの推移分析', icon: ChartCandlestick },
+      { href: '/backtest', label: '過去検証', description: 'シグナルと期待値を確認', icon: FlaskConical },
+    ],
+  },
+  { kind: 'link', href: '/watchlist', label: 'ウォッチ', icon: Star },
+] as const satisfies readonly NavEntry[]
 
 const COMMODITY_NAV_ITEMS = [
   { href: '/commodities', label: '概要', icon: LayoutDashboard },
@@ -541,7 +561,10 @@ export function Header() {
 
   const isEntryActive = (entry: NavEntry | (typeof US_NAV_ITEMS)[number] | (typeof COMMODITY_NAV_ITEMS)[number]) => {
     if ('kind' in entry && entry.kind === 'menu') {
-      return entry.items.some((item) => item.includeInGroupActive !== false && isActive(item.href))
+      return entry.items.some((item) => {
+        const includeInGroupActive = 'includeInGroupActive' in item ? item.includeInGroupActive : undefined
+        return includeInGroupActive !== false && isActive(item.href)
+      })
     }
     return isActive(entry.href)
   }

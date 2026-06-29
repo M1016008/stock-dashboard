@@ -1,14 +1,15 @@
-// scripts/install-local-ml-learning.ts
+// scripts/install-local-us-ml-weekly.ts
 //
-// ローカルMacの launchd に、日次ML serving更新ジョブを登録する。
-// 重い全期間再学習は weekly governance に寄せ、ここでは最新特徴量・候補・予測・RL/物理状態を早朝に更新する。
+// Register a weekly full-history US ML training/governance run. US daily update
+// keeps serving data fresh; this job refreshes full-history models and
+// evaluations from the oldest available history.
 
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-const label = 'com.stockboard.ml-learning'
+const label = 'com.stockboard.us-ml-weekly'
 const cwd = process.cwd()
 const home = os.homedir()
 const launchAgentsDir = path.join(home, 'Library', 'LaunchAgents')
@@ -23,8 +24,12 @@ const pathEnv = [
   '/usr/sbin',
   '/sbin',
 ].join(':')
-const scheduleHour = Number(process.env.ML_LEARNING_HOUR ?? '3')
-const scheduleMinute = Number(process.env.ML_LEARNING_MINUTE ?? '0')
+
+// launchd Weekday: 1=Monday ... 6=Saturday, 0/7=Sunday.
+const scheduleWeekday = Number(process.env.US_ML_WEEKLY_WEEKDAY ?? '0')
+const scheduleHour = Number(process.env.US_ML_WEEKLY_HOUR ?? '3')
+const scheduleMinute = Number(process.env.US_ML_WEEKLY_MINUTE ?? '0')
+const defaultUsAnalyticsDb = process.env.US_ANALYTICS_DB_PATH?.trim() || '/Volumes/OWC Express 1M2 80G/stockboard-data/us/stockboard-us.db'
 
 function xmlEscape(value: string): string {
   return value
@@ -35,22 +40,6 @@ function xmlEscape(value: string): string {
     .replaceAll("'", '&apos;')
 }
 
-function calendar(hour: number, minute: number, weekday: number): string {
-  return [
-    '    <dict>',
-    `      <key>Weekday</key><integer>${weekday}</integer>`,
-    `      <key>Hour</key><integer>${hour}</integer>`,
-    `      <key>Minute</key><integer>${minute}</integer>`,
-    '    </dict>',
-  ].join('\n')
-}
-
-function weekdaySchedule(): string {
-  // launchd Weekday: 1=Monday ... 6=Saturday, 0/7=Sunday.
-  // Japanese exchange holidays are handled inside scripts/run-ml-learning.ts.
-  return [1, 2, 3, 4, 5].map((weekday) => calendar(scheduleHour, scheduleMinute, weekday)).join('\n')
-}
-
 fs.mkdirSync(launchAgentsDir, { recursive: true })
 fs.mkdirSync(logDir, { recursive: true })
 
@@ -58,9 +47,11 @@ const command = [
   `cd ${JSON.stringify(cwd)}`,
   `export PATH=${JSON.stringify(pathEnv)}`,
   'export USE_LOCAL_DB=1',
-  'export SQLITE_BUSY_RETRIES=240',
-  'export UPDATE_CHILD_TIMEOUT_MINUTES=1440',
-  'npm run batch:ml-learning-daily',
+  'export SQLITE_BUSY_RETRIES=720',
+  'export UPDATE_CHILD_TIMEOUT_MINUTES=2880',
+  `export US_ANALYTICS_DB_PATH=${JSON.stringify(defaultUsAnalyticsDb)}`,
+  'export US_ML_FULL_START_DATE=${US_ML_FULL_START_DATE:-1900-01-01}',
+  'npm run batch:us-ml-full',
 ].join(' && ')
 
 const plist = `<?xml version="1.0" encoding="UTF-8"?>
@@ -79,13 +70,15 @@ const plist = `<?xml version="1.0" encoding="UTF-8"?>
     <string>${xmlEscape(command)}</string>
   </array>
   <key>StartCalendarInterval</key>
-  <array>
-${weekdaySchedule()}
-  </array>
+  <dict>
+    <key>Weekday</key><integer>${scheduleWeekday}</integer>
+    <key>Hour</key><integer>${scheduleHour}</integer>
+    <key>Minute</key><integer>${scheduleMinute}</integer>
+  </dict>
   <key>StandardOutPath</key>
-  <string>${xmlEscape(path.join(logDir, 'ml-learning.log'))}</string>
+  <string>${xmlEscape(path.join(logDir, 'us-ml-weekly.log'))}</string>
   <key>StandardErrorPath</key>
-  <string>${xmlEscape(path.join(logDir, 'ml-learning.err'))}</string>
+  <string>${xmlEscape(path.join(logDir, 'us-ml-weekly.err'))}</string>
   <key>RunAtLoad</key>
   <false/>
 </dict>
@@ -97,12 +90,12 @@ fs.writeFileSync(plistPath, plist)
 try {
   execFileSync('launchctl', ['bootout', `gui/${uid}`, plistPath], { stdio: 'ignore' })
 } catch {
-  // 未登録なら問題なし。
+  // Not registered yet.
 }
 
 execFileSync('launchctl', ['bootstrap', `gui/${uid}`, plistPath], { stdio: 'inherit' })
 execFileSync('launchctl', ['enable', `gui/${uid}/${label}`], { stdio: 'inherit' })
 
 console.log(`launchd registered: ${plistPath}`)
-console.log(`schedule: Mon-Fri ${String(scheduleHour).padStart(2, '0')}:${String(scheduleMinute).padStart(2, '0')} JST; JP exchange holidays are skipped by the wrapper`)
-console.log(`logs: ${path.join(logDir, 'ml-learning.log')}`)
+console.log(`schedule: weekday=${scheduleWeekday} ${String(scheduleHour).padStart(2, '0')}:${String(scheduleMinute).padStart(2, '0')} JST`)
+console.log(`logs: ${path.join(logDir, 'us-ml-weekly.log')}`)

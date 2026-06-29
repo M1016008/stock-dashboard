@@ -5,6 +5,7 @@ import { db } from '@/lib/db/client'
 import { ohlcvDaily } from '@/lib/db/schema'
 import { and, asc, eq, gte } from 'drizzle-orm'
 import type { OHLCV } from '@/types/stock'
+import { parseTimeframeSpec, resampleOhlcv, specToIntervalCode } from '@/lib/timeframes'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -30,6 +31,19 @@ export async function GET(
     const ticker = decodeURIComponent(rawTicker).replace(/\.T$/i, '')
     const { searchParams } = new URL(request.url)
     const period = searchParams.get('period') ?? '1y'
+    const timeframeSpec = parseTimeframeSpec({
+      interval: searchParams.get('interval'),
+      timeframe: searchParams.get('timeframe'),
+      multiplier: searchParams.get('multiplier'),
+    })
+    const wantsTimeframe = searchParams.has('interval') || searchParams.has('timeframe') || searchParams.has('multiplier')
+
+    if (wantsTimeframe && !timeframeSpec) {
+      return NextResponse.json(
+        { error: 'Invalid timeframe. Use interval=D|2D|W|2W|M|2M or timeframe=day|week|month&multiplier=1..12.' },
+        { status: 400 },
+      )
+    }
 
     const days = PERIOD_DAYS[period]
     if (!days && period !== 'all') {
@@ -57,7 +71,20 @@ export async function GET(
       volume: r.volume,
     }))
 
-    return NextResponse.json(history)
+    const output = timeframeSpec ? resampleOhlcv(history, timeframeSpec) : history
+
+    if (searchParams.get('meta') === '1') {
+      return NextResponse.json({
+        ticker,
+        period,
+        timeframe: timeframeSpec ?? { timeframe: 'day', multiplier: 1 },
+        interval: timeframeSpec ? specToIntervalCode(timeframeSpec) : 'D',
+        count: output.length,
+        rows: output,
+      })
+    }
+
+    return NextResponse.json(output)
   } catch (error) {
     console.error('History API error:', error)
     return NextResponse.json(

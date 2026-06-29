@@ -102,6 +102,37 @@ interface UsPhysicalPlanResponse {
   horizons: UsPhysicalPlanHorizon[]
 }
 
+type UsMlStatusTone = 'ok' | 'info' | 'warn' | 'missing'
+
+interface UsMlStatusItem {
+  key: string
+  label: string
+  status: UsMlStatusTone
+  badge: string
+  date: string | null
+  count: number | null
+  detail: string
+  evidence: string[]
+}
+
+interface UsMlStatusResponse {
+  ok: boolean
+  market: 'US'
+  ticker: string
+  dbAvailable: boolean
+  requestedDate?: string | null
+  featureSet: string
+  modelType: string
+  summary: {
+    status: UsMlStatusTone
+    label: string
+    detail: string
+    latestMarketDate?: string | null
+    healthCheckDate?: string | null
+  }
+  items: UsMlStatusItem[]
+}
+
 interface StageHistoryEntry {
   daily_a_stage: number | null
   daily_b_stage: number | null
@@ -126,6 +157,16 @@ function fmtMoney(value: number | null | undefined) {
 
 function fmtScore(value: number | null | undefined) {
   if (value == null || !Number.isFinite(value)) return '-'
+  return value.toFixed(2)
+}
+
+function fmtCompact(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(value)) return '-'
+  const abs = Math.abs(value)
+  const sign = value < 0 ? '-' : ''
+  if (abs >= 1e9) return `${sign}${(abs / 1e9).toFixed(1)}B`
+  if (abs >= 1e6) return `${sign}${(abs / 1e6).toFixed(1)}M`
+  if (abs >= 1e3) return `${sign}${(abs / 1e3).toFixed(1)}K`
   return value.toFixed(2)
 }
 
@@ -173,6 +214,20 @@ function shortTermPanelClass(label: string) {
   if (label === '弱含み注意') return 'border-blue-200 bg-white/70 text-blue-800'
   if (label === '下落警戒') return 'border-sky-200 bg-white/70 text-sky-900'
   return 'border-[var(--color-border-default)] bg-white/70 text-[var(--color-text-secondary)]'
+}
+
+function usMlStatusPanelClass(status: UsMlStatusTone) {
+  if (status === 'ok') return 'border-emerald-200 bg-emerald-50 text-emerald-900'
+  if (status === 'info') return 'border-sky-200 bg-sky-50 text-sky-900'
+  if (status === 'warn') return 'border-amber-200 bg-amber-50 text-amber-900'
+  return 'border-blue-200 bg-blue-50 text-blue-900'
+}
+
+function usMlStatusBadgeClass(status: UsMlStatusTone) {
+  if (status === 'ok') return 'border-emerald-300 bg-white text-emerald-800'
+  if (status === 'info') return 'border-sky-300 bg-white text-sky-800'
+  if (status === 'warn') return 'border-amber-300 bg-white text-amber-800'
+  return 'border-blue-300 bg-white text-blue-800'
 }
 
 export function UsStockDetailClient({
@@ -342,12 +397,12 @@ export function UsStockDetailClient({
           historyPeriod="all"
           showTimeframeSelector
           maLinesByInterval={{
-            D: [5, 25, 75, 200],
-            '2D': [5, 25, 75, 200],
-            W: [5, 25, 75, 200],
-            '2W': [5, 25, 75, 200],
-            M: [5, 25, 75, 200],
-            '2M': [5, 25, 75, 200],
+            D: [3, 5, 25, 75, 200],
+            '2D': [3, 5, 25, 75, 200],
+            W: [3, 5, 25, 75, 200],
+            '2W': [3, 5, 25, 75, 200],
+            M: [3, 5, 25, 75, 200],
+            '2M': [3, 5, 25, 75, 200],
           }}
         />
       </Card>
@@ -358,21 +413,123 @@ export function UsStockDetailClient({
 
       <StockScenarioAiPanel ticker={quote.ticker} market="US" name={quote.name ?? quote.ticker} analysisDate={analysisDate} />
 
-      <Card>
-        <CardHeader title="US ML連携ステータス" hint="日本株と同じUI枠で、US分析データがあるものから順次表示します。" />
-        <div className="grid gap-3 text-[12px] font-semibold text-[var(--color-text-secondary)] md:grid-cols-3">
-          <div className="rounded-[4px] border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] p-3">
-            価格・チャート・6ステージは `market_ohlcv_daily` / `market_daily_snapshots` のUSデータを直接参照します。
+      <UsMlStatusSection ticker={quote.ticker} analysisDate={analysisDate} />
+    </div>
+  )
+}
+
+function UsMlStatusSection({ ticker, analysisDate }: { ticker: string; analysisDate: string | null }) {
+  const [data, setData] = useState<UsMlStatusResponse | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    setError('')
+    const params = new URLSearchParams()
+    if (analysisDate) params.set('date', analysisDate)
+    const query = params.toString()
+    fetch(`/api/us/ml-status/${encodeURIComponent(ticker)}${query ? `?${query}` : ''}`, { cache: 'no-store' })
+      .then((res) => res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`)))
+      .then((payload: UsMlStatusResponse) => {
+        if (!cancelled) setData(payload)
+      })
+      .catch((e) => {
+        if (!cancelled) setError(e instanceof Error ? e.message : String(e))
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => { cancelled = true }
+  }, [ticker, analysisDate])
+
+  return (
+    <Card size="lg">
+      <CardHeader
+        title="US ML連携ステータス"
+        hint="価格・PMS・特徴量・類似候補・物理ML・検証/RLをUS分析DBから実データ確認"
+      />
+      {loading ? (
+        <div className="rounded-[6px] border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] p-4 text-[12px] font-bold text-[var(--color-text-tertiary)]">
+          US ML連携状況を確認中...
+        </div>
+      ) : error ? (
+        <div className="rounded-[6px] border border-blue-200 bg-blue-50 p-4 text-[12px] font-bold text-blue-900">
+          US MLステータス取得エラー: {error}
+        </div>
+      ) : !data?.dbAvailable ? (
+        <div className="rounded-[6px] border border-blue-200 bg-blue-50 p-4 text-[12px] font-bold leading-6 text-blue-900">
+          US分析DBが見つからないため、ML連携状況を確認できません。価格・チャート側は別データで表示される場合があります。
+        </div>
+      ) : data ? (
+        <div className="grid gap-4">
+          <div className={`rounded-[8px] border p-4 ${usMlStatusPanelClass(data.summary.status)}`}>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <div className="text-[11px] font-black opacity-75">結論</div>
+                <div className="mt-1 text-[20px] font-black leading-7">{data.summary.label}</div>
+                <p className="mt-2 text-[12px] font-bold leading-6">{data.summary.detail}</p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <span className="rounded-full border border-current/20 bg-white/80 px-3 py-1 text-[10px] font-black">
+                  {data.featureSet}
+                </span>
+                <span className="rounded-full border border-current/20 bg-white/80 px-3 py-1 text-[10px] font-black">
+                  市場日 {data.summary.latestMarketDate ?? '-'}
+                </span>
+                {data.summary.healthCheckDate && (
+                  <span className="rounded-full border border-current/20 bg-white/80 px-3 py-1 text-[10px] font-black">
+                    健康診断 {data.summary.healthCheckDate}
+                  </span>
+                )}
+                {analysisDate && (
+                  <span className="rounded-full border border-current/20 bg-white/80 px-3 py-1 text-[10px] font-black">
+                    {analysisDate}時点
+                  </span>
+                )}
+              </div>
+            </div>
           </div>
-          <div className="rounded-[4px] border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] p-3">
-            PMS/PFS/PESはUS分析DBで日本株ML互換パイプラインを回した結果を優先表示します。
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {data.items.map((item) => (
+              <UsMlStatusItemCard key={item.key} item={item} />
+            ))}
           </div>
-          <div className="rounded-[4px] border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] p-3">
-            類似候補・物理MLランキング・観察プランはUS特徴量生成済みの範囲から反映します。未生成時も価格・MA・ステージ表示は維持します。
+          <div className="rounded-[6px] border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] p-3 text-[11px] font-bold leading-5 text-[var(--color-text-secondary)]">
+            物理ML候補ランキングは「最新トップ候補」を示すため、全銘柄が候補入りするわけではありません。候補外でも、価格・6ステージ・PMS・特徴量・類似検索・観察プランは個別銘柄分析に利用できます。
           </div>
         </div>
-      </Card>
-    </div>
+      ) : null}
+    </Card>
+  )
+}
+
+function UsMlStatusItemCard({ item }: { item: UsMlStatusItem }) {
+  return (
+    <article className={`rounded-[6px] border p-4 ${usMlStatusPanelClass(item.status)}`}>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="text-[12px] font-black leading-5">{item.label}</div>
+          <div className="mt-1 text-[10px] font-bold opacity-75">
+            {item.date ?? '日付なし'}{item.count != null ? ` / ${item.count.toLocaleString('en-US')}件` : ''}
+          </div>
+        </div>
+        <span className={`shrink-0 rounded-full border px-2 py-1 text-[10px] font-black ${usMlStatusBadgeClass(item.status)}`}>
+          {item.badge}
+        </span>
+      </div>
+      <p className="mt-3 text-[12px] font-bold leading-6">{item.detail}</p>
+      {item.evidence.length > 0 && (
+        <div className="mt-3 flex flex-wrap gap-1.5">
+          {item.evidence.slice(0, 4).map((line) => (
+            <span key={line} className="rounded-full border border-current/15 bg-white/80 px-2 py-1 text-[10px] font-black">
+              {line}
+            </span>
+          ))}
+        </div>
+      )}
+    </article>
   )
 }
 
@@ -515,7 +672,7 @@ function UsPhysicalMomentumSection({
             <BarChart3 size={15} /> Physical Momentum
           </div>
           <p className="mt-1 text-[12px] font-semibold leading-6 text-[var(--color-text-secondary)]">
-            US市場内で標準化した速度・加速度・力・熱量から、現在の運動状態を読みます。
+            PMSは買い/売りの予測ではなく、直近20営業日の累積運動量です。足元の向きはPFS、過熱や大値幅はPESで分けて見ます。
             {data?.source === 'us_analytics' ? ' US分析DBの学習用データを参照しています。' : ''}
           </p>
         </div>
@@ -530,52 +687,65 @@ function UsPhysicalMomentumSection({
           US PMSは未計算です。US physical momentum バッチ生成後にここへ表示されます。
         </p>
       ) : (
-        <div className="mt-3 grid gap-3 lg:grid-cols-[1.15fr_1.85fr]">
-          <div className={`rounded-[6px] border p-4 ${momentumTonePanelClass(view?.tone ?? 'neutral')}`}>
-            <div className="text-[11px] font-black opacity-75">総合判定</div>
-            <div className="mt-1 text-[20px] font-black">{view?.label ?? '方向待ち'}</div>
-            <p className="mt-2 text-[12px] font-bold leading-6">
-              {view?.summary}
-            </p>
-            <div className="mt-3 flex flex-wrap gap-1.5">
-              {view?.badges.map((badge) => (
-                <span key={badge} className="rounded-full border border-current/20 bg-white/70 px-2 py-1 text-[10px] font-black">
-                  {badge}
-                </span>
-              ))}
+        <div className="mt-3 grid gap-3">
+          <div className={`rounded-[8px] border p-4 ${momentumTonePanelClass(view?.tone ?? 'neutral')}`}>
+            <div className="grid gap-3 lg:grid-cols-[1.15fr_1fr]">
+              <div>
+                <div className="inline-flex items-center rounded-full border border-current/20 bg-white/70 px-2.5 py-1 text-[10px] font-black opacity-80">
+                  結論
+                </div>
+                <div className="mt-2 text-[24px] font-black leading-tight">{view?.label ?? '方向待ち'}</div>
+                <p className="mt-2 max-w-[760px] text-[13px] font-bold leading-6">
+                  {view?.summary}
+                </p>
+              </div>
+              <div className="rounded-[6px] border border-current/15 bg-white/70 p-3">
+                <div className="text-[10px] font-black opacity-70">根拠</div>
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {view?.badges.map((badge) => (
+                    <span key={badge} className="rounded-full border border-current/20 bg-white px-2 py-1 text-[10px] font-black">
+                      {badge}
+                    </span>
+                  ))}
+                </div>
+              </div>
             </div>
             {shortTermCheck && (
-              <div className={`mt-3 rounded-[5px] border px-3 py-2 ${shortTermPanelClass(shortTermCheck.label)}`}>
-                <div className="text-[10px] font-black opacity-75">短期チェック</div>
-                <div className="mt-0.5 text-[14px] font-black">{shortTermCheck.label}</div>
+              <div className={`mt-3 rounded-[6px] border px-3 py-2 ${shortTermPanelClass(shortTermCheck.label)}`}>
+                <div className="flex flex-wrap items-baseline gap-2">
+                  <span className="text-[10px] font-black opacity-75">短期チェック</span>
+                  <span className="text-[15px] font-black">{shortTermCheck.label}</span>
+                </div>
                 <p className="mt-1 text-[11px] font-bold leading-5">{shortTermCheck.description}</p>
               </div>
             )}
           </div>
-          <div className="grid gap-3">
-            <div className="grid gap-2 sm:grid-cols-3">
-              <Stat label="PMS 総合の力" value={fmtScore(latest.physicalMomentumScore)} />
-              <Stat label="PFS 初動/失速" value={fmtScore(latest.physicalForceScore)} />
-              <Stat label="PES 熱量" value={fmtScore(latest.physicalEnergyScore)} />
+          <div className="grid gap-3 lg:grid-cols-[0.9fr_1.4fr]">
+            <div className="grid gap-2 sm:grid-cols-3 lg:grid-cols-1">
+              <Stat label="PMS 20日累積" value={fmtScore(latest.physicalMomentumScore)} />
+              <Stat label="PFS 足元の力" value={fmtScore(latest.physicalForceScore)} />
+              <Stat label="PES 値幅/過熱" value={fmtScore(latest.physicalEnergyScore)} />
             </div>
-            <div>
-              <div className="text-[13px] font-black text-[var(--color-text-primary)]">だから、どう見る？</div>
-              <p className="mt-1 text-[11px] font-bold leading-5 text-[var(--color-text-tertiary)]">
-                数字をそのまま読ませず、次に確認する行動条件へ変換しています。
-              </p>
-            </div>
-            <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-              {view?.checks.map((check) => (
-                <div key={`${check.label}-${check.text}`} className={`rounded-[6px] border p-3 ${momentumToneMiniClass(check.tone)}`}>
-                  <div className="text-[10px] font-black opacity-75">{check.label}</div>
-                  <div className="mt-1 text-[12px] font-black leading-5">{check.text}</div>
-                </div>
-              ))}
-            </div>
-            <div className="grid gap-2 sm:grid-cols-3">
-              <Stat label="Velocity" value={fmtScore(latest.velocity)} />
-              <Stat label="Acceleration" value={fmtScore(latest.acceleration)} />
-              <Stat label="Force" value={fmtScore(latest.force)} />
+            <div className="grid gap-3">
+              <div>
+                <div className="text-[13px] font-black text-[var(--color-text-primary)]">だから、どう見る？</div>
+                <p className="mt-1 text-[11px] font-bold leading-5 text-[var(--color-text-tertiary)]">
+                  買い目線と空売り目線を分けて、次に確認する条件だけを表示します。
+                </p>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
+                {view?.checks.map((check) => (
+                  <div key={`${check.label}-${check.text}`} className={`rounded-[6px] border p-3 ${momentumToneMiniClass(check.tone)}`}>
+                    <div className="text-[10px] font-black opacity-75">{check.label}</div>
+                    <div className="mt-1 text-[12px] font-black leading-5">{check.text}</div>
+                  </div>
+                ))}
+              </div>
+              <div className="grid gap-2 sm:grid-cols-3">
+                <Stat label="Velocity" value={fmtScore(latest.velocity)} />
+                <Stat label="Acceleration" value={fmtScore(latest.acceleration)} />
+                <Stat label="Force" value={fmtCompact(latest.force)} />
+              </div>
             </div>
           </div>
         </div>
@@ -694,11 +864,8 @@ function UsPhysicalPlanCard({ horizon }: { horizon: UsPhysicalPlanHorizon }) {
         <Stat label="Lift" value={horizon.lift == null ? '-' : horizon.lift.toFixed(2)} />
         <Stat label="順行/逆行" value={`${fmtPctRaw(horizon.avgMaxReturnPct)} / ${fmtPctRaw(horizon.avgMinReturnPct)}`} />
       </div>
-      <p className="mt-3 text-[12px] font-semibold leading-6 text-[var(--color-text-secondary)]">
-        {horizon.suggestion.summary}
-      </p>
       <div className="mt-3 space-y-2">
-        {horizon.suggestion.checklist.slice(0, 3).map((item) => (
+        {horizon.suggestion.checklist.slice(0, 2).map((item) => (
           <div key={item} className="flex gap-2 text-[12px] font-bold leading-6 text-[var(--color-brand-900)]">
             <span className={`mt-[9px] h-2 w-2 shrink-0 rounded-full ${dotClass}`} />
             <span>{item}</span>

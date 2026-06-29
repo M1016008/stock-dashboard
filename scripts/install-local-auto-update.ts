@@ -51,6 +51,7 @@ const command = [
   'export USE_LOCAL_DB=1',
   'export SQLITE_BUSY_RETRIES=20',
   'export UPDATE_CHILD_TIMEOUT_MINUTES=75',
+  'export SKIP_DAILY_ML=1',
   'npm run batch:update-latest',
 ].join(' && ')
 

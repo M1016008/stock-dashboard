@@ -18,6 +18,7 @@ const COPY_CHUNK = Math.min(requestedCopyChunk, maxCopyChunk)
 const BATCH_CHUNK = Math.max(25, Math.min(Number(process.env.US_ANALYTICS_BATCH_CHUNK ?? 100), 200))
 const NATIVE_COPY = process.env.US_ANALYTICS_NATIVE_COPY !== '0'
 const NATIVE_COPY_CHUNK = Math.max(25, Math.min(Number(process.env.US_ANALYTICS_NATIVE_CHUNK ?? 500), 1000))
+const NATIVE_SYNC_RECENT_DAYS = Math.max(1, Number(process.env.US_ANALYTICS_SYNC_RECENT_DAYS ?? 45))
 
 async function run(client: Client, sql: string, args: Array<string | number | null> = []) {
   await client.execute({ sql, args })
@@ -150,6 +151,115 @@ function nativeCopyPending(pendingTickers: string[], doneSize: number): boolean 
   return true
 }
 
+function nativeSyncLatest(sourcePath: string): { ohlcvRows: number; snapshotRows: number; ohlcvAfter: string | null; snapshotAfter: string | null } {
+  if (!NATIVE_COPY || !fs.existsSync(sourcePath)) {
+    return { ohlcvRows: 0, snapshotRows: 0, ohlcvAfter: null, snapshotAfter: null }
+  }
+
+  const output = runSqlite(TARGET_PATH, `
+.bail on
+PRAGMA busy_timeout = 60000;
+PRAGMA synchronous = NORMAL;
+PRAGMA temp_store = MEMORY;
+ATTACH DATABASE ${sqlLiteral(sourcePath)} AS src;
+CREATE TEMP TABLE sync_bounds AS
+  SELECT
+    (SELECT MAX(date) FROM ohlcv_daily) AS ohlcv_after,
+    (SELECT MAX(date) FROM daily_snapshots) AS snapshot_after,
+    (SELECT MAX(date) FROM src.market_ohlcv_daily WHERE market = 'US') AS source_ohlcv_latest,
+    (SELECT MAX(date) FROM src.market_daily_snapshots WHERE market = 'US') AS source_snapshot_latest;
+CREATE TEMP TABLE sync_recent_bounds AS
+  SELECT
+    CASE
+      WHEN source_ohlcv_latest IS NOT NULL THEN date(source_ohlcv_latest, '-${NATIVE_SYNC_RECENT_DAYS} days')
+      ELSE NULL
+    END AS ohlcv_start,
+    CASE
+      WHEN source_snapshot_latest IS NOT NULL THEN date(source_snapshot_latest, '-${NATIVE_SYNC_RECENT_DAYS} days')
+      ELSE NULL
+    END AS snapshot_start
+  FROM sync_bounds;
+BEGIN IMMEDIATE;
+INSERT OR REPLACE INTO ohlcv_daily (ticker, date, open, high, low, close, volume)
+  SELECT m.ticker, m.date, m.open, m.high, m.low, m.close, m.volume
+  FROM src.market_ohlcv_daily m
+  WHERE m.market = 'US'
+    AND (
+      (
+        (SELECT ohlcv_after FROM sync_bounds) IS NOT NULL
+        AND m.date > (SELECT ohlcv_after FROM sync_bounds)
+      )
+      OR (
+        (SELECT ohlcv_start FROM sync_recent_bounds) IS NOT NULL
+        AND m.date >= (SELECT ohlcv_start FROM sync_recent_bounds)
+      )
+    );
+INSERT OR REPLACE INTO daily_snapshots (
+  ticker, date, ma_5, ma_25, ma_75, ma_150, ma_300,
+  weekly_ma_5, weekly_ma_13, weekly_ma_25, weekly_ma_50, weekly_ma_100,
+  monthly_ma_3, monthly_ma_5, monthly_ma_10, monthly_ma_20, monthly_ma_25,
+  daily_a_stage, daily_b_stage, weekly_a_stage, weekly_b_stage, monthly_a_stage, monthly_b_stage,
+  computed_at
+)
+  SELECT
+    m.ticker, m.date, m.ma_5, m.ma_25, m.ma_75, m.ma_150, m.ma_300,
+    m.weekly_ma_5, m.weekly_ma_13, m.weekly_ma_25, m.weekly_ma_50, m.weekly_ma_100,
+    m.monthly_ma_3, m.monthly_ma_5, m.monthly_ma_10, m.monthly_ma_20, m.monthly_ma_25,
+    m.daily_a_stage, m.daily_b_stage, m.weekly_a_stage, m.weekly_b_stage, m.monthly_a_stage, m.monthly_b_stage,
+    unixepoch()
+  FROM src.market_daily_snapshots m
+  WHERE m.market = 'US'
+    AND (
+      (
+        (SELECT snapshot_after FROM sync_bounds) IS NOT NULL
+        AND m.date > (SELECT snapshot_after FROM sync_bounds)
+      )
+      OR (
+        (SELECT snapshot_start FROM sync_recent_bounds) IS NOT NULL
+        AND m.date >= (SELECT snapshot_start FROM sync_recent_bounds)
+      )
+    );
+INSERT OR REPLACE INTO us_analytics_copy_state (ticker, status, ohlcv_rows, snapshot_rows, updated_at)
+  SELECT
+    u.ticker,
+    'done',
+    COALESCE((SELECT COUNT(*) FROM ohlcv_daily o WHERE o.ticker = u.ticker), 0),
+    COALESCE((SELECT COUNT(*) FROM daily_snapshots d WHERE d.ticker = u.ticker), 0),
+    unixepoch()
+  FROM ticker_universe u
+  WHERE EXISTS (
+      SELECT 1
+      FROM ohlcv_daily o
+      WHERE o.ticker = u.ticker
+        AND o.date >= COALESCE((SELECT ohlcv_start FROM sync_recent_bounds), '9999-12-31')
+    )
+     OR EXISTS (
+      SELECT 1
+      FROM daily_snapshots d
+      WHERE d.ticker = u.ticker
+        AND d.date >= COALESCE((SELECT snapshot_start FROM sync_recent_bounds), '9999-12-31')
+    );
+COMMIT;
+SELECT 'synced|' ||
+  COALESCE((SELECT COUNT(*) FROM ohlcv_daily WHERE date >= COALESCE((SELECT ohlcv_start FROM sync_recent_bounds), '9999-12-31')), 0) ||
+  '|' ||
+  COALESCE((SELECT COUNT(*) FROM daily_snapshots WHERE date >= COALESCE((SELECT snapshot_start FROM sync_recent_bounds), '9999-12-31')), 0) ||
+  '|' ||
+  COALESCE((SELECT ohlcv_after FROM sync_bounds), '') ||
+  '|' ||
+  COALESCE((SELECT snapshot_after FROM sync_bounds), '');
+DETACH DATABASE src;
+`)
+  const line = output.trim().split(/\r?\n/).find((row) => row.startsWith('synced|'))
+  const [, ohlcvRows, snapshotRows, ohlcvAfter, snapshotAfter] = (line ?? 'synced|0|0||').split('|')
+  return {
+    ohlcvRows: Number(ohlcvRows ?? 0),
+    snapshotRows: Number(snapshotRows ?? 0),
+    ohlcvAfter: ohlcvAfter || null,
+    snapshotAfter: snapshotAfter || null,
+  }
+}
+
 async function ensureTarget(client: Client) {
   await run(client, `PRAGMA journal_mode=WAL`)
   await run(client, `CREATE TABLE IF NOT EXISTS ticker_universe (
@@ -256,6 +366,12 @@ async function main() {
   })))
 
   const tickers = universe.map((row) => row.ticker)
+  const synced = nativeSyncLatest(localDbPath)
+  if (synced.ohlcvRows > 0 || synced.snapshotRows > 0) {
+    console.log(
+      `US analytics latest sync: ohlcvRows=${synced.ohlcvRows} after=${synced.ohlcvAfter ?? 'none'}, snapshots=${synced.snapshotRows} after=${synced.snapshotAfter ?? 'none'}`,
+    )
+  }
   const doneRows = await target.execute({
     sql: `SELECT ticker FROM us_analytics_copy_state WHERE status = 'done'`,
     args: [],

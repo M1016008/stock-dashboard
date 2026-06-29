@@ -1,15 +1,26 @@
 export const ML_PHYSICS_FEATURE_SET_V2 = 'ma_physics_v2'
 export const ML_PHYSICS_FEATURE_SET_V3 = 'ma_physics_v3'
+export const ML_PHYSICS_FEATURE_SET_V4 = 'ma_physics_v4'
 
 const configuredPhysicsFeatureSet = process.env.ML_PHYSICS_FEATURE_SET?.trim()
 
 export const ML_PHYSICS_FEATURE_SET =
   configuredPhysicsFeatureSet === ML_PHYSICS_FEATURE_SET_V2
     ? ML_PHYSICS_FEATURE_SET_V2
-    : ML_PHYSICS_FEATURE_SET_V3
-export const ML_PHYSICS_VERSION = ML_PHYSICS_FEATURE_SET === ML_PHYSICS_FEATURE_SET_V3 ? 3 : 2
+    : configuredPhysicsFeatureSet === ML_PHYSICS_FEATURE_SET_V3
+      ? ML_PHYSICS_FEATURE_SET_V3
+      : configuredPhysicsFeatureSet === ML_PHYSICS_FEATURE_SET_V4
+        ? ML_PHYSICS_FEATURE_SET_V4
+        : ML_PHYSICS_FEATURE_SET_V4
+export const ML_PHYSICS_VERSION = ML_PHYSICS_FEATURE_SET === ML_PHYSICS_FEATURE_SET_V4
+  ? 4
+  : ML_PHYSICS_FEATURE_SET === ML_PHYSICS_FEATURE_SET_V3
+    ? 3
+    : 2
 export const ML_PHYSICS_MODEL_TYPE =
-  ML_PHYSICS_VERSION >= 3 ? 'logistic_regression_physics_v3' : 'logistic_regression_physics_v2'
+  ML_PHYSICS_VERSION >= 4 ? 'logistic_regression_physics_v4'
+    : ML_PHYSICS_VERSION >= 3 ? 'logistic_regression_physics_v3'
+      : 'logistic_regression_physics_v2'
 export const ML_PHYSICS_DEFAULT_HORIZONS = [5, 10, 15, 20, 40, 60, 90, 180] as const
 export const ML_PHYSICS_DEFAULT_HORIZON_LIST = ML_PHYSICS_DEFAULT_HORIZONS.join(',')
 
@@ -123,10 +134,42 @@ export const ML_PHYSICS_V3_FEATURE_NAMES = [
   'upperTimeframeResistance',
 ] as const
 
+export const ML_PHYSICS_V4_FEATURE_NAMES = [
+  'twoDayOrderBullish',
+  'twoDayOrderBearish',
+  'twoWeekOrderBullish',
+  'twoWeekOrderBearish',
+  'twoMonthOrderBullish',
+  'twoMonthOrderBearish',
+  'twoDayMa5Velocity5',
+  'twoDayMa25Velocity5',
+  'twoDayMa5Acceleration5',
+  'twoDayGap5To25',
+  'twoDayGap5To25Velocity5',
+  'twoDayBundleWidthPct',
+  'twoDayPriceToMa5',
+  'twoWeekMa5Velocity5',
+  'twoWeekMa13Velocity5',
+  'twoWeekMa5Acceleration5',
+  'twoWeekGap5To13',
+  'twoWeekGap5To13Velocity5',
+  'twoWeekBundleWidthPct',
+  'twoWeekPriceToMa5',
+  'twoMonthMa3Velocity21',
+  'twoMonthMa5Velocity21',
+  'twoMonthMa3Acceleration21',
+  'twoMonthGap3To5',
+  'twoMonthGap3To5Velocity21',
+  'twoMonthBundleWidthPct',
+  'twoMonthPriceToMa3',
+] as const
+
 export const ML_PHYSICS_FEATURE_NAMES: readonly string[] =
-  ML_PHYSICS_VERSION >= 3
-    ? [...ML_PHYSICS_BASE_FEATURE_NAMES, ...ML_PHYSICS_V3_FEATURE_NAMES]
-    : ML_PHYSICS_BASE_FEATURE_NAMES
+  ML_PHYSICS_VERSION >= 4
+    ? [...ML_PHYSICS_BASE_FEATURE_NAMES, ...ML_PHYSICS_V3_FEATURE_NAMES, ...ML_PHYSICS_V4_FEATURE_NAMES]
+    : ML_PHYSICS_VERSION >= 3
+      ? [...ML_PHYSICS_BASE_FEATURE_NAMES, ...ML_PHYSICS_V3_FEATURE_NAMES]
+      : ML_PHYSICS_BASE_FEATURE_NAMES
 
 export type PhysicsDirection = 'up' | 'down' | 'wait'
 export type PhysicsMaKey = 'sma5' | 'sma25' | 'sma75' | 'sma200'
@@ -219,6 +262,9 @@ export type PhysicsFeatureProfile = {
   multiTimeframe?: {
     weekly: PhysicsUpperTimeframeProfile
     monthly: PhysicsUpperTimeframeProfile
+    twoDay?: PhysicsUpperTimeframeProfile
+    twoWeek?: PhysicsUpperTimeframeProfile
+    twoMonth?: PhysicsUpperTimeframeProfile
     alignment: {
       dailyWeeklyBullish: number
       dailyWeeklyBearish: number
@@ -387,7 +433,7 @@ export function physicsFeatureVector(profile: PhysicsFeatureProfile): number[] {
   const monthly = profile.multiTimeframe?.monthly
   const weeklyOrder = upperOrderScores(weekly?.maOrder, ['5週', '13週', '25週', '50週', '100週'], ['100週', '50週', '25週', '13週', '5週'])
   const monthlyOrder = upperOrderScores(monthly?.maOrder, ['3か月', '5か月', '10か月', '20か月', '25か月'], ['25か月', '20か月', '10か月', '5か月', '3か月'])
-  return [
+  const v3 = [
     ...base,
     weeklyOrder.bullish,
     weeklyOrder.bearish,
@@ -421,6 +467,44 @@ export function physicsFeatureVector(profile: PhysicsFeatureProfile): number[] {
     profile.multiTimeframe?.alignment.weeklyMonthlyBearish ?? 0,
     profile.multiTimeframe?.alignment.upperSupport ?? 0,
     profile.multiTimeframe?.alignment.upperResistance ?? 0,
+  ]
+  if (ML_PHYSICS_VERSION < 4) return v3
+
+  const twoDay = profile.multiTimeframe?.twoDay
+  const twoWeek = profile.multiTimeframe?.twoWeek
+  const twoMonth = profile.multiTimeframe?.twoMonth
+  const twoDayOrder = upperOrderScores(twoDay?.maOrder, ['5本', '25本', '75本', '200本'], ['200本', '75本', '25本', '5本'])
+  const twoWeekOrder = upperOrderScores(twoWeek?.maOrder, ['5本', '13本', '25本', '50本', '100本'], ['100本', '50本', '25本', '13本', '5本'])
+  const twoMonthOrder = upperOrderScores(twoMonth?.maOrder, ['3本', '5本', '10本', '20本', '25本'], ['25本', '20本', '10本', '5本', '3本'])
+  return [
+    ...v3,
+    twoDayOrder.bullish,
+    twoDayOrder.bearish,
+    twoWeekOrder.bullish,
+    twoWeekOrder.bearish,
+    twoMonthOrder.bullish,
+    twoMonthOrder.bearish,
+    clip(twoDay?.velocities.ma5?.d5, 10),
+    clip(twoDay?.velocities.ma25?.d5, 8),
+    clip(twoDay?.accelerations.ma5?.d5, 7),
+    clip(twoDay?.gaps.ma5To25Pct, 18),
+    clip(twoDay?.gapVelocity.ma5To25?.d5, 8),
+    clip(twoDay?.bundleWidthPct, 35),
+    clip(twoDay?.pricePosition.ma5, 18),
+    clip(twoWeek?.velocities.ma5?.d5, 10),
+    clip(twoWeek?.velocities.ma13?.d5, 8),
+    clip(twoWeek?.accelerations.ma5?.d5, 7),
+    clip(twoWeek?.gaps.ma5To13Pct, 18),
+    clip(twoWeek?.gapVelocity.ma5To13?.d5, 8),
+    clip(twoWeek?.bundleWidthPct, 35),
+    clip(twoWeek?.pricePosition.ma5, 18),
+    clip(twoMonth?.velocities.ma3?.d21, 12),
+    clip(twoMonth?.velocities.ma5?.d21, 10),
+    clip(twoMonth?.accelerations.ma3?.d21, 8),
+    clip(twoMonth?.gaps.ma3To5Pct, 18),
+    clip(twoMonth?.gapVelocity.ma3To5?.d21, 8),
+    clip(twoMonth?.bundleWidthPct, 40),
+    clip(twoMonth?.pricePosition.ma3, 22),
   ]
 }
 

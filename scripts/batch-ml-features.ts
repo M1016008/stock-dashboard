@@ -35,7 +35,7 @@ const END_DATE = process.env.ML_END_DATE?.trim() || null
 const TICKER_LIMIT = Number(process.env.ML_TICKER_LIMIT ?? 0)
 const TICKER_START = process.env.ML_TICKER_START?.trim() || null
 const TICKER_END = process.env.ML_TICKER_END?.trim() || null
-const HORIZONS = (process.env.ML_HORIZONS ?? '20,40,60,90')
+const HORIZONS = (process.env.ML_HORIZONS ?? '5,10,20,40,60,90')
   .split(',')
   .map((value) => Number(value.trim()))
   .filter((value) => Number.isFinite(value) && value > 0)

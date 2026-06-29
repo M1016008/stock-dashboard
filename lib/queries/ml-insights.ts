@@ -1,6 +1,6 @@
 import { execAll, execGet } from '@/lib/db/client'
 import { ML_PHYSICS_FEATURE_SET } from '@/lib/backtest/ml-physics'
-import { MIN_DISPLAY_SIMILARITY_SCORE } from '@/lib/ml/similarity-threshold'
+import { LOW_CONFIDENCE_SIMILARITY_SCORE, MIN_DISPLAY_SIMILARITY_SCORE } from '@/lib/ml/similarity-threshold'
 
 export type MlDirectionFilter = 'up' | 'down' | 'both'
 export type MlObjectiveVariant = 'enhanced' | 'baseline' | 'all'
@@ -337,7 +337,7 @@ export async function getCurrentSimilars(params: {
   const where = ticker ? 'as_of_date = ? AND base_ticker = ?' : 'as_of_date = ?'
   const args: Array<string | number> = ticker ? [asOfDate, ticker] : [asOfDate]
   const filteredWhere = `${where} AND similarity_score >= ?`
-  const rows = await execAll<SimilarRow>(
+  let rows = await execAll<SimilarRow>(
     `
     SELECT as_of_date, base_ticker, rank, similar_ticker, similarity_score,
            base_direction, similar_direction, payload_json, reason_json
@@ -348,6 +348,20 @@ export async function getCurrentSimilars(params: {
     `,
     [...args, MIN_DISPLAY_SIMILARITY_SCORE, limit],
   )
+  if (ticker && rows.length === 0) {
+    rows = await execAll<SimilarRow>(
+      `
+      SELECT as_of_date, base_ticker, rank, similar_ticker, similarity_score,
+             base_direction, similar_direction, payload_json, reason_json
+      FROM serving_current_similars
+      WHERE ${where}
+        AND similarity_score >= ?
+      ORDER BY rank ASC
+      LIMIT ?
+      `,
+      [...args, LOW_CONFIDENCE_SIMILARITY_SCORE, limit],
+    )
+  }
   return {
     asOfDate,
     rows: rows.map((row) => ({

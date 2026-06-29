@@ -213,6 +213,14 @@ function levelPriceText(level: PriceLevel | null | undefined, market: MarketCode
   return `${level.label} ${priceText(level.value, market)}`
 }
 
+function compactPriceSummary(levels: HorizonPriceLevels | null, market: MarketCode): string {
+  if (!levels) return '価格ライン未判定'
+  if (finite(levels.support.value) && finite(levels.breakdown.value) && levels.support.value === levels.breakdown.value) {
+    return `支持/崩れ ${priceText(levels.support.value, market)} / 抵抗 ${priceText(levels.resistance.value, market)}`
+  }
+  return `支持 ${priceText(levels.support.value, market)} / 抵抗 ${priceText(levels.resistance.value, market)} / 崩れ ${priceText(levels.breakdown.value, market)}`
+}
+
 function windowRows(rows: PriceRow[], days: number): PriceRow[] {
   return rows.slice(Math.max(0, rows.length - days))
 }
@@ -350,81 +358,81 @@ function horizonFocus(horizon: PlanHorizon): {
 } {
   if (horizon.days <= 5) {
     return {
-      focus: '5営業日は「初動が今日から数日で続くか」を見る時間軸です。5日線、直近安値/高値、PFSの向きだけを重く見ます',
-      upStance: '打診は小さく。5日線上でPFSが保てるかを確認',
-      downStance: '反発を急がず、短期線の戻り失敗を優先確認',
-      neutralStance: '数日内の方向が出るまで見送り',
+      focus: '5日: 初動が続くかだけ確認',
+      upStance: '小さく打診。5日線維持が条件',
+      downStance: '反発待ち。戻り失敗を確認',
+      neutralStance: '方向が出るまで見送り',
       upChecklist: [
-        '終値が5日線上を維持し、翌日以降もPFSがプラス圏に残るかを見る',
-        '直近高値を試す場面でPESが落ちず、短期の熱量が抜けないか確認する',
-        '5日線を割ったら、打診ではなく一度観察へ戻す',
+        '5日線上を維持',
+        'PFSプラス継続',
+        '5日線割れなら観察へ戻す',
       ],
       downChecklist: [
-        '5日線への戻りで上値が抑えられ、終値が直近安値に近づくかを見る',
-        'PFSがマイナス圏で拡大するなら、短期反発より下方向の力を優先する',
-        '陽線反発が出ても5日線を回復できなければ戻り売り形として扱う',
+        '5日線で戻り失敗',
+        'PFSマイナス拡大',
+        '5日線回復なら警戒を弱める',
       ],
       neutralChecklist: [
-        '5日線の上下どちらで終値が2営業日続くかを見る',
-        'PFSがゼロ近辺から明確に傾くまで判断を急がない',
-        '短期の値幅だけでなく、直近高安のどちらを先に抜くか確認する',
+        '5日線の上下どちらに定着するか',
+        'PFSの向き待ち',
+        '直近高安の抜け方向を確認',
       ],
-      upInvalidation: '5日線を終値で割り、PFSがマイナス化する場合は短期上昇シナリオを取り下げます。',
-      downInvalidation: '5日線を終値で回復し、PFSがプラス圏へ戻る場合は短期下落警戒を弱めます。',
-      neutralInvalidation: '5日線の片側に終値が定着し、PFSも同方向へ傾いたら見送りから方向判断へ移します。',
+      upInvalidation: '5日線割れ + PFSマイナス。',
+      downInvalidation: '5日線回復 + PFSプラス。',
+      neutralInvalidation: '5日線の片側に定着 + PFS同方向。',
     }
   }
 
   if (horizon.days <= 20) {
     return {
-      focus: '20営業日は「1か月のトレンドへ育つか」を見る時間軸です。25日線、日足6ステージ、PMSの上昇/低下を重く見ます',
-      upStance: '25日線を軸に、押し目が崩れず中期上昇へつながるか確認',
-      downStance: '25日線回復の失敗と日足ステージ悪化を優先確認',
-      neutralStance: '25日線をまたぐ往来が続く間は中期判断を保留',
+      focus: '20日: 1か月トレンド化を確認',
+      upStance: '25日線維持なら押し目候補',
+      downStance: '25日線回復失敗なら失速警戒',
+      neutralStance: '25日線周辺は判断保留',
       upChecklist: [
-        '25日線を終値で維持し、日足ステージが2→1または3→2へ改善するかを見る',
-        'PMSが低下に転じず、短期のPFS改善が総合PMSへ波及するか確認する',
-        '25日線割れ後にすぐ回復できない場合は、1か月上昇シナリオを弱める',
+        '25日線を維持',
+        '日足ステージ改善',
+        'PMS低下なら弱める',
       ],
       downChecklist: [
-        '25日線を終値で回復できず、日足ステージが4/5側へ進むかを見る',
-        'PMSが低下し、PFSのマイナスが数日で解消しない場合は中期下落を優先する',
-        '戻り高値が切り下がるなら、短期反発ではなく中期失速として扱う',
+        '25日線回復失敗',
+        '日足ステージ悪化',
+        '戻り高値切り下げ',
       ],
       neutralChecklist: [
-        '25日線付近で終値が上下に振れる間は、日足ステージの連続改善/悪化を待つ',
-        'PMSとPFSの向きが揃うかを見る。片方だけなら中期判断は弱い',
-        '20営業日の検証liftが低い場合は、物理MLより価格の節目確認を優先する',
+        '25日線の上下定着待ち',
+        'PMS/PFSの向き一致待ち',
+        '価格節目を優先',
       ],
-      upInvalidation: '25日線を終値で明確に割り、PMSも低下へ転じる場合は中期上昇シナリオを保留します。',
-      downInvalidation: '25日線を終値で回復し、日足ステージが改善へ連続する場合は中期下落警戒を弱めます。',
-      neutralInvalidation: '25日線の上下どちらかに定着し、日足ステージとPMSが同方向へ揃ったら中期判断へ移します。',
+      upInvalidation: '25日線割れ + PMS低下。',
+      downInvalidation: '25日線回復 + ステージ改善。',
+      neutralInvalidation: '25日線定着 + PMS/PFS同方向。',
     }
   }
 
   return {
-    focus: '60営業日は「大局の転換か一時的な揺れか」を見る時間軸です。週足/月足、75日線、200日線、過去検証の順行/逆行幅を重く見ます',
-    upStance: '週足の悪化が止まり、75日線/200日線側へ力が伝わるか確認',
-    downStance: '週足・月足の上値抵抗と75日線割れを優先確認',
-    neutralStance: '大局判断は急がず、週足/月足の整合を待つ',
+    focus: '60日: 大局転換か調整か確認',
+    upStance: '75日線維持なら大局回復候補',
+    downStance: '75日線割れなら大局悪化警戒',
+    neutralStance: '週足/月足が揃うまで保留',
     upChecklist: [
-      '75日線を回復または維持し、週足ステージの悪化が止まるかを見る',
-      'PMS改善が数週間続き、短期だけでなく中長期線へ上向きの力が拡散するか確認する',
-      '60営業日の平均順行幅に対して、逆行リスクが大きすぎないかを見る',
+      '75日線を維持/回復',
+      '週足悪化が停止',
+      'PMS改善が継続',
     ],
     downChecklist: [
-      '75日線を終値で割り込み、週足/月足ステージも悪化側へ揃うかを見る',
-      '反発しても200日線や週足MAで抑えられる場合は、大局下落継続として扱う',
-      '60営業日の平均逆行幅が大きい場合は、短期反発より資金管理を優先する',
+      '75日線割れ',
+      '週足/月足悪化',
+      '200日線で戻り失敗',
     ],
     neutralChecklist: [
-      '75日線と200日線の間で推移する間は、大局転換の判断を急がない',
-      '週足と月足の向きが揃うかを見る。日足だけの改善/悪化では長期判断を固定しない',
-      '60営業日の検証サンプルとliftが弱い場合は、統計より価格帯と上位足を優先する',
+      '75日線/200日線の抜け方向待ち',
+      '週足/月足の一致待ち',
+      '上位足を優先',
     ],
-    upInvalidation: '75日線を明確に割り、週足ステージも悪化へ進む場合は長期上昇シナリオを保留します。',
-    downInvalidation: '75日線を回復し、週足ステージの悪化が止まる場合は長期下落警戒を弱めます。',
-    neutralInvalidation: '週足/月足とPMSが同方向へ揃い、75日線または200日線を明確に抜けたら大局判断へ移します。',
+    upInvalidation: '75日線割れ + 週足悪化。',
+    downInvalidation: '75日線回復 + 週足悪化停止。',
+    neutralInvalidation: '週足/月足 + PMSが同方向。',
   }
 }
 
@@ -450,18 +458,7 @@ function planFrom(
   const pfs = momentum?.physicalForceScore ?? null
   const pms = momentum?.physicalMomentumScore ?? null
   const focus = horizonFocus(horizon)
-  const horizonScope =
-    horizon.days <= 5 ? '数日内'
-      : horizon.days <= 20 ? '1か月内'
-        : '数週間から3か月'
-  const priceSummary = levels
-    ? `基準価格は${priceText(levels.close, market)}。支持/反発候補は${levelText(levels.support, market)}、抵抗/反落候補は${levelText(levels.resistance, market)}`
-    : '価格ラインは未判定'
-  const evidence = [
-    `${status}`,
-    `${directionLabel(target)} / 信頼${confidence}`,
-    candidateLine(candidates),
-  ]
+  const priceSummary = compactPriceSummary(levels, market)
   const statLine = [
     finite(calibration?.hitRate) ? `的中率${pct(calibration?.hitRate)}` : null,
     finite(calibration?.lift) ? `lift ${calibration?.lift?.toFixed(2)}` : null,
@@ -475,13 +472,13 @@ function planFrom(
       tone: strong ? 'negative' : 'warning',
       stance: strong ? focus.downStance : `${focus.downStance}。ただし統計信頼は${confidence}`,
       headline: `${horizon.label}は下方向の警戒を優先`,
-      summary: `${focus.focus}。${priceSummary}。現在形状は${evidence.join('、')}。${statLine || '検証統計は不足気味です'}。`,
+      summary: `${priceSummary}。${statLine || '検証不足'}。`,
       checklist: levels ? [
-        `${levelPriceText(levels.resistance, market)}前後が${horizonScope}の反落候補。戻りが止まり、陰線またはPFS再低下になるかを見る`,
-        `${levelPriceText(levels.breakdown, market)}を終値で割ると、${horizonScope}の下方向への力の拡散を優先して警戒する`,
-        `${levelPriceText(levels.resistance, market)}を終値で回復するなら、${horizonScope}の下落警戒はいったん弱める`,
+        `${levelPriceText(levels.resistance, market)}で戻り失敗`,
+        `${levelPriceText(levels.breakdown, market)}割れで警戒強め`,
+        `${levelPriceText(levels.resistance, market)}回復で警戒弱め`,
       ] : focus.downChecklist,
-      invalidation: levels ? `${levelPriceText(levels.resistance, market)}を終値で回復し、PFSがプラス圏へ戻る場合は下落警戒を弱めます。` : focus.downInvalidation,
+      invalidation: levels ? `${levelPriceText(levels.resistance, market)}回復 + PFSプラス。` : focus.downInvalidation,
     }
   }
 
@@ -491,15 +488,15 @@ function planFrom(
       tone: overheated ? 'warning' : 'positive',
       stance: overheated ? `追いかけず、${horizon.days <= 5 ? '数日内の押し目' : horizon.days <= 20 ? '25日線付近の押し目' : '週足の押し目'}確認型` : focus.upStance,
       headline: `${horizon.label}は上方向の形を確認`,
-      summary: `${focus.focus}。${priceSummary}。現在形状は${evidence.join('、')}。${statLine || '検証統計は不足気味です'}。`,
+      summary: `${priceSummary}。${statLine || '検証不足'}。`,
       checklist: levels ? [
-        `${levelPriceText(levels.support, market)}付近まで押した時に終値で守り、${horizonScope}の反発候補になるかを見る`,
-        `${levelPriceText(levels.resistance, market)}を終値で上抜けるか。ここで上髭/陰線なら${horizonScope}の反落注意`,
-        `${levelPriceText(levels.breakdown, market)}を終値で割る場合は、${horizonScope}の上方向シナリオをいったん保留する`,
+        `${levelPriceText(levels.support, market)}で下げ止まり`,
+        `${levelPriceText(levels.resistance, market)}上抜け確認`,
+        `${levelPriceText(levels.breakdown, market)}割れで保留`,
       ] : overheated && horizon.days <= 5
           ? ['高値追いではなく、5日線付近まで熱量が冷めるかを見る', 'PESが急低下する場合は短期反落を優先する', '再加速するならPFSがプラスを維持するか確認する']
           : focus.upChecklist,
-      invalidation: levels ? `${levelPriceText(levels.breakdown, market)}を終値で明確に割り、PFSがマイナス化する場合は強気シナリオを保留します。` : focus.upInvalidation,
+      invalidation: levels ? `${levelPriceText(levels.breakdown, market)}割れ + PFSマイナス。` : focus.upInvalidation,
     }
   }
 
@@ -508,17 +505,17 @@ function planFrom(
       tone: 'warning',
       stance: horizon.days <= 5 ? '短期過熱の冷却待ち' : horizon.days <= 20 ? '25日線までの調整余地を確認' : '上位足で過熱が解消するまで待つ',
       headline: `${horizon.label}は上げ余地より反落余地を確認`,
-      summary: `${focus.focus}。${priceSummary}。PMS ${finite(pms) ? pms.toFixed(2) : '-'}、PFS ${finite(pfs) ? pfs.toFixed(2) : '-'}。${statLine || '検証統計は不足気味です'}。`,
+      summary: `${priceSummary}。PMS ${finite(pms) ? pms.toFixed(2) : '-'} / PFS ${finite(pfs) ? pfs.toFixed(2) : '-'}。`,
       checklist: levels ? [
-        `${levelPriceText(levels.resistance, market)}付近で高値更新に失敗するなら、${horizonScope}の反落警戒を強める`,
-        `${levelPriceText(levels.support, market)}まで冷却しても終値で守れるかを見る`,
-        `${levelPriceText(levels.breakdown, market)}割れなら過熱終了、${levelPriceText(levels.resistance, market)}上抜けなら再加速として扱う`,
+        `${levelPriceText(levels.resistance, market)}で高値失敗`,
+        `${levelPriceText(levels.support, market)}を守れるか`,
+        `${levelPriceText(levels.breakdown, market)}割れで過熱終了`,
       ] : horizon.days <= 5
           ? ['5日線割れで急速に失速しないかを見る', '高値更新後にPFSが低下する場合は一段の買い増しを避ける', '短期熱量が冷めても終値が5日線上に残るか確認する']
           : horizon.days <= 20
             ? ['25日線までの調整で止まるかを見る', 'PMSが低下し続ける場合は中期の過熱終了として扱う', '日足ステージが悪化側へ連続しないか確認する']
             : ['週足で上髭や上値抵抗が続かないかを見る', '75日線から離れすぎている場合は平均回帰を警戒する', '月足側の勢いが鈍るなら長期過熱終了として扱う'],
-      invalidation: levels ? `${levelPriceText(levels.resistance, market)}を終値で上抜け、PFSがプラスを維持する場合は反落警戒を弱めます。` : horizon.days <= 5 ? '過熱縮小後に5日線上で再加速し、PFSがプラスを維持する場合は短期上方向の見方を戻します。' : focus.upInvalidation,
+      invalidation: levels ? `${levelPriceText(levels.resistance, market)}上抜け + PFS維持。` : horizon.days <= 5 ? '5日線上で再加速 + PFSプラス。' : focus.upInvalidation,
     }
   }
 
@@ -526,13 +523,13 @@ function planFrom(
     tone: 'neutral',
     stance: focus.neutralStance,
     headline: `${horizon.label}は方向感待ち`,
-    summary: `${focus.focus}。${priceSummary}。過去検証では${directionLabel(target)}寄りですが、現時点では決め打ちより確認条件を待つ形です。${evidence.join('、')}。${statLine || '検証統計は不足気味です'}。`,
+    summary: `${priceSummary}。${directionLabel(target)}寄りだが確認待ち。`,
     checklist: levels ? [
-      `${levelPriceText(levels.support, market)}から${levelPriceText(levels.resistance, market)}のレンジをどちらに抜けるかを見る`,
-      `${levelPriceText(levels.resistance, market)}上抜けなら上方向、${levelPriceText(levels.support, market)}割れなら下方向へ判断を寄せる`,
-      'PMS/PFSが価格の抜け方向と揃うまで、決め打ちせず観察する',
+      `${levelPriceText(levels.support, market)}〜${levelPriceText(levels.resistance, market)}の抜け待ち`,
+      `${levelPriceText(levels.resistance, market)}上抜けなら上方向`,
+      `${levelPriceText(levels.support, market)}割れなら下方向`,
     ] : focus.neutralChecklist,
-    invalidation: levels ? `${levelPriceText(levels.support, market)}または${levelPriceText(levels.resistance, market)}を終値で明確に抜け、PMS/PFSも同方向へ揃ったら見送りから方向判断へ移します。` : focus.neutralInvalidation,
+    invalidation: levels ? `レンジ抜け + PMS/PFS同方向。` : focus.neutralInvalidation,
   }
 }
 

@@ -208,8 +208,8 @@ async function main() {
         console.log('Backtest signal_stats rebuild skipped (set BACKTEST_REBUILD_STATS=1 for full/stat refresh)')
       }
 
-      if (process.env.SKIP_DAILY_ML === '1') {
-        console.log('Daily ML refresh skipped (SKIP_DAILY_ML=1)')
+      if (process.env.SKIP_DAILY_ML === '1' || process.env.UPDATE_LATEST_RUN_DAILY_ML !== '1') {
+        console.log('Daily ML refresh skipped by update-latest. Use npm run batch:ml-learning-daily for the scheduled early-morning ML serving refresh, or set UPDATE_LATEST_RUN_DAILY_ML=1 for a manual combined run.')
       } else {
         try {
           await runRequired('scripts/batch-ml-features.ts', {
@@ -222,10 +222,10 @@ async function main() {
           await runRequired('scripts/batch-ml-outcomes.ts', {}, heartbeat)
           await lock.heartbeat()
           await runRequired('scripts/batch-ml-train.ts', {
-            ML_TRAIN_START_DATE: process.env.ML_DAILY_TRAIN_START_DATE ?? '2008-05-07',
-            ML_TRAIN_SAMPLE_MODE: process.env.ML_DAILY_TRAIN_SAMPLE_MODE ?? 'yearly',
+            ML_TRAIN_START_DATE: process.env.ML_DAILY_TRAIN_START_DATE ?? '1900-01-01',
+            ML_TRAIN_SAMPLE_MODE: process.env.ML_DAILY_TRAIN_SAMPLE_MODE ?? 'all_paged',
             ML_TRAIN_LABEL_SOURCE: process.env.ML_DAILY_TRAIN_LABEL_SOURCE ?? 'extrema',
-            ML_TRAIN_LIMIT: process.env.ML_DAILY_TRAIN_LIMIT ?? process.env.ML_TRAIN_LIMIT ?? '80000',
+            ML_TRAIN_LIMIT: process.env.ML_DAILY_TRAIN_LIMIT ?? process.env.ML_TRAIN_LIMIT ?? '0',
           }, heartbeat)
           await lock.heartbeat()
           await runRequired('scripts/batch-ml-candidates.ts', {}, heartbeat)
@@ -252,9 +252,9 @@ async function main() {
           }, heartbeat)
           await lock.heartbeat()
           await runRequired('scripts/batch-ml-physics-train.ts', {
-            ML_PHYSICS_TRAIN_START_DATE: process.env.ML_PHYSICS_DAILY_TRAIN_START_DATE ?? '2008-05-07',
-            ML_PHYSICS_TRAIN_SAMPLE_MODE: process.env.ML_PHYSICS_DAILY_TRAIN_SAMPLE_MODE ?? 'yearly',
-            ML_PHYSICS_TRAIN_LIMIT: process.env.ML_PHYSICS_DAILY_TRAIN_LIMIT ?? process.env.ML_PHYSICS_TRAIN_LIMIT ?? '120000',
+            ML_PHYSICS_TRAIN_START_DATE: process.env.ML_PHYSICS_DAILY_TRAIN_START_DATE ?? '1900-01-01',
+            ML_PHYSICS_TRAIN_SAMPLE_MODE: process.env.ML_PHYSICS_DAILY_TRAIN_SAMPLE_MODE ?? 'all_paged',
+            ML_PHYSICS_TRAIN_LIMIT: process.env.ML_PHYSICS_DAILY_TRAIN_LIMIT ?? process.env.ML_PHYSICS_TRAIN_LIMIT ?? '0',
           }, heartbeat)
           await lock.heartbeat()
           await runRequired('scripts/batch-ml-physics-candidates.ts', {}, heartbeat)

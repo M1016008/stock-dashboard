@@ -16,8 +16,21 @@ import {
   type UTCTimestamp,
 } from 'lightweight-charts'
 import type { OHLCV } from '@/types/stock'
+import {
+  CHART_INTERVAL_OPTIONS,
+  angleDeg,
+  defaultMaLinesForInterval,
+  defaultPeriodForInterval,
+  initialVisiblePeriodForInterval,
+  intervalLabel,
+  intervalToSpec,
+  resampleOhlcv,
+  smaSeries as calcSmaSeries,
+  stageFromThreeMa,
+  type ChartIntervalCode,
+} from '@/lib/timeframes'
 
-export type TvInterval = 'D' | 'W' | 'M'
+export type TvInterval = ChartIntervalCode
 
 export interface ChartDateRange {
   startDate: string
@@ -28,7 +41,10 @@ interface CandlestickChartProps {
   ticker: string
   height?: number
   maLines?: number[]
+  maLinesByInterval?: Partial<Record<TvInterval, number[]>>
   interval?: TvInterval
+  showTimeframeSelector?: boolean
+  timeframeOptions?: TvInterval[]
   market?: 'JP' | 'US'
   historyPeriod?: string
   initialVisiblePeriod?: string
@@ -42,8 +58,11 @@ interface CandlestickChartProps {
 // 取得期間 (interval 別に必要 OHLCV 日数の目安)
 const PERIOD_BY_INTERVAL: Record<TvInterval, string> = {
   D: '1y',   // 日足: 1 年
+  '2D': '2y',
   W: '5y',   // 週足: 5 年
+  '2W': '10y',
   M: '10y',  // 月足: 10 年
+  '2M': '10y',
 }
 
 const PERIOD_DAYS: Record<string, number> = {
@@ -58,6 +77,7 @@ const PERIOD_DAYS: Record<string, number> = {
 
 // MA カラー (Yoshio の好みに合わせて TradingView 旧版と近い色味)
 const MA_COLORS: Record<number, string> = {
+  3:   '#10b981',  // emerald: 3MA
   5:   '#e5e7eb',  // 薄いグレー (白基調)
   12:  '#e5e7eb',
   13:  '#e5e7eb',
@@ -80,7 +100,10 @@ export function CandlestickChart({
   ticker,
   height = 500,
   maLines = [5, 25, 75],
+  maLinesByInterval,
   interval = 'D',
+  showTimeframeSelector = false,
+  timeframeOptions = ['D', '2D', 'W', '2W', 'M', '2M'],
   market = 'JP',
   historyPeriod,
   initialVisiblePeriod,
@@ -104,10 +127,14 @@ export function CandlestickChart({
   const [data, setData] = useState<OHLCV[] | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [activeInterval, setActiveInterval] = useState<TvInterval>(interval)
+  const effectiveInterval = showTimeframeSelector ? activeInterval : interval
+  const effectiveMaLines = maLinesByInterval?.[effectiveInterval] ?? (showTimeframeSelector ? defaultMaLinesForInterval(effectiveInterval) : maLines)
   const [selectedMAs, setSelectedMAs] = useState<number[]>(maLines)
   const [rangeDragEnabled, setRangeDragEnabled] = useState(false)
-  const maLinesKey = maLines.join(',')
-  const fetchPeriod = historyPeriod ?? PERIOD_BY_INTERVAL[interval]
+  const maLinesKey = effectiveMaLines.join(',')
+  const fetchPeriod = historyPeriod ?? PERIOD_BY_INTERVAL[effectiveInterval] ?? defaultPeriodForInterval(effectiveInterval)
+  const visiblePeriod = initialVisiblePeriod ?? initialVisiblePeriodForInterval(effectiveInterval)
   const canRangeDragSelect = Boolean(enableRangeDragSelect && onVisibleRangeChange)
 
   useEffect(() => {
@@ -123,8 +150,12 @@ export function CandlestickChart({
   }, [enableRangeDragSelect])
 
   useEffect(() => {
-    setSelectedMAs(maLines)
-  }, [maLinesKey])
+    setActiveInterval(interval)
+  }, [interval])
+
+  useEffect(() => {
+    setSelectedMAs(effectiveMaLines)
+  }, [maLinesKey, effectiveInterval])
 
   // データフェッチ
   useEffect(() => {
@@ -147,7 +178,7 @@ export function CandlestickChart({
     return () => { cancelled = true }
   }, [ticker, fetchPeriod, market])
 
-  // 日足 → 週足/月足に集約 + MA 計算用に整形
+  // 日足 → 指定時間軸に集約 + MA 計算用に整形
   const { grouped, candles, mas } = useMemo(() => {
     if (!data || data.length === 0) {
       return {
@@ -157,7 +188,7 @@ export function CandlestickChart({
       }
     }
 
-    const grouped = aggregateOhlcv(data, interval)
+    const grouped = resampleOhlcv(data, intervalToSpec(effectiveInterval))
 
     const candles = grouped.map(d => ({
       time:  dateToTime(d.date),
@@ -171,18 +202,23 @@ export function CandlestickChart({
     const mas: Record<number, { time: UTCTimestamp; value: number }[]> = {}
     for (const period of selectedMAs) {
       const series: { time: UTCTimestamp; value: number }[] = []
-      for (let i = period - 1; i < grouped.length; i++) {
-        const slice = grouped.slice(i - period + 1, i + 1)
-        const avg = slice.reduce((s, d) => s + d.close, 0) / period
-        series.push({ time: dateToTime(grouped[i].date), value: avg })
+      const values = calcSmaSeries(grouped, period)
+      for (let i = 0; i < grouped.length; i++) {
+        const value = values[i]
+        if (value == null) continue
+        series.push({ time: dateToTime(grouped[i].date), value })
       }
       mas[period] = series
     }
 
     return { grouped, candles, mas }
-  }, [data, interval, selectedMAs])
+  }, [data, effectiveInterval, selectedMAs])
 
   const candleDates = useMemo(() => grouped.map((row) => row.date), [grouped])
+  const timeframeSummary = useMemo(
+    () => buildTimeframeSummary(grouped, effectiveInterval, selectedMAs),
+    [grouped, effectiveInterval, selectedMAs],
+  )
 
   // チャート描画
   useEffect(() => {
@@ -278,7 +314,7 @@ export function CandlestickChart({
       if (selected && key === `${selected.startDate}:${selected.endDate}`) return
       if (key === lastEmittedRangeKeyRef.current) return
       lastEmittedRangeKeyRef.current = key
-      onVisibleRangeChangeRef.current(visibleRange, interval)
+      onVisibleRangeChangeRef.current(visibleRange, effectiveInterval)
     }
 
     applyingRangeRef.current = true
@@ -287,7 +323,7 @@ export function CandlestickChart({
     const initialRange =
       syncSelectedRange && selectedRangeRef.current
         ? selectedRangeRef.current
-        : rangeFromPeriod(candleDates, initialVisiblePeriod)
+        : rangeFromPeriod(candleDates, visiblePeriod)
     if (initialRange) {
       setVisibleDateRange(chart, initialRange, candleDates)
     }
@@ -317,7 +353,7 @@ export function CandlestickChart({
         chartRef.current = null
       }
     }
-  }, [candles, mas, height, selectedMAs, candleDates, initialVisiblePeriod, interval, syncSelectedRange])
+  }, [candles, mas, height, selectedMAs, candleDates, visiblePeriod, effectiveInterval, syncSelectedRange])
 
   useEffect(() => {
     const chart = chartRef.current
@@ -399,7 +435,7 @@ export function CandlestickChart({
     if (!snappedRange) return
     const key = `${snappedRange.startDate}:${snappedRange.endDate}`
     lastEmittedRangeKeyRef.current = key
-    onVisibleRangeChangeRef.current?.(snappedRange, interval, 'drag')
+    onVisibleRangeChangeRef.current?.(snappedRange, effectiveInterval, 'drag')
   }
 
   function handleRangePointerDown(event: ReactPointerEvent<HTMLDivElement>) {
@@ -448,9 +484,25 @@ export function CandlestickChart({
         alignItems: 'center',
         padding: '8px 0',
         marginBottom: '8px',
+        flexWrap: 'wrap',
       }}>
+        {showTimeframeSelector && (
+          <div style={timeframeSelectorStyle} role="tablist" aria-label="チャート時間軸">
+            {timeframeOptions.map((option) => (
+              <button
+                key={option}
+                type="button"
+                onClick={() => setActiveInterval(option)}
+                style={timeframeButtonStyle(option === effectiveInterval)}
+                aria-selected={option === effectiveInterval}
+              >
+                {intervalLabel(option)}
+              </button>
+            ))}
+          </div>
+        )}
         <span style={{ fontSize: '10px', color: 'var(--text-muted)', letterSpacing: '0.08em' }}>MA:</span>
-        {maLines.map((period, index) => (
+        {effectiveMaLines.map((period, index) => (
           <label key={period} style={{
             display: 'flex',
             alignItems: 'center',
@@ -488,6 +540,7 @@ export function CandlestickChart({
           </div>
         )}
       </div>
+      <TimeframeSummaryBar summary={timeframeSummary} />
 
       {/* チャートコンテナ */}
       <div style={{ position: 'relative', height }}>
@@ -530,48 +583,365 @@ export function CandlestickChart({
 
 // ─── ヘルパー ───
 
-function aggregateOhlcv(rows: OHLCV[], interval: TvInterval): OHLCV[] {
-  if (interval === 'D') return rows
-
-  const grouped: OHLCV[] = []
-  let currentKey: string | null = null
-  let current: OHLCV | null = null
-
-  for (const row of rows) {
-    const key = interval === 'W' ? weekKey(row.date) : row.date.slice(0, 7)
-    if (key !== currentKey) {
-      if (current) grouped.push(current)
-      currentKey = key
-      current = { ...row }
-      continue
-    }
-
-    if (!current) {
-      current = { ...row }
-      continue
-    }
-
-    current = {
-      date: row.date,
-      open: current.open,
-      high: Math.max(current.high, row.high),
-      low: Math.min(current.low, row.low),
-      close: row.close,
-      volume: current.volume + row.volume,
-      adjustedClose: row.adjustedClose ?? current.adjustedClose,
-    }
-  }
-
-  if (current) grouped.push(current)
-  return grouped
+type TimeframeSummary = {
+  intervalLabel: string
+  stage: number | null
+  stageText: string
+  headline: string
+  tone: 'up' | 'down' | 'neutral' | 'warning'
+  maStructure: string
+  maTone: SummaryTone
+  maOrderDetail: string
+  angleSummary: string
+  angleTone: SummaryTone
+  angleDetail: string
+  momentumSummary: string
+  momentumTone: SummaryTone
+  volumeSummary: string
+  volumeTone: SummaryTone
+  rangeSummary: string
+  rangeTone: SummaryTone
+  observation: string
 }
 
-function weekKey(isoDate: string): string {
-  const date = new Date(`${isoDate}T00:00:00Z`)
-  const day = date.getUTCDay()
-  const daysFromMonday = day === 0 ? 6 : day - 1
-  date.setUTCDate(date.getUTCDate() - daysFromMonday)
-  return date.toISOString().slice(0, 10)
+type SummaryTone = 'up' | 'down' | 'neutral' | 'warning'
+
+function buildTimeframeSummary(rows: OHLCV[], interval: TvInterval, maLines: number[]): TimeframeSummary | null {
+  if (rows.length < 2) return null
+  const label = intervalLabel(interval)
+  const periods = maLines.length >= 3 ? maLines.slice(0, 3) : defaultMaLinesForInterval(interval).slice(0, 3)
+  const latestIndex = rows.length - 1
+  const maValues = periods.map((period) => smaAtSafe(rows, period, latestIndex))
+  const stage = stageFromThreeMa(maValues[0] ?? null, maValues[1] ?? null, maValues[2] ?? null)
+  const maOrder = periods
+    .map((period, index) => ({ period, value: maValues[index] }))
+    .filter((item): item is { period: number; value: number } => item.value != null && Number.isFinite(item.value))
+    .sort((a, b) => b.value - a.value)
+    .map((item) => maPeriodLabel(item.period, interval))
+    .join(' > ') || '-'
+
+  const angleLookback = Math.min(5, Math.max(1, latestIndex))
+  const angleValues = periods.map((period) => {
+    const current = smaAtSafe(rows, period, latestIndex)
+    const previous = smaAtSafe(rows, period, latestIndex - angleLookback)
+    return angleDeg(current, previous, angleLookback)
+  })
+  const angleParts = periods.map((period, index) => {
+    const angle = angleValues[index]
+    return angle == null ? `${maPeriodLabel(period, interval)} -` : `${maPeriodLabel(period, interval)} ${angle >= 0 ? '+' : ''}${angle.toFixed(1)}°`
+  })
+
+  const latest = rows[latestIndex]
+  const previous = rows[latestIndex - 1]
+  const latestReturnPrice = priceForReturn(latest)
+  const previousReturnPrice = priceForReturn(previous)
+  const closeChange = previousReturnPrice > 0 ? ((latestReturnPrice - previousReturnPrice) / previousReturnPrice) * 100 : null
+  const volumeWindow = rows.slice(Math.max(0, rows.length - 21), rows.length - 1).filter((row) => row.volume > 0)
+  const avgVolume = volumeWindow.length > 0 ? volumeWindow.reduce((sum, row) => sum + row.volume, 0) / volumeWindow.length : null
+  const volumeRatio = avgVolume && avgVolume > 0 ? latest.volume / avgVolume : null
+  const rangeRows = rows.slice(Math.max(0, rows.length - 20))
+  const high20 = Math.max(...rangeRows.map((row) => row.high))
+  const low20 = Math.min(...rangeRows.map((row) => row.low))
+  const return20Base = rows.length > 20 ? priceForReturn(rows[rows.length - 21]) : null
+  const return20 = return20Base != null && return20Base > 0
+    ? ((latestReturnPrice - return20Base) / return20Base) * 100
+    : null
+  const volatility = rangeRows.length > 1
+    ? (Math.max(...rangeRows.map((row) => row.high)) - Math.min(...rangeRows.map((row) => row.low))) / latest.close * 100
+    : null
+
+  const hasReturnDiscontinuity = closeChange != null && Math.abs(closeChange) > 50
+  const latestLowBreak = latest.low <= low20
+  const latestHighBreak = latest.high >= high20
+  const stageBias = stageBiasLabel(stage)
+  const maStructure = maStructureLabel(stage)
+  const angleSummary = angleSummaryLabel(angleValues)
+  const momentumSummary = hasReturnDiscontinuity
+    ? '足元: データ段差を確認'
+    : closeChange == null
+      ? '足元: 変化不明'
+      : `足元: ${priceMoveLabel(closeChange)} ${formatSignedPct(closeChange)}`
+  const volumeSummary = volumeRatio == null
+    ? '出来高: 比較不可'
+    : `出来高: ${volumeRatioLabel(volumeRatio)} ${volumeRatio.toFixed(1)}倍`
+  const rangeSummary = volatility == null
+    ? '20本: 値幅不明'
+    : `20本: ${twentyBarRangeLabel(volatility)} / ${twentyBarDirection(latestHighBreak, latestLowBreak, return20)}`
+  const tone = summaryTone(stage, angleValues, closeChange, return20, latestHighBreak, latestLowBreak)
+  const headline = summaryHeadline(tone, stageBias)
+  const maTone = stageToSummaryTone(stage)
+  const angleTone = angleToneLabel(angleValues)
+  const momentumTone = momentumToneLabel(closeChange, hasReturnDiscontinuity)
+  const volumeTone = volumeToneLabel(volumeRatio)
+  const rangeTone = rangeToneLabel(volatility, latestHighBreak, latestLowBreak, return20)
+
+  return {
+    intervalLabel: label,
+    stage,
+    stageText: stage == null ? 'ステージ判定不足' : `S${stage}`,
+    headline,
+    tone,
+    maStructure,
+    maTone,
+    maOrderDetail: maOrder,
+    angleSummary,
+    angleTone,
+    angleDetail: angleParts.join(' / '),
+    momentumSummary,
+    momentumTone,
+    volumeSummary,
+    volumeTone,
+    rangeSummary,
+    rangeTone,
+    observation: observationText(tone, stage, volumeRatio, volatility),
+  }
+}
+
+function smaAtSafe(rows: OHLCV[], period: number, index: number): number | null {
+  if (index < 0) return null
+  const values = calcSmaSeries(rows, period)
+  return values[index] ?? null
+}
+
+function priceForReturn(row: OHLCV): number {
+  return row.adjustedClose != null && Number.isFinite(row.adjustedClose) ? row.adjustedClose : row.close
+}
+
+function maPeriodLabel(period: number, interval: TvInterval): string {
+  if (interval === 'D') return `${period}日線`
+  if (interval === 'W') return `${period}週線`
+  if (interval === 'M') return `${period}ヶ月線`
+  return `${period}本線`
+}
+
+function stageBiasLabel(stage: number | null): string {
+  if (stage === 1) return '上昇配列'
+  if (stage === 2) return '短期調整'
+  if (stage === 3) return '悪化進行'
+  if (stage === 4) return '下降配列'
+  if (stage === 5) return '反発試し'
+  if (stage === 6) return '好転候補'
+  return '判定不足'
+}
+
+function maStructureLabel(stage: number | null): string {
+  if (stage === 1) return '短期線が上。上昇基調'
+  if (stage === 2) return '短期線が中期線を下回る調整'
+  if (stage === 3) return '短期線が下。悪化が進行'
+  if (stage === 4) return '長期線が上。戻り売り優勢'
+  if (stage === 5) return '短期線が反発。底打ち確認'
+  if (stage === 6) return '短期線が上。好転候補'
+  return 'MA不足'
+}
+
+function angleSummaryLabel(angles: Array<number | null>): string {
+  const labels = ['短期', '中期', '長期']
+  const parts = angles.map((angle, index) => `${labels[index] ?? `${index + 1}本目`}${angleStateLabel(angle)}`)
+  return parts.join(' / ')
+}
+
+function angleStateLabel(angle: number | null): string {
+  if (angle == null || !Number.isFinite(angle)) return '不明'
+  const abs = Math.abs(angle)
+  if (abs >= 45) return angle > 0 ? '急上昇' : '急降下'
+  if (abs >= 15) return angle > 0 ? '上向き' : '下向き'
+  if (abs >= 5) return angle > 0 ? 'やや上向き' : 'やや下向き'
+  return '横ばい'
+}
+
+function priceMoveLabel(changePct: number): string {
+  const abs = Math.abs(changePct)
+  if (abs >= 3) return changePct > 0 ? '大幅高' : '大幅安'
+  if (abs >= 1) return changePct > 0 ? '上昇' : '下落'
+  if (abs >= 0.3) return changePct > 0 ? '小幅高' : '小幅安'
+  return '横ばい'
+}
+
+function volumeRatioLabel(ratio: number): string {
+  if (ratio >= 2) return '商い急増'
+  if (ratio >= 1.2) return '通常より多い'
+  if (ratio >= 0.8) return '通常並み'
+  return '薄商い'
+}
+
+function twentyBarRangeLabel(volatility: number): string {
+  if (volatility >= 25) return '値幅かなり大'
+  if (volatility >= 15) return '値幅大きめ'
+  if (volatility >= 8) return '値幅あり'
+  return '値幅小さめ'
+}
+
+function twentyBarDirection(isHighBreak: boolean, isLowBreak: boolean, returnPct: number | null): string {
+  if (isHighBreak) return '高値更新'
+  if (isLowBreak) return '安値更新'
+  if (returnPct == null || !Number.isFinite(returnPct)) return '方向不明'
+  if (returnPct >= 5) return `上向き ${formatSignedPct(returnPct)}`
+  if (returnPct <= -5) return `下向き ${formatSignedPct(returnPct)}`
+  return `横ばい圏 ${formatSignedPct(returnPct)}`
+}
+
+function formatSignedPct(value: number): string {
+  return `${value >= 0 ? '+' : ''}${value.toFixed(1)}%`
+}
+
+function summaryTone(
+  stage: number | null,
+  angles: Array<number | null>,
+  closeChange: number | null,
+  return20: number | null,
+  isHighBreak: boolean,
+  isLowBreak: boolean,
+): 'up' | 'down' | 'neutral' | 'warning' {
+  let up = 0
+  let down = 0
+
+  if (stage === 1 || stage === 6) up += 2
+  if (stage === 3 || stage === 4) down += 2
+  if (stage === 2) down += 1
+  if (stage === 5) up += 1
+
+  for (const angle of angles) {
+    if (angle == null || !Number.isFinite(angle)) continue
+    if (angle >= 10) up += 1
+    if (angle <= -10) down += 1
+  }
+
+  if (closeChange != null && Number.isFinite(closeChange)) {
+    if (closeChange >= 0.5) up += 1
+    if (closeChange <= -0.5) down += 1
+  }
+  if (return20 != null && Number.isFinite(return20)) {
+    if (return20 >= 3) up += 1
+    if (return20 <= -3) down += 1
+  }
+  if (isHighBreak) up += 1
+  if (isLowBreak) down += 1
+
+  if (up >= down + 2) return 'up'
+  if (down >= up + 2) return 'down'
+  if (up >= 3 && down >= 3) return 'warning'
+  return 'neutral'
+}
+
+function stageToSummaryTone(stage: number | null): SummaryTone {
+  if (stage === 1 || stage === 6) return 'up'
+  if (stage === 3 || stage === 4) return 'down'
+  if (stage === 2 || stage === 5) return 'warning'
+  return 'neutral'
+}
+
+function angleToneLabel(angles: Array<number | null>): SummaryTone {
+  const valid = angles.filter((angle): angle is number => angle != null && Number.isFinite(angle))
+  if (valid.length === 0) return 'neutral'
+  const up = valid.filter((angle) => angle >= 10).length
+  const down = valid.filter((angle) => angle <= -10).length
+  if (up >= 2) return 'up'
+  if (down >= 2) return 'down'
+  if (up > 0 && down > 0) return 'warning'
+  return 'neutral'
+}
+
+function momentumToneLabel(changePct: number | null, hasDiscontinuity: boolean): SummaryTone {
+  if (hasDiscontinuity) return 'warning'
+  if (changePct == null || !Number.isFinite(changePct)) return 'neutral'
+  if (changePct >= 0.5) return 'up'
+  if (changePct <= -0.5) return 'down'
+  return 'neutral'
+}
+
+function volumeToneLabel(ratio: number | null): SummaryTone {
+  if (ratio == null || !Number.isFinite(ratio)) return 'neutral'
+  if (ratio >= 1.2) return 'up'
+  if (ratio < 0.8) return 'warning'
+  return 'neutral'
+}
+
+function rangeToneLabel(
+  volatility: number | null,
+  isHighBreak: boolean,
+  isLowBreak: boolean,
+  returnPct: number | null,
+): SummaryTone {
+  if (isHighBreak) return 'up'
+  if (isLowBreak) return 'down'
+  if (returnPct != null && Number.isFinite(returnPct)) {
+    if (returnPct >= 5) return 'up'
+    if (returnPct <= -5) return 'down'
+  }
+  if (volatility != null && Number.isFinite(volatility) && volatility >= 15) return 'warning'
+  return 'neutral'
+}
+
+function summaryHeadline(tone: TimeframeSummary['tone'], stageBias: string): string {
+  if (tone === 'up') return `${stageBias}: 上方向を確認`
+  if (tone === 'down') return `${stageBias}: 下方向に注意`
+  if (tone === 'warning') return `${stageBias}: 上下に振れやすい`
+  return `${stageBias}: 方向確認中`
+}
+
+function observationText(tone: TimeframeSummary['tone'], stage: number | null, volumeRatio: number | null, volatility: number | null): string {
+  const volumeWeak = volumeRatio != null && volumeRatio < 0.8
+  const highVol = volatility != null && volatility >= 15
+  if (tone === 'down') {
+    return volumeWeak
+      ? '下向きだが商いは薄め。戻り局面の出来高を確認。'
+      : '戻り売りや安値更新の有無を優先確認。'
+  }
+  if (tone === 'up') {
+    return volumeWeak
+      ? '形は上向き。出来高が伴うかを確認。'
+      : '高値更新後も短期線上を保てるか確認。'
+  }
+  if (tone === 'warning' || highVol) return '値幅が大きく、追いかけず支持線・抵抗線を確認。'
+  if (stage === 5 || stage === 6) return '好転候補。短期線の上で定着できるか確認。'
+  return '方向感は限定的。次の高値・安値抜けを待つ状態。'
+}
+
+function TimeframeSummaryBar({ summary }: { summary: TimeframeSummary | null }) {
+  if (!summary) return null
+  const stageTone = stageToneColor(summary.stage)
+  const toneColor = summaryToneColor(summary.tone)
+  return (
+    <div style={summaryBarStyle}>
+      <div style={summaryHeaderStyle}>
+        <span style={summaryBadgeStyle(stageTone)}>{summary.intervalLabel} {summary.stageText}</span>
+        <strong style={summaryHeadlineStyle(toneColor)}>{summary.headline}</strong>
+        <span style={summaryObservationStyle}>{summary.observation}</span>
+      </div>
+      <div style={summaryChipGridStyle}>
+        <SummaryChip label="MA配置" main={summary.maStructure} sub={summary.maOrderDetail} tone={summary.maTone} />
+        <SummaryChip label="傾き" main={summary.angleSummary} sub={summary.angleDetail} tone={summary.angleTone} />
+        <SummaryChip label="足元" main={summary.momentumSummary} tone={summary.momentumTone} />
+        <SummaryChip label="商い" main={summary.volumeSummary} tone={summary.volumeTone} />
+        <SummaryChip label="値幅" main={summary.rangeSummary} tone={summary.rangeTone} />
+      </div>
+    </div>
+  )
+}
+
+function SummaryChip({ label, main, sub, tone }: { label: string; main: string; sub?: string; tone: SummaryTone }) {
+  const palette = summaryTonePalette(tone)
+  return (
+    <span style={summaryChipStyle(palette)}>
+      <small style={summaryChipLabelStyle(palette)}>{label}</small>
+      <b style={summaryChipMainStyle(palette)}>{main}</b>
+      {sub && <span style={summaryChipSubStyle} title={sub}>{sub}</span>}
+    </span>
+  )
+}
+
+function stageToneColor(stage: number | null): string {
+  if (stage === 1 || stage === 6) return '#16a34a'
+  if (stage === 2 || stage === 5) return '#d97706'
+  if (stage === 3 || stage === 4) return '#2563eb'
+  return 'var(--text-muted)'
+}
+
+function summaryToneColor(tone: TimeframeSummary['tone']): string {
+  if (tone === 'up') return '#dc2626'
+  if (tone === 'down') return '#2563eb'
+  if (tone === 'warning') return '#d97706'
+  return 'var(--text-primary)'
 }
 
 function dateToTime(isoDate: string): UTCTimestamp {
@@ -679,6 +1049,175 @@ const loadingTextStyle: React.CSSProperties = {
   color: 'var(--text-muted)',
   fontSize: '12px',
   fontFamily: 'var(--font-mono)',
+}
+
+const timeframeSelectorStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: '2px',
+  padding: '3px',
+  border: '1px solid var(--border-base)',
+  borderRadius: 'var(--radius-sm)',
+  background: 'var(--bg-muted)',
+}
+
+function timeframeButtonStyle(active: boolean): React.CSSProperties {
+  return {
+    border: active ? '1px solid rgba(217, 119, 6, 0.45)' : '1px solid transparent',
+    borderRadius: '6px',
+    background: active ? 'var(--bg-surface)' : 'transparent',
+    color: active ? 'var(--accent-primary)' : 'var(--text-secondary)',
+    boxShadow: active ? '0 1px 3px rgba(15, 23, 42, 0.10)' : 'none',
+    fontSize: '11px',
+    fontWeight: 800,
+    lineHeight: 1,
+    padding: '6px 9px',
+    cursor: 'pointer',
+    whiteSpace: 'nowrap',
+  }
+}
+
+const summaryBarStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: '8px',
+  margin: '0 0 8px',
+  padding: '10px',
+  border: '1px solid var(--border-base)',
+  borderRadius: 'var(--radius-sm)',
+  background: 'linear-gradient(180deg, #fff 0%, var(--bg-surface) 100%)',
+  color: 'var(--text-secondary)',
+  fontSize: '12px',
+  fontWeight: 700,
+}
+
+const summaryHeaderStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: '8px',
+  flexWrap: 'wrap',
+}
+
+function summaryHeadlineStyle(color: string): React.CSSProperties {
+  return {
+    color,
+    fontSize: '13px',
+    lineHeight: 1.35,
+  }
+}
+
+const summaryObservationStyle: React.CSSProperties = {
+  color: 'var(--text-secondary)',
+  fontSize: '11px',
+  lineHeight: 1.5,
+}
+
+const summaryChipGridStyle: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+  gap: '7px',
+}
+
+type SummaryTonePalette = {
+  accent: string
+  border: string
+  bg: string
+  text: string
+  label: string
+}
+
+function summaryTonePalette(tone: SummaryTone): SummaryTonePalette {
+  if (tone === 'up') {
+    return {
+      accent: '#dc2626',
+      border: 'rgba(220, 38, 38, 0.24)',
+      bg: 'linear-gradient(180deg, rgba(254, 242, 242, 0.98) 0%, rgba(255, 255, 255, 0.86) 100%)',
+      text: '#991b1b',
+      label: '#b91c1c',
+    }
+  }
+  if (tone === 'down') {
+    return {
+      accent: '#2563eb',
+      border: 'rgba(37, 99, 235, 0.24)',
+      bg: 'linear-gradient(180deg, rgba(239, 246, 255, 0.98) 0%, rgba(255, 255, 255, 0.86) 100%)',
+      text: '#1d4ed8',
+      label: '#2563eb',
+    }
+  }
+  if (tone === 'warning') {
+    return {
+      accent: '#d97706',
+      border: 'rgba(217, 119, 6, 0.28)',
+      bg: 'linear-gradient(180deg, rgba(255, 251, 235, 0.98) 0%, rgba(255, 255, 255, 0.86) 100%)',
+      text: '#92400e',
+      label: '#b45309',
+    }
+  }
+  return {
+    accent: '#64748b',
+    border: 'var(--border-subtle)',
+    bg: 'rgba(255,255,255,0.78)',
+    text: 'var(--text-primary)',
+    label: 'var(--text-muted)',
+  }
+}
+
+function summaryChipStyle(palette: SummaryTonePalette): React.CSSProperties {
+  return {
+    minWidth: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '3px',
+    border: `1px solid ${palette.border}`,
+    borderLeft: `4px solid ${palette.accent}`,
+    borderRadius: '6px',
+    background: palette.bg,
+    padding: '7px 8px',
+    boxShadow: '0 1px 2px rgba(15, 23, 42, 0.04)',
+  }
+}
+
+function summaryChipLabelStyle(palette: SummaryTonePalette): React.CSSProperties {
+  return {
+    color: palette.label,
+    fontSize: '10px',
+    fontWeight: 900,
+    lineHeight: 1,
+  }
+}
+
+function summaryChipMainStyle(palette: SummaryTonePalette): React.CSSProperties {
+  return {
+    color: palette.text,
+    fontSize: '12px',
+    lineHeight: 1.35,
+  }
+}
+
+const summaryChipSubStyle: React.CSSProperties = {
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+  color: 'var(--text-muted)',
+  fontFamily: 'var(--font-mono)',
+  fontSize: '10px',
+  lineHeight: 1.3,
+}
+
+function summaryBadgeStyle(color: string): React.CSSProperties {
+  return {
+    display: 'inline-flex',
+    alignItems: 'center',
+    border: `1px solid ${color}`,
+    borderRadius: '999px',
+    color,
+    background: 'rgba(255,255,255,0.72)',
+    fontFamily: 'var(--font-mono)',
+    fontSize: '11px',
+    fontWeight: 900,
+    lineHeight: 1,
+    padding: '4px 8px',
+  }
 }
 
 const toolbarRangeGroupStyle: React.CSSProperties = {

@@ -36,7 +36,7 @@ const HORIZONS = (process.env.ML_PHYSICS_HORIZONS ?? ML_PHYSICS_DEFAULT_HORIZON_
   .split(',')
   .map((value) => Number(value.trim()))
   .filter((value) => Number.isFinite(value) && value > 0)
-const START_DATE = process.env.ML_PHYSICS_EVAL_TRAIN_START_DATE?.trim() || '2008-05-07'
+const START_DATE = process.env.ML_PHYSICS_EVAL_TRAIN_START_DATE?.trim() || '1900-01-01'
 const START_YEAR = Number(process.env.ML_PHYSICS_EVAL_START_YEAR ?? 2018)
 const END_YEAR_ENV = process.env.ML_PHYSICS_EVAL_END_YEAR ? Number(process.env.ML_PHYSICS_EVAL_END_YEAR) : null
 const TRAIN_LIMIT = Number(process.env.ML_PHYSICS_EVAL_TRAIN_LIMIT ?? 60000)
