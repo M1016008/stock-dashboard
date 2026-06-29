@@ -12,6 +12,8 @@ import { StockScenarioAiPanel } from '@/components/stock/StockScenarioAiPanel'
 import { StockMovePeriods } from '@/components/stock/StockMovePeriods'
 import { TradeScenarioNotebook } from '@/components/stock/TradeScenarioNotebook'
 import type { StockQuote } from '@/types/stock'
+import { buildPhysicalMomentumView, type PhysicalMomentumTone } from '@/lib/physical-momentum-view'
+import { buildShortTermCheck, type ShortTermCheckResult } from '@/lib/short-term-check'
 
 type Status = 'idle' | 'loading' | 'ready' | 'error'
 
@@ -22,7 +24,13 @@ interface PhysicalMomentumApiRow {
   physicalEnergyScore: number | null
   velocity: number | null
   acceleration: number | null
+  momentum?: number | null
   force: number | null
+  ma5Angle?: number | null
+  ma25Angle?: number | null
+  ma75Angle?: number | null
+  ma200Angle?: number | null
+  maAngleAvg?: number | null
   energy: number | null
 }
 
@@ -94,6 +102,15 @@ interface UsPhysicalPlanResponse {
   horizons: UsPhysicalPlanHorizon[]
 }
 
+interface StageHistoryEntry {
+  daily_a_stage: number | null
+  daily_b_stage: number | null
+  weekly_a_stage: number | null
+  weekly_b_stage: number | null
+  monthly_a_stage: number | null
+  monthly_b_stage: number | null
+}
+
 function fmtNumber(value: number | null | undefined) {
   if (value == null || !Number.isFinite(value)) return '-'
   return value.toLocaleString('en-US')
@@ -134,6 +151,28 @@ function Stat({ label, value }: { label: string; value: string }) {
       <div className="mt-1 text-[14px] font-bold text-[var(--color-brand-900)]">{value}</div>
     </div>
   )
+}
+
+function momentumTonePanelClass(tone: PhysicalMomentumTone) {
+  if (tone === 'up') return 'border-red-200 bg-red-50 text-red-700'
+  if (tone === 'down') return 'border-blue-200 bg-blue-50 text-blue-700'
+  if (tone === 'warning') return 'border-amber-200 bg-amber-50 text-amber-800'
+  return 'border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] text-[var(--color-text-secondary)]'
+}
+
+function momentumToneMiniClass(tone: PhysicalMomentumTone) {
+  if (tone === 'up') return 'border-red-200 bg-red-50 text-red-800'
+  if (tone === 'down') return 'border-blue-200 bg-blue-50 text-blue-800'
+  if (tone === 'warning') return 'border-amber-200 bg-amber-50 text-amber-800'
+  return 'border-[var(--color-border-default)] bg-white text-[var(--color-text-secondary)]'
+}
+
+function shortTermPanelClass(label: string) {
+  if (label === '強気優勢') return 'border-red-200 bg-white/70 text-red-800'
+  if (label === '好転候補') return 'border-rose-200 bg-white/70 text-rose-800'
+  if (label === '弱含み注意') return 'border-blue-200 bg-white/70 text-blue-800'
+  if (label === '下落警戒') return 'border-sky-200 bg-white/70 text-sky-900'
+  return 'border-[var(--color-border-default)] bg-white/70 text-[var(--color-text-secondary)]'
 }
 
 export function UsStockDetailClient({
@@ -267,7 +306,11 @@ export function UsStockDetailClient({
 
       <UsAnalysisDateControl analysisDate={analysisDate} onChange={updateAnalysisDate} />
 
-      <UsPhysicalMomentumSection ticker={quote.ticker} analysisDate={analysisDate} />
+      <UsPhysicalMomentumSection
+        ticker={quote.ticker}
+        analysisDate={analysisDate}
+        changePercent={quote.isPriceDiscontinuous ? null : quote.changePercent}
+      />
 
       <UsPhysicalPlanSection ticker={quote.ticker} analysisDate={analysisDate} />
 
@@ -390,8 +433,17 @@ function UsAnalysisDateControl({
   )
 }
 
-function UsPhysicalMomentumSection({ ticker, analysisDate }: { ticker: string; analysisDate: string | null }) {
+function UsPhysicalMomentumSection({
+  ticker,
+  analysisDate,
+  changePercent,
+}: {
+  ticker: string
+  analysisDate: string | null
+  changePercent: number | null | undefined
+}) {
   const [data, setData] = useState<PhysicalMomentumResponse | null>(null)
+  const [stageLatest, setStageLatest] = useState<StageHistoryEntry | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
@@ -401,13 +453,30 @@ function UsPhysicalMomentumSection({ ticker, analysisDate }: { ticker: string; a
     setError('')
     const params = new URLSearchParams({ market: 'US', limit: '260' })
     if (analysisDate) params.set('date', analysisDate)
-    fetch(`/api/physical-momentum/${encodeURIComponent(ticker)}?${params.toString()}`, { cache: 'no-store' })
-      .then((res) => res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`)))
-      .then((payload) => {
-        if (!cancelled) setData(payload)
-      })
-      .catch((e) => {
-        if (!cancelled) setError((e as Error).message)
+    const stageParams = new URLSearchParams({ market: 'US', granularity: 'daily', count: '1' })
+    if (analysisDate) {
+      stageParams.set('startDate', '1900-01-01')
+      stageParams.set('endDate', analysisDate)
+    }
+    Promise.allSettled([
+      fetch(`/api/physical-momentum/${encodeURIComponent(ticker)}?${params.toString()}`, { cache: 'no-store' })
+        .then((res) => res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))),
+      fetch(`/api/stage-history/${encodeURIComponent(ticker)}?${stageParams.toString()}`, { cache: 'no-store' })
+        .then((res) => res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))),
+    ])
+      .then(([momentumResult, stageResult]) => {
+        if (cancelled) return
+        if (momentumResult.status === 'fulfilled') {
+          setData(momentumResult.value)
+        } else {
+          setError((momentumResult.reason as Error).message)
+        }
+        if (stageResult.status === 'fulfilled') {
+          const history = Array.isArray(stageResult.value?.history) ? stageResult.value.history : []
+          setStageLatest(history[history.length - 1] ?? null)
+        } else {
+          setStageLatest(null)
+        }
       })
       .finally(() => {
         if (!cancelled) setLoading(false)
@@ -416,18 +485,27 @@ function UsPhysicalMomentumSection({ ticker, analysisDate }: { ticker: string; a
   }, [ticker, analysisDate])
 
   const latest = data?.latest ?? null
-  const tone =
-    (latest?.physicalMomentumScore ?? 0) > 0.8 ? 'up' :
-    (latest?.physicalMomentumScore ?? 0) < -0.8 ? 'down' :
-    'neutral'
-  const toneClass =
-    tone === 'up' ? 'border-red-200 bg-red-50 text-red-700' :
-    tone === 'down' ? 'border-blue-200 bg-blue-50 text-blue-700' :
-    'border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] text-[var(--color-text-secondary)]'
-  const headline =
-    tone === 'up' ? '上方向の力が優勢' :
-    tone === 'down' ? '下方向の力が優勢' :
-    '方向感は中立'
+  const view = latest ? buildPhysicalMomentumView({
+    pms: latest.physicalMomentumScore,
+    pfs: latest.physicalForceScore,
+    pes: latest.physicalEnergyScore,
+    trend: data?.trend ?? null,
+    rank: data?.rank ?? null,
+    total: data?.totalRanked ?? 0,
+  }) : null
+  const shortTermCheck: ShortTermCheckResult | null = latest ? buildShortTermCheck({
+    stages: stageLatest ? {
+      dailyA: stageLatest.daily_a_stage,
+      dailyB: stageLatest.daily_b_stage,
+      weeklyA: stageLatest.weekly_a_stage,
+      weeklyB: stageLatest.weekly_b_stage,
+      monthlyA: stageLatest.monthly_a_stage,
+      monthlyB: stageLatest.monthly_b_stage,
+    } : null,
+    physicalMomentumScore: latest.physicalMomentumScore,
+    physicalForceScore: latest.physicalForceScore,
+    changePercent,
+  }) : null
 
   return (
     <Card>
@@ -452,22 +530,53 @@ function UsPhysicalMomentumSection({ ticker, analysisDate }: { ticker: string; a
           US PMSは未計算です。US physical momentum バッチ生成後にここへ表示されます。
         </p>
       ) : (
-        <div className="mt-3 grid gap-3 lg:grid-cols-[1.2fr_2fr]">
-          <div className={`rounded-[6px] border p-4 ${toneClass}`}>
+        <div className="mt-3 grid gap-3 lg:grid-cols-[1.15fr_1.85fr]">
+          <div className={`rounded-[6px] border p-4 ${momentumTonePanelClass(view?.tone ?? 'neutral')}`}>
             <div className="text-[11px] font-black opacity-75">総合判定</div>
-            <div className="mt-1 text-[20px] font-black">{headline}</div>
+            <div className="mt-1 text-[20px] font-black">{view?.label ?? '方向待ち'}</div>
             <p className="mt-2 text-[12px] font-bold leading-6">
-              PMS順位 {data?.rank ?? '-'} / {data?.totalRanked ?? '-'}。
-              {data?.trend === 'rising' ? '直前より力は増加中です。' : data?.trend === 'falling' ? '直前より力は低下中です。' : '直前比は横ばいです。'}
+              {view?.summary}
             </p>
+            <div className="mt-3 flex flex-wrap gap-1.5">
+              {view?.badges.map((badge) => (
+                <span key={badge} className="rounded-full border border-current/20 bg-white/70 px-2 py-1 text-[10px] font-black">
+                  {badge}
+                </span>
+              ))}
+            </div>
+            {shortTermCheck && (
+              <div className={`mt-3 rounded-[5px] border px-3 py-2 ${shortTermPanelClass(shortTermCheck.label)}`}>
+                <div className="text-[10px] font-black opacity-75">短期チェック</div>
+                <div className="mt-0.5 text-[14px] font-black">{shortTermCheck.label}</div>
+                <p className="mt-1 text-[11px] font-bold leading-5">{shortTermCheck.description}</p>
+              </div>
+            )}
           </div>
-          <div className="grid gap-2 sm:grid-cols-3">
-            <Stat label="PMS 総合の力" value={fmtScore(latest.physicalMomentumScore)} />
-            <Stat label="PFS 初動/失速" value={fmtScore(latest.physicalForceScore)} />
-            <Stat label="PES 熱量" value={fmtScore(latest.physicalEnergyScore)} />
-            <Stat label="Velocity" value={fmtScore(latest.velocity)} />
-            <Stat label="Acceleration" value={fmtScore(latest.acceleration)} />
-            <Stat label="Force" value={fmtScore(latest.force)} />
+          <div className="grid gap-3">
+            <div className="grid gap-2 sm:grid-cols-3">
+              <Stat label="PMS 総合の力" value={fmtScore(latest.physicalMomentumScore)} />
+              <Stat label="PFS 初動/失速" value={fmtScore(latest.physicalForceScore)} />
+              <Stat label="PES 熱量" value={fmtScore(latest.physicalEnergyScore)} />
+            </div>
+            <div>
+              <div className="text-[13px] font-black text-[var(--color-text-primary)]">だから、どう見る？</div>
+              <p className="mt-1 text-[11px] font-bold leading-5 text-[var(--color-text-tertiary)]">
+                数字をそのまま読ませず、次に確認する行動条件へ変換しています。
+              </p>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+              {view?.checks.map((check) => (
+                <div key={`${check.label}-${check.text}`} className={`rounded-[6px] border p-3 ${momentumToneMiniClass(check.tone)}`}>
+                  <div className="text-[10px] font-black opacity-75">{check.label}</div>
+                  <div className="mt-1 text-[12px] font-black leading-5">{check.text}</div>
+                </div>
+              ))}
+            </div>
+            <div className="grid gap-2 sm:grid-cols-3">
+              <Stat label="Velocity" value={fmtScore(latest.velocity)} />
+              <Stat label="Acceleration" value={fmtScore(latest.acceleration)} />
+              <Stat label="Force" value={fmtScore(latest.force)} />
+            </div>
           </div>
         </div>
       )}

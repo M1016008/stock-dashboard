@@ -6,11 +6,11 @@ import type { CSSProperties } from 'react'
 import { MarketBadge } from '@/components/ui/MarketBadge'
 import { MarginBadges } from '@/components/ui/MarginBadges'
 import { PriceDisplay } from '@/components/ui/PriceDisplay'
-import { CandlestickChart, type ChartDateRange, type TvInterval } from '@/components/charts/CandlestickChart'
+import { CandlestickChart } from '@/components/charts/CandlestickChart'
 import { PerformanceCard } from '@/components/stock/PerformanceCard'
 import { EarningsCard } from '@/components/stock/EarningsCard'
 import { WatchlistButton } from '@/components/ui/WatchlistButton'
-import { StageTimeline, type StageRangeSelection } from '@/components/stock/StageTimeline'
+import { StageTimeline } from '@/components/stock/StageTimeline'
 import { StockMovePeriods } from '@/components/stock/StockMovePeriods'
 import { StockMlInsights } from '@/components/stock/StockMlInsights'
 import { ScenarioProjectionChart } from '@/components/stock/ScenarioProjectionChart'
@@ -19,6 +19,7 @@ import { StockScenarioAiPanel } from '@/components/stock/StockScenarioAiPanel'
 import { findTicker } from '@/lib/master/tickers'
 import { STAGE_BG_COLORS, STAGE_BORDER_COLORS, STAGE_LABELS } from '@/lib/hex-stage'
 import { buildShortTermCheck, type ShortTermCheckTone } from '@/lib/short-term-check'
+import { buildPhysicalMomentumView, type PhysicalMomentumCheck, type PhysicalMomentumTone } from '@/lib/physical-momentum-view'
 import type { StockQuote } from '@/types/stock'
 
 interface StockDetailClientProps {
@@ -55,18 +56,11 @@ interface StockMarginInfo {
   }>
 }
 
-interface StockSelectedRange extends ChartDateRange {
-  sourceLabel: string
-  source: 'chart' | 'stage' | 'calendar'
-  sourceInterval?: TvInterval
-}
-
 export function StockDetailClient({ ticker }: StockDetailClientProps) {
   const [quote, setQuote] = useState<StockQuote | null>(null)
   const [smaster, setSmaster] = useState<SectorMasterRow | null>(null)
   const [marginInfo, setMarginInfo] = useState<StockMarginInfo | null>(null)
   const [loading, setLoading] = useState(true)
-  const [selectedRange, setSelectedRange] = useState<StockSelectedRange | null>(null)
   const [analysisDate, setAnalysisDate] = useState<string | null>(null)
 
   const hardcoded = findTicker(ticker)
@@ -117,50 +111,6 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
   const displayCode = ticker.replace('.T', '')
   const name = smaster?.name ?? hardcoded?.name ?? quote?.name ?? '---'
 
-  const updateSelectedRange = useCallback((next: StockSelectedRange) => {
-    setSelectedRange((prev) => {
-      if (
-        prev?.startDate === next.startDate &&
-        prev?.endDate === next.endDate &&
-        prev?.sourceLabel === next.sourceLabel &&
-        prev?.sourceInterval === next.sourceInterval
-      ) {
-        return prev
-      }
-      return next
-    })
-  }, [])
-
-  const handleChartRangeChange = useCallback((range: ChartDateRange, interval: TvInterval, source: 'visible' | 'drag' = 'visible') => {
-    updateSelectedRange({
-      ...range,
-      source: 'chart',
-      sourceInterval: interval,
-      sourceLabel: source === 'drag' ? `${intervalLabel(interval)}選択範囲` : `${intervalLabel(interval)}表示範囲`,
-    })
-  }, [updateSelectedRange])
-
-  const handleStageRangeSelect = useCallback((selection: StageRangeSelection) => {
-    updateSelectedRange({
-      startDate: selection.startDate,
-      endDate: selection.endDate,
-      source: 'stage',
-      sourceLabel: selection.sourceLabel,
-    })
-  }, [updateSelectedRange])
-
-  const handleCalendarRangeSelect = useCallback((range: ChartDateRange) => {
-    updateSelectedRange({
-      ...range,
-      source: 'calendar',
-      sourceLabel: 'カレンダー選択範囲',
-    })
-  }, [updateSelectedRange])
-
-  const clearSelectedRange = useCallback(() => {
-    setSelectedRange(null)
-  }, [])
-
   const updateAnalysisDate = useCallback((date: string | null) => {
     setAnalysisDate(date)
     const url = new URL(window.location.href)
@@ -171,11 +121,6 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
     }
     window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`)
   }, [])
-
-  const shouldSyncChartRange = useCallback((interval: TvInterval) => {
-    if (!selectedRange) return false
-    return selectedRange.source !== 'chart' || selectedRange.sourceInterval !== interval
-  }, [selectedRange])
 
   return (
     <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -246,7 +191,7 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
         ticker={ticker}
         name={name}
         quote={quote}
-        selectedRange={selectedRange}
+        selectedRange={null}
         context={{
           marketSegment: displayMarketSegment,
           marginType: displayMarginType,
@@ -258,69 +203,27 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
       {/* ステージ変遷 */}
       <div>
         <div className="section-header">ステージ変遷</div>
-        <StageTimeline
-          ticker={ticker}
-          selectedRange={selectedRange}
-          onStageRangeSelect={handleStageRangeSelect}
-        />
-        <CalendarRangeSelector
-          selectedRange={selectedRange}
-          onRangeSelect={handleCalendarRangeSelect}
-          onClear={clearSelectedRange}
-        />
-        <SelectedRangeSummary ticker={ticker} range={selectedRange} />
+        <StageTimeline ticker={ticker} />
       </div>
 
-      {/* TradingView チャート: 日足 / 週足 / 月足 を縦に並べて時間軸比較 */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-        <div>
-          <div className="section-header">📈 日足チャート（短期トレンド）</div>
-          <CandlestickChart
-            ticker={ticker}
-            interval="D"
-            height={420}
-            maLines={[5, 25, 75]}
-            historyPeriod="all"
-            initialVisiblePeriod="1y"
-            selectedRange={selectedRange}
-            syncSelectedRange={shouldSyncChartRange('D')}
-            rangeLabel={selectedRange?.sourceLabel}
-            enableRangeDragSelect
-            onVisibleRangeChange={handleChartRangeChange}
-          />
-        </div>
-        <div>
-          <div className="section-header">📊 週足チャート（中期トレンド）</div>
-          <CandlestickChart
-            ticker={ticker}
-            interval="W"
-            height={420}
-            maLines={[13, 26, 52]}
-            historyPeriod="all"
-            initialVisiblePeriod="5y"
-            selectedRange={selectedRange}
-            syncSelectedRange={shouldSyncChartRange('W')}
-            rangeLabel={selectedRange?.sourceLabel}
-            enableRangeDragSelect
-            onVisibleRangeChange={handleChartRangeChange}
-          />
-        </div>
-        <div>
-          <div className="section-header">📉 月足チャート（長期トレンド）</div>
-          <CandlestickChart
-            ticker={ticker}
-            interval="M"
-            height={420}
-            maLines={[12, 24, 60]}
-            historyPeriod="all"
-            initialVisiblePeriod="10y"
-            selectedRange={selectedRange}
-            syncSelectedRange={shouldSyncChartRange('M')}
-            rangeLabel={selectedRange?.sourceLabel}
-            enableRangeDragSelect
-            onVisibleRangeChange={handleChartRangeChange}
-          />
-        </div>
+      {/* マルチタイムフレームチャート: 日足 / 2日足 / 週足 / 2週足 / 月足 / 2ヶ月足 */}
+      <div>
+        <div className="section-header">マルチタイムフレームチャート</div>
+        <CandlestickChart
+          ticker={ticker}
+          interval="D"
+          height={460}
+          historyPeriod="all"
+          showTimeframeSelector
+          maLinesByInterval={{
+            D: [5, 25, 75],
+            '2D': [5, 25, 75],
+            W: [13, 26, 52],
+            '2W': [13, 26, 52],
+            M: [12, 24, 60],
+            '2M': [12, 24, 60],
+          }}
+        />
       </div>
 
       {/* 過去の大きな値動き */}
@@ -1015,14 +918,17 @@ function PhysicalActionPoints({
   return (
     <div style={physicalActionPanelStyle}>
       <div style={physicalMiniHeaderStyle}>
-        <strong>次に見る確認ポイント</strong>
-        <span>売買判断の前に、力の向きが継続するかを確認します。</span>
+        <strong>だから、どう見る？</strong>
+        <span>数字ではなく、次の行動条件に変換しています。</span>
       </div>
       <div style={physicalActionListStyle}>
         {points.map((point, index) => (
-          <div key={point} style={physicalActionItemStyle}>
-            <span style={physicalActionIndexStyle}>{index + 1}</span>
-            <span>{point}</span>
+          <div key={`${point.label}-${point.text}`} style={{ ...physicalActionItemStyle, ...physicalActionToneStyle(point.tone) }}>
+            <span style={{ ...physicalActionIndexStyle, ...physicalActionIndexToneStyle(point.tone) }}>{index + 1}</span>
+            <span>
+              <strong style={physicalActionLabelStyle}>{point.label}</strong>
+              <span>{point.text}</span>
+            </span>
           </div>
         ))}
       </div>
@@ -1321,6 +1227,47 @@ function angleDirectionColor(value: number | null): string {
   return 'var(--text-secondary)'
 }
 
+function physicalToneColor(tone: PhysicalMomentumTone): string {
+  if (tone === 'up') return 'var(--price-up)'
+  if (tone === 'down') return 'var(--price-down)'
+  if (tone === 'warning') return '#b45309'
+  return 'var(--text-secondary)'
+}
+
+function physicalActionToneStyle(tone: PhysicalMomentumTone): CSSProperties {
+  if (tone === 'up') {
+    return {
+      borderColor: 'rgba(220, 38, 38, 0.28)',
+      background: 'linear-gradient(135deg, rgba(220, 38, 38, 0.08), #fff 72%)',
+      color: 'var(--text-primary)',
+    }
+  }
+  if (tone === 'down') {
+    return {
+      borderColor: 'rgba(37, 99, 235, 0.30)',
+      background: 'linear-gradient(135deg, rgba(37, 99, 235, 0.09), #fff 72%)',
+      color: 'var(--text-primary)',
+    }
+  }
+  if (tone === 'warning') {
+    return {
+      borderColor: 'rgba(245, 158, 11, 0.34)',
+      background: 'linear-gradient(135deg, rgba(245, 158, 11, 0.12), #fff 72%)',
+      color: 'var(--text-primary)',
+    }
+  }
+  return {}
+}
+
+function physicalActionIndexToneStyle(tone: PhysicalMomentumTone): CSSProperties {
+  const color = physicalToneColor(tone)
+  return {
+    color,
+    borderColor: color,
+    background: tone === 'neutral' ? 'var(--bg-elevated)' : '#fff',
+  }
+}
+
 function buildPhysicalMomentumInsight(
   latest: PhysicalMomentumApiRow,
   rank: number | null,
@@ -1328,104 +1275,36 @@ function buildPhysicalMomentumInsight(
   trend: PhysicalMomentumResponse['trend'],
   field: PhysicalMaFieldInsight | null,
 ) {
-  const pms = latest.physicalMomentumScore
-  const pfs = latest.physicalForceScore
-  const pes = latest.physicalEnergyScore
-  const color = pms == null ? 'var(--text-muted)' : pms >= 0 ? 'var(--price-up)' : 'var(--price-down)'
-  let label = '中立'
-  let description = '市場平均に近い運動状態です。力場の拡散/収縮、PFS、PES、ステージ判定を併せて確認します。'
-  if (pms != null && pms >= 2) {
-    label = '強い上向きの力'
-    description = '総合運動状態が市場平均を大きく上回っています。力が長期側へ拡散しているか、短期だけの過熱かをMA力場で確認します。'
-  } else if (pms != null && pms >= 1) {
-    label = '上向きの力が優勢'
-    description = '市場平均より明確に強い運動状態です。PFSがプラスなら力が増加中、PESがプラスならエネルギーが残っています。'
-  } else if (pms != null && pms >= 0.35) {
-    label = 'やや上向き'
-    description = '市場平均よりやや強い状態です。短期の力が長期側へ伝わっているか、MA力場で確認します。'
-  } else if (pms != null && pms <= -2) {
-    label = '強い下向きの力'
-    description = '総合運動状態が市場平均を大きく下回っています。下向きの力が長期側へ拡散しているかを優先確認します。'
-  } else if (pms != null && pms <= -1) {
-    label = '下向きの力が優勢'
-    description = '市場平均より弱い運動状態です。PFSもマイナスなら、下向きの力がまだ残っている可能性があります。'
-  } else if (pms != null && pms <= -0.35) {
-    label = 'やや下向き'
-    description = '市場平均よりやや弱い状態です。力が収縮して反転準備に入っているのか、下方向へ拡散中なのかを確認します。'
+  const view = buildPhysicalMomentumView({
+    pms: latest.physicalMomentumScore,
+    pfs: latest.physicalForceScore,
+    pes: latest.physicalEnergyScore,
+    trend,
+    rank,
+    total,
+    fieldLabel: field?.label,
+  })
+
+  return {
+    label: view.label,
+    description: view.summary,
+    color: physicalToneColor(view.tone),
+    reasons: view.badges,
   }
-
-  const reasons = [
-    `PMS ${fmtScore(pms)}`,
-    trend === 'rising' ? 'PMS上昇中' : trend === 'falling' ? 'PMS低下中' : 'PMS横ばい',
-    rank && total ? `市場上位 ${Math.max(1, Math.round((rank / total) * 100))}%` : '順位未取得',
-    physicalSignalText(pfs, 'force'),
-    physicalSignalText(pes, 'energy'),
-    field?.label ?? 'MA力場未判定',
-  ]
-
-  return { label, description, color, reasons }
 }
 
 function buildPhysicalActionPoints(
   latest: PhysicalMomentumApiRow,
   trend: PhysicalMomentumResponse['trend'],
   field: PhysicalMaFieldInsight | null,
-): string[] {
-  const points: string[] = []
-  const pms = latest.physicalMomentumScore
-  const pfs = latest.physicalForceScore
-  const pes = latest.physicalEnergyScore
-
-  if (pms != null && Number.isFinite(pms)) {
-    if (pms >= 1) {
-      points.push('PMSは市場平均より強い状態です。次はPFSがプラスを維持し、力が失速していないかを確認します。')
-    } else if (pms <= -1) {
-      points.push('PMSは市場平均より弱い状態です。反発を見る前に、PFSのマイナスが止まるかを確認します。')
-    } else {
-      points.push('PMSは市場平均付近です。単独では判断せず、PFSとMA力場の向きが揃うかを確認します。')
-    }
-  }
-
-  if (pfs != null && Number.isFinite(pfs)) {
-    if (pfs >= 0.35) {
-      points.push('PFSがプラスなので、短期の押し目後も上向きの力が再加速するかを見ます。')
-    } else if (pfs <= -0.35) {
-      points.push('PFSがマイナスなので、短期反発があっても下向きの力が残っていないかを見ます。')
-    } else {
-      points.push('PFSは中立です。初動判断は急がず、加速度が上下どちらへ傾くかを待ちます。')
-    }
-  }
-
-  if (pes != null && Number.isFinite(pes)) {
-    if (pes >= 1) {
-      points.push('PESが高いため、強さと同時に過熱もあります。上髭や急失速の有無を確認します。')
-    } else if (pes <= -0.35) {
-      points.push('PESが弱いため、値動きの熱量は不足気味です。反転には出来高を伴う力の回復が必要です。')
-    }
-  }
-
-  if (field?.label.includes('上方向')) {
-    points.push('MA力場は上方向です。5MA/25MAの力が75MA/200MAへ伝わり続けるかを確認します。')
-  } else if (field?.label.includes('下方向')) {
-    points.push('MA力場は下方向です。短期線の反発だけでなく、長期線側の下向き拡散が止まるかを確認します。')
-  } else if (field?.label.includes('収縮')) {
-    points.push('MA力場は収縮中です。次に上へ拡散するか、下へ拡散するかが重要です。')
-  } else if (field?.label.includes('ねじれ')) {
-    points.push('MA力場がねじれています。日足だけでなく週足・月足の向きと矛盾していないかを確認します。')
-  }
-
-  if (trend === 'rising') {
-    points.push('PMS推移は改善中です。直近高値更新時にPFSが落ちないかを見ます。')
-  } else if (trend === 'falling') {
-    points.push('PMS推移は低下中です。買い判断ではなく、低下が止まる証拠を優先します。')
-  }
-
-  if (points.length === 0) {
-    points.push('PMSデータが不足しています。まずは6ステージ、MA力場、直近チャートの方向を併せて確認します。')
-  }
-
-  const unique = Array.from(new Set(points))
-  return unique.slice(0, 4)
+): PhysicalMomentumCheck[] {
+  return buildPhysicalMomentumView({
+    pms: latest.physicalMomentumScore,
+    pfs: latest.physicalForceScore,
+    pes: latest.physicalEnergyScore,
+    trend,
+    fieldLabel: field?.label,
+  }).checks
 }
 
 function physicalSignalText(value: number | null | undefined, kind: 'force' | 'energy'): string {
@@ -1560,278 +1439,6 @@ const SUMMARY_STAGE_KEYS: { key: StageKey; label: string }[] = [
   { key: 'monthly_b_stage', label: '月B' },
 ]
 
-function CalendarRangeSelector({
-  selectedRange,
-  onRangeSelect,
-  onClear,
-}: {
-  selectedRange: ChartDateRange | null
-  onRangeSelect: (range: ChartDateRange) => void
-  onClear: () => void
-}) {
-  const [startDate, setStartDate] = useState(selectedRange?.startDate ?? '')
-  const [endDate, setEndDate] = useState(selectedRange?.endDate ?? '')
-  const [error, setError] = useState('')
-
-  useEffect(() => {
-    setStartDate(selectedRange?.startDate ?? '')
-    setEndDate(selectedRange?.endDate ?? '')
-    setError('')
-  }, [selectedRange?.startDate, selectedRange?.endDate])
-
-  function applyRange(nextStart = startDate, nextEnd = endDate) {
-    if (!nextStart || !nextEnd) {
-      setError('開始日と終了日を選択してください。')
-      return
-    }
-    const ordered =
-      nextStart <= nextEnd
-        ? { startDate: nextStart, endDate: nextEnd }
-        : { startDate: nextEnd, endDate: nextStart }
-    setError('')
-    onRangeSelect(ordered)
-  }
-
-  function applyPreset(days: number) {
-    const end = selectedRange?.endDate ?? isoTodayJst()
-    const start = isoDaysBefore(end, days)
-    setStartDate(start)
-    setEndDate(end)
-    setError('')
-    onRangeSelect({ startDate: start, endDate: end })
-  }
-
-  function clearRange() {
-    setStartDate('')
-    setEndDate('')
-    setError('')
-    onClear()
-  }
-
-  return (
-    <div className="card" style={calendarCardStyle}>
-      <div style={calendarHeaderStyle}>
-        <div>
-          <strong style={{ fontSize: '12px' }}>期間をカレンダーで選択</strong>
-          <div style={{ color: 'var(--text-muted)', fontSize: '10px', marginTop: '2px' }}>
-            選択した期間はステージ表、日足・週足・月足チャート、サマリーへ同期します。
-          </div>
-        </div>
-        <div style={presetGroupStyle}>
-          <button type="button" onClick={() => applyPreset(30)} style={presetButtonStyle}>1か月</button>
-          <button type="button" onClick={() => applyPreset(90)} style={presetButtonStyle}>3か月</button>
-          <button type="button" onClick={() => applyPreset(365)} style={presetButtonStyle}>1年</button>
-        </div>
-      </div>
-      <form
-        onSubmit={(event) => {
-          event.preventDefault()
-          applyRange()
-        }}
-        style={calendarFormStyle}
-      >
-        <label style={dateInputLabelStyle}>
-          <span>開始日</span>
-          <input
-            type="date"
-            value={startDate}
-            onChange={(event) => setStartDate(event.target.value)}
-            style={dateInputStyle}
-          />
-        </label>
-        <label style={dateInputLabelStyle}>
-          <span>終了日</span>
-          <input
-            type="date"
-            value={endDate}
-            onChange={(event) => setEndDate(event.target.value)}
-            style={dateInputStyle}
-          />
-        </label>
-        <button type="submit" style={applyButtonStyle}>適用</button>
-        <button type="button" onClick={clearRange} style={clearButtonStyle}>解除</button>
-      </form>
-      {error && <div style={calendarErrorStyle}>{error}</div>}
-    </div>
-  )
-}
-
-function SelectedRangeSummary({ ticker, range }: { ticker: string; range: StockSelectedRange | null }) {
-  const [entries, setEntries] = useState<SummaryStageEntry[]>([])
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
-
-  useEffect(() => {
-    if (!range) {
-      setEntries([])
-      setError('')
-      setLoading(false)
-      return
-    }
-    let cancelled = false
-    setLoading(true)
-    setError('')
-    const params = new URLSearchParams({
-      granularity: 'daily',
-      startDate: range.startDate,
-      endDate: range.endDate,
-      count: '3000',
-    })
-    fetch(`/api/stage-history/${encodeURIComponent(ticker)}?${params.toString()}`, { cache: 'no-store' })
-      .then((res) => res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`)))
-      .then((data) => {
-        if (cancelled) return
-        if (data.error) throw new Error(data.message ?? data.error)
-        setEntries(data.history ?? [])
-      })
-      .catch((e) => { if (!cancelled) setError((e as Error).message) })
-      .finally(() => { if (!cancelled) setLoading(false) })
-    return () => { cancelled = true }
-  }, [ticker, range?.startDate, range?.endDate])
-
-  if (!range) {
-    return (
-      <div className="card" style={summaryCardStyle}>
-        <div style={summaryTitleRowStyle}>
-          <strong>選択期間サマリー</strong>
-          <span>チャートをズーム/パン、またはステージ表のセルをクリック</span>
-        </div>
-        <p style={summaryEmptyStyle}>
-          チャートの表示範囲とステージ変遷を同じ日付軸で結び、期間内のステージ変化・騰落率・MA状態をここに表示します。
-        </p>
-      </div>
-    )
-  }
-
-  const summary = buildRangeSummary(entries)
-
-  return (
-    <div className="card" style={summaryCardStyle}>
-      <div style={summaryTitleRowStyle}>
-        <strong>選択期間サマリー</strong>
-        <span>{range.sourceLabel} / {range.startDate} → {range.endDate}</span>
-      </div>
-      {loading ? (
-        <p style={summaryEmptyStyle}>集計中...</p>
-      ) : error ? (
-        <p style={{ ...summaryEmptyStyle, color: 'var(--price-down)' }}>集計エラー: {error}</p>
-      ) : !summary ? (
-        <p style={summaryEmptyStyle}>集計対象データ不足</p>
-      ) : (
-        <>
-          <div style={summaryGridStyle}>
-            <SummaryMetric label="騰落率" value={fmtPct(summary.returnPct)} tone={summary.returnPct} />
-            <SummaryMetric label="終値" value={`${fmtPrice(summary.startClose)} → ${fmtPrice(summary.endClose)}`} />
-            <SummaryMetric label="データ数" value={`${summary.rows.toLocaleString('ja-JP')}営業日`} />
-            <SummaryMetric label="ステージ変化" value={`${summary.stageChanges}回`} />
-            <SummaryMetric label="MA配列" value={`${summary.startMaState} → ${summary.endMaState}`} />
-            <SummaryMetric label="MA変化" value={summary.maChangeText} />
-          </div>
-          <div style={stageSummaryRowStyle}>
-            {SUMMARY_STAGE_KEYS.map(({ key, label }) => (
-              <span key={key} style={stageSummaryItemStyle}>
-                <small>{label}</small>
-                <StageMini stage={summary.startStages[key]} />
-                <b>→</b>
-                <StageMini stage={summary.endStages[key]} />
-              </span>
-            ))}
-          </div>
-        </>
-      )}
-    </div>
-  )
-}
-
-function SummaryMetric({ label, value, tone }: { label: string; value: string; tone?: number | null }) {
-  return (
-    <div style={summaryMetricStyle}>
-      <span>{label}</span>
-      <strong style={{ color: tone == null ? 'var(--text-primary)' : tone >= 0 ? 'var(--price-up)' : 'var(--price-down)' }}>
-        {value}
-      </strong>
-    </div>
-  )
-}
-
-function StageMini({ stage }: { stage: number | null }) {
-  if (!stage) return <i style={stageMiniEmptyStyle}>-</i>
-  return (
-    <i style={{
-      ...stageMiniStyle,
-      background: STAGE_BORDER_COLORS[stage],
-    }}>
-      {stage}
-    </i>
-  )
-}
-
-function buildRangeSummary(entries: SummaryStageEntry[]) {
-  const rows = entries.filter((entry) => entry.date && entry.close != null && Number.isFinite(entry.close))
-  if (entries.length === 0 || rows.length < 2) return null
-  const startPriceRow = rows[0]
-  const endPriceRow = rows[rows.length - 1]
-  const startClose = Number(startPriceRow.close)
-  const endClose = Number(endPriceRow.close)
-  if (!Number.isFinite(startClose) || startClose === 0 || !Number.isFinite(endClose)) return null
-
-  const startStageRow = entries.find((entry) => SUMMARY_STAGE_KEYS.some(({ key }) => entry[key] != null)) ?? entries[0]
-  const endStageRow = [...entries].reverse().find((entry) => SUMMARY_STAGE_KEYS.some(({ key }) => entry[key] != null)) ?? entries[entries.length - 1]
-  const startStages = Object.fromEntries(SUMMARY_STAGE_KEYS.map(({ key }) => [key, startStageRow?.[key] ?? null])) as Record<StageKey, number | null>
-  const endStages = Object.fromEntries(SUMMARY_STAGE_KEYS.map(({ key }) => [key, endStageRow?.[key] ?? null])) as Record<StageKey, number | null>
-
-  let stageChanges = 0
-  for (const { key } of SUMMARY_STAGE_KEYS) {
-    let prev: number | null = null
-    for (const entry of entries) {
-      const current = entry[key]
-      if (current == null) continue
-      if (prev != null && current !== prev) stageChanges += 1
-      prev = current
-    }
-  }
-
-  const startMaRow = entries.find((entry) => entry.ma_5 != null && entry.ma_25 != null && entry.ma_75 != null) ?? entries[0]
-  const endMaRow = [...entries].reverse().find((entry) => entry.ma_5 != null && entry.ma_25 != null && entry.ma_75 != null) ?? entries[entries.length - 1]
-
-  return {
-    rows: entries.length,
-    startClose,
-    endClose,
-    returnPct: ((endClose - startClose) / startClose) * 100,
-    stageChanges,
-    startStages,
-    endStages,
-    startMaState: maState(startMaRow),
-    endMaState: maState(endMaRow),
-    maChangeText: maChangeText(startMaRow, endMaRow),
-  }
-}
-
-function maState(entry: Pick<SummaryStageEntry, 'ma_5' | 'ma_25' | 'ma_75'> | undefined): string {
-  if (!entry || entry.ma_5 == null || entry.ma_25 == null || entry.ma_75 == null) return '不足'
-  if (entry.ma_5 > entry.ma_25 && entry.ma_25 > entry.ma_75) return '上昇配列'
-  if (entry.ma_5 < entry.ma_25 && entry.ma_25 < entry.ma_75) return '下降配列'
-  return '混在'
-}
-
-function maChangeText(start: SummaryStageEntry | undefined, end: SummaryStageEntry | undefined): string {
-  const changes = [
-    ['5MA', pctChange(start?.ma_5, end?.ma_5)],
-    ['25MA', pctChange(start?.ma_25, end?.ma_25)],
-    ['75MA', pctChange(start?.ma_75, end?.ma_75)],
-  ] as const
-  const parts = changes
-    .filter(([, value]) => value != null)
-    .map(([label, value]) => `${label} ${fmtPct(value)}`)
-  return parts.length > 0 ? parts.join(' / ') : '不足'
-}
-
-function pctChange(start: number | null | undefined, end: number | null | undefined): number | null {
-  if (start == null || end == null || !Number.isFinite(start) || !Number.isFinite(end) || start === 0) return null
-  return ((end - start) / start) * 100
-}
-
 function fmtPrice(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(value)) return '-'
   return `${Math.round(value).toLocaleString('ja-JP')}円`
@@ -1840,28 +1447,6 @@ function fmtPrice(value: number | null | undefined): string {
 function fmtPct(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(value)) return '-'
   return `${value >= 0 ? '+' : ''}${value.toFixed(1)}%`
-}
-
-function intervalLabel(interval: TvInterval): string {
-  if (interval === 'D') return '日足'
-  if (interval === 'W') return '週足'
-  return '月足'
-}
-
-function isoTodayJst(): string {
-  const now = new Date()
-  const jst = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Tokyo' }))
-  return [
-    jst.getFullYear(),
-    String(jst.getMonth() + 1).padStart(2, '0'),
-    String(jst.getDate()).padStart(2, '0'),
-  ].join('-')
-}
-
-function isoDaysBefore(isoDate: string, days: number): string {
-  const date = new Date(`${isoDate}T00:00:00Z`)
-  date.setUTCDate(date.getUTCDate() - days)
-  return date.toISOString().slice(0, 10)
 }
 
 const analysisDateCardStyle: CSSProperties = {
@@ -2197,6 +1782,14 @@ const physicalActionItemStyle: CSSProperties = {
   fontSize: '11px',
   lineHeight: 1.55,
   padding: '8px',
+}
+
+const physicalActionLabelStyle: CSSProperties = {
+  display: 'block',
+  color: 'var(--text-primary)',
+  fontSize: '11px',
+  fontWeight: 900,
+  marginBottom: '2px',
 }
 
 const physicalActionIndexStyle: CSSProperties = {
@@ -2694,166 +2287,10 @@ const physicalSparklineEmptyStyle: CSSProperties = {
   minHeight: '150px',
 }
 
-const calendarCardStyle: CSSProperties = {
-  marginTop: '8px',
-  padding: '12px',
-}
-
-const calendarHeaderStyle: CSSProperties = {
-  display: 'flex',
-  alignItems: 'flex-start',
-  justifyContent: 'space-between',
-  gap: '12px',
-  flexWrap: 'wrap',
-  marginBottom: '10px',
-}
-
-const presetGroupStyle: CSSProperties = {
-  display: 'flex',
-  gap: '6px',
-  flexWrap: 'wrap',
-  justifyContent: 'flex-end',
-}
-
-const presetButtonStyle: CSSProperties = {
-  border: '1px solid var(--border-base)',
-  borderRadius: 'var(--radius-sm)',
-  background: 'var(--bg-elevated)',
-  color: 'var(--text-secondary)',
-  fontFamily: 'var(--font-mono)',
-  fontSize: '10px',
-  fontWeight: 700,
-  padding: '5px 8px',
-  cursor: 'pointer',
-}
-
-const calendarFormStyle: CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
-  gap: '8px',
-  alignItems: 'end',
-}
-
-const dateInputLabelStyle: CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: '4px',
-  color: 'var(--text-muted)',
-  fontSize: '10px',
-  fontWeight: 700,
-}
-
-const dateInputStyle: CSSProperties = {
-  height: '34px',
-  border: '1px solid var(--border-base)',
-  borderRadius: 'var(--radius-sm)',
-  background: '#fff',
-  color: 'var(--text-primary)',
-  fontFamily: 'var(--font-mono)',
-  fontSize: '12px',
-  padding: '0 8px',
-}
-
-const applyButtonStyle: CSSProperties = {
-  height: '34px',
-  border: '1px solid var(--accent-primary)',
-  borderRadius: 'var(--radius-sm)',
-  background: 'var(--accent-primary)',
-  color: '#fff',
-  fontSize: '12px',
-  fontWeight: 700,
-  cursor: 'pointer',
-}
-
-const clearButtonStyle: CSSProperties = {
-  height: '34px',
-  border: '1px solid var(--border-base)',
-  borderRadius: 'var(--radius-sm)',
-  background: '#fff',
-  color: 'var(--text-secondary)',
-  fontSize: '12px',
-  fontWeight: 700,
-  cursor: 'pointer',
-}
-
-const calendarErrorStyle: CSSProperties = {
-  marginTop: '8px',
-  color: 'var(--price-down)',
-  fontSize: '11px',
-  fontWeight: 700,
-}
-
-const summaryCardStyle: CSSProperties = {
-  marginTop: '8px',
-  padding: '12px',
-}
-
-const summaryTitleRowStyle: CSSProperties = {
-  display: 'flex',
-  alignItems: 'baseline',
-  justifyContent: 'space-between',
-  gap: '12px',
-  flexWrap: 'wrap',
-  marginBottom: '8px',
-}
-
 const summaryEmptyStyle: CSSProperties = {
   margin: 0,
   color: 'var(--text-muted)',
   fontSize: '11px',
-}
-
-const summaryGridStyle: CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(138px, 1fr))',
-  gap: '8px',
-  marginBottom: '10px',
-}
-
-const summaryMetricStyle: CSSProperties = {
-  border: '1px solid var(--border-subtle)',
-  borderRadius: 'var(--radius-sm)',
-  background: 'var(--bg-elevated)',
-  padding: '8px',
-  display: 'flex',
-  flexDirection: 'column',
-  gap: '4px',
-}
-
-const stageSummaryRowStyle: CSSProperties = {
-  display: 'flex',
-  flexWrap: 'wrap',
-  gap: '6px',
-}
-
-const stageSummaryItemStyle: CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: '4px',
-  border: '1px solid var(--border-subtle)',
-  borderRadius: 'var(--radius-sm)',
-  padding: '4px 6px',
-  background: '#fff',
-}
-
-const stageMiniStyle: CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  width: '18px',
-  height: '18px',
-  borderRadius: '3px',
-  color: '#fff',
-  fontFamily: 'var(--font-mono)',
-  fontSize: '10px',
-  fontStyle: 'normal',
-  fontWeight: 700,
-}
-
-const stageMiniEmptyStyle: CSSProperties = {
-  ...stageMiniStyle,
-  background: 'var(--bg-surface)',
-  color: 'var(--text-muted)',
 }
 
 function fmtShares(value: number | null | undefined) {

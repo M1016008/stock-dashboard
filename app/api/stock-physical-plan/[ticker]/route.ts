@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { execAll, execGet } from '@/lib/db/client'
+import { execUsAnalyticsAll, execUsAnalyticsGet, hasUsAnalyticsDb } from '@/lib/db/us-analytics'
 import { ML_PHYSICS_FEATURE_SET } from '@/lib/backtest/ml-physics'
 import { analyzePhysicsProfile, type PhysicsStatus } from '@/lib/ml/physics-analysis'
+import { normalizeMarket, type MarketCode } from '@/lib/markets'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -71,6 +73,9 @@ type CandidateRow = {
   modelName: string | null
 }
 
+type GetFn = <T = Record<string, unknown>>(sql: string, args?: readonly unknown[]) => Promise<T | undefined>
+type AllFn = <T = Record<string, unknown>>(sql: string, args?: readonly unknown[]) => Promise<T[]>
+
 type PlanTone = 'positive' | 'negative' | 'neutral' | 'warning'
 
 type PriceLevel = {
@@ -95,8 +100,19 @@ const PLAN_HORIZONS = [
 
 type PlanHorizon = typeof PLAN_HORIZONS[number]
 
-function normalizeTicker(value: string): string {
-  return value.trim().toUpperCase().replace(/\.T$/i, '')
+function normalizeTicker(value: string, market: MarketCode): string {
+  const ticker = value.trim().toUpperCase()
+  return market === 'JP' ? ticker.replace(/\.T$/i, '') : ticker
+}
+
+function getReader(market: MarketCode): { get: GetFn; all: AllFn; dbMarket: string; isUsAnalytics: boolean } {
+  const isUsAnalytics = market === 'US' && hasUsAnalyticsDb()
+  return {
+    get: (isUsAnalytics ? execUsAnalyticsGet : execGet) as GetFn,
+    all: (isUsAnalytics ? execUsAnalyticsAll : execAll) as AllFn,
+    dbMarket: market,
+    isUsAnalytics,
+  }
 }
 
 function parseJson<T>(value: string | null | undefined, fallback: T): T {
@@ -134,10 +150,13 @@ function roundPrice(value: number | null | undefined): number | null {
   return Math.round(value * 100) / 100
 }
 
-function yen(value: number | null | undefined): string {
+function priceText(value: number | null | undefined, market: MarketCode): string {
   const rounded = roundPrice(value)
   if (!finite(rounded)) return '未判定'
-  return `${rounded.toLocaleString('ja-JP', { maximumFractionDigits: rounded >= 1000 ? 0 : 2 })}円`
+  const formatted = rounded.toLocaleString(market === 'US' ? 'en-US' : 'ja-JP', {
+    maximumFractionDigits: rounded >= 1000 ? 0 : 2,
+  })
+  return market === 'US' ? `$${formatted}` : `${formatted}円`
 }
 
 function distancePct(value: number | null | undefined, base: number): number | null {
@@ -183,15 +202,15 @@ function makeLevel(label: string, value: number | null | undefined, base: number
   }
 }
 
-function levelText(level: PriceLevel | null | undefined): string {
+function levelText(level: PriceLevel | null | undefined, market: MarketCode): string {
   if (!level || !finite(level.value)) return '価格未判定'
   const distance = finite(level.distancePct) ? ` / ${pctRaw(level.distancePct)}` : ''
-  return `${level.label} ${yen(level.value)}${distance}`
+  return `${level.label} ${priceText(level.value, market)}${distance}`
 }
 
-function levelPriceText(level: PriceLevel | null | undefined): string {
+function levelPriceText(level: PriceLevel | null | undefined, market: MarketCode): string {
   if (!level || !finite(level.value)) return '価格未判定'
-  return `${level.label} ${yen(level.value)}`
+  return `${level.label} ${priceText(level.value, market)}`
 }
 
 function windowRows(rows: PriceRow[], days: number): PriceRow[] {
@@ -416,6 +435,7 @@ function planFrom(
   momentum: MomentumRow | null,
   horizon: PlanHorizon,
   levels: HorizonPriceLevels | null,
+  market: MarketCode,
 ): {
   tone: PlanTone
   stance: string
@@ -435,7 +455,7 @@ function planFrom(
       : horizon.days <= 20 ? '1か月内'
         : '数週間から3か月'
   const priceSummary = levels
-    ? `基準価格は${yen(levels.close)}。支持/反発候補は${levelText(levels.support)}、抵抗/反落候補は${levelText(levels.resistance)}`
+    ? `基準価格は${priceText(levels.close, market)}。支持/反発候補は${levelText(levels.support, market)}、抵抗/反落候補は${levelText(levels.resistance, market)}`
     : '価格ラインは未判定'
   const evidence = [
     `${status}`,
@@ -457,11 +477,11 @@ function planFrom(
       headline: `${horizon.label}は下方向の警戒を優先`,
       summary: `${focus.focus}。${priceSummary}。現在形状は${evidence.join('、')}。${statLine || '検証統計は不足気味です'}。`,
       checklist: levels ? [
-        `${levelPriceText(levels.resistance)}前後が${horizonScope}の反落候補。戻りが止まり、陰線またはPFS再低下になるかを見る`,
-        `${levelPriceText(levels.breakdown)}を終値で割ると、${horizonScope}の下方向への力の拡散を優先して警戒する`,
-        `${levelPriceText(levels.resistance)}を終値で回復するなら、${horizonScope}の下落警戒はいったん弱める`,
+        `${levelPriceText(levels.resistance, market)}前後が${horizonScope}の反落候補。戻りが止まり、陰線またはPFS再低下になるかを見る`,
+        `${levelPriceText(levels.breakdown, market)}を終値で割ると、${horizonScope}の下方向への力の拡散を優先して警戒する`,
+        `${levelPriceText(levels.resistance, market)}を終値で回復するなら、${horizonScope}の下落警戒はいったん弱める`,
       ] : focus.downChecklist,
-      invalidation: levels ? `${levelPriceText(levels.resistance)}を終値で回復し、PFSがプラス圏へ戻る場合は下落警戒を弱めます。` : focus.downInvalidation,
+      invalidation: levels ? `${levelPriceText(levels.resistance, market)}を終値で回復し、PFSがプラス圏へ戻る場合は下落警戒を弱めます。` : focus.downInvalidation,
     }
   }
 
@@ -473,13 +493,13 @@ function planFrom(
       headline: `${horizon.label}は上方向の形を確認`,
       summary: `${focus.focus}。${priceSummary}。現在形状は${evidence.join('、')}。${statLine || '検証統計は不足気味です'}。`,
       checklist: levels ? [
-        `${levelPriceText(levels.support)}付近まで押した時に終値で守り、${horizonScope}の反発候補になるかを見る`,
-        `${levelPriceText(levels.resistance)}を終値で上抜けるか。ここで上髭/陰線なら${horizonScope}の反落注意`,
-        `${levelPriceText(levels.breakdown)}を終値で割る場合は、${horizonScope}の上方向シナリオをいったん保留する`,
+        `${levelPriceText(levels.support, market)}付近まで押した時に終値で守り、${horizonScope}の反発候補になるかを見る`,
+        `${levelPriceText(levels.resistance, market)}を終値で上抜けるか。ここで上髭/陰線なら${horizonScope}の反落注意`,
+        `${levelPriceText(levels.breakdown, market)}を終値で割る場合は、${horizonScope}の上方向シナリオをいったん保留する`,
       ] : overheated && horizon.days <= 5
           ? ['高値追いではなく、5日線付近まで熱量が冷めるかを見る', 'PESが急低下する場合は短期反落を優先する', '再加速するならPFSがプラスを維持するか確認する']
           : focus.upChecklist,
-      invalidation: levels ? `${levelPriceText(levels.breakdown)}を終値で明確に割り、PFSがマイナス化する場合は強気シナリオを保留します。` : focus.upInvalidation,
+      invalidation: levels ? `${levelPriceText(levels.breakdown, market)}を終値で明確に割り、PFSがマイナス化する場合は強気シナリオを保留します。` : focus.upInvalidation,
     }
   }
 
@@ -490,15 +510,15 @@ function planFrom(
       headline: `${horizon.label}は上げ余地より反落余地を確認`,
       summary: `${focus.focus}。${priceSummary}。PMS ${finite(pms) ? pms.toFixed(2) : '-'}、PFS ${finite(pfs) ? pfs.toFixed(2) : '-'}。${statLine || '検証統計は不足気味です'}。`,
       checklist: levels ? [
-        `${levelPriceText(levels.resistance)}付近で高値更新に失敗するなら、${horizonScope}の反落警戒を強める`,
-        `${levelPriceText(levels.support)}まで冷却しても終値で守れるかを見る`,
-        `${levelPriceText(levels.breakdown)}割れなら過熱終了、${levelPriceText(levels.resistance)}上抜けなら再加速として扱う`,
+        `${levelPriceText(levels.resistance, market)}付近で高値更新に失敗するなら、${horizonScope}の反落警戒を強める`,
+        `${levelPriceText(levels.support, market)}まで冷却しても終値で守れるかを見る`,
+        `${levelPriceText(levels.breakdown, market)}割れなら過熱終了、${levelPriceText(levels.resistance, market)}上抜けなら再加速として扱う`,
       ] : horizon.days <= 5
           ? ['5日線割れで急速に失速しないかを見る', '高値更新後にPFSが低下する場合は一段の買い増しを避ける', '短期熱量が冷めても終値が5日線上に残るか確認する']
           : horizon.days <= 20
             ? ['25日線までの調整で止まるかを見る', 'PMSが低下し続ける場合は中期の過熱終了として扱う', '日足ステージが悪化側へ連続しないか確認する']
             : ['週足で上髭や上値抵抗が続かないかを見る', '75日線から離れすぎている場合は平均回帰を警戒する', '月足側の勢いが鈍るなら長期過熱終了として扱う'],
-      invalidation: levels ? `${levelPriceText(levels.resistance)}を終値で上抜け、PFSがプラスを維持する場合は反落警戒を弱めます。` : horizon.days <= 5 ? '過熱縮小後に5日線上で再加速し、PFSがプラスを維持する場合は短期上方向の見方を戻します。' : focus.upInvalidation,
+      invalidation: levels ? `${levelPriceText(levels.resistance, market)}を終値で上抜け、PFSがプラスを維持する場合は反落警戒を弱めます。` : horizon.days <= 5 ? '過熱縮小後に5日線上で再加速し、PFSがプラスを維持する場合は短期上方向の見方を戻します。' : focus.upInvalidation,
     }
   }
 
@@ -508,17 +528,18 @@ function planFrom(
     headline: `${horizon.label}は方向感待ち`,
     summary: `${focus.focus}。${priceSummary}。過去検証では${directionLabel(target)}寄りですが、現時点では決め打ちより確認条件を待つ形です。${evidence.join('、')}。${statLine || '検証統計は不足気味です'}。`,
     checklist: levels ? [
-      `${levelPriceText(levels.support)}から${levelPriceText(levels.resistance)}のレンジをどちらに抜けるかを見る`,
-      `${levelPriceText(levels.resistance)}上抜けなら上方向、${levelPriceText(levels.support)}割れなら下方向へ判断を寄せる`,
+      `${levelPriceText(levels.support, market)}から${levelPriceText(levels.resistance, market)}のレンジをどちらに抜けるかを見る`,
+      `${levelPriceText(levels.resistance, market)}上抜けなら上方向、${levelPriceText(levels.support, market)}割れなら下方向へ判断を寄せる`,
       'PMS/PFSが価格の抜け方向と揃うまで、決め打ちせず観察する',
     ] : focus.neutralChecklist,
-    invalidation: levels ? `${levelPriceText(levels.support)}または${levelPriceText(levels.resistance)}を終値で明確に抜け、PMS/PFSも同方向へ揃ったら見送りから方向判断へ移します。` : focus.neutralInvalidation,
+    invalidation: levels ? `${levelPriceText(levels.support, market)}または${levelPriceText(levels.resistance, market)}を終値で明確に抜け、PMS/PFSも同方向へ揃ったら見送りから方向判断へ移します。` : focus.neutralInvalidation,
   }
 }
 
-async function loadLatestFeature(ticker: string, asOfDate?: string | null): Promise<FeatureRow | null> {
+async function loadLatestFeature(ticker: string, market: MarketCode, asOfDate?: string | null): Promise<FeatureRow | null> {
   const dateFilter = asOfDate ? 'AND f.date <= ?' : ''
-  return (await execGet<FeatureRow>(
+  const { get } = getReader(market)
+  return (await get<FeatureRow>(
     `
       SELECT
         f.ticker,
@@ -538,12 +559,19 @@ async function loadLatestFeature(ticker: string, asOfDate?: string | null): Prom
       LIMIT 1
     `,
     asOfDate ? [ML_PHYSICS_FEATURE_SET, ticker, asOfDate] : [ML_PHYSICS_FEATURE_SET, ticker],
-  )) ?? null
+  ).catch((error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error)
+    if (message.includes('no such table') || message.includes('US analytics DB not found')) return null
+    throw error
+  })) ?? null
 }
 
-async function loadMomentum(ticker: string, asOfDate?: string | null): Promise<MomentumRow | null> {
+async function loadMomentum(ticker: string, market: MarketCode, asOfDate?: string | null): Promise<MomentumRow | null> {
   const dateFilter = asOfDate ? 'AND date <= ?' : ''
-  return (await execGet<MomentumRow>(
+  const { get, isUsAnalytics } = getReader(market)
+  const dbMarkets = isUsAnalytics ? ['US', 'JP'] : [market]
+  const placeholders = dbMarkets.map(() => '?').join(', ')
+  return (await get<MomentumRow>(
     `
       SELECT
         date,
@@ -551,23 +579,24 @@ async function loadMomentum(ticker: string, asOfDate?: string | null): Promise<M
         physical_force_score AS physicalForceScore,
         physical_energy_score AS physicalEnergyScore
       FROM physical_momentum_metrics
-      WHERE market = 'JP'
+      WHERE market IN (${placeholders})
         AND symbol = ?
         ${dateFilter}
-      ORDER BY date DESC
+      ORDER BY CASE market WHEN ? THEN 0 ELSE 1 END, date DESC
       LIMIT 1
     `,
-    asOfDate ? [ticker, asOfDate] : [ticker],
+    asOfDate ? [...dbMarkets, ticker, asOfDate, market] : [...dbMarkets, ticker, market],
   ).catch((error: unknown) => {
     const message = error instanceof Error ? error.message : String(error)
-    if (message.includes('no such table')) return null
+    if (message.includes('no such table') || message.includes('US analytics DB not found')) return null
     throw error
   })) ?? null
 }
 
-async function loadCalibrations(status: PhysicsStatus, asOfDate?: string | null): Promise<Map<number, CalibrationRow>> {
+async function loadCalibrations(status: PhysicsStatus, market: MarketCode, asOfDate?: string | null): Promise<Map<number, CalibrationRow>> {
   const dateFilter = asOfDate ? 'AND evaluation_date <= ?' : ''
-  const rows = await execAll<CalibrationRow>(
+  const { all } = getReader(market)
+  const rows = await all<CalibrationRow>(
     `
       WITH latest AS (
         SELECT horizon_days, MAX(evaluation_date) AS evaluation_date
@@ -605,15 +634,16 @@ async function loadCalibrations(status: PhysicsStatus, asOfDate?: string | null)
       : [ML_PHYSICS_FEATURE_SET, status, ...PLAN_HORIZONS.map((h) => h.days), ML_PHYSICS_FEATURE_SET, status],
   ).catch((error: unknown) => {
     const message = error instanceof Error ? error.message : String(error)
-    if (message.includes('no such table')) return []
+    if (message.includes('no such table') || message.includes('US analytics DB not found')) return []
     throw error
   })
   return new Map(rows.map((row) => [Number(row.horizonDays), row]))
 }
 
-async function loadCandidates(ticker: string, asOfDate?: string | null): Promise<Map<number, CandidateRow[]>> {
+async function loadCandidates(ticker: string, market: MarketCode, asOfDate?: string | null): Promise<Map<number, CandidateRow[]>> {
   const dateFilter = asOfDate ? 'AND as_of_date <= ?' : ''
-  const rows = await execAll<CandidateRow>(
+  const { all } = getReader(market)
+  const rows = await all<CandidateRow>(
     `
       WITH latest AS (
         SELECT horizon_days, MAX(as_of_date) AS as_of_date
@@ -639,7 +669,7 @@ async function loadCandidates(ticker: string, asOfDate?: string | null): Promise
     asOfDate ? [...PLAN_HORIZONS.map((h) => h.days), asOfDate, ticker] : [...PLAN_HORIZONS.map((h) => h.days), ticker],
   ).catch((error: unknown) => {
     const message = error instanceof Error ? error.message : String(error)
-    if (message.includes('no such table')) return []
+    if (message.includes('no such table') || message.includes('US analytics DB not found')) return []
     throw error
   })
   const map = new Map<number, CandidateRow[]>()
@@ -651,25 +681,59 @@ async function loadCandidates(ticker: string, asOfDate?: string | null): Promise
   return map
 }
 
-async function loadPriceRows(ticker: string, asOfDate?: string | null): Promise<PriceRow[]> {
+async function loadPriceRows(ticker: string, market: MarketCode, asOfDate?: string | null): Promise<PriceRow[]> {
   const dateFilter = asOfDate ? 'AND date <= ?' : ''
-  const rows = await execAll<PriceRow>(
-    `
-      SELECT date, open, high, low, close, volume
-      FROM ohlcv_daily
-      WHERE ticker = ?
-        ${dateFilter}
-      ORDER BY date DESC
-      LIMIT 180
-    `,
-    asOfDate ? [ticker, asOfDate] : [ticker],
-  )
+  const { all, isUsAnalytics } = getReader(market)
+  const rows = market === 'US' && !isUsAnalytics
+    ? await execAll<PriceRow>(
+        `
+          SELECT date, open, high, low, close, volume
+          FROM market_ohlcv_daily
+          WHERE market = 'US'
+            AND ticker = ?
+            ${dateFilter}
+          ORDER BY date DESC
+          LIMIT 180
+        `,
+        asOfDate ? [ticker, asOfDate] : [ticker],
+      )
+    : await all<PriceRow>(
+        `
+          SELECT date, open, high, low, close, volume
+          FROM ohlcv_daily
+          WHERE ticker = ?
+            ${dateFilter}
+          ORDER BY date DESC
+          LIMIT 180
+        `,
+        asOfDate ? [ticker, asOfDate] : [ticker],
+      )
   return rows.reverse()
 }
 
-async function loadSnapshot(ticker: string, asOfDate?: string | null): Promise<SnapshotRow | null> {
+async function loadSnapshot(ticker: string, market: MarketCode, asOfDate?: string | null): Promise<SnapshotRow | null> {
   const dateFilter = asOfDate ? 'AND date <= ?' : ''
-  return (await execGet<SnapshotRow>(
+  const { get, isUsAnalytics } = getReader(market)
+  if (market === 'US' && !isUsAnalytics) {
+    return (await execGet<SnapshotRow>(
+      `
+        SELECT
+          date,
+          ma_5 AS ma5,
+          ma_25 AS ma25,
+          ma_75 AS ma75,
+          ma_300 AS ma300
+        FROM market_daily_snapshots
+        WHERE market = 'US'
+          AND ticker = ?
+          ${dateFilter}
+        ORDER BY date DESC
+        LIMIT 1
+      `,
+      asOfDate ? [ticker, asOfDate] : [ticker],
+    )) ?? null
+  }
+  return (await get<SnapshotRow>(
     `
       SELECT
         date,
@@ -690,12 +754,14 @@ async function loadSnapshot(ticker: string, asOfDate?: string | null): Promise<S
 export async function GET(request: NextRequest, context: RouteContext) {
   try {
     const { ticker: rawTicker } = await context.params
-    const ticker = normalizeTicker(rawTicker)
+    const market = normalizeMarket(request.nextUrl.searchParams.get('market'))
+    const ticker = normalizeTicker(rawTicker, market)
     const asOfDate = parseAsOfDate(request.nextUrl.searchParams.get('date'))
-    const feature = await loadLatestFeature(ticker, asOfDate)
+    const feature = await loadLatestFeature(ticker, market, asOfDate)
     if (!feature) {
       return NextResponse.json({
         ok: true,
+        market,
         ticker,
         available: false,
         message: '物理ML特徴量が未生成です。',
@@ -706,18 +772,18 @@ export async function GET(request: NextRequest, context: RouteContext) {
     const profile = parseJson<Record<string, unknown> | null>(feature.featureJson, null)
     const analysis = analyzePhysicsProfile(profile)
     const [momentum, calibrationMap, candidateMap, priceRows, snapshot] = await Promise.all([
-      loadMomentum(ticker, asOfDate),
-      loadCalibrations(analysis.physicsStatus, asOfDate),
-      loadCandidates(ticker, asOfDate),
-      loadPriceRows(ticker, asOfDate),
-      loadSnapshot(ticker, asOfDate),
+      loadMomentum(ticker, market, asOfDate),
+      loadCalibrations(analysis.physicsStatus, market, asOfDate),
+      loadCandidates(ticker, market, asOfDate),
+      loadPriceRows(ticker, market, asOfDate),
+      loadSnapshot(ticker, market, asOfDate),
     ])
 
     const horizons = PLAN_HORIZONS.map((horizon) => {
       const calibration = calibrationMap.get(horizon.days) ?? null
       const candidates = candidateMap.get(horizon.days) ?? []
       const levels = buildHorizonLevels(priceRows, snapshot, horizon)
-      const plan = planFrom(analysis.physicsStatus, calibration, candidates, momentum, horizon, levels)
+      const plan = planFrom(analysis.physicsStatus, calibration, candidates, momentum, horizon, levels, market)
       return {
         label: horizon.label,
         horizonDays: horizon.days,
@@ -750,6 +816,7 @@ export async function GET(request: NextRequest, context: RouteContext) {
 
     return NextResponse.json({
       ok: true,
+      market,
       ticker,
       available: true,
       featureSet: ML_PHYSICS_FEATURE_SET,

@@ -221,7 +221,8 @@ const STAGE_PARAM_MAP: Record<string, typeof STAGE_KEYS[number]> = {
 const PHYSICAL_STATUS_HORIZONS = [5, 10, 20, 40, 60, 90] as const
 const JP_TICKER_MASTER_MAP = new Map(getTickersByMarket('JP').map((ticker) => [ticker.ticker, ticker]))
 const SCREENER_BUILT_ROWS_CACHE_TTL_MS = Number(process.env.SCREENER_BUILT_ROWS_CACHE_TTL_MS ?? 6 * 60 * 60 * 1000)
-const SCREENER_BUILT_ROWS_CACHE_NAMESPACE = 'screener_built_rows_v1'
+const SCREENER_BUILT_ROWS_CACHE_NAMESPACE = 'screener_built_rows_v2'
+const SCREENER_BUILT_ROWS_LOGIC_VERSION = 'short-term-physics-risk-cap-v1'
 
 async function latestSnapshotDate(): Promise<string | null> {
   const row = await execGet<{ d: string | null }>(`SELECT MAX(date) AS d FROM daily_snapshots`)
@@ -719,6 +720,7 @@ function buildResultRow(
   const marketCapStatus = resolveMarketCapStatus(s, marketSegment, sectorLarge, sector33)
   const lastEarnings = resolveLastEarningsDate(s, marketSegment, sectorLarge, sector33)
   const nextEarnings = resolveNextEarningsDate(s, marketSegment, sectorLarge, sector33)
+  const physicsAnalysis = analyzePhysicsProfile(parsePhysicsProfile(s.physics_feature_json))
   const shortTermCheck = buildShortTermCheck({
     stages: {
       dailyA: s.daily_a_stage,
@@ -735,8 +737,8 @@ function buildResultRow(
     mlDownCount: s.ml_down_count,
     mlSimilarCount: s.ml_similar_count,
     mlTopSimilarity: s.ml_top_similarity,
+    physicsStatus: physicsAnalysis.physicsStatus,
   })
-  const physicsAnalysis = analyzePhysicsProfile(parsePhysicsProfile(s.physics_feature_json))
   const statusCalibration = physicsStatusCalibration.get(physicsAnalysis.physicsStatus) ?? null
   return {
     ticker: s.ticker,
@@ -1109,7 +1111,7 @@ function getBuiltRowsCache(): Map<string, BuiltRowsCacheEntry> {
 
 async function loadBuiltRows(date: string, physicalStatusHorizon: number): Promise<BuiltRowsResult> {
   const cache = getBuiltRowsCache()
-  const key = `${date}:${physicalStatusHorizon}:${ML_PHYSICS_FEATURE_SET}`
+  const key = `${date}:${physicalStatusHorizon}:${ML_PHYSICS_FEATURE_SET}:${SCREENER_BUILT_ROWS_LOGIC_VERSION}`
   const now = Date.now()
   const cached = cache.get(key)
   if (cached && now - cached.createdAt <= SCREENER_BUILT_ROWS_CACHE_TTL_MS) {
@@ -1124,6 +1126,7 @@ async function loadBuiltRows(date: string, physicalStatusHorizon: number): Promi
     date,
     physicalStatusHorizon,
     featureSet: ML_PHYSICS_FEATURE_SET,
+    logicVersion: SCREENER_BUILT_ROWS_LOGIC_VERSION,
   })
   const stored = await readServingCache<BuiltRowsStoredPayload>(
     SCREENER_BUILT_ROWS_CACHE_NAMESPACE,
