@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { execAll } from '@/lib/db/client'
+import { normalizeMarket, normalizeTickerForMarket } from '@/lib/markets'
 import {
   buildChartWindowWithMa,
   buildVolumeSummary,
@@ -69,16 +70,31 @@ function stageCode(row: StageRow): string {
   return values.map((value) => value == null ? '-' : String(value)).join('')
 }
 
-async function stagePath(ticker: string, startDate: string, endDate: string): Promise<StagePoint[]> {
-  const rows = await execAll<StageRow>(
-    `
-    SELECT date, daily_a_stage, daily_b_stage, weekly_a_stage, weekly_b_stage, monthly_a_stage, monthly_b_stage
-    FROM daily_snapshots
-    WHERE ticker = ? AND date >= ? AND date <= ?
-    ORDER BY date
-    `,
-    [ticker, startDate, endDate],
-  )
+async function stagePath(
+  ticker: string,
+  startDate: string,
+  endDate: string,
+  market: 'JP' | 'US',
+): Promise<StagePoint[]> {
+  const rows = market === 'US'
+    ? await execAll<StageRow>(
+      `
+      SELECT date, daily_a_stage, daily_b_stage, weekly_a_stage, weekly_b_stage, monthly_a_stage, monthly_b_stage
+      FROM market_daily_snapshots
+      WHERE market = 'US' AND ticker = ? AND date >= ? AND date <= ?
+      ORDER BY date
+      `,
+      [ticker, startDate, endDate],
+    )
+    : await execAll<StageRow>(
+      `
+      SELECT date, daily_a_stage, daily_b_stage, weekly_a_stage, weekly_b_stage, monthly_a_stage, monthly_b_stage
+      FROM daily_snapshots
+      WHERE ticker = ? AND date >= ? AND date <= ?
+      ORDER BY date
+      `,
+      [ticker, startDate, endDate],
+    )
   const path: StagePoint[] = []
   for (const row of rows) {
     const code = stageCode(row)
@@ -150,30 +166,43 @@ export async function GET(
 ) {
   try {
     const { ticker: rawTicker } = await context.params
-    const ticker = decodeURIComponent(rawTicker).replace(/\.T$/i, '')
     const { searchParams } = new URL(request.url)
+    const market = normalizeMarket(searchParams.get('market'))
+    const ticker = normalizeTickerForMarket(rawTicker, market)
     const limit = Math.min(12, Math.max(1, Number(searchParams.get('limit') ?? 8)))
 
-    const history = await execAll<OhlcvPoint>(
-      `
-      SELECT date, open, high, low, close, volume
-      FROM ohlcv_daily
-      WHERE ticker = ?
-      ORDER BY date
-      `,
-      [ticker],
-    )
+    const history = market === 'US'
+      ? await execAll<OhlcvPoint>(
+        `
+        SELECT date, open, high, low, close, volume
+        FROM market_ohlcv_daily
+        WHERE market = 'US' AND ticker = ?
+        ORDER BY date
+        `,
+        [ticker],
+      )
+      : await execAll<OhlcvPoint>(
+        `
+        SELECT date, open, high, low, close, volume
+        FROM ohlcv_daily
+        WHERE ticker = ?
+        ORDER BY date
+        `,
+        [ticker],
+      )
 
-    const serving = await execAll<ServingMoveRow>(
-      `
-      SELECT direction, rank, start_date, end_date, return_pct, trading_days, stage_path_json, payload_json
-      FROM serving_stock_move_periods
-      WHERE ticker = ?
-      ORDER BY direction, rank
-      LIMIT ?
-      `,
-      [ticker, limit],
-    )
+    const serving = market === 'JP'
+      ? await execAll<ServingMoveRow>(
+        `
+        SELECT direction, rank, start_date, end_date, return_pct, trading_days, stage_path_json, payload_json
+        FROM serving_stock_move_periods
+        WHERE ticker = ?
+        ORDER BY direction, rank
+        LIMIT ?
+        `,
+        [ticker, limit],
+      )
+      : []
 
     let moves: MoveCandidate[] = serving.map((row) => {
       const start = history.find((item) => item.date === row.start_date)
@@ -199,7 +228,7 @@ export async function GET(
     }
 
     const enriched = await Promise.all(moves.map(async (move) => {
-      const path = move.stagePath.length > 0 ? move.stagePath : await stagePath(ticker, move.startDate, move.endDate)
+      const path = move.stagePath.length > 0 ? move.stagePath : await stagePath(ticker, move.startDate, move.endDate, market)
       return {
         ...move,
         stagePath: path,
@@ -208,7 +237,7 @@ export async function GET(
       }
     }))
 
-    return NextResponse.json({ ticker, moves: enriched })
+    return NextResponse.json({ ticker, market, moves: enriched })
   } catch (error) {
     console.error('Stock move periods API error:', error)
     return NextResponse.json(

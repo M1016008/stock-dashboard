@@ -39,6 +39,7 @@ type Props = {
   startPrice?: number | null
   endPrice?: number | null
   returnPct?: number | null
+  currency?: 'JPY' | 'USD'
 }
 
 type StagePosition = StageMarkerPoint & {
@@ -49,8 +50,11 @@ function dateToTime(date: string): UTCTimestamp {
   return Math.floor(new Date(`${date}T00:00:00Z`).getTime() / 1000) as UTCTimestamp
 }
 
-function fmtPrice(value: number | null | undefined): string {
+function fmtPrice(value: number | null | undefined, currency: 'JPY' | 'USD' = 'JPY'): string {
   if (value == null || !Number.isFinite(value)) return '-'
+  if (currency === 'USD') {
+    return `$${value.toLocaleString('en-US', { maximumFractionDigits: value >= 100 ? 1 : 2 })}`
+  }
   return `${Math.round(value).toLocaleString('ja-JP')}円`
 }
 
@@ -69,6 +73,7 @@ export function BacktestHighlightChart({
   startPrice,
   endPrice,
   returnPct,
+  currency = 'JPY',
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const highlightRef = useRef<HTMLDivElement>(null)
@@ -235,7 +240,7 @@ export function BacktestHighlightChart({
     <div className="bt-highlight-chart">
       <div className="bt-highlight-chart-meta">
         <span>{highlightStart} → {highlightEnd ?? '-'}</span>
-        <strong>{fmtPrice(startPrice)} → {fmtPrice(endPrice)}</strong>
+        <strong>{fmtPrice(startPrice, currency)} → {fmtPrice(endPrice, currency)}</strong>
         <b data-direction={direction}>{fmtPct(returnPct)}</b>
         <i className="bt-ma-legend">
           <em data-ma="5">5日</em>
