@@ -75,6 +75,8 @@ const plist = `<?xml version="1.0" encoding="UTF-8"?>
 ${calendar(16, 40)}
 ${calendar(16, 55)}
 ${calendar(17, 20)}
+${calendar(18, 10)}
+${calendar(21, 10)}
   </array>
   <key>StandardOutPath</key>
   <string>${xmlEscape(path.join(logDir, 'update-latest.log'))}</string>
@@ -98,5 +100,5 @@ execFileSync('launchctl', ['bootstrap', `gui/${uid}`, plistPath], { stdio: 'inhe
 execFileSync('launchctl', ['enable', `gui/${uid}/${label}`], { stdio: 'inherit' })
 
 console.log(`launchd registered: ${plistPath}`)
-console.log('schedule: 16:40, 16:55, 17:20 JST')
+console.log('schedule: 16:40, 16:55, 17:20, 18:10, 21:10 JST')
 console.log(`logs: ${path.join(logDir, 'update-latest.log')}`)

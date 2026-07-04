@@ -51,6 +51,8 @@ function marketCloseRetrySchedule(): string {
     [6, 30],
     [7, 30],
     [8, 30],
+    [12, 30],
+    [18, 30],
   ] as const
   return weekdays.flatMap((weekday) => times.map(([hour, minute]) => calendar(hour, minute, weekday))).join('\n')
 }
@@ -112,5 +114,5 @@ execFileSync('launchctl', ['bootstrap', `gui/${uid}`, plistPath], { stdio: 'inhe
 execFileSync('launchctl', ['enable', `gui/${uid}/${label}`], { stdio: 'inherit' })
 
 console.log(`launchd registered: ${plistPath}`)
-console.log('schedule: Tue-Sat 06:30, 07:30, 08:30 JST')
+console.log('schedule: Tue-Sat 06:30, 07:30, 08:30, 12:30, 18:30 JST')
 console.log(`logs: ${path.join(logDir, 'us-update-latest.log')}`)

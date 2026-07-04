@@ -39,7 +39,7 @@ function xmlEscape(value: string): string {
 }
 
 function parseGuardTimes(): GuardTime[] {
-  const raw = process.env.ML_FRESHNESS_GUARD_TIMES ?? '07:30,12:30'
+  const raw = process.env.ML_FRESHNESS_GUARD_TIMES ?? '07:30,12:30,18:30,21:30'
   const parsed = raw
     .split(',')
     .map((item) => item.trim())
@@ -49,7 +49,9 @@ function parseGuardTimes(): GuardTime[] {
       return { hour, minute }
     })
     .filter((item) => Number.isInteger(item.hour) && Number.isInteger(item.minute) && item.hour >= 0 && item.hour <= 23 && item.minute >= 0 && item.minute <= 59)
-  return parsed.length > 0 ? parsed : [{ hour: 7, minute: 30 }, { hour: 12, minute: 30 }]
+  return parsed.length > 0
+    ? parsed
+    : [{ hour: 7, minute: 30 }, { hour: 12, minute: 30 }, { hour: 18, minute: 30 }, { hour: 21, minute: 30 }]
 }
 
 function calendar(hour: number, minute: number, weekday: number): string {

@@ -189,6 +189,7 @@ async function main() {
           FORWARD_EXTREMA_WRITE_MODEL_LABELS: '0',
         }],
         ['serving-backtest', 'scripts/build-serving-backtest.ts', {}],
+        ['serving-stock', 'scripts/build-serving-stock.ts', {}],
       ]
 
       for (const [label, script, env] of optionalScripts) {
