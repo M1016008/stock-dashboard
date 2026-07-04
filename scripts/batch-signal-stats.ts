@@ -32,7 +32,7 @@ function envInt(name: string, fallback: number, min = 0): number {
 
 const MIN_N = envInt('SIGNAL_MIN_N', 40, 1)
 const GROUP_LIMIT = envInt('SIGNAL_STATS_LIMIT_GROUPS', 0, 0)
-const RECENT_DAYS = envInt('BACKTEST_RECENT_DAYS', 260, 0)
+const RECENT_DAYS = envInt('BACKTEST_RECENT_DAYS', 0, 0)
 const DATE_CHUNK = envInt('SIGNAL_STATS_DATE_CHUNK', BY_PATTERN ? 5 : 10, 1)
 const INSERT_CHUNK = 200
 

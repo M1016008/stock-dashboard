@@ -262,6 +262,7 @@ export async function GET(request: NextRequest, context: RouteContext) {
           SUM(sample_count) AS samples
         FROM ml_physics_status_evaluations
         WHERE feature_set = ?
+          AND sample_count > 0
           ${asOfDate ? 'AND evaluation_date <= ?' : ''}
       `,
       asOfDate ? [ML_PHYSICS_FEATURE_SET, asOfDate] : [ML_PHYSICS_FEATURE_SET],

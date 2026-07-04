@@ -164,13 +164,13 @@ async function main() {
     const physicsStatusEvaluationDataDate = await maxDate(
       'ml_physics_status_evaluations',
       'end_date',
-      'WHERE feature_set = ? AND horizon_days = ?',
+      'WHERE feature_set = ? AND horizon_days = ? AND sample_count > 0',
       [ML_PHYSICS_FEATURE_SET, horizon],
     )
     const physicsStatusEvaluationRunDate = await maxDate(
       'ml_physics_status_evaluations',
       'evaluation_date',
-      'WHERE feature_set = ? AND horizon_days = ?',
+      'WHERE feature_set = ? AND horizon_days = ? AND sample_count > 0',
       [ML_PHYSICS_FEATURE_SET, horizon],
     )
     checks.push({
@@ -182,7 +182,7 @@ async function main() {
         'ml_physics_status_evaluations',
         'end_date',
         physicsStatusEvaluationDataDate,
-        'AND feature_set = ? AND horizon_days = ?',
+        'AND feature_set = ? AND horizon_days = ? AND sample_count > 0',
         [ML_PHYSICS_FEATURE_SET, horizon],
       ),
       payload: {

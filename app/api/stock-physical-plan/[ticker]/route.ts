@@ -600,6 +600,7 @@ async function loadCalibrations(status: PhysicsStatus, market: MarketCode, asOfD
         FROM ml_physics_status_evaluations
         WHERE feature_set = ?
           AND status_label = ?
+          AND sample_count > 0
           AND horizon_days IN (${PLAN_HORIZONS.map(() => '?').join(', ')})
           ${dateFilter}
         GROUP BY horizon_days
@@ -625,6 +626,7 @@ async function loadCalibrations(status: PhysicsStatus, market: MarketCode, asOfD
        AND l.evaluation_date = e.evaluation_date
       WHERE e.feature_set = ?
         AND e.status_label = ?
+        AND e.sample_count > 0
     `,
     asOfDate
       ? [ML_PHYSICS_FEATURE_SET, status, ...PLAN_HORIZONS.map((h) => h.days), asOfDate, ML_PHYSICS_FEATURE_SET, status]

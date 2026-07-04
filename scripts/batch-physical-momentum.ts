@@ -1,7 +1,8 @@
 // scripts/batch-physical-momentum.ts
 //
 // Physical Momentum Score (PMS) を市場横断で計算する。
-// 通常運用は直近営業日だけを再計算し、必要時は PMS_RECENT_DAYS=0 で全期間をバックフィルする。
+// 通常運用も全期間を再評価する。既存データを先に消さず、UPSERTで更新して
+// 長時間実行中でも画面が欠損データを拾わないようにする。
 
 import { execAll, execBatch, execGet, execRun } from '@/lib/db/client'
 import {
@@ -37,9 +38,10 @@ type DbMetricRow = {
 }
 
 const LOOKBACK_DAYS = Number(process.env.PMS_LOOKBACK_DAYS ?? PHYSICAL_MOMENTUM_LOOKBACK_DAYS)
-const RECENT_DAYS = Number(process.env.PMS_RECENT_DAYS ?? 320)
+const RECENT_DAYS = Number(process.env.PMS_RECENT_DAYS ?? 0)
 const START_DATE = process.env.PMS_START_DATE?.trim() || null
 const END_DATE = process.env.PMS_END_DATE?.trim() || null
+const DELETE_EXISTING = process.env.PMS_DELETE_EXISTING === '1'
 const MARKETS = (process.env.PMS_MARKETS ?? 'JP')
   .split(',')
   .map((value) => value.trim().toUpperCase())
@@ -52,7 +54,12 @@ const TICKER_FILTER = new Set(
     .map((value) => value.trim().toUpperCase().replace(/\.T$/, ''))
     .filter(Boolean),
 )
+const TICKER_OFFSET = Number(process.env.PMS_TICKER_OFFSET ?? 0)
 const TICKER_LIMIT = Number(process.env.PMS_TICKER_LIMIT ?? 0)
+const DATE_OFFSET = Number(process.env.PMS_DATE_OFFSET ?? 0)
+const DATE_LIMIT = Number(process.env.PMS_DATE_LIMIT ?? 0)
+const SKIP_RAW = process.env.PMS_SKIP_RAW === '1' || process.env.PMS_NORMALIZE_ONLY === '1'
+const SKIP_NORMALIZE = process.env.PMS_SKIP_NORMALIZE === '1' || process.env.PMS_RAW_ONLY === '1'
 const CHUNK = Number(process.env.PMS_BATCH_CHUNK ?? 400)
 const LOG_EVERY = Number(process.env.PMS_LOG_EVERY ?? 250)
 
@@ -87,7 +94,7 @@ function logLabelFor(sourceMarket: Market): string {
   const outputMarket = outputMarketFor(sourceMarket)
   return outputMarket === sourceMarket
     ? sourceMarket
-    : `${outputMarket} source=${sourceMarket}-compatible`
+    : `${outputMarket} source=ohlcv_daily`
 }
 
 function sourceTable(market: Market): {
@@ -284,7 +291,9 @@ async function tickersForMarket(market: Market, startDate: string, endDate: stri
   const tickers = rows
     .map((row) => row.symbol)
     .filter((symbol) => TICKER_FILTER.size === 0 || TICKER_FILTER.has(symbol.toUpperCase()))
-  return TICKER_LIMIT > 0 ? tickers.slice(0, TICKER_LIMIT) : tickers
+  const offset = Number.isFinite(TICKER_OFFSET) && TICKER_OFFSET > 0 ? Math.floor(TICKER_OFFSET) : 0
+  const limit = Number.isFinite(TICKER_LIMIT) && TICKER_LIMIT > 0 ? Math.floor(TICKER_LIMIT) : 0
+  return limit > 0 ? tickers.slice(offset, offset + limit) : tickers.slice(offset)
 }
 
 async function priceRowsForTicker(
@@ -470,7 +479,10 @@ async function processMarket(market: Market): Promise<{ totalTickers: number; su
     return { totalTickers: 0, succeeded: 0, failed: 0, rowsInserted: 0 }
   }
 
-  const dates = await processingDatesForMarket(market, latestDate)
+  const allDates = await processingDatesForMarket(market, latestDate)
+  const dateOffset = Number.isFinite(DATE_OFFSET) && DATE_OFFSET > 0 ? Math.floor(DATE_OFFSET) : 0
+  const dateLimit = Number.isFinite(DATE_LIMIT) && DATE_LIMIT > 0 ? Math.floor(DATE_LIMIT) : 0
+  const dates = dateLimit > 0 ? allDates.slice(dateOffset, dateOffset + dateLimit) : allDates.slice(dateOffset)
   if (dates.length === 0) {
     console.log(`[${logLabel}] skipped: no processing dates`)
     return { totalTickers: 0, succeeded: 0, failed: 0, rowsInserted: 0 }
@@ -481,40 +493,56 @@ async function processMarket(market: Market): Promise<{ totalTickers: number; su
   const warmupStartDate = RECENT_DAYS > 0 ? dateDaysBefore(startDate, 560) : null
   const tickers = await tickersForMarket(market, startDate, endDate)
 
-  console.log(`[${logLabel}] ${tickers.length} symbols, ${dates.length} dates (${startDate} -> ${endDate})`)
+  console.log(
+    `[${logLabel}] ${tickers.length} symbols, ${dates.length}/${allDates.length} dates (${startDate} -> ${endDate})`
+    + `${TICKER_OFFSET > 0 ? `, ticker_offset=${TICKER_OFFSET}` : ''}`
+    + `${TICKER_LIMIT > 0 ? `, ticker_limit=${TICKER_LIMIT}` : ''}`
+    + `${DATE_OFFSET > 0 ? `, date_offset=${DATE_OFFSET}` : ''}`
+    + `${DATE_LIMIT > 0 ? `, date_limit=${DATE_LIMIT}` : ''}`
+    + `${SKIP_RAW ? ', normalize_only' : ''}`
+    + `${SKIP_NORMALIZE ? ', raw_only' : ''}`,
+  )
 
-  await deleteExistingMetrics(metricMarket, startDate, endDate, tickers)
+  if (DELETE_EXISTING && !SKIP_RAW) {
+    await deleteExistingMetrics(metricMarket, startDate, endDate, tickers)
+  }
 
   let succeeded = 0
   let failed = 0
   let rowsInserted = 0
 
-  for (const [index, symbol] of tickers.entries()) {
-    try {
-      const prices = await priceRowsForTicker(market, symbol, endDate, warmupStartDate)
-      const rawRows = computePhysicalMomentumRawRows(prices, LOOKBACK_DAYS)
-        .filter((row) => row.date >= startDate && row.date <= endDate)
-        .map((row) => ({ ...row, symbol }))
+  if (!SKIP_RAW) {
+    for (const [index, symbol] of tickers.entries()) {
+      try {
+        const prices = await priceRowsForTicker(market, symbol, endDate, warmupStartDate)
+        const rawRows = computePhysicalMomentumRawRows(prices, LOOKBACK_DAYS)
+          .filter((row) => row.date >= startDate && row.date <= endDate)
+          .map((row) => ({ ...row, symbol }))
 
-      if (rawRows.length > 0) {
-        await insertRawMetrics(metricMarket, rawRows)
-        rowsInserted += rawRows.length
+        if (rawRows.length > 0) {
+          await insertRawMetrics(metricMarket, rawRows)
+          rowsInserted += rawRows.length
+        }
+        succeeded += 1
+      } catch (error) {
+        failed += 1
+        console.error(`[${logLabel}] ${symbol} failed:`, error instanceof Error ? error.message : error)
       }
-      succeeded += 1
-    } catch (error) {
-      failed += 1
-      console.error(`[${logLabel}] ${symbol} failed:`, error instanceof Error ? error.message : error)
-    }
 
-    if ((index + 1) % LOG_EVERY === 0) {
-      console.log(`[${logLabel}] processed ${index + 1}/${tickers.length}, rows=${rowsInserted}`)
+      if ((index + 1) % LOG_EVERY === 0) {
+        console.log(`[${logLabel}] processed ${index + 1}/${tickers.length}, rows=${rowsInserted}`)
+      }
     }
+  } else {
+    succeeded = tickers.length
   }
 
-  for (const [index, date] of dates.entries()) {
-    await normalizeMarketDate(metricMarket, date)
-    if ((index + 1) % 50 === 0) {
-      console.log(`[${logLabel}] normalized ${index + 1}/${dates.length} dates`)
+  if (!SKIP_NORMALIZE) {
+    for (const [index, date] of dates.entries()) {
+      await normalizeMarketDate(metricMarket, date)
+      if ((index + 1) % 50 === 0) {
+        console.log(`[${logLabel}] normalized ${index + 1}/${dates.length} dates`)
+      }
     }
   }
 

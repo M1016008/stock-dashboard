@@ -111,15 +111,41 @@ async function ensureHealthTable(): Promise<void> {
 
 async function collectCoverageChecks(priceDate: string | null, oldestPriceDate: string | null): Promise<Check[]> {
   const checks: Check[] = []
-  const latestClassicFeature = await maxDate('ml_feature_vectors')
+  const hasClassicFeatureTable = await tableExists('ml_feature_vectors')
+  const latestClassicFeature = hasClassicFeatureTable ? await maxDate('ml_feature_vectors') : null
   const latestPhysicsFeature = await maxDate('ml_feature_vectors_v2', 'date', 'WHERE feature_set = ?', [ML_PHYSICS_FEATURE_SET])
-  const oldestClassicFeature = await minDate('ml_feature_vectors')
+  const oldestClassicFeature = hasClassicFeatureTable ? await minDate('ml_feature_vectors') : null
   const oldestPhysicsFeature = await minDate('ml_feature_vectors_v2', 'date', 'WHERE feature_set = ?', [ML_PHYSICS_FEATURE_SET])
   const expectedSnapshotCount = priceDate && await tableExists('daily_snapshots')
     ? await countRows(`SELECT COUNT(*) AS count FROM daily_snapshots WHERE date = ?`, [priceDate])
     : 0
+  const physicsFeatureCount = latestPhysicsFeature
+    ? await countRows(
+        `SELECT COUNT(*) AS count FROM ml_feature_vectors_v2 WHERE date = ? AND feature_set = ?`,
+        [latestPhysicsFeature, ML_PHYSICS_FEATURE_SET],
+      )
+    : 0
 
-  for (const check of [
+  if (!hasClassicFeatureTable) {
+    checks.push({
+      key: 'accuracy_readiness.ml_feature_vectors_latest',
+      status: latestPhysicsFeature === priceDate ? statusFromCoverage(physicsFeatureCount, expectedSnapshotCount) : 'warn',
+      expectedDate: priceDate,
+      actualDate: latestPhysicsFeature,
+      expectedCount: expectedSnapshotCount,
+      actualCount: physicsFeatureCount,
+      payload: {
+        oldestPriceDate,
+        oldestFeatureDate: oldestPhysicsFeature,
+        fullHistoryStart: FULL_HISTORY_START,
+        legacyTableAbsent: true,
+        replacedBy: 'ml_feature_vectors_v2',
+        featureSet: ML_PHYSICS_FEATURE_SET,
+      },
+    })
+  }
+
+  const featureChecks = [
     {
       key: 'accuracy_readiness.ml_feature_vectors_latest',
       actualDate: latestClassicFeature,
@@ -136,24 +162,40 @@ async function collectCoverageChecks(priceDate: string | null, oldestPriceDate: 
       countWhere: 'AND feature_set = ?',
       args: [ML_PHYSICS_FEATURE_SET] as Array<string | number>,
     },
-  ]) {
+  ].filter((check) => check.countTable !== 'ml_feature_vectors' || hasClassicFeatureTable)
+
+  for (const check of featureChecks) {
     const actualCount = check.actualDate
       ? await countRows(
           `SELECT COUNT(*) AS count FROM ${check.countTable} WHERE date = ? ${check.countWhere}`,
           [check.actualDate, ...check.args],
         )
       : 0
+    const replacementStatus = statusFromCoverage(physicsFeatureCount, expectedSnapshotCount)
+    const replacedByPhysicsV2 =
+      check.countTable === 'ml_feature_vectors'
+      && latestPhysicsFeature === priceDate
+      && replacementStatus === 'ok'
+    const effectiveActualDate = replacedByPhysicsV2 ? latestPhysicsFeature : check.actualDate
+    const effectiveActualCount = replacedByPhysicsV2 ? physicsFeatureCount : actualCount
     checks.push({
       key: check.key,
-      status: check.actualDate === priceDate ? statusFromCoverage(actualCount, expectedSnapshotCount) : 'warn',
+      status: replacedByPhysicsV2
+        ? 'ok'
+        : check.actualDate === priceDate
+          ? statusFromCoverage(actualCount, expectedSnapshotCount)
+          : 'warn',
       expectedDate: priceDate,
-      actualDate: check.actualDate,
+      actualDate: effectiveActualDate,
       expectedCount: expectedSnapshotCount,
-      actualCount,
+      actualCount: effectiveActualCount,
       payload: {
         oldestPriceDate,
-        oldestFeatureDate: check.oldestDate,
+        oldestFeatureDate: replacedByPhysicsV2 ? oldestPhysicsFeature : check.oldestDate,
         fullHistoryStart: FULL_HISTORY_START,
+        replacedBy: replacedByPhysicsV2 ? 'ml_feature_vectors_v2' : undefined,
+        legacyActualDate: replacedByPhysicsV2 ? check.actualDate : undefined,
+        legacyActualCount: replacedByPhysicsV2 ? actualCount : undefined,
       },
     })
   }

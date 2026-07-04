@@ -631,6 +631,7 @@ async function loadPhysicsStatusCalibration(horizonDays: number): Promise<Map<Ph
       FROM ml_physics_status_evaluations
       WHERE feature_set = ?
         AND horizon_days = ?
+        AND sample_count > 0
     )
     SELECT
       e.status_label,
@@ -646,6 +647,7 @@ async function loadPhysicsStatusCalibration(horizonDays: number): Promise<Map<Ph
     INNER JOIN latest l ON l.evaluation_date = e.evaluation_date
     WHERE e.feature_set = ?
       AND e.horizon_days = ?
+      AND e.sample_count > 0
     `,
     [ML_PHYSICS_FEATURE_SET, horizonDays, ML_PHYSICS_FEATURE_SET, horizonDays],
   ).catch((error: unknown) => {

@@ -70,6 +70,7 @@ export interface ProjectionResponse {
   sourceDates: {
     price: string
     feature: string | null
+    featureDerived?: boolean
     physicalMomentum: string | null
     calibration: string | null
     physicsCandidates: string | null
@@ -447,6 +448,133 @@ function maPeriodsForInterval(interval: ScenarioInterval): number[] {
     ...defaultMaLinesForInterval(interval),
     ...SCENARIO_STATS_MA_PERIODS,
   ])).sort((a, b) => a - b)
+}
+
+function maAt(rows: OHLCV[], period: number, index: number): number | null {
+  if (period <= 0 || index < period - 1 || index >= rows.length) return null
+  let sum = 0
+  for (let i = index - period + 1; i <= index; i += 1) {
+    const close = rows[i]?.close
+    if (!finite(close)) return null
+    sum += close
+  }
+  return sum / period
+}
+
+function maVelocity(rows: OHLCV[], period: number, bars: number, index = rows.length - 1): number | null {
+  const current = maAt(rows, period, index)
+  const previous = maAt(rows, period, index - bars)
+  if (!finite(current) || !finite(previous) || previous === 0) return null
+  return ((current - previous) / previous) * 100
+}
+
+function maAcceleration(rows: OHLCV[], period: number, bars: number, index = rows.length - 1): number | null {
+  const current = maVelocity(rows, period, bars, index)
+  const previous = maVelocity(rows, period, bars, index - 1)
+  if (!finite(current) || !finite(previous)) return null
+  return current - previous
+}
+
+function gapPct(shortMa: number | null, longMa: number | null): number | null {
+  if (!finite(shortMa) || !finite(longMa) || longMa === 0) return null
+  return ((shortMa - longMa) / longMa) * 100
+}
+
+function gapVelocity(rows: OHLCV[], shortPeriod: number, longPeriod: number, bars: number, index = rows.length - 1): number | null {
+  const current = gapPct(maAt(rows, shortPeriod, index), maAt(rows, longPeriod, index))
+  const previous = gapPct(maAt(rows, shortPeriod, index - bars), maAt(rows, longPeriod, index - bars))
+  if (!finite(current) || !finite(previous)) return null
+  return current - previous
+}
+
+function priceToMa(close: number, ma: number | null): number | null {
+  if (!finite(ma) || ma === 0) return null
+  return ((close - ma) / ma) * 100
+}
+
+function maOrderLabel(values: Array<{ label: string; value: number | null }>): string {
+  return values
+    .filter((item): item is { label: string; value: number } => finite(item.value))
+    .sort((a, b) => b.value - a.value)
+    .map((item) => item.label)
+    .join(' > ')
+}
+
+function inferTrendRegime(sma5Velocity5: number | null, sma25Velocity5: number | null, sma5Acceleration5: number | null): string {
+  if ((sma5Velocity5 ?? 0) >= 1.2 && (sma25Velocity5 ?? 0) >= -0.2 && (sma5Acceleration5 ?? 0) >= 0.15) return 'up_acceleration'
+  if ((sma5Velocity5 ?? 0) > 0.3 && (sma5Acceleration5 ?? 0) <= -0.35) return 'up_deceleration'
+  if ((sma5Velocity5 ?? 0) <= -1.2 && (sma25Velocity5 ?? 0) <= 0.2 && (sma5Acceleration5 ?? 0) <= -0.15) return 'down_acceleration'
+  return 'sideways'
+}
+
+function inferSpreadRegime(gap5To25Pct: number | null, gap5To25Velocity5: number | null, gap25To75Velocity5: number | null): string {
+  if ((gap5To25Pct ?? 0) >= 11 && (gap5To25Velocity5 ?? 0) > 0.4) return 'overheated'
+  if ((gap5To25Pct ?? 0) > 0 && (gap5To25Velocity5 ?? 0) > 0.35 && (gap25To75Velocity5 ?? 0) >= -0.5) return 'up_expansion'
+  if ((gap5To25Pct ?? 0) < 0 && (gap5To25Velocity5 ?? 0) < -0.35) return 'down_expansion'
+  if (Math.abs(gap5To25Velocity5 ?? 999) <= 0.35 && Math.abs(gap25To75Velocity5 ?? 999) <= 0.35) return 'compression'
+  return 'neutral'
+}
+
+function buildLatestChartPhysicsProfile(rows: OHLCV[]): Record<string, unknown> | null {
+  if (rows.length < 30) return null
+  const latest = rows[rows.length - 1]
+  if (!latest || !finite(latest.close)) return null
+  const ma5 = maAt(rows, 5, rows.length - 1)
+  const ma25 = maAt(rows, 25, rows.length - 1)
+  const ma75 = maAt(rows, 75, rows.length - 1)
+  const ma200 = maAt(rows, 200, rows.length - 1)
+  const sma5Velocity5 = maVelocity(rows, 5, 5)
+  const sma25Velocity5 = maVelocity(rows, 25, 5)
+  const sma75Velocity10 = maVelocity(rows, 75, 10)
+  const sma200Velocity10 = maVelocity(rows, 200, 10)
+  const sma5Acceleration5 = maAcceleration(rows, 5, 5)
+  const sma25Acceleration5 = maAcceleration(rows, 25, 5)
+  const gap5To25Pct = gapPct(ma5, ma25)
+  const gap25To75Pct = gapPct(ma25, ma75)
+  const gap75To200Pct = gapPct(ma75, ma200)
+  const gap5To25Velocity5 = gapVelocity(rows, 5, 25, 5)
+  const gap25To75Velocity5 = gapVelocity(rows, 25, 75, 5)
+  const recentHighValue = recentHigh(rows, Math.min(60, rows.length))
+  const distanceToRecentHighPct = finite(recentHighValue) && latest.close > 0
+    ? ((recentHighValue - latest.close) / latest.close) * 100
+    : null
+
+  return {
+    maOrder: maOrderLabel([
+      { label: '5日', value: ma5 },
+      { label: '25日', value: ma25 },
+      { label: '75日', value: ma75 },
+      { label: '200日', value: ma200 },
+    ]),
+    velocities: {
+      sma5: { d5: sma5Velocity5 },
+      sma25: { d5: sma25Velocity5 },
+      sma75: { d10: sma75Velocity10 },
+      sma200: { d10: sma200Velocity10 },
+    },
+    accelerations: {
+      sma5: { d5: sma5Acceleration5 },
+      sma25: { d5: sma25Acceleration5 },
+    },
+    gaps: {
+      sma5To25Pct: gap5To25Pct,
+      sma25To75Pct: gap25To75Pct,
+      sma75To200Pct: gap75To200Pct,
+    },
+    gapVelocity: {
+      sma5To25D5: gap5To25Velocity5,
+      sma25To75D5: gap25To75Velocity5,
+    },
+    pricePosition: {
+      sma5: priceToMa(latest.close, ma5),
+      sma25: priceToMa(latest.close, ma25),
+    },
+    distanceToRecentHighPct,
+    regimes: {
+      trend: inferTrendRegime(sma5Velocity5, sma25Velocity5, sma5Acceleration5),
+      spread: inferSpreadRegime(gap5To25Pct, gap5To25Velocity5, gap25To75Velocity5),
+    },
+  }
 }
 
 function makePath(baseDate: string, basePrice: number, target: number, interval: ScenarioInterval, horizonDays: number, curve = 1): ProjectionPoint[] {
@@ -905,6 +1033,7 @@ async function loadCalibration(
       WHERE feature_set = ?
         AND status_label = ?
         AND horizon_days = ?
+        AND sample_count > 0
         ${dateFilter}
       ORDER BY evaluation_date DESC
       LIMIT 1
@@ -994,7 +1123,10 @@ export async function buildStockScenarioProjection(params: {
   const latest = grouped[grouped.length - 1]
   if (!latest || !finite(latest.close)) return null
 
-  const profile = parseJson<Record<string, unknown> | null>(feature?.featureJson, null)
+  const storedProfile = parseJson<Record<string, unknown> | null>(feature?.featureJson, null)
+  const derivedProfile = buildLatestChartPhysicsProfile(grouped)
+  const usesDerivedProfile = !storedProfile || feature?.date !== latest.date
+  const profile = usesDerivedProfile ? (derivedProfile ?? storedProfile) : storedProfile
   const analysis = analyzePhysicsProfile(profile)
   const [calibration, candidates] = await Promise.all([
     loadCalibration(analysis.physicsStatus, horizonDays, asOfDate, market),
@@ -1037,7 +1169,8 @@ export async function buildStockScenarioProjection(params: {
     statusLabel: analysis.physicsStatus,
     sourceDates: {
       price: latest.date,
-      feature: feature?.date ?? null,
+      feature: usesDerivedProfile && derivedProfile ? latest.date : feature?.date ?? null,
+      featureDerived: usesDerivedProfile && !!derivedProfile,
       physicalMomentum: momentum?.date ?? null,
       calibration: calibration?.evaluationDate ?? null,
       physicsCandidates: candidates[0]?.asOfDate ?? null,

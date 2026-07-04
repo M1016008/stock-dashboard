@@ -50,6 +50,8 @@ const LR = Number(process.env.ML_PHYSICS_TRAIN_LR ?? (ALL_PAGED_MODE ? 0.01 : 0.
 const PER_YEAR_LIMIT = Number(process.env.ML_PHYSICS_TRAIN_PER_YEAR_LIMIT ?? 0)
 const PAGE_DATES = Math.max(1, Number(process.env.ML_PHYSICS_TRAIN_PAGE_DATES ?? 20))
 const MODEL_VERSION = process.env.ML_PHYSICS_MODEL_VERSION?.trim() || timestampVersion()
+const FAST_YEARLY_SAMPLE = (process.env.ML_PHYSICS_TRAIN_FAST_YEARLY_SAMPLE ?? '1') !== '0'
+const FAST_YEARLY_MODULO = Number(process.env.ML_PHYSICS_TRAIN_FAST_YEARLY_MODULO ?? 1)
 
 function timestampVersion(): string {
   const d = new Date()
@@ -260,19 +262,32 @@ async function loadYearlyRows(horizon: number, trainEndDate: string): Promise<Tr
     const from = year === Number(START_DATE.slice(0, 4)) ? START_DATE : `${year}-01-01`
     const to = year === Number(trainEndDate.slice(0, 4)) ? trainEndDate : `${year}-12-31`
     if (from > trainEndDate || to < START_DATE) continue
-    const args: Array<string | number> = [ML_PHYSICS_FEATURE_SET, horizon, from, to]
+    const args: Array<string | number> = [horizon, ML_PHYSICS_FEATURE_SET, from, to]
+    const fastSampleSql = FAST_YEARLY_SAMPLE && perYear > 0 && FAST_YEARLY_MODULO > 1
+      ? `AND ((abs(f.rowid * 1009 + CAST(strftime('%j', f.date) AS INTEGER) * 917) % ?) = 0)`
+      : ''
+    if (fastSampleSql) args.push(FAST_YEARLY_MODULO)
+    const orderSql = fastSampleSql
+      ? ''
+      : `ORDER BY ((CAST(f.ticker AS INTEGER) * 1009 + CAST(strftime('%j', f.date) AS INTEGER) * 917) % 1000003), f.date, f.ticker`
     const limitSql = perYear > 0 ? `LIMIT ?` : ''
+    if (PER_YEAR_LIMIT > 0 && fastSampleSql && year === years[0]) {
+      console.log(`ml physics train: fast yearly sample enabled modulo=${FAST_YEARLY_MODULO}`)
+    } else if (PER_YEAR_LIMIT > 0 && FAST_YEARLY_SAMPLE && year === years[0]) {
+      console.log('ml physics train: fast yearly sample enabled without extra modulo filter')
+    }
     if (perYear > 0) args.push(perYear)
     rows.push(...await execAll<TrainRow>(
       `
       SELECT f.date, f.vector_json, l.up_label, l.down_label, l.wait_label
-      FROM ml_feature_vectors_v2 f
-      INNER JOIN ml_short_labels l ON l.ticker = f.ticker AND l.date = f.date
+      FROM ml_feature_vectors_v2 f INDEXED BY ml_feature_vectors_v2_feature_date_ticker_idx
+      INNER JOIN ml_short_labels l INDEXED BY sqlite_autoindex_ml_short_labels_1
+        ON l.ticker = f.ticker AND l.date = f.date AND l.horizon_days = ?
       WHERE f.feature_set = ?
-        AND l.horizon_days = ?
         AND f.date >= ?
         AND f.date <= ?
-      ORDER BY ((CAST(f.ticker AS INTEGER) * 1009 + CAST(strftime('%j', f.date) AS INTEGER) * 917) % 1000003), f.date, f.ticker
+        ${fastSampleSql}
+      ${orderSql}
       ${limitSql}
       `,
       args,

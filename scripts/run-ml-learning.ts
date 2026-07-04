@@ -183,8 +183,17 @@ function jpMarketCalendarStatus(date = jstDateString()): { shouldRun: boolean; d
 
 function configureDefaults(): void {
   process.env.USE_LOCAL_DB = process.env.USE_LOCAL_DB ?? '1'
-  process.env.SQLITE_BUSY_RETRIES = process.env.SQLITE_BUSY_RETRIES ?? '240'
-  process.env.UPDATE_CHILD_TIMEOUT_MINUTES = process.env.UPDATE_CHILD_TIMEOUT_MINUTES ?? '720'
+  process.env.SQLITE_BUSY_RETRIES = process.env.SQLITE_BUSY_RETRIES ?? '720'
+  process.env.UPDATE_CHILD_TIMEOUT_MINUTES = process.env.UPDATE_CHILD_TIMEOUT_MINUTES ?? '2880'
+  process.env.PMS_DAILY_RECENT_DAYS = process.env.PMS_DAILY_RECENT_DAYS ?? '420'
+  process.env.ML_DAILY_RECENT_DAYS = process.env.ML_DAILY_RECENT_DAYS ?? '420'
+  process.env.ML_DAILY_MIN_HISTORY_DAYS = process.env.ML_DAILY_MIN_HISTORY_DAYS ?? '220'
+  process.env.ML_DAILY_LABEL_RECENT_DAYS = process.env.ML_DAILY_LABEL_RECENT_DAYS ?? '520'
+  process.env.ML_DAILY_RL_RECENT_DAYS = process.env.ML_DAILY_RL_RECENT_DAYS ?? '260'
+  process.env.ML_DAILY_STATUS_RECENT_DAYS = process.env.ML_DAILY_STATUS_RECENT_DAYS ?? '1560'
+  process.env.ML_CONTEXT_DAILY_RECENT_DAYS = process.env.ML_CONTEXT_DAILY_RECENT_DAYS ?? '420'
+  process.env.ML_PHYSICS_DAILY_RECENT_DAYS = process.env.ML_PHYSICS_DAILY_RECENT_DAYS ?? '420'
+  process.env.ML_PHYSICS_DAILY_MIN_HISTORY_DAYS = process.env.ML_PHYSICS_DAILY_MIN_HISTORY_DAYS ?? '220'
 }
 
 function installSignalHandlers(): void {
@@ -246,8 +255,8 @@ function runHeavyMlChain(heartbeat: () => Promise<void>): Promise<RunResult> {
       env: {
         ...process.env,
         USE_LOCAL_DB: '1',
-        SQLITE_BUSY_RETRIES: process.env.SQLITE_BUSY_RETRIES ?? '240',
-        UPDATE_CHILD_TIMEOUT_MINUTES: process.env.UPDATE_CHILD_TIMEOUT_MINUTES ?? '720',
+        SQLITE_BUSY_RETRIES: process.env.SQLITE_BUSY_RETRIES ?? '720',
+        UPDATE_CHILD_TIMEOUT_MINUTES: process.env.UPDATE_CHILD_TIMEOUT_MINUTES ?? '2880',
       },
     })
 

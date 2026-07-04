@@ -240,8 +240,9 @@ async function repair(checks: FreshnessCheck[]): Promise<string[]> {
   if (hasBad(checks, ['model_features', 'daily_snapshots'])) {
     actions.push('batch:ml-features')
     await runRequired('batch:ml-features', {
-      ML_RECENT_DAYS: process.env.ML_RECENT_DAYS ?? '260',
-      ML_MIN_HISTORY_DAYS: process.env.ML_MIN_HISTORY_DAYS ?? '200',
+      ML_RECENT_DAYS: process.env.ML_RECENT_DAYS ?? '0',
+      ML_MIN_HISTORY_DAYS: process.env.ML_MIN_HISTORY_DAYS ?? '1',
+      ML_START_DATE: process.env.ML_FULL_START_DATE ?? '1900-01-01',
     })
   }
 
@@ -255,21 +256,21 @@ async function repair(checks: FreshnessCheck[]): Promise<string[]> {
   if (hasBad(checks, ['ml_feature_vectors_v2.physics', 'model_features', 'daily_snapshots'])) {
     actions.push('batch:ml-context-features')
     await runRequired('batch:ml-context-features', {
-      ML_CONTEXT_RECENT_DAYS: process.env.ML_CONTEXT_RECENT_DAYS ?? '260',
+      ML_CONTEXT_RECENT_DAYS: process.env.ML_CONTEXT_RECENT_DAYS ?? '0',
+      ML_CONTEXT_START_DATE: process.env.ML_FULL_START_DATE ?? '1900-01-01',
     })
     actions.push('batch:ml-physics-features')
     await runRequired('batch:ml-physics-features', {
-      ML_PHYSICS_RECENT_DAYS: process.env.ML_PHYSICS_RECENT_DAYS ?? '1',
+      ML_PHYSICS_RECENT_DAYS: process.env.ML_PHYSICS_RECENT_DAYS ?? '0',
       ML_PHYSICS_MIN_HISTORY_DAYS: process.env.ML_PHYSICS_MIN_HISTORY_DAYS ?? '1',
-      ML_PHYSICS_HISTORY_LOOKBACK_DAYS: process.env.ML_PHYSICS_HISTORY_LOOKBACK_DAYS ?? '520',
-      ML_PHYSICS_MISSING_ONLY_DATE: process.env.ML_PHYSICS_MISSING_ONLY_DATE ?? 'latest',
+      ML_PHYSICS_START_DATE: process.env.ML_FULL_START_DATE ?? '1900-01-01',
     })
   }
 
   if (hasBad(checks, ['serving_ml_physics_candidates', 'ml_feature_vectors_v2.physics', 'model_features', 'daily_snapshots'])) {
     actions.push('batch:ml-physics-candidates')
     await runRequired('batch:ml-physics-candidates', {
-      ML_PHYSICS_HORIZONS: process.env.ML_PHYSICS_HORIZONS ?? '20,40,60,90',
+      ML_PHYSICS_HORIZONS: process.env.ML_PHYSICS_HORIZONS ?? '5,10,20,40,60,90',
     })
   }
 

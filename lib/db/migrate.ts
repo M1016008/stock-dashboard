@@ -1092,6 +1092,8 @@ const STATEMENTS = [
   )`,
   `CREATE INDEX IF NOT EXISTS ml_physics_status_evaluations_latest_idx ON ml_physics_status_evaluations(evaluation_date, horizon_days, status_label)`,
   `CREATE INDEX IF NOT EXISTS ml_physics_status_evaluations_status_idx ON ml_physics_status_evaluations(status_label, horizon_days, evaluation_date)`,
+  `CREATE INDEX IF NOT EXISTS ml_physics_status_evaluations_lookup_idx
+     ON ml_physics_status_evaluations(feature_set, status_label, horizon_days, evaluation_date)`,
   `CREATE TABLE IF NOT EXISTS serving_ml_candidates (
     as_of_date TEXT NOT NULL,
     direction TEXT NOT NULL,
@@ -1126,6 +1128,10 @@ const STATEMENTS = [
   )`,
   `CREATE INDEX IF NOT EXISTS serving_ml_physics_candidates_rank_idx ON serving_ml_physics_candidates(as_of_date, horizon_days, direction, rank)`,
   `CREATE INDEX IF NOT EXISTS serving_ml_physics_candidates_ticker_idx ON serving_ml_physics_candidates(ticker, as_of_date)`,
+  `CREATE INDEX IF NOT EXISTS serving_ml_physics_candidates_horizon_date_idx
+     ON serving_ml_physics_candidates(horizon_days, as_of_date)`,
+  `CREATE INDEX IF NOT EXISTS serving_ml_physics_candidates_horizon_ticker_date_idx
+     ON serving_ml_physics_candidates(horizon_days, ticker, as_of_date)`,
   `CREATE TABLE IF NOT EXISTS serving_current_similars (
     as_of_date TEXT NOT NULL,
     base_ticker TEXT NOT NULL,

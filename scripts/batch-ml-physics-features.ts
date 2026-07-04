@@ -78,7 +78,7 @@ type UpperGapSpec = {
 type UpperSeriesMap = Record<string, Array<number | null>>
 
 const CHUNK = Number(process.env.ML_PHYSICS_BATCH_CHUNK ?? 500)
-const RECENT_DAYS = Number(process.env.ML_PHYSICS_RECENT_DAYS ?? 260)
+const RECENT_DAYS = Number(process.env.ML_PHYSICS_RECENT_DAYS ?? 0)
 const MIN_HISTORY_DAYS = Number(process.env.ML_PHYSICS_MIN_HISTORY_DAYS ?? (RECENT_DAYS > 0 ? 220 : 1))
 const START_DATE = process.env.ML_PHYSICS_START_DATE?.trim() || null
 const END_DATE = process.env.ML_PHYSICS_END_DATE?.trim() || null

@@ -1,7 +1,7 @@
 // scripts/install-local-ml-learning.ts
 //
 // ローカルMacの launchd に、日次ML serving更新ジョブを登録する。
-// 重い全期間再学習は weekly governance に寄せ、ここでは最新特徴量・候補・予測・RL/物理状態を早朝に更新する。
+// 特徴量・PMS・RL/物理状態は、保持している最古データから全期間で早朝に更新する。
 
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -58,8 +58,8 @@ const command = [
   `cd ${JSON.stringify(cwd)}`,
   `export PATH=${JSON.stringify(pathEnv)}`,
   'export USE_LOCAL_DB=1',
-  'export SQLITE_BUSY_RETRIES=240',
-  'export UPDATE_CHILD_TIMEOUT_MINUTES=1440',
+  'export SQLITE_BUSY_RETRIES=720',
+  'export UPDATE_CHILD_TIMEOUT_MINUTES=2880',
   'npm run batch:ml-learning-daily',
 ].join(' && ')
 

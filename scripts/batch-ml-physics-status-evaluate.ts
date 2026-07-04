@@ -23,6 +23,12 @@ type LabelRow = {
   reward_long: number | null
   reward_short: number | null
   reward_wait: number | null
+  status_label: PhysicsStatus
+}
+
+type FeatureStatusRow = {
+  ticker: string
+  date: string
   feature_json: string
 }
 
@@ -58,6 +64,70 @@ type HorizonEvaluation = {
   globals: Map<TargetDirection, GlobalAggregate>
 }
 
+type SqlAggregateRow = {
+  status_label: PhysicsStatus
+  target_direction: TargetDirection
+  horizon_days: number
+  start_date: string | null
+  end_date: string | null
+  sample_count: number
+  hit_count: number
+  adverse_count: number
+  avg_return_pct: number | null
+  avg_max_return_pct: number | null
+  avg_min_return_pct: number | null
+  avg_reward: number | null
+  global_sample_count: number
+  global_up_hit_count: number
+  global_down_hit_count: number
+  global_wait_hit_count: number
+}
+
+type SqlPartialRow = {
+  status_label: PhysicsStatus
+  target_direction: TargetDirection
+  horizon_days: number
+  start_date: string | null
+  end_date: string | null
+  sample_count: number
+  hit_count: number
+  adverse_count: number
+  return_sum: number | null
+  return_count: number
+  max_return_sum: number | null
+  max_return_count: number
+  min_return_sum: number | null
+  min_return_count: number
+  reward_sum: number | null
+  reward_count: number
+  global_up_hit_count: number
+  global_down_hit_count: number
+  global_wait_hit_count: number
+}
+
+type SqlRunningAggregate = {
+  status_label: PhysicsStatus
+  target_direction: TargetDirection
+  horizon_days: number
+  start_date: string | null
+  end_date: string | null
+  sample_count: number
+  hit_count: number
+  adverse_count: number
+  return_sum: number
+  return_count: number
+  max_return_sum: number
+  max_return_count: number
+  min_return_sum: number
+  min_return_count: number
+  reward_sum: number
+  reward_count: number
+  global_sample_count: number
+  global_up_hit_count: number
+  global_down_hit_count: number
+  global_wait_hit_count: number
+}
+
 const STATUS_TARGET: Record<PhysicsStatus, TargetDirection> = {
   上昇加速: 'up',
   上昇継続: 'up',
@@ -74,11 +144,14 @@ const HORIZONS = (process.env.ML_PHYSICS_STATUS_HORIZONS ?? '5,10,20,40,60,90')
   .split(',')
   .map((value) => Number(value.trim()))
   .filter((value) => Number.isFinite(value) && value > 0)
-const RECENT_DAYS = Number(process.env.ML_PHYSICS_STATUS_RECENT_DAYS ?? 1560)
+const RECENT_DAYS = Number(process.env.ML_PHYSICS_STATUS_RECENT_DAYS ?? 0)
 const START_DATE = process.env.ML_PHYSICS_STATUS_START_DATE?.trim() || null
 const END_DATE = process.env.ML_PHYSICS_STATUS_END_DATE?.trim() || null
 const PAGE_DATES = Math.max(1, Number(process.env.ML_PHYSICS_STATUS_PAGE_DATES ?? 20))
 const LIMIT_ROWS = Math.max(0, Number(process.env.ML_PHYSICS_STATUS_LIMIT_ROWS ?? 0))
+const STATUS_CACHE_INSERT_ROWS = Math.max(100, Number(process.env.ML_PHYSICS_STATUS_CACHE_INSERT_ROWS ?? 1000))
+const SKIP_STATUS_CACHE = process.env.ML_PHYSICS_STATUS_SKIP_CACHE === '1'
+const SQL_AGGREGATE = process.env.ML_PHYSICS_STATUS_SQL_AGG === '1'
 
 function parseJson<T>(value: string, fallback: T): T {
   try {
@@ -229,6 +302,21 @@ function pushGlobal(aggregate: GlobalAggregate, row: LabelRow): void {
 
 async function ensureTables(): Promise<void> {
   await execRun(`
+    CREATE TABLE IF NOT EXISTS ml_physics_feature_statuses (
+      feature_set TEXT NOT NULL,
+      ticker TEXT NOT NULL,
+      date TEXT NOT NULL,
+      status_label TEXT NOT NULL,
+      target_direction TEXT NOT NULL,
+      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+      PRIMARY KEY (feature_set, ticker, date)
+    )
+  `)
+  await execRun(`CREATE INDEX IF NOT EXISTS ml_physics_feature_statuses_date_idx ON ml_physics_feature_statuses(feature_set, date, status_label)`)
+  await execRun(`CREATE INDEX IF NOT EXISTS ml_physics_feature_statuses_status_idx ON ml_physics_feature_statuses(feature_set, status_label, date)`)
+  await execRun(`CREATE INDEX IF NOT EXISTS ml_short_labels_horizon_date_ticker_idx ON ml_short_labels(horizon_days, date, ticker)`)
+
+  await execRun(`
     CREATE TABLE IF NOT EXISTS ml_physics_status_evaluations (
       evaluation_id TEXT PRIMARY KEY,
       evaluation_date TEXT NOT NULL,
@@ -256,6 +344,114 @@ async function ensureTables(): Promise<void> {
   `)
   await execRun(`CREATE INDEX IF NOT EXISTS ml_physics_status_evaluations_latest_idx ON ml_physics_status_evaluations(evaluation_date, horizon_days, status_label)`)
   await execRun(`CREATE INDEX IF NOT EXISTS ml_physics_status_evaluations_status_idx ON ml_physics_status_evaluations(status_label, horizon_days, evaluation_date)`)
+}
+
+async function loadMissingStatusDateBatch(startDate: string | null, beforeDate: string | null): Promise<string[]> {
+  const where = ['f.feature_set = ?']
+  const args: Array<string | number> = [ML_PHYSICS_FEATURE_SET]
+  if (startDate) {
+    where.push('f.date >= ?')
+    args.push(startDate)
+  }
+  if (END_DATE) {
+    where.push('f.date <= ?')
+    args.push(END_DATE)
+  }
+  if (beforeDate) {
+    where.push('f.date < ?')
+    args.push(beforeDate)
+  }
+  where.push(`
+    NOT EXISTS (
+      SELECT 1
+      FROM ml_physics_feature_statuses s
+      WHERE s.feature_set = f.feature_set
+        AND s.ticker = f.ticker
+        AND s.date = f.date
+    )
+  `)
+
+  const rows = await execAll<{ date: string }>(
+    `
+    SELECT DISTINCT f.date
+    FROM ml_feature_vectors_v2 f
+    WHERE ${where.join(' AND ')}
+    ORDER BY f.date DESC
+    LIMIT ?
+    `,
+    [...args, PAGE_DATES],
+  )
+  return rows.map((row) => row.date)
+}
+
+async function loadMissingStatusRows(dates: string[]): Promise<FeatureStatusRow[]> {
+  if (dates.length === 0) return []
+  const placeholders = dates.map(() => '?').join(', ')
+  return execAll<FeatureStatusRow>(
+    `
+    SELECT
+      f.ticker,
+      f.date,
+      f.feature_json
+    FROM ml_feature_vectors_v2 f
+    WHERE f.feature_set = ?
+      AND f.date IN (${placeholders})
+      AND NOT EXISTS (
+        SELECT 1
+        FROM ml_physics_feature_statuses s
+        WHERE s.feature_set = f.feature_set
+          AND s.ticker = f.ticker
+          AND s.date = f.date
+      )
+    `,
+    [ML_PHYSICS_FEATURE_SET, ...dates],
+  )
+}
+
+async function insertStatusCacheRows(rows: Array<{ ticker: string; date: string; statusLabel: PhysicsStatus }>): Promise<void> {
+  for (let i = 0; i < rows.length; i += STATUS_CACHE_INSERT_ROWS) {
+    const chunk = rows.slice(i, i + STATUS_CACHE_INSERT_ROWS)
+    if (chunk.length === 0) continue
+    const values = chunk.map(() => '(?, ?, ?, ?, ?, unixepoch())').join(', ')
+    const args: string[] = []
+    for (const row of chunk) {
+      args.push(ML_PHYSICS_FEATURE_SET, row.ticker, row.date, row.statusLabel, STATUS_TARGET[row.statusLabel])
+    }
+    await execRun(
+      `
+      INSERT OR IGNORE INTO ml_physics_feature_statuses
+        (feature_set, ticker, date, status_label, target_direction, created_at)
+      VALUES ${values}
+      `,
+      args,
+    )
+  }
+}
+
+async function populateStatusCache(startDate: string | null): Promise<void> {
+  let beforeDate: string | null = null
+  let batches = 0
+  let cachedRows = 0
+  for (;;) {
+    const dates = await loadMissingStatusDateBatch(startDate, beforeDate)
+    if (dates.length === 0) break
+    const rows = await loadMissingStatusRows(dates)
+    const cacheRows: Array<{ ticker: string; date: string; statusLabel: PhysicsStatus }> = []
+    for (const row of rows) {
+      const profile = parseJson<Partial<PhysicsFeatureProfile> | null>(row.feature_json, null)
+      const analysis = analyzePhysicsProfile(profile)
+      cacheRows.push({ ticker: row.ticker, date: row.date, statusLabel: analysis.physicsStatus })
+    }
+    await insertStatusCacheRows(cacheRows)
+    cachedRows += cacheRows.length
+    batches += 1
+    beforeDate = dates.at(-1) ?? null
+    if (batches % 10 === 0) {
+      console.log(`physics status cache: batches=${batches}, cached=${cachedRows.toLocaleString()}, cursor<${beforeDate ?? '-'}`)
+    }
+    if (!beforeDate) break
+  }
+  console.log(`physics status cache ready: feature_set=${ML_PHYSICS_FEATURE_SET}, added=${cachedRows.toLocaleString()}, start=${startDate ?? '-'}`)
 }
 
 async function cutoffDate(): Promise<string | null> {
@@ -327,15 +523,14 @@ async function loadRows(horizon: number, dates: string[]): Promise<LabelRow[]> {
       l.reward_long,
       l.reward_short,
       l.reward_wait,
-      f.feature_json
+      s.status_label
     FROM ml_short_labels l
-    INNER JOIN ml_feature_vectors_v2 f
-      ON f.ticker = l.ticker
-     AND f.date = l.date
-     AND f.feature_set = ?
+    INNER JOIN ml_physics_feature_statuses s
+      ON s.ticker = l.ticker
+     AND s.date = l.date
+     AND s.feature_set = ?
     WHERE l.horizon_days = ?
       AND l.date IN (${placeholders})
-    ORDER BY l.date DESC, l.ticker
     `,
     [ML_PHYSICS_FEATURE_SET, horizon, ...dates],
   )
@@ -387,9 +582,7 @@ async function evaluateHorizon(horizon: number, startDate: string | null): Promi
     const rows = await loadRows(horizon, dates)
     for (const row of rows) {
       if (LIMIT_ROWS > 0 && processedRows >= LIMIT_ROWS) break
-      const profile = parseJson<Partial<PhysicsFeatureProfile> | null>(row.feature_json, null)
-      const analysis = analyzePhysicsProfile(profile)
-      const aggregate = aggregates.get(analysis.physicsStatus)
+      const aggregate = aggregates.get(row.status_label)
       if (aggregate) pushAggregate(aggregate, row)
       for (const direction of ['up', 'down', 'wait'] as const) {
         const global = globals.get(direction)
@@ -408,6 +601,212 @@ async function evaluateHorizon(horizon: number, startDate: string | null): Promi
   return { aggregates: [...aggregates.values()], globals }
 }
 
+function statusWhere(startDate: string | null): { sql: string; args: Array<string | number> } {
+  const where = [`l.horizon_days = ?`, `s.feature_set = ?`]
+  const args: Array<string | number> = [0, ML_PHYSICS_FEATURE_SET]
+  if (startDate) {
+    where.push(`l.date >= ?`)
+    args.push(startDate)
+  }
+  if (END_DATE) {
+    where.push(`l.date <= ?`)
+    args.push(END_DATE)
+  }
+  return { sql: where.join(' AND '), args }
+}
+
+async function evaluateHorizonSql(
+  horizon: number,
+  startDate: string | null,
+): Promise<{ aggregates: SqlAggregateRow[] }> {
+  const running = new Map<string, SqlRunningAggregate>()
+  let beforeDate: string | null = null
+  let batches = 0
+  let globalSampleCount = 0
+  let globalUpHitCount = 0
+  let globalDownHitCount = 0
+  let globalWaitHitCount = 0
+
+  for (;;) {
+    const dates = await loadDateBatch(horizon, startDate, beforeDate)
+    if (dates.length === 0) break
+    const placeholders = dates.map(() => '?').join(', ')
+    const partials = await execAll<SqlPartialRow>(
+      `
+      SELECT
+        s.status_label,
+        s.target_direction,
+        l.horizon_days,
+        MIN(l.date) AS start_date,
+        MAX(l.date) AS end_date,
+        COUNT(*) AS sample_count,
+        SUM(
+          CASE s.target_direction
+            WHEN 'up' THEN CASE WHEN l.up_label = 1 THEN 1 ELSE 0 END
+            WHEN 'down' THEN CASE WHEN l.down_label = 1 THEN 1 ELSE 0 END
+            ELSE CASE WHEN l.wait_label = 1 THEN 1 ELSE 0 END
+          END
+        ) AS hit_count,
+        SUM(
+          CASE s.target_direction
+            WHEN 'up' THEN CASE WHEN l.down_label = 1 THEN 1 ELSE 0 END
+            WHEN 'down' THEN CASE WHEN l.up_label = 1 THEN 1 ELSE 0 END
+            ELSE CASE WHEN l.up_label = 1 OR l.down_label = 1 THEN 1 ELSE 0 END
+          END
+        ) AS adverse_count,
+        SUM(
+          CASE
+            WHEN l.return_pct IS NULL THEN NULL
+            WHEN s.target_direction = 'down' THEN -l.return_pct
+            WHEN s.target_direction = 'wait' THEN -ABS(l.return_pct)
+            ELSE l.return_pct
+          END
+        ) AS return_sum,
+        SUM(CASE WHEN l.return_pct IS NULL THEN 0 ELSE 1 END) AS return_count,
+        SUM(l.max_return_pct) AS max_return_sum,
+        SUM(CASE WHEN l.max_return_pct IS NULL THEN 0 ELSE 1 END) AS max_return_count,
+        SUM(l.min_return_pct) AS min_return_sum,
+        SUM(CASE WHEN l.min_return_pct IS NULL THEN 0 ELSE 1 END) AS min_return_count,
+        SUM(
+          CASE s.target_direction
+            WHEN 'up' THEN l.reward_long
+            WHEN 'down' THEN l.reward_short
+            ELSE l.reward_wait
+          END
+        ) AS reward_sum,
+        SUM(
+          CASE s.target_direction
+            WHEN 'up' THEN CASE WHEN l.reward_long IS NULL THEN 0 ELSE 1 END
+            WHEN 'down' THEN CASE WHEN l.reward_short IS NULL THEN 0 ELSE 1 END
+            ELSE CASE WHEN l.reward_wait IS NULL THEN 0 ELSE 1 END
+          END
+        ) AS reward_count,
+        SUM(CASE WHEN l.up_label = 1 THEN 1 ELSE 0 END) AS global_up_hit_count,
+        SUM(CASE WHEN l.down_label = 1 THEN 1 ELSE 0 END) AS global_down_hit_count,
+        SUM(CASE WHEN l.wait_label = 1 THEN 1 ELSE 0 END) AS global_wait_hit_count
+      FROM ml_short_labels l INDEXED BY ml_short_labels_horizon_date_ticker_idx
+      INNER JOIN ml_physics_feature_statuses s
+        ON s.ticker = l.ticker
+       AND s.date = l.date
+       AND s.feature_set = ?
+      WHERE l.horizon_days = ?
+        AND l.date IN (${placeholders})
+      GROUP BY s.status_label, s.target_direction, l.horizon_days
+      HAVING sample_count > 0
+      `,
+      [ML_PHYSICS_FEATURE_SET, horizon, ...dates],
+    )
+
+    const batchSampleCount = partials.reduce((sum, row) => sum + Number(row.sample_count ?? 0), 0)
+    globalSampleCount += batchSampleCount
+    globalUpHitCount += partials.reduce((sum, row) => sum + Number(row.global_up_hit_count ?? 0), 0)
+    globalDownHitCount += partials.reduce((sum, row) => sum + Number(row.global_down_hit_count ?? 0), 0)
+    globalWaitHitCount += partials.reduce((sum, row) => sum + Number(row.global_wait_hit_count ?? 0), 0)
+    for (const row of partials) {
+      const key = row.status_label
+      const current = running.get(key) ?? {
+        status_label: row.status_label,
+        target_direction: row.target_direction,
+        horizon_days: horizon,
+        start_date: null,
+        end_date: null,
+        sample_count: 0,
+        hit_count: 0,
+        adverse_count: 0,
+        return_sum: 0,
+        return_count: 0,
+        max_return_sum: 0,
+        max_return_count: 0,
+        min_return_sum: 0,
+        min_return_count: 0,
+        reward_sum: 0,
+        reward_count: 0,
+        global_sample_count: 0,
+        global_up_hit_count: 0,
+        global_down_hit_count: 0,
+        global_wait_hit_count: 0,
+      }
+      current.start_date = current.start_date == null || (row.start_date != null && row.start_date < current.start_date) ? row.start_date : current.start_date
+      current.end_date = current.end_date == null || (row.end_date != null && row.end_date > current.end_date) ? row.end_date : current.end_date
+      current.sample_count += Number(row.sample_count ?? 0)
+      current.hit_count += Number(row.hit_count ?? 0)
+      current.adverse_count += Number(row.adverse_count ?? 0)
+      current.return_sum += Number(row.return_sum ?? 0)
+      current.return_count += Number(row.return_count ?? 0)
+      current.max_return_sum += Number(row.max_return_sum ?? 0)
+      current.max_return_count += Number(row.max_return_count ?? 0)
+      current.min_return_sum += Number(row.min_return_sum ?? 0)
+      current.min_return_count += Number(row.min_return_count ?? 0)
+      current.reward_sum += Number(row.reward_sum ?? 0)
+      current.reward_count += Number(row.reward_count ?? 0)
+      running.set(key, current)
+    }
+
+    batches += 1
+    beforeDate = dates.at(-1) ?? null
+    if (batches % 10 === 0) {
+      const processedRows = [...running.values()].reduce((sum, row) => sum + row.sample_count, 0)
+      console.log(`physics status eval sql horizon=${horizon}: batches=${batches}, rows=${processedRows.toLocaleString()}, cursor<${beforeDate ?? '-'}`)
+    }
+    if (!beforeDate) break
+  }
+
+  const aggregates: SqlAggregateRow[] = [...running.values()].map((row) => ({
+    status_label: row.status_label,
+    target_direction: row.target_direction,
+    horizon_days: row.horizon_days,
+    start_date: row.start_date,
+    end_date: row.end_date,
+    sample_count: row.sample_count,
+    hit_count: row.hit_count,
+    adverse_count: row.adverse_count,
+    avg_return_pct: avg(row.return_sum, row.return_count),
+    avg_max_return_pct: avg(row.max_return_sum, row.max_return_count),
+    avg_min_return_pct: avg(row.min_return_sum, row.min_return_count),
+    avg_reward: avg(row.reward_sum, row.reward_count),
+    global_sample_count: globalSampleCount,
+    global_up_hit_count: globalUpHitCount,
+    global_down_hit_count: globalDownHitCount,
+    global_wait_hit_count: globalWaitHitCount,
+  }))
+
+  return { aggregates }
+}
+
+function metricsForSql(aggregate: SqlAggregateRow): Record<string, unknown> {
+  const globalHitCount =
+    aggregate.target_direction === 'up'
+      ? aggregate.global_up_hit_count
+      : aggregate.target_direction === 'down'
+        ? aggregate.global_down_hit_count
+        : aggregate.global_wait_hit_count
+  const hitRate = aggregate.sample_count ? aggregate.hit_count / aggregate.sample_count : null
+  const baseRate = aggregate.global_sample_count ? globalHitCount / aggregate.global_sample_count : null
+  const lift = hitRate != null && baseRate != null && baseRate > 0 ? hitRate / baseRate : null
+  return {
+    featureSet: ML_PHYSICS_FEATURE_SET,
+    statusLabel: aggregate.status_label,
+    targetDirection: aggregate.target_direction,
+    horizonDays: aggregate.horizon_days,
+    sampleCount: aggregate.sample_count,
+    hitCount: aggregate.hit_count,
+    adverseCount: aggregate.adverse_count,
+    hitRate: round(hitRate),
+    baseRate: round(baseRate),
+    lift: round(lift),
+    confidenceScore: round(confidenceScore(aggregate.hit_count, aggregate.sample_count, lift), 2),
+    adverseRate: round(aggregate.sample_count ? aggregate.adverse_count / aggregate.sample_count : null),
+    avgReward: round(aggregate.avg_reward),
+    medianReturnPct: null,
+    avgReturnPct: round(aggregate.avg_return_pct),
+    avgMaxReturnPct: round(aggregate.avg_max_return_pct),
+    avgMinReturnPct: round(aggregate.avg_min_return_pct),
+    globalSampleCount: aggregate.global_sample_count,
+    globalHitCount,
+    aggregateMode: 'sql',
+  }
+}
+
 async function main(): Promise<void> {
   if (HORIZONS.length === 0) {
     console.log('physics status eval: no horizons')
@@ -417,6 +816,11 @@ async function main(): Promise<void> {
   const startDate = await cutoffDate()
   const evaluationDate = new Date().toISOString().slice(0, 10)
   const statements: Array<{ sql: string; args: Array<string | number | null> }> = []
+  if (SKIP_STATUS_CACHE) {
+    console.log(`physics status cache skipped: ML_PHYSICS_STATUS_SKIP_CACHE=1, feature_set=${ML_PHYSICS_FEATURE_SET}`)
+  } else {
+    await populateStatusCache(startDate)
+  }
 
   await execRun(
     `
@@ -429,11 +833,60 @@ async function main(): Promise<void> {
   )
 
   for (const horizon of HORIZONS) {
+    const horizonStatements: typeof statements = []
+    if (SQL_AGGREGATE) {
+      const { aggregates } = await evaluateHorizonSql(horizon, startDate)
+      const total = aggregates.reduce((sum, aggregate) => sum + Number(aggregate.sample_count ?? 0), 0)
+      for (const aggregate of aggregates) {
+        const m = metricsForSql(aggregate)
+        horizonStatements.push({
+          sql: `
+            INSERT OR REPLACE INTO ml_physics_status_evaluations
+              (evaluation_id, evaluation_date, feature_set, status_label, target_direction,
+               horizon_days, start_date, end_date, sample_count, hit_count, adverse_count,
+               hit_rate, base_rate, lift, confidence_score, median_return_pct, avg_return_pct,
+               avg_max_return_pct, avg_min_return_pct, adverse_rate, metrics_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch())
+          `,
+          args: [
+            `${ML_PHYSICS_FEATURE_SET}_${aggregate.status_label}_h${horizon}_${evaluationDate}`,
+            evaluationDate,
+            ML_PHYSICS_FEATURE_SET,
+            aggregate.status_label,
+            aggregate.target_direction,
+            horizon,
+            aggregate.start_date,
+            aggregate.end_date,
+            aggregate.sample_count,
+            aggregate.hit_count,
+            aggregate.adverse_count,
+            m.hitRate as number | null,
+            m.baseRate as number | null,
+            m.lift as number | null,
+            m.confidenceScore as number | null,
+            null,
+            m.avgReturnPct as number | null,
+            m.avgMaxReturnPct as number | null,
+            m.avgMinReturnPct as number | null,
+            m.adverseRate as number | null,
+            JSON.stringify(m),
+          ],
+        })
+      }
+      console.log(`physics status eval horizon=${horizon}: rows=${total.toLocaleString()}, start=${startDate ?? '-'}, run=${evaluationDate}, mode=sql`)
+      await execBatch(horizonStatements)
+      statements.push(...horizonStatements)
+      console.log(`physics status eval horizon=${horizon}: saved=${horizonStatements.length}`)
+      continue
+    }
+
     const { aggregates, globals } = await evaluateHorizon(horizon, startDate)
-    for (const aggregate of aggregates) {
+    const total = aggregates.reduce((sum, aggregate) => sum + aggregate.sampleCount, 0)
+    const nonEmptyAggregates = aggregates.filter((aggregate) => aggregate.sampleCount > 0)
+    for (const aggregate of nonEmptyAggregates) {
       const global = globals.get(aggregate.targetDirection) ?? makeGlobal(aggregate.targetDirection, horizon)
       const m = metricsFor(aggregate, global)
-      statements.push({
+      horizonStatements.push({
         sql: `
           INSERT OR REPLACE INTO ml_physics_status_evaluations
             (evaluation_id, evaluation_date, feature_set, status_label, target_direction,
@@ -467,12 +920,13 @@ async function main(): Promise<void> {
         ],
       })
     }
-    const total = aggregates.reduce((sum, aggregate) => sum + aggregate.sampleCount, 0)
     console.log(`physics status eval horizon=${horizon}: rows=${total.toLocaleString()}, start=${startDate ?? '-'}, run=${evaluationDate}`)
+    await execBatch(horizonStatements)
+    statements.push(...horizonStatements)
+    console.log(`physics status eval horizon=${horizon}: saved=${horizonStatements.length}`)
   }
 
-  await execBatch(statements)
-  console.log(`physics status eval complete: horizons=${HORIZONS.join('/')}, recent_days=${RECENT_DAYS || 'all'}, start=${startDate ?? '-'}, feature_set=${ML_PHYSICS_FEATURE_SET}`)
+  console.log(`physics status eval complete: horizons=${HORIZONS.join('/')}, recent_days=${RECENT_DAYS || 'all'}, start=${startDate ?? '-'}, feature_set=${ML_PHYSICS_FEATURE_SET}, cache_skipped=${SKIP_STATUS_CACHE}, mode=${SQL_AGGREGATE ? 'sql' : 'js'}`)
 }
 
 main()

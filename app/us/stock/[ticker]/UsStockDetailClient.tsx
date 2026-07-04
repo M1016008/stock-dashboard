@@ -642,7 +642,9 @@ function UsPhysicalMomentumSection({
   }, [ticker, analysisDate])
 
   const latest = data?.latest ?? null
-  const view = latest ? buildPhysicalMomentumView({
+  const momentumHistoryCount = data?.history?.length ?? 0
+  const isMomentumCoverageSparse = momentumHistoryCount < 20
+  const view = latest && !isMomentumCoverageSparse ? buildPhysicalMomentumView({
     pms: latest.physicalMomentumScore,
     pfs: latest.physicalForceScore,
     pes: latest.physicalEnergyScore,
@@ -688,6 +690,16 @@ function UsPhysicalMomentumSection({
         </p>
       ) : (
         <div className="mt-3 grid gap-3">
+          {isMomentumCoverageSparse && (
+            <div className="rounded-[8px] border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] font-bold leading-6 text-amber-800">
+              <div className="font-black">結論は保留中</div>
+              <div>
+                PMS履歴が{momentumHistoryCount}営業日分しかありません。全期間PMSを再生成中または未完了のため、
+                いまはPMS/PFS/PESの数値を投資判断の結論として扱わず、チャート・MA・ステージを優先してください。
+              </div>
+            </div>
+          )}
+          {!isMomentumCoverageSparse && (
           <div className={`rounded-[8px] border p-4 ${momentumTonePanelClass(view?.tone ?? 'neutral')}`}>
             <div className="grid gap-3 lg:grid-cols-[1.15fr_1fr]">
               <div>
@@ -720,6 +732,7 @@ function UsPhysicalMomentumSection({
               </div>
             )}
           </div>
+          )}
           <div className="grid gap-3 lg:grid-cols-[0.9fr_1.4fr]">
             <div className="grid gap-2 sm:grid-cols-3 lg:grid-cols-1">
               <Stat label="PMS 20日累積" value={fmtScore(latest.physicalMomentumScore)} />

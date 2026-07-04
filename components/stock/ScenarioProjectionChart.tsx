@@ -65,6 +65,7 @@ interface ProjectionResponse {
   sourceDates: {
     price: string
     feature: string | null
+    featureDerived?: boolean
     physicalMomentum: string | null
     calibration: string | null
     physicsCandidates: string | null
@@ -410,6 +411,23 @@ export function ScenarioProjectionChart({ ticker, name, analysisDate, market = '
   const [savingId, setSavingId] = useState<string | null>(null)
   const [savedIds, setSavedIds] = useState<Set<string>>(new Set())
   const [message, setMessage] = useState('')
+  const [refreshTick, setRefreshTick] = useState(0)
+
+  useEffect(() => {
+    if (analysisDate) return
+    const refreshLatest = () => setRefreshTick((value) => value + 1)
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') refreshLatest()
+    }
+    window.addEventListener('focus', refreshLatest)
+    document.addEventListener('visibilitychange', onVisibility)
+    const timer = window.setInterval(refreshLatest, 10 * 60 * 1000)
+    return () => {
+      window.removeEventListener('focus', refreshLatest)
+      document.removeEventListener('visibilitychange', onVisibility)
+      window.clearInterval(timer)
+    }
+  }, [analysisDate])
 
   useEffect(() => {
     let cancelled = false
@@ -423,6 +441,7 @@ export function ScenarioProjectionChart({ ticker, name, analysisDate, market = '
       limit: '8',
     })
     if (analysisDate) params.set('date', analysisDate)
+    if (!analysisDate) params.set('_ts', String(Date.now()))
     fetch(`/api/stock-scenario-projections/${encodeURIComponent(ticker)}?${params.toString()}`, { cache: 'no-store' })
       .then((res) => res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`)))
       .then((payload) => {
@@ -435,14 +454,19 @@ export function ScenarioProjectionChart({ ticker, name, analysisDate, market = '
         if (!cancelled) setLoading(false)
       })
     return () => { cancelled = true }
-  }, [ticker, activeTab, analysisDate, market])
+  }, [ticker, activeTab, analysisDate, market, refreshTick])
 
   const topScenario = data?.scenarios[0] ?? null
   const sourceText = useMemo(() => {
     if (!data) return ''
     const parts = [
       `価格 ${data.sourceDates.price}`,
-      data.sourceDates.feature ? `特徴量 ${data.sourceDates.feature}` : null,
+      data.sourceDates.feature
+        ? `特徴量 ${data.sourceDates.featureDerived ? '最新足から再計算' : data.sourceDates.feature}`
+        : null,
+      data.sourceDates.physicalMomentum && data.sourceDates.physicalMomentum !== data.sourceDates.price
+        ? `PMS ${data.sourceDates.physicalMomentum}`
+        : null,
       data.sourceDates.calibration ? `検証 ${data.sourceDates.calibration}` : null,
       data.llmNarrative?.used ? `AI説明 ${data.llmNarrative.model}` : 'ローカル説明',
     ].filter(Boolean)
@@ -554,6 +578,16 @@ export function ScenarioProjectionChart({ ticker, name, analysisDate, market = '
                   <div style={topScenarioStyle}>
                     最上位: {topScenario.label} / score {topScenario.score}
                   </div>
+                )}
+              </div>
+              <div style={freshnessNoticeStyle(data.sourceDates.featureDerived === true)}>
+                {data.sourceDates.featureDerived
+                  ? `保存済み物理特徴量が最新価格日と異なるため、${data.sourceDates.price} の足から物理状態を再計算して表示しています。`
+                  : `保存済み物理特徴量と価格データを使って ${data.sourceDates.price} 基準で表示しています。`}
+                {!analysisDate && (
+                  <button type="button" onClick={() => setRefreshTick((value) => value + 1)} style={refreshButtonStyle}>
+                    最新で再生成
+                  </button>
                 )}
               </div>
               <ScenarioCanvas data={data} market={market} />
@@ -889,6 +923,36 @@ const summaryBarStyle: CSSProperties = {
   color: 'var(--text-secondary)',
   fontSize: 12,
   marginBottom: 10,
+}
+
+function freshnessNoticeStyle(derived: boolean): CSSProperties {
+  return {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    flexWrap: 'wrap',
+    border: `1px solid ${derived ? 'rgba(245, 158, 11, 0.30)' : 'var(--border-subtle)'}`,
+    borderRadius: 8,
+    background: derived ? 'rgba(245, 158, 11, 0.08)' : 'var(--surface-muted)',
+    color: derived ? '#92400e' : 'var(--text-secondary)',
+    fontSize: 11,
+    fontWeight: 800,
+    lineHeight: 1.55,
+    padding: '7px 9px',
+    marginBottom: 10,
+  }
+}
+
+const refreshButtonStyle: CSSProperties = {
+  border: '1px solid var(--border-subtle)',
+  borderRadius: 999,
+  background: '#fff',
+  color: 'var(--accent-primary)',
+  fontSize: 11,
+  fontWeight: 900,
+  padding: '4px 9px',
+  cursor: 'pointer',
 }
 
 const topScenarioStyle: CSSProperties = {

@@ -4,7 +4,7 @@
 
 import { execGet, execRun } from '@/lib/db/client'
 
-const RECENT_DAYS = Number(process.env.ML_CONTEXT_RECENT_DAYS ?? 260)
+const RECENT_DAYS = Number(process.env.ML_CONTEXT_RECENT_DAYS ?? 0)
 const START_DATE = process.env.ML_CONTEXT_START_DATE?.trim() || null
 const END_DATE = process.env.ML_CONTEXT_END_DATE?.trim() || null
 
@@ -62,7 +62,7 @@ async function main() {
     'o.date <= ?',
   ].filter(Boolean).join(' AND ')
   const baseDateArgs = [...(lookbackStart ? [lookbackStart] : []), end]
-  const marketArgs = [...baseDateArgs, ...(start ? [start] : [])]
+  const marketArgs = [...baseDateArgs, RECENT_DAYS, end, ...(start ? [start] : [])]
   const sectorArgs = [...baseDateArgs, ...(start ? [start, start] : [])]
   const outputWhere = start ? 'WHERE date >= ?' : ''
 
@@ -107,7 +107,7 @@ async function main() {
     ${outputWhere}
     GROUP BY date
     `,
-    [...marketArgs, RECENT_DAYS, end],
+    marketArgs,
   )
 
   await execRun(

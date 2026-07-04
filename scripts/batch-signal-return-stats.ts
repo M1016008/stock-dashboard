@@ -43,7 +43,7 @@ function parseHorizons(): number[] {
 }
 
 const HORIZONS = parseHorizons()
-const RECENT_DAYS = envInt('BACKTEST_RECENT_DAYS', 260, 0)
+const RECENT_DAYS = envInt('BACKTEST_RECENT_DAYS', 0, 0)
 const DATE_CHUNK = envInt('SIGNAL_RETURN_DATE_CHUNK', 10, 1)
 const MIN_N = envInt('SIGNAL_RETURN_MIN_N', 20, 1)
 const prevDateByDate = new Map<string, string | null>()

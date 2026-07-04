@@ -29,6 +29,22 @@ function parseHorizons(value: string | undefined, fallback: number[]): number[] 
 
 const HORIZONS = parseHorizons(process.env.FORWARD_RETURN_HORIZONS, DEFAULT_HORIZONS)
 
+function parsePositiveInt(value: string | undefined): number | null {
+  if (!value?.trim()) return null
+  const parsed = Number(value)
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null
+}
+
+const TICKER_CHUNK_SIZE = parsePositiveInt(process.env.FORWARD_RETURNS_TICKER_CHUNK_SIZE)
+
+function chunkTickers(tickers: string[], chunkSize: number): string[][] {
+  const chunks: string[][] = []
+  for (let start = 0; start < tickers.length; start += chunkSize) {
+    chunks.push(tickers.slice(start, start + chunkSize))
+  }
+  return chunks
+}
+
 async function computeForwardReturnsForHorizon(horizon: number, tickers: string[] | null): Promise<number> {
   const tickerWhere = tickers?.length
     ? `WHERE ticker IN (${tickers.map(() => '?').join(', ')})`
@@ -95,12 +111,33 @@ async function main() {
   let rowsInserted = 0
   const errors: string[] = []
 
-  console.log(`Forward returns 計算開始: ${tickers.length} 銘柄 / horizons=${HORIZONS.join(',')}`)
+  const tickerUniverseList = tickers.map((row) => row.ticker)
+  const chunkedTickerLists = TICKER_CHUNK_SIZE
+    ? chunkTickers(tickerFilter ?? tickerUniverseList, TICKER_CHUNK_SIZE)
+    : null
+
+  console.log(
+    `Forward returns 計算開始: ${tickers.length} 銘柄 / horizons=${HORIZONS.join(',')}` +
+    (chunkedTickerLists ? ` / tickerChunk=${TICKER_CHUNK_SIZE}` : ''),
+  )
   const startTime = Date.now()
 
   for (const [i, horizon] of HORIZONS.entries()) {
     try {
-      const count = await computeForwardReturnsForHorizon(horizon, tickerFilter)
+      let count = 0
+      if (chunkedTickerLists) {
+        for (const [chunkIndex, chunk] of chunkedTickerLists.entries()) {
+          const chunkCount = await computeForwardReturnsForHorizon(horizon, chunk)
+          count += chunkCount
+          const elapsedMin = ((Date.now() - startTime) / 60000).toFixed(1)
+          console.log(
+            `  - ${horizon}営業日 chunk ${chunkIndex + 1}/${chunkedTickerLists.length}: ` +
+            `+${chunkCount.toLocaleString()} (horizon累計 ${count.toLocaleString()}, 経過 ${elapsedMin}min)`,
+          )
+        }
+      } else {
+        count = await computeForwardReturnsForHorizon(horizon, tickerFilter)
+      }
       succeeded++
       rowsInserted += count
       const pct = (((i + 1) / HORIZONS.length) * 100).toFixed(1)

@@ -432,11 +432,28 @@ function PhysicalMomentumSection({ ticker, analysisDate }: { ticker: string; ana
   }, [ticker, analysisDate])
 
   const latest = data?.latest ?? null
+  const momentumHistoryCount = data?.history?.length ?? 0
+  const isMomentumCoverageSparse = momentumHistoryCount < 20
+  const coverageWarningStyle: CSSProperties = {
+    display: 'grid',
+    gap: '4px',
+    border: '1px solid rgba(245, 158, 11, 0.34)',
+    borderRadius: 'var(--radius-sm)',
+    background: 'rgba(245, 158, 11, 0.10)',
+    color: '#92400e',
+    fontSize: '12px',
+    fontWeight: 700,
+    lineHeight: 1.65,
+    padding: '10px 12px',
+    marginBottom: '10px',
+  }
   const previous = latest
     ? [...(data?.history ?? [])].reverse().find((row) => row.date < latest.date) ?? null
     : null
   const fieldInsight = latest ? buildMaFieldInsight(latest, previous) : null
-  const insight = latest ? buildPhysicalMomentumInsight(latest, data?.rank ?? null, data?.totalRanked ?? 0, data?.trend ?? null, fieldInsight) : null
+  const insight = latest && !isMomentumCoverageSparse
+    ? buildPhysicalMomentumInsight(latest, data?.rank ?? null, data?.totalRanked ?? 0, data?.trend ?? null, fieldInsight)
+    : null
 
   return (
     <div className="card" style={physicalCardStyle}>
@@ -462,6 +479,15 @@ function PhysicalMomentumSection({ ticker, analysisDate }: { ticker: string; ana
         <p style={summaryEmptyStyle}>PMS未計算です。`npm run batch:physical-momentum` 実行後に表示されます。</p>
       ) : (
         <>
+          {isMomentumCoverageSparse && (
+            <div style={coverageWarningStyle}>
+              <strong>結論は保留中</strong>
+              <span>
+                PMS履歴が{momentumHistoryCount}営業日分しかありません。全期間PMSを再生成中または未完了のため、
+                いまはPMS/PFS/PESの数値を投資判断の結論として扱わず、チャート・MA・ステージを優先してください。
+              </span>
+            </div>
+          )}
           {insight && (
             <div style={physicalHeroStyle}>
               <div style={physicalHeroMainStyle}>

@@ -162,32 +162,112 @@ function validDateParam(value: unknown): string | null {
   return typeof raw === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : null
 }
 
+function finiteOrNull(value: number | null | undefined): number | null {
+  return value != null && Number.isFinite(value) ? value : null
+}
+
+function compareDesc(a: number | null | undefined, b: number | null | undefined): number {
+  const av = finiteOrNull(a)
+  const bv = finiteOrNull(b)
+  if (av == null && bv == null) return 0
+  if (av == null) return 1
+  if (bv == null) return -1
+  return bv - av
+}
+
+function compareAsc(a: number | null | undefined, b: number | null | undefined): number {
+  const av = finiteOrNull(a)
+  const bv = finiteOrNull(b)
+  if (av == null && bv == null) return 0
+  if (av == null) return 1
+  if (bv == null) return -1
+  return av - bv
+}
+
+function byTicker(a: StockMomentumRow, b: StockMomentumRow): number {
+  return a.ticker.localeCompare(b.ticker, 'ja')
+}
+
+function rankedRows(rows: StockMomentumRow[], rank: MarketMomentumRankId): StockMomentumRow[] {
+  return [...rows].sort((a, b) => {
+    if (rank === 'continuation' || rank === 'strong') {
+      return compareDesc(a.pms, b.pms) || compareDesc(a.pfs, b.pfs) || byTicker(a, b)
+    }
+    if (rank === 'stall') {
+      return compareAsc(a.pfs, b.pfs) || compareDesc(a.pms, b.pms) || byTicker(a, b)
+    }
+    if (rank === 'drop' || rank === 'weak') {
+      return compareAsc(a.pms, b.pms) || compareAsc(a.pfs, b.pfs) || byTicker(a, b)
+    }
+    return compareDesc(a.pfs, b.pfs) || compareDesc(a.pms, b.pms) || byTicker(a, b)
+  })
+}
+
+function buildSummary(date: string | null, rows: StockMomentumRow[]): SummaryRow {
+  return rows.reduce<SummaryRow>(
+    (acc, row) => {
+      const pms = finiteOrNull(row.pms)
+      const pfs = finiteOrNull(row.pfs)
+      const pes = finiteOrNull(row.pes)
+      acc.count += 1
+      if (pms != null && pms > 0) acc.positivePms += 1
+      if (pms != null && pms < 0) acc.negativePms += 1
+      if (pms != null && pms >= 1) acc.strongPms += 1
+      if (pms != null && pms <= -1) acc.weakPms += 1
+      if (pfs != null && pfs > 0) acc.positivePfs += 1
+      if (pes != null && pes >= 1) acc.highPes += 1
+      return acc
+    },
+    {
+      date,
+      count: 0,
+      positivePms: 0,
+      negativePms: 0,
+      strongPms: 0,
+      weakPms: 0,
+      positivePfs: 0,
+      highPes: 0,
+    },
+  )
+}
+
 async function getMarketMomentumData(group: MarketMomentumGroupId, rank: MarketMomentumRankId, date: string | null) {
   const groupSql = marketMomentumGroupSql(
     group,
     'pm.symbol',
     "COALESCE(NULLIF(tu.market_segment, ''), '未分類')",
   )
-  const selectedRank = rankMeta(rank)
   const dateParams = date ? [date] : []
-  const commonLatest = `
-    WITH latest AS (
+
+  const latest = await execGet<{ date: string | null }>(
+    `
       SELECT MAX(date) AS date
       FROM physical_momentum_metrics
       WHERE market = 'JP'
         ${date ? 'AND date <= ?' : ''}
-    )
-  `
-  const aggregateSelect = `
-    COUNT(*) AS count,
-    SUM(CASE WHEN pm.physical_momentum_score > 0 THEN 1 ELSE 0 END) AS positivePms,
-    SUM(CASE WHEN pm.physical_momentum_score < 0 THEN 1 ELSE 0 END) AS negativePms,
-    SUM(CASE WHEN pm.physical_momentum_score >= 1 THEN 1 ELSE 0 END) AS strongPms,
-    SUM(CASE WHEN pm.physical_momentum_score <= -1 THEN 1 ELSE 0 END) AS weakPms,
-    SUM(CASE WHEN pm.physical_force_score > 0 THEN 1 ELSE 0 END) AS positivePfs,
-    SUM(CASE WHEN pm.physical_energy_score >= 1 THEN 1 ELSE 0 END) AS highPes
-  `
-  const rowsSelect = `
+    `,
+    dateParams,
+  )
+  const latestDate = latest?.date ?? null
+  if (!latestDate) {
+    return {
+      summary: buildSummary(null, []),
+      initialRows: [],
+      continuationRows: [],
+      stallRows: [],
+      dropRows: [],
+      allRows: [],
+    }
+  }
+
+  const previous = await execGet<{ date: string | null }>(
+    'SELECT MAX(date) AS date FROM ohlcv_daily WHERE date < ?',
+    [latestDate],
+  )
+  const previousDate = previous?.date ?? null
+
+  const rows = await execAll<StockMomentumRow>(
+    `
     SELECT
       pm.symbol AS ticker,
       tu.name AS name,
@@ -207,84 +287,30 @@ async function getMarketMomentumData(group: MarketMomentumGroupId, rank: MarketM
       ds.weekly_b_stage AS weeklyBStage,
       ds.monthly_a_stage AS monthlyAStage,
       ds.monthly_b_stage AS monthlyBStage
-    FROM latest
-    JOIN physical_momentum_metrics pm ON pm.market = 'JP' AND pm.date = latest.date
+    FROM physical_momentum_metrics pm
     LEFT JOIN ticker_universe tu ON tu.ticker = pm.symbol
-    LEFT JOIN ohlcv_daily cur ON cur.ticker = pm.symbol AND cur.date = latest.date
-    LEFT JOIN ohlcv_daily prev ON prev.ticker = pm.symbol AND prev.date = (
-      SELECT MAX(date) FROM ohlcv_daily WHERE ticker = pm.symbol AND date < latest.date
-    )
-    LEFT JOIN daily_snapshots ds ON ds.ticker = pm.symbol AND ds.date = latest.date
-    WHERE pm.physical_momentum_score IS NOT NULL
+    LEFT JOIN ohlcv_daily cur ON cur.ticker = pm.symbol AND cur.date = ?
+    LEFT JOIN ohlcv_daily prev ON prev.ticker = pm.symbol AND prev.date = ?
+    LEFT JOIN daily_snapshots ds ON ds.ticker = pm.symbol AND ds.date = ?
+    WHERE pm.market = 'JP'
+      AND pm.date = ?
+      AND pm.physical_momentum_score IS NOT NULL
       AND ${groupSql.sql}
-  `
+    `,
+    [latestDate, previousDate, latestDate, latestDate, ...groupSql.params],
+  )
 
-  const [summary, initialRows, continuationRows, stallRows, dropRows, allRows] = await Promise.all([
-    execGet<SummaryRow>(
-      `
-        ${commonLatest}
-        SELECT
-          latest.date AS date,
-          ${aggregateSelect}
-        FROM latest
-        JOIN physical_momentum_metrics pm ON pm.market = 'JP' AND pm.date = latest.date
-        LEFT JOIN ticker_universe tu ON tu.ticker = pm.symbol
-        WHERE pm.physical_momentum_score IS NOT NULL
-          AND ${groupSql.sql}
-      `,
-      [...dateParams, ...groupSql.params],
-    ),
-    execAll<StockMomentumRow>(
-      `
-        ${commonLatest}
-        ${rowsSelect}
-        ORDER BY pm.physical_force_score DESC, pm.physical_momentum_score DESC, pm.symbol
-        LIMIT 12
-      `,
-      [...dateParams, ...groupSql.params],
-    ),
-    execAll<StockMomentumRow>(
-      `
-        ${commonLatest}
-        ${rowsSelect}
-        ORDER BY pm.physical_momentum_score DESC, pm.physical_force_score DESC, pm.symbol
-        LIMIT 12
-      `,
-      [...dateParams, ...groupSql.params],
-    ),
-    execAll<StockMomentumRow>(
-      `
-        ${commonLatest}
-        ${rowsSelect}
-          AND pm.physical_momentum_score > 0
-          AND pm.physical_force_score < 0
-        ORDER BY pm.physical_force_score ASC, pm.physical_momentum_score DESC, pm.symbol
-        LIMIT 12
-      `,
-      [...dateParams, ...groupSql.params],
-    ),
-    execAll<StockMomentumRow>(
-      `
-        ${commonLatest}
-        ${rowsSelect}
-        ORDER BY pm.physical_momentum_score ASC, pm.physical_force_score ASC, pm.symbol
-        LIMIT 12
-      `,
-      [...dateParams, ...groupSql.params],
-    ),
-    execAll<StockMomentumRow>(
-      `
-        ${commonLatest}
-        ${rowsSelect}
-        ORDER BY ${selectedRank.orderBy}
-        LIMIT 500
-      `,
-      [...dateParams, ...groupSql.params],
-    ),
-  ])
+  const initialRows = rankedRows(rows, 'initial').slice(0, 12)
+  const continuationRows = rankedRows(rows, 'continuation').slice(0, 12)
+  const stallRows = rankedRows(
+    rows.filter((row) => (row.pms ?? 0) > 0 && (row.pfs ?? 0) < 0),
+    'stall',
+  ).slice(0, 12)
+  const dropRows = rankedRows(rows, 'drop').slice(0, 12)
+  const allRows = rankedRows(rows, rank).slice(0, 500)
 
   return {
-    summary,
+    summary: buildSummary(latestDate, rows),
     initialRows,
     continuationRows,
     stallRows,
