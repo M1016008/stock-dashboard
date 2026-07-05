@@ -11,6 +11,7 @@ import { PageTitle } from '@/components/layout/PageTitle'
 import { AiResearchShortcuts } from '@/components/dashboard/AiResearchShortcuts'
 import { DashboardEarningsAlerts } from '@/components/dashboard/DashboardEarningsAlerts'
 import { PhysicalMomentumMarket } from '@/components/dashboard/PhysicalMomentumMarket'
+import { DashboardTradeSignalTable } from '@/components/dashboard/DashboardTradeSignalTable'
 import { TradeScenarioOverview } from '@/components/dashboard/TradeScenarioOverview'
 import { DashboardDateSelector } from '@/components/dashboard/DashboardDateSelector'
 import { getLatestDate } from '@/lib/queries/dashboard'
@@ -84,6 +85,9 @@ export default async function DashboardPage({
       <DashboardDateSelector dates={initialDates} selectedDate={selectedDate} />
       <Suspense fallback={<SectionFallback height={300} />}>
         <TradeScenarioOverview date={dashboardDate} />
+      </Suspense>
+      <Suspense fallback={<SectionFallback height={430} />}>
+        <DashboardTradeSignalTable date={dashboardDate} universe={universeFilter} />
       </Suspense>
       <Suspense fallback={<SectionFallback height={150} />}>
         <PhysicalMomentumMarket date={dashboardDate} universe={universeFilter} />

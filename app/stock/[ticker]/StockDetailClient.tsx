@@ -229,7 +229,12 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
       {/* 過去の大きな値動き */}
       <StockMovePeriods ticker={ticker} />
 
-      <ScenarioProjectionChart ticker={ticker} name={name} analysisDate={analysisDate} />
+      <ScenarioProjectionChart
+        ticker={ticker}
+        name={name}
+        analysisDate={analysisDate}
+        onUseLatest={() => updateAnalysisDate(null)}
+      />
 
       <StockScenarioAiPanel ticker={ticker} name={name} analysisDate={analysisDate} />
 

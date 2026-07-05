@@ -106,6 +106,7 @@ interface ScenarioProjectionChartProps {
   name: string
   analysisDate?: string | null
   market?: MarketCode
+  onUseLatest?: () => void
 }
 
 interface ScenarioEndpointLabel {
@@ -403,7 +404,9 @@ function ScenarioCanvas({ data, market }: { data: ProjectionResponse; market: Ma
   )
 }
 
-export function ScenarioProjectionChart({ ticker, name, analysisDate, market = 'JP' }: ScenarioProjectionChartProps) {
+type RefreshSource = 'initial' | 'auto' | 'manual'
+
+export function ScenarioProjectionChart({ ticker, name, analysisDate, market = 'JP', onUseLatest }: ScenarioProjectionChartProps) {
   const [activeTab, setActiveTab] = useState(TABS[0])
   const [data, setData] = useState<ProjectionResponse | null>(null)
   const [loading, setLoading] = useState(true)
@@ -411,11 +414,16 @@ export function ScenarioProjectionChart({ ticker, name, analysisDate, market = '
   const [savingId, setSavingId] = useState<string | null>(null)
   const [savedIds, setSavedIds] = useState<Set<string>>(new Set())
   const [message, setMessage] = useState('')
-  const [refreshTick, setRefreshTick] = useState(0)
+  const [refreshNonce, setRefreshNonce] = useState(0)
+  const [refreshNotice, setRefreshNotice] = useState('')
+  const refreshSourceRef = useRef<RefreshSource>('initial')
 
   useEffect(() => {
     if (analysisDate) return
-    const refreshLatest = () => setRefreshTick((value) => value + 1)
+    const refreshLatest = () => {
+      refreshSourceRef.current = 'auto'
+      setRefreshNonce((value) => value + 1)
+    }
     const onVisibility = () => {
       if (document.visibilityState === 'visible') refreshLatest()
     }
@@ -431,30 +439,54 @@ export function ScenarioProjectionChart({ ticker, name, analysisDate, market = '
 
   useEffect(() => {
     let cancelled = false
+    const requestDate = analysisDate
+    const isManualRefresh = refreshSourceRef.current === 'manual'
     setLoading(true)
     setError('')
     setMessage('')
+    if (isManualRefresh) {
+      setRefreshNotice('最新データでシナリオを再生成中...')
+      refreshSourceRef.current = 'initial'
+    } else if (requestDate) {
+      setRefreshNotice('')
+    }
     const params = new URLSearchParams({
       market,
       interval: activeTab.interval,
       horizonDays: String(activeTab.horizonDays),
       limit: '8',
     })
-    if (analysisDate) params.set('date', analysisDate)
-    if (!analysisDate) params.set('_ts', String(Date.now()))
+    if (requestDate) params.set('date', requestDate)
+    if (!requestDate || isManualRefresh) params.set('_ts', String(Date.now()))
     fetch(`/api/stock-scenario-projections/${encodeURIComponent(ticker)}?${params.toString()}`, { cache: 'no-store' })
       .then((res) => res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`)))
       .then((payload) => {
-        if (!cancelled) setData(payload)
+        if (!cancelled) {
+          setData(payload)
+          if (isManualRefresh) {
+            setRefreshNotice(`最新データで再生成しました。基準 ${payload.baseDate ?? payload.sourceDates?.price ?? '-'}。`)
+          }
+        }
       })
       .catch((e) => {
-        if (!cancelled) setError((e as Error).message)
+        if (!cancelled) {
+          setError((e as Error).message)
+          if (isManualRefresh) setRefreshNotice('')
+        }
       })
       .finally(() => {
         if (!cancelled) setLoading(false)
       })
     return () => { cancelled = true }
-  }, [ticker, activeTab, analysisDate, market, refreshTick])
+  }, [ticker, activeTab, analysisDate, market, refreshNonce])
+
+  function regenerateLatest() {
+    refreshSourceRef.current = 'manual'
+    onUseLatest?.()
+    setError('')
+    setMessage('')
+    setRefreshNonce((value) => value + 1)
+  }
 
   const topScenario = data?.scenarios[0] ?? null
   const sourceText = useMemo(() => {
@@ -584,12 +616,11 @@ export function ScenarioProjectionChart({ ticker, name, analysisDate, market = '
                 {data.sourceDates.featureDerived
                   ? `保存済み物理特徴量が最新価格日と異なるため、${data.sourceDates.price} の足から物理状態を再計算して表示しています。`
                   : `保存済み物理特徴量と価格データを使って ${data.sourceDates.price} 基準で表示しています。`}
-                {!analysisDate && (
-                  <button type="button" onClick={() => setRefreshTick((value) => value + 1)} style={refreshButtonStyle}>
-                    最新で再生成
-                  </button>
-                )}
+                <button type="button" onClick={regenerateLatest} style={refreshButtonStyle}>
+                  最新で再生成
+                </button>
               </div>
+              {refreshNotice && <div style={refreshNoticeStyle}>{refreshNotice}</div>}
               <ScenarioCanvas data={data} market={market} />
               <div style={legendStyle}>
                 <span><i style={{ background: '#dc2626' }} />上昇</span>
@@ -953,6 +984,18 @@ const refreshButtonStyle: CSSProperties = {
   fontWeight: 900,
   padding: '4px 9px',
   cursor: 'pointer',
+}
+
+const refreshNoticeStyle: CSSProperties = {
+  border: '1px solid rgba(37, 99, 235, 0.22)',
+  borderRadius: 8,
+  background: 'rgba(37, 99, 235, 0.06)',
+  color: '#1d4ed8',
+  fontSize: 11,
+  fontWeight: 900,
+  lineHeight: 1.55,
+  padding: '7px 9px',
+  marginBottom: 10,
 }
 
 const topScenarioStyle: CSSProperties = {

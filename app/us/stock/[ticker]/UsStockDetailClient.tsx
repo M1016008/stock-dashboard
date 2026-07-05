@@ -407,7 +407,13 @@ export function UsStockDetailClient({
         />
       </Card>
 
-      <ScenarioProjectionChart ticker={quote.ticker} market="US" name={quote.name ?? quote.ticker} analysisDate={analysisDate} />
+      <ScenarioProjectionChart
+        ticker={quote.ticker}
+        market="US"
+        name={quote.name ?? quote.ticker}
+        analysisDate={analysisDate}
+        onUseLatest={() => updateAnalysisDate(null)}
+      />
 
       <StockMovePeriods ticker={quote.ticker} market="US" />
 
