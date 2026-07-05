@@ -6,14 +6,89 @@ import { analyzePhysicsProfile, type PhysicsStatus } from '@/lib/ml/physics-anal
 import { getUsDisplayName } from '@/lib/us-symbol-aliases'
 import { type UniverseFilterValue, universeSqlCondition } from '@/lib/market-universe'
 import { US_SEC_SIC_TAXONOMY } from '@/lib/us-classification'
+import {
+  buildStockScenarioProjection,
+  defaultProjectionHorizon,
+  normalizeProjectionInterval,
+  type ProjectionDirection,
+  type ProjectionResponse,
+  type ScenarioInterval,
+} from '@/lib/stock-scenarios/projections'
 
 const DASHBOARD_HORIZON_DAYS = 20
 const JP_QUERY_LIMIT = 7000
 const US_QUERY_LIMIT = 2500
 const MIN_DASHBOARD_SCORE = 60
+const MAX_ROWS_PER_MARKET_SIDE = 80
+const SCENARIO_ENRICH_CONCURRENCY = 6
+const US_LEVERAGED_INVERSE_ETP_TICKERS = new Set([
+  'AGQ',
+  'BOIL',
+  'DUST',
+  'DUG',
+  'DXD',
+  'EDC',
+  'EDZ',
+  'ERX',
+  'ERY',
+  'FAZ',
+  'FAS',
+  'GDXD',
+  'GDXU',
+  'GUSH',
+  'HIBL',
+  'HIBS',
+  'KOLD',
+  'LABD',
+  'LABU',
+  'NUGT',
+  'PSQ',
+  'QID',
+  'QLD',
+  'SCO',
+  'SDOW',
+  'SDS',
+  'SH',
+  'SOXL',
+  'SOXS',
+  'SPXL',
+  'SPXS',
+  'SPXU',
+  'SQQQ',
+  'SVXY',
+  'TBT',
+  'TECL',
+  'TECS',
+  'TNA',
+  'TQQQ',
+  'TWM',
+  'TZA',
+  'UCO',
+  'UPRO',
+  'UVXY',
+  'VXX',
+  'YANG',
+  'YINN',
+  'ZSL',
+])
 
-export type DashboardTradeSignalSide = 'buy' | 'short'
+export type DashboardTradeSignalSide = 'buy' | 'sell'
 export type DashboardTradeSignalMarket = 'JP' | 'US'
+export type DashboardScenarioInterval = ScenarioInterval
+export type DashboardScenarioDecisionTone = 'constructive' | 'caution' | 'neutral' | 'conflict'
+
+const SCENARIO_INTERVAL_LABELS: Record<ScenarioInterval, string> = {
+  D: '1日',
+  '2D': '2日',
+  W: '1週間',
+  '2W': '2週間',
+  M: '1か月',
+  '2M': '2か月',
+}
+
+export function dashboardScenarioIntervalLabel(interval: ScenarioInterval): string {
+  return SCENARIO_INTERVAL_LABELS[interval] ?? interval
+}
 
 export interface DashboardTradeSignalStages {
   dailyA: number | null
@@ -39,11 +114,13 @@ export interface DashboardTradeSignalRow {
   avgVolumeLabel: string
   industryName: string
   industryDetail: string | null
+  industry17: string
+  industry33: string
   marketSegment: string | null
   marginType: string | null
   confidenceScore: number
   confidenceBand: 'high' | 'candidate'
-  primaryLabel: ShortTermCheckLabel | '空売り候補'
+  primaryLabel: ShortTermCheckLabel | '売り候補'
   shortTermCheckLabel: ShortTermCheckLabel
   shortTermCheckScore: number
   physicalStatusLabel: PhysicsStatus
@@ -56,8 +133,36 @@ export interface DashboardTradeSignalRow {
   classicUpRank: number | null
   classicDownRank: number | null
   stages: DashboardTradeSignalStages
+  scenario: DashboardScenarioSignal | null
+  technicalChips: string[]
   evidenceChips: string[]
   riskChips: string[]
+}
+
+export interface DashboardScenarioSignal {
+  baseDate: string
+  interval: ScenarioInterval
+  intervalLabel: string
+  horizonDays: number
+  leader: ProjectionDirection | 'mixed'
+  upWeightPct: number
+  downWeightPct: number
+  rangeWeightPct: number
+  sideWeightPct: number
+  oppositeWeightPct: number
+  scenarioScore: number
+  topLabel: string
+  topDirection: ProjectionDirection
+  topScore: number
+  alignedLabel: string | null
+  alignedScore: number | null
+  targetPrice: number | null
+  stopPrice: number | null
+  invalidation: string | null
+  decisionSummary: string
+  decisionPoints: string[]
+  decisionTone: DashboardScenarioDecisionTone
+  evidence: string[]
 }
 
 export interface DashboardTradeSignalResult {
@@ -66,6 +171,9 @@ export interface DashboardTradeSignalResult {
   usDate: string | null
   generatedAt: string
   horizonDays: number
+  scenarioInterval: ScenarioInterval
+  scenarioIntervalLabel: string
+  scenarioHorizonDays: number
 }
 
 type RawSignalRow = {
@@ -126,6 +234,12 @@ function clamp(value: number, min = 0, max = 100): number {
   return Math.max(min, Math.min(max, value))
 }
 
+function round(value: number | null | undefined, digits = 1): number | null {
+  if (!finite(value)) return null
+  const scale = 10 ** digits
+  return Math.round(value * scale) / scale
+}
+
 function parseJson<T>(value: string | null | undefined): T | null {
   if (!value) return null
   try {
@@ -134,6 +248,30 @@ function parseJson<T>(value: string | null | undefined): T | null {
   } catch {
     return null
   }
+}
+
+function recordAt(value: unknown, key: string): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object') return null
+  const next = (value as Record<string, unknown>)[key]
+  return next && typeof next === 'object' ? next as Record<string, unknown> : null
+}
+
+function boolAt(value: unknown, path: string[]): boolean | null {
+  let current: unknown = value
+  for (const key of path) {
+    if (!current || typeof current !== 'object') return null
+    current = (current as Record<string, unknown>)[key]
+  }
+  return typeof current === 'boolean' ? current : null
+}
+
+function numAt(value: unknown, path: string[]): number | null {
+  let current: unknown = value
+  for (const key of path) {
+    if (!current || typeof current !== 'object') return null
+    current = (current as Record<string, unknown>)[key]
+  }
+  return num(current)
 }
 
 function changePct(price: number | null, prev: number | null): number | null {
@@ -257,6 +395,71 @@ function physicalStatusScore(status: PhysicsStatus, pms: number | null, pfs: num
   return base[status] + clamp(pms ?? 0, -5, 5) + clamp(pfs ?? 0, -5, 5)
 }
 
+function buildTechnicalChips(
+  row: RawSignalRow,
+  feature: Record<string, unknown> | null,
+  side: DashboardTradeSignalSide,
+): string[] {
+  const bullish: string[] = []
+  const bearish: string[] = []
+  const neutral: string[] = []
+
+  if (boolAt(feature, ['crosses', 'upSma5'])) bullish.push('日足: 5日線上抜け')
+  if (boolAt(feature, ['crosses', 'downSma5'])) bearish.push('日足: 5日線下抜け')
+  if (boolAt(feature, ['crosses', 'upSma25'])) bullish.push('日足: 25日線上抜け')
+  if (boolAt(feature, ['crosses', 'downSma25'])) bearish.push('日足: 25日線下抜け')
+
+  const daily5 = numAt(feature, ['pricePosition', 'sma5'])
+  const daily25 = numAt(feature, ['pricePosition', 'sma25'])
+  if (finite(daily5) && finite(daily25)) {
+    if (daily5 > 0 && daily25 > 0) bullish.push('日足: 5/25日線上')
+    if (daily5 < 0 && daily25 < 0) bearish.push('日足: 5/25日線下')
+  }
+
+  const bundleVelocity = numAt(feature, ['bundleWidthVelocity5'])
+  if (finite(bundleVelocity)) {
+    if (bundleVelocity < -0.2) neutral.push('日足: MA束収縮')
+    if (bundleVelocity > 0.25) neutral.push('日足: MA束拡散')
+  }
+
+  const weekly = recordAt(recordAt(feature, 'multiTimeframe'), 'weekly')
+  const weekly5 = numAt(weekly, ['pricePosition', 'ma5'])
+  const weekly13 = numAt(weekly, ['pricePosition', 'ma13'])
+  const weekly5Slope = numAt(weekly, ['velocities', 'ma5', 'd5'])
+  if (finite(weekly5) && finite(weekly13)) {
+    if (weekly5 > 0 && weekly13 > 0) bullish.push('週足: 5/13週線上')
+    if (weekly5 < 0 && weekly13 < 0) bearish.push('週足: 5/13週線下')
+  }
+  if (finite(weekly5) && finite(weekly5Slope)) {
+    if (weekly5 > 0 && weekly5Slope > 0) bullish.push('週足: 5週線上向き')
+    if (weekly5 < 0 && weekly5Slope < 0) bearish.push('週足: 5週線下向き')
+  }
+
+  const twoDay = recordAt(recordAt(feature, 'multiTimeframe'), 'twoDay')
+  const twoDay5 = numAt(twoDay, ['pricePosition', 'ma5'])
+  const twoDay25 = numAt(twoDay, ['pricePosition', 'ma25'])
+  if (finite(twoDay5) && finite(twoDay25)) {
+    if (twoDay5 > 0 && twoDay25 > 0) bullish.push('2日足: 5/25本線上')
+    if (twoDay5 < 0 && twoDay25 < 0) bearish.push('2日足: 5/25本線下')
+  }
+
+  const trend = recordAt(feature, 'regimes')?.trend
+  if (trend === 'up_acceleration') bullish.push('物理: 上昇加速')
+  if (trend === 'down_acceleration') bearish.push('物理: 下落加速')
+  if (trend === 'reversal_down') bearish.push('物理: 反落警戒')
+  if (trend === 'reversal_up') bullish.push('物理: 反発兆候')
+
+  if (row.daily_a_stage === 1 || row.daily_a_stage === 6) bullish.push(`日A: S${row.daily_a_stage}`)
+  if (row.daily_a_stage === 3 || row.daily_a_stage === 4) bearish.push(`日A: S${row.daily_a_stage}`)
+  if (row.weekly_a_stage === 1 || row.weekly_a_stage === 6) bullish.push(`週A: S${row.weekly_a_stage}`)
+  if (row.weekly_a_stage === 3 || row.weekly_a_stage === 4) bearish.push(`週A: S${row.weekly_a_stage}`)
+
+  const ordered = side === 'sell'
+    ? [...bearish, ...neutral, ...bullish]
+    : [...bullish, ...neutral, ...bearish]
+  return Array.from(new Set(ordered)).slice(0, 7)
+}
+
 function industryName(row: RawSignalRow): string {
   if (row.market === 'US') return row.sector || row.industry || '未分類'
   return row.sector17_name || row.sector33_name || '未分類'
@@ -281,7 +484,7 @@ function evidenceForSide(row: RawSignalRow, side: DashboardTradeSignalSide, stat
     if (row.classic_down_rank) chips.push(`通常ML下落#${row.classic_down_rank}`)
     if ((row.physical_force_score ?? 0) < 0) chips.push('PFS下向き')
     if ((row.physical_momentum_score ?? 0) < 0) chips.push('PMSマイナス')
-    if (row.margin_type === '貸借') chips.push('貸借')
+    if (row.market === 'JP' && row.margin_type === '貸借') chips.push('貸借')
     if (label === '下落警戒' || label === '弱含み注意') chips.push(label)
     if (status === '下落加速' || status === '失速警戒' || status === '過熱注意') chips.push(status)
   }
@@ -303,6 +506,27 @@ function riskForSide(row: RawSignalRow, side: DashboardTradeSignalSide, status: 
   return chips.slice(0, 3)
 }
 
+function isExcludedDashboardInstrument(row: RawSignalRow): boolean {
+  const ticker = row.ticker.toUpperCase()
+  const name = row.name ?? ''
+  const sector17 = row.sector17_name ?? ''
+  const sector33 = row.sector33_name ?? ''
+  const text = `${row.ticker} ${name} ${sector17} ${sector33}`.toLowerCase()
+  const jpText = `${row.ticker} ${name} ${sector17} ${sector33}`
+
+  if (row.market === 'US' && US_LEVERAGED_INVERSE_ETP_TICKERS.has(ticker)) return true
+
+  const isEtfLike =
+    /ETF|ＥＴＦ|上場投信|上場投資信託|投資信託|投信投資顧問|投資法人|REIT|ＲＥＩＴ/i.test(jpText)
+  const isLeveragedOrInverse =
+    /インバース|ダブルインバース|ベア|ブル|レバレッジ|先物|指数連動|leveraged|inverse|ultra|bear|bull/.test(text)
+  const isOtherFund =
+    (sector17 === 'その他' || sector33 === 'その他') &&
+    /ETF|ＥＴＦ|投信|投資信託|投資顧問|指数連動|インバース|レバレッジ/i.test(jpText)
+
+  return isLeveragedOrInverse || isEtfLike || isOtherFund
+}
+
 function toStages(row: RawSignalRow): DashboardTradeSignalStages {
   return {
     dailyA: num(row.daily_a_stage),
@@ -315,6 +539,8 @@ function toStages(row: RawSignalRow): DashboardTradeSignalStages {
 }
 
 function buildCandidate(row: RawSignalRow, side: DashboardTradeSignalSide): DashboardTradeSignalRow | null {
+  if (isExcludedDashboardInstrument(row)) return null
+
   const stages = toStages(row)
   const parsedFeature = parseJson<Record<string, unknown>>(row.feature_json)
   const analysis = parsedFeature
@@ -346,24 +572,21 @@ function buildCandidate(row: RawSignalRow, side: DashboardTradeSignalSide): Dash
     + stage * 0.45
     + liquidity,
   )
-  const shortEligible = row.market === 'JP' && row.margin_type === '貸借'
-  const shortScore = shortEligible
-    ? clamp(
-      34
-      + shortTermShortBonus(shortTerm.label)
-      + statusShortBonus(physicalStatusLabel)
-      + scoreMetric(finite(row.physical_momentum_score) ? -row.physical_momentum_score : null, 3)
-      + scoreMetric(finite(row.physical_force_score) ? -row.physical_force_score : null, 3.6)
-      + downBoost * 0.6
-      - upBoost * 0.65
-      - stage * 0.45
-      + liquidity,
-    )
-    : 0
-  const score = side === 'buy' ? buyScore : shortScore
+  const sellScore = clamp(
+    34
+    + shortTermShortBonus(shortTerm.label)
+    + statusShortBonus(physicalStatusLabel)
+    + scoreMetric(finite(row.physical_momentum_score) ? -row.physical_momentum_score : null, 3)
+    + scoreMetric(finite(row.physical_force_score) ? -row.physical_force_score : null, 3.6)
+    + downBoost * 0.6
+    - upBoost * 0.65
+    - stage * 0.45
+    + liquidity,
+  )
+  const score = side === 'buy' ? buyScore : sellScore
   if (score < MIN_DASHBOARD_SCORE) return null
-  if (side === 'buy' && row.market === 'JP' && shortScore > buyScore + 4) return null
-  if (side === 'short' && (!shortEligible || buyScore >= shortScore)) return null
+  if (side === 'buy' && sellScore > buyScore + 4) return null
+  if (side === 'sell' && buyScore >= sellScore) return null
 
   return {
     id: `${row.market}:${row.ticker}:${side}`,
@@ -380,11 +603,13 @@ function buildCandidate(row: RawSignalRow, side: DashboardTradeSignalSide): Dash
     avgVolumeLabel: row.market === 'US' ? '20日平均' : '30日平均',
     industryName: industryName(row),
     industryDetail: industryDetail(row),
+    industry17: row.market === 'US' ? row.sector || '未分類' : row.sector17_name || '未分類',
+    industry33: row.market === 'US' ? row.industry || row.sector || '未分類' : row.sector33_name || row.sector17_name || '未分類',
     marketSegment: row.market === 'US' ? row.exchange : row.market_segment,
     marginType: row.margin_type,
     confidenceScore: Math.round(score),
     confidenceBand: score >= 75 ? 'high' : 'candidate',
-    primaryLabel: side === 'short' ? '空売り候補' : shortTerm.label,
+    primaryLabel: side === 'sell' ? '売り候補' : shortTerm.label,
     shortTermCheckLabel: shortTerm.label,
     shortTermCheckScore: shortTerm.score,
     physicalStatusLabel,
@@ -397,9 +622,278 @@ function buildCandidate(row: RawSignalRow, side: DashboardTradeSignalSide): Dash
     classicUpRank: row.classic_up_rank,
     classicDownRank: row.classic_down_rank,
     stages,
+    scenario: null,
+    technicalChips: buildTechnicalChips(row, parsedFeature, side),
     evidenceChips: evidenceForSide(row, side, physicalStatusLabel, shortTerm.label),
     riskChips: riskForSide(row, side, physicalStatusLabel),
   }
+}
+
+function scenarioLeader(upWeightPct: number, downWeightPct: number, rangeWeightPct: number): ProjectionDirection | 'mixed' {
+  const ranked = [
+    ['up', upWeightPct],
+    ['down', downWeightPct],
+    ['range', rangeWeightPct],
+  ] as Array<[ProjectionDirection, number]>
+  ranked.sort((a, b) => b[1] - a[1])
+  const [leader, top] = ranked[0] ?? ['range', 0]
+  const second = ranked[1]?.[1] ?? 0
+  if (top < 38 || top - second < 6) return 'mixed'
+  return leader
+}
+
+function scenarioDecision(
+  side: DashboardTradeSignalSide,
+  leader: ProjectionDirection | 'mixed',
+  sideWeightPct: number,
+  oppositeWeightPct: number,
+  rangeWeightPct: number,
+  score: number,
+  invalidation: string | null,
+): { summary: string; points: string[]; tone: DashboardScenarioDecisionTone } {
+  const sideLabel = side === 'buy' ? '買い目線' : '売り目線'
+  const sideDirectionLabel = side === 'buy' ? '上昇' : '下落'
+  const oppositeDirectionLabel = side === 'buy' ? '下落' : '反発'
+  const invalidationPoint = invalidation ? `崩れる条件: ${invalidation}` : null
+  const withInvalidation = (points: string[]) => invalidationPoint ? [...points, invalidationPoint] : points
+
+  if (sideWeightPct >= 48 && sideWeightPct - oppositeWeightPct >= 14 && score >= 70) {
+    const points = withInvalidation([
+      `${sideLabel}: ${sideDirectionLabel}シナリオ優勢`,
+      `重み: ${sideWeightPct.toFixed(1)}% 対 ${oppositeDirectionLabel}${oppositeWeightPct.toFixed(1)}%`,
+      '見方: 目標と撤退条件を先に決め、同方向の継続を確認',
+    ])
+    return {
+      summary: points.join(' / '),
+      points,
+      tone: side === 'buy' ? 'constructive' : 'caution',
+    }
+  }
+
+  if (sideWeightPct >= 40 && sideWeightPct >= oppositeWeightPct) {
+    const points = withInvalidation([
+      `${sideLabel}: ${sideDirectionLabel}シナリオやや優勢`,
+      `重み: ${sideWeightPct.toFixed(1)}% 対 ${oppositeDirectionLabel}${oppositeWeightPct.toFixed(1)}%`,
+      '見方: 差は大きくない。出来高・MA位置・失効条件を確認して追う候補',
+    ])
+    return {
+      summary: points.join(' / '),
+      points,
+      tone: side === 'buy' ? 'constructive' : 'caution',
+    }
+  }
+
+  if (oppositeWeightPct >= sideWeightPct + 8) {
+    const points = withInvalidation([
+      `${sideLabel}: 反対側が優勢`,
+      `重み: ${oppositeDirectionLabel}${oppositeWeightPct.toFixed(1)}% が上回る`,
+      '見方: 無理に入らず、形が崩れるか再加速するかを確認',
+    ])
+    return {
+      summary: points.join(' / '),
+      points,
+      tone: 'conflict',
+    }
+  }
+
+  if (leader === 'range' || rangeWeightPct >= 34) {
+    const points = withInvalidation([
+      '方向感: 横ばい・保ち合いの重み大',
+      `横ばい: ${rangeWeightPct.toFixed(1)}%`,
+      '見方: 上抜け/下抜け後に再評価',
+    ])
+    return {
+      summary: points.join(' / '),
+      points,
+      tone: 'neutral',
+    }
+  }
+
+  const points = withInvalidation([
+    `${sideLabel}: 優劣は薄い`,
+    `重み: ${sideDirectionLabel}${sideWeightPct.toFixed(1)}% / ${oppositeDirectionLabel}${oppositeWeightPct.toFixed(1)}%`,
+    '見方: 監視候補。方向が出るまで待つ',
+  ])
+  return {
+    summary: points.join(' / '),
+    points,
+    tone: 'neutral',
+  }
+}
+
+function buildScenarioSignal(projection: ProjectionResponse, side: DashboardTradeSignalSide): DashboardScenarioSignal | null {
+  if (projection.scenarios.length === 0) return null
+  const totals: Record<ProjectionDirection, number> = { up: 0, down: 0, range: 0 }
+  for (const scenario of projection.scenarios) {
+    totals[scenario.direction] += scenario.relativeWeightPct
+  }
+  const sideDirection: ProjectionDirection = side === 'buy' ? 'up' : 'down'
+  const oppositeDirection: ProjectionDirection = side === 'buy' ? 'down' : 'up'
+  const topScenario = projection.scenarios[0]
+  const alignedScenario =
+    projection.scenarios.find((scenario) => scenario.direction === sideDirection) ??
+    null
+  const sideWeight = totals[sideDirection]
+  const oppositeWeight = totals[oppositeDirection]
+  const alignment = sideWeight - oppositeWeight
+  const confidenceBasis = alignedScenario?.score ?? Math.max(0, topScenario.score - 16)
+  const topDirectionBonus = topScenario.direction === sideDirection ? 8 : topScenario.direction === 'range' ? -4 : -10
+  const liftBonus = projection.stats.lift && projection.stats.lift > 1 ? Math.min(8, (projection.stats.lift - 1) * 10) : 0
+  const score = clamp(
+    confidenceBasis * 0.72
+    + alignment * 0.38
+    + topDirectionBonus
+    + liftBonus
+    + (sideWeight >= 45 ? 6 : 0)
+    - (sideWeight < 26 ? 8 : 0),
+  )
+  const leader = scenarioLeader(totals.up, totals.down, totals.range)
+  const invalidation = alignedScenario?.invalidation ?? topScenario.invalidation ?? null
+  const decision = scenarioDecision(
+    side,
+    leader,
+    round(sideWeight, 1) ?? 0,
+    round(oppositeWeight, 1) ?? 0,
+    round(totals.range, 1) ?? 0,
+    score,
+    invalidation,
+  )
+  return {
+    baseDate: projection.baseDate,
+    interval: projection.interval,
+    intervalLabel: dashboardScenarioIntervalLabel(projection.interval),
+    horizonDays: projection.horizonDays,
+    leader,
+    upWeightPct: round(totals.up, 1) ?? 0,
+    downWeightPct: round(totals.down, 1) ?? 0,
+    rangeWeightPct: round(totals.range, 1) ?? 0,
+    sideWeightPct: round(sideWeight, 1) ?? 0,
+    oppositeWeightPct: round(oppositeWeight, 1) ?? 0,
+    scenarioScore: Math.round(score),
+    topLabel: topScenario.label,
+    topDirection: topScenario.direction,
+    topScore: topScenario.score,
+    alignedLabel: alignedScenario?.label ?? null,
+    alignedScore: alignedScenario?.score ?? null,
+    targetPrice: alignedScenario?.targetPrice ?? topScenario.targetPrice,
+    stopPrice: alignedScenario?.stopPrice ?? topScenario.stopPrice,
+    invalidation,
+    decisionSummary: decision.summary,
+    decisionPoints: decision.points,
+    decisionTone: decision.tone,
+    evidence: (alignedScenario?.evidence ?? topScenario.evidence).slice(0, 4),
+  }
+}
+
+function scenarioEvidenceChips(signal: DashboardScenarioSignal, side: DashboardTradeSignalSide): string[] {
+  const directionLabel = side === 'buy' ? '上昇' : '下落'
+  const chips = [
+    `シナリオ${directionLabel}${signal.sideWeightPct.toFixed(1)}%`,
+    `#1 ${signal.topLabel}`,
+  ]
+  if (signal.alignedLabel && signal.alignedLabel !== signal.topLabel) chips.push(signal.alignedLabel)
+  for (const evidence of signal.evidence) {
+    if (/^PMS|^PFS|^PES|過去検証/.test(evidence)) continue
+    chips.push(evidence)
+  }
+  if (signal.scenarioScore >= 75) chips.push('シナリオ強')
+  return Array.from(new Set(chips)).slice(0, 7)
+}
+
+function scenarioRiskChips(signal: DashboardScenarioSignal, side: DashboardTradeSignalSide): string[] {
+  const oppositeLabel = side === 'buy' ? '下落' : '上昇'
+  const chips: string[] = []
+  if (signal.oppositeWeightPct >= 32) chips.push(`${oppositeLabel}${signal.oppositeWeightPct.toFixed(1)}%`)
+  if (signal.leader === 'mixed') chips.push('シナリオ拮抗')
+  if (signal.topDirection === 'range') chips.push('横ばい優勢')
+  return chips
+}
+
+function applyScenarioToRow(row: DashboardTradeSignalRow, signal: DashboardScenarioSignal | null): DashboardTradeSignalRow {
+  if (!signal) return row
+  const sideMatchesTop = (row.side === 'buy' && signal.topDirection === 'up') || (row.side === 'sell' && signal.topDirection === 'down')
+  const sideWeightPenalty = signal.sideWeightPct < 30 ? -10 : 0
+  const dominanceBonus = clamp((signal.sideWeightPct - signal.oppositeWeightPct) * 0.08, -5, 5)
+  const adjustedScore = clamp(
+    row.confidenceScore * 0.22
+    + signal.scenarioScore * 0.78
+    + (sideMatchesTop ? 4 : -6)
+    + sideWeightPenalty
+    + dominanceBonus,
+  )
+  return {
+    ...row,
+    confidenceScore: Math.round(adjustedScore),
+    confidenceBand: adjustedScore >= 75 ? 'high' : 'candidate',
+    scenario: signal,
+    evidenceChips: Array.from(new Set([...scenarioEvidenceChips(signal, row.side), ...row.evidenceChips])).slice(0, 7),
+    riskChips: Array.from(new Set([...scenarioRiskChips(signal, row.side), ...row.riskChips])).slice(0, 5),
+  }
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length)
+  let nextIndex = 0
+  async function worker() {
+    while (nextIndex < items.length) {
+      const index = nextIndex
+      nextIndex += 1
+      results[index] = await mapper(items[index], index)
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker))
+  return results
+}
+
+async function enrichScenarioSignals(
+  rows: DashboardTradeSignalRow[],
+  date: string | null,
+  scenarioInterval: ScenarioInterval,
+  scenarioHorizonDays: number,
+): Promise<DashboardTradeSignalRow[]> {
+  const uniqueRows = new Map<string, DashboardTradeSignalRow>()
+  for (const row of rows) {
+    uniqueRows.set(`${row.market}:${row.ticker}`, row)
+  }
+  const projectionPairs = await mapWithConcurrency(Array.from(uniqueRows.values()), SCENARIO_ENRICH_CONCURRENCY, async (row) => {
+    const key = `${row.market}:${row.ticker}`
+    try {
+      const projection = await buildStockScenarioProjection({
+        ticker: row.ticker,
+        market: row.market,
+        interval: scenarioInterval,
+        horizonDays: scenarioHorizonDays,
+        limit: 8,
+        asOfDate: date ?? null,
+      })
+      return [key, projection] as const
+    } catch {
+      return [key, null] as const
+    }
+  })
+  const projectionMap = new Map(projectionPairs)
+  return rows.map((row) => {
+    const projection = projectionMap.get(`${row.market}:${row.ticker}`)
+    return applyScenarioToRow(row, projection ? buildScenarioSignal(projection, row.side) : null)
+  })
+}
+
+function selectDashboardTradeRows(rows: DashboardTradeSignalRow[]): DashboardTradeSignalRow[] {
+  return (['JP', 'US'] as const).flatMap((market) => (
+    (['buy', 'sell'] as const).flatMap((side) => (
+      rows
+        .filter((row) => row.market === market && row.side === side)
+        .sort((a, b) => {
+          if (b.confidenceScore !== a.confidenceScore) return b.confidenceScore - a.confidenceScore
+          return (b.avgVolume ?? 0) - (a.avgVolume ?? 0)
+        })
+        .slice(0, MAX_ROWS_PER_MARKET_SIDE)
+    ))
+  ))
 }
 
 async function loadJpRows(date: string | null, universe: UniverseFilterValue): Promise<{ rows: RawSignalRow[]; date: string | null }> {
@@ -733,7 +1227,10 @@ async function loadUsRows(date: string | null): Promise<{ rows: RawSignalRow[]; 
 export async function getDashboardTradeSignals(params: {
   date?: string | null
   universe?: UniverseFilterValue
+  scenarioInterval?: string | null
 } = {}): Promise<DashboardTradeSignalResult> {
+  const scenarioInterval = normalizeProjectionInterval(params.scenarioInterval)
+  const scenarioHorizonDays = defaultProjectionHorizon(scenarioInterval)
   const [jp, us] = await Promise.all([
     loadJpRows(params.date ?? null, params.universe ?? null),
     params.universe ? Promise.resolve({ rows: [] as RawSignalRow[], date: null }) : loadUsRows(params.date ?? null),
@@ -742,21 +1239,20 @@ export async function getDashboardTradeSignals(params: {
   const candidates: DashboardTradeSignalRow[] = []
   for (const row of jp.rows) {
     const buy = buildCandidate(row, 'buy')
-    const sell = buildCandidate(row, 'short')
+    const sell = buildCandidate(row, 'sell')
     if (buy) candidates.push(buy)
     if (sell) candidates.push(sell)
   }
   for (const row of us.rows) {
     const buy = buildCandidate(row, 'buy')
+    const sell = buildCandidate(row, 'sell')
     if (buy) candidates.push(buy)
+    if (sell) candidates.push(sell)
   }
 
-  const rows = candidates
-    .sort((a, b) => {
-      if (b.confidenceScore !== a.confidenceScore) return b.confidenceScore - a.confidenceScore
-      return (b.avgVolume ?? 0) - (a.avgVolume ?? 0)
-    })
-    .slice(0, 240)
+  const displayCandidates = selectDashboardTradeRows(candidates)
+  const scenarioCandidates = await enrichScenarioSignals(displayCandidates, params.date ?? null, scenarioInterval, scenarioHorizonDays)
+  const rows = selectDashboardTradeRows(scenarioCandidates)
 
   return {
     rows,
@@ -764,5 +1260,8 @@ export async function getDashboardTradeSignals(params: {
     usDate: us.date,
     generatedAt: new Date().toISOString(),
     horizonDays: DASHBOARD_HORIZON_DAYS,
+    scenarioInterval,
+    scenarioIntervalLabel: dashboardScenarioIntervalLabel(scenarioInterval),
+    scenarioHorizonDays,
   }
 }

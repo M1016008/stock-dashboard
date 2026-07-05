@@ -53,10 +53,11 @@ function SectionFallback({ height = 80 }: { height?: number }) {
 export default async function DashboardPage({
   searchParams,
 }: {
-  searchParams?: Promise<{ date?: string | string[]; universe?: string | string[] }>
+  searchParams?: Promise<{ date?: string | string[]; universe?: string | string[]; scenarioInterval?: string | string[] }>
 }) {
   const sp = searchParams ? await searchParams : {}
   const requested = typeof sp.date === 'string' ? sp.date : null
+  const scenarioInterval = typeof sp.scenarioInterval === 'string' ? sp.scenarioInterval : null
   const universeFilter = parseUniverseFilter(sp.universe)
   const universeMeta = getUniverseFilterMeta(universeFilter)
   const [latestAvailable, requestedDateOption] = await Promise.all([
@@ -87,7 +88,7 @@ export default async function DashboardPage({
         <TradeScenarioOverview date={dashboardDate} />
       </Suspense>
       <Suspense fallback={<SectionFallback height={430} />}>
-        <DashboardTradeSignalTable date={dashboardDate} universe={universeFilter} />
+        <DashboardTradeSignalTable date={dashboardDate} universe={universeFilter} scenarioInterval={scenarioInterval} />
       </Suspense>
       <Suspense fallback={<SectionFallback height={150} />}>
         <PhysicalMomentumMarket date={dashboardDate} universe={universeFilter} />

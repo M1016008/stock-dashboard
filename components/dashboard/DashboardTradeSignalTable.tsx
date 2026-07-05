@@ -5,10 +5,12 @@ import type { UniverseFilterValue } from '@/lib/market-universe'
 export async function DashboardTradeSignalTable({
   date = null,
   universe = null,
+  scenarioInterval = null,
 }: {
   date?: string | null
   universe?: UniverseFilterValue
+  scenarioInterval?: string | null
 }) {
-  const data = await getDashboardTradeSignals({ date, universe })
+  const data = await getDashboardTradeSignals({ date, universe, scenarioInterval })
   return <DashboardTradeSignalTableClient data={data} />
 }
