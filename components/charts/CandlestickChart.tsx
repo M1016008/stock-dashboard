@@ -29,6 +29,7 @@ import {
   stageFromThreeMa,
   type ChartIntervalCode,
 } from '@/lib/timeframes'
+import { movingAverageColor } from '@/lib/chart-colors'
 
 export type TvInterval = ChartIntervalCode
 
@@ -75,25 +76,8 @@ const PERIOD_DAYS: Record<string, number> = {
   '10y': 3650,
 }
 
-// MA カラー (Yoshio の好みに合わせて TradingView 旧版と近い色味)
-const MA_COLORS: Record<number, string> = {
-  3:   '#10b981',  // emerald: 3MA
-  5:   '#e5e7eb',  // 薄いグレー (白基調)
-  12:  '#e5e7eb',
-  13:  '#e5e7eb',
-  24:  '#f59e0b',
-  25:  '#f59e0b',  // amber (HEX ステージ色と整合)
-  26:  '#f59e0b',
-  52:  '#3b82f6',
-  60:  '#3b82f6',
-  75:  '#3b82f6',  // blue
-  200: '#a855f7',  // purple
-}
-
-const MA_COLOR_FALLBACKS = ['#e5e7eb', '#f59e0b', '#3b82f6', '#a855f7', '#10b981']
-
 function maColor(period: number, index = 0): string {
-  return MA_COLORS[period] ?? MA_COLOR_FALLBACKS[index % MA_COLOR_FALLBACKS.length]
+  return movingAverageColor(period, index)
 }
 
 export function CandlestickChart({

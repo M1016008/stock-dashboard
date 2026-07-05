@@ -12,8 +12,24 @@ import { fetchJQuantsEarningsCalendar } from '@/lib/jquants'
 import { fetchJpxEarningsCalendar, JPX_EARNINGS_PAGE } from '@/lib/jpx-earnings'
 import { eq } from 'drizzle-orm'
 
+function todayIsoJst(): string {
+  const now = new Date()
+  const jst = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Tokyo' }))
+  return [
+    jst.getFullYear(),
+    String(jst.getMonth() + 1).padStart(2, '0'),
+    String(jst.getDate()).padStart(2, '0'),
+  ].join('-')
+}
+
 async function main() {
   await ensureReady()
+  const busyTimeoutMs = Math.min(
+    600_000,
+    Math.max(1_000, Number(process.env.SQLITE_BUSY_TIMEOUT_MS ?? '600000') || 600_000),
+  )
+  await client.execute({ sql: `PRAGMA busy_timeout = ${busyTimeoutMs}` })
+
   const [run] = await db
     .insert(batchRuns)
     .values({ jobType: 'earnings_calendar', startedAt: new Date(), status: 'running' })
@@ -32,6 +48,16 @@ async function main() {
 
   let inserted = 0
   const importedAt = Math.floor(Date.now() / 1000)
+  const scheduleRefreshFrom = todayIsoJst()
+  const deleted = await client.execute({
+    sql: `DELETE FROM earnings_calendar
+          WHERE source IN ('jpx', 'jquants')
+            AND announce_date >= ?`,
+    args: [scheduleRefreshFrom],
+  })
+  const deletedStaleFutureRows = Number(deleted.rowsAffected ?? 0)
+  console.log(`既存の未来予定を整理: ${deletedStaleFutureRows} 件削除 (${scheduleRefreshFrom} 以降 / jpx,jquants)`)
+
   for (const row of jquantsRows) {
     const code5 = row.Code
     const ticker = code5.length === 5 && code5.endsWith('0') ? code5.slice(0, 4) : code5
@@ -106,11 +132,13 @@ async function main() {
       errorSummary: JSON.stringify({
         jquants: jquantsRows.length,
         jpxOfficial: jpxRows.length,
+        deletedStaleFutureRows,
+        scheduleRefreshFrom,
       }),
     })
     .where(eq(batchRuns.id, runId))
 
-  console.log(`完了: ${inserted} 件を earnings_calendar に同期 (J-Quants ${jquantsRows.length} / JPX公式 ${jpxRows.length})`)
+  console.log(`完了: ${inserted} 件を earnings_calendar に同期 (J-Quants ${jquantsRows.length} / JPX公式 ${jpxRows.length} / stale削除 ${deletedStaleFutureRows})`)
 }
 
 main().catch(err => { console.error('Fatal:', err); process.exit(1) })

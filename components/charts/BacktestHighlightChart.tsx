@@ -10,6 +10,7 @@ import {
   type IChartApi,
   type UTCTimestamp,
 } from 'lightweight-charts'
+import { movingAverageColor } from '@/lib/chart-colors'
 
 export type HighlightChartPoint = {
   date: string
@@ -100,10 +101,10 @@ export function BacktestHighlightChart({
     })), [direction, series])
 
   const maLines = useMemo(() => ([
-    { key: 'ma5', label: '5日', color: '#dc2626' },
-    { key: 'ma25', label: '25日', color: '#2563eb' },
-    { key: 'ma75', label: '75日', color: '#16a34a' },
-    { key: 'ma200', label: '200日', color: '#f97316' },
+    { key: 'ma5', label: '5日', color: movingAverageColor(5) },
+    { key: 'ma25', label: '25日', color: movingAverageColor(25) },
+    { key: 'ma75', label: '75日', color: movingAverageColor(75) },
+    { key: 'ma200', label: '200日', color: movingAverageColor(200) },
   ] as const).map((line) => ({
     ...line,
     data: series

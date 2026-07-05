@@ -13,6 +13,7 @@ import {
   type UTCTimestamp,
 } from 'lightweight-charts'
 import type { OHLCV } from '@/types/stock'
+import { movingAverageColor } from '@/lib/chart-colors'
 import type { MarketCode } from '@/lib/markets'
 import type { ChartIntervalCode } from '@/lib/timeframes'
 
@@ -128,20 +129,6 @@ const TABS: Array<{ interval: ScenarioInterval; label: string; horizonDays: numb
   { interval: 'M', label: '月足', horizonDays: 60, note: '60営業日' },
   { interval: '2M', label: '2ヶ月足', horizonDays: 120, note: '120営業日' },
 ]
-
-const MA_COLORS: Record<string, string> = {
-  '3': '#10b981',
-  '5': '#e5e7eb',
-  '12': '#f59e0b',
-  '13': '#f59e0b',
-  '24': '#3b82f6',
-  '25': '#f59e0b',
-  '26': '#3b82f6',
-  '52': '#a855f7',
-  '60': '#a855f7',
-  '75': '#3b82f6',
-  '200': '#a855f7',
-}
 
 function dateToTime(date: string): UTCTimestamp {
   return Math.floor(new Date(`${date}T00:00:00Z`).getTime() / 1000) as UTCTimestamp
@@ -298,7 +285,7 @@ function ScenarioCanvas({ data, market }: { data: ProjectionResponse; market: Ma
 
     for (const [period, points] of Object.entries(data.chart.ma)) {
       const series = chart.addSeries(LineSeries, {
-        color: MA_COLORS[period] ?? '#94a3b8',
+        color: movingAverageColor(period),
         lineWidth: 1,
         priceLineVisible: false,
         lastValueVisible: false,

@@ -18,6 +18,7 @@ import {
 } from 'lucide-react'
 import { PageTitle } from '@/components/layout/PageTitle'
 import { Card, CardHeader } from '@/components/ui/Card'
+import { movingAverageColor } from '@/lib/chart-colors'
 import { useWatchlistStore } from '@/lib/watchlist-store'
 import type {
   DrillAnswer,
@@ -853,9 +854,9 @@ function DrillSvgChart({
           </>
         )}
         {chart.gridY.map((y) => <line key={y} x1="0" x2={chart.width} y1={y} y2={y} stroke="rgba(15,23,42,0.06)" />)}
-        <Polyline points={chart.ma75Points} stroke="#2563eb" />
-        <Polyline points={chart.ma25Points} stroke="#f59e0b" />
-        <Polyline points={chart.ma5Points} stroke="#94a3b8" />
+        <Polyline points={chart.ma75Points} stroke={movingAverageColor(75)} />
+        <Polyline points={chart.ma25Points} stroke={movingAverageColor(25)} />
+        <Polyline points={chart.ma5Points} stroke={movingAverageColor(5)} />
         {chart.candles.map((candle) => (
           <g key={candle.date}>
             <line x1={candle.x} x2={candle.x} y1={candle.highY} y2={candle.lowY} stroke={candle.color} strokeWidth="1.2" />

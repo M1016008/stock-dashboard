@@ -26,6 +26,20 @@ interface EarningsCalendarRow {
   source_url: string | null
 }
 
+interface EarningsCalendarStats {
+  count: number | null
+  latest_known_date: string | null
+  latest_imported_at: number | null
+}
+
+interface EarningsScheduleStats {
+  count: number | null
+  latest_known_date: string | null
+  latest_imported_at: number | null
+}
+
+type EarningsNextDateKind = 'confirmed' | 'estimated' | 'cached' | 'not_announced' | 'not_applicable' | 'no_history'
+
 interface TickerProfile {
   name: string | null
   market_segment: string | null
@@ -37,6 +51,8 @@ interface ResolvedNextEarnings {
   date: string | null
   fiscalPeriod: string | null
   source: string | null
+  kind: EarningsNextDateKind
+  note: string | null
 }
 
 function parseJson(value: string): Record<string, unknown> {
@@ -84,7 +100,22 @@ async function getEarningsAround(ticker: string, referenceDate: string | null) {
      LIMIT 1`,
     [ticker, referenceDate],
   )
-  return { previous, next }
+  const stats = await execGet<EarningsCalendarStats>(
+    `SELECT COUNT(*) AS count,
+            MAX(announce_date) AS latest_known_date,
+            MAX(imported_at) AS latest_imported_at
+     FROM earnings_calendar
+     WHERE ticker = ?`,
+    [ticker],
+  )
+  const scheduleStats = await execGet<EarningsScheduleStats>(
+    `SELECT COUNT(*) AS count,
+            MAX(announce_date) AS latest_known_date,
+            MAX(imported_at) AS latest_imported_at
+     FROM earnings_calendar
+     WHERE source IN ('jpx', 'jquants')`,
+  )
+  return { previous, next, stats, scheduleStats }
 }
 
 function resolveNextEarnings(
@@ -94,20 +125,25 @@ function resolveNextEarnings(
   previousDate: string | null,
   referenceDate: string | null,
   allowEstimate: boolean,
+  calendarCount: number,
 ): ResolvedNextEarnings {
   if (next?.announce_date) {
     return {
       date: next.announce_date,
       fiscalPeriod: next.fiscal_period,
       source: next.source,
+      kind: 'confirmed',
+      note: '公式予定を表示しています。',
     }
   }
 
-  if (fallbackNextDate) {
+  if (fallbackNextDate && !previousDate) {
     return {
       date: fallbackNextDate,
       fiscalPeriod: null,
       source: fallbackSource,
+      kind: 'cached',
+      note: '旧スナップショット由来の予定です。公式予定の再取得後に更新されます。',
     }
   }
 
@@ -116,6 +152,8 @@ function resolveNextEarnings(
       date: null,
       fiscalPeriod: null,
       source: null,
+      kind: 'not_applicable',
+      note: 'ETF/REIT等のため、決算予定の推定対象外です。',
     }
   }
 
@@ -125,6 +163,8 @@ function resolveNextEarnings(
       date: estimated,
       fiscalPeriod: null,
       source: 'estimated_from_previous_earnings',
+      kind: 'estimated',
+      note: '公式予定が未発表のため、前回決算日から約3か月後を目安として表示しています。',
     }
   }
 
@@ -132,6 +172,10 @@ function resolveNextEarnings(
     date: null,
     fiscalPeriod: null,
     source: null,
+    kind: calendarCount > 0 ? 'not_announced' : 'no_history',
+    note: calendarCount > 0
+      ? '公式予定はまだ発表されていません。'
+      : '決算予定の取得履歴がまだありません。',
   }
 }
 
@@ -226,6 +270,7 @@ export async function GET(
       previousDate,
       referenceDate,
       !isFundLikeProfile(profile, name),
+      Number(calendar.stats?.count ?? 0),
     )
     return NextResponse.json({
       ticker,
@@ -237,6 +282,14 @@ export async function GET(
       earningsNextDate: nextEarnings.date,
       earningsNextFiscalPeriod: nextEarnings.fiscalPeriod,
       earningsNextSource: nextEarnings.source,
+      earningsNextDateKind: nextEarnings.kind,
+      earningsNextNote: nextEarnings.note,
+      earningsCalendarCount: Number(calendar.stats?.count ?? 0),
+      earningsCalendarLatestKnownDate: calendar.stats?.latest_known_date ?? null,
+      earningsCalendarLatestImportedAt: calendar.stats?.latest_imported_at ?? null,
+      earningsScheduleCount: Number(calendar.scheduleStats?.count ?? 0),
+      earningsScheduleLatestKnownDate: calendar.scheduleStats?.latest_known_date ?? null,
+      earningsScheduleLatestImportedAt: calendar.scheduleStats?.latest_imported_at ?? null,
       source: nextEarnings.date || calendar.previous?.announce_date
         ? 'earnings_calendar'
         : 'serving_stock_metrics',
@@ -262,6 +315,7 @@ export async function GET(
       previousDate,
       latestPriceDate,
       !isFundLikeProfile(profile),
+      Number(calendar.stats?.count ?? 0),
     )
     return NextResponse.json({
       ticker,
@@ -272,6 +326,14 @@ export async function GET(
       earningsNextDate: nextEarnings.date,
       earningsNextFiscalPeriod: nextEarnings.fiscalPeriod,
       earningsNextSource: nextEarnings.source,
+      earningsNextDateKind: nextEarnings.kind,
+      earningsNextNote: nextEarnings.note,
+      earningsCalendarCount: Number(calendar.stats?.count ?? 0),
+      earningsCalendarLatestKnownDate: calendar.stats?.latest_known_date ?? null,
+      earningsCalendarLatestImportedAt: calendar.stats?.latest_imported_at ?? null,
+      earningsScheduleCount: Number(calendar.scheduleStats?.count ?? 0),
+      earningsScheduleLatestKnownDate: calendar.scheduleStats?.latest_known_date ?? null,
+      earningsScheduleLatestImportedAt: calendar.scheduleStats?.latest_imported_at ?? null,
       source: 'earnings_calendar',
     })
   }
@@ -286,6 +348,7 @@ export async function GET(
     previousDate,
     referenceDate,
     !isFundLikeProfile(profile, row.name),
+    Number(calendar.stats?.count ?? 0),
   )
 
   return NextResponse.json({
@@ -298,6 +361,14 @@ export async function GET(
     earningsNextDate: nextEarnings.date,
     earningsNextFiscalPeriod: nextEarnings.fiscalPeriod,
     earningsNextSource: nextEarnings.source,
+    earningsNextDateKind: nextEarnings.kind,
+    earningsNextNote: nextEarnings.note,
+    earningsCalendarCount: Number(calendar.stats?.count ?? 0),
+    earningsCalendarLatestKnownDate: calendar.stats?.latest_known_date ?? null,
+    earningsCalendarLatestImportedAt: calendar.stats?.latest_imported_at ?? null,
+    earningsScheduleCount: Number(calendar.scheduleStats?.count ?? 0),
+    earningsScheduleLatestKnownDate: calendar.scheduleStats?.latest_known_date ?? null,
+    earningsScheduleLatestImportedAt: calendar.scheduleStats?.latest_imported_at ?? null,
     source: nextEarnings.date || calendar.previous?.announce_date
       ? 'earnings_calendar'
       : 'tv_daily_snapshots',

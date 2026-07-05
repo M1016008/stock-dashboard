@@ -12,6 +12,12 @@ interface SnapshotInfo {
   earningsLastFiscalPeriod?: string | null
   earningsNextSource?: string | null
   earningsNextFiscalPeriod?: string | null
+  earningsNextDateKind?: 'confirmed' | 'estimated' | 'cached' | 'not_announced' | 'not_applicable' | 'no_history' | null
+  earningsNextNote?: string | null
+  earningsCalendarLatestKnownDate?: string | null
+  earningsCalendarLatestImportedAt?: number | null
+  earningsScheduleLatestKnownDate?: string | null
+  earningsScheduleLatestImportedAt?: number | null
 }
 
 interface Props {
@@ -45,9 +51,16 @@ export function EarningsCard({ ticker }: Props) {
     return null
   }
 
-  const today = new Date().toISOString().split('T')[0]
+  const today = todayIsoJst()
   const daysToNext = data.earningsNextDate ? daysBetween(today, data.earningsNextDate) : null
   const daysSinceLast = data.earningsLastDate ? daysBetween(data.earningsLastDate, today) : null
+  const nextKind = data.earningsNextDateKind
+    ?? (data.earningsNextSource === 'estimated_from_previous_earnings' ? 'estimated' : data.earningsNextDate ? 'confirmed' : null)
+  const nextTone = nextKind === 'confirmed'
+    ? { color: 'var(--accent-primary)', bg: 'rgba(37,99,235,0.08)', border: 'rgba(37,99,235,0.24)' }
+    : nextKind === 'estimated' || nextKind === 'cached'
+      ? { color: '#b45309', bg: 'rgba(245,158,11,0.10)', border: 'rgba(245,158,11,0.32)' }
+      : { color: 'var(--text-muted)', bg: 'var(--bg-elevated)', border: 'var(--border-subtle)' }
 
   return (
     <div className="card" style={{ padding: '12px', display: 'flex', gap: '24px', flexWrap: 'wrap' }}>
@@ -65,12 +78,12 @@ export function EarningsCard({ ticker }: Props) {
           )}
         </div>
       </div>
-      <div>
+      <div style={{ minWidth: '280px', flex: '1 1 320px' }}>
         <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '2px' }}>次回決算日</div>
-        <div style={{ fontSize: '14px', fontFamily: 'var(--font-mono)', fontWeight: 600, color: 'var(--accent-primary)' }}>
+        <div style={{ fontSize: '14px', fontFamily: 'var(--font-mono)', fontWeight: 700, color: nextTone.color }}>
           {formatJapaneseDate(data.earningsNextDate)}
           {data.earningsNextSource && (
-            <SourceBadge source={data.earningsNextSource} fiscalPeriod={data.earningsNextFiscalPeriod} />
+            <SourceBadge source={data.earningsNextSource} fiscalPeriod={data.earningsNextFiscalPeriod} kind={nextKind} />
           )}
           {daysToNext != null && (
             <span style={{ marginLeft: '8px', fontSize: '11px', color: daysToNext <= 7 ? 'var(--price-down, #ef4444)' : 'var(--text-secondary)' }}>
@@ -78,23 +91,54 @@ export function EarningsCard({ ticker }: Props) {
             </span>
           )}
         </div>
+        {(data.earningsNextNote || nextKind === 'estimated' || nextKind === 'not_announced') && (
+          <div style={{
+            marginTop: '6px',
+            border: `1px solid ${nextTone.border}`,
+            background: nextTone.bg,
+            borderRadius: '6px',
+            padding: '6px 8px',
+            fontSize: '11px',
+            lineHeight: 1.55,
+            color: nextTone.color,
+          }}>
+            {data.earningsNextNote ?? '公式予定が未発表のため、推定日を表示しています。'}
+          </div>
+        )}
       </div>
       {data.date && (
         <div style={{ marginLeft: 'auto', fontSize: '10px', color: 'var(--text-muted)' }}>
-          📅 {data.date} 時点
+          <div>{data.date} 時点</div>
+          {data.earningsScheduleLatestImportedAt != null && (
+            <div>予定DB更新 {formatImportedAt(data.earningsScheduleLatestImportedAt)}</div>
+          )}
+          {data.earningsScheduleLatestKnownDate && (
+            <div>公式予定最大 {formatJapaneseDate(data.earningsScheduleLatestKnownDate)}</div>
+          )}
         </div>
       )}
     </div>
   )
 }
 
-function SourceBadge({ source, fiscalPeriod }: { source: string | null | undefined; fiscalPeriod: string | null | undefined }) {
+function SourceBadge({
+  source,
+  fiscalPeriod,
+  kind,
+}: {
+  source: string | null | undefined
+  fiscalPeriod: string | null | undefined
+  kind?: SnapshotInfo['earningsNextDateKind']
+}) {
   const label =
     source === 'jpx' ? 'JPX公式'
       : source === 'jquants' ? 'J-Quants予定'
         : source === 'jquants_fins_summary' ? 'JQ実績'
-          : source === 'estimated_from_previous_earnings' ? '推定'
+          : source === 'estimated_from_previous_earnings' ? '推定目安'
+            : kind === 'cached' ? '旧キャッシュ'
             : source
+  const isEstimated = source === 'estimated_from_previous_earnings' || kind === 'estimated'
+  const isCached = kind === 'cached'
   return (
     <span
       title={fiscalPeriod ?? undefined}
@@ -102,10 +146,10 @@ function SourceBadge({ source, fiscalPeriod }: { source: string | null | undefin
         display: 'inline-flex',
         alignItems: 'center',
         marginLeft: '8px',
-        border: '1px solid var(--border-subtle)',
+        border: `1px solid ${isEstimated || isCached ? 'rgba(245,158,11,0.36)' : 'var(--border-subtle)'}`,
         borderRadius: '999px',
-        background: 'var(--bg-elevated)',
-        color: 'var(--text-muted)',
+        background: isEstimated || isCached ? 'rgba(245,158,11,0.10)' : 'var(--bg-elevated)',
+        color: isEstimated || isCached ? '#b45309' : 'var(--text-muted)',
         fontFamily: 'var(--font-mono)',
         fontSize: '10px',
         fontWeight: 700,
@@ -115,6 +159,16 @@ function SourceBadge({ source, fiscalPeriod }: { source: string | null | undefin
       {label ?? '取得'}
     </span>
   )
+}
+
+function todayIsoJst(): string {
+  const now = new Date()
+  const jst = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Tokyo' }))
+  return [
+    jst.getFullYear(),
+    String(jst.getMonth() + 1).padStart(2, '0'),
+    String(jst.getDate()).padStart(2, '0'),
+  ].join('-')
 }
 
 function daysBetween(a: string, b: string): number | null {
@@ -131,4 +185,16 @@ function formatJapaneseDate(date: string | null): string {
   const [year, month, day] = date.split('-').map(Number)
   if (!year || !month || !day) return date
   return `${year}年${month}月${day}日`
+}
+
+function formatImportedAt(value: number): string {
+  if (!Number.isFinite(value)) return '---'
+  const date = new Date(value * 1000)
+  return date.toLocaleString('ja-JP', {
+    timeZone: 'Asia/Tokyo',
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
 }
