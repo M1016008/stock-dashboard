@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { useEffect, useMemo, useState } from 'react'
 import { StageTag } from '@/components/ui/StageTag'
+import { formatShortTermStrength } from '@/lib/short-term-check'
 
 type Row = {
   ticker: string
@@ -244,6 +245,9 @@ export function UsScreenerClient() {
                 <td className="px-3 py-2">
                   <div className={`inline-flex items-center rounded-full border px-2 py-1 text-[10px] font-black ${shortTermClass(row.shortTermCheckLabel)}`}>
                     {row.shortTermCheckLabel ?? '中立'}
+                    <span className="ml-1 font-mono opacity-80">
+                      / {formatShortTermStrength(row.shortTermCheckLabel, row.shortTermCheckScore)}
+                    </span>
                   </div>
                   {row.shortTermCheckReasons?.[0] && (
                     <div className="mt-1 max-w-[180px] truncate text-[10px] font-bold text-[var(--color-text-tertiary)]">

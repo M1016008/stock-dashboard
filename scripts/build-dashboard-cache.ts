@@ -6,7 +6,11 @@
 import { db } from '@/lib/db/client'
 import { batchRuns } from '@/lib/db/schema'
 import { buildDashboardCache } from '@/lib/queries/dashboard-cache'
+import { getDashboardEarningsAlertsCached } from '@/lib/queries/dashboard-earnings-alerts-cache'
+import { getDashboardTradeSignals } from '@/lib/queries/dashboard-trade-signals'
 import { eq } from 'drizzle-orm'
+
+const SCENARIO_INTERVALS = ['D', '2D', 'W', '2W', 'M', '2M'] as const
 
 async function main() {
   const [run] = await db
@@ -22,6 +26,19 @@ async function main() {
 
   try {
     const payload = await buildDashboardCache()
+    const warmed: string[] = []
+    if (payload?.latestDate) {
+      for (const scenarioInterval of SCENARIO_INTERVALS) {
+        const result = await getDashboardTradeSignals({
+          date: payload.latestDate,
+          scenarioInterval,
+        })
+        warmed.push(`trade:${scenarioInterval}:${result.rows.length}`)
+      }
+      const earnings = await getDashboardEarningsAlertsCached(payload.latestDate, null)
+      warmed.push(`earnings:${earnings.rows.length + earnings.completedRows.length}`)
+    }
+
     await db
       .update(batchRuns)
       .set({
@@ -34,7 +51,7 @@ async function main() {
       .where(eq(batchRuns.id, runId))
 
     console.log(payload
-      ? `Dashboard cache updated: ${payload.latestDate}`
+      ? `Dashboard cache updated: ${payload.latestDate}${warmed.length > 0 ? ` (${warmed.join(', ')})` : ''}`
       : 'Dashboard cache skipped: no latest date')
   } catch (err) {
     await db

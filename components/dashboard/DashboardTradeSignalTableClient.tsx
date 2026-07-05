@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { useEffect, useMemo, useState } from 'react'
 import { StageTag } from '@/components/ui/StageTag'
+import { formatShortTermStrength } from '@/lib/short-term-check'
 import type {
   DashboardScenarioInterval,
   DashboardTradeSignalMarket,
@@ -271,6 +272,7 @@ function evidencePointClass(point: string): string {
 function shapeEvidencePoints(row: DashboardTradeSignalRow): string[] {
   const raw = [
     `総合:${row.primaryLabel}。物理状態は${row.physicalStatusLabel}`,
+    `短期:${row.shortTermCheckLabel} / ${formatShortTermStrength(row.shortTermCheckLabel, row.shortTermCheckScore)}`,
     ...row.technicalChips,
     ...row.evidenceChips,
     ...row.riskChips.map((chip) => `注意: ${chip}`),

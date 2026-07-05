@@ -40,6 +40,31 @@ export interface ShortTermCheckResult {
   mlText: string
 }
 
+export function shortTermStrengthPercent(score: number | null | undefined): number {
+  if (score == null || !Number.isFinite(score)) return 0
+  return Math.max(0, Math.min(100, Math.round((Math.abs(score) / 10) * 100)))
+}
+
+export function shortTermStrengthLabel(label: ShortTermCheckLabel | string | null | undefined): string {
+  switch (label) {
+    case '強気優勢':
+    case '好転候補':
+      return '上昇強度'
+    case '下落警戒':
+    case '弱含み注意':
+      return '下落圧力'
+    default:
+      return '方向感'
+  }
+}
+
+export function formatShortTermStrength(
+  label: ShortTermCheckLabel | string | null | undefined,
+  score: number | null | undefined,
+): string {
+  return `${shortTermStrengthLabel(label)}${shortTermStrengthPercent(score)}%`
+}
+
 function normalizeStage(stage: number | null | undefined): number | null {
   if (stage == null || !Number.isFinite(stage)) return null
   const rounded = Math.round(stage)

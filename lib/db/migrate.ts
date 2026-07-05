@@ -424,6 +424,44 @@ const STATEMENTS = [
     payload_json TEXT NOT NULL,
     computed_at INTEGER NOT NULL DEFAULT (unixepoch())
   )`,
+  `CREATE TABLE IF NOT EXISTS dashboard_trade_signal_cache (
+    cache_key TEXT PRIMARY KEY,
+    payload_json TEXT NOT NULL,
+    computed_at INTEGER NOT NULL DEFAULT (unixepoch())
+  )`,
+  `CREATE INDEX IF NOT EXISTS dashboard_trade_signal_cache_computed_idx ON dashboard_trade_signal_cache(computed_at DESC)`,
+  `CREATE TABLE IF NOT EXISTS dashboard_earnings_alert_cache (
+    cache_key TEXT PRIMARY KEY,
+    payload_json TEXT NOT NULL,
+    computed_at INTEGER NOT NULL DEFAULT (unixepoch())
+  )`,
+  `CREATE INDEX IF NOT EXISTS dashboard_earnings_alert_cache_computed_idx ON dashboard_earnings_alert_cache(computed_at DESC)`,
+  `CREATE TABLE IF NOT EXISTS kabutan_material_news (
+    article_id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    published_at TEXT NOT NULL,
+    url TEXT NOT NULL,
+    category TEXT NOT NULL DEFAULT '材料',
+    snippet TEXT,
+    related_tickers_json TEXT NOT NULL DEFAULT '[]',
+    related_stocks_json TEXT NOT NULL DEFAULT '[]',
+    source TEXT NOT NULL DEFAULT 'kabutan',
+    fetched_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    parse_status TEXT NOT NULL DEFAULT 'ok',
+    error_summary TEXT
+  )`,
+  `CREATE INDEX IF NOT EXISTS kabutan_material_news_published_idx ON kabutan_material_news(published_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS kabutan_material_news_status_idx ON kabutan_material_news(parse_status, fetched_at DESC)`,
+  `CREATE TABLE IF NOT EXISTS kabutan_material_news_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    status TEXT NOT NULL,
+    started_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    finished_at INTEGER,
+    fetched_count INTEGER NOT NULL DEFAULT 0,
+    saved_count INTEGER NOT NULL DEFAULT 0,
+    error_summary TEXT
+  )`,
+  `CREATE INDEX IF NOT EXISTS kabutan_material_news_runs_latest_idx ON kabutan_material_news_runs(started_at DESC)`,
   `CREATE TABLE IF NOT EXISTS serving_daily_snapshot_dates (
     date TEXT PRIMARY KEY,
     tickers INTEGER NOT NULL,
@@ -1281,6 +1319,7 @@ const ADD_COLUMN_IF_MISSING: string[] = [
   `ALTER TABLE earnings_calendar ADD COLUMN market_segment TEXT`,
   `ALTER TABLE earnings_calendar ADD COLUMN source TEXT`,
   `ALTER TABLE earnings_calendar ADD COLUMN source_url TEXT`,
+  `ALTER TABLE kabutan_material_news ADD COLUMN related_stocks_json TEXT NOT NULL DEFAULT '[]'`,
 ]
 
 function isBusy(error: unknown): boolean {

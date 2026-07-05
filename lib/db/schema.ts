@@ -535,6 +535,68 @@ export const dashboardCache = sqliteTable('dashboard_cache', {
   computedAt:  integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
 })
 
+export const dashboardTradeSignalCache = sqliteTable(
+  'dashboard_trade_signal_cache',
+  {
+    cacheKey:    text('cache_key').primaryKey(),
+    payloadJson: text('payload_json').notNull(),
+    computedAt: integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    computedIdx: index('dashboard_trade_signal_cache_computed_idx').on(t.computedAt),
+  }),
+)
+
+export const dashboardEarningsAlertCache = sqliteTable(
+  'dashboard_earnings_alert_cache',
+  {
+    cacheKey:    text('cache_key').primaryKey(),
+    payloadJson: text('payload_json').notNull(),
+    computedAt: integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    computedIdx: index('dashboard_earnings_alert_cache_computed_idx').on(t.computedAt),
+  }),
+)
+
+export const kabutanMaterialNews = sqliteTable(
+  'kabutan_material_news',
+  {
+    articleId:           text('article_id').primaryKey(),
+    title:               text('title').notNull(),
+    publishedAt:         text('published_at').notNull(),
+    url:                 text('url').notNull(),
+    category:            text('category').notNull().default('材料'),
+    snippet:             text('snippet'),
+    relatedTickersJson:  text('related_tickers_json').notNull().default('[]'),
+    relatedStocksJson:   text('related_stocks_json').notNull().default('[]'),
+    source:              text('source').notNull().default('kabutan'),
+    fetchedAt:           integer('fetched_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+    parseStatus:         text('parse_status').notNull().default('ok'),
+    errorSummary:        text('error_summary'),
+  },
+  (t) => ({
+    publishedIdx: index('kabutan_material_news_published_idx').on(t.publishedAt),
+    statusIdx: index('kabutan_material_news_status_idx').on(t.parseStatus, t.fetchedAt),
+  }),
+)
+
+export const kabutanMaterialNewsRuns = sqliteTable(
+  'kabutan_material_news_runs',
+  {
+    id:           integer('id').primaryKey({ autoIncrement: true }),
+    status:       text('status').notNull(),
+    startedAt:    integer('started_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+    finishedAt:   integer('finished_at', { mode: 'timestamp' }),
+    fetchedCount: integer('fetched_count').notNull().default(0),
+    savedCount:   integer('saved_count').notNull().default(0),
+    errorSummary: text('error_summary'),
+  },
+  (t) => ({
+    latestIdx: index('kabutan_material_news_runs_latest_idx').on(t.startedAt),
+  }),
+)
+
 export const servingDailySnapshotDates = sqliteTable('serving_daily_snapshot_dates', {
   date:       text('date').primaryKey(),
   tickers:    integer('tickers').notNull(),

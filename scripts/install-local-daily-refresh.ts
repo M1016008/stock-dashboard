@@ -28,6 +28,11 @@ const steps: Step[] = [
     script: 'auto-update:install',
   },
   {
+    name: 'Kabutan dashboard news hourly refresh',
+    label: 'com.stockboard.kabutan-material-news',
+    script: 'auto-kabutan-material-news:install',
+  },
+  {
     name: 'US latest data, analytics DB, and US daily ML',
     label: 'com.stockboard.us-update-latest',
     script: 'auto-update-us:install',
@@ -95,6 +100,7 @@ for (const step of steps) {
 
 console.log('\nStockBoard daily refresh suite registered.')
 console.log('JP prices/cache: 16:40, 16:55, 17:20, 18:10, 21:10 JST')
+console.log('Kabutan dashboard news: every 60 minutes')
 console.log('US prices/analytics/ML: Tue-Sat 06:30, 07:30, 08:30, 12:30, 18:30 JST')
 console.log('JP ML serving: Mon-Fri 03:00 JST, JP exchange holidays skipped')
 console.log('JP ML freshness guard: Mon-Fri 07:30, 12:30, 18:30, 21:30 JST')

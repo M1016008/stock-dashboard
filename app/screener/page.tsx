@@ -9,7 +9,7 @@ import { WatchlistButton } from '@/components/ui/WatchlistButton'
 import { StageDots } from '@/components/ui/StageDots'
 import { MarketDateCalendar } from '@/components/ui/MarketDateCalendar'
 import { getUniverseFilterMeta, parseUniverseFilter, UNIVERSE_FILTER_PARAM } from '@/lib/market-universe'
-import { SHORT_TERM_CHECK_LABELS, type ShortTermCheckLabel } from '@/lib/short-term-check'
+import { formatShortTermStrength, SHORT_TERM_CHECK_LABELS, type ShortTermCheckLabel } from '@/lib/short-term-check'
 import type { PhysicsStatus } from '@/lib/ml/physics-analysis'
 
 type Market = 'JP'
@@ -68,14 +68,20 @@ const PHYSICAL_STATUS_LABELS: PhysicsStatus[] = [
 ]
 const PHYSICAL_STATUS_HORIZONS = [5, 10, 20, 40, 60, 90] as const
 type PhysicalStatusHorizon = typeof PHYSICAL_STATUS_HORIZONS[number]
+type PhysicalStatusOption = {
+  label: PhysicsStatus
+  count: number
+  confidence: number | null
+  evaluatedCount: number
+}
 
 const AXES: { key: AxisKey; label: string; color: string }[] = [
-  { key: 'daily_a',   label: '日足 A', color: '#ef4444' },
-  { key: 'weekly_a',  label: '週足 A', color: '#22c55e' },
-  { key: 'monthly_a', label: '月足 A', color: '#a855f7' },
-  { key: 'daily_b',   label: '日足 B', color: '#f59e0b' },
-  { key: 'weekly_b',  label: '週足 B', color: '#3b82f6' },
-  { key: 'monthly_b', label: '月足 B', color: '#ec4899' },
+  { key: 'daily_a',   label: '日足A', color: '#ef4444' },
+  { key: 'daily_b',   label: '日足B', color: '#f59e0b' },
+  { key: 'weekly_a',  label: '週足A', color: '#22c55e' },
+  { key: 'weekly_b',  label: '週足B', color: '#3b82f6' },
+  { key: 'monthly_a', label: '月足A', color: '#a855f7' },
+  { key: 'monthly_b', label: '月足B', color: '#ec4899' },
 ]
 
 interface StockRow {
@@ -501,12 +507,27 @@ export default function ScreenerPage() {
     return SHORT_TERM_CHECK_LABELS.map((label) => [label, counts.get(label) ?? 0] as const)
   }, [results])
 
-  const physicalStatusOptions = useMemo(() => {
-    const counts = new Map<string, number>()
+  const physicalStatusOptions = useMemo<PhysicalStatusOption[]>(() => {
+    const stats = new Map<string, { count: number; confidenceTotal: number; evaluatedCount: number }>()
     for (const r of results) {
-      counts.set(r.physicalStatusLabel, (counts.get(r.physicalStatusLabel) ?? 0) + 1)
+      const current = stats.get(r.physicalStatusLabel) ?? { count: 0, confidenceTotal: 0, evaluatedCount: 0 }
+      current.count += 1
+      const confidence = physicalStatusConfidencePct(r)
+      if (confidence != null) {
+        current.confidenceTotal += confidence
+        current.evaluatedCount += 1
+      }
+      stats.set(r.physicalStatusLabel, current)
     }
-    return PHYSICAL_STATUS_LABELS.map((label) => [label, counts.get(label) ?? 0] as const)
+    return PHYSICAL_STATUS_LABELS.map((label) => {
+      const item = stats.get(label)
+      return {
+        label,
+        count: item?.count ?? 0,
+        confidence: item && item.evaluatedCount > 0 ? item.confidenceTotal / item.evaluatedCount : null,
+        evaluatedCount: item?.evaluatedCount ?? 0,
+      }
+    })
   }, [results])
 
   const marginOptions = useMemo(() => {
@@ -1199,14 +1220,18 @@ export default function ScreenerPage() {
           >
             全て（{results.length.toLocaleString('ja-JP')}）
           </button>
-          {physicalStatusOptions.map(([label, count]) => (
+          {physicalStatusOptions.map((option) => (
             <button
-              key={label}
+              key={option.label}
               type="button"
-              onClick={() => setSelectedPhysicalStatus((current) => current === label ? '' : label)}
-              style={physicalStatusFilterChipStyle(label, selectedPhysicalStatus === label)}
+              onClick={() => setSelectedPhysicalStatus((current) => current === option.label ? '' : option.label)}
+              style={physicalStatusFilterChipStyle(option.label, selectedPhysicalStatus === option.label)}
+              title={`${option.label}: 過去ML検証ベースの平均確度 ${formatPhysicalConfidence(option.confidence)} / 対象 ${option.count.toLocaleString('ja-JP')}件 / 検証済み ${option.evaluatedCount.toLocaleString('ja-JP')}件`}
             >
-              {label}（{count.toLocaleString('ja-JP')}）
+              {option.label} 確度{formatPhysicalConfidence(option.confidence)}
+              <span style={{ opacity: 0.7, marginLeft: 4, fontFamily: 'var(--font-mono)' }}>
+                {' / '}n={option.count.toLocaleString('ja-JP')}
+              </span>
             </button>
           ))}
         </div>
@@ -1880,8 +1905,9 @@ function shortTermFilterChipStyle(label: ShortTermCheckLabel, active: boolean): 
 
 function ShortTermCheckBadge({ row }: { row: StockRow }) {
   const tone = shortTermTone(row.shortTermCheckLabel)
+  const strengthText = formatShortTermStrength(row.shortTermCheckLabel, row.shortTermCheckScore)
   const title = [
-    `スコア ${row.shortTermCheckScore.toFixed(2)}`,
+    `${strengthText}（内部スコア ${row.shortTermCheckScore.toFixed(2)} を0〜100換算）`,
     ...(row.shortTermCheckReasons ?? []),
     row.shortTermCheckMlText ? `ML類似: ${row.shortTermCheckMlText}` : null,
   ].filter(Boolean).join(' / ')
@@ -1903,7 +1929,9 @@ function ShortTermCheckBadge({ row }: { row: StockRow }) {
       }}
     >
       {row.shortTermCheckLabel}
-      <small style={{ fontFamily: 'var(--font-mono)', opacity: 0.8 }}>{row.shortTermCheckScore.toFixed(1)}</small>
+      <small style={{ fontFamily: 'var(--font-mono)', opacity: 0.84 }}>
+        / {strengthText}
+      </small>
     </span>
   )
 }
@@ -1964,6 +1992,7 @@ function physicalStatusFilterChipStyle(label: PhysicsStatus, active: boolean): R
 
 function PhysicalStatusBadge({ row }: { row: StockRow }) {
   const tone = physicalStatusTone(row.physicalStatusLabel)
+  const confidence = physicalStatusConfidencePct(row)
   const source = row.physicalStatusSourceDate ? `特徴量日付 ${row.physicalStatusSourceDate}` : '特徴量未取得'
   const score = row.physicalStatusScore != null && Number.isFinite(row.physicalStatusScore)
     ? ` / 並び替えスコア ${row.physicalStatusScore.toFixed(1)}`
@@ -1996,9 +2025,9 @@ function PhysicalStatusBadge({ row }: { row: StockRow }) {
       }}
     >
       {row.physicalStatusLabel}
-      {row.physicalStatusHitRate != null && Number.isFinite(row.physicalStatusHitRate) ? (
+      {confidence != null ? (
         <small style={{ fontFamily: 'var(--font-mono)', opacity: 0.82 }}>
-          {fmtRate(row.physicalStatusHitRate)}
+          確度{formatPhysicalConfidence(confidence)}
         </small>
       ) : row.physicalStatusScore != null && Number.isFinite(row.physicalStatusScore) && (
         <small style={{ fontFamily: 'var(--font-mono)', opacity: 0.78 }}>
@@ -2007,6 +2036,40 @@ function PhysicalStatusBadge({ row }: { row: StockRow }) {
       )}
     </span>
   )
+}
+
+function physicalStatusConfidencePct(row: StockRow): number | null {
+  if (row.physicalStatusConfidence != null && Number.isFinite(row.physicalStatusConfidence)) {
+    return clampPercent(row.physicalStatusConfidence)
+  }
+  if (row.physicalStatusHitRate != null && Number.isFinite(row.physicalStatusHitRate)) {
+    const hitRate = normalizeRate(row.physicalStatusHitRate)
+    const baseRate = row.physicalStatusBaseRate != null && Number.isFinite(row.physicalStatusBaseRate)
+      ? normalizeRate(row.physicalStatusBaseRate)
+      : null
+    const lift = row.physicalStatusLift != null && Number.isFinite(row.physicalStatusLift)
+      ? row.physicalStatusLift
+      : null
+    const liftBonus = lift != null ? Math.max(-15, Math.min(15, (lift - 1) * 12)) : 0
+    const baseBonus = baseRate != null ? Math.max(-12, Math.min(12, (hitRate - baseRate) * 35)) : 0
+    return clampPercent((hitRate * 100) + liftBonus + baseBonus)
+  }
+  return null
+}
+
+function normalizeRate(value: number): number {
+  if (!Number.isFinite(value)) return 0
+  if (value > 1) return Math.max(0, Math.min(1, value / 100))
+  return Math.max(0, Math.min(1, value))
+}
+
+function clampPercent(value: number): number {
+  return Math.max(0, Math.min(100, value))
+}
+
+function formatPhysicalConfidence(value: number | null): string {
+  if (value == null || !Number.isFinite(value)) return '未検証'
+  return `${Math.round(value)}%`
 }
 
 function fmtAngle(v: number | undefined): string {

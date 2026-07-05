@@ -1,4 +1,4 @@
-import { execAll, execGet } from '@/lib/db/client'
+import { client, execAll, execGet } from '@/lib/db/client'
 import { execUsAnalyticsAll, execUsAnalyticsGet, hasUsAnalyticsDb } from '@/lib/db/us-analytics'
 import { ML_PHYSICS_FEATURE_SET } from '@/lib/backtest/ml-physics'
 import { buildShortTermCheck, type ShortTermCheckLabel } from '@/lib/short-term-check'
@@ -19,8 +19,9 @@ const DASHBOARD_HORIZON_DAYS = 20
 const JP_QUERY_LIMIT = 7000
 const US_QUERY_LIMIT = 2500
 const MIN_DASHBOARD_SCORE = 60
-const MAX_ROWS_PER_MARKET_SIDE = 80
+const MAX_ROWS_PER_MARKET_SIDE = 40
 const SCENARIO_ENRICH_CONCURRENCY = 6
+const TRADE_SIGNAL_CACHE_TTL_SEC = 30 * 60
 const US_LEVERAGED_INVERSE_ETP_TICKERS = new Set([
   'AGQ',
   'BOIL',
@@ -206,6 +207,111 @@ type RawSignalRow = {
   physics_down_rank: number | null
   classic_up_rank: number | null
   classic_down_rank: number | null
+}
+
+type TradeSignalCacheDateRow = {
+  jpDate: string | null
+  usDate: string | null
+}
+
+type TradeSignalCacheRow = {
+  payloadJson: string
+  computedAt: number
+}
+
+let ensureTradeSignalCachePromise: Promise<void> | null = null
+
+async function ensureTradeSignalCacheTable(): Promise<void> {
+  if (!ensureTradeSignalCachePromise) {
+    ensureTradeSignalCachePromise = Promise.resolve()
+      .then(async () => {
+        await client.execute({
+          sql: `
+            CREATE TABLE IF NOT EXISTS dashboard_trade_signal_cache (
+              cache_key TEXT PRIMARY KEY,
+              payload_json TEXT NOT NULL,
+              computed_at INTEGER NOT NULL DEFAULT (unixepoch())
+            )
+          `,
+          args: [],
+        })
+        await client.execute({
+          sql: `CREATE INDEX IF NOT EXISTS dashboard_trade_signal_cache_computed_idx ON dashboard_trade_signal_cache(computed_at DESC)`,
+          args: [],
+        })
+      })
+      .catch((error) => {
+        ensureTradeSignalCachePromise = null
+        throw error
+      })
+  }
+  await ensureTradeSignalCachePromise
+}
+
+function cacheUniverseKey(universe: UniverseFilterValue): string {
+  return universe ?? 'all'
+}
+
+async function resolveTradeSignalCacheDates(date: string | null, includeUs: boolean): Promise<TradeSignalCacheDateRow> {
+  const requested = date ?? '9999-12-31'
+  const [jp, us] = await Promise.all([
+    execGet<{ date: string | null }>(
+      `
+        SELECT COALESCE(
+          (SELECT MAX(date) FROM daily_snapshots WHERE date <= ?),
+          (SELECT MAX(date) FROM daily_snapshots)
+        ) AS date
+      `,
+      [requested],
+    ),
+    includeUs
+      ? execGet<{ date: string | null }>(
+        `
+          SELECT COALESCE(
+            (SELECT MAX(date) FROM market_daily_snapshots WHERE market = 'US' AND date <= ?),
+            (SELECT MAX(date) FROM market_daily_snapshots WHERE market = 'US')
+          ) AS date
+        `,
+        [requested],
+      )
+      : Promise.resolve({ date: null }),
+  ])
+  return { jpDate: jp?.date ?? null, usDate: us?.date ?? null }
+}
+
+async function readTradeSignalCache(cacheKey: string): Promise<DashboardTradeSignalResult | null> {
+  await ensureTradeSignalCacheTable()
+  const row = await execGet<TradeSignalCacheRow>(
+    `
+      SELECT payload_json AS payloadJson, computed_at AS computedAt
+      FROM dashboard_trade_signal_cache
+      WHERE cache_key = ?
+      LIMIT 1
+    `,
+    [cacheKey],
+  )
+  if (!row) return null
+  const age = Math.floor(Date.now() / 1000) - Number(row.computedAt ?? 0)
+  if (age > TRADE_SIGNAL_CACHE_TTL_SEC) return null
+  try {
+    return JSON.parse(row.payloadJson) as DashboardTradeSignalResult
+  } catch {
+    return null
+  }
+}
+
+async function writeTradeSignalCache(cacheKey: string, payload: DashboardTradeSignalResult): Promise<void> {
+  await ensureTradeSignalCacheTable()
+  await client.execute({
+    sql: `
+      INSERT INTO dashboard_trade_signal_cache (cache_key, payload_json, computed_at)
+      VALUES (?, ?, unixepoch())
+      ON CONFLICT(cache_key) DO UPDATE SET
+        payload_json = excluded.payload_json,
+        computed_at = excluded.computed_at
+    `,
+    args: [cacheKey, JSON.stringify(payload)],
+  })
 }
 
 type UsMetricRow = {
@@ -1231,9 +1337,26 @@ export async function getDashboardTradeSignals(params: {
 } = {}): Promise<DashboardTradeSignalResult> {
   const scenarioInterval = normalizeProjectionInterval(params.scenarioInterval)
   const scenarioHorizonDays = defaultProjectionHorizon(scenarioInterval)
+  const includeUs = !params.universe
+  const cacheDates = await resolveTradeSignalCacheDates(params.date ?? null, includeUs)
+  const cacheKey = [
+    'v3',
+    `jp:${cacheDates.jpDate ?? 'none'}`,
+    `us:${cacheDates.usDate ?? 'none'}`,
+    `u:${cacheUniverseKey(params.universe ?? null)}`,
+    `i:${scenarioInterval}`,
+    `h:${scenarioHorizonDays}`,
+  ].join('|')
+  const cached = await readTradeSignalCache(cacheKey)
+  if (cached) {
+    return {
+      ...cached,
+      generatedAt: cached.generatedAt,
+    }
+  }
   const [jp, us] = await Promise.all([
     loadJpRows(params.date ?? null, params.universe ?? null),
-    params.universe ? Promise.resolve({ rows: [] as RawSignalRow[], date: null }) : loadUsRows(params.date ?? null),
+    includeUs ? loadUsRows(params.date ?? null) : Promise.resolve({ rows: [] as RawSignalRow[], date: null }),
   ])
 
   const candidates: DashboardTradeSignalRow[] = []
@@ -1254,7 +1377,7 @@ export async function getDashboardTradeSignals(params: {
   const scenarioCandidates = await enrichScenarioSignals(displayCandidates, params.date ?? null, scenarioInterval, scenarioHorizonDays)
   const rows = selectDashboardTradeRows(scenarioCandidates)
 
-  return {
+  const result = {
     rows,
     jpDate: jp.date,
     usDate: us.date,
@@ -1264,4 +1387,6 @@ export async function getDashboardTradeSignals(params: {
     scenarioIntervalLabel: dashboardScenarioIntervalLabel(scenarioInterval),
     scenarioHorizonDays,
   }
+  await writeTradeSignalCache(cacheKey, result)
+  return result
 }

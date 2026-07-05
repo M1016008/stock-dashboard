@@ -18,7 +18,7 @@ import { TradeScenarioNotebook } from '@/components/stock/TradeScenarioNotebook'
 import { StockScenarioAiPanel } from '@/components/stock/StockScenarioAiPanel'
 import { findTicker } from '@/lib/master/tickers'
 import { STAGE_BG_COLORS, STAGE_BORDER_COLORS, STAGE_LABELS } from '@/lib/hex-stage'
-import { buildShortTermCheck, type ShortTermCheckTone } from '@/lib/short-term-check'
+import { buildShortTermCheck, formatShortTermStrength, type ShortTermCheckTone } from '@/lib/short-term-check'
 import { buildPhysicalMomentumView, type PhysicalMomentumCheck, type PhysicalMomentumTone } from '@/lib/physical-momentum-view'
 import type { StockQuote } from '@/types/stock'
 
@@ -2562,6 +2562,20 @@ function BasicInfoCard({ ticker, quote }: { ticker: string; quote: StockQuote | 
         <div style={basicDecisionHeaderStyle}>
           <span style={basicDecisionLabelStyle}>短期チェック</span>
           <strong style={{ color: decision.color }}>{decision.label}</strong>
+          <span style={{
+            marginLeft: 'auto',
+            padding: '2px 7px',
+            borderRadius: 999,
+            border: `1px solid ${decision.border}`,
+            color: decision.color,
+            background: 'rgba(255,255,255,0.62)',
+            fontSize: '10px',
+            fontFamily: 'var(--font-mono)',
+            fontWeight: 900,
+            whiteSpace: 'nowrap',
+          }}>
+            {formatShortTermStrength(decision.label, decision.score)}
+          </span>
         </div>
         <p style={basicDecisionDescriptionStyle}>{decision.description}</p>
         <div style={basicReasonRowStyle}>

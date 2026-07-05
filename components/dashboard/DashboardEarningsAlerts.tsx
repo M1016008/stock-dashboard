@@ -2,7 +2,8 @@ import Link from 'next/link'
 import { Card, CardHeader } from '@/components/ui/Card'
 import { MarginBadges } from '@/components/ui/MarginBadges'
 import { StageTag } from '@/components/ui/StageTag'
-import { getEarningsCalendarDashboard, type EarningsRow } from '@/lib/queries/dashboard'
+import { type EarningsRow } from '@/lib/queries/dashboard'
+import { getDashboardEarningsAlertsCached } from '@/lib/queries/dashboard-earnings-alerts-cache'
 import type { UniverseFilterValue } from '@/lib/market-universe'
 
 function fmtPct(value: number | null | undefined): string {
@@ -156,11 +157,7 @@ export async function DashboardEarningsAlerts({
   date?: string | null
   universe?: UniverseFilterValue
 }) {
-  const data = await getEarningsCalendarDashboard(21, date, {
-    preferLatestImport: false,
-    includeCompleted: true,
-    filters: { limit: 80, universe },
-  })
+  const data = await getDashboardEarningsAlertsCached(date, universe)
   const upcoming = [...data.rows].sort((a, b) => alertScore(b) - alertScore(a)).slice(0, 8)
   const completed = [...data.completedRows].sort((a, b) => completedScore(b) - completedScore(a)).slice(0, 5)
   const signalCount = upcoming.filter((row) => (row.signalLabels?.length ?? 0) > 0).length

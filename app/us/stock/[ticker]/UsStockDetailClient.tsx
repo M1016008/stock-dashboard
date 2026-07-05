@@ -13,7 +13,7 @@ import { StockMovePeriods } from '@/components/stock/StockMovePeriods'
 import { TradeScenarioNotebook } from '@/components/stock/TradeScenarioNotebook'
 import type { StockQuote } from '@/types/stock'
 import { buildPhysicalMomentumView, type PhysicalMomentumTone } from '@/lib/physical-momentum-view'
-import { buildShortTermCheck, type ShortTermCheckResult } from '@/lib/short-term-check'
+import { buildShortTermCheck, formatShortTermStrength, type ShortTermCheckResult } from '@/lib/short-term-check'
 
 type Status = 'idle' | 'loading' | 'ready' | 'error'
 
@@ -733,6 +733,9 @@ function UsPhysicalMomentumSection({
                 <div className="flex flex-wrap items-baseline gap-2">
                   <span className="text-[10px] font-black opacity-75">短期チェック</span>
                   <span className="text-[15px] font-black">{shortTermCheck.label}</span>
+                  <span className="rounded-full border border-current/20 bg-white px-2 py-0.5 font-mono text-[10px] font-black">
+                    {formatShortTermStrength(shortTermCheck.label, shortTermCheck.score)}
+                  </span>
                 </div>
                 <p className="mt-1 text-[11px] font-bold leading-5">{shortTermCheck.description}</p>
               </div>
