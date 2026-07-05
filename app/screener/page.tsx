@@ -363,8 +363,6 @@ export default function ScreenerPage() {
   const [notice, setNotice] = useState<string | null>(null)
   const [sort, setSort] = useState<SortState | null>(() => initialSortState(searchParams))
   const [copiedTicker, setCopiedTicker] = useState<string | null>(null)
-  const [copiedConditionUrl, setCopiedConditionUrl] = useState(false)
-  const [conditionUrlFallback, setConditionUrlFallback] = useState<string | null>(null)
   const [availableDates, setAvailableDates] = useState<AvailableDate[]>([])
   const [selectedDate, setSelectedDate] = useState<string | null>(() => searchParams.get('date')) // null = 最新
   const [selectedMarketSegment, setSelectedMarketSegment] = useState<string>(() => searchParams.get('marketSegment') ?? '')
@@ -874,59 +872,6 @@ export default function ScreenerPage() {
     }
   }
 
-  async function copyConditionUrl() {
-    if (typeof window === 'undefined') return
-    const url = new URL(window.location.href)
-    const params = url.searchParams
-    const setOrDelete = (key: string, value: string | null | undefined) => {
-      if (value && value.trim()) params.set(key, value.trim())
-      else params.delete(key)
-    }
-    setOrDelete('date', selectedDate ?? '')
-    setOrDelete(UNIVERSE_FILTER_PARAM, activeUniverse ?? '')
-    setOrDelete('marketSegment', selectedMarketSegment)
-    setOrDelete('sectorLarge', selectedSectorLarge)
-    setOrDelete('sector33', selectedSector33)
-    setOrDelete('marginType', selectedMarginType)
-    setOrDelete('volumeMin', selectedVolumeMin != null ? String(selectedVolumeMin) : '')
-    setOrDelete('earningsWindowWeeks', selectedEarningsWindowWeeks != null ? String(selectedEarningsWindowWeeks) : '')
-    setOrDelete('ma200Direction', selectedMa200Direction)
-    setOrDelete('shortTermCheck', selectedShortTermCheck)
-    setOrDelete('physicalStatus', selectedPhysicalStatus)
-    setOrDelete('physicalStatusHorizon', String(selectedPhysicalStatusHorizon))
-    setOrDelete('pmsMin', pmsMin)
-    setOrDelete('pfsMin', pfsMin)
-    setOrDelete('pesMin', pesMin)
-    setOrDelete('pmsTrend', pmsTrend)
-    setOrDelete('accelerationPositive', accelerationPositive ? '1' : '')
-    setOrDelete('forcePositive', forcePositive ? '1' : '')
-    setOrDelete('stage23Candidate', stage23Candidate ? '1' : '')
-    setOrDelete('mcapBins', selectedMcapBins.size > 0 ? Array.from(selectedMcapBins).sort((a, b) => a - b).join(',') : '')
-    for (const axis of AXES) {
-      const selected = stages[axis.key]
-      setOrDelete(axis.key, selected && selected.length > 0 ? selected.join(',') : '')
-    }
-    if (sort) {
-      params.set('sort', sort.key)
-      params.set('dir', sort.dir)
-    } else {
-      params.delete('sort')
-      params.delete('dir')
-    }
-    setOrDelete('limit', requestedLimit != null ? String(requestedLimit) : '')
-    url.hash = ''
-    const conditionUrl = url.toString()
-    try {
-      await writeTextToClipboard(conditionUrl)
-      setConditionUrlFallback(null)
-    } catch (error) {
-      console.warn('condition URL clipboard copy failed', error)
-      setConditionUrlFallback(conditionUrl)
-    }
-    setCopiedConditionUrl(true)
-    setTimeout(() => setCopiedConditionUrl(false), 3500)
-  }
-
   return (
     <div className="sb-page">
       <div className="sb-page-title">
@@ -1361,9 +1306,6 @@ export default function ScreenerPage() {
         chips={activeFilterChips}
         onReset={resetAllFilters}
         onClearChip={clearFilterChip}
-        onCopyUrl={copyConditionUrl}
-        copied={copiedConditionUrl}
-        fallbackUrl={conditionUrlFallback}
         sort={sort}
       />
 
@@ -1705,19 +1647,13 @@ export default function ScreenerPage() {
 function ScreenerConditionPanel({
   chips,
   sort,
-  copied,
-  fallbackUrl,
   onReset,
   onClearChip,
-  onCopyUrl,
 }: {
   chips: ActiveFilterChip[]
   sort: SortState | null
-  copied: boolean
-  fallbackUrl: string | null
   onReset: () => void
   onClearChip: (key: string) => void
-  onCopyUrl: () => void
 }) {
   const sortLabel = sort
     ? `${SORT_OPTIONS.find((option) => option.key === sort.key)?.label ?? sort.key} / ${sort.dir === 'desc' ? sortDirectionLabels(sort).desc : sortDirectionLabels(sort).asc}`
@@ -1784,14 +1720,6 @@ function ScreenerConditionPanel({
       <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
         <button
           type="button"
-          onClick={onCopyUrl}
-          style={mcChipStyle(copied)}
-          title="現在の絞り込み条件と並び替えをURLとしてコピーします"
-        >
-          {copied ? '✓ URLコピー済み' : '条件URLをコピー'}
-        </button>
-        <button
-          type="button"
           onClick={onReset}
           style={{
             ...mcChipStyle(false),
@@ -1803,25 +1731,6 @@ function ScreenerConditionPanel({
           全条件クリア
         </button>
       </div>
-      {fallbackUrl && (
-        <div style={{ gridColumn: '1 / -1', display: 'grid', gap: '5px' }}>
-          <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 700 }}>
-            自動コピーできない場合は、このURLを選択してコピー
-          </span>
-          <input
-            readOnly
-            value={fallbackUrl}
-            onFocus={(event) => event.currentTarget.select()}
-            style={{
-              ...mcSelectStyle,
-              width: '100%',
-              minWidth: 0,
-              cursor: 'text',
-              fontSize: '11px',
-            }}
-          />
-        </div>
-      )}
     </div>
   )
 }
@@ -2596,27 +2505,6 @@ function filterChipToneStyle(tone: ActiveFilterChip['tone'] = 'neutral'): React.
         border: '1px solid var(--border-base)',
       }
   }
-}
-
-async function writeTextToClipboard(text: string) {
-  try {
-    await navigator.clipboard.writeText(text)
-    return
-  } catch {
-    // Some browser contexts deny Clipboard API reads/writes during automation.
-    // Keep the user-click path working with the classic textarea fallback.
-  }
-  const textarea = document.createElement('textarea')
-  textarea.value = text
-  textarea.setAttribute('readonly', 'true')
-  textarea.style.position = 'fixed'
-  textarea.style.left = '-9999px'
-  textarea.style.top = '0'
-  document.body.appendChild(textarea)
-  textarea.select()
-  const copied = document.execCommand('copy')
-  document.body.removeChild(textarea)
-  if (!copied) throw new Error('clipboard copy failed')
 }
 
 const mcSelectStyle: React.CSSProperties = {
