@@ -5,7 +5,7 @@
 
 import { spawn, type ChildProcess } from 'node:child_process'
 import { eq } from 'drizzle-orm'
-import { db } from '@/lib/db/client'
+import { db, execAll } from '@/lib/db/client'
 import { batchRuns } from '@/lib/db/schema'
 import { acquireUpdateLock, getActiveUpdateLocks } from '@/lib/server/update-lock'
 
@@ -15,12 +15,30 @@ type RunResult = {
   timedOut: boolean
 }
 
+type ActiveBatchRun = {
+  id: number
+  jobType: string
+  startedAt: number
+}
+
 const JOB_TYPE = 'ml_learning'
 const DEFAULT_BLOCKING_LOCKS = ['update_latest', 'post_ohlcv_refresh', 'us_update_latest'] as const
+const DEFAULT_BLOCKING_BATCH_RUNS = [
+  'ml_learning',
+  'update_latest',
+  'post_ohlcv_refresh',
+  'physical_momentum',
+  'physical_momentum_us',
+  'physical_momentum_us_raw_chunk',
+  'physical_momentum_us_normalize_chunk',
+  'us_update_latest',
+] as const
 const MS_PER_DAY = 24 * 60 * 60 * 1000
 
 let activeChild: ChildProcess | null = null
 let shutdownSignal: NodeJS.Signals | null = null
+let releaseActiveLock: (() => Promise<void>) | null = null
+let activeRunId: number | null = null
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -194,12 +212,32 @@ function configureDefaults(): void {
   process.env.ML_CONTEXT_DAILY_RECENT_DAYS = process.env.ML_CONTEXT_DAILY_RECENT_DAYS ?? '420'
   process.env.ML_PHYSICS_DAILY_RECENT_DAYS = process.env.ML_PHYSICS_DAILY_RECENT_DAYS ?? '420'
   process.env.ML_PHYSICS_DAILY_MIN_HISTORY_DAYS = process.env.ML_PHYSICS_DAILY_MIN_HISTORY_DAYS ?? '220'
+  process.env.ML_LEARNING_MAX_ATTEMPTS = process.env.ML_LEARNING_MAX_ATTEMPTS ?? '3'
+  process.env.ML_LEARNING_RETRY_DELAY_SECONDS = process.env.ML_LEARNING_RETRY_DELAY_SECONDS ?? '900'
+  process.env.ML_LEARNING_BATCH_WAIT_MINUTES = process.env.ML_LEARNING_BATCH_WAIT_MINUTES ?? '360'
 }
 
 function installSignalHandlers(): void {
   const handler = (signal: NodeJS.Signals) => {
     shutdownSignal = signal
     console.error(`Received ${signal}; stopping ML learning child process`)
+    releaseActiveLock?.().catch((error) => {
+      console.warn(`Failed to release ML learning lock on ${signal}: ${errorMessage(error)}`)
+    })
+    if (activeRunId != null) {
+      db
+        .update(batchRuns)
+        .set({
+          finishedAt: new Date(),
+          status: 'failed',
+          failed: 1,
+          errorSummary: `interrupted by ${signal}`,
+        })
+        .where(eq(batchRuns.id, activeRunId))
+        .catch((error) => {
+          console.warn(`Failed to mark ML learning batch run interrupted: ${errorMessage(error)}`)
+        })
+    }
     if (activeChild && activeChild.exitCode === null && activeChild.signalCode === null) {
       activeChild.kill('SIGTERM')
       setTimeout(() => {
@@ -240,6 +278,113 @@ async function waitForBlockingLocks(jobTypes: readonly string[]): Promise<void> 
     }
 
     await sleep(pollSeconds * 1000)
+  }
+}
+
+async function waitForBlockingBatchRuns(jobTypes: readonly string[], currentRunId: number): Promise<void> {
+  if (jobTypes.length === 0) return
+
+  const waitMinutes = numberEnv('ML_LEARNING_BATCH_WAIT_MINUTES', 360)
+  const pollSeconds = numberEnv('ML_LEARNING_LOCK_POLL_SECONDS', 30)
+  const startedAt = Date.now()
+  let lastLogAt = 0
+  const placeholders = jobTypes.map(() => '?').join(', ')
+
+  for (;;) {
+    if (shutdownSignal) throw new Error(`Interrupted while waiting for batch runs: ${shutdownSignal}`)
+
+    const activeRuns = await execAll<ActiveBatchRun>(
+      `
+      SELECT
+        id,
+        job_type AS jobType,
+        started_at AS startedAt
+      FROM batch_runs
+      WHERE status = 'running'
+        AND id <> ?
+        AND job_type IN (${placeholders})
+      ORDER BY started_at ASC
+      `,
+      [currentRunId, ...jobTypes],
+    )
+
+    if (activeRuns.length === 0) return
+
+    const elapsedMs = Date.now() - startedAt
+    if (elapsedMs > waitMinutes * 60_000) {
+      const details = activeRuns.map((run) => `${run.jobType}#${run.id}`).join(', ')
+      throw new Error(`Timed out waiting ${waitMinutes} minutes for active batch runs: ${details}`)
+    }
+
+    if (Date.now() - lastLogAt > 60_000) {
+      lastLogAt = Date.now()
+      const details = activeRuns
+        .map((run) => `${run.jobType}#${run.id}(started=${new Date(run.startedAt * 1000).toISOString()})`)
+        .join(', ')
+      console.log(`Waiting for active batch runs before ML learning: ${details}`)
+    }
+
+    await sleep(pollSeconds * 1000)
+  }
+}
+
+function runNpmUtility(
+  script: string,
+  heartbeat: () => Promise<void>,
+  timeoutMinutes = 30,
+  envOverrides: Record<string, string | undefined> = {},
+): Promise<RunResult> {
+  return new Promise((resolve, reject) => {
+    let timedOut = false
+    const child = spawn('npm', ['run', script], {
+      cwd: process.cwd(),
+      stdio: 'inherit',
+      env: {
+        ...process.env,
+        USE_LOCAL_DB: '1',
+        SQLITE_BUSY_RETRIES: process.env.SQLITE_BUSY_RETRIES ?? '720',
+        UPDATE_CHILD_TIMEOUT_MINUTES: String(timeoutMinutes),
+        ...envOverrides,
+      },
+    })
+
+    const heartbeatTimer = setInterval(() => {
+      heartbeat().catch((err) => {
+        console.warn(`${script} heartbeat failed: ${errorMessage(err)}`)
+      })
+    }, 60_000)
+    const timeoutTimer = setTimeout(() => {
+      timedOut = true
+      console.error(`${script} timed out after ${timeoutMinutes} minutes; sending SIGTERM`)
+      child.kill('SIGTERM')
+      setTimeout(() => {
+        if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
+      }, 10_000)
+    }, timeoutMinutes * 60_000)
+
+    const clearTimers = () => {
+      clearInterval(heartbeatTimer)
+      clearTimeout(timeoutTimer)
+    }
+
+    child.on('error', (err) => {
+      clearTimers()
+      reject(err)
+    })
+    child.on('close', (code, signal) => {
+      clearTimers()
+      resolve({ code: timedOut ? 124 : code, signal, timedOut })
+    })
+  })
+}
+
+async function cleanupStaleBatchRuns(heartbeat: () => Promise<void>): Promise<void> {
+  console.log('\n▶ npm run batch:cleanup-stale-runs')
+  const result = await runNpmUtility('batch:cleanup-stale-runs', heartbeat, 30, {
+    STALE_BATCH_TTL_HOURS: process.env.ML_STALE_BATCH_TTL_HOURS ?? '1',
+  })
+  if (result.code !== 0) {
+    throw new Error(`batch:cleanup-stale-runs failed: code=${result.code}, signal=${result.signal ?? 'none'}`)
   }
 }
 
@@ -305,6 +450,7 @@ async function main(): Promise<void> {
     console.log('ML learning skipped: ml_learning lock is already active')
     return
   }
+  releaseActiveLock = lock.release
 
   const [run] = await db
     .insert(batchRuns)
@@ -316,11 +462,14 @@ async function main(): Promise<void> {
     .returning({ id: batchRuns.id })
 
   const runId = run.id
+  activeRunId = runId
   const blockingLocks = parseCsv(process.env.ML_LEARNING_BLOCKING_LOCKS, DEFAULT_BLOCKING_LOCKS)
+  const blockingBatchRuns = parseCsv(process.env.ML_LEARNING_BLOCKING_BATCH_RUNS, DEFAULT_BLOCKING_BATCH_RUNS)
 
   try {
     console.log('ML learning daily wrapper started')
     console.log(`blocking locks: ${blockingLocks.join(', ')}`)
+    console.log(`blocking batch runs: ${blockingBatchRuns.join(', ')}`)
     console.log(`timeout minutes: ${process.env.UPDATE_CHILD_TIMEOUT_MINUTES}`)
 
     const marketStatus = jpMarketCalendarStatus()
@@ -340,10 +489,11 @@ async function main(): Promise<void> {
       return
     }
 
-    await waitForBlockingLocks(blockingLocks)
-    await lock.heartbeat()
-
     if (process.env.ML_LEARNING_PREFLIGHT_ONLY === '1') {
+      await cleanupStaleBatchRuns(() => lock.heartbeat())
+      await waitForBlockingLocks(blockingLocks)
+      await waitForBlockingBatchRuns(blockingBatchRuns, runId)
+      await lock.heartbeat()
       console.log('ML learning preflight succeeded; heavy chain skipped')
       await db
         .update(batchRuns)
@@ -358,9 +508,38 @@ async function main(): Promise<void> {
       return
     }
 
-    const result = await runHeavyMlChain(() => lock.heartbeat())
-    if (result.code !== 0) {
-      throw new Error(`${process.env.ML_LEARNING_NPM_SCRIPT?.trim() || 'batch:ml-daily'} failed: code=${result.code}, signal=${result.signal ?? 'none'}`)
+    const maxAttempts = numberEnv('ML_LEARNING_MAX_ATTEMPTS', 3)
+    const retryDelaySeconds = numberEnv('ML_LEARNING_RETRY_DELAY_SECONDS', 900)
+    const npmScript = process.env.ML_LEARNING_NPM_SCRIPT?.trim() || 'batch:ml-daily'
+    let lastError: Error | null = null
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      if (shutdownSignal) throw new Error(`ML learning interrupted before attempt ${attempt}: ${shutdownSignal}`)
+
+      console.log(`\nML learning attempt ${attempt}/${maxAttempts}: ${npmScript}`)
+      await cleanupStaleBatchRuns(() => lock.heartbeat())
+      await waitForBlockingLocks(blockingLocks)
+      await waitForBlockingBatchRuns(blockingBatchRuns, runId)
+      await lock.heartbeat()
+
+      const result = await runHeavyMlChain(() => lock.heartbeat())
+      if (result.code === 0) {
+        lastError = null
+        break
+      }
+
+      lastError = new Error(`${npmScript} failed: code=${result.code}, signal=${result.signal ?? 'none'}`)
+      console.error(`ML learning attempt ${attempt}/${maxAttempts} failed: ${lastError.message}`)
+      if (shutdownSignal) throw new Error(`ML learning interrupted: ${shutdownSignal}`)
+      if (attempt >= maxAttempts) break
+
+      console.log(`Retrying ML learning after ${retryDelaySeconds} seconds`)
+      await sleep(retryDelaySeconds * 1000)
+      await lock.heartbeat()
+    }
+
+    if (lastError) {
+      throw lastError
     }
     if (shutdownSignal) {
       throw new Error(`ML learning interrupted: ${shutdownSignal}`)
@@ -391,6 +570,8 @@ async function main(): Promise<void> {
     throw error
   } finally {
     await lock.release()
+    releaseActiveLock = null
+    activeRunId = null
   }
 }
 

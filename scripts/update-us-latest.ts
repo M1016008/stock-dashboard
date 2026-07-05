@@ -19,6 +19,15 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function numberEnv(name: string, fallback: number): number {
+  const value = Number(process.env[name])
+  return Number.isFinite(value) && value > 0 ? value : fallback
+}
+
 function dateInTokyo(): string {
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Asia/Tokyo',
@@ -109,7 +118,7 @@ function runCommand(command: string, args: string[], envOverrides: EnvOverrides,
       env: {
         ...process.env,
         USE_LOCAL_DB: '1',
-        SQLITE_BUSY_RETRIES: process.env.SQLITE_BUSY_RETRIES ?? '40',
+        SQLITE_BUSY_RETRIES: process.env.SQLITE_BUSY_RETRIES ?? '720',
         ...envOverrides,
       },
     })
@@ -149,10 +158,17 @@ function runCommand(command: string, args: string[], envOverrides: EnvOverrides,
 }
 
 async function runNpm(script: string, envOverrides: EnvOverrides = {}, heartbeat?: Heartbeat): Promise<void> {
-  console.log(`\n▶ npm run ${script}`)
-  const result = await runCommand('npm', ['run', script], envOverrides, heartbeat)
-  if (result.code !== 0) {
-    throw new Error(`npm run ${script} failed: code=${result.code}, signal=${result.signal ?? 'none'}`)
+  const attempts = numberEnv('US_UPDATE_STEP_MAX_ATTEMPTS', 2)
+  const retryDelaySeconds = numberEnv('US_UPDATE_STEP_RETRY_DELAY_SECONDS', 300)
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    console.log(`\n▶ npm run ${script}${attempt > 1 ? ` (retry ${attempt}/${attempts})` : ''}`)
+    const result = await runCommand('npm', ['run', script], envOverrides, heartbeat)
+    if (result.code === 0) return
+    const message = `npm run ${script} failed: code=${result.code}, signal=${result.signal ?? 'none'}`
+    if (attempt >= attempts) throw new Error(message)
+    console.error(`${message}; retrying after ${retryDelaySeconds} seconds`)
+    await sleep(retryDelaySeconds * 1000)
   }
 }
 
@@ -246,6 +262,15 @@ async function main() {
         STOCKBOARD_DB_PATH: usAnalyticsDbPath,
         ML_DAILY_TRAIN_LIMIT: process.env.US_ML_DAILY_TRAIN_LIMIT ?? '80000',
         ML_PHYSICS_DAILY_TRAIN_LIMIT: process.env.US_ML_PHYSICS_DAILY_TRAIN_LIMIT ?? '120000',
+        US_PMS_DAILY_RECENT_DAYS: process.env.US_PMS_DAILY_RECENT_DAYS ?? '420',
+        US_ML_DAILY_RECENT_DAYS: process.env.US_ML_DAILY_RECENT_DAYS ?? '420',
+        US_ML_DAILY_MIN_HISTORY_DAYS: process.env.US_ML_DAILY_MIN_HISTORY_DAYS ?? '220',
+        US_ML_DAILY_LABEL_RECENT_DAYS: process.env.US_ML_DAILY_LABEL_RECENT_DAYS ?? '520',
+        US_ML_CONTEXT_DAILY_RECENT_DAYS: process.env.US_ML_CONTEXT_DAILY_RECENT_DAYS ?? '420',
+        US_ML_PHYSICS_DAILY_RECENT_DAYS: process.env.US_ML_PHYSICS_DAILY_RECENT_DAYS ?? '420',
+        US_ML_PHYSICS_DAILY_MIN_HISTORY_DAYS: process.env.US_ML_PHYSICS_DAILY_MIN_HISTORY_DAYS ?? '220',
+        US_ML_DAILY_RL_RECENT_DAYS: process.env.US_ML_DAILY_RL_RECENT_DAYS ?? '260',
+        US_ML_DAILY_STATUS_RECENT_DAYS: process.env.US_ML_DAILY_STATUS_RECENT_DAYS ?? '1560',
         UPDATE_CHILD_TIMEOUT_MINUTES: process.env.US_ML_DAILY_TIMEOUT_MINUTES ?? '1440',
       }, heartbeat)
       await lock.heartbeat()

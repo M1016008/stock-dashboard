@@ -50,6 +50,9 @@ const command = [
   'export SQLITE_BUSY_RETRIES=720',
   'export UPDATE_CHILD_TIMEOUT_MINUTES=1440',
   'export ML_LEARNING_IGNORE_MARKET_CALENDAR=1',
+  'export ML_LEARNING_MAX_ATTEMPTS=${ML_LEARNING_MAX_ATTEMPTS:-2}',
+  'export ML_LEARNING_RETRY_DELAY_SECONDS=${ML_LEARNING_RETRY_DELAY_SECONDS:-1800}',
+  'export ML_LEARNING_BATCH_WAIT_MINUTES=${ML_LEARNING_BATCH_WAIT_MINUTES:-720}',
   'export ML_LEARNING_NPM_SCRIPT=batch:ml-weekly-governance',
   'npm run batch:ml-learning-daily',
 ].join(' && ')

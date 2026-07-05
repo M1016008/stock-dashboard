@@ -19,6 +19,15 @@ const DATE_START_OFFSET = Math.max(0, Number(process.env.US_PMS_DATE_START_OFFSE
 
 type CountRow = { count: number }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function numberEnv(name: string, fallback: number): number {
+  const value = Number(process.env[name])
+  return Number.isFinite(value) && value > 0 ? value : fallback
+}
+
 function dbPath(): string {
   return process.env.US_ANALYTICS_DB_PATH?.trim()
     || DEFAULT_US_ANALYTICS_DB
@@ -56,6 +65,28 @@ function runNpm(script: string, env: NodeJS.ProcessEnv): Promise<void> {
   })
 }
 
+async function runNpmWithRetry(script: string, env: NodeJS.ProcessEnv): Promise<void> {
+  const attempts = numberEnv('US_PMS_STEP_MAX_ATTEMPTS', 3)
+  const retryDelaySeconds = numberEnv('US_PMS_STEP_RETRY_DELAY_SECONDS', 300)
+  let lastError: unknown = null
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      if (attempt > 1) console.log(`US PMS retry ${attempt}/${attempts}: npm run ${script}`)
+      await runNpm(script, env)
+      return
+    } catch (error) {
+      lastError = error
+      const message = error instanceof Error ? error.message : String(error)
+      console.error(`US PMS step failed ${attempt}/${attempts}: ${message}`)
+      if (attempt >= attempts) break
+      await sleep(retryDelaySeconds * 1000)
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error(String(lastError))
+}
+
 async function main(): Promise<void> {
   const mode = modeFromArg(process.argv[2])
   const path = dbPath()
@@ -81,7 +112,7 @@ async function main(): Promise<void> {
   if (mode === 'full' || mode === 'raw') {
     for (let offset = TICKER_START_OFFSET; offset < tickers; offset += TICKER_CHUNK) {
       console.log(`US PMS raw chunk: offset=${offset}, limit=${TICKER_CHUNK}`)
-      await runNpm('batch:physical-momentum', {
+      await runNpmWithRetry('batch:physical-momentum', {
         ...baseEnv,
         PMS_RUN_JOB_TYPE: 'physical_momentum_us_raw_chunk',
         PMS_RAW_ONLY: '1',
@@ -94,7 +125,7 @@ async function main(): Promise<void> {
   if (mode === 'full' || mode === 'normalize') {
     for (let offset = DATE_START_OFFSET; offset < dates; offset += DATE_CHUNK) {
       console.log(`US PMS normalize chunk: offset=${offset}, limit=${DATE_CHUNK}`)
-      await runNpm('batch:physical-momentum', {
+      await runNpmWithRetry('batch:physical-momentum', {
         ...baseEnv,
         PMS_RUN_JOB_TYPE: 'physical_momentum_us_normalize_chunk',
         PMS_NORMALIZE_ONLY: '1',
