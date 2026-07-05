@@ -3,7 +3,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
-import { useSearchParams } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { toTvSymbol, buildTvWatchlistText } from '@/lib/tv-format'
 import { WatchlistButton } from '@/components/ui/WatchlistButton'
 import { StageDots } from '@/components/ui/StageDots'
@@ -26,6 +26,35 @@ const MCAP_BINS: { label: string; min: number; max: number }[] = [
 ]
 
 const MARGIN_FILTER_ORDER = ['貸借', '信用', 'その他', '未設定']
+const EARNINGS_WINDOW_OPTIONS = [
+  { weeks: 1, label: '1週間以内', businessDays: 5 },
+  { weeks: 2, label: '2週間以内', businessDays: 10 },
+  { weeks: 3, label: '3週間以内', businessDays: 15 },
+] as const
+type EarningsWindowWeeks = typeof EARNINGS_WINDOW_OPTIONS[number]['weeks']
+const VOLUME_MIN_OPTIONS = [
+  { value: 100_000, label: '10万株以上' },
+  { value: 300_000, label: '30万株以上' },
+  { value: 500_000, label: '50万株以上' },
+  { value: 1_000_000, label: '100万株以上' },
+  { value: 3_000_000, label: '300万株以上' },
+] as const
+type VolumeMinValue = typeof VOLUME_MIN_OPTIONS[number]['value']
+const MA200_DIRECTION_OPTIONS = [
+  { key: 'up', label: '上向き', description: '200日線が上向き' },
+  { key: 'down', label: '下向き', description: '200日線が下向き' },
+  { key: 'flat', label: '横ばい', description: '200日線がほぼ横ばい' },
+] as const
+type Ma200Direction = typeof MA200_DIRECTION_OPTIONS[number]['key']
+const MA200_FLAT_THRESHOLD = 0.05
+const MARKET_SEGMENT_SORT_ORDER = [
+  'プライム',
+  'スタンダード',
+  'グロース',
+  'TOKYO PRO Market',
+  'その他',
+  '未設定',
+] as const
 const PHYSICAL_STATUS_LABELS: PhysicsStatus[] = [
   '上昇加速',
   '上昇継続',
@@ -158,6 +187,20 @@ interface SortState {
   dir: 'asc' | 'desc'
 }
 
+interface ActiveFilterChip {
+  key: string
+  label: string
+  value: string
+  tone?: 'red' | 'blue' | 'green' | 'amber' | 'purple' | 'neutral'
+}
+
+interface SummaryMetric {
+  label: string
+  value: string
+  sub: string
+  tone?: 'red' | 'blue' | 'green' | 'amber' | 'purple' | 'neutral'
+}
+
 const SORT_KEY_VALUES: readonly SortKey[] = [
   'ticker',
   'marginType',
@@ -197,6 +240,27 @@ const SORT_KEY_VALUES: readonly SortKey[] = [
   'earningsNextBusinessDays',
 ]
 
+const SORT_OPTIONS: Array<{ key: SortKey; label: string; descLabel?: string; ascLabel?: string }> = [
+  { key: 'marketSegment', label: '市場区分', descLabel: '逆順', ascLabel: 'プライム順' },
+  { key: 'marketCap', label: '時価総額', descLabel: '大きい順', ascLabel: '小さい順' },
+  { key: 'volume', label: '出来高', descLabel: '多い順', ascLabel: '少ない順' },
+  { key: 'avgVolume10d', label: '10日平均出来高', descLabel: '多い順', ascLabel: '少ない順' },
+  { key: 'avgVolume30d', label: '30日平均出来高', descLabel: '多い順', ascLabel: '少ない順' },
+  { key: 'changePercent', label: '日次騰落率', descLabel: '上昇順', ascLabel: '下落順' },
+  { key: 'changePercentWeek', label: '週次騰落率', descLabel: '上昇順', ascLabel: '下落順' },
+  { key: 'changePercentMonth', label: '月次騰落率', descLabel: '上昇順', ascLabel: '下落順' },
+  { key: 'shortTermCheckScore', label: '短期チェック', descLabel: '強い順', ascLabel: '弱い順' },
+  { key: 'physicalStatusScore', label: '物理状態スコア', descLabel: '強い順', ascLabel: '弱い順' },
+  { key: 'physicalMomentumScore', label: 'PMS', descLabel: '高い順', ascLabel: '低い順' },
+  { key: 'physicalForceScore', label: 'PFS', descLabel: '高い順', ascLabel: '低い順' },
+  { key: 'physicalEnergyScore', label: 'PES', descLabel: '高い順', ascLabel: '低い順' },
+  { key: 'sma200Angle', label: '200日線の向き', descLabel: '上向き順', ascLabel: '下向き順' },
+  { key: 'physicalStatusConfidence', label: '物理状態 確度', descLabel: '高い順', ascLabel: '低い順' },
+  { key: 'earningsNextBusinessDays', label: '次回決算まで', descLabel: '遠い順', ascLabel: '近い順' },
+  { key: 'ticker', label: 'コード', descLabel: '降順', ascLabel: '昇順' },
+  { key: 'name', label: '銘柄名', descLabel: '降順', ascLabel: '昇順' },
+]
+
 function isSortKey(value: string | null): value is SortKey {
   return SORT_KEY_VALUES.includes(value as SortKey)
 }
@@ -206,6 +270,58 @@ function parsePhysicalStatusHorizon(value: string | null): PhysicalStatusHorizon
   return PHYSICAL_STATUS_HORIZONS.includes(parsed as PhysicalStatusHorizon)
     ? parsed as PhysicalStatusHorizon
     : 20
+}
+
+function parseEarningsWindowWeeks(value: string | null): EarningsWindowWeeks | null {
+  const parsed = Number(value)
+  return EARNINGS_WINDOW_OPTIONS.some((option) => option.weeks === parsed)
+    ? parsed as EarningsWindowWeeks
+    : null
+}
+
+function parseVolumeMin(value: string | null): VolumeMinValue | null {
+  const parsed = Number(value)
+  return VOLUME_MIN_OPTIONS.some((option) => option.value === parsed)
+    ? parsed as VolumeMinValue
+    : null
+}
+
+function parseMa200Direction(value: string | null): Ma200Direction | '' {
+  return MA200_DIRECTION_OPTIONS.some((option) => option.key === value)
+    ? value as Ma200Direction
+    : ''
+}
+
+function parseMcapBins(value: string | null): Set<number> {
+  if (!value) return new Set()
+  const selected = value
+    .split(',')
+    .map((item) => Number(item.trim()))
+    .filter((idx) => Number.isInteger(idx) && idx >= 0 && idx < MCAP_BINS.length)
+  return new Set(selected)
+}
+
+function parseStageSelection(value: string | null): number[] {
+  if (!value) return []
+  return Array.from(new Set(
+    value
+      .split(',')
+      .map((item) => Number(item.trim()))
+      .filter((stage) => Number.isInteger(stage) && stage >= 1 && stage <= 6),
+  )).sort((a, b) => a - b)
+}
+
+function initialStageFilters(searchParams: ReturnType<typeof useSearchParams>): Partial<Record<AxisKey, number[]>> {
+  const next: Partial<Record<AxisKey, number[]>> = {}
+  for (const axis of AXES) {
+    const stages = parseStageSelection(searchParams.get(axis.key))
+    if (stages.length > 0) next[axis.key] = stages
+  }
+  return next
+}
+
+function defaultSortDir(key: SortKey): SortState['dir'] {
+  return key === 'earningsNextBusinessDays' || key === 'marketSegment' ? 'asc' : 'desc'
 }
 
 function initialSortState(searchParams: ReturnType<typeof useSearchParams>): SortState {
@@ -232,11 +348,12 @@ interface AvailableDate {
 }
 
 export default function ScreenerPage() {
+  const router = useRouter()
   const searchParams = useSearchParams()
   const activeUniverse = parseUniverseFilter(searchParams.get(UNIVERSE_FILTER_PARAM))
   const activeUniverseMeta = getUniverseFilterMeta(activeUniverse)
   const requestedLimit = parseUrlLimit(searchParams.get('limit'))
-  const [stages, setStages] = useState<Partial<Record<AxisKey, number[]>>>({})
+  const [stages, setStages] = useState<Partial<Record<AxisKey, number[]>>>(() => initialStageFilters(searchParams))
   const [results, setResults] = useState<StockRow[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -246,14 +363,26 @@ export default function ScreenerPage() {
   const [notice, setNotice] = useState<string | null>(null)
   const [sort, setSort] = useState<SortState | null>(() => initialSortState(searchParams))
   const [copiedTicker, setCopiedTicker] = useState<string | null>(null)
+  const [copiedConditionUrl, setCopiedConditionUrl] = useState(false)
+  const [conditionUrlFallback, setConditionUrlFallback] = useState<string | null>(null)
   const [availableDates, setAvailableDates] = useState<AvailableDate[]>([])
-  const [selectedDate, setSelectedDate] = useState<string | null>(null) // null = 最新
-  const [selectedSectorLarge, setSelectedSectorLarge] = useState<string>('')
-  const [selectedSector33, setSelectedSector33] = useState<string>('')
-  const [selectedMarginType, setSelectedMarginType] = useState<string>('')
-  const [selectedShortTermCheck, setSelectedShortTermCheck] = useState<string>('')
+  const [selectedDate, setSelectedDate] = useState<string | null>(() => searchParams.get('date')) // null = 最新
+  const [selectedMarketSegment, setSelectedMarketSegment] = useState<string>(() => searchParams.get('marketSegment') ?? '')
+  const [selectedSectorLarge, setSelectedSectorLarge] = useState<string>(() => searchParams.get('sectorLarge') ?? '')
+  const [selectedSector33, setSelectedSector33] = useState<string>(() => searchParams.get('sector33') ?? '')
+  const [selectedMarginType, setSelectedMarginType] = useState<string>(() => searchParams.get('marginType') ?? '')
+  const [selectedVolumeMin, setSelectedVolumeMin] = useState<VolumeMinValue | null>(() => (
+    parseVolumeMin(searchParams.get('volumeMin'))
+  ))
+  const [selectedEarningsWindowWeeks, setSelectedEarningsWindowWeeks] = useState<EarningsWindowWeeks | null>(() => (
+    parseEarningsWindowWeeks(searchParams.get('earningsWindowWeeks'))
+  ))
+  const [selectedMa200Direction, setSelectedMa200Direction] = useState<Ma200Direction | ''>(() => (
+    parseMa200Direction(searchParams.get('ma200Direction'))
+  ))
+  const [selectedShortTermCheck, setSelectedShortTermCheck] = useState<string>(() => searchParams.get('shortTermCheck') ?? '')
   const [selectedPhysicalStatus, setSelectedPhysicalStatus] = useState<string>(() => searchParams.get('physicalStatus') ?? '')
-  const [selectedMcapBins, setSelectedMcapBins] = useState<Set<number>>(new Set())
+  const [selectedMcapBins, setSelectedMcapBins] = useState<Set<number>>(() => parseMcapBins(searchParams.get('mcapBins')))
   const [pmsMin, setPmsMin] = useState(() => searchParams.get('pmsMin') ?? '')
   const [pfsMin, setPfsMin] = useState(() => searchParams.get('pfsMin') ?? '')
   const [pesMin, setPesMin] = useState(() => searchParams.get('pesMin') ?? '')
@@ -340,9 +469,17 @@ export default function ScreenerPage() {
   // 業種・時価総額のクライアントサイド絞り込み
   const filteredResults = useMemo(() => {
     return results.filter((r) => {
+      if (selectedMarketSegment && marketSegmentFilterValue(r.marketSegment) !== selectedMarketSegment) return false
       if (selectedSectorLarge && r.sectorLarge !== selectedSectorLarge) return false
       if (selectedSector33 && (r.sector33 ?? r.sector33Name) !== selectedSector33) return false
       if (selectedMarginType && (r.marginType ?? '未設定') !== selectedMarginType) return false
+      if (selectedVolumeMin != null && ((r.volume ?? 0) < selectedVolumeMin)) return false
+      if (selectedEarningsWindowWeeks != null) {
+        const window = EARNINGS_WINDOW_OPTIONS.find((option) => option.weeks === selectedEarningsWindowWeeks)
+        const days = businessDaysUntil(r.earningsNextDate, referenceDate, tradingDates)
+        if (!window || days == null || days < 0 || days > window.businessDays) return false
+      }
+      if (selectedMa200Direction && ma200DirectionOf(r.sma200Angle) !== selectedMa200Direction) return false
       if (selectedShortTermCheck && r.shortTermCheckLabel !== selectedShortTermCheck) return false
       if (selectedPhysicalStatus && r.physicalStatusLabel !== selectedPhysicalStatus) return false
       if (selectedMcapBins.size > 0) {
@@ -356,7 +493,7 @@ export default function ScreenerPage() {
       }
       return true
     })
-  }, [results, selectedSectorLarge, selectedSector33, selectedMarginType, selectedShortTermCheck, selectedPhysicalStatus, selectedMcapBins])
+  }, [results, selectedMarketSegment, selectedSectorLarge, selectedSector33, selectedMarginType, selectedVolumeMin, selectedEarningsWindowWeeks, referenceDate, tradingDates, selectedMa200Direction, selectedShortTermCheck, selectedPhysicalStatus, selectedMcapBins])
 
   const shortTermOptions = useMemo(() => {
     const counts = new Map<string, number>()
@@ -388,6 +525,23 @@ export default function ScreenerPage() {
         return a.localeCompare(b, 'ja')
       })
   }, [results])
+
+  const marketSegmentOptions = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const r of results) {
+      const key = marketSegmentFilterValue(r.marketSegment)
+      counts.set(key, (counts.get(key) ?? 0) + 1)
+    }
+    return Array.from(counts.entries())
+      .sort(([a], [b]) => marketSegmentSortValue(a).localeCompare(marketSegmentSortValue(b), 'ja'))
+  }, [results])
+
+  const volumeMinCounts = useMemo(() => (
+    VOLUME_MIN_OPTIONS.map((option) => [
+      option.value,
+      results.filter((row) => (row.volume ?? 0) >= option.value).length,
+    ] as const)
+  ), [results])
 
   // セクターのドロップダウン候補
   const sectorOptions = useMemo(() => {
@@ -438,13 +592,131 @@ export default function ScreenerPage() {
     const missing = filteredResults.length - calculated - notApplicable
     return { calculated, notApplicable, missing }
   }, [filteredResults])
+  const activeFilterChips = useMemo<ActiveFilterChip[]>(() => {
+    const chips: ActiveFilterChip[] = []
+    if (selectedDate) chips.push({ key: 'date', label: '日付', value: selectedDate, tone: 'blue' })
+    if (activeUniverseMeta) chips.push({ key: 'universe', label: 'ユニバース', value: activeUniverseMeta.shortLabel, tone: 'red' })
+    if (selectedMarketSegment) chips.push({ key: 'marketSegment', label: '市場区分', value: selectedMarketSegment, tone: 'purple' })
+    if (selectedSectorLarge) chips.push({ key: 'sectorLarge', label: '17業種', value: selectedSectorLarge, tone: 'green' })
+    if (selectedSector33) chips.push({ key: 'sector33', label: '33業種', value: selectedSector33, tone: 'green' })
+    if (selectedMarginType) chips.push({ key: 'marginType', label: '貸借/信用', value: selectedMarginType, tone: selectedMarginType === '貸借' ? 'blue' : 'neutral' })
+    if (selectedVolumeMin != null) chips.push({ key: 'volumeMin', label: '出来高', value: `${selectedVolumeMin.toLocaleString('ja-JP')}株以上`, tone: 'amber' })
+    if (selectedEarningsWindowWeeks != null) {
+      const option = EARNINGS_WINDOW_OPTIONS.find((item) => item.weeks === selectedEarningsWindowWeeks)
+      chips.push({ key: 'earningsWindowWeeks', label: '次回決算', value: option?.label ?? `${selectedEarningsWindowWeeks}週間以内`, tone: 'amber' })
+    }
+    if (selectedMa200Direction) {
+      const option = MA200_DIRECTION_OPTIONS.find((item) => item.key === selectedMa200Direction)
+      chips.push({ key: 'ma200Direction', label: '200日線', value: option?.label ?? selectedMa200Direction, tone: selectedMa200Direction === 'down' ? 'blue' : selectedMa200Direction === 'up' ? 'red' : 'neutral' })
+    }
+    if (selectedMcapBins.size > 0) {
+      const labels = Array.from(selectedMcapBins)
+        .sort((a, b) => a - b)
+        .map((idx) => MCAP_BINS[idx]?.label)
+        .filter(Boolean)
+      chips.push({ key: 'mcapBins', label: '時価総額', value: labels.join(' / '), tone: 'purple' })
+    }
+    if (selectedShortTermCheck) chips.push({ key: 'shortTermCheck', label: '短期チェック', value: selectedShortTermCheck, tone: selectedShortTermCheck.includes('下落') || selectedShortTermCheck.includes('弱') ? 'blue' : 'red' })
+    if (selectedPhysicalStatus) chips.push({ key: 'physicalStatus', label: '物理状態', value: selectedPhysicalStatus, tone: selectedPhysicalStatus.includes('下落') || selectedPhysicalStatus.includes('失速') ? 'blue' : 'red' })
+    if (selectedPhysicalStatusHorizon !== 20) chips.push({ key: 'physicalStatusHorizon', label: '物理検証', value: `${selectedPhysicalStatusHorizon}営業日`, tone: 'neutral' })
+    if (pmsMin.trim()) chips.push({ key: 'pmsMin', label: 'PMS', value: `${pmsMin.trim()}以上`, tone: 'red' })
+    if (pfsMin.trim()) chips.push({ key: 'pfsMin', label: 'PFS', value: `${pfsMin.trim()}以上`, tone: 'red' })
+    if (pesMin.trim()) chips.push({ key: 'pesMin', label: 'PES', value: `${pesMin.trim()}以上`, tone: 'red' })
+    if (pmsTrend) chips.push({ key: 'pmsTrend', label: 'PMS方向', value: pmsTrend === 'rising' ? '上昇中' : '低下中', tone: pmsTrend === 'rising' ? 'red' : 'blue' })
+    if (accelerationPositive) chips.push({ key: 'accelerationPositive', label: '加速度', value: 'プラス', tone: 'red' })
+    if (forcePositive) chips.push({ key: 'forcePositive', label: '力', value: 'プラス', tone: 'red' })
+    if (stage23Candidate) chips.push({ key: 'stage23Candidate', label: 'ステージ', value: '2→3候補', tone: 'green' })
+    for (const axis of AXES) {
+      const selected = stages[axis.key]
+      if (selected && selected.length > 0) {
+        chips.push({ key: axis.key, label: axis.label, value: selected.join(','), tone: 'neutral' })
+      }
+    }
+    return chips
+  }, [
+    activeUniverseMeta,
+    accelerationPositive,
+    forcePositive,
+    pesMin,
+    pfsMin,
+    pmsMin,
+    pmsTrend,
+    selectedDate,
+    selectedEarningsWindowWeeks,
+    selectedMa200Direction,
+    selectedMarginType,
+    selectedMarketSegment,
+    selectedMcapBins,
+    selectedPhysicalStatus,
+    selectedPhysicalStatusHorizon,
+    selectedSector33,
+    selectedSectorLarge,
+    selectedShortTermCheck,
+    selectedVolumeMin,
+    stage23Candidate,
+    stages,
+  ])
+  const resultSummaryMetrics = useMemo<SummaryMetric[]>(() => {
+    const count = filteredResults.length
+    const liquid = filteredResults.filter((row) => (row.volume ?? 0) >= 1_000_000).length
+    const upcoming = filteredResults.filter((row) => {
+      const days = businessDaysUntil(row.earningsNextDate, referenceDate, tradingDates)
+      return days != null && days >= 0 && days <= 5
+    }).length
+    const bullish = filteredResults.filter((row) => row.shortTermCheckLabel === '強気優勢' || row.shortTermCheckLabel === '好転候補').length
+    const bearish = filteredResults.filter((row) => row.shortTermCheckLabel === '下落警戒' || row.shortTermCheckLabel === '弱含み注意').length
+    const pmsReady = filteredResults.filter((row) => row.physicalMomentumScore != null && Number.isFinite(row.physicalMomentumScore)).length
+    return [
+      {
+        label: '抽出件数',
+        value: count.toLocaleString('ja-JP'),
+        sub: `母集団 ${universe.toLocaleString('ja-JP')} / 表示 ${Math.min(displayedResults.length, count).toLocaleString('ja-JP')}`,
+        tone: 'neutral',
+      },
+      {
+        label: '流動性',
+        value: `${liquid.toLocaleString('ja-JP')}件`,
+        sub: '当日出来高100万株以上',
+        tone: liquid > 0 ? 'amber' : 'neutral',
+      },
+      {
+        label: '決算注意',
+        value: `${upcoming.toLocaleString('ja-JP')}件`,
+        sub: '5営業日以内',
+        tone: upcoming > 0 ? 'amber' : 'neutral',
+      },
+      {
+        label: '短期ラベル',
+        value: `強 ${bullish.toLocaleString('ja-JP')} / 弱 ${bearish.toLocaleString('ja-JP')}`,
+        sub: '強気・好転 / 下落・弱含み',
+        tone: bullish >= bearish ? 'red' : 'blue',
+      },
+      {
+        label: 'PMS coverage',
+        value: `${pmsReady.toLocaleString('ja-JP')}件`,
+        sub: count > 0 ? `${Math.round((pmsReady / count) * 100)}% 算出済み` : '抽出なし',
+        tone: pmsReady === count && count > 0 ? 'green' : 'neutral',
+      },
+    ]
+  }, [displayedResults.length, filteredResults, referenceDate, tradingDates, universe])
 
   function toggleSort(key: SortKey) {
     setSort((prev) => {
-      if (!prev || prev.key !== key) return { key, dir: 'desc' }
+      if (!prev || prev.key !== key) return { key, dir: defaultSortDir(key) }
       if (prev.dir === 'desc') return { key, dir: 'asc' }
       return null
     })
+  }
+
+  function setSortKey(key: SortKey) {
+    setSort((prev) => ({
+      key,
+      dir: prev?.key === key ? prev.dir : defaultSortDir(key),
+    }))
+  }
+
+  function setSortDir(dir: SortState['dir']) {
+    setSort((prev) => prev ? { ...prev, dir } : { key: 'volume', dir })
   }
 
   async function copyTvSymbol(ticker: string, ms: string) {
@@ -474,6 +746,187 @@ export default function ScreenerPage() {
     URL.revokeObjectURL(url)
   }
 
+  function resetAllFilters() {
+    setStages({})
+    setSelectedDate(null)
+    setSelectedMarketSegment('')
+    setSelectedSectorLarge('')
+    setSelectedSector33('')
+    setSelectedMarginType('')
+    setSelectedVolumeMin(null)
+    setSelectedEarningsWindowWeeks(null)
+    setSelectedMa200Direction('')
+    setSelectedShortTermCheck('')
+    setSelectedPhysicalStatus('')
+    setSelectedMcapBins(new Set())
+    setPmsMin('')
+    setPfsMin('')
+    setPesMin('')
+    setAccelerationPositive(false)
+    setForcePositive(false)
+    setStage23Candidate(false)
+    setPmsTrend('')
+    setSelectedPhysicalStatusHorizon(20)
+    setSort({ key: 'marketCap', dir: 'desc' })
+    router.replace('/screener')
+  }
+
+  function removeUrlParams(...keys: string[]) {
+    const params = new URLSearchParams(searchParams.toString())
+    for (const key of keys) params.delete(key)
+    const qs = params.toString()
+    router.replace(`/screener${qs ? `?${qs}` : ''}`)
+  }
+
+  function clearFilterChip(key: string) {
+    switch (key) {
+      case 'date':
+        setSelectedDate(null)
+        removeUrlParams('date')
+        break
+      case 'universe': {
+        removeUrlParams(UNIVERSE_FILTER_PARAM)
+        break
+      }
+      case 'marketSegment':
+        setSelectedMarketSegment('')
+        removeUrlParams('marketSegment')
+        break
+      case 'sectorLarge':
+        setSelectedSectorLarge('')
+        setSelectedSector33('')
+        removeUrlParams('sectorLarge', 'sector33')
+        break
+      case 'sector33':
+        setSelectedSector33('')
+        removeUrlParams('sector33')
+        break
+      case 'marginType':
+        setSelectedMarginType('')
+        removeUrlParams('marginType')
+        break
+      case 'volumeMin':
+        setSelectedVolumeMin(null)
+        removeUrlParams('volumeMin')
+        break
+      case 'earningsWindowWeeks':
+        setSelectedEarningsWindowWeeks(null)
+        removeUrlParams('earningsWindowWeeks')
+        break
+      case 'ma200Direction':
+        setSelectedMa200Direction('')
+        removeUrlParams('ma200Direction')
+        break
+      case 'mcapBins':
+        setSelectedMcapBins(new Set())
+        removeUrlParams('mcapBins')
+        break
+      case 'shortTermCheck':
+        setSelectedShortTermCheck('')
+        removeUrlParams('shortTermCheck')
+        break
+      case 'physicalStatus':
+        setSelectedPhysicalStatus('')
+        removeUrlParams('physicalStatus')
+        break
+      case 'physicalStatusHorizon':
+        setSelectedPhysicalStatusHorizon(20)
+        removeUrlParams('physicalStatusHorizon')
+        break
+      case 'pmsMin':
+        setPmsMin('')
+        removeUrlParams('pmsMin')
+        break
+      case 'pfsMin':
+        setPfsMin('')
+        removeUrlParams('pfsMin')
+        break
+      case 'pesMin':
+        setPesMin('')
+        removeUrlParams('pesMin')
+        break
+      case 'pmsTrend':
+        setPmsTrend('')
+        removeUrlParams('pmsTrend')
+        break
+      case 'accelerationPositive':
+        setAccelerationPositive(false)
+        removeUrlParams('accelerationPositive')
+        break
+      case 'forcePositive':
+        setForcePositive(false)
+        removeUrlParams('forcePositive')
+        break
+      case 'stage23Candidate':
+        setStage23Candidate(false)
+        removeUrlParams('stage23Candidate')
+        break
+      default:
+        if (AXES.some((axis) => axis.key === key)) {
+          setStages((prev) => {
+            const next = { ...prev }
+            delete next[key as AxisKey]
+            return next
+          })
+          removeUrlParams(key)
+        }
+        break
+    }
+  }
+
+  async function copyConditionUrl() {
+    if (typeof window === 'undefined') return
+    const url = new URL(window.location.href)
+    const params = url.searchParams
+    const setOrDelete = (key: string, value: string | null | undefined) => {
+      if (value && value.trim()) params.set(key, value.trim())
+      else params.delete(key)
+    }
+    setOrDelete('date', selectedDate ?? '')
+    setOrDelete(UNIVERSE_FILTER_PARAM, activeUniverse ?? '')
+    setOrDelete('marketSegment', selectedMarketSegment)
+    setOrDelete('sectorLarge', selectedSectorLarge)
+    setOrDelete('sector33', selectedSector33)
+    setOrDelete('marginType', selectedMarginType)
+    setOrDelete('volumeMin', selectedVolumeMin != null ? String(selectedVolumeMin) : '')
+    setOrDelete('earningsWindowWeeks', selectedEarningsWindowWeeks != null ? String(selectedEarningsWindowWeeks) : '')
+    setOrDelete('ma200Direction', selectedMa200Direction)
+    setOrDelete('shortTermCheck', selectedShortTermCheck)
+    setOrDelete('physicalStatus', selectedPhysicalStatus)
+    setOrDelete('physicalStatusHorizon', String(selectedPhysicalStatusHorizon))
+    setOrDelete('pmsMin', pmsMin)
+    setOrDelete('pfsMin', pfsMin)
+    setOrDelete('pesMin', pesMin)
+    setOrDelete('pmsTrend', pmsTrend)
+    setOrDelete('accelerationPositive', accelerationPositive ? '1' : '')
+    setOrDelete('forcePositive', forcePositive ? '1' : '')
+    setOrDelete('stage23Candidate', stage23Candidate ? '1' : '')
+    setOrDelete('mcapBins', selectedMcapBins.size > 0 ? Array.from(selectedMcapBins).sort((a, b) => a - b).join(',') : '')
+    for (const axis of AXES) {
+      const selected = stages[axis.key]
+      setOrDelete(axis.key, selected && selected.length > 0 ? selected.join(',') : '')
+    }
+    if (sort) {
+      params.set('sort', sort.key)
+      params.set('dir', sort.dir)
+    } else {
+      params.delete('sort')
+      params.delete('dir')
+    }
+    setOrDelete('limit', requestedLimit != null ? String(requestedLimit) : '')
+    url.hash = ''
+    const conditionUrl = url.toString()
+    try {
+      await writeTextToClipboard(conditionUrl)
+      setConditionUrlFallback(null)
+    } catch (error) {
+      console.warn('condition URL clipboard copy failed', error)
+      setConditionUrlFallback(conditionUrl)
+    }
+    setCopiedConditionUrl(true)
+    setTimeout(() => setCopiedConditionUrl(false), 3500)
+  }
+
   return (
     <div className="sb-page">
       <div className="sb-page-title">
@@ -482,8 +935,31 @@ export default function ScreenerPage() {
       </div>
 
       <div style={{ padding: '14px 16px 16px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+      {/* 市場区分で絞り込み */}
+      <Section step={1} label="市場区分で絞り込み（任意）">
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+          <button
+            type="button"
+            onClick={() => setSelectedMarketSegment('')}
+            style={mcChipStyle(selectedMarketSegment === '')}
+          >
+            全て（{results.length.toLocaleString('ja-JP')}）
+          </button>
+          {marketSegmentOptions.map(([segment, count]) => (
+            <button
+              key={segment}
+              type="button"
+              onClick={() => setSelectedMarketSegment((current) => current === segment ? '' : segment)}
+              style={mcChipStyle(selectedMarketSegment === segment)}
+            >
+              {segment}（{count.toLocaleString('ja-JP')}）
+            </button>
+          ))}
+        </div>
+      </Section>
+
       {/* 業種で絞り込み */}
-      <Section step={1} label="業種で絞り込み（任意）">
+      <Section step={2} label="業種で絞り込み（任意）">
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
           <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: 'var(--text-muted)' }}>
             17業種
@@ -537,7 +1013,7 @@ export default function ScreenerPage() {
       </Section>
 
       {/* 貸借/信用で絞り込み */}
-      <Section step={2} label="貸借/信用で絞り込み（任意）">
+      <Section step={3} label="貸借/信用で絞り込み（任意）">
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
           <button
             onClick={() => setSelectedMarginType('')}
@@ -557,8 +1033,128 @@ export default function ScreenerPage() {
         </div>
       </Section>
 
+      {/* 出来高で絞り込み */}
+      <Section step={4} label="出来高下限で絞り込み（任意）">
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', alignItems: 'center' }}>
+          <button
+            type="button"
+            onClick={() => setSelectedVolumeMin(null)}
+            style={mcChipStyle(selectedVolumeMin == null)}
+          >
+            全て（{results.length.toLocaleString('ja-JP')}）
+          </button>
+          {VOLUME_MIN_OPTIONS.map((option) => {
+            const count = volumeMinCounts.find(([value]) => value === option.value)?.[1] ?? 0
+            return (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => setSelectedVolumeMin((current) => current === option.value ? null : option.value)}
+                style={mcChipStyle(selectedVolumeMin === option.value)}
+                title={`当日出来高が${option.label}の銘柄だけを表示します`}
+              >
+                {option.label}（{count.toLocaleString('ja-JP')}）
+              </button>
+            )
+          })}
+          {selectedVolumeMin != null && (
+            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+              選択中: {selectedVolumeMin.toLocaleString('ja-JP')}株以上
+            </span>
+          )}
+        </div>
+      </Section>
+
+      {/* 次回決算までで絞り込み */}
+      <Section step={5} label="次回決算までで絞り込み・並び替え（任意）">
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', alignItems: 'center' }}>
+          <button
+            type="button"
+            onClick={() => setSelectedEarningsWindowWeeks(null)}
+            style={mcChipStyle(selectedEarningsWindowWeeks == null)}
+          >
+            全て
+          </button>
+          {EARNINGS_WINDOW_OPTIONS.map((option) => (
+            <button
+              key={option.weeks}
+              type="button"
+              onClick={() => setSelectedEarningsWindowWeeks((current) => current === option.weeks ? null : option.weeks)}
+              style={mcChipStyle(selectedEarningsWindowWeeks === option.weeks)}
+              title={`次回決算まで${option.businessDays}営業日以内の銘柄だけを表示`}
+            >
+              {option.label}
+            </button>
+          ))}
+          <button
+            type="button"
+            onClick={() => setSort({ key: 'earningsNextBusinessDays', dir: 'asc' })}
+            style={mcChipStyle(sort?.key === 'earningsNextBusinessDays' && sort.dir === 'asc')}
+            title="次回決算までの残営業日が少ない順に並べます"
+          >
+            近い順に並べる
+          </button>
+          <button
+            type="button"
+            onClick={() => setSort({ key: 'earningsNextBusinessDays', dir: 'desc' })}
+            style={mcChipStyle(sort?.key === 'earningsNextBusinessDays' && sort.dir === 'desc')}
+            title="次回決算までの残営業日が多い順に並べます"
+          >
+            遠い順に並べる
+          </button>
+        </div>
+      </Section>
+
+      {/* 200日移動平均線で絞り込み */}
+      <Section step={6} label="200日移動平均線で絞り込み・並び替え（任意）">
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', alignItems: 'center' }}>
+          <button
+            type="button"
+            onClick={() => setSelectedMa200Direction('')}
+            style={mcChipStyle(selectedMa200Direction === '')}
+          >
+            全て
+          </button>
+          {MA200_DIRECTION_OPTIONS.map((option) => (
+            <button
+              key={option.key}
+              type="button"
+              onClick={() => setSelectedMa200Direction((current) => current === option.key ? '' : option.key)}
+              style={mcChipStyle(selectedMa200Direction === option.key)}
+              title={option.description}
+            >
+              {option.label}
+            </button>
+          ))}
+          <button
+            type="button"
+            onClick={() => setSort({ key: 'sma200Angle', dir: 'desc' })}
+            style={mcChipStyle(sort?.key === 'sma200Angle' && sort.dir === 'desc')}
+            title="200日線の角度が強く上向きの順に並べます"
+          >
+            上向きが強い順
+          </button>
+          <button
+            type="button"
+            onClick={() => setSort({ key: 'sma200Angle', dir: 'asc' })}
+            style={mcChipStyle(sort?.key === 'sma200Angle' && sort.dir === 'asc')}
+            title="200日線の角度が強く下向きの順に並べます"
+          >
+            下向きが強い順
+          </button>
+          <button
+            type="button"
+            onClick={() => setSort({ key: 'physicalStatusConfidence', dir: 'desc' })}
+            style={mcChipStyle(sort?.key === 'physicalStatusConfidence' && sort.dir === 'desc')}
+            title="物理状態の過去検証 confidence が高い順に並べます"
+          >
+            確度が高い順
+          </button>
+        </div>
+      </Section>
+
       {/* 時価総額で絞り込み */}
-      <Section step={3} label="時価総額で絞り込み（任意 / 複数選択可）">
+      <Section step={7} label="時価総額で絞り込み（任意 / 複数選択可）">
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
           {MCAP_BINS.map((bin, idx) => {
             const active = selectedMcapBins.has(idx)
@@ -585,7 +1181,7 @@ export default function ScreenerPage() {
         </div>
       </Section>
 
-      <Section step={4} label="短期チェックで絞り込み（任意）">
+      <Section step={8} label="短期チェックで絞り込み（任意）">
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
           <button
             onClick={() => setSelectedShortTermCheck('')}
@@ -606,7 +1202,7 @@ export default function ScreenerPage() {
       </Section>
 
       {/* Physical Momentumで絞り込み */}
-      <Section step={5} label="Physical Momentumで絞り込み（任意）">
+      <Section step={9} label="Physical Momentumで絞り込み（任意）">
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '8px', alignItems: 'end' }}>
           <MomentumNumberInput label="PMS >=" value={pmsMin} onChange={setPmsMin} placeholder="例: 1.0" />
           <MomentumNumberInput label="PFS >=" value={pfsMin} onChange={setPfsMin} placeholder="例: 0.8" />
@@ -701,7 +1297,7 @@ export default function ScreenerPage() {
       </Section>
 
       {/* HEXステージ（任意の絞り込み） */}
-      <Section step={6} label="HEXステージで絞り込み（任意 / 複数系統 AND）">
+      <Section step={10} label="HEXステージで絞り込み（任意 / 複数系統 AND）">
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '8px' }}>
           <button
             onClick={() => setStages({})}
@@ -760,6 +1356,19 @@ export default function ScreenerPage() {
           </div>
         )}
       </Section>
+
+      <ScreenerConditionPanel
+        chips={activeFilterChips}
+        onReset={resetAllFilters}
+        onClearChip={clearFilterChip}
+        onCopyUrl={copyConditionUrl}
+        copied={copiedConditionUrl}
+        fallbackUrl={conditionUrlFallback}
+        sort={sort}
+      />
+
+      <ResultSummaryStrip metrics={resultSummaryMetrics} />
+
       {error && (
         <div className="card" style={{ padding: '12px', borderLeft: '3px solid var(--price-down)' }}>
           <p style={{ fontSize: '12px', color: 'var(--price-down)', margin: 0 }}>エラー: {error}</p>
@@ -808,28 +1417,85 @@ export default function ScreenerPage() {
               )}
               {cached && <span style={{ color: 'var(--text-muted)' }}>（DB）</span>}
             </span>
-            <button
-              onClick={downloadTvWatchlist}
-              disabled={sortedResults.length === 0}
-              style={{
-                padding: '6px 12px',
-                fontSize: '11px',
-                background: sortedResults.length > 0 ? 'var(--accent-primary)' : 'var(--bg-surface)',
-                color: sortedResults.length > 0 ? '#fff' : 'var(--text-muted)',
-                border: `1px solid ${sortedResults.length > 0 ? 'var(--accent-primary)' : 'var(--border-base)'}`,
-                borderRadius: 'var(--radius-sm)',
-                cursor: sortedResults.length > 0 ? 'pointer' : 'not-allowed',
-                fontWeight: 600,
-                fontFamily: 'var(--font-mono)',
-              }}
-              title="TradingView の銘柄リストにインポートできる .txt をダウンロード"
-            >
-              📤 TVリストをダウンロード
-            </button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 700, color: 'var(--text-muted)' }}>
+                並び替え
+                <select
+                  value={sort?.key ?? ''}
+                  onChange={(event) => {
+                    const key = event.target.value
+                    if (isSortKey(key)) setSortKey(key)
+                    else setSort(null)
+                  }}
+                  style={{ ...mcSelectStyle, minWidth: 168 }}
+                  aria-label="スクリーナーの並び替え条件"
+                >
+                  <option value="">未指定</option>
+                  {SORT_OPTIONS.map((option) => (
+                    <option key={option.key} value={option.key}>{option.label}</option>
+                  ))}
+                </select>
+              </label>
+              <select
+                value={sort?.dir ?? 'desc'}
+                onChange={(event) => setSortDir(event.target.value === 'asc' ? 'asc' : 'desc')}
+                disabled={!sort}
+                style={{ ...mcSelectStyle, minWidth: 104, opacity: sort ? 1 : 0.55 }}
+                aria-label="スクリーナーの並び替え順序"
+              >
+                <option value="desc">{sortDirectionLabels(sort).desc}</option>
+                <option value="asc">{sortDirectionLabels(sort).asc}</option>
+              </select>
+              <button
+                onClick={downloadTvWatchlist}
+                disabled={sortedResults.length === 0}
+                style={{
+                  padding: '6px 12px',
+                  fontSize: '11px',
+                  background: sortedResults.length > 0 ? 'var(--accent-primary)' : 'var(--bg-surface)',
+                  color: sortedResults.length > 0 ? '#fff' : 'var(--text-muted)',
+                  border: `1px solid ${sortedResults.length > 0 ? 'var(--accent-primary)' : 'var(--border-base)'}`,
+                  borderRadius: 'var(--radius-sm)',
+                  cursor: sortedResults.length > 0 ? 'pointer' : 'not-allowed',
+                  fontWeight: 600,
+                  fontFamily: 'var(--font-mono)',
+                }}
+                title="TradingView の銘柄リストにインポートできる .txt をダウンロード"
+              >
+                📤 TVリストをダウンロード
+              </button>
+            </div>
           </div>
           {sortedResults.length === 0 ? (
-            <div style={{ padding: '32px', textAlign: 'center' }}>
-              <p style={{ fontSize: '12px', color: 'var(--text-muted)' }}>該当する銘柄がありません</p>
+            <div style={{ padding: '32px', textAlign: 'center', display: 'grid', gap: '12px', justifyItems: 'center' }}>
+              <div style={{
+                width: '44px',
+                height: '44px',
+                borderRadius: 999,
+                display: 'grid',
+                placeItems: 'center',
+                color: 'var(--text-muted)',
+                background: 'var(--bg-elevated)',
+                border: '1px solid var(--border-base)',
+                fontSize: '18px',
+              }}>
+                0
+              </div>
+              <div>
+                <p style={{ fontSize: '13px', fontWeight: 800, color: 'var(--text-primary)', margin: '0 0 4px' }}>
+                  該当する銘柄がありません
+                </p>
+                <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: 0 }}>
+                  出来高下限・決算日・200日線・HEXステージのいずれかを緩めると候補が戻りやすいです。
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={resetAllFilters}
+                style={mcChipStyle(false)}
+              >
+                条件をすべてクリア
+              </button>
             </div>
           ) : (
             <div style={{ overflowX: 'auto' }}>
@@ -1032,6 +1698,159 @@ export default function ScreenerPage() {
         </div>
       )}
       </div>
+    </div>
+  )
+}
+
+function ScreenerConditionPanel({
+  chips,
+  sort,
+  copied,
+  fallbackUrl,
+  onReset,
+  onClearChip,
+  onCopyUrl,
+}: {
+  chips: ActiveFilterChip[]
+  sort: SortState | null
+  copied: boolean
+  fallbackUrl: string | null
+  onReset: () => void
+  onClearChip: (key: string) => void
+  onCopyUrl: () => void
+}) {
+  const sortLabel = sort
+    ? `${SORT_OPTIONS.find((option) => option.key === sort.key)?.label ?? sort.key} / ${sort.dir === 'desc' ? sortDirectionLabels(sort).desc : sortDirectionLabels(sort).asc}`
+    : '未指定'
+  return (
+    <div className="card" style={{
+      padding: '12px',
+      display: 'grid',
+      gridTemplateColumns: 'minmax(0, 1fr) auto',
+      gap: '12px',
+      alignItems: 'start',
+      border: '1px solid var(--border-subtle)',
+      background: 'linear-gradient(180deg, var(--bg-surface), var(--bg-elevated))',
+    }}>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginBottom: '8px' }}>
+          <span style={{ fontSize: '12px', fontWeight: 900, color: 'var(--text-primary)' }}>
+            現在の条件
+          </span>
+          <span style={{
+            padding: '2px 7px',
+            borderRadius: 999,
+            border: '1px solid var(--border-base)',
+            color: 'var(--text-secondary)',
+            background: 'var(--bg-elevated)',
+            fontSize: '10px',
+            fontWeight: 800,
+            fontFamily: 'var(--font-mono)',
+          }}>
+            並び替え: {sortLabel}
+          </span>
+        </div>
+        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
+          {chips.length === 0 ? (
+            <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+              条件未指定。全銘柄から広く確認中。
+            </span>
+          ) : chips.map((chip) => (
+            <button
+              key={`${chip.key}-${chip.value}`}
+              type="button"
+              onClick={() => onClearChip(chip.key)}
+              title={`${chip.label} 条件を外す`}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '5px',
+                padding: '4px 8px',
+                borderRadius: 999,
+                fontSize: '11px',
+                fontWeight: 800,
+                whiteSpace: 'nowrap',
+                cursor: 'pointer',
+                ...filterChipToneStyle(chip.tone ?? 'neutral'),
+              }}
+            >
+              <span style={{ opacity: 0.72 }}>{chip.label}</span>
+              <span>{chip.value}</span>
+              <span aria-hidden="true" style={{ opacity: 0.7, fontWeight: 900 }}>×</span>
+            </button>
+          ))}
+        </div>
+      </div>
+      <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+        <button
+          type="button"
+          onClick={onCopyUrl}
+          style={mcChipStyle(copied)}
+          title="現在の絞り込み条件と並び替えをURLとしてコピーします"
+        >
+          {copied ? '✓ URLコピー済み' : '条件URLをコピー'}
+        </button>
+        <button
+          type="button"
+          onClick={onReset}
+          style={{
+            ...mcChipStyle(false),
+            borderColor: chips.length > 0 ? 'var(--accent-primary)' : 'var(--border-base)',
+            color: chips.length > 0 ? 'var(--accent-primary)' : 'var(--text-secondary)',
+            fontWeight: 800,
+          }}
+        >
+          全条件クリア
+        </button>
+      </div>
+      {fallbackUrl && (
+        <div style={{ gridColumn: '1 / -1', display: 'grid', gap: '5px' }}>
+          <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 700 }}>
+            自動コピーできない場合は、このURLを選択してコピー
+          </span>
+          <input
+            readOnly
+            value={fallbackUrl}
+            onFocus={(event) => event.currentTarget.select()}
+            style={{
+              ...mcSelectStyle,
+              width: '100%',
+              minWidth: 0,
+              cursor: 'text',
+              fontSize: '11px',
+            }}
+          />
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ResultSummaryStrip({ metrics }: { metrics: SummaryMetric[] }) {
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '8px' }}>
+      {metrics.map((metric) => (
+        <div
+          key={metric.label}
+          className="card"
+          style={{
+            padding: '10px 12px',
+            minHeight: 72,
+            border: `1px solid ${filterChipToneStyle(metric.tone ?? 'neutral').borderColor}`,
+            background: filterChipToneStyle(metric.tone ?? 'neutral').background,
+          }}
+        >
+          <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 800, marginBottom: '5px' }}>
+            {metric.label}
+          </div>
+          <div style={{ fontSize: '17px', lineHeight: 1.15, fontWeight: 900, color: filterChipToneStyle(metric.tone ?? 'neutral').color }}>
+            {metric.value}
+          </div>
+          <div style={{ marginTop: '4px', fontSize: '11px', color: 'var(--text-secondary)' }}>
+            {metric.sub}
+          </div>
+        </div>
+      ))}
     </div>
   )
 }
@@ -1294,13 +2113,27 @@ function fmtAngleWithTrend(v: number | undefined): string {
 
 function fmtLongSmaAngle(v: number | undefined): string {
   if (v == null || !Number.isFinite(v)) return '---'
-  const label = Math.abs(v) < 0.05 ? '横ばい' : v > 0 ? '上向き' : '下向き'
+  const label = ma200DirectionLabel(v)
   return `${label} ${fmtAngle(v)}`
+}
+
+function ma200DirectionOf(v: number | null | undefined): Ma200Direction | null {
+  if (v == null || !Number.isFinite(v)) return null
+  if (Math.abs(v) < MA200_FLAT_THRESHOLD) return 'flat'
+  return v > 0 ? 'up' : 'down'
+}
+
+function ma200DirectionLabel(v: number | null | undefined): string {
+  const direction = ma200DirectionOf(v)
+  if (direction === 'up') return '上向き'
+  if (direction === 'down') return '下向き'
+  if (direction === 'flat') return '横ばい'
+  return '判定不可'
 }
 
 function sma200Tone(v: number | undefined): string {
   if (v == null || !Number.isFinite(v)) return 'var(--text-muted)'
-  if (Math.abs(v) < 0.05) return 'var(--text-secondary)'
+  if (ma200DirectionOf(v) === 'flat') return 'var(--text-secondary)'
   return pctColor(v)
 }
 
@@ -1435,7 +2268,19 @@ function earningsSourceLabel(source: string | null | undefined): string | null {
 function sortValue(row: StockRow, key: SortKey, referenceDate: string | null, tradingDates: string[]): unknown {
   if (key === 'earningsLastElapsedDays') return daysSince(row.earningsLastDate, referenceDate)
   if (key === 'earningsNextBusinessDays') return businessDaysUntil(row.earningsNextDate, referenceDate, tradingDates)
+  if (key === 'marketSegment') return marketSegmentSortValue(row.marketSegment)
   return (row as unknown as Record<string, unknown>)[key]
+}
+
+function marketSegmentSortValue(segment: string | null | undefined): string {
+  const normalized = marketSegmentFilterValue(segment)
+  const matchedIndex = MARKET_SEGMENT_SORT_ORDER.findIndex((item) => normalized.includes(item))
+  const order = matchedIndex >= 0 ? matchedIndex : MARKET_SEGMENT_SORT_ORDER.length
+  return `${String(order).padStart(2, '0')}:${normalized}`
+}
+
+function marketSegmentFilterValue(segment: string | null | undefined): string {
+  return segment?.trim() || '未設定'
 }
 
 function parseDateUtc(dateStr: string | null | undefined): number | null {
@@ -1541,6 +2386,15 @@ function pctColor(v: number | undefined): string {
   if (v > 0) return 'var(--price-up, #22c55e)'
   if (v < 0) return 'var(--price-down, #ef4444)'
   return 'var(--text-secondary)'
+}
+
+function sortDirectionLabels(sort: SortState | null): { desc: string; asc: string } {
+  if (!sort) return { desc: '多い順', asc: '少ない順' }
+  const option = SORT_OPTIONS.find((item) => item.key === sort.key)
+  return {
+    desc: option?.descLabel ?? '降順',
+    asc: option?.ascLabel ?? '昇順',
+  }
 }
 
 function SortableTh({
@@ -1697,6 +2551,74 @@ function MomentumNumberInput({
   )
 }
 
+function filterChipToneStyle(tone: ActiveFilterChip['tone'] = 'neutral'): React.CSSProperties {
+  switch (tone) {
+    case 'red':
+      return {
+        color: 'var(--price-up)',
+        background: 'rgba(220, 38, 38, 0.07)',
+        borderColor: 'rgba(220, 38, 38, 0.28)',
+        border: '1px solid rgba(220, 38, 38, 0.28)',
+      }
+    case 'blue':
+      return {
+        color: 'var(--price-down)',
+        background: 'rgba(37, 99, 235, 0.07)',
+        borderColor: 'rgba(37, 99, 235, 0.28)',
+        border: '1px solid rgba(37, 99, 235, 0.28)',
+      }
+    case 'green':
+      return {
+        color: '#0f766e',
+        background: 'rgba(20, 184, 166, 0.08)',
+        borderColor: 'rgba(20, 184, 166, 0.32)',
+        border: '1px solid rgba(20, 184, 166, 0.32)',
+      }
+    case 'amber':
+      return {
+        color: '#b45309',
+        background: 'rgba(245, 158, 11, 0.1)',
+        borderColor: 'rgba(245, 158, 11, 0.34)',
+        border: '1px solid rgba(245, 158, 11, 0.34)',
+      }
+    case 'purple':
+      return {
+        color: '#7c3aed',
+        background: 'rgba(124, 58, 237, 0.08)',
+        borderColor: 'rgba(124, 58, 237, 0.28)',
+        border: '1px solid rgba(124, 58, 237, 0.28)',
+      }
+    default:
+      return {
+        color: 'var(--text-secondary)',
+        background: 'var(--bg-elevated)',
+        borderColor: 'var(--border-base)',
+        border: '1px solid var(--border-base)',
+      }
+  }
+}
+
+async function writeTextToClipboard(text: string) {
+  try {
+    await navigator.clipboard.writeText(text)
+    return
+  } catch {
+    // Some browser contexts deny Clipboard API reads/writes during automation.
+    // Keep the user-click path working with the classic textarea fallback.
+  }
+  const textarea = document.createElement('textarea')
+  textarea.value = text
+  textarea.setAttribute('readonly', 'true')
+  textarea.style.position = 'fixed'
+  textarea.style.left = '-9999px'
+  textarea.style.top = '0'
+  document.body.appendChild(textarea)
+  textarea.select()
+  const copied = document.execCommand('copy')
+  document.body.removeChild(textarea)
+  if (!copied) throw new Error('clipboard copy failed')
+}
+
 const mcSelectStyle: React.CSSProperties = {
   padding: '5px 8px',
   fontSize: '12px',
@@ -1753,6 +2675,11 @@ const th: React.CSSProperties = {
   color: 'var(--text-muted)',
   fontSize: '11px',
   whiteSpace: 'nowrap',
+  position: 'sticky',
+  top: 0,
+  zIndex: 3,
+  background: 'var(--bg-elevated)',
+  boxShadow: '0 1px 0 var(--border-dim)',
 }
 const thR: React.CSSProperties = { ...th, textAlign: 'right' }
 const td: React.CSSProperties = { padding: '8px 12px', fontSize: '12px', color: 'var(--text-primary)', whiteSpace: 'nowrap' }

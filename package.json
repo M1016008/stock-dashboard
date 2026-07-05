@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "ulimit -n 65536 2>/dev/null || true; next dev",
     "dev:check": "tsx scripts/check-local-dev.ts",
     "build": "next build",
     "test:timeframes": "tsx scripts/test-timeframes.ts",

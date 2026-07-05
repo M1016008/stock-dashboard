@@ -165,6 +165,165 @@ function similarityBand(score: number) {
   }
 }
 
+const SIMILAR_REASON_ORDER = [
+  'stage',
+  'maAngle',
+  'maAcceleration',
+  'maDistance',
+  'maDistanceFlow',
+  'upperTimeframe',
+  'pricePosition',
+  'context',
+  'risk',
+] as const
+
+type SimilarReasonKey = typeof SIMILAR_REASON_ORDER[number]
+type SimilarReasonSection = {
+  key: SimilarReasonKey
+  meta: { title: string; color: string; background: string; border: string }
+  bullets: string[]
+}
+
+const SIMILAR_REASON_META: Record<string, { title: string; color: string; background: string; border: string }> = {
+  stage: {
+    title: '形の一致',
+    color: '#0f766e',
+    background: 'rgba(20, 184, 166, 0.08)',
+    border: 'rgba(20, 184, 166, 0.34)',
+  },
+  maAngle: {
+    title: '短期の勢い',
+    color: '#b45309',
+    background: 'rgba(245, 158, 11, 0.1)',
+    border: 'rgba(245, 158, 11, 0.34)',
+  },
+  maAcceleration: {
+    title: '急変度',
+    color: '#b45309',
+    background: 'rgba(245, 158, 11, 0.1)',
+    border: 'rgba(245, 158, 11, 0.34)',
+  },
+  maDistance: {
+    title: 'MA間距離',
+    color: '#7c3aed',
+    background: 'rgba(124, 58, 237, 0.08)',
+    border: 'rgba(124, 58, 237, 0.3)',
+  },
+  maDistanceFlow: {
+    title: '距離変化',
+    color: '#7c3aed',
+    background: 'rgba(124, 58, 237, 0.08)',
+    border: 'rgba(124, 58, 237, 0.3)',
+  },
+  upperTimeframe: {
+    title: '週足・月足',
+    color: '#1d4ed8',
+    background: 'rgba(37, 99, 235, 0.08)',
+    border: 'rgba(37, 99, 235, 0.3)',
+  },
+  pricePosition: {
+    title: '価格位置',
+    color: '#475569',
+    background: 'rgba(100, 116, 139, 0.08)',
+    border: 'rgba(100, 116, 139, 0.26)',
+  },
+  context: {
+    title: '地合い',
+    color: '#15803d',
+    background: 'rgba(22, 163, 74, 0.07)',
+    border: 'rgba(22, 163, 74, 0.28)',
+  },
+  risk: {
+    title: '総合・注意点',
+    color: '#be123c',
+    background: 'rgba(225, 29, 72, 0.07)',
+    border: 'rgba(225, 29, 72, 0.3)',
+  },
+}
+
+function stripSentenceEnd(text: string) {
+  return text
+    .replace(/です。/g, '。')
+    .replace(/です$/g, '')
+    .replace(/しています。/g, '。')
+    .replace(/します。/g, '。')
+    .trim()
+}
+
+function compactReasonBullets(key: string, text: string) {
+  const value = stripSentenceEnd(text)
+
+  if (key === 'stage') {
+    const match = value.match(/6桁ステージは\s*(.+?)\s*と\s*(.+?)\s*で、6軸の一致度は約(.+?)%。?/)
+    if (match) return [`基準 ${match[1]} / 候補 ${match[2]}`, `6軸一致度 約${match[3]}%`]
+  }
+
+  if (key === 'maAngle') {
+    const match = value.match(/5日SMA速度は基準(?:銘柄)?が(.+?)、候補(?:銘柄)?が(.+?)(?:。|$)/)
+    if (match) return [`5日SMA速度: 基準 ${match[1]}`, `候補 ${match[2]}`]
+  }
+
+  if (key === 'maAcceleration') {
+    const match = value.match(/短期SMAの急変は、5日SMA加速度が基準(.+?)、候補(.+?)(?:。|$)/)
+    if (match) return [`5日SMA加速度: 基準 ${match[1]}`, `候補 ${match[2]}`]
+  }
+
+  if (key === 'maDistance') {
+    const match = value.match(/5-25距離は基準(.+?)・候補(.+?)、25-75距離は基準(.+?)・候補(.+?)(?:。|$)/)
+    if (match) return [`5-25距離: 基準 ${match[1]} / 候補 ${match[2]}`, `25-75距離: 基準 ${match[3]} / 候補 ${match[4]}`]
+  }
+
+  if (key === 'maDistanceFlow') {
+    const match = value.match(/距離変化は5-25の5日変化が基準(.+?)、候補(.+?)(?:。|$)/)
+    if (match) return [`5-25距離の5日変化: 基準 ${match[1]}`, `候補 ${match[2]}`]
+  }
+
+  if (key === 'upperTimeframe') {
+    const match = value.match(/週足はMA順が基準「(.+?)」・候補「(.+?)」、月足は基準「(.+?)」・候補「(.+?)」(?:。|$)/)
+    if (match) {
+      return [
+        `週足MA順: 基準「${match[1]}」 / 候補「${match[2]}」`,
+        `月足MA順: 基準「${match[3]}」 / 候補「${match[4]}」`,
+        '週足/月足の速度・距離・価格位置も反映',
+      ]
+    }
+  }
+
+  if (key === 'pricePosition') {
+    const match = value.match(/株価位置は5日SMA比が基準(.+?)・候補(.+?)、25日SMA比が基準(.+?)・候補(.+?)(?:。|$)/)
+    if (match) return [`5日SMA比: 基準 ${match[1]} / 候補 ${match[2]}`, `25日SMA比: 基準 ${match[3]} / 候補 ${match[4]}`]
+  }
+
+  if (key === 'context') {
+    const match = value.match(/地合いは市場25日SMA上銘柄比率が基準(.+?)・候補(.+?)、17業種5日騰落が基準(.+?)・候補(.+?)(?:。|$)/)
+    if (match) return [`市場25日SMA上比率: 基準 ${match[1]} / 候補 ${match[2]}`, `17業種5日騰落: 基準 ${match[3]} / 候補 ${match[4]}`]
+  }
+
+  if (key === 'risk') {
+    const match = value.match(/類似度は(.+?)に、(.+?)を重ねて(.+?)%。?失敗条件は(.+?)(?:。|$)/)
+    if (match) return [`類似度 ${match[3]}%: ${match[1]} + ${match[2]}`, `失敗条件: ${match[4]}`]
+  }
+
+  return value
+    .split('。')
+    .map((part) => part.trim())
+    .filter(Boolean)
+}
+
+function similarReasonSections(reason: Record<string, string>) {
+  const sections: SimilarReasonSection[] = []
+  for (const key of SIMILAR_REASON_ORDER) {
+    const text = reason[key]
+    if (!text) continue
+    sections.push({
+      key,
+      meta: SIMILAR_REASON_META[key],
+      bullets: compactReasonBullets(key, text),
+    })
+  }
+  return sections
+}
+
 function trendLabel(value: string | null | undefined) {
   switch (value) {
     case 'up_acceleration': return '上向き加速'
@@ -241,6 +400,58 @@ function MiniMetric({ label, value }: { label: string; value: string }) {
     <div style={{ border: '1px solid var(--border-subtle)', borderRadius: 8, background: 'white', padding: 8 }}>
       <div style={{ fontSize: 10, fontWeight: 800, color: 'var(--text-muted)' }}>{label}</div>
       <div style={{ marginTop: 3, fontSize: 12, fontWeight: 900, color: 'var(--text-primary)' }}>{value}</div>
+    </div>
+  )
+}
+
+function SimilarReasonBlock({ reason }: { reason: Record<string, string> }) {
+  const sections = similarReasonSections(reason)
+  if (sections.length === 0) return null
+  return (
+    <div style={{ marginTop: 10, display: 'grid', gap: 7 }}>
+      <div style={{ fontSize: 11, fontWeight: 900, color: 'var(--text-primary)' }}>
+        類似根拠
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 7 }}>
+        {sections.map((section) => (
+          <div
+            key={section.key}
+            style={{
+              border: `1px solid ${section.meta.border}`,
+              borderLeft: `4px solid ${section.meta.color}`,
+              borderRadius: 8,
+              background: section.meta.background,
+              padding: '8px 9px',
+              display: 'grid',
+              gap: 5,
+            }}
+          >
+            <div style={{ fontSize: 11, fontWeight: 900, color: section.meta.color }}>
+              {section.meta.title}
+            </div>
+            <div style={{ display: 'grid', gap: 3 }}>
+              {section.bullets.map((bullet, index) => (
+                <div
+                  key={`${section.key}-${index}-${bullet}`}
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: '12px minmax(0, 1fr)',
+                    gap: 4,
+                    alignItems: 'start',
+                    fontSize: 11,
+                    lineHeight: 1.5,
+                    fontWeight: 750,
+                    color: 'var(--text-secondary)',
+                  }}
+                >
+                  <span style={{ color: section.meta.color, fontWeight: 1000 }}>・</span>
+                  <span>{bullet}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   )
 }
@@ -441,11 +652,7 @@ export function StockMlInsights({ ticker }: { ticker: string }) {
                   </span>
                 </div>
               </div>
-              <div style={{ marginTop: 8, display: 'grid', gap: 4, fontSize: 11, lineHeight: 1.55, color: 'var(--text-secondary)' }}>
-                {['stage', 'maAngle', 'maAcceleration', 'maDistance', 'maDistanceFlow', 'upperTimeframe', 'pricePosition', 'context', 'risk'].map((key) => (
-                  row.reason[key] ? <span key={key}>{row.reason[key]}</span> : null
-                ))}
-              </div>
+              <SimilarReasonBlock reason={row.reason} />
             </div>
           )
         })}
