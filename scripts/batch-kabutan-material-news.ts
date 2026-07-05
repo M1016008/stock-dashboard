@@ -99,7 +99,7 @@ function splitArticleBodyLines(bodyHtml: string): string[] {
 }
 
 function parseRelatedStocksFromBodyHtml(bodyHtml: string): KabutanMaterialNewsStock[] {
-  const stockLinePattern = /^■?\s*(.+?)<\s*([0-9]{4}|[0-9]{3}[A-Z])\s*>\s*(?:\[([^\]]+)\])?\s*([0-9,.]+(?:\.\d+)?)?\s*([+-][0-9,.]+(?:\.\d+)?)?/i
+  const stockLinePattern = /^(■)?\s*(.+?)<\s*([0-9]{4}|[0-9]{3}[A-Z])\s*>\s*(?:\[([^\]]+)\])?\s*([0-9,.]+(?:\.\d+)?)?\s*([+-][0-9,.]+(?:\.\d+)?)?/i
   const skipPattern = /^(銘柄名|《|提供：|「株探」|日足|週足|月足)/u
   const rows: KabutanMaterialNewsStock[] = []
   let currentTone: 'good' | 'bad' | 'neutral' | null = null
@@ -137,15 +137,21 @@ function parseRelatedStocksFromBodyHtml(bodyHtml: string): KabutanMaterialNewsSt
     if (skipPattern.test(line)) continue
     const match = line.match(stockLinePattern)
     if (match) {
+      const hasStockHeading = Boolean(match[1])
+      const marketText = match[4] ?? null
+      if (!hasStockHeading && !marketText && current) {
+        current.notes.push(line)
+        continue
+      }
       pushCurrent()
       const next: KabutanMaterialNewsStock & { notes: string[] } = {
-        ticker: match[2].toUpperCase(),
-        name: match[1].replace(/^■\s*/, '').trim(),
-        closeText: match[4] ?? null,
-        changeText: match[5] ?? null,
+        ticker: match[3].toUpperCase(),
+        name: match[2].replace(/^■\s*/, '').trim(),
+        closeText: match[5] ?? null,
+        changeText: match[6] ?? null,
         comment: null,
         materialTone: currentTone,
-        marketText: match[3] ?? null,
+        marketText,
         notes: [],
       }
       const tail = line.slice(match[0].length).trim()

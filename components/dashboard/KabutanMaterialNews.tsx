@@ -234,7 +234,11 @@ function ArticleStockTable({ article }: { article: KabutanMaterialNewsArticle })
               </td>
               <td className="px-3 py-2 text-right font-mono text-[11px] font-bold text-[var(--color-text-secondary)]">{row.closeText ?? '---'}</td>
               <td className={`px-3 py-2 text-right font-mono text-[11px] font-black ${changeTone(row.changeText)}`}>{row.changeText ?? '---'}</td>
-              <td className="px-3 py-2 text-[11px] font-semibold leading-5 text-[var(--color-text-secondary)]">{row.comment ?? '記事内コメント未抽出'}</td>
+              <td className="px-3 py-2 text-[11px] font-semibold leading-5 text-[var(--color-text-secondary)]">
+                {row.comment ?? (
+                  <span className="text-[var(--color-text-tertiary)]">コメントは原文で確認</span>
+                )}
+              </td>
               <td className="px-3 py-2 text-right font-mono text-[12px] font-black text-[var(--color-brand-900)]">
                 {row.screener ? `¥${formatNumber(row.screener.price, 1)}` : '---'}
               </td>
