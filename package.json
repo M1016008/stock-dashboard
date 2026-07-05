@@ -54,6 +54,7 @@
     "batch:earnings": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/batch-earnings.ts",
     "batch:earnings-history": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/batch-earnings-history.ts",
     "batch:earnings-refresh": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/refresh-earnings.ts",
+    "auto-earnings-refresh:install": "tsx --env-file=.env.local scripts/install-local-earnings-refresh.ts",
     "batch:sector-etf-holdings": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/batch-sector-etf-holdings.ts",
     "batch:kabutan-material-news": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/batch-kabutan-material-news.ts",
     "auto-kabutan-material-news:install": "tsx --env-file=.env.local scripts/install-local-kabutan-material-news.ts",

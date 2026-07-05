@@ -1,7 +1,7 @@
 // scripts/refresh-earnings.ts
 //
-// JPX公式Excel + J-Quants翌営業日APIの決算予定だけを軽量更新し、
-// ダッシュボードキャッシュへ即時反映する。
+// JPX公式Excel + J-Quants翌営業日APIの決算予定を軽量更新し、
+// 個別銘柄用 serving とダッシュボードキャッシュへ即時反映する。
 
 import { spawn } from 'node:child_process'
 import { eq } from 'drizzle-orm'
@@ -61,6 +61,8 @@ async function main() {
 
   try {
     await runRequired('scripts/batch-earnings.ts')
+    await lock?.heartbeat()
+    await runRequired('scripts/build-serving-stock.ts')
     await lock?.heartbeat()
     await runRequired('scripts/build-dashboard-cache.ts')
 
