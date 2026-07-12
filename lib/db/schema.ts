@@ -618,6 +618,46 @@ export const kabutanMaterialNewsRuns = sqliteTable(
   }),
 )
 
+export const kabutanThemes = sqliteTable(
+  'kabutan_themes',
+  {
+    themeId:                  text('theme_id').primaryKey(),
+    name:                     text('name').notNull(),
+    rank:                     integer('rank'),
+    rankingPeriod:            text('ranking_period').notNull().default('3days_access'),
+    rankingAsOf:              text('ranking_as_of'),
+    url:                      text('url').notNull(),
+    description:              text('description'),
+    representativeStocksJson: text('representative_stocks_json').notNull().default('[]'),
+    relatedStocksJson:        text('related_stocks_json').notNull().default('[]'),
+    stockCount:               integer('stock_count'),
+    source:                   text('source').notNull().default('kabutan'),
+    fetchedAt:                integer('fetched_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+    parseStatus:              text('parse_status').notNull().default('ok'),
+    errorSummary:             text('error_summary'),
+  },
+  (t) => ({
+    rankIdx: index('kabutan_themes_rank_idx').on(t.rank, t.fetchedAt),
+    statusIdx: index('kabutan_themes_status_idx').on(t.parseStatus, t.fetchedAt),
+  }),
+)
+
+export const kabutanThemeRuns = sqliteTable(
+  'kabutan_theme_runs',
+  {
+    id:           integer('id').primaryKey({ autoIncrement: true }),
+    status:       text('status').notNull(),
+    startedAt:    integer('started_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+    finishedAt:   integer('finished_at', { mode: 'timestamp' }),
+    fetchedCount: integer('fetched_count').notNull().default(0),
+    savedCount:   integer('saved_count').notNull().default(0),
+    errorSummary: text('error_summary'),
+  },
+  (t) => ({
+    latestIdx: index('kabutan_theme_runs_latest_idx').on(t.startedAt),
+  }),
+)
+
 export const servingDailySnapshotDates = sqliteTable('serving_daily_snapshot_dates', {
   date:       text('date').primaryKey(),
   tickers:    integer('tickers').notNull(),
@@ -1786,5 +1826,42 @@ export const tursoSyncPartitions = sqliteTable(
   (t) => ({
     pk:        primaryKey({ columns: [t.mode, t.tableName, t.partitionKey] }),
     statusIdx: index('turso_sync_partitions_status_idx').on(t.mode, t.status, t.tableName),
+  }),
+)
+
+export const fxRatesDaily = sqliteTable(
+  'fx_rates_daily',
+  {
+    pair:       text('pair').notNull(),
+    date:       text('date').notNull(),
+    rate:       real('rate').notNull(),
+    source:     text('source').notNull().default('csv'),
+    importedAt: integer('imported_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk:      primaryKey({ columns: [t.pair, t.date] }),
+    dateIdx: index('fx_rates_daily_date_idx').on(t.date),
+  }),
+)
+
+export const customCharts = sqliteTable(
+  'custom_charts',
+  {
+    id:                  text('id').primaryKey(),
+    name:                text('name').notNull(),
+    formula:             text('formula').notNull(),
+    formulaAstJson:      text('formula_ast_json').notNull(),
+    mode:                text('mode').notNull().default('valuation'),
+    baseDate:            text('base_date'),
+    displayCurrency:     text('display_currency').notNull().default('LOCAL'),
+    missingPolicy:       text('missing_policy').notNull().default('intersection'),
+    indicatorConfigJson: text('indicator_config_json').notNull(),
+    favorite:            integer('favorite', { mode: 'boolean' }).notNull().default(false),
+    sortOrder:           integer('sort_order').notNull().default(0),
+    createdAt:           integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+    updatedAt:           integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    sortIdx: index('custom_charts_sort_idx').on(t.favorite, t.sortOrder, t.updatedAt),
   }),
 )

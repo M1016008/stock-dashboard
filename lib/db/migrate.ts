@@ -477,6 +477,34 @@ const STATEMENTS = [
     error_summary TEXT
   )`,
   `CREATE INDEX IF NOT EXISTS kabutan_material_news_runs_latest_idx ON kabutan_material_news_runs(started_at DESC)`,
+  `CREATE TABLE IF NOT EXISTS kabutan_themes (
+    theme_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    rank INTEGER,
+    ranking_period TEXT NOT NULL DEFAULT '3days_access',
+    ranking_as_of TEXT,
+    url TEXT NOT NULL,
+    description TEXT,
+    representative_stocks_json TEXT NOT NULL DEFAULT '[]',
+    related_stocks_json TEXT NOT NULL DEFAULT '[]',
+    stock_count INTEGER,
+    source TEXT NOT NULL DEFAULT 'kabutan',
+    fetched_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    parse_status TEXT NOT NULL DEFAULT 'ok',
+    error_summary TEXT
+  )`,
+  `CREATE INDEX IF NOT EXISTS kabutan_themes_rank_idx ON kabutan_themes(rank, fetched_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS kabutan_themes_status_idx ON kabutan_themes(parse_status, fetched_at DESC)`,
+  `CREATE TABLE IF NOT EXISTS kabutan_theme_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    status TEXT NOT NULL,
+    started_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    finished_at INTEGER,
+    fetched_count INTEGER NOT NULL DEFAULT 0,
+    saved_count INTEGER NOT NULL DEFAULT 0,
+    error_summary TEXT
+  )`,
+  `CREATE INDEX IF NOT EXISTS kabutan_theme_runs_latest_idx ON kabutan_theme_runs(started_at DESC)`,
   `CREATE TABLE IF NOT EXISTS serving_daily_snapshot_dates (
     date TEXT PRIMARY KEY,
     tickers INTEGER NOT NULL,
@@ -1305,6 +1333,31 @@ const STATEMENTS = [
     PRIMARY KEY (mode, table_name, partition_key)
   )`,
   `CREATE INDEX IF NOT EXISTS turso_sync_partitions_status_idx ON turso_sync_partitions(mode, status, table_name)`,
+  `CREATE TABLE IF NOT EXISTS fx_rates_daily (
+    pair TEXT NOT NULL,
+    date TEXT NOT NULL,
+    rate REAL NOT NULL,
+    source TEXT NOT NULL DEFAULT 'csv',
+    imported_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (pair, date)
+  )`,
+  `CREATE INDEX IF NOT EXISTS fx_rates_daily_date_idx ON fx_rates_daily(date)`,
+  `CREATE TABLE IF NOT EXISTS custom_charts (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    formula TEXT NOT NULL,
+    formula_ast_json TEXT NOT NULL,
+    mode TEXT NOT NULL DEFAULT 'valuation',
+    base_date TEXT,
+    display_currency TEXT NOT NULL DEFAULT 'LOCAL',
+    missing_policy TEXT NOT NULL DEFAULT 'intersection',
+    indicator_config_json TEXT NOT NULL,
+    favorite INTEGER NOT NULL DEFAULT 0,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+  )`,
+  `CREATE INDEX IF NOT EXISTS custom_charts_sort_idx ON custom_charts(favorite DESC, sort_order ASC, updated_at DESC)`,
 ]
 
 /** 廃止されたテーブル。存在していれば DROP する（再実行しても無害）。 */

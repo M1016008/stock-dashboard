@@ -366,7 +366,7 @@ async function loadArticlePriceFallbacks(
   return map
 }
 
-async function loadKabutanScreenerInfo(tickers: string[]): Promise<Map<string, KabutanScreenerInfo>> {
+export async function loadKabutanScreenerInfo(tickers: string[]): Promise<Map<string, KabutanScreenerInfo>> {
   const uniqueTickers = Array.from(new Set(tickers.filter((ticker) => /^(?:\d{4}|\d{3}[A-Z])$/.test(ticker))))
   if (uniqueTickers.length === 0) return new Map()
 

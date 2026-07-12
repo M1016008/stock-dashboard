@@ -63,6 +63,7 @@ const NAV_ITEMS = [
       { href: '/hex-stage', label: 'HEXステージ', description: '6ステージの分布と遷移', icon: Hexagon },
       { href: '/sectors', label: '業種分析', description: '17/33業種の強弱', icon: Building2 },
       { href: '/sector-etfs', label: '業界ETF分析', description: 'ETFで業界・テーマを確認', icon: ChartCandlestick },
+      { href: '/themes', label: 'テーマ', description: '株探人気テーマと関連銘柄', icon: ListFilter },
       {
         href: '/ai/ma-lens#historical-pattern-search',
         label: '過去パターン検索',
@@ -87,7 +88,16 @@ const NAV_ITEMS = [
     ],
   },
   { kind: 'link', href: '/earnings', label: '決算', icon: CalendarDays },
-  { kind: 'link', href: '/watchlist', label: 'ウォッチ', icon: Star },
+  {
+    kind: 'menu',
+    id: 'watch',
+    label: 'ウォッチ',
+    icon: Star,
+    items: [
+      { href: '/watchlist', label: 'ウォッチリスト', description: '保存した監視銘柄', icon: Star },
+      { href: '/custom-charts', label: '合成チャート', description: '数式で独自チャートを作成', icon: ChartCandlestick },
+    ],
+  },
 ] as const satisfies readonly NavEntry[]
 
 const US_NAV_ITEMS = [
@@ -114,7 +124,16 @@ const US_NAV_ITEMS = [
       { href: '/backtest', label: '過去検証', description: 'シグナルと期待値を確認', icon: FlaskConical },
     ],
   },
-  { kind: 'link', href: '/watchlist', label: 'ウォッチ', icon: Star },
+  {
+    kind: 'menu',
+    id: 'us-watch',
+    label: 'ウォッチ',
+    icon: Star,
+    items: [
+      { href: '/watchlist', label: 'ウォッチリスト', description: '保存した監視銘柄', icon: Star },
+      { href: '/custom-charts', label: '合成チャート', description: '数式で独自チャートを作成', icon: ChartCandlestick },
+    ],
+  },
 ] as const satisfies readonly NavEntry[]
 
 const COMMODITY_NAV_ITEMS = [
