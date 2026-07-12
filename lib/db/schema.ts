@@ -225,6 +225,27 @@ export const ohlcvDaily = sqliteTable(
   }),
 )
 
+export const manualOhlcvDaily = sqliteTable(
+  'manual_ohlcv_daily',
+  {
+    market:     text('market').notNull().default('JP'),
+    ticker:     text('ticker').notNull(),
+    date:       text('date').notNull(),
+    open:       real('open').notNull(),
+    high:       real('high').notNull(),
+    low:        real('low').notNull(),
+    close:      real('close').notNull(),
+    volume:     integer('volume').notNull().default(0),
+    sourceName: text('source_name'),
+    sourceNote: text('source_note'),
+    importedAt: integer('imported_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.market, t.ticker, t.date] }),
+    tickerDateIdx: index('manual_ohlcv_market_ticker_date_idx').on(t.market, t.ticker, t.date),
+  }),
+)
+
 export const marketUniverse = sqliteTable(
   'market_universe',
   {

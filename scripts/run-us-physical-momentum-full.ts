@@ -16,6 +16,10 @@ const TICKER_CHUNK = Math.max(1, Number(process.env.US_PMS_TICKER_CHUNK ?? 500))
 const DATE_CHUNK = Math.max(1, Number(process.env.US_PMS_DATE_CHUNK ?? 100))
 const TICKER_START_OFFSET = Math.max(0, Number(process.env.US_PMS_TICKER_START_OFFSET ?? 0))
 const DATE_START_OFFSET = Math.max(0, Number(process.env.US_PMS_DATE_START_OFFSET ?? 0))
+const RECENT_DAYS = Math.max(
+  0,
+  Number(process.env.US_PMS_RECENT_DAYS ?? process.env.US_PMS_DAILY_RECENT_DAYS ?? process.env.PMS_RECENT_DAYS ?? 0),
+)
 
 type CountRow = { count: number }
 
@@ -43,7 +47,20 @@ async function countUsDbRows(path: string): Promise<{ tickers: number; dates: nu
   const client = createClient({ url: `file:${path}` })
   await client.execute('PRAGMA busy_timeout=60000')
   const tickerRows = await client.execute('SELECT COUNT(DISTINCT ticker) AS count FROM ohlcv_daily')
-  const dateRows = await client.execute('SELECT COUNT(DISTINCT date) AS count FROM ohlcv_daily')
+  const dateRows = RECENT_DAYS > 0
+    ? await client.execute({
+        sql: `
+          SELECT COUNT(*) AS count
+          FROM (
+            SELECT DISTINCT date
+            FROM ohlcv_daily
+            ORDER BY date DESC
+            LIMIT ?
+          )
+        `,
+        args: [RECENT_DAYS],
+      })
+    : await client.execute('SELECT COUNT(DISTINCT date) AS count FROM ohlcv_daily')
   return {
     tickers: Number((tickerRows.rows[0] as unknown as CountRow | undefined)?.count ?? 0),
     dates: Number((dateRows.rows[0] as unknown as CountRow | undefined)?.count ?? 0),
@@ -101,13 +118,13 @@ async function main(): Promise<void> {
     STOCKBOARD_DB_PATH: path,
     US_ANALYTICS_DB_PATH: path,
     SQLITE_BUSY_RETRIES: process.env.SQLITE_BUSY_RETRIES ?? '720',
-    PMS_RECENT_DAYS: '0',
+    PMS_RECENT_DAYS: String(RECENT_DAYS),
     PMS_OUTPUT_MARKET: 'US',
     PMS_BATCH_CHUNK: process.env.US_PMS_BATCH_CHUNK ?? process.env.PMS_BATCH_CHUNK ?? '300',
   }
 
   console.log(`US PMS chunked full: db=${path}`)
-  console.log(`US PMS chunked full: mode=${mode}, tickers=${tickers}, dates=${dates}, tickerChunk=${TICKER_CHUNK}, dateChunk=${DATE_CHUNK}`)
+  console.log(`US PMS chunked full: mode=${mode}, tickers=${tickers}, dates=${dates}, recentDays=${RECENT_DAYS}, tickerChunk=${TICKER_CHUNK}, dateChunk=${DATE_CHUNK}`)
 
   if (mode === 'full' || mode === 'raw') {
     for (let offset = TICKER_START_OFFSET; offset < tickers; offset += TICKER_CHUNK) {

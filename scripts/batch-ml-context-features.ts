@@ -8,18 +8,27 @@ const RECENT_DAYS = Number(process.env.ML_CONTEXT_RECENT_DAYS ?? 0)
 const START_DATE = process.env.ML_CONTEXT_START_DATE?.trim() || null
 const END_DATE = process.env.ML_CONTEXT_END_DATE?.trim() || null
 
+function maxDate(a: string, b: string): string {
+  return a >= b ? a : b
+}
+
+function laterDate(a: string | null, b: string | null): string | null {
+  if (a && b) return maxDate(a, b)
+  return a ?? b
+}
+
 async function dateBoundary(): Promise<{ start: string | null; lookbackStart: string | null; end: string | null }> {
   const end = END_DATE ?? (await execGet<{ date: string | null }>(
     `SELECT MAX(date) AS date FROM ohlcv_daily`,
   ))?.date ?? null
   if (!end) return { start: null, lookbackStart: null, end: null }
-  const start = START_DATE ?? (RECENT_DAYS > 0
+  const recentStart = RECENT_DAYS > 0
     ? (await execGet<{ date: string | null }>(
         `
         SELECT MIN(date) AS date
         FROM (
           SELECT DISTINCT date
-          FROM ohlcv_daily
+          FROM ohlcv_daily INDEXED BY ohlcv_date_idx
           WHERE date <= ?
           ORDER BY date DESC
           LIMIT ?
@@ -27,14 +36,15 @@ async function dateBoundary(): Promise<{ start: string | null; lookbackStart: st
         `,
         [end, RECENT_DAYS],
       ))?.date ?? null
-    : null)
+    : null
+  const start = RECENT_DAYS > 0 ? laterDate(START_DATE, recentStart) : START_DATE
   const lookbackStart = start
     ? (await execGet<{ date: string | null }>(
         `
         SELECT MIN(date) AS date
         FROM (
           SELECT DISTINCT date
-          FROM ohlcv_daily
+          FROM ohlcv_daily INDEXED BY ohlcv_date_idx
           WHERE date <= ?
           ORDER BY date DESC
           LIMIT 40
@@ -52,10 +62,16 @@ async function main() {
     console.log('ml context features skipped: no ohlcv dates')
     return
   }
+  console.log(
+    `ml context features start: start=${start ?? '-'}, requested_start=${START_DATE ?? '-'}, lookback_start=${lookbackStart ?? '-'}, end=${end}, recent_days=${RECENT_DAYS || 'all'}`,
+  )
   const whereDate = start ? 'date >= ? AND date <= ?' : 'date <= ?'
   const deleteArgs = start ? [start, end] : [end]
-  await execRun(`DELETE FROM ml_market_context_features WHERE ${whereDate}`, deleteArgs)
-  await execRun(`DELETE FROM ml_sector_context_features WHERE ${whereDate}`, deleteArgs)
+  if (process.env.ML_CONTEXT_DELETE_STALE === '1') {
+    console.log(`ml context features delete stale: start=${start ?? '-'}, end=${end}`)
+    await execRun(`DELETE FROM ml_market_context_features WHERE ${whereDate}`, deleteArgs)
+    await execRun(`DELETE FROM ml_sector_context_features WHERE ${whereDate}`, deleteArgs)
+  }
 
   const baseDateWhere = [
     lookbackStart ? 'o.date >= ?' : null,
@@ -66,6 +82,7 @@ async function main() {
   const sectorArgs = [...baseDateArgs, ...(start ? [start, start] : [])]
   const outputWhere = start ? 'WHERE date >= ?' : ''
 
+  console.log(`ml context features market start: start=${start ?? '-'}, end=${end}`)
   await execRun(
     `
     INSERT OR REPLACE INTO ml_market_context_features
@@ -109,7 +126,9 @@ async function main() {
     `,
     marketArgs,
   )
+  console.log(`ml context features market done: start=${start ?? '-'}, end=${end}`)
 
+  console.log(`ml context features sector start: start=${start ?? '-'}, end=${end}`)
   await execRun(
     `
     INSERT OR REPLACE INTO ml_sector_context_features
@@ -181,6 +200,7 @@ async function main() {
     `,
     [...sectorArgs, RECENT_DAYS, end],
   )
+  console.log(`ml context features sector done: start=${start ?? '-'}, end=${end}`)
 
   console.log(`ml context features complete: start=${start ?? '-'}, end=${end}, recent_days=${RECENT_DAYS || 'all'}`)
 }

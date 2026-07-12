@@ -13,7 +13,10 @@ const globalForUsAnalytics = global as unknown as {
 export type UsAnalyticsArgs = readonly InValue[]
 
 export function resolveUsAnalyticsDbPath(): string {
-  return path.resolve(process.env.US_ANALYTICS_DB_PATH?.trim() || DEFAULT_US_ANALYTICS_PATH)
+  const configured = process.env.US_ANALYTICS_DB_PATH?.trim()
+  return configured
+    ? path.resolve(configured)
+    : path.join(/* turbopackIgnore: true */ process.cwd(), DEFAULT_US_ANALYTICS_PATH)
 }
 
 export function hasUsAnalyticsDb(): boolean {

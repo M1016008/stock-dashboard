@@ -113,6 +113,15 @@ const PAGE_DATES = Math.max(1, Number(process.env.ML_RL_PAGE_DATES ?? 20))
 const POLICY_CACHE_INSERT_ROWS = Math.max(100, Number(process.env.ML_RL_POLICY_CACHE_INSERT_ROWS ?? 1000))
 const SQL_AGG_MODE = (process.env.ML_RL_SQL_AGG ?? '1') !== '0'
 
+function maxDate(a: string, b: string): string {
+  return a >= b ? a : b
+}
+
+function laterDate(a: string | null, b: string | null): string | null {
+  if (a && b) return maxDate(a, b)
+  return a ?? b
+}
+
 function parseJson<T>(value: string, fallback: T): T {
   try {
     return JSON.parse(value) as T
@@ -258,12 +267,12 @@ function pushEvaluation(result: PolicyResult, state: State, action: Action) {
 }
 
 async function cutoffDate(): Promise<string | null> {
-  if (START_DATE || RECENT_DAYS <= 0) return START_DATE
+  if (RECENT_DAYS <= 0) return START_DATE
   const latest = END_DATE ?? (await execGet<{ date: string | null }>(
     `SELECT MAX(date) AS date FROM rl_training_states_v2`,
   ))?.date ?? null
   if (!latest) return null
-  return (await execGet<{ date: string | null }>(
+  const recentStart = (await execGet<{ date: string | null }>(
     `
     SELECT MIN(date) AS date
     FROM (
@@ -276,6 +285,7 @@ async function cutoffDate(): Promise<string | null> {
     `,
     [latest, RECENT_DAYS],
   ))?.date ?? null
+  return laterDate(START_DATE, recentStart)
 }
 
 async function ensurePolicyCacheTables(): Promise<void> {

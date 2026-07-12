@@ -24,6 +24,11 @@ function makeOwner(jobType: string): string {
   return `${jobType}:${process.pid}:${Date.now()}:${suffix}`
 }
 
+function isSqliteBusyError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return /SQLITE_BUSY|database is locked/i.test(message)
+}
+
 export async function acquireUpdateLock(
   jobType: string,
   leaseSeconds = DEFAULT_UPDATE_LOCK_LEASE_SECONDS,
@@ -157,18 +162,23 @@ export async function cleanupExpiredUpdateLocks(jobTypes?: readonly string[]): P
   const where = jobTypes && jobTypes.length > 0
     ? `AND job_type IN (${jobTypes.map(() => '?').join(', ')})`
     : ''
-  const result = await client.execute({
-    sql: `
-      UPDATE update_locks
-      SET status = 'idle',
-          owner = NULL,
-          heartbeat_at = unixepoch(),
-          lease_expires_at = unixepoch()
-      WHERE status = 'running'
-        AND lease_expires_at <= unixepoch()
-        ${where}
-    `,
-    args: [...(jobTypes ?? [])],
-  })
-  return Number(result.rowsAffected ?? 0)
+  try {
+    const result = await client.execute({
+      sql: `
+        UPDATE update_locks
+        SET status = 'idle',
+            owner = NULL,
+            heartbeat_at = unixepoch(),
+            lease_expires_at = unixepoch()
+        WHERE status = 'running'
+          AND lease_expires_at <= unixepoch()
+          ${where}
+      `,
+      args: [...(jobTypes ?? [])],
+    })
+    return Number(result.rowsAffected ?? 0)
+  } catch (error) {
+    if (isSqliteBusyError(error)) return 0
+    throw error
+  }
 }

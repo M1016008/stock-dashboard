@@ -52,13 +52,13 @@ async function main() {
     actualCount: await countRows('daily_snapshots', 'date', snapshotDate),
   })
 
-  const modelFeatureDate = await maxDate('model_features')
+  const modelFeatureDate = await maxDate('ml_feature_vectors')
   checks.push({
     key: 'model_features',
     expectedDate,
     actualDate: modelFeatureDate,
     expectedCount,
-    actualCount: await countRows('model_features', 'date', modelFeatureDate),
+    actualCount: await countRows('ml_feature_vectors', 'date', modelFeatureDate),
   })
 
   const physicsDate = await maxDate('ml_feature_vectors_v2', 'date', 'WHERE feature_set = ?', [ML_PHYSICS_FEATURE_SET])

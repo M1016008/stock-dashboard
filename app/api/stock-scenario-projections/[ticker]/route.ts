@@ -167,7 +167,7 @@ export async function GET(request: NextRequest, context: RouteContext) {
     const llmEnabled = request.nextUrl.searchParams.get('llm') !== '0' && process.env.SCENARIO_PROJECTION_LLM_ENABLED !== '0'
     const projection = await buildStockScenarioProjection({ ticker, market, interval, horizonDays, limit, asOfDate })
     if (!projection) {
-      return NextResponse.json({ ok: true, ticker, interval, horizonDays, scenarios: [], message: '価格データがありません。' })
+      return NextResponse.json({ ok: true, ticker, interval, horizonDays, scenarios: [], message: 'J-Quants/手動補完の価格データがありません。' })
     }
     const enriched = await withLlmNarratives(projection, llmEnabled)
     return NextResponse.json({

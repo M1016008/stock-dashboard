@@ -38,7 +38,7 @@ async function main() {
     },
     {
       key: 'model_features',
-      date: await maxDate(`SELECT MAX(date) AS date FROM model_features`),
+      date: await maxDate(`SELECT MAX(date) AS date FROM ml_feature_vectors`),
     },
     {
       key: 'ml_feature_vectors_v2.physics',

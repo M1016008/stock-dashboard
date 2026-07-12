@@ -2,7 +2,7 @@
 'use client'
 
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
-import type { CSSProperties } from 'react'
+import type { CSSProperties, FormEvent } from 'react'
 import { MarketBadge } from '@/components/ui/MarketBadge'
 import { MarginBadges } from '@/components/ui/MarginBadges'
 import { PriceDisplay } from '@/components/ui/PriceDisplay'
@@ -174,6 +174,13 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
         </div>
       </div>
 
+      {!loading && !quote && (
+        <div className="card" style={missingPriceNoticeStyle}>
+          J-Quants日足に未収録です。手動補完CSVを投入すると株価・価格チャート・シナリオに反映します。
+        </div>
+      )}
+      {!loading && !quote && <ManualOhlcvImportCard ticker={ticker} />}
+
       {/* 基本情報 + 直近変化率 */}
       <div className="stock-info-grid">
         <BasicInfoCard ticker={ticker} quote={quote} />
@@ -327,6 +334,24 @@ interface PhysicalMomentumResponse {
   rank: number | null
   totalRanked: number
   trend: 'rising' | 'falling' | 'flat' | null
+  latestScoredDate?: string | null
+  isScoreFresh?: boolean
+  timeframeViews?: PhysicalMomentumTimeframeView[]
+}
+
+interface PhysicalMomentumTimeframeView {
+  interval: 'D' | '2D' | 'W' | 'M'
+  label: string
+  basis: string
+  latestDate: string | null
+  lookbackBars: number
+  approxTradingDays: number | null
+  scoreSource: 'market_z' | 'local_timeframe_z'
+  historyCount: number
+  physicalMomentumScore: number | null
+  physicalForceScore: number | null
+  physicalEnergyScore: number | null
+  trend: 'rising' | 'falling' | 'flat' | null
 }
 
 interface PhysicalPlanCandidate {
@@ -439,6 +464,7 @@ function PhysicalMomentumSection({ ticker, analysisDate }: { ticker: string; ana
   const latest = data?.latest ?? null
   const momentumHistoryCount = data?.history?.length ?? 0
   const isMomentumCoverageSparse = momentumHistoryCount < 20
+  const isMomentumScoreStale = Boolean(latest && data?.isScoreFresh === false)
   const coverageWarningStyle: CSSProperties = {
     display: 'grid',
     gap: '4px',
@@ -466,7 +492,7 @@ function PhysicalMomentumSection({ ticker, analysisDate }: { ticker: string; ana
         <div>
           <div className="section-header" style={{ margin: 0 }}>Physical Momentum</div>
           <div style={physicalSubTextStyle}>
-            PMSは買い/売りの予測ではなく、直近20営業日の累積運動量です。足元の向きはPFS、過熱や大値幅はPESで分けて見ます。
+            PMSは買い/売りの予測ではなく、時間軸ごとの運動状態です。日足・2日足・週足・月足で結論を分けて見ます。
           </div>
         </div>
         {latest && (
@@ -493,10 +519,21 @@ function PhysicalMomentumSection({ ticker, analysisDate }: { ticker: string; ana
               </span>
             </div>
           )}
+          {isMomentumScoreStale && (
+            <div style={coverageWarningStyle}>
+              <strong>最新スコア標準化が未完了</strong>
+              <span>
+                価格・raw物理量は{latest.date}までありますが、PMS/PFS/PESの標準化済みスコアは
+                {data?.latestScoredDate ? `${data.latestScoredDate}まで` : 'まだありません'}。
+                古い日付を最新扱いせず、標準化完了後に結論を更新します。
+              </span>
+            </div>
+          )}
+          <PhysicalTimeframeConclusionPanel views={data?.timeframeViews ?? []} />
           {insight && (
             <div style={physicalHeroStyle}>
               <div style={physicalHeroMainStyle}>
-                <div style={{ ...physicalHeroLabelStyle, color: insight.color }}>結論</div>
+                <div style={{ ...physicalHeroLabelStyle, color: insight.color }}>日足20営業日の結論</div>
                 <div style={{ ...physicalHeroTitleStyle, color: insight.color }}>{insight.label}</div>
                 <p style={physicalHeroDescriptionStyle}>{insight.description}</p>
               </div>
@@ -654,6 +691,93 @@ function PhysicalMomentumGauge({
       </div>
     </div>
   )
+}
+
+function PhysicalTimeframeConclusionPanel({ views }: { views: PhysicalMomentumTimeframeView[] }) {
+  if (views.length === 0) return null
+  const primary = views.find((view) => view.interval === 'D') ?? views[0]
+  const primaryView = buildPhysicalMomentumView({
+    pms: primary.physicalMomentumScore,
+    pfs: primary.physicalForceScore,
+    pes: primary.physicalEnergyScore,
+    trend: primary.trend,
+  })
+  const longerViews = views.filter((view) => view.interval !== 'D')
+  const longerLabels = longerViews
+    .map((view) => {
+      const built = buildPhysicalMomentumView({
+        pms: view.physicalMomentumScore,
+        pfs: view.physicalForceScore,
+        pes: view.physicalEnergyScore,
+        trend: view.trend,
+      })
+      return `${view.interval}:${built.label}`
+    })
+    .join(' / ')
+
+  return (
+    <div style={physicalTimeframePanelStyle}>
+      <div style={physicalMiniHeaderStyle}>
+        <strong>時間軸別の結論</strong>
+        <span>
+          総合: 日足は{primaryView.label}
+          {longerLabels ? ` / ${longerLabels}` : ''}
+        </span>
+      </div>
+      <div style={physicalTimeframeGridStyle}>
+        {views.map((view) => (
+          <PhysicalTimeframeConclusionCard key={view.interval} view={view} />
+        ))}
+      </div>
+      <p style={physicalTimeframeNoteStyle}>
+        日足は市場横断Z、2日足・週足・月足は銘柄内の時間軸Z。時間軸が違えば「買い/売り/待ち」の見方も変わります。
+      </p>
+    </div>
+  )
+}
+
+function PhysicalTimeframeConclusionCard({ view }: { view: PhysicalMomentumTimeframeView }) {
+  const built = buildPhysicalMomentumView({
+    pms: view.physicalMomentumScore,
+    pfs: view.physicalForceScore,
+    pes: view.physicalEnergyScore,
+    trend: view.trend,
+  })
+  const color = physicalToneColor(built.tone)
+  const scoreTone = view.physicalMomentumScore == null
+    ? 'var(--text-muted)'
+    : view.physicalMomentumScore >= 0
+      ? 'var(--price-up)'
+      : 'var(--price-down)'
+  return (
+    <div style={{ ...physicalTimeframeCardStyle, borderColor: `${color}66`, background: physicalTimeframeCardBackground(built.tone) }}>
+      <div style={physicalTimeframeCardTopStyle}>
+        <div>
+          <span style={physicalTimeframeLabelStyle}>{view.label}</span>
+          <strong style={{ ...physicalTimeframeTitleStyle, color }}>{built.label}</strong>
+        </div>
+        <span style={{ ...physicalTimeframeBadgeStyle, borderColor: `${color}66`, color }}>{view.interval}</span>
+      </div>
+      <div style={physicalTimeframeMetricRowStyle}>
+        <span>PMS <b style={{ color: scoreTone }}>{fmtScore(view.physicalMomentumScore)}</b></span>
+        <span>PFS <b>{fmtScore(view.physicalForceScore)}</b></span>
+        <span>PES <b>{fmtScore(view.physicalEnergyScore)}</b></span>
+      </div>
+      <p style={physicalTimeframeStanceStyle}>{built.stance}</p>
+      <div style={physicalTimeframeMetaStyle}>
+        <span>{view.basis}</span>
+        <span>{view.latestDate ?? '-'}</span>
+        <span>{view.scoreSource === 'market_z' ? '市場比較' : '時間軸内比較'}</span>
+      </div>
+    </div>
+  )
+}
+
+function physicalTimeframeCardBackground(tone: PhysicalMomentumTone): string {
+  if (tone === 'up') return 'rgba(220, 38, 38, 0.055)'
+  if (tone === 'down') return 'rgba(37, 99, 235, 0.055)'
+  if (tone === 'warning') return 'rgba(245, 158, 11, 0.075)'
+  return 'var(--bg-elevated)'
 }
 
 function PhysicalBreakdown({ label, help, value, tone }: { label: string; help: string; value: string; tone?: number | null }) {
@@ -1632,6 +1756,94 @@ const physicalHeroDescriptionStyle: CSSProperties = {
   lineHeight: 1.65,
 }
 
+const physicalTimeframePanelStyle: CSSProperties = {
+  border: '1px solid var(--border-subtle)',
+  borderRadius: 'var(--radius-sm)',
+  background: 'linear-gradient(180deg, #fff, var(--bg-elevated))',
+  padding: '12px',
+  marginBottom: '10px',
+}
+
+const physicalTimeframeGridStyle: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(min(210px, 100%), 1fr))',
+  gap: '10px',
+}
+
+const physicalTimeframeCardStyle: CSSProperties = {
+  border: '1px solid var(--border-subtle)',
+  borderRadius: 'var(--radius-sm)',
+  padding: '10px',
+  display: 'grid',
+  gap: '8px',
+  minWidth: 0,
+}
+
+const physicalTimeframeCardTopStyle: CSSProperties = {
+  display: 'flex',
+  justifyContent: 'space-between',
+  gap: '8px',
+  alignItems: 'flex-start',
+}
+
+const physicalTimeframeLabelStyle: CSSProperties = {
+  display: 'block',
+  color: 'var(--text-muted)',
+  fontSize: '10px',
+  fontWeight: 800,
+}
+
+const physicalTimeframeTitleStyle: CSSProperties = {
+  display: 'block',
+  marginTop: '3px',
+  fontSize: '15px',
+  lineHeight: 1.25,
+}
+
+const physicalTimeframeBadgeStyle: CSSProperties = {
+  border: '1px solid currentColor',
+  borderRadius: '999px',
+  background: '#fff',
+  fontFamily: 'var(--font-mono)',
+  fontSize: '10px',
+  fontWeight: 900,
+  padding: '3px 7px',
+}
+
+const physicalTimeframeMetricRowStyle: CSSProperties = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: '6px',
+  color: 'var(--text-secondary)',
+  fontFamily: 'var(--font-mono)',
+  fontSize: '11px',
+  fontWeight: 800,
+}
+
+const physicalTimeframeStanceStyle: CSSProperties = {
+  margin: 0,
+  color: 'var(--text-primary)',
+  fontSize: '12px',
+  fontWeight: 700,
+  lineHeight: 1.55,
+}
+
+const physicalTimeframeMetaStyle: CSSProperties = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: '6px',
+  color: 'var(--text-muted)',
+  fontSize: '10px',
+  fontWeight: 700,
+}
+
+const physicalTimeframeNoteStyle: CSSProperties = {
+  margin: '10px 0 0',
+  color: 'var(--text-muted)',
+  fontSize: '11px',
+  lineHeight: 1.6,
+}
+
 const physicalReasonPanelStyle: CSSProperties = {
   border: '1px solid var(--border-subtle)',
   borderRadius: 'var(--radius-sm)',
@@ -2356,6 +2568,95 @@ function fmtChange(value: number | null | undefined) {
   return `${value > 0 ? '+' : ''}${Math.round(value).toLocaleString('ja-JP')}株`
 }
 
+interface ManualOhlcvImportResponse {
+  ok: boolean
+  imported?: number
+  error?: string
+  message?: string
+  errors?: string[]
+  summary?: {
+    count: number
+    firstDate: string | null
+    latestDate: string | null
+  }
+}
+
+function ManualOhlcvImportCard({ ticker }: { ticker: string }) {
+  const [csv, setCsv] = useState('')
+  const [sourceName, setSourceName] = useState('manual_csv')
+  const [status, setStatus] = useState<string | null>(null)
+  const [errors, setErrors] = useState<string[]>([])
+  const [submitting, setSubmitting] = useState(false)
+
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    setSubmitting(true)
+    setStatus(null)
+    setErrors([])
+    try {
+      const res = await fetch(`/api/manual-ohlcv/${encodeURIComponent(ticker)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ csv, sourceName }),
+      })
+      const data = await res.json() as ManualOhlcvImportResponse
+      if (!res.ok || !data.ok) {
+        setErrors(data.errors?.length ? data.errors : [data.message ?? data.error ?? '取り込みに失敗'])
+        return
+      }
+      const range = data.summary?.firstDate && data.summary.latestDate
+        ? `${data.summary.firstDate} - ${data.summary.latestDate}`
+        : '期間未取得'
+      setStatus(`${data.imported ?? 0}行を保存。${range}`)
+      window.setTimeout(() => window.location.reload(), 700)
+    } catch (error) {
+      setErrors([error instanceof Error ? error.message : String(error)])
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <form className="card" style={manualImportCardStyle} onSubmit={submit}>
+      <div style={manualImportHeaderStyle}>
+        <div>
+          <div style={manualImportTitleStyle}>手動OHLCV補完</div>
+          <div style={manualImportSubStyle}>date, open, high, low, close, volume / 日付, 始値, 高値, 安値, 終値, 出来高</div>
+        </div>
+        <button type="submit" style={manualImportButtonStyle} disabled={submitting || csv.trim().length === 0}>
+          {submitting ? '保存中...' : '保存'}
+        </button>
+      </div>
+      <div style={manualImportControlsStyle}>
+        <label style={manualImportLabelStyle}>
+          データ元
+          <input
+            value={sourceName}
+            onChange={(event) => setSourceName(event.target.value)}
+            style={manualImportInputStyle}
+            placeholder="manual_csv"
+          />
+        </label>
+      </div>
+      <textarea
+        value={csv}
+        onChange={(event) => setCsv(event.target.value)}
+        style={manualImportTextareaStyle}
+        spellCheck={false}
+        placeholder={'date,open,high,low,close,volume\n2026-07-10,100,105,98,103,120000'}
+      />
+      {status && <div style={manualImportStatusStyle}>{status}</div>}
+      {errors.length > 0 && (
+        <div style={manualImportErrorStyle}>
+          {errors.map((error) => (
+            <div key={error}>・{error}</div>
+          ))}
+        </div>
+      )}
+    </form>
+  )
+}
+
 function MarketSnapshotCard({
   ticker,
   marginInfo,
@@ -2711,6 +3012,109 @@ const basicStageCellStyle: CSSProperties = {
   display: 'grid',
   justifyItems: 'center',
   gap: '1px',
+}
+
+const missingPriceNoticeStyle: CSSProperties = {
+  padding: '10px 12px',
+  borderColor: 'rgba(245, 158, 11, 0.34)',
+  background: 'rgba(245, 158, 11, 0.10)',
+  color: '#92400e',
+  fontSize: '12px',
+  fontWeight: 700,
+  lineHeight: 1.6,
+}
+
+const manualImportCardStyle: CSSProperties = {
+  padding: '14px',
+  display: 'grid',
+  gap: '10px',
+  borderColor: 'rgba(59, 130, 246, 0.22)',
+  background: 'rgba(59, 130, 246, 0.055)',
+}
+
+const manualImportHeaderStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'flex-start',
+  justifyContent: 'space-between',
+  gap: '12px',
+}
+
+const manualImportTitleStyle: CSSProperties = {
+  color: 'var(--text-primary)',
+  fontSize: '13px',
+  fontWeight: 800,
+}
+
+const manualImportSubStyle: CSSProperties = {
+  marginTop: '3px',
+  color: 'var(--text-muted)',
+  fontSize: '11px',
+  fontFamily: 'var(--font-mono)',
+  lineHeight: 1.4,
+}
+
+const manualImportControlsStyle: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'minmax(180px, 320px)',
+  gap: '8px',
+}
+
+const manualImportLabelStyle: CSSProperties = {
+  display: 'grid',
+  gap: '4px',
+  color: 'var(--text-muted)',
+  fontSize: '11px',
+  fontWeight: 700,
+}
+
+const manualImportInputStyle: CSSProperties = {
+  height: '32px',
+  border: '1px solid var(--border-base)',
+  borderRadius: '6px',
+  padding: '0 10px',
+  background: 'var(--surface-primary)',
+  color: 'var(--text-primary)',
+  fontSize: '12px',
+}
+
+const manualImportTextareaStyle: CSSProperties = {
+  width: '100%',
+  minHeight: '132px',
+  resize: 'vertical',
+  border: '1px solid var(--border-base)',
+  borderRadius: '6px',
+  padding: '10px',
+  background: 'var(--surface-primary)',
+  color: 'var(--text-primary)',
+  fontFamily: 'var(--font-mono)',
+  fontSize: '11px',
+  lineHeight: 1.5,
+}
+
+const manualImportButtonStyle: CSSProperties = {
+  border: '1px solid var(--accent-primary)',
+  borderRadius: '6px',
+  padding: '7px 13px',
+  background: 'var(--accent-primary)',
+  color: '#fff',
+  fontSize: '12px',
+  fontWeight: 800,
+  cursor: 'pointer',
+  whiteSpace: 'nowrap',
+}
+
+const manualImportStatusStyle: CSSProperties = {
+  color: 'var(--price-up)',
+  fontSize: '12px',
+  fontWeight: 700,
+}
+
+const manualImportErrorStyle: CSSProperties = {
+  display: 'grid',
+  gap: '3px',
+  color: 'var(--price-down)',
+  fontSize: '12px',
+  lineHeight: 1.5,
 }
 
 const basicStageCellLabelStyle: CSSProperties = {

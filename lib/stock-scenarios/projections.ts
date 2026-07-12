@@ -10,6 +10,7 @@ import {
   resampleOhlcv,
   type ChartIntervalCode,
 } from '@/lib/timeframes'
+import { loadManualOhlcvRows } from '@/lib/manual-ohlcv'
 import type { OHLCV } from '@/types/stock'
 
 export type ScenarioInterval = ChartIntervalCode
@@ -956,7 +957,10 @@ async function loadOhlcv(ticker: string, market: MarketCode, asOfDate?: string |
     `,
     asOfDate ? [ticker, asOfDate] : [ticker],
   )
-  return rows.map(toOhlcv)
+  if (rows.length > 0) {
+    return rows.map(toOhlcv)
+  }
+  return loadManualOhlcvRows(ticker, { asOfDate })
 }
 
 async function loadFeature(ticker: string, market: MarketCode, asOfDate?: string | null): Promise<FeatureRow | null> {

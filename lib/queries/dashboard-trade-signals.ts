@@ -221,6 +221,11 @@ type TradeSignalCacheRow = {
 
 let ensureTradeSignalCachePromise: Promise<void> | null = null
 
+function isSqliteBusyError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return /SQLITE_BUSY|database is locked/i.test(message)
+}
+
 async function ensureTradeSignalCacheTable(): Promise<void> {
   if (!ensureTradeSignalCachePromise) {
     ensureTradeSignalCachePromise = Promise.resolve()
@@ -280,16 +285,22 @@ async function resolveTradeSignalCacheDates(date: string | null, includeUs: bool
 }
 
 async function readTradeSignalCache(cacheKey: string): Promise<DashboardTradeSignalResult | null> {
-  await ensureTradeSignalCacheTable()
-  const row = await execGet<TradeSignalCacheRow>(
-    `
-      SELECT payload_json AS payloadJson, computed_at AS computedAt
-      FROM dashboard_trade_signal_cache
-      WHERE cache_key = ?
-      LIMIT 1
-    `,
-    [cacheKey],
-  )
+  let row: TradeSignalCacheRow | undefined
+  try {
+    await ensureTradeSignalCacheTable()
+    row = await execGet<TradeSignalCacheRow>(
+      `
+        SELECT payload_json AS payloadJson, computed_at AS computedAt
+        FROM dashboard_trade_signal_cache
+        WHERE cache_key = ?
+        LIMIT 1
+      `,
+      [cacheKey],
+    )
+  } catch (error) {
+    if (isSqliteBusyError(error)) return null
+    throw error
+  }
   if (!row) return null
   const age = Math.floor(Date.now() / 1000) - Number(row.computedAt ?? 0)
   if (age > TRADE_SIGNAL_CACHE_TTL_SEC) return null
@@ -301,17 +312,25 @@ async function readTradeSignalCache(cacheKey: string): Promise<DashboardTradeSig
 }
 
 async function writeTradeSignalCache(cacheKey: string, payload: DashboardTradeSignalResult): Promise<void> {
-  await ensureTradeSignalCacheTable()
-  await client.execute({
-    sql: `
-      INSERT INTO dashboard_trade_signal_cache (cache_key, payload_json, computed_at)
-      VALUES (?, ?, unixepoch())
-      ON CONFLICT(cache_key) DO UPDATE SET
-        payload_json = excluded.payload_json,
-        computed_at = excluded.computed_at
-    `,
-    args: [cacheKey, JSON.stringify(payload)],
-  })
+  try {
+    await ensureTradeSignalCacheTable()
+    await client.execute({
+      sql: `
+        INSERT INTO dashboard_trade_signal_cache (cache_key, payload_json, computed_at)
+        VALUES (?, ?, unixepoch())
+        ON CONFLICT(cache_key) DO UPDATE SET
+          payload_json = excluded.payload_json,
+          computed_at = excluded.computed_at
+      `,
+      args: [cacheKey, JSON.stringify(payload)],
+    })
+  } catch (error) {
+    if (isSqliteBusyError(error)) {
+      console.warn('[dashboard-trade-signals] cache write skipped: database is locked')
+      return
+    }
+    throw error
+  }
 }
 
 type UsMetricRow = {

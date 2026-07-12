@@ -499,7 +499,7 @@ async function tickers(): Promise<string[]> {
       `d.date = ?`,
       `f.ticker IS NULL`,
     ]
-    const args: string[] = [ML_PHYSICS_FEATURE_SET, date]
+    const args: Array<string | number> = [ML_PHYSICS_FEATURE_SET, date]
     if (TICKER_START) {
       where.push(`d.ticker >= ?`)
       args.push(TICKER_START)
@@ -508,6 +508,7 @@ async function tickers(): Promise<string[]> {
       where.push(`d.ticker <= ?`)
       args.push(TICKER_END)
     }
+    args.push(MIN_HISTORY_DAYS)
     const limitSql = TICKER_LIMIT > 0 ? ` LIMIT ${TICKER_LIMIT}` : ''
     const rows = await execAll<{ ticker: string }>(
       `
@@ -518,6 +519,7 @@ async function tickers(): Promise<string[]> {
        AND f.date = d.date
        AND f.feature_set = ?
       WHERE ${where.join(' AND ')}
+        AND (SELECT COUNT(*) FROM ohlcv_daily h WHERE h.ticker = d.ticker) >= ?
       ORDER BY d.ticker${limitSql}
       `,
       args,

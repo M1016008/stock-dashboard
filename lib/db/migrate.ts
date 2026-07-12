@@ -180,6 +180,21 @@ const STATEMENTS = [
   )`,
   `CREATE INDEX IF NOT EXISTS ohlcv_date_idx ON ohlcv_daily(date)`,
   `CREATE INDEX IF NOT EXISTS ohlcv_date_ticker_idx ON ohlcv_daily(date, ticker)`,
+  `CREATE TABLE IF NOT EXISTS manual_ohlcv_daily (
+    market TEXT NOT NULL DEFAULT 'JP',
+    ticker TEXT NOT NULL,
+    date TEXT NOT NULL,
+    open REAL NOT NULL,
+    high REAL NOT NULL,
+    low REAL NOT NULL,
+    close REAL NOT NULL,
+    volume INTEGER NOT NULL DEFAULT 0,
+    source_name TEXT,
+    source_note TEXT,
+    imported_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (market, ticker, date)
+  )`,
+  `CREATE INDEX IF NOT EXISTS manual_ohlcv_market_ticker_date_idx ON manual_ohlcv_daily(market, ticker, date)`,
   `CREATE TABLE IF NOT EXISTS market_universe (
     market TEXT NOT NULL,
     ticker TEXT NOT NULL,

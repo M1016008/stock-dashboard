@@ -215,8 +215,8 @@ async function main() {
       } else {
         try {
           await runRequired('scripts/batch-ml-features.ts', {
-            ML_RECENT_DAYS: process.env.ML_DAILY_RECENT_DAYS ?? '0',
-            ML_MIN_HISTORY_DAYS: process.env.ML_DAILY_MIN_HISTORY_DAYS ?? '1',
+            ML_RECENT_DAYS: process.env.ML_DAILY_RECENT_DAYS ?? '420',
+            ML_MIN_HISTORY_DAYS: process.env.ML_DAILY_MIN_HISTORY_DAYS ?? '220',
             ML_START_DATE: process.env.ML_FULL_START_DATE ?? '1900-01-01',
           }, heartbeat)
           await lock.heartbeat()
@@ -242,13 +242,13 @@ async function main() {
             console.log('Daily ML walk-forward evaluation skipped (set ML_DAILY_EVALUATE=1 for weekly/manual evaluation)')
           }
           await runRequired('scripts/batch-ml-context-features.ts', {
-            ML_CONTEXT_RECENT_DAYS: process.env.ML_CONTEXT_DAILY_RECENT_DAYS ?? '0',
+            ML_CONTEXT_RECENT_DAYS: process.env.ML_CONTEXT_DAILY_RECENT_DAYS ?? '420',
             ML_CONTEXT_START_DATE: process.env.ML_FULL_START_DATE ?? '1900-01-01',
           }, heartbeat)
           await lock.heartbeat()
           await runRequired('scripts/batch-ml-physics-features.ts', {
-            ML_PHYSICS_RECENT_DAYS: process.env.ML_PHYSICS_DAILY_RECENT_DAYS ?? '0',
-            ML_PHYSICS_MIN_HISTORY_DAYS: process.env.ML_PHYSICS_DAILY_MIN_HISTORY_DAYS ?? '1',
+            ML_PHYSICS_RECENT_DAYS: process.env.ML_PHYSICS_DAILY_RECENT_DAYS ?? '420',
+            ML_PHYSICS_MIN_HISTORY_DAYS: process.env.ML_PHYSICS_DAILY_MIN_HISTORY_DAYS ?? '220',
             ML_PHYSICS_START_DATE: process.env.ML_FULL_START_DATE ?? '1900-01-01',
           }, heartbeat)
           await lock.heartbeat()

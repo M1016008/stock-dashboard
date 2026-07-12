@@ -35,6 +35,7 @@ const END_DATE = process.env.ML_END_DATE?.trim() || null
 const TICKER_LIMIT = Number(process.env.ML_TICKER_LIMIT ?? 0)
 const TICKER_START = process.env.ML_TICKER_START?.trim() || null
 const TICKER_END = process.env.ML_TICKER_END?.trim() || null
+const MISSING_ONLY_DATE = process.env.ML_MISSING_ONLY_DATE?.trim() || null
 const HORIZONS = (process.env.ML_HORIZONS ?? '5,10,20,40,60,90')
   .split(',')
   .map((value) => Number(value.trim()))
@@ -111,20 +112,34 @@ function maxHigh(rows: Row[], from: number, to: number): { date: string | null; 
 }
 
 async function tickers(): Promise<string[]> {
+  const missingOnlyDate = MISSING_ONLY_DATE === 'latest'
+    ? ((await execAll<{ date: string | null }>(`SELECT MAX(date) AS date FROM ohlcv_daily`))[0]?.date ?? null)
+    : MISSING_ONLY_DATE
   const where: string[] = []
-  const args: string[] = []
+  const args: Array<string | number> = []
   if (TICKER_START) {
-    where.push(`ticker >= ?`)
+    where.push(`o.ticker >= ?`)
     args.push(TICKER_START)
   }
   if (TICKER_END) {
-    where.push(`ticker <= ?`)
+    where.push(`o.ticker <= ?`)
     args.push(TICKER_END)
+  }
+  if (missingOnlyDate) {
+    where.push(`o.date = ?`)
+    args.push(missingOnlyDate)
+    where.push(`(SELECT COUNT(*) FROM ohlcv_daily h WHERE h.ticker = o.ticker) >= ?`)
+    args.push(MIN_HISTORY_DAYS)
+    where.push(`NOT EXISTS (
+      SELECT 1
+      FROM ml_feature_vectors f
+      WHERE f.ticker = o.ticker AND f.date = o.date
+    )`)
   }
   const whereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : ''
   const limitSql = TICKER_LIMIT > 0 ? ` LIMIT ${TICKER_LIMIT}` : ''
   const rows = await execAll<{ ticker: string }>(
-    `SELECT ticker FROM ohlcv_daily ${whereSql} GROUP BY ticker ORDER BY ticker${limitSql}`,
+    `SELECT o.ticker FROM ohlcv_daily o ${whereSql} GROUP BY o.ticker ORDER BY o.ticker${limitSql}`,
     args,
   )
   return rows.map((row) => row.ticker)
@@ -303,7 +318,7 @@ async function main() {
   let stateCount = 0
   const started = Date.now()
   console.log(
-    `ml feature build: tickers=${codes.length}, recent_days=${RECENT_DAYS || 'all'}, min_history_days=${MIN_HISTORY_DAYS}, start=${START_DATE ?? '-'}, end=${END_DATE ?? '-'}, horizons=${HORIZONS.join('/')}`,
+    `ml feature build: tickers=${codes.length}, recent_days=${RECENT_DAYS || 'all'}, min_history_days=${MIN_HISTORY_DAYS}, start=${START_DATE ?? '-'}, end=${END_DATE ?? '-'}, missing_only_date=${MISSING_ONLY_DATE ?? '-'}, horizons=${HORIZONS.join('/')}`,
   )
   if (TICKER_START || TICKER_END) console.log(`ml feature ticker range: ${TICKER_START ?? '-'}..${TICKER_END ?? '-'}`)
 

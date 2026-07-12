@@ -6,6 +6,7 @@ import { ohlcvDaily } from '@/lib/db/schema'
 import { and, asc, eq, gte } from 'drizzle-orm'
 import type { OHLCV } from '@/types/stock'
 import { parseTimeframeSpec, resampleOhlcv, specToIntervalCode } from '@/lib/timeframes'
+import { loadManualOhlcvRows } from '@/lib/manual-ohlcv'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -54,15 +55,19 @@ export async function GET(
     }
     const safeDays = days ?? PERIOD_DAYS['1y']
 
+    const fromDate = period === 'all'
+      ? null
+      : new Date(Date.now() - safeDays * 86_400_000).toISOString().slice(0, 10)
+    let source: 'jquants' | 'manual_ohlcv' = 'jquants'
     const rows = await db
       .select()
       .from(ohlcvDaily)
-      .where(period === 'all'
+      .where(fromDate === null
         ? eq(ohlcvDaily.ticker, ticker)
-        : and(eq(ohlcvDaily.ticker, ticker), gte(ohlcvDaily.date, new Date(Date.now() - safeDays * 86_400_000).toISOString().slice(0, 10))))
+        : and(eq(ohlcvDaily.ticker, ticker), gte(ohlcvDaily.date, fromDate)))
       .orderBy(asc(ohlcvDaily.date))
 
-    const history: OHLCV[] = rows.map(r => ({
+    let history: OHLCV[] = rows.map(r => ({
       date:   r.date,
       open:   r.open,
       high:   r.high,
@@ -70,6 +75,12 @@ export async function GET(
       close:  r.close,
       volume: r.volume,
     }))
+    if (history.length === 0) {
+      history = await loadManualOhlcvRows(ticker, { fromDate })
+      if (history.length > 0) {
+        source = 'manual_ohlcv'
+      }
+    }
 
     const output = timeframeSpec ? resampleOhlcv(history, timeframeSpec) : history
 
@@ -79,6 +90,7 @@ export async function GET(
         period,
         timeframe: timeframeSpec ?? { timeframe: 'day', multiplier: 1 },
         interval: timeframeSpec ? specToIntervalCode(timeframeSpec) : 'D',
+        source,
         count: output.length,
         rows: output,
       })

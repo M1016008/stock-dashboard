@@ -22,7 +22,10 @@ const TURSO_TOKEN = process.env.TURSO_AUTH_TOKEN
 // USE_LOCAL_DB=1 で Turso を無視してローカル DB を強制 (バッチ用)
 const FORCE_LOCAL = process.env.USE_LOCAL_DB === '1'
 
-const configuredLocalDbPath = process.env.STOCKBOARD_DB_PATH || process.env.LOCAL_DB_PATH
+const configuredLocalDbPath =
+  process.env.STOCKBOARD_DB_ROLE === 'us-analytics' && process.env.US_ANALYTICS_DB_PATH
+    ? process.env.US_ANALYTICS_DB_PATH
+    : process.env.STOCKBOARD_DB_PATH || process.env.LOCAL_DB_PATH
 export const localDbPath = configuredLocalDbPath
   ? path.resolve(configuredLocalDbPath)
   : path.join(process.cwd(), 'data', 'stockboard.db')

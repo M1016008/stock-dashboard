@@ -6,10 +6,20 @@ import { db, client } from '@/lib/db/client'
 import { ohlcvDaily, tickerUniverse } from '@/lib/db/schema'
 import { desc, eq } from 'drizzle-orm'
 import type { StockQuote } from '@/types/stock'
+import { getManualOhlcvHiLo, loadManualLatestOhlcvRows } from '@/lib/manual-ohlcv'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
 export const fetchCache = 'force-no-store'
+
+interface QuotePriceRow {
+  date: string
+  open: number
+  high: number
+  low: number
+  close: number
+  volume: number
+}
 
 export async function GET(
   request: NextRequest,
@@ -20,16 +30,31 @@ export async function GET(
     const ticker = decodeURIComponent(rawTicker).replace(/\.T$/i, '')
 
     // 直近 2 営業日 (前日比計算用)
-    const rows = await db
-      .select()
+    let priceSource: 'jquants' | 'manual_ohlcv' = 'jquants'
+    let rows: QuotePriceRow[] = await db
+      .select({
+        date: ohlcvDaily.date,
+        open: ohlcvDaily.open,
+        high: ohlcvDaily.high,
+        low: ohlcvDaily.low,
+        close: ohlcvDaily.close,
+        volume: ohlcvDaily.volume,
+      })
       .from(ohlcvDaily)
       .where(eq(ohlcvDaily.ticker, ticker))
       .orderBy(desc(ohlcvDaily.date))
       .limit(2)
 
     if (rows.length === 0) {
+      rows = await loadManualLatestOhlcvRows(ticker, 2)
+      if (rows.length > 0) {
+        priceSource = 'manual_ohlcv'
+      }
+    }
+
+    if (rows.length === 0) {
       return NextResponse.json(
-        { error: 'No data', message: `ticker ${ticker} not found in ohlcv_daily` },
+        { error: 'No data', message: `ticker ${ticker} not found in ohlcv_daily or manual_ohlcv_daily` },
         { status: 404 },
       )
     }
@@ -41,13 +66,21 @@ export async function GET(
 
     // 52 週高値/安値 (約 252 営業日)
     const since52w = new Date(Date.now() - 365 * 86_400_000).toISOString().slice(0, 10)
-    const hiLoRes = await client.execute({
-      sql: 'SELECT MAX(high) AS hi, MIN(low) AS lo FROM ohlcv_daily WHERE ticker = ? AND date >= ?',
-      args: [ticker, since52w],
-    })
-    const hiLoRow = hiLoRes.rows[0] as unknown as { hi: number | null; lo: number | null }
-    const fiftyTwoWeekHigh = hiLoRow?.hi ?? undefined
-    const fiftyTwoWeekLow  = hiLoRow?.lo ?? undefined
+    let fiftyTwoWeekHigh: number | undefined
+    let fiftyTwoWeekLow: number | undefined
+    if (priceSource === 'manual_ohlcv') {
+      const row = await getManualOhlcvHiLo(ticker, since52w)
+      fiftyTwoWeekHigh = row.hi
+      fiftyTwoWeekLow = row.lo
+    } else {
+      const hiLoRes = await client.execute({
+        sql: 'SELECT MAX(high) AS hi, MIN(low) AS lo FROM ohlcv_daily WHERE ticker = ? AND date >= ?',
+        args: [ticker, since52w],
+      })
+      const row = hiLoRes.rows[0] as unknown as { hi: number | null; lo: number | null }
+      fiftyTwoWeekHigh = row?.hi ?? undefined
+      fiftyTwoWeekLow = row?.lo ?? undefined
+    }
 
     // 名前 + 発行済株式数 (時価総額計算用)
     const uniRow = await db
@@ -73,10 +106,15 @@ export async function GET(
       change,
       changePercent,
       volume: latest.volume,
+      priceDate: latest.date,
+      previousPriceDate: prev?.date,
+      priceQualityWarning: priceSource === 'manual_ohlcv'
+        ? 'J-Quants未収録のため手動補完CSVを表示'
+        : undefined,
       marketCap,
       fiftyTwoWeekHigh,
       fiftyTwoWeekLow,
-      exchange: 'TSE',
+      exchange: priceSource === 'manual_ohlcv' ? 'MANUAL' : 'TSE',
     }
 
     return NextResponse.json(quote)

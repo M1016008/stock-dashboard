@@ -162,7 +162,7 @@ async function collectChecks(): Promise<{ price: DateCount; checks: FreshnessChe
     predictionDate,
   ] = await Promise.all([
     maxDate(`SELECT MAX(date) AS date FROM daily_snapshots`),
-    maxDate(`SELECT MAX(date) AS date FROM model_features`),
+    maxDate(`SELECT MAX(date) AS date FROM ml_feature_vectors`),
     maxDate(`SELECT MAX(date) AS date FROM ml_feature_vectors_v2 WHERE feature_set = ?`, [ML_PHYSICS_FEATURE_SET]),
     maxDate(`SELECT MAX(as_of_date) AS date FROM serving_current_similars`),
     maxDate(`SELECT MAX(as_of_date) AS date FROM serving_ml_physics_candidates`),
@@ -172,7 +172,7 @@ async function collectChecks(): Promise<{ price: DateCount; checks: FreshnessChe
 
   const [snapshots, modelFeatures, physicsFeatures, currentSimilars, physicsCandidates, mlCandidates, predictions] = await Promise.all([
     tableDateCount('daily_snapshots', 'date', snapshotDate),
-    tableDateCount('model_features', 'date', modelFeatureDate),
+    tableDateCount('ml_feature_vectors', 'date', modelFeatureDate),
     tableDateCount('ml_feature_vectors_v2', 'date', physicsFeatureDate, 'AND feature_set = ?', [ML_PHYSICS_FEATURE_SET]),
     {
       date: currentSimilarDate,
@@ -240,9 +240,10 @@ async function repair(checks: FreshnessCheck[]): Promise<string[]> {
   if (hasBad(checks, ['model_features', 'daily_snapshots'])) {
     actions.push('batch:ml-features')
     await runRequired('batch:ml-features', {
-      ML_RECENT_DAYS: process.env.ML_RECENT_DAYS ?? '0',
-      ML_MIN_HISTORY_DAYS: process.env.ML_MIN_HISTORY_DAYS ?? '1',
+      ML_RECENT_DAYS: process.env.ML_RECENT_DAYS ?? process.env.ML_DAILY_RECENT_DAYS ?? '420',
+      ML_MIN_HISTORY_DAYS: process.env.ML_MIN_HISTORY_DAYS ?? process.env.ML_DAILY_MIN_HISTORY_DAYS ?? '220',
       ML_START_DATE: process.env.ML_FULL_START_DATE ?? '1900-01-01',
+      ML_MISSING_ONLY_DATE: process.env.ML_MISSING_ONLY_DATE ?? 'latest',
     })
   }
 
@@ -256,13 +257,13 @@ async function repair(checks: FreshnessCheck[]): Promise<string[]> {
   if (hasBad(checks, ['ml_feature_vectors_v2.physics', 'model_features', 'daily_snapshots'])) {
     actions.push('batch:ml-context-features')
     await runRequired('batch:ml-context-features', {
-      ML_CONTEXT_RECENT_DAYS: process.env.ML_CONTEXT_RECENT_DAYS ?? '0',
+      ML_CONTEXT_RECENT_DAYS: process.env.ML_CONTEXT_RECENT_DAYS ?? process.env.ML_CONTEXT_DAILY_RECENT_DAYS ?? '420',
       ML_CONTEXT_START_DATE: process.env.ML_FULL_START_DATE ?? '1900-01-01',
     })
     actions.push('batch:ml-physics-features')
     await runRequired('batch:ml-physics-features', {
-      ML_PHYSICS_RECENT_DAYS: process.env.ML_PHYSICS_RECENT_DAYS ?? '0',
-      ML_PHYSICS_MIN_HISTORY_DAYS: process.env.ML_PHYSICS_MIN_HISTORY_DAYS ?? '1',
+      ML_PHYSICS_RECENT_DAYS: process.env.ML_PHYSICS_RECENT_DAYS ?? process.env.ML_PHYSICS_DAILY_RECENT_DAYS ?? '420',
+      ML_PHYSICS_MIN_HISTORY_DAYS: process.env.ML_PHYSICS_MIN_HISTORY_DAYS ?? process.env.ML_PHYSICS_DAILY_MIN_HISTORY_DAYS ?? '220',
       ML_PHYSICS_START_DATE: process.env.ML_FULL_START_DATE ?? '1900-01-01',
     })
   }

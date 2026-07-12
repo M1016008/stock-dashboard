@@ -60,6 +60,7 @@ interface ProjectionResponse {
   ticker: string
   interval: ScenarioInterval
   horizonDays: number
+  message?: string
   baseDate: string
   basePrice: number
   statusLabel: string
@@ -475,18 +476,21 @@ export function ScenarioProjectionChart({ ticker, name, analysisDate, market = '
     setRefreshNonce((value) => value + 1)
   }
 
-  const topScenario = data?.scenarios[0] ?? null
+  const scenarios = Array.isArray(data?.scenarios) ? data.scenarios : []
+  const topScenario = scenarios[0] ?? null
   const sourceText = useMemo(() => {
     if (!data) return ''
+    const sourceDates = data.sourceDates
+    const priceDate = sourceDates?.price ?? data.baseDate ?? '-'
     const parts = [
-      `価格 ${data.sourceDates.price}`,
-      data.sourceDates.feature
-        ? `特徴量 ${data.sourceDates.featureDerived ? '最新足から再計算' : data.sourceDates.feature}`
+      `価格 ${priceDate}`,
+      sourceDates?.feature
+        ? `特徴量 ${sourceDates.featureDerived ? '最新足から再計算' : sourceDates.feature}`
         : null,
-      data.sourceDates.physicalMomentum && data.sourceDates.physicalMomentum !== data.sourceDates.price
-        ? `PMS ${data.sourceDates.physicalMomentum}`
+      sourceDates?.physicalMomentum && sourceDates.physicalMomentum !== priceDate
+        ? `PMS ${sourceDates.physicalMomentum}`
         : null,
-      data.sourceDates.calibration ? `検証 ${data.sourceDates.calibration}` : null,
+      sourceDates?.calibration ? `検証 ${sourceDates.calibration}` : null,
       data.llmNarrative?.used ? `AI説明 ${data.llmNarrative.model}` : 'ローカル説明',
     ].filter(Boolean)
     return parts.join(' / ')
@@ -581,8 +585,8 @@ export function ScenarioProjectionChart({ ticker, name, analysisDate, market = '
         <div style={emptyStyle}>シナリオを生成中...</div>
       ) : error ? (
         <div style={{ ...emptyStyle, color: 'var(--price-down)' }}>シナリオ取得エラー: {error}</div>
-      ) : !data || data.scenarios.length === 0 ? (
-        <div style={emptyStyle}>シナリオ生成に必要な価格データがありません。</div>
+      ) : !data || scenarios.length === 0 ? (
+        <div style={emptyStyle}>{data?.message ?? 'シナリオ生成に必要な価格データがありません。'}</div>
       ) : (
         <div style={loadedStackStyle}>
           <DirectionSummaryPanel data={data} />
@@ -619,7 +623,7 @@ export function ScenarioProjectionChart({ ticker, name, analysisDate, market = '
             </div>
             <div style={scenarioListStyle}>
               {message && <div style={messageStyle}>{message}</div>}
-              {data.scenarios.map((scenario) => {
+              {scenarios.map((scenario) => {
                 const tone = scenarioTone(scenario.direction, scenario.probabilityRank)
                 const saved = savedIds.has(scenario.id)
                 return (

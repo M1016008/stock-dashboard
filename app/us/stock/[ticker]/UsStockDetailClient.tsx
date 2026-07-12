@@ -42,6 +42,19 @@ interface PhysicalMomentumResponse {
   trend: 'rising' | 'falling' | 'flat' | null
   source?: 'main' | 'us_analytics'
   requestedDate?: string | null
+  timeframeViews?: PhysicalMomentumTimeframeView[]
+}
+
+interface PhysicalMomentumTimeframeView {
+  interval: 'D' | '2D' | 'W' | 'M'
+  label: string
+  basis: string
+  latestDate: string | null
+  scoreSource: 'market_z' | 'local_timeframe_z'
+  physicalMomentumScore: number | null
+  physicalForceScore: number | null
+  physicalEnergyScore: number | null
+  trend: 'rising' | 'falling' | 'flat' | null
 }
 
 interface UsPhysicalPlanLevel {
@@ -214,6 +227,13 @@ function shortTermPanelClass(label: string) {
   if (label === '弱含み注意') return 'border-blue-200 bg-white/70 text-blue-800'
   if (label === '下落警戒') return 'border-sky-200 bg-white/70 text-sky-900'
   return 'border-[var(--color-border-default)] bg-white/70 text-[var(--color-text-secondary)]'
+}
+
+function timeframeToneCardClass(tone: PhysicalMomentumTone) {
+  if (tone === 'up') return 'border-red-200 bg-red-50 text-red-800'
+  if (tone === 'down') return 'border-blue-200 bg-blue-50 text-blue-800'
+  if (tone === 'warning') return 'border-amber-200 bg-amber-50 text-amber-900'
+  return 'border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] text-[var(--color-text-secondary)]'
 }
 
 function usMlStatusPanelClass(status: UsMlStatusTone) {
@@ -680,7 +700,7 @@ function UsPhysicalMomentumSection({
             <BarChart3 size={15} /> Physical Momentum
           </div>
           <p className="mt-1 text-[12px] font-semibold leading-6 text-[var(--color-text-secondary)]">
-            PMSは買い/売りの予測ではなく、直近20営業日の累積運動量です。足元の向きはPFS、過熱や大値幅はPESで分けて見ます。
+            PMSは買い/売りの予測ではなく、時間軸ごとの運動状態です。日足・2日足・週足・月足で結論を分けて見ます。
             {data?.source === 'us_analytics' ? ' US分析DBの学習用データを参照しています。' : ''}
           </p>
         </div>
@@ -705,12 +725,13 @@ function UsPhysicalMomentumSection({
               </div>
             </div>
           )}
+          <UsPhysicalTimeframeConclusion views={data?.timeframeViews ?? []} />
           {!isMomentumCoverageSparse && (
           <div className={`rounded-[8px] border p-4 ${momentumTonePanelClass(view?.tone ?? 'neutral')}`}>
             <div className="grid gap-3 lg:grid-cols-[1.15fr_1fr]">
               <div>
                 <div className="inline-flex items-center rounded-full border border-current/20 bg-white/70 px-2.5 py-1 text-[10px] font-black opacity-80">
-                  結論
+                  日足20営業日の結論
                 </div>
                 <div className="mt-2 text-[24px] font-black leading-tight">{view?.label ?? '方向待ち'}</div>
                 <p className="mt-2 max-w-[760px] text-[13px] font-bold leading-6">
@@ -773,6 +794,65 @@ function UsPhysicalMomentumSection({
         </div>
       )}
     </Card>
+  )
+}
+
+function UsPhysicalTimeframeConclusion({ views }: { views: PhysicalMomentumTimeframeView[] }) {
+  if (views.length === 0) return null
+  const primary = views.find((view) => view.interval === 'D') ?? views[0]
+  const primaryBuilt = buildPhysicalMomentumView({
+    pms: primary.physicalMomentumScore,
+    pfs: primary.physicalForceScore,
+    pes: primary.physicalEnergyScore,
+    trend: primary.trend,
+  })
+
+  return (
+    <div className="rounded-[8px] border border-[var(--color-border-default)] bg-white p-3">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <div>
+          <div className="text-[13px] font-black text-[var(--color-text-primary)]">時間軸別の結論</div>
+          <div className="mt-1 text-[11px] font-bold leading-5 text-[var(--color-text-tertiary)]">
+            総合: 日足は{primaryBuilt.label}。2日足・週足・月足で同じ方向かを確認。
+          </div>
+        </div>
+      </div>
+      <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+        {views.map((view) => {
+          const built = buildPhysicalMomentumView({
+            pms: view.physicalMomentumScore,
+            pfs: view.physicalForceScore,
+            pes: view.physicalEnergyScore,
+            trend: view.trend,
+          })
+          return (
+            <div key={view.interval} className={`rounded-[6px] border p-3 ${timeframeToneCardClass(built.tone)}`}>
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <div className="text-[10px] font-black opacity-70">{view.label}</div>
+                  <div className="mt-1 text-[14px] font-black leading-5">{built.label}</div>
+                </div>
+                <span className="rounded-full border border-current/25 bg-white px-2 py-0.5 font-mono text-[10px] font-black">{view.interval}</span>
+              </div>
+              <div className="mt-2 flex flex-wrap gap-2 font-mono text-[10px] font-black">
+                <span>PMS {fmtScore(view.physicalMomentumScore)}</span>
+                <span>PFS {fmtScore(view.physicalForceScore)}</span>
+                <span>PES {fmtScore(view.physicalEnergyScore)}</span>
+              </div>
+              <div className="mt-2 text-[11px] font-bold leading-5">{built.stance}</div>
+              <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] font-bold opacity-75">
+                <span>{view.basis}</span>
+                <span>{view.latestDate ?? '-'}</span>
+                <span>{view.scoreSource === 'market_z' ? '市場比較' : '時間軸内比較'}</span>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+      <p className="mt-2 text-[11px] font-bold leading-5 text-[var(--color-text-tertiary)]">
+        日足は市場横断Z、2日足・週足・月足は銘柄内の時間軸Z。時間軸が違えば見方も変わります。
+      </p>
+    </div>
   )
 }
 

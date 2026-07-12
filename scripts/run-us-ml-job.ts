@@ -5,7 +5,7 @@
 // so a direct npm invocation cannot accidentally write US artifacts into the JP
 // stockboard database.
 
-import { spawn } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import fs from 'node:fs'
 
 const DEFAULT_US_ANALYTICS_DB = '/Volumes/OWC Express 1M2 80G/stockboard-data/us/stockboard-us.db'
@@ -44,6 +44,67 @@ function runNpmOnce(script: string, env: NodeJS.ProcessEnv, overrides: EnvOverri
       else reject(new Error(`npm run ${script} failed: code=${code}, signal=${signal ?? 'none'}`))
     })
   })
+}
+
+function sqliteInt(dbPath: string, sql: string): number {
+  const output = execFileSync('sqlite3', ['-cmd', '.timeout 30000', dbPath, sql], { encoding: 'utf8' }).trim()
+  const value = Number(output)
+  return Number.isFinite(value) ? value : 0
+}
+
+function sqlQuote(value: string): string {
+  return value.replaceAll("'", "''")
+}
+
+function latestEligibleMissingFeatureCount(env: NodeJS.ProcessEnv, minHistoryDays: string): number {
+  const dbPath = env.STOCKBOARD_DB_PATH
+  if (!dbPath) return 0
+  const minRows = Number(minHistoryDays) || 1
+  return sqliteInt(
+    dbPath,
+    `
+    SELECT COUNT(*)
+    FROM (
+      SELECT o.ticker
+      FROM ohlcv_daily o
+      WHERE o.date = (SELECT MAX(date) FROM ohlcv_daily)
+        AND (SELECT COUNT(*) FROM ohlcv_daily h WHERE h.ticker = o.ticker) >= ${minRows}
+        AND NOT EXISTS (
+          SELECT 1
+          FROM ml_feature_vectors f
+          WHERE f.ticker = o.ticker AND f.date = o.date
+        )
+      GROUP BY o.ticker
+      )
+    `,
+  )
+}
+
+function latestEligibleMissingPhysicsFeatureCount(env: NodeJS.ProcessEnv, minHistoryDays: string): number {
+  const dbPath = env.STOCKBOARD_DB_PATH
+  if (!dbPath) return 0
+  const featureSet = env.ML_PHYSICS_FEATURE_SET?.trim() || 'ma_physics_v4'
+  const minRows = Number(minHistoryDays) || 1
+  return sqliteInt(
+    dbPath,
+    `
+    SELECT COUNT(*)
+    FROM (
+      SELECT d.ticker
+      FROM daily_snapshots d
+      WHERE d.date = (SELECT MAX(date) FROM daily_snapshots)
+        AND (SELECT COUNT(*) FROM ohlcv_daily h WHERE h.ticker = d.ticker) >= ${minRows}
+        AND NOT EXISTS (
+          SELECT 1
+          FROM ml_feature_vectors_v2 f
+          WHERE f.ticker = d.ticker
+            AND f.date = d.date
+            AND f.feature_set = '${sqlQuote(featureSet)}'
+        )
+      GROUP BY d.ticker
+      )
+    `,
+  )
 }
 
 async function runNpm(script: string, env: NodeJS.ProcessEnv, overrides: EnvOverrides = {}): Promise<void> {
@@ -203,19 +264,50 @@ async function runFullHistory(env: NodeJS.ProcessEnv, options: { skipPms?: boole
 async function runDailyServing(env: NodeJS.ProcessEnv): Promise<void> {
   const startDate = env.US_ML_FULL_START_DATE ?? '1900-01-01'
   const horizons = '5,10,20,40,60,90'
+  const dailyRecentDays = env.US_ML_DAILY_RECENT_DAYS ?? '420'
+  const dailyMinHistoryDays = env.US_ML_DAILY_MIN_HISTORY_DAYS ?? '220'
 
-  await runNpm('batch:physical-momentum', env, {
-    PMS_RECENT_DAYS: env.US_PMS_DAILY_RECENT_DAYS ?? '420',
-    PMS_OUTPUT_MARKET: 'US',
-    PMS_RUN_JOB_TYPE: 'physical_momentum_us',
+  if (env.US_ML_SKIP_DAILY_PMS === '1') {
+    console.log('US ML daily: skipping PMS by US_ML_SKIP_DAILY_PMS=1')
+  } else {
+    await runNpm('batch:physical-momentum:us-full', env, {
+      US_PMS_RECENT_DAYS: env.US_PMS_DAILY_RECENT_DAYS ?? '420',
+      US_PMS_TICKER_CHUNK: env.US_PMS_DAILY_TICKER_CHUNK ?? '500',
+      US_PMS_DATE_CHUNK: env.US_PMS_DAILY_DATE_CHUNK ?? '100',
+    })
+  }
+  const featureMissingOnlyDate = env.US_ML_DAILY_FEATURE_MISSING_ONLY_DATE ?? 'latest'
+  const featureTickerLimit = env.US_ML_DAILY_FEATURE_TICKER_LIMIT ?? '750'
+  const featureMaxPasses = numberEnv('US_ML_DAILY_FEATURE_MAX_PASSES', 80)
+  if (featureMissingOnlyDate === 'latest') {
+    for (let pass = 1; pass <= featureMaxPasses; pass += 1) {
+      console.log(`US ML daily features pass ${pass}/${featureMaxPasses}: counting eligible_missing...`)
+      const missing = latestEligibleMissingFeatureCount(env, dailyMinHistoryDays)
+      console.log(`US ML daily features pass ${pass}/${featureMaxPasses}: eligible_missing=${missing}, ticker_limit=${featureTickerLimit}`)
+      if (missing <= 0) break
+      await runNpm('batch:ml-features', env, {
+        ML_RECENT_DAYS: dailyRecentDays,
+        ML_MIN_HISTORY_DAYS: dailyMinHistoryDays,
+        ML_START_DATE: startDate,
+        ML_HORIZONS: horizons,
+        ML_MISSING_ONLY_DATE: featureMissingOnlyDate,
+        ML_TICKER_LIMIT: featureTickerLimit,
+      })
+    }
+  } else {
+    await runNpm('batch:ml-features', env, {
+      ML_RECENT_DAYS: dailyRecentDays,
+      ML_MIN_HISTORY_DAYS: dailyMinHistoryDays,
+      ML_START_DATE: startDate,
+      ML_HORIZONS: horizons,
+      ML_MISSING_ONLY_DATE: featureMissingOnlyDate,
+      ML_TICKER_LIMIT: env.US_ML_DAILY_FEATURE_TICKER_LIMIT,
+    })
+  }
+  await runNpm('batch:ml-labels', env, {
+    ML_LABEL_RECENT_DAYS: env.US_ML_DAILY_LABEL_RECENT_DAYS ?? '520',
+    ML_LABEL_DATE_CHUNK_DAYS: env.US_ML_DAILY_LABEL_DATE_CHUNK_DAYS ?? '7',
   })
-  await runNpm('batch:ml-features', env, {
-    ML_RECENT_DAYS: env.US_ML_DAILY_RECENT_DAYS ?? '420',
-    ML_MIN_HISTORY_DAYS: env.US_ML_DAILY_MIN_HISTORY_DAYS ?? '220',
-    ML_START_DATE: startDate,
-    ML_HORIZONS: horizons,
-  })
-  await runNpm('batch:ml-labels', env, { ML_LABEL_RECENT_DAYS: env.US_ML_DAILY_LABEL_RECENT_DAYS ?? '520' })
   await runNpm('batch:ml-outcomes', env)
   await runNpm('batch:ml-candidates', env)
   await runNpm('batch:ml-predict', env)
@@ -223,11 +315,33 @@ async function runDailyServing(env: NodeJS.ProcessEnv): Promise<void> {
     ML_CONTEXT_RECENT_DAYS: env.US_ML_CONTEXT_DAILY_RECENT_DAYS ?? '420',
     ML_CONTEXT_START_DATE: startDate,
   })
-  await runNpm('batch:ml-physics-features', env, {
-    ML_PHYSICS_RECENT_DAYS: env.US_ML_PHYSICS_DAILY_RECENT_DAYS ?? '420',
-    ML_PHYSICS_MIN_HISTORY_DAYS: env.US_ML_PHYSICS_DAILY_MIN_HISTORY_DAYS ?? '220',
-    ML_PHYSICS_START_DATE: startDate,
-  })
+  const physicsMissingOnlyDate = env.US_ML_DAILY_PHYSICS_MISSING_ONLY_DATE ?? 'latest'
+  const physicsTickerLimit = env.US_ML_DAILY_PHYSICS_TICKER_LIMIT ?? '500'
+  const physicsMaxPasses = numberEnv('US_ML_DAILY_PHYSICS_MAX_PASSES', 80)
+  const physicsMinHistoryDays = env.US_ML_PHYSICS_DAILY_MIN_HISTORY_DAYS ?? '220'
+  if (physicsMissingOnlyDate === 'latest') {
+    for (let pass = 1; pass <= physicsMaxPasses; pass += 1) {
+      console.log(`US ML daily physics features pass ${pass}/${physicsMaxPasses}: counting eligible_missing...`)
+      const missing = latestEligibleMissingPhysicsFeatureCount(env, physicsMinHistoryDays)
+      console.log(`US ML daily physics features pass ${pass}/${physicsMaxPasses}: eligible_missing=${missing}, ticker_limit=${physicsTickerLimit}`)
+      if (missing <= 0) break
+      await runNpm('batch:ml-physics-features', env, {
+        ML_PHYSICS_RECENT_DAYS: env.US_ML_PHYSICS_DAILY_RECENT_DAYS ?? '420',
+        ML_PHYSICS_MIN_HISTORY_DAYS: physicsMinHistoryDays,
+        ML_PHYSICS_START_DATE: startDate,
+        ML_PHYSICS_MISSING_ONLY_DATE: physicsMissingOnlyDate,
+        ML_PHYSICS_TICKER_LIMIT: physicsTickerLimit,
+      })
+    }
+  } else {
+    await runNpm('batch:ml-physics-features', env, {
+      ML_PHYSICS_RECENT_DAYS: env.US_ML_PHYSICS_DAILY_RECENT_DAYS ?? '420',
+      ML_PHYSICS_MIN_HISTORY_DAYS: physicsMinHistoryDays,
+      ML_PHYSICS_START_DATE: startDate,
+      ML_PHYSICS_MISSING_ONLY_DATE: physicsMissingOnlyDate,
+      ML_PHYSICS_TICKER_LIMIT: env.US_ML_DAILY_PHYSICS_TICKER_LIMIT,
+    })
+  }
   await runNpm('batch:ml-physics-candidates', env, {
     ML_PHYSICS_HORIZONS: horizons,
     ML_PHYSICS_CANDIDATE_LIMIT: '120',
@@ -237,6 +351,7 @@ async function runDailyServing(env: NodeJS.ProcessEnv): Promise<void> {
     ML_SHORT_HORIZONS: horizons,
     ML_SHORT_LABEL_RECENT_DAYS: env.US_ML_DAILY_RL_RECENT_DAYS ?? '260',
     ML_SHORT_LABEL_START_DATE: startDate,
+    ML_SHORT_RL_DATE_CHUNK_DAYS: env.US_ML_DAILY_RL_DATE_CHUNK_DAYS ?? '7',
     ML_SHORT_WRITE_RL_STATES: '1',
   })
   await runNpm('batch:ml-rl-policy', env, {
@@ -266,6 +381,7 @@ async function main(): Promise<void> {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     USE_LOCAL_DB: '1',
+    STOCKBOARD_DB_ROLE: 'us-analytics',
     STOCKBOARD_DB_PATH: usAnalyticsDbPath,
     US_ANALYTICS_DB_PATH: usAnalyticsDbPath,
     SQLITE_BUSY_RETRIES: process.env.SQLITE_BUSY_RETRIES ?? '720',

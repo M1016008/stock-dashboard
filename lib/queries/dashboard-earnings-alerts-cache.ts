@@ -11,6 +11,11 @@ type EarningsAlertCacheRow = {
 
 let ensureEarningsAlertCachePromise: Promise<void> | null = null
 
+function isSqliteBusyError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return /SQLITE_BUSY|database is locked/i.test(message)
+}
+
 async function ensureEarningsAlertCacheTable(): Promise<void> {
   if (!ensureEarningsAlertCachePromise) {
     ensureEarningsAlertCachePromise = Promise.resolve()
@@ -43,16 +48,22 @@ function isIsoDate(value: string | null | undefined): value is string {
 }
 
 async function readCache(cacheKey: string): Promise<EarningsCalendarDashboard | null> {
-  await ensureEarningsAlertCacheTable()
-  const row = await execGet<EarningsAlertCacheRow>(
-    `
-      SELECT payload_json AS payloadJson, computed_at AS computedAt
-      FROM dashboard_earnings_alert_cache
-      WHERE cache_key = ?
-      LIMIT 1
-    `,
-    [cacheKey],
-  )
+  let row: EarningsAlertCacheRow | undefined
+  try {
+    await ensureEarningsAlertCacheTable()
+    row = await execGet<EarningsAlertCacheRow>(
+      `
+        SELECT payload_json AS payloadJson, computed_at AS computedAt
+        FROM dashboard_earnings_alert_cache
+        WHERE cache_key = ?
+        LIMIT 1
+      `,
+      [cacheKey],
+    )
+  } catch (error) {
+    if (isSqliteBusyError(error)) return null
+    throw error
+  }
   if (!row) return null
   const age = Math.floor(Date.now() / 1000) - Number(row.computedAt ?? 0)
   if (age > EARNINGS_ALERT_CACHE_TTL_SEC) return null
@@ -64,17 +75,25 @@ async function readCache(cacheKey: string): Promise<EarningsCalendarDashboard | 
 }
 
 async function writeCache(cacheKey: string, payload: EarningsCalendarDashboard): Promise<void> {
-  await ensureEarningsAlertCacheTable()
-  await client.execute({
-    sql: `
-      INSERT INTO dashboard_earnings_alert_cache (cache_key, payload_json, computed_at)
-      VALUES (?, ?, unixepoch())
-      ON CONFLICT(cache_key) DO UPDATE SET
-        payload_json = excluded.payload_json,
-        computed_at = excluded.computed_at
-    `,
-    args: [cacheKey, JSON.stringify(payload)],
-  })
+  try {
+    await ensureEarningsAlertCacheTable()
+    await client.execute({
+      sql: `
+        INSERT INTO dashboard_earnings_alert_cache (cache_key, payload_json, computed_at)
+        VALUES (?, ?, unixepoch())
+        ON CONFLICT(cache_key) DO UPDATE SET
+          payload_json = excluded.payload_json,
+          computed_at = excluded.computed_at
+      `,
+      args: [cacheKey, JSON.stringify(payload)],
+    })
+  } catch (error) {
+    if (isSqliteBusyError(error)) {
+      console.warn('[dashboard-earnings-alerts] cache write skipped: database is locked')
+      return
+    }
+    throw error
+  }
 }
 
 export async function getDashboardEarningsAlertsCached(

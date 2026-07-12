@@ -14,6 +14,8 @@ const END_DATE = process.env.ML_SHORT_LABEL_END_DATE?.trim() || null
 const RECENT_DAYS = Number(process.env.ML_SHORT_LABEL_RECENT_DAYS ?? 0)
 const WRITE_RL_STATES = process.env.ML_SHORT_WRITE_RL_STATES !== '0'
 const DATE_CHUNK_DAYS = Number(process.env.ML_SHORT_LABEL_DATE_CHUNK_DAYS ?? 0)
+const AUTO_LABEL_CHUNK_DAYS = Number(process.env.ML_SHORT_LABEL_AUTO_CHUNK_DAYS ?? 30)
+const RL_DATE_CHUNK_DAYS = Number(process.env.ML_SHORT_RL_DATE_CHUNK_DAYS ?? 90)
 const SKIP_LABEL_SYNC = process.env.ML_SHORT_SKIP_LABEL_SYNC === '1'
 
 function horizonPlaceholders(): string {
@@ -30,6 +32,15 @@ function minDate(a: string, b: string): string {
   return a <= b ? a : b
 }
 
+function maxDate(a: string, b: string): string {
+  return a >= b ? a : b
+}
+
+function laterDate(a: string | null, b: string | null): string | null {
+  if (a && b) return maxDate(a, b)
+  return a ?? b
+}
+
 async function syncLabelsForRange(startDate: string | null, endDate: string | null): Promise<void> {
   const where = [`fe.horizon_days IN (${horizonPlaceholders()})`]
   const args: Array<string | number> = [...HORIZONS]
@@ -44,17 +55,7 @@ async function syncLabelsForRange(startDate: string | null, endDate: string | nu
 
   await execRun(
     `
-    DELETE FROM ml_short_labels
-    WHERE horizon_days IN (${horizonPlaceholders()})
-      ${startDate ? 'AND date >= ?' : ''}
-      ${endDate ? 'AND date <= ?' : ''}
-    `,
-    [...HORIZONS, ...(startDate ? [startDate] : []), ...(endDate ? [endDate] : [])],
-  )
-
-  await execRun(
-    `
-    INSERT INTO ml_short_labels
+    INSERT OR REPLACE INTO ml_short_labels
       (ticker, date, horizon_days, return_pct, max_return_pct, min_return_pct,
        up_label, down_label, wait_label, reward_long, reward_short, reward_wait,
        label_json, computed_at)
@@ -134,24 +135,30 @@ async function syncLabelsForRange(startDate: string | null, endDate: string | nu
   )
 }
 
-async function labelDateBounds(): Promise<{ minDate: string; maxDate: string } | null> {
-  const where = [`horizon_days IN (${horizonPlaceholders()})`]
-  const args: Array<string | number> = [...HORIZONS]
-  if (START_DATE) {
+async function labelDateBounds(startDate: string | null, endDate: string | null): Promise<{ minDate: string; maxDate: string } | null> {
+  const where: string[] = []
+  const args: Array<string | number> = []
+  if (startDate) {
     where.push('date >= ?')
-    args.push(START_DATE)
+    args.push(startDate)
   }
-  if (END_DATE) {
+  if (endDate) {
     where.push('date <= ?')
-    args.push(END_DATE)
+    args.push(endDate)
   }
-  const rows = await execAll<{ minDate: string | null; maxDate: string | null }>(
-    `SELECT MIN(date) AS minDate, MAX(date) AS maxDate FROM forward_extrema WHERE ${where.join(' AND ')}`,
+  const whereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : ''
+  const minRows = await execAll<{ date: string | null }>(
+    `SELECT date FROM forward_extrema INDEXED BY fext_date_horizon_idx ${whereSql} ORDER BY date ASC LIMIT 1`,
     args,
   )
-  const row = rows[0]
-  if (!row?.minDate || !row.maxDate) return null
-  return { minDate: row.minDate, maxDate: row.maxDate }
+  const maxRows = await execAll<{ date: string | null }>(
+    `SELECT date FROM forward_extrema INDEXED BY fext_date_horizon_idx ${whereSql} ORDER BY date DESC LIMIT 1`,
+    args,
+  )
+  const minDate = minRows[0]?.date ?? null
+  const maxDate = maxRows[0]?.date ?? null
+  if (!minDate || !maxDate) return null
+  return { minDate, maxDate }
 }
 
 async function recentStartDate(): Promise<string | null> {
@@ -161,15 +168,105 @@ async function recentStartDate(): Promise<string | null> {
     SELECT MIN(date) AS date
     FROM (
       SELECT DISTINCT date
-      FROM forward_extrema
-      WHERE horizon_days IN (${horizonPlaceholders()})
+      FROM forward_extrema INDEXED BY fext_date_horizon_idx
       ORDER BY date DESC
       LIMIT ?
     )
     `,
-    [...HORIZONS, RECENT_DAYS],
+    [RECENT_DAYS],
   )
   return rows[0]?.date ?? null
+}
+
+async function existingLabelDateBounds(startDate: string | null, endDate: string | null): Promise<{ minDate: string; maxDate: string } | null> {
+  const where: string[] = []
+  const args: Array<string | number> = []
+  if (startDate) {
+    where.push('date >= ?')
+    args.push(startDate)
+  }
+  if (endDate) {
+    where.push('date <= ?')
+    args.push(endDate)
+  }
+  const whereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : ''
+  const minRows = await execAll<{ date: string | null }>(
+    `SELECT date FROM ml_short_labels ${whereSql} ORDER BY date ASC LIMIT 1`,
+    args,
+  )
+  const maxRows = await execAll<{ date: string | null }>(
+    `SELECT date FROM ml_short_labels ${whereSql} ORDER BY date DESC LIMIT 1`,
+    args,
+  )
+  const minDate = minRows[0]?.date ?? null
+  const maxDate = maxRows[0]?.date ?? null
+  if (!minDate || !maxDate) return null
+  return { minDate, maxDate }
+}
+
+async function syncRlStatesForRange(startDate: string | null, endDate: string | null): Promise<void> {
+  await execRun(
+    `
+    INSERT OR REPLACE INTO rl_training_states_v2
+      (ticker, date, horizon_days, action, state_json, reward, next_state_json, computed_at)
+    WITH actions(action) AS (
+      VALUES ('long_entry'), ('short_entry'), ('wait')
+    )
+    SELECT
+      f.ticker,
+      f.date,
+      l.horizon_days,
+      actions.action,
+      json_object(
+        'featureSet', f.feature_set,
+        'featureVersion', f.version,
+        'featureDate', f.date,
+        'featureRow', f.ticker || ':' || f.date || ':' || f.feature_set
+      ),
+      CASE actions.action
+        WHEN 'long_entry' THEN l.reward_long
+        WHEN 'short_entry' THEN l.reward_short
+        ELSE l.reward_wait
+      END,
+      NULL,
+      unixepoch()
+    FROM ml_feature_vectors_v2 f
+    INNER JOIN ml_short_labels l ON l.ticker = f.ticker AND l.date = f.date
+    CROSS JOIN actions
+    WHERE f.feature_set = ? AND l.horizon_days IN (${horizonPlaceholders()})
+      ${startDate ? 'AND l.date >= ? AND f.date >= ?' : ''}
+      ${endDate ? 'AND l.date <= ? AND f.date <= ?' : ''}
+    `,
+    [
+      ML_PHYSICS_FEATURE_SET,
+      ...HORIZONS,
+      ...(startDate ? [startDate, startDate] : []),
+      ...(endDate ? [endDate, endDate] : []),
+    ],
+  )
+}
+
+async function syncRlStates(startDate: string | null, endDate: string | null): Promise<number> {
+  if (RL_DATE_CHUNK_DAYS > 0) {
+    const bounds = await existingLabelDateBounds(startDate, endDate)
+    if (!bounds) {
+      console.log('ml short rl states: no label rows')
+      return 0
+    }
+    let cursor = bounds.minDate
+    let chunks = 0
+    while (cursor <= bounds.maxDate) {
+      const chunkEnd = minDate(addDays(cursor, RL_DATE_CHUNK_DAYS - 1), bounds.maxDate)
+      console.log(`ml short rl states chunk ${chunks + 1} start: horizons=${HORIZONS.join('/')}, start=${cursor}, end=${chunkEnd}`)
+      await syncRlStatesForRange(cursor, chunkEnd)
+      chunks += 1
+      console.log(`ml short rl states chunk ${chunks} done: horizons=${HORIZONS.join('/')}, start=${cursor}, end=${chunkEnd}`)
+      cursor = addDays(chunkEnd, 1)
+    }
+    return chunks
+  }
+  await syncRlStatesForRange(startDate, endDate)
+  return 1
 }
 
 async function main() {
@@ -178,11 +275,24 @@ async function main() {
     return
   }
 
-  if (DATE_CHUNK_DAYS > 0 && !SKIP_LABEL_SYNC) {
-    if (WRITE_RL_STATES) {
-      throw new Error('ML_SHORT_LABEL_DATE_CHUNK_DAYS currently requires ML_SHORT_WRITE_RL_STATES=0')
-    }
-    const bounds = await labelDateBounds()
+  const recentStart = await recentStartDate()
+  const effectiveStartDate = laterDate(START_DATE, recentStart)
+  const effectiveEndDate = END_DATE
+  const labelChunkDays = DATE_CHUNK_DAYS > 0
+    ? DATE_CHUNK_DAYS
+    : WRITE_RL_STATES && AUTO_LABEL_CHUNK_DAYS > 0
+      ? AUTO_LABEL_CHUNK_DAYS
+      : 0
+
+  console.log(
+    `ml short labels start: horizons=${HORIZONS.join('/')}, start=${effectiveStartDate ?? '-'}, requested_start=${START_DATE ?? '-'}, recent_start=${recentStart ?? '-'}, end=${effectiveEndDate ?? '-'}, recent_days=${RECENT_DAYS || '-'}, label_chunk_days=${labelChunkDays || '-'}, rl_chunk_days=${RL_DATE_CHUNK_DAYS || '-'}, skip_labels=${SKIP_LABEL_SYNC ? '1' : '0'}, rl_states=${WRITE_RL_STATES ? 'on' : 'off'}`,
+  )
+
+  let labelChunks = 0
+  if (SKIP_LABEL_SYNC) {
+    console.log(`ml short labels: label sync skipped, using existing labels for horizons=${HORIZONS.join('/')}`)
+  } else if (labelChunkDays > 0) {
+    const bounds = await labelDateBounds(effectiveStartDate, effectiveEndDate)
     if (!bounds) {
       console.log('ml short labels: no forward_extrema rows')
       return
@@ -190,72 +300,26 @@ async function main() {
     let cursor = bounds.minDate
     let chunks = 0
     while (cursor <= bounds.maxDate) {
-      const chunkEnd = minDate(addDays(cursor, DATE_CHUNK_DAYS - 1), bounds.maxDate)
+      const chunkEnd = minDate(addDays(cursor, labelChunkDays - 1), bounds.maxDate)
+      console.log(`ml short labels chunk ${chunks + 1} start: horizons=${HORIZONS.join('/')}, start=${cursor}, end=${chunkEnd}`)
       await syncLabelsForRange(cursor, chunkEnd)
       chunks += 1
-      console.log(`ml short labels chunk ${chunks}: horizons=${HORIZONS.join('/')}, start=${cursor}, end=${chunkEnd}`)
+      console.log(`ml short labels chunk ${chunks} done: horizons=${HORIZONS.join('/')}, start=${cursor}, end=${chunkEnd}`)
       cursor = addDays(chunkEnd, 1)
     }
-    console.log(
-      `ml short labels synced: horizons=${HORIZONS.join('/')}, start=${bounds.minDate}, end=${bounds.maxDate}, chunks=${chunks}, rl_states=off`,
-    )
-    return
-  }
-
-  const effectiveStartDate = START_DATE ?? await recentStartDate()
-  const effectiveEndDate = END_DATE
-
-  if (SKIP_LABEL_SYNC) {
-    console.log(`ml short labels: label sync skipped, using existing labels for horizons=${HORIZONS.join('/')}`)
+    labelChunks = chunks
   } else {
     await syncLabelsForRange(effectiveStartDate, effectiveEndDate)
+    labelChunks = 1
   }
 
   if (WRITE_RL_STATES) {
-    const actions = [
-      { action: 'long_entry', rewardColumn: 'reward_long' },
-      { action: 'short_entry', rewardColumn: 'reward_short' },
-      { action: 'wait', rewardColumn: 'reward_wait' },
-    ]
-
-    for (const { action, rewardColumn } of actions) {
-      await execRun(
-        `
-        INSERT OR REPLACE INTO rl_training_states_v2
-          (ticker, date, horizon_days, action, state_json, reward, next_state_json, computed_at)
-        SELECT
-          f.ticker,
-          f.date,
-          l.horizon_days,
-          ?,
-          json_object(
-            'featureSet', f.feature_set,
-            'featureVersion', f.version,
-            'featureDate', f.date,
-            'featureRow', f.ticker || ':' || f.date || ':' || f.feature_set
-          ),
-          l.${rewardColumn},
-          NULL,
-          unixepoch()
-        FROM ml_feature_vectors_v2 f
-        INNER JOIN ml_short_labels l ON l.ticker = f.ticker AND l.date = f.date
-        WHERE f.feature_set = ? AND l.horizon_days IN (${horizonPlaceholders()})
-          ${effectiveStartDate ? 'AND l.date >= ? AND f.date >= ?' : ''}
-          ${effectiveEndDate ? 'AND l.date <= ? AND f.date <= ?' : ''}
-        `,
-        [
-          action,
-          ML_PHYSICS_FEATURE_SET,
-          ...HORIZONS,
-          ...(effectiveStartDate ? [effectiveStartDate, effectiveStartDate] : []),
-          ...(effectiveEndDate ? [effectiveEndDate, effectiveEndDate] : []),
-        ],
-      )
-    }
+    const rlChunks = await syncRlStates(effectiveStartDate, effectiveEndDate)
+    console.log(`ml short rl states synced: horizons=${HORIZONS.join('/')}, chunks=${rlChunks}`)
   }
 
   console.log(
-    `ml short labels synced: horizons=${HORIZONS.join('/')}, start=${effectiveStartDate ?? '-'}, end=${effectiveEndDate ?? '-'}, recent_days=${RECENT_DAYS || '-'}, rl_states=${WRITE_RL_STATES ? 'on' : 'off'}`,
+    `ml short labels synced: horizons=${HORIZONS.join('/')}, start=${effectiveStartDate ?? '-'}, end=${effectiveEndDate ?? '-'}, recent_days=${RECENT_DAYS || '-'}, label_chunks=${labelChunks || '-'}, rl_states=${WRITE_RL_STATES ? 'on' : 'off'}`,
   )
 }
 
