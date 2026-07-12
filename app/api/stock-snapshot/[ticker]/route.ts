@@ -133,7 +133,7 @@ function resolveNextEarnings(
       fiscalPeriod: next.fiscal_period,
       source: next.source,
       kind: 'confirmed',
-      note: '公式予定を表示しています。',
+      note: null,
     }
   }
 
