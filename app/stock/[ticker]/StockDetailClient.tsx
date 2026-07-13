@@ -336,6 +336,8 @@ interface PhysicalMomentumResponse {
   trend: 'rising' | 'falling' | 'flat' | null
   latestScoredDate?: string | null
   isScoreFresh?: boolean
+  scoreSource?: 'stored' | 'runtime_raw' | null
+  isScoreRefreshRunning?: boolean
   timeframeViews?: PhysicalMomentumTimeframeView[]
 }
 
@@ -464,7 +466,8 @@ function PhysicalMomentumSection({ ticker, analysisDate }: { ticker: string; ana
   const latest = data?.latest ?? null
   const momentumHistoryCount = data?.history?.length ?? 0
   const isMomentumCoverageSparse = momentumHistoryCount < 20
-  const isMomentumScoreStale = Boolean(latest && data?.isScoreFresh === false)
+  const isMomentumScoreRuntime = data?.scoreSource === 'runtime_raw'
+  const isMomentumScoreStale = Boolean(latest && data?.isScoreFresh === false && !isMomentumScoreRuntime)
   const coverageWarningStyle: CSSProperties = {
     display: 'grid',
     gap: '4px',

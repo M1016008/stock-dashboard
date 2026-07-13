@@ -42,6 +42,18 @@ type RankRow = {
   totalRanked: number
 }
 
+type RuntimeMetricRow = {
+  symbol: string
+  velocity: number | null
+  acceleration: number | null
+  momentum: number | null
+  force: number | null
+  maAngleAvg: number | null
+  energy: number | null
+}
+
+type ScoreSource = 'stored' | 'runtime_raw' | null
+
 type MomentumPayload = {
   latest: MomentumRow | null
   history: MomentumRow[]
@@ -49,6 +61,8 @@ type MomentumPayload = {
   totalRanked: number
   previousScore: number | null
   latestScoredDate: string | null
+  scoreSource: ScoreSource
+  isScoreRefreshRunning: boolean
 }
 
 type TimeframeMomentumView = {
@@ -110,6 +124,103 @@ function scoreTrend(current: number | null, previous: number | null): 'rising' |
   if (current > previous) return 'rising'
   if (current < previous) return 'falling'
   return 'flat'
+}
+
+function hasCompleteScores(row: MomentumRow | null): boolean {
+  return row?.physicalMomentumScore != null
+    && row.physicalForceScore != null
+    && row.physicalEnergyScore != null
+}
+
+async function loadScoreRefreshRunning(get: GetFn): Promise<boolean> {
+  const row = await get<{ jobType: string | null }>(
+    `
+      SELECT jobType
+      FROM (
+        SELECT job_type AS jobType, started_at AS startedAt
+        FROM batch_runs
+        WHERE status = 'running'
+          AND job_type IN (
+            'physical_momentum',
+            'physical_momentum_us',
+            'physical_momentum_us_normalize_chunk',
+            'post_ohlcv_refresh',
+            'update_latest',
+            'us_update_latest'
+          )
+        UNION ALL
+        SELECT job_type AS jobType, started_at AS startedAt
+        FROM update_locks
+        WHERE status = 'running'
+          AND lease_expires_at > unixepoch()
+          AND job_type IN ('post_ohlcv_refresh', 'update_latest', 'us_update_latest')
+      )
+      ORDER BY startedAt DESC
+      LIMIT 1
+    `,
+  ).catch(() => undefined)
+  return Boolean(row?.jobType)
+}
+
+async function computeRuntimeScoresForDate(
+  all: AllFn,
+  market: string,
+  date: string,
+): Promise<{ scoresBySymbol: Map<string, Pick<MomentumRow, 'physicalMomentumScore' | 'physicalForceScore' | 'physicalEnergyScore'>>; rankBySymbol: Map<string, RankRow> }> {
+  const rows = await all<RuntimeMetricRow>(
+    `
+      SELECT
+        symbol,
+        velocity,
+        acceleration,
+        momentum,
+        force,
+        ma_angle_avg AS maAngleAvg,
+        energy
+      FROM physical_momentum_metrics
+      WHERE market = ?
+        AND date = ?
+    `,
+    [market, date],
+  )
+  if (rows.length === 0) return { scoresBySymbol: new Map(), rankBySymbol: new Map() }
+
+  const stats = Object.fromEntries(
+    RAW_KEYS.map((key) => [key, meanAndStd(rows.map((row) => row[key]))]),
+  ) as Record<PhysicalMomentumRawKey, { mean: number | null; std: number | null }>
+
+  const scores = rows.map((row) => {
+    const result = composePhysicalMomentumScores({
+      zVelocity: zScore(row.velocity, stats.velocity.mean, stats.velocity.std),
+      zAcceleration: zScore(row.acceleration, stats.acceleration.mean, stats.acceleration.std),
+      zMomentum: zScore(row.momentum, stats.momentum.mean, stats.momentum.std),
+      zForce: zScore(row.force, stats.force.mean, stats.force.std),
+      zMaAngleAvg: zScore(row.maAngleAvg, stats.maAngleAvg.mean, stats.maAngleAvg.std),
+      zEnergy: zScore(row.energy, stats.energy.mean, stats.energy.std),
+    })
+    return { symbol: row.symbol, ...result }
+  })
+
+  const scoresBySymbol = new Map<string, Pick<MomentumRow, 'physicalMomentumScore' | 'physicalForceScore' | 'physicalEnergyScore'>>()
+  for (const row of scores) {
+    scoresBySymbol.set(row.symbol, {
+      physicalMomentumScore: row.physicalMomentumScore,
+      physicalForceScore: row.physicalForceScore,
+      physicalEnergyScore: row.physicalEnergyScore,
+    })
+  }
+
+  const rankedScores = scores
+    .map((row) => ({ symbol: row.symbol, score: row.physicalMomentumScore }))
+    .filter((row): row is { symbol: string; score: number } => row.score != null && Number.isFinite(row.score))
+  const totalRanked = rankedScores.length
+  const rankBySymbol = new Map<string, RankRow>()
+  for (const row of rankedScores) {
+    const rank = rankedScores.reduce((count, other) => count + (other.score > row.score ? 1 : 0), 1)
+    rankBySymbol.set(row.symbol, { rank, totalRanked })
+  }
+
+  return { scoresBySymbol, rankBySymbol }
 }
 
 function latestDailyTimeframeView(
@@ -304,7 +415,36 @@ async function loadPayload(
   )
 
   if (!latest) {
-    return { latest: null, history: [], rank: null, totalRanked: 0, previousScore: null, latestScoredDate: null }
+    return {
+      latest: null,
+      history: [],
+      rank: null,
+      totalRanked: 0,
+      previousScore: null,
+      latestScoredDate: null,
+      scoreSource: null,
+      isScoreRefreshRunning: false,
+    }
+  }
+
+  const isScoreRefreshRunning = await loadScoreRefreshRunning(get)
+  let latestForResponse = latest
+  let runtimeRankRow: RankRow | undefined
+  let scoreSource: ScoreSource = hasCompleteScores(latestForResponse) ? 'stored' : null
+
+  if (isScoreRefreshRunning || !hasCompleteScores(latestForResponse)) {
+    const runtimeScores = await computeRuntimeScoresForDate(all, dbMarket, latestForResponse.date).catch(() => null)
+    const runtimeLatest = runtimeScores?.scoresBySymbol.get(ticker)
+    if (
+      runtimeLatest
+      && runtimeLatest.physicalMomentumScore != null
+      && runtimeLatest.physicalForceScore != null
+      && runtimeLatest.physicalEnergyScore != null
+    ) {
+      latestForResponse = { ...latestForResponse, ...runtimeLatest }
+      runtimeRankRow = runtimeScores?.rankBySymbol.get(ticker)
+      scoreSource = 'runtime_raw'
+    }
   }
 
   const [history, rankRow, prevRow, latestScoredRow] = await Promise.all([
@@ -340,8 +480,10 @@ async function loadPayload(
       `,
       [dbMarket, ticker, latest.date, limit],
     ),
-    latest.physicalMomentumScore == null
+    latestForResponse.physicalMomentumScore == null
       ? Promise.resolve(undefined)
+      : runtimeRankRow
+        ? Promise.resolve(runtimeRankRow)
       : get<RankRow>(
           `
             SELECT
@@ -352,7 +494,7 @@ async function loadPayload(
               AND date = ?
               AND physical_momentum_score IS NOT NULL
           `,
-          [latest.physicalMomentumScore, dbMarket, latest.date],
+          [latestForResponse.physicalMomentumScore, dbMarket, latestForResponse.date],
         ),
     get<{ physicalMomentumScore: number | null }>(
       `
@@ -375,6 +517,8 @@ async function loadPayload(
           AND symbol = ?
           ${dateFilter}
           AND physical_momentum_score IS NOT NULL
+          AND physical_force_score IS NOT NULL
+          AND physical_energy_score IS NOT NULL
         ORDER BY date DESC
         LIMIT 1
       `,
@@ -382,13 +526,24 @@ async function loadPayload(
     ),
   ])
 
+  const historyForResponse = history.map((row) => (
+    row.date === latestForResponse.date && row.symbol === latestForResponse.symbol
+      ? { ...row, ...latestForResponse }
+      : row
+  ))
+  const latestScoreDate = scoreSource === 'runtime_raw'
+    ? latestForResponse.date
+    : latestScoredRow?.date ?? null
+
   return {
-    latest: remapMarket(latest, publicMarket),
-    history: history.map((row) => remapMarket(row, publicMarket)),
+    latest: remapMarket(latestForResponse, publicMarket),
+    history: historyForResponse.map((row) => remapMarket(row, publicMarket)),
     rank: rankRow?.rank ?? null,
     totalRanked: rankRow?.totalRanked ?? 0,
     previousScore: prevRow?.physicalMomentumScore ?? null,
-    latestScoredDate: latestScoredRow?.date ?? null,
+    latestScoredDate: latestScoreDate,
+    scoreSource,
+    isScoreRefreshRunning,
   }
 }
 
@@ -454,6 +609,8 @@ export async function GET(request: NextRequest, context: RouteContext) {
       requestedDate: asOfDate,
       latestScoredDate: null,
       isScoreFresh: false,
+      scoreSource: null,
+      isScoreRefreshRunning: false,
       timeframeViews: [],
     })
   }
@@ -492,6 +649,8 @@ export async function GET(request: NextRequest, context: RouteContext) {
     requestedDate: asOfDate,
     latestScoredDate: payload.latestScoredDate,
     isScoreFresh: payload.latestScoredDate === latest.date,
+    scoreSource: payload.scoreSource,
+    isScoreRefreshRunning: payload.isScoreRefreshRunning,
     timeframeViews,
   })
 }

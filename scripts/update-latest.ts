@@ -123,6 +123,11 @@ async function main() {
   let rowsInserted = 0
   const optionalErrors: string[] = []
   const heartbeat = () => lock.heartbeat()
+  const refreshAfterOhlcvEnv: EnvOverrides = {
+    REFRESH_AFTER_OHLCV_SKIP_LOCK: '1',
+    REFRESH_AFTER_OHLCV_CRITICAL_ONLY: '1',
+    UPDATE_CHILD_TIMEOUT_MINUTES: process.env.REFRESH_AFTER_OHLCV_TIMEOUT_MINUTES ?? '180',
+  }
 
   try {
     console.log('Latest data update started')
@@ -137,21 +142,16 @@ async function main() {
     if (before.needsOhlcvUpdate) {
       await runRequired('scripts/batch-ohlcv.ts', { POST_OHLCV_REFRESH: '0' }, heartbeat)
       await lock.heartbeat()
-      await runRequired('scripts/refresh-after-ohlcv.ts', {
-        REFRESH_AFTER_OHLCV_SKIP_LOCK: '1',
-        REFRESH_AFTER_OHLCV_CRITICAL_ONLY: '1',
-      }, heartbeat)
+      await runRequired('scripts/refresh-after-ohlcv.ts', refreshAfterOhlcvEnv, heartbeat)
       await lock.heartbeat()
     } else if (
       before.needsSnapshotUpdate
+      || before.needsPhysicalMomentumUpdate
       || before.needsFeatureUpdate
       || before.needsModelFeatureUpdate
       || before.needsDashboardCacheUpdate
     ) {
-      await runRequired('scripts/refresh-after-ohlcv.ts', {
-        REFRESH_AFTER_OHLCV_SKIP_LOCK: '1',
-        REFRESH_AFTER_OHLCV_CRITICAL_ONLY: '1',
-      }, heartbeat)
+      await runRequired('scripts/refresh-after-ohlcv.ts', refreshAfterOhlcvEnv, heartbeat)
       await lock.heartbeat()
     } else {
       console.log('Critical market data is already fresh')
@@ -165,6 +165,7 @@ async function main() {
     if (
       afterCritical.needsOhlcvUpdate
       || afterCritical.needsSnapshotUpdate
+      || afterCritical.needsPhysicalMomentumUpdate
       || afterCritical.needsFeatureUpdate
       || afterCritical.needsModelFeatureUpdate
       || afterCritical.needsDashboardCacheUpdate

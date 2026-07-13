@@ -54,6 +54,8 @@ export type DataFreshness = {
   latestIndexDate: string | null
   latestEarningsDate: string | null
   latestDashboardCacheDate: string | null
+  latestPhysicalMomentumDate: string | null
+  latestPhysicalMomentumScoreDate: string | null
   latestFeatureDate: string | null
   latestModelFeatureDate: string | null
   latestMlFeatureDate: string | null
@@ -73,6 +75,7 @@ export type DataFreshness = {
   needsOhlcvUpdate: boolean
   needsSnapshotUpdate: boolean
   needsDashboardCacheUpdate: boolean
+  needsPhysicalMomentumUpdate: boolean
   needsFeatureUpdate: boolean
   needsModelFeatureUpdate: boolean
   needsMlFeatureUpdate: boolean
@@ -142,6 +145,27 @@ async function maxDate(tableName: string, columnName: string): Promise<string | 
   return row?.maxDate ?? null
 }
 
+async function loadLatestPhysicalMomentumDate(requireScores: boolean): Promise<string | null> {
+  const scoreFilter = requireScores
+    ? `
+        AND physical_momentum_score IS NOT NULL
+        AND physical_force_score IS NOT NULL
+        AND physical_energy_score IS NOT NULL
+      `
+    : ''
+  const row = await execGet<{ date: string | null }>(
+    `
+      SELECT date
+      FROM physical_momentum_metrics
+      WHERE market = 'JP'
+        ${scoreFilter}
+      ORDER BY date DESC
+      LIMIT 1
+    `,
+  )
+  return row?.date ?? null
+}
+
 async function dateCoverage(tableName: string): Promise<{ latestCount: number; baselineCount: number }> {
   const rows = await execAll<{ date: string; count: number }>(`
     WITH recent_dates AS (
@@ -173,6 +197,8 @@ export async function getDataFreshness(now = new Date()): Promise<DataFreshness>
     latestIndexDate,
     latestEarningsDate,
     latestDashboardCacheDate,
+    latestPhysicalMomentumDate,
+    latestPhysicalMomentumScoreDate,
     latestFeatureDate,
     latestModelFeatureDate,
     latestMlFeatureDate,
@@ -193,6 +219,8 @@ export async function getDataFreshness(now = new Date()): Promise<DataFreshness>
     maxDate('indices_daily', 'date'),
     maxDate('earnings_calendar', 'announce_date'),
     maxDate('dashboard_cache', 'date'),
+    loadLatestPhysicalMomentumDate(false),
+    loadLatestPhysicalMomentumDate(true),
     maxDate('feature_snapshots', 'date'),
     maxDate('model_features', 'date'),
     maxDate('ml_feature_vectors', 'date'),
@@ -360,6 +388,14 @@ export async function getDataFreshness(now = new Date()): Promise<DataFreshness>
   const needsDashboardCacheUpdate =
     !!latestSnapshotDate
     && (!latestDashboardCacheDate || latestDashboardCacheDate < latestSnapshotDate)
+  const needsPhysicalMomentumUpdate =
+    !!latestOhlcvDate
+    && (
+      !latestPhysicalMomentumDate
+      || latestPhysicalMomentumDate < latestOhlcvDate
+      || !latestPhysicalMomentumScoreDate
+      || latestPhysicalMomentumScoreDate < latestOhlcvDate
+    )
   const needsFeatureUpdate =
     !!latestSnapshotDate
     && (!latestFeatureDate || latestFeatureDate < latestSnapshotDate)
@@ -395,6 +431,8 @@ export async function getDataFreshness(now = new Date()): Promise<DataFreshness>
     latestIndexDate,
     latestEarningsDate,
     latestDashboardCacheDate,
+    latestPhysicalMomentumDate,
+    latestPhysicalMomentumScoreDate,
     latestFeatureDate,
     latestModelFeatureDate,
     latestMlFeatureDate,
@@ -414,6 +452,7 @@ export async function getDataFreshness(now = new Date()): Promise<DataFreshness>
     needsOhlcvUpdate,
     needsSnapshotUpdate,
     needsDashboardCacheUpdate,
+    needsPhysicalMomentumUpdate,
     needsFeatureUpdate,
     needsModelFeatureUpdate,
     needsMlFeatureUpdate,
@@ -427,6 +466,7 @@ export async function getDataFreshness(now = new Date()): Promise<DataFreshness>
       needsOhlcvUpdate
       || needsSnapshotUpdate
       || needsDashboardCacheUpdate
+      || needsPhysicalMomentumUpdate
       || needsFeatureUpdate
       || needsModelFeatureUpdate
       || needsMlFeatureUpdate

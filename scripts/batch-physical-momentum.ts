@@ -337,15 +337,6 @@ async function insertRawMetrics(market: Market, rows: MetricRow[]): Promise<void
           ma200_angle = excluded.ma200_angle,
           ma_angle_avg = excluded.ma_angle_avg,
           energy = excluded.energy,
-          z_velocity = NULL,
-          z_acceleration = NULL,
-          z_momentum = NULL,
-          z_force = NULL,
-          z_ma_angle_avg = NULL,
-          z_energy = NULL,
-          physical_momentum_score = NULL,
-          physical_force_score = NULL,
-          physical_energy_score = NULL,
           updated_at = unixepoch()
       `,
       args: [

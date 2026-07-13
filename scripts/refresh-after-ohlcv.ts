@@ -28,7 +28,10 @@ type FreshnessSummary = {
   latestMlPhysicsCandidateDate: string | null
   latestMlSimilarDate: string | null
   latestDashboardCacheDate: string | null
+  latestPhysicalMomentumDate: string | null
+  latestPhysicalMomentumScoreDate: string | null
   needsSnapshotUpdate: boolean
+  needsPhysicalMomentumUpdate: boolean
   needsFeatureUpdate: boolean
   needsModelFeatureUpdate: boolean
   needsMlFeatureUpdate: boolean
@@ -54,7 +57,10 @@ function summarizeFreshness(freshness: Awaited<ReturnType<typeof getDataFreshnes
     latestMlPhysicsCandidateDate: freshness.latestMlPhysicsCandidateDate,
     latestMlSimilarDate: freshness.latestMlSimilarDate,
     latestDashboardCacheDate: freshness.latestDashboardCacheDate,
+    latestPhysicalMomentumDate: freshness.latestPhysicalMomentumDate,
+    latestPhysicalMomentumScoreDate: freshness.latestPhysicalMomentumScoreDate,
     needsSnapshotUpdate: freshness.needsSnapshotUpdate,
+    needsPhysicalMomentumUpdate: freshness.needsPhysicalMomentumUpdate,
     needsFeatureUpdate: freshness.needsFeatureUpdate,
     needsModelFeatureUpdate: freshness.needsModelFeatureUpdate,
     needsMlFeatureUpdate: freshness.needsMlFeatureUpdate,
