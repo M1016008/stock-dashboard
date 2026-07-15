@@ -8,6 +8,7 @@ import { eq } from 'drizzle-orm'
 import { db, execAll } from '@/lib/db/client'
 import { batchRuns } from '@/lib/db/schema'
 import { acquireUpdateLock, getActiveUpdateLocks } from '@/lib/server/update-lock'
+import { waitForMemoryHeadroom, withMemoryGuardEnv } from '@/lib/system/memory-guard'
 
 type RunResult = {
   code: number | null
@@ -328,24 +329,25 @@ async function waitForBlockingBatchRuns(jobTypes: readonly string[], currentRunI
   }
 }
 
-function runNpmUtility(
+async function runNpmUtility(
   script: string,
   heartbeat: () => Promise<void>,
   timeoutMinutes = 30,
   envOverrides: Record<string, string | undefined> = {},
 ): Promise<RunResult> {
+  await waitForMemoryHeadroom({ label: `npm run ${script}` })
   return new Promise((resolve, reject) => {
     let timedOut = false
     const child = spawn('npm', ['run', script], {
       cwd: process.cwd(),
       stdio: 'inherit',
-      env: {
+      env: withMemoryGuardEnv({
         ...process.env,
         USE_LOCAL_DB: '1',
         SQLITE_BUSY_RETRIES: process.env.SQLITE_BUSY_RETRIES ?? '720',
         UPDATE_CHILD_TIMEOUT_MINUTES: String(timeoutMinutes),
         ...envOverrides,
-      },
+      }),
     })
 
     const heartbeatTimer = setInterval(() => {
@@ -388,21 +390,22 @@ async function cleanupStaleBatchRuns(heartbeat: () => Promise<void>): Promise<vo
   }
 }
 
-function runHeavyMlChain(heartbeat: () => Promise<void>): Promise<RunResult> {
+async function runHeavyMlChain(heartbeat: () => Promise<void>): Promise<RunResult> {
+  const npmScript = process.env.ML_LEARNING_NPM_SCRIPT?.trim() || 'batch:ml-daily'
+  await waitForMemoryHeadroom({ label: `npm run ${npmScript}` })
   return new Promise((resolve, reject) => {
     const timeoutMinutes = numberEnv('UPDATE_CHILD_TIMEOUT_MINUTES', 720)
     let timedOut = false
 
-    const npmScript = process.env.ML_LEARNING_NPM_SCRIPT?.trim() || 'batch:ml-daily'
     activeChild = spawn('npm', ['run', npmScript], {
       cwd: process.cwd(),
       stdio: 'inherit',
-      env: {
+      env: withMemoryGuardEnv({
         ...process.env,
         USE_LOCAL_DB: '1',
         SQLITE_BUSY_RETRIES: process.env.SQLITE_BUSY_RETRIES ?? '720',
         UPDATE_CHILD_TIMEOUT_MINUTES: process.env.UPDATE_CHILD_TIMEOUT_MINUTES ?? '2880',
-      },
+      }),
     })
 
     const heartbeatTimer = setInterval(() => {

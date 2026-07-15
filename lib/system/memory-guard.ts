@@ -1,0 +1,125 @@
+import { execFileSync } from 'node:child_process'
+
+type MemoryHeadroom = {
+  availableMb: number
+  compressorMb: number
+  throttledPages: number
+}
+
+type WaitOptions = {
+  label: string
+  minAvailableMb?: number
+  maxCompressorMb?: number
+  maxThrottledPages?: number
+  waitSeconds?: number
+  pollSeconds?: number
+}
+
+type EnvMap = NodeJS.ProcessEnv | Record<string, string | undefined>
+
+const MB = 1024 * 1024
+
+function positiveNumberEnv(name: string, fallback: number): number {
+  const value = Number(process.env[name])
+  return Number.isFinite(value) && value > 0 ? value : fallback
+}
+
+function nonNegativeNumberEnv(name: string, fallback: number): number {
+  const value = Number(process.env[name])
+  return Number.isFinite(value) && value >= 0 ? value : fallback
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function parseVmStatValue(output: string, label: string): number {
+  const match = output.match(new RegExp(`${label}:\\s+([0-9]+)\\.`))
+  return match ? Number(match[1]) : 0
+}
+
+export function readMemoryHeadroom(): MemoryHeadroom | null {
+  if (process.platform !== 'darwin') return null
+  const output = execFileSync('vm_stat', { encoding: 'utf8' })
+  const pageSizeMatch = output.match(/page size of ([0-9]+) bytes/i)
+  const pageSize = pageSizeMatch ? Number(pageSizeMatch[1]) : 16_384
+
+  const free = parseVmStatValue(output, 'Pages free')
+  const speculative = parseVmStatValue(output, 'Pages speculative')
+  const purgeable = parseVmStatValue(output, 'Pages purgeable')
+  const compressor = parseVmStatValue(output, 'Pages occupied by compressor')
+  const throttled = parseVmStatValue(output, 'Pages throttled')
+
+  return {
+    availableMb: ((free + speculative + purgeable) * pageSize) / MB,
+    compressorMb: (compressor * pageSize) / MB,
+    throttledPages: throttled,
+  }
+}
+
+function hasEnoughHeadroom(
+  headroom: MemoryHeadroom,
+  minAvailableMb: number,
+  maxCompressorMb: number,
+  maxThrottledPages: number,
+): boolean {
+  return (
+    headroom.availableMb >= minAvailableMb
+    && headroom.compressorMb <= maxCompressorMb
+    && headroom.throttledPages <= maxThrottledPages
+  )
+}
+
+function formatHeadroom(headroom: MemoryHeadroom): string {
+  return `available=${Math.round(headroom.availableMb)}MB, compressor=${Math.round(headroom.compressorMb)}MB, throttled=${headroom.throttledPages}`
+}
+
+export async function waitForMemoryHeadroom(options: WaitOptions): Promise<void> {
+  if (process.env.STOCKBOARD_MEMORY_GUARD === '0') return
+  if (process.platform !== 'darwin') return
+
+  const minAvailableMb = options.minAvailableMb
+    ?? positiveNumberEnv('STOCKBOARD_MEMORY_MIN_AVAILABLE_MB', 2_048)
+  const maxCompressorMb = options.maxCompressorMb
+    ?? positiveNumberEnv('STOCKBOARD_MEMORY_MAX_COMPRESSOR_MB', 8_192)
+  const maxThrottledPages = options.maxThrottledPages
+    ?? nonNegativeNumberEnv('STOCKBOARD_MEMORY_MAX_THROTTLED_PAGES', 0)
+  const waitSeconds = options.waitSeconds
+    ?? nonNegativeNumberEnv('STOCKBOARD_MEMORY_WAIT_SECONDS', 1_800)
+  const pollSeconds = options.pollSeconds
+    ?? positiveNumberEnv('STOCKBOARD_MEMORY_POLL_SECONDS', 30)
+
+  const startedAt = Date.now()
+  let lastLogAt = 0
+
+  for (;;) {
+    const headroom = readMemoryHeadroom()
+    if (!headroom) return
+    if (hasEnoughHeadroom(headroom, minAvailableMb, maxCompressorMb, maxThrottledPages)) {
+      return
+    }
+
+    const elapsedSeconds = Math.floor((Date.now() - startedAt) / 1_000)
+    const message = `Memory guard waiting before ${options.label}: ${formatHeadroom(headroom)}; required available>=${minAvailableMb}MB, compressor<=${maxCompressorMb}MB, throttled<=${maxThrottledPages}`
+    if (Date.now() - lastLogAt > 60_000) {
+      lastLogAt = Date.now()
+      console.warn(message)
+    }
+
+    if (waitSeconds === 0 || elapsedSeconds >= waitSeconds) {
+      throw new Error(`${message}; timed out after ${elapsedSeconds}s`)
+    }
+
+    await sleep(Math.min(pollSeconds, Math.max(1, waitSeconds - elapsedSeconds)) * 1_000)
+  }
+}
+
+export function withMemoryGuardEnv<T extends EnvMap>(env: T, defaultMaxOldSpaceMb = 3_072): T {
+  const maxOldSpaceMb = positiveNumberEnv('STOCKBOARD_NODE_MAX_OLD_SPACE_MB', defaultMaxOldSpaceMb)
+  const existing = env.NODE_OPTIONS ?? ''
+  if (existing.includes('--max-old-space-size')) return env
+  return {
+    ...env,
+    NODE_OPTIONS: `${existing} --max-old-space-size=${maxOldSpaceMb}`.trim(),
+  } as T
+}

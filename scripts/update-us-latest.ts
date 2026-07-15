@@ -6,6 +6,7 @@
 import { execFileSync, spawn } from 'node:child_process'
 import { execGet } from '@/lib/db/client'
 import { acquireUpdateLock } from '@/lib/server/update-lock'
+import { waitForMemoryHeadroom, withMemoryGuardEnv } from '@/lib/system/memory-guard'
 
 type RunResult = {
   code: number | null
@@ -104,7 +105,8 @@ async function latestUsSnapshotDate(): Promise<string | null> {
   return row?.date ?? null
 }
 
-function runCommand(command: string, args: string[], envOverrides: EnvOverrides, heartbeat?: Heartbeat): Promise<RunResult> {
+async function runCommand(command: string, args: string[], envOverrides: EnvOverrides, heartbeat?: Heartbeat): Promise<RunResult> {
+  await waitForMemoryHeadroom({ label: `${command} ${args.join(' ')}` })
   return new Promise((resolve, reject) => {
     const timeoutMinutes = Number(
       envOverrides.UPDATE_CHILD_TIMEOUT_MINUTES
@@ -115,12 +117,12 @@ function runCommand(command: string, args: string[], envOverrides: EnvOverrides,
     const child = spawn(command, args, {
       cwd: process.cwd(),
       stdio: 'inherit',
-      env: {
+      env: withMemoryGuardEnv({
         ...process.env,
         USE_LOCAL_DB: '1',
         SQLITE_BUSY_RETRIES: process.env.SQLITE_BUSY_RETRIES ?? '720',
         ...envOverrides,
-      },
+      }),
     })
 
     const heartbeatTimer = heartbeat
@@ -263,14 +265,14 @@ async function main() {
         ML_DAILY_TRAIN_LIMIT: process.env.US_ML_DAILY_TRAIN_LIMIT ?? '80000',
         ML_PHYSICS_DAILY_TRAIN_LIMIT: process.env.US_ML_PHYSICS_DAILY_TRAIN_LIMIT ?? '120000',
         US_PMS_DAILY_RECENT_DAYS: process.env.US_PMS_DAILY_RECENT_DAYS ?? '420',
-        US_ML_DAILY_RECENT_DAYS: process.env.US_ML_DAILY_RECENT_DAYS ?? '420',
+        US_ML_DAILY_RECENT_DAYS: process.env.US_ML_DAILY_RECENT_DAYS ?? '2',
         US_ML_DAILY_MIN_HISTORY_DAYS: process.env.US_ML_DAILY_MIN_HISTORY_DAYS ?? '220',
-        US_ML_DAILY_LABEL_RECENT_DAYS: process.env.US_ML_DAILY_LABEL_RECENT_DAYS ?? '520',
-        US_ML_CONTEXT_DAILY_RECENT_DAYS: process.env.US_ML_CONTEXT_DAILY_RECENT_DAYS ?? '420',
-        US_ML_PHYSICS_DAILY_RECENT_DAYS: process.env.US_ML_PHYSICS_DAILY_RECENT_DAYS ?? '420',
+        US_ML_DAILY_LABEL_RECENT_DAYS: process.env.US_ML_DAILY_LABEL_RECENT_DAYS ?? '10',
+        US_ML_CONTEXT_DAILY_RECENT_DAYS: process.env.US_ML_CONTEXT_DAILY_RECENT_DAYS ?? '2',
+        US_ML_PHYSICS_DAILY_RECENT_DAYS: process.env.US_ML_PHYSICS_DAILY_RECENT_DAYS ?? '2',
         US_ML_PHYSICS_DAILY_MIN_HISTORY_DAYS: process.env.US_ML_PHYSICS_DAILY_MIN_HISTORY_DAYS ?? '220',
         US_ML_DAILY_RL_RECENT_DAYS: process.env.US_ML_DAILY_RL_RECENT_DAYS ?? '260',
-        US_ML_DAILY_STATUS_RECENT_DAYS: process.env.US_ML_DAILY_STATUS_RECENT_DAYS ?? '1560',
+        US_ML_DAILY_STATUS_RECENT_DAYS: process.env.US_ML_DAILY_STATUS_RECENT_DAYS ?? '260',
         UPDATE_CHILD_TIMEOUT_MINUTES: process.env.US_ML_DAILY_TIMEOUT_MINUTES ?? '1440',
       }, heartbeat)
       await lock.heartbeat()

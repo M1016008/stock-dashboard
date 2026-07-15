@@ -9,6 +9,7 @@ import { db } from '@/lib/db/client'
 import { batchRuns } from '@/lib/db/schema'
 import { getDataFreshness } from '@/lib/server/data-freshness'
 import { acquireUpdateLock } from '@/lib/server/update-lock'
+import { waitForMemoryHeadroom, withMemoryGuardEnv } from '@/lib/system/memory-guard'
 
 type RunResult = {
   code: number | null
@@ -18,7 +19,8 @@ type RunResult = {
 type EnvOverrides = Record<string, string | undefined>
 type Heartbeat = () => Promise<void>
 
-function runScript(script: string, envOverrides: EnvOverrides = {}, heartbeat?: Heartbeat): Promise<RunResult> {
+async function runScript(script: string, envOverrides: EnvOverrides = {}, heartbeat?: Heartbeat): Promise<RunResult> {
+  await waitForMemoryHeadroom({ label: script })
   return new Promise((resolve, reject) => {
     const timeoutMinutes = Number(
       envOverrides.UPDATE_CHILD_TIMEOUT_MINUTES
@@ -29,12 +31,12 @@ function runScript(script: string, envOverrides: EnvOverrides = {}, heartbeat?: 
     const child = spawn('npx', ['tsx', '--env-file=.env.local', script], {
       cwd: process.cwd(),
       stdio: 'inherit',
-      env: {
+      env: withMemoryGuardEnv({
         ...process.env,
         USE_LOCAL_DB: '1',
         BACKTEST_RECENT_DAYS: process.env.BACKTEST_RECENT_DAYS ?? '0',
         ...envOverrides,
-      },
+      }),
     })
 
     const heartbeatTimer = heartbeat
@@ -182,10 +184,12 @@ async function main() {
         ['earnings-history', 'scripts/batch-earnings-history.ts', { EARNINGS_HISTORY_LIMIT: process.env.EARNINGS_HISTORY_LIMIT ?? '40' }],
         ['credit-short', 'scripts/batch-credit-short.ts', {}],
         ['serving-margin', 'scripts/build-serving-margin.ts', {}],
-        ['forward-extrema', 'scripts/batch-forward-extrema.ts', {}],
+        ['forward-extrema', 'scripts/batch-forward-extrema.ts', {
+          BACKTEST_RECENT_DAYS: process.env.UPDATE_LATEST_FORWARD_EXTREMA_RECENT_DAYS ?? process.env.BACKTEST_RECENT_DAYS ?? '520',
+        }],
         ['forward-extrema-short', 'scripts/batch-forward-extrema.ts', {
           FORWARD_EXTREMA_HORIZONS: process.env.ML_PHYSICS_EXTREMA_HORIZONS ?? '5,10,15,20,40,60,90',
-          BACKTEST_RECENT_DAYS: process.env.ML_PHYSICS_EXTREMA_RECENT_DAYS ?? process.env.BACKTEST_RECENT_DAYS ?? '0',
+          BACKTEST_RECENT_DAYS: process.env.ML_PHYSICS_EXTREMA_RECENT_DAYS ?? process.env.BACKTEST_RECENT_DAYS ?? '520',
           FORWARD_EXTREMA_START_DATE: process.env.ML_FULL_START_DATE ?? '1900-01-01',
           FORWARD_EXTREMA_WRITE_MODEL_LABELS: '0',
         }],

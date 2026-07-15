@@ -7,6 +7,7 @@
 
 import { execFileSync, spawn } from 'node:child_process'
 import fs from 'node:fs'
+import { waitForMemoryHeadroom, withMemoryGuardEnv } from '@/lib/system/memory-guard'
 
 const DEFAULT_US_ANALYTICS_DB = '/Volumes/OWC Express 1M2 80G/stockboard-data/us/stockboard-us.db'
 
@@ -31,11 +32,12 @@ function modeFromArg(value: string | undefined): Mode {
   throw new Error('Usage: tsx scripts/run-us-ml-job.ts <daily|full|after-pms>')
 }
 
-function runNpmOnce(script: string, env: NodeJS.ProcessEnv, overrides: EnvOverrides = {}): Promise<void> {
+async function runNpmOnce(script: string, env: NodeJS.ProcessEnv, overrides: EnvOverrides = {}): Promise<void> {
+  await waitForMemoryHeadroom({ label: `npm run ${script}` })
   return new Promise((resolve, reject) => {
     const child = spawn('npm', ['run', script], {
       cwd: process.cwd(),
-      env: { ...env, ...overrides },
+      env: withMemoryGuardEnv({ ...env, ...overrides }),
       stdio: 'inherit',
     })
     child.on('error', reject)
@@ -264,7 +266,7 @@ async function runFullHistory(env: NodeJS.ProcessEnv, options: { skipPms?: boole
 async function runDailyServing(env: NodeJS.ProcessEnv): Promise<void> {
   const startDate = env.US_ML_FULL_START_DATE ?? '1900-01-01'
   const horizons = '5,10,20,40,60,90'
-  const dailyRecentDays = env.US_ML_DAILY_RECENT_DAYS ?? '420'
+  const dailyRecentDays = env.US_ML_DAILY_RECENT_DAYS ?? '2'
   const dailyMinHistoryDays = env.US_ML_DAILY_MIN_HISTORY_DAYS ?? '220'
 
   if (env.US_ML_SKIP_DAILY_PMS === '1') {
@@ -305,14 +307,14 @@ async function runDailyServing(env: NodeJS.ProcessEnv): Promise<void> {
     })
   }
   await runNpm('batch:ml-labels', env, {
-    ML_LABEL_RECENT_DAYS: env.US_ML_DAILY_LABEL_RECENT_DAYS ?? '520',
+    ML_LABEL_RECENT_DAYS: env.US_ML_DAILY_LABEL_RECENT_DAYS ?? '10',
     ML_LABEL_DATE_CHUNK_DAYS: env.US_ML_DAILY_LABEL_DATE_CHUNK_DAYS ?? '7',
   })
   await runNpm('batch:ml-outcomes', env)
   await runNpm('batch:ml-candidates', env)
   await runNpm('batch:ml-predict', env)
   await runNpm('batch:ml-context-features', env, {
-    ML_CONTEXT_RECENT_DAYS: env.US_ML_CONTEXT_DAILY_RECENT_DAYS ?? '420',
+    ML_CONTEXT_RECENT_DAYS: env.US_ML_CONTEXT_DAILY_RECENT_DAYS ?? '2',
     ML_CONTEXT_START_DATE: startDate,
   })
   const physicsMissingOnlyDate = env.US_ML_DAILY_PHYSICS_MISSING_ONLY_DATE ?? 'latest'
@@ -326,7 +328,7 @@ async function runDailyServing(env: NodeJS.ProcessEnv): Promise<void> {
       console.log(`US ML daily physics features pass ${pass}/${physicsMaxPasses}: eligible_missing=${missing}, ticker_limit=${physicsTickerLimit}`)
       if (missing <= 0) break
       await runNpm('batch:ml-physics-features', env, {
-        ML_PHYSICS_RECENT_DAYS: env.US_ML_PHYSICS_DAILY_RECENT_DAYS ?? '420',
+        ML_PHYSICS_RECENT_DAYS: env.US_ML_PHYSICS_DAILY_RECENT_DAYS ?? '2',
         ML_PHYSICS_MIN_HISTORY_DAYS: physicsMinHistoryDays,
         ML_PHYSICS_START_DATE: startDate,
         ML_PHYSICS_MISSING_ONLY_DATE: physicsMissingOnlyDate,
@@ -335,7 +337,7 @@ async function runDailyServing(env: NodeJS.ProcessEnv): Promise<void> {
     }
   } else {
     await runNpm('batch:ml-physics-features', env, {
-      ML_PHYSICS_RECENT_DAYS: env.US_ML_PHYSICS_DAILY_RECENT_DAYS ?? '420',
+      ML_PHYSICS_RECENT_DAYS: env.US_ML_PHYSICS_DAILY_RECENT_DAYS ?? '2',
       ML_PHYSICS_MIN_HISTORY_DAYS: physicsMinHistoryDays,
       ML_PHYSICS_START_DATE: startDate,
       ML_PHYSICS_MISSING_ONLY_DATE: physicsMissingOnlyDate,
@@ -363,7 +365,7 @@ async function runDailyServing(env: NodeJS.ProcessEnv): Promise<void> {
   })
   await runNpm('batch:ml-physics-status-evaluate', env, {
     ML_PHYSICS_STATUS_HORIZONS: horizons,
-    ML_PHYSICS_STATUS_RECENT_DAYS: env.US_ML_DAILY_STATUS_RECENT_DAYS ?? '1560',
+    ML_PHYSICS_STATUS_RECENT_DAYS: env.US_ML_DAILY_STATUS_RECENT_DAYS ?? '260',
     ML_PHYSICS_STATUS_START_DATE: startDate,
   })
   await runNpm('batch:us-ml-health', env)

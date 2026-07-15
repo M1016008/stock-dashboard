@@ -223,12 +223,12 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
           historyPeriod="all"
           showTimeframeSelector
           maLinesByInterval={{
-            D: [3, 5, 25, 75],
-            '2D': [3, 5, 25, 75],
-            W: [3, 13, 26, 52],
-            '2W': [3, 13, 26, 52],
-            M: [3, 12, 24, 60],
-            '2M': [3, 12, 24, 60],
+            D: [3, 5, 25, 75, 200],
+            '2D': [3, 5, 25, 75, 200],
+            W: [3, 13, 26, 52, 200],
+            '2W': [3, 13, 26, 52, 200],
+            M: [3, 12, 24, 60, 200],
+            '2M': [3, 12, 24, 60, 200],
           }}
         />
       </div>
