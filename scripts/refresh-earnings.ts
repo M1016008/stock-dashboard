@@ -14,6 +14,15 @@ type RunResult = {
   signal: NodeJS.Signals | null
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function numberEnv(name: string, fallback: number): number {
+  const value = Number(process.env[name])
+  return Number.isFinite(value) && value > 0 ? value : fallback
+}
+
 function runScript(script: string): Promise<RunResult> {
   return new Promise((resolve, reject) => {
     const child = spawn('npx', ['tsx', '--env-file=.env.local', script], {
@@ -38,6 +47,27 @@ async function runRequired(script: string) {
   }
 }
 
+async function runRequiredWithRetry(script: string): Promise<void> {
+  const maxAttempts = numberEnv('EARNINGS_REFRESH_MAX_ATTEMPTS', 3)
+  const delaySeconds = numberEnv('EARNINGS_REFRESH_RETRY_DELAY_SECONDS', 300)
+  let lastError: unknown = null
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      if (attempt > 1) console.log(`Retrying ${script}: attempt ${attempt}/${maxAttempts}`)
+      await runRequired(script)
+      return
+    } catch (error) {
+      lastError = error
+      if (attempt >= maxAttempts) break
+      console.warn(`${script} failed; retrying in ${delaySeconds}s: ${error instanceof Error ? error.message : String(error)}`)
+      await sleep(delaySeconds * 1000)
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error(String(lastError))
+}
+
 async function main() {
   const lock = process.env.EARNINGS_REFRESH_SKIP_LOCK === '1'
     ? null
@@ -60,7 +90,7 @@ async function main() {
   const runId = run.id
 
   try {
-    await runRequired('scripts/batch-earnings.ts')
+    await runRequiredWithRetry('scripts/batch-earnings.ts')
     await lock?.heartbeat()
     await runRequired('scripts/build-serving-stock.ts')
     await lock?.heartbeat()

@@ -306,11 +306,15 @@ async function runDailyServing(env: NodeJS.ProcessEnv): Promise<void> {
       ML_TICKER_LIMIT: env.US_ML_DAILY_FEATURE_TICKER_LIMIT,
     })
   }
-  await runNpm('batch:ml-labels', env, {
-    ML_LABEL_RECENT_DAYS: env.US_ML_DAILY_LABEL_RECENT_DAYS ?? '10',
-    ML_LABEL_DATE_CHUNK_DAYS: env.US_ML_DAILY_LABEL_DATE_CHUNK_DAYS ?? '7',
-  })
-  await runNpm('batch:ml-outcomes', env)
+  if (env.US_ML_DAILY_REFRESH_LABELS === '1') {
+    await runNpm('batch:ml-labels', env, {
+      ML_LABEL_RECENT_DAYS: env.US_ML_DAILY_LABEL_RECENT_DAYS ?? '10',
+      ML_LABEL_DATE_CHUNK_DAYS: env.US_ML_DAILY_LABEL_DATE_CHUNK_DAYS ?? '7',
+    })
+    await runNpm('batch:ml-outcomes', env)
+  } else {
+    console.log('US ML daily: skipping labels/outcomes; weekly full ML refresh owns training data')
+  }
   await runNpm('batch:ml-candidates', env)
   await runNpm('batch:ml-predict', env)
   await runNpm('batch:ml-context-features', env, {
@@ -349,27 +353,37 @@ async function runDailyServing(env: NodeJS.ProcessEnv): Promise<void> {
     ML_PHYSICS_CANDIDATE_LIMIT: '120',
   })
   await runNpm('batch:ml-insights', env)
-  await runNpm('batch:ml-short-labels', env, {
-    ML_SHORT_HORIZONS: horizons,
-    ML_SHORT_LABEL_RECENT_DAYS: env.US_ML_DAILY_RL_RECENT_DAYS ?? '260',
-    ML_SHORT_LABEL_START_DATE: startDate,
-    ML_SHORT_RL_DATE_CHUNK_DAYS: env.US_ML_DAILY_RL_DATE_CHUNK_DAYS ?? '7',
-    ML_SHORT_WRITE_RL_STATES: '1',
-  })
-  await runNpm('batch:ml-rl-policy', env, {
-    ML_RL_HORIZONS: horizons,
-    ML_RL_RECENT_DAYS: env.US_ML_DAILY_RL_RECENT_DAYS ?? '260',
-    ML_RL_START_DATE: startDate,
-    ML_RL_SQL_AGG: '1',
-    ML_RL_PAGE_DATES: env.US_ML_RL_PAGE_DATES ?? '100',
-  })
-  await runNpm('batch:ml-physics-status-evaluate', env, {
-    ML_PHYSICS_STATUS_HORIZONS: horizons,
-    ML_PHYSICS_STATUS_RECENT_DAYS: env.US_ML_DAILY_STATUS_RECENT_DAYS ?? '260',
-    ML_PHYSICS_STATUS_START_DATE: startDate,
-  })
+  if (env.US_ML_DAILY_REFRESH_RL === '1') {
+    await runNpm('batch:ml-short-labels', env, {
+      ML_SHORT_HORIZONS: horizons,
+      ML_SHORT_LABEL_RECENT_DAYS: env.US_ML_DAILY_RL_RECENT_DAYS ?? '60',
+      ML_SHORT_LABEL_START_DATE: startDate,
+      ML_SHORT_RL_DATE_CHUNK_DAYS: env.US_ML_DAILY_RL_DATE_CHUNK_DAYS ?? '7',
+      ML_SHORT_WRITE_RL_STATES: '1',
+    })
+    await runNpm('batch:ml-rl-policy', env, {
+      ML_RL_HORIZONS: horizons,
+      ML_RL_RECENT_DAYS: env.US_ML_DAILY_RL_RECENT_DAYS ?? '60',
+      ML_RL_START_DATE: startDate,
+      ML_RL_SQL_AGG: '1',
+      ML_RL_PAGE_DATES: env.US_ML_RL_PAGE_DATES ?? '100',
+    })
+  } else {
+    console.log('US ML daily: skipping RL state/policy refresh; weekly full ML refresh owns RL updates')
+  }
+  if (env.US_ML_DAILY_REFRESH_STATUS === '1') {
+    await runNpm('batch:ml-physics-status-evaluate', env, {
+      ML_PHYSICS_STATUS_HORIZONS: horizons,
+      ML_PHYSICS_STATUS_RECENT_DAYS: env.US_ML_DAILY_STATUS_RECENT_DAYS ?? '60',
+      ML_PHYSICS_STATUS_START_DATE: startDate,
+    })
+  } else {
+    console.log('US ML daily: skipping physics status evaluation; weekly full ML refresh owns status evaluation')
+  }
   await runNpm('batch:us-ml-health', env)
-  await runNpm('batch:ml-accuracy-health', env)
+  if (env.US_ML_DAILY_ACCURACY_HEALTH === '1') {
+    await runNpm('batch:ml-accuracy-health', env)
+  }
 }
 
 async function main(): Promise<void> {

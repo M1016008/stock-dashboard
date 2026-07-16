@@ -186,13 +186,13 @@ async function main(): Promise<void> {
       console.log('ML refresh skipped in critical-only refresh')
     } else if (needsAnyMlRefresh) {
       await runRequired('scripts/batch-ml-features.ts', {
-        ML_RECENT_DAYS: envOrDefault('ML_DAILY_RECENT_DAYS', '420'),
+        ML_RECENT_DAYS: envOrDefault('ML_DAILY_RECENT_DAYS', '5'),
         ML_MIN_HISTORY_DAYS: envOrDefault('ML_DAILY_MIN_HISTORY_DAYS', '220'),
         ML_START_DATE: process.env.ML_FULL_START_DATE ?? '1900-01-01',
       })
       await lock?.heartbeat()
       await runRequired('scripts/batch-ml-labels.ts', {
-        ML_LABEL_RECENT_DAYS: envOrDefault('ML_DAILY_LABEL_RECENT_DAYS', '520'),
+        ML_LABEL_RECENT_DAYS: envOrDefault('ML_DAILY_LABEL_RECENT_DAYS', '30'),
       })
       await lock?.heartbeat()
       await runRequired('scripts/batch-ml-outcomes.ts')
@@ -210,24 +210,24 @@ async function main(): Promise<void> {
       await lock?.heartbeat()
       await runRequired('scripts/batch-forward-extrema.ts', {
         FORWARD_EXTREMA_HORIZONS: process.env.ML_PHYSICS_EXTREMA_HORIZONS ?? '5,10,15,20,40,60,90',
-        BACKTEST_RECENT_DAYS: process.env.ML_PHYSICS_EXTREMA_RECENT_DAYS ?? process.env.BACKTEST_RECENT_DAYS ?? '520',
+        BACKTEST_RECENT_DAYS: process.env.ML_PHYSICS_EXTREMA_RECENT_DAYS ?? process.env.BACKTEST_RECENT_DAYS ?? '60',
         FORWARD_EXTREMA_START_DATE: process.env.ML_FULL_START_DATE ?? '1900-01-01',
         FORWARD_EXTREMA_WRITE_MODEL_LABELS: '0',
       })
       await lock?.heartbeat()
       await runRequired('scripts/batch-ml-context-features.ts', {
-        ML_CONTEXT_RECENT_DAYS: envOrDefault('ML_CONTEXT_DAILY_RECENT_DAYS', '420'),
+        ML_CONTEXT_RECENT_DAYS: envOrDefault('ML_CONTEXT_DAILY_RECENT_DAYS', '5'),
         ML_CONTEXT_START_DATE: process.env.ML_FULL_START_DATE ?? '1900-01-01',
       })
       await lock?.heartbeat()
       await runRequired('scripts/batch-ml-physics-features.ts', {
-        ML_PHYSICS_RECENT_DAYS: envOrDefault('ML_PHYSICS_DAILY_RECENT_DAYS', '420'),
+        ML_PHYSICS_RECENT_DAYS: envOrDefault('ML_PHYSICS_DAILY_RECENT_DAYS', '5'),
         ML_PHYSICS_MIN_HISTORY_DAYS: envOrDefault('ML_PHYSICS_DAILY_MIN_HISTORY_DAYS', '220'),
         ML_PHYSICS_START_DATE: process.env.ML_FULL_START_DATE ?? '1900-01-01',
       })
       await lock?.heartbeat()
       await runRequired('scripts/batch-ml-short-labels.ts', {
-        ML_SHORT_LABEL_RECENT_DAYS: envOrDefault('ML_DAILY_RL_RECENT_DAYS', '260'),
+        ML_SHORT_LABEL_RECENT_DAYS: envOrDefault('ML_DAILY_RL_RECENT_DAYS', '60'),
         ML_SHORT_LABEL_START_DATE: process.env.ML_FULL_START_DATE ?? '1900-01-01',
         ML_SHORT_WRITE_RL_STATES: process.env.ML_SHORT_DAILY_WRITE_RL_STATES ?? '1',
       })
@@ -245,7 +245,7 @@ async function main(): Promise<void> {
       await runRequired('scripts/batch-ml-similarity-evaluate.ts')
       await lock?.heartbeat()
       await runRequired('scripts/batch-ml-rl-policy.ts', {
-        ML_RL_RECENT_DAYS: envOrDefault('ML_DAILY_RL_RECENT_DAYS', '260'),
+        ML_RL_RECENT_DAYS: envOrDefault('ML_DAILY_RL_RECENT_DAYS', '60'),
         ML_RL_START_DATE: process.env.ML_FULL_START_DATE ?? '1900-01-01',
       })
       await lock?.heartbeat()
@@ -272,7 +272,10 @@ async function main(): Promise<void> {
       await lock?.heartbeat()
       await runRequired('scripts/batch-ml-similarity-evaluate.ts')
       await lock?.heartbeat()
-      await runRequired('scripts/batch-ml-rl-policy.ts')
+      await runRequired('scripts/batch-ml-rl-policy.ts', {
+        ML_RL_RECENT_DAYS: envOrDefault('ML_DAILY_RL_RECENT_DAYS', '60'),
+        ML_RL_START_DATE: process.env.ML_FULL_START_DATE ?? '1900-01-01',
+      })
       await lock?.heartbeat()
       await runRequired('scripts/batch-ml-feature-health.ts')
       await lock?.heartbeat()

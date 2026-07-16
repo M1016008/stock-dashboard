@@ -33,6 +33,11 @@ const steps: Step[] = [
     script: 'auto-kabutan-material-news:install',
   },
   {
+    name: 'Earnings calendar and stock serving refresh',
+    label: 'com.stockboard.earnings-refresh',
+    script: 'auto-earnings-refresh:install',
+  },
+  {
     name: 'US latest data, analytics DB, and US daily ML',
     label: 'com.stockboard.us-update-latest',
     script: 'auto-update-us:install',

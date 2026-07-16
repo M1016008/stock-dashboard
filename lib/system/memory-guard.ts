@@ -3,12 +3,14 @@ import { execFileSync } from 'node:child_process'
 type MemoryHeadroom = {
   availableMb: number
   compressorMb: number
+  freePercent: number | null
   throttledPages: number
 }
 
 type WaitOptions = {
   label: string
   minAvailableMb?: number
+  minFreePercent?: number
   maxCompressorMb?: number
   maxThrottledPages?: number
   waitSeconds?: number
@@ -38,9 +40,20 @@ function parseVmStatValue(output: string, label: string): number {
   return match ? Number(match[1]) : 0
 }
 
+function parseMemoryPressureFreePercent(output: string): number | null {
+  const match = output.match(/System-wide memory free percentage:\s+([0-9]+)%/i)
+  return match ? Number(match[1]) : null
+}
+
 export function readMemoryHeadroom(): MemoryHeadroom | null {
   if (process.platform !== 'darwin') return null
   const output = execFileSync('vm_stat', { encoding: 'utf8' })
+  let pressureOutput = ''
+  try {
+    pressureOutput = execFileSync('memory_pressure', { encoding: 'utf8' })
+  } catch {
+    pressureOutput = ''
+  }
   const pageSizeMatch = output.match(/page size of ([0-9]+) bytes/i)
   const pageSize = pageSizeMatch ? Number(pageSizeMatch[1]) : 16_384
 
@@ -53,6 +66,7 @@ export function readMemoryHeadroom(): MemoryHeadroom | null {
   return {
     availableMb: ((free + speculative + purgeable) * pageSize) / MB,
     compressorMb: (compressor * pageSize) / MB,
+    freePercent: pressureOutput ? parseMemoryPressureFreePercent(pressureOutput) : null,
     throttledPages: throttled,
   }
 }
@@ -60,18 +74,25 @@ export function readMemoryHeadroom(): MemoryHeadroom | null {
 function hasEnoughHeadroom(
   headroom: MemoryHeadroom,
   minAvailableMb: number,
+  minFreePercent: number,
   maxCompressorMb: number,
   maxThrottledPages: number,
 ): boolean {
   return (
-    headroom.availableMb >= minAvailableMb
+    (minAvailableMb === 0 || headroom.availableMb >= minAvailableMb)
+    && (
+      minFreePercent === 0
+      || headroom.freePercent === null
+      || headroom.freePercent >= minFreePercent
+    )
     && headroom.compressorMb <= maxCompressorMb
     && headroom.throttledPages <= maxThrottledPages
   )
 }
 
 function formatHeadroom(headroom: MemoryHeadroom): string {
-  return `available=${Math.round(headroom.availableMb)}MB, compressor=${Math.round(headroom.compressorMb)}MB, throttled=${headroom.throttledPages}`
+  const freePercent = headroom.freePercent === null ? 'unknown' : `${headroom.freePercent}%`
+  return `available=${Math.round(headroom.availableMb)}MB, free=${freePercent}, compressor=${Math.round(headroom.compressorMb)}MB, throttled=${headroom.throttledPages}`
 }
 
 export async function waitForMemoryHeadroom(options: WaitOptions): Promise<void> {
@@ -79,9 +100,11 @@ export async function waitForMemoryHeadroom(options: WaitOptions): Promise<void>
   if (process.platform !== 'darwin') return
 
   const minAvailableMb = options.minAvailableMb
-    ?? positiveNumberEnv('STOCKBOARD_MEMORY_MIN_AVAILABLE_MB', 2_048)
+    ?? nonNegativeNumberEnv('STOCKBOARD_MEMORY_MIN_AVAILABLE_MB', 0)
+  const minFreePercent = options.minFreePercent
+    ?? nonNegativeNumberEnv('STOCKBOARD_MEMORY_MIN_FREE_PERCENT', 15)
   const maxCompressorMb = options.maxCompressorMb
-    ?? positiveNumberEnv('STOCKBOARD_MEMORY_MAX_COMPRESSOR_MB', 8_192)
+    ?? positiveNumberEnv('STOCKBOARD_MEMORY_MAX_COMPRESSOR_MB', 12_288)
   const maxThrottledPages = options.maxThrottledPages
     ?? nonNegativeNumberEnv('STOCKBOARD_MEMORY_MAX_THROTTLED_PAGES', 0)
   const waitSeconds = options.waitSeconds
@@ -95,12 +118,12 @@ export async function waitForMemoryHeadroom(options: WaitOptions): Promise<void>
   for (;;) {
     const headroom = readMemoryHeadroom()
     if (!headroom) return
-    if (hasEnoughHeadroom(headroom, minAvailableMb, maxCompressorMb, maxThrottledPages)) {
+    if (hasEnoughHeadroom(headroom, minAvailableMb, minFreePercent, maxCompressorMb, maxThrottledPages)) {
       return
     }
 
     const elapsedSeconds = Math.floor((Date.now() - startedAt) / 1_000)
-    const message = `Memory guard waiting before ${options.label}: ${formatHeadroom(headroom)}; required available>=${minAvailableMb}MB, compressor<=${maxCompressorMb}MB, throttled<=${maxThrottledPages}`
+    const message = `Memory guard waiting before ${options.label}: ${formatHeadroom(headroom)}; required available>=${minAvailableMb}MB, free>=${minFreePercent}%, compressor<=${maxCompressorMb}MB, throttled<=${maxThrottledPages}`
     if (Date.now() - lastLogAt > 60_000) {
       lastLogAt = Date.now()
       console.warn(message)

@@ -199,17 +199,23 @@ async function main() {
       throw new Error('US_ANALYTICS_DB_PATH is required for US latest update. Point it at the external SSD analytics DB before running.')
     }
 
-    await runNpm('batch:us-universe', {
-      US_INCLUDE_INACTIVE: process.env.US_DAILY_INCLUDE_INACTIVE ?? '0',
-      UPDATE_CHILD_TIMEOUT_MINUTES: process.env.US_UNIVERSE_TIMEOUT_MINUTES ?? '30',
-    }, heartbeat)
+    try {
+      await runNpm('batch:us-universe', {
+        US_INCLUDE_INACTIVE: process.env.US_DAILY_INCLUDE_INACTIVE ?? '0',
+        UPDATE_CHILD_TIMEOUT_MINUTES: process.env.US_UNIVERSE_TIMEOUT_MINUTES ?? '30',
+      }, heartbeat)
+    } catch (error) {
+      if (!beforeOhlcv) throw error
+      console.warn(`US universe refresh failed; continuing with existing universe because OHLCV already exists: ${errorMessage(error)}`)
+    }
     await lock.heartbeat()
 
     const latestBeforeFetch = await latestUsOhlcvDate()
+    const dailyHistoryFrom = process.env.US_DAILY_HISTORY_FROM?.trim() || expected
     if (!latestBeforeFetch || latestBeforeFetch < expected || process.env.US_FORCE_OHLCV_REFRESH === '1') {
       await runNpm('batch:us-ohlcv', {
         US_INCLUDE_INACTIVE: process.env.US_DAILY_INCLUDE_INACTIVE ?? '0',
-        US_HISTORY_FROM: process.env.US_DAILY_HISTORY_FROM ?? '1900-01-01',
+        US_HISTORY_FROM: dailyHistoryFrom,
         US_OHLCV_CONCURRENCY: process.env.US_DAILY_OHLCV_CONCURRENCY ?? '2',
         US_OHLCV_RATE_LIMIT_MS: process.env.US_DAILY_OHLCV_RATE_LIMIT_MS ?? '350',
         US_OHLCV_INSERT_CHUNK: process.env.US_DAILY_OHLCV_INSERT_CHUNK ?? '50',
@@ -271,8 +277,8 @@ async function main() {
         US_ML_CONTEXT_DAILY_RECENT_DAYS: process.env.US_ML_CONTEXT_DAILY_RECENT_DAYS ?? '2',
         US_ML_PHYSICS_DAILY_RECENT_DAYS: process.env.US_ML_PHYSICS_DAILY_RECENT_DAYS ?? '2',
         US_ML_PHYSICS_DAILY_MIN_HISTORY_DAYS: process.env.US_ML_PHYSICS_DAILY_MIN_HISTORY_DAYS ?? '220',
-        US_ML_DAILY_RL_RECENT_DAYS: process.env.US_ML_DAILY_RL_RECENT_DAYS ?? '260',
-        US_ML_DAILY_STATUS_RECENT_DAYS: process.env.US_ML_DAILY_STATUS_RECENT_DAYS ?? '260',
+        US_ML_DAILY_RL_RECENT_DAYS: process.env.US_ML_DAILY_RL_RECENT_DAYS ?? '60',
+        US_ML_DAILY_STATUS_RECENT_DAYS: process.env.US_ML_DAILY_STATUS_RECENT_DAYS ?? '60',
         UPDATE_CHILD_TIMEOUT_MINUTES: process.env.US_ML_DAILY_TIMEOUT_MINUTES ?? '1440',
       }, heartbeat)
       await lock.heartbeat()

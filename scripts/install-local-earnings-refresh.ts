@@ -52,7 +52,9 @@ const command = [
   `cd ${JSON.stringify(cwd)}`,
   `export PATH=${JSON.stringify(pathEnv)}`,
   'export USE_LOCAL_DB=1',
-  'export SQLITE_BUSY_RETRIES=${SQLITE_BUSY_RETRIES:-40}',
+  'export SQLITE_BUSY_RETRIES=${SQLITE_BUSY_RETRIES:-240}',
+  'export EARNINGS_REFRESH_MAX_ATTEMPTS=${EARNINGS_REFRESH_MAX_ATTEMPTS:-3}',
+  'export EARNINGS_REFRESH_RETRY_DELAY_SECONDS=${EARNINGS_REFRESH_RETRY_DELAY_SECONDS:-300}',
   'npm run batch:earnings-refresh',
 ].join(' && ')
 
