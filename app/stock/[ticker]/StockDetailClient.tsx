@@ -13,6 +13,7 @@ import { WatchlistButton } from '@/components/ui/WatchlistButton'
 import { StageTimeline } from '@/components/stock/StageTimeline'
 import { StockMovePeriods } from '@/components/stock/StockMovePeriods'
 import { StockMlInsights } from '@/components/stock/StockMlInsights'
+import { HistoricalAnalogExplorer } from '@/components/stock/HistoricalAnalogExplorer'
 import { ScenarioProjectionChart } from '@/components/stock/ScenarioProjectionChart'
 import { TradeScenarioNotebook } from '@/components/stock/TradeScenarioNotebook'
 import { StockScenarioAiPanel } from '@/components/stock/StockScenarioAiPanel'
@@ -134,24 +135,25 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
         paddingBottom: '12px',
         flexWrap: 'wrap',
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
           <span style={{ fontSize: '22px', lineHeight: 1 }}>
             <WatchlistButton ticker={ticker} size="md" />
           </span>
-          <span style={{
-            fontFamily: 'var(--font-mono)',
-            fontSize: '22px',
-            fontWeight: 700,
-            color: 'var(--accent-primary)',
-          }}>
-            {displayCode}
-          </span>
-          <MarketBadge />
+          <h1 style={{ display: 'flex', minWidth: 0, alignItems: 'center', gap: '8px', margin: 0, flexWrap: 'wrap' }}>
+            <span style={{
+              fontFamily: 'var(--font-mono)',
+              fontSize: '22px',
+              fontWeight: 700,
+              color: 'var(--accent-primary)',
+            }}>
+              {displayCode}
+            </span>
+            <MarketBadge />
+            <span style={{ minWidth: 0, fontSize: '14px', color: 'var(--text-primary)', fontWeight: 600 }}>
+              {name}
+            </span>
+          </h1>
         </div>
-
-        <span style={{ fontSize: '14px', color: 'var(--text-primary)', fontWeight: 600 }}>
-          {name}
-        </span>
 
         <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
           {displayMarginType && <Pill label={displayMarginType} />}
@@ -247,6 +249,8 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
 
       {/* 最新ML類似候補 */}
       <StockMlInsights ticker={ticker} />
+
+      <HistoricalAnalogExplorer ticker={ticker} analysisDate={analysisDate} />
 
     </div>
   )

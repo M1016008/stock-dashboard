@@ -161,7 +161,7 @@ export async function GET(request: NextRequest, context: RouteContext) {
     const interval = normalizeProjectionInterval(request.nextUrl.searchParams.get('interval'))
     const market = normalizeMarket(request.nextUrl.searchParams.get('market'))
     const defaultHorizon = defaultProjectionHorizon(interval)
-    const horizonDays = parsePositiveInt(request.nextUrl.searchParams.get('horizonDays'), defaultHorizon, 180)
+    const horizonDays = parsePositiveInt(request.nextUrl.searchParams.get('horizonDays'), defaultHorizon, 200)
     const limit = parsePositiveInt(request.nextUrl.searchParams.get('limit'), 8, 8)
     const asOfDate = parseAsOfDate(request.nextUrl.searchParams.get('date'))
     const llmEnabled = request.nextUrl.searchParams.get('llm') !== '0' && process.env.SCENARIO_PROJECTION_LLM_ENABLED !== '0'

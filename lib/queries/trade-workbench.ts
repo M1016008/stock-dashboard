@@ -1319,7 +1319,7 @@ export async function getTradeWorkbench(params: {
   limit?: number | null
   budgetYen?: number | null
 } = {}): Promise<TradeWorkbenchResult> {
-  const horizonDays = [20, 40, 60, 90, 180].includes(Number(params.horizonDays))
+  const horizonDays = [20, 40, 60, 90, 180, 200].includes(Number(params.horizonDays))
     ? Number(params.horizonDays)
     : DEFAULT_HORIZON
   const limit = Math.min(120, Math.max(1, Number(params.limit ?? DEFAULT_LIMIT)))
@@ -1334,7 +1334,7 @@ export async function getTradeWorkbench(params: {
     num(row.monthly_a_stage),
     num(row.monthly_b_stage),
   ])).filter((value): value is string => Boolean(value))))
-  const evidenceHorizons = Array.from(new Set([horizonDays, 20, 40, 60, 90, 180, 30, 5]))
+  const evidenceHorizons = Array.from(new Set([horizonDays, 20, 40, 60, 90, 180, 200, 30, 5]))
 
   const [
     signalReturnMap,

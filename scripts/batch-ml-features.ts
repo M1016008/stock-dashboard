@@ -4,6 +4,8 @@
 
 import { execAll, execBatch, execRun } from '@/lib/db/client'
 import { featureVector, type MlFeatureProfile } from '@/lib/backtest/ml'
+import { ML_PRIMARY_HORIZON_LIST } from '@/lib/backtest/ml-horizons'
+import { waitForMemoryHeadroom } from '@/lib/system/memory-guard'
 
 type Row = {
   date: string
@@ -36,7 +38,8 @@ const TICKER_LIMIT = Number(process.env.ML_TICKER_LIMIT ?? 0)
 const TICKER_START = process.env.ML_TICKER_START?.trim() || null
 const TICKER_END = process.env.ML_TICKER_END?.trim() || null
 const MISSING_ONLY_DATE = process.env.ML_MISSING_ONLY_DATE?.trim() || null
-const HORIZONS = (process.env.ML_HORIZONS ?? '5,10,20,40,60,90')
+const ACTIVE_ONLY = process.env.ML_FEATURE_ACTIVE_ONLY === '1'
+const HORIZONS = (process.env.ML_HORIZONS ?? ML_PRIMARY_HORIZON_LIST)
   .split(',')
   .map((value) => Number(value.trim()))
   .filter((value) => Number.isFinite(value) && value > 0)
@@ -138,6 +141,25 @@ async function tickers(): Promise<string[]> {
   }
   const whereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : ''
   const limitSql = TICKER_LIMIT > 0 ? ` LIMIT ${TICKER_LIMIT}` : ''
+  if (ACTIVE_ONLY) {
+    try {
+      const rows = await execAll<{ ticker: string }>(
+        `
+        SELECT o.ticker
+        FROM ohlcv_daily o
+        JOIN ticker_universe u ON u.ticker = o.ticker AND COALESCE(u.active, 1) = 1
+        ${whereSql}
+        GROUP BY o.ticker
+        ORDER BY o.ticker${limitSql}
+        `,
+        args,
+      )
+      if (rows.length > 0) return rows.map((row) => row.ticker)
+      console.warn('ml feature active_only requested but active universe returned no tickers; falling back to OHLCV tickers')
+    } catch (error) {
+      console.warn(`ml feature active_only requested but ticker_universe lookup failed; falling back to OHLCV tickers: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
   const rows = await execAll<{ ticker: string }>(
     `SELECT o.ticker FROM ohlcv_daily o ${whereSql} GROUP BY o.ticker ORDER BY o.ticker${limitSql}`,
     args,
@@ -318,11 +340,14 @@ async function main() {
   let stateCount = 0
   const started = Date.now()
   console.log(
-    `ml feature build: tickers=${codes.length}, recent_days=${RECENT_DAYS || 'all'}, min_history_days=${MIN_HISTORY_DAYS}, start=${START_DATE ?? '-'}, end=${END_DATE ?? '-'}, missing_only_date=${MISSING_ONLY_DATE ?? '-'}, horizons=${HORIZONS.join('/')}`,
+    `ml feature build: tickers=${codes.length}, recent_days=${RECENT_DAYS || 'all'}, min_history_days=${MIN_HISTORY_DAYS}, start=${START_DATE ?? '-'}, end=${END_DATE ?? '-'}, missing_only_date=${MISSING_ONLY_DATE ?? '-'}, active_only=${ACTIVE_ONLY ? 'on' : 'off'}, horizons=${HORIZONS.join('/')}`,
   )
   if (TICKER_START || TICKER_END) console.log(`ml feature ticker range: ${TICKER_START ?? '-'}..${TICKER_END ?? '-'}`)
 
   for (const [index, ticker] of codes.entries()) {
+    if (index > 0 && index % 100 === 0) {
+      await waitForMemoryHeadroom({ label: `ml features ${index}/${codes.length}` })
+    }
     const result = await buildTicker(ticker)
     featureCount += result.features
     labelCount += result.labels

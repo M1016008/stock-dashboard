@@ -57,6 +57,9 @@ type StockMomentumRow = {
   monthlyBStage: number | null
 }
 
+const STOCK_LIST_PAGE_SIZE = 100
+const STOCK_LIST_MAX_ROWS = 500
+
 function ratio(part: number | null | undefined, total: number | null | undefined): number | null {
   if (part == null || total == null || !Number.isFinite(part) || !Number.isFinite(total) || total <= 0) return null
   return (part / total) * 100
@@ -231,7 +234,7 @@ function buildSummary(date: string | null, rows: StockMomentumRow[]): SummaryRow
   )
 }
 
-async function getMarketMomentumData(group: MarketMomentumGroupId, rank: MarketMomentumRankId, date: string | null) {
+async function getMarketMomentumData(group: MarketMomentumGroupId, rank: MarketMomentumRankId, date: string | null, requestedPage: number) {
   const groupSql = marketMomentumGroupSql(
     group,
     'pm.symbol',
@@ -257,6 +260,9 @@ async function getMarketMomentumData(group: MarketMomentumGroupId, rank: MarketM
       stallRows: [],
       dropRows: [],
       allRows: [],
+      listTotal: 0,
+      listPage: 1,
+      listPageCount: 1,
     }
   }
 
@@ -307,7 +313,12 @@ async function getMarketMomentumData(group: MarketMomentumGroupId, rank: MarketM
     'stall',
   ).slice(0, 12)
   const dropRows = rankedRows(rows, 'drop').slice(0, 12)
-  const allRows = rankedRows(rows, rank).slice(0, 500)
+  const ranked = rankedRows(rows, rank).slice(0, STOCK_LIST_MAX_ROWS)
+  const listTotal = ranked.length
+  const listPageCount = Math.max(1, Math.ceil(listTotal / STOCK_LIST_PAGE_SIZE))
+  const listPage = Math.min(Math.max(1, requestedPage), listPageCount)
+  const listOffset = (listPage - 1) * STOCK_LIST_PAGE_SIZE
+  const allRows = ranked.slice(listOffset, listOffset + STOCK_LIST_PAGE_SIZE)
 
   return {
     summary: buildSummary(latestDate, rows),
@@ -316,6 +327,9 @@ async function getMarketMomentumData(group: MarketMomentumGroupId, rank: MarketM
     stallRows,
     dropRows,
     allRows,
+    listTotal,
+    listPage,
+    listPageCount,
   }
 }
 
@@ -424,16 +438,22 @@ function RankingPanel({
 function StockListTable({
   rows,
   rank,
+  total,
+  page,
 }: {
   rows: StockMomentumRow[]
   rank: ReturnType<typeof rankMeta>
+  total: number
+  page: number
 }) {
+  const first = total > 0 ? (page - 1) * STOCK_LIST_PAGE_SIZE + 1 : 0
+  const last = total > 0 ? first + rows.length - 1 : 0
   return (
     <div id="stock-list" className="scroll-mt-24 overflow-hidden rounded-[8px] border border-[var(--color-border-soft)] bg-white">
       <div className={`border-b px-3 py-2 ${statusClass(rank.tone)}`}>
         <h2 className="text-[13px] font-bold">{rank.label}</h2>
         <p className="mt-1 text-[10px] font-semibold opacity-80">
-          {rank.description} 最大500件を表示し、ステージ、貸借、出来高、PMS/PFS/PESを同じ行で確認できます。
+          {rank.description} 上位最大{STOCK_LIST_MAX_ROWS}件を100件ずつ表示します。現在 {first.toLocaleString()}〜{last.toLocaleString()} / {total.toLocaleString()}件です。
         </p>
       </div>
       <div className="overflow-x-auto">
@@ -499,6 +519,55 @@ function StockListTable({
   )
 }
 
+function stockListPageHref(
+  group: MarketMomentumGroupId,
+  rank: MarketMomentumRankId,
+  date: string | null,
+  page: number,
+): string {
+  const base = marketMomentumRankingHref(group, rank, date).replace('#stock-list', '')
+  return `${base}${base.includes('?') ? '&' : '?'}page=${page}#stock-list`
+}
+
+function StockListPagination({
+  group,
+  rank,
+  date,
+  page,
+  pageCount,
+}: {
+  group: MarketMomentumGroupId
+  rank: MarketMomentumRankId
+  date: string | null
+  page: number
+  pageCount: number
+}) {
+  if (pageCount <= 1) return null
+  return (
+    <nav aria-label="銘柄一覧ページ" className="flex items-center justify-center gap-2">
+      <Link
+        href={stockListPageHref(group, rank, date, Math.max(1, page - 1))}
+        prefetch={false}
+        aria-disabled={page <= 1}
+        className={`rounded-[4px] border px-3 py-1.5 text-[11px] font-bold ${page <= 1 ? 'pointer-events-none border-[var(--color-border-soft)] text-[var(--color-text-tertiary)]' : 'border-[var(--color-border-default)] bg-white text-[var(--color-brand-800)] hover:bg-[var(--color-surface-subtle)]'}`}
+      >
+        前へ
+      </Link>
+      <span className="font-mono text-[11px] font-bold text-[var(--color-text-secondary)]">
+        {page} / {pageCount}
+      </span>
+      <Link
+        href={stockListPageHref(group, rank, date, Math.min(pageCount, page + 1))}
+        prefetch={false}
+        aria-disabled={page >= pageCount}
+        className={`rounded-[4px] border px-3 py-1.5 text-[11px] font-bold ${page >= pageCount ? 'pointer-events-none border-[var(--color-border-soft)] text-[var(--color-text-tertiary)]' : 'border-[var(--color-border-default)] bg-white text-[var(--color-brand-800)] hover:bg-[var(--color-surface-subtle)]'}`}
+      >
+        次へ
+      </Link>
+    </nav>
+  )
+}
+
 function GroupTabs({ active, date }: { active: MarketMomentumGroupId; date: string | null }) {
   return (
     <div className="flex gap-2 overflow-x-auto pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
@@ -527,15 +596,17 @@ function GroupTabs({ active, date }: { active: MarketMomentumGroupId; date: stri
 export default async function MarketMomentumPage({
   searchParams,
 }: {
-  searchParams: Promise<{ group?: string | string[]; rank?: string | string[]; date?: string | string[] }>
+  searchParams: Promise<{ group?: string | string[]; rank?: string | string[]; date?: string | string[]; page?: string | string[] }>
 }) {
   const sp = await searchParams
   const groupId = parseMarketMomentumGroup(sp.group)
   const rankId = parseMarketMomentumRank(sp.rank)
   const requestedDate = validDateParam(sp.date)
+  const rawPage = Array.isArray(sp.page) ? sp.page[0] : sp.page
+  const requestedPage = Math.max(1, Number.parseInt(rawPage ?? '1', 10) || 1)
   const group = MARKET_MOMENTUM_GROUPS[groupId]
   const activeRank = rankMeta(rankId)
-  const { summary, initialRows, continuationRows, stallRows, dropRows, allRows } = await getMarketMomentumData(groupId, rankId, requestedDate)
+  const { summary, initialRows, continuationRows, stallRows, dropRows, allRows, listTotal, listPage, listPageCount } = await getMarketMomentumData(groupId, rankId, requestedDate, requestedPage)
   const count = Number(summary?.count ?? 0)
   const pmsPlus = ratio(summary?.positivePms ?? 0, count)
   const pfsPlus = ratio(summary?.positivePfs ?? 0, count)
@@ -627,7 +698,8 @@ export default async function MarketMomentumPage({
         />
       </div>
 
-      <StockListTable rows={allRows} rank={activeRank} />
+      <StockListTable rows={allRows} rank={activeRank} total={listTotal} page={listPage} />
+      <StockListPagination group={groupId} rank={rankId} date={requestedDate} page={listPage} pageCount={listPageCount} />
     </div>
   )
 }

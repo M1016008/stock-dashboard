@@ -1,3 +1,4 @@
+import type { Metadata } from 'next'
 import Link from 'next/link'
 import { Suspense } from 'react'
 import { PageTitle } from '@/components/layout/PageTitle'
@@ -41,10 +42,15 @@ import {
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
 
+export const metadata: Metadata = {
+  title: 'AI Lens — StockBoard',
+  description: 'MA形状、物理特徴量、類似候補、過去パターンを横断分析します。',
+}
+
 type Direction = 'up' | 'down'
 type MaKey = 'sma5' | 'sma25' | 'sma75' | 'sma200'
 
-const PHYSICS_LENS_HORIZONS = [10, 40, 90, 180]
+const PHYSICS_LENS_HORIZONS = [5, 10, 20, 40, 60, 90, 200]
 
 type Status = {
   firstFeatureDate: string | null
@@ -1677,10 +1683,13 @@ function PhysicsLensPanel({ status, rows }: { status: PhysicsDataStatus; rows: P
       ? 'v3'
       : 'v2'
   const sections = [
-    { title: '短期', horizonDays: 10, body: '日足の速度・加速度に、週足/月足の支援や抵抗を重ねた短期候補です。' },
-    { title: '週足', horizonDays: 40, body: '週足トレンドが効く数週間〜約2か月の候補です。' },
-    { title: '月足', horizonDays: 90, body: '月足の方向性まで見た約3〜4か月の候補です。' },
-    { title: '長期月足', horizonDays: 180, body: '半年規模で、月足の土台や大きな崩れを重視する候補です。' },
+    { title: '超短期', horizonDays: 5, body: '数日から1週間の初動と急失速を捉える候補です。' },
+    { title: '短期', horizonDays: 10, body: '日足の速度・加速度に、週足/月足の支援や抵抗を重ねた候補です。' },
+    { title: '1か月', horizonDays: 20, body: '約1か月の方向感と押し目・失速を評価する候補です。' },
+    { title: '2か月', horizonDays: 40, body: '週足トレンドが効く数週間から約2か月の候補です。' },
+    { title: '3か月', horizonDays: 60, body: '日足と週足の持続性を約3か月で確認する候補です。' },
+    { title: '中長期', horizonDays: 90, body: '月足の方向性まで見た約4か月の候補です。' },
+    { title: '超長期', horizonDays: 200, body: '約10か月の月足構造と大きな転換を重視する候補です。' },
   ]
   const groups: Array<{ direction: PhysicsDirection; title: string; body: string }> = [
     { direction: 'up', title: '上昇候補', body: 'SMA速度・加速度・距離拡大が上方向に揃いやすい形です。' },

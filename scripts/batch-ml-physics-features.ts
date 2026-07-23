@@ -10,6 +10,7 @@ import {
   type PhysicsFeatureProfile,
   type PhysicsUpperTimeframeProfile,
 } from '@/lib/backtest/ml-physics'
+import { waitForMemoryHeadroom } from '@/lib/system/memory-guard'
 import { resampleOhlcv } from '@/lib/timeframes'
 import type { OHLCV } from '@/types/stock'
 
@@ -85,6 +86,7 @@ const END_DATE = process.env.ML_PHYSICS_END_DATE?.trim() || null
 const TICKER_LIMIT = Number(process.env.ML_PHYSICS_TICKER_LIMIT ?? 0)
 const TICKER_START = process.env.ML_PHYSICS_TICKER_START?.trim() || null
 const TICKER_END = process.env.ML_PHYSICS_TICKER_END?.trim() || null
+const ACTIVE_ONLY = process.env.ML_PHYSICS_ACTIVE_ONLY === '1'
 const DEFAULT_RECENT_HISTORY_LOOKBACK = Math.max(520, RECENT_DAYS + 260, RECENT_DAYS + MIN_HISTORY_DAYS + 80)
 const HISTORY_LOOKBACK_DAYS = Number(process.env.ML_PHYSICS_HISTORY_LOOKBACK_DAYS ?? (RECENT_DAYS > 0 ? DEFAULT_RECENT_HISTORY_LOOKBACK : 0))
 const MISSING_ONLY_DATE = process.env.ML_PHYSICS_MISSING_ONLY_DATE?.trim() || null
@@ -508,6 +510,12 @@ async function tickers(): Promise<string[]> {
       where.push(`d.ticker <= ?`)
       args.push(TICKER_END)
     }
+    if (ACTIVE_ONLY) {
+      where.push(`EXISTS (
+        SELECT 1 FROM ticker_universe u
+        WHERE u.ticker = d.ticker AND COALESCE(u.active, 1) = 1
+      )`)
+    }
     args.push(MIN_HISTORY_DAYS)
     const limitSql = TICKER_LIMIT > 0 ? ` LIMIT ${TICKER_LIMIT}` : ''
     const rows = await execAll<{ ticker: string }>(
@@ -530,17 +538,23 @@ async function tickers(): Promise<string[]> {
   const where: string[] = []
   const args: string[] = []
   if (TICKER_START) {
-    where.push(`ticker >= ?`)
+    where.push(`o.ticker >= ?`)
     args.push(TICKER_START)
   }
   if (TICKER_END) {
-    where.push(`ticker <= ?`)
+    where.push(`o.ticker <= ?`)
     args.push(TICKER_END)
+  }
+  if (ACTIVE_ONLY) {
+    where.push(`EXISTS (
+      SELECT 1 FROM ticker_universe u
+      WHERE u.ticker = o.ticker AND COALESCE(u.active, 1) = 1
+    )`)
   }
   const whereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : ''
   const limitSql = TICKER_LIMIT > 0 ? ` LIMIT ${TICKER_LIMIT}` : ''
   const rows = await execAll<{ ticker: string }>(
-    `SELECT ticker FROM ohlcv_daily ${whereSql} GROUP BY ticker ORDER BY ticker${limitSql}`,
+    `SELECT o.ticker FROM ohlcv_daily o ${whereSql} GROUP BY o.ticker ORDER BY o.ticker${limitSql}`,
     args,
   )
   return rows.map((row) => row.ticker)
@@ -907,10 +921,13 @@ async function main() {
   let featureCount = 0
   const started = Date.now()
   console.log(
-    `ml physics features: tickers=${codes.length}, recent_days=${RECENT_DAYS || 'all'}, min_history_days=${MIN_HISTORY_DAYS}, history_lookback_days=${HISTORY_LOOKBACK_DAYS || 'all'}, missing_only_date=${MISSING_ONLY_DATE ?? '-'}, start=${START_DATE ?? '-'}, end=${END_DATE ?? '-'}`,
+    `ml physics features: tickers=${codes.length}, recent_days=${RECENT_DAYS || 'all'}, min_history_days=${MIN_HISTORY_DAYS}, history_lookback_days=${HISTORY_LOOKBACK_DAYS || 'all'}, missing_only_date=${MISSING_ONLY_DATE ?? '-'}, active_only=${ACTIVE_ONLY ? 'on' : 'off'}, start=${START_DATE ?? '-'}, end=${END_DATE ?? '-'}`,
   )
   if (TICKER_START || TICKER_END) console.log(`ml physics ticker range: ${TICKER_START ?? '-'}..${TICKER_END ?? '-'}`)
   for (const [index, ticker] of codes.entries()) {
+    if (index > 0 && index % 100 === 0) {
+      await waitForMemoryHeadroom({ label: `ml physics features ${index}/${codes.length}` })
+    }
     featureCount += await buildTicker(ticker, contexts, metaByTicker.get(ticker))
     if ((index + 1) % 100 === 0 || index === codes.length - 1) {
       const elapsed = ((Date.now() - started) / 60000).toFixed(1)

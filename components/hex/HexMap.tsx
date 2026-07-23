@@ -17,8 +17,6 @@ interface Stock {
   sector_large: string
   market_cap: number
   stage: number
-  stage_a?: number | null
-  stage_b?: number | null
   sector_small?: string | null
   sector17_name?: string | null
   sector33_name?: string | null
@@ -37,21 +35,8 @@ interface Stock {
   weekly_b_stage?: number | null
   monthly_a_stage?: number | null
   monthly_b_stage?: number | null
-  prev_daily_a_stage?: number | null
-  prev_daily_b_stage?: number | null
-  prev_weekly_a_stage?: number | null
-  prev_weekly_b_stage?: number | null
-  prev_monthly_a_stage?: number | null
-  prev_monthly_b_stage?: number | null
-  prev_prev_daily_a_stage?: number | null
-  prev_prev_daily_b_stage?: number | null
-  prev_prev_weekly_a_stage?: number | null
-  prev_prev_weekly_b_stage?: number | null
-  prev_prev_monthly_a_stage?: number | null
-  prev_prev_monthly_b_stage?: number | null
   sma_angles?: { sma5: number | null; sma25: number | null; sma75: number | null; sma300: number | null }
   prev_sma_angles?: { sma5: number | null; sma25: number | null; sma75: number | null; sma300: number | null }
-  prev_prev_sma_angles?: { sma5: number | null; sma25: number | null; sma75: number | null; sma300: number | null }
   ml_candidate_direction?: 'up' | 'down' | null
   ml_candidate_rank?: number | null
   ml_candidate_summary?: string | null

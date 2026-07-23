@@ -4,7 +4,7 @@ import { execAll } from '@/lib/db/client'
 export const dynamic = 'force-dynamic'
 export const maxDuration = 30
 
-const HORIZONS = [5, 20, 30, 40, 60, 90, 180]
+const HORIZONS = [5, 20, 30, 40, 60, 90, 180, 200]
 
 export async function GET(request: NextRequest) {
   try {

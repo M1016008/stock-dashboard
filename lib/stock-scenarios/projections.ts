@@ -1110,7 +1110,7 @@ export async function buildStockScenarioProjection(params: {
   const ticker = normalizeTicker(params.ticker, market)
   const interval = params.interval
   const horizonDays = params.horizonDays && Number.isFinite(params.horizonDays)
-    ? Math.max(1, Math.min(180, Math.floor(params.horizonDays)))
+    ? Math.max(1, Math.min(200, Math.floor(params.horizonDays)))
     : defaultProjectionHorizon(interval)
   const limit = Math.max(1, Math.min(MAX_LIMIT, Math.floor(params.limit ?? DEFAULT_LIMIT)))
   const asOfDate = params.asOfDate && /^\d{4}-\d{2}-\d{2}$/.test(params.asOfDate) ? params.asOfDate : null

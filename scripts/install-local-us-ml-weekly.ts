@@ -1,8 +1,9 @@
 // scripts/install-local-us-ml-weekly.ts
 //
-// Register a weekly full-history US ML training/governance run. US daily update
-// keeps serving data fresh; this job refreshes full-history models and
-// evaluations from the oldest available history.
+// Register a weekly US ML training/governance run. US daily update keeps
+// serving data fresh; this job refreshes recent labels/features and retrains
+// models against the accumulated history without repeating all-history
+// forward-extrema work every weekend.
 
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -49,14 +50,17 @@ const command = [
   'export USE_LOCAL_DB=1',
   'export STOCKBOARD_MEMORY_MIN_FREE_PERCENT=${STOCKBOARD_MEMORY_MIN_FREE_PERCENT:-15}',
   'export STOCKBOARD_MEMORY_MIN_AVAILABLE_MB=${STOCKBOARD_MEMORY_MIN_AVAILABLE_MB:-0}',
-  'export STOCKBOARD_MEMORY_MAX_COMPRESSOR_MB=${STOCKBOARD_MEMORY_MAX_COMPRESSOR_MB:-8192}',
+  'export STOCKBOARD_MEMORY_MAX_COMPRESSOR_MB=${STOCKBOARD_MEMORY_MAX_COMPRESSOR_MB:-4096}',
   'export STOCKBOARD_MEMORY_WAIT_SECONDS=${STOCKBOARD_MEMORY_WAIT_SECONDS:-1800}',
   'export STOCKBOARD_NODE_MAX_OLD_SPACE_MB=${STOCKBOARD_NODE_MAX_OLD_SPACE_MB:-3072}',
   'export SQLITE_BUSY_RETRIES=720',
   'export UPDATE_CHILD_TIMEOUT_MINUTES=2880',
   `export US_ANALYTICS_DB_PATH=${JSON.stringify(defaultUsAnalyticsDb)}`,
   'export US_ML_FULL_START_DATE=${US_ML_FULL_START_DATE:-1900-01-01}',
-  'npm run batch:us-ml-full',
+  'export US_ML_WEEKLY_RECENT_DAYS=${US_ML_WEEKLY_RECENT_DAYS:-420}',
+  'export US_PMS_WEEKLY_RECENT_DAYS=${US_PMS_WEEKLY_RECENT_DAYS:-420}',
+  'export US_ML_WEEKLY_EXTREMA_RECENT_DAYS=${US_ML_WEEKLY_EXTREMA_RECENT_DAYS:-420}',
+  'npm run batch:us-ml-weekly-efficient',
 ].join(' && ')
 
 const plist = `<?xml version="1.0" encoding="UTF-8"?>

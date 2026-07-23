@@ -4,6 +4,7 @@
 
 import { execAll, execBatch, execGet } from '@/lib/db/client'
 import { ML_FEATURE_NAMES, dot, sigmoid } from '@/lib/backtest/ml'
+import { ML_PRIMARY_HORIZON_LIST } from '@/lib/backtest/ml-horizons'
 
 type LabeledRow = {
   date: string
@@ -23,7 +24,7 @@ type ScoredRow = {
   minReturnPct: number | null
 }
 
-const HORIZONS = (process.env.ML_HORIZONS ?? '5,10,20,40,60,90')
+const HORIZONS = (process.env.ML_HORIZONS ?? ML_PRIMARY_HORIZON_LIST)
   .split(',')
   .map((value) => Number(value.trim()))
   .filter((value) => Number.isFinite(value) && value > 0)

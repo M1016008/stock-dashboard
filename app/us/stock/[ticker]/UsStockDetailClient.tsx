@@ -11,6 +11,7 @@ import { ScenarioProjectionChart } from '@/components/stock/ScenarioProjectionCh
 import { StockScenarioAiPanel } from '@/components/stock/StockScenarioAiPanel'
 import { StockMovePeriods } from '@/components/stock/StockMovePeriods'
 import { TradeScenarioNotebook } from '@/components/stock/TradeScenarioNotebook'
+import { HistoricalAnalogExplorer } from '@/components/stock/HistoricalAnalogExplorer'
 import type { StockQuote } from '@/types/stock'
 import { buildPhysicalMomentumView, type PhysicalMomentumTone } from '@/lib/physical-momentum-view'
 import { buildShortTermCheck, formatShortTermStrength, type ShortTermCheckResult } from '@/lib/short-term-check'
@@ -438,6 +439,8 @@ export function UsStockDetailClient({
       <StockMovePeriods ticker={quote.ticker} market="US" />
 
       <StockScenarioAiPanel ticker={quote.ticker} market="US" name={quote.name ?? quote.ticker} analysisDate={analysisDate} />
+
+      <HistoricalAnalogExplorer ticker={quote.ticker} market="US" analysisDate={analysisDate} />
 
       <UsMlStatusSection ticker={quote.ticker} analysisDate={analysisDate} />
     </div>

@@ -658,7 +658,8 @@ main td {
   width: 124px;
   background: var(--color-market-red);
 }
-.sb-page-title h1 {
+.sb-page-title h1,
+.sb-page-title h2 {
   margin: 0 0 2px;
   font-size: 22px;
   font-weight: 700;

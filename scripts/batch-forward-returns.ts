@@ -11,7 +11,7 @@ import { db, client } from '@/lib/db/client'
 import { tickerUniverse, batchRuns } from '@/lib/db/schema'
 import { eq } from 'drizzle-orm'
 
-const DEFAULT_HORIZONS = [2, 3, 4, 5, 10, 15, 30, 60, 90, 180]
+const DEFAULT_HORIZONS = [2, 3, 4, 5, 10, 15, 30, 60, 90, 180, 200]
 
 function parseHorizons(value: string | undefined, fallback: number[]): number[] {
   const source = value?.trim() ? value : fallback.join(',')

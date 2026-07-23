@@ -8,6 +8,7 @@
 import { createClient, type Client, type InValue } from '@libsql/client'
 import path from 'path'
 import { ML_PHYSICS_FEATURE_SET } from '@/lib/backtest/ml-physics'
+import { ML_PRIMARY_HORIZONS } from '@/lib/backtest/ml-horizons'
 
 const stockboardDbPath = process.env.STOCKBOARD_DB_PATH?.trim()
 const stockboardDbLooksUs = stockboardDbPath != null && /stockboard-us\.db$/i.test(stockboardDbPath)
@@ -161,7 +162,7 @@ async function main() {
     payload: { latestEvaluationRunDate: rlPolicyRunDate },
   })
 
-  for (const horizon of [5, 10, 20, 40, 60, 90]) {
+  for (const horizon of ML_PRIMARY_HORIZONS) {
     const latestPhysicsStatusLabelDate = await maxDate(
       'ml_short_labels',
       'date',

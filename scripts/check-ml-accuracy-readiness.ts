@@ -6,6 +6,7 @@
 
 import { execAll, execBatch, execGet, execRun } from '@/lib/db/client'
 import { ML_PHYSICS_FEATURE_SET, ML_PHYSICS_MODEL_TYPE } from '@/lib/backtest/ml-physics'
+import { ML_PRIMARY_HORIZON_LIST } from '@/lib/backtest/ml-horizons'
 
 type Status = 'ok' | 'warn' | 'fail' | 'missing'
 
@@ -28,7 +29,7 @@ type ModelRow = {
   metricsJson: string | null
 }
 
-const REQUIRED_HORIZONS = (process.env.ML_ACCURACY_REQUIRED_HORIZONS ?? '5,10,20,40,60,90')
+const REQUIRED_HORIZONS = (process.env.ML_ACCURACY_REQUIRED_HORIZONS ?? ML_PRIMARY_HORIZON_LIST)
   .split(',')
   .map((value) => Number(value.trim()))
   .filter((value) => Number.isFinite(value) && value > 0)
@@ -36,6 +37,15 @@ const FULL_HISTORY_START = process.env.ML_ACCURACY_FULL_START_DATE?.trim()
   || process.env.ML_FULL_START_DATE?.trim()
   || process.env.US_ML_FULL_START_DATE?.trim()
   || '1900-01-01'
+const MIN_FEATURE_HISTORY_DAYS = Math.max(
+  1,
+  Number(
+    process.env.ML_ACCURACY_MIN_HISTORY_DAYS
+    ?? process.env.ML_MIN_HISTORY_DAYS
+    ?? process.env.ML_PHYSICS_MIN_HISTORY_DAYS
+    ?? 220,
+  ),
+)
 const STRICT = process.env.ML_ACCURACY_STRICT === '1'
 
 function safeJson(value: string | null): Record<string, unknown> {
@@ -116,8 +126,20 @@ async function collectCoverageChecks(priceDate: string | null, oldestPriceDate: 
   const latestPhysicsFeature = await maxDate('ml_feature_vectors_v2', 'date', 'WHERE feature_set = ?', [ML_PHYSICS_FEATURE_SET])
   const oldestClassicFeature = hasClassicFeatureTable ? await minDate('ml_feature_vectors') : null
   const oldestPhysicsFeature = await minDate('ml_feature_vectors_v2', 'date', 'WHERE feature_set = ?', [ML_PHYSICS_FEATURE_SET])
-  const expectedSnapshotCount = priceDate && await tableExists('daily_snapshots')
-    ? await countRows(`SELECT COUNT(*) AS count FROM daily_snapshots WHERE date = ?`, [priceDate])
+  const expectedFeatureCount = priceDate
+    ? await countRows(
+        `
+          SELECT COUNT(*) AS count
+          FROM (
+            SELECT ticker
+            FROM ohlcv_daily
+            GROUP BY ticker
+            HAVING MAX(date) = ?
+               AND COUNT(*) >= ?
+          )
+        `,
+        [priceDate, MIN_FEATURE_HISTORY_DAYS],
+      )
     : 0
   const physicsFeatureCount = latestPhysicsFeature
     ? await countRows(
@@ -129,15 +151,16 @@ async function collectCoverageChecks(priceDate: string | null, oldestPriceDate: 
   if (!hasClassicFeatureTable) {
     checks.push({
       key: 'accuracy_readiness.ml_feature_vectors_latest',
-      status: latestPhysicsFeature === priceDate ? statusFromCoverage(physicsFeatureCount, expectedSnapshotCount) : 'warn',
+      status: latestPhysicsFeature === priceDate ? statusFromCoverage(physicsFeatureCount, expectedFeatureCount) : 'warn',
       expectedDate: priceDate,
       actualDate: latestPhysicsFeature,
-      expectedCount: expectedSnapshotCount,
+      expectedCount: expectedFeatureCount,
       actualCount: physicsFeatureCount,
       payload: {
         oldestPriceDate,
         oldestFeatureDate: oldestPhysicsFeature,
         fullHistoryStart: FULL_HISTORY_START,
+        minFeatureHistoryDays: MIN_FEATURE_HISTORY_DAYS,
         legacyTableAbsent: true,
         replacedBy: 'ml_feature_vectors_v2',
         featureSet: ML_PHYSICS_FEATURE_SET,
@@ -171,7 +194,7 @@ async function collectCoverageChecks(priceDate: string | null, oldestPriceDate: 
           [check.actualDate, ...check.args],
         )
       : 0
-    const replacementStatus = statusFromCoverage(physicsFeatureCount, expectedSnapshotCount)
+    const replacementStatus = statusFromCoverage(physicsFeatureCount, expectedFeatureCount)
     const replacedByPhysicsV2 =
       check.countTable === 'ml_feature_vectors'
       && latestPhysicsFeature === priceDate
@@ -183,16 +206,17 @@ async function collectCoverageChecks(priceDate: string | null, oldestPriceDate: 
       status: replacedByPhysicsV2
         ? 'ok'
         : check.actualDate === priceDate
-          ? statusFromCoverage(actualCount, expectedSnapshotCount)
+          ? statusFromCoverage(actualCount, expectedFeatureCount)
           : 'warn',
       expectedDate: priceDate,
       actualDate: effectiveActualDate,
-      expectedCount: expectedSnapshotCount,
+      expectedCount: expectedFeatureCount,
       actualCount: effectiveActualCount,
       payload: {
         oldestPriceDate,
         oldestFeatureDate: replacedByPhysicsV2 ? oldestPhysicsFeature : check.oldestDate,
         fullHistoryStart: FULL_HISTORY_START,
+        minFeatureHistoryDays: MIN_FEATURE_HISTORY_DAYS,
         replacedBy: replacedByPhysicsV2 ? 'ml_feature_vectors_v2' : undefined,
         legacyActualDate: replacedByPhysicsV2 ? check.actualDate : undefined,
         legacyActualCount: replacedByPhysicsV2 ? actualCount : undefined,
@@ -296,7 +320,10 @@ function collectModelChecks(modelType: string, rows: ModelRow[], directions: str
       const trainStartDate = asString(metrics.trainStartDate)
       const trainRows = asNumber(metrics.trainRows) ?? asNumber(metrics.samples) ?? 0
       const mode = asString(metrics.mode)
-      const fullHistoryMode = mode === 'all_paged' || mode === 'all_paged_multi'
+      // `yearly` is the memory-bounded full-history sampler used by the US
+      // pipeline. The start-date guard below still prevents a recent-only
+      // yearly run from being reported as full-history ready.
+      const fullHistoryMode = mode === 'all_paged' || mode === 'all_paged_multi' || mode === 'yearly'
       checks.push({
         key: `accuracy_readiness.model.${modelType}.h${horizon}.${direction}`,
         status: fullHistoryMode && trainStartDate && trainStartDate <= FULL_HISTORY_START && trainRows > 0 ? 'ok' : 'warn',

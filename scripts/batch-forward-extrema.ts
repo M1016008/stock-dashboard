@@ -4,42 +4,27 @@
 // forward_returns は終端日の騰落率だけなので、到達率分析と ML/RL ラベル用に別テーブルへ保存する。
 
 import { execAll, execBatch } from '@/lib/db/client'
-import { HORIZONS as DEFAULT_HORIZONS, TARGET_PCTS } from '@/lib/backtest/signals'
+import { HORIZONS as DEFAULT_HORIZONS } from '@/lib/backtest/signals'
+import {
+  computeForwardExtremaRows,
+  type ForwardExtremaBar as Bar,
+  type ForwardExtremaRow as ExtremaRow,
+} from '@/lib/backtest/forward-extrema'
 
-type Bar = {
-  date: string
-  high: number
-  low: number
-  close: number
-}
-
-type ExtremaRow = {
-  ticker: string
-  date: string
-  horizon_days: number
-  return_pct: number
-  end_date: string
-  max_return_pct: number
-  max_return_date: string
-  days_to_max: number
-  min_return_pct: number
-  min_return_date: string
-  days_to_min: number
-  hit_10: number
-  hit_20: number
-  hit_40: number
-  days_to_10: number | null
-  days_to_20: number | null
-  days_to_40: number | null
-}
-
-const CHUNK = Number(process.env.FORWARD_EXTREMA_CHUNK ?? 300)
+const EXTREMA_BINDINGS_PER_ROW = 17
+const SQLITE_SAFE_BIND_LIMIT = 32_766
+const DEFAULT_CHUNK = 1_000
+const requestedChunk = Number(process.env.FORWARD_EXTREMA_CHUNK ?? DEFAULT_CHUNK)
+const CHUNK = Number.isFinite(requestedChunk) && requestedChunk > 0
+  ? Math.min(Math.floor(requestedChunk), Math.floor(SQLITE_SAFE_BIND_LIMIT / EXTREMA_BINDINGS_PER_ROW))
+  : DEFAULT_CHUNK
 const PROGRESS_EVERY = Number(process.env.FORWARD_EXTREMA_PROGRESS_EVERY ?? 100)
 const RECENT_DAYS = Number(process.env.BACKTEST_RECENT_DAYS ?? 0)
 const START_DATE = process.env.FORWARD_EXTREMA_START_DATE?.trim() || null
 const END_DATE = process.env.FORWARD_EXTREMA_END_DATE?.trim() || null
 const TICKER_START = process.env.FORWARD_EXTREMA_TICKER_START?.trim() || null
 const TICKER_END = process.env.FORWARD_EXTREMA_TICKER_END?.trim() || null
+const ACTIVE_ONLY = process.env.FORWARD_EXTREMA_ACTIVE_ONLY === '1'
 const WRITE_MODEL_LABELS = process.env.FORWARD_EXTREMA_WRITE_MODEL_LABELS !== '0'
 
 function parseHorizons(value: string | undefined): number[] {
@@ -53,14 +38,13 @@ function parseHorizons(value: string | undefined): number[] {
 }
 
 const HORIZONS = parseHorizons(process.env.FORWARD_EXTREMA_HORIZONS)
-const HORIZON_SET = new Set(HORIZONS)
-const MAX_HORIZON = Math.max(...HORIZONS)
 
 async function tickers(): Promise<string[]> {
   const filter = process.env.TICKERS?.split(',').map((value) => value.trim()).filter(Boolean)
   if (filter && filter.length > 0) return filter
   const where: string[] = []
   const args: string[] = []
+  if (ACTIVE_ONLY) where.push(`active = 1`)
   if (TICKER_START) {
     where.push(`ticker >= ?`)
     args.push(TICKER_START)
@@ -70,77 +54,43 @@ async function tickers(): Promise<string[]> {
     args.push(TICKER_END)
   }
   const whereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : ''
+  if (ACTIVE_ONLY) {
+    try {
+      const rows = await execAll<{ ticker: string }>(
+        `SELECT ticker FROM ticker_universe ${whereSql} GROUP BY ticker ORDER BY ticker`,
+        args,
+      )
+      if (rows.length > 0) return rows.map((row) => row.ticker)
+      console.warn('FORWARD_EXTREMA_ACTIVE_ONLY=1 but ticker_universe returned no rows; falling back to ohlcv_daily')
+    } catch (error) {
+      console.warn(
+        `FORWARD_EXTREMA_ACTIVE_ONLY=1 fallback: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      )
+    }
+  }
+  const ohlcvWhere = [
+    ...(TICKER_START ? [`ticker >= ?`] : []),
+    ...(TICKER_END ? [`ticker <= ?`] : []),
+  ]
+  const ohlcvWhereSql = ohlcvWhere.length > 0 ? `WHERE ${ohlcvWhere.join(' AND ')}` : ''
+  const ohlcvArgs = [
+    ...(TICKER_START ? [TICKER_START] : []),
+    ...(TICKER_END ? [TICKER_END] : []),
+  ]
   const rows = await execAll<{ ticker: string }>(
-    `SELECT ticker FROM ohlcv_daily ${whereSql} GROUP BY ticker ORDER BY ticker`,
-    args,
+    `SELECT ticker FROM ohlcv_daily ${ohlcvWhereSql} GROUP BY ticker ORDER BY ticker`,
+    ohlcvArgs,
   )
   return rows.map((row) => row.ticker)
 }
 
 function computeTicker(ticker: string, bars: Bar[]): ExtremaRow[] {
-  const records: ExtremaRow[] = []
   const recentIndex = RECENT_DAYS > 0 ? Math.max(0, bars.length - RECENT_DAYS) : 0
   const startDateIndex = START_DATE ? bars.findIndex((bar) => bar.date >= START_DATE) : -1
   const startIndex = Math.max(recentIndex, startDateIndex >= 0 ? startDateIndex : 0)
-
-  for (let i = startIndex; i < bars.length; i++) {
-    const base = bars[i]
-    if (!base || !Number.isFinite(base.close) || base.close <= 0) continue
-    if (END_DATE && base.date > END_DATE) break
-
-    let maxReturnPct = Number.NEGATIVE_INFINITY
-    let minReturnPct = Number.POSITIVE_INFINITY
-    let maxReturnDate = ''
-    let minReturnDate = ''
-    let daysToMax = 0
-    let daysToMin = 0
-    const targetDays: Record<number, number | null> = { 10: null, 20: null, 40: null }
-    const maxFutureDays = Math.min(MAX_HORIZON, bars.length - i - 1)
-
-    for (let day = 1; day <= maxFutureDays; day++) {
-      const bar = bars[i + day]
-      const highReturn = ((bar.high - base.close) / base.close) * 100
-      const lowReturn = ((bar.low - base.close) / base.close) * 100
-      if (highReturn > maxReturnPct) {
-        maxReturnPct = highReturn
-        maxReturnDate = bar.date
-        daysToMax = day
-      }
-      if (lowReturn < minReturnPct) {
-        minReturnPct = lowReturn
-        minReturnDate = bar.date
-        daysToMin = day
-      }
-      for (const target of TARGET_PCTS) {
-        if (targetDays[target] == null && highReturn >= target) targetDays[target] = day
-      }
-
-      if (HORIZON_SET.has(day)) {
-        const returnPct = ((bar.close - base.close) / base.close) * 100
-        records.push({
-          ticker,
-          date: base.date,
-          horizon_days: day,
-          return_pct: returnPct,
-          end_date: bar.date,
-          max_return_pct: maxReturnPct,
-          max_return_date: maxReturnDate,
-          days_to_max: daysToMax,
-          min_return_pct: minReturnPct,
-          min_return_date: minReturnDate,
-          days_to_min: daysToMin,
-          hit_10: targetDays[10] == null ? 0 : 1,
-          hit_20: targetDays[20] == null ? 0 : 1,
-          hit_40: targetDays[40] == null ? 0 : 1,
-          days_to_10: targetDays[10],
-          days_to_20: targetDays[20],
-          days_to_40: targetDays[40],
-        })
-      }
-    }
-  }
-
-  return records
+  return computeForwardExtremaRows({ ticker, bars, horizons: HORIZONS, startIndex, endDate: END_DATE })
 }
 
 async function insertRows(ticker: string, rows: ExtremaRow[]): Promise<void> {
@@ -257,6 +207,7 @@ async function main() {
   console.log(
     `forward_extrema build: ${codes.length} tickers, recent_days=${RECENT_DAYS || 'all'}, start=${START_DATE ?? '-'}, end=${END_DATE ?? '-'}, horizons=${HORIZONS.join('/')}, chunk=${CHUNK}, model_labels=${WRITE_MODEL_LABELS ? 'on' : 'off'}`,
   )
+  if (ACTIVE_ONLY) console.log('forward_extrema active_only=on')
   if (TICKER_START || TICKER_END) console.log(`forward_extrema ticker range: ${TICKER_START ?? '-'}..${TICKER_END ?? '-'}`)
 
   for (const [index, ticker] of codes.entries()) {

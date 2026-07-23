@@ -27,9 +27,9 @@ import type {
 
 const LOOKBACK_CANDLES = 140
 const HISTORY_LIMIT = 1100
-const MAX_HORIZON = 180
+const MAX_HORIZON = 200
 const PRECOMPUTED_MIN_DATE = '2008-05-07'
-const PRECOMPUTED_HORIZONS = new Set([5, 10, 15, 20, 30, 40, 60, 90, 180])
+const PRECOMPUTED_HORIZONS = new Set([5, 10, 15, 20, 30, 40, 60, 90, 180, 200])
 
 type UniverseItem = {
   market: DrillMarket

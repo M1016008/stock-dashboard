@@ -38,6 +38,7 @@ interface UniverseSummary {
   total: number
   active: number
   inactive: number
+  matched: number
   items: { ticker: string; name: string | null; active: boolean; addedAt: number }[]
 }
 
@@ -46,6 +47,7 @@ export default function AdminDbPage() {
   const [runs, setRuns] = useState<BatchRun[]>([])
   const [universe, setUniverse] = useState<UniverseSummary | null>(null)
   const [loading, setLoading] = useState(true)
+  const [universeLoading, setUniverseLoading] = useState(false)
   const [error, setError] = useState('')
   const [universeFilter, setUniverseFilter] = useState('')
 
@@ -56,7 +58,7 @@ export default function AdminDbPage() {
       const [s, r, u] = await Promise.all([
         fetch('/api/admin/db-stats', { cache: 'no-store' }).then(r => r.ok ? r.json() : Promise.reject(r)),
         fetch('/api/admin/batch/runs', { cache: 'no-store' }).then(r => r.ok ? r.json() : Promise.reject(r)),
-        fetch('/api/admin/universe', { cache: 'no-store' }).then(r => r.ok ? r.json() : Promise.reject(r)),
+        fetch('/api/admin/universe?limit=0', { cache: 'no-store' }).then(r => r.ok ? r.json() : Promise.reject(r)),
       ])
       setStats(s)
       setRuns(r.runs ?? [])
@@ -70,18 +72,48 @@ export default function AdminDbPage() {
 
   useEffect(() => {
     loadAll()
-    // 走行中のバッチがある間はポーリング
+  }, [loadAll])
+
+  useEffect(() => {
+    if (!runs.some((run) => run.status === 'running')) return
     const interval = setInterval(() => {
-      if (runs.some(r => r.status === 'running')) loadAll()
+      void loadAll()
     }, 5000)
     return () => clearInterval(interval)
-  }, [loadAll]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [loadAll, runs])
 
-  const filteredUniverse = (universe?.items ?? []).filter(it => {
-    if (!universeFilter) return false  // 未入力時は表示しない (4165 行は重い)
-    const q = universeFilter.toLowerCase()
-    return it.ticker.toLowerCase().includes(q) || (it.name ?? '').toLowerCase().includes(q)
-  }).slice(0, 50)
+  useEffect(() => {
+    const query = universeFilter.trim()
+    if (!query) {
+      setUniverse((current) => current ? { ...current, matched: current.total, items: [] } : current)
+      setUniverseLoading(false)
+      return
+    }
+    const controller = new AbortController()
+    const timer = window.setTimeout(async () => {
+      setUniverseLoading(true)
+      try {
+        const response = await fetch(`/api/admin/universe?q=${encodeURIComponent(query)}&limit=50`, {
+          cache: 'no-store',
+          signal: controller.signal,
+        })
+        if (!response.ok) throw new Error(`universe search failed (${response.status})`)
+        setUniverse(await response.json())
+      } catch (searchError) {
+        if ((searchError as Error).name !== 'AbortError') {
+          setError((searchError as Error).message)
+        }
+      } finally {
+        if (!controller.signal.aborted) setUniverseLoading(false)
+      }
+    }, 250)
+    return () => {
+      controller.abort()
+      window.clearTimeout(timer)
+    }
+  }, [universeFilter])
+
+  const filteredUniverse = universeFilter.trim() ? (universe?.items ?? []) : []
 
   return (
     <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -184,6 +216,9 @@ export default function AdminDbPage() {
               placeholder="銘柄コード or 名前で検索 (空欄時は表示しない、最大50件)"
               style={inputStyle}
             />
+            {universeLoading && (
+              <div style={{ marginTop: '6px', fontSize: '10px', color: 'var(--text-muted)' }}>検索中...</div>
+            )}
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '11px', marginTop: '8px' }}>
               <thead>
                 <tr style={{ background: 'var(--bg-elevated)', borderBottom: '1px solid var(--border-dim)' }}>
@@ -196,7 +231,7 @@ export default function AdminDbPage() {
                 {!universeFilter && (
                   <tr><td colSpan={3} style={{ ...cellStyle, textAlign: 'center', color: 'var(--text-muted)' }}>検索ボックスに何か入力してください</td></tr>
                 )}
-                {universeFilter && filteredUniverse.length === 0 && (
+                {universeFilter && !universeLoading && filteredUniverse.length === 0 && (
                   <tr><td colSpan={3} style={{ ...cellStyle, textAlign: 'center', color: 'var(--text-muted)' }}>該当なし</td></tr>
                 )}
                 {filteredUniverse.map(it => (
@@ -216,6 +251,11 @@ export default function AdminDbPage() {
                 ))}
               </tbody>
             </table>
+            {universeFilter && !universeLoading && (universe?.matched ?? 0) > filteredUniverse.length && (
+              <div style={{ marginTop: '6px', fontSize: '10px', color: 'var(--text-muted)', textAlign: 'right' }}>
+                該当 {(universe?.matched ?? 0).toLocaleString()} 件のうち先頭 {filteredUniverse.length.toLocaleString()} 件
+              </div>
+            )}
           </div>
         </div>
       </section>

@@ -96,6 +96,7 @@ const PLAN_HORIZONS = [
   { label: '短期', days: 5, description: '数日から1週間程度の反応を見る時間軸' },
   { label: '中期', days: 20, description: '約1か月の方向感と押し目/失速を見る時間軸' },
   { label: '長期', days: 60, description: '約3か月の地合い転換と大きな崩れを見る時間軸' },
+  { label: '超長期', days: 200, description: '約10か月のトレンド持続性と大きな転換を見る時間軸' },
 ] as const
 
 type PlanHorizon = typeof PLAN_HORIZONS[number]

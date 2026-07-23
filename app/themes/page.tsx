@@ -1,3 +1,4 @@
+import type { Metadata } from 'next'
 import Link from 'next/link'
 import { PageTitle } from '@/components/layout/PageTitle'
 import { Card, CardHeader } from '@/components/ui/Card'
@@ -6,6 +7,11 @@ import { getKabutanThemes, stockboardThemePath, type KabutanTheme, type KabutanT
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
 export const fetchCache = 'force-no-store'
+
+export const metadata: Metadata = {
+  title: 'テーマ — StockBoard',
+  description: '株探の人気テーマランキング、概要、関連銘柄を確認します。',
+}
 
 function formatRunTime(value: number | null | undefined): string {
   if (!value) return '未取得'
@@ -116,7 +122,7 @@ export default async function ThemesPage() {
   const hasError = lastRun?.status === 'failed' || lastRun?.status === 'partial'
 
   return (
-    <main className="grid gap-5">
+    <div className="grid gap-5">
       <PageTitle
         title="テーマ"
         subtitle="株探の人気テーマランキングを、概要と関連銘柄の表で確認します。"
@@ -188,6 +194,6 @@ export default async function ThemesPage() {
           )}
         </div>
       </Card>
-    </main>
+    </div>
   )
 }

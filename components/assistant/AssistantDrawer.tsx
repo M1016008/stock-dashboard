@@ -357,11 +357,11 @@ export function AssistantDrawer() {
         <button
           type="button"
           onClick={() => setOpen(true)}
-          className="fixed bottom-5 right-5 z-50 inline-flex h-12 items-center gap-2 rounded-[6px] border border-[var(--color-brand-700)] bg-[var(--color-brand-800)] px-4 text-[13px] font-black text-white shadow-[0_12px_30px_rgba(16,32,52,0.28)] transition-colors hover:bg-[var(--color-brand-900)]"
+          className="fixed bottom-5 right-5 z-50 inline-flex h-12 w-12 items-center justify-center gap-2 rounded-[6px] border border-[var(--color-brand-700)] bg-[var(--color-brand-800)] px-0 text-[13px] font-black text-white shadow-[0_12px_30px_rgba(16,32,52,0.28)] transition-colors hover:bg-[var(--color-brand-900)] sm:w-auto sm:px-4"
           aria-label="AI銘柄リサーチを開く"
         >
           <Sparkles size={17} strokeWidth={2.4} />
-          AI銘柄リサーチ
+          <span className="hidden sm:inline">AI銘柄リサーチ</span>
         </button>
       )}
 

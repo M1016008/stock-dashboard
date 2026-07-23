@@ -23,7 +23,7 @@ export const dynamic = 'force-dynamic'
 export const revalidate = 0
 export const fetchCache = 'force-no-store'
 
-const HORIZONS = [20, 40, 60, 90, 180]
+const HORIZONS = [20, 40, 60, 90, 180, 200]
 const BUDGETS = [300_000, 500_000, 1_000_000]
 
 function paramValue(value: string | string[] | undefined): string | null {

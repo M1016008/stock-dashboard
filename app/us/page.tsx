@@ -1,3 +1,4 @@
+import type { Metadata } from 'next'
 import Link from 'next/link'
 import { PageTitle } from '@/components/layout/PageTitle'
 import { Card, CardHeader } from '@/components/ui/Card'
@@ -8,6 +9,11 @@ import { getUsDisplayName } from '@/lib/us-symbol-aliases'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
+
+export const metadata: Metadata = {
+  title: '米国株ダッシュボード — StockBoard',
+  description: '米国株の価格、ステージ、ランキング、ML連携状況を確認します。',
+}
 
 function fmt(value: number | null | undefined) {
   return Number(value ?? 0).toLocaleString('ja-JP')

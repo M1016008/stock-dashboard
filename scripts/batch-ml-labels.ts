@@ -3,8 +3,9 @@
 // forward_extrema から、確定済みの教師ラベルだけを ml_training_labels に同期する。
 
 import { execAll, execRun } from '@/lib/db/client'
+import { ML_PRIMARY_HORIZON_LIST } from '@/lib/backtest/ml-horizons'
 
-const HORIZONS = (process.env.ML_HORIZONS ?? '5,10,20,40,60,90')
+const HORIZONS = (process.env.ML_HORIZONS ?? ML_PRIMARY_HORIZON_LIST)
   .split(',')
   .map((value) => Number(value.trim()))
   .filter((value) => Number.isFinite(value) && value > 0)

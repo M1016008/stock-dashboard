@@ -7,6 +7,7 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { execGet } from '@/lib/db/client'
 import { ML_PHYSICS_FEATURE_SET } from '@/lib/backtest/ml-physics'
+import { ML_PRIMARY_HORIZON_LIST } from '@/lib/backtest/ml-horizons'
 import { waitForMemoryHeadroom, withMemoryGuardEnv } from '@/lib/system/memory-guard'
 
 type RunResult = {
@@ -192,7 +193,7 @@ async function main(): Promise<void> {
   await runRequired('batch:ml-predict')
   await fillMissingPhysicsFeatures(priceDate)
   await runRequired('batch:ml-physics-candidates', {
-    ML_PHYSICS_HORIZONS: process.env.ML_PHYSICS_HORIZONS ?? '5,10,20,40,60,90',
+    ML_PHYSICS_HORIZONS: process.env.ML_PHYSICS_HORIZONS ?? ML_PRIMARY_HORIZON_LIST,
   })
   await runRequired('batch:ml-insights')
   await runRequired('batch:historical-universe')

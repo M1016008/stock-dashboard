@@ -29,6 +29,15 @@ type GuardTime = {
   minute: number
 }
 
+const DEFAULT_GUARD_TIMES: GuardTime[] = [
+  { hour: 7, minute: 30 },
+  { hour: 12, minute: 30 },
+  { hour: 18, minute: 30 },
+  { hour: 21, minute: 30 },
+  { hour: 22, minute: 30 },
+  { hour: 23, minute: 45 },
+]
+
 function xmlEscape(value: string): string {
   return value
     .replaceAll('&', '&amp;')
@@ -39,7 +48,8 @@ function xmlEscape(value: string): string {
 }
 
 function parseGuardTimes(): GuardTime[] {
-  const raw = process.env.ML_FRESHNESS_GUARD_TIMES ?? '07:30,12:30,18:30,21:30'
+  const raw = process.env.ML_FRESHNESS_GUARD_TIMES
+    ?? DEFAULT_GUARD_TIMES.map((time) => `${String(time.hour).padStart(2, '0')}:${String(time.minute).padStart(2, '0')}`).join(',')
   const parsed = raw
     .split(',')
     .map((item) => item.trim())
@@ -51,7 +61,7 @@ function parseGuardTimes(): GuardTime[] {
     .filter((item) => Number.isInteger(item.hour) && Number.isInteger(item.minute) && item.hour >= 0 && item.hour <= 23 && item.minute >= 0 && item.minute <= 59)
   return parsed.length > 0
     ? parsed
-    : [{ hour: 7, minute: 30 }, { hour: 12, minute: 30 }, { hour: 18, minute: 30 }, { hour: 21, minute: 30 }]
+    : DEFAULT_GUARD_TIMES
 }
 
 function calendar(hour: number, minute: number, weekday: number): string {

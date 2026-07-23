@@ -1,3 +1,5 @@
+import { ML_PRIMARY_HORIZONS } from '@/lib/backtest/ml-horizons'
+
 export const ML_PHYSICS_FEATURE_SET_V2 = 'ma_physics_v2'
 export const ML_PHYSICS_FEATURE_SET_V3 = 'ma_physics_v3'
 export const ML_PHYSICS_FEATURE_SET_V4 = 'ma_physics_v4'
@@ -21,7 +23,7 @@ export const ML_PHYSICS_MODEL_TYPE =
   ML_PHYSICS_VERSION >= 4 ? 'logistic_regression_physics_v4'
     : ML_PHYSICS_VERSION >= 3 ? 'logistic_regression_physics_v3'
       : 'logistic_regression_physics_v2'
-export const ML_PHYSICS_DEFAULT_HORIZONS = [5, 10, 15, 20, 40, 60, 90, 180] as const
+export const ML_PHYSICS_DEFAULT_HORIZONS = ML_PRIMARY_HORIZONS
 export const ML_PHYSICS_DEFAULT_HORIZON_LIST = ML_PHYSICS_DEFAULT_HORIZONS.join(',')
 
 export const ML_PHYSICS_BASE_FEATURE_NAMES = [

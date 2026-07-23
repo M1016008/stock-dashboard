@@ -14,7 +14,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { ticker } = await params
   const normalized = normalizeTickerForMarket(ticker, 'US')
   return {
-    title: `${normalized} | US StockBoard`,
+    title: `${normalized} — US StockBoard`,
   }
 }
 

@@ -319,7 +319,7 @@ type CoverageInfo = {
   excluded: { days: number; reasons: string[] }
 }
 
-const HORIZONS = [5, 20, 30, 40, 60, 90, 180]
+const HORIZONS = [5, 20, 30, 40, 60, 90, 180, 200]
 const EMPTY_RESULTS: BacktestResult[] = []
 
 const SIGNAL_OPTIONS = [

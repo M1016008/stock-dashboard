@@ -6,6 +6,7 @@
 
 import { execAll, execBatch, execGet, execRun } from '@/lib/db/client'
 import { ML_PHYSICS_FEATURE_SET, type PhysicsFeatureProfile } from '@/lib/backtest/ml-physics'
+import { ML_PRIMARY_HORIZON_LIST } from '@/lib/backtest/ml-horizons'
 import { analyzePhysicsProfile, type PhysicsStatus } from '@/lib/ml/physics-analysis'
 
 type TargetDirection = 'up' | 'down' | 'wait'
@@ -140,7 +141,7 @@ const STATUS_TARGET: Record<PhysicsStatus, TargetDirection> = {
   算出待ち: 'wait',
 }
 
-const HORIZONS = (process.env.ML_PHYSICS_STATUS_HORIZONS ?? '5,10,20,40,60,90')
+const HORIZONS = (process.env.ML_PHYSICS_STATUS_HORIZONS ?? ML_PRIMARY_HORIZON_LIST)
   .split(',')
   .map((value) => Number(value.trim()))
   .filter((value) => Number.isFinite(value) && value > 0)
@@ -151,7 +152,9 @@ const PAGE_DATES = Math.max(1, Number(process.env.ML_PHYSICS_STATUS_PAGE_DATES ?
 const LIMIT_ROWS = Math.max(0, Number(process.env.ML_PHYSICS_STATUS_LIMIT_ROWS ?? 0))
 const STATUS_CACHE_INSERT_ROWS = Math.max(100, Number(process.env.ML_PHYSICS_STATUS_CACHE_INSERT_ROWS ?? 1000))
 const SKIP_STATUS_CACHE = process.env.ML_PHYSICS_STATUS_SKIP_CACHE === '1'
-const SQL_AGGREGATE = process.env.ML_PHYSICS_STATUS_SQL_AGG === '1'
+const SQL_AGGREGATE =
+  process.env.ML_PHYSICS_STATUS_SQL_AGG === '1' ||
+  (process.env.ML_PHYSICS_STATUS_SQL_AGG == null && RECENT_DAYS > 0)
 
 function parseJson<T>(value: string, fallback: T): T {
   try {
@@ -454,27 +457,29 @@ async function populateStatusCache(startDate: string | null): Promise<void> {
   console.log(`physics status cache ready: feature_set=${ML_PHYSICS_FEATURE_SET}, added=${cachedRows.toLocaleString()}, start=${startDate ?? '-'}`)
 }
 
-async function cutoffDate(): Promise<string | null> {
-  if (START_DATE || RECENT_DAYS <= 0) return START_DATE
+async function cutoffDate(horizon: number): Promise<string | null> {
+  if (RECENT_DAYS <= 0) return START_DATE
   const latest = END_DATE ?? (await execGet<{ date: string | null }>(
-    `SELECT MAX(date) AS date FROM ml_short_labels WHERE horizon_days IN (${HORIZONS.map(() => '?').join(', ')})`,
-    HORIZONS,
+    `SELECT MAX(date) AS date FROM ml_short_labels WHERE horizon_days = ?`,
+    [horizon],
   ))?.date ?? null
   if (!latest) return null
-  return (await execGet<{ date: string | null }>(
+  const recentStart = (await execGet<{ date: string | null }>(
     `
     SELECT MIN(date) AS date
     FROM (
       SELECT DISTINCT date
       FROM ml_short_labels
-      WHERE horizon_days IN (${HORIZONS.map(() => '?').join(', ')})
+      WHERE horizon_days = ?
         AND date <= ?
       ORDER BY date DESC
       LIMIT ?
     )
     `,
-    [...HORIZONS, latest, RECENT_DAYS],
+    [horizon, latest, RECENT_DAYS],
   ))?.date ?? null
+  if (START_DATE && recentStart && START_DATE > recentStart) return START_DATE
+  return recentStart
 }
 
 async function loadDateBatch(horizon: number, startDate: string | null, beforeDate: string | null): Promise<string[]> {
@@ -813,27 +818,33 @@ async function main(): Promise<void> {
     return
   }
   await ensureTables()
-  const startDate = await cutoffDate()
+  const startDates = new Map<number, string | null>()
+  for (const horizon of HORIZONS) {
+    startDates.set(horizon, await cutoffDate(horizon))
+  }
+  const cacheStartDate = [...startDates.values()]
+    .filter((value): value is string => value != null)
+    .sort()[0] ?? START_DATE
   const evaluationDate = new Date().toISOString().slice(0, 10)
   const statements: Array<{ sql: string; args: Array<string | number | null> }> = []
   if (SKIP_STATUS_CACHE) {
     console.log(`physics status cache skipped: ML_PHYSICS_STATUS_SKIP_CACHE=1, feature_set=${ML_PHYSICS_FEATURE_SET}`)
   } else {
-    await populateStatusCache(startDate)
+    await populateStatusCache(cacheStartDate)
   }
 
-  await execRun(
-    `
-    DELETE FROM ml_physics_status_evaluations
-    WHERE evaluation_date = ?
-      AND feature_set = ?
-      AND horizon_days IN (${HORIZONS.map(() => '?').join(', ')})
-    `,
-    [evaluationDate, ML_PHYSICS_FEATURE_SET, ...HORIZONS],
-  )
-
   for (const horizon of HORIZONS) {
+    const startDate = startDates.get(horizon) ?? null
     const horizonStatements: typeof statements = []
+    const deleteHorizonStatement = {
+      sql: `
+        DELETE FROM ml_physics_status_evaluations
+        WHERE evaluation_date = ?
+          AND feature_set = ?
+          AND horizon_days = ?
+      `,
+      args: [evaluationDate, ML_PHYSICS_FEATURE_SET, horizon],
+    }
     if (SQL_AGGREGATE) {
       const { aggregates } = await evaluateHorizonSql(horizon, startDate)
       const total = aggregates.reduce((sum, aggregate) => sum + Number(aggregate.sample_count ?? 0), 0)
@@ -874,7 +885,7 @@ async function main(): Promise<void> {
         })
       }
       console.log(`physics status eval horizon=${horizon}: rows=${total.toLocaleString()}, start=${startDate ?? '-'}, run=${evaluationDate}, mode=sql`)
-      await execBatch(horizonStatements)
+      await execBatch([deleteHorizonStatement, ...horizonStatements])
       statements.push(...horizonStatements)
       console.log(`physics status eval horizon=${horizon}: saved=${horizonStatements.length}`)
       continue
@@ -921,12 +932,13 @@ async function main(): Promise<void> {
       })
     }
     console.log(`physics status eval horizon=${horizon}: rows=${total.toLocaleString()}, start=${startDate ?? '-'}, run=${evaluationDate}`)
-    await execBatch(horizonStatements)
+    await execBatch([deleteHorizonStatement, ...horizonStatements])
     statements.push(...horizonStatements)
     console.log(`physics status eval horizon=${horizon}: saved=${horizonStatements.length}`)
   }
 
-  console.log(`physics status eval complete: horizons=${HORIZONS.join('/')}, recent_days=${RECENT_DAYS || 'all'}, start=${startDate ?? '-'}, feature_set=${ML_PHYSICS_FEATURE_SET}, cache_skipped=${SKIP_STATUS_CACHE}, mode=${SQL_AGGREGATE ? 'sql' : 'js'}`)
+  const startSummary = HORIZONS.map((horizon) => `h${horizon}:${startDates.get(horizon) ?? '-'}`).join(',')
+  console.log(`physics status eval complete: horizons=${HORIZONS.join('/')}, recent_days=${RECENT_DAYS || 'all'}, starts=${startSummary}, feature_set=${ML_PHYSICS_FEATURE_SET}, cache_skipped=${SKIP_STATUS_CACHE}, mode=${SQL_AGGREGATE ? 'sql' : 'js'}`)
 }
 
 main()

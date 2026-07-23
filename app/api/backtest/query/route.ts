@@ -138,7 +138,7 @@ export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
     const horizon = Number(searchParams.get('horizon') ?? 40)
-    const safeHorizon = [5, 20, 30, 40, 60, 90, 180].includes(horizon) ? horizon : 40
+    const safeHorizon = [5, 20, 30, 40, 60, 90, 180, 200].includes(horizon) ? horizon : 40
     const date = searchParams.get('date') ?? await latestOutcomeDate(safeHorizon)
     if (!date) {
       return NextResponse.json({

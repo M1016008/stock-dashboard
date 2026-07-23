@@ -1,3 +1,4 @@
+import type { Metadata } from 'next'
 import Link from 'next/link'
 import { PageTitle } from '@/components/layout/PageTitle'
 import { Card, CardHeader } from '@/components/ui/Card'
@@ -16,6 +17,15 @@ function decodeThemeId(value: string): string {
     return decodeURIComponent(value)
   } catch {
     return value
+  }
+}
+
+export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
+  const { themeId } = await params
+  const name = decodeThemeId(themeId)
+  return {
+    title: `${name} — テーマ — StockBoard`,
+    description: `${name}の概要、関連銘柄、6ステージ、短期チェックを確認します。`,
   }
 }
 
@@ -164,7 +174,7 @@ export default async function ThemeDetailPage({ params }: PageProps) {
 
   if (!theme) {
     return (
-      <main className="grid gap-5">
+      <div className="grid min-w-0 max-w-full gap-5">
         <PageTitle title="テーマ" subtitle="保存済みテーマが見つかりませんでした。" badge="株探テーマ" />
         <Card>
           <div className="grid gap-3 text-[12px] font-bold text-[var(--color-text-secondary)]">
@@ -174,14 +184,14 @@ export default async function ThemeDetailPage({ params }: PageProps) {
             </Link>
           </div>
         </Card>
-      </main>
+      </div>
     )
   }
 
   const relatedCount = theme.stockCount ?? theme.relatedStocks.length
 
   return (
-    <main className="grid gap-5">
+    <div className="grid min-w-0 max-w-full gap-5">
       <PageTitle
         title={theme.name}
         subtitle={theme.rank ? `人気テーマランキング ${theme.rank}位 / ${theme.rankingAsOf ?? '日時未取得'}` : '人気テーマランキング'}
@@ -206,7 +216,7 @@ export default async function ThemeDetailPage({ params }: PageProps) {
         }
       />
 
-      <Card size="lg" className="p-0">
+      <Card size="lg" className="min-w-0 p-0">
         <CardHeader
           title="テーマ概要"
           hint="株探のテーマ説明と関連銘柄を保存済みデータから表示します。"
@@ -233,7 +243,7 @@ export default async function ThemeDetailPage({ params }: PageProps) {
         </div>
       </Card>
 
-      <Card size="lg" className="p-0">
+      <Card size="lg" className="min-w-0 p-0">
         <CardHeader
           title="関連銘柄一覧"
           hint="株価、前日比、6ステージ、短期チェック、PER/PBR、利回り"
@@ -243,10 +253,10 @@ export default async function ThemeDetailPage({ params }: PageProps) {
             </span>
           }
         />
-        <div className="px-4 pb-4">
+        <div className="min-w-0 px-4 pb-4">
           <RelatedStockTable stocks={theme.relatedStocks} />
         </div>
       </Card>
-    </main>
+    </div>
   )
 }

@@ -6,6 +6,7 @@
 import { spawn, spawnSync } from 'node:child_process'
 import { execAll, execGet, execRun } from '@/lib/db/client'
 import { ML_PHYSICS_FEATURE_SET } from '@/lib/backtest/ml-physics'
+import { ML_PRIMARY_HORIZON_LIST } from '@/lib/backtest/ml-horizons'
 import { acquireUpdateLock, getActiveUpdateLocks } from '@/lib/server/update-lock'
 
 type DateCount = {
@@ -271,7 +272,7 @@ async function repair(checks: FreshnessCheck[]): Promise<string[]> {
   if (hasBad(checks, ['serving_ml_physics_candidates', 'ml_feature_vectors_v2.physics', 'model_features', 'daily_snapshots'])) {
     actions.push('batch:ml-physics-candidates')
     await runRequired('batch:ml-physics-candidates', {
-      ML_PHYSICS_HORIZONS: process.env.ML_PHYSICS_HORIZONS ?? '5,10,20,40,60,90',
+      ML_PHYSICS_HORIZONS: process.env.ML_PHYSICS_HORIZONS ?? ML_PRIMARY_HORIZON_LIST,
     })
   }
 

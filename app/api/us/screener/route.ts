@@ -77,7 +77,7 @@ export async function GET(request: NextRequest) {
       sort === 'pms' ? 'physical_momentum_score'
         : sort === 'pfs' ? 'physical_force_score'
           : 'physical_energy_score'
-    const metricTopLimit = Math.max(limit * 40, 1000)
+    const metricTopLimit = Math.max(limit * 2, 50)
     const topMetricRows = useAnalyticsMetricTop
       ? await execUsAnalyticsAll<{
           symbol: string
@@ -111,6 +111,25 @@ export async function GET(request: NextRequest) {
     const metricMap = new Map(topMetricRows.map((row) => [row.symbol, row]))
     const sqlLimit = topMetricTickers.length > 0 ? topMetricTickers.length : physicalSort || computedSort ? Math.max(limit * 30, 5000) : limit
     const whereMetricTop = topMetricTickers.length > 0 ? `AND s.ticker IN (${topMetricTickers.map(() => '?').join(',')})` : ''
+    const physicalMetricColumns = useAnalyticsMetricTop
+      ? `
+        NULL AS physical_momentum_score,
+        NULL AS physical_force_score,
+        NULL AS physical_energy_score
+      `
+      : `
+        pm.physical_momentum_score,
+        pm.physical_force_score,
+        pm.physical_energy_score
+      `
+    const physicalMetricJoin = useAnalyticsMetricTop
+      ? ''
+      : `
+      LEFT JOIN physical_momentum_metrics pm
+        ON pm.market = 'US'
+       AND pm.symbol = s.ticker
+       AND pm.date = s.date
+      `
     const whereExchange = exchange ? `AND u.exchange = ?` : ''
     const whereQ = q
       ? `AND (s.ticker LIKE ? OR UPPER(COALESCE(u.name, '')) LIKE ?${qAliasTickers.length ? ` OR s.ticker IN (${qAliasPlaceholders})` : ''})`
@@ -197,9 +216,7 @@ export async function GET(request: NextRequest) {
         s.ma_25,
         s.ma_75,
         s.ma_300,
-        pm.physical_momentum_score,
-        pm.physical_force_score,
-        pm.physical_energy_score
+        ${physicalMetricColumns}
       FROM market_daily_snapshots s INDEXED BY market_snapshots_market_date_ticker_idx
       LEFT JOIN market_universe u ON u.market = s.market AND u.ticker = s.ticker
       LEFT JOIN market_classifications c
@@ -216,10 +233,7 @@ export async function GET(request: NextRequest) {
         ON prev.market = 'US'
        AND prev.ticker = s.ticker
        AND prev.date = (SELECT date FROM prev_date)
-      LEFT JOIN physical_momentum_metrics pm
-        ON pm.market = 'US'
-       AND pm.symbol = s.ticker
-       AND pm.date = s.date
+      ${physicalMetricJoin}
       WHERE s.market = 'US' AND s.date = ?
         ${whereQ}
         ${whereSector}
@@ -230,15 +244,17 @@ export async function GET(request: NextRequest) {
         ${wherePriceMin}
         ${wherePriceMax}
         ${whereMetricTop}
-      ORDER BY ${orderExpr[sort]} ${dir.toUpperCase()}, s.ticker ASC
+      ORDER BY ${useAnalyticsMetricTop ? 's.ticker' : orderExpr[sort]} ${dir.toUpperCase()}, s.ticker ASC
       LIMIT ?
       `,
       args,
     )
     if (hasUsAnalyticsDb() && rows.length > 0) {
-      const tickers = rows.map((row) => String(row.ticker)).filter(Boolean)
+      const tickers = rows
+        .map((row) => String(row.ticker))
+        .filter((ticker) => ticker && !metricMap.has(ticker))
       const placeholders = tickers.map(() => '?').join(',')
-      const metrics = await execUsAnalyticsAll<{
+      const metrics = tickers.length > 0 ? await execUsAnalyticsAll<{
         symbol: string
         physical_momentum_score: number | null
         physical_force_score: number | null
@@ -275,7 +291,7 @@ export async function GET(request: NextRequest) {
         WHERE rn = 1
         `,
         [date, ...tickers],
-      ).catch(() => [])
+      ).catch(() => []) : []
       for (const metric of metrics) metricMap.set(metric.symbol, metric)
       for (const row of rows) {
         const metric = metricMap.get(String(row.ticker))

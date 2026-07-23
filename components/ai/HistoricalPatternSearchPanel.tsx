@@ -102,7 +102,7 @@ type EventsResponse = {
   events: PatternEvent[]
 }
 
-const HORIZON_OPTIONS = [5, 10, 15, 20, 30, 40, 60, 90, 180]
+const HORIZON_OPTIONS = [5, 10, 15, 20, 30, 40, 60, 90, 180, 200]
 
 function subtractCalendarDays(date: string, days: number): string {
   const d = new Date(`${date}T00:00:00.000Z`)

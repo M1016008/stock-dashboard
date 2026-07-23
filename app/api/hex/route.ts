@@ -36,35 +36,18 @@ interface HexStock {
   months6_change: number
   ytd_change: number
   stage: number
-  stage_a: number | null
-  stage_b: number | null
   daily_a_stage: number | null
   daily_b_stage: number | null
   weekly_a_stage: number | null
   weekly_b_stage: number | null
   monthly_a_stage: number | null
   monthly_b_stage: number | null
-  prev_daily_a_stage: number | null
-  prev_daily_b_stage: number | null
-  prev_weekly_a_stage: number | null
-  prev_weekly_b_stage: number | null
-  prev_monthly_a_stage: number | null
-  prev_monthly_b_stage: number | null
-  prev_prev_daily_a_stage: number | null
-  prev_prev_daily_b_stage: number | null
-  prev_prev_weekly_a_stage: number | null
-  prev_prev_weekly_b_stage: number | null
-  prev_prev_monthly_a_stage: number | null
-  prev_prev_monthly_b_stage: number | null
   sma_angles: { sma5: number | null; sma25: number | null; sma75: number | null; sma300: number | null }
   prev_sma_angles: { sma5: number | null; sma25: number | null; sma75: number | null; sma300: number | null }
-  prev_prev_sma_angles: { sma5: number | null; sma25: number | null; sma75: number | null; sma300: number | null }
   ml_candidate_direction: 'up' | 'down' | null
   ml_candidate_rank: number | null
   ml_candidate_summary: string | null
   physical_momentum_score: number | null
-  physical_force_score: number | null
-  physical_energy_score: number | null
 }
 
 interface SnapshotRow {
@@ -119,8 +102,6 @@ interface MlCandidateRow {
 interface PhysicalMomentumRow {
   ticker: string
   physical_momentum_score: number | null
-  physical_force_score: number | null
-  physical_energy_score: number | null
 }
 
 function jsonResponse(request: NextRequest, payload: unknown): NextResponse {
@@ -341,9 +322,7 @@ export async function GET(request: NextRequest) {
         `
         SELECT
           symbol AS ticker,
-          physical_momentum_score,
-          physical_force_score,
-          physical_energy_score
+          physical_momentum_score
         FROM physical_momentum_metrics
         WHERE market = 'JP'
           AND date = ?
@@ -438,35 +417,18 @@ export async function GET(request: NextRequest) {
         months6_change: px?.perf_6m ?? 0,
         ytd_change: px?.perf_ytd ?? 0,
         stage: stageNow,
-        stage_a: daily_a,
-        stage_b: daily_b,
         daily_a_stage: daily_a,
         daily_b_stage: daily_b,
         weekly_a_stage: weekly_a,
         weekly_b_stage: weekly_b,
         monthly_a_stage: monthly_a,
         monthly_b_stage: monthly_b,
-        prev_daily_a_stage:   p1?.daily_a_stage   ?? null,
-        prev_daily_b_stage:   p1?.daily_b_stage   ?? null,
-        prev_weekly_a_stage:  p1?.weekly_a_stage  ?? null,
-        prev_weekly_b_stage:  p1?.weekly_b_stage  ?? null,
-        prev_monthly_a_stage: p1?.monthly_a_stage ?? null,
-        prev_monthly_b_stage: p1?.monthly_b_stage ?? null,
-        prev_prev_daily_a_stage:   p2?.daily_a_stage   ?? null,
-        prev_prev_daily_b_stage:   p2?.daily_b_stage   ?? null,
-        prev_prev_weekly_a_stage:  p2?.weekly_a_stage  ?? null,
-        prev_prev_weekly_b_stage:  p2?.weekly_b_stage  ?? null,
-        prev_prev_monthly_a_stage: p2?.monthly_a_stage ?? null,
-        prev_prev_monthly_b_stage: p2?.monthly_b_stage ?? null,
         sma_angles: smaAngles,
         prev_sma_angles: prevSmaAngles,
-        prev_prev_sma_angles: prevSmaAngles,
         ml_candidate_direction: ml?.direction ?? null,
         ml_candidate_rank: ml?.rank ?? null,
         ml_candidate_summary: ml?.summary ?? null,
         physical_momentum_score: pm?.physical_momentum_score ?? null,
-        physical_force_score: pm?.physical_force_score ?? null,
-        physical_energy_score: pm?.physical_energy_score ?? null,
       }
     })
 

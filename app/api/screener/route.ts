@@ -218,7 +218,7 @@ const STAGE_PARAM_MAP: Record<string, typeof STAGE_KEYS[number]> = {
   monthly_b: 'monthly_b_stage',
 }
 
-const PHYSICAL_STATUS_HORIZONS = [5, 10, 20, 40, 60, 90] as const
+const PHYSICAL_STATUS_HORIZONS = [5, 10, 20, 40, 60, 90, 200] as const
 const JP_TICKER_MASTER_MAP = new Map(getTickersByMarket('JP').map((ticker) => [ticker.ticker, ticker]))
 const SCREENER_BUILT_ROWS_CACHE_TTL_MS = Number(process.env.SCREENER_BUILT_ROWS_CACHE_TTL_MS ?? 6 * 60 * 60 * 1000)
 const SCREENER_BUILT_ROWS_CACHE_NAMESPACE = 'screener_built_rows_v2'

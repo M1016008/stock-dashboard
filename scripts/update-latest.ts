@@ -188,7 +188,7 @@ async function main() {
           BACKTEST_RECENT_DAYS: process.env.UPDATE_LATEST_FORWARD_EXTREMA_RECENT_DAYS ?? process.env.BACKTEST_RECENT_DAYS ?? '60',
         }],
         ['forward-extrema-short', 'scripts/batch-forward-extrema.ts', {
-          FORWARD_EXTREMA_HORIZONS: process.env.ML_PHYSICS_EXTREMA_HORIZONS ?? '5,10,15,20,40,60,90',
+          FORWARD_EXTREMA_HORIZONS: process.env.ML_PHYSICS_EXTREMA_HORIZONS ?? '5,10,15,20,40,60,90,200',
           BACKTEST_RECENT_DAYS: process.env.ML_PHYSICS_EXTREMA_RECENT_DAYS ?? process.env.BACKTEST_RECENT_DAYS ?? '60',
           FORWARD_EXTREMA_START_DATE: process.env.ML_FULL_START_DATE ?? '1900-01-01',
           FORWARD_EXTREMA_WRITE_MODEL_LABELS: '0',

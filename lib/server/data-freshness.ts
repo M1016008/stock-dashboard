@@ -1,5 +1,6 @@
 import { execAll, execGet } from '@/lib/db/client'
 import { getActiveUpdateLocks } from '@/lib/server/update-lock'
+import { MAX_CONTINUOUS_HISTORY_GAP_DAYS, MIN_SNAPSHOT_DATA_POINTS } from '@/lib/snapshots/continuous-ma'
 
 const UPDATE_JOB_TYPES = [
   'update_latest',
@@ -24,7 +25,6 @@ const UPDATE_JOB_TYPES = [
 const LOCK_MANAGED_JOB_TYPES = new Set(['update_latest', 'post_ohlcv_refresh'])
 const RUNNING_JOB_TTL_SECONDS = 45 * 60
 const MIN_COVERAGE_RATIO = 1
-const MIN_SNAPSHOT_OHLCV_ROWS = 5
 const JQUANTS_DAILY_READY_MINUTES = 16 * 60 + 30
 
 type MaxDateRow = {
@@ -246,15 +246,42 @@ export async function getDataFreshness(now = new Date()): Promise<DataFreshness>
           AND (
             SELECT COUNT(*)
             FROM (
-              SELECT 1
+              SELECT h.date
               FROM ohlcv_daily h
               WHERE h.ticker = u.ticker
                 AND h.date <= ?
+              ORDER BY h.date DESC
               LIMIT ?
             )
           ) >= ?
+          AND NOT EXISTS (
+            SELECT 1
+            FROM (
+              SELECT
+                date,
+                LEAD(date) OVER (ORDER BY date) AS next_date
+              FROM (
+                SELECT h.date
+                FROM ohlcv_daily h
+                WHERE h.ticker = u.ticker
+                  AND h.date <= ?
+                ORDER BY h.date DESC
+                LIMIT ?
+              )
+            )
+            WHERE next_date IS NOT NULL
+              AND julianday(next_date) - julianday(date) > ?
+          )
       `,
-      [expectedTradingDate, expectedTradingDate, MIN_SNAPSHOT_OHLCV_ROWS, MIN_SNAPSHOT_OHLCV_ROWS],
+      [
+        expectedTradingDate,
+        expectedTradingDate,
+        MIN_SNAPSHOT_DATA_POINTS,
+        MIN_SNAPSHOT_DATA_POINTS,
+        expectedTradingDate,
+        MIN_SNAPSHOT_DATA_POINTS,
+        MAX_CONTINUOUS_HISTORY_GAP_DAYS,
+      ],
     ),
     execGet<{ expectedRows: number }>(
       `SELECT expected_rows AS expectedRows FROM jquants_daily_coverage WHERE date = ?`,
@@ -287,13 +314,32 @@ export async function getDataFreshness(now = new Date()): Promise<DataFreshness>
             AND (
               SELECT COUNT(*)
               FROM (
-                SELECT 1
+                SELECT h.date
                 FROM ohlcv_daily h
                 WHERE h.ticker = u.ticker
                   AND h.date <= ?
+                ORDER BY h.date DESC
                 LIMIT ?
               )
             ) >= ?
+            AND NOT EXISTS (
+              SELECT 1
+              FROM (
+                SELECT
+                  date,
+                  LEAD(date) OVER (ORDER BY date) AS next_date
+                FROM (
+                  SELECT h.date
+                  FROM ohlcv_daily h
+                  WHERE h.ticker = u.ticker
+                    AND h.date <= ?
+                  ORDER BY h.date DESC
+                  LIMIT ?
+                )
+              )
+              WHERE next_date IS NOT NULL
+                AND julianday(next_date) - julianday(date) > ?
+            )
             AND NOT EXISTS (
               SELECT 1
               FROM daily_snapshots s
@@ -309,8 +355,11 @@ export async function getDataFreshness(now = new Date()): Promise<DataFreshness>
         expectedTradingDate,
         expectedTradingDate,
         expectedTradingDate,
-        MIN_SNAPSHOT_OHLCV_ROWS,
-        MIN_SNAPSHOT_OHLCV_ROWS,
+        MIN_SNAPSHOT_DATA_POINTS,
+        MIN_SNAPSHOT_DATA_POINTS,
+        expectedTradingDate,
+        MIN_SNAPSHOT_DATA_POINTS,
+        MAX_CONTINUOUS_HISTORY_GAP_DAYS,
         expectedTradingDate,
       ],
     ),

@@ -4,6 +4,7 @@
 
 import { execAll, execBatch, execGet } from '@/lib/db/client'
 import { ML_PHYSICS_FEATURE_SET } from '@/lib/backtest/ml-physics'
+import { ML_PRIMARY_HORIZONS } from '@/lib/backtest/ml-horizons'
 
 type Check = {
   key: string
@@ -155,7 +156,7 @@ async function main() {
     payload: { expectedFrom: 'rl_training_states_v2.max(date)', latestEvaluationRunDate: rlPolicyRunDate },
   })
 
-  const physicsStatusHorizons = [5, 10, 20, 40, 60, 90]
+  const physicsStatusHorizons = ML_PRIMARY_HORIZONS
   for (const horizon of physicsStatusHorizons) {
     const latestPhysicsStatusLabelDate = await execGet<{ date: string | null }>(
       `SELECT MAX(date) AS date FROM ml_short_labels WHERE horizon_days = ?`,

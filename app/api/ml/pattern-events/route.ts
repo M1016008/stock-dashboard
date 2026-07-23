@@ -28,8 +28,8 @@ type RawEventRow = {
   pattern_end_date: string | null
 }
 
-const EXISTING_HORIZONS = new Set([5, 10, 15, 20, 30, 40, 60, 90, 180])
-const MAX_HORIZON_DAYS = 180
+const EXISTING_HORIZONS = new Set([5, 10, 15, 20, 30, 40, 60, 90, 180, 200])
+const MAX_HORIZON_DAYS = 200
 const MAX_LIMIT = 200
 
 function badRequest(message: string, status = 400) {

@@ -40,13 +40,10 @@ interface Stock {
   monthly_b_stage?: number | null
   sma_angles?: { sma5: number | null; sma25: number | null; sma75: number | null; sma300: number | null }
   prev_sma_angles?: { sma5: number | null; sma25: number | null; sma75: number | null; sma300: number | null }
-  prev_prev_sma_angles?: { sma5: number | null; sma25: number | null; sma75: number | null; sma300: number | null }
   ml_candidate_direction?: 'up' | 'down' | null
   ml_candidate_rank?: number | null
   ml_candidate_summary?: string | null
   physical_momentum_score?: number | null
-  physical_force_score?: number | null
-  physical_energy_score?: number | null
 }
 
 type Timeframe = 'daily' | 'weekly' | 'monthly'

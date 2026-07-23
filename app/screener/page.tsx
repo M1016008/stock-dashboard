@@ -66,7 +66,7 @@ const PHYSICAL_STATUS_LABELS: PhysicsStatus[] = [
   '見送り',
   '算出待ち',
 ]
-const PHYSICAL_STATUS_HORIZONS = [5, 10, 20, 40, 60, 90] as const
+const PHYSICAL_STATUS_HORIZONS = [5, 10, 20, 40, 60, 90, 200] as const
 type PhysicalStatusHorizon = typeof PHYSICAL_STATUS_HORIZONS[number]
 type PhysicalStatusOption = {
   label: PhysicsStatus

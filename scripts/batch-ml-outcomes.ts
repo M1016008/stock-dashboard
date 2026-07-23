@@ -3,6 +3,7 @@
 // 保存済み予測を forward_extrema と照合し、horizon到達済みの実績を記録する。
 
 import { execAll, execBatch, execGet } from '@/lib/db/client'
+import { ML_PRIMARY_HORIZON_LIST } from '@/lib/backtest/ml-horizons'
 
 type PredictionRow = {
   as_of_date: string
@@ -26,7 +27,7 @@ type ExtremaRow = {
   hit_40: number | null
 }
 
-const HORIZONS = (process.env.ML_HORIZONS ?? '20,40,60,90')
+const HORIZONS = (process.env.ML_HORIZONS ?? ML_PRIMARY_HORIZON_LIST)
   .split(',')
   .map((value) => Number(value.trim()))
   .filter((value) => Number.isFinite(value) && value > 0)

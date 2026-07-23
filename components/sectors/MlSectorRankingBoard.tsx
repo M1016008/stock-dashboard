@@ -89,7 +89,7 @@ export function MlSectorRankingBoard({
     const horizonGroups = [
       { title: '短期', body: '5/10/15営業日。日足の勢いに、週足・月足の支援/抵抗を重ねます。', horizons: [5, 10, 15] },
       { title: '週足', body: '20/40/60営業日。週足トレンドが効く数週間〜約3か月の候補です。', horizons: [20, 40, 60] },
-      { title: '月足', body: '90/180営業日。月足の向きまで含む中長期の候補です。', horizons: [90, 180] },
+      { title: '月足', body: '90/180/200営業日。月足の向きまで含む中長期の候補です。', horizons: [90, 180, 200] },
     ]
     const topRows = (horizons: number[], sectorType: '17' | '33', direction: 'up' | 'down') =>
       rows

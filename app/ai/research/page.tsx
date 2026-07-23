@@ -3,7 +3,7 @@ import { Suspense } from 'react'
 import { AssistantResearchClient } from '@/components/assistant/AssistantResearchClient'
 
 export const metadata: Metadata = {
-  title: 'AI銘柄リサーチ | StockBoard',
+  title: 'AI銘柄リサーチ — StockBoard',
   description: '自然言語で銘柄条件を相談し、StockBoardのDB根拠から候補を探す専用ページ',
 }
 

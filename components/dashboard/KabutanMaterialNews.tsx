@@ -184,9 +184,16 @@ function LiquidityCell({ stock }: { stock: ReturnType<typeof articleStockRows>[n
   )
 }
 
-function ArticleStockTable({ article }: { article: KabutanMaterialNewsArticle }) {
-  const rows = articleStockRows(article)
-  if (rows.length === 0) {
+function ArticleStockTable({
+  article,
+  maxStocks,
+}: {
+  article: KabutanMaterialNewsArticle
+  maxStocks: number
+}) {
+  const allRows = articleStockRows(article)
+  const rows = allRows.slice(0, maxStocks)
+  if (allRows.length === 0) {
     return (
       <div className="rounded-[8px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-4 py-5 text-center text-[12px] font-bold text-[var(--color-text-tertiary)]">
         銘柄コードを読み取れませんでした。原文リンクで確認してください。
@@ -195,8 +202,14 @@ function ArticleStockTable({ article }: { article: KabutanMaterialNewsArticle })
   }
 
   return (
-    <div className="max-w-full overflow-x-auto rounded-[8px] border border-[var(--color-border-soft)] bg-white">
-      <table className="w-full min-w-[1540px] border-collapse text-left">
+    <div className="grid max-w-full gap-2">
+      {allRows.length > rows.length && (
+        <div className="rounded-[6px] border border-[var(--color-border-soft)] bg-white px-3 py-2 text-[10px] font-bold text-[var(--color-text-tertiary)]">
+          関連 {allRows.length.toLocaleString()} 銘柄のうち、記事掲載順の先頭 {rows.length.toLocaleString()} 銘柄を表示しています。残りは原文で確認できます。
+        </div>
+      )}
+      <div className="max-w-full overflow-x-auto rounded-[8px] border border-[var(--color-border-soft)] bg-white">
+        <table className="w-full min-w-[1540px] border-collapse text-left">
         <thead className="bg-[var(--color-surface-subtle)] text-[10px] font-black tracking-wide text-[var(--color-text-tertiary)]">
           <tr>
             <th className="w-[90px] border-b border-[var(--color-border-soft)] px-3 py-2">コード</th>
@@ -258,12 +271,21 @@ function ArticleStockTable({ article }: { article: KabutanMaterialNewsArticle })
             </tr>
           ))}
         </tbody>
-      </table>
+        </table>
+      </div>
     </div>
   )
 }
 
-function ArticleDisclosure({ article, defaultOpen = false }: { article: KabutanMaterialNewsArticle; defaultOpen?: boolean }) {
+function ArticleDisclosure({
+  article,
+  defaultOpen = false,
+  maxStocks,
+}: {
+  article: KabutanMaterialNewsArticle
+  defaultOpen?: boolean
+  maxStocks: number
+}) {
   const rows = articleStockRows(article)
   const preview = rows.slice(0, 3).map((row) => row.name).join(' / ')
   return (
@@ -313,17 +335,23 @@ function ArticleDisclosure({ article, defaultOpen = false }: { article: KabutanM
             {article.snippet}
           </p>
         )}
-        <ArticleStockTable article={article} />
+        <ArticleStockTable article={article} maxStocks={maxStocks} />
       </div>
     </details>
   )
 }
 
-function NewsTable({ articles }: { articles: KabutanMaterialNewsArticle[] }) {
+function NewsTable({
+  articles,
+  maxStocks,
+}: {
+  articles: KabutanMaterialNewsArticle[]
+  maxStocks: number
+}) {
   return (
     <div className="grid min-w-0 gap-3">
       {articles.map((article, index) => (
-        <ArticleDisclosure key={article.articleId} article={article} defaultOpen={index === 0} />
+        <ArticleDisclosure key={article.articleId} article={article} defaultOpen={index === 0} maxStocks={maxStocks} />
       ))}
     </div>
   )
@@ -333,10 +361,12 @@ function NewsSection({
   title,
   description,
   articles,
+  maxStocks,
 }: {
   title: string
   description: string
   articles: KabutanMaterialNewsArticle[]
+  maxStocks: number
 }) {
   return (
     <section className="grid min-w-0 gap-3">
@@ -350,7 +380,7 @@ function NewsSection({
         </span>
       </div>
       {articles.length > 0 ? (
-        <NewsTable articles={articles} />
+        <NewsTable articles={articles} maxStocks={maxStocks} />
       ) : (
         <div className="rounded-[8px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-4 py-6 text-center">
           <div className="text-[12px] font-black text-[var(--color-brand-900)]">保存済み記事はまだありません</div>
@@ -365,8 +395,8 @@ function NewsSection({
 
 export async function KabutanMaterialNews() {
   const [movers, goodBad] = await Promise.all([
-    getKabutanMaterialNews(12),
-    getKabutanGoodBadDisclosureNews(6),
+    getKabutanMaterialNews(6),
+    getKabutanGoodBadDisclosureNews(3),
   ])
   const lastRun = movers.lastRun ?? goodBad.lastRun
   const status = lastRun?.status ?? null
@@ -408,13 +438,15 @@ export async function KabutanMaterialNews() {
         <div className="grid gap-5">
           <NewsSection
             title="前日に動いた銘柄"
-            description="市場ニュース「材料」から、記事内の材料コメントとStockBoard側のスクリーナー情報を並べます。"
+            description="市場ニュース「材料」の最新6記事から、記事内の材料コメントとStockBoard側のスクリーナー情報を並べます。"
             articles={movers.articles}
+            maxStocks={12}
           />
           <NewsSection
             title="明日の好悪材料"
-            description="市場ニュース「注目」の開示情報チェック記事を、好材料/悪材料別に銘柄単位で表示します。"
+            description="市場ニュース「注目」の最新3記事を、好材料/悪材料別に銘柄単位で表示します。"
             articles={goodBad.articles}
+            maxStocks={12}
           />
         </div>
       </div>

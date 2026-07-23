@@ -117,7 +117,7 @@ const EVIDENCE_DATE_CHUNK = envInt('SERVING_EVIDENCE_DATE_CHUNK', DATE_LIMIT ===
 const DETAIL_PER_DATE_HORIZON = envInt('SERVING_DETAIL_PER_DATE_HORIZON', 20, 0)
 const SIMILAR_SOURCE_LIMIT = envInt('SERVING_SIMILAR_SOURCE_LIMIT', 30, 0)
 const CHUNK = 250
-const HORIZONS = [5, 20, 30, 40, 60, 90, 180] as const
+const HORIZONS = [5, 20, 30, 40, 60, 90, 180, 200] as const
 
 function scoreSignals(row: LatestFeature): number {
   const codes = (row.signal_codes ?? '').split(',').filter(Boolean)

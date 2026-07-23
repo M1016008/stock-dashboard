@@ -12,7 +12,7 @@ import {
   type SectorPeriod,
   type SectorPeriodSummary,
 } from '@/lib/queries/sectors'
-import { getMlObjectiveValidation, getMlSectorRankings } from '@/lib/queries/ml-insights'
+import { getMlObjectiveValidation, getMlSectorRankings, type MlSectorRanking } from '@/lib/queries/ml-insights'
 import { MlObjectiveValidationBoard } from '@/components/sectors/MlObjectiveValidationBoard'
 import { MlSectorRankingBoard } from '@/components/sectors/MlSectorRankingBoard'
 import { getUniverseFilterMeta, parseUniverseFilter } from '@/lib/market-universe'
@@ -27,6 +27,20 @@ export const metadata: Metadata = {
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
 export const fetchCache = 'force-no-store'
+
+function selectMlSectorRankingHighlights(rows: MlSectorRanking[]): MlSectorRanking[] {
+  const horizonGroups = [[5, 10, 15], [20, 40, 60], [90, 180, 200]]
+  return horizonGroups.flatMap((horizons) => (
+    (['17', '33'] as const).flatMap((sectorType) => (
+      (['up', 'down'] as const).flatMap((direction) => (
+        rows
+          .filter((row) => horizons.includes(row.horizonDays) && row.sectorType === sectorType && row.direction === direction)
+          .sort((a, b) => b.candidateCount - a.candidateCount || (b.avgScore ?? 0) - (a.avgScore ?? 0))
+          .slice(0, 5)
+      ))
+    ))
+  ))
+}
 
 function fmtPct(value: number | null | undefined) {
   if (value == null || !Number.isFinite(value)) return '---'
@@ -447,7 +461,7 @@ function ClassificationSection({
   return (
     <div className="space-y-4">
       <div className="sb-page-title">
-        <h1>{title}</h1>
+        <h2>{title}</h2>
         <p>{description}</p>
       </div>
       <div className="grid grid-cols-1 gap-4">
@@ -734,6 +748,7 @@ export default async function SectorsPage({
     getMlObjectiveValidation({ limit: 80 }),
   ])
   const latestDate = board.latestDate
+  const mlRankingHighlights = selectMlSectorRankingHighlights(mlRankingData.rows)
   const selectedPeriodSummary = selectedSector
     ? board.periods.find((period) => period.period === selectedSector.period)
     : null
@@ -800,7 +815,7 @@ export default async function SectorsPage({
             periodLabel={selectedPeriodLabel}
             baseParams={selectedListParams}
           />
-          <MlSectorRankingBoard rows={mlRankingData.rows} asOfDate={mlRankingData.asOfDate} />
+          <MlSectorRankingBoard rows={mlRankingHighlights} asOfDate={mlRankingData.asOfDate} />
           <MlObjectiveValidationBoard rows={objectiveValidationData.rows} />
           <ClassificationSection
             title="17業種ヒートマップ・ランキング"

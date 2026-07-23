@@ -1,4 +1,4 @@
-export const HORIZONS = [5, 20, 30, 40, 60, 90, 180] as const
+export const HORIZONS = [5, 20, 30, 40, 60, 90, 180, 200] as const
 export const TARGET_PCTS = [10, 20, 40] as const
 
 export type HorizonDays = typeof HORIZONS[number]
