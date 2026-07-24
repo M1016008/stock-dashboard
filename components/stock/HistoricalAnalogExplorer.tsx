@@ -448,10 +448,13 @@ export function HistoricalAnalogExplorer({
             </h2>
           </div>
           <div className="mt-1 flex flex-wrap gap-1.5 text-[10px] font-bold text-[var(--color-text-secondary)]">
-            <span className="border border-teal-200 bg-teal-50 px-2 py-1 text-teal-800">10・20・40日軌跡</span>
-            <span className="border border-blue-200 bg-blue-50 px-2 py-1 text-blue-800">週足・月足・長期</span>
-            <span className="border border-violet-200 bg-violet-50 px-2 py-1 text-violet-800">MA 5〜200</span>
+            <span className="border border-teal-200 bg-teal-50 px-2 py-1 text-teal-800">転移ステージ・位置関係</span>
+            <span className="border border-blue-200 bg-blue-50 px-2 py-1 text-blue-800">乖離・角度・軌跡</span>
+            <span className="border border-violet-200 bg-violet-50 px-2 py-1 text-violet-800">日・週・月 / MA 5〜200</span>
           </div>
+          <p className="mt-2 max-w-[760px] text-[11px] font-semibold leading-5 text-[var(--color-text-secondary)]">
+            ローソク足の見た目ではなく、現在の移動平均構造と本質的に同じ過去局面を全銘柄・全期間から検索し、その後の値動きを定量比較します。
+          </p>
         </div>
         <button
           type="button"

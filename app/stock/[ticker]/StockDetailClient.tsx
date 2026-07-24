@@ -366,8 +366,8 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
 
       {activeTab === 'ml' && (
         <>
-          <StockMlInsights ticker={ticker} analysisDate={analysisDate} />
           <HistoricalAnalogExplorer ticker={ticker} analysisDate={analysisDate} />
+          <StockMlInsights ticker={ticker} analysisDate={analysisDate} />
         </>
       )}
 
@@ -386,7 +386,7 @@ function StockDetailTabs({
     { id: 'overview' as const, label: '概要', icon: LayoutDashboard },
     { id: 'chart' as const, label: 'チャート・6ステージ', icon: ChartCandlestick },
     { id: 'scenario' as const, label: 'シナリオ', icon: NotebookPen },
-    { id: 'ml' as const, label: 'ML・類似局面', icon: BrainCircuit },
+    { id: 'ml' as const, label: '本質類似・ML', icon: BrainCircuit },
   ]
   return (
     <nav className="flex overflow-x-auto border-t border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-2" aria-label="個別銘柄分析">

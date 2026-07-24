@@ -98,16 +98,15 @@ async function getUsDashboardRows(date: string | null) {
     execAll<RankingRow>(rankingSql('cur.volume DESC NULLS LAST'), [date, date, date]),
     execAll<StageSummaryRow>(
       `
-        SELECT 'Stage1' AS label, SUM(CASE WHEN daily_a_stage = 1 THEN 1 ELSE 0 END) AS count
-        FROM market_daily_snapshots INDEXED BY market_snapshots_market_date_idx WHERE market = 'US' AND date = ?
-        UNION ALL
-        SELECT 'Stage4' AS label, SUM(CASE WHEN daily_a_stage = 4 THEN 1 ELSE 0 END) AS count
-        FROM market_daily_snapshots INDEXED BY market_snapshots_market_date_idx WHERE market = 'US' AND date = ?
-        UNION ALL
-        SELECT 'Stage6' AS label, SUM(CASE WHEN daily_a_stage = 6 THEN 1 ELSE 0 END) AS count
-        FROM market_daily_snapshots INDEXED BY market_snapshots_market_date_idx WHERE market = 'US' AND date = ?
+        SELECT CAST(daily_a_stage AS TEXT) AS label, COUNT(*) AS count
+        FROM market_daily_snapshots INDEXED BY market_snapshots_market_date_idx
+        WHERE market = 'US'
+          AND date = ?
+          AND daily_a_stage BETWEEN 1 AND 6
+        GROUP BY daily_a_stage
+        ORDER BY daily_a_stage
       `,
-      [date, date, date],
+      [date],
     ),
   ])
   const withDisplayNames = (rows: RankingRow[]) => rows.map((row) => ({
@@ -169,49 +168,66 @@ function RankingList({ title, rows, tone }: { title: string; rows: RankingRow[];
 export default async function UsHomePage() {
   const status = await getUsStatusSummary()
   const dashboard = await getUsDashboardRows(status.snapshots.latestDate)
+  const stageCounts = new Map(dashboard.stageSummary.map((row) => [Number(row.label), Number(row.count)]))
+  const stageTotal = Array.from({ length: 6 }, (_, index) => stageCounts.get(index + 1) ?? 0).reduce((sum, count) => sum + count, 0)
+  const constructiveCount = (stageCounts.get(1) ?? 0) + (stageCounts.get(6) ?? 0)
+  const cautionCount = (stageCounts.get(3) ?? 0) + (stageCounts.get(4) ?? 0)
+  const constructivePct = stageTotal > 0 ? (constructiveCount / stageTotal) * 100 : 0
+  const cautionPct = stageTotal > 0 ? (cautionCount / stageTotal) * 100 : 0
+  const marketTone = constructivePct >= cautionPct + 10
+    ? '上昇構造が優勢'
+    : cautionPct >= constructivePct + 10
+      ? '下落構造を警戒'
+      : '方向感を確認'
   return (
     <div className="mx-auto flex w-full max-w-[1420px] flex-col gap-5">
       <PageTitle
         title="米国株ダッシュボード"
-        subtitle="日本株ページと同じ分析体験へ寄せるためのUS市場ワークスペース。価格、6ステージ、スクリーニング、シナリオ分析を横断します。"
+        subtitle="6ステージの市場構造から、いま確認すべき銘柄と分析画面へ最短で移動します。"
         badge="US Market"
       />
-      <section className="grid gap-4 md:grid-cols-3">
-        <Card>
-          <CardHeader title="ユニバース" hint="market_universe / US" />
-          <div className="text-[24px] font-bold text-[var(--color-brand-900)]">{fmt(status.universe.active)}</div>
-          <div className="mt-1 text-[12px] font-semibold text-[var(--color-text-secondary)]">登録 {fmt(status.universe.total)} 銘柄</div>
-        </Card>
-        <Card>
-          <CardHeader title="OHLCV" hint="米国株の日次価格データ" />
-          <div className="text-[24px] font-bold text-[var(--color-brand-900)]">{fmt(status.ohlcv.tickers)}</div>
-          <div className="mt-1 text-[12px] font-semibold text-[var(--color-text-secondary)]">
-            {status.ohlcv.firstDate ?? '-'} 〜 {status.ohlcv.latestDate ?? '-'} / {fmt(status.ohlcv.rows)} 行{status.ohlcv.rowsApproximate ? '（概算）' : ''}
-          </div>
-        </Card>
-        <Card>
-          <CardHeader title="ステージ" hint="market_daily_snapshots / US" />
-          <div className="text-[24px] font-bold text-[var(--color-brand-900)]">{fmt(status.snapshots.tickers)}</div>
-          <div className="mt-1 text-[12px] font-semibold text-[var(--color-text-secondary)]">
-            最新 {status.snapshots.latestDate ?? '-'}
-          </div>
-        </Card>
-      </section>
       <Card size="lg">
-        <CardHeader title="US機能" hint="個別銘柄は上部検索から直接開けます。固定サンプル銘柄は置きません。" />
-        <div className="grid gap-3 md:grid-cols-4">
-          <Link className="rounded-[4px] border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] p-4 text-[13px] font-bold text-[var(--color-brand-900)] hover:bg-white" href="/us/screener?sort=changePct&dir=desc">
-            USスクリーナー
+        <CardHeader title="今日の市場構造" hint={`基準日 ${status.snapshots.latestDate ?? '-'} / 日足Aステージ`} />
+        <div className="grid gap-4 lg:grid-cols-[1.2fr_1fr_1fr]">
+          <div className="border-l-4 border-[var(--color-brand-900)] bg-[var(--color-surface-subtle)] px-4 py-3">
+            <div className="text-[11px] font-black text-[var(--color-text-tertiary)]">現在の判断</div>
+            <div className="mt-1 text-[22px] font-black text-[var(--color-brand-900)]">{marketTone}</div>
+            <p className="mt-1 text-[12px] font-semibold leading-5 text-[var(--color-text-secondary)]">
+              上昇構造 {constructivePct.toFixed(1)}% / 警戒構造 {cautionPct.toFixed(1)}%。ランキングと6ステージを併せて確認してください。
+            </p>
+          </div>
+          <Link
+            href="/us/screener?sort=stageCode&dir=asc"
+            className="border border-[var(--color-border-default)] bg-white px-4 py-3 hover:bg-[var(--color-surface-subtle)]"
+          >
+            <div className="text-[11px] font-black text-[var(--color-text-tertiary)]">上昇構造 Stage 1・6</div>
+            <div className="mt-1 text-[24px] font-black text-red-700">{fmt(constructiveCount)}</div>
+            <div className="mt-1 text-[11px] font-bold text-[var(--color-brand-900)]">該当銘柄を開く →</div>
           </Link>
-          <Link className="rounded-[4px] border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] p-4 text-[13px] font-bold text-[var(--color-brand-900)] hover:bg-white" href="/us/screener?sort=stageCode&dir=asc">
-            US 6ステージ一覧
+          <Link
+            href="/us/screener?sort=stageCode&dir=desc"
+            className="border border-[var(--color-border-default)] bg-white px-4 py-3 hover:bg-[var(--color-surface-subtle)]"
+          >
+            <div className="text-[11px] font-black text-[var(--color-text-tertiary)]">警戒構造 Stage 3・4</div>
+            <div className="mt-1 text-[24px] font-black text-blue-700">{fmt(cautionCount)}</div>
+            <div className="mt-1 text-[11px] font-bold text-[var(--color-brand-900)]">下落構造を確認 →</div>
           </Link>
-          <Link className="rounded-[4px] border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] p-4 text-[13px] font-bold text-[var(--color-brand-900)] hover:bg-white" href="/ai/research?market=US">
-            AI銘柄リサーチ
-          </Link>
-          <Link className="rounded-[4px] border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] p-4 text-[13px] font-bold text-[var(--color-brand-900)] hover:bg-white" href="/chart-drill?market=US">
-            チャートドリル
-          </Link>
+        </div>
+        <div className="mt-4 flex flex-wrap gap-2">
+          {[
+            ['/us/screener?sort=changePct&dir=desc', 'スクリーナー'],
+            ['/ai/research?market=US', 'AI銘柄リサーチ'],
+            ['/chart-drill?market=US', 'チャートドリル'],
+            ['/watchlist', 'ウォッチリスト'],
+          ].map(([href, label]) => (
+            <Link
+              key={href}
+              href={href}
+              className="border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-3 py-2 text-[12px] font-black text-[var(--color-brand-900)] hover:bg-white"
+            >
+              {label}
+            </Link>
+          ))}
         </div>
       </Card>
 
@@ -222,16 +238,48 @@ export default async function UsHomePage() {
       </section>
 
       <Card>
-        <CardHeader title="USステージ分布" hint="日足Aの現在ステージ。詳細はUSスクリーナーで6桁ステージを確認します。" />
-        <div className="grid gap-3 sm:grid-cols-3">
-          {dashboard.stageSummary.map((row) => (
-            <div key={row.label} className="rounded-[4px] border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] p-4">
-              <div className="text-[11px] font-black text-[var(--color-text-tertiary)]">{row.label}</div>
-              <div className="mt-1 text-[24px] font-black text-[var(--color-brand-900)]">{fmt(row.count)}</div>
-            </div>
+        <CardHeader title="US 6ステージ分布" hint="日足Aの現在地。各ステージから該当銘柄へ絞り込めます。" />
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6">
+          {Array.from({ length: 6 }, (_, index) => index + 1).map((stage) => (
+            <Link
+              key={stage}
+              href={`/us/screener?stageCode=${stage}&sort=stageCode&dir=asc`}
+              className="border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] p-3 hover:bg-white"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <StageTag stage={stage} size="sm" />
+                <span className="text-[10px] font-black text-[var(--color-text-tertiary)]">Stage {stage}</span>
+              </div>
+              <div className="mt-2 text-[22px] font-black text-[var(--color-brand-900)]">{fmt(stageCounts.get(stage) ?? 0)}</div>
+            </Link>
           ))}
         </div>
       </Card>
+
+      <details className="border border-[var(--color-border-default)] bg-white">
+        <summary className="cursor-pointer px-4 py-3 text-[12px] font-black text-[var(--color-brand-900)]">
+          データ基盤の健全性
+        </summary>
+        <div className="grid gap-3 border-t border-[var(--color-border-default)] p-4 md:grid-cols-3">
+          <div>
+            <div className="text-[11px] font-black text-[var(--color-text-tertiary)]">ユニバース</div>
+            <div className="mt-1 text-[20px] font-black text-[var(--color-brand-900)]">{fmt(status.universe.active)} 銘柄</div>
+            <div className="text-[11px] font-semibold text-[var(--color-text-secondary)]">登録 {fmt(status.universe.total)}</div>
+          </div>
+          <div>
+            <div className="text-[11px] font-black text-[var(--color-text-tertiary)]">OHLCV</div>
+            <div className="mt-1 text-[20px] font-black text-[var(--color-brand-900)]">{fmt(status.ohlcv.tickers)} 銘柄</div>
+            <div className="text-[11px] font-semibold text-[var(--color-text-secondary)]">
+              {status.ohlcv.firstDate ?? '-'} 〜 {status.ohlcv.latestDate ?? '-'}
+            </div>
+          </div>
+          <div>
+            <div className="text-[11px] font-black text-[var(--color-text-tertiary)]">6ステージ</div>
+            <div className="mt-1 text-[20px] font-black text-[var(--color-brand-900)]">{fmt(status.snapshots.tickers)} 銘柄</div>
+            <div className="text-[11px] font-semibold text-[var(--color-text-secondary)]">最新 {status.snapshots.latestDate ?? '-'}</div>
+          </div>
+        </div>
+      </details>
     </div>
   )
 }

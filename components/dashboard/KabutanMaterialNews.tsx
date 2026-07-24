@@ -393,10 +393,63 @@ function NewsSection({
   )
 }
 
-export async function KabutanMaterialNews() {
+function CompactNewsList({
+  title,
+  articles,
+}: {
+  title: string
+  articles: KabutanMaterialNewsArticle[]
+}) {
+  return (
+    <section className="min-w-0">
+      <h3 className="mb-2 text-[12px] font-black text-[var(--color-brand-900)]">{title}</h3>
+      <div className="divide-y divide-[var(--color-border-soft)] border-y border-[var(--color-border-soft)]">
+        {articles.map((article) => {
+          const stocks = articleStockRows(article).slice(0, 3)
+          return (
+            <article key={article.articleId} className="grid gap-1 py-2.5 sm:grid-cols-[70px_minmax(0,1fr)]">
+              <time className="font-mono text-[10px] font-black text-[var(--color-text-tertiary)]" dateTime={article.publishedAt}>
+                {formatDateTime(article.publishedAt)}
+              </time>
+              <div className="min-w-0">
+                <a
+                  href={article.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="block truncate text-[12px] font-black text-[var(--color-brand-900)] hover:text-[var(--color-market-red)]"
+                >
+                  {article.title}
+                </a>
+                {stocks.length > 0 && (
+                  <div className="mt-1 flex min-w-0 flex-wrap gap-1">
+                    {stocks.map((stock) => (
+                      <Link
+                        key={`${article.articleId}-${stock.ticker}`}
+                        href={`/stock/${encodeURIComponent(stock.ticker)}`}
+                        prefetch={false}
+                        className="border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-1.5 py-0.5 text-[10px] font-black text-[var(--color-brand-800)] hover:bg-white"
+                      >
+                        {stock.ticker} {stock.name}
+                      </Link>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </article>
+          )
+        })}
+        {articles.length === 0 && (
+          <p className="py-4 text-center text-[11px] font-bold text-[var(--color-text-tertiary)]">保存済み記事はありません</p>
+        )}
+      </div>
+    </section>
+  )
+}
+
+export async function KabutanMaterialNews({ compact = false }: { compact?: boolean } = {}) {
   const [movers, goodBad] = await Promise.all([
-    getKabutanMaterialNews(6),
-    getKabutanGoodBadDisclosureNews(3),
+    getKabutanMaterialNews(compact ? 3 : 6),
+    getKabutanGoodBadDisclosureNews(compact ? 2 : 3),
   ])
   const lastRun = movers.lastRun ?? goodBad.lastRun
   const status = lastRun?.status ?? null
@@ -406,16 +459,16 @@ export async function KabutanMaterialNews() {
     <Card size="lg" className="p-0">
       <CardHeader
         title="株探ニュース"
-        hint="前日に動いた銘柄と、明日の好悪材料を銘柄単位の表で確認します。"
+        hint={compact ? '投資判断に関係する最新見出しと主要銘柄を確認します。' : '前日に動いた銘柄と、明日の好悪材料を銘柄単位の表で確認します。'}
         action={
-          <a
-            href="https://kabutan.jp/news/marketnews/?category=2"
-            target="_blank"
-            rel="noopener noreferrer"
+          <Link
+            href={compact ? '/materials' : 'https://kabutan.jp/news/marketnews/?category=2'}
+            target={compact ? undefined : '_blank'}
+            rel={compact ? undefined : 'noopener noreferrer'}
             className="rounded-full border border-current/25 bg-white px-2.5 py-1 text-[10px] font-black hover:bg-[var(--color-surface-subtle)]"
           >
-            株探を開く
-          </a>
+            {compact ? '材料をすべて見る' : '株探を開く'}
+          </Link>
         }
       />
       <div className="px-4 pb-4">
@@ -435,20 +488,27 @@ export async function KabutanMaterialNews() {
           </p>
         )}
 
-        <div className="grid gap-5">
-          <NewsSection
-            title="前日に動いた銘柄"
-            description="市場ニュース「材料」の最新6記事から、記事内の材料コメントとStockBoard側のスクリーナー情報を並べます。"
-            articles={movers.articles}
-            maxStocks={12}
-          />
-          <NewsSection
-            title="明日の好悪材料"
-            description="市場ニュース「注目」の最新3記事を、好材料/悪材料別に銘柄単位で表示します。"
-            articles={goodBad.articles}
-            maxStocks={12}
-          />
-        </div>
+        {compact ? (
+          <div className="grid gap-5 lg:grid-cols-2">
+            <CompactNewsList title="前日に動いた銘柄" articles={movers.articles} />
+            <CompactNewsList title="明日の好悪材料" articles={goodBad.articles} />
+          </div>
+        ) : (
+          <div className="grid gap-5">
+            <NewsSection
+              title="前日に動いた銘柄"
+              description="市場ニュース「材料」の最新6記事から、記事内の材料コメントとStockBoard側のスクリーナー情報を並べます。"
+              articles={movers.articles}
+              maxStocks={12}
+            />
+            <NewsSection
+              title="明日の好悪材料"
+              description="市場ニュース「注目」の最新3記事を、好材料/悪材料別に銘柄単位で表示します。"
+              articles={goodBad.articles}
+              maxStocks={12}
+            />
+          </div>
+        )}
       </div>
     </Card>
   )

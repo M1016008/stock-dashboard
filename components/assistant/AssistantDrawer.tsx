@@ -357,16 +357,21 @@ export function AssistantDrawer() {
         <button
           type="button"
           onClick={() => setOpen(true)}
-          className="fixed bottom-5 right-5 z-50 inline-flex h-12 w-12 items-center justify-center gap-2 rounded-[6px] border border-[var(--color-brand-700)] bg-[var(--color-brand-800)] px-0 text-[13px] font-black text-white shadow-[0_12px_30px_rgba(16,32,52,0.28)] transition-colors hover:bg-[var(--color-brand-900)] sm:w-auto sm:px-4"
+          className="fixed right-3 z-50 inline-flex h-11 w-11 items-center justify-center gap-2 rounded-[6px] border border-[var(--color-brand-700)] bg-[var(--color-brand-800)] px-0 text-[13px] font-black text-white shadow-[0_12px_30px_rgba(16,32,52,0.28)] transition-colors hover:bg-[var(--color-brand-900)] xl:w-auto xl:px-3"
+          style={{ bottom: 'max(12px, env(safe-area-inset-bottom))' }}
           aria-label="AI銘柄リサーチを開く"
+          title="AI銘柄リサーチ"
         >
           <Sparkles size={17} strokeWidth={2.4} />
-          <span className="hidden sm:inline">AI銘柄リサーチ</span>
+          <span className="hidden xl:inline">AI銘柄リサーチ</span>
         </button>
       )}
 
       {open && (
-        <div className="fixed bottom-5 right-5 z-50 flex max-h-[calc(100vh-40px)] w-[min(440px,calc(100vw-40px))] flex-col overflow-hidden rounded-[8px] border border-[var(--color-border-strong)] bg-white shadow-[0_18px_48px_rgba(16,32,52,0.30)]">
+        <div
+          className="fixed right-3 z-50 flex max-h-[calc(100dvh-24px)] w-[min(440px,calc(100vw-24px))] flex-col overflow-hidden rounded-[8px] border border-[var(--color-border-strong)] bg-white shadow-[0_18px_48px_rgba(16,32,52,0.30)]"
+          style={{ bottom: 'max(12px, env(safe-area-inset-bottom))' }}
+        >
           <div className="flex items-center justify-between border-b border-[var(--color-border-default)] bg-[var(--color-brand-800)] px-4 py-3 text-white">
             <div className="flex items-center gap-2">
               <span className="inline-flex h-8 w-8 items-center justify-center rounded-[4px] border border-white/25 bg-white/10">

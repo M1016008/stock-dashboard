@@ -4,18 +4,22 @@
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { Filter, RotateCcw } from 'lucide-react'
+import { Columns3, Filter, GitCompareArrows, RotateCcw } from 'lucide-react'
 import { toTvSymbol, buildTvWatchlistText } from '@/lib/tv-format'
 import { WatchlistButton } from '@/components/ui/WatchlistButton'
 import { StageDots } from '@/components/ui/StageDots'
 import { MarketDateCalendar } from '@/components/ui/MarketDateCalendar'
 import { SavedViewManager } from '@/components/ui/SavedViewManager'
+import { getCompareSymbols, toggleComparedSymbol } from '@/lib/client/stock-workspace'
 import { getUniverseFilterMeta, parseUniverseFilter, UNIVERSE_FILTER_PARAM } from '@/lib/market-universe'
 import { formatShortTermStrength, SHORT_TERM_CHECK_LABELS, type ShortTermCheckLabel } from '@/lib/short-term-check'
 import type { PhysicsStatus } from '@/lib/ml/physics-analysis'
 
 type Market = 'JP'
 type AxisKey = 'daily_a' | 'daily_b' | 'weekly_a' | 'weekly_b' | 'monthly_a' | 'monthly_b'
+type TableView = 'compact' | 'core' | 'all'
+
+const TABLE_VIEW_KEY = 'stockboard_jp_screener_columns_v1'
 
 // 時価総額レンジ（円）。.minは含む / .maxは含まない。億単位の閾値で設計。
 const MCAP_BINS: { label: string; min: number; max: number }[] = [
@@ -424,6 +428,8 @@ export default function ScreenerPage() {
     parsePhysicalStatusHorizon(searchParams.get('physicalStatusHorizon'))
   ))
   const [filtersExpanded, setFiltersExpanded] = useState(true)
+  const [tableView, setTableView] = useState<TableView>('core')
+  const [selectedForComparison, setSelectedForComparison] = useState<Set<string>>(new Set())
   const referenceDate = snapshotDate ?? selectedDate
   const tradingDates = useMemo(
     () => availableDates.map((item) => item.date).filter(Boolean).sort(),
@@ -444,6 +450,38 @@ export default function ScreenerPage() {
       .catch(() => { /* 無視 */ })
     return () => { cancelled = true }
   }, [])
+
+  useEffect(() => {
+    const saved = window.localStorage.getItem(TABLE_VIEW_KEY)
+    if (saved === 'compact' || saved === 'core' || saved === 'all') setTableView(saved)
+  }, [])
+
+  const updateTableView = (next: TableView) => {
+    setTableView(next)
+    window.localStorage.setItem(TABLE_VIEW_KEY, next)
+  }
+
+  const toggleComparisonSelection = (ticker: string) => {
+    setSelectedForComparison((current) => {
+      const next = new Set(current)
+      if (next.has(ticker)) next.delete(ticker)
+      else if (next.size < 4) next.add(ticker)
+      return next
+    })
+  }
+
+  const addSelectedToComparison = () => {
+    const compared = new Set(getCompareSymbols().map((symbol) => `${symbol.market}:${symbol.ticker}`))
+    results
+      .filter((row) => selectedForComparison.has(row.ticker))
+      .forEach((row) => {
+        const ticker = row.ticker.replace(/\.T$/i, '')
+        if (!compared.has(`JP:${ticker}`)) {
+          toggleComparedSymbol({ market: 'JP', ticker, name: row.name })
+        }
+      })
+    setSelectedForComparison(new Set())
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -1501,6 +1539,28 @@ export default function ScreenerPage() {
               {cached && <span style={{ color: 'var(--text-muted)' }}>（DB）</span>}
             </span>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+              {selectedForComparison.size > 0 && (
+                <button
+                  type="button"
+                  onClick={addSelectedToComparison}
+                  style={{
+                    display: 'inline-flex',
+                    height: 32,
+                    alignItems: 'center',
+                    gap: 6,
+                    padding: '0 10px',
+                    border: '1px solid var(--accent-primary)',
+                    background: 'var(--accent-primary)',
+                    color: '#fff',
+                    fontSize: 11,
+                    fontWeight: 800,
+                    cursor: 'pointer',
+                  }}
+                >
+                  <GitCompareArrows size={14} />
+                  {selectedForComparison.size}銘柄を比較
+                </button>
+              )}
               <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 700, color: 'var(--text-muted)' }}>
                 並び替え
                 <select
@@ -1529,6 +1589,40 @@ export default function ScreenerPage() {
                 <option value="desc">{sortDirectionLabels(sort).desc}</option>
                 <option value="asc">{sortDirectionLabels(sort).asc}</option>
               </select>
+              <div
+                style={{ display: 'inline-flex', height: 32, border: '1px solid var(--border-base)', background: 'var(--bg-surface)' }}
+                aria-label="表示する列"
+              >
+                {([
+                  ['compact', '判断'],
+                  ['core', '主要'],
+                  ['all', '全列'],
+                ] as const).map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => updateTableView(value)}
+                    aria-pressed={tableView === value}
+                    title={`${label}列を表示`}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 4,
+                      padding: '0 9px',
+                      border: 0,
+                      borderRight: value === 'all' ? 0 : '1px solid var(--border-base)',
+                      background: tableView === value ? 'var(--accent-primary)' : 'transparent',
+                      color: tableView === value ? '#fff' : 'var(--text-secondary)',
+                      fontSize: 11,
+                      fontWeight: 800,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {value === 'all' && <Columns3 size={13} />}
+                    {label}
+                  </button>
+                ))}
+              </div>
               <button
                 onClick={downloadTvWatchlist}
                 disabled={sortedResults.length === 0}
@@ -1582,7 +1676,14 @@ export default function ScreenerPage() {
             </div>
           ) : (
             <div style={{ overflow: 'auto', maxHeight: '72vh' }}>
-              <table className="data-table" style={{ minWidth: '3480px', borderCollapse: 'collapse', fontSize: '12px' }}>
+              <table
+                className={`data-table jp-screener-table jp-screener-table--${tableView}`}
+                style={{
+                  minWidth: tableView === 'all' ? '3480px' : tableView === 'core' ? '1760px' : '1080px',
+                  borderCollapse: 'collapse',
+                  fontSize: '12px',
+                }}
+              >
                 <thead>
                   <tr style={{ background: 'var(--bg-elevated)', borderBottom: '1px solid var(--border-dim)' }}>
                     <th scope="col" style={th}></th>
@@ -1631,8 +1732,17 @@ export default function ScreenerPage() {
                     const nextEarnings = earningsNextDisplay(r)
                     return (
                       <tr key={r.ticker} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-                        <td style={{ ...td, width: '32px' }}>
+                        <td style={{ ...td, width: '56px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <input
+                              type="checkbox"
+                              checked={selectedForComparison.has(r.ticker)}
+                              onChange={() => toggleComparisonSelection(r.ticker)}
+                              aria-label={`${r.ticker.replace('.T', '')}を比較対象にする`}
+                              style={{ width: 14, height: 14, accentColor: 'var(--accent-primary)' }}
+                            />
                           <WatchlistButton ticker={r.ticker} size="sm" />
+                          </div>
                         </td>
                         <td style={td}>
                           <Link href={`/stock/${encodeURIComponent(r.ticker)}`} style={{ color: 'var(--accent-primary)', fontFamily: 'var(--font-mono)', textDecoration: 'none', fontWeight: 600 }}>

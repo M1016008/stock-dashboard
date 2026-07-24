@@ -3,9 +3,10 @@
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { useEffect, useMemo, useState } from 'react'
-import { ArrowDownAZ, ArrowUpAZ, Filter, RotateCcw } from 'lucide-react'
+import { ArrowDownAZ, ArrowUpAZ, Columns3, Filter, GitCompareArrows, RotateCcw } from 'lucide-react'
 import { StageTag } from '@/components/ui/StageTag'
 import { SavedViewManager } from '@/components/ui/SavedViewManager'
+import { getCompareSymbols, toggleComparedSymbol } from '@/lib/client/stock-workspace'
 import { formatShortTermStrength } from '@/lib/short-term-check'
 
 type Row = {
@@ -42,7 +43,10 @@ type UsScreenerView = {
   dir: 'asc' | 'desc'
 }
 
+type ColumnMode = 'core' | 'all'
+
 const SORT_VALUES = new Set(['ticker', 'exchange', 'sector', 'industry', 'price', 'changePct', 'volume', 'avgVolume20', 'marketCap', 'stageCode', 'pms', 'pfs', 'pes', 'shortTermCheckScore', 'shortTermCheckLabel'])
+const COLUMN_MODE_KEY = 'stockboard_us_screener_columns_v1'
 
 function fmtMoney(value: number | null | undefined) {
   if (value == null || !Number.isFinite(value)) return '-'
@@ -123,6 +127,8 @@ export function UsScreenerClient() {
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
   const [filtersOpen, setFiltersOpen] = useState(true)
+  const [columnMode, setColumnMode] = useState<ColumnMode>('core')
+  const [selected, setSelected] = useState<Set<string>>(new Set())
   const params = useMemo(() => {
     const sp = new URLSearchParams({ limit: String(requestedLimit), sort, dir })
     if (query.trim()) sp.set('q', query.trim())
@@ -161,6 +167,37 @@ export function UsScreenerClient() {
       window.clearTimeout(timer)
     }
   }, [params])
+
+  useEffect(() => {
+    const saved = window.localStorage.getItem(COLUMN_MODE_KEY)
+    if (saved === 'core' || saved === 'all') setColumnMode(saved)
+  }, [])
+
+  const updateColumnMode = (next: ColumnMode) => {
+    setColumnMode(next)
+    window.localStorage.setItem(COLUMN_MODE_KEY, next)
+  }
+
+  const toggleSelected = (ticker: string) => {
+    setSelected((current) => {
+      const next = new Set(current)
+      if (next.has(ticker)) next.delete(ticker)
+      else if (next.size < 4) next.add(ticker)
+      return next
+    })
+  }
+
+  const addSelectedToComparison = () => {
+    const compared = new Set(getCompareSymbols().map((symbol) => `${symbol.market}:${symbol.ticker}`))
+    rows
+      .filter((row) => selected.has(row.ticker))
+      .forEach((row) => {
+        if (!compared.has(`US:${row.ticker}`)) {
+          toggleComparedSymbol({ market: 'US', ticker: row.ticker, name: row.name })
+        }
+      })
+    setSelected(new Set())
+  }
 
   const view = useMemo<UsScreenerView>(() => ({
     query,
@@ -218,6 +255,35 @@ export function UsScreenerClient() {
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          {selected.size > 0 && (
+            <button
+              type="button"
+              onClick={addSelectedToComparison}
+              className="inline-flex h-8 items-center gap-1.5 border border-[var(--color-brand-700)] bg-[var(--color-brand-700)] px-2.5 text-[11px] font-black text-white"
+            >
+              <GitCompareArrows size={14} />
+              {selected.size}銘柄を比較
+            </button>
+          )}
+          <div className="inline-flex h-8 border border-[var(--color-border-default)] bg-white" aria-label="表示列">
+            <button
+              type="button"
+              onClick={() => updateColumnMode('core')}
+              className={`px-2.5 text-[11px] font-black ${columnMode === 'core' ? 'bg-[var(--color-brand-700)] text-white' : 'text-[var(--color-text-secondary)]'}`}
+              aria-pressed={columnMode === 'core'}
+            >
+              主要列
+            </button>
+            <button
+              type="button"
+              onClick={() => updateColumnMode('all')}
+              className={`inline-flex items-center gap-1 px-2.5 text-[11px] font-black ${columnMode === 'all' ? 'bg-[var(--color-brand-700)] text-white' : 'text-[var(--color-text-secondary)]'}`}
+              aria-pressed={columnMode === 'all'}
+            >
+              <Columns3 size={13} />
+              全列
+            </button>
+          </div>
           <SavedViewManager
             storageKey="stockboard_us_screener_views"
             value={view}
@@ -326,31 +392,43 @@ export function UsScreenerClient() {
       )}
 
       <div className="max-h-[70vh] overflow-auto">
-        <table className="data-table min-w-[1280px] w-full border-collapse text-left text-[12px]">
+        <table className={`data-table w-full border-collapse text-left text-[12px] ${columnMode === 'all' ? 'min-w-[1280px]' : 'min-w-[920px]'}`}>
           <thead>
             <tr className="border-b border-[var(--color-border-default)] bg-white text-[11px] font-bold text-[var(--color-text-secondary)]">
-              <th className="sticky left-0 z-[3] bg-white px-3 py-2">銘柄</th>
-              <th className="px-3 py-2">取引所</th>
+              <th className="sticky left-0 z-[4] w-9 bg-white px-2 py-2">
+                <span className="sr-only">比較選択</span>
+              </th>
+              <th className="sticky left-9 z-[3] bg-white px-3 py-2">銘柄</th>
+              {columnMode === 'all' && <th className="px-3 py-2">取引所</th>}
               <th className="px-3 py-2">業種</th>
               <th className="px-3 py-2">6桁</th>
               <th className="px-3 py-2">短期チェック</th>
               <th className="px-3 py-2 text-right">株価</th>
               <th className="px-3 py-2 text-right">騰落率</th>
               <th className="px-3 py-2 text-right">出来高</th>
-              <th className="px-3 py-2 text-right">20日平均</th>
+              {columnMode === 'all' && <th className="px-3 py-2 text-right">20日平均</th>}
               <th className="px-3 py-2 text-right">PMS/PFS/PES</th>
-              <th className="px-3 py-2 text-right">時価総額</th>
+              {columnMode === 'all' && <th className="px-3 py-2 text-right">時価総額</th>}
             </tr>
           </thead>
           <tbody>
             {rows.map((row) => (
-              <tr key={row.ticker} className="border-b border-[var(--color-border-subtle)]">
-                <td className="sticky left-0 z-[1] bg-white px-3 py-2">
+              <tr key={row.ticker} className={`border-b border-[var(--color-border-subtle)] ${selected.has(row.ticker) ? 'bg-blue-50/60' : ''}`}>
+                <td className="sticky left-0 z-[2] bg-inherit px-2 py-2">
+                  <input
+                    type="checkbox"
+                    checked={selected.has(row.ticker)}
+                    onChange={() => toggleSelected(row.ticker)}
+                    aria-label={`${row.ticker}を比較対象にする`}
+                    className="h-4 w-4 accent-[var(--color-brand-700)]"
+                  />
+                </td>
+                <td className="sticky left-9 z-[1] bg-inherit px-3 py-2">
                   <Link href={`/us/stock/${row.ticker}`} className="font-bold text-[var(--color-brand-900)] hover:text-[var(--color-market-red)]">
                     {row.ticker} {row.name ?? ''}
                   </Link>
                 </td>
-                <td className="px-3 py-2 font-semibold">{row.exchange ?? '-'}</td>
+                {columnMode === 'all' && <td className="px-3 py-2 font-semibold">{row.exchange ?? '-'}</td>}
                 <td className="px-3 py-2 font-semibold">
                   <div>{row.sector ?? '-'}</div>
                   {row.industry && <div className="mt-0.5 text-[10px] text-[var(--color-text-tertiary)]">{row.industry}</div>}
@@ -372,7 +450,7 @@ export function UsScreenerClient() {
                 <td className="px-3 py-2 text-right font-bold">{fmtMoney(row.price)}</td>
                 <td className={`px-3 py-2 text-right font-bold ${(row.change_pct ?? 0) >= 0 ? 'text-red-700' : 'text-blue-700'}`}>{fmtPct(row.change_pct)}</td>
                 <td className="px-3 py-2 text-right font-semibold">{row.volume?.toLocaleString('en-US') ?? '-'}</td>
-                <td className="px-3 py-2 text-right font-semibold">{row.avg_volume_20 == null ? '-' : Math.round(row.avg_volume_20).toLocaleString('en-US')}</td>
+                {columnMode === 'all' && <td className="px-3 py-2 text-right font-semibold">{row.avg_volume_20 == null ? '-' : Math.round(row.avg_volume_20).toLocaleString('en-US')}</td>}
                 <td className="px-3 py-2 text-right font-semibold">
                   <span className="font-bold text-[var(--color-brand-900)]">{fmtScore(row.physical_momentum_score)}</span>
                   <span className="mx-1 text-[var(--color-text-tertiary)]">/</span>
@@ -380,12 +458,12 @@ export function UsScreenerClient() {
                   <span className="mx-1 text-[var(--color-text-tertiary)]">/</span>
                   {fmtScore(row.physical_energy_score)}
                 </td>
-                <td className="px-3 py-2 text-right font-semibold">{fmtCap(row.market_cap)}</td>
+                {columnMode === 'all' && <td className="px-3 py-2 text-right font-semibold">{fmtCap(row.market_cap)}</td>}
               </tr>
             ))}
             {rows.length === 0 && (
               <tr>
-                <td colSpan={11} className="px-3 py-8 text-center text-[12px] font-bold text-[var(--color-text-tertiary)]">
+                <td colSpan={columnMode === 'all' ? 12 : 9} className="px-3 py-8 text-center text-[12px] font-bold text-[var(--color-text-tertiary)]">
                   {loading
                     ? 'USデータを確認しています...'
                     : displayMessage(message)}

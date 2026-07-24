@@ -8,6 +8,7 @@ import {
   normalizeKabutanThemeId,
   type KabutanThemeStock,
 } from '@/lib/queries/kabutan-themes'
+import { acquireExclusiveUpdateLock } from '@/lib/server/update-lock'
 
 const BASE_URL = 'https://kabutan.jp'
 const RANKING_URL = `${BASE_URL}/info/accessranking/3_2`
@@ -330,71 +331,84 @@ async function saveTheme(item: RankingTheme, detail: ThemeDetail): Promise<void>
 }
 
 async function main() {
-  await ensureReady()
-  await ensureKabutanThemeTables()
-  const runId = await insertRun()
-  const limit = envInt('KABUTAN_THEME_LIMIT', 30, 1, 30)
-  const detailLimit = envInt('KABUTAN_THEME_DETAIL_LIMIT', limit, 1, 30)
-  const stockPageLimit = envInt('KABUTAN_THEME_STOCK_PAGES', 8, 1, 8)
-  const delayMs = envInt('KABUTAN_REQUEST_DELAY_MS', 900, 300, 5000)
-  const errors: string[] = []
-  let saved = 0
-  let themes: RankingTheme[] = []
-
+  const lock = await acquireExclusiveUpdateLock(
+    'kabutan_themes',
+    envInt('KABUTAN_THEME_LOCK_SECONDS', 60 * 60, 15 * 60, 2 * 60 * 60),
+  )
+  if (!lock) {
+    console.log('Kabutan themes skipped: another StockBoard writer is active')
+    return
+  }
   try {
-    const rankingHtml = await fetchHtml(RANKING_URL)
-    themes = parseRanking(rankingHtml).slice(0, limit)
-    if (themes.length === 0) errors.push('ranking parser found no theme rows')
+    await ensureReady()
+    await ensureKabutanThemeTables()
+    const runId = await insertRun()
+    const limit = envInt('KABUTAN_THEME_LIMIT', 30, 1, 30)
+    const detailLimit = envInt('KABUTAN_THEME_DETAIL_LIMIT', limit, 1, 30)
+    const stockPageLimit = envInt('KABUTAN_THEME_STOCK_PAGES', 8, 1, 8)
+    const delayMs = envInt('KABUTAN_REQUEST_DELAY_MS', 900, 300, 5000)
+    const errors: string[] = []
+    let saved = 0
+    let themes: RankingTheme[] = []
 
-    for (const [index, item] of themes.entries()) {
-      let detail: ThemeDetail = {
-        description: null,
-        relatedStocks: item.representativeStocks,
-        stockCount: item.representativeStocks.length || null,
-        parseStatus: 'list_only',
-        errorSummary: null,
-      }
-      if (index < detailLimit) {
-        try {
-          await sleep(delayMs)
-          const html = await fetchHtml(kabutanThemeUrl(item.name))
-          detail = parseDetail(html)
-          const pageUrls = themePageUrlsFromDetail(html, stockPageLimit)
-          for (const pageUrl of pageUrls) {
-            try {
-              await sleep(delayMs)
-              const pageHtml = await fetchHtml(pageUrl)
-              const pageDetail = parseDetail(pageHtml)
-              detail = {
-                description: detail.description ?? pageDetail.description,
-                relatedStocks: mergeStocks(detail.relatedStocks, pageDetail.relatedStocks),
-                stockCount: detail.stockCount ?? pageDetail.stockCount,
-                parseStatus: detail.parseStatus === 'ok' || pageDetail.parseStatus === 'ok' ? 'ok' : 'list_only',
-                errorSummary: detail.errorSummary ?? pageDetail.errorSummary,
-              }
-            } catch (error) {
-              const pageError = `detail page failed: ${(error as Error).message}`
-              detail.errorSummary = detail.errorSummary ? `${detail.errorSummary} / ${pageError}` : pageError
-              errors.push(`${item.name}: ${pageError}`)
-            }
-          }
-        } catch (error) {
-          detail.errorSummary = `detail fetch failed: ${(error as Error).message}`
-          errors.push(`${item.name}: ${(error as Error).message}`)
+    try {
+      const rankingHtml = await fetchHtml(RANKING_URL)
+      themes = parseRanking(rankingHtml).slice(0, limit)
+      if (themes.length === 0) errors.push('ranking parser found no theme rows')
+
+      for (const [index, item] of themes.entries()) {
+        let detail: ThemeDetail = {
+          description: null,
+          relatedStocks: item.representativeStocks,
+          stockCount: item.representativeStocks.length || null,
+          parseStatus: 'list_only',
+          errorSummary: null,
         }
+        if (index < detailLimit) {
+          try {
+            await sleep(delayMs)
+            const html = await fetchHtml(kabutanThemeUrl(item.name))
+            detail = parseDetail(html)
+            const pageUrls = themePageUrlsFromDetail(html, stockPageLimit)
+            for (const pageUrl of pageUrls) {
+              try {
+                await sleep(delayMs)
+                const pageHtml = await fetchHtml(pageUrl)
+                const pageDetail = parseDetail(pageHtml)
+                detail = {
+                  description: detail.description ?? pageDetail.description,
+                  relatedStocks: mergeStocks(detail.relatedStocks, pageDetail.relatedStocks),
+                  stockCount: detail.stockCount ?? pageDetail.stockCount,
+                  parseStatus: detail.parseStatus === 'ok' || pageDetail.parseStatus === 'ok' ? 'ok' : 'list_only',
+                  errorSummary: detail.errorSummary ?? pageDetail.errorSummary,
+                }
+              } catch (error) {
+                const pageError = `detail page failed: ${(error as Error).message}`
+                detail.errorSummary = detail.errorSummary ? `${detail.errorSummary} / ${pageError}` : pageError
+                errors.push(`${item.name}: ${pageError}`)
+              }
+            }
+          } catch (error) {
+            detail.errorSummary = `detail fetch failed: ${(error as Error).message}`
+            errors.push(`${item.name}: ${(error as Error).message}`)
+          }
+        }
+        await saveTheme(item, detail)
+        saved += 1
+        await lock.heartbeat()
       }
-      await saveTheme(item, detail)
-      saved += 1
-    }
 
-    const status = errors.length > 0 ? 'partial' : 'success'
-    await finishRun(runId, status, themes.length, saved, errors.length > 0 ? errors.slice(0, 6).join(' / ') : null)
-    console.log(JSON.stringify({ status, fetched: themes.length, saved, errors, rankingUrl: RANKING_URL }, null, 2))
-  } catch (error) {
-    const message = (error as Error).message
-    await finishRun(runId, 'failed', themes.length, saved, message)
-    console.error(JSON.stringify({ status: 'failed', fetched: themes.length, saved, error: message }, null, 2))
-    process.exitCode = 1
+      const status = errors.length > 0 ? 'partial' : 'success'
+      await finishRun(runId, status, themes.length, saved, errors.length > 0 ? errors.slice(0, 6).join(' / ') : null)
+      console.log(JSON.stringify({ status, fetched: themes.length, saved, errors, rankingUrl: RANKING_URL }, null, 2))
+    } catch (error) {
+      const message = (error as Error).message
+      await finishRun(runId, 'failed', themes.length, saved, message)
+      console.error(JSON.stringify({ status: 'failed', fetched: themes.length, saved, error: message }, null, 2))
+      process.exitCode = 1
+    }
+  } finally {
+    await lock.release()
   }
 }
 

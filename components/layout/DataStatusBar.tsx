@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
-import { CheckCircle2, Database, Maximize2, Minimize2, RefreshCw, TriangleAlert } from 'lucide-react'
+import { Activity, CheckCircle2, Database, Maximize2, Minimize2, RefreshCw, TriangleAlert } from 'lucide-react'
 
 type MarketStatus = {
   price: string | null
@@ -17,7 +17,18 @@ type StatusPayload = {
   checkedAt: string
   jp?: MarketStatus
   us?: MarketStatus
+  sources?: Record<'themes' | 'materials' | 'earnings', SourceStatus>
+  runningJobs?: Array<{
+    jobType: string
+    startedAt: string
+  }>
   message?: string
+}
+
+type SourceStatus = {
+  updatedAt: string | null
+  ageHours: number | null
+  fresh: boolean
 }
 
 type Density = 'compact' | 'comfortable'
@@ -25,6 +36,18 @@ type Density = 'compact' | 'comfortable'
 function statusText(status?: MarketStatus) {
   if (!status?.price) return '未取得'
   return status.fresh ? status.price : `${status.price} / ML ${status.candidates ?? '-'}`
+}
+
+function sourceTime(value: string | null) {
+  if (!value) return '未取得'
+  return new Intl.DateTimeFormat('ja-JP', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+    timeZone: 'Asia/Tokyo',
+  }).format(new Date(value))
 }
 
 export function DataStatusBar() {
@@ -68,7 +91,11 @@ export function DataStatusBar() {
   }
 
   const isOk = payload?.status === 'ok'
-  const StatusIcon = isOk ? CheckCircle2 : TriangleAlert
+  const hasSourceAttention = Boolean(
+    payload?.sources && Object.values(payload.sources).some((source) => !source.fresh),
+  )
+  const hasAttention = !isOk || hasSourceAttention
+  const StatusIcon = hasAttention ? TriangleAlert : CheckCircle2
 
   return (
     <div className="border-b border-[var(--color-border-soft)] bg-white">
@@ -85,12 +112,15 @@ export function DataStatusBar() {
           <span className="inline-flex items-center gap-1">
             <StatusIcon
               size={12}
-              className={isOk ? 'text-emerald-700' : 'text-amber-700'}
+              className={hasAttention ? 'text-amber-700' : 'text-emerald-700'}
             />
             JP {statusText(payload?.jp)}
           </span>
           <span className="text-[var(--color-border-strong)]">|</span>
           <span>US {statusText(payload?.us)}</span>
+          {hasSourceAttention && (
+            <span className="hidden text-amber-800 sm:inline">補完データ要確認</span>
+          )}
         </button>
 
         <div className="flex shrink-0 items-center gap-1">
@@ -116,17 +146,51 @@ export function DataStatusBar() {
         </div>
 
         {open && (
-          <div className="absolute left-5 top-[calc(100%+6px)] z-[65] w-[min(520px,calc(100vw-40px))] border border-[var(--color-border-strong)] bg-white p-3 shadow-[0_14px_34px_rgba(16,32,52,0.2)] sm:left-8">
+          <div className="absolute left-5 top-[calc(100%+6px)] z-[65] w-[min(660px,calc(100vw-40px))] border border-[var(--color-border-strong)] bg-white p-3 shadow-[0_14px_34px_rgba(16,32,52,0.2)] sm:left-8">
             <div className="grid gap-3 sm:grid-cols-2">
               <StatusDetail label="日本株" status={payload?.jp} />
               <StatusDetail label="米国株" status={payload?.us} />
             </div>
+            <div className="mt-3 border border-[var(--color-border-soft)] bg-white p-2.5">
+              <div className="mb-2 text-[11px] font-black text-[var(--color-brand-900)]">補完データ</div>
+              <div className="grid gap-1.5 sm:grid-cols-3">
+                <SourceDetail label="テーマ" status={payload?.sources?.themes} />
+                <SourceDetail label="材料" status={payload?.sources?.materials} />
+                <SourceDetail label="決算" status={payload?.sources?.earnings} />
+              </div>
+            </div>
+            {payload?.runningJobs && payload.runningJobs.length > 0 && (
+              <div className="mt-3 border border-blue-200 bg-blue-50 p-2.5">
+                <div className="flex items-center gap-1.5 text-[11px] font-black text-blue-900">
+                  <Activity size={13} />
+                  バックグラウンド更新中
+                </div>
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {payload.runningJobs.map((job) => (
+                    <span key={`${job.jobType}-${job.startedAt}`} className="border border-blue-200 bg-white px-2 py-1 font-mono text-[9px] font-bold text-blue-800">
+                      {job.jobType} / {sourceTime(job.startedAt)}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
             {payload?.message && (
               <div className="mt-2 text-[11px] font-bold text-amber-800">{payload.message}</div>
             )}
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+function SourceDetail({ label, status }: { label: string; status?: SourceStatus }) {
+  return (
+    <div className="flex items-center justify-between gap-2 bg-[var(--color-surface-subtle)] px-2 py-1.5 text-[10px]">
+      <span className="font-black text-[var(--color-text-secondary)]">{label}</span>
+      <span className={`text-right font-mono font-bold ${status?.fresh ? 'text-emerald-700' : 'text-amber-800'}`}>
+        {sourceTime(status?.updatedAt ?? null)}
+      </span>
     </div>
   )
 }

@@ -70,6 +70,7 @@ const NAV_ITEMS = [
       { href: '/sectors', label: '業種分析', description: '17/33業種の強弱', icon: Building2 },
       { href: '/sector-etfs', label: '業界ETF分析', description: 'ETFで業界・テーマを確認', icon: ChartCandlestick },
       { href: '/themes', label: 'テーマ', description: '株探人気テーマと関連銘柄', icon: ListFilter },
+      { href: '/materials', label: '材料', description: '材料ニュースと関連銘柄', icon: ListFilter },
       {
         href: '/ai/ma-lens#historical-pattern-search',
         label: '過去パターン検索',
@@ -273,7 +274,7 @@ type QuickSearchResult = {
   key: string
   ticker: string
   name: string
-  market: 'JP' | 'US' | 'COMMODITY'
+  market: 'JP' | 'US' | 'COMMODITY' | 'COMMAND'
   href: string
   badge: string
   meta?: string | null
@@ -288,6 +289,20 @@ const COMMODITY_SEARCH_RESULTS: QuickSearchResult[] = COMMODITY_INSTRUMENTS.map(
   badge: item.market === 'JP' ? '商品JP' : '商品US',
   meta: `${item.commodity} / ${item.productType}`,
 }))
+
+const COMMAND_SEARCH_RESULTS: QuickSearchResult[] = [
+  { key: 'command:dashboard', ticker: '開く', name: 'ダッシュボード', market: 'COMMAND', href: '/', badge: '機能', meta: '今日の市場判断と売買候補' },
+  { key: 'command:jp-screener', ticker: '探す', name: '日本株スクリーナー', market: 'COMMAND', href: '/screener', badge: '機能', meta: '条件・6ステージ・PMSで抽出' },
+  { key: 'command:us-screener', ticker: '探す', name: 'USスクリーナー', market: 'COMMAND', href: '/us/screener', badge: '機能', meta: '米国株を条件で抽出' },
+  { key: 'command:analogs', ticker: '分析', name: '本質類似局面', market: 'COMMAND', href: '/ai/ma-lens#historical-pattern-search', badge: '機能', meta: 'MA構造が近い過去局面・現在銘柄' },
+  { key: 'command:research', ticker: '相談', name: 'AI銘柄リサーチ', market: 'COMMAND', href: '/ai/research', badge: '機能', meta: '自然言語をDB条件へ変換' },
+  { key: 'command:watchlist', ticker: '監視', name: 'ウォッチリスト', market: 'COMMAND', href: '/watchlist', badge: '機能', meta: '保存した監視銘柄' },
+  { key: 'command:custom-chart', ticker: '作成', name: '合成チャート', market: 'COMMAND', href: '/custom-charts', badge: '機能', meta: '複数銘柄を数式で合成' },
+  { key: 'command:earnings', ticker: '確認', name: '決算カレンダー', market: 'COMMAND', href: '/earnings', badge: '機能', meta: '決算予定と発表後の値動き' },
+  { key: 'command:materials', ticker: '確認', name: '材料ニュース', market: 'COMMAND', href: '/materials', badge: '機能', meta: '材料と関連銘柄を6ステージで確認' },
+  { key: 'command:themes', ticker: '探す', name: 'テーマ', market: 'COMMAND', href: '/themes', badge: '機能', meta: '人気テーマと関連銘柄' },
+  { key: 'command:backtest', ticker: '検証', name: '過去検証', market: 'COMMAND', href: '/backtest', badge: '機能', meta: 'シグナルと期待値を検証' },
+]
 
 function normalizeTickerQuery(value: string): string {
   return value.trim().replace(/\.T$/i, '').toUpperCase()
@@ -310,9 +325,18 @@ function searchResultMeta(result: SearchApiResult): string | null {
 }
 
 function areaPriority(area: HeaderArea, result: QuickSearchResult): number {
+  if (result.market === 'COMMAND') return 0
   if (area === 'commodities') return result.market === 'COMMODITY' ? 0 : result.market === 'JP' ? 1 : 2
   if (area === 'us') return result.market === 'US' ? 0 : result.market === 'COMMODITY' ? 1 : 2
   return result.market === 'JP' ? 0 : result.market === 'COMMODITY' ? 1 : 2
+}
+
+function commandMatches(query: string): QuickSearchResult[] {
+  const normalized = query.trim().toLowerCase()
+  if (!normalized) return []
+  return COMMAND_SEARCH_RESULTS.filter((result) => (
+    `${result.name} ${result.meta ?? ''} ${result.ticker}`.toLowerCase().includes(normalized)
+  ))
 }
 
 function sortQuickSearchResults(area: HeaderArea, query: string, results: QuickSearchResult[]): QuickSearchResult[] {
@@ -430,7 +454,11 @@ function TickerQuickSearch({ area }: { area: HeaderArea }) {
         }))
 
         if (requestIdRef.current !== currentRequestId) return
-        setResults(sortQuickSearchResults(area, normalized, [...commodityRows, ...mappedRows]))
+        setResults(sortQuickSearchResults(area, normalized, [
+          ...commandMatches(normalized),
+          ...commodityRows,
+          ...mappedRows,
+        ]))
         setActiveIndex(0)
       } catch (fetchError) {
         if ((fetchError as Error).name === 'AbortError') return
@@ -464,7 +492,12 @@ function TickerQuickSearch({ area }: { area: HeaderArea }) {
     badge: symbol.market,
     meta: '最近見た銘柄',
   }))
-  const visibleResults = query.trim() ? results : recentResults
+  const quickCommands = COMMAND_SEARCH_RESULTS.filter((result) => {
+    if (area === 'us') return ['/us/screener', '/ai/research', '/custom-charts', '/watchlist'].includes(result.href)
+    if (area === 'commodities') return ['/custom-charts', '/watchlist'].includes(result.href)
+    return ['/', '/screener', '/ai/ma-lens#historical-pattern-search', '/watchlist'].includes(result.href)
+  })
+  const visibleResults = query.trim() ? results : [...recentResults, ...quickCommands].slice(0, 8)
 
   const submitCurrent = () => {
     const target = visibleResults[activeIndex] ?? visibleResults[0]
@@ -514,17 +547,17 @@ function TickerQuickSearch({ area }: { area: HeaderArea }) {
               submitCurrent()
             }
           }}
-          placeholder="コード/銘柄名で検索 ⌘K"
-          aria-label="銘柄コード検索"
+          placeholder="銘柄・機能を検索 ⌘K"
+          aria-label="銘柄・機能検索"
           aria-expanded={open && visibleResults.length > 0}
           className="h-8 w-full rounded-[4px] border border-[var(--color-border-default)] bg-white py-1 pl-8 pr-3 text-[12px] font-semibold text-[var(--color-text-primary)] outline-none transition-colors placeholder:text-[var(--color-text-tertiary)] focus:border-[var(--color-brand-700)] focus:ring-2 focus:ring-[rgba(37,99,235,0.16)]"
         />
       </form>
 
-      {open && (query.trim() || recentResults.length > 0) && (
+      {open && (query.trim() || visibleResults.length > 0) && (
         <div className="absolute left-0 right-0 top-[calc(100%+6px)] z-[70] overflow-hidden rounded-[5px] border border-[var(--color-border-strong)] bg-white shadow-[0_18px_42px_rgba(16,32,52,0.22)]">
           <div className="border-b border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-3 py-2 text-[10px] font-bold text-[var(--color-text-tertiary)]">
-            {query.trim() ? 'Enterで候補へ移動' : '最近見た銘柄'}
+            {query.trim() ? '銘柄・機能を検索 / Enterで移動' : '最近見た銘柄・よく使う機能'}
           </div>
           {loading && (
             <div className="px-3 py-3 text-[12px] font-semibold text-[var(--color-text-secondary)]">検索中...</div>

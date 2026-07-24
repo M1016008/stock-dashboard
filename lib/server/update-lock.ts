@@ -10,6 +10,7 @@ export const EXCLUSIVE_UPDATE_JOB_TYPES = [
   'us_update_latest',
   'earnings_refresh',
   'kabutan_material_news',
+  'kabutan_themes',
   'db_maintenance',
 ] as const
 
@@ -55,7 +56,7 @@ const SQLITE_WRITER_PROCESS_PATTERNS = [
   /scripts\/(?:update-latest|refresh-after-ohlcv|batch-ohlcv|batch-snapshots|batch-physical-momentum|build-dashboard-cache)\.(?:ts|js)\b/,
   /scripts\/(?:update-us-latest|batch-us-|run-us-ml-job)\S*\.(?:ts|js)\b/,
   /scripts\/(?:run-ml-learning|guard-ml-freshness|batch-ml-|build-serving-ml-)\S*\.(?:ts|js)\b/,
-  /scripts\/(?:batch-forward-extrema|build-serving-|refresh-earnings|batch-kabutan-material-news|maintenance-db)\S*\.(?:ts|js)\b/,
+  /scripts\/(?:batch-forward-extrema|build-serving-|refresh-earnings|batch-kabutan-(?:material-news|themes)|maintenance-db)\S*\.(?:ts|js)\b/,
 ] as const
 
 function hasActiveSqliteWriterProcess(): boolean {

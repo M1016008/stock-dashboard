@@ -15,6 +15,7 @@ import {
 import { CandlestickChart } from '@/components/charts/CandlestickChart'
 import { Card, CardHeader } from '@/components/ui/Card'
 import { PriceDisplay } from '@/components/ui/PriceDisplay'
+import { WatchlistButton } from '@/components/ui/WatchlistButton'
 import { StageTimeline } from '@/components/stock/StageTimeline'
 import { ScenarioProjectionChart } from '@/components/stock/ScenarioProjectionChart'
 import { StockScenarioAiPanel } from '@/components/stock/StockScenarioAiPanel'
@@ -441,6 +442,7 @@ export function UsStockDetailClient({
             <div className="mt-1.5 truncate text-[13px] font-semibold text-[var(--color-text-secondary)]">{quote.name}</div>
           </div>
           <div className="ml-auto flex items-center gap-2 text-right">
+            <WatchlistButton ticker={quote.ticker} market="US" size="md" />
             <button
               type="button"
               onClick={() => setCompared(toggleComparedSymbol({ market: 'US', ticker: quote.ticker, name: quote.name }))}
@@ -584,7 +586,7 @@ function UsStockDetailTabs({
     { id: 'overview' as const, label: '概要', icon: LayoutDashboard },
     { id: 'chart' as const, label: 'チャート・6ステージ', icon: ChartCandlestick },
     { id: 'scenario' as const, label: 'シナリオ', icon: NotebookPen },
-    { id: 'ml' as const, label: 'ML・類似局面', icon: BrainCircuit },
+    { id: 'ml' as const, label: '本質類似・ML', icon: BrainCircuit },
   ]
   return (
     <nav className="flex overflow-x-auto border-t border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-2" aria-label="US個別銘柄分析">

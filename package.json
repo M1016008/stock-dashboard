@@ -81,6 +81,7 @@
     "batch:sector-etf-holdings": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/batch-sector-etf-holdings.ts",
     "batch:kabutan-material-news": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/batch-kabutan-material-news.ts",
     "batch:kabutan-themes": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/batch-kabutan-themes.ts",
+    "auto-kabutan-themes:install": "tsx --env-file=.env.local scripts/install-local-kabutan-themes.ts",
     "auto-kabutan-material-news:install": "tsx --env-file=.env.local scripts/install-local-kabutan-material-news.ts",
     "sector-etf-holdings:health": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/check-sector-etf-holdings-health.ts",
     "batch:indices": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/batch-indices.ts",

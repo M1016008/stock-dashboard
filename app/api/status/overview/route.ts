@@ -1,11 +1,16 @@
 import { NextResponse } from 'next/server'
-import { execGet } from '@/lib/db/client'
+import { execAll, execGet } from '@/lib/db/client'
 import { execUsAnalyticsGet, hasUsAnalyticsDb } from '@/lib/db/us-analytics'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
 
 type DateRow = { date: string | null }
+type EpochRow = { value: number | null }
+type RunningJobRow = {
+  jobType: string
+  startedAt: number
+}
 
 async function latestDate(
   query: (sql: string, args?: readonly (string | number | null)[]) => Promise<DateRow | undefined>,
@@ -19,6 +24,15 @@ async function latestDate(
   return row?.date ?? null
 }
 
+function sourceState(value: number | null, maxAgeHours: number) {
+  const ageHours = value ? Math.max(0, (Date.now() / 1000 - value) / 3600) : null
+  return {
+    updatedAt: value ? new Date(value * 1000).toISOString() : null,
+    ageHours: ageHours == null ? null : Math.round(ageHours * 10) / 10,
+    fresh: ageHours != null && ageHours <= maxAgeHours,
+  }
+}
+
 export async function GET() {
   try {
     const jpQuery = (sql: string, args: readonly (string | number | null)[] = []) => execGet<DateRow>(sql, args)
@@ -30,6 +44,10 @@ export async function GET() {
       jpCandidates,
       jpPhysicsCandidates,
       usDates,
+      themeEpoch,
+      materialEpoch,
+      earningsEpoch,
+      runningJobs,
     ] = await Promise.all([
       latestDate(jpQuery, 'ohlcv_daily', 'date'),
       latestDate(jpQuery, 'physical_momentum_metrics', 'date', "WHERE market = 'JP'"),
@@ -45,6 +63,19 @@ export async function GET() {
             latestDate(usQuery, 'serving_ml_physics_candidates', 'as_of_date'),
           ])
         : Promise.resolve([null, null, null, null, null]),
+      execGet<EpochRow>('SELECT MAX(fetched_at) AS value FROM kabutan_themes'),
+      execGet<EpochRow>('SELECT MAX(fetched_at) AS value FROM kabutan_material_news'),
+      execGet<EpochRow>('SELECT MAX(imported_at) AS value FROM earnings_calendar'),
+      execAll<RunningJobRow>(
+        `
+          SELECT job_type AS jobType, started_at AS startedAt
+          FROM batch_runs
+          WHERE status = 'running'
+            AND started_at >= unixepoch('now', '-24 hours')
+          ORDER BY started_at DESC
+          LIMIT 6
+        `,
+      ),
     ])
 
     const [usPrice, usPms, usFeatures, usCandidates, usPhysicsCandidates] = usDates
@@ -82,6 +113,15 @@ export async function GET() {
         physicsCandidates: usPhysicsCandidates,
         fresh: usFresh,
       },
+      sources: {
+        themes: sourceState(themeEpoch?.value ?? null, 72),
+        materials: sourceState(materialEpoch?.value ?? null, 48),
+        earnings: sourceState(earningsEpoch?.value ?? null, 72),
+      },
+      runningJobs: runningJobs.map((job) => ({
+        jobType: job.jobType,
+        startedAt: new Date(job.startedAt * 1000).toISOString(),
+      })),
     })
   } catch (error) {
     console.error('status overview failed:', error)

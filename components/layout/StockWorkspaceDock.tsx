@@ -37,7 +37,10 @@ export function StockWorkspaceDock() {
   if (symbols.length === 0) return null
 
   return (
-    <aside className="fixed bottom-4 left-1/2 z-40 w-[min(720px,calc(100vw-24px))] -translate-x-1/2 border border-[var(--color-border-strong)] bg-white shadow-[0_16px_36px_rgba(16,32,52,0.24)]">
+    <aside
+      className="fixed left-1/2 z-40 w-[min(720px,calc(100vw-80px))] -translate-x-1/2 border border-[var(--color-border-strong)] bg-white shadow-[0_16px_36px_rgba(16,32,52,0.24)]"
+      style={{ bottom: 'max(12px, env(safe-area-inset-bottom))' }}
+    >
       <div className="flex min-h-10 items-center gap-2 px-3">
         <GitCompareArrows size={15} className="shrink-0 text-[var(--color-brand-700)]" />
         <strong className="shrink-0 text-[11px] text-[var(--color-brand-900)]">
