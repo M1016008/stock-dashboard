@@ -56,6 +56,10 @@ const MAX_OUTCOME_HORIZON = 200
 const CACHE_MAX_ENTRIES = 100
 const CORE_CACHE_MAX_ENTRIES = 20
 const responseCache = new Map<string, { generatedAt: number; payload: Record<string, unknown> }>()
+const globalForHistoricalAnalogs = global as unknown as {
+  historicalAnalogSearchTail?: Promise<void>
+  historicalAnalogSearchDepth?: number
+}
 
 type Market = AnalogSequenceMarket
 type DbArgs = readonly (string | number | null)[]
@@ -195,6 +199,44 @@ function subtractCalendarDays(date: string, days: number): string {
   return value.toISOString().slice(0, 10)
 }
 
+function logSearchPhase(
+  market: Market,
+  ticker: string,
+  phase: string,
+  startedAt: number,
+): number {
+  const completedAt = Date.now()
+  const elapsedMs = completedAt - startedAt
+  if (elapsedMs >= 2_000 || process.env.ANALOG_SEARCH_PHASE_LOGS === '1') {
+    console.info(`[historical-analogs] ${market}:${ticker} ${phase} ${elapsedMs}ms`)
+  }
+  return completedAt
+}
+
+async function acquireSearchSlot(): Promise<() => void> {
+  const prior = globalForHistoricalAnalogs.historicalAnalogSearchTail ?? Promise.resolve()
+  let releaseCurrent!: () => void
+  const current = new Promise<void>((resolve) => {
+    releaseCurrent = resolve
+  })
+  globalForHistoricalAnalogs.historicalAnalogSearchTail = prior
+    .catch(() => undefined)
+    .then(() => current)
+  globalForHistoricalAnalogs.historicalAnalogSearchDepth =
+    (globalForHistoricalAnalogs.historicalAnalogSearchDepth ?? 0) + 1
+  await prior.catch(() => undefined)
+  let released = false
+  return () => {
+    if (released) return
+    released = true
+    globalForHistoricalAnalogs.historicalAnalogSearchDepth = Math.max(
+      0,
+      (globalForHistoricalAnalogs.historicalAnalogSearchDepth ?? 1) - 1,
+    )
+    releaseCurrent()
+  }
+}
+
 function createDbAdapter(market: Market) {
   return market === 'US'
     ? {
@@ -210,14 +252,12 @@ function createDbAdapter(market: Market) {
 function normalizePriceRows(rows: PriceRow[]): PriceRow[] {
   const normalized: PriceRow[] = []
   for (const row of rows) {
-    row.ticker = String(row.ticker)
-    row.date = String(row.date)
-    row.close = Number(row.close)
-    row.open = row.open == null ? null : Number(row.open)
-    row.high = row.high == null ? null : Number(row.high)
-    row.low = row.low == null ? null : Number(row.low)
-    row.volume = row.volume == null ? null : Number(row.volume)
-    if (row.date && finite(row.close) && row.close > 0) normalized.push(row)
+    const ticker = String(row.ticker)
+    const date = String(row.date)
+    const close = Number(row.close)
+    if (date && finite(close) && close > 0) {
+      normalized.push({ ticker, date, close })
+    }
   }
   return normalized
 }
@@ -571,7 +611,7 @@ export async function GET(request: NextRequest) {
     const indexMeta = await assertAnalogSequenceIndexReady(market)
     const baseRows = normalizePriceRows(await db.all<PriceRow>(
       `
-      SELECT ticker, date, open, high, low, close, volume
+      SELECT ticker, date, close
       FROM ohlcv_daily
       WHERE ticker = ?
         ${requestedDate ? 'AND date <= ?' : ''}
@@ -661,6 +701,8 @@ export async function GET(request: NextRequest) {
       maxOutcomeHorizon: MAX_OUTCOME_HORIZON,
       mlRerankWeight: ML_RERANK_WEIGHT,
     })
+    const releaseSearchSlot = await acquireSearchSlot()
+    try {
     const cachedCore = coreSearchCache.get(coreCacheKey)
     const freshCore = cachedCore && Date.now() - cachedCore.generatedAt < CACHE_TTL_MS
       ? cachedCore
@@ -670,6 +712,7 @@ export async function GET(request: NextRequest) {
     let searchDiagnostics = freshCore?.search ?? null
 
     if (!exactCore || !searchDiagnostics) {
+    let phaseStartedAt = Date.now()
     const excludeAfterDate = subtractCalendarDays(baseDate, 90)
     const initialIndexedCandidates = await searchAnalogSequenceIndex({
       market,
@@ -679,6 +722,7 @@ export async function GET(request: NextRequest) {
       excludeAfterDate,
       maxBitDistance: 0,
     })
+    phaseStartedAt = logSearchPhase(market, ticker, 'exact-band-index', phaseStartedAt)
     let coverageRejectedCount = initialIndexedCandidates.filter((row) =>
       (row.coverageMask & requiredCoverageMask) !== requiredCoverageMask,
     ).length
@@ -695,6 +739,7 @@ export async function GET(request: NextRequest) {
         maxBitDistance: 1,
         perBandLimit: 8_000,
       })
+      phaseStartedAt = logSearchPhase(market, ticker, 'neighbor-band-index', phaseStartedAt)
       coverageRejectedCount += expanded.filter((row) =>
         (row.coverageMask & requiredCoverageMask) !== requiredCoverageMask,
       ).length
@@ -718,6 +763,7 @@ export async function GET(request: NextRequest) {
           (row.coverageMask & requiredCoverageMask) === requiredCoverageMask,
         )
       : []
+    phaseStartedAt = logSearchPhase(market, ticker, 'stage-index', phaseStartedAt)
     const approximate = indexedCandidates
       .map((row) => ({
         ...row,
@@ -781,7 +827,7 @@ export async function GET(request: NextRequest) {
     for (const range of candidateRanges) {
       const candidateRows = normalizePriceRows(await db.all<PriceRow>(
         `
-        SELECT ticker, date, open, high, low, close, volume
+        SELECT ticker, date, close
         FROM ohlcv_daily
         WHERE ticker = ?
           AND date >= ?
@@ -858,10 +904,12 @@ export async function GET(request: NextRequest) {
         }
       }
     }
+    phaseStartedAt = logSearchPhase(market, ticker, 'exact-price-rerank', phaseStartedAt)
     const maRanked = [...exactByKey.values()]
       .sort((a, b) => b.score - a.score)
       .slice(0, Math.min(500, Math.max(EXACT_POOL_LIMIT, 320)))
     const vectorScores = await loadVectorScores(db, ticker, baseDate, maRanked)
+    logSearchPhase(market, ticker, 'feature-vector-rerank', phaseStartedAt)
     exactCore = maRanked
       .map((row) => {
         const vectorScore = vectorScores.get(`${row.ticker}\u0000${row.date}`)
@@ -998,6 +1046,9 @@ export async function GET(request: NextRequest) {
       console.warn('historical analog sequence cache write failed:', error)
     })
     return NextResponse.json(payload)
+    } finally {
+      releaseSearchSlot()
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     console.error('historical analog sequence search failed:', error)

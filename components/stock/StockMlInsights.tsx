@@ -495,7 +495,13 @@ function PhysicsAnalysisPanel({ analysis }: { analysis: PhysicsAnalysis }) {
   )
 }
 
-export function StockMlInsights({ ticker }: { ticker: string }) {
+export function StockMlInsights({
+  ticker,
+  analysisDate = null,
+}: {
+  ticker: string
+  analysisDate?: string | null
+}) {
   const [data, setData] = useState<ApiResponse | null>(null)
   const [caseStudies, setCaseStudies] = useState<CaseStudy[]>([])
   const [casesLoading, setCasesLoading] = useState(false)
@@ -503,13 +509,20 @@ export function StockMlInsights({ ticker }: { ticker: string }) {
 
   useEffect(() => {
     let cancelled = false
-    const code = encodeURIComponent(ticker.replace(/\.T$/i, ''))
+    const code = ticker.replace(/\.T$/i, '')
     setCaseStudies([])
     setCasesLoaded(false)
     setCasesLoading(false)
+    const similarParams = new URLSearchParams({ ticker: code, limit: '6' })
+    const historyParams = new URLSearchParams({ ticker: code, limit: '8' })
+    if (analysisDate) {
+      similarParams.set('date', analysisDate)
+      similarParams.set('fallback', '1')
+      historyParams.set('date', analysisDate)
+    }
     Promise.all([
-      fetch(`/api/ml/current-similars?ticker=${code}&limit=6`, { cache: 'no-store' }).then((res) => res.json()),
-      fetch(`/api/ml/prediction-history?ticker=${code}&limit=8`, { cache: 'no-store' }).then((res) => res.json()),
+      fetch(`/api/ml/current-similars?${similarParams.toString()}`, { cache: 'no-store' }).then((res) => res.json()),
+      fetch(`/api/ml/prediction-history?${historyParams.toString()}`, { cache: 'no-store' }).then((res) => res.json()),
     ])
       .then(([similarJson, historyJson]) => {
         if (!cancelled) {
@@ -528,7 +541,7 @@ export function StockMlInsights({ ticker }: { ticker: string }) {
         if (!cancelled) setData({ asOfDate: null, featureAsOfDate: null, source: null, physicsAnalysis: null, similars: [], caseStudies: [], predictions: [] })
       })
     return () => { cancelled = true }
-  }, [ticker])
+  }, [analysisDate, ticker])
 
   const rows = data?.similars ?? []
   const predictions = data?.predictions ?? []
@@ -536,8 +549,10 @@ export function StockMlInsights({ ticker }: { ticker: string }) {
   const loadCaseStudies = () => {
     if (casesLoading || casesLoaded) return
     setCasesLoading(true)
-    const code = encodeURIComponent(ticker.replace(/\.T$/i, ''))
-    fetch(`/api/ml/current-similars?ticker=${code}&limit=6&includeCases=1`, { cache: 'no-store' })
+    const code = ticker.replace(/\.T$/i, '')
+    const params = new URLSearchParams({ ticker: code, limit: '6', includeCases: '1' })
+    if (analysisDate) params.set('date', analysisDate)
+    fetch(`/api/ml/current-similars?${params.toString()}`, { cache: 'no-store' })
       .then((res) => res.json())
       .then((json) => {
         setCaseStudies(Array.isArray(json.caseStudies) ? json.caseStudies : [])
@@ -556,7 +571,7 @@ export function StockMlInsights({ ticker }: { ticker: string }) {
         ML類似候補
       </div>
       <p style={{ margin: '0 0 10px', fontSize: 12, fontWeight: 600, color: 'var(--text-muted)', lineHeight: 1.6 }}>
-        最新データ上で、6桁ステージと5/25/75/200日MAの角度・距離感が近い銘柄です。
+        {analysisDate ? `${analysisDate}以前のデータ上で` : '最新データ上で'}、6桁ステージと5/25/75/200日MAの角度・距離感が近い銘柄です。
         90%以上は強い類似、80〜90%は参考類似、80%未満は「低確信の近似」として慎重に表示します。
         {data?.featureAsOfDate ? ` ML特徴量基準日: ${data.featureAsOfDate}` : data?.asOfDate ? ` 基準日: ${data.asOfDate}` : ''}
       </p>

@@ -80,6 +80,16 @@ export interface ProjectionResponse {
     candles: OHLCV[]
     ma: Record<string, ProjectionPoint[]>
   }
+  realized?: {
+    complete: boolean
+    observedDays: number
+    latestDate: string | null
+    latestPrice: number | null
+    returnPct: number | null
+    maxReturnPct: number | null
+    minReturnPct: number | null
+    points: ProjectionPoint[]
+  }
   stats: {
     recentHigh: number | null
     recentLow: number | null
@@ -963,6 +973,52 @@ async function loadOhlcv(ticker: string, market: MarketCode, asOfDate?: string |
   return loadManualOhlcvRows(ticker, { asOfDate })
 }
 
+async function loadRealizedOutcome(
+  ticker: string,
+  market: MarketCode,
+  baseDate: string,
+  basePrice: number,
+  horizonDays: number,
+): Promise<ProjectionResponse['realized']> {
+  const fullHistory = await loadOhlcv(ticker, market)
+  const future = fullHistory
+    .filter((row) => row.date > baseDate)
+    .slice(0, horizonDays)
+  if (future.length === 0) {
+    return {
+      complete: false,
+      observedDays: 0,
+      latestDate: null,
+      latestPrice: null,
+      returnPct: null,
+      maxReturnPct: null,
+      minReturnPct: null,
+      points: [],
+    }
+  }
+
+  const latest = future[future.length - 1]
+  const highest = future.reduce<number | null>((value, row) => (
+    finite(row.high) ? Math.max(value ?? row.high, row.high) : value
+  ), null)
+  const lowest = future.reduce<number | null>((value, row) => (
+    finite(row.low) ? Math.min(value ?? row.low, row.low) : value
+  ), null)
+  return {
+    complete: future.length >= horizonDays,
+    observedDays: future.length,
+    latestDate: latest.date,
+    latestPrice: round(latest.close, 2),
+    returnPct: round(priceToPct(latest.close, basePrice), 2),
+    maxReturnPct: round(priceToPct(highest, basePrice), 2),
+    minReturnPct: round(priceToPct(lowest, basePrice), 2),
+    points: [
+      { date: baseDate, value: basePrice },
+      ...future.map((row) => ({ date: row.date, value: row.close })),
+    ],
+  }
+}
+
 async function loadFeature(ticker: string, market: MarketCode, asOfDate?: string | null): Promise<FeatureRow | null> {
   const dateFilter = asOfDate ? 'AND date <= ?' : ''
   const get = market === 'US' && hasUsAnalyticsDb() ? execUsAnalyticsGet : execGet
@@ -1105,6 +1161,7 @@ export async function buildStockScenarioProjection(params: {
   horizonDays?: number | null
   limit?: number | null
   asOfDate?: string | null
+  includeRealized?: boolean
 }): Promise<ProjectionResponse | null> {
   const market = normalizeMarket(params.market)
   const ticker = normalizeTicker(params.ticker, market)
@@ -1161,6 +1218,9 @@ export async function buildStockScenarioProjection(params: {
     momentum,
     stats,
   }).slice(0, limit)
+  const realized = asOfDate && params.includeRealized
+    ? await loadRealizedOutcome(ticker, market, latest.date, latest.close, horizonDays)
+    : undefined
 
   return {
     ok: true,
@@ -1183,6 +1243,7 @@ export async function buildStockScenarioProjection(params: {
       candles: chartCandles,
       ma,
     },
+    realized,
     stats: {
       recentHigh: round(stats.recentHigh, 1),
       recentLow: round(stats.recentLow, 1),

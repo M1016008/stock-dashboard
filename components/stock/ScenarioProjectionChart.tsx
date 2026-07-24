@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
 import {
   createChart,
+  createSeriesMarkers,
   CandlestickSeries,
   LineSeries,
   LineStyle,
@@ -76,6 +77,16 @@ interface ProjectionResponse {
     candles: OHLCV[]
     ma: Record<string, ProjectionPoint[]>
   }
+  realized?: {
+    complete: boolean
+    observedDays: number
+    latestDate: string | null
+    latestPrice: number | null
+    returnPct: number | null
+    maxReturnPct: number | null
+    minReturnPct: number | null
+    points: ProjectionPoint[]
+  }
   stats: {
     recentHigh: number | null
     recentLow: number | null
@@ -107,6 +118,7 @@ interface ScenarioProjectionChartProps {
   ticker: string
   name: string
   analysisDate?: string | null
+  showActual?: boolean
   market?: MarketCode
   onUseLatest?: () => void
 }
@@ -141,6 +153,11 @@ function fmtPrice(value: number | null | undefined, market: MarketCode = 'JP'): 
     return `$${value.toLocaleString('en-US', { maximumFractionDigits: 2 })}`
   }
   return `${value.toLocaleString('ja-JP', { maximumFractionDigits: 1 })}円`
+}
+
+function fmtPercent(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return '-'
+  return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`
 }
 
 function fmtScore(value: number | null | undefined): string {
@@ -283,6 +300,15 @@ function ScenarioCanvas({ data, market }: { data: ProjectionResponse; market: Ma
       low: row.low,
       close: row.close,
     })))
+    if (data.realized?.points.length) {
+      createSeriesMarkers(candleSeries, [{
+        time: dateToTime(data.baseDate),
+        position: 'aboveBar',
+        color: '#047857',
+        shape: 'square',
+        text: '分析基準',
+      }])
+    }
 
     for (const [period, points] of Object.entries(data.chart.ma)) {
       const series = chart.addSeries(LineSeries, {
@@ -306,6 +332,21 @@ function ScenarioCanvas({ data, market }: { data: ProjectionResponse; market: Ma
       })
       series.setData(scenario.points.map((point) => ({ time: dateToTime(point.date), value: point.value })))
       scenarioSeries.push({ scenario, series })
+    }
+
+    if (data.realized?.points.length) {
+      const realizedSeries = chart.addSeries(LineSeries, {
+        color: '#047857',
+        lineWidth: 3,
+        lineStyle: LineStyle.Solid,
+        priceLineVisible: false,
+        lastValueVisible: true,
+        title: '事後実績',
+      })
+      realizedSeries.setData(data.realized.points.map((point) => ({
+        time: dateToTime(point.date),
+        value: point.value,
+      })))
     }
 
     chart.timeScale().fitContent()
@@ -386,7 +427,9 @@ function ScenarioCanvas({ data, market }: { data: ProjectionResponse; market: Ma
         </div>
       ))}
       <div style={chartOverlayBadgeStyle}>
-        点線は将来シナリオ / 基準 {data.baseDate} {fmtPrice(data.basePrice, market)}
+        点線は将来シナリオ
+        {data.realized?.points.length ? ' / 緑実線は事後実績' : ''}
+        {' / '}基準 {data.baseDate} {fmtPrice(data.basePrice, market)}
       </div>
     </div>
   )
@@ -394,7 +437,14 @@ function ScenarioCanvas({ data, market }: { data: ProjectionResponse; market: Ma
 
 type RefreshSource = 'initial' | 'auto' | 'manual'
 
-export function ScenarioProjectionChart({ ticker, name, analysisDate, market = 'JP', onUseLatest }: ScenarioProjectionChartProps) {
+export function ScenarioProjectionChart({
+  ticker,
+  name,
+  analysisDate,
+  showActual = false,
+  market = 'JP',
+  onUseLatest,
+}: ScenarioProjectionChartProps) {
   const [activeTab, setActiveTab] = useState(TABS[0])
   const [data, setData] = useState<ProjectionResponse | null>(null)
   const [loading, setLoading] = useState(true)
@@ -445,6 +495,7 @@ export function ScenarioProjectionChart({ ticker, name, analysisDate, market = '
       limit: '8',
     })
     if (requestDate) params.set('date', requestDate)
+    if (requestDate && showActual) params.set('actual', '1')
     if (!requestDate || isManualRefresh) params.set('_ts', String(Date.now()))
     fetch(`/api/stock-scenario-projections/${encodeURIComponent(ticker)}?${params.toString()}`, { cache: 'no-store' })
       .then((res) => res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`)))
@@ -466,7 +517,7 @@ export function ScenarioProjectionChart({ ticker, name, analysisDate, market = '
         if (!cancelled) setLoading(false)
       })
     return () => { cancelled = true }
-  }, [ticker, activeTab, analysisDate, market, refreshNonce])
+  }, [ticker, activeTab, analysisDate, showActual, market, refreshNonce])
 
   function regenerateLatest() {
     refreshSourceRef.current = 'manual'
@@ -478,6 +529,13 @@ export function ScenarioProjectionChart({ ticker, name, analysisDate, market = '
 
   const scenarios = Array.isArray(data?.scenarios) ? data.scenarios : []
   const topScenario = scenarios[0] ?? null
+  const realizedDirection: ProjectionDirection | null = data?.realized?.returnPct == null
+    ? null
+    : data.realized.returnPct > 1
+      ? 'up'
+      : data.realized.returnPct < -1
+        ? 'down'
+        : 'range'
   const sourceText = useMemo(() => {
     if (!data) return ''
     const sourceDates = data.sourceDates
@@ -608,15 +666,33 @@ export function ScenarioProjectionChart({ ticker, name, analysisDate, market = '
                   ? `保存済み物理特徴量が最新価格日と異なるため、${data.sourceDates.price} の足から物理状態を再計算して表示しています。`
                   : `保存済み物理特徴量と価格データを使って ${data.sourceDates.price} 基準で表示しています。`}
                 <button type="button" onClick={regenerateLatest} style={refreshButtonStyle}>
-                  最新で再生成
+                  {analysisDate ? '最新モードへ' : '最新で再生成'}
                 </button>
               </div>
               {refreshNotice && <div style={refreshNoticeStyle}>{refreshNotice}</div>}
+              {data.realized && (
+                <div className="grid gap-2 border border-emerald-200 bg-emerald-50 p-2.5 sm:grid-cols-[minmax(0,1fr)_repeat(3,minmax(84px,auto))]">
+                  <div>
+                    <div className="text-[11px] font-black text-emerald-900">事後実績との照合</div>
+                    <div className="mt-1 text-[10px] font-bold leading-5 text-emerald-800">
+                      {data.realized.observedDays === 0
+                        ? '基準日後の価格はまだありません。'
+                        : `${data.realized.observedDays}営業日を観測。最上位シナリオ「${topScenario?.label ?? '-'}」との方向${
+                          realizedDirection && topScenario?.direction === realizedDirection ? 'は一致' : 'は不一致または中立'
+                        }です。`}
+                    </div>
+                  </div>
+                  <Metric label="実績騰落率" value={fmtPercent(data.realized.returnPct)} />
+                  <Metric label="期間内上値" value={fmtPercent(data.realized.maxReturnPct)} />
+                  <Metric label="期間内下値" value={fmtPercent(data.realized.minReturnPct)} />
+                </div>
+              )}
               <ScenarioCanvas data={data} market={market} />
               <div style={legendStyle}>
                 <span><i style={{ background: '#dc2626' }} />上昇</span>
                 <span><i style={{ background: '#f59e0b' }} />横ばい</span>
                 <span><i style={{ background: '#2563eb' }} />下落</span>
+                {data.realized?.points.length ? <span><i style={{ background: '#047857' }} />事後実績</span> : null}
                 <span>点線の終点 #n が右側カードの #n と対応</span>
               </div>
               <p style={noteStyle}>{data.note}</p>

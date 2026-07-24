@@ -478,11 +478,12 @@ export function HistoricalAnalogExplorer({
                 role="tab"
                 aria-selected={horizon === item.days}
                 onClick={() => setHorizon(item.days)}
+                disabled={loading}
                 className={`h-8 shrink-0 rounded-[3px] border px-2.5 text-[11px] font-black ${
                   horizon === item.days
                     ? 'border-teal-700 bg-teal-700 text-white'
                     : 'border-[var(--color-border-default)] bg-white text-[var(--color-text-secondary)] hover:border-teal-400'
-                }`}
+                } disabled:cursor-not-allowed disabled:opacity-50`}
               >
                 {item.label}
               </button>
@@ -494,7 +495,8 @@ export function HistoricalAnalogExplorer({
           <select
             value={sort}
             onChange={(event) => setSort(event.target.value as HistoricalAnalogSort)}
-            className="h-8 min-w-0 rounded-[3px] border border-[var(--color-border-default)] bg-white px-2 text-[11px] font-bold text-[var(--color-text-primary)]"
+            disabled={loading}
+            className="h-8 min-w-0 rounded-[3px] border border-[var(--color-border-default)] bg-white px-2 text-[11px] font-bold text-[var(--color-text-primary)] disabled:cursor-not-allowed disabled:opacity-50"
           >
             {SORT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select>
@@ -504,7 +506,8 @@ export function HistoricalAnalogExplorer({
           <select
             value={minScore}
             onChange={(event) => setMinScore(Number(event.target.value))}
-            className="h-8 min-w-0 rounded-[3px] border border-[var(--color-border-default)] bg-white px-2 text-[11px] font-bold text-[var(--color-text-primary)]"
+            disabled={loading}
+            className="h-8 min-w-0 rounded-[3px] border border-[var(--color-border-default)] bg-white px-2 text-[11px] font-bold text-[var(--color-text-primary)] disabled:cursor-not-allowed disabled:opacity-50"
           >
             {[0.25, 0.3, 0.35, 0.4, 0.45, 0.5].map((value) => (
               <option key={value} value={value}>{Math.round(value * 100)}%</option>
@@ -517,7 +520,8 @@ export function HistoricalAnalogExplorer({
             type="checkbox"
             checked={showMa}
             onChange={(event) => setShowMa(event.target.checked)}
-            className="h-4 w-4 accent-teal-700"
+            disabled={loading}
+            className="h-4 w-4 accent-teal-700 disabled:cursor-not-allowed disabled:opacity-50"
           />
         </label>
       </div>

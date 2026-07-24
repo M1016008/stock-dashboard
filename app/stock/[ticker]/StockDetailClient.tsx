@@ -18,6 +18,10 @@ import { HistoricalAnalogExplorer } from '@/components/stock/HistoricalAnalogExp
 import { ScenarioProjectionChart } from '@/components/stock/ScenarioProjectionChart'
 import { TradeScenarioNotebook } from '@/components/stock/TradeScenarioNotebook'
 import { StockScenarioAiPanel } from '@/components/stock/StockScenarioAiPanel'
+import {
+  HistoricalAnalysisModeBar,
+  type StockAnalysisReview,
+} from '@/components/stock/HistoricalAnalysisModeBar'
 import { findTicker } from '@/lib/master/tickers'
 import { STAGE_BG_COLORS, STAGE_BORDER_COLORS, STAGE_LABELS } from '@/lib/hex-stage'
 import { buildShortTermCheck, formatShortTermStrength, type ShortTermCheckTone } from '@/lib/short-term-check'
@@ -72,6 +76,8 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
   const [marginInfo, setMarginInfo] = useState<StockMarginInfo | null>(null)
   const [loading, setLoading] = useState(true)
   const [analysisDate, setAnalysisDate] = useState<string | null>(null)
+  const [showActual, setShowActual] = useState(false)
+  const [analysisReview, setAnalysisReview] = useState<StockAnalysisReview | null>(null)
   const [activeTab, setActiveTab] = useState<StockDetailTab>('overview')
   const [compared, setCompared] = useState(false)
 
@@ -80,7 +86,9 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     const date = params.get('date')
-    setAnalysisDate(date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : null)
+    const validDate = date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : null
+    setAnalysisDate(validDate)
+    setShowActual(Boolean(validDate && params.get('actual') === '1'))
   }, [ticker])
 
   useEffect(() => {
@@ -122,6 +130,23 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
 
   const displayCode = ticker.replace('.T', '')
   const name = smaster?.name ?? hardcoded?.name ?? quote?.name ?? '---'
+  const displayedQuote = useMemo<StockQuote | null>(() => {
+    if (!analysisDate || !analysisReview?.available) return quote
+    const base = analysisReview.base
+    return {
+      ticker,
+      market: 'JP',
+      name,
+      currency: 'JPY',
+      price: base.close,
+      change: base.change ?? 0,
+      changePercent: base.changePercent ?? 0,
+      volume: base.volume,
+      priceDate: base.date,
+      fiftyTwoWeekHigh: base.fiftyTwoWeekHigh ?? undefined,
+      fiftyTwoWeekLow: base.fiftyTwoWeekLow ?? undefined,
+    }
+  }, [analysisDate, analysisReview, name, quote, ticker])
 
   useEffect(() => {
     const readTab = () => {
@@ -151,14 +176,30 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
 
   const updateAnalysisDate = useCallback((date: string | null) => {
     setAnalysisDate(date)
+    if (!date) {
+      setShowActual(false)
+      setAnalysisReview(null)
+    }
     const url = new URL(window.location.href)
     if (date) {
       url.searchParams.set('date', date)
     } else {
       url.searchParams.delete('date')
+      url.searchParams.delete('actual')
     }
     window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`)
   }, [])
+
+  const updateShowActual = useCallback((show: boolean) => {
+    setShowActual(show)
+    const url = new URL(window.location.href)
+    if (show && analysisDate) {
+      url.searchParams.set('actual', '1')
+    } else {
+      url.searchParams.delete('actual')
+    }
+    window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`)
+  }, [analysisDate])
 
   return (
     <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -213,20 +254,36 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
               <GitCompareArrows size={14} />
               <span className="hidden sm:inline">{compared ? '比較中' : '比較'}</span>
             </button>
-            {quote && (
-              <PriceDisplay
-                value={quote.price}
-                change={quote.change}
-                changePercent={quote.changePercent}
-                currency={quote.currency}
-                size="lg"
-              />
+            {displayedQuote && (
+              <div className="text-right">
+                <PriceDisplay
+                  value={displayedQuote.price}
+                  change={displayedQuote.change}
+                  changePercent={displayedQuote.changePercent}
+                  currency={displayedQuote.currency}
+                  size="lg"
+                />
+                <div className="mt-1 text-[9px] font-bold text-[var(--color-text-tertiary)]">
+                  {analysisDate ? `過去終値 ${displayedQuote.priceDate ?? analysisDate}` : displayedQuote.priceDate ? `価格日 ${displayedQuote.priceDate}` : '最新価格'}
+                </div>
+              </div>
             )}
             {loading && <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>読込中...</span>}
           </div>
         </div>
         <StockDetailTabs active={activeTab} onSelect={selectTab} />
       </div>
+
+      <HistoricalAnalysisModeBar
+        ticker={displayCode}
+        market="JP"
+        analysisDate={analysisDate}
+        latestDate={quote?.priceDate}
+        showActual={showActual}
+        onDateChange={updateAnalysisDate}
+        onShowActualChange={updateShowActual}
+        onReviewChange={setAnalysisReview}
+      />
 
       {activeTab === 'overview' && (
         <>
@@ -237,12 +294,18 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
           )}
           {!loading && !quote && <ManualOhlcvImportCard ticker={ticker} />}
           <div className="stock-info-grid">
-            <BasicInfoCard ticker={ticker} quote={quote} />
-            <MarketSnapshotCard ticker={ticker} marginInfo={marginInfo} fallbackType={displayMarginType} />
+            <BasicInfoCard ticker={ticker} quote={displayedQuote} analysisDate={analysisDate} />
+            <MarketSnapshotCard
+              ticker={ticker}
+              marginInfo={marginInfo}
+              fallbackType={displayMarginType}
+              analysisDate={analysisDate}
+            />
           </div>
-          <EarningsCard ticker={ticker} />
+          {analysisDate
+            ? <CurrentOnlyDataNotice label="決算予定は現在情報のため、過去分析モードでは非表示にしています。" />
+            : <EarningsCard ticker={ticker} />}
           <PhysicalMomentumSection ticker={ticker} analysisDate={analysisDate} />
-          <AnalysisDateControl analysisDate={analysisDate} onChange={updateAnalysisDate} />
         </>
       )}
 
@@ -250,7 +313,7 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
         <>
           <div>
             <div className="section-header">ステージ変遷</div>
-            <StageTimeline ticker={ticker} />
+            <StageTimeline ticker={ticker} analysisDate={analysisDate} />
           </div>
           <div>
             <div className="section-header">マルチタイムフレームチャート</div>
@@ -260,6 +323,8 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
               height={460}
               historyPeriod="all"
               showTimeframeSelector
+              analysisDate={analysisDate}
+              revealAfterAnalysis={showActual}
               maLinesByInterval={{
                 D: [3, 5, 25, 75, 200],
                 '2D': [3, 5, 25, 75, 200],
@@ -275,11 +340,10 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
 
       {activeTab === 'scenario' && (
         <>
-          <AnalysisDateControl analysisDate={analysisDate} onChange={updateAnalysisDate} />
           <TradeScenarioNotebook
             ticker={ticker}
             name={name}
-            quote={quote}
+            quote={displayedQuote}
             selectedRange={null}
             context={{
               marketSegment: displayMarketSegment,
@@ -288,11 +352,12 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
               sector33: displaySector33,
             }}
           />
-          <StockMovePeriods ticker={ticker} />
+          <StockMovePeriods ticker={ticker} analysisDate={analysisDate} />
           <ScenarioProjectionChart
             ticker={ticker}
             name={name}
             analysisDate={analysisDate}
+            showActual={showActual}
             onUseLatest={() => updateAnalysisDate(null)}
           />
           <StockScenarioAiPanel ticker={ticker} name={name} analysisDate={analysisDate} />
@@ -301,8 +366,7 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
 
       {activeTab === 'ml' && (
         <>
-          <AnalysisDateControl analysisDate={analysisDate} onChange={updateAnalysisDate} />
-          <StockMlInsights ticker={ticker} />
+          <StockMlInsights ticker={ticker} analysisDate={analysisDate} />
           <HistoricalAnalogExplorer ticker={ticker} analysisDate={analysisDate} />
         </>
       )}
@@ -346,65 +410,6 @@ function StockDetailTabs({
         )
       })}
     </nav>
-  )
-}
-
-function AnalysisDateControl({
-  analysisDate,
-  onChange,
-}: {
-  analysisDate: string | null
-  onChange: (date: string | null) => void
-}) {
-  const [draft, setDraft] = useState(analysisDate ?? '')
-
-  useEffect(() => {
-    setDraft(analysisDate ?? '')
-  }, [analysisDate])
-
-  const applyDraft = useCallback((next: string) => {
-    setDraft(next)
-    onChange(next || null)
-  }, [onChange])
-
-  return (
-    <section className="card" style={analysisDateCardStyle}>
-      <div>
-        <div className="section-header" style={analysisDateTitleStyle}>シナリオ・AI分析基準日</div>
-        <p style={analysisDateSubTextStyle}>
-          日付を指定すると、その日付以前の価格・物理特徴量・ML候補だけでシナリオとAI回答を再構成します。
-          未指定なら最新データで分析します。
-        </p>
-      </div>
-      <div style={analysisDateControlsStyle}>
-        <label style={analysisDateInputLabelStyle}>
-          基準日
-          <input
-            type="date"
-            value={draft}
-            onInput={(event) => applyDraft((event.target as HTMLInputElement).value)}
-            onChange={(event) => applyDraft(event.target.value)}
-            style={analysisDateInputStyle}
-          />
-        </label>
-        <button type="button" onClick={() => onChange(draft || null)} style={analysisDateApplyButtonStyle}>
-          反映
-        </button>
-        <button
-          type="button"
-          onClick={() => {
-            setDraft('')
-            onChange(null)
-          }}
-          style={analysisDateClearButtonStyle}
-        >
-          最新に戻す
-        </button>
-      </div>
-      <div style={analysisDateBadgeStyle}>
-        現在: {analysisDate ? `${analysisDate}時点` : '最新時点'}
-      </div>
-    </section>
   )
 }
 
@@ -533,7 +538,7 @@ function PhysicalMomentumSection({ ticker, analysisDate }: { ticker: string; ana
     setPlanError('')
     const planParams = analysisDate ? `?date=${encodeURIComponent(analysisDate)}` : ''
     Promise.allSettled([
-      fetch(`/api/physical-momentum/${encodeURIComponent(ticker)}?market=JP&limit=260`, { cache: 'no-store' })
+      fetch(`/api/physical-momentum/${encodeURIComponent(ticker)}?market=JP&limit=260${analysisDate ? `&date=${encodeURIComponent(analysisDate)}` : ''}`, { cache: 'no-store' })
         .then((res) => res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))),
       fetch(`/api/stock-physical-plan/${encodeURIComponent(ticker)}${planParams}`, { cache: 'no-store' })
         .then((res) => res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))),
@@ -1705,84 +1710,6 @@ function fmtPct(value: number | null | undefined): string {
   return `${value >= 0 ? '+' : ''}${value.toFixed(1)}%`
 }
 
-const analysisDateCardStyle: CSSProperties = {
-  padding: 14,
-  display: 'flex',
-  gap: 12,
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  flexWrap: 'wrap',
-}
-
-const analysisDateTitleStyle: CSSProperties = {
-  margin: 0,
-  fontSize: 16,
-}
-
-const analysisDateSubTextStyle: CSSProperties = {
-  margin: '4px 0 0',
-  color: 'var(--text-secondary)',
-  fontSize: 12,
-  lineHeight: 1.6,
-}
-
-const analysisDateControlsStyle: CSSProperties = {
-  display: 'flex',
-  alignItems: 'end',
-  gap: 8,
-  flexWrap: 'wrap',
-}
-
-const analysisDateInputLabelStyle: CSSProperties = {
-  display: 'grid',
-  gap: 4,
-  color: 'var(--text-muted)',
-  fontSize: 11,
-  fontWeight: 900,
-}
-
-const analysisDateInputStyle: CSSProperties = {
-  border: '1px solid var(--border-subtle)',
-  borderRadius: 8,
-  padding: '8px 10px',
-  fontSize: 13,
-  color: 'var(--text-primary)',
-  background: '#fff',
-}
-
-const analysisDateApplyButtonStyle: CSSProperties = {
-  border: '1px solid var(--accent-primary)',
-  borderRadius: 8,
-  background: 'var(--accent-primary)',
-  color: '#fff',
-  fontSize: 12,
-  fontWeight: 900,
-  padding: '9px 12px',
-  cursor: 'pointer',
-}
-
-const analysisDateClearButtonStyle: CSSProperties = {
-  border: '1px solid var(--border-subtle)',
-  borderRadius: 8,
-  background: '#fff',
-  color: 'var(--text-secondary)',
-  fontSize: 12,
-  fontWeight: 900,
-  padding: '9px 12px',
-  cursor: 'pointer',
-}
-
-const analysisDateBadgeStyle: CSSProperties = {
-  border: '1px solid rgba(37, 99, 235, 0.22)',
-  borderRadius: 999,
-  background: 'rgba(37, 99, 235, 0.06)',
-  color: 'var(--accent-primary)',
-  fontSize: 12,
-  fontWeight: 900,
-  padding: '7px 10px',
-  whiteSpace: 'nowrap',
-}
-
 const physicalCardStyle: CSSProperties = {
   padding: '14px',
 }
@@ -2761,17 +2688,29 @@ function MarketSnapshotCard({
   ticker,
   marginInfo,
   fallbackType,
+  analysisDate,
 }: {
   ticker: string
   marginInfo: StockMarginInfo | null
   fallbackType?: string | null
+  analysisDate: string | null
 }) {
   return (
     <div className="card" style={marketSnapshotCardStyle}>
       <div style={marketSnapshotGridStyle}>
-        <PerformanceCard ticker={ticker} embedded />
-        <MarginInfoCard info={marginInfo} fallbackType={fallbackType} embedded />
+        <PerformanceCard ticker={ticker} embedded analysisDate={analysisDate} />
+        {analysisDate
+          ? <CurrentOnlyDataNotice label="信用残は現在情報のため、過去の短期判断には含めていません。" compact />
+          : <MarginInfoCard info={marginInfo} fallbackType={fallbackType} embedded />}
       </div>
+    </div>
+  )
+}
+
+function CurrentOnlyDataNotice({ label, compact = false }: { label: string; compact?: boolean }) {
+  return (
+    <div className={`border border-dashed border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-3 py-2 text-[10px] font-bold leading-5 text-[var(--color-text-secondary)] ${compact ? 'mt-1' : ''}`}>
+      {label}
     </div>
   )
 }
@@ -2876,7 +2815,15 @@ type BasicMlResponse = {
   } | null
 }
 
-function BasicInfoCard({ ticker, quote }: { ticker: string; quote: StockQuote | null }) {
+function BasicInfoCard({
+  ticker,
+  quote,
+  analysisDate,
+}: {
+  ticker: string
+  quote: StockQuote | null
+  analysisDate: string | null
+}) {
   const [latestStage, setLatestStage] = useState<SummaryStageEntry | null>(null)
   const [physical, setPhysical] = useState<PhysicalMomentumResponse | null>(null)
   const [ml, setMl] = useState<BasicMlResponse | null>(null)
@@ -2887,10 +2834,21 @@ function BasicInfoCard({ ticker, quote }: { ticker: string; quote: StockQuote | 
     const code = ticker.replace(/\.T$/i, '')
     setSummaryLoading(true)
 
+    const stageParams = new URLSearchParams({ granularity: 'daily', count: '1' })
+    const physicalParams = new URLSearchParams({ market: 'JP', limit: '40' })
+    const mlParams = new URLSearchParams({ ticker: code, limit: '6' })
+    if (analysisDate) {
+      stageParams.set('startDate', '1900-01-01')
+      stageParams.set('endDate', analysisDate)
+      physicalParams.set('date', analysisDate)
+      mlParams.set('date', analysisDate)
+      mlParams.set('fallback', '1')
+    }
+
     Promise.allSettled([
-      fetch(`/api/stage-history/${encodeURIComponent(code)}?granularity=daily&count=1`, { cache: 'no-store' }).then((res) => res.ok ? res.json() : null),
-      fetch(`/api/physical-momentum/${encodeURIComponent(code)}?market=JP&limit=40`, { cache: 'no-store' }).then((res) => res.ok ? res.json() : null),
-      fetch(`/api/ml/current-similars?ticker=${encodeURIComponent(code)}&limit=6`, { cache: 'no-store' }).then((res) => res.ok ? res.json() : null),
+      fetch(`/api/stage-history/${encodeURIComponent(code)}?${stageParams.toString()}`, { cache: 'no-store' }).then((res) => res.ok ? res.json() : null),
+      fetch(`/api/physical-momentum/${encodeURIComponent(code)}?${physicalParams.toString()}`, { cache: 'no-store' }).then((res) => res.ok ? res.json() : null),
+      fetch(`/api/ml/current-similars?${mlParams.toString()}`, { cache: 'no-store' }).then((res) => res.ok ? res.json() : null),
     ])
       .then(([stageResult, physicalResult, mlResult]) => {
         if (cancelled) return
@@ -2908,7 +2866,7 @@ function BasicInfoCard({ ticker, quote }: { ticker: string; quote: StockQuote | 
       })
 
     return () => { cancelled = true }
-  }, [ticker])
+  }, [analysisDate, ticker])
 
   const items = [
     { label: '時価総額', value: quote?.marketCap != null ? `${(quote.marketCap / 1e8).toLocaleString('ja-JP', { maximumFractionDigits: 0 })} 億円` : '---' },

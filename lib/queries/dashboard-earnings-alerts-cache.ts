@@ -2,8 +2,6 @@ import { client, execGet } from '@/lib/db/client'
 import { getEarningsCalendarDashboard, getLatestDate, type EarningsCalendarDashboard } from '@/lib/queries/dashboard'
 import type { UniverseFilterValue } from '@/lib/market-universe'
 
-const EARNINGS_ALERT_CACHE_TTL_SEC = 30 * 60
-
 type EarningsAlertCacheRow = {
   payloadJson: string
   computedAt: number
@@ -50,7 +48,6 @@ function isIsoDate(value: string | null | undefined): value is string {
 async function readCache(cacheKey: string): Promise<EarningsCalendarDashboard | null> {
   let row: EarningsAlertCacheRow | undefined
   try {
-    await ensureEarningsAlertCacheTable()
     row = await execGet<EarningsAlertCacheRow>(
       `
         SELECT payload_json AS payloadJson, computed_at AS computedAt
@@ -61,12 +58,11 @@ async function readCache(cacheKey: string): Promise<EarningsCalendarDashboard | 
       [cacheKey],
     )
   } catch (error) {
-    if (isSqliteBusyError(error)) return null
+    const message = error instanceof Error ? error.message : String(error)
+    if (isSqliteBusyError(error) || /no such table/i.test(message)) return null
     throw error
   }
   if (!row) return null
-  const age = Math.floor(Date.now() / 1000) - Number(row.computedAt ?? 0)
-  if (age > EARNINGS_ALERT_CACHE_TTL_SEC) return null
   try {
     return JSON.parse(row.payloadJson) as EarningsCalendarDashboard
   } catch {
@@ -99,10 +95,11 @@ async function writeCache(cacheKey: string, payload: EarningsCalendarDashboard):
 export async function getDashboardEarningsAlertsCached(
   date: string | null,
   universe: UniverseFilterValue,
+  options: { forceRefresh?: boolean } = {},
 ): Promise<EarningsCalendarDashboard> {
   const resolvedDate = isIsoDate(date) ? date : await getLatestDate()
   const cacheKey = `v1|date:${resolvedDate ?? 'none'}|u:${universe ?? 'all'}`
-  const cached = await readCache(cacheKey)
+  const cached = options.forceRefresh ? null : await readCache(cacheKey)
   if (cached) return cached
 
   const data = await getEarningsCalendarDashboard(21, resolvedDate, {

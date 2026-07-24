@@ -46,6 +46,10 @@ const globalForDb = global as unknown as {
   libsql?: Client
   schemaReady?: Promise<void>
   sqlitePragmasReady?: Promise<void>
+  readQueue?: {
+    active: number
+    waiters: Array<() => void>
+  }
 }
 
 export const client: Client =
@@ -113,6 +117,36 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+function queryLabel(sql: string): string {
+  return sql.replace(/\s+/g, ' ').trim().slice(0, 180)
+}
+
+async function acquireReadSlot(): Promise<() => void> {
+  const configured = Number(process.env.STOCKBOARD_DB_READ_CONCURRENCY ?? 0)
+  if (!Number.isFinite(configured) || configured <= 0) return () => undefined
+  const limit = Math.min(8, Math.max(1, Math.floor(configured)))
+  globalForDb.readQueue ??= { active: 0, waiters: [] }
+  const queue = globalForDb.readQueue
+  if (queue.active >= limit) {
+    await new Promise<void>((resolve) => {
+      queue.waiters.push(resolve)
+    })
+  } else {
+    queue.active += 1
+  }
+  let released = false
+  return () => {
+    if (released) return
+    released = true
+    const next = queue.waiters.shift()
+    if (next) {
+      setImmediate(next)
+    } else {
+      queue.active = Math.max(0, queue.active - 1)
+    }
+  }
+}
+
 async function withBusyRetry<T>(fn: () => Promise<T>): Promise<T> {
   const max = Number(process.env.SQLITE_BUSY_RETRIES ?? 8)
   for (let attempt = 0; ; attempt++) {
@@ -127,8 +161,20 @@ async function withBusyRetry<T>(fn: () => Promise<T>): Promise<T> {
 
 export async function execAll<T = Record<string, unknown>>(sql: string, args: Args = []): Promise<T[]> {
   await ensureReady()
-  const res = await withBusyRetry(() => client.execute({ sql, args: args as InValue[] }))
-  return res.rows.map((row) => ({ ...row })) as unknown as T[]
+  const release = await acquireReadSlot()
+  const startedAt = Date.now()
+  const trace = process.env.STOCKBOARD_DB_QUERY_LOGS === '1'
+  if (trace) console.info(`[db-read] start ${queryLabel(sql)}`)
+  try {
+    const res = await withBusyRetry(() => client.execute({ sql, args: args as InValue[] }))
+    const elapsedMs = Date.now() - startedAt
+    if (trace || elapsedMs >= 2_000) {
+      console.info(`[db-read] done ${elapsedMs}ms ${queryLabel(sql)}`)
+    }
+    return res.rows.map((row) => ({ ...row })) as unknown as T[]
+  } finally {
+    release()
+  }
 }
 
 export async function execGet<T = Record<string, unknown>>(sql: string, args: Args = []): Promise<T | undefined> {

@@ -12,7 +12,9 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'ticker is required' }, { status: 400 })
     }
     const limit = Math.min(300, Math.max(1, Number(searchParams.get('limit') ?? 80)))
-    return NextResponse.json(await getMlPredictionHistory({ ticker, limit }))
+    const rawDate = searchParams.get('date')?.trim() ?? ''
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(rawDate) ? rawDate : null
+    return NextResponse.json(await getMlPredictionHistory({ ticker, limit, date }))
   } catch (error) {
     console.error('ML prediction history API error:', error)
     return NextResponse.json(

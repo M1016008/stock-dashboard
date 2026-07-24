@@ -145,7 +145,15 @@ function moveProfile(move: Move): MoveProfile {
   }
 }
 
-export function StockMovePeriods({ ticker, market = 'JP' }: { ticker: string; market?: 'JP' | 'US' }) {
+export function StockMovePeriods({
+  ticker,
+  market = 'JP',
+  analysisDate = null,
+}: {
+  ticker: string
+  market?: 'JP' | 'US'
+  analysisDate?: string | null
+}) {
   const [moves, setMoves] = useState<Move[]>([])
   const [openKey, setOpenKey] = useState('')
   const [loading, setLoading] = useState(true)
@@ -155,6 +163,7 @@ export function StockMovePeriods({ ticker, market = 'JP' }: { ticker: string; ma
     let cancelled = false
     setLoading(true)
     const params = new URLSearchParams({ limit: '8', market })
+    if (analysisDate) params.set('date', analysisDate)
     fetch(`/api/stock-move-periods/${encodeURIComponent(ticker)}?${params.toString()}`, { cache: 'no-store' })
       .then((res) => res.json())
       .then((data) => {
@@ -164,7 +173,7 @@ export function StockMovePeriods({ ticker, market = 'JP' }: { ticker: string; ma
       .catch(() => { if (!cancelled) setMoves([]) })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [ticker, market])
+  }, [analysisDate, ticker, market])
 
   if (loading) {
     return <div className="card stock-move-card">過去の上昇・下落局面を読込中...</div>

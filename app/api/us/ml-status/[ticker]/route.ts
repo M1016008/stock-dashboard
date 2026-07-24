@@ -272,8 +272,9 @@ export async function GET(request: NextRequest, context: RouteContext) {
         SELECT MAX(trained_at) AS trainedAt, COUNT(*) AS rows, COUNT(DISTINCT horizon_days) AS horizons
         FROM ml_models
         WHERE model_type = ?
+          ${asOfDate ? `AND trained_at <= CAST(strftime('%s', ? || ' 23:59:59') AS INTEGER)` : ''}
       `,
-      [ML_PHYSICS_MODEL_TYPE],
+      asOfDate ? [ML_PHYSICS_MODEL_TYPE, asOfDate] : [ML_PHYSICS_MODEL_TYPE],
     ),
     safeGet<{ evaluationDate: string | null; endDate: string | null; horizons: number | null; rows: number | null }>(
       `
@@ -285,7 +286,12 @@ export async function GET(request: NextRequest, context: RouteContext) {
       asOfArgs,
     ),
     safeGet<{ checkDate: string | null }>(
-      `SELECT MAX(check_date) AS checkDate FROM ml_feature_health_checks`,
+      `
+        SELECT MAX(check_date) AS checkDate
+        FROM ml_feature_health_checks
+        ${asOfDate ? 'WHERE check_date <= ?' : ''}
+      `,
+      asOfArgs,
     ),
   ])
 

@@ -8,6 +8,7 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import {
   createChart,
+  createSeriesMarkers,
   CandlestickSeries,
   LineSeries,
   HistogramSeries,
@@ -53,6 +54,8 @@ interface CandlestickChartProps {
   syncSelectedRange?: boolean
   rangeLabel?: string
   enableRangeDragSelect?: boolean
+  analysisDate?: string | null
+  revealAfterAnalysis?: boolean
   onVisibleRangeChange?: (range: ChartDateRange, interval: TvInterval, source?: 'visible' | 'drag') => void
 }
 
@@ -95,6 +98,8 @@ export function CandlestickChart({
   syncSelectedRange = false,
   rangeLabel,
   enableRangeDragSelect = false,
+  analysisDate = null,
+  revealAfterAnalysis = false,
   onVisibleRangeChange,
 }: CandlestickChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -163,16 +168,23 @@ export function CandlestickChart({
   }, [ticker, fetchPeriod, market])
 
   // 日足 → 指定時間軸に集約 + MA 計算用に整形
-  const { grouped, candles, mas } = useMemo(() => {
+  const { grouped, candles, mas, resolvedAnalysisDate } = useMemo(() => {
     if (!data || data.length === 0) {
       return {
         grouped: [] as OHLCV[],
         candles: [],
         mas: {} as Record<number, { time: UTCTimestamp; value: number }[]>,
+        resolvedAnalysisDate: null as string | null,
       }
     }
 
-    const grouped = resampleOhlcv(data, intervalToSpec(effectiveInterval))
+    const analysisRows = analysisDate && !revealAfterAnalysis
+      ? data.filter((row) => row.date <= analysisDate)
+      : data
+    const grouped = resampleOhlcv(analysisRows, intervalToSpec(effectiveInterval))
+    const resolvedAnalysisDate = analysisDate
+      ? grouped.filter((row) => row.date <= analysisDate).at(-1)?.date ?? null
+      : null
 
     const candles = grouped.map(d => ({
       time:  dateToTime(d.date),
@@ -195,8 +207,8 @@ export function CandlestickChart({
       mas[period] = series
     }
 
-    return { grouped, candles, mas }
-  }, [data, effectiveInterval, selectedMAs])
+    return { grouped, candles, mas, resolvedAnalysisDate }
+  }, [analysisDate, data, effectiveInterval, revealAfterAnalysis, selectedMAs])
 
   const candleDates = useMemo(() => grouped.map((row) => row.date), [grouped])
   const timeframeSummary = useMemo(
@@ -246,6 +258,15 @@ export function CandlestickChart({
       wickDownColor:  '#2563eb',
     })
     candleSeries.setData(candles)
+    if (resolvedAnalysisDate) {
+      createSeriesMarkers(candleSeries, [{
+        time: dateToTime(resolvedAnalysisDate),
+        position: 'aboveBar',
+        color: '#b45309',
+        shape: 'square',
+        text: revealAfterAnalysis ? '分析基準' : 'この日時点',
+      }])
+    }
 
     // MA 各種
     for (const [index, period] of selectedMAs.entries()) {
@@ -337,7 +358,18 @@ export function CandlestickChart({
         chartRef.current = null
       }
     }
-  }, [candles, mas, height, selectedMAs, candleDates, visiblePeriod, effectiveInterval, syncSelectedRange])
+  }, [
+    candleDates,
+    candles,
+    effectiveInterval,
+    height,
+    mas,
+    resolvedAnalysisDate,
+    revealAfterAnalysis,
+    selectedMAs,
+    syncSelectedRange,
+    visiblePeriod,
+  ])
 
   useEffect(() => {
     const chart = chartRef.current

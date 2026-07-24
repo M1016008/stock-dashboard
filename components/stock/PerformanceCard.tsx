@@ -7,6 +7,7 @@ import type { OHLCV } from '@/types/stock'
 interface PerformanceCardProps {
   ticker: string
   embedded?: boolean
+  analysisDate?: string | null
 }
 
 interface PerfRow {
@@ -66,7 +67,7 @@ function yearToDateInfo(ohlcv: OHLCV[]): YtdInfo {
  * 直近の変化率を一目で確認できるカード
  * 1日 / 1週 / 1ヶ月 / 3ヶ月 / 6ヶ月 / 年初来
  */
-export function PerformanceCard({ ticker, embedded = false }: PerformanceCardProps) {
+export function PerformanceCard({ ticker, embedded = false, analysisDate = null }: PerformanceCardProps) {
   const [perf, setPerf] = useState<PerfRow[]>([])
   const [ytd, setYtd] = useState<YtdInfo | null>(null)
   const [loading, setLoading] = useState(true)
@@ -76,28 +77,32 @@ export function PerformanceCard({ ticker, embedded = false }: PerformanceCardPro
     setLoading(true)
     setPerf([])
     setYtd(null)
-    fetch(`/api/history/${encodeURIComponent(ticker)}?period=1y`, { cache: 'no-store' })
+    const period = analysisDate ? 'all' : '1y'
+    fetch(`/api/history/${encodeURIComponent(ticker)}?period=${period}`, { cache: 'no-store' })
       .then((r) => r.json())
       .then((d: OHLCV[] | { error: string }) => {
         if (cancelled || !Array.isArray(d)) return
+        const rows = analysisDate ? d.filter((row) => row.date <= analysisDate).slice(-260) : d
         setPerf([
-          { label: '1日', value: pctFromHistory(d, 1) },
-          { label: '1週', value: pctFromHistory(d, 5) },
-          { label: '1ヶ月', value: pctFromHistory(d, 21) },
-          { label: '3ヶ月', value: pctFromHistory(d, 63) },
-          { label: '6ヶ月', value: pctFromHistory(d, 126) },
-          { label: '年初来', value: pctYearToDate(d) },
+          { label: '1日', value: pctFromHistory(rows, 1) },
+          { label: '1週', value: pctFromHistory(rows, 5) },
+          { label: '1ヶ月', value: pctFromHistory(rows, 21) },
+          { label: '3ヶ月', value: pctFromHistory(rows, 63) },
+          { label: '6ヶ月', value: pctFromHistory(rows, 126) },
+          { label: '年初来', value: pctYearToDate(rows) },
         ])
-        setYtd(yearToDateInfo(d))
+        setYtd(yearToDateInfo(rows))
       })
       .catch(() => { /* ignore */ })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [ticker])
+  }, [analysisDate, ticker])
 
   return (
     <div className={embedded ? '' : 'card stock-performance-card'} style={embedded ? { minWidth: 0 } : undefined}>
-      <div style={{ fontSize: '11px', fontWeight: 600, marginBottom: '8px' }}>直近の変化率</div>
+      <div style={{ fontSize: '11px', fontWeight: 600, marginBottom: '8px' }}>
+        {analysisDate ? `${analysisDate}時点の変化率` : '直近の変化率'}
+      </div>
       <div className="stock-perf-grid">
         {perf.length === 0 && loading && (
           <div style={{ gridColumn: 'span 6', textAlign: 'center', fontSize: '11px', color: 'var(--text-muted)' }}>計算中...</div>

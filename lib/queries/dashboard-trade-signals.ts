@@ -21,7 +21,6 @@ const US_QUERY_LIMIT = 2500
 const MIN_DASHBOARD_SCORE = 60
 const MAX_ROWS_PER_MARKET_SIDE = 40
 const SCENARIO_ENRICH_CONCURRENCY = 6
-const TRADE_SIGNAL_CACHE_TTL_SEC = 30 * 60
 const US_LEVERAGED_INVERSE_ETP_TICKERS = new Set([
   'AGQ',
   'BOIL',
@@ -287,7 +286,6 @@ async function resolveTradeSignalCacheDates(date: string | null, includeUs: bool
 async function readTradeSignalCache(cacheKey: string): Promise<DashboardTradeSignalResult | null> {
   let row: TradeSignalCacheRow | undefined
   try {
-    await ensureTradeSignalCacheTable()
     row = await execGet<TradeSignalCacheRow>(
       `
         SELECT payload_json AS payloadJson, computed_at AS computedAt
@@ -298,12 +296,11 @@ async function readTradeSignalCache(cacheKey: string): Promise<DashboardTradeSig
       [cacheKey],
     )
   } catch (error) {
-    if (isSqliteBusyError(error)) return null
+    const message = error instanceof Error ? error.message : String(error)
+    if (isSqliteBusyError(error) || /no such table/i.test(message)) return null
     throw error
   }
   if (!row) return null
-  const age = Math.floor(Date.now() / 1000) - Number(row.computedAt ?? 0)
-  if (age > TRADE_SIGNAL_CACHE_TTL_SEC) return null
   try {
     return JSON.parse(row.payloadJson) as DashboardTradeSignalResult
   } catch {
@@ -1353,6 +1350,7 @@ export async function getDashboardTradeSignals(params: {
   date?: string | null
   universe?: UniverseFilterValue
   scenarioInterval?: string | null
+  forceRefresh?: boolean
 } = {}): Promise<DashboardTradeSignalResult> {
   const scenarioInterval = normalizeProjectionInterval(params.scenarioInterval)
   const scenarioHorizonDays = defaultProjectionHorizon(scenarioInterval)
@@ -1366,7 +1364,7 @@ export async function getDashboardTradeSignals(params: {
     `i:${scenarioInterval}`,
     `h:${scenarioHorizonDays}`,
   ].join('|')
-  const cached = await readTradeSignalCache(cacheKey)
+  const cached = params.forceRefresh ? null : await readTradeSignalCache(cacheKey)
   if (cached) {
     return {
       ...cached,

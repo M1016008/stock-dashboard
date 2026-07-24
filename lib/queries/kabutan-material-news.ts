@@ -449,7 +449,6 @@ async function getKabutanArticlesByFilter(filterSql: string, limit = 12): Promis
   articles: KabutanMaterialNewsArticle[]
   lastRun: KabutanMaterialNewsRun | null
 }> {
-  await ensureKabutanMaterialNewsTables()
   const safeLimit = Math.max(1, Math.min(30, Math.floor(limit)))
   const [rows, lastRun] = await Promise.all([
     execAll<ArticleRow>(

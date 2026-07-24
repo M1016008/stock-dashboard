@@ -866,6 +866,7 @@ export async function getMlModelStatus(): Promise<MlModelStatus> {
 export async function getMlPredictionHistory(params: {
   ticker: string
   limit?: number
+  date?: string | null
 }): Promise<{ ticker: string; rows: MlPredictionHistoryRow[] }> {
   const ticker = params.ticker.replace(/\.T$/i, '').trim()
   const limit = Math.min(300, Math.max(1, params.limit ?? 80))
@@ -896,10 +897,11 @@ export async function getMlPredictionHistory(params: {
      AND o.direction = p.direction
      AND o.ticker = p.ticker
     WHERE p.ticker = ?
+      ${params.date ? 'AND p.as_of_date <= ?' : ''}
     ORDER BY p.as_of_date DESC, p.horizon_days ASC, p.direction ASC
     LIMIT ?
     `,
-    [ticker, limit],
+    params.date ? [ticker, params.date, limit] : [ticker, limit],
   )
   return {
     ticker,

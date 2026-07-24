@@ -32,10 +32,15 @@ async function main() {
         const result = await getDashboardTradeSignals({
           date: payload.latestDate,
           scenarioInterval,
+          forceRefresh: true,
         })
         warmed.push(`trade:${scenarioInterval}:${result.rows.length}`)
       }
-      const earnings = await getDashboardEarningsAlertsCached(payload.latestDate, null)
+      const earnings = await getDashboardEarningsAlertsCached(
+        payload.latestDate,
+        null,
+        { forceRefresh: true },
+      )
       warmed.push(`earnings:${earnings.rows.length + earnings.completedRows.length}`)
     }
 

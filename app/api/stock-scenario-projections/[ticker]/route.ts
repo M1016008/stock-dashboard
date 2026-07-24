@@ -164,8 +164,17 @@ export async function GET(request: NextRequest, context: RouteContext) {
     const horizonDays = parsePositiveInt(request.nextUrl.searchParams.get('horizonDays'), defaultHorizon, 200)
     const limit = parsePositiveInt(request.nextUrl.searchParams.get('limit'), 8, 8)
     const asOfDate = parseAsOfDate(request.nextUrl.searchParams.get('date'))
+    const includeRealized = asOfDate != null && request.nextUrl.searchParams.get('actual') === '1'
     const llmEnabled = request.nextUrl.searchParams.get('llm') !== '0' && process.env.SCENARIO_PROJECTION_LLM_ENABLED !== '0'
-    const projection = await buildStockScenarioProjection({ ticker, market, interval, horizonDays, limit, asOfDate })
+    const projection = await buildStockScenarioProjection({
+      ticker,
+      market,
+      interval,
+      horizonDays,
+      limit,
+      asOfDate,
+      includeRealized,
+    })
     if (!projection) {
       return NextResponse.json({ ok: true, ticker, interval, horizonDays, scenarios: [], message: 'J-Quants/手動補完の価格データがありません。' })
     }

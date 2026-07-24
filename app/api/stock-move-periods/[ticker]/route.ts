@@ -170,6 +170,9 @@ export async function GET(
     const market = normalizeMarket(searchParams.get('market'))
     const ticker = normalizeTickerForMarket(rawTicker, market)
     const limit = Math.min(12, Math.max(1, Number(searchParams.get('limit') ?? 8)))
+    const rawDate = searchParams.get('date')?.trim() ?? ''
+    const asOfDate = /^\d{4}-\d{2}-\d{2}$/.test(rawDate) ? rawDate : null
+    const dateFilter = asOfDate ? 'AND date <= ?' : ''
 
     const history = market === 'US'
       ? await execAll<OhlcvPoint>(
@@ -177,18 +180,20 @@ export async function GET(
         SELECT date, open, high, low, close, volume
         FROM market_ohlcv_daily
         WHERE market = 'US' AND ticker = ?
+          ${dateFilter}
         ORDER BY date
         `,
-        [ticker],
+        asOfDate ? [ticker, asOfDate] : [ticker],
       )
       : await execAll<OhlcvPoint>(
         `
         SELECT date, open, high, low, close, volume
         FROM ohlcv_daily
         WHERE ticker = ?
+          ${dateFilter}
         ORDER BY date
         `,
-        [ticker],
+        asOfDate ? [ticker, asOfDate] : [ticker],
       )
 
     const serving = market === 'JP'
@@ -197,10 +202,11 @@ export async function GET(
         SELECT direction, rank, start_date, end_date, return_pct, trading_days, stage_path_json, payload_json
         FROM serving_stock_move_periods
         WHERE ticker = ?
+          ${asOfDate ? 'AND end_date <= ?' : ''}
         ORDER BY direction, rank
         LIMIT ?
         `,
-        [ticker, limit],
+        asOfDate ? [ticker, asOfDate, limit] : [ticker, limit],
       )
       : []
 

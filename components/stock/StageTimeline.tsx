@@ -30,6 +30,7 @@ export interface StageRangeSelection extends DateRange {
 interface StageTimelineProps {
   ticker: string
   market?: MarketCode
+  analysisDate?: string | null
   selectedRange?: DateRange | null
   onStageRangeSelect?: (selection: StageRangeSelection) => void
 }
@@ -87,7 +88,13 @@ const DEFAULT_COUNTS: Record<Granularity, number> = {
  * 行: 日足A/B、週足A/B、月足A/B
  * 列: 日毎 / 週毎 / 月毎の日付
  */
-export function StageTimeline({ ticker, market = 'JP', selectedRange, onStageRangeSelect }: StageTimelineProps) {
+export function StageTimeline({
+  ticker,
+  market = 'JP',
+  analysisDate = null,
+  selectedRange,
+  onStageRangeSelect,
+}: StageTimelineProps) {
   const [entries, setEntries] = useState<StageEntry[]>([])
   const [activeStartDate, setActiveStartDate] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -106,6 +113,10 @@ export function StageTimeline({ ticker, market = 'JP', selectedRange, onStageRan
       granularity,
       count: String(count),
     })
+    if (analysisDate) {
+      params.set('startDate', '1900-01-01')
+      params.set('endDate', analysisDate)
+    }
     fetch(`/api/stage-history/${encodeURIComponent(ticker)}?${params.toString()}`, { cache: 'no-store' })
       .then((r) => r.json())
       .then((d) => {
@@ -117,7 +128,7 @@ export function StageTimeline({ ticker, market = 'JP', selectedRange, onStageRan
       .catch((e) => { if (!cancelled) setError((e as Error).message) })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [ticker, market, granularity, count])
+  }, [analysisDate, ticker, market, granularity, count])
 
   function selectGranularity(next: Granularity) {
     setGranularity(next)

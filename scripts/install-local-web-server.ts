@@ -124,6 +124,7 @@ const webPlist = `<?xml version="1.0" encoding="UTF-8"?>
     <key>ANALOG_SEARCH_PROXY_URL</key><string>http://127.0.0.1:${analogPort}</string>
     <key>PATH</key><string>${xmlEscape(pathEnv)}</string>
     <key>SKIP_SCHEMA_ENSURE</key><string>1</string>
+    <key>STOCKBOARD_DB_READ_CONCURRENCY</key><string>2</string>
     <key>SQLITE_BUSY_RETRIES</key><string>3</string>
     <key>SQLITE_BUSY_TIMEOUT_MS</key><string>5000</string>
     <key>US_SQLITE_BUSY_RETRIES</key><string>3</string>
@@ -136,7 +137,7 @@ const webPlist = `<?xml version="1.0" encoding="UTF-8"?>
   <key>ThrottleInterval</key>
   <integer>30</integer>
   <key>ProcessType</key>
-  <string>Adaptive</string>
+  <string>Standard</string>
   <key>Nice</key>
   <integer>5</integer>
   <key>SoftResourceLimits</key>
@@ -190,7 +191,7 @@ const analogPlist = `<?xml version="1.0" encoding="UTF-8"?>
   <key>ThrottleInterval</key>
   <integer>30</integer>
   <key>ProcessType</key>
-  <string>Background</string>
+  <string>Standard</string>
   <key>Nice</key>
   <integer>12</integer>
   <key>SoftResourceLimits</key>
@@ -295,7 +296,7 @@ execFileSync('launchctl', ['kickstart', `gui/${uid}/${webLabel}`], { stdio: 'inh
 console.log(`web service: ${webLabel} http://localhost:${port}`)
 console.log(
   `analog worker: ${analogLabel} http://127.0.0.1:${analogPort} `
-  + `(heap ${analogHeapMb} MB, background priority)`,
+  + `(heap ${analogHeapMb} MB, standard I/O + low CPU priority)`,
 )
 console.log(
   `health monitor: ${healthLabel} checks web + analog every ${healthIntervalSeconds}s `

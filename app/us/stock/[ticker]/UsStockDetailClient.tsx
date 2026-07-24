@@ -6,7 +6,6 @@ import {
   ArrowLeft,
   BarChart3,
   BrainCircuit,
-  CalendarDays,
   ChartCandlestick,
   GitCompareArrows,
   LayoutDashboard,
@@ -22,6 +21,10 @@ import { StockScenarioAiPanel } from '@/components/stock/StockScenarioAiPanel'
 import { StockMovePeriods } from '@/components/stock/StockMovePeriods'
 import { TradeScenarioNotebook } from '@/components/stock/TradeScenarioNotebook'
 import { HistoricalAnalogExplorer } from '@/components/stock/HistoricalAnalogExplorer'
+import {
+  HistoricalAnalysisModeBar,
+  type StockAnalysisReview,
+} from '@/components/stock/HistoricalAnalysisModeBar'
 import type { StockQuote } from '@/types/stock'
 import { buildPhysicalMomentumView, type PhysicalMomentumTone } from '@/lib/physical-momentum-view'
 import { buildShortTermCheck, formatShortTermStrength, type ShortTermCheckResult } from '@/lib/short-term-check'
@@ -282,13 +285,17 @@ export function UsStockDetailClient({
   const [quote, setQuote] = useState<StockQuote | null>(initialQuote ?? null)
   const [error, setError] = useState<string | null>(initialError ?? null)
   const [analysisDate, setAnalysisDate] = useState<string | null>(null)
+  const [showActual, setShowActual] = useState(false)
+  const [analysisReview, setAnalysisReview] = useState<StockAnalysisReview | null>(null)
   const [activeTab, setActiveTab] = useState<UsStockDetailTab>('overview')
   const [compared, setCompared] = useState(false)
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     const date = params.get('date')
-    setAnalysisDate(date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : null)
+    const validDate = date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : null
+    setAnalysisDate(validDate)
+    setShowActual(Boolean(validDate && params.get('actual') === '1'))
   }, [normalizedTicker])
 
   useEffect(() => {
@@ -319,14 +326,46 @@ export function UsStockDetailClient({
 
   const updateAnalysisDate = useCallback((date: string | null) => {
     setAnalysisDate(date)
+    if (!date) {
+      setShowActual(false)
+      setAnalysisReview(null)
+    }
     const url = new URL(window.location.href)
     if (date) {
       url.searchParams.set('date', date)
     } else {
       url.searchParams.delete('date')
+      url.searchParams.delete('actual')
     }
     window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`)
   }, [])
+
+  const updateShowActual = useCallback((show: boolean) => {
+    setShowActual(show)
+    const url = new URL(window.location.href)
+    if (show && analysisDate) {
+      url.searchParams.set('actual', '1')
+    } else {
+      url.searchParams.delete('actual')
+    }
+    window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`)
+  }, [analysisDate])
+
+  const displayedQuote = useMemo<StockQuote | null>(() => {
+    if (!quote || !analysisDate || !analysisReview?.available) return quote
+    const base = analysisReview.base
+    return {
+      ...quote,
+      price: base.close,
+      change: base.change ?? 0,
+      changePercent: base.changePercent ?? 0,
+      volume: base.volume,
+      priceDate: base.date,
+      fiftyTwoWeekHigh: base.fiftyTwoWeekHigh ?? undefined,
+      fiftyTwoWeekLow: base.fiftyTwoWeekLow ?? undefined,
+      marketCap: undefined,
+    }
+  }, [analysisDate, analysisReview, quote])
 
   useEffect(() => {
     if (!quote) return
@@ -417,14 +456,16 @@ export function UsStockDetailClient({
             </button>
             <div>
               <PriceDisplay
-                value={quote.price}
-                change={quote.isPriceDiscontinuous ? undefined : quote.change}
-                changePercent={quote.isPriceDiscontinuous ? undefined : quote.changePercent}
+                value={displayedQuote?.price ?? quote.price}
+                change={quote.isPriceDiscontinuous ? undefined : displayedQuote?.change ?? quote.change}
+                changePercent={quote.isPriceDiscontinuous ? undefined : displayedQuote?.changePercent ?? quote.changePercent}
                 currency="USD"
                 size="lg"
               />
               <div className="mt-1 text-[10px] font-semibold text-[var(--color-text-tertiary)]">
-                {quote.priceDate ? `価格日 ${quote.priceDate}` : 'US株'}
+                {analysisDate
+                  ? `過去終値 ${displayedQuote?.priceDate ?? analysisDate}`
+                  : quote.priceDate ? `価格日 ${quote.priceDate}` : 'US株'}
               </div>
             </div>
           </div>
@@ -437,15 +478,25 @@ export function UsStockDetailClient({
         <UsStockDetailTabs active={activeTab} onSelect={selectTab} />
       </div>
 
+      <HistoricalAnalysisModeBar
+        ticker={quote.ticker}
+        market="US"
+        analysisDate={analysisDate}
+        latestDate={quote.priceDate}
+        showActual={showActual}
+        onDateChange={updateAnalysisDate}
+        onShowActualChange={updateShowActual}
+        onReviewChange={setAnalysisReview}
+      />
+
       {activeTab === 'overview' && (
         <>
           <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <Stat label="出来高" value={fmtNumber(quote.volume)} />
-            <Stat label="時価総額" value={fmtMoney(quote.marketCap)} />
-            <Stat label="52週高値" value={quote.fiftyTwoWeekHigh == null ? '-' : `$${quote.fiftyTwoWeekHigh.toFixed(2)}`} />
-            <Stat label="52週安値" value={quote.fiftyTwoWeekLow == null ? '-' : `$${quote.fiftyTwoWeekLow.toFixed(2)}`} />
+            <Stat label="出来高" value={fmtNumber(displayedQuote?.volume ?? quote.volume)} />
+            <Stat label="時価総額" value={analysisDate ? '-' : fmtMoney(quote.marketCap)} />
+            <Stat label="52週高値" value={displayedQuote?.fiftyTwoWeekHigh == null ? '-' : `$${displayedQuote.fiftyTwoWeekHigh.toFixed(2)}`} />
+            <Stat label="52週安値" value={displayedQuote?.fiftyTwoWeekLow == null ? '-' : `$${displayedQuote.fiftyTwoWeekLow.toFixed(2)}`} />
           </section>
-          <UsAnalysisDateControl analysisDate={analysisDate} onChange={updateAnalysisDate} />
           <UsPhysicalMomentumSection
             ticker={quote.ticker}
             analysisDate={analysisDate}
@@ -459,7 +510,7 @@ export function UsStockDetailClient({
         <>
           <Card size="lg">
             <CardHeader title="ステージ変遷" hint="日足A/B・週足A/B・月足A/B" />
-            <StageTimeline ticker={quote.ticker} market="US" />
+            <StageTimeline ticker={quote.ticker} market="US" analysisDate={analysisDate} />
           </Card>
           <Card size="lg">
             <CardHeader title="マルチタイムフレームチャート" hint="日足・2日足・週足・2週足・月足・2ヶ月足" />
@@ -470,6 +521,8 @@ export function UsStockDetailClient({
               height={460}
               historyPeriod="all"
               showTimeframeSelector
+              analysisDate={analysisDate}
+              revealAfterAnalysis={showActual}
               maLinesByInterval={{
                 D: [3, 5, 25, 75, 200],
                 '2D': [3, 5, 25, 75, 200],
@@ -485,12 +538,11 @@ export function UsStockDetailClient({
 
       {activeTab === 'scenario' && (
         <>
-          <UsAnalysisDateControl analysisDate={analysisDate} onChange={updateAnalysisDate} />
           <TradeScenarioNotebook
             ticker={quote.ticker}
             market="US"
             name={quote.name ?? quote.ticker}
-            quote={quote}
+            quote={displayedQuote}
             selectedRange={null}
             context={{
               exchange: quote.exchange,
@@ -503,16 +555,16 @@ export function UsStockDetailClient({
             market="US"
             name={quote.name ?? quote.ticker}
             analysisDate={analysisDate}
+            showActual={showActual}
             onUseLatest={() => updateAnalysisDate(null)}
           />
-          <StockMovePeriods ticker={quote.ticker} market="US" />
+          <StockMovePeriods ticker={quote.ticker} market="US" analysisDate={analysisDate} />
           <StockScenarioAiPanel ticker={quote.ticker} market="US" name={quote.name ?? quote.ticker} analysisDate={analysisDate} />
         </>
       )}
 
       {activeTab === 'ml' && (
         <>
-          <UsAnalysisDateControl analysisDate={analysisDate} onChange={updateAnalysisDate} />
           <HistoricalAnalogExplorer ticker={quote.ticker} market="US" analysisDate={analysisDate} />
           <UsMlStatusSection ticker={quote.ticker} analysisDate={analysisDate} />
         </>
@@ -671,63 +723,6 @@ function UsMlStatusItemCard({ item }: { item: UsMlStatusItem }) {
         </div>
       )}
     </article>
-  )
-}
-
-function UsAnalysisDateControl({
-  analysisDate,
-  onChange,
-}: {
-  analysisDate: string | null
-  onChange: (date: string | null) => void
-}) {
-  const [draft, setDraft] = useState(analysisDate ?? '')
-
-  useEffect(() => {
-    setDraft(analysisDate ?? '')
-  }, [analysisDate])
-
-  return (
-    <Card>
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <div className="inline-flex items-center gap-2 text-[13px] font-black text-[var(--color-brand-900)]">
-            <CalendarDays size={15} /> シナリオ・AI分析基準日
-          </div>
-          <p className="mt-1 text-[12px] font-semibold leading-6 text-[var(--color-text-secondary)]">
-            日付を指定すると、その日付以前のUS価格・PMS・ステージでシナリオとAI回答を再構成します。
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <input
-            type="date"
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            className="h-9 rounded-[4px] border border-[var(--color-border-default)] bg-white px-3 text-[12px] font-bold text-[var(--color-brand-900)]"
-          />
-          <button
-            type="button"
-            onClick={() => onChange(draft || null)}
-            className="h-9 rounded-[4px] bg-[var(--color-brand-900)] px-3 text-[12px] font-black text-white"
-          >
-            反映
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setDraft('')
-              onChange(null)
-            }}
-            className="h-9 rounded-[4px] border border-[var(--color-border-default)] bg-white px-3 text-[12px] font-black text-[var(--color-text-secondary)]"
-          >
-            最新
-          </button>
-          <span className="rounded-full border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-3 py-2 text-[11px] font-black text-[var(--color-text-secondary)]">
-            {analysisDate ? `${analysisDate}時点` : '最新時点'}
-          </span>
-        </div>
-      </div>
-    </Card>
   )
 }
 

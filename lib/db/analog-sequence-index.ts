@@ -40,6 +40,7 @@ type RawIndexRow = {
 }
 
 type RawMetaRow = {
+  key: string
   value: string
 }
 
@@ -101,6 +102,16 @@ async function ensureReady(market: AnalogSequenceMarket): Promise<void> {
     globalForAnalogIndex.analogSequenceReady[market] = Promise.resolve()
       .then(async () => {
         await client.execute(`PRAGMA busy_timeout=${positiveInteger(process.env.SQLITE_BUSY_TIMEOUT_MS, 60_000)}`)
+        const mmapMb = Math.min(
+          2_048,
+          Math.max(64, positiveInteger(process.env.ANALOG_SEQUENCE_MMAP_MB, 512)),
+        )
+        const cacheMb = Math.min(
+          256,
+          Math.max(16, positiveInteger(process.env.ANALOG_SEQUENCE_CACHE_MB, 64)),
+        )
+        await client.execute(`PRAGMA mmap_size=${mmapMb * 1_024 * 1_024}`)
+        await client.execute(`PRAGMA cache_size=-${cacheMb * 1_024}`)
         await client.execute('PRAGMA query_only=ON')
       })
       .catch((error) => {
@@ -142,16 +153,14 @@ function yearWindows(fromDate: string, toDate: string, spanYears = 5): Array<[st
   return windows.length > 0 ? windows : [[fromDate, toDate]]
 }
 
-async function metadataValue(
-  market: AnalogSequenceMarket,
-  key: string,
-): Promise<string | null> {
-  const [row] = await execute<RawMetaRow>(
-    market,
-    `SELECT value FROM analog_sequence_meta WHERE key = ? LIMIT 1`,
-    [key],
+function searchWindowSpanYears(market: AnalogSequenceMarket): number {
+  const configured = positiveInteger(
+    market === 'US'
+      ? process.env.ANALOG_SEQUENCE_US_WINDOW_YEARS
+      : process.env.ANALOG_SEQUENCE_JP_WINDOW_YEARS,
+    market === 'US' ? 15 : 10,
   )
-  return row?.value ?? null
+  return Math.min(25, Math.max(5, configured))
 }
 
 export async function readAnalogSequenceIndexMeta(
@@ -159,32 +168,32 @@ export async function readAnalogSequenceIndexMeta(
 ): Promise<AnalogSequenceIndexMeta | null> {
   if (!hasAnalogSequenceIndex(market)) return null
   try {
-    const [
-      version,
-      sourceDate,
-      coverageFrom,
-      coverageTo,
-      rowCount,
-      completed,
-      updatedAt,
-    ] = await Promise.all([
-      metadataValue(market, 'version'),
-      metadataValue(market, 'source_date'),
-      metadataValue(market, 'coverage_from'),
-      metadataValue(market, 'coverage_to'),
-      metadataValue(market, 'row_count'),
-      metadataValue(market, 'completed'),
-      metadataValue(market, 'updated_at'),
-    ])
+    const rows = await execute<RawMetaRow>(
+      market,
+      `
+      SELECT key, value
+      FROM analog_sequence_meta
+      WHERE key IN (
+        'version',
+        'source_date',
+        'coverage_from',
+        'coverage_to',
+        'row_count',
+        'completed',
+        'updated_at'
+      )
+      `,
+    )
+    const values = new Map(rows.map((row) => [row.key, row.value]))
     return {
       market,
-      version: Number(version ?? 0),
-      sourceDate,
-      coverageFrom,
-      coverageTo,
-      rowCount: Number(rowCount ?? 0),
-      completed: completed === '1',
-      updatedAt,
+      version: Number(values.get('version') ?? 0),
+      sourceDate: values.get('source_date') ?? null,
+      coverageFrom: values.get('coverage_from') ?? null,
+      coverageTo: values.get('coverage_to') ?? null,
+      rowCount: Number(values.get('row_count') ?? 0),
+      completed: values.get('completed') === '1',
+      updatedAt: values.get('updated_at') ?? null,
     }
   } catch {
     return null
@@ -207,7 +216,11 @@ export async function searchAnalogSequenceIndex(args: {
   )
   const maxBitDistance = Math.min(1, Math.max(0, args.maxBitDistance ?? 0))
   const meta = await readAnalogSequenceIndexMeta(args.market)
-  const windows = yearWindows(meta?.coverageFrom || '1980-01-01', args.beforeDate)
+  const windows = yearWindows(
+    meta?.coverageFrom || '1980-01-01',
+    args.beforeDate,
+    searchWindowSpanYears(args.market),
+  )
   const perWindowLimit = Math.max(500, Math.ceil(perBandLimit / windows.length))
   const byKey = new Map<string, AnalogSequenceIndexRow>()
   for (let bandIndex = 0; bandIndex < MA_SEQUENCE_BAND_COUNT; bandIndex += 1) {
@@ -266,7 +279,11 @@ export async function searchAnalogSequenceIndexByStage(args: {
   const stageCodes = [...new Set(args.stageCodes.filter((code) => /^[1-6]{5,6}$/.test(code)))]
   if (stageCodes.length === 0) return []
   const meta = await readAnalogSequenceIndexMeta(args.market)
-  const windows = yearWindows(meta?.coverageFrom || '1980-01-01', args.beforeDate)
+  const windows = yearWindows(
+    meta?.coverageFrom || '1980-01-01',
+    args.beforeDate,
+    searchWindowSpanYears(args.market),
+  )
   const limitPerWindow = Math.min(5_000, Math.max(250, args.limitPerWindow ?? 1_200))
   const placeholders = stageCodes.map(() => '?').join(', ')
   const byKey = new Map<string, AnalogSequenceIndexRow>()
