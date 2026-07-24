@@ -7,7 +7,7 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { eq } from 'drizzle-orm'
 import { db, execAll } from '@/lib/db/client'
 import { batchRuns } from '@/lib/db/schema'
-import { acquireUpdateLock, getActiveUpdateLocks } from '@/lib/server/update-lock'
+import { acquireExclusiveUpdateLock, getActiveUpdateLocks } from '@/lib/server/update-lock'
 import { waitForMemoryHeadroom, withMemoryGuardEnv } from '@/lib/system/memory-guard'
 
 type RunResult = {
@@ -449,7 +449,7 @@ async function main(): Promise<void> {
   installSignalHandlers()
 
   const leaseSeconds = numberEnv('ML_LEARNING_LOCK_LEASE_SECONDS', 18 * 60 * 60)
-  const lock = await acquireUpdateLock(JOB_TYPE, leaseSeconds)
+  const lock = await acquireExclusiveUpdateLock(JOB_TYPE, leaseSeconds)
   if (!lock) {
     console.log('ML learning skipped: ml_learning lock is already active')
     return

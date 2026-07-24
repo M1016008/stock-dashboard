@@ -8,7 +8,7 @@ import { eq } from 'drizzle-orm'
 import { db } from '@/lib/db/client'
 import { batchRuns } from '@/lib/db/schema'
 import { getDataFreshness } from '@/lib/server/data-freshness'
-import { acquireUpdateLock } from '@/lib/server/update-lock'
+import { acquireExclusiveUpdateLock } from '@/lib/server/update-lock'
 
 type RunResult = {
   code: number | null
@@ -114,7 +114,7 @@ async function main(): Promise<void> {
 
   const criticalOnly = process.env.REFRESH_AFTER_OHLCV_CRITICAL_ONLY === '1'
   const skipLock = process.env.REFRESH_AFTER_OHLCV_SKIP_LOCK === '1'
-  const lock = skipLock ? null : await acquireUpdateLock('post_ohlcv_refresh')
+  const lock = skipLock ? null : await acquireExclusiveUpdateLock('post_ohlcv_refresh')
   if (!skipLock && !lock) {
     console.log('Post-OHLCV refresh skipped: post_ohlcv_refresh lock is already active')
     return

@@ -8,7 +8,7 @@ import { eq } from 'drizzle-orm'
 import { db } from '@/lib/db/client'
 import { batchRuns } from '@/lib/db/schema'
 import { getDataFreshness } from '@/lib/server/data-freshness'
-import { acquireUpdateLock } from '@/lib/server/update-lock'
+import { acquireExclusiveUpdateLock } from '@/lib/server/update-lock'
 import { waitForMemoryHeadroom, withMemoryGuardEnv } from '@/lib/system/memory-guard'
 
 type RunResult = {
@@ -106,7 +106,7 @@ function errorMessage(error: unknown): string {
 }
 
 async function main() {
-  const lock = await acquireUpdateLock('update_latest')
+  const lock = await acquireExclusiveUpdateLock('update_latest')
   if (!lock) {
     console.log('Latest data update skipped: update_latest lock is already active')
     return

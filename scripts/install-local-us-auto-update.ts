@@ -47,12 +47,11 @@ function marketCloseRetrySchedule(): string {
   // Tue-Sat JST corresponds to Mon-Fri US closes. 06:30 JST is after both
   // daylight-saving (05:00 JST close) and standard-time (06:00 JST close).
   const weekdays = [2, 3, 4, 5, 6]
+  // The second run is a delayed-data retry. Keep both runs before the JP
+  // afternoon refresh window so the two large DB pipelines do not compete.
   const times = [
     [6, 30],
-    [7, 30],
-    [8, 30],
-    [12, 30],
-    [18, 30],
+    [10, 30],
   ] as const
   return weekdays.flatMap((weekday) => times.map(([hour, minute]) => calendar(hour, minute, weekday))).join('\n')
 }
@@ -136,5 +135,5 @@ execFileSync('launchctl', ['bootstrap', `gui/${uid}`, plistPath], { stdio: 'inhe
 execFileSync('launchctl', ['enable', `gui/${uid}/${label}`], { stdio: 'inherit' })
 
 console.log(`launchd registered: ${plistPath}`)
-console.log('schedule: Tue-Sat 06:30, 07:30, 08:30, 12:30, 18:30 JST')
+console.log('schedule: Tue-Sat 06:30, 10:30 JST')
 console.log(`logs: ${path.join(logDir, 'us-update-latest.log')}`)

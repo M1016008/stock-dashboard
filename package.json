@@ -15,6 +15,8 @@
     "test:ml-horizons": "tsx scripts/test-ml-horizons.ts",
     "test:forward-extrema": "tsx scripts/test-forward-extrema.ts",
     "start": "next start",
+    "web:install": "tsx scripts/install-local-web-server.ts",
+    "web:status": "launchctl print gui/$(id -u)/com.stockboard.web",
     "share:dev": "STOCKBOARD_SHARE_MODE=1 STOCKBOARD_SHARE_READ_ONLY=1 npm run dev",
     "share:start": "STOCKBOARD_SHARE_MODE=1 STOCKBOARD_SHARE_READ_ONLY=1 next start",
     "share:tunnel:quick": "cloudflared tunnel --url http://localhost:3000",

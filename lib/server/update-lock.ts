@@ -1,6 +1,13 @@
 import { client, ensureReady, execAll, execGet } from '@/lib/db/client'
 
 export const DEFAULT_UPDATE_LOCK_LEASE_SECONDS = 45 * 60
+export const EXCLUSIVE_UPDATE_JOB_TYPES = [
+  'update_latest',
+  'post_ohlcv_refresh',
+  'ml_learning',
+  'ml_freshness_guard',
+  'us_update_latest',
+] as const
 
 export type UpdateLockSnapshot = {
   jobType: string
@@ -32,27 +39,51 @@ function isSqliteBusyError(error: unknown): boolean {
 export async function acquireUpdateLock(
   jobType: string,
   leaseSeconds = DEFAULT_UPDATE_LOCK_LEASE_SECONDS,
+  conflictingJobTypes: readonly string[] = [],
 ): Promise<UpdateLockHandle | null> {
   await ensureReady()
   await cleanupExpiredUpdateLocks()
   const owner = makeOwner(jobType)
-  const result = await client.execute({
-    sql: `
-      INSERT INTO update_locks (
-        job_type, status, owner, started_at, heartbeat_at, lease_expires_at
+  const conflicts = [...new Set(conflictingJobTypes.filter((candidate) => candidate !== jobType))]
+  const activeConflictSql = conflicts.length > 0
+    ? `
+      AND NOT EXISTS (
+        SELECT 1
+        FROM update_locks AS conflicting_lock
+        WHERE conflicting_lock.job_type IN (${conflicts.map(() => '?').join(', ')})
+          AND conflicting_lock.status = 'running'
+          AND conflicting_lock.lease_expires_at > unixepoch()
       )
-      VALUES (?, 'running', ?, unixepoch(), unixepoch(), unixepoch() + ?)
-      ON CONFLICT(job_type) DO UPDATE SET
-        status = 'running',
-        owner = excluded.owner,
-        started_at = unixepoch(),
-        heartbeat_at = unixepoch(),
-        lease_expires_at = unixepoch() + ?
-      WHERE update_locks.status <> 'running'
-         OR update_locks.lease_expires_at <= unixepoch()
-    `,
-    args: [jobType, owner, leaseSeconds, leaseSeconds],
-  })
+    `
+    : ''
+  let result
+  try {
+    result = await client.execute({
+      sql: `
+        INSERT INTO update_locks (
+          job_type, status, owner, started_at, heartbeat_at, lease_expires_at
+        )
+        SELECT ?, 'running', ?, unixepoch(), unixepoch(), unixepoch() + ?
+        WHERE 1 = 1
+          ${activeConflictSql}
+        ON CONFLICT(job_type) DO UPDATE SET
+          status = 'running',
+          owner = excluded.owner,
+          started_at = unixepoch(),
+          heartbeat_at = unixepoch(),
+          lease_expires_at = unixepoch() + ?
+        WHERE (
+          update_locks.status <> 'running'
+          OR update_locks.lease_expires_at <= unixepoch()
+        )
+          ${activeConflictSql}
+      `,
+      args: [jobType, owner, leaseSeconds, ...conflicts, leaseSeconds, ...conflicts],
+    })
+  } catch (error) {
+    if (isSqliteBusyError(error)) return null
+    throw error
+  }
 
   if (result.rowsAffected < 1) return null
 
@@ -86,6 +117,17 @@ export async function acquireUpdateLock(
       })
     },
   }
+}
+
+export async function acquireExclusiveUpdateLock(
+  jobType: string,
+  leaseSeconds = DEFAULT_UPDATE_LOCK_LEASE_SECONDS,
+): Promise<UpdateLockHandle | null> {
+  return acquireUpdateLock(
+    jobType,
+    leaseSeconds,
+    EXCLUSIVE_UPDATE_JOB_TYPES,
+  )
 }
 
 export async function getUpdateLock(jobType: string): Promise<UpdateLockSnapshot | null> {

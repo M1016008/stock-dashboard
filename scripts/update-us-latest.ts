@@ -5,7 +5,7 @@
 
 import { execFileSync, spawn } from 'node:child_process'
 import { execGet } from '@/lib/db/client'
-import { acquireUpdateLock } from '@/lib/server/update-lock'
+import { acquireExclusiveUpdateLock } from '@/lib/server/update-lock'
 import { waitForMemoryHeadroom, withMemoryGuardEnv } from '@/lib/system/memory-guard'
 
 type RunResult = {
@@ -180,7 +180,7 @@ async function main() {
     return
   }
 
-  const lock = await acquireUpdateLock('us_update_latest', 6 * 60 * 60)
+  const lock = await acquireExclusiveUpdateLock('us_update_latest', 6 * 60 * 60)
   if (!lock) {
     console.log('US latest update skipped: us_update_latest lock is already active')
     return

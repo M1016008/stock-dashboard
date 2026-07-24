@@ -7,7 +7,7 @@ import { spawn } from 'node:child_process'
 import { eq } from 'drizzle-orm'
 import { db } from '@/lib/db/client'
 import { batchRuns } from '@/lib/db/schema'
-import { acquireUpdateLock } from '@/lib/server/update-lock'
+import { acquireExclusiveUpdateLock } from '@/lib/server/update-lock'
 
 type RunResult = {
   code: number | null
@@ -71,7 +71,7 @@ async function runRequiredWithRetry(script: string): Promise<void> {
 async function main() {
   const lock = process.env.EARNINGS_REFRESH_SKIP_LOCK === '1'
     ? null
-    : await acquireUpdateLock('update_latest', 30 * 60)
+    : await acquireExclusiveUpdateLock('update_latest', 30 * 60)
 
   if (!lock && process.env.EARNINGS_REFRESH_SKIP_LOCK !== '1') {
     console.log('Earnings refresh skipped: update_latest lock is already active')

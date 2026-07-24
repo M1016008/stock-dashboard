@@ -30,11 +30,6 @@ type GuardTime = {
 }
 
 const DEFAULT_GUARD_TIMES: GuardTime[] = [
-  { hour: 7, minute: 30 },
-  { hour: 12, minute: 30 },
-  { hour: 18, minute: 30 },
-  { hour: 21, minute: 30 },
-  { hour: 22, minute: 30 },
   { hour: 23, minute: 45 },
 ]
 
