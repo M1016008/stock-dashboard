@@ -10,6 +10,7 @@ import os from 'node:os'
 import path from 'node:path'
 
 const webLabel = 'com.stockboard.web'
+const analogLabel = 'com.stockboard.analog-search'
 const healthLabel = 'com.stockboard.web-health'
 const cwd = process.cwd()
 const home = os.homedir()
@@ -18,13 +19,16 @@ const launchAgentsDir = path.join(home, 'Library', 'LaunchAgents')
 const logDir = path.join(home, 'Library', 'Logs', 'StockBoard')
 const stateDir = path.join(home, 'Library', 'Application Support', 'StockBoard')
 const webPlistPath = path.join(launchAgentsDir, `${webLabel}.plist`)
+const analogPlistPath = path.join(launchAgentsDir, `${analogLabel}.plist`)
 const healthPlistPath = path.join(launchAgentsDir, `${healthLabel}.plist`)
 const healthScriptPath = path.join(stateDir, 'check-web-health.zsh')
 const nextBin = path.join(cwd, 'node_modules', 'next', 'dist', 'bin', 'next')
 const liveDistDir = process.env.STOCKBOARD_WEB_DIST_DIR || '.next-live'
 const buildIdPath = path.join(cwd, liveDistDir, 'BUILD_ID')
 const port = integerEnv('STOCKBOARD_WEB_PORT', 3000, 1, 65535)
+const analogPort = integerEnv('STOCKBOARD_ANALOG_PORT', 3105, 1, 65535)
 const heapMb = integerEnv('STOCKBOARD_WEB_MAX_OLD_SPACE_MB', 2048, 512, 8192)
+const analogHeapMb = integerEnv('STOCKBOARD_ANALOG_MAX_OLD_SPACE_MB', 1536, 512, 4096)
 const healthIntervalSeconds = integerEnv('STOCKBOARD_WEB_HEALTH_INTERVAL_SECONDS', 60, 30, 3600)
 const healthTimeoutSeconds = integerEnv('STOCKBOARD_WEB_HEALTH_TIMEOUT_SECONDS', 20, 5, 120)
 const healthFailureThreshold = integerEnv('STOCKBOARD_WEB_HEALTH_FAILURE_THRESHOLD', 3, 2, 10)
@@ -117,6 +121,7 @@ const webPlist = `<?xml version="1.0" encoding="UTF-8"?>
     <key>NODE_ENV</key><string>production</string>
     <key>NODE_OPTIONS</key><string>--max-old-space-size=${heapMb}</string>
     <key>NEXT_DIST_DIR</key><string>${liveDistDir}</string>
+    <key>ANALOG_SEARCH_PROXY_URL</key><string>http://127.0.0.1:${analogPort}</string>
     <key>PATH</key><string>${xmlEscape(pathEnv)}</string>
     <key>SKIP_SCHEMA_ENSURE</key><string>1</string>
     <key>SQLITE_BUSY_RETRIES</key><string>3</string>
@@ -146,34 +151,99 @@ const webPlist = `<?xml version="1.0" encoding="UTF-8"?>
 </plist>
 `
 
+const analogPlist = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>${analogLabel}</string>
+  <key>WorkingDirectory</key>
+  <string>${xmlEscape(cwd)}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${xmlEscape(process.execPath)}</string>
+    <string>${xmlEscape(nextBin)}</string>
+    <string>start</string>
+    <string>-p</string>
+    <string>${analogPort}</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>NODE_ENV</key><string>production</string>
+    <key>NODE_OPTIONS</key><string>--max-old-space-size=${analogHeapMb}</string>
+    <key>NEXT_DIST_DIR</key><string>${liveDistDir}</string>
+    <key>ANALOG_SEARCH_WORKER</key><string>1</string>
+    <key>ANALOG_SEQUENCE_APPROXIMATE_LIMIT</key><string>400</string>
+    <key>ANALOG_SEQUENCE_EXACT_POOL_LIMIT</key><string>250</string>
+    <key>PATH</key><string>${xmlEscape(pathEnv)}</string>
+    <key>SKIP_SCHEMA_ENSURE</key><string>1</string>
+    <key>SQLITE_BUSY_RETRIES</key><string>3</string>
+    <key>SQLITE_BUSY_TIMEOUT_MS</key><string>5000</string>
+    <key>US_SQLITE_BUSY_RETRIES</key><string>3</string>
+    <key>USE_LOCAL_DB</key><string>1</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>Nice</key>
+  <integer>12</integer>
+  <key>SoftResourceLimits</key>
+  <dict>
+    <key>NumberOfFiles</key><integer>65536</integer>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>${xmlEscape(path.join(logDir, 'analog-search.log'))}</string>
+  <key>StandardErrorPath</key>
+  <string>${xmlEscape(path.join(logDir, 'analog-search.err'))}</string>
+</dict>
+</plist>
+`
+
 const healthScript = `#!/bin/zsh
 set -u
 
-COUNT_FILE=${shellQuote(path.join(stateDir, 'web-health-failures'))}
-HEALTH_URL=${shellQuote(`http://127.0.0.1:${port}/api/health`)}
-LABEL=${shellQuote(webLabel)}
+check_service() {
+  local health_url="$1"
+  local label="$2"
+  local count_file="$3"
 
-if /usr/bin/curl --silent --fail --max-time ${healthTimeoutSeconds} "$HEALTH_URL" | /usr/bin/grep --quiet '"status":"ok"'; then
-  /bin/echo 0 > "$COUNT_FILE"
-  exit 0
-fi
+  if /usr/bin/curl --silent --fail --max-time ${healthTimeoutSeconds} "$health_url" | /usr/bin/grep --quiet '"status":"ok"'; then
+    /bin/echo 0 > "$count_file"
+    return
+  fi
 
-count=0
-if [[ -f "$COUNT_FILE" ]]; then
-  count=$(/bin/cat "$COUNT_FILE" 2>/dev/null || /bin/echo 0)
-fi
-if ! [[ "$count" =~ ^[0-9]+$ ]]; then
-  count=0
-fi
-count=$((count + 1))
-/bin/echo "$count" > "$COUNT_FILE"
-/bin/echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) health check failed count=$count"
+  local count=0
+  if [[ -f "$count_file" ]]; then
+    count=$(/bin/cat "$count_file" 2>/dev/null || /bin/echo 0)
+  fi
+  if ! [[ "$count" =~ ^[0-9]+$ ]]; then
+    count=0
+  fi
+  count=$((count + 1))
+  /bin/echo "$count" > "$count_file"
+  /bin/echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $label health check failed count=$count"
 
-if (( count >= ${healthFailureThreshold} )); then
-  /bin/echo 0 > "$COUNT_FILE"
-  /bin/launchctl kickstart -k "gui/$UID/$LABEL"
-  /bin/echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) restarted $LABEL after $count failures"
-fi
+  if (( count >= ${healthFailureThreshold} )); then
+    /bin/echo 0 > "$count_file"
+    /bin/launchctl kickstart -k "gui/$UID/$label"
+    /bin/echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) restarted $label after $count failures"
+  fi
+}
+
+check_service \
+  ${shellQuote(`http://127.0.0.1:${port}/api/health`)} \
+  ${shellQuote(webLabel)} \
+  ${shellQuote(path.join(stateDir, 'web-health-failures'))}
+check_service \
+  ${shellQuote(`http://127.0.0.1:${analogPort}/api/health`)} \
+  ${shellQuote(analogLabel)} \
+  ${shellQuote(path.join(stateDir, 'analog-health-failures'))}
 
 exit 0
 `
@@ -205,13 +275,17 @@ const healthPlist = `<?xml version="1.0" encoding="UTF-8"?>
 `
 
 fs.writeFileSync(webPlistPath, webPlist)
+fs.writeFileSync(analogPlistPath, analogPlist)
 fs.writeFileSync(healthPlistPath, healthPlist)
 fs.writeFileSync(healthScriptPath, healthScript, { mode: 0o755 })
 
 bootout(healthLabel)
 bootout(webLabel)
+bootout(analogLabel)
 sleep(750)
 
+bootstrap(analogPlistPath)
+execFileSync('launchctl', ['enable', `gui/${uid}/${analogLabel}`], { stdio: 'inherit' })
 bootstrap(webPlistPath)
 execFileSync('launchctl', ['enable', `gui/${uid}/${webLabel}`], { stdio: 'inherit' })
 bootstrap(healthPlistPath)
@@ -220,7 +294,11 @@ execFileSync('launchctl', ['kickstart', `gui/${uid}/${webLabel}`], { stdio: 'inh
 
 console.log(`web service: ${webLabel} http://localhost:${port}`)
 console.log(
-  `health monitor: ${healthLabel} every ${healthIntervalSeconds}s `
+  `analog worker: ${analogLabel} http://127.0.0.1:${analogPort} `
+  + `(heap ${analogHeapMb} MB, background priority)`,
+)
+console.log(
+  `health monitor: ${healthLabel} checks web + analog every ${healthIntervalSeconds}s `
   + `(timeout ${healthTimeoutSeconds}s, restart after ${healthFailureThreshold} failures)`,
 )
 console.log(`heap limit: ${heapMb} MB`)

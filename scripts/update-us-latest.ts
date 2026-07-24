@@ -262,6 +262,12 @@ async function main() {
     }, heartbeat)
     await lock.heartbeat()
 
+    await runNpm('batch:analog-index:us', {
+      US_ANALYTICS_DB_PATH: usAnalyticsDbPath,
+      UPDATE_CHILD_TIMEOUT_MINUTES: process.env.ANALOG_INDEX_DAILY_TIMEOUT_MINUTES ?? '60',
+    }, heartbeat)
+    await lock.heartbeat()
+
     if (process.env.US_SKIP_DAILY_ML === '1') {
       console.log('US daily ML skipped (US_SKIP_DAILY_ML=1)')
     } else {

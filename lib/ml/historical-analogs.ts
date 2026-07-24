@@ -52,7 +52,7 @@ export function normalizeHistoricalAnalogSort(value: string | null | undefined):
 }
 
 export function stageNeighborCodes(stageCode: string | null | undefined, maxDistance = 1): string[] {
-  if (!stageCode || !/^[1-6]{6}$/.test(stageCode)) return stageCode ? [stageCode] : []
+  if (!stageCode || !/^[1-6]{5,6}$/.test(stageCode)) return stageCode ? [stageCode] : []
   const seen = new Set<string>([stageCode])
   let frontier = [stageCode]
   for (let distance = 1; distance <= maxDistance; distance += 1) {

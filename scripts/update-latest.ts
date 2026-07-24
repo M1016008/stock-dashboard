@@ -175,6 +175,19 @@ async function main() {
     await runRequired('scripts/build-dashboard-cache.ts', {}, heartbeat)
     await lock.heartbeat()
 
+    const analogIndexError = await runOptional(
+      'analog-sequence-index',
+      'scripts/build-analog-sequence-index.ts',
+      {
+        ANALOG_INDEX_MARKET: 'JP',
+        ANALOG_INDEX_MODE: 'incremental',
+        UPDATE_CHILD_TIMEOUT_MINUTES: process.env.ANALOG_INDEX_DAILY_TIMEOUT_MINUTES ?? '30',
+      },
+      heartbeat,
+    )
+    if (analogIndexError) optionalErrors.push(analogIndexError)
+    await lock.heartbeat()
+
     const afterCritical = await getDataFreshness()
     console.log('Critical freshness after:', afterCritical)
     if (

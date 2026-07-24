@@ -17,6 +17,7 @@ const stagePath = path.join(cwd, stageName)
 const previousPath = path.join(cwd, previousName)
 const legacyPath = path.join(cwd, '.next')
 const healthUrl = `http://127.0.0.1:${process.env.STOCKBOARD_WEB_PORT || '3000'}/api/health`
+const analogHealthUrl = `http://127.0.0.1:${process.env.STOCKBOARD_ANALOG_PORT || '3105'}/api/health`
 
 function removeGenerated(pathname: string): void {
   fs.rmSync(pathname, { recursive: true, force: true })
@@ -30,12 +31,12 @@ function runNpm(script: string, env: NodeJS.ProcessEnv = process.env): void {
   })
 }
 
-function waitForHealth(timeoutSeconds = 60): boolean {
+function waitForHealth(url: string, timeoutSeconds = 60): boolean {
   const deadline = Date.now() + timeoutSeconds * 1_000
   while (Date.now() < deadline) {
     const result = spawnSync(
       '/usr/bin/curl',
-      ['--silent', '--show-error', '--fail', '--max-time', '5', healthUrl],
+      ['--silent', '--show-error', '--fail', '--max-time', '5', url],
       { encoding: 'utf8' },
     )
     if (result.status === 0 && result.stdout.includes('"status":"ok"')) return true
@@ -61,18 +62,22 @@ fs.renameSync(stagePath, livePath)
 
 try {
   runNpm('web:install')
-  if (!waitForHealth()) {
+  if (!waitForHealth(healthUrl)) {
     throw new Error(`Health check did not recover within 60 seconds: ${healthUrl}`)
+  }
+  if (!waitForHealth(analogHealthUrl)) {
+    throw new Error(`Analog worker did not recover within 60 seconds: ${analogHealthUrl}`)
   }
   console.log(`deployed: ${livePath}`)
   console.log(`health: ${healthUrl}`)
+  console.log(`analog health: ${analogHealthUrl}`)
 } catch (error) {
   console.error('New live build failed. Restoring the previous build.')
   removeGenerated(livePath)
   if (hadPreviousBuild && fs.existsSync(previousPath)) {
     fs.renameSync(previousPath, livePath)
     runNpm('web:install')
-    if (!waitForHealth()) {
+    if (!waitForHealth(healthUrl)) {
       throw new Error('Rollback completed on disk, but the previous service did not recover.', {
         cause: error,
       })
@@ -82,7 +87,7 @@ try {
       ...process.env,
       STOCKBOARD_WEB_DIST_DIR: '.next',
     })
-    if (!waitForHealth()) {
+    if (!waitForHealth(healthUrl)) {
       throw new Error('Legacy rollback was installed, but the previous service did not recover.', {
         cause: error,
       })
