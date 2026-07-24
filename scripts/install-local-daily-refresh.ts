@@ -58,14 +58,9 @@ const steps: Step[] = [
     },
   },
   {
-    name: 'JP weekly full-history ML governance',
-    label: 'com.stockboard.ml-weekly-governance',
-    script: 'auto-ml-weekly:install',
-  },
-  {
-    name: 'US weekly full-history ML governance',
-    label: 'com.stockboard.us-ml-weekly',
-    script: 'auto-us-ml-weekly:install',
+    name: 'Sunday JP/US weekly optimization',
+    label: 'com.stockboard.weekly-optimization',
+    script: 'auto-weekly-optimization:install',
   },
   {
     name: 'Safe JP/US DB maintenance',
@@ -111,5 +106,5 @@ console.log('Kabutan dashboard news: every 60 minutes')
 console.log('US prices/analytics/ML: Tue-Sat 06:30, 10:30 JST')
 console.log('JP ML serving: Mon-Fri 03:00 JST, JP exchange holidays skipped')
 console.log('JP ML freshness guard: Mon-Fri 23:45 JST')
-console.log('Weekly governance: JP Sat 04:30 JST, US Sun 03:00 JST')
+console.log('Weekly optimization: Sunday 00:30 JST, sequential JP/US ML, indexes, cache, and DB maintenance')
 console.log('DB maintenance: daily 01:30 JST, skips unsafe checkpoints when DB is open')

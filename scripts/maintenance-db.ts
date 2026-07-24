@@ -5,7 +5,8 @@
 // - records DB/WAL/SHM sizes
 // - marks stale running batch/update-lock rows when the owning process is gone
 // - runs PRAGMA optimize
-// - checkpoints/truncates WAL only when no other process has the DB open
+// - optimizes planner statistics and safely attempts a WAL checkpoint; SQLite
+//   itself refuses the truncate if an active reader/writer still needs the WAL
 // - performs a smoke check by default, or PRAGMA quick_check when requested
 
 import { spawnSync } from 'node:child_process'
@@ -329,9 +330,6 @@ function maintainTarget(target: Target): MaintenanceResult {
   try {
     if (dryRun) {
       checkpoint = 'skipped_dry_run'
-      sqliteOutput = runReadOnlySmoke(target.dbPath)
-    } else if (activeHandles.length > 0 && process.env.DB_MAINT_ALLOW_ACTIVE !== '1') {
-      checkpoint = 'skipped_active_handles'
       sqliteOutput = runReadOnlySmoke(target.dbPath)
     } else {
       checkpoint = 'done'
