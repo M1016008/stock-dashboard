@@ -23,6 +23,32 @@ export function hasUsAnalyticsDb(): boolean {
   return fs.existsSync(resolveUsAnalyticsDbPath())
 }
 
+function numberEnv(name: string, fallback: number): number {
+  const value = Number(process.env[name])
+  return Number.isFinite(value) && value > 0 ? value : fallback
+}
+
+function isBusyError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return /SQLITE_BUSY|database is locked/i.test(message)
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function withBusyRetry<T>(operation: () => Promise<T>): Promise<T> {
+  const maxRetries = Math.max(0, numberEnv('US_SQLITE_BUSY_RETRIES', numberEnv('SQLITE_BUSY_RETRIES', 8)))
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await operation()
+    } catch (error) {
+      if (!isBusyError(error) || attempt >= maxRetries) throw error
+      await sleep(Math.min(2_000, 100 * 2 ** attempt))
+    }
+  }
+}
+
 function getClient(): Client {
   const dbPath = resolveUsAnalyticsDbPath()
   if (!globalForUsAnalytics.usAnalyticsClient || globalForUsAnalytics.usAnalyticsPath !== dbPath) {
@@ -38,8 +64,23 @@ async function ensurePragmas(): Promise<void> {
     const client = getClient()
     globalForUsAnalytics.usAnalyticsPragmasReady = Promise.resolve()
       .then(async () => {
-        await client.execute('PRAGMA busy_timeout=60000')
+        const busyTimeoutMs = Math.max(1_000, numberEnv('SQLITE_BUSY_TIMEOUT_MS', 60_000))
+        await client.execute(`PRAGMA busy_timeout=${busyTimeoutMs}`)
         await client.execute('PRAGMA synchronous=NORMAL')
+        const journalMode = await client.execute('PRAGMA journal_mode')
+        const mode = String(
+          journalMode.rows[0]?.journal_mode
+          ?? journalMode.rows[0]?.['journal_mode']
+          ?? '',
+        ).toLowerCase()
+        if (mode !== 'wal') {
+          try {
+            await client.execute('PRAGMA journal_mode=WAL')
+          } catch (error) {
+            if (!isBusyError(error)) throw error
+          }
+        }
+        await client.execute('PRAGMA query_only=ON')
       })
       .catch((error) => {
         delete globalForUsAnalytics.usAnalyticsPragmasReady
@@ -57,7 +98,7 @@ export async function execUsAnalyticsAll<T = Record<string, unknown>>(
     throw new Error(`US analytics DB not found: ${resolveUsAnalyticsDbPath()}`)
   }
   await ensurePragmas()
-  const res = await getClient().execute({ sql, args: args as InValue[] })
+  const res = await withBusyRetry(() => getClient().execute({ sql, args: args as InValue[] }))
   return res.rows.map((row) => ({ ...row })) as unknown as T[]
 }
 

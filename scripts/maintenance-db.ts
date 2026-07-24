@@ -11,6 +11,7 @@
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
+import { acquireExclusiveUpdateLock } from '@/lib/server/update-lock'
 
 type TargetName = 'jp' | 'us'
 
@@ -110,9 +111,12 @@ function sizes(dbPath: string): SizeSnapshot {
 }
 
 function runSqlite(dbPath: string, sql: string, options: { readonly?: boolean } = {}): string {
+  const target = options.readonly
+    ? `file:${dbPath}?mode=ro`
+    : dbPath
   const args = [
-    ...(options.readonly ? ['-readonly'] : []),
-    dbPath,
+    ...(!options.readonly ? ['-cmd', '.timeout 15000'] : []),
+    target,
     sql,
   ]
   const result = spawnSync(SQLITE_BIN, args, {
@@ -280,7 +284,7 @@ function runReadOnlySmoke(dbPath: string): string[] {
     'PRAGMA page_count;',
     'PRAGMA freelist_count;',
   ].join(' ')
-  return runSqlite(dbPath, sql).split('\n').filter(Boolean)
+  return runSqlite(dbPath, sql, { readonly: true }).split('\n').filter(Boolean)
 }
 
 function runWritableMaintenance(dbPath: string): string[] {
@@ -353,23 +357,35 @@ function maintainTarget(target: Target): MaintenanceResult {
   }
 }
 
-function main(): void {
-  const results = parseTargets().map(maintainTarget)
-  console.log(JSON.stringify({
-    generatedAt: new Date().toISOString(),
-    dryRun: process.env.DRY_RUN === '1',
-    checkMode: process.env.DB_MAINT_CHECK_MODE ?? 'smoke',
-    results,
-  }, null, 2))
+async function main(): Promise<void> {
+  const lock = await acquireExclusiveUpdateLock('db_maintenance', 30 * 60)
+  if (!lock) {
+    console.log(JSON.stringify({
+      generatedAt: new Date().toISOString(),
+      skipped: true,
+      reason: 'another StockBoard writer is active',
+    }, null, 2))
+    return
+  }
 
-  if (results.some((result) => result.checkpoint === 'failed')) {
-    process.exitCode = 1
+  try {
+    const results = parseTargets().map(maintainTarget)
+    console.log(JSON.stringify({
+      generatedAt: new Date().toISOString(),
+      dryRun: process.env.DRY_RUN === '1',
+      checkMode: process.env.DB_MAINT_CHECK_MODE ?? 'smoke',
+      results,
+    }, null, 2))
+
+    if (results.some((result) => result.checkpoint === 'failed')) {
+      process.exitCode = 1
+    }
+  } finally {
+    await lock.release()
   }
 }
 
-try {
-  main()
-} catch (error) {
+main().catch((error) => {
   console.error('[maintenance-db] failed:', error)
   process.exitCode = 1
-}
+})

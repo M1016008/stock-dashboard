@@ -450,7 +450,7 @@ async function main(): Promise<void> {
     STOCKBOARD_DB_ROLE: 'us-analytics',
     STOCKBOARD_DB_PATH: usAnalyticsDbPath,
     US_ANALYTICS_DB_PATH: usAnalyticsDbPath,
-    SQLITE_BUSY_RETRIES: process.env.SQLITE_BUSY_RETRIES ?? '720',
+    SQLITE_BUSY_RETRIES: process.env.SQLITE_BUSY_RETRIES ?? '12',
     UPDATE_CHILD_TIMEOUT_MINUTES: process.env.UPDATE_CHILD_TIMEOUT_MINUTES ?? '2880',
     US_ML_FULL_START_DATE: process.env.US_ML_FULL_START_DATE ?? '1900-01-01',
     US_ML_STEP_MAX_ATTEMPTS: process.env.US_ML_STEP_MAX_ATTEMPTS ?? '3',

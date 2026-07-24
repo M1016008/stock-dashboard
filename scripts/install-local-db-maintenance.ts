@@ -24,7 +24,7 @@ const pathEnv = [
   '/sbin',
 ].join(':')
 
-const scheduleHour = Number(process.env.DB_MAINT_HOUR ?? '10')
+const scheduleHour = Number(process.env.DB_MAINT_HOUR ?? '1')
 const scheduleMinute = Number(process.env.DB_MAINT_MINUTE ?? '30')
 
 function xmlEscape(value: string): string {
@@ -64,6 +64,7 @@ const command = [
   'export DB_MAINT_TARGETS=${DB_MAINT_TARGETS:-jp,us}',
   'export DB_MAINT_CHECK_MODE=${DB_MAINT_CHECK_MODE:-smoke}',
   'export DB_MAINT_STALE_BATCH_TTL_HOURS=${DB_MAINT_STALE_BATCH_TTL_HOURS:-6}',
+  'export DB_MAINT_CLEAN_STALE_WITH_ACTIVE=${DB_MAINT_CLEAN_STALE_WITH_ACTIVE:-1}',
   `export US_ANALYTICS_DB_PATH=${JSON.stringify(process.env.US_ANALYTICS_DB_PATH?.trim() || '/Volumes/OWC Express 1M2 80G/stockboard-data/us/stockboard-us.db')}`,
   'npm run db:maintenance',
 ].join(' && ')

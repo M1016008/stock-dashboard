@@ -57,7 +57,7 @@ async function main(): Promise<void> {
     STOCKBOARD_DB_PATH: dbPath,
     STOCKBOARD_DB_ROLE: market === 'us' ? 'us-analytics' : 'jp',
     US_ANALYTICS_DB_PATH: market === 'us' ? dbPath : process.env.US_ANALYTICS_DB_PATH,
-    SQLITE_BUSY_RETRIES: process.env.SQLITE_BUSY_RETRIES ?? '720',
+    SQLITE_BUSY_RETRIES: process.env.SQLITE_BUSY_RETRIES ?? '12',
     ML_FULL_START_DATE: fullStartDate,
     ML_ACCURACY_REQUIRED_HORIZONS: ML_PRIMARY_HORIZON_LIST,
   }

@@ -71,10 +71,10 @@ async function runRequiredWithRetry(script: string): Promise<void> {
 async function main() {
   const lock = process.env.EARNINGS_REFRESH_SKIP_LOCK === '1'
     ? null
-    : await acquireExclusiveUpdateLock('update_latest', 30 * 60)
+    : await acquireExclusiveUpdateLock('earnings_refresh', 2 * 60 * 60)
 
   if (!lock && process.env.EARNINGS_REFRESH_SKIP_LOCK !== '1') {
-    console.log('Earnings refresh skipped: update_latest lock is already active')
+    console.log('Earnings refresh skipped: another StockBoard writer is active')
     return
   }
 

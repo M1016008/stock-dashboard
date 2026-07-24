@@ -74,7 +74,7 @@ async function main(): Promise<void> {
       USE_LOCAL_DB: '1',
       STOCKBOARD_DB_PATH: path,
       US_ANALYTICS_DB_PATH: path,
-      SQLITE_BUSY_RETRIES: process.env.SQLITE_BUSY_RETRIES ?? '720',
+      SQLITE_BUSY_RETRIES: process.env.SQLITE_BUSY_RETRIES ?? '12',
       ML_PHYSICS_START_DATE: process.env.ML_PHYSICS_START_DATE ?? DEFAULT_START_DATE,
       ML_PHYSICS_RECENT_DAYS: '0',
       ML_PHYSICS_MIN_HISTORY_DAYS: process.env.ML_PHYSICS_MIN_HISTORY_DAYS ?? '220',

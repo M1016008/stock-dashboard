@@ -22,6 +22,9 @@ type Heartbeat = () => Promise<void>
 async function runScript(script: string, envOverrides: EnvOverrides = {}, heartbeat?: Heartbeat): Promise<RunResult> {
   await waitForMemoryHeadroom({ label: script })
   return new Promise((resolve, reject) => {
+    // The child is the active SQLite writer. Keep the parent out of the DB
+    // until the child exits; manual heartbeats run between pipeline steps.
+    void heartbeat
     const timeoutMinutes = Number(
       envOverrides.UPDATE_CHILD_TIMEOUT_MINUTES
       ?? process.env.UPDATE_CHILD_TIMEOUT_MINUTES
@@ -39,17 +42,6 @@ async function runScript(script: string, envOverrides: EnvOverrides = {}, heartb
       }),
     })
 
-    const heartbeatTimer = heartbeat
-      ? setInterval(() => {
-          heartbeat().catch((err) => {
-            console.warn(`heartbeat failed while running ${script}:`, errorMessage(err))
-          })
-        }, 60_000)
-      : null
-
-    const clearHeartbeat = () => {
-      if (heartbeatTimer) clearInterval(heartbeatTimer)
-    }
     const timeoutTimer = Number.isFinite(timeoutMinutes) && timeoutMinutes > 0
       ? setTimeout(() => {
           timedOut = true
@@ -62,7 +54,6 @@ async function runScript(script: string, envOverrides: EnvOverrides = {}, heartb
       : null
 
     const clearTimers = () => {
-      clearHeartbeat()
       if (timeoutTimer) clearTimeout(timeoutTimer)
     }
 
@@ -92,7 +83,13 @@ async function runOptional(
   heartbeat?: Heartbeat,
 ): Promise<string | null> {
   try {
-    await runRequired(script, envOverrides, heartbeat)
+    await runRequired(script, {
+      UPDATE_CHILD_TIMEOUT_MINUTES:
+        process.env.UPDATE_OPTIONAL_CHILD_TIMEOUT_MINUTES
+        ?? envOverrides.UPDATE_CHILD_TIMEOUT_MINUTES
+        ?? '30',
+      ...envOverrides,
+    }, heartbeat)
     return null
   } catch (err) {
     const message = `${label}: ${errorMessage(err)}`
@@ -105,8 +102,24 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+function currentJstHour(): number {
+  const hour = Number(
+    new Intl.DateTimeFormat('en-US', {
+      timeZone: 'Asia/Tokyo',
+      hour: '2-digit',
+      hour12: false,
+    }).format(new Date()),
+  )
+  return Number.isFinite(hour) ? hour % 24 : new Date().getHours()
+}
+
 async function main() {
-  const lock = await acquireExclusiveUpdateLock('update_latest')
+  const runStartedJstHour = currentJstHour()
+  const configuredLockLeaseSeconds = Number(process.env.UPDATE_LATEST_LOCK_SECONDS)
+  const lockLeaseSeconds = Number.isFinite(configuredLockLeaseSeconds) && configuredLockLeaseSeconds > 0
+    ? Math.max(60 * 60, configuredLockLeaseSeconds)
+    : 3 * 60 * 60
+  const lock = await acquireExclusiveUpdateLock('update_latest', lockLeaseSeconds)
   if (!lock) {
     console.log('Latest data update skipped: update_latest lock is already active')
     return
@@ -175,8 +188,15 @@ async function main() {
       throw new Error('Critical market data refresh did not reach the expected trading date')
     }
 
-    if (process.env.UPDATE_LATEST_CRITICAL_ONLY === '1') {
-      console.log('Optional market data and ML refresh skipped (UPDATE_LATEST_CRITICAL_ONLY=1)')
+    const optionalAfterHour = Number(process.env.UPDATE_LATEST_OPTIONAL_AFTER_HOUR ?? '0')
+    const beforeOptionalWindow = Number.isFinite(optionalAfterHour)
+      && optionalAfterHour > 0
+      && runStartedJstHour < optionalAfterHour
+    if (process.env.UPDATE_LATEST_CRITICAL_ONLY === '1' || beforeOptionalWindow) {
+      const reason = beforeOptionalWindow
+        ? `scheduled heavy refresh window starts at ${optionalAfterHour}:00 JST (run started at ${runStartedJstHour}:xx)`
+        : 'UPDATE_LATEST_CRITICAL_ONLY=1'
+      console.log(`Optional market data and ML refresh skipped (${reason})`)
     } else {
       const optionalScripts: Array<[string, string, EnvOverrides]> = [
         ['indices', 'scripts/batch-indices.ts', {}],
@@ -185,13 +205,12 @@ async function main() {
         ['credit-short', 'scripts/batch-credit-short.ts', {}],
         ['serving-margin', 'scripts/build-serving-margin.ts', {}],
         ['forward-extrema', 'scripts/batch-forward-extrema.ts', {
+          FORWARD_EXTREMA_HORIZONS:
+            process.env.UPDATE_LATEST_FORWARD_EXTREMA_HORIZONS
+            ?? process.env.ML_PHYSICS_EXTREMA_HORIZONS
+            ?? '5,10,15,20,30,40,60,90,180,200',
           BACKTEST_RECENT_DAYS: process.env.UPDATE_LATEST_FORWARD_EXTREMA_RECENT_DAYS ?? process.env.BACKTEST_RECENT_DAYS ?? '60',
-        }],
-        ['forward-extrema-short', 'scripts/batch-forward-extrema.ts', {
-          FORWARD_EXTREMA_HORIZONS: process.env.ML_PHYSICS_EXTREMA_HORIZONS ?? '5,10,15,20,40,60,90,200',
-          BACKTEST_RECENT_DAYS: process.env.ML_PHYSICS_EXTREMA_RECENT_DAYS ?? process.env.BACKTEST_RECENT_DAYS ?? '60',
           FORWARD_EXTREMA_START_DATE: process.env.ML_FULL_START_DATE ?? '1900-01-01',
-          FORWARD_EXTREMA_WRITE_MODEL_LABELS: '0',
         }],
         ['serving-backtest', 'scripts/build-serving-backtest.ts', {}],
         ['serving-stock', 'scripts/build-serving-stock.ts', {}],

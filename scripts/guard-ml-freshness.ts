@@ -6,7 +6,7 @@
 import { spawn, spawnSync } from 'node:child_process'
 import { execAll, execGet, execRun } from '@/lib/db/client'
 import { ML_PHYSICS_FEATURE_SET } from '@/lib/backtest/ml-physics'
-import { ML_PRIMARY_HORIZON_LIST } from '@/lib/backtest/ml-horizons'
+import { ML_PRIMARY_HORIZONS, ML_PRIMARY_HORIZON_LIST } from '@/lib/backtest/ml-horizons'
 import { acquireExclusiveUpdateLock, getActiveUpdateLocks } from '@/lib/server/update-lock'
 
 type DateCount = {
@@ -149,6 +149,63 @@ function classify(
   return { key, date: actual.date, count: actual.count, status: 'ok', reason: null }
 }
 
+async function physicsStatusFreshness(): Promise<FreshnessCheck> {
+  const staleHorizons: string[] = []
+  let latestRunDate: string | null = null
+  let availableHorizons = 0
+
+  for (const horizon of ML_PRIMARY_HORIZONS) {
+    const [labelDate, evaluation] = await Promise.all([
+      maxDate(`SELECT MAX(date) AS date FROM ml_short_labels WHERE horizon_days = ?`, [horizon]),
+      execGet<{ endDate: string | null; runDate: string | null }>(
+        `
+          SELECT
+            MAX(end_date) AS endDate,
+            MAX(evaluation_date) AS runDate
+          FROM ml_physics_status_evaluations
+          WHERE feature_set = ?
+            AND horizon_days = ?
+            AND sample_count > 0
+        `,
+        [ML_PHYSICS_FEATURE_SET, horizon],
+      ),
+    ])
+    const endDate = evaluation?.endDate ?? null
+    const runDate = evaluation?.runDate ?? null
+    if (runDate && (!latestRunDate || runDate > latestRunDate)) latestRunDate = runDate
+    if (endDate) availableHorizons += 1
+    if (!labelDate || !endDate || endDate < labelDate) {
+      staleHorizons.push(`${horizon}:${endDate ?? '-'}<${labelDate ?? '-'}`)
+    }
+  }
+
+  if (availableHorizons === 0) {
+    return {
+      key: 'ml_physics_status_evaluations',
+      date: latestRunDate,
+      count: 0,
+      status: 'missing',
+      reason: 'no evaluated horizons',
+    }
+  }
+  if (staleHorizons.length > 0) {
+    return {
+      key: 'ml_physics_status_evaluations',
+      date: latestRunDate,
+      count: availableHorizons,
+      status: 'stale',
+      reason: staleHorizons.join(', '),
+    }
+  }
+  return {
+    key: 'ml_physics_status_evaluations',
+    date: latestRunDate,
+    count: availableHorizons,
+    status: 'ok',
+    reason: null,
+  }
+}
+
 async function collectChecks(): Promise<{ price: DateCount; checks: FreshnessCheck[] }> {
   const price = await priceDateCount()
   const priceDate = price.date
@@ -161,6 +218,7 @@ async function collectChecks(): Promise<{ price: DateCount; checks: FreshnessChe
     physicsCandidateDate,
     mlCandidateDate,
     predictionDate,
+    rlPolicyDate,
   ] = await Promise.all([
     maxDate(`SELECT MAX(date) AS date FROM daily_snapshots`),
     maxDate(`SELECT MAX(date) AS date FROM ml_feature_vectors`),
@@ -169,9 +227,10 @@ async function collectChecks(): Promise<{ price: DateCount; checks: FreshnessChe
     maxDate(`SELECT MAX(as_of_date) AS date FROM serving_ml_physics_candidates`),
     maxDate(`SELECT MAX(as_of_date) AS date FROM serving_ml_candidates`),
     maxDate(`SELECT MAX(as_of_date) AS date FROM ml_predictions`),
+    maxDate(`SELECT MAX(evaluation_date) AS date FROM ml_rl_policy_evaluations`),
   ])
 
-  const [snapshots, modelFeatures, physicsFeatures, currentSimilars, physicsCandidates, mlCandidates, predictions] = await Promise.all([
+  const [snapshots, modelFeatures, physicsFeatures, currentSimilars, physicsCandidates, mlCandidates, predictions, rlPolicy, physicsStatus] = await Promise.all([
     tableDateCount('daily_snapshots', 'date', snapshotDate),
     tableDateCount('ml_feature_vectors', 'date', modelFeatureDate),
     tableDateCount('ml_feature_vectors_v2', 'date', physicsFeatureDate, 'AND feature_set = ?', [ML_PHYSICS_FEATURE_SET]),
@@ -184,6 +243,8 @@ async function collectChecks(): Promise<{ price: DateCount; checks: FreshnessChe
     tableDateCount('serving_ml_physics_candidates', 'as_of_date', physicsCandidateDate),
     tableDateCount('serving_ml_candidates', 'as_of_date', mlCandidateDate),
     tableDateCount('ml_predictions', 'as_of_date', predictionDate),
+    tableDateCount('ml_rl_policy_evaluations', 'evaluation_date', rlPolicyDate),
+    physicsStatusFreshness(),
   ])
 
   return {
@@ -196,6 +257,8 @@ async function collectChecks(): Promise<{ price: DateCount; checks: FreshnessChe
       classify('serving_ml_physics_candidates', priceDate, null, physicsCandidates, MIN_PHYSICS_CANDIDATES),
       classify('serving_ml_candidates', priceDate, null, mlCandidates, 2),
       classify('ml_predictions', priceDate, null, predictions, 2),
+      classify('ml_rl_policy_evaluations', priceDate, null, rlPolicy, 1),
+      physicsStatus,
     ],
   }
 }
@@ -209,7 +272,7 @@ function runNpm(script: string, extraEnv: Record<string, string> = {}): Promise<
       env: {
         ...process.env,
         USE_LOCAL_DB: '1',
-        SQLITE_BUSY_RETRIES: process.env.SQLITE_BUSY_RETRIES ?? '240',
+        SQLITE_BUSY_RETRIES: process.env.SQLITE_BUSY_RETRIES ?? '12',
         ...extraEnv,
       },
     })
@@ -279,6 +342,34 @@ async function repair(checks: FreshnessCheck[]): Promise<string[]> {
   if (hasBad(checks, ['serving_current_similars', 'serving_ml_physics_candidates', 'ml_feature_vectors_v2.physics', 'model_features', 'daily_snapshots'])) {
     actions.push('batch:ml-insights')
     await runRequired('batch:ml-insights')
+  }
+
+  if (hasBad(checks, ['ml_rl_policy_evaluations', 'ml_feature_vectors_v2.physics', 'model_features', 'daily_snapshots'])) {
+    actions.push('batch:ml-short-labels')
+    await runRequired('batch:ml-short-labels', {
+      ML_SHORT_HORIZONS: process.env.ML_SHORT_HORIZONS ?? ML_PRIMARY_HORIZON_LIST,
+      ML_SHORT_LABEL_RECENT_DAYS: process.env.ML_SHORT_LABEL_RECENT_DAYS ?? process.env.ML_DAILY_RL_RECENT_DAYS ?? '60',
+      ML_SHORT_LABEL_START_DATE: process.env.ML_FULL_START_DATE ?? '1900-01-01',
+      ML_SHORT_WRITE_RL_STATES: '1',
+    })
+    actions.push('batch:ml-rl-policy')
+    await runRequired('batch:ml-rl-policy', {
+      ML_RL_HORIZONS: process.env.ML_RL_HORIZONS ?? ML_PRIMARY_HORIZON_LIST,
+      ML_RL_RECENT_DAYS: process.env.ML_RL_RECENT_DAYS ?? process.env.ML_DAILY_RL_RECENT_DAYS ?? '60',
+      ML_RL_START_DATE: process.env.ML_FULL_START_DATE ?? '1900-01-01',
+    })
+  }
+
+  if (hasBad(checks, ['ml_physics_status_evaluations', 'ml_rl_policy_evaluations', 'ml_feature_vectors_v2.physics', 'model_features', 'daily_snapshots'])) {
+    actions.push('batch:ml-physics-status-evaluate')
+    await runRequired('batch:ml-physics-status-evaluate', {
+      ML_PHYSICS_STATUS_HORIZONS: process.env.ML_PHYSICS_STATUS_HORIZONS ?? ML_PRIMARY_HORIZON_LIST,
+      ML_PHYSICS_STATUS_RECENT_DAYS:
+        process.env.ML_PHYSICS_STATUS_RECENT_DAYS
+        ?? process.env.ML_DAILY_STATUS_RECENT_DAYS
+        ?? '60',
+      ML_PHYSICS_STATUS_START_DATE: process.env.ML_FULL_START_DATE ?? '1900-01-01',
+    })
   }
 
   actions.push('batch:historical-universe')
@@ -366,7 +457,7 @@ async function recordRun(status: string, startedAt: number, actions: string[], e
 
 async function main() {
   process.env.USE_LOCAL_DB = process.env.USE_LOCAL_DB ?? '1'
-  process.env.SQLITE_BUSY_RETRIES = process.env.SQLITE_BUSY_RETRIES ?? '240'
+  process.env.SQLITE_BUSY_RETRIES = process.env.SQLITE_BUSY_RETRIES ?? '12'
   const startedAt = nowSeconds()
   await clearStaleOwnLock()
   const lock = await acquireExclusiveUpdateLock(JOB_TYPE, envNumber('ML_FRESHNESS_GUARD_LOCK_SECONDS', 6 * 60 * 60))
@@ -374,12 +465,6 @@ async function main() {
     console.log('[ml-freshness-guard] skipped: guard lock is already active')
     return
   }
-
-  const heartbeat = setInterval(() => {
-    lock.heartbeat().catch((error) => {
-      console.warn(`[ml-freshness-guard] heartbeat failed: ${error instanceof Error ? error.message : String(error)}`)
-    })
-  }, 60_000)
 
   const actions: string[] = []
   try {
@@ -417,6 +502,8 @@ async function main() {
     console.log(JSON.stringify({ phase: 'before', repair: REPAIR, dryRun: DRY_RUN, price: before.price, checks: before.checks }, null, 2))
     const bad = before.checks.filter((check) => check.status !== 'ok')
     if (bad.length === 0) {
+      actions.push('batch:historical-universe')
+      await runRequired('batch:historical-universe')
       actions.push('batch:ml-feature-health')
       await runRequired('batch:ml-feature-health')
       actions.push('ml:freshness-check')
@@ -440,7 +527,6 @@ async function main() {
     await recordRun('failed', startedAt, actions, message)
     throw error
   } finally {
-    clearInterval(heartbeat)
     await lock.release()
   }
 }

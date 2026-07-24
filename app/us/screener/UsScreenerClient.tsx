@@ -3,7 +3,9 @@
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { useEffect, useMemo, useState } from 'react'
+import { ArrowDownAZ, ArrowUpAZ, Filter, RotateCcw } from 'lucide-react'
 import { StageTag } from '@/components/ui/StageTag'
+import { SavedViewManager } from '@/components/ui/SavedViewManager'
 import { formatShortTermStrength } from '@/lib/short-term-check'
 
 type Row = {
@@ -26,6 +28,18 @@ type Row = {
   shortTermCheckLabel?: string | null
   shortTermCheckScore?: number | null
   shortTermCheckReasons?: string[] | null
+}
+
+type UsScreenerView = {
+  query: string
+  exchange: string
+  sector: string
+  stageCode: string
+  avgVolumeMin: string
+  priceMin: string
+  priceMax: string
+  sort: string
+  dir: 'asc' | 'desc'
 }
 
 const SORT_VALUES = new Set(['ticker', 'exchange', 'sector', 'industry', 'price', 'changePct', 'volume', 'avgVolume20', 'marketCap', 'stageCode', 'pms', 'pfs', 'pes', 'shortTermCheckScore', 'shortTermCheckLabel'])
@@ -55,10 +69,10 @@ function fmtScore(value: number | null | undefined) {
 
 function displayMessage(message: string | null) {
   if (!message) {
-    return 'USデータが未取得です。`npm run batch:us-universe && npm run batch:us-ohlcv && npm run batch:us-snapshots` を実行してください。'
+    return 'USデータが未取得です。データ更新状況を確認してください。'
   }
   if (message.includes('snapshots are not generated')) {
-    return 'USステージデータが未生成です。Tiingo取得後に `npm run batch:us-snapshots` を実行してください。'
+    return 'USステージデータが未生成です。更新ジョブの完了後に再読み込みしてください。'
   }
   return message
 }
@@ -108,6 +122,7 @@ export function UsScreenerClient() {
   const [dir, setDir] = useState<'asc' | 'desc'>(initialDir)
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
+  const [filtersOpen, setFiltersOpen] = useState(true)
   const params = useMemo(() => {
     const sp = new URLSearchParams({ limit: String(requestedLimit), sort, dir })
     if (query.trim()) sp.set('q', query.trim())
@@ -122,75 +137,172 @@ export function UsScreenerClient() {
 
   useEffect(() => {
     let cancelled = false
-    setLoading(true)
-    fetch(`/api/us/screener?${params}`, { cache: 'no-store' })
-      .then((res) => res.json())
-      .then((data) => {
-        if (cancelled) return
-        setRows(Array.isArray(data.rows) ? data.rows : [])
-        setDate(data.date ?? null)
-        setMessage(typeof data.message === 'string' ? data.message : null)
-      })
-      .catch((error) => {
-        if (cancelled) return
-        setRows([])
-        setMessage(error instanceof Error ? error.message : 'USスクリーナーAPIの取得に失敗しました。')
-      })
-      .finally(() => { if (!cancelled) setLoading(false) })
-    return () => { cancelled = true }
+    const controller = new AbortController()
+    const timer = window.setTimeout(() => {
+      setLoading(true)
+      fetch(`/api/us/screener?${params}`, { cache: 'no-store', signal: controller.signal })
+        .then((res) => res.json())
+        .then((data) => {
+          if (cancelled) return
+          setRows(Array.isArray(data.rows) ? data.rows : [])
+          setDate(data.date ?? null)
+          setMessage(typeof data.message === 'string' ? data.message : null)
+        })
+        .catch((error) => {
+          if (cancelled || (error instanceof DOMException && error.name === 'AbortError')) return
+          setRows([])
+          setMessage(error instanceof Error ? error.message : 'USスクリーナーAPIの取得に失敗しました。')
+        })
+        .finally(() => { if (!cancelled) setLoading(false) })
+    }, 180)
+    return () => {
+      cancelled = true
+      controller.abort()
+      window.clearTimeout(timer)
+    }
   }, [params])
+
+  const view = useMemo<UsScreenerView>(() => ({
+    query,
+    exchange,
+    sector,
+    stageCode,
+    avgVolumeMin,
+    priceMin,
+    priceMax,
+    sort,
+    dir,
+  }), [query, exchange, sector, stageCode, avgVolumeMin, priceMin, priceMax, sort, dir])
+
+  const applyView = (next: UsScreenerView) => {
+    setQuery(next.query ?? '')
+    setExchange(next.exchange ?? '')
+    setSector(next.sector ?? '')
+    setStageCode(next.stageCode ?? '')
+    setAvgVolumeMin(next.avgVolumeMin ?? '')
+    setPriceMin(next.priceMin ?? '')
+    setPriceMax(next.priceMax ?? '')
+    setSort(SORT_VALUES.has(next.sort) ? next.sort : 'ticker')
+    setDir(next.dir === 'desc' ? 'desc' : 'asc')
+  }
+
+  const resetFilters = () => {
+    setQuery('')
+    setExchange('')
+    setSector('')
+    setStageCode('')
+    setAvgVolumeMin('')
+    setPriceMin('')
+    setPriceMax('')
+    setSort('ticker')
+    setDir('asc')
+  }
+
+  const activeFilters = [
+    query.trim() ? `検索: ${query.trim()}` : '',
+    exchange.trim() ? `取引所: ${exchange.trim()}` : '',
+    sector.trim() ? `業種: ${sector.trim()}` : '',
+    stageCode.trim() ? `6ステージ: ${stageCode.trim()}` : '',
+    avgVolumeMin.trim() ? `20日平均出来高 ≥ ${avgVolumeMin}` : '',
+    priceMin.trim() ? `価格 ≥ ${priceMin}` : '',
+    priceMax.trim() ? `価格 ≤ ${priceMax}` : '',
+  ].filter(Boolean)
 
   return (
     <div className="rounded-[var(--radius-card)] border border-[var(--color-border-default)] bg-white shadow-[var(--shadow-card)]">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-4 py-3">
         <div>
           <div className="text-[14px] font-bold text-[var(--color-brand-900)]">USスクリーナー</div>
-          <div className="mt-1 text-[11px] font-semibold text-[var(--color-text-tertiary)]">基準日 {date ?? '-'} / Tiingo EOD</div>
+          <div className="mt-1 text-[11px] font-semibold text-[var(--color-text-tertiary)]">
+            基準日 {date ?? '-'} / {loading ? '更新中' : `${rows.length.toLocaleString('ja-JP')}件`}
+          </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <SavedViewManager
+            storageKey="stockboard_us_screener_views"
+            value={view}
+            onApply={applyView}
+          />
+          <button
+            type="button"
+            onClick={resetFilters}
+            className="inline-flex h-8 w-8 items-center justify-center border border-[var(--color-border-default)] bg-white text-[var(--color-text-secondary)]"
+            title="条件をリセット"
+            aria-label="条件をリセット"
+          >
+            <RotateCcw size={14} />
+          </button>
+          <button
+            type="button"
+            onClick={() => setFiltersOpen((current) => !current)}
+            className={`inline-flex h-8 items-center gap-1.5 border px-2.5 text-[11px] font-black ${
+              filtersOpen
+                ? 'border-[var(--color-brand-700)] bg-[var(--color-brand-700)] text-white'
+                : 'border-[var(--color-border-default)] bg-white text-[var(--color-text-secondary)]'
+            }`}
+            aria-expanded={filtersOpen}
+          >
+            <Filter size={14} />
+            条件
+          </button>
+        </div>
+      </div>
+
+      {activeFilters.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 border-b border-[var(--color-border-soft)] px-4 py-2">
+          {activeFilters.map((filter) => (
+            <span key={filter} className="border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-2 py-1 text-[10px] font-bold text-[var(--color-text-secondary)]">
+              {filter}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {filtersOpen && (
+        <div className="grid gap-2 border-b border-[var(--color-border-default)] bg-white px-4 py-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6">
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="AAPL / Microsoft"
-            className="h-8 rounded-[4px] border border-[var(--color-border-default)] px-3 text-[12px] font-semibold"
+            className="h-8 min-w-0 border border-[var(--color-border-default)] px-3 text-[12px] font-semibold"
           />
           <input
             value={exchange}
             onChange={(event) => setExchange(event.target.value.toUpperCase())}
             placeholder="NASDAQ / NYSE"
-            className="h-8 w-[130px] rounded-[4px] border border-[var(--color-border-default)] px-3 text-[12px] font-semibold"
+            className="h-8 min-w-0 border border-[var(--color-border-default)] px-3 text-[12px] font-semibold"
           />
           <input
             value={sector}
             onChange={(event) => setSector(event.target.value)}
             placeholder="セクター"
-            className="h-8 w-[130px] rounded-[4px] border border-[var(--color-border-default)] px-3 text-[12px] font-semibold"
+            className="h-8 min-w-0 border border-[var(--color-border-default)] px-3 text-[12px] font-semibold"
           />
           <input
             value={stageCode}
             onChange={(event) => setStageCode(event.target.value.replace(/[^1-6]/g, '').slice(0, 6))}
-            placeholder="6桁 prefix"
-            className="h-8 w-[100px] rounded-[4px] border border-[var(--color-border-default)] px-3 text-[12px] font-semibold"
+            placeholder="6桁ステージ"
+            className="h-8 min-w-0 border border-[var(--color-border-default)] px-3 text-[12px] font-semibold"
           />
           <input
             value={avgVolumeMin}
             onChange={(event) => setAvgVolumeMin(event.target.value.replace(/[^\d]/g, ''))}
             placeholder="20日平均出来高"
-            className="h-8 w-[130px] rounded-[4px] border border-[var(--color-border-default)] px-3 text-[12px] font-semibold"
+            className="h-8 min-w-0 border border-[var(--color-border-default)] px-3 text-[12px] font-semibold"
           />
           <input
             value={priceMin}
             onChange={(event) => setPriceMin(event.target.value.replace(/[^\d.]/g, ''))}
             placeholder="価格下限"
-            className="h-8 w-[90px] rounded-[4px] border border-[var(--color-border-default)] px-3 text-[12px] font-semibold"
+            className="h-8 min-w-0 border border-[var(--color-border-default)] px-3 text-[12px] font-semibold"
           />
           <input
             value={priceMax}
             onChange={(event) => setPriceMax(event.target.value.replace(/[^\d.]/g, ''))}
             placeholder="価格上限"
-            className="h-8 w-[90px] rounded-[4px] border border-[var(--color-border-default)] px-3 text-[12px] font-semibold"
+            className="h-8 min-w-0 border border-[var(--color-border-default)] px-3 text-[12px] font-semibold"
           />
-          <select value={sort} onChange={(event) => setSort(event.target.value)} className="h-8 rounded-[4px] border border-[var(--color-border-default)] px-2 text-[12px] font-bold">
+          <select value={sort} onChange={(event) => setSort(event.target.value)} className="h-8 min-w-0 border border-[var(--color-border-default)] px-2 text-[12px] font-bold">
             <option value="ticker">コード</option>
             <option value="exchange">取引所</option>
             <option value="sector">セクター</option>
@@ -206,16 +318,18 @@ export function UsScreenerClient() {
             <option value="pfs">PFS</option>
             <option value="pes">PES</option>
           </select>
-          <button type="button" onClick={() => setDir(dir === 'asc' ? 'desc' : 'asc')} className="h-8 rounded-[4px] border border-[var(--color-border-default)] bg-white px-3 text-[12px] font-bold">
+          <button type="button" onClick={() => setDir(dir === 'asc' ? 'desc' : 'asc')} className="inline-flex h-8 items-center justify-center gap-1.5 border border-[var(--color-border-default)] bg-white px-3 text-[12px] font-bold">
+            {dir === 'asc' ? <ArrowUpAZ size={14} /> : <ArrowDownAZ size={14} />}
             {dir === 'asc' ? '昇順' : '降順'}
           </button>
         </div>
-      </div>
-      <div className="overflow-x-auto">
-        <table className="min-w-[1280px] w-full border-collapse text-left text-[12px]">
+      )}
+
+      <div className="max-h-[70vh] overflow-auto">
+        <table className="data-table min-w-[1280px] w-full border-collapse text-left text-[12px]">
           <thead>
             <tr className="border-b border-[var(--color-border-default)] bg-white text-[11px] font-bold text-[var(--color-text-secondary)]">
-              <th className="px-3 py-2">銘柄</th>
+              <th className="sticky left-0 z-[3] bg-white px-3 py-2">銘柄</th>
               <th className="px-3 py-2">取引所</th>
               <th className="px-3 py-2">業種</th>
               <th className="px-3 py-2">6桁</th>
@@ -231,7 +345,7 @@ export function UsScreenerClient() {
           <tbody>
             {rows.map((row) => (
               <tr key={row.ticker} className="border-b border-[var(--color-border-subtle)]">
-                <td className="px-3 py-2">
+                <td className="sticky left-0 z-[1] bg-white px-3 py-2">
                   <Link href={`/us/stock/${row.ticker}`} className="font-bold text-[var(--color-brand-900)] hover:text-[var(--color-market-red)]">
                     {row.ticker} {row.name ?? ''}
                   </Link>

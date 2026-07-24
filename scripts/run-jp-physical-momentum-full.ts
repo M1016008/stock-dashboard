@@ -110,7 +110,7 @@ async function main(): Promise<void> {
     ...process.env,
     USE_LOCAL_DB: '1',
     STOCKBOARD_DB_PATH: path,
-    SQLITE_BUSY_RETRIES: process.env.SQLITE_BUSY_RETRIES ?? '720',
+    SQLITE_BUSY_RETRIES: process.env.SQLITE_BUSY_RETRIES ?? '12',
     PMS_MARKETS: 'JP',
     PMS_RECENT_DAYS: String(RECENT_DAYS),
     PMS_BATCH_CHUNK: process.env.JP_PMS_BATCH_CHUNK ?? process.env.PMS_BATCH_CHUNK ?? '300',

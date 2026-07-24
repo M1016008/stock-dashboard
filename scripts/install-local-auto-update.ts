@@ -33,13 +33,49 @@ function xmlEscape(value: string): string {
     .replaceAll("'", '&apos;')
 }
 
-function calendar(hour: number, minute: number): string {
+function calendar(hour: number, minute: number, weekday: number): string {
   return [
     '    <dict>',
+    `      <key>Weekday</key><integer>${weekday}</integer>`,
     `      <key>Hour</key><integer>${hour}</integer>`,
     `      <key>Minute</key><integer>${minute}</integer>`,
     '    </dict>',
   ].join('\n')
+}
+
+function marketDayRetrySchedule(): string {
+  // launchd Weekday: 1=Monday ... 5=Friday.
+  // Exchange holidays are harmless no-op runs in the updater, but weekends
+  // must not consume memory or contend with weekly ML governance.
+  const weekdays = [1, 2, 3, 4, 5]
+  const times = [
+    [16, 40],
+    [16, 55],
+    [17, 20],
+    [18, 10],
+    [21, 10],
+  ] as const
+  return weekdays.flatMap((weekday) => times.map(([hour, minute]) => calendar(hour, minute, weekday))).join('\n')
+}
+
+function sleep(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+}
+
+function bootstrap(attempts = 6): void {
+  let lastError: unknown
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      execFileSync('launchctl', ['bootstrap', `gui/${uid}`, plistPath], {
+        stdio: attempt === attempts ? 'inherit' : 'ignore',
+      })
+      return
+    } catch (error) {
+      lastError = error
+      if (attempt < attempts) sleep(500 * attempt)
+    }
+  }
+  throw lastError
 }
 
 fs.mkdirSync(launchAgentsDir, { recursive: true })
@@ -54,9 +90,18 @@ const command = [
   'export STOCKBOARD_MEMORY_MAX_COMPRESSOR_MB=${STOCKBOARD_MEMORY_MAX_COMPRESSOR_MB:-8192}',
   'export STOCKBOARD_MEMORY_WAIT_SECONDS=${STOCKBOARD_MEMORY_WAIT_SECONDS:-1800}',
   'export STOCKBOARD_NODE_MAX_OLD_SPACE_MB=${STOCKBOARD_NODE_MAX_OLD_SPACE_MB:-3072}',
-  'export SQLITE_BUSY_RETRIES=20',
+  // A busy optional writer must fail fast enough for the next scheduled
+  // repair to run. Required refreshes still retry through their own jobs.
+  'export SQLITE_BUSY_TIMEOUT_MS=${SQLITE_BUSY_TIMEOUT_MS:-15000}',
+  'export SQLITE_BUSY_RETRIES=${SQLITE_BUSY_RETRIES:-6}',
   'export UPDATE_CHILD_TIMEOUT_MINUTES=75',
+  'export UPDATE_OPTIONAL_CHILD_TIMEOUT_MINUTES=${UPDATE_OPTIONAL_CHILD_TIMEOUT_MINUTES:-30}',
+  'export UPDATE_LATEST_OPTIONAL_AFTER_HOUR=${UPDATE_LATEST_OPTIONAL_AFTER_HOUR:-21}',
   'export SKIP_DAILY_ML=1',
+  'export SERVING_DATE_LIMIT=${SERVING_DATE_LIMIT:-60}',
+  'export SERVING_SUMMARY_DATE_CHUNK=${SERVING_SUMMARY_DATE_CHUNK:-30}',
+  'export SERVING_RESULT_DATE_CHUNK=${SERVING_RESULT_DATE_CHUNK:-10}',
+  'export SERVING_EVIDENCE_DATE_CHUNK=${SERVING_EVIDENCE_DATE_CHUNK:-10}',
   // 夕方の差分更新は全期間再計算に倒さない。全期間ML/PMSは週次ジョブへ分離する。
   'export PMS_DAILY_RECENT_DAYS=${PMS_DAILY_RECENT_DAYS:-30}',
   'export ML_DAILY_RECENT_DAYS=${ML_DAILY_RECENT_DAYS:-5}',
@@ -88,11 +133,7 @@ const plist = `<?xml version="1.0" encoding="UTF-8"?>
   </array>
   <key>StartCalendarInterval</key>
   <array>
-${calendar(16, 40)}
-${calendar(16, 55)}
-${calendar(17, 20)}
-${calendar(18, 10)}
-${calendar(21, 10)}
+${marketDayRetrySchedule()}
   </array>
   <key>StandardOutPath</key>
   <string>${xmlEscape(path.join(logDir, 'update-latest.log'))}</string>
@@ -112,9 +153,10 @@ try {
   // 未登録なら問題なし。
 }
 
-execFileSync('launchctl', ['bootstrap', `gui/${uid}`, plistPath], { stdio: 'inherit' })
+sleep(750)
+bootstrap()
 execFileSync('launchctl', ['enable', `gui/${uid}/${label}`], { stdio: 'inherit' })
 
 console.log(`launchd registered: ${plistPath}`)
-console.log('schedule: 16:40, 16:55, 17:20, 18:10, 21:10 JST')
+console.log('schedule: Mon-Fri 16:40, 16:55, 17:20, 18:10, 21:10 JST')
 console.log(`logs: ${path.join(logDir, 'update-latest.log')}`)

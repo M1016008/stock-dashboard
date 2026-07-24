@@ -62,8 +62,9 @@ async function ensureLocalSqlitePragmas(): Promise<void> {
   if (!globalForDb.sqlitePragmasReady) {
     globalForDb.sqlitePragmasReady = Promise.resolve()
       .then(async () => {
+        const busyTimeoutMs = Math.max(1_000, Number(process.env.SQLITE_BUSY_TIMEOUT_MS ?? 60_000))
         await client.execute('PRAGMA synchronous=NORMAL')
-        await client.execute('PRAGMA busy_timeout=60000')
+        await client.execute(`PRAGMA busy_timeout=${busyTimeoutMs}`)
         const journalMode = await client.execute('PRAGMA journal_mode')
         const mode = String(
           journalMode.rows[0]?.journal_mode

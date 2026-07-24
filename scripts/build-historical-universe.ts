@@ -27,6 +27,11 @@ type SampleRow = {
   ml_physics_v2_rows: number
 }
 
+const ML_PHYSICS_WARMUP_GAP_DAYS = Math.max(
+  0,
+  Number(process.env.ML_PHYSICS_WARMUP_GAP_DAYS ?? 3),
+)
+
 function asNumber(value: unknown): number {
   return Number(value ?? 0)
 }
@@ -109,12 +114,17 @@ async function main() {
         u.margin_type,
         o.ohlcv_rows,
         COALESCE(v.ml_physics_v2_rows, 0),
-        CASE WHEN COALESCE(v.ml_physics_v2_rows, 0) = o.ohlcv_rows THEN 1 ELSE 0 END,
+        CASE
+          WHEN COALESCE(v.ml_physics_v2_rows, 0) >= MAX(0, o.ohlcv_rows - ?)
+          THEN 1
+          ELSE 0
+        END,
         'ohlcv_daily',
         json_object(
           'latestOhlcvDate', ?,
           'currentByLatestOhlcv', CASE WHEN o.last_trade_date = ? THEN 1 ELSE 0 END,
-          'featureSet', ?
+          'featureSet', ?,
+          'warmupGapDays', ?
         ),
         unixepoch()
       FROM hist_ohlcv o
@@ -122,7 +132,16 @@ async function main() {
       LEFT JOIN hist_v2 v ON v.ticker = o.ticker
       ORDER BY o.ticker
       `,
-      [latestDate, latestDate, latestDate, latestDate, latestDate, ML_PHYSICS_FEATURE_SET],
+      [
+        latestDate,
+        latestDate,
+        latestDate,
+        ML_PHYSICS_WARMUP_GAP_DAYS,
+        latestDate,
+        latestDate,
+        ML_PHYSICS_FEATURE_SET,
+        ML_PHYSICS_WARMUP_GAP_DAYS,
+      ],
     )
 
     const summary = await execGet<SummaryRow>(

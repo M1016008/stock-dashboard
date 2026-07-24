@@ -4,10 +4,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
+import { Filter, RotateCcw } from 'lucide-react'
 import { toTvSymbol, buildTvWatchlistText } from '@/lib/tv-format'
 import { WatchlistButton } from '@/components/ui/WatchlistButton'
 import { StageDots } from '@/components/ui/StageDots'
 import { MarketDateCalendar } from '@/components/ui/MarketDateCalendar'
+import { SavedViewManager } from '@/components/ui/SavedViewManager'
 import { getUniverseFilterMeta, parseUniverseFilter, UNIVERSE_FILTER_PARAM } from '@/lib/market-universe'
 import { formatShortTermStrength, SHORT_TERM_CHECK_LABELS, type ShortTermCheckLabel } from '@/lib/short-term-check'
 import type { PhysicsStatus } from '@/lib/ml/physics-analysis'
@@ -191,6 +193,30 @@ type SortKey =
 interface SortState {
   key: SortKey
   dir: 'asc' | 'desc'
+}
+
+interface JpScreenerView {
+  stages: Partial<Record<AxisKey, number[]>>
+  selectedDate: string | null
+  selectedMarketSegment: string
+  selectedSectorLarge: string
+  selectedSector33: string
+  selectedMarginType: string
+  selectedVolumeMin: VolumeMinValue | null
+  selectedEarningsWindowWeeks: EarningsWindowWeeks | null
+  selectedMa200Direction: Ma200Direction | ''
+  selectedShortTermCheck: string
+  selectedPhysicalStatus: string
+  selectedMcapBins: number[]
+  pmsMin: string
+  pfsMin: string
+  pesMin: string
+  accelerationPositive: boolean
+  forcePositive: boolean
+  stage23Candidate: boolean
+  pmsTrend: string
+  selectedPhysicalStatusHorizon: PhysicalStatusHorizon
+  sort: SortState | null
 }
 
 interface ActiveFilterChip {
@@ -397,6 +423,7 @@ export default function ScreenerPage() {
   const [selectedPhysicalStatusHorizon, setSelectedPhysicalStatusHorizon] = useState<PhysicalStatusHorizon>(() => (
     parsePhysicalStatusHorizon(searchParams.get('physicalStatusHorizon'))
   ))
+  const [filtersExpanded, setFiltersExpanded] = useState(true)
   const referenceDate = snapshotDate ?? selectedDate
   const tradingDates = useMemo(
     () => availableDates.map((item) => item.date).filter(Boolean).sort(),
@@ -893,6 +920,60 @@ export default function ScreenerPage() {
     }
   }
 
+  const savedView = {
+    stages,
+    selectedDate,
+    selectedMarketSegment,
+    selectedSectorLarge,
+    selectedSector33,
+    selectedMarginType,
+    selectedVolumeMin,
+    selectedEarningsWindowWeeks,
+    selectedMa200Direction,
+    selectedShortTermCheck,
+    selectedPhysicalStatus,
+    selectedMcapBins: Array.from(selectedMcapBins),
+    pmsMin,
+    pfsMin,
+    pesMin,
+    accelerationPositive,
+    forcePositive,
+    stage23Candidate,
+    pmsTrend,
+    selectedPhysicalStatusHorizon,
+    sort,
+  } satisfies JpScreenerView
+
+  function applySavedView(view: JpScreenerView) {
+    setStages(view.stages ?? {})
+    setSelectedDate(view.selectedDate ?? null)
+    setSelectedMarketSegment(view.selectedMarketSegment ?? '')
+    setSelectedSectorLarge(view.selectedSectorLarge ?? '')
+    setSelectedSector33(view.selectedSector33 ?? '')
+    setSelectedMarginType(view.selectedMarginType ?? '')
+    setSelectedVolumeMin(view.selectedVolumeMin ?? null)
+    setSelectedEarningsWindowWeeks(view.selectedEarningsWindowWeeks ?? null)
+    setSelectedMa200Direction(view.selectedMa200Direction ?? '')
+    setSelectedShortTermCheck(view.selectedShortTermCheck ?? '')
+    setSelectedPhysicalStatus(view.selectedPhysicalStatus ?? '')
+    setSelectedMcapBins(new Set(view.selectedMcapBins ?? []))
+    setPmsMin(view.pmsMin ?? '')
+    setPfsMin(view.pfsMin ?? '')
+    setPesMin(view.pesMin ?? '')
+    setAccelerationPositive(Boolean(view.accelerationPositive))
+    setForcePositive(Boolean(view.forcePositive))
+    setStage23Candidate(Boolean(view.stage23Candidate))
+    setPmsTrend(view.pmsTrend ?? '')
+    setSelectedPhysicalStatusHorizon(
+      PHYSICAL_STATUS_HORIZONS.includes(view.selectedPhysicalStatusHorizon)
+        ? view.selectedPhysicalStatusHorizon
+        : 20,
+    )
+    setSort(view.sort && isSortKey(view.sort.key)
+      ? { key: view.sort.key, dir: view.sort.dir === 'asc' ? 'asc' : 'desc' }
+      : { key: 'marketCap', dir: 'desc' })
+  }
+
   return (
     <div className="sb-page">
       <div className="sb-page-title">
@@ -901,6 +982,39 @@ export default function ScreenerPage() {
       </div>
 
       <div style={{ padding: '14px 16px 16px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+      <div className="flex flex-wrap items-center justify-between gap-2 border border-[var(--color-border-default)] bg-white px-3 py-2">
+        <SavedViewManager
+          storageKey="stockboard_jp_screener_views"
+          value={savedView}
+          onApply={applySavedView}
+        />
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={resetAllFilters}
+            className="inline-flex h-8 w-8 items-center justify-center border border-[var(--color-border-default)] bg-white text-[var(--color-text-secondary)]"
+            title="条件をリセット"
+            aria-label="条件をリセット"
+          >
+            <RotateCcw size={14} />
+          </button>
+          <button
+            type="button"
+            onClick={() => setFiltersExpanded((current) => !current)}
+            className={`inline-flex h-8 items-center gap-1.5 border px-2.5 text-[11px] font-black ${
+              filtersExpanded
+                ? 'border-[var(--color-brand-700)] bg-[var(--color-brand-700)] text-white'
+                : 'border-[var(--color-border-default)] bg-white text-[var(--color-text-secondary)]'
+            }`}
+            aria-expanded={filtersExpanded}
+          >
+            <Filter size={14} />
+            条件 {activeFilterChips.length > 0 ? `(${activeFilterChips.length})` : ''}
+          </button>
+        </div>
+      </div>
+      {filtersExpanded && (
+      <div className="flex flex-col gap-3">
       {/* 市場区分で絞り込み */}
       <Section step={1} label="市場区分で絞り込み（任意）">
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
@@ -1326,6 +1440,8 @@ export default function ScreenerPage() {
           </div>
         )}
       </Section>
+      </div>
+      )}
 
       <ScreenerConditionPanel
         chips={activeFilterChips}
@@ -1465,8 +1581,8 @@ export default function ScreenerPage() {
               </button>
             </div>
           ) : (
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ minWidth: '3480px', borderCollapse: 'collapse', fontSize: '12px' }}>
+            <div style={{ overflow: 'auto', maxHeight: '72vh' }}>
+              <table className="data-table" style={{ minWidth: '3480px', borderCollapse: 'collapse', fontSize: '12px' }}>
                 <thead>
                   <tr style={{ background: 'var(--bg-elevated)', borderBottom: '1px solid var(--border-dim)' }}>
                     <th scope="col" style={th}></th>

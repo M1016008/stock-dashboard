@@ -82,8 +82,13 @@ npm run dev
 ブラウザで開きます。
 
 ```text
-http://localhost:3000
+http://localhost:3001
 ```
+
+Mac miniでは `http://localhost:3000` をlaunchd管理の公開用サイト、
+`http://localhost:3001` を開発用サイトとして分離します。開発中の変更や
+ビルドが公開用サイトを停止させることはありません。公開反映時は
+`npm run web:deploy` を使用してください。
 
 ## 6. 最新コードを取り込む
 

@@ -75,7 +75,7 @@ if (warnings.length > 0) {
 }
 
 if (problems.length === 0) {
-  console.log('\nMacBook開発環境の基本チェックはOKです。npm run dev で起動できます。')
+  console.log('\nMacBook開発環境の基本チェックはOKです。npm run dev で http://localhost:3001 に起動できます。')
 }
 
 process.exit(problems.length > 0 ? 1 : 0)

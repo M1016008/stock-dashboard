@@ -3,6 +3,7 @@
 
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
 import type { CSSProperties, FormEvent } from 'react'
+import { BrainCircuit, ChartCandlestick, GitCompareArrows, LayoutDashboard, NotebookPen } from 'lucide-react'
 import { MarketBadge } from '@/components/ui/MarketBadge'
 import { MarginBadges } from '@/components/ui/MarginBadges'
 import { PriceDisplay } from '@/components/ui/PriceDisplay'
@@ -21,6 +22,12 @@ import { findTicker } from '@/lib/master/tickers'
 import { STAGE_BG_COLORS, STAGE_BORDER_COLORS, STAGE_LABELS } from '@/lib/hex-stage'
 import { buildShortTermCheck, formatShortTermStrength, type ShortTermCheckTone } from '@/lib/short-term-check'
 import { buildPhysicalMomentumView, type PhysicalMomentumCheck, type PhysicalMomentumTone } from '@/lib/physical-momentum-view'
+import {
+  isComparedSymbol,
+  recordRecentSymbol,
+  toggleComparedSymbol,
+  WORKSPACE_EVENT,
+} from '@/lib/client/stock-workspace'
 import type { StockQuote } from '@/types/stock'
 
 interface StockDetailClientProps {
@@ -57,12 +64,16 @@ interface StockMarginInfo {
   }>
 }
 
+type StockDetailTab = 'overview' | 'chart' | 'scenario' | 'ml'
+
 export function StockDetailClient({ ticker }: StockDetailClientProps) {
   const [quote, setQuote] = useState<StockQuote | null>(null)
   const [smaster, setSmaster] = useState<SectorMasterRow | null>(null)
   const [marginInfo, setMarginInfo] = useState<StockMarginInfo | null>(null)
   const [loading, setLoading] = useState(true)
   const [analysisDate, setAnalysisDate] = useState<string | null>(null)
+  const [activeTab, setActiveTab] = useState<StockDetailTab>('overview')
+  const [compared, setCompared] = useState(false)
 
   const hardcoded = findTicker(ticker)
 
@@ -112,6 +123,32 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
   const displayCode = ticker.replace('.T', '')
   const name = smaster?.name ?? hardcoded?.name ?? quote?.name ?? '---'
 
+  useEffect(() => {
+    const readTab = () => {
+      const hash = window.location.hash.replace('#', '')
+      if (hash === 'chart' || hash === 'scenario' || hash === 'ml' || hash === 'overview') {
+        setActiveTab(hash)
+      }
+    }
+    const syncCompared = () => setCompared(isComparedSymbol('JP', displayCode))
+    readTab()
+    syncCompared()
+    recordRecentSymbol({ market: 'JP', ticker: displayCode, name: name === '---' ? null : name })
+    window.addEventListener('hashchange', readTab)
+    window.addEventListener(WORKSPACE_EVENT, syncCompared)
+    return () => {
+      window.removeEventListener('hashchange', readTab)
+      window.removeEventListener(WORKSPACE_EVENT, syncCompared)
+    }
+  }, [displayCode, name])
+
+  const selectTab = (tab: StockDetailTab) => {
+    setActiveTab(tab)
+    const url = new URL(window.location.href)
+    url.hash = tab
+    window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`)
+  }
+
   const updateAnalysisDate = useCallback((date: string | null) => {
     setAnalysisDate(date)
     const url = new URL(window.location.href)
@@ -126,133 +163,189 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
   return (
     <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
 
-      {/* ヘッダー */}
-      <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: '12px',
-        borderBottom: '1px solid var(--border-subtle)',
-        paddingBottom: '12px',
-        flexWrap: 'wrap',
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
-          <span style={{ fontSize: '22px', lineHeight: 1 }}>
-            <WatchlistButton ticker={ticker} size="md" />
-          </span>
-          <h1 style={{ display: 'flex', minWidth: 0, alignItems: 'center', gap: '8px', margin: 0, flexWrap: 'wrap' }}>
-            <span style={{
-              fontFamily: 'var(--font-mono)',
-              fontSize: '22px',
-              fontWeight: 700,
-              color: 'var(--accent-primary)',
-            }}>
-              {displayCode}
+      <div className="stock-detail-sticky border border-[var(--color-border-default)] bg-white shadow-[0_2px_8px_rgba(16,32,52,0.12)]">
+        {/* ヘッダー */}
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '12px',
+          padding: '10px 12px 8px',
+          flexWrap: 'wrap',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
+            <span style={{ fontSize: '22px', lineHeight: 1 }}>
+              <WatchlistButton ticker={ticker} size="md" />
             </span>
-            <MarketBadge />
-            <span style={{ minWidth: 0, fontSize: '14px', color: 'var(--text-primary)', fontWeight: 600 }}>
-              {name}
-            </span>
-          </h1>
-        </div>
+            <h1 style={{ display: 'flex', minWidth: 0, alignItems: 'center', gap: '8px', margin: 0, flexWrap: 'wrap' }}>
+              <span style={{
+                fontFamily: 'var(--font-mono)',
+                fontSize: '22px',
+                fontWeight: 700,
+                color: 'var(--accent-primary)',
+              }}>
+                {displayCode}
+              </span>
+              <MarketBadge />
+              <span style={{ minWidth: 0, fontSize: '14px', color: 'var(--text-primary)', fontWeight: 600 }}>
+                {name}
+              </span>
+            </h1>
+          </div>
 
-        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-          {displayMarginType && <Pill label={displayMarginType} />}
-          {displayMarketSegment && <Pill label={`市場: ${displayMarketSegment}`} accent />}
-          {displaySectorLarge && <Pill label={`17業種: ${displaySectorLarge}`} />}
-          {displaySector33 && <Pill label={`33業種: ${displaySector33}`} />}
-        </div>
+          <div className="hidden flex-wrap gap-1.5 lg:flex">
+            {displayMarginType && <Pill label={displayMarginType} />}
+            {displayMarketSegment && <Pill label={`市場: ${displayMarketSegment}`} accent />}
+            {displaySectorLarge && <Pill label={`17業種: ${displaySectorLarge}`} />}
+            {displaySector33 && <Pill label={`33業種: ${displaySector33}`} />}
+          </div>
 
-        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '12px' }}>
-          {quote && (
-            <PriceDisplay
-              value={quote.price}
-              change={quote.change}
-              changePercent={quote.changePercent}
-              currency={quote.currency}
-              size="lg"
-            />
+          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <button
+              type="button"
+              onClick={() => setCompared(toggleComparedSymbol({ market: 'JP', ticker: displayCode, name }))}
+              className={`inline-flex h-8 items-center gap-1.5 border px-2.5 text-[11px] font-black ${
+                compared
+                  ? 'border-[var(--color-market-red)] bg-[var(--color-price-up-bg)] text-[var(--color-market-red)]'
+                  : 'border-[var(--color-border-default)] bg-white text-[var(--color-text-secondary)]'
+              }`}
+              title={compared ? '比較から外す' : '比較へ追加'}
+            >
+              <GitCompareArrows size={14} />
+              <span className="hidden sm:inline">{compared ? '比較中' : '比較'}</span>
+            </button>
+            {quote && (
+              <PriceDisplay
+                value={quote.price}
+                change={quote.change}
+                changePercent={quote.changePercent}
+                currency={quote.currency}
+                size="lg"
+              />
+            )}
+            {loading && <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>読込中...</span>}
+          </div>
+        </div>
+        <StockDetailTabs active={activeTab} onSelect={selectTab} />
+      </div>
+
+      {activeTab === 'overview' && (
+        <>
+          {!loading && !quote && (
+            <div className="card" style={missingPriceNoticeStyle}>
+              J-Quants日足に未収録です。手動補完CSVを投入すると株価・価格チャート・シナリオに反映します。
+            </div>
           )}
-          {loading && <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>読込中...</span>}
-        </div>
-      </div>
-
-      {!loading && !quote && (
-        <div className="card" style={missingPriceNoticeStyle}>
-          J-Quants日足に未収録です。手動補完CSVを投入すると株価・価格チャート・シナリオに反映します。
-        </div>
+          {!loading && !quote && <ManualOhlcvImportCard ticker={ticker} />}
+          <div className="stock-info-grid">
+            <BasicInfoCard ticker={ticker} quote={quote} />
+            <MarketSnapshotCard ticker={ticker} marginInfo={marginInfo} fallbackType={displayMarginType} />
+          </div>
+          <EarningsCard ticker={ticker} />
+          <PhysicalMomentumSection ticker={ticker} analysisDate={analysisDate} />
+          <AnalysisDateControl analysisDate={analysisDate} onChange={updateAnalysisDate} />
+        </>
       )}
-      {!loading && !quote && <ManualOhlcvImportCard ticker={ticker} />}
 
-      {/* 基本情報 + 直近変化率 */}
-      <div className="stock-info-grid">
-        <BasicInfoCard ticker={ticker} quote={quote} />
-        <MarketSnapshotCard ticker={ticker} marginInfo={marginInfo} fallbackType={displayMarginType} />
-      </div>
+      {activeTab === 'chart' && (
+        <>
+          <div>
+            <div className="section-header">ステージ変遷</div>
+            <StageTimeline ticker={ticker} />
+          </div>
+          <div>
+            <div className="section-header">マルチタイムフレームチャート</div>
+            <CandlestickChart
+              ticker={ticker}
+              interval="D"
+              height={460}
+              historyPeriod="all"
+              showTimeframeSelector
+              maLinesByInterval={{
+                D: [3, 5, 25, 75, 200],
+                '2D': [3, 5, 25, 75, 200],
+                W: [3, 13, 26, 52, 200],
+                '2W': [3, 13, 26, 52, 200],
+                M: [3, 12, 24, 60, 200],
+                '2M': [3, 12, 24, 60, 200],
+              }}
+            />
+          </div>
+        </>
+      )}
 
-      {/* 決算情報 */}
-      <EarningsCard ticker={ticker} />
+      {activeTab === 'scenario' && (
+        <>
+          <AnalysisDateControl analysisDate={analysisDate} onChange={updateAnalysisDate} />
+          <TradeScenarioNotebook
+            ticker={ticker}
+            name={name}
+            quote={quote}
+            selectedRange={null}
+            context={{
+              marketSegment: displayMarketSegment,
+              marginType: displayMarginType,
+              sector17: displaySectorLarge,
+              sector33: displaySector33,
+            }}
+          />
+          <StockMovePeriods ticker={ticker} />
+          <ScenarioProjectionChart
+            ticker={ticker}
+            name={name}
+            analysisDate={analysisDate}
+            onUseLatest={() => updateAnalysisDate(null)}
+          />
+          <StockScenarioAiPanel ticker={ticker} name={name} analysisDate={analysisDate} />
+        </>
+      )}
 
-      <PhysicalMomentumSection ticker={ticker} analysisDate={analysisDate} />
-
-      <AnalysisDateControl analysisDate={analysisDate} onChange={updateAnalysisDate} />
-
-      <TradeScenarioNotebook
-        ticker={ticker}
-        name={name}
-        quote={quote}
-        selectedRange={null}
-        context={{
-          marketSegment: displayMarketSegment,
-          marginType: displayMarginType,
-          sector17: displaySectorLarge,
-          sector33: displaySector33,
-        }}
-      />
-
-      {/* ステージ変遷 */}
-      <div>
-        <div className="section-header">ステージ変遷</div>
-        <StageTimeline ticker={ticker} />
-      </div>
-
-      {/* マルチタイムフレームチャート: 日足 / 2日足 / 週足 / 2週足 / 月足 / 2ヶ月足 */}
-      <div>
-        <div className="section-header">マルチタイムフレームチャート</div>
-        <CandlestickChart
-          ticker={ticker}
-          interval="D"
-          height={460}
-          historyPeriod="all"
-          showTimeframeSelector
-          maLinesByInterval={{
-            D: [3, 5, 25, 75, 200],
-            '2D': [3, 5, 25, 75, 200],
-            W: [3, 13, 26, 52, 200],
-            '2W': [3, 13, 26, 52, 200],
-            M: [3, 12, 24, 60, 200],
-            '2M': [3, 12, 24, 60, 200],
-          }}
-        />
-      </div>
-
-      {/* 過去の大きな値動き */}
-      <StockMovePeriods ticker={ticker} />
-
-      <ScenarioProjectionChart
-        ticker={ticker}
-        name={name}
-        analysisDate={analysisDate}
-        onUseLatest={() => updateAnalysisDate(null)}
-      />
-
-      <StockScenarioAiPanel ticker={ticker} name={name} analysisDate={analysisDate} />
-
-      {/* 最新ML類似候補 */}
-      <StockMlInsights ticker={ticker} />
-
-      <HistoricalAnalogExplorer ticker={ticker} analysisDate={analysisDate} />
+      {activeTab === 'ml' && (
+        <>
+          <AnalysisDateControl analysisDate={analysisDate} onChange={updateAnalysisDate} />
+          <StockMlInsights ticker={ticker} />
+          <HistoricalAnalogExplorer ticker={ticker} analysisDate={analysisDate} />
+        </>
+      )}
 
     </div>
+  )
+}
+
+function StockDetailTabs({
+  active,
+  onSelect,
+}: {
+  active: StockDetailTab
+  onSelect: (tab: StockDetailTab) => void
+}) {
+  const tabs = [
+    { id: 'overview' as const, label: '概要', icon: LayoutDashboard },
+    { id: 'chart' as const, label: 'チャート・6ステージ', icon: ChartCandlestick },
+    { id: 'scenario' as const, label: 'シナリオ', icon: NotebookPen },
+    { id: 'ml' as const, label: 'ML・類似局面', icon: BrainCircuit },
+  ]
+  return (
+    <nav className="flex overflow-x-auto border-t border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-2" aria-label="個別銘柄分析">
+      {tabs.map((tab) => {
+        const Icon = tab.icon
+        return (
+          <button
+            key={tab.id}
+            type="button"
+            onClick={() => onSelect(tab.id)}
+            className={`inline-flex h-9 shrink-0 items-center gap-1.5 border-b-2 px-3 text-[11px] font-black ${
+              active === tab.id
+                ? 'border-[var(--color-market-red)] bg-white text-[var(--color-brand-900)]'
+                : 'border-transparent text-[var(--color-text-secondary)] hover:bg-white'
+            }`}
+            aria-current={active === tab.id ? 'page' : undefined}
+          >
+            <Icon size={14} />
+            {tab.label}
+          </button>
+        )
+      })}
+    </nav>
   )
 }
 

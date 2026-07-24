@@ -28,6 +28,7 @@ import type {
 const LOOKBACK_CANDLES = 140
 const HISTORY_LIMIT = 1100
 const MAX_HORIZON = 200
+const ANCHORED_HISTORY_BEFORE = LOOKBACK_CANDLES + 220
 const PRECOMPUTED_MIN_DATE = '2008-05-07'
 const PRECOMPUTED_HORIZONS = new Set([5, 10, 15, 20, 30, 40, 60, 90, 180, 200])
 
@@ -138,7 +139,7 @@ export async function createDrillQuestion(params: DrillQuestionParams): Promise<
 
 export async function answerDrillQuestion(params: DrillAnswerParams): Promise<DrillAnswerResult> {
   const payload = decodeProblemId(params.problemId)
-  const rows = await loadSeries(payload.market, payload.ticker)
+  const rows = await loadSeries(payload.market, payload.ticker, payload.asOfDate)
   const index = rows.findIndex((row) => row.date === payload.asOfDate)
   if (index < LOOKBACK_CANDLES || index < 0 || index + payload.horizonDays >= rows.length) {
     throw new Error('問題の価格データを再取得できませんでした。別の問題を出題してください。')
@@ -233,12 +234,36 @@ async function findPrecomputedQuestion(params: DrillQuestionParams, intended: Dr
   if (intended === 'up') {
     where.push('fe.max_return_pct >= ?')
     criteriaArgs.push(params.thresholdPct)
+    if (params.difficulty === 'beginner') {
+      where.push('fe.max_return_pct >= ?', 'fe.min_return_pct > ?')
+      criteriaArgs.push(params.thresholdPct * 1.25, -params.thresholdPct * 0.55)
+    } else if (params.difficulty === 'intermediate') {
+      where.push('fe.min_return_pct > ?')
+      criteriaArgs.push(-params.thresholdPct * 0.9)
+    } else if (params.difficulty === 'advanced') {
+      where.push('fe.min_return_pct <= ?')
+      criteriaArgs.push(-params.thresholdPct * 0.45)
+    }
   } else if (intended === 'down') {
     where.push('fe.min_return_pct <= ?')
     criteriaArgs.push(-params.thresholdPct)
+    if (params.difficulty === 'beginner') {
+      where.push('fe.min_return_pct <= ?', 'fe.max_return_pct < ?')
+      criteriaArgs.push(-params.thresholdPct * 1.25, params.thresholdPct * 0.55)
+    } else if (params.difficulty === 'intermediate') {
+      where.push('fe.max_return_pct < ?')
+      criteriaArgs.push(params.thresholdPct * 0.9)
+    } else if (params.difficulty === 'advanced') {
+      where.push('fe.max_return_pct >= ?')
+      criteriaArgs.push(params.thresholdPct * 0.45)
+    }
   } else {
     where.push('fe.max_return_pct < ?', 'fe.min_return_pct > ?')
     criteriaArgs.push(params.thresholdPct, -params.thresholdPct)
+    if (params.difficulty === 'beginner') {
+      where.push('fe.max_return_pct < ?', 'fe.min_return_pct > ?')
+      criteriaArgs.push(params.thresholdPct * 0.75, -params.thresholdPct * 0.75)
+    }
   }
 
   const universeArgs: Array<string | number> = []
@@ -267,7 +292,7 @@ async function findPrecomputedQuestion(params: DrillQuestionParams, intended: Dr
 
   let looseQuestion: DrillQuestion | null = null
   for (const row of rows) {
-    const series = await loadSeries('JP', row.ticker)
+    const series = await loadSeries('JP', row.ticker, row.date)
     const index = series.findIndex((item) => item.date === row.date)
     if (index < LOOKBACK_CANDLES || index + params.horizonDays >= series.length) continue
     const outcome = computeOutcome({
@@ -424,7 +449,39 @@ function metricSnapshot(rows: DrillCandle[], index: number, past5: DrillCandle |
   }
 }
 
-async function loadSeries(market: DrillMarket, ticker: string): Promise<Array<DrillCandle & Partial<RawSeriesRow>>> {
+async function loadSeries(
+  market: DrillMarket,
+  ticker: string,
+  anchorDate?: string,
+): Promise<Array<DrillCandle & Partial<RawSeriesRow>>> {
+  const sourceRowsSql = anchorDate
+    ? `
+      SELECT * FROM (
+        SELECT date, open, high, low, close, volume
+        FROM ${market === 'US' ? 'market_ohlcv_daily' : 'ohlcv_daily'}
+        WHERE ${market === 'US' ? "market = 'US' AND " : ''}ticker = ? AND date <= ?
+        ORDER BY date DESC
+        LIMIT ?
+      )
+      UNION ALL
+      SELECT * FROM (
+        SELECT date, open, high, low, close, volume
+        FROM ${market === 'US' ? 'market_ohlcv_daily' : 'ohlcv_daily'}
+        WHERE ${market === 'US' ? "market = 'US' AND " : ''}ticker = ? AND date > ?
+        ORDER BY date ASC
+        LIMIT ?
+      )
+    `
+    : `
+      SELECT date, open, high, low, close, volume
+      FROM ${market === 'US' ? 'market_ohlcv_daily' : 'ohlcv_daily'}
+      WHERE ${market === 'US' ? "market = 'US' AND " : ''}ticker = ?
+      ORDER BY date DESC
+      LIMIT ?
+    `
+  const sourceArgs: Array<string | number> = anchorDate
+    ? [ticker, anchorDate, ANCHORED_HISTORY_BEFORE, ticker, anchorDate, MAX_HORIZON]
+    : [ticker, HISTORY_LIMIT]
   const rows = market === 'US'
     ? await execAll<RawSeriesRow>(
       `
@@ -434,18 +491,14 @@ async function loadSeries(market: DrillMarket, ticker: string): Promise<Array<Dr
         s.daily_a_stage, s.daily_b_stage, s.weekly_a_stage, s.weekly_b_stage, s.monthly_a_stage, s.monthly_b_stage,
         pm.velocity, pm.acceleration, pm.physical_momentum_score, pm.physical_force_score, pm.physical_energy_score
       FROM (
-        SELECT date, open, high, low, close, volume
-        FROM market_ohlcv_daily
-        WHERE market = 'US' AND ticker = ?
-        ORDER BY date DESC
-        LIMIT ?
+        ${sourceRowsSql}
       ) o
       LEFT JOIN market_universe u ON u.market = 'US' AND u.ticker = ?
       LEFT JOIN market_daily_snapshots s ON s.market = 'US' AND s.ticker = ? AND s.date = o.date
       LEFT JOIN physical_momentum_metrics pm ON pm.market = 'US' AND pm.symbol = ? AND pm.date = o.date
       ORDER BY o.date
       `,
-      [ticker, HISTORY_LIMIT, ticker, ticker, ticker],
+      [...sourceArgs, ticker, ticker, ticker],
     )
     : await execAll<RawSeriesRow>(
       `
@@ -455,19 +508,19 @@ async function loadSeries(market: DrillMarket, ticker: string): Promise<Array<Dr
         s.daily_a_stage, s.daily_b_stage, s.weekly_a_stage, s.weekly_b_stage, s.monthly_a_stage, s.monthly_b_stage,
         pm.velocity, pm.acceleration, pm.physical_momentum_score, pm.physical_force_score, pm.physical_energy_score
       FROM (
-        SELECT date, open, high, low, close, volume
-        FROM ohlcv_daily
-        WHERE ticker = ?
-        ORDER BY date DESC
-        LIMIT ?
+        ${sourceRowsSql}
       ) o
       LEFT JOIN ticker_universe u ON u.ticker = ?
       LEFT JOIN daily_snapshots s ON s.ticker = ? AND s.date = o.date
       LEFT JOIN physical_momentum_metrics pm ON pm.market = 'JP' AND pm.symbol = ? AND pm.date = o.date
       ORDER BY o.date
       `,
-      [ticker, HISTORY_LIMIT, ticker, ticker, ticker],
+      [...sourceArgs, ticker, ticker, ticker],
     )
+  return enrichRawSeriesRows(rows)
+}
+
+function enrichRawSeriesRows(rows: RawSeriesRow[]): Array<DrillCandle & Partial<RawSeriesRow>> {
   const enriched = enrichCandlesWithMa(rows.map((row) => ({
     date: row.date,
     open: row.open,

@@ -202,8 +202,8 @@ function jpMarketCalendarStatus(date = jstDateString()): { shouldRun: boolean; d
 
 function configureDefaults(): void {
   process.env.USE_LOCAL_DB = process.env.USE_LOCAL_DB ?? '1'
-  process.env.SQLITE_BUSY_RETRIES = process.env.SQLITE_BUSY_RETRIES ?? '720'
-  process.env.UPDATE_CHILD_TIMEOUT_MINUTES = process.env.UPDATE_CHILD_TIMEOUT_MINUTES ?? '2880'
+  process.env.SQLITE_BUSY_RETRIES = process.env.SQLITE_BUSY_RETRIES ?? '12'
+  process.env.UPDATE_CHILD_TIMEOUT_MINUTES = process.env.UPDATE_CHILD_TIMEOUT_MINUTES ?? '240'
   process.env.PMS_DAILY_RECENT_DAYS = process.env.PMS_DAILY_RECENT_DAYS ?? '30'
   process.env.ML_DAILY_RECENT_DAYS = process.env.ML_DAILY_RECENT_DAYS ?? '5'
   process.env.ML_DAILY_MIN_HISTORY_DAYS = process.env.ML_DAILY_MIN_HISTORY_DAYS ?? '220'
@@ -214,9 +214,10 @@ function configureDefaults(): void {
   process.env.ML_CONTEXT_DAILY_RECENT_DAYS = process.env.ML_CONTEXT_DAILY_RECENT_DAYS ?? '5'
   process.env.ML_PHYSICS_DAILY_RECENT_DAYS = process.env.ML_PHYSICS_DAILY_RECENT_DAYS ?? '5'
   process.env.ML_PHYSICS_DAILY_MIN_HISTORY_DAYS = process.env.ML_PHYSICS_DAILY_MIN_HISTORY_DAYS ?? '220'
-  process.env.ML_LEARNING_MAX_ATTEMPTS = process.env.ML_LEARNING_MAX_ATTEMPTS ?? '3'
-  process.env.ML_LEARNING_RETRY_DELAY_SECONDS = process.env.ML_LEARNING_RETRY_DELAY_SECONDS ?? '900'
-  process.env.ML_LEARNING_BATCH_WAIT_MINUTES = process.env.ML_LEARNING_BATCH_WAIT_MINUTES ?? '360'
+  process.env.ML_LEARNING_MAX_ATTEMPTS = process.env.ML_LEARNING_MAX_ATTEMPTS ?? '2'
+  process.env.ML_LEARNING_RETRY_DELAY_SECONDS = process.env.ML_LEARNING_RETRY_DELAY_SECONDS ?? '300'
+  process.env.ML_LEARNING_LOCK_WAIT_MINUTES = process.env.ML_LEARNING_LOCK_WAIT_MINUTES ?? '60'
+  process.env.ML_LEARNING_BATCH_WAIT_MINUTES = process.env.ML_LEARNING_BATCH_WAIT_MINUTES ?? '60'
 }
 
 function installSignalHandlers(): void {
@@ -338,6 +339,9 @@ async function runNpmUtility(
 ): Promise<RunResult> {
   await waitForMemoryHeadroom({ label: `npm run ${script}` })
   return new Promise((resolve, reject) => {
+    // The child utility is the current writer. The long parent lease is
+    // refreshed after it exits to avoid self-inflicted SQLITE_BUSY errors.
+    void heartbeat
     let timedOut = false
     const child = spawn('npm', ['run', script], {
       cwd: process.cwd(),
@@ -345,17 +349,12 @@ async function runNpmUtility(
       env: withMemoryGuardEnv({
         ...process.env,
         USE_LOCAL_DB: '1',
-        SQLITE_BUSY_RETRIES: process.env.SQLITE_BUSY_RETRIES ?? '720',
+        SQLITE_BUSY_RETRIES: process.env.SQLITE_BUSY_RETRIES ?? '12',
         UPDATE_CHILD_TIMEOUT_MINUTES: String(timeoutMinutes),
         ...envOverrides,
       }),
     })
 
-    const heartbeatTimer = setInterval(() => {
-      heartbeat().catch((err) => {
-        console.warn(`${script} heartbeat failed: ${errorMessage(err)}`)
-      })
-    }, 60_000)
     const timeoutTimer = setTimeout(() => {
       timedOut = true
       console.error(`${script} timed out after ${timeoutMinutes} minutes; sending SIGTERM`)
@@ -366,7 +365,6 @@ async function runNpmUtility(
     }, timeoutMinutes * 60_000)
 
     const clearTimers = () => {
-      clearInterval(heartbeatTimer)
       clearTimeout(timeoutTimer)
     }
 
@@ -395,6 +393,7 @@ async function runHeavyMlChain(heartbeat: () => Promise<void>): Promise<RunResul
   const npmScript = process.env.ML_LEARNING_NPM_SCRIPT?.trim() || 'batch:ml-daily'
   await waitForMemoryHeadroom({ label: `npm run ${npmScript}` })
   return new Promise((resolve, reject) => {
+    void heartbeat
     const timeoutMinutes = numberEnv('UPDATE_CHILD_TIMEOUT_MINUTES', 720)
     let timedOut = false
 
@@ -404,16 +403,10 @@ async function runHeavyMlChain(heartbeat: () => Promise<void>): Promise<RunResul
       env: withMemoryGuardEnv({
         ...process.env,
         USE_LOCAL_DB: '1',
-        SQLITE_BUSY_RETRIES: process.env.SQLITE_BUSY_RETRIES ?? '720',
+        SQLITE_BUSY_RETRIES: process.env.SQLITE_BUSY_RETRIES ?? '12',
         UPDATE_CHILD_TIMEOUT_MINUTES: process.env.UPDATE_CHILD_TIMEOUT_MINUTES ?? '2880',
       }),
     })
-
-    const heartbeatTimer = setInterval(() => {
-      heartbeat().catch((err) => {
-        console.warn(`ML learning heartbeat failed: ${errorMessage(err)}`)
-      })
-    }, 60_000)
 
     const timeoutTimer = setTimeout(() => {
       timedOut = true
@@ -427,7 +420,6 @@ async function runHeavyMlChain(heartbeat: () => Promise<void>): Promise<RunResul
     }, timeoutMinutes * 60_000)
 
     const clearTimers = () => {
-      clearInterval(heartbeatTimer)
       clearTimeout(timeoutTimer)
     }
 
@@ -448,7 +440,11 @@ async function main(): Promise<void> {
   configureDefaults()
   installSignalHandlers()
 
-  const leaseSeconds = numberEnv('ML_LEARNING_LOCK_LEASE_SECONDS', 18 * 60 * 60)
+  const childTimeoutMinutes = numberEnv('UPDATE_CHILD_TIMEOUT_MINUTES', 240)
+  const leaseSeconds = numberEnv(
+    'ML_LEARNING_LOCK_LEASE_SECONDS',
+    Math.max(5 * 60 * 60, (childTimeoutMinutes + 60) * 60),
+  )
   const lock = await acquireExclusiveUpdateLock(JOB_TYPE, leaseSeconds)
   if (!lock) {
     console.log('ML learning skipped: ml_learning lock is already active')

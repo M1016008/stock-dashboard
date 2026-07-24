@@ -9,6 +9,7 @@ import type { Metadata } from 'next'
 import { Suspense } from 'react'
 import { PageTitle } from '@/components/layout/PageTitle'
 import { AiResearchShortcuts } from '@/components/dashboard/AiResearchShortcuts'
+import { DashboardWorkspace } from '@/components/dashboard/DashboardWorkspace'
 import { DashboardEarningsAlerts } from '@/components/dashboard/DashboardEarningsAlerts'
 import { PhysicalMomentumMarket } from '@/components/dashboard/PhysicalMomentumMarket'
 import { DashboardTradeSignalTable } from '@/components/dashboard/DashboardTradeSignalTable'
@@ -85,24 +86,64 @@ export default async function DashboardPage({
         badge={universeMeta ? `${universeMeta.shortLabel} / ${selectedDate ? '過去日表示' : '最新データ反映'}` : selectedDate ? '過去日表示' : '最新データ反映'}
       />
       <DashboardDateSelector dates={initialDates} selectedDate={selectedDate} />
-      <Suspense fallback={<SectionFallback height={300} />}>
-        <TradeScenarioOverview date={dashboardDate} />
-      </Suspense>
-      <Suspense fallback={<SectionFallback height={300} />}>
-        <KabutanMaterialNews />
-      </Suspense>
-      <Suspense fallback={<SectionFallback height={430} />}>
-        <DashboardTradeSignalTable date={dashboardDate} universe={universeFilter} scenarioInterval={scenarioInterval} />
-      </Suspense>
-      <Suspense fallback={<SectionFallback height={150} />}>
-        <PhysicalMomentumMarket date={dashboardDate} universe={universeFilter} />
-      </Suspense>
-      <Suspense fallback={<SectionFallback height={360} />}>
-        <DashboardEarningsAlerts date={dashboardDate} universe={universeFilter} />
-      </Suspense>
-      <Suspense fallback={<SectionFallback height={220} />}>
-        <AiResearchShortcuts date={dashboardDate} universe={universeFilter} />
-      </Suspense>
+      <DashboardWorkspace
+        sections={[
+          {
+            id: 'trade-overview',
+            label: '市場判断とシナリオ',
+            content: (
+              <Suspense fallback={<SectionFallback height={300} />}>
+                <TradeScenarioOverview date={dashboardDate} />
+              </Suspense>
+            ),
+          },
+          {
+            id: 'signals',
+            label: '売買候補',
+            content: (
+              <Suspense fallback={<SectionFallback height={430} />}>
+                <DashboardTradeSignalTable date={dashboardDate} universe={universeFilter} scenarioInterval={scenarioInterval} />
+              </Suspense>
+            ),
+          },
+          {
+            id: 'momentum',
+            label: '市場モメンタム',
+            content: (
+              <Suspense fallback={<SectionFallback height={150} />}>
+                <PhysicalMomentumMarket date={dashboardDate} universe={universeFilter} />
+              </Suspense>
+            ),
+          },
+          {
+            id: 'earnings',
+            label: '決算注意',
+            content: (
+              <Suspense fallback={<SectionFallback height={360} />}>
+                <DashboardEarningsAlerts date={dashboardDate} universe={universeFilter} />
+              </Suspense>
+            ),
+          },
+          {
+            id: 'materials',
+            label: '材料',
+            content: (
+              <Suspense fallback={<SectionFallback height={300} />}>
+                <KabutanMaterialNews />
+              </Suspense>
+            ),
+          },
+          {
+            id: 'research',
+            label: '次の分析',
+            content: (
+              <Suspense fallback={<SectionFallback height={220} />}>
+                <AiResearchShortcuts date={dashboardDate} universe={universeFilter} />
+              </Suspense>
+            ),
+          },
+        ]}
+      />
     </div>
   )
 }

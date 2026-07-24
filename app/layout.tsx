@@ -1,6 +1,8 @@
 import type { Metadata } from 'next'
 import { Suspense } from 'react'
 import { Header } from '@/components/layout/Header'
+import { DataStatusBar } from '@/components/layout/DataStatusBar'
+import { StockWorkspaceDock } from '@/components/layout/StockWorkspaceDock'
 import { FreshDataRefresher } from '@/components/layout/FreshDataRefresher'
 import { AssistantDrawer } from '@/components/assistant/AssistantDrawer'
 import './globals.css'
@@ -28,6 +30,7 @@ export default function RootLayout({
         <Suspense fallback={null}>
           <Header />
         </Suspense>
+        <DataStatusBar />
         <main className="mx-auto w-full max-w-[1480px] px-5 py-5 sm:px-8 lg:px-10 lg:py-7 xl:px-12">
           {children}
         </main>
@@ -35,6 +38,7 @@ export default function RootLayout({
           表示内容は過去データに基づく統計的観測です。投資判断は自己責任で行ってください。
         </footer>
         <AssistantDrawer />
+        <StockWorkspaceDock />
       </body>
     </html>
   )

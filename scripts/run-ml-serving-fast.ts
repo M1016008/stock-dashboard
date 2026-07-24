@@ -82,7 +82,7 @@ function runNpm(script: string, extraEnv: Record<string, string> = {}): Promise<
       env: withMemoryGuardEnv({
         ...process.env,
         USE_LOCAL_DB: '1',
-        SQLITE_BUSY_RETRIES: process.env.SQLITE_BUSY_RETRIES ?? '720',
+        SQLITE_BUSY_RETRIES: process.env.SQLITE_BUSY_RETRIES ?? '12',
         ...extraEnv,
       }),
     })
@@ -171,7 +171,7 @@ function installSignalHandlers(): void {
 async function main(): Promise<void> {
   installSignalHandlers()
   process.env.USE_LOCAL_DB = process.env.USE_LOCAL_DB ?? '1'
-  process.env.SQLITE_BUSY_RETRIES = process.env.SQLITE_BUSY_RETRIES ?? '720'
+  process.env.SQLITE_BUSY_RETRIES = process.env.SQLITE_BUSY_RETRIES ?? '12'
 
   const priceDate = await maxDate('ohlcv_daily', 'date')
   if (!priceDate) throw new Error('ohlcv_daily has no price date')

@@ -15,8 +15,8 @@ export default function UsScreenerPage() {
     <div className="mx-auto flex w-full max-w-[1480px] flex-col gap-5">
       <PageTitle
         title="USスクリーナー"
-        subtitle="Tiingo EODから生成した米国株のステージ、移動平均、価格変化を一覧で確認します。"
-        badge="US / Tiingo"
+        subtitle="米国株の日次価格から生成したステージ、移動平均、価格変化を一覧で確認します。"
+        badge="US Market"
       />
       <UsScreenerClient />
     </div>

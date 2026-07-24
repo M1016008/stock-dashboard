@@ -23,6 +23,12 @@ import {
 } from 'lucide-react'
 import { COMMODITY_INSTRUMENTS } from '@/lib/commodities'
 import {
+  getRecentSymbols,
+  symbolHref,
+  WORKSPACE_EVENT,
+  type WorkspaceSymbol,
+} from '@/lib/client/stock-workspace'
+import {
   addUniverseToHref,
   getUniverseFilterMeta,
   parseUniverseFilter,
@@ -341,9 +347,11 @@ function fallbackSearchHref(query: string, area: HeaderArea): string | null {
 function TickerQuickSearch({ area }: { area: HeaderArea }) {
   const router = useRouter()
   const rootRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
   const requestIdRef = useRef(0)
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<QuickSearchResult[]>([])
+  const [recentSymbols, setRecentSymbols] = useState<WorkspaceSymbol[]>([])
   const [activeIndex, setActiveIndex] = useState(0)
   const [open, setOpen] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -355,6 +363,26 @@ function TickerQuickSearch({ area }: { area: HeaderArea }) {
     }
     document.addEventListener('pointerdown', onPointerDown)
     return () => document.removeEventListener('pointerdown', onPointerDown)
+  }, [])
+
+  useEffect(() => {
+    const syncRecent = () => setRecentSymbols(getRecentSymbols())
+    const onShortcut = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault()
+        inputRef.current?.focus()
+        setOpen(true)
+      }
+    }
+    syncRecent()
+    window.addEventListener(WORKSPACE_EVENT, syncRecent)
+    window.addEventListener('storage', syncRecent)
+    window.addEventListener('keydown', onShortcut)
+    return () => {
+      window.removeEventListener(WORKSPACE_EVENT, syncRecent)
+      window.removeEventListener('storage', syncRecent)
+      window.removeEventListener('keydown', onShortcut)
+    }
   }, [])
 
   useEffect(() => {
@@ -427,8 +455,19 @@ function TickerQuickSearch({ area }: { area: HeaderArea }) {
     router.push(href)
   }
 
+  const recentResults: QuickSearchResult[] = recentSymbols.map((symbol) => ({
+    key: `recent:${symbol.market}:${symbol.ticker}`,
+    ticker: symbol.ticker,
+    name: symbol.name || symbol.ticker,
+    market: symbol.market,
+    href: symbolHref(symbol),
+    badge: symbol.market,
+    meta: '最近見た銘柄',
+  }))
+  const visibleResults = query.trim() ? results : recentResults
+
   const submitCurrent = () => {
-    const target = results[activeIndex] ?? results[0]
+    const target = visibleResults[activeIndex] ?? visibleResults[0]
     if (target) {
       navigateTo(target.href)
       return
@@ -453,6 +492,7 @@ function TickerQuickSearch({ area }: { area: HeaderArea }) {
           className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--color-text-tertiary)]"
         />
         <input
+          ref={inputRef}
           value={query}
           onChange={(event) => {
             setQuery(event.target.value)
@@ -463,7 +503,7 @@ function TickerQuickSearch({ area }: { area: HeaderArea }) {
             if (event.key === 'ArrowDown') {
               event.preventDefault()
               setOpen(true)
-              setActiveIndex((current) => Math.min(current + 1, Math.max(results.length - 1, 0)))
+              setActiveIndex((current) => Math.min(current + 1, Math.max(visibleResults.length - 1, 0)))
             } else if (event.key === 'ArrowUp') {
               event.preventDefault()
               setActiveIndex((current) => Math.max(current - 1, 0))
@@ -474,17 +514,17 @@ function TickerQuickSearch({ area }: { area: HeaderArea }) {
               submitCurrent()
             }
           }}
-          placeholder="コード/銘柄名で検索"
+          placeholder="コード/銘柄名で検索 ⌘K"
           aria-label="銘柄コード検索"
-          aria-expanded={open && !!query.trim()}
+          aria-expanded={open && visibleResults.length > 0}
           className="h-8 w-full rounded-[4px] border border-[var(--color-border-default)] bg-white py-1 pl-8 pr-3 text-[12px] font-semibold text-[var(--color-text-primary)] outline-none transition-colors placeholder:text-[var(--color-text-tertiary)] focus:border-[var(--color-brand-700)] focus:ring-2 focus:ring-[rgba(37,99,235,0.16)]"
         />
       </form>
 
-      {open && query.trim() && (
+      {open && (query.trim() || recentResults.length > 0) && (
         <div className="absolute left-0 right-0 top-[calc(100%+6px)] z-[70] overflow-hidden rounded-[5px] border border-[var(--color-border-strong)] bg-white shadow-[0_18px_42px_rgba(16,32,52,0.22)]">
           <div className="border-b border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-3 py-2 text-[10px] font-bold text-[var(--color-text-tertiary)]">
-            Enterで候補へ移動
+            {query.trim() ? 'Enterで候補へ移動' : '最近見た銘柄'}
           </div>
           {loading && (
             <div className="px-3 py-3 text-[12px] font-semibold text-[var(--color-text-secondary)]">検索中...</div>
@@ -492,14 +532,14 @@ function TickerQuickSearch({ area }: { area: HeaderArea }) {
           {!loading && error && (
             <div className="px-3 py-3 text-[12px] font-semibold text-[var(--color-price-down)]">{error}</div>
           )}
-          {!loading && !error && results.length === 0 && (
+          {!loading && !error && visibleResults.length === 0 && (
             <div className="px-3 py-3 text-[12px] font-semibold text-[var(--color-text-secondary)]">
               候補が見つかりません
             </div>
           )}
           {!loading &&
             !error &&
-            results.map((result, index) => (
+            visibleResults.map((result, index) => (
               <button
                 key={result.key}
                 type="button"
@@ -702,7 +742,7 @@ export function Header() {
             <div className="leading-tight">
               <div className="text-[16px] font-bold tracking-normal text-[var(--color-brand-900)]">StockBoard</div>
               <div className="hidden text-[10px] font-bold text-[var(--color-text-tertiary)] sm:block">
-                {isCommodityArea ? 'Commodity ETF Console' : isUsArea ? 'Tiingo US Market Console' : 'J-Quants Market Console'}
+                {isCommodityArea ? 'Commodity ETF Console' : isUsArea ? 'US Market Console' : 'J-Quants Market Console'}
               </div>
             </div>
           </Link>

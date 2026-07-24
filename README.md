@@ -2,23 +2,31 @@ This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-
 
 ## Getting Started
 
-First, run the development server:
+The launchd-managed production site runs at
+[http://localhost:3000](http://localhost:3000). Its verified build is kept in
+`.next-live`, separate from source edits and development builds.
+
+Run the development server on port 3001:
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3001](http://localhost:3001) to inspect work in progress.
+Editing or rebuilding this development site does not interrupt the production
+dashboard on port 3000.
 
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Promote a successfully built version to the production service with:
+
+```bash
+npm run web:deploy
+```
+
+The command builds in an isolated staging directory, keeps the previous live
+build as a rollback target, restarts the managed service, and verifies
+`/api/health`.
 
 ## Learn More
 

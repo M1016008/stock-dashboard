@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { execAll, execGet } from '@/lib/db/client'
 import { execUsAnalyticsAll, execUsAnalyticsGet } from '@/lib/db/us-analytics'
+import { readServingCache, stableCacheKey, writeServingCache } from '@/lib/api/serving-cache'
 import { ML_PHYSICS_FEATURE_SET } from '@/lib/backtest/ml-physics'
 import {
   diversifyHistoricalAnalogs,
@@ -18,10 +19,25 @@ export const maxDuration = 60
 
 const STAGE_INDEX_NAME = 'ml_feature_vectors_v2_feature_stage_date_ticker_idx'
 const ANALOG_BUCKET_INDEX_NAME = 'ml_feature_vectors_v2_analog_bucket_idx'
-const DEFAULT_POOL_LIMIT = 30_000
+const DEFAULT_POOL_LIMIT = boundedEnv('HISTORICAL_ANALOG_POOL_LIMIT', 30_000, 3_000, 30_000)
+const CACHE_NAMESPACE = 'historical_analogs_v1'
+const CACHE_TTL_MS = boundedEnv(
+  'HISTORICAL_ANALOG_CACHE_TTL_MS',
+  24 * 60 * 60 * 1_000,
+  60_000,
+  24 * 60 * 60 * 1_000,
+)
+const CACHE_MAX_ENTRIES = 100
 const BUCKET_VECTOR_INDICES = [11, 15, 25, 26] as const
 const BUCKET_SCALE = 5
 const BUCKET_RADIUS = 1
+const responseCache = new Map<string, { generatedAt: number; payload: Record<string, unknown> }>()
+
+function boundedEnv(name: string, fallback: number, min: number, max: number): number {
+  const parsed = Number(process.env[name])
+  if (!Number.isFinite(parsed)) return fallback
+  return Math.min(max, Math.max(min, Math.floor(parsed)))
+}
 
 type Market = 'JP' | 'US'
 type DbArgs = readonly (string | number | null)[]
@@ -288,6 +304,33 @@ export async function GET(request: NextRequest) {
         code: 'HISTORICAL_ANALOG_LABELS_REQUIRED',
       }, { status: 503 })
     }
+    const cacheKey = stableCacheKey({
+      market,
+      ticker,
+      asOfDate: base.date,
+      labelDate: labelCoverage.latest_date,
+      horizon,
+      sort,
+      limit,
+      minScore,
+      featureSet: ML_PHYSICS_FEATURE_SET,
+      poolLimit: DEFAULT_POOL_LIMIT,
+    })
+    const memoryCached = responseCache.get(cacheKey)
+    if (memoryCached && Date.now() - memoryCached.generatedAt < CACHE_TTL_MS) {
+      return NextResponse.json({
+        ...memoryCached.payload,
+        cache: { hit: true, generatedAt: new Date(memoryCached.generatedAt).toISOString() },
+      })
+    }
+    const stored = await readServingCache<Record<string, unknown>>(CACHE_NAMESPACE, cacheKey, CACHE_TTL_MS)
+    if (stored) {
+      responseCache.set(cacheKey, stored)
+      return NextResponse.json({
+        ...stored.payload,
+        cache: { hit: true, generatedAt: new Date(stored.generatedAt).toISOString() },
+      })
+    }
     const bucketPlaceholders = bucketGroups.slice(0, 2).map((group) => group.map(() => '?').join(', '))
     const candidateRows = await db.all<CandidateRow>(
       `
@@ -386,7 +429,8 @@ export async function GET(request: NextRequest) {
     }))
 
     const dates = candidateRows.map((row) => row.date).sort()
-    return NextResponse.json({
+    const generatedAt = Date.now()
+    const payload = {
       market,
       ticker,
       asOfDate: base.date,
@@ -418,7 +462,17 @@ export async function GET(request: NextRequest) {
         poolLimit: DEFAULT_POOL_LIMIT,
         truncated: candidateRows.length >= DEFAULT_POOL_LIMIT,
       },
+      cache: { hit: false, generatedAt: new Date(generatedAt).toISOString() },
+    }
+    responseCache.set(cacheKey, { generatedAt, payload })
+    if (responseCache.size > CACHE_MAX_ENTRIES) {
+      const oldestKey = responseCache.keys().next().value
+      if (oldestKey) responseCache.delete(oldestKey)
+    }
+    writeServingCache(CACHE_NAMESPACE, cacheKey, payload, CACHE_TTL_MS, generatedAt).catch((error) => {
+      console.warn('historical analog cache write failed:', error)
     })
+    return NextResponse.json(payload)
   } catch (error) {
     console.error('historical analog search failed:', error)
     return NextResponse.json({

@@ -48,11 +48,14 @@ fs.mkdirSync(logDir, { recursive: true })
 
 const hour = clampHour(scheduleHour)
 const minute = clampMinute(scheduleMinute)
+const retryHour = clampHour(Number(process.env.EARNINGS_REFRESH_RETRY_HOUR ?? '14'))
+const retryMinute = clampMinute(Number(process.env.EARNINGS_REFRESH_RETRY_MINUTE ?? '10'))
 const command = [
   `cd ${JSON.stringify(cwd)}`,
   `export PATH=${JSON.stringify(pathEnv)}`,
   'export USE_LOCAL_DB=1',
-  'export SQLITE_BUSY_RETRIES=${SQLITE_BUSY_RETRIES:-240}',
+  'export SQLITE_BUSY_TIMEOUT_MS=${SQLITE_BUSY_TIMEOUT_MS:-15000}',
+  'export SQLITE_BUSY_RETRIES=${SQLITE_BUSY_RETRIES:-8}',
   'export EARNINGS_REFRESH_MAX_ATTEMPTS=${EARNINGS_REFRESH_MAX_ATTEMPTS:-3}',
   'export EARNINGS_REFRESH_RETRY_DELAY_SECONDS=${EARNINGS_REFRESH_RETRY_DELAY_SECONDS:-300}',
   'npm run batch:earnings-refresh',
@@ -74,10 +77,16 @@ const plist = `<?xml version="1.0" encoding="UTF-8"?>
     <string>${xmlEscape(command)}</string>
   </array>
   <key>StartCalendarInterval</key>
-  <dict>
-    <key>Hour</key><integer>${hour}</integer>
-    <key>Minute</key><integer>${minute}</integer>
-  </dict>
+  <array>
+    <dict>
+      <key>Hour</key><integer>${hour}</integer>
+      <key>Minute</key><integer>${minute}</integer>
+    </dict>
+    <dict>
+      <key>Hour</key><integer>${retryHour}</integer>
+      <key>Minute</key><integer>${retryMinute}</integer>
+    </dict>
+  </array>
   <key>StandardOutPath</key>
   <string>${xmlEscape(path.join(logDir, 'earnings-refresh.log'))}</string>
   <key>StandardErrorPath</key>
@@ -100,6 +109,9 @@ execFileSync('launchctl', ['bootstrap', `gui/${uid}`, plistPath], { stdio: 'inhe
 execFileSync('launchctl', ['enable', `gui/${uid}/${label}`], { stdio: 'inherit' })
 
 console.log(`launchd registered: ${plistPath}`)
-console.log(`schedule: daily ${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')} JST`)
+console.log(
+  `schedule: daily ${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')} and `
+  + `${String(retryHour).padStart(2, '0')}:${String(retryMinute).padStart(2, '0')} JST`,
+)
 console.log('command: npm run batch:earnings-refresh')
 console.log(`logs: ${path.join(logDir, 'earnings-refresh.log')}`)

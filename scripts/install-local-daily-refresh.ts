@@ -17,7 +17,8 @@ type Step = {
 const baseEnv: NodeJS.ProcessEnv = {
   ...process.env,
   USE_LOCAL_DB: '1',
-  SQLITE_BUSY_RETRIES: process.env.SQLITE_BUSY_RETRIES ?? '720',
+  SQLITE_BUSY_TIMEOUT_MS: process.env.SQLITE_BUSY_TIMEOUT_MS ?? '15000',
+  SQLITE_BUSY_RETRIES: process.env.SQLITE_BUSY_RETRIES ?? '12',
   US_ANALYTICS_DB_PATH: process.env.US_ANALYTICS_DB_PATH?.trim() || '/Volumes/OWC Express 1M2 80G/stockboard-data/us/stockboard-us.db',
 }
 
@@ -104,10 +105,11 @@ for (const step of steps) {
 }
 
 console.log('\nStockBoard daily refresh suite registered.')
-console.log('JP prices/cache: 16:40, 16:55, 17:20, 18:10, 21:10 JST')
+console.log('JP prices/cache: Mon-Fri 16:40, 16:55, 17:20, 18:10, 21:10 JST')
+console.log('JP heavy derived serving refresh: 21:10 JST window only, latest 60 trading dates')
 console.log('Kabutan dashboard news: every 60 minutes')
 console.log('US prices/analytics/ML: Tue-Sat 06:30, 10:30 JST')
 console.log('JP ML serving: Mon-Fri 03:00 JST, JP exchange holidays skipped')
 console.log('JP ML freshness guard: Mon-Fri 23:45 JST')
 console.log('Weekly governance: JP Sat 04:30 JST, US Sun 03:00 JST')
-console.log('DB maintenance: daily 10:30 JST, skips unsafe checkpoints when DB is open')
+console.log('DB maintenance: daily 01:30 JST, skips unsafe checkpoints when DB is open')

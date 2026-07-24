@@ -2,7 +2,17 @@
 
 import Link from 'next/link'
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, BarChart3, CalendarDays, Loader2 } from 'lucide-react'
+import {
+  ArrowLeft,
+  BarChart3,
+  BrainCircuit,
+  CalendarDays,
+  ChartCandlestick,
+  GitCompareArrows,
+  LayoutDashboard,
+  Loader2,
+  NotebookPen,
+} from 'lucide-react'
 import { CandlestickChart } from '@/components/charts/CandlestickChart'
 import { Card, CardHeader } from '@/components/ui/Card'
 import { PriceDisplay } from '@/components/ui/PriceDisplay'
@@ -15,8 +25,15 @@ import { HistoricalAnalogExplorer } from '@/components/stock/HistoricalAnalogExp
 import type { StockQuote } from '@/types/stock'
 import { buildPhysicalMomentumView, type PhysicalMomentumTone } from '@/lib/physical-momentum-view'
 import { buildShortTermCheck, formatShortTermStrength, type ShortTermCheckResult } from '@/lib/short-term-check'
+import {
+  isComparedSymbol,
+  recordRecentSymbol,
+  toggleComparedSymbol,
+  WORKSPACE_EVENT,
+} from '@/lib/client/stock-workspace'
 
 type Status = 'idle' | 'loading' | 'ready' | 'error'
+type UsStockDetailTab = 'overview' | 'chart' | 'scenario' | 'ml'
 
 interface PhysicalMomentumApiRow {
   date: string
@@ -265,6 +282,8 @@ export function UsStockDetailClient({
   const [quote, setQuote] = useState<StockQuote | null>(initialQuote ?? null)
   const [error, setError] = useState<string | null>(initialError ?? null)
   const [analysisDate, setAnalysisDate] = useState<string | null>(null)
+  const [activeTab, setActiveTab] = useState<UsStockDetailTab>('overview')
+  const [compared, setCompared] = useState(false)
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
@@ -309,6 +328,33 @@ export function UsStockDetailClient({
     window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`)
   }, [])
 
+  useEffect(() => {
+    if (!quote) return
+    const readTab = () => {
+      const hash = window.location.hash.replace('#', '')
+      if (hash === 'chart' || hash === 'scenario' || hash === 'ml' || hash === 'overview') {
+        setActiveTab(hash)
+      }
+    }
+    const syncCompared = () => setCompared(isComparedSymbol('US', quote.ticker))
+    readTab()
+    syncCompared()
+    recordRecentSymbol({ market: 'US', ticker: quote.ticker, name: quote.name })
+    window.addEventListener('hashchange', readTab)
+    window.addEventListener(WORKSPACE_EVENT, syncCompared)
+    return () => {
+      window.removeEventListener('hashchange', readTab)
+      window.removeEventListener(WORKSPACE_EVENT, syncCompared)
+    }
+  }, [quote])
+
+  const selectTab = (tab: UsStockDetailTab) => {
+    setActiveTab(tab)
+    const url = new URL(window.location.href)
+    url.hash = tab
+    window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`)
+  }
+
   if (status === 'loading' || status === 'idle') {
     return (
       <div className="mx-auto flex min-h-[420px] w-full max-w-[1480px] items-center justify-center">
@@ -329,7 +375,7 @@ export function UsStockDetailClient({
         <Card>
           <CardHeader title={`${normalizedTicker} のUSデータが見つかりません`} hint="market_ohlcv_daily / US" />
           <p className="text-[13px] font-semibold text-[var(--color-text-secondary)]">
-            {error ?? 'Tiingoデータが未取得です。'} `npm run batch:us-ohlcv` と `npm run batch:us-snapshots` の実行状況を確認してください。
+            {error ?? '米国株の日次データが未取得です。'} データ更新状況を確認してください。
           </p>
         </Card>
       </div>
@@ -338,112 +384,178 @@ export function UsStockDetailClient({
 
   return (
     <div className="mx-auto flex w-full max-w-[1480px] flex-col gap-5">
-      <div className="flex flex-wrap items-start justify-between gap-4 rounded-[var(--radius-card)] border border-[var(--color-border-default)] bg-white p-4 shadow-[var(--shadow-card)]">
-        <div className="min-w-0">
-          <Link href="/us/screener" className="mb-3 inline-flex items-center gap-2 text-[12px] font-bold text-[var(--color-brand-700)] hover:text-[var(--color-market-red)]">
-            <ArrowLeft size={14} /> USスクリーナー
-          </Link>
-          <div className="flex flex-wrap items-center gap-2">
-            <h1 className="text-[26px] font-bold leading-none text-[var(--color-brand-900)]">{quote.ticker}</h1>
-            <span className="rounded-[3px] border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-2 py-1 text-[11px] font-bold text-[var(--color-text-secondary)]">
-              {quote.exchange ?? 'US'}
-            </span>
-            <span className="rounded-[3px] border border-[var(--color-border-default)] bg-white px-2 py-1 text-[11px] font-bold text-[var(--color-brand-700)]">
-              Tiingo EOD
-            </span>
-          </div>
-          <div className="mt-2 text-[14px] font-semibold text-[var(--color-text-secondary)]">{quote.name}</div>
-        </div>
-        <div className="text-right">
-          <PriceDisplay
-            value={quote.price}
-            change={quote.isPriceDiscontinuous ? undefined : quote.change}
-            changePercent={quote.isPriceDiscontinuous ? undefined : quote.changePercent}
-            currency="USD"
-            size="xl"
-          />
-          <div className="mt-1 text-[11px] font-semibold text-[var(--color-text-tertiary)]">
-            米国株ワークスペース{quote.priceDate ? ` / 価格日 ${quote.priceDate}` : ''}
-          </div>
-          {quote.priceQualityWarning && (
-            <div className="mt-2 max-w-[360px] rounded-[4px] border border-amber-200 bg-amber-50 px-3 py-2 text-left text-[11px] font-bold leading-5 text-amber-800">
-              {quote.priceQualityWarning}
+      <div className="stock-detail-sticky border border-[var(--color-border-default)] bg-white shadow-[0_2px_8px_rgba(16,32,52,0.12)]">
+        <div className="flex flex-wrap items-start justify-between gap-3 p-3">
+          <div className="min-w-0">
+            <Link href="/us/screener" className="mb-2 inline-flex items-center gap-2 text-[11px] font-bold text-[var(--color-brand-700)] hover:text-[var(--color-market-red)]">
+              <ArrowLeft size={13} /> USスクリーナー
+            </Link>
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="text-[22px] font-bold leading-none text-[var(--color-brand-900)]">{quote.ticker}</h1>
+              <span className="rounded-[3px] border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-2 py-1 text-[10px] font-bold text-[var(--color-text-secondary)]">
+                {quote.exchange ?? 'US'}
+              </span>
+              <span className="rounded-[3px] border border-[var(--color-border-default)] bg-white px-2 py-1 text-[10px] font-bold text-[var(--color-brand-700)]">
+                US EOD
+              </span>
             </div>
-          )}
+            <div className="mt-1.5 truncate text-[13px] font-semibold text-[var(--color-text-secondary)]">{quote.name}</div>
+          </div>
+          <div className="ml-auto flex items-center gap-2 text-right">
+            <button
+              type="button"
+              onClick={() => setCompared(toggleComparedSymbol({ market: 'US', ticker: quote.ticker, name: quote.name }))}
+              className={`inline-flex h-8 items-center gap-1.5 border px-2.5 text-[11px] font-black ${
+                compared
+                  ? 'border-[var(--color-market-red)] bg-[var(--color-price-up-bg)] text-[var(--color-market-red)]'
+                  : 'border-[var(--color-border-default)] bg-white text-[var(--color-text-secondary)]'
+              }`}
+              title={compared ? '比較から外す' : '比較へ追加'}
+            >
+              <GitCompareArrows size={14} />
+              <span className="hidden sm:inline">{compared ? '比較中' : '比較'}</span>
+            </button>
+            <div>
+              <PriceDisplay
+                value={quote.price}
+                change={quote.isPriceDiscontinuous ? undefined : quote.change}
+                changePercent={quote.isPriceDiscontinuous ? undefined : quote.changePercent}
+                currency="USD"
+                size="lg"
+              />
+              <div className="mt-1 text-[10px] font-semibold text-[var(--color-text-tertiary)]">
+                {quote.priceDate ? `価格日 ${quote.priceDate}` : 'US株'}
+              </div>
+            </div>
+          </div>
         </div>
+        {quote.priceQualityWarning && (
+          <div className="mx-3 mb-2 rounded-[4px] border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] font-bold leading-5 text-amber-800">
+            {quote.priceQualityWarning}
+          </div>
+        )}
+        <UsStockDetailTabs active={activeTab} onSelect={selectTab} />
       </div>
 
-      <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Stat label="出来高" value={fmtNumber(quote.volume)} />
-        <Stat label="時価総額" value={fmtMoney(quote.marketCap)} />
-        <Stat label="52週高値" value={quote.fiftyTwoWeekHigh == null ? '-' : `$${quote.fiftyTwoWeekHigh.toFixed(2)}`} />
-        <Stat label="52週安値" value={quote.fiftyTwoWeekLow == null ? '-' : `$${quote.fiftyTwoWeekLow.toFixed(2)}`} />
-      </section>
+      {activeTab === 'overview' && (
+        <>
+          <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <Stat label="出来高" value={fmtNumber(quote.volume)} />
+            <Stat label="時価総額" value={fmtMoney(quote.marketCap)} />
+            <Stat label="52週高値" value={quote.fiftyTwoWeekHigh == null ? '-' : `$${quote.fiftyTwoWeekHigh.toFixed(2)}`} />
+            <Stat label="52週安値" value={quote.fiftyTwoWeekLow == null ? '-' : `$${quote.fiftyTwoWeekLow.toFixed(2)}`} />
+          </section>
+          <UsAnalysisDateControl analysisDate={analysisDate} onChange={updateAnalysisDate} />
+          <UsPhysicalMomentumSection
+            ticker={quote.ticker}
+            analysisDate={analysisDate}
+            changePercent={quote.isPriceDiscontinuous ? null : quote.changePercent}
+          />
+          <UsPhysicalPlanSection ticker={quote.ticker} analysisDate={analysisDate} />
+        </>
+      )}
 
-      <UsAnalysisDateControl analysisDate={analysisDate} onChange={updateAnalysisDate} />
+      {activeTab === 'chart' && (
+        <>
+          <Card size="lg">
+            <CardHeader title="ステージ変遷" hint="日足A/B・週足A/B・月足A/B" />
+            <StageTimeline ticker={quote.ticker} market="US" />
+          </Card>
+          <Card size="lg">
+            <CardHeader title="マルチタイムフレームチャート" hint="日足・2日足・週足・2週足・月足・2ヶ月足" />
+            <CandlestickChart
+              ticker={quote.ticker}
+              market="US"
+              interval="D"
+              height={460}
+              historyPeriod="all"
+              showTimeframeSelector
+              maLinesByInterval={{
+                D: [3, 5, 25, 75, 200],
+                '2D': [3, 5, 25, 75, 200],
+                W: [3, 5, 25, 75, 200],
+                '2W': [3, 5, 25, 75, 200],
+                M: [3, 5, 25, 75, 200],
+                '2M': [3, 5, 25, 75, 200],
+              }}
+            />
+          </Card>
+        </>
+      )}
 
-      <UsPhysicalMomentumSection
-        ticker={quote.ticker}
-        analysisDate={analysisDate}
-        changePercent={quote.isPriceDiscontinuous ? null : quote.changePercent}
-      />
+      {activeTab === 'scenario' && (
+        <>
+          <UsAnalysisDateControl analysisDate={analysisDate} onChange={updateAnalysisDate} />
+          <TradeScenarioNotebook
+            ticker={quote.ticker}
+            market="US"
+            name={quote.name ?? quote.ticker}
+            quote={quote}
+            selectedRange={null}
+            context={{
+              exchange: quote.exchange,
+              currency: quote.currency,
+              source: 'US EOD',
+            }}
+          />
+          <ScenarioProjectionChart
+            ticker={quote.ticker}
+            market="US"
+            name={quote.name ?? quote.ticker}
+            analysisDate={analysisDate}
+            onUseLatest={() => updateAnalysisDate(null)}
+          />
+          <StockMovePeriods ticker={quote.ticker} market="US" />
+          <StockScenarioAiPanel ticker={quote.ticker} market="US" name={quote.name ?? quote.ticker} analysisDate={analysisDate} />
+        </>
+      )}
 
-      <UsPhysicalPlanSection ticker={quote.ticker} analysisDate={analysisDate} />
-
-      <TradeScenarioNotebook
-        ticker={quote.ticker}
-        market="US"
-        name={quote.name ?? quote.ticker}
-        quote={quote}
-        selectedRange={null}
-        context={{
-          exchange: quote.exchange,
-          currency: quote.currency,
-          source: 'Tiingo EOD',
-        }}
-      />
-
-      <Card size="lg">
-        <CardHeader title="ステージ変遷" hint="日足A/B・週足A/B・月足A/B" />
-        <StageTimeline ticker={quote.ticker} market="US" />
-      </Card>
-
-      <Card size="lg">
-        <CardHeader title="マルチタイムフレームチャート" hint="日足・2日足・週足・2週足・月足・2ヶ月足" />
-        <CandlestickChart
-          ticker={quote.ticker}
-          market="US"
-          interval="D"
-          height={460}
-          historyPeriod="all"
-          showTimeframeSelector
-          maLinesByInterval={{
-            D: [3, 5, 25, 75, 200],
-            '2D': [3, 5, 25, 75, 200],
-            W: [3, 5, 25, 75, 200],
-            '2W': [3, 5, 25, 75, 200],
-            M: [3, 5, 25, 75, 200],
-            '2M': [3, 5, 25, 75, 200],
-          }}
-        />
-      </Card>
-
-      <ScenarioProjectionChart
-        ticker={quote.ticker}
-        market="US"
-        name={quote.name ?? quote.ticker}
-        analysisDate={analysisDate}
-        onUseLatest={() => updateAnalysisDate(null)}
-      />
-
-      <StockMovePeriods ticker={quote.ticker} market="US" />
-
-      <StockScenarioAiPanel ticker={quote.ticker} market="US" name={quote.name ?? quote.ticker} analysisDate={analysisDate} />
-
-      <HistoricalAnalogExplorer ticker={quote.ticker} market="US" analysisDate={analysisDate} />
-
-      <UsMlStatusSection ticker={quote.ticker} analysisDate={analysisDate} />
+      {activeTab === 'ml' && (
+        <>
+          <UsAnalysisDateControl analysisDate={analysisDate} onChange={updateAnalysisDate} />
+          <HistoricalAnalogExplorer ticker={quote.ticker} market="US" analysisDate={analysisDate} />
+          <UsMlStatusSection ticker={quote.ticker} analysisDate={analysisDate} />
+        </>
+      )}
     </div>
+  )
+}
+
+function UsStockDetailTabs({
+  active,
+  onSelect,
+}: {
+  active: UsStockDetailTab
+  onSelect: (tab: UsStockDetailTab) => void
+}) {
+  const tabs = [
+    { id: 'overview' as const, label: '概要', icon: LayoutDashboard },
+    { id: 'chart' as const, label: 'チャート・6ステージ', icon: ChartCandlestick },
+    { id: 'scenario' as const, label: 'シナリオ', icon: NotebookPen },
+    { id: 'ml' as const, label: 'ML・類似局面', icon: BrainCircuit },
+  ]
+  return (
+    <nav className="flex overflow-x-auto border-t border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-2" aria-label="US個別銘柄分析">
+      {tabs.map((tab) => {
+        const Icon = tab.icon
+        return (
+          <button
+            key={tab.id}
+            type="button"
+            onClick={() => onSelect(tab.id)}
+            className={`inline-flex h-9 shrink-0 items-center gap-1.5 border-b-2 px-3 text-[11px] font-black ${
+              active === tab.id
+                ? 'border-[var(--color-market-red)] bg-white text-[var(--color-brand-900)]'
+                : 'border-transparent text-[var(--color-text-secondary)] hover:bg-white'
+            }`}
+            aria-current={active === tab.id ? 'page' : undefined}
+          >
+            <Icon size={14} />
+            {tab.label}
+          </button>
+        )
+      })}
+    </nav>
   )
 }
 

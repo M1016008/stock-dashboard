@@ -26,6 +26,11 @@ function conciseError(error: unknown): string {
     .slice(0, 300)
 }
 
+function isProviderUnavailableTicker(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return /HTTP 404/i.test(message) && /ticker .* not found/i.test(message)
+}
+
 function laterDate(a: string, b: string | null): string {
   if (!b) return a
   return a > b ? a : b
@@ -159,8 +164,10 @@ async function main() {
   let nextIndex = 0
   let succeeded = 0
   let failed = 0
+  let unavailable = 0
   let rowsInserted = 0
   const errors: string[] = []
+  const unavailableTickers: string[] = []
   let progressSave = Promise.resolve()
 
   async function saveProgress() {
@@ -171,6 +178,13 @@ async function main() {
       failed,
       rowsInserted,
       errorSummary: JSON.stringify(errors.slice(0, 20)),
+      payloadJson: JSON.stringify({
+        historyFrom: HISTORY_FROM,
+        limit: LIMIT || null,
+        tickers: TICKERS ?? null,
+        unavailable,
+        unavailableTickers: unavailableTickers.slice(0, 50),
+      }),
     }).where(eq(marketDataRuns.id, run.id))
   }
 
@@ -210,15 +224,22 @@ async function main() {
         const count = await storeTicker(target)
         succeeded += 1
         rowsInserted += count
-        if ((succeeded + failed) % 50 === 0 || succeeded + failed === targets.length) {
-          console.log(`[${succeeded + failed}/${targets.length}] rows=${rowsInserted}, failed=${failed}`)
+        const processed = succeeded + failed + unavailable
+        if (processed % 50 === 0 || processed === targets.length) {
+          console.log(`[${processed}/${targets.length}] rows=${rowsInserted}, failed=${failed}, unavailable=${unavailable}`)
           queueProgressSave()
         }
       } catch (error) {
-        failed += 1
-        const msg = `${target.ticker}: ${conciseError(error)}`
-        errors.push(msg)
-        console.error(`worker=${workerId} ${msg}`)
+        if (isProviderUnavailableTicker(error)) {
+          unavailable += 1
+          unavailableTickers.push(target.ticker)
+          console.warn(`worker=${workerId} ${target.ticker}: provider reports ticker unavailable; skipped`)
+        } else {
+          failed += 1
+          const msg = `${target.ticker}: ${conciseError(error)}`
+          errors.push(msg)
+          console.error(`worker=${workerId} ${msg}`)
+        }
       }
     }
   }
@@ -233,12 +254,22 @@ async function main() {
     failed,
     rowsInserted,
     errorSummary: JSON.stringify(errors.slice(0, 20)),
+    payloadJson: JSON.stringify({
+      historyFrom: HISTORY_FROM,
+      limit: LIMIT || null,
+      tickers: TICKERS ?? null,
+      unavailable,
+      unavailableTickers: unavailableTickers.slice(0, 50),
+    }),
   }).where(eq(marketDataRuns.id, run.id))
   const latest = await execGet<{ date: string | null }>(
     `SELECT MAX(date) AS date FROM market_ohlcv_daily WHERE market = ?`,
     [MARKET],
   )
-  console.log(`US OHLCV complete: succeeded=${succeeded}, failed=${failed}, rows=${rowsInserted}, latest=${latest?.date ?? '-'}`)
+  console.log(
+    `US OHLCV complete: succeeded=${succeeded}, failed=${failed}, unavailable=${unavailable}, `
+    + `rows=${rowsInserted}, latest=${latest?.date ?? '-'}`,
+  )
 }
 
 main().catch((error) => {

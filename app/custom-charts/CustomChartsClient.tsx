@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useSearchParams } from 'next/navigation'
 import {
   ArrowDown,
   ArrowUp,
@@ -298,9 +299,12 @@ function SavedChartList({
 }
 
 export function CustomChartsClient() {
+  const searchParams = useSearchParams()
   const formulaRef = useRef<HTMLTextAreaElement>(null)
   const [name, setName] = useState('保有株ポートフォリオ')
-  const [formula, setFormula] = useState('7203 * 100 + 6758 * 200')
+  const [formula, setFormula] = useState(() => (
+    searchParams.get('formula')?.trim().slice(0, 500) || '7203 * 100 + 6758 * 200'
+  ))
   const [mode, setMode] = useState<CustomChartMode>('valuation')
   const [chartType, setChartType] = useState<'line' | 'candlestick'>('line')
   const [period, setPeriod] = useState<PeriodCode>('1y')

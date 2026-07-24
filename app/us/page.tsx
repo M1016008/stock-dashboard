@@ -174,7 +174,7 @@ export default async function UsHomePage() {
       <PageTitle
         title="米国株ダッシュボード"
         subtitle="日本株ページと同じ分析体験へ寄せるためのUS市場ワークスペース。価格、6ステージ、スクリーニング、シナリオ分析を横断します。"
-        badge="US / Tiingo"
+        badge="US Market"
       />
       <section className="grid gap-4 md:grid-cols-3">
         <Card>
@@ -183,7 +183,7 @@ export default async function UsHomePage() {
           <div className="mt-1 text-[12px] font-semibold text-[var(--color-text-secondary)]">登録 {fmt(status.universe.total)} 銘柄</div>
         </Card>
         <Card>
-          <CardHeader title="OHLCV" hint="market_ohlcv_daily / Tiingo" />
+          <CardHeader title="OHLCV" hint="米国株の日次価格データ" />
           <div className="text-[24px] font-bold text-[var(--color-brand-900)]">{fmt(status.ohlcv.tickers)}</div>
           <div className="mt-1 text-[12px] font-semibold text-[var(--color-text-secondary)]">
             {status.ohlcv.firstDate ?? '-'} 〜 {status.ohlcv.latestDate ?? '-'} / {fmt(status.ohlcv.rows)} 行{status.ohlcv.rowsApproximate ? '（概算）' : ''}

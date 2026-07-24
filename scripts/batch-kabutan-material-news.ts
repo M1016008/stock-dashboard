@@ -8,6 +8,7 @@ import {
   isKabutanDashboardTargetTitle,
   pruneKabutanMaterialNewsToPreviousDayMovers,
 } from '@/lib/queries/kabutan-material-news'
+import { acquireExclusiveUpdateLock } from '@/lib/server/update-lock'
 
 const BASE_URL = 'https://kabutan.jp'
 const CATEGORY_URLS = [
@@ -348,66 +349,82 @@ async function saveArticle(item: ListItem, detail: DetailResult): Promise<void> 
 }
 
 async function main() {
-  await ensureReady()
-  await ensureKabutanMaterialNewsTables()
-  const pruned = await pruneKabutanMaterialNewsToPreviousDayMovers()
-  const runId = await insertRun()
-  const pages = envInt('KABUTAN_MATERIAL_NEWS_PAGES', 3, 1, 3)
-  const limit = envInt('KABUTAN_MATERIAL_NEWS_LIMIT', 60, 1, 60)
-  const delayMs = envInt('KABUTAN_REQUEST_DELAY_MS', 900, 300, 5000)
-  const errors: string[] = []
-  let saved = 0
+  const lock = await acquireExclusiveUpdateLock(
+    'kabutan_material_news',
+    envInt('KABUTAN_MATERIAL_NEWS_LOCK_SECONDS', 20 * 60, 5 * 60, 60 * 60),
+  )
+  if (!lock) {
+    console.log('Kabutan material news skipped: another StockBoard writer is active')
+    return
+  }
 
   try {
-    const byId = new Map<string, ListItem>()
-    for (const categoryUrl of CATEGORY_URLS) {
-      for (let page = 1; page <= pages && byId.size < limit; page += 1) {
-        const url = page === 1 ? categoryUrl : `${categoryUrl}&page=${page}`
-        try {
-          const html = await fetchHtml(url)
-          for (const item of parseListItems(html)) {
-            if (byId.size >= limit) break
-            byId.set(item.articleId, item)
+    await ensureReady()
+    await ensureKabutanMaterialNewsTables()
+    const pruned = await pruneKabutanMaterialNewsToPreviousDayMovers()
+    const runId = await insertRun()
+    const pages = envInt('KABUTAN_MATERIAL_NEWS_PAGES', 3, 1, 3)
+    const limit = envInt('KABUTAN_MATERIAL_NEWS_LIMIT', 60, 1, 60)
+    const delayMs = envInt('KABUTAN_REQUEST_DELAY_MS', 900, 300, 5000)
+    const errors: string[] = []
+    let saved = 0
+
+    try {
+      const byId = new Map<string, ListItem>()
+      for (const categoryUrl of CATEGORY_URLS) {
+        for (let page = 1; page <= pages && byId.size < limit; page += 1) {
+          const url = page === 1 ? categoryUrl : `${categoryUrl}&page=${page}`
+          try {
+            const html = await fetchHtml(url)
+            for (const item of parseListItems(html)) {
+              if (byId.size >= limit) break
+              byId.set(item.articleId, item)
+            }
+          } catch (error) {
+            errors.push(`list page ${page}: ${(error as Error).message}`)
           }
-        } catch (error) {
-          errors.push(`list page ${page}: ${(error as Error).message}`)
+          await sleep(delayMs)
         }
+      }
+
+      const items = Array.from(byId.values())
+      for (const item of items) {
+        let detail: DetailResult
+        try {
+          const html = await fetchHtml(item.url)
+          detail = parseDetail(html, item)
+        } catch (error) {
+          detail = {
+            title: item.title,
+            publishedAt: item.publishedAt,
+            snippet: null,
+            relatedTickers: [],
+            relatedStocks: [],
+            parseStatus: 'list_only',
+            errorSummary: `detail fetch failed: ${(error as Error).message}`,
+          }
+          errors.push(`${item.articleId}: ${detail.errorSummary}`)
+        }
+        await saveArticle(item, detail)
+        saved += 1
         await sleep(delayMs)
       }
-    }
 
-    const items = Array.from(byId.values())
-    for (const item of items) {
-      let detail: DetailResult
-      try {
-        const html = await fetchHtml(item.url)
-        detail = parseDetail(html, item)
-      } catch (error) {
-        detail = {
-          title: item.title,
-          publishedAt: item.publishedAt,
-          snippet: null,
-          relatedTickers: [],
-          relatedStocks: [],
-          parseStatus: 'list_only',
-          errorSummary: `detail fetch failed: ${(error as Error).message}`,
-        }
-        errors.push(`${item.articleId}: ${detail.errorSummary}`)
-      }
-      await saveArticle(item, detail)
-      saved += 1
-      await sleep(delayMs)
+      const status = items.length === 0 ? 'failed' : errors.length > 0 ? 'partial' : 'success'
+      await finishRun(runId, status, items.length, saved, errors.slice(0, 8).join(' / ') || null)
+      console.log(`Kabutan material news ${status}: fetched=${items.length} saved=${saved} pruned=${pruned}`)
+      if (errors.length > 0) console.log(`Warnings: ${errors.slice(0, 8).join(' / ')}`)
+    } catch (error) {
+      const message = (error as Error).message
+      await finishRun(runId, 'failed', 0, saved, message)
+      throw error
     }
-
-    const status = items.length === 0 ? 'failed' : errors.length > 0 ? 'partial' : 'success'
-    await finishRun(runId, status, items.length, saved, errors.slice(0, 8).join(' / ') || null)
-    console.log(`Kabutan material news ${status}: fetched=${items.length} saved=${saved} pruned=${pruned}`)
-    if (errors.length > 0) console.log(`Warnings: ${errors.slice(0, 8).join(' / ')}`)
-  } catch (error) {
-    const message = (error as Error).message
-    await finishRun(runId, 'failed', 0, saved, message)
-    console.error(`Kabutan material news failed: ${message}`)
+  } finally {
+    await lock.release()
   }
 }
 
-main()
+main().catch((error) => {
+  console.error(`Kabutan material news failed: ${error instanceof Error ? error.message : String(error)}`)
+  process.exitCode = 1
+})

@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process'
 import { client, ensureReady, execAll, execGet } from '@/lib/db/client'
 
 export const DEFAULT_UPDATE_LOCK_LEASE_SECONDS = 45 * 60
@@ -7,6 +8,9 @@ export const EXCLUSIVE_UPDATE_JOB_TYPES = [
   'ml_learning',
   'ml_freshness_guard',
   'us_update_latest',
+  'earnings_refresh',
+  'kabutan_material_news',
+  'db_maintenance',
 ] as const
 
 export type UpdateLockSnapshot = {
@@ -29,6 +33,50 @@ export type UpdateLockHandle = {
 function makeOwner(jobType: string): string {
   const suffix = Math.random().toString(36).slice(2, 10)
   return `${jobType}:${process.pid}:${Date.now()}:${suffix}`
+}
+
+function localOwnerPid(owner: string | null): number | null {
+  if (!owner) return null
+  const rawPid = owner.split(':')[1]
+  const pid = Number(rawPid)
+  return Number.isInteger(pid) && pid > 0 ? pid : null
+}
+
+function processExists(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+const SQLITE_WRITER_PROCESS_PATTERNS = [
+  /scripts\/(?:update-latest|refresh-after-ohlcv|batch-ohlcv|batch-snapshots|batch-physical-momentum|build-dashboard-cache)\.(?:ts|js)\b/,
+  /scripts\/(?:update-us-latest|batch-us-|run-us-ml-job)\S*\.(?:ts|js)\b/,
+  /scripts\/(?:run-ml-learning|guard-ml-freshness|batch-ml-|build-serving-ml-)\S*\.(?:ts|js)\b/,
+  /scripts\/(?:batch-forward-extrema|build-serving-|refresh-earnings|batch-kabutan-material-news|maintenance-db)\S*\.(?:ts|js)\b/,
+] as const
+
+function hasActiveSqliteWriterProcess(): boolean {
+  try {
+    const output = execFileSync('ps', ['-axo', 'pid=,command='], {
+      encoding: 'utf8',
+      timeout: 5_000,
+    })
+    return output
+      .split('\n')
+      .some((line) => {
+        const match = line.trim().match(/^(\d+)\s+(.+)$/)
+        if (!match) return false
+        const pid = Number(match[1])
+        if (!Number.isInteger(pid) || pid === process.pid) return false
+        return SQLITE_WRITER_PROCESS_PATTERNS.some((pattern) => pattern.test(match[2]))
+      })
+  } catch {
+    // A failed process audit must never make lock cleanup more aggressive.
+    return true
+  }
 }
 
 function isSqliteBusyError(error: unknown): boolean {
@@ -87,23 +135,35 @@ export async function acquireUpdateLock(
 
   if (result.rowsAffected < 1) return null
 
+  let heartbeatInFlight: Promise<void> | null = null
+  const heartbeat = (): Promise<void> => {
+    if (heartbeatInFlight) return heartbeatInFlight
+    heartbeatInFlight = client.execute({
+      sql: `
+        UPDATE update_locks
+        SET heartbeat_at = unixepoch(),
+            lease_expires_at = unixepoch() + ?
+        WHERE job_type = ?
+          AND owner = ?
+          AND status = 'running'
+      `,
+      args: [leaseSeconds, jobType, owner],
+    })
+      .then(() => undefined)
+      .finally(() => {
+        heartbeatInFlight = null
+      })
+    return heartbeatInFlight
+  }
+
   return {
     jobType,
     owner,
-    heartbeat: async () => {
-      await client.execute({
-        sql: `
-          UPDATE update_locks
-          SET heartbeat_at = unixepoch(),
-              lease_expires_at = unixepoch() + ?
-          WHERE job_type = ?
-            AND owner = ?
-            AND status = 'running'
-        `,
-        args: [leaseSeconds, jobType, owner],
-      })
-    },
+    heartbeat,
     release: async () => {
+      if (heartbeatInFlight) {
+        await heartbeatInFlight.catch(() => undefined)
+      }
       await client.execute({
         sql: `
           UPDATE update_locks
@@ -218,7 +278,42 @@ export async function cleanupExpiredUpdateLocks(jobTypes?: readonly string[]): P
       `,
       args: [...(jobTypes ?? [])],
     })
-    return Number(result.rowsAffected ?? 0)
+    let cleaned = Number(result.rowsAffected ?? 0)
+
+    const candidates = await client.execute({
+      sql: `
+        SELECT job_type, owner
+        FROM update_locks
+        WHERE status = 'running'
+          AND lease_expires_at > unixepoch()
+          ${where}
+      `,
+      args: [...(jobTypes ?? [])],
+    })
+    let writerAudit: boolean | null = null
+    for (const row of candidates.rows) {
+      const jobType = String(row.job_type ?? '')
+      const owner = row.owner == null ? null : String(row.owner)
+      const pid = localOwnerPid(owner)
+      if (!jobType || !owner || !pid || processExists(pid)) continue
+      writerAudit ??= hasActiveSqliteWriterProcess()
+      if (writerAudit) continue
+      const orphaned = await client.execute({
+        sql: `
+          UPDATE update_locks
+          SET status = 'idle',
+              owner = NULL,
+              heartbeat_at = unixepoch(),
+              lease_expires_at = unixepoch()
+          WHERE job_type = ?
+            AND owner = ?
+            AND status = 'running'
+        `,
+        args: [jobType, owner],
+      })
+      cleaned += Number(orphaned.rowsAffected ?? 0)
+    }
+    return cleaned
   } catch (error) {
     if (isSqliteBusyError(error)) return 0
     throw error

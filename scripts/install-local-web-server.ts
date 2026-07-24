@@ -21,10 +21,13 @@ const webPlistPath = path.join(launchAgentsDir, `${webLabel}.plist`)
 const healthPlistPath = path.join(launchAgentsDir, `${healthLabel}.plist`)
 const healthScriptPath = path.join(stateDir, 'check-web-health.zsh')
 const nextBin = path.join(cwd, 'node_modules', 'next', 'dist', 'bin', 'next')
-const buildIdPath = path.join(cwd, '.next', 'BUILD_ID')
+const liveDistDir = process.env.STOCKBOARD_WEB_DIST_DIR || '.next-live'
+const buildIdPath = path.join(cwd, liveDistDir, 'BUILD_ID')
 const port = integerEnv('STOCKBOARD_WEB_PORT', 3000, 1, 65535)
 const heapMb = integerEnv('STOCKBOARD_WEB_MAX_OLD_SPACE_MB', 2048, 512, 8192)
 const healthIntervalSeconds = integerEnv('STOCKBOARD_WEB_HEALTH_INTERVAL_SECONDS', 60, 30, 3600)
+const healthTimeoutSeconds = integerEnv('STOCKBOARD_WEB_HEALTH_TIMEOUT_SECONDS', 20, 5, 120)
+const healthFailureThreshold = integerEnv('STOCKBOARD_WEB_HEALTH_FAILURE_THRESHOLD', 3, 2, 10)
 const pathEnv = [
   '/opt/homebrew/bin',
   '/usr/local/bin',
@@ -61,11 +64,31 @@ function bootout(label: string): void {
   }
 }
 
+function sleep(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+}
+
+function bootstrap(plistPath: string, attempts = 6): void {
+  let lastError: unknown
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      execFileSync('launchctl', ['bootstrap', `gui/${uid}`, plistPath], {
+        stdio: attempt === attempts ? 'inherit' : 'ignore',
+      })
+      return
+    } catch (error) {
+      lastError = error
+      if (attempt < attempts) sleep(500 * attempt)
+    }
+  }
+  throw lastError
+}
+
 if (!fs.existsSync(nextBin)) {
   throw new Error(`Next.js executable was not found: ${nextBin}`)
 }
 if (!fs.existsSync(buildIdPath)) {
-  throw new Error('Production build is missing. Run npm run build before web:install.')
+  throw new Error(`Production build is missing: ${buildIdPath}. Run npm run web:deploy before web:install.`)
 }
 
 fs.mkdirSync(launchAgentsDir, { recursive: true })
@@ -93,7 +116,12 @@ const webPlist = `<?xml version="1.0" encoding="UTF-8"?>
   <dict>
     <key>NODE_ENV</key><string>production</string>
     <key>NODE_OPTIONS</key><string>--max-old-space-size=${heapMb}</string>
+    <key>NEXT_DIST_DIR</key><string>${liveDistDir}</string>
     <key>PATH</key><string>${xmlEscape(pathEnv)}</string>
+    <key>SKIP_SCHEMA_ENSURE</key><string>1</string>
+    <key>SQLITE_BUSY_RETRIES</key><string>3</string>
+    <key>SQLITE_BUSY_TIMEOUT_MS</key><string>5000</string>
+    <key>US_SQLITE_BUSY_RETRIES</key><string>3</string>
     <key>USE_LOCAL_DB</key><string>1</string>
   </dict>
   <key>RunAtLoad</key>
@@ -125,7 +153,7 @@ COUNT_FILE=${shellQuote(path.join(stateDir, 'web-health-failures'))}
 HEALTH_URL=${shellQuote(`http://127.0.0.1:${port}/api/health`)}
 LABEL=${shellQuote(webLabel)}
 
-if /usr/bin/curl --silent --show-error --fail --max-time 10 "$HEALTH_URL" | /usr/bin/grep --quiet '"status":"ok"'; then
+if /usr/bin/curl --silent --fail --max-time ${healthTimeoutSeconds} "$HEALTH_URL" | /usr/bin/grep --quiet '"status":"ok"'; then
   /bin/echo 0 > "$COUNT_FILE"
   exit 0
 fi
@@ -141,7 +169,7 @@ count=$((count + 1))
 /bin/echo "$count" > "$COUNT_FILE"
 /bin/echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) health check failed count=$count"
 
-if (( count >= 3 )); then
+if (( count >= ${healthFailureThreshold} )); then
   /bin/echo 0 > "$COUNT_FILE"
   /bin/launchctl kickstart -k "gui/$UID/$LABEL"
   /bin/echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) restarted $LABEL after $count failures"
@@ -182,14 +210,18 @@ fs.writeFileSync(healthScriptPath, healthScript, { mode: 0o755 })
 
 bootout(healthLabel)
 bootout(webLabel)
+sleep(750)
 
-execFileSync('launchctl', ['bootstrap', `gui/${uid}`, webPlistPath], { stdio: 'inherit' })
+bootstrap(webPlistPath)
 execFileSync('launchctl', ['enable', `gui/${uid}/${webLabel}`], { stdio: 'inherit' })
-execFileSync('launchctl', ['bootstrap', `gui/${uid}`, healthPlistPath], { stdio: 'inherit' })
+bootstrap(healthPlistPath)
 execFileSync('launchctl', ['enable', `gui/${uid}/${healthLabel}`], { stdio: 'inherit' })
 execFileSync('launchctl', ['kickstart', `gui/${uid}/${webLabel}`], { stdio: 'inherit' })
 
 console.log(`web service: ${webLabel} http://localhost:${port}`)
-console.log(`health monitor: ${healthLabel} every ${healthIntervalSeconds}s`)
+console.log(
+  `health monitor: ${healthLabel} every ${healthIntervalSeconds}s `
+  + `(timeout ${healthTimeoutSeconds}s, restart after ${healthFailureThreshold} failures)`,
+)
 console.log(`heap limit: ${heapMb} MB`)
 console.log(`logs: ${path.join(logDir, 'web.log')}`)

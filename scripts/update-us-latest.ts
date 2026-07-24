@@ -108,6 +108,9 @@ async function latestUsSnapshotDate(): Promise<string | null> {
 async function runCommand(command: string, args: string[], envOverrides: EnvOverrides, heartbeat?: Heartbeat): Promise<RunResult> {
   await waitForMemoryHeadroom({ label: `${command} ${args.join(' ')}` })
   return new Promise((resolve, reject) => {
+    // Child steps own the SQLite write window. Refresh the lease only between
+    // steps so the coordinator never competes with its own writer.
+    void heartbeat
     const timeoutMinutes = Number(
       envOverrides.UPDATE_CHILD_TIMEOUT_MINUTES
       ?? process.env.UPDATE_CHILD_TIMEOUT_MINUTES
@@ -120,18 +123,11 @@ async function runCommand(command: string, args: string[], envOverrides: EnvOver
       env: withMemoryGuardEnv({
         ...process.env,
         USE_LOCAL_DB: '1',
-        SQLITE_BUSY_RETRIES: process.env.SQLITE_BUSY_RETRIES ?? '720',
+        SQLITE_BUSY_RETRIES: process.env.SQLITE_BUSY_RETRIES ?? '12',
         ...envOverrides,
       }),
     })
 
-    const heartbeatTimer = heartbeat
-      ? setInterval(() => {
-          heartbeat().catch((error) => {
-            console.warn(`US update heartbeat failed while running ${args.join(' ')}:`, errorMessage(error))
-          })
-        }, 60_000)
-      : null
     const timeoutTimer = Number.isFinite(timeoutMinutes) && timeoutMinutes > 0
       ? setTimeout(() => {
           timedOut = true
@@ -144,7 +140,6 @@ async function runCommand(command: string, args: string[], envOverrides: EnvOver
       : null
 
     const clearTimers = () => {
-      if (heartbeatTimer) clearInterval(heartbeatTimer)
       if (timeoutTimer) clearTimeout(timeoutTimer)
     }
 
@@ -180,7 +175,11 @@ async function main() {
     return
   }
 
-  const lock = await acquireExclusiveUpdateLock('us_update_latest', 6 * 60 * 60)
+  const lockLeaseSeconds = Math.max(
+    6 * 60 * 60,
+    (numberEnv('UPDATE_CHILD_TIMEOUT_MINUTES', 360) + 60) * 60,
+  )
+  const lock = await acquireExclusiveUpdateLock('us_update_latest', lockLeaseSeconds)
   if (!lock) {
     console.log('US latest update skipped: us_update_latest lock is already active')
     return
@@ -283,6 +282,12 @@ async function main() {
       }, heartbeat)
       await lock.heartbeat()
     }
+
+    await runNpm('batch:dashboard-cache', {
+      STOCKBOARD_DB_PATH: usAnalyticsDbPath,
+      UPDATE_CHILD_TIMEOUT_MINUTES: process.env.US_DASHBOARD_CACHE_TIMEOUT_MINUTES ?? '30',
+    }, heartbeat)
+    await lock.heartbeat()
 
     const finalOhlcv = await latestUsOhlcvDate()
     const finalSnapshots = await latestUsSnapshotDate()

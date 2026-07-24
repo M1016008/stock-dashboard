@@ -1056,7 +1056,10 @@ async function getRecentEarningsCalendarRows(baseDate: string, prevDate: string 
     `,
     [baseDate, limit, baseDate, prevDate ?? baseDate, baseDate, baseDate, baseDate, baseDate],
   )
-  return withEarningsSignals(rows, baseDate)
+  return withEarningsSignals(rows, baseDate, {
+    includeDetails: false,
+    includeMlInsight: true,
+  })
 }
 
 async function getLatestImportedEarningsCalendarRows(baseDate: string, prevDate: string | null, limit = 50): Promise<EarningsRow[]> {
@@ -1136,7 +1139,10 @@ async function getLatestImportedEarningsCalendarRows(baseDate: string, prevDate:
     `,
     [baseDate, baseDate, limit, baseDate, prevDate ?? baseDate, baseDate, baseDate, baseDate, baseDate],
   )
-  return withEarningsSignals(rows, baseDate)
+  return withEarningsSignals(rows, baseDate, {
+    includeDetails: false,
+    includeMlInsight: true,
+  })
 }
 
 async function getCompletedEarningsCalendarRows(
@@ -1247,7 +1253,10 @@ async function getCompletedEarningsCalendarRows(
       marketDate,
     ],
   )
-  return withEarningsSignals(rows, marketDate)
+  return withEarningsSignals(rows, marketDate, {
+    includeDetails: false,
+    includeMlInsight: true,
+  })
 }
 
 function earningsDateRange(rows: EarningsRow[], fallbackStart: string | null, fallbackEnd: string | null) {
@@ -1350,7 +1359,10 @@ export async function getEarningsCalendarDashboard(
     if (!preferLatestImport) {
       const allRows = await getEarningsCalendar(daysAhead, anchorDate, { exactDate, limit: null, signalMode: 'labels' })
       const scoped = applyEarningsScope(allRows, filters, anchorDate, exactDate)
-      const displayedRows = await withEarningsSignals(scoped.rows, marketDate)
+      const displayedRows = await withEarningsSignals(scoped.rows, marketDate, {
+        includeDetails: false,
+        includeMlInsight: true,
+      })
       const latestAnnounceDate = meta?.latestAnnounceDate ?? null
       return {
         rows: displayedRows,
@@ -1419,7 +1431,10 @@ export async function getEarningsCalendarDashboard(
     const fallbackRows = await getEarningsCalendar(daysAhead, anchorDate, { limit: null, signalMode: 'labels' })
     if (fallbackRows.length > 0) {
       const scoped = applyEarningsScope(fallbackRows, filters, anchorDate, false)
-      const displayedRows = await withEarningsSignals(scoped.rows, marketDate)
+      const displayedRows = await withEarningsSignals(scoped.rows, marketDate, {
+        includeDetails: false,
+        includeMlInsight: true,
+      })
       return {
         rows: displayedRows,
         completedRows,

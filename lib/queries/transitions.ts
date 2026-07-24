@@ -124,9 +124,12 @@ export async function getReturnDistribution(code: string, horizonDays = 60): Pro
       WHERE ${STAGE_MATCH_WHERE}
       LIMIT 20000
     )
-    SELECT fr.return_pct FROM forward_returns fr
-    JOIN match USING (ticker, date)
-    WHERE fr.horizon_days = ?
+    SELECT fr.return_pct
+    FROM match m
+    JOIN forward_returns AS fr INDEXED BY sqlite_autoindex_forward_returns_1
+      ON fr.ticker = m.ticker
+     AND fr.date = m.date
+     AND fr.horizon_days = ?
     `,
     [...stages, horizonDays],
   )
@@ -233,7 +236,7 @@ export async function getSampleCases(
              MAX(CASE WHEN fr.horizon_days = 90  THEN fr.return_pct END) AS r90,
              MAX(CASE WHEN fr.horizon_days = 180 THEN fr.return_pct END) AS r180
       FROM match m
-      LEFT JOIN forward_returns fr
+      LEFT JOIN forward_returns AS fr INDEXED BY sqlite_autoindex_forward_returns_1
         ON fr.ticker = m.ticker
        AND fr.date = m.date
        AND fr.horizon_days IN (30, 60, 90, 180)
