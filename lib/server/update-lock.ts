@@ -91,9 +91,27 @@ export async function acquireUpdateLock(
   conflictingJobTypes: readonly string[] = [],
 ): Promise<UpdateLockHandle | null> {
   await ensureReady()
-  await cleanupExpiredUpdateLocks()
   const owner = makeOwner(jobType)
   const conflicts = [...new Set(conflictingJobTypes.filter((candidate) => candidate !== jobType))]
+  const blockers = [...new Set([jobType, ...conflicts])]
+  if (blockers.length > 0) {
+    const active = await execGet<{ active: number }>(
+      `
+        SELECT 1 AS active
+        FROM update_locks
+        WHERE job_type IN (${blockers.map(() => '?').join(', ')})
+          AND status = 'running'
+          AND lease_expires_at > unixepoch()
+        LIMIT 1
+      `,
+      blockers,
+    )
+    // Waiting jobs must remain read-only. Writing stale-cleanup metadata on
+    // every poll can monopolize SQLite's single WAL writer and starve the
+    // active batch that owns the lock.
+    if (active) return null
+  }
+  await cleanupExpiredUpdateLocks()
   const activeConflictSql = conflicts.length > 0
     ? `
       AND NOT EXISTS (

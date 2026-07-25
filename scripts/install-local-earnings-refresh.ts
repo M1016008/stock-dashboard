@@ -1,6 +1,6 @@
 // scripts/install-local-earnings-refresh.ts
 //
-// Register a local launchd job that refreshes the earnings calendar once per day.
+// Register a local launchd job that refreshes the earnings calendar and actual disclosure times.
 // The refresh uses J-Quants + JPX official data and warms dashboard cache.
 
 import { execFileSync } from 'node:child_process'
@@ -50,6 +50,8 @@ const hour = clampHour(scheduleHour)
 const minute = clampMinute(scheduleMinute)
 const retryHour = clampHour(Number(process.env.EARNINGS_REFRESH_RETRY_HOUR ?? '14'))
 const retryMinute = clampMinute(Number(process.env.EARNINGS_REFRESH_RETRY_MINUTE ?? '10'))
+const closeHour = clampHour(Number(process.env.EARNINGS_REFRESH_CLOSE_HOUR ?? '16'))
+const closeMinute = clampMinute(Number(process.env.EARNINGS_REFRESH_CLOSE_MINUTE ?? '30'))
 const command = [
   `cd ${JSON.stringify(cwd)}`,
   `export PATH=${JSON.stringify(pathEnv)}`,
@@ -86,6 +88,10 @@ const plist = `<?xml version="1.0" encoding="UTF-8"?>
       <key>Hour</key><integer>${retryHour}</integer>
       <key>Minute</key><integer>${retryMinute}</integer>
     </dict>
+    <dict>
+      <key>Hour</key><integer>${closeHour}</integer>
+      <key>Minute</key><integer>${closeMinute}</integer>
+    </dict>
   </array>
   <key>StandardOutPath</key>
   <string>${xmlEscape(path.join(logDir, 'earnings-refresh.log'))}</string>
@@ -111,7 +117,8 @@ execFileSync('launchctl', ['enable', `gui/${uid}/${label}`], { stdio: 'inherit' 
 console.log(`launchd registered: ${plistPath}`)
 console.log(
   `schedule: daily ${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')} and `
-  + `${String(retryHour).padStart(2, '0')}:${String(retryMinute).padStart(2, '0')} JST`,
+  + `${String(retryHour).padStart(2, '0')}:${String(retryMinute).padStart(2, '0')} and `
+  + `${String(closeHour).padStart(2, '0')}:${String(closeMinute).padStart(2, '0')} JST`,
 )
 console.log('command: npm run batch:earnings-refresh')
 console.log(`logs: ${path.join(logDir, 'earnings-refresh.log')}`)

@@ -904,6 +904,174 @@ export const servingMarginLatest = sqliteTable(
   }),
 )
 
+export const stockFinancialSummaries = sqliteTable(
+  'stock_financial_summaries',
+  {
+    ticker:                  text('ticker').notNull(),
+    disclosureNo:            text('disclosure_no').notNull(),
+    disclosureDate:          text('disclosure_date').notNull(),
+    disclosureTime:          text('disclosure_time'),
+    documentType:            text('document_type'),
+    periodType:              text('period_type'),
+    periodStart:             text('period_start'),
+    periodEnd:               text('period_end'),
+    fiscalYearEnd:           text('fiscal_year_end'),
+    sales:                    real('sales'),
+    operatingProfit:          real('operating_profit'),
+    ordinaryProfit:           real('ordinary_profit'),
+    netProfit:                real('net_profit'),
+    eps:                      real('eps'),
+    totalAssets:              real('total_assets'),
+    equity:                   real('equity'),
+    equityRatio:              real('equity_ratio'),
+    bps:                      real('bps'),
+    operatingCashFlow:        real('operating_cash_flow'),
+    investingCashFlow:        real('investing_cash_flow'),
+    financingCashFlow:        real('financing_cash_flow'),
+    cashEquivalents:          real('cash_equivalents'),
+    annualDividend:           real('annual_dividend'),
+    payoutRatio:              real('payout_ratio'),
+    forecastSales:            real('forecast_sales'),
+    forecastOperatingProfit:  real('forecast_operating_profit'),
+    forecastNetProfit:        real('forecast_net_profit'),
+    forecastEps:              real('forecast_eps'),
+    forecastAnnualDividend:   real('forecast_annual_dividend'),
+    source:                    text('source').notNull().default('jquants'),
+    importedAt:               integer('imported_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.ticker, t.disclosureNo] }),
+    dateIdx: index('stock_financial_date_idx').on(t.ticker, t.disclosureDate),
+  }),
+)
+
+export const dailyMarginAlerts = sqliteTable(
+  'daily_margin_alerts',
+  {
+    ticker:                text('ticker').notNull(),
+    publicationDate:       text('publication_date').notNull(),
+    applicationDate:       text('application_date').notNull(),
+    publicationReasonJson: text('publication_reason_json'),
+    shortOutstanding:      real('short_outstanding'),
+    shortChange:           real('short_change'),
+    shortRatio:            real('short_ratio'),
+    longOutstanding:       real('long_outstanding'),
+    longChange:            real('long_change'),
+    longRatio:             real('long_ratio'),
+    shortLongRatio:        real('short_long_ratio'),
+    shortNegotiable:       real('short_negotiable'),
+    shortStandardized:     real('short_standardized'),
+    longNegotiable:        real('long_negotiable'),
+    longStandardized:      real('long_standardized'),
+    regulationClass:       text('regulation_class'),
+    source:                 text('source').notNull().default('jquants'),
+    importedAt:             integer('imported_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.ticker, t.publicationDate, t.applicationDate] }),
+    tickerDateIdx: index('daily_margin_alert_ticker_date_idx').on(t.ticker, t.applicationDate, t.publicationDate),
+  }),
+)
+
+export const edinetDocuments = sqliteTable(
+  'edinet_documents',
+  {
+    documentId:  text('document_id').primaryKey(),
+    ticker:      text('ticker'),
+    documentType:text('document_type').notNull(),
+    submittedAt: text('submitted_at'),
+    periodEnd:   text('period_end'),
+    filerName:   text('filer_name'),
+    status:      text('status').notNull().default('pending'),
+    errorMessage:text('error_message'),
+    processedAt: integer('processed_at', { mode: 'timestamp' }),
+    importedAt:  integer('imported_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    tickerTypeIdx: index('edinet_documents_ticker_type_idx').on(t.ticker, t.documentType, t.submittedAt),
+  }),
+)
+
+export const majorShareholders = sqliteTable(
+  'major_shareholders',
+  {
+    ticker:       text('ticker').notNull(),
+    documentId:   text('document_id').notNull(),
+    rank:         integer('rank').notNull(),
+    fiscalYearEnd:text('fiscal_year_end'),
+    holderName:   text('holder_name').notNull(),
+    shares:       real('shares'),
+    holdingRatio: real('holding_ratio'),
+    submittedAt:  text('submitted_at'),
+    source:       text('source').notNull().default('edinet'),
+    importedAt:   integer('imported_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.ticker, t.documentId, t.rank] }),
+    tickerDateIdx: index('major_shareholders_ticker_date_idx').on(t.ticker, t.fiscalYearEnd, t.rank),
+  }),
+)
+
+export const policyHoldings = sqliteTable(
+  'policy_holdings',
+  {
+    ticker:             text('ticker').notNull(),
+    documentId:         text('document_id').notNull(),
+    rank:               integer('rank').notNull(),
+    fiscalYearEnd:      text('fiscal_year_end'),
+    issuerName:         text('issuer_name').notNull(),
+    shares:             real('shares'),
+    bookValue:          real('book_value'),
+    purpose:            text('purpose'),
+    quantitativeEffect: text('quantitative_effect'),
+    holdingType:        text('holding_type'),
+    submittedAt:        text('submitted_at'),
+    source:             text('source').notNull().default('edinet'),
+    importedAt:         integer('imported_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.ticker, t.documentId, t.rank] }),
+    tickerDateIdx: index('policy_holdings_ticker_date_idx').on(t.ticker, t.fiscalYearEnd, t.bookValue),
+  }),
+)
+
+export const largeHoldingReports = sqliteTable(
+  'large_holding_reports',
+  {
+    ticker:              text('ticker').notNull(),
+    documentId:          text('document_id').notNull(),
+    submittedAt:         text('submitted_at'),
+    reportDate:          text('report_date'),
+    holderName:          text('holder_name'),
+    shares:              real('shares'),
+    holdingRatio:        real('holding_ratio'),
+    previousHoldingRatio:real('previous_holding_ratio'),
+    purpose:             text('purpose'),
+    reportKind:          text('report_kind'),
+    source:              text('source').notNull().default('edinet'),
+    importedAt:          integer('imported_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.ticker, t.documentId] }),
+    tickerDateIdx: index('large_holding_reports_ticker_date_idx').on(t.ticker, t.submittedAt),
+  }),
+)
+
+export const stockExternalDataStatus = sqliteTable(
+  'stock_external_data_status',
+  {
+    ticker:      text('ticker').notNull(),
+    dataset:     text('dataset').notNull(),
+    status:      text('status').notNull(),
+    sourceDate:  text('source_date'),
+    message:     text('message'),
+    attemptedAt: integer('attempted_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.ticker, t.dataset] }),
+  }),
+)
+
 // ─────────────────────────────────────
 // 17. Phase 4: 空売り残高 (J-Quants /markets/short_selling_positions)
 // ─────────────────────────────────────
@@ -936,11 +1104,27 @@ export const earningsCalendar = sqliteTable(
     marketSegment: text('market_segment'),
     source:        text('source'),
     sourceUrl:     text('source_url'),
+    scheduledTime: text('scheduled_time'),
+    scheduledTimeKind: text('scheduled_time_kind'),
+    scheduledTimeSource: text('scheduled_time_source'),
+    scheduledTimeSourceUrl: text('scheduled_time_source_url'),
+    predictedTime: text('predicted_time'),
+    predictionConfidence: text('prediction_confidence'),
+    predictionSampleCount: integer('prediction_sample_count'),
+    predictionModeCount: integer('prediction_mode_count'),
+    actualDisclosedDate: text('actual_disclosed_date'),
+    actualDisclosedTime: text('actual_disclosed_time'),
+    actualDisclosedAt: text('actual_disclosed_at'),
+    actualSource: text('actual_source'),
+    actualSourceUrl: text('actual_source_url'),
+    timeBucket: text('time_bucket'),
+    timeUpdatedAt: integer('time_updated_at', { mode: 'timestamp' }),
     importedAt:    integer('imported_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
   },
   (t) => ({
     pk:      primaryKey({ columns: [t.ticker, t.announceDate] }),
     dateIdx: index('earn_date_idx').on(t.announceDate),
+    timeBucketDateIdx: index('earn_time_bucket_date_idx').on(t.timeBucket, t.announceDate),
   }),
 )
 

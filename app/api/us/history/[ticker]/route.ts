@@ -35,7 +35,7 @@ export async function GET(
     const wantsTimeframe = searchParams.has('interval') || searchParams.has('timeframe') || searchParams.has('multiplier')
     if (wantsTimeframe && !timeframeSpec) {
       return NextResponse.json(
-        { error: 'Invalid timeframe. Use interval=D|2D|W|2W|M|2M or timeframe=day|week|month&multiplier=1..12.' },
+        { error: 'Invalid timeframe. Use interval=D|2D|3D|W|2W|3W|M|2M|3M|6M|Y|2Y|3Y or timeframe=day|week|month|year&multiplier=1..12.' },
         { status: 400 },
       )
     }

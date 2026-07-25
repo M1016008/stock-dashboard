@@ -39,11 +39,6 @@ const steps: Step[] = [
     script: 'auto-kabutan-themes:install',
   },
   {
-    name: 'Authorized Traders Web JP company data',
-    label: 'com.stockboard.traders-company-data',
-    script: 'auto-traders-company-data:install',
-  },
-  {
     name: 'Earnings calendar and stock serving refresh',
     label: 'com.stockboard.earnings-refresh',
     script: 'auto-earnings-refresh:install',
@@ -119,7 +114,6 @@ console.log('JP prices/cache: Mon-Fri 16:40, 16:55, 17:20, 18:10, 21:10 JST')
 console.log('JP heavy derived serving refresh: 21:10 JST window only, latest 60 trading dates')
 console.log('Kabutan dashboard news: every 60 minutes')
 console.log('Kabutan themes: daily 21:00 JST, recovery checks 22:00/23:00, waits safely for the DB writer')
-console.log('Traders Web company data: daily 01:45 JST, isolated supplemental DB, low priority')
 console.log('US prices/analytics/ML: Tue-Sat 06:30, 10:30 JST')
 console.log('JP ML serving: Mon-Fri 03:00 JST, JP exchange holidays skipped')
 console.log('JP ML freshness guard: Mon-Fri 23:45 JST')

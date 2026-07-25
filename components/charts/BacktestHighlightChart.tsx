@@ -19,9 +19,20 @@ export type HighlightChartPoint = {
   low: number | null
   close: number | null
   volume: number | null
+  ma3?: number | null
   ma5?: number | null
+  ma9?: number | null
+  ma10?: number | null
+  ma13?: number | null
+  ma20?: number | null
+  ma24?: number | null
   ma25?: number | null
+  ma26?: number | null
+  ma40?: number | null
+  ma52?: number | null
+  ma60?: number | null
   ma75?: number | null
+  ma90?: number | null
   ma200?: number | null
 }
 
@@ -40,12 +51,58 @@ type Props = {
   startPrice?: number | null
   endPrice?: number | null
   returnPct?: number | null
+  displayStartDate?: string
+  displayEndDate?: string | null
   currency?: 'JPY' | 'USD'
+  maPeriods?: readonly MovingAveragePeriod[]
+  showMovingAverages?: boolean
+  showMovingAverageLegend?: boolean
+  maUnitLabel?: string
 }
+
+export type MovingAveragePeriod =
+  | 3
+  | 5
+  | 9
+  | 10
+  | 13
+  | 20
+  | 24
+  | 25
+  | 26
+  | 40
+  | 52
+  | 60
+  | 75
+  | 90
+  | 200
 
 type StagePosition = StageMarkerPoint & {
   x: number
 }
+
+const DEFAULT_MA_PERIODS: readonly MovingAveragePeriod[] = [5, 25, 75, 200]
+
+const MA_LINE_CONFIG: ReadonlyArray<{
+  period: MovingAveragePeriod
+  key: `ma${MovingAveragePeriod}`
+}> = [
+  { period: 3, key: 'ma3' },
+  { period: 5, key: 'ma5' },
+  { period: 9, key: 'ma9' },
+  { period: 10, key: 'ma10' },
+  { period: 13, key: 'ma13' },
+  { period: 20, key: 'ma20' },
+  { period: 24, key: 'ma24' },
+  { period: 25, key: 'ma25' },
+  { period: 26, key: 'ma26' },
+  { period: 40, key: 'ma40' },
+  { period: 52, key: 'ma52' },
+  { period: 60, key: 'ma60' },
+  { period: 75, key: 'ma75' },
+  { period: 90, key: 'ma90' },
+  { period: 200, key: 'ma200' },
+]
 
 function dateToTime(date: string): UTCTimestamp {
   return Math.floor(new Date(`${date}T00:00:00Z`).getTime() / 1000) as UTCTimestamp
@@ -74,7 +131,13 @@ export function BacktestHighlightChart({
   startPrice,
   endPrice,
   returnPct,
+  displayStartDate,
+  displayEndDate,
   currency = 'JPY',
+  maPeriods = DEFAULT_MA_PERIODS,
+  showMovingAverages = true,
+  showMovingAverageLegend = true,
+  maUnitLabel = '日',
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const highlightRef = useRef<HTMLDivElement>(null)
@@ -100,20 +163,23 @@ export function BacktestHighlightChart({
       color: direction === 'up' ? 'rgba(220, 38, 38, 0.22)' : 'rgba(37, 99, 235, 0.22)',
     })), [direction, series])
 
-  const maLines = useMemo(() => ([
-    { key: 'ma5', label: '5日', color: movingAverageColor(5) },
-    { key: 'ma25', label: '25日', color: movingAverageColor(25) },
-    { key: 'ma75', label: '75日', color: movingAverageColor(75) },
-    { key: 'ma200', label: '200日', color: movingAverageColor(200) },
-  ] as const).map((line) => ({
-    ...line,
-    data: series
-      .filter((row) => row[line.key] != null)
-      .map((row) => ({
-        time: dateToTime(row.date),
-        value: Number(row[line.key]),
-      })),
-  })), [series])
+  const maLines = useMemo(() => {
+    if (!showMovingAverages) return []
+    const enabled = new Set(maPeriods)
+    return MA_LINE_CONFIG
+      .filter((line) => enabled.has(line.period))
+      .map((line) => ({
+        ...line,
+        label: `${line.period}${maUnitLabel}`,
+        color: movingAverageColor(line.period),
+        data: series
+          .filter((row) => row[line.key] != null)
+          .map((row) => ({
+            time: dateToTime(row.date),
+            value: Number(row[line.key]),
+          })),
+      }))
+  }, [maPeriods, maUnitLabel, series, showMovingAverages])
 
   const visibleStagePath = useMemo(() => {
     if (stagePath.length <= 12) return stagePath
@@ -164,7 +230,7 @@ export function BacktestHighlightChart({
       if (line.data.length === 0) continue
       const seriesLine = chart.addSeries(LineSeries, {
         color: line.color,
-        lineWidth: line.key === 'ma200' ? 2 : 1,
+        lineWidth: line.period === 200 ? 2 : 1,
         priceLineVisible: false,
         lastValueVisible: false,
         crosshairMarkerVisible: false,
@@ -193,8 +259,22 @@ export function BacktestHighlightChart({
         if (target) target.dataset.visible = 'false'
         return
       }
-      const left = Math.min(startX, endX)
-      const width = Math.max(6, Math.abs(endX - startX))
+      const highlightedIndex = candles.findIndex((point) =>
+        point.time === dateToTime(highlightStart)
+      )
+      const neighbor = highlightedIndex > 0
+        ? candles[highlightedIndex - 1]
+        : candles[highlightedIndex + 1]
+      const neighborX = neighbor
+        ? chart.timeScale().timeToCoordinate(neighbor.time)
+        : null
+      const halfBarWidth = neighborX == null
+        ? 3
+        : Math.max(3, Math.min(24, Math.abs(startX - neighborX) / 2))
+      const frameWidth = containerRef.current?.clientWidth ?? 0
+      const left = Math.max(0, Math.min(startX, endX) - halfBarWidth)
+      const right = Math.min(frameWidth, Math.max(startX, endX) + halfBarWidth)
+      const width = Math.max(6, right - left)
       target.style.left = `${left}px`
       target.style.width = `${width}px`
       target.dataset.visible = 'true'
@@ -212,20 +292,40 @@ export function BacktestHighlightChart({
       }
     }
 
-    chart.timeScale().fitContent()
-    chart.timeScale().subscribeVisibleTimeRangeChange(paintHighlight)
-    requestAnimationFrame(paintHighlight)
-    chartRef.current = chart
-
+    let paintFrame = 0
+    let settleFrame = 0
+    let resizePaintTimer: ReturnType<typeof setTimeout> | null = null
+    const scheduleHighlightPaint = () => {
+      cancelAnimationFrame(paintFrame)
+      cancelAnimationFrame(settleFrame)
+      paintFrame = requestAnimationFrame(() => {
+        settleFrame = requestAnimationFrame(paintHighlight)
+      })
+    }
     const resize = () => {
       if (!containerRef.current || !chartRef.current) return
       chartRef.current.applyOptions({ width: containerRef.current.clientWidth })
-      paintHighlight()
+      chartRef.current.timeScale().fitContent()
+      scheduleHighlightPaint()
+      if (resizePaintTimer) clearTimeout(resizePaintTimer)
+      resizePaintTimer = setTimeout(paintHighlight, 120)
     }
+
+    chart.timeScale().fitContent()
+    chart.timeScale().subscribeVisibleTimeRangeChange(paintHighlight)
+    chartRef.current = chart
+    scheduleHighlightPaint()
+
+    const resizeObserver = new ResizeObserver(resize)
+    resizeObserver.observe(containerRef.current)
     window.addEventListener('resize', resize)
 
     return () => {
       window.removeEventListener('resize', resize)
+      resizeObserver.disconnect()
+      cancelAnimationFrame(paintFrame)
+      cancelAnimationFrame(settleFrame)
+      if (resizePaintTimer) clearTimeout(resizePaintTimer)
       chart.timeScale().unsubscribeVisibleTimeRangeChange(paintHighlight)
       chart.remove()
       chartRef.current = null
@@ -238,17 +338,27 @@ export function BacktestHighlightChart({
   }
 
   return (
-    <div className="bt-highlight-chart">
+    <div
+      className="bt-highlight-chart"
+      data-ma-periods={maLines.map((line) => line.period).join(',')}
+    >
       <div className="bt-highlight-chart-meta">
-        <span>{highlightStart} → {highlightEnd ?? '-'}</span>
+        <span>{displayStartDate ?? highlightStart} → {displayEndDate ?? highlightEnd ?? '-'}</span>
         <strong>{fmtPrice(startPrice, currency)} → {fmtPrice(endPrice, currency)}</strong>
         <b data-direction={direction}>{fmtPct(returnPct)}</b>
-        <i className="bt-ma-legend">
-          <em data-ma="5">5日</em>
-          <em data-ma="25">25日</em>
-          <em data-ma="75">75日</em>
-          <em data-ma="200">200日</em>
-        </i>
+        {showMovingAverageLegend && maLines.length > 0 && (
+          <i className="bt-ma-legend">
+            {maLines.map((line) => (
+              <em
+                key={line.period}
+                data-ma={line.period}
+                style={{ color: line.color }}
+              >
+                {line.label}
+              </em>
+            ))}
+          </i>
+        )}
       </div>
       <div className="bt-highlight-chart-canvas" style={{ height }}>
         <div ref={containerRef} style={{ height, width: '100%' }} />

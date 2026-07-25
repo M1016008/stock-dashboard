@@ -3,7 +3,17 @@
 
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
 import type { CSSProperties, FormEvent } from 'react'
-import { BrainCircuit, ChartCandlestick, GitCompareArrows, LayoutDashboard, NotebookPen } from 'lucide-react'
+import {
+  BrainCircuit,
+  Building2,
+  ChartCandlestick,
+  FileSearch,
+  GitCompareArrows,
+  LayoutDashboard,
+  NotebookPen,
+  Users,
+  WalletCards,
+} from 'lucide-react'
 import { MarketBadge } from '@/components/ui/MarketBadge'
 import { MarginBadges } from '@/components/ui/MarginBadges'
 import { PriceDisplay } from '@/components/ui/PriceDisplay'
@@ -14,7 +24,6 @@ import { WatchlistButton } from '@/components/ui/WatchlistButton'
 import { StageTimeline } from '@/components/stock/StageTimeline'
 import { StockMovePeriods } from '@/components/stock/StockMovePeriods'
 import { StockMlInsights } from '@/components/stock/StockMlInsights'
-import { TradersCompanyDataCard } from '@/components/stock/TradersCompanyDataCard'
 import { HistoricalAnalogExplorer } from '@/components/stock/HistoricalAnalogExplorer'
 import { ScenarioProjectionChart } from '@/components/stock/ScenarioProjectionChart'
 import { TradeScenarioNotebook } from '@/components/stock/TradeScenarioNotebook'
@@ -69,12 +78,94 @@ interface StockMarginInfo {
   }>
 }
 
+interface StockOverviewInfo {
+  financial: {
+    latest: FinancialSummary | null
+    previousComparable: FinancialSummary | null
+    available: boolean
+  }
+  shareholders: {
+    major: Array<{
+      rank: number
+      fiscalYearEnd: string | null
+      holderName: string
+      shares: number | null
+      holdingRatio: number | null
+      submittedAt: string | null
+    }>
+    policy: Array<{
+      rank: number
+      fiscalYearEnd: string | null
+      issuerName: string
+      shares: number | null
+      bookValue: number | null
+      purpose: string | null
+      quantitativeEffect: string | null
+      holdingType: string | null
+      submittedAt: string | null
+    }>
+    largeReports: Array<{
+      documentId: string
+      submittedAt: string | null
+      reportDate: string | null
+      holderName: string | null
+      shares: number | null
+      holdingRatio: number | null
+      previousHoldingRatio: number | null
+      purpose: string | null
+      reportKind: string | null
+    }>
+    edinetConfigured: boolean
+  }
+  statuses: Record<string, {
+    status: string
+    sourceDate: string | null
+    message: string | null
+    attemptedAt: number
+  }>
+  sources: {
+    financial: string
+    margin: string
+    shareholders: string
+  }
+}
+
+interface FinancialSummary {
+  disclosureDate: string
+  disclosureTime: string | null
+  periodType: string | null
+  periodStart: string | null
+  periodEnd: string | null
+  fiscalYearEnd: string | null
+  sales: number | null
+  operatingProfit: number | null
+  ordinaryProfit: number | null
+  netProfit: number | null
+  eps: number | null
+  totalAssets: number | null
+  equity: number | null
+  equityRatio: number | null
+  bps: number | null
+  operatingCashFlow: number | null
+  investingCashFlow: number | null
+  financingCashFlow: number | null
+  cashEquivalents: number | null
+  annualDividend: number | null
+  payoutRatio: number | null
+  forecastSales: number | null
+  forecastOperatingProfit: number | null
+  forecastNetProfit: number | null
+  forecastEps: number | null
+  forecastAnnualDividend: number | null
+}
+
 type StockDetailTab = 'overview' | 'chart' | 'scenario' | 'ml'
 
 export function StockDetailClient({ ticker }: StockDetailClientProps) {
   const [quote, setQuote] = useState<StockQuote | null>(null)
   const [smaster, setSmaster] = useState<SectorMasterRow | null>(null)
   const [marginInfo, setMarginInfo] = useState<StockMarginInfo | null>(null)
+  const [overviewInfo, setOverviewInfo] = useState<StockOverviewInfo | null>(null)
   const [loading, setLoading] = useState(true)
   const [analysisDate, setAnalysisDate] = useState<string | null>(null)
   const [showActual, setShowActual] = useState(false)
@@ -94,13 +185,14 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
 
   useEffect(() => {
     let cancelled = false
-    let pending = 3
+    let pending = 4
     const done = () => {
       pending -= 1
       if (!cancelled && pending <= 0) setLoading(false)
     }
     async function fetchData() {
       setLoading(true)
+      setOverviewInfo(null)
       fetch(`/api/quote/${encodeURIComponent(ticker)}`, { cache: 'no-store' })
         .then((res) => res.ok ? res.json() : null)
         .then((data) => { if (!cancelled && data) setQuote(data) })
@@ -117,6 +209,12 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
         .then((res) => res.ok ? res.json() : null)
         .then((data) => { if (!cancelled && data) setMarginInfo(data) })
         .catch((error) => console.error('Failed to fetch stock margin:', error))
+        .finally(done)
+
+      fetch(`/api/stock-overview/${encodeURIComponent(ticker)}`, { cache: 'no-store' })
+        .then((res) => res.ok ? res.json() : null)
+        .then((data) => { if (!cancelled && data) setOverviewInfo(data) })
+        .catch((error) => console.error('Failed to fetch stock overview:', error))
         .finally(done)
     }
     fetchData()
@@ -303,7 +401,9 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
               analysisDate={analysisDate}
             />
           </div>
-          <TradersCompanyDataCard ticker={displayCode} />
+          {analysisDate
+            ? <CurrentOnlyDataNotice label="財務・株主・保有情報は現在情報のため、過去分析モードでは非表示にしています。" />
+            : <CompanyIntelligencePanel info={overviewInfo} />}
           {analysisDate
             ? <CurrentOnlyDataNotice label="決算予定は現在情報のため、過去分析モードでは非表示にしています。" />
             : <EarningsCard ticker={ticker} />}
@@ -327,14 +427,6 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
               showTimeframeSelector
               analysisDate={analysisDate}
               revealAfterAnalysis={showActual}
-              maLinesByInterval={{
-                D: [3, 5, 25, 75, 200],
-                '2D': [3, 5, 25, 75, 200],
-                W: [3, 13, 26, 52, 200],
-                '2W': [3, 13, 26, 52, 200],
-                M: [3, 12, 24, 60, 200],
-                '2M': [3, 12, 24, 60, 200],
-              }}
             />
           </div>
         </>
@@ -2686,6 +2778,411 @@ function ManualOhlcvImportCard({ ticker }: { ticker: string }) {
   )
 }
 
+type CompanyInfoTab = 'financial' | 'major' | 'policy' | 'large'
+
+function CompanyIntelligencePanel({ info }: { info: StockOverviewInfo | null }) {
+  const [tab, setTab] = useState<CompanyInfoTab>('financial')
+  const latest = info?.financial.latest ?? null
+  const previous = info?.financial.previousComparable ?? null
+  const shareholders = info?.shareholders
+  const tabs: Array<{
+    id: CompanyInfoTab
+    label: string
+    count?: number
+    icon: typeof Building2
+  }> = [
+    { id: 'financial', label: '財務サマリー', icon: Building2 },
+    { id: 'major', label: '大株主', count: shareholders?.major.length, icon: Users },
+    { id: 'policy', label: '政策保有', count: shareholders?.policy.length, icon: WalletCards },
+    { id: 'large', label: '大量保有報告', count: shareholders?.largeReports.length, icon: FileSearch },
+  ]
+
+  return (
+    <section className="card overflow-hidden">
+      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-3 py-2.5">
+        <div>
+          <div className="text-[12px] font-black text-[var(--color-text-primary)]">企業・保有情報</div>
+          <div className="mt-0.5 text-[9px] font-bold text-[var(--color-text-tertiary)]">
+            財務はJ-Quants、大株主・保有報告はEDINETの公表情報
+          </div>
+        </div>
+        <div className="text-right text-[9px] font-bold text-[var(--color-text-tertiary)]">
+          {latest ? `財務開示 ${latest.disclosureDate}` : '財務データ未取得'}
+        </div>
+      </div>
+
+      <div className="overflow-x-auto border-b border-[var(--color-border-default)]">
+        <div className="flex min-w-max">
+          {tabs.map(({ id, label, count, icon: Icon }) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => setTab(id)}
+              aria-pressed={tab === id}
+              className={`inline-flex h-9 items-center gap-1.5 border-r border-[var(--color-border-default)] px-3 text-[10px] font-black ${
+                tab === id
+                  ? 'bg-white text-[var(--color-brand-700)] shadow-[inset_0_-2px_0_var(--color-brand-600)]'
+                  : 'bg-[var(--color-surface-subtle)] text-[var(--color-text-secondary)] hover:bg-white'
+              }`}
+            >
+              <Icon size={13} aria-hidden="true" />
+              {label}
+              {count != null && (
+                <span className="min-w-4 bg-[var(--color-surface-muted)] px-1 py-0.5 font-mono text-[9px] text-[var(--color-text-secondary)]">
+                  {count}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="min-h-44 p-3">
+        {tab === 'financial' && (
+          <FinancialSummaryView latest={latest} previous={previous} />
+        )}
+        {tab === 'major' && (
+          <MajorShareholdersView
+            rows={shareholders?.major ?? []}
+            edinetConfigured={shareholders?.edinetConfigured ?? false}
+            message={info?.statuses.major_shareholders?.message ?? null}
+          />
+        )}
+        {tab === 'policy' && (
+          <PolicyHoldingsView
+            rows={shareholders?.policy ?? []}
+            edinetConfigured={shareholders?.edinetConfigured ?? false}
+            message={info?.statuses.policy_holdings?.message ?? null}
+          />
+        )}
+        {tab === 'large' && (
+          <LargeHoldingReportsView
+            rows={shareholders?.largeReports ?? []}
+            edinetConfigured={shareholders?.edinetConfigured ?? false}
+            message={info?.statuses.large_holding_reports?.message ?? null}
+          />
+        )}
+      </div>
+
+      <div className="flex flex-wrap gap-x-4 gap-y-1 border-t border-[var(--color-border-soft)] px-3 py-2 text-[9px] font-bold">
+        <a
+          href={info?.sources.financial ?? 'https://jpx-jquants.com/ja/spec/fins-summary'}
+          target="_blank"
+          rel="noreferrer"
+          className="text-[var(--color-brand-700)] hover:underline"
+        >
+          財務データ出典
+        </a>
+        <a
+          href={info?.sources.shareholders ?? 'https://disclosure2.edinet-fsa.go.jp/'}
+          target="_blank"
+          rel="noreferrer"
+          className="text-[var(--color-brand-700)] hover:underline"
+        >
+          株主・保有報告出典
+        </a>
+      </div>
+    </section>
+  )
+}
+
+function FinancialSummaryView({
+  latest,
+  previous,
+}: {
+  latest: FinancialSummary | null
+  previous: FinancialSummary | null
+}) {
+  if (!latest) return <CompanyDataEmpty label="J-Quantsの財務サマリーを取得中です。" />
+  const metrics = [
+    ['売上高', latest.sales, previous?.sales],
+    ['営業利益', latest.operatingProfit, previous?.operatingProfit],
+    ['経常利益', latest.ordinaryProfit, previous?.ordinaryProfit],
+    ['純利益', latest.netProfit, previous?.netProfit],
+    ['営業CF', latest.operatingCashFlow, previous?.operatingCashFlow],
+  ] as const
+  const forecasts = [
+    ['会社予想 売上高', latest.forecastSales],
+    ['会社予想 営業利益', latest.forecastOperatingProfit],
+    ['会社予想 純利益', latest.forecastNetProfit],
+    ['会社予想 EPS', latest.forecastEps],
+    ['会社予想 年間配当', latest.forecastAnnualDividend],
+  ] as const
+
+  return (
+    <div>
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <span className="bg-[var(--color-brand-700)] px-2 py-1 text-[9px] font-black text-white">
+          {financialPeriodLabel(latest.periodType)}
+        </span>
+        <span className="text-[10px] font-bold text-[var(--color-text-secondary)]">
+          対象期間 {latest.periodEnd ?? latest.fiscalYearEnd ?? '---'}
+        </span>
+        <span className="text-[9px] font-bold text-[var(--color-text-tertiary)]">
+          前年同区分比
+        </span>
+      </div>
+      <div className="grid grid-cols-2 border-l border-t border-[var(--color-border-soft)] sm:grid-cols-3 lg:grid-cols-5">
+        {metrics.map(([label, value, previousValue]) => (
+          <FinancialMetric
+            key={label}
+            label={label}
+            value={formatCorporateAmount(value)}
+            change={financialChange(value, previousValue)}
+          />
+        ))}
+      </div>
+      <div className="mt-3 grid grid-cols-2 gap-x-4 md:grid-cols-4">
+        <InfoLine label="EPS" value={latest.eps == null ? '---' : `${latest.eps.toFixed(2)}円`} />
+        <InfoLine label="BPS" value={latest.bps == null ? '---' : `${latest.bps.toFixed(2)}円`} />
+        <InfoLine label="自己資本比率" value={formatEquityRatio(latest.equityRatio)} />
+        <InfoLine label="年間配当" value={latest.annualDividend == null ? '---' : `${latest.annualDividend.toFixed(2)}円`} />
+      </div>
+      {forecasts.some(([, value]) => value != null) && (
+        <div className="mt-3 border-t border-[var(--color-border-default)] pt-2">
+          <div className="mb-1.5 text-[10px] font-black text-[var(--color-text-secondary)]">会社予想</div>
+          <div className="grid grid-cols-2 gap-x-4 md:grid-cols-5">
+            {forecasts.map(([label, value]) => (
+              <InfoLine
+                key={label}
+                label={label}
+                value={
+                  value == null
+                    ? '---'
+                    : label.includes('EPS') || label.includes('配当')
+                      ? `${value.toFixed(2)}円`
+                      : formatCorporateAmount(value)
+                }
+              />
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function FinancialMetric({
+  label,
+  value,
+  change,
+}: {
+  label: string
+  value: string
+  change: number | null
+}) {
+  return (
+    <div className="min-w-0 border-b border-r border-[var(--color-border-soft)] px-2 py-2">
+      <div className="truncate text-[9px] font-bold text-[var(--color-text-tertiary)]">{label}</div>
+      <div className="mt-1 truncate font-mono text-[12px] font-black text-[var(--color-text-primary)]">{value}</div>
+      <div className={`mt-0.5 font-mono text-[9px] font-bold ${
+        change == null
+          ? 'text-[var(--color-text-tertiary)]'
+          : change >= 0 ? 'text-[var(--color-price-up)]' : 'text-[var(--color-price-down)]'
+      }`}>
+        {change == null ? '比較なし' : `${change >= 0 ? '+' : ''}${change.toFixed(1)}%`}
+      </div>
+    </div>
+  )
+}
+
+function MajorShareholdersView({
+  rows,
+  edinetConfigured,
+  message,
+}: {
+  rows: StockOverviewInfo['shareholders']['major']
+  edinetConfigured: boolean
+  message: string | null
+}) {
+  if (rows.length === 0) {
+    return <EdinetEmptyState configured={edinetConfigured} message={message} label="大株主情報" />
+  }
+  return (
+    <CompanyDataTable
+      headers={['順位', '株主名', '保有株数', '保有比率']}
+      rows={rows.map((row) => [
+        `${row.rank}`,
+        row.holderName,
+        fmtShares(row.shares),
+        formatHoldingRatio(row.holdingRatio),
+      ])}
+      meta={`基準 ${rows[0]?.fiscalYearEnd ?? rows[0]?.submittedAt?.slice(0, 10) ?? '---'}`}
+      numericColumns={[0, 2, 3]}
+    />
+  )
+}
+
+function PolicyHoldingsView({
+  rows,
+  edinetConfigured,
+  message,
+}: {
+  rows: StockOverviewInfo['shareholders']['policy']
+  edinetConfigured: boolean
+  message: string | null
+}) {
+  if (rows.length === 0) {
+    return <EdinetEmptyState configured={edinetConfigured} message={message} label="政策保有株式" />
+  }
+  const total = rows.reduce((sum, row) => sum + (row.bookValue ?? 0), 0)
+  return (
+    <CompanyDataTable
+      headers={['銘柄・発行体', '区分', '保有株数', '貸借対照表計上額', '保有目的']}
+      rows={rows.map((row) => [
+        row.issuerName,
+        row.holdingType ?? '---',
+        fmtShares(row.shares),
+        formatCorporateAmount(row.bookValue),
+        row.purpose ?? row.quantitativeEffect ?? '---',
+      ])}
+      meta={`${rows.length}銘柄 / 計上額合計 ${formatCorporateAmount(total)}`}
+      numericColumns={[2, 3]}
+    />
+  )
+}
+
+function LargeHoldingReportsView({
+  rows,
+  edinetConfigured,
+  message,
+}: {
+  rows: StockOverviewInfo['shareholders']['largeReports']
+  edinetConfigured: boolean
+  message: string | null
+}) {
+  if (rows.length === 0) {
+    return <EdinetEmptyState configured={edinetConfigured} message={message} label="大量保有報告" />
+  }
+  return (
+    <CompanyDataTable
+      headers={['提出日', '提出者', '保有比率', '前回比率', '保有株数', '目的・区分']}
+      rows={rows.map((row) => [
+        row.submittedAt?.slice(0, 10) ?? row.reportDate ?? '---',
+        row.holderName ?? '---',
+        formatHoldingRatio(row.holdingRatio),
+        formatHoldingRatio(row.previousHoldingRatio),
+        fmtShares(row.shares),
+        row.purpose ?? row.reportKind ?? '---',
+      ])}
+      meta={`直近 ${rows.length}件`}
+      numericColumns={[0, 2, 3, 4]}
+    />
+  )
+}
+
+function CompanyDataTable({
+  headers,
+  rows,
+  meta,
+  numericColumns = [],
+}: {
+  headers: string[]
+  rows: string[][]
+  meta: string
+  numericColumns?: number[]
+}) {
+  return (
+    <div>
+      <div className="mb-2 text-[9px] font-bold text-[var(--color-text-tertiary)]">{meta}</div>
+      <div className="overflow-x-auto border border-[var(--color-border-default)]">
+        <table className="w-full min-w-[620px] border-collapse text-[10px]">
+          <thead className="bg-[var(--color-surface-subtle)] text-[var(--color-text-secondary)]">
+            <tr>
+              {headers.map((header, index) => (
+                <th
+                  key={header}
+                  className={`border-b border-r border-[var(--color-border-default)] px-2 py-1.5 font-black ${
+                    numericColumns.includes(index) ? 'text-right' : 'text-left'
+                  }`}
+                >
+                  {header}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, rowIndex) => (
+              <tr key={`${row[0]}-${rowIndex}`} className="even:bg-[var(--color-surface-subtle)]">
+                {row.map((value, index) => (
+                  <td
+                    key={`${index}-${value}`}
+                    className={`max-w-80 border-b border-r border-[var(--color-border-soft)] px-2 py-1.5 align-top ${
+                      numericColumns.includes(index)
+                        ? 'whitespace-nowrap text-right font-mono'
+                        : index === row.length - 1 ? 'whitespace-normal leading-4' : 'whitespace-nowrap'
+                    }`}
+                  >
+                    {value}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+function EdinetEmptyState({
+  configured,
+  message,
+  label,
+}: {
+  configured: boolean
+  message: string | null
+  label: string
+}) {
+  return (
+    <CompanyDataEmpty
+      label={
+        configured
+          ? message ?? `${label}の公表データはありません。`
+          : `${label}はEDINET APIキー設定後に自動取得されます。`
+      }
+    />
+  )
+}
+
+function CompanyDataEmpty({ label }: { label: string }) {
+  return (
+    <div className="flex min-h-32 items-center justify-center border border-dashed border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-4 text-center text-[10px] font-bold leading-5 text-[var(--color-text-secondary)]">
+      {label}
+    </div>
+  )
+}
+
+function financialPeriodLabel(period: string | null): string {
+  const labels: Record<string, string> = { '1Q': '第1四半期', '2Q': '第2四半期', '3Q': '第3四半期', FY: '通期' }
+  return period ? labels[period] ?? period : '最新開示'
+}
+
+function financialChange(value: number | null, previous: number | null | undefined): number | null {
+  if (value == null || previous == null || previous === 0) return null
+  return ((value / previous) - 1) * 100
+}
+
+function formatCorporateAmount(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return '---'
+  const absolute = Math.abs(value)
+  if (absolute >= 100_000_000) return `${(value / 100_000_000).toLocaleString('ja-JP', { maximumFractionDigits: 1 })}億円`
+  if (absolute >= 10_000) return `${(value / 10_000).toLocaleString('ja-JP', { maximumFractionDigits: 1 })}万円`
+  return `${value.toLocaleString('ja-JP', { maximumFractionDigits: 1 })}円`
+}
+
+function formatEquityRatio(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return '---'
+  const percent = Math.abs(value) <= 1 ? value * 100 : value
+  return `${percent.toFixed(1)}%`
+}
+
+function formatHoldingRatio(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return '---'
+  const percent = Math.abs(value) <= 1 ? value * 100 : value
+  return `${percent.toFixed(2)}%`
+}
+
 function MarketSnapshotCard({
   ticker,
   marginInfo,
@@ -2739,6 +3236,7 @@ function MarginInfoCard({
           compact
         />
       </div>
+      <div className="mb-1 text-[9px] font-black text-[var(--color-text-tertiary)]">週次信用残</div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '4px 8px' }}>
         <InfoLine label="基準週" value={latest?.asOfDate ?? latestHistory?.date ?? '---'} />
         <InfoLine label="信用倍率" value={latest?.creditRatio == null ? '---' : `${latest.creditRatio.toFixed(2)}倍`} />
@@ -2870,9 +3368,44 @@ function BasicInfoCard({
     return () => { cancelled = true }
   }, [analysisDate, ticker])
 
+  const technicals = quote?.technicals
+  const macd = technicals?.macd
+  const averageVolumeLabel = technicals?.averageVolumeObservationCount &&
+    technicals.averageVolumeObservationCount < 30
+    ? `${technicals.averageVolumeObservationCount}日平均出来高`
+    : '30日平均出来高'
+  const macdValue = macd?.relation === 'golden'
+    ? 'ゴールデンクロス側'
+    : macd?.relation === 'dead'
+      ? 'デッドクロス側'
+      : macd?.relation === 'neutral'
+        ? '中立'
+        : '---'
+  const macdDetail = macd?.lastCrossDate
+    ? `直近${macd.lastCrossType === 'golden' ? 'GC' : 'DC'} ${macd.lastCrossDate}`
+    : macd
+      ? `MACD ${macd.value.toFixed(2)} / Signal ${macd.signal.toFixed(2)}`
+      : '日足データ不足'
   const items = [
     { label: '時価総額', value: quote?.marketCap != null ? `${(quote.marketCap / 1e8).toLocaleString('ja-JP', { maximumFractionDigits: 0 })} 億円` : '---' },
     { label: '出来高', value: quote?.volume ? quote.volume.toLocaleString('ja-JP') : '---' },
+    {
+      label: averageVolumeLabel,
+      value: technicals?.averageVolume30 != null
+        ? `${Math.round(technicals.averageVolume30).toLocaleString('ja-JP')} 株`
+        : '---',
+      detail: technicals?.asOfDate ? `基準 ${technicals.asOfDate}` : undefined,
+    },
+    {
+      label: 'MACD (12・26・9)',
+      value: macdValue,
+      detail: macdDetail,
+      color: macd?.relation === 'golden'
+        ? 'var(--color-market-red)'
+        : macd?.relation === 'dead'
+          ? 'var(--color-market-blue)'
+          : 'var(--text-primary)',
+    },
     { label: '52週高値', value: quote?.fiftyTwoWeekHigh != null ? `¥${quote.fiftyTwoWeekHigh.toLocaleString('ja-JP', { maximumFractionDigits: 1 })}` : '---' },
     { label: '52週安値', value: quote?.fiftyTwoWeekLow != null ? `¥${quote.fiftyTwoWeekLow.toLocaleString('ja-JP', { maximumFractionDigits: 1 })}` : '---' },
   ]
@@ -2889,16 +3422,39 @@ function BasicInfoCard({
         )}
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '4px 8px' }}>
-        {items.map(({ label, value }) => (
+        {items.map(({ label, value, detail, color }) => (
           <div key={label} style={{
             display: 'flex',
             justifyContent: 'space-between',
-            alignItems: 'baseline',
+            alignItems: 'flex-start',
             padding: '4px 0',
             borderBottom: '1px solid var(--border-subtle)',
+            gap: '8px',
           }}>
             <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{label}</span>
-            <span style={{ fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-primary)' }}>{value}</span>
+            <span style={{ minWidth: 0, textAlign: 'right' }}>
+              <span style={{
+                display: 'block',
+                fontFamily: 'var(--font-mono)',
+                fontSize: '11px',
+                color: color ?? 'var(--text-primary)',
+                fontWeight: color ? 800 : 400,
+              }}>
+                {value}
+              </span>
+              {detail && (
+                <span style={{
+                  display: 'block',
+                  marginTop: '1px',
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: '9px',
+                  color: 'var(--text-muted)',
+                  whiteSpace: 'nowrap',
+                }}>
+                  {detail}
+                </span>
+              )}
+            </span>
           </div>
         ))}
       </div>

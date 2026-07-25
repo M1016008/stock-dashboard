@@ -80,10 +80,17 @@ export type DashboardScenarioDecisionTone = 'constructive' | 'caution' | 'neutra
 const SCENARIO_INTERVAL_LABELS: Record<ScenarioInterval, string> = {
   D: '1日',
   '2D': '2日',
+  '3D': '3日',
   W: '1週間',
   '2W': '2週間',
+  '3W': '3週間',
   M: '1か月',
   '2M': '2か月',
+  '3M': '3か月',
+  '6M': '6か月',
+  Y: '1年',
+  '2Y': '2年',
+  '3Y': '3年',
 }
 
 export function dashboardScenarioIntervalLabel(interval: ScenarioInterval): string {

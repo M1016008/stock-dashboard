@@ -220,11 +220,31 @@ function fmtUsd(value: number | null | undefined) {
   return `$${value.toLocaleString('en-US', { maximumFractionDigits: value >= 100 ? 1 : 2 })}`
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
+function Stat({
+  label,
+  value,
+  detail,
+  tone = 'default',
+}: {
+  label: string
+  value: string
+  detail?: string
+  tone?: 'default' | 'up' | 'down'
+}) {
+  const valueClass = tone === 'up'
+    ? 'text-[var(--color-market-red)]'
+    : tone === 'down'
+      ? 'text-[var(--color-market-blue)]'
+      : 'text-[var(--color-brand-900)]'
   return (
     <div className="rounded-[4px] border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-3 py-2">
       <div className="text-[10px] font-bold text-[var(--color-text-tertiary)]">{label}</div>
-      <div className="mt-1 text-[14px] font-bold text-[var(--color-brand-900)]">{value}</div>
+      <div className={`mt-1 text-[14px] font-bold ${valueClass}`}>{value}</div>
+      {detail && (
+        <div className="mt-1 whitespace-nowrap font-mono text-[9px] font-semibold text-[var(--color-text-tertiary)]">
+          {detail}
+        </div>
+      )}
     </div>
   )
 }
@@ -493,8 +513,40 @@ export function UsStockDetailClient({
 
       {activeTab === 'overview' && (
         <>
-          <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
             <Stat label="出来高" value={fmtNumber(displayedQuote?.volume ?? quote.volume)} />
+            <Stat
+              label={quote.technicals?.averageVolumeObservationCount &&
+                quote.technicals.averageVolumeObservationCount < 30
+                ? `${quote.technicals.averageVolumeObservationCount}日平均出来高`
+                : '30日平均出来高'}
+              value={analysisDate || quote.technicals?.averageVolume30 == null
+                ? '-'
+                : fmtNumber(Math.round(quote.technicals.averageVolume30))}
+              detail={!analysisDate && quote.technicals?.asOfDate ? `基準 ${quote.technicals.asOfDate}` : undefined}
+            />
+            <Stat
+              label="MACD (12・26・9)"
+              value={analysisDate
+                ? '-'
+                : quote.technicals?.macd?.relation === 'golden'
+                  ? 'ゴールデンクロス側'
+                  : quote.technicals?.macd?.relation === 'dead'
+                    ? 'デッドクロス側'
+                    : quote.technicals?.macd?.relation === 'neutral'
+                      ? '中立'
+                      : '-'}
+              detail={!analysisDate && quote.technicals?.macd
+                ? quote.technicals.macd.lastCrossDate
+                  ? `直近${quote.technicals.macd.lastCrossType === 'golden' ? 'GC' : 'DC'} ${quote.technicals.macd.lastCrossDate}`
+                  : `MACD ${quote.technicals.macd.value.toFixed(2)} / Signal ${quote.technicals.macd.signal.toFixed(2)}`
+                : undefined}
+              tone={!analysisDate && quote.technicals?.macd?.relation === 'golden'
+                ? 'up'
+                : !analysisDate && quote.technicals?.macd?.relation === 'dead'
+                  ? 'down'
+                  : 'default'}
+            />
             <Stat label="時価総額" value={analysisDate ? '-' : fmtMoney(quote.marketCap)} />
             <Stat label="52週高値" value={displayedQuote?.fiftyTwoWeekHigh == null ? '-' : `$${displayedQuote.fiftyTwoWeekHigh.toFixed(2)}`} />
             <Stat label="52週安値" value={displayedQuote?.fiftyTwoWeekLow == null ? '-' : `$${displayedQuote.fiftyTwoWeekLow.toFixed(2)}`} />
@@ -515,7 +567,7 @@ export function UsStockDetailClient({
             <StageTimeline ticker={quote.ticker} market="US" analysisDate={analysisDate} />
           </Card>
           <Card size="lg">
-            <CardHeader title="マルチタイムフレームチャート" hint="日足・2日足・週足・2週足・月足・2ヶ月足" />
+            <CardHeader title="マルチタイムフレームチャート" hint="日・週・月・年" />
             <CandlestickChart
               ticker={quote.ticker}
               market="US"
@@ -525,14 +577,6 @@ export function UsStockDetailClient({
               showTimeframeSelector
               analysisDate={analysisDate}
               revealAfterAnalysis={showActual}
-              maLinesByInterval={{
-                D: [3, 5, 25, 75, 200],
-                '2D': [3, 5, 25, 75, 200],
-                W: [3, 5, 25, 75, 200],
-                '2W': [3, 5, 25, 75, 200],
-                M: [3, 5, 25, 75, 200],
-                '2M': [3, 5, 25, 75, 200],
-              }}
             />
           </Card>
         </>

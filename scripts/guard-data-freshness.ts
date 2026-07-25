@@ -6,16 +6,11 @@ import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { createClient } from '@libsql/client'
-import { execAll, execGet } from '@/lib/db/client'
+import { execGet } from '@/lib/db/client'
 import { execUsAnalyticsGet, hasUsAnalyticsDb } from '@/lib/db/us-analytics'
 import { expectedLatestTradingDate } from '@/lib/server/data-freshness'
 import { expectedLatestUsTradingDate } from '@/lib/server/us-data-freshness'
 import { getActiveUpdateLocks } from '@/lib/server/update-lock'
-import {
-  normalizeJpTicker,
-  tradersCompanyDataDbPath,
-} from '@/lib/traders-company-data'
 
 type DateRow = { date: string | null }
 type EpochRow = { value: number | null }
@@ -58,15 +53,6 @@ type WeeklyFreshness = {
   ageHours: number | null
   usModelAgeHours: number | null
   lastActivityAt: number | null
-  fresh: boolean
-}
-type TradersState = {
-  activeTickers: number
-  attemptedTickers: number
-  savedTickers: number
-  lastRunAt: number | null
-  latestFullSuccessAt: number | null
-  fullSuccessAgeHours: number | null
   fresh: boolean
 }
 
@@ -115,12 +101,6 @@ const services = {
     label: 'com.stockboard.earnings-refresh',
     cooldownSeconds: 6 * 60 * 60,
     requiresIdleWriter: true,
-  },
-  traders: {
-    key: 'traders-company-data',
-    label: 'com.stockboard.traders-company-data',
-    cooldownSeconds: 24 * 60 * 60,
-    requiresIdleWriter: false,
   },
   weekly: {
     key: 'weekly-optimization',
@@ -279,77 +259,6 @@ async function loadSourceStates(): Promise<{
   }
 }
 
-async function loadTradersState(activeTickers: readonly string[]): Promise<TradersState> {
-  const activeTickerSet = new Set(activeTickers)
-  const dbPath = tradersCompanyDataDbPath()
-  if (!fs.existsSync(dbPath)) {
-    return {
-      activeTickers: activeTickerSet.size,
-      attemptedTickers: 0,
-      savedTickers: 0,
-      lastRunAt: null,
-      latestFullSuccessAt: null,
-      fullSuccessAgeHours: null,
-      fresh: false,
-    }
-  }
-  const client = createClient({ url: `file:${dbPath}` })
-  await client.execute('PRAGMA query_only=ON')
-  const [coverageResult, savedResult, runResult] = await Promise.all([
-    client.execute(
-      'SELECT ticker FROM traders_company_data_status',
-    ),
-    client.execute(
-      'SELECT COUNT(*) AS saved FROM traders_company_data',
-    ),
-    client.execute({
-      sql: `SELECT
-         MAX(COALESCE(finished_at, started_at)) AS last_run_at,
-         MAX(CASE
-           WHEN status = 'success'
-             AND processed_count >= total_count
-             AND total_count >= ?
-           THEN finished_at
-         END) AS latest_full_success_at
-       FROM traders_company_data_runs`,
-      args: [activeTickerSet.size],
-    }),
-  ])
-  const attemptedTickerSet = new Set(
-    coverageResult.rows
-      .map((row) => String(row.ticker ?? ''))
-      .filter(Boolean),
-  )
-  const attemptedTickers = [...activeTickerSet]
-    .filter((ticker) => attemptedTickerSet.has(ticker))
-    .length
-  const saved = savedResult.rows[0]
-  const run = runResult.rows[0]
-  const savedTickers = Number(saved?.saved ?? 0)
-  const lastRunAt = run?.last_run_at == null ? null : Number(run.last_run_at)
-  const latestFullSuccessAt = run?.latest_full_success_at == null
-    ? null
-    : Number(run.latest_full_success_at)
-  const fullSuccessAgeHours = latestFullSuccessAt == null
-    ? null
-    : Math.max(0, (nowSec - latestFullSuccessAt) / 3600)
-  return {
-    activeTickers: activeTickerSet.size,
-    attemptedTickers,
-    savedTickers,
-    lastRunAt,
-    latestFullSuccessAt,
-    fullSuccessAgeHours: fullSuccessAgeHours == null
-      ? null
-      : Math.round(fullSuccessAgeHours * 10) / 10,
-    fresh:
-      activeTickerSet.size > 0
-      && attemptedTickers >= activeTickerSet.size
-      && fullSuccessAgeHours != null
-      && fullSuccessAgeHours <= 36,
-  }
-}
-
 async function weeklyFreshness(): Promise<WeeklyFreshness> {
   const state = readJson<WeeklyState>(weeklyStatePath, {})
   const fileReference = state.status === 'running' ? state.startedAt : state.finishedAt
@@ -474,22 +383,14 @@ async function main(): Promise<void> {
   const state = readJson<GuardState>(guardStatePath, { lastTriggeredAt: {} })
   const expectedJp = expectedLatestTradingDate()
   const expectedUs = expectedLatestUsTradingDate()
-  const [jpDates, usDates, sources, activeLocks, activeTickerRows] = await Promise.all([
+  const [jpDates, usDates, sources, activeLocks] = await Promise.all([
     loadJpDates(),
     loadUsDates(),
     loadSourceStates(),
     getActiveUpdateLocks().then(
       (locks) => locks.map((lock) => ({ jobType: lock.jobType })),
     ),
-    execAll<{ ticker: string }>(
-      'SELECT ticker FROM ticker_universe WHERE active = 1',
-    ),
   ])
-  const traders = await loadTradersState(
-    activeTickerRows
-      .map((row) => normalizeJpTicker(row.ticker))
-      .filter((ticker): ticker is string => Boolean(ticker)),
-  )
   const weekly = await weeklyFreshness()
 
   const jpPrice = jpDates.price
@@ -590,12 +491,6 @@ async function main(): Promise<void> {
     sources.earnings.latestSuccessAt,
   )
   await reconcile(
-    services.traders,
-    !traders.fresh,
-    `coverage=${traders.attemptedTickers}/${traders.activeTickers}, saved=${traders.savedTickers}, fullSuccessAge=${traders.fullSuccessAgeHours ?? '-'}h`,
-    traders.lastRunAt,
-  )
-  await reconcile(
     services.weekly,
     !weekly.fresh,
     `status=${weekly.state.status ?? 'missing'}, jpAge=${weekly.ageHours ?? '-'}h, usModelAge=${weekly.usModelAgeHours ?? '-'}h`,
@@ -611,7 +506,6 @@ async function main(): Promise<void> {
     expected: { jp: expectedJp, us: expectedUs },
     dates: { jp: jpDates, us: usDates },
     sources,
-    traders,
     weekly,
     activeLocks: activeLocks.map((lock) => lock.jobType),
     actions,

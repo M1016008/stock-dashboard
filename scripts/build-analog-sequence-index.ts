@@ -6,8 +6,13 @@ import path from 'node:path'
 import { resolveUsAnalyticsDbPath } from '@/lib/db/us-analytics'
 import {
   MA_SEQUENCE_BAND_COUNT,
+  MA_SEQUENCE_EMBEDDING_FEATURE_LENGTH,
   MA_SEQUENCE_INDEX_STRIDE,
+  MA_SEQUENCE_MONTHLY_PERIODS,
+  MA_SEQUENCE_PERIODS,
   MA_SEQUENCE_VERSION,
+  MA_SEQUENCE_WEEKLY_PERIODS,
+  MA_SEQUENCE_YEARLY_PERIODS,
   buildMaSequenceEmbedding,
   prepareMaSequence,
   stageCodeAt,
@@ -28,6 +33,51 @@ const INCREMENTAL_LOOKBACK_ROWS = Math.max(
   Number(process.env.ANALOG_INDEX_INCREMENTAL_LOOKBACK_ROWS ?? 3_000),
 )
 const MAX_GAP_DAYS = 60
+let ownedProcessLock: string | null = null
+
+function pidExists(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function releaseProcessLock(): void {
+  if (!ownedProcessLock) return
+  try {
+    const owner = Number(fs.readFileSync(ownedProcessLock, 'utf8').trim())
+    if (owner === process.pid) fs.unlinkSync(ownedProcessLock)
+  } catch {
+    // Missing or replaced locks no longer belong to this process.
+  }
+  ownedProcessLock = null
+}
+
+function acquireProcessLock(target: string): boolean {
+  const lockPath = `${target}.process.lock`
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const handle = fs.openSync(lockPath, 'wx', 0o600)
+      fs.writeFileSync(handle, `${process.pid}\n`)
+      fs.closeSync(handle)
+      ownedProcessLock = lockPath
+      process.once('exit', releaseProcessLock)
+      return true
+    } catch (error) {
+      if (!(error instanceof Error) || !('code' in error) || error.code !== 'EEXIST') throw error
+      const owner = Number(fs.readFileSync(lockPath, 'utf8').trim())
+      if (pidExists(owner)) {
+        console.log(`Analog index build already running for ${target} (pid=${owner}); skipping duplicate.`)
+        return false
+      }
+      fs.unlinkSync(lockPath)
+    }
+  }
+  return false
+}
 
 function lowerProcessPriority(): void {
   try {
@@ -70,7 +120,10 @@ function targetPath(market: Market, source: string): string {
     : process.env.ANALOG_JP_DB_PATH?.trim()
   return configured
     ? path.resolve(configured)
-    : path.join(path.dirname(source), market === 'US' ? 'analog-sequence-us.db' : 'analog-sequence-jp.db')
+    : path.join(
+        path.dirname(source),
+        `analog-sequence-${market.toLowerCase()}-v${MA_SEQUENCE_VERSION}.db`,
+      )
 }
 
 function calendarDays(from: string, to: string): number {
@@ -230,6 +283,7 @@ async function main(): Promise<void> {
   const target = targetPath(market, source)
   if (!fs.existsSync(source)) throw new Error(`Source DB not found: ${source}`)
   fs.mkdirSync(path.dirname(target), { recursive: true })
+  if (!acquireProcessLock(target)) return
 
   const sourceClient = createClient({ url: `file:${source}` })
   const targetClient = createClient({ url: `file:${target}` })
@@ -278,6 +332,13 @@ async function main(): Promise<void> {
   await setMeta(targetClient, {
     market,
     version: String(MA_SEQUENCE_VERSION),
+    feature_schema: [
+      `D:${MA_SEQUENCE_PERIODS.join(',')}`,
+      `W:${MA_SEQUENCE_WEEKLY_PERIODS.join(',')}`,
+      `M:${MA_SEQUENCE_MONTHLY_PERIODS.join(',')}`,
+      `Y:${MA_SEQUENCE_YEARLY_PERIODS.join(',')}`,
+    ].join('|'),
+    embedding_bytes: String(MA_SEQUENCE_EMBEDDING_FEATURE_LENGTH + 5),
     source_date: sourceDate,
     completed: '0',
     mode,

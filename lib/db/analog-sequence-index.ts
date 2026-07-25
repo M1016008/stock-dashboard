@@ -29,6 +29,8 @@ export type AnalogSequenceIndexMeta = {
   rowCount: number
   completed: boolean
   updatedAt: string | null
+  featureSchema: string | null
+  embeddingBytes: number | null
 }
 
 type RawIndexRow = {
@@ -68,12 +70,15 @@ export function resolveAnalogSequenceIndexPath(market: AnalogSequenceMarket): st
     const configured = process.env.ANALOG_US_DB_PATH?.trim()
     return configured
       ? path.resolve(configured)
-      : path.join(realDirectory(resolveUsAnalyticsDbPath()), 'analog-sequence-us.db')
+      : path.join(
+          realDirectory(resolveUsAnalyticsDbPath()),
+          `analog-sequence-us-v${MA_SEQUENCE_VERSION}.db`,
+        )
   }
   const configured = process.env.ANALOG_JP_DB_PATH?.trim()
   return configured
     ? path.resolve(configured)
-    : path.join(realDirectory(localDbPath), 'analog-sequence-jp.db')
+    : path.join(realDirectory(localDbPath), `analog-sequence-jp-v${MA_SEQUENCE_VERSION}.db`)
 }
 
 export function hasAnalogSequenceIndex(market: AnalogSequenceMarket): boolean {
@@ -180,7 +185,9 @@ export async function readAnalogSequenceIndexMeta(
         'coverage_to',
         'row_count',
         'completed',
-        'updated_at'
+        'updated_at',
+        'feature_schema',
+        'embedding_bytes'
       )
       `,
     )
@@ -194,6 +201,10 @@ export async function readAnalogSequenceIndexMeta(
       rowCount: Number(values.get('row_count') ?? 0),
       completed: values.get('completed') === '1',
       updatedAt: values.get('updated_at') ?? null,
+      featureSchema: values.get('feature_schema') ?? null,
+      embeddingBytes: values.has('embedding_bytes')
+        ? Number(values.get('embedding_bytes'))
+        : null,
     }
   } catch {
     return null

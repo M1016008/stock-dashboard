@@ -16,6 +16,19 @@ export interface StockQuote {
   fiftyTwoWeekHigh?: number;
   fiftyTwoWeekLow?: number;
   averageDailyVolume10Day?: number;
+  technicals?: {
+    asOfDate: string;
+    averageVolume30: number | null;
+    averageVolumeObservationCount: number;
+    macd: {
+      relation: 'golden' | 'dead' | 'neutral';
+      value: number;
+      signal: number;
+      histogram: number;
+      lastCrossType: 'golden' | 'dead' | null;
+      lastCrossDate: string | null;
+    } | null;
+  };
   exchange?: string;
 }
 

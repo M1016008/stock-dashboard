@@ -63,10 +63,17 @@ interface CandlestickChartProps {
 const PERIOD_BY_INTERVAL: Record<TvInterval, string> = {
   D: '1y',   // 日足: 1 年
   '2D': '2y',
+  '3D': '5y',
   W: '5y',   // 週足: 5 年
   '2W': '10y',
+  '3W': 'all',
   M: '10y',  // 月足: 10 年
   '2M': '10y',
+  '3M': 'all',
+  '6M': 'all',
+  Y: 'all',
+  '2Y': 'all',
+  '3Y': 'all',
 }
 
 const PERIOD_DAYS: Record<string, number> = {
@@ -86,11 +93,11 @@ function maColor(period: number, index = 0): string {
 export function CandlestickChart({
   ticker,
   height = 500,
-  maLines = [5, 25, 75],
+  maLines = [5, 25, 75, 200],
   maLinesByInterval,
   interval = 'D',
   showTimeframeSelector = false,
-  timeframeOptions = ['D', '2D', 'W', '2W', 'M', '2M'],
+  timeframeOptions = ['D', '2D', '3D', 'W', '2W', '3W', 'M', '2M', '3M', '6M', 'Y', '2Y', '3Y'],
   market = 'JP',
   historyPeriod,
   initialVisiblePeriod,
@@ -1071,6 +1078,8 @@ const timeframeSelectorStyle: React.CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
   gap: '2px',
+  maxWidth: '100%',
+  overflowX: 'auto',
   padding: '3px',
   border: '1px solid var(--border-base)',
   borderRadius: 'var(--radius-sm)',

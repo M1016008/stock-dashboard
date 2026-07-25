@@ -7,6 +7,7 @@ import { ohlcvDaily, tickerUniverse } from '@/lib/db/schema'
 import { desc, eq } from 'drizzle-orm'
 import type { StockQuote } from '@/types/stock'
 import { getManualOhlcvHiLo, loadManualLatestOhlcvRows } from '@/lib/manual-ohlcv'
+import { buildQuoteTechnicalSummary } from '@/lib/quote-technicals'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -29,7 +30,7 @@ export async function GET(
     const { ticker: rawTicker } = await params
     const ticker = decodeURIComponent(rawTicker).replace(/\.T$/i, '')
 
-    // 直近 2 営業日 (前日比計算用)
+    // 前日比・30日平均出来高・MACDの計算に必要な履歴
     let priceSource: 'jquants' | 'manual_ohlcv' = 'jquants'
     let rows: QuotePriceRow[] = await db
       .select({
@@ -43,10 +44,10 @@ export async function GET(
       .from(ohlcvDaily)
       .where(eq(ohlcvDaily.ticker, ticker))
       .orderBy(desc(ohlcvDaily.date))
-      .limit(2)
+      .limit(260)
 
     if (rows.length === 0) {
-      rows = await loadManualLatestOhlcvRows(ticker, 2)
+      rows = await loadManualLatestOhlcvRows(ticker, 260)
       if (rows.length > 0) {
         priceSource = 'manual_ohlcv'
       }
@@ -63,6 +64,7 @@ export async function GET(
     const prev = rows[1]
     const change = prev ? latest.close - prev.close : 0
     const changePercent = prev && prev.close !== 0 ? (change / prev.close) * 100 : 0
+    const technicals = buildQuoteTechnicalSummary([...rows].reverse())
 
     // 52 週高値/安値 (約 252 営業日)
     const since52w = new Date(Date.now() - 365 * 86_400_000).toISOString().slice(0, 10)
@@ -114,6 +116,7 @@ export async function GET(
       marketCap,
       fiftyTwoWeekHigh,
       fiftyTwoWeekLow,
+      technicals: technicals ?? undefined,
       exchange: priceSource === 'manual_ohlcv' ? 'MANUAL' : 'TSE',
     }
 

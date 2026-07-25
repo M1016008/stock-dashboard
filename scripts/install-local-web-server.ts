@@ -176,7 +176,7 @@ const analogPlist = `<?xml version="1.0" encoding="UTF-8"?>
     <key>NEXT_DIST_DIR</key><string>${liveDistDir}</string>
     <key>ANALOG_SEARCH_WORKER</key><string>1</string>
     <key>ANALOG_SEQUENCE_APPROXIMATE_LIMIT</key><string>400</string>
-    <key>ANALOG_SEQUENCE_EXACT_POOL_LIMIT</key><string>250</string>
+    <key>ANALOG_SEQUENCE_RECENCY_SHORTLIST_LIMIT</key><string>260</string>
     <key>PATH</key><string>${xmlEscape(pathEnv)}</string>
     <key>SKIP_SCHEMA_ENSURE</key><string>1</string>
     <key>SQLITE_BUSY_RETRIES</key><string>3</string>

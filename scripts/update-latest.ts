@@ -214,7 +214,10 @@ async function main() {
       const optionalScripts: Array<[string, string, EnvOverrides]> = [
         ['indices', 'scripts/batch-indices.ts', {}],
         ['earnings-calendar', 'scripts/batch-earnings.ts', {}],
+        ['earnings-times', 'scripts/batch-earnings-times.ts', {}],
         ['earnings-history', 'scripts/batch-earnings-history.ts', { EARNINGS_HISTORY_LIMIT: process.env.EARNINGS_HISTORY_LIMIT ?? '40' }],
+        ['company-overview', 'scripts/batch-company-overview.ts', {}],
+        ['edinet-holdings', 'scripts/batch-edinet-holdings.ts', {}],
         ['credit-short', 'scripts/batch-credit-short.ts', {}],
         ['serving-margin', 'scripts/build-serving-margin.ts', {}],
         ['forward-extrema', 'scripts/batch-forward-extrema.ts', {

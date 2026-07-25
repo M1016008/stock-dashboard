@@ -14,6 +14,11 @@ import { getCompareSymbols, toggleComparedSymbol } from '@/lib/client/stock-work
 import { getUniverseFilterMeta, parseUniverseFilter, UNIVERSE_FILTER_PARAM } from '@/lib/market-universe'
 import { formatShortTermStrength, SHORT_TERM_CHECK_LABELS, type ShortTermCheckLabel } from '@/lib/short-term-check'
 import type { PhysicsStatus } from '@/lib/ml/physics-analysis'
+import {
+  earningsTimeBucketLabel,
+  type EarningsTimeBucket,
+  type EarningsTimeKind,
+} from '@/lib/earnings-time'
 
 type Market = 'JP'
 type AxisKey = 'daily_a' | 'daily_b' | 'weekly_a' | 'weekly_b' | 'monthly_a' | 'monthly_b'
@@ -38,6 +43,14 @@ const EARNINGS_WINDOW_OPTIONS = [
   { weeks: 3, label: '3週間以内', businessDays: 15 },
 ] as const
 type EarningsWindowWeeks = typeof EARNINGS_WINDOW_OPTIONS[number]['weeks']
+const EARNINGS_TIME_BUCKET_OPTIONS: EarningsTimeBucket[] = [
+  'pre_open',
+  'morning',
+  'lunch',
+  'afternoon',
+  'after_close',
+  'unknown',
+]
 const VOLUME_MIN_OPTIONS = [
   { value: 100_000, label: '10万株以上' },
   { value: 300_000, label: '30万株以上' },
@@ -126,6 +139,12 @@ interface StockRow {
   earningsNextDateKind?: 'confirmed' | 'estimated' | 'not_announced' | 'not_applicable' | 'no_history'
   earningsNextDateSource?: string | null
   earningsNextFiscalPeriod?: string | null
+  earningsNextTime?: string | null
+  earningsNextTimeKind?: EarningsTimeKind
+  earningsNextTimeBucket?: string | null
+  earningsNextPredictionConfidence?: string | null
+  earningsNextPredictionSampleCount?: number | null
+  earningsNextPredictionModeCount?: number | null
   daily_a_stage: number | null
   daily_b_stage: number | null
   weekly_a_stage: number | null
@@ -208,6 +227,7 @@ interface JpScreenerView {
   selectedMarginType: string
   selectedVolumeMin: VolumeMinValue | null
   selectedEarningsWindowWeeks: EarningsWindowWeeks | null
+  selectedEarningsTimeBucket?: EarningsTimeBucket | ''
   selectedMa200Direction: Ma200Direction | ''
   selectedShortTermCheck: string
   selectedPhysicalStatus: string
@@ -411,6 +431,12 @@ export default function ScreenerPage() {
   const [selectedEarningsWindowWeeks, setSelectedEarningsWindowWeeks] = useState<EarningsWindowWeeks | null>(() => (
     parseEarningsWindowWeeks(searchParams.get('earningsWindowWeeks'))
   ))
+  const [selectedEarningsTimeBucket, setSelectedEarningsTimeBucket] = useState<EarningsTimeBucket | ''>(() => {
+    const value = searchParams.get('earningsTimeBucket')
+    return EARNINGS_TIME_BUCKET_OPTIONS.includes(value as EarningsTimeBucket)
+      ? value as EarningsTimeBucket
+      : ''
+  })
   const [selectedMa200Direction, setSelectedMa200Direction] = useState<Ma200Direction | ''>(() => (
     parseMa200Direction(searchParams.get('ma200Direction'))
   ))
@@ -548,6 +574,7 @@ export default function ScreenerPage() {
         const days = businessDaysUntil(r.earningsNextDate, referenceDate, tradingDates)
         if (!window || days == null || days < 0 || days > window.businessDays) return false
       }
+      if (selectedEarningsTimeBucket && r.earningsNextTimeBucket !== selectedEarningsTimeBucket) return false
       if (selectedMa200Direction && ma200DirectionOf(r.sma200Angle) !== selectedMa200Direction) return false
       if (selectedShortTermCheck && r.shortTermCheckLabel !== selectedShortTermCheck) return false
       if (selectedPhysicalStatus && r.physicalStatusLabel !== selectedPhysicalStatus) return false
@@ -562,7 +589,7 @@ export default function ScreenerPage() {
       }
       return true
     })
-  }, [results, selectedMarketSegment, selectedSectorLarge, selectedSector33, selectedMarginType, selectedVolumeMin, selectedEarningsWindowWeeks, referenceDate, tradingDates, selectedMa200Direction, selectedShortTermCheck, selectedPhysicalStatus, selectedMcapBins])
+  }, [results, selectedMarketSegment, selectedSectorLarge, selectedSector33, selectedMarginType, selectedVolumeMin, selectedEarningsWindowWeeks, selectedEarningsTimeBucket, referenceDate, tradingDates, selectedMa200Direction, selectedShortTermCheck, selectedPhysicalStatus, selectedMcapBins])
 
   const shortTermOptions = useMemo(() => {
     const counts = new Map<string, number>()
@@ -689,6 +716,14 @@ export default function ScreenerPage() {
       const option = EARNINGS_WINDOW_OPTIONS.find((item) => item.weeks === selectedEarningsWindowWeeks)
       chips.push({ key: 'earningsWindowWeeks', label: '次回決算', value: option?.label ?? `${selectedEarningsWindowWeeks}週間以内`, tone: 'amber' })
     }
+    if (selectedEarningsTimeBucket) {
+      chips.push({
+        key: 'earningsTimeBucket',
+        label: '発表時間帯',
+        value: earningsTimeBucketLabel(selectedEarningsTimeBucket),
+        tone: 'amber',
+      })
+    }
     if (selectedMa200Direction) {
       const option = MA200_DIRECTION_OPTIONS.find((item) => item.key === selectedMa200Direction)
       chips.push({ key: 'ma200Direction', label: '200日線', value: option?.label ?? selectedMa200Direction, tone: selectedMa200Direction === 'down' ? 'blue' : selectedMa200Direction === 'up' ? 'red' : 'neutral' })
@@ -727,6 +762,7 @@ export default function ScreenerPage() {
     pmsTrend,
     selectedDate,
     selectedEarningsWindowWeeks,
+    selectedEarningsTimeBucket,
     selectedMa200Direction,
     selectedMarginType,
     selectedMarketSegment,
@@ -897,6 +933,10 @@ export default function ScreenerPage() {
         setSelectedEarningsWindowWeeks(null)
         removeUrlParams('earningsWindowWeeks')
         break
+      case 'earningsTimeBucket':
+        setSelectedEarningsTimeBucket('')
+        removeUrlParams('earningsTimeBucket')
+        break
       case 'ma200Direction':
         setSelectedMa200Direction('')
         removeUrlParams('ma200Direction')
@@ -967,6 +1007,7 @@ export default function ScreenerPage() {
     selectedMarginType,
     selectedVolumeMin,
     selectedEarningsWindowWeeks,
+    selectedEarningsTimeBucket,
     selectedMa200Direction,
     selectedShortTermCheck,
     selectedPhysicalStatus,
@@ -991,6 +1032,7 @@ export default function ScreenerPage() {
     setSelectedMarginType(view.selectedMarginType ?? '')
     setSelectedVolumeMin(view.selectedVolumeMin ?? null)
     setSelectedEarningsWindowWeeks(view.selectedEarningsWindowWeeks ?? null)
+    setSelectedEarningsTimeBucket(view.selectedEarningsTimeBucket ?? '')
     setSelectedMa200Direction(view.selectedMa200Direction ?? '')
     setSelectedShortTermCheck(view.selectedShortTermCheck ?? '')
     setSelectedPhysicalStatus(view.selectedPhysicalStatus ?? '')
@@ -1220,6 +1262,28 @@ export default function ScreenerPage() {
           >
             遠い順に並べる
           </button>
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', alignItems: 'center', marginTop: '10px' }}>
+          <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', marginRight: '2px' }}>
+            発表時間帯
+          </span>
+          <button
+            type="button"
+            onClick={() => setSelectedEarningsTimeBucket('')}
+            style={mcChipStyle(selectedEarningsTimeBucket === '')}
+          >
+            全て
+          </button>
+          {EARNINGS_TIME_BUCKET_OPTIONS.map((bucket) => (
+            <button
+              key={bucket}
+              type="button"
+              onClick={() => setSelectedEarningsTimeBucket((current) => current === bucket ? '' : bucket)}
+              style={mcChipStyle(selectedEarningsTimeBucket === bucket)}
+            >
+              {earningsTimeBucketLabel(bucket)}
+            </button>
+          ))}
         </div>
       </Section>
 
@@ -1857,6 +1921,20 @@ export default function ScreenerPage() {
                             }}>
                               {r.earningsNextDate ?? nextEarnings.label}
                             </span>
+                            {r.earningsNextDate && (
+                              <span style={{
+                                fontFamily: 'var(--font-mono)',
+                                fontSize: '10px',
+                                color: r.earningsNextTimeKind === 'predicted' ? '#b45309' : 'var(--text-secondary)',
+                                fontWeight: 700,
+                              }}>
+                                {r.earningsNextTime
+                                  ? `${r.earningsNextTime}${r.earningsNextTimeKind === 'predicted' ? '頃（予想）' : ''}`
+                                  : '時刻未定'}
+                                {' / '}
+                                {earningsTimeBucketLabel((r.earningsNextTimeBucket ?? 'unknown') as EarningsTimeBucket)}
+                              </span>
+                            )}
                             <span
                               title={nextEarnings.title}
                               style={{

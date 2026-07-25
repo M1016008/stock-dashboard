@@ -1,14 +1,29 @@
-export const MA_SEQUENCE_VERSION = 1
-export const MA_SEQUENCE_SCORE_VERSION = 7
-export const MA_SEQUENCE_PERIODS = [5, 10, 20, 40, 60, 90, 200] as const
+export const MA_SEQUENCE_VERSION = 2
+export const MA_SEQUENCE_SCORE_VERSION = 10
+export const MA_SEQUENCE_PERIODS = [5, 25, 75, 200] as const
+export const MA_SEQUENCE_STAGE_PERIODS = [5, 10, 20, 40, 60, 90, 200] as const
+export const MA_SEQUENCE_WEEKLY_PERIODS = [13, 26, 52] as const
+export const MA_SEQUENCE_MONTHLY_PERIODS = [9, 24, 60] as const
+export const MA_SEQUENCE_YEARLY_PERIODS = [3, 5, 10] as const
 export const MA_SEQUENCE_WINDOWS = [10, 20, 40] as const
 export const MA_SEQUENCE_WINDOW_WEIGHTS = [0.25, 0.35, 0.4] as const
-export const MA_SEQUENCE_MONTHLY_PERIODS = [3, 6, 12, 24, 36, 60] as const
-export const MA_SEQUENCE_LONG_TERM_PERIODS = [12, 24, 36, 60, 120] as const
 export const MA_SEQUENCE_INDEX_STRIDE = 5
 export const MA_SEQUENCE_BAND_COUNT = 4
 export const MA_SEQUENCE_BAND_BITS = 12
 export const MA_SEQUENCE_EMBEDDING_SCALE = 30
+export const MA_SEQUENCE_EMBEDDING_FEATURE_LENGTH =
+  (MA_SEQUENCE_PERIODS.length * 3 - 1)
+  + MA_SEQUENCE_WINDOWS.length * (MA_SEQUENCE_PERIODS.length * 2 + 2)
+  + (MA_SEQUENCE_WEEKLY_PERIODS.length * 3 - 1)
+  + (MA_SEQUENCE_MONTHLY_PERIODS.length * 3 - 1)
+  + (MA_SEQUENCE_YEARLY_PERIODS.length * 3 - 1)
+
+const MA_SEQUENCE_DAILY_EMBEDDING_LENGTH =
+  (MA_SEQUENCE_PERIODS.length * 3 - 1)
+  + MA_SEQUENCE_WINDOWS.length * (MA_SEQUENCE_PERIODS.length * 2 + 2)
+const MA_SEQUENCE_WEEKLY_EMBEDDING_LENGTH = MA_SEQUENCE_WEEKLY_PERIODS.length * 3 - 1
+const MA_SEQUENCE_MONTHLY_EMBEDDING_LENGTH = MA_SEQUENCE_MONTHLY_PERIODS.length * 3 - 1
+const MA_SEQUENCE_YEARLY_EMBEDDING_LENGTH = MA_SEQUENCE_YEARLY_PERIODS.length * 3 - 1
 
 export type MaSequencePriceRow = {
   date: string
@@ -27,17 +42,19 @@ export type MaSequencePoint = {
 
 export type MaSequencePrepared = {
   rows: MaSequencePriceRow[]
+  stage: MaSequenceFrame
   daily: MaSequenceFrame
   weekly: MaSequenceFrame
   monthly: MaSequenceFrame
-  monthlyComparison: MaSequenceFrame
-  longTerm: MaSequenceFrame
+  yearly: MaSequenceFrame
 }
 
 export type MaSequenceFrame = {
   step: number
   periods: readonly number[]
   mas: Array<Array<number | null>>
+  bucketKeys: string[]
+  velocityIndexes: number[]
 }
 
 export type MaSequenceEmbedding = {
@@ -48,7 +65,7 @@ export type MaSequenceEmbedding = {
 }
 
 export type MaSequenceScoreComponent = {
-  key: 'daily10' | 'daily20' | 'daily40' | 'weekly' | 'monthly' | 'longTerm'
+  key: 'daily10' | 'daily20' | 'daily40' | 'weekly' | 'monthly' | 'yearly'
   label: string
   score: number
   weight: number
@@ -60,6 +77,30 @@ export type MaSequenceScore = {
   components: MaSequenceScoreComponent[]
 }
 
+export type MaSequenceRangeComponent = {
+  key: 'daily' | 'weekly' | 'monthly' | 'yearly'
+  label: string
+  score: number
+  weight: number
+  available: boolean
+}
+
+export type MaSequenceRangeScore = {
+  score: number
+  dailyScore: number | null
+  weeklyScore: number | null
+  monthlyScore: number | null
+  yearlyScore: number | null
+  components: MaSequenceRangeComponent[]
+}
+
+export type MaSequenceRangeWeights = {
+  daily: number
+  weekly: number
+  monthly: number
+  yearly: number
+}
+
 export type MaSequenceScoringProfile = {
   key: string
   label: string
@@ -68,7 +109,7 @@ export type MaSequenceScoringProfile = {
     daily: number
     weekly: number
     monthly: number
-    longTerm: number
+    yearly: number
   }
 }
 
@@ -77,37 +118,37 @@ export const MA_SEQUENCE_SCORING_PROFILES = [
     key: 'balanced-v2',
     label: '現行バランス',
     dailyWindowWeights: [0.25, 0.35, 0.4],
-    timeframeWeights: { daily: 0.72, weekly: 0.13, monthly: 0.1, longTerm: 0.05 },
+    timeframeWeights: { daily: 0.56, weekly: 0.2, monthly: 0.15, yearly: 0.09 },
   },
   {
     key: 'trajectory-heavy',
     label: '日足軌跡重視',
     dailyWindowWeights: [0.2, 0.3, 0.5],
-    timeframeWeights: { daily: 0.8, weekly: 0.1, monthly: 0.07, longTerm: 0.03 },
+    timeframeWeights: { daily: 0.65, weekly: 0.17, monthly: 0.11, yearly: 0.07 },
   },
   {
     key: 'medium-trajectory',
     label: '中期軌跡重視',
     dailyWindowWeights: [0.2, 0.35, 0.45],
-    timeframeWeights: { daily: 0.68, weekly: 0.15, monthly: 0.11, longTerm: 0.06 },
+    timeframeWeights: { daily: 0.5, weekly: 0.22, monthly: 0.18, yearly: 0.1 },
   },
   {
     key: 'multiframe',
     label: '上位足重視',
     dailyWindowWeights: [0.2, 0.35, 0.45],
-    timeframeWeights: { daily: 0.62, weekly: 0.16, monthly: 0.14, longTerm: 0.08 },
+    timeframeWeights: { daily: 0.4, weekly: 0.25, monthly: 0.2, yearly: 0.15 },
   },
   {
     key: 'structural-context',
     label: '構造文脈重視',
     dailyWindowWeights: [0.18, 0.34, 0.48],
-    timeframeWeights: { daily: 0.55, weekly: 0.2, monthly: 0.17, longTerm: 0.08 },
+    timeframeWeights: { daily: 0.36, weekly: 0.27, monthly: 0.22, yearly: 0.15 },
   },
   {
     key: 'short-reactive',
     label: '短期変化重視',
     dailyWindowWeights: [0.4, 0.4, 0.2],
-    timeframeWeights: { daily: 0.75, weekly: 0.13, monthly: 0.08, longTerm: 0.04 },
+    timeframeWeights: { daily: 0.62, weekly: 0.19, monthly: 0.12, yearly: 0.07 },
   },
 ] as const satisfies readonly MaSequenceScoringProfile[]
 
@@ -139,36 +180,84 @@ function normalizedPct(base: number | null | undefined, value: number | null | u
   return valuePct == null ? 0 : clamp(valuePct / scale, -3, 3)
 }
 
-function sampledSmaSeries(
+function smaSeries(
   rows: MaSequencePriceRow[],
   period: number,
-  step: number,
 ): Array<number | null> {
   const output: Array<number | null> = Array(rows.length).fill(null)
-  const span = period * step
-  for (let residue = 0; residue < step; residue += 1) {
-    let sum = 0
-    let count = 0
-    for (let index = residue; index < rows.length; index += step) {
-      sum += rows[index].close
-      count += 1
-      if (count > period) sum -= rows[index - span].close
-      if (count >= period) output[index] = sum / period
-    }
+  let sum = 0
+  for (let index = 0; index < rows.length; index += 1) {
+    sum += rows[index].close
+    if (index >= period) sum -= rows[index - period].close
+    if (index >= period - 1) output[index] = sum / period
   }
   return output
 }
 
-function buildFrame(
+function buildDailyFrame(
   rows: MaSequencePriceRow[],
   periods: readonly number[],
-  step: number,
+  velocitySessions = 5,
 ): MaSequenceFrame {
   return {
-    step,
+    step: 1,
     periods,
-    mas: periods.map((period) => sampledSmaSeries(rows, period, step)),
+    mas: periods.map((period) => smaSeries(rows, period)),
+    bucketKeys: rows.map((row) => row.date),
+    velocityIndexes: rows.map((_, index) => index - velocitySessions),
   }
+}
+
+type CalendarFrameInterval = 'W' | 'M' | 'Y'
+
+function calendarBucketKey(date: string, interval: CalendarFrameInterval): string {
+  if (interval === 'M') return date.slice(0, 7)
+  if (interval === 'Y') return date.slice(0, 4)
+  const value = new Date(`${date}T00:00:00.000Z`)
+  const day = value.getUTCDay()
+  const mondayOffset = day === 0 ? -6 : 1 - day
+  value.setUTCDate(value.getUTCDate() + mondayOffset)
+  return value.toISOString().slice(0, 10)
+}
+
+function buildCalendarFrame(
+  rows: MaSequencePriceRow[],
+  periods: readonly number[],
+  interval: CalendarFrameInterval,
+  velocityBuckets: number,
+  step: number,
+): MaSequenceFrame {
+  const bucketKeys = rows.map((row) => calendarBucketKey(row.date, interval))
+  const mas = periods.map(() => Array<number | null>(rows.length).fill(null))
+  const velocityIndexes = Array<number>(rows.length).fill(-1)
+  const completedCloses: number[] = []
+  const completedPrefix = [0]
+  const bucketEndIndexes: number[] = []
+
+  for (let index = 0; index < rows.length; index += 1) {
+    if (index > 0 && bucketKeys[index] !== bucketKeys[index - 1]) {
+      const completedClose = rows[index - 1].close
+      completedCloses.push(completedClose)
+      completedPrefix.push(completedPrefix.at(-1)! + completedClose)
+      bucketEndIndexes.push(index - 1)
+    }
+
+    for (const [periodIndex, period] of periods.entries()) {
+      const priorCount = period - 1
+      if (completedCloses.length < priorCount) continue
+      const priorSum = completedPrefix[completedCloses.length]
+        - completedPrefix[completedCloses.length - priorCount]
+      mas[periodIndex][index] = (priorSum + rows[index].close) / period
+    }
+
+    const currentBucketIndex = completedCloses.length
+    const priorBucketIndex = currentBucketIndex - velocityBuckets
+    if (priorBucketIndex >= 0) {
+      velocityIndexes[index] = bucketEndIndexes[priorBucketIndex] ?? -1
+    }
+  }
+
+  return { step, periods, mas, bucketKeys, velocityIndexes }
 }
 
 export function prepareMaSequence(rows: MaSequencePriceRow[]): MaSequencePrepared {
@@ -178,13 +267,11 @@ export function prepareMaSequence(rows: MaSequencePriceRow[]): MaSequencePrepare
     .sort((a, b) => a.date.localeCompare(b.date))
   return {
     rows: ordered,
-    daily: buildFrame(ordered, MA_SEQUENCE_PERIODS, 1),
-    weekly: buildFrame(ordered, MA_SEQUENCE_PERIODS, 5),
-    // Keep the legacy monthly frame stable because its compact embedding is
-    // persisted in the sidecar index. Exact scoring uses monthlyComparison.
-    monthly: buildFrame(ordered, MA_SEQUENCE_PERIODS, 21),
-    monthlyComparison: buildFrame(ordered, MA_SEQUENCE_MONTHLY_PERIODS, 21),
-    longTerm: buildFrame(ordered, MA_SEQUENCE_LONG_TERM_PERIODS, 21),
+    stage: buildDailyFrame(ordered, MA_SEQUENCE_STAGE_PERIODS),
+    daily: buildDailyFrame(ordered, MA_SEQUENCE_PERIODS),
+    weekly: buildCalendarFrame(ordered, MA_SEQUENCE_WEEKLY_PERIODS, 'W', 4, 5),
+    monthly: buildCalendarFrame(ordered, MA_SEQUENCE_MONTHLY_PERIODS, 'M', 3, 21),
+    yearly: buildCalendarFrame(ordered, MA_SEQUENCE_YEARLY_PERIODS, 'Y', 1, 252),
   }
 }
 
@@ -198,8 +285,8 @@ function frameStructure(
   if (currentMas.some((value) => !finite(value))) return null
   const close = prepared.rows[index]?.close
   if (!finite(close)) return null
-  const velocityOffset = frame.step * 5
-  const priorMas = frame.mas.map((series) => series[index - velocityOffset])
+  const velocityIndex = frame.velocityIndexes[index] ?? -1
+  const priorMas = frame.mas.map((series) => series[velocityIndex])
   const pricePositions = currentMas.map((ma) => normalizedPct(ma, close, 12))
   const adjacentGaps = currentMas.slice(0, -1).map((ma, maIndex) =>
     normalizedPct(currentMas[maIndex + 1], ma, 10),
@@ -255,6 +342,43 @@ function buildPointAt(
   }
 }
 
+function frameIndexesEndingAt(
+  frame: MaSequenceFrame,
+  endIndex: number,
+  count: number,
+): number[] {
+  const indexes: number[] = []
+  let priorKey = ''
+  for (let index = endIndex; index >= 0 && indexes.length < count; index -= 1) {
+    const key = frame.bucketKeys[index]
+    if (!key || key === priorKey) continue
+    indexes.push(index)
+    priorKey = key
+  }
+  return indexes.reverse()
+}
+
+function frameIndexesInRange(
+  frame: MaSequenceFrame,
+  startIndex: number,
+  endIndex: number,
+): number[] {
+  if (startIndex > endIndex) return []
+  const indexes: number[] = []
+  let currentKey = ''
+  for (let index = startIndex; index <= endIndex; index += 1) {
+    const key = frame.bucketKeys[index]
+    if (!key) continue
+    if (key !== currentKey) {
+      indexes.push(index)
+      currentKey = key
+    } else {
+      indexes[indexes.length - 1] = index
+    }
+  }
+  return indexes
+}
+
 function pointsEndingAt(
   prepared: MaSequencePrepared,
   frame: MaSequenceFrame,
@@ -262,12 +386,7 @@ function pointsEndingAt(
   count: number,
 ): MaSequencePoint[] {
   const points: MaSequencePoint[] = []
-  for (
-    let index = endIndex - (count - 1) * frame.step;
-    index <= endIndex;
-    index += frame.step
-  ) {
-    if (index < 0) continue
+  for (const index of frameIndexesEndingAt(frame, endIndex, count)) {
     const point = buildPointAt(prepared, frame, index)
     if (point) points.push(point)
   }
@@ -350,6 +469,247 @@ function sequenceDistance(a: MaSequencePoint[], b: MaSequencePoint[]): number {
   return alignedDistance(a, b) * 0.7 + dtwDistance(a, b) * 0.3
 }
 
+function rangePoints(
+  prepared: MaSequencePrepared,
+  frame: MaSequenceFrame,
+  startIndex: number,
+  endIndex: number,
+): MaSequencePoint[] {
+  const startClose = prepared.rows[startIndex]?.close
+  if (!finite(startClose) || startClose <= 0 || startIndex > endIndex) return []
+  const points: MaSequencePoint[] = []
+  for (const index of frameIndexesInRange(frame, startIndex, endIndex)) {
+    const point = buildPointAt(prepared, frame, index)
+    const close = prepared.rows[index]?.close
+    if (!point || !finite(close) || close <= 0) continue
+    const normalizedPath = clamp(Math.log(close / startClose) / 0.2, -3, 3)
+    points.push({
+      ...point,
+      values: [normalizedPath, ...point.values],
+    })
+  }
+  return points
+}
+
+function rangePointDistance(a: MaSequencePoint, b: MaSequencePoint): number {
+  const pricePathDistance = Math.abs((a.values[0] ?? 0) - (b.values[0] ?? 0))
+  const structuralDistance = pointDistance(
+    { ...a, values: a.values.slice(1) },
+    { ...b, values: b.values.slice(1) },
+  )
+  return structuralDistance * 0.72 + pricePathDistance * 0.28
+}
+
+function rangeAlignedDistance(a: MaSequencePoint[], b: MaSequencePoint[]): number {
+  const length = Math.min(a.length, b.length)
+  if (length === 0) return Infinity
+  let total = 0
+  let weight = 0
+  for (let index = 0; index < length; index += 1) {
+    const recencyWeight = 0.65 + 0.35 * ((index + 1) / length)
+    total += rangePointDistance(
+      a[a.length - length + index],
+      b[b.length - length + index],
+    ) * recencyWeight
+    weight += recencyWeight
+  }
+  return total / weight
+}
+
+function rangeDtwDistance(a: MaSequencePoint[], b: MaSequencePoint[]): number {
+  if (a.length === 0 || b.length === 0) return Infinity
+  const width = Math.max(
+    Math.abs(a.length - b.length),
+    Math.ceil(Math.max(a.length, b.length) * 0.15),
+  )
+  let previous = new Float64Array(b.length + 1)
+  let current = new Float64Array(b.length + 1)
+  previous.fill(Infinity)
+  previous[0] = 0
+  for (let rowIndex = 1; rowIndex <= a.length; rowIndex += 1) {
+    current.fill(Infinity)
+    const from = Math.max(1, rowIndex - width)
+    const to = Math.min(b.length, rowIndex + width)
+    for (let columnIndex = from; columnIndex <= to; columnIndex += 1) {
+      const cost = rangePointDistance(a[rowIndex - 1], b[columnIndex - 1])
+      current[columnIndex] = cost + Math.min(
+        previous[columnIndex],
+        current[columnIndex - 1],
+        previous[columnIndex - 1],
+      )
+    }
+    const swap = previous
+    previous = current
+    current = swap
+  }
+  return previous[b.length] / Math.max(a.length, b.length)
+}
+
+function compareRangeFrame(
+  base: MaSequencePrepared,
+  baseStartIndex: number,
+  baseEndIndex: number,
+  candidate: MaSequencePrepared,
+  candidateStartIndex: number,
+  candidateEndIndex: number,
+  frame: 'daily' | 'weekly' | 'monthly' | 'yearly',
+  includeDtw: boolean,
+): number | null {
+  const basePoints = rangePoints(base, base[frame], baseStartIndex, baseEndIndex)
+  const candidatePoints = rangePoints(
+    candidate,
+    candidate[frame],
+    candidateStartIndex,
+    candidateEndIndex,
+  )
+  const expected = frameIndexesInRange(base[frame], baseStartIndex, baseEndIndex).length
+  const minimum = Math.max(frame === 'daily' ? 3 : 1, Math.ceil(expected * 0.7))
+  if (basePoints.length < minimum || candidatePoints.length < minimum) return null
+  const aligned = rangeAlignedDistance(basePoints, candidatePoints)
+  const distance = includeDtw
+    ? aligned * 0.65 + rangeDtwDistance(basePoints, candidatePoints) * 0.35
+    : aligned
+  return distanceToSimilarity(distance)
+}
+
+function scoreMaSequenceRangeInternal(
+  base: MaSequencePrepared,
+  baseStartIndex: number,
+  baseEndIndex: number,
+  candidate: MaSequencePrepared,
+  candidateStartIndex: number,
+  candidateEndIndex: number,
+  weights: MaSequenceRangeWeights,
+  includeDtw: boolean,
+): MaSequenceRangeScore {
+  const daily = compareRangeFrame(
+    base,
+    baseStartIndex,
+    baseEndIndex,
+    candidate,
+    candidateStartIndex,
+    candidateEndIndex,
+    'daily',
+    includeDtw,
+  )
+  const weekly = compareRangeFrame(
+    base,
+    baseStartIndex,
+    baseEndIndex,
+    candidate,
+    candidateStartIndex,
+    candidateEndIndex,
+    'weekly',
+    includeDtw,
+  )
+  const monthly = compareRangeFrame(
+    base,
+    baseStartIndex,
+    baseEndIndex,
+    candidate,
+    candidateStartIndex,
+    candidateEndIndex,
+    'monthly',
+    includeDtw,
+  )
+  const yearly = compareRangeFrame(
+    base,
+    baseStartIndex,
+    baseEndIndex,
+    candidate,
+    candidateStartIndex,
+    candidateEndIndex,
+    'yearly',
+    includeDtw,
+  )
+  const sessionCount = baseEndIndex - baseStartIndex + 1
+  const components: MaSequenceRangeComponent[] = [
+    {
+      key: 'daily',
+      label: `日足 ${sessionCount}営業日`,
+      score: daily ?? 0,
+      weight: weights.daily,
+      available: daily != null,
+    },
+    {
+      key: 'weekly',
+      label: '週足構造',
+      score: weekly ?? 0,
+      weight: weights.weekly,
+      available: weekly != null,
+    },
+    {
+      key: 'monthly',
+      label: '月足構造',
+      score: monthly ?? 0,
+      weight: weights.monthly,
+      available: monthly != null,
+    },
+    {
+      key: 'yearly',
+      label: '年足構造',
+      score: yearly ?? 0,
+      weight: weights.yearly,
+      available: yearly != null,
+    },
+  ]
+  const available = components.filter((component) => component.available)
+  const totalWeight = available.reduce((sum, component) => sum + component.weight, 0)
+  const score = totalWeight > 0
+    ? available.reduce((sum, component) => sum + component.score * component.weight, 0) / totalWeight
+    : 0
+  return {
+    score,
+    dailyScore: daily,
+    weeklyScore: weekly,
+    monthlyScore: monthly,
+    yearlyScore: yearly,
+    components,
+  }
+}
+
+export function scoreMaSequenceRange(
+  base: MaSequencePrepared,
+  baseStartIndex: number,
+  baseEndIndex: number,
+  candidate: MaSequencePrepared,
+  candidateStartIndex: number,
+  candidateEndIndex: number,
+  weights: MaSequenceRangeWeights,
+): MaSequenceRangeScore {
+  return scoreMaSequenceRangeInternal(
+    base,
+    baseStartIndex,
+    baseEndIndex,
+    candidate,
+    candidateStartIndex,
+    candidateEndIndex,
+    weights,
+    true,
+  )
+}
+
+export function scoreMaSequenceRangeAligned(
+  base: MaSequencePrepared,
+  baseStartIndex: number,
+  baseEndIndex: number,
+  candidate: MaSequencePrepared,
+  candidateStartIndex: number,
+  candidateEndIndex: number,
+  weights: MaSequenceRangeWeights,
+): MaSequenceRangeScore {
+  return scoreMaSequenceRangeInternal(
+    base,
+    baseStartIndex,
+    baseEndIndex,
+    candidate,
+    candidateStartIndex,
+    candidateEndIndex,
+    weights,
+    false,
+  )
+}
+
 function distanceToSimilarity(distance: number): number {
   return finite(distance) ? Math.exp(-1.35 * distance) : 0
 }
@@ -359,7 +719,7 @@ function compareFrame(
   baseIndex: number,
   candidate: MaSequencePrepared,
   candidateIndex: number,
-  frame: 'daily' | 'weekly' | 'monthlyComparison' | 'longTerm',
+  frame: 'daily' | 'weekly' | 'monthly' | 'yearly',
   count: number,
   includeDtw: boolean,
 ): number | null {
@@ -390,11 +750,11 @@ function scoreMaSequenceInternal(
     baseIndex,
     candidate,
     candidateIndex,
-    'monthlyComparison',
+    'monthly',
     6,
     includeDtw,
   )
-  const longTerm = compareFrame(base, baseIndex, candidate, candidateIndex, 'longTerm', 6, includeDtw)
+  const yearly = compareFrame(base, baseIndex, candidate, candidateIndex, 'yearly', 6, includeDtw)
   const components: MaSequenceScoreComponent[] = [
     ...dailyScores.map((score, index) => ({
       key: `daily${MA_SEQUENCE_WINDOWS[index]}` as const,
@@ -418,11 +778,11 @@ function scoreMaSequenceInternal(
       available: monthly != null,
     },
     {
-      key: 'longTerm',
-      label: '長期構造',
-      score: longTerm ?? 0,
-      weight: profile.timeframeWeights.longTerm,
-      available: longTerm != null,
+      key: 'yearly',
+      label: '年足構造',
+      score: yearly ?? 0,
+      weight: profile.timeframeWeights.yearly,
+      available: yearly != null,
     },
   ]
   return rescoreMaSequenceComponents(components, profile)
@@ -442,7 +802,7 @@ export function rescoreMaSequenceComponents(
     ...dailyWeightByKey,
     ['weekly', profile.timeframeWeights.weekly],
     ['monthly', profile.timeframeWeights.monthly],
-    ['longTerm', profile.timeframeWeights.longTerm],
+    ['yearly', profile.timeframeWeights.yearly],
   ])
   const rescored = components.map((component) => ({
     ...component,
@@ -484,7 +844,7 @@ function embeddingDailyWindow(
   const startIndex = endIndex - window + 1
   const current = frameStructure(prepared, prepared.daily, endIndex, false)
   const start = frameStructure(prepared, prepared.daily, startIndex, false)
-  if (!current || !start) return Array(16).fill(0)
+  if (!current || !start) return Array(MA_SEQUENCE_PERIODS.length * 2 + 2).fill(0)
   const positionAndGaps = MA_SEQUENCE_PERIODS.length + MA_SEQUENCE_PERIODS.length - 1
   const changes = current
     .slice(0, positionAndGaps)
@@ -523,10 +883,11 @@ function projectionHash(dimension: number, bit: number): number {
 function signatureBands(values: number[]): number[] {
   const bitCount = MA_SEQUENCE_BAND_COUNT * MA_SEQUENCE_BAND_BITS
   const accumulators = new Float64Array(bitCount)
-  // Candidate recall is driven by the continuous daily trajectory. Higher-timeframe
-  // values remain in the compact embedding and take part in the rerank.
-  const dailyDimensionCount = 20 + MA_SEQUENCE_WINDOWS.length * 16
-  for (let dimension = 0; dimension < Math.min(values.length, dailyDimensionCount); dimension += 1) {
+  for (
+    let dimension = 0;
+    dimension < Math.min(values.length, MA_SEQUENCE_EMBEDDING_FEATURE_LENGTH);
+    dimension += 1
+  ) {
     const value = values[dimension]
     if (!finite(value) || value === 0) continue
     for (let bit = 0; bit < bitCount; bit += 1) {
@@ -553,28 +914,30 @@ export function buildMaSequenceEmbedding(
   if (!currentDaily || endIndex < MA_SEQUENCE_PERIODS.at(-1)! + MA_SEQUENCE_WINDOWS.at(-1)!) return null
   const weekly = frameEmbedding(prepared, prepared.weekly, endIndex)
   const monthly = frameEmbedding(prepared, prepared.monthly, endIndex)
-  const longTerm = frameEmbedding(prepared, prepared.longTerm, endIndex)
+  const yearly = frameEmbedding(prepared, prepared.yearly, endIndex)
+  const dailyAvailable = prepared.daily.mas.every((series) => finite(series[endIndex]))
   const weeklyAvailable = prepared.weekly.mas.every((series) => finite(series[endIndex]))
   const monthlyAvailable = prepared.monthly.mas.every((series) => finite(series[endIndex]))
-  const longTermAvailable = prepared.longTerm.mas.every((series) => finite(series[endIndex]))
+  const yearlyAvailable = prepared.yearly.mas.every((series) => finite(series[endIndex]))
   const values = [
     ...currentDaily,
     ...MA_SEQUENCE_WINDOWS.flatMap((window) => embeddingDailyWindow(prepared, endIndex, window)),
     ...weekly,
     ...monthly,
-    ...longTerm,
-    1,
+    ...yearly,
+    dailyAvailable ? 1 : 0,
     weeklyAvailable ? 1 : 0,
     monthlyAvailable ? 1 : 0,
-    longTermAvailable ? 1 : 0,
+    yearlyAvailable ? 1 : 0,
+    1,
   ]
   const quantized = Uint8Array.from(values, (value) =>
     clamp(Math.round(value * MA_SEQUENCE_EMBEDDING_SCALE), -127, 127) + 128,
   )
-  const coverageMask = 1
+  const coverageMask = (dailyAvailable ? 1 : 0)
     | (weeklyAvailable ? 2 : 0)
     | (monthlyAvailable ? 4 : 0)
-    | (longTermAvailable ? 8 : 0)
+    | (yearlyAvailable ? 8 : 0)
   return {
     values,
     quantized,
@@ -622,6 +985,22 @@ export function maSequenceEmbeddingSimilarityRanges(
   return Math.exp(-1.25 * Math.sqrt(squared / used))
 }
 
+export function maSequenceEmbeddingRangesForCoverage(
+  coverageMask: number,
+): Array<readonly [number, number]> {
+  let offset = 0
+  const ranges: Array<readonly [number, number]> = []
+  const append = (bit: number, length: number) => {
+    if ((coverageMask & bit) !== 0) ranges.push([offset, offset + length])
+    offset += length
+  }
+  append(1, MA_SEQUENCE_DAILY_EMBEDDING_LENGTH)
+  append(2, MA_SEQUENCE_WEEKLY_EMBEDDING_LENGTH)
+  append(4, MA_SEQUENCE_MONTHLY_EMBEDDING_LENGTH)
+  append(8, MA_SEQUENCE_YEARLY_EMBEDDING_LENGTH)
+  return ranges
+}
+
 export function maSequenceBandNeighbors(band: number, maxBitDistance = 1): number[] {
   const values = [band]
   if (maxBitDistance >= 1) {
@@ -631,7 +1010,7 @@ export function maSequenceBandNeighbors(band: number, maxBitDistance = 1): numbe
 }
 
 export function stageCodeAt(prepared: MaSequencePrepared, index: number): string | null {
-  const stages = frameStages(prepared.daily, index)
+  const stages = frameStages(prepared.stage, index)
   if (stages.some((stage) => stage === 0)) return null
   return stages.join('')
 }

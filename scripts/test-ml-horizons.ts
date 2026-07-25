@@ -3,15 +3,10 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { ML_PRIMARY_HORIZON_LIST, ML_PRIMARY_HORIZONS } from '@/lib/backtest/ml-horizons'
 import { ML_PHYSICS_DEFAULT_HORIZONS } from '@/lib/backtest/ml-physics'
-import { HISTORICAL_ANALOG_HORIZONS } from '@/lib/ml/historical-analogs'
 
 const expected = [5, 10, 20, 40, 60, 90, 200]
 assert.deepEqual([...ML_PRIMARY_HORIZONS], expected)
 assert.deepEqual([...ML_PHYSICS_DEFAULT_HORIZONS], expected)
-for (const horizon of expected) {
-  assert.ok(HISTORICAL_ANALOG_HORIZONS.includes(horizon as never), `historical analog horizon ${horizon} is missing`)
-}
-
 const packageJson = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'package.json'), 'utf8')) as {
   scripts: Record<string, string>
 }

@@ -3,6 +3,13 @@
 
 import { NextResponse } from 'next/server'
 import { execGet } from '@/lib/db/client'
+import {
+  classifyEarningsTime,
+  predictEarningsTime,
+  type EarningsPredictionConfidence,
+  type EarningsTimeBucket,
+  type EarningsTimeKind,
+} from '@/lib/earnings-time'
 
 export const dynamic = 'force-dynamic'
 
@@ -24,6 +31,19 @@ interface EarningsCalendarRow {
   fiscal_period: string | null
   source: string | null
   source_url: string | null
+  scheduled_time: string | null
+  scheduled_time_kind: string | null
+  scheduled_time_source: string | null
+  scheduled_time_source_url: string | null
+  predicted_time: string | null
+  prediction_confidence: EarningsPredictionConfidence | null
+  prediction_sample_count: number | null
+  prediction_mode_count: number | null
+  actual_disclosed_date: string | null
+  actual_disclosed_time: string | null
+  actual_source: string | null
+  actual_source_url: string | null
+  time_bucket: EarningsTimeBucket | null
 }
 
 interface EarningsCalendarStats {
@@ -53,6 +73,16 @@ interface ResolvedNextEarnings {
   source: string | null
   kind: EarningsNextDateKind
   note: string | null
+  time: string | null
+  timeKind: EarningsTimeKind
+  timeBucket: EarningsTimeBucket
+  scheduledTime: string | null
+  scheduledTimeKind: string | null
+  scheduledTimeSource: string | null
+  predictedTime: string | null
+  predictionConfidence: EarningsPredictionConfidence | null
+  predictionSampleCount: number | null
+  predictionModeCount: number | null
 }
 
 function parseJson(value: string): Record<string, unknown> {
@@ -83,7 +113,10 @@ async function getTickerProfile(ticker: string): Promise<TickerProfile | null> {
 
 async function getEarningsAround(ticker: string, referenceDate: string | null) {
   const previous = await execGet<EarningsCalendarRow>(
-    `SELECT announce_date, fiscal_period, source, source_url
+    `SELECT announce_date, fiscal_period, source, source_url,
+            scheduled_time, scheduled_time_kind, scheduled_time_source, scheduled_time_source_url,
+            predicted_time, prediction_confidence, prediction_sample_count, prediction_mode_count,
+            actual_disclosed_date, actual_disclosed_time, actual_source, actual_source_url, time_bucket
      FROM earnings_calendar
      WHERE ticker = ?
        AND announce_date <= COALESCE(?, date('now'))
@@ -92,7 +125,10 @@ async function getEarningsAround(ticker: string, referenceDate: string | null) {
     [ticker, referenceDate],
   )
   const next = await execGet<EarningsCalendarRow>(
-    `SELECT announce_date, fiscal_period, source, source_url
+    `SELECT announce_date, fiscal_period, source, source_url,
+            scheduled_time, scheduled_time_kind, scheduled_time_source, scheduled_time_source_url,
+            predicted_time, prediction_confidence, prediction_sample_count, prediction_mode_count,
+            actual_disclosed_date, actual_disclosed_time, actual_source, actual_source_url, time_bucket
      FROM earnings_calendar
      WHERE ticker = ?
        AND announce_date > COALESCE(?, date('now'))
@@ -115,7 +151,19 @@ async function getEarningsAround(ticker: string, referenceDate: string | null) {
      FROM earnings_calendar
      WHERE source IN ('jpx', 'jquants')`,
   )
-  return { previous, next, stats, scheduleStats }
+  const historicalTimes = await execGet<{ times: string | null }>(
+    `SELECT group_concat(actual_disclosed_time, ',') AS times
+     FROM (
+       SELECT actual_disclosed_time
+       FROM earnings_calendar
+       WHERE ticker = ? AND actual_disclosed_time IS NOT NULL
+       ORDER BY announce_date DESC
+       LIMIT 8
+     )`,
+    [ticker],
+  )
+  const fallbackPrediction = predictEarningsTime(historicalTimes?.times?.split(',') ?? [])
+  return { previous, next, stats, scheduleStats, fallbackPrediction }
 }
 
 function resolveNextEarnings(
@@ -126,14 +174,31 @@ function resolveNextEarnings(
   referenceDate: string | null,
   allowEstimate: boolean,
   calendarCount: number,
+  fallbackPrediction: ReturnType<typeof predictEarningsTime>,
 ): ResolvedNextEarnings {
   if (next?.announce_date) {
+    const scheduledTime = next.scheduled_time
+    const predictedTime = next.predicted_time ?? fallbackPrediction?.time ?? null
+    const time = scheduledTime ?? predictedTime
+    const timeKind: EarningsTimeKind = scheduledTime
+      ? next.scheduled_time_kind === 'confirmed' ? 'confirmed' : 'scheduled'
+      : predictedTime ? 'predicted' : 'unknown'
     return {
       date: next.announce_date,
       fiscalPeriod: next.fiscal_period,
       source: next.source,
       kind: 'confirmed',
       note: null,
+      time,
+      timeKind,
+      timeBucket: next.time_bucket ?? classifyEarningsTime(time, next.announce_date),
+      scheduledTime,
+      scheduledTimeKind: next.scheduled_time_kind,
+      scheduledTimeSource: next.scheduled_time_source,
+      predictedTime,
+      predictionConfidence: next.prediction_confidence ?? fallbackPrediction?.confidence ?? null,
+      predictionSampleCount: next.prediction_sample_count ?? fallbackPrediction?.sampleCount ?? null,
+      predictionModeCount: next.prediction_mode_count ?? fallbackPrediction?.modeCount ?? null,
     }
   }
 
@@ -144,6 +209,7 @@ function resolveNextEarnings(
       source: fallbackSource,
       kind: 'cached',
       note: '旧スナップショット由来の予定です。公式予定の再取得後に更新されます。',
+      ...resolvedPredictionFields(fallbackPrediction, fallbackNextDate),
     }
   }
 
@@ -154,6 +220,7 @@ function resolveNextEarnings(
       source: null,
       kind: 'not_applicable',
       note: 'ETF/REIT等のため、決算予定の推定対象外です。',
+      ...resolvedPredictionFields(null, null),
     }
   }
 
@@ -165,6 +232,7 @@ function resolveNextEarnings(
       source: 'estimated_from_previous_earnings',
       kind: 'estimated',
       note: '公式予定が未発表のため、前回決算日から約3か月後を目安として表示しています。',
+      ...resolvedPredictionFields(fallbackPrediction, estimated),
     }
   }
 
@@ -176,6 +244,37 @@ function resolveNextEarnings(
     note: calendarCount > 0
       ? '公式予定はまだ発表されていません。'
       : '決算予定の取得履歴がまだありません。',
+    ...resolvedPredictionFields(null, null),
+  }
+}
+
+function resolvedPredictionFields(
+  prediction: ReturnType<typeof predictEarningsTime>,
+  announceDate: string | null,
+): Pick<
+  ResolvedNextEarnings,
+  | 'time'
+  | 'timeKind'
+  | 'timeBucket'
+  | 'scheduledTime'
+  | 'scheduledTimeKind'
+  | 'scheduledTimeSource'
+  | 'predictedTime'
+  | 'predictionConfidence'
+  | 'predictionSampleCount'
+  | 'predictionModeCount'
+> {
+  return {
+    time: prediction?.time ?? null,
+    timeKind: prediction ? 'predicted' : 'unknown',
+    timeBucket: classifyEarningsTime(prediction?.time, announceDate),
+    scheduledTime: null,
+    scheduledTimeKind: null,
+    scheduledTimeSource: null,
+    predictedTime: prediction?.time ?? null,
+    predictionConfidence: prediction?.confidence ?? null,
+    predictionSampleCount: prediction?.sampleCount ?? null,
+    predictionModeCount: prediction?.modeCount ?? null,
   }
 }
 
@@ -271,6 +370,7 @@ export async function GET(
       referenceDate,
       !isFundLikeProfile(profile, name),
       Number(calendar.stats?.count ?? 0),
+      calendar.fallbackPrediction,
     )
     return NextResponse.json({
       ticker,
@@ -279,11 +379,25 @@ export async function GET(
       earningsLastDate: previousDate,
       earningsLastFiscalPeriod: calendar.previous?.fiscal_period ?? null,
       earningsLastSource: calendar.previous?.source ?? null,
+      earningsLastActualDate: calendar.previous?.actual_disclosed_date ?? null,
+      earningsLastActualTime: calendar.previous?.actual_disclosed_time ?? null,
+      earningsLastActualSource: calendar.previous?.actual_source ?? null,
+      earningsLastScheduledTime: calendar.previous?.scheduled_time ?? null,
       earningsNextDate: nextEarnings.date,
       earningsNextFiscalPeriod: nextEarnings.fiscalPeriod,
       earningsNextSource: nextEarnings.source,
       earningsNextDateKind: nextEarnings.kind,
       earningsNextNote: nextEarnings.note,
+      earningsNextTime: nextEarnings.time,
+      earningsNextTimeKind: nextEarnings.timeKind,
+      earningsNextTimeBucket: nextEarnings.timeBucket,
+      earningsNextScheduledTime: nextEarnings.scheduledTime,
+      earningsNextScheduledTimeKind: nextEarnings.scheduledTimeKind,
+      earningsNextScheduledTimeSource: nextEarnings.scheduledTimeSource,
+      earningsNextPredictedTime: nextEarnings.predictedTime,
+      earningsNextPredictionConfidence: nextEarnings.predictionConfidence,
+      earningsNextPredictionSampleCount: nextEarnings.predictionSampleCount,
+      earningsNextPredictionModeCount: nextEarnings.predictionModeCount,
       earningsCalendarCount: Number(calendar.stats?.count ?? 0),
       earningsCalendarLatestKnownDate: calendar.stats?.latest_known_date ?? null,
       earningsCalendarLatestImportedAt: calendar.stats?.latest_imported_at ?? null,
@@ -316,6 +430,7 @@ export async function GET(
       latestPriceDate,
       !isFundLikeProfile(profile),
       Number(calendar.stats?.count ?? 0),
+      calendar.fallbackPrediction,
     )
     return NextResponse.json({
       ticker,
@@ -323,11 +438,25 @@ export async function GET(
       earningsLastDate: previousDate,
       earningsLastFiscalPeriod: calendar.previous?.fiscal_period ?? null,
       earningsLastSource: calendar.previous?.source ?? null,
+      earningsLastActualDate: calendar.previous?.actual_disclosed_date ?? null,
+      earningsLastActualTime: calendar.previous?.actual_disclosed_time ?? null,
+      earningsLastActualSource: calendar.previous?.actual_source ?? null,
+      earningsLastScheduledTime: calendar.previous?.scheduled_time ?? null,
       earningsNextDate: nextEarnings.date,
       earningsNextFiscalPeriod: nextEarnings.fiscalPeriod,
       earningsNextSource: nextEarnings.source,
       earningsNextDateKind: nextEarnings.kind,
       earningsNextNote: nextEarnings.note,
+      earningsNextTime: nextEarnings.time,
+      earningsNextTimeKind: nextEarnings.timeKind,
+      earningsNextTimeBucket: nextEarnings.timeBucket,
+      earningsNextScheduledTime: nextEarnings.scheduledTime,
+      earningsNextScheduledTimeKind: nextEarnings.scheduledTimeKind,
+      earningsNextScheduledTimeSource: nextEarnings.scheduledTimeSource,
+      earningsNextPredictedTime: nextEarnings.predictedTime,
+      earningsNextPredictionConfidence: nextEarnings.predictionConfidence,
+      earningsNextPredictionSampleCount: nextEarnings.predictionSampleCount,
+      earningsNextPredictionModeCount: nextEarnings.predictionModeCount,
       earningsCalendarCount: Number(calendar.stats?.count ?? 0),
       earningsCalendarLatestKnownDate: calendar.stats?.latest_known_date ?? null,
       earningsCalendarLatestImportedAt: calendar.stats?.latest_imported_at ?? null,
@@ -349,6 +478,7 @@ export async function GET(
     referenceDate,
     !isFundLikeProfile(profile, row.name),
     Number(calendar.stats?.count ?? 0),
+    calendar.fallbackPrediction,
   )
 
   return NextResponse.json({
@@ -358,11 +488,25 @@ export async function GET(
     earningsLastDate: previousDate,
     earningsLastFiscalPeriod: calendar.previous?.fiscal_period ?? null,
     earningsLastSource: calendar.previous?.source ?? null,
+    earningsLastActualDate: calendar.previous?.actual_disclosed_date ?? null,
+    earningsLastActualTime: calendar.previous?.actual_disclosed_time ?? null,
+    earningsLastActualSource: calendar.previous?.actual_source ?? null,
+    earningsLastScheduledTime: calendar.previous?.scheduled_time ?? null,
     earningsNextDate: nextEarnings.date,
     earningsNextFiscalPeriod: nextEarnings.fiscalPeriod,
     earningsNextSource: nextEarnings.source,
     earningsNextDateKind: nextEarnings.kind,
     earningsNextNote: nextEarnings.note,
+    earningsNextTime: nextEarnings.time,
+    earningsNextTimeKind: nextEarnings.timeKind,
+    earningsNextTimeBucket: nextEarnings.timeBucket,
+    earningsNextScheduledTime: nextEarnings.scheduledTime,
+    earningsNextScheduledTimeKind: nextEarnings.scheduledTimeKind,
+    earningsNextScheduledTimeSource: nextEarnings.scheduledTimeSource,
+    earningsNextPredictedTime: nextEarnings.predictedTime,
+    earningsNextPredictionConfidence: nextEarnings.predictionConfidence,
+    earningsNextPredictionSampleCount: nextEarnings.predictionSampleCount,
+    earningsNextPredictionModeCount: nextEarnings.predictionModeCount,
     earningsCalendarCount: Number(calendar.stats?.count ?? 0),
     earningsCalendarLatestKnownDate: calendar.stats?.latest_known_date ?? null,
     earningsCalendarLatestImportedAt: calendar.stats?.latest_imported_at ?? null,

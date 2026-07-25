@@ -92,6 +92,8 @@ async function main() {
   try {
     await runRequiredWithRetry('scripts/batch-earnings.ts')
     await lock?.heartbeat()
+    await runRequiredWithRetry('scripts/batch-earnings-times.ts')
+    await lock?.heartbeat()
     await runRequired('scripts/build-serving-stock.ts')
     await lock?.heartbeat()
     await runRequired('scripts/build-dashboard-cache.ts')

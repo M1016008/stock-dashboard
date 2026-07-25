@@ -46,6 +46,8 @@ function waitForHealth(url: string, timeoutSeconds = 60): boolean {
 }
 
 removeGenerated(stagePath)
+runNpm('test:historical-analogs')
+runNpm('test:quote-technicals')
 runNpm('build', {
   ...process.env,
   NEXT_DIST_DIR: stageName,

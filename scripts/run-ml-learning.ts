@@ -420,11 +420,10 @@ async function cleanupStaleBatchRuns(heartbeat: () => Promise<void>): Promise<vo
   }
 }
 
-async function runHeavyMlChain(heartbeat: () => Promise<void>): Promise<RunResult> {
+async function runHeavyMlChain(): Promise<RunResult> {
   const npmScript = process.env.ML_LEARNING_NPM_SCRIPT?.trim() || 'batch:ml-daily'
   await waitForMemoryHeadroom({ label: `npm run ${npmScript}` })
   return new Promise((resolve, reject) => {
-    const stopHeartbeat = startHeartbeatLoop(heartbeat, npmScript)
     const timeoutMinutes = numberEnv('UPDATE_CHILD_TIMEOUT_MINUTES', 720)
     let timedOut = false
 
@@ -452,7 +451,6 @@ async function runHeavyMlChain(heartbeat: () => Promise<void>): Promise<RunResul
 
     const clearTimers = () => {
       clearTimeout(timeoutTimer)
-      stopHeartbeat()
     }
 
     activeChild.on('error', (err) => {
@@ -554,7 +552,7 @@ async function main(): Promise<void> {
       await waitForBlockingBatchRuns(blockingBatchRuns, runId)
       await lock.heartbeat()
 
-      const result = await runHeavyMlChain(() => lock.heartbeat())
+      const result = await runHeavyMlChain()
       if (result.code === 0) {
         lastError = null
         break

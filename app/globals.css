@@ -185,7 +185,10 @@ body[data-density='compact'] table td {
 
 @media (max-width: 767px) {
   html { scroll-padding-top: 160px; }
-  .stock-detail-sticky { top: 137px; }
+  .stock-detail-sticky {
+    position: relative;
+    top: auto;
+  }
 }
 
 .site-shell {

@@ -37,6 +37,13 @@ export function toJQuantsCode(ticker: string): string {
   return ticker.replace(/\.T$/i, '')
 }
 
+export function fromJQuantsCode(code: string): string {
+  const normalized = toJQuantsCode(code)
+  return normalized.length === 5 && normalized.endsWith('0')
+    ? normalized.slice(0, -1)
+    : normalized
+}
+
 // ─────────────────────────────────────
 // API: 日足 OHLCV (/equities/bars/daily)
 // ─────────────────────────────────────
@@ -150,7 +157,7 @@ export async function fetchJQuantsDailyByDate(date: string): Promise<JQuantsDail
       const ohlcv = toOhlcv(row)
       if (!ohlcv) continue
       all.push({
-        ticker: toJQuantsCode(row.Code).replace(/0$/, ''),
+        ticker: fromJQuantsCode(row.Code),
         ...ohlcv,
       })
     }
@@ -238,6 +245,23 @@ export interface JFinsSummaryRow {
   Eq: string                 // 自己資本
   EqAR: string               // 自己資本比率
   BPS: string                // 1株あたり純資産
+  OdP?: string               // 経常利益
+  CFO?: string               // 営業キャッシュフロー
+  CFI?: string               // 投資キャッシュフロー
+  CFF?: string               // 財務キャッシュフロー
+  CashEq?: string            // 現金及び現金同等物
+  DivAnn?: string            // 年間配当
+  PayoutRatioAnn?: string    // 配当性向
+  FSales?: string            // 通期会社予想 売上高
+  FOP?: string               // 通期会社予想 営業利益
+  FNP?: string               // 通期会社予想 純利益
+  FEPS?: string              // 通期会社予想 EPS
+  FDivAnn?: string           // 通期会社予想 年間配当
+  NxFSales?: string          // 次期会社予想 売上高
+  NxFOP?: string             // 次期会社予想 営業利益
+  NxFNp?: string             // 次期会社予想 純利益
+  NxFEPS?: string            // 次期会社予想 EPS
+  NxFDivAnn?: string         // 次期会社予想 年間配当
   ShOutFY: string            // 期末発行済株式数
   TrShFY: string             // 期末自己株式数
   AvgSh: string              // 期中平均株式数
@@ -274,6 +298,98 @@ export async function fetchJQuantsFinsSummary(ticker: string): Promise<JFinsSumm
   } while (paginationKey)
 
   return all
+}
+
+export async function fetchJQuantsFinsSummaryByDate(date: string): Promise<JFinsSummaryRow[]> {
+  const apiKey = getApiKey()
+  const all: JFinsSummaryRow[] = []
+  let paginationKey: string | undefined
+
+  do {
+    const params = new URLSearchParams({ date })
+    if (paginationKey) params.set('pagination_key', paginationKey)
+    const res = await fetch(`${BASE_URL}/fins/summary?${params.toString()}`, {
+      headers: { 'x-api-key': apiKey },
+    })
+    if (!res.ok) {
+      throw new Error(`J-Quants fins/summary 失敗 (${date}): ${res.status} ${await res.text()}`)
+    }
+    const json = await res.json() as JFinsSummaryResponse
+    all.push(...(json.data ?? []))
+    paginationKey = json.pagination_key
+  } while (paginationKey)
+
+  return all
+}
+
+// ─────────────────────────────────────
+// API: 日々公表信用取引残高 (/markets/margin-alert)
+// ─────────────────────────────────────
+
+export interface JMarginAlertRow {
+  PubDate: string
+  Code: string
+  AppDate: string
+  PubReason?: Record<string, string> | string | null
+  ShrtOut?: number | null
+  ShrtOutChg?: number | null
+  ShrtOutRatio?: number | null
+  LongOut?: number | null
+  LongOutChg?: number | null
+  LongOutRatio?: number | null
+  SLRatio?: number | null
+  ShrtNegOut?: number | null
+  ShrtNegOutChg?: number | null
+  ShrtStdOut?: number | null
+  ShrtStdOutChg?: number | null
+  LongNegOut?: number | null
+  LongNegOutChg?: number | null
+  LongStdOut?: number | null
+  LongStdOutChg?: number | null
+  TSEMrgnRegCls?: string | null
+}
+
+interface JMarginAlertResponse {
+  data?: JMarginAlertRow[]
+  pagination_key?: string
+}
+
+export async function fetchJQuantsMarginAlert(options: {
+  ticker?: string
+  date?: string
+  from?: string
+  to?: string
+} = {}): Promise<JMarginAlertRow[]> {
+  const apiKey = getApiKey()
+  const all: JMarginAlertRow[] = []
+  let paginationKey: string | undefined
+
+  do {
+    const params = new URLSearchParams()
+    if (options.ticker) params.set('code', toJQuantsCode(options.ticker))
+    if (options.date) {
+      params.set('date', options.date)
+    } else {
+      if (options.from) params.set('from', options.from)
+      if (options.to) params.set('to', options.to)
+    }
+    if (paginationKey) params.set('pagination_key', paginationKey)
+    const res = await fetch(`${BASE_URL}/markets/margin-alert${params.size > 0 ? `?${params}` : ''}`, {
+      headers: { 'x-api-key': apiKey },
+    })
+    if (!res.ok) {
+      throw new Error(`J-Quants markets/margin-alert 失敗: ${res.status} ${await res.text()}`)
+    }
+    const json = await res.json() as JMarginAlertResponse
+    all.push(...(json.data ?? []))
+    paginationKey = json.pagination_key
+  } while (paginationKey)
+
+  return all.sort((a, b) => (
+    a.AppDate.localeCompare(b.AppDate)
+    || a.PubDate.localeCompare(b.PubDate)
+    || a.Code.localeCompare(b.Code)
+  ))
 }
 
 // ─────────────────────────────────────

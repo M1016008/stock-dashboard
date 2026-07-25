@@ -466,6 +466,15 @@ export interface EarningsRow extends EarningsSignalDecoration {
   daysLeft: number
   kind: 'upcoming' | 'completed'
   source: string | null
+  scheduledTime: string | null
+  scheduledTimeKind: string | null
+  predictedTime: string | null
+  predictionConfidence: string | null
+  predictionSampleCount: number | null
+  predictionModeCount: number | null
+  actualDisclosedDate: string | null
+  actualDisclosedTime: string | null
+  timeBucket: string | null
   sector17Name: string | null
   sector33Name: string | null
   marketSegment: string | null
@@ -513,6 +522,7 @@ export type EarningsSortKey =
   | 'signalCount'
   | 'stageCode'
   | 'postEarningsChangePct'
+  | 'announcementTime'
 export type EarningsSortDir = 'asc' | 'desc'
 
 export interface EarningsCalendarFilters {
@@ -529,6 +539,7 @@ export interface EarningsCalendarFilters {
   priceMin?: number | null
   priceMax?: number | null
   signal?: string | null
+  timeBucket?: string | null
   sortBy?: EarningsSortKey | null
   sortDir?: EarningsSortDir | null
   limit?: number | null
@@ -550,6 +561,7 @@ export interface EarningsFilterOptions {
   stageCodes: EarningsFilterOption[]
   dailyPatterns: EarningsFilterOption[]
   signals: EarningsFilterOption[]
+  timeBuckets: EarningsFilterOption[]
 }
 
 export interface EarningsScopeSummary {
@@ -579,6 +591,7 @@ function emptyFilterOptions(): EarningsFilterOptions {
     stageCodes: [],
     dailyPatterns: [],
     signals: [],
+    timeBuckets: [],
   }
 }
 
@@ -654,6 +667,7 @@ function filterEarningsRows(rows: EarningsRow[], filters: EarningsCalendarFilter
   const stageCode = cleanFilterValue(filters.stageCode)
   const dailyPattern = cleanFilterValue(filters.dailyPattern)
   const signal = cleanFilterValue(filters.signal)
+  const timeBucket = cleanFilterValue(filters.timeBucket)
   const priceMin = filters.priceMin
   const priceMax = filters.priceMax
 
@@ -669,6 +683,7 @@ function filterEarningsRows(rows: EarningsRow[], filters: EarningsCalendarFilter
     if (priceMin != null && (row.price == null || row.price < priceMin)) return false
     if (priceMax != null && (row.price == null || row.price > priceMax)) return false
     if (signal && !(row.signalLabels ?? []).includes(signal)) return false
+    if (timeBucket && row.timeBucket !== timeBucket) return false
     return true
   })
 }
@@ -725,6 +740,11 @@ function compareEarningsRows(a: EarningsRow, b: EarningsRow, sortBy: EarningsSor
       return compareNullableText(stageCodeFor(a), stageCodeFor(b))
     case 'postEarningsChangePct':
       return compareNullableNumber(a.postEarningsChangePct, b.postEarningsChangePct)
+    case 'announcementTime':
+      return compareNullableText(
+        a.actualDisclosedTime ?? a.scheduledTime ?? a.predictedTime,
+        b.actualDisclosedTime ?? b.scheduledTime ?? b.predictedTime,
+      )
     case 'daysLeft':
     default:
       return compareNullableNumber(a.daysLeft, b.daysLeft)
@@ -759,6 +779,8 @@ function earningsSortValueMissing(row: EarningsRow, sortBy: EarningsSortKey): bo
       return row.avgVolume60 == null || !Number.isFinite(row.avgVolume60)
     case 'postEarningsChangePct':
       return row.postEarningsChangePct == null || !Number.isFinite(row.postEarningsChangePct)
+    case 'announcementTime':
+      return !cleanFilterValue(row.actualDisclosedTime ?? row.scheduledTime ?? row.predictedTime)
     case 'signalCount':
     case 'daysLeft':
     default:
@@ -809,7 +831,17 @@ function buildEarningsFilterOptions(rows: EarningsRow[]): EarningsFilterOptions 
     stageCodes: countedOptions(rows.map(stageCodeFor)),
     dailyPatterns: countedOptions(rows.map(dailyPatternFor), (value) => `日足${value[0]}/${value[1]}`),
     signals: countedOptions(rows.flatMap((row) => row.signalLabels ?? [])),
+    timeBuckets: countedOptions(rows.map((row) => row.timeBucket), earningsTimeBucketOptionLabel),
   }
+}
+
+function earningsTimeBucketOptionLabel(value: string): string {
+  if (value === 'pre_open') return '寄付前'
+  if (value === 'morning') return '前場中'
+  if (value === 'lunch') return '昼休み'
+  if (value === 'afternoon') return '後場中'
+  if (value === 'after_close') return '大引け後'
+  return '時刻未定'
 }
 
 function applyEarningsScope(
@@ -900,6 +932,9 @@ export async function getEarningsCalendar(
     `
     WITH cal AS (
       SELECT ticker, announce_date, company_name, sector_name, market_segment, source,
+             scheduled_time, scheduled_time_kind, predicted_time, prediction_confidence,
+             prediction_sample_count, prediction_mode_count,
+             actual_disclosed_date, actual_disclosed_time, time_bucket,
              CAST(julianday(announce_date) - julianday(?) AS INTEGER) AS daysLeft
       FROM earnings_calendar
       WHERE ${calWhere}
@@ -908,6 +943,11 @@ export async function getEarningsCalendar(
     py AS (SELECT ticker, close AS prev_close FROM ohlcv_daily WHERE date = ?),
     st AS (SELECT * FROM daily_snapshots WHERE date = ?)
     SELECT cal.ticker, COALESCE(tu.name, cal.company_name) AS name, cal.announce_date, cal.daysLeft, 'upcoming' AS kind, cal.source,
+           cal.scheduled_time AS scheduledTime, cal.scheduled_time_kind AS scheduledTimeKind,
+           cal.predicted_time AS predictedTime, cal.prediction_confidence AS predictionConfidence,
+           cal.prediction_sample_count AS predictionSampleCount, cal.prediction_mode_count AS predictionModeCount,
+           cal.actual_disclosed_date AS actualDisclosedDate, cal.actual_disclosed_time AS actualDisclosedTime,
+           cal.time_bucket AS timeBucket,
            tu.sector17_name AS sector17Name,
            COALESCE(tu.sector33_name, cal.sector_name) AS sector33Name,
            COALESCE(tu.market_segment, cal.market_segment) AS marketSegment,
@@ -989,6 +1029,9 @@ async function getRecentEarningsCalendarRows(baseDate: string, prevDate: string 
     ),
     cal AS (
       SELECT e.ticker, e.announce_date, e.company_name, e.sector_name, e.market_segment, e.source,
+             e.scheduled_time, e.scheduled_time_kind, e.predicted_time, e.prediction_confidence,
+             e.prediction_sample_count, e.prediction_mode_count,
+             e.actual_disclosed_date, e.actual_disclosed_time, e.time_bucket,
              CAST(julianday(e.announce_date) - julianday(?) AS INTEGER) AS daysLeft
       FROM earnings_calendar e
       JOIN latest_cal lc ON lc.announce_date = e.announce_date
@@ -999,6 +1042,11 @@ async function getRecentEarningsCalendarRows(baseDate: string, prevDate: string 
     py AS (SELECT ticker, close AS prev_close FROM ohlcv_daily WHERE date = ?),
     st AS (SELECT * FROM daily_snapshots WHERE date = ?)
     SELECT cal.ticker, COALESCE(tu.name, cal.company_name) AS name, cal.announce_date, cal.daysLeft, 'upcoming' AS kind, cal.source,
+           cal.scheduled_time AS scheduledTime, cal.scheduled_time_kind AS scheduledTimeKind,
+           cal.predicted_time AS predictedTime, cal.prediction_confidence AS predictionConfidence,
+           cal.prediction_sample_count AS predictionSampleCount, cal.prediction_mode_count AS predictionModeCount,
+           cal.actual_disclosed_date AS actualDisclosedDate, cal.actual_disclosed_time AS actualDisclosedTime,
+           cal.time_bucket AS timeBucket,
            tu.sector17_name AS sector17Name,
            COALESCE(tu.sector33_name, cal.sector_name) AS sector33Name,
            COALESCE(tu.market_segment, cal.market_segment) AS marketSegment,
@@ -1070,6 +1118,9 @@ async function getLatestImportedEarningsCalendarRows(baseDate: string, prevDate:
     ),
     cal AS (
       SELECT e.ticker, e.announce_date, e.company_name, e.sector_name, e.market_segment, e.source,
+             e.scheduled_time, e.scheduled_time_kind, e.predicted_time, e.prediction_confidence,
+             e.prediction_sample_count, e.prediction_mode_count,
+             e.actual_disclosed_date, e.actual_disclosed_time, e.time_bucket,
              CAST(julianday(e.announce_date) - julianday(?) AS INTEGER) AS daysLeft
       FROM earnings_calendar e
       JOIN latest_import li ON li.imported_at = e.imported_at
@@ -1082,6 +1133,11 @@ async function getLatestImportedEarningsCalendarRows(baseDate: string, prevDate:
     py AS (SELECT ticker, close AS prev_close FROM ohlcv_daily WHERE date = ?),
     st AS (SELECT * FROM daily_snapshots WHERE date = ?)
     SELECT cal.ticker, COALESCE(tu.name, cal.company_name) AS name, cal.announce_date, cal.daysLeft, 'upcoming' AS kind, cal.source,
+           cal.scheduled_time AS scheduledTime, cal.scheduled_time_kind AS scheduledTimeKind,
+           cal.predicted_time AS predictedTime, cal.prediction_confidence AS predictionConfidence,
+           cal.prediction_sample_count AS predictionSampleCount, cal.prediction_mode_count AS predictionModeCount,
+           cal.actual_disclosed_date AS actualDisclosedDate, cal.actual_disclosed_time AS actualDisclosedTime,
+           cal.time_bucket AS timeBucket,
            tu.sector17_name AS sector17Name,
            COALESCE(tu.sector33_name, cal.sector_name) AS sector33Name,
            COALESCE(tu.market_segment, cal.market_segment) AS marketSegment,
@@ -1156,6 +1212,9 @@ async function getCompletedEarningsCalendarRows(
     `
     WITH cal AS (
       SELECT e.ticker, e.announce_date, e.company_name, e.sector_name, e.market_segment, e.source,
+             e.scheduled_time, e.scheduled_time_kind, e.predicted_time, e.prediction_confidence,
+             e.prediction_sample_count, e.prediction_mode_count,
+             e.actual_disclosed_date, e.actual_disclosed_time, e.time_bucket,
              CAST(julianday(e.announce_date) - julianday(?) AS INTEGER) AS daysLeft
       FROM earnings_calendar e
       WHERE e.announce_date BETWEEN date(?, '-' || ? || ' days') AND date(?, '-1 day')
@@ -1177,6 +1236,11 @@ async function getCompletedEarningsCalendarRows(
       LEFT JOIN ohlcv_daily od ON od.ticker = ft.ticker AND od.date = ft.base_date
     )
     SELECT cal.ticker, COALESCE(tu.name, cal.company_name) AS name, cal.announce_date, cal.daysLeft, 'completed' AS kind, cal.source,
+           cal.scheduled_time AS scheduledTime, cal.scheduled_time_kind AS scheduledTimeKind,
+           cal.predicted_time AS predictedTime, cal.prediction_confidence AS predictionConfidence,
+           cal.prediction_sample_count AS predictionSampleCount, cal.prediction_mode_count AS predictionModeCount,
+           cal.actual_disclosed_date AS actualDisclosedDate, cal.actual_disclosed_time AS actualDisclosedTime,
+           cal.time_bucket AS timeBucket,
            tu.sector17_name AS sector17Name,
            COALESCE(tu.sector33_name, cal.sector_name) AS sector33Name,
            COALESCE(tu.market_segment, cal.market_segment) AS marketSegment,

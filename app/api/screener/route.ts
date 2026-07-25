@@ -50,6 +50,13 @@ interface SnapshotRow {
   earnings_next_date: string | null
   earnings_next_source: string | null
   earnings_next_fiscal_period: string | null
+  earnings_next_scheduled_time: string | null
+  earnings_next_scheduled_time_kind: string | null
+  earnings_next_predicted_time: string | null
+  earnings_next_prediction_confidence: string | null
+  earnings_next_prediction_sample_count: number | null
+  earnings_next_prediction_mode_count: number | null
+  earnings_next_time_bucket: string | null
   earnings_calendar_count: number | null
   earnings_latest_known_date: string | null
   earnings_summary_count: number | null
@@ -153,6 +160,12 @@ interface ScreenerStockRow {
   earningsNextDateKind: 'confirmed' | 'estimated' | 'not_announced' | 'not_applicable' | 'no_history'
   earningsNextDateSource: string | null
   earningsNextFiscalPeriod: string | null
+  earningsNextTime: string | null
+  earningsNextTimeKind: 'confirmed' | 'scheduled' | 'predicted' | 'unknown'
+  earningsNextTimeBucket: string | null
+  earningsNextPredictionConfidence: string | null
+  earningsNextPredictionSampleCount: number | null
+  earningsNextPredictionModeCount: number | null
   daily_a_stage: number | null
   daily_b_stage: number | null
   weekly_a_stage: number | null
@@ -384,6 +397,48 @@ async function loadBaseSnapshotRows(date: string): Promise<BaseSnapshotRow[]> {
         ORDER BY e.announce_date ASC
         LIMIT 1
       ) AS earnings_next_fiscal_period,
+      (
+        SELECT e.scheduled_time
+        FROM earnings_calendar e
+        WHERE e.ticker = s.ticker AND e.announce_date >= s.date
+        ORDER BY e.announce_date ASC LIMIT 1
+      ) AS earnings_next_scheduled_time,
+      (
+        SELECT e.scheduled_time_kind
+        FROM earnings_calendar e
+        WHERE e.ticker = s.ticker AND e.announce_date >= s.date
+        ORDER BY e.announce_date ASC LIMIT 1
+      ) AS earnings_next_scheduled_time_kind,
+      (
+        SELECT e.predicted_time
+        FROM earnings_calendar e
+        WHERE e.ticker = s.ticker AND e.announce_date >= s.date
+        ORDER BY e.announce_date ASC LIMIT 1
+      ) AS earnings_next_predicted_time,
+      (
+        SELECT e.prediction_confidence
+        FROM earnings_calendar e
+        WHERE e.ticker = s.ticker AND e.announce_date >= s.date
+        ORDER BY e.announce_date ASC LIMIT 1
+      ) AS earnings_next_prediction_confidence,
+      (
+        SELECT e.prediction_sample_count
+        FROM earnings_calendar e
+        WHERE e.ticker = s.ticker AND e.announce_date >= s.date
+        ORDER BY e.announce_date ASC LIMIT 1
+      ) AS earnings_next_prediction_sample_count,
+      (
+        SELECT e.prediction_mode_count
+        FROM earnings_calendar e
+        WHERE e.ticker = s.ticker AND e.announce_date >= s.date
+        ORDER BY e.announce_date ASC LIMIT 1
+      ) AS earnings_next_prediction_mode_count,
+      (
+        SELECT e.time_bucket
+        FROM earnings_calendar e
+        WHERE e.ticker = s.ticker AND e.announce_date >= s.date
+        ORDER BY e.announce_date ASC LIMIT 1
+      ) AS earnings_next_time_bucket,
       (SELECT COUNT(*) FROM earnings_calendar e WHERE e.ticker = s.ticker) AS earnings_calendar_count,
       (SELECT MAX(e.announce_date) FROM earnings_calendar e WHERE e.ticker = s.ticker) AS earnings_latest_known_date,
       (SELECT COUNT(*) FROM earnings_calendar e WHERE e.ticker = s.ticker AND e.source = 'jquants_fins_summary') AS earnings_summary_count,
@@ -779,6 +834,12 @@ function buildResultRow(
     earningsNextDateKind: nextEarnings.earningsNextDateKind,
     earningsNextDateSource: nextEarnings.earningsNextDateSource,
     earningsNextFiscalPeriod: nextEarnings.earningsNextFiscalPeriod,
+    earningsNextTime: nextEarnings.earningsNextTime,
+    earningsNextTimeKind: nextEarnings.earningsNextTimeKind,
+    earningsNextTimeBucket: nextEarnings.earningsNextTimeBucket,
+    earningsNextPredictionConfidence: nextEarnings.earningsNextPredictionConfidence,
+    earningsNextPredictionSampleCount: nextEarnings.earningsNextPredictionSampleCount,
+    earningsNextPredictionModeCount: nextEarnings.earningsNextPredictionModeCount,
     daily_a_stage: s.daily_a_stage,
     daily_b_stage: s.daily_b_stage,
     weekly_a_stage: s.weekly_a_stage,
@@ -874,13 +935,35 @@ function resolveNextEarningsDate(
   marketSegment: string,
   sectorLarge: string | null,
   sector33: string | null,
-): Pick<ScreenerStockRow, 'earningsNextDate' | 'earningsNextDateKind' | 'earningsNextDateSource' | 'earningsNextFiscalPeriod'> {
+): Pick<
+  ScreenerStockRow,
+  | 'earningsNextDate'
+  | 'earningsNextDateKind'
+  | 'earningsNextDateSource'
+  | 'earningsNextFiscalPeriod'
+  | 'earningsNextTime'
+  | 'earningsNextTimeKind'
+  | 'earningsNextTimeBucket'
+  | 'earningsNextPredictionConfidence'
+  | 'earningsNextPredictionSampleCount'
+  | 'earningsNextPredictionModeCount'
+> {
   if (s.earnings_next_date) {
+    const scheduledTime = s.earnings_next_scheduled_time
+    const predictedTime = s.earnings_next_predicted_time
     return {
       earningsNextDate: s.earnings_next_date,
       earningsNextDateKind: 'confirmed',
       earningsNextDateSource: s.earnings_next_source,
       earningsNextFiscalPeriod: s.earnings_next_fiscal_period,
+      earningsNextTime: scheduledTime ?? predictedTime,
+      earningsNextTimeKind: scheduledTime
+        ? s.earnings_next_scheduled_time_kind === 'confirmed' ? 'confirmed' : 'scheduled'
+        : predictedTime ? 'predicted' : 'unknown',
+      earningsNextTimeBucket: s.earnings_next_time_bucket,
+      earningsNextPredictionConfidence: s.earnings_next_prediction_confidence,
+      earningsNextPredictionSampleCount: s.earnings_next_prediction_sample_count,
+      earningsNextPredictionModeCount: s.earnings_next_prediction_mode_count,
     }
   }
 
@@ -890,6 +973,7 @@ function resolveNextEarningsDate(
       earningsNextDateKind: 'not_applicable',
       earningsNextDateSource: null,
       earningsNextFiscalPeriod: null,
+      ...emptyNextEarningsTime(),
     }
   }
 
@@ -900,6 +984,7 @@ function resolveNextEarningsDate(
       earningsNextDateKind: 'estimated',
       earningsNextDateSource: 'estimated_from_previous_earnings',
       earningsNextFiscalPeriod: null,
+      ...emptyNextEarningsTime(),
     }
   }
 
@@ -908,6 +993,26 @@ function resolveNextEarningsDate(
     earningsNextDateKind: Number(s.earnings_calendar_count ?? 0) > 0 ? 'not_announced' : 'no_history',
     earningsNextDateSource: null,
     earningsNextFiscalPeriod: null,
+    ...emptyNextEarningsTime(),
+  }
+}
+
+function emptyNextEarningsTime(): Pick<
+  ScreenerStockRow,
+  | 'earningsNextTime'
+  | 'earningsNextTimeKind'
+  | 'earningsNextTimeBucket'
+  | 'earningsNextPredictionConfidence'
+  | 'earningsNextPredictionSampleCount'
+  | 'earningsNextPredictionModeCount'
+> {
+  return {
+    earningsNextTime: null,
+    earningsNextTimeKind: 'unknown',
+    earningsNextTimeBucket: 'unknown',
+    earningsNextPredictionConfidence: null,
+    earningsNextPredictionSampleCount: null,
+    earningsNextPredictionModeCount: null,
   }
 }
 

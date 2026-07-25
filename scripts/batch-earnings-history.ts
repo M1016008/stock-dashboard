@@ -6,6 +6,7 @@
 import { db, client } from '@/lib/db/client'
 import { batchRuns } from '@/lib/db/schema'
 import { fetchJQuantsFinsSummary, type JFinsSummaryRow } from '@/lib/jquants'
+import { classifyEarningsTime, normalizeEarningsTime } from '@/lib/earnings-time'
 import { eq } from 'drizzle-orm'
 
 const RATE_LIMIT_MS = Number(process.env.EARNINGS_HISTORY_RATE_LIMIT_MS ?? 850)
@@ -102,24 +103,34 @@ async function loadTargets(): Promise<TargetTicker[]> {
 async function upsertRows(target: TargetTicker, rows: JFinsSummaryRow[], importedAt: number): Promise<number> {
   let inserted = 0
   for (const row of rows.filter(isFinancialStatement)) {
+    const actualTime = normalizeEarningsTime(row.DiscTime)
+    const actualAt = actualTime ? `${row.DiscDate}T${actualTime}:00+09:00` : null
     await client.execute({
       sql: `
         INSERT INTO earnings_calendar (
           ticker, announce_date, fiscal_period, company_name, sector_name,
-          market_segment, source, source_url, imported_at
+          market_segment, source, source_url,
+          actual_disclosed_date, actual_disclosed_time, actual_disclosed_at,
+          actual_source, actual_source_url, time_bucket, time_updated_at, imported_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(ticker, announce_date) DO UPDATE SET
           fiscal_period = COALESCE(earnings_calendar.fiscal_period, excluded.fiscal_period),
           company_name = COALESCE(earnings_calendar.company_name, excluded.company_name),
           sector_name = COALESCE(earnings_calendar.sector_name, excluded.sector_name),
           market_segment = COALESCE(earnings_calendar.market_segment, excluded.market_segment),
           source = CASE
-            WHEN excluded.source = 'jquants_fins_summary' THEN excluded.source
             WHEN earnings_calendar.source IN ('jpx', 'jquants') THEN earnings_calendar.source
             ELSE excluded.source
           END,
           source_url = COALESCE(excluded.source_url, earnings_calendar.source_url),
+          actual_disclosed_date = COALESCE(excluded.actual_disclosed_date, earnings_calendar.actual_disclosed_date),
+          actual_disclosed_time = COALESCE(excluded.actual_disclosed_time, earnings_calendar.actual_disclosed_time),
+          actual_disclosed_at = COALESCE(excluded.actual_disclosed_at, earnings_calendar.actual_disclosed_at),
+          actual_source = COALESCE(excluded.actual_source, earnings_calendar.actual_source),
+          actual_source_url = COALESCE(excluded.actual_source_url, earnings_calendar.actual_source_url),
+          time_bucket = COALESCE(excluded.time_bucket, earnings_calendar.time_bucket),
+          time_updated_at = MAX(COALESCE(earnings_calendar.time_updated_at, 0), excluded.time_updated_at),
           imported_at = MAX(earnings_calendar.imported_at, excluded.imported_at)
       `,
       args: [
@@ -131,6 +142,13 @@ async function upsertRows(target: TargetTicker, rows: JFinsSummaryRow[], importe
         target.market_segment,
         'jquants_fins_summary',
         SOURCE_URL,
+        row.DiscDate,
+        actualTime,
+        actualAt,
+        'jquants_fins_summary',
+        SOURCE_URL,
+        classifyEarningsTime(actualTime, row.DiscDate),
+        importedAt,
         importedAt,
       ],
     })

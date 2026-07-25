@@ -76,6 +76,7 @@ function parseSortKey(value: string | undefined): EarningsSortKey | null {
   if (
     value === 'daysLeft' ||
     value === 'announceDate' ||
+    value === 'announcementTime' ||
     value === 'ticker' ||
     value === 'name' ||
     value === 'market' ||
@@ -124,6 +125,7 @@ export default async function EarningsPage({
     priceMin: parseNumberParam(firstParam(sp.priceMin)),
     priceMax: parseNumberParam(firstParam(sp.priceMax)),
     signal: firstParam(sp.signal) ?? null,
+    timeBucket: firstParam(sp.timeBucket) ?? null,
     sortBy: parseSortKey(firstParam(sp.sort)),
     sortDir: parseSortDir(firstParam(sp.dir)),
     limit: parseLimit(firstParam(sp.limit)),

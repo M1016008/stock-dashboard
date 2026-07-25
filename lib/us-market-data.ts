@@ -2,6 +2,7 @@ import { execAll, execGet } from '@/lib/db/client'
 import { normalizeTickerForMarket } from '@/lib/markets'
 import { getUsDisplayName } from '@/lib/us-symbol-aliases'
 import type { StockQuote } from '@/types/stock'
+import { buildQuoteTechnicalSummary } from '@/lib/quote-technicals'
 
 export async function getUsQuote(rawTicker: string): Promise<StockQuote | null> {
   const ticker = normalizeTickerForMarket(rawTicker, 'US')
@@ -14,7 +15,7 @@ export async function getUsQuote(rawTicker: string): Promise<StockQuote | null> 
      FROM market_ohlcv_daily
      WHERE market = 'US' AND ticker = ?
      ORDER BY date DESC
-     LIMIT 80`,
+     LIMIT 260`,
     [ticker],
   )
   if (rows.length === 0) return null
@@ -44,6 +45,7 @@ export async function getUsQuote(rawTicker: string): Promise<StockQuote | null> 
   )
   const change = prev ? latest.close - prev.close : 0
   const changePercent = prev && prev.close !== 0 ? 100 * change / prev.close : 0
+  const technicals = buildQuoteTechnicalSummary([...rows].reverse())
   const priceQualityWarning = Number(latest.volume) <= 0
     ? '最新価格日の出来高が0のため、価格鮮度と前日比の解釈に注意してください。'
     : hasZeroVolumeBridge
@@ -65,6 +67,7 @@ export async function getUsQuote(rawTicker: string): Promise<StockQuote | null> 
     marketCap: meta?.shares_outstanding ? latest.close * meta.shares_outstanding : undefined,
     fiftyTwoWeekHigh: hiLo?.hi ?? undefined,
     fiftyTwoWeekLow: hiLo?.lo ?? undefined,
+    technicals: technicals ?? undefined,
     exchange: meta?.exchange ?? undefined,
   }
 }

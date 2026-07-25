@@ -14,6 +14,12 @@ import {
   type EarningsSortDir,
   type EarningsSortKey,
 } from '@/lib/queries/dashboard'
+import {
+  earningsPredictionConfidenceLabel,
+  earningsTimeBucketLabel,
+  type EarningsPredictionConfidence,
+  type EarningsTimeBucket,
+} from '@/lib/earnings-time'
 
 type EarningsDashboard = Awaited<ReturnType<typeof getEarningsCalendarDashboard>>
 type EarningsRows = EarningsDashboard['rows']
@@ -22,6 +28,7 @@ type EarningsFilterOptions = EarningsDashboard['filterOptions']
 const SORT_OPTIONS: Array<{ value: EarningsSortKey; label: string }> = [
   { value: 'daysLeft', label: '発表日が近い順' },
   { value: 'announceDate', label: '発表日' },
+  { value: 'announcementTime', label: '発表時刻' },
   { value: 'ticker', label: 'コード' },
   { value: 'name', label: '銘柄名' },
   { value: 'market', label: '市場区分' },
@@ -98,6 +105,39 @@ function sourceLabel(source: string | null) {
   if (source === 'jpx') return 'JPX公式'
   if (source === 'jquants') return 'J-Quants'
   return '取得済み'
+}
+
+function announcementTimeDisplay(row: EarningsRows[number]) {
+  if (row.kind === 'completed' && row.actualDisclosedTime) {
+    return {
+      time: row.actualDisclosedTime,
+      badge: '実績',
+      detail: row.scheduledTime ? `予定 ${row.scheduledTime}` : null,
+      predicted: false,
+    }
+  }
+  if (row.scheduledTime) {
+    return {
+      time: row.scheduledTime,
+      badge: row.scheduledTimeKind === 'confirmed' ? '確定予定' : '予定',
+      detail: null,
+      predicted: false,
+    }
+  }
+  if (row.predictedTime) {
+    const confidence = earningsPredictionConfidenceLabel(
+      row.predictionConfidence as EarningsPredictionConfidence | null,
+    )
+    return {
+      time: `${row.predictedTime}頃`,
+      badge: '予想',
+      detail: row.predictionSampleCount != null && row.predictionModeCount != null
+        ? `${row.predictionModeCount}/${row.predictionSampleCount}回・信頼度${confidence}`
+        : `信頼度${confidence}`,
+      predicted: true,
+    }
+  }
+  return { time: '未定', badge: '未公表', detail: null, predicted: false }
 }
 
 function signalTone(label: string) {
@@ -224,6 +264,7 @@ function earningsHref({
     ['priceMin', filters.priceMin],
     ['priceMax', filters.priceMax],
     ['signal', filters.signal],
+    ['timeBucket', filters.timeBucket],
     ['sort', filters.sortBy],
     ['dir', filters.sortDir],
     ['limit', limit ?? filters.limit],
@@ -310,7 +351,7 @@ function EarningsScopeControls({
         {month && <input type="hidden" name="month" value={month} />}
         {filters.completed && <input type="hidden" name="completed" value="1" />}
         {filters.universe && <input type="hidden" name="universe" value={filters.universe} />}
-        <div className="grid gap-2 md:grid-cols-4 xl:grid-cols-9">
+        <div className="grid gap-2 md:grid-cols-4 xl:grid-cols-10">
           <SelectField label="市場区分" name="market" value={filters.marketSegment} options={options.marketSegments} />
           <SelectField label="17業種" name="sector17" value={filters.sector17} options={options.sector17} />
           <SelectField label="33業種" name="sector33" value={filters.sector33} options={options.sector33} />
@@ -344,6 +385,7 @@ function EarningsScopeControls({
             </select>
           </label>
           <SelectField label="シグナル" name="signal" value={filters.signal} options={options.signals} />
+          <SelectField label="発表時間帯" name="timeBucket" value={filters.timeBucket} options={options.timeBuckets} />
           <label className="flex min-w-0 flex-col gap-1 text-[11px] font-bold text-[var(--color-text-tertiary)]">
             並び替え
             <select
@@ -534,13 +576,14 @@ function EarningsTable({
   const completed = mode === 'completed'
   const visibleRows = rows.slice(0, maxRows)
   const hiddenCount = Math.max(0, rows.length - visibleRows.length)
-  const colSpan = completed ? 12 : 11
+  const colSpan = completed ? 13 : 12
   return (
     <div className="overflow-x-auto">
-      <table className={`w-full text-[12px] ${completed ? 'min-w-[1740px]' : 'min-w-[1640px]'}`}>
+      <table className={`w-full text-[12px] ${completed ? 'min-w-[1830px]' : 'min-w-[1730px]'}`}>
         <thead>
           <tr className="text-left text-[11px] font-bold text-[var(--color-text-tertiary)]">
             <SortableTh label="発表" sortKey="daysLeft" date={date} month={month} filters={filters} className="pb-3 pl-2 pr-3" />
+            <SortableTh label="時刻" sortKey="announcementTime" date={date} month={month} filters={filters} className="pb-3 pr-3" />
             <SortableTh label="銘柄名" sortKey="ticker" date={date} month={month} filters={filters} className="pb-3 pr-3" />
             <th className="pb-3 pr-3">貸借/信用</th>
             <SortableTh label="J-Quants業種" sortKey="sector33" date={date} month={month} filters={filters} className="pb-3 pr-3" />
@@ -555,13 +598,31 @@ function EarningsTable({
           </tr>
         </thead>
         <tbody className="divide-y divide-[var(--color-border-soft)]">
-          {visibleRows.map((row) => (
+          {visibleRows.map((row) => {
+            const announcementTime = announcementTimeDisplay(row)
+            return (
             <Fragment key={row.ticker + row.announce_date}>
               <tr className="hover:bg-[var(--color-surface-subtle)]">
                 <td className={`py-3 pl-2 pr-3 tabular-nums ${row.daysLeft === 0 ? 'font-bold text-[var(--color-price-up)]' : 'text-[var(--color-text-secondary)]'}`}>
                   <div>{dayLabel(row.daysLeft)}</div>
                   <div className="mt-1 text-[11px] font-semibold text-[var(--color-text-tertiary)]">{row.announce_date.slice(5)}</div>
                   <div className="mt-1 text-[10px] font-bold text-[var(--color-brand-700)]">{sourceLabel(row.source)}</div>
+                </td>
+                <td className="py-3 pr-3 align-top">
+                  <div className={`font-mono text-[12px] font-bold tabular-nums ${announcementTime.predicted ? 'text-amber-700' : 'text-[var(--color-text-primary)]'}`}>
+                    {announcementTime.time}
+                  </div>
+                  <div className={`mt-1 inline-flex rounded-[3px] border px-1.5 py-0.5 text-[9px] font-bold ${announcementTime.predicted ? 'border-amber-300 bg-amber-50 text-amber-700' : 'border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] text-[var(--color-text-secondary)]'}`}>
+                    {announcementTime.badge}
+                  </div>
+                  <div className="mt-1 text-[10px] font-semibold text-[var(--color-text-tertiary)]">
+                    {earningsTimeBucketLabel(row.timeBucket as EarningsTimeBucket | null)}
+                  </div>
+                  {announcementTime.detail && (
+                    <div className="mt-1 max-w-[120px] text-[9px] font-semibold leading-snug text-[var(--color-text-tertiary)]">
+                      {announcementTime.detail}
+                    </div>
+                  )}
                 </td>
                 <td className="py-3 pr-3">
                   <Link href={`/stock/${row.ticker}`} className="font-bold tabular-nums hover:underline">{row.ticker}</Link>
@@ -617,7 +678,8 @@ function EarningsTable({
                 colSpan={colSpan}
               />
             </Fragment>
-          ))}
+            )
+          })}
           {hiddenCount > 0 && (
             <tr>
               <td colSpan={colSpan} className="py-3 text-center text-[11px] font-bold text-[var(--color-text-tertiary)]">

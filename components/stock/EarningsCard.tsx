@@ -2,6 +2,13 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import {
+  earningsPredictionConfidenceLabel,
+  earningsTimeBucketLabel,
+  type EarningsPredictionConfidence,
+  type EarningsTimeBucket,
+  type EarningsTimeKind,
+} from '@/lib/earnings-time'
 
 interface SnapshotInfo {
   ticker: string
@@ -10,10 +17,24 @@ interface SnapshotInfo {
   earningsNextDate: string | null
   earningsLastSource?: string | null
   earningsLastFiscalPeriod?: string | null
+  earningsLastActualDate?: string | null
+  earningsLastActualTime?: string | null
+  earningsLastActualSource?: string | null
+  earningsLastScheduledTime?: string | null
   earningsNextSource?: string | null
   earningsNextFiscalPeriod?: string | null
   earningsNextDateKind?: 'confirmed' | 'estimated' | 'cached' | 'not_announced' | 'not_applicable' | 'no_history' | null
   earningsNextNote?: string | null
+  earningsNextTime?: string | null
+  earningsNextTimeKind?: EarningsTimeKind | null
+  earningsNextTimeBucket?: EarningsTimeBucket | null
+  earningsNextScheduledTime?: string | null
+  earningsNextScheduledTimeKind?: string | null
+  earningsNextScheduledTimeSource?: string | null
+  earningsNextPredictedTime?: string | null
+  earningsNextPredictionConfidence?: EarningsPredictionConfidence | null
+  earningsNextPredictionSampleCount?: number | null
+  earningsNextPredictionModeCount?: number | null
   earningsCalendarLatestKnownDate?: string | null
   earningsCalendarLatestImportedAt?: number | null
   earningsScheduleLatestKnownDate?: string | null
@@ -61,15 +82,34 @@ export function EarningsCard({ ticker }: Props) {
     : nextKind === 'estimated' || nextKind === 'cached'
       ? { color: '#b45309', bg: 'rgba(245,158,11,0.10)', border: 'rgba(245,158,11,0.32)' }
       : { color: 'var(--text-muted)', bg: 'var(--bg-elevated)', border: 'var(--border-subtle)' }
+  const lastDisplayDate = data.earningsLastActualDate ?? data.earningsLastDate
+  const timeKind = data.earningsNextTimeKind ?? 'unknown'
+  const timeLabel = timeKind === 'predicted'
+    ? `${data.earningsNextTime ?? '--:--'}頃`
+    : data.earningsNextTime ?? '時刻未定'
+  const timeBadge = timeKind === 'confirmed'
+    ? '確定予定時刻'
+    : timeKind === 'scheduled'
+      ? '予定時刻'
+      : timeKind === 'predicted'
+        ? '予想時刻'
+        : '時刻未定'
+  const predictionEvidence =
+    timeKind === 'predicted' &&
+    data.earningsNextPredictionSampleCount != null &&
+    data.earningsNextPredictionModeCount != null
+      ? `過去${data.earningsNextPredictionSampleCount}回のうち${data.earningsNextPredictionModeCount}回が${data.earningsNextPredictedTime}前後に開示`
+      : null
 
   return (
     <div className="card" style={{ padding: '12px', display: 'flex', gap: '24px', flexWrap: 'wrap' }}>
-      <div>
-        <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '2px' }}>前回決算日</div>
+      <div style={{ minWidth: '260px' }}>
+        <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '2px' }}>前回決算発表</div>
         <div style={{ fontSize: '14px', fontFamily: 'var(--font-mono)', fontWeight: 600, color: 'var(--text-primary)' }}>
-          {formatJapaneseDate(data.earningsLastDate)}
-          {data.earningsLastSource && (
-            <SourceBadge source={data.earningsLastSource} fiscalPeriod={data.earningsLastFiscalPeriod} />
+          {formatJapaneseDate(lastDisplayDate)}
+          {data.earningsLastActualTime && ` ${data.earningsLastActualTime}`}
+          {(data.earningsLastActualSource || data.earningsLastSource) && (
+            <SourceBadge source={data.earningsLastActualSource ?? data.earningsLastSource} fiscalPeriod={data.earningsLastFiscalPeriod} />
           )}
           {daysSinceLast != null && daysSinceLast >= 0 && (
             <span style={{ marginLeft: '8px', fontSize: '11px', color: 'var(--text-secondary)' }}>
@@ -77,11 +117,27 @@ export function EarningsCard({ ticker }: Props) {
             </span>
           )}
         </div>
+        {data.earningsLastActualTime && (
+          <div style={{ marginTop: '5px', fontSize: '11px', color: 'var(--text-secondary)' }}>
+            実際の開示時刻：{data.earningsLastActualTime}
+            {data.earningsLastScheduledTime && (
+              <span style={{ marginLeft: '10px' }}>予定時刻：{data.earningsLastScheduledTime}</span>
+            )}
+          </div>
+        )}
       </div>
       <div style={{ minWidth: '280px', flex: '1 1 320px' }}>
-        <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '2px' }}>次回決算日</div>
+        <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '2px' }}>
+          {nextKind === 'estimated' ? '次回決算発表予想' : '次回決算発表予定'}
+        </div>
         <div style={{ fontSize: '14px', fontFamily: 'var(--font-mono)', fontWeight: 700, color: nextTone.color }}>
           {formatJapaneseDate(data.earningsNextDate)}
+          {data.earningsNextDate && (
+            <span style={{ marginLeft: '6px' }}>
+              {timeKind === 'unknown' ? '（時刻未定）' : timeLabel}
+            </span>
+          )}
+          {data.earningsNextDate && <TimeKindBadge kind={timeKind} label={timeBadge} />}
           {data.earningsNextSource && (
             <SourceBadge source={data.earningsNextSource} fiscalPeriod={data.earningsNextFiscalPeriod} kind={nextKind} />
           )}
@@ -91,6 +147,21 @@ export function EarningsCard({ ticker }: Props) {
             </span>
           )}
         </div>
+        {data.earningsNextDate && (
+          <div style={{ marginTop: '5px', display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', fontSize: '11px' }}>
+            <span style={{ color: 'var(--text-secondary)' }}>
+              {earningsTimeBucketLabel(data.earningsNextTimeBucket)}
+            </span>
+            {predictionEvidence && (
+              <span style={{ color: '#b45309' }}>{predictionEvidence}</span>
+            )}
+            {timeKind === 'predicted' && data.earningsNextPredictionConfidence && (
+              <span style={{ color: '#b45309', fontWeight: 700 }}>
+                予想信頼度：{earningsPredictionConfidenceLabel(data.earningsNextPredictionConfidence)}
+              </span>
+            )}
+          </div>
+        )}
         {(data.earningsNextNote || nextKind === 'estimated' || nextKind === 'not_announced') && (
           <div style={{
             marginTop: '6px',
@@ -118,6 +189,27 @@ export function EarningsCard({ ticker }: Props) {
         </div>
       )}
     </div>
+  )
+}
+
+function TimeKindBadge({ kind, label }: { kind: EarningsTimeKind; label: string }) {
+  const predicted = kind === 'predicted'
+  const confirmed = kind === 'confirmed'
+  return (
+    <span style={{
+      display: 'inline-flex',
+      marginLeft: '8px',
+      border: `1px solid ${confirmed ? 'rgba(22,163,74,0.35)' : predicted ? 'rgba(245,158,11,0.36)' : 'var(--border-subtle)'}`,
+      borderRadius: '3px',
+      background: confirmed ? 'rgba(22,163,74,0.08)' : predicted ? 'rgba(245,158,11,0.10)' : 'var(--bg-elevated)',
+      color: confirmed ? '#15803d' : predicted ? '#b45309' : 'var(--text-muted)',
+      fontFamily: 'var(--font-sans)',
+      fontSize: '10px',
+      fontWeight: 700,
+      padding: '2px 5px',
+    }}>
+      {label}
+    </span>
   )
 }
 

@@ -3,32 +3,56 @@
 import Link from 'next/link'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  BarChart3,
-  CheckCircle2,
-  Clock3,
+  ArrowUpDown,
+  CalendarRange,
+  CircleHelp,
   GitCompareArrows,
+  ListFilter,
   RefreshCw,
+  RotateCcw,
   ScanSearch,
 } from 'lucide-react'
 import {
-  CartesianGrid,
-  Line,
-  LineChart,
-  ReferenceLine,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts'
+  BacktestHighlightChart,
+  type HighlightChartPoint,
+  type MovingAveragePeriod,
+} from '@/components/charts/BacktestHighlightChart'
 import { StageTag } from '@/components/ui/StageTag'
-import type { HistoricalAnalogSort } from '@/lib/ml/historical-analogs'
+import { movingAverageColor } from '@/lib/chart-colors'
+import type { OHLCV } from '@/types/stock'
+import type {
+  HistoricalAnalogProfile,
+  HistoricalAnalogRecency,
+  HistoricalAnalogSort,
+} from '@/lib/ml/historical-analogs'
+import {
+  buildHistoricalAnalogChartSeries,
+  type HistoricalAnalogChartInterval,
+} from '@/lib/ml/historical-analog-chart'
 
 type Market = 'JP' | 'US'
+type AnalogTableSortKey =
+  | 'rank'
+  | 'recent'
+  | 'ticker'
+  | 'market'
+  | 'sector17'
+  | 'sector33'
+  | 'margin'
+  | 'similarity'
+  | 'daily'
+  | 'weekly'
+  | 'monthly'
+  | 'yearly'
+  | 'ml'
+  | 'volume'
+  | 'avgVolume30'
+  | 'volumeRatio30'
+type AnalogTableSortDirection = 'asc' | 'desc'
+type AnalogVolumeFilter = 'all' | 'above_avg' | 'below_avg' | 'surge' | 'missing'
 
-type StructurePoint = {
+type StructurePoint = HighlightChartPoint & {
   relativeDay: number
-  date: string
-  close: number
   ma5: number | null
   ma10: number | null
   ma20: number | null
@@ -44,12 +68,6 @@ type StagePoint = {
   stageCode: string
 }
 
-type OutcomePoint = {
-  afterDays: number
-  date: string
-  value: number
-}
-
 type AnalogRow = {
   rank: number
   ticker: string
@@ -57,68 +75,84 @@ type AnalogRow = {
   marketSegment: string | null
   sector17Name: string | null
   sector33Name: string | null
-  caseDate: string
+  marginType: string | null
+  caseStartDate: string
+  caseEndDate: string
+  elapsedDays: number
+  recencyBucket: '2w' | '1m' | '3m' | 'older'
   stageCode: string | null
   similarityScore: number
+  dailyScore: number | null
+  weeklyScore: number | null
+  monthlyScore: number | null
+  yearlyScore: number | null
+  mlFeatureScore: number | null
+  mlFeaturePointCount: number
+  mlFeatureTotalPoints: number
   approximationScore: number
   bandMatches: number
+  volume: number | null
+  avgVolume30: number | null
+  volumeRatio30: number | null
+  volumeObservationCount: number
   components: Array<{
     key: string
     label: string
     score: number
     weight: number
   }>
-  preWindow: StructurePoint[]
+  window: StructurePoint[]
   stagePath: StagePoint[]
-  outcome: {
-    horizonDays: number
-    complete: boolean
-    availableDays: number
-    returnPct: number | null
-    maxReturnPct: number | null
-    minReturnPct: number | null
-    path: OutcomePoint[]
-  }
 }
 
 type AnalogResponse = {
   market: Market
   ticker: string
-  asOfDate: string
+  latestMarketDate: string
   featureSet: string
   base: {
     ticker: string
     name: string | null
-    date: string
+    startDate: string
+    endDate: string
+    sessionCount: number
     stageCode: string | null
-    preWindow: StructurePoint[]
+    window: StructurePoint[]
     stagePath: StagePoint[]
   }
-  horizon: number
+  profile: HistoricalAnalogProfile
+  recency: HistoricalAnalogRecency
   sort: HistoricalAnalogSort
   minScore: number
   summary: {
-    sampleCount: number
-    partialCount: number
-    upRate: number | null
-    averageReturnPct: number | null
-    medianReturnPct: number | null
-    lowerQuartileReturnPct: number | null
-    upperQuartileReturnPct: number | null
-    averageMaxReturnPct: number | null
-    averageMinReturnPct: number | null
+    matchCount: number
+    displayedCount: number
+    sameTickerCount: number
+    otherTickerCount: number
+    latestMatchEndDate: string | null
+    medianSimilarity: number | null
   }
   analogs: AnalogRow[]
   search: {
     method: string
     maPeriods: number[]
-    dailyWindows: number[]
+    maPeriodsByTimeframe: {
+      daily: number[]
+      weekly: number[]
+      monthly: number[]
+      yearly: number[]
+    }
+    periodSessions: number
     higherTimeframes: string[]
-    monthlyPeriods: number[]
-    longTermPeriods: number[]
     scoringProfile: {
       key: string
       label: string
+      weights: {
+        daily: number
+        weekly: number
+        monthly: number
+        yearly: number
+      }
     }
     mlRerankWeight: number
     indexedCandidateCount: number
@@ -128,6 +162,12 @@ type AnalogResponse = {
     approximateCount: number
     stageCandidateCount: number
     stageShortlistCount: number
+    retrievalPolicy: 'global-stage-first' | 'recency-first'
+    recencyShortlistTarget: number
+    recencyPoolCount: number
+    recencyShortlistCount: number
+    recencyStagePoolCount: number
+    fallbackShortlistCount: number
     candidateRangeCount: number
     candidatePriceRowCount: number
     alignedCount: number
@@ -138,46 +178,172 @@ type AnalogResponse = {
     indexSourceDate: string | null
     indexRows: number
     indexVersion: number
+    indexFeatureSchema: string | null
+    indexEmbeddingBytes: number | null
     truncated: boolean
   }
 }
 
-const HORIZONS = [
-  { days: 5, label: '1週' },
-  { days: 10, label: '2週' },
-  { days: 15, label: '3週' },
-  { days: 20, label: '1か月' },
-  { days: 40, label: '2か月' },
-  { days: 60, label: '3か月' },
-  { days: 90, label: '4.5か月' },
-  { days: 200, label: '10か月' },
-] as const
-
-const SORT_OPTIONS: Array<{ value: HistoricalAnalogSort; label: string }> = [
-  { value: 'similarity', label: '類似度' },
-  { value: 'return_desc', label: 'その後の上昇率' },
-  { value: 'return_asc', label: 'その後の下落率' },
-  { value: 'max_return', label: '期間内最大上昇' },
-  { value: 'min_return', label: '期間内最大下落' },
+const PROFILE_OPTIONS: Array<{
+  value: HistoricalAnalogProfile
+  label: string
+  description: string
+  weights: string
+}> = [
+  {
+    value: 'balanced',
+    label: '標準',
+    description: '日・週・月・年足の構造を総合して探します。迷った場合はこちら。',
+    weights: '日足40%・週足25%・月足20%・年足15%',
+  },
+  {
+    value: 'short',
+    label: '日足を優先',
+    description: '目先の値動きと移動平均線の形が近い局面を優先します。',
+    weights: '日足55%・週足20%・月足15%・年足10%',
+  },
+  {
+    value: 'long',
+    label: '上位足を優先',
+    description: '週・月・年足のトレンドや大局的な位置関係が近い局面を優先します。',
+    weights: '日足25%・週足30%・月足25%・年足20%',
+  },
 ]
 
-const MA_LINES = [
-  { key: 'ma5', label: '5', color: '#dc2626', width: 1.4 },
-  { key: 'ma10', label: '10', color: '#ea580c', width: 1.4 },
-  { key: 'ma20', label: '20', color: '#ca8a04', width: 1.4 },
-  { key: 'ma40', label: '40', color: '#16a34a', width: 1.4 },
-  { key: 'ma60', label: '60', color: '#0d9488', width: 1.4 },
-  { key: 'ma90', label: '90', color: '#2563eb', width: 1.4 },
-  { key: 'ma200', label: '200', color: '#9333ea', width: 1.8 },
-] as const
+const RECENCY_OPTIONS: Array<{
+  value: HistoricalAnalogRecency
+  label: string
+}> = [
+  { value: 'all', label: '全期間' },
+  { value: '2w', label: '直近2週間' },
+  { value: '1m', label: '直近1か月' },
+  { value: '3m', label: '直近3か月' },
+]
 
-function fmtPct(value: number | null | undefined, digits = 1): string {
-  if (value == null || !Number.isFinite(value)) return '-'
-  return `${value >= 0 ? '+' : ''}${value.toFixed(digits)}%`
+const SORT_OPTIONS: Array<{ value: HistoricalAnalogSort; label: string }> = [
+  { value: 'similarity', label: '総合類似度' },
+  { value: 'recent', label: '発生日が新しい順' },
+]
+
+const TABLE_SORT_OPTIONS: Array<{ value: AnalogTableSortKey; label: string }> = [
+  { value: 'rank', label: '類似順位' },
+  { value: 'recent', label: '発生日' },
+  { value: 'similarity', label: '総合類似度' },
+  { value: 'daily', label: '日足類似度' },
+  { value: 'weekly', label: '週足類似度' },
+  { value: 'monthly', label: '月足類似度' },
+  { value: 'yearly', label: '年足類似度' },
+  { value: 'ml', label: '学習特徴量' },
+  { value: 'volume', label: '当日出来高' },
+  { value: 'avgVolume30', label: '30日平均出来高' },
+  { value: 'volumeRatio30', label: '出来高の平均比' },
+  { value: 'ticker', label: '銘柄コード' },
+  { value: 'market', label: '市場' },
+  { value: 'sector17', label: '17業種' },
+  { value: 'sector33', label: '33業種' },
+  { value: 'margin', label: '貸借・信用区分' },
+]
+
+const ANALOG_MA_DEFAULTS: Record<
+  HistoricalAnalogChartInterval,
+  readonly MovingAveragePeriod[]
+> = {
+  D: [5, 25, 75, 200],
+  W: [13, 26, 52],
+  M: [9, 24, 60],
+  Y: [3, 5, 10],
+}
+const ANALOG_CHART_INTERVALS: Array<{
+  value: HistoricalAnalogChartInterval
+  label: string
+  maUnit: string
+  description: string
+}> = [
+  { value: 'D', label: '日足', maUnit: '日', description: '短期の値動きと日次MA' },
+  { value: 'W', label: '週足', maUnit: '週', description: '中期トレンドと週次MA' },
+  { value: 'M', label: '月足', maUnit: 'か月', description: '長期構造と月次MA' },
+  { value: 'Y', label: '年足', maUnit: '年', description: '大局的な位置と年次MA' },
+]
+
+function addDays(date: string, days: number): string {
+  const value = new Date(`${date}T00:00:00.000Z`)
+  value.setUTCDate(value.getUTCDate() + days)
+  return value.toISOString().slice(0, 10)
 }
 
-function fmtScore(value: number): string {
+function todayIso(): string {
+  const now = new Date()
+  const local = new Date(now.getTime() - now.getTimezoneOffset() * 60_000)
+  return local.toISOString().slice(0, 10)
+}
+
+function fmtScore(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return '-'
   return `${Math.round(value * 100)}%`
+}
+
+function fmtVolume(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return '-'
+  return Math.round(value).toLocaleString('ja-JP')
+}
+
+function uniqueLabels(values: Array<string | null | undefined>): string[] {
+  return [...new Set(values.map((value) => value?.trim()).filter((value): value is string => Boolean(value)))]
+    .sort((a, b) => a.localeCompare(b, 'ja'))
+}
+
+function numericSortValue(row: AnalogRow, key: AnalogTableSortKey): number | null {
+  if (key === 'rank') return row.rank
+  if (key === 'recent') return row.elapsedDays
+  if (key === 'similarity') return row.similarityScore
+  if (key === 'daily') return row.dailyScore
+  if (key === 'weekly') return row.weeklyScore
+  if (key === 'monthly') return row.monthlyScore
+  if (key === 'yearly') return row.yearlyScore
+  if (key === 'ml') return row.mlFeatureScore
+  if (key === 'volume') return row.volume
+  if (key === 'avgVolume30') return row.avgVolume30
+  if (key === 'volumeRatio30') return row.volumeRatio30
+  return null
+}
+
+function textSortValue(row: AnalogRow, key: AnalogTableSortKey): string {
+  if (key === 'ticker') return row.ticker
+  if (key === 'market') return row.marketSegment ?? ''
+  if (key === 'sector17') return row.sector17Name ?? ''
+  if (key === 'sector33') return row.sector33Name ?? ''
+  if (key === 'margin') return row.marginType ?? ''
+  return ''
+}
+
+function compareAnalogRows(
+  first: AnalogRow,
+  second: AnalogRow,
+  key: AnalogTableSortKey,
+  direction: AnalogTableSortDirection,
+): number {
+  if (['ticker', 'market', 'sector17', 'sector33', 'margin'].includes(key)) {
+    const compared = textSortValue(first, key).localeCompare(
+      textSortValue(second, key),
+      'ja',
+      { numeric: true },
+    )
+    return direction === 'asc' ? compared : -compared
+  }
+  const firstValue = numericSortValue(first, key)
+  const secondValue = numericSortValue(second, key)
+  if (firstValue == null && secondValue == null) return first.rank - second.rank
+  if (firstValue == null) return 1
+  if (secondValue == null) return -1
+  const compared = firstValue - secondValue
+  return direction === 'asc' ? compared : -compared
+}
+
+function elapsedLabel(days: number): string {
+  if (days === 0) return '市場最新日'
+  if (days < 31) return `${days}日前`
+  if (days < 365) return `${Math.max(1, Math.round(days / 30))}か月前`
+  return `${(days / 365).toFixed(days < 730 ? 1 : 0)}年前`
 }
 
 function stageTags(code: string | null | undefined) {
@@ -196,150 +362,139 @@ function stageTags(code: string | null | undefined) {
   )
 }
 
-function outcomeTone(value: number | null) {
-  if (value == null) return 'text-[var(--color-text-tertiary)]'
-  if (value > 0) return 'text-[var(--color-market-red)]'
-  if (value < 0) return 'text-[var(--color-market-blue)]'
-  return 'text-[var(--color-text-secondary)]'
-}
-
-function chartDomain(...groups: StructurePoint[][]): [number, number] {
-  const values = groups.flatMap((points) =>
-    points.flatMap((point) => [
-      point.close,
-      point.ma5,
-      point.ma10,
-      point.ma20,
-      point.ma40,
-      point.ma60,
-      point.ma90,
-      point.ma200,
-    ]),
-  ).filter((value): value is number => value != null && Number.isFinite(value))
-  if (values.length === 0) return [80, 120]
-  const min = Math.min(...values)
-  const max = Math.max(...values)
-  const padding = Math.max(1.5, (max - min) * 0.08)
-  return [Math.floor((min - padding) * 10) / 10, Math.ceil((max + padding) * 10) / 10]
-}
-
-function StructureChart({
+function AnalogPeriodChart({
+  ticker,
+  market,
+  interval,
   points,
-  domain,
-  showMa,
+  maPeriods,
   label,
+  startDate,
+  endDate,
+  currency,
 }: {
+  ticker: string
+  market: Market
+  interval: HistoricalAnalogChartInterval
   points: StructurePoint[]
-  domain: [number, number]
-  showMa: boolean
+  maPeriods: readonly MovingAveragePeriod[]
   label: string
+  startDate: string
+  endDate: string
+  currency: 'JPY' | 'USD'
 }) {
-  return (
-    <div className="h-[248px] min-w-0" aria-label={label}>
-      <ResponsiveContainer width="100%" height="100%" initialDimension={{ width: 420, height: 248 }}>
-        <LineChart data={points} margin={{ top: 8, right: 8, bottom: 0, left: -14 }}>
-          <CartesianGrid stroke="var(--color-border-soft)" strokeDasharray="3 3" vertical={false} />
-          <XAxis
-            dataKey="relativeDay"
-            tick={{ fontSize: 9, fill: 'var(--color-text-tertiary)' }}
-            tickLine={false}
-            axisLine={false}
-            minTickGap={24}
-          />
-          <YAxis
-            domain={domain}
-            tick={{ fontSize: 9, fill: 'var(--color-text-tertiary)' }}
-            tickLine={false}
-            axisLine={false}
-            width={42}
-          />
-          <Tooltip
-            formatter={(value, name) => [Number(value).toFixed(2), String(name)]}
-            labelFormatter={(value, payload) => {
-              const date = payload?.[0]?.payload?.date
-              return `${date ?? ''} (${value}営業日)`
-            }}
-            contentStyle={{ borderRadius: 4, border: '1px solid var(--color-border-default)', fontSize: 10 }}
-          />
-          <ReferenceLine y={100} stroke="var(--color-text-tertiary)" strokeDasharray="3 3" />
-          {showMa && MA_LINES.map((line) => (
-            <Line
-              key={line.key}
-              type="linear"
-              dataKey={line.key}
-              name={`MA${line.label}`}
-              stroke={line.color}
-              strokeWidth={line.width}
-              dot={false}
-              connectNulls
-              isAnimationActive={false}
-            />
-          ))}
-          <Line
-            type="linear"
-            dataKey="close"
-            name="終値"
-            stroke="#111827"
-            strokeWidth={2.2}
-            dot={false}
-            isAnimationActive={false}
-          />
-        </LineChart>
-      </ResponsiveContainer>
-    </div>
-  )
-}
+  const historyKey = `${market}:${ticker}`
+  const [historyState, setHistoryState] = useState<{
+    key: string
+    rows: OHLCV[]
+  } | null>(null)
+  const [historyLoading, setHistoryLoading] = useState(false)
+  const [historyError, setHistoryError] = useState('')
+  const history = historyState?.key === historyKey ? historyState.rows : null
+  const activeInterval = ANALOG_CHART_INTERVALS.find((option) => option.value === interval)
+    ?? ANALOG_CHART_INTERVALS[0]
 
-function OutcomeChart({ row }: { row: AnalogRow }) {
-  if (row.outcome.path.length < 2) {
+  useEffect(() => {
+    if (history) return
+    const controller = new AbortController()
+    const basePath = market === 'US' ? '/api/us/history' : '/api/history'
+    setHistoryLoading(true)
+    setHistoryError('')
+    fetch(`${basePath}/${encodeURIComponent(ticker)}?period=all`, {
+      cache: 'no-store',
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        const json = await response.json()
+        if (!response.ok || !Array.isArray(json)) {
+          throw new Error(json?.error ?? `HTTP ${response.status}`)
+        }
+        setHistoryState({ key: historyKey, rows: json as OHLCV[] })
+      })
+      .catch((fetchError) => {
+        if (controller.signal.aborted) return
+        setHistoryError(fetchError instanceof Error
+          ? fetchError.message
+          : '全履歴の取得に失敗しました。')
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setHistoryLoading(false)
+      })
+    return () => controller.abort()
+  }, [history, historyKey, market, ticker])
+
+  const chartSeries = useMemo(() => {
+    const fallbackRows: OHLCV[] = points.flatMap((point) => {
+      if (
+        point.open == null
+        || point.high == null
+        || point.low == null
+        || point.close == null
+      ) return []
+      return [{
+        date: point.date,
+        open: point.open,
+        high: point.high,
+        low: point.low,
+        close: point.close,
+        volume: point.volume ?? 0,
+      }]
+    })
+    return buildHistoricalAnalogChartSeries(
+      history ?? fallbackRows,
+      interval,
+      startDate,
+      endDate,
+    )
+  }, [endDate, history, interval, points, startDate])
+
+  if (!chartSeries) {
     return (
-      <div className="grid h-[180px] place-items-center text-[11px] font-bold text-[var(--color-text-tertiary)]">
-        事後データなし
+      <div className="grid h-[280px] place-items-center text-[11px] font-bold text-[var(--color-text-tertiary)]">
+        {historyLoading ? `${activeInterval.label}を作成中` : 'チャートデータがありません'}
       </div>
     )
   }
+
+  const availableMaPeriods = maPeriods.filter((period) =>
+    chartSeries.points.some((point) => point[`ma${period}`] != null)
+  )
   return (
-    <div className="h-[180px] min-w-0" aria-label={`${row.ticker}の類似局面後チャート`}>
-      <ResponsiveContainer width="100%" height="100%" initialDimension={{ width: 420, height: 180 }}>
-        <LineChart data={row.outcome.path} margin={{ top: 8, right: 8, bottom: 0, left: -14 }}>
-          <CartesianGrid stroke="var(--color-border-soft)" strokeDasharray="3 3" vertical={false} />
-          <XAxis
-            dataKey="afterDays"
-            tick={{ fontSize: 9, fill: 'var(--color-text-tertiary)' }}
-            tickLine={false}
-            axisLine={false}
-            minTickGap={24}
-          />
-          <YAxis
-            domain={['auto', 'auto']}
-            tick={{ fontSize: 9, fill: 'var(--color-text-tertiary)' }}
-            tickLine={false}
-            axisLine={false}
-            width={42}
-          />
-          <Tooltip
-            formatter={(value) => [Number(value).toFixed(2), '基準化値']}
-            labelFormatter={(value) => `${value}営業日後`}
-            contentStyle={{ borderRadius: 4, border: '1px solid var(--color-border-default)', fontSize: 10 }}
-          />
-          <ReferenceLine y={100} stroke="var(--color-text-tertiary)" strokeDasharray="3 3" />
-          <Line
-            type="linear"
-            dataKey="value"
-            stroke="#0f766e"
-            strokeWidth={2.2}
-            dot={false}
-            isAnimationActive={false}
-          />
-        </LineChart>
-      </ResponsiveContainer>
+    <div aria-label={`${label}（${activeInterval.label}）`}>
+      {historyLoading && (
+        <div className="px-1 pt-1 text-[9px] font-bold text-teal-700">
+          全履歴から{activeInterval.label}を作成中
+        </div>
+      )}
+      {historyError && (
+        <div className="px-1 pt-1 text-[9px] font-bold text-amber-700">
+          取得済み範囲で表示：{historyError}
+        </div>
+      )}
+      <BacktestHighlightChart
+        series={chartSeries.points}
+        highlightStart={chartSeries.highlightStart}
+        highlightEnd={chartSeries.highlightEnd}
+        direction={(chartSeries.returnPct ?? 0) >= 0 ? 'up' : 'down'}
+        height={280}
+        startPrice={chartSeries.startPrice}
+        endPrice={chartSeries.endPrice}
+        returnPct={chartSeries.returnPct}
+        displayStartDate={startDate}
+        displayEndDate={endDate}
+        currency={currency}
+        maPeriods={availableMaPeriods}
+        showMovingAverages={availableMaPeriods.length > 0}
+        showMovingAverageLegend={false}
+        maUnitLabel={activeInterval.maUnit}
+      />
     </div>
   )
 }
 
 function StageTimeline({ points }: { points: StagePoint[] }) {
   if (points.length === 0) {
-    return <span className="text-[10px] font-bold text-[var(--color-text-tertiary)]">遷移なし</span>
+    return <span className="text-[10px] font-bold text-[var(--color-text-tertiary)]">遷移データなし</span>
   }
   return (
     <div className="flex max-w-full items-center gap-1 overflow-x-auto pb-1">
@@ -347,7 +502,9 @@ function StageTimeline({ points }: { points: StagePoint[] }) {
         <div key={`${point.date}-${point.stageCode}`} className="inline-flex shrink-0 items-center gap-1">
           {index > 0 && <span className="text-[10px] text-[var(--color-text-tertiary)]">→</span>}
           <span className="border border-[var(--color-border-soft)] bg-white px-1.5 py-1">
-            <span className="mr-1 text-[9px] font-bold text-[var(--color-text-tertiary)]">{point.relativeDay}</span>
+            <span className="mr-1 text-[9px] font-bold text-[var(--color-text-tertiary)]">
+              {point.relativeDay + 1}日目
+            </span>
             {stageTags(point.stageCode)}
           </span>
         </div>
@@ -365,220 +522,360 @@ export function HistoricalAnalogExplorer({
   market?: Market
   analysisDate?: string | null
 }) {
-  const [horizon, setHorizon] = useState(20)
+  const initialEndDate = analysisDate ?? todayIso()
+  const [startDate, setStartDate] = useState(() => addDays(initialEndDate, -90))
+  const [endDate, setEndDate] = useState(initialEndDate)
+  const [profile, setProfile] = useState<HistoricalAnalogProfile>('balanced')
+  const [recency, setRecency] = useState<HistoricalAnalogRecency>('all')
   const [sort, setSort] = useState<HistoricalAnalogSort>('similarity')
-  const [minScore, setMinScore] = useState(0.35)
-  const [showMa, setShowMa] = useState(true)
+  const [minScore, setMinScore] = useState(0.4)
+  const [chartInterval, setChartInterval] = useState<HistoricalAnalogChartInterval>('D')
+  const [maSelections, setMaSelections] = useState<
+    Record<HistoricalAnalogChartInterval, MovingAveragePeriod[]>
+  >(() => ({
+    D: [...ANALOG_MA_DEFAULTS.D],
+    W: [...ANALOG_MA_DEFAULTS.W],
+    M: [...ANALOG_MA_DEFAULTS.M],
+    Y: [...ANALOG_MA_DEFAULTS.Y],
+  }))
   const [data, setData] = useState<AnalogResponse | null>(null)
   const [selectedKey, setSelectedKey] = useState('')
   const [started, setStarted] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [marketFilter, setMarketFilter] = useState('all')
+  const [sector17Filter, setSector17Filter] = useState('all')
+  const [sector33Filter, setSector33Filter] = useState('all')
+  const [marginFilter, setMarginFilter] = useState('all')
+  const [volumeFilter, setVolumeFilter] = useState<AnalogVolumeFilter>('all')
+  const [tableSortKey, setTableSortKey] = useState<AnalogTableSortKey>('rank')
+  const [tableSortDirection, setTableSortDirection] =
+    useState<AnalogTableSortDirection>('asc')
 
-  const runSearch = useCallback(async (signal?: AbortSignal) => {
+  const runSearch = useCallback(async () => {
+    if (!startDate || !endDate) {
+      setError('分析対象の開始日と終了日を指定してください。')
+      return
+    }
+    if (startDate > endDate) {
+      setError('開始日は終了日以前の日付を指定してください。')
+      return
+    }
+    setStarted(true)
     setLoading(true)
     setError('')
     const params = new URLSearchParams({
       ticker: ticker.replace(/\.T$/i, ''),
       market,
-      horizon: String(horizon),
+      startDate,
+      endDate,
+      profile,
+      recency,
       sort,
       minScore: String(minScore),
-      limit: '30',
+      limit: '40',
     })
-    if (analysisDate) params.set('date', analysisDate)
     try {
       const response = await fetch(`/api/ml/historical-analogs?${params.toString()}`, {
         cache: 'no-store',
-        signal,
       })
       const json = await response.json()
-      if (!response.ok) throw new Error(json.error ?? '過去局面検索に失敗しました。')
+      if (!response.ok) throw new Error(json.error ?? '本質類似局面の検索に失敗しました。')
       const next = json as AnalogResponse
       setData(next)
+      setStartDate(next.base.startDate)
+      setEndDate(next.base.endDate)
       setSelectedKey((current) => {
-        if (next.analogs.some((row) => `${row.ticker}-${row.caseDate}` === current)) return current
+        if (
+          next.analogs.some((row) =>
+            `${row.ticker}-${row.caseStartDate}-${row.caseEndDate}` === current
+          )
+        ) return current
         const first = next.analogs[0]
-        return first ? `${first.ticker}-${first.caseDate}` : ''
+        return first ? `${first.ticker}-${first.caseStartDate}-${first.caseEndDate}` : ''
       })
     } catch (searchError) {
-      if ((searchError as Error).name !== 'AbortError') {
-        setData(null)
-        setError(searchError instanceof Error ? searchError.message : '過去局面検索に失敗しました。')
-      }
+      setData(null)
+      setError(searchError instanceof Error
+        ? searchError.message
+        : '本質類似局面の検索に失敗しました。')
     } finally {
-      if (!signal?.aborted) setLoading(false)
+      setLoading(false)
     }
-  }, [analysisDate, horizon, market, minScore, sort, ticker])
+  }, [endDate, market, minScore, profile, recency, sort, startDate, ticker])
 
   useEffect(() => {
-    if (!started) return
-    const controller = new AbortController()
-    void runSearch(controller.signal)
-    return () => controller.abort()
-  }, [runSearch, started])
-
-  useEffect(() => {
+    const nextEndDate = analysisDate ?? todayIso()
+    setStartDate(addDays(nextEndDate, -90))
+    setEndDate(nextEndDate)
     setStarted(false)
     setData(null)
     setSelectedKey('')
     setError('')
+    setMarketFilter('all')
+    setSector17Filter('all')
+    setSector33Filter('all')
+    setMarginFilter('all')
+    setVolumeFilter('all')
+    setTableSortKey('rank')
+    setTableSortDirection('asc')
   }, [analysisDate, market, ticker])
 
+  const filterOptions = useMemo(() => ({
+    marketSegments: uniqueLabels(data?.analogs.map((row) => row.marketSegment) ?? []),
+    sector17Names: uniqueLabels(data?.analogs.map((row) => row.sector17Name) ?? []),
+    sector33Names: uniqueLabels(data?.analogs.map((row) => row.sector33Name) ?? []),
+    marginTypes: uniqueLabels(data?.analogs.map((row) => row.marginType) ?? []),
+  }), [data])
+  const displayedAnalogs = useMemo(() => {
+    const rows = (data?.analogs ?? []).filter((row) => {
+      if (marketFilter !== 'all' && row.marketSegment !== marketFilter) return false
+      if (sector17Filter !== 'all' && row.sector17Name !== sector17Filter) return false
+      if (sector33Filter !== 'all' && row.sector33Name !== sector33Filter) return false
+      if (marginFilter !== 'all' && row.marginType !== marginFilter) return false
+      if (volumeFilter === 'missing') return row.volume == null || row.avgVolume30 == null
+      if (row.volume == null || row.avgVolume30 == null) return volumeFilter === 'all'
+      if (volumeFilter === 'above_avg') return row.volume >= row.avgVolume30
+      if (volumeFilter === 'below_avg') return row.volume < row.avgVolume30
+      if (volumeFilter === 'surge') return row.volumeRatio30 != null && row.volumeRatio30 >= 1.5
+      return true
+    })
+    return rows.sort((first, second) =>
+      compareAnalogRows(first, second, tableSortKey, tableSortDirection)
+      || first.rank - second.rank
+    )
+  }, [
+    data,
+    marginFilter,
+    marketFilter,
+    sector17Filter,
+    sector33Filter,
+    tableSortDirection,
+    tableSortKey,
+    volumeFilter,
+  ])
   const selected = useMemo(
-    () => data?.analogs.find((row) => `${row.ticker}-${row.caseDate}` === selectedKey)
-      ?? data?.analogs[0]
-      ?? null,
-    [data, selectedKey],
+    () => displayedAnalogs.find((row) =>
+      `${row.ticker}-${row.caseStartDate}-${row.caseEndDate}` === selectedKey
+    ) ?? displayedAnalogs[0] ?? null,
+    [displayedAnalogs, selectedKey],
   )
-  const sharedDomain = useMemo(
-    () => chartDomain(data?.base.preWindow ?? [], selected?.preWindow ?? []),
-    [data, selected],
-  )
-  const horizonLabel = HORIZONS.find((item) => item.days === horizon)?.label ?? `${horizon}日`
+  const activeProfile = PROFILE_OPTIONS.find((option) => option.value === profile)
+    ?? PROFILE_OPTIONS[0]
+  const activeChartInterval = ANALOG_CHART_INTERVALS.find(
+    (option) => option.value === chartInterval,
+  ) ?? ANALOG_CHART_INTERVALS[0]
+  const activeMaPeriods = maSelections[chartInterval]
+  const toggleMaPeriod = (period: MovingAveragePeriod) => {
+    setMaSelections((current) => {
+      const selected = current[chartInterval]
+      const next = selected.includes(period)
+        ? selected.filter((value) => value !== period)
+        : [...selected, period].sort((a, b) => a - b)
+      return { ...current, [chartInterval]: next }
+    })
+  }
 
   return (
-    <section className="min-w-0 border-y border-[var(--color-border-default)] bg-white py-4" aria-labelledby="historical-analog-title">
-      <div className="flex flex-wrap items-start justify-between gap-3 px-3 sm:px-4">
+    <section className="overflow-hidden border border-[var(--color-border-default)] bg-white">
+      <div className="flex flex-col gap-3 border-b border-[var(--color-border-default)] px-3 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-4">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <GitCompareArrows size={18} className="text-teal-700" aria-hidden="true" />
-            <h2 id="historical-analog-title" className="text-[15px] font-black text-[var(--color-brand-900)]">
-              本質類似局面
-            </h2>
+            <ScanSearch size={17} className="shrink-0 text-teal-700" aria-hidden="true" />
+            <h2 className="text-[14px] font-black text-[var(--color-text-primary)]">本質類似局面</h2>
           </div>
-          <div className="mt-1 flex flex-wrap gap-1.5 text-[10px] font-bold text-[var(--color-text-secondary)]">
-            <span className="border border-teal-200 bg-teal-50 px-2 py-1 text-teal-800">転移ステージ・位置関係</span>
-            <span className="border border-blue-200 bg-blue-50 px-2 py-1 text-blue-800">乖離・角度・軌跡</span>
-            <span className="border border-violet-200 bg-violet-50 px-2 py-1 text-violet-800">日・週・月 / MA 5〜200</span>
-          </div>
-          <p className="mt-2 max-w-[760px] text-[11px] font-semibold leading-5 text-[var(--color-text-secondary)]">
-            ローソク足の見た目ではなく、現在の移動平均構造と本質的に同じ過去局面を全銘柄・全期間から検索し、その後の値動きを定量比較します。
+          <p className="mt-1 text-[10px] font-bold text-[var(--color-text-tertiary)]">
+            指定期間の日足・週足・月足・年足と移動平均線構造を、{market === 'US' ? '米国株' : '日本株'}の全履歴内で照合
           </p>
         </div>
         <button
           type="button"
-          onClick={() => {
-            if (!started) setStarted(true)
-            else void runSearch()
-          }}
+          onClick={() => void runSearch()}
           disabled={loading}
-          className="inline-flex h-9 items-center gap-2 rounded-[4px] bg-teal-700 px-3 text-[12px] font-black text-white hover:bg-teal-800 disabled:opacity-60"
+          className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-[4px] bg-teal-700 px-3 text-[12px] font-black text-white hover:bg-teal-800 disabled:cursor-wait disabled:opacity-60"
         >
           {started ? <RefreshCw size={14} className={loading ? 'animate-spin' : ''} /> : <ScanSearch size={14} />}
-          {loading ? '検索中' : started ? '再検索' : '全期間を検索'}
+          {loading ? '精密検索中' : started ? '条件を反映して再検索' : '本質類似局面を検索'}
         </button>
       </div>
 
-      <div className="mt-4 grid gap-3 border-y border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-3 py-3 sm:px-4 lg:grid-cols-[minmax(0,1fr)_170px_132px_110px]">
-        <div className="min-w-0">
-          <div className="mb-1.5 text-[10px] font-black text-[var(--color-text-tertiary)]">事後期間</div>
-          <div className="flex max-w-full gap-1 overflow-x-auto pb-1" role="tablist" aria-label="事後リターン期間">
-            {HORIZONS.map((item) => (
+      <div className="grid gap-3 border-b border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-3 py-3 sm:px-4 xl:grid-cols-[minmax(320px,1.1fr)_minmax(270px,.9fr)_minmax(320px,1fr)]">
+        <div>
+          <div className="mb-1.5 flex items-center gap-1 text-[10px] font-black text-[var(--color-text-tertiary)]">
+            <CalendarRange size={12} aria-hidden="true" />
+            分析対象期間
+          </div>
+          <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2">
+            <input
+              type="date"
+              value={startDate}
+              onChange={(event) => setStartDate(event.target.value)}
+              disabled={loading}
+              aria-label="分析開始日"
+              className="h-9 min-w-0 rounded-[3px] border border-[var(--color-border-default)] bg-white px-2 text-[11px] font-bold text-[var(--color-text-primary)] disabled:opacity-50"
+            />
+            <span className="text-[10px] font-black text-[var(--color-text-tertiary)]">〜</span>
+            <input
+              type="date"
+              value={endDate}
+              onChange={(event) => setEndDate(event.target.value)}
+              disabled={loading}
+              aria-label="分析終了日"
+              className="h-9 min-w-0 rounded-[3px] border border-[var(--color-border-default)] bg-white px-2 text-[11px] font-bold text-[var(--color-text-primary)] disabled:opacity-50"
+            />
+          </div>
+        </div>
+
+        <div>
+          <div className="mb-1.5 flex items-center gap-1 text-[10px] font-black text-[var(--color-text-tertiary)]">
+            比較で重視する時間軸
+            <span
+              title="日足・週足・月足・年足を、総合類似度へどの割合で反映するかを選びます。"
+              className="inline-flex"
+            >
+              <CircleHelp size={12} aria-hidden="true" />
+            </span>
+          </div>
+          <div className="grid grid-cols-3 border border-[var(--color-border-default)] bg-white p-0.5">
+            {PROFILE_OPTIONS.map((option) => (
               <button
-                key={item.days}
+                key={option.value}
                 type="button"
-                role="tab"
-                aria-selected={horizon === item.days}
-                onClick={() => setHorizon(item.days)}
+                onClick={() => setProfile(option.value)}
                 disabled={loading}
-                className={`h-8 shrink-0 rounded-[3px] border px-2.5 text-[11px] font-black ${
-                  horizon === item.days
+                aria-pressed={profile === option.value}
+                className={`h-8 px-1 text-[10px] font-black ${
+                  profile === option.value
+                    ? 'bg-teal-700 text-white'
+                    : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-subtle)]'
+                } disabled:opacity-50`}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+          <div className="mt-1.5 min-h-[34px] text-[9px] font-bold leading-[1.35] text-[var(--color-text-tertiary)]">
+            <strong className="text-teal-700">{activeProfile.weights}</strong>
+            <span className="ml-1">{activeProfile.description}</span>
+          </div>
+        </div>
+
+        <div>
+          <div className="mb-1.5 text-[10px] font-black text-[var(--color-text-tertiary)]">類似局面の発生時期</div>
+          <div className="grid grid-cols-4 gap-1">
+            {RECENCY_OPTIONS.map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => setRecency(option.value)}
+                disabled={loading}
+                aria-pressed={recency === option.value}
+                className={`h-9 min-w-0 rounded-[3px] border px-1 text-[10px] font-black ${
+                  recency === option.value
                     ? 'border-teal-700 bg-teal-700 text-white'
                     : 'border-[var(--color-border-default)] bg-white text-[var(--color-text-secondary)] hover:border-teal-400'
-                } disabled:cursor-not-allowed disabled:opacity-50`}
+                } disabled:opacity-50`}
               >
-                {item.label}
+                {option.label}
               </button>
             ))}
           </div>
         </div>
-        <label className="grid content-start gap-1.5 text-[10px] font-black text-[var(--color-text-tertiary)]">
+      </div>
+
+      <div className="flex flex-wrap items-end gap-3 border-b border-[var(--color-border-soft)] px-3 py-2 sm:px-4">
+        <label className="grid gap-1 text-[9px] font-black text-[var(--color-text-tertiary)]">
           並び順
           <select
             value={sort}
             onChange={(event) => setSort(event.target.value as HistoricalAnalogSort)}
             disabled={loading}
-            className="h-8 min-w-0 rounded-[3px] border border-[var(--color-border-default)] bg-white px-2 text-[11px] font-bold text-[var(--color-text-primary)] disabled:cursor-not-allowed disabled:opacity-50"
+            className="h-8 min-w-[148px] rounded-[3px] border border-[var(--color-border-default)] bg-white px-2 text-[10px] font-bold text-[var(--color-text-primary)] disabled:opacity-50"
           >
-            {SORT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            {SORT_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
           </select>
         </label>
-        <label className="grid content-start gap-1.5 text-[10px] font-black text-[var(--color-text-tertiary)]">
+        <label className="grid gap-1 text-[9px] font-black text-[var(--color-text-tertiary)]">
           最低類似度
           <select
             value={minScore}
             onChange={(event) => setMinScore(Number(event.target.value))}
             disabled={loading}
-            className="h-8 min-w-0 rounded-[3px] border border-[var(--color-border-default)] bg-white px-2 text-[11px] font-bold text-[var(--color-text-primary)] disabled:cursor-not-allowed disabled:opacity-50"
+            className="h-8 rounded-[3px] border border-[var(--color-border-default)] bg-white px-2 text-[10px] font-bold text-[var(--color-text-primary)]"
           >
-            {[0.25, 0.3, 0.35, 0.4, 0.45, 0.5].map((value) => (
+            {[0.3, 0.35, 0.4, 0.45, 0.5, 0.55].map((value) => (
               <option key={value} value={value}>{Math.round(value * 100)}%</option>
             ))}
           </select>
         </label>
-        <label className="flex h-8 self-end items-center justify-between gap-2 border border-[var(--color-border-default)] bg-white px-2 text-[10px] font-black text-[var(--color-text-secondary)]">
-          MA表示
-          <input
-            type="checkbox"
-            checked={showMa}
-            onChange={(event) => setShowMa(event.target.checked)}
-            disabled={loading}
-            className="h-4 w-4 accent-teal-700 disabled:cursor-not-allowed disabled:opacity-50"
-          />
-        </label>
+        <span className="pb-1 text-[9px] font-bold text-[var(--color-text-tertiary)]">
+          5〜250営業日・同一市場内
+        </span>
       </div>
 
       {!started && (
-        <div className="mx-3 mt-4 grid min-h-[132px] place-items-center border border-dashed border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-4 text-center sm:mx-4">
+        <div className="grid min-h-[150px] place-items-center px-4 text-center">
           <div>
-            <BarChart3 size={24} className="mx-auto text-teal-700" aria-hidden="true" />
-            <div className="mt-2 text-[13px] font-black text-[var(--color-text-primary)]">現在と同じ構造変化を全履歴から検索</div>
-            <div className="mt-1 text-[11px] font-bold text-[var(--color-text-tertiary)]">日足・週足・月足・長期のMA軌跡を厳密再評価</div>
+            <CalendarRange size={25} className="mx-auto text-teal-700" aria-hidden="true" />
+            <div className="mt-2 text-[13px] font-black text-[var(--color-text-primary)]">
+              比較したい期間を指定
+            </div>
+            <div className="mt-1 text-[10px] font-bold text-[var(--color-text-tertiary)]">
+              開始日と終了日の取引日へ自動調整されます
+            </div>
           </div>
         </div>
       )}
 
       {loading && !data && (
-        <div className="mx-3 mt-4 grid gap-2 sm:mx-4 sm:grid-cols-2">
+        <div className="grid gap-2 p-3 sm:grid-cols-2 sm:p-4">
           <div className="h-[360px] animate-pulse border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)]" />
           <div className="h-[360px] animate-pulse border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)]" />
         </div>
       )}
 
       {error && (
-        <div role="alert" className="mx-3 mt-4 border border-rose-200 bg-rose-50 px-3 py-2 text-[12px] font-bold text-rose-800 sm:mx-4">
+        <div role="alert" className="m-3 border border-rose-200 bg-rose-50 px-3 py-2 text-[12px] font-bold text-rose-800 sm:m-4">
           {error}
         </div>
       )}
 
       {data && (
         <>
-          <div className="mx-3 mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] font-bold text-[var(--color-text-tertiary)] sm:mx-4">
-            <span>基準日 {data.asOfDate}</span>
-            <span className="inline-flex items-center gap-1">現在 {stageTags(data.base.stageCode)}</span>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 pt-3 text-[9px] font-bold text-[var(--color-text-tertiary)] sm:px-4">
+            <span>基準 {data.base.startDate}〜{data.base.endDate}</span>
+            <span>{data.base.sessionCount}営業日</span>
+            <span>市場最新 {data.latestMarketDate}</span>
             <span>履歴 {data.search.coverageFrom ?? '-'}〜{data.search.coverageTo ?? '-'}</span>
             <span>索引 {data.search.indexRows.toLocaleString('ja-JP')}局面</span>
-            <span>DTW再評価 {data.search.dtwRerankCount.toLocaleString('ja-JP')}局面</span>
-            <span>ステージ経路 {data.search.stageShortlistCount.toLocaleString('ja-JP')}局面</span>
-            <span>全時間軸一致 {data.search.requiredComponents.length}要素必須</span>
-            <span>検証済み重み {data.search.scoringProfile.label}</span>
-            <span>学習特徴量 {Math.round(data.search.mlRerankWeight * 100)}%寄与・内訳表示</span>
+            <span>
+              アンカー D {data.search.maPeriodsByTimeframe.daily.join('/')}
+              {' · '}W {data.search.maPeriodsByTimeframe.weekly.join('/')}
+              {' · '}M {data.search.maPeriodsByTimeframe.monthly.join('/')}
+              {' · '}Y {data.search.maPeriodsByTimeframe.yearly.join('/')}
+            </span>
+            <span>精密再評価 {data.search.dtwRerankCount.toLocaleString('ja-JP')}局面</span>
+            <span>{data.search.scoringProfile.label}</span>
+            <span>学習特徴量 最大{Math.round(data.search.mlRerankWeight * 100)}%</span>
             {data.search.truncated && <span className="font-black text-amber-700">候補上限到達</span>}
           </div>
 
-          <div className="mx-3 mt-3 grid grid-cols-2 border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] sm:mx-4 sm:grid-cols-3 lg:grid-cols-6">
+          <div className="mx-3 mt-3 grid grid-cols-2 border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] sm:mx-4 sm:grid-cols-5">
             {[
-              { label: '確定標本', value: `${data.summary.sampleCount}件`, tone: 'text-[var(--color-text-primary)]' },
-              { label: '途中標本', value: `${data.summary.partialCount}件`, tone: 'text-amber-700' },
-              { label: '上昇率', value: data.summary.upRate == null ? '-' : `${Math.round(data.summary.upRate * 100)}%`, tone: 'text-teal-700' },
-              { label: '中央値', value: fmtPct(data.summary.medianReturnPct), tone: outcomeTone(data.summary.medianReturnPct) },
-              { label: '平均最大上昇', value: fmtPct(data.summary.averageMaxReturnPct), tone: 'text-[var(--color-market-red)]' },
-              { label: '平均最大下落', value: fmtPct(data.summary.averageMinReturnPct), tone: 'text-[var(--color-market-blue)]' },
+              {
+                label: '該当 / 表示',
+                value: `${data.summary.matchCount} / ${data.summary.displayedCount}件`,
+              },
+              { label: '同一銘柄', value: `${data.summary.sameTickerCount}件` },
+              { label: '他銘柄', value: `${data.summary.otherTickerCount}件` },
+              { label: '類似度中央値', value: fmtScore(data.summary.medianSimilarity) },
+              { label: '最新の類似局面', value: data.summary.latestMatchEndDate ?? '-' },
             ].map((item) => (
               <div key={item.label} className="min-w-0 border-b border-r border-[var(--color-border-soft)] px-2 py-2.5 text-center last:border-r-0 sm:border-b-0">
                 <div className="truncate text-[9px] font-black text-[var(--color-text-tertiary)]">{item.label}</div>
-                <div className={`mt-1 text-[14px] font-black ${item.tone}`}>{item.value}</div>
+                <div className="mt-1 truncate text-[13px] font-black text-[var(--color-text-primary)]">{item.value}</div>
               </div>
             ))}
           </div>
@@ -588,31 +885,105 @@ export function HistoricalAnalogExplorer({
               <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--color-border-soft)] px-3 py-2.5">
                 <div className="flex min-w-0 items-center gap-2">
                   <GitCompareArrows size={15} className="shrink-0 text-teal-700" />
-                  <span className="text-[12px] font-black text-[var(--color-text-primary)]">構造比較</span>
-                  <span className="text-[10px] font-bold text-[var(--color-text-tertiary)]">終点=100・共通スケール</span>
+                  <span className="text-[12px] font-black text-[var(--color-text-primary)]">指定期間比較</span>
+                  <span className="text-[9px] font-bold text-[var(--color-text-tertiary)]">
+                    黄色の範囲が比較対象・前後の値動きも表示
+                  </span>
                 </div>
-                <div className="flex flex-wrap gap-2 text-[9px] font-black">
-                  <span className="text-[#111827]">終値</span>
-                  {showMa && MA_LINES.map((line) => (
-                    <span key={line.key} style={{ color: line.color }}>MA{line.label}</span>
-                  ))}
+                <span className="shrink-0 border border-amber-300 bg-amber-100 px-2 py-1 text-[9px] font-black text-amber-800">
+                  黄色 = 指定期間
+                </span>
+              </div>
+              <div className="grid gap-2 border-b border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-3 py-2">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <div className="text-[9px] font-black text-[var(--color-text-tertiary)]">チャート時間軸</div>
+                    <div className="mt-0.5 text-[9px] font-bold text-[var(--color-text-secondary)]">
+                      {activeChartInterval.description}
+                    </div>
+                  </div>
+                  <div className="grid w-full grid-cols-4 border border-[var(--color-border-default)] bg-white p-0.5 sm:w-auto sm:min-w-[280px]">
+                    {ANALOG_CHART_INTERVALS.map((option) => (
+                      <button
+                        key={option.value}
+                        type="button"
+                        onClick={() => setChartInterval(option.value)}
+                        aria-pressed={chartInterval === option.value}
+                        className={`h-8 px-2 text-[10px] font-black ${
+                          chartInterval === option.value
+                            ? 'bg-teal-700 text-white'
+                            : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-subtle)]'
+                        }`}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
+                <fieldset className="flex flex-wrap items-center gap-2 border-t border-[var(--color-border-soft)] pt-2">
+                  <legend className="sr-only">{activeChartInterval.label}の移動平均線</legend>
+                  <span className="mr-1 text-[9px] font-black text-[var(--color-text-tertiary)]">
+                    移動平均線
+                  </span>
+                  {ANALOG_MA_DEFAULTS[chartInterval].map((period) => {
+                    const checked = activeMaPeriods.includes(period)
+                    return (
+                      <label
+                        key={period}
+                        className={`inline-flex h-7 cursor-pointer items-center gap-1.5 border px-2 text-[9px] font-black ${
+                          checked
+                            ? 'border-[var(--color-border-default)] bg-white text-[var(--color-text-primary)]'
+                            : 'border-[var(--color-border-soft)] bg-transparent text-[var(--color-text-tertiary)]'
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => toggleMaPeriod(period)}
+                          aria-label={`${period}${activeChartInterval.maUnit}移動平均線`}
+                          className="h-3.5 w-3.5 accent-teal-700"
+                        />
+                        <span
+                          aria-hidden="true"
+                          className="h-0.5 w-3"
+                          style={{ backgroundColor: movingAverageColor(period) }}
+                        />
+                        {period}{activeChartInterval.maUnit}
+                      </label>
+                    )
+                  })}
+                  {activeMaPeriods.length === 0 && (
+                    <span className="text-[9px] font-bold text-[var(--color-text-tertiary)]">
+                      すべて非表示
+                    </span>
+                  )}
+                </fieldset>
               </div>
               <div className="grid min-w-0 lg:grid-cols-2">
                 <div className="min-w-0 border-b border-[var(--color-border-soft)] p-2 lg:border-b-0 lg:border-r">
                   <div className="flex items-center justify-between gap-2 px-1">
-                    <div className="text-[11px] font-black text-[var(--color-text-primary)]">
-                      現在 {data.base.ticker} {data.base.name ?? ''}
+                    <div className="truncate text-[11px] font-black text-[var(--color-text-primary)]">
+                      基準 {data.base.ticker} {data.base.name ?? ''}
                     </div>
-                    <span className="text-[9px] font-bold text-[var(--color-text-tertiary)]">{data.base.date}</span>
+                    <span className="shrink-0 text-[9px] font-bold text-[var(--color-text-tertiary)]">
+                      {data.base.startDate}〜{data.base.endDate}
+                    </span>
                   </div>
-                  <StructureChart
-                    points={data.base.preWindow}
-                    domain={sharedDomain}
-                    showMa={showMa}
-                    label={`${data.base.ticker}の現在までのMA構造`}
+                  <AnalogPeriodChart
+                    ticker={data.base.ticker}
+                    market={market}
+                    interval={chartInterval}
+                    points={data.base.window}
+                    maPeriods={activeMaPeriods}
+                    label={`${data.base.ticker}の指定期間チャート`}
+                    startDate={data.base.startDate}
+                    endDate={data.base.endDate}
+                    currency={market === 'US' ? 'USD' : 'JPY'}
                   />
                   <div className="border-t border-[var(--color-border-soft)] px-1 pt-2">
+                    <div className="mb-1 text-[9px] font-black text-[var(--color-text-tertiary)]">
+                      日足6ステージ推移
+                    </div>
                     <StageTimeline points={data.base.stagePath} />
                   </div>
                 </div>
@@ -620,77 +991,74 @@ export function HistoricalAnalogExplorer({
                   <div className="flex items-center justify-between gap-2 px-1">
                     <Link
                       href={market === 'US'
-                        ? `/us/stock/${encodeURIComponent(selected.ticker)}?date=${selected.caseDate}`
-                        : `/stock/${encodeURIComponent(selected.ticker)}?date=${selected.caseDate}`}
+                        ? `/us/stock/${encodeURIComponent(selected.ticker)}?date=${selected.caseEndDate}`
+                        : `/stock/${encodeURIComponent(selected.ticker)}?date=${selected.caseEndDate}`}
                       className="min-w-0 truncate text-[11px] font-black text-[var(--color-brand-700)] hover:text-[var(--color-market-red)]"
                     >
-                      過去 {selected.ticker} {selected.name ?? ''}
+                      類似 {selected.ticker} {selected.name ?? ''}
                     </Link>
-                    <span className="text-[9px] font-bold text-[var(--color-text-tertiary)]">{selected.caseDate}</span>
+                    <span className="shrink-0 text-[9px] font-bold text-[var(--color-text-tertiary)]">
+                      {selected.caseStartDate}〜{selected.caseEndDate}
+                    </span>
                   </div>
-                  <StructureChart
-                    points={selected.preWindow}
-                    domain={sharedDomain}
-                    showMa={showMa}
-                    label={`${selected.ticker}の${selected.caseDate}までのMA構造`}
+                  <AnalogPeriodChart
+                    ticker={selected.ticker}
+                    market={market}
+                    interval={chartInterval}
+                    points={selected.window}
+                    maPeriods={activeMaPeriods}
+                    label={`${selected.ticker}の類似期間チャート`}
+                    startDate={selected.caseStartDate}
+                    endDate={selected.caseEndDate}
+                    currency={market === 'US' ? 'USD' : 'JPY'}
                   />
                   <div className="border-t border-[var(--color-border-soft)] px-1 pt-2">
+                    <div className="mb-1 text-[9px] font-black text-[var(--color-text-tertiary)]">
+                      日足6ステージ推移
+                    </div>
                     <StageTimeline points={selected.stagePath} />
                   </div>
                 </div>
               </div>
 
-              <div className="grid border-t border-[var(--color-border-default)] lg:grid-cols-[minmax(0,1.35fr)_minmax(280px,.65fr)]">
-                <div className="min-w-0 border-b border-[var(--color-border-soft)] p-3 lg:border-b-0 lg:border-r">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="text-[11px] font-black text-[var(--color-text-primary)]">
-                      {selected.caseDate} 以後 {horizonLabel}
+              <div className="grid border-t border-[var(--color-border-default)] lg:grid-cols-[minmax(0,1fr)_340px]">
+                <div className="grid grid-cols-2 sm:grid-cols-5">
+                  {[
+                    { label: '総合類似度', value: selected.similarityScore },
+                    { label: '日足', value: selected.dailyScore },
+                    { label: '週足', value: selected.weeklyScore },
+                    { label: '月足', value: selected.monthlyScore },
+                    { label: '年足', value: selected.yearlyScore },
+                  ].map((item) => (
+                    <div key={item.label} className="border-b border-r border-[var(--color-border-soft)] px-3 py-3 text-center lg:border-b-0">
+                      <div className="text-[9px] font-black text-[var(--color-text-tertiary)]">{item.label}</div>
+                      <div className={`mt-1 text-[18px] font-black ${item.label === '総合類似度' ? 'text-teal-700' : 'text-[var(--color-text-primary)]'}`}>
+                        {fmtScore(item.value)}
+                      </div>
                     </div>
-                    <div className="flex items-center gap-1 text-[10px] font-black">
-                      {selected.outcome.complete
-                        ? <CheckCircle2 size={13} className="text-teal-700" />
-                        : <Clock3 size={13} className="text-amber-700" />}
-                      <span className={selected.outcome.complete ? 'text-teal-700' : 'text-amber-700'}>
-                        {selected.outcome.complete ? '確定' : `${selected.outcome.availableDays}営業日まで`}
-                      </span>
-                    </div>
-                  </div>
-                  <OutcomeChart row={selected} />
-                  <div className="grid grid-cols-3 border-t border-[var(--color-border-soft)] text-center">
-                    <div className="px-2 py-2">
-                      <div className="text-[9px] font-black text-[var(--color-text-tertiary)]">期末</div>
-                      <div className={`mt-1 text-[13px] font-black ${outcomeTone(selected.outcome.returnPct)}`}>{fmtPct(selected.outcome.returnPct)}</div>
-                    </div>
-                    <div className="border-x border-[var(--color-border-soft)] px-2 py-2">
-                      <div className="text-[9px] font-black text-[var(--color-text-tertiary)]">最大上昇</div>
-                      <div className="mt-1 text-[13px] font-black text-[var(--color-market-red)]">{fmtPct(selected.outcome.maxReturnPct)}</div>
-                    </div>
-                    <div className="px-2 py-2">
-                      <div className="text-[9px] font-black text-[var(--color-text-tertiary)]">最大下落</div>
-                      <div className="mt-1 text-[13px] font-black text-[var(--color-market-blue)]">{fmtPct(selected.outcome.minReturnPct)}</div>
-                    </div>
-                  </div>
+                  ))}
                 </div>
                 <div className="min-w-0 p-3">
-                  <div className="flex items-end justify-between gap-2 border-b border-[var(--color-border-soft)] pb-2">
-                    <div>
-                      <div className="text-[9px] font-black text-[var(--color-text-tertiary)]">総合類似度</div>
-                      <div className="mt-1 text-[26px] font-black leading-none text-teal-700">{fmtScore(selected.similarityScore)}</div>
-                    </div>
-                    <div className="text-right text-[9px] font-bold text-[var(--color-text-tertiary)]">
-                      {selected.sector17Name ?? selected.marketSegment ?? '分類なし'}
-                    </div>
+                  <div className="flex items-center justify-between gap-2 border-b border-[var(--color-border-soft)] pb-2">
+                    <span className="text-[10px] font-black text-[var(--color-text-primary)]">
+                      {selected.caseEndDate} に終了
+                    </span>
+                    <span className="text-[10px] font-black text-teal-700">
+                      市場最新から {elapsedLabel(selected.elapsedDays)}
+                    </span>
                   </div>
-                  <div className="mt-3 grid gap-2">
+                  <div className="mt-2 grid gap-1.5">
                     {selected.components.map((component) => (
-                      <div key={component.key}>
-                        <div className="mb-1 flex items-center justify-between gap-2 text-[10px] font-black">
-                          <span className="text-[var(--color-text-secondary)]">{component.label}</span>
-                          <span className="text-teal-700">{fmtScore(component.score)}</span>
-                        </div>
+                      <div key={component.key} className="grid grid-cols-[64px_1fr_38px] items-center gap-2">
+                        <span className="truncate text-[9px] font-black text-[var(--color-text-secondary)]">
+                          {component.label}
+                        </span>
                         <div className="h-1.5 bg-[var(--color-surface-muted)]">
                           <div className="h-full bg-teal-600" style={{ width: `${Math.max(2, component.score * 100)}%` }} />
                         </div>
+                        <span className="text-right text-[9px] font-black text-teal-700">
+                          {fmtScore(component.score)}
+                        </span>
                       </div>
                     ))}
                   </div>
@@ -699,65 +1067,257 @@ export function HistoricalAnalogExplorer({
             </div>
           )}
 
+          {data.analogs.length > 0 && (
+            <div className="mx-3 mt-4 border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] sm:mx-4">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--color-border-soft)] px-3 py-2">
+                <div className="flex items-center gap-2">
+                  <ListFilter size={14} className="text-teal-700" aria-hidden="true" />
+                  <span className="text-[11px] font-black text-[var(--color-text-primary)]">
+                    ランキング絞り込み・ソート
+                  </span>
+                  <span className="text-[9px] font-bold text-[var(--color-text-tertiary)]">
+                    表示中{data.analogs.length}件を対象
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-black tabular-nums text-teal-700">
+                    {displayedAnalogs.length}件表示
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMarketFilter('all')
+                      setSector17Filter('all')
+                      setSector33Filter('all')
+                      setMarginFilter('all')
+                      setVolumeFilter('all')
+                      setTableSortKey('rank')
+                      setTableSortDirection('asc')
+                    }}
+                    title="絞り込みとソートを初期状態へ戻す"
+                    className="inline-flex h-7 items-center gap-1 border border-[var(--color-border-default)] bg-white px-2 text-[9px] font-black text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-muted)]"
+                  >
+                    <RotateCcw size={11} aria-hidden="true" />
+                    リセット
+                  </button>
+                </div>
+              </div>
+              <div className="grid gap-2 p-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
+                <label className="min-w-0">
+                  <span className="mb-1 block text-[9px] font-black text-[var(--color-text-tertiary)]">市場</span>
+                  <select
+                    value={marketFilter}
+                    onChange={(event) => setMarketFilter(event.target.value)}
+                    className="h-8 w-full min-w-0 border border-[var(--color-border-default)] bg-white px-2 text-[10px] font-bold text-[var(--color-text-primary)]"
+                  >
+                    <option value="all">すべて</option>
+                    {filterOptions.marketSegments.map((value) => (
+                      <option key={value} value={value}>{value}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="min-w-0">
+                  <span className="mb-1 block text-[9px] font-black text-[var(--color-text-tertiary)]">17業種</span>
+                  <select
+                    value={sector17Filter}
+                    onChange={(event) => setSector17Filter(event.target.value)}
+                    className="h-8 w-full min-w-0 border border-[var(--color-border-default)] bg-white px-2 text-[10px] font-bold text-[var(--color-text-primary)]"
+                  >
+                    <option value="all">すべて</option>
+                    {filterOptions.sector17Names.map((value) => (
+                      <option key={value} value={value}>{value}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="min-w-0">
+                  <span className="mb-1 block text-[9px] font-black text-[var(--color-text-tertiary)]">33業種</span>
+                  <select
+                    value={sector33Filter}
+                    onChange={(event) => setSector33Filter(event.target.value)}
+                    className="h-8 w-full min-w-0 border border-[var(--color-border-default)] bg-white px-2 text-[10px] font-bold text-[var(--color-text-primary)]"
+                  >
+                    <option value="all">すべて</option>
+                    {filterOptions.sector33Names.map((value) => (
+                      <option key={value} value={value}>{value}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="min-w-0">
+                  <span className="mb-1 block text-[9px] font-black text-[var(--color-text-tertiary)]">貸借・信用</span>
+                  <select
+                    value={marginFilter}
+                    onChange={(event) => setMarginFilter(event.target.value)}
+                    className="h-8 w-full min-w-0 border border-[var(--color-border-default)] bg-white px-2 text-[10px] font-bold text-[var(--color-text-primary)]"
+                  >
+                    <option value="all">すべて</option>
+                    {filterOptions.marginTypes.map((value) => (
+                      <option key={value} value={value}>{value}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="min-w-0">
+                  <span className="mb-1 block text-[9px] font-black text-[var(--color-text-tertiary)]">出来高</span>
+                  <select
+                    value={volumeFilter}
+                    onChange={(event) => setVolumeFilter(event.target.value as AnalogVolumeFilter)}
+                    className="h-8 w-full min-w-0 border border-[var(--color-border-default)] bg-white px-2 text-[10px] font-bold text-[var(--color-text-primary)]"
+                  >
+                    <option value="all">すべて</option>
+                    <option value="above_avg">30日平均以上</option>
+                    <option value="below_avg">30日平均未満</option>
+                    <option value="surge">30日平均の1.5倍以上</option>
+                    <option value="missing">データなし</option>
+                  </select>
+                </label>
+                <label className="min-w-0">
+                  <span className="mb-1 flex items-center gap-1 text-[9px] font-black text-[var(--color-text-tertiary)]">
+                    <ArrowUpDown size={10} aria-hidden="true" />
+                    一覧ソート
+                  </span>
+                  <select
+                    value={tableSortKey}
+                    onChange={(event) => {
+                      const next = event.target.value as AnalogTableSortKey
+                      setTableSortKey(next)
+                      setTableSortDirection(
+                        next === 'rank' || next === 'recent' || next === 'ticker' ? 'asc' : 'desc',
+                      )
+                    }}
+                    className="h-8 w-full min-w-0 border border-[var(--color-border-default)] bg-white px-2 text-[10px] font-bold text-[var(--color-text-primary)]"
+                  >
+                    {TABLE_SORT_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="min-w-0">
+                  <span className="mb-1 block text-[9px] font-black text-[var(--color-text-tertiary)]">並び方向</span>
+                  <select
+                    value={tableSortDirection}
+                    onChange={(event) =>
+                      setTableSortDirection(event.target.value as AnalogTableSortDirection)
+                    }
+                    className="h-8 w-full min-w-0 border border-[var(--color-border-default)] bg-white px-2 text-[10px] font-bold text-[var(--color-text-primary)]"
+                  >
+                    <option value="desc">降順（大きい順）</option>
+                    <option value="asc">昇順（小さい順）</option>
+                  </select>
+                </label>
+              </div>
+            </div>
+          )}
+
           {data.analogs.length === 0 ? (
-            <div className="mx-3 mt-4 border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-3 py-5 text-center text-[12px] font-bold text-[var(--color-text-tertiary)] sm:mx-4">
-              指定条件に合う過去局面は見つかりませんでした。
+            <div className="mx-3 my-4 border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-3 py-5 text-center text-[12px] font-bold text-[var(--color-text-tertiary)] sm:mx-4">
+              指定条件に合う本質類似局面は見つかりませんでした。
+            </div>
+          ) : displayedAnalogs.length === 0 ? (
+            <div className="mx-3 my-4 border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-3 py-5 text-center text-[12px] font-bold text-[var(--color-text-tertiary)] sm:mx-4">
+              絞り込み条件に合う候補はありません。条件を変更するかリセットしてください。
             </div>
           ) : (
-            <div className="mx-3 mt-4 overflow-x-auto border border-[var(--color-border-default)] sm:mx-4">
-              <table className="w-full min-w-[1040px] border-collapse text-left">
+            <div className="mx-3 my-4 overflow-x-auto border border-[var(--color-border-default)] sm:mx-4">
+              <table className="w-full min-w-[1480px] border-collapse text-left">
                 <thead className="bg-[var(--color-surface-subtle)] text-[9px] font-black text-[var(--color-text-tertiary)]">
                   <tr>
-                    <th className="w-10 px-2 py-2 text-center">順位</th>
-                    <th className="px-2 py-2">銘柄・局面</th>
+                    <th className="w-10 px-2 py-2 text-center">類似順位</th>
+                    <th className="px-2 py-2">銘柄・類似期間</th>
+                    <th className="px-2 py-2">市場・取引区分</th>
+                    <th className="px-2 py-2">17・33業種</th>
+                    <th className="px-2 py-2">発生日</th>
                     <th className="px-2 py-2 text-center">ステージ</th>
-                    <th className="px-2 py-2 text-right">類似度</th>
-                    <th className="px-2 py-2 text-right">10日</th>
-                    <th className="px-2 py-2 text-right">20日</th>
-                    <th className="px-2 py-2 text-right">40日</th>
+                    <th className="px-2 py-2 text-right">総合</th>
+                    <th className="px-2 py-2 text-right">日足</th>
                     <th className="px-2 py-2 text-right">週足</th>
                     <th className="px-2 py-2 text-right">月足</th>
-                    <th className="px-2 py-2 text-right">長期</th>
-                    <th className="px-2 py-2 text-right">学習</th>
-                    <th className="px-2 py-2 text-right">{horizonLabel}後</th>
-                    <th className="px-2 py-2 text-right">期間最大</th>
+                    <th className="px-2 py-2 text-right">年足</th>
+                    <th className="px-2 py-2 text-right">学習特徴量</th>
+                    <th className="px-2 py-2 text-right">出来高・30日平均</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {data.analogs.map((row) => {
-                    const key = `${row.ticker}-${row.caseDate}`
-                    const component = new Map(row.components.map((item) => [item.key, item.score]))
-                    const active = key === `${selected?.ticker}-${selected?.caseDate}`
+                  {displayedAnalogs.map((row) => {
+                    const key = `${row.ticker}-${row.caseStartDate}-${row.caseEndDate}`
+                    const active = key === `${selected?.ticker}-${selected?.caseStartDate}-${selected?.caseEndDate}`
                     return (
                       <tr
                         key={key}
                         onClick={() => setSelectedKey(key)}
+                        onKeyDown={(event) => {
+                          if (event.key !== 'Enter' && event.key !== ' ') return
+                          event.preventDefault()
+                          setSelectedKey(key)
+                        }}
+                        tabIndex={0}
+                        aria-selected={active}
                         className={`cursor-pointer border-t border-[var(--color-border-soft)] text-[10px] font-bold ${
                           active ? 'bg-teal-50' : 'bg-white hover:bg-[var(--color-surface-subtle)]'
                         }`}
                       >
                         <td className="px-2 py-2.5 text-center">
                           <span className={`inline-grid h-5 min-w-5 place-items-center rounded-full px-1 text-[9px] font-black ${
-                            active ? 'bg-teal-700 text-white' : 'bg-[var(--color-surface-muted)] text-[var(--color-text-secondary)]'
+                            active
+                              ? 'bg-teal-700 text-white'
+                              : 'bg-[var(--color-surface-muted)] text-[var(--color-text-secondary)]'
                           }`}>
                             {row.rank}
                           </span>
                         </td>
                         <td className="px-2 py-2.5">
                           <div className="font-black text-[var(--color-brand-800)]">{row.ticker} {row.name ?? ''}</div>
-                          <div className="mt-0.5 text-[9px] text-[var(--color-text-tertiary)]">{row.caseDate}</div>
+                          <div className="mt-0.5 text-[9px] text-[var(--color-text-tertiary)]">
+                            {row.caseStartDate}〜{row.caseEndDate}
+                          </div>
+                        </td>
+                        <td className="px-2 py-2.5">
+                          <div className="font-black text-[var(--color-text-primary)]">
+                            {row.marketSegment ?? '市場未分類'}
+                          </div>
+                          <div className="mt-0.5 text-[9px] text-[var(--color-text-tertiary)]">
+                            {row.marginType ?? (market === 'JP' ? '信用区分未登録' : '信用区分対象外')}
+                          </div>
+                        </td>
+                        <td className="px-2 py-2.5">
+                          <div className="font-black text-[var(--color-text-primary)]">
+                            17: {row.sector17Name ?? '未分類'}
+                          </div>
+                          <div className="mt-0.5 text-[9px] text-[var(--color-text-tertiary)]">
+                            33: {row.sector33Name ?? '未分類'}
+                          </div>
+                        </td>
+                        <td className="px-2 py-2.5">
+                          <div className="font-black text-[var(--color-text-primary)]">{row.caseEndDate}</div>
+                          <div className="mt-0.5 text-[9px] text-[var(--color-text-tertiary)]">{elapsedLabel(row.elapsedDays)}</div>
                         </td>
                         <td className="px-2 py-2.5 text-center">{stageTags(row.stageCode)}</td>
                         <td className="px-2 py-2.5 text-right text-[12px] font-black text-teal-700">{fmtScore(row.similarityScore)}</td>
-                        {['daily10', 'daily20', 'daily40', 'weekly', 'monthly', 'longTerm', 'mlFeatures'].map((name) => (
-                          <td key={name} className="px-2 py-2.5 text-right text-[var(--color-text-secondary)]">
-                            {component.has(name) ? fmtScore(component.get(name)!) : '-'}
-                          </td>
-                        ))}
-                        <td className={`px-2 py-2.5 text-right font-black ${outcomeTone(row.outcome.returnPct)}`}>
-                          {row.outcome.complete ? fmtPct(row.outcome.returnPct) : `${row.outcome.availableDays}日途中`}
+                        <td className="px-2 py-2.5 text-right text-[var(--color-text-secondary)]">{fmtScore(row.dailyScore)}</td>
+                        <td className="px-2 py-2.5 text-right text-[var(--color-text-secondary)]">{fmtScore(row.weeklyScore)}</td>
+                        <td className="px-2 py-2.5 text-right text-[var(--color-text-secondary)]">{fmtScore(row.monthlyScore)}</td>
+                        <td className="px-2 py-2.5 text-right text-[var(--color-text-secondary)]">{fmtScore(row.yearlyScore)}</td>
+                        <td className="px-2 py-2.5 text-right text-[var(--color-text-secondary)]">
+                          <div>{fmtScore(row.mlFeatureScore)}</div>
+                          {row.mlFeaturePointCount > 0 && (
+                            <div className="mt-0.5 text-[8px] text-[var(--color-text-tertiary)]">
+                              {row.mlFeaturePointCount}/{row.mlFeatureTotalPoints}時点
+                            </div>
+                          )}
                         </td>
-                        <td className="px-2 py-2.5 text-right font-black text-[var(--color-market-red)]">{fmtPct(row.outcome.maxReturnPct)}</td>
+                        <td className="px-2 py-2.5 text-right">
+                          <div className="font-black tabular-nums text-[var(--color-text-primary)]">
+                            {fmtVolume(row.volume)}
+                          </div>
+                          <div className="mt-0.5 text-[9px] tabular-nums text-[var(--color-text-tertiary)]">
+                            平均 {fmtVolume(row.avgVolume30)}
+                          </div>
+                          <div className={`mt-0.5 text-[9px] font-black tabular-nums ${
+                            row.volumeRatio30 != null && row.volumeRatio30 >= 1.5
+                              ? 'text-amber-700'
+                              : 'text-[var(--color-text-secondary)]'
+                          }`}>
+                            {row.volumeRatio30 == null ? '-' : `${row.volumeRatio30.toFixed(2)}倍`}
+                          </div>
+                        </td>
                       </tr>
                     )
                   })}

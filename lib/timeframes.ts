@@ -1,7 +1,11 @@
 import type { OHLCV } from '@/types/stock'
 
-export type TimeframeUnit = 'day' | 'week' | 'month'
-export type ChartIntervalCode = 'D' | '2D' | 'W' | '2W' | 'M' | '2M'
+export type TimeframeUnit = 'day' | 'week' | 'month' | 'year'
+export type ChartIntervalCode =
+  | 'D' | '2D' | '3D'
+  | 'W' | '2W' | '3W'
+  | 'M' | '2M' | '3M' | '6M'
+  | 'Y' | '2Y' | '3Y'
 
 export interface TimeframeSpec {
   timeframe: TimeframeUnit
@@ -16,12 +20,19 @@ export const CHART_INTERVAL_OPTIONS: Array<{
   initialVisiblePeriod: string
   defaultMaLines: number[]
 }> = [
-  { code: 'D', label: '日足', spec: { timeframe: 'day', multiplier: 1 }, defaultPeriod: '1y', initialVisiblePeriod: '1y', defaultMaLines: [3, 5, 25, 75] },
-  { code: '2D', label: '2日足', spec: { timeframe: 'day', multiplier: 2 }, defaultPeriod: '2y', initialVisiblePeriod: '1y', defaultMaLines: [3, 5, 25, 75] },
-  { code: 'W', label: '週足', spec: { timeframe: 'week', multiplier: 1 }, defaultPeriod: '5y', initialVisiblePeriod: '5y', defaultMaLines: [3, 13, 26, 52] },
-  { code: '2W', label: '2週足', spec: { timeframe: 'week', multiplier: 2 }, defaultPeriod: '10y', initialVisiblePeriod: '5y', defaultMaLines: [3, 13, 26, 52] },
-  { code: 'M', label: '月足', spec: { timeframe: 'month', multiplier: 1 }, defaultPeriod: '10y', initialVisiblePeriod: '10y', defaultMaLines: [3, 12, 24, 60] },
-  { code: '2M', label: '2ヶ月足', spec: { timeframe: 'month', multiplier: 2 }, defaultPeriod: '10y', initialVisiblePeriod: '10y', defaultMaLines: [3, 12, 24, 60] },
+  { code: 'D', label: '日足', spec: { timeframe: 'day', multiplier: 1 }, defaultPeriod: '1y', initialVisiblePeriod: '1y', defaultMaLines: [5, 25, 75, 200] },
+  { code: '2D', label: '2日足', spec: { timeframe: 'day', multiplier: 2 }, defaultPeriod: '2y', initialVisiblePeriod: '1y', defaultMaLines: [5, 25, 75, 200] },
+  { code: '3D', label: '3日足', spec: { timeframe: 'day', multiplier: 3 }, defaultPeriod: '5y', initialVisiblePeriod: '2y', defaultMaLines: [5, 25, 75, 200] },
+  { code: 'W', label: '週足', spec: { timeframe: 'week', multiplier: 1 }, defaultPeriod: '5y', initialVisiblePeriod: '5y', defaultMaLines: [13, 26, 52] },
+  { code: '2W', label: '2週足', spec: { timeframe: 'week', multiplier: 2 }, defaultPeriod: '10y', initialVisiblePeriod: '5y', defaultMaLines: [13, 26, 52] },
+  { code: '3W', label: '3週足', spec: { timeframe: 'week', multiplier: 3 }, defaultPeriod: 'all', initialVisiblePeriod: '10y', defaultMaLines: [13, 26, 52] },
+  { code: 'M', label: '月足', spec: { timeframe: 'month', multiplier: 1 }, defaultPeriod: '10y', initialVisiblePeriod: '10y', defaultMaLines: [9, 24, 60] },
+  { code: '2M', label: '2ヶ月足', spec: { timeframe: 'month', multiplier: 2 }, defaultPeriod: '10y', initialVisiblePeriod: '10y', defaultMaLines: [9, 24, 60] },
+  { code: '3M', label: '3ヶ月足', spec: { timeframe: 'month', multiplier: 3 }, defaultPeriod: 'all', initialVisiblePeriod: '10y', defaultMaLines: [9, 24, 60] },
+  { code: '6M', label: '6ヶ月足', spec: { timeframe: 'month', multiplier: 6 }, defaultPeriod: 'all', initialVisiblePeriod: 'all', defaultMaLines: [9, 24, 60] },
+  { code: 'Y', label: '年足', spec: { timeframe: 'year', multiplier: 1 }, defaultPeriod: 'all', initialVisiblePeriod: 'all', defaultMaLines: [3, 5, 10] },
+  { code: '2Y', label: '2年足', spec: { timeframe: 'year', multiplier: 2 }, defaultPeriod: 'all', initialVisiblePeriod: 'all', defaultMaLines: [3, 5, 10] },
+  { code: '3Y', label: '3年足', spec: { timeframe: 'year', multiplier: 3 }, defaultPeriod: 'all', initialVisiblePeriod: 'all', defaultMaLines: [3, 5, 10] },
 ]
 
 const OPTION_BY_CODE = new Map(CHART_INTERVAL_OPTIONS.map((option) => [option.code, option]))
@@ -43,7 +54,7 @@ export function initialVisiblePeriodForInterval(interval: ChartIntervalCode): st
 }
 
 export function defaultMaLinesForInterval(interval: ChartIntervalCode): number[] {
-  return OPTION_BY_CODE.get(interval)?.defaultMaLines ?? [3, 5, 25, 75]
+  return OPTION_BY_CODE.get(interval)?.defaultMaLines ?? [5, 25, 75, 200]
 }
 
 export function parseInterval(value: string | null | undefined): ChartIntervalCode | null {
@@ -61,7 +72,7 @@ export function parseTimeframeSpec(args: {
   if (interval) return intervalToSpec(interval)
 
   const timeframe = args.timeframe?.trim().toLowerCase()
-  if (timeframe !== 'day' && timeframe !== 'week' && timeframe !== 'month') return null
+  if (timeframe !== 'day' && timeframe !== 'week' && timeframe !== 'month' && timeframe !== 'year') return null
 
   const multiplier = Number(args.multiplier ?? '1')
   if (!Number.isInteger(multiplier) || multiplier < 1 || multiplier > 12) return null
@@ -95,15 +106,14 @@ export function resampleOhlcv(rows: OHLCV[], spec: TimeframeSpec): OHLCV[] {
   const grouped: OHLCV[] = []
   let currentKey: number | null = null
   let current: OHLCV | null = null
-  const baseBucket = spec.timeframe === 'week'
-    ? weekBucket(sorted[0].date)
-    : monthBucket(sorted[0].date)
-
   for (const row of sorted) {
     const rawKey = spec.timeframe === 'week'
       ? weekBucket(row.date)
-      : monthBucket(row.date)
-    const key = Math.floor((rawKey - baseBucket) / multiplier)
+      : spec.timeframe === 'month'
+        ? monthBucket(row.date)
+        : yearBucket(row.date)
+    // Fixed epoch buckets keep 2x/3x candles identical regardless of the requested history window.
+    const key = Math.floor(rawKey / multiplier)
 
     if (key !== currentKey) {
       if (current) grouped.push(current)
@@ -190,7 +200,11 @@ function weekBucket(isoDate: string): number {
 function monthBucket(isoDate: string): number {
   const year = Number(isoDate.slice(0, 4))
   const month = Number(isoDate.slice(5, 7))
-  return year * 12 + (month - 1)
+  return (year - 1970) * 12 + (month - 1)
+}
+
+function yearBucket(isoDate: string): number {
+  return Number(isoDate.slice(0, 4)) - 1970
 }
 
 function mondayUtc(isoDate: string): Date {
