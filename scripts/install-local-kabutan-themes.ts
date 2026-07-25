@@ -1,5 +1,5 @@
-// Register the low-priority daily Kabutan theme refresh.
-// A second run provides a safe retry when another StockBoard writer owns the DB.
+// Register the low-priority daily Kabutan theme refresh at 21:00 JST.
+// Later triggers recover transient failures and no-op after a successful refresh.
 
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -13,10 +13,10 @@ const launchAgentsDir = path.join(home, 'Library', 'LaunchAgents')
 const plistPath = path.join(launchAgentsDir, `${label}.plist`)
 const logDir = path.join(home, 'Library', 'Logs', 'StockBoard')
 const uid = typeof process.getuid === 'function' ? process.getuid() : Number(process.env.UID)
-const primaryHour = clamp(Number(process.env.KABUTAN_THEMES_HOUR ?? '2'), 0, 23, 2)
-const primaryMinute = clamp(Number(process.env.KABUTAN_THEMES_MINUTE ?? '15'), 0, 59, 15)
-const retryHour = clamp(Number(process.env.KABUTAN_THEMES_RETRY_HOUR ?? '12'), 0, 23, 12)
-const retryMinute = clamp(Number(process.env.KABUTAN_THEMES_RETRY_MINUTE ?? '15'), 0, 59, 15)
+const primaryHour = clamp(Number(process.env.KABUTAN_THEMES_HOUR ?? '21'), 0, 23, 21)
+const primaryMinute = clamp(Number(process.env.KABUTAN_THEMES_MINUTE ?? '0'), 0, 59, 0)
+const recoveryHours = parseHours(process.env.KABUTAN_THEMES_RECOVERY_HOURS ?? '22,23')
+  .filter((hour) => hour !== primaryHour)
 const pathEnv = [
   '/opt/homebrew/bin',
   '/usr/local/bin',
@@ -29,6 +29,15 @@ const pathEnv = [
 function clamp(value: number, min: number, max: number, fallback: number): number {
   if (!Number.isInteger(value)) return fallback
   return Math.max(min, Math.min(max, value))
+}
+
+function parseHours(value: string): number[] {
+  return Array.from(new Set(
+    value
+      .split(',')
+      .map((item) => Number(item.trim()))
+      .filter((item) => Number.isInteger(item) && item >= 0 && item <= 23),
+  ))
 }
 
 function xmlEscape(value: string): string {
@@ -53,6 +62,12 @@ const command = [
   'export KABUTAN_THEME_DETAIL_LIMIT=${KABUTAN_THEME_DETAIL_LIMIT:-30}',
   'export KABUTAN_THEME_STOCK_PAGES=${KABUTAN_THEME_STOCK_PAGES:-8}',
   'export KABUTAN_REQUEST_DELAY_MS=${KABUTAN_REQUEST_DELAY_MS:-1000}',
+  'export KABUTAN_THEME_WAIT_FOR_LOCK_SECONDS=${KABUTAN_THEME_WAIT_FOR_LOCK_SECONDS:-86400}',
+  'export KABUTAN_THEME_LOCK_POLL_SECONDS=${KABUTAN_THEME_LOCK_POLL_SECONDS:-60}',
+  'export KABUTAN_THEME_FAIL_ON_LOCK_TIMEOUT=${KABUTAN_THEME_FAIL_ON_LOCK_TIMEOUT:-1}',
+  'export KABUTAN_THEME_SKIP_IF_FRESH=${KABUTAN_THEME_SKIP_IF_FRESH:-1}',
+  `export KABUTAN_THEME_FRESH_SINCE_HOUR=\${KABUTAN_THEME_FRESH_SINCE_HOUR:-${primaryHour}}`,
+  `export KABUTAN_THEME_FRESH_SINCE_MINUTE=\${KABUTAN_THEME_FRESH_SINCE_MINUTE:-${primaryMinute}}`,
   'nice -n 10 npm run batch:kabutan-themes',
 ].join(' && ')
 
@@ -61,6 +76,11 @@ const calendar = (hour: number, minute: number) => `
       <key>Hour</key><integer>${hour}</integer>
       <key>Minute</key><integer>${minute}</integer>
     </dict>`
+
+const schedules = [
+  [primaryHour, primaryMinute] as const,
+  ...recoveryHours.map((hour) => [hour, 0] as const),
+]
 
 const plist = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
@@ -78,7 +98,7 @@ const plist = `<?xml version="1.0" encoding="UTF-8"?>
     <string>${xmlEscape(command)}</string>
   </array>
   <key>StartCalendarInterval</key>
-  <array>${calendar(primaryHour, primaryMinute)}${calendar(retryHour, retryMinute)}
+  <array>${schedules.map(([hour, minute]) => calendar(hour, minute)).join('')}
   </array>
   <key>ProcessType</key>
   <string>Background</string>
@@ -91,7 +111,7 @@ const plist = `<?xml version="1.0" encoding="UTF-8"?>
   <key>StandardErrorPath</key>
   <string>${xmlEscape(path.join(logDir, 'kabutan-themes.err'))}</string>
   <key>RunAtLoad</key>
-  <false/>
+  <true/>
 </dict>
 </plist>
 `
@@ -109,8 +129,10 @@ execFileSync('launchctl', ['enable', `gui/${uid}/${label}`], { stdio: 'inherit' 
 
 console.log(`launchd registered: ${plistPath}`)
 console.log(
-  `schedule: daily ${String(primaryHour).padStart(2, '0')}:${String(primaryMinute).padStart(2, '0')} JST`
-  + ` + retry ${String(retryHour).padStart(2, '0')}:${String(retryMinute).padStart(2, '0')} JST`,
+  `schedule: daily ${schedules
+    .map(([hour, minute]) => `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`)
+    .join(', ')} JST`,
 )
-console.log('safety: exclusive DB writer lock, low-priority I/O, niceness 10')
+console.log('safety: runs after login, waits up to 24 hours for the DB writer; recovery runs skip after success')
+console.log('resource policy: low-priority I/O, niceness 10')
 console.log(`logs: ${path.join(logDir, 'kabutan-themes.log')}`)

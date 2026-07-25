@@ -129,7 +129,7 @@ export default async function DashboardPage({
             label: '材料',
             content: (
               <Suspense fallback={<SectionFallback height={300} />}>
-                <KabutanMaterialNews compact />
+                <KabutanMaterialNews />
               </Suspense>
             ),
           },

@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server'
 import { execAll, execGet } from '@/lib/db/client'
 import { execUsAnalyticsGet, hasUsAnalyticsDb } from '@/lib/db/us-analytics'
+import { expectedLatestTradingDate } from '@/lib/server/data-freshness'
+import { expectedLatestUsTradingDate } from '@/lib/server/us-data-freshness'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -43,6 +45,9 @@ export async function GET() {
       jpFeatures,
       jpCandidates,
       jpPhysicsCandidates,
+      jpDashboardCache,
+      jpPredictions,
+      jpSimilars,
       usDates,
       themeEpoch,
       materialEpoch,
@@ -50,22 +55,50 @@ export async function GET() {
       runningJobs,
     ] = await Promise.all([
       latestDate(jpQuery, 'ohlcv_daily', 'date'),
-      latestDate(jpQuery, 'physical_momentum_metrics', 'date', "WHERE market = 'JP'"),
+      latestDate(
+        jpQuery,
+        'physical_momentum_metrics',
+        'date',
+        `WHERE market = 'JP'
+          AND physical_momentum_score IS NOT NULL
+          AND physical_force_score IS NOT NULL
+          AND physical_energy_score IS NOT NULL`,
+      ),
       latestDate(jpQuery, 'ml_feature_vectors_v2', 'date'),
       latestDate(jpQuery, 'serving_ml_candidates', 'as_of_date'),
       latestDate(jpQuery, 'serving_ml_physics_candidates', 'as_of_date'),
+      latestDate(jpQuery, 'dashboard_cache', 'date'),
+      latestDate(jpQuery, 'ml_predictions', 'as_of_date'),
+      latestDate(jpQuery, 'serving_current_similars', 'as_of_date'),
       hasUsAnalyticsDb()
         ? Promise.all([
             latestDate(usQuery, 'ohlcv_daily', 'date'),
-            latestDate(usQuery, 'physical_momentum_metrics', 'date', "WHERE market = 'US'"),
+            latestDate(
+              usQuery,
+              'physical_momentum_metrics',
+              'date',
+              `WHERE market = 'US'
+                AND physical_momentum_score IS NOT NULL
+                AND physical_force_score IS NOT NULL
+                AND physical_energy_score IS NOT NULL`,
+            ),
             latestDate(usQuery, 'ml_feature_vectors_v2', 'date'),
             latestDate(usQuery, 'serving_ml_candidates', 'as_of_date'),
             latestDate(usQuery, 'serving_ml_physics_candidates', 'as_of_date'),
+            latestDate(usQuery, 'dashboard_cache', 'date'),
+            latestDate(usQuery, 'ml_predictions', 'as_of_date'),
+            latestDate(usQuery, 'serving_current_similars', 'as_of_date'),
           ])
-        : Promise.resolve([null, null, null, null, null]),
-      execGet<EpochRow>('SELECT MAX(fetched_at) AS value FROM kabutan_themes'),
-      execGet<EpochRow>('SELECT MAX(fetched_at) AS value FROM kabutan_material_news'),
-      execGet<EpochRow>('SELECT MAX(imported_at) AS value FROM earnings_calendar'),
+        : Promise.resolve([null, null, null, null, null, null, null, null]),
+      execGet<EpochRow>(
+        "SELECT MAX(finished_at) AS value FROM kabutan_theme_runs WHERE status = 'success'",
+      ),
+      execGet<EpochRow>(
+        "SELECT MAX(finished_at) AS value FROM kabutan_material_news_runs WHERE status = 'success'",
+      ),
+      execGet<EpochRow>(
+        "SELECT MAX(finished_at) AS value FROM batch_runs WHERE job_type = 'earnings_refresh' AND status = 'success'",
+      ),
       execAll<RunningJobRow>(
         `
           SELECT job_type AS jobType, started_at AS startedAt
@@ -78,46 +111,75 @@ export async function GET() {
       ),
     ])
 
-    const [usPrice, usPms, usFeatures, usCandidates, usPhysicsCandidates] = usDates
+    const expectedJp = expectedLatestTradingDate()
+    const expectedUs = expectedLatestUsTradingDate()
+    const [
+      usPrice,
+      usPms,
+      usFeatures,
+      usCandidates,
+      usPhysicsCandidates,
+      usDashboardCache,
+      usPredictions,
+      usSimilars,
+    ] = usDates
     const jpFresh = Boolean(
       jpPrice
+      && jpPrice >= expectedJp
       && jpPms === jpPrice
       && jpFeatures === jpPrice
       && jpCandidates === jpPrice
-      && jpPhysicsCandidates === jpPrice,
+      && jpPhysicsCandidates === jpPrice
+      && jpDashboardCache === jpPrice
+      && jpPredictions === jpPrice
+      && jpSimilars === jpPrice,
     )
     const usFresh = Boolean(
       usPrice
+      && usPrice >= expectedUs
       && usPms === usPrice
       && usFeatures === usPrice
       && usCandidates === usPrice
-      && usPhysicsCandidates === usPrice,
+      && usPhysicsCandidates === usPrice
+      && usDashboardCache === usPrice
+      && usPredictions === usPrice
+      && usSimilars === usPrice,
     )
+    const sources = {
+      themes: sourceState(themeEpoch?.value ?? null, 36),
+      materials: sourceState(materialEpoch?.value ?? null, 3),
+      earnings: sourceState(earningsEpoch?.value ?? null, 36),
+    }
+    const sourcesFresh = Object.values(sources).every((source) => source.fresh)
 
     return NextResponse.json({
-      status: jpFresh && usFresh ? 'ok' : 'attention',
+      status: jpFresh && usFresh && sourcesFresh ? 'ok' : 'attention',
       checkedAt: new Date().toISOString(),
       jp: {
+        expected: expectedJp,
         price: jpPrice,
         pms: jpPms,
         features: jpFeatures,
         candidates: jpCandidates,
         physicsCandidates: jpPhysicsCandidates,
+        dashboardCache: jpDashboardCache,
+        predictions: jpPredictions,
+        similars: jpSimilars,
         fresh: jpFresh,
       },
       us: {
+        expected: expectedUs,
         price: usPrice,
         pms: usPms,
         features: usFeatures,
         candidates: usCandidates,
         physicsCandidates: usPhysicsCandidates,
+        dashboardCache: usDashboardCache,
+        predictions: usPredictions,
+        similars: usSimilars,
         fresh: usFresh,
       },
-      sources: {
-        themes: sourceState(themeEpoch?.value ?? null, 72),
-        materials: sourceState(materialEpoch?.value ?? null, 48),
-        earnings: sourceState(earningsEpoch?.value ?? null, 72),
-      },
+      sources,
       runningJobs: runningJobs.map((job) => ({
         jobType: job.jobType,
         startedAt: new Date(job.startedAt * 1000).toISOString(),

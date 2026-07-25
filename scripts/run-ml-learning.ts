@@ -331,6 +331,38 @@ async function waitForBlockingBatchRuns(jobTypes: readonly string[], currentRunI
   }
 }
 
+function startHeartbeatLoop(
+  heartbeat: () => Promise<void>,
+  label: string,
+): () => void {
+  let heartbeatInFlight = false
+  const timer = setInterval(() => {
+    if (heartbeatInFlight) return
+    heartbeatInFlight = true
+    heartbeat()
+      .catch((error) => {
+        console.warn(`Failed to refresh ML learning lock during ${label}: ${errorMessage(error)}`)
+      })
+      .finally(() => {
+        heartbeatInFlight = false
+      })
+  }, 60_000)
+  timer.unref()
+  return () => clearInterval(timer)
+}
+
+async function sleepWithHeartbeat(
+  milliseconds: number,
+  heartbeat: () => Promise<void>,
+): Promise<void> {
+  const deadline = Date.now() + milliseconds
+  while (Date.now() < deadline) {
+    if (shutdownSignal) return
+    await sleep(Math.min(60_000, deadline - Date.now()))
+    await heartbeat()
+  }
+}
+
 async function runNpmUtility(
   script: string,
   heartbeat: () => Promise<void>,
@@ -339,9 +371,7 @@ async function runNpmUtility(
 ): Promise<RunResult> {
   await waitForMemoryHeadroom({ label: `npm run ${script}` })
   return new Promise((resolve, reject) => {
-    // The child utility is the current writer. The long parent lease is
-    // refreshed after it exits to avoid self-inflicted SQLITE_BUSY errors.
-    void heartbeat
+    const stopHeartbeat = startHeartbeatLoop(heartbeat, script)
     let timedOut = false
     const child = spawn('npm', ['run', script], {
       cwd: process.cwd(),
@@ -366,6 +396,7 @@ async function runNpmUtility(
 
     const clearTimers = () => {
       clearTimeout(timeoutTimer)
+      stopHeartbeat()
     }
 
     child.on('error', (err) => {
@@ -393,7 +424,7 @@ async function runHeavyMlChain(heartbeat: () => Promise<void>): Promise<RunResul
   const npmScript = process.env.ML_LEARNING_NPM_SCRIPT?.trim() || 'batch:ml-daily'
   await waitForMemoryHeadroom({ label: `npm run ${npmScript}` })
   return new Promise((resolve, reject) => {
-    void heartbeat
+    const stopHeartbeat = startHeartbeatLoop(heartbeat, npmScript)
     const timeoutMinutes = numberEnv('UPDATE_CHILD_TIMEOUT_MINUTES', 720)
     let timedOut = false
 
@@ -421,6 +452,7 @@ async function runHeavyMlChain(heartbeat: () => Promise<void>): Promise<RunResul
 
     const clearTimers = () => {
       clearTimeout(timeoutTimer)
+      stopHeartbeat()
     }
 
     activeChild.on('error', (err) => {
@@ -534,8 +566,7 @@ async function main(): Promise<void> {
       if (attempt >= maxAttempts) break
 
       console.log(`Retrying ML learning after ${retryDelaySeconds} seconds`)
-      await sleep(retryDelaySeconds * 1000)
-      await lock.heartbeat()
+      await sleepWithHeartbeat(retryDelaySeconds * 1000, () => lock.heartbeat())
     }
 
     if (lastError) {

@@ -25,10 +25,11 @@ function formatRunTime(value: number | null | undefined): string {
   }).format(new Date(value * 1000))
 }
 
-function runTone(status: string | null | undefined): string {
+function runTone(status: string | null | undefined, isStale: boolean): string {
+  if (isStale) return 'border-amber-200 bg-amber-50 text-amber-800'
   if (status === 'success') return 'border-emerald-200 bg-emerald-50 text-emerald-700'
   if (status === 'partial') return 'border-amber-200 bg-amber-50 text-amber-700'
-  if (status === 'failed') return 'border-sky-200 bg-sky-50 text-sky-700'
+  if (status === 'failed') return 'border-red-200 bg-red-50 text-red-700'
   return 'border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] text-[var(--color-text-tertiary)]'
 }
 
@@ -105,12 +106,21 @@ function ThemeCard({ theme }: { theme: KabutanTheme }) {
   )
 }
 
-function LastRunBadge({ lastRun, count }: { lastRun: KabutanThemeRun | null; count: number }) {
+function LastRunBadge({
+  lastRun,
+  count,
+  isStale,
+}: {
+  lastRun: KabutanThemeRun | null
+  count: number
+  isStale: boolean
+}) {
   const status = lastRun?.status ?? null
   return (
-    <div className={`rounded-full border px-2.5 py-1 text-[10px] font-black ${runTone(status)}`}>
+    <div className={`rounded-full border px-2.5 py-1 text-[10px] font-black ${runTone(status, isStale)}`}>
       最終取得 {formatRunTime(lastRun?.finishedAt ?? lastRun?.startedAt)}
       {lastRun ? ` / 表示 ${count}件` : ''}
+      {isStale ? ' / 要更新' : ''}
     </div>
   )
 }
@@ -120,6 +130,8 @@ export default async function ThemesPage() {
   const topTheme = themes[0]
   const relatedTotal = themes.reduce((sum, theme) => sum + (theme.stockCount ?? theme.relatedStocks.length), 0)
   const hasError = lastRun?.status === 'failed' || lastRun?.status === 'partial'
+  const lastCompletedAt = lastRun?.finishedAt ?? null
+  const isStale = !lastCompletedAt || Date.now() / 1000 - lastCompletedAt > 36 * 60 * 60
 
   return (
     <div className="grid gap-5">
@@ -143,7 +155,7 @@ export default async function ThemesPage() {
         <CardHeader
           title="人気テーマランキング"
           hint="3日間アクセスランキングと関連銘柄を保存済みデータから表示します。"
-          action={<LastRunBadge lastRun={lastRun} count={themes.length} />}
+          action={<LastRunBadge lastRun={lastRun} count={themes.length} isStale={isStale} />}
         />
         <div className="px-4 pb-4">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -158,6 +170,12 @@ export default async function ThemesPage() {
           {hasError && lastRun?.errorSummary && (
             <p className="mb-3 rounded-[6px] border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] font-bold leading-5 text-amber-800">
               最新取得に一部問題があります。保存済みテーマを表示しています: {lastRun.errorSummary}
+            </p>
+          )}
+
+          {isStale && (
+            <p className="mb-3 rounded-[6px] border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] font-bold leading-5 text-amber-800">
+              人気テーマの最終取得から36時間以上経過しています。毎日21:00の自動更新と22:00・23:00の回復確認で再取得し、完了後に自動反映します。
             </p>
           )}
 

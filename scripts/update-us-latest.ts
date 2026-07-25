@@ -6,6 +6,7 @@
 import { execFileSync, spawn } from 'node:child_process'
 import { execGet } from '@/lib/db/client'
 import { acquireExclusiveUpdateLock } from '@/lib/server/update-lock'
+import { expectedLatestUsTradingDate } from '@/lib/server/us-data-freshness'
 import { waitForMemoryHeadroom, withMemoryGuardEnv } from '@/lib/system/memory-guard'
 
 type RunResult = {
@@ -27,39 +28,6 @@ function sleep(ms: number): Promise<void> {
 function numberEnv(name: string, fallback: number): number {
   const value = Number(process.env[name])
   return Number.isFinite(value) && value > 0 ? value : fallback
-}
-
-function dateInTokyo(): string {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Asia/Tokyo',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).formatToParts(new Date())
-  const byType = new Map(parts.map((part) => [part.type, part.value]))
-  return `${byType.get('year')}-${byType.get('month')}-${byType.get('day')}`
-}
-
-function addDays(dateString: string, days: number): string {
-  const date = new Date(`${dateString}T00:00:00Z`)
-  date.setUTCDate(date.getUTCDate() + days)
-  return date.toISOString().slice(0, 10)
-}
-
-function weekday(dateString: string): number {
-  return new Date(`${dateString}T00:00:00Z`).getUTCDay()
-}
-
-function rollBackWeekend(dateString: string): string {
-  let date = dateString
-  while (weekday(date) === 0 || weekday(date) === 6) date = addDays(date, -1)
-  return date
-}
-
-function expectedLatestUsTradingDate(): string {
-  // JST朝には、通常「前日NY営業日」のEODが最新候補になる。
-  // 祝日はTiingo側で0件になり得るため、ここでは週末だけを保守的に戻す。
-  return rollBackWeekend(addDays(dateInTokyo(), -1))
 }
 
 function hasActiveHeavyMlProcess(): boolean {

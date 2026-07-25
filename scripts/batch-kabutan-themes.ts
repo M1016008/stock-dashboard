@@ -8,7 +8,10 @@ import {
   normalizeKabutanThemeId,
   type KabutanThemeStock,
 } from '@/lib/queries/kabutan-themes'
-import { acquireExclusiveUpdateLock } from '@/lib/server/update-lock'
+import {
+  acquireExclusiveUpdateLock,
+  type UpdateLockHandle,
+} from '@/lib/server/update-lock'
 
 const BASE_URL = 'https://kabutan.jp'
 const RANKING_URL = `${BASE_URL}/info/accessranking/3_2`
@@ -43,6 +46,20 @@ function envInt(name: string, fallback: number, min: number, max: number): numbe
   const raw = Number(process.env[name] ?? fallback)
   if (!Number.isFinite(raw)) return fallback
   return Math.max(min, Math.min(max, Math.floor(raw)))
+}
+
+function currentJstWindowStartSec(hour: number, minute: number): number {
+  const jstOffsetMs = 9 * 60 * 60 * 1000
+  const jstNow = new Date(Date.now() + jstOffsetMs)
+  return Math.floor((
+    Date.UTC(
+      jstNow.getUTCFullYear(),
+      jstNow.getUTCMonth(),
+      jstNow.getUTCDate(),
+      hour,
+      minute,
+    ) - jstOffsetMs
+  ) / 1000)
 }
 
 function decodeHtml(value: string): string {
@@ -279,6 +296,26 @@ async function finishRun(id: number, status: string, fetchedCount: number, saved
   })
 }
 
+async function hasSuccessfulRefreshInCurrentWindow(expectedCount: number): Promise<boolean> {
+  if (process.env.KABUTAN_THEME_SKIP_IF_FRESH !== '1') return false
+  const hour = envInt('KABUTAN_THEME_FRESH_SINCE_HOUR', 21, 0, 23)
+  const minute = envInt('KABUTAN_THEME_FRESH_SINCE_MINUTE', 0, 0, 59)
+  const result = await client.execute({
+    sql: `
+      SELECT id
+      FROM kabutan_theme_runs
+      WHERE status = 'success'
+        AND finished_at >= ?
+        AND fetched_count >= ?
+        AND saved_count >= ?
+      ORDER BY finished_at DESC
+      LIMIT 1
+    `,
+    args: [currentJstWindowStartSec(hour, minute), expectedCount, expectedCount],
+  })
+  return result.rows.length > 0
+}
+
 async function saveTheme(item: RankingTheme, detail: ThemeDetail): Promise<void> {
   await client.execute({
     sql: `
@@ -330,20 +367,46 @@ async function saveTheme(item: RankingTheme, detail: ThemeDetail): Promise<void>
   })
 }
 
+async function acquireThemeUpdateLock(): Promise<UpdateLockHandle | null> {
+  const leaseSeconds = envInt('KABUTAN_THEME_LOCK_SECONDS', 60 * 60, 15 * 60, 2 * 60 * 60)
+  const waitSeconds = envInt('KABUTAN_THEME_WAIT_FOR_LOCK_SECONDS', 0, 0, 24 * 60 * 60)
+  const pollSeconds = envInt('KABUTAN_THEME_LOCK_POLL_SECONDS', 60, 5, 15 * 60)
+  const startedAt = Date.now()
+  let lastLogAt = 0
+
+  for (;;) {
+    const lock = await acquireExclusiveUpdateLock('kabutan_themes', leaseSeconds)
+    if (lock) return lock
+
+    const elapsedSeconds = Math.floor((Date.now() - startedAt) / 1000)
+    if (elapsedSeconds >= waitSeconds) return null
+    if (Date.now() - lastLogAt >= 60_000 || lastLogAt === 0) {
+      lastLogAt = Date.now()
+      console.log(
+        `Kabutan themes waiting for another StockBoard writer: elapsed=${elapsedSeconds}s, timeout=${waitSeconds}s`,
+      )
+    }
+    await sleep(Math.min(pollSeconds, Math.max(1, waitSeconds - elapsedSeconds)) * 1000)
+  }
+}
+
 async function main() {
-  const lock = await acquireExclusiveUpdateLock(
-    'kabutan_themes',
-    envInt('KABUTAN_THEME_LOCK_SECONDS', 60 * 60, 15 * 60, 2 * 60 * 60),
-  )
+  const lock = await acquireThemeUpdateLock()
   if (!lock) {
-    console.log('Kabutan themes skipped: another StockBoard writer is active')
+    console.error('Kabutan themes could not acquire the DB writer lock before the timeout')
+    if (process.env.KABUTAN_THEME_FAIL_ON_LOCK_TIMEOUT === '1') process.exitCode = 75
     return
   }
   try {
     await ensureReady()
     await ensureKabutanThemeTables()
-    const runId = await insertRun()
     const limit = envInt('KABUTAN_THEME_LIMIT', 30, 1, 30)
+    if (await hasSuccessfulRefreshInCurrentWindow(limit)) {
+      console.log(`Kabutan themes already refreshed successfully in the current 21:00 JST window (${limit} themes)`)
+      return
+    }
+
+    const runId = await insertRun()
     const detailLimit = envInt('KABUTAN_THEME_DETAIL_LIMIT', limit, 1, 30)
     const stockPageLimit = envInt('KABUTAN_THEME_STOCK_PAGES', 8, 1, 8)
     const delayMs = envInt('KABUTAN_REQUEST_DELAY_MS', 900, 300, 5000)

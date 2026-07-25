@@ -14,6 +14,7 @@ import { WatchlistButton } from '@/components/ui/WatchlistButton'
 import { StageTimeline } from '@/components/stock/StageTimeline'
 import { StockMovePeriods } from '@/components/stock/StockMovePeriods'
 import { StockMlInsights } from '@/components/stock/StockMlInsights'
+import { TradersCompanyDataCard } from '@/components/stock/TradersCompanyDataCard'
 import { HistoricalAnalogExplorer } from '@/components/stock/HistoricalAnalogExplorer'
 import { ScenarioProjectionChart } from '@/components/stock/ScenarioProjectionChart'
 import { TradeScenarioNotebook } from '@/components/stock/TradeScenarioNotebook'
@@ -302,6 +303,7 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
               analysisDate={analysisDate}
             />
           </div>
+          <TradersCompanyDataCard ticker={displayCode} />
           {analysisDate
             ? <CurrentOnlyDataNotice label="決算予定は現在情報のため、過去分析モードでは非表示にしています。" />
             : <EarningsCard ticker={ticker} />}

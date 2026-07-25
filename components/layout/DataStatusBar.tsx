@@ -4,11 +4,15 @@ import { useCallback, useEffect, useState } from 'react'
 import { Activity, CheckCircle2, Database, Maximize2, Minimize2, RefreshCw, TriangleAlert } from 'lucide-react'
 
 type MarketStatus = {
+  expected: string
   price: string | null
   pms: string | null
   features: string | null
   candidates: string | null
   physicsCandidates: string | null
+  dashboardCache: string | null
+  predictions: string | null
+  similars: string | null
   fresh: boolean
 }
 
@@ -35,7 +39,7 @@ type Density = 'compact' | 'comfortable'
 
 function statusText(status?: MarketStatus) {
   if (!status?.price) return '未取得'
-  return status.fresh ? status.price : `${status.price} / ML ${status.candidates ?? '-'}`
+  return status.fresh ? status.price : `${status.price} / 期待 ${status.expected ?? '-'}`
 }
 
 function sourceTime(value: string | null) {
@@ -197,11 +201,15 @@ function SourceDetail({ label, status }: { label: string; status?: SourceStatus 
 
 function StatusDetail({ label, status }: { label: string; status?: MarketStatus }) {
   const rows = [
+    ['期待営業日', status?.expected],
     ['価格', status?.price],
     ['PMS/PFS/PES', status?.pms],
     ['特徴量', status?.features],
     ['ML候補', status?.candidates],
     ['Physics候補', status?.physicsCandidates],
+    ['予測', status?.predictions],
+    ['類似局面', status?.similars],
+    ['キャッシュ', status?.dashboardCache],
   ]
   return (
     <div className="border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] p-2.5">

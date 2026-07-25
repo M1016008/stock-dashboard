@@ -1,4 +1,5 @@
 import { execAll, execGet } from '@/lib/db/client'
+import { rollBackToJpTradingDate } from '@/lib/server/jp-market-calendar'
 import { getActiveUpdateLocks } from '@/lib/server/update-lock'
 import { MAX_CONTINUOUS_HISTORY_GAP_DAYS, MIN_SNAPSHOT_DATA_POINTS } from '@/lib/snapshots/continuous-ma'
 
@@ -120,24 +121,15 @@ function formatDate(date: Date): string {
   return `${y}-${m}-${d}`
 }
 
-function previousWeekday(date: Date): Date {
-  const d = new Date(date)
-  do {
-    d.setUTCDate(d.getUTCDate() - 1)
-  } while (d.getUTCDay() === 0 || d.getUTCDay() === 6)
-  return d
-}
-
 export function expectedLatestTradingDate(now = new Date()): string {
   const parts = jstParts(now)
   const jstDate = new Date(Date.UTC(parts.year, parts.month - 1, parts.day))
-  const weekday = jstDate.getUTCDay()
   const minuteOfDay = parts.hour * 60 + parts.minute
 
-  if (weekday === 0) return formatDate(previousWeekday(jstDate))
-  if (weekday === 6) return formatDate(previousWeekday(jstDate))
-  if (minuteOfDay < JQUANTS_DAILY_READY_MINUTES) return formatDate(previousWeekday(jstDate))
-  return formatDate(jstDate)
+  if (minuteOfDay < JQUANTS_DAILY_READY_MINUTES) {
+    jstDate.setUTCDate(jstDate.getUTCDate() - 1)
+  }
+  return formatDate(rollBackToJpTradingDate(jstDate))
 }
 
 async function maxDate(tableName: string, columnName: string): Promise<string | null> {
