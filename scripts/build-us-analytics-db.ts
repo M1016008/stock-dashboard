@@ -113,7 +113,7 @@ ATTACH DATABASE ${sqlLiteral(sourcePath)} AS src;
 CREATE TEMP TABLE copy_tickers (ticker TEXT PRIMARY KEY);
 INSERT INTO copy_tickers (ticker) VALUES
 ${values};
-BEGIN IMMEDIATE;
+BEGIN;
 INSERT OR REPLACE INTO ohlcv_daily (ticker, date, open, high, low, close, volume, split_factor)
   SELECT
     m.ticker,
@@ -225,7 +225,7 @@ CREATE TEMP TABLE sync_recent_bounds AS
       ELSE NULL
     END AS snapshot_start
   FROM sync_bounds;
-BEGIN IMMEDIATE;
+BEGIN;
 INSERT OR REPLACE INTO ohlcv_daily (ticker, date, open, high, low, close, volume, split_factor)
   SELECT
     m.ticker,

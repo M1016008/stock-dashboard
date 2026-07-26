@@ -218,6 +218,11 @@ const usAnalyticsBuilder = read('scripts/build-us-analytics-db.ts')
 assert.match(usAnalyticsBuilder, /US_ANALYTICS_NATIVE_BUSY_RETRIES/)
 assert.match(usAnalyticsBuilder, /US analytics copy lock retry/)
 assert.match(usAnalyticsBuilder, /PRAGMA temp_store = FILE/)
+assert.doesNotMatch(
+  usAnalyticsBuilder,
+  /BEGIN IMMEDIATE;/,
+  'US analytics copy must not reserve a write lock on the attached source DB',
+)
 assert.match(usAnalyticsBuilder, /if \(nativeCopyAvailable\) target\.close\(\)\s+const synced = nativeSyncLatest/)
 assert.match(usAnalyticsBuilder, /if \(nativeCopyAvailable\) target\.close\(\)\s+if \(nativeCopyPending/)
 
