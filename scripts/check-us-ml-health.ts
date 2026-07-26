@@ -18,6 +18,7 @@ const dbPath = path.resolve(
   || '/Volumes/OWC Express 1M2 80G/stockboard-data/us/stockboard-us.db',
 )
 const WRITE_HEALTH = process.env.US_ML_HEALTH_WRITE === '1'
+const MIN_HISTORY_DAYS = Math.max(1, Number(process.env.US_ML_HEALTH_MIN_HISTORY_DAYS ?? 220))
 
 type Args = readonly InValue[]
 
@@ -56,8 +57,17 @@ async function countRows(table: string, column: string, date: string | null, whe
 }
 
 function statusFor(row: HealthRow): string {
+  if (row.payload?.qualityOk === false) return 'invalid'
   if (!row.expectedDate || !row.actualDate) return 'missing'
   if (row.actualDate !== row.expectedDate) return 'stale'
+  if (
+    row.payload?.strictCoverage === true
+    && row.expectedCount != null
+    && row.actualCount != null
+    && row.actualCount < row.expectedCount
+  ) {
+    return 'partial'
+  }
   if (row.expectedCount && row.actualCount != null && row.actualCount < Math.floor(row.expectedCount * 0.75)) return 'partial'
   return 'ok'
 }
@@ -97,22 +107,122 @@ async function main() {
   })
 
   const pmsDate = await maxDate('physical_momentum_metrics')
+  const pmsQuality = pmsDate
+    ? await get<{
+        maxAbsPms: number | null
+      maxAbsPfs: number | null
+      maxAbsPes: number | null
+      extremeScoreCount: number
+      eligibleCount: number
+      coveredCount: number
+      rawRowCount: number
+      }>(
+        `
+          SELECT
+            MAX(ABS(physical_momentum_score)) AS maxAbsPms,
+            MAX(ABS(physical_force_score)) AS maxAbsPfs,
+            MAX(ABS(physical_energy_score)) AS maxAbsPes,
+            SUM(
+              CASE
+                WHEN ABS(physical_momentum_score) > 8
+                  OR ABS(physical_force_score) > 8
+                  OR ABS(physical_energy_score) > 8
+                THEN 1 ELSE 0
+              END
+            ) AS extremeScoreCount,
+            COUNT(*) AS rawRowCount,
+            SUM(
+              CASE
+                WHEN velocity IS NOT NULL
+                  AND acceleration IS NOT NULL
+                  AND momentum IS NOT NULL
+                  AND force IS NOT NULL
+                  AND ma_angle_avg IS NOT NULL
+                  AND energy IS NOT NULL
+                THEN 1 ELSE 0
+              END
+            ) AS eligibleCount,
+            SUM(
+              CASE
+                WHEN velocity IS NOT NULL
+                  AND acceleration IS NOT NULL
+                  AND momentum IS NOT NULL
+                  AND force IS NOT NULL
+                  AND ma_angle_avg IS NOT NULL
+                  AND energy IS NOT NULL
+                  AND physical_momentum_score IS NOT NULL
+                  AND physical_force_score IS NOT NULL
+                  AND physical_energy_score IS NOT NULL
+                THEN 1 ELSE 0
+              END
+            ) AS coveredCount
+          FROM physical_momentum_metrics
+          WHERE market = 'US'
+            AND date = ?
+        `,
+        [pmsDate],
+      )
+    : undefined
+  const extremeScoreCount = Number(pmsQuality?.extremeScoreCount ?? 0)
   checks.push({
     key: 'us_physical_momentum_metrics',
     expectedDate,
     actualDate: pmsDate,
-    expectedCount: snapshotLatestCount ?? expectedCount,
-    actualCount: await countRows('physical_momentum_metrics', 'date', pmsDate),
+    expectedCount: Number(pmsQuality?.eligibleCount ?? 0),
+    actualCount: Number(pmsQuality?.coveredCount ?? 0),
+    payload: {
+      qualityOk: extremeScoreCount === 0,
+      strictCoverage: true,
+      denominator: 'raw_complete',
+      rawRowCount: Number(pmsQuality?.rawRowCount ?? 0),
+      maxAbsPms: pmsQuality?.maxAbsPms ?? null,
+      maxAbsPfs: pmsQuality?.maxAbsPfs ?? null,
+      maxAbsPes: pmsQuality?.maxAbsPes ?? null,
+      extremeScoreCount,
+      absoluteScoreLimit: 8,
+    },
   })
 
   const physicsDate = await maxDate('ml_feature_vectors_v2', 'date', 'WHERE feature_set = ?', [ML_PHYSICS_FEATURE_SET])
+  const physicsCoverage = latestSnapshotDate
+    ? await get<{ eligibleCount: number; coveredCount: number }>(
+        `
+          SELECT
+            COUNT(*) AS eligibleCount,
+            SUM(
+              CASE WHEN EXISTS (
+                SELECT 1
+                FROM ml_feature_vectors_v2 f
+                WHERE f.ticker = d.ticker
+                  AND f.date = d.date
+                  AND f.feature_set = ?
+              ) THEN 1 ELSE 0 END
+            ) AS coveredCount
+          FROM daily_snapshots d
+          WHERE d.date = ?
+            AND EXISTS (
+              SELECT 1
+              FROM ohlcv_daily h
+              WHERE h.ticker = d.ticker
+              ORDER BY h.date
+              LIMIT 1 OFFSET ?
+            )
+        `,
+        [ML_PHYSICS_FEATURE_SET, latestSnapshotDate, MIN_HISTORY_DAYS - 1],
+      )
+    : undefined
   checks.push({
     key: 'us_ml_feature_vectors_v2',
     expectedDate,
     actualDate: physicsDate,
-    expectedCount: snapshotLatestCount ?? expectedCount,
-    actualCount: await countRows('ml_feature_vectors_v2', 'date', physicsDate, 'AND feature_set = ?', [ML_PHYSICS_FEATURE_SET]),
-    payload: { featureSet: ML_PHYSICS_FEATURE_SET },
+    expectedCount: Number(physicsCoverage?.eligibleCount ?? 0),
+    actualCount: Number(physicsCoverage?.coveredCount ?? 0),
+    payload: {
+      featureSet: ML_PHYSICS_FEATURE_SET,
+      strictCoverage: true,
+      denominator: 'latest_snapshot_with_minimum_history',
+      minimumHistoryDays: MIN_HISTORY_DAYS,
+    },
   })
 
   const candidateDate = await maxDate('serving_ml_physics_candidates', 'as_of_date')

@@ -1,7 +1,12 @@
 import type { OHLCV } from '@/types/stock'
-import { smaSeries } from '@/lib/timeframes'
+import {
+  type ChartIntervalCode,
+  intervalToSpec,
+  resampleOhlcv,
+  smaSeries,
+} from '@/lib/timeframes'
 
-export type HistoricalAnalogChartInterval = 'D' | 'W' | 'M' | 'Y'
+export type HistoricalAnalogChartInterval = ChartIntervalCode
 
 export type HistoricalAnalogChartPoint = OHLCV & {
   relativeDay: number
@@ -59,29 +64,19 @@ const CONTEXT_BARS: Record<
   { before: number; after: number }
 > = {
   D: { before: 35, after: 18 },
+  '2D': { before: 28, after: 14 },
+  '3D': { before: 24, after: 12 },
   W: { before: 26, after: 12 },
+  '2W': { before: 20, after: 10 },
+  '3W': { before: 16, after: 8 },
   M: { before: 24, after: 12 },
+  '2M': { before: 18, after: 9 },
+  '3M': { before: 14, after: 7 },
+  '6M': { before: 10, after: 5 },
   Y: { before: 8, after: 4 },
-}
-
-function dateParts(date: string): { year: number; month: number; day: number } {
-  const [year, month, day] = date.split('-').map(Number)
-  return { year, month, day }
-}
-
-function weekKey(date: string): string {
-  const { year, month, day } = dateParts(date)
-  const value = new Date(Date.UTC(year, month - 1, day))
-  const weekday = value.getUTCDay() || 7
-  value.setUTCDate(value.getUTCDate() - weekday + 1)
-  return value.toISOString().slice(0, 10)
-}
-
-function bucketKey(date: string, interval: HistoricalAnalogChartInterval): string {
-  if (interval === 'D') return date
-  if (interval === 'W') return weekKey(date)
-  if (interval === 'M') return date.slice(0, 7)
-  return date.slice(0, 4)
+  '2Y': { before: 6, after: 3 },
+  '3Y': { before: 5, after: 3 },
+  '5Y': { before: 4, after: 2 },
 }
 
 function normalizeRows(rows: OHLCV[]): OHLCV[] {
@@ -105,29 +100,20 @@ function aggregateRows(
   rows: OHLCV[],
   interval: HistoricalAnalogChartInterval,
 ): AggregateRow[] {
-  const grouped: AggregateRow[] = []
-  let currentKey = ''
+  const grouped = resampleOhlcv(rows, intervalToSpec(interval))
+  let sourceCursor = 0
 
-  for (const row of rows) {
-    const key = bucketKey(row.date, interval)
-    const current = grouped.at(-1)
-    if (!current || key !== currentKey) {
-      currentKey = key
-      grouped.push({
-        ...row,
-        sourceStartDate: row.date,
-        sourceEndDate: row.date,
-      })
-      continue
+  return grouped.map((row) => {
+    const sourceStartDate = rows[sourceCursor]?.date ?? row.date
+    while (sourceCursor < rows.length && rows[sourceCursor].date <= row.date) {
+      sourceCursor += 1
     }
-    current.high = Math.max(current.high, row.high)
-    current.low = Math.min(current.low, row.low)
-    current.close = row.close
-    current.volume += row.volume
-    current.sourceEndDate = row.date
-  }
-
-  return grouped
+    return {
+      ...row,
+      sourceStartDate,
+      sourceEndDate: rows[sourceCursor - 1]?.date ?? row.date,
+    }
+  })
 }
 
 function rangeIndexes(

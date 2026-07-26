@@ -498,9 +498,11 @@ function PhysicsAnalysisPanel({ analysis }: { analysis: PhysicsAnalysis }) {
 export function StockMlInsights({
   ticker,
   analysisDate = null,
+  market = 'JP',
 }: {
   ticker: string
   analysisDate?: string | null
+  market?: 'JP' | 'US'
 }) {
   const [data, setData] = useState<ApiResponse | null>(null)
   const [caseStudies, setCaseStudies] = useState<CaseStudy[]>([])
@@ -509,7 +511,7 @@ export function StockMlInsights({
 
   useEffect(() => {
     let cancelled = false
-    const code = ticker.replace(/\.T$/i, '')
+    const code = market === 'US' ? ticker.toUpperCase() : ticker.replace(/\.T$/i, '')
     setCaseStudies([])
     setCasesLoaded(false)
     setCasesLoading(false)
@@ -520,9 +522,13 @@ export function StockMlInsights({
       similarParams.set('fallback', '1')
       historyParams.set('date', analysisDate)
     }
+    const similarEndpoint = market === 'US' ? '/api/us/ml-current-similars' : '/api/ml/current-similars'
+    const historyRequest = market === 'US'
+      ? Promise.resolve({ rows: [] })
+      : fetch(`/api/ml/prediction-history?${historyParams.toString()}`, { cache: 'no-store' }).then((res) => res.json())
     Promise.all([
-      fetch(`/api/ml/current-similars?${similarParams.toString()}`, { cache: 'no-store' }).then((res) => res.json()),
-      fetch(`/api/ml/prediction-history?${historyParams.toString()}`, { cache: 'no-store' }).then((res) => res.json()),
+      fetch(`${similarEndpoint}?${similarParams.toString()}`, { cache: 'no-store' }).then((res) => res.json()),
+      historyRequest,
     ])
       .then(([similarJson, historyJson]) => {
         if (!cancelled) {
@@ -541,13 +547,13 @@ export function StockMlInsights({
         if (!cancelled) setData({ asOfDate: null, featureAsOfDate: null, source: null, physicsAnalysis: null, similars: [], caseStudies: [], predictions: [] })
       })
     return () => { cancelled = true }
-  }, [analysisDate, ticker])
+  }, [analysisDate, market, ticker])
 
   const rows = data?.similars ?? []
   const predictions = data?.predictions ?? []
   const mlReading = data ? buildMlReading(rows, data.physicsAnalysis) : null
   const loadCaseStudies = () => {
-    if (casesLoading || casesLoaded) return
+    if (market === 'US' || casesLoading || casesLoaded) return
     setCasesLoading(true)
     const code = ticker.replace(/\.T$/i, '')
     const params = new URLSearchParams({ ticker: code, limit: '6', includeCases: '1' })
@@ -643,7 +649,7 @@ export function StockMlInsights({
             >
               <div style={{ display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' }}>
                 <div>
-                  <Link href={`/stock/${row.similarTicker}`} style={{ fontWeight: 800, color: 'var(--accent-primary)' }}>
+                  <Link href={market === 'US' ? `/us/stock/${row.similarTicker}#ml` : `/stock/${row.similarTicker}#ml`} style={{ fontWeight: 800, color: 'var(--accent-primary)' }}>
                     {row.similarTicker} {row.payload.similar?.name ?? ''}
                   </Link>
                   <div style={{ marginTop: 3, fontSize: 11, fontWeight: 700, color: 'var(--text-muted)' }}>
@@ -671,7 +677,7 @@ export function StockMlInsights({
             </div>
           )
         })}
-        {data && (
+        {data && market === 'JP' && (
           <div style={{ marginTop: 4, borderTop: '1px solid var(--border-subtle)', paddingTop: 10 }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
               <div>
@@ -721,7 +727,7 @@ export function StockMlInsights({
                 >
                   <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
                     <div>
-                      <Link href={`/stock/${study.ticker}`} style={{ fontSize: 12, fontWeight: 900, color: 'var(--accent-primary)' }}>
+                      <Link href={market === 'US' ? `/us/stock/${study.ticker}#ml` : `/stock/${study.ticker}#ml`} style={{ fontSize: 12, fontWeight: 900, color: 'var(--accent-primary)' }}>
                         {study.ticker} {study.name ?? ''}
                       </Link>
                       <div style={{ marginTop: 3, fontSize: 11, fontWeight: 800, color: 'var(--text-muted)' }}>

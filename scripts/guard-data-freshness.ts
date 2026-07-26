@@ -12,12 +12,14 @@ import { expectedLatestTradingDate } from '@/lib/server/data-freshness'
 import { expectedLatestUsTradingDate } from '@/lib/server/us-data-freshness'
 import { getActiveUpdateLocks } from '@/lib/server/update-lock'
 import { US_ADJUSTED_PRICE_BASIS } from '@/lib/us-adjusted-ohlcv'
+import { usInvestableSymbolSql } from '@/lib/us-symbol-quality'
 
 type DateRow = { date: string | null }
 type EpochRow = { value: number | null }
 type ActiveLockRow = { jobType: string }
 type LaunchdState = {
   installed: boolean
+  enabled: boolean
   running: boolean
   state: string | null
 }
@@ -45,8 +47,10 @@ type SourceState = {
   fresh: boolean
 }
 type WeeklyState = {
+  pid?: number
   status?: string
   startedAt?: string | null
+  heartbeatAt?: string | null
   finishedAt?: string | null
 }
 type WeeklyFreshness = {
@@ -54,6 +58,7 @@ type WeeklyFreshness = {
   ageHours: number | null
   usModelAgeHours: number | null
   lastActivityAt: number | null
+  runningHealthy: boolean
   fresh: boolean
 }
 type CountRow = { count: number | null }
@@ -72,15 +77,41 @@ type UsAutomationState = {
   analogPriceBasis: string | null
   priceBasisCurrent: boolean
 }
+type UsCoverageHealth = {
+  pmsStatus: string | null
+  pmsDate: string | null
+  featureStatus: string | null
+  featureDate: string | null
+}
 
 const supportDir = path.join(os.homedir(), 'Library', 'Application Support', 'StockBoard')
 const guardStatePath = path.join(supportDir, 'data-freshness-guard-state.json')
 const reportPath = path.join(supportDir, 'data-freshness-latest.json')
 const weeklyStatePath = path.join(supportDir, 'weekly-optimization-state.json')
 const uid = typeof process.getuid === 'function' ? process.getuid() : Number(process.env.UID)
-const dryRun = process.env.DATA_FRESHNESS_GUARD_DRY_RUN === '1'
-const force = process.env.DATA_FRESHNESS_GUARD_FORCE === '1'
+const cliArgs = new Set(process.argv.slice(2))
+const dryRun = process.env.DATA_FRESHNESS_GUARD_DRY_RUN === '1' || cliArgs.has('--dry-run')
+const force = process.env.DATA_FRESHNESS_GUARD_FORCE === '1' || cliArgs.has('--force')
 const nowSec = Math.floor(Date.now() / 1000)
+const legacyWeeklyLabels = [
+  'com.stockboard.ml-weekly-governance',
+  'com.stockboard.us-ml-weekly',
+] as const
+
+function disabledLaunchdLabels(): Set<string> {
+  const result = spawnSync('launchctl', ['print-disabled', `gui/${uid}`], {
+    encoding: 'utf8',
+    timeout: 5_000,
+  })
+  if (result.status !== 0) return new Set()
+  return new Set(
+    [...result.stdout.matchAll(/"([^"]+)"\s*=>\s*disabled/g)]
+      .map((match) => match[1])
+      .filter(Boolean),
+  )
+}
+
+const disabledLabels = disabledLaunchdLabels()
 
 const services = {
   jpCore: {
@@ -99,7 +130,7 @@ const services = {
     key: 'us',
     label: 'com.stockboard.us-update-latest',
     cooldownSeconds: 2 * 60 * 60,
-    requiresIdleWriter: false,
+    requiresIdleWriter: true,
   },
   themes: {
     key: 'themes',
@@ -118,6 +149,12 @@ const services = {
     label: 'com.stockboard.earnings-refresh',
     cooldownSeconds: 6 * 60 * 60,
     requiresIdleWriter: true,
+  },
+  usEarnings: {
+    key: 'us-earnings',
+    label: 'com.stockboard.us-earnings',
+    cooldownSeconds: 2 * 60 * 60,
+    requiresIdleWriter: false,
   },
   weekly: {
     key: 'weekly-optimization',
@@ -152,13 +189,51 @@ function launchdState(label: string): LaunchdState {
     encoding: 'utf8',
     timeout: 5_000,
   })
-  if (result.status !== 0) return { installed: false, running: false, state: null }
+  if (result.status !== 0) {
+    return { installed: false, enabled: !disabledLabels.has(label), running: false, state: null }
+  }
   const state = result.stdout.match(/^\s*state = (.+)$/m)?.[1]?.trim() ?? null
   return {
     installed: true,
+    enabled: !disabledLabels.has(label),
     running: state === 'running',
     state,
   }
+}
+
+function setLaunchdEnabled(label: string, enabled: boolean): { ok: boolean; error: string | null } {
+  if (dryRun) return { ok: true, error: null }
+  const result = spawnSync(
+    'launchctl',
+    [enabled ? 'enable' : 'disable', `gui/${uid}/${label}`],
+    { encoding: 'utf8', timeout: 5_000 },
+  )
+  if (result.status === 0) {
+    if (enabled) disabledLabels.delete(label)
+    else disabledLabels.add(label)
+  }
+  return {
+    ok: result.status === 0,
+    error: result.status === 0
+      ? null
+      : (result.stderr.trim() || result.stdout.trim() || `exit ${result.status}`),
+  }
+}
+
+function enforceWeeklySchedulePolicy(): Array<{
+  label: string
+  expected: 'disabled'
+  state: 'disabled' | 'would_disable' | 'repaired' | 'error'
+  error?: string
+}> {
+  return legacyWeeklyLabels.map((label) => {
+    if (disabledLabels.has(label)) return { label, expected: 'disabled', state: 'disabled' }
+    if (dryRun) return { label, expected: 'disabled', state: 'would_disable' }
+    const result = setLaunchdEnabled(label, false)
+    return result.ok
+      ? { label, expected: 'disabled', state: 'repaired' }
+      : { label, expected: 'disabled', state: 'error', error: result.error ?? 'unknown error' }
+  })
 }
 
 function heavyMlProcessIsActive(): boolean {
@@ -186,8 +261,8 @@ function heavyMlProcessIsActive(): boolean {
     .some((line) => !line.includes('guard-data-freshness'))
 }
 
-function kickstart(label: string): { ok: boolean; error: string | null } {
-  const result = spawnSync('launchctl', ['kickstart', `gui/${uid}/${label}`], {
+function kickstart(label: string, restart = false): { ok: boolean; error: string | null } {
+  const result = spawnSync('launchctl', ['kickstart', ...(restart ? ['-k'] : []), `gui/${uid}/${label}`], {
     encoding: 'utf8',
     timeout: 15_000,
   })
@@ -196,6 +271,16 @@ function kickstart(label: string): { ok: boolean; error: string | null } {
     error: result.status === 0
       ? null
       : (result.stderr.trim() || result.stdout.trim() || `exit ${result.status}`),
+  }
+}
+
+function pidExists(pid: number | undefined): boolean {
+  if (!Number.isInteger(pid) || Number(pid) <= 0) return false
+  try {
+    process.kill(Number(pid), 0)
+    return true
+  } catch {
+    return false
   }
 }
 
@@ -282,8 +367,9 @@ async function loadSourceStates(): Promise<{
   themes: SourceState
   materials: SourceState
   earnings: SourceState
+  usEarnings: SourceState
 }> {
-  const [themes, materials, earnings] = await Promise.all([
+  const [themes, materials, earnings, usEarnings] = await Promise.all([
     execGet<EpochRow>(
       "SELECT MAX(finished_at) AS value FROM kabutan_theme_runs WHERE status = 'success'",
     ),
@@ -293,11 +379,43 @@ async function loadSourceStates(): Promise<{
     execGet<EpochRow>(
       "SELECT MAX(finished_at) AS value FROM batch_runs WHERE job_type = 'earnings_refresh' AND status = 'success'",
     ),
+    execGet<EpochRow>(
+      "SELECT MAX(finished_at) AS value FROM market_data_runs WHERE market = 'US' AND job_type = 'finnhub_earnings' AND status = 'success'",
+    ),
   ])
   return {
     themes: sourceState(themes?.value ?? null, 36),
     materials: sourceState(materials?.value ?? null, 3),
     earnings: sourceState(earnings?.value ?? null, 36),
+    usEarnings: sourceState(usEarnings?.value ?? null, 36),
+  }
+}
+
+async function loadUsCoverageHealth(): Promise<UsCoverageHealth> {
+  if (!hasUsAnalyticsDb()) {
+    return { pmsStatus: null, pmsDate: null, featureStatus: null, featureDate: null }
+  }
+  const [pms, features] = await Promise.all([
+    execUsAnalyticsGet<{ status: string; expectedDate: string | null }>(
+      `SELECT status, expected_date AS expectedDate
+       FROM ml_feature_health_checks
+       WHERE check_key = 'us_physical_momentum_metrics'
+       ORDER BY computed_at DESC
+       LIMIT 1`,
+    ).catch(() => undefined),
+    execUsAnalyticsGet<{ status: string; expectedDate: string | null }>(
+      `SELECT status, expected_date AS expectedDate
+       FROM ml_feature_health_checks
+       WHERE check_key = 'us_ml_feature_vectors_v2'
+       ORDER BY computed_at DESC
+       LIMIT 1`,
+    ).catch(() => undefined),
+  ])
+  return {
+    pmsStatus: pms?.status ?? null,
+    pmsDate: pms?.expectedDate ?? null,
+    featureStatus: features?.status ?? null,
+    featureDate: features?.expectedDate ?? null,
   }
 }
 
@@ -306,12 +424,18 @@ async function loadUsAutomationState(expectedDate: string): Promise<UsAutomation
     execGet<CountRow>(
       `SELECT COUNT(*) AS count
        FROM market_universe
-       WHERE market = 'US' AND active = 1`,
+       WHERE market = 'US'
+         AND active = 1
+         AND ${usInvestableSymbolSql('ticker')}`,
     ),
     execGet<CountRow>(
-      `SELECT COUNT(DISTINCT ticker) AS count
-       FROM market_ohlcv_daily INDEXED BY market_ohlcv_market_date_ticker_idx
-       WHERE market = 'US' AND date = ?`,
+      `SELECT COUNT(*) AS count
+       FROM market_universe u INDEXED BY market_universe_market_active_idx
+       INNER JOIN market_ohlcv_daily o INDEXED BY market_ohlcv_market_date_ticker_idx
+         ON o.market = 'US' AND o.date = ? AND o.ticker = u.ticker
+       WHERE u.market = 'US'
+         AND u.active = 1
+         AND ${usInvestableSymbolSql('u.ticker')}`,
       [expectedDate],
     ),
     execGet<RunRow>(
@@ -379,7 +503,13 @@ async function loadUsAutomationState(expectedDate: string): Promise<UsAutomation
 
 async function weeklyFreshness(): Promise<WeeklyFreshness> {
   const state = readJson<WeeklyState>(weeklyStatePath, {})
-  const fileReference = state.status === 'running' ? state.startedAt : state.finishedAt
+  const heartbeatReference = state.heartbeatAt ?? state.startedAt
+  const heartbeatMs = heartbeatReference ? Date.parse(heartbeatReference) : Number.NaN
+  const runningHealthy = state.status === 'running'
+    && pidExists(state.pid)
+    && Number.isFinite(heartbeatMs)
+    && Date.now() - heartbeatMs <= 10 * 60 * 1_000
+  const fileReference = runningHealthy ? heartbeatReference : state.finishedAt
   const fileTimestampMs = fileReference ? Date.parse(fileReference) : Number.NaN
   const [fallback, usModel] = await Promise.all([
     execGet<{
@@ -423,6 +553,7 @@ async function weeklyFreshness(): Promise<WeeklyFreshness> {
     : null
   const lastActivityAt = Math.max(
     Number.isFinite(fileTimestampMs) ? Math.floor(fileTimestampMs / 1000) : 0,
+    Number.isFinite(heartbeatMs) ? Math.floor(heartbeatMs / 1000) : 0,
     Number(fallback?.lastActivityAt ?? 0),
   ) || null
   return {
@@ -430,8 +561,9 @@ async function weeklyFreshness(): Promise<WeeklyFreshness> {
     ageHours: ageHours == null ? null : Math.round(ageHours * 10) / 10,
     usModelAgeHours: usModelAgeHours == null ? null : Math.round(usModelAgeHours * 10) / 10,
     lastActivityAt,
+    runningHealthy,
     fresh:
-      state.status === 'running'
+      runningHealthy
       || (
         ageHours != null
         && ageHours <= 8 * 24
@@ -448,13 +580,37 @@ async function maybeTrigger(
   activeLocks: readonly ActiveLockRow[],
   state: GuardState,
   sourceLastRunAt: number | null = null,
+  restartRunning = false,
 ): Promise<Action> {
   const launchd = launchdState(service.label)
   if (!launchd.installed) {
     return { key: service.key, label: service.label, state: 'missing', reason: `${reason}; launchd service is not installed` }
   }
-  if (!needed) return { key: service.key, label: service.label, state: 'fresh', reason }
-  if (launchd.running) {
+  let scheduleRepair = ''
+  if (!launchd.enabled) {
+    if (dryRun) {
+      return {
+        key: service.key,
+        label: service.label,
+        state: 'missing',
+        reason: `${reason}; launchd service is disabled`,
+      }
+    }
+    const enabled = setLaunchdEnabled(service.label, true)
+    if (!enabled.ok) {
+      return {
+        key: service.key,
+        label: service.label,
+        state: 'missing',
+        reason: `${reason}; launchd enable failed: ${enabled.error ?? 'unknown error'}`,
+      }
+    }
+    scheduleRepair = '; disabled schedule was re-enabled'
+  }
+  if (!needed) {
+    return { key: service.key, label: service.label, state: 'fresh', reason: `${reason}${scheduleRepair}` }
+  }
+  if (launchd.running && !restartRunning) {
     return { key: service.key, label: service.label, state: 'running', reason }
   }
   if (service.requiresIdleWriter && activeLocks.length > 0) {
@@ -483,7 +639,7 @@ async function maybeTrigger(
     return { key: service.key, label: service.label, state: 'would_trigger', reason }
   }
 
-  const result = kickstart(service.label)
+  const result = kickstart(service.label, launchd.running && restartRunning)
   if (!result.ok) {
     return {
       key: service.key,
@@ -499,9 +655,10 @@ async function maybeTrigger(
 
 async function main(): Promise<void> {
   const state = readJson<GuardState>(guardStatePath, { lastTriggeredAt: {} })
+  const weeklySchedulePolicy = enforceWeeklySchedulePolicy()
   const expectedJp = expectedLatestTradingDate()
   const expectedUs = expectedLatestUsTradingDate()
-  const [jpDates, usDates, sources, activeLocks, usAutomation] = await Promise.all([
+  const [jpDates, usDates, sources, activeLocks, usAutomation, usCoverageHealth] = await Promise.all([
     loadJpDates(),
     loadUsDates(),
     loadSourceStates(),
@@ -509,6 +666,7 @@ async function main(): Promise<void> {
       (locks) => locks.map((lock) => ({ jobType: lock.jobType })),
     ),
     loadUsAutomationState(expectedUs),
+    loadUsCoverageHealth(),
   ])
   const weekly = await weeklyFreshness()
   const heavyMlActive = heavyMlProcessIsActive()
@@ -551,6 +709,12 @@ async function main(): Promise<void> {
       'mlRlPolicy',
     ],
   )
+  const usCoverageIncomplete = Boolean(
+    (usCoverageHealth.pmsStatus && usCoverageHealth.pmsStatus !== 'ok')
+    || (usCoverageHealth.featureStatus && usCoverageHealth.featureStatus !== 'ok')
+    || (usPrice && usCoverageHealth.pmsDate !== usPrice)
+    || (usPrice && usCoverageHealth.featureDate !== usPrice),
+  )
 
   const actions: Action[] = []
   const writerReservations = [
@@ -562,6 +726,7 @@ async function main(): Promise<void> {
     needed: boolean,
     reason: string,
     sourceLastRunAt: number | null = null,
+    restartRunning = false,
   ): Promise<void> => {
     const action = await maybeTrigger(
       service,
@@ -570,6 +735,7 @@ async function main(): Promise<void> {
       writerReservations,
       state,
       sourceLastRunAt,
+      restartRunning,
     )
     actions.push(action)
     if (
@@ -595,9 +761,12 @@ async function main(): Promise<void> {
     !usPrice
       || usPrice < expectedUs
       || usStale.length > 0
+      || usCoverageIncomplete
       || usAutomation.ingestionNeedsRetry
       || (usAutomation.coveragePct != null && usAutomation.coveragePct < 95),
     `expected=${expectedUs}, price=${usPrice ?? '-'}, stale=${usStale.join(',') || '-'}, `
+      + `coverageHealth=pms:${usCoverageHealth.pmsStatus ?? '-'}@${usCoverageHealth.pmsDate ?? '-'}`
+      + `/features:${usCoverageHealth.featureStatus ?? '-'}@${usCoverageHealth.featureDate ?? '-'}, `
       + `coverage=${usAutomation.coveragePct ?? '-'}%, ingestion=${usAutomation.ingestionStatus ?? '-'}`,
   )
   await reconcile(
@@ -618,6 +787,21 @@ async function main(): Promise<void> {
     `last success age=${sources.earnings.ageHours ?? '-'}h`,
     sources.earnings.latestSuccessAt,
   )
+  if (process.env.FINNHUB_API_KEY?.trim()) {
+    await reconcile(
+      services.usEarnings,
+      !sources.usEarnings.fresh,
+      `last success age=${sources.usEarnings.ageHours ?? '-'}h`,
+      sources.usEarnings.latestSuccessAt,
+    )
+  } else {
+    actions.push({
+      key: services.usEarnings.key,
+      label: services.usEarnings.label,
+      state: 'missing',
+      reason: 'FINNHUB_API_KEY is not configured',
+    })
+  }
   await reconcile(
     services.weekly,
     !weekly.fresh || !usAutomation.priceBasisCurrent,
@@ -628,10 +812,12 @@ async function main(): Promise<void> {
       + `analogBasis=${usAutomation.analogPriceBasis ?? 'missing'}`
       + `/${US_ADJUSTED_PRICE_BASIS}`,
     weekly.lastActivityAt,
+    weekly.state.status === 'running' && !weekly.runningHealthy,
   )
 
   const report = {
     status: actions.every((action) => action.state === 'fresh' || action.state === 'running')
+      && weeklySchedulePolicy.every((item) => item.state === 'disabled' || item.state === 'repaired')
       ? 'ok'
       : 'attention',
     checkedAt: new Date().toISOString(),
@@ -639,8 +825,10 @@ async function main(): Promise<void> {
     expected: { jp: expectedJp, us: expectedUs },
     dates: { jp: jpDates, us: usDates },
     usAutomation,
+    usCoverageHealth,
     sources,
     weekly,
+    weeklySchedulePolicy,
     activeLocks: writerReservations.map((lock) => lock.jobType),
     actions,
   }

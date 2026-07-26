@@ -3,10 +3,12 @@ import { execAll, execGet } from '@/lib/db/client'
 import { execUsAnalyticsAll, execUsAnalyticsGet, hasUsAnalyticsDb } from '@/lib/db/us-analytics'
 import {
   PHYSICAL_MOMENTUM_LOOKBACK_DAYS,
+  adjustLikelySplitDiscontinuities,
   composePhysicalMomentumScores,
   computePhysicalMomentumRawRows,
-  meanAndStd,
-  zScore,
+  winsorizedMeanAndStd,
+  winsorizedZScore,
+  type PhysicalMomentumNormalizationStats,
   type PhysicalMomentumRawKey,
 } from '@/lib/physical-momentum'
 import { intervalToSpec, resampleOhlcv, type ChartIntervalCode } from '@/lib/timeframes'
@@ -140,6 +142,10 @@ async function loadScoreRefreshRunning(get: GetFn): Promise<boolean> {
         SELECT job_type AS jobType, started_at AS startedAt
         FROM batch_runs
         WHERE status = 'running'
+          AND started_at > unixepoch() - CASE
+            WHEN job_type = 'physical_momentum_us_normalize_chunk' THEN 900
+            ELSE 21600
+          END
           AND job_type IN (
             'physical_momentum',
             'physical_momentum_us',
@@ -186,17 +192,17 @@ async function computeRuntimeScoresForDate(
   if (rows.length === 0) return { scoresBySymbol: new Map(), rankBySymbol: new Map() }
 
   const stats = Object.fromEntries(
-    RAW_KEYS.map((key) => [key, meanAndStd(rows.map((row) => row[key]))]),
-  ) as Record<PhysicalMomentumRawKey, { mean: number | null; std: number | null }>
+    RAW_KEYS.map((key) => [key, winsorizedMeanAndStd(rows.map((row) => row[key]))]),
+  ) as Record<PhysicalMomentumRawKey, PhysicalMomentumNormalizationStats>
 
   const scores = rows.map((row) => {
     const result = composePhysicalMomentumScores({
-      zVelocity: zScore(row.velocity, stats.velocity.mean, stats.velocity.std),
-      zAcceleration: zScore(row.acceleration, stats.acceleration.mean, stats.acceleration.std),
-      zMomentum: zScore(row.momentum, stats.momentum.mean, stats.momentum.std),
-      zForce: zScore(row.force, stats.force.mean, stats.force.std),
-      zMaAngleAvg: zScore(row.maAngleAvg, stats.maAngleAvg.mean, stats.maAngleAvg.std),
-      zEnergy: zScore(row.energy, stats.energy.mean, stats.energy.std),
+      zVelocity: winsorizedZScore(row.velocity, stats.velocity),
+      zAcceleration: winsorizedZScore(row.acceleration, stats.acceleration),
+      zMomentum: winsorizedZScore(row.momentum, stats.momentum),
+      zForce: winsorizedZScore(row.force, stats.force),
+      zMaAngleAvg: winsorizedZScore(row.maAngleAvg, stats.maAngleAvg),
+      zEnergy: winsorizedZScore(row.energy, stats.energy),
     })
     return { symbol: row.symbol, ...result }
   })
@@ -213,11 +219,18 @@ async function computeRuntimeScoresForDate(
   const rankedScores = scores
     .map((row) => ({ symbol: row.symbol, score: row.physicalMomentumScore }))
     .filter((row): row is { symbol: string; score: number } => row.score != null && Number.isFinite(row.score))
+    .sort((a, b) => b.score - a.score)
   const totalRanked = rankedScores.length
   const rankBySymbol = new Map<string, RankRow>()
-  for (const row of rankedScores) {
-    const rank = rankedScores.reduce((count, other) => count + (other.score > row.score ? 1 : 0), 1)
+  let previousRank = 0
+  let previousValue: number | null = null
+  for (const [index, row] of rankedScores.entries()) {
+    const rank = previousValue != null && row.score === previousValue
+      ? previousRank
+      : index + 1
     rankBySymbol.set(row.symbol, { rank, totalRanked })
+    previousRank = rank
+    previousValue = row.score
   }
 
   return { scoresBySymbol, rankBySymbol }
@@ -277,18 +290,18 @@ function localTimeframeView(
   }
 
   const stats = Object.fromEntries(
-    RAW_KEYS.map((key) => [key, meanAndStd(scoredRows.map((row) => row[key]))]),
-  ) as Record<PhysicalMomentumRawKey, { mean: number | null; std: number | null }>
+    RAW_KEYS.map((key) => [key, winsorizedMeanAndStd(scoredRows.map((row) => row[key]))]),
+  ) as Record<PhysicalMomentumRawKey, PhysicalMomentumNormalizationStats>
 
   const toScores = (row: typeof scoredRows[number] | undefined) => {
     if (!row) return null
     return composePhysicalMomentumScores({
-      zVelocity: zScore(row.velocity, stats.velocity.mean, stats.velocity.std),
-      zAcceleration: zScore(row.acceleration, stats.acceleration.mean, stats.acceleration.std),
-      zMomentum: zScore(row.momentum, stats.momentum.mean, stats.momentum.std),
-      zForce: zScore(row.force, stats.force.mean, stats.force.std),
-      zMaAngleAvg: zScore(row.maAngleAvg, stats.maAngleAvg.mean, stats.maAngleAvg.std),
-      zEnergy: zScore(row.energy, stats.energy.mean, stats.energy.std),
+      zVelocity: winsorizedZScore(row.velocity, stats.velocity),
+      zAcceleration: winsorizedZScore(row.acceleration, stats.acceleration),
+      zMomentum: winsorizedZScore(row.momentum, stats.momentum),
+      zForce: winsorizedZScore(row.force, stats.force),
+      zMaAngleAvg: winsorizedZScore(row.maAngleAvg, stats.maAngleAvg),
+      zEnergy: winsorizedZScore(row.energy, stats.energy),
     })
   }
 
@@ -320,9 +333,17 @@ async function loadPriceRowsForTimeframes(
   asOfDate: string | null,
 ): Promise<OHLCV[]> {
   const dateFilter = asOfDate ? 'AND date <= ?' : ''
-  const sql = dbMarket === 'JP'
+  const usesAnalyticsUsTable = dbMarket === 'US' && all === (execUsAnalyticsAll as AllFn)
+  const sql = dbMarket === 'JP' || usesAnalyticsUsTable
     ? `
-        SELECT date, open, high, low, close, volume
+        SELECT
+          date,
+          open,
+          high,
+          low,
+          close,
+          volume,
+          ${usesAnalyticsUsTable ? 'split_factor' : 'NULL'} AS splitFactor
         FROM ohlcv_daily
         WHERE ticker = ?
           ${dateFilter}
@@ -335,18 +356,19 @@ async function loadPriceRowsForTimeframes(
           CASE WHEN adj_high IS NOT NULL THEN adj_high WHEN adj_close IS NOT NULL AND close <> 0 THEN high * adj_close / close ELSE high END AS high,
           CASE WHEN adj_low IS NOT NULL THEN adj_low WHEN adj_close IS NOT NULL AND close <> 0 THEN low * adj_close / close ELSE low END AS low,
           COALESCE(adj_close, close) AS close,
-          COALESCE(adj_volume, volume) AS volume
+          COALESCE(adj_volume, volume) AS volume,
+          split_factor AS splitFactor
         FROM market_ohlcv_daily
         WHERE market = ?
           AND ticker = ?
           ${dateFilter}
         ORDER BY date
       `
-  const args = dbMarket === 'JP'
+  const args = dbMarket === 'JP' || usesAnalyticsUsTable
     ? (asOfDate ? [ticker, asOfDate] : [ticker])
     : (asOfDate ? [dbMarket, ticker, asOfDate] : [dbMarket, ticker])
-  const rows = await all<OHLCV>(sql, args)
-  return rows
+  const rows = await all<OHLCV & { splitFactor?: number | null }>(sql, args)
+  const cleaned = rows
     .map((row) => ({
       date: row.date,
       open: Number(row.open),
@@ -354,8 +376,25 @@ async function loadPriceRowsForTimeframes(
       low: Number(row.low),
       close: Number(row.close),
       volume: Number(row.volume ?? 0),
+      splitFactor: row.splitFactor == null ? null : Number(row.splitFactor),
     }))
     .filter((row) => row.date && [row.open, row.high, row.low, row.close].every(Number.isFinite))
+  const adjusted = adjustLikelySplitDiscontinuities(cleaned)
+  return cleaned.map((row, index) => {
+    const adjustedRow = adjusted[index]
+    const priceFactor =
+      adjustedRow?.close != null && row.close !== 0
+        ? adjustedRow.close / row.close
+        : 1
+    return {
+      date: row.date,
+      open: row.open * priceFactor,
+      high: row.high * priceFactor,
+      low: row.low * priceFactor,
+      close: adjustedRow?.close ?? row.close,
+      volume: adjustedRow?.volume ?? row.volume,
+    }
+  })
 }
 
 async function buildTimeframeViews(

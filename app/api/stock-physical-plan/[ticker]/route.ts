@@ -4,6 +4,13 @@ import { execUsAnalyticsAll, execUsAnalyticsGet, hasUsAnalyticsDb } from '@/lib/
 import { ML_PHYSICS_FEATURE_SET } from '@/lib/backtest/ml-physics'
 import { analyzePhysicsProfile, type PhysicsStatus } from '@/lib/ml/physics-analysis'
 import { normalizeMarket, type MarketCode } from '@/lib/markets'
+import {
+  physicalPlanDirectionLabel,
+  physicalPlanStatisticsLabel,
+  resolvePhysicalPlanDecision,
+  type PhysicalPlanDecision,
+  type PhysicalPlanStructureMetrics,
+} from '@/lib/physical-plan'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -165,13 +172,6 @@ function distancePct(value: number | null | undefined, base: number): number | n
   return ((value - base) / base) * 100
 }
 
-function directionLabel(direction: 'up' | 'down' | 'wait' | null | undefined): string {
-  if (direction === 'up') return '上昇方向'
-  if (direction === 'down') return '下落方向'
-  if (direction === 'wait') return '見送り優位'
-  return '方向未判定'
-}
-
 function confidenceLabel(row: CalibrationRow | null): string {
   const confidence = row?.confidenceScore
   const lift = row?.lift
@@ -180,19 +180,6 @@ function confidenceLabel(row: CalibrationRow | null): string {
   if (confidence >= 52 && lift >= 1.05) return '中程度'
   if (confidence >= 42) return '参考'
   return '弱い'
-}
-
-function bestCandidate(candidates: CandidateRow[]): CandidateRow | null {
-  if (candidates.length === 0) return null
-  return [...candidates].sort((a, b) => a.rank - b.rank)[0] ?? null
-}
-
-function candidateLine(candidates: CandidateRow[]): string {
-  if (candidates.length === 0) return '物理ML上位候補には未掲載'
-  return candidates
-    .sort((a, b) => a.rank - b.rank)
-    .map((row) => `${directionLabel(row.direction)}#${row.rank}`)
-    .join(' / ')
 }
 
 function makeLevel(label: string, value: number | null | undefined, base: number): PriceLevel {
@@ -240,10 +227,12 @@ function pickNearestLevel(
   candidates: Array<{ label: string; value: number | null | undefined; priority: number }>,
   close: number,
   side: 'support' | 'resistance',
+  excludeValues: number[] = [],
 ): PriceLevel {
   const usable = candidates
     .filter((item): item is { label: string; value: number; priority: number } => finite(item.value))
-    .filter((item) => side === 'support' ? item.value <= close * 1.002 : item.value >= close * 0.998)
+    .filter((item) => !excludeValues.some((value) => Math.abs(value - item.value) <= Math.max(0.0001, Math.abs(value) * 1e-8)))
+    .filter((item) => side === 'support' ? item.value <= close : item.value >= close)
     .sort((a, b) => {
       const distanceA = Math.abs(a.value - close) / close
       const distanceB = Math.abs(b.value - close) / close
@@ -253,10 +242,7 @@ function pickNearestLevel(
 
   if (usable.length > 0) return makeLevel(usable[0].label, usable[0].value, close)
 
-  const fallback = candidates
-    .filter((item): item is { label: string; value: number; priority: number } => finite(item.value))
-    .sort((a, b) => Math.abs(a.value - close) - Math.abs(b.value - close))[0]
-  return fallback ? makeLevel(fallback.label, fallback.value, close) : makeLevel(side === 'support' ? '支持未判定' : '抵抗未判定', null, close)
+  return makeLevel(side === 'support' ? '支持未判定' : '抵抗未判定', null, close)
 }
 
 function buildHorizonLevels(rows: PriceRow[], snapshot: SnapshotRow | null, horizon: PlanHorizon): HorizonPriceLevels | null {
@@ -334,7 +320,12 @@ function buildHorizonLevels(rows: PriceRow[], snapshot: SnapshotRow | null, hori
           ]
 
   const support = pickNearestLevel(nearSupportCandidates, close, 'support')
-  const resistance = pickNearestLevel(resistanceCandidates, close, 'resistance')
+  const resistance = pickNearestLevel(
+    resistanceCandidates,
+    close,
+    'resistance',
+    finite(support.value) ? [support.value] : [],
+  )
   const breakdown = pickNearestLevel(breakdownCandidates, close, 'support')
   return {
     baseDate: latest.date,
@@ -439,6 +430,7 @@ function horizonFocus(horizon: PlanHorizon): {
 
 function planFrom(
   status: PhysicsStatus,
+  metrics: PhysicalPlanStructureMetrics,
   calibration: CalibrationRow | null,
   candidates: CandidateRow[],
   momentum: MomentumRow | null,
@@ -451,62 +443,36 @@ function planFrom(
   headline: string
   summary: string
   checklist: string[]
+  conditionLabel: string
   invalidation: string
+  decision: PhysicalPlanDecision
 } {
-  const target = calibration?.targetDirection ?? null
-  const confidence = confidenceLabel(calibration)
-  const best = bestCandidate(candidates)
   const pfs = momentum?.physicalForceScore ?? null
   const pms = momentum?.physicalMomentumScore ?? null
   const focus = horizonFocus(horizon)
   const priceSummary = compactPriceSummary(levels, market)
+  const decision = resolvePhysicalPlanDecision({
+    horizonDays: horizon.days,
+    status,
+    metrics,
+    pms,
+    pfs,
+    calibration,
+    candidates,
+  })
+  const statisticsLabel = physicalPlanStatisticsLabel(decision.statisticsQuality)
   const statLine = [
-    finite(calibration?.hitRate) ? `的中率${pct(calibration?.hitRate)}` : null,
+    finite(calibration?.hitRate) ? `的中率${pct(calibration.hitRate)}` : null,
+    finite(calibration?.baseRate) ? `基準${pct(calibration.baseRate)}` : null,
     finite(calibration?.lift) ? `lift ${calibration?.lift?.toFixed(2)}` : null,
-    finite(calibration?.avgMaxReturnPct) ? `平均順行${pctRaw(calibration?.avgMaxReturnPct)}` : null,
-    finite(calibration?.avgMinReturnPct) ? `平均逆行${pctRaw(calibration?.avgMinReturnPct)}` : null,
   ].filter(Boolean).join(' / ')
-
-  if (target === 'down' || status === '下落加速' || status === '失速警戒') {
-    const strong = confidence === '強め' || best?.direction === 'down' || (finite(pfs) && pfs <= -0.35)
-    return {
-      tone: strong ? 'negative' : 'warning',
-      stance: strong ? focus.downStance : `${focus.downStance}。ただし統計信頼は${confidence}`,
-      headline: `${horizon.label}は下方向の警戒を優先`,
-      summary: `${priceSummary}。${statLine || '検証不足'}。`,
-      checklist: levels ? [
-        `${levelPriceText(levels.resistance, market)}で戻り失敗`,
-        `${levelPriceText(levels.breakdown, market)}割れで警戒強め`,
-        `${levelPriceText(levels.resistance, market)}回復で警戒弱め`,
-      ] : focus.downChecklist,
-      invalidation: levels ? `${levelPriceText(levels.resistance, market)}回復 + PFSプラス。` : focus.downInvalidation,
-    }
-  }
-
-  if (target === 'up' || ['上昇加速', '上昇継続', '押し目形成', '反発準備'].includes(status)) {
-    const overheated = status === '過熱注意' || (finite(momentum?.physicalEnergyScore) && (momentum.physicalEnergyScore ?? 0) >= 1.2)
-    return {
-      tone: overheated ? 'warning' : 'positive',
-      stance: overheated ? `追いかけず、${horizon.days <= 5 ? '数日内の押し目' : horizon.days <= 20 ? '25日線付近の押し目' : '週足の押し目'}確認型` : focus.upStance,
-      headline: `${horizon.label}は上方向の形を確認`,
-      summary: `${priceSummary}。${statLine || '検証不足'}。`,
-      checklist: levels ? [
-        `${levelPriceText(levels.support, market)}で下げ止まり`,
-        `${levelPriceText(levels.resistance, market)}上抜け確認`,
-        `${levelPriceText(levels.breakdown, market)}割れで保留`,
-      ] : overheated && horizon.days <= 5
-          ? ['高値追いではなく、5日線付近まで熱量が冷めるかを見る', 'PESが急低下する場合は短期反落を優先する', '再加速するならPFSがプラスを維持するか確認する']
-          : focus.upChecklist,
-      invalidation: levels ? `${levelPriceText(levels.breakdown, market)}割れ + PFSマイナス。` : focus.upInvalidation,
-    }
-  }
 
   if (status === '過熱注意') {
     return {
       tone: 'warning',
       stance: horizon.days <= 5 ? '短期過熱の冷却待ち' : horizon.days <= 20 ? '25日線までの調整余地を確認' : '上位足で過熱が解消するまで待つ',
-      headline: `${horizon.label}は上げ余地より反落余地を確認`,
-      summary: `${priceSummary}。PMS ${finite(pms) ? pms.toFixed(2) : '-'} / PFS ${finite(pfs) ? pfs.toFixed(2) : '-'}。`,
+      headline: `${horizon.label}は過熱後の反落条件を確認`,
+      summary: `${priceSummary}。${statLine || '検証不足'} / ${statisticsLabel}。`,
       checklist: levels ? [
         `${levelPriceText(levels.resistance, market)}で高値失敗`,
         `${levelPriceText(levels.support, market)}を守れるか`,
@@ -516,7 +482,82 @@ function planFrom(
           : horizon.days <= 20
             ? ['25日線までの調整で止まるかを見る', 'PMSが低下し続ける場合は中期の過熱終了として扱う', '日足ステージが悪化側へ連続しないか確認する']
             : ['週足で上髭や上値抵抗が続かないかを見る', '75日線から離れすぎている場合は平均回帰を警戒する', '月足側の勢いが鈍るなら長期過熱終了として扱う'],
+      conditionLabel: '過熱警戒が解ける条件',
       invalidation: levels ? `${levelPriceText(levels.resistance, market)}上抜け + PFS維持。` : horizon.days <= 5 ? '5日線上で再加速 + PFSプラス。' : focus.upInvalidation,
+      decision,
+    }
+  }
+
+  if (decision.direction === 'mixed') {
+    const conflictSources = [
+      `構造は${physicalPlanDirectionLabel(decision.structureDirection)}`,
+      `PMS/PFSは${physicalPlanDirectionLabel(decision.momentumDirection)}`,
+      decision.candidateDirection !== 'wait'
+        ? `物理ML候補は${physicalPlanDirectionLabel(decision.candidateDirection)}`
+        : null,
+    ].filter(Boolean).join('、')
+    return {
+      tone: 'warning',
+      stance: `${conflictSources}。方向を決め打ちせず価格条件を優先`,
+      headline: `${horizon.label}は方向が競合`,
+      summary: `${priceSummary}。${statLine || '検証不足'} / ${statisticsLabel}。`,
+      checklist: levels ? [
+        `${levelPriceText(levels.resistance, market)}上抜け + PFSプラスで上向き確認`,
+        `${levelPriceText(levels.breakdown, market)}割れ + PFSマイナスで下向き確認`,
+        `${levelPriceText(levels.support, market)}付近では方向待ち`,
+      ] : focus.neutralChecklist,
+      conditionLabel: '方向が固まる条件',
+      invalidation: levels
+        ? `${levelPriceText(levels.resistance, market)}上抜け、または${levelPriceText(levels.breakdown, market)}割れ。`
+        : focus.neutralInvalidation,
+      decision,
+    }
+  }
+
+  if (decision.direction === 'down') {
+    const headline = decision.statisticsQuality === 'contrary'
+      ? `${horizon.label}は下向き基調、上振れ統計も確認`
+      : decision.statisticsQuality === 'weak'
+        ? `${horizon.label}は下向き基調、価格条件を優先`
+        : `${horizon.label}は下向き基調`
+    return {
+      tone: decision.caution ? 'warning' : 'negative',
+      stance: `${focus.downStance}。${statisticsLabel}`,
+      headline,
+      summary: `${priceSummary}。${statLine || '検証不足'}。`,
+      checklist: levels ? [
+        `${levelPriceText(levels.resistance, market)}で戻り失敗`,
+        `${levelPriceText(levels.breakdown, market)}割れで警戒強め`,
+        `${levelPriceText(levels.resistance, market)}回復で警戒弱め`,
+      ] : focus.downChecklist,
+      conditionLabel: '下向き判断が崩れる条件',
+      invalidation: levels ? `${levelPriceText(levels.resistance, market)}回復 + PFSプラス。` : focus.downInvalidation,
+      decision,
+    }
+  }
+
+  if (decision.direction === 'up') {
+    const overheated = finite(momentum?.physicalEnergyScore) && (momentum.physicalEnergyScore ?? 0) >= 1.2
+    const headline = decision.statisticsQuality === 'contrary'
+      ? `${horizon.label}は上向き基調、下振れ統計も確認`
+      : decision.statisticsQuality === 'weak'
+        ? `${horizon.label}は上向き基調、価格条件を優先`
+        : `${horizon.label}は上向き基調`
+    return {
+      tone: overheated || decision.caution ? 'warning' : 'positive',
+      stance: overheated
+        ? `追いかけず、${horizon.days <= 5 ? '数日内の押し目' : horizon.days <= 20 ? '25日線付近の押し目' : '上位足の押し目'}を確認`
+        : `${focus.upStance}。${statisticsLabel}`,
+      headline,
+      summary: `${priceSummary}。${statLine || '検証不足'}。`,
+      checklist: levels ? [
+        `${levelPriceText(levels.support, market)}で下げ止まり`,
+        `${levelPriceText(levels.resistance, market)}上抜け確認`,
+        `${levelPriceText(levels.breakdown, market)}割れで保留`,
+      ] : focus.upChecklist,
+      conditionLabel: '上向き判断が崩れる条件',
+      invalidation: levels ? `${levelPriceText(levels.breakdown, market)}割れ + PFSマイナス。` : focus.upInvalidation,
+      decision,
     }
   }
 
@@ -524,13 +565,15 @@ function planFrom(
     tone: 'neutral',
     stance: focus.neutralStance,
     headline: `${horizon.label}は方向感待ち`,
-    summary: `${priceSummary}。${directionLabel(target)}寄りだが確認待ち。`,
+    summary: `${priceSummary}。${statLine || '検証不足'} / ${statisticsLabel}。`,
     checklist: levels ? [
       `${levelPriceText(levels.support, market)}〜${levelPriceText(levels.resistance, market)}の抜け待ち`,
       `${levelPriceText(levels.resistance, market)}上抜けなら上方向`,
       `${levelPriceText(levels.support, market)}割れなら下方向`,
     ] : focus.neutralChecklist,
+    conditionLabel: '方向が固まる条件',
     invalidation: levels ? `レンジ抜け + PMS/PFS同方向。` : focus.neutralInvalidation,
+    decision,
   }
 }
 
@@ -789,7 +832,7 @@ export async function GET(request: NextRequest, context: RouteContext) {
       const calibration = calibrationMap.get(horizon.days) ?? null
       const candidates = candidateMap.get(horizon.days) ?? []
       const levels = buildHorizonLevels(priceRows, snapshot, horizon)
-      const plan = planFrom(analysis.physicsStatus, calibration, candidates, momentum, horizon, levels, market)
+      const plan = planFrom(analysis.physicsStatus, analysis.metrics, calibration, candidates, momentum, horizon, levels, market)
       return {
         label: horizon.label,
         horizonDays: horizon.days,

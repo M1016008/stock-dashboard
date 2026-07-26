@@ -463,6 +463,33 @@ export const marketDataRuns = sqliteTable(
   }),
 )
 
+export const marketEarningsCalendar = sqliteTable(
+  'market_earnings_calendar',
+  {
+    market:          text('market').notNull(),
+    ticker:          text('ticker').notNull(),
+    reportDate:      text('report_date').notNull(),
+    hour:            text('hour'),
+    timeBucket:      text('time_bucket'),
+    fiscalYear:      integer('fiscal_year'),
+    fiscalQuarter:   integer('fiscal_quarter'),
+    epsEstimate:     real('eps_estimate'),
+    epsActual:       real('eps_actual'),
+    revenueEstimate: real('revenue_estimate'),
+    revenueActual:   real('revenue_actual'),
+    source:          text('source').notNull(),
+    sourceUrl:       text('source_url'),
+    rawJson:         text('raw_json').notNull().default('{}'),
+    importedAt:      integer('imported_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk:            primaryKey({ columns: [t.market, t.ticker, t.reportDate] }),
+    dateIdx:       index('market_earnings_market_date_idx').on(t.market, t.reportDate, t.ticker),
+    tickerDateIdx: index('market_earnings_market_ticker_date_idx').on(t.market, t.ticker, t.reportDate),
+    bucketDateIdx: index('market_earnings_market_bucket_date_idx').on(t.market, t.timeBucket, t.reportDate),
+  }),
+)
+
 export const sectorEtfHoldings = sqliteTable(
   'sector_etf_holdings',
   {
@@ -1128,6 +1155,11 @@ export const earningsCalendar = sqliteTable(
   (t) => ({
     pk:      primaryKey({ columns: [t.ticker, t.announceDate] }),
     dateIdx: index('earn_date_idx').on(t.announceDate),
+    importDateIdx: index('earn_import_date_ticker_idx').on(
+      t.importedAt,
+      t.announceDate,
+      t.ticker,
+    ),
     timeBucketDateIdx: index('earn_time_bucket_date_idx').on(t.timeBucket, t.announceDate),
   }),
 )

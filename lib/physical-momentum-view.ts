@@ -30,8 +30,119 @@ export interface PhysicalMomentumView {
   checks: PhysicalMomentumCheck[]
 }
 
+export type PhysicalScoreKind = 'pms' | 'pfs' | 'pes'
+export type PhysicalRawMetricKind = 'velocity' | 'acceleration' | 'force'
+
+export interface PhysicalRawMetricView {
+  label: string
+  value: string
+  interpretation: string
+  detail: string
+  tone: 'up' | 'down' | 'neutral'
+}
+
 function finite(value: number | null | undefined): value is number {
   return value != null && Number.isFinite(value)
+}
+
+function signed(value: number, digits: number, suffix: string): string {
+  return `${value > 0 ? '+' : ''}${value.toFixed(digits)}${suffix}`
+}
+
+export function describePhysicalScore(
+  kind: PhysicalScoreKind,
+  value: number | null | undefined,
+): string {
+  if (!finite(value)) return '未判定'
+  if (kind === 'pms') {
+    if (value >= 1.5) return '市場平均よりかなり強い'
+    if (value >= 0.5) return '市場平均より強い'
+    if (value <= -1.5) return '市場平均よりかなり弱い'
+    if (value <= -0.5) return '市場平均より弱い'
+    return '市場平均付近'
+  }
+  if (kind === 'pfs') {
+    if (value >= 1.5) return '上向きの力がかなり強い'
+    if (value >= 0.5) return '上向きの力が強い'
+    if (value <= -1.5) return '下向きの力がかなり強い'
+    if (value <= -0.5) return '下向きの力が強い'
+    return '力の向きは中立'
+  }
+  if (value >= 1.5) return '値動きの熱量がかなり高い'
+  if (value >= 0.5) return '値動きの熱量が高い'
+  if (value <= -1.5) return '値動きの熱量がかなり低い'
+  if (value <= -0.5) return '値動きの熱量が低い'
+  return '値動きの熱量は平常圏'
+}
+
+export function buildPhysicalRawMetricView(
+  kind: PhysicalRawMetricKind,
+  value: number | null | undefined,
+): PhysicalRawMetricView {
+  if (!finite(value)) {
+    return {
+      label: kind === 'velocity' ? '20日騰落率' : kind === 'acceleration' ? '騰落率の前日差' : '出来高を加味した力',
+      value: '-',
+      interpretation: '未判定',
+      detail: '計算に必要な履歴が不足しています',
+      tone: 'neutral',
+    }
+  }
+
+  if (kind === 'velocity') {
+    const interpretation = value >= 0.1
+      ? '強い上昇'
+      : value >= 0.03
+        ? '上昇'
+        : value <= -0.1
+          ? '強い下落'
+          : value <= -0.03
+            ? '下落'
+            : 'ほぼ横ばい'
+    return {
+      label: '20日騰落率',
+      value: signed(value * 100, 1, '%'),
+      interpretation,
+      detail: `${interpretation} / 20営業日前の終値と比較`,
+      tone: value >= 0.03 ? 'up' : value <= -0.03 ? 'down' : 'neutral',
+    }
+  }
+
+  if (kind === 'acceleration') {
+    const interpretation = value >= 0.05
+      ? '20日騰落率が大きく改善'
+      : value >= 0.01
+        ? '20日騰落率が改善'
+        : value <= -0.05
+          ? '20日騰落率が大きく悪化'
+          : value <= -0.01
+            ? '20日騰落率が悪化'
+            : 'ペースの変化は小さい'
+    return {
+      label: '騰落率の前日差',
+      value: signed(value * 100, 1, 'pt'),
+      interpretation,
+      detail: `${interpretation} / 20日騰落率の前日からの変化`,
+      tone: value >= 0.01 ? 'up' : value <= -0.01 ? 'down' : 'neutral',
+    }
+  }
+
+  const interpretation = value >= 0.05
+    ? '出来高を伴って上向きの力が増加'
+    : value >= 0.01
+      ? '上向きの力が増加'
+      : value <= -0.05
+        ? '出来高を伴って下向きの力が増加'
+        : value <= -0.01
+          ? '下向きの力が増加'
+          : '力の変化は小さい'
+  return {
+    label: '出来高を加味した力',
+    value: interpretation,
+    interpretation,
+    detail: '出来高と20日騰落率の変化を組み合わせた方向指標 / 市場内の強弱はPFSで比較',
+    tone: value >= 0.01 ? 'up' : value <= -0.01 ? 'down' : 'neutral',
+  }
 }
 
 function fmtScore(value: number | null | undefined): string {
@@ -170,7 +281,7 @@ export function buildPhysicalMomentumView(input: PhysicalMomentumViewInput): Phy
   }
 
   const badges = [
-    `PMS累積 ${fmtScore(pms)}`,
+    `PMS総合 ${fmtScore(pms)}`,
     `PFS足元 ${fmtScore(pfs)}`,
     `PES熱量 ${fmtScore(pes)}`,
     trendUp ? 'PMS改善中' : trendDown ? 'PMS低下中' : trend === 'flat' ? 'PMS横ばい' : null,

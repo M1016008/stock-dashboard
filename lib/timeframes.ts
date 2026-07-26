@@ -5,7 +5,7 @@ export type ChartIntervalCode =
   | 'D' | '2D' | '3D'
   | 'W' | '2W' | '3W'
   | 'M' | '2M' | '3M' | '6M'
-  | 'Y' | '2Y' | '3Y'
+  | 'Y' | '2Y' | '3Y' | '5Y'
 
 export interface TimeframeSpec {
   timeframe: TimeframeUnit
@@ -33,6 +33,7 @@ export const CHART_INTERVAL_OPTIONS: Array<{
   { code: 'Y', label: '年足', spec: { timeframe: 'year', multiplier: 1 }, defaultPeriod: 'all', initialVisiblePeriod: 'all', defaultMaLines: [3, 5, 10] },
   { code: '2Y', label: '2年足', spec: { timeframe: 'year', multiplier: 2 }, defaultPeriod: 'all', initialVisiblePeriod: 'all', defaultMaLines: [3, 5, 10] },
   { code: '3Y', label: '3年足', spec: { timeframe: 'year', multiplier: 3 }, defaultPeriod: 'all', initialVisiblePeriod: 'all', defaultMaLines: [3, 5, 10] },
+  { code: '5Y', label: '5年足', spec: { timeframe: 'year', multiplier: 5 }, defaultPeriod: 'all', initialVisiblePeriod: 'all', defaultMaLines: [3, 5, 10] },
 ]
 
 const OPTION_BY_CODE = new Map(CHART_INTERVAL_OPTIONS.map((option) => [option.code, option]))

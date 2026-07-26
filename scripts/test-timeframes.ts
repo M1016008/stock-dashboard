@@ -1,5 +1,11 @@
 import assert from 'node:assert/strict'
-import { resampleOhlcv } from '@/lib/timeframes'
+import {
+  defaultMaLinesForInterval,
+  intervalLabel,
+  parseInterval,
+  resampleOhlcv,
+  specToIntervalCode,
+} from '@/lib/timeframes'
 import type { OHLCV } from '@/types/stock'
 
 const rows: OHLCV[] = [
@@ -98,5 +104,20 @@ const threeYearSubset = resampleOhlcv(yearlyRows.filter((row) => row.date >= '20
   multiplier: 3,
 }).map(candleKey)
 assert.deepEqual(threeYearSubset, threeYear.slice(1))
+
+const fiveYear = resampleOhlcv(yearlyRows, { timeframe: 'year', multiplier: 5 }).map(candleKey)
+assert.deepEqual(fiveYear[0], { date: '2024-12-30', open: 80, high: 140, low: 75, close: 135, volume: 1_000 })
+assert.deepEqual(fiveYear[1], { date: '2026-01-05', open: 136, high: 155, low: 120, close: 152, volume: 1_800 })
+
+const fiveYearSubset = resampleOhlcv(yearlyRows.filter((row) => row.date >= '2025-01-01'), {
+  timeframe: 'year',
+  multiplier: 5,
+}).map(candleKey)
+assert.deepEqual(fiveYearSubset, fiveYear.slice(1))
+
+assert.equal(parseInterval('5y'), '5Y')
+assert.equal(intervalLabel('5Y'), '5年足')
+assert.equal(specToIntervalCode({ timeframe: 'year', multiplier: 5 }), '5Y')
+assert.deepEqual(defaultMaLinesForInterval('5Y'), [3, 5, 10])
 
 console.log('timeframe resampling tests passed')

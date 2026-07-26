@@ -29,6 +29,7 @@ import {
   buildHistoricalAnalogChartSeries,
   type HistoricalAnalogChartInterval,
 } from '@/lib/ml/historical-analog-chart'
+import { CHART_INTERVAL_OPTIONS, type TimeframeUnit } from '@/lib/timeframes'
 import { getUsSecondaryName } from '@/lib/us-symbol-aliases'
 
 type Market = 'JP' | 'US'
@@ -256,23 +257,56 @@ const TABLE_SORT_OPTIONS: Array<{ value: AnalogTableSortKey; label: string }> = 
 const ANALOG_MA_DEFAULTS: Record<
   HistoricalAnalogChartInterval,
   readonly MovingAveragePeriod[]
-> = {
-  D: [5, 25, 75, 200],
-  W: [13, 26, 52],
-  M: [9, 24, 60],
-  Y: [3, 5, 10],
+> = CHART_INTERVAL_OPTIONS.reduce((defaults, option) => {
+  defaults[option.code] = option.defaultMaLines as MovingAveragePeriod[]
+  return defaults
+}, {} as Record<HistoricalAnalogChartInterval, readonly MovingAveragePeriod[]>)
+
+const ANALOG_TIMEFRAME_META: Record<TimeframeUnit, {
+  groupLabel: string
+  maUnit: string
+  description: string
+}> = {
+  day: { groupLabel: '日足系', maUnit: '日', description: '短期の値動きと日次MA' },
+  week: { groupLabel: '週足系', maUnit: '週', description: '中期トレンドと週次MA' },
+  month: { groupLabel: '月足系', maUnit: 'か月', description: '長期構造と月次MA' },
+  year: { groupLabel: '年足系', maUnit: '年', description: '大局的な位置と年次MA' },
 }
+
 const ANALOG_CHART_INTERVALS: Array<{
   value: HistoricalAnalogChartInterval
   label: string
+  timeframe: TimeframeUnit
   maUnit: string
   description: string
-}> = [
-  { value: 'D', label: '日足', maUnit: '日', description: '短期の値動きと日次MA' },
-  { value: 'W', label: '週足', maUnit: '週', description: '中期トレンドと週次MA' },
-  { value: 'M', label: '月足', maUnit: 'か月', description: '長期構造と月次MA' },
-  { value: 'Y', label: '年足', maUnit: '年', description: '大局的な位置と年次MA' },
-]
+}> = CHART_INTERVAL_OPTIONS.map((option) => {
+  const meta = ANALOG_TIMEFRAME_META[option.spec.timeframe]
+  return {
+    value: option.code,
+    label: option.label,
+    timeframe: option.spec.timeframe,
+    maUnit: meta.maUnit,
+    description: `${option.label}で見る${meta.description}`,
+  }
+})
+
+const ANALOG_CHART_GROUPS = (['day', 'week', 'month', 'year'] as const).map(
+  (timeframe) => ({
+    timeframe,
+    label: ANALOG_TIMEFRAME_META[timeframe].groupLabel,
+    options: ANALOG_CHART_INTERVALS.filter((option) => option.timeframe === timeframe),
+  }),
+)
+
+function initialMaSelections(): Record<
+  HistoricalAnalogChartInterval,
+  MovingAveragePeriod[]
+> {
+  return ANALOG_CHART_INTERVALS.reduce((selections, option) => {
+    selections[option.value] = [...ANALOG_MA_DEFAULTS[option.value]]
+    return selections
+  }, {} as Record<HistoricalAnalogChartInterval, MovingAveragePeriod[]>)
+}
 
 function addDays(date: string, days: number): string {
   const value = new Date(`${date}T00:00:00.000Z`)
@@ -541,12 +575,7 @@ export function HistoricalAnalogExplorer({
   const [chartInterval, setChartInterval] = useState<HistoricalAnalogChartInterval>('D')
   const [maSelections, setMaSelections] = useState<
     Record<HistoricalAnalogChartInterval, MovingAveragePeriod[]>
-  >(() => ({
-    D: [...ANALOG_MA_DEFAULTS.D],
-    W: [...ANALOG_MA_DEFAULTS.W],
-    M: [...ANALOG_MA_DEFAULTS.M],
-    Y: [...ANALOG_MA_DEFAULTS.Y],
-  }))
+  >(initialMaSelections)
   const [data, setData] = useState<AnalogResponse | null>(null)
   const [selectedKey, setSelectedKey] = useState('')
   const [started, setStarted] = useState(false)
@@ -694,7 +723,7 @@ export function HistoricalAnalogExplorer({
             <h2 className="text-[14px] font-black text-[var(--color-text-primary)]">本質類似局面</h2>
           </div>
           <p className="mt-1 text-[10px] font-bold text-[var(--color-text-tertiary)]">
-            指定期間の日足・週足・月足・年足と移動平均線構造を、{market === 'US' ? '米国株' : '日本株'}の全履歴内で照合
+            指定期間の日足・週足・月足・年足を照合し、比較チャートは14時間軸で表示
           </p>
         </div>
         <button
@@ -904,28 +933,47 @@ export function HistoricalAnalogExplorer({
                 </span>
               </div>
               <div className="grid gap-2 border-b border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-3 py-2">
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
                   <div>
-                    <div className="text-[9px] font-black text-[var(--color-text-tertiary)]">チャート時間軸</div>
+                    <div className="text-[9px] font-black text-[var(--color-text-tertiary)]">
+                      チャート時間軸（14種類）
+                    </div>
                     <div className="mt-0.5 text-[9px] font-bold text-[var(--color-text-secondary)]">
                       {activeChartInterval.description}
                     </div>
                   </div>
-                  <div className="grid w-full grid-cols-4 border border-[var(--color-border-default)] bg-white p-0.5 sm:w-auto sm:min-w-[280px]">
-                    {ANALOG_CHART_INTERVALS.map((option) => (
-                      <button
-                        key={option.value}
-                        type="button"
-                        onClick={() => setChartInterval(option.value)}
-                        aria-pressed={chartInterval === option.value}
-                        className={`h-8 px-2 text-[10px] font-black ${
-                          chartInterval === option.value
-                            ? 'bg-teal-700 text-white'
-                            : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-subtle)]'
-                        }`}
+                  <div className="grid w-full gap-1.5 sm:grid-cols-2 lg:w-[620px]">
+                    {ANALOG_CHART_GROUPS.map((group) => (
+                      <div
+                        key={group.timeframe}
+                        className="grid grid-cols-[42px_minmax(0,1fr)] items-center border border-[var(--color-border-default)] bg-white p-0.5"
                       >
-                        {option.label}
-                      </button>
+                        <span className="px-1 text-[9px] font-black text-[var(--color-text-tertiary)]">
+                          {group.label}
+                        </span>
+                        <div
+                          className="grid"
+                          style={{
+                            gridTemplateColumns: `repeat(${group.options.length}, minmax(0, 1fr))`,
+                          }}
+                        >
+                          {group.options.map((option) => (
+                            <button
+                              key={option.value}
+                              type="button"
+                              onClick={() => setChartInterval(option.value)}
+                              aria-pressed={chartInterval === option.value}
+                              className={`h-8 whitespace-nowrap px-0.5 text-[9px] font-black sm:px-1 sm:text-[10px] ${
+                                chartInterval === option.value
+                                  ? 'bg-teal-700 text-white'
+                                  : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-subtle)]'
+                              }`}
+                            >
+                              {option.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
                     ))}
                   </div>
                 </div>

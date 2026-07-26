@@ -308,10 +308,10 @@ export default function AdminDbPage() {
 
 function StatusBadge({ status }: { status: string }) {
   const map: Record<string, { color: string; bg: string; label: string }> = {
-    running: { color: '#0e7490', bg: 'var(--color-pattern-50)', label: 'running' },
-    success: { color: '#15803d', bg: '#dcfce7', label: 'success' },
-    partial: { color: '#a16207', bg: '#fef3c7', label: 'partial' },
-    failed:  { color: '#b91c1c', bg: '#fee2e2', label: 'failed' },
+    running: { color: '#0e7490', bg: 'var(--color-pattern-50)', label: '実行中' },
+    success: { color: '#15803d', bg: '#dcfce7', label: '完了' },
+    partial: { color: '#a16207', bg: '#fef3c7', label: '一部完了' },
+    failed:  { color: '#b91c1c', bg: '#fee2e2', label: '失敗' },
   }
   const s = map[status] ?? { color: 'var(--text-muted)', bg: 'var(--bg-elevated)', label: status }
   return (

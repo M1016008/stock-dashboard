@@ -254,6 +254,21 @@ async function main() {
     }
     await lock.heartbeat()
 
+    if (process.env.FINNHUB_API_KEY?.trim()) {
+      try {
+        await runNpm('batch:us-earnings', {
+          UPDATE_CHILD_TIMEOUT_MINUTES: process.env.US_EARNINGS_TIMEOUT_MINUTES ?? '15',
+        }, heartbeat)
+      } catch (error) {
+        console.warn(
+          `Finnhub earnings refresh failed; price/snapshot/ML update will continue: ${errorMessage(error)}`,
+        )
+      }
+    } else {
+      console.warn('Finnhub earnings refresh skipped: FINNHUB_API_KEY is not set')
+    }
+    await lock.heartbeat()
+
     const latestBeforeFetch = await latestUsOhlcvDate()
     const minimumCoveragePct = numberEnv('US_DAILY_MIN_PRICE_COVERAGE_PCT', 95)
     const retryCoveragePct = numberEnv('US_DAILY_RETRY_PRICE_COVERAGE_PCT', 99.95)

@@ -74,6 +74,7 @@ const PERIOD_BY_INTERVAL: Record<TvInterval, string> = {
   Y: 'all',
   '2Y': 'all',
   '3Y': 'all',
+  '5Y': 'all',
 }
 
 const PERIOD_DAYS: Record<string, number> = {
@@ -97,7 +98,7 @@ export function CandlestickChart({
   maLinesByInterval,
   interval = 'D',
   showTimeframeSelector = false,
-  timeframeOptions = ['D', '2D', '3D', 'W', '2W', '3W', 'M', '2M', '3M', '6M', 'Y', '2Y', '3Y'],
+  timeframeOptions = ['D', '2D', '3D', 'W', '2W', '3W', 'M', '2M', '3M', '6M', 'Y', '2Y', '3Y', '5Y'],
   market = 'JP',
   historyPeriod,
   initialVisiblePeriod,

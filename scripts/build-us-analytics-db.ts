@@ -19,7 +19,22 @@ const maxCopyChunk = Math.max(1, Number(process.env.US_ANALYTICS_MAX_CHUNK ?? 10
 const COPY_CHUNK = Math.min(requestedCopyChunk, maxCopyChunk)
 const BATCH_CHUNK = Math.max(25, Math.min(Number(process.env.US_ANALYTICS_BATCH_CHUNK ?? 100), 200))
 const NATIVE_COPY = process.env.US_ANALYTICS_NATIVE_COPY !== '0'
-const NATIVE_COPY_CHUNK = Math.max(25, Math.min(Number(process.env.US_ANALYTICS_NATIVE_CHUNK ?? 500), 1000))
+const NATIVE_COPY_CHUNK = Math.max(
+  10,
+  Math.min(
+    Number(process.env.US_ANALYTICS_NATIVE_CHUNK ?? 50),
+    Number(process.env.US_ANALYTICS_NATIVE_MAX_CHUNK ?? 50),
+    250,
+  ),
+)
+const NATIVE_BUSY_TIMEOUT_MS = Math.max(
+  60_000,
+  Math.min(Number(process.env.US_ANALYTICS_NATIVE_BUSY_TIMEOUT_MS ?? 300_000), 900_000),
+)
+const NATIVE_BUSY_RETRIES = Math.max(
+  1,
+  Math.min(Number(process.env.US_ANALYTICS_NATIVE_BUSY_RETRIES ?? 8), 20),
+)
 const NATIVE_SYNC_RECENT_DAYS = Math.max(1, Number(process.env.US_ANALYTICS_SYNC_RECENT_DAYS ?? 45))
 const REBUILD_PRICE_BASIS = process.env.US_ANALYTICS_REBUILD_PRICE_BASIS === '1'
 
@@ -73,25 +88,33 @@ function runSqlite(dbPath: string, sql: string): string {
   if (result.error) throw result.error
   if (result.status !== 0) {
     throw new Error(
-      `sqlite3 failed (${result.status}): ${result.stderr || result.stdout || 'no output'}`,
+      `sqlite3 failed (${result.status ?? 'signal'}${result.signal ? `/${result.signal}` : ''}): `
+      + `${result.stderr || result.stdout || 'no output'}`,
     )
   }
   return result.stdout
 }
 
+function waitSync(milliseconds: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds)
+}
+
 function nativeCopyChunk(sourcePath: string, chunk: string[]): { ohlcvRows: number; snapshotRows: number } {
   const values = chunk.map((ticker) => `(${sqlLiteral(ticker)})`).join(',\n')
-  const output = runSqlite(TARGET_PATH, `
+  let output = ''
+  for (let attempt = 1; attempt <= NATIVE_BUSY_RETRIES; attempt += 1) {
+    try {
+      output = runSqlite(TARGET_PATH, `
 .bail on
-PRAGMA busy_timeout = 60000;
+PRAGMA busy_timeout = ${NATIVE_BUSY_TIMEOUT_MS};
 PRAGMA synchronous = NORMAL;
-PRAGMA temp_store = MEMORY;
+PRAGMA temp_store = FILE;
 ATTACH DATABASE ${sqlLiteral(sourcePath)} AS src;
 CREATE TEMP TABLE copy_tickers (ticker TEXT PRIMARY KEY);
 INSERT INTO copy_tickers (ticker) VALUES
 ${values};
 BEGIN IMMEDIATE;
-INSERT OR REPLACE INTO ohlcv_daily (ticker, date, open, high, low, close, volume)
+INSERT OR REPLACE INTO ohlcv_daily (ticker, date, open, high, low, close, volume, split_factor)
   SELECT
     m.ticker,
     m.date,
@@ -99,7 +122,8 @@ INSERT OR REPLACE INTO ohlcv_daily (ticker, date, open, high, low, close, volume
     CASE WHEN m.adj_high IS NOT NULL THEN m.adj_high WHEN m.adj_close IS NOT NULL AND m.close <> 0 THEN m.high * m.adj_close / m.close ELSE m.high END,
     CASE WHEN m.adj_low IS NOT NULL THEN m.adj_low WHEN m.adj_close IS NOT NULL AND m.close <> 0 THEN m.low * m.adj_close / m.close ELSE m.low END,
     COALESCE(m.adj_close, m.close),
-    COALESCE(m.adj_volume, m.volume)
+    COALESCE(m.adj_volume, m.volume),
+    m.split_factor
   FROM copy_tickers t
   JOIN src.market_ohlcv_daily m INDEXED BY market_ohlcv_market_ticker_date_idx
     ON m.market = 'US'
@@ -137,6 +161,17 @@ SELECT 'copied|' ||
   COALESCE((SELECT SUM(snapshot_rows) FROM us_analytics_copy_state WHERE ticker IN (SELECT ticker FROM copy_tickers)), 0);
 DETACH DATABASE src;
 `)
+      break
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      if (!/database is locked|database is busy|SQLITE_BUSY/i.test(message) || attempt >= NATIVE_BUSY_RETRIES) {
+        throw error
+      }
+      const delayMs = Math.min(30_000, 2_000 * attempt)
+      console.warn(`US analytics copy lock retry ${attempt}/${NATIVE_BUSY_RETRIES}; waiting ${delayMs}ms`)
+      waitSync(delayMs)
+    }
+  }
   const line = output.trim().split(/\r?\n/).find((row) => row.startsWith('copied|'))
   const [, ohlcvRows, snapshotRows] = (line ?? 'copied|0|0').split('|')
   return {
@@ -169,9 +204,9 @@ function nativeSyncLatest(sourcePath: string): { ohlcvRows: number; snapshotRows
 
   const output = runSqlite(TARGET_PATH, `
 .bail on
-PRAGMA busy_timeout = 60000;
+PRAGMA busy_timeout = ${NATIVE_BUSY_TIMEOUT_MS};
 PRAGMA synchronous = NORMAL;
-PRAGMA temp_store = MEMORY;
+PRAGMA temp_store = FILE;
 ATTACH DATABASE ${sqlLiteral(sourcePath)} AS src;
 CREATE TEMP TABLE sync_bounds AS
   SELECT
@@ -191,7 +226,7 @@ CREATE TEMP TABLE sync_recent_bounds AS
     END AS snapshot_start
   FROM sync_bounds;
 BEGIN IMMEDIATE;
-INSERT OR REPLACE INTO ohlcv_daily (ticker, date, open, high, low, close, volume)
+INSERT OR REPLACE INTO ohlcv_daily (ticker, date, open, high, low, close, volume, split_factor)
   SELECT
     m.ticker,
     m.date,
@@ -199,7 +234,8 @@ INSERT OR REPLACE INTO ohlcv_daily (ticker, date, open, high, low, close, volume
     CASE WHEN m.adj_high IS NOT NULL THEN m.adj_high WHEN m.adj_close IS NOT NULL AND m.close <> 0 THEN m.high * m.adj_close / m.close ELSE m.high END,
     CASE WHEN m.adj_low IS NOT NULL THEN m.adj_low WHEN m.adj_close IS NOT NULL AND m.close <> 0 THEN m.low * m.adj_close / m.close ELSE m.low END,
     COALESCE(m.adj_close, m.close),
-    COALESCE(m.adj_volume, m.volume)
+    COALESCE(m.adj_volume, m.volume),
+    m.split_factor
   FROM src.market_ohlcv_daily m
   WHERE m.market = 'US'
     AND (
@@ -283,8 +319,14 @@ async function ensureTarget(client: Client) {
     low REAL NOT NULL,
     close REAL NOT NULL,
     volume INTEGER NOT NULL,
+    split_factor REAL,
     PRIMARY KEY (ticker, date)
   )`)
+  try {
+    await run(client, 'ALTER TABLE ohlcv_daily ADD COLUMN split_factor REAL')
+  } catch (error) {
+    if (!String(error).includes('duplicate column name')) throw error
+  }
   await run(client, `CREATE INDEX IF NOT EXISTS ohlcv_date_idx ON ohlcv_daily(date)`)
   await run(client, `CREATE INDEX IF NOT EXISTS ohlcv_date_ticker_idx ON ohlcv_daily(date, ticker)`)
   await run(client, `CREATE TABLE IF NOT EXISTS us_analytics_copy_state (
@@ -332,7 +374,7 @@ async function main() {
     `US analytics chunks: tickers=${COPY_CHUNK}, statements=${BATCH_CHUNK}, native=${NATIVE_COPY ? NATIVE_COPY_CHUNK : 'off'}`,
   )
   fs.mkdirSync(path.dirname(TARGET_PATH), { recursive: true })
-  const target = createClient({ url: `file:${TARGET_PATH}` })
+  let target = createClient({ url: `file:${TARGET_PATH}` })
   await ensureTarget(target)
   await ensureSchema(target)
 
@@ -393,12 +435,15 @@ async function main() {
   })))
 
   const tickers = universe.map((row) => row.ticker)
+  const nativeCopyAvailable = NATIVE_COPY && fs.existsSync(localDbPath)
+  if (nativeCopyAvailable) target.close()
   const synced = nativeSyncLatest(localDbPath)
   if (synced.ohlcvRows > 0 || synced.snapshotRows > 0) {
     console.log(
       `US analytics latest sync: ohlcvRows=${synced.ohlcvRows} after=${synced.ohlcvAfter ?? 'none'}, snapshots=${synced.snapshotRows} after=${synced.snapshotAfter ?? 'none'}`,
     )
   }
+  if (nativeCopyAvailable) target = createClient({ url: `file:${TARGET_PATH}` })
   const doneRows = await target.execute({
     sql: REBUILD_PRICE_BASIS
       ? `SELECT ticker FROM us_analytics_copy_state WHERE status = 'done' AND price_basis = ?`
@@ -407,8 +452,14 @@ async function main() {
   })
   const done = new Set(doneRows.rows.map((row) => String(row.ticker)))
   const pendingTickers = tickers.filter((ticker) => !done.has(ticker))
+  if (nativeCopyAvailable) target.close()
   if (nativeCopyPending(pendingTickers, done.size)) {
-    await markPriceBasisIfComplete(target, tickers.length)
+    const finalTarget = createClient({ url: `file:${TARGET_PATH}` })
+    try {
+      await markPriceBasisIfComplete(finalTarget, tickers.length)
+    } finally {
+      finalTarget.close()
+    }
     console.log(
       `US analytics DB ready: ${TARGET_PATH}, universe=${universe.length}, copied via native SQLite, skipped=${done.size}`,
     )
@@ -427,6 +478,7 @@ async function main() {
       low: number
       close: number
       volume: number
+      splitFactor: number | null
     }>(
       `
       SELECT
@@ -436,7 +488,8 @@ async function main() {
         CASE WHEN adj_high IS NOT NULL THEN adj_high WHEN adj_close IS NOT NULL AND close <> 0 THEN high * adj_close / close ELSE high END AS high,
         CASE WHEN adj_low IS NOT NULL THEN adj_low WHEN adj_close IS NOT NULL AND close <> 0 THEN low * adj_close / close ELSE low END AS low,
         COALESCE(adj_close, close) AS close,
-        COALESCE(adj_volume, volume) AS volume
+        COALESCE(adj_volume, volume) AS volume,
+        split_factor AS splitFactor
       FROM market_ohlcv_daily
       WHERE market = 'US' AND ticker IN (${placeholders})
       ORDER BY ticker, date
@@ -446,16 +499,17 @@ async function main() {
     copied += rows.length
     await batch(target, rows.map((row) => ({
       sql: `
-        INSERT INTO ohlcv_daily (ticker, date, open, high, low, close, volume)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO ohlcv_daily (ticker, date, open, high, low, close, volume, split_factor)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(ticker, date) DO UPDATE SET
           open = excluded.open,
           high = excluded.high,
           low = excluded.low,
           close = excluded.close,
-          volume = excluded.volume
+          volume = excluded.volume,
+          split_factor = excluded.split_factor
       `,
-      args: [row.ticker, row.date, row.open, row.high, row.low, row.close, row.volume],
+      args: [row.ticker, row.date, row.open, row.high, row.low, row.close, row.volume, row.splitFactor],
     })))
 
     const snapshotRows = await execAll<{
@@ -583,6 +637,7 @@ async function main() {
     )
   }
   await markPriceBasisIfComplete(target, tickers.length)
+  target.close()
   console.log(
     `US analytics DB ready: ${TARGET_PATH}, universe=${universe.length}, copiedOhlcv=${copied}, copiedSnapshots=${snapshotsCopied}, skipped=${done.size}`,
   )

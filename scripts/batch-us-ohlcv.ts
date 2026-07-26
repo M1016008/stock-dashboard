@@ -15,8 +15,11 @@ const LIMIT = Number(process.env.US_OHLCV_LIMIT ?? 0)
 const INCLUDE_INACTIVE = process.env.US_INCLUDE_INACTIVE === '1'
 const REQUIRE_DATE_RANGE = process.env.US_REQUIRE_DATE_RANGE !== '0'
 const BACKFILL_EARLY = process.env.US_BACKFILL_EARLY !== '0'
+const FORCE_FULL_REFRESH = process.env.US_OHLCV_FORCE_FULL_REFRESH === '1'
 const TARGET_END_DATE = process.env.US_TARGET_END_DATE?.trim() || null
 const TICKERS = process.env.TICKERS?.split(',').map((value) => value.trim().toUpperCase()).filter(Boolean)
+const FAILED_RETRY_ROUNDS = Math.max(0, Number(process.env.US_OHLCV_FAILED_RETRY_ROUNDS ?? 2))
+const FAILED_RETRY_BASE_MS = Math.max(250, Number(process.env.US_OHLCV_FAILED_RETRY_BASE_MS ?? 2_000))
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -99,10 +102,28 @@ async function loadTargets(): Promise<Target[]> {
   return rows
 }
 
-async function fetchAndStore(ticker: string, startDate: string, endDate: string | undefined): Promise<number> {
-  const rows = await fetchTiingoDailyPrices(ticker, startDate, endDate)
+function containsSplit(rows: Awaited<ReturnType<typeof fetchTiingoDailyPrices>>): boolean {
+  return rows.some((row) => (
+    row.splitFactor != null
+    && Number.isFinite(row.splitFactor)
+    && Math.abs(row.splitFactor - 1) > 1e-8
+  ))
+}
+
+async function fetchAndStore(
+  ticker: string,
+  startDate: string,
+  endDate: string | undefined,
+): Promise<number> {
+  let rows = await fetchTiingoDailyPrices(ticker, startDate, endDate)
   if (RATE_LIMIT_MS > 0) await sleep(RATE_LIMIT_MS)
   if (rows.length === 0) return 0
+
+  if (startDate > HISTORY_FROM && containsSplit(rows)) {
+    console.log(`${ticker}: split detected; refreshing adjusted full history`)
+    rows = await fetchTiingoDailyPrices(ticker, HISTORY_FROM, endDate)
+    if (RATE_LIMIT_MS > 0) await sleep(RATE_LIMIT_MS)
+  }
 
   const CHUNK = INSERT_CHUNK
   for (let i = 0; i < rows.length; i += CHUNK) {
@@ -155,6 +176,10 @@ async function storeTicker(target: Target): Promise<number> {
     : requestedEndDate
   if (desiredStartDate > today) return 0
 
+  if (FORCE_FULL_REFRESH) {
+    return fetchAndStore(target.ticker, desiredStartDate, finalEndDate)
+  }
+
   if (BACKFILL_EARLY && target.firstDate && desiredStartDate < target.firstDate) {
     const earlyEndDate = previousDate(target.firstDate)
     if (desiredStartDate <= earlyEndDate) {
@@ -178,6 +203,7 @@ async function main() {
       targetEndDate: TARGET_END_DATE,
       limit: LIMIT || null,
       tickers: TICKERS ?? null,
+      forceFullRefresh: FORCE_FULL_REFRESH,
     }),
   }).returning({ id: marketDataRuns.id })
 
@@ -189,7 +215,8 @@ async function main() {
   let rowsInserted = 0
   let quotaExhausted = false
   let quotaRetryAfterSeconds: number | null = null
-  const errors: string[] = []
+  const errorsByTicker = new Map<string, string>()
+  const failedTargets: Target[] = []
   const unavailableTickers: string[] = []
   let progressSave = Promise.resolve()
 
@@ -200,17 +227,20 @@ async function main() {
       succeeded,
       failed,
       rowsInserted,
-      errorSummary: JSON.stringify(errors.slice(0, 20)),
+      errorSummary: JSON.stringify([...errorsByTicker.values()].slice(0, 20)),
       payloadJson: JSON.stringify({
         historyFrom: HISTORY_FROM,
         targetEndDate: TARGET_END_DATE,
         limit: LIMIT || null,
         tickers: TICKERS ?? null,
+        forceFullRefresh: FORCE_FULL_REFRESH,
         unavailable,
         deferred: quotaExhausted ? Math.max(0, targets.length - succeeded - failed - unavailable) : 0,
         quotaExhausted,
         quotaRetryAfterSeconds,
         unavailableTickers: unavailableTickers.slice(0, 50),
+        failedTickers: [...errorsByTicker.keys()].slice(0, 50),
+        failedRetryRounds: FAILED_RETRY_ROUNDS,
       }),
     }).where(eq(marketDataRuns.id, run.id))
   }
@@ -230,7 +260,7 @@ async function main() {
       succeeded,
       failed,
       rowsInserted,
-      errorSummary: JSON.stringify([`${signal}: interrupted`, ...errors].slice(0, 20)),
+      errorSummary: JSON.stringify([`${signal}: interrupted`, ...errorsByTicker.values()].slice(0, 20)),
     }).where(eq(marketDataRuns.id, run.id))
   }
 
@@ -273,7 +303,8 @@ async function main() {
         } else {
           failed += 1
           const msg = `${target.ticker}: ${conciseError(error)}`
-          errors.push(msg)
+          errorsByTicker.set(target.ticker, msg)
+          failedTargets.push(target)
           console.error(`worker=${workerId} ${msg}`)
         }
       }
@@ -282,6 +313,46 @@ async function main() {
 
   await Promise.all(Array.from({ length: Math.min(CONCURRENCY, targets.length) }, (_, i) => worker(i + 1)))
   await progressSave
+  let retryTargets = failedTargets
+  for (let round = 1; round <= FAILED_RETRY_ROUNDS && retryTargets.length > 0 && !quotaExhausted; round += 1) {
+    const backoffMs = FAILED_RETRY_BASE_MS * (2 ** (round - 1))
+    console.log(`US OHLCV failed retry round ${round}/${FAILED_RETRY_ROUNDS}: targets=${retryTargets.length}`)
+    await sleep(backoffMs)
+    const remaining: Target[] = []
+    for (const target of retryTargets) {
+      try {
+        const count = await storeTicker(target)
+        succeeded += 1
+        failed -= 1
+        rowsInserted += count
+        errorsByTicker.delete(target.ticker)
+        console.log(`${target.ticker}: recovered on failed retry round ${round}`)
+      } catch (error) {
+        if (isTiingoRateLimitError(error)) {
+          quotaExhausted = true
+          quotaRetryAfterSeconds = error.retryAfterSeconds
+          remaining.push(target)
+          console.warn(`Tiingo quota reached while retrying ${target.ticker}; retry queue deferred`)
+          break
+        }
+        if (isProviderUnavailableTicker(error)) {
+          failed -= 1
+          unavailable += 1
+          unavailableTickers.push(target.ticker)
+          errorsByTicker.delete(target.ticker)
+          console.warn(`${target.ticker}: provider reports ticker unavailable during retry; classified as data unavailable`)
+          continue
+        }
+        const msg = `${target.ticker}: ${conciseError(error)}`
+        errorsByTicker.set(target.ticker, msg)
+        remaining.push(target)
+        console.error(`retry=${round} ${msg}`)
+      }
+    }
+    retryTargets = remaining
+    queueProgressSave()
+    await progressSave
+  }
   const deferred = quotaExhausted
     ? Math.max(0, targets.length - succeeded - failed - unavailable)
     : 0
@@ -292,17 +363,20 @@ async function main() {
     succeeded,
     failed,
     rowsInserted,
-    errorSummary: JSON.stringify(errors.slice(0, 20)),
+    errorSummary: JSON.stringify([...errorsByTicker.values()].slice(0, 20)),
     payloadJson: JSON.stringify({
       historyFrom: HISTORY_FROM,
       targetEndDate: TARGET_END_DATE,
       limit: LIMIT || null,
       tickers: TICKERS ?? null,
+      forceFullRefresh: FORCE_FULL_REFRESH,
       unavailable,
       deferred,
       quotaExhausted,
       quotaRetryAfterSeconds,
       unavailableTickers: unavailableTickers.slice(0, 50),
+      failedTickers: [...errorsByTicker.keys()].slice(0, 50),
+      failedRetryRounds: FAILED_RETRY_ROUNDS,
     }),
   }).where(eq(marketDataRuns.id, run.id))
   const latest = await execGet<{ date: string | null }>(
@@ -313,6 +387,12 @@ async function main() {
     `US OHLCV complete: succeeded=${succeeded}, failed=${failed}, unavailable=${unavailable}, deferred=${deferred}, `
     + `rows=${rowsInserted}, latest=${latest?.date ?? '-'}`,
   )
+  if (failed > 0 || deferred > 0) {
+    throw new Error(
+      `US OHLCV incomplete after targeted retries: failed=${failed}, deferred=${deferred}; `
+      + 'the update orchestrator will retry only tickers that are still missing the target date',
+    )
+  }
 }
 
 main().catch((error) => {

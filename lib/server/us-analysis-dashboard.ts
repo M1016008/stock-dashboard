@@ -3,6 +3,14 @@ import {
   execUsAnalyticsGet,
   hasUsAnalyticsDb,
 } from '@/lib/db/us-analytics'
+import {
+  ML_PHYSICS_FEATURE_SET,
+  type PhysicsCandidateExplanation,
+  type PhysicsCandidateReason,
+  type PhysicsDirection,
+  type PhysicsFeatureProfile,
+} from '@/lib/backtest/ml-physics'
+import { analyzePhysicsProfile, type PhysicsAnalysis } from '@/lib/ml/physics-analysis'
 import { getUsSecondaryName } from '@/lib/us-symbol-aliases'
 import { usInvestableSymbolSql } from '@/lib/us-symbol-quality'
 
@@ -18,18 +26,23 @@ export type UsAnalysisStatus = {
   priceBasis: string | null
   derivedPriceBasis: string | null
   analogPriceBasis: string | null
+  featureRowsLatest: number
+  candidateRowsLatest: number
 }
 
 export type UsPhysicsCandidate = {
   asOfDate: string
-  direction: 'up' | 'down' | 'wait'
+  direction: PhysicsDirection
   horizonDays: number
   rank: number
   ticker: string
   name: string | null
   sector: string | null
   candidateScore: number
-  stageCode: string | null
+  profile: PhysicsFeatureProfile | null
+  reason: Partial<PhysicsCandidateReason>
+  explanation: Partial<PhysicsCandidateExplanation>
+  analysis: PhysicsAnalysis
 }
 
 export type UsModelEvaluation = {
@@ -123,6 +136,14 @@ function nullableNumber(value: unknown): number | null {
   return Number.isFinite(number) ? number : null
 }
 
+function parseJson<T>(value: string | null | undefined, fallback: T): T {
+  try {
+    return value ? JSON.parse(value) as T : fallback
+  } catch {
+    return fallback
+  }
+}
+
 async function safeGet<T>(sql: string, args: readonly SqlArg[] = []): Promise<T | undefined> {
   try {
     return await execUsAnalyticsGet<T>(sql, args)
@@ -155,6 +176,8 @@ export async function loadUsAnalysisStatus(): Promise<UsAnalysisStatus> {
       priceBasis: null,
       derivedPriceBasis: null,
       analogPriceBasis: null,
+      featureRowsLatest: 0,
+      candidateRowsLatest: 0,
     }
   }
 
@@ -165,12 +188,25 @@ export async function loadUsAnalysisStatus(): Promise<UsAnalysisStatus> {
       candidateDate: string | null
       evaluationDate: string | null
       analogDate: string | null
+      featureRowsLatest: number | null
+      candidateRowsLatest: number | null
     }>(
       `
         SELECT
           (SELECT MAX(date) FROM ohlcv_daily) AS priceDate,
-          (SELECT MAX(date) FROM ml_feature_vectors_v2) AS featureDate,
+          (SELECT MAX(date) FROM ml_feature_vectors_v2 WHERE feature_set = ?) AS featureDate,
           (SELECT MAX(as_of_date) FROM serving_ml_physics_candidates) AS candidateDate,
+          (
+            SELECT COUNT(*)
+            FROM ml_feature_vectors_v2
+            WHERE feature_set = ?
+              AND date = (SELECT MAX(date) FROM ml_feature_vectors_v2 WHERE feature_set = ?)
+          ) AS featureRowsLatest,
+          (
+            SELECT COUNT(*)
+            FROM serving_ml_physics_candidates
+            WHERE as_of_date = (SELECT MAX(as_of_date) FROM serving_ml_physics_candidates)
+          ) AS candidateRowsLatest,
           (
             SELECT MAX(evaluation_date)
             FROM ml_model_evaluations
@@ -178,6 +214,7 @@ export async function loadUsAnalysisStatus(): Promise<UsAnalysisStatus> {
           ) AS evaluationDate,
           (SELECT MAX(as_of_date) FROM serving_current_similars) AS analogDate
       `,
+      [ML_PHYSICS_FEATURE_SET, ML_PHYSICS_FEATURE_SET, ML_PHYSICS_FEATURE_SET],
     ),
     safeAll<{ key: string; value: string | null }>(
       `
@@ -198,13 +235,15 @@ export async function loadUsAnalysisStatus(): Promise<UsAnalysisStatus> {
     priceBasis: metadataMap.get('ohlcv_price_basis') ?? null,
     derivedPriceBasis: metadataMap.get('derived_price_basis') ?? null,
     analogPriceBasis: metadataMap.get('analog_index_price_basis') ?? null,
+    featureRowsLatest: numeric(dates?.featureRowsLatest),
+    candidateRowsLatest: numeric(dates?.candidateRowsLatest),
   }
 }
 
 export async function loadUsPhysicsCandidates(): Promise<UsPhysicsCandidate[]> {
   const rows = await safeAll<{
     asOfDate: string
-    direction: 'up' | 'down' | 'wait'
+    direction: PhysicsDirection
     horizonDays: number
     rank: number
     ticker: string
@@ -212,6 +251,8 @@ export async function loadUsPhysicsCandidates(): Promise<UsPhysicsCandidate[]> {
     sector: string | null
     candidateScore: number
     featureJson: string
+    reasonJson: string
+    explanationJson: string
   }>(
     `
       WITH latest AS (
@@ -227,34 +268,36 @@ export async function loadUsPhysicsCandidates(): Promise<UsPhysicsCandidate[]> {
         COALESCE(NULLIF(c.name, ''), NULLIF(u.name, ''), c.ticker) AS name,
         COALESCE(NULLIF(c.sector_large, ''), NULLIF(u.sector17_name, ''), NULLIF(u.sector33_name, '')) AS sector,
         c.candidate_score AS candidateScore,
-        c.feature_json AS featureJson
+        c.feature_json AS featureJson,
+        c.reason_json AS reasonJson,
+        c.explanation_json AS explanationJson
       FROM serving_ml_physics_candidates c
       INNER JOIN latest l ON l.date = c.as_of_date
       INNER JOIN ticker_universe u
         ON u.ticker = c.ticker
        AND u.active = 1
-      WHERE c.horizon_days IN (20, 40, 60)
-        AND c.direction IN ('up', 'down')
-        AND c.rank <= 8
+      WHERE c.horizon_days IN (5, 10, 20, 40, 60, 90, 200)
+        AND c.direction IN ('up', 'down', 'wait')
+        AND c.rank <= 6
         AND ${usInvestableSymbolSql('c.ticker')}
-      ORDER BY c.horizon_days, CASE c.direction WHEN 'up' THEN 0 ELSE 1 END, c.rank
+      ORDER BY c.horizon_days, CASE c.direction WHEN 'up' THEN 0 WHEN 'down' THEN 1 ELSE 2 END, c.rank
     `,
   )
   return rows.map((row) => {
-    let stageCode: string | null = null
-    try {
-      const parsed = JSON.parse(row.featureJson) as { stageCode?: unknown }
-      stageCode = typeof parsed.stageCode === 'string' ? parsed.stageCode : null
-    } catch {
-      stageCode = null
-    }
+    const profile = parseJson<PhysicsFeatureProfile | null>(row.featureJson, null)
     return {
-      ...row,
+      asOfDate: row.asOfDate,
+      direction: row.direction,
+      ticker: row.ticker,
       name: getUsSecondaryName(row.ticker, row.name),
+      sector: row.sector,
       horizonDays: numeric(row.horizonDays),
       rank: numeric(row.rank),
       candidateScore: numeric(row.candidateScore),
-      stageCode,
+      profile,
+      reason: parseJson<Partial<PhysicsCandidateReason>>(row.reasonJson, {}),
+      explanation: parseJson<Partial<PhysicsCandidateExplanation>>(row.explanationJson, {}),
+      analysis: analyzePhysicsProfile(profile),
     }
   })
 }
@@ -302,24 +345,6 @@ export async function loadUsCurrentSimilars(): Promise<UsCurrentSimilar[]> {
       WITH latest AS (
         SELECT MAX(as_of_date) AS date
         FROM serving_current_similars
-      ),
-      eligible AS (
-        SELECT
-          s.*,
-          ROW_NUMBER() OVER (
-            PARTITION BY s.base_ticker
-            ORDER BY s.rank ASC, s.similarity_score DESC, s.similar_ticker ASC
-          ) AS eligible_rank
-        FROM serving_current_similars s
-        INNER JOIN latest l ON l.date = s.as_of_date
-        INNER JOIN ticker_universe base_u
-          ON base_u.ticker = s.base_ticker
-         AND base_u.active = 1
-        INNER JOIN ticker_universe similar_u
-          ON similar_u.ticker = s.similar_ticker
-         AND similar_u.active = 1
-        WHERE ${usInvestableSymbolSql('s.base_ticker')}
-          AND ${usInvestableSymbolSql('s.similar_ticker')}
       )
       SELECT
         s.as_of_date AS asOfDate,
@@ -328,8 +353,27 @@ export async function loadUsCurrentSimilars(): Promise<UsCurrentSimilar[]> {
         s.similarity_score AS similarityScore,
         s.base_direction AS baseDirection,
         s.similar_direction AS similarDirection
-      FROM eligible s
-      WHERE s.eligible_rank = 1
+      FROM serving_current_similars AS s INDEXED BY serving_current_similars_score_idx
+      INNER JOIN latest l ON l.date = s.as_of_date
+      INNER JOIN ticker_universe base_u
+        ON base_u.ticker = s.base_ticker
+       AND base_u.active = 1
+      INNER JOIN ticker_universe similar_u
+        ON similar_u.ticker = s.similar_ticker
+       AND similar_u.active = 1
+      WHERE ${usInvestableSymbolSql('s.base_ticker')}
+        AND ${usInvestableSymbolSql('s.similar_ticker')}
+        AND NOT EXISTS (
+          SELECT 1
+          FROM serving_current_similars AS better
+          INNER JOIN ticker_universe better_u
+            ON better_u.ticker = better.similar_ticker
+           AND better_u.active = 1
+          WHERE better.as_of_date = s.as_of_date
+            AND better.base_ticker = s.base_ticker
+            AND better.rank < s.rank
+            AND ${usInvestableSymbolSql('better.similar_ticker')}
+        )
       ORDER BY s.similarity_score DESC
       LIMIT 16
     `,

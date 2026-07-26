@@ -49,6 +49,8 @@ removeGenerated(stagePath)
 runNpm('test:historical-analogs')
 runNpm('test:quote-technicals')
 runNpm('test:us-screener-filters')
+runNpm('test:physical-plan')
+runNpm('test:timeframes')
 runNpm('build', {
   ...process.env,
   NEXT_DIST_DIR: stageName,

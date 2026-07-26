@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
-import { ArrowDown, ArrowUp, Database, Network } from 'lucide-react'
+import { Database, Network } from 'lucide-react'
+import { PhysicsMlCandidatesPanel } from '@/components/ml/PhysicsMlCandidatesPanel'
 import { UsAnalysisNav } from '@/components/us/UsAnalysisNav'
 import {
   loadUsAnalysisStatus,
@@ -46,7 +47,7 @@ export default async function UsMlLensPage() {
           ['US価格', status.priceDate],
           ['物理特徴量', status.featureDate],
           ['物理ML候補', status.candidateDate],
-          ['モデル評価', status.evaluationDate],
+          ['検証区間終端', status.evaluationDate],
           ['類似局面', status.analogDate],
         ].map(([label, value]) => (
           <div key={label} className="border border-[var(--color-border-default)] bg-white p-3">
@@ -62,61 +63,38 @@ export default async function UsMlLensPage() {
         </div>
       )}
 
-      <section>
-        <div className="sb-hd">
-          <h2>物理ML候補ランキング</h2>
-          <span>{status.candidateDate ?? '未生成'} / 20・40・60営業日</span>
-        </div>
-        {candidates.length === 0 ? (
-          <div className="border border-dashed border-[var(--color-border-default)] bg-white p-6 text-[12px] font-semibold text-[var(--color-text-secondary)]">
-            US物理ML候補は現在生成中です。
-          </div>
-        ) : (
-          <div className="overflow-x-auto border border-[var(--color-border-default)] bg-white">
-            <table className="w-full min-w-[780px] text-left text-[12px]">
-              <thead className="bg-[var(--color-surface-subtle)] text-[10px] font-black text-[var(--color-text-tertiary)]">
-                <tr>
-                  <th className="px-3 py-2">方向</th>
-                  <th className="px-3 py-2">期間</th>
-                  <th className="px-3 py-2">順位</th>
-                  <th className="px-3 py-2">銘柄</th>
-                  <th className="px-3 py-2">セクター</th>
-                  <th className="px-3 py-2">6ステージ</th>
-                  <th className="px-3 py-2 text-right">候補スコア</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[var(--color-border-soft)]">
-                {candidates.map((row) => (
-                  <tr key={`${row.direction}-${row.horizonDays}-${row.ticker}`} className="hover:bg-[var(--color-surface-subtle)]">
-                    <td className="px-3 py-2">
-                      <span className={`inline-flex items-center gap-1 font-black ${row.direction === 'up' ? 'text-[var(--color-price-up)]' : 'text-[var(--color-price-down)]'}`}>
-                        {row.direction === 'up' ? <ArrowUp size={13} /> : <ArrowDown size={13} />}
-                        {row.direction === 'up' ? '上昇' : '下落'}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2 font-bold">{row.horizonDays}日</td>
-                    <td className="px-3 py-2 tabular-nums">{row.rank}</td>
-                    <td className="px-3 py-2">
-                      <Link href={`/us/stock/${encodeURIComponent(row.ticker)}#ml`} className="font-black text-[var(--color-brand-800)] hover:text-[var(--color-market-red)]">
-                        {row.ticker}{row.name && row.name !== row.ticker ? ` ${row.name}` : ''}
-                      </Link>
-                    </td>
-                    <td className="px-3 py-2 text-[var(--color-text-secondary)]">{row.sector ?? '-'}</td>
-                    <td className="px-3 py-2 font-mono">{row.stageCode ?? '-'}</td>
-                    <td className="px-3 py-2 text-right font-black tabular-nums">{row.candidateScore.toFixed(4)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
+      <PhysicsMlCandidatesPanel
+        market="US"
+        status={{
+          latestDate: status.featureDate,
+          rowsLatest: status.featureRowsLatest,
+          candidateDate: status.candidateDate,
+          candidateRowsLatest: status.candidateRowsLatest,
+        }}
+        rows={candidates.map((row) => ({
+          as_of_date: row.asOfDate,
+          direction: row.direction,
+          horizon_days: row.horizonDays,
+          rank: row.rank,
+          ticker: row.ticker,
+          name: row.name,
+          sector_large: row.sector,
+          candidate_score: row.candidateScore,
+          profile: row.profile,
+          reason: row.reason,
+          explanation: row.explanation,
+          analysis: row.analysis,
+        }))}
+      />
 
       <section className="grid gap-4 lg:grid-cols-2">
         <div>
           <div className="sb-hd">
             <h2>モデル評価</h2>
-            <Database size={15} />
+            <span className="inline-flex items-center gap-1 text-[10px] font-bold text-[var(--color-text-tertiary)]">
+              <Database size={15} />
+              年次ウォークフォワード検証 / 終端 {status.evaluationDate ?? '未生成'}
+            </span>
           </div>
           <div className="overflow-x-auto border border-[var(--color-border-default)] bg-white">
             <table className="w-full min-w-[560px] text-left text-[11px]">

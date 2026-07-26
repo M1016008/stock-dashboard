@@ -4,10 +4,15 @@ import path from 'path'
 
 const DEFAULT_US_ANALYTICS_PATH = 'data/stockboard-us.db'
 
+type UsAnalyticsGeneration = {
+  client: Client
+  identity: string
+  path: string
+  pragmasReady?: Promise<void>
+}
+
 const globalForUsAnalytics = global as unknown as {
-  usAnalyticsClient?: Client
-  usAnalyticsPath?: string
-  usAnalyticsPragmasReady?: Promise<void>
+  usAnalyticsGeneration?: UsAnalyticsGeneration
 }
 
 export type UsAnalyticsArgs = readonly InValue[]
@@ -37,6 +42,11 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+function fileIdentity(dbPath: string): string {
+  const stat = fs.statSync(dbPath)
+  return `${stat.dev}:${stat.ino}`
+}
+
 async function withBusyRetry<T>(operation: () => Promise<T>): Promise<T> {
   const maxRetries = Math.max(0, numberEnv('US_SQLITE_BUSY_RETRIES', numberEnv('SQLITE_BUSY_RETRIES', 8)))
   for (let attempt = 0; ; attempt++) {
@@ -49,25 +59,42 @@ async function withBusyRetry<T>(operation: () => Promise<T>): Promise<T> {
   }
 }
 
-function getClient(): Client {
-  const dbPath = resolveUsAnalyticsDbPath()
-  if (!globalForUsAnalytics.usAnalyticsClient || globalForUsAnalytics.usAnalyticsPath !== dbPath) {
-    globalForUsAnalytics.usAnalyticsClient = createClient({ url: `file:${dbPath}` })
-    globalForUsAnalytics.usAnalyticsPath = dbPath
-    delete globalForUsAnalytics.usAnalyticsPragmasReady
-  }
-  return globalForUsAnalytics.usAnalyticsClient
+function retireClient(client: Client): void {
+  const timer = setTimeout(() => {
+    try {
+      client.close()
+    } catch {
+      // The retired generation is already detached from new requests.
+    }
+  }, 120_000)
+  timer.unref()
 }
 
-async function ensurePragmas(): Promise<void> {
-  if (!globalForUsAnalytics.usAnalyticsPragmasReady) {
-    const client = getClient()
-    globalForUsAnalytics.usAnalyticsPragmasReady = Promise.resolve()
+function getGeneration(): UsAnalyticsGeneration {
+  const dbPath = resolveUsAnalyticsDbPath()
+  const identity = fileIdentity(dbPath)
+  const current = globalForUsAnalytics.usAnalyticsGeneration
+  if (!current || current.path !== dbPath || current.identity !== identity) {
+    const next = {
+      client: createClient({ url: `file:${dbPath}` }),
+      identity,
+      path: dbPath,
+    }
+    globalForUsAnalytics.usAnalyticsGeneration = next
+    if (current) retireClient(current.client)
+    return next
+  }
+  return current
+}
+
+async function ensurePragmas(generation: UsAnalyticsGeneration): Promise<void> {
+  if (!generation.pragmasReady) {
+    const ready = Promise.resolve()
       .then(async () => {
         const busyTimeoutMs = Math.max(1_000, numberEnv('SQLITE_BUSY_TIMEOUT_MS', 60_000))
-        await client.execute(`PRAGMA busy_timeout=${busyTimeoutMs}`)
-        await client.execute('PRAGMA synchronous=NORMAL')
-        const journalMode = await client.execute('PRAGMA journal_mode')
+        await generation.client.execute(`PRAGMA busy_timeout=${busyTimeoutMs}`)
+        await generation.client.execute('PRAGMA synchronous=NORMAL')
+        const journalMode = await generation.client.execute('PRAGMA journal_mode')
         const mode = String(
           journalMode.rows[0]?.journal_mode
           ?? journalMode.rows[0]?.['journal_mode']
@@ -75,19 +102,20 @@ async function ensurePragmas(): Promise<void> {
         ).toLowerCase()
         if (mode !== 'wal') {
           try {
-            await client.execute('PRAGMA journal_mode=WAL')
+            await generation.client.execute('PRAGMA journal_mode=WAL')
           } catch (error) {
             if (!isBusyError(error)) throw error
           }
         }
-        await client.execute('PRAGMA query_only=ON')
+        await generation.client.execute('PRAGMA query_only=ON')
       })
       .catch((error) => {
-        delete globalForUsAnalytics.usAnalyticsPragmasReady
+        if (generation.pragmasReady === ready) delete generation.pragmasReady
         throw error
       })
+    generation.pragmasReady = ready
   }
-  await globalForUsAnalytics.usAnalyticsPragmasReady
+  await generation.pragmasReady
 }
 
 export async function execUsAnalyticsAll<T = Record<string, unknown>>(
@@ -97,8 +125,11 @@ export async function execUsAnalyticsAll<T = Record<string, unknown>>(
   if (!hasUsAnalyticsDb()) {
     throw new Error(`US analytics DB not found: ${resolveUsAnalyticsDbPath()}`)
   }
-  await ensurePragmas()
-  const res = await withBusyRetry(() => getClient().execute({ sql, args: args as InValue[] }))
+  const generation = getGeneration()
+  await ensurePragmas(generation)
+  const res = await withBusyRetry(
+    () => generation.client.execute({ sql, args: args as InValue[] }),
+  )
   return res.rows.map((row) => ({ ...row })) as unknown as T[]
 }
 

@@ -35,7 +35,18 @@ import {
 import { findTicker } from '@/lib/master/tickers'
 import { STAGE_BG_COLORS, STAGE_BORDER_COLORS, STAGE_LABELS } from '@/lib/hex-stage'
 import { buildShortTermCheck, formatShortTermStrength, type ShortTermCheckTone } from '@/lib/short-term-check'
-import { buildPhysicalMomentumView, type PhysicalMomentumCheck, type PhysicalMomentumTone } from '@/lib/physical-momentum-view'
+import {
+  buildPhysicalMomentumView,
+  buildPhysicalRawMetricView,
+  describePhysicalScore,
+  type PhysicalMomentumCheck,
+  type PhysicalMomentumTone,
+} from '@/lib/physical-momentum-view'
+import {
+  physicalPlanDirectionLabel,
+  physicalPlanStatisticsLabel,
+  type PhysicalPlanDecision,
+} from '@/lib/physical-plan'
 import {
   isComparedSymbol,
   recordRecentSymbol,
@@ -600,7 +611,9 @@ interface PhysicalPlanHorizon {
     headline: string
     summary: string
     checklist: string[]
+    conditionLabel: string
     invalidation: string
+    decision: PhysicalPlanDecision
   }
 }
 
@@ -684,6 +697,9 @@ function PhysicalMomentumSection({ ticker, analysisDate }: { ticker: string; ana
   const insight = latest && !isMomentumCoverageSparse
     ? buildPhysicalMomentumInsight(latest, data?.rank ?? null, data?.totalRanked ?? 0, data?.trend ?? null, fieldInsight)
     : null
+  const velocityMetric = buildPhysicalRawMetricView('velocity', latest?.velocity)
+  const accelerationMetric = buildPhysicalRawMetricView('acceleration', latest?.acceleration)
+  const forceMetric = buildPhysicalRawMetricView('force', latest?.force)
 
   return (
     <div className="card" style={physicalCardStyle}>
@@ -755,12 +771,12 @@ function PhysicalMomentumSection({ ticker, analysisDate }: { ticker: string; ana
 
           <div style={physicalScoreGridStyle}>
             <PhysicalScoreCard
-              label="20日累積の動き"
+              label="総合的な運動状態"
               code="PMS"
               title="方向+熱量の合成"
               value={latest.physicalMomentumScore}
               sub={data?.rank && data.totalRanked ? `市場順位 ${data.rank}/${data.totalRanked}` : '市場順位 -'}
-              guide="高い=買いではなく、20営業日で大きく動いた状態。足元の向きはPFSで確認"
+              guide="高い=買いではなく、20営業日の方向・力・熱量が市場内で強い状態。足元の向きはPFSで確認"
               trend={data?.trend ?? null}
             />
             <PhysicalScoreCard
@@ -792,14 +808,12 @@ function PhysicalMomentumSection({ ticker, analysisDate }: { ticker: string; ana
             <div style={physicalBreakdownPanelStyle}>
               <div style={physicalMiniHeaderStyle}>
                 <strong>内訳</strong>
-                <span>数値は補足。まずは力場とPMS/PFS/PESを見ます。</span>
+                <span>騰落率は%・変化はptで表示。比較不能な生値は出さず、市場内の強弱はPMS/PFS/PESで見ます。</span>
               </div>
               <div style={physicalBreakdownGridStyle}>
-                <PhysicalBreakdown label="速度" help="20営業日前からの変化率" value={fmtPctValue(latest.velocity)} tone={latest.velocity} />
-                <PhysicalBreakdown label="加速度" help="速度の変化" value={fmtDecimal(latest.acceleration, 4)} tone={latest.acceleration} />
-                <PhysicalBreakdown label="運動量" help="出来高 × 速度" value={fmtCompact(latest.momentum)} tone={latest.momentum} />
-                <PhysicalBreakdown label="力" help="出来高 × 加速度" value={fmtCompact(latest.force)} tone={latest.force} />
-                <PhysicalBreakdown label="運動エネルギー" help="出来高 × 速度^2" value={fmtCompact(latest.energy)} tone={latest.energy} />
+                <PhysicalBreakdown label={velocityMetric.label} help={velocityMetric.detail} value={velocityMetric.value} tone={latest.velocity} />
+                <PhysicalBreakdown label={accelerationMetric.label} help={accelerationMetric.detail} value={accelerationMetric.value} tone={latest.acceleration} />
+                <PhysicalBreakdown label={forceMetric.label} help={forceMetric.detail} value={forceMetric.value} tone={latest.force} />
               </div>
             </div>
             <PhysicalMomentumSparkline history={data?.history ?? []} />
@@ -929,7 +943,8 @@ function PhysicalTimeframeConclusionPanel({ views }: { views: PhysicalMomentumTi
         ))}
       </div>
       <p style={physicalTimeframeNoteStyle}>
-        日足は市場横断Z、2日足・週足・月足は銘柄内の時間軸Z。時間軸が違えば「買い/売り/待ち」の見方も変わります。
+        日足は市場横断Z、2日足・週足・月足は銘柄内の時間軸Zです。いずれも分布の裾1%を抑えた標準化で、
+        時間軸が違う数値同士は直接比較しません。
       </p>
     </div>
   )
@@ -958,9 +973,9 @@ function PhysicalTimeframeConclusionCard({ view }: { view: PhysicalMomentumTimef
         <span style={{ ...physicalTimeframeBadgeStyle, borderColor: `${color}66`, color }}>{view.interval}</span>
       </div>
       <div style={physicalTimeframeMetricRowStyle}>
-        <span>PMS <b style={{ color: scoreTone }}>{fmtScore(view.physicalMomentumScore)}</b></span>
-        <span>PFS <b>{fmtScore(view.physicalForceScore)}</b></span>
-        <span>PES <b>{fmtScore(view.physicalEnergyScore)}</b></span>
+        <span>PMS <b style={{ color: scoreTone }}>{describePhysicalScore('pms', view.physicalMomentumScore)} ({fmtScore(view.physicalMomentumScore)})</b></span>
+        <span>PFS <b>{describePhysicalScore('pfs', view.physicalForceScore)} ({fmtScore(view.physicalForceScore)})</b></span>
+        <span>PES <b>{describePhysicalScore('pes', view.physicalEnergyScore)} ({fmtScore(view.physicalEnergyScore)})</b></span>
       </div>
       <p style={physicalTimeframeStanceStyle}>{built.stance}</p>
       <div style={physicalTimeframeMetaStyle}>
@@ -984,7 +999,7 @@ function PhysicalBreakdown({ label, help, value, tone }: { label: string; help: 
   return (
     <div style={physicalBreakdownStyle}>
       <span>{label}</span>
-      <strong style={{ color }}>{value}</strong>
+      <strong style={{ color, lineHeight: 1.4 }}>{value}</strong>
       <small>{help}</small>
     </div>
   )
@@ -1378,10 +1393,18 @@ function PhysicalTradePlanCard({ horizon }: { horizon: PhysicalPlanHorizon }) {
       </div>
       <p style={physicalTradePlanStanceStyle}>{horizon.suggestion.stance}</p>
       <PhysicalPlanLevelStrip levels={horizon.levels} />
+      <div style={physicalTradePlanEvidenceStyle}>
+        <span>構造 {physicalPlanDirectionLabel(horizon.suggestion.decision.structureDirection)}</span>
+        <span>PMS/PFS {physicalPlanDirectionLabel(horizon.suggestion.decision.momentumDirection)}</span>
+        {horizon.suggestion.decision.candidateDirection !== 'wait' && (
+          <span>物理ML {physicalPlanDirectionLabel(horizon.suggestion.decision.candidateDirection)}</span>
+        )}
+        <span>{physicalPlanStatisticsLabel(horizon.suggestion.decision.statisticsQuality)}</span>
+      </div>
       <div style={physicalTradePlanMetricGridStyle}>
-        <PhysicalPlanMetric label="的中率" value={fmtRate(horizon.hitRate)} sub={`base ${fmtRate(horizon.baseRate)}`} />
-        <PhysicalPlanMetric label="lift" value={fmtLift(horizon.lift)} sub={`信頼 ${horizon.confidenceLabel}`} />
-        <PhysicalPlanMetric label="平均順行" value={fmtPctRaw(horizon.avgMaxReturnPct)} sub={`逆行 ${fmtPctRaw(horizon.avgMinReturnPct)}`} />
+        <PhysicalPlanMetric label="的中率" value={fmtRate(horizon.hitRate)} sub="同状態の実績" />
+        <PhysicalPlanMetric label="基準率" value={fmtRate(horizon.baseRate)} sub="市場全体" />
+        <PhysicalPlanMetric label="Lift" value={fmtLift(horizon.lift)} sub={`信頼 ${horizon.confidenceLabel}`} />
       </div>
       <div style={physicalTradePlanCandidatesStyle}>
         {topCandidates.length > 0 ? topCandidates.map((candidate) => (
@@ -1404,7 +1427,7 @@ function PhysicalTradePlanCard({ horizon }: { horizon: PhysicalPlanHorizon }) {
         ))}
       </div>
       <div style={physicalTradePlanInvalidationStyle}>
-        <strong>崩れる条件</strong>
+        <strong>{horizon.suggestion.conditionLabel}</strong>
         <span>{horizon.suggestion.invalidation}</span>
       </div>
       <div style={physicalTradePlanFooterStyle}>
@@ -1417,11 +1440,16 @@ function PhysicalTradePlanCard({ horizon }: { horizon: PhysicalPlanHorizon }) {
 function PhysicalPlanLevelStrip({ levels }: { levels: PhysicalPlanLevels | null }) {
   if (!levels) return null
   return (
-    <div style={physicalTradePlanLevelGridStyle}>
-      <PhysicalPlanLevelChip label="基準" level={{ label: levels.baseDate, value: levels.close, distancePct: 0 }} tone="base" />
-      <PhysicalPlanLevelChip label="支持/反発" level={levels.support} tone="support" />
-      <PhysicalPlanLevelChip label="抵抗/反落" level={levels.resistance} tone="resistance" />
-      <PhysicalPlanLevelChip label="割れ注意" level={levels.breakdown} tone="breakdown" />
+    <div style={physicalTradePlanLevelsStyle}>
+      <div style={physicalTradePlanBaseStyle}>
+        <span>基準 {levels.baseDate}</span>
+        <strong>{fmtPrice(levels.close)}</strong>
+      </div>
+      <div style={physicalTradePlanLevelGridStyle}>
+        <PhysicalPlanLevelChip label="支持" level={levels.support} tone="support" />
+        <PhysicalPlanLevelChip label="抵抗" level={levels.resistance} tone="resistance" />
+        <PhysicalPlanLevelChip label="割れ注意" level={levels.breakdown} tone="breakdown" />
+      </div>
     </div>
   )
 }
@@ -1747,11 +1775,6 @@ function scoreLevelLabel(value: number | null | undefined): string {
 function fmtDecimal(value: number | null | undefined, digits = 2): string {
   if (value == null || !Number.isFinite(value)) return '-'
   return value.toFixed(digits)
-}
-
-function fmtPctValue(value: number | null | undefined): string {
-  if (value == null || !Number.isFinite(value)) return '-'
-  return `${value >= 0 ? '+' : ''}${(value * 100).toFixed(2)}%`
 }
 
 function fmtCompact(value: number | null | undefined): string {
@@ -2196,23 +2219,23 @@ const physicalTradePlanPanelStyle: CSSProperties = {
   border: '1px solid var(--border-subtle)',
   borderRadius: 'var(--radius-sm)',
   background: '#fff',
-  padding: '10px',
-  marginBottom: '10px',
+  padding: '8px',
+  marginBottom: '8px',
 }
 
 const physicalTradePlanGridStyle: CSSProperties = {
   display: 'grid',
   gridTemplateColumns: 'repeat(auto-fit, minmax(min(260px, 100%), 1fr))',
-  gap: '8px',
+  gap: '6px',
 }
 
 const physicalTradePlanCardStyle: CSSProperties = {
   border: '1px solid var(--border-subtle)',
   borderRadius: 'var(--radius-sm)',
-  padding: '10px',
+  padding: '8px',
   display: 'flex',
   flexDirection: 'column',
-  gap: '8px',
+  gap: '6px',
   minWidth: 0,
 }
 
@@ -2252,29 +2275,40 @@ const physicalTradePlanBadgeStyle: CSSProperties = {
 const physicalTradePlanStanceStyle: CSSProperties = {
   margin: 0,
   color: 'var(--text-primary)',
-  fontSize: '12px',
+  fontSize: '11px',
   fontWeight: 900,
-  lineHeight: 1.45,
+  lineHeight: 1.5,
 }
 
-const physicalTradePlanSummaryStyle: CSSProperties = {
-  margin: 0,
+const physicalTradePlanLevelsStyle: CSSProperties = {
+  display: 'grid',
+  gap: '5px',
+}
+
+const physicalTradePlanBaseStyle: CSSProperties = {
+  borderTop: '1px solid var(--border-subtle)',
+  borderBottom: '1px solid var(--border-subtle)',
+  padding: '4px 1px',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: '6px',
   color: 'var(--text-secondary)',
-  fontSize: '11px',
-  lineHeight: 1.6,
+  fontSize: '9px',
+  fontWeight: 800,
 }
 
 const physicalTradePlanLevelGridStyle: CSSProperties = {
   display: 'grid',
-  gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
-  gap: '5px',
+  gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+  gap: '4px',
 }
 
 const physicalTradePlanLevelChipStyle: CSSProperties = {
   border: '1px solid var(--border-subtle)',
-  borderRadius: '7px',
+  borderRadius: '5px',
   background: 'rgba(255,255,255,0.72)',
-  padding: '6px',
+  padding: '5px',
   display: 'grid',
   gap: '2px',
   minWidth: 0,
@@ -2290,7 +2324,7 @@ const physicalTradePlanLevelLabelStyle: CSSProperties = {
 
 const physicalTradePlanLevelValueStyle: CSSProperties = {
   fontFamily: 'var(--font-mono)',
-  fontSize: '13px',
+  fontSize: '12px',
   fontWeight: 900,
   lineHeight: 1.2,
   whiteSpace: 'nowrap',
@@ -2306,17 +2340,26 @@ const physicalTradePlanLevelSubStyle: CSSProperties = {
   whiteSpace: 'nowrap',
 }
 
+const physicalTradePlanEvidenceStyle: CSSProperties = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: '4px',
+  color: 'var(--text-secondary)',
+  fontSize: '9px',
+  fontWeight: 900,
+}
+
 const physicalTradePlanMetricGridStyle: CSSProperties = {
   display: 'grid',
   gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
-  gap: '5px',
+  gap: '4px',
 }
 
 const physicalTradePlanMetricStyle: CSSProperties = {
   border: '1px solid var(--border-subtle)',
-  borderRadius: '7px',
+  borderRadius: '5px',
   background: '#fff',
-  padding: '7px',
+  padding: '5px',
   display: 'grid',
   gap: '2px',
   minWidth: 0,
@@ -2325,7 +2368,7 @@ const physicalTradePlanMetricStyle: CSSProperties = {
 const physicalTradePlanCandidatesStyle: CSSProperties = {
   display: 'flex',
   flexWrap: 'wrap',
-  gap: '5px',
+  gap: '4px',
 }
 
 const physicalTradePlanCandidatePillStyle: CSSProperties = {
@@ -2333,9 +2376,9 @@ const physicalTradePlanCandidatePillStyle: CSSProperties = {
   borderRadius: '999px',
   background: '#fff',
   color: 'var(--text-secondary)',
-  fontSize: '10px',
+  fontSize: '9px',
   fontWeight: 800,
-  padding: '3px 7px',
+  padding: '2px 6px',
 }
 
 const physicalTradePlanChecklistStyle: CSSProperties = {
@@ -2363,11 +2406,11 @@ const physicalTradePlanDotStyle: CSSProperties = {
 
 const physicalTradePlanInvalidationStyle: CSSProperties = {
   borderTop: '1px solid var(--border-subtle)',
-  paddingTop: '7px',
+  paddingTop: '5px',
   display: 'grid',
-  gap: '3px',
+  gap: '2px',
   color: 'var(--text-secondary)',
-  fontSize: '11px',
+  fontSize: '10px',
   lineHeight: 1.5,
 }
 
@@ -2382,7 +2425,7 @@ const physicalTradePlanFooterStyle: CSSProperties = {
 }
 
 const physicalTradePlanNoteStyle: CSSProperties = {
-  margin: '8px 0 0',
+  margin: '6px 0 0',
   color: 'var(--text-muted)',
   fontSize: '10px',
   lineHeight: 1.5,

@@ -3,6 +3,11 @@ import { inflateRawSync } from 'node:zlib'
 
 const TIINGO_BASE_URL = 'https://api.tiingo.com'
 const TIINGO_SUPPORTED_TICKERS_ZIP = 'https://apimedia.tiingo.com/docs/tiingo/daily/supported_tickers.zip'
+const TIINGO_REQUEST_RETRIES = Math.max(0, Number(process.env.TIINGO_REQUEST_RETRIES ?? 3))
+const TIINGO_RETRY_BASE_MS = Math.max(100, Number(process.env.TIINGO_RETRY_BASE_MS ?? 750))
+const TIINGO_REQUEST_TIMEOUT_MS = Math.max(5_000, Number(process.env.TIINGO_REQUEST_TIMEOUT_MS ?? 30_000))
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 export class TiingoHttpError extends Error {
   readonly status: number
@@ -149,23 +154,42 @@ async function tiingoGet<T>(path: string, params: Record<string, string | number
     if (value != null && value !== '') url.searchParams.set(key, String(value))
   }
   url.searchParams.set('token', apiKey())
-  const res = await fetch(url, {
-    headers: {
-      'accept': 'application/json',
-      'content-type': 'application/json',
-      'user-agent': 'StockBoard Tiingo ingestion',
-    },
-  })
-  if (!res.ok) {
-    const body = await res.text().catch(() => '')
-    const retryAfter = Number(res.headers.get('retry-after'))
-    throw new TiingoHttpError(
-      `Tiingo ${path} failed: HTTP ${res.status}${body ? ` ${body.slice(0, 240)}` : ''}`,
-      res.status,
-      Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : null,
-    )
+  const maxAttempts = TIINGO_REQUEST_RETRIES + 1
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const res = await fetch(url, {
+        headers: {
+          'accept': 'application/json',
+          'content-type': 'application/json',
+          'user-agent': 'StockBoard Tiingo ingestion',
+        },
+        signal: AbortSignal.timeout(TIINGO_REQUEST_TIMEOUT_MS),
+      })
+      if (!res.ok) {
+        const body = await res.text().catch(() => '')
+        const retryAfter = Number(res.headers.get('retry-after'))
+        const error = new TiingoHttpError(
+          `Tiingo ${path} failed: HTTP ${res.status}${body ? ` ${body.slice(0, 240)}` : ''}`,
+          res.status,
+          Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : null,
+        )
+        const retryableStatus = [408, 425, 500, 502, 503, 504].includes(res.status)
+        if (!retryableStatus || attempt >= maxAttempts) throw error
+      } else {
+        return await res.json() as T
+      }
+    } catch (error) {
+      if (error instanceof TiingoHttpError) {
+        const retryableStatus = [408, 425, 500, 502, 503, 504].includes(error.status)
+        if (!retryableStatus || attempt >= maxAttempts) throw error
+      } else if (attempt >= maxAttempts) {
+        throw error
+      }
+    }
+    const backoffMs = TIINGO_RETRY_BASE_MS * (2 ** (attempt - 1))
+    await sleep(backoffMs)
   }
-  return await res.json() as T
+  throw new Error(`Tiingo ${path} failed after ${maxAttempts} attempts`)
 }
 
 export async function fetchTiingoSupportedTickers(): Promise<TiingoTickerMeta[]> {

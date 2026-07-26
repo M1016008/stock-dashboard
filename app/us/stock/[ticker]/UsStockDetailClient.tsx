@@ -22,14 +22,25 @@ import { StockScenarioAiPanel } from '@/components/stock/StockScenarioAiPanel'
 import { StockMovePeriods } from '@/components/stock/StockMovePeriods'
 import { TradeScenarioNotebook } from '@/components/stock/TradeScenarioNotebook'
 import { HistoricalAnalogExplorer } from '@/components/stock/HistoricalAnalogExplorer'
-import { UsPhysicalMlRanking } from '@/components/stock/UsPhysicalMlRanking'
+import { StockMlInsights } from '@/components/stock/StockMlInsights'
 import { PerformanceCard } from '@/components/stock/PerformanceCard'
 import {
   HistoricalAnalysisModeBar,
   type StockAnalysisReview,
 } from '@/components/stock/HistoricalAnalysisModeBar'
 import type { StockQuote } from '@/types/stock'
-import { buildPhysicalMomentumView, type PhysicalMomentumTone } from '@/lib/physical-momentum-view'
+import type { NextUsEarnings } from '@/lib/queries/us-earnings'
+import {
+  buildPhysicalMomentumView,
+  buildPhysicalRawMetricView,
+  describePhysicalScore,
+  type PhysicalMomentumTone,
+} from '@/lib/physical-momentum-view'
+import {
+  physicalPlanDirectionLabel,
+  physicalPlanStatisticsLabel,
+  type PhysicalPlanDecision,
+} from '@/lib/physical-plan'
 import { buildShortTermCheck, formatShortTermStrength, type ShortTermCheckResult } from '@/lib/short-term-check'
 import {
   isComparedSymbol,
@@ -124,7 +135,9 @@ interface UsPhysicalPlanHorizon {
     headline: string
     summary: string
     checklist: string[]
+    conditionLabel: string
     invalidation: string
+    decision: PhysicalPlanDecision
   }
 }
 
@@ -197,16 +210,6 @@ function fmtScore(value: number | null | undefined) {
   return value.toFixed(2)
 }
 
-function fmtCompact(value: number | null | undefined) {
-  if (value == null || !Number.isFinite(value)) return '-'
-  const abs = Math.abs(value)
-  const sign = value < 0 ? '-' : ''
-  if (abs >= 1e9) return `${sign}${(abs / 1e9).toFixed(1)}B`
-  if (abs >= 1e6) return `${sign}${(abs / 1e6).toFixed(1)}M`
-  if (abs >= 1e3) return `${sign}${(abs / 1e3).toFixed(1)}K`
-  return value.toFixed(2)
-}
-
 function fmtRate(value: number | null | undefined) {
   if (value == null || !Number.isFinite(value)) return '-'
   return `${(value * 100).toFixed(1)}%`
@@ -241,9 +244,9 @@ function Stat({
   return (
     <div className="rounded-[4px] border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-3 py-2">
       <div className="text-[10px] font-bold text-[var(--color-text-tertiary)]">{label}</div>
-      <div className={`mt-1 text-[14px] font-bold ${valueClass}`}>{value}</div>
+      <div className={`mt-1 break-words text-[14px] font-bold leading-5 ${valueClass}`}>{value}</div>
       {detail && (
-        <div className="mt-1 whitespace-nowrap font-mono text-[9px] font-semibold text-[var(--color-text-tertiary)]">
+        <div className="mt-1 break-words font-mono text-[9px] font-semibold leading-4 text-[var(--color-text-tertiary)]">
           {detail}
         </div>
       )}
@@ -297,10 +300,12 @@ function usMlStatusBadgeClass(status: UsMlStatusTone) {
 export function UsStockDetailClient({
   ticker,
   initialQuote,
+  initialNextEarnings,
   initialError,
 }: {
   ticker: string
   initialQuote?: StockQuote | null
+  initialNextEarnings?: NextUsEarnings | null
   initialError?: string | null
 }) {
   const normalizedTicker = useMemo(() => ticker.toUpperCase(), [ticker])
@@ -515,7 +520,7 @@ export function UsStockDetailClient({
 
       {activeTab === 'overview' && (
         <>
-          <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+          <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-7">
             <Stat label="出来高" value={fmtNumber(displayedQuote?.volume ?? quote.volume)} />
             <Stat
               label={quote.technicals?.averageVolumeObservationCount &&
@@ -552,6 +557,24 @@ export function UsStockDetailClient({
             <Stat label="時価総額" value={analysisDate ? '-' : fmtMoney(quote.marketCap)} />
             <Stat label="52週高値" value={displayedQuote?.fiftyTwoWeekHigh == null ? '-' : `$${displayedQuote.fiftyTwoWeekHigh.toFixed(2)}`} />
             <Stat label="52週安値" value={displayedQuote?.fiftyTwoWeekLow == null ? '-' : `$${displayedQuote.fiftyTwoWeekLow.toFixed(2)}`} />
+            <Stat
+              label="次回決算予定"
+              value={analysisDate
+                ? '-'
+                : initialNextEarnings?.reportDate ?? '予定未取得'}
+              detail={!analysisDate && initialNextEarnings
+                ? `${
+                    initialNextEarnings.hour === 'bmo' ? '寄付前'
+                      : initialNextEarnings.hour === 'dmh' ? '取引時間中'
+                        : initialNextEarnings.hour === 'amc' ? '引け後'
+                          : '時刻未定'
+                  }${
+                    initialNextEarnings.fiscalYear && initialNextEarnings.fiscalQuarter
+                      ? ` / ${initialNextEarnings.fiscalYear} Q${initialNextEarnings.fiscalQuarter}`
+                      : ''
+                  } / Finnhub`
+                : undefined}
+            />
           </section>
           <Card>
             <PerformanceCard
@@ -622,7 +645,7 @@ export function UsStockDetailClient({
       {activeTab === 'ml' && (
         <>
           <HistoricalAnalogExplorer ticker={quote.ticker} market="US" analysisDate={analysisDate} />
-          <UsPhysicalMlRanking ticker={quote.ticker} analysisDate={analysisDate} />
+          <StockMlInsights ticker={quote.ticker} market="US" analysisDate={analysisDate} />
           <UsMlStatusSection ticker={quote.ticker} analysisDate={analysisDate} />
         </>
       )}
@@ -858,6 +881,9 @@ function UsPhysicalMomentumSection({
     physicalForceScore: latest.physicalForceScore,
     changePercent,
   }) : null
+  const velocityMetric = buildPhysicalRawMetricView('velocity', latest?.velocity)
+  const accelerationMetric = buildPhysicalRawMetricView('acceleration', latest?.acceleration)
+  const forceMetric = buildPhysicalRawMetricView('force', latest?.force)
 
   return (
     <Card>
@@ -868,6 +894,7 @@ function UsPhysicalMomentumSection({
           </div>
           <p className="mt-1 text-[12px] font-semibold leading-6 text-[var(--color-text-secondary)]">
             PMSは買い/売りの予測ではなく、時間軸ごとの運動状態です。日足・2日足・週足・月足で結論を分けて見ます。
+            株式分割・併合を補正し、相対出来高と価格水準に依存しないMA傾斜で比較します。
             {data?.source === 'us_analytics' ? ' US分析DBの学習用データを参照しています。' : ''}
           </p>
         </div>
@@ -932,9 +959,21 @@ function UsPhysicalMomentumSection({
           )}
           <div className="grid gap-3 lg:grid-cols-[0.9fr_1.4fr]">
             <div className="grid gap-2 sm:grid-cols-3 lg:grid-cols-1">
-              <Stat label="PMS 20日累積" value={fmtScore(latest.physicalMomentumScore)} />
-              <Stat label="PFS 足元の力" value={fmtScore(latest.physicalForceScore)} />
-              <Stat label="PES 値幅/過熱" value={fmtScore(latest.physicalEnergyScore)} />
+              <Stat
+                label="PMS 総合"
+                value={fmtScore(latest.physicalMomentumScore)}
+                detail={describePhysicalScore('pms', latest.physicalMomentumScore)}
+              />
+              <Stat
+                label="PFS 足元の力"
+                value={fmtScore(latest.physicalForceScore)}
+                detail={describePhysicalScore('pfs', latest.physicalForceScore)}
+              />
+              <Stat
+                label="PES 値幅/過熱"
+                value={fmtScore(latest.physicalEnergyScore)}
+                detail={describePhysicalScore('pes', latest.physicalEnergyScore)}
+              />
             </div>
             <div className="grid gap-3">
               <div>
@@ -952,9 +991,24 @@ function UsPhysicalMomentumSection({
                 ))}
               </div>
               <div className="grid gap-2 sm:grid-cols-3">
-                <Stat label="Velocity" value={fmtScore(latest.velocity)} />
-                <Stat label="Acceleration" value={fmtScore(latest.acceleration)} />
-                <Stat label="Force" value={fmtCompact(latest.force)} />
+                <Stat
+                  label={velocityMetric.label}
+                  value={velocityMetric.value}
+                  detail={velocityMetric.detail}
+                  tone={velocityMetric.tone === 'neutral' ? 'default' : velocityMetric.tone}
+                />
+                <Stat
+                  label={accelerationMetric.label}
+                  value={accelerationMetric.value}
+                  detail={accelerationMetric.detail}
+                  tone={accelerationMetric.tone === 'neutral' ? 'default' : accelerationMetric.tone}
+                />
+                <Stat
+                  label={forceMetric.label}
+                  value={forceMetric.value}
+                  detail={forceMetric.detail}
+                  tone={forceMetric.tone === 'neutral' ? 'default' : forceMetric.tone}
+                />
               </div>
             </div>
           </div>
@@ -1002,9 +1056,9 @@ function UsPhysicalTimeframeConclusion({ views }: { views: PhysicalMomentumTimef
                 <span className="rounded-full border border-current/25 bg-white px-2 py-0.5 font-mono text-[10px] font-black">{view.interval}</span>
               </div>
               <div className="mt-2 flex flex-wrap gap-2 font-mono text-[10px] font-black">
-                <span>PMS {fmtScore(view.physicalMomentumScore)}</span>
-                <span>PFS {fmtScore(view.physicalForceScore)}</span>
-                <span>PES {fmtScore(view.physicalEnergyScore)}</span>
+                <span>PMS {describePhysicalScore('pms', view.physicalMomentumScore)} ({fmtScore(view.physicalMomentumScore)})</span>
+                <span>PFS {describePhysicalScore('pfs', view.physicalForceScore)} ({fmtScore(view.physicalForceScore)})</span>
+                <span>PES {describePhysicalScore('pes', view.physicalEnergyScore)} ({fmtScore(view.physicalEnergyScore)})</span>
               </div>
               <div className="mt-2 text-[11px] font-bold leading-5">{built.stance}</div>
               <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] font-bold opacity-75">
@@ -1017,7 +1071,8 @@ function UsPhysicalTimeframeConclusion({ views }: { views: PhysicalMomentumTimef
         })}
       </div>
       <p className="mt-2 text-[11px] font-bold leading-5 text-[var(--color-text-tertiary)]">
-        日足は市場横断Z、2日足・週足・月足は銘柄内の時間軸Z。時間軸が違えば見方も変わります。
+        日足はUS市場横断Z、2日足・週足・月足は銘柄内の時間軸Zです。いずれも分布の裾1%を抑えた標準化で、
+        時間軸が違う数値同士は直接比較しません。
       </p>
     </div>
   )
@@ -1049,15 +1104,15 @@ function UsPhysicalPlanSection({ ticker, analysisDate }: { ticker: string; analy
   }, [ticker, analysisDate])
 
   return (
-    <Card size="lg">
+    <Card>
       <CardHeader
         title="短期・中期・長期の観察プラン"
-        hint="US物理ML・PMS・過去検証から、価格ラインと確認条件に変換"
+        hint="期間別MA構造・PMS/PFS・物理ML・過去統計を照合"
       />
       {loading ? (
-        <div className="grid gap-3 lg:grid-cols-3">
-          {['短期', '中期', '長期'].map((label) => (
-            <div key={label} className="min-h-[180px] rounded-[6px] border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] p-4">
+        <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+          {['短期', '中期', '長期', '超長期'].map((label) => (
+            <div key={label} className="min-h-[150px] rounded-[6px] border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] p-3">
               <div className="text-[12px] font-black text-[var(--color-text-tertiary)]">{label}</div>
             </div>
           ))}
@@ -1069,7 +1124,7 @@ function UsPhysicalPlanSection({ ticker, analysisDate }: { ticker: string; analy
           US物理ML特徴量がまだ不足しています。US MLバッチ完了後に、短期・中期・長期の観察プランを表示します。
         </div>
       ) : (
-        <div className="grid gap-3 lg:grid-cols-3">
+        <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
           {plan.horizons.map((horizon) => (
             <UsPhysicalPlanCard key={`${horizon.label}-${horizon.horizonDays}`} horizon={horizon} />
           ))}
@@ -1114,11 +1169,11 @@ function UsPhysicalPlanCard({ horizon }: { horizon: UsPhysicalPlanHorizon }) {
   const topCandidates = horizon.candidates.slice().sort((a, b) => a.rank - b.rank).slice(0, 3)
 
   return (
-    <article className={`rounded-[6px] border p-4 ${toneClass}`}>
+    <article className={`flex min-w-0 flex-col rounded-[6px] border p-3 ${toneClass}`}>
       <div className="flex items-start justify-between gap-2">
         <div>
           <div className="text-[11px] font-black text-[var(--color-text-tertiary)]">{horizon.label}</div>
-          <h3 className={`mt-1 text-[16px] font-black leading-6 ${headlineClass}`}>
+          <h3 className={`mt-0.5 text-[14px] font-black leading-5 ${headlineClass}`}>
             {horizon.suggestion.headline}
           </h3>
         </div>
@@ -1126,44 +1181,59 @@ function UsPhysicalPlanCard({ horizon }: { horizon: UsPhysicalPlanHorizon }) {
           {horizon.horizonDays}営業日
         </span>
       </div>
-      <p className="mt-2 text-[12px] font-bold leading-6 text-[var(--color-brand-900)]">{horizon.suggestion.stance}</p>
+      <p className="mt-2 text-[11px] font-bold leading-5 text-[var(--color-brand-900)]">{horizon.suggestion.stance}</p>
       <UsPhysicalPlanLevels levels={horizon.levels} />
-      <div className="mt-3 grid grid-cols-3 gap-2">
-        <Stat label="的中率" value={fmtRate(horizon.hitRate)} />
-        <Stat label="Lift" value={horizon.lift == null ? '-' : horizon.lift.toFixed(2)} />
-        <Stat label="順行/逆行" value={`${fmtPctRaw(horizon.avgMaxReturnPct)} / ${fmtPctRaw(horizon.avgMinReturnPct)}`} />
+      <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] font-black text-[var(--color-text-secondary)]">
+        <span className="rounded-full border border-current/15 bg-white/70 px-2 py-1">
+          構造 {physicalPlanDirectionLabel(horizon.suggestion.decision.structureDirection)}
+        </span>
+        <span className="rounded-full border border-current/15 bg-white/70 px-2 py-1">
+          PMS/PFS {physicalPlanDirectionLabel(horizon.suggestion.decision.momentumDirection)}
+        </span>
+        {horizon.suggestion.decision.candidateDirection !== 'wait' && (
+          <span className="rounded-full border border-current/15 bg-white/70 px-2 py-1">
+            物理ML {physicalPlanDirectionLabel(horizon.suggestion.decision.candidateDirection)}
+          </span>
+        )}
+        <span className="rounded-full border border-current/15 bg-white/70 px-2 py-1">
+          {physicalPlanStatisticsLabel(horizon.suggestion.decision.statisticsQuality)}
+        </span>
       </div>
-      <div className="mt-3 space-y-2">
+      <div className="mt-2 grid grid-cols-3 gap-1.5">
+        <Stat label="的中率" value={fmtRate(horizon.hitRate)} />
+        <Stat label="基準率" value={fmtRate(horizon.baseRate)} />
+        <Stat label="Lift" value={horizon.lift == null ? '-' : horizon.lift.toFixed(2)} />
+      </div>
+      <div className="mt-2 space-y-1">
         {horizon.suggestion.checklist.slice(0, 2).map((item) => (
-          <div key={item} className="flex gap-2 text-[12px] font-bold leading-6 text-[var(--color-brand-900)]">
-            <span className={`mt-[9px] h-2 w-2 shrink-0 rounded-full ${dotClass}`} />
+          <div key={item} className="flex gap-2 text-[11px] font-bold leading-5 text-[var(--color-brand-900)]">
+            <span className={`mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full ${dotClass}`} />
             <span>{item}</span>
           </div>
         ))}
       </div>
-      <div className="mt-3 rounded-[4px] border border-[var(--color-border-default)] bg-white/80 p-3 text-[11px] font-bold leading-5 text-[var(--color-text-secondary)]">
-        <strong className="block text-[var(--color-brand-900)]">崩れる条件</strong>
+      <div className="mt-2 rounded-[4px] border border-[var(--color-border-default)] bg-white/80 px-2.5 py-2 text-[10px] font-bold leading-5 text-[var(--color-text-secondary)]">
+        <strong className="block text-[var(--color-brand-900)]">{horizon.suggestion.conditionLabel}</strong>
         {horizon.suggestion.invalidation}
       </div>
-      <div className="mt-3 flex flex-wrap gap-2">
+      <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[10px]">
         {topCandidates.length > 0 ? topCandidates.map((candidate) => (
-          <span key={`${candidate.direction}-${candidate.rank}`} className="rounded-full border border-[var(--color-border-default)] bg-white px-2 py-1 text-[10px] font-black text-[var(--color-text-secondary)]">
+          <span key={`${candidate.direction}-${candidate.rank}`} className="rounded-full border border-[var(--color-border-default)] bg-white px-2 py-1 font-black text-[var(--color-text-secondary)]">
             {candidate.direction === 'up' ? '上昇' : candidate.direction === 'down' ? '下落' : '待機'} #{candidate.rank}
           </span>
         )) : (
-          <span className="rounded-full border border-[var(--color-border-default)] bg-white px-2 py-1 text-[10px] font-black text-[var(--color-text-secondary)]">
+          <span className="rounded-full border border-[var(--color-border-default)] bg-white px-2 py-1 font-black text-[var(--color-text-secondary)]">
             物理ML上位外
           </span>
         )}
         {horizon.sampleCount != null && (
-          <span className="rounded-full border border-[var(--color-border-default)] bg-white px-2 py-1 text-[10px] font-black text-[var(--color-text-secondary)]">
+          <span className="rounded-full border border-[var(--color-border-default)] bg-white px-2 py-1 font-black text-[var(--color-text-secondary)]">
             検証 n={horizon.sampleCount.toLocaleString('en-US')}
           </span>
         )}
-      </div>
-      <div className="mt-3 flex justify-between gap-2 text-[10px] font-bold text-[var(--color-text-tertiary)]">
-        <span>{horizon.confidenceLabel}</span>
-        <span>{horizon.evaluationDate ? `検証 ${horizon.evaluationDate}` : '検証日 -'}</span>
+        <span className="ml-auto font-bold text-[var(--color-text-tertiary)]">
+          {horizon.evaluationDate ? `検証 ${horizon.evaluationDate}` : '検証日 -'}
+        </span>
       </div>
     </article>
   )
@@ -1172,21 +1242,26 @@ function UsPhysicalPlanCard({ horizon }: { horizon: UsPhysicalPlanHorizon }) {
 function UsPhysicalPlanLevels({ levels }: { levels: UsPhysicalPlanLevels | null }) {
   if (!levels) return null
   return (
-    <div className="mt-3 grid grid-cols-2 gap-2">
-      <UsPhysicalPlanLevel label="基準" level={{ label: levels.baseDate, value: levels.close, distancePct: 0 }} />
-      <UsPhysicalPlanLevel label="支持/反発" level={levels.support} />
-      <UsPhysicalPlanLevel label="抵抗/反落" level={levels.resistance} />
-      <UsPhysicalPlanLevel label="割れ注意" level={levels.breakdown} />
+    <div className="mt-2">
+      <div className="flex items-center justify-between border-y border-[var(--color-border-default)] py-1.5 text-[10px] font-black text-[var(--color-text-tertiary)]">
+        <span>基準 {levels.baseDate}</span>
+        <strong className="font-mono text-[12px] text-[var(--color-brand-900)]">{fmtUsd(levels.close)}</strong>
+      </div>
+      <div className="mt-1.5 grid grid-cols-3 gap-1.5">
+        <UsPhysicalPlanLevel label="支持" level={levels.support} />
+        <UsPhysicalPlanLevel label="抵抗" level={levels.resistance} />
+        <UsPhysicalPlanLevel label="割れ注意" level={levels.breakdown} />
+      </div>
     </div>
   )
 }
 
 function UsPhysicalPlanLevel({ label, level }: { label: string; level: UsPhysicalPlanLevel }) {
   return (
-    <div className="rounded-[4px] border border-[var(--color-border-default)] bg-white/80 px-3 py-2">
-      <div className="text-[10px] font-black text-[var(--color-text-tertiary)]">{label}</div>
-      <div className="mt-1 text-[14px] font-black text-[var(--color-brand-900)]">{fmtUsd(level.value)}</div>
-      <div className="mt-0.5 truncate text-[10px] font-bold text-[var(--color-text-secondary)]">
+    <div className="min-w-0 rounded-[4px] border border-[var(--color-border-default)] bg-white/80 px-2 py-1.5">
+      <div className="text-[9px] font-black text-[var(--color-text-tertiary)]">{label}</div>
+      <div className="mt-0.5 font-mono text-[12px] font-black text-[var(--color-brand-900)]">{fmtUsd(level.value)}</div>
+      <div className="mt-0.5 truncate text-[9px] font-bold text-[var(--color-text-secondary)]">
         {level.label}{level.distancePct != null ? ` ${fmtPctRaw(level.distancePct)}` : ''}
       </div>
     </div>

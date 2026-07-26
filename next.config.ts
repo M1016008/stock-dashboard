@@ -2,6 +2,9 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   distDir: process.env.NEXT_DIST_DIR || '.next',
+  experimental: {
+    cpus: Math.max(1, Number(process.env.STOCKBOARD_BUILD_CPUS ?? 2)),
+  },
   turbopack: {
     root: process.cwd(),
   },

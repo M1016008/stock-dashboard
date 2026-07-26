@@ -8,6 +8,7 @@ export const EXCLUSIVE_UPDATE_JOB_TYPES = [
   'ml_learning',
   'ml_freshness_guard',
   'us_update_latest',
+  'us_adjusted_foundation',
   'earnings_refresh',
   'kabutan_material_news',
   'kabutan_themes',
@@ -85,6 +86,54 @@ function isSqliteBusyError(error: unknown): boolean {
   return /SQLITE_BUSY|database is locked/i.test(message)
 }
 
+async function cleanupOrphanedUpdateLocks(jobTypes: readonly string[]): Promise<number> {
+  if (jobTypes.length === 0) return 0
+  try {
+    const candidates = await client.execute({
+      sql: `
+        SELECT job_type, owner
+        FROM update_locks
+        WHERE job_type IN (${jobTypes.map(() => '?').join(', ')})
+          AND status = 'running'
+          AND lease_expires_at > unixepoch()
+      `,
+      args: [...jobTypes],
+    })
+    const orphaned = candidates.rows
+      .map((row) => ({
+        jobType: String(row.job_type ?? ''),
+        owner: row.owner == null ? null : String(row.owner),
+      }))
+      .filter((row) => {
+        const pid = localOwnerPid(row.owner)
+        return row.jobType && row.owner && pid && !processExists(pid)
+      })
+    if (orphaned.length === 0 || hasActiveSqliteWriterProcess()) return 0
+
+    let cleaned = 0
+    for (const row of orphaned) {
+      const result = await client.execute({
+        sql: `
+          UPDATE update_locks
+          SET status = 'idle',
+              owner = NULL,
+              heartbeat_at = unixepoch(),
+              lease_expires_at = unixepoch()
+          WHERE job_type = ?
+            AND owner = ?
+            AND status = 'running'
+        `,
+        args: [row.jobType, row.owner],
+      })
+      cleaned += Number(result.rowsAffected ?? 0)
+    }
+    return cleaned
+  } catch (error) {
+    if (isSqliteBusyError(error)) return 0
+    throw error
+  }
+}
+
 export async function acquireUpdateLock(
   jobType: string,
   leaseSeconds = DEFAULT_UPDATE_LOCK_LEASE_SECONDS,
@@ -95,7 +144,7 @@ export async function acquireUpdateLock(
   const conflicts = [...new Set(conflictingJobTypes.filter((candidate) => candidate !== jobType))]
   const blockers = [...new Set([jobType, ...conflicts])]
   if (blockers.length > 0) {
-    const active = await execGet<{ active: number }>(
+    let active = await execGet<{ active: number }>(
       `
         SELECT 1 AS active
         FROM update_locks
@@ -106,6 +155,22 @@ export async function acquireUpdateLock(
       `,
       blockers,
     )
+    if (active) {
+      // A terminated local process can leave a long lease behind. Cleanup
+      // reclaims it only after auditing both its owner PID and SQLite writers.
+      await cleanupOrphanedUpdateLocks(blockers)
+      active = await execGet<{ active: number }>(
+        `
+          SELECT 1 AS active
+          FROM update_locks
+          WHERE job_type IN (${blockers.map(() => '?').join(', ')})
+            AND status = 'running'
+            AND lease_expires_at > unixepoch()
+          LIMIT 1
+        `,
+        blockers,
+      )
+    }
     // Waiting jobs must remain read-only. Writing stale-cleanup metadata on
     // every poll can monopolize SQLite's single WAL writer and starve the
     // active batch that owns the lock.

@@ -78,14 +78,15 @@ function hasEnoughHeadroom(
   maxCompressorMb: number,
   maxThrottledPages: number,
 ): boolean {
+  // memory_pressure is the authoritative current-pressure signal on macOS.
+  // Compressor pages can remain high long after pressure has recovered, so use
+  // them only when memory_pressure is unavailable.
+  const pressureHealthy = headroom.freePercent === null
+    ? headroom.compressorMb <= maxCompressorMb
+    : minFreePercent === 0 || headroom.freePercent >= minFreePercent
   return (
     (minAvailableMb === 0 || headroom.availableMb >= minAvailableMb)
-    && (
-      minFreePercent === 0
-      || headroom.freePercent === null
-      || headroom.freePercent >= minFreePercent
-    )
-    && headroom.compressorMb <= maxCompressorMb
+    && pressureHealthy
     && headroom.throttledPages <= maxThrottledPages
   )
 }
@@ -123,7 +124,10 @@ export async function waitForMemoryHeadroom(options: WaitOptions): Promise<void>
     }
 
     const elapsedSeconds = Math.floor((Date.now() - startedAt) / 1_000)
-    const message = `Memory guard waiting before ${options.label}: ${formatHeadroom(headroom)}; required available>=${minAvailableMb}MB, free>=${minFreePercent}%, compressor<=${maxCompressorMb}MB, throttled<=${maxThrottledPages}`
+    const pressureRequirement = headroom.freePercent === null
+      ? `compressor<=${maxCompressorMb}MB (memory_pressure unavailable)`
+      : `free>=${minFreePercent}%`
+    const message = `Memory guard waiting before ${options.label}: ${formatHeadroom(headroom)}; required available>=${minAvailableMb}MB, ${pressureRequirement}, throttled<=${maxThrottledPages}`
     if (Date.now() - lastLogAt > 60_000) {
       lastLogAt = Date.now()
       console.warn(message)

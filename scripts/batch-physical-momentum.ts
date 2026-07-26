@@ -9,8 +9,9 @@ import {
   PHYSICAL_MOMENTUM_LOOKBACK_DAYS,
   composePhysicalMomentumScores,
   computePhysicalMomentumRawRows,
-  meanAndStd,
-  zScore,
+  winsorizedMeanAndStd,
+  winsorizedZScore,
+  type PhysicalMomentumNormalizationStats,
   type PhysicalMomentumRawKey,
   type PhysicalMomentumRawRow,
 } from '@/lib/physical-momentum'
@@ -21,6 +22,7 @@ type PriceRow = {
   date: string
   close: number | null
   volume: number | null
+  splitFactor?: number | null
 }
 
 type MetricRow = PhysicalMomentumRawRow & {
@@ -62,6 +64,8 @@ const SKIP_RAW = process.env.PMS_SKIP_RAW === '1' || process.env.PMS_NORMALIZE_O
 const SKIP_NORMALIZE = process.env.PMS_SKIP_NORMALIZE === '1' || process.env.PMS_RAW_ONLY === '1'
 const CHUNK = Number(process.env.PMS_BATCH_CHUNK ?? 400)
 const LOG_EVERY = Number(process.env.PMS_LOG_EVERY ?? 250)
+let activeRunId: number | null = null
+let signalExitStarted = false
 
 const RAW_KEYS: PhysicalMomentumRawKey[] = [
   'velocity',
@@ -104,6 +108,9 @@ function sourceTable(market: Market): {
   rowsSql: (hasWarmup: boolean) => string
 } {
   if (market === 'JP') {
+    const splitFactorSql = outputMarketFor(market) === 'US'
+      ? 'split_factor AS splitFactor'
+      : 'NULL AS splitFactor'
     return {
       latestSql: 'SELECT MAX(date) AS latestDate FROM ohlcv_daily',
       datesSql: (hasStart, recentDays) => `
@@ -125,7 +132,7 @@ function sourceTable(market: Market): {
         ORDER BY ticker
       `,
       rowsSql: (hasWarmup) => `
-        SELECT date, close, volume
+        SELECT date, close, volume, ${splitFactorSql}
         FROM ohlcv_daily
         WHERE ticker = ?
           AND date <= ?
@@ -158,7 +165,11 @@ function sourceTable(market: Market): {
       ORDER BY ticker
     `,
     rowsSql: (hasWarmup) => `
-      SELECT date, COALESCE(adj_close, close) AS close, COALESCE(adj_volume, volume) AS volume
+      SELECT
+        date,
+        COALESCE(adj_close, close) AS close,
+        COALESCE(adj_volume, volume) AS volume,
+        split_factor AS splitFactor
       FROM market_ohlcv_daily
       WHERE market = ?
         AND ticker = ?
@@ -239,6 +250,7 @@ async function finishRun(
           rows_inserted = ?,
           error_summary = ?
       WHERE id = ?
+        AND status = 'running'
     `,
     [
       status,
@@ -379,18 +391,18 @@ async function normalizeMarketDate(market: Market, date: string): Promise<void> 
   if (rows.length === 0) return
 
   const stats = Object.fromEntries(
-    RAW_KEYS.map((key) => [key, meanAndStd(rows.map((row) => row[key]))]),
-  ) as Record<PhysicalMomentumRawKey, { mean: number | null; std: number | null }>
+    RAW_KEYS.map((key) => [key, winsorizedMeanAndStd(rows.map((row) => row[key]))]),
+  ) as Record<PhysicalMomentumRawKey, PhysicalMomentumNormalizationStats>
 
   for (let i = 0; i < rows.length; i += CHUNK) {
     const chunk = rows.slice(i, i + CHUNK)
     await execBatch(chunk.map((row) => {
-      const zVelocity = zScore(row.velocity, stats.velocity.mean, stats.velocity.std)
-      const zAcceleration = zScore(row.acceleration, stats.acceleration.mean, stats.acceleration.std)
-      const zMomentum = zScore(row.momentum, stats.momentum.mean, stats.momentum.std)
-      const zForce = zScore(row.force, stats.force.mean, stats.force.std)
-      const zMaAngleAvg = zScore(row.maAngleAvg, stats.maAngleAvg.mean, stats.maAngleAvg.std)
-      const zEnergy = zScore(row.energy, stats.energy.mean, stats.energy.std)
+      const zVelocity = winsorizedZScore(row.velocity, stats.velocity)
+      const zAcceleration = winsorizedZScore(row.acceleration, stats.acceleration)
+      const zMomentum = winsorizedZScore(row.momentum, stats.momentum)
+      const zForce = winsorizedZScore(row.force, stats.force)
+      const zMaAngleAvg = winsorizedZScore(row.maAngleAvg, stats.maAngleAvg)
+      const zEnergy = winsorizedZScore(row.energy, stats.energy)
       const scores = composePhysicalMomentumScores({
         zVelocity,
         zAcceleration,
@@ -543,6 +555,7 @@ async function processMarket(market: Market): Promise<{ totalTickers: number; su
 async function main(): Promise<void> {
   await ensurePhysicalMomentumSchema()
   const runId = await startRun()
+  activeRunId = runId
   let totalTickers = 0
   let succeeded = 0
   let failed = 0
@@ -558,6 +571,7 @@ async function main(): Promise<void> {
     }
 
     await finishRun(runId, 'success', { totalTickers, succeeded, failed, rowsInserted })
+    activeRunId = null
     console.log(`Physical momentum complete: source_markets=${MARKETS.join(',')}, output_market=${OUTPUT_MARKET ?? 'source'}, tickers=${totalTickers}, rows=${rowsInserted}, failed=${failed}`)
   } catch (error) {
     await finishRun(runId, 'failed', {
@@ -567,9 +581,32 @@ async function main(): Promise<void> {
       rowsInserted,
       errorSummary: error instanceof Error ? error.message : String(error),
     })
+    activeRunId = null
     throw error
   }
 }
+
+async function handleTerminationSignal(signal: 'SIGINT' | 'SIGTERM'): Promise<void> {
+  if (signalExitStarted) return
+  signalExitStarted = true
+  const runId = activeRunId
+  activeRunId = null
+  await finishRun(runId, 'failed', {
+    totalTickers: 0,
+    succeeded: 0,
+    failed: 0,
+    rowsInserted: 0,
+    errorSummary: `Interrupted by ${signal}`,
+  }).catch(() => undefined)
+  process.exit(signal === 'SIGTERM' ? 143 : 130)
+}
+
+process.once('SIGINT', () => {
+  void handleTerminationSignal('SIGINT')
+})
+process.once('SIGTERM', () => {
+  void handleTerminationSignal('SIGTERM')
+})
 
 main()
   .then(() => process.exit(0))

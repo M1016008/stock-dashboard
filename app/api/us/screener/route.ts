@@ -36,9 +36,13 @@ const SORT_KEYS = new Set([
   'ma200Angle',
   'acceleration',
   'force',
+  'earningsNextDate',
+  'earningsDays',
 ])
 
-const US_SCREENER_CACHE_NAMESPACE = 'us-screener-v5'
+const US_SCREENER_CACHE_NAMESPACE = 'us-screener-v6'
+const EARNINGS_WINDOWS = new Set([14, 30, 60, 90, 180])
+const EARNINGS_TIME_BUCKETS = new Set(['before_open', 'market_hours', 'after_close', 'unknown'])
 const STAGE_AXES = [
   'daily_a',
   'daily_b',
@@ -64,6 +68,16 @@ type UsScreenerPayload = {
   quality: 'standard' | 'all'
   source: 'tiingo'
   mlSource: 'us_analytics' | 'main'
+  earnings: {
+    source: 'finnhub'
+    updatedAt: string | null
+    latestRun: {
+      status: string
+      startedAt: string
+      finishedAt: string | null
+      rowsInserted: number
+    } | null
+  }
 }
 
 function numeric(value: unknown): number | null {
@@ -110,6 +124,17 @@ function screenerCacheTtlMs(): number {
   return Number.isFinite(value) && value >= 60_000 ? value : 15 * 60 * 1_000
 }
 
+function todayInNewYork(): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/New_York',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date())
+  const value = (type: string) => parts.find((part) => part.type === type)?.value ?? ''
+  return `${value('year')}-${value('month')}-${value('day')}`
+}
+
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
@@ -154,6 +179,13 @@ export async function GET(request: NextRequest) {
     const stage23Candidate = searchParams.get('stage23Candidate') === '1'
     const shortTermCheck = searchParams.get('shortTermCheck')?.trim() ?? ''
     const physicalStatus = searchParams.get('physicalStatus')?.trim() ?? ''
+    const earningsWindowValue = Number(searchParams.get('earningsWindowDays'))
+    const earningsWindowDays = EARNINGS_WINDOWS.has(earningsWindowValue) ? earningsWindowValue : null
+    const earningsTimeBucketValue = searchParams.get('earningsTimeBucket')?.trim() ?? ''
+    const earningsTimeBucket = EARNINGS_TIME_BUCKETS.has(earningsTimeBucketValue)
+      ? earningsTimeBucketValue
+      : ''
+    const earningsToday = todayInNewYork()
     const avgVolumeMinParam = searchParams.get('avgVolumeMin')?.trim()
     const priceMinParam = searchParams.get('priceMin')?.trim()
     const priceMaxParam = searchParams.get('priceMax')?.trim()
@@ -189,6 +221,9 @@ export async function GET(request: NextRequest) {
       stage23Candidate,
       shortTermCheck,
       physicalStatus,
+      earningsWindowDays,
+      earningsTimeBucket,
+      earningsToday,
       avgVolumeMin: avgVolumeMin != null && Number.isFinite(avgVolumeMin) ? avgVolumeMin : null,
       priceMin: priceMin != null && Number.isFinite(priceMin) ? priceMin : null,
       priceMax: priceMax != null && Number.isFinite(priceMax) ? priceMax : null,
@@ -303,6 +338,8 @@ export async function GET(request: NextRequest) {
       && !ma200Trend
       && !ma200Direction
       && !hasComputedFilters
+      && earningsWindowDays == null
+      && !earningsTimeBucket
       && marketCapMin == null
       && marketCapMax == null
       && !avgVolumeFilter
@@ -461,7 +498,16 @@ export async function GET(request: NextRequest) {
     const whereMarketCapMax = marketCapMax != null
       ? 'AND u.shares_outstanding * COALESCE(cur.adj_close, cur.close) < ?'
       : ''
-    const args: Array<string | number> = [date, taxonomy, date, date]
+    const whereEarningsWindow = earningsWindowDays != null
+      ? `AND earnings.report_date <= date((SELECT today FROM earnings_clock), '+${earningsWindowDays} days')`
+      : ''
+    const whereEarningsBucket = earningsTimeBucket
+      ? 'AND COALESCE(earnings.time_bucket, \'unknown\') = ?'
+      : ''
+    const whereKnownEarnings = sort === 'earningsNextDate' || sort === 'earningsDays'
+      ? 'AND earnings.report_date IS NOT NULL'
+      : ''
+    const args: Array<string | number> = [date, earningsToday, taxonomy, date, date]
     if (q) args.push(`%${q}%`, `%${q.toUpperCase()}%`, ...qAliasTickers)
     if (sector) args.push(sector)
     if (industryGroup) args.push(industryGroup)
@@ -478,6 +524,7 @@ export async function GET(request: NextRequest) {
     if (priceMax != null && Number.isFinite(priceMax)) args.push(priceMax)
     if (marketCapMin != null) args.push(marketCapMin)
     if (marketCapMax != null) args.push(marketCapMax)
+    if (earningsTimeBucket) args.push(earningsTimeBucket)
     if (topMetricTickers.length > 0) args.push(...topMetricTickers)
     args.push(sqlLimit)
 
@@ -506,6 +553,8 @@ export async function GET(request: NextRequest) {
       ma200Angle: 'ma_200_angle',
       acceleration: 's.ticker',
       force: 's.ticker',
+      earningsNextDate: 'earnings.report_date',
+      earningsDays: 'earnings_days',
     }
     const rows = await execAll<Record<string, unknown>>(
       `
@@ -518,6 +567,16 @@ export async function GET(request: NextRequest) {
           ORDER BY date DESC
           LIMIT 201
         )
+      ),
+      earnings_clock AS (
+        SELECT ? AS today
+      ),
+      next_earnings_dates AS (
+        SELECT ticker, MIN(report_date) AS report_date
+        FROM market_earnings_calendar INDEXED BY market_earnings_market_date_idx
+        WHERE market = 'US'
+          AND report_date >= (SELECT today FROM earnings_clock)
+        GROUP BY ticker
       ),
       periods AS (
         SELECT
@@ -572,6 +631,19 @@ export async function GET(request: NextRequest) {
         s.ma_25,
         s.ma_75,
         s.ma_300,
+        earnings.report_date AS next_earnings_date,
+        earnings.hour AS next_earnings_hour,
+        COALESCE(earnings.time_bucket, 'unknown') AS next_earnings_time_bucket,
+        earnings.fiscal_year AS next_earnings_fiscal_year,
+        earnings.fiscal_quarter AS next_earnings_fiscal_quarter,
+        earnings.eps_estimate AS next_earnings_eps_estimate,
+        earnings.revenue_estimate AS next_earnings_revenue_estimate,
+        earnings.source AS next_earnings_source,
+        earnings.imported_at AS next_earnings_imported_at,
+        CASE
+          WHEN earnings.report_date IS NOT NULL
+          THEN CAST(julianday(earnings.report_date) - julianday((SELECT today FROM earnings_clock)) AS INTEGER)
+        END AS earnings_days,
         ${physicalMetricColumns}
       FROM market_daily_snapshots s INDEXED BY market_snapshots_market_date_ticker_idx
       LEFT JOIN market_universe u ON u.market = s.market AND u.ticker = s.ticker
@@ -585,6 +657,12 @@ export async function GET(request: NextRequest) {
        AND cur.ticker = s.ticker
        AND cur.date = ?
       LEFT JOIN periods ON periods.ticker = s.ticker
+      LEFT JOIN next_earnings_dates next_earnings
+        ON next_earnings.ticker = s.ticker
+      LEFT JOIN market_earnings_calendar earnings
+        ON earnings.market = 'US'
+       AND earnings.ticker = s.ticker
+       AND earnings.report_date = next_earnings.report_date
       ${physicalMetricJoin}
       WHERE s.market = 'US' AND s.date = ?
         AND u.active = 1
@@ -605,6 +683,9 @@ export async function GET(request: NextRequest) {
         ${whereMa200Direction}
         ${whereMarketCapMin}
         ${whereMarketCapMax}
+        ${whereEarningsWindow}
+        ${whereEarningsBucket}
+        ${whereKnownEarnings}
         ${whereMetricTop}
       ORDER BY ${useAnalyticsMetricTop ? 's.ticker' : orderExpr[sort]} ${dir.toUpperCase()}, s.ticker ASC
       LIMIT ?
@@ -745,6 +826,29 @@ export async function GET(request: NextRequest) {
     }
 
     const candidatesTruncated = topMetricTickers.length === 0 && rows.length >= sqlLimit
+    const [earningsSync, earningsRun] = await Promise.all([
+      execGet<{ value: number | null }>(
+        `SELECT MAX(imported_at) AS value
+         FROM market_earnings_calendar
+         WHERE market = 'US' AND source = 'finnhub'`,
+      ).catch(() => undefined),
+      execGet<{
+        status: string
+        startedAt: number
+        finishedAt: number | null
+        rowsInserted: number
+      }>(
+        `SELECT
+           status,
+           started_at AS startedAt,
+           finished_at AS finishedAt,
+           rows_inserted AS rowsInserted
+         FROM market_data_runs
+         WHERE market = 'US' AND job_type = 'finnhub_earnings'
+         ORDER BY started_at DESC
+         LIMIT 1`,
+      ).catch(() => undefined),
+    ])
     const payload: UsScreenerPayload = {
       market: 'US',
       date,
@@ -755,6 +859,20 @@ export async function GET(request: NextRequest) {
       quality,
       source: 'tiingo',
       mlSource: hasUsAnalyticsDb() ? 'us_analytics' : 'main',
+      earnings: {
+        source: 'finnhub',
+        updatedAt: earningsSync?.value
+          ? new Date(earningsSync.value * 1000).toISOString()
+          : null,
+        latestRun: earningsRun ? {
+          status: earningsRun.status,
+          startedAt: new Date(earningsRun.startedAt * 1000).toISOString(),
+          finishedAt: earningsRun.finishedAt
+            ? new Date(earningsRun.finishedAt * 1000).toISOString()
+            : null,
+          rowsInserted: Number(earningsRun.rowsInserted ?? 0),
+        } : null,
+      },
     }
     const generatedAt = Date.now()
     await writeServingCache(

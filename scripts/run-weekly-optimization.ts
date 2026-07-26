@@ -34,6 +34,7 @@ type RunState = {
   pid: number
   runKey: string
   startedAt: string
+  heartbeatAt: string
   finishedAt: string | null
   status: 'running' | 'completed' | 'failed'
   steps: StepResult[]
@@ -305,6 +306,7 @@ async function main(): Promise<void> {
     pid: process.pid,
     runKey,
     startedAt: isoNow(),
+    heartbeatAt: isoNow(),
     finishedAt: null,
     status: 'running',
     steps: configuredSteps.map((step) => {
@@ -333,7 +335,12 @@ async function main(): Promise<void> {
     }
     result.status = 'running'
     result.startedAt = isoNow()
+    state.heartbeatAt = isoNow()
     writeState(state)
+    const heartbeatTimer = setInterval(() => {
+      state.heartbeatAt = isoNow()
+      writeState(state)
+    }, 60_000)
     try {
       const completed = await runStep(step)
       result.exitCode = completed.exitCode
@@ -346,6 +353,8 @@ async function main(): Promise<void> {
       result.status = 'failed'
       result.error = errorMessage(error)
     } finally {
+      clearInterval(heartbeatTimer)
+      state.heartbeatAt = isoNow()
       result.finishedAt = isoNow()
       writeState(state)
     }
@@ -362,6 +371,7 @@ async function main(): Promise<void> {
   }
 
   const failed = state.steps.filter((step) => step.status === 'failed')
+  state.heartbeatAt = isoNow()
   state.finishedAt = isoNow()
   state.status = failed.length === 0 ? 'completed' : 'failed'
   writeState(state)

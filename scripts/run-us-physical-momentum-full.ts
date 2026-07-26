@@ -46,7 +46,24 @@ function modeFromArg(value: string | undefined): Mode {
 async function countUsDbRows(path: string): Promise<{ tickers: number; dates: number }> {
   const client = createClient({ url: `file:${path}` })
   await client.execute('PRAGMA busy_timeout=60000')
-  const tickerRows = await client.execute('SELECT COUNT(DISTINCT ticker) AS count FROM ohlcv_daily')
+  const tickerRows = RECENT_DAYS > 0
+    ? await client.execute({
+        sql: `
+          SELECT COUNT(DISTINCT ticker) AS count
+          FROM ohlcv_daily
+          WHERE date >= (
+            SELECT MIN(date)
+            FROM (
+              SELECT DISTINCT date
+              FROM ohlcv_daily
+              ORDER BY date DESC
+              LIMIT ?
+            )
+          )
+        `,
+        args: [RECENT_DAYS],
+      })
+    : await client.execute('SELECT COUNT(DISTINCT ticker) AS count FROM ohlcv_daily')
   const dateRows = RECENT_DAYS > 0
     ? await client.execute({
         sql: `

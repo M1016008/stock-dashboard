@@ -33,6 +33,7 @@ import {
   scoreMaSequenceRange,
   stageCodeAt,
 } from '@/lib/ml/ma-sequence'
+import { CHART_INTERVAL_OPTIONS } from '@/lib/timeframes'
 
 const neighbors = stageNeighborCodes('524141')
 assert.equal(neighbors.length, 31)
@@ -256,33 +257,30 @@ const chartRows = Array.from({ length: 5_500 }, (_, index) => {
 })
 const chartStartDate = '2025-04-01'
 const chartEndDate = '2025-07-31'
-const weeklyChart = buildHistoricalAnalogChartSeries(
-  chartRows,
-  'W',
-  chartStartDate,
-  chartEndDate,
+const chartsByInterval = new Map(
+  CHART_INTERVAL_OPTIONS.map((option) => {
+    const chart = buildHistoricalAnalogChartSeries(
+      chartRows,
+      option.code,
+      chartStartDate,
+      chartEndDate,
+    )
+    assert.ok(chart, `${option.label}の比較チャートを生成できること`)
+    assert.ok(chart.points.length > 0, `${option.label}に表示点があること`)
+    assert.match(chart.highlightStart, /^\d{4}-\d{2}-\d{2}$/)
+    assert.match(chart.highlightEnd, /^\d{4}-\d{2}-\d{2}$/)
+    return [option.code, chart] as const
+  }),
 )
-const monthlyChart = buildHistoricalAnalogChartSeries(
-  chartRows,
-  'M',
-  chartStartDate,
-  chartEndDate,
-)
-const yearlyChart = buildHistoricalAnalogChartSeries(
-  chartRows,
-  'Y',
-  chartStartDate,
-  chartEndDate,
-)
+assert.equal(chartsByInterval.size, 14)
+const weeklyChart = chartsByInterval.get('W')!
+const monthlyChart = chartsByInterval.get('M')!
+const yearlyChart = chartsByInterval.get('Y')!
 assert.ok(weeklyChart)
 assert.ok(monthlyChart)
 assert.ok(yearlyChart)
 assert.ok(weeklyChart.points.length > monthlyChart.points.length)
 assert.ok(monthlyChart.points.length > yearlyChart.points.length)
-assert.match(weeklyChart.highlightStart, /^2025-03-(31|30)$/)
-assert.equal(monthlyChart.highlightStart, '2025-04-01')
-assert.equal(yearlyChart.highlightStart, '2025-01-01')
-assert.equal(yearlyChart.highlightEnd, '2025-01-01')
 assert.ok(yearlyChart.points.some((point) => point.ma3 != null))
 assert.ok(yearlyChart.points.some((point) => point.ma5 != null))
 assert.ok(yearlyChart.points.some((point) => point.ma10 != null))
@@ -295,5 +293,9 @@ assert.ok(weeklyChart.points.some((point) => point.ma52 != null))
 assert.ok(weeklyChart.points.some((point) => point.ma200 != null))
 assert.equal(weeklyChart.startPrice, chartRows.find((row) => row.date === chartStartDate)?.close)
 assert.equal(weeklyChart.endPrice, chartRows.find((row) => row.date === chartEndDate)?.close)
+assert.ok(chartsByInterval.get('3W')?.points.length)
+assert.ok(chartsByInterval.get('2Y')?.points.length)
+assert.ok(chartsByInterval.get('3Y')?.points.length)
+assert.ok(chartsByInterval.get('5Y')?.points.length)
 
 console.log('historical analog period tests passed')

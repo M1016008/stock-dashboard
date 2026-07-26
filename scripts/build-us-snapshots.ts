@@ -3,7 +3,11 @@
 import { db, ensureReady, execAll, execGet } from '@/lib/db/client'
 import { marketDailySnapshots, marketDataRuns } from '@/lib/db/schema'
 import { calculateAllStages, type MaValues } from '@/lib/hex-stage'
-import { toAdjustedUsOhlcvRows, type UsRawOhlcvRow } from '@/lib/us-adjusted-ohlcv'
+import {
+  US_ADJUSTED_PRICE_BASIS,
+  toAdjustedUsOhlcvRows,
+  type UsRawOhlcvRow,
+} from '@/lib/us-adjusted-ohlcv'
 import { usInvestableSymbolSql } from '@/lib/us-symbol-quality'
 import type { OHLCV } from '@/types/stock'
 import { eq, sql } from 'drizzle-orm'
@@ -13,6 +17,9 @@ const CONCURRENCY = Math.max(1, Number(process.env.US_SNAPSHOT_CONCURRENCY ?? 4)
 const LIMIT = Number(process.env.US_SNAPSHOT_LIMIT ?? 0)
 const INCLUDE_INACTIVE = process.env.US_INCLUDE_INACTIVE === '1'
 const REBUILD = process.env.US_SNAPSHOT_REBUILD === '1'
+const PROGRESS_EVERY = Math.max(10, Number(process.env.US_SNAPSHOT_PROGRESS_EVERY ?? 50))
+const TICKER_START = process.env.US_SNAPSHOT_TICKER_START?.trim().toUpperCase() || null
+const TICKER_END = process.env.US_SNAPSHOT_TICKER_END?.trim().toUpperCase() || null
 const TICKERS = process.env.TICKERS?.split(',').map((value) => value.trim().toUpperCase()).filter(Boolean)
 
 function prefix(rows: OHLCV[]): number[] {
@@ -57,21 +64,34 @@ function maAt(rows: OHLCV[], values: number[], index: number): MaValues {
 
 async function loadTargets(): Promise<string[]> {
   if (TICKERS?.length) return TICKERS
+  const where = [
+    `u.market = ?`,
+    `(? = 1 OR u.active = 1)`,
+    usInvestableSymbolSql('u.ticker'),
+    `EXISTS (
+      SELECT 1 FROM market_ohlcv_daily o
+      WHERE o.market = u.market AND o.ticker = u.ticker
+    )`,
+  ]
+  const args: Array<string | number> = [MARKET, INCLUDE_INACTIVE ? 1 : 0]
+  if (TICKER_START) {
+    where.push('u.ticker >= ?')
+    args.push(TICKER_START)
+  }
+  if (TICKER_END) {
+    where.push('u.ticker <= ?')
+    args.push(TICKER_END)
+  }
+  if (LIMIT > 0) args.push(LIMIT)
   const rows = await execAll<{ ticker: string }>(
     `
     SELECT u.ticker
     FROM market_universe u
-    WHERE u.market = ?
-      AND (? = 1 OR u.active = 1)
-      AND ${usInvestableSymbolSql('u.ticker')}
-      AND EXISTS (
-        SELECT 1 FROM market_ohlcv_daily o
-        WHERE o.market = u.market AND o.ticker = u.ticker
-      )
+    WHERE ${where.join('\n      AND ')}
     ORDER BY u.ticker
     ${LIMIT > 0 ? 'LIMIT ?' : ''}
     `,
-    LIMIT > 0 ? [MARKET, INCLUDE_INACTIVE ? 1 : 0, LIMIT] : [MARKET, INCLUDE_INACTIVE ? 1 : 0],
+    args,
   )
   return rows.map((row) => row.ticker)
 }
@@ -147,39 +167,147 @@ async function main() {
     market: MARKET,
     jobType: 'snapshot_compute',
     status: 'running',
-    payloadJson: JSON.stringify({ rebuild: REBUILD, includeInactive: INCLUDE_INACTIVE, limit: LIMIT || null, tickers: TICKERS ?? null }),
+    payloadJson: JSON.stringify({
+      stage: 'targets',
+      priceBasis: US_ADJUSTED_PRICE_BASIS,
+      rebuild: REBUILD,
+      includeInactive: INCLUDE_INACTIVE,
+      tickerStart: TICKER_START,
+      tickerEnd: TICKER_END,
+      limit: LIMIT || null,
+      tickers: TICKERS ?? null,
+      heartbeatAt: new Date().toISOString(),
+    }),
   }).returning({ id: marketDataRuns.id })
   const tickers = await loadTargets()
+  await db.update(marketDataRuns).set({
+    totalTickers: tickers.length,
+    payloadJson: JSON.stringify({
+      stage: 'snapshots',
+      priceBasis: US_ADJUSTED_PRICE_BASIS,
+      rebuild: REBUILD,
+      includeInactive: INCLUDE_INACTIVE,
+      tickerStart: TICKER_START,
+      tickerEnd: TICKER_END,
+      limit: LIMIT || null,
+      tickers: TICKERS ?? null,
+      heartbeatAt: new Date().toISOString(),
+    }),
+  }).where(eq(marketDataRuns.id, run.id))
   let nextIndex = 0
   let succeeded = 0
   let failed = 0
   let rowsInserted = 0
+  let lastPersisted = 0
+  let lastContiguousIndex = -1
+  let lastCompletedTicker: string | null = null
+  let progressSave = Promise.resolve()
+  const completedIndices = new Set<number>()
   const errors: string[] = []
+
+  async function persistProgress(force = false) {
+    const completed = succeeded + failed
+    if (!force && completed - lastPersisted < PROGRESS_EVERY) return
+    lastPersisted = completed
+    const snapshot = {
+      succeeded,
+      failed,
+      rowsInserted,
+      errorSummary: JSON.stringify(errors.slice(0, 20)),
+      payloadJson: JSON.stringify({
+        stage: 'snapshots',
+        priceBasis: US_ADJUSTED_PRICE_BASIS,
+        rebuild: REBUILD,
+        includeInactive: INCLUDE_INACTIVE,
+        tickerStart: TICKER_START,
+        tickerEnd: TICKER_END,
+        lastCompletedTicker,
+        limit: LIMIT || null,
+        tickers: TICKERS ?? null,
+        heartbeatAt: new Date().toISOString(),
+      }),
+    }
+    progressSave = progressSave.then(async () => {
+      await db.update(marketDataRuns).set(snapshot).where(eq(marketDataRuns.id, run.id))
+    })
+    await progressSave
+    console.log(
+      `US snapshots progress: ${completed}/${tickers.length}, rows=${rowsInserted}, failed=${failed}`,
+    )
+  }
+
   async function worker() {
     while (true) {
-      const ticker = tickers[nextIndex++]
+      const index = nextIndex++
+      const ticker = tickers[index]
       if (!ticker) return
       try {
         const count = await computeTicker(ticker)
         rowsInserted += count
         succeeded += 1
+        completedIndices.add(index)
+        while (completedIndices.has(lastContiguousIndex + 1)) {
+          completedIndices.delete(lastContiguousIndex + 1)
+          lastContiguousIndex += 1
+        }
+        lastCompletedTicker = tickers[lastContiguousIndex] ?? null
       } catch (error) {
         failed += 1
         errors.push(`${ticker}: ${error instanceof Error ? error.message : String(error)}`)
       }
+      await persistProgress()
     }
   }
-  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, tickers.length) }, () => worker()))
-  await db.update(marketDataRuns).set({
-    status: failed === 0 ? 'success' : succeeded === 0 ? 'failed' : 'partial',
-    finishedAt: new Date(),
-    totalTickers: tickers.length,
-    succeeded,
-    failed,
-    rowsInserted,
-    errorSummary: JSON.stringify(errors.slice(0, 20)),
-  }).where(eq(marketDataRuns.id, run.id))
-  console.log(`US snapshots complete: tickers=${tickers.length}, rows=${rowsInserted}, failed=${failed}`)
+  try {
+    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, tickers.length) }, () => worker()))
+    await persistProgress(true)
+    await db.update(marketDataRuns).set({
+      status: failed === 0 ? 'success' : succeeded === 0 ? 'failed' : 'partial',
+      finishedAt: new Date(),
+      totalTickers: tickers.length,
+      succeeded,
+      failed,
+      rowsInserted,
+      errorSummary: JSON.stringify(errors.slice(0, 20)),
+      payloadJson: JSON.stringify({
+        stage: 'complete',
+        priceBasis: US_ADJUSTED_PRICE_BASIS,
+        rebuild: REBUILD,
+        includeInactive: INCLUDE_INACTIVE,
+        tickerStart: TICKER_START,
+        tickerEnd: TICKER_END,
+        lastCompletedTicker,
+        limit: LIMIT || null,
+        tickers: TICKERS ?? null,
+        heartbeatAt: new Date().toISOString(),
+      }),
+    }).where(eq(marketDataRuns.id, run.id))
+    if (failed > 0) {
+      throw new Error(`US snapshot rebuild incomplete: ${failed} ticker(s) failed`)
+    }
+    console.log(`US snapshots complete: tickers=${tickers.length}, rows=${rowsInserted}, failed=${failed}`)
+  } catch (error) {
+    await progressSave.catch(() => undefined)
+    await db.update(marketDataRuns).set({
+      status: 'failed',
+      finishedAt: new Date(),
+      totalTickers: tickers.length,
+      succeeded,
+      failed,
+      rowsInserted,
+      errorSummary: error instanceof Error ? error.message : String(error),
+      payloadJson: JSON.stringify({
+        stage: 'failed',
+        priceBasis: US_ADJUSTED_PRICE_BASIS,
+        rebuild: REBUILD,
+        tickerStart: TICKER_START,
+        tickerEnd: TICKER_END,
+        lastCompletedTicker,
+        heartbeatAt: new Date().toISOString(),
+      }),
+    }).where(eq(marketDataRuns.id, run.id)).catch(() => undefined)
+    throw error
+  }
 }
 
 main().catch((error) => {

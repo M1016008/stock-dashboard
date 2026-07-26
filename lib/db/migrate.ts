@@ -373,6 +373,30 @@ const STATEMENTS = [
     payload_json TEXT NOT NULL DEFAULT '{}'
   )`,
   `CREATE INDEX IF NOT EXISTS market_data_runs_latest_idx ON market_data_runs(market, job_type, started_at)`,
+  `CREATE TABLE IF NOT EXISTS market_earnings_calendar (
+    market TEXT NOT NULL,
+    ticker TEXT NOT NULL,
+    report_date TEXT NOT NULL,
+    hour TEXT,
+    time_bucket TEXT,
+    fiscal_year INTEGER,
+    fiscal_quarter INTEGER,
+    eps_estimate REAL,
+    eps_actual REAL,
+    revenue_estimate REAL,
+    revenue_actual REAL,
+    source TEXT NOT NULL,
+    source_url TEXT,
+    raw_json TEXT NOT NULL DEFAULT '{}',
+    imported_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (market, ticker, report_date)
+  )`,
+  `CREATE INDEX IF NOT EXISTS market_earnings_market_date_idx
+    ON market_earnings_calendar(market, report_date, ticker)`,
+  `CREATE INDEX IF NOT EXISTS market_earnings_market_ticker_date_idx
+    ON market_earnings_calendar(market, ticker, report_date)`,
+  `CREATE INDEX IF NOT EXISTS market_earnings_market_bucket_date_idx
+    ON market_earnings_calendar(market, time_bucket, report_date)`,
   `CREATE TABLE IF NOT EXISTS sector_etf_holdings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     etf_ticker TEXT NOT NULL,
@@ -844,6 +868,8 @@ const STATEMENTS = [
     PRIMARY KEY (ticker, announce_date)
   )`,
   `CREATE INDEX IF NOT EXISTS earn_date_idx ON earnings_calendar(announce_date)`,
+  `CREATE INDEX IF NOT EXISTS earn_import_date_ticker_idx
+    ON earnings_calendar(imported_at, announce_date, ticker)`,
   // ─── Phase 4: 6 桁パターンコード検索用 expression index ───
   `CREATE INDEX IF NOT EXISTS idx_ds_pattern_code ON daily_snapshots(
     (CAST(daily_a_stage AS TEXT) || CAST(daily_b_stage AS TEXT) || CAST(weekly_a_stage AS TEXT) || CAST(weekly_b_stage AS TEXT) || CAST(monthly_a_stage AS TEXT) || CAST(monthly_b_stage AS TEXT))
@@ -1562,6 +1588,8 @@ const ADD_COLUMN_IF_MISSING: string[] = [
   `ALTER TABLE earnings_calendar ADD COLUMN actual_source_url TEXT`,
   `ALTER TABLE earnings_calendar ADD COLUMN time_bucket TEXT`,
   `ALTER TABLE earnings_calendar ADD COLUMN time_updated_at INTEGER`,
+  `CREATE INDEX IF NOT EXISTS earn_import_date_ticker_idx
+    ON earnings_calendar(imported_at, announce_date, ticker)`,
   `CREATE INDEX IF NOT EXISTS earn_time_bucket_date_idx ON earnings_calendar(time_bucket, announce_date)`,
   `ALTER TABLE kabutan_material_news ADD COLUMN related_stocks_json TEXT NOT NULL DEFAULT '[]'`,
 ]

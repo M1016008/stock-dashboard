@@ -91,6 +91,7 @@ const SCENARIO_INTERVAL_LABELS: Record<ScenarioInterval, string> = {
   Y: '1年',
   '2Y': '2年',
   '3Y': '3年',
+  '5Y': '5年',
 }
 
 export function dashboardScenarioIntervalLabel(interval: ScenarioInterval): string {

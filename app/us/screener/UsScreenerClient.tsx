@@ -53,6 +53,15 @@ type Row = {
   shortTermCheckLabel?: string | null
   shortTermCheckScore?: number | null
   shortTermCheckReasons?: string[] | null
+  next_earnings_date?: string | null
+  next_earnings_hour?: 'bmo' | 'dmh' | 'amc' | null
+  next_earnings_time_bucket?: 'before_open' | 'market_hours' | 'after_close' | 'unknown' | null
+  next_earnings_fiscal_year?: number | null
+  next_earnings_fiscal_quarter?: number | null
+  next_earnings_eps_estimate?: number | null
+  next_earnings_revenue_estimate?: number | null
+  next_earnings_source?: string | null
+  earnings_days?: number | null
 }
 
 type AxisKey = 'daily_a' | 'daily_b' | 'weekly_a' | 'weekly_b' | 'monthly_a' | 'monthly_b'
@@ -82,6 +91,8 @@ type UsScreenerView = {
   shortTermCheck: string
   physicalStatus: string
   marketCapBin: string
+  earningsWindowDays: string
+  earningsTimeBucket: string
   sort: string
   dir: 'asc' | 'desc'
 }
@@ -95,7 +106,18 @@ type ScreenerFacets = {
   industries: Array<{ sector: string | null; industryCode: string | null; industry: string }>
 }
 
-const SORT_VALUES = new Set(['ticker', 'exchange', 'sector', 'industry', 'price', 'changePct', 'return5d', 'return20d', 'return60d', 'return120d', 'ma200Gap', 'ma200Angle', 'volume', 'avgVolume20', 'marketCap', 'stageCode', 'pms', 'pfs', 'pes', 'acceleration', 'force', 'shortTermCheckScore', 'shortTermCheckLabel'])
+type EarningsMeta = {
+  source: 'finnhub'
+  updatedAt: string | null
+  latestRun: {
+    status: string
+    startedAt: string
+    finishedAt: string | null
+    rowsInserted: number
+  } | null
+}
+
+const SORT_VALUES = new Set(['ticker', 'exchange', 'sector', 'industry', 'price', 'changePct', 'return5d', 'return20d', 'return60d', 'return120d', 'ma200Gap', 'ma200Angle', 'volume', 'avgVolume20', 'marketCap', 'stageCode', 'pms', 'pfs', 'pes', 'acceleration', 'force', 'shortTermCheckScore', 'shortTermCheckLabel', 'earningsNextDate', 'earningsDays'])
 const COLUMN_MODE_KEY = 'stockboard_us_screener_columns_v1'
 const AXES: { key: AxisKey; label: string; color: string }[] = [
   { key: 'daily_a', label: '日足A', color: '#ef4444' },
@@ -147,6 +169,43 @@ function fmtScore(value: number | null | undefined) {
   return value.toFixed(2)
 }
 
+function fmtVolume(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(value)) return '-'
+  return Math.round(value).toLocaleString('en-US')
+}
+
+function earningsHourLabel(hour: Row['next_earnings_hour']) {
+  if (hour === 'bmo') return '寄付前'
+  if (hour === 'dmh') return '取引時間中'
+  if (hour === 'amc') return '引け後'
+  return '時刻未定'
+}
+
+function fmtSyncTime(value: string | null | undefined) {
+  if (!value) return null
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return null
+  return new Intl.DateTimeFormat('ja-JP', {
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date)
+}
+
+function pctClass(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(value)) return 'text-[var(--color-text-tertiary)]'
+  return value >= 0 ? 'text-red-700' : 'text-blue-700'
+}
+
+function physicalStatusClass(label: string | null | undefined) {
+  if (label === '上昇加速' || label === '上昇継続') return 'border-red-200 bg-red-50 text-red-700'
+  if (label === '反発準備') return 'border-rose-200 bg-rose-50 text-rose-700'
+  if (label === '下落加速' || label === '弱含み') return 'border-blue-200 bg-blue-50 text-blue-700'
+  if (label === '失速警戒') return 'border-amber-200 bg-amber-50 text-amber-800'
+  return 'border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] text-[var(--color-text-secondary)]'
+}
+
 function displayMessage(message: string | null, hasScreeningConditions: boolean) {
   if (!message) {
     if (hasScreeningConditions) {
@@ -169,12 +228,20 @@ function parseUrlLimit(value: string | null): number {
 
 function StageCode({ code }: { code: string | null | undefined }) {
   if (!code) return <span className="text-[11px] font-bold text-[var(--color-text-tertiary)]">------</span>
+  const digits = code.split('').slice(0, 6)
   return (
-    <span className="inline-flex gap-0.5">
-      {code.split('').slice(0, 6).map((digit, index) => (
-        <StageTag key={`${digit}-${index}`} stage={Number(digit)} size="xs" />
-      ))}
-    </span>
+    <div className="min-w-[126px]" title={`日足 ${digits[0]}/${digits[1]}・週足 ${digits[2]}/${digits[3]}・月足 ${digits[4]}/${digits[5]}`}>
+      <span className="inline-flex gap-0.5">
+        {digits.map((digit, index) => (
+          <StageTag key={`${digit}-${index}`} stage={Number(digit)} size="xs" />
+        ))}
+      </span>
+      <div className="mt-1 flex gap-2 font-mono text-[9px] font-bold text-[var(--color-text-tertiary)]">
+        <span>日 {digits[0]}/{digits[1]}</span>
+        <span>週 {digits[2]}/{digits[3]}</span>
+        <span>月 {digits[4]}/{digits[5]}</span>
+      </div>
+    </div>
   )
 }
 
@@ -202,6 +269,7 @@ export function UsScreenerClient() {
     industryGroups: [],
     industries: [],
   })
+  const [earningsMeta, setEarningsMeta] = useState<EarningsMeta | null>(null)
   const [query, setQuery] = useState(searchParams.get('q') || '')
   const [exchange, setExchange] = useState(searchParams.get('exchange') || '')
   const [sector, setSector] = useState(searchParams.get('sector') || '')
@@ -239,6 +307,8 @@ export function UsScreenerClient() {
   const [shortTermCheck, setShortTermCheck] = useState('')
   const [physicalStatus, setPhysicalStatus] = useState('')
   const [marketCapBin, setMarketCapBin] = useState('')
+  const [earningsWindowDays, setEarningsWindowDays] = useState(searchParams.get('earningsWindowDays') || '')
+  const [earningsTimeBucket, setEarningsTimeBucket] = useState(searchParams.get('earningsTimeBucket') || '')
   const [sort, setSort] = useState(initialSort)
   const [dir, setDir] = useState<'asc' | 'desc'>(initialDir)
   const [loading, setLoading] = useState(false)
@@ -274,11 +344,13 @@ export function UsScreenerClient() {
     if (stage23Candidate) sp.set('stage23Candidate', '1')
     if (shortTermCheck) sp.set('shortTermCheck', shortTermCheck)
     if (physicalStatus) sp.set('physicalStatus', physicalStatus)
+    if (earningsWindowDays) sp.set('earningsWindowDays', earningsWindowDays)
+    if (earningsTimeBucket) sp.set('earningsTimeBucket', earningsTimeBucket)
     const capBin = MCAP_BINS.find((bin) => bin.key === marketCapBin)
     if (capBin?.min != null) sp.set('marketCapMin', String(capBin.min))
     if (capBin?.max != null) sp.set('marketCapMax', String(capBin.max))
     return sp.toString()
-  }, [query, exchange, sector, industryGroup, industry, stageCode, stages, avgVolumeMin, priceMin, priceMax, assetType, sicClassificationEnabled, quality, ma200Trend, ma200Direction, pmsMin, pfsMin, pesMin, accelerationPositive, forcePositive, stage23Candidate, shortTermCheck, physicalStatus, marketCapBin, sort, dir, resultLimit])
+  }, [query, exchange, sector, industryGroup, industry, stageCode, stages, avgVolumeMin, priceMin, priceMax, assetType, sicClassificationEnabled, quality, ma200Trend, ma200Direction, pmsMin, pfsMin, pesMin, accelerationPositive, forcePositive, stage23Candidate, shortTermCheck, physicalStatus, marketCapBin, earningsWindowDays, earningsTimeBucket, sort, dir, resultLimit])
 
   useEffect(() => {
     if (sicClassificationEnabled || (!sector && !industryGroup && !industry)) return
@@ -318,6 +390,7 @@ export function UsScreenerClient() {
             industryGroups: Array.isArray(data.facets?.industryGroups) ? data.facets.industryGroups : [],
             industries: Array.isArray(data.facets?.industries) ? data.facets.industries : [],
           })
+          setEarningsMeta(data.earnings ?? null)
           setMessage(typeof data.message === 'string' ? data.message : null)
         })
         .catch((error) => {
@@ -390,9 +463,11 @@ export function UsScreenerClient() {
     shortTermCheck,
     physicalStatus,
     marketCapBin,
+    earningsWindowDays,
+    earningsTimeBucket,
     sort,
     dir,
-  }), [query, exchange, sector, industryGroup, industry, stageCode, stages, avgVolumeMin, priceMin, priceMax, assetType, quality, ma200Trend, ma200Direction, pmsMin, pfsMin, pesMin, accelerationPositive, forcePositive, stage23Candidate, shortTermCheck, physicalStatus, marketCapBin, sort, dir])
+  }), [query, exchange, sector, industryGroup, industry, stageCode, stages, avgVolumeMin, priceMin, priceMax, assetType, quality, ma200Trend, ma200Direction, pmsMin, pfsMin, pesMin, accelerationPositive, forcePositive, stage23Candidate, shortTermCheck, physicalStatus, marketCapBin, earningsWindowDays, earningsTimeBucket, sort, dir])
 
   const applyView = (next: UsScreenerView) => {
     const normalizedClassification = normalizeUsClassificationFilters({
@@ -424,6 +499,8 @@ export function UsScreenerClient() {
     setShortTermCheck(next.shortTermCheck ?? '')
     setPhysicalStatus(next.physicalStatus ?? '')
     setMarketCapBin(next.marketCapBin ?? '')
+    setEarningsWindowDays(next.earningsWindowDays ?? '')
+    setEarningsTimeBucket(next.earningsTimeBucket ?? '')
     setSort(SORT_VALUES.has(next.sort) ? next.sort : 'ticker')
     setDir(next.dir === 'desc' ? 'desc' : 'asc')
   }
@@ -452,6 +529,8 @@ export function UsScreenerClient() {
     setShortTermCheck('')
     setPhysicalStatus('')
     setMarketCapBin('')
+    setEarningsWindowDays('')
+    setEarningsTimeBucket('')
     setSort('ticker')
     setDir('asc')
     setResultLimit(200)
@@ -477,6 +556,15 @@ export function UsScreenerClient() {
     ma200Trend === 'above' ? '200日線より上' : ma200Trend === 'below' ? '200日線より下' : '',
     ma200Direction ? `200日線: ${ma200Direction === 'up' ? '上向き' : ma200Direction === 'down' ? '下向き' : '横ばい'}` : '',
     marketCapBin ? `時価総額: ${MCAP_BINS.find((bin) => bin.key === marketCapBin)?.label}` : '',
+    earningsWindowDays ? `次回決算: ${earningsWindowDays}日以内` : '',
+    earningsTimeBucket
+      ? `決算時間: ${
+          earningsTimeBucket === 'before_open' ? '寄付前'
+            : earningsTimeBucket === 'market_hours' ? '取引時間中'
+              : earningsTimeBucket === 'after_close' ? '引け後'
+                : '時刻未定'
+        }`
+      : '',
     shortTermCheck ? `短期: ${shortTermCheck}` : '',
     physicalStatus ? `物理状態: ${physicalStatus}` : '',
     pmsMin ? `PMS ≥ ${pmsMin}` : '',
@@ -618,6 +706,7 @@ export function UsScreenerClient() {
               <option value="ma200Angle">200日線の角度</option>
               <option value="volume">出来高</option>
               <option value="avgVolume20">20日平均出来高</option>
+              <option value="earningsNextDate">次回決算日</option>
               <option value="shortTermCheckScore">短期チェック</option>
               <option value="pms">PMS</option>
               <option value="pfs">PFS</option>
@@ -757,8 +846,60 @@ export function UsScreenerClient() {
           </Section>
 
           <Section step={5} label="次回決算までで絞り込み・並び替え">
-            <div className="border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] font-bold text-amber-900">
-              US決算予定データは現在未連携です。正式な外部データソース承認後に有効化します。推定日を確定情報として表示しません。
+            <div className="flex flex-wrap gap-1.5">
+              {[
+                ['', '全て'],
+                ['14', '2週間以内'],
+                ['30', '1か月以内'],
+                ['60', '2か月以内'],
+                ['90', '3か月以内'],
+              ].map(([value, label]) => (
+                <Chip
+                  key={value || 'all'}
+                  active={earningsWindowDays === value}
+                  onClick={() => setEarningsWindowDays(value)}
+                >
+                  {label}
+                </Chip>
+              ))}
+              <Chip
+                active={sort === 'earningsNextDate' && dir === 'asc'}
+                onClick={() => { setSort('earningsNextDate'); setDir('asc') }}
+              >
+                決算が近い順
+              </Chip>
+              <Chip
+                active={sort === 'earningsNextDate' && dir === 'desc'}
+                onClick={() => { setSort('earningsNextDate'); setDir('desc') }}
+              >
+                決算が遠い順
+              </Chip>
+            </div>
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {[
+                ['', '発表時間: 全て'],
+                ['before_open', '寄付前'],
+                ['market_hours', '取引時間中'],
+                ['after_close', '引け後'],
+                ['unknown', '時刻未定'],
+              ].map(([value, label]) => (
+                <Chip
+                  key={value || 'all'}
+                  active={earningsTimeBucket === value}
+                  onClick={() => setEarningsTimeBucket(value)}
+                >
+                  {label}
+                </Chip>
+              ))}
+            </div>
+            <div className={`mt-2 border px-3 py-2 text-[10px] font-bold leading-5 ${
+              earningsMeta?.updatedAt
+                ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
+                : 'border-amber-200 bg-amber-50 text-amber-900'
+            }`}>
+              {earningsMeta?.updatedAt
+                ? `正式ソース: Finnhub / 最終同期 ${fmtSyncTime(earningsMeta.updatedAt)} / 推定日は表示していません。`
+                : 'Finnhub決算予定は同期待ちです。APIキー設定後の日次同期で有効になります。推定日は表示しません。'}
             </div>
           </Section>
 
@@ -845,114 +986,233 @@ export function UsScreenerClient() {
       )}
 
       <div className="max-h-[70vh] overflow-auto">
-        <table className={`data-table w-full border-collapse text-left text-[12px] ${columnMode === 'all' ? 'min-w-[1540px]' : 'min-w-[1080px]'}`}>
+        <table className={`data-table w-full table-fixed border-collapse text-left text-[12px] ${columnMode === 'all' ? 'min-w-[1870px]' : 'min-w-[1530px]'}`}>
           <thead>
             <tr className="border-b border-[var(--color-border-default)] bg-white text-[11px] font-bold text-[var(--color-text-secondary)]">
-              <th className="sticky left-0 z-[4] w-9 bg-white px-2 py-2">
+              <th className="sticky left-0 top-0 z-[7] w-9 bg-white px-2 py-2">
                 <span className="sr-only">比較選択</span>
               </th>
-              <th className="sticky left-9 z-[3] bg-white px-3 py-2">銘柄</th>
-              {columnMode === 'all' && <th className="px-3 py-2">取引所</th>}
-              <th className="px-3 py-2">業種</th>
-              <th className="px-3 py-2">6桁</th>
-              <th className="px-3 py-2">短期チェック</th>
-              <th className="px-3 py-2 text-right">株価</th>
-              <th className="px-3 py-2 text-right">騰落率</th>
-              <th className="px-3 py-2 text-right">1か月</th>
-              {columnMode === 'all' && <th className="px-3 py-2 text-right">5日 / 3か月 / 6か月</th>}
-              <th className="px-3 py-2 text-right">200日線</th>
-              <th className="px-3 py-2 text-right">出来高</th>
-              {columnMode === 'all' && <th className="px-3 py-2 text-right">20日平均</th>}
-              <th className="px-3 py-2 text-right">PMS/PFS/PES</th>
-              {columnMode === 'all' && <th className="px-3 py-2 text-right">時価総額</th>}
-              {columnMode === 'all' && <th className="px-3 py-2">品質</th>}
+              <th className="sticky left-9 top-0 z-[6] w-[220px] min-w-[220px] bg-white px-3 py-2">銘柄・市場</th>
+              <th className="sticky top-0 z-[3] w-[210px] bg-white px-3 py-2">業種</th>
+              <th className="sticky top-0 z-[3] w-[150px] bg-white px-3 py-2">ステージ構造</th>
+              <th className="sticky top-0 z-[3] w-[220px] bg-white px-3 py-2">総合判断</th>
+              <th className="sticky top-0 z-[3] w-[150px] bg-white px-3 py-2">次回決算</th>
+              <th className="sticky top-0 z-[3] w-[105px] bg-white px-3 py-2 text-right">株価・日次</th>
+              <th className="sticky top-0 z-[3] w-[190px] bg-white px-3 py-2">期間騰落</th>
+              <th className="sticky top-0 z-[3] w-[125px] bg-white px-3 py-2 text-right">200日線</th>
+              <th className="sticky top-0 z-[3] w-[150px] bg-white px-3 py-2 text-right">流動性</th>
+              <th className="sticky top-0 z-[3] w-[180px] bg-white px-3 py-2">物理ML</th>
+              {columnMode === 'all' && <th className="sticky top-0 z-[3] w-[125px] bg-white px-3 py-2 text-right">企業規模</th>}
+              {columnMode === 'all' && <th className="sticky top-0 z-[3] w-[145px] bg-white px-3 py-2 text-right">力学</th>}
+              {columnMode === 'all' && <th className="sticky top-0 z-[3] w-[170px] bg-white px-3 py-2">品質</th>}
             </tr>
           </thead>
           <tbody>
-            {rows.map((row) => (
-              <tr key={row.ticker} className={`border-b border-[var(--color-border-subtle)] ${selected.has(row.ticker) ? 'bg-blue-50/60' : ''}`}>
-                <td className="sticky left-0 z-[2] bg-inherit px-2 py-2">
-                  <input
-                    type="checkbox"
-                    checked={selected.has(row.ticker)}
-                    onChange={() => toggleSelected(row.ticker)}
-                    aria-label={`${row.ticker}を比較対象にする`}
-                    className="h-4 w-4 accent-[var(--color-brand-700)]"
-                  />
-                </td>
-                <td className="sticky left-9 z-[1] bg-inherit px-3 py-2">
-                  <Link href={`/us/stock/${row.ticker}`} className="font-bold text-[var(--color-brand-900)] hover:text-[var(--color-market-red)]">
-                    {row.ticker}{row.name && row.name.trim().toUpperCase() !== row.ticker.trim().toUpperCase() ? ` ${row.name}` : ''}
-                  </Link>
-                  {row.asset_type && row.asset_type !== 'Stock' && (
-                    <div className="mt-0.5 text-[9px] font-black text-[var(--color-text-tertiary)]">
-                      {row.asset_type === 'Mutual Fund' ? '投資信託' : row.asset_type}
-                    </div>
-                  )}
-                </td>
-                {columnMode === 'all' && (
-                  <td className="px-3 py-2 font-semibold">
-                    <div>{row.exchange ?? '-'}</div>
+            {rows.map((row) => {
+              const relativeVolume = row.volume != null && row.avg_volume_20 != null && row.avg_volume_20 > 0
+                ? row.volume / row.avg_volume_20
+                : null
+              const isAboveMa200 = row.ma_200_gap_pct != null ? row.ma_200_gap_pct >= 0 : null
+              return (
+                <tr
+                  key={row.ticker}
+                  className={`group border-b border-[var(--color-border-subtle)] align-top transition-colors hover:bg-blue-50/40 ${selected.has(row.ticker) ? 'bg-blue-50/60' : ''}`}
+                >
+                  <td className={`sticky left-0 z-[5] px-2 py-3 ${selected.has(row.ticker) ? 'bg-blue-50' : 'bg-white group-hover:bg-blue-50'}`}>
+                    <input
+                      type="checkbox"
+                      checked={selected.has(row.ticker)}
+                      onChange={() => toggleSelected(row.ticker)}
+                      aria-label={`${row.ticker}を比較対象にする`}
+                      className="h-4 w-4 accent-[var(--color-brand-700)]"
+                    />
                   </td>
-                )}
-                <td className="px-3 py-2 font-semibold">
-                  <div>{row.sector ?? '-'}</div>
-                  {row.industry && <div className="mt-0.5 text-[10px] text-[var(--color-text-tertiary)]">{row.industry}</div>}
-                </td>
-                <td className="px-3 py-2"><StageCode code={row.stage_code} /></td>
-                <td className="px-3 py-2">
-                  <div className={`inline-flex items-center rounded-full border px-2 py-1 text-[10px] font-black ${shortTermClass(row.shortTermCheckLabel)}`}>
-                    {row.shortTermCheckLabel ?? '中立'}
-                    <span className="ml-1 font-mono opacity-80">
-                      / {formatShortTermStrength(row.shortTermCheckLabel, row.shortTermCheckScore)}
-                    </span>
-                  </div>
-                  {row.shortTermCheckReasons?.[0] && (
-                    <div className="mt-1 max-w-[180px] truncate text-[10px] font-bold text-[var(--color-text-tertiary)]">
-                      {row.shortTermCheckReasons.slice(0, 2).join(' / ')}
+                  <td className={`sticky left-9 z-[4] w-[220px] min-w-[220px] px-3 py-3 ${selected.has(row.ticker) ? 'bg-blue-50' : 'bg-white group-hover:bg-blue-50'}`}>
+                    <div className="flex items-center gap-2">
+                      <Link
+                        href={`/us/stock/${row.ticker}`}
+                        className="font-mono text-[13px] font-black text-[var(--color-brand-900)] hover:text-[var(--color-market-red)]"
+                      >
+                        {row.ticker}
+                      </Link>
+                      {row.asset_type && row.asset_type !== 'Stock' && (
+                        <span className="border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-1.5 py-0.5 text-[9px] font-black text-[var(--color-text-tertiary)]">
+                          {row.asset_type === 'Mutual Fund' ? '投資信託' : row.asset_type}
+                        </span>
+                      )}
                     </div>
-                  )}
-                </td>
-                <td className="px-3 py-2 text-right font-bold">{fmtMoney(row.price)}</td>
-                <td className={`px-3 py-2 text-right font-bold ${(row.change_pct ?? 0) >= 0 ? 'text-red-700' : 'text-blue-700'}`}>{fmtPct(row.change_pct)}</td>
-                <td className={`px-3 py-2 text-right font-bold ${(row.return_20d ?? 0) >= 0 ? 'text-red-700' : 'text-blue-700'}`}>{fmtPct(row.return_20d)}</td>
-                {columnMode === 'all' && (
-                  <td className="px-3 py-2 text-right font-mono text-[10px] font-semibold">
-                    {fmtPct(row.return_5d)} / {fmtPct(row.return_60d)} / {fmtPct(row.return_120d)}
+                    {row.name && row.name.trim().toUpperCase() !== row.ticker.trim().toUpperCase() && (
+                      <div className="mt-1 line-clamp-2 text-[10px] font-bold leading-4 text-[var(--color-text-secondary)]" title={row.name}>
+                        {row.name}
+                      </div>
+                    )}
+                    <div className="mt-1 font-mono text-[9px] font-bold text-[var(--color-text-tertiary)]">
+                      {row.exchange ?? '取引所未登録'}
+                    </div>
                   </td>
-                )}
-                <td className={`px-3 py-2 text-right font-bold ${(row.ma_200_gap_pct ?? 0) >= 0 ? 'text-red-700' : 'text-blue-700'}`}>
-                  {fmtPct(row.ma_200_gap_pct)}
-                  {row.ma_200_observations != null && row.ma_200_observations < 200 && (
-                    <div className="text-[9px] text-amber-700">{row.ma_200_observations}日</div>
-                  )}
-                </td>
-                <td className="px-3 py-2 text-right font-semibold">{row.volume?.toLocaleString('en-US') ?? '-'}</td>
-                {columnMode === 'all' && <td className="px-3 py-2 text-right font-semibold">{row.avg_volume_20 == null ? '-' : Math.round(row.avg_volume_20).toLocaleString('en-US')}</td>}
-                <td className="px-3 py-2 text-right font-semibold">
-                  <span className="font-bold text-[var(--color-brand-900)]">{fmtScore(row.physical_momentum_score)}</span>
-                  <span className="mx-1 text-[var(--color-text-tertiary)]">/</span>
-                  {fmtScore(row.physical_force_score)}
-                  <span className="mx-1 text-[var(--color-text-tertiary)]">/</span>
-                  {fmtScore(row.physical_energy_score)}
-                </td>
-                {columnMode === 'all' && <td className="px-3 py-2 text-right font-semibold">{fmtCap(row.market_cap)}</td>}
-                {columnMode === 'all' && (
-                  <td className="px-3 py-2">
-                    {row.qualityFlags?.length
-                      ? row.qualityFlags.map((flag) => (
-                          <span key={flag} className="mr-1 inline-flex border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[9px] font-black text-amber-800">
-                            {flag}
+                  <td className="px-3 py-3 font-semibold">
+                    <div className="line-clamp-2 text-[11px] font-black leading-4 text-[var(--color-text-primary)]" title={row.sector ?? undefined}>
+                      {row.sector ?? '-'}
+                    </div>
+                    {row.industry && (
+                      <div className="mt-1 line-clamp-2 text-[10px] leading-4 text-[var(--color-text-tertiary)]" title={row.industry}>
+                        {row.industry}
+                      </div>
+                    )}
+                  </td>
+                  <td className="px-3 py-3"><StageCode code={row.stage_code} /></td>
+                  <td className="px-3 py-3">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className={`inline-flex items-center border px-2 py-1 text-[10px] font-black ${shortTermClass(row.shortTermCheckLabel)}`}>
+                        {row.shortTermCheckLabel ?? '中立'}
+                        <span className="ml-1 font-mono opacity-80">
+                          {formatShortTermStrength(row.shortTermCheckLabel, row.shortTermCheckScore)}
+                        </span>
+                      </span>
+                      <span className={`inline-flex border px-1.5 py-1 text-[9px] font-black ${physicalStatusClass(row.physicalStatusLabel)}`}>
+                        {row.physicalStatusLabel ?? '算出待ち'}
+                      </span>
+                    </div>
+                    {row.shortTermCheckReasons?.[0] && (
+                      <div className="mt-1.5 line-clamp-2 text-[10px] font-bold leading-4 text-[var(--color-text-tertiary)]" title={row.shortTermCheckReasons.join(' / ')}>
+                        {row.shortTermCheckReasons.slice(0, 2).join(' / ')}
+                      </div>
+                    )}
+                  </td>
+                  <td className="px-3 py-3">
+                    {row.next_earnings_date ? (
+                      <>
+                        <div className="font-mono text-[11px] font-black text-[var(--color-brand-900)]">
+                          {row.next_earnings_date}
+                        </div>
+                        <div className="mt-1 flex flex-wrap items-center gap-1">
+                          <span className="border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-1.5 py-0.5 text-[9px] font-black text-[var(--color-text-secondary)]">
+                            {earningsHourLabel(row.next_earnings_hour)}
                           </span>
-                        ))
-                      : <span className="text-[10px] font-bold text-emerald-700">標準</span>}
+                          {row.earnings_days != null && (
+                            <span className="font-mono text-[9px] font-black text-[var(--color-market-red)]">
+                              あと{row.earnings_days}日
+                            </span>
+                          )}
+                        </div>
+                        <div className="mt-1 text-[9px] font-bold text-[var(--color-text-tertiary)]">
+                          {row.next_earnings_fiscal_year && row.next_earnings_fiscal_quarter
+                            ? `${row.next_earnings_fiscal_year} Q${row.next_earnings_fiscal_quarter}`
+                            : 'Finnhub予定'}
+                          {row.next_earnings_eps_estimate != null
+                            ? ` / EPS予想 ${row.next_earnings_eps_estimate.toFixed(2)}`
+                            : ''}
+                        </div>
+                      </>
+                    ) : (
+                      <span className="text-[10px] font-bold text-[var(--color-text-tertiary)]">
+                        予定未取得
+                      </span>
+                    )}
                   </td>
-                )}
-              </tr>
-            ))}
+                  <td className="px-3 py-3 text-right">
+                    <div className="font-mono text-[13px] font-black text-[var(--color-text-primary)]">{fmtMoney(row.price)}</div>
+                    <div className={`mt-1 font-mono text-[11px] font-black ${pctClass(row.change_pct)}`}>
+                      {fmtPct(row.change_pct)}
+                    </div>
+                  </td>
+                  <td className="px-3 py-3">
+                    <div className="grid grid-cols-2 gap-x-3 gap-y-1 font-mono text-[10px] font-bold">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[var(--color-text-tertiary)]">5日</span>
+                        <span className={pctClass(row.return_5d)}>{fmtPct(row.return_5d)}</span>
+                      </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[var(--color-text-tertiary)]">1月</span>
+                        <span className={pctClass(row.return_20d)}>{fmtPct(row.return_20d)}</span>
+                      </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[var(--color-text-tertiary)]">3月</span>
+                        <span className={pctClass(row.return_60d)}>{fmtPct(row.return_60d)}</span>
+                      </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[var(--color-text-tertiary)]">6月</span>
+                        <span className={pctClass(row.return_120d)}>{fmtPct(row.return_120d)}</span>
+                      </div>
+                    </div>
+                  </td>
+                  <td className="px-3 py-3 text-right">
+                    <div className={`font-mono text-[12px] font-black ${pctClass(row.ma_200_gap_pct)}`}>
+                      {fmtPct(row.ma_200_gap_pct)}
+                    </div>
+                    <div className="mt-1 text-[9px] font-bold text-[var(--color-text-tertiary)]">
+                      {isAboveMa200 == null ? '位置未算出' : isAboveMa200 ? '200日線より上' : '200日線より下'}
+                    </div>
+                    <div className={`mt-0.5 font-mono text-[9px] font-bold ${pctClass(row.ma_200_angle)}`}>
+                      傾き {fmtPct(row.ma_200_angle)}
+                    </div>
+                    {row.ma_200_observations != null && row.ma_200_observations < 200 && (
+                      <div className="mt-0.5 text-[9px] font-bold text-amber-700">履歴 {row.ma_200_observations}日</div>
+                    )}
+                  </td>
+                  <td className="px-3 py-3 text-right">
+                    <div className="font-mono text-[11px] font-black text-[var(--color-text-primary)]">{fmtVolume(row.volume)}</div>
+                    <div className="mt-1 font-mono text-[9px] font-bold text-[var(--color-text-tertiary)]">
+                      20日平均 {fmtVolume(row.avg_volume_20)}
+                    </div>
+                    <div className={`mt-0.5 font-mono text-[10px] font-black ${relativeVolume != null && relativeVolume >= 1 ? 'text-emerald-700' : 'text-[var(--color-text-secondary)]'}`}>
+                      相対 {relativeVolume == null ? '-' : `${relativeVolume.toFixed(2)}x`}
+                    </div>
+                  </td>
+                  <td className="px-3 py-3">
+                    <div className={`inline-flex border px-1.5 py-1 text-[9px] font-black ${physicalStatusClass(row.physicalStatusLabel)}`}>
+                      {row.physicalStatusLabel ?? '算出待ち'}
+                    </div>
+                    <div className="mt-1.5 grid grid-cols-3 gap-1 text-center">
+                      {[
+                        ['PMS', row.physical_momentum_score],
+                        ['PFS', row.physical_force_score],
+                        ['PES', row.physical_energy_score],
+                      ].map(([label, value]) => (
+                        <div key={String(label)} className="border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-1 py-1">
+                          <div className="text-[8px] font-black text-[var(--color-text-tertiary)]">{String(label)}</div>
+                          <div className="mt-0.5 font-mono text-[10px] font-black text-[var(--color-brand-900)]">{fmtScore(value as number | null)}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </td>
+                  {columnMode === 'all' && (
+                    <td className="px-3 py-3 text-right">
+                      <div className="font-mono text-[12px] font-black text-[var(--color-text-primary)]">{fmtCap(row.market_cap)}</div>
+                      <div className="mt-1 text-[9px] font-bold text-[var(--color-text-tertiary)]">
+                        {row.asset_type === 'Stock' || !row.asset_type ? '株式' : row.asset_type === 'Mutual Fund' ? '投資信託' : row.asset_type}
+                      </div>
+                    </td>
+                  )}
+                  {columnMode === 'all' && (
+                    <td className="px-3 py-3 text-right font-mono">
+                      <div className="flex items-center justify-between gap-2 text-[10px] font-bold">
+                        <span className="text-[var(--color-text-tertiary)]">加速度</span>
+                        <span className={pctClass(row.acceleration)}>{fmtScore(row.acceleration)}</span>
+                      </div>
+                      <div className="mt-1 flex items-center justify-between gap-2 text-[10px] font-bold">
+                        <span className="text-[var(--color-text-tertiary)]">力</span>
+                        <span className={pctClass(row.force)}>{fmtScore(row.force)}</span>
+                      </div>
+                    </td>
+                  )}
+                  {columnMode === 'all' && (
+                    <td className="px-3 py-3">
+                      {row.qualityFlags?.length
+                        ? row.qualityFlags.map((flag) => (
+                            <span key={flag} className="mb-1 mr-1 inline-flex border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[9px] font-black text-amber-800">
+                              {flag}
+                            </span>
+                          ))
+                        : <span className="text-[10px] font-bold text-emerald-700">異常値なし</span>}
+                    </td>
+                  )}
+                </tr>
+              )
+            })}
             {rows.length === 0 && (
               <tr>
-                <td colSpan={columnMode === 'all' ? 16 : 11} className="px-3 py-8 text-center text-[12px] font-bold text-[var(--color-text-tertiary)]">
+                <td colSpan={columnMode === 'all' ? 14 : 11} className="px-3 py-8 text-center text-[12px] font-bold text-[var(--color-text-tertiary)]">
                   {loading
                     ? 'USデータを確認しています...'
                     : displayMessage(message, hasScreeningConditions)}

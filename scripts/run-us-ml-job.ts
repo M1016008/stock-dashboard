@@ -340,7 +340,9 @@ async function runFullHistory(env: NodeJS.ProcessEnv, options: { skipPms?: boole
       SERVING_SUMMARY_DATE_CHUNK: env.US_SERVING_SUMMARY_DATE_CHUNK ?? '40',
     })
   }
-  await runNpm('batch:us-ml-health', env)
+  await runNpm('batch:us-ml-health', env, {
+    US_ML_HEALTH_WRITE: '1',
+  })
   await runNpm('batch:ml-accuracy-health', env, {
     ML_ACCURACY_STRICT: '1',
   })
@@ -463,7 +465,10 @@ async function runDailyServing(env: NodeJS.ProcessEnv): Promise<void> {
   } else {
     console.log('US ML daily: skipping physics status evaluation; weekly full ML refresh owns status evaluation')
   }
-  await runNpm('batch:us-ml-health', env)
+  await runNpm('batch:us-ml-health', env, {
+    US_ML_HEALTH_WRITE: '1',
+    US_ML_HEALTH_MIN_HISTORY_DAYS: physicsMinHistoryDays,
+  })
   if (env.US_ML_DAILY_ACCURACY_HEALTH === '1') {
     await runNpm('batch:ml-accuracy-health', env, {
       ML_ACCURACY_STRICT: '1',
