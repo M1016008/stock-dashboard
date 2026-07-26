@@ -3,6 +3,7 @@ import { execAll } from '@/lib/db/client'
 import { normalizeTickerForMarket } from '@/lib/markets'
 import type { OHLCV } from '@/types/stock'
 import { parseTimeframeSpec, resampleOhlcv, specToIntervalCode } from '@/lib/timeframes'
+import { toAdjustedUsOhlcvRows, type UsRawOhlcvRow } from '@/lib/us-adjusted-ohlcv'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -46,9 +47,15 @@ export async function GET(
         { status: 400 },
       )
     }
-    const rows = await execAll<OHLCV>(
+    const rawRows = await execAll<UsRawOhlcvRow>(
       `
-      SELECT date, open, high, low, close, volume, adj_close AS adjustedClose
+      SELECT
+        date, open, high, low, close, volume,
+        adj_open AS adjustedOpen,
+        adj_high AS adjustedHigh,
+        adj_low AS adjustedLow,
+        adj_close AS adjustedClose,
+        adj_volume AS adjustedVolume
       FROM market_ohlcv_daily
       WHERE market = 'US' AND ticker = ?
         ${period === 'all' ? '' : `AND date >= date((SELECT MAX(date) FROM market_ohlcv_daily WHERE market = 'US' AND ticker = ?), '-' || ? || ' days')`}
@@ -56,6 +63,7 @@ export async function GET(
       `,
       period === 'all' ? [ticker] : [ticker, ticker, days],
     )
+    const rows: OHLCV[] = toAdjustedUsOhlcvRows(rawRows)
     const output = timeframeSpec ? resampleOhlcv(rows, timeframeSpec) : rows
     if (searchParams.get('meta') === '1') {
       return NextResponse.json({

@@ -14,6 +14,8 @@ const globalForServingCache = global as unknown as {
   servingCachePath?: string
   servingCacheReady?: Promise<void>
   servingCacheLastCleanupAt?: number
+  servingCacheWriteQueue?: Promise<void>
+  servingCacheLastBusyWarningAt?: number
 }
 
 function numberEnv(name: string, fallback: number): number {
@@ -30,6 +32,14 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+function warnBusyOnce(operation: 'read' | 'write' | 'cleanup'): void {
+  const now = Date.now()
+  const lastWarningAt = globalForServingCache.servingCacheLastBusyWarningAt ?? 0
+  if (now - lastWarningAt < 60_000) return
+  globalForServingCache.servingCacheLastBusyWarningAt = now
+  console.warn(`Serving cache ${operation} skipped because the optional cache database is busy.`)
+}
+
 async function withBusyRetry<T>(operation: () => Promise<T>): Promise<T> {
   const maxRetries = Math.max(0, numberEnv('SERVING_CACHE_BUSY_RETRIES', 8))
   for (let attempt = 0; ; attempt += 1) {
@@ -40,6 +50,14 @@ async function withBusyRetry<T>(operation: () => Promise<T>): Promise<T> {
       await sleep(Math.min(1_500, 80 * 2 ** attempt))
     }
   }
+}
+
+async function serializeWrite(operation: () => Promise<void>): Promise<void> {
+  const queued = (globalForServingCache.servingCacheWriteQueue ?? Promise.resolve())
+    .catch(() => undefined)
+    .then(operation)
+  globalForServingCache.servingCacheWriteQueue = queued.catch(() => undefined)
+  await queued
 }
 
 export function resolveServingCacheDbPath(): string {
@@ -121,28 +139,34 @@ export async function readServingCache<T>(
   cacheKey: string,
   ttlMs: number,
 ): Promise<{ payload: T; generatedAt: number } | null> {
-  await ensureServingCacheReady()
-  const minGeneratedAt = Date.now() - ttlMs
-  const result = await withBusyRetry(() => getClient().execute({
-    sql: `
-      SELECT payload_json, generated_at_ms
-      FROM api_serving_cache
-      WHERE namespace = ?
-        AND cache_key = ?
-        AND generated_at_ms >= ?
-        AND expires_at > ?
-      LIMIT 1
-    `,
-    args: [namespace, cacheKey, minGeneratedAt, Math.floor(Date.now() / 1000)],
-  }))
-  const row = result.rows[0] as unknown as CacheRow | undefined
-  if (!row) return null
   try {
-    return {
-      payload: JSON.parse(row.payload_json) as T,
-      generatedAt: Number(row.generated_at_ms),
+    await ensureServingCacheReady()
+    const minGeneratedAt = Date.now() - ttlMs
+    const result = await withBusyRetry(() => getClient().execute({
+      sql: `
+        SELECT payload_json, generated_at_ms
+        FROM api_serving_cache
+        WHERE namespace = ?
+          AND cache_key = ?
+          AND generated_at_ms >= ?
+          AND expires_at > ?
+        LIMIT 1
+      `,
+      args: [namespace, cacheKey, minGeneratedAt, Math.floor(Date.now() / 1000)],
+    }))
+    const row = result.rows[0] as unknown as CacheRow | undefined
+    if (!row) return null
+    try {
+      return {
+        payload: JSON.parse(row.payload_json) as T,
+        generatedAt: Number(row.generated_at_ms),
+      }
+    } catch {
+      return null
     }
-  } catch {
+  } catch (error) {
+    if (!isBusyError(error)) throw error
+    warnBusyOnce('read')
     return null
   }
 }
@@ -154,45 +178,57 @@ export async function writeServingCache<T>(
   ttlMs: number,
   generatedAt = Date.now(),
 ): Promise<void> {
-  await ensureServingCacheReady()
-  const now = Math.floor(Date.now() / 1000)
-  const expiresAt = Math.floor((generatedAt + ttlMs) / 1000)
-  await withBusyRetry(() => getClient().execute({
-    sql: `
-      INSERT INTO api_serving_cache (
-        namespace,
-        cache_key,
-        payload_json,
-        generated_at_ms,
-        expires_at,
-        updated_at
-      )
-      VALUES (?, ?, ?, ?, ?, ?)
-      ON CONFLICT(namespace, cache_key) DO UPDATE SET
-        payload_json = excluded.payload_json,
-        generated_at_ms = excluded.generated_at_ms,
-        expires_at = excluded.expires_at,
-        updated_at = excluded.updated_at
-    `,
-    args: [
-      namespace,
-      cacheKey,
-      JSON.stringify(payload),
-      generatedAt,
-      expiresAt,
-      now,
-    ] as InValue[],
-  }))
+  await serializeWrite(async () => {
+    try {
+      await ensureServingCacheReady()
+      const now = Math.floor(Date.now() / 1000)
+      const expiresAt = Math.floor((generatedAt + ttlMs) / 1000)
+      await withBusyRetry(() => getClient().execute({
+        sql: `
+          INSERT INTO api_serving_cache (
+            namespace,
+            cache_key,
+            payload_json,
+            generated_at_ms,
+            expires_at,
+            updated_at
+          )
+          VALUES (?, ?, ?, ?, ?, ?)
+          ON CONFLICT(namespace, cache_key) DO UPDATE SET
+            payload_json = excluded.payload_json,
+            generated_at_ms = excluded.generated_at_ms,
+            expires_at = excluded.expires_at,
+            updated_at = excluded.updated_at
+        `,
+        args: [
+          namespace,
+          cacheKey,
+          JSON.stringify(payload),
+          generatedAt,
+          expiresAt,
+          now,
+        ] as InValue[],
+      }))
 
-  const cleanupIntervalMs = Math.max(
-    60_000,
-    numberEnv('SERVING_CACHE_CLEANUP_INTERVAL_MS', 60 * 60 * 1_000),
-  )
-  const lastCleanupAt = globalForServingCache.servingCacheLastCleanupAt ?? 0
-  if (Date.now() - lastCleanupAt < cleanupIntervalMs) return
-  globalForServingCache.servingCacheLastCleanupAt = Date.now()
-  await withBusyRetry(() => getClient().execute({
-    sql: 'DELETE FROM api_serving_cache WHERE expires_at <= ?',
-    args: [now],
-  }))
+      const cleanupIntervalMs = Math.max(
+        60_000,
+        numberEnv('SERVING_CACHE_CLEANUP_INTERVAL_MS', 60 * 60 * 1_000),
+      )
+      const lastCleanupAt = globalForServingCache.servingCacheLastCleanupAt ?? 0
+      if (Date.now() - lastCleanupAt < cleanupIntervalMs) return
+      globalForServingCache.servingCacheLastCleanupAt = Date.now()
+      try {
+        await withBusyRetry(() => getClient().execute({
+          sql: 'DELETE FROM api_serving_cache WHERE expires_at <= ?',
+          args: [now],
+        }))
+      } catch (error) {
+        if (!isBusyError(error)) throw error
+        warnBusyOnce('cleanup')
+      }
+    } catch (error) {
+      if (!isBusyError(error)) throw error
+      warnBusyOnce('write')
+    }
+  })
 }

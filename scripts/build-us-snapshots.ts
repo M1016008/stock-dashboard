@@ -1,8 +1,10 @@
 // market_ohlcv_daily(market='US') からUS用ステージスナップショットを生成する。
 
-import { db, ensureReady, execAll, execGet, execRun } from '@/lib/db/client'
+import { db, ensureReady, execAll, execGet } from '@/lib/db/client'
 import { marketDailySnapshots, marketDataRuns } from '@/lib/db/schema'
 import { calculateAllStages, type MaValues } from '@/lib/hex-stage'
+import { toAdjustedUsOhlcvRows, type UsRawOhlcvRow } from '@/lib/us-adjusted-ohlcv'
+import { usInvestableSymbolSql } from '@/lib/us-symbol-quality'
 import type { OHLCV } from '@/types/stock'
 import { eq, sql } from 'drizzle-orm'
 
@@ -61,6 +63,7 @@ async function loadTargets(): Promise<string[]> {
     FROM market_universe u
     WHERE u.market = ?
       AND (? = 1 OR u.active = 1)
+      AND ${usInvestableSymbolSql('u.ticker')}
       AND EXISTS (
         SELECT 1 FROM market_ohlcv_daily o
         WHERE o.market = u.market AND o.ticker = u.ticker
@@ -74,19 +77,26 @@ async function loadTargets(): Promise<string[]> {
 }
 
 async function computeTicker(ticker: string): Promise<number> {
-  if (REBUILD) {
-    await execRun(`DELETE FROM market_daily_snapshots WHERE market = ? AND ticker = ?`, [MARKET, ticker])
-  }
-  const [existing, rows] = await Promise.all([
+  const [existing, rawRows] = await Promise.all([
     execGet<{ maxDate: string | null }>(
       `SELECT MAX(date) AS maxDate FROM market_daily_snapshots WHERE market = ? AND ticker = ?`,
       [MARKET, ticker],
     ),
-    execAll<OHLCV>(
-      `SELECT date, open, high, low, close, volume FROM market_ohlcv_daily WHERE market = ? AND ticker = ? ORDER BY date`,
+    execAll<UsRawOhlcvRow>(
+      `SELECT
+         date, open, high, low, close, volume,
+         adj_open AS adjustedOpen,
+         adj_high AS adjustedHigh,
+         adj_low AS adjustedLow,
+         adj_close AS adjustedClose,
+         adj_volume AS adjustedVolume
+       FROM market_ohlcv_daily
+       WHERE market = ? AND ticker = ?
+       ORDER BY date`,
       [MARKET, ticker],
     ),
   ])
+  const rows: OHLCV[] = toAdjustedUsOhlcvRows(rawRows)
   if (rows.length < 5) return 0
   const values = prefix(rows)
   const inserts: Array<typeof marketDailySnapshots.$inferInsert> = []

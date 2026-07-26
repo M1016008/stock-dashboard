@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import {
   computeForwardExtremaRows,
+  exactForwardExtremaRecomputeBars,
   type ForwardExtremaBar,
   type ForwardExtremaRow,
 } from '@/lib/backtest/forward-extrema'
@@ -87,4 +88,21 @@ const expected = naive('TEST', bars, horizons, 17)
 const actual = computeForwardExtremaRows({ ticker: 'TEST', bars, horizons, startIndex: 17 })
 assert.deepEqual(actual, expected)
 
-console.log(`forward extrema optimization parity passed: rows=${actual.length}`)
+const exactRecomputeBars = exactForwardExtremaRecomputeBars(horizons)
+assert.equal(exactRecomputeBars, 201)
+const fullRecent = computeForwardExtremaRows({
+  ticker: 'TEST',
+  bars,
+  horizons,
+  startIndex: bars.length - exactRecomputeBars,
+})
+const slicedRecent = computeForwardExtremaRows({
+  ticker: 'TEST',
+  bars: bars.slice(-exactRecomputeBars),
+  horizons,
+})
+assert.deepEqual(slicedRecent, fullRecent)
+
+console.log(
+  `forward extrema optimization parity passed: rows=${actual.length}, exact_recompute_bars=${exactRecomputeBars}`,
+)

@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { execGet } from '@/lib/db/client'
 import { execUsAnalyticsAll, execUsAnalyticsGet, hasUsAnalyticsDb } from '@/lib/db/us-analytics'
 import { ML_PHYSICS_FEATURE_SET, ML_PHYSICS_MODEL_TYPE } from '@/lib/backtest/ml-physics'
+import { US_ADJUSTED_PRICE_BASIS } from '@/lib/us-adjusted-ohlcv'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -57,6 +59,11 @@ function dateBadge(actual: string | null, expected: string | null, ok = '反映�
 function fmtCount(value: number | null): string {
   if (value == null) return '-'
   return value.toLocaleString('en-US')
+}
+
+function fmtPct(value: number | null): string {
+  if (value == null) return '-'
+  return `${value.toFixed(1)}%`
 }
 
 function trainedAtText(epoch: number | null): string | null {
@@ -127,6 +134,10 @@ export async function GET(request: NextRequest, context: RouteContext) {
     modelSummary,
     rlSummary,
     latestHealthCheckDate,
+    sourceFoundation,
+    analyticsPriceBasis,
+    derivedPriceBasis,
+    analogPriceBasis,
   ] = await Promise.all([
     safeGet<{ date: string | null }>(
       `SELECT date FROM ohlcv_daily INDEXED BY ohlcv_date_idx WHERE 1 = 1 ${dateFilter} ORDER BY date DESC LIMIT 1`,
@@ -293,6 +304,58 @@ export async function GET(request: NextRequest, context: RouteContext) {
       `,
       asOfArgs,
     ),
+    execGet<{
+      date: string | null
+      universe: number | null
+      covered: number | null
+    }>(
+      `
+        WITH latest AS (
+          SELECT date
+          FROM market_ohlcv_daily INDEXED BY market_ohlcv_market_date_idx
+          WHERE market = 'US'
+          ORDER BY date DESC
+          LIMIT 1
+        )
+        SELECT
+          latest.date,
+          (
+            SELECT COUNT(*)
+            FROM market_universe
+            WHERE market = 'US' AND active = 1
+          ) AS universe,
+          (
+            SELECT COUNT(DISTINCT ticker)
+            FROM market_ohlcv_daily INDEXED BY market_ohlcv_market_date_ticker_idx
+            WHERE market = 'US' AND date = latest.date
+          ) AS covered
+        FROM latest
+      `,
+    ),
+    safeGet<{ value: string | null }>(
+      `
+        SELECT value
+        FROM us_analytics_metadata
+        WHERE key = 'ohlcv_price_basis'
+        LIMIT 1
+      `,
+    ),
+    safeGet<{ value: string | null }>(
+      `
+        SELECT value
+        FROM us_analytics_metadata
+        WHERE key = 'derived_price_basis'
+        LIMIT 1
+      `,
+    ),
+    safeGet<{ value: string | null }>(
+      `
+        SELECT value
+        FROM us_analytics_metadata
+        WHERE key = 'analog_index_price_basis'
+        LIMIT 1
+      `,
+    ),
   ])
 
   const expectedDate = tickerPrice?.date ?? globalPriceDate?.date ?? null
@@ -351,6 +414,45 @@ export async function GET(request: NextRequest, context: RouteContext) {
     : []
 
   const items: StatusItem[] = []
+  const sourceUniverse = numeric(sourceFoundation?.universe)
+  const sourceCovered = numeric(sourceFoundation?.covered)
+  const sourceCoveragePct =
+    sourceUniverse && sourceUniverse > 0 && sourceCovered != null
+      ? 100 * sourceCovered / sourceUniverse
+      : null
+  const coverageReady = sourceCoveragePct != null && sourceCoveragePct >= 95
+  const adjustedOhlcvReady = analyticsPriceBasis?.value === US_ADJUSTED_PRICE_BASIS
+  const adjustedDerivedReady = derivedPriceBasis?.value === US_ADJUSTED_PRICE_BASIS
+  const adjustedAnalogReady = analogPriceBasis?.value === US_ADJUSTED_PRICE_BASIS
+  const adjustedFoundationReady = adjustedOhlcvReady && adjustedDerivedReady && adjustedAnalogReady
+  const foundationReady = coverageReady && adjustedFoundationReady
+
+  const foundationDetails: string[] = []
+  if (!coverageReady) {
+    foundationDetails.push(`最新価格カバレッジは${fmtPct(sourceCoveragePct)}で、95%到達まで差分再取得中です`)
+  }
+  if (!adjustedFoundationReady) {
+    foundationDetails.push('調整後OHLCV・派生特徴量・類似局面インデックスの世代移行は、実行中の週次ML完了後に再開します')
+  }
+  if (foundationDetails.length === 0) {
+    foundationDetails.push('最新価格の網羅性と調整後価格基準が整合しています')
+  }
+
+  items.push({
+    key: 'foundation',
+    label: 'USデータ基盤',
+    status: foundationReady ? 'ok' : 'warn',
+    badge: foundationReady ? '整合済み' : '更新中',
+    date: sourceFoundation?.date ?? null,
+    count: sourceCovered,
+    detail: `${foundationDetails.join('。')}。`,
+    evidence: [
+      `価格カバレッジ ${fmtPct(sourceCoveragePct)} (${fmtCount(sourceCovered)}/${fmtCount(sourceUniverse)})`,
+      `OHLCV価格基準 ${adjustedOhlcvReady ? '調整後' : '移行待ち'}`,
+      `派生特徴量価格基準 ${adjustedDerivedReady ? '調整後' : '移行待ち'}`,
+      `類似局面価格基準 ${adjustedAnalogReady ? '調整後' : '移行待ち'}`,
+    ],
+  })
 
   items.push({
     key: 'price',
@@ -515,9 +617,12 @@ export async function GET(request: NextRequest, context: RouteContext) {
   })
 
   const issueCount = items.filter((item) => item.status === 'missing' || item.status === 'warn').length
-  const summaryStatus: StatusTone = issueCount === 0 ? 'ok' : issueCount <= 2 ? 'warn' : 'missing'
+  const summaryStatus: StatusTone = foundationReady
+    ? issueCount === 0 ? 'ok' : issueCount <= 2 ? 'warn' : 'missing'
+    : 'warn'
   const summaryLabel =
-    summaryStatus === 'ok' ? 'US MLは主要機能へ反映済み'
+    !foundationReady ? 'US MLデータ基盤を更新中'
+      : summaryStatus === 'ok' ? 'US MLは主要機能へ反映済み'
       : summaryStatus === 'warn' ? 'US MLは一部に注意あり'
         : 'US MLの反映不足あり'
 
@@ -532,8 +637,14 @@ export async function GET(request: NextRequest, context: RouteContext) {
     summary: {
       status: summaryStatus,
       label: summaryLabel,
-      detail: `${items.length - issueCount}/${items.length}項目が正常または情報表示です。`,
+      detail: foundationReady
+        ? `${items.length - issueCount}/${items.length}項目が正常または情報表示です。`
+        : `${items.length - issueCount}/${items.length}項目が正常または情報表示です。完了済み分析は閲覧できますが、新規MLの確定公開はデータ基盤の整合後に行います。`,
       latestMarketDate: globalPriceDate?.date ?? null,
+      latestSourceDate: sourceFoundation?.date ?? null,
+      sourceCoveragePct,
+      analyticsPriceBasis: analyticsPriceBasis?.value ?? null,
+      expectedPriceBasis: US_ADJUSTED_PRICE_BASIS,
       healthCheckDate: latestHealthCheckDate?.checkDate ?? null,
     },
     healthChecks: healthRows,

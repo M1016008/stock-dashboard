@@ -3,6 +3,7 @@
 import { db, ensureReady } from '@/lib/db/client'
 import { marketDataRuns, marketUniverse } from '@/lib/db/schema'
 import { fetchTiingoSupportedTickers } from '@/lib/tiingo'
+import { isUsInvestableSymbol } from '@/lib/us-symbol-quality'
 import { eq, sql } from 'drizzle-orm'
 
 const MARKET = 'US'
@@ -67,7 +68,7 @@ async function main() {
           market: MARKET,
           ticker: row.ticker,
           name: row.name ?? row.ticker,
-          active: isActive(row.endDate),
+          active: isUsInvestableSymbol(row.ticker) && isActive(row.endDate),
           exchange: row.exchange ?? null,
           currency: row.priceCurrency ?? 'USD',
           assetType: row.assetType ?? null,

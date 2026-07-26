@@ -236,7 +236,7 @@ export async function GET(
     const priceRows = market === 'US'
       ? await execAll<{ date: string; close: number }>(
         `
-          SELECT date, close
+          SELECT date, COALESCE(adj_close, close) AS close
           FROM market_ohlcv_daily
           WHERE market = 'US'
             AND ticker = ?

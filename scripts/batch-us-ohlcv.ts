@@ -2,7 +2,8 @@
 
 import { db, ensureReady, execAll, execGet } from '@/lib/db/client'
 import { marketDataRuns, marketOhlcvDaily } from '@/lib/db/schema'
-import { fetchTiingoDailyPrices } from '@/lib/tiingo'
+import { fetchTiingoDailyPrices, isTiingoRateLimitError } from '@/lib/tiingo'
+import { usInvestableSymbolSql } from '@/lib/us-symbol-quality'
 import { eq, sql } from 'drizzle-orm'
 
 const MARKET = 'US'
@@ -14,6 +15,7 @@ const LIMIT = Number(process.env.US_OHLCV_LIMIT ?? 0)
 const INCLUDE_INACTIVE = process.env.US_INCLUDE_INACTIVE === '1'
 const REQUIRE_DATE_RANGE = process.env.US_REQUIRE_DATE_RANGE !== '0'
 const BACKFILL_EARLY = process.env.US_BACKFILL_EARLY !== '0'
+const TARGET_END_DATE = process.env.US_TARGET_END_DATE?.trim() || null
 const TICKERS = process.env.TICKERS?.split(',').map((value) => value.trim().toUpperCase()).filter(Boolean)
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -83,9 +85,13 @@ async function loadTargets(): Promise<Target[]> {
       ON o.market = u.market AND o.ticker = u.ticker
     WHERE u.market = ?
       AND (? = 1 OR u.active = 1)
+      AND ${usInvestableSymbolSql('u.ticker')}
       AND (? = 0 OR u.start_date IS NOT NULL OR u.end_date IS NOT NULL)
     GROUP BY u.ticker, u.start_date, u.end_date
-    ORDER BY u.ticker
+    ORDER BY
+      CASE WHEN MAX(o.date) IS NULL THEN 0 ELSE 1 END,
+      MAX(o.date),
+      u.ticker
     ${LIMIT > 0 ? 'LIMIT ?' : ''}
     `,
     LIMIT > 0 ? [MARKET, INCLUDE_INACTIVE ? 1 : 0, REQUIRE_DATE_RANGE ? 1 : 0, LIMIT] : [MARKET, INCLUDE_INACTIVE ? 1 : 0, REQUIRE_DATE_RANGE ? 1 : 0],
@@ -109,8 +115,12 @@ async function fetchAndStore(ticker: string, startDate: string, endDate: string 
       high: row.high,
       low: row.low,
       close: row.close,
+      adjOpen: row.adjustedOpen,
+      adjHigh: row.adjustedHigh,
+      adjLow: row.adjustedLow,
       adjClose: row.adjustedClose,
       volume: row.volume,
+      adjVolume: row.adjustedVolume,
       divCash: row.divCash,
       splitFactor: row.splitFactor,
       source: 'tiingo',
@@ -121,8 +131,12 @@ async function fetchAndStore(ticker: string, startDate: string, endDate: string 
         high: sql`excluded.high`,
         low: sql`excluded.low`,
         close: sql`excluded.close`,
+        adjOpen: sql`excluded.adj_open`,
+        adjHigh: sql`excluded.adj_high`,
+        adjLow: sql`excluded.adj_low`,
         adjClose: sql`excluded.adj_close`,
         volume: sql`excluded.volume`,
+        adjVolume: sql`excluded.adj_volume`,
         divCash: sql`excluded.div_cash`,
         splitFactor: sql`excluded.split_factor`,
         importedAt: sql`unixepoch()`,
@@ -135,7 +149,10 @@ async function fetchAndStore(ticker: string, startDate: string, endDate: string 
 async function storeTicker(target: Target): Promise<number> {
   const desiredStartDate = laterDate(HISTORY_FROM, target.startDate)
   const today = new Date().toISOString().slice(0, 10)
-  const finalEndDate = target.endDate && target.endDate < today ? target.endDate : undefined
+  const requestedEndDate = TARGET_END_DATE && TARGET_END_DATE < today ? TARGET_END_DATE : today
+  const finalEndDate = target.endDate && target.endDate < requestedEndDate
+    ? target.endDate
+    : requestedEndDate
   if (desiredStartDate > today) return 0
 
   if (BACKFILL_EARLY && target.firstDate && desiredStartDate < target.firstDate) {
@@ -146,8 +163,7 @@ async function storeTicker(target: Target): Promise<number> {
   }
 
   const startDate = nextStartDate(target.lastDate, target.startDate)
-  if (startDate > today) return 0
-  if (finalEndDate && startDate > finalEndDate) return 0
+  if (startDate > finalEndDate) return 0
   return fetchAndStore(target.ticker, startDate, finalEndDate)
 }
 
@@ -157,7 +173,12 @@ async function main() {
     market: MARKET,
     jobType: 'tiingo_ohlcv',
     status: 'running',
-    payloadJson: JSON.stringify({ historyFrom: HISTORY_FROM, limit: LIMIT || null, tickers: TICKERS ?? null }),
+    payloadJson: JSON.stringify({
+      historyFrom: HISTORY_FROM,
+      targetEndDate: TARGET_END_DATE,
+      limit: LIMIT || null,
+      tickers: TICKERS ?? null,
+    }),
   }).returning({ id: marketDataRuns.id })
 
   const targets = await loadTargets()
@@ -166,6 +187,8 @@ async function main() {
   let failed = 0
   let unavailable = 0
   let rowsInserted = 0
+  let quotaExhausted = false
+  let quotaRetryAfterSeconds: number | null = null
   const errors: string[] = []
   const unavailableTickers: string[] = []
   let progressSave = Promise.resolve()
@@ -180,9 +203,13 @@ async function main() {
       errorSummary: JSON.stringify(errors.slice(0, 20)),
       payloadJson: JSON.stringify({
         historyFrom: HISTORY_FROM,
+        targetEndDate: TARGET_END_DATE,
         limit: LIMIT || null,
         tickers: TICKERS ?? null,
         unavailable,
+        deferred: quotaExhausted ? Math.max(0, targets.length - succeeded - failed - unavailable) : 0,
+        quotaExhausted,
+        quotaRetryAfterSeconds,
         unavailableTickers: unavailableTickers.slice(0, 50),
       }),
     }).where(eq(marketDataRuns.id, run.id))
@@ -218,6 +245,7 @@ async function main() {
   queueProgressSave()
   async function worker(workerId: number) {
     while (true) {
+      if (quotaExhausted) return
       const target = targets[nextIndex++]
       if (!target) return
       try {
@@ -230,7 +258,15 @@ async function main() {
           queueProgressSave()
         }
       } catch (error) {
-        if (isProviderUnavailableTicker(error)) {
+        if (isTiingoRateLimitError(error)) {
+          quotaExhausted = true
+          quotaRetryAfterSeconds = error.retryAfterSeconds
+          console.warn(
+            `worker=${workerId} Tiingo quota reached at ${target.ticker}; remaining tickers are deferred to the next scheduled run`,
+          )
+          queueProgressSave()
+          return
+        } else if (isProviderUnavailableTicker(error)) {
           unavailable += 1
           unavailableTickers.push(target.ticker)
           console.warn(`worker=${workerId} ${target.ticker}: provider reports ticker unavailable; skipped`)
@@ -246,8 +282,11 @@ async function main() {
 
   await Promise.all(Array.from({ length: Math.min(CONCURRENCY, targets.length) }, (_, i) => worker(i + 1)))
   await progressSave
+  const deferred = quotaExhausted
+    ? Math.max(0, targets.length - succeeded - failed - unavailable)
+    : 0
   await db.update(marketDataRuns).set({
-    status: failed === 0 ? 'success' : succeeded === 0 ? 'failed' : 'partial',
+    status: failed === 0 && deferred === 0 ? 'success' : succeeded === 0 && deferred === 0 ? 'failed' : 'partial',
     finishedAt: new Date(),
     totalTickers: targets.length,
     succeeded,
@@ -256,9 +295,13 @@ async function main() {
     errorSummary: JSON.stringify(errors.slice(0, 20)),
     payloadJson: JSON.stringify({
       historyFrom: HISTORY_FROM,
+      targetEndDate: TARGET_END_DATE,
       limit: LIMIT || null,
       tickers: TICKERS ?? null,
       unavailable,
+      deferred,
+      quotaExhausted,
+      quotaRetryAfterSeconds,
       unavailableTickers: unavailableTickers.slice(0, 50),
     }),
   }).where(eq(marketDataRuns.id, run.id))
@@ -267,7 +310,7 @@ async function main() {
     [MARKET],
   )
   console.log(
-    `US OHLCV complete: succeeded=${succeeded}, failed=${failed}, unavailable=${unavailable}, `
+    `US OHLCV complete: succeeded=${succeeded}, failed=${failed}, unavailable=${unavailable}, deferred=${deferred}, `
     + `rows=${rowsInserted}, latest=${latest?.date ?? '-'}`,
   )
 }

@@ -22,6 +22,8 @@ import { StockScenarioAiPanel } from '@/components/stock/StockScenarioAiPanel'
 import { StockMovePeriods } from '@/components/stock/StockMovePeriods'
 import { TradeScenarioNotebook } from '@/components/stock/TradeScenarioNotebook'
 import { HistoricalAnalogExplorer } from '@/components/stock/HistoricalAnalogExplorer'
+import { UsPhysicalMlRanking } from '@/components/stock/UsPhysicalMlRanking'
+import { PerformanceCard } from '@/components/stock/PerformanceCard'
 import {
   HistoricalAnalysisModeBar,
   type StockAnalysisReview,
@@ -551,6 +553,14 @@ export function UsStockDetailClient({
             <Stat label="52週高値" value={displayedQuote?.fiftyTwoWeekHigh == null ? '-' : `$${displayedQuote.fiftyTwoWeekHigh.toFixed(2)}`} />
             <Stat label="52週安値" value={displayedQuote?.fiftyTwoWeekLow == null ? '-' : `$${displayedQuote.fiftyTwoWeekLow.toFixed(2)}`} />
           </section>
+          <Card>
+            <PerformanceCard
+              ticker={quote.ticker}
+              market="US"
+              embedded
+              analysisDate={analysisDate}
+            />
+          </Card>
           <UsPhysicalMomentumSection
             ticker={quote.ticker}
             analysisDate={analysisDate}
@@ -612,6 +622,7 @@ export function UsStockDetailClient({
       {activeTab === 'ml' && (
         <>
           <HistoricalAnalogExplorer ticker={quote.ticker} market="US" analysisDate={analysisDate} />
+          <UsPhysicalMlRanking ticker={quote.ticker} analysisDate={analysisDate} />
           <UsMlStatusSection ticker={quote.ticker} analysisDate={analysisDate} />
         </>
       )}

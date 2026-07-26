@@ -11,6 +11,7 @@ import { execUsAnalyticsGet, hasUsAnalyticsDb } from '@/lib/db/us-analytics'
 import { expectedLatestTradingDate } from '@/lib/server/data-freshness'
 import { expectedLatestUsTradingDate } from '@/lib/server/us-data-freshness'
 import { getActiveUpdateLocks } from '@/lib/server/update-lock'
+import { US_ADJUSTED_PRICE_BASIS } from '@/lib/us-adjusted-ohlcv'
 
 type DateRow = { date: string | null }
 type EpochRow = { value: number | null }
@@ -55,6 +56,22 @@ type WeeklyFreshness = {
   lastActivityAt: number | null
   fresh: boolean
 }
+type CountRow = { count: number | null }
+type RunRow = {
+  status: string
+  payloadJson: string
+}
+type UsAutomationState = {
+  universe: number
+  covered: number
+  coveragePct: number | null
+  ingestionStatus: string | null
+  ingestionNeedsRetry: boolean
+  priceBasis: string | null
+  derivedPriceBasis: string | null
+  analogPriceBasis: string | null
+  priceBasisCurrent: boolean
+}
 
 const supportDir = path.join(os.homedir(), 'Library', 'Application Support', 'StockBoard')
 const guardStatePath = path.join(supportDir, 'data-freshness-guard-state.json')
@@ -82,7 +99,7 @@ const services = {
     key: 'us',
     label: 'com.stockboard.us-update-latest',
     cooldownSeconds: 2 * 60 * 60,
-    requiresIdleWriter: true,
+    requiresIdleWriter: false,
   },
   themes: {
     key: 'themes',
@@ -142,6 +159,31 @@ function launchdState(label: string): LaunchdState {
     running: state === 'running',
     state,
   }
+}
+
+function heavyMlProcessIsActive(): boolean {
+  const result = spawnSync(
+    'pgrep',
+    [
+      '-fl',
+      [
+        'run-weekly-optimization',
+        'run-us-ml-job',
+        'run-ml-learning',
+        'batch-forward-extrema',
+        'batch-ml-features',
+        'batch-ml-physics-features',
+        'batch-ml-short-labels',
+        'batch-ml-physics-train',
+      ].join('|'),
+    ],
+    { encoding: 'utf8', timeout: 5_000 },
+  )
+  if (result.status !== 0) return false
+  return result.stdout
+    .split('\n')
+    .filter(Boolean)
+    .some((line) => !line.includes('guard-data-freshness'))
 }
 
 function kickstart(label: string): { ok: boolean; error: string | null } {
@@ -256,6 +298,82 @@ async function loadSourceStates(): Promise<{
     themes: sourceState(themes?.value ?? null, 36),
     materials: sourceState(materials?.value ?? null, 3),
     earnings: sourceState(earnings?.value ?? null, 36),
+  }
+}
+
+async function loadUsAutomationState(expectedDate: string): Promise<UsAutomationState> {
+  const [universeRow, coveredRow, runRow, basisRow, derivedBasisRow, analogBasisRow] = await Promise.all([
+    execGet<CountRow>(
+      `SELECT COUNT(*) AS count
+       FROM market_universe
+       WHERE market = 'US' AND active = 1`,
+    ),
+    execGet<CountRow>(
+      `SELECT COUNT(DISTINCT ticker) AS count
+       FROM market_ohlcv_daily INDEXED BY market_ohlcv_market_date_ticker_idx
+       WHERE market = 'US' AND date = ?`,
+      [expectedDate],
+    ),
+    execGet<RunRow>(
+      `SELECT status, payload_json AS payloadJson
+       FROM market_data_runs
+       WHERE market = 'US' AND job_type = 'tiingo_ohlcv'
+       ORDER BY started_at DESC
+       LIMIT 1`,
+    ),
+    hasUsAnalyticsDb()
+      ? execUsAnalyticsGet<{ value: string }>(
+          `SELECT value
+           FROM us_analytics_metadata
+           WHERE key = 'ohlcv_price_basis'`,
+        ).catch(() => undefined)
+      : Promise.resolve(undefined),
+    hasUsAnalyticsDb()
+      ? execUsAnalyticsGet<{ value: string }>(
+          `SELECT value
+           FROM us_analytics_metadata
+           WHERE key = 'derived_price_basis'`,
+        ).catch(() => undefined)
+      : Promise.resolve(undefined),
+    hasUsAnalyticsDb()
+      ? execUsAnalyticsGet<{ value: string }>(
+          `SELECT value
+           FROM us_analytics_metadata
+           WHERE key = 'analog_index_price_basis'`,
+        ).catch(() => undefined)
+      : Promise.resolve(undefined),
+  ])
+  const universe = Number(universeRow?.count ?? 0)
+  const covered = Number(coveredRow?.count ?? 0)
+  let ingestionNeedsRetry = runRow?.status === 'failed'
+    || runRow?.status === 'interrupted'
+    || runRow?.status === 'partial'
+  if (runRow?.payloadJson) {
+    try {
+      const payload = JSON.parse(runRow.payloadJson) as { deferred?: unknown; quotaExhausted?: unknown }
+      ingestionNeedsRetry = ingestionNeedsRetry
+        || Number(payload.deferred ?? 0) > 0
+        || payload.quotaExhausted === true
+    } catch {
+      ingestionNeedsRetry = true
+    }
+  }
+  const priceBasis = basisRow?.value ?? null
+  const derivedPriceBasis = derivedBasisRow?.value ?? null
+  const analogPriceBasis = analogBasisRow?.value ?? null
+  return {
+    universe,
+    covered,
+    coveragePct: universe > 0 ? Math.round((100 * covered / universe) * 100) / 100 : null,
+    ingestionStatus: runRow?.status ?? null,
+    ingestionNeedsRetry,
+    priceBasis,
+    derivedPriceBasis,
+    analogPriceBasis,
+    priceBasisCurrent:
+      priceBasis === US_ADJUSTED_PRICE_BASIS
+      && derivedPriceBasis === US_ADJUSTED_PRICE_BASIS
+      && analogPriceBasis === US_ADJUSTED_PRICE_BASIS,
   }
 }
 
@@ -383,15 +501,17 @@ async function main(): Promise<void> {
   const state = readJson<GuardState>(guardStatePath, { lastTriggeredAt: {} })
   const expectedJp = expectedLatestTradingDate()
   const expectedUs = expectedLatestUsTradingDate()
-  const [jpDates, usDates, sources, activeLocks] = await Promise.all([
+  const [jpDates, usDates, sources, activeLocks, usAutomation] = await Promise.all([
     loadJpDates(),
     loadUsDates(),
     loadSourceStates(),
     getActiveUpdateLocks().then(
       (locks) => locks.map((lock) => ({ jobType: lock.jobType })),
     ),
+    loadUsAutomationState(expectedUs),
   ])
   const weekly = await weeklyFreshness()
+  const heavyMlActive = heavyMlProcessIsActive()
 
   const jpPrice = jpDates.price
   const jpCoreStale = staleDateEntries(
@@ -433,7 +553,10 @@ async function main(): Promise<void> {
   )
 
   const actions: Action[] = []
-  const writerReservations = [...activeLocks]
+  const writerReservations = [
+    ...activeLocks,
+    ...(heavyMlActive ? [{ jobType: 'heavy_ml_process' }] : []),
+  ]
   const reconcile = async (
     service: Service,
     needed: boolean,
@@ -469,8 +592,13 @@ async function main(): Promise<void> {
   )
   await reconcile(
     services.us,
-    !usPrice || usPrice < expectedUs || usStale.length > 0,
-    `expected=${expectedUs}, price=${usPrice ?? '-'}, stale=${usStale.join(',') || '-'}`,
+    !usPrice
+      || usPrice < expectedUs
+      || usStale.length > 0
+      || usAutomation.ingestionNeedsRetry
+      || (usAutomation.coveragePct != null && usAutomation.coveragePct < 95),
+    `expected=${expectedUs}, price=${usPrice ?? '-'}, stale=${usStale.join(',') || '-'}, `
+      + `coverage=${usAutomation.coveragePct ?? '-'}%, ingestion=${usAutomation.ingestionStatus ?? '-'}`,
   )
   await reconcile(
     services.themes,
@@ -492,8 +620,13 @@ async function main(): Promise<void> {
   )
   await reconcile(
     services.weekly,
-    !weekly.fresh,
-    `status=${weekly.state.status ?? 'missing'}, jpAge=${weekly.ageHours ?? '-'}h, usModelAge=${weekly.usModelAgeHours ?? '-'}h`,
+    !weekly.fresh || !usAutomation.priceBasisCurrent,
+    `status=${weekly.state.status ?? 'missing'}, jpAge=${weekly.ageHours ?? '-'}h, `
+      + `usModelAge=${weekly.usModelAgeHours ?? '-'}h, `
+      + `priceBasis=${usAutomation.priceBasis ?? 'missing'}, `
+      + `derivedBasis=${usAutomation.derivedPriceBasis ?? 'missing'}, `
+      + `analogBasis=${usAutomation.analogPriceBasis ?? 'missing'}`
+      + `/${US_ADJUSTED_PRICE_BASIS}`,
     weekly.lastActivityAt,
   )
 
@@ -505,9 +638,10 @@ async function main(): Promise<void> {
     dryRun,
     expected: { jp: expectedJp, us: expectedUs },
     dates: { jp: jpDates, us: usDates },
+    usAutomation,
     sources,
     weekly,
-    activeLocks: activeLocks.map((lock) => lock.jobType),
+    activeLocks: writerReservations.map((lock) => lock.jobType),
     actions,
   }
   if (!dryRun) writeJson(reportPath, report)

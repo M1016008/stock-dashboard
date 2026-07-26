@@ -36,9 +36,9 @@ interface AssistantChatEntry {
   response?: AssistantChatResponse
 }
 
-const RESEARCH_STORAGE_KEY = 'stockboard.aiResearch.session.v2'
+const LEGACY_RESEARCH_STORAGE_KEY = 'stockboard.aiResearch.session.v2'
 const LEGACY_RESEARCH_SESSION_STORAGE_KEY = 'stockboard.aiResearch.session.v1'
-const SAVED_RESEARCH_CONVERSATIONS_KEY = 'stockboard.aiResearch.savedConversations.v1'
+const LEGACY_SAVED_RESEARCH_CONVERSATIONS_KEY = 'stockboard.aiResearch.savedConversations.v1'
 const MAX_STORED_MESSAGES = 24
 const MAX_SAVED_CONVERSATIONS = 30
 const DEFAULT_ANCHOR_TICKER = '7003'
@@ -47,6 +47,7 @@ const DEFAULT_ANCHOR_LOOKBACK_DAYS = 60
 const DEFAULT_ANCHOR_LIMIT = 20
 
 type ResearchMode = 'chat' | 'historicalAnchor'
+type ResearchMarket = Exclude<AssistantPageContext['market'], null | undefined>
 type AnchorPatternDirection = 'down' | 'up'
 type AnchorUniverse = 'all' | 'nikkei225' | 'margin'
 
@@ -115,17 +116,85 @@ const PROMPT_GROUPS = [
   },
 ] as const
 
-function marketFromPath(pathname: string): AssistantPageContext['market'] {
+const US_PROMPT_GROUPS = [
+  {
+    title: 'ML候補',
+    prompts: [
+      '米国株の物理ML上昇候補を10件見せて',
+      '米国株でPMSと6ステージが強い初動候補を探して',
+      '米国株で出来高が多く短期チェックが強い候補を見せて',
+    ],
+  },
+  {
+    title: 'リスク確認',
+    prompts: [
+      '米国株の物理ML下落警戒候補を10件見せて',
+      '米国株でPMSが弱くなっている銘柄を探して',
+      '米国株でMA200を下回り短期モメンタムも弱い候補を見せて',
+    ],
+  },
+  {
+    title: '個別深掘り',
+    prompts: [
+      'AAPLの現在の特徴量に似た米国株を5件探して',
+      'MSFTの6ステージ、PMS、物理MLの状態を整理して',
+      'NVDAと特徴量が近い米国株を出来高が多い順で見せて',
+    ],
+  },
+] as const
+
+const JP_REFERENCE_ITEMS = [
+  '6ステージ',
+  'PMS/PFS/PES',
+  '短期ラベル',
+  'ML類似候補',
+  '決算予定',
+  '貸借/信用',
+  '業種/市場区分',
+  '出来高',
+] as const
+
+const US_REFERENCE_ITEMS = [
+  '6ステージ',
+  'PMS/PFS/PES',
+  '短期ラベル',
+  '物理ML',
+  'ML類似候補',
+  'SEC業種',
+  '取引所',
+  '出来高',
+] as const
+
+function marketFromContext(pathname: string, marketParam: string | null): ResearchMarket {
+  if (marketParam === 'US' || marketParam === 'JP' || marketParam === 'COMMODITY') {
+    return marketParam
+  }
   if (pathname.startsWith('/us')) return 'US'
   if (pathname.startsWith('/commodities')) return 'COMMODITY'
   return 'JP'
 }
 
-function readStoredSession(): StoredAssistantResearchSession | null {
+function researchStorageKey(market: ResearchMarket): string {
+  return `stockboard.aiResearch.session.v3.${market}`
+}
+
+function savedResearchConversationsKey(market: ResearchMarket): string {
+  return `stockboard.aiResearch.savedConversations.v2.${market}`
+}
+
+function legacySessionStorageKey(market: ResearchMarket): string {
+  return `${LEGACY_RESEARCH_SESSION_STORAGE_KEY}.${market}`
+}
+
+function readStoredSession(market: ResearchMarket): StoredAssistantResearchSession | null {
   if (typeof window === 'undefined') return null
   try {
-    const raw = window.localStorage.getItem(RESEARCH_STORAGE_KEY)
-      ?? window.sessionStorage.getItem(LEGACY_RESEARCH_SESSION_STORAGE_KEY)
+    const raw = window.localStorage.getItem(researchStorageKey(market))
+      ?? window.sessionStorage.getItem(legacySessionStorageKey(market))
+      ?? (market === 'JP'
+        ? window.localStorage.getItem(LEGACY_RESEARCH_STORAGE_KEY)
+          ?? window.sessionStorage.getItem(LEGACY_RESEARCH_SESSION_STORAGE_KEY)
+        : null)
     if (!raw) return null
     const parsed = JSON.parse(raw) as StoredAssistantResearchSession
     if (!parsed || typeof parsed !== 'object') return null
@@ -169,7 +238,7 @@ function sanitizeAnchorForm(value: unknown): HistoricalAnchorFormState {
   }
 }
 
-function writeStoredSession(session: StoredAssistantResearchSession): void {
+function writeStoredSession(market: ResearchMarket, session: StoredAssistantResearchSession): void {
   if (typeof window === 'undefined') return
   try {
     const payload = JSON.stringify({
@@ -177,8 +246,8 @@ function writeStoredSession(session: StoredAssistantResearchSession): void {
       messages: session.messages ? sanitizeMessages(session.messages) : undefined,
       savedAt: Date.now(),
     })
-    window.localStorage.setItem(RESEARCH_STORAGE_KEY, payload)
-    window.sessionStorage.setItem(LEGACY_RESEARCH_SESSION_STORAGE_KEY, payload)
+    window.localStorage.setItem(researchStorageKey(market), payload)
+    window.sessionStorage.setItem(legacySessionStorageKey(market), payload)
   } catch {
     // 保存失敗は会話機能そのものを止めない。
   }
@@ -211,10 +280,13 @@ function buildHistoricalAnchorPrompt(form: HistoricalAnchorFormState): string {
   ].join(' ')
 }
 
-function readSavedConversations(): SavedAssistantResearchConversation[] {
+function readSavedConversations(market: ResearchMarket): SavedAssistantResearchConversation[] {
   if (typeof window === 'undefined') return []
   try {
-    const raw = window.localStorage.getItem(SAVED_RESEARCH_CONVERSATIONS_KEY)
+    const raw = window.localStorage.getItem(savedResearchConversationsKey(market))
+      ?? (market === 'JP'
+        ? window.localStorage.getItem(LEGACY_SAVED_RESEARCH_CONVERSATIONS_KEY)
+        : null)
     if (!raw) return []
     const parsed = JSON.parse(raw) as SavedAssistantResearchConversation[]
     if (!Array.isArray(parsed)) return []
@@ -235,11 +307,14 @@ function readSavedConversations(): SavedAssistantResearchConversation[] {
   }
 }
 
-function writeSavedConversations(conversations: SavedAssistantResearchConversation[]): void {
+function writeSavedConversations(
+  market: ResearchMarket,
+  conversations: SavedAssistantResearchConversation[],
+): void {
   if (typeof window === 'undefined') return
   try {
     window.localStorage.setItem(
-      SAVED_RESEARCH_CONVERSATIONS_KEY,
+      savedResearchConversationsKey(market),
       JSON.stringify(conversations.slice(0, MAX_SAVED_CONVERSATIONS).map((item) => ({
         ...item,
         messages: sanitizeMessages(item.messages),
@@ -250,11 +325,11 @@ function writeSavedConversations(conversations: SavedAssistantResearchConversati
   }
 }
 
-function clearStoredSession(): void {
+function clearStoredSession(market: ResearchMarket): void {
   if (typeof window === 'undefined') return
   try {
-    window.localStorage.removeItem(RESEARCH_STORAGE_KEY)
-    window.sessionStorage.removeItem(LEGACY_RESEARCH_SESSION_STORAGE_KEY)
+    window.localStorage.removeItem(researchStorageKey(market))
+    window.sessionStorage.removeItem(legacySessionStorageKey(market))
   } catch {
     // no-op
   }
@@ -314,6 +389,7 @@ export function AssistantResearchClient() {
   const [messages, setMessages] = useState<AssistantChatEntry[]>([])
   const [assistantStatus, setAssistantStatus] = useState<AssistantStatusResponse | null>(null)
   const [storageReady, setStorageReady] = useState(false)
+  const [storageMarket, setStorageMarket] = useState<ResearchMarket | null>(null)
   const [activeSavedConversationId, setActiveSavedConversationId] = useState<string | null>(null)
   const [savedConversations, setSavedConversations] = useState<SavedAssistantResearchConversation[]>([])
   const [saveNotice, setSaveNotice] = useState<string | null>(null)
@@ -321,13 +397,21 @@ export function AssistantResearchClient() {
   const [anchorForm, setAnchorForm] = useState<HistoricalAnchorFormState>(DEFAULT_ANCHOR_FORM)
   const initialPromptKeyRef = useRef<string | null>(null)
 
+  const researchMarket = useMemo(
+    () => marketFromContext(pathname, searchParams.get('market')),
+    [pathname, searchParams],
+  )
+  const isUsResearch = researchMarket === 'US'
+  const promptGroups = isUsResearch ? US_PROMPT_GROUPS : PROMPT_GROUPS
+  const referenceItems = isUsResearch ? US_REFERENCE_ITEMS : JP_REFERENCE_ITEMS
+
   const context = useMemo<AssistantPageContext>(() => ({
     pathname,
     search: searchParams.toString(),
     ticker: searchParams.get('ticker'),
-    market: marketFromPath(pathname),
+    market: researchMarket,
     universe: searchParams.get('universe'),
-  }), [pathname, searchParams])
+  }), [pathname, researchMarket, searchParams])
 
   useEffect(() => {
     let cancelled = false
@@ -343,25 +427,56 @@ export function AssistantResearchClient() {
   }, [])
 
   useEffect(() => {
-    const stored = readStoredSession()
-    if (stored?.messages?.length) setMessages(sanitizeMessages(stored.messages))
-    if (typeof stored?.input === 'string') setInput(stored.input)
-    if (stored?.researchMode) setResearchMode(sanitizeResearchMode(stored.researchMode))
-    if (stored?.anchorForm) setAnchorForm(sanitizeAnchorForm(stored.anchorForm))
-    if (typeof stored?.activeSavedConversationId === 'string') {
-      setActiveSavedConversationId(stored.activeSavedConversationId)
-    }
-    setSavedConversations(readSavedConversations())
+    setStorageReady(false)
+    setMessages([])
+    setInput('')
+    setError(null)
+    setActiveSavedConversationId(null)
+    setSaveNotice(null)
+    initialPromptKeyRef.current = null
+
+    const stored = readStoredSession(researchMarket)
+    setMessages(stored?.messages?.length ? sanitizeMessages(stored.messages) : [])
+    setInput(typeof stored?.input === 'string' ? stored.input : '')
+    setResearchMode(
+      researchMarket === 'JP' && stored?.researchMode
+        ? sanitizeResearchMode(stored.researchMode)
+        : 'chat',
+    )
+    setAnchorForm(stored?.anchorForm ? sanitizeAnchorForm(stored.anchorForm) : DEFAULT_ANCHOR_FORM)
+    setActiveSavedConversationId(
+      typeof stored?.activeSavedConversationId === 'string'
+        ? stored.activeSavedConversationId
+        : null,
+    )
+    setSavedConversations(readSavedConversations(researchMarket))
+    setStorageMarket(researchMarket)
     setStorageReady(true)
-  }, [])
+  }, [researchMarket])
+
+  useEffect(() => {
+    if (!storageReady || storageMarket !== researchMarket) return
+    writeStoredSession(researchMarket, {
+      messages,
+      input,
+      researchMode: researchMarket === 'JP' ? researchMode : 'chat',
+      anchorForm,
+      activeSavedConversationId,
+    })
+  }, [
+    activeSavedConversationId,
+    anchorForm,
+    input,
+    messages,
+    researchMarket,
+    researchMode,
+    storageMarket,
+    storageReady,
+  ])
 
   useEffect(() => {
     if (!storageReady) return
-    writeStoredSession({ messages, input, researchMode, anchorForm, activeSavedConversationId })
-  }, [activeSavedConversationId, anchorForm, input, messages, researchMode, storageReady])
-
-  useEffect(() => {
-    if (!storageReady) return
+    if (researchMarket !== 'JP') return
     if (searchParams.get('mode') !== 'historical-anchor') return
     setResearchMode('historicalAnchor')
     setAnchorForm((prev) => sanitizeAnchorForm({
@@ -370,7 +485,7 @@ export function AssistantResearchClient() {
       anchorEndDate: searchParams.get('anchorEndDate') ?? prev.anchorEndDate,
       lookbackTradingDays: searchParams.get('lookbackTradingDays') ?? prev.lookbackTradingDays,
     }))
-  }, [searchParams, storageReady])
+  }, [researchMarket, searchParams, storageReady])
 
   useEffect(() => {
     if (!saveNotice) return
@@ -379,7 +494,7 @@ export function AssistantResearchClient() {
   }, [saveNotice])
 
   const clearConversation = () => {
-    clearStoredSession()
+    clearStoredSession(researchMarket)
     setMessages([])
     setInput('')
     setError(null)
@@ -409,7 +524,7 @@ export function AssistantResearchClient() {
     const next = [item, ...savedConversations.filter((conversation) => conversation.id !== id)]
       .sort((a, b) => b.updatedAt - a.updatedAt)
       .slice(0, MAX_SAVED_CONVERSATIONS)
-    writeSavedConversations(next)
+    writeSavedConversations(researchMarket, next)
     setSavedConversations(next)
     setActiveSavedConversationId(id)
     setSaveNotice(existing ? '保存済みの会話を更新しました' : 'この会話を保存しました')
@@ -424,12 +539,16 @@ export function AssistantResearchClient() {
     setError(null)
     setActiveSavedConversationId(item.id)
     setSaveNotice('保存した会話を開きました')
-    writeStoredSession({ messages: restoredMessages, input: '', activeSavedConversationId: item.id })
+    writeStoredSession(researchMarket, {
+      messages: restoredMessages,
+      input: '',
+      activeSavedConversationId: item.id,
+    })
   }
 
   const deleteSavedConversation = (id: string) => {
     const next = savedConversations.filter((conversation) => conversation.id !== id)
-    writeSavedConversations(next)
+    writeSavedConversations(researchMarket, next)
     setSavedConversations(next)
     if (activeSavedConversationId === id) setActiveSavedConversationId(null)
     setSaveNotice('保存した会話を削除しました')
@@ -452,7 +571,7 @@ export function AssistantResearchClient() {
       .map((item) => ({ role: item.role, content: item.content }))
       .slice(-10)
     if (options.reset) {
-      clearStoredSession()
+      clearStoredSession(researchMarket)
       setActiveSavedConversationId(null)
       setMessages([userEntry])
     } else {
@@ -504,12 +623,12 @@ export function AssistantResearchClient() {
       return
     }
     if (reset) {
-      clearStoredSession()
+      clearStoredSession(researchMarket)
       setMessages([])
       setActiveSavedConversationId(null)
     }
     setInput(prompt)
-  }, [searchParams, storageReady])
+  }, [researchMarket, searchParams, storageReady])
 
   const runHistoricalAnchorSearch = () => {
     const prompt = buildHistoricalAnchorPrompt(sanitizeAnchorForm(anchorForm))
@@ -531,9 +650,16 @@ export function AssistantResearchClient() {
                 <Bot size={20} />
               </span>
               <div>
-                <h1 className="text-[22px] font-black tracking-normal">AI銘柄リサーチ</h1>
+                <div className="flex flex-wrap items-center gap-2">
+                  <h1 className="text-[22px] font-black tracking-normal">AI銘柄リサーチ</h1>
+                  <span className="rounded-[3px] border border-white/30 bg-white/10 px-2 py-0.5 text-[10px] font-black">
+                    {researchMarket === 'US' ? '米国株' : researchMarket === 'COMMODITY' ? '商品' : '日本株'}
+                  </span>
+                </div>
                 <p className="mt-1 text-[12px] font-bold text-white/75">
-                  自然言語の相談を、StockBoard内のDB検索と分析機能へつなぎます。
+                  {isUsResearch
+                    ? '米国株専用DBの検索とML分析を、自然言語の相談へつなぎます。'
+                    : '自然言語の相談を、StockBoard内のDB検索と分析機能へつなぎます。'}
                 </p>
               </div>
             </div>
@@ -553,7 +679,9 @@ export function AssistantResearchClient() {
                   DB根拠
                 </div>
                 <p className="mt-1 text-[11px] leading-relaxed text-white/72">
-                  6ステージ、PMS、決算、ML類似候補などの既存データを参照します。
+                  {isUsResearch
+                    ? '6ステージ、PMS、物理ML、ML類似候補などの米国株データを参照します。'
+                    : '6ステージ、PMS、決算、ML類似候補などの既存データを参照します。'}
                 </p>
               </div>
               <div className="rounded-[6px] border border-white/20 bg-white/10 p-3">
@@ -623,53 +751,67 @@ export function AssistantResearchClient() {
                   )}
                 </div>
               </div>
-              <div className="grid gap-2 sm:grid-cols-2">
-                <button
-                  type="button"
-                  onClick={() => setResearchMode('chat')}
-                  className={`rounded-[6px] border px-3 py-2 text-left transition-colors ${
-                    researchMode === 'chat'
-                      ? 'border-[var(--color-brand-700)] bg-[var(--color-brand-50)]'
-                      : 'border-[var(--color-border-default)] bg-white hover:bg-[var(--color-surface-subtle)]'
-                  }`}
-                >
-                  <div className="flex items-center gap-2 text-[12px] font-black text-[var(--color-text-primary)]">
-                    <MessageSquareText size={15} />
-                    通常会話
+              {researchMarket === 'JP' ? (
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <button
+                    type="button"
+                    onClick={() => setResearchMode('chat')}
+                    className={`rounded-[6px] border px-3 py-2 text-left transition-colors ${
+                      researchMode === 'chat'
+                        ? 'border-[var(--color-brand-700)] bg-[var(--color-brand-50)]'
+                        : 'border-[var(--color-border-default)] bg-white hover:bg-[var(--color-surface-subtle)]'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 text-[12px] font-black text-[var(--color-text-primary)]">
+                      <MessageSquareText size={15} />
+                      通常会話
+                    </div>
+                    <p className="mt-1 text-[10px] font-semibold leading-relaxed text-[var(--color-text-secondary)]">
+                      自由文で相談し、必要ならAIが条件を聞き返します。
+                    </p>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setResearchMode('historicalAnchor')}
+                    className={`rounded-[6px] border px-3 py-2 text-left transition-colors ${
+                      researchMode === 'historicalAnchor'
+                        ? 'border-[var(--color-brand-700)] bg-[var(--color-brand-50)]'
+                        : 'border-[var(--color-border-default)] bg-white hover:bg-[var(--color-surface-subtle)]'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 text-[12px] font-black text-[var(--color-text-primary)]">
+                      <History size={15} />
+                      過去アンカー類似
+                    </div>
+                    <p className="mt-1 text-[10px] font-semibold leading-relaxed text-[var(--color-text-secondary)]">
+                      特定銘柄の過去局面に、今まさに近い銘柄を探します。
+                    </p>
+                  </button>
+                </div>
+              ) : (
+                <div className="rounded-[6px] border border-[var(--color-brand-200)] bg-[var(--color-brand-50)] px-3 py-2">
+                  <div className="flex items-center gap-2 text-[12px] font-black text-[var(--color-brand-800)]">
+                    <ShieldCheck size={15} />
+                    米国株専用リサーチ
                   </div>
                   <p className="mt-1 text-[10px] font-semibold leading-relaxed text-[var(--color-text-secondary)]">
-                    自由文で相談し、必要ならAIが条件を聞き返します。
+                    検索・候補抽出・保存会話は米国株だけで完結し、日本株の結果を混在させません。
                   </p>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setResearchMode('historicalAnchor')}
-                  className={`rounded-[6px] border px-3 py-2 text-left transition-colors ${
-                    researchMode === 'historicalAnchor'
-                      ? 'border-[var(--color-brand-700)] bg-[var(--color-brand-50)]'
-                      : 'border-[var(--color-border-default)] bg-white hover:bg-[var(--color-surface-subtle)]'
-                  }`}
-                >
-                  <div className="flex items-center gap-2 text-[12px] font-black text-[var(--color-text-primary)]">
-                    <History size={15} />
-                    過去アンカー類似
-                  </div>
-                  <p className="mt-1 text-[10px] font-semibold leading-relaxed text-[var(--color-text-secondary)]">
-                    特定銘柄の過去局面に、今まさに近い銘柄を探します。
-                  </p>
-                </button>
-              </div>
+                </div>
+              )}
               {saveNotice && (
                 <div className="rounded-[4px] border border-[var(--color-brand-200)] bg-[var(--color-brand-50)] px-2.5 py-1.5 text-[11px] font-bold text-[var(--color-brand-800)]">
                   {saveNotice}
                 </div>
               )}
-              {researchMode === 'chat' ? (
+              {researchMarket !== 'JP' || researchMode === 'chat' ? (
                 <div className="flex flex-col gap-2 md:flex-row md:items-end">
                   <textarea
                     value={input}
                     onChange={(event) => setInput(event.target.value)}
-                    placeholder="例: 日経225で初動があり、貸借で、PMSと6ステージが強い候補を10件探して"
+                    placeholder={isUsResearch
+                      ? '例: 米国株で物理ML上昇候補を、PMSと出来高も含めて10件探して'
+                      : '例: 日経225で初動があり、貸借で、PMSと6ステージが強い候補を10件探して'}
                     className="min-h-[78px] flex-1 resize-none rounded-[6px] border border-[var(--color-border-default)] px-3 py-2 text-[13px] font-semibold leading-relaxed outline-none focus:border-[var(--color-brand-600)]"
                     rows={3}
                   />
@@ -833,41 +975,43 @@ export function AssistantResearchClient() {
         </section>
 
         <aside className="space-y-4">
-          <section className="rounded-[8px] border border-[var(--color-brand-200)] bg-white p-4">
-            <div className="flex items-start gap-2">
-              <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-[5px] border border-[var(--color-brand-200)] bg-[var(--color-brand-50)] text-[var(--color-brand-800)]">
-                <History size={16} />
-              </span>
-              <div>
-                <h2 className="text-[13px] font-black text-[var(--color-text-primary)]">過去アンカー類似モード</h2>
-                <p className="mt-1 text-[11px] font-semibold leading-relaxed text-[var(--color-text-secondary)]">
-                  「あの銘柄があの時期に崩れる直前の形」に、今まさに近い銘柄を探す専用検索です。
-                </p>
+          {researchMarket === 'JP' && (
+            <section className="rounded-[8px] border border-[var(--color-brand-200)] bg-white p-4">
+              <div className="flex items-start gap-2">
+                <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-[5px] border border-[var(--color-brand-200)] bg-[var(--color-brand-50)] text-[var(--color-brand-800)]">
+                  <History size={16} />
+                </span>
+                <div>
+                  <h2 className="text-[13px] font-black text-[var(--color-text-primary)]">過去アンカー類似モード</h2>
+                  <p className="mt-1 text-[11px] font-semibold leading-relaxed text-[var(--color-text-secondary)]">
+                    「あの銘柄があの時期に崩れる直前の形」に、今まさに近い銘柄を探す専用検索です。
+                  </p>
+                </div>
               </div>
-            </div>
-            <div className="mt-3 grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={useAnchorPreset7003}
-                className="rounded-[5px] border border-[var(--color-brand-600)] bg-[var(--color-brand-800)] px-3 py-2 text-left text-[11px] font-black leading-relaxed text-white transition-colors hover:bg-[var(--color-brand-900)]"
-              >
-                7003下落前を型にする
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setResearchMode('historicalAnchor')
-                  setAnchorForm((prev) => ({ ...prev, patternDirection: 'up' }))
-                }}
-                className="rounded-[5px] border border-[var(--color-border-default)] bg-white px-3 py-2 text-left text-[11px] font-black leading-relaxed text-[var(--color-brand-800)] transition-colors hover:bg-[var(--color-surface-subtle)]"
-              >
-                上昇前形状で探す
-              </button>
-            </div>
-            <p className="mt-3 text-[10px] font-bold leading-relaxed text-[var(--color-text-tertiary)]">
-              ランキングは形状類似を主軸にし、PMS/PFS・物理ML・過去検証は補助根拠として表示します。
-            </p>
-          </section>
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={useAnchorPreset7003}
+                  className="rounded-[5px] border border-[var(--color-brand-600)] bg-[var(--color-brand-800)] px-3 py-2 text-left text-[11px] font-black leading-relaxed text-white transition-colors hover:bg-[var(--color-brand-900)]"
+                >
+                  7003下落前を型にする
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setResearchMode('historicalAnchor')
+                    setAnchorForm((prev) => ({ ...prev, patternDirection: 'up' }))
+                  }}
+                  className="rounded-[5px] border border-[var(--color-border-default)] bg-white px-3 py-2 text-left text-[11px] font-black leading-relaxed text-[var(--color-brand-800)] transition-colors hover:bg-[var(--color-surface-subtle)]"
+                >
+                  上昇前形状で探す
+                </button>
+              </div>
+              <p className="mt-3 text-[10px] font-bold leading-relaxed text-[var(--color-text-tertiary)]">
+                ランキングは形状類似を主軸にし、PMS/PFS・物理ML・過去検証は補助根拠として表示します。
+              </p>
+            </section>
+          )}
 
           <section className="rounded-[8px] border border-[var(--color-border-strong)] bg-white p-4">
             <div className="flex items-center justify-between gap-2">
@@ -921,7 +1065,7 @@ export function AssistantResearchClient() {
             )}
           </section>
 
-          {PROMPT_GROUPS.map((group) => (
+          {promptGroups.map((group) => (
             <section key={group.title} className="rounded-[8px] border border-[var(--color-border-strong)] bg-white p-4">
               <h2 className="text-[13px] font-black text-[var(--color-text-primary)]">{group.title}</h2>
               <div className="mt-3 space-y-2">
@@ -943,7 +1087,7 @@ export function AssistantResearchClient() {
           <section className="rounded-[8px] border border-[var(--color-border-default)] bg-white p-4">
             <h2 className="text-[13px] font-black text-[var(--color-text-primary)]">参照できる主な情報</h2>
             <div className="mt-3 flex flex-wrap gap-2">
-              {['6ステージ', 'PMS/PFS/PES', '短期ラベル', 'ML類似候補', '決算予定', '貸借/信用', '業種/市場区分', '出来高'].map((item) => (
+              {referenceItems.map((item) => (
                 <span
                   key={item}
                   className="rounded-[3px] border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-2 py-1 text-[10px] font-black text-[var(--color-text-secondary)]"

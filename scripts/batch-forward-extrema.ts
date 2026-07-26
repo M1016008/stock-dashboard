@@ -3,13 +3,18 @@
 // 指定日から各 horizon 内に「どこまで上がったか / 下がったか」を計算する。
 // forward_returns は終端日の騰落率だけなので、到達率分析と ML/RL ラベル用に別テーブルへ保存する。
 
-import { execAll, execBatch } from '@/lib/db/client'
+import { createHash } from 'node:crypto'
+import fs from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
+import { execAll, execBatch, execGet, execRun, localDbPath } from '@/lib/db/client'
 import { HORIZONS as DEFAULT_HORIZONS } from '@/lib/backtest/signals'
 import {
   computeForwardExtremaRows,
   type ForwardExtremaBar as Bar,
   type ForwardExtremaRow as ExtremaRow,
 } from '@/lib/backtest/forward-extrema'
+import { waitForMemoryHeadroom } from '@/lib/system/memory-guard'
 
 const EXTREMA_BINDINGS_PER_ROW = 17
 const SQLITE_SAFE_BIND_LIMIT = 32_766
@@ -18,7 +23,10 @@ const requestedChunk = Number(process.env.FORWARD_EXTREMA_CHUNK ?? DEFAULT_CHUNK
 const CHUNK = Number.isFinite(requestedChunk) && requestedChunk > 0
   ? Math.min(Math.floor(requestedChunk), Math.floor(SQLITE_SAFE_BIND_LIMIT / EXTREMA_BINDINGS_PER_ROW))
   : DEFAULT_CHUNK
-const PROGRESS_EVERY = Number(process.env.FORWARD_EXTREMA_PROGRESS_EVERY ?? 100)
+const requestedProgressEvery = Number(process.env.FORWARD_EXTREMA_PROGRESS_EVERY ?? 100)
+const PROGRESS_EVERY = Number.isFinite(requestedProgressEvery) && requestedProgressEvery > 0
+  ? Math.floor(requestedProgressEvery)
+  : 100
 const RECENT_DAYS = Number(process.env.BACKTEST_RECENT_DAYS ?? 0)
 const START_DATE = process.env.FORWARD_EXTREMA_START_DATE?.trim() || null
 const END_DATE = process.env.FORWARD_EXTREMA_END_DATE?.trim() || null
@@ -26,6 +34,30 @@ const TICKER_START = process.env.FORWARD_EXTREMA_TICKER_START?.trim() || null
 const TICKER_END = process.env.FORWARD_EXTREMA_TICKER_END?.trim() || null
 const ACTIVE_ONLY = process.env.FORWARD_EXTREMA_ACTIVE_ONLY === '1'
 const WRITE_MODEL_LABELS = process.env.FORWARD_EXTREMA_WRITE_MODEL_LABELS !== '0'
+const RESUME_ENABLED = process.env.FORWARD_EXTREMA_RESUME === '1'
+const CHECKPOINT_VERSION = 1
+
+type Checkpoint = {
+  version: number
+  signature: string
+  latestDate: string | null
+  totalTickers: number
+  lastCompletedIndex: number
+  totalRows: number
+  updatedAt: string
+}
+
+let requestedSignal: NodeJS.Signals | null = null
+
+for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+  process.on(signal, () => {
+    if (requestedSignal) {
+      process.exit(signal === 'SIGINT' ? 130 : 143)
+    }
+    requestedSignal = signal
+    console.warn(`forward_extrema received ${signal}; checkpointing after the current ticker`)
+  })
+}
 
 function parseHorizons(value: string | undefined): number[] {
   if (!value?.trim()) return [...DEFAULT_HORIZONS]
@@ -38,6 +70,152 @@ function parseHorizons(value: string | undefined): number[] {
 }
 
 const HORIZONS = parseHorizons(process.env.FORWARD_EXTREMA_HORIZONS)
+
+function checkpointDirectory(): string {
+  return process.env.STOCKBOARD_CHECKPOINT_DIR?.trim()
+    || path.join(os.homedir(), 'Library', 'Application Support', 'StockBoard', 'checkpoints')
+}
+
+function buildCheckpointSignature(codes: string[], latestDate: string | null): string {
+  const payload = JSON.stringify({
+    version: CHECKPOINT_VERSION,
+    database: localDbPath,
+    latestDate,
+    recentDays: RECENT_DAYS,
+    startDate: START_DATE,
+    endDate: END_DATE,
+    tickerStart: TICKER_START,
+    tickerEnd: TICKER_END,
+    activeOnly: ACTIVE_ONLY,
+    writeModelLabels: WRITE_MODEL_LABELS,
+    horizons: HORIZONS,
+    tickers: codes,
+  })
+  return createHash('sha256').update(payload).digest('hex').slice(0, 24)
+}
+
+function checkpointPath(signature: string): string {
+  return path.join(checkpointDirectory(), `forward-extrema-${signature}.json`)
+}
+
+async function readCheckpoint(file: string, signature: string, totalTickers: number): Promise<Checkpoint | null> {
+  if (!RESUME_ENABLED) return null
+  try {
+    const checkpoint = JSON.parse(await fs.readFile(file, 'utf8')) as Checkpoint
+    if (
+      checkpoint.version !== CHECKPOINT_VERSION
+      || checkpoint.signature !== signature
+      || checkpoint.totalTickers !== totalTickers
+      || !Number.isInteger(checkpoint.lastCompletedIndex)
+      || checkpoint.lastCompletedIndex < -1
+      || checkpoint.lastCompletedIndex >= totalTickers
+      || !Number.isFinite(checkpoint.totalRows)
+      || checkpoint.totalRows < 0
+    ) {
+      console.warn('forward_extrema ignored an incompatible checkpoint')
+      return null
+    }
+    return checkpoint
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      console.warn(`forward_extrema checkpoint read failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
+    return null
+  }
+}
+
+async function writeCheckpoint(file: string, checkpoint: Checkpoint): Promise<void> {
+  if (!RESUME_ENABLED) return
+  const temporary = `${file}.${process.pid}.tmp`
+  try {
+    await fs.mkdir(path.dirname(file), { recursive: true })
+    await fs.writeFile(temporary, `${JSON.stringify(checkpoint)}\n`, 'utf8')
+    await fs.rename(temporary, file)
+  } catch (error) {
+    await fs.unlink(temporary).catch(() => undefined)
+    console.warn(`forward_extrema checkpoint write failed: ${error instanceof Error ? error.message : String(error)}`)
+  }
+}
+
+async function removeCheckpoint(file: string): Promise<void> {
+  if (!RESUME_ENABLED) return
+  try {
+    await fs.unlink(file)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      console.warn(`forward_extrema checkpoint cleanup failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+}
+
+function jobType(): string {
+  return 'forward_extrema'
+}
+
+async function startBatchRun(totalTickers: number, succeeded: number, rowsInserted: number): Promise<number | null> {
+  try {
+    const row = await execGet<{ id: number }>(
+      `
+        INSERT INTO batch_runs
+          (job_type, started_at, status, total_tickers, succeeded, failed, rows_inserted)
+        VALUES (?, unixepoch(), 'running', ?, ?, 0, ?)
+        RETURNING id
+      `,
+      [jobType(), totalTickers, succeeded, rowsInserted],
+    )
+    return row?.id ?? null
+  } catch (error) {
+    console.warn(`forward_extrema progress tracking unavailable: ${error instanceof Error ? error.message : String(error)}`)
+    return null
+  }
+}
+
+async function updateBatchRun(
+  id: number | null,
+  succeeded: number,
+  rowsInserted: number,
+): Promise<void> {
+  if (id == null) return
+  try {
+    await execRun(
+      `
+        UPDATE batch_runs
+        SET succeeded = ?, rows_inserted = ?
+        WHERE id = ? AND status = 'running'
+      `,
+      [succeeded, rowsInserted, id],
+    )
+  } catch (error) {
+    console.warn(`forward_extrema progress update failed: ${error instanceof Error ? error.message : String(error)}`)
+  }
+}
+
+async function finishBatchRun(
+  id: number | null,
+  status: 'success' | 'failed',
+  succeeded: number,
+  rowsInserted: number,
+  errorSummary: string | null = null,
+): Promise<void> {
+  if (id == null) return
+  try {
+    await execRun(
+      `
+        UPDATE batch_runs
+        SET finished_at = unixepoch(),
+            status = ?,
+            succeeded = ?,
+            failed = ?,
+            rows_inserted = ?,
+            error_summary = ?
+        WHERE id = ?
+      `,
+      [status, succeeded, status === 'failed' ? 1 : 0, rowsInserted, errorSummary, id],
+    )
+  } catch (error) {
+    console.warn(`forward_extrema final progress update failed: ${error instanceof Error ? error.message : String(error)}`)
+  }
+}
 
 async function tickers(): Promise<string[]> {
   const filter = process.env.TICKERS?.split(',').map((value) => value.trim()).filter(Boolean)
@@ -91,6 +269,29 @@ function computeTicker(ticker: string, bars: Bar[]): ExtremaRow[] {
   const startDateIndex = START_DATE ? bars.findIndex((bar) => bar.date >= START_DATE) : -1
   const startIndex = Math.max(recentIndex, startDateIndex >= 0 ? startDateIndex : 0)
   return computeForwardExtremaRows({ ticker, bars, horizons: HORIZONS, startIndex, endDate: END_DATE })
+}
+
+async function loadBars(ticker: string): Promise<Bar[]> {
+  if (RECENT_DAYS > 0 && !END_DATE) {
+    return execAll<Bar>(
+      `
+        SELECT date, high, low, close
+        FROM (
+          SELECT date, high, low, close
+          FROM ohlcv_daily
+          WHERE ticker = ?
+          ORDER BY date DESC
+          LIMIT ?
+        )
+        ORDER BY date
+      `,
+      [ticker, Math.floor(RECENT_DAYS)],
+    )
+  }
+  return execAll<Bar>(
+    `SELECT date, high, low, close FROM ohlcv_daily WHERE ticker = ? ORDER BY date`,
+    [ticker],
+  )
 }
 
 async function insertRows(ticker: string, rows: ExtremaRow[]): Promise<void> {
@@ -202,30 +403,75 @@ async function insertRows(ticker: string, rows: ExtremaRow[]): Promise<void> {
 
 async function main() {
   const codes = await tickers()
-  let total = 0
+  const latest = await execGet<{ date: string | null }>('SELECT MAX(date) AS date FROM ohlcv_daily')
+  const signature = buildCheckpointSignature(codes, latest?.date ?? null)
+  const checkpointFile = checkpointPath(signature)
+  const checkpoint = await readCheckpoint(checkpointFile, signature, codes.length)
+  const resumeIndex = checkpoint ? checkpoint.lastCompletedIndex + 1 : 0
+  let completed = resumeIndex
+  let total = checkpoint?.totalRows ?? 0
   const started = Date.now()
+  const runId = await startBatchRun(codes.length, completed, total)
   console.log(
-    `forward_extrema build: ${codes.length} tickers, recent_days=${RECENT_DAYS || 'all'}, start=${START_DATE ?? '-'}, end=${END_DATE ?? '-'}, horizons=${HORIZONS.join('/')}, chunk=${CHUNK}, model_labels=${WRITE_MODEL_LABELS ? 'on' : 'off'}`,
+    `forward_extrema build: ${codes.length} tickers, recent_days=${RECENT_DAYS || 'all'}, start=${START_DATE ?? '-'}, end=${END_DATE ?? '-'}, horizons=${HORIZONS.join('/')}, chunk=${CHUNK}, model_labels=${WRITE_MODEL_LABELS ? 'on' : 'off'}, resume=${RESUME_ENABLED ? 'on' : 'off'}`,
   )
   if (ACTIVE_ONLY) console.log('forward_extrema active_only=on')
   if (TICKER_START || TICKER_END) console.log(`forward_extrema ticker range: ${TICKER_START ?? '-'}..${TICKER_END ?? '-'}`)
-
-  for (const [index, ticker] of codes.entries()) {
-    const bars = await execAll<Bar>(
-      `SELECT date, high, low, close FROM ohlcv_daily WHERE ticker = ? ORDER BY date`,
-      [ticker],
-    )
-    const rows = computeTicker(ticker, bars)
-    await insertRows(ticker, rows)
-    total += rows.length
-
-    if ((index + 1) % PROGRESS_EVERY === 0 || index === codes.length - 1) {
-      const elapsed = ((Date.now() - started) / 60000).toFixed(1)
-      console.log(`[${index + 1}/${codes.length}] ${ticker}: ${rows.length} labels, total=${total}, elapsed=${elapsed}m`)
-    }
+  if (checkpoint) {
+    console.log(`forward_extrema resumed at ${resumeIndex}/${codes.length}; prior_rows=${total}`)
   }
 
-  console.log(`forward_extrema complete: ${total} rows`)
+  try {
+    for (let index = resumeIndex; index < codes.length; index += 1) {
+      if (requestedSignal) throw new Error(`interrupted by ${requestedSignal}`)
+      const ticker = codes[index]
+      const bars = await loadBars(ticker)
+      const rows = computeTicker(ticker, bars)
+      await insertRows(ticker, rows)
+      total += rows.length
+      completed = index + 1
+
+      const shouldReport = completed % PROGRESS_EVERY === 0 || completed === codes.length || requestedSignal != null
+      if (shouldReport) {
+        await writeCheckpoint(checkpointFile, {
+          version: CHECKPOINT_VERSION,
+          signature,
+          latestDate: latest?.date ?? null,
+          totalTickers: codes.length,
+          lastCompletedIndex: index,
+          totalRows: total,
+          updatedAt: new Date().toISOString(),
+        })
+        await updateBatchRun(runId, completed, total)
+        const elapsedMinutes = (Date.now() - started) / 60000
+        const processedThisAttempt = Math.max(1, completed - resumeIndex)
+        const remaining = codes.length - completed
+        const etaMinutes = remaining * (elapsedMinutes / processedThisAttempt)
+        console.log(
+          `[${completed}/${codes.length}] ${ticker}: ${rows.length} labels, total=${total}, elapsed=${elapsedMinutes.toFixed(1)}m, eta=${etaMinutes.toFixed(1)}m`,
+        )
+        if (!requestedSignal && completed < codes.length) {
+          await waitForMemoryHeadroom({
+            label: `forward_extrema ${completed}/${codes.length}`,
+          })
+        }
+      }
+      if (requestedSignal) throw new Error(`interrupted by ${requestedSignal}`)
+    }
+
+    await finishBatchRun(runId, 'success', completed, total)
+    await removeCheckpoint(checkpointFile)
+    console.log(`forward_extrema complete: ${total} rows`)
+  } catch (error) {
+    await finishBatchRun(
+      runId,
+      'failed',
+      completed,
+      total,
+      (error instanceof Error ? error.message : String(error)).slice(0, 1_000),
+    )
+    throw error
+  }
 }
 
 main().then(() => {

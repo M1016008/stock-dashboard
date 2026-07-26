@@ -3,7 +3,8 @@
 // Sunday maintenance orchestrator. Heavy JP/US learning stays sequential so
 // the two large SQLite databases never compete for memory or write bandwidth.
 
-import { spawn, type ChildProcess } from 'node:child_process'
+import { createHash } from 'node:crypto'
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -31,6 +32,7 @@ type StepResult = {
 
 type RunState = {
   pid: number
+  runKey: string
   startedAt: string
   finishedAt: string | null
   status: 'running' | 'completed' | 'failed'
@@ -68,6 +70,82 @@ function writeState(state: RunState): void {
   const temporaryPath = `${statePath}.${process.pid}.tmp`
   fs.writeFileSync(temporaryPath, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 })
   fs.renameSync(temporaryPath, statePath)
+}
+
+function readState(): RunState | null {
+  try {
+    return JSON.parse(fs.readFileSync(statePath, 'utf8')) as RunState
+  } catch {
+    return null
+  }
+}
+
+function sqliteScalar(dbPath: string, sql: string): string {
+  try {
+    return execFileSync(
+      'sqlite3',
+      ['-cmd', '.timeout 5000', dbPath, sql],
+      { encoding: 'utf8', timeout: 10_000 },
+    ).trim() || 'missing'
+  } catch {
+    return 'missing'
+  }
+}
+
+function currentJstWeek(): string {
+  const formatted = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Tokyo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date())
+  const date = new Date(`${formatted}T00:00:00Z`)
+  date.setUTCDate(date.getUTCDate() - date.getUTCDay())
+  return date.toISOString().slice(0, 10)
+}
+
+function implementationFingerprint(): string {
+  const files = [
+    'package.json',
+    'scripts/run-weekly-optimization.ts',
+    'scripts/run-ml-learning.ts',
+    'scripts/run-us-ml-job.ts',
+    'scripts/ensure-us-adjusted-foundation.ts',
+    'scripts/build-us-analytics-db.ts',
+    'scripts/validate-us-analytics-db.ts',
+    'lib/backtest/forward-extrema.ts',
+  ]
+  const hash = createHash('sha256')
+  for (const file of files) {
+    const absolute = path.join(process.cwd(), file)
+    hash.update(file)
+    hash.update(fs.existsSync(absolute) ? fs.readFileSync(absolute) : 'missing')
+  }
+  return hash.digest('hex').slice(0, 16)
+}
+
+function buildRunKey(configuredSteps: Step[]): string {
+  const jpDb = path.resolve(
+    process.env.STOCKBOARD_DB_PATH?.trim()
+      || path.join(process.cwd(), 'data', 'stockboard.db'),
+  )
+  const usDb = path.resolve(
+    process.env.US_ANALYTICS_DB_PATH?.trim()
+      || defaultUsDb,
+  )
+  const input = {
+    version: 1,
+    week: currentJstWeek(),
+    jpPriceDate: sqliteScalar(jpDb, 'SELECT MAX(date) FROM ohlcv_daily'),
+    usPriceDate: sqliteScalar(usDb, 'SELECT MAX(date) FROM ohlcv_daily'),
+    usPriceBasis: sqliteScalar(
+      usDb,
+      `SELECT value FROM us_analytics_metadata WHERE key = 'ohlcv_price_basis'`,
+    ),
+    implementation: implementationFingerprint(),
+    steps: configuredSteps.map((step) => ({ id: step.id, npmScript: step.npmScript })),
+  }
+  return createHash('sha256').update(JSON.stringify(input)).digest('hex').slice(0, 24)
 }
 
 function acquireProcessLock(): boolean {
@@ -109,6 +187,8 @@ function steps(): Step[] {
     USE_LOCAL_DB: '1',
     SQLITE_BUSY_TIMEOUT_MS: process.env.SQLITE_BUSY_TIMEOUT_MS ?? '30000',
     SQLITE_BUSY_RETRIES: process.env.SQLITE_BUSY_RETRIES ?? '20',
+    ML_FEATURE_HEALTH_STRICT: '1',
+    ML_ACCURACY_STRICT: '1',
     UPDATE_CHILD_TIMEOUT_MINUTES: process.env.UPDATE_CHILD_TIMEOUT_MINUTES ?? '2880',
     US_ANALYTICS_DB_PATH: process.env.US_ANALYTICS_DB_PATH?.trim() || defaultUsDb,
   }
@@ -212,26 +292,45 @@ async function main(): Promise<void> {
   if (!acquireProcessLock()) return
   installSignalHandlers()
 
+  const runKey = buildRunKey(configuredSteps)
+  const previousState = readState()
+  const reusableSteps = previousState?.runKey === runKey
+    ? new Map(
+        previousState.steps
+          .filter((step) => step.status === 'completed')
+          .map((step) => [step.id, step]),
+      )
+    : new Map<string, StepResult>()
   const state: RunState = {
     pid: process.pid,
+    runKey,
     startedAt: isoNow(),
     finishedAt: null,
     status: 'running',
-    steps: configuredSteps.map((step) => ({
-      id: step.id,
-      label: step.label,
-      status: 'pending',
-      startedAt: null,
-      finishedAt: null,
-      exitCode: null,
-      signal: null,
-      error: null,
-    })),
+    steps: configuredSteps.map((step) => {
+      const reusable = reusableSteps.get(step.id)
+      return reusable
+        ? { ...reusable }
+        : {
+            id: step.id,
+            label: step.label,
+            status: 'pending',
+            startedAt: null,
+            finishedAt: null,
+            exitCode: null,
+            signal: null,
+            error: null,
+          }
+    }),
   }
   writeState(state)
 
   for (const [index, step] of configuredSteps.entries()) {
     const result = state.steps[index]
+    if (result.status === 'completed') {
+      console.log(`[weekly-optimization] RESUME ${step.id}: same week, data dates, and implementation`)
+      continue
+    }
     result.status = 'running'
     result.startedAt = isoNow()
     writeState(state)
@@ -256,6 +355,10 @@ async function main(): Promise<void> {
       writeState(state)
       break
     }
+    if (result.status === 'failed') {
+      console.error(`[weekly-optimization] STOP ${step.id}: downstream publication was not started`)
+      break
+    }
   }
 
   const failed = state.steps.filter((step) => step.status === 'failed')
@@ -266,6 +369,7 @@ async function main(): Promise<void> {
 
   console.log(JSON.stringify({
     status: state.status,
+    runKey: state.runKey,
     startedAt: state.startedAt,
     finishedAt: state.finishedAt,
     steps: state.steps,

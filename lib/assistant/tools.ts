@@ -1,4 +1,5 @@
 import { execAll, execGet } from '@/lib/db/client'
+import { execUsAnalyticsAll, execUsAnalyticsGet, hasUsAnalyticsDb } from '@/lib/db/us-analytics'
 import { ML_PHYSICS_FEATURE_SET } from '@/lib/backtest/ml-physics'
 import { NIKKEI225_TICKERS, parseUniverseFilter, universeSqlCondition } from '@/lib/market-universe'
 import { getCurrentSimilars } from '@/lib/queries/ml-insights'
@@ -386,7 +387,15 @@ function stockHref(ticker: string): string {
   return `/stock/${encodeURIComponent(ticker)}`
 }
 
-function rowFromOverview(row: StockOverviewRow, evidenceMap?: Map<'up' | 'down', AssistantModelEvidence>): AssistantResultRow {
+function usStockHref(ticker: string): string {
+  return `/us/stock/${encodeURIComponent(ticker)}`
+}
+
+function rowFromOverview(
+  row: StockOverviewRow,
+  evidenceMap?: Map<'up' | 'down', AssistantModelEvidence>,
+  market: 'JP' | 'US' = 'JP',
+): AssistantResultRow {
   const code = stageCode(row)
   const changePct = pctChange(row.close, row.prev_close)
   const upEvidence = row.physics_up_rank ? evidenceMap?.get('up') ?? null : null
@@ -423,7 +432,7 @@ function rowFromOverview(row: StockOverviewRow, evidenceMap?: Map<'up' | 'down',
   return {
     ticker: row.ticker,
     name: row.name,
-    href: stockHref(row.ticker),
+    href: market === 'US' ? usStockHref(row.ticker) : stockHref(row.ticker),
     date: row.date,
     price: row.close,
     changePct,
@@ -533,7 +542,53 @@ async function latestClassicMlDate(): Promise<string | null> {
   return (await execGet<{ date: string | null }>(`SELECT MAX(as_of_date) AS date FROM serving_ml_candidates`))?.date ?? null
 }
 
+async function latestUsDate(table: string, column: 'date' | 'as_of_date'): Promise<string | null> {
+  if (!hasUsAnalyticsDb()) return null
+  return (await execUsAnalyticsGet<{ date: string | null }>(
+    `SELECT MAX(${column}) AS date FROM ${table}`,
+  ))?.date ?? null
+}
+
+async function searchUsStocks(call: AssistantPlannedToolCall): Promise<AssistantToolResult> {
+  const query = (call.query ?? call.ticker ?? '').trim().toUpperCase()
+  if (!query) {
+    return { tool: 'search_stocks', title: '米国株検索', summary: '検索語が不足しています。', rows: [] }
+  }
+  if (!hasUsAnalyticsDb()) {
+    return { tool: 'search_stocks', title: '米国株検索', summary: 'US分析DBを利用できません。', rows: [] }
+  }
+  const escaped = query.replace(/[%_]/g, (m) => `\\${m}`)
+  const rows = await execUsAnalyticsAll<SearchRow>(
+    `
+    SELECT ticker, name, sector17_name, sector33_name, market_segment, margin_type
+    FROM ticker_universe
+    WHERE active = 1
+      AND (UPPER(ticker) LIKE ? ESCAPE '\\' OR UPPER(COALESCE(name, '')) LIKE ? ESCAPE '\\')
+    ORDER BY CASE WHEN ticker = ? THEN 0 ELSE 1 END, ticker ASC
+    LIMIT ?
+    `,
+    [`%${escaped}%`, `%${escaped}%`, query, clampLimit(call.limit, 8, 20)],
+  )
+  return {
+    tool: 'search_stocks',
+    title: '米国株検索',
+    summary: `${query} に一致する米国株を ${rows.length} 件見つけました。`,
+    href: '/us/screener',
+    rows: rows.map((row) => ({
+      ticker: row.ticker,
+      name: row.name,
+      href: usStockHref(row.ticker),
+      sector17Name: row.sector17_name,
+      sector33Name: row.sector33_name,
+      marketSegment: row.market_segment,
+      reason: [row.market_segment, row.sector17_name, row.sector33_name].filter(Boolean).join(' / ') || null,
+    })),
+    meta: { market: 'US' },
+  }
+}
+
 export async function searchStocks(call: AssistantPlannedToolCall): Promise<AssistantToolResult> {
+  if (call.market === 'US') return searchUsStocks(call)
   const query = (call.query ?? call.ticker ?? '').trim()
   if (!query) {
     return { tool: 'search_stocks', title: '銘柄検索', summary: '検索語が不足しています。', rows: [] }
@@ -567,7 +622,119 @@ export async function searchStocks(call: AssistantPlannedToolCall): Promise<Assi
   }
 }
 
+async function getUsStockOverview(call: AssistantPlannedToolCall): Promise<AssistantToolResult> {
+  const ticker = normalizeTicker(call.ticker)
+  if (!ticker) {
+    return { tool: 'get_stock_overview', title: '米国株個別分析', summary: 'ティッカーが不足しています。', rows: [] }
+  }
+  if (!hasUsAnalyticsDb()) {
+    return { tool: 'get_stock_overview', title: '米国株個別分析', summary: 'US分析DBを利用できません。', rows: [] }
+  }
+  const horizonDays = Number(call.horizonDays ?? 20)
+  const [snapshotDate, physicsDate, classicDate] = await Promise.all([
+    latestUsDate('daily_snapshots', 'date'),
+    latestUsDate('serving_ml_physics_candidates', 'as_of_date'),
+    latestUsDate('serving_ml_candidates', 'as_of_date'),
+  ])
+  if (!snapshotDate) {
+    return { tool: 'get_stock_overview', title: '米国株個別分析', summary: 'US日次スナップショットが未作成です。', rows: [] }
+  }
+  const row = await execUsAnalyticsGet<StockOverviewRow>(
+    `
+    WITH prices AS (
+      SELECT close, volume, date,
+             ROW_NUMBER() OVER (ORDER BY date DESC) AS rn
+      FROM ohlcv_daily
+      WHERE ticker = ? AND date <= ?
+    ),
+    avg_volume AS (
+      SELECT AVG(volume) AS avg_volume_30d FROM prices WHERE rn <= 30
+    ),
+    ml_summary AS (
+      SELECT
+        base_ticker,
+        SUM(CASE WHEN similar_direction = 'up' THEN 1 ELSE 0 END) AS ml_up_count,
+        SUM(CASE WHEN similar_direction = 'down' THEN 1 ELSE 0 END) AS ml_down_count,
+        COUNT(*) AS ml_similar_count,
+        MAX(similarity_score) AS ml_top_similarity
+      FROM serving_current_similars
+      WHERE as_of_date = (SELECT MAX(as_of_date) FROM serving_current_similars)
+        AND base_ticker = ?
+      GROUP BY base_ticker
+    )
+    SELECT
+      u.ticker, u.name, u.sector17_name, u.sector33_name, u.market_segment, u.margin_type,
+      ds.date,
+      cur.close,
+      prev.close AS prev_close,
+      cur.volume,
+      av.avg_volume_30d,
+      ds.daily_a_stage, ds.daily_b_stage,
+      ds.weekly_a_stage, ds.weekly_b_stage,
+      ds.monthly_a_stage, ds.monthly_b_stage,
+      ds.ma_5, ds.ma_25, ds.ma_75, ds.ma_300,
+      p_up.rank AS physics_up_rank,
+      p_up.candidate_score AS physics_up_score,
+      p_down.rank AS physics_down_rank,
+      p_down.candidate_score AS physics_down_score,
+      c_up.rank AS classic_up_rank,
+      c_down.rank AS classic_down_rank,
+      pm.physical_momentum_score,
+      pm.physical_force_score,
+      pm.physical_energy_score,
+      pm_prev.physical_momentum_score AS physical_momentum_prev_score,
+      ms.ml_up_count, ms.ml_down_count, ms.ml_similar_count, ms.ml_top_similarity
+    FROM ticker_universe u
+    LEFT JOIN daily_snapshots ds ON ds.ticker = u.ticker AND ds.date = ?
+    LEFT JOIN prices cur ON cur.rn = 1
+    LEFT JOIN prices prev ON prev.rn = 2
+    LEFT JOIN avg_volume av ON 1 = 1
+    LEFT JOIN physical_momentum_metrics pm
+      ON pm.market = 'US' AND pm.symbol = u.ticker AND pm.date = ds.date
+    LEFT JOIN physical_momentum_metrics pm_prev
+      ON pm_prev.market = 'US' AND pm_prev.symbol = u.ticker AND pm_prev.date = prev.date
+    LEFT JOIN ml_summary ms ON ms.base_ticker = u.ticker
+    LEFT JOIN serving_ml_physics_candidates p_up
+      ON p_up.ticker = u.ticker AND p_up.as_of_date = ? AND p_up.horizon_days = ? AND p_up.direction = 'up'
+    LEFT JOIN serving_ml_physics_candidates p_down
+      ON p_down.ticker = u.ticker AND p_down.as_of_date = ? AND p_down.horizon_days = ? AND p_down.direction = 'down'
+    LEFT JOIN serving_ml_candidates c_up
+      ON c_up.ticker = u.ticker AND c_up.as_of_date = ? AND c_up.direction = 'up'
+    LEFT JOIN serving_ml_candidates c_down
+      ON c_down.ticker = u.ticker AND c_down.as_of_date = ? AND c_down.direction = 'down'
+    WHERE u.ticker = ?
+    LIMIT 1
+    `,
+    [
+      ticker,
+      snapshotDate,
+      ticker,
+      snapshotDate,
+      physicsDate ?? '',
+      horizonDays,
+      physicsDate ?? '',
+      horizonDays,
+      classicDate ?? '',
+      classicDate ?? '',
+      ticker,
+    ],
+  )
+  if (!row) {
+    return { tool: 'get_stock_overview', title: '米国株個別分析', summary: `${ticker} はUSユニバースにありません。`, rows: [] }
+  }
+  const result = rowFromOverview(row, undefined, 'US')
+  return {
+    tool: 'get_stock_overview',
+    title: `${ticker} 米国株分析`,
+    summary: `${row.name ?? ticker} は ${snapshotDate} 時点で ${result.stageCode ?? 'ステージ未判定'}。US専用DBの価格・PMS・MLだけを参照しています。`,
+    href: usStockHref(ticker),
+    rows: [result],
+    meta: { market: 'US', snapshotDate, physicsDate, classicDate, horizonDays },
+  }
+}
+
 export async function getStockOverview(call: AssistantPlannedToolCall): Promise<AssistantToolResult> {
+  if (call.market === 'US') return getUsStockOverview(call)
   const ticker = normalizeTicker(call.ticker)
   if (!ticker) {
     return { tool: 'get_stock_overview', title: '個別銘柄分析', summary: '銘柄コードが不足しています。', rows: [] }
@@ -704,7 +871,147 @@ export async function getStockOverview(call: AssistantPlannedToolCall): Promise<
   }
 }
 
+async function screenUsStocks(call: AssistantPlannedToolCall): Promise<AssistantToolResult> {
+  if (!hasUsAnalyticsDb()) {
+    return { tool: 'screen_jp_stocks', title: '米国株スクリーニング', summary: 'US分析DBを利用できません。', rows: [] }
+  }
+  const horizonDays = Number(call.horizonDays ?? 20)
+  const [snapshotDate, physicsDate] = await Promise.all([
+    latestUsDate('daily_snapshots', 'date'),
+    latestUsDate('serving_ml_physics_candidates', 'as_of_date'),
+  ])
+  if (!snapshotDate || !physicsDate) {
+    return { tool: 'screen_jp_stocks', title: '米国株スクリーニング', summary: 'USスナップショットまたは物理ML候補が未作成です。', rows: [] }
+  }
+  const direction = call.direction === 'down' ? 'down' : call.direction === 'neutral' ? 'neutral' : 'up'
+  const limit = clampLimit(call.limit, 10, 30)
+  const where = [
+    'ds.date = ?',
+    'u.active = 1',
+    'od.close >= 0.1',
+    'od.volume > 0',
+    'prev.close > 0',
+    'ABS(100.0 * (od.close - prev.close) / prev.close) <= 100',
+    "NOT (LENGTH(ds.ticker) >= 5 AND SUBSTR(ds.ticker, -1, 1) IN ('W', 'U', 'R'))",
+  ]
+  const args: Array<string | number> = [snapshotDate]
+  if (call.marketSegment?.trim()) {
+    where.push('u.market_segment = ?')
+    args.push(call.marketSegment.trim())
+  }
+  if (call.sector17?.trim()) {
+    where.push('u.sector17_name = ?')
+    args.push(call.sector17.trim())
+  }
+  const minAvgVolume = Number(call.minAvgVolume ?? 0)
+  if (Number.isFinite(minAvgVolume) && minAvgVolume > 0) {
+    where.push('av.avg_volume_30d >= ?')
+    args.push(minAvgVolume)
+  }
+  const pmsMin = Number(call.pmsMin ?? Number.NaN)
+  const pfsMin = Number(call.pfsMin ?? Number.NaN)
+  const pesMin = Number(call.pesMin ?? Number.NaN)
+  if (Number.isFinite(pmsMin)) {
+    where.push('pm.physical_momentum_score >= ?')
+    args.push(pmsMin)
+  }
+  if (Number.isFinite(pfsMin)) {
+    where.push('pm.physical_force_score >= ?')
+    args.push(pfsMin)
+  }
+  if (Number.isFinite(pesMin)) {
+    where.push('pm.physical_energy_score >= ?')
+    args.push(pesMin)
+  }
+  if (call.pmsTrend === 'rising') where.push('pm.physical_momentum_score > pm_prev.physical_momentum_score')
+  if (call.pmsTrend === 'falling') where.push('pm.physical_momentum_score < pm_prev.physical_momentum_score')
+  if (direction === 'up') where.push('candidate.direction = \'up\'')
+  if (direction === 'down') where.push('candidate.direction = \'down\'')
+  const orderBy = call.sort === 'pfs'
+    ? 'pm.physical_force_score DESC'
+    : call.sort === 'pms'
+      ? 'pm.physical_momentum_score DESC'
+      : direction === 'neutral'
+        ? 'av.avg_volume_30d DESC'
+        : 'candidate.rank ASC'
+  const rows = await execUsAnalyticsAll<ScreenRow>(
+    `
+    WITH prev_date AS (
+      SELECT MAX(date) AS date FROM ohlcv_daily WHERE date < ?
+    ),
+    recent_dates AS (
+      SELECT DISTINCT date
+      FROM ohlcv_daily
+      WHERE date <= ?
+      ORDER BY date DESC
+      LIMIT 30
+    ),
+    avg_volume AS (
+      SELECT ticker, AVG(volume) AS avg_volume_30d
+      FROM ohlcv_daily
+      WHERE date IN (SELECT date FROM recent_dates)
+      GROUP BY ticker
+    )
+    SELECT
+      u.ticker, u.name, u.sector17_name, u.sector33_name, u.market_segment, u.margin_type,
+      ds.date, od.close, prev.close AS prev_close, od.volume, av.avg_volume_30d,
+      ds.daily_a_stage, ds.daily_b_stage,
+      ds.weekly_a_stage, ds.weekly_b_stage,
+      ds.monthly_a_stage, ds.monthly_b_stage,
+      ds.ma_5, ds.ma_25, ds.ma_75, ds.ma_300,
+      CASE WHEN candidate.direction = 'up' THEN candidate.rank END AS physics_up_rank,
+      CASE WHEN candidate.direction = 'up' THEN candidate.candidate_score END AS physics_up_score,
+      CASE WHEN candidate.direction = 'down' THEN candidate.rank END AS physics_down_rank,
+      CASE WHEN candidate.direction = 'down' THEN candidate.candidate_score END AS physics_down_score,
+      NULL AS classic_up_rank, NULL AS classic_down_rank,
+      pm.physical_momentum_score, pm.physical_force_score, pm.physical_energy_score,
+      pm_prev.physical_momentum_score AS physical_momentum_prev_score,
+      NULL AS ml_up_count, NULL AS ml_down_count, NULL AS ml_similar_count, NULL AS ml_top_similarity
+    FROM daily_snapshots ds
+    INNER JOIN ticker_universe u ON u.ticker = ds.ticker
+    LEFT JOIN ohlcv_daily od ON od.ticker = ds.ticker AND od.date = ds.date
+    LEFT JOIN ohlcv_daily prev ON prev.ticker = ds.ticker AND prev.date = (SELECT date FROM prev_date)
+    LEFT JOIN avg_volume av ON av.ticker = ds.ticker
+    LEFT JOIN physical_momentum_metrics pm
+      ON pm.market = 'US' AND pm.symbol = ds.ticker AND pm.date = ds.date
+    LEFT JOIN physical_momentum_metrics pm_prev
+      ON pm_prev.market = 'US' AND pm_prev.symbol = ds.ticker AND pm_prev.date = prev.date
+    LEFT JOIN serving_ml_physics_candidates candidate
+      ON candidate.ticker = ds.ticker
+     AND candidate.as_of_date = ?
+     AND candidate.horizon_days = ?
+     AND candidate.direction = ?
+    WHERE ${where.join(' AND ')}
+    ORDER BY ${orderBy}, ds.ticker ASC
+    LIMIT ?
+    `,
+    [
+      snapshotDate,
+      snapshotDate,
+      physicsDate,
+      horizonDays,
+      direction === 'neutral' ? 'up' : direction,
+      ...args,
+      limit,
+    ],
+  )
+  const title = direction === 'down' ? '米国株 下落警戒候補' : direction === 'up' ? '米国株 上昇候補' : '米国株スクリーニング'
+  return {
+    tool: 'screen_jp_stocks',
+    title,
+    summary: `${snapshotDate} 時点のUS専用データから ${rows.length} 件抽出しました。価格0・出来高0は除外しています。`,
+    href: `/us/screener?sort=${call.sort === 'pfs' ? 'pfs' : call.sort === 'pms' ? 'pms' : 'volume'}&dir=desc`,
+    rows: rows.map((row) => ({
+      ...rowFromOverview(row, undefined, 'US'),
+      rank: direction === 'down' ? row.physics_down_rank : row.physics_up_rank,
+      direction,
+    })),
+    meta: { market: 'US', snapshotDate, physicsDate, horizonDays },
+  }
+}
+
 export async function screenJpStocks(call: AssistantPlannedToolCall): Promise<AssistantToolResult> {
+  if (call.market === 'US') return screenUsStocks(call)
   const horizonDays = Number(call.horizonDays ?? 20)
   const [snapshotDate, physicsDate, classicDate, evidenceMap] = await Promise.all([
     latestSnapshotDate(),
@@ -1452,6 +1759,66 @@ export async function getMlSimilars(call: AssistantPlannedToolCall): Promise<Ass
   if (!ticker) {
     return { tool: 'get_ml_similars', title: 'ML類似銘柄', summary: '銘柄コードが不足しています。', rows: [] }
   }
+  if (call.market === 'US') {
+    if (!hasUsAnalyticsDb()) {
+      return { tool: 'get_ml_similars', title: '米国株ML類似銘柄', summary: 'US分析DBを利用できません。', rows: [] }
+    }
+    const asOfDate = await latestUsDate('serving_current_similars', 'as_of_date')
+    if (!asOfDate) {
+      return { tool: 'get_ml_similars', title: '米国株ML類似銘柄', summary: 'US類似データがまだ生成されていません。', rows: [] }
+    }
+    const rows = await execUsAnalyticsAll<{
+      rank: number
+      similar_ticker: string
+      similarity_score: number
+      similar_direction: string | null
+      payload_json: string
+      reason_json: string
+      name: string | null
+      sector17_name: string | null
+      sector33_name: string | null
+      market_segment: string | null
+    }>(
+      `
+      SELECT
+        s.rank, s.similar_ticker, s.similarity_score, s.similar_direction,
+        s.payload_json, s.reason_json,
+        u.name, u.sector17_name, u.sector33_name, u.market_segment
+      FROM serving_current_similars s
+      LEFT JOIN ticker_universe u ON u.ticker = s.similar_ticker
+      WHERE s.as_of_date = ? AND s.base_ticker = ?
+      ORDER BY s.rank ASC
+      LIMIT ?
+      `,
+      [asOfDate, ticker, clampLimit(call.limit, 8, 20)],
+    )
+    return {
+      tool: 'get_ml_similars',
+      title: `${ticker} に似た米国株`,
+      summary: `${asOfDate} 時点のUS物理特徴量・ステージ類似で ${rows.length} 件見つけました。`,
+      href: usStockHref(ticker),
+      rows: rows.map((row) => {
+        const payload = parseJson<Record<string, unknown>>(row.payload_json, {})
+        const reason = parseJson<Record<string, unknown>>(row.reason_json, {})
+        return {
+          ticker: row.similar_ticker,
+          name: row.name,
+          href: usStockHref(row.similar_ticker),
+          rank: row.rank,
+          score: row.similarity_score,
+          direction: row.similar_direction,
+          stageCode: typeof payload.stageCode === 'string' ? payload.stageCode : null,
+          sector17Name: row.sector17_name,
+          sector33Name: row.sector33_name,
+          marketSegment: row.market_segment,
+          reason: typeof reason.summary === 'string'
+            ? reason.summary
+            : `US専用類似度 ${Math.round(row.similarity_score * 100)}%`,
+        }
+      }),
+      meta: { market: 'US', asOfDate, source: 'us_analytics.serving_current_similars' },
+    }
+  }
   const result = await getCurrentSimilars({ ticker, limit: clampLimit(call.limit, 8, 20) })
   let rows: AssistantResultRow[] = result.rows.map((row) => {
     const payload = row.payload as Record<string, unknown>
@@ -1654,6 +2021,36 @@ export async function getEarningsCandidates(call: AssistantPlannedToolCall): Pro
 }
 
 export async function runAssistantTool(call: AssistantPlannedToolCall): Promise<AssistantToolResult> {
+  if (call.market === 'US') {
+    if (call.tool === 'scan_weekly_bearish_ma_breaks') {
+      return {
+        tool: call.tool,
+        title: '米国株 週足ブレイク検索',
+        summary: 'この専用条件はUS向け集計が未実装です。日本株データへ置き換えず、US対応まで結果を返しません。',
+        rows: [],
+        meta: { market: 'US', unsupported: true },
+      }
+    }
+    if (call.tool === 'find_historical_anchor_similars') {
+      return {
+        tool: call.tool,
+        title: '米国株 過去アンカー検索',
+        summary: '米国株の本質類似局面は個別銘柄ページで利用できます。AIリサーチからの期間指定検索はUS対応準備中です。',
+        href: call.anchorTicker ? `${usStockHref(call.anchorTicker)}#ml` : '/us/screener',
+        rows: [],
+        meta: { market: 'US', unsupported: true },
+      }
+    }
+    if (call.tool === 'get_earnings_candidates') {
+      return {
+        tool: call.tool,
+        title: '米国株 決算候補',
+        summary: 'US決算データソースは未承認のため、推測値や日本株の決算予定は返しません。',
+        rows: [],
+        meta: { market: 'US', unsupported: true },
+      }
+    }
+  }
   switch (call.tool) {
     case 'search_stocks':
       return searchStocks(call)
@@ -1692,6 +2089,10 @@ export function buildNavigateActions(results: AssistantToolResult[]) {
 
 export function describeResults(results: AssistantToolResult[]): string {
   const totalRows = results.reduce((sum, result) => sum + result.rows.length, 0)
+  const isUsResult = results.some((result) => (
+    result.href?.startsWith('/us/')
+    || result.rows.some((row) => row.href?.startsWith('/us/'))
+  ))
   if (results.length === 0) return '条件に合う機能を特定できませんでした。銘柄コードや条件を少し具体化してください。'
   if (totalRows === 0) return results.map((result) => result.summary).join(' ')
   if (results.some((result) => result.tool === 'scan_weekly_bearish_ma_breaks')) {
@@ -1703,6 +2104,9 @@ export function describeResults(results: AssistantToolResult[]): string {
     return `${titles}をDBから取得して表示しました。ランキングはアンカー期間全体の物理特徴量との形状類似を優先し、PMS/PFS低下、物理ML下落順位、過去検証は補助根拠として確認してください。`
   }
   const titles = results.map((result) => `${result.title}${result.rows.length ? ` ${result.rows.length}件` : ''}`).join('、')
+  if (isUsResult) {
+    return `${titles}を米国株DBから取得して表示しました。候補の根拠は各カードの6ステージ、短期チェック、PMS/PFS、物理ML順位、出来高を確認してください。`
+  }
   return `${titles}をDBから取得して表示しました。候補の根拠は各カードの6ステージ、短期チェック、PMS/PFS、物理ML順位、出来高、決算日を確認してください。`
 }
 

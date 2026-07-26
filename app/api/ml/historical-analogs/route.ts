@@ -269,7 +269,8 @@ async function proxyToAnalogWorker(request: NextRequest): Promise<NextResponse |
       cache: 'no-store',
       signal: AbortSignal.timeout(120_000),
     })
-    return new NextResponse(response.body, {
+    const body = await response.arrayBuffer()
+    return new NextResponse(body, {
       status: response.status,
       headers: {
         'content-type': response.headers.get('content-type') ?? 'application/json; charset=utf-8',

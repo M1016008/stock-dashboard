@@ -8,6 +8,8 @@ import { createClient, type Client } from '@libsql/client'
 import { execAll, localDbPath } from '@/lib/db/client'
 import { ensureSchema } from '@/lib/db/migrate'
 import { US_SEC_SIC_TAXONOMY } from '@/lib/us-classification'
+import { US_ADJUSTED_PRICE_BASIS } from '@/lib/us-adjusted-ohlcv'
+import { isUsInvestableSymbol } from '@/lib/us-symbol-quality'
 
 const configuredTargetPath = process.env.US_ANALYTICS_DB_PATH?.trim()
 const TARGET_PATH = path.resolve(configuredTargetPath || 'data/stockboard-us.db')
@@ -19,6 +21,7 @@ const BATCH_CHUNK = Math.max(25, Math.min(Number(process.env.US_ANALYTICS_BATCH_
 const NATIVE_COPY = process.env.US_ANALYTICS_NATIVE_COPY !== '0'
 const NATIVE_COPY_CHUNK = Math.max(25, Math.min(Number(process.env.US_ANALYTICS_NATIVE_CHUNK ?? 500), 1000))
 const NATIVE_SYNC_RECENT_DAYS = Math.max(1, Number(process.env.US_ANALYTICS_SYNC_RECENT_DAYS ?? 45))
+const REBUILD_PRICE_BASIS = process.env.US_ANALYTICS_REBUILD_PRICE_BASIS === '1'
 
 async function run(client: Client, sql: string, args: Array<string | number | null> = []) {
   await client.execute({ sql, args })
@@ -89,7 +92,14 @@ INSERT INTO copy_tickers (ticker) VALUES
 ${values};
 BEGIN IMMEDIATE;
 INSERT OR REPLACE INTO ohlcv_daily (ticker, date, open, high, low, close, volume)
-  SELECT m.ticker, m.date, m.open, m.high, m.low, m.close, m.volume
+  SELECT
+    m.ticker,
+    m.date,
+    CASE WHEN m.adj_open IS NOT NULL THEN m.adj_open WHEN m.adj_close IS NOT NULL AND m.close <> 0 THEN m.open * m.adj_close / m.close ELSE m.open END,
+    CASE WHEN m.adj_high IS NOT NULL THEN m.adj_high WHEN m.adj_close IS NOT NULL AND m.close <> 0 THEN m.high * m.adj_close / m.close ELSE m.high END,
+    CASE WHEN m.adj_low IS NOT NULL THEN m.adj_low WHEN m.adj_close IS NOT NULL AND m.close <> 0 THEN m.low * m.adj_close / m.close ELSE m.low END,
+    COALESCE(m.adj_close, m.close),
+    COALESCE(m.adj_volume, m.volume)
   FROM copy_tickers t
   JOIN src.market_ohlcv_daily m INDEXED BY market_ohlcv_market_ticker_date_idx
     ON m.market = 'US'
@@ -111,12 +121,13 @@ INSERT OR REPLACE INTO daily_snapshots (
   JOIN src.market_daily_snapshots m INDEXED BY sqlite_autoindex_market_daily_snapshots_1
     ON m.market = 'US'
    AND m.ticker = t.ticker;
-INSERT OR REPLACE INTO us_analytics_copy_state (ticker, status, ohlcv_rows, snapshot_rows, updated_at)
+INSERT OR REPLACE INTO us_analytics_copy_state (ticker, status, ohlcv_rows, snapshot_rows, price_basis, updated_at)
   SELECT
     t.ticker,
     'done',
     COALESCE((SELECT COUNT(*) FROM ohlcv_daily o WHERE o.ticker = t.ticker), 0),
     COALESCE((SELECT COUNT(*) FROM daily_snapshots d WHERE d.ticker = t.ticker), 0),
+    ${sqlLiteral(US_ADJUSTED_PRICE_BASIS)},
     unixepoch()
   FROM copy_tickers t;
 COMMIT;
@@ -181,7 +192,14 @@ CREATE TEMP TABLE sync_recent_bounds AS
   FROM sync_bounds;
 BEGIN IMMEDIATE;
 INSERT OR REPLACE INTO ohlcv_daily (ticker, date, open, high, low, close, volume)
-  SELECT m.ticker, m.date, m.open, m.high, m.low, m.close, m.volume
+  SELECT
+    m.ticker,
+    m.date,
+    CASE WHEN m.adj_open IS NOT NULL THEN m.adj_open WHEN m.adj_close IS NOT NULL AND m.close <> 0 THEN m.open * m.adj_close / m.close ELSE m.open END,
+    CASE WHEN m.adj_high IS NOT NULL THEN m.adj_high WHEN m.adj_close IS NOT NULL AND m.close <> 0 THEN m.high * m.adj_close / m.close ELSE m.high END,
+    CASE WHEN m.adj_low IS NOT NULL THEN m.adj_low WHEN m.adj_close IS NOT NULL AND m.close <> 0 THEN m.low * m.adj_close / m.close ELSE m.low END,
+    COALESCE(m.adj_close, m.close),
+    COALESCE(m.adj_volume, m.volume)
   FROM src.market_ohlcv_daily m
   WHERE m.market = 'US'
     AND (
@@ -218,26 +236,6 @@ INSERT OR REPLACE INTO daily_snapshots (
         (SELECT snapshot_start FROM sync_recent_bounds) IS NOT NULL
         AND m.date >= (SELECT snapshot_start FROM sync_recent_bounds)
       )
-    );
-INSERT OR REPLACE INTO us_analytics_copy_state (ticker, status, ohlcv_rows, snapshot_rows, updated_at)
-  SELECT
-    u.ticker,
-    'done',
-    COALESCE((SELECT COUNT(*) FROM ohlcv_daily o WHERE o.ticker = u.ticker), 0),
-    COALESCE((SELECT COUNT(*) FROM daily_snapshots d WHERE d.ticker = u.ticker), 0),
-    unixepoch()
-  FROM ticker_universe u
-  WHERE EXISTS (
-      SELECT 1
-      FROM ohlcv_daily o
-      WHERE o.ticker = u.ticker
-        AND o.date >= COALESCE((SELECT ohlcv_start FROM sync_recent_bounds), '9999-12-31')
-    )
-     OR EXISTS (
-      SELECT 1
-      FROM daily_snapshots d
-      WHERE d.ticker = u.ticker
-        AND d.date >= COALESCE((SELECT snapshot_start FROM sync_recent_bounds), '9999-12-31')
     );
 COMMIT;
 SELECT 'synced|' ||
@@ -294,8 +292,37 @@ async function ensureTarget(client: Client) {
     status TEXT NOT NULL,
     ohlcv_rows INTEGER NOT NULL DEFAULT 0,
     snapshot_rows INTEGER NOT NULL DEFAULT 0,
+    price_basis TEXT,
     updated_at INTEGER NOT NULL DEFAULT (unixepoch())
   )`)
+  try {
+    await run(client, 'ALTER TABLE us_analytics_copy_state ADD COLUMN price_basis TEXT')
+  } catch (error) {
+    if (!/duplicate column name/i.test(error instanceof Error ? error.message : String(error))) throw error
+  }
+  await run(client, `CREATE TABLE IF NOT EXISTS us_analytics_metadata (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+  )`)
+}
+
+async function markPriceBasisIfComplete(client: Client, expectedCount: number): Promise<void> {
+  const result = await client.execute({
+    sql: `SELECT COUNT(*) AS count
+          FROM us_analytics_copy_state
+          WHERE status = 'done' AND price_basis = ?`,
+    args: [US_ADJUSTED_PRICE_BASIS],
+  })
+  const count = Number(result.rows[0]?.count ?? 0)
+  if (expectedCount === 0 || count < expectedCount) return
+  await run(
+    client,
+    `INSERT INTO us_analytics_metadata (key, value, updated_at)
+     VALUES ('ohlcv_price_basis', ?, unixepoch())
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = unixepoch()`,
+    [US_ADJUSTED_PRICE_BASIS],
+  )
 }
 
 async function main() {
@@ -356,7 +383,7 @@ async function main() {
     args: [
       row.ticker,
       row.name,
-      row.active,
+      isUsInvestableSymbol(row.ticker) ? row.active : 0,
       row.shares_outstanding,
       row.sector,
       row.industry,
@@ -373,12 +400,15 @@ async function main() {
     )
   }
   const doneRows = await target.execute({
-    sql: `SELECT ticker FROM us_analytics_copy_state WHERE status = 'done'`,
-    args: [],
+    sql: REBUILD_PRICE_BASIS
+      ? `SELECT ticker FROM us_analytics_copy_state WHERE status = 'done' AND price_basis = ?`
+      : `SELECT ticker FROM us_analytics_copy_state WHERE status = 'done'`,
+    args: REBUILD_PRICE_BASIS ? [US_ADJUSTED_PRICE_BASIS] : [],
   })
   const done = new Set(doneRows.rows.map((row) => String(row.ticker)))
   const pendingTickers = tickers.filter((ticker) => !done.has(ticker))
   if (nativeCopyPending(pendingTickers, done.size)) {
+    await markPriceBasisIfComplete(target, tickers.length)
     console.log(
       `US analytics DB ready: ${TARGET_PATH}, universe=${universe.length}, copied via native SQLite, skipped=${done.size}`,
     )
@@ -399,7 +429,14 @@ async function main() {
       volume: number
     }>(
       `
-      SELECT ticker, date, open, high, low, close, volume
+      SELECT
+        ticker,
+        date,
+        CASE WHEN adj_open IS NOT NULL THEN adj_open WHEN adj_close IS NOT NULL AND close <> 0 THEN open * adj_close / close ELSE open END AS open,
+        CASE WHEN adj_high IS NOT NULL THEN adj_high WHEN adj_close IS NOT NULL AND close <> 0 THEN high * adj_close / close ELSE high END AS high,
+        CASE WHEN adj_low IS NOT NULL THEN adj_low WHEN adj_close IS NOT NULL AND close <> 0 THEN low * adj_close / close ELSE low END AS low,
+        COALESCE(adj_close, close) AS close,
+        COALESCE(adj_volume, volume) AS volume
       FROM market_ohlcv_daily
       WHERE market = 'US' AND ticker IN (${placeholders})
       ORDER BY ticker, date
@@ -525,20 +562,27 @@ async function main() {
     }
     await batch(target, chunk.map((ticker) => ({
       sql: `
-        INSERT INTO us_analytics_copy_state (ticker, status, ohlcv_rows, snapshot_rows, updated_at)
-        VALUES (?, 'done', ?, ?, unixepoch())
+        INSERT INTO us_analytics_copy_state (ticker, status, ohlcv_rows, snapshot_rows, price_basis, updated_at)
+        VALUES (?, 'done', ?, ?, ?, unixepoch())
         ON CONFLICT(ticker) DO UPDATE SET
           status = 'done',
           ohlcv_rows = excluded.ohlcv_rows,
           snapshot_rows = excluded.snapshot_rows,
+          price_basis = excluded.price_basis,
           updated_at = unixepoch()
       `,
-      args: [ticker, ohlcvByTicker.get(ticker) ?? 0, snapshotsByTicker.get(ticker) ?? 0],
+      args: [
+        ticker,
+        ohlcvByTicker.get(ticker) ?? 0,
+        snapshotsByTicker.get(ticker) ?? 0,
+        US_ADJUSTED_PRICE_BASIS,
+      ],
     })))
     console.log(
       `[${Math.min(i + COPY_CHUNK, pendingTickers.length)}/${pendingTickers.length}] copied ohlcv=${copied} snapshots=${snapshotsCopied} skipped=${done.size}`,
     )
   }
+  await markPriceBasisIfComplete(target, tickers.length)
   console.log(
     `US analytics DB ready: ${TARGET_PATH}, universe=${universe.length}, copiedOhlcv=${copied}, copiedSnapshots=${snapshotsCopied}, skipped=${done.size}`,
   )

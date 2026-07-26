@@ -16,19 +16,20 @@ interface Stock {
   name: string
   sector_large: string
   market_cap: number
-  stage: number
+  stage: number | null
   sector_small?: string | null
   sector17_name?: string | null
   sector33_name?: string | null
   market_segment?: string | null
   margin_type?: string | null
-  price: number
-  daily_change?: number
-  weekly_change?: number
-  monthly_change?: number
-  months3_change?: number
-  months6_change?: number
-  ytd_change?: number
+  price: number | null
+  daily_change?: number | null
+  weekly_change?: number | null
+  monthly_change?: number | null
+  months3_change?: number | null
+  months6_change?: number | null
+  ytd_change?: number | null
+  data_status?: 'ready' | 'partial_stage' | 'snapshot_pending' | 'price_pending'
   daily_a_stage?: number | null
   daily_b_stage?: number | null
   weekly_a_stage?: number | null
@@ -50,12 +51,12 @@ const TIMEFRAMES: { key: Timeframe; label: string }[] = [
   { key: 'monthly', label: '月足' },
 ]
 
-const formatPercent = (val?: number) => {
+const formatPercent = (val?: number | null) => {
   if (val === undefined || val === null) return '-'
   return `${val > 0 ? '+' : ''}${val.toFixed(2)}%`
 }
 
-const getPercentStyle = (val?: number | string): React.CSSProperties => {
+const getPercentStyle = (val?: number | string | null): React.CSSProperties => {
   if (val === undefined || val === null || val === '') return { color: '#9ca3af' }
   const num = Number(val)
   if (isNaN(num)) return { color: '#9ca3af' }
@@ -126,17 +127,28 @@ const MARKET_CAP_RANGES: { id: string; label: string }[] = [
   { id: '300-1000', label: '300〜1,000億' },
   { id: '1000-',    label: '1,000億〜' },
 ]
+const US_MARKET_CAP_RANGES: { id: string; label: string }[] = [
+  { id: 'all', label: '全て' },
+  { id: '-300m', label: '〜$300M' },
+  { id: '300m-2b', label: '$300M〜$2B' },
+  { id: '2b-10b', label: '$2B〜$10B' },
+  { id: '10b-200b', label: '$10B〜$200B' },
+  { id: '200b-', label: '$200B〜' },
+]
 
 // 銘柄テーブルの初期表示件数 /「もっと見る」増分。4,000+ 行の一括描画を避ける。
 const ROW_STEP = 100
 
-export default function HexMap({ data }: { data: Stock[]; timeframe?: Timeframe }) {
+export default function HexMap({ data, market = 'JP' }: { data: Stock[]; timeframe?: Timeframe; market?: 'JP' | 'US' }) {
+  const isUs = market === 'US'
   const router = useRouter()
   const [copiedCode, setCopiedCode] = useState<string | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
   const [selections, setSelections] = useState<Selections>(emptySelections)
   const [selectedMarketCapRange, setSelectedMarketCapRange] = useState<string>('all')
   const [rowLimit, setRowLimit] = useState(ROW_STEP)
+  const marketCapRanges = isUs ? US_MARKET_CAP_RANGES : MARKET_CAP_RANGES
+  const hasMarketCapData = data.some((stock) => stock.market_cap > 0)
 
   // 選択数の合計（任意のセルが1つでも選ばれているか）
   const totalSelectedCells = selections.daily.size + selections.weekly.size + selections.monthly.size
@@ -164,6 +176,17 @@ export default function HexMap({ data }: { data: Stock[]; timeframe?: Timeframe 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, selections, hasSelection])
   const filterByMarketCap = (stock: Stock) => {
+    if (isUs) {
+      const val = stock.market_cap
+      switch (selectedMarketCapRange) {
+        case '-300m': return val > 0 && val < 300e6
+        case '300m-2b': return val >= 300e6 && val < 2e9
+        case '2b-10b': return val >= 2e9 && val < 10e9
+        case '10b-200b': return val >= 10e9 && val < 200e9
+        case '200b-': return val >= 200e9
+        default: return true
+      }
+    }
     const val = stock.market_cap / 100000000
     switch (selectedMarketCapRange) {
       case '-50': return val < 50
@@ -274,7 +297,7 @@ export default function HexMap({ data }: { data: Stock[]; timeframe?: Timeframe 
               <>
                 <span className="text-gray-300 leading-none">|</span>
                 <span className="px-2.5 py-1 text-[11px] leading-none bg-gray-50 border border-gray-200 rounded-full">
-                  {MARKET_CAP_RANGES.find((r) => r.id === selectedMarketCapRange)?.label}
+                  {marketCapRanges.find((r) => r.id === selectedMarketCapRange)?.label}
                 </span>
               </>
             )}
@@ -284,22 +307,26 @@ export default function HexMap({ data }: { data: Stock[]; timeframe?: Timeframe 
         {/* 時価総額フィルタ */}
         <div className="flex flex-wrap gap-1.5 items-center">
           <span className="text-[11px] text-gray-500 mr-1 leading-none">時価総額</span>
-          {MARKET_CAP_RANGES.map((range) => {
+          {marketCapRanges.map((range) => {
             const active = selectedMarketCapRange === range.id
             return (
               <button
                 key={range.id}
+                disabled={range.id !== 'all' && !hasMarketCapData}
                 onClick={() => setSelectedMarketCapRange(range.id)}
                 className={`px-2.5 py-1 text-[11px] leading-none font-mono rounded-full border ${
                   active
                     ? 'bg-indigo-600 text-white border-indigo-600'
                     : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
-                }`}
+                } disabled:cursor-not-allowed disabled:opacity-40`}
               >
                 {range.label}
               </button>
             )
           })}
+          {isUs && !hasMarketCapData && (
+            <span className="text-[10px] font-semibold text-amber-700">発行済株式数が未連携のため無効</span>
+          )}
         </div>
       </div>
 
@@ -311,8 +338,8 @@ export default function HexMap({ data }: { data: Stock[]; timeframe?: Timeframe 
               <tr style={{ borderBottom: '1px solid #e5e7eb' }}>
                 <th scope="col" className="px-3 py-2 text-left font-medium text-gray-500 whitespace-nowrap">コード</th>
                 <th scope="col" className="px-3 py-2 text-left font-medium text-gray-500 whitespace-nowrap">銘柄名</th>
-                <th scope="col" className="px-3 py-2 text-left font-medium text-gray-500 whitespace-nowrap">貸借/信用</th>
-                <th scope="col" className="px-3 py-2 text-left font-medium text-gray-500 whitespace-nowrap">J-Quants業種</th>
+                <th scope="col" className="px-3 py-2 text-left font-medium text-gray-500 whitespace-nowrap">銘柄区分</th>
+                <th scope="col" className="px-3 py-2 text-left font-medium text-gray-500 whitespace-nowrap">市場 / 業種</th>
                 <th scope="col" className="px-3 py-2 text-right font-medium text-gray-500 whitespace-nowrap">株価</th>
                 <th scope="col" className="px-3 py-2 text-right font-medium text-gray-500 whitespace-nowrap">時価総額</th>
                 <th scope="col" className="px-3 py-2 text-right font-medium text-gray-500 whitespace-nowrap">日%</th>
@@ -329,8 +356,8 @@ export default function HexMap({ data }: { data: Stock[]; timeframe?: Timeframe 
               {visible.slice(0, rowLimit).map((s) => (
                 <tr
                   key={s.code}
-                  onClick={() => router.push(`/stock/${encodeURIComponent(s.code)}`)}
-                  onKeyDown={(e) => { if (e.key === 'Enter') router.push(`/stock/${encodeURIComponent(s.code)}`) }}
+                  onClick={() => router.push(`${isUs ? '/us/stock' : '/stock'}/${encodeURIComponent(s.code)}`)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') router.push(`${isUs ? '/us/stock' : '/stock'}/${encodeURIComponent(s.code)}`) }}
                   tabIndex={0}
                   role="link"
                   aria-label={`${s.name} の詳細を開く`}
@@ -358,7 +385,26 @@ export default function HexMap({ data }: { data: Stock[]; timeframe?: Timeframe 
                   </td>
                   <td className="px-3 py-2 font-medium text-gray-900 whitespace-nowrap">{s.name}</td>
                   <td className="px-3 py-2 whitespace-nowrap">
-                    <MarginBadges marginType={s.margin_type} compact />
+                    <div className="flex flex-wrap items-center gap-1">
+                      <MarginBadges marginType={s.margin_type} compact emptyLabel={isUs ? 'Stock' : '未取得'} />
+                      {isUs && s.data_status && s.data_status !== 'ready' && (
+                        <span
+                          className={`rounded-full border px-2 py-0.5 text-[10px] font-bold leading-tight whitespace-nowrap ${
+                            s.data_status === 'price_pending'
+                              ? 'border-amber-200 bg-amber-50 text-amber-700'
+                              : s.data_status === 'snapshot_pending'
+                                ? 'border-blue-200 bg-blue-50 text-blue-700'
+                                : 'border-gray-200 bg-gray-50 text-gray-600'
+                          }`}
+                        >
+                          {s.data_status === 'price_pending'
+                            ? '当日価格待ち'
+                            : s.data_status === 'snapshot_pending'
+                              ? 'Stage生成待ち'
+                              : '履歴蓄積中'}
+                        </span>
+                      )}
+                    </div>
                   </td>
                   <td className="px-3 py-2 text-gray-500 whitespace-nowrap">
                     {s.market_segment && (
@@ -367,17 +413,31 @@ export default function HexMap({ data }: { data: Stock[]; timeframe?: Timeframe 
                         <span className="text-gray-300 mx-1">/</span>
                       </>
                     )}
-                    <span>17: {s.sector17_name ?? s.sector_large}</span>
+                    <span>{isUs ? 'Sector' : '17'}: {s.sector17_name ?? s.sector_large}</span>
                     {(s.sector33_name ?? s.sector_small) && (
                       <>
                         <span className="text-gray-300 mx-1">/</span>
-                        <span>33: {s.sector33_name ?? s.sector_small}</span>
+                        <span>{isUs ? 'Industry' : '33'}: {s.sector33_name ?? s.sector_small}</span>
                       </>
                     )}
                   </td>
-                  <td className="px-3 py-2 text-right font-mono whitespace-nowrap">{s.price.toLocaleString()}</td>
+                  <td className="px-3 py-2 text-right font-mono whitespace-nowrap">
+                    {s.price == null
+                      ? '-'
+                      : isUs
+                        ? `$${s.price.toLocaleString('en-US', { maximumFractionDigits: 2 })}`
+                        : s.price.toLocaleString()}
+                  </td>
                   <td className="px-3 py-2 text-right font-mono text-gray-600 whitespace-nowrap">
-                    {Math.round(s.market_cap / 1e8).toLocaleString()}<span className="text-[10px] text-gray-400 ml-0.5">億</span>
+                    {isUs
+                      ? s.market_cap > 0
+                        ? s.market_cap >= 1e12
+                          ? `$${(s.market_cap / 1e12).toFixed(2)}T`
+                          : s.market_cap >= 1e9
+                            ? `$${(s.market_cap / 1e9).toFixed(1)}B`
+                            : `$${(s.market_cap / 1e6).toFixed(0)}M`
+                        : '-'
+                      : <>{Math.round(s.market_cap / 1e8).toLocaleString()}<span className="text-[10px] text-gray-400 ml-0.5">億</span></>}
                   </td>
                   <td className="px-3 py-2 text-right font-mono whitespace-nowrap" style={getPercentStyle(s.daily_change)}>{formatPercent(s.daily_change)}</td>
                   <td className="px-3 py-2 text-right font-mono whitespace-nowrap" style={getPercentStyle(s.weekly_change)}>{formatPercent(s.weekly_change)}</td>

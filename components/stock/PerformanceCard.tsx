@@ -6,6 +6,7 @@ import type { OHLCV } from '@/types/stock'
 
 interface PerformanceCardProps {
   ticker: string
+  market?: 'JP' | 'US'
   embedded?: boolean
   analysisDate?: string | null
 }
@@ -67,7 +68,12 @@ function yearToDateInfo(ohlcv: OHLCV[]): YtdInfo {
  * 直近の変化率を一目で確認できるカード
  * 1日 / 1週 / 1ヶ月 / 3ヶ月 / 6ヶ月 / 年初来
  */
-export function PerformanceCard({ ticker, embedded = false, analysisDate = null }: PerformanceCardProps) {
+export function PerformanceCard({
+  ticker,
+  market = 'JP',
+  embedded = false,
+  analysisDate = null,
+}: PerformanceCardProps) {
   const [perf, setPerf] = useState<PerfRow[]>([])
   const [ytd, setYtd] = useState<YtdInfo | null>(null)
   const [loading, setLoading] = useState(true)
@@ -78,7 +84,8 @@ export function PerformanceCard({ ticker, embedded = false, analysisDate = null 
     setPerf([])
     setYtd(null)
     const period = analysisDate ? 'all' : '1y'
-    fetch(`/api/history/${encodeURIComponent(ticker)}?period=${period}`, { cache: 'no-store' })
+    const historyPath = market === 'US' ? '/api/us/history' : '/api/history'
+    fetch(`${historyPath}/${encodeURIComponent(ticker)}?period=${period}`, { cache: 'no-store' })
       .then((r) => r.json())
       .then((d: OHLCV[] | { error: string }) => {
         if (cancelled || !Array.isArray(d)) return
@@ -96,7 +103,16 @@ export function PerformanceCard({ ticker, embedded = false, analysisDate = null 
       .catch(() => { /* ignore */ })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [analysisDate, ticker])
+  }, [analysisDate, market, ticker])
+
+  const formatPrice = (value: number | null) => {
+    if (value == null) return '---'
+    return new Intl.NumberFormat(market === 'US' ? 'en-US' : 'ja-JP', {
+      style: 'currency',
+      currency: market === 'US' ? 'USD' : 'JPY',
+      maximumFractionDigits: market === 'US' ? 2 : 0,
+    }).format(value)
+  }
 
   return (
     <div className={embedded ? '' : 'card stock-performance-card'} style={embedded ? { minWidth: 0 } : undefined}>
@@ -130,12 +146,12 @@ export function PerformanceCard({ ticker, embedded = false, analysisDate = null 
         <div className="stock-ytd-strip">
           <div>
             <span>年初来高値</span>
-            <strong>{ytd.high == null ? '---' : `¥${Math.round(ytd.high).toLocaleString('ja-JP')}`}</strong>
+            <strong>{formatPrice(ytd.high)}</strong>
             <small>{ytd.highDate ?? '-'}</small>
           </div>
           <div>
             <span>年初来安値</span>
-            <strong>{ytd.low == null ? '---' : `¥${Math.round(ytd.low).toLocaleString('ja-JP')}`}</strong>
+            <strong>{formatPrice(ytd.low)}</strong>
             <small>{ytd.lowDate ?? '-'}</small>
           </div>
           <div>

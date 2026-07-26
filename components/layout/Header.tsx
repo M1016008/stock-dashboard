@@ -116,6 +116,7 @@ const US_NAV_ITEMS = [
     icon: Search,
     items: [
       { href: '/us/screener', label: 'USスクリーナー', description: '米国株を条件で抽出', icon: Search },
+      { href: '/us/stage-screener', label: 'USステージスクリーナー', description: '日足・週足・月足の行列で抽出', icon: Hexagon },
       { href: '/ai/research?market=US', label: 'AI銘柄リサーチ', description: '米国株も自然言語で探索', icon: MessageSquareText },
       { href: '/chart-drill?market=US', label: 'チャートドリル', description: 'US過去チャートで初動練習', icon: ChartCandlestick },
     ],
@@ -126,9 +127,9 @@ const US_NAV_ITEMS = [
     label: '分析',
     icon: Activity,
     items: [
-      { href: '/ai/ma-lens', label: 'AI Lens', description: 'MA形状・物理特徴量を横断確認', icon: Activity },
-      { href: '/ai/transitions', label: 'パターン遷移', description: '過去パターンの推移分析', icon: ChartCandlestick },
-      { href: '/backtest', label: '過去検証', description: 'シグナルと期待値を確認', icon: FlaskConical },
+      { href: '/us/analysis/ml-lens', label: 'US AI Lens', description: 'US物理特徴量・ML候補・類似局面', icon: Activity },
+      { href: '/us/analysis/transitions', label: 'USステージ遷移', description: 'US日足・週足・月足の構造分析', icon: ChartCandlestick },
+      { href: '/us/analysis/backtest', label: 'US過去検証', description: 'USモデル・物理状態・RLを検証', icon: FlaskConical },
     ],
   },
   {
@@ -294,6 +295,10 @@ const COMMAND_SEARCH_RESULTS: QuickSearchResult[] = [
   { key: 'command:dashboard', ticker: '開く', name: 'ダッシュボード', market: 'COMMAND', href: '/', badge: '機能', meta: '今日の市場判断と売買候補' },
   { key: 'command:jp-screener', ticker: '探す', name: '日本株スクリーナー', market: 'COMMAND', href: '/screener', badge: '機能', meta: '条件・6ステージ・PMSで抽出' },
   { key: 'command:us-screener', ticker: '探す', name: 'USスクリーナー', market: 'COMMAND', href: '/us/screener', badge: '機能', meta: '米国株を条件で抽出' },
+  { key: 'command:us-stage-screener', ticker: '探す', name: 'USステージスクリーナー', market: 'COMMAND', href: '/us/stage-screener', badge: '機能', meta: '日足・週足・月足のB×A行列で抽出' },
+  { key: 'command:us-ml-lens', ticker: '分析', name: 'US AI Lens', market: 'COMMAND', href: '/us/analysis/ml-lens', badge: 'US機能', meta: 'US物理特徴量・ML候補・類似局面' },
+  { key: 'command:us-transitions', ticker: '分析', name: 'USステージ遷移', market: 'COMMAND', href: '/us/analysis/transitions', badge: 'US機能', meta: 'US日足・週足・月足の構造分析' },
+  { key: 'command:us-backtest', ticker: '検証', name: 'US過去検証', market: 'COMMAND', href: '/us/analysis/backtest', badge: 'US機能', meta: 'USモデル・物理状態・RLを検証' },
   { key: 'command:analogs', ticker: '分析', name: '本質類似局面', market: 'COMMAND', href: '/ai/ma-lens#historical-pattern-search', badge: '機能', meta: 'MA構造が近い過去局面・現在銘柄' },
   { key: 'command:research', ticker: '相談', name: 'AI銘柄リサーチ', market: 'COMMAND', href: '/ai/research', badge: '機能', meta: '自然言語をDB条件へ変換' },
   { key: 'command:watchlist', ticker: '監視', name: 'ウォッチリスト', market: 'COMMAND', href: '/watchlist', badge: '機能', meta: '保存した監視銘柄' },
@@ -493,7 +498,16 @@ function TickerQuickSearch({ area }: { area: HeaderArea }) {
     meta: '最近見た銘柄',
   }))
   const quickCommands = COMMAND_SEARCH_RESULTS.filter((result) => {
-    if (area === 'us') return ['/us/screener', '/ai/research', '/custom-charts', '/watchlist'].includes(result.href)
+    if (area === 'us') return [
+      '/us/screener',
+      '/us/stage-screener',
+      '/us/analysis/ml-lens',
+      '/us/analysis/transitions',
+      '/us/analysis/backtest',
+      '/ai/research',
+      '/custom-charts',
+      '/watchlist',
+    ].includes(result.href)
     if (area === 'commodities') return ['/custom-charts', '/watchlist'].includes(result.href)
     return ['/', '/screener', '/ai/ma-lens#historical-pattern-search', '/watchlist'].includes(result.href)
   })
@@ -607,7 +621,14 @@ function TickerQuickSearch({ area }: { area: HeaderArea }) {
 export function Header() {
   const pathname = usePathname()
   const searchParams = useSearchParams()
-  const area = pathname.startsWith('/commodities') ? 'commodities' : pathname.startsWith('/us') ? 'us' : 'jp'
+  const requestedMarket = searchParams.get('market')
+  const area = pathname.startsWith('/commodities')
+    || (pathname.startsWith('/ai/') && requestedMarket === 'COMMODITY')
+    ? 'commodities'
+    : pathname.startsWith('/us')
+      || (pathname.startsWith('/ai/') && requestedMarket === 'US')
+      ? 'us'
+      : 'jp'
   const isUsArea = area === 'us'
   const isCommodityArea = area === 'commodities'
   const navItems = isCommodityArea ? COMMODITY_NAV_ITEMS : isUsArea ? US_NAV_ITEMS : NAV_ITEMS

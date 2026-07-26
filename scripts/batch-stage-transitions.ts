@@ -12,7 +12,7 @@
 //   - 既存 stage_transitions を削除して再投入 (冪等)
 
 import { db, client } from '@/lib/db/client'
-import { stageTransitions, batchRuns } from '@/lib/db/schema'
+import { batchRuns } from '@/lib/db/schema'
 import { eq } from 'drizzle-orm'
 
 const AXES = [
@@ -59,27 +59,40 @@ async function main() {
     .returning({ id: batchRuns.id })
   const runId = run.id
 
-  console.log('既存 stage_transitions 削除...')
-  await db.delete(stageTransitions)
-
   let totalInserted = 0
   const startTime = Date.now()
+  const records: Array<{
+    axis: string
+    from_stage: number
+    to_stage: number
+    count: number
+  }> = []
 
   for (const axis of AXES) {
     console.log(`\n=== ${axis.key} (column: ${axis.col}) ===`)
     const cells = await aggregateAxis(axis.key, axis.col)
     console.log(`  ${cells.length} セル (${cells.reduce((s, c) => s + c.count, 0).toLocaleString()} 遷移)`)
 
-    if (cells.length === 0) continue
-    const records = cells.map(c => ({
+    records.push(...cells.map(c => ({
       axis:        axis.key,
       from_stage:  c.from_stage,
       to_stage:    c.to_stage,
       count:       c.count,
-    }))
-    await db.insert(stageTransitions).values(records)
-    totalInserted += records.length
+    })))
   }
+
+  console.log('\n全6軸の集計完了。既存値を原子的に置換...')
+  await client.batch([
+    { sql: 'DELETE FROM stage_transitions', args: [] },
+    ...records.map((record) => ({
+      sql: `
+        INSERT INTO stage_transitions(axis, from_stage, to_stage, count, computed_at)
+        VALUES (?, ?, ?, ?, unixepoch())
+      `,
+      args: [record.axis, record.from_stage, record.to_stage, record.count],
+    })),
+  ])
+  totalInserted = records.length
 
   await db
     .update(batchRuns)

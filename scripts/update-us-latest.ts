@@ -5,9 +5,12 @@
 
 import { execFileSync, spawn } from 'node:child_process'
 import { execGet } from '@/lib/db/client'
+import { execUsAnalyticsGet } from '@/lib/db/us-analytics'
 import { acquireExclusiveUpdateLock } from '@/lib/server/update-lock'
 import { expectedLatestUsTradingDate } from '@/lib/server/us-data-freshness'
 import { waitForMemoryHeadroom, withMemoryGuardEnv } from '@/lib/system/memory-guard'
+import { US_ADJUSTED_PRICE_BASIS } from '@/lib/us-adjusted-ohlcv'
+import { usInvestableSymbolSql } from '@/lib/us-symbol-quality'
 
 type RunResult = {
   code: number | null
@@ -62,6 +65,59 @@ async function latestUsOhlcvDate(): Promise<string | null> {
   return row?.date ?? null
 }
 
+async function usOhlcvCoverage(date: string): Promise<{ universe: number; covered: number; coveragePct: number }> {
+  const row = await execGet<{ universe: number; covered: number }>(
+    `SELECT
+       COUNT(*) AS universe,
+       SUM(CASE WHEN o.ticker IS NOT NULL THEN 1 ELSE 0 END) AS covered
+     FROM market_universe u INDEXED BY market_universe_market_active_idx
+     LEFT JOIN market_ohlcv_daily o INDEXED BY market_ohlcv_market_date_ticker_idx
+       ON o.market = 'US' AND o.date = ? AND o.ticker = u.ticker
+     WHERE u.market = 'US'
+       AND u.active = 1
+       AND ${usInvestableSymbolSql('u.ticker')}`,
+    [date],
+  )
+  const universe = Number(row?.universe ?? 0)
+  const covered = Number(row?.covered ?? 0)
+  return {
+    universe,
+    covered,
+    coveragePct: universe > 0 ? 100 * covered / universe : 0,
+  }
+}
+
+async function usSnapshotCoverage(date: string): Promise<{ universe: number; covered: number; coveragePct: number }> {
+  const row = await execGet<{ universe: number; covered: number }>(
+    `SELECT
+       COUNT(*) AS universe,
+       SUM(CASE WHEN s.ticker IS NOT NULL THEN 1 ELSE 0 END) AS covered
+     FROM market_universe u INDEXED BY market_universe_market_active_idx
+     INNER JOIN market_ohlcv_daily current INDEXED BY market_ohlcv_market_date_ticker_idx
+       ON current.market = 'US' AND current.date = ? AND current.ticker = u.ticker
+     LEFT JOIN market_daily_snapshots s INDEXED BY market_snapshots_market_date_ticker_idx
+       ON s.market = 'US' AND s.date = ? AND s.ticker = u.ticker
+     WHERE u.market = 'US'
+       AND u.active = 1
+       AND ${usInvestableSymbolSql('u.ticker')}
+       AND EXISTS (
+         SELECT 1
+         FROM market_ohlcv_daily history INDEXED BY market_ohlcv_market_ticker_date_idx
+         WHERE history.market = 'US' AND history.ticker = u.ticker
+         ORDER BY history.date DESC
+         LIMIT 1 OFFSET 4
+       )`,
+    [date, date],
+  )
+  const universe = Number(row?.universe ?? 0)
+  const covered = Number(row?.covered ?? 0)
+  return {
+    universe,
+    covered,
+    coveragePct: universe > 0 ? 100 * covered / universe : 0,
+  }
+}
+
 async function latestUsSnapshotDate(): Promise<string | null> {
   const row = await execGet<{ date: string | null }>(
     `SELECT date
@@ -71,6 +127,28 @@ async function latestUsSnapshotDate(): Promise<string | null> {
      LIMIT 1`,
   )
   return row?.date ?? null
+}
+
+async function latestUsOhlcvRunNeedsRetry(): Promise<boolean> {
+  const row = await execGet<{ status: string; payloadJson: string }>(
+    `
+    SELECT status, payload_json AS payloadJson
+    FROM market_data_runs
+    WHERE market = 'US' AND job_type = 'tiingo_ohlcv'
+    ORDER BY started_at DESC
+    LIMIT 1
+    `,
+  )
+  if (!row || row.status === 'running') return false
+  return row.status === 'failed' || row.status === 'interrupted' || row.status === 'partial'
+}
+
+async function usAnalyticsPriceBasis(): Promise<string | null> {
+  return execUsAnalyticsGet<{ value: string }>(
+    `SELECT value
+     FROM us_analytics_metadata
+     WHERE key = 'ohlcv_price_basis'`,
+  ).then((row) => row?.value ?? null).catch(() => null)
 }
 
 async function runCommand(command: string, args: string[], envOverrides: EnvOverrides, heartbeat?: Heartbeat): Promise<RunResult> {
@@ -139,8 +217,7 @@ async function runNpm(script: string, envOverrides: EnvOverrides = {}, heartbeat
 
 async function main() {
   if (hasActiveHeavyMlProcess()) {
-    console.log('US latest update skipped: heavy ML/backfill process is active')
-    return
+    console.log('Heavy US ML is active; source price refresh will continue and analytics publication will be deferred')
   }
 
   const lockLeaseSeconds = Math.max(
@@ -178,11 +255,37 @@ async function main() {
     await lock.heartbeat()
 
     const latestBeforeFetch = await latestUsOhlcvDate()
+    const minimumCoveragePct = numberEnv('US_DAILY_MIN_PRICE_COVERAGE_PCT', 95)
+    const retryCoveragePct = numberEnv('US_DAILY_RETRY_PRICE_COVERAGE_PCT', 99.95)
+    const coverageBeforeFetch = latestBeforeFetch
+      ? await usOhlcvCoverage(latestBeforeFetch)
+      : null
+    const coverageNeedsRetry = Boolean(
+      latestBeforeFetch
+      && latestBeforeFetch >= expected
+      && coverageBeforeFetch
+      && coverageBeforeFetch.coveragePct < retryCoveragePct,
+    )
+    const pendingOhlcvRetry = await latestUsOhlcvRunNeedsRetry()
     const dailyHistoryFrom = process.env.US_DAILY_HISTORY_FROM?.trim() || expected
-    if (!latestBeforeFetch || latestBeforeFetch < expected || process.env.US_FORCE_OHLCV_REFRESH === '1') {
+    if (
+      !latestBeforeFetch
+      || latestBeforeFetch < expected
+      || pendingOhlcvRetry
+      || coverageNeedsRetry
+      || process.env.US_FORCE_OHLCV_REFRESH === '1'
+    ) {
+      if (pendingOhlcvRetry || coverageNeedsRetry) {
+        console.log(
+          `US OHLCV retry required: previousPartial=${pendingOhlcvRetry}, `
+          + `coverage=${coverageBeforeFetch?.coveragePct.toFixed(2) ?? '-'}%`,
+        )
+      }
       await runNpm('batch:us-ohlcv', {
         US_INCLUDE_INACTIVE: process.env.US_DAILY_INCLUDE_INACTIVE ?? '0',
         US_HISTORY_FROM: dailyHistoryFrom,
+        US_TARGET_END_DATE: expected,
+        US_REQUIRE_DATE_RANGE: process.env.US_DAILY_REQUIRE_DATE_RANGE ?? '0',
         US_OHLCV_CONCURRENCY: process.env.US_DAILY_OHLCV_CONCURRENCY ?? '2',
         US_OHLCV_RATE_LIMIT_MS: process.env.US_DAILY_OHLCV_RATE_LIMIT_MS ?? '350',
         US_OHLCV_INSERT_CHUNK: process.env.US_DAILY_OHLCV_INSERT_CHUNK ?? '50',
@@ -205,8 +308,39 @@ async function main() {
       return
     }
 
+    const coverage = await usOhlcvCoverage(afterOhlcv)
+    console.log(
+      `US source coverage: ${coverage.covered}/${coverage.universe} (${coverage.coveragePct.toFixed(2)}%), `
+      + `publication minimum=${minimumCoveragePct}%, retry target=${retryCoveragePct}%`,
+    )
+    if (
+      coverage.coveragePct < minimumCoveragePct
+      && process.env.US_ALLOW_PARTIAL_DAILY_PUBLICATION !== '1'
+    ) {
+      console.log(
+        'US latest update deferred: price coverage is below the publication threshold; '
+        + 'the next scheduled run will retry stale tickers before snapshots/ML are published',
+      )
+      return
+    }
+
     const latestSnapshots = await latestUsSnapshotDate()
-    if (afterOhlcv && (latestSnapshots == null || latestSnapshots < afterOhlcv || process.env.US_FORCE_SNAPSHOT_REFRESH === '1')) {
+    const minimumSnapshotCoveragePct = numberEnv('US_DAILY_MIN_SNAPSHOT_COVERAGE_PCT', 99.5)
+    const snapshotCoverageBefore = await usSnapshotCoverage(afterOhlcv)
+    const snapshotCoverageNeedsRepair = snapshotCoverageBefore.coveragePct < minimumSnapshotCoveragePct
+    console.log(
+      `US snapshot coverage: ${snapshotCoverageBefore.covered}/${snapshotCoverageBefore.universe} `
+      + `(${snapshotCoverageBefore.coveragePct.toFixed(2)}%), minimum=${minimumSnapshotCoveragePct}%`,
+    )
+    if (
+      latestSnapshots == null
+      || latestSnapshots < afterOhlcv
+      || snapshotCoverageNeedsRepair
+      || process.env.US_FORCE_SNAPSHOT_REFRESH === '1'
+    ) {
+      if (snapshotCoverageNeedsRepair) {
+        console.log('US snapshot repair required: latest date is aligned but eligible ticker coverage is incomplete')
+      }
       await runNpm('batch:us-snapshots', {
         US_INCLUDE_INACTIVE: process.env.US_DAILY_INCLUDE_INACTIVE ?? '0',
         US_SNAPSHOT_CONCURRENCY: process.env.US_DAILY_SNAPSHOT_CONCURRENCY ?? '2',
@@ -216,6 +350,28 @@ async function main() {
     } else {
       console.log(`US snapshots are already aligned: ${latestSnapshots ?? '-'} / OHLCV ${afterOhlcv ?? '-'}`)
     }
+    const snapshotCoverageAfter = await usSnapshotCoverage(afterOhlcv)
+    console.log(
+      `US snapshot coverage after refresh: ${snapshotCoverageAfter.covered}/${snapshotCoverageAfter.universe} `
+      + `(${snapshotCoverageAfter.coveragePct.toFixed(2)}%)`,
+    )
+    if (
+      snapshotCoverageAfter.coveragePct < minimumSnapshotCoveragePct
+      && process.env.US_ALLOW_PARTIAL_DAILY_PUBLICATION !== '1'
+    ) {
+      console.log(
+        'US latest update deferred: snapshot coverage is below the publication threshold; '
+        + 'the next scheduled run will repair missing snapshot rows before analytics/ML are published',
+      )
+      return
+    }
+
+    if (hasActiveHeavyMlProcess()) {
+      console.log(
+        'US source price and snapshots are current; analytics/ML publication deferred until the active heavy ML process exits',
+      )
+      return
+    }
 
     await runNpm('batch:us-analytics-db', {
       US_ANALYTICS_DB_PATH: usAnalyticsDbPath,
@@ -223,6 +379,15 @@ async function main() {
       UPDATE_CHILD_TIMEOUT_MINUTES: process.env.US_ANALYTICS_TIMEOUT_MINUTES ?? '240',
     }, heartbeat)
     await lock.heartbeat()
+
+    const priceBasis = await usAnalyticsPriceBasis()
+    if (priceBasis !== US_ADJUSTED_PRICE_BASIS) {
+      console.log(
+        `US analytics publication deferred: priceBasis=${priceBasis ?? 'missing'}, `
+        + `expected=${US_ADJUSTED_PRICE_BASIS}. The weekly foundation job will rebuild full history safely.`,
+      )
+      return
+    }
 
     await runNpm('batch:us-analytics-validate', {
       US_ANALYTICS_DB_PATH: usAnalyticsDbPath,

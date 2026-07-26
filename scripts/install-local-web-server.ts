@@ -139,7 +139,7 @@ const webPlist = `<?xml version="1.0" encoding="UTF-8"?>
   <key>ProcessType</key>
   <string>Standard</string>
   <key>Nice</key>
-  <integer>5</integer>
+  <integer>0</integer>
   <key>SoftResourceLimits</key>
   <dict>
     <key>NumberOfFiles</key><integer>65536</integer>

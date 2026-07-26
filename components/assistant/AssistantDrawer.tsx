@@ -20,7 +20,13 @@ interface AssistantChatEntry {
   response?: AssistantChatResponse
 }
 
-function marketFromPath(pathname: string): AssistantPageContext['market'] {
+function marketFromContext(
+  pathname: string,
+  marketParam: string | null,
+): AssistantPageContext['market'] {
+  if (marketParam === 'US' || marketParam === 'JP' || marketParam === 'COMMODITY') {
+    return marketParam
+  }
   if (pathname.startsWith('/us')) return 'US'
   if (pathname.startsWith('/commodities')) return 'COMMODITY'
   return 'JP'
@@ -37,6 +43,22 @@ function tickerFromPath(pathname: string): string | null {
 function formatNumber(value: number | null | undefined): string {
   if (typeof value !== 'number' || !Number.isFinite(value)) return '-'
   return Math.round(value).toLocaleString()
+}
+
+function formatPrice(
+  value: number | null | undefined,
+  market: AssistantPageContext['market'],
+): string {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '-'
+  if (market === 'US') {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: 'USD',
+      minimumFractionDigits: value < 10 ? 2 : 0,
+      maximumFractionDigits: value < 10 ? 4 : 2,
+    }).format(value)
+  }
+  return Math.round(value).toLocaleString('ja-JP')
 }
 
 function formatPct(value: number | null | undefined): string {
@@ -80,7 +102,13 @@ export function assistantStatusText(status: AssistantStatusResponse | null): str
   return `OpenAI接続設定あり / ${status.model}`
 }
 
-function ResultRowCard({ row }: { row: AssistantResultRow }) {
+function ResultRowCard({
+  row,
+  market,
+}: {
+  row: AssistantResultRow
+  market: AssistantPageContext['market']
+}) {
   const content = (
     <div className="rounded-[6px] border border-[var(--color-border-default)] bg-white p-3 transition-colors hover:border-[var(--color-brand-500)]">
       <div className="flex items-start justify-between gap-3">
@@ -95,7 +123,7 @@ function ResultRowCard({ row }: { row: AssistantResultRow }) {
             )}
           </div>
           <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] font-semibold text-[var(--color-text-secondary)]">
-            {row.price != null && <span>株価 {formatNumber(row.price)}</span>}
+            {row.price != null && <span>株価 {formatPrice(row.price, market)}</span>}
             {row.changePct != null && (
               <span className={row.changePct >= 0 ? 'text-[var(--color-price-up)]' : 'text-[var(--color-price-down)]'}>
                 {formatPct(row.changePct)}
@@ -223,7 +251,11 @@ export function AssistantResponseCard({ response, onRun }: { response: Assistant
           </div>
           <div className="space-y-2">
             {section.rows.slice(0, 8).map((row, index) => (
-              <ResultRowCard key={`${section.tool}-${row.ticker ?? index}-${index}`} row={row} />
+              <ResultRowCard
+                key={`${section.tool}-${row.ticker ?? index}-${index}`}
+                row={row}
+                market={response.context.market}
+              />
             ))}
             {section.rows.length === 0 && (
               <div className="rounded-[6px] border border-dashed border-[var(--color-border-default)] bg-white p-3 text-[11px] font-bold text-[var(--color-text-tertiary)]">
@@ -269,15 +301,23 @@ export function AssistantDrawer() {
     pathname,
     search: searchParams.toString(),
     ticker,
-    market: marketFromPath(pathname),
+    market: marketFromContext(pathname, searchParams.get('market')),
     universe: searchParams.get('universe'),
   }), [pathname, searchParams, ticker])
   const suggestions = useMemo(() => {
     if (ticker) {
+      const marketLabel = pathname.startsWith('/us') ? '米国株' : '銘柄'
       return [
-        `${ticker}に似た銘柄を探して`,
+        `${ticker}に似た${marketLabel}を探して`,
         `${ticker}の下落リスクを見て`,
         'この銘柄と同じ形で、まだ初動っぽい候補を探して',
+      ]
+    }
+    if (pathname.startsWith('/us') || searchParams.get('market') === 'US') {
+      return [
+        '米国株の物理ML上昇候補を探して',
+        '米国株でPMSが弱い下落警戒候補',
+        '米国株で良さそうな銘柄を相談したい',
       ]
     }
     if (pathname.startsWith('/earnings')) {
@@ -287,7 +327,7 @@ export function AssistantDrawer() {
       return ['日経225で好転候補を探して', '下落警戒が強い貸借銘柄', '出来高が多い順で候補を出して']
     }
     return ['日経225で初動候補を探して', '下落警戒が強い銘柄', '良さそうな銘柄を相談したい']
-  }, [pathname, ticker])
+  }, [pathname, searchParams, ticker])
 
   useEffect(() => {
     if (!open) return

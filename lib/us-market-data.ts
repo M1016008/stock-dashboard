@@ -3,21 +3,25 @@ import { normalizeTickerForMarket } from '@/lib/markets'
 import { getUsDisplayName } from '@/lib/us-symbol-aliases'
 import type { StockQuote } from '@/types/stock'
 import { buildQuoteTechnicalSummary } from '@/lib/quote-technicals'
+import { toAdjustedUsOhlcvRows, type UsRawOhlcvRow } from '@/lib/us-adjusted-ohlcv'
 
 export async function getUsQuote(rawTicker: string): Promise<StockQuote | null> {
   const ticker = normalizeTickerForMarket(rawTicker, 'US')
-  const rows = await execAll<{
-    date: string
-    close: number
-    volume: number
-  }>(
-    `SELECT date, close, volume
+  const rawRows = await execAll<UsRawOhlcvRow>(
+    `SELECT
+       date, open, high, low, close, volume,
+       adj_open AS adjustedOpen,
+       adj_high AS adjustedHigh,
+       adj_low AS adjustedLow,
+       adj_close AS adjustedClose,
+       adj_volume AS adjustedVolume
      FROM market_ohlcv_daily
      WHERE market = 'US' AND ticker = ?
      ORDER BY date DESC
      LIMIT 260`,
     [ticker],
   )
+  const rows = toAdjustedUsOhlcvRows(rawRows)
   if (rows.length === 0) return null
 
   const latest = rows[0]
@@ -37,12 +41,16 @@ export async function getUsQuote(rawTicker: string): Promise<StockQuote | null> 
      WHERE market = 'US' AND ticker = ?`,
     [ticker],
   )
-  const hiLo = await execGet<{ hi: number | null; lo: number | null }>(
-    `SELECT MAX(high) AS hi, MIN(low) AS lo
-     FROM market_ohlcv_daily
-     WHERE market = 'US' AND ticker = ? AND date >= date(?, '-365 days')`,
-    [ticker, latest.date],
-  )
+  const yearStart = new Date(`${latest.date}T00:00:00Z`)
+  yearStart.setUTCDate(yearStart.getUTCDate() - 365)
+  const yearStartDate = yearStart.toISOString().slice(0, 10)
+  const trailingYear = rows.filter((row) => row.date >= yearStartDate)
+  const fiftyTwoWeekHigh = trailingYear.length > 0
+    ? Math.max(...trailingYear.map((row) => row.high))
+    : undefined
+  const fiftyTwoWeekLow = trailingYear.length > 0
+    ? Math.min(...trailingYear.map((row) => row.low))
+    : undefined
   const change = prev ? latest.close - prev.close : 0
   const changePercent = prev && prev.close !== 0 ? 100 * change / prev.close : 0
   const technicals = buildQuoteTechnicalSummary([...rows].reverse())
@@ -65,8 +73,8 @@ export async function getUsQuote(rawTicker: string): Promise<StockQuote | null> 
     priceQualityWarning,
     isPriceDiscontinuous: Boolean(priceQualityWarning),
     marketCap: meta?.shares_outstanding ? latest.close * meta.shares_outstanding : undefined,
-    fiftyTwoWeekHigh: hiLo?.hi ?? undefined,
-    fiftyTwoWeekLow: hiLo?.lo ?? undefined,
+    fiftyTwoWeekHigh,
+    fiftyTwoWeekLow,
     technicals: technicals ?? undefined,
     exchange: meta?.exchange ?? undefined,
   }

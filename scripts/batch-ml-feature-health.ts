@@ -15,6 +15,8 @@ type Check = {
   payload?: Record<string, unknown>
 }
 
+const STRICT = process.env.ML_FEATURE_HEALTH_STRICT === '1'
+
 function statusFor(check: Check): string {
   if (!check.expectedDate || !check.actualDate) return 'missing'
   if (check.actualDate !== check.expectedDate) return 'stale'
@@ -216,6 +218,12 @@ async function main() {
 
   const summary = checks.map((check) => `${check.key}=${statusFor(check)}(${check.actualDate ?? '-'} ${check.actualCount ?? '-'})`).join(', ')
   console.log(`ml feature health ${checkDate}: ${summary}`)
+  const unhealthy = checks.filter((check) => statusFor(check) !== 'ok')
+  if (STRICT && unhealthy.length > 0) {
+    throw new Error(
+      `ML feature health gate failed: ${unhealthy.map((check) => `${check.key}=${statusFor(check)}`).join(', ')}`,
+    )
+  }
 }
 
 main()

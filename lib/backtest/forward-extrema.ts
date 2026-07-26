@@ -25,6 +25,12 @@ export type ForwardExtremaRow = {
   days_to_40: number | null
 }
 
+export function exactForwardExtremaRecomputeBars(horizons: readonly number[]): number {
+  const validHorizons = horizons.filter((horizon) => Number.isInteger(horizon) && horizon > 0)
+  if (validHorizons.length === 0) return 0
+  return Math.max(...validHorizons) + 1
+}
+
 class RangeMaxTree {
   private readonly size: number
   private readonly tree: number[]

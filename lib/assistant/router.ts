@@ -53,8 +53,26 @@ function normalizeTicker(value: unknown): string | null {
 function tickerFromContext(context: AssistantPageContext): string | null {
   const explicit = normalizeTicker(context.ticker)
   if (explicit) return explicit
-  const match = context.pathname?.match(/^\/stock\/([^/?#]+)/)
+  const match = context.pathname?.match(/^\/(?:us\/)?stock\/([^/?#]+)/)
   return normalizeTicker(match?.[1])
+}
+
+function marketFromContext(context: AssistantPageContext): 'JP' | 'US' {
+  if (context.market === 'US') return 'US'
+  if (context.pathname?.startsWith('/us/')) return 'US'
+  if (/(?:^|[?&])market=US(?:&|$)/i.test(context.search ?? '')) return 'US'
+  return 'JP'
+}
+
+function scopePlanToMarket(plan: AssistantPlan, market: 'JP' | 'US'): AssistantPlan {
+  return {
+    ...plan,
+    interpretedConditions: Array.from(new Set([
+      market === 'US' ? '米国株' : '日本株',
+      ...(plan.interpretedConditions ?? []).filter((condition) => !/^(?:日本株|米国株)$/.test(condition)),
+    ])).slice(0, 8),
+    toolCalls: plan.toolCalls.map((call) => ({ ...call, market })),
+  }
 }
 
 function numberFromText(text: string, patterns: RegExp[]): number | null {
@@ -132,6 +150,7 @@ function isWeeklyBearishMaBreakRequest(message: string): boolean {
 }
 
 function buildWeeklyBearishMaBreakPlan(message: string, context: AssistantPageContext): AssistantPlan | null {
+  if (marketFromContext(context) === 'US') return null
   if (!isWeeklyBearishMaBreakRequest(message)) return null
   const universe = /日経\s*225|nikkei|n225/i.test(message) || context.universe === 'nikkei225' ? 'nikkei225' : null
   const minAvgVolume = volumeThresholdFromText(message) ?? 1_000_000
@@ -169,6 +188,7 @@ function isHistoricalAnchorSimilarRequest(message: string, context: AssistantPag
 }
 
 function buildHistoricalAnchorSimilarPlan(message: string, context: AssistantPageContext): AssistantPlan | null {
+  if (marketFromContext(context) === 'US') return null
   if (!isHistoricalAnchorSimilarRequest(message, context)) return null
   const anchorTicker = anchorTickerFromText(message, context)
   if (!anchorTicker) return null
@@ -208,6 +228,7 @@ function fallbackPlan(message: string, context: AssistantPageContext): Assistant
   if (weeklyBearishPlan) return weeklyBearishPlan
 
   const lower = message.toLowerCase()
+  const market: 'JP' | 'US' = /米国株|\bUS(?:株)?\b/i.test(message) ? 'US' : marketFromContext(context)
   const contextTicker = tickerFromContext(context)
   const explicitTicker = normalizeTicker(message.match(/\b([0-9]{4}|[0-9]{3}A|[A-Z]{1,5})\b/i)?.[1])
   const ticker = explicitTicker ?? contextTicker
@@ -244,9 +265,9 @@ function fallbackPlan(message: string, context: AssistantPageContext): Assistant
     )
   }
 
-  if (ticker && wantsSimilar) calls.push({ tool: 'get_ml_similars', ticker, limit })
-  if (ticker && !wantsSimilar && !wantsEarnings && !wantsSearch) calls.push({ tool: 'get_stock_overview', ticker })
-  if (wantsEarnings) calls.push({ tool: 'get_earnings_candidates', daysAhead: 14, universe, marginType, minAvgVolume, limit, sort: 'earnings_date' })
+  if (ticker && wantsSimilar) calls.push({ tool: 'get_ml_similars', ticker, limit, market })
+  if (ticker && !wantsSimilar && !wantsEarnings && !wantsSearch) calls.push({ tool: 'get_stock_overview', ticker, market })
+  if (wantsEarnings) calls.push({ tool: 'get_earnings_candidates', daysAhead: 14, universe, marginType, minAvgVolume, limit, sort: 'earnings_date', market })
   if (wantsDown || wantsUp || wantsMomentum || wantsShortTerm || /スクリーナ|候補|抽出|条件/.test(message)) {
     const direction = wantsDown ? 'down' : wantsUp ? 'up' : 'neutral'
     if (universe) interpretedConditions.push('日経225')
@@ -255,6 +276,7 @@ function fallbackPlan(message: string, context: AssistantPageContext): Assistant
     if (wantsMomentum) interpretedConditions.push('PMS/PFSを重視')
     calls.push({
       tool: 'screen_jp_stocks',
+      market,
       direction,
       universe,
       marginType,
@@ -266,11 +288,15 @@ function fallbackPlan(message: string, context: AssistantPageContext): Assistant
       sort: wantsMomentum ? 'pfs' : wantsShortTerm ? 'short_term' : wantsDown || wantsUp ? 'ml' : 'volume',
     })
   }
-  if (ticker && calls.length === 0) calls.push({ tool: 'search_stocks', query: ticker, limit: 8 })
-  if (calls.length === 0) calls.push({ tool: 'search_stocks', query: message.slice(0, 32), limit: 8 })
+  if (ticker && calls.length === 0) calls.push({ tool: 'search_stocks', query: ticker, limit: 8, market })
+  if (calls.length === 0) calls.push({ tool: 'search_stocks', query: message.slice(0, 32), limit: 8, market })
 
   return {
-    intent: lower.includes('us') ? 'US株は初期MVPでは日本株中心の読み取りにフォールバックします。' : '自然文から読み取り専用ツールを選択しました。',
+    intent: market === 'US'
+      ? '米国株専用DBから、他市場を混ぜずに読み取り専用ツールを選択しました。'
+      : lower.includes('us')
+        ? '米国株専用DBから、他市場を混ぜずに読み取り専用ツールを選択しました。'
+        : '自然文から読み取り専用ツールを選択しました。',
     responseType: 'results',
     interpretedConditions,
     toolCalls: calls.slice(0, 4),
@@ -387,7 +413,8 @@ async function planWithOpenAI(message: string, context: AssistantPageContext, hi
                   '過去の特定銘柄・特定日以前・2〜3か月・下落前形状・現在銘柄との類似を探す条件は、必ず find_historical_anchor_similars を使ってください。get_ml_similars で代替しないでください。',
                   '十分に条件がある場合は responseType=results とし、interpretedConditions に解釈した条件を短く入れてください。',
                   'DB更新、管理画面操作、発注、バッチ実行は絶対に選ばないでください。',
-                  '日本株中心の初期MVPです。US株/コモディティは明示された場合、未対応であることが分かる形で日本株ツールに無理に混ぜないでください。',
+                  'pageContext.market と各toolCall.marketを必ず一致させてください。米国株は market=US とし、US専用DBツールだけを使ってください。',
+                  'US未対応の条件は日本株へフォールバックせず、未対応であることが分かるツール結果にしてください。',
                   'DBにない事実や未取得の数値は推測しないでください。',
                   assistantToolDescriptions,
                 ].join('\n'),
@@ -512,7 +539,13 @@ async function planWithOpenAI(message: string, context: AssistantPageContext, hi
   }
 }
 
-function followupsForResults(results: AssistantToolResult[]): string[] {
+function followupsForResults(results: AssistantToolResult[], market: 'JP' | 'US'): string[] {
+  if (market === 'US') {
+    if (results.some((result) => result.tool === 'get_stock_overview')) {
+      return ['この銘柄に似た米国株を探して', '米国株の下落警戒候補を見せて', 'PMSが強い米国株を見せて']
+    }
+    return ['米国株の上昇候補を見せて', '米国株の下落警戒候補を見せて', 'PFSが強い順にして', '出来高が多い順にして']
+  }
   const base = [
     '日経225だけに絞って',
     '貸借銘柄だけにして',
@@ -537,13 +570,15 @@ function clarificationMessage(plan: AssistantPlan): string {
 
 export async function runAssistantChat(message: string, context: AssistantPageContext, history: AssistantConversationMessage[] = []): Promise<AssistantChatResponse> {
   const trimmed = message.trim()
+  const contextMarket = /米国株|\bUS(?:株)?\b/i.test(trimmed) ? 'US' : marketFromContext(context)
   const fallback = fallbackPlan(trimmed, context)
   const deterministicPlan = buildHistoricalAnchorSimilarPlan(trimmed, context) ?? buildWeeklyBearishMaBreakPlan(trimmed, context)
   if (deterministicPlan) {
+    const scopedPlan = scopePlanToMarket(deterministicPlan, contextMarket)
     const config = getAssistantOpenAIConfig()
     const openai = assistantOpenAIStatusFromConfig(config)
     const results: AssistantToolResult[] = []
-    for (const call of deterministicPlan.toolCalls) {
+    for (const call of scopedPlan.toolCalls) {
       results.push(await runAssistantTool(call))
     }
     return {
@@ -553,16 +588,16 @@ export async function runAssistantChat(message: string, context: AssistantPageCo
       model: config.model,
       openai,
       context,
-      interpretedConditions: deterministicPlan.interpretedConditions ?? [],
+      interpretedConditions: scopedPlan.interpretedConditions ?? [],
       clarificationQuestions: [],
       toolsUsed: Array.from(new Set(results.map((result) => result.tool))),
       sections: results,
       actions: buildNavigateActions(results),
-      followups: followupsForResults(results),
+      followups: followupsForResults(results, contextMarket),
     }
   }
   const { plan: rawPlan, source, model, openai } = await planWithOpenAI(trimmed, context, history, fallback)
-  const plan = enforceSpecializedPlan(trimmed, context, rawPlan)
+  const plan = scopePlanToMarket(enforceSpecializedPlan(trimmed, context, rawPlan), contextMarket)
 
   if (plan.responseType === 'clarify') {
     const questions = plan.clarificationQuestions ?? []
@@ -601,6 +636,6 @@ export async function runAssistantChat(message: string, context: AssistantPageCo
     toolsUsed: Array.from(new Set(results.map((result) => result.tool))),
     sections: results,
     actions,
-    followups: followupsForResults(results),
+    followups: followupsForResults(results, contextMarket),
   }
 }

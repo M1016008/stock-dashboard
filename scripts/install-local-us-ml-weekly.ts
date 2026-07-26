@@ -60,7 +60,8 @@ const command = [
   'export US_ML_FULL_START_DATE=${US_ML_FULL_START_DATE:-1900-01-01}',
   'export US_ML_WEEKLY_RECENT_DAYS=${US_ML_WEEKLY_RECENT_DAYS:-420}',
   'export US_PMS_WEEKLY_RECENT_DAYS=${US_PMS_WEEKLY_RECENT_DAYS:-420}',
-  'export US_ML_WEEKLY_EXTREMA_RECENT_DAYS=${US_ML_WEEKLY_EXTREMA_RECENT_DAYS:-420}',
+  'export US_ML_WEEKLY_EXTREMA_RECALC_DAYS=${US_ML_WEEKLY_EXTREMA_RECALC_DAYS:-201}',
+  'export FORWARD_EXTREMA_RESUME=${FORWARD_EXTREMA_RESUME:-1}',
   'npm run batch:us-ml-weekly-efficient',
 ].join(' && ')
 
@@ -89,6 +90,12 @@ const plist = `<?xml version="1.0" encoding="UTF-8"?>
   <string>${xmlEscape(path.join(logDir, 'us-ml-weekly.log'))}</string>
   <key>StandardErrorPath</key>
   <string>${xmlEscape(path.join(logDir, 'us-ml-weekly.err'))}</string>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>LowPriorityIO</key>
+  <true/>
+  <key>Nice</key>
+  <integer>10</integer>
   <key>RunAtLoad</key>
   <false/>
 </dict>

@@ -4,6 +4,27 @@ import { inflateRawSync } from 'node:zlib'
 const TIINGO_BASE_URL = 'https://api.tiingo.com'
 const TIINGO_SUPPORTED_TICKERS_ZIP = 'https://apimedia.tiingo.com/docs/tiingo/daily/supported_tickers.zip'
 
+export class TiingoHttpError extends Error {
+  readonly status: number
+  readonly retryAfterSeconds: number | null
+
+  constructor(message: string, status: number, retryAfterSeconds: number | null) {
+    super(message)
+    this.name = 'TiingoHttpError'
+    this.status = status
+    this.retryAfterSeconds = retryAfterSeconds
+  }
+}
+
+export function isTiingoRateLimitError(error: unknown): error is TiingoHttpError {
+  if (error instanceof TiingoHttpError) return error.status === 429
+  if (typeof error === 'object' && error !== null && 'status' in error) {
+    return Number((error as { status?: unknown }).status) === 429
+  }
+  const message = error instanceof Error ? error.message : String(error)
+  return /\bHTTP\s+429\b/i.test(message)
+}
+
 export type TiingoTickerMeta = {
   ticker: string
   name?: string | null
@@ -137,7 +158,12 @@ async function tiingoGet<T>(path: string, params: Record<string, string | number
   })
   if (!res.ok) {
     const body = await res.text().catch(() => '')
-    throw new Error(`Tiingo ${path} failed: HTTP ${res.status}${body ? ` ${body.slice(0, 240)}` : ''}`)
+    const retryAfter = Number(res.headers.get('retry-after'))
+    throw new TiingoHttpError(
+      `Tiingo ${path} failed: HTTP ${res.status}${body ? ` ${body.slice(0, 240)}` : ''}`,
+      res.status,
+      Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : null,
+    )
   }
   return await res.json() as T
 }
@@ -177,7 +203,11 @@ export async function fetchTiingoDailyPrices(
   startDate: string,
   endDate?: string | null,
 ): Promise<Array<OHLCV & {
+  adjustedOpen: number | null
+  adjustedHigh: number | null
+  adjustedLow: number | null
   adjustedClose: number | null
+  adjustedVolume: number | null
   divCash: number | null
   splitFactor: number | null
 }>> {
@@ -193,7 +223,11 @@ export async function fetchTiingoDailyPrices(
     low: Number(row.low),
     close: Number(row.close),
     volume: Number(row.volume ?? 0),
+    adjustedOpen: row.adjOpen == null ? null : Number(row.adjOpen),
+    adjustedHigh: row.adjHigh == null ? null : Number(row.adjHigh),
+    adjustedLow: row.adjLow == null ? null : Number(row.adjLow),
     adjustedClose: row.adjClose == null ? null : Number(row.adjClose),
+    adjustedVolume: row.adjVolume == null ? null : Number(row.adjVolume),
     divCash: row.divCash == null ? null : Number(row.divCash),
     splitFactor: row.splitFactor == null ? null : Number(row.splitFactor),
   }))

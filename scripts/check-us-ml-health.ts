@@ -224,6 +224,15 @@ async function main() {
     .map((check) => `${check.key}=${statusFor(check)}(${check.actualDate ?? '-'} ${check.actualCount ?? '-'})`)
     .join(', ')
   console.log(`us ml health ${checkDate}: ${summary}`)
+
+  const nonOk = checks
+    .map((check) => ({ key: check.key, status: statusFor(check) }))
+    .filter((check) => check.status !== 'ok')
+  if (nonOk.length > 0 && process.env.US_ML_HEALTH_ALLOW_NON_OK !== '1') {
+    throw new Error(
+      `US ML health gate failed: ${nonOk.map((check) => `${check.key}=${check.status}`).join(', ')}`,
+    )
+  }
 }
 
 main()

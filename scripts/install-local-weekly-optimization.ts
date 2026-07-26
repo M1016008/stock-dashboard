@@ -107,7 +107,9 @@ const plist = `<?xml version="1.0" encoding="UTF-8"?>
     <key>Minute</key><integer>${scheduleMinute}</integer>
   </dict>
   <key>ProcessType</key>
-  <string>Standard</string>
+  <string>Background</string>
+  <key>LowPriorityIO</key>
+  <true/>
   <key>Nice</key>
   <integer>10</integer>
   <key>StandardOutPath</key>

@@ -158,7 +158,7 @@ function sourceTable(market: Market): {
       ORDER BY ticker
     `,
     rowsSql: (hasWarmup) => `
-      SELECT date, close, volume
+      SELECT date, COALESCE(adj_close, close) AS close, COALESCE(adj_volume, volume) AS volume
       FROM market_ohlcv_daily
       WHERE market = ?
         AND ticker = ?

@@ -7,6 +7,7 @@
 
 import { execFileSync, spawn } from 'node:child_process'
 import fs from 'node:fs'
+import { exactForwardExtremaRecomputeBars } from '@/lib/backtest/forward-extrema'
 import { ML_PRIMARY_HORIZON_LIST } from '@/lib/backtest/ml-horizons'
 import { waitForMemoryHeadroom, withMemoryGuardEnv } from '@/lib/system/memory-guard'
 
@@ -160,6 +161,9 @@ async function runFullHistory(env: NodeJS.ProcessEnv, options: { skipPms?: boole
   const startDate = env.US_ML_FULL_START_DATE ?? '1900-01-01'
   const horizons = ML_PRIMARY_HORIZON_LIST
   const weeklyRecentDays = env.US_ML_WEEKLY_RECENT_DAYS ?? '420'
+  const exactExtremaRecomputeBars = String(
+    exactForwardExtremaRecomputeBars(horizons.split(',').map(Number)),
+  )
   const physicsEvalWindow = physicsEvaluationWindow(env, weeklyRecentDays)
 
   if (!options.skipPms) {
@@ -181,13 +185,15 @@ async function runFullHistory(env: NodeJS.ProcessEnv, options: { skipPms?: boole
     console.log('US ML full-history: skipping forward_extrema by US_ML_SKIP_FORWARD_EXTREMA=1')
   } else {
     await runNpm('batch:forward-extrema:ml-recent', env, {
-      ML_WEEKLY_EXTREMA_RECENT_DAYS: env.US_ML_WEEKLY_EXTREMA_RECENT_DAYS ?? weeklyRecentDays,
+      ML_WEEKLY_EXTREMA_RECENT_DAYS:
+        env.US_ML_WEEKLY_EXTREMA_RECALC_DAYS ?? exactExtremaRecomputeBars,
       ML_FULL_START_DATE: startDate,
       FORWARD_EXTREMA_START_DATE: startDate,
       FORWARD_EXTREMA_HORIZONS: horizons,
       FORWARD_EXTREMA_WRITE_MODEL_LABELS: '0',
       FORWARD_EXTREMA_ACTIVE_ONLY: '1',
       FORWARD_EXTREMA_PROGRESS_EVERY: env.FORWARD_EXTREMA_PROGRESS_EVERY ?? '25',
+      FORWARD_EXTREMA_RESUME: env.FORWARD_EXTREMA_RESUME ?? '1',
     })
   }
   if (env.US_ML_SKIP_ML_FEATURES === '1') {
@@ -309,8 +315,35 @@ async function runFullHistory(env: NodeJS.ProcessEnv, options: { skipPms?: boole
     ML_PHYSICS_EVAL_END_YEAR:
       env.US_ML_PHYSICS_EVAL_END_YEAR ?? physicsEvalWindow.endYear,
   })
+  if (env.US_ML_SKIP_ANALYSIS_FOUNDATION === '1') {
+    console.log('US ML full-history: skipping analysis foundation by US_ML_SKIP_ANALYSIS_FOUNDATION=1')
+  } else {
+    await runNpm('batch:weekly-ohlcv', env)
+    await runNpm('batch:technical-signals', env, {
+      BACKTEST_RECENT_DAYS: env.US_BACKTEST_RECENT_DAYS ?? '0',
+    })
+    await runNpm('batch:pattern-stats', env, {
+      PATTERN_STAT_HORIZONS: env.US_PATTERN_STAT_HORIZONS ?? horizons,
+    })
+    await runNpm('batch:stage-transitions', env)
+    await runNpm('batch:signal-stats', env, {
+      BACKTEST_RECENT_DAYS: env.US_BACKTEST_RECENT_DAYS ?? '0',
+      SIGNAL_STATS_LIMIT_GROUPS: '0',
+      SIGNAL_STATS_DATE_CHUNK: env.US_SIGNAL_STATS_DATE_CHUNK ?? '20',
+    })
+    await runNpm('batch:signal-return-stats', env, {
+      BACKTEST_RECENT_DAYS: env.US_BACKTEST_RECENT_DAYS ?? '0',
+      SIGNAL_RETURN_HORIZONS: env.US_SIGNAL_RETURN_HORIZONS ?? horizons,
+    })
+    await runNpm('batch:serving-backtest:full', env, {
+      SERVING_DATE_LIMIT: '0',
+      SERVING_SUMMARY_DATE_CHUNK: env.US_SERVING_SUMMARY_DATE_CHUNK ?? '40',
+    })
+  }
   await runNpm('batch:us-ml-health', env)
-  await runNpm('batch:ml-accuracy-health', env)
+  await runNpm('batch:ml-accuracy-health', env, {
+    ML_ACCURACY_STRICT: '1',
+  })
 }
 
 async function runDailyServing(env: NodeJS.ProcessEnv): Promise<void> {
@@ -432,7 +465,9 @@ async function runDailyServing(env: NodeJS.ProcessEnv): Promise<void> {
   }
   await runNpm('batch:us-ml-health', env)
   if (env.US_ML_DAILY_ACCURACY_HEALTH === '1') {
-    await runNpm('batch:ml-accuracy-health', env)
+    await runNpm('batch:ml-accuracy-health', env, {
+      ML_ACCURACY_STRICT: '1',
+    })
   }
 }
 

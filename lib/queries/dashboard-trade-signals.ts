@@ -1277,13 +1277,13 @@ async function loadUsRows(date: string | null): Promise<{ rows: RawSignalRow[]; 
       s.ticker,
       COALESCE(u.name, s.ticker) AS name,
       s.date,
-      cur.close AS price,
-      prev.close AS prev_price,
-      cur.volume,
+      COALESCE(cur.adj_close, cur.close) AS price,
+      COALESCE(prev.adj_close, prev.close) AS prev_price,
+      COALESCE(cur.adj_volume, cur.volume) AS volume,
       (
         SELECT AVG(v.volume)
         FROM (
-          SELECT volume
+          SELECT COALESCE(adj_volume, volume) AS volume
           FROM market_ohlcv_daily INDEXED BY market_ohlcv_market_ticker_date_idx
           WHERE market = 'US'
             AND ticker = s.ticker

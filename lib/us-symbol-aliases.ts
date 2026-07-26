@@ -47,6 +47,12 @@ export function getUsDisplayName(ticker: string, rawName?: string | null): strin
   return US_PRIMARY_NAMES[normalized] ?? name ?? normalized
 }
 
+export function getUsSecondaryName(ticker: string, rawName?: string | null): string | null {
+  const normalized = ticker.trim().toUpperCase()
+  const displayName = getUsDisplayName(normalized, rawName).trim()
+  return displayName.toUpperCase() === normalized ? null : displayName
+}
+
 export function findUsAliasTickers(query: string): string[] {
   const normalized = normalizeQuery(query)
   if (!normalized) return []

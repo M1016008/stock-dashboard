@@ -177,7 +177,13 @@ export async function GET(
     const history = market === 'US'
       ? await execAll<OhlcvPoint>(
         `
-        SELECT date, open, high, low, close, volume
+        SELECT
+          date,
+          CASE WHEN adj_open IS NOT NULL THEN adj_open WHEN adj_close IS NOT NULL AND close <> 0 THEN open * adj_close / close ELSE open END AS open,
+          CASE WHEN adj_high IS NOT NULL THEN adj_high WHEN adj_close IS NOT NULL AND close <> 0 THEN high * adj_close / close ELSE high END AS high,
+          CASE WHEN adj_low IS NOT NULL THEN adj_low WHEN adj_close IS NOT NULL AND close <> 0 THEN low * adj_close / close ELSE low END AS low,
+          COALESCE(adj_close, close) AS close,
+          COALESCE(adj_volume, volume) AS volume
         FROM market_ohlcv_daily
         WHERE market = 'US' AND ticker = ?
           ${dateFilter}

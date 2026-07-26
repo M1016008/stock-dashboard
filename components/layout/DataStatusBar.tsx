@@ -6,6 +6,7 @@ import { Activity, CheckCircle2, Database, Maximize2, Minimize2, RefreshCw, Tria
 type MarketStatus = {
   expected: string
   price: string | null
+  analyticsPrice?: string | null
   pms: string | null
   features: string | null
   candidates: string | null
@@ -13,6 +14,33 @@ type MarketStatus = {
   dashboardCache: string | null
   predictions: string | null
   similars: string | null
+  priceBasis?: string | null
+  derivedPriceBasis?: string | null
+  analogPriceBasis?: string | null
+  expectedPriceBasis?: string | null
+  coverage?: {
+    universe: number
+    price: number
+    pricePct: number | null
+    pms: number
+    pmsPct: number | null
+    features: number
+    featuresPct: number | null
+    analyticsUniverse?: number
+    analyticsPrice?: number
+    analyticsPricePct?: number | null
+    partial: boolean
+    analyticsPartial?: boolean
+  }
+  ingestionRun?: {
+    status: string
+    totalTickers: number
+    succeeded: number
+    failed: number
+    rowsInserted: number
+    startedAt: string
+    finishedAt: string | null
+  } | null
   fresh: boolean
 }
 
@@ -23,8 +51,16 @@ type StatusPayload = {
   us?: MarketStatus
   sources?: Record<'themes' | 'materials' | 'earnings', SourceStatus>
   runningJobs?: Array<{
+    market: 'JP' | 'US'
     jobType: string
     startedAt: string
+    totalTickers: number
+    succeeded: number
+    failed: number
+    rowsInserted: number
+    progressPct: number | null
+    elapsedMinutes: number
+    etaMinutes: number | null
   }>
   message?: string
 }
@@ -37,8 +73,15 @@ type SourceStatus = {
 
 type Density = 'compact' | 'comfortable'
 
+function formatPct(value: number) {
+  return `${(Math.round((value + Number.EPSILON) * 10) / 10).toFixed(1)}%`
+}
+
 function statusText(status?: MarketStatus) {
   if (!status?.price) return '未取得'
+  if (status.coverage?.pricePct != null && status.coverage.pricePct < 99.95) {
+    return `${status.price} / ${formatPct(status.coverage.pricePct)}`
+  }
   return status.fresh ? status.price : `${status.price} / 期待 ${status.expected ?? '-'}`
 }
 
@@ -52,6 +95,14 @@ function sourceTime(value: string | null) {
     hour12: false,
     timeZone: 'Asia/Tokyo',
   }).format(new Date(value))
+}
+
+function durationText(minutes: number | null) {
+  if (minutes == null || !Number.isFinite(minutes)) return '-'
+  if (minutes < 60) return `${Math.max(0, Math.round(minutes))}分`
+  const hours = Math.floor(minutes / 60)
+  const rest = Math.round(minutes % 60)
+  return rest > 0 ? `${hours}時間${rest}分` : `${hours}時間`
 }
 
 export function DataStatusBar() {
@@ -169,11 +220,25 @@ export function DataStatusBar() {
                   <Activity size={13} />
                   バックグラウンド更新中
                 </div>
-                <div className="mt-2 flex flex-wrap gap-1.5">
+                <div className="mt-2 grid gap-1.5">
                   {payload.runningJobs.map((job) => (
-                    <span key={`${job.jobType}-${job.startedAt}`} className="border border-blue-200 bg-white px-2 py-1 font-mono text-[9px] font-bold text-blue-800">
-                      {job.jobType} / {sourceTime(job.startedAt)}
-                    </span>
+                    <div
+                      key={`${job.market}-${job.jobType}-${job.startedAt}`}
+                      className="border border-blue-200 bg-white px-2 py-1.5 text-[9px] font-bold text-blue-900"
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="font-mono">{job.market} / {job.jobType}</span>
+                        <span className="font-mono">
+                          {job.progressPct == null
+                            ? sourceTime(job.startedAt)
+                            : `${job.succeeded.toLocaleString()} / ${job.totalTickers.toLocaleString()} (${formatPct(job.progressPct)})`}
+                        </span>
+                      </div>
+                      <div className="mt-0.5 flex items-center justify-between gap-3 text-[8px] text-blue-700">
+                        <span>経過 {durationText(job.elapsedMinutes)}</span>
+                        <span>{job.etaMinutes == null ? '完了時刻を算出中' : `残り目安 ${durationText(job.etaMinutes)}`}</span>
+                      </div>
+                    </div>
                   ))}
                 </div>
               </div>
@@ -202,7 +267,8 @@ function SourceDetail({ label, status }: { label: string; status?: SourceStatus 
 function StatusDetail({ label, status }: { label: string; status?: MarketStatus }) {
   const rows = [
     ['期待営業日', status?.expected],
-    ['価格', status?.price],
+    [status?.analyticsPrice !== undefined ? '価格取得' : '価格', status?.price],
+    ...(status?.analyticsPrice !== undefined ? [['分析DB価格', status.analyticsPrice]] : []),
     ['PMS/PFS/PES', status?.pms],
     ['特徴量', status?.features],
     ['ML候補', status?.candidates],
@@ -227,6 +293,50 @@ function StatusDetail({ label, status }: { label: string; status?: MarketStatus 
           </div>
         ))}
       </dl>
+      {status?.coverage && (
+        <div className="mt-2 border-t border-[var(--color-border-default)] pt-2">
+          <div className="mb-1 text-[9px] font-black text-[var(--color-text-tertiary)]">カバレッジ / active {status.coverage.universe.toLocaleString()}</div>
+          <div className="grid grid-cols-2 gap-1 text-center text-[9px]">
+            {[
+              ['価格取得', status.coverage.price, status.coverage.pricePct],
+              ...(status.coverage.analyticsPrice !== undefined
+                ? [['分析反映', status.coverage.analyticsPrice, status.coverage.analyticsPricePct] as const]
+                : []),
+              ['PMS', status.coverage.pms, status.coverage.pmsPct],
+              ['特徴量', status.coverage.features, status.coverage.featuresPct],
+            ].map(([name, count, pct]) => (
+              <div key={String(name)} className="bg-white px-1 py-1">
+                <div className="font-black text-[var(--color-text-tertiary)]">{name}</div>
+                <div className="font-mono font-bold text-[var(--color-text-primary)]">
+                  {typeof pct === 'number' ? formatPct(pct) : '-'}
+                </div>
+                <div className="font-mono text-[8px] text-[var(--color-text-tertiary)]">
+                  {typeof count === 'number' ? count.toLocaleString() : '-'}
+                </div>
+              </div>
+            ))}
+          </div>
+          {status.ingestionRun && (
+            <div className={`mt-1.5 px-2 py-1 text-[9px] font-bold ${
+              status.ingestionRun.status === 'success'
+                ? 'bg-emerald-50 text-emerald-800'
+                : 'bg-amber-50 text-amber-800'
+            }`}>
+              直近取得 {status.ingestionRun.status} / 成功 {status.ingestionRun.succeeded.toLocaleString()}
+              {status.ingestionRun.failed > 0 ? ` / 失敗 ${status.ingestionRun.failed.toLocaleString()}` : ''}
+            </div>
+          )}
+        </div>
+      )}
+      {status?.expectedPriceBasis && (
+        status.priceBasis !== status.expectedPriceBasis
+        || status.derivedPriceBasis !== status.expectedPriceBasis
+        || status.analogPriceBasis !== status.expectedPriceBasis
+      ) && (
+        <div className="mt-2 border-t border-amber-200 bg-amber-50 px-2 py-1.5 text-[9px] font-bold text-amber-900">
+          調整後価格・全特徴量・類似索引の世代移行を待機中
+        </div>
+      )}
     </div>
   )
 }

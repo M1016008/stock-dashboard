@@ -2,6 +2,8 @@
 
 import path from 'node:path'
 import { createClient, type Client } from '@libsql/client'
+import { expectedLatestUsTradingDate } from '@/lib/server/us-data-freshness'
+import { US_ADJUSTED_PRICE_BASIS } from '@/lib/us-adjusted-ohlcv'
 
 const configuredTargetPath = process.env.US_ANALYTICS_DB_PATH?.trim()
 const TARGET_PATH = path.resolve(configuredTargetPath || 'data/stockboard-us.db')
@@ -10,6 +12,9 @@ const MIN_OHLCV_TICKERS = Number(process.env.US_ANALYTICS_MIN_OHLCV_TICKERS ?? 1
 const MIN_SNAPSHOT_TICKERS = Number(process.env.US_ANALYTICS_MIN_SNAPSHOT_TICKERS ?? 18000)
 const MIN_OHLCV_ROWS = Number(process.env.US_ANALYTICS_MIN_OHLCV_ROWS ?? 40000000)
 const MIN_SNAPSHOT_ROWS = Number(process.env.US_ANALYTICS_MIN_SNAPSHOT_ROWS ?? 40000000)
+const MIN_LATEST_COVERAGE_PCT = Number(process.env.US_ANALYTICS_MIN_LATEST_COVERAGE_PCT ?? 95)
+const EXPECTED_DATE = process.env.US_ANALYTICS_EXPECTED_DATE?.trim() || expectedLatestUsTradingDate()
+const REQUIRE_DERIVED_BASIS = process.env.US_ANALYTICS_REQUIRE_DERIVED_BASIS === '1'
 
 type ScalarRow = { value: number | string | null }
 
@@ -44,6 +49,73 @@ async function main() {
   const snapshotTickers = await scalarNumber(target, `SELECT COUNT(DISTINCT ticker) AS value FROM daily_snapshots`)
   const snapshotMinDate = await scalarText(target, `SELECT MIN(date) AS value FROM daily_snapshots`)
   const snapshotMaxDate = await scalarText(target, `SELECT MAX(date) AS value FROM daily_snapshots`)
+  const activeUniverse = await scalarNumber(target, `SELECT COUNT(*) AS value FROM ticker_universe WHERE active = 1`)
+  const latestOhlcvActiveTickers = await scalarNumber(
+    target,
+    `SELECT COUNT(DISTINCT o.ticker) AS value
+     FROM ohlcv_daily o
+     INNER JOIN ticker_universe u ON u.ticker = o.ticker AND u.active = 1
+     WHERE o.date = (SELECT MAX(date) FROM ohlcv_daily)`,
+  )
+  const latestSnapshotActiveTickers = await scalarNumber(
+    target,
+    `SELECT COUNT(DISTINCT d.ticker) AS value
+     FROM daily_snapshots d
+     INNER JOIN ticker_universe u ON u.ticker = d.ticker AND u.active = 1
+     WHERE d.date = (SELECT MAX(date) FROM daily_snapshots)`,
+  )
+  const latestOhlcvCoveragePct = activeUniverse > 0
+    ? 100 * latestOhlcvActiveTickers / activeUniverse
+    : 0
+  const latestSnapshotCoveragePct = activeUniverse > 0
+    ? 100 * latestSnapshotActiveTickers / activeUniverse
+    : 0
+  const priceBasis = await scalarText(
+    target,
+    `SELECT value
+     FROM us_analytics_metadata
+     WHERE key = 'ohlcv_price_basis'`,
+  )
+  const derivedPriceBasis = await scalarText(
+    target,
+    `SELECT value
+     FROM us_analytics_metadata
+     WHERE key = 'derived_price_basis'`,
+  )
+  const derivedPriceDate = await scalarText(
+    target,
+    `SELECT value
+     FROM us_analytics_metadata
+     WHERE key = 'derived_price_date'`,
+  )
+  const analogPriceBasis = await scalarText(
+    target,
+    `SELECT value
+     FROM us_analytics_metadata
+     WHERE key = 'analog_index_price_basis'`,
+  )
+  const analogPriceDate = await scalarText(
+    target,
+    `SELECT value
+     FROM us_analytics_metadata
+     WHERE key = 'analog_index_price_date'`,
+  )
+  const backtestFeatureDate = await scalarText(target, `SELECT MAX(date) AS value FROM model_features`)
+  const patternStatsRows = await scalarNumber(target, `SELECT COUNT(*) AS value FROM pattern_stats`)
+  const transitionAxes = await scalarNumber(target, `SELECT COUNT(DISTINCT axis) AS value FROM stage_transitions`)
+  const servingBacktestDate = await scalarText(target, `SELECT MAX(date) AS value FROM serving_backtest_dates`)
+  const latestModelEvaluationDate = await scalarText(
+    target,
+    `SELECT MAX(evaluation_date) AS value FROM ml_model_evaluations`,
+  )
+  const latestPhysicsEvaluationDate = await scalarText(
+    target,
+    `SELECT MAX(evaluation_date) AS value FROM ml_physics_status_evaluations`,
+  )
+  const latestRlEvaluationDate = await scalarText(
+    target,
+    `SELECT MAX(evaluation_date) AS value FROM ml_rl_policy_evaluations`,
+  )
 
   console.log(
     [
@@ -55,6 +127,22 @@ async function main() {
       `snapshotRows=${snapshotRows}`,
       `snapshotTickers=${snapshotTickers}`,
       `snapshotRange=${snapshotMinDate ?? '-'}..${snapshotMaxDate ?? '-'}`,
+      `expectedDate=${EXPECTED_DATE}`,
+      `activeUniverse=${activeUniverse}`,
+      `latestOhlcvCoverage=${latestOhlcvActiveTickers}/${activeUniverse}(${latestOhlcvCoveragePct.toFixed(2)}%)`,
+      `latestSnapshotCoverage=${latestSnapshotActiveTickers}/${activeUniverse}(${latestSnapshotCoveragePct.toFixed(2)}%)`,
+      `priceBasis=${priceBasis ?? '-'}`,
+      `derivedPriceBasis=${derivedPriceBasis ?? '-'}`,
+      `derivedPriceDate=${derivedPriceDate ?? '-'}`,
+      `analogPriceBasis=${analogPriceBasis ?? '-'}`,
+      `analogPriceDate=${analogPriceDate ?? '-'}`,
+      `backtestFeatureDate=${backtestFeatureDate ?? '-'}`,
+      `patternStatsRows=${patternStatsRows}`,
+      `transitionAxes=${transitionAxes}`,
+      `servingBacktestDate=${servingBacktestDate ?? '-'}`,
+      `latestModelEvaluationDate=${latestModelEvaluationDate ?? '-'}`,
+      `latestPhysicsEvaluationDate=${latestPhysicsEvaluationDate ?? '-'}`,
+      `latestRlEvaluationDate=${latestRlEvaluationDate ?? '-'}`,
     ].join(' '),
   )
 
@@ -64,6 +152,50 @@ async function main() {
     assertThreshold('snapshotTickers', snapshotTickers, MIN_SNAPSHOT_TICKERS),
     assertThreshold('ohlcvRows', ohlcvRows, MIN_OHLCV_ROWS),
     assertThreshold('snapshotRows', snapshotRows, MIN_SNAPSHOT_ROWS),
+    !ohlcvMaxDate || ohlcvMaxDate < EXPECTED_DATE
+      ? `ohlcvMaxDate: ${ohlcvMaxDate ?? 'missing'} < ${EXPECTED_DATE}`
+      : null,
+    snapshotMaxDate !== ohlcvMaxDate
+      ? `snapshotMaxDate: ${snapshotMaxDate ?? 'missing'} != ohlcvMaxDate ${ohlcvMaxDate ?? 'missing'}`
+      : null,
+    assertThreshold('latestOhlcvCoveragePct', latestOhlcvCoveragePct, MIN_LATEST_COVERAGE_PCT),
+    assertThreshold('latestSnapshotCoveragePct', latestSnapshotCoveragePct, MIN_LATEST_COVERAGE_PCT),
+    priceBasis !== US_ADJUSTED_PRICE_BASIS
+      ? `priceBasis: ${priceBasis ?? 'missing'} != ${US_ADJUSTED_PRICE_BASIS}`
+      : null,
+    REQUIRE_DERIVED_BASIS && derivedPriceBasis !== US_ADJUSTED_PRICE_BASIS
+      ? `derivedPriceBasis: ${derivedPriceBasis ?? 'missing'} != ${US_ADJUSTED_PRICE_BASIS}`
+      : null,
+    REQUIRE_DERIVED_BASIS && derivedPriceDate !== ohlcvMaxDate
+      ? `derivedPriceDate: ${derivedPriceDate ?? 'missing'} != ohlcvMaxDate ${ohlcvMaxDate ?? 'missing'}`
+      : null,
+    REQUIRE_DERIVED_BASIS && analogPriceBasis !== US_ADJUSTED_PRICE_BASIS
+      ? `analogPriceBasis: ${analogPriceBasis ?? 'missing'} != ${US_ADJUSTED_PRICE_BASIS}`
+      : null,
+    REQUIRE_DERIVED_BASIS && analogPriceDate !== ohlcvMaxDate
+      ? `analogPriceDate: ${analogPriceDate ?? 'missing'} != ohlcvMaxDate ${ohlcvMaxDate ?? 'missing'}`
+      : null,
+    REQUIRE_DERIVED_BASIS && backtestFeatureDate !== ohlcvMaxDate
+      ? `backtestFeatureDate: ${backtestFeatureDate ?? 'missing'} != ohlcvMaxDate ${ohlcvMaxDate ?? 'missing'}`
+      : null,
+    REQUIRE_DERIVED_BASIS && patternStatsRows <= 0
+      ? 'patternStatsRows: missing'
+      : null,
+    REQUIRE_DERIVED_BASIS && transitionAxes < 6
+      ? `transitionAxes: ${transitionAxes} < 6`
+      : null,
+    REQUIRE_DERIVED_BASIS && !servingBacktestDate
+      ? 'servingBacktestDate: missing'
+      : null,
+    REQUIRE_DERIVED_BASIS && latestModelEvaluationDate && ohlcvMaxDate && latestModelEvaluationDate > ohlcvMaxDate
+      ? `latestModelEvaluationDate: ${latestModelEvaluationDate} > ohlcvMaxDate ${ohlcvMaxDate}`
+      : null,
+    REQUIRE_DERIVED_BASIS && latestPhysicsEvaluationDate && ohlcvMaxDate && latestPhysicsEvaluationDate > ohlcvMaxDate
+      ? `latestPhysicsEvaluationDate: ${latestPhysicsEvaluationDate} > ohlcvMaxDate ${ohlcvMaxDate}`
+      : null,
+    REQUIRE_DERIVED_BASIS && latestRlEvaluationDate && ohlcvMaxDate && latestRlEvaluationDate > ohlcvMaxDate
+      ? `latestRlEvaluationDate: ${latestRlEvaluationDate} > ohlcvMaxDate ${ohlcvMaxDate}`
+      : null,
   ].filter((failure): failure is string => failure != null)
 
   if (failures.length > 0) {

@@ -197,7 +197,9 @@ async function main(): Promise<void> {
   })
   await runRequired('batch:ml-insights')
   await runRequired('batch:historical-universe')
-  await runRequired('batch:ml-feature-health')
+  await runRequired('batch:ml-feature-health', {
+    ML_FEATURE_HEALTH_STRICT: '1',
+  })
   await runRequired('ml:freshness-check')
   await runRequired('batch:dashboard-cache')
 

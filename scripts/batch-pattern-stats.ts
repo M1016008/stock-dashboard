@@ -37,8 +37,13 @@ async function ensureIndexes() {
 }
 
 async function aggregateHorizon(horizon: number): Promise<number> {
-  const result = await client.execute({
-    sql: `
+  const results = await client.batch([
+    {
+      sql: `DELETE FROM pattern_stats WHERE horizon_days = ?`,
+      args: [horizon],
+    },
+    {
+      sql: `
       INSERT INTO pattern_stats
         (pattern_code, horizon_days, count, p05, p25, p50, p75, p95,
          very_up_count, up_count, flat_count, down_count, very_down_count)
@@ -88,18 +93,15 @@ async function aggregateHorizon(horizon: number): Promise<number> {
       FROM ranked
       GROUP BY pattern_code
     `,
-    args: [horizon, horizon],
-  })
-  return Number(result.rowsAffected ?? 0)
+      args: [horizon, horizon],
+    },
+  ])
+  return Number(results[1]?.rowsAffected ?? 0)
 }
 
 async function aggregate(): Promise<number> {
-  console.log(`既存 pattern_stats 削除: horizons=${HORIZONS.join(',')}`)
+  console.log(`pattern_stats horizon単位の原子的再構築: horizons=${HORIZONS.join(',')}`)
   await ensureIndexes()
-  await client.execute({
-    sql: `DELETE FROM pattern_stats WHERE horizon_days IN (${HORIZONS.map(() => '?').join(', ')})`,
-    args: HORIZONS,
-  })
 
   let rowsInserted = 0
   for (const horizon of HORIZONS) {

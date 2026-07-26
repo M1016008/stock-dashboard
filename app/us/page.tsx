@@ -4,8 +4,10 @@ import { PageTitle } from '@/components/layout/PageTitle'
 import { Card, CardHeader } from '@/components/ui/Card'
 import { StageTag } from '@/components/ui/StageTag'
 import { execAll } from '@/lib/db/client'
+import { execUsAnalyticsAll, hasUsAnalyticsDb } from '@/lib/db/us-analytics'
 import { getUsStatusSummary } from '@/lib/us-status'
-import { getUsDisplayName } from '@/lib/us-symbol-aliases'
+import { getUsSecondaryName } from '@/lib/us-symbol-aliases'
+import { usInvestableSymbolSql } from '@/lib/us-symbol-quality'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -44,6 +46,25 @@ type StageSummaryRow = {
   count: number
 }
 
+type MlCandidateRow = {
+  ticker: string
+  name: string | null
+  rank: number
+  candidate_score: number
+  physical_momentum_score: number | null
+  physical_force_score: number | null
+  stage_code: string | null
+}
+
+type PmsSummaryRow = {
+  total: number
+  positive: number
+  negative: number
+  average_pms: number | null
+  average_pfs: number | null
+  date: string | null
+}
+
 async function getUsDashboardRows(date: string | null) {
   if (!date) {
     return {
@@ -51,6 +72,9 @@ async function getUsDashboardRows(date: string | null) {
       losers: [] as RankingRow[],
       volume: [] as RankingRow[],
       stageSummary: [] as StageSummaryRow[],
+      mlUp: [] as MlCandidateRow[],
+      mlDown: [] as MlCandidateRow[],
+      pmsSummary: null as PmsSummaryRow | null,
     }
   }
   const rankingSql = (orderBy: string) => `
@@ -62,10 +86,15 @@ async function getUsDashboardRows(date: string | null) {
     ranked AS (
       SELECT
         cur.ticker,
-        cur.close AS price,
-        cur.volume,
+        COALESCE(cur.adj_close, cur.close) AS price,
+        COALESCE(cur.adj_volume, cur.volume) AS volume,
         CASE
-          WHEN cur.volume > 0 AND prev.volume > 0 AND prev.close > 0 THEN 100.0 * (cur.close - prev.close) / prev.close
+          WHEN COALESCE(cur.adj_volume, cur.volume) > 0
+           AND COALESCE(prev.adj_volume, prev.volume) > 0
+           AND COALESCE(prev.adj_close, prev.close) > 0
+          THEN 100.0 * (
+            COALESCE(cur.adj_close, cur.close) - COALESCE(prev.adj_close, prev.close)
+          ) / COALESCE(prev.adj_close, prev.close)
         END AS change_pct
       FROM market_ohlcv_daily cur INDEXED BY market_ohlcv_market_date_ticker_idx
       LEFT JOIN market_ohlcv_daily prev INDEXED BY market_ohlcv_market_ticker_date_idx
@@ -74,6 +103,24 @@ async function getUsDashboardRows(date: string | null) {
        AND prev.date = (SELECT date FROM prev_date)
       WHERE cur.market = 'US'
         AND cur.date = ?
+        AND COALESCE(cur.adj_close, cur.close) >= 0.1
+        AND COALESCE(cur.adj_volume, cur.volume) > 0
+        AND COALESCE(prev.adj_close, prev.close) > 0
+        AND ABS(100.0 * (
+          COALESCE(cur.adj_close, cur.close) - COALESCE(prev.adj_close, prev.close)
+        ) / COALESCE(prev.adj_close, prev.close)) <= 100
+        AND EXISTS (
+          SELECT 1
+          FROM market_universe quality_universe
+          WHERE quality_universe.market = 'US'
+            AND quality_universe.ticker = cur.ticker
+            AND COALESCE(quality_universe.asset_type, 'Stock') = 'Stock'
+            AND ${usInvestableSymbolSql('quality_universe.ticker')}
+            AND NOT (
+              LENGTH(quality_universe.ticker) >= 5
+              AND SUBSTR(quality_universe.ticker, -1, 1) IN ('W', 'U', 'R')
+            )
+        )
       ORDER BY ${orderBy}, cur.ticker ASC
       LIMIT 8
     )
@@ -92,10 +139,44 @@ async function getUsDashboardRows(date: string | null) {
      AND s.date = ?
      AND s.ticker = r.ticker
   `
-  const [gainers, losers, volume, stageSummary] = await Promise.all([
+  const candidateSql = `
+    WITH latest_candidate AS (
+      SELECT MAX(as_of_date) AS date FROM serving_ml_physics_candidates
+    ),
+    latest_metric AS (
+      SELECT MAX(date) AS date FROM physical_momentum_metrics WHERE market = 'US'
+    )
+    SELECT
+      c.ticker,
+      COALESCE(c.name, u.name, c.ticker) AS name,
+      c.rank,
+      c.candidate_score,
+      pm.physical_momentum_score,
+      pm.physical_force_score,
+      f.stage_code
+    FROM serving_ml_physics_candidates c
+    INNER JOIN ticker_universe u
+      ON u.ticker = c.ticker
+     AND u.active = 1
+    LEFT JOIN physical_momentum_metrics pm
+      ON pm.market = 'US'
+     AND pm.symbol = c.ticker
+     AND pm.date = (SELECT date FROM latest_metric)
+    LEFT JOIN ml_feature_vectors_v2 f
+      ON f.ticker = c.ticker
+     AND f.date = c.as_of_date
+     AND f.feature_set = 'ma_physics_v4'
+    WHERE c.as_of_date = (SELECT date FROM latest_candidate)
+      AND c.horizon_days = 20
+      AND c.direction = ?
+      AND ${usInvestableSymbolSql('c.ticker')}
+    ORDER BY c.rank ASC
+    LIMIT 8
+  `
+  const [gainers, losers, volume, stageSummary, mlUp, mlDown, pmsSummary] = await Promise.all([
     execAll<RankingRow>(rankingSql('change_pct DESC NULLS LAST'), [date, date, date]),
     execAll<RankingRow>(rankingSql('change_pct ASC NULLS LAST'), [date, date, date]),
-    execAll<RankingRow>(rankingSql('cur.volume DESC NULLS LAST'), [date, date, date]),
+    execAll<RankingRow>(rankingSql('volume DESC NULLS LAST'), [date, date, date]),
     execAll<StageSummaryRow>(
       `
         SELECT CAST(daily_a_stage AS TEXT) AS label, COUNT(*) AS count
@@ -108,16 +189,42 @@ async function getUsDashboardRows(date: string | null) {
       `,
       [date],
     ),
+    hasUsAnalyticsDb() ? execUsAnalyticsAll<MlCandidateRow>(candidateSql, ['up']) : Promise.resolve([]),
+    hasUsAnalyticsDb() ? execUsAnalyticsAll<MlCandidateRow>(candidateSql, ['down']) : Promise.resolve([]),
+    hasUsAnalyticsDb()
+      ? execUsAnalyticsAll<PmsSummaryRow>(
+          `
+          SELECT
+            COUNT(*) AS total,
+            SUM(CASE WHEN physical_momentum_score > 0 THEN 1 ELSE 0 END) AS positive,
+            SUM(CASE WHEN physical_momentum_score < 0 THEN 1 ELSE 0 END) AS negative,
+            AVG(physical_momentum_score) AS average_pms,
+            AVG(physical_force_score) AS average_pfs,
+            MAX(date) AS date
+          FROM physical_momentum_metrics
+          WHERE market = 'US'
+            AND date = (SELECT MAX(date) FROM physical_momentum_metrics WHERE market = 'US')
+            AND physical_momentum_score IS NOT NULL
+          `,
+        ).then((rows) => rows[0] ?? null)
+      : Promise.resolve(null),
   ])
   const withDisplayNames = (rows: RankingRow[]) => rows.map((row) => ({
     ...row,
-    name: getUsDisplayName(row.ticker, row.name),
+    name: getUsSecondaryName(row.ticker, row.name),
+  }))
+  const withCandidateNames = (rows: MlCandidateRow[]) => rows.map((row) => ({
+    ...row,
+    name: getUsSecondaryName(row.ticker, row.name),
   }))
   return {
     gainers: withDisplayNames(gainers),
     losers: withDisplayNames(losers),
     volume: withDisplayNames(volume),
     stageSummary,
+    mlUp: withCandidateNames(mlUp),
+    mlDown: withCandidateNames(mlDown),
+    pmsSummary,
   }
 }
 
@@ -146,7 +253,7 @@ function RankingList({ title, rows, tone }: { title: string; rows: RankingRow[];
           >
             <span className="font-mono text-[13px] font-black text-[var(--color-brand-900)]">{row.ticker}</span>
             <span className="min-w-0">
-              <span className="block truncate text-[12px] font-bold text-[var(--color-text-primary)]">{row.name ?? row.ticker}</span>
+              <span className="block truncate text-[12px] font-bold text-[var(--color-text-primary)]">{row.name ?? '名称未登録'}</span>
               <span className="mt-0.5 flex items-center gap-2 text-[10px] font-semibold text-[var(--color-text-tertiary)]">
                 {row.exchange ?? 'US'} <StageCode code={row.stage_code} />
               </span>
@@ -160,6 +267,36 @@ function RankingList({ title, rows, tone }: { title: string; rows: RankingRow[];
           </Link>
         ))}
         {rows.length === 0 && <p className="py-4 text-center text-[12px] font-bold text-[var(--color-text-tertiary)]">データなし</p>}
+      </div>
+    </Card>
+  )
+}
+
+function MlCandidateList({ title, rows, direction }: { title: string; rows: MlCandidateRow[]; direction: 'up' | 'down' }) {
+  return (
+    <Card>
+      <CardHeader title={title} hint="物理ML / 20営業日" />
+      <div className="grid gap-2">
+        {rows.map((row) => (
+          <Link
+            key={row.ticker}
+            href={`/us/stock/${encodeURIComponent(row.ticker)}#ml`}
+            className="grid grid-cols-[36px_72px_1fr_auto] items-center gap-2 border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-3 py-2 hover:bg-white"
+          >
+            <span className={`font-mono text-[11px] font-black ${direction === 'up' ? 'text-red-700' : 'text-blue-700'}`}>#{row.rank}</span>
+            <span className="font-mono text-[12px] font-black text-[var(--color-brand-900)]">{row.ticker}</span>
+            <span className="min-w-0">
+              <span className="block truncate text-[11px] font-bold">{row.name ?? '名称未登録'}</span>
+              <span className="mt-0.5 flex items-center gap-2 text-[9px] text-[var(--color-text-tertiary)]">
+                PMS {row.physical_momentum_score?.toFixed(2) ?? '-'} / PFS {row.physical_force_score?.toFixed(2) ?? '-'}
+              </span>
+            </span>
+            <span className="text-right font-mono text-[11px] font-black text-[var(--color-brand-900)]">
+              {row.candidate_score.toFixed(3)}
+            </span>
+          </Link>
+        ))}
+        {rows.length === 0 && <p className="py-4 text-center text-[12px] font-bold text-[var(--color-text-tertiary)]">候補データなし</p>}
       </div>
     </Card>
   )
@@ -237,6 +374,37 @@ export default async function UsHomePage() {
         <RankingList title="US 出来高ランキング" rows={dashboard.volume} tone="volume" />
       </section>
 
+      <section className="grid gap-4 xl:grid-cols-[1fr_1fr_0.72fr]">
+        <MlCandidateList title="物理ML 上昇候補" rows={dashboard.mlUp} direction="up" />
+        <MlCandidateList title="物理ML 下落警戒" rows={dashboard.mlDown} direction="down" />
+        <Card>
+          <CardHeader title="US市場 PMS" hint={`基準日 ${dashboard.pmsSummary?.date ?? '-'}`} />
+          <div className="grid gap-2">
+            <div className="border-l-4 border-red-600 bg-red-50 px-3 py-2">
+              <div className="text-[10px] font-black text-red-700">PMSプラス</div>
+              <div className="mt-1 text-[22px] font-black text-red-800">{fmt(dashboard.pmsSummary?.positive)} 銘柄</div>
+            </div>
+            <div className="border-l-4 border-blue-600 bg-blue-50 px-3 py-2">
+              <div className="text-[10px] font-black text-blue-700">PMSマイナス</div>
+              <div className="mt-1 text-[22px] font-black text-blue-800">{fmt(dashboard.pmsSummary?.negative)} 銘柄</div>
+            </div>
+            <div className="grid grid-cols-2 gap-2 text-center">
+              <div className="bg-[var(--color-surface-subtle)] px-2 py-2">
+                <div className="text-[9px] font-black text-[var(--color-text-tertiary)]">平均PMS</div>
+                <div className="mt-1 font-mono text-[14px] font-black">{dashboard.pmsSummary?.average_pms?.toFixed(2) ?? '-'}</div>
+              </div>
+              <div className="bg-[var(--color-surface-subtle)] px-2 py-2">
+                <div className="text-[9px] font-black text-[var(--color-text-tertiary)]">平均PFS</div>
+                <div className="mt-1 font-mono text-[14px] font-black">{dashboard.pmsSummary?.average_pfs?.toFixed(2) ?? '-'}</div>
+              </div>
+            </div>
+            <Link href="/us/screener?sort=pms&dir=desc" className="border border-[var(--color-border-default)] px-3 py-2 text-center text-[11px] font-black text-[var(--color-brand-900)]">
+              PMS順で確認
+            </Link>
+          </div>
+        </Card>
+      </section>
+
       <Card>
         <CardHeader title="US 6ステージ分布" hint="日足Aの現在地。各ステージから該当銘柄へ絞り込めます。" />
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6">
@@ -262,9 +430,11 @@ export default async function UsHomePage() {
         </summary>
         <div className="grid gap-3 border-t border-[var(--color-border-default)] p-4 md:grid-cols-3">
           <div>
-            <div className="text-[11px] font-black text-[var(--color-text-tertiary)]">ユニバース</div>
+            <div className="text-[11px] font-black text-[var(--color-text-tertiary)]">稼働全資産</div>
             <div className="mt-1 text-[20px] font-black text-[var(--color-brand-900)]">{fmt(status.universe.active)} 銘柄</div>
-            <div className="text-[11px] font-semibold text-[var(--color-text-secondary)]">登録 {fmt(status.universe.total)}</div>
+            <div className="text-[11px] font-semibold text-[var(--color-text-secondary)]">
+              運用対象 {fmt(status.universe.productionActive)} / 登録 {fmt(status.universe.total)}
+            </div>
           </div>
           <div>
             <div className="text-[11px] font-black text-[var(--color-text-tertiary)]">OHLCV</div>

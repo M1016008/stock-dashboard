@@ -29,8 +29,17 @@ import {
   buildHistoricalAnalogChartSeries,
   type HistoricalAnalogChartInterval,
 } from '@/lib/ml/historical-analog-chart'
+import { getUsSecondaryName } from '@/lib/us-symbol-aliases'
 
 type Market = 'JP' | 'US'
+
+function tickerNameLabel(market: Market, ticker: string, name: string | null): string {
+  if (market === 'US') {
+    const secondary = getUsSecondaryName(ticker, name)
+    return secondary ? `${ticker} ${secondary}` : ticker
+  }
+  return `${ticker}${name ? ` ${name}` : ''}`
+}
 type AnalogTableSortKey =
   | 'rank'
   | 'recent'
@@ -963,7 +972,7 @@ export function HistoricalAnalogExplorer({
                 <div className="min-w-0 border-b border-[var(--color-border-soft)] p-2 lg:border-b-0 lg:border-r">
                   <div className="flex items-center justify-between gap-2 px-1">
                     <div className="truncate text-[11px] font-black text-[var(--color-text-primary)]">
-                      基準 {data.base.ticker} {data.base.name ?? ''}
+                      基準 {tickerNameLabel(market, data.base.ticker, data.base.name)}
                     </div>
                     <span className="shrink-0 text-[9px] font-bold text-[var(--color-text-tertiary)]">
                       {data.base.startDate}〜{data.base.endDate}
@@ -995,7 +1004,7 @@ export function HistoricalAnalogExplorer({
                         : `/stock/${encodeURIComponent(selected.ticker)}?date=${selected.caseEndDate}`}
                       className="min-w-0 truncate text-[11px] font-black text-[var(--color-brand-700)] hover:text-[var(--color-market-red)]"
                     >
-                      類似 {selected.ticker} {selected.name ?? ''}
+                      類似 {tickerNameLabel(market, selected.ticker, selected.name)}
                     </Link>
                     <span className="shrink-0 text-[9px] font-bold text-[var(--color-text-tertiary)]">
                       {selected.caseStartDate}〜{selected.caseEndDate}
@@ -1264,7 +1273,7 @@ export function HistoricalAnalogExplorer({
                           </span>
                         </td>
                         <td className="px-2 py-2.5">
-                          <div className="font-black text-[var(--color-brand-800)]">{row.ticker} {row.name ?? ''}</div>
+                          <div className="font-black text-[var(--color-brand-800)]">{tickerNameLabel(market, row.ticker, row.name)}</div>
                           <div className="mt-0.5 text-[9px] text-[var(--color-text-tertiary)]">
                             {row.caseStartDate}〜{row.caseEndDate}
                           </div>
