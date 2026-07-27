@@ -62,8 +62,8 @@ const command = [
   'export KABUTAN_THEME_DETAIL_LIMIT=${KABUTAN_THEME_DETAIL_LIMIT:-30}',
   'export KABUTAN_THEME_STOCK_PAGES=${KABUTAN_THEME_STOCK_PAGES:-8}',
   'export KABUTAN_REQUEST_DELAY_MS=${KABUTAN_REQUEST_DELAY_MS:-1000}',
-  'export KABUTAN_THEME_WAIT_FOR_LOCK_SECONDS=${KABUTAN_THEME_WAIT_FOR_LOCK_SECONDS:-86400}',
-  'export KABUTAN_THEME_LOCK_POLL_SECONDS=${KABUTAN_THEME_LOCK_POLL_SECONDS:-60}',
+  'export KABUTAN_THEME_WAIT_FOR_LOCK_SECONDS=${KABUTAN_THEME_WAIT_FOR_LOCK_SECONDS:-2700}',
+  'export KABUTAN_THEME_LOCK_POLL_SECONDS=${KABUTAN_THEME_LOCK_POLL_SECONDS:-30}',
   'export KABUTAN_THEME_FAIL_ON_LOCK_TIMEOUT=${KABUTAN_THEME_FAIL_ON_LOCK_TIMEOUT:-1}',
   'export KABUTAN_THEME_SKIP_IF_FRESH=${KABUTAN_THEME_SKIP_IF_FRESH:-1}',
   `export KABUTAN_THEME_FRESH_SINCE_HOUR=\${KABUTAN_THEME_FRESH_SINCE_HOUR:-${primaryHour}}`,
@@ -133,6 +133,6 @@ console.log(
     .map(([hour, minute]) => `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`)
     .join(', ')} JST`,
 )
-console.log('safety: runs after login, waits up to 24 hours for the DB writer; recovery runs skip after success')
+console.log('safety: runs after login, waits up to 45 minutes for a JP DB writer; recovery runs skip after success')
 console.log('resource policy: low-priority I/O, niceness 10')
 console.log(`logs: ${path.join(logDir, 'kabutan-themes.log')}`)

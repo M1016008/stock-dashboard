@@ -1,7 +1,7 @@
 // scripts/install-local-ml-learning.ts
 //
 // ローカルMacの launchd に、日次ML serving更新ジョブを登録する。
-// 特徴量・PMS・RL/物理状態は、保持している最古データから全期間で早朝に更新する。
+// 当日引け後を本実行、翌早朝を自動再試行枠として登録する。
 
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -23,8 +23,10 @@ const pathEnv = [
   '/usr/sbin',
   '/sbin',
 ].join(':')
-const scheduleHour = Number(process.env.ML_LEARNING_HOUR ?? '3')
-const scheduleMinute = Number(process.env.ML_LEARNING_MINUTE ?? '0')
+const scheduleHour = Number(process.env.ML_LEARNING_HOUR ?? '22')
+const scheduleMinute = Number(process.env.ML_LEARNING_MINUTE ?? '30')
+const retryHour = Number(process.env.ML_LEARNING_RETRY_HOUR ?? '3')
+const retryMinute = Number(process.env.ML_LEARNING_RETRY_MINUTE ?? '0')
 
 function xmlEscape(value: string): string {
   return value
@@ -48,7 +50,12 @@ function calendar(hour: number, minute: number, weekday: number): string {
 function weekdaySchedule(): string {
   // launchd Weekday: 1=Monday ... 6=Saturday, 0/7=Sunday.
   // Japanese exchange holidays are handled inside scripts/run-ml-learning.ts.
-  return [1, 2, 3, 4, 5].map((weekday) => calendar(scheduleHour, scheduleMinute, weekday)).join('\n')
+  return [1, 2, 3, 4, 5]
+    .flatMap((weekday) => [
+      calendar(scheduleHour, scheduleMinute, weekday),
+      calendar(retryHour, retryMinute, weekday),
+    ])
+    .join('\n')
 }
 
 fs.mkdirSync(launchAgentsDir, { recursive: true })
@@ -58,7 +65,7 @@ const command = [
   `cd ${JSON.stringify(cwd)}`,
   `export PATH=${JSON.stringify(pathEnv)}`,
   'export USE_LOCAL_DB=1',
-  'export STOCKBOARD_MEMORY_MIN_FREE_PERCENT=${STOCKBOARD_MEMORY_MIN_FREE_PERCENT:-15}',
+  'export STOCKBOARD_MEMORY_MIN_FREE_PERCENT=${STOCKBOARD_MEMORY_MIN_FREE_PERCENT:-20}',
   'export STOCKBOARD_MEMORY_MIN_AVAILABLE_MB=${STOCKBOARD_MEMORY_MIN_AVAILABLE_MB:-0}',
   'export STOCKBOARD_MEMORY_MAX_COMPRESSOR_MB=${STOCKBOARD_MEMORY_MAX_COMPRESSOR_MB:-8192}',
   'export STOCKBOARD_MEMORY_WAIT_SECONDS=${STOCKBOARD_MEMORY_WAIT_SECONDS:-1800}',
@@ -124,5 +131,9 @@ execFileSync('launchctl', ['bootstrap', `gui/${uid}`, plistPath], { stdio: 'inhe
 execFileSync('launchctl', ['enable', `gui/${uid}/${label}`], { stdio: 'inherit' })
 
 console.log(`launchd registered: ${plistPath}`)
-console.log(`schedule: Mon-Fri ${String(scheduleHour).padStart(2, '0')}:${String(scheduleMinute).padStart(2, '0')} JST; JP exchange holidays are skipped by the wrapper`)
+console.log(
+  `schedule: Mon-Fri ${String(scheduleHour).padStart(2, '0')}:${String(scheduleMinute).padStart(2, '0')} JST`
+  + ` + retry ${String(retryHour).padStart(2, '0')}:${String(retryMinute).padStart(2, '0')} JST;`
+  + ' JP exchange holidays are skipped by the wrapper',
+)
 console.log(`logs: ${path.join(logDir, 'ml-learning.log')}`)

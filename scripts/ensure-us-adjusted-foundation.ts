@@ -4,7 +4,11 @@ import path from 'node:path'
 import { createClient } from '@libsql/client'
 import { db, ensureReady, execGet } from '@/lib/db/client'
 import { marketDataRuns } from '@/lib/db/schema'
-import { acquireExclusiveUpdateLock } from '@/lib/server/update-lock'
+import {
+  acquireUpdateLock,
+  EXCLUSIVE_UPDATE_JOB_TYPES,
+  type UpdateLockHandle,
+} from '@/lib/server/update-lock'
 import { waitForMemoryHeadroom, withMemoryGuardEnv } from '@/lib/system/memory-guard'
 import { US_ADJUSTED_PRICE_BASIS } from '@/lib/us-adjusted-ohlcv'
 import { and, eq } from 'drizzle-orm'
@@ -18,6 +22,10 @@ const adjustedShadowDbPath = path.resolve(
   || `${usAnalyticsDbPath}.${US_ADJUSTED_PRICE_BASIS}.building`,
 )
 const foundationProcessLockPath = `${adjustedShadowDbPath}.process-lock`
+const SOURCE_SNAPSHOT_LOCK_JOB = 'us_adjusted_source_snapshots'
+const SOURCE_SNAPSHOT_CONFLICTS = EXCLUSIVE_UPDATE_JOB_TYPES.filter(
+  (jobType) => jobType !== 'us_adjusted_foundation',
+)
 
 type FoundationProcessLock = {
   release: () => void
@@ -466,7 +474,11 @@ async function main(): Promise<void> {
   }
   process.once('SIGINT', releaseOnSignal)
   process.once('SIGTERM', releaseOnSignal)
-  const lock = await acquireExclusiveUpdateLock('us_adjusted_foundation', 72 * 60 * 60)
+  const lock = await acquireUpdateLock(
+    'us_adjusted_foundation',
+    72 * 60 * 60,
+    EXCLUSIVE_UPDATE_JOB_TYPES,
+  )
   if (!lock) {
     processLock.release()
     throw new Error('US adjusted foundation is already active')
@@ -522,17 +534,32 @@ async function main(): Promise<void> {
     }, 60 * 1_000)
     try {
       if (!sourceCurrent) {
-        await setStage('source_snapshots')
-        const resumeTicker = process.env.US_SNAPSHOT_TICKER_START?.trim().toUpperCase()
-          || await resumableSnapshotTicker()
-        console.log(`Rebuilding US source snapshots with ${US_ADJUSTED_PRICE_BASIS}`)
-        await runNpm('batch:us-snapshots', {
-          US_SNAPSHOT_REBUILD: '1',
-          US_SNAPSHOT_CONCURRENCY: process.env.US_FOUNDATION_SNAPSHOT_CONCURRENCY ?? '2',
-          ...(resumeTicker ? { US_SNAPSHOT_TICKER_START: resumeTicker } : {}),
-        })
-        await recordSourceSnapshotBasis()
-        await enqueueStatusWrite(() => lock.heartbeat())
+        let sourceSnapshotLock: UpdateLockHandle | null = null
+        try {
+          sourceSnapshotLock = await acquireUpdateLock(
+            SOURCE_SNAPSHOT_LOCK_JOB,
+            72 * 60 * 60,
+            SOURCE_SNAPSHOT_CONFLICTS,
+          )
+          if (!sourceSnapshotLock) {
+            throw new Error(
+              'US adjusted foundation deferred: a shared source DB update is active',
+            )
+          }
+          await setStage('source_snapshots')
+          const resumeTicker = process.env.US_SNAPSHOT_TICKER_START?.trim().toUpperCase()
+            || await resumableSnapshotTicker()
+          console.log(`Rebuilding US source snapshots with ${US_ADJUSTED_PRICE_BASIS}`)
+          await runNpm('batch:us-snapshots', {
+            US_SNAPSHOT_REBUILD: '1',
+            US_SNAPSHOT_CONCURRENCY: process.env.US_FOUNDATION_SNAPSHOT_CONCURRENCY ?? '2',
+            ...(resumeTicker ? { US_SNAPSHOT_TICKER_START: resumeTicker } : {}),
+          })
+          await recordSourceSnapshotBasis()
+          await enqueueStatusWrite(() => lock.heartbeat())
+        } finally {
+          await sourceSnapshotLock?.release().catch(() => undefined)
+        }
       }
 
       if (!analyticsCurrent) {

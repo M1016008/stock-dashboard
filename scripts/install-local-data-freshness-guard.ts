@@ -1,5 +1,5 @@
 // Register the cross-market recovery guard. It runs after login and every
-// 30 minutes, then conditionally starts only stale, idle StockBoard services.
+// 15 minutes, then conditionally starts only stale, compatible StockBoard services.
 
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -15,7 +15,7 @@ const logDir = path.join(home, 'Library', 'Logs', 'StockBoard')
 const uid = typeof process.getuid === 'function' ? process.getuid() : Number(process.env.UID)
 const intervalSeconds = Math.max(
   900,
-  Number(process.env.DATA_FRESHNESS_GUARD_INTERVAL_SECONDS ?? '1800') || 1800,
+  Number(process.env.DATA_FRESHNESS_GUARD_INTERVAL_SECONDS ?? '900') || 900,
 )
 const defaultUsDb = process.env.US_ANALYTICS_DB_PATH?.trim()
   || '/Volumes/OWC Express 1M2 80G/stockboard-data/us/stockboard-us.db'

@@ -103,7 +103,7 @@ export async function waitForMemoryHeadroom(options: WaitOptions): Promise<void>
   const minAvailableMb = options.minAvailableMb
     ?? nonNegativeNumberEnv('STOCKBOARD_MEMORY_MIN_AVAILABLE_MB', 0)
   const minFreePercent = options.minFreePercent
-    ?? nonNegativeNumberEnv('STOCKBOARD_MEMORY_MIN_FREE_PERCENT', 15)
+    ?? nonNegativeNumberEnv('STOCKBOARD_MEMORY_MIN_FREE_PERCENT', 20)
   const maxCompressorMb = options.maxCompressorMb
     ?? positiveNumberEnv('STOCKBOARD_MEMORY_MAX_COMPRESSOR_MB', 12_288)
   const maxThrottledPages = options.maxThrottledPages

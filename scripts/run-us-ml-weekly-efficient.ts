@@ -49,6 +49,8 @@ async function runNpm(script: string, overrides: Record<string, string> = {}): P
       env: withMemoryGuardEnv({
         ...process.env,
         USE_LOCAL_DB: '1',
+        STOCKBOARD_DB_ROLE: 'us-analytics',
+        STOCKBOARD_DB_PATH: usAnalyticsDbPath,
         US_ANALYTICS_DB_PATH: usAnalyticsDbPath,
         ...overrides,
       }),
@@ -75,6 +77,15 @@ async function main(): Promise<void> {
     )
   }
 
+  await runNpm('batch:ml-model-deterioration', {
+    ML_MODEL_DETERIORATION_STRICT: '1',
+  })
+  await runNpm('batch:us-ml-health', {
+    US_ML_HEALTH_WRITE: '1',
+  })
+  await runNpm('batch:ml-accuracy-health', {
+    ML_ACCURACY_STRICT: '1',
+  })
   await runNpm('db:maintenance', { DB_MAINT_TARGETS: 'us' })
 }
 

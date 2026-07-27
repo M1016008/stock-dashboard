@@ -35,6 +35,10 @@ const NATIVE_BUSY_RETRIES = Math.max(
   1,
   Math.min(Number(process.env.US_ANALYTICS_NATIVE_BUSY_RETRIES ?? 8), 20),
 )
+const SOURCE_WRITER_POLL_MS = Math.max(
+  1_000,
+  Math.min(Number(process.env.US_ANALYTICS_SOURCE_WRITER_POLL_MS ?? 5_000), 60_000),
+)
 const NATIVE_SYNC_RECENT_DAYS = Math.max(1, Number(process.env.US_ANALYTICS_SYNC_RECENT_DAYS ?? 45))
 const REBUILD_PRICE_BASIS = process.env.US_ANALYTICS_REBUILD_PRICE_BASIS === '1'
 
@@ -97,6 +101,34 @@ function runSqlite(dbPath: string, sql: string): string {
 
 function waitSync(milliseconds: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds)
+}
+
+function waitForSharedSourceWriter(sourcePath: string): void {
+  let waits = 0
+  while (true) {
+    let activeJob = ''
+    try {
+      activeJob = runSqlite(sourcePath, `
+.timeout 5000
+SELECT job_type
+FROM update_locks
+WHERE status = 'running'
+  AND lease_expires_at > unixepoch()
+  AND job_type <> 'us_adjusted_foundation'
+LIMIT 1;
+`).trim()
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      if (!/database is locked|database is busy|SQLITE_BUSY/i.test(message)) throw error
+      activeJob = 'sqlite_writer'
+    }
+    if (!activeJob) return
+    if (waits % 6 === 0) {
+      console.log(`US analytics copy yielding to shared source writer: ${activeJob}`)
+    }
+    waits += 1
+    waitSync(SOURCE_WRITER_POLL_MS)
+  }
 }
 
 function nativeCopyChunk(sourcePath: string, chunk: string[]): { ohlcvRows: number; snapshotRows: number } {
@@ -186,6 +218,7 @@ function nativeCopyPending(pendingTickers: string[], doneSize: number): boolean 
   let copied = 0
   let snapshotsCopied = 0
   for (let i = 0; i < pendingTickers.length; i += NATIVE_COPY_CHUNK) {
+    waitForSharedSourceWriter(sourcePath)
     const chunk = pendingTickers.slice(i, i + NATIVE_COPY_CHUNK)
     const result = nativeCopyChunk(sourcePath, chunk)
     copied += result.ohlcvRows

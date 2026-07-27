@@ -10,7 +10,12 @@ import { execGet } from '@/lib/db/client'
 import { execUsAnalyticsGet, hasUsAnalyticsDb } from '@/lib/db/us-analytics'
 import { expectedLatestTradingDate } from '@/lib/server/data-freshness'
 import { expectedLatestUsTradingDate } from '@/lib/server/us-data-freshness'
-import { getActiveUpdateLocks } from '@/lib/server/update-lock'
+import {
+  cleanupOrphanedUpdateLocks,
+  EXCLUSIVE_UPDATE_JOB_TYPES,
+  getActiveUpdateLocks,
+  US_ISOLATED_UPDATE_JOB_TYPES,
+} from '@/lib/server/update-lock'
 import { US_ADJUSTED_PRICE_BASIS } from '@/lib/us-adjusted-ohlcv'
 import { usInvestableSymbolSql } from '@/lib/us-symbol-quality'
 
@@ -112,55 +117,67 @@ function disabledLaunchdLabels(): Set<string> {
 }
 
 const disabledLabels = disabledLaunchdLabels()
+const jpSupplementalIgnoredWriters = [
+  ...US_ISOLATED_UPDATE_JOB_TYPES,
+  'heavy_us_ml_process',
+] as const
 
 const services = {
   jpCore: {
     key: 'jp-core',
     label: 'com.stockboard.update-latest',
-    cooldownSeconds: 90 * 60,
+    cooldownSeconds: 15 * 60,
     requiresIdleWriter: true,
+    ignoredWriterJobTypes: ['us_adjusted_foundation'],
   },
   jpMl: {
     key: 'jp-ml',
     label: 'com.stockboard.ml-freshness-guard',
     cooldownSeconds: 2 * 60 * 60,
     requiresIdleWriter: true,
+    ignoredWriterJobTypes: [],
   },
   us: {
     key: 'us',
     label: 'com.stockboard.us-update-latest',
     cooldownSeconds: 2 * 60 * 60,
     requiresIdleWriter: true,
+    ignoredWriterJobTypes: [],
   },
   themes: {
     key: 'themes',
     label: 'com.stockboard.kabutan-themes',
     cooldownSeconds: 60 * 60,
     requiresIdleWriter: true,
+    ignoredWriterJobTypes: jpSupplementalIgnoredWriters,
   },
   materials: {
     key: 'materials',
     label: 'com.stockboard.kabutan-material-news',
     cooldownSeconds: 60 * 60,
     requiresIdleWriter: true,
+    ignoredWriterJobTypes: jpSupplementalIgnoredWriters,
   },
   earnings: {
     key: 'earnings',
     label: 'com.stockboard.earnings-refresh',
-    cooldownSeconds: 6 * 60 * 60,
+    cooldownSeconds: 90 * 60,
     requiresIdleWriter: true,
+    ignoredWriterJobTypes: jpSupplementalIgnoredWriters,
   },
   usEarnings: {
     key: 'us-earnings',
     label: 'com.stockboard.us-earnings',
     cooldownSeconds: 2 * 60 * 60,
     requiresIdleWriter: false,
+    ignoredWriterJobTypes: [],
   },
   weekly: {
     key: 'weekly-optimization',
     label: 'com.stockboard.weekly-optimization',
     cooldownSeconds: 6 * 60 * 60,
     requiresIdleWriter: true,
+    ignoredWriterJobTypes: [],
   },
 } as const
 type Service = (typeof services)[keyof typeof services]
@@ -236,7 +253,7 @@ function enforceWeeklySchedulePolicy(): Array<{
   })
 }
 
-function heavyMlProcessIsActive(): boolean {
+function heavyMlProcessReservations(): ActiveLockRow[] {
   const result = spawnSync(
     'pgrep',
     [
@@ -254,11 +271,23 @@ function heavyMlProcessIsActive(): boolean {
     ],
     { encoding: 'utf8', timeout: 5_000 },
   )
-  if (result.status !== 0) return false
-  return result.stdout
+  if (result.status !== 0) return []
+  const lines = result.stdout
     .split('\n')
     .filter(Boolean)
-    .some((line) => !line.includes('guard-data-freshness'))
+    .filter((line) => !line.includes('guard-data-freshness'))
+  const reservations: ActiveLockRow[] = []
+  const hasUsOrchestrator = lines.some((line) => /run-us-ml-job/.test(line))
+  if (hasUsOrchestrator) {
+    reservations.push({ jobType: 'heavy_us_ml_process' })
+  }
+  const hasJpOrGlobalOrchestrator = lines.some(
+    (line) => /run-weekly-optimization|run-ml-learning/.test(line),
+  )
+  if (hasJpOrGlobalOrchestrator || (!hasUsOrchestrator && lines.length > 0)) {
+    reservations.push({ jobType: 'heavy_ml_process' })
+  }
+  return reservations
 }
 
 function kickstart(label: string, restart = false): { ok: boolean; error: string | null } {
@@ -613,12 +642,16 @@ async function maybeTrigger(
   if (launchd.running && !restartRunning) {
     return { key: service.key, label: service.label, state: 'running', reason }
   }
-  if (service.requiresIdleWriter && activeLocks.length > 0) {
+  const ignoredWriterJobTypes: readonly string[] = service.ignoredWriterJobTypes
+  const blockingLocks = activeLocks.filter(
+    (lock) => !ignoredWriterJobTypes.includes(lock.jobType),
+  )
+  if (service.requiresIdleWriter && blockingLocks.length > 0) {
     return {
       key: service.key,
       label: service.label,
       state: 'deferred',
-      reason: `${reason}; active writer: ${activeLocks.map((lock) => lock.jobType).join(', ')}`,
+      reason: `${reason}; active writer: ${blockingLocks.map((lock) => lock.jobType).join(', ')}`,
     }
   }
 
@@ -658,6 +691,7 @@ async function main(): Promise<void> {
   const weeklySchedulePolicy = enforceWeeklySchedulePolicy()
   const expectedJp = expectedLatestTradingDate()
   const expectedUs = expectedLatestUsTradingDate()
+  const clearedOrphanedLocks = await cleanupOrphanedUpdateLocks(EXCLUSIVE_UPDATE_JOB_TYPES)
   const [jpDates, usDates, sources, activeLocks, usAutomation, usCoverageHealth] = await Promise.all([
     loadJpDates(),
     loadUsDates(),
@@ -669,7 +703,7 @@ async function main(): Promise<void> {
     loadUsCoverageHealth(),
   ])
   const weekly = await weeklyFreshness()
-  const heavyMlActive = heavyMlProcessIsActive()
+  const heavyMlReservations = heavyMlProcessReservations()
 
   const jpPrice = jpDates.price
   const jpCoreStale = staleDateEntries(
@@ -719,7 +753,7 @@ async function main(): Promise<void> {
   const actions: Action[] = []
   const writerReservations = [
     ...activeLocks,
-    ...(heavyMlActive ? [{ jobType: 'heavy_ml_process' }] : []),
+    ...heavyMlReservations,
   ]
   const reconcile = async (
     service: Service,
@@ -829,6 +863,7 @@ async function main(): Promise<void> {
     sources,
     weekly,
     weeklySchedulePolicy,
+    clearedOrphanedLocks,
     activeLocks: writerReservations.map((lock) => lock.jobType),
     actions,
   }

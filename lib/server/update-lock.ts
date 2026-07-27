@@ -9,10 +9,28 @@ export const EXCLUSIVE_UPDATE_JOB_TYPES = [
   'ml_freshness_guard',
   'us_update_latest',
   'us_adjusted_foundation',
+  'us_adjusted_source_snapshots',
   'earnings_refresh',
   'kabutan_material_news',
   'kabutan_themes',
   'db_maintenance',
+] as const
+
+export const JP_STOCKBOARD_UPDATE_JOB_TYPES = [
+  'update_latest',
+  'post_ohlcv_refresh',
+  'ml_learning',
+  'ml_freshness_guard',
+  'earnings_refresh',
+  'kabutan_material_news',
+  'kabutan_themes',
+  'db_maintenance',
+] as const
+
+export const US_ISOLATED_UPDATE_JOB_TYPES = [
+  'us_update_latest',
+  'us_adjusted_foundation',
+  'us_adjusted_source_snapshots',
 ] as const
 
 export type UpdateLockSnapshot = {
@@ -81,12 +99,37 @@ function hasActiveSqliteWriterProcess(): boolean {
   }
 }
 
+function hasActiveUsAdjustedFoundationProcess(): boolean {
+  try {
+    const output = execFileSync('ps', ['-axo', 'pid=,command='], {
+      encoding: 'utf8',
+      timeout: 5_000,
+    })
+    return output
+      .split('\n')
+      .some((line) => {
+        const match = line.trim().match(/^(\d+)\s+(.+)$/)
+        if (!match) return false
+        const pid = Number(match[1])
+        if (!Number.isInteger(pid) || pid === process.pid) return false
+        return /scripts\/(?:run-us-ml-weekly-efficient|ensure-us-adjusted-foundation|build-us-analytics-db)\.(?:ts|js)\b/
+          .test(match[2])
+      })
+  } catch {
+    return true
+  }
+}
+
 function isSqliteBusyError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error)
   return /SQLITE_BUSY|database is locked/i.test(message)
 }
 
-async function cleanupOrphanedUpdateLocks(jobTypes: readonly string[]): Promise<number> {
+function wait(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds))
+}
+
+export async function cleanupOrphanedUpdateLocks(jobTypes: readonly string[]): Promise<number> {
   if (jobTypes.length === 0) return 0
   try {
     const candidates = await client.execute({
@@ -108,10 +151,22 @@ async function cleanupOrphanedUpdateLocks(jobTypes: readonly string[]): Promise<
         const pid = localOwnerPid(row.owner)
         return row.jobType && row.owner && pid && !processExists(pid)
       })
-    if (orphaned.length === 0 || hasActiveSqliteWriterProcess()) return 0
+    if (orphaned.length === 0) return 0
+    const foundationJobTypes = new Set([
+      'us_adjusted_foundation',
+      'us_adjusted_source_snapshots',
+    ])
+    const foundationBusy = orphaned.some((row) => foundationJobTypes.has(row.jobType))
+      && hasActiveUsAdjustedFoundationProcess()
+    const generalBusy = orphaned.some((row) => !foundationJobTypes.has(row.jobType))
+      && hasActiveSqliteWriterProcess()
+    const reclaimable = orphaned.filter((row) => (
+      foundationJobTypes.has(row.jobType) ? !foundationBusy : !generalBusy
+    ))
+    if (reclaimable.length === 0) return 0
 
     let cleaned = 0
-    for (const row of orphaned) {
+    for (const row of reclaimable) {
       const result = await client.execute({
         sql: `
           UPDATE update_locks
@@ -188,36 +243,50 @@ export async function acquireUpdateLock(
       )
     `
     : ''
-  let result
-  try {
-    result = await client.execute({
-      sql: `
-        INSERT INTO update_locks (
-          job_type, status, owner, started_at, heartbeat_at, lease_expires_at
-        )
-        SELECT ?, 'running', ?, unixepoch(), unixepoch(), unixepoch() + ?
-        WHERE 1 = 1
-          ${activeConflictSql}
-        ON CONFLICT(job_type) DO UPDATE SET
-          status = 'running',
-          owner = excluded.owner,
-          started_at = unixepoch(),
-          heartbeat_at = unixepoch(),
-          lease_expires_at = unixepoch() + ?
-        WHERE (
-          update_locks.status <> 'running'
-          OR update_locks.lease_expires_at <= unixepoch()
-        )
-          ${activeConflictSql}
-      `,
-      args: [jobType, owner, leaseSeconds, ...conflicts, leaseSeconds, ...conflicts],
-    })
-  } catch (error) {
-    if (isSqliteBusyError(error)) return null
-    throw error
+  const configuredBusyRetries = Number(process.env.UPDATE_LOCK_BUSY_RETRIES ?? 20)
+  const busyRetries = Number.isFinite(configuredBusyRetries)
+    ? Math.max(1, Math.min(Math.floor(configuredBusyRetries), 20))
+    : 20
+  let claimed = false
+  for (let attempt = 1; attempt <= busyRetries; attempt += 1) {
+    try {
+      const result = await client.execute({
+        sql: `
+          INSERT INTO update_locks (
+            job_type, status, owner, started_at, heartbeat_at, lease_expires_at
+          )
+          SELECT ?, 'running', ?, unixepoch(), unixepoch(), unixepoch() + ?
+          WHERE 1 = 1
+            ${activeConflictSql}
+          ON CONFLICT(job_type) DO UPDATE SET
+            status = 'running',
+            owner = excluded.owner,
+            started_at = unixepoch(),
+            heartbeat_at = unixepoch(),
+            lease_expires_at = unixepoch() + ?
+          WHERE (
+            update_locks.status <> 'running'
+            OR update_locks.lease_expires_at <= unixepoch()
+          )
+            ${activeConflictSql}
+        `,
+        args: [jobType, owner, leaseSeconds, ...conflicts, leaseSeconds, ...conflicts],
+      })
+      claimed = result.rowsAffected >= 1
+      break
+    } catch (error) {
+      if (!isSqliteBusyError(error)) throw error
+      if (attempt >= busyRetries) return null
+      const delayMs = Math.min(5_000, attempt * 500)
+      console.warn(
+        `Update lock ${jobType} waiting for SQLite writer slot `
+        + `(${attempt}/${busyRetries}); retrying in ${delayMs}ms`,
+      )
+      await wait(delayMs)
+    }
   }
 
-  if (result.rowsAffected < 1) return null
+  if (!claimed) return null
 
   let heartbeatInFlight: Promise<void> | null = null
   const heartbeat = (): Promise<void> => {
@@ -271,6 +340,17 @@ export async function acquireExclusiveUpdateLock(
     jobType,
     leaseSeconds,
     EXCLUSIVE_UPDATE_JOB_TYPES,
+  )
+}
+
+export async function acquireJpStockboardUpdateLock(
+  jobType: string,
+  leaseSeconds = DEFAULT_UPDATE_LOCK_LEASE_SECONDS,
+): Promise<UpdateLockHandle | null> {
+  return acquireUpdateLock(
+    jobType,
+    leaseSeconds,
+    JP_STOCKBOARD_UPDATE_JOB_TYPES,
   )
 }
 

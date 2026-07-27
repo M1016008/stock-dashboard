@@ -60,6 +60,8 @@ const command = [
   'export SQLITE_BUSY_RETRIES=${SQLITE_BUSY_RETRIES:-8}',
   'export EARNINGS_REFRESH_MAX_ATTEMPTS=${EARNINGS_REFRESH_MAX_ATTEMPTS:-3}',
   'export EARNINGS_REFRESH_RETRY_DELAY_SECONDS=${EARNINGS_REFRESH_RETRY_DELAY_SECONDS:-300}',
+  'export EARNINGS_REFRESH_WAIT_FOR_LOCK_SECONDS=${EARNINGS_REFRESH_WAIT_FOR_LOCK_SECONDS:-2700}',
+  'export EARNINGS_REFRESH_LOCK_POLL_SECONDS=${EARNINGS_REFRESH_LOCK_POLL_SECONDS:-30}',
   'npm run batch:earnings-refresh',
 ].join(' && ')
 
@@ -98,7 +100,15 @@ const plist = `<?xml version="1.0" encoding="UTF-8"?>
   <key>StandardErrorPath</key>
   <string>${xmlEscape(path.join(logDir, 'earnings-refresh.err'))}</string>
   <key>RunAtLoad</key>
-  <false/>
+  <true/>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>LowPriorityIO</key>
+  <true/>
+  <key>Nice</key>
+  <integer>10</integer>
+  <key>ThrottleInterval</key>
+  <integer>300</integer>
 </dict>
 </plist>
 `

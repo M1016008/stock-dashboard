@@ -46,6 +46,8 @@ const command = [
   'export KABUTAN_MATERIAL_NEWS_PAGES=${KABUTAN_MATERIAL_NEWS_PAGES:-2}',
   'export KABUTAN_MATERIAL_NEWS_LIMIT=${KABUTAN_MATERIAL_NEWS_LIMIT:-30}',
   'export KABUTAN_REQUEST_DELAY_MS=${KABUTAN_REQUEST_DELAY_MS:-1200}',
+  'export KABUTAN_MATERIAL_NEWS_WAIT_FOR_LOCK_SECONDS=${KABUTAN_MATERIAL_NEWS_WAIT_FOR_LOCK_SECONDS:-1200}',
+  'export KABUTAN_MATERIAL_NEWS_LOCK_POLL_SECONDS=${KABUTAN_MATERIAL_NEWS_LOCK_POLL_SECONDS:-30}',
   'npm run batch:kabutan-material-news',
 ].join(' && ')
 
@@ -71,7 +73,15 @@ const plist = `<?xml version="1.0" encoding="UTF-8"?>
   <key>StandardErrorPath</key>
   <string>${xmlEscape(path.join(logDir, 'kabutan-material-news.err'))}</string>
   <key>RunAtLoad</key>
-  <false/>
+  <true/>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>LowPriorityIO</key>
+  <true/>
+  <key>Nice</key>
+  <integer>10</integer>
+  <key>ThrottleInterval</key>
+  <integer>300</integer>
 </dict>
 </plist>
 `

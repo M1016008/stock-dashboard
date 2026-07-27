@@ -9,7 +9,7 @@ import {
   type KabutanThemeStock,
 } from '@/lib/queries/kabutan-themes'
 import {
-  acquireExclusiveUpdateLock,
+  acquireJpStockboardUpdateLock,
   type UpdateLockHandle,
 } from '@/lib/server/update-lock'
 
@@ -50,8 +50,9 @@ function envInt(name: string, fallback: number, min: number, max: number): numbe
 
 function currentJstWindowStartSec(hour: number, minute: number): number {
   const jstOffsetMs = 9 * 60 * 60 * 1000
-  const jstNow = new Date(Date.now() + jstOffsetMs)
-  return Math.floor((
+  const nowMs = Date.now()
+  const jstNow = new Date(nowMs + jstOffsetMs)
+  let windowStartMs = (
     Date.UTC(
       jstNow.getUTCFullYear(),
       jstNow.getUTCMonth(),
@@ -59,7 +60,9 @@ function currentJstWindowStartSec(hour: number, minute: number): number {
       hour,
       minute,
     ) - jstOffsetMs
-  ) / 1000)
+  )
+  if (windowStartMs > nowMs) windowStartMs -= 24 * 60 * 60 * 1000
+  return Math.floor(windowStartMs / 1000)
 }
 
 function decodeHtml(value: string): string {
@@ -375,7 +378,7 @@ async function acquireThemeUpdateLock(): Promise<UpdateLockHandle | null> {
   let lastLogAt = 0
 
   for (;;) {
-    const lock = await acquireExclusiveUpdateLock('kabutan_themes', leaseSeconds)
+    const lock = await acquireJpStockboardUpdateLock('kabutan_themes', leaseSeconds)
     if (lock) return lock
 
     const elapsedSeconds = Math.floor((Date.now() - startedAt) / 1000)
@@ -383,7 +386,7 @@ async function acquireThemeUpdateLock(): Promise<UpdateLockHandle | null> {
     if (Date.now() - lastLogAt >= 60_000 || lastLogAt === 0) {
       lastLogAt = Date.now()
       console.log(
-        `Kabutan themes waiting for another StockBoard writer: elapsed=${elapsedSeconds}s, timeout=${waitSeconds}s`,
+        `Kabutan themes waiting for a JP StockBoard writer: elapsed=${elapsedSeconds}s, timeout=${waitSeconds}s`,
       )
     }
     await sleep(Math.min(pollSeconds, Math.max(1, waitSeconds - elapsedSeconds)) * 1000)

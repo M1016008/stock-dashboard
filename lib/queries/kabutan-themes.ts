@@ -189,6 +189,14 @@ export async function getKabutanThemes(limit = 30): Promise<{
   const [rows, lastRun] = await Promise.all([
     execAll<ThemeRow>(
       `
+        WITH latest_success AS (
+          SELECT started_at, finished_at
+          FROM kabutan_theme_runs
+          WHERE status = 'success'
+            AND finished_at IS NOT NULL
+          ORDER BY finished_at DESC, id DESC
+          LIMIT 1
+        )
         SELECT
           theme_id AS themeId,
           name,
@@ -205,6 +213,8 @@ export async function getKabutanThemes(limit = 30): Promise<{
           parse_status AS parseStatus,
           error_summary AS errorSummary
         FROM kabutan_themes
+        CROSS JOIN latest_success
+        WHERE fetched_at BETWEEN latest_success.started_at AND latest_success.finished_at
         ORDER BY
           CASE WHEN rank IS NULL THEN 1 ELSE 0 END,
           rank ASC,

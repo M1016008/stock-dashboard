@@ -8,6 +8,7 @@ import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { createClient } from '@libsql/client'
 import { waitForMemoryHeadroom, withMemoryGuardEnv } from '@/lib/system/memory-guard'
 
 type StepStatus = 'pending' | 'running' | 'completed' | 'failed'
@@ -17,6 +18,8 @@ type Step = {
   label: string
   npmScript: string
   env?: NodeJS.ProcessEnv
+  modelDbPath?: string
+  rollbackScripts?: string[]
 }
 
 type StepResult = {
@@ -38,6 +41,18 @@ type RunState = {
   finishedAt: string | null
   status: 'running' | 'completed' | 'failed'
   steps: StepResult[]
+}
+
+type ModelSnapshotRow = {
+  model_name: string
+  model_type: string
+  direction: string
+  horizon_days: number
+  feature_names_json: string
+  weights_json: string
+  intercept: number
+  metrics_json: string
+  trained_at: number
 }
 
 const supportDir = path.join(os.homedir(), 'Library', 'Application Support', 'StockBoard')
@@ -183,6 +198,13 @@ function releaseProcessLock(): void {
 }
 
 function steps(): Step[] {
+  const jpDbPath = path.resolve(
+    process.env.STOCKBOARD_DB_PATH?.trim()
+      || path.join(process.cwd(), 'data', 'stockboard.db'),
+  )
+  const usDbPath = path.resolve(
+    process.env.US_ANALYTICS_DB_PATH?.trim() || defaultUsDb,
+  )
   const baseEnv: NodeJS.ProcessEnv = {
     ...process.env,
     USE_LOCAL_DB: '1',
@@ -191,7 +213,8 @@ function steps(): Step[] {
     ML_FEATURE_HEALTH_STRICT: '1',
     ML_ACCURACY_STRICT: '1',
     UPDATE_CHILD_TIMEOUT_MINUTES: process.env.UPDATE_CHILD_TIMEOUT_MINUTES ?? '2880',
-    US_ANALYTICS_DB_PATH: process.env.US_ANALYTICS_DB_PATH?.trim() || defaultUsDb,
+    ML_MODEL_DETERIORATION_STRICT: '1',
+    US_ANALYTICS_DB_PATH: usDbPath,
   }
   return [
     {
@@ -207,12 +230,32 @@ function steps(): Step[] {
         ML_LEARNING_BATCH_WAIT_MINUTES: process.env.ML_LEARNING_BATCH_WAIT_MINUTES ?? '2880',
         ML_LEARNING_NPM_SCRIPT: 'batch:ml-weekly-governance',
       },
+      modelDbPath: jpDbPath,
+      rollbackScripts: [
+        'batch:ml-candidates',
+        'batch:ml-predict',
+        'batch:ml-physics-candidates',
+        'batch:ml-insights',
+        'batch:dashboard-cache',
+      ],
     },
     {
       id: 'us-features-models',
       label: 'US feature/model governance',
       npmScript: 'batch:us-ml-weekly-efficient',
-      env: baseEnv,
+      env: {
+        ...baseEnv,
+        STOCKBOARD_DB_ROLE: 'us-analytics',
+        STOCKBOARD_DB_PATH: usDbPath,
+      },
+      modelDbPath: usDbPath,
+      rollbackScripts: [
+        'batch:ml-candidates',
+        'batch:ml-predict',
+        'batch:ml-physics-candidates',
+        'batch:ml-insights',
+        'batch:us-ml-health',
+      ],
     },
     {
       id: 'jp-analog-index',
@@ -246,6 +289,93 @@ function steps(): Step[] {
   ]
 }
 
+async function snapshotModels(dbPath: string | undefined): Promise<ModelSnapshotRow[] | null> {
+  if (!dbPath || !fs.existsSync(dbPath)) return null
+  const client = createClient({ url: `file:${dbPath}` })
+  try {
+    await client.execute('PRAGMA busy_timeout=60000')
+    const table = await client.execute(
+      `SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ml_models' LIMIT 1`,
+    )
+    if (table.rows.length === 0) return null
+    const rows = await client.execute(`
+      SELECT model_name, model_type, direction, horizon_days, feature_names_json,
+             weights_json, intercept, metrics_json, trained_at
+      FROM ml_models
+    `)
+    return rows.rows.map((row) => ({
+      model_name: String(row.model_name),
+      model_type: String(row.model_type),
+      direction: String(row.direction),
+      horizon_days: Number(row.horizon_days),
+      feature_names_json: String(row.feature_names_json),
+      weights_json: String(row.weights_json),
+      intercept: Number(row.intercept),
+      metrics_json: String(row.metrics_json),
+      trained_at: Number(row.trained_at),
+    }))
+  } finally {
+    client.close()
+  }
+}
+
+function modelGroup(row: Pick<ModelSnapshotRow, 'model_type' | 'direction' | 'horizon_days'>): string {
+  return `${row.model_type}\u0000${row.direction}\u0000${row.horizon_days}`
+}
+
+async function restoreValidatedModels(dbPath: string, snapshot: ModelSnapshotRow[]): Promise<number> {
+  if (snapshot.length === 0) return 0
+  const client = createClient({ url: `file:${dbPath}` })
+  try {
+    await client.execute('PRAGMA busy_timeout=60000')
+    const current = await client.execute(`
+      SELECT model_name, model_type, direction, horizon_days
+      FROM ml_models
+    `)
+    const previousNames = new Set(snapshot.map((row) => row.model_name))
+    const previousGroups = new Set(snapshot.map(modelGroup))
+    const failedGenerationNames = current.rows
+      .map((row) => ({
+        model_name: String(row.model_name),
+        model_type: String(row.model_type),
+        direction: String(row.direction),
+        horizon_days: Number(row.horizon_days),
+      }))
+      .filter((row) => !previousNames.has(row.model_name) && previousGroups.has(modelGroup(row)))
+      .map((row) => row.model_name)
+
+    const statements = [
+      ...failedGenerationNames.map((modelName) => ({
+        sql: `UPDATE ml_models SET trained_at = 0 WHERE model_name = ?`,
+        args: [modelName],
+      })),
+      ...snapshot.map((row) => ({
+        sql: `
+          INSERT OR REPLACE INTO ml_models
+            (model_name, model_type, direction, horizon_days, feature_names_json,
+             weights_json, intercept, metrics_json, trained_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+        args: [
+          row.model_name,
+          row.model_type,
+          row.direction,
+          row.horizon_days,
+          row.feature_names_json,
+          row.weights_json,
+          row.intercept,
+          row.metrics_json,
+          row.trained_at,
+        ],
+      })),
+    ]
+    if (statements.length > 0) await client.batch(statements, 'write')
+    return failedGenerationNames.length
+  } finally {
+    client.close()
+  }
+}
+
 async function runStep(step: Step): Promise<{
   exitCode: number | null
   signal: NodeJS.Signals | null
@@ -264,6 +394,23 @@ async function runStep(step: Step): Promise<{
       resolve({ exitCode, signal })
     })
   })
+}
+
+async function republishValidatedModels(step: Step): Promise<void> {
+  for (const npmScript of step.rollbackScripts ?? []) {
+    const recoveryStep: Step = {
+      id: `${step.id}-rollback-${npmScript}`,
+      label: `${step.label} rollback publication: ${npmScript}`,
+      npmScript,
+      env: step.env,
+    }
+    const result = await runStep(recoveryStep)
+    if (result.exitCode !== 0) {
+      throw new Error(
+        `rollback publication failed: npm run ${npmScript}, exit=${result.exitCode}, signal=${result.signal ?? 'none'}`,
+      )
+    }
+  }
 }
 
 function installSignalHandlers(): void {
@@ -337,11 +484,13 @@ async function main(): Promise<void> {
     result.startedAt = isoNow()
     state.heartbeatAt = isoNow()
     writeState(state)
+    let modelSnapshot: ModelSnapshotRow[] | null = null
     const heartbeatTimer = setInterval(() => {
       state.heartbeatAt = isoNow()
       writeState(state)
     }, 60_000)
     try {
+      modelSnapshot = await snapshotModels(step.modelDbPath)
       const completed = await runStep(step)
       result.exitCode = completed.exitCode
       result.signal = completed.signal
@@ -365,6 +514,20 @@ async function main(): Promise<void> {
       break
     }
     if (result.status === 'failed') {
+      if (step.modelDbPath && modelSnapshot && modelSnapshot.length > 0) {
+        try {
+          const demoted = await restoreValidatedModels(step.modelDbPath, modelSnapshot)
+          console.warn(
+            `[weekly-optimization] ROLLBACK ${step.id}: restored validated model generation; demoted=${demoted}`,
+          )
+          await republishValidatedModels(step)
+        } catch (error) {
+          const rollbackError = errorMessage(error)
+          result.error = `${result.error ?? 'step failed'}; rollback failed: ${rollbackError}`
+          writeState(state)
+          console.error(`[weekly-optimization] ROLLBACK FAILED ${step.id}: ${rollbackError}`)
+        }
+      }
       console.error(`[weekly-optimization] STOP ${step.id}: downstream publication was not started`)
       break
     }

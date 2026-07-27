@@ -8,7 +8,10 @@ import { eq } from 'drizzle-orm'
 import { db } from '@/lib/db/client'
 import { batchRuns } from '@/lib/db/schema'
 import { getDataFreshness } from '@/lib/server/data-freshness'
-import { acquireExclusiveUpdateLock } from '@/lib/server/update-lock'
+import {
+  acquireUpdateLock,
+  EXCLUSIVE_UPDATE_JOB_TYPES,
+} from '@/lib/server/update-lock'
 import { waitForMemoryHeadroom, withMemoryGuardEnv } from '@/lib/system/memory-guard'
 
 type RunResult = {
@@ -18,6 +21,47 @@ type RunResult = {
 
 type EnvOverrides = Record<string, string | undefined>
 type Heartbeat = () => Promise<void>
+
+// The isolated US analytics generation only reads the shared source DB after
+// its source-snapshot stage. JP daily writes can safely continue in WAL mode.
+// The dedicated source-snapshot lock below still blocks this job while that
+// shared-US write stage is active.
+const JP_DAILY_UPDATE_CONFLICTS = [
+  ...EXCLUSIVE_UPDATE_JOB_TYPES.filter((jobType) => jobType !== 'us_adjusted_foundation'),
+] as const
+
+function wait(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds))
+}
+
+async function acquireDailyUpdateLock(leaseSeconds: number) {
+  const configuredWaitSeconds = Number(process.env.UPDATE_LOCK_WAIT_SECONDS ?? 30 * 60)
+  const waitSeconds = Number.isFinite(configuredWaitSeconds)
+    ? Math.max(0, Math.min(Math.floor(configuredWaitSeconds), 2 * 60 * 60))
+    : 30 * 60
+  const pollSeconds = Math.max(
+    10,
+    Math.min(Number(process.env.UPDATE_LOCK_POLL_SECONDS ?? 30) || 30, 5 * 60),
+  )
+  const deadline = Date.now() + waitSeconds * 1_000
+  let attempts = 0
+  do {
+    attempts += 1
+    const lock = await acquireUpdateLock(
+      'update_latest',
+      leaseSeconds,
+      JP_DAILY_UPDATE_CONFLICTS,
+    )
+    if (lock) return lock
+    if (Date.now() >= deadline) break
+    console.warn(
+      `Latest data update waiting for a conflicting writer `
+      + `(attempt ${attempts}; next check in ${pollSeconds}s)`,
+    )
+    await wait(pollSeconds * 1_000)
+  } while (Date.now() < deadline)
+  return null
+}
 
 async function runScript(script: string, envOverrides: EnvOverrides = {}, heartbeat?: Heartbeat): Promise<RunResult> {
   await waitForMemoryHeadroom({ label: script })
@@ -119,9 +163,12 @@ async function main() {
   const lockLeaseSeconds = Number.isFinite(configuredLockLeaseSeconds) && configuredLockLeaseSeconds > 0
     ? Math.max(60 * 60, configuredLockLeaseSeconds)
     : 3 * 60 * 60
-  const lock = await acquireExclusiveUpdateLock('update_latest', lockLeaseSeconds)
+  const lock = await acquireDailyUpdateLock(lockLeaseSeconds)
   if (!lock) {
-    console.log('Latest data update skipped: update_latest lock is already active')
+    console.error(
+      'Latest data update deferred: a conflicting writer remained active after the bounded wait',
+    )
+    process.exitCode = 75
     return
   }
 
@@ -251,7 +298,7 @@ async function main() {
       }
 
       if (process.env.SKIP_DAILY_ML === '1' || process.env.UPDATE_LATEST_RUN_DAILY_ML !== '1') {
-        console.log('Daily ML refresh skipped by update-latest. Use npm run batch:ml-learning-daily for the scheduled early-morning ML serving refresh, or set UPDATE_LATEST_RUN_DAILY_ML=1 for a manual combined run.')
+        console.log('Daily ML refresh skipped by update-latest. Use npm run batch:ml-learning-daily for the scheduled post-close ML serving refresh, or set UPDATE_LATEST_RUN_DAILY_ML=1 for a manual combined run.')
       } else {
         try {
           await runRequired('scripts/batch-ml-features.ts', {

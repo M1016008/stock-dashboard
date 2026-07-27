@@ -169,8 +169,8 @@ async function runFullHistory(env: NodeJS.ProcessEnv, options: { skipPms?: boole
   if (!options.skipPms) {
     await runNpm('batch:physical-momentum:us-full', env, {
       US_PMS_RECENT_DAYS: env.US_PMS_WEEKLY_RECENT_DAYS ?? weeklyRecentDays,
-      US_PMS_TICKER_CHUNK: env.US_PMS_WEEKLY_TICKER_CHUNK ?? '500',
-      US_PMS_DATE_CHUNK: env.US_PMS_WEEKLY_DATE_CHUNK ?? '100',
+      US_PMS_TICKER_CHUNK: env.US_PMS_WEEKLY_TICKER_CHUNK ?? '250',
+      US_PMS_DATE_CHUNK: env.US_PMS_WEEKLY_DATE_CHUNK ?? '50',
     })
   }
   if (env.US_ML_SKIP_FORWARD_RETURNS === '1') {
@@ -358,9 +358,9 @@ async function runDailyServing(env: NodeJS.ProcessEnv): Promise<void> {
     console.log('US ML daily: skipping PMS by US_ML_SKIP_DAILY_PMS=1')
   } else {
     await runNpm('batch:physical-momentum:us-full', env, {
-      US_PMS_RECENT_DAYS: env.US_PMS_DAILY_RECENT_DAYS ?? '420',
-      US_PMS_TICKER_CHUNK: env.US_PMS_DAILY_TICKER_CHUNK ?? '500',
-      US_PMS_DATE_CHUNK: env.US_PMS_DAILY_DATE_CHUNK ?? '100',
+      US_PMS_RECENT_DAYS: env.US_PMS_DAILY_RECENT_DAYS ?? '30',
+      US_PMS_TICKER_CHUNK: env.US_PMS_DAILY_TICKER_CHUNK ?? '250',
+      US_PMS_DATE_CHUNK: env.US_PMS_DAILY_DATE_CHUNK ?? '50',
     })
   }
   const featureMissingOnlyDate = env.US_ML_DAILY_FEATURE_MISSING_ONLY_DATE ?? 'latest'

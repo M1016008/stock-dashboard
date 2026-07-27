@@ -8,7 +8,10 @@ import {
   isKabutanDashboardTargetTitle,
   pruneKabutanMaterialNewsToPreviousDayMovers,
 } from '@/lib/queries/kabutan-material-news'
-import { acquireExclusiveUpdateLock } from '@/lib/server/update-lock'
+import {
+  acquireJpStockboardUpdateLock,
+  type UpdateLockHandle,
+} from '@/lib/server/update-lock'
 
 const BASE_URL = 'https://kabutan.jp'
 const CATEGORY_URLS = [
@@ -47,6 +50,30 @@ function envInt(name: string, fallback: number, min: number, max: number): numbe
   const raw = Number(process.env[name] ?? fallback)
   if (!Number.isFinite(raw)) return fallback
   return Math.max(min, Math.min(max, Math.floor(raw)))
+}
+
+async function acquireMaterialNewsUpdateLock(): Promise<UpdateLockHandle | null> {
+  const leaseSeconds = envInt('KABUTAN_MATERIAL_NEWS_LOCK_SECONDS', 20 * 60, 5 * 60, 60 * 60)
+  const waitSeconds = envInt('KABUTAN_MATERIAL_NEWS_WAIT_FOR_LOCK_SECONDS', 20 * 60, 0, 60 * 60)
+  const pollSeconds = envInt('KABUTAN_MATERIAL_NEWS_LOCK_POLL_SECONDS', 30, 5, 5 * 60)
+  const startedAt = Date.now()
+  let lastLogAt = 0
+
+  for (;;) {
+    const lock = await acquireJpStockboardUpdateLock('kabutan_material_news', leaseSeconds)
+    if (lock) return lock
+
+    const elapsedSeconds = Math.floor((Date.now() - startedAt) / 1000)
+    if (elapsedSeconds >= waitSeconds) return null
+    if (lastLogAt === 0 || Date.now() - lastLogAt >= 60_000) {
+      lastLogAt = Date.now()
+      console.log(
+        `Kabutan material news waiting for a JP StockBoard writer: `
+        + `elapsed=${elapsedSeconds}s, timeout=${waitSeconds}s`,
+      )
+    }
+    await sleep(Math.min(pollSeconds, Math.max(1, waitSeconds - elapsedSeconds)) * 1000)
+  }
 }
 
 function decodeHtml(value: string): string {
@@ -349,12 +376,10 @@ async function saveArticle(item: ListItem, detail: DetailResult): Promise<void> 
 }
 
 async function main() {
-  const lock = await acquireExclusiveUpdateLock(
-    'kabutan_material_news',
-    envInt('KABUTAN_MATERIAL_NEWS_LOCK_SECONDS', 20 * 60, 5 * 60, 60 * 60),
-  )
+  const lock = await acquireMaterialNewsUpdateLock()
   if (!lock) {
-    console.log('Kabutan material news skipped: another StockBoard writer is active')
+    console.error('Kabutan material news could not acquire the JP DB writer lock before the timeout')
+    process.exitCode = 75
     return
   }
 

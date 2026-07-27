@@ -7,7 +7,10 @@ import { spawn } from 'node:child_process'
 import { eq } from 'drizzle-orm'
 import { db } from '@/lib/db/client'
 import { batchRuns } from '@/lib/db/schema'
-import { acquireExclusiveUpdateLock } from '@/lib/server/update-lock'
+import {
+  acquireJpStockboardUpdateLock,
+  type UpdateLockHandle,
+} from '@/lib/server/update-lock'
 
 type RunResult = {
   code: number | null
@@ -21,6 +24,30 @@ function sleep(ms: number): Promise<void> {
 function numberEnv(name: string, fallback: number): number {
   const value = Number(process.env[name])
   return Number.isFinite(value) && value > 0 ? value : fallback
+}
+
+async function acquireEarningsUpdateLock(): Promise<UpdateLockHandle | null> {
+  const leaseSeconds = numberEnv('EARNINGS_REFRESH_LOCK_SECONDS', 2 * 60 * 60)
+  const waitSeconds = numberEnv('EARNINGS_REFRESH_WAIT_FOR_LOCK_SECONDS', 45 * 60)
+  const pollSeconds = numberEnv('EARNINGS_REFRESH_LOCK_POLL_SECONDS', 30)
+  const startedAt = Date.now()
+  let lastLogAt = 0
+
+  for (;;) {
+    const lock = await acquireJpStockboardUpdateLock('earnings_refresh', leaseSeconds)
+    if (lock) return lock
+
+    const elapsedSeconds = Math.floor((Date.now() - startedAt) / 1000)
+    if (elapsedSeconds >= waitSeconds) return null
+    if (lastLogAt === 0 || Date.now() - lastLogAt >= 60_000) {
+      lastLogAt = Date.now()
+      console.log(
+        `Earnings refresh waiting for a JP StockBoard writer: `
+        + `elapsed=${elapsedSeconds}s, timeout=${waitSeconds}s`,
+      )
+    }
+    await sleep(Math.min(pollSeconds, Math.max(1, waitSeconds - elapsedSeconds)) * 1000)
+  }
 }
 
 function runScript(script: string): Promise<RunResult> {
@@ -71,10 +98,11 @@ async function runRequiredWithRetry(script: string): Promise<void> {
 async function main() {
   const lock = process.env.EARNINGS_REFRESH_SKIP_LOCK === '1'
     ? null
-    : await acquireExclusiveUpdateLock('earnings_refresh', 2 * 60 * 60)
+    : await acquireEarningsUpdateLock()
 
   if (!lock && process.env.EARNINGS_REFRESH_SKIP_LOCK !== '1') {
-    console.log('Earnings refresh skipped: another StockBoard writer is active')
+    console.error('Earnings refresh could not acquire the JP DB writer lock before the timeout')
+    process.exitCode = 75
     return
   }
 
