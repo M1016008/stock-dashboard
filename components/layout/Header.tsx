@@ -786,9 +786,9 @@ export function Header() {
   }
 
   return (
-    <header className="sticky top-0 z-30 border-b border-[var(--color-border-strong)] bg-white shadow-[0_1px_3px_rgba(16,32,52,0.12)]">
+    <header className="relative z-30 border-b border-[var(--color-border-strong)] bg-white shadow-[0_1px_3px_rgba(16,32,52,0.12)]">
       <div className="border-b border-[var(--color-border-default)] bg-[var(--color-surface-subtle)]">
-        <div className="mx-auto flex min-h-10 w-full max-w-[1480px] flex-wrap items-center justify-between gap-2 px-5 py-1.5 sm:px-8 lg:flex-nowrap lg:px-10 xl:px-12">
+        <div className="mx-auto flex min-h-10 w-full max-w-[1480px] flex-wrap items-center justify-between gap-2 px-5 py-1.5 sm:px-8 lg:px-10 xl:px-12">
           <Link href={isCommodityArea ? '/commodities' : isUsArea ? '/us' : scopedHref('/')} prefetch={false} className="flex shrink-0 items-center gap-2.5">
             <div className="flex h-7 w-7 items-center justify-center rounded-[3px] bg-[var(--color-brand-800)] text-white shadow-sm">
               <BarChart3 size={16} strokeWidth={2.5} />
@@ -801,7 +801,7 @@ export function Header() {
             </div>
           </Link>
 
-          <div className="hidden shrink-0 items-center gap-1 rounded-[4px] border border-[var(--color-border-default)] bg-white p-1 md:flex">
+          <div className="header-market-switcher shrink-0 items-center gap-1 rounded-[4px] border border-[var(--color-border-default)] bg-white p-1">
             <Globe2 size={13} className="ml-1 text-[var(--color-text-tertiary)]" />
             <Link
               href={scopedHref('/')}
@@ -845,7 +845,7 @@ export function Header() {
             </Link>
           )}
 
-          <div className="flex shrink-0 items-center gap-1 rounded-[4px] border border-[var(--color-border-default)] bg-white p-1 md:hidden">
+          <div className="header-market-switcher-compact shrink-0 items-center gap-1 rounded-[4px] border border-[var(--color-border-default)] bg-white p-1">
             <Link
               href={scopedHref('/')}
               prefetch={false}
@@ -884,7 +884,7 @@ export function Header() {
             </Link>
           </div>
 
-          <div className="hidden shrink-0 items-center gap-1.5 lg:flex">
+          <div className="header-market-context shrink-0 items-center gap-1.5">
             <span className="inline-flex h-6 items-center gap-1.5 rounded-[3px] border border-[var(--color-border-default)] bg-white px-2 text-[11px] font-bold text-[var(--color-text-secondary)]">
               <Activity size={12} />
               {isCommodityArea ? '商品ETF' : isUsArea ? 'NYSE' : '東証'}
@@ -916,12 +916,8 @@ export function Header() {
 
       <div className="bg-[var(--color-brand-800)]">
         <div ref={navRef} className="mx-auto flex min-h-12 w-full max-w-[1480px] items-center justify-between gap-4 px-5 py-1.5 sm:px-8 lg:px-10 xl:px-12">
-          <nav className="hidden min-w-0 flex-1 items-center gap-2 overflow-visible lg:flex">
+          <nav className="header-primary-nav min-w-0 flex-1 items-center gap-2 overflow-visible">
             {navItems.map((item) => renderNavEntry(item))}
-          </nav>
-
-          <nav className="flex min-w-0 flex-1 flex-wrap items-center gap-2 overflow-visible lg:hidden">
-            {navItems.map((item) => renderNavEntry(item, true))}
           </nav>
         </div>
       </div>

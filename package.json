@@ -15,6 +15,7 @@
     "test:trade-scenarios": "tsx scripts/test-trade-scenarios.ts",
     "test:historical-analogs": "tsx scripts/test-historical-analogs.ts",
     "test:data-freshness": "tsx scripts/test-data-freshness.ts",
+    "test:layout-shell": "tsx scripts/test-layout-shell.ts",
     "test:earnings-time": "tsx scripts/test-earnings-time.ts",
     "test:finnhub-earnings": "tsx scripts/test-finnhub-earnings.ts",
     "test:edinet-xbrl": "tsx scripts/test-edinet-xbrl.ts",

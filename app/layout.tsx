@@ -27,10 +27,12 @@ export default function RootLayout({
         <Suspense fallback={null}>
           <FreshDataRefresher />
         </Suspense>
-        <Suspense fallback={null}>
-          <Header />
-        </Suspense>
-        <DataStatusBar />
+        <div className="site-header-stack">
+          <Suspense fallback={null}>
+            <Header />
+          </Suspense>
+          <DataStatusBar />
+        </div>
         <main className="mx-auto w-full max-w-[1480px] px-5 py-5 sm:px-8 lg:px-10 lg:py-7 xl:px-12">
           {children}
         </main>
