@@ -142,6 +142,12 @@ type AnalogResponse = {
     latestMatchEndDate: string | null
     medianSimilarity: number | null
   }
+  pagination: {
+    offset: number
+    limit: number
+    hasMore: boolean
+    nextOffset: number | null
+  }
   analogs: AnalogRow[]
   search: {
     method: string
@@ -192,6 +198,12 @@ type AnalogResponse = {
     indexEmbeddingBytes: number | null
     truncated: boolean
   }
+}
+
+const ANALOG_PAGE_SIZE = 100
+
+function analogRowKey(row: Pick<AnalogRow, 'ticker' | 'caseStartDate' | 'caseEndDate'>): string {
+  return `${row.ticker}-${row.caseStartDate}-${row.caseEndDate}`
 }
 
 const PROFILE_OPTIONS: Array<{
@@ -580,6 +592,7 @@ export function HistoricalAnalogExplorer({
   const [selectedKey, setSelectedKey] = useState('')
   const [started, setStarted] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
   const [error, setError] = useState('')
   const [marketFilter, setMarketFilter] = useState('all')
   const [sector17Filter, setSector17Filter] = useState('all')
@@ -590,7 +603,7 @@ export function HistoricalAnalogExplorer({
   const [tableSortDirection, setTableSortDirection] =
     useState<AnalogTableSortDirection>('asc')
 
-  const runSearch = useCallback(async () => {
+  const runSearch = useCallback(async (offset = 0, append = false) => {
     if (!startDate || !endDate) {
       setError('分析対象の開始日と終了日を指定してください。')
       return
@@ -600,7 +613,8 @@ export function HistoricalAnalogExplorer({
       return
     }
     setStarted(true)
-    setLoading(true)
+    if (append) setLoadingMore(true)
+    else setLoading(true)
     setError('')
     const params = new URLSearchParams({
       ticker: ticker.replace(/\.T$/i, ''),
@@ -611,7 +625,8 @@ export function HistoricalAnalogExplorer({
       recency,
       sort,
       minScore: String(minScore),
-      limit: '40',
+      limit: String(ANALOG_PAGE_SIZE),
+      offset: String(offset),
     })
     try {
       const response = await fetch(`/api/ml/historical-analogs?${params.toString()}`, {
@@ -620,25 +635,37 @@ export function HistoricalAnalogExplorer({
       const json = await response.json()
       if (!response.ok) throw new Error(json.error ?? '本質類似局面の検索に失敗しました。')
       const next = json as AnalogResponse
-      setData(next)
+      setData((current) => {
+        if (!append || !current) return next
+        const existing = new Set(current.analogs.map(analogRowKey))
+        const appended = next.analogs.filter((row) => !existing.has(analogRowKey(row)))
+        const analogs = [...current.analogs, ...appended]
+        return {
+          ...next,
+          analogs,
+          summary: {
+            ...next.summary,
+            displayedCount: analogs.length,
+          },
+        }
+      })
       setStartDate(next.base.startDate)
       setEndDate(next.base.endDate)
-      setSelectedKey((current) => {
-        if (
-          next.analogs.some((row) =>
-            `${row.ticker}-${row.caseStartDate}-${row.caseEndDate}` === current
-          )
-        ) return current
-        const first = next.analogs[0]
-        return first ? `${first.ticker}-${first.caseStartDate}-${first.caseEndDate}` : ''
-      })
+      if (!append) {
+        setSelectedKey((current) => {
+          if (next.analogs.some((row) => analogRowKey(row) === current)) return current
+          const first = next.analogs[0]
+          return first ? analogRowKey(first) : ''
+        })
+      }
     } catch (searchError) {
-      setData(null)
+      if (!append) setData(null)
       setError(searchError instanceof Error
         ? searchError.message
         : '本質類似局面の検索に失敗しました。')
     } finally {
-      setLoading(false)
+      if (append) setLoadingMore(false)
+      else setLoading(false)
     }
   }, [endDate, market, minScore, profile, recency, sort, startDate, ticker])
 
@@ -648,6 +675,7 @@ export function HistoricalAnalogExplorer({
     setEndDate(nextEndDate)
     setStarted(false)
     setData(null)
+    setLoadingMore(false)
     setSelectedKey('')
     setError('')
     setMarketFilter('all')
@@ -658,6 +686,15 @@ export function HistoricalAnalogExplorer({
     setTableSortKey('rank')
     setTableSortDirection('asc')
   }, [analysisDate, market, ticker])
+  const busy = loading || loadingMore
+  const paginationCriteriaChanged = data != null && (
+    data.base.startDate !== startDate
+    || data.base.endDate !== endDate
+    || data.profile !== profile
+    || data.recency !== recency
+    || data.sort !== sort
+    || data.minScore !== minScore
+  )
 
   const filterOptions = useMemo(() => ({
     marketSegments: uniqueLabels(data?.analogs.map((row) => row.marketSegment) ?? []),
@@ -729,11 +766,11 @@ export function HistoricalAnalogExplorer({
         <button
           type="button"
           onClick={() => void runSearch()}
-          disabled={loading}
+          disabled={busy}
           className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-[4px] bg-teal-700 px-3 text-[12px] font-black text-white hover:bg-teal-800 disabled:cursor-wait disabled:opacity-60"
         >
-          {started ? <RefreshCw size={14} className={loading ? 'animate-spin' : ''} /> : <ScanSearch size={14} />}
-          {loading ? '精密検索中' : started ? '条件を反映して再検索' : '本質類似局面を検索'}
+          {started ? <RefreshCw size={14} className={busy ? 'animate-spin' : ''} /> : <ScanSearch size={14} />}
+          {loading ? '精密検索中' : loadingMore ? '候補を追加中' : started ? '条件を反映して再検索' : '本質類似局面を検索'}
         </button>
       </div>
 
@@ -748,7 +785,7 @@ export function HistoricalAnalogExplorer({
               type="date"
               value={startDate}
               onChange={(event) => setStartDate(event.target.value)}
-              disabled={loading}
+              disabled={busy}
               aria-label="分析開始日"
               className="h-9 min-w-0 rounded-[3px] border border-[var(--color-border-default)] bg-white px-2 text-[11px] font-bold text-[var(--color-text-primary)] disabled:opacity-50"
             />
@@ -757,7 +794,7 @@ export function HistoricalAnalogExplorer({
               type="date"
               value={endDate}
               onChange={(event) => setEndDate(event.target.value)}
-              disabled={loading}
+              disabled={busy}
               aria-label="分析終了日"
               className="h-9 min-w-0 rounded-[3px] border border-[var(--color-border-default)] bg-white px-2 text-[11px] font-bold text-[var(--color-text-primary)] disabled:opacity-50"
             />
@@ -780,7 +817,7 @@ export function HistoricalAnalogExplorer({
                 key={option.value}
                 type="button"
                 onClick={() => setProfile(option.value)}
-                disabled={loading}
+                disabled={busy}
                 aria-pressed={profile === option.value}
                 className={`h-8 px-1 text-[10px] font-black ${
                   profile === option.value
@@ -806,7 +843,7 @@ export function HistoricalAnalogExplorer({
                 key={option.value}
                 type="button"
                 onClick={() => setRecency(option.value)}
-                disabled={loading}
+                disabled={busy}
                 aria-pressed={recency === option.value}
                 className={`h-9 min-w-0 rounded-[3px] border px-1 text-[10px] font-black ${
                   recency === option.value
@@ -827,7 +864,7 @@ export function HistoricalAnalogExplorer({
           <select
             value={sort}
             onChange={(event) => setSort(event.target.value as HistoricalAnalogSort)}
-            disabled={loading}
+            disabled={busy}
             className="h-8 min-w-[148px] rounded-[3px] border border-[var(--color-border-default)] bg-white px-2 text-[10px] font-bold text-[var(--color-text-primary)] disabled:opacity-50"
           >
             {SORT_OPTIONS.map((option) => (
@@ -840,7 +877,7 @@ export function HistoricalAnalogExplorer({
           <select
             value={minScore}
             onChange={(event) => setMinScore(Number(event.target.value))}
-            disabled={loading}
+            disabled={busy}
             className="h-8 rounded-[3px] border border-[var(--color-border-default)] bg-white px-2 text-[10px] font-bold text-[var(--color-text-primary)]"
           >
             {[0.3, 0.35, 0.4, 0.45, 0.5, 0.55].map((value) => (
@@ -1133,7 +1170,7 @@ export function HistoricalAnalogExplorer({
                     ランキング絞り込み・ソート
                   </span>
                   <span className="text-[9px] font-bold text-[var(--color-text-tertiary)]">
-                    表示中{data.analogs.length}件を対象
+                    読み込み済み{data.analogs.length}件を対象
                   </span>
                 </div>
                 <div className="flex items-center gap-2">
@@ -1380,6 +1417,42 @@ export function HistoricalAnalogExplorer({
                   })}
                 </tbody>
               </table>
+            </div>
+          )}
+
+          {data.analogs.length > 0 && (
+            <div
+              className="mx-3 mb-4 flex flex-col items-center justify-between gap-2 border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-3 py-3 sm:mx-4 sm:flex-row"
+              aria-live="polite"
+            >
+              <div className="text-center text-[10px] font-bold text-[var(--color-text-secondary)] sm:text-left">
+                <span className="font-black text-[var(--color-text-primary)]">
+                  {data.analogs.length.toLocaleString('ja-JP')}件
+                </span>
+                を読み込み済み
+                <span className="ml-1 text-[var(--color-text-tertiary)]">
+                  （類似条件該当 {data.summary.matchCount.toLocaleString('ja-JP')}件）
+                </span>
+              </div>
+              {paginationCriteriaChanged ? (
+                <span className="text-[10px] font-black text-amber-700">
+                  条件を反映して再検索すると、続きも新しい条件で取得できます
+                </span>
+              ) : data.pagination.hasMore && data.pagination.nextOffset != null ? (
+                <button
+                  type="button"
+                  onClick={() => void runSearch(data.pagination.nextOffset ?? 0, true)}
+                  disabled={busy}
+                  className="inline-flex h-9 min-w-40 items-center justify-center gap-2 rounded-[4px] border border-teal-700 bg-white px-3 text-[11px] font-black text-teal-800 hover:bg-teal-50 disabled:cursor-wait disabled:opacity-60"
+                >
+                  <RefreshCw size={13} className={loadingMore ? 'animate-spin' : ''} aria-hidden="true" />
+                  {loadingMore ? '次の候補を取得中' : `さらに${ANALOG_PAGE_SIZE}件表示`}
+                </button>
+              ) : (
+                <span className="text-[10px] font-black text-teal-700">
+                  表示可能な候補をすべて読み込みました
+                </span>
+              )}
             </div>
           )}
         </>

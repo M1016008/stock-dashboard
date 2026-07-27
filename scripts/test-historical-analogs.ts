@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import path from 'node:path'
 import {
   buildHistoricalAnalogShortlist,
   calendarDaysBetween,
@@ -11,6 +13,7 @@ import {
   normalizeHistoricalAnalogProfile,
   normalizeHistoricalAnalogRecency,
   normalizeHistoricalAnalogSort,
+  paginateHistoricalAnalogRows,
   requiredHistoricalAnalogComponents,
   stageNeighborCodes,
   weightedVectorSequenceSimilarity,
@@ -71,6 +74,23 @@ assert.equal(
   1,
 )
 assert.equal(weightedVectorSequenceSimilarity([null, null], [null, null]), null)
+const analogPages = Array.from({ length: 253 }, (_, index) => `candidate-${index + 1}`)
+const firstAnalogPage = paginateHistoricalAnalogRows(analogPages, 0, 100)
+const secondAnalogPage = paginateHistoricalAnalogRows(analogPages, 100, 100)
+const finalAnalogPage = paginateHistoricalAnalogRows(analogPages, 200, 100)
+assert.deepEqual(firstAnalogPage.rows, analogPages.slice(0, 100))
+assert.equal(firstAnalogPage.hasMore, true)
+assert.equal(firstAnalogPage.nextOffset, 100)
+assert.deepEqual(secondAnalogPage.rows, analogPages.slice(100, 200))
+assert.equal(secondAnalogPage.nextOffset, 200)
+assert.deepEqual(finalAnalogPage.rows, analogPages.slice(200))
+assert.equal(finalAnalogPage.hasMore, false)
+assert.equal(finalAnalogPage.nextOffset, null)
+assert.equal(new Set([
+  ...firstAnalogPage.rows,
+  ...secondAnalogPage.rows,
+  ...finalAnalogPage.rows,
+]).size, analogPages.length)
 assert.deepEqual(
   weightedVectorSequenceSimilarityDetails(
     [[0, 0], null, [2, 2]],
@@ -297,5 +317,24 @@ assert.ok(chartsByInterval.get('3W')?.points.length)
 assert.ok(chartsByInterval.get('2Y')?.points.length)
 assert.ok(chartsByInterval.get('3Y')?.points.length)
 assert.ok(chartsByInterval.get('5Y')?.points.length)
+
+const historicalAnalogRouteSource = fs.readFileSync(
+  path.join(process.cwd(), 'app/api/ml/historical-analogs/route.ts'),
+  'utf8',
+)
+const historicalAnalogExplorerSource = fs.readFileSync(
+  path.join(process.cwd(), 'components/stock/HistoricalAnalogExplorer.tsx'),
+  'utf8',
+)
+assert.match(
+  historicalAnalogRouteSource,
+  /params\.get\('offset'\)[\s\S]*?paginateHistoricalAnalogRows\(diversified,\s*offset,\s*limit\)/,
+  '本質類似局面APIは100件以降を取得できること',
+)
+assert.match(
+  historicalAnalogExplorerSource,
+  /offset:\s*String\(offset\)[\s\S]*?さらに\$\{ANALOG_PAGE_SIZE\}件表示/,
+  '本質類似局面画面は次の候補を追加表示できること',
+)
 
 console.log('historical analog period tests passed')

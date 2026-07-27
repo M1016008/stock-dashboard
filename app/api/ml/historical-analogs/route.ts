@@ -38,6 +38,7 @@ import {
   normalizeHistoricalAnalogProfile,
   normalizeHistoricalAnalogRecency,
   normalizeHistoricalAnalogSort,
+  paginateHistoricalAnalogRows,
   requiredHistoricalAnalogComponents,
   stageNeighborCodes,
   weightedVectorSequenceSimilarityDetails,
@@ -47,7 +48,7 @@ import {
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
 
-const CACHE_NAMESPACE = 'historical_analogs_period_v10'
+const CACHE_NAMESPACE = 'historical_analogs_period_v12'
 const CACHE_TTL_MS = boundedEnv(
   'HISTORICAL_ANALOG_CACHE_TTL_MS',
   24 * 60 * 60 * 1_000,
@@ -57,6 +58,7 @@ const CACHE_TTL_MS = boundedEnv(
 const APPROXIMATE_LIMIT = boundedEnv('ANALOG_SEQUENCE_APPROXIMATE_LIMIT', 450, 150, 900)
 const MAX_ANCHORS_PER_TICKER = 4
 const LOCAL_ALIGNED_LIMIT = 2
+const MAX_PAGINATED_RESULTS = APPROXIMATE_LIMIT * LOCAL_ALIGNED_LIMIT
 const LOCAL_ALIGNED_RADIUS = 8
 const STAGE_SHORTLIST_LIMIT = 120
 const RECENCY_SHORTLIST_LIMIT = boundedEnv('ANALOG_SEQUENCE_RECENCY_SHORTLIST_LIMIT', 260, 50, 350)
@@ -804,11 +806,18 @@ export async function GET(request: NextRequest) {
     const recency = normalizeHistoricalAnalogRecency(requestedRecency)
     const profile = normalizeHistoricalAnalogProfile(requestedProfile)
     const profileConfig = historicalAnalogProfileConfig(profile)
-    const limit = boundedRequestNumber(params.get('limit'), 20, 3, 40, true)
+    const limit = boundedRequestNumber(params.get('limit'), 20, 3, 100, true)
+    const offset = boundedRequestNumber(
+      params.get('offset'),
+      0,
+      0,
+      MAX_PAGINATED_RESULTS - 1,
+      true,
+    )
     const minScore = boundedRequestNumber(params.get('minScore'), 0.4, 0.15, 0.95)
-    if (limit == null || minScore == null) {
+    if (limit == null || offset == null || minScore == null) {
       return NextResponse.json(
-        { error: '表示件数と最低類似度には数値を指定してください。' },
+        { error: '表示件数、表示位置、最低類似度には数値を指定してください。' },
         { status: 400 },
       )
     }
@@ -937,6 +946,7 @@ export async function GET(request: NextRequest) {
       sort,
       minScore,
       limit,
+      offset,
       mlRerankWeight: ML_RERANK_WEIGHT,
     })
     const memoryCached = responseCache.get(cacheKey)
@@ -1079,7 +1089,7 @@ export async function GET(request: NextRequest) {
             latestMarketDate,
             recency,
             periodSessions,
-            resultLimit: limit,
+            resultLimit: APPROXIMATE_LIMIT,
             totalLimit: APPROXIMATE_LIMIT,
             stageLimit: STAGE_SHORTLIST_LIMIT,
             recencyLimit: RECENCY_SHORTLIST_LIMIT,
@@ -1313,11 +1323,13 @@ export async function GET(request: NextRequest) {
         14,
         Math.ceil(calendarDaysBetween(baseStartDate, baseEndDate) * 0.4),
       )
-      const selected = diversify(
+      const diversified = diversify(
         sortExact(filtered, sort, latestMarketDate),
-        limit,
+        MAX_PAGINATED_RESULTS,
         minimumSpacingDays,
       )
+      const page = paginateHistoricalAnalogRows(diversified, offset, limit)
+      const selected = page.rows
       const [metadata, presentations] = await Promise.all([
         loadTickerMetadata(db, [ticker, ...selected.map((row) => row.ticker)]),
         loadPresentations(db, selected),
@@ -1328,7 +1340,7 @@ export async function GET(request: NextRequest) {
         const presentation = presentations.get(key)
         const elapsedDays = calendarDaysBetween(row.endDate, latestMarketDate)
         return {
-          rank: index + 1,
+          rank: offset + index + 1,
           ticker: row.ticker,
           name: info?.name ?? null,
           marketSegment: info?.market_segment ?? null,
@@ -1380,12 +1392,18 @@ export async function GET(request: NextRequest) {
         sort,
         minScore,
         summary: {
-          matchCount: filtered.length,
+          matchCount: diversified.length,
           displayedCount: analogs.length,
-          sameTickerCount: filtered.filter((row) => row.ticker === ticker).length,
-          otherTickerCount: filtered.filter((row) => row.ticker !== ticker).length,
-          latestMatchEndDate: filtered.map((row) => row.endDate).sort().at(-1) ?? null,
-          medianSimilarity: median(filtered.map((row) => row.score)),
+          sameTickerCount: diversified.filter((row) => row.ticker === ticker).length,
+          otherTickerCount: diversified.filter((row) => row.ticker !== ticker).length,
+          latestMatchEndDate: diversified.map((row) => row.endDate).sort().at(-1) ?? null,
+          medianSimilarity: median(diversified.map((row) => row.score)),
+        },
+        pagination: {
+          offset: page.offset,
+          limit: page.limit,
+          hasMore: page.hasMore,
+          nextOffset: page.nextOffset,
         },
         analogs,
         search: searchDiagnostics,

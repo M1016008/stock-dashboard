@@ -109,6 +109,31 @@ export function historicalAnalogRecencyBucket(
   return 'older'
 }
 
+export function paginateHistoricalAnalogRows<T>(
+  rows: readonly T[],
+  offset: number,
+  limit: number,
+): {
+  rows: T[]
+  offset: number
+  limit: number
+  hasMore: boolean
+  nextOffset: number | null
+} {
+  const safeOffset = Math.max(0, Math.floor(offset))
+  const safeLimit = Math.max(1, Math.floor(limit))
+  const pageRows = rows.slice(safeOffset, safeOffset + safeLimit)
+  const nextOffset = safeOffset + pageRows.length
+  const hasMore = nextOffset < rows.length
+  return {
+    rows: pageRows,
+    offset: safeOffset,
+    limit: safeLimit,
+    hasMore,
+    nextOffset: hasMore ? nextOffset : null,
+  }
+}
+
 export function isWithinHistoricalAnalogRecency(
   candidateEndDate: string,
   latestMarketDate: string,
