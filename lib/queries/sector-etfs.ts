@@ -7,6 +7,7 @@ import {
   type SectorEtfCatalogItem,
 } from '@/lib/sector-etfs'
 import { calculateAngle } from '@/lib/hex-stage'
+import { isValidTickerForMarket } from '@/lib/markets'
 
 export interface SectorEtfStages {
   dailyA: number | null
@@ -485,7 +486,7 @@ async function enrichHoldings(
     new Set(
       holdings
         .map((holding) => normalizeTicker(holding.holdingTicker))
-        .filter((ticker) => /^\d{4}[A-Z]?$/.test(ticker)),
+        .filter((ticker) => isValidTickerForMarket(ticker, 'JP')),
     ),
   )
   if (analyzableTickers.length === 0) {

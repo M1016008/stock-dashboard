@@ -6,6 +6,7 @@ import { CandlestickChart } from '@/components/charts/CandlestickChart'
 import { PageTitle } from '@/components/layout/PageTitle'
 import { Card, CardHeader } from '@/components/ui/Card'
 import { StageDots } from '@/components/ui/StageDots'
+import { isValidTickerForMarket } from '@/lib/markets'
 import { getSectorEtfDetail, type SectorEtfHolding, type SectorEtfMetric } from '@/lib/queries/sector-etfs'
 
 export const dynamic = 'force-dynamic'
@@ -67,7 +68,7 @@ function trendTone(label: SectorEtfHolding['trendLabel']) {
 }
 
 function canLinkHolding(ticker: string) {
-  return /^\d{4}[A-Z]?$/.test(ticker)
+  return isValidTickerForMarket(ticker, 'JP')
 }
 
 function HoldingName({ holding }: { holding: SectorEtfHolding }) {

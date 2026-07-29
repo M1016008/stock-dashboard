@@ -19,6 +19,7 @@ import {
   weightedVectorSequenceSimilarity,
   weightedVectorSequenceSimilarityDetails,
 } from '@/lib/ml/historical-analogs'
+import { isValidTickerForMarket } from '@/lib/markets'
 import { buildHistoricalAnalogChartSeries } from '@/lib/ml/historical-analog-chart'
 import {
   MA_SEQUENCE_EMBEDDING_FEATURE_LENGTH,
@@ -321,6 +322,43 @@ assert.ok(chartsByInterval.get('5Y')?.points.length)
 const historicalAnalogRouteSource = fs.readFileSync(
   path.join(process.cwd(), 'app/api/ml/historical-analogs/route.ts'),
   'utf8',
+)
+const headerSource = fs.readFileSync(
+  path.join(process.cwd(), 'components/layout/Header.tsx'),
+  'utf8',
+)
+const sectorEtfPageSource = fs.readFileSync(
+  path.join(process.cwd(), 'app/sector-etfs/[ticker]/page.tsx'),
+  'utf8',
+)
+const sectorEtfQuerySource = fs.readFileSync(
+  path.join(process.cwd(), 'lib/queries/sector-etfs.ts'),
+  'utf8',
+)
+assert.equal(isValidTickerForMarket('200A', 'JP'), true)
+assert.equal(isValidTickerForMarket('200a', 'JP'), true)
+assert.equal(isValidTickerForMarket('7003', 'JP'), true)
+assert.equal(isValidTickerForMarket('20AA', 'JP'), false)
+assert.equal(isValidTickerForMarket('AAPL', 'JP'), false)
+assert.match(
+  historicalAnalogRouteSource,
+  /isValidTickerForMarket\(normalized,\s*market\)/,
+  '本質類似局面APIは英字を含む正式な日本株コードを受け付けること',
+)
+assert.match(
+  headerSource,
+  /isValidTickerForMarket\(normalized,\s*'JP'\)/,
+  'ヘッダーの直接検索も英字を含む正式な日本株コードを受け付けること',
+)
+assert.match(
+  sectorEtfPageSource,
+  /isValidTickerForMarket\(ticker,\s*'JP'\)/,
+  '業種ETFの構成銘柄リンクも英字を含む正式な日本株コードを受け付けること',
+)
+assert.match(
+  sectorEtfQuerySource,
+  /isValidTickerForMarket\(ticker,\s*'JP'\)/,
+  '業種ETFの構成銘柄分析も英字を含む正式な日本株コードを受け付けること',
 )
 const historicalAnalogExplorerSource = fs.readFileSync(
   path.join(process.cwd(), 'components/stock/HistoricalAnalogExplorer.tsx'),

@@ -35,6 +35,7 @@ import {
   UNIVERSE_FILTER_PARAM,
   type UniverseFilterId,
 } from '@/lib/market-universe'
+import { isValidTickerForMarket } from '@/lib/markets'
 
 type HeaderArea = 'jp' | 'us' | 'commodities'
 
@@ -368,8 +369,8 @@ function fallbackSearchHref(query: string, area: HeaderArea): string | null {
 
   const commodity = COMMODITY_SEARCH_RESULTS.find((result) => normalizeTickerQuery(result.ticker) === normalized)
   if (area === 'commodities' && commodity) return commodity.href
-  if (/^\d{4}[A-Z]?$/.test(normalized)) return `/stock/${encodeURIComponent(normalized)}`
-  if (/^[A-Z][A-Z0-9.-]{0,9}$/.test(normalized)) return `/us/stock/${encodeURIComponent(normalized)}`
+  if (isValidTickerForMarket(normalized, 'JP')) return `/stock/${encodeURIComponent(normalized)}`
+  if (isValidTickerForMarket(normalized, 'US')) return `/us/stock/${encodeURIComponent(normalized)}`
   return null
 }
 

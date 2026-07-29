@@ -2,6 +2,8 @@
 
 # dependencies
 /node_modules
+__pycache__/
+*.py[cod]
 /.pnp
 .pnp.*
 .yarn/*
@@ -59,6 +61,8 @@ next-env.d.ts
 /data/stockboard-us-analytics.db-wal
 /data/update-latest.lock
 /data/snapshots/
+/data/analog-encoder-shadow/
+/.venv-analog-encoder/
 # 独自分類 Excel (Yoshio 個人の分析資産。各人ローカルに置く)
 /data/classification.xlsx
 

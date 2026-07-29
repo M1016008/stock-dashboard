@@ -44,6 +44,7 @@ import {
   weightedVectorSequenceSimilarityDetails,
   type HistoricalAnalogSort,
 } from '@/lib/ml/historical-analogs'
+import { isValidTickerForMarket } from '@/lib/markets'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
@@ -236,8 +237,7 @@ function normalizeMarket(value: string | null): Market | null {
 function normalizeTicker(value: string | null, market: Market): string | null {
   const normalized = value?.trim().toUpperCase().replace(/\.T$/i, '') ?? ''
   if (!normalized) return null
-  if (market === 'JP') return /^\d{4}$/.test(normalized) ? normalized : null
-  return /^[A-Z0-9.^-]{1,16}$/.test(normalized) ? normalized : null
+  return isValidTickerForMarket(normalized, market) ? normalized : null
 }
 
 function addCalendarDays(date: string, days: number): string {

@@ -18,6 +18,12 @@ export function normalizeTickerForMarket(ticker: string, market: MarketCode): st
   return decoded.replace(/\s+/g, '').toUpperCase()
 }
 
+export function isValidTickerForMarket(ticker: string, market: MarketCode): boolean {
+  const normalized = ticker.trim().toUpperCase()
+  if (market === 'JP') return /^(?:\d{4}|\d{3}[A-Z])$/.test(normalized)
+  return /^[A-Z0-9.^-]{1,16}$/.test(normalized)
+}
+
 export function marketLabel(market: MarketCode): string {
   return market === 'US' ? '米国株' : '日本株'
 }
