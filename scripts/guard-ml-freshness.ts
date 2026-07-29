@@ -7,7 +7,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import { execAll, execGet, execRun } from '@/lib/db/client'
 import { ML_PHYSICS_FEATURE_SET } from '@/lib/backtest/ml-physics'
 import { ML_PRIMARY_HORIZONS, ML_PRIMARY_HORIZON_LIST } from '@/lib/backtest/ml-horizons'
-import { acquireExclusiveUpdateLock, getActiveUpdateLocks } from '@/lib/server/update-lock'
+import { acquireJpStockboardUpdateLock, getActiveUpdateLocks } from '@/lib/server/update-lock'
 
 type DateCount = {
   date: string | null
@@ -460,7 +460,7 @@ async function main() {
   process.env.SQLITE_BUSY_RETRIES = process.env.SQLITE_BUSY_RETRIES ?? '12'
   const startedAt = nowSeconds()
   await clearStaleOwnLock()
-  const lock = await acquireExclusiveUpdateLock(JOB_TYPE, envNumber('ML_FRESHNESS_GUARD_LOCK_SECONDS', 6 * 60 * 60))
+  const lock = await acquireJpStockboardUpdateLock(JOB_TYPE, envNumber('ML_FRESHNESS_GUARD_LOCK_SECONDS', 6 * 60 * 60))
   if (!lock) {
     console.log('[ml-freshness-guard] skipped: guard lock is already active')
     return

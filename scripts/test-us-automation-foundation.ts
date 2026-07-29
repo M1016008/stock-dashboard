@@ -274,6 +274,14 @@ assert.match(jpLatestUpdate, /acquireDailyUpdateLock/)
 assert.match(jpLatestUpdate, /UPDATE_LOCK_WAIT_SECONDS/)
 assert.match(jpLatestUpdate, /process\.exitCode = 75/)
 
+const jpMlLearning = read('scripts/run-ml-learning.ts')
+assert.match(jpMlLearning, /acquireJpStockboardUpdateLock/)
+assert.doesNotMatch(jpMlLearning, /acquireExclusiveUpdateLock/)
+
+const jpMlFreshnessGuard = read('scripts/guard-ml-freshness.ts')
+assert.match(jpMlFreshnessGuard, /acquireJpStockboardUpdateLock/)
+assert.doesNotMatch(jpMlFreshnessGuard, /acquireExclusiveUpdateLock/)
+
 const dataFreshnessGuard = read('scripts/guard-data-freshness.ts')
 assert.match(dataFreshnessGuard, /ignoredWriterJobTypes: \['us_adjusted_foundation'\]/)
 assert.match(dataFreshnessGuard, /cooldownSeconds: 15 \* 60/)
@@ -398,6 +406,11 @@ assert.match(usMlRunner, /US_ML_HEALTH_WRITE: '1'/)
 
 const featureHealth = read('scripts/batch-ml-feature-health.ts')
 assert.match(featureHealth, /ML_FEATURE_HEALTH_STRICT/)
+assert.match(featureHealth, /ML_FEATURE_HEALTH_STRICT_SCOPE/)
+assert.match(featureHealth, /SERVING_CHECK_KEYS/)
+
+const jpFastMlServing = read('scripts/run-ml-serving-fast.ts')
+assert.match(jpFastMlServing, /ML_FEATURE_HEALTH_STRICT_SCOPE: 'serving'/)
 assert.match(featureHealth, /ML feature health gate failed/)
 
 const memoryGuard = read('lib/system/memory-guard.ts')
