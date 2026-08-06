@@ -15,7 +15,7 @@ import {
 } from '@/lib/classification-source'
 
 type SyncState = {
-  schemaVersion: 2
+  schemaVersion: 3
   sourcePath: string
   databasePath: string
   sha256: string
@@ -24,6 +24,7 @@ type SyncState = {
   sourceRecordCount: number
   majorCategoryCount: number
   subIndustryCount: number
+  recoveredMissingSubIndustryCount: number
   syncedAt: string
 }
 
@@ -126,7 +127,7 @@ async function main(): Promise<void> {
     const databaseCount = await databaseClassificationCount()
     if (
       !forceSync
-      && previous?.schemaVersion === 2
+      && previous?.schemaVersion === 3
       && previous.sourcePath === sourcePath
       && previous.databasePath === databasePath
       && previous.sha256 === sourceSha256
@@ -150,7 +151,7 @@ async function main(): Promise<void> {
 
     const source = readClassificationSource(snapshotPath)
     validateClassificationSource(source, classificationValidationOptionsFromEnv())
-    if (previous?.schemaVersion === 2 && previous.sourceRecordCount > 0) {
+    if (previous && previous.sourceRecordCount > 0) {
       const minimumRelativeCount = Math.floor(
         previous.sourceRecordCount * (1 - maxRecordDropPercent / 100),
       )
@@ -165,6 +166,7 @@ async function main(): Promise<void> {
     console.log(
       `Classification update detected: records=${source.records.length}, `
       + `majorCategories=${source.majorCategoryCount}, subIndustries=${source.subIndustryCount}, `
+      + `recoveredMissingSubIndustries=${source.recoveredMissingSubIndustries.length}, `
       + `size=${before.size}, modified=${new Date(before.mtimeMs).toISOString()}`,
     )
     const result = spawnSync('npm', ['run', 'import:classification'], {
@@ -189,7 +191,7 @@ async function main(): Promise<void> {
       )
     }
     const state: SyncState = {
-      schemaVersion: 2,
+      schemaVersion: 3,
       sourcePath,
       databasePath,
       sha256: sourceSha256,
@@ -198,6 +200,7 @@ async function main(): Promise<void> {
       sourceRecordCount: source.records.length,
       majorCategoryCount: source.majorCategoryCount,
       subIndustryCount: source.subIndustryCount,
+      recoveredMissingSubIndustryCount: source.recoveredMissingSubIndustries.length,
       syncedAt: new Date().toISOString(),
     }
     writeState(state)

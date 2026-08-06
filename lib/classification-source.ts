@@ -13,6 +13,8 @@ export type ClassificationSourceData = {
   rawRowCount: number
   records: ClassificationRecord[]
   skippedRows: number
+  recoveredMissingSubIndustries: string[]
+  invalidSubIndustries: string[]
   duplicateTickers: string[]
   invalidTickers: string[]
   majorCategoryCount: number
@@ -25,8 +27,11 @@ export type ClassificationValidationOptions = {
   expectedMajorCategories: number
   minSubIndustries: number
   maxSkippedRows: number
+  maxRecoveredMissingSubIndustries: number
   maxDuplicateTickers: number
 }
+
+const MISSING_SUB_INDUSTRY = '未分類'
 
 function pick(row: ClassificationRow, keys: string[]): string | undefined {
   for (const key of keys) {
@@ -41,6 +46,12 @@ function normalizeTicker(value: string): string {
   return /^\d+$/.test(code) ? code.padStart(4, '0') : code
 }
 
+function looksLikeExcelDateSerial(value: string): boolean {
+  if (!/^\d+(?:\.0+)?$/.test(value)) return false
+  const serial = Number(value)
+  return Number.isInteger(serial) && serial >= 20_000 && serial <= 80_000
+}
+
 export function readClassificationSource(sourcePath: string): ClassificationSourceData {
   const workbook = XLSX.readFile(sourcePath)
   const sheetName = workbook.SheetNames[0]
@@ -50,13 +61,15 @@ export function readClassificationSource(sourcePath: string): ClassificationSour
   const recordsByTicker = new Map<string, ClassificationRecord>()
   const tickerCounts = new Map<string, number>()
   const invalidTickers = new Set<string>()
+  const recoveredMissingSubIndustries = new Set<string>()
+  const invalidSubIndustries = new Set<string>()
   let skippedRows = 0
 
   for (const row of rows) {
     const codeRaw = pick(row, ['コード', 'Code', 'code', 'ticker', '銘柄コード'])
     const majorCategory = pick(row, ['大分類', '業種大分類', 'major_category', 'Major'])
-    const subIndustry = pick(row, ['業種細分類', '業種', '業界', 'sub_industry', 'SubIndustry'])
-    if (!codeRaw || !majorCategory || !subIndustry) {
+    const subIndustryRaw = pick(row, ['業種細分類', '業種', '業界', 'sub_industry', 'SubIndustry'])
+    if (!codeRaw || !majorCategory || !subIndustryRaw) {
       skippedRows += 1
       continue
     }
@@ -65,6 +78,13 @@ export function readClassificationSource(sourcePath: string): ClassificationSour
     if (!/^(?:\d{4}|\d{3}[A-Z])$/.test(ticker)) {
       invalidTickers.add(ticker)
       continue
+    }
+    const updateTime = pick(row, ['更新時刻', 'updated_at', 'UpdatedAt'])
+    const shiftedUpdateTime = !updateTime && looksLikeExcelDateSerial(subIndustryRaw)
+    const subIndustry = shiftedUpdateTime ? MISSING_SUB_INDUSTRY : subIndustryRaw
+    if (shiftedUpdateTime) recoveredMissingSubIndustries.add(ticker)
+    if (/^\d+(?:\.\d+)?$/.test(subIndustry)) {
+      invalidSubIndustries.add(`${ticker}:${subIndustry}`)
     }
     tickerCounts.set(ticker, (tickerCounts.get(ticker) ?? 0) + 1)
     recordsByTicker.set(ticker, { ticker, majorCategory, subIndustry })
@@ -83,6 +103,8 @@ export function readClassificationSource(sourcePath: string): ClassificationSour
     rawRowCount: rows.length,
     records,
     skippedRows,
+    recoveredMissingSubIndustries: Array.from(recoveredMissingSubIndustries).sort(),
+    invalidSubIndustries: Array.from(invalidSubIndustries).sort(),
     duplicateTickers: Array.from(tickerCounts)
       .filter(([, count]) => count > 1)
       .map(([ticker]) => ticker)
@@ -114,11 +136,20 @@ export function validateClassificationSource(
   if (source.skippedRows > options.maxSkippedRows) {
     issues.push(`skippedRows=${source.skippedRows}/${options.maxSkippedRows}`)
   }
+  if (source.recoveredMissingSubIndustries.length > options.maxRecoveredMissingSubIndustries) {
+    issues.push(
+      `recoveredMissingSubIndustries=${source.recoveredMissingSubIndustries.length}`
+      + `/${options.maxRecoveredMissingSubIndustries}`,
+    )
+  }
   if (source.duplicateTickers.length > options.maxDuplicateTickers) {
     issues.push(`duplicateTickers=${source.duplicateTickers.length}/${options.maxDuplicateTickers}`)
   }
   if (source.invalidTickers.length > 0) {
     issues.push(`invalidTickers=${source.invalidTickers.length}`)
+  }
+  if (source.invalidSubIndustries.length > 0) {
+    issues.push(`invalidSubIndustries=${source.invalidSubIndustries.length}`)
   }
   if (source.multiParentSubIndustries.length > 0) {
     issues.push(`multiParentSubIndustries=${source.multiParentSubIndustries.length}`)
@@ -129,6 +160,9 @@ export function validateClassificationSource(
 }
 
 export function classificationValidationOptionsFromEnv(): ClassificationValidationOptions {
+  const recoveredMissingLimit = Number(
+    process.env.CLASSIFICATION_MAX_RECOVERED_MISSING_SUB_INDUSTRIES ?? '20',
+  )
   return {
     minRecords: Math.max(1, Number(process.env.CLASSIFICATION_MIN_RECORDS ?? '3500') || 3500),
     expectedMajorCategories: Math.max(
@@ -143,6 +177,9 @@ export function classificationValidationOptionsFromEnv(): ClassificationValidati
       0,
       Number(process.env.CLASSIFICATION_MAX_SKIPPED_ROWS ?? '0') || 0,
     ),
+    maxRecoveredMissingSubIndustries: Number.isFinite(recoveredMissingLimit)
+      ? Math.max(0, recoveredMissingLimit)
+      : 20,
     maxDuplicateTickers: Math.max(
       0,
       Number(process.env.CLASSIFICATION_MAX_DUPLICATE_TICKERS ?? '0') || 0,

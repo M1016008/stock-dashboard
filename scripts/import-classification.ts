@@ -39,7 +39,8 @@ async function main() {
   const records = source.records
   console.log(
     `Sheet "${source.sheetName}": ${source.rawRowCount} rows, `
-    + `${source.majorCategoryCount} major categories, ${source.subIndustryCount} sub-industries`,
+    + `${source.majorCategoryCount} major categories, ${source.subIndustryCount} sub-industries, `
+    + `${source.recoveredMissingSubIndustries.length} missing sub-industries recovered`,
   )
   console.log(`Importing ${records.length} unique valid records`)
 
