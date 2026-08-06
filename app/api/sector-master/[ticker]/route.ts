@@ -1,5 +1,5 @@
 // app/api/sector-master/[ticker]/route.ts
-// 単一銘柄の sector_master 情報（市場区分・17業種・33業種・銘柄名）を返す。
+// 単一銘柄の市場区分・標準業種・四季報分類・銘柄名を返す。
 
 import { NextResponse } from 'next/server'
 import { execGet, ensureReady } from '@/lib/db/client'
@@ -37,9 +37,12 @@ export async function GET(
           tu.sector17_code,
           tu.sector17_name,
           tu.sector33_code,
-          tu.sector33_name
+          tu.sector33_name,
+          sc.major_category,
+          sc.sub_industry
         FROM ticker_universe tu
         LEFT JOIN sector_master sm ON sm.ticker = tu.ticker OR sm.ticker = tu.ticker || '.T'
+        LEFT JOIN stock_classification sc ON sc.ticker = tu.ticker
         WHERE tu.ticker = REPLACE(?, '.T', '')
         UNION ALL
         SELECT
@@ -54,8 +57,11 @@ export async function GET(
           NULL AS sector17_code,
           sm.sector_large AS sector17_name,
           NULL AS sector33_code,
-          sm.sector33 AS sector33_name
+          sm.sector33 AS sector33_name,
+          sc.major_category,
+          sc.sub_industry
         FROM sector_master sm
+        LEFT JOIN stock_classification sc ON sc.ticker = REPLACE(sm.ticker, '.T', '')
         WHERE sm.ticker = ?
         LIMIT 1
         `,

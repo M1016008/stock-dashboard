@@ -134,6 +134,8 @@ interface ScreenerStockRow {
   sector33: string | null
   sector17Name: string | null
   sector33Name: string | null
+  majorCategory: string | null
+  subIndustry: string | null
   price: number | null
   currency: string | null
   changePercent: number | null
@@ -235,7 +237,7 @@ const PHYSICAL_STATUS_HORIZONS = [5, 10, 20, 40, 60, 90, 200] as const
 const JP_TICKER_MASTER_MAP = new Map(getTickersByMarket('JP').map((ticker) => [ticker.ticker, ticker]))
 const SCREENER_BUILT_ROWS_CACHE_TTL_MS = Number(process.env.SCREENER_BUILT_ROWS_CACHE_TTL_MS ?? 6 * 60 * 60 * 1000)
 const SCREENER_BUILT_ROWS_CACHE_NAMESPACE = 'screener_built_rows_v2'
-const SCREENER_BUILT_ROWS_LOGIC_VERSION = 'short-term-physics-risk-cap-v1'
+const SCREENER_BUILT_ROWS_LOGIC_VERSION = 'short-term-physics-risk-cap-classification-v2'
 
 async function latestSnapshotDate(): Promise<string | null> {
   const row = await execGet<{ d: string | null }>(`SELECT MAX(date) AS d FROM daily_snapshots`)
@@ -641,6 +643,11 @@ interface SectorEntry {
   marginType: string | null
 }
 
+interface ClassificationEntry {
+  majorCategory: string
+  subIndustry: string
+}
+
 async function loadSectorMap(): Promise<Map<string, SectorEntry>> {
   const rows = await execAll<{
     ticker: string
@@ -661,6 +668,25 @@ async function loadSectorMap(): Promise<Map<string, SectorEntry>> {
     })
   }
   return map
+}
+
+async function loadClassificationMap(): Promise<Map<string, ClassificationEntry>> {
+  const rows = await execAll<{
+    ticker: string
+    major_category: string
+    sub_industry: string
+  }>(`SELECT ticker, major_category, sub_industry FROM stock_classification`)
+  return new Map(rows.map((row) => [
+    row.ticker.replace(/\.T$/i, ''),
+    { majorCategory: row.major_category, subIndustry: row.sub_industry },
+  ]))
+}
+
+async function loadClassificationVersion(): Promise<string> {
+  const row = await execGet<{ updated_at: number | null }>(
+    `SELECT MAX(updated_at) AS updated_at FROM stock_classification`,
+  )
+  return String(row?.updated_at ?? 'none')
 }
 
 function parsePhysicalStatusHorizon(value: string | null): number {
@@ -766,10 +792,12 @@ function physicalStatusSortScore(
 function buildResultRow(
   s: SnapshotRow,
   sectorMap: Map<string, SectorEntry>,
+  classificationMap: Map<string, ClassificationEntry>,
   physicsStatusCalibration: Map<PhysicsStatus, PhysicsStatusCalibration>,
 ): ScreenerStockRow | null {
   const master = JP_TICKER_MASTER_MAP.get(s.ticker)
   const fromDb = sectorMap.get(s.ticker)
+  const classification = classificationMap.get(s.ticker.replace(/\.T$/i, ''))
   // J-Quants 17/33業種を第一参照にする。
   const sectorLarge = s.sector17_name ?? fromDb?.sectorLarge ?? master?.sectorLarge ?? 'その他'
   const sector33 = s.sector33_name ?? fromDb?.sector33 ?? null
@@ -807,6 +835,8 @@ function buildResultRow(
     sector33,
     sector17Name: s.sector17_name,
     sector33Name: s.sector33_name,
+    majorCategory: classification?.majorCategory ?? null,
+    subIndustry: classification?.subIndustry ?? null,
     price: s.price,
     currency: 'JPY',
     changePercent: s.change_percent_1d,
@@ -1135,6 +1165,8 @@ const SORT_KEYS = new Set<ScreenerSortKey>([
   'marketSegment',
   'sector33',
   'sectorLarge',
+  'majorCategory',
+  'subIndustry',
   'name',
   'price',
   'currency',
@@ -1216,9 +1248,13 @@ function getBuiltRowsCache(): Map<string, BuiltRowsCacheEntry> {
   return globalForScreener.__stockBoardScreenerBuiltRowsCache
 }
 
-async function loadBuiltRows(date: string, physicalStatusHorizon: number): Promise<BuiltRowsResult> {
+async function loadBuiltRows(
+  date: string,
+  physicalStatusHorizon: number,
+  classificationVersion: string,
+): Promise<BuiltRowsResult> {
   const cache = getBuiltRowsCache()
-  const key = `${date}:${physicalStatusHorizon}:${ML_PHYSICS_FEATURE_SET}:${SCREENER_BUILT_ROWS_LOGIC_VERSION}`
+  const key = `${date}:${physicalStatusHorizon}:${ML_PHYSICS_FEATURE_SET}:${SCREENER_BUILT_ROWS_LOGIC_VERSION}:${classificationVersion}`
   const now = Date.now()
   const cached = cache.get(key)
   if (cached && now - cached.createdAt <= SCREENER_BUILT_ROWS_CACHE_TTL_MS) {
@@ -1234,6 +1270,7 @@ async function loadBuiltRows(date: string, physicalStatusHorizon: number): Promi
     physicalStatusHorizon,
     featureSet: ML_PHYSICS_FEATURE_SET,
     logicVersion: SCREENER_BUILT_ROWS_LOGIC_VERSION,
+    classificationVersion,
   })
   const stored = await readServingCache<BuiltRowsStoredPayload>(
     SCREENER_BUILT_ROWS_CACHE_NAMESPACE,
@@ -1254,13 +1291,14 @@ async function loadBuiltRows(date: string, physicalStatusHorizon: number): Promi
     }
   }
 
-  const [snapshots, sectorMap, physicsStatusCalibration] = await Promise.all([
+  const [snapshots, sectorMap, classificationMap, physicsStatusCalibration] = await Promise.all([
     loadSnapshotByDate(date),
     loadSectorMap(),
+    loadClassificationMap(),
     loadPhysicsStatusCalibration(physicalStatusHorizon),
   ])
   const rows = snapshots
-    .map((s) => buildResultRow(s, sectorMap, physicsStatusCalibration))
+    .map((s) => buildResultRow(s, sectorMap, classificationMap, physicsStatusCalibration))
     .filter((r): r is ScreenerStockRow => r !== null)
   const entry: BuiltRowsCacheEntry = {
     rows,
@@ -1301,6 +1339,8 @@ export async function GET(request: NextRequest) {
     const marginTypes = stringSetParam(searchParams, 'marginType')
     const sector17 = searchParams.get('sector17')?.trim()
     const sector33 = searchParams.get('sector33')?.trim()
+    const majorCategory = searchParams.get('majorCategory')?.trim()
+    const subIndustry = searchParams.get('subIndustry')?.trim()
     const marketCapMin = numParam(searchParams, 'marketCapMin')
     const marketCapMax = numParam(searchParams, 'marketCapMax')
     const priceMin = numParam(searchParams, 'priceMin')
@@ -1351,7 +1391,8 @@ export async function GET(request: NextRequest) {
       if (stages.length > 0) stageFilter[key] = Array.from(new Set(stages)).sort()
     }
 
-    const builtRows = await loadBuiltRows(date, physicalStatusHorizon)
+    const classificationVersion = await loadClassificationVersion()
+    const builtRows = await loadBuiltRows(date, physicalStatusHorizon, classificationVersion)
     const universe = builtRows.universe
     const built = builtRows.rows
 
@@ -1366,6 +1407,8 @@ export async function GET(request: NextRequest) {
     if (sector33) {
       filtered = filtered.filter((r) => r.sector33 === sector33 || r.sector33Name === sector33)
     }
+    if (majorCategory) filtered = filtered.filter((r) => r.majorCategory === majorCategory)
+    if (subIndustry) filtered = filtered.filter((r) => r.subIndustry === subIndustry)
     if (marketCapMin != null) filtered = filtered.filter((r) => (r.marketCap ?? -Infinity) >= marketCapMin)
     if (marketCapMax != null) filtered = filtered.filter((r) => (r.marketCap ?? Infinity) <= marketCapMax)
     if (priceMin != null) filtered = filtered.filter((r) => (r.price ?? -Infinity) >= priceMin)
@@ -1428,6 +1471,8 @@ export async function GET(request: NextRequest) {
         marginType: Array.from(marginTypes),
         sector17,
         sector33,
+        majorCategory,
+        subIndustry,
         marketCapMin,
         marketCapMax,
         priceMin,

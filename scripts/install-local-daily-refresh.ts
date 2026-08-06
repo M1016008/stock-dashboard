@@ -29,6 +29,11 @@ const steps: Step[] = [
     script: 'auto-update:install',
   },
   {
+    name: 'JP classification CSV change detector',
+    label: 'com.stockboard.classification-sync',
+    script: 'auto-classification-sync:install',
+  },
+  {
     name: 'Kabutan dashboard news hourly refresh',
     label: 'com.stockboard.kabutan-material-news',
     script: 'auto-kabutan-material-news:install',
@@ -112,6 +117,7 @@ for (const step of steps) {
 console.log('\nStockBoard daily refresh suite registered.')
 console.log('JP prices/cache: Mon-Fri 16:40, 16:55, 17:20, 18:10, 21:10 JST')
 console.log('JP heavy derived serving refresh: 21:10 JST window only, latest 60 trading dates')
+console.log('JP classification CSV: daily 16:05/16:15/16:30/17:00/18:00 JST plus six-hour recovery')
 console.log('Kabutan dashboard news: every 60 minutes')
 console.log('Kabutan themes: daily 21:00 JST, recovery checks 22:00/23:00, waits safely for the DB writer')
 console.log('US prices/analytics/ML: Tue-Sat 06:30, 10:30 JST')

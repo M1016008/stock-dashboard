@@ -65,6 +65,8 @@ interface SectorMasterRow {
   sector_large?: string | null
   sector_small?: string | null
   sector33?: string | null
+  major_category?: string | null
+  sub_industry?: string | null
   market_segment?: string | null
   margin_type?: string | null
 }
@@ -235,6 +237,8 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
   // 表示用にマージ: sector_master(JPX/CSV) → ハードコードマスタ
   const displaySectorLarge   = smaster?.sector_large   ?? hardcoded?.sectorLarge
   const displaySector33      = smaster?.sector33       ?? null
+  const displayMajorCategory = smaster?.major_category ?? null
+  const displaySubIndustry   = smaster?.sub_industry   ?? null
   const displayMarketSegment = smaster?.market_segment ?? hardcoded?.marketSegment
   const displayMarginType    = smaster?.margin_type    ?? hardcoded?.marginType
 
@@ -348,6 +352,8 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
             {displayMarketSegment && <Pill label={`市場: ${displayMarketSegment}`} accent />}
             {displaySectorLarge && <Pill label={`17業種: ${displaySectorLarge}`} />}
             {displaySector33 && <Pill label={`33業種: ${displaySector33}`} />}
+            {displayMajorCategory && <Pill label={`60分類: ${displayMajorCategory}`} accent />}
+            {displaySubIndustry && <Pill label={`細分類: ${displaySubIndustry}`} />}
           </div>
 
           <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -381,6 +387,12 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
             {loading && <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>読込中...</span>}
           </div>
         </div>
+        {(displayMajorCategory || displaySubIndustry) && (
+          <div className="flex flex-wrap gap-1.5 border-t border-[var(--color-border-subtle)] px-3 py-2 lg:hidden">
+            {displayMajorCategory && <Pill label={`60分類: ${displayMajorCategory}`} accent />}
+            {displaySubIndustry && <Pill label={`細分類: ${displaySubIndustry}`} />}
+          </div>
+        )}
         <StockDetailTabs active={activeTab} onSelect={selectTab} />
       </div>
 

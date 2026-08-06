@@ -113,6 +113,8 @@ interface StockRow {
   sector33?: string | null
   sector17Name?: string | null
   sector33Name?: string | null
+  majorCategory?: string | null
+  subIndustry?: string | null
   price: number | null
   currency?: string | null
   changePercent: number | null
@@ -181,6 +183,8 @@ type SortKey =
   | 'marketSegment'
   | 'sector33'
   | 'sectorLarge'
+  | 'majorCategory'
+  | 'subIndustry'
   | 'name'
   | 'price'
   | 'currency'
@@ -224,6 +228,8 @@ interface JpScreenerView {
   selectedMarketSegment: string
   selectedSectorLarge: string
   selectedSector33: string
+  selectedMajorCategory?: string
+  selectedSubIndustry?: string
   selectedMarginType: string
   selectedVolumeMin: VolumeMinValue | null
   selectedEarningsWindowWeeks: EarningsWindowWeeks | null
@@ -263,6 +269,8 @@ const SORT_KEY_VALUES: readonly SortKey[] = [
   'marketSegment',
   'sector33',
   'sectorLarge',
+  'majorCategory',
+  'subIndustry',
   'name',
   'price',
   'currency',
@@ -298,6 +306,8 @@ const SORT_KEY_VALUES: readonly SortKey[] = [
 
 const SORT_OPTIONS: Array<{ key: SortKey; label: string; descLabel?: string; ascLabel?: string }> = [
   { key: 'marketSegment', label: '市場区分', descLabel: '逆順', ascLabel: 'プライム順' },
+  { key: 'majorCategory', label: '四季報60分類', descLabel: '降順', ascLabel: '昇順' },
+  { key: 'subIndustry', label: '業種細分類', descLabel: '降順', ascLabel: '昇順' },
   { key: 'marketCap', label: '時価総額', descLabel: '大きい順', ascLabel: '小さい順' },
   { key: 'volume', label: '出来高', descLabel: '多い順', ascLabel: '少ない順' },
   { key: 'avgVolume10d', label: '10日平均出来高', descLabel: '多い順', ascLabel: '少ない順' },
@@ -377,7 +387,12 @@ function initialStageFilters(searchParams: ReturnType<typeof useSearchParams>): 
 }
 
 function defaultSortDir(key: SortKey): SortState['dir'] {
-  return key === 'earningsNextBusinessDays' || key === 'marketSegment' ? 'asc' : 'desc'
+  return key === 'earningsNextBusinessDays'
+    || key === 'marketSegment'
+    || key === 'majorCategory'
+    || key === 'subIndustry'
+    ? 'asc'
+    : 'desc'
 }
 
 function initialSortState(searchParams: ReturnType<typeof useSearchParams>): SortState {
@@ -424,6 +439,8 @@ export default function ScreenerPage() {
   const [selectedMarketSegment, setSelectedMarketSegment] = useState<string>(() => searchParams.get('marketSegment') ?? '')
   const [selectedSectorLarge, setSelectedSectorLarge] = useState<string>(() => searchParams.get('sectorLarge') ?? '')
   const [selectedSector33, setSelectedSector33] = useState<string>(() => searchParams.get('sector33') ?? '')
+  const [selectedMajorCategory, setSelectedMajorCategory] = useState<string>(() => searchParams.get('majorCategory') ?? '')
+  const [selectedSubIndustry, setSelectedSubIndustry] = useState<string>(() => searchParams.get('subIndustry') ?? '')
   const [selectedMarginType, setSelectedMarginType] = useState<string>(() => searchParams.get('marginType') ?? '')
   const [selectedVolumeMin, setSelectedVolumeMin] = useState<VolumeMinValue | null>(() => (
     parseVolumeMin(searchParams.get('volumeMin'))
@@ -567,6 +584,8 @@ export default function ScreenerPage() {
       if (selectedMarketSegment && marketSegmentFilterValue(r.marketSegment) !== selectedMarketSegment) return false
       if (selectedSectorLarge && r.sectorLarge !== selectedSectorLarge) return false
       if (selectedSector33 && (r.sector33 ?? r.sector33Name) !== selectedSector33) return false
+      if (selectedMajorCategory && r.majorCategory !== selectedMajorCategory) return false
+      if (selectedSubIndustry && r.subIndustry !== selectedSubIndustry) return false
       if (selectedMarginType && (r.marginType ?? '未設定') !== selectedMarginType) return false
       if (selectedVolumeMin != null && ((r.volume ?? 0) < selectedVolumeMin)) return false
       if (selectedEarningsWindowWeeks != null) {
@@ -589,7 +608,7 @@ export default function ScreenerPage() {
       }
       return true
     })
-  }, [results, selectedMarketSegment, selectedSectorLarge, selectedSector33, selectedMarginType, selectedVolumeMin, selectedEarningsWindowWeeks, selectedEarningsTimeBucket, referenceDate, tradingDates, selectedMa200Direction, selectedShortTermCheck, selectedPhysicalStatus, selectedMcapBins])
+  }, [results, selectedMarketSegment, selectedSectorLarge, selectedSector33, selectedMajorCategory, selectedSubIndustry, selectedMarginType, selectedVolumeMin, selectedEarningsWindowWeeks, selectedEarningsTimeBucket, referenceDate, tradingDates, selectedMa200Direction, selectedShortTermCheck, selectedPhysicalStatus, selectedMcapBins])
 
   const shortTermOptions = useMemo(() => {
     const counts = new Map<string, number>()
@@ -677,6 +696,27 @@ export default function ScreenerPage() {
     return { largeArr, sector33Arr, sector33Map: sector33 }
   }, [results, selectedSectorLarge])
 
+  const classificationOptions = useMemo(() => {
+    const major = new Map<string, number>()
+    const sub = new Map<string, { count: number; major: string }>()
+    for (const row of results) {
+      const majorCategory = row.majorCategory?.trim()
+      const subIndustry = row.subIndustry?.trim()
+      if (majorCategory) major.set(majorCategory, (major.get(majorCategory) ?? 0) + 1)
+      if (majorCategory && subIndustry) {
+        const current = sub.get(subIndustry) ?? { count: 0, major: majorCategory }
+        current.count += 1
+        current.major = majorCategory
+        sub.set(subIndustry, current)
+      }
+    }
+    const majorArr = Array.from(major.entries()).sort(([a], [b]) => a.localeCompare(b, 'ja'))
+    const subArr = Array.from(sub.entries())
+      .filter(([, value]) => !selectedMajorCategory || value.major === selectedMajorCategory)
+      .sort(([a], [b]) => a.localeCompare(b, 'ja'))
+    return { majorArr, subArr, subMap: sub }
+  }, [results, selectedMajorCategory])
+
   const sortedResults = useMemo(() => {
     if (!sort) return filteredResults
     const copy = [...filteredResults]
@@ -710,6 +750,8 @@ export default function ScreenerPage() {
     if (selectedMarketSegment) chips.push({ key: 'marketSegment', label: '市場区分', value: selectedMarketSegment, tone: 'purple' })
     if (selectedSectorLarge) chips.push({ key: 'sectorLarge', label: '17業種', value: selectedSectorLarge, tone: 'green' })
     if (selectedSector33) chips.push({ key: 'sector33', label: '33業種', value: selectedSector33, tone: 'green' })
+    if (selectedMajorCategory) chips.push({ key: 'majorCategory', label: '60分類', value: selectedMajorCategory, tone: 'purple' })
+    if (selectedSubIndustry) chips.push({ key: 'subIndustry', label: '細分類', value: selectedSubIndustry, tone: 'purple' })
     if (selectedMarginType) chips.push({ key: 'marginType', label: '貸借/信用', value: selectedMarginType, tone: selectedMarginType === '貸借' ? 'blue' : 'neutral' })
     if (selectedVolumeMin != null) chips.push({ key: 'volumeMin', label: '出来高', value: `${selectedVolumeMin.toLocaleString('ja-JP')}株以上`, tone: 'amber' })
     if (selectedEarningsWindowWeeks != null) {
@@ -765,12 +807,14 @@ export default function ScreenerPage() {
     selectedEarningsTimeBucket,
     selectedMa200Direction,
     selectedMarginType,
+    selectedMajorCategory,
     selectedMarketSegment,
     selectedMcapBins,
     selectedPhysicalStatus,
     selectedPhysicalStatusHorizon,
     selectedSector33,
     selectedSectorLarge,
+    selectedSubIndustry,
     selectedShortTermCheck,
     selectedVolumeMin,
     stage23Candidate,
@@ -872,6 +916,8 @@ export default function ScreenerPage() {
     setSelectedMarketSegment('')
     setSelectedSectorLarge('')
     setSelectedSector33('')
+    setSelectedMajorCategory('')
+    setSelectedSubIndustry('')
     setSelectedMarginType('')
     setSelectedVolumeMin(null)
     setSelectedEarningsWindowWeeks(null)
@@ -920,6 +966,15 @@ export default function ScreenerPage() {
       case 'sector33':
         setSelectedSector33('')
         removeUrlParams('sector33')
+        break
+      case 'majorCategory':
+        setSelectedMajorCategory('')
+        setSelectedSubIndustry('')
+        removeUrlParams('majorCategory', 'subIndustry')
+        break
+      case 'subIndustry':
+        setSelectedSubIndustry('')
+        removeUrlParams('subIndustry')
         break
       case 'marginType':
         setSelectedMarginType('')
@@ -1004,6 +1059,8 @@ export default function ScreenerPage() {
     selectedMarketSegment,
     selectedSectorLarge,
     selectedSector33,
+    selectedMajorCategory,
+    selectedSubIndustry,
     selectedMarginType,
     selectedVolumeMin,
     selectedEarningsWindowWeeks,
@@ -1029,6 +1086,8 @@ export default function ScreenerPage() {
     setSelectedMarketSegment(view.selectedMarketSegment ?? '')
     setSelectedSectorLarge(view.selectedSectorLarge ?? '')
     setSelectedSector33(view.selectedSector33 ?? '')
+    setSelectedMajorCategory(view.selectedMajorCategory ?? '')
+    setSelectedSubIndustry(view.selectedSubIndustry ?? '')
     setSelectedMarginType(view.selectedMarginType ?? '')
     setSelectedVolumeMin(view.selectedVolumeMin ?? null)
     setSelectedEarningsWindowWeeks(view.selectedEarningsWindowWeeks ?? null)
@@ -1164,6 +1223,54 @@ export default function ScreenerPage() {
           {(selectedSectorLarge || selectedSector33) && (
             <button
               onClick={() => { setSelectedSectorLarge(''); setSelectedSector33('') }}
+              style={mcChipStyle(false)}
+            >
+              × クリア
+            </button>
+          )}
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap', marginTop: '10px', paddingTop: '10px', borderTop: '1px solid var(--border-subtle)' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: 'var(--text-muted)' }}>
+            四季報60分類
+            <select
+              data-testid="major-category-filter"
+              value={selectedMajorCategory}
+              onChange={(event) => {
+                setSelectedMajorCategory(event.target.value)
+                setSelectedSubIndustry('')
+              }}
+              style={mcSelectStyle}
+            >
+              <option value="">全て（{results.length}）</option>
+              {classificationOptions.majorArr.map(([category, count]) => (
+                <option key={category} value={category}>{category}（{count}）</option>
+              ))}
+            </select>
+          </label>
+
+          <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: 'var(--text-muted)' }}>
+            業種細分類
+            <select
+              data-testid="sub-industry-filter"
+              value={selectedSubIndustry}
+              onChange={(event) => {
+                const value = event.target.value
+                setSelectedSubIndustry(value)
+                if (value) setSelectedMajorCategory(classificationOptions.subMap.get(value)?.major ?? '')
+              }}
+              style={{ ...mcSelectStyle, maxWidth: '320px' }}
+            >
+              <option value="">全て</option>
+              {classificationOptions.subArr.map(([industry, value]) => (
+                <option key={industry} value={industry}>{industry}（{value.count}）</option>
+              ))}
+            </select>
+          </label>
+
+          {(selectedMajorCategory || selectedSubIndustry) && (
+            <button
+              onClick={() => { setSelectedMajorCategory(''); setSelectedSubIndustry('') }}
               style={mcChipStyle(false)}
             >
               × クリア
@@ -1743,7 +1850,7 @@ export default function ScreenerPage() {
               <table
                 className={`data-table jp-screener-table jp-screener-table--${tableView}`}
                 style={{
-                  minWidth: tableView === 'all' ? '3480px' : tableView === 'core' ? '1760px' : '1080px',
+                  minWidth: tableView === 'all' ? '3900px' : tableView === 'core' ? '2100px' : '1080px',
                   borderCollapse: 'collapse',
                   fontSize: '12px',
                 }}
@@ -1760,6 +1867,8 @@ export default function ScreenerPage() {
                     <SortableTh label="市場区分"   sortKey="marketSegment"       current={sort} onClick={toggleSort} />
                     <SortableTh label="33業種" sortKey="sector33"            current={sort} onClick={toggleSort} />
                     <SortableTh label="17業種" sortKey="sectorLarge"         current={sort} onClick={toggleSort} />
+                    <SortableTh label="四季報60分類" sortKey="majorCategory" current={sort} onClick={toggleSort} />
+                    <SortableTh label="業種細分類" sortKey="subIndustry"      current={sort} onClick={toggleSort} />
                     <SortableTh label="株価"       sortKey="price"               current={sort} onClick={toggleSort} align="right" />
                     <SortableTh label="日%"        sortKey="changePercent"       current={sort} onClick={toggleSort} align="right" />
                     <SortableTh label="週%"        sortKey="changePercentWeek"   current={sort} onClick={toggleSort} align="right" />
@@ -1857,6 +1966,8 @@ export default function ScreenerPage() {
                         <td style={td}>{r.marketSegment || '---'}</td>
                         <td style={td}>{r.sector33 || '---'}</td>
                         <td style={td}>{r.sectorLarge || '---'}</td>
+                        <td style={td}>{r.majorCategory || '---'}</td>
+                        <td style={td}>{r.subIndustry || '---'}</td>
                         <td style={tdR}>{r.price?.toLocaleString('ja-JP', { maximumFractionDigits: 2 }) ?? '---'}</td>
                         <td style={{ ...tdR, color: pctColor(r.changePercent ?? undefined) }}>{fmtPct(r.changePercent ?? undefined)}</td>
                         <td style={{ ...tdR, color: pctColor(r.changePercentWeek ?? undefined) }}>{fmtPct(r.changePercentWeek ?? undefined)}</td>
