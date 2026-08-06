@@ -266,6 +266,8 @@ type SearchApiResult = {
   sector33Name?: string | null
   marketSegment?: string | null
   marginType?: string | null
+  majorCategory?: string | null
+  subIndustry?: string | null
   exchange?: string | null
   sectorName?: string | null
   industryName?: string | null
@@ -327,7 +329,13 @@ function searchResultMeta(result: SearchApiResult): string | null {
   if (result.market === 'US') {
     return [result.exchange, result.sectorName, result.industryName].filter(Boolean).join(' / ') || null
   }
-  return [result.marketSegment, result.sector17Name, result.marginType].filter(Boolean).join(' / ') || null
+  return [
+    result.marketSegment,
+    result.majorCategory ? `60分類: ${result.majorCategory}` : null,
+    result.subIndustry ? `細分類: ${result.subIndustry}` : null,
+    result.sector17Name,
+    result.marginType,
+  ].filter(Boolean).join(' / ') || null
 }
 
 function areaPriority(area: HeaderArea, result: QuickSearchResult): number {
@@ -562,8 +570,8 @@ function TickerQuickSearch({ area }: { area: HeaderArea }) {
               submitCurrent()
             }
           }}
-          placeholder="銘柄・機能を検索 ⌘K"
-          aria-label="銘柄・機能検索"
+          placeholder="銘柄・分類・機能を検索 ⌘K"
+          aria-label="銘柄・分類・機能検索"
           aria-expanded={open && visibleResults.length > 0}
           className="h-8 w-full rounded-[4px] border border-[var(--color-border-default)] bg-white py-1 pl-8 pr-3 text-[12px] font-semibold text-[var(--color-text-primary)] outline-none transition-colors placeholder:text-[var(--color-text-tertiary)] focus:border-[var(--color-brand-700)] focus:ring-2 focus:ring-[rgba(37,99,235,0.16)]"
         />
@@ -572,7 +580,7 @@ function TickerQuickSearch({ area }: { area: HeaderArea }) {
       {open && (query.trim() || visibleResults.length > 0) && (
         <div className="absolute left-0 right-0 top-[calc(100%+6px)] z-[70] overflow-hidden rounded-[5px] border border-[var(--color-border-strong)] bg-white shadow-[0_18px_42px_rgba(16,32,52,0.22)]">
           <div className="border-b border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-3 py-2 text-[10px] font-bold text-[var(--color-text-tertiary)]">
-            {query.trim() ? '銘柄・機能を検索 / Enterで移動' : '最近見た銘柄・よく使う機能'}
+            {query.trim() ? '銘柄・分類・機能を検索 / Enterで移動' : '最近見た銘柄・よく使う機能'}
           </div>
           {loading && (
             <div className="px-3 py-3 text-[12px] font-semibold text-[var(--color-text-secondary)]">検索中...</div>

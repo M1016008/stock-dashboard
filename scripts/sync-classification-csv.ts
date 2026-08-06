@@ -130,7 +130,7 @@ async function main(): Promise<void> {
       && previous.sourcePath === sourcePath
       && previous.databasePath === databasePath
       && previous.sha256 === sourceSha256
-      && databaseCount >= previous.sourceRecordCount
+      && databaseCount === previous.sourceRecordCount
     ) {
       console.log(`Classification source unchanged since ${previous.syncedAt}; no import needed.`)
       return
@@ -183,7 +183,7 @@ async function main(): Promise<void> {
     }
 
     const importedDatabaseCount = await databaseClassificationCount()
-    if (importedDatabaseCount < source.records.length) {
+    if (importedDatabaseCount !== source.records.length) {
       throw new Error(
         `Classification DB verification failed: rows=${importedDatabaseCount}, source=${source.records.length}`,
       )

@@ -44,6 +44,22 @@ async function main() {
   console.log(`Importing ${records.length} unique valid records`)
 
   const CHUNK = 200
+  await client.execute(`
+    CREATE TEMP TABLE IF NOT EXISTS classification_import_tickers (
+      ticker TEXT PRIMARY KEY
+    )
+  `)
+  await client.execute('DELETE FROM classification_import_tickers')
+  for (let i = 0; i < records.length; i += CHUNK) {
+    await client.batch(
+      records.slice(i, i + CHUNK).map((record) => ({
+        sql: 'INSERT OR IGNORE INTO classification_import_tickers (ticker) VALUES (?)',
+        args: [record.ticker],
+      })),
+      'write',
+    )
+  }
+
   let inserted = 0
   for (let i = 0; i < records.length; i += CHUNK) {
     const chunk = records.slice(i, i + CHUNK)
@@ -61,6 +77,12 @@ async function main() {
     inserted += chunk.length
   }
 
+  const pruneResult = await client.execute(`
+    DELETE FROM stock_classification
+    WHERE ticker NOT IN (SELECT ticker FROM classification_import_tickers)
+  `)
+  await client.execute('DELETE FROM classification_import_tickers')
+
   // 集計表示
   const majorCount = await db
     .select({ n: sql<number>`COUNT(DISTINCT major_category)` })
@@ -74,7 +96,8 @@ async function main() {
 
   console.log(
     `完了: ソース ${inserted} 件 / DB合計 ${rowCount[0]?.n ?? 0} 件 / `
-    + `大分類 ${majorCount[0]?.n ?? 0} 種 / 業種細分類 ${subCount[0]?.n ?? 0} 種`,
+    + `大分類 ${majorCount[0]?.n ?? 0} 種 / 業種細分類 ${subCount[0]?.n ?? 0} 種 / `
+    + `旧分類削除 ${pruneResult.rowsAffected} 件`,
   )
 }
 

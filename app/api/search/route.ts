@@ -1,10 +1,10 @@
 // app/api/search/route.ts
 // Phase 3.5 で完全書き換え: Yahoo search の代わりに、
-// ローカル ticker_universe を ticker または name の LIKE で検索する。
+// ローカル ticker_universe と四季報分類を横断検索する。
 
 import { NextRequest, NextResponse } from 'next/server'
 import { db, ensureReady } from '@/lib/db/client'
-import { tickerUniverse } from '@/lib/db/schema'
+import { stockClassification, tickerUniverse } from '@/lib/db/schema'
 import { and, eq, like, or } from 'drizzle-orm'
 
 export const revalidate = 0
@@ -29,11 +29,19 @@ export async function GET(request: NextRequest) {
         sector33Name: tickerUniverse.sector33_name,
         marketSegment: tickerUniverse.market_segment,
         marginType: tickerUniverse.margin_type,
+        majorCategory: stockClassification.majorCategory,
+        subIndustry: stockClassification.subIndustry,
       })
       .from(tickerUniverse)
+      .leftJoin(stockClassification, eq(stockClassification.ticker, tickerUniverse.ticker))
       .where(and(
         eq(tickerUniverse.active, true),
-        or(like(tickerUniverse.ticker, pattern), like(tickerUniverse.name, pattern)),
+        or(
+          like(tickerUniverse.ticker, pattern),
+          like(tickerUniverse.name, pattern),
+          like(stockClassification.majorCategory, pattern),
+          like(stockClassification.subIndustry, pattern),
+        ),
       ))
       .limit(10)
 
@@ -46,6 +54,8 @@ export async function GET(request: NextRequest) {
         sector33Name: r.sector33Name,
         marketSegment: r.marketSegment,
         marginType: r.marginType,
+        majorCategory: r.majorCategory,
+        subIndustry: r.subIndustry,
       })),
     )
   } catch (error) {
