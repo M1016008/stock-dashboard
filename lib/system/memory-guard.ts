@@ -1,7 +1,9 @@
 import { execFileSync } from 'node:child_process'
 
-type MemoryHeadroom = {
+export type MemoryHeadroom = {
   availableMb: number
+  immediateAvailableMb: number
+  inactiveMb: number
   compressorMb: number
   freePercent: number | null
   throttledPages: number
@@ -54,17 +56,28 @@ export function readMemoryHeadroom(): MemoryHeadroom | null {
   } catch {
     pressureOutput = ''
   }
+  return parseMacMemoryHeadroom(output, pressureOutput)
+}
+
+export function parseMacMemoryHeadroom(output: string, pressureOutput = ''): MemoryHeadroom {
   const pageSizeMatch = output.match(/page size of ([0-9]+) bytes/i)
   const pageSize = pageSizeMatch ? Number(pageSizeMatch[1]) : 16_384
 
   const free = parseVmStatValue(output, 'Pages free')
+  const inactive = parseVmStatValue(output, 'Pages inactive')
   const speculative = parseVmStatValue(output, 'Pages speculative')
   const purgeable = parseVmStatValue(output, 'Pages purgeable')
   const compressor = parseVmStatValue(output, 'Pages occupied by compressor')
   const throttled = parseVmStatValue(output, 'Pages throttled')
+  const immediateAvailableMb = ((free + speculative + purgeable) * pageSize) / MB
+  const inactiveMb = (inactive * pageSize) / MB
 
   return {
-    availableMb: ((free + speculative + purgeable) * pageSize) / MB,
+    // Inactive pages are clean/reclaimable cache on macOS. Excluding them made
+    // healthy machines wait forever even when memory_pressure reported ample room.
+    availableMb: immediateAvailableMb + inactiveMb,
+    immediateAvailableMb,
+    inactiveMb,
     compressorMb: (compressor * pageSize) / MB,
     freePercent: pressureOutput ? parseMemoryPressureFreePercent(pressureOutput) : null,
     throttledPages: throttled,
@@ -93,7 +106,7 @@ function hasEnoughHeadroom(
 
 function formatHeadroom(headroom: MemoryHeadroom): string {
   const freePercent = headroom.freePercent === null ? 'unknown' : `${headroom.freePercent}%`
-  return `available=${Math.round(headroom.availableMb)}MB, free=${freePercent}, compressor=${Math.round(headroom.compressorMb)}MB, throttled=${headroom.throttledPages}`
+  return `reclaimable=${Math.round(headroom.availableMb)}MB, immediate=${Math.round(headroom.immediateAvailableMb)}MB, inactive=${Math.round(headroom.inactiveMb)}MB, free=${freePercent}, compressor=${Math.round(headroom.compressorMb)}MB, throttled=${headroom.throttledPages}`
 }
 
 export async function waitForMemoryHeadroom(options: WaitOptions): Promise<void> {
@@ -127,7 +140,7 @@ export async function waitForMemoryHeadroom(options: WaitOptions): Promise<void>
     const pressureRequirement = headroom.freePercent === null
       ? `compressor<=${maxCompressorMb}MB (memory_pressure unavailable)`
       : `free>=${minFreePercent}%`
-    const message = `Memory guard waiting before ${options.label}: ${formatHeadroom(headroom)}; required available>=${minAvailableMb}MB, ${pressureRequirement}, throttled<=${maxThrottledPages}`
+    const message = `Memory guard waiting before ${options.label}: ${formatHeadroom(headroom)}; required reclaimable>=${minAvailableMb}MB, ${pressureRequirement}, throttled<=${maxThrottledPages}`
     if (Date.now() - lastLogAt > 60_000) {
       lastLogAt = Date.now()
       console.warn(message)

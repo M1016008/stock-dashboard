@@ -129,6 +129,8 @@ function implementationFingerprint(): string {
     'scripts/ensure-us-adjusted-foundation.ts',
     'scripts/build-us-analytics-db.ts',
     'scripts/validate-us-analytics-db.ts',
+    'scripts/train-ma-trajectory-shadow.py',
+    'scripts/run-ma-trajectory-shadow.ts',
     'lib/backtest/forward-extrema.ts',
   ]
   const hash = createHash('sha256')
@@ -261,6 +263,12 @@ function steps(): Step[] {
       id: 'jp-analog-index',
       label: 'JP analog search index refresh',
       npmScript: 'batch:analog-index:jp',
+      env: baseEnv,
+    },
+    {
+      id: 'jp-ma-trajectory-shadow',
+      label: 'JP MA trajectory expanding walk-forward shadow',
+      npmScript: 'batch:ma-trajectory-shadow:jp',
       env: baseEnv,
     },
     {

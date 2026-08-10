@@ -25,7 +25,7 @@ import { StageTimeline } from '@/components/stock/StageTimeline'
 import { StockMovePeriods } from '@/components/stock/StockMovePeriods'
 import { StockMlInsights } from '@/components/stock/StockMlInsights'
 import { HistoricalAnalogExplorer } from '@/components/stock/HistoricalAnalogExplorer'
-import { ScenarioProjectionChart } from '@/components/stock/ScenarioProjectionChart'
+import { FutureScenarioPanel } from '@/components/stock/FutureScenarioPanel'
 import { TradeScenarioNotebook } from '@/components/stock/TradeScenarioNotebook'
 import { StockScenarioAiPanel } from '@/components/stock/StockScenarioAiPanel'
 import {
@@ -470,7 +470,7 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
             }}
           />
           <StockMovePeriods ticker={ticker} analysisDate={analysisDate} />
-          <ScenarioProjectionChart
+          <FutureScenarioPanel
             ticker={ticker}
             name={name}
             analysisDate={analysisDate}
