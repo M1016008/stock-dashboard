@@ -7,6 +7,7 @@ import { and, asc, eq, gte } from 'drizzle-orm'
 import type { OHLCV } from '@/types/stock'
 import { parseTimeframeSpec, resampleOhlcv, specToIntervalCode } from '@/lib/timeframes'
 import { loadManualOhlcvRows } from '@/lib/manual-ohlcv'
+import { decodePathSegment } from '@/lib/url-path'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -29,7 +30,7 @@ export async function GET(
 ) {
   try {
     const { ticker: rawTicker } = await params
-    const ticker = decodeURIComponent(rawTicker).replace(/\.T$/i, '')
+    const ticker = decodePathSegment(rawTicker).replace(/\.T$/i, '')
     const { searchParams } = new URL(request.url)
     const period = searchParams.get('period') ?? '1y'
     const timeframeSpec = parseTimeframeSpec({

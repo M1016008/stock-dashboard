@@ -110,6 +110,7 @@ const START_DATE = process.env.ML_RL_START_DATE?.trim() || null
 const END_DATE = process.env.ML_RL_END_DATE?.trim() || null
 const LIMIT_STATES = Number(process.env.ML_RL_LIMIT_STATES ?? 0)
 const PAGE_DATES = Math.max(1, Number(process.env.ML_RL_PAGE_DATES ?? 20))
+const POLICY_CACHE_PAGE_DATES = Math.max(1, Number(process.env.ML_RL_POLICY_CACHE_PAGE_DATES ?? 5))
 const POLICY_CACHE_INSERT_ROWS = Math.max(100, Number(process.env.ML_RL_POLICY_CACHE_INSERT_ROWS ?? 1000))
 const SQL_AGG_MODE = (process.env.ML_RL_SQL_AGG ?? '1') !== '0'
 
@@ -337,7 +338,7 @@ async function loadMissingPolicyDateBatch(startDate: string | null, beforeDate: 
     ORDER BY f.date DESC
     LIMIT ?
     `,
-    [...args, PAGE_DATES],
+    [...args, POLICY_CACHE_PAGE_DATES],
   )
   return rows.map((row) => row.date)
 }

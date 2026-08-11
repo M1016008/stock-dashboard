@@ -353,6 +353,15 @@ export const marketDailySnapshots = sqliteTable(
     weekly_b_stage:  integer('weekly_b_stage'),
     monthly_a_stage: integer('monthly_a_stage'),
     monthly_b_stage: integer('monthly_b_stage'),
+    prevClose:        real('prev_close'),
+    close5d:          real('close_5d'),
+    close20d:         real('close_20d'),
+    close60d:         real('close_60d'),
+    close120d:        real('close_120d'),
+    avgVolume20:      real('avg_volume_20'),
+    ma200:            real('ma_200'),
+    ma200Prev:        real('ma_200_prev'),
+    ma200Observations: integer('ma_200_observations'),
     computedAt:      integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
   },
   (t) => ({
@@ -2015,6 +2024,28 @@ export const mlFeatureHealthChecks = sqliteTable(
   },
   (t) => ({
     pk: primaryKey({ columns: [t.checkDate, t.checkKey] }),
+  }),
+)
+
+export const mlPipelineGenerations = sqliteTable(
+  'ml_pipeline_generations',
+  {
+    market:               text('market').notNull(),
+    pipeline:             text('pipeline').notNull(),
+    generationVersion:    text('generation_version').notNull(),
+    status:               text('status').notNull(),
+    baselineSourceDate:   text('baseline_source_date').notNull(),
+    baselineStartDate:    text('baseline_start_date'),
+    lastDeltaSourceDate:  text('last_delta_source_date').notNull(),
+    priceBasis:           text('price_basis'),
+    featureSet:           text('feature_set').notNull(),
+    baselineCompletedAt:  integer('baseline_completed_at', { mode: 'timestamp' }).notNull(),
+    lastDeltaCompletedAt: integer('last_delta_completed_at', { mode: 'timestamp' }).notNull(),
+    payloadJson:          text('payload_json').notNull().default('{}'),
+    updatedAt:            integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.market, t.pipeline] }),
   }),
 )
 

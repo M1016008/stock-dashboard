@@ -39,6 +39,12 @@ const TICKER_START = process.env.ML_TICKER_START?.trim() || null
 const TICKER_END = process.env.ML_TICKER_END?.trim() || null
 const MISSING_ONLY_DATE = process.env.ML_MISSING_ONLY_DATE?.trim() || null
 const ACTIVE_ONLY = process.env.ML_FEATURE_ACTIVE_ONLY === '1'
+const INCREMENTAL_UPSERT = process.env.ML_FEATURE_INCREMENTAL_UPSERT === '1'
+  || (process.env.ML_FEATURE_INCREMENTAL_UPSERT !== '0' && RECENT_DAYS > 0)
+const WRITE_LABELS = process.env.ML_FEATURE_WRITE_LABELS != null
+  ? process.env.ML_FEATURE_WRITE_LABELS !== '0'
+  : RECENT_DAYS <= 0
+const WRITE_RL_STATES = WRITE_LABELS && (process.env.ML_FEATURE_WRITE_RL_STATES !== '0')
 const HORIZONS = (process.env.ML_HORIZONS ?? ML_PRIMARY_HORIZON_LIST)
   .split(',')
   .map((value) => Number(value.trim()))
@@ -189,15 +195,18 @@ async function history(ticker: string): Promise<Row[]> {
   )
 }
 
-async function labels(ticker: string): Promise<Map<string, LabelRow[]>> {
+async function labels(ticker: string, minDate: string): Promise<Map<string, LabelRow[]>> {
   if (HORIZONS.length === 0) return new Map()
   const rows = await execAll<LabelRow>(
     `
     SELECT date, horizon_days, return_pct, max_return_pct, min_return_pct, days_to_max, days_to_min
     FROM forward_extrema
-    WHERE ticker = ? AND horizon_days IN (${HORIZONS.map(() => '?').join(', ')})
+    WHERE ticker = ?
+      AND date >= ?
+      ${END_DATE ? 'AND date <= ?' : ''}
+      AND horizon_days IN (${HORIZONS.map(() => '?').join(', ')})
     `,
-    [ticker, ...HORIZONS],
+    [ticker, minDate, ...(END_DATE ? [END_DATE] : []), ...HORIZONS],
   )
   const map = new Map<string, LabelRow[]>()
   for (const row of rows) {
@@ -211,7 +220,6 @@ async function labels(ticker: string): Promise<Map<string, LabelRow[]>> {
 async function buildTicker(ticker: string): Promise<{ features: number; labels: number; states: number }> {
   const rows = await history(ticker)
   if (rows.length < Math.max(1, MIN_HISTORY_DAYS)) return { features: 0, labels: 0, states: 0 }
-  const labelMap = await labels(ticker)
   const ma5 = smaSeries(rows, 5)
   const ma25 = smaSeries(rows, 25)
   const ma75 = smaSeries(rows, 75)
@@ -224,6 +232,9 @@ async function buildTicker(ticker: string): Promise<{ features: number; labels: 
   const recentIndex = RECENT_DAYS > 0 ? Math.max(minHistoryIndex, rows.length - RECENT_DAYS) : minHistoryIndex
   const startDateIndex = START_DATE ? rows.findIndex((row) => row.date >= START_DATE) : -1
   const firstIndex = Math.max(recentIndex, startDateIndex >= 0 ? startDateIndex : 0)
+  const labelMap = WRITE_LABELS
+    ? await labels(ticker, rows[firstIndex].date)
+    : new Map<string, LabelRow[]>()
   const featureStmts: Array<{ sql: string; args: Array<string | number | null> }> = []
   const labelStmts: Array<{ sql: string; args: Array<string | number | null> }> = []
   const stateStmts: Array<{ sql: string; args: Array<string | number | null> }> = []
@@ -280,14 +291,24 @@ async function buildTicker(ticker: string): Promise<{ features: number; labels: 
     const vector = featureVector(profile)
     featureStmts.push({
       sql: `
-        INSERT OR REPLACE INTO ml_feature_vectors
+        INSERT INTO ml_feature_vectors
           (ticker, date, stage_code, feature_json, vector_json, computed_at)
         VALUES (?, ?, ?, ?, ?, unixepoch())
+        ${INCREMENTAL_UPSERT ? `
+        ON CONFLICT(ticker, date) DO UPDATE SET
+          stage_code = excluded.stage_code,
+          feature_json = excluded.feature_json,
+          vector_json = excluded.vector_json,
+          computed_at = unixepoch()
+        WHERE ml_feature_vectors.stage_code IS NOT excluded.stage_code
+           OR ml_feature_vectors.feature_json IS NOT excluded.feature_json
+           OR ml_feature_vectors.vector_json IS NOT excluded.vector_json
+        ` : 'ON CONFLICT(ticker, date) DO UPDATE SET stage_code = excluded.stage_code, feature_json = excluded.feature_json, vector_json = excluded.vector_json, computed_at = unixepoch()'}
       `,
       args: [ticker, row.date, profile.stageCode, JSON.stringify(profile), JSON.stringify(vector)],
     })
 
-    for (const label of labelMap.get(row.date) ?? []) {
+    for (const label of WRITE_LABELS ? (labelMap.get(row.date) ?? []) : []) {
       const upLabel = (label.max_return_pct ?? -Infinity) >= 10 ? 1 : 0
       const downLabel = (label.min_return_pct ?? Infinity) <= -5 ? 1 : 0
       const reward = round((label.max_return_pct ?? label.return_pct ?? 0) + Math.min(0, label.min_return_pct ?? 0) * 0.5)
@@ -299,26 +320,64 @@ async function buildTicker(ticker: string): Promise<{ features: number; labels: 
       })
       labelStmts.push({
         sql: `
-          INSERT OR REPLACE INTO ml_training_labels
+          INSERT INTO ml_training_labels
             (ticker, date, horizon_days, return_pct, max_return_pct, min_return_pct, up_label, down_label, reward_score, label_json, computed_at)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch())
+          ${INCREMENTAL_UPSERT ? `
+          ON CONFLICT(ticker, date, horizon_days) DO UPDATE SET
+            return_pct = excluded.return_pct,
+            max_return_pct = excluded.max_return_pct,
+            min_return_pct = excluded.min_return_pct,
+            up_label = excluded.up_label,
+            down_label = excluded.down_label,
+            reward_score = excluded.reward_score,
+            label_json = excluded.label_json,
+            computed_at = unixepoch()
+          WHERE ml_training_labels.return_pct IS NOT excluded.return_pct
+             OR ml_training_labels.max_return_pct IS NOT excluded.max_return_pct
+             OR ml_training_labels.min_return_pct IS NOT excluded.min_return_pct
+             OR ml_training_labels.up_label IS NOT excluded.up_label
+             OR ml_training_labels.down_label IS NOT excluded.down_label
+             OR ml_training_labels.reward_score IS NOT excluded.reward_score
+             OR ml_training_labels.label_json IS NOT excluded.label_json
+          ` : 'ON CONFLICT(ticker, date, horizon_days) DO UPDATE SET return_pct = excluded.return_pct, max_return_pct = excluded.max_return_pct, min_return_pct = excluded.min_return_pct, up_label = excluded.up_label, down_label = excluded.down_label, reward_score = excluded.reward_score, label_json = excluded.label_json, computed_at = unixepoch()'}
         `,
         args: [ticker, row.date, label.horizon_days, label.return_pct, label.max_return_pct, label.min_return_pct, upLabel, downLabel, reward, labelJson],
       })
-      if (label.horizon_days === 40) {
+      if (WRITE_RL_STATES && label.horizon_days === 40) {
         stateStmts.push({
           sql: `
-            INSERT OR REPLACE INTO rl_training_states
+            INSERT INTO rl_training_states
               (ticker, date, horizon_days, action, state_json, reward, next_state_json, computed_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, unixepoch())
+            ${INCREMENTAL_UPSERT ? `
+            ON CONFLICT(ticker, date, horizon_days, action) DO UPDATE SET
+              state_json = excluded.state_json,
+              reward = excluded.reward,
+              next_state_json = excluded.next_state_json,
+              computed_at = unixepoch()
+            WHERE rl_training_states.state_json IS NOT excluded.state_json
+               OR rl_training_states.reward IS NOT excluded.reward
+               OR rl_training_states.next_state_json IS NOT excluded.next_state_json
+            ` : 'ON CONFLICT(ticker, date, horizon_days, action) DO UPDATE SET state_json = excluded.state_json, reward = excluded.reward, next_state_json = excluded.next_state_json, computed_at = unixepoch()'}
           `,
           args: [ticker, row.date, label.horizon_days, 'watch_up', JSON.stringify(profile), label.max_return_pct, null],
         })
         stateStmts.push({
           sql: `
-            INSERT OR REPLACE INTO rl_training_states
+            INSERT INTO rl_training_states
               (ticker, date, horizon_days, action, state_json, reward, next_state_json, computed_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, unixepoch())
+            ${INCREMENTAL_UPSERT ? `
+            ON CONFLICT(ticker, date, horizon_days, action) DO UPDATE SET
+              state_json = excluded.state_json,
+              reward = excluded.reward,
+              next_state_json = excluded.next_state_json,
+              computed_at = unixepoch()
+            WHERE rl_training_states.state_json IS NOT excluded.state_json
+               OR rl_training_states.reward IS NOT excluded.reward
+               OR rl_training_states.next_state_json IS NOT excluded.next_state_json
+            ` : 'ON CONFLICT(ticker, date, horizon_days, action) DO UPDATE SET state_json = excluded.state_json, reward = excluded.reward, next_state_json = excluded.next_state_json, computed_at = unixepoch()'}
           `,
           args: [ticker, row.date, label.horizon_days, 'watch_down', JSON.stringify(profile), label.min_return_pct, null],
         })
@@ -340,7 +399,7 @@ async function main() {
   let stateCount = 0
   const started = Date.now()
   console.log(
-    `ml feature build: tickers=${codes.length}, recent_days=${RECENT_DAYS || 'all'}, min_history_days=${MIN_HISTORY_DAYS}, start=${START_DATE ?? '-'}, end=${END_DATE ?? '-'}, missing_only_date=${MISSING_ONLY_DATE ?? '-'}, active_only=${ACTIVE_ONLY ? 'on' : 'off'}, horizons=${HORIZONS.join('/')}`,
+    `ml feature build: tickers=${codes.length}, recent_days=${RECENT_DAYS || 'all'}, min_history_days=${MIN_HISTORY_DAYS}, start=${START_DATE ?? '-'}, end=${END_DATE ?? '-'}, missing_only_date=${MISSING_ONLY_DATE ?? '-'}, active_only=${ACTIVE_ONLY ? 'on' : 'off'}, incremental_upsert=${INCREMENTAL_UPSERT ? 'on' : 'off'}, labels=${WRITE_LABELS ? 'on' : 'deferred'}, rl_states=${WRITE_RL_STATES ? 'on' : 'deferred'}, horizons=${HORIZONS.join('/')}`,
   )
   if (TICKER_START || TICKER_END) console.log(`ml feature ticker range: ${TICKER_START ?? '-'}..${TICKER_END ?? '-'}`)
 

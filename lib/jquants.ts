@@ -136,6 +136,34 @@ export async function fetchJQuantsDaily(
 
 export interface JQuantsDailyByDateRow extends OHLCV {
   ticker: string
+  adjustmentFactor: number
+}
+
+export function hasJQuantsCorporateAction(adjustmentFactor: number | null | undefined): boolean {
+  return typeof adjustmentFactor === 'number'
+    && Number.isFinite(adjustmentFactor)
+    && Math.abs(adjustmentFactor - 1) > Number.EPSILON
+}
+
+export function shouldApplyJQuantsLegacyAdjustment(input: {
+  adjustmentFactor: number | null | undefined
+  adjustedProviderStartClose: number | null | undefined
+  existingProviderStartClose: number | null | undefined
+  legacyLastClose: number | null | undefined
+}): boolean {
+  const factor = input.adjustmentFactor
+  const adjustedClose = input.adjustedProviderStartClose
+  if (!hasJQuantsCorporateAction(factor) || factor! <= 0 || !adjustedClose || adjustedClose <= 0) {
+    return false
+  }
+
+  const referenceCloses = [input.existingProviderStartClose, input.legacyLastClose]
+    .filter((value): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0)
+
+  return referenceCloses.some((referenceClose) => {
+    const observedFactor = adjustedClose / referenceClose
+    return Math.abs(Math.log(observedFactor / factor!)) <= Math.log(1.35)
+  })
 }
 
 export async function fetchJQuantsDailyByDate(date: string): Promise<JQuantsDailyByDateRow[]> {
@@ -158,6 +186,7 @@ export async function fetchJQuantsDailyByDate(date: string): Promise<JQuantsDail
       if (!ohlcv) continue
       all.push({
         ticker: fromJQuantsCode(row.Code),
+        adjustmentFactor: row.AdjFactor ?? 1,
         ...ohlcv,
       })
     }

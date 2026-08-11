@@ -8,6 +8,11 @@ import {
   MA_SEQUENCE_VERSION,
   maSequenceBandNeighbors,
 } from '@/lib/ml/ma-sequence'
+import {
+  analogDateToEpochDay,
+  deduplicateAnalogPriceRows,
+  decodeAnalogPriceChunk,
+} from '@/lib/ml/analog-price-chunks'
 
 export type AnalogSequenceMarket = 'JP' | 'US'
 
@@ -31,6 +36,22 @@ export type AnalogSequenceIndexMeta = {
   updatedAt: string | null
   featureSchema: string | null
   embeddingBytes: number | null
+  priceSourceDate: string | null
+  priceCompleted: boolean
+  priceChunksSourceDate: string | null
+  priceChunksCompleted: boolean
+}
+
+export type AnalogSequencePriceRange = {
+  ticker: string
+  fromDate: string
+  toDate: string
+}
+
+export type AnalogSequencePriceRow = {
+  ticker: string
+  date: string
+  close: number
 }
 
 type RawIndexRow = {
@@ -187,7 +208,11 @@ export async function readAnalogSequenceIndexMeta(
         'completed',
         'updated_at',
         'feature_schema',
-        'embedding_bytes'
+        'embedding_bytes',
+        'price_source_date',
+        'price_completed',
+        'price_chunks_source_date',
+        'price_chunks_completed'
       )
       `,
     )
@@ -205,10 +230,84 @@ export async function readAnalogSequenceIndexMeta(
       embeddingBytes: values.has('embedding_bytes')
         ? Number(values.get('embedding_bytes'))
         : null,
+      priceSourceDate: values.get('price_source_date') ?? null,
+      priceCompleted: values.get('price_completed') === '1',
+      priceChunksSourceDate: values.get('price_chunks_source_date') ?? null,
+      priceChunksCompleted: values.get('price_chunks_completed') === '1',
     }
   } catch {
     return null
   }
+}
+
+type RawPriceChunkRow = {
+  ticker: string
+  chunk_year: number
+  points: ArrayBuffer | Uint8Array
+}
+
+export async function readAnalogSequencePriceChunks(
+  market: AnalogSequenceMarket,
+  ranges: AnalogSequencePriceRange[],
+): Promise<AnalogSequencePriceRow[]> {
+  if (ranges.length === 0) return []
+  if (ranges.length > 80) throw new Error('Too many analog price ranges in one query.')
+  const rows = await execute<RawPriceChunkRow>(
+    market,
+    `
+    SELECT ticker, chunk_year, points
+    FROM analog_sequence_price_chunks
+    WHERE ${ranges.map(() => '(ticker = ? AND chunk_year >= ? AND chunk_year <= ?)').join(' OR ')}
+    ORDER BY ticker, chunk_year
+    `,
+    ranges.flatMap((range) => [
+      range.ticker,
+      Number(range.fromDate.slice(0, 4)),
+      Number(range.toDate.slice(0, 4)),
+    ]),
+  )
+  const rangesByTicker = new Map<string, Array<AnalogSequencePriceRange & {
+    fromEpochDay: number
+    toEpochDay: number
+  }>>()
+  for (const range of ranges) {
+    const tickerRanges = rangesByTicker.get(range.ticker) ?? []
+    tickerRanges.push({
+      ...range,
+      fromEpochDay: analogDateToEpochDay(range.fromDate),
+      toEpochDay: analogDateToEpochDay(range.toDate),
+    })
+    rangesByTicker.set(range.ticker, tickerRanges)
+  }
+  const output: AnalogSequencePriceRow[] = []
+  for (const row of rows) {
+    for (const range of rangesByTicker.get(row.ticker) ?? []) {
+      if (Number(row.chunk_year) < Number(range.fromDate.slice(0, 4))) continue
+      if (Number(row.chunk_year) > Number(range.toDate.slice(0, 4))) continue
+      for (const point of decodeAnalogPriceChunk(row.points, range.fromEpochDay, range.toEpochDay)) {
+        output.push({ ticker: row.ticker, ...point })
+      }
+    }
+  }
+  return deduplicateAnalogPriceRows(output)
+}
+
+export async function readAnalogSequencePrices(
+  market: AnalogSequenceMarket,
+  ranges: AnalogSequencePriceRange[],
+): Promise<AnalogSequencePriceRow[]> {
+  if (ranges.length === 0) return []
+  if (ranges.length > 80) throw new Error('Too many analog price ranges in one query.')
+  return execute<AnalogSequencePriceRow>(
+    market,
+    `
+    SELECT ticker, date, close
+    FROM analog_sequence_prices
+    WHERE ${ranges.map(() => '(ticker = ? AND date >= ? AND date <= ?)').join(' OR ')}
+    ORDER BY ticker, date
+    `,
+    ranges.flatMap((range) => [range.ticker, range.fromDate, range.toDate]),
+  )
 }
 
 export async function searchAnalogSequenceIndex(args: {

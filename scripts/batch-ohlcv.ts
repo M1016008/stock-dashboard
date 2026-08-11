@@ -12,6 +12,8 @@
 //   USE_LOCAL_DB        '1' でローカル SQLite を強制 (Turso クォータ回避)
 //   TICKERS             カンマ区切りで銘柄を絞り込み (テスト用)
 //   HISTORY_FROM        ISO 日付 (YYYY-MM-DD) で取得開始日を上書き (初回フェッチ時のみ意味あり)
+//   OHLCV_FORCE_FULL_HISTORY  '1' で対象銘柄の全履歴を再取得 (分割調整の修復用)
+//   OHLCV_LEGACY_ADJUSTMENT_FACTOR  取得期間外の旧履歴へ適用する係数 (対象を絞った修復時のみ)
 //
 // 動作:
 //   - 各銘柄について ohlcv_daily の最新日付を確認、それ以降の差分のみ取得 (冪等)
@@ -19,9 +21,15 @@
 //   - 失敗銘柄は batch_runs.error_summary に記録、バッチは続行
 
 import { spawn } from 'node:child_process'
-import { db, execAll } from '@/lib/db/client'
+import { db, execAll, execGet, execRun } from '@/lib/db/client'
 import { ohlcvDaily, batchRuns, jquantsDailyCoverage, jquantsSyncRuns } from '@/lib/db/schema'
-import { fetchJQuantsDaily, fetchJQuantsDailyByDate, type JQuantsDailyByDateRow } from '@/lib/jquants'
+import {
+  fetchJQuantsDaily,
+  fetchJQuantsDailyByDate,
+  hasJQuantsCorporateAction,
+  shouldApplyJQuantsLegacyAdjustment,
+  type JQuantsDailyByDateRow,
+} from '@/lib/jquants'
 import { expectedLatestTradingDate } from '@/lib/server/data-freshness'
 import type { OHLCV } from '@/types/stock'
 import { eq, sql } from 'drizzle-orm'
@@ -38,6 +46,12 @@ const DEFAULT_FROM_DATE: string =
 const TARGET_DATE = process.env.OHLCV_TARGET_DATE ?? expectedLatestTradingDate()
 const USE_DATE_BULK = process.env.OHLCV_USE_DATE_BULK !== '0'
 const ENABLE_MISSING_FALLBACK = process.env.OHLCV_ENABLE_MISSING_FALLBACK === '1'
+const FORCE_FULL_HISTORY = process.env.OHLCV_FORCE_FULL_HISTORY === '1'
+const configuredLegacyAdjustmentFactor = Number(process.env.OHLCV_LEGACY_ADJUSTMENT_FACTOR)
+const LEGACY_ADJUSTMENT_FACTOR = Number.isFinite(configuredLegacyAdjustmentFactor)
+  && configuredLegacyAdjustmentFactor > 0
+  ? configuredLegacyAdjustmentFactor
+  : null
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 
@@ -88,8 +102,12 @@ async function withDbRetry<T>(fn: () => Promise<T>): Promise<T> {
   throw new Error('unreachable')
 }
 
-async function fetchAndStoreForTicker(ticker: string, lastDate: string | null): Promise<number> {
-  const fromDate = lastDate ?? DEFAULT_FROM_DATE
+async function fetchAndStoreForTicker(
+  ticker: string,
+  lastDate: string | null,
+  options: { fullHistory?: boolean; legacyAdjustmentFactor?: number | null } = {},
+): Promise<number> {
+  const fromDate = options.fullHistory ? undefined : (lastDate ?? DEFAULT_FROM_DATE)
 
   // フェッチ (リトライ付き、指数バックオフ)
   let data: OHLCV[] = []
@@ -106,6 +124,28 @@ async function fetchAndStoreForTicker(ticker: string, lastDate: string | null): 
   }
 
   if (data.length === 0) return 0
+
+  const providerStartDate = data[0].date
+  const legacyAdjustmentFactor = options.legacyAdjustmentFactor
+  let applyLegacyAdjustment = false
+  if (options.fullHistory && hasJQuantsCorporateAction(legacyAdjustmentFactor)) {
+    const [existingProviderStart, legacyLast] = await Promise.all([
+      execGet<{ close: number }>(
+        'SELECT close FROM ohlcv_daily WHERE ticker = ? AND date = ?',
+        [ticker, providerStartDate],
+      ),
+      execGet<{ close: number }>(
+        'SELECT close FROM ohlcv_daily WHERE ticker = ? AND date < ? ORDER BY date DESC LIMIT 1',
+        [ticker, providerStartDate],
+      ),
+    ])
+    applyLegacyAdjustment = shouldApplyJQuantsLegacyAdjustment({
+      adjustmentFactor: legacyAdjustmentFactor,
+      adjustedProviderStartClose: data[0].close,
+      existingProviderStartClose: existingProviderStart?.close,
+      legacyLastClose: legacyLast?.close,
+    })
+  }
 
   // チャンク分割で UPSERT (libSQL の SQL 長制限対策)
   const CHUNK = 200
@@ -128,13 +168,39 @@ async function fetchAndStoreForTicker(ticker: string, lastDate: string | null): 
     )
   }
 
+  if (applyLegacyAdjustment) {
+    await withDbRetry(() => execRun(
+      `
+        UPDATE ohlcv_daily
+        SET open = open * ?,
+            high = high * ?,
+            low = low * ?,
+            close = close * ?,
+            volume = CAST(ROUND(volume / ?) AS INTEGER)
+        WHERE ticker = ? AND date < ?
+      `,
+      [
+        legacyAdjustmentFactor!,
+        legacyAdjustmentFactor!,
+        legacyAdjustmentFactor!,
+        legacyAdjustmentFactor!,
+        legacyAdjustmentFactor!,
+        ticker,
+        providerStartDate,
+      ],
+    ))
+    console.log(
+      `${ticker}: adjusted legacy rows before ${providerStartDate} with factor=${legacyAdjustmentFactor}`,
+    )
+  }
+
   return data.length
 }
 
 async function storeRows(rows: JQuantsDailyByDateRow[]): Promise<number> {
   const CHUNK = 200
   for (let i = 0; i < rows.length; i += CHUNK) {
-    const chunk = rows.slice(i, i + CHUNK)
+    const chunk = rows.slice(i, i + CHUNK).map(({ adjustmentFactor: _adjustmentFactor, ...row }) => row)
     await withDbRetry(() =>
       db
         .insert(ohlcvDaily)
@@ -155,7 +221,7 @@ async function storeRows(rows: JQuantsDailyByDateRow[]): Promise<number> {
 }
 
 async function main() {
-  console.log(`SOURCE=jquants, HISTORY_FROM=${DEFAULT_FROM_DATE}, TARGET_DATE=${TARGET_DATE}, CONCURRENCY=${CONCURRENCY}, RATE_LIMIT=${RATE_LIMIT_MS}ms`)
+  console.log(`SOURCE=jquants, HISTORY_FROM=${DEFAULT_FROM_DATE}, TARGET_DATE=${TARGET_DATE}, CONCURRENCY=${CONCURRENCY}, RATE_LIMIT=${RATE_LIMIT_MS}ms, FORCE_FULL_HISTORY=${FORCE_FULL_HISTORY}`)
 
   // 開始記録
   const [run] = await db
@@ -216,12 +282,26 @@ async function main() {
       console.log(`J-Quants date bulk fetch: ${TARGET_DATE}`)
       const rows = await fetchJQuantsDailyByDate(TARGET_DATE)
       const inserted = await storeRows(rows)
+      const corporateActionTickers = Array.from(new Set(
+        rows
+          .filter(row => hasJQuantsCorporateAction(row.adjustmentFactor))
+          .map(row => row.ticker),
+      ))
+      let adjustedHistoryRows = 0
+      for (const ticker of corporateActionTickers) {
+        const adjustmentFactor = rows.find(row => row.ticker === ticker)?.adjustmentFactor ?? null
+        console.log(`${ticker}: adjustment factor detected; refreshing J-Quants adjusted full history`)
+        adjustedHistoryRows += await fetchAndStoreForTicker(ticker, null, {
+          fullHistory: true,
+          legacyAdjustmentFactor: adjustmentFactor,
+        })
+      }
       const rowTickerSet = new Set(rows.map(r => r.ticker))
       const missingTickers = tickers
         .filter(t => !rowTickerSet.has(t.ticker))
         .map(t => t.ticker)
 
-      rowsInserted += inserted
+      rowsInserted += inserted + adjustedHistoryRows
       succeeded += Math.max(0, tickers.length - missingTickers.length)
       await db
         .insert(jquantsDailyCoverage)
@@ -243,7 +323,9 @@ async function main() {
           finishedAt: new Date(),
         })
         .where(eq(jquantsSyncRuns.id, syncRun.id))
-      console.log(`J-Quants date bulk 完了: expected=${rows.length}, stored=${inserted}`)
+      console.log(
+        `J-Quants date bulk 完了: expected=${rows.length}, stored=${inserted}, corporateActions=${corporateActionTickers.length}, adjustedHistoryRows=${adjustedHistoryRows}`,
+      )
       tickers = tickers.filter(t => !rowTickerSet.has(t.ticker))
       if (tickers.length > 0 && !ENABLE_MISSING_FALLBACK) {
         console.log(`missing ${tickers.length} tickers after date bulk; per-ticker fallback is disabled`)
@@ -271,7 +353,10 @@ async function main() {
       if (!item) return
       const { ticker, lastDate } = item
       try {
-        const count = await fetchAndStoreForTicker(ticker, lastDate)
+        const count = await fetchAndStoreForTicker(ticker, lastDate, {
+          fullHistory: FORCE_FULL_HISTORY,
+          legacyAdjustmentFactor: FORCE_FULL_HISTORY ? LEGACY_ADJUSTMENT_FACTOR : null,
+        })
         succeeded++
         rowsInserted += count
       } catch (err) {

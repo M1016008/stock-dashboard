@@ -5,8 +5,9 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { Search, Copy, Check } from 'lucide-react'
+import { replaceCurrentUrlFilters } from '@/lib/client/url-filter-state'
 import { STAGE_BG_COLORS, STAGE_BORDER_COLORS, STAGE_LABELS } from '@/lib/hex-stage'
 import { MarginBadges } from '@/components/ui/MarginBadges'
 import { StageDots } from '@/components/ui/StageDots'
@@ -119,6 +120,25 @@ const emptySelections = (): Selections => ({
   monthly: new Set(),
 })
 
+const CELL_FILTER_PARAMS: Record<Timeframe, string> = {
+  daily: 'dailyCells',
+  weekly: 'weeklyCells',
+  monthly: 'monthlyCells',
+}
+
+function parseCellSelection(value: string | null): Set<CellKey> {
+  if (!value) return new Set()
+  return new Set(value.split(',').filter((key) => /^[1-6]-[1-6]$/.test(key)))
+}
+
+function initialSelections(searchParams: ReturnType<typeof useSearchParams>): Selections {
+  return {
+    daily: parseCellSelection(searchParams.get(CELL_FILTER_PARAMS.daily)),
+    weekly: parseCellSelection(searchParams.get(CELL_FILTER_PARAMS.weekly)),
+    monthly: parseCellSelection(searchParams.get(CELL_FILTER_PARAMS.monthly)),
+  }
+}
+
 const MARKET_CAP_RANGES: { id: string; label: string }[] = [
   { id: 'all',      label: '全て' },
   { id: '-50',      label: '〜50億' },
@@ -142,13 +162,27 @@ const ROW_STEP = 100
 export default function HexMap({ data, market = 'JP' }: { data: Stock[]; timeframe?: Timeframe; market?: 'JP' | 'US' }) {
   const isUs = market === 'US'
   const router = useRouter()
-  const [copiedCode, setCopiedCode] = useState<string | null>(null)
-  const [searchTerm, setSearchTerm] = useState('')
-  const [selections, setSelections] = useState<Selections>(emptySelections)
-  const [selectedMarketCapRange, setSelectedMarketCapRange] = useState<string>('all')
-  const [rowLimit, setRowLimit] = useState(ROW_STEP)
+  const searchParams = useSearchParams()
   const marketCapRanges = isUs ? US_MARKET_CAP_RANGES : MARKET_CAP_RANGES
+  const [copiedCode, setCopiedCode] = useState<string | null>(null)
+  const [searchTerm, setSearchTerm] = useState(() => searchParams.get('q') ?? '')
+  const [selections, setSelections] = useState<Selections>(() => initialSelections(searchParams))
+  const [selectedMarketCapRange, setSelectedMarketCapRange] = useState<string>(() => {
+    const value = searchParams.get('marketCap') ?? 'all'
+    return marketCapRanges.some((range) => range.id === value) ? value : 'all'
+  })
+  const [rowLimit, setRowLimit] = useState(ROW_STEP)
   const hasMarketCapData = data.some((stock) => stock.market_cap > 0)
+
+  useEffect(() => {
+    replaceCurrentUrlFilters({
+      q: searchTerm.trim(),
+      marketCap: selectedMarketCapRange === 'all' ? null : selectedMarketCapRange,
+      [CELL_FILTER_PARAMS.daily]: Array.from(selections.daily).sort().join(','),
+      [CELL_FILTER_PARAMS.weekly]: Array.from(selections.weekly).sort().join(','),
+      [CELL_FILTER_PARAMS.monthly]: Array.from(selections.monthly).sort().join(','),
+    })
+  }, [searchTerm, selectedMarketCapRange, selections])
 
   // 選択数の合計（任意のセルが1つでも選ばれているか）
   const totalSelectedCells = selections.daily.size + selections.weekly.size + selections.monthly.size

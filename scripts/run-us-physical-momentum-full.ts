@@ -17,12 +17,16 @@ const DEFAULT_US_ANALYTICS_DB = '/Volumes/OWC Express 1M2 80G/stockboard-data/us
 type Mode = 'full' | 'raw' | 'normalize'
 
 const TICKER_CHUNK = Math.max(1, Number(process.env.US_PMS_TICKER_CHUNK ?? 250))
-const DATE_CHUNK = Math.max(1, Number(process.env.US_PMS_DATE_CHUNK ?? 50))
+const DATE_CHUNK = Math.max(1, Number(process.env.US_PMS_DATE_CHUNK ?? 250))
 const TICKER_START_OFFSET = Math.max(0, Number(process.env.US_PMS_TICKER_START_OFFSET ?? 0))
 const DATE_START_OFFSET = Math.max(0, Number(process.env.US_PMS_DATE_START_OFFSET ?? 0))
 const RECENT_DAYS = Math.max(
   0,
   Number(process.env.US_PMS_RECENT_DAYS ?? process.env.US_PMS_DAILY_RECENT_DAYS ?? process.env.PMS_RECENT_DAYS ?? 0),
+)
+const NORMALIZE_RECENT_DAYS = Math.max(
+  0,
+  Number(process.env.US_PMS_NORMALIZE_RECENT_DAYS ?? RECENT_DAYS),
 )
 
 type CountRow = { count: number }
@@ -30,6 +34,8 @@ type ValueRow = { value: string | null }
 type DbProfile = {
   tickers: number
   dates: number
+  dateValues: string[]
+  earliestDate: string | null
   latestDate: string | null
   priceBasis: string | null
 }
@@ -38,6 +44,7 @@ type CheckpointState = {
   inputKey: string
   dbPath: string
   recentDays: number
+  normalizeRecentDays?: number
   latestDate: string | null
   priceBasis: string | null
   nextTickerOffset: number
@@ -104,17 +111,18 @@ async function usDbProfile(dbFile: string): Promise<DbProfile> {
     const dateRows = RECENT_DAYS > 0
       ? await client.execute({
           sql: `
-            SELECT COUNT(*) AS count
+            SELECT date AS value
             FROM (
               SELECT DISTINCT date
               FROM ohlcv_daily
               ORDER BY date DESC
               LIMIT ?
             )
+            ORDER BY date
           `,
           args: [RECENT_DAYS],
         })
-      : await client.execute('SELECT COUNT(DISTINCT date) AS count FROM ohlcv_daily')
+      : await client.execute('SELECT DISTINCT date AS value FROM ohlcv_daily ORDER BY date')
     const latestRows = await client.execute('SELECT MAX(date) AS value FROM ohlcv_daily')
     let priceBasis: string | null = null
     try {
@@ -125,9 +133,14 @@ async function usDbProfile(dbFile: string): Promise<DbProfile> {
     } catch {
       priceBasis = null
     }
+    const dateValues = dateRows.rows
+      .map((row) => String((row as unknown as ValueRow).value ?? ''))
+      .filter(Boolean)
     return {
       tickers: Number((tickerRows.rows[0] as unknown as CountRow | undefined)?.count ?? 0),
-      dates: Number((dateRows.rows[0] as unknown as CountRow | undefined)?.count ?? 0),
+      dates: dateValues.length,
+      dateValues,
+      earliestDate: dateValues[0] ?? null,
       latestDate: String((latestRows.rows[0] as unknown as ValueRow | undefined)?.value ?? '') || null,
       priceBasis,
     }
@@ -181,6 +194,7 @@ function freshCheckpoint(dbFile: string, profile: DbProfile, inputKey: string): 
     inputKey,
     dbPath: path.resolve(dbFile),
     recentDays: RECENT_DAYS,
+    normalizeRecentDays: NORMALIZE_RECENT_DAYS,
     latestDate: profile.latestDate,
     priceBasis: profile.priceBasis,
     nextTickerOffset: 0,
@@ -195,9 +209,15 @@ function readCheckpoint(file: string, initial: CheckpointState): CheckpointState
   if (!checkpointEnabled() || process.env.US_PMS_RESET_CHECKPOINT === '1') return initial
   try {
     const saved = JSON.parse(fs.readFileSync(file, 'utf8')) as CheckpointState
-    return saved.version === CHECKPOINT_VERSION && saved.inputKey === initial.inputKey
-      ? saved
-      : initial
+    if (saved.version !== CHECKPOINT_VERSION || saved.inputKey !== initial.inputKey) return initial
+    if (saved.normalizeRecentDays !== NORMALIZE_RECENT_DAYS) {
+      return {
+        ...initial,
+        nextTickerOffset: saved.nextTickerOffset,
+        rawComplete: saved.rawComplete,
+      }
+    }
+    return saved
   } catch {
     return initial
   }
@@ -229,7 +249,7 @@ function runNpm(script: string, env: NodeJS.ProcessEnv): Promise<void> {
 
 async function runNpmWithRetry(script: string, env: NodeJS.ProcessEnv): Promise<void> {
   const attempts = numberEnv('US_PMS_STEP_MAX_ATTEMPTS', 3)
-  const retryDelaySeconds = numberEnv('US_PMS_STEP_RETRY_DELAY_SECONDS', 300)
+  const retryDelaySeconds = numberEnv('US_PMS_STEP_RETRY_DELAY_SECONDS', 30)
   let lastError: unknown = null
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
@@ -266,6 +286,10 @@ async function main(): Promise<void> {
   const explicitDateOffset = explicitOffset('US_PMS_DATE_START_OFFSET', DATE_START_OFFSET)
   const tickerStartOffset = explicitTickerOffset ?? state.nextTickerOffset
   const dateStartOffset = explicitDateOffset ?? state.nextDateOffset
+  const normalizeDateValues = NORMALIZE_RECENT_DAYS > 0
+    ? profile.dateValues.slice(-NORMALIZE_RECENT_DAYS)
+    : profile.dateValues
+  const normalizeDates = normalizeDateValues.length
 
   const baseEnv: NodeJS.ProcessEnv = {
     ...process.env,
@@ -279,7 +303,7 @@ async function main(): Promise<void> {
   }
 
   console.log(`US PMS chunked full: db=${path}`)
-  console.log(`US PMS chunked full: mode=${mode}, tickers=${tickers}, dates=${dates}, recentDays=${RECENT_DAYS}, tickerChunk=${TICKER_CHUNK}, dateChunk=${DATE_CHUNK}`)
+  console.log(`US PMS chunked full: mode=${mode}, tickers=${tickers}, rawDates=${dates}, normalizeDates=${normalizeDates}, recentDays=${RECENT_DAYS}, normalizeRecentDays=${NORMALIZE_RECENT_DAYS}, tickerChunk=${TICKER_CHUNK}, dateChunk=${DATE_CHUNK}`)
   console.log(`US PMS checkpoint: enabled=${checkpointEnabled()}, path=${progressPath}, rawOffset=${tickerStartOffset}, dateOffset=${dateStartOffset}`)
 
   if (mode === 'full' || mode === 'raw') {
@@ -293,6 +317,8 @@ async function main(): Promise<void> {
           ...baseEnv,
           PMS_RUN_JOB_TYPE: 'physical_momentum_us_raw_chunk',
           PMS_RAW_ONLY: '1',
+          PMS_START_DATE: profile.earliestDate ?? '',
+          PMS_END_DATE: profile.latestDate ?? '',
           PMS_TICKER_OFFSET: String(offset),
           PMS_TICKER_LIMIT: String(TICKER_CHUNK),
         })
@@ -309,20 +335,24 @@ async function main(): Promise<void> {
     if (state.normalizeComplete && explicitDateOffset === null) {
       console.log('US PMS normalization already complete for this input')
     } else {
-      for (let offset = dateStartOffset; offset < dates; offset += DATE_CHUNK) {
+      for (let offset = dateStartOffset; offset < normalizeDates; offset += DATE_CHUNK) {
         await waitForMemoryHeadroom({ label: `US PMS normalize chunk offset=${offset}` })
         console.log(`US PMS normalize chunk: offset=${offset}, limit=${DATE_CHUNK}`)
+        const dateChunk = normalizeDateValues.slice(offset, offset + DATE_CHUNK)
+        if (dateChunk.length === 0) break
         await runNpmWithRetry('batch:physical-momentum', {
           ...baseEnv,
           PMS_RUN_JOB_TYPE: 'physical_momentum_us_normalize_chunk',
           PMS_NORMALIZE_ONLY: '1',
-          PMS_DATE_OFFSET: String(offset),
-          PMS_DATE_LIMIT: String(DATE_CHUNK),
+          PMS_START_DATE: dateChunk[0],
+          PMS_END_DATE: dateChunk[dateChunk.length - 1],
+          PMS_DATE_OFFSET: '0',
+          PMS_DATE_LIMIT: '0',
         })
-        state.nextDateOffset = Math.min(dates, offset + DATE_CHUNK)
+        state.nextDateOffset = Math.min(normalizeDates, offset + DATE_CHUNK)
         writeCheckpoint(progressPath, state)
       }
-      state.nextDateOffset = dates
+      state.nextDateOffset = normalizeDates
       state.normalizeComplete = true
       writeCheckpoint(progressPath, state)
     }

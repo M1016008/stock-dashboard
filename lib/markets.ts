@@ -1,3 +1,5 @@
+import { decodePathSegment } from '@/lib/url-path'
+
 export type MarketCode = 'JP' | 'US'
 
 export const DEFAULT_MARKET: MarketCode = 'JP'
@@ -13,7 +15,7 @@ export function marketPath(market: MarketCode, path = ''): string {
 }
 
 export function normalizeTickerForMarket(ticker: string, market: MarketCode): string {
-  const decoded = decodeURIComponent(ticker).trim()
+  const decoded = decodePathSegment(ticker).trim()
   if (market === 'JP') return decoded.replace(/\.T$/i, '')
   return decoded.replace(/\s+/g, '').toUpperCase()
 }

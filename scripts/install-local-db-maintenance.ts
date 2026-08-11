@@ -1,7 +1,8 @@
 // scripts/install-local-db-maintenance.ts
 //
 // Register a local launchd job for safe DB maintenance. The job is intentionally
-// conservative: it skips WAL truncation whenever another process has a DB open.
+// conservative: it yields to active StockBoard writers and lets SQLite coordinate
+// checkpoints with any readers that still need the WAL.
 
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -24,8 +25,31 @@ const pathEnv = [
   '/sbin',
 ].join(':')
 
-const scheduleHour = Number(process.env.DB_MAINT_HOUR ?? '1')
-const scheduleMinute = Number(process.env.DB_MAINT_MINUTE ?? '30')
+type MaintenanceTime = {
+  hour: number
+  minute: number
+}
+
+function parseScheduleTimes(): MaintenanceTime[] {
+  const legacyTime = process.env.DB_MAINT_HOUR !== undefined || process.env.DB_MAINT_MINUTE !== undefined
+    ? `${process.env.DB_MAINT_HOUR ?? '1'}:${process.env.DB_MAINT_MINUTE ?? '30'}`
+    : null
+  const rawTimes = process.env.DB_MAINT_TIMES?.trim() || legacyTime || '01:30,05:30,12:30,15:30'
+  const times = rawTimes.split(',').map((rawTime) => {
+    const match = rawTime.trim().match(/^(\d{1,2}):(\d{2})$/)
+    if (!match) throw new Error(`Invalid DB maintenance time: ${rawTime}`)
+    const hour = Number(match[1])
+    const minute = Number(match[2])
+    if (hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+      throw new Error(`Invalid DB maintenance time: ${rawTime}`)
+    }
+    return { hour, minute }
+  })
+
+  return [...new Map(times.map((time) => [`${time.hour}:${time.minute}`, time])).values()]
+}
+
+const scheduleTimes = parseScheduleTimes()
 
 function xmlEscape(value: string): string {
   return value
@@ -48,9 +72,9 @@ function calendar(hour: number, minute: number, weekday: number): string {
 
 function dailySchedule(): string {
   // launchd Weekday: 1=Monday ... 6=Saturday, 0/7=Sunday.
-  // Run every day; the script itself skips unsafe checkpoints when writers/readers are active.
+  // Retry in several quiet windows; the script itself yields to active writers.
   return [1, 2, 3, 4, 5, 6, 0]
-    .map((weekday) => calendar(scheduleHour, scheduleMinute, weekday))
+    .flatMap((weekday) => scheduleTimes.map(({ hour, minute }) => calendar(hour, minute, weekday)))
     .join('\n')
 }
 
@@ -110,5 +134,5 @@ execFileSync('launchctl', ['bootstrap', `gui/${uid}`, plistPath], { stdio: 'inhe
 execFileSync('launchctl', ['enable', `gui/${uid}/${label}`], { stdio: 'inherit' })
 
 console.log(`launchd registered: ${plistPath}`)
-console.log(`schedule: daily ${String(scheduleHour).padStart(2, '0')}:${String(scheduleMinute).padStart(2, '0')} JST`)
+console.log(`schedule: daily ${scheduleTimes.map(({ hour, minute }) => `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`).join(', ')} JST`)
 console.log(`logs: ${path.join(logDir, 'db-maintenance.log')}`)

@@ -149,7 +149,7 @@ async function main(): Promise<void> {
       return
     }
 
-    const source = readClassificationSource(snapshotPath)
+    const source = await readClassificationSource(snapshotPath)
     validateClassificationSource(source, classificationValidationOptionsFromEnv())
     if (previous && previous.sourceRecordCount > 0) {
       const minimumRelativeCount = Math.floor(

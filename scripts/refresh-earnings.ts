@@ -3,9 +3,12 @@
 // JPX公式Excel + J-Quants翌営業日APIの決算予定を軽量更新し、
 // 個別銘柄用 serving とダッシュボードキャッシュへ即時反映する。
 
-import { spawn } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { eq } from 'drizzle-orm'
-import { db } from '@/lib/db/client'
+import { db, execGet } from '@/lib/db/client'
 import { batchRuns } from '@/lib/db/schema'
 import {
   acquireJpStockboardUpdateLock,
@@ -17,6 +20,40 @@ type RunResult = {
   signal: NodeJS.Signals | null
 }
 
+const deferredPath = path.resolve(
+  process.env.EARNINGS_REFRESH_DEFERRED_PATH?.trim()
+    || path.join(os.homedir(), 'Library', 'Application Support', 'StockBoard', 'earnings-refresh-deferred'),
+)
+let shutdownSignal: NodeJS.Signals | null = null
+let activeChild: ChildProcess | null = null
+
+function requestShutdown(signal: NodeJS.Signals): void {
+  if (shutdownSignal) return
+  shutdownSignal = signal
+  console.warn(`Earnings refresh received ${signal}; stopping the active child cleanly.`)
+  activeChild?.kill(signal)
+  const forceExit = setTimeout(() => process.exit(signal === 'SIGINT' ? 130 : 143), 30_000)
+  forceExit.unref()
+}
+
+process.once('SIGINT', () => requestShutdown('SIGINT'))
+process.once('SIGTERM', () => requestShutdown('SIGTERM'))
+
+function markDeferred(): void {
+  fs.mkdirSync(path.dirname(deferredPath), { recursive: true })
+  const temporaryPath = `${deferredPath}.${process.pid}.tmp`
+  fs.writeFileSync(temporaryPath, `${new Date().toISOString()}\n`, { encoding: 'utf8', mode: 0o600 })
+  fs.renameSync(temporaryPath, deferredPath)
+}
+
+function clearDeferred(): void {
+  try {
+    fs.unlinkSync(deferredPath)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+  }
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
@@ -26,19 +63,29 @@ function numberEnv(name: string, fallback: number): number {
   return Number.isFinite(value) && value > 0 ? value : fallback
 }
 
-async function acquireEarningsUpdateLock(): Promise<UpdateLockHandle | null> {
+async function acquireEarningsUpdateLock(): Promise<{
+  lock: UpdateLockHandle | null
+  waited: boolean
+}> {
   const leaseSeconds = numberEnv('EARNINGS_REFRESH_LOCK_SECONDS', 2 * 60 * 60)
   const waitSeconds = numberEnv('EARNINGS_REFRESH_WAIT_FOR_LOCK_SECONDS', 45 * 60)
   const pollSeconds = numberEnv('EARNINGS_REFRESH_LOCK_POLL_SECONDS', 30)
   const startedAt = Date.now()
   let lastLogAt = 0
+  let waited = false
 
   for (;;) {
+    if (shutdownSignal) throw new Error(`Earnings refresh interrupted by ${shutdownSignal}.`)
     const lock = await acquireJpStockboardUpdateLock('earnings_refresh', leaseSeconds)
-    if (lock) return lock
+    if (lock) {
+      clearDeferred()
+      return { lock, waited }
+    }
+    waited = true
+    markDeferred()
 
     const elapsedSeconds = Math.floor((Date.now() - startedAt) / 1000)
-    if (elapsedSeconds >= waitSeconds) return null
+    if (elapsedSeconds >= waitSeconds) return { lock: null, waited }
     if (lastLogAt === 0 || Date.now() - lastLogAt >= 60_000) {
       lastLogAt = Date.now()
       console.log(
@@ -60,16 +107,24 @@ function runScript(script: string): Promise<RunResult> {
         USE_LOCAL_DB: '1',
       },
     })
+    activeChild = child
 
-    child.on('error', reject)
-    child.on('close', (code, signal) => resolve({ code, signal }))
+    child.on('error', (error) => {
+      if (activeChild === child) activeChild = null
+      reject(error)
+    })
+    child.on('close', (code, signal) => {
+      if (activeChild === child) activeChild = null
+      resolve({ code, signal })
+    })
   })
 }
 
 async function runRequired(script: string) {
+  if (shutdownSignal) throw new Error(`${script} skipped after ${shutdownSignal}.`)
   console.log(`\n▶ ${script}`)
   const result = await runScript(script)
-  if (result.code !== 0) {
+  if (result.code !== 0 || result.signal || shutdownSignal) {
     throw new Error(`${script} failed: code=${result.code}, signal=${result.signal ?? 'none'}`)
   }
 }
@@ -86,6 +141,7 @@ async function runRequiredWithRetry(script: string): Promise<void> {
       return
     } catch (error) {
       lastError = error
+      if (shutdownSignal) throw error
       if (attempt >= maxAttempts) break
       console.warn(`${script} failed; retrying in ${delaySeconds}s: ${error instanceof Error ? error.message : String(error)}`)
       await sleep(delaySeconds * 1000)
@@ -96,14 +152,36 @@ async function runRequiredWithRetry(script: string): Promise<void> {
 }
 
 async function main() {
-  const lock = process.env.EARNINGS_REFRESH_SKIP_LOCK === '1'
-    ? null
+  const processStartedAt = Math.floor(Date.now() / 1000)
+  const skipLock = process.env.EARNINGS_REFRESH_SKIP_LOCK === '1'
+  if (skipLock) clearDeferred()
+  const acquisition = skipLock
+    ? { lock: null, waited: false }
     : await acquireEarningsUpdateLock()
+  const lock = acquisition.lock
 
-  if (!lock && process.env.EARNINGS_REFRESH_SKIP_LOCK !== '1') {
-    console.error('Earnings refresh could not acquire the JP DB writer lock before the timeout')
+  if (!lock && !skipLock) {
+    console.warn('Earnings refresh deferred; launchd will retry while the JP writer is active')
     process.exitCode = 75
     return
+  }
+
+  if (lock && acquisition.waited) {
+    const completedWhileWaiting = await execGet<{ id: number }>(
+      `SELECT id
+       FROM batch_runs
+       WHERE job_type = 'earnings_refresh'
+         AND status = 'success'
+         AND finished_at >= ?
+       ORDER BY finished_at DESC
+       LIMIT 1`,
+      [processStartedAt],
+    )
+    if (completedWhileWaiting) {
+      console.log('Earnings refresh skipped because another refresh completed while this job waited.')
+      await lock.release()
+      return
+    }
   }
 
   const [run] = await db

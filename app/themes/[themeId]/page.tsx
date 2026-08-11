@@ -3,6 +3,7 @@ import Link from 'next/link'
 import { PageTitle } from '@/components/layout/PageTitle'
 import { Card, CardHeader } from '@/components/ui/Card'
 import { getKabutanTheme, type KabutanThemeStock } from '@/lib/queries/kabutan-themes'
+import { decodePathSegment } from '@/lib/url-path'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -13,11 +14,7 @@ type PageProps = {
 }
 
 function decodeThemeId(value: string): string {
-  try {
-    return decodeURIComponent(value)
-  } catch {
-    return value
-  }
+  return decodePathSegment(value)
 }
 
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {

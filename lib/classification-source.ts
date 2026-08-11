@@ -1,12 +1,10 @@
-import * as XLSX from 'xlsx'
+import { readSafeSpreadsheetFile } from '@/lib/safe-spreadsheet'
 
 export type ClassificationRecord = {
   ticker: string
   majorCategory: string
   subIndustry: string
 }
-
-type ClassificationRow = Record<string, unknown>
 
 export type ClassificationSourceData = {
   sheetName: string
@@ -33,9 +31,10 @@ export type ClassificationValidationOptions = {
 
 const MISSING_SUB_INDUSTRY = '未分類'
 
-function pick(row: ClassificationRow, keys: string[]): string | undefined {
+function pick(row: string[], headerIndexes: Map<string, number>, keys: string[]): string | undefined {
   for (const key of keys) {
-    const value = row[key]
+    const index = headerIndexes.get(key)
+    const value = index == null ? undefined : row[index]
     if (value != null && String(value).trim() !== '') return String(value).trim()
   }
   return undefined
@@ -47,17 +46,26 @@ function normalizeTicker(value: string): string {
 }
 
 function looksLikeExcelDateSerial(value: string): boolean {
+  if (/^\d{1,2}[\/-]\d{1,2}$/.test(value)) return true
   if (!/^\d+(?:\.0+)?$/.test(value)) return false
   const serial = Number(value)
   return Number.isInteger(serial) && serial >= 20_000 && serial <= 80_000
 }
 
-export function readClassificationSource(sourcePath: string): ClassificationSourceData {
-  const workbook = XLSX.readFile(sourcePath)
-  const sheetName = workbook.SheetNames[0]
-  if (!sheetName) throw new Error('Classification source has no worksheets.')
-  const sheet = workbook.Sheets[sheetName]
-  const rows = XLSX.utils.sheet_to_json<ClassificationRow>(sheet)
+export async function readClassificationSource(sourcePath: string): Promise<ClassificationSourceData> {
+  const spreadsheet = await readSafeSpreadsheetFile(sourcePath, {
+    maxRows: 20_000,
+    maxColumns: 64,
+  })
+  const header = spreadsheet.rows[0]
+  if (!header) throw new Error('Classification source has no header row.')
+  const headerIndexes = new Map<string, number>()
+  for (const [index, value] of header.entries()) {
+    const normalized = value.trim()
+    if (!normalized || ['__proto__', 'prototype', 'constructor'].includes(normalized)) continue
+    if (!headerIndexes.has(normalized)) headerIndexes.set(normalized, index)
+  }
+  const rows = spreadsheet.rows.slice(1).filter((row) => row.some((value) => value.trim() !== ''))
   const recordsByTicker = new Map<string, ClassificationRecord>()
   const tickerCounts = new Map<string, number>()
   const invalidTickers = new Set<string>()
@@ -66,9 +74,9 @@ export function readClassificationSource(sourcePath: string): ClassificationSour
   let skippedRows = 0
 
   for (const row of rows) {
-    const codeRaw = pick(row, ['コード', 'Code', 'code', 'ticker', '銘柄コード'])
-    const majorCategory = pick(row, ['大分類', '業種大分類', 'major_category', 'Major'])
-    const subIndustryRaw = pick(row, ['業種細分類', '業種', '業界', 'sub_industry', 'SubIndustry'])
+    const codeRaw = pick(row, headerIndexes, ['コード', 'Code', 'code', 'ticker', '銘柄コード'])
+    const majorCategory = pick(row, headerIndexes, ['大分類', '業種大分類', 'major_category', 'Major'])
+    const subIndustryRaw = pick(row, headerIndexes, ['業種細分類', '業種', '業界', 'sub_industry', 'SubIndustry'])
     if (!codeRaw || !majorCategory || !subIndustryRaw) {
       skippedRows += 1
       continue
@@ -79,7 +87,7 @@ export function readClassificationSource(sourcePath: string): ClassificationSour
       invalidTickers.add(ticker)
       continue
     }
-    const updateTime = pick(row, ['更新時刻', 'updated_at', 'UpdatedAt'])
+    const updateTime = pick(row, headerIndexes, ['更新時刻', 'updated_at', 'UpdatedAt'])
     const shiftedUpdateTime = !updateTime && looksLikeExcelDateSerial(subIndustryRaw)
     const subIndustry = shiftedUpdateTime ? MISSING_SUB_INDUSTRY : subIndustryRaw
     if (shiftedUpdateTime) recoveredMissingSubIndustries.add(ticker)
@@ -99,7 +107,7 @@ export function readClassificationSource(sourcePath: string): ClassificationSour
   }
 
   return {
-    sheetName,
+    sheetName: spreadsheet.sheetName,
     rawRowCount: rows.length,
     records,
     skippedRows,

@@ -8,10 +8,10 @@ import {
   validateClassificationSource,
 } from '../lib/classification-source'
 
-const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'stockboard-classification-'))
-const sourcePath = path.join(directory, 'classification.csv')
-
-try {
+async function main(): Promise<void> {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'stockboard-classification-'))
+  const sourcePath = path.join(directory, 'classification.csv')
+  try {
   fs.writeFileSync(
     sourcePath,
     '\ufeff' + [
@@ -23,7 +23,7 @@ try {
     'utf8',
   )
 
-  const source = readClassificationSource(sourcePath)
+  const source = await readClassificationSource(sourcePath)
   assert.deepEqual(source.records, [
     { ticker: '6806', majorCategory: '電子部品・産業用電子機器', subIndustry: 'コネクター' },
     { ticker: '8273', majorCategory: '総合スーパー', subIndustry: '未分類' },
@@ -61,8 +61,14 @@ try {
   } else {
     process.env.CLASSIFICATION_MAX_RECOVERED_MISSING_SUB_INDUSTRIES = previousLimit
   }
-} finally {
-  fs.rmSync(directory, { recursive: true, force: true })
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true })
+  }
 }
 
-console.log('classification source normalization tests: ok')
+main()
+  .then(() => console.log('classification source normalization tests: ok'))
+  .catch((error) => {
+    console.error(error)
+    process.exit(1)
+  })

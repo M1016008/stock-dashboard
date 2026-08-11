@@ -29,6 +29,10 @@ const port = integerEnv('STOCKBOARD_WEB_PORT', 3000, 1, 65535)
 const analogPort = integerEnv('STOCKBOARD_ANALOG_PORT', 3105, 1, 65535)
 const heapMb = integerEnv('STOCKBOARD_WEB_MAX_OLD_SPACE_MB', 2048, 512, 8192)
 const analogHeapMb = integerEnv('STOCKBOARD_ANALOG_MAX_OLD_SPACE_MB', 1536, 512, 4096)
+const webDbCacheMb = integerEnv('STOCKBOARD_WEB_DB_CACHE_MB', 32, 8, 256)
+const webDbMmapMb = integerEnv('STOCKBOARD_WEB_DB_MMAP_MB', 256, 0, 1024)
+const analogDbCacheMb = integerEnv('STOCKBOARD_ANALOG_DB_CACHE_MB', 96, 8, 256)
+const analogDbMmapMb = integerEnv('STOCKBOARD_ANALOG_DB_MMAP_MB', 512, 0, 1024)
 const healthIntervalSeconds = integerEnv('STOCKBOARD_WEB_HEALTH_INTERVAL_SECONDS', 60, 30, 3600)
 const healthTimeoutSeconds = integerEnv('STOCKBOARD_WEB_HEALTH_TIMEOUT_SECONDS', 20, 5, 120)
 const healthFailureThreshold = integerEnv('STOCKBOARD_WEB_HEALTH_FAILURE_THRESHOLD', 3, 2, 10)
@@ -124,6 +128,8 @@ const webPlist = `<?xml version="1.0" encoding="UTF-8"?>
     <key>ANALOG_SEARCH_PROXY_URL</key><string>http://127.0.0.1:${analogPort}</string>
     <key>PATH</key><string>${xmlEscape(pathEnv)}</string>
     <key>SKIP_SCHEMA_ENSURE</key><string>1</string>
+    <key>STOCKBOARD_DB_CACHE_MB</key><string>${webDbCacheMb}</string>
+    <key>STOCKBOARD_DB_MMAP_MB</key><string>${webDbMmapMb}</string>
     <key>STOCKBOARD_DB_READ_CONCURRENCY</key><string>2</string>
     <key>SQLITE_BUSY_RETRIES</key><string>3</string>
     <key>SQLITE_BUSY_TIMEOUT_MS</key><string>5000</string>
@@ -179,6 +185,9 @@ const analogPlist = `<?xml version="1.0" encoding="UTF-8"?>
     <key>ANALOG_SEQUENCE_RECENCY_SHORTLIST_LIMIT</key><string>260</string>
     <key>PATH</key><string>${xmlEscape(pathEnv)}</string>
     <key>SKIP_SCHEMA_ENSURE</key><string>1</string>
+    <key>STOCKBOARD_DB_CACHE_MB</key><string>${analogDbCacheMb}</string>
+    <key>STOCKBOARD_DB_MMAP_MB</key><string>${analogDbMmapMb}</string>
+    <key>STOCKBOARD_DB_READ_CONCURRENCY</key><string>2</string>
     <key>SQLITE_BUSY_RETRIES</key><string>3</string>
     <key>SQLITE_BUSY_TIMEOUT_MS</key><string>5000</string>
     <key>US_SQLITE_BUSY_RETRIES</key><string>3</string>

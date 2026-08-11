@@ -282,6 +282,15 @@ const STATEMENTS = [
     weekly_b_stage INTEGER,
     monthly_a_stage INTEGER,
     monthly_b_stage INTEGER,
+    prev_close REAL,
+    close_5d REAL,
+    close_20d REAL,
+    close_60d REAL,
+    close_120d REAL,
+    avg_volume_20 REAL,
+    ma_200 REAL,
+    ma_200_prev REAL,
+    ma_200_observations INTEGER,
     computed_at INTEGER NOT NULL DEFAULT (unixepoch()),
     PRIMARY KEY (market, ticker, date)
   )`,
@@ -938,6 +947,12 @@ const STATEMENTS = [
   `CREATE INDEX IF NOT EXISTS fext_date_horizon_max_return_idx ON forward_extrema(date, horizon_days, max_return_pct DESC)`,
   `CREATE INDEX IF NOT EXISTS fext_horizon_date_idx ON forward_extrema(horizon_days, date)`,
   `CREATE INDEX IF NOT EXISTS fext_horizon_max_idx ON forward_extrema(horizon_days, max_return_pct)`,
+  `CREATE TABLE IF NOT EXISTS forward_extrema_date_coverage (
+    horizon_days INTEGER NOT NULL,
+    date TEXT NOT NULL,
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (horizon_days, date)
+  )`,
   `CREATE TABLE IF NOT EXISTS model_features (
     ticker TEXT NOT NULL,
     date TEXT NOT NULL,
@@ -1490,6 +1505,22 @@ const STATEMENTS = [
     computed_at INTEGER NOT NULL DEFAULT (unixepoch()),
     PRIMARY KEY (check_date, check_key)
   )`,
+  `CREATE TABLE IF NOT EXISTS ml_pipeline_generations (
+    market TEXT NOT NULL,
+    pipeline TEXT NOT NULL,
+    generation_version TEXT NOT NULL,
+    status TEXT NOT NULL,
+    baseline_source_date TEXT NOT NULL,
+    baseline_start_date TEXT,
+    last_delta_source_date TEXT NOT NULL,
+    price_basis TEXT,
+    feature_set TEXT NOT NULL,
+    baseline_completed_at INTEGER NOT NULL,
+    last_delta_completed_at INTEGER NOT NULL,
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (market, pipeline)
+  )`,
   `CREATE TABLE IF NOT EXISTS turso_sync_runs (
     run_id TEXT PRIMARY KEY,
     mode TEXT NOT NULL,
@@ -1567,6 +1598,16 @@ const ADD_COLUMN_IF_MISSING: string[] = [
   `ALTER TABLE market_ohlcv_daily ADD COLUMN adj_high REAL`,
   `ALTER TABLE market_ohlcv_daily ADD COLUMN adj_low REAL`,
   `ALTER TABLE market_ohlcv_daily ADD COLUMN adj_volume INTEGER`,
+  // US screener: latest-period metrics are computed once with the snapshot.
+  `ALTER TABLE market_daily_snapshots ADD COLUMN prev_close REAL`,
+  `ALTER TABLE market_daily_snapshots ADD COLUMN close_5d REAL`,
+  `ALTER TABLE market_daily_snapshots ADD COLUMN close_20d REAL`,
+  `ALTER TABLE market_daily_snapshots ADD COLUMN close_60d REAL`,
+  `ALTER TABLE market_daily_snapshots ADD COLUMN close_120d REAL`,
+  `ALTER TABLE market_daily_snapshots ADD COLUMN avg_volume_20 REAL`,
+  `ALTER TABLE market_daily_snapshots ADD COLUMN ma_200 REAL`,
+  `ALTER TABLE market_daily_snapshots ADD COLUMN ma_200_prev REAL`,
+  `ALTER TABLE market_daily_snapshots ADD COLUMN ma_200_observations INTEGER`,
   // Phase 4: J-Quants + JPX 公式決算予定の表示補完
   `ALTER TABLE earnings_calendar ADD COLUMN company_name TEXT`,
   `ALTER TABLE earnings_calendar ADD COLUMN sector_name TEXT`,

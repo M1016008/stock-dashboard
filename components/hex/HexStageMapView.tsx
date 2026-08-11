@@ -11,6 +11,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import HexMap from '@/components/hex/HexMap'
 import { MarketDateCalendar } from '@/components/ui/MarketDateCalendar'
+import { replaceCurrentUrlFilters } from '@/lib/client/url-filter-state'
 import { STAGE_BG_COLORS, STAGE_BORDER_COLORS, STAGE_LABELS } from '@/lib/hex-stage'
 import { getUniverseFilterMeta, parseUniverseFilter, UNIVERSE_FILTER_PARAM } from '@/lib/market-universe'
 
@@ -99,11 +100,19 @@ export default function HexStageMapView({ market = 'JP' }: { market?: 'JP' | 'US
 
   // 3 タイムフレームのマトリクスを縦に積んで全部表示するため固定
   const timeframe: Timeframe = 'daily'
-  const [selectedCategory, setSelectedCategory] = useState<string>('')
-  const [selectedSubCategory, setSelectedSubCategory] = useState<string>('')
-  const [selectedAssetType, setSelectedAssetType] = useState<string>('')
+  const [selectedCategory, setSelectedCategory] = useState<string>(() => searchParams.get('sector') ?? '')
+  const [selectedSubCategory, setSelectedSubCategory] = useState<string>(() => searchParams.get('industry') ?? '')
+  const [selectedAssetType, setSelectedAssetType] = useState<string>(() => isUs ? searchParams.get('assetType') ?? '' : '')
   const [availableDates, setAvailableDates] = useState<AvailableDate[]>([])
   const [legendOpen, setLegendOpen] = useState(false)
+
+  useEffect(() => {
+    replaceCurrentUrlFilters({
+      assetType: selectedAssetType,
+      sector: selectedCategory,
+      industry: selectedSubCategory,
+    })
+  }, [selectedAssetType, selectedCategory, selectedSubCategory])
 
   const updateDate = (nextDate: string | null) => {
     const params = new URLSearchParams(searchParams.toString())

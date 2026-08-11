@@ -5,11 +5,12 @@ import {
   upsertExternalDataStatus,
   upsertFinancialSummaryRows,
 } from '@/lib/server/company-overview-store'
+import { decodePathSegment } from '@/lib/url-path'
 
 export const dynamic = 'force-dynamic'
 
 function normalizeTicker(raw: string) {
-  return decodeURIComponent(raw).replace(/\.T$/i, '')
+  return decodePathSegment(raw).replace(/\.T$/i, '')
 }
 
 type FinancialRow = {

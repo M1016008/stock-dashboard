@@ -2,7 +2,8 @@
 //
 // 日足・週足 MA シグナル、複合シグナル、ML/RL 用 model_features を生成する。
 
-import { execAll, execGet, execRun } from '@/lib/db/client'
+import { execAll, execBatch, execGet } from '@/lib/db/client'
+import { spawn } from 'node:child_process'
 import {
   deriveCompositeSignals,
   evaluateMaSignals,
@@ -66,9 +67,30 @@ type FeatureRow = {
 
 const DAILY_MAS = [5, 25, 75] as const
 const WEEKLY_MAS = [5, 13, 25] as const
-const CHUNK = 80
+const CHUNK = 1000
+const WRITE_BATCH_STATEMENTS = 5
 const PROGRESS_EVERY = 100
 const RECENT_DAYS = Number(process.env.BACKTEST_RECENT_DAYS ?? 0)
+const TICKER_PROCESS_CHUNK = Math.max(1, Number(process.env.TECHNICAL_SIGNAL_TICKER_CHUNK ?? 50))
+const PROCESS_CONCURRENCY = Math.max(1, Math.min(2, Number(process.env.TECHNICAL_SIGNAL_PROCESS_CONCURRENCY ?? 1)))
+const OUTPUT_INDEX_NAMES = [
+  'tech_signal_date_idx',
+  'tech_signal_code_idx',
+  'tech_signal_date_ticker_idx',
+  'tech_signal_ticker_code_date_idx',
+  'model_features_date_idx',
+  'model_features_pattern_idx',
+  'model_features_ticker_date_idx',
+] as const
+const OUTPUT_INDEXES = [
+  `CREATE INDEX IF NOT EXISTS tech_signal_date_idx ON technical_signals(date, signal_code)`,
+  `CREATE INDEX IF NOT EXISTS tech_signal_code_idx ON technical_signals(signal_code, date)`,
+  `CREATE INDEX IF NOT EXISTS tech_signal_date_ticker_idx ON technical_signals(date, ticker)`,
+  `CREATE INDEX IF NOT EXISTS tech_signal_ticker_code_date_idx ON technical_signals(ticker, signal_code, date)`,
+  `CREATE INDEX IF NOT EXISTS model_features_date_idx ON model_features(date)`,
+  `CREATE INDEX IF NOT EXISTS model_features_pattern_idx ON model_features(pattern_code, date)`,
+  `CREATE INDEX IF NOT EXISTS model_features_ticker_date_idx ON model_features(ticker, date)`,
+] as const
 
 function safeRatio(numerator: number | null, denominator: number | null): number | null {
   if (numerator == null || denominator == null || !Number.isFinite(denominator) || denominator === 0) return null
@@ -85,14 +107,44 @@ function ratioPct(numerator: number | null, denominator: number | null): number 
   return ratio == null ? null : ratio * 100
 }
 
-function average(values: Array<number | null | undefined>): number | null {
-  const xs = values.filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
-  if (xs.length === 0) return null
-  return xs.reduce((sum, value) => sum + value, 0) / xs.length
+function rollingAverage(values: Array<number | null>, window: number): Array<number | null> {
+  const result: Array<number | null> = new Array(values.length).fill(null)
+  let sum = 0
+  let count = 0
+  for (let i = 0; i < values.length; i++) {
+    const added = values[i]
+    if (added != null && Number.isFinite(added)) {
+      sum += added
+      count += 1
+    }
+    const removedIndex = i - window
+    if (removedIndex >= 0) {
+      const removed = values[removedIndex]
+      if (removed != null && Number.isFinite(removed)) {
+        sum -= removed
+        count -= 1
+      }
+    }
+    result[i] = count > 0 ? sum / count : null
+  }
+  return result
 }
 
-function max(values: number[]): number | null {
-  return values.length === 0 ? null : Math.max(...values)
+function rollingMax(values: number[], window: number): Array<number | null> {
+  const result: Array<number | null> = new Array(values.length).fill(null)
+  const deque: number[] = []
+  let head = 0
+  for (let i = 0; i < values.length; i++) {
+    while (head < deque.length && deque[head] <= i - window) head += 1
+    while (deque.length > head && values[deque[deque.length - 1]] <= values[i]) deque.pop()
+    deque.push(i)
+    result[i] = values[deque[head]]
+    if (head > 1024 && head * 2 > deque.length) {
+      deque.splice(0, head)
+      head = 0
+    }
+  }
+  return result
 }
 
 async function tickers(): Promise<string[]> {
@@ -162,14 +214,6 @@ function computeWeeklySignals(ticker: string, rows: WeeklyRow[]): Map<string, Si
   return byDate
 }
 
-function latestWeeklySignals(weeklyByDate: Map<string, SignalRecord[]>, date: string): SignalRecord[] {
-  let latest = ''
-  for (const key of weeklyByDate.keys()) {
-    if (key <= date && key > latest) latest = key
-  }
-  return latest ? weeklyByDate.get(latest) ?? [] : []
-}
-
 function trueRange(row: DailyRow, prev: DailyRow | undefined): number {
   if (!prev) return row.high - row.low
   return Math.max(row.high - row.low, Math.abs(row.high - prev.close), Math.abs(row.low - prev.close))
@@ -184,20 +228,28 @@ function buildFeatures(
 ): { features: FeatureRow[]; compositeSignals: SignalRecord[] } {
   const features: FeatureRow[] = []
   const compositeSignals: SignalRecord[] = []
+  const weeklyEntries = Array.from(weeklyByDate.entries())
+    .sort(([left], [right]) => left.localeCompare(right))
+  let weeklyIndex = -1
+  const volumeAverage20 = rollingAverage(rows.map((row) => row.volume), 20)
+  const rangePctValues = rows.map((row) => ratioPct(row.high - row.low, row.close))
+  const rangeAverage20 = rollingAverage(rangePctValues, 20)
+  const trueRangeAverage20 = rollingAverage(
+    rows.map((row, index) => trueRange(row, rows[index - 1])),
+    20,
+  )
+  const high60Values = rollingMax(rows.map((row) => row.high), 60)
 
   for (let i = startIndex; i < rows.length; i++) {
     const row = rows[i]
     const prev = rows[i - 1]
-    const trailing20 = rows.slice(Math.max(0, i - 19), i + 1)
-    const trailing60 = rows.slice(Math.max(0, i - 59), i + 1)
-    const prev60 = rows.slice(Math.max(0, i - 60), i)
-    const avgVolume20 = average(trailing20.map((bar) => bar.volume))
-    const rangePct = ratioPct(row.high - row.low, row.close)
-    const avgRange20Pct = average(trailing20.map((bar) => ratioPct(bar.high - bar.low, bar.close)))
-    const atr20 = average(trailing20.map((bar, offset) => trueRange(bar, rows[Math.max(0, i - 19) + offset - 1])))
+    const avgVolume20 = volumeAverage20[i]
+    const rangePct = rangePctValues[i]
+    const avgRange20Pct = rangeAverage20[i]
+    const atr20 = trueRangeAverage20[i]
     const atr20Pct = ratioPct(atr20, row.close)
-    const high60 = max(trailing60.map((bar) => bar.high))
-    const prevHigh60 = max(prev60.map((bar) => bar.high))
+    const high60 = high60Values[i]
+    const prevHigh60 = i > 0 ? high60Values[i - 1] : null
     const volumeRatio20 = safeRatio(row.volume, avgVolume20)
     const ma5PosPct = pct(row.close, row.ma_5)
     const ma25PosPct = pct(row.close, row.ma_25)
@@ -208,7 +260,10 @@ function buildFeatures(
       : null
 
     const dailySignals = dailyByDate.get(row.date) ?? []
-    const weeklySignals = latestWeeklySignals(weeklyByDate, row.date)
+    while (weeklyIndex + 1 < weeklyEntries.length && weeklyEntries[weeklyIndex + 1][0] <= row.date) {
+      weeklyIndex += 1
+    }
+    const weeklySignals = weeklyIndex >= 0 ? weeklyEntries[weeklyIndex][1] : []
     const composites = deriveCompositeSignals({
       ticker,
       date: row.date,
@@ -290,89 +345,164 @@ function buildFeatures(
   return { features, compositeSignals }
 }
 
-async function insertSignals(signals: SignalRecord[]): Promise<void> {
-  for (let i = 0; i < signals.length; i += CHUNK) {
-    const chunk = signals.slice(i, i + CHUNK)
-    const args: Array<string | number | null> = []
-    const values = chunk.map((signal) => {
-      args.push(
-        signal.ticker,
-        signal.date,
-        signal.timescale,
-        signal.maPeriod,
-        signal.signalCode,
-        signal.signalStrength,
-        signal.direction,
-        signal.label,
-        signal.scoreComponent,
-        signal.valueJson ?? null,
-      )
-      return `(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch())`
-    }).join(', ')
+async function runInTickerProcesses(codes: string[]): Promise<void> {
+  const chunks: string[][] = []
+  for (let offset = 0; offset < codes.length; offset += TICKER_PROCESS_CHUNK) {
+    chunks.push(codes.slice(offset, offset + TICKER_PROCESS_CHUNK))
+  }
+  let nextChunk = 0
+  let completedTickers = 0
+  console.log(
+    `technical_signals bounded-memory driver: ${codes.length} tickers, `
+    + `chunk=${TICKER_PROCESS_CHUNK}, concurrency=${PROCESS_CONCURRENCY}`,
+  )
 
-    await execRun(
-      `
-      INSERT OR REPLACE INTO technical_signals
-        (ticker, date, timescale, ma_period, signal_code, signal_strength, direction, label, score_component, value_json, computed_at)
-      VALUES ${values}
-      `,
-      args,
-    )
+  const runChunk = async (chunk: string[]): Promise<void> => {
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn(process.execPath, [...process.execArgv, process.argv[1]], {
+        env: {
+          ...process.env,
+          TICKERS: chunk.join(','),
+          TECHNICAL_SIGNAL_PROCESS_CHILD: '1',
+          SKIP_SCHEMA_ENSURE: '1',
+        },
+        stdio: 'inherit',
+      })
+      child.once('error', reject)
+      child.once('exit', (code, signal) => {
+        if (code === 0) resolve()
+        else reject(new Error(`technical signal ticker process failed: code=${code ?? 'null'} signal=${signal ?? 'none'}`))
+      })
+    })
+  }
+
+  const worker = async (): Promise<void> => {
+    while (true) {
+      const chunkIndex = nextChunk
+      nextChunk += 1
+      const chunk = chunks[chunkIndex]
+      if (!chunk) return
+      await runChunk(chunk)
+      completedTickers += chunk.length
+      const memory = process.memoryUsage()
+      console.log(
+        `technical_signals chunk complete: ${completedTickers}/${codes.length}, `
+        + `driver_rss_mb=${(memory.rss / 1024 / 1024).toFixed(0)}`,
+      )
+    }
+  }
+
+  console.log('technical_signals bounded-memory driver: suspending serving indexes during rebuild')
+  for (const name of OUTPUT_INDEX_NAMES) await execBatch([{ sql: `DROP INDEX IF EXISTS ${name}` }])
+  try {
+    await Promise.all(Array.from(
+      { length: Math.min(PROCESS_CONCURRENCY, chunks.length) },
+      () => worker(),
+    ))
+  } finally {
+    console.log('technical_signals bounded-memory driver: restoring serving indexes')
+    for (const sql of OUTPUT_INDEXES) await execBatch([{ sql }])
+  }
+}
+
+async function insertSignals(signals: SignalRecord[]): Promise<void> {
+  for (let i = 0; i < signals.length; i += CHUNK * WRITE_BATCH_STATEMENTS) {
+    const statements = []
+    for (let j = i; j < Math.min(signals.length, i + CHUNK * WRITE_BATCH_STATEMENTS); j += CHUNK) {
+      const chunk = signals.slice(j, j + CHUNK)
+      const args: Array<string | number | null> = []
+      const values = chunk.map((signal) => {
+        args.push(
+          signal.ticker,
+          signal.date,
+          signal.timescale,
+          signal.maPeriod,
+          signal.signalCode,
+          signal.signalStrength,
+          signal.direction,
+          signal.label,
+          signal.scoreComponent,
+          signal.valueJson ?? null,
+        )
+        return `(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch())`
+      }).join(', ')
+      statements.push({
+        sql: `
+          INSERT OR REPLACE INTO technical_signals
+            (ticker, date, timescale, ma_period, signal_code, signal_strength, direction, label, score_component, value_json, computed_at)
+          VALUES ${values}
+        `,
+        args,
+      })
+    }
+    await execBatch(statements)
   }
 }
 
 async function insertFeatures(features: FeatureRow[]): Promise<void> {
-  for (let i = 0; i < features.length; i += CHUNK) {
-    const chunk = features.slice(i, i + CHUNK)
-    const args: Array<string | number | null> = []
-    const values = chunk.map((row) => {
-      args.push(
-        row.ticker,
-        row.date,
-        row.pattern_code,
-        row.daily_a_stage,
-        row.daily_b_stage,
-        row.weekly_a_stage,
-        row.weekly_b_stage,
-        row.monthly_a_stage,
-        row.monthly_b_stage,
-        row.close,
-        row.volume,
-        row.volume_ratio_20,
-        row.range_pct,
-        row.atr20_pct,
-        row.ma5_pos_pct,
-        row.ma25_pos_pct,
-        row.ma75_pos_pct,
-        row.ma_spread_pct,
-        row.rel_strength_20,
-        row.signal_codes,
-        row.feature_json,
-      )
-      return `(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch())`
-    }).join(', ')
-
-    await execRun(
-      `
-      INSERT OR REPLACE INTO model_features
-        (ticker, date, pattern_code, daily_a_stage, daily_b_stage, weekly_a_stage, weekly_b_stage,
-         monthly_a_stage, monthly_b_stage, close, volume, volume_ratio_20, range_pct, atr20_pct,
-         ma5_pos_pct, ma25_pos_pct, ma75_pos_pct, ma_spread_pct, rel_strength_20, signal_codes, feature_json, computed_at)
-      VALUES ${values}
-      `,
-      args,
-    )
+  for (let i = 0; i < features.length; i += CHUNK * WRITE_BATCH_STATEMENTS) {
+    const statements = []
+    for (let j = i; j < Math.min(features.length, i + CHUNK * WRITE_BATCH_STATEMENTS); j += CHUNK) {
+      const chunk = features.slice(j, j + CHUNK)
+      const args: Array<string | number | null> = []
+      const values = chunk.map((row) => {
+        args.push(
+          row.ticker,
+          row.date,
+          row.pattern_code,
+          row.daily_a_stage,
+          row.daily_b_stage,
+          row.weekly_a_stage,
+          row.weekly_b_stage,
+          row.monthly_a_stage,
+          row.monthly_b_stage,
+          row.close,
+          row.volume,
+          row.volume_ratio_20,
+          row.range_pct,
+          row.atr20_pct,
+          row.ma5_pos_pct,
+          row.ma25_pos_pct,
+          row.ma75_pos_pct,
+          row.ma_spread_pct,
+          row.rel_strength_20,
+          row.signal_codes,
+          row.feature_json,
+        )
+        return `(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch())`
+      }).join(', ')
+      statements.push({
+        sql: `
+          INSERT OR REPLACE INTO model_features
+            (ticker, date, pattern_code, daily_a_stage, daily_b_stage, weekly_a_stage, weekly_b_stage,
+             monthly_a_stage, monthly_b_stage, close, volume, volume_ratio_20, range_pct, atr20_pct,
+             ma5_pos_pct, ma25_pos_pct, ma75_pos_pct, ma_spread_pct, rel_strength_20, signal_codes, feature_json, computed_at)
+          VALUES ${values}
+        `,
+        args,
+      })
+    }
+    await execBatch(statements)
   }
 }
 
 async function main() {
   const codes = await tickers()
+  if (!process.env.TICKERS && process.env.TECHNICAL_SIGNAL_PROCESS_CHILD !== '1') {
+    await runInTickerProcesses(codes)
+    console.log(`technical_signals/model_features complete: bounded-memory chunks=${Math.ceil(codes.length / TICKER_PROCESS_CHUNK)}`)
+    return
+  }
   let signalCount = 0
   let featureCount = 0
+  let loadMs = 0
+  let computeMs = 0
+  let writeMs = 0
   const started = Date.now()
   console.log(`technical_signals/model_features build: ${codes.length} tickers, recent_days=${RECENT_DAYS || 'all'}`)
 
   for (const [index, ticker] of codes.entries()) {
+    const loadStarted = Date.now()
     const [daily, weekly, lastModelDate] = await Promise.all([
       execAll<DailyRow>(
         `
@@ -393,6 +523,7 @@ async function main() {
       ),
       latestModelFeatureDate(ticker),
     ])
+    loadMs += Date.now() - loadStarted
 
     let startIndex = RECENT_DAYS > 0 ? Math.max(0, daily.length - RECENT_DAYS) : 0
     if (lastModelDate) {
@@ -406,6 +537,7 @@ async function main() {
       }
       startIndex = Math.max(1, nextIndex)
     }
+    const computeStarted = Date.now()
     const dailyByDate = computeDailySignals(ticker, daily, startIndex)
     const weeklyByDate = computeWeeklySignals(ticker, weekly)
     const dailySignals = Array.from(dailyByDate.values()).flat()
@@ -415,15 +547,22 @@ async function main() {
     const newSignals = lastModelDate
       ? allSignals.filter((signal) => signal.date > lastModelDate)
       : allSignals
+    computeMs += Date.now() - computeStarted
 
+    const writeStarted = Date.now()
     await insertSignals(newSignals)
     await insertFeatures(features)
+    writeMs += Date.now() - writeStarted
     signalCount += newSignals.length
     featureCount += features.length
 
     if ((index + 1) % PROGRESS_EVERY === 0 || index === codes.length - 1) {
       const elapsed = ((Date.now() - started) / 60000).toFixed(1)
-      console.log(`[${index + 1}/${codes.length}] ${ticker}: signals=${newSignals.length}, features=${features.length}, totalSignals=${signalCount}, elapsed=${elapsed}m`)
+      console.log(
+        `[${index + 1}/${codes.length}] ${ticker}: signals=${newSignals.length}, features=${features.length}, `
+        + `totalSignals=${signalCount}, elapsed=${elapsed}m, load=${(loadMs / 1000).toFixed(1)}s, `
+        + `compute=${(computeMs / 1000).toFixed(1)}s, write=${(writeMs / 1000).toFixed(1)}s`,
+      )
     }
   }
 

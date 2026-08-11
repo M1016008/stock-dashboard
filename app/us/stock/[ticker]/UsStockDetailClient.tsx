@@ -17,7 +17,7 @@ import { Card, CardHeader } from '@/components/ui/Card'
 import { PriceDisplay } from '@/components/ui/PriceDisplay'
 import { WatchlistButton } from '@/components/ui/WatchlistButton'
 import { StageTimeline } from '@/components/stock/StageTimeline'
-import { FutureScenarioPanel } from '@/components/stock/FutureScenarioPanel'
+import { ScenarioProjectionChart } from '@/components/stock/ScenarioProjectionChart'
 import { StockScenarioAiPanel } from '@/components/stock/StockScenarioAiPanel'
 import { StockMovePeriods } from '@/components/stock/StockMovePeriods'
 import { TradeScenarioNotebook } from '@/components/stock/TradeScenarioNotebook'
@@ -629,7 +629,7 @@ export function UsStockDetailClient({
               source: 'US EOD',
             }}
           />
-          <FutureScenarioPanel
+          <ScenarioProjectionChart
             ticker={quote.ticker}
             market="US"
             name={quote.name ?? quote.ticker}

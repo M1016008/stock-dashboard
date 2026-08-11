@@ -149,6 +149,7 @@ const RECENT_DAYS = Number(process.env.ML_PHYSICS_STATUS_RECENT_DAYS ?? 0)
 const START_DATE = process.env.ML_PHYSICS_STATUS_START_DATE?.trim() || null
 const END_DATE = process.env.ML_PHYSICS_STATUS_END_DATE?.trim() || null
 const PAGE_DATES = Math.max(1, Number(process.env.ML_PHYSICS_STATUS_PAGE_DATES ?? 20))
+const STATUS_CACHE_PAGE_DATES = Math.max(1, Number(process.env.ML_PHYSICS_STATUS_CACHE_PAGE_DATES ?? 5))
 const LIMIT_ROWS = Math.max(0, Number(process.env.ML_PHYSICS_STATUS_LIMIT_ROWS ?? 0))
 const STATUS_CACHE_INSERT_ROWS = Math.max(100, Number(process.env.ML_PHYSICS_STATUS_CACHE_INSERT_ROWS ?? 1000))
 const SKIP_STATUS_CACHE = process.env.ML_PHYSICS_STATUS_SKIP_CACHE === '1'
@@ -382,7 +383,7 @@ async function loadMissingStatusDateBatch(startDate: string | null, beforeDate: 
     ORDER BY f.date DESC
     LIMIT ?
     `,
-    [...args, PAGE_DATES],
+    [...args, STATUS_CACHE_PAGE_DATES],
   )
   return rows.map((row) => row.date)
 }

@@ -111,6 +111,24 @@ function sourceTable(market: Market): {
     const splitFactorSql = outputMarketFor(market) === 'US'
       ? 'split_factor AS splitFactor'
       : 'NULL AS splitFactor'
+    const tickersSql = outputMarketFor(market) === 'US'
+      ? `
+        SELECT u.ticker AS symbol
+        FROM ticker_universe u
+        WHERE EXISTS (
+          SELECT 1
+          FROM ohlcv_daily o
+          WHERE o.ticker = u.ticker
+            AND o.date BETWEEN ? AND ?
+        )
+        ORDER BY u.ticker
+      `
+      : `
+        SELECT DISTINCT ticker AS symbol
+        FROM ohlcv_daily
+        WHERE date BETWEEN ? AND ?
+        ORDER BY ticker
+      `
     return {
       latestSql: 'SELECT MAX(date) AS latestDate FROM ohlcv_daily',
       datesSql: (hasStart, recentDays) => `
@@ -125,12 +143,7 @@ function sourceTable(market: Market): {
         )
         ORDER BY date
       `,
-      tickersSql: `
-        SELECT DISTINCT ticker AS symbol
-        FROM ohlcv_daily
-        WHERE date BETWEEN ? AND ?
-        ORDER BY ticker
-      `,
+      tickersSql,
       rowsSql: (hasWarmup) => `
         SELECT date, close, volume, ${splitFactorSql}
         FROM ohlcv_daily
@@ -274,6 +287,9 @@ async function latestDateForMarket(market: Market): Promise<string | null> {
 }
 
 async function processingDatesForMarket(market: Market, endDate: string): Promise<string[]> {
+  if (SKIP_NORMALIZE && RECENT_DAYS === 0 && START_DATE && DATE_OFFSET === 0 && DATE_LIMIT === 0) {
+    return START_DATE === endDate ? [endDate] : [START_DATE, endDate]
+  }
   const source = sourceTable(market)
   const hasStart = Boolean(START_DATE)
   const sql = source.datesSql(hasStart, RECENT_DAYS)

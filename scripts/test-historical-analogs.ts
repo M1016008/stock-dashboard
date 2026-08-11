@@ -38,6 +38,39 @@ import {
   stageCodeAt,
 } from '@/lib/ml/ma-sequence'
 import { CHART_INTERVAL_OPTIONS } from '@/lib/timeframes'
+import {
+  analogDateToEpochDay,
+  deduplicateAnalogPriceRows,
+  decodeAnalogPriceChunk,
+  encodeAnalogPriceChunk,
+} from '@/lib/ml/analog-price-chunks'
+
+const encodedPriceChunk = encodeAnalogPriceChunk([
+  { date: '2025-01-06', close: 1234.567890123 },
+  { date: '2025-01-07', close: 1240.25 },
+])
+assert.equal(encodedPriceChunk.byteLength, 24)
+assert.deepEqual(
+  decodeAnalogPriceChunk(
+    encodedPriceChunk,
+    analogDateToEpochDay('2025-01-07'),
+    analogDateToEpochDay('2025-01-07'),
+  ),
+  [{ date: '2025-01-07', close: 1240.25 }],
+)
+assert.deepEqual(
+  deduplicateAnalogPriceRows([
+    { ticker: 'AAA', date: '2025-01-07', close: 10 },
+    { ticker: 'AAA', date: '2025-01-06', close: 9 },
+    { ticker: 'AAA', date: '2025-01-07', close: 10 },
+    { ticker: 'BBB', date: '2025-01-06', close: 20 },
+  ]),
+  [
+    { ticker: 'AAA', date: '2025-01-06', close: 9 },
+    { ticker: 'AAA', date: '2025-01-07', close: 10 },
+    { ticker: 'BBB', date: '2025-01-06', close: 20 },
+  ],
+)
 
 const neighbors = stageNeighborCodes('524141')
 assert.equal(neighbors.length, 31)

@@ -35,6 +35,11 @@ const GROUP_LIMIT = envInt('SIGNAL_STATS_LIMIT_GROUPS', 0, 0)
 const RECENT_DAYS = envInt('BACKTEST_RECENT_DAYS', 0, 0)
 const DATE_CHUNK = envInt('SIGNAL_STATS_DATE_CHUNK', BY_PATTERN ? 5 : 10, 1)
 const INSERT_CHUNK = 200
+const DIRECT_AGGREGATE = process.env.SIGNAL_STATS_DIRECT_AGGREGATE !== '0'
+const DIRECT_HORIZONS = (process.env.SIGNAL_STATS_HORIZONS ?? '5,10,20,40,60,90,200')
+  .split(',')
+  .map((value) => Number(value.trim()))
+  .filter((value) => Number.isInteger(value) && value > 0)
 
 type TargetDateRow = {
   date: string
@@ -247,8 +252,114 @@ async function insertRows(rows: SignalStatRow[]): Promise<void> {
   }
 }
 
+async function aggregateDirectBySignal(): Promise<void> {
+  const signalCodes = await execAll<{ signal_code: string }>(
+    `SELECT signal_code FROM technical_signals GROUP BY signal_code ORDER BY signal_code`,
+  )
+  const horizonPlaceholders = DIRECT_HORIZONS.map(() => '?').join(', ')
+  await execRun(`DELETE FROM signal_stats`)
+
+  for (const [index, { signal_code: signalCode }] of signalCodes.entries()) {
+    const started = Date.now()
+    await execRun(
+      `
+      INSERT INTO signal_stats
+        (signal_code, pattern_code, horizon_days, count, hit_10_rate, hit_20_rate, hit_40_rate,
+         max_return_p25, max_return_p50, max_return_p75, return_p50, min_return_p50,
+         days_to_max_p50, computed_at)
+      SELECT
+        ts.signal_code,
+        'ALL',
+        fe.horizon_days,
+        COUNT(*) AS count,
+        AVG(fe.hit_10),
+        AVG(fe.hit_20),
+        AVG(fe.hit_40),
+        AVG(COALESCE(fe.max_return_pct, 0)),
+        AVG(COALESCE(fe.max_return_pct, 0)),
+        AVG(COALESCE(fe.max_return_pct, 0)),
+        AVG(COALESCE(fe.return_pct, 0)),
+        AVG(COALESCE(fe.min_return_pct, 0)),
+        AVG(fe.days_to_max),
+        unixepoch()
+      FROM technical_signals ts INDEXED BY tech_signal_code_idx
+      INNER JOIN forward_extrema fe
+        ON fe.ticker = ts.ticker AND fe.date = ts.date
+      WHERE ts.signal_code = ?
+        AND fe.horizon_days IN (${horizonPlaceholders})
+      GROUP BY fe.horizon_days
+      HAVING COUNT(*) >= ?
+      `,
+      [signalCode, ...DIRECT_HORIZONS, MIN_N],
+    )
+    const count = await execAll<{ count: number }>(
+      `SELECT COUNT(*) AS count FROM signal_stats WHERE signal_code = ?`,
+      [signalCode],
+    )
+    console.log(
+      `signal_stats direct signal=${index + 1}/${signalCodes.length} ${signalCode}: `
+      + `rows=${Number(count[0]?.count ?? 0)}, `
+      + `elapsed=${((Date.now() - started) / 60000).toFixed(1)}m`,
+    )
+  }
+}
+
+async function aggregateDirectByHorizon(): Promise<void> {
+  await execRun(`DELETE FROM signal_stats`)
+
+  for (const horizon of DIRECT_HORIZONS) {
+    const started = Date.now()
+    await execRun(
+      `
+      INSERT INTO signal_stats
+        (signal_code, pattern_code, horizon_days, count, hit_10_rate, hit_20_rate, hit_40_rate,
+         max_return_p25, max_return_p50, max_return_p75, return_p50, min_return_p50,
+         days_to_max_p50, computed_at)
+      SELECT
+        ts.signal_code,
+        'ALL',
+        fe.horizon_days,
+        COUNT(*) AS count,
+        AVG(fe.hit_10),
+        AVG(fe.hit_20),
+        AVG(fe.hit_40),
+        AVG(COALESCE(fe.max_return_pct, 0)),
+        AVG(COALESCE(fe.max_return_pct, 0)),
+        AVG(COALESCE(fe.max_return_pct, 0)),
+        AVG(COALESCE(fe.return_pct, 0)),
+        AVG(COALESCE(fe.min_return_pct, 0)),
+        AVG(fe.days_to_max),
+        unixepoch()
+      FROM forward_extrema fe INDEXED BY fext_horizon_date_idx
+      INNER JOIN technical_signals ts
+        ON ts.ticker = fe.ticker AND ts.date = fe.date
+      WHERE fe.horizon_days = ?
+      GROUP BY ts.signal_code, fe.horizon_days
+      HAVING COUNT(*) >= ?
+      `,
+      [horizon, MIN_N],
+    )
+    const count = await execAll<{ count: number }>(
+      `SELECT COUNT(*) AS count FROM signal_stats WHERE horizon_days = ?`,
+      [horizon],
+    )
+    console.log(
+      `signal_stats direct horizon=${horizon}: rows=${Number(count[0]?.count ?? 0)}, `
+      + `elapsed=${((Date.now() - started) / 60000).toFixed(1)}m`,
+    )
+  }
+}
+
 async function main() {
   console.log(`signal_stats build: min_n=${MIN_N}, group_limit=${GROUP_LIMIT || 'all'}, recent_days=${RECENT_DAYS || 'all'}, date_chunk=${DATE_CHUNK}, by_pattern=${BY_PATTERN}`)
+  if (DIRECT_AGGREGATE && !BY_PATTERN && GROUP_LIMIT === 0 && RECENT_DAYS === 0) {
+    const axis = process.env.SIGNAL_STATS_DIRECT_AXIS === 'signal' ? 'signal' : 'horizon'
+    console.log(`signal_stats: using equivalent ${axis}-indexed direct aggregation`)
+    if (axis === 'signal') await aggregateDirectBySignal()
+    else await aggregateDirectByHorizon()
+    console.log(`signal_stats complete: direct ${axis} aggregate`)
+    return
+  }
   await execRun(`DELETE FROM signal_stats`)
 
   const dates = await loadTargetDates()

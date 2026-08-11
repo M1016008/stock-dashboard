@@ -57,15 +57,15 @@ async function countMissingPhysicsFeatures(priceDate: string, minHistoryDays: nu
   const row = await execGet<CountRow>(
     `
     SELECT COUNT(*) AS count
-    FROM ohlcv_daily o
-    WHERE o.date = ?
-      AND (SELECT COUNT(*) FROM ohlcv_daily h WHERE h.ticker = o.ticker) >= ?
+    FROM daily_snapshots d
+    WHERE d.date = ?
+      AND (SELECT COUNT(*) FROM ohlcv_daily h WHERE h.ticker = d.ticker) >= ?
       AND NOT EXISTS (
         SELECT 1
         FROM ml_feature_vectors_v2 f
         WHERE f.feature_set = ?
-          AND f.ticker = o.ticker
-          AND f.date = o.date
+          AND f.ticker = d.ticker
+          AND f.date = d.date
       )
     `,
     [priceDate, minHistoryDays, ML_PHYSICS_FEATURE_SET],
@@ -177,6 +177,10 @@ async function main(): Promise<void> {
   if (!priceDate) throw new Error('ohlcv_daily has no price date')
   console.log(`fast ML serving refresh start: priceDate=${priceDate}`)
 
+  await runRequired('batch:ml-pipeline-state', {
+    ML_PIPELINE_ACTION: 'verify-or-adopt',
+    ML_PIPELINE_MARKET: 'JP',
+  })
   await runRequired('batch:cleanup-stale-runs', {
     STALE_BATCH_TTL_HOURS: process.env.ML_STALE_BATCH_TTL_HOURS ?? '1',
   })
@@ -203,6 +207,10 @@ async function main(): Promise<void> {
   })
   await runRequired('ml:freshness-check')
   await runRequired('batch:dashboard-cache')
+  await runRequired('batch:ml-pipeline-state', {
+    ML_PIPELINE_ACTION: 'mark-delta',
+    ML_PIPELINE_MARKET: 'JP',
+  })
 
   console.log(`fast ML serving refresh complete: priceDate=${priceDate}`)
 }

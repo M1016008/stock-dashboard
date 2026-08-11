@@ -8,6 +8,7 @@ import { desc, eq } from 'drizzle-orm'
 import type { StockQuote } from '@/types/stock'
 import { getManualOhlcvHiLo, loadManualLatestOhlcvRows } from '@/lib/manual-ohlcv'
 import { buildQuoteTechnicalSummary } from '@/lib/quote-technicals'
+import { decodePathSegment } from '@/lib/url-path'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -28,7 +29,7 @@ export async function GET(
 ) {
   try {
     const { ticker: rawTicker } = await params
-    const ticker = decodeURIComponent(rawTicker).replace(/\.T$/i, '')
+    const ticker = decodePathSegment(rawTicker).replace(/\.T$/i, '')
 
     // 前日比・30日平均出来高・MACDの計算に必要な履歴
     let priceSource: 'jquants' | 'manual_ohlcv' = 'jquants'
@@ -111,7 +112,7 @@ export async function GET(
       priceDate: latest.date,
       previousPriceDate: prev?.date,
       priceQualityWarning: priceSource === 'manual_ohlcv'
-        ? 'J-Quants未収録のため手動補完CSVを表示'
+        ? 'J-Quants未収録の補完価格データを表示'
         : undefined,
       marketCap,
       fiftyTwoWeekHigh,

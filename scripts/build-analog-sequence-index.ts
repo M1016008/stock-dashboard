@@ -16,8 +16,10 @@ import {
   buildMaSequenceEmbedding,
   prepareMaSequence,
   stageCodeAt,
+  type MaSequenceEmbedding,
   type MaSequencePriceRow,
 } from '@/lib/ml/ma-sequence'
+import { encodeAnalogPriceChunk } from '@/lib/ml/analog-price-chunks'
 
 type Market = 'JP' | 'US'
 type Mode = 'full' | 'incremental'
@@ -25,6 +27,17 @@ type Mode = 'full' | 'incremental'
 type TickerRow = { ticker: string }
 type SourcePriceRow = { date: string; close: number }
 type ExistingRow = { ticker: string; latest_date: string | null }
+type PriceComparisonRow = { prior_rows: number; source_rows: number; changed: number }
+type ExistingIndexValue = {
+  date: string
+  stage_code: string | null
+  embedding: ArrayBuffer | Uint8Array
+  coverage_mask: number
+  band0: number
+  band1: number
+  band2: number
+  band3: number
+}
 
 const SQLITE_BUSY_TIMEOUT_MS = Math.max(10_000, Number(process.env.SQLITE_BUSY_TIMEOUT_MS ?? 60_000))
 const INSERT_BATCH_SIZE = Math.min(1_000, Math.max(50, Number(process.env.ANALOG_INDEX_INSERT_BATCH ?? 300)))
@@ -80,6 +93,10 @@ function acquireProcessLock(target: string): boolean {
 }
 
 function lowerProcessPriority(): void {
+  if (process.env.ANALOG_HIGH_PRIORITY?.trim() === '1') {
+    console.log('[analog-sequence-index] high-priority mode: standard CPU and I/O priority')
+    return
+  }
   try {
     os.setPriority(process.pid, 15)
   } catch (error) {
@@ -204,7 +221,154 @@ async function ensureSchema(client: Client): Promise<void> {
         ) WITHOUT ROWID
       `,
     },
+    {
+      sql: `
+        CREATE TABLE IF NOT EXISTS analog_sequence_prices (
+          ticker TEXT NOT NULL,
+          date TEXT NOT NULL,
+          close REAL NOT NULL,
+          PRIMARY KEY (ticker, date)
+        ) WITHOUT ROWID
+      `,
+    },
+    {
+      sql: `
+        CREATE TABLE IF NOT EXISTS analog_sequence_price_chunks (
+          ticker TEXT NOT NULL,
+          chunk_year INTEGER NOT NULL,
+          points BLOB NOT NULL,
+          row_count INTEGER NOT NULL,
+          from_date TEXT NOT NULL,
+          to_date TEXT NOT NULL,
+          PRIMARY KEY (ticker, chunk_year)
+        ) WITHOUT ROWID
+      `,
+    },
   ])
+}
+
+function sqliteString(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`
+}
+
+async function syncPriceMirror(args: {
+  targetClient: Client
+  source: string
+  sinceDate: string | null
+  changedOnly?: boolean
+}): Promise<{ rows: number; coverageFrom: string | null; coverageTo: string | null }> {
+  const alias = 'analog_price_source'
+  await args.targetClient.execute(`ATTACH DATABASE ${sqliteString(args.source)} AS ${alias}`)
+  try {
+    await args.targetClient.execute(`
+      INSERT OR REPLACE INTO analog_sequence_prices(ticker, date, close)
+      SELECT source.ticker, source.date, source.close
+      FROM ${alias}.ohlcv_daily source
+      WHERE source.close IS NOT NULL
+        AND source.close > 0
+        ${args.sinceDate ? `AND source.date > ${sqliteString(args.sinceDate)}` : ''}
+        ${args.changedOnly ? `
+          AND NOT EXISTS (
+            SELECT 1
+            FROM analog_sequence_prices current
+            WHERE current.ticker = source.ticker
+              AND current.date = source.date
+              AND ABS(current.close - source.close) <= 1e-9
+          )
+        ` : ''}
+    `)
+  } finally {
+    await args.targetClient.execute(`DETACH DATABASE ${alias}`)
+  }
+  const [coverage] = await all<{
+    rows: number
+    coverage_from: string | null
+    coverage_to: string | null
+  }>(
+    args.targetClient,
+    `SELECT COUNT(*) AS rows, MIN(date) AS coverage_from, MAX(date) AS coverage_to
+     FROM analog_sequence_prices`,
+  )
+  return {
+    rows: Number(coverage?.rows ?? 0),
+    coverageFrom: coverage?.coverage_from ?? null,
+    coverageTo: coverage?.coverage_to ?? null,
+  }
+}
+
+async function syncPriceChunks(args: {
+  targetClient: Client
+  sourceDate: string
+  priorSourceDate: string | null
+  full: boolean
+  tickers?: string[]
+  fullTickers?: ReadonlySet<string>
+}): Promise<{ chunks: number; rows: number }> {
+  const fromDate = args.full || !args.priorSourceDate
+    ? null
+    : `${args.priorSourceDate.slice(0, 4)}-01-01`
+  const tickers = args.tickers
+    ? args.tickers.map((ticker) => ({ ticker }))
+    : await all<TickerRow>(
+        args.targetClient,
+        `SELECT DISTINCT ticker FROM analog_sequence_prices
+         ${fromDate ? 'WHERE date >= ?' : ''}
+         ORDER BY ticker`,
+        fromDate ? [fromDate] : [],
+      )
+  const pending: PendingInsert[] = []
+  let writtenChunks = 0
+  for (const [tickerIndex, tickerRow] of tickers.entries()) {
+    const ticker = String(tickerRow.ticker)
+    const tickerFromDate = args.full || args.fullTickers?.has(ticker) ? null : fromDate
+    const rows = await all<SourcePriceRow>(
+      args.targetClient,
+      `SELECT date, close FROM analog_sequence_prices
+       WHERE ticker = ? ${tickerFromDate ? 'AND date >= ?' : ''}
+       ORDER BY date`,
+      tickerFromDate ? [ticker, tickerFromDate] : [ticker],
+    )
+    const byYear = new Map<number, SourcePriceRow[]>()
+    for (const row of rows) {
+      const year = Number(String(row.date).slice(0, 4))
+      if (!Number.isInteger(year)) continue
+      const yearRows = byYear.get(year) ?? []
+      yearRows.push({ date: String(row.date), close: Number(row.close) })
+      byYear.set(year, yearRows)
+    }
+    for (const [year, yearRows] of byYear) {
+      pending.push({
+        kind: 'price_chunk',
+        sql: `
+          INSERT OR REPLACE INTO analog_sequence_price_chunks(
+            ticker, chunk_year, points, row_count, from_date, to_date
+          ) VALUES (?, ?, ?, ?, ?, ?)
+        `,
+        args: [
+          ticker,
+          year,
+          encodeAnalogPriceChunk(yearRows).buffer as ArrayBuffer,
+          yearRows.length,
+          yearRows[0].date,
+          yearRows.at(-1)!.date,
+        ],
+      })
+    }
+    if (pending.length >= INSERT_BATCH_SIZE || tickerIndex === tickers.length - 1) {
+      writtenChunks += await flush(args.targetClient, pending)
+    }
+    if (tickerIndex > 0 && tickerIndex % 500 === 0) {
+      console.log(`[${args.sourceDate}] compacted ${tickerIndex}/${tickers.length} tickers`)
+    }
+  }
+  const [coverage] = await all<{ chunks: number; rows: number }>(
+    args.targetClient,
+    'SELECT COUNT(*) AS chunks, COALESCE(SUM(row_count), 0) AS rows FROM analog_sequence_price_chunks',
+  )
+  return {
+    chunks: Number(coverage?.chunks ?? writtenChunks),
+    rows: Number(coverage?.rows ?? 0),
+  }
 }
 
 async function ensureIndexes(client: Client, analyze: boolean): Promise<void> {
@@ -230,6 +394,7 @@ function normalizedRows(rows: SourcePriceRow[]): MaSequencePriceRow[] {
 }
 
 type PendingInsert = {
+  kind?: 'index' | 'price_chunk'
   sql: string
   args: InValue[]
 }
@@ -241,6 +406,7 @@ function createInsert(
   embedding: ReturnType<typeof buildMaSequenceEmbedding> & {},
 ): PendingInsert {
   return {
+    kind: 'index',
     sql: `
       INSERT INTO analog_sequence_index(
         ticker, date, stage_code, embedding, coverage_mask,
@@ -267,10 +433,76 @@ function createInsert(
   }
 }
 
+function sameBytes(left: ArrayBuffer | Uint8Array, right: Uint8Array): boolean {
+  const leftBytes = left instanceof Uint8Array ? left : new Uint8Array(left)
+  if (leftBytes.length !== right.length) return false
+  for (let index = 0; index < right.length; index += 1) {
+    if (leftBytes[index] !== right[index]) return false
+  }
+  return true
+}
+
+function sameIndexValue(
+  existing: ExistingIndexValue | undefined,
+  stageCode: string | null,
+  embedding: MaSequenceEmbedding,
+): boolean {
+  if (!existing || existing.stage_code !== stageCode) return false
+  if (Number(existing.coverage_mask) !== embedding.coverageMask) return false
+  if (
+    Number(existing.band0) !== embedding.bands[0]
+    || Number(existing.band1) !== embedding.bands[1]
+    || Number(existing.band2) !== embedding.bands[2]
+    || Number(existing.band3) !== embedding.bands[3]
+  ) return false
+  return sameBytes(existing.embedding, embedding.quantized)
+}
+
 async function flush(client: Client, pending: PendingInsert[]): Promise<number> {
   if (pending.length === 0) return 0
-  await client.batch(pending)
   const count = pending.length
+  if (pending.every((statement) => statement.kind === 'index')) {
+    const rowChunk = 300
+    const statements = []
+    for (let offset = 0; offset < pending.length; offset += rowChunk) {
+      const rows = pending.slice(offset, offset + rowChunk)
+      statements.push({
+        sql: `
+          INSERT INTO analog_sequence_index(
+            ticker, date, stage_code, embedding, coverage_mask,
+            band0, band1, band2, band3
+          ) VALUES ${rows.map(() => '(?, ?, ?, ?, ?, ?, ?, ?, ?)').join(', ')}
+          ON CONFLICT(ticker, date) DO UPDATE SET
+            stage_code = excluded.stage_code,
+            embedding = excluded.embedding,
+            coverage_mask = excluded.coverage_mask,
+            band0 = excluded.band0,
+            band1 = excluded.band1,
+            band2 = excluded.band2,
+            band3 = excluded.band3
+        `,
+        args: rows.flatMap((row) => row.args),
+      })
+    }
+    await client.batch(statements)
+  } else if (pending.every((statement) => statement.kind === 'price_chunk')) {
+    const rowChunk = 100
+    const statements = []
+    for (let offset = 0; offset < pending.length; offset += rowChunk) {
+      const rows = pending.slice(offset, offset + rowChunk)
+      statements.push({
+        sql: `
+          INSERT OR REPLACE INTO analog_sequence_price_chunks(
+            ticker, chunk_year, points, row_count, from_date, to_date
+          ) VALUES ${rows.map(() => '(?, ?, ?, ?, ?, ?)').join(', ')}
+        `,
+        args: rows.flatMap((row) => row.args),
+      })
+    }
+    await client.batch(statements)
+  } else {
+    await client.batch(pending)
+  }
   pending.length = 0
   return count
 }
@@ -289,6 +521,9 @@ async function main(): Promise<void> {
   const targetClient = createClient({ url: `file:${target}` })
   await sourceClient.execute(`PRAGMA busy_timeout=${SQLITE_BUSY_TIMEOUT_MS}`)
   await sourceClient.execute('PRAGMA query_only=ON')
+  await sourceClient.execute('PRAGMA temp_store=FILE')
+  await sourceClient.execute('PRAGMA cache_size=-65536')
+  await sourceClient.execute('PRAGMA mmap_size=0')
   await targetClient.execute(`PRAGMA busy_timeout=${SQLITE_BUSY_TIMEOUT_MS}`)
   await ensureSchema(targetClient)
 
@@ -301,11 +536,32 @@ async function main(): Promise<void> {
   const existingVersion = Number(await getValue(targetClient, 'version') ?? 0)
   const existingSourceDate = await getValue(targetClient, 'source_date')
   const existingCompleted = await getValue(targetClient, 'completed')
+  const existingPriceSourceDate = await getValue(targetClient, 'price_source_date')
+  const existingPriceCompleted = await getValue(targetClient, 'price_completed')
+  const existingPriceChunksSourceDate = await getValue(targetClient, 'price_chunks_source_date')
+  const existingPriceChunksCompleted = await getValue(targetClient, 'price_chunks_completed')
+  const reuseIdenticalFullHistory = mode === 'full'
+    && existingVersion === MA_SEQUENCE_VERSION
+    && existingPriceCompleted === '1'
+    && Boolean(existingPriceSourceDate)
+    && (
+      existingCompleted === '1'
+      || (existingCompleted === '0' && existingSourceDate === sourceDate)
+    )
+  if (reuseIdenticalFullHistory) {
+    await sourceClient.execute(
+      `ATTACH DATABASE ${sqliteString(target)} AS prior_analog`,
+    )
+  }
   if (
     mode === 'incremental'
     && existingVersion === MA_SEQUENCE_VERSION
     && existingSourceDate === sourceDate
     && existingCompleted === '1'
+    && existingPriceSourceDate === sourceDate
+    && existingPriceCompleted === '1'
+    && existingPriceChunksSourceDate === sourceDate
+    && existingPriceChunksCompleted === '1'
   ) {
     await ensureIndexes(targetClient, false)
     console.log(`${market} analog sequence index is already fresh: ${sourceDate}`)
@@ -313,17 +569,77 @@ async function main(): Promise<void> {
     await targetClient.close()
     return
   }
+  if (
+    mode === 'incremental'
+    && existingVersion === MA_SEQUENCE_VERSION
+    && existingSourceDate === sourceDate
+    && existingCompleted === '1'
+  ) {
+    await setMeta(targetClient, {
+      price_completed: '0',
+      price_chunks_completed: '0',
+      price_sync_started_at: new Date().toISOString(),
+    })
+    const priceMirror = await syncPriceMirror({
+      targetClient,
+      source,
+      sinceDate: existingPriceCompleted === '1' ? existingPriceSourceDate : null,
+    })
+    const priceChunks = await syncPriceChunks({
+      targetClient,
+      sourceDate,
+      priorSourceDate: existingPriceChunksSourceDate,
+      full: existingPriceChunksCompleted !== '1',
+    })
+    await setMeta(targetClient, {
+      price_source_date: sourceDate,
+      price_completed: '1',
+      price_row_count: String(priceMirror.rows),
+      price_coverage_from: priceMirror.coverageFrom ?? '',
+      price_coverage_to: priceMirror.coverageTo ?? '',
+      price_chunks_source_date: sourceDate,
+      price_chunks_completed: '1',
+      price_chunk_count: String(priceChunks.chunks),
+      price_chunk_row_count: String(priceChunks.rows),
+      updated_at: new Date().toISOString(),
+    })
+    await targetClient.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+    console.log(JSON.stringify({
+      market,
+      mode,
+      sourceDate,
+      indexAlreadyFresh: true,
+      priceRows: priceMirror.rows,
+      priceCoverageFrom: priceMirror.coverageFrom,
+      priceCoverageTo: priceMirror.coverageTo,
+      priceChunks: priceChunks.chunks,
+      priceChunkRows: priceChunks.rows,
+    }, null, 2))
+    await sourceClient.close()
+    await targetClient.close()
+    return
+  }
 
-  const existingRows = await all<ExistingRow>(
-    targetClient,
-    'SELECT ticker, MAX(date) AS latest_date FROM analog_sequence_index GROUP BY ticker',
-  )
+  const existingRows = mode === 'incremental'
+    ? await all<ExistingRow>(
+        targetClient,
+        'SELECT ticker, MAX(date) AS latest_date FROM analog_sequence_index GROUP BY ticker',
+      )
+    : []
   const latestByTicker = new Map(existingRows.map((row) => [row.ticker, row.latest_date]))
   const tickerRows = await all<TickerRow>(
     sourceClient,
-    'SELECT DISTINCT ticker FROM ohlcv_daily ORDER BY ticker',
+    market === 'US'
+      ? `
+        SELECT ticker
+        FROM us_analytics_copy_state
+        WHERE status = 'done' AND ohlcv_rows > 0
+        ORDER BY ticker
+      `
+      : 'SELECT DISTINCT ticker FROM ohlcv_daily ORDER BY ticker',
   )
   const resumeTicker = mode === 'full'
+    && !reuseIdenticalFullHistory
     && existingCompleted !== '1'
     && existingVersion === MA_SEQUENCE_VERSION
     && existingSourceDate === sourceDate
@@ -347,13 +663,78 @@ async function main(): Promise<void> {
 
   let inserted = 0
   let processed = 0
+  let reusedTickers = 0
+  let rebuiltTickers = 0
+  let reusedIndexRows = 0
+  const changedPriceTickers = new Set<string>()
   const pending: PendingInsert[] = []
   const startedAt = Date.now()
   for (const [tickerIndex, tickerRow] of tickerRows.entries()) {
     const ticker = String(tickerRow.ticker)
     if (resumeTicker && ticker <= resumeTicker) continue
-    const latestIndexed = latestByTicker.get(ticker)
-    const incrementalExisting = mode === 'incremental' && Boolean(latestIndexed)
+    let latestIndexed = latestByTicker.get(ticker)
+    let reuseExisting = false
+    let pricesChanged = true
+    if (reuseIdenticalFullHistory && existingPriceSourceDate) {
+      const [comparison] = await all<PriceComparisonRow>(
+        sourceClient,
+        `
+          SELECT
+            (SELECT COUNT(*)
+             FROM prior_analog.analog_sequence_prices
+             WHERE ticker = ? AND date <= ?) AS prior_rows,
+            (SELECT COUNT(*)
+             FROM ohlcv_daily
+             WHERE ticker = ? AND date <= ?) AS source_rows,
+            EXISTS(
+              SELECT 1
+              FROM ohlcv_daily current
+              LEFT JOIN prior_analog.analog_sequence_prices prior
+                ON prior.ticker = current.ticker AND prior.date = current.date
+              WHERE current.ticker = ?
+                AND current.date <= ?
+                AND (prior.date IS NULL OR ABS(prior.close - current.close) > 1e-9)
+              LIMIT 1
+            ) AS changed
+        `,
+        [
+          ticker,
+          existingPriceSourceDate,
+          ticker,
+          existingPriceSourceDate,
+          ticker,
+          existingPriceSourceDate,
+        ],
+      )
+      if (
+        Number(comparison?.prior_rows ?? -1) === Number(comparison?.source_rows ?? -2)
+        && Number(comparison?.changed ?? 1) === 0
+      ) {
+        pricesChanged = false
+        const [latest] = await all<{ latest_date: string | null }>(
+          targetClient,
+          'SELECT MAX(date) AS latest_date FROM analog_sequence_index WHERE ticker = ?',
+          [ticker],
+        )
+        latestIndexed = latest?.latest_date ?? undefined
+        reuseExisting = Boolean(latestIndexed)
+      }
+    }
+    if (mode === 'full' && pricesChanged) changedPriceTickers.add(ticker)
+    const incrementalExisting = (mode === 'incremental' || reuseExisting) && Boolean(latestIndexed)
+    const priorIndexByDate = mode === 'full' && pricesChanged && existingVersion === MA_SEQUENCE_VERSION
+      ? new Map(
+          (await all<ExistingIndexValue>(
+            targetClient,
+            `
+              SELECT date, stage_code, embedding, coverage_mask, band0, band1, band2, band3
+              FROM analog_sequence_index
+              WHERE ticker = ?
+            `,
+            [ticker],
+          )).map((row) => [String(row.date), row]),
+        )
+      : null
     const rows = normalizedRows(await all<SourcePriceRow>(
       sourceClient,
       incrementalExisting
@@ -396,10 +777,17 @@ async function main(): Promise<void> {
         if (mode === 'incremental' && latestIndexed && date <= latestIndexed) continue
         const embedding = buildMaSequenceEmbedding(prepared, index)
         if (!embedding) continue
-        pending.push(createInsert(ticker, date, stageCodeAt(prepared, index), embedding))
+        const stageCode = stageCodeAt(prepared, index)
+        if (sameIndexValue(priorIndexByDate?.get(date), stageCode, embedding)) {
+          reusedIndexRows += 1
+          continue
+        }
+        pending.push(createInsert(ticker, date, stageCode, embedding))
         if (pending.length >= INSERT_BATCH_SIZE) inserted += await flush(targetClient, pending)
       }
     }
+    if (reuseExisting) reusedTickers += 1
+    else rebuiltTickers += 1
     processed += 1
     if (tickerIndex % 25 === 0 || tickerIndex === tickerRows.length - 1) {
       inserted += await flush(targetClient, pending)
@@ -418,6 +806,25 @@ async function main(): Promise<void> {
     }
   }
   inserted += await flush(targetClient, pending)
+  if (reuseIdenticalFullHistory) {
+    await sourceClient.execute('DETACH DATABASE prior_analog')
+  }
+  const priceMirror = await syncPriceMirror({
+    targetClient,
+    source,
+    sinceDate: mode === 'full'
+      ? null
+      : existingPriceCompleted === '1' ? existingPriceSourceDate : null,
+    changedOnly: mode === 'full' && existingPriceCompleted === '1',
+  })
+  const priceChunks = await syncPriceChunks({
+    targetClient,
+    sourceDate,
+    priorSourceDate: existingPriceChunksSourceDate,
+    full: existingPriceChunksCompleted !== '1',
+    tickers: tickerRows.map((row) => String(row.ticker)),
+    fullTickers: mode === 'full' ? changedPriceTickers : undefined,
+  })
   await ensureIndexes(targetClient, mode === 'full')
   const [coverage] = await all<{
     coverage_from: string | null
@@ -437,6 +844,15 @@ async function main(): Promise<void> {
     coverage_from: coverage?.coverage_from ?? '',
     coverage_to: coverage?.coverage_to ?? '',
     row_count: String(Number(coverage?.row_count ?? 0)),
+    price_source_date: sourceDate,
+    price_completed: '1',
+    price_row_count: String(priceMirror.rows),
+    price_coverage_from: priceMirror.coverageFrom ?? '',
+    price_coverage_to: priceMirror.coverageTo ?? '',
+    price_chunks_source_date: sourceDate,
+    price_chunks_completed: '1',
+    price_chunk_count: String(priceChunks.chunks),
+    price_chunk_row_count: String(priceChunks.rows),
     completed: '1',
     completed_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
@@ -449,8 +865,17 @@ async function main(): Promise<void> {
     target,
     sourceDate,
     processedTickers: processed,
+    reusedTickers,
+    rebuiltTickers,
+    reusedIndexRows,
+    changedPriceTickers: changedPriceTickers.size,
     writtenRows: inserted,
     indexedRows: Number(coverage?.row_count ?? 0),
+    priceRows: priceMirror.rows,
+    priceCoverageFrom: priceMirror.coverageFrom,
+    priceCoverageTo: priceMirror.coverageTo,
+    priceChunks: priceChunks.chunks,
+    priceChunkRows: priceChunks.rows,
     coverageFrom: coverage?.coverage_from ?? null,
     coverageTo: coverage?.coverage_to ?? null,
     elapsedSeconds: Math.round((Date.now() - startedAt) / 1_000),

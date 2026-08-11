@@ -11,6 +11,7 @@ import { StageDots } from '@/components/ui/StageDots'
 import { MarketDateCalendar } from '@/components/ui/MarketDateCalendar'
 import { SavedViewManager } from '@/components/ui/SavedViewManager'
 import { getCompareSymbols, toggleComparedSymbol } from '@/lib/client/stock-workspace'
+import { replaceCurrentUrlFilters } from '@/lib/client/url-filter-state'
 import { getUniverseFilterMeta, parseUniverseFilter, UNIVERSE_FILTER_PARAM } from '@/lib/market-universe'
 import { formatShortTermStrength, SHORT_TERM_CHECK_LABELS, type ShortTermCheckLabel } from '@/lib/short-term-check'
 import type { PhysicsStatus } from '@/lib/ml/physics-analysis'
@@ -481,6 +482,64 @@ export default function ScreenerPage() {
 
   const hasAnyStage = Object.values(stages).some((v) => v && v.length > 0)
 
+  useEffect(() => {
+    const stageParams = Object.fromEntries(
+      AXES.map((axis) => [axis.key, stages[axis.key]?.slice().sort((a, b) => a - b).join(',') ?? null]),
+    )
+    replaceCurrentUrlFilters({
+      ...stageParams,
+      date: selectedDate,
+      marketSegment: selectedMarketSegment,
+      sectorLarge: selectedSectorLarge,
+      sector33: selectedSector33,
+      majorCategory: selectedMajorCategory,
+      subIndustry: selectedSubIndustry,
+      marginType: selectedMarginType,
+      volumeMin: selectedVolumeMin,
+      earningsWindowWeeks: selectedEarningsWindowWeeks,
+      earningsTimeBucket: selectedEarningsTimeBucket,
+      ma200Direction: selectedMa200Direction,
+      shortTermCheck: selectedShortTermCheck,
+      physicalStatus: selectedPhysicalStatus,
+      mcapBins: Array.from(selectedMcapBins).sort((a, b) => a - b).join(','),
+      pmsMin: pmsMin.trim(),
+      pfsMin: pfsMin.trim(),
+      pesMin: pesMin.trim(),
+      accelerationPositive,
+      forcePositive,
+      stage23Candidate,
+      pmsTrend,
+      physicalStatusHorizon: selectedPhysicalStatusHorizon === 20 ? null : selectedPhysicalStatusHorizon,
+      sort: sort?.key,
+      dir: sort?.dir,
+    })
+  }, [
+    stages,
+    selectedDate,
+    selectedMarketSegment,
+    selectedSectorLarge,
+    selectedSector33,
+    selectedMajorCategory,
+    selectedSubIndustry,
+    selectedMarginType,
+    selectedVolumeMin,
+    selectedEarningsWindowWeeks,
+    selectedEarningsTimeBucket,
+    selectedMa200Direction,
+    selectedShortTermCheck,
+    selectedPhysicalStatus,
+    selectedMcapBins,
+    pmsMin,
+    pfsMin,
+    pesMin,
+    accelerationPositive,
+    forcePositive,
+    stage23Candidate,
+    pmsTrend,
+    selectedPhysicalStatusHorizon,
+    sort,
+  ])
+
   // J-Quants 由来のスナップショット日付リストの取得
   useEffect(() => {
     let cancelled = false
@@ -921,6 +980,7 @@ export default function ScreenerPage() {
     setSelectedMarginType('')
     setSelectedVolumeMin(null)
     setSelectedEarningsWindowWeeks(null)
+    setSelectedEarningsTimeBucket('')
     setSelectedMa200Direction('')
     setSelectedShortTermCheck('')
     setSelectedPhysicalStatus('')

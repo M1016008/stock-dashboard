@@ -51,7 +51,7 @@ const PER_YEAR_LIMIT = Number(process.env.ML_PHYSICS_TRAIN_PER_YEAR_LIMIT ?? 0)
 const PAGE_DATES = Math.max(1, Number(process.env.ML_PHYSICS_TRAIN_PAGE_DATES ?? 20))
 const MODEL_VERSION = process.env.ML_PHYSICS_MODEL_VERSION?.trim() || timestampVersion()
 const FAST_YEARLY_SAMPLE = (process.env.ML_PHYSICS_TRAIN_FAST_YEARLY_SAMPLE ?? '1') !== '0'
-const FAST_YEARLY_MODULO = Number(process.env.ML_PHYSICS_TRAIN_FAST_YEARLY_MODULO ?? 1)
+const FAST_YEARLY_MODULO = Number(process.env.ML_PHYSICS_TRAIN_FAST_YEARLY_MODULO ?? 50)
 
 function timestampVersion(): string {
   const d = new Date()
@@ -280,7 +280,7 @@ async function loadYearlyRows(horizon: number, trainEndDate: string): Promise<Tr
     rows.push(...await execAll<TrainRow>(
       `
       SELECT f.date, f.vector_json, l.up_label, l.down_label, l.wait_label
-      FROM ml_feature_vectors_v2 f INDEXED BY ml_feature_vectors_v2_feature_date_ticker_idx
+      FROM ml_feature_vectors_v2 f INDEXED BY ml_feature_vectors_v2_date_idx
       INNER JOIN ml_short_labels l INDEXED BY sqlite_autoindex_ml_short_labels_1
         ON l.ticker = f.ticker AND l.date = f.date AND l.horizon_days = ?
       WHERE f.feature_set = ?

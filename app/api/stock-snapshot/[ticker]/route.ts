@@ -10,6 +10,7 @@ import {
   type EarningsTimeBucket,
   type EarningsTimeKind,
 } from '@/lib/earnings-time'
+import { decodePathSegment } from '@/lib/url-path'
 
 export const dynamic = 'force-dynamic'
 
@@ -347,7 +348,7 @@ export async function GET(
   context: { params: Promise<{ ticker: string }> },
 ) {
   const { ticker: rawTicker } = await context.params
-  const ticker = decodeURIComponent(rawTicker)
+  const ticker = decodePathSegment(rawTicker)
   const latestPriceDate = await getLatestPriceDate(ticker)
   const profile = await getTickerProfile(ticker)
 

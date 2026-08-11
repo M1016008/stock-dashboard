@@ -14,10 +14,7 @@ import {
 } from '@/lib/server/update-lock'
 
 const BASE_URL = 'https://kabutan.jp'
-const CATEGORY_URLS = [
-  `${BASE_URL}/news/marketnews/?category=2`,
-  `${BASE_URL}/news/marketnews/?category=1`,
-] as const
+const CATEGORY_IDS = [2, 9] as const
 const USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 StockBoardKabutanBot/1.0'
 
 type ListItem = {
@@ -50,6 +47,30 @@ function envInt(name: string, fallback: number, min: number, max: number): numbe
   const raw = Number(process.env[name] ?? fallback)
   if (!Number.isFinite(raw)) return fallback
   return Math.max(min, Math.min(max, Math.floor(raw)))
+}
+
+function tokyoDateKey(daysAgo: number): string {
+  const date = new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000)
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Tokyo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(date).replaceAll('-', '')
+}
+
+function buildListUrls(pages: number, lookbackDays: number): string[] {
+  const urls = new Set<string>()
+  for (const category of CATEGORY_IDS) {
+    const categoryUrl = `${BASE_URL}/news/marketnews/?category=${category}`
+    for (let daysAgo = 0; daysAgo < lookbackDays; daysAgo += 1) {
+      urls.add(`${categoryUrl}&date=${tokyoDateKey(daysAgo)}`)
+    }
+    for (let page = 1; page <= pages; page += 1) {
+      urls.add(page === 1 ? categoryUrl : `${categoryUrl}&page=${page}`)
+    }
+  }
+  return Array.from(urls)
 }
 
 async function acquireMaterialNewsUpdateLock(): Promise<UpdateLockHandle | null> {
@@ -275,6 +296,10 @@ function parseListItems(html: string): ListItem[] {
   return items
 }
 
+function countMarketNewsArticleLinks(html: string): number {
+  return Array.from(html.matchAll(/<a\s+href="[^"]*marketnews\/\?[^\"]*b=n\d{12}[^\"]*"[^>]*>/gi)).length
+}
+
 function parseDetail(html: string, fallback: ListItem): DetailResult {
   const articleMatch = html.match(/<article[\s\S]*?<\/article>/i)
   const article = articleMatch?.[0] ?? html
@@ -389,6 +414,7 @@ async function main() {
     const pruned = await pruneKabutanMaterialNewsToPreviousDayMovers()
     const runId = await insertRun()
     const pages = envInt('KABUTAN_MATERIAL_NEWS_PAGES', 3, 1, 3)
+    const lookbackDays = envInt('KABUTAN_MATERIAL_NEWS_LOOKBACK_DAYS', 7, 1, 14)
     const limit = envInt('KABUTAN_MATERIAL_NEWS_LIMIT', 60, 1, 60)
     const delayMs = envInt('KABUTAN_REQUEST_DELAY_MS', 900, 300, 5000)
     const errors: string[] = []
@@ -396,20 +422,22 @@ async function main() {
 
     try {
       const byId = new Map<string, ListItem>()
-      for (const categoryUrl of CATEGORY_URLS) {
-        for (let page = 1; page <= pages && byId.size < limit; page += 1) {
-          const url = page === 1 ? categoryUrl : `${categoryUrl}&page=${page}`
-          try {
-            const html = await fetchHtml(url)
-            for (const item of parseListItems(html)) {
-              if (byId.size >= limit) break
-              byId.set(item.articleId, item)
-            }
-          } catch (error) {
-            errors.push(`list page ${page}: ${(error as Error).message}`)
+      let successfulListFetches = 0
+      let discoveredArticleLinks = 0
+      for (const url of buildListUrls(pages, lookbackDays)) {
+        if (byId.size >= limit) break
+        try {
+          const html = await fetchHtml(url)
+          successfulListFetches += 1
+          discoveredArticleLinks += countMarketNewsArticleLinks(html)
+          for (const item of parseListItems(html)) {
+            if (byId.size >= limit) break
+            byId.set(item.articleId, item)
           }
-          await sleep(delayMs)
+        } catch (error) {
+          errors.push(`list fetch ${url}: ${(error as Error).message}`)
         }
+        await sleep(delayMs)
       }
 
       const items = Array.from(byId.values())
@@ -435,10 +463,15 @@ async function main() {
         await sleep(delayMs)
       }
 
-      const status = items.length === 0 ? 'failed' : errors.length > 0 ? 'partial' : 'success'
+      const healthyListScan = successfulListFetches > 0 && discoveredArticleLinks > 0
+      if (!healthyListScan && errors.length === 0) {
+        errors.push('list parser found no article links across successful pages')
+      }
+      const status = !healthyListScan ? 'failed' : errors.length > 0 ? 'partial' : 'success'
       await finishRun(runId, status, items.length, saved, errors.slice(0, 8).join(' / ') || null)
       console.log(`Kabutan material news ${status}: fetched=${items.length} saved=${saved} pruned=${pruned}`)
       if (errors.length > 0) console.log(`Warnings: ${errors.slice(0, 8).join(' / ')}`)
+      if (status !== 'success') process.exitCode = 1
     } catch (error) {
       const message = (error as Error).message
       await finishRun(runId, 'failed', 0, saved, message)

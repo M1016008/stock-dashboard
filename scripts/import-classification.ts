@@ -34,7 +34,7 @@ async function main() {
   }
 
   console.log(`Reading ${SOURCE_PATH}...`)
-  const source = readClassificationSource(SOURCE_PATH)
+  const source = await readClassificationSource(SOURCE_PATH)
   validateClassificationSource(source, classificationValidationOptionsFromEnv())
   const records = source.records
   console.log(

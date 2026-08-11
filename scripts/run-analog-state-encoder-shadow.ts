@@ -227,6 +227,7 @@ async function main(): Promise<void> {
     5_000,
     500_000,
   )
+  const workerThreads = integerEnv('ANALOG_ENCODER_NUM_THREADS', 2, 1, 4)
   const args = [
     TRAINER_PATH,
     '--market', market,
@@ -239,6 +240,49 @@ async function main(): Promise<void> {
     '--epochs', String(integerEnv('ANALOG_ENCODER_EPOCHS', 24, 4, 80)),
     '--batch-size', String(integerEnv('ANALOG_ENCODER_BATCH_SIZE', 192, 32, 512)),
     '--learning-rate', String(numberEnv('ANALOG_ENCODER_LEARNING_RATE', 0.002, 0.0001, 0.02)),
+    '--lightgbm-train-queries', String(integerEnv(
+      'ANALOG_ENCODER_LIGHTGBM_TRAIN_QUERIES',
+      market === 'US' ? 2_200 : 1_800,
+      200,
+      5_000,
+    )),
+    '--lightgbm-validation-queries', String(integerEnv(
+      'ANALOG_ENCODER_LIGHTGBM_VALIDATION_QUERIES',
+      400,
+      100,
+      1_500,
+    )),
+    '--lightgbm-candidates-per-query', String(integerEnv(
+      'ANALOG_ENCODER_LIGHTGBM_CANDIDATES',
+      96,
+      24,
+      256,
+    )),
+    '--lightgbm-estimators', String(integerEnv(
+      'ANALOG_ENCODER_LIGHTGBM_ESTIMATORS',
+      300,
+      50,
+      800,
+    )),
+    '--lightgbm-learning-rate', String(numberEnv(
+      'ANALOG_ENCODER_LIGHTGBM_LEARNING_RATE',
+      0.05,
+      0.005,
+      0.2,
+    )),
+    '--lightgbm-num-leaves', String(integerEnv(
+      'ANALOG_ENCODER_LIGHTGBM_NUM_LEAVES',
+      31,
+      7,
+      127,
+    )),
+    '--lightgbm-minimum-data-in-leaf', String(integerEnv(
+      'ANALOG_ENCODER_LIGHTGBM_MIN_DATA_IN_LEAF',
+      40,
+      10,
+      500,
+    )),
+    '--lightgbm-threads', String(workerThreads),
     '--reference-limit', String(integerEnv('ANALOG_ENCODER_REFERENCE_LIMIT', 30_000, 2_000, 80_000)),
     '--query-limit', String(integerEnv('ANALOG_ENCODER_QUERY_LIMIT', 1_200, 200, 5_000)),
     '--top-k', String(integerEnv('ANALOG_ENCODER_TOP_K', 10, 3, 50)),
@@ -258,6 +302,9 @@ async function main(): Promise<void> {
     productionRankingChanged: false,
     hostMemoryGb: Number((os.totalmem() / 1_073_741_824).toFixed(1)),
     maxSamples,
+    benchmark: 'euclidean + LightGBM LambdaRank',
+    promotionRule: 'encoder must beat both baselines',
+    workerThreads,
   }, null, 2))
   try {
     await runPython(
@@ -266,10 +313,10 @@ async function main(): Promise<void> {
         ...process.env,
         ANALOG_ENCODER_MARKET: market,
         ANALOG_ENCODER_MODE: 'shadow',
-        OPENBLAS_NUM_THREADS: process.env.ANALOG_ENCODER_NUM_THREADS ?? '2',
-        VECLIB_MAXIMUM_THREADS: process.env.ANALOG_ENCODER_NUM_THREADS ?? '2',
-        OMP_NUM_THREADS: process.env.ANALOG_ENCODER_NUM_THREADS ?? '2',
-        NUMEXPR_NUM_THREADS: process.env.ANALOG_ENCODER_NUM_THREADS ?? '2',
+        OPENBLAS_NUM_THREADS: String(workerThreads),
+        VECLIB_MAXIMUM_THREADS: String(workerThreads),
+        OMP_NUM_THREADS: String(workerThreads),
+        NUMEXPR_NUM_THREADS: String(workerThreads),
       }),
     )
   } finally {

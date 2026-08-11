@@ -47,9 +47,14 @@ function waitForHealth(url: string, timeoutSeconds = 60): boolean {
 
 removeGenerated(stagePath)
 runNpm('test:layout-shell')
+runNpm('test:status-health')
+runNpm('test:manual-import-removal')
 runNpm('test:historical-analogs')
+runNpm('test:safe-spreadsheet')
 runNpm('test:quote-technicals')
 runNpm('test:us-screener-filters')
+runNpm('test:us-screener-period-metrics')
+runNpm('test:us-automation-foundation')
 runNpm('test:physical-plan')
 runNpm('test:timeframes')
 runNpm('build', {

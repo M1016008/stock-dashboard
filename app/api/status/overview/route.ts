@@ -10,7 +10,9 @@ import {
   resolveUsAnalyticsDbPath,
 } from '@/lib/db/us-analytics'
 import { expectedLatestTradingDate } from '@/lib/server/data-freshness'
+import { runningJobIsVisible } from '@/lib/server/running-job-health'
 import { expectedLatestUsTradingDate } from '@/lib/server/us-data-freshness'
+import { supplementalSourcesAreFresh } from '@/lib/status-health'
 import { US_ADJUSTED_PRICE_BASIS } from '@/lib/us-adjusted-ohlcv'
 import { usInvestableSymbolSql } from '@/lib/us-symbol-quality'
 
@@ -82,6 +84,18 @@ function sourceState(value: number | null, maxAgeHours: number) {
     updatedAt: value ? new Date(value * 1000).toISOString() : null,
     ageHours: ageHours == null ? null : Math.round(ageHours * 10) / 10,
     fresh: ageHours != null && ageHours <= maxAgeHours,
+  }
+}
+
+async function activeProcessText(): Promise<string | null> {
+  try {
+    const { stdout } = await execFileAsync('/bin/ps', ['-axo', 'command='], {
+      timeout: 3_000,
+      maxBuffer: 2 * 1024 * 1024,
+    })
+    return stdout
+  } catch {
+    return null
   }
 }
 
@@ -644,12 +658,18 @@ export async function GET() {
         ...sourceState(usEarningsEpoch?.value ?? null, 36),
         provider: 'finnhub',
         configured: Boolean(process.env.FINNHUB_API_KEY?.trim()),
+        optional: true,
       },
     }
-    const sourcesFresh = Object.values(sources).every((source) => source.fresh)
-    const latestUsSourceJobs = usSourceRunningJobs.filter(
-      (job, index, jobs) => jobs.findIndex((candidate) => candidate.jobType === job.jobType) === index,
-    )
+    const sourcesFresh = supplementalSourcesAreFresh(sources)
+    const processText = await activeProcessText()
+    const visibleJpJobs = runningJobs.filter((job) => runningJobIsVisible(job, processText))
+    const latestUsSourceJobs = usSourceRunningJobs
+      .filter((job) => runningJobIsVisible(job, processText))
+      .filter(
+        (job, index, jobs) => jobs.findIndex((candidate) => candidate.jobType === job.jobType) === index,
+      )
+    const visibleUsJobs = usRunningJobs.filter((job) => runningJobIsVisible(job, processText))
     const foundationSourceRun = latestUsSourceJobs.find(
       (job) => job.jobType === 'us_adjusted_foundation',
     )
@@ -728,10 +748,10 @@ export async function GET() {
       },
       sources,
       runningJobs: [
-        ...runningJobs.map((job) => runningJobState(job, 'JP')),
+        ...visibleJpJobs.map((job) => runningJobState(job, 'JP')),
         ...foundationProgressJob.map((job) => runningJobState(job, 'US')),
         ...visibleUsSourceJobs.map((job) => runningJobState(job, 'US')),
-        ...usRunningJobs.map((job) => runningJobState(job, 'US')),
+        ...visibleUsJobs.map((job) => runningJobState(job, 'US')),
       ]
         .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
         .slice(0, 8),

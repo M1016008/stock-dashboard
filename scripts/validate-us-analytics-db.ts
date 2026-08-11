@@ -106,15 +106,33 @@ async function main() {
   const servingBacktestDate = await scalarText(target, `SELECT MAX(date) AS value FROM serving_backtest_dates`)
   const latestModelEvaluationDate = await scalarText(
     target,
-    `SELECT MAX(evaluation_date) AS value FROM ml_model_evaluations`,
+    `SELECT MAX(evaluation_date) AS value
+     FROM ml_model_evaluations
+     WHERE evaluation_date <= (SELECT MAX(date) FROM ohlcv_daily)`,
+  )
+  const latestModelTrainDate = await scalarText(
+    target,
+    `SELECT MAX(train_end_date) AS value FROM ml_model_evaluations`,
   )
   const latestPhysicsEvaluationDate = await scalarText(
     target,
-    `SELECT MAX(evaluation_date) AS value FROM ml_physics_status_evaluations`,
+    `SELECT MAX(evaluation_date) AS value
+     FROM ml_physics_status_evaluations
+     WHERE evaluation_date <= (SELECT MAX(date) FROM ohlcv_daily)`,
+  )
+  const latestPhysicsDataDate = await scalarText(
+    target,
+    `SELECT MAX(end_date) AS value FROM ml_physics_status_evaluations`,
   )
   const latestRlEvaluationDate = await scalarText(
     target,
-    `SELECT MAX(evaluation_date) AS value FROM ml_rl_policy_evaluations`,
+    `SELECT MAX(evaluation_date) AS value
+     FROM ml_rl_policy_evaluations
+     WHERE evaluation_date <= (SELECT MAX(date) FROM ohlcv_daily)`,
+  )
+  const latestRlDataDate = await scalarText(
+    target,
+    `SELECT MAX(end_date) AS value FROM ml_rl_policy_evaluations`,
   )
 
   console.log(
@@ -141,8 +159,11 @@ async function main() {
       `transitionAxes=${transitionAxes}`,
       `servingBacktestDate=${servingBacktestDate ?? '-'}`,
       `latestModelEvaluationDate=${latestModelEvaluationDate ?? '-'}`,
+      `latestModelTrainDate=${latestModelTrainDate ?? '-'}`,
       `latestPhysicsEvaluationDate=${latestPhysicsEvaluationDate ?? '-'}`,
+      `latestPhysicsDataDate=${latestPhysicsDataDate ?? '-'}`,
       `latestRlEvaluationDate=${latestRlEvaluationDate ?? '-'}`,
+      `latestRlDataDate=${latestRlDataDate ?? '-'}`,
     ].join(' '),
   )
 
@@ -187,14 +208,23 @@ async function main() {
     REQUIRE_DERIVED_BASIS && !servingBacktestDate
       ? 'servingBacktestDate: missing'
       : null,
-    REQUIRE_DERIVED_BASIS && latestModelEvaluationDate && ohlcvMaxDate && latestModelEvaluationDate > ohlcvMaxDate
-      ? `latestModelEvaluationDate: ${latestModelEvaluationDate} > ohlcvMaxDate ${ohlcvMaxDate}`
+    REQUIRE_DERIVED_BASIS && !latestModelEvaluationDate
+      ? 'latestModelEvaluationDate: no evaluation at or before ohlcvMaxDate'
       : null,
-    REQUIRE_DERIVED_BASIS && latestPhysicsEvaluationDate && ohlcvMaxDate && latestPhysicsEvaluationDate > ohlcvMaxDate
-      ? `latestPhysicsEvaluationDate: ${latestPhysicsEvaluationDate} > ohlcvMaxDate ${ohlcvMaxDate}`
+    REQUIRE_DERIVED_BASIS && latestModelTrainDate && ohlcvMaxDate && latestModelTrainDate > ohlcvMaxDate
+      ? `latestModelTrainDate: ${latestModelTrainDate} > ohlcvMaxDate ${ohlcvMaxDate}`
       : null,
-    REQUIRE_DERIVED_BASIS && latestRlEvaluationDate && ohlcvMaxDate && latestRlEvaluationDate > ohlcvMaxDate
-      ? `latestRlEvaluationDate: ${latestRlEvaluationDate} > ohlcvMaxDate ${ohlcvMaxDate}`
+    REQUIRE_DERIVED_BASIS && !latestPhysicsEvaluationDate
+      ? 'latestPhysicsEvaluationDate: no evaluation at or before ohlcvMaxDate'
+      : null,
+    REQUIRE_DERIVED_BASIS && latestPhysicsDataDate && ohlcvMaxDate && latestPhysicsDataDate > ohlcvMaxDate
+      ? `latestPhysicsDataDate: ${latestPhysicsDataDate} > ohlcvMaxDate ${ohlcvMaxDate}`
+      : null,
+    REQUIRE_DERIVED_BASIS && !latestRlEvaluationDate
+      ? 'latestRlEvaluationDate: no evaluation at or before ohlcvMaxDate'
+      : null,
+    REQUIRE_DERIVED_BASIS && latestRlDataDate && ohlcvMaxDate && latestRlDataDate > ohlcvMaxDate
+      ? `latestRlDataDate: ${latestRlDataDate} > ohlcvMaxDate ${ohlcvMaxDate}`
       : null,
   ].filter((failure): failure is string => failure != null)
 

@@ -5,11 +5,13 @@ import { createClient } from '@libsql/client'
 import { db, ensureReady, execGet } from '@/lib/db/client'
 import { marketDataRuns } from '@/lib/db/schema'
 import {
+  acquireUsStockboardUpdateLock,
   acquireUpdateLock,
   EXCLUSIVE_UPDATE_JOB_TYPES,
   type UpdateLockHandle,
 } from '@/lib/server/update-lock'
 import { waitForMemoryHeadroom, withMemoryGuardEnv } from '@/lib/system/memory-guard'
+import { MA_SEQUENCE_VERSION } from '@/lib/ml/ma-sequence'
 import { US_ADJUSTED_PRICE_BASIS } from '@/lib/us-adjusted-ohlcv'
 import { and, eq } from 'drizzle-orm'
 
@@ -20,6 +22,14 @@ const usAnalyticsDbPath = path.resolve(
 const adjustedShadowDbPath = path.resolve(
   process.env.US_ADJUSTED_FOUNDATION_SHADOW_PATH?.trim()
   || `${usAnalyticsDbPath}.${US_ADJUSTED_PRICE_BASIS}.building`,
+)
+const usAnalogDbPath = path.resolve(
+  process.env.ANALOG_US_DB_PATH?.trim()
+  || path.join(path.dirname(usAnalyticsDbPath), `analog-sequence-us-v${MA_SEQUENCE_VERSION}.db`),
+)
+const adjustedAnalogShadowDbPath = path.resolve(
+  process.env.US_ADJUSTED_FOUNDATION_ANALOG_SHADOW_PATH?.trim()
+  || `${usAnalogDbPath}.${US_ADJUSTED_PRICE_BASIS}.building`,
 )
 const foundationProcessLockPath = `${adjustedShadowDbPath}.process-lock`
 const SOURCE_SNAPSHOT_LOCK_JOB = 'us_adjusted_source_snapshots'
@@ -86,16 +96,67 @@ function acquireFoundationProcessLock(): FoundationProcessLock {
 
 function heavyMlIsActive(): boolean {
   try {
-    const output = execFileSync('pgrep', ['-fl', [
-      'run-us-ml-job',
-      'batch-forward-extrema',
-      'batch-ml-features',
-      'batch-ml-physics-features',
-    ].join('|')], { encoding: 'utf8' })
-    return output
+    const output = execFileSync('ps', ['-axo', 'pid=,ppid=,command='], {
+      encoding: 'utf8',
+      timeout: 5_000,
+    })
+    const rows = output
       .split('\n')
       .filter(Boolean)
-      .some((line) => !line.includes('ensure-us-adjusted-foundation'))
+      .map((line) => {
+        const match = line.trim().match(/^(\d+)\s+(\d+)\s+(.+)$/)
+        return match
+          ? { pid: Number(match[1]), parentPid: Number(match[2]), command: match[3] }
+          : null
+      })
+      .filter((row): row is { pid: number; parentPid: number; command: string } => row != null)
+    const byPid = new Map(rows.map((row) => [row.pid, row]))
+    const currentFamilyPids = new Set<number>()
+    let currentFamilyMember = byPid.get(process.pid)
+    while (currentFamilyMember && !currentFamilyPids.has(currentFamilyMember.pid)) {
+      currentFamilyPids.add(currentFamilyMember.pid)
+      currentFamilyMember = byPid.get(currentFamilyMember.parentPid)
+    }
+    const candidates = rows.filter((row) => (
+      !currentFamilyPids.has(row.pid)
+      && /scripts\/(?:run-us-ml-job|run-us-ml-weekly-efficient|batch-forward-extrema|batch-ml-features|batch-ml-physics-features)\.(?:ts|js)\b/.test(row.command)
+    ))
+
+    return candidates.some((candidate) => {
+      const familyCommands: string[] = []
+      let current: typeof candidate | undefined = candidate
+      const visited = new Set<number>()
+      while (current && !visited.has(current.pid)) {
+        visited.add(current.pid)
+        familyCommands.push(current.command)
+        current = byPid.get(current.parentPid)
+      }
+      const family = familyCommands.join('\n')
+      if (/scripts\/(?:run-us-ml-job|run-us-ml-weekly-efficient|ensure-us-adjusted-foundation)\.(?:ts|js)\b/.test(family)) {
+        return true
+      }
+      if (/scripts\/run-ml-learning\.(?:ts|js)\b/.test(family)) return false
+
+      try {
+        const files = execFileSync('lsof', ['-p', String(candidate.pid), '-Fn'], {
+          encoding: 'utf8',
+          timeout: 5_000,
+        })
+        return files
+          .split('\n')
+          .filter((line) => line.startsWith('n'))
+          .map((line) => line.slice(1))
+          .some((file) => (
+            file === usAnalyticsDbPath
+            || file.startsWith(`${usAnalyticsDbPath}-`)
+            || file === adjustedShadowDbPath
+            || file.startsWith(`${adjustedShadowDbPath}-`)
+          ))
+      } catch {
+        // Unknown manually-started heavy workers stay conservative.
+        return true
+      }
+    })
   } catch {
     return false
   }
@@ -158,6 +219,7 @@ async function completedSnapshotRebuildCanRecoverBasis(): Promise<boolean> {
     payloadJson: string
     finishedAt: number | null
     latestPriceFinishedAt: number | null
+    latestAdjustedRebuildFinishedAt: number | null
   }>(
     `SELECT
        total_tickers AS totalTickers,
@@ -169,7 +231,17 @@ async function completedSnapshotRebuildCanRecoverBasis(): Promise<boolean> {
          SELECT MAX(finished_at)
          FROM market_data_runs
          WHERE market = 'US' AND job_type = 'tiingo_ohlcv' AND status = 'success'
-       ) AS latestPriceFinishedAt
+       ) AS latestPriceFinishedAt,
+       (
+         SELECT MAX(finished_at)
+         FROM market_data_runs
+         WHERE market = 'US'
+           AND job_type = 'snapshot_compute'
+           AND status = 'success'
+           AND finished_at IS NOT NULL
+           AND json_extract(payload_json, '$.rebuild') = 1
+           AND json_extract(payload_json, '$.priceBasis') = '${US_ADJUSTED_PRICE_BASIS}'
+       ) AS latestAdjustedRebuildFinishedAt
      FROM market_data_runs
      WHERE market = 'US'
        AND job_type = 'snapshot_compute'
@@ -185,6 +257,8 @@ async function completedSnapshotRebuildCanRecoverBasis(): Promise<boolean> {
     || row.failed !== 0
     || row.finishedAt == null
     || (row.latestPriceFinishedAt != null && row.finishedAt < row.latestPriceFinishedAt)
+    || row.latestAdjustedRebuildFinishedAt == null
+    || row.latestAdjustedRebuildFinishedAt > row.finishedAt
   ) {
     return false
   }
@@ -194,8 +268,7 @@ async function completedSnapshotRebuildCanRecoverBasis(): Promise<boolean> {
       priceBasis?: unknown
       stage?: unknown
     }
-    return payload.rebuild === true
-      && (payload.priceBasis == null || payload.priceBasis === US_ADJUSTED_PRICE_BASIS)
+    return payload.priceBasis === US_ADJUSTED_PRICE_BASIS
       && (payload.stage == null || payload.stage === 'complete')
   } catch {
     return false
@@ -285,6 +358,42 @@ async function writeAnalyticsMetadata(dbPath: string, key: string, value: string
   }
 }
 
+async function analogMetadataValue(dbPath: string, key: string): Promise<string | null> {
+  if (!fs.existsSync(dbPath)) return null
+  const client = createClient({ url: `file:${dbPath}` })
+  try {
+    const row = await client.execute({
+      sql: `SELECT value FROM analog_sequence_meta WHERE key = ?`,
+      args: [key],
+    })
+    const value = row.rows[0]?.value
+    return value == null ? null : String(value)
+  } catch {
+    return null
+  } finally {
+    client.close()
+  }
+}
+
+async function analogGenerationIsCurrent(dbPath: string, sourceDate: string): Promise<boolean> {
+  const [version, completed, indexDate, priceCompleted, priceDate, chunkCompleted, chunkDate] = await Promise.all([
+    analogMetadataValue(dbPath, 'version'),
+    analogMetadataValue(dbPath, 'completed'),
+    analogMetadataValue(dbPath, 'source_date'),
+    analogMetadataValue(dbPath, 'price_completed'),
+    analogMetadataValue(dbPath, 'price_source_date'),
+    analogMetadataValue(dbPath, 'price_chunks_completed'),
+    analogMetadataValue(dbPath, 'price_chunks_source_date'),
+  ])
+  return Number(version) === MA_SEQUENCE_VERSION
+    && completed === '1'
+    && indexDate === sourceDate
+    && priceCompleted === '1'
+    && priceDate === sourceDate
+    && chunkCompleted === '1'
+    && chunkDate === sourceDate
+}
+
 async function analyticsMaxPriceDate(dbPath: string): Promise<string | null> {
   if (!fs.existsSync(dbPath)) return null
   const client = createClient({ url: `file:${dbPath}` })
@@ -292,6 +401,60 @@ async function analyticsMaxPriceDate(dbPath: string): Promise<string | null> {
     const row = await client.execute('SELECT MAX(date) AS value FROM ohlcv_daily')
     const value = row.rows[0]?.value
     return value == null ? null : String(value)
+  } finally {
+    client.close()
+  }
+}
+
+async function resumableAdjustedShadowExists(): Promise<boolean> {
+  if (!fs.existsSync(adjustedShadowDbPath)) return false
+  const [basis, shadowDate, source] = await Promise.all([
+    analyticsMetadataValue(adjustedShadowDbPath, 'ohlcv_price_basis'),
+    analyticsMaxPriceDate(adjustedShadowDbPath),
+    execGet<{ date: string | null }>(
+      `SELECT MAX(date) AS date FROM market_ohlcv_daily WHERE market = 'US'`,
+    ),
+  ])
+  return basis === US_ADJUSTED_PRICE_BASIS
+    && shadowDate != null
+    && shadowDate === source?.date
+}
+
+async function adjustedForwardExtremaBaselineExists(dbPath: string): Promise<boolean> {
+  if (!fs.existsSync(dbPath)) return false
+  const client = createClient({ url: `file:${dbPath}` })
+  try {
+    const row = await client.execute(`
+      SELECT
+        EXISTS(SELECT 1 FROM forward_extrema WHERE horizon_days = 5 LIMIT 1)
+        + EXISTS(SELECT 1 FROM forward_extrema WHERE horizon_days = 10 LIMIT 1)
+        + EXISTS(SELECT 1 FROM forward_extrema WHERE horizon_days = 20 LIMIT 1)
+        + EXISTS(SELECT 1 FROM forward_extrema WHERE horizon_days = 40 LIMIT 1)
+        + EXISTS(SELECT 1 FROM forward_extrema WHERE horizon_days = 60 LIMIT 1)
+        + EXISTS(SELECT 1 FROM forward_extrema WHERE horizon_days = 90 LIMIT 1)
+        + EXISTS(SELECT 1 FROM forward_extrema WHERE horizon_days = 200 LIMIT 1)
+        AS horizonCount
+    `)
+    return Number(row.rows[0]?.horizonCount ?? 0) === 7
+  } finally {
+    client.close()
+  }
+}
+
+async function reusableAdjustedDerivedBaselineExists(dbPath: string): Promise<boolean> {
+  if (!fs.existsSync(dbPath)) return false
+  const client = createClient({ url: `file:${dbPath}` })
+  try {
+    const row = await client.execute(`
+      SELECT
+        EXISTS(SELECT 1 FROM physical_momentum_metrics WHERE market = 'US' LIMIT 1)
+        + EXISTS(SELECT 1 FROM forward_returns LIMIT 1)
+        + EXISTS(SELECT 1 FROM forward_extrema LIMIT 1)
+        + EXISTS(SELECT 1 FROM ml_feature_vectors LIMIT 1)
+        + EXISTS(SELECT 1 FROM ml_training_labels LIMIT 1)
+        AS baselineCount
+    `)
+    return Number(row.rows[0]?.baselineCount ?? 0) === 5
   } finally {
     client.close()
   }
@@ -349,6 +512,16 @@ function moveIfPresent(from: string, to: string): void {
   if (fs.existsSync(from)) fs.renameSync(from, to)
 }
 
+function cloneFile(source: string, target: string): void {
+  if (process.platform === 'darwin') {
+    // Node/libuv can report ENOSYS for APFS clone flags on removable volumes,
+    // while macOS clonefile(2) remains available through cp -c.
+    execFileSync('/bin/cp', ['-c', source, target], { stdio: 'inherit' })
+    return
+  }
+  fs.copyFileSync(source, target, fs.constants.COPYFILE_FICLONE_FORCE)
+}
+
 async function promoteAdjustedShadow(): Promise<string> {
   if (!fs.existsSync(adjustedShadowDbPath)) {
     throw new Error(`US adjusted shadow DB not found: ${adjustedShadowDbPath}`)
@@ -361,11 +534,7 @@ async function promoteAdjustedShadow(): Promise<string> {
   // APFS clones retain a rollback generation without copying hundreds of GB.
   // Replacing the main file is atomic, so readers keep serving the old inode
   // until the generation-aware client reconnects on its next request.
-  fs.copyFileSync(
-    usAnalyticsDbPath,
-    backupPath,
-    fs.constants.COPYFILE_FICLONE_FORCE,
-  )
+  cloneFile(usAnalyticsDbPath, backupPath)
   moveIfPresent(`${usAnalyticsDbPath}-wal`, `${backupPath}-wal`)
   moveIfPresent(`${usAnalyticsDbPath}-shm`, `${backupPath}-shm`)
   moveIfPresent(`${adjustedShadowDbPath}-wal`, `${backupPath}.promoted-shadow-wal`)
@@ -374,13 +543,43 @@ async function promoteAdjustedShadow(): Promise<string> {
   return backupPath
 }
 
+async function seedAdjustedAnalogShadow(): Promise<void> {
+  if (fs.existsSync(adjustedAnalogShadowDbPath) || !fs.existsSync(usAnalogDbPath)) return
+  await checkpointDb(usAnalogDbPath)
+  cloneFile(usAnalogDbPath, adjustedAnalogShadowDbPath)
+  fs.chmodSync(adjustedAnalogShadowDbPath, 0o600)
+}
+
+async function promoteAdjustedAnalogShadow(): Promise<string> {
+  if (!fs.existsSync(adjustedAnalogShadowDbPath)) {
+    throw new Error(`US adjusted analog shadow DB not found: ${adjustedAnalogShadowDbPath}`)
+  }
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
+  const backupPath = `${usAnalogDbPath}.pre-${US_ADJUSTED_PRICE_BASIS}-${timestamp}`
+  await checkpointDb(usAnalogDbPath)
+  await checkpointDb(adjustedAnalogShadowDbPath)
+  if (fs.existsSync(usAnalogDbPath)) {
+    cloneFile(usAnalogDbPath, backupPath)
+  }
+  moveIfPresent(`${usAnalogDbPath}-wal`, `${backupPath}-wal`)
+  moveIfPresent(`${usAnalogDbPath}-shm`, `${backupPath}-shm`)
+  moveIfPresent(`${adjustedAnalogShadowDbPath}-wal`, `${backupPath}.promoted-shadow-wal`)
+  moveIfPresent(`${adjustedAnalogShadowDbPath}-shm`, `${backupPath}.promoted-shadow-shm`)
+  fs.renameSync(adjustedAnalogShadowDbPath, usAnalogDbPath)
+  return backupPath
+}
+
 async function buildAdjustedShadow(onStage: (stage: FoundationStage) => Promise<void>): Promise<void> {
-  await onStage('analytics_copy')
-  await runNpm('batch:us-analytics-db', {
-    US_ANALYTICS_DB_PATH: adjustedShadowDbPath,
-    US_ANALYTICS_REBUILD_PRICE_BASIS: '1',
-    US_ANALYTICS_NATIVE_CHUNK: process.env.US_FOUNDATION_ANALYTICS_CHUNK ?? '100',
-  })
+  if (await resumableAdjustedShadowExists()) {
+    console.log(`US adjusted foundation: resuming validated shadow generation ${adjustedShadowDbPath}`)
+  } else {
+    await onStage('analytics_copy')
+    await runNpm('batch:us-analytics-db', {
+      US_ANALYTICS_DB_PATH: adjustedShadowDbPath,
+      US_ANALYTICS_REBUILD_PRICE_BASIS: '1',
+      US_ANALYTICS_NATIVE_CHUNK: process.env.US_FOUNDATION_ANALYTICS_CHUNK ?? '100',
+    })
+  }
   await onStage('validation')
   await runNpm('batch:us-analytics-validate', {
     US_ANALYTICS_DB_PATH: adjustedShadowDbPath,
@@ -393,24 +592,50 @@ async function buildAdjustedShadow(onStage: (stage: FoundationStage) => Promise<
     analyticsMetadataValue(adjustedShadowDbPath, 'derived_price_date'),
   ])
   if (derivedBasis !== US_ADJUSTED_PRICE_BASIS || derivedPriceDate !== priceDate) {
+    const [extremaBaselineExists, derivedBaselineExists] = await Promise.all([
+      adjustedForwardExtremaBaselineExists(adjustedShadowDbPath),
+      reusableAdjustedDerivedBaselineExists(adjustedShadowDbPath),
+    ])
+    const extremaRecalcDays = extremaBaselineExists
+      ? (process.env.US_FOUNDATION_EXTREMA_RECALC_DAYS ?? '201')
+      : '0'
+    const derivedRecentDays = derivedBaselineExists
+      ? (process.env.US_FOUNDATION_DERIVED_RECENT_DAYS ?? '420')
+      : '0'
+    if (extremaBaselineExists) {
+      console.log(`US adjusted foundation: reusing the full forward-extrema baseline; recalculating ${extremaRecalcDays} recent bars`)
+    }
+    if (derivedBaselineExists) {
+      console.log(`US adjusted foundation: reusing the adjusted derived baseline; recalculating ${derivedRecentDays} recent bars`)
+    }
     await onStage('features_models')
     await runNpm('batch:us-ml-full-history', {
       US_ANALYTICS_DB_PATH: adjustedShadowDbPath,
       US_ML_FULL_START_DATE: '1900-01-01',
-      US_ML_WEEKLY_RECENT_DAYS: '0',
-      US_PMS_WEEKLY_RECENT_DAYS: '0',
-      US_ML_WEEKLY_EXTREMA_RECALC_DAYS: '0',
-      US_ML_FEATURE_RECENT_DAYS: '0',
-      US_ML_LABEL_RECENT_DAYS: '0',
-      US_ML_CONTEXT_RECENT_DAYS: '0',
-      US_ML_PHYSICS_RECENT_DAYS: '0',
-      US_ML_SHORT_LABEL_RECENT_DAYS: '0',
-      US_ML_RL_RECENT_DAYS: '0',
-      US_ML_STATUS_RECENT_DAYS: '0',
+      US_ML_WEEKLY_RECENT_DAYS: derivedRecentDays,
+      US_PMS_WEEKLY_RECENT_DAYS: derivedRecentDays,
+      US_PMS_NORMALIZE_RECENT_DAYS: derivedBaselineExists
+        ? (process.env.US_FOUNDATION_PMS_NORMALIZE_RECENT_DAYS ?? '30')
+        : derivedRecentDays,
+      US_ML_WEEKLY_EXTREMA_RECALC_DAYS: extremaRecalcDays,
+      FORWARD_EXTREMA_INCREMENTAL_UPSERT: extremaBaselineExists ? '1' : '0',
+      US_ML_FEATURE_RECENT_DAYS: derivedRecentDays,
+      ML_FEATURE_INCREMENTAL_UPSERT: derivedBaselineExists ? '1' : '0',
+      ML_FEATURE_WRITE_LABELS: derivedBaselineExists ? '0' : '1',
+      ML_FEATURE_WRITE_RL_STATES: derivedBaselineExists ? '0' : '1',
+      US_ML_LABEL_RECENT_DAYS: derivedRecentDays,
+      ML_LABEL_INCREMENTAL_UPSERT: derivedBaselineExists ? '1' : '0',
+      ML_LABEL_CHANGED_ONLY: derivedBaselineExists ? '1' : '0',
+      US_ML_CONTEXT_RECENT_DAYS: derivedRecentDays,
+      US_ML_PHYSICS_RECENT_DAYS: derivedRecentDays,
+      ML_PHYSICS_INCREMENTAL_UPSERT: derivedBaselineExists ? '1' : '0',
+      US_ML_SHORT_LABEL_RECENT_DAYS: derivedRecentDays,
+      US_ML_RL_RECENT_DAYS: derivedRecentDays,
+      US_ML_STATUS_RECENT_DAYS: derivedRecentDays,
       FORWARD_EXTREMA_RESUME: '1',
       ML_FEATURE_HEALTH_STRICT: '1',
       ML_ACCURACY_STRICT: '1',
-      US_ML_SKIP_FORWARD_RETURNS: '0',
+      US_ML_SKIP_FORWARD_RETURNS: derivedBaselineExists ? '1' : '0',
       US_ML_SKIP_FORWARD_EXTREMA: '0',
       US_ML_SKIP_ML_FEATURES: '0',
       US_ML_SKIP_ML_LABELS: '0',
@@ -430,11 +655,25 @@ async function buildAdjustedShadow(onStage: (stage: FoundationStage) => Promise<
     analyticsMetadataValue(adjustedShadowDbPath, 'analog_index_price_basis'),
     analyticsMetadataValue(adjustedShadowDbPath, 'analog_index_price_date'),
   ])
-  if (analogBasis !== US_ADJUSTED_PRICE_BASIS || analogPriceDate !== priceDate) {
+  const currentAnalogIsCurrent = await analogGenerationIsCurrent(usAnalogDbPath, priceDate)
+  if (
+    analogBasis !== US_ADJUSTED_PRICE_BASIS
+    || analogPriceDate !== priceDate
+    || !currentAnalogIsCurrent
+  ) {
     await onStage('analog_index')
-    await runNpm('batch:analog-index:us-full', {
-      US_ANALYTICS_DB_PATH: adjustedShadowDbPath,
-    })
+    if (!await analogGenerationIsCurrent(adjustedAnalogShadowDbPath, priceDate)) {
+      await seedAdjustedAnalogShadow()
+      await runNpm('batch:analog-index:us-full', {
+        US_ANALYTICS_DB_PATH: adjustedShadowDbPath,
+        ANALOG_US_DB_PATH: adjustedAnalogShadowDbPath,
+      })
+    }
+    if (!await analogGenerationIsCurrent(adjustedAnalogShadowDbPath, priceDate)) {
+      throw new Error('US adjusted analog shadow did not complete for the current source date')
+    }
+    const analogBackupPath = await promoteAdjustedAnalogShadow()
+    console.log(`US adjusted analog index promoted; previous generation retained: ${analogBackupPath}`)
     await writeAnalyticsMetadata(adjustedShadowDbPath, 'analog_index_price_basis', US_ADJUSTED_PRICE_BASIS)
     await writeAnalyticsMetadata(adjustedShadowDbPath, 'analog_index_price_date', priceDate)
   }
@@ -468,21 +707,29 @@ async function main(): Promise<void> {
   }
 
   const processLock = acquireFoundationProcessLock()
+  let updateLockForSignal: UpdateLockHandle | null = null
+  let signalExitStarted = false
   const releaseOnSignal = (signal: NodeJS.Signals) => {
-    processLock.release()
-    process.exit(signal === 'SIGINT' ? 130 : 143)
+    if (signalExitStarted) return
+    signalExitStarted = true
+    void updateLockForSignal?.release()
+      .catch(() => undefined)
+      .finally(() => {
+        processLock.release()
+        process.exit(signal === 'SIGINT' ? 130 : 143)
+      })
   }
   process.once('SIGINT', releaseOnSignal)
   process.once('SIGTERM', releaseOnSignal)
-  const lock = await acquireUpdateLock(
+  const lock = await acquireUsStockboardUpdateLock(
     'us_adjusted_foundation',
     72 * 60 * 60,
-    EXCLUSIVE_UPDATE_JOB_TYPES,
   )
   if (!lock) {
     processLock.release()
     throw new Error('US adjusted foundation is already active')
   }
+  updateLockForSignal = lock
   let heartbeat: ReturnType<typeof setInterval> | null = null
   let statusWriteQueue: Promise<void> = Promise.resolve()
   const enqueueStatusWrite = (operation: () => Promise<void>): Promise<void> => {
@@ -599,6 +846,7 @@ async function main(): Promise<void> {
     if (heartbeat) clearInterval(heartbeat)
     await statusWriteQueue.catch(() => undefined)
     await lock.release()
+    updateLockForSignal = null
     process.removeListener('SIGINT', releaseOnSignal)
     process.removeListener('SIGTERM', releaseOnSignal)
     processLock.release()

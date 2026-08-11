@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { execGet } from '@/lib/db/client'
 import { execUsAnalyticsAll, execUsAnalyticsGet, hasUsAnalyticsDb } from '@/lib/db/us-analytics'
 import { ML_PHYSICS_FEATURE_SET, ML_PHYSICS_MODEL_TYPE } from '@/lib/backtest/ml-physics'
 import { US_ADJUSTED_PRICE_BASIS } from '@/lib/us-adjusted-ohlcv'
@@ -212,22 +211,14 @@ export async function GET(request: NextRequest, context: RouteContext) {
     ),
     safeGet<{ date: string | null; count: number | null }>(
       `
-        WITH latest AS (
-          SELECT date
-          FROM ml_feature_vectors_v2 INDEXED BY ml_feature_vectors_v2_date_idx
-          WHERE feature_set = ?
-            ${dateFilter}
-          ORDER BY date DESC
-          LIMIT 1
-        )
-        SELECT latest.date, COUNT(f.ticker) AS count
-        FROM latest
-        LEFT JOIN ml_feature_vectors_v2 f
-          ON f.feature_set = ?
-         AND f.date = latest.date
-        GROUP BY latest.date
+        SELECT actual_date AS date, actual_count AS count
+        FROM ml_feature_health_checks
+        WHERE check_key = 'us_ml_feature_vectors_v2'
+          ${asOfDate ? 'AND actual_date <= ?' : ''}
+        ORDER BY computed_at DESC
+        LIMIT 1
       `,
-      asOfDate ? [ML_PHYSICS_FEATURE_SET, asOfDate, ML_PHYSICS_FEATURE_SET] : [ML_PHYSICS_FEATURE_SET, ML_PHYSICS_FEATURE_SET],
+      asOfArgs,
     ),
     safeGet<{ asOfDate: string | null; count: number | null }>(
       `
@@ -304,7 +295,7 @@ export async function GET(request: NextRequest, context: RouteContext) {
       `,
       asOfArgs,
     ),
-    execGet<{
+    safeGet<{
       date: string | null
       universe: number | null
       covered: number | null
@@ -312,8 +303,7 @@ export async function GET(request: NextRequest, context: RouteContext) {
       `
         WITH latest AS (
           SELECT date
-          FROM market_ohlcv_daily INDEXED BY market_ohlcv_market_date_idx
-          WHERE market = 'US'
+          FROM ohlcv_daily INDEXED BY ohlcv_date_idx
           ORDER BY date DESC
           LIMIT 1
         )
@@ -321,13 +311,14 @@ export async function GET(request: NextRequest, context: RouteContext) {
           latest.date,
           (
             SELECT COUNT(*)
-            FROM market_universe
-            WHERE market = 'US' AND active = 1
+            FROM ticker_universe
+            WHERE active = 1
           ) AS universe,
           (
-            SELECT COUNT(DISTINCT ticker)
-            FROM market_ohlcv_daily INDEXED BY market_ohlcv_market_date_ticker_idx
-            WHERE market = 'US' AND date = latest.date
+            SELECT COUNT(DISTINCT o.ticker)
+            FROM ohlcv_daily o
+            INNER JOIN ticker_universe u ON u.ticker = o.ticker AND u.active = 1
+            WHERE o.date = latest.date
           ) AS covered
         FROM latest
       `,

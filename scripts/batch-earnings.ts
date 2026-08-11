@@ -12,6 +12,8 @@ import { fetchJQuantsEarningsCalendar } from '@/lib/jquants'
 import { fetchJpxEarningsCalendar, JPX_EARNINGS_PAGE } from '@/lib/jpx-earnings'
 import { eq } from 'drizzle-orm'
 
+let activeRunId: number | null = null
+
 function todayIsoJst(): string {
   const now = new Date()
   const jst = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Tokyo' }))
@@ -35,6 +37,7 @@ async function main() {
     .values({ jobType: 'earnings_calendar', startedAt: new Date(), status: 'running' })
     .returning({ id: batchRuns.id })
   const runId = run.id
+  activeRunId = runId
 
   console.log('J-Quants /equities/earnings-calendar を取得中...')
   const t0 = Date.now()
@@ -137,8 +140,24 @@ async function main() {
       }),
     })
     .where(eq(batchRuns.id, runId))
+  activeRunId = null
 
   console.log(`完了: ${inserted} 件を earnings_calendar に同期 (J-Quants ${jquantsRows.length} / JPX公式 ${jpxRows.length} / stale削除 ${deletedStaleFutureRows})`)
 }
 
-main().catch(err => { console.error('Fatal:', err); process.exit(1) })
+main().catch(async (err) => {
+  if (activeRunId != null) {
+    await db
+      .update(batchRuns)
+      .set({
+        finishedAt: new Date(),
+        status: 'failed',
+        failed: 1,
+        errorSummary: err instanceof Error ? err.message : String(err),
+      })
+      .where(eq(batchRuns.id, activeRunId))
+      .catch((updateError) => console.error('Failed to record earnings batch failure:', updateError))
+  }
+  console.error('Fatal:', err)
+  process.exit(1)
+})

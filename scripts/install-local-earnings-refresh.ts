@@ -14,6 +14,8 @@ const home = os.homedir()
 const launchAgentsDir = path.join(home, 'Library', 'LaunchAgents')
 const plistPath = path.join(launchAgentsDir, `${label}.plist`)
 const logDir = path.join(home, 'Library', 'Logs', 'StockBoard')
+const supportDir = path.join(home, 'Library', 'Application Support', 'StockBoard')
+const deferredPath = path.join(supportDir, 'earnings-refresh-deferred')
 const uid = typeof process.getuid === 'function' ? process.getuid() : Number(process.env.UID)
 const scheduleHour = Number(process.env.EARNINGS_REFRESH_HOUR ?? '7')
 const scheduleMinute = Number(process.env.EARNINGS_REFRESH_MINUTE ?? '10')
@@ -45,6 +47,7 @@ function clampMinute(value: number): number {
 
 fs.mkdirSync(launchAgentsDir, { recursive: true })
 fs.mkdirSync(logDir, { recursive: true })
+fs.mkdirSync(supportDir, { recursive: true })
 
 const hour = clampHour(scheduleHour)
 const minute = clampMinute(scheduleMinute)
@@ -62,6 +65,7 @@ const command = [
   'export EARNINGS_REFRESH_RETRY_DELAY_SECONDS=${EARNINGS_REFRESH_RETRY_DELAY_SECONDS:-300}',
   'export EARNINGS_REFRESH_WAIT_FOR_LOCK_SECONDS=${EARNINGS_REFRESH_WAIT_FOR_LOCK_SECONDS:-2700}',
   'export EARNINGS_REFRESH_LOCK_POLL_SECONDS=${EARNINGS_REFRESH_LOCK_POLL_SECONDS:-30}',
+  `export EARNINGS_REFRESH_DEFERRED_PATH=${JSON.stringify(deferredPath)}`,
   'npm run batch:earnings-refresh',
 ].join(' && ')
 
@@ -101,6 +105,14 @@ const plist = `<?xml version="1.0" encoding="UTF-8"?>
   <string>${xmlEscape(path.join(logDir, 'earnings-refresh.err'))}</string>
   <key>RunAtLoad</key>
   <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>PathState</key>
+    <dict>
+      <key>${xmlEscape(deferredPath)}</key>
+      <true/>
+    </dict>
+  </dict>
   <key>ProcessType</key>
   <string>Background</string>
   <key>LowPriorityIO</key>

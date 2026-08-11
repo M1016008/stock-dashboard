@@ -574,6 +574,24 @@ async function main(): Promise<void> {
       throw new Error(`ML learning interrupted: ${shutdownSignal}`)
     }
 
+    const generationAction = /(?:^|:)ml-full(?:$|:)/.test(npmScript)
+      ? 'mark-baseline'
+      : 'mark-delta'
+    const generationResult = await runNpmUtility(
+      'batch:ml-pipeline-state',
+      () => lock.heartbeat(),
+      60,
+      {
+        ML_PIPELINE_ACTION: generationAction,
+        ML_PIPELINE_MARKET: 'JP',
+      },
+    )
+    if (generationResult.code !== 0) {
+      throw new Error(
+        `batch:ml-pipeline-state failed: code=${generationResult.code}, signal=${generationResult.signal ?? 'none'}`,
+      )
+    }
+
     await db
       .update(batchRuns)
       .set({

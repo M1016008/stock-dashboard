@@ -40,7 +40,8 @@ const SORT_KEYS = new Set([
   'earningsDays',
 ])
 
-const US_SCREENER_CACHE_NAMESPACE = 'us-screener-v6'
+const US_SCREENER_CACHE_NAMESPACE = 'us-screener-v7'
+const US_SCREENER_FACETS_CACHE_NAMESPACE = 'us-screener-facets-v1'
 const EARNINGS_WINDOWS = new Set([14, 30, 60, 90, 180])
 const EARNINGS_TIME_BUCKETS = new Set(['before_open', 'market_hours', 'after_close', 'unknown'])
 const STAGE_AXES = [
@@ -78,6 +79,15 @@ type UsScreenerPayload = {
       rowsInserted: number
     } | null
   }
+}
+
+type UsScreenerFacets = UsScreenerPayload['facets']
+type UsScreenerFacetRow = {
+  exchange: string | null
+  asset_type: string | null
+  sector: string | null
+  industry_code: string | null
+  industry: string | null
 }
 
 function numeric(value: unknown): number | null {
@@ -133,6 +143,85 @@ function todayInNewYork(): string {
   }).formatToParts(new Date())
   const value = (type: string) => parts.find((part) => part.type === type)?.value ?? ''
   return `${value('year')}-${value('month')}-${value('day')}`
+}
+
+async function loadFacets(date: string, taxonomy: string): Promise<UsScreenerFacets> {
+  const cacheKey = stableCacheKey({ date, taxonomy })
+  const cacheTtlMs = 24 * 60 * 60 * 1_000
+  const cached = await readServingCache<UsScreenerFacets>(
+    US_SCREENER_FACETS_CACHE_NAMESPACE,
+    cacheKey,
+    cacheTtlMs,
+  ).catch(() => null)
+  if (cached) return cached.payload
+
+  const facetRows = await execAll<UsScreenerFacetRow>(
+    `
+    SELECT DISTINCT
+      u.exchange,
+      u.asset_type,
+      COALESCE(c.sector_name, u.sector) AS sector,
+      c.industry_code,
+      COALESCE(c.industry_name, u.industry) AS industry
+    FROM market_daily_snapshots s INDEXED BY market_snapshots_market_date_ticker_idx
+    INNER JOIN market_universe u
+      ON u.market = s.market
+     AND u.ticker = s.ticker
+     AND u.active = 1
+    LEFT JOIN market_classifications c
+      ON c.market = s.market
+     AND c.ticker = s.ticker
+     AND c.taxonomy = ?
+     AND c.effective_from = '0000-01-01'
+    WHERE s.market = 'US'
+      AND s.date = ?
+      AND ${usInvestableSymbolSql('s.ticker')}
+    `,
+    [taxonomy, date],
+  )
+  const industryGroupMap = new Map<string, { sector: string | null; code: string; name: string }>()
+  for (const row of facetRows) {
+    const group = sicMajorGroupFromCode(row.industry_code)
+    if (!group) continue
+    industryGroupMap.set(`${row.sector ?? ''}\u0000${group.code}`, {
+      sector: row.sector,
+      code: group.code,
+      name: group.name,
+    })
+  }
+  const facets: UsScreenerFacets = {
+    exchanges: Array.from(new Set(
+      facetRows.map((row) => row.exchange).filter((value): value is string => Boolean(value)),
+    )).sort(),
+    sectors: Array.from(new Set(
+      facetRows.map((row) => row.sector).filter((value): value is string => Boolean(value)),
+    )).sort(),
+    industryGroups: Array.from(industryGroupMap.values()).sort((a, b) => (
+      (a.sector ?? '').localeCompare(b.sector ?? '', 'en')
+      || a.code.localeCompare(b.code, 'en')
+    )),
+    industries: Array.from(new Map(
+      facetRows
+        .filter((row): row is typeof row & { industry: string } => Boolean(row.industry))
+        .map((row) => [`${row.sector ?? ''}\u0000${row.industry}`, {
+          sector: row.sector,
+          industryCode: row.industry_code,
+          industry: row.industry,
+        }]),
+    ).values()).sort((a, b) => (
+      (a.sector ?? '').localeCompare(b.sector ?? '', 'en')
+      || a.industry.localeCompare(b.industry, 'en')
+    )),
+  }
+  await writeServingCache(
+    US_SCREENER_FACETS_CACHE_NAMESPACE,
+    cacheKey,
+    facets,
+    cacheTtlMs,
+  ).catch((error) => {
+    console.warn('US screener facets cache write skipped:', error)
+  })
+  return facets
 }
 
 export async function GET(request: NextRequest) {
@@ -239,70 +328,7 @@ export async function GET(request: NextRequest) {
         cache: { status: 'hit', generatedAt: cached.generatedAt },
       })
     }
-    const facetRows = await execAll<{
-      exchange: string | null
-      asset_type: string | null
-      sector: string | null
-      industry_code: string | null
-      industry: string | null
-    }>(
-      `
-      SELECT DISTINCT
-        u.exchange,
-        u.asset_type,
-        COALESCE(c.sector_name, u.sector) AS sector,
-        c.industry_code,
-        COALESCE(c.industry_name, u.industry) AS industry
-      FROM market_daily_snapshots s INDEXED BY market_snapshots_market_date_ticker_idx
-      INNER JOIN market_universe u
-        ON u.market = s.market
-       AND u.ticker = s.ticker
-       AND u.active = 1
-      LEFT JOIN market_classifications c
-        ON c.market = s.market
-       AND c.ticker = s.ticker
-       AND c.taxonomy = ?
-       AND c.effective_from = '0000-01-01'
-      WHERE s.market = 'US'
-        AND s.date = ?
-        AND ${usInvestableSymbolSql('s.ticker')}
-      `,
-      [taxonomy, date],
-    )
-    const industryGroupMap = new Map<string, { sector: string | null; code: string; name: string }>()
-    for (const row of facetRows) {
-      const group = sicMajorGroupFromCode(row.industry_code)
-      if (!group) continue
-      industryGroupMap.set(`${row.sector ?? ''}\u0000${group.code}`, {
-        sector: row.sector,
-        code: group.code,
-        name: group.name,
-      })
-    }
-    const facets = {
-      exchanges: Array.from(new Set(
-        facetRows.map((row) => row.exchange).filter((value): value is string => Boolean(value)),
-      )).sort(),
-      sectors: Array.from(new Set(
-        facetRows.map((row) => row.sector).filter((value): value is string => Boolean(value)),
-      )).sort(),
-      industryGroups: Array.from(industryGroupMap.values()).sort((a, b) => (
-        (a.sector ?? '').localeCompare(b.sector ?? '', 'en')
-        || a.code.localeCompare(b.code, 'en')
-      )),
-      industries: Array.from(new Map(
-        facetRows
-          .filter((row): row is typeof row & { industry: string } => Boolean(row.industry))
-          .map((row) => [`${row.sector ?? ''}\u0000${row.industry}`, {
-            sector: row.sector,
-            industryCode: row.industry_code,
-            industry: row.industry,
-          }]),
-      ).values()).sort((a, b) => (
-        (a.sector ?? '').localeCompare(b.sector ?? '', 'en')
-        || a.industry.localeCompare(b.industry, 'en')
-      )),
-    }
+    const facets = await loadFacets(date, taxonomy)
     const qAliasTickers = q ? findUsAliasTickers(q) : []
     const qAliasPlaceholders = qAliasTickers.map(() => '?').join(',')
     const physicalSort = sort === 'pms' || sort === 'pfs' || sort === 'pes'
@@ -447,7 +473,7 @@ export async function GET(request: NextRequest) {
         ? [`AND s.${axis}_stage IN (${values.map(() => '?').join(',')})`]
         : []
     })
-    const whereAvgVolume = avgVolumeFilter ? `AND COALESCE(periods.avg_volume_20, 0) >= ?` : ''
+    const whereAvgVolume = avgVolumeFilter ? `AND COALESCE(s.avg_volume_20, 0) >= ?` : ''
     const wherePriceMin = priceMin != null && Number.isFinite(priceMin) ? `AND COALESCE(cur.adj_close, cur.close) >= ?` : ''
     const wherePriceMax = priceMax != null && Number.isFinite(priceMax) ? `AND COALESCE(cur.adj_close, cur.close) <= ?` : ''
     const whereQuality = quality === 'standard'
@@ -456,41 +482,41 @@ export async function GET(request: NextRequest) {
            COALESCE(u.asset_type, 'Stock') = 'Mutual Fund'
            OR COALESCE(cur.adj_volume, cur.volume) > 0
          )
-         AND periods.prev_close > 0
-         AND ABS(100.0 * (COALESCE(cur.adj_close, cur.close) - periods.prev_close) / periods.prev_close) <= 100`
+         AND s.prev_close > 0
+         AND ABS(100.0 * (COALESCE(cur.adj_close, cur.close) - s.prev_close) / s.prev_close) <= 100`
          + `
          AND NOT (
            LENGTH(s.ticker) >= 5
            AND SUBSTR(s.ticker, -1, 1) IN ('W', 'U', 'R')
          )
          AND (
-           periods.close_5d IS NULL
-           OR ABS(100.0 * (COALESCE(cur.adj_close, cur.close) - periods.close_5d) / periods.close_5d) <= 200
+           s.close_5d IS NULL
+           OR ABS(100.0 * (COALESCE(cur.adj_close, cur.close) - s.close_5d) / s.close_5d) <= 200
          )
          AND (
-           periods.close_20d IS NULL
-           OR ABS(100.0 * (COALESCE(cur.adj_close, cur.close) - periods.close_20d) / periods.close_20d) <= 300
+           s.close_20d IS NULL
+           OR ABS(100.0 * (COALESCE(cur.adj_close, cur.close) - s.close_20d) / s.close_20d) <= 300
          )
          AND (
-           periods.close_60d IS NULL
-           OR ABS(100.0 * (COALESCE(cur.adj_close, cur.close) - periods.close_60d) / periods.close_60d) <= 500
+           s.close_60d IS NULL
+           OR ABS(100.0 * (COALESCE(cur.adj_close, cur.close) - s.close_60d) / s.close_60d) <= 500
          )
          AND (
-           periods.close_120d IS NULL
-           OR ABS(100.0 * (COALESCE(cur.adj_close, cur.close) - periods.close_120d) / periods.close_120d) <= 500
+           s.close_120d IS NULL
+           OR ABS(100.0 * (COALESCE(cur.adj_close, cur.close) - s.close_120d) / s.close_120d) <= 500
          )`
       : ''
     const whereMa200 = ma200Trend === 'above'
-      ? 'AND periods.ma_200 IS NOT NULL AND COALESCE(cur.adj_close, cur.close) >= periods.ma_200'
+      ? 'AND s.ma_200 IS NOT NULL AND COALESCE(cur.adj_close, cur.close) >= s.ma_200'
       : ma200Trend === 'below'
-        ? 'AND periods.ma_200 IS NOT NULL AND COALESCE(cur.adj_close, cur.close) < periods.ma_200'
+        ? 'AND s.ma_200 IS NOT NULL AND COALESCE(cur.adj_close, cur.close) < s.ma_200'
         : ''
     const whereMa200Direction = ma200Direction === 'up'
-      ? 'AND periods.ma_200_prev > 0 AND periods.ma_200 > periods.ma_200_prev * 1.0005'
+      ? 'AND s.ma_200_prev > 0 AND s.ma_200 > s.ma_200_prev * 1.0005'
       : ma200Direction === 'down'
-        ? 'AND periods.ma_200_prev > 0 AND periods.ma_200 < periods.ma_200_prev * 0.9995'
+        ? 'AND s.ma_200_prev > 0 AND s.ma_200 < s.ma_200_prev * 0.9995'
         : ma200Direction === 'flat'
-          ? 'AND periods.ma_200_prev > 0 AND ABS(periods.ma_200 - periods.ma_200_prev) / periods.ma_200_prev <= 0.0005'
+          ? 'AND s.ma_200_prev > 0 AND ABS(s.ma_200 - s.ma_200_prev) / s.ma_200_prev <= 0.0005'
           : ''
     const whereMarketCapMin = marketCapMin != null
       ? 'AND u.shares_outstanding * COALESCE(cur.adj_close, cur.close) >= ?'
@@ -507,7 +533,7 @@ export async function GET(request: NextRequest) {
     const whereKnownEarnings = sort === 'earningsNextDate' || sort === 'earningsDays'
       ? 'AND earnings.report_date IS NOT NULL'
       : ''
-    const args: Array<string | number> = [date, earningsToday, taxonomy, date, date]
+    const args: Array<string | number> = [earningsToday, taxonomy, date, date]
     if (q) args.push(`%${q}%`, `%${q.toUpperCase()}%`, ...qAliasTickers)
     if (sector) args.push(sector)
     if (industryGroup) args.push(industryGroup)
@@ -558,17 +584,7 @@ export async function GET(request: NextRequest) {
     }
     const rows = await execAll<Record<string, unknown>>(
       `
-      WITH lookback_dates AS (
-        SELECT date, ROW_NUMBER() OVER (ORDER BY date DESC) AS rn
-        FROM (
-          SELECT DISTINCT date
-          FROM market_ohlcv_daily INDEXED BY market_ohlcv_market_date_idx
-          WHERE market = 'US' AND date <= ?
-          ORDER BY date DESC
-          LIMIT 201
-        )
-      ),
-      earnings_clock AS (
+      WITH earnings_clock AS (
         SELECT ? AS today
       ),
       next_earnings_dates AS (
@@ -577,23 +593,6 @@ export async function GET(request: NextRequest) {
         WHERE market = 'US'
           AND report_date >= (SELECT today FROM earnings_clock)
         GROUP BY ticker
-      ),
-      periods AS (
-        SELECT
-          o.ticker,
-          MAX(CASE WHEN d.rn = 2 THEN COALESCE(o.adj_close, o.close) END) AS prev_close,
-          MAX(CASE WHEN d.rn = 6 THEN COALESCE(o.adj_close, o.close) END) AS close_5d,
-          MAX(CASE WHEN d.rn = 21 THEN COALESCE(o.adj_close, o.close) END) AS close_20d,
-          MAX(CASE WHEN d.rn = 61 THEN COALESCE(o.adj_close, o.close) END) AS close_60d,
-          MAX(CASE WHEN d.rn = 121 THEN COALESCE(o.adj_close, o.close) END) AS close_120d,
-          AVG(CASE WHEN d.rn <= 20 THEN COALESCE(o.adj_volume, o.volume) END) AS avg_volume_20,
-          AVG(CASE WHEN d.rn <= 200 THEN COALESCE(o.adj_close, o.close) END) AS ma_200,
-          AVG(CASE WHEN d.rn BETWEEN 2 AND 201 THEN COALESCE(o.adj_close, o.close) END) AS ma_200_prev,
-          COUNT(CASE WHEN d.rn <= 200 THEN 1 END) AS ma_200_observations
-        FROM market_ohlcv_daily o
-        INNER JOIN lookback_dates d ON d.date = o.date
-        WHERE o.market = 'US'
-        GROUP BY o.ticker
       )
       SELECT
         s.ticker,
@@ -606,19 +605,19 @@ export async function GET(request: NextRequest) {
         c.source AS classification_source,
         COALESCE(cur.adj_close, cur.close) AS price,
         COALESCE(cur.adj_volume, cur.volume) AS volume,
-        periods.avg_volume_20,
-        CASE WHEN COALESCE(cur.adj_volume, cur.volume) > 0 AND periods.prev_close > 0 THEN 100.0 * (COALESCE(cur.adj_close, cur.close) - periods.prev_close) / periods.prev_close END AS change_pct,
-        CASE WHEN periods.close_5d > 0 THEN 100.0 * (COALESCE(cur.adj_close, cur.close) - periods.close_5d) / periods.close_5d END AS return_5d,
-        CASE WHEN periods.close_20d > 0 THEN 100.0 * (COALESCE(cur.adj_close, cur.close) - periods.close_20d) / periods.close_20d END AS return_20d,
-        CASE WHEN periods.close_60d > 0 THEN 100.0 * (COALESCE(cur.adj_close, cur.close) - periods.close_60d) / periods.close_60d END AS return_60d,
-        CASE WHEN periods.close_120d > 0 THEN 100.0 * (COALESCE(cur.adj_close, cur.close) - periods.close_120d) / periods.close_120d END AS return_120d,
-        periods.ma_200,
+        s.avg_volume_20,
+        CASE WHEN COALESCE(cur.adj_volume, cur.volume) > 0 AND s.prev_close > 0 THEN 100.0 * (COALESCE(cur.adj_close, cur.close) - s.prev_close) / s.prev_close END AS change_pct,
+        CASE WHEN s.close_5d > 0 THEN 100.0 * (COALESCE(cur.adj_close, cur.close) - s.close_5d) / s.close_5d END AS return_5d,
+        CASE WHEN s.close_20d > 0 THEN 100.0 * (COALESCE(cur.adj_close, cur.close) - s.close_20d) / s.close_20d END AS return_20d,
+        CASE WHEN s.close_60d > 0 THEN 100.0 * (COALESCE(cur.adj_close, cur.close) - s.close_60d) / s.close_60d END AS return_60d,
+        CASE WHEN s.close_120d > 0 THEN 100.0 * (COALESCE(cur.adj_close, cur.close) - s.close_120d) / s.close_120d END AS return_120d,
+        s.ma_200,
         CASE
-          WHEN periods.ma_200_prev > 0
-          THEN 100.0 * (periods.ma_200 - periods.ma_200_prev) / periods.ma_200_prev
+          WHEN s.ma_200_prev > 0
+          THEN 100.0 * (s.ma_200 - s.ma_200_prev) / s.ma_200_prev
         END AS ma_200_angle,
-        periods.ma_200_observations,
-        CASE WHEN periods.ma_200 > 0 THEN 100.0 * (COALESCE(cur.adj_close, cur.close) - periods.ma_200) / periods.ma_200 END AS ma_200_gap_pct,
+        s.ma_200_observations,
+        CASE WHEN s.ma_200 > 0 THEN 100.0 * (COALESCE(cur.adj_close, cur.close) - s.ma_200) / s.ma_200 END AS ma_200_gap_pct,
         CASE WHEN u.shares_outstanding IS NOT NULL AND COALESCE(cur.adj_close, cur.close) IS NOT NULL THEN u.shares_outstanding * COALESCE(cur.adj_close, cur.close) END AS market_cap,
         s.daily_a_stage || s.daily_b_stage || s.weekly_a_stage || s.weekly_b_stage || s.monthly_a_stage || s.monthly_b_stage AS stage_code,
         s.daily_a_stage,
@@ -656,7 +655,6 @@ export async function GET(request: NextRequest) {
         ON cur.market = 'US'
        AND cur.ticker = s.ticker
        AND cur.date = ?
-      LEFT JOIN periods ON periods.ticker = s.ticker
       LEFT JOIN next_earnings_dates next_earnings
         ON next_earnings.ticker = s.ticker
       LEFT JOIN market_earnings_calendar earnings

@@ -75,24 +75,50 @@ const SQLITE_WRITER_PROCESS_PATTERNS = [
   /scripts\/(?:update-latest|refresh-after-ohlcv|batch-ohlcv|batch-snapshots|batch-physical-momentum|build-dashboard-cache)\.(?:ts|js)\b/,
   /scripts\/(?:update-us-latest|batch-us-|run-us-ml-job)\S*\.(?:ts|js)\b/,
   /scripts\/(?:run-ml-learning|guard-ml-freshness|batch-ml-|build-serving-ml-)\S*\.(?:ts|js)\b/,
-  /scripts\/(?:batch-forward-extrema|build-serving-|refresh-earnings|batch-kabutan-(?:material-news|themes)|maintenance-db)\S*\.(?:ts|js)\b/,
+  /scripts\/(?:batch-forward-extrema|batch-earnings(?:-times)?|build-serving-|batch-kabutan-(?:material-news|themes)|maintenance-db)\S*\.(?:ts|js)\b/,
 ] as const
+
+type ProcessRow = {
+  pid: number
+  parentPid: number
+  command: string
+}
+
+function processRows(): ProcessRow[] {
+  const output = execFileSync('ps', ['-axo', 'pid=,ppid=,command='], {
+    encoding: 'utf8',
+    timeout: 5_000,
+  })
+  return output
+    .split('\n')
+    .map((line) => {
+      const match = line.trim().match(/^(\d+)\s+(\d+)\s+(.+)$/)
+      return match
+        ? { pid: Number(match[1]), parentPid: Number(match[2]), command: match[3] }
+        : null
+    })
+    .filter((row): row is ProcessRow => row != null)
+}
+
+function currentProcessFamilyPids(rows: ProcessRow[]): Set<number> {
+  const byPid = new Map(rows.map((row) => [row.pid, row]))
+  const family = new Set<number>()
+  let current = byPid.get(process.pid)
+  while (current && !family.has(current.pid)) {
+    family.add(current.pid)
+    current = byPid.get(current.parentPid)
+  }
+  return family
+}
 
 function hasActiveSqliteWriterProcess(): boolean {
   try {
-    const output = execFileSync('ps', ['-axo', 'pid=,command='], {
-      encoding: 'utf8',
-      timeout: 5_000,
-    })
-    return output
-      .split('\n')
-      .some((line) => {
-        const match = line.trim().match(/^(\d+)\s+(.+)$/)
-        if (!match) return false
-        const pid = Number(match[1])
-        if (!Number.isInteger(pid) || pid === process.pid) return false
-        return SQLITE_WRITER_PROCESS_PATTERNS.some((pattern) => pattern.test(match[2]))
-      })
+    const rows = processRows()
+    const currentFamily = currentProcessFamilyPids(rows)
+    return rows.some((row) => (
+      !currentFamily.has(row.pid)
+      && SQLITE_WRITER_PROCESS_PATTERNS.some((pattern) => pattern.test(row.command))
+    ))
   } catch {
     // A failed process audit must never make lock cleanup more aggressive.
     return true
@@ -101,20 +127,13 @@ function hasActiveSqliteWriterProcess(): boolean {
 
 function hasActiveUsAdjustedFoundationProcess(): boolean {
   try {
-    const output = execFileSync('ps', ['-axo', 'pid=,command='], {
-      encoding: 'utf8',
-      timeout: 5_000,
-    })
-    return output
-      .split('\n')
-      .some((line) => {
-        const match = line.trim().match(/^(\d+)\s+(.+)$/)
-        if (!match) return false
-        const pid = Number(match[1])
-        if (!Number.isInteger(pid) || pid === process.pid) return false
-        return /scripts\/(?:run-us-ml-weekly-efficient|ensure-us-adjusted-foundation|build-us-analytics-db)\.(?:ts|js)\b/
-          .test(match[2])
-      })
+    const rows = processRows()
+    const currentFamily = currentProcessFamilyPids(rows)
+    return rows.some((row) => (
+      !currentFamily.has(row.pid)
+      && /scripts\/(?:run-us-ml-weekly-efficient|ensure-us-adjusted-foundation|build-us-analytics-db)\.(?:ts|js)\b/
+        .test(row.command)
+    ))
   } catch {
     return true
   }
@@ -351,6 +370,17 @@ export async function acquireJpStockboardUpdateLock(
     jobType,
     leaseSeconds,
     JP_STOCKBOARD_UPDATE_JOB_TYPES,
+  )
+}
+
+export async function acquireUsStockboardUpdateLock(
+  jobType: string,
+  leaseSeconds = DEFAULT_UPDATE_LOCK_LEASE_SECONDS,
+): Promise<UpdateLockHandle | null> {
+  return acquireUpdateLock(
+    jobType,
+    leaseSeconds,
+    US_ISOLATED_UPDATE_JOB_TYPES,
   )
 }
 

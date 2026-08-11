@@ -6,15 +6,84 @@
 // stockboard database.
 
 import { execFileSync, spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { exactForwardExtremaRecomputeBars } from '@/lib/backtest/forward-extrema'
 import { ML_PRIMARY_HORIZON_LIST } from '@/lib/backtest/ml-horizons'
 import { waitForMemoryHeadroom, withMemoryGuardEnv } from '@/lib/system/memory-guard'
 
 const DEFAULT_US_ANALYTICS_DB = '/Volumes/OWC Express 1M2 80G/stockboard-data/us/stockboard-us.db'
+const US_ML_LOCK_PATH = path.join(
+  os.homedir(),
+  'Library',
+  'Application Support',
+  'StockBoard',
+  'us-ml-job.lock',
+)
 
-type Mode = 'daily' | 'full' | 'after-pms'
+type Mode = 'daily' | 'weekly' | 'full' | 'after-pms'
 type EnvOverrides = Record<string, string | undefined>
+
+const CHUNK_CHECKPOINT_VERSION = 1
+
+type ChunkCheckpoint = {
+  version: number
+  signature: string
+  completed: string[]
+  updatedAt: string
+}
+
+let usMlLockOwned = false
+
+function pidExists(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function acquireUsMlProcessLock(mode: Mode): boolean {
+  fs.mkdirSync(path.dirname(US_ML_LOCK_PATH), { recursive: true })
+  try {
+    const handle = fs.openSync(US_ML_LOCK_PATH, 'wx', 0o600)
+    fs.writeFileSync(handle, `${JSON.stringify({ pid: process.pid, mode, startedAt: new Date().toISOString() })}\n`)
+    fs.closeSync(handle)
+    usMlLockOwned = true
+    return true
+  } catch (error) {
+    if (!(error instanceof Error) || !('code' in error) || error.code !== 'EEXIST') throw error
+  }
+
+  try {
+    const value = JSON.parse(fs.readFileSync(US_ML_LOCK_PATH, 'utf8')) as { pid?: unknown; mode?: unknown }
+    const pid = Number(value.pid)
+    if (pidExists(pid)) {
+      console.log(`US ML ${mode} skipped: another US ML job is active (pid=${pid}, mode=${String(value.mode ?? '-')})`)
+      return false
+    }
+  } catch {
+    // An unreadable lock is treated as stale and replaced atomically below.
+  }
+
+  fs.unlinkSync(US_ML_LOCK_PATH)
+  return acquireUsMlProcessLock(mode)
+}
+
+function releaseUsMlProcessLock(): void {
+  if (!usMlLockOwned) return
+  try {
+    const value = JSON.parse(fs.readFileSync(US_ML_LOCK_PATH, 'utf8')) as { pid?: unknown }
+    if (Number(value.pid) === process.pid) fs.unlinkSync(US_ML_LOCK_PATH)
+  } catch {
+    // A missing stale lock is already released.
+  }
+  usMlLockOwned = false
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -30,8 +99,8 @@ function numberEnv(name: string, fallback: number): number {
 }
 
 function modeFromArg(value: string | undefined): Mode {
-  if (value === 'daily' || value === 'full' || value === 'after-pms') return value
-  throw new Error('Usage: tsx scripts/run-us-ml-job.ts <daily|full|after-pms>')
+  if (value === 'daily' || value === 'weekly' || value === 'full' || value === 'after-pms') return value
+  throw new Error('Usage: tsx scripts/run-us-ml-job.ts <daily|weekly|full|after-pms>')
 }
 
 async function runNpmOnce(script: string, env: NodeJS.ProcessEnv, overrides: EnvOverrides = {}): Promise<void> {
@@ -60,6 +129,171 @@ function sqliteText(dbPath: string, sql: string): string {
   return execFileSync('sqlite3', ['-cmd', '.timeout 30000', dbPath, sql], { encoding: 'utf8' }).trim()
 }
 
+function checkpointDirectory(env: NodeJS.ProcessEnv): string {
+  return env.STOCKBOARD_CHECKPOINT_DIR?.trim()
+    || path.join(os.homedir(), 'Library', 'Application Support', 'StockBoard', 'checkpoints')
+}
+
+function checkpointScriptPath(script: 'batch:ml-features' | 'batch:ml-physics-features'): string {
+  return script === 'batch:ml-features'
+    ? path.join(process.cwd(), 'scripts', 'batch-ml-features.ts')
+    : path.join(process.cwd(), 'scripts', 'batch-ml-physics-features.ts')
+}
+
+function chunkCheckpointSignature(
+  script: 'batch:ml-features' | 'batch:ml-physics-features',
+  env: NodeJS.ProcessEnv,
+  overrides: EnvOverrides,
+  tickers: string[],
+  chunkSize: number,
+): string {
+  const dbPath = env.STOCKBOARD_DB_PATH
+  if (!dbPath) throw new Error('STOCKBOARD_DB_PATH is required to checkpoint US ML feature jobs')
+  const latestDate = sqliteText(dbPath, 'SELECT MAX(date) FROM ohlcv_daily')
+  const implementationHash = createHash('sha256')
+    .update(fs.readFileSync(checkpointScriptPath(script)))
+    .digest('hex')
+    .slice(0, 16)
+  return createHash('sha256').update(JSON.stringify({
+    version: CHUNK_CHECKPOINT_VERSION,
+    script,
+    database: path.resolve(dbPath),
+    latestDate,
+    implementationHash,
+    chunkSize,
+    tickers,
+    overrides,
+  })).digest('hex').slice(0, 24)
+}
+
+function chunkCheckpointPath(
+  script: 'batch:ml-features' | 'batch:ml-physics-features',
+  env: NodeJS.ProcessEnv,
+  signature: string,
+): string {
+  const label = script.replaceAll(':', '-').replaceAll('/', '-')
+  return path.join(checkpointDirectory(env), `us-${label}-${signature}.json`)
+}
+
+function readChunkCheckpoint(file: string, signature: string): Set<string> {
+  try {
+    const checkpoint = JSON.parse(fs.readFileSync(file, 'utf8')) as ChunkCheckpoint
+    if (
+      checkpoint.version !== CHUNK_CHECKPOINT_VERSION
+      || checkpoint.signature !== signature
+      || !Array.isArray(checkpoint.completed)
+      || checkpoint.completed.some((value) => typeof value !== 'string')
+    ) {
+      console.warn(`Ignoring incompatible US ML chunk checkpoint: ${file}`)
+      return new Set()
+    }
+    return new Set(checkpoint.completed)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      console.warn(`US ML chunk checkpoint read failed: ${errorMessage(error)}`)
+    }
+    return new Set()
+  }
+}
+
+function writeChunkCheckpoint(file: string, signature: string, completed: Set<string>): void {
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  const temporary = `${file}.${process.pid}.tmp`
+  const checkpoint: ChunkCheckpoint = {
+    version: CHUNK_CHECKPOINT_VERSION,
+    signature,
+    completed: [...completed].sort(),
+    updatedAt: new Date().toISOString(),
+  }
+  try {
+    fs.writeFileSync(temporary, `${JSON.stringify(checkpoint)}\n`, { mode: 0o600 })
+    fs.renameSync(temporary, file)
+  } catch (error) {
+    try {
+      fs.rmSync(temporary, { force: true })
+    } catch {
+      // Preserve the original checkpoint write error.
+    }
+    throw error
+  }
+}
+
+function pipelineTickers(env: NodeJS.ProcessEnv, includeInactive: boolean): string[] {
+  const dbPath = env.STOCKBOARD_DB_PATH
+  if (!dbPath) throw new Error('STOCKBOARD_DB_PATH is required to split US ML feature jobs')
+  return execFileSync(
+    'sqlite3',
+    [
+      '-readonly',
+      '-cmd',
+      '.timeout 30000',
+      dbPath,
+      includeInactive
+        ? `SELECT DISTINCT ticker FROM ohlcv_daily ORDER BY ticker`
+        : `SELECT DISTINCT o.ticker
+           FROM ohlcv_daily o
+           JOIN ticker_universe u ON u.ticker = o.ticker AND COALESCE(u.active, 1) = 1
+           ORDER BY o.ticker`,
+    ],
+    { encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 },
+  ).trim().split(/\r?\n/).filter(Boolean)
+}
+
+async function runFeatureJobInTickerChunks(
+  script: 'batch:ml-features' | 'batch:ml-physics-features',
+  env: NodeJS.ProcessEnv,
+  overrides: EnvOverrides,
+  options: {
+    chunkSizeEnv: string
+    defaultChunkSize: number
+    startEnv: string
+    endEnv: string
+    targetStartEnv: string
+    targetEndEnv: string
+    includeInactive?: boolean
+  },
+): Promise<void> {
+  const explicitStart = env[options.startEnv]?.trim()
+  const explicitEnd = env[options.endEnv]?.trim()
+  if (explicitStart || explicitEnd) {
+    await runNpm(script, env, {
+      ...overrides,
+      [options.targetStartEnv]: explicitStart,
+      [options.targetEndEnv]: explicitEnd,
+    })
+    return
+  }
+
+  const chunkSize = numberEnv(options.chunkSizeEnv, options.defaultChunkSize)
+  const tickers = pipelineTickers(env, options.includeInactive === true)
+  const totalChunks = Math.ceil(tickers.length / chunkSize)
+  const signature = chunkCheckpointSignature(script, env, overrides, tickers, chunkSize)
+  const checkpointFile = chunkCheckpointPath(script, env, signature)
+  const completedChunks = readChunkCheckpoint(checkpointFile, signature)
+  console.log(`${script}: splitting ${tickers.length} active tickers into ${totalChunks} process chunks of up to ${chunkSize}`)
+
+  for (let offset = 0; offset < tickers.length; offset += chunkSize) {
+    const chunk = tickers.slice(offset, offset + chunkSize)
+    const chunkNumber = Math.floor(offset / chunkSize) + 1
+    const start = chunk[0]
+    const end = chunk.at(-1)
+    if (!start || !end) continue
+    const chunkKey = `${start}\u0000${end}`
+    if (completedChunks.has(chunkKey)) {
+      console.log(`${script} chunk ${chunkNumber}/${totalChunks}: ${start}..${end} (checkpoint complete, skipped)`)
+      continue
+    }
+    console.log(`${script} chunk ${chunkNumber}/${totalChunks}: ${start}..${end}`)
+    await runNpm(script, env, {
+      ...overrides,
+      [options.targetStartEnv]: start,
+      [options.targetEndEnv]: end,
+    })
+    completedChunks.add(chunkKey)
+    writeChunkCheckpoint(checkpointFile, signature, completedChunks)
+  }
+}
+
 function physicsEvaluationWindow(env: NodeJS.ProcessEnv, recentDaysValue: string): {
   trainStartDate: string
   startYear: string
@@ -71,6 +305,21 @@ function physicsEvaluationWindow(env: NodeJS.ProcessEnv, recentDaysValue: string
     ? Number(latestDate.slice(0, 4))
     : new Date().getUTCFullYear()
   const recentDays = Number(recentDaysValue)
+  if (recentDays === 0 && dbPath) {
+    const featureSet = sqlQuote(env.ML_PHYSICS_FEATURE_SET?.trim() || 'ma_physics_v4')
+    const earliestDate = sqliteText(
+      dbPath,
+      `SELECT MIN(date) FROM ml_feature_vectors_v2 WHERE feature_set = '${featureSet}'`,
+    )
+    const earliestYear = /^\d{4}-\d{2}-\d{2}$/.test(earliestDate)
+      ? Number(earliestDate.slice(0, 4))
+      : latestYear - 1
+    return {
+      trainStartDate: env.US_ML_FULL_START_DATE ?? '1900-01-01',
+      startYear: String(Math.min(latestYear, earliestYear + 1)),
+      endYear: String(latestYear),
+    }
+  }
   const evaluationYears = Math.max(1, Math.ceil((Number.isFinite(recentDays) ? recentDays : 420) / 252))
   const startYear = latestYear - evaluationYears + 1
 
@@ -136,6 +385,12 @@ function latestEligibleMissingPhysicsFeatureCount(env: NodeJS.ProcessEnv, minHis
   )
 }
 
+function earliestShortLabelDate(env: NodeJS.ProcessEnv): string | null {
+  const dbPath = env.STOCKBOARD_DB_PATH
+  if (!dbPath) return null
+  return sqliteText(dbPath, 'SELECT MIN(date) FROM ml_short_labels') || null
+}
+
 async function runNpm(script: string, env: NodeJS.ProcessEnv, overrides: EnvOverrides = {}): Promise<void> {
   const attempts = numberEnv('US_ML_STEP_MAX_ATTEMPTS', 3)
   const retryDelaySeconds = numberEnv('US_ML_STEP_RETRY_DELAY_SECONDS', 300)
@@ -157,10 +412,14 @@ async function runNpm(script: string, env: NodeJS.ProcessEnv, overrides: EnvOver
   throw lastError instanceof Error ? lastError : new Error(errorMessage(lastError))
 }
 
-async function runFullHistory(env: NodeJS.ProcessEnv, options: { skipPms?: boolean } = {}): Promise<void> {
+async function runFullHistory(
+  env: NodeJS.ProcessEnv,
+  options: { skipPms?: boolean; baseline?: boolean } = {},
+): Promise<void> {
   const startDate = env.US_ML_FULL_START_DATE ?? '1900-01-01'
   const horizons = ML_PRIMARY_HORIZON_LIST
-  const weeklyRecentDays = env.US_ML_WEEKLY_RECENT_DAYS ?? '420'
+  const baseline = options.baseline === true
+  const weeklyRecentDays = baseline ? '0' : env.US_ML_WEEKLY_RECENT_DAYS ?? '420'
   const exactExtremaRecomputeBars = String(
     exactForwardExtremaRecomputeBars(horizons.split(',').map(Number)),
   )
@@ -168,9 +427,9 @@ async function runFullHistory(env: NodeJS.ProcessEnv, options: { skipPms?: boole
 
   if (!options.skipPms) {
     await runNpm('batch:physical-momentum:us-full', env, {
-      US_PMS_RECENT_DAYS: env.US_PMS_WEEKLY_RECENT_DAYS ?? weeklyRecentDays,
+      US_PMS_RECENT_DAYS: baseline ? '0' : env.US_PMS_WEEKLY_RECENT_DAYS ?? weeklyRecentDays,
       US_PMS_TICKER_CHUNK: env.US_PMS_WEEKLY_TICKER_CHUNK ?? '250',
-      US_PMS_DATE_CHUNK: env.US_PMS_WEEKLY_DATE_CHUNK ?? '50',
+      US_PMS_DATE_CHUNK: env.US_PMS_DATE_CHUNK ?? env.US_PMS_WEEKLY_DATE_CHUNK ?? '250',
     })
   }
   if (env.US_ML_SKIP_FORWARD_RETURNS === '1') {
@@ -184,14 +443,14 @@ async function runFullHistory(env: NodeJS.ProcessEnv, options: { skipPms?: boole
   if (env.US_ML_SKIP_FORWARD_EXTREMA === '1') {
     console.log('US ML full-history: skipping forward_extrema by US_ML_SKIP_FORWARD_EXTREMA=1')
   } else {
-    await runNpm('batch:forward-extrema:ml-recent', env, {
+    await runNpm(baseline ? 'batch:forward-extrema:ml' : 'batch:forward-extrema:ml-recent', env, {
       ML_WEEKLY_EXTREMA_RECENT_DAYS:
         env.US_ML_WEEKLY_EXTREMA_RECALC_DAYS ?? exactExtremaRecomputeBars,
       ML_FULL_START_DATE: startDate,
       FORWARD_EXTREMA_START_DATE: startDate,
       FORWARD_EXTREMA_HORIZONS: horizons,
       FORWARD_EXTREMA_WRITE_MODEL_LABELS: '0',
-      FORWARD_EXTREMA_ACTIVE_ONLY: '1',
+      FORWARD_EXTREMA_ACTIVE_ONLY: baseline ? '0' : '1',
       FORWARD_EXTREMA_PROGRESS_EVERY: env.FORWARD_EXTREMA_PROGRESS_EVERY ?? '25',
       FORWARD_EXTREMA_RESUME: env.FORWARD_EXTREMA_RESUME ?? '1',
     })
@@ -199,14 +458,20 @@ async function runFullHistory(env: NodeJS.ProcessEnv, options: { skipPms?: boole
   if (env.US_ML_SKIP_ML_FEATURES === '1') {
     console.log('US ML full-history: skipping ml-features by US_ML_SKIP_ML_FEATURES=1')
   } else {
-    await runNpm('batch:ml-features', env, {
+    await runFeatureJobInTickerChunks('batch:ml-features', env, {
       ML_RECENT_DAYS: env.US_ML_FEATURE_RECENT_DAYS ?? weeklyRecentDays,
       ML_MIN_HISTORY_DAYS: env.US_ML_FEATURE_MIN_HISTORY_DAYS ?? '1',
       ML_START_DATE: startDate,
       ML_HORIZONS: horizons,
-      ML_TICKER_START: env.US_ML_FEATURE_TICKER_START,
-      ML_TICKER_END: env.US_ML_FEATURE_TICKER_END,
-      ML_FEATURE_ACTIVE_ONLY: '1',
+      ML_FEATURE_ACTIVE_ONLY: baseline ? '0' : '1',
+    }, {
+      chunkSizeEnv: 'US_ML_FEATURE_TICKER_CHUNK_SIZE',
+      defaultChunkSize: 200,
+      startEnv: 'US_ML_FEATURE_TICKER_START',
+      endEnv: 'US_ML_FEATURE_TICKER_END',
+      targetStartEnv: 'ML_TICKER_START',
+      targetEndEnv: 'ML_TICKER_END',
+      includeInactive: baseline,
     })
   }
   if (env.US_ML_SKIP_ML_LABELS === '1') {
@@ -223,8 +488,8 @@ async function runFullHistory(env: NodeJS.ProcessEnv, options: { skipPms?: boole
     await runNpm('batch:ml-train', env, {
       ML_HORIZONS: horizons,
       ML_TRAIN_START_DATE: startDate,
-      ML_TRAIN_SAMPLE_MODE: env.US_ML_TRAIN_SAMPLE_MODE ?? 'yearly',
-      ML_TRAIN_LIMIT: env.US_ML_TRAIN_LIMIT ?? '240000',
+      ML_TRAIN_SAMPLE_MODE: env.US_ML_TRAIN_SAMPLE_MODE ?? (baseline ? 'all_paged' : 'yearly'),
+      ML_TRAIN_LIMIT: env.US_ML_TRAIN_LIMIT ?? (baseline ? '0' : '240000'),
       ML_TRAIN_PER_YEAR_LIMIT: env.US_ML_TRAIN_PER_YEAR_LIMIT ?? '5000',
       ML_TRAIN_LABEL_SOURCE: 'extrema',
     })
@@ -242,23 +507,46 @@ async function runFullHistory(env: NodeJS.ProcessEnv, options: { skipPms?: boole
   if (env.US_ML_SKIP_PHYSICS_FEATURES === '1') {
     console.log('US ML full-history: skipping ml-physics-features by US_ML_SKIP_PHYSICS_FEATURES=1')
   } else {
-    await runNpm('batch:ml-physics-features', env, {
+    await runFeatureJobInTickerChunks('batch:ml-physics-features', env, {
       ML_PHYSICS_RECENT_DAYS: env.US_ML_PHYSICS_RECENT_DAYS ?? weeklyRecentDays,
       ML_PHYSICS_MIN_HISTORY_DAYS: env.US_ML_PHYSICS_MIN_HISTORY_DAYS ?? '1',
       ML_PHYSICS_START_DATE: startDate,
-      ML_PHYSICS_TICKER_START: env.US_ML_PHYSICS_TICKER_START,
-      ML_PHYSICS_TICKER_END: env.US_ML_PHYSICS_TICKER_END,
-      ML_PHYSICS_ACTIVE_ONLY: '1',
+      ML_PHYSICS_ACTIVE_ONLY: baseline ? '0' : '1',
+    }, {
+      chunkSizeEnv: 'US_ML_PHYSICS_TICKER_CHUNK_SIZE',
+      defaultChunkSize: 200,
+      startEnv: 'US_ML_PHYSICS_TICKER_START',
+      endEnv: 'US_ML_PHYSICS_TICKER_END',
+      targetStartEnv: 'ML_PHYSICS_TICKER_START',
+      targetEndEnv: 'ML_PHYSICS_TICKER_END',
+      includeInactive: baseline,
+    })
+  }
+  if (env.US_ML_SKIP_SHORT_LABELS === '1') {
+    console.log('US ML full-history: skipping ml-short-labels by US_ML_SKIP_SHORT_LABELS=1')
+  } else {
+    // Physics training joins these labels. Generate them before training, while
+    // RL states remain deferred until the refreshed candidates are available.
+    await runNpm('batch:ml-short-labels', env, {
+      ML_SHORT_HORIZONS: horizons,
+      ML_SHORT_LABEL_RECENT_DAYS: env.US_ML_SHORT_LABEL_RECENT_DAYS ?? weeklyRecentDays,
+      ML_SHORT_LABEL_START_DATE: startDate,
+      ML_SHORT_WRITE_RL_STATES: '0',
+      ML_SHORT_LABEL_DATE_CHUNK_DAYS: env.US_ML_SHORT_LABEL_DATE_CHUNK_DAYS ?? '365',
     })
   }
   if (env.US_ML_SKIP_PHYSICS_TRAIN === '1') {
     console.log('US ML full-history: skipping ml-physics-train by US_ML_SKIP_PHYSICS_TRAIN=1')
   } else {
+    const physicsTrainStartDate = env.US_ML_PHYSICS_TRAIN_START_DATE
+      ?? earliestShortLabelDate(env)
+      ?? startDate
     await runNpm('batch:ml-physics-train', env, {
       ML_PHYSICS_HORIZONS: horizons,
-      ML_PHYSICS_TRAIN_START_DATE: startDate,
-      ML_PHYSICS_TRAIN_SAMPLE_MODE: env.US_ML_PHYSICS_TRAIN_SAMPLE_MODE ?? 'yearly',
-      ML_PHYSICS_TRAIN_LIMIT: env.US_ML_PHYSICS_TRAIN_LIMIT ?? '240000',
+      ML_PHYSICS_TRAIN_START_DATE: physicsTrainStartDate,
+      ML_PHYSICS_TRAIN_SAMPLE_MODE:
+        env.US_ML_PHYSICS_TRAIN_SAMPLE_MODE ?? (baseline ? 'all_paged' : 'yearly'),
+      ML_PHYSICS_TRAIN_LIMIT: env.US_ML_PHYSICS_TRAIN_LIMIT ?? (baseline ? '0' : '240000'),
       ML_PHYSICS_TRAIN_PER_YEAR_LIMIT: env.US_ML_PHYSICS_TRAIN_PER_YEAR_LIMIT ?? '5000',
     })
   }
@@ -276,15 +564,8 @@ async function runFullHistory(env: NodeJS.ProcessEnv, options: { skipPms?: boole
     await runNpm('batch:ml-insights', env)
   }
   if (env.US_ML_SKIP_SHORT_LABELS === '1') {
-    console.log('US ML full-history: skipping ml-short-labels by US_ML_SKIP_SHORT_LABELS=1')
+    // The label-stage skip above also owns RL-state generation.
   } else {
-    await runNpm('batch:ml-short-labels', env, {
-      ML_SHORT_HORIZONS: horizons,
-      ML_SHORT_LABEL_RECENT_DAYS: env.US_ML_SHORT_LABEL_RECENT_DAYS ?? weeklyRecentDays,
-      ML_SHORT_LABEL_START_DATE: startDate,
-      ML_SHORT_WRITE_RL_STATES: '0',
-      ML_SHORT_LABEL_DATE_CHUNK_DAYS: env.US_ML_SHORT_LABEL_DATE_CHUNK_DAYS ?? '365',
-    })
     await runNpm('batch:ml-short-labels', env, {
       ML_SHORT_HORIZONS: horizons,
       ML_SHORT_LABEL_RECENT_DAYS: env.US_ML_SHORT_LABEL_RECENT_DAYS ?? weeklyRecentDays,
@@ -339,6 +620,7 @@ async function runFullHistory(env: NodeJS.ProcessEnv, options: { skipPms?: boole
       SERVING_DATE_LIMIT: '0',
       SERVING_SUMMARY_DATE_CHUNK: env.US_SERVING_SUMMARY_DATE_CHUNK ?? '40',
     })
+    await runNpm('batch:dashboard-cache', env)
   }
   await runNpm('batch:us-ml-health', env, {
     US_ML_HEALTH_WRITE: '1',
@@ -465,6 +747,7 @@ async function runDailyServing(env: NodeJS.ProcessEnv): Promise<void> {
   } else {
     console.log('US ML daily: skipping physics status evaluation; weekly full ML refresh owns status evaluation')
   }
+  await runNpm('batch:dashboard-cache', env)
   await runNpm('batch:us-ml-health', env, {
     US_ML_HEALTH_WRITE: '1',
     US_ML_HEALTH_MIN_HISTORY_DAYS: physicsMinHistoryDays,
@@ -483,24 +766,42 @@ async function main(): Promise<void> {
   if (!fs.existsSync(usAnalyticsDbPath)) {
     throw new Error(`US analytics DB not found: ${usAnalyticsDbPath}`)
   }
+  if (!acquireUsMlProcessLock(mode)) return
 
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    USE_LOCAL_DB: '1',
-    STOCKBOARD_DB_ROLE: 'us-analytics',
-    STOCKBOARD_DB_PATH: usAnalyticsDbPath,
-    US_ANALYTICS_DB_PATH: usAnalyticsDbPath,
-    SQLITE_BUSY_RETRIES: process.env.SQLITE_BUSY_RETRIES ?? '12',
-    UPDATE_CHILD_TIMEOUT_MINUTES: process.env.UPDATE_CHILD_TIMEOUT_MINUTES ?? '2880',
-    US_ML_FULL_START_DATE: process.env.US_ML_FULL_START_DATE ?? '1900-01-01',
-    US_ML_STEP_MAX_ATTEMPTS: process.env.US_ML_STEP_MAX_ATTEMPTS ?? '3',
-    US_ML_STEP_RETRY_DELAY_SECONDS: process.env.US_ML_STEP_RETRY_DELAY_SECONDS ?? '300',
+  try {
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      USE_LOCAL_DB: '1',
+      STOCKBOARD_DB_ROLE: 'us-analytics',
+      STOCKBOARD_DB_PATH: usAnalyticsDbPath,
+      US_ANALYTICS_DB_PATH: usAnalyticsDbPath,
+      SQLITE_BUSY_RETRIES: process.env.SQLITE_BUSY_RETRIES ?? '12',
+      UPDATE_CHILD_TIMEOUT_MINUTES: process.env.UPDATE_CHILD_TIMEOUT_MINUTES ?? '2880',
+      US_ML_FULL_START_DATE: process.env.US_ML_FULL_START_DATE ?? '1900-01-01',
+      US_ML_STEP_MAX_ATTEMPTS: process.env.US_ML_STEP_MAX_ATTEMPTS ?? '3',
+      US_ML_STEP_RETRY_DELAY_SECONDS: process.env.US_ML_STEP_RETRY_DELAY_SECONDS ?? '300',
+    }
+
+    console.log(`US ML ${mode} job: db=${usAnalyticsDbPath}`)
+    if (mode === 'daily' || mode === 'weekly') {
+      await runNpm('batch:ml-pipeline-state', env, {
+        ML_PIPELINE_ACTION: 'verify-or-adopt',
+        ML_PIPELINE_MARKET: 'US',
+      })
+    }
+
+    if (mode === 'full') await runFullHistory(env, { baseline: true })
+    else if (mode === 'after-pms') await runFullHistory(env, { skipPms: true, baseline: true })
+    else if (mode === 'weekly') await runFullHistory(env)
+    else await runDailyServing(env)
+
+    await runNpm('batch:ml-pipeline-state', env, {
+      ML_PIPELINE_ACTION: mode === 'full' || mode === 'after-pms' ? 'mark-baseline' : 'mark-delta',
+      ML_PIPELINE_MARKET: 'US',
+    })
+  } finally {
+    releaseUsMlProcessLock()
   }
-
-  console.log(`US ML ${mode} job: db=${usAnalyticsDbPath}`)
-  if (mode === 'full') await runFullHistory(env)
-  else if (mode === 'after-pms') await runFullHistory(env, { skipPms: true })
-  else await runDailyServing(env)
 }
 
 main().catch((error) => {

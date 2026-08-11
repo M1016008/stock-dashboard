@@ -210,14 +210,24 @@ function buildDailyFrame(
 
 type CalendarFrameInterval = 'W' | 'M' | 'Y'
 
+const weeklyBucketCache = new Map<string, string>()
+
 function calendarBucketKey(date: string, interval: CalendarFrameInterval): string {
   if (interval === 'M') return date.slice(0, 7)
   if (interval === 'Y') return date.slice(0, 4)
+  const cached = weeklyBucketCache.get(date)
+  if (cached) return cached
   const value = new Date(`${date}T00:00:00.000Z`)
   const day = value.getUTCDay()
   const mondayOffset = day === 0 ? -6 : 1 - day
   value.setUTCDate(value.getUTCDate() + mondayOffset)
-  return value.toISOString().slice(0, 10)
+  const bucket = value.toISOString().slice(0, 10)
+  weeklyBucketCache.set(date, bucket)
+  if (weeklyBucketCache.size > 20_000) {
+    const oldest = weeklyBucketCache.keys().next().value
+    if (oldest) weeklyBucketCache.delete(oldest)
+  }
+  return bucket
 }
 
 function buildCalendarFrame(
@@ -261,10 +271,15 @@ function buildCalendarFrame(
 }
 
 export function prepareMaSequence(rows: MaSequencePriceRow[]): MaSequencePrepared {
-  const ordered = rows
-    .filter((row) => row.date && finite(row.close) && row.close > 0)
-    .slice()
-    .sort((a, b) => a.date.localeCompare(b.date))
+  const ordered = rows.filter((row) => row.date && finite(row.close) && row.close > 0)
+  let needsSort = false
+  for (let index = 1; index < ordered.length; index += 1) {
+    if (ordered[index - 1].date > ordered[index].date) {
+      needsSort = true
+      break
+    }
+  }
+  if (needsSort) ordered.sort((a, b) => a.date.localeCompare(b.date))
   return {
     rows: ordered,
     stage: buildDailyFrame(ordered, MA_SEQUENCE_STAGE_PERIODS),
@@ -880,8 +895,22 @@ function projectionHash(dimension: number, bit: number): number {
   return (value ^ (value >>> 16)) >>> 0
 }
 
+const MA_SEQUENCE_SIGNATURE_BIT_COUNT = MA_SEQUENCE_BAND_COUNT * MA_SEQUENCE_BAND_BITS
+const MA_SEQUENCE_SIGNATURE_SIGNS = (() => {
+  const signs = new Int8Array(
+    MA_SEQUENCE_EMBEDDING_FEATURE_LENGTH * MA_SEQUENCE_SIGNATURE_BIT_COUNT,
+  )
+  for (let dimension = 0; dimension < MA_SEQUENCE_EMBEDDING_FEATURE_LENGTH; dimension += 1) {
+    const offset = dimension * MA_SEQUENCE_SIGNATURE_BIT_COUNT
+    for (let bit = 0; bit < MA_SEQUENCE_SIGNATURE_BIT_COUNT; bit += 1) {
+      signs[offset + bit] = (projectionHash(dimension, bit) & 0x40000000) === 0 ? -1 : 1
+    }
+  }
+  return signs
+})()
+
 function signatureBands(values: number[]): number[] {
-  const bitCount = MA_SEQUENCE_BAND_COUNT * MA_SEQUENCE_BAND_BITS
+  const bitCount = MA_SEQUENCE_SIGNATURE_BIT_COUNT
   const accumulators = new Float64Array(bitCount)
   for (
     let dimension = 0;
@@ -890,10 +919,9 @@ function signatureBands(values: number[]): number[] {
   ) {
     const value = values[dimension]
     if (!finite(value) || value === 0) continue
+    const projectionOffset = dimension * bitCount
     for (let bit = 0; bit < bitCount; bit += 1) {
-      const state = projectionHash(dimension, bit)
-      const sign = (state & 0x40000000) === 0 ? -1 : 1
-      accumulators[bit] += value * sign
+      accumulators[bit] += value * MA_SEQUENCE_SIGNATURE_SIGNS[projectionOffset + bit]
     }
   }
   return Array.from({ length: MA_SEQUENCE_BAND_COUNT }, (_, bandIndex) => {

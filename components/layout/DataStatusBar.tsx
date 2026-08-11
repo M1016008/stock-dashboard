@@ -2,6 +2,10 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { Activity, CheckCircle2, Database, Maximize2, Minimize2, RefreshCw, TriangleAlert } from 'lucide-react'
+import {
+  marketPriceCoverageNeedsAttention,
+  supplementalSourceNeedsAttention,
+} from '@/lib/status-health'
 
 type MarketStatus = {
   expected: string
@@ -85,6 +89,9 @@ type SourceStatus = {
   updatedAt: string | null
   ageHours: number | null
   fresh: boolean
+  configured?: boolean
+  optional?: boolean
+  provider?: string
 }
 
 type Density = 'compact' | 'comfortable'
@@ -95,8 +102,8 @@ function formatPct(value: number) {
 
 function statusText(status?: MarketStatus) {
   if (!status?.price) return '未取得'
-  if (status.coverage?.pricePct != null && status.coverage.pricePct < 99.95) {
-    return `${status.price} / ${formatPct(status.coverage.pricePct)}`
+  if (marketPriceCoverageNeedsAttention(status.coverage)) {
+    return `${status.price} / ${formatPct(status.coverage?.pricePct ?? 0)}`
   }
   return status.fresh ? status.price : `${status.price} / 期待 ${status.expected ?? '-'}`
 }
@@ -192,7 +199,7 @@ export function DataStatusBar() {
 
   const isOk = payload?.status === 'ok'
   const hasSourceAttention = Boolean(
-    payload?.sources && Object.values(payload.sources).some((source) => !source.fresh),
+    payload?.sources && Object.values(payload.sources).some(supplementalSourceNeedsAttention),
   )
   const hasAttention = !isOk || hasSourceAttention
   const StatusIcon = hasAttention ? TriangleAlert : CheckCircle2
@@ -223,7 +230,9 @@ export function DataStatusBar() {
           <span className="text-[var(--color-border-strong)]">|</span>
           <span>US {statusText(payload?.us)}</span>
           {hasSourceAttention && (
-            <span className="hidden text-amber-800 sm:inline">補完データ要確認</span>
+            <span className="hidden text-amber-800 sm:inline">
+              {payload?.runningJobs?.length ? '補完データ更新待ち' : '補完データ要確認'}
+            </span>
           )}
         </button>
 
@@ -304,11 +313,20 @@ export function DataStatusBar() {
 }
 
 function SourceDetail({ label, status }: { label: string; status?: SourceStatus }) {
+  const unconfigured = status?.configured === false
   return (
     <div className="flex items-center justify-between gap-2 bg-[var(--color-surface-subtle)] px-2 py-1.5 text-[10px]">
       <span className="font-black text-[var(--color-text-secondary)]">{label}</span>
-      <span className={`text-right font-mono font-bold ${status?.fresh ? 'text-emerald-700' : 'text-amber-800'}`}>
-        {sourceTime(status?.updatedAt ?? null)}
+      <span className={`text-right font-mono font-bold ${
+        unconfigured
+          ? 'text-[var(--color-text-tertiary)]'
+          : status?.fresh
+            ? 'text-emerald-700'
+            : 'text-amber-800'
+      }`}>
+        {unconfigured
+          ? status.optional ? '未設定（任意）' : '未設定'
+          : sourceTime(status?.updatedAt ?? null)}
       </span>
     </div>
   )

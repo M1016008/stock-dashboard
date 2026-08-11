@@ -3,6 +3,7 @@
 
 import { NextResponse } from 'next/server'
 import { execGet, ensureReady } from '@/lib/db/client'
+import { decodePathSegment } from '@/lib/url-path'
 
 export const dynamic = 'force-dynamic'
 
@@ -13,7 +14,7 @@ export async function GET(
   try {
     await ensureReady()
     const { ticker } = await params
-    const decoded = decodeURIComponent(ticker)
+    const decoded = decodePathSegment(ticker)
     // .T サフィックスが無い場合（例: "7203"）は補完して両方試す
     const candidates = decoded.endsWith('.T')
       ? [decoded]

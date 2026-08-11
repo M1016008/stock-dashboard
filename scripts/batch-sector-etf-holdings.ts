@@ -6,7 +6,7 @@
 
 import { execFileSync } from 'child_process'
 import { TextDecoder } from 'util'
-import * as XLSX from 'xlsx'
+import { readSafeSpreadsheetBuffer } from '@/lib/safe-spreadsheet'
 import { client, ensureReady } from '@/lib/db/client'
 import { SECTOR_ETF_CATALOG, type SectorEtfCatalogItem } from '@/lib/sector-etfs'
 
@@ -169,11 +169,15 @@ function findHeaderIndex(header: unknown[], patterns: RegExp[]): number {
   })
 }
 
-function parseNextFundsXlsx(buffer: Buffer): HoldingInput[] {
-  const workbook = XLSX.read(buffer, { type: 'buffer', cellDates: false })
-  const sheet = workbook.Sheets['保有明細'] ?? workbook.Sheets[workbook.SheetNames[0]]
-  if (!sheet) return []
-  const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, raw: false, defval: '' })
+async function parseNextFundsXlsx(buffer: Buffer): Promise<HoldingInput[]> {
+  const { rows } = await readSafeSpreadsheetBuffer(buffer, {
+    sheetName: '保有明細',
+    maxRows: 20_000,
+    maxColumns: 64,
+  }).catch(async (error) => {
+    if (!/no readable worksheets/i.test(String(error))) throw error
+    return readSafeSpreadsheetBuffer(buffer, { maxRows: 20_000, maxColumns: 64 })
+  })
   const asOfDate = rows.map((row) => parseJapaneseDate(row.join(' '))).find(Boolean) ?? null
   const headerIndex = rows.findIndex((row) => {
     const joined = row.join(' ')
@@ -274,7 +278,7 @@ function parseBlackRockCsv(text: string): HoldingInput[] {
 async function fetchHoldings(item: SectorEtfCatalogItem): Promise<HoldingInput[]> {
   if (!item.holdingsUrl) return []
   if (item.provider === 'nextfunds') {
-    return parseNextFundsXlsx(await fetchBuffer(item.holdingsUrl))
+    return await parseNextFundsXlsx(await fetchBuffer(item.holdingsUrl))
   }
   if (item.provider === 'globalx') {
     return parseGlobalXPcfCsv(await fetchText(item.holdingsUrl))

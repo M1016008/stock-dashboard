@@ -5,6 +5,7 @@ import { usePathname, useSearchParams } from 'next/navigation'
 import { FormEvent, useEffect, useMemo, useState } from 'react'
 import { Bot, ChevronRight, Loader2, MessageSquareText, Send, Sparkles, X } from 'lucide-react'
 import type { AssistantChatResponse, AssistantConversationMessage, AssistantPageContext, AssistantResultRow } from '@/lib/assistant/types'
+import { decodePathSegment } from '@/lib/url-path'
 
 interface AssistantStatusResponse {
   enabled: boolean
@@ -34,9 +35,9 @@ function marketFromContext(
 
 function tickerFromPath(pathname: string): string | null {
   const jp = pathname.match(/^\/stock\/([^/?#]+)/)
-  if (jp?.[1]) return decodeURIComponent(jp[1])
+  if (jp?.[1]) return decodePathSegment(jp[1])
   const us = pathname.match(/^\/us\/stock\/([^/?#]+)/)
-  if (us?.[1]) return decodeURIComponent(us[1])
+  if (us?.[1]) return decodePathSegment(us[1])
   return null
 }
 

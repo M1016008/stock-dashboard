@@ -9,6 +9,7 @@ import {
   type UsRawOhlcvRow,
 } from '@/lib/us-adjusted-ohlcv'
 import { usInvestableSymbolSql } from '@/lib/us-symbol-quality'
+import { computeUsScreenerPeriodMetrics } from '@/lib/us-screener-period-metrics'
 import type { OHLCV } from '@/types/stock'
 import { eq, sql } from 'drizzle-orm'
 
@@ -96,10 +97,24 @@ async function loadTargets(): Promise<string[]> {
   return rows.map((row) => row.ticker)
 }
 
-async function computeTicker(ticker: string): Promise<number> {
+async function loadMarketDates(): Promise<string[]> {
+  const rows = await execAll<{ date: string }>(
+    `SELECT DISTINCT date
+     FROM market_ohlcv_daily INDEXED BY market_ohlcv_market_date_idx
+     WHERE market = ?
+     ORDER BY date`,
+    [MARKET],
+  )
+  return rows.map((row) => row.date)
+}
+
+async function computeTicker(ticker: string, marketDates: string[]): Promise<number> {
   const [existing, rawRows] = await Promise.all([
-    execGet<{ maxDate: string | null }>(
-      `SELECT MAX(date) AS maxDate FROM market_daily_snapshots WHERE market = ? AND ticker = ?`,
+    execGet<{ maxDate: string | null; maxMetricDate: string | null }>(
+      `SELECT
+         MAX(date) AS maxDate,
+         MAX(CASE WHEN avg_volume_20 IS NOT NULL THEN date END) AS maxMetricDate
+       FROM market_daily_snapshots WHERE market = ? AND ticker = ?`,
       [MARKET, ticker],
     ),
     execAll<UsRawOhlcvRow>(
@@ -119,12 +134,26 @@ async function computeTicker(ticker: string): Promise<number> {
   const rows: OHLCV[] = toAdjustedUsOhlcvRows(rawRows)
   if (rows.length < 5) return 0
   const values = prefix(rows)
+  const periodMetrics = computeUsScreenerPeriodMetrics(rows, marketDates)
   const inserts: Array<typeof marketDailySnapshots.$inferInsert> = []
   for (let i = 0; i < rows.length; i += 1) {
     const row = rows[i]
-    if (!REBUILD && existing?.maxDate && row.date <= existing.maxDate) continue
+    const latestNeedsMetricBackfill = Boolean(
+      existing?.maxDate
+      && row.date === existing.maxDate
+      && existing.maxMetricDate !== existing.maxDate,
+    )
+    if (!REBUILD && existing?.maxDate && row.date <= existing.maxDate && !latestNeedsMetricBackfill) continue
     const ma = maAt(rows, values, i)
-    inserts.push({ market: MARKET, ticker, date: row.date, ...ma, ...calculateAllStages(ma) })
+    const metrics = periodMetrics[i]
+    inserts.push({
+      market: MARKET,
+      ticker,
+      date: row.date,
+      ...ma,
+      ...calculateAllStages(ma),
+      ...metrics,
+    })
   }
   const CHUNK = 300
   for (let i = 0; i < inserts.length; i += CHUNK) {
@@ -154,6 +183,15 @@ async function computeTicker(ticker: string): Promise<number> {
           weekly_b_stage: sql`excluded.weekly_b_stage`,
           monthly_a_stage: sql`excluded.monthly_a_stage`,
           monthly_b_stage: sql`excluded.monthly_b_stage`,
+          prevClose: sql`excluded.prev_close`,
+          close5d: sql`excluded.close_5d`,
+          close20d: sql`excluded.close_20d`,
+          close60d: sql`excluded.close_60d`,
+          close120d: sql`excluded.close_120d`,
+          avgVolume20: sql`excluded.avg_volume_20`,
+          ma200: sql`excluded.ma_200`,
+          ma200Prev: sql`excluded.ma_200_prev`,
+          ma200Observations: sql`excluded.ma_200_observations`,
           computedAt: sql`unixepoch()`,
         },
       })
@@ -179,7 +217,7 @@ async function main() {
       heartbeatAt: new Date().toISOString(),
     }),
   }).returning({ id: marketDataRuns.id })
-  const tickers = await loadTargets()
+  const [tickers, marketDates] = await Promise.all([loadTargets(), loadMarketDates()])
   await db.update(marketDataRuns).set({
     totalTickers: tickers.length,
     payloadJson: JSON.stringify({
@@ -242,7 +280,7 @@ async function main() {
       const ticker = tickers[index]
       if (!ticker) return
       try {
-        const count = await computeTicker(ticker)
+        const count = await computeTicker(ticker, marketDates)
         rowsInserted += count
         succeeded += 1
         completedIndices.add(index)

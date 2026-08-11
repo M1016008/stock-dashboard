@@ -90,6 +90,8 @@ const ACTIVE_ONLY = process.env.ML_PHYSICS_ACTIVE_ONLY === '1'
 const DEFAULT_RECENT_HISTORY_LOOKBACK = Math.max(520, RECENT_DAYS + 260, RECENT_DAYS + MIN_HISTORY_DAYS + 80)
 const HISTORY_LOOKBACK_DAYS = Number(process.env.ML_PHYSICS_HISTORY_LOOKBACK_DAYS ?? (RECENT_DAYS > 0 ? DEFAULT_RECENT_HISTORY_LOOKBACK : 0))
 const MISSING_ONLY_DATE = process.env.ML_PHYSICS_MISSING_ONLY_DATE?.trim() || null
+const INCREMENTAL_UPSERT = process.env.ML_PHYSICS_INCREMENTAL_UPSERT === '1'
+  || (process.env.ML_PHYSICS_INCREMENTAL_UPSERT !== '0' && RECENT_DAYS > 0)
 
 const WEEKLY_MA_SPECS: UpperMaSpec[] = [
   { key: 'ma5', label: '5週' },
@@ -903,9 +905,21 @@ async function buildTicker(ticker: string, contexts: ContextMaps, meta: TickerMe
     const vector = physicsFeatureVector(profile)
     stmts.push({
       sql: `
-        INSERT OR REPLACE INTO ml_feature_vectors_v2
+        INSERT INTO ml_feature_vectors_v2
           (ticker, date, feature_set, version, stage_code, feature_json, vector_json, computed_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, unixepoch())
+        ${INCREMENTAL_UPSERT ? `
+        ON CONFLICT(ticker, date, feature_set) DO UPDATE SET
+          version = excluded.version,
+          stage_code = excluded.stage_code,
+          feature_json = excluded.feature_json,
+          vector_json = excluded.vector_json,
+          computed_at = unixepoch()
+        WHERE ml_feature_vectors_v2.version IS NOT excluded.version
+           OR ml_feature_vectors_v2.stage_code IS NOT excluded.stage_code
+           OR ml_feature_vectors_v2.feature_json IS NOT excluded.feature_json
+           OR ml_feature_vectors_v2.vector_json IS NOT excluded.vector_json
+        ` : 'ON CONFLICT(ticker, date, feature_set) DO UPDATE SET version = excluded.version, stage_code = excluded.stage_code, feature_json = excluded.feature_json, vector_json = excluded.vector_json, computed_at = unixepoch()'}
       `,
       args: [ticker, row.date, ML_PHYSICS_FEATURE_SET, ML_PHYSICS_VERSION, profile.stageCode, JSON.stringify(profile), JSON.stringify(vector)],
     })
@@ -921,7 +935,7 @@ async function main() {
   let featureCount = 0
   const started = Date.now()
   console.log(
-    `ml physics features: tickers=${codes.length}, recent_days=${RECENT_DAYS || 'all'}, min_history_days=${MIN_HISTORY_DAYS}, history_lookback_days=${HISTORY_LOOKBACK_DAYS || 'all'}, missing_only_date=${MISSING_ONLY_DATE ?? '-'}, active_only=${ACTIVE_ONLY ? 'on' : 'off'}, start=${START_DATE ?? '-'}, end=${END_DATE ?? '-'}`,
+    `ml physics features: tickers=${codes.length}, recent_days=${RECENT_DAYS || 'all'}, min_history_days=${MIN_HISTORY_DAYS}, history_lookback_days=${HISTORY_LOOKBACK_DAYS || 'all'}, missing_only_date=${MISSING_ONLY_DATE ?? '-'}, active_only=${ACTIVE_ONLY ? 'on' : 'off'}, incremental_upsert=${INCREMENTAL_UPSERT ? 'on' : 'off'}, start=${START_DATE ?? '-'}, end=${END_DATE ?? '-'}`,
   )
   if (TICKER_START || TICKER_END) console.log(`ml physics ticker range: ${TICKER_START ?? '-'}..${TICKER_END ?? '-'}`)
   for (const [index, ticker] of codes.entries()) {

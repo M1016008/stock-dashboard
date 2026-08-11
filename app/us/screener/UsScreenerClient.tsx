@@ -7,6 +7,7 @@ import { ArrowDownAZ, ArrowUpAZ, CircleHelp, Columns3, Filter, GitCompareArrows,
 import { StageTag } from '@/components/ui/StageTag'
 import { SavedViewManager } from '@/components/ui/SavedViewManager'
 import { getCompareSymbols, toggleComparedSymbol } from '@/lib/client/stock-workspace'
+import { replaceCurrentUrlFilters } from '@/lib/client/url-filter-state'
 import { formatShortTermStrength } from '@/lib/short-term-check'
 import {
   normalizeUsClassificationFilters,
@@ -297,16 +298,22 @@ export function UsScreenerClient() {
       ? searchParams.get('ma200Trend') as 'above' | 'below'
       : '',
   )
-  const [ma200Direction, setMa200Direction] = useState<'' | 'up' | 'down' | 'flat'>('')
-  const [pmsMin, setPmsMin] = useState('')
-  const [pfsMin, setPfsMin] = useState('')
-  const [pesMin, setPesMin] = useState('')
-  const [accelerationPositive, setAccelerationPositive] = useState(false)
-  const [forcePositive, setForcePositive] = useState(false)
-  const [stage23Candidate, setStage23Candidate] = useState(false)
-  const [shortTermCheck, setShortTermCheck] = useState('')
-  const [physicalStatus, setPhysicalStatus] = useState('')
-  const [marketCapBin, setMarketCapBin] = useState('')
+  const [ma200Direction, setMa200Direction] = useState<'' | 'up' | 'down' | 'flat'>(() => {
+    const value = searchParams.get('ma200Direction')
+    return value === 'up' || value === 'down' || value === 'flat' ? value : ''
+  })
+  const [pmsMin, setPmsMin] = useState(searchParams.get('pmsMin') || '')
+  const [pfsMin, setPfsMin] = useState(searchParams.get('pfsMin') || '')
+  const [pesMin, setPesMin] = useState(searchParams.get('pesMin') || '')
+  const [accelerationPositive, setAccelerationPositive] = useState(searchParams.get('accelerationPositive') === '1')
+  const [forcePositive, setForcePositive] = useState(searchParams.get('forcePositive') === '1')
+  const [stage23Candidate, setStage23Candidate] = useState(searchParams.get('stage23Candidate') === '1')
+  const [shortTermCheck, setShortTermCheck] = useState(searchParams.get('shortTermCheck') || '')
+  const [physicalStatus, setPhysicalStatus] = useState(searchParams.get('physicalStatus') || '')
+  const [marketCapBin, setMarketCapBin] = useState(() => {
+    const value = searchParams.get('marketCapBin') || ''
+    return MCAP_BINS.some((bin) => bin.key === value) ? value : ''
+  })
   const [earningsWindowDays, setEarningsWindowDays] = useState(searchParams.get('earningsWindowDays') || '')
   const [earningsTimeBucket, setEarningsTimeBucket] = useState(searchParams.get('earningsTimeBucket') || '')
   const [sort, setSort] = useState(initialSort)
@@ -351,6 +358,22 @@ export function UsScreenerClient() {
     if (capBin?.max != null) sp.set('marketCapMax', String(capBin.max))
     return sp.toString()
   }, [query, exchange, sector, industryGroup, industry, stageCode, stages, avgVolumeMin, priceMin, priceMax, assetType, sicClassificationEnabled, quality, ma200Trend, ma200Direction, pmsMin, pfsMin, pesMin, accelerationPositive, forcePositive, stage23Candidate, shortTermCheck, physicalStatus, marketCapBin, earningsWindowDays, earningsTimeBucket, sort, dir, resultLimit])
+
+  useEffect(() => {
+    const apiParams = new URLSearchParams(params)
+    const updates: Record<string, string | null> = {}
+    const ownedKeys = [
+      'limit', 'sort', 'dir', 'q', 'exchange', 'sector', 'industryGroup', 'industry', 'stageCode',
+      ...AXES.map((axis) => axis.key),
+      'avgVolumeMin', 'priceMin', 'priceMax', 'assetType', 'quality', 'ma200Trend', 'ma200Direction',
+      'pmsMin', 'pfsMin', 'pesMin', 'accelerationPositive', 'forcePositive', 'stage23Candidate',
+      'shortTermCheck', 'physicalStatus', 'earningsWindowDays', 'earningsTimeBucket',
+      'marketCapMin', 'marketCapMax',
+    ]
+    for (const key of ownedKeys) updates[key] = apiParams.get(key)
+    updates.marketCapBin = marketCapBin || null
+    replaceCurrentUrlFilters(updates)
+  }, [params, marketCapBin])
 
   useEffect(() => {
     if (sicClassificationEnabled || (!sector && !industryGroup && !industry)) return

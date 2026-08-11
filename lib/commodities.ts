@@ -1,3 +1,5 @@
+import { decodePathSegment } from '@/lib/url-path'
+
 export type CommodityMarket = 'JP' | 'US'
 export type CommodityMarketSlug = 'jp' | 'us'
 
@@ -214,7 +216,7 @@ export function normalizeCommodityMarketSlug(value: string | null | undefined): 
 }
 
 export function normalizeCommodityTicker(ticker: string): string {
-  return decodeURIComponent(ticker).trim().toUpperCase().replace(/\.T$/i, '')
+  return decodePathSegment(ticker).trim().toUpperCase().replace(/\.T$/i, '')
 }
 
 export function getCommodityInstrument(

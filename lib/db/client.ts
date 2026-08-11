@@ -61,14 +61,24 @@ if (process.env.NODE_ENV !== 'production') globalForDb.libsql = client
 export const db = drizzle(client, { schema })
 export const isCloud = cfg.isCloud
 
+function boundedIntegerEnv(name: string, fallback: number, min: number, max: number): number {
+  const value = Number(process.env[name])
+  if (!Number.isInteger(value)) return fallback
+  return Math.max(min, Math.min(max, value))
+}
+
 async function ensureLocalSqlitePragmas(): Promise<void> {
   if (cfg.isCloud) return
   if (!globalForDb.sqlitePragmasReady) {
     globalForDb.sqlitePragmasReady = Promise.resolve()
       .then(async () => {
-        const busyTimeoutMs = Math.max(1_000, Number(process.env.SQLITE_BUSY_TIMEOUT_MS ?? 60_000))
+        const busyTimeoutMs = boundedIntegerEnv('SQLITE_BUSY_TIMEOUT_MS', 60_000, 1_000, 300_000)
+        const cacheMb = boundedIntegerEnv('STOCKBOARD_DB_CACHE_MB', 32, 8, 256)
+        const mmapMb = boundedIntegerEnv('STOCKBOARD_DB_MMAP_MB', 256, 0, 1_024)
         await client.execute('PRAGMA synchronous=NORMAL')
         await client.execute(`PRAGMA busy_timeout=${busyTimeoutMs}`)
+        await client.execute(`PRAGMA cache_size=-${cacheMb * 1_024}`)
+        await client.execute(`PRAGMA mmap_size=${mmapMb * 1_024 * 1_024}`)
         const journalMode = await client.execute('PRAGMA journal_mode')
         const mode = String(
           journalMode.rows[0]?.journal_mode
@@ -91,7 +101,10 @@ async function ensureLocalSqlitePragmas(): Promise<void> {
  */
 export async function ensureReady(): Promise<void> {
   await ensureLocalSqlitePragmas()
-  if (process.env.SKIP_SCHEMA_ENSURE === '1') return
+  if (
+    process.env.SKIP_SCHEMA_ENSURE === '1'
+    || process.env.TECHNICAL_SIGNAL_PROCESS_CHILD === '1'
+  ) return
   if (!globalForDb.schemaReady) {
     globalForDb.schemaReady = ensureSchema(client).catch((e) => {
       // 失敗時はキャッシュをクリアして次回再試行できるようにする

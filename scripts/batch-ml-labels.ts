@@ -13,6 +13,10 @@ const START_DATE = process.env.ML_LABEL_START_DATE?.trim() || null
 const END_DATE = process.env.ML_LABEL_END_DATE?.trim() || null
 const RECENT_DAYS = Number(process.env.ML_LABEL_RECENT_DAYS ?? 0)
 const DATE_CHUNK_DAYS = Number(process.env.ML_LABEL_DATE_CHUNK_DAYS ?? 30)
+const INCREMENTAL_UPSERT = process.env.ML_LABEL_INCREMENTAL_UPSERT === '1'
+  || (process.env.ML_LABEL_INCREMENTAL_UPSERT !== '0' && RECENT_DAYS > 0)
+const CHANGED_ONLY = process.env.ML_LABEL_CHANGED_ONLY === '1'
+  || (process.env.ML_LABEL_CHANGED_ONLY !== '0' && INCREMENTAL_UPSERT)
 
 function horizonPlaceholders(): string {
   return HORIZONS.map(() => '?').join(', ')
@@ -91,9 +95,32 @@ async function syncLabelsForRange(startDate: string | null, endDate: string | nu
     where.push('fe.date <= ?')
     args.push(endDate)
   }
+  if (CHANGED_ONLY) {
+    where.push(`fe.computed_at >= COALESCE((
+      SELECT MIN(started_at)
+      FROM batch_runs
+      WHERE job_type = 'forward_extrema'
+        AND id > COALESCE((
+          SELECT MAX(id)
+          FROM batch_runs
+          WHERE job_type = 'forward_extrema'
+            AND status = 'success'
+            AND id < (
+              SELECT MAX(id)
+              FROM batch_runs
+              WHERE job_type = 'forward_extrema' AND status = 'success'
+            )
+        ), 0)
+        AND id <= (
+          SELECT MAX(id)
+          FROM batch_runs
+          WHERE job_type = 'forward_extrema' AND status = 'success'
+        )
+    ), 0)`)
+  }
   await execRun(
     `
-    INSERT OR REPLACE INTO ml_training_labels
+    INSERT INTO ml_training_labels
       (ticker, date, horizon_days, return_pct, max_return_pct, min_return_pct,
        up_label, down_label, reward_score, label_json, computed_at)
     SELECT
@@ -117,6 +144,24 @@ async function syncLabelsForRange(startDate: string | null, endDate: string | nu
       unixepoch()
     FROM forward_extrema fe
     WHERE ${where.join(' AND ')}
+    ${INCREMENTAL_UPSERT ? `
+    ON CONFLICT(ticker, date, horizon_days) DO UPDATE SET
+      return_pct = excluded.return_pct,
+      max_return_pct = excluded.max_return_pct,
+      min_return_pct = excluded.min_return_pct,
+      up_label = excluded.up_label,
+      down_label = excluded.down_label,
+      reward_score = excluded.reward_score,
+      label_json = excluded.label_json,
+      computed_at = unixepoch()
+    WHERE ml_training_labels.return_pct IS NOT excluded.return_pct
+       OR ml_training_labels.max_return_pct IS NOT excluded.max_return_pct
+       OR ml_training_labels.min_return_pct IS NOT excluded.min_return_pct
+       OR ml_training_labels.up_label IS NOT excluded.up_label
+       OR ml_training_labels.down_label IS NOT excluded.down_label
+       OR ml_training_labels.reward_score IS NOT excluded.reward_score
+       OR ml_training_labels.label_json IS NOT excluded.label_json
+    ` : 'ON CONFLICT(ticker, date, horizon_days) DO UPDATE SET return_pct = excluded.return_pct, max_return_pct = excluded.max_return_pct, min_return_pct = excluded.min_return_pct, up_label = excluded.up_label, down_label = excluded.down_label, reward_score = excluded.reward_score, label_json = excluded.label_json, computed_at = unixepoch()'}
     `,
     args,
   )
@@ -133,7 +178,7 @@ async function main() {
   const effectiveEndDate = END_DATE
 
   console.log(
-    `ml labels start: horizons=${HORIZONS.join('/')}, start=${effectiveStartDate ?? '-'}, requested_start=${START_DATE ?? '-'}, recent_start=${recentStart ?? '-'}, end=${effectiveEndDate ?? '-'}, recent_days=${RECENT_DAYS || '-'}, chunk_days=${DATE_CHUNK_DAYS || '-'}`,
+    `ml labels start: horizons=${HORIZONS.join('/')}, start=${effectiveStartDate ?? '-'}, requested_start=${START_DATE ?? '-'}, recent_start=${recentStart ?? '-'}, end=${effectiveEndDate ?? '-'}, recent_days=${RECENT_DAYS || '-'}, chunk_days=${DATE_CHUNK_DAYS || '-'}, incremental_upsert=${INCREMENTAL_UPSERT ? 'on' : 'off'}, changed_only=${CHANGED_ONLY ? 'on' : 'off'}`,
   )
 
   let chunks = 0

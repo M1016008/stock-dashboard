@@ -6,7 +6,7 @@
 import { execFileSync, spawn } from 'node:child_process'
 import { execGet } from '@/lib/db/client'
 import { execUsAnalyticsGet } from '@/lib/db/us-analytics'
-import { acquireExclusiveUpdateLock } from '@/lib/server/update-lock'
+import { acquireUsStockboardUpdateLock } from '@/lib/server/update-lock'
 import { expectedLatestUsTradingDate } from '@/lib/server/us-data-freshness'
 import { waitForMemoryHeadroom, withMemoryGuardEnv } from '@/lib/system/memory-guard'
 import { US_ADJUSTED_PRICE_BASIS } from '@/lib/us-adjusted-ohlcv'
@@ -224,7 +224,7 @@ async function main() {
     6 * 60 * 60,
     (numberEnv('UPDATE_CHILD_TIMEOUT_MINUTES', 360) + 60) * 60,
   )
-  const lock = await acquireExclusiveUpdateLock('us_update_latest', lockLeaseSeconds)
+  const lock = await acquireUsStockboardUpdateLock('us_update_latest', lockLeaseSeconds)
   if (!lock) {
     console.log('US latest update skipped: us_update_latest lock is already active')
     return
@@ -391,6 +391,7 @@ async function main() {
     await runNpm('batch:us-analytics-db', {
       US_ANALYTICS_DB_PATH: usAnalyticsDbPath,
       US_ANALYTICS_LIMIT: process.env.US_DAILY_ANALYTICS_LIMIT ?? '0',
+      US_ANALYTICS_SOURCE_WRITER_JOB_TO_IGNORE: 'us_update_latest',
       UPDATE_CHILD_TIMEOUT_MINUTES: process.env.US_ANALYTICS_TIMEOUT_MINUTES ?? '240',
     }, heartbeat)
     await lock.heartbeat()

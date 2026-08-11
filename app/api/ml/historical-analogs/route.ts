@@ -4,6 +4,8 @@ import { execUsAnalyticsAll, execUsAnalyticsGet } from '@/lib/db/us-analytics'
 import { readServingCache, stableCacheKey, writeServingCache } from '@/lib/api/serving-cache'
 import {
   assertAnalogSequenceIndexReady,
+  readAnalogSequencePriceChunks,
+  readAnalogSequencePrices,
   searchAnalogSequenceIndex,
   searchAnalogSequenceIndexByStage,
   type AnalogSequenceIndexRow,
@@ -66,6 +68,7 @@ const RECENCY_SHORTLIST_LIMIT = boundedEnv('ANALOG_SEQUENCE_RECENCY_SHORTLIST_LI
 const ML_RERANK_WEIGHT = 0.1
 const CANDIDATE_HISTORY_DAYS = 4_300
 const CANDIDATE_FUTURE_DAYS = 500
+const CANDIDATE_RANGE_QUERY_CHUNK = 50
 const MIN_PERIOD_SESSIONS = 5
 const MAX_PERIOD_SESSIONS = 250
 const PRESENTATION_CONTEXT_BEFORE = 35
@@ -510,6 +513,40 @@ function buildCandidateRanges(
     merged.push({ ...range })
   }
   return merged
+}
+
+async function loadCandidateRangeChunk(
+  db: ReturnType<typeof createDbAdapter>,
+  market: Market,
+  usePriceChunks: boolean,
+  usePriceMirror: boolean,
+  ranges: CandidateRange[],
+): Promise<Map<string, PriceRow[]>> {
+  if (ranges.length === 0) return new Map()
+  let rawRows: PriceRow[]
+  if (usePriceChunks) {
+    rawRows = await readAnalogSequencePriceChunks(market, ranges)
+  } else if (usePriceMirror) {
+    rawRows = await readAnalogSequencePrices(market, ranges)
+  } else {
+    rawRows = await db.all<PriceRow>(
+      `
+        SELECT ticker, date, open, high, low, close, volume
+        FROM ohlcv_daily
+        WHERE ${ranges.map(() => '(ticker = ? AND date >= ? AND date <= ?)').join(' OR ')}
+        ORDER BY ticker, date
+      `,
+      ranges.flatMap((range) => [range.ticker, range.fromDate, range.toDate]),
+    )
+  }
+  const rows = normalizePriceRows(rawRows)
+  const byTicker = new Map<string, PriceRow[]>()
+  for (const row of rows) {
+    const tickerRows = byTicker.get(row.ticker) ?? []
+    tickerRows.push(row)
+    byTicker.set(row.ticker, tickerRows)
+  }
+  return byTicker
 }
 
 function componentReasons(components: ScoreComponent[]) {
@@ -1112,23 +1149,31 @@ export async function GET(request: NextRequest) {
         let alignedCount = 0
         let exactCoverageRejectedCount = 0
         let candidatePriceRowCount = 0
-        for (const range of candidateRanges) {
-          const candidateRows = normalizePriceRows(await db.all<PriceRow>(
-            `
-            SELECT ticker, date, open, high, low, close, volume
-            FROM ohlcv_daily
-            WHERE ticker = ?
-              AND date >= ?
-              AND date <= ?
-            ORDER BY date
-            `,
-            [range.ticker, range.fromDate, range.toDate],
-          ))
-          candidatePriceRowCount += candidateRows.length
-          const segments = buildPreparedSegments(candidateRows)
-          const anchors = (anchorsByTicker.get(range.ticker) ?? [])
-            .filter((anchor) => anchor.date >= range.fromDate && anchor.date <= range.toDate)
-          for (const anchor of anchors) {
+        let candidateLoadMs = 0
+        let candidatePrepareMs = 0
+        let candidateAlignedMs = 0
+        let candidateDtwMs = 0
+        for (let chunkOffset = 0; chunkOffset < candidateRanges.length; chunkOffset += CANDIDATE_RANGE_QUERY_CHUNK) {
+          const rangeChunk = candidateRanges.slice(chunkOffset, chunkOffset + CANDIDATE_RANGE_QUERY_CHUNK)
+          let operationStartedAt = Date.now()
+          const chunkRows = await loadCandidateRangeChunk(
+            db,
+            market,
+            indexMeta.priceChunksCompleted && indexMeta.priceChunksSourceDate === latestMarketDate,
+            indexMeta.priceCompleted && indexMeta.priceSourceDate === latestMarketDate,
+            rangeChunk,
+          )
+          candidateLoadMs += Date.now() - operationStartedAt
+          for (const range of rangeChunk) {
+            const candidateRows = (chunkRows.get(range.ticker) ?? [])
+              .filter((row) => row.date >= range.fromDate && row.date <= range.toDate)
+            candidatePriceRowCount += candidateRows.length
+            operationStartedAt = Date.now()
+            const segments = buildPreparedSegments(candidateRows)
+            candidatePrepareMs += Date.now() - operationStartedAt
+            const anchors = (anchorsByTicker.get(range.ticker) ?? [])
+              .filter((anchor) => anchor.date >= range.fromDate && anchor.date <= range.toDate)
+            for (const anchor of anchors) {
             const located = findPreparedSegment(segments, anchor.date)
             if (!located) continue
             const localAligned: Array<{
@@ -1153,6 +1198,7 @@ export async function GET(request: NextRequest) {
                 anchor.ticker === ticker
                 && dateRangesOverlap(startRow.date, endRow.date, baseStartDate, baseEndDate)
               ) continue
+              operationStartedAt = Date.now()
               const aligned = scoreMaSequenceRangeAligned(
                 basePrepared,
                 baseStartIndex,
@@ -1162,6 +1208,7 @@ export async function GET(request: NextRequest) {
                 candidateEndIndex,
                 profileConfig.weights,
               )
+              candidateAlignedMs += Date.now() - operationStartedAt
               alignedCount += 1
               localAligned.push({
                 startIndex: candidateStartIndex,
@@ -1174,6 +1221,7 @@ export async function GET(request: NextRequest) {
             for (const local of localAligned
               .sort((a, b) => b.score - a.score)
               .slice(0, LOCAL_ALIGNED_LIMIT)) {
+              operationStartedAt = Date.now()
               const result = scoreMaSequenceRange(
                 basePrepared,
                 baseStartIndex,
@@ -1183,6 +1231,7 @@ export async function GET(request: NextRequest) {
                 local.endIndex,
                 profileConfig.weights,
               )
+              candidateDtwMs += Date.now() - operationStartedAt
               const availableKeys = new Set(coverageKeys(result.components))
               if (!requiredComponents.every((key) => availableKeys.has(key))) {
                 exactCoverageRejectedCount += 1
@@ -1212,7 +1261,15 @@ export async function GET(request: NextRequest) {
                 stageCode: stageCodeAt(located.prepared, local.endIndex),
               })
             }
+            }
           }
+        }
+        if (process.env.ANALOG_SEARCH_PHASE_LOGS === '1') {
+          console.info(
+            `[historical-analogs] ${market}:${ticker} exact-detail `
+            + `load=${candidateLoadMs}ms prepare=${candidatePrepareMs}ms `
+            + `aligned=${candidateAlignedMs}ms dtw=${candidateDtwMs}ms`,
+          )
         }
         phaseStartedAt = logSearchPhase(market, ticker, 'period-exact-rerank', phaseStartedAt)
 

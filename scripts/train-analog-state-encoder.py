@@ -2,8 +2,9 @@
 """Train and evaluate an isolated multi-timeframe analog state encoder.
 
 The production analog ranking remains untouched. This program reads the
-existing compact D/W/M/Y state index, learns a deep metric using confirmed
-forward returns, and writes only model artifacts and shadow evaluation rows.
+existing compact D/W/M/Y state index, compares the current distance metric,
+a LightGBM LambdaRank baseline, and a deep metric learned from confirmed
+forward returns, then writes only model artifacts and shadow evaluation rows.
 """
 
 from __future__ import annotations
@@ -28,6 +29,13 @@ except ImportError as error:
         "numpy is required. Run `npm run setup:analog-encoder` first."
     ) from error
 
+try:
+    import lightgbm as lgb
+except ImportError as error:
+    raise SystemExit(
+        "lightgbm is required. Run `npm run setup:analog-encoder` first."
+    ) from error
+
 
 HORIZONS = (5, 10, 20, 40, 60, 90, 200)
 RETURN_SCALES = np.asarray((8, 10, 12, 15, 18, 22, 30), dtype=np.float32)
@@ -40,6 +48,7 @@ FRAME_SLICES = {
 INPUT_DIM = 65
 EMBEDDING_DIM = 32
 MODEL_NAME = "multiframe_state_encoder_v1"
+LIGHTGBM_MODEL_NAME = "multiframe_lambdarank_baseline_v1"
 
 
 @dataclass
@@ -539,6 +548,254 @@ def top_indexes(values: np.ndarray, count: int, largest: bool) -> np.ndarray:
     return indexes[np.argsort(values[indexes])]
 
 
+def lightgbm_pair_features(
+    reference_x: np.ndarray,
+    query_x: np.ndarray,
+) -> np.ndarray:
+    absolute_difference = np.abs(reference_x - query_x).astype(np.float32)
+    frame_distances = np.stack(
+        [
+            np.sqrt(np.mean(absolute_difference[:, frame_slice] ** 2, axis=1))
+            for frame_slice in FRAME_SLICES.values()
+        ],
+        axis=1,
+    ).astype(np.float32)
+    overall_distance = np.sqrt(
+        np.mean(absolute_difference * absolute_difference, axis=1, keepdims=True)
+    ).astype(np.float32)
+    reference_norm = np.linalg.norm(reference_x, axis=1)
+    query_norm = max(1e-6, float(np.linalg.norm(query_x)))
+    cosine_similarity = (
+        np.sum(reference_x * query_x, axis=1)
+        / np.maximum(reference_norm * query_norm, 1e-6)
+    ).reshape(-1, 1).astype(np.float32)
+    return np.concatenate(
+        [absolute_difference, frame_distances, overall_distance, cosine_similarity],
+        axis=1,
+    )
+
+
+def lightgbm_relevance(
+    reference_y: np.ndarray,
+    query_y: np.ndarray,
+) -> np.ndarray:
+    outcome_distance = np.mean(np.abs(reference_y - query_y), axis=1)
+    return np.select(
+        [
+            outcome_distance <= 0.05,
+            outcome_distance <= 0.10,
+            outcome_distance <= 0.18,
+            outcome_distance <= 0.28,
+        ],
+        [4, 3, 2, 1],
+        default=0,
+    ).astype(np.int32)
+
+
+def ranker_candidate_indexes(
+    reference: Dataset,
+    query_x: np.ndarray,
+    query_date: str,
+    purge_days: int,
+    candidate_count: int,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    cutoff = (parse_date(query_date) - timedelta(days=purge_days)).isoformat()
+    eligible = np.flatnonzero(reference.dates <= cutoff)
+    if len(eligible) <= candidate_count:
+        return eligible
+    distance = np.sqrt(
+        np.mean((reference.x[eligible] - query_x) ** 2, axis=1)
+    )
+    hard_count = min(len(eligible), max(8, math.ceil(candidate_count * 0.7)))
+    hard = eligible[top_indexes(distance, hard_count, largest=False)]
+    random_count = candidate_count - len(hard)
+    if random_count <= 0:
+        return hard
+    remaining = np.setdiff1d(eligible, hard, assume_unique=False)
+    random_indexes = rng.choice(
+        remaining,
+        size=min(random_count, len(remaining)),
+        replace=False,
+    )
+    return np.concatenate([hard, random_indexes.astype(np.int64)])
+
+
+def build_lightgbm_ranker_dataset(
+    reference: Dataset,
+    queries: Dataset,
+    query_limit: int,
+    purge_days: int,
+    candidate_count: int,
+    seed: int,
+) -> tuple[np.ndarray, np.ndarray, list[int], dict[str, int]]:
+    rng = np.random.default_rng(seed)
+    query_indexes = np.unique(
+        np.linspace(
+            0,
+            len(queries.x) - 1,
+            num=min(query_limit, len(queries.x)),
+            dtype=np.int64,
+        )
+    )
+    features: list[np.ndarray] = []
+    labels: list[np.ndarray] = []
+    groups: list[int] = []
+    skipped = 0
+    for query_index in query_indexes:
+        candidates = ranker_candidate_indexes(
+            reference,
+            queries.x[query_index],
+            str(queries.dates[query_index]),
+            purge_days,
+            candidate_count,
+            rng,
+        )
+        if len(candidates) < 8:
+            skipped += 1
+            continue
+        relevance = lightgbm_relevance(
+            reference.y[candidates],
+            queries.y[query_index],
+        )
+        if len(np.unique(relevance)) < 2:
+            skipped += 1
+            continue
+        features.append(
+            lightgbm_pair_features(
+                reference.x[candidates],
+                queries.x[query_index],
+            )
+        )
+        labels.append(relevance)
+        groups.append(len(candidates))
+    if not features or len(groups) < 10:
+        raise RuntimeError(
+            f"insufficient LightGBM ranking groups: groups={len(groups)} skipped={skipped}"
+        )
+    return (
+        np.concatenate(features).astype(np.float32, copy=False),
+        np.concatenate(labels).astype(np.int32, copy=False),
+        groups,
+        {
+            "groups": len(groups),
+            "rows": int(sum(groups)),
+            "skippedQueries": skipped,
+        },
+    )
+
+
+def train_lightgbm_ranker(
+    train: Dataset,
+    validation: Dataset,
+    train_query_limit: int,
+    validation_query_limit: int,
+    purge_days: int,
+    candidate_count: int,
+    estimators: int,
+    learning_rate: float,
+    num_leaves: int,
+    minimum_data_in_leaf: int,
+    top_k: int,
+    threads: int,
+    seed: int,
+) -> tuple[Any, dict[str, Any]]:
+    train_x, train_y, train_groups, train_stats = build_lightgbm_ranker_dataset(
+        train,
+        train,
+        train_query_limit,
+        purge_days,
+        candidate_count,
+        seed,
+    )
+    validation_x, validation_y, validation_groups, validation_stats = (
+        build_lightgbm_ranker_dataset(
+            train,
+            validation,
+            validation_query_limit,
+            purge_days,
+            candidate_count,
+            seed + 1,
+        )
+    )
+    print(
+        "[lightgbm] "
+        f"train_groups={train_stats['groups']:,} train_rows={train_stats['rows']:,} "
+        f"validation_groups={validation_stats['groups']:,} "
+        f"validation_rows={validation_stats['rows']:,}",
+        flush=True,
+    )
+    train_set = lgb.Dataset(
+        train_x,
+        label=train_y,
+        group=train_groups,
+        free_raw_data=True,
+    )
+    validation_set = lgb.Dataset(
+        validation_x,
+        label=validation_y,
+        group=validation_groups,
+        reference=train_set,
+        free_raw_data=True,
+    )
+    evaluation: dict[str, dict[str, list[float]]] = {}
+    ranker = lgb.train(
+        {
+            "objective": "lambdarank",
+            "metric": "ndcg",
+            "ndcg_eval_at": [top_k],
+            "lambdarank_truncation_level": max(top_k + 3, 10),
+            "learning_rate": learning_rate,
+            "num_leaves": num_leaves,
+            "min_data_in_leaf": minimum_data_in_leaf,
+            "max_bin": 63,
+            "feature_fraction": 0.85,
+            "bagging_fraction": 0.85,
+            "bagging_freq": 1,
+            "lambda_l2": 1.0,
+            "verbosity": -1,
+            "num_threads": threads,
+            "seed": seed,
+            "deterministic": True,
+            "force_col_wise": True,
+        },
+        train_set,
+        num_boost_round=estimators,
+        valid_sets=[validation_set],
+        valid_names=["validation"],
+        callbacks=[
+            lgb.early_stopping(30, verbose=False),
+            lgb.record_evaluation(evaluation),
+        ],
+    )
+    return ranker, {
+        "model": LIGHTGBM_MODEL_NAME,
+        "bestIteration": int(ranker.best_iteration or ranker.current_iteration()),
+        "featureCount": int(train_x.shape[1]),
+        "train": train_stats,
+        "validation": validation_stats,
+        "evaluation": evaluation,
+    }
+
+
+def lightgbm_rank_scores(
+    ranker: Any,
+    reference_x: np.ndarray,
+    query_x: np.ndarray,
+    chunk_size: int = 8_192,
+) -> np.ndarray:
+    output = np.empty(len(reference_x), dtype=np.float32)
+    iteration = ranker.best_iteration or ranker.current_iteration()
+    for start in range(0, len(reference_x), chunk_size):
+        end = min(len(reference_x), start + chunk_size)
+        features = lightgbm_pair_features(reference_x[start:end], query_x)
+        output[start:end] = np.asarray(
+            ranker.predict(features, num_iteration=iteration),
+            dtype=np.float32,
+        )
+    return output
+
+
 def bootstrap_interval(values: np.ndarray, seed: int, rounds: int = 500) -> tuple[float, float]:
     if len(values) < 2:
         value = float(values[0]) if len(values) else 0.0
@@ -552,6 +809,7 @@ def bootstrap_interval(values: np.ndarray, seed: int, rounds: int = 500) -> tupl
 
 def evaluate_retrieval(
     model: MultiFrameEncoder,
+    lightgbm_ranker: Any,
     reference: Dataset,
     queries: Dataset,
     raw_reference_x: np.ndarray,
@@ -564,23 +822,39 @@ def evaluate_retrieval(
     query_metrics: list[dict[str, Any]] = []
     rankings: list[dict[str, Any]] = []
     baseline_horizon_errors: list[np.ndarray] = []
+    lightgbm_horizon_errors: list[np.ndarray] = []
     encoder_horizon_errors: list[np.ndarray] = []
     for query_index in range(len(queries.x)):
         baseline_distance = np.sqrt(
             np.mean((raw_reference_x - raw_query_x[query_index]) ** 2, axis=1)
         )
+        lightgbm_score = lightgbm_rank_scores(
+            lightgbm_ranker,
+            raw_reference_x,
+            raw_query_x[query_index],
+        )
         encoder_similarity = reference_embedding @ query_embedding[query_index]
         baseline_indexes = top_indexes(baseline_distance, top_k, largest=False)
+        lightgbm_indexes = top_indexes(lightgbm_score, top_k, largest=True)
         encoder_indexes = top_indexes(encoder_similarity, top_k, largest=True)
         baseline_prediction = reference.y[baseline_indexes].mean(axis=0)
+        lightgbm_prediction = reference.y[lightgbm_indexes].mean(axis=0)
         encoder_prediction = reference.y[encoder_indexes].mean(axis=0)
         baseline_errors = np.abs(baseline_prediction - queries.y[query_index])
+        lightgbm_errors = np.abs(lightgbm_prediction - queries.y[query_index])
         encoder_errors = np.abs(encoder_prediction - queries.y[query_index])
         baseline_horizon_errors.append(baseline_errors)
+        lightgbm_horizon_errors.append(lightgbm_errors)
         encoder_horizon_errors.append(encoder_errors)
         baseline_direction = float(
             np.mean(
                 np.sign(reference.y[baseline_indexes])
+                == np.sign(queries.y[query_index])
+            )
+        )
+        lightgbm_direction = float(
+            np.mean(
+                np.sign(reference.y[lightgbm_indexes])
                 == np.sign(queries.y[query_index])
             )
         )
@@ -595,14 +869,17 @@ def evaluate_retrieval(
                 "ticker": str(queries.tickers[query_index]),
                 "date": str(queries.dates[query_index]),
                 "baselineMae": float(np.mean(baseline_errors)),
+                "lightgbmMae": float(np.mean(lightgbm_errors)),
                 "encoderMae": float(np.mean(encoder_errors)),
                 "baselineDirectionAgreement": baseline_direction,
+                "lightgbmDirectionAgreement": lightgbm_direction,
                 "encoderDirectionAgreement": encoder_direction,
             }
         )
         if query_index < 250:
             for method, selected, scores in (
                 ("baseline", baseline_indexes, -baseline_distance[baseline_indexes]),
+                ("lightgbm", lightgbm_indexes, lightgbm_score[lightgbm_indexes]),
                 ("encoder", encoder_indexes, encoder_similarity[encoder_indexes]),
             ):
                 for rank, (reference_index, score) in enumerate(zip(selected, scores), start=1):
@@ -626,31 +903,69 @@ def evaluate_retrieval(
                         }
                     )
     baseline_errors = np.stack(baseline_horizon_errors)
+    lightgbm_errors = np.stack(lightgbm_horizon_errors)
     encoder_errors = np.stack(encoder_horizon_errors)
-    paired = encoder_errors.mean(axis=1) - baseline_errors.mean(axis=1)
-    ci_low, ci_high = bootstrap_interval(paired, seed)
+    paired_baseline = encoder_errors.mean(axis=1) - baseline_errors.mean(axis=1)
+    paired_lightgbm = encoder_errors.mean(axis=1) - lightgbm_errors.mean(axis=1)
+    baseline_ci_low, baseline_ci_high = bootstrap_interval(paired_baseline, seed)
+    lightgbm_ci_low, lightgbm_ci_high = bootstrap_interval(
+        paired_lightgbm,
+        seed + 1,
+    )
     baseline_mae = float(baseline_errors.mean())
+    lightgbm_mae = float(lightgbm_errors.mean())
     encoder_mae = float(encoder_errors.mean())
     baseline_direction = float(
         np.mean([row["baselineDirectionAgreement"] for row in query_metrics])
     )
+    lightgbm_direction = float(
+        np.mean([row["lightgbmDirectionAgreement"] for row in query_metrics])
+    )
     encoder_direction = float(
         np.mean([row["encoderDirectionAgreement"] for row in query_metrics])
     )
+    best_baseline_method = (
+        "lightgbm" if lightgbm_mae < baseline_mae else "euclidean"
+    )
+    best_baseline_mae = min(lightgbm_mae, baseline_mae)
     metrics = {
         "queryCount": len(query_metrics),
         "topK": top_k,
         "baselineOutcomeMae": baseline_mae,
+        "lightgbmOutcomeMae": lightgbm_mae,
         "encoderOutcomeMae": encoder_mae,
         "relativeMaeImprovement": (
             (baseline_mae - encoder_mae) / baseline_mae if baseline_mae else 0.0
         ),
+        "relativeMaeImprovementVsLightgbm": (
+            (lightgbm_mae - encoder_mae) / lightgbm_mae
+            if lightgbm_mae
+            else 0.0
+        ),
+        "relativeMaeImprovementVsBestBaseline": (
+            (best_baseline_mae - encoder_mae) / best_baseline_mae
+            if best_baseline_mae
+            else 0.0
+        ),
+        "bestBaselineMethod": best_baseline_method,
         "baselineDirectionAgreement": baseline_direction,
+        "lightgbmDirectionAgreement": lightgbm_direction,
         "encoderDirectionAgreement": encoder_direction,
         "directionAgreementImprovement": encoder_direction - baseline_direction,
-        "pairedMaeDifference95Ci": [ci_low, ci_high],
+        "directionAgreementImprovementVsLightgbm": (
+            encoder_direction - lightgbm_direction
+        ),
+        "pairedMaeDifference95Ci": [baseline_ci_low, baseline_ci_high],
+        "pairedMaeDifferenceVsLightgbm95Ci": [
+            lightgbm_ci_low,
+            lightgbm_ci_high,
+        ],
         "baselineHorizonMae": {
             str(horizon): float(baseline_errors[:, index].mean())
+            for index, horizon in enumerate(HORIZONS)
+        },
+        "lightgbmHorizonMae": {
+            str(horizon): float(lightgbm_errors[:, index].mean())
             for index, horizon in enumerate(HORIZONS)
         },
         "encoderHorizonMae": {
@@ -668,21 +983,44 @@ def promotion_gate(
     minimum_direction_improvement: float,
 ) -> dict[str, Any]:
     horizon_deterioration = {}
+    lightgbm_horizon_deterioration = {}
     for horizon in HORIZONS:
         key = str(horizon)
         baseline = float(metrics["baselineHorizonMae"][key])
+        lightgbm_baseline = float(metrics["lightgbmHorizonMae"][key])
         encoder = float(metrics["encoderHorizonMae"][key])
         horizon_deterioration[key] = (
             (encoder - baseline) / baseline if baseline else 0.0
+        )
+        lightgbm_horizon_deterioration[key] = (
+            (encoder - lightgbm_baseline) / lightgbm_baseline
+            if lightgbm_baseline
+            else 0.0
         )
     checks = {
         "minimumQueries": int(metrics["queryCount"]) >= minimum_queries,
         "maeImprovement": float(metrics["relativeMaeImprovement"])
         >= minimum_mae_improvement,
+        "maeImprovementVsLightgbm": float(
+            metrics["relativeMaeImprovementVsLightgbm"]
+        )
+        >= minimum_mae_improvement,
         "directionImprovement": float(metrics["directionAgreementImprovement"])
         >= minimum_direction_improvement,
+        "directionImprovementVsLightgbm": float(
+            metrics["directionAgreementImprovementVsLightgbm"]
+        )
+        >= minimum_direction_improvement,
         "statisticallyPositive": float(metrics["pairedMaeDifference95Ci"][1]) < 0,
+        "statisticallyPositiveVsLightgbm": float(
+            metrics["pairedMaeDifferenceVsLightgbm95Ci"][1]
+        )
+        < 0,
         "noMaterialHorizonRegression": max(horizon_deterioration.values()) <= 0.03,
+        "noMaterialHorizonRegressionVsLightgbm": max(
+            lightgbm_horizon_deterioration.values()
+        )
+        <= 0.03,
     }
     return {
         "passed": all(checks.values()),
@@ -694,6 +1032,8 @@ def promotion_gate(
             "maximumSingleHorizonRegression": 0.03,
         },
         "horizonDeterioration": horizon_deterioration,
+        "horizonDeteriorationVsLightgbm": lightgbm_horizon_deterioration,
+        "benchmarkRule": "encoder_must_beat_euclidean_and_lightgbm",
         "action": "shadow_only_even_when_passed",
     }
 
@@ -734,8 +1074,10 @@ def write_shadow_database(
           ticker TEXT NOT NULL,
           date TEXT NOT NULL,
           baseline_mae REAL NOT NULL,
+          lightgbm_mae REAL,
           encoder_mae REAL NOT NULL,
           baseline_direction_agreement REAL NOT NULL,
+          lightgbm_direction_agreement REAL,
           encoder_direction_agreement REAL NOT NULL,
           PRIMARY KEY(run_id, ticker, date)
         );
@@ -753,6 +1095,21 @@ def write_shadow_database(
         );
         """
     )
+    metric_columns = {
+        str(row[1])
+        for row in connection.execute(
+            "PRAGMA table_info(analog_encoder_query_metrics)"
+        )
+    }
+    if "lightgbm_mae" not in metric_columns:
+        connection.execute(
+            "ALTER TABLE analog_encoder_query_metrics ADD COLUMN lightgbm_mae REAL"
+        )
+    if "lightgbm_direction_agreement" not in metric_columns:
+        connection.execute(
+            "ALTER TABLE analog_encoder_query_metrics "
+            "ADD COLUMN lightgbm_direction_agreement REAL"
+        )
     status = "shadow_passed" if report["gate"]["passed"] else "shadow_rejected"
     cursor = connection.execute(
         """
@@ -793,9 +1150,10 @@ def write_shadow_database(
     connection.executemany(
         """
         INSERT INTO analog_encoder_query_metrics(
-          run_id, ticker, date, baseline_mae, encoder_mae,
-          baseline_direction_agreement, encoder_direction_agreement
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+          run_id, ticker, date, baseline_mae, lightgbm_mae, encoder_mae,
+          baseline_direction_agreement, lightgbm_direction_agreement,
+          encoder_direction_agreement
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
             (
@@ -803,8 +1161,10 @@ def write_shadow_database(
                 row["ticker"],
                 row["date"],
                 row["baselineMae"],
+                row["lightgbmMae"],
                 row["encoderMae"],
                 row["baselineDirectionAgreement"],
+                row["lightgbmDirectionAgreement"],
                 row["encoderDirectionAgreement"],
             )
             for row in query_metrics
@@ -852,6 +1212,14 @@ def save_artifact(
         input_std=std,
         horizons=np.asarray(HORIZONS, dtype=np.int32),
         history_json=np.asarray(json.dumps(history, separators=(",", ":"))),
+    )
+
+
+def save_lightgbm_artifact(artifact_path: Path, ranker: Any) -> None:
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    ranker.save_model(
+        str(artifact_path),
+        num_iteration=ranker.best_iteration or ranker.current_iteration(),
     )
 
 
@@ -910,6 +1278,21 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         f"test={len(test.x):,} {split}",
         flush=True,
     )
+    lightgbm_ranker, lightgbm_training = train_lightgbm_ranker(
+        train_raw,
+        validation_raw,
+        args.lightgbm_train_queries,
+        args.lightgbm_validation_queries,
+        args.purge_days,
+        args.lightgbm_candidates_per_query,
+        args.lightgbm_estimators,
+        args.lightgbm_learning_rate,
+        args.lightgbm_num_leaves,
+        args.lightgbm_minimum_data_in_leaf,
+        args.top_k,
+        args.lightgbm_threads,
+        args.seed,
+    )
     model = MultiFrameEncoder(np.random.default_rng(args.seed))
     history = train_model(
         model,
@@ -934,6 +1317,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     raw_queries = np.clip(queries.x * std + mean, -3.5, 3.5)
     metrics, query_metrics, rankings = evaluate_retrieval(
         model,
+        lightgbm_ranker,
         reference,
         queries,
         raw_reference,
@@ -949,7 +1333,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     )
     version = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
     artifact_path = output_dir / f"{args.market.lower()}-{MODEL_NAME}-{version}.npz"
+    lightgbm_artifact_path = (
+        output_dir
+        / f"{args.market.lower()}-{LIGHTGBM_MODEL_NAME}-{version}.txt"
+    )
     save_artifact(artifact_path, model, mean, std, history)
+    save_lightgbm_artifact(lightgbm_artifact_path, lightgbm_ranker)
     report = {
         "market": args.market,
         "model": MODEL_NAME,
@@ -972,10 +1361,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "batchSize": args.batch_size,
             "learningRate": args.learning_rate,
             "finalValidationPredictionLoss": history[-1]["validationPredictionLoss"],
+            "lightgbm": lightgbm_training,
         },
         "metrics": metrics,
         "gate": gate,
         "artifactPath": str(artifact_path),
+        "lightgbmArtifactPath": str(lightgbm_artifact_path),
         "productionRankingChanged": False,
         "createdAt": utc_now(),
     }
@@ -1027,6 +1418,21 @@ def self_test() -> None:
     dataset = Dataset(x, y, tickers, dates)
     train = dataset.take(np.arange(0, 560))
     validation = dataset.take(np.arange(560, 680))
+    ranker, ranker_training = train_lightgbm_ranker(
+        train,
+        validation,
+        train_query_limit=80,
+        validation_query_limit=32,
+        purge_days=30,
+        candidate_count=24,
+        estimators=30,
+        learning_rate=0.08,
+        num_leaves=15,
+        minimum_data_in_leaf=12,
+        top_k=5,
+        threads=1,
+        seed=7,
+    )
     model = MultiFrameEncoder(rng)
     initial = model_loss(model, validation)
     history = train_model(model, train, validation, 8, 96, 0.004, 7)
@@ -1038,8 +1444,39 @@ def self_test() -> None:
         raise RuntimeError("self-test embeddings are not normalized")
     if not history:
         raise RuntimeError("self-test produced no training history")
+    ranker_scores = lightgbm_rank_scores(
+        ranker,
+        train.x[:64],
+        validation.x[0],
+    )
+    if not np.isfinite(ranker_scores).all():
+        raise RuntimeError("self-test LightGBM scores are not finite")
+    if int(ranker_training["bestIteration"]) <= 0:
+        raise RuntimeError("self-test LightGBM ranker did not train")
+    horizon_values = {str(horizon): 1.0 for horizon in HORIZONS}
+    lightgbm_horizon_values = {str(horizon): 0.9 for horizon in HORIZONS}
+    encoder_horizon_values = {str(horizon): 0.75 for horizon in HORIZONS}
+    gate_metrics = {
+        "queryCount": 600,
+        "relativeMaeImprovement": 0.25,
+        "relativeMaeImprovementVsLightgbm": 0.16,
+        "directionAgreementImprovement": 0.05,
+        "directionAgreementImprovementVsLightgbm": 0.03,
+        "pairedMaeDifference95Ci": [-0.20, -0.05],
+        "pairedMaeDifferenceVsLightgbm95Ci": [-0.15, -0.03],
+        "baselineHorizonMae": horizon_values,
+        "lightgbmHorizonMae": lightgbm_horizon_values,
+        "encoderHorizonMae": encoder_horizon_values,
+    }
+    if not promotion_gate(gate_metrics, 500, 0.03, 0.01)["passed"]:
+        raise RuntimeError("self-test strict dual-baseline gate should pass")
+    gate_metrics["relativeMaeImprovementVsLightgbm"] = -0.01
+    if promotion_gate(gate_metrics, 500, 0.03, 0.01)["passed"]:
+        raise RuntimeError("self-test gate accepted an encoder that lost to LightGBM")
     print(
-        f"analog encoder self-test passed: initial={initial:.6f} final={final:.6f}",
+        "analog encoder self-test passed: "
+        f"initial={initial:.6f} final={final:.6f} "
+        f"lightgbm_iteration={ranker_training['bestIteration']}",
         flush=True,
     )
 
@@ -1056,6 +1493,14 @@ def parser() -> argparse.ArgumentParser:
     value.add_argument("--epochs", type=int, default=24)
     value.add_argument("--batch-size", type=int, default=192)
     value.add_argument("--learning-rate", type=float, default=0.002)
+    value.add_argument("--lightgbm-train-queries", type=int, default=2_000)
+    value.add_argument("--lightgbm-validation-queries", type=int, default=400)
+    value.add_argument("--lightgbm-candidates-per-query", type=int, default=96)
+    value.add_argument("--lightgbm-estimators", type=int, default=300)
+    value.add_argument("--lightgbm-learning-rate", type=float, default=0.05)
+    value.add_argument("--lightgbm-num-leaves", type=int, default=31)
+    value.add_argument("--lightgbm-minimum-data-in-leaf", type=int, default=40)
+    value.add_argument("--lightgbm-threads", type=int, default=2)
     value.add_argument("--reference-limit", type=int, default=30_000)
     value.add_argument("--query-limit", type=int, default=1_200)
     value.add_argument("--top-k", type=int, default=10)

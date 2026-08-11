@@ -39,6 +39,7 @@ const SOURCE_WRITER_POLL_MS = Math.max(
   1_000,
   Math.min(Number(process.env.US_ANALYTICS_SOURCE_WRITER_POLL_MS ?? 5_000), 60_000),
 )
+const SOURCE_WRITER_JOB_TO_IGNORE = process.env.US_ANALYTICS_SOURCE_WRITER_JOB_TO_IGNORE?.trim() || null
 const NATIVE_SYNC_RECENT_DAYS = Math.max(1, Number(process.env.US_ANALYTICS_SYNC_RECENT_DAYS ?? 45))
 const REBUILD_PRICE_BASIS = process.env.US_ANALYTICS_REBUILD_PRICE_BASIS === '1'
 
@@ -115,6 +116,7 @@ FROM update_locks
 WHERE status = 'running'
   AND lease_expires_at > unixepoch()
   AND job_type <> 'us_adjusted_foundation'
+  ${SOURCE_WRITER_JOB_TO_IGNORE ? `AND job_type <> ${sqlLiteral(SOURCE_WRITER_JOB_TO_IGNORE)}` : ''}
 LIMIT 1;
 `).trim()
     } catch (error) {

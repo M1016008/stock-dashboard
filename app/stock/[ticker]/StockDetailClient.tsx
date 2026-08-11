@@ -2,7 +2,7 @@
 'use client'
 
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
-import type { CSSProperties, FormEvent } from 'react'
+import type { CSSProperties } from 'react'
 import {
   BrainCircuit,
   Building2,
@@ -25,7 +25,7 @@ import { StageTimeline } from '@/components/stock/StageTimeline'
 import { StockMovePeriods } from '@/components/stock/StockMovePeriods'
 import { StockMlInsights } from '@/components/stock/StockMlInsights'
 import { HistoricalAnalogExplorer } from '@/components/stock/HistoricalAnalogExplorer'
-import { FutureScenarioPanel } from '@/components/stock/FutureScenarioPanel'
+import { ScenarioProjectionChart } from '@/components/stock/ScenarioProjectionChart'
 import { TradeScenarioNotebook } from '@/components/stock/TradeScenarioNotebook'
 import { StockScenarioAiPanel } from '@/components/stock/StockScenarioAiPanel'
 import {
@@ -411,10 +411,9 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
         <>
           {!loading && !quote && (
             <div className="card" style={missingPriceNoticeStyle}>
-              J-Quants日足に未収録です。手動補完CSVを投入すると株価・価格チャート・シナリオに反映します。
+              J-Quants日足の価格データを取得できませんでした。
             </div>
           )}
-          {!loading && !quote && <ManualOhlcvImportCard ticker={ticker} />}
           <div className="stock-info-grid">
             <BasicInfoCard ticker={ticker} quote={displayedQuote} analysisDate={analysisDate} />
             <MarketSnapshotCard
@@ -470,7 +469,7 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
             }}
           />
           <StockMovePeriods ticker={ticker} analysisDate={analysisDate} />
-          <FutureScenarioPanel
+          <ScenarioProjectionChart
             ticker={ticker}
             name={name}
             analysisDate={analysisDate}
@@ -2744,95 +2743,6 @@ function fmtChange(value: number | null | undefined) {
   return `${value > 0 ? '+' : ''}${Math.round(value).toLocaleString('ja-JP')}株`
 }
 
-interface ManualOhlcvImportResponse {
-  ok: boolean
-  imported?: number
-  error?: string
-  message?: string
-  errors?: string[]
-  summary?: {
-    count: number
-    firstDate: string | null
-    latestDate: string | null
-  }
-}
-
-function ManualOhlcvImportCard({ ticker }: { ticker: string }) {
-  const [csv, setCsv] = useState('')
-  const [sourceName, setSourceName] = useState('manual_csv')
-  const [status, setStatus] = useState<string | null>(null)
-  const [errors, setErrors] = useState<string[]>([])
-  const [submitting, setSubmitting] = useState(false)
-
-  const submit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    setSubmitting(true)
-    setStatus(null)
-    setErrors([])
-    try {
-      const res = await fetch(`/api/manual-ohlcv/${encodeURIComponent(ticker)}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ csv, sourceName }),
-      })
-      const data = await res.json() as ManualOhlcvImportResponse
-      if (!res.ok || !data.ok) {
-        setErrors(data.errors?.length ? data.errors : [data.message ?? data.error ?? '取り込みに失敗'])
-        return
-      }
-      const range = data.summary?.firstDate && data.summary.latestDate
-        ? `${data.summary.firstDate} - ${data.summary.latestDate}`
-        : '期間未取得'
-      setStatus(`${data.imported ?? 0}行を保存。${range}`)
-      window.setTimeout(() => window.location.reload(), 700)
-    } catch (error) {
-      setErrors([error instanceof Error ? error.message : String(error)])
-    } finally {
-      setSubmitting(false)
-    }
-  }
-
-  return (
-    <form className="card" style={manualImportCardStyle} onSubmit={submit}>
-      <div style={manualImportHeaderStyle}>
-        <div>
-          <div style={manualImportTitleStyle}>手動OHLCV補完</div>
-          <div style={manualImportSubStyle}>date, open, high, low, close, volume / 日付, 始値, 高値, 安値, 終値, 出来高</div>
-        </div>
-        <button type="submit" style={manualImportButtonStyle} disabled={submitting || csv.trim().length === 0}>
-          {submitting ? '保存中...' : '保存'}
-        </button>
-      </div>
-      <div style={manualImportControlsStyle}>
-        <label style={manualImportLabelStyle}>
-          データ元
-          <input
-            value={sourceName}
-            onChange={(event) => setSourceName(event.target.value)}
-            style={manualImportInputStyle}
-            placeholder="manual_csv"
-          />
-        </label>
-      </div>
-      <textarea
-        value={csv}
-        onChange={(event) => setCsv(event.target.value)}
-        style={manualImportTextareaStyle}
-        spellCheck={false}
-        placeholder={'date,open,high,low,close,volume\n2026-07-10,100,105,98,103,120000'}
-      />
-      {status && <div style={manualImportStatusStyle}>{status}</div>}
-      {errors.length > 0 && (
-        <div style={manualImportErrorStyle}>
-          {errors.map((error) => (
-            <div key={error}>・{error}</div>
-          ))}
-        </div>
-      )}
-    </form>
-  )
-}
-
 type CompanyInfoTab = 'financial' | 'major' | 'policy' | 'large'
 
 function CompanyIntelligencePanel({ info }: { info: StockOverviewInfo | null }) {
@@ -3693,99 +3603,6 @@ const missingPriceNoticeStyle: CSSProperties = {
   fontSize: '12px',
   fontWeight: 700,
   lineHeight: 1.6,
-}
-
-const manualImportCardStyle: CSSProperties = {
-  padding: '14px',
-  display: 'grid',
-  gap: '10px',
-  borderColor: 'rgba(59, 130, 246, 0.22)',
-  background: 'rgba(59, 130, 246, 0.055)',
-}
-
-const manualImportHeaderStyle: CSSProperties = {
-  display: 'flex',
-  alignItems: 'flex-start',
-  justifyContent: 'space-between',
-  gap: '12px',
-}
-
-const manualImportTitleStyle: CSSProperties = {
-  color: 'var(--text-primary)',
-  fontSize: '13px',
-  fontWeight: 800,
-}
-
-const manualImportSubStyle: CSSProperties = {
-  marginTop: '3px',
-  color: 'var(--text-muted)',
-  fontSize: '11px',
-  fontFamily: 'var(--font-mono)',
-  lineHeight: 1.4,
-}
-
-const manualImportControlsStyle: CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: 'minmax(180px, 320px)',
-  gap: '8px',
-}
-
-const manualImportLabelStyle: CSSProperties = {
-  display: 'grid',
-  gap: '4px',
-  color: 'var(--text-muted)',
-  fontSize: '11px',
-  fontWeight: 700,
-}
-
-const manualImportInputStyle: CSSProperties = {
-  height: '32px',
-  border: '1px solid var(--border-base)',
-  borderRadius: '6px',
-  padding: '0 10px',
-  background: 'var(--surface-primary)',
-  color: 'var(--text-primary)',
-  fontSize: '12px',
-}
-
-const manualImportTextareaStyle: CSSProperties = {
-  width: '100%',
-  minHeight: '132px',
-  resize: 'vertical',
-  border: '1px solid var(--border-base)',
-  borderRadius: '6px',
-  padding: '10px',
-  background: 'var(--surface-primary)',
-  color: 'var(--text-primary)',
-  fontFamily: 'var(--font-mono)',
-  fontSize: '11px',
-  lineHeight: 1.5,
-}
-
-const manualImportButtonStyle: CSSProperties = {
-  border: '1px solid var(--accent-primary)',
-  borderRadius: '6px',
-  padding: '7px 13px',
-  background: 'var(--accent-primary)',
-  color: '#fff',
-  fontSize: '12px',
-  fontWeight: 800,
-  cursor: 'pointer',
-  whiteSpace: 'nowrap',
-}
-
-const manualImportStatusStyle: CSSProperties = {
-  color: 'var(--price-up)',
-  fontSize: '12px',
-  fontWeight: 700,
-}
-
-const manualImportErrorStyle: CSSProperties = {
-  display: 'grid',
-  gap: '3px',
-  color: 'var(--price-down)',
-  fontSize: '12px',
-  lineHeight: 1.5,
 }
 
 const basicStageCellLabelStyle: CSSProperties = {

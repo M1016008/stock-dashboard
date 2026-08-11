@@ -4,7 +4,8 @@
 // J-Quants /equities/earnings-calendar は翌営業日分のみのため、
 // 月次予定はJPX公式Excelを補完ソースとして扱う。
 
-import * as XLSX from 'xlsx'
+import { readSafeSpreadsheetBuffer } from '@/lib/safe-spreadsheet'
+import { execFileSync } from 'node:child_process'
 
 export const JPX_EARNINGS_PAGE =
   'https://www.jpx.co.jp/listing/event-schedules/financial-announcement/index.html'
@@ -29,6 +30,14 @@ type AsOfDate = {
   year: number
   month: number
   day: number
+}
+
+const USER_AGENT = 'StockBoard/1.0 (+https://www.jpx.co.jp/)'
+const MAX_PAGE_BYTES = 5 * 1024 * 1024
+const MAX_WORKBOOK_BYTES = 32 * 1024 * 1024
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 function decodeHtml(input: string): string {
@@ -75,10 +84,12 @@ function parseAsOf(rows: unknown[][]): AsOfDate | null {
   return null
 }
 
-function parseAnnouncementDate(value: unknown, asOf: AsOfDate): string | null {
+function parseAnnouncementDate(value: unknown, asOf: AsOfDate | null): string | null {
   const text = cleanCell(value)
+  const iso = text.match(/^(\d{4})-(\d{2})-(\d{2})(?:T|$)/)
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`
   const match = text.match(/(\d{1,2})[\/月](\d{1,2})/)
-  if (!match) return null
+  if (!match || !asOf) return null
   const month = Number(match[1])
   const day = Number(match[2])
   if (!month || !day) return null
@@ -88,28 +99,63 @@ function parseAnnouncementDate(value: unknown, asOf: AsOfDate): string | null {
   return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
 }
 
-async function fetchText(url: string): Promise<string> {
-  const res = await fetch(url, {
-    headers: {
-      'user-agent': 'StockBoard/1.0 (+https://www.jpx.co.jp/)',
-    },
-  })
-  if (!res.ok) {
-    throw new Error(`JPX決算予定ページ取得失敗: ${res.status}`)
+async function fetchWithFallback(url: string, label: string, maxBytes: number): Promise<Buffer> {
+  let lastError: unknown = null
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      const res = await fetch(url, {
+        headers: { 'user-agent': USER_AGENT },
+        signal: AbortSignal.timeout(60_000),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const contentLength = Number(res.headers.get('content-length'))
+      if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+        throw new Error(`response exceeds ${maxBytes} bytes`)
+      }
+      const buffer = Buffer.from(await res.arrayBuffer())
+      if (buffer.length === 0 || buffer.length > maxBytes) {
+        throw new Error(`response size is invalid: ${buffer.length}`)
+      }
+      return buffer
+    } catch (error) {
+      lastError = error
+      if (attempt < 3) await sleep(attempt * 2_000)
+    }
   }
-  return await res.text()
+
+  try {
+    const output = execFileSync('curl', [
+      '--http1.1',
+      '--location',
+      '--fail',
+      '--silent',
+      '--show-error',
+      '--retry', '3',
+      '--retry-delay', '2',
+      '--retry-all-errors',
+      '--connect-timeout', '20',
+      '--max-time', '90',
+      '--max-filesize', String(maxBytes),
+      '--user-agent', USER_AGENT,
+      url,
+    ], { encoding: null, maxBuffer: maxBytes })
+    if (output.length === 0 || output.length > maxBytes) {
+      throw new Error(`curl response size is invalid: ${output.length}`)
+    }
+    return output
+  } catch (curlError) {
+    const nativeMessage = lastError instanceof Error ? lastError.message : String(lastError)
+    const curlMessage = curlError instanceof Error ? curlError.message : String(curlError)
+    throw new Error(`${label}: fetch=${nativeMessage}; curl=${curlMessage}`)
+  }
+}
+
+async function fetchText(url: string): Promise<string> {
+  return (await fetchWithFallback(url, 'JPX決算予定ページ取得失敗', MAX_PAGE_BYTES)).toString('utf8')
 }
 
 async function fetchBuffer(url: string): Promise<Buffer> {
-  const res = await fetch(url, {
-    headers: {
-      'user-agent': 'StockBoard/1.0 (+https://www.jpx.co.jp/)',
-    },
-  })
-  if (!res.ok) {
-    throw new Error(`JPX決算予定Excel取得失敗: ${res.status} ${url}`)
-  }
-  return Buffer.from(await res.arrayBuffer())
+  return fetchWithFallback(url, `JPX決算予定Excel取得失敗: ${url}`, MAX_WORKBOOK_BYTES)
 }
 
 export function extractJpxEarningsWorkbookLinks(html: string): WorkbookLink[] {
@@ -129,13 +175,15 @@ export function extractJpxEarningsWorkbookLinks(html: string): WorkbookLink[] {
   return links
 }
 
-function parseWorkbookRows(buffer: Buffer, source: WorkbookLink): JpxEarningsCalendarRow[] {
-  const wb = XLSX.read(buffer, { type: 'buffer', cellDates: false })
-  const sheetName = wb.SheetNames[0]
-  if (!sheetName) return []
-  const sheet = wb.Sheets[sheetName]
-  const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: null, raw: false })
-  const asOf = parseAsOf(rows)
+export async function parseJpxEarningsWorkbook(
+  buffer: Buffer,
+  source: { url: string; title: string },
+): Promise<JpxEarningsCalendarRow[]> {
+  const { rows } = await readSafeSpreadsheetBuffer(buffer, {
+    maxRows: 10_000,
+    maxColumns: 32,
+  })
+  const asOf = parseAsOf(rows) ?? parseAsOf([[source.title]])
   if (!asOf) return []
 
   const headerIndex = rows.findIndex(row =>
@@ -172,9 +220,13 @@ export async function fetchJpxEarningsCalendar(): Promise<JpxEarningsCalendarRow
 
   for (const link of links) {
     const buffer = await fetchBuffer(link.url)
-    for (const row of parseWorkbookRows(buffer, link)) {
+    for (const row of await parseJpxEarningsWorkbook(buffer, link)) {
       byKey.set(`${row.ticker}\t${row.announceDate}`, row)
     }
+  }
+
+  if (links.length > 0 && byKey.size === 0) {
+    throw new Error('JPX決算予定Excelを解析できましたが、有効な予定行が0件でした。')
   }
 
   return [...byKey.values()].sort((a, b) =>

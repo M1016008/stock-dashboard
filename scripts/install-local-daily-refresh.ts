@@ -131,4 +131,4 @@ console.log('JP MA trajectory refresh: daily 23:20 JST plus 00:20 retry; source-
 console.log('JP ML freshness guard: Mon-Fri 23:45 JST')
 console.log('All-data recovery guard: after login and every 30 minutes; stale services only')
 console.log('Weekly optimization: Sunday 00:30 JST, sequential JP/US ML, indexes, cache, and DB maintenance')
-console.log('DB maintenance: daily 01:30 JST, skips unsafe checkpoints when DB is open')
+console.log('DB maintenance: daily 01:30/05:30/12:30/15:30 JST, retries safely around active writers')

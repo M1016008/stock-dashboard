@@ -5,7 +5,7 @@ import { readServingCache, writeServingCache } from '@/lib/api/serving-cache'
 export const dynamic = 'force-dynamic'
 
 const CACHE_TTL_MS = 6 * 60 * 60 * 1000
-const CACHE_NAMESPACE = 'backtest_coverage_v1'
+const CACHE_NAMESPACE = 'backtest_coverage_v2'
 
 type CoveragePayload = {
   horizon: number
@@ -53,6 +53,33 @@ async function indexedDateRange(table: 'ohlcv_daily' | 'indices_daily' | 'model_
   }
 }
 
+async function indexedBacktestRange(horizon: number): Promise<RangeCount> {
+  const compact = await rangeCount(`
+    SELECT MIN(date) AS start_date, MAX(date) AS end_date, COUNT(*) AS days
+    FROM forward_extrema_date_coverage
+    WHERE horizon_days = ?
+  `, [horizon])
+  if (compact.days > 0) return compact
+
+  const [start, end] = await Promise.all([
+    execGet<{ date: string | null }>(`
+      SELECT date FROM forward_extrema INDEXED BY fext_horizon_date_idx
+      WHERE horizon_days = ? ORDER BY date ASC LIMIT 1
+    `, [horizon]),
+    execGet<{ date: string | null }>(`
+      SELECT date FROM forward_extrema INDEXED BY fext_horizon_date_idx
+      WHERE horizon_days = ? ORDER BY date DESC LIMIT 1
+    `, [horizon]),
+  ])
+  if (!start?.date || !end?.date) return { start_date: null, end_date: null, days: 0 }
+  const count = await execGet<{ days: number }>(`
+    SELECT COUNT(*) AS days
+    FROM (SELECT DISTINCT date FROM ohlcv_daily INDEXED BY ohlcv_date_idx
+          WHERE date BETWEEN ? AND ?)
+  `, [start.date, end.date])
+  return { start_date: start.date, end_date: end.date, days: Number(count?.days ?? 0) }
+}
+
 function toPayload(row: RangeCount) {
   return {
     startDate: row.start_date,
@@ -87,11 +114,7 @@ export async function GET(request: NextRequest) {
       indexedDateRange('ohlcv_daily', 'ohlcv_date_idx'),
       indexedDateRange('indices_daily', 'indices_date_idx'),
       indexedDateRange('model_features', 'model_features_date_idx'),
-      rangeCount(`
-        SELECT MIN(date) AS start_date, MAX(date) AS end_date, COUNT(DISTINCT date) AS days
-        FROM forward_extrema INDEXED BY fext_horizon_date_idx
-        WHERE horizon_days = ?
-      `, [safeHorizon])
+      indexedBacktestRange(safeHorizon),
     ])
     const excludedDays = Math.max(0, market.days - backtest.days)
 

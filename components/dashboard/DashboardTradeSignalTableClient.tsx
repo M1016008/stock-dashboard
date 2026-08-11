@@ -133,9 +133,9 @@ function StageStrip({ row }: { row: DashboardTradeSignalRow }) {
     ['月B', row.stages.monthlyB],
   ] as const
   return (
-    <div className="flex items-center gap-1 whitespace-nowrap">
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
       {stages.map(([label, stage]) => (
-        <span key={label} className="inline-flex items-center gap-0.5 rounded-full border border-[var(--color-border-soft)] bg-white px-1 py-0.5">
+        <span key={label} className="inline-flex items-center gap-0.5">
           <span className="text-[8px] font-black text-[var(--color-text-tertiary)]">{label}</span>
           <StageTag stage={stage} size="xs" />
         </span>
@@ -160,28 +160,28 @@ function scenarioDirectionLabel(direction: 'up' | 'down' | 'range' | 'mixed'): s
 
 function scenarioDecisionClass(tone: string): string {
   if (tone === 'constructive') {
-    return 'border-[rgba(220,38,38,0.22)] bg-[rgba(254,226,226,0.62)] text-[var(--color-price-up)]'
+    return 'border-l-[var(--color-price-up)] text-[var(--color-price-up)]'
   }
   if (tone === 'caution') {
-    return 'border-[rgba(37,99,235,0.24)] bg-[rgba(219,234,254,0.68)] text-[var(--color-price-down)]'
+    return 'border-l-[var(--color-price-down)] text-[var(--color-price-down)]'
   }
   if (tone === 'conflict') {
-    return 'border-[rgba(245,158,11,0.28)] bg-[rgba(254,243,199,0.78)] text-[#b45309]'
+    return 'border-l-[#d97706] text-[#b45309]'
   }
-  return 'border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] text-[var(--color-text-secondary)]'
+  return 'border-l-[var(--color-border-strong)] text-[var(--color-text-secondary)]'
 }
 
 function ScenarioCell({ row }: { row: DashboardTradeSignalRow }) {
   const scenario = row.scenario
   if (!scenario) {
     return (
-      <div className="text-[11px] font-bold leading-relaxed text-[var(--color-text-tertiary)]">
+      <div className="col-span-2 text-[11px] font-bold leading-relaxed text-[var(--color-text-tertiary)] xl:col-span-1">
         シナリオ生成データ不足
       </div>
     )
   }
   return (
-    <div className="grid min-w-[230px] gap-1.5">
+    <div className="col-span-2 grid min-w-0 gap-1.5 xl:col-span-1">
       <div className="flex flex-wrap items-center gap-1">
         <span className={`rounded-full px-2 py-0.5 text-[10px] font-black ${scenarioDirectionClass(scenario.leader)}`}>
           {scenarioDirectionLabel(scenario.leader)}
@@ -193,18 +193,17 @@ function ScenarioCell({ row }: { row: DashboardTradeSignalRow }) {
           {scenario.intervalLabel} / {scenario.horizonDays}営業日 / {scenario.baseDate}
         </span>
       </div>
-      <div className="grid grid-cols-3 gap-1 font-mono text-[10px] font-black">
-        <span className="rounded bg-[rgba(254,226,226,0.58)] px-1.5 py-0.5 text-[var(--color-price-up)]">上 {scenario.upWeightPct.toFixed(1)}%</span>
-        <span className="rounded bg-[rgba(219,234,254,0.72)] px-1.5 py-0.5 text-[var(--color-price-down)]">下 {scenario.downWeightPct.toFixed(1)}%</span>
-        <span className="rounded bg-[rgba(254,243,199,0.72)] px-1.5 py-0.5 text-[#b45309]">横 {scenario.rangeWeightPct.toFixed(1)}%</span>
+      <div className="flex flex-wrap items-center divide-x divide-[var(--color-border-soft)] font-mono text-[10px] font-black">
+        <span className="pr-2 text-[var(--color-price-up)]">上 {scenario.upWeightPct.toFixed(1)}%</span>
+        <span className="px-2 text-[var(--color-price-down)]">下 {scenario.downWeightPct.toFixed(1)}%</span>
+        <span className="pl-2 text-[#b45309]">横 {scenario.rangeWeightPct.toFixed(1)}%</span>
       </div>
       <div className="text-[11px] font-black text-[var(--color-text-primary)]">
         #1 {scenario.topLabel} / {scenario.topScore}
       </div>
-      <div className={`rounded-[7px] border px-2 py-1.5 text-[11px] font-bold leading-relaxed ${scenarioDecisionClass(scenario.decisionTone)}`}>
-        <div className="mb-1 text-[10px] font-black opacity-70">判断材料</div>
+      <div className={`border-l-2 pl-2 text-[10px] font-bold leading-relaxed ${scenarioDecisionClass(scenario.decisionTone)}`}>
         <div className="grid gap-0.5">
-          {(scenario.decisionPoints?.length ? scenario.decisionPoints : [scenario.decisionSummary]).map((point) => (
+          {(scenario.decisionPoints?.length ? scenario.decisionPoints : [scenario.decisionSummary]).slice(0, 3).map((point) => (
             <div key={point} className="grid grid-cols-[auto_1fr] gap-1">
               <span aria-hidden="true">・</span>
               <span>{point}</span>
@@ -277,35 +276,33 @@ function shapeEvidencePoints(row: DashboardTradeSignalRow): string[] {
     ...row.evidenceChips,
     ...row.riskChips.map((chip) => `注意: ${chip}`),
   ]
-  return Array.from(new Set(raw.map(shapeEvidenceSentence))).slice(0, 7)
+  return Array.from(new Set(raw.map(shapeEvidenceSentence))).slice(0, 5)
 }
 
 function SignalRow({ row, index }: { row: DashboardTradeSignalRow; index: number }) {
   const evidencePoints = shapeEvidencePoints(row)
   return (
-    <tr className="border-b border-[var(--color-border-soft)] last:border-0 hover:bg-[rgba(248,250,252,0.86)]">
-      <td className="w-[92px] px-3 py-3 align-top">
-        <div className={`inline-flex min-w-[52px] justify-center rounded-full px-2.5 py-1.5 font-mono text-[15px] font-black ${scoreClass(row.confidenceScore)}`}>
+    <li className={`grid grid-cols-[58px_minmax(0,1fr)] gap-x-3 gap-y-2 border-l-2 px-3 py-2.5 transition-colors hover:bg-[rgba(248,250,252,0.86)] xl:grid-cols-[70px_minmax(210px,0.9fr)_minmax(250px,1.1fr)_minmax(250px,1.15fr)_minmax(210px,0.95fr)] xl:gap-x-4 ${row.side === 'buy' ? 'border-l-[var(--color-price-up)]' : 'border-l-[var(--color-price-down)]'}`}>
+      <div className="min-w-0">
+        <div className={`inline-flex min-w-[46px] justify-center px-1.5 py-1 font-mono text-[14px] font-black ${scoreClass(row.confidenceScore)}`}>
           {row.confidenceScore}
         </div>
-        <div className="mt-2 flex flex-wrap items-center gap-1">
-          <span className={`inline-flex whitespace-nowrap rounded-full border px-2 py-0.5 text-[10px] font-black ${sideToneClass(row.side)}`}>
+        <div className="mt-1.5 flex flex-wrap items-center gap-1">
+          <span className={`inline-flex whitespace-nowrap border px-1.5 py-0.5 text-[9px] font-black ${sideToneClass(row.side)}`}>
             {sideLabel(row.side)}
           </span>
-          <span className="rounded-full bg-[var(--color-surface-subtle)] px-1.5 py-0.5 text-[9px] font-black text-[var(--color-text-tertiary)]">
-            {row.market}
-          </span>
         </div>
-        <div className="mt-2 font-mono text-[10px] font-black text-[var(--color-text-tertiary)]">#{index + 1}</div>
-      </td>
-      <td className="min-w-[280px] px-3 py-3 align-top">
+        <div className="mt-1.5 font-mono text-[9px] font-black text-[var(--color-text-tertiary)]">#{index + 1} / {row.market}</div>
+      </div>
+
+      <div className="min-w-0">
         <div className="flex min-w-0 items-center gap-2">
           <Link href={row.href} prefetch={false} className="font-mono text-[15px] font-black text-[var(--color-brand-800)] hover:underline">
             {row.ticker}
           </Link>
           <span className="line-clamp-1 text-[12px] font-bold text-[var(--color-text-primary)]">{row.name}</span>
         </div>
-        <div className="mt-2 grid grid-cols-[auto_auto_1fr] items-end gap-x-2 gap-y-1">
+        <div className="mt-1 grid grid-cols-[auto_auto_1fr] items-end gap-x-2 gap-y-0.5">
           <div className="font-mono text-[14px] font-black text-[var(--color-text-primary)]">{fmtPrice(row.price, row.market)}</div>
           <div className={`font-mono text-[12px] font-black ${signedClass(row.changePct)}`}>{fmtPct(row.changePct)}</div>
           <div className="text-right text-[9px] font-bold text-[var(--color-text-tertiary)]">{row.date ?? '日付なし'}</div>
@@ -313,55 +310,39 @@ function SignalRow({ row, index }: { row: DashboardTradeSignalRow; index: number
             平均出来高 {fmtCompact(row.avgVolume)} / {row.avgVolumeLabel}
           </div>
         </div>
-        <div className="mt-2 flex flex-wrap gap-1">
-          <span className="rounded-full bg-[var(--color-surface-subtle)] px-2 py-0.5 text-[10px] font-bold text-[var(--color-text-secondary)]">
-            {row.marketSegment ?? '市場未分類'}
-          </span>
-          {row.marginType && (
-            <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-bold text-[var(--color-text-secondary)] ring-1 ring-[var(--color-border-soft)]">
-              {row.marginType}
-            </span>
-          )}
-          <span className="rounded-full bg-[var(--color-surface-subtle)] px-2 py-0.5 text-[10px] font-bold text-[var(--color-text-secondary)]">
-            17: {row.industry17}
-          </span>
-          <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-bold text-[var(--color-text-primary)] ring-1 ring-[var(--color-border-soft)]">
-            33: {row.industry33}
-          </span>
+        <div className="mt-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[9px] font-bold text-[var(--color-text-tertiary)]">
+          <span>{row.marketSegment ?? '市場未分類'}</span>
+          {row.marginType && <><span aria-hidden="true">/</span><span>{row.marginType}</span></>}
+          <span aria-hidden="true">/</span>
+          <span>{row.industry17}</span>
+          <span aria-hidden="true">/</span>
+          <span className="text-[var(--color-text-secondary)]">{row.industry33}</span>
         </div>
-      </td>
-      <td className="min-w-[360px] px-3 py-3 align-top">
-        <ScenarioCell row={row} />
-      </td>
-      <td className="min-w-[330px] px-3 py-3 align-top">
-        <div className="rounded-[7px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-2.5 py-2">
-          <div className="mb-1 text-[10px] font-black text-[var(--color-text-tertiary)]">形状根拠</div>
-          <div className="grid gap-1">
-            {evidencePoints.map((point) => (
-              <div key={point} className={`grid grid-cols-[auto_1fr] gap-1 rounded-[5px] px-1 py-0.5 text-[11px] font-bold leading-relaxed ${evidencePointClass(point)}`}>
-                <span aria-hidden="true">・</span>
-                <span>{point}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </td>
-      <td className="min-w-[240px] px-3 py-3 align-top">
-        <StageStrip row={row} />
-        <div className="mt-2 grid grid-cols-3 gap-1 rounded-[7px] bg-[var(--color-surface-subtle)] p-2 font-mono text-[10px] font-black">
-          <span className={signedClass(row.pms)}>PMS {fmtNumber(row.pms, 2)}</span>
-          <span className={signedClass(row.pfs)}>PFS {fmtNumber(row.pfs, 2)}</span>
-          <span className={signedClass(row.pes)}>PES {fmtNumber(row.pes, 2)}</span>
-        </div>
-        <div className="mt-2 grid gap-1">
-          {row.evidenceChips.slice(0, 3).map((chip) => (
-            <span key={chip} className="line-clamp-1 text-[10px] font-bold text-[var(--color-text-tertiary)]">
-              {chip}
-            </span>
+      </div>
+
+      <ScenarioCell row={row} />
+
+      <div className="col-span-2 min-w-0 xl:col-span-1">
+        <div className="mb-1 text-[9px] font-black text-[var(--color-text-tertiary)]">形状根拠</div>
+        <div className="grid gap-0.5">
+          {evidencePoints.map((point) => (
+            <div key={point} className={`grid grid-cols-[auto_1fr] gap-1 text-[10px] font-bold leading-relaxed ${evidencePointClass(point)}`}>
+              <span aria-hidden="true">・</span>
+              <span>{point}</span>
+            </div>
           ))}
         </div>
-      </td>
-    </tr>
+      </div>
+
+      <div className="col-span-2 min-w-0 xl:col-span-1">
+        <StageStrip row={row} />
+        <div className="mt-1.5 flex divide-x divide-[var(--color-border-soft)] font-mono text-[10px] font-black">
+          <span className={`pr-2 ${signedClass(row.pms)}`}>PMS {fmtNumber(row.pms, 2)}</span>
+          <span className={`px-2 ${signedClass(row.pfs)}`}>PFS {fmtNumber(row.pfs, 2)}</span>
+          <span className={`pl-2 ${signedClass(row.pes)}`}>PES {fmtNumber(row.pes, 2)}</span>
+        </div>
+      </div>
+    </li>
   )
 }
 
@@ -522,23 +503,19 @@ export function DashboardTradeSignalTableClient({ data }: { data: DashboardTrade
         <span>{market}の{industryLevel}業種を表示中。売る候補は下落/弱含み側の監視候補です。</span>
       </div>
 
-      <div className="overflow-x-auto rounded-[8px] border border-[var(--color-border-soft)]">
-        <table className="min-w-[1180px] w-full border-collapse bg-white text-left">
-          <thead className="bg-[var(--color-surface-subtle)] text-[10px] font-black uppercase tracking-wide text-[var(--color-text-tertiary)]">
-            <tr>
-              <th className="px-3 py-2">確度</th>
-              <th className="px-3 py-2">銘柄 / 価格</th>
-              <th className="px-3 py-2">シナリオ判断</th>
-              <th className="px-3 py-2">ラベル / 形状根拠</th>
-              <th className="px-3 py-2">6ステージ / 指標</th>
-            </tr>
-          </thead>
-          <tbody>
-            {visibleRows.map((row, index) => (
-              <SignalRow key={row.id} row={row} index={index} />
-            ))}
-          </tbody>
-        </table>
+      <div className="border-y border-[var(--color-border-default)] bg-white">
+        <div className="hidden grid-cols-[70px_minmax(210px,0.9fr)_minmax(250px,1.1fr)_minmax(250px,1.15fr)_minmax(210px,0.95fr)] gap-x-4 border-b border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-3 py-2 text-[9px] font-black uppercase tracking-wide text-[var(--color-text-tertiary)] xl:grid">
+          <div>確度</div>
+          <div>銘柄 / 価格</div>
+          <div>シナリオ判断</div>
+          <div>形状根拠</div>
+          <div>6ステージ / 指標</div>
+        </div>
+        <ol className="divide-y divide-[var(--color-border-soft)]">
+          {visibleRows.map((row, index) => (
+            <SignalRow key={row.id} row={row} index={index} />
+          ))}
+        </ol>
         {filteredRows.length === 0 && (
           <div className="bg-white px-4 py-8 text-center text-[12px] font-bold text-[var(--color-text-tertiary)]">
             条件に合う候補がありません。
