@@ -10,7 +10,11 @@ import {
   type PhysicsDirection,
   type PhysicsFeatureProfile,
 } from '@/lib/backtest/ml-physics'
-import { physicsSimilarity, physicsSimilarityScore } from '@/lib/ml/physics-similarity'
+import {
+  physicsSimilarity,
+  preparePhysicsSimilarityProfile,
+  preparedPhysicsSimilarityScore,
+} from '@/lib/ml/physics-similarity'
 
 type FeatureRow = {
   ticker: string
@@ -66,6 +70,7 @@ type ScoredPerformanceRow = {
 
 const SIMILAR_LIMIT = Math.max(1, Number(process.env.ML_SIMILAR_LIMIT ?? 5))
 const SIMILAR_BASE_LIMIT = Number(process.env.ML_SIMILAR_BASE_LIMIT ?? 0)
+const SIMILAR_WRITE_BATCH = Math.max(100, Number(process.env.ML_SIMILAR_WRITE_BATCH ?? 1000))
 const PERFORMANCE_PER_YEAR_LIMIT = Math.max(100, Number(process.env.ML_PERFORMANCE_PER_YEAR_LIMIT ?? 900))
 const PERFORMANCE_TOP_LIMIT = Math.max(500, Number(process.env.ML_PERFORMANCE_TOP_LIMIT ?? 8000))
 const PERFORMANCE_MIN_SECTOR_N = Math.max(10, Number(process.env.ML_PERFORMANCE_MIN_SECTOR_N ?? 20))
@@ -202,6 +207,10 @@ async function buildCurrentSimilars(date: string, features: FeatureRow[], candid
       profile: parseJson<PhysicsFeatureProfile | null>(row.feature_json, null),
     }))
     .filter((item) => item.vector.length > 0)
+    .map((item) => ({
+      ...item,
+      preparedProfile: preparePhysicsSimilarityProfile(item.profile ?? {}, item.row.stage_code),
+    }))
   const featureByTicker = new Map(featureItems.map((item) => [item.row.ticker, item]))
   const bestCandidateByTicker = new Map<string, CandidateRow>()
   for (const candidate of candidates) {
@@ -216,12 +225,14 @@ async function buildCurrentSimilars(date: string, features: FeatureRow[], candid
         .filter((item): item is (typeof featureItems)[number] => Boolean(item))
         .slice(0, SIMILAR_BASE_LIMIT)
     : featureItems
-  const stmts = baseItems.flatMap((base) => {
+  const pending: Array<{ sql: string; args: Array<string | number | null> }> = []
+  let written = 0
+  for (const base of baseItems) {
     const candidate = bestCandidateByTicker.get(base.row.ticker)
     const ranked: Array<{ item: (typeof featureItems)[number]; score: number; similarCandidate: CandidateRow | undefined }> = []
     for (const item of featureItems) {
       if (item.row.ticker === base.row.ticker) continue
-      const score = physicsSimilarityScore(base.profile ?? {}, item.profile ?? {}, base.row.stage_code, item.row.stage_code)
+      const score = preparedPhysicsSimilarityScore(base.preparedProfile, item.preparedProfile)
       const entry = { item, score, similarCandidate: bestCandidateByTicker.get(item.row.ticker) }
       if (ranked.length < SIMILAR_LIMIT) {
         ranked.push(entry)
@@ -235,7 +246,7 @@ async function buildCurrentSimilars(date: string, features: FeatureRow[], candid
     }
     ranked.sort((a, b) => b.score - a.score)
 
-    return ranked.map((similar, index) => {
+    for (const [index, similar] of ranked.entries()) {
       const reason = physicsSimilarity(
         base.profile ?? {},
         similar.item.profile ?? {},
@@ -264,7 +275,7 @@ async function buildCurrentSimilars(date: string, features: FeatureRow[], candid
           ...summarizeProfile(similar.item.profile),
         },
       }
-      return {
+      pending.push({
         sql: `
           INSERT OR REPLACE INTO serving_current_similars
             (as_of_date, base_ticker, rank, similar_ticker, similarity_score,
@@ -282,11 +293,19 @@ async function buildCurrentSimilars(date: string, features: FeatureRow[], candid
           JSON.stringify(payload),
           JSON.stringify(reason),
         ],
-      }
-    })
-  })
-  await execBatch(stmts)
-  return stmts.length
+      })
+    }
+    if (pending.length >= SIMILAR_WRITE_BATCH) {
+      await execBatch(pending)
+      written += pending.length
+      pending.length = 0
+    }
+  }
+  if (pending.length > 0) {
+    await execBatch(pending)
+    written += pending.length
+  }
+  return written
 }
 
 async function buildSectorRankings(date: string, candidates: CandidateRow[]): Promise<number> {

@@ -1,16 +1,17 @@
 import { calculateAllStages, type MaValues, type StageResult } from '@/lib/hex-stage'
+import { calendarMonthBucket, calendarWeekBucket } from '@/lib/timeframes'
 import type { OHLCV } from '@/types/stock'
 
 export const MIN_SNAPSHOT_DATA_POINTS = 5
 export const MAX_CONTINUOUS_HISTORY_GAP_DAYS = 60
 
-export const REQUIRED_ACTIVE_DAYS = {
+export const REQUIRED_ACTIVE_PERIODS = {
   daily_a_stage: 75,
   daily_b_stage: 300,
-  weekly_a_stage: 121,
-  weekly_b_stage: 496,
-  monthly_a_stage: 190,
-  monthly_b_stage: 505,
+  weekly_a_stage: 25,
+  weekly_b_stage: 100,
+  monthly_a_stage: 10,
+  monthly_b_stage: 25,
 } as const
 
 export type SnapshotCalculation = MaValues & StageResult & {
@@ -64,11 +65,11 @@ export function splitContinuousHistory<T extends { date: string }>(
 
 export function stageWithEnoughHistory(
   value: number | null,
-  activeDays: number | null,
-  requiredDays: number,
+  activePeriods: number | null,
+  requiredPeriods: number,
 ): number | null {
-  if (activeDays == null) return value
-  return activeDays >= requiredDays ? value : null
+  if (activePeriods == null) return value
+  return activePeriods >= requiredPeriods ? value : null
 }
 
 function buildClosePrefix(rows: OHLCV[]): number[] {
@@ -85,49 +86,99 @@ function dailySmaAt(prefix: number[], index: number, period: number): number | n
   return (prefix[end] - prefix[end - period]) / period
 }
 
-function sampledSmaAt(rows: OHLCV[], index: number, step: number, period: number): number | null {
-  const firstIndex = index - (period - 1) * step
-  if (firstIndex < 0) return null
-  let sum = 0
-  for (let i = 0; i < period; i++) {
-    sum += rows[index - i * step].close
+class CalendarCloseAccumulator {
+  private currentBucket: number | null = null
+  private currentClose: number | null = null
+  private readonly completedPrefix = [0]
+
+  constructor(private readonly bucketForDate: (date: string) => number) {}
+
+  update(row: OHLCV): void {
+    const bucket = this.bucketForDate(row.date)
+    if (this.currentBucket !== null && bucket !== this.currentBucket) {
+      this.completedPrefix.push(
+        this.completedPrefix[this.completedPrefix.length - 1] + (this.currentClose ?? 0),
+      )
+    }
+    this.currentBucket = bucket
+    this.currentClose = row.close
   }
-  return sum / period
+
+  sma(period: number): number | null {
+    if (this.currentClose === null) return null
+    const completedCount = this.completedPrefix.length - 1
+    const totalPeriods = completedCount + 1
+    if (totalPeriods < period) return null
+    const completedNeeded = period - 1
+    const completedSum = this.completedPrefix[completedCount]
+      - this.completedPrefix[completedCount - completedNeeded]
+    return (completedSum + this.currentClose) / period
+  }
 }
 
 export function buildMaValuesAtIndex(rows: OHLCV[], prefix: number[], index: number): MaValues {
+  const weekly = new CalendarCloseAccumulator(calendarWeekBucket)
+  const monthly = new CalendarCloseAccumulator(calendarMonthBucket)
+  for (let i = 0; i <= index; i++) {
+    weekly.update(rows[i])
+    monthly.update(rows[i])
+  }
+
   return {
     ma_5: dailySmaAt(prefix, index, 5),
     ma_25: dailySmaAt(prefix, index, 25),
     ma_75: dailySmaAt(prefix, index, 75),
     ma_150: dailySmaAt(prefix, index, 150),
     ma_300: dailySmaAt(prefix, index, 300),
-    weekly_ma_5: sampledSmaAt(rows, index, 5, 5),
-    weekly_ma_13: sampledSmaAt(rows, index, 5, 13),
-    weekly_ma_25: sampledSmaAt(rows, index, 5, 25),
-    weekly_ma_50: sampledSmaAt(rows, index, 5, 50),
-    weekly_ma_100: sampledSmaAt(rows, index, 5, 100),
-    monthly_ma_3: sampledSmaAt(rows, index, 21, 3),
-    monthly_ma_5: sampledSmaAt(rows, index, 21, 5),
-    monthly_ma_10: sampledSmaAt(rows, index, 21, 10),
-    monthly_ma_20: sampledSmaAt(rows, index, 21, 20),
-    monthly_ma_25: sampledSmaAt(rows, index, 21, 25),
+    weekly_ma_5: weekly.sma(5),
+    weekly_ma_13: weekly.sma(13),
+    weekly_ma_25: weekly.sma(25),
+    weekly_ma_50: weekly.sma(50),
+    weekly_ma_100: weekly.sma(100),
+    monthly_ma_3: monthly.sma(3),
+    monthly_ma_5: monthly.sma(5),
+    monthly_ma_10: monthly.sma(10),
+    monthly_ma_20: monthly.sma(20),
+    monthly_ma_25: monthly.sma(25),
   }
 }
 
-export function buildSnapshotCalculations(rows: OHLCV[]): SnapshotCalculation[] {
+export function buildSnapshotCalculations(
+  rows: OHLCV[],
+  options: { includeWarmup?: boolean } = {},
+): SnapshotCalculation[] {
   const results: SnapshotCalculation[] = []
 
   for (const segment of splitContinuousHistory(rows)) {
-    if (segment.length < MIN_SNAPSHOT_DATA_POINTS) continue
+    if (!options.includeWarmup && segment.length < MIN_SNAPSHOT_DATA_POINTS) continue
 
     const prefix = buildClosePrefix(segment)
     const segmentStartDate = segment[0].date
+    const weekly = new CalendarCloseAccumulator(calendarWeekBucket)
+    const monthly = new CalendarCloseAccumulator(calendarMonthBucket)
 
     for (let i = 0; i < segment.length; i++) {
-      if (i + 1 < MIN_SNAPSHOT_DATA_POINTS) continue
+      weekly.update(segment[i])
+      monthly.update(segment[i])
+      if (!options.includeWarmup && i + 1 < MIN_SNAPSHOT_DATA_POINTS) continue
 
-      const ma = buildMaValuesAtIndex(segment, prefix, i)
+      const ma: MaValues = {
+        ma_5: dailySmaAt(prefix, i, 5),
+        ma_25: dailySmaAt(prefix, i, 25),
+        ma_75: dailySmaAt(prefix, i, 75),
+        ma_150: dailySmaAt(prefix, i, 150),
+        ma_300: dailySmaAt(prefix, i, 300),
+        weekly_ma_5: weekly.sma(5),
+        weekly_ma_13: weekly.sma(13),
+        weekly_ma_25: weekly.sma(25),
+        weekly_ma_50: weekly.sma(50),
+        weekly_ma_100: weekly.sma(100),
+        monthly_ma_3: monthly.sma(3),
+        monthly_ma_5: monthly.sma(5),
+        monthly_ma_10: monthly.sma(10),
+        monthly_ma_20: monthly.sma(20),
+        monthly_ma_25: monthly.sma(25),
+      }
       const stages = calculateAllStages(ma)
 
       results.push({

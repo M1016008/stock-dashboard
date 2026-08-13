@@ -14,6 +14,7 @@ import { createClient, type Client, type InValue } from '@libsql/client'
 import { drizzle } from 'drizzle-orm/libsql'
 import * as schema from './schema'
 import { ensureSchema } from './migrate'
+import { resolveConfiguredStoragePath } from '../storage-paths'
 import path from 'path'
 import fs from 'fs'
 
@@ -27,7 +28,7 @@ const configuredLocalDbPath =
     ? process.env.US_ANALYTICS_DB_PATH
     : process.env.STOCKBOARD_DB_PATH || process.env.LOCAL_DB_PATH
 export const localDbPath = configuredLocalDbPath
-  ? path.resolve(configuredLocalDbPath)
+  ? resolveConfiguredStoragePath(configuredLocalDbPath)
   : path.join(process.cwd(), 'data', 'stockboard.db')
 
 function buildClientUrl(): { url: string; authToken?: string; isCloud: boolean } {

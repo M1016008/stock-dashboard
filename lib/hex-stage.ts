@@ -13,15 +13,17 @@
 // 期間設定:
 //   日足 A: SMA 5/25/75
 //   日足 B: SMA 75/150/300
-//   週足 A: WMA 5/13/25
-//   週足 B: WMA 25/50/100
-//   月足 A: MMA 3/5/10
-//   月足 B: MMA 10/20/25
+//   週足 A: 暦週 SMA 5/13/25
+//   週足 B: 暦週 SMA 25/50/100
+//   月足 A: 暦月 SMA 3/5/10
+//   月足 B: 暦月 SMA 10/20/25
 
 import type { OHLCV } from '@/types/stock'
-import { calcSMA } from './indicators'
+import { resampleOhlcv, smaAt } from './timeframes'
 
 export type StageLevel = 1 | 2 | 3 | 4 | 5 | 6
+
+export const STAGE_COMPARISON_RELATIVE_EPSILON = 1e-10
 
 export interface MaValues {
   ma_5: number | null
@@ -53,19 +55,24 @@ export interface StageResult {
 /**
  * 3本の移動平均線（ma1, ma2, ma3）の並び順からステージを判定
  */
-function calculateStageFromThreeMa(
+export function calculateStageFromThreeMa(
   ma1: number | null,
   ma2: number | null,
   ma3: number | null,
 ): number | null {
   if (ma1 === null || ma2 === null || ma3 === null) return null
 
-  if (ma1 > ma2 && ma2 > ma3) return 1
-  if (ma2 > ma1 && ma1 > ma3) return 2
-  if (ma2 > ma3 && ma3 > ma1) return 3
-  if (ma3 > ma2 && ma2 > ma1) return 4
-  if (ma3 > ma1 && ma1 > ma2) return 5
-  if (ma1 > ma3 && ma3 > ma2) return 6
+  const greaterThan = (left: number, right: number): boolean => {
+    const tolerance = STAGE_COMPARISON_RELATIVE_EPSILON * Math.max(1, Math.abs(left), Math.abs(right))
+    return left - right > tolerance
+  }
+
+  if (greaterThan(ma1, ma2) && greaterThan(ma2, ma3)) return 1
+  if (greaterThan(ma2, ma1) && greaterThan(ma1, ma3)) return 2
+  if (greaterThan(ma2, ma3) && greaterThan(ma3, ma1)) return 3
+  if (greaterThan(ma3, ma2) && greaterThan(ma2, ma1)) return 4
+  if (greaterThan(ma3, ma1) && greaterThan(ma1, ma2)) return 5
+  if (greaterThan(ma1, ma3) && greaterThan(ma3, ma2)) return 6
 
   // 等しい値がある場合は判定不能
   return null
@@ -108,41 +115,22 @@ export function calculateAllStages(ma: MaValues): StageResult {
 // OHLCV から MA を計算するヘルパー（stock-dashboard 固有）
 // ─────────────────────────────────────────────────────────
 
-/** 日足 OHLCV を週足/月足に集約 */
-function aggregate(ohlcv: OHLCV[], groupSize: number): OHLCV[] {
-  if (groupSize <= 1) return ohlcv
-  const result: OHLCV[] = []
-  for (let i = 0; i < ohlcv.length; i += groupSize) {
-    const slice = ohlcv.slice(i, i + groupSize)
-    if (slice.length === 0) continue
-    result.push({
-      date: slice[slice.length - 1].date,
-      open: slice[0].open,
-      high: Math.max(...slice.map((d) => d.high)),
-      low: Math.min(...slice.map((d) => d.low)),
-      close: slice[slice.length - 1].close,
-      volume: slice.reduce((s, d) => s + d.volume, 0),
-    })
-  }
-  return result
-}
-
 function lastSma(ohlcv: OHLCV[], period: number): number | null {
-  const arr = calcSMA(ohlcv, period)
-  return arr[arr.length - 1] ?? null
+  return smaAt(ohlcv, period)
 }
 
 /** Yahoo Finance の日足 OHLCV から MA 値一式を計算 */
 export function buildMaValuesFromOhlcv(ohlcv: OHLCV[]): MaValues {
-  const weekly = aggregate(ohlcv, 5)
-  const monthly = aggregate(ohlcv, 21)
+  const daily = resampleOhlcv(ohlcv, { timeframe: 'day', multiplier: 1 })
+  const weekly = resampleOhlcv(daily, { timeframe: 'week', multiplier: 1 })
+  const monthly = resampleOhlcv(daily, { timeframe: 'month', multiplier: 1 })
 
   return {
-    ma_5: lastSma(ohlcv, 5),
-    ma_25: lastSma(ohlcv, 25),
-    ma_75: lastSma(ohlcv, 75),
-    ma_150: lastSma(ohlcv, 150),
-    ma_300: lastSma(ohlcv, 300),
+    ma_5: lastSma(daily, 5),
+    ma_25: lastSma(daily, 25),
+    ma_75: lastSma(daily, 75),
+    ma_150: lastSma(daily, 150),
+    ma_300: lastSma(daily, 300),
     weekly_ma_5: lastSma(weekly, 5),
     weekly_ma_13: lastSma(weekly, 13),
     weekly_ma_25: lastSma(weekly, 25),

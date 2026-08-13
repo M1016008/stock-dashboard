@@ -5,9 +5,10 @@
 
 import { spawn, type ChildProcess } from 'node:child_process'
 import { eq } from 'drizzle-orm'
-import { db, execAll } from '@/lib/db/client'
+import { db, execAll, execRun } from '@/lib/db/client'
 import { batchRuns } from '@/lib/db/schema'
 import { acquireJpStockboardUpdateLock, getActiveUpdateLocks } from '@/lib/server/update-lock'
+import type { UpdateLockHandle } from '@/lib/server/update-lock'
 import { waitForMemoryHeadroom, withMemoryGuardEnv } from '@/lib/system/memory-guard'
 
 type RunResult = {
@@ -254,7 +255,10 @@ function installSignalHandlers(): void {
   process.once('SIGTERM', handler)
 }
 
-async function waitForBlockingLocks(jobTypes: readonly string[]): Promise<void> {
+async function waitForBlockingLocks(
+  jobTypes: readonly string[],
+  heartbeat?: () => Promise<void>,
+): Promise<void> {
   const waitMinutes = numberEnv('ML_LEARNING_LOCK_WAIT_MINUTES', 360)
   const pollSeconds = numberEnv('ML_LEARNING_LOCK_POLL_SECONDS', 30)
   const startedAt = Date.now()
@@ -281,10 +285,39 @@ async function waitForBlockingLocks(jobTypes: readonly string[]): Promise<void> 
     }
 
     await sleep(pollSeconds * 1000)
+    await heartbeat?.()
   }
 }
 
-async function waitForBlockingBatchRuns(jobTypes: readonly string[], currentRunId: number): Promise<void> {
+async function waitForJpStockboardLock(leaseSeconds: number): Promise<UpdateLockHandle> {
+  const waitMinutes = numberEnv('ML_LEARNING_LOCK_WAIT_MINUTES', 360)
+  const pollSeconds = numberEnv('ML_LEARNING_LOCK_POLL_SECONDS', 30)
+  const startedAt = Date.now()
+  let lastLogAt = 0
+
+  for (;;) {
+    if (shutdownSignal) throw new Error(`Interrupted while waiting for the ML learning lock: ${shutdownSignal}`)
+
+    const lock = await acquireJpStockboardUpdateLock(JOB_TYPE, leaseSeconds)
+    if (lock) return lock
+
+    const elapsedMs = Date.now() - startedAt
+    if (elapsedMs > waitMinutes * 60_000) {
+      throw new Error(`Timed out waiting ${waitMinutes} minutes for the JP StockBoard writer lock`)
+    }
+    if (Date.now() - lastLogAt > 60_000) {
+      lastLogAt = Date.now()
+      console.log('Waiting for the JP StockBoard writer lock before ML learning')
+    }
+    await sleep(pollSeconds * 1000)
+  }
+}
+
+async function waitForBlockingBatchRuns(
+  jobTypes: readonly string[],
+  currentRunId: number,
+  heartbeat?: () => Promise<void>,
+): Promise<void> {
   if (jobTypes.length === 0) return
 
   const waitMinutes = numberEnv('ML_LEARNING_BATCH_WAIT_MINUTES', 360)
@@ -328,6 +361,7 @@ async function waitForBlockingBatchRuns(jobTypes: readonly string[], currentRunI
     }
 
     await sleep(pollSeconds * 1000)
+    await heartbeat?.()
   }
 }
 
@@ -420,10 +454,11 @@ async function cleanupStaleBatchRuns(heartbeat: () => Promise<void>): Promise<vo
   }
 }
 
-async function runHeavyMlChain(): Promise<RunResult> {
+async function runHeavyMlChain(heartbeat: () => Promise<void>): Promise<RunResult> {
   const npmScript = process.env.ML_LEARNING_NPM_SCRIPT?.trim() || 'batch:ml-daily'
   await waitForMemoryHeadroom({ label: `npm run ${npmScript}` })
   return new Promise((resolve, reject) => {
+    const stopHeartbeat = startHeartbeatLoop(heartbeat, npmScript)
     const timeoutMinutes = numberEnv('UPDATE_CHILD_TIMEOUT_MINUTES', 720)
     let timedOut = false
 
@@ -451,6 +486,7 @@ async function runHeavyMlChain(): Promise<RunResult> {
 
     const clearTimers = () => {
       clearTimeout(timeoutTimer)
+      stopHeartbeat()
     }
 
     activeChild.on('error', (err) => {
@@ -475,12 +511,18 @@ async function main(): Promise<void> {
     'ML_LEARNING_LOCK_LEASE_SECONDS',
     Math.max(5 * 60 * 60, (childTimeoutMinutes + 60) * 60),
   )
-  const lock = await acquireJpStockboardUpdateLock(JOB_TYPE, leaseSeconds)
-  if (!lock) {
-    console.log('ML learning skipped: ml_learning lock is already active')
-    return
-  }
+  const lock = await waitForJpStockboardLock(leaseSeconds)
   releaseActiveLock = lock.release
+
+  await execRun(
+    `UPDATE batch_runs
+     SET finished_at = unixepoch(),
+         status = 'failed',
+         failed = 1,
+         error_summary = COALESCE(error_summary, 'Superseded after the previous ML worker exited')
+     WHERE job_type = ? AND status = 'running'`,
+    [JOB_TYPE],
+  )
 
   const [run] = await db
     .insert(batchRuns)
@@ -521,8 +563,8 @@ async function main(): Promise<void> {
 
     if (process.env.ML_LEARNING_PREFLIGHT_ONLY === '1') {
       await cleanupStaleBatchRuns(() => lock.heartbeat())
-      await waitForBlockingLocks(blockingLocks)
-      await waitForBlockingBatchRuns(blockingBatchRuns, runId)
+      await waitForBlockingLocks(blockingLocks, () => lock.heartbeat())
+      await waitForBlockingBatchRuns(blockingBatchRuns, runId, () => lock.heartbeat())
       await lock.heartbeat()
       console.log('ML learning preflight succeeded; heavy chain skipped')
       await db
@@ -548,11 +590,11 @@ async function main(): Promise<void> {
 
       console.log(`\nML learning attempt ${attempt}/${maxAttempts}: ${npmScript}`)
       await cleanupStaleBatchRuns(() => lock.heartbeat())
-      await waitForBlockingLocks(blockingLocks)
-      await waitForBlockingBatchRuns(blockingBatchRuns, runId)
+      await waitForBlockingLocks(blockingLocks, () => lock.heartbeat())
+      await waitForBlockingBatchRuns(blockingBatchRuns, runId, () => lock.heartbeat())
       await lock.heartbeat()
 
-      const result = await runHeavyMlChain()
+      const result = await runHeavyMlChain(() => lock.heartbeat())
       if (result.code === 0) {
         lastError = null
         break

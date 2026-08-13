@@ -15,8 +15,16 @@ const MIN_SNAPSHOT_ROWS = Number(process.env.US_ANALYTICS_MIN_SNAPSHOT_ROWS ?? 4
 const MIN_LATEST_COVERAGE_PCT = Number(process.env.US_ANALYTICS_MIN_LATEST_COVERAGE_PCT ?? 95)
 const EXPECTED_DATE = process.env.US_ANALYTICS_EXPECTED_DATE?.trim() || expectedLatestUsTradingDate()
 const REQUIRE_DERIVED_BASIS = process.env.US_ANALYTICS_REQUIRE_DERIVED_BASIS === '1'
+const DEEP_COUNTS = process.env.US_ANALYTICS_DEEP_COUNTS === '1'
 
 type ScalarRow = { value: number | string | null }
+type CopySummaryRow = {
+  copy_done: number | string | null
+  ohlcv_rows: number | string | null
+  ohlcv_tickers: number | string | null
+  snapshot_rows: number | string | null
+  snapshot_tickers: number | string | null
+}
 
 async function scalarNumber(client: Client, sql: string): Promise<number> {
   const result = await client.execute(sql)
@@ -30,6 +38,12 @@ async function scalarText(client: Client, sql: string): Promise<string | null> {
   return row?.value == null ? null : String(row.value)
 }
 
+async function scalarNumberWithArgs(client: Client, sql: string, args: Array<string | number>): Promise<number> {
+  const result = await client.execute({ sql, args })
+  const row = result.rows[0] as unknown as ScalarRow | undefined
+  return Number(row?.value ?? 0)
+}
+
 function assertThreshold(name: string, actual: number, expected: number): string | null {
   return actual >= expected ? null : `${name}: ${actual} < ${expected}`
 }
@@ -37,32 +51,63 @@ function assertThreshold(name: string, actual: number, expected: number): string
 async function main() {
   const target = createClient({ url: `file:${TARGET_PATH}` })
 
-  const copyDone = await scalarNumber(
+  // The copy ledger is updated in the same transaction as each ticker copy. Use it for
+  // routine validation instead of rescanning nearly 100 million rows across both tables.
+  const copySummaryResult = await target.execute(`
+    SELECT
+      SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) AS copy_done,
+      SUM(CASE WHEN status = 'done' THEN ohlcv_rows ELSE 0 END) AS ohlcv_rows,
+      SUM(CASE WHEN status = 'done' AND ohlcv_rows > 0 THEN 1 ELSE 0 END) AS ohlcv_tickers,
+      SUM(CASE WHEN status = 'done' THEN snapshot_rows ELSE 0 END) AS snapshot_rows,
+      SUM(CASE WHEN status = 'done' AND snapshot_rows > 0 THEN 1 ELSE 0 END) AS snapshot_tickers
+    FROM us_analytics_copy_state
+  `)
+  const copySummary = copySummaryResult.rows[0] as unknown as CopySummaryRow | undefined
+  const copyDone = Number(copySummary?.copy_done ?? 0)
+  const ohlcvRows = DEEP_COUNTS
+    ? await scalarNumber(target, `SELECT COUNT(*) AS value FROM ohlcv_daily`)
+    : Number(copySummary?.ohlcv_rows ?? 0)
+  const ohlcvTickers = DEEP_COUNTS
+    ? await scalarNumber(target, `SELECT COUNT(DISTINCT ticker) AS value FROM ohlcv_daily`)
+    : Number(copySummary?.ohlcv_tickers ?? 0)
+  const snapshotRows = DEEP_COUNTS
+    ? await scalarNumber(target, `SELECT COUNT(*) AS value FROM daily_snapshots`)
+    : Number(copySummary?.snapshot_rows ?? 0)
+  const snapshotTickers = DEEP_COUNTS
+    ? await scalarNumber(target, `SELECT COUNT(DISTINCT ticker) AS value FROM daily_snapshots`)
+    : Number(copySummary?.snapshot_tickers ?? 0)
+  const ohlcvMinDate = await scalarText(
     target,
-    `SELECT COUNT(*) AS value FROM us_analytics_copy_state WHERE status = 'done'`,
+    `SELECT date AS value FROM ohlcv_daily INDEXED BY ohlcv_date_idx ORDER BY date ASC LIMIT 1`,
   )
-  const ohlcvRows = await scalarNumber(target, `SELECT COUNT(*) AS value FROM ohlcv_daily`)
-  const ohlcvTickers = await scalarNumber(target, `SELECT COUNT(DISTINCT ticker) AS value FROM ohlcv_daily`)
-  const ohlcvMinDate = await scalarText(target, `SELECT MIN(date) AS value FROM ohlcv_daily`)
-  const ohlcvMaxDate = await scalarText(target, `SELECT MAX(date) AS value FROM ohlcv_daily`)
-  const snapshotRows = await scalarNumber(target, `SELECT COUNT(*) AS value FROM daily_snapshots`)
-  const snapshotTickers = await scalarNumber(target, `SELECT COUNT(DISTINCT ticker) AS value FROM daily_snapshots`)
-  const snapshotMinDate = await scalarText(target, `SELECT MIN(date) AS value FROM daily_snapshots`)
-  const snapshotMaxDate = await scalarText(target, `SELECT MAX(date) AS value FROM daily_snapshots`)
+  const ohlcvMaxDate = await scalarText(
+    target,
+    `SELECT date AS value FROM ohlcv_daily INDEXED BY ohlcv_date_idx ORDER BY date DESC LIMIT 1`,
+  )
+  const snapshotMinDate = await scalarText(
+    target,
+    `SELECT date AS value FROM daily_snapshots INDEXED BY snapshots_date_idx ORDER BY date ASC LIMIT 1`,
+  )
+  const snapshotMaxDate = await scalarText(
+    target,
+    `SELECT date AS value FROM daily_snapshots INDEXED BY snapshots_date_idx ORDER BY date DESC LIMIT 1`,
+  )
   const activeUniverse = await scalarNumber(target, `SELECT COUNT(*) AS value FROM ticker_universe WHERE active = 1`)
-  const latestOhlcvActiveTickers = await scalarNumber(
+  const latestOhlcvActiveTickers = await scalarNumberWithArgs(
     target,
     `SELECT COUNT(DISTINCT o.ticker) AS value
-     FROM ohlcv_daily o
+     FROM ohlcv_daily o INDEXED BY ohlcv_date_ticker_idx
      INNER JOIN ticker_universe u ON u.ticker = o.ticker AND u.active = 1
-     WHERE o.date = (SELECT MAX(date) FROM ohlcv_daily)`,
+     WHERE o.date = ?`,
+    [ohlcvMaxDate ?? ''],
   )
-  const latestSnapshotActiveTickers = await scalarNumber(
+  const latestSnapshotActiveTickers = await scalarNumberWithArgs(
     target,
     `SELECT COUNT(DISTINCT d.ticker) AS value
-     FROM daily_snapshots d
+     FROM daily_snapshots d INDEXED BY snapshots_date_ticker_idx
      INNER JOIN ticker_universe u ON u.ticker = d.ticker AND u.active = 1
-     WHERE d.date = (SELECT MAX(date) FROM daily_snapshots)`,
+     WHERE d.date = ?`,
+    [snapshotMaxDate ?? ''],
   )
   const latestOhlcvCoveragePct = activeUniverse > 0
     ? 100 * latestOhlcvActiveTickers / activeUniverse
@@ -138,6 +183,7 @@ async function main() {
   console.log(
     [
       `US analytics validation: ${TARGET_PATH}`,
+      `countMode=${DEEP_COUNTS ? 'deep' : 'ledger'}`,
       `copyDone=${copyDone}`,
       `ohlcvRows=${ohlcvRows}`,
       `ohlcvTickers=${ohlcvTickers}`,

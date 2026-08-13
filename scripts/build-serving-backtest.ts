@@ -114,10 +114,28 @@ const DATE_LIMIT = envInt('SERVING_DATE_LIMIT', 260, 0)
 const SUMMARY_DATE_CHUNK = envInt('SERVING_SUMMARY_DATE_CHUNK', DATE_LIMIT === 0 ? 40 : 60, 1)
 const RESULT_DATE_CHUNK = envInt('SERVING_RESULT_DATE_CHUNK', 20, 1)
 const EVIDENCE_DATE_CHUNK = envInt('SERVING_EVIDENCE_DATE_CHUNK', 20, 1)
+const EVIDENCE_DATE_LIMIT = envInt('SERVING_EVIDENCE_DATE_LIMIT', DATE_LIMIT, 0)
 const DETAIL_PER_DATE_HORIZON = envInt('SERVING_DETAIL_PER_DATE_HORIZON', 20, 0)
 const SIMILAR_SOURCE_LIMIT = envInt('SERVING_SIMILAR_SOURCE_LIMIT', 30, 0)
 const CHUNK = 250
 const HORIZONS = [5, 10, 20, 40, 60, 90, 200] as const
+const SERVING_STAGES = ['latest', 'dates', 'summaries', 'results', 'evidence', 'details', 'similar'] as const
+type ServingStage = (typeof SERVING_STAGES)[number]
+
+function stageIndex(value: string | undefined, fallback: number): number {
+  if (!value) return fallback
+  const index = SERVING_STAGES.indexOf(value.trim() as ServingStage)
+  if (index < 0) throw new Error(`Unknown serving stage: ${value}`)
+  return index
+}
+
+const START_STAGE_INDEX = stageIndex(process.env.SERVING_START_STAGE, 0)
+const STOP_STAGE_INDEX = stageIndex(process.env.SERVING_STOP_AFTER_STAGE, SERVING_STAGES.length - 1)
+
+function shouldRunStage(stage: ServingStage): boolean {
+  const index = SERVING_STAGES.indexOf(stage)
+  return index >= START_STAGE_INDEX && index <= STOP_STAGE_INDEX
+}
 
 const RESULT_INDEXES = [
   `CREATE INDEX IF NOT EXISTS serving_backtest_results_sort_idx ON serving_backtest_results(date, horizon_days, max_return_pct)`,
@@ -487,12 +505,14 @@ async function buildBacktestResults(dates: string[]): Promise<void> {
 
   try {
     if (DATE_LIMIT === 0) await execRun(`DELETE FROM serving_backtest_results`)
-    else await deleteServingDates('serving_backtest_results', 'date', dates)
 
     const started = Date.now()
     const totalChunks = Math.ceil(dates.length / RESULT_DATE_CHUNK)
     for (let i = 0; i < dates.length; i += RESULT_DATE_CHUNK) {
       const chunkDates = dates.slice(i, i + RESULT_DATE_CHUNK)
+      if (DATE_LIMIT > 0) {
+        await deleteServingDates('serving_backtest_results', 'date', chunkDates)
+      }
       await execRun(
       `
       INSERT OR REPLACE INTO serving_backtest_results
@@ -570,12 +590,14 @@ async function buildSignalEvidence(dates: string[]): Promise<void> {
 
   try {
     if (DATE_LIMIT === 0) await execRun(`DELETE FROM serving_signal_evidence`)
-    else await deleteServingDates('serving_signal_evidence', 'date', dates)
 
     let inserted = 0
     const totalChunks = Math.ceil(dates.length / EVIDENCE_DATE_CHUNK)
     for (let i = 0; i < dates.length; i += EVIDENCE_DATE_CHUNK) {
       const chunkDates = dates.slice(i, i + EVIDENCE_DATE_CHUNK)
+      if (DATE_LIMIT > 0) {
+        await deleteServingDates('serving_signal_evidence', 'date', chunkDates)
+      }
       const rows = await execAll<TechnicalSignalRow>(
       `
       SELECT ticker, date, timescale, ma_period, signal_code, signal_strength,
@@ -794,14 +816,20 @@ async function main() {
     await buildSimilarCases(date)
     return
   }
-  await buildLatestSignals(date)
-  await buildSignalStats()
+  if (START_STAGE_INDEX > STOP_STAGE_INDEX) throw new Error('SERVING_START_STAGE must not follow SERVING_STOP_AFTER_STAGE')
+  if (shouldRunStage('latest')) {
+    await buildLatestSignals(date)
+    await buildSignalStats()
+  }
   const dates = await buildBacktestDates()
-  await buildBacktestSummaries(dates)
-  await buildBacktestResults(dates)
-  await buildSignalEvidence(dates)
-  await buildBacktestDetails(dates)
-  await buildSimilarCases(date)
+  if (shouldRunStage('summaries')) await buildBacktestSummaries(dates)
+  if (shouldRunStage('results')) await buildBacktestResults(dates)
+  if (shouldRunStage('evidence')) {
+    const evidenceDates = EVIDENCE_DATE_LIMIT > 0 ? dates.slice(0, EVIDENCE_DATE_LIMIT) : dates
+    await buildSignalEvidence(evidenceDates)
+  }
+  if (shouldRunStage('details')) await buildBacktestDetails(dates)
+  if (shouldRunStage('similar')) await buildSimilarCases(date)
   console.log('serving build complete')
 }
 

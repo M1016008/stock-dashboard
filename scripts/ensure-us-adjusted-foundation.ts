@@ -12,12 +12,13 @@ import {
 } from '@/lib/server/update-lock'
 import { waitForMemoryHeadroom, withMemoryGuardEnv } from '@/lib/system/memory-guard'
 import { MA_SEQUENCE_VERSION } from '@/lib/ml/ma-sequence'
+import { ML_PHYSICS_FEATURE_SET } from '@/lib/backtest/ml-physics'
 import { US_ADJUSTED_PRICE_BASIS } from '@/lib/us-adjusted-ohlcv'
 import { and, eq } from 'drizzle-orm'
 
 const usAnalyticsDbPath = path.resolve(
   process.env.US_ANALYTICS_DB_PATH?.trim()
-  || '/Volumes/OWC Express 1M2 80G/stockboard-data/us/stockboard-us.db',
+  || '/Volumes/こうし/stockboard-data/us/stockboard-us.db',
 )
 const adjustedShadowDbPath = path.resolve(
   process.env.US_ADJUSTED_FOUNDATION_SHADOW_PATH?.trim()
@@ -308,15 +309,22 @@ async function resumableSnapshotTicker(): Promise<string | null> {
 }
 
 async function analyticsPriceBasisIsCurrent(): Promise<boolean> {
-  const [priceBasis, derivedBasis, analogBasis] = await Promise.all([
+  const [priceBasis, derivedBasis, derivedDate, analogBasis, analogDate, priceDate] = await Promise.all([
     analyticsMetadataValue(usAnalyticsDbPath, 'ohlcv_price_basis'),
     analyticsMetadataValue(usAnalyticsDbPath, 'derived_price_basis'),
+    analyticsMetadataValue(usAnalyticsDbPath, 'derived_price_date'),
     analyticsMetadataValue(usAnalyticsDbPath, 'analog_index_price_basis'),
+    analyticsMetadataValue(usAnalyticsDbPath, 'analog_index_price_date'),
+    analyticsMaxPriceDate(usAnalyticsDbPath),
   ])
+  if (!priceDate) return false
   return (
     priceBasis === US_ADJUSTED_PRICE_BASIS
     && derivedBasis === US_ADJUSTED_PRICE_BASIS
+    && derivedDate === priceDate
     && analogBasis === US_ADJUSTED_PRICE_BASIS
+    && analogDate === priceDate
+    && await analogGenerationIsCurrent(usAnalogDbPath, priceDate)
   )
 }
 
@@ -420,6 +428,28 @@ async function resumableAdjustedShadowExists(): Promise<boolean> {
     && shadowDate === source?.date
 }
 
+async function seedAdjustedAnalyticsShadow(): Promise<boolean> {
+  if (fs.existsSync(adjustedShadowDbPath)) return false
+  const [basis, analyticsDate, source] = await Promise.all([
+    analyticsMetadataValue(usAnalyticsDbPath, 'ohlcv_price_basis'),
+    analyticsMaxPriceDate(usAnalyticsDbPath),
+    execGet<{ date: string | null }>(
+      `SELECT MAX(date) AS date FROM market_ohlcv_daily WHERE market = 'US'`,
+    ),
+  ])
+  if (
+    basis !== US_ADJUSTED_PRICE_BASIS
+    || analyticsDate == null
+    || analyticsDate !== source?.date
+  ) return false
+
+  await checkpointDb(usAnalyticsDbPath)
+  cloneFile(usAnalyticsDbPath, adjustedShadowDbPath)
+  fs.chmodSync(adjustedShadowDbPath, 0o600)
+  console.log(`US adjusted foundation: seeded shadow from current adjusted analytics baseline (${analyticsDate})`)
+  return true
+}
+
 async function adjustedForwardExtremaBaselineExists(dbPath: string): Promise<boolean> {
   if (!fs.existsSync(dbPath)) return false
   const client = createClient({ url: `file:${dbPath}` })
@@ -455,6 +485,41 @@ async function reusableAdjustedDerivedBaselineExists(dbPath: string): Promise<bo
         AS baselineCount
     `)
     return Number(row.rows[0]?.baselineCount ?? 0) === 5
+  } finally {
+    client.close()
+  }
+}
+
+async function reusablePhysicsLabelBaselineExists(dbPath: string): Promise<boolean> {
+  if (!fs.existsSync(dbPath)) return false
+  const client = createClient({ url: `file:${dbPath}` })
+  try {
+    const featureStartResult = await client.execute({
+      sql: `
+        SELECT date
+        FROM ml_feature_vectors_v2 INDEXED BY ml_feature_vectors_v2_date_idx
+        WHERE feature_set = ?
+        ORDER BY date ASC
+        LIMIT 1
+      `,
+      args: [ML_PHYSICS_FEATURE_SET],
+    })
+    const featureStart = featureStartResult.rows[0]?.date
+    if (featureStart == null) return false
+    const row = await client.execute({
+      sql: `
+        SELECT COUNT(DISTINCT horizon_days) AS horizonCount
+        FROM ml_short_labels INDEXED BY ml_short_labels_date_idx
+        WHERE date = ?
+          AND horizon_days IN (5, 10, 20, 40, 60, 90, 200)
+      `,
+      args: [String(featureStart)],
+    })
+    return Number(row.rows[0]?.horizonCount ?? 0) === 7
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    if (message.includes('no such table')) return false
+    throw error
   } finally {
     client.close()
   }
@@ -570,6 +635,7 @@ async function promoteAdjustedAnalogShadow(): Promise<string> {
 }
 
 async function buildAdjustedShadow(onStage: (stage: FoundationStage) => Promise<void>): Promise<void> {
+  await seedAdjustedAnalyticsShadow()
   if (await resumableAdjustedShadowExists()) {
     console.log(`US adjusted foundation: resuming validated shadow generation ${adjustedShadowDbPath}`)
   } else {
@@ -592,9 +658,10 @@ async function buildAdjustedShadow(onStage: (stage: FoundationStage) => Promise<
     analyticsMetadataValue(adjustedShadowDbPath, 'derived_price_date'),
   ])
   if (derivedBasis !== US_ADJUSTED_PRICE_BASIS || derivedPriceDate !== priceDate) {
-    const [extremaBaselineExists, derivedBaselineExists] = await Promise.all([
+    const [extremaBaselineExists, derivedBaselineExists, physicsLabelBaselineExists] = await Promise.all([
       adjustedForwardExtremaBaselineExists(adjustedShadowDbPath),
       reusableAdjustedDerivedBaselineExists(adjustedShadowDbPath),
+      reusablePhysicsLabelBaselineExists(adjustedShadowDbPath),
     ])
     const extremaRecalcDays = extremaBaselineExists
       ? (process.env.US_FOUNDATION_EXTREMA_RECALC_DAYS ?? '201')
@@ -602,17 +669,22 @@ async function buildAdjustedShadow(onStage: (stage: FoundationStage) => Promise<
     const derivedRecentDays = derivedBaselineExists
       ? (process.env.US_FOUNDATION_DERIVED_RECENT_DAYS ?? '420')
       : '0'
+    const physicsLabelRecentDays = physicsLabelBaselineExists ? derivedRecentDays : '0'
     if (extremaBaselineExists) {
       console.log(`US adjusted foundation: reusing the full forward-extrema baseline; recalculating ${extremaRecalcDays} recent bars`)
     }
     if (derivedBaselineExists) {
       console.log(`US adjusted foundation: reusing the adjusted derived baseline; recalculating ${derivedRecentDays} recent bars`)
     }
+    if (!physicsLabelBaselineExists) {
+      console.log('US adjusted foundation: full-history physics labels are missing; building the one-time baseline')
+    }
     await onStage('features_models')
     await runNpm('batch:us-ml-full-history', {
       US_ANALYTICS_DB_PATH: adjustedShadowDbPath,
       US_ML_FULL_START_DATE: '1900-01-01',
       US_ML_WEEKLY_RECENT_DAYS: derivedRecentDays,
+      US_PMS_RECENT_DAYS: derivedRecentDays,
       US_PMS_WEEKLY_RECENT_DAYS: derivedRecentDays,
       US_PMS_NORMALIZE_RECENT_DAYS: derivedBaselineExists
         ? (process.env.US_FOUNDATION_PMS_NORMALIZE_RECENT_DAYS ?? '30')
@@ -629,14 +701,16 @@ async function buildAdjustedShadow(onStage: (stage: FoundationStage) => Promise<
       US_ML_CONTEXT_RECENT_DAYS: derivedRecentDays,
       US_ML_PHYSICS_RECENT_DAYS: derivedRecentDays,
       ML_PHYSICS_INCREMENTAL_UPSERT: derivedBaselineExists ? '1' : '0',
-      US_ML_SHORT_LABEL_RECENT_DAYS: derivedRecentDays,
-      US_ML_RL_RECENT_DAYS: derivedRecentDays,
-      US_ML_STATUS_RECENT_DAYS: derivedRecentDays,
+      US_ML_SHORT_LABEL_RECENT_DAYS: physicsLabelRecentDays,
+      US_ML_RL_RECENT_DAYS: physicsLabelRecentDays,
+      US_ML_STATUS_RECENT_DAYS: physicsLabelRecentDays,
       FORWARD_EXTREMA_RESUME: '1',
+      FORWARD_EXTREMA_WRITE_BATCH_TICKERS:
+        process.env.US_FOUNDATION_EXTREMA_WRITE_BATCH_TICKERS ?? '100',
       ML_FEATURE_HEALTH_STRICT: '1',
       ML_ACCURACY_STRICT: '1',
       US_ML_SKIP_FORWARD_RETURNS: derivedBaselineExists ? '1' : '0',
-      US_ML_SKIP_FORWARD_EXTREMA: '0',
+      US_ML_SKIP_FORWARD_EXTREMA: process.env.US_FOUNDATION_SKIP_FORWARD_EXTREMA ?? '0',
       US_ML_SKIP_ML_FEATURES: '0',
       US_ML_SKIP_ML_LABELS: '0',
       US_ML_SKIP_ML_TRAIN: '0',

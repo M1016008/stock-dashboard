@@ -13,6 +13,15 @@ type TrainRow = {
   down_label: number
 }
 
+type FeaturePageRow = { ticker: string; date: string; vector_json: string }
+type LabelPageRow = { ticker: string; date: string; horizon_days: number; up_label: number; down_label: number }
+type PagedHorizonState = {
+  horizon: number
+  trainEndDate: string
+  states: Record<'up' | 'down', ModelState>
+  trainRows: number
+}
+
 const HORIZONS = (process.env.ML_HORIZONS ?? ML_PRIMARY_HORIZON_LIST)
   .split(',')
   .map((value) => Number(value.trim()))
@@ -280,11 +289,24 @@ async function loadRows(horizon: number, trainEndDate: string): Promise<TrainRow
 }
 
 async function loadTrainingDates(horizon: number, trainEndDate: string): Promise<string[]> {
-  const labelTable = LABEL_SOURCE === 'forward_returns' ? 'forward_returns' : 'ml_training_labels'
+  if (LABEL_SOURCE !== 'forward_returns') {
+    const rows = await execAll<{ date: string }>(
+      `
+      SELECT date
+      FROM forward_extrema_date_coverage
+      WHERE horizon_days = ?
+        AND date >= ?
+        AND date <= ?
+      ORDER BY date ASC
+      `,
+      [horizon, START_DATE, trainEndDate],
+    )
+    return rows.map((row) => row.date)
+  }
   const rows = await execAll<{ date: string }>(
     `
     SELECT DISTINCT date
-    FROM ${labelTable}
+    FROM forward_returns
     WHERE horizon_days = ?
       AND date >= ?
       AND date <= ?
@@ -310,6 +332,92 @@ async function loadRowsForDates(horizon: number, dates: string[]): Promise<Train
     `,
     [horizon, ...dates],
   )
+}
+
+async function loadFeatureRowsForDates(dates: string[]): Promise<FeaturePageRow[]> {
+  if (dates.length === 0) return []
+  return execAll<FeaturePageRow>(
+    `SELECT ticker, date, vector_json
+     FROM ml_feature_vectors
+     WHERE date IN (${dates.map(() => '?').join(', ')})
+     ORDER BY date ASC, ticker ASC`,
+    dates,
+  )
+}
+
+async function loadLabelRowsForDates(horizons: number[], dates: string[]): Promise<LabelPageRow[]> {
+  if (horizons.length === 0 || dates.length === 0) return []
+  return execAll<LabelPageRow>(
+    `SELECT ticker, date, horizon_days, up_label, down_label
+     FROM ml_training_labels
+     WHERE horizon_days IN (${horizons.map(() => '?').join(', ')})
+       AND date IN (${dates.map(() => '?').join(', ')})`,
+    [...horizons, ...dates],
+  )
+}
+
+async function loadMultiTrainingDates(horizons: number[], maxTrainEndDate: string): Promise<string[]> {
+  const rows = await execAll<{ date: string }>(
+    `SELECT DISTINCT date
+     FROM forward_extrema_date_coverage
+     WHERE horizon_days IN (${horizons.map(() => '?').join(', ')})
+       AND date >= ? AND date <= ?
+     ORDER BY date ASC`,
+    [...horizons, START_DATE, maxTrainEndDate],
+  )
+  return rows.map((row) => row.date)
+}
+
+function labelMapKey(ticker: string, date: string): string {
+  return `${ticker}\u0000${date}`
+}
+
+async function forEachMultiHorizonPage(
+  horizonStates: PagedHorizonState[],
+  dates: string[],
+  phase: string,
+  onRow: (horizonState: PagedHorizonState, row: ParsedTrainRow) => void,
+): Promise<Map<number, number>> {
+  const horizonList = horizonStates.map((state) => state.horizon)
+  const counts = new Map<number, number>(horizonList.map((horizon) => [horizon, 0]))
+  const totalPages = Math.ceil(dates.length / PAGE_DATES)
+  for (let offset = 0; offset < dates.length; offset += PAGE_DATES) {
+    const page = Math.floor(offset / PAGE_DATES) + 1
+    const pageDates = dates.slice(offset, offset + PAGE_DATES)
+    const [features, labels] = await Promise.all([
+      loadFeatureRowsForDates(pageDates),
+      loadLabelRowsForDates(horizonList, pageDates),
+    ])
+    const labelsByTickerDate = new Map<string, Map<number, LabelPageRow>>()
+    for (const label of labels) {
+      const key = labelMapKey(label.ticker, label.date)
+      const existing = labelsByTickerDate.get(key)
+      if (existing) existing.set(label.horizon_days, label)
+      else labelsByTickerDate.set(key, new Map([[label.horizon_days, label]]))
+    }
+    for (const feature of features) {
+      const vector = parseVector(feature.vector_json)
+      if (vector.length !== ML_FEATURE_NAMES.length) continue
+      const featureLabels = labelsByTickerDate.get(labelMapKey(feature.ticker, feature.date))
+      if (!featureLabels) continue
+      for (const horizonState of horizonStates) {
+        if (feature.date > horizonState.trainEndDate) continue
+        const label = featureLabels.get(horizonState.horizon)
+        if (!label) continue
+        counts.set(horizonState.horizon, (counts.get(horizonState.horizon) ?? 0) + 1)
+        onRow(horizonState, {
+          vector,
+          up: label.up_label ? 1 : 0,
+          down: label.down_label ? 1 : 0,
+        })
+      }
+    }
+    if (page === totalPages || page % 10 === 0) {
+      const summary = horizonList.map((horizon) => `${horizon}:${(counts.get(horizon) ?? 0).toLocaleString()}`).join(' ')
+      console.log(`ml train multi ${phase}: page=${page}/${totalPages}, rows=[${summary}], dates=${pageDates[0]}..${pageDates.at(-1)}`)
+    }
+  }
+  return counts
 }
 
 async function forEachTrainingPage(
@@ -423,6 +531,86 @@ async function trainHorizonAllPaged(horizon: number, trainEndDate: string): Prom
   console.log(`ml train horizon=${horizon}: rows=${trainRows.toLocaleString()} cutoff=${trainEndDate} up=${upName} acc=${up.metrics.accuracy} down=${downName} acc=${down.metrics.accuracy}`)
 }
 
+async function trainAllHorizonsPaged(): Promise<void> {
+  const horizonStates: PagedHorizonState[] = []
+  for (const horizon of HORIZONS) {
+    const trainEndDate = await confirmedCutoffDate(horizon)
+    if (!trainEndDate) {
+      console.log(`ml train horizon=${horizon}: skipped, no confirmed cutoff`)
+      continue
+    }
+    horizonStates.push({
+      horizon,
+      trainEndDate,
+      states: { up: createModelState(), down: createModelState() },
+      trainRows: 0,
+    })
+  }
+  if (horizonStates.length === 0) return
+  const maxTrainEndDate = horizonStates.map((state) => state.trainEndDate).sort().at(-1)
+  if (!maxTrainEndDate) return
+  const dates = await loadMultiTrainingDates(horizonStates.map((state) => state.horizon), maxTrainEndDate)
+  if (dates.length === 0) {
+    console.log(`ml train multi: skipped, no dates before ${maxTrainEndDate}`)
+    return
+  }
+
+  for (let epoch = 0; epoch < EPOCHS; epoch += 1) {
+    const counts = await forEachMultiHorizonPage(horizonStates, dates, `epoch=${epoch + 1}/${EPOCHS}`, (state, row) => {
+      updateModelState(state.states.up, row.vector, row.up)
+      updateModelState(state.states.down, row.vector, row.down)
+    })
+    for (const state of horizonStates) state.trainRows = counts.get(state.horizon) ?? 0
+  }
+
+  for (const state of horizonStates) {
+    resetMetrics(state.states.up)
+    resetMetrics(state.states.down)
+  }
+  await forEachMultiHorizonPage(horizonStates, dates, 'evaluate', (state, row) => {
+    evaluateModelState(state.states.up, row.vector, row.up)
+    evaluateModelState(state.states.down, row.vector, row.down)
+  })
+
+  const statements: Array<{ sql: string; args: Array<string | number> }> = []
+  for (const state of horizonStates) {
+    const baseMetrics = {
+      mode: 'all_paged_multi',
+      requestedMode: SAMPLE_MODE,
+      labelSource: LABEL_SOURCE,
+      trainStartDate: START_DATE,
+      trainEndDate: state.trainEndDate,
+      limit: 0,
+      perYearLimit: 0,
+      pageDates: PAGE_DATES,
+      dateCount: dates.filter((date) => date <= state.trainEndDate).length,
+      trainRows: state.trainRows,
+      featureCount: ML_FEATURE_NAMES.length,
+    }
+    for (const direction of ['up', 'down'] as const) {
+      const model = finalizeModelState(state.states[direction], baseMetrics)
+      const modelName = `ma_stage_${direction}_h${state.horizon}_${MODEL_VERSION}`
+      statements.push({
+        sql: `INSERT OR REPLACE INTO ml_models
+          (model_name, model_type, direction, horizon_days, feature_names_json, weights_json, intercept, metrics_json, trained_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, unixepoch())`,
+        args: [
+          modelName,
+          'logistic_regression_v1',
+          direction,
+          state.horizon,
+          JSON.stringify(ML_FEATURE_NAMES),
+          JSON.stringify(model.weights),
+          model.intercept,
+          JSON.stringify(model.metrics),
+        ],
+      })
+      console.log(`ml train horizon=${state.horizon} direction=${direction}: rows=${Number(model.metrics.samples).toLocaleString()} cutoff=${state.trainEndDate} acc=${model.metrics.accuracy}`)
+    }
+  }
+  await execBatch(statements)
+}
+
 async function trainHorizon(horizon: number): Promise<void> {
   const trainEndDate = await confirmedCutoffDate(horizon)
   if (!trainEndDate) {
@@ -499,6 +687,10 @@ async function trainHorizon(horizon: number): Promise<void> {
 
 async function main() {
   console.log(`ml train: version=${MODEL_VERSION}, mode=${SAMPLE_MODE}, label_source=${LABEL_SOURCE}, limit=${LIMIT || 'all'}, per_year=${PER_YEAR_LIMIT || 'auto'}, page_dates=${PAGE_DATES}, start=${START_DATE}, end=${END_DATE ?? 'auto'}, horizons=${HORIZONS.join('/')}`)
+  if (ALL_PAGED_MODE && HORIZONS.length > 1 && LABEL_SOURCE !== 'forward_returns') {
+    await trainAllHorizonsPaged()
+    return
+  }
   for (const horizon of HORIZONS) await trainHorizon(horizon)
 }
 

@@ -303,16 +303,14 @@ async function loadRows(horizon: number, trainEndDate: string): Promise<TrainRow
 async function loadTrainingDates(horizon: number, trainEndDate: string): Promise<string[]> {
   const rows = await execAll<{ date: string }>(
     `
-    SELECT DISTINCT f.date
-    FROM ml_feature_vectors_v2 f
-    INNER JOIN ml_short_labels l ON l.ticker = f.ticker AND l.date = f.date
-    WHERE f.feature_set = ?
-      AND l.horizon_days = ?
-      AND f.date >= ?
-      AND f.date <= ?
-    ORDER BY f.date ASC
+    SELECT DISTINCT date
+    FROM ml_short_labels
+    WHERE horizon_days = ?
+      AND date >= ?
+      AND date <= ?
+    ORDER BY date ASC
     `,
-    [ML_PHYSICS_FEATURE_SET, horizon, START_DATE, trainEndDate],
+    [horizon, START_DATE, trainEndDate],
   )
   return rows.map((row) => row.date)
 }

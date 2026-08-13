@@ -130,15 +130,21 @@ async function collectCoverageChecks(priceDate: string | null, oldestPriceDate: 
     ? await countRows(
         `
           SELECT COUNT(*) AS count
-          FROM (
-            SELECT ticker
-            FROM ohlcv_daily
-            GROUP BY ticker
-            HAVING MAX(date) = ?
-               AND COUNT(*) >= ?
-          )
+          FROM ohlcv_daily current INDEXED BY ohlcv_date_ticker_idx
+          LEFT JOIN us_analytics_copy_state copy ON copy.ticker = current.ticker
+          WHERE current.date = ?
+            AND (
+              COALESCE(copy.ohlcv_rows, 0) >= ?
+              OR EXISTS (
+                SELECT 1
+                FROM ohlcv_daily history INDEXED BY sqlite_autoindex_ohlcv_daily_1
+                WHERE history.ticker = current.ticker
+                ORDER BY history.date
+                LIMIT 1 OFFSET ?
+              )
+            )
         `,
-        [priceDate, MIN_FEATURE_HISTORY_DAYS],
+        [priceDate, MIN_FEATURE_HISTORY_DAYS, MIN_FEATURE_HISTORY_DAYS - 1],
       )
     : 0
   const physicsFeatureCount = latestPhysicsFeature
@@ -238,21 +244,29 @@ async function collectForwardExtremaChecks(): Promise<Check[]> {
       payload: { requiredHorizons: REQUIRED_HORIZONS },
     }]
   }
-  const rows = await execAll<{ horizonDays: number; minDate: string | null; maxDate: string | null; count: number }>(
-    `
-      SELECT horizon_days AS horizonDays, MIN(date) AS minDate, MAX(date) AS maxDate, COUNT(*) AS count
-      FROM forward_extrema
-      WHERE horizon_days IN (${REQUIRED_HORIZONS.map(() => '?').join(', ')})
-      GROUP BY horizon_days
-      ORDER BY horizon_days
-    `,
-    REQUIRED_HORIZONS,
-  )
+  const rows = (await Promise.all(REQUIRED_HORIZONS.map(async (horizonDays) => {
+    const [first, last] = await Promise.all([
+      execGet<{ date: string | null }>(
+        `SELECT date FROM forward_extrema INDEXED BY fext_horizon_date_idx
+         WHERE horizon_days = ? ORDER BY date ASC LIMIT 1`,
+        [horizonDays],
+      ),
+      execGet<{ date: string | null }>(
+        `SELECT date FROM forward_extrema INDEXED BY fext_horizon_date_idx
+         WHERE horizon_days = ? ORDER BY date DESC LIMIT 1`,
+        [horizonDays],
+      ),
+    ])
+    return {
+      horizonDays,
+      minDate: first?.date ?? null,
+      maxDate: last?.date ?? null,
+    }
+  }))).filter((row) => row.minDate !== null || row.maxDate !== null)
   const present = new Set(rows.map((row) => row.horizonDays))
   const missing = REQUIRED_HORIZONS.filter((horizon) => !present.has(horizon))
   const latest = rows.map((row) => row.maxDate).filter((value): value is string => !!value).sort().at(-1) ?? null
   const oldest = rows.map((row) => row.minDate).filter((value): value is string => !!value).sort()[0] ?? null
-  const count = rows.reduce((sum, row) => sum + Number(row.count ?? 0), 0)
   return [{
     key: 'accuracy_readiness.forward_extrema_horizons',
     status: missing.length > 0 ? 'fail' : 'ok',
@@ -264,7 +278,7 @@ async function collectForwardExtremaChecks(): Promise<Check[]> {
       requiredHorizons: REQUIRED_HORIZONS,
       missingHorizons: missing,
       latestDate: latest,
-      rows: count,
+      coverageMode: 'indexed_bounds',
     },
   }]
 }
@@ -298,8 +312,14 @@ async function latestModels(modelType: string): Promise<ModelRow[]> {
   )
 }
 
-function collectModelChecks(modelType: string, rows: ModelRow[], directions: string[]): Check[] {
+function collectModelChecks(
+  modelType: string,
+  rows: ModelRow[],
+  directions: string[],
+  availableHistoryStart: string | null,
+): Check[] {
   const checks: Check[] = []
+  const expectedStart = availableHistoryStart ?? FULL_HISTORY_START
   const byKey = new Map(rows.map((row) => [`${row.horizonDays}:${row.direction}`, row]))
   for (const horizon of REQUIRED_HORIZONS) {
     for (const direction of directions) {
@@ -308,7 +328,7 @@ function collectModelChecks(modelType: string, rows: ModelRow[], directions: str
         checks.push({
           key: `accuracy_readiness.model.${modelType}.h${horizon}.${direction}`,
           status: 'missing',
-          expectedDate: FULL_HISTORY_START,
+          expectedDate: expectedStart,
           actualDate: null,
           expectedCount: 1,
           actualCount: 0,
@@ -326,8 +346,8 @@ function collectModelChecks(modelType: string, rows: ModelRow[], directions: str
       const fullHistoryMode = mode === 'all_paged' || mode === 'all_paged_multi' || mode === 'yearly'
       checks.push({
         key: `accuracy_readiness.model.${modelType}.h${horizon}.${direction}`,
-        status: fullHistoryMode && trainStartDate && trainStartDate <= FULL_HISTORY_START && trainRows > 0 ? 'ok' : 'warn',
-        expectedDate: FULL_HISTORY_START,
+        status: fullHistoryMode && trainStartDate && trainStartDate <= expectedStart && trainRows > 0 ? 'ok' : 'warn',
+        expectedDate: expectedStart,
         actualDate: trainStartDate,
         expectedCount: 1,
         actualCount: trainRows > 0 ? 1 : 0,
@@ -404,11 +424,25 @@ async function main(): Promise<void> {
   await ensureHealthTable()
   const priceDate = await maxDate('ohlcv_daily')
   const oldestPriceDate = await minDate('ohlcv_daily')
+  const [classicFeatureStart, physicsFeatureStart] = await Promise.all([
+    minDate('ml_feature_vectors'),
+    minDate('ml_feature_vectors_v2', 'date', 'WHERE feature_set = ?', [ML_PHYSICS_FEATURE_SET]),
+  ])
   const checks = [
     ...await collectCoverageChecks(priceDate, oldestPriceDate),
     ...await collectForwardExtremaChecks(),
-    ...collectModelChecks('logistic_regression_v1', await latestModels('logistic_regression_v1'), ['up', 'down']),
-    ...collectModelChecks(ML_PHYSICS_MODEL_TYPE, await latestModels(ML_PHYSICS_MODEL_TYPE), ['up', 'down', 'wait']),
+    ...collectModelChecks(
+      'logistic_regression_v1',
+      await latestModels('logistic_regression_v1'),
+      ['up', 'down'],
+      classicFeatureStart,
+    ),
+    ...collectModelChecks(
+      ML_PHYSICS_MODEL_TYPE,
+      await latestModels(ML_PHYSICS_MODEL_TYPE),
+      ['up', 'down', 'wait'],
+      physicsFeatureStart,
+    ),
     ...await collectServingChecks(),
   ]
 

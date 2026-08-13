@@ -9,6 +9,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { createClient } from '@libsql/client'
+import { resolveConfiguredStoragePath } from '@/lib/storage-paths'
 import { waitForMemoryHeadroom, withMemoryGuardEnv } from '@/lib/system/memory-guard'
 
 type StepStatus = 'pending' | 'running' | 'completed' | 'failed'
@@ -59,7 +60,7 @@ const supportDir = path.join(os.homedir(), 'Library', 'Application Support', 'St
 const lockPath = path.join(supportDir, 'weekly-optimization.lock')
 const statePath = path.join(supportDir, 'weekly-optimization-state.json')
 const dryRun = process.argv.includes('--dry-run') || process.env.WEEKLY_OPTIMIZATION_DRY_RUN === '1'
-const defaultUsDb = '/Volumes/OWC Express 1M2 80G/stockboard-data/us/stockboard-us.db'
+const defaultUsDb = '/Volumes/こうし/stockboard-data/us/stockboard-us.db'
 let activeChild: ChildProcess | null = null
 let lockOwned = false
 let shutdownSignal: NodeJS.Signals | null = null
@@ -198,13 +199,13 @@ function releaseProcessLock(): void {
 }
 
 function steps(): Step[] {
-  const jpDbPath = path.resolve(
+  const jpDbPath = resolveConfiguredStoragePath(path.resolve(
     process.env.STOCKBOARD_DB_PATH?.trim()
       || path.join(process.cwd(), 'data', 'stockboard.db'),
-  )
-  const usDbPath = path.resolve(
+  ))
+  const usDbPath = resolveConfiguredStoragePath(path.resolve(
     process.env.US_ANALYTICS_DB_PATH?.trim() || defaultUsDb,
-  )
+  ))
   const baseEnv: NodeJS.ProcessEnv = {
     ...process.env,
     USE_LOCAL_DB: '1',
@@ -229,6 +230,7 @@ function steps(): Step[] {
         ML_LEARNING_LOCK_WAIT_MINUTES: process.env.ML_LEARNING_LOCK_WAIT_MINUTES ?? '2880',
         ML_LEARNING_BATCH_WAIT_MINUTES: process.env.ML_LEARNING_BATCH_WAIT_MINUTES ?? '2880',
         ML_LEARNING_NPM_SCRIPT: 'batch:ml-weekly-governance',
+        STOCKBOARD_DB_PATH: jpDbPath,
       },
       modelDbPath: jpDbPath,
       rollbackScripts: [

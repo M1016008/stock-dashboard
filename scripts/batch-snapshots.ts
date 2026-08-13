@@ -8,14 +8,12 @@
 //
 // 動作:
 //   - 各銘柄について daily_snapshots の最新日付を確認、それ以降の日付分のみ計算
-//   - 各日について OHLCV を slice (その日まで) → buildMaValuesFromOhlcv → calculateAllStages
+//   - 日足の累積和と暦週・暦月の終値を使って各日の MA/ステージを線形時間で計算
 //   - チャンク単位で UPSERT (onConflictDoNothing で冪等)
 //   - 銘柄単位で失敗してもバッチは継続、失敗銘柄は batch_runs.error_summary に記録
 //
 // パフォーマンス注:
-//   各日で OHLCV を slice して再計算するため銘柄あたり O(n²)。
-//   2年分 = 約 500 日 × 4000 銘柄 = 200万計算。約 5〜10 分目安。
-//   将来データ量が増えたら累積計算に最適化する余地あり。
+//   銘柄ごとに O(n) で計算し、書き込みはチャンク化する。
 
 import { db, execAll, execGet, execRun } from '@/lib/db/client'
 import { dailySnapshots, batchRuns, computeState } from '@/lib/db/schema'

@@ -4,6 +4,7 @@
 // record deterioration warnings into ml_feature_health_checks.
 
 import { execAll, execBatch, execGet } from '@/lib/db/client'
+import { shouldFailDeteriorationGate } from '@/lib/ml/deterioration-gate'
 
 type Status = 'ok' | 'warn' | 'fail' | 'missing'
 
@@ -14,6 +15,7 @@ type Check = {
   actualDate: string | null
   expectedCount: number | null
   actualCount: number | null
+  publicationBlocking: boolean
   payload?: Record<string, unknown>
 }
 
@@ -186,6 +188,23 @@ async function latestModelEvaluations(): Promise<ModelEvaluationRow[]> {
   )
 }
 
+async function activeServingModelNames(): Promise<Set<string>> {
+  const rows = await execAll<{ modelName: string }>(
+    `
+      SELECT m.model_name AS modelName
+      FROM ml_models m
+      WHERE m.trained_at = (
+        SELECT MAX(newer.trained_at)
+        FROM ml_models newer
+        WHERE newer.model_type = m.model_type
+          AND newer.direction = m.direction
+          AND newer.horizon_days = m.horizon_days
+      )
+    `,
+  )
+  return new Set(rows.map((row) => row.modelName))
+}
+
 async function modelBaseline(row: ModelEvaluationRow): Promise<ModelEvaluationRow[]> {
   return execAll<ModelEvaluationRow>(
     `
@@ -277,7 +296,10 @@ async function rlBaseline(row: RlEvaluationRow): Promise<RlEvaluationRow[]> {
 }
 
 async function modelChecks(): Promise<Check[]> {
-  const latest = await latestModelEvaluations()
+  const [latest, servingModelNames] = await Promise.all([
+    latestModelEvaluations(),
+    activeServingModelNames(),
+  ])
   const checks: Check[] = []
   for (const row of latest) {
     const baseline = await modelBaseline(row)
@@ -305,6 +327,7 @@ async function modelChecks(): Promise<Check[]> {
       actualDate: row.evaluationDate,
       expectedCount: baselineSamples == null ? null : Math.round(baselineSamples),
       actualCount: Number(row.sampleCount ?? 0),
+      publicationBlocking: row.modelName != null && servingModelNames.has(row.modelName),
       payload: {
         modelName: row.modelName,
         modelType: row.modelType,
@@ -337,6 +360,7 @@ async function modelChecks(): Promise<Check[]> {
       actualDate: null,
       expectedCount: null,
       actualCount: 0,
+      publicationBlocking: true,
       payload: { reason: 'ml_model_evaluations has no rows' },
     })
   }
@@ -372,6 +396,7 @@ async function rlChecks(): Promise<Check[]> {
       actualDate: row.evaluationDate,
       expectedCount: baselineSamples == null ? null : Math.round(baselineSamples),
       actualCount: Number(row.sampleCount ?? 0),
+      publicationBlocking: false,
       payload: {
         policyName: row.policyName,
         policyType: row.policyType,
@@ -406,7 +431,7 @@ async function saveChecks(checks: Check[]): Promise<void> {
       check.actualDate,
       check.expectedCount,
       check.actualCount,
-      JSON.stringify(check.payload ?? {}),
+      JSON.stringify({ ...check.payload, publicationBlocking: check.publicationBlocking }),
     ],
   })))
 }
@@ -416,11 +441,16 @@ async function main() {
   await saveChecks(checks)
 
   const warnings = checks.filter((check) => check.status === 'warn' || check.status === 'fail' || check.status === 'missing')
-  console.log(`ml model deterioration check: checks=${checks.length}, warnings=${warnings.length}`)
+  const blockingFailures = warnings.filter(
+    (check) => check.publicationBlocking && (check.status === 'fail' || check.status === 'missing'),
+  )
+  console.log(
+    `ml model deterioration check: checks=${checks.length}, warnings=${warnings.length}, blocking=${blockingFailures.length}`,
+  )
   for (const check of warnings) {
-    console.warn(`- ${check.key}: ${check.status}`)
+    console.warn(`- ${check.key}: ${check.status}${check.publicationBlocking ? ' [publication-blocking]' : ''}`)
   }
-  if (STRICT && warnings.some((check) => check.status === 'fail' || check.status === 'missing')) {
+  if (shouldFailDeteriorationGate(checks, STRICT)) {
     process.exitCode = 1
   }
 

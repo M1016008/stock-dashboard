@@ -7,7 +7,7 @@ export type MlPipelineMarket = 'JP' | 'US'
 export type MlPipelineAction = 'verify-or-adopt' | 'mark-baseline' | 'mark-delta' | 'status'
 
 export const ML_PIPELINE_NAME = 'core_forecast'
-export const ML_PIPELINE_GENERATION_VERSION = 'full_history_then_delta_v1'
+export const ML_PIPELINE_GENERATION_VERSION = 'full_history_then_delta_v2_calendar_stages'
 
 type RangeRow = {
   minDate: string | null
@@ -86,24 +86,62 @@ function objectValue(value: string): Record<string, unknown> {
   }
 }
 
+export function hasAuditedFullHistoryBaseline(state: MlPipelineState | null): boolean {
+  if (
+    !state
+    || state.status !== 'complete'
+    || state.generationVersion !== ML_PIPELINE_GENERATION_VERSION
+    || state.featureSet !== ML_PHYSICS_FEATURE_SET
+  ) return false
+
+  const payload = objectValue(state.payloadJson)
+  const baseline = payload.baseline && typeof payload.baseline === 'object' && !Array.isArray(payload.baseline)
+    ? payload.baseline as Record<string, unknown>
+    : payload
+  return baseline.fullHistoryModelReady === true
+}
+
+export function canRefreshLegacyBaselineForCalendarStages(state: MlPipelineState | null): boolean {
+  if (
+    !state
+    || state.status !== 'complete'
+    || state.generationVersion !== 'full_history_then_delta_v1'
+    || state.featureSet !== ML_PHYSICS_FEATURE_SET
+  ) return false
+
+  const payload = objectValue(state.payloadJson)
+  const baseline = payload.baseline && typeof payload.baseline === 'object' && !Array.isArray(payload.baseline)
+    ? payload.baseline as Record<string, unknown>
+    : payload
+  return baseline.fullHistoryModelReady === true
+}
+
 async function range(
   client: Client,
   table: 'ohlcv_daily' | 'ml_feature_vectors' | 'ml_feature_vectors_v2',
   includeCounts: boolean,
   where = '',
+  throughDate: string | null = null,
 ): Promise<RangeRow> {
-  const result = await client.execute(includeCounts
+  const rangeWhere = throughDate
+    ? `${where || 'WHERE 1 = 1'} AND date <= ?`
+    : where
+  const sql = includeCounts
     ? `
       SELECT MIN(date) AS minDate, MAX(date) AS maxDate, COUNT(*) AS rows
       FROM ${table}
-      ${where}
+      ${rangeWhere}
     `
     : `
       SELECT
-        (SELECT date FROM ${table} ${where} ORDER BY date ASC LIMIT 1) AS minDate,
-        (SELECT date FROM ${table} ${where} ORDER BY date DESC LIMIT 1) AS maxDate,
+        (SELECT date FROM ${table} ${rangeWhere} ORDER BY date ASC LIMIT 1) AS minDate,
+        (SELECT date FROM ${table} ${rangeWhere} ORDER BY date DESC LIMIT 1) AS maxDate,
         NULL AS rows
-    `)
+    `
+  const args = throughDate
+    ? (includeCounts ? [throughDate] : [throughDate, throughDate])
+    : []
+  const result = await client.execute({ sql, args })
   const row = result.rows[0]
   return {
     minDate: stringValue(row?.minDate),
@@ -122,7 +160,8 @@ async function modelCoverage(client: Client): Promise<Map<string, ModelRow>> {
         COUNT(DISTINCT m.direction) AS directions,
         SUM(
           CASE
-            WHEN json_extract(m.metrics_json, '$.mode') IN ('all_paged', 'all_paged_multi') THEN 1
+            -- yearly covers every training year with a bounded, stratified sample.
+            WHEN json_extract(m.metrics_json, '$.mode') IN ('all_paged', 'all_paged_multi', 'yearly') THEN 1
             ELSE 0
           END
         ) AS fullHistoryModels,
@@ -188,23 +227,31 @@ export async function ensureMlPipelineGenerationTable(client: Client): Promise<v
 export async function inspectMlPipelineEvidence(
   client: Client,
   market: MlPipelineMarket,
-  options: { includeCounts?: boolean; requireFullHistoryModels?: boolean } = {},
+  options: { includeCounts?: boolean; requireFullHistoryModels?: boolean; sourceDate?: string | null } = {},
 ): Promise<MlPipelineEvidence> {
   const includeCounts = options.includeCounts === true
+  const sourceDate = options.sourceDate?.trim() || null
+  if (sourceDate && !/^\d{4}-\d{2}-\d{2}$/.test(sourceDate)) {
+    throw new Error(`${market} ML baseline check failed: invalid source date ${sourceDate}`)
+  }
   const [source, features, physics, models, priceBasis] = await Promise.all([
-    range(client, 'ohlcv_daily', includeCounts),
-    range(client, 'ml_feature_vectors', includeCounts),
+    range(client, 'ohlcv_daily', includeCounts, '', sourceDate),
+    range(client, 'ml_feature_vectors', includeCounts, '', sourceDate),
     range(
       client,
       'ml_feature_vectors_v2',
       includeCounts,
       `WHERE feature_set = '${ML_PHYSICS_FEATURE_SET.replaceAll("'", "''")}'`,
+      sourceDate,
     ),
     modelCoverage(client),
     market === 'US' ? metadataValue(client, 'ohlcv_price_basis') : Promise.resolve(null),
   ])
 
   if (!source.maxDate) throw new Error(`${market} ML baseline check failed: ohlcv_daily is empty`)
+  if (sourceDate && source.maxDate !== sourceDate) {
+    throw new Error(`${market} ML baseline check failed: requested source=${sourceDate}, available=${source.maxDate}`)
+  }
   if (features.maxDate !== source.maxDate) {
     throw new Error(`${market} ML baseline check failed: features=${features.maxDate ?? '-'}, price=${source.maxDate}`)
   }
@@ -439,7 +486,10 @@ export async function verifyOrAdoptMlPipelineBaseline(
         `${market} ML baseline price basis is incompatible: actual=${existing.priceBasis ?? '-'}, expected=${US_ADJUSTED_PRICE_BASIS}`,
       )
     }
-    await inspectMlPipelineEvidence(client, market)
+    await inspectMlPipelineEvidence(client, market, {
+      requireFullHistoryModels: true,
+      sourceDate: existing.baselineSourceDate,
+    })
     return { state: existing, adopted: false }
   }
 

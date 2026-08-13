@@ -30,7 +30,7 @@ const pathEnv = [
 const scheduleWeekday = Number(process.env.US_ML_WEEKLY_WEEKDAY ?? '0')
 const scheduleHour = Number(process.env.US_ML_WEEKLY_HOUR ?? '3')
 const scheduleMinute = Number(process.env.US_ML_WEEKLY_MINUTE ?? '0')
-const defaultUsAnalyticsDb = process.env.US_ANALYTICS_DB_PATH?.trim() || '/Volumes/OWC Express 1M2 80G/stockboard-data/us/stockboard-us.db'
+const defaultUsAnalyticsDb = process.env.US_ANALYTICS_DB_PATH?.trim() || '/Volumes/こうし/stockboard-data/us/stockboard-us.db'
 
 function xmlEscape(value: string): string {
   return value

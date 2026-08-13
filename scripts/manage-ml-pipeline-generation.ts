@@ -10,8 +10,9 @@ import {
   recordMlPipelineDelta,
   verifyOrAdoptMlPipelineBaseline,
 } from '@/lib/ml/pipeline-generation'
+import { resolveConfiguredStoragePath } from '@/lib/storage-paths'
 
-const DEFAULT_US_DB = '/Volumes/OWC Express 1M2 80G/stockboard-data/us/stockboard-us.db'
+const DEFAULT_US_DB = '/Volumes/こうし/stockboard-data/us/stockboard-us.db'
 
 function marketFromEnv(value: string | undefined): MlPipelineMarket {
   const normalized = value?.trim().toUpperCase()
@@ -30,7 +31,7 @@ function databasePath(market: MlPipelineMarket): string {
   const configured = market === 'US'
     ? process.env.US_ANALYTICS_DB_PATH?.trim() || process.env.STOCKBOARD_DB_PATH?.trim() || DEFAULT_US_DB
     : process.env.STOCKBOARD_DB_PATH?.trim() || process.env.LOCAL_DB_PATH?.trim() || 'data/stockboard.db'
-  return path.resolve(configured)
+  return resolveConfiguredStoragePath(path.resolve(configured))
 }
 
 async function main(): Promise<void> {
@@ -48,9 +49,11 @@ async function main(): Promise<void> {
       return
     }
     if (action === 'mark-baseline') {
+      const sourceDate = process.env.ML_PIPELINE_SOURCE_DATE?.trim() || null
       const evidence = await inspectMlPipelineEvidence(client, market, {
-        includeCounts: true,
+        includeCounts: process.env.ML_PIPELINE_INCLUDE_COUNTS === '1',
         requireFullHistoryModels: true,
+        sourceDate,
       })
       await recordMlPipelineBaseline(client, evidence)
       console.log(JSON.stringify({ action, market, evidence }, null, 2))

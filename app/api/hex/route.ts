@@ -35,7 +35,7 @@ interface HexStock {
   months3_change: number
   months6_change: number
   ytd_change: number
-  stage: number
+  stage: number | null
   daily_a_stage: number | null
   daily_b_stage: number | null
   weekly_a_stage: number | null
@@ -395,9 +395,9 @@ export async function GET(request: NextRequest) {
       const monthly_b = s.monthly_b_stage
 
       const stageNow =
-        timeframe === 'weekly' ? (weekly_a ?? 1) :
-        timeframe === 'monthly' ? (monthly_a ?? 1) :
-        (daily_a ?? 1)
+        timeframe === 'weekly' ? weekly_a :
+        timeframe === 'monthly' ? monthly_a :
+        daily_a
 
       return {
         code: s.ticker,

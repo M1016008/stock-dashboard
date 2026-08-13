@@ -10,6 +10,7 @@ import { execGet } from '@/lib/db/client'
 import { execUsAnalyticsGet, hasUsAnalyticsDb } from '@/lib/db/us-analytics'
 import { expectedLatestTradingDate } from '@/lib/server/data-freshness'
 import { expectedLatestUsTradingDate } from '@/lib/server/us-data-freshness'
+import { ML_PIPELINE_GENERATION_VERSION, ML_PIPELINE_NAME } from '@/lib/ml/pipeline-generation'
 import {
   cleanupOrphanedUpdateLocks,
   EXCLUSIVE_UPDATE_JOB_TYPES,
@@ -61,6 +62,7 @@ type WeeklyState = {
 type WeeklyFreshness = {
   state: WeeklyState
   ageHours: number | null
+  jpModelDate: string | null
   usModelAgeHours: number | null
   lastActivityAt: number | null
   runningHealthy: boolean
@@ -70,6 +72,12 @@ type CountRow = { count: number | null }
 type RunRow = {
   status: string
   payloadJson: string
+}
+type PipelineGenerationRow = {
+  status: string
+  generationVersion: string
+  lastDeltaSourceDate: string
+  lastDeltaCompletedAt: number
 }
 type UsAutomationState = {
   universe: number
@@ -540,7 +548,7 @@ async function weeklyFreshness(): Promise<WeeklyFreshness> {
     && Date.now() - heartbeatMs <= 10 * 60 * 1_000
   const fileReference = runningHealthy ? heartbeatReference : state.finishedAt
   const fileTimestampMs = fileReference ? Date.parse(fileReference) : Number.NaN
-  const [fallback, usModel] = await Promise.all([
+  const [fallback, jpPipeline, usModel] = await Promise.all([
     execGet<{
       lastSuccessAt: number | null
       lastActivityAt: number | null
@@ -559,6 +567,17 @@ async function weeklyFreshness(): Promise<WeeklyFreshness> {
            OR status = 'running'
          )`,
     ),
+    execGet<PipelineGenerationRow>(
+      `SELECT
+         status,
+         generation_version AS generationVersion,
+         last_delta_source_date AS lastDeltaSourceDate,
+         last_delta_completed_at AS lastDeltaCompletedAt
+       FROM ml_pipeline_generations
+       WHERE market = 'JP' AND pipeline = ?
+       LIMIT 1`,
+      [ML_PIPELINE_NAME],
+    ).catch(() => undefined),
     hasUsAnalyticsDb()
       ? execUsAnalyticsGet<EpochRow>('SELECT MAX(trained_at) AS value FROM ml_models')
       : Promise.resolve(undefined),
@@ -566,12 +585,17 @@ async function weeklyFreshness(): Promise<WeeklyFreshness> {
   const fallbackSuccessMs = fallback?.lastSuccessAt == null
     ? Number.NaN
     : Number(fallback.lastSuccessAt) * 1000
+  const pipelineSuccessMs = jpPipeline?.status === 'complete'
+    && jpPipeline.generationVersion === ML_PIPELINE_GENERATION_VERSION
+    ? Number(jpPipeline.lastDeltaCompletedAt) * 1000
+    : 0
   const fileCompletedMs = state.status === 'completed' && Number.isFinite(fileTimestampMs)
     ? fileTimestampMs
     : 0
   const jpWeeklySuccessMs = Math.max(
     fileCompletedMs,
     Number.isFinite(fallbackSuccessMs) ? fallbackSuccessMs : 0,
+    Number.isFinite(pipelineSuccessMs) ? pipelineSuccessMs : 0,
   )
   const usModelMs = usModel?.value == null ? 0 : Number(usModel.value) * 1000
   const ageHours = jpWeeklySuccessMs > 0
@@ -584,10 +608,20 @@ async function weeklyFreshness(): Promise<WeeklyFreshness> {
     Number.isFinite(fileTimestampMs) ? Math.floor(fileTimestampMs / 1000) : 0,
     Number.isFinite(heartbeatMs) ? Math.floor(heartbeatMs / 1000) : 0,
     Number(fallback?.lastActivityAt ?? 0),
+    Number.isFinite(pipelineSuccessMs) ? Math.floor(pipelineSuccessMs / 1000) : 0,
   ) || null
+  const reportState = state.status === 'failed'
+    && pipelineSuccessMs > 0
+    && (!Number.isFinite(fileTimestampMs) || pipelineSuccessMs > fileTimestampMs)
+    ? {
+        status: 'superseded_by_pipeline_delta',
+        finishedAt: new Date(pipelineSuccessMs).toISOString(),
+      }
+    : state
   return {
-    state,
+    state: reportState,
     ageHours: ageHours == null ? null : Math.round(ageHours * 10) / 10,
+    jpModelDate: jpPipeline?.lastDeltaSourceDate ?? null,
     usModelAgeHours: usModelAgeHours == null ? null : Math.round(usModelAgeHours * 10) / 10,
     lastActivityAt,
     runningHealthy,
@@ -832,14 +866,14 @@ async function main(): Promise<void> {
     actions.push({
       key: services.usEarnings.key,
       label: services.usEarnings.label,
-      state: 'missing',
-      reason: 'FINNHUB_API_KEY is not configured',
+      state: 'fresh',
+      reason: 'optional source disabled because FINNHUB_API_KEY is not configured',
     })
   }
   await reconcile(
     services.weekly,
     !weekly.fresh || !usAutomation.priceBasisCurrent,
-    `status=${weekly.state.status ?? 'missing'}, jpAge=${weekly.ageHours ?? '-'}h, `
+    `status=${weekly.state.status ?? 'missing'}, jpDate=${weekly.jpModelDate ?? '-'}, jpAge=${weekly.ageHours ?? '-'}h, `
       + `usModelAge=${weekly.usModelAgeHours ?? '-'}h, `
       + `priceBasis=${usAutomation.priceBasis ?? 'missing'}, `
       + `derivedBasis=${usAutomation.derivedPriceBasis ?? 'missing'}, `

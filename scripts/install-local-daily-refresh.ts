@@ -19,7 +19,7 @@ const baseEnv: NodeJS.ProcessEnv = {
   USE_LOCAL_DB: '1',
   SQLITE_BUSY_TIMEOUT_MS: process.env.SQLITE_BUSY_TIMEOUT_MS ?? '15000',
   SQLITE_BUSY_RETRIES: process.env.SQLITE_BUSY_RETRIES ?? '12',
-  US_ANALYTICS_DB_PATH: process.env.US_ANALYTICS_DB_PATH?.trim() || '/Volumes/OWC Express 1M2 80G/stockboard-data/us/stockboard-us.db',
+  US_ANALYTICS_DB_PATH: process.env.US_ANALYTICS_DB_PATH?.trim() || '/Volumes/こうし/stockboard-data/us/stockboard-us.db',
 }
 
 const steps: Step[] = [
@@ -57,11 +57,6 @@ const steps: Step[] = [
     name: 'JP daily ML serving refresh',
     label: 'com.stockboard.ml-learning',
     script: 'auto-ml:install',
-  },
-  {
-    name: 'JP daily MA trajectory prediction refresh',
-    label: 'com.stockboard.ma-trajectory',
-    script: 'auto-ma-trajectory:install',
   },
   {
     name: 'JP ML freshness repair guard',
@@ -127,7 +122,6 @@ console.log('Kabutan dashboard news: every 60 minutes')
 console.log('Kabutan themes: daily 21:00 JST, recovery checks 22:00/23:00, waits safely for the DB writer')
 console.log('US prices/analytics/ML: Tue-Sat 06:30, 10:30 JST')
 console.log('JP ML serving: Mon-Fri 03:00 JST, JP exchange holidays skipped')
-console.log('JP MA trajectory refresh: daily 23:20 JST plus 00:20 retry; source-date deduplicated')
 console.log('JP ML freshness guard: Mon-Fri 23:45 JST')
 console.log('All-data recovery guard: after login and every 30 minutes; stale services only')
 console.log('Weekly optimization: Sunday 00:30 JST, sequential JP/US ML, indexes, cache, and DB maintenance')

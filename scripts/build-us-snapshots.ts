@@ -2,7 +2,7 @@
 
 import { db, ensureReady, execAll, execGet } from '@/lib/db/client'
 import { marketDailySnapshots, marketDataRuns } from '@/lib/db/schema'
-import { calculateAllStages, type MaValues } from '@/lib/hex-stage'
+import { buildSnapshotCalculations } from '@/lib/snapshots/continuous-ma'
 import {
   US_ADJUSTED_PRICE_BASIS,
   toAdjustedUsOhlcvRows,
@@ -22,46 +22,6 @@ const PROGRESS_EVERY = Math.max(10, Number(process.env.US_SNAPSHOT_PROGRESS_EVER
 const TICKER_START = process.env.US_SNAPSHOT_TICKER_START?.trim().toUpperCase() || null
 const TICKER_END = process.env.US_SNAPSHOT_TICKER_END?.trim().toUpperCase() || null
 const TICKERS = process.env.TICKERS?.split(',').map((value) => value.trim().toUpperCase()).filter(Boolean)
-
-function prefix(rows: OHLCV[]): number[] {
-  const values = [0]
-  for (const row of rows) values.push(values[values.length - 1] + row.close)
-  return values
-}
-
-function dailySmaAt(values: number[], index: number, period: number): number | null {
-  const end = index + 1
-  if (end < period) return null
-  return (values[end] - values[end - period]) / period
-}
-
-function sampledSmaAt(rows: OHLCV[], index: number, step: number, period: number): number | null {
-  const firstIndex = index - (period - 1) * step
-  if (firstIndex < 0) return null
-  let sum = 0
-  for (let i = 0; i < period; i += 1) sum += rows[index - i * step].close
-  return sum / period
-}
-
-function maAt(rows: OHLCV[], values: number[], index: number): MaValues {
-  return {
-    ma_5: dailySmaAt(values, index, 5),
-    ma_25: dailySmaAt(values, index, 25),
-    ma_75: dailySmaAt(values, index, 75),
-    ma_150: dailySmaAt(values, index, 150),
-    ma_300: dailySmaAt(values, index, 300),
-    weekly_ma_5: sampledSmaAt(rows, index, 5, 5),
-    weekly_ma_13: sampledSmaAt(rows, index, 5, 13),
-    weekly_ma_25: sampledSmaAt(rows, index, 5, 25),
-    weekly_ma_50: sampledSmaAt(rows, index, 5, 50),
-    weekly_ma_100: sampledSmaAt(rows, index, 5, 100),
-    monthly_ma_3: sampledSmaAt(rows, index, 21, 3),
-    monthly_ma_5: sampledSmaAt(rows, index, 21, 5),
-    monthly_ma_10: sampledSmaAt(rows, index, 21, 10),
-    monthly_ma_20: sampledSmaAt(rows, index, 21, 20),
-    monthly_ma_25: sampledSmaAt(rows, index, 21, 25),
-  }
-}
 
 async function loadTargets(): Promise<string[]> {
   if (TICKERS?.length) return TICKERS
@@ -133,7 +93,9 @@ async function computeTicker(ticker: string, marketDates: string[]): Promise<num
   ])
   const rows: OHLCV[] = toAdjustedUsOhlcvRows(rawRows)
   if (rows.length < 5) return 0
-  const values = prefix(rows)
+  const calculationsByDate = new Map(
+    buildSnapshotCalculations(rows, { includeWarmup: true }).map((calculation) => [calculation.date, calculation]),
+  )
   const periodMetrics = computeUsScreenerPeriodMetrics(rows, marketDates)
   const inserts: Array<typeof marketDailySnapshots.$inferInsert> = []
   for (let i = 0; i < rows.length; i += 1) {
@@ -144,14 +106,20 @@ async function computeTicker(ticker: string, marketDates: string[]): Promise<num
       && existing.maxMetricDate !== existing.maxDate,
     )
     if (!REBUILD && existing?.maxDate && row.date <= existing.maxDate && !latestNeedsMetricBackfill) continue
-    const ma = maAt(rows, values, i)
+    const calculation = calculationsByDate.get(row.date)
+    if (!calculation) continue
+    const {
+      date: _date,
+      activeDays: _activeDays,
+      segmentStartDate: _segmentStartDate,
+      ...snapshotValues
+    } = calculation
     const metrics = periodMetrics[i]
     inserts.push({
       market: MARKET,
       ticker,
       date: row.date,
-      ...ma,
-      ...calculateAllStages(ma),
+      ...snapshotValues,
       ...metrics,
     })
   }

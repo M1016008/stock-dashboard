@@ -6,6 +6,8 @@ import path from 'node:path'
 import { ML_PHYSICS_FEATURE_SET, ML_PHYSICS_MODEL_TYPE } from '@/lib/backtest/ml-physics'
 import { ML_PRIMARY_HORIZONS } from '@/lib/backtest/ml-horizons'
 import {
+  canRefreshLegacyBaselineForCalendarStages,
+  hasAuditedFullHistoryBaseline,
   inspectMlPipelineEvidence,
   ML_PIPELINE_NAME,
   readMlPipelineState,
@@ -42,11 +44,11 @@ async function main(): Promise<void> {
       await client.batch([
         ...['up', 'down'].map((direction) => ({
           sql: 'INSERT INTO ml_models VALUES (?, ?, ?, ?, ?)',
-          args: ['logistic_regression_v1', direction, horizon, JSON.stringify({ mode: 'yearly', trainStartDate: '2020-01-02' }), 1],
+          args: ['logistic_regression_v1', direction, horizon, JSON.stringify({ mode: 'recent', trainStartDate: '2020-01-02' }), 1],
         })),
         ...['up', 'down', 'wait'].map((direction) => ({
           sql: 'INSERT INTO ml_models VALUES (?, ?, ?, ?, ?)',
-          args: [ML_PHYSICS_MODEL_TYPE, direction, horizon, JSON.stringify({ mode: 'yearly', trainStartDate: '2020-01-02' }), 1],
+          args: [ML_PHYSICS_MODEL_TYPE, direction, horizon, JSON.stringify({ mode: 'recent', trainStartDate: '2020-01-02' }), 1],
         })),
       ])
     }
@@ -57,14 +59,27 @@ async function main(): Promise<void> {
     )
     await client.execute(
       `UPDATE ml_models
-       SET metrics_json = json_set(metrics_json, '$.mode', 'all_paged')`,
+       SET metrics_json = json_set(metrics_json, '$.mode', 'yearly')`,
     )
     const adopted = await verifyOrAdoptMlPipelineBaseline(client, 'US')
     assert.equal(adopted.adopted, true)
     assert.equal(adopted.state.baselineSourceDate, '2026-08-10')
+    assert.equal(hasAuditedFullHistoryBaseline(adopted.state), true)
+    assert.equal(canRefreshLegacyBaselineForCalendarStages(adopted.state), false)
+
+    const legacyState = {
+      ...adopted.state,
+      generationVersion: 'full_history_then_delta_v1',
+    }
+    assert.equal(canRefreshLegacyBaselineForCalendarStages(legacyState), true)
+    assert.equal(canRefreshLegacyBaselineForCalendarStages({ ...legacyState, status: 'failed' }), false)
+
+    await client.execute("INSERT INTO ohlcv_daily VALUES ('AAPL', '2026-08-11')")
+    const verifiedBeforeDelta = await verifyOrAdoptMlPipelineBaseline(client, 'US')
+    assert.equal(verifiedBeforeDelta.adopted, false)
+    assert.equal(verifiedBeforeDelta.state.baselineSourceDate, '2026-08-10')
 
     await client.batch([
-      "INSERT INTO ohlcv_daily VALUES ('AAPL', '2026-08-11')",
       "INSERT INTO ml_feature_vectors VALUES ('AAPL', '2026-08-11')",
       `INSERT INTO ml_feature_vectors_v2 VALUES ('${ML_PHYSICS_FEATURE_SET}', 'AAPL', '2026-08-11')`,
     ])
@@ -76,11 +91,13 @@ async function main(): Promise<void> {
     const payload = JSON.parse(updated?.payloadJson ?? '{}') as Record<string, unknown>
     assert.ok(payload.baseline)
     assert.ok(payload.latestDelta)
+    assert.equal(hasAuditedFullHistoryBaseline(updated), true)
 
     await client.execute({
       sql: 'UPDATE ml_pipeline_generations SET generation_version = ? WHERE market = ? AND pipeline = ?',
       args: ['incompatible', 'US', ML_PIPELINE_NAME],
     })
+    assert.equal(hasAuditedFullHistoryBaseline(await readMlPipelineState(client, 'US')), false)
     await assert.rejects(() => verifyOrAdoptMlPipelineBaseline(client, 'US'), /incompatible/)
   } finally {
     client.close()

@@ -58,6 +58,12 @@ assert.ok(
   readinessSource.includes('MIN_FEATURE_HISTORY_DAYS'),
   'accuracy readiness must compare feature coverage against the eligible history universe',
 )
+assert.ok(
+  readinessSource.includes('ohlcv_daily current INDEXED BY ohlcv_date_ticker_idx')
+    && readinessSource.includes('us_analytics_copy_state copy')
+    && readinessSource.includes('LIMIT 1 OFFSET ?'),
+  'accuracy readiness must use the indexed hybrid history eligibility check',
+)
 
 const statusEvaluationSource = fs.readFileSync(path.join(process.cwd(), 'scripts/batch-ml-physics-status-evaluate.ts'), 'utf8')
 assert.ok(statusEvaluationSource.includes('cutoffDate(horizon: number)'), 'status evaluation must calculate a cutoff per horizon')

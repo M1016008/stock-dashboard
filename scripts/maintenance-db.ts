@@ -60,7 +60,7 @@ function resolveDefaultUsDbPath(): string {
   const configured = process.env.US_ANALYTICS_DB_PATH
   return configured
     ? path.resolve(configured)
-    : '/Volumes/OWC Express 1M2 80G/stockboard-data/us/stockboard-us.db'
+    : '/Volumes/こうし/stockboard-data/us/stockboard-us.db'
 }
 
 function parseTargets(): Target[] {

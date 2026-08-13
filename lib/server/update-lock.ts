@@ -14,6 +14,9 @@ export const EXCLUSIVE_UPDATE_JOB_TYPES = [
   'kabutan_material_news',
   'kabutan_themes',
   'db_maintenance',
+  'calendar_stage_backfill_jp',
+  'calendar_stage_backfill_us',
+  'stage_transitions',
 ] as const
 
 export const JP_STOCKBOARD_UPDATE_JOB_TYPES = [
@@ -25,12 +28,15 @@ export const JP_STOCKBOARD_UPDATE_JOB_TYPES = [
   'kabutan_material_news',
   'kabutan_themes',
   'db_maintenance',
+  'calendar_stage_backfill_jp',
+  'stage_transitions',
 ] as const
 
 export const US_ISOLATED_UPDATE_JOB_TYPES = [
   'us_update_latest',
   'us_adjusted_foundation',
   'us_adjusted_source_snapshots',
+  'calendar_stage_backfill_us',
 ] as const
 
 export type UpdateLockSnapshot = {
@@ -76,6 +82,8 @@ const SQLITE_WRITER_PROCESS_PATTERNS = [
   /scripts\/(?:update-us-latest|batch-us-|run-us-ml-job)\S*\.(?:ts|js)\b/,
   /scripts\/(?:run-ml-learning|guard-ml-freshness|batch-ml-|build-serving-ml-)\S*\.(?:ts|js)\b/,
   /scripts\/(?:batch-forward-extrema|batch-earnings(?:-times)?|build-serving-|batch-kabutan-(?:material-news|themes)|maintenance-db)\S*\.(?:ts|js)\b/,
+  /scripts\/backfill-calendar-stage-snapshots\.(?:ts|js)\b/,
+  /scripts\/batch-stage-transitions\.(?:ts|js)\b/,
 ] as const
 
 type ProcessRow = {

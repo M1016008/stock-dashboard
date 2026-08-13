@@ -8,7 +8,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db, execAll } from '@/lib/db/client'
 import { dailySnapshots, ohlcvDaily } from '@/lib/db/schema'
-import { getActiveSegmentStart, REQUIRED_ACTIVE_DAYS, stageWithEnoughHistory } from '@/lib/snapshots/continuous-ma'
+import { activeCalendarPeriodCounts, sampleCalendarPeriodEnds } from '@/lib/snapshots/calendar-periods'
+import { getActiveSegmentStart, REQUIRED_ACTIVE_PERIODS, stageWithEnoughHistory } from '@/lib/snapshots/continuous-ma'
 import { normalizeMarket, normalizeTickerForMarket } from '@/lib/markets'
 import { asc, eq } from 'drizzle-orm'
 
@@ -90,42 +91,19 @@ function parseIsoDate(value: string | null): string | null {
   return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : null
 }
 
-function sampleSnapshots(snapshots: SnapshotRow[], granularity: Granularity, count: number): SnapshotRow[] {
-  if (granularity === 'daily') {
-    return snapshots.slice(-count)
-  }
-
-  if (granularity === 'monthly') {
-    const monthEnds: SnapshotRow[] = []
-    for (const snap of snapshots) {
-      const month = snap.date.slice(0, 7)
-      const last = monthEnds[monthEnds.length - 1]
-      if (!last || last.date.slice(0, 7) !== month) {
-        monthEnds.push(snap)
-      } else {
-        monthEnds[monthEnds.length - 1] = snap
-      }
-    }
-    return monthEnds.slice(-count)
-  }
-
-  const entries: SnapshotRow[] = []
-  const stepDays = 5
-  for (let idx = snapshots.length - 1 - (count - 1) * stepDays; idx < snapshots.length; idx += stepDays) {
-    if (idx >= 0) entries.push(snapshots[idx])
-  }
-  return entries
-}
-
-function toStageHistoryEntry(snap: SnapshotRow, activeDays: number | null, close: number | null): StageHistoryEntry {
+function toStageHistoryEntry(
+  snap: SnapshotRow,
+  activePeriods: { daily: number | null; weekly: number | null; monthly: number | null },
+  close: number | null,
+): StageHistoryEntry {
   return {
     date:             snap.date,
-    daily_a_stage:    stageWithEnoughHistory(snap.daily_a_stage, activeDays, REQUIRED_ACTIVE_DAYS.daily_a_stage),
-    daily_b_stage:    stageWithEnoughHistory(snap.daily_b_stage, activeDays, REQUIRED_ACTIVE_DAYS.daily_b_stage),
-    weekly_a_stage:   stageWithEnoughHistory(snap.weekly_a_stage, activeDays, REQUIRED_ACTIVE_DAYS.weekly_a_stage),
-    weekly_b_stage:   stageWithEnoughHistory(snap.weekly_b_stage, activeDays, REQUIRED_ACTIVE_DAYS.weekly_b_stage),
-    monthly_a_stage:  stageWithEnoughHistory(snap.monthly_a_stage, activeDays, REQUIRED_ACTIVE_DAYS.monthly_a_stage),
-    monthly_b_stage:  stageWithEnoughHistory(snap.monthly_b_stage, activeDays, REQUIRED_ACTIVE_DAYS.monthly_b_stage),
+    daily_a_stage:    stageWithEnoughHistory(snap.daily_a_stage, activePeriods.daily, REQUIRED_ACTIVE_PERIODS.daily_a_stage),
+    daily_b_stage:    stageWithEnoughHistory(snap.daily_b_stage, activePeriods.daily, REQUIRED_ACTIVE_PERIODS.daily_b_stage),
+    weekly_a_stage:   stageWithEnoughHistory(snap.weekly_a_stage, activePeriods.weekly, REQUIRED_ACTIVE_PERIODS.weekly_a_stage),
+    weekly_b_stage:   stageWithEnoughHistory(snap.weekly_b_stage, activePeriods.weekly, REQUIRED_ACTIVE_PERIODS.weekly_b_stage),
+    monthly_a_stage:  stageWithEnoughHistory(snap.monthly_a_stage, activePeriods.monthly, REQUIRED_ACTIVE_PERIODS.monthly_a_stage),
+    monthly_b_stage:  stageWithEnoughHistory(snap.monthly_b_stage, activePeriods.monthly, REQUIRED_ACTIVE_PERIODS.monthly_b_stage),
     close,
     ma_5:             snap.ma_5,
     ma_25:            snap.ma_25,
@@ -262,6 +240,8 @@ export async function GET(
       ? priceDates.filter((row) => row.date >= activeStartDate)
       : priceDates
     const activeDayByDate = new Map(activePriceDates.map((row, index) => [row.date, index + 1]))
+    const activeWeekByDate = activeCalendarPeriodCounts(activePriceDates, 'weekly')
+    const activeMonthByDate = activeCalendarPeriodCounts(activePriceDates, 'monthly')
     const snapshots = activeStartDate
       ? all.filter((snap) => snap.date >= activeStartDate)
       : all
@@ -272,11 +252,15 @@ export async function GET(
 
     const selectedSnapshots = hasDateRange && startDate && endDate
       ? snapshots.filter((snap) => snap.date >= startDate && snap.date <= endDate).slice(-count)
-      : sampleSnapshots(snapshots, granularity, count)
+      : sampleCalendarPeriodEnds(snapshots, granularity, count)
 
     const entries = selectedSnapshots.map((snap) => {
-      const activeDays = activeDayByDate.get(snap.date) ?? null
-      return toStageHistoryEntry(snap, activeDays, closeByDate.get(snap.date) ?? null)
+      const activePeriods = {
+        daily: activeDayByDate.get(snap.date) ?? null,
+        weekly: activeWeekByDate.get(snap.date) ?? null,
+        monthly: activeMonthByDate.get(snap.date) ?? null,
+      }
+      return toStageHistoryEntry(snap, activePeriods, closeByDate.get(snap.date) ?? null)
     })
 
     return NextResponse.json({

@@ -109,9 +109,9 @@ export function resampleOhlcv(rows: OHLCV[], spec: TimeframeSpec): OHLCV[] {
   let current: OHLCV | null = null
   for (const row of sorted) {
     const rawKey = spec.timeframe === 'week'
-      ? weekBucket(row.date)
+      ? calendarWeekBucket(row.date)
       : spec.timeframe === 'month'
-        ? monthBucket(row.date)
+        ? calendarMonthBucket(row.date)
         : yearBucket(row.date)
     // Fixed epoch buckets keep 2x/3x candles identical regardless of the requested history window.
     const key = Math.floor(rawKey / multiplier)
@@ -192,13 +192,13 @@ function mergeCandle(current: OHLCV | null, row: OHLCV): OHLCV {
   }
 }
 
-function weekBucket(isoDate: string): number {
+export function calendarWeekBucket(isoDate: string): number {
   const monday = mondayUtc(isoDate)
   const epochMonday = Date.UTC(1970, 0, 5)
   return Math.floor((monday.getTime() - epochMonday) / (7 * 86_400_000))
 }
 
-function monthBucket(isoDate: string): number {
+export function calendarMonthBucket(isoDate: string): number {
   const year = Number(isoDate.slice(0, 4))
   const month = Number(isoDate.slice(5, 7))
   return (year - 1970) * 12 + (month - 1)

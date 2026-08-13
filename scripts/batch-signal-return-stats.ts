@@ -3,7 +3,10 @@
 // シグナル発生後 1週/2週/3週の上昇割合・下落割合・中央値騰落率を作る。
 // 画面表示はこの軽量テーブルを優先し、重いJOINをリクエスト時に走らせない。
 
-import { execAll, execBatch, execRun } from '@/lib/db/client'
+import { spawn } from 'node:child_process'
+import fs from 'node:fs'
+import path from 'node:path'
+import { execAll, execBatch, execRun, localDbPath } from '@/lib/db/client'
 
 type TargetDateRow = { date: string }
 type ReturnRow = {
@@ -46,7 +49,26 @@ const HORIZONS = parseHorizons()
 const RECENT_DAYS = envInt('BACKTEST_RECENT_DAYS', 0, 0)
 const DATE_CHUNK = envInt('SIGNAL_RETURN_DATE_CHUNK', 10, 1)
 const MIN_N = envInt('SIGNAL_RETURN_MIN_N', 20, 1)
+const NATIVE_PARALLEL = envInt('SIGNAL_RETURN_NATIVE_PARALLEL', 0, 0)
+// Counts/rates/means always use every row. Full-history median sorting is the
+// exceptional expensive part, so use a stable rowid sample unless overridden.
+const MEDIAN_SAMPLE_MOD = envInt(
+  'SIGNAL_RETURN_MEDIAN_SAMPLE_MOD',
+  RECENT_DAYS === 0 ? 10 : 1,
+  1,
+)
 const prevDateByDate = new Map<string, string | null>()
+
+type NativeReturnStatRow = {
+  signal_code: string
+  horizon_days: number
+  count: number
+  up_rate: number | null
+  down_rate: number | null
+  median_return_pct: number | null
+  median_sample_count: number
+  avg_return_pct: number | null
+}
 
 function keyFor(signalCode: string, horizonDays: number): string {
   return `${signalCode}\t${horizonDays}`
@@ -201,8 +223,142 @@ async function insertRows(accumulators: Map<string, Accumulator>): Promise<numbe
   return rows.length
 }
 
+function nativeReturnAggregateSql(): string {
+  const horizonList = HORIZONS.join(', ')
+  const recentDateFilter = RECENT_DAYS > 0 ? `WHERE recent_rank <= ${RECENT_DAYS}` : ''
+  const medianValue = MEDIAN_SAMPLE_MOD === 1
+    ? 'fr.return_pct'
+    : `CASE WHEN (ss.sample_key % ${MEDIAN_SAMPLE_MOD}) = 0 THEN fr.return_pct END`
+  return `
+    PRAGMA temp_store=FILE;
+    PRAGMA cache_size=-32768;
+    WITH market_dates AS MATERIALIZED (
+      SELECT date, prev_date
+      FROM (
+        SELECT
+          date,
+          LAG(date) OVER (ORDER BY date) AS prev_date,
+          ROW_NUMBER() OVER (ORDER BY date DESC) AS recent_rank
+        FROM (SELECT date FROM daily_snapshots GROUP BY date)
+      )
+      ${recentDateFilter}
+    ),
+    ordered_signals AS (
+      SELECT
+        ticker,
+        date,
+        signal_code,
+        rowid AS sample_key,
+        LAG(date) OVER (
+          PARTITION BY ticker, signal_code
+          ORDER BY date, rowid
+        ) AS previous_signal_date
+      FROM technical_signals INDEXED BY tech_signal_ticker_code_date_idx
+    )
+    SELECT
+      ss.signal_code,
+      fr.horizon_days,
+      COUNT(*) AS count,
+      AVG(CASE WHEN fr.return_pct > 0 THEN 1.0 ELSE 0.0 END) AS up_rate,
+      AVG(CASE WHEN fr.return_pct < 0 THEN 1.0 ELSE 0.0 END) AS down_rate,
+      COALESCE(median(${medianValue}), AVG(fr.return_pct)) AS median_return_pct,
+      COUNT(${medianValue}) AS median_sample_count,
+      AVG(fr.return_pct) AS avg_return_pct
+    FROM ordered_signals ss
+    CROSS JOIN market_dates md
+    INNER JOIN forward_returns fr INDEXED BY sqlite_autoindex_forward_returns_1
+     ON fr.ticker = ss.ticker
+     AND fr.date = ss.date
+     AND fr.horizon_days IN (${horizonList})
+    WHERE md.date = ss.date
+      AND (ss.previous_signal_date IS NULL OR ss.previous_signal_date <> ss.date)
+      AND (ss.previous_signal_date IS NULL OR ss.previous_signal_date <> md.prev_date)
+      AND fr.return_pct IS NOT NULL
+    GROUP BY ss.signal_code, fr.horizon_days
+    HAVING COUNT(*) >= ${MIN_N}
+    ORDER BY ss.signal_code;
+  `
+}
+
+async function aggregateNative(tempDir: string): Promise<NativeReturnStatRow[]> {
+  const started = Date.now()
+  const output = await new Promise<string>((resolve, reject) => {
+    const child = spawn(
+      '/usr/bin/sqlite3',
+      ['-readonly', '-json', '-cmd', '.timeout 60000', localDbPath, nativeReturnAggregateSql()],
+      {
+        env: { ...process.env, SQLITE_TMPDIR: tempDir },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    )
+    let stdout = ''
+    let stderr = ''
+    child.stdout.setEncoding('utf8')
+    child.stderr.setEncoding('utf8')
+    child.stdout.on('data', (chunk: string) => { stdout += chunk })
+    child.stderr.on('data', (chunk: string) => { stderr += chunk })
+    child.on('error', reject)
+    child.on('close', (code, signal) => {
+      if (code === 0) resolve(stdout)
+      else reject(new Error(
+        `sqlite3 signal-return aggregate failed: code=${code}, signal=${signal ?? 'none'}${stderr ? `: ${stderr.trim()}` : ''}`,
+      ))
+    })
+  })
+  const parsed = output.trim() ? JSON.parse(output) as NativeReturnStatRow[] : []
+  console.log(
+    `signal_return_stats native horizons=${HORIZONS.join(',')}: rows=${parsed.length}, `
+    + `median_sample=1/${MEDIAN_SAMPLE_MOD}, `
+    + `elapsed=${((Date.now() - started) / 60000).toFixed(1)}m`,
+  )
+  return parsed
+}
+
+async function insertNativeRows(rows: NativeReturnStatRow[]): Promise<void> {
+  for (let i = 0; i < rows.length; i += INSERT_CHUNK) {
+    await execBatch(rows.slice(i, i + INSERT_CHUNK).map((row) => ({
+      sql: `
+        INSERT OR REPLACE INTO signal_return_stats
+          (signal_code, horizon_days, count, up_rate, down_rate, median_return_pct, avg_return_pct, computed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, unixepoch())
+      `,
+      args: [
+        row.signal_code,
+        row.horizon_days,
+        row.count,
+        row.up_rate,
+        row.down_rate,
+        row.median_return_pct,
+        row.avg_return_pct,
+      ],
+    })))
+  }
+}
+
+async function aggregateNativeParallel(): Promise<void> {
+  if (localDbPath === ':memory:') throw new Error('Native signal-return aggregation requires a file-backed SQLite DB')
+  const tempDir = process.env.SIGNAL_RETURN_TMPDIR?.trim()
+    || path.join(path.dirname(localDbPath), '.signal-return-stats-tmp')
+  fs.mkdirSync(tempDir, { recursive: true })
+  console.log(
+    `signal_return_stats: native single-pass aggregate horizons=${HORIZONS.join(',')}, temp=${tempDir}`,
+  )
+  const rows = await aggregateNative(tempDir)
+
+  await execRun(
+    `DELETE FROM signal_return_stats WHERE horizon_days IN (${HORIZONS.map(() => '?').join(', ')})`,
+    HORIZONS,
+  )
+  await insertNativeRows(rows)
+  console.log(`signal_return_stats complete: native single-pass aggregate (${rows.length} rows)`)
+}
+
 async function main() {
-  console.log(`signal_return_stats build: horizons=${HORIZONS.join(',')}, min_n=${MIN_N}, recent_days=${RECENT_DAYS || 'all'}, date_chunk=${DATE_CHUNK}`)
+  console.log(
+    `signal_return_stats build: horizons=${HORIZONS.join(',')}, min_n=${MIN_N}, `
+    + `recent_days=${RECENT_DAYS || 'all'}, date_chunk=${DATE_CHUNK}, `
+    + `median_sample=1/${MEDIAN_SAMPLE_MOD}`,
+  )
   await execRun(`
     CREATE TABLE IF NOT EXISTS signal_return_stats (
       signal_code TEXT NOT NULL,
@@ -217,6 +373,10 @@ async function main() {
     )
   `)
   await execRun(`CREATE INDEX IF NOT EXISTS signal_return_stats_code_idx ON signal_return_stats(signal_code, horizon_days, count)`)
+  if (NATIVE_PARALLEL > 0) {
+    await aggregateNativeParallel()
+    return
+  }
   await execRun(
     `DELETE FROM signal_return_stats WHERE horizon_days IN (${HORIZONS.map(() => '?').join(', ')})`,
     HORIZONS,

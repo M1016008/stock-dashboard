@@ -13,7 +13,7 @@ import path from 'node:path'
 import { createClient } from '@libsql/client'
 import { waitForMemoryHeadroom, withMemoryGuardEnv } from '@/lib/system/memory-guard'
 
-const DEFAULT_US_ANALYTICS_DB = '/Volumes/OWC Express 1M2 80G/stockboard-data/us/stockboard-us.db'
+const DEFAULT_US_ANALYTICS_DB = '/Volumes/こうし/stockboard-data/us/stockboard-us.db'
 type Mode = 'full' | 'raw' | 'normalize'
 
 const TICKER_CHUNK = Math.max(1, Number(process.env.US_PMS_TICKER_CHUNK ?? 250))

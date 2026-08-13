@@ -55,7 +55,7 @@ const SYSTEMS: { key: StageKey; label: string }[] = [
 
 const GRANULARITIES: { key: Granularity; label: string; subtitle: string }[] = [
   { key: 'daily', label: '日毎', subtitle: '各営業日時点の3本MA配列' },
-  { key: 'weekly', label: '週毎', subtitle: '各週末相当の3本MA配列' },
+  { key: 'weekly', label: '週毎', subtitle: '各暦週の最終営業日時点の3本MA配列' },
   { key: 'monthly', label: '月毎', subtitle: '各月末営業日時点の3本MA配列' },
 ]
 

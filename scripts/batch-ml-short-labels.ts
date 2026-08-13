@@ -55,7 +55,7 @@ async function syncLabelsForRange(startDate: string | null, endDate: string | nu
 
   await execRun(
     `
-    INSERT OR REPLACE INTO ml_short_labels
+    INSERT INTO ml_short_labels
       (ticker, date, horizon_days, return_pct, max_return_pct, min_return_pct,
        up_label, down_label, wait_label, reward_long, reward_short, reward_wait,
        label_json, computed_at)
@@ -130,6 +130,19 @@ async function syncLabelsForRange(startDate: string | null, endDate: string | nu
       ) AS label_json,
       unixepoch()
     FROM base
+    WHERE 1 = 1
+    ON CONFLICT(ticker, date, horizon_days) DO UPDATE SET
+      return_pct = excluded.return_pct,
+      max_return_pct = excluded.max_return_pct,
+      min_return_pct = excluded.min_return_pct,
+      up_label = excluded.up_label,
+      down_label = excluded.down_label,
+      wait_label = excluded.wait_label,
+      reward_long = excluded.reward_long,
+      reward_short = excluded.reward_short,
+      reward_wait = excluded.reward_wait,
+      label_json = excluded.label_json,
+      computed_at = excluded.computed_at
     `,
     args,
   )

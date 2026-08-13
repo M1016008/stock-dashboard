@@ -18,6 +18,26 @@ type ContextProfile = Record<string, number | null | undefined>
 type MaybeUpperProfile = Partial<PhysicsUpperTimeframeProfile> & Record<string, any>
 type UpperTimeframeKey = 'weekly' | 'monthly'
 
+type PreparedOrder = { value: string; parts: string[] }
+type PreparedUpper = { order: PreparedOrder; values: Array<number | null> }
+
+export type PreparedPhysicsSimilarityProfile = {
+  source: MaybeProfile
+  stage: string | null
+  order: PreparedOrder
+  velocity: Array<number | null>
+  acceleration: Array<number | null>
+  distance: Array<number | null>
+  distanceFlow: Array<number | null>
+  pricePosition: Array<number | null>
+  priceFlags: Array<boolean | null>
+  weekly: PreparedUpper | null
+  monthly: PreparedUpper | null
+  alignment: Array<number | null> | null
+  regimes: unknown[]
+  context: Array<number | null>
+}
+
 function finite(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value)
 }
@@ -263,13 +283,223 @@ function weightedScore(components: PhysicsSimilarityComponent[]): number {
   return Math.min(0.999, Math.max(0, components.reduce((sum, item) => sum + item.score * item.weight, 0) / totalWeight))
 }
 
+function bounded(value: number): number {
+  return Math.max(0, Math.min(1, value))
+}
+
+function preparedOrder(value: unknown): PreparedOrder {
+  const normalized = typeof value === 'string' ? value.replace(/\s/g, '') : ''
+  return { value: normalized, parts: normalized ? normalized.split('>') : [] }
+}
+
+function numericValues(values: unknown[]): Array<number | null> {
+  return values.map(n)
+}
+
+function booleanValues(values: unknown[]): Array<boolean | null> {
+  return values.map((value) => typeof value === 'boolean' ? value : null)
+}
+
+function preparedClosenessMean(
+  a: Array<number | null>,
+  b: Array<number | null>,
+  scales: number[],
+): number {
+  let total = 0
+  const length = Math.min(a.length, b.length, scales.length)
+  for (let i = 0; i < length; i += 1) {
+    const av = a[i]
+    const bv = b[i]
+    total += av == null || bv == null
+      ? 0.5
+      : Math.max(0, Math.min(1, 1 - Math.abs(av - bv) / scales[i]))
+  }
+  return length > 0 ? total / length : 0
+}
+
+function preparedBooleanMean(a: Array<boolean | null>, b: Array<boolean | null>): number {
+  let total = 0
+  const length = Math.min(a.length, b.length)
+  for (let i = 0; i < length; i += 1) {
+    total += a[i] == null || b[i] == null ? 0.5 : a[i] === b[i] ? 1 : 0
+  }
+  return length > 0 ? total / length : 0
+}
+
+function preparedOrderScore(a: PreparedOrder, b: PreparedOrder, upper = false): number {
+  if (!a.value || !b.value || (upper && (a.value === '-' || b.value === '-'))) return 0.5
+  if (a.value === b.value) return 1
+  const compareLength = upper
+    ? Math.min(3, a.parts.length, b.parts.length)
+    : Math.min(3, a.parts.length)
+  let pairSame = 0
+  for (let i = 0; i < compareLength; i += 1) {
+    if (a.parts[i] === b.parts[i]) pairSame += 1
+  }
+  const pairRate = upper
+    ? (compareLength > 0 ? pairSame / compareLength : 0)
+    : pairSame / 3
+  return bounded(
+    (a.parts[0] === b.parts[0] ? 0.35 : 0)
+    + (a.parts.at(-1) === b.parts.at(-1) ? 0.2 : 0)
+    + pairRate * 0.45,
+  )
+}
+
+function prepareUpper(profile: MaybeUpperProfile | null, key: UpperTimeframeKey): PreparedUpper | null {
+  if (!profile) return null
+  const values = key === 'weekly'
+    ? [
+        profile.velocities?.ma5?.d5,
+        profile.velocities?.ma13?.d5,
+        profile.velocities?.ma25?.d10,
+        profile.accelerations?.ma5?.d5,
+        profile.gaps?.ma5To13Pct,
+        profile.gaps?.ma13To25Pct,
+        profile.gaps?.ma25To50Pct,
+        profile.gapVelocity?.ma5To13?.d5,
+        profile.bundleWidthPct,
+        profile.pricePosition?.ma5,
+        profile.pricePosition?.ma13,
+      ]
+    : [
+        profile.velocities?.ma3?.d21,
+        profile.velocities?.ma5?.d21,
+        profile.velocities?.ma10?.d21,
+        profile.accelerations?.ma3?.d21,
+        profile.gaps?.ma3To5Pct,
+        profile.gaps?.ma5To10Pct,
+        profile.gaps?.ma10To20Pct,
+        profile.gapVelocity?.ma3To5?.d21,
+        profile.bundleWidthPct,
+        profile.pricePosition?.ma3,
+        profile.pricePosition?.ma5,
+      ]
+  return {
+    order: preparedOrder(profile.maOrder),
+    values: numericValues(values),
+  }
+}
+
+export function preparePhysicsSimilarityProfile(
+  profile: MaybeProfile,
+  fallbackStage?: string | null,
+): PreparedPhysicsSimilarityProfile {
+  const context = contextOf(profile)
+  const alignment = profile.multiTimeframe?.alignment
+  return {
+    source: profile,
+    stage: stageCode(profile, fallbackStage),
+    order: preparedOrder(profile.maOrder),
+    velocity: numericValues([
+      profile.velocities?.sma5?.d1, profile.velocities?.sma5?.d3,
+      profile.velocities?.sma5?.d5, profile.velocities?.sma5?.d10,
+      profile.velocities?.sma25?.d3, profile.velocities?.sma25?.d5,
+      profile.velocities?.sma75?.d10, profile.velocities?.sma200?.d10,
+    ]),
+    acceleration: numericValues([
+      profile.accelerations?.sma5?.d5, profile.accelerations?.sma5?.d10,
+      profile.accelerations?.sma25?.d5, profile.accelerations?.sma25?.d10,
+      profile.accelerations?.sma75?.d5,
+    ]),
+    distance: numericValues([
+      profile.gaps?.sma5To25Pct, profile.gaps?.sma25To75Pct,
+      profile.gaps?.sma75To200Pct, profile.bundleWidthPct,
+    ]),
+    distanceFlow: numericValues([
+      profile.gapVelocity?.sma5To25D5, profile.gapVelocity?.sma25To75D5,
+      profile.gapVelocity?.sma75To200D5, profile.gapAcceleration?.sma5To25D5,
+      profile.gapAcceleration?.sma25To75D5, profile.bundleWidthVelocity5,
+    ]),
+    pricePosition: numericValues([
+      profile.pricePosition?.sma5, profile.pricePosition?.sma25,
+      profile.pricePosition?.sma75, profile.pricePosition?.sma200,
+      profile.distanceToRecentHighPct, profile.distanceToRecentLowPct,
+    ]),
+    priceFlags: booleanValues([profile.brokeRecentHigh, profile.brokeRecentLow]),
+    weekly: prepareUpper(upperProfile(profile, 'weekly'), 'weekly'),
+    monthly: prepareUpper(upperProfile(profile, 'monthly'), 'monthly'),
+    alignment: alignment ? numericValues([
+      alignment.dailyWeeklyBullish, alignment.dailyWeeklyBearish,
+      alignment.weeklyMonthlyBullish, alignment.weeklyMonthlyBearish,
+      alignment.upperSupport, alignment.upperResistance,
+    ]) : null,
+    regimes: [profile.regimes?.trend, profile.regimes?.spread, profile.regimes?.turn],
+    context: numericValues([
+      context.marketAboveSma25Rate, context.marketReturn5,
+      context.sector17Return5, context.sector33Return5,
+      context.sector17RankPct, context.sector33RankPct,
+    ]),
+  }
+}
+
+function preparedUpperScore(
+  a: PreparedUpper | null,
+  b: PreparedUpper | null,
+  key: UpperTimeframeKey,
+): number {
+  if (!a || !b) return 0.5
+  const scales = key === 'weekly'
+    ? [10, 8, 8, 7, 18, 18, 22, 8, 35, 18, 22]
+    : [12, 10, 8, 8, 18, 18, 22, 8, 40, 22, 28]
+  return (preparedOrderScore(a.order, b.order, true) + preparedClosenessMean(a.values, b.values, scales) * 11) / 12
+}
+
+export function preparedPhysicsSimilarityScore(
+  a: PreparedPhysicsSimilarityProfile,
+  b: PreparedPhysicsSimilarityProfile,
+): number {
+  let regimeScore = 0
+  for (let i = 0; i < 3; i += 1) regimeScore += a.regimes[i] === b.regimes[i] ? 1 : 0
+  const alignmentScore = !a.alignment || !b.alignment
+    ? 0.5
+    : preparedClosenessMean(a.alignment, b.alignment, [1, 1, 1, 1, 1, 1])
+  const priceScore = (
+    preparedClosenessMean(a.pricePosition, b.pricePosition, [10, 14, 18, 25, 25, 25]) * 6
+    + preparedBooleanMean(a.priceFlags, b.priceFlags) * 2
+  ) / 8
+  const score = (
+    bounded(stageSimilarity(a.stage, b.stage)) * 0.11
+    + preparedOrderScore(a.order, b.order) * 0.06
+    + preparedClosenessMean(a.velocity, b.velocity, [6, 8, 10, 14, 5, 7, 8, 6]) * 0.14
+    + preparedClosenessMean(a.acceleration, b.acceleration, [8, 10, 5, 7, 4]) * 0.11
+    + preparedClosenessMean(a.distance, b.distance, [10, 10, 15, 18]) * 0.1
+    + preparedClosenessMean(a.distanceFlow, b.distanceFlow, [6, 6, 6, 5, 5, 8]) * 0.08
+    + priceScore * 0.06
+    + preparedUpperScore(a.weekly, b.weekly, 'weekly') * 0.12
+    + preparedUpperScore(a.monthly, b.monthly, 'monthly') * 0.1
+    + alignmentScore * 0.06
+    + (regimeScore / 3) * 0.03
+    + preparedClosenessMean(a.context, b.context, [35, 8, 10, 10, 50, 50]) * 0.03
+  )
+  return Math.min(0.999, Math.max(0, score))
+}
+
 export function physicsSimilarityScore(
   base: MaybeProfile,
   similar: MaybeProfile,
   fallbackStageBase?: string | null,
   fallbackStageSimilar?: string | null,
 ): number {
-  return weightedScore(physicsSimilarityComponents(base, similar, fallbackStageBase, fallbackStageSimilar))
+  const baseStage = stageCode(base, fallbackStageBase)
+  const similarStage = stageCode(similar, fallbackStageSimilar)
+  // Ranking evaluates every pair. Keep this numerically identical to the
+  // component path without allocating twelve objects for each comparison.
+  const score = (
+    bounded(stageSimilarity(baseStage, similarStage)) * 0.11
+    + bounded(maOrderSimilarity(base, similar)) * 0.06
+    + bounded(profileVelocityScore(base, similar)) * 0.14
+    + bounded(profileAccelerationScore(base, similar)) * 0.11
+    + bounded(profileDistanceScore(base, similar)) * 0.1
+    + bounded(profileDistanceFlowScore(base, similar)) * 0.08
+    + bounded(pricePositionScore(base, similar)) * 0.06
+    + bounded(upperTimeframeScore(base, similar, 'weekly')) * 0.12
+    + bounded(upperTimeframeScore(base, similar, 'monthly')) * 0.1
+    + bounded(upperAlignmentScore(base, similar)) * 0.06
+    + bounded(regimeSimilarity(base, similar)) * 0.03
+    + bounded(contextSimilarity(base, similar)) * 0.03
+  )
+  return Math.min(0.999, Math.max(0, score))
 }
 
 export function physicsSimilarity(

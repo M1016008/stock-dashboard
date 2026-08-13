@@ -14,7 +14,7 @@ import { exactForwardExtremaRecomputeBars } from '@/lib/backtest/forward-extrema
 import { ML_PRIMARY_HORIZON_LIST } from '@/lib/backtest/ml-horizons'
 import { waitForMemoryHeadroom, withMemoryGuardEnv } from '@/lib/system/memory-guard'
 
-const DEFAULT_US_ANALYTICS_DB = '/Volumes/OWC Express 1M2 80G/stockboard-data/us/stockboard-us.db'
+const DEFAULT_US_ANALYTICS_DB = '/Volumes/こうし/stockboard-data/us/stockboard-us.db'
 const US_ML_LOCK_PATH = path.join(
   os.homedir(),
   'Library',
@@ -385,10 +385,17 @@ function latestEligibleMissingPhysicsFeatureCount(env: NodeJS.ProcessEnv, minHis
   )
 }
 
-function earliestShortLabelDate(env: NodeJS.ProcessEnv): string | null {
+function earliestPhysicsTrainingDate(env: NodeJS.ProcessEnv): string | null {
   const dbPath = env.STOCKBOARD_DB_PATH
   if (!dbPath) return null
-  return sqliteText(dbPath, 'SELECT MIN(date) FROM ml_short_labels') || null
+  const labelDate = sqliteText(dbPath, 'SELECT MIN(date) FROM ml_short_labels')
+  const featureSet = sqlQuote(env.ML_PHYSICS_FEATURE_SET?.trim() || 'ma_physics_v4')
+  const featureDate = sqliteText(
+    dbPath,
+    `SELECT MIN(date) FROM ml_feature_vectors_v2 WHERE feature_set = '${featureSet}'`,
+  )
+  const dates = [labelDate, featureDate].filter((date) => /^\d{4}-\d{2}-\d{2}$/.test(date))
+  return dates.sort().at(-1) ?? null
 }
 
 async function runNpm(script: string, env: NodeJS.ProcessEnv, overrides: EnvOverrides = {}): Promise<void> {
@@ -420,6 +427,11 @@ async function runFullHistory(
   const horizons = ML_PRIMARY_HORIZON_LIST
   const baseline = options.baseline === true
   const weeklyRecentDays = baseline ? '0' : env.US_ML_WEEKLY_RECENT_DAYS ?? '420'
+  const featureRecentDays = env.US_ML_FEATURE_RECENT_DAYS ?? weeklyRecentDays
+  const physicsFeatureRecentDays = env.US_ML_PHYSICS_RECENT_DAYS ?? weeklyRecentDays
+  const analysisRecentDays = baseline
+    ? '0'
+    : env.US_BACKTEST_RECENT_DAYS ?? weeklyRecentDays
   const exactExtremaRecomputeBars = String(
     exactForwardExtremaRecomputeBars(horizons.split(',').map(Number)),
   )
@@ -427,7 +439,8 @@ async function runFullHistory(
 
   if (!options.skipPms) {
     await runNpm('batch:physical-momentum:us-full', env, {
-      US_PMS_RECENT_DAYS: baseline ? '0' : env.US_PMS_WEEKLY_RECENT_DAYS ?? weeklyRecentDays,
+      US_PMS_RECENT_DAYS:
+        env.US_PMS_RECENT_DAYS ?? (baseline ? '0' : env.US_PMS_WEEKLY_RECENT_DAYS ?? weeklyRecentDays),
       US_PMS_TICKER_CHUNK: env.US_PMS_WEEKLY_TICKER_CHUNK ?? '250',
       US_PMS_DATE_CHUNK: env.US_PMS_DATE_CHUNK ?? env.US_PMS_WEEKLY_DATE_CHUNK ?? '250',
     })
@@ -443,14 +456,18 @@ async function runFullHistory(
   if (env.US_ML_SKIP_FORWARD_EXTREMA === '1') {
     console.log('US ML full-history: skipping forward_extrema by US_ML_SKIP_FORWARD_EXTREMA=1')
   } else {
-    await runNpm(baseline ? 'batch:forward-extrema:ml' : 'batch:forward-extrema:ml-recent', env, {
+    const requestedExtremaRecalcDays = env.US_ML_WEEKLY_EXTREMA_RECALC_DAYS?.trim()
+    const extremaScript = baseline && !requestedExtremaRecalcDays
+      ? 'batch:forward-extrema:ml'
+      : 'batch:forward-extrema:ml-recent'
+    await runNpm(extremaScript, env, {
       ML_WEEKLY_EXTREMA_RECENT_DAYS:
-        env.US_ML_WEEKLY_EXTREMA_RECALC_DAYS ?? exactExtremaRecomputeBars,
+        requestedExtremaRecalcDays ?? exactExtremaRecomputeBars,
       ML_FULL_START_DATE: startDate,
       FORWARD_EXTREMA_START_DATE: startDate,
       FORWARD_EXTREMA_HORIZONS: horizons,
       FORWARD_EXTREMA_WRITE_MODEL_LABELS: '0',
-      FORWARD_EXTREMA_ACTIVE_ONLY: baseline ? '0' : '1',
+      FORWARD_EXTREMA_ACTIVE_ONLY: baseline && !requestedExtremaRecalcDays ? '0' : '1',
       FORWARD_EXTREMA_PROGRESS_EVERY: env.FORWARD_EXTREMA_PROGRESS_EVERY ?? '25',
       FORWARD_EXTREMA_RESUME: env.FORWARD_EXTREMA_RESUME ?? '1',
     })
@@ -459,11 +476,11 @@ async function runFullHistory(
     console.log('US ML full-history: skipping ml-features by US_ML_SKIP_ML_FEATURES=1')
   } else {
     await runFeatureJobInTickerChunks('batch:ml-features', env, {
-      ML_RECENT_DAYS: env.US_ML_FEATURE_RECENT_DAYS ?? weeklyRecentDays,
+      ML_RECENT_DAYS: featureRecentDays,
       ML_MIN_HISTORY_DAYS: env.US_ML_FEATURE_MIN_HISTORY_DAYS ?? '1',
       ML_START_DATE: startDate,
       ML_HORIZONS: horizons,
-      ML_FEATURE_ACTIVE_ONLY: baseline ? '0' : '1',
+      ML_FEATURE_ACTIVE_ONLY: baseline && featureRecentDays === '0' ? '0' : '1',
     }, {
       chunkSizeEnv: 'US_ML_FEATURE_TICKER_CHUNK_SIZE',
       defaultChunkSize: 200,
@@ -471,7 +488,7 @@ async function runFullHistory(
       endEnv: 'US_ML_FEATURE_TICKER_END',
       targetStartEnv: 'ML_TICKER_START',
       targetEndEnv: 'ML_TICKER_END',
-      includeInactive: baseline,
+      includeInactive: baseline && featureRecentDays === '0',
     })
   }
   if (env.US_ML_SKIP_ML_LABELS === '1') {
@@ -508,10 +525,10 @@ async function runFullHistory(
     console.log('US ML full-history: skipping ml-physics-features by US_ML_SKIP_PHYSICS_FEATURES=1')
   } else {
     await runFeatureJobInTickerChunks('batch:ml-physics-features', env, {
-      ML_PHYSICS_RECENT_DAYS: env.US_ML_PHYSICS_RECENT_DAYS ?? weeklyRecentDays,
+      ML_PHYSICS_RECENT_DAYS: physicsFeatureRecentDays,
       ML_PHYSICS_MIN_HISTORY_DAYS: env.US_ML_PHYSICS_MIN_HISTORY_DAYS ?? '1',
       ML_PHYSICS_START_DATE: startDate,
-      ML_PHYSICS_ACTIVE_ONLY: baseline ? '0' : '1',
+      ML_PHYSICS_ACTIVE_ONLY: baseline && physicsFeatureRecentDays === '0' ? '0' : '1',
     }, {
       chunkSizeEnv: 'US_ML_PHYSICS_TICKER_CHUNK_SIZE',
       defaultChunkSize: 200,
@@ -519,7 +536,7 @@ async function runFullHistory(
       endEnv: 'US_ML_PHYSICS_TICKER_END',
       targetStartEnv: 'ML_PHYSICS_TICKER_START',
       targetEndEnv: 'ML_PHYSICS_TICKER_END',
-      includeInactive: baseline,
+      includeInactive: baseline && physicsFeatureRecentDays === '0',
     })
   }
   if (env.US_ML_SKIP_SHORT_LABELS === '1') {
@@ -539,15 +556,18 @@ async function runFullHistory(
     console.log('US ML full-history: skipping ml-physics-train by US_ML_SKIP_PHYSICS_TRAIN=1')
   } else {
     const physicsTrainStartDate = env.US_ML_PHYSICS_TRAIN_START_DATE
-      ?? earliestShortLabelDate(env)
+      ?? (baseline ? earliestPhysicsTrainingDate(env) : physicsEvalWindow.trainStartDate)
       ?? startDate
     await runNpm('batch:ml-physics-train', env, {
       ML_PHYSICS_HORIZONS: horizons,
       ML_PHYSICS_TRAIN_START_DATE: physicsTrainStartDate,
       ML_PHYSICS_TRAIN_SAMPLE_MODE:
-        env.US_ML_PHYSICS_TRAIN_SAMPLE_MODE ?? (baseline ? 'all_paged' : 'yearly'),
+        env.US_ML_PHYSICS_TRAIN_SAMPLE_MODE ?? 'yearly',
       ML_PHYSICS_TRAIN_LIMIT: env.US_ML_PHYSICS_TRAIN_LIMIT ?? (baseline ? '0' : '240000'),
       ML_PHYSICS_TRAIN_PER_YEAR_LIMIT: env.US_ML_PHYSICS_TRAIN_PER_YEAR_LIMIT ?? '5000',
+      ML_PHYSICS_TRAIN_EPOCHS: env.US_ML_PHYSICS_TRAIN_EPOCHS ?? (baseline ? '8' : '6'),
+      ML_PHYSICS_TRAIN_FAST_YEARLY_MODULO:
+        env.US_ML_PHYSICS_TRAIN_FAST_YEARLY_MODULO ?? (baseline ? '2' : '10'),
     })
   }
   if (env.US_ML_SKIP_PHYSICS_CANDIDATES === '1') {
@@ -599,25 +619,34 @@ async function runFullHistory(
   if (env.US_ML_SKIP_ANALYSIS_FOUNDATION === '1') {
     console.log('US ML full-history: skipping analysis foundation by US_ML_SKIP_ANALYSIS_FOUNDATION=1')
   } else {
-    await runNpm('batch:weekly-ohlcv', env)
+    await runNpm('batch:weekly-ohlcv', env, {
+      BACKTEST_RECENT_DAYS: analysisRecentDays,
+    })
     await runNpm('batch:technical-signals', env, {
-      BACKTEST_RECENT_DAYS: env.US_BACKTEST_RECENT_DAYS ?? '0',
+      BACKTEST_RECENT_DAYS: analysisRecentDays,
     })
     await runNpm('batch:pattern-stats', env, {
       PATTERN_STAT_HORIZONS: env.US_PATTERN_STAT_HORIZONS ?? horizons,
     })
     await runNpm('batch:stage-transitions', env)
     await runNpm('batch:signal-stats', env, {
-      BACKTEST_RECENT_DAYS: env.US_BACKTEST_RECENT_DAYS ?? '0',
+      BACKTEST_RECENT_DAYS: analysisRecentDays,
       SIGNAL_STATS_LIMIT_GROUPS: '0',
       SIGNAL_STATS_DATE_CHUNK: env.US_SIGNAL_STATS_DATE_CHUNK ?? '20',
+      SIGNAL_STATS_NATIVE_PARALLEL: env.US_SIGNAL_STATS_NATIVE_PARALLEL ?? '3',
     })
     await runNpm('batch:signal-return-stats', env, {
-      BACKTEST_RECENT_DAYS: env.US_BACKTEST_RECENT_DAYS ?? '0',
+      BACKTEST_RECENT_DAYS: analysisRecentDays,
       SIGNAL_RETURN_HORIZONS: env.US_SIGNAL_RETURN_HORIZONS ?? horizons,
+      SIGNAL_RETURN_NATIVE_PARALLEL: env.US_SIGNAL_RETURN_NATIVE_PARALLEL ?? '1',
+      SIGNAL_RETURN_MEDIAN_SAMPLE_MOD:
+        env.US_SIGNAL_RETURN_MEDIAN_SAMPLE_MOD ?? (baseline ? '10' : '1'),
+      SIGNAL_RETURN_TMPDIR:
+        env.US_SIGNAL_RETURN_TMPDIR ?? '/tmp/stockboard-us-signal-return',
     })
     await runNpm('batch:serving-backtest:full', env, {
-      SERVING_DATE_LIMIT: '0',
+      SERVING_DATE_LIMIT: env.US_SERVING_DATE_LIMIT ?? '201',
+      SERVING_EVIDENCE_DATE_LIMIT: env.US_SERVING_EVIDENCE_DATE_LIMIT ?? '10',
       SERVING_SUMMARY_DATE_CHUNK: env.US_SERVING_SUMMARY_DATE_CHUNK ?? '40',
     })
     await runNpm('batch:dashboard-cache', env)

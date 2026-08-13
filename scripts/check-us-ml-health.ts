@@ -15,9 +15,10 @@ const stockboardDbLooksUs = stockboardDbPath != null && /stockboard-us\.db$/i.te
 const dbPath = path.resolve(
   process.env.US_ANALYTICS_DB_PATH?.trim()
   || (stockboardDbLooksUs ? stockboardDbPath : undefined)
-  || '/Volumes/OWC Express 1M2 80G/stockboard-data/us/stockboard-us.db',
+  || '/Volumes/こうし/stockboard-data/us/stockboard-us.db',
 )
 const WRITE_HEALTH = process.env.US_ML_HEALTH_WRITE === '1'
+const PROFILE_QUERIES = process.env.US_ML_HEALTH_PROFILE === '1'
 const MIN_HISTORY_DAYS = Math.max(1, Number(process.env.US_ML_HEALTH_MIN_HISTORY_DAYS ?? 220))
 
 type Args = readonly InValue[]
@@ -33,13 +34,30 @@ type HealthRow = {
 
 const client: Client = createClient({ url: `file:${dbPath}` })
 
+function profileQuery(sql: string, startedAt: number): void {
+  if (!PROFILE_QUERIES) return
+  const label = sql.replace(/\s+/g, ' ').trim().slice(0, 120)
+  console.log(`[us-ml-health] ${Date.now() - startedAt}ms ${label}`)
+}
+
 async function get<T = Record<string, unknown>>(sql: string, args: Args = []): Promise<T | undefined> {
+  const startedAt = Date.now()
   const res = await client.execute({ sql, args: args as InValue[] })
+  profileQuery(sql, startedAt)
   return res.rows[0] ? ({ ...res.rows[0] } as unknown as T) : undefined
 }
 
+async function all<T = Record<string, unknown>>(sql: string, args: Args = []): Promise<T[]> {
+  const startedAt = Date.now()
+  const res = await client.execute({ sql, args: args as InValue[] })
+  profileQuery(sql, startedAt)
+  return res.rows.map((row) => ({ ...row } as unknown as T))
+}
+
 async function run(sql: string, args: Args = []): Promise<void> {
+  const startedAt = Date.now()
   await client.execute({ sql, args: args as InValue[] })
+  profileQuery(sql, startedAt)
 }
 
 async function maxDate(table: string, column = 'date', where = '', args: Args = []): Promise<string | null> {
@@ -106,7 +124,12 @@ async function main() {
     actualCount: snapshotLatestCount,
   })
 
-  const pmsDate = await maxDate('physical_momentum_metrics')
+  const pmsDate = await maxDate(
+    'physical_momentum_metrics',
+    'date',
+    'WHERE market = ?',
+    ['US'],
+  )
   const pmsQuality = pmsDate
     ? await get<{
         maxAbsPms: number | null
@@ -189,26 +212,31 @@ async function main() {
         `
           SELECT
             COUNT(*) AS eligibleCount,
-            SUM(
-              CASE WHEN EXISTS (
+            COUNT(f.ticker) AS coveredCount
+          FROM ohlcv_daily current INDEXED BY ohlcv_date_ticker_idx
+          LEFT JOIN us_analytics_copy_state copy ON copy.ticker = current.ticker
+          LEFT JOIN ml_feature_vectors_v2 f INDEXED BY ml_feature_vectors_v2_feature_ticker_date_idx
+            ON f.feature_set = ?
+           AND f.ticker = current.ticker
+           AND f.date = current.date
+          WHERE current.date = ?
+            AND (
+              COALESCE(copy.ohlcv_rows, 0) >= ?
+              OR EXISTS (
                 SELECT 1
-                FROM ml_feature_vectors_v2 f
-                WHERE f.ticker = d.ticker
-                  AND f.date = d.date
-                  AND f.feature_set = ?
-              ) THEN 1 ELSE 0 END
-            ) AS coveredCount
-          FROM daily_snapshots d
-          WHERE d.date = ?
-            AND EXISTS (
-              SELECT 1
-              FROM ohlcv_daily h
-              WHERE h.ticker = d.ticker
-              ORDER BY h.date
-              LIMIT 1 OFFSET ?
+                FROM ohlcv_daily history INDEXED BY sqlite_autoindex_ohlcv_daily_1
+                WHERE history.ticker = current.ticker
+                ORDER BY history.date
+                LIMIT 1 OFFSET ?
+              )
             )
         `,
-        [ML_PHYSICS_FEATURE_SET, latestSnapshotDate, MIN_HISTORY_DAYS - 1],
+        [
+          ML_PHYSICS_FEATURE_SET,
+          latestSnapshotDate,
+          MIN_HISTORY_DAYS,
+          MIN_HISTORY_DAYS - 1,
+        ],
       )
     : undefined
   checks.push({
@@ -220,7 +248,7 @@ async function main() {
     payload: {
       featureSet: ML_PHYSICS_FEATURE_SET,
       strictCoverage: true,
-      denominator: 'latest_snapshot_with_minimum_history',
+      denominator: 'latest_price_with_hybrid_minimum_history_check',
       minimumHistoryDays: MIN_HISTORY_DAYS,
     },
   })
@@ -272,6 +300,36 @@ async function main() {
     payload: { latestEvaluationRunDate: rlPolicyRunDate },
   })
 
+  const physicsStatusRows = await all<{
+    horizonDays: number
+    runDate: string | null
+    endDate: string | null
+    latestCount: number
+  }>(
+    `
+      SELECT
+        horizon_days AS horizonDays,
+        MAX(evaluation_date) AS runDate,
+        MAX(end_date) AS endDate,
+        SUM(CASE WHEN end_date = latest_end_date THEN 1 ELSE 0 END) AS latestCount
+      FROM (
+        SELECT
+          horizon_days,
+          evaluation_date,
+          end_date,
+          MAX(end_date) OVER (PARTITION BY horizon_days) AS latest_end_date
+        FROM ml_physics_status_evaluations
+        WHERE feature_set = ?
+          AND sample_count > 0
+      )
+      GROUP BY horizon_days
+    `,
+    [ML_PHYSICS_FEATURE_SET],
+  )
+  const physicsStatusByHorizon = new Map(
+    physicsStatusRows.map((row) => [Number(row.horizonDays), row]),
+  )
+
   for (const horizon of ML_PRIMARY_HORIZONS) {
     const latestPhysicsStatusLabelDate = await maxDate(
       'ml_short_labels',
@@ -279,30 +337,15 @@ async function main() {
       'WHERE horizon_days = ?',
       [horizon],
     )
-    const runDate = await maxDate(
-      'ml_physics_status_evaluations',
-      'evaluation_date',
-      'WHERE feature_set = ? AND horizon_days = ? AND sample_count > 0',
-      [ML_PHYSICS_FEATURE_SET, horizon],
-    )
-    const endDate = await maxDate(
-      'ml_physics_status_evaluations',
-      'end_date',
-      'WHERE feature_set = ? AND horizon_days = ? AND sample_count > 0',
-      [ML_PHYSICS_FEATURE_SET, horizon],
-    )
+    const status = physicsStatusByHorizon.get(horizon)
+    const runDate = status?.runDate ?? null
+    const endDate = status?.endDate ?? null
     checks.push({
       key: `us_ml_physics_status_evaluations_h${horizon}`,
       expectedDate: latestPhysicsStatusLabelDate,
       actualDate: endDate,
       expectedCount: null,
-      actualCount: await countRows(
-        'ml_physics_status_evaluations',
-        'end_date',
-        endDate,
-        'AND feature_set = ? AND horizon_days = ? AND sample_count > 0',
-        [ML_PHYSICS_FEATURE_SET, horizon],
-      ),
+      actualCount: status ? Number(status.latestCount) : null,
       payload: { featureSet: ML_PHYSICS_FEATURE_SET, horizonDays: horizon, latestEvaluationRunDate: runDate },
     })
   }

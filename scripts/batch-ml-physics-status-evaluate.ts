@@ -149,7 +149,7 @@ const RECENT_DAYS = Number(process.env.ML_PHYSICS_STATUS_RECENT_DAYS ?? 0)
 const START_DATE = process.env.ML_PHYSICS_STATUS_START_DATE?.trim() || null
 const END_DATE = process.env.ML_PHYSICS_STATUS_END_DATE?.trim() || null
 const PAGE_DATES = Math.max(1, Number(process.env.ML_PHYSICS_STATUS_PAGE_DATES ?? 20))
-const STATUS_CACHE_PAGE_DATES = Math.max(1, Number(process.env.ML_PHYSICS_STATUS_CACHE_PAGE_DATES ?? 5))
+const STATUS_CACHE_PAGE_ROWS = Math.max(100, Number(process.env.ML_PHYSICS_STATUS_CACHE_PAGE_ROWS ?? 1000))
 const LIMIT_ROWS = Math.max(0, Number(process.env.ML_PHYSICS_STATUS_LIMIT_ROWS ?? 0))
 const STATUS_CACHE_INSERT_ROWS = Math.max(100, Number(process.env.ML_PHYSICS_STATUS_CACHE_INSERT_ROWS ?? 1000))
 const SKIP_STATUS_CACHE = process.env.ML_PHYSICS_STATUS_SKIP_CACHE === '1'
@@ -350,7 +350,10 @@ async function ensureTables(): Promise<void> {
   await execRun(`CREATE INDEX IF NOT EXISTS ml_physics_status_evaluations_status_idx ON ml_physics_status_evaluations(status_label, horizon_days, evaluation_date)`)
 }
 
-async function loadMissingStatusDateBatch(startDate: string | null, beforeDate: string | null): Promise<string[]> {
+async function loadMissingStatusRows(
+  startDate: string | null,
+  cursor: { ticker: string; date: string } | null,
+): Promise<FeatureStatusRow[]> {
   const where = ['f.feature_set = ?']
   const args: Array<string | number> = [ML_PHYSICS_FEATURE_SET]
   if (startDate) {
@@ -361,9 +364,9 @@ async function loadMissingStatusDateBatch(startDate: string | null, beforeDate: 
     where.push('f.date <= ?')
     args.push(END_DATE)
   }
-  if (beforeDate) {
-    where.push('f.date < ?')
-    args.push(beforeDate)
+  if (cursor) {
+    where.push('(f.ticker > ? OR (f.ticker = ? AND f.date > ?))')
+    args.push(cursor.ticker, cursor.ticker, cursor.date)
   }
   where.push(`
     NOT EXISTS (
@@ -375,40 +378,15 @@ async function loadMissingStatusDateBatch(startDate: string | null, beforeDate: 
     )
   `)
 
-  const rows = await execAll<{ date: string }>(
-    `
-    SELECT DISTINCT f.date
-    FROM ml_feature_vectors_v2 f
-    WHERE ${where.join(' AND ')}
-    ORDER BY f.date DESC
-    LIMIT ?
-    `,
-    [...args, STATUS_CACHE_PAGE_DATES],
-  )
-  return rows.map((row) => row.date)
-}
-
-async function loadMissingStatusRows(dates: string[]): Promise<FeatureStatusRow[]> {
-  if (dates.length === 0) return []
-  const placeholders = dates.map(() => '?').join(', ')
   return execAll<FeatureStatusRow>(
     `
-    SELECT
-      f.ticker,
-      f.date,
-      f.feature_json
-    FROM ml_feature_vectors_v2 f
-    WHERE f.feature_set = ?
-      AND f.date IN (${placeholders})
-      AND NOT EXISTS (
-        SELECT 1
-        FROM ml_physics_feature_statuses s
-        WHERE s.feature_set = f.feature_set
-          AND s.ticker = f.ticker
-          AND s.date = f.date
-      )
+    SELECT f.ticker, f.date, f.feature_json
+    FROM ml_feature_vectors_v2 f INDEXED BY ml_feature_vectors_v2_feature_ticker_date_idx
+    WHERE ${where.join(' AND ')}
+    ORDER BY f.ticker ASC, f.date ASC
+    LIMIT ?
     `,
-    [ML_PHYSICS_FEATURE_SET, ...dates],
+    [...args, STATUS_CACHE_PAGE_ROWS],
   )
 }
 
@@ -433,13 +411,12 @@ async function insertStatusCacheRows(rows: Array<{ ticker: string; date: string;
 }
 
 async function populateStatusCache(startDate: string | null): Promise<void> {
-  let beforeDate: string | null = null
+  let cursor: { ticker: string; date: string } | null = null
   let batches = 0
   let cachedRows = 0
   for (;;) {
-    const dates = await loadMissingStatusDateBatch(startDate, beforeDate)
-    if (dates.length === 0) break
-    const rows = await loadMissingStatusRows(dates)
+    const rows = await loadMissingStatusRows(startDate, cursor)
+    if (rows.length === 0) break
     const cacheRows: Array<{ ticker: string; date: string; statusLabel: PhysicsStatus }> = []
     for (const row of rows) {
       const profile = parseJson<Partial<PhysicsFeatureProfile> | null>(row.feature_json, null)
@@ -449,11 +426,14 @@ async function populateStatusCache(startDate: string | null): Promise<void> {
     await insertStatusCacheRows(cacheRows)
     cachedRows += cacheRows.length
     batches += 1
-    beforeDate = dates.at(-1) ?? null
+    const lastRow = rows.at(-1)
+    cursor = lastRow ? { ticker: lastRow.ticker, date: lastRow.date } : null
     if (batches % 10 === 0) {
-      console.log(`physics status cache: batches=${batches}, cached=${cachedRows.toLocaleString()}, cursor<${beforeDate ?? '-'}`)
+      console.log(
+        `physics status cache: batches=${batches}, cached=${cachedRows.toLocaleString()}, cursor>${cursor ? `${cursor.ticker}@${cursor.date}` : '-'}`,
+      )
     }
-    if (!beforeDate) break
+    if (!cursor || rows.length < STATUS_CACHE_PAGE_ROWS) break
   }
   console.log(`physics status cache ready: feature_set=${ML_PHYSICS_FEATURE_SET}, added=${cachedRows.toLocaleString()}, start=${startDate ?? '-'}`)
 }

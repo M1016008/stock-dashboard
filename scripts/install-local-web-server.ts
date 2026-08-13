@@ -33,6 +33,8 @@ const webDbCacheMb = integerEnv('STOCKBOARD_WEB_DB_CACHE_MB', 32, 8, 256)
 const webDbMmapMb = integerEnv('STOCKBOARD_WEB_DB_MMAP_MB', 256, 0, 1024)
 const analogDbCacheMb = integerEnv('STOCKBOARD_ANALOG_DB_CACHE_MB', 96, 8, 256)
 const analogDbMmapMb = integerEnv('STOCKBOARD_ANALOG_DB_MMAP_MB', 512, 0, 1024)
+const usAnalyticsDbPath = process.env.US_ANALYTICS_DB_PATH?.trim()
+  || '/Volumes/こうし/stockboard-data/us/stockboard-us.db'
 const healthIntervalSeconds = integerEnv('STOCKBOARD_WEB_HEALTH_INTERVAL_SECONDS', 60, 30, 3600)
 const healthTimeoutSeconds = integerEnv('STOCKBOARD_WEB_HEALTH_TIMEOUT_SECONDS', 20, 5, 120)
 const healthFailureThreshold = integerEnv('STOCKBOARD_WEB_HEALTH_FAILURE_THRESHOLD', 3, 2, 10)
@@ -134,6 +136,7 @@ const webPlist = `<?xml version="1.0" encoding="UTF-8"?>
     <key>SQLITE_BUSY_RETRIES</key><string>3</string>
     <key>SQLITE_BUSY_TIMEOUT_MS</key><string>5000</string>
     <key>US_SQLITE_BUSY_RETRIES</key><string>3</string>
+    <key>US_ANALYTICS_DB_PATH</key><string>${xmlEscape(usAnalyticsDbPath)}</string>
     <key>USE_LOCAL_DB</key><string>1</string>
   </dict>
   <key>RunAtLoad</key>
@@ -191,6 +194,7 @@ const analogPlist = `<?xml version="1.0" encoding="UTF-8"?>
     <key>SQLITE_BUSY_RETRIES</key><string>3</string>
     <key>SQLITE_BUSY_TIMEOUT_MS</key><string>5000</string>
     <key>US_SQLITE_BUSY_RETRIES</key><string>3</string>
+    <key>US_ANALYTICS_DB_PATH</key><string>${xmlEscape(usAnalyticsDbPath)}</string>
     <key>USE_LOCAL_DB</key><string>1</string>
   </dict>
   <key>RunAtLoad</key>

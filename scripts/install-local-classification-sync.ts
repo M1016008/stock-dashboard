@@ -24,7 +24,7 @@ if (scheduleTimes.length === 0) {
   throw new Error('CLASSIFICATION_SYNC_TIMES must contain at least one HH:MM value.')
 }
 const sourcePath = process.env.CLASSIFICATION_FILE?.trim()
-  || '/Volumes/OWC Express 1M2 80G/会社四季報CSV/会社四季報_最新.csv'
+  || '/Volumes/こうし/会社四季報CSV/会社四季報_最新.csv'
 const pathEnv = [
   '/opt/homebrew/bin',
   '/usr/local/bin',

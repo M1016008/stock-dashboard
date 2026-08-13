@@ -11,6 +11,10 @@ const HORIZONS = (process.env.ML_HORIZONS ?? ML_PRIMARY_HORIZON_LIST)
   .filter((value) => Number.isFinite(value) && value > 0)
 const START_DATE = process.env.ML_LABEL_START_DATE?.trim() || null
 const END_DATE = process.env.ML_LABEL_END_DATE?.trim() || null
+const TICKERS = (process.env.ML_LABEL_TICKERS ?? '')
+  .split(',')
+  .map((value) => value.trim())
+  .filter(Boolean)
 const RECENT_DAYS = Number(process.env.ML_LABEL_RECENT_DAYS ?? 0)
 const DATE_CHUNK_DAYS = Number(process.env.ML_LABEL_DATE_CHUNK_DAYS ?? 30)
 const INCREMENTAL_UPSERT = process.env.ML_LABEL_INCREMENTAL_UPSERT === '1'
@@ -87,6 +91,10 @@ async function labelDateBounds(startDate: string | null, endDate: string | null)
 async function syncLabelsForRange(startDate: string | null, endDate: string | null): Promise<void> {
   const where = [`fe.horizon_days IN (${horizonPlaceholders()})`]
   const args: Array<string | number> = [...HORIZONS]
+  if (TICKERS.length > 0) {
+    where.push(`fe.ticker IN (${TICKERS.map(() => '?').join(', ')})`)
+    args.push(...TICKERS)
+  }
   if (startDate) {
     where.push('fe.date >= ?')
     args.push(startDate)
@@ -178,7 +186,7 @@ async function main() {
   const effectiveEndDate = END_DATE
 
   console.log(
-    `ml labels start: horizons=${HORIZONS.join('/')}, start=${effectiveStartDate ?? '-'}, requested_start=${START_DATE ?? '-'}, recent_start=${recentStart ?? '-'}, end=${effectiveEndDate ?? '-'}, recent_days=${RECENT_DAYS || '-'}, chunk_days=${DATE_CHUNK_DAYS || '-'}, incremental_upsert=${INCREMENTAL_UPSERT ? 'on' : 'off'}, changed_only=${CHANGED_ONLY ? 'on' : 'off'}`,
+    `ml labels start: horizons=${HORIZONS.join('/')}, tickers=${TICKERS.length > 0 ? TICKERS.join('/') : 'all'}, start=${effectiveStartDate ?? '-'}, requested_start=${START_DATE ?? '-'}, recent_start=${recentStart ?? '-'}, end=${effectiveEndDate ?? '-'}, recent_days=${RECENT_DAYS || '-'}, chunk_days=${DATE_CHUNK_DAYS || '-'}, incremental_upsert=${INCREMENTAL_UPSERT ? 'on' : 'off'}, changed_only=${CHANGED_ONLY ? 'on' : 'off'}`,
   )
 
   let chunks = 0

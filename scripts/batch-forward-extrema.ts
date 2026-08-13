@@ -29,7 +29,7 @@ const PROGRESS_EVERY = Number.isFinite(requestedProgressEvery) && requestedProgr
   : 100
 const requestedWriteBatchTickers = Number(process.env.FORWARD_EXTREMA_WRITE_BATCH_TICKERS ?? 25)
 const WRITE_BATCH_TICKERS = Number.isFinite(requestedWriteBatchTickers) && requestedWriteBatchTickers > 0
-  ? Math.min(25, Math.floor(requestedWriteBatchTickers))
+  ? Math.min(100, Math.floor(requestedWriteBatchTickers))
   : 25
 const RECENT_DAYS = Number(process.env.BACKTEST_RECENT_DAYS ?? 0)
 const START_DATE = process.env.FORWARD_EXTREMA_START_DATE?.trim() || null

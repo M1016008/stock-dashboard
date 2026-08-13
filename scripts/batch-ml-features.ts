@@ -238,6 +238,17 @@ async function buildTicker(ticker: string): Promise<{ features: number; labels: 
   const featureStmts: Array<{ sql: string; args: Array<string | number | null> }> = []
   const labelStmts: Array<{ sql: string; args: Array<string | number | null> }> = []
   const stateStmts: Array<{ sql: string; args: Array<string | number | null> }> = []
+  let featureCount = 0
+  let labelCount = 0
+  let stateCount = 0
+
+  const flush = async (all = false): Promise<void> => {
+    for (const statements of [featureStmts, labelStmts, stateStmts]) {
+      while (statements.length >= CHUNK || (all && statements.length > 0)) {
+        await execBatch(statements.splice(0, Math.min(CHUNK, statements.length)))
+      }
+    }
+  }
 
   for (let i = 0; i < rows.length; i += 1) {
     if (ma5[i] != null && rows[i].close != null && (rows[i].close ?? 0) >= (ma5[i] ?? 0)) currentAbove += 1
@@ -307,6 +318,7 @@ async function buildTicker(ticker: string): Promise<{ features: number; labels: 
       `,
       args: [ticker, row.date, profile.stageCode, JSON.stringify(profile), JSON.stringify(vector)],
     })
+    featureCount += 1
 
     for (const label of WRITE_LABELS ? (labelMap.get(row.date) ?? []) : []) {
       const upLabel = (label.max_return_pct ?? -Infinity) >= 10 ? 1 : 0
@@ -344,6 +356,7 @@ async function buildTicker(ticker: string): Promise<{ features: number; labels: 
         `,
         args: [ticker, row.date, label.horizon_days, label.return_pct, label.max_return_pct, label.min_return_pct, upLabel, downLabel, reward, labelJson],
       })
+      labelCount += 1
       if (WRITE_RL_STATES && label.horizon_days === 40) {
         stateStmts.push({
           sql: `
@@ -363,6 +376,7 @@ async function buildTicker(ticker: string): Promise<{ features: number; labels: 
           `,
           args: [ticker, row.date, label.horizon_days, 'watch_up', JSON.stringify(profile), label.max_return_pct, null],
         })
+        stateCount += 1
         stateStmts.push({
           sql: `
             INSERT INTO rl_training_states
@@ -381,14 +395,17 @@ async function buildTicker(ticker: string): Promise<{ features: number; labels: 
           `,
           args: [ticker, row.date, label.horizon_days, 'watch_down', JSON.stringify(profile), label.min_return_pct, null],
         })
+        stateCount += 1
       }
+    }
+
+    if (featureStmts.length >= CHUNK || labelStmts.length >= CHUNK || stateStmts.length >= CHUNK) {
+      await flush()
     }
   }
 
-  for (let i = 0; i < featureStmts.length; i += CHUNK) await execBatch(featureStmts.slice(i, i + CHUNK))
-  for (let i = 0; i < labelStmts.length; i += CHUNK) await execBatch(labelStmts.slice(i, i + CHUNK))
-  for (let i = 0; i < stateStmts.length; i += CHUNK) await execBatch(stateStmts.slice(i, i + CHUNK))
-  return { features: featureStmts.length, labels: labelStmts.length, states: stateStmts.length }
+  await flush(true)
+  return { features: featureCount, labels: labelCount, states: stateCount }
 }
 
 async function main() {

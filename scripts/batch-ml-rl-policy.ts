@@ -35,12 +35,6 @@ type LabelStateRow = {
   state_bucket: string
 }
 
-type PolicyCacheFeatureRow = {
-  ticker: string
-  date: string
-  feature_json: string
-}
-
 type State = {
   ticker: string
   date: string
@@ -74,6 +68,7 @@ type PolicyResult = {
 }
 
 type SqlPolicyAggRow = {
+  horizon_days: number
   sample_count: number | null
   min_date: string | null
   max_date: string | null
@@ -110,9 +105,10 @@ const START_DATE = process.env.ML_RL_START_DATE?.trim() || null
 const END_DATE = process.env.ML_RL_END_DATE?.trim() || null
 const LIMIT_STATES = Number(process.env.ML_RL_LIMIT_STATES ?? 0)
 const PAGE_DATES = Math.max(1, Number(process.env.ML_RL_PAGE_DATES ?? 20))
-const POLICY_CACHE_PAGE_DATES = Math.max(1, Number(process.env.ML_RL_POLICY_CACHE_PAGE_DATES ?? 5))
-const POLICY_CACHE_INSERT_ROWS = Math.max(100, Number(process.env.ML_RL_POLICY_CACHE_INSERT_ROWS ?? 1000))
+const POLICY_CACHE_PAGE_DATES = Math.max(1, Number(process.env.ML_RL_POLICY_CACHE_PAGE_DATES ?? 60))
+const POLICY_CACHE_RESUME_BEFORE_DATE = process.env.ML_RL_POLICY_CACHE_RESUME_BEFORE_DATE?.trim() || null
 const SQL_AGG_MODE = (process.env.ML_RL_SQL_AGG ?? '1') !== '0'
+const MULTI_HORIZON_SQL_AGG = (process.env.ML_RL_MULTI_HORIZON_SQL_AGG ?? '1') !== '0'
 
 function maxDate(a: string, b: string): string {
   return a >= b ? a : b
@@ -305,37 +301,28 @@ async function ensurePolicyCacheTables(): Promise<void> {
   await execRun(`CREATE INDEX IF NOT EXISTS ml_physics_feature_policy_cache_action_idx ON ml_physics_feature_policy_cache(feature_set, policy_action, date)`)
 }
 
-async function loadMissingPolicyDateBatch(startDate: string | null, beforeDate: string | null): Promise<string[]> {
-  const where = ['f.feature_set = ?']
+async function loadPolicyDateBatch(startDate: string | null, beforeDate: string | null): Promise<string[]> {
+  const where = ['feature_set = ?']
   const args: Array<string | number> = [ML_PHYSICS_FEATURE_SET]
   if (startDate) {
-    where.push('f.date >= ?')
+    where.push('date >= ?')
     args.push(startDate)
   }
   if (END_DATE) {
-    where.push('f.date <= ?')
+    where.push('date <= ?')
     args.push(END_DATE)
   }
   if (beforeDate) {
-    where.push('f.date < ?')
+    where.push('date < ?')
     args.push(beforeDate)
   }
-  where.push(`
-    NOT EXISTS (
-      SELECT 1
-      FROM ml_physics_feature_policy_cache c
-      WHERE c.feature_set = f.feature_set
-        AND c.ticker = f.ticker
-        AND c.date = f.date
-    )
-  `)
 
   const rows = await execAll<{ date: string }>(
     `
-    SELECT DISTINCT f.date
-    FROM ml_feature_vectors_v2 f
+    SELECT DISTINCT date
+    FROM ml_feature_vectors_v2 INDEXED BY ml_feature_vectors_v2_date_idx
     WHERE ${where.join(' AND ')}
-    ORDER BY f.date DESC
+    ORDER BY date DESC
     LIMIT ?
     `,
     [...args, POLICY_CACHE_PAGE_DATES],
@@ -343,79 +330,124 @@ async function loadMissingPolicyDateBatch(startDate: string | null, beforeDate: 
   return rows.map((row) => row.date)
 }
 
-async function loadMissingPolicyRows(dates: string[]): Promise<PolicyCacheFeatureRow[]> {
-  if (dates.length === 0) return []
+async function refreshPolicyCacheRows(dates: string[]): Promise<void> {
+  if (dates.length === 0) return
   const placeholders = dates.map(() => '?').join(', ')
-  return execAll<PolicyCacheFeatureRow>(
+  await execRun(
     `
+    WITH extracted AS (
+      SELECT
+        f.feature_set,
+        f.ticker,
+        f.date,
+        COALESCE(CAST(json_extract(f.feature_json, '$.velocities.sma5.d5') AS REAL), 0) AS sma5_velocity,
+        COALESCE(CAST(json_extract(f.feature_json, '$.velocities.sma25.d5') AS REAL), 0) AS sma25_velocity,
+        COALESCE(CAST(json_extract(f.feature_json, '$.accelerations.sma5.d5') AS REAL), 0) AS sma5_acceleration,
+        COALESCE(CAST(json_extract(f.feature_json, '$.gaps.sma5To25Pct') AS REAL), 0) AS gap_5_to_25,
+        COALESCE(CAST(json_extract(f.feature_json, '$.gapVelocity.sma5To25D5') AS REAL), 0) AS gap_5_to_25_velocity,
+        COALESCE(CAST(json_extract(f.feature_json, '$.pricePosition.sma5') AS REAL), 0) AS price_vs_sma5,
+        COALESCE(CAST(json_extract(f.feature_json, '$.pricePosition.sma25') AS REAL), 0) AS price_vs_sma25,
+        COALESCE(
+          CAST(json_extract(f.feature_json, '$.context.sector33RankPct') AS REAL),
+          CAST(json_extract(f.feature_json, '$.context.sector17RankPct') AS REAL),
+          50
+        ) AS sector_rank,
+        replace(replace(replace(replace(
+          COALESCE(json_extract(f.feature_json, '$.maOrder'), ''),
+          ' ', ''), char(9), ''), char(10), ''), char(13), '') AS ma_order,
+        COALESCE(json_extract(f.feature_json, '$.regimes.trend'), 'unknown') AS trend,
+        COALESCE(json_extract(f.feature_json, '$.regimes.spread'), 'unknown') AS spread,
+        COALESCE(json_extract(f.feature_json, '$.regimes.turn'), 'unknown') AS turn,
+        json_type(f.feature_json, '$.velocities.sma5.d5') AS sma5_velocity_type,
+        json_type(f.feature_json, '$.gapVelocity.sma5To25D5') AS gap_velocity_type
+      FROM ml_feature_vectors_v2 f INDEXED BY ml_feature_vectors_v2_date_idx
+      WHERE f.feature_set = ?
+        AND f.date IN (${placeholders})
+    ),
+    classified AS (
+      SELECT
+        *,
+        price_vs_sma5 > 14
+          OR gap_5_to_25 > 11
+          OR (sma5_velocity > 16 AND sma5_acceleration < -4) AS overheated,
+        ma_order LIKE '5日>25日%'
+          AND sma5_velocity > 0.8
+          AND sma25_velocity >= -0.2
+          AND gap_5_to_25_velocity >= -1.5
+          AND price_vs_sma5 >= -1
+          AND price_vs_sma25 >= -3
+          AND sector_rank <= 65
+          AND NOT (
+            price_vs_sma5 > 14
+            OR gap_5_to_25 > 11
+            OR (sma5_velocity > 16 AND sma5_acceleration < -4)
+          )
+          AND (trend = 'up_acceleration' OR spread = 'up_expansion' OR turn IN ('rebound_watch', 'bullish_turn')) AS long_setup,
+        (ma_order LIKE '200日>75日%' OR ma_order LIKE '%25日>5日')
+          AND sma5_velocity < -0.8
+          AND sma25_velocity <= 0.2
+          AND gap_5_to_25_velocity <= 1.5
+          AND price_vs_sma5 <= 1
+          AND price_vs_sma25 <= 3
+          AND (trend = 'down_acceleration' OR spread = 'down_expansion' OR turn IN ('breakdown_watch', 'bearish_turn')) AS short_setup
+      FROM extracted
+    )
+    INSERT INTO ml_physics_feature_policy_cache
+      (feature_set, ticker, date, policy_action, state_bucket, created_at)
     SELECT
-      f.ticker,
-      f.date,
-      f.feature_json
-    FROM ml_feature_vectors_v2 f
-    WHERE f.feature_set = ?
-      AND f.date IN (${placeholders})
-      AND NOT EXISTS (
-        SELECT 1
-        FROM ml_physics_feature_policy_cache c
-        WHERE c.feature_set = f.feature_set
-          AND c.ticker = f.ticker
-          AND c.date = f.date
-      )
+      feature_set,
+      ticker,
+      date,
+      CASE
+        WHEN long_setup THEN 'long_entry'
+        WHEN short_setup OR overheated THEN 'short_entry'
+        ELSE 'wait'
+      END,
+      trend || '|' || spread || '|sma5:' ||
+        CASE
+          WHEN sma5_velocity_type NOT IN ('integer', 'real') OR sma5_velocity_type IS NULL THEN 'unknown'
+          WHEN sma5_velocity <= -2 THEN 'low'
+          WHEN sma5_velocity >= 2 THEN 'high'
+          ELSE 'mid'
+        END || '|gap:' ||
+        CASE
+          WHEN gap_velocity_type NOT IN ('integer', 'real') OR gap_velocity_type IS NULL THEN 'unknown'
+          WHEN gap_5_to_25_velocity <= -1.5 THEN 'low'
+          WHEN gap_5_to_25_velocity >= 1.5 THEN 'high'
+          ELSE 'mid'
+        END,
+      unixepoch()
+    FROM classified
+    WHERE 1
+    ON CONFLICT(feature_set, ticker, date) DO UPDATE SET
+      policy_action = excluded.policy_action,
+      state_bucket = excluded.state_bucket,
+      created_at = unixepoch()
+    WHERE ml_physics_feature_policy_cache.policy_action IS NOT excluded.policy_action
+       OR ml_physics_feature_policy_cache.state_bucket IS NOT excluded.state_bucket
     `,
     [ML_PHYSICS_FEATURE_SET, ...dates],
   )
 }
 
-async function insertPolicyCacheRows(rows: Array<{ ticker: string; date: string; policyAction: Action; stateBucket: string }>): Promise<void> {
-  for (let i = 0; i < rows.length; i += POLICY_CACHE_INSERT_ROWS) {
-    const chunk = rows.slice(i, i + POLICY_CACHE_INSERT_ROWS)
-    if (chunk.length === 0) continue
-    const values = chunk.map(() => '(?, ?, ?, ?, ?, unixepoch())').join(', ')
-    const args: string[] = []
-    for (const row of chunk) {
-      args.push(ML_PHYSICS_FEATURE_SET, row.ticker, row.date, row.policyAction, row.stateBucket)
-    }
-    await execRun(
-      `
-      INSERT OR IGNORE INTO ml_physics_feature_policy_cache
-        (feature_set, ticker, date, policy_action, state_bucket, created_at)
-      VALUES ${values}
-      `,
-      args,
-    )
-  }
-}
-
 async function populatePolicyCache(startDate: string | null): Promise<void> {
-  let beforeDate: string | null = null
+  let beforeDate: string | null = POLICY_CACHE_RESUME_BEFORE_DATE
   let batches = 0
-  let cachedRows = 0
+  let processedDates = 0
+  if (beforeDate) {
+    console.log(`ml rl policy cache: resume cursor<${beforeDate}`)
+  }
   for (;;) {
-    const dates = await loadMissingPolicyDateBatch(startDate, beforeDate)
+    const dates = await loadPolicyDateBatch(startDate, beforeDate)
     if (dates.length === 0) break
-    const rows = await loadMissingPolicyRows(dates)
-    const cacheRows: Array<{ ticker: string; date: string; policyAction: Action; stateBucket: string }> = []
-    for (const row of rows) {
-      const profile = parseJson<PhysicsFeatureProfile | null>(row.feature_json, null)
-      if (!profile) continue
-      cacheRows.push({
-        ticker: row.ticker,
-        date: row.date,
-        policyAction: policyAction(profile),
-        stateBucket: stateBucket(profile),
-      })
-    }
-    await insertPolicyCacheRows(cacheRows)
-    cachedRows += cacheRows.length
+    await refreshPolicyCacheRows(dates)
+    processedDates += dates.length
     batches += 1
     beforeDate = dates.at(-1) ?? null
-    if (batches % 10 === 0) {
-      console.log(`ml rl policy cache: batches=${batches}, cached=${cachedRows.toLocaleString()}, cursor<${beforeDate ?? '-'}`)
-    }
+    console.log(`ml rl policy cache: batches=${batches}, dates=${processedDates.toLocaleString()}, cursor<${beforeDate ?? '-'}`)
     if (!beforeDate) break
   }
-  console.log(`ml rl policy cache ready: feature_set=${ML_PHYSICS_FEATURE_SET}, added=${cachedRows.toLocaleString()}, start=${startDate ?? '-'}`)
+  console.log(`ml rl policy cache ready: feature_set=${ML_PHYSICS_FEATURE_SET}, dates=${processedDates.toLocaleString()}, start=${startDate ?? '-'}`)
 }
 
 async function loadStates(horizon: number, startDate: string | null): Promise<State[]> {
@@ -596,6 +628,35 @@ async function loadDateBatch(horizon: number, startDate: string | null, beforeDa
   return rows.map((row) => row.date)
 }
 
+async function loadMultiHorizonDateBatch(horizons: number[], startDate: string | null, beforeDate: string | null): Promise<string[]> {
+  const horizonPlaceholders = horizons.map(() => '?').join(', ')
+  const where = [`horizon_days IN (${horizonPlaceholders})`]
+  const args: Array<string | number> = [...horizons]
+  if (startDate) {
+    where.push('date >= ?')
+    args.push(startDate)
+  }
+  if (END_DATE) {
+    where.push('date <= ?')
+    args.push(END_DATE)
+  }
+  if (beforeDate) {
+    where.push('date < ?')
+    args.push(beforeDate)
+  }
+  const rows = await execAll<{ date: string }>(
+    `
+    SELECT DISTINCT date
+    FROM ml_short_labels
+    WHERE ${where.join(' AND ')}
+    ORDER BY date DESC
+    LIMIT ?
+    `,
+    [...args, PAGE_DATES],
+  )
+  return rows.map((row) => row.date)
+}
+
 async function loadLabelStates(horizon: number, dates: string[]): Promise<LabelStateRow[]> {
   if (dates.length === 0) return []
   const placeholders = dates.map(() => '?').join(', ')
@@ -680,13 +741,15 @@ function mergeSqlAggRow(
   results.wait.oracleMatches += Number(row?.oracle_wait_count ?? 0)
 }
 
-async function aggregateSqlPolicyBatch(horizon: number, dates: string[]): Promise<SqlPolicyAggRow | undefined> {
-  if (dates.length === 0) return undefined
+async function aggregateSqlPolicyBatch(horizons: number[], dates: string[]): Promise<SqlPolicyAggRow[]> {
+  if (dates.length === 0 || horizons.length === 0) return []
+  const horizonPlaceholders = horizons.map(() => '?').join(', ')
   const placeholders = dates.map(() => '?').join(', ')
-  return execGet<SqlPolicyAggRow>(
+  return execAll<SqlPolicyAggRow>(
     `
     WITH base AS (
       SELECT
+        l.horizon_days,
         l.date,
         l.return_pct,
         l.max_return_pct,
@@ -705,7 +768,7 @@ async function aggregateSqlPolicyBatch(horizon: number, dates: string[]): Promis
         ON c.ticker = l.ticker
        AND c.date = l.date
        AND c.feature_set = ?
-      WHERE l.horizon_days = ?
+      WHERE l.horizon_days IN (${horizonPlaceholders})
         AND l.date IN (${placeholders})
         AND l.reward_long IS NOT NULL
         AND l.reward_short IS NOT NULL
@@ -739,6 +802,7 @@ async function aggregateSqlPolicyBatch(horizon: number, dates: string[]): Promis
       FROM base
     )
     SELECT
+      horizon_days,
       COUNT(*) AS sample_count,
       MIN(date) AS min_date,
       MAX(date) AS max_date,
@@ -765,8 +829,9 @@ async function aggregateSqlPolicyBatch(horizon: number, dates: string[]): Promis
       SUM(CASE WHEN return_pct IS NOT NULL THEN 1 ELSE 0 END) AS wait_return_count,
       MIN(min_return_pct) AS wait_max_drawdown_pct
     FROM scored
+    GROUP BY horizon_days
     `,
-    [ML_PHYSICS_FEATURE_SET, horizon, ...dates],
+    [ML_PHYSICS_FEATURE_SET, ...horizons, ...dates],
   )
 }
 
@@ -781,7 +846,7 @@ async function evaluateHorizonSql(horizon: number, startDate: string | null, eva
   for (;;) {
     const dates = await loadDateBatch(horizon, startDate, beforeDate)
     if (dates.length === 0) break
-    const row = await aggregateSqlPolicyBatch(horizon, dates)
+    const row = (await aggregateSqlPolicyBatch([horizon], dates))[0]
     mergeSqlAggRow(results, row)
     batchCount += 1
     beforeDate = dates.at(-1) ?? null
@@ -794,6 +859,47 @@ async function evaluateHorizonSql(horizon: number, startDate: string | null, eva
     ;(result as PolicyResult & { bucketSummary?: unknown }).bucketSummary = []
   }
   return [results.rule, results.oracle, results.wait]
+}
+
+async function evaluateHorizonsSql(horizons: number[], startDate: string | null, evaluationDate: string): Promise<Map<number, PolicyResult[]>> {
+  const resultMap = new Map<number, { rule: PolicyResult; oracle: PolicyResult; wait: PolicyResult }>()
+  for (const horizon of horizons) {
+    resultMap.set(horizon, {
+      rule: makeResult('physics_rule_policy_v1', 'offline_contextual_bandit', horizon, evaluationDate, startDate, END_DATE),
+      oracle: makeResult('oracle_upper_bound', 'offline_oracle_benchmark', horizon, evaluationDate, startDate, END_DATE),
+      wait: makeResult('always_wait', 'baseline', horizon, evaluationDate, startDate, END_DATE),
+    })
+  }
+
+  let beforeDate: string | null = null
+  let batchCount = 0
+  for (;;) {
+    const dates = await loadMultiHorizonDateBatch(horizons, startDate, beforeDate)
+    if (dates.length === 0) break
+    const rows = await aggregateSqlPolicyBatch(horizons, dates)
+    for (const row of rows) {
+      const results = resultMap.get(Number(row.horizon_days))
+      if (results) mergeSqlAggRow(results, row)
+    }
+    batchCount += 1
+    beforeDate = dates.at(-1) ?? null
+    if (batchCount % 10 === 0) {
+      const states = horizons
+        .map((horizon) => `h${horizon}:${resultMap.get(horizon)?.rule.sampleCount.toLocaleString() ?? '0'}`)
+        .join(' ')
+      console.log(`ml rl policy multi sql: batches=${batchCount}, ${states}, cursor<${beforeDate ?? '-'}`)
+    }
+    if (!beforeDate) break
+  }
+
+  const output = new Map<number, PolicyResult[]>()
+  for (const [horizon, results] of resultMap) {
+    for (const result of [results.rule, results.oracle, results.wait]) {
+      ;(result as PolicyResult & { bucketSummary?: unknown }).bucketSummary = []
+    }
+    output.set(horizon, [results.rule, results.oracle, results.wait])
+  }
+  return output
 }
 
 async function evaluateHorizon(horizon: number, startDate: string | null, evaluationDate: string): Promise<PolicyResult[]> {
@@ -879,12 +985,15 @@ async function main() {
   )
   const startDate = await cutoffDate()
   await populatePolicyCache(startDate)
+  const multiSqlResults = SQL_AGG_MODE && MULTI_HORIZON_SQL_AGG
+    ? await evaluateHorizonsSql(HORIZONS, startDate, evaluationDate)
+    : null
   const statements: Array<{ sql: string; args: Array<string | number | null> }> = []
   for (const horizon of HORIZONS) {
     const horizonStatements: typeof statements = []
-    const results = SQL_AGG_MODE
+    const results = multiSqlResults?.get(horizon) ?? (SQL_AGG_MODE
       ? await evaluateHorizonSql(horizon, startDate, evaluationDate)
-      : await evaluateHorizon(horizon, startDate, evaluationDate)
+      : await evaluateHorizon(horizon, startDate, evaluationDate))
     for (const result of results) {
       const m = metrics(result)
       const actionBreakdown = describeActionBreakdown(result)

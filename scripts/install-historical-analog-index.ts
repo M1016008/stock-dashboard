@@ -13,7 +13,7 @@ const SQLITE_BIN = process.env.SQLITE3_BIN || '/usr/bin/sqlite3'
 
 function targetPath(name: TargetName): string {
   if (name === 'us') {
-    return path.resolve(process.env.US_ANALYTICS_DB_PATH || '/Volumes/OWC Express 1M2 80G/stockboard-data/us/stockboard-us.db')
+    return path.resolve(process.env.US_ANALYTICS_DB_PATH || '/Volumes/こうし/stockboard-data/us/stockboard-us.db')
   }
   return path.resolve(process.env.STOCKBOARD_DB_PATH || process.env.LOCAL_DB_PATH || path.join(process.cwd(), 'data', 'stockboard.db'))
 }
