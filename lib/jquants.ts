@@ -145,6 +145,60 @@ export function hasJQuantsCorporateAction(adjustmentFactor: number | null | unde
     && Math.abs(adjustmentFactor - 1) > Number.EPSILON
 }
 
+const JQUANTS_CORPORATE_ACTION_BOUNDARY_FACTORS = [
+  0.1,
+  0.125,
+  0.2,
+  0.25,
+  1 / 3,
+  0.5,
+  2 / 3,
+  1.5,
+  2,
+  3,
+  4,
+  5,
+  8,
+  10,
+] as const
+
+export function isLikelyJQuantsCorporateActionBoundary(input: {
+  previousDate: string | null | undefined
+  currentDate: string | null | undefined
+  previousClose: number | null | undefined
+  currentClose: number | null | undefined
+}): boolean {
+  const previousClose = input.previousClose
+  const currentClose = input.currentClose
+  if (
+    typeof previousClose !== 'number'
+    || !Number.isFinite(previousClose)
+    || previousClose <= 0
+    || typeof currentClose !== 'number'
+    || !Number.isFinite(currentClose)
+    || currentClose <= 0
+    || !input.previousDate
+    || !input.currentDate
+  ) {
+    return false
+  }
+
+  const gapDays = (
+    Date.parse(`${input.currentDate}T00:00:00Z`)
+    - Date.parse(`${input.previousDate}T00:00:00Z`)
+  ) / 86_400_000
+  if (!Number.isFinite(gapDays) || gapDays <= 0 || gapDays > 10) return false
+
+  const priceRatio = currentClose / previousClose
+  const nearestFactor = JQUANTS_CORPORATE_ACTION_BOUNDARY_FACTORS.reduce((best, candidate) => (
+    Math.abs(Math.log(priceRatio / candidate)) < Math.abs(Math.log(priceRatio / best))
+      ? candidate
+      : best
+  ))
+
+  return Math.abs(Math.log(priceRatio / nearestFactor)) <= Math.log(1.12)
+}
+
 export function shouldApplyJQuantsLegacyAdjustment(input: {
   adjustmentFactor: number | null | undefined
   adjustedProviderStartClose: number | null | undefined

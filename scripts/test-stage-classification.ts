@@ -79,6 +79,24 @@ assert.equal(afterGap.activeDays, 1)
 assert.equal(afterGap.weekly_ma_5, null)
 assert.equal(afterGap.monthly_ma_3, null)
 
+const splitRows = buildWeekdays('2026-01-05', 86).map((row, index) => {
+  const close = index < 80 ? 800 : 100
+  return {
+    ...row,
+    open: close,
+    high: close,
+    low: close,
+    close,
+    volume: index < 80 ? 1_000 : 8_000,
+  }
+})
+const splitCalculations = buildSnapshotCalculations(splitRows, { includeWarmup: true })
+const latestSplitCalculation = splitCalculations.at(-1)
+assert.ok(latestSplitCalculation)
+assertNumberEqual(latestSplitCalculation.ma_5, 100, '1:8 split ma_5')
+assertNumberEqual(latestSplitCalculation.ma_25, 100, '1:8 split ma_25')
+assertNumberEqual(latestSplitCalculation.ma_75, 100, '1:8 split ma_75')
+
 const sampledRows = [
   { date: '2026-05-14' },
   { date: '2026-05-15' },

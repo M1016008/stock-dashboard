@@ -1,3 +1,5 @@
+import type { OHLCV } from '@/types/stock'
+
 export const PHYSICAL_MOMENTUM_LOOKBACK_DAYS = 20
 export const PHYSICAL_MOMENTUM_MA_PERIODS = [5, 25, 75, 200] as const
 
@@ -58,6 +60,7 @@ const SPLIT_ADJUSTMENT_FACTORS = [
   0.04,
   0.05,
   0.1,
+  0.125,
   0.2,
   0.25,
   1 / 3,
@@ -66,6 +69,7 @@ const SPLIT_ADJUSTMENT_FACTORS = [
   3,
   4,
   5,
+  8,
   10,
   20,
   25,
@@ -124,8 +128,15 @@ function inferLikelySplitAdjustment(
   previous: PhysicalMomentumInputRow,
   current: PhysicalMomentumInputRow,
 ): number | null {
+  const gapDays = (
+    Date.parse(`${current.date}T00:00:00Z`)
+    - Date.parse(`${previous.date}T00:00:00Z`)
+  ) / 86_400_000
   if (
-    !isFiniteNumber(previous.close)
+    !Number.isFinite(gapDays)
+    || gapDays <= 0
+    || gapDays > 10
+    || !isFiniteNumber(previous.close)
     || !isFiniteNumber(current.close)
     || previous.close <= 0
     || current.close <= 0
@@ -187,6 +198,27 @@ export function adjustLikelySplitDiscontinuities(
   }
 
   return output
+}
+
+export function adjustLikelySplitOhlcv(rows: OHLCV[]): OHLCV[] {
+  const adjusted = adjustLikelySplitDiscontinuities(rows)
+
+  return rows.map((row, index) => {
+    const adjustedRow = adjusted[index]
+    const priceFactor = adjustedRow?.close != null && row.close > 0
+      ? adjustedRow.close / row.close
+      : 1
+
+    return {
+      ...row,
+      open: row.open * priceFactor,
+      high: row.high * priceFactor,
+      low: row.low * priceFactor,
+      close: adjustedRow?.close ?? row.close,
+      volume: Math.round(adjustedRow?.volume ?? row.volume),
+      adjustedClose: row.adjustedClose == null ? row.adjustedClose : row.adjustedClose * priceFactor,
+    }
+  })
 }
 
 export function computePhysicalMomentumRawRows(

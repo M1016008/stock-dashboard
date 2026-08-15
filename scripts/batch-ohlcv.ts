@@ -27,6 +27,7 @@ import {
   fetchJQuantsDaily,
   fetchJQuantsDailyByDate,
   hasJQuantsCorporateAction,
+  isLikelyJQuantsCorporateActionBoundary,
   shouldApplyJQuantsLegacyAdjustment,
   type JQuantsDailyByDateRow,
 } from '@/lib/jquants'
@@ -220,6 +221,44 @@ async function storeRows(rows: JQuantsDailyByDateRow[]): Promise<number> {
   return rows.length
 }
 
+async function findCorporateActionBoundaryCandidates(targetDate: string): Promise<string[]> {
+  const rows = await execAll<{
+    ticker: string
+    currentDate: string
+    currentClose: number
+    previousDate: string | null
+    previousClose: number | null
+  }>(
+    `
+      SELECT current.ticker,
+             current.date AS currentDate,
+             current.close AS currentClose,
+             previous.date AS previousDate,
+             previous.close AS previousClose
+      FROM ohlcv_daily current
+      LEFT JOIN ohlcv_daily previous
+        ON previous.ticker = current.ticker
+       AND previous.date = (
+         SELECT MAX(history.date)
+         FROM ohlcv_daily history
+         WHERE history.ticker = current.ticker
+           AND history.date < current.date
+       )
+      WHERE current.date = ?
+    `,
+    [targetDate],
+  )
+
+  return rows
+    .filter((row) => isLikelyJQuantsCorporateActionBoundary({
+      previousDate: row.previousDate,
+      currentDate: row.currentDate,
+      previousClose: row.previousClose,
+      currentClose: row.currentClose,
+    }))
+    .map((row) => row.ticker)
+}
+
 async function main() {
   console.log(`SOURCE=jquants, HISTORY_FROM=${DEFAULT_FROM_DATE}, TARGET_DATE=${TARGET_DATE}, CONCURRENCY=${CONCURRENCY}, RATE_LIMIT=${RATE_LIMIT_MS}ms, FORCE_FULL_HISTORY=${FORCE_FULL_HISTORY}`)
 
@@ -282,11 +321,16 @@ async function main() {
       console.log(`J-Quants date bulk fetch: ${TARGET_DATE}`)
       const rows = await fetchJQuantsDailyByDate(TARGET_DATE)
       const inserted = await storeRows(rows)
-      const corporateActionTickers = Array.from(new Set(
+      const explicitCorporateActionTickers = Array.from(new Set(
         rows
           .filter(row => hasJQuantsCorporateAction(row.adjustmentFactor))
           .map(row => row.ticker),
       ))
+      const boundaryCorporateActionTickers = await findCorporateActionBoundaryCandidates(TARGET_DATE)
+      const corporateActionTickers = Array.from(new Set([
+        ...explicitCorporateActionTickers,
+        ...boundaryCorporateActionTickers,
+      ]))
       let adjustedHistoryRows = 0
       for (const ticker of corporateActionTickers) {
         const adjustmentFactor = rows.find(row => row.ticker === ticker)?.adjustmentFactor ?? null
@@ -324,7 +368,7 @@ async function main() {
         })
         .where(eq(jquantsSyncRuns.id, syncRun.id))
       console.log(
-        `J-Quants date bulk 完了: expected=${rows.length}, stored=${inserted}, corporateActions=${corporateActionTickers.length}, adjustedHistoryRows=${adjustedHistoryRows}`,
+        `J-Quants date bulk 完了: expected=${rows.length}, stored=${inserted}, corporateActions=${explicitCorporateActionTickers.length}, boundaryCandidates=${boundaryCorporateActionTickers.length}, adjustedHistoryRows=${adjustedHistoryRows}`,
       )
       tickers = tickers.filter(t => !rowTickerSet.has(t.ticker))
       if (tickers.length > 0 && !ENABLE_MISSING_FALLBACK) {

@@ -8,6 +8,7 @@ import type { OHLCV } from '@/types/stock'
 import { parseTimeframeSpec, resampleOhlcv, specToIntervalCode } from '@/lib/timeframes'
 import { loadManualOhlcvRows } from '@/lib/manual-ohlcv'
 import { decodePathSegment } from '@/lib/url-path'
+import { adjustLikelySplitOhlcv } from '@/lib/physical-momentum'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -83,7 +84,8 @@ export async function GET(
       }
     }
 
-    const output = timeframeSpec ? resampleOhlcv(history, timeframeSpec) : history
+    const adjustedHistory = source === 'jquants' ? adjustLikelySplitOhlcv(history) : history
+    const output = timeframeSpec ? resampleOhlcv(adjustedHistory, timeframeSpec) : adjustedHistory
 
     if (searchParams.get('meta') === '1') {
       return NextResponse.json({

@@ -5,6 +5,8 @@
 // 使い方:
 //   npm run batch:snapshots                       # active な ticker_universe を全件処理
 //   TICKERS=7203,6758 npm run batch:snapshots     # 環境変数で銘柄を絞ってテスト
+//   TICKERS=7203 SNAPSHOT_FORCE_REBUILD=1 npm run batch:snapshots
+//                                                 # 企業行動修復後に既存行も再計算
 //
 // 動作:
 //   - 各銘柄について daily_snapshots の最新日付を確認、それ以降の日付分のみ計算
@@ -24,6 +26,7 @@ import { eq, sql } from 'drizzle-orm'
 const CONCURRENCY = Math.max(1, Number(process.env.SNAPSHOT_CONCURRENCY ?? 4))
 const PROGRESS_EVERY = Number(process.env.SNAPSHOT_PROGRESS_EVERY ?? 200)
 const LOOKBACK_DAYS = Number(process.env.SNAPSHOT_LOOKBACK_DAYS ?? 900)
+const FORCE_REBUILD = process.env.SNAPSHOT_FORCE_REBUILD === '1'
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 
 async function withDbRetry<T>(fn: () => Promise<T>): Promise<T> {
@@ -103,10 +106,12 @@ async function computeSnapshotsForTicker(ticker: string): Promise<SnapshotComput
       [ticker],
     ),
   ])
-  const lastSnapshotDate = [state?.lastProcessedDate, existing?.maxDate]
-    .filter((date): date is string => Boolean(date))
-    .sort()
-    .at(-1) ?? null
+  const lastSnapshotDate = FORCE_REBUILD
+    ? null
+    : [state?.lastProcessedDate, existing?.maxDate]
+        .filter((date): date is string => Boolean(date))
+        .sort()
+        .at(-1) ?? null
   const startDate = lastSnapshotDate ? dateDaysBefore(lastSnapshotDate, LOOKBACK_DAYS) : null
 
   const rows = await execAll<OHLCV>(
@@ -151,12 +156,39 @@ async function computeSnapshotsForTicker(ticker: string): Promise<SnapshotComput
   // チャンク分割で INSERT (libSQL の SQL長制限対策)
   const CHUNK = 200
   for (let i = 0; i < newSnapshots.length; i += CHUNK) {
-    await withDbRetry(() =>
-      db
-        .insert(dailySnapshots)
-        .values(newSnapshots.slice(i, i + CHUNK))
-        .onConflictDoNothing(),  // 既存日付は触らない (冪等)
-    )
+    const chunk = newSnapshots.slice(i, i + CHUNK)
+    await withDbRetry(() => {
+      const insert = db.insert(dailySnapshots).values(chunk)
+      if (!FORCE_REBUILD) return insert.onConflictDoNothing()
+
+      return insert.onConflictDoUpdate({
+        target: [dailySnapshots.ticker, dailySnapshots.date],
+        set: {
+          ma_5: sql`excluded.ma_5`,
+          ma_25: sql`excluded.ma_25`,
+          ma_75: sql`excluded.ma_75`,
+          ma_150: sql`excluded.ma_150`,
+          ma_300: sql`excluded.ma_300`,
+          weekly_ma_5: sql`excluded.weekly_ma_5`,
+          weekly_ma_13: sql`excluded.weekly_ma_13`,
+          weekly_ma_25: sql`excluded.weekly_ma_25`,
+          weekly_ma_50: sql`excluded.weekly_ma_50`,
+          weekly_ma_100: sql`excluded.weekly_ma_100`,
+          monthly_ma_3: sql`excluded.monthly_ma_3`,
+          monthly_ma_5: sql`excluded.monthly_ma_5`,
+          monthly_ma_10: sql`excluded.monthly_ma_10`,
+          monthly_ma_20: sql`excluded.monthly_ma_20`,
+          monthly_ma_25: sql`excluded.monthly_ma_25`,
+          daily_a_stage: sql`excluded.daily_a_stage`,
+          daily_b_stage: sql`excluded.daily_b_stage`,
+          weekly_a_stage: sql`excluded.weekly_a_stage`,
+          weekly_b_stage: sql`excluded.weekly_b_stage`,
+          monthly_a_stage: sql`excluded.monthly_a_stage`,
+          monthly_b_stage: sql`excluded.monthly_b_stage`,
+          computedAt: sql`unixepoch()`,
+        },
+      })
+    })
   }
 
   const latestDate = newSnapshots[newSnapshots.length - 1]?.date
@@ -212,7 +244,7 @@ async function main() {
   const errors: string[] = []
   const touchedSnapshotDates = new Set<string>()
 
-  console.log(`Snapshot 計算開始: ${tickers.length} 銘柄 (CONCURRENCY=${CONCURRENCY})`)
+  console.log(`Snapshot 計算開始: ${tickers.length} 銘柄 (CONCURRENCY=${CONCURRENCY}, FORCE_REBUILD=${FORCE_REBUILD})`)
   const startTime = Date.now()
   let nextIndex = 0
   let processed = 0

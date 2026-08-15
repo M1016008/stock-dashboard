@@ -1,4 +1,5 @@
 import { calculateAllStages, type MaValues, type StageResult } from '@/lib/hex-stage'
+import { adjustLikelySplitOhlcv } from '@/lib/physical-momentum'
 import { calendarMonthBucket, calendarWeekBucket } from '@/lib/timeframes'
 import type { OHLCV } from '@/types/stock'
 
@@ -148,8 +149,9 @@ export function buildSnapshotCalculations(
   options: { includeWarmup?: boolean } = {},
 ): SnapshotCalculation[] {
   const results: SnapshotCalculation[] = []
+  const adjustedRows = adjustLikelySplitOhlcv(rows)
 
-  for (const segment of splitContinuousHistory(rows)) {
+  for (const segment of splitContinuousHistory(adjustedRows)) {
     if (!options.includeWarmup && segment.length < MIN_SNAPSHOT_DATA_POINTS) continue
 
     const prefix = buildClosePrefix(segment)
