@@ -143,6 +143,12 @@ const apiChecks: Check[] = [
   },
   { name: 'chart drill question', path: '/api/chart-drill/question', kind: 'json' },
   { name: 'ML model status', path: '/api/ml/model-status', kind: 'json' },
+  {
+    name: 'ML reliability status',
+    path: '/api/ml/reliability-status',
+    kind: 'json',
+    requiredPaths: ['modelDate', 'validationRuns', 'validationSamples', 'healthIssueCount'],
+  },
   { name: 'ML current similars', path: '/api/ml/current-similars?ticker=7003&limit=3', kind: 'json' },
   {
     name: 'JP historical analogs',

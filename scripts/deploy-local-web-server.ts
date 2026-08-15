@@ -48,6 +48,8 @@ function waitForHealth(url: string, timeoutSeconds = 60): boolean {
 removeGenerated(stagePath)
 runNpm('test:layout-shell')
 runNpm('test:status-health')
+runNpm('test:ml-reliability')
+runNpm('test:remote-access')
 runNpm('test:manual-import-removal')
 runNpm('test:historical-analogs')
 runNpm('test:safe-spreadsheet')

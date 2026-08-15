@@ -4,6 +4,8 @@ import Link from 'next/link'
 import { useEffect, useState } from 'react'
 import { StageTag } from '@/components/ui/StageTag'
 import { BacktestHighlightChart, type HighlightChartPoint, type StageMarkerPoint } from '@/components/charts/BacktestHighlightChart'
+import { MlReliabilityStrip } from '@/components/ml/MlReliabilityStrip'
+import { assessMlReliability } from '@/lib/ml/reliability'
 import type { PhysicsAnalysis, PhysicsStatus } from '@/lib/ml/physics-analysis'
 
 type SimilarInsight = {
@@ -93,6 +95,65 @@ type ApiResponse = {
       hitLabel: boolean
     } | null
   }>
+}
+
+type MlBackendStatus = {
+  modelDate?: string | null
+  evaluationDate?: string | null
+  validationRuns?: number | null
+  validationSamples?: number | null
+  healthIssueCount?: number | null
+  items?: Array<{
+    key?: string
+    status?: string
+    date?: string | null
+    count?: number | null
+    evidence?: string[]
+  }>
+}
+
+function usValidationSamples(status: MlBackendStatus | null) {
+  const evaluation = status?.items?.find((item) => item.key === 'evaluation')
+  const sampleLine = evaluation?.evidence?.find((line) => /^sample\s/i.test(line))
+  if (!sampleLine) return null
+  const value = Number(sampleLine.replace(/[^0-9]/g, ''))
+  return Number.isFinite(value) ? value : null
+}
+
+function backendReliability(status: MlBackendStatus | null, market: 'JP' | 'US') {
+  if (market === 'US') {
+    const model = status?.items?.find((item) => item.key === 'models')
+    const evaluation = status?.items?.find((item) => item.key === 'evaluation')
+    return {
+      modelDate: model?.date ?? null,
+      evaluationDate: evaluation?.date ?? null,
+      validationRuns: evaluation?.count ?? null,
+      validationSamples: usValidationSamples(status),
+      healthIssueCount: status?.items?.filter((item) => item.status === 'warn' || item.status === 'missing').length ?? 0,
+    }
+  }
+
+  return {
+    modelDate: status?.modelDate ?? null,
+    evaluationDate: status?.evaluationDate ?? null,
+    validationRuns: status?.validationRuns ?? null,
+    validationSamples: status?.validationSamples ?? null,
+    healthIssueCount: status?.healthIssueCount ?? 0,
+  }
+}
+
+async function requiredJson<T>(url: string): Promise<T> {
+  const response = await fetch(url, { cache: 'no-store' })
+  if (!response.ok) throw new Error(`HTTP ${response.status}: ${url}`)
+  return response.json() as Promise<T>
+}
+
+async function optionalJson<T>(url: string): Promise<T | null> {
+  try {
+    return await requiredJson<T>(url)
+  } catch {
+    return null
+  }
 }
 
 function fmtPct(value: number | null | undefined) {
@@ -508,6 +569,7 @@ export function StockMlInsights({
   const [caseStudies, setCaseStudies] = useState<CaseStudy[]>([])
   const [casesLoading, setCasesLoading] = useState(false)
   const [casesLoaded, setCasesLoaded] = useState(false)
+  const [backendStatus, setBackendStatus] = useState<MlBackendStatus | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -515,8 +577,9 @@ export function StockMlInsights({
     setCaseStudies([])
     setCasesLoaded(false)
     setCasesLoading(false)
+    setBackendStatus(null)
     const similarParams = new URLSearchParams({ ticker: code, limit: '6' })
-    const historyParams = new URLSearchParams({ ticker: code, limit: '8' })
+    const historyParams = new URLSearchParams({ ticker: code, limit: '80' })
     if (analysisDate) {
       similarParams.set('date', analysisDate)
       similarParams.set('fallback', '1')
@@ -525,12 +588,17 @@ export function StockMlInsights({
     const similarEndpoint = market === 'US' ? '/api/us/ml-current-similars' : '/api/ml/current-similars'
     const historyRequest = market === 'US'
       ? Promise.resolve({ rows: [] })
-      : fetch(`/api/ml/prediction-history?${historyParams.toString()}`, { cache: 'no-store' }).then((res) => res.json())
+      : optionalJson<{ rows?: ApiResponse['predictions'] }>(`/api/ml/prediction-history?${historyParams.toString()}`)
+        .then((result) => result ?? { rows: [] })
+    const statusEndpoint = market === 'US'
+      ? `/api/us/ml-status/${encodeURIComponent(code)}${analysisDate ? `?date=${encodeURIComponent(analysisDate)}` : ''}`
+      : '/api/ml/reliability-status'
     Promise.all([
-      fetch(`${similarEndpoint}?${similarParams.toString()}`, { cache: 'no-store' }).then((res) => res.json()),
+      requiredJson<Partial<ApiResponse>>(`${similarEndpoint}?${similarParams.toString()}`),
       historyRequest,
+      optionalJson<MlBackendStatus>(statusEndpoint),
     ])
-      .then(([similarJson, historyJson]) => {
+      .then(([similarJson, historyJson, statusJson]) => {
         if (!cancelled) {
           setData({
             asOfDate: similarJson.asOfDate ?? null,
@@ -539,12 +607,16 @@ export function StockMlInsights({
             physicsAnalysis: similarJson.physicsAnalysis ?? null,
             similars: Array.isArray(similarJson.similars) ? similarJson.similars : [],
             caseStudies: [],
-            predictions: Array.isArray(historyJson.rows) ? historyJson.rows : [],
+            predictions: Array.isArray(historyJson?.rows) ? historyJson.rows : [],
           })
+          setBackendStatus(statusJson)
         }
       })
       .catch(() => {
-        if (!cancelled) setData({ asOfDate: null, featureAsOfDate: null, source: null, physicsAnalysis: null, similars: [], caseStudies: [], predictions: [] })
+        if (!cancelled) {
+          setData({ asOfDate: null, featureAsOfDate: null, source: null, physicsAnalysis: null, similars: [], caseStudies: [], predictions: [] })
+          setBackendStatus(null)
+        }
       })
     return () => { cancelled = true }
   }, [analysisDate, market, ticker])
@@ -552,6 +624,20 @@ export function StockMlInsights({
   const rows = data?.similars ?? []
   const predictions = data?.predictions ?? []
   const mlReading = data ? buildMlReading(rows, data.physicsAnalysis) : null
+  const reliabilityBackend = backendReliability(backendStatus, market)
+  const completedPredictions = predictions.filter((prediction) => prediction.outcome != null)
+  const reliability = data ? assessMlReliability({
+    asOfDate: data.asOfDate,
+    featureDate: data.featureAsOfDate,
+    modelDate: reliabilityBackend.modelDate,
+    evaluationDate: reliabilityBackend.evaluationDate,
+    similarityScores: rows.map((row) => row.similarityScore),
+    completedPredictions: completedPredictions.length,
+    hitPredictions: completedPredictions.filter((prediction) => prediction.outcome?.hitLabel).length,
+    validationRuns: reliabilityBackend.validationRuns,
+    validationSamples: reliabilityBackend.validationSamples,
+    healthIssueCount: reliabilityBackend.healthIssueCount,
+  }) : null
   const loadCaseStudies = () => {
     if (market === 'US' || casesLoading || casesLoaded) return
     setCasesLoading(true)
@@ -585,6 +671,7 @@ export function StockMlInsights({
         {!data && Array.from({ length: 3 }).map((_, index) => (
           <div key={index} style={{ minHeight: 56, border: '1px solid var(--border-subtle)', borderRadius: 8, background: 'var(--surface-muted)' }} />
         ))}
+        {reliability && <MlReliabilityStrip assessment={reliability} />}
         {data?.physicsAnalysis && <PhysicsAnalysisPanel analysis={data.physicsAnalysis} />}
         {mlReading && (
           <div style={{

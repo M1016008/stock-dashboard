@@ -26,6 +26,7 @@ const nextBin = path.join(cwd, 'node_modules', 'next', 'dist', 'bin', 'next')
 const liveDistDir = process.env.STOCKBOARD_WEB_DIST_DIR || '.next-live'
 const buildIdPath = path.join(cwd, liveDistDir, 'BUILD_ID')
 const port = integerEnv('STOCKBOARD_WEB_PORT', 3000, 1, 65535)
+const host = '127.0.0.1'
 const analogPort = integerEnv('STOCKBOARD_ANALOG_PORT', 3105, 1, 65535)
 const heapMb = integerEnv('STOCKBOARD_WEB_MAX_OLD_SPACE_MB', 2048, 512, 8192)
 const analogHeapMb = integerEnv('STOCKBOARD_ANALOG_MAX_OLD_SPACE_MB', 1536, 512, 4096)
@@ -121,6 +122,8 @@ const webPlist = `<?xml version="1.0" encoding="UTF-8"?>
     <string>start</string>
     <string>-p</string>
     <string>${port}</string>
+    <string>-H</string>
+    <string>${host}</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>
@@ -306,7 +309,7 @@ bootstrap(healthPlistPath)
 execFileSync('launchctl', ['enable', `gui/${uid}/${healthLabel}`], { stdio: 'inherit' })
 execFileSync('launchctl', ['kickstart', `gui/${uid}/${webLabel}`], { stdio: 'inherit' })
 
-console.log(`web service: ${webLabel} http://localhost:${port}`)
+console.log(`web service: ${webLabel} http://${host}:${port}`)
 console.log(
   `analog worker: ${analogLabel} http://127.0.0.1:${analogPort} `
   + `(heap ${analogHeapMb} MB, standard I/O + low CPU priority)`,
