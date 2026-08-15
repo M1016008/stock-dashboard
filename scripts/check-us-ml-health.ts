@@ -214,6 +214,9 @@ async function main() {
             COUNT(*) AS eligibleCount,
             COUNT(f.ticker) AS coveredCount
           FROM ohlcv_daily current INDEXED BY ohlcv_date_ticker_idx
+          INNER JOIN ticker_universe universe
+            ON universe.ticker = current.ticker
+           AND universe.active = 1
           LEFT JOIN us_analytics_copy_state copy ON copy.ticker = current.ticker
           LEFT JOIN ml_feature_vectors_v2 f INDEXED BY ml_feature_vectors_v2_feature_ticker_date_idx
             ON f.feature_set = ?

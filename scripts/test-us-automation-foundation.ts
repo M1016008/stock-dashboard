@@ -611,6 +611,7 @@ assert.match(
   /const pmsDate = await maxDate\(\s*'physical_momentum_metrics',\s*'date',\s*'WHERE market = \?'/,
 )
 assert.match(usMlHealth, /ohlcv_daily current INDEXED BY ohlcv_date_ticker_idx/)
+assert.match(usMlHealth, /INNER JOIN ticker_universe universe[\s\S]*universe\.active = 1/)
 assert.match(usMlHealth, /LIMIT 1 OFFSET \?/)
 assert.match(usMlHealth, /MAX\(end_date\) OVER \(PARTITION BY horizon_days\)/)
 const usMlRunner = read('scripts/run-us-ml-job.ts')
