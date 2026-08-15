@@ -4,11 +4,14 @@
 // ローカルMacのlaunchdで安全に回すためのオーケストレーター。
 
 import { execFileSync, spawn } from 'node:child_process'
+import path from 'node:path'
+import { createClient } from '@libsql/client'
 import { execGet } from '@/lib/db/client'
 import { execUsAnalyticsGet } from '@/lib/db/us-analytics'
 import { acquireUsStockboardUpdateLock } from '@/lib/server/update-lock'
 import { expectedLatestUsTradingDate } from '@/lib/server/us-data-freshness'
 import { waitForMemoryHeadroom, withMemoryGuardEnv } from '@/lib/system/memory-guard'
+import { resolveConfiguredStoragePath } from '@/lib/storage-paths'
 import { US_ADJUSTED_PRICE_BASIS } from '@/lib/us-adjusted-ohlcv'
 import { usInvestableSymbolSql } from '@/lib/us-symbol-quality'
 
@@ -151,6 +154,24 @@ async function usAnalyticsPriceBasis(): Promise<string | null> {
   ).then((row) => row?.value ?? null).catch(() => null)
 }
 
+async function writeUsAnalyticsMetadata(
+  dbPath: string,
+  entries: Array<[key: string, value: string]>,
+): Promise<void> {
+  const client = createClient({ url: `file:${dbPath}` })
+  try {
+    await client.execute('PRAGMA busy_timeout=30000')
+    await client.batch(entries.map(([key, value]) => ({
+      sql: `INSERT INTO us_analytics_metadata (key, value, updated_at)
+            VALUES (?, ?, unixepoch())
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = unixepoch()`,
+      args: [key, value],
+    })), 'write')
+  } finally {
+    client.close()
+  }
+}
+
 async function runCommand(command: string, args: string[], envOverrides: EnvOverrides, heartbeat?: Heartbeat): Promise<RunResult> {
   await waitForMemoryHeadroom({ label: `${command} ${args.join(' ')}` })
   return new Promise((resolve, reject) => {
@@ -238,10 +259,12 @@ async function main() {
     const beforeSnapshots = await latestUsSnapshotDate()
     console.log(`US latest update started: expected=${expected}, ohlcv=${beforeOhlcv ?? '-'}, snapshots=${beforeSnapshots ?? '-'}`)
 
-    const usAnalyticsDbPath = process.env.US_ANALYTICS_DB_PATH?.trim()
-    if (!usAnalyticsDbPath) {
+    const configuredUsAnalyticsDbPath = process.env.US_ANALYTICS_DB_PATH?.trim()
+    if (!configuredUsAnalyticsDbPath) {
       throw new Error('US_ANALYTICS_DB_PATH is required for US latest update. Point it at the external SSD analytics DB before running.')
     }
+    const usAnalyticsDbPath = resolveConfiguredStoragePath(path.resolve(configuredUsAnalyticsDbPath))
+    process.env.US_ANALYTICS_DB_PATH = usAnalyticsDbPath
 
     try {
       await runNpm('batch:us-universe', {
@@ -271,7 +294,7 @@ async function main() {
 
     const latestBeforeFetch = await latestUsOhlcvDate()
     const minimumCoveragePct = numberEnv('US_DAILY_MIN_PRICE_COVERAGE_PCT', 95)
-    const retryCoveragePct = numberEnv('US_DAILY_RETRY_PRICE_COVERAGE_PCT', 99.95)
+    const retryCoveragePct = numberEnv('US_DAILY_RETRY_PRICE_COVERAGE_PCT', minimumCoveragePct)
     const coverageBeforeFetch = latestBeforeFetch
       ? await usOhlcvCoverage(latestBeforeFetch)
       : null
@@ -415,6 +438,10 @@ async function main() {
       US_ANALYTICS_DB_PATH: usAnalyticsDbPath,
       UPDATE_CHILD_TIMEOUT_MINUTES: process.env.ANALOG_INDEX_DAILY_TIMEOUT_MINUTES ?? '60',
     }, heartbeat)
+    await writeUsAnalyticsMetadata(usAnalyticsDbPath, [
+      ['analog_index_price_basis', US_ADJUSTED_PRICE_BASIS],
+      ['analog_index_price_date', afterOhlcv],
+    ])
     await lock.heartbeat()
 
     if (process.env.US_SKIP_DAILY_ML === '1') {

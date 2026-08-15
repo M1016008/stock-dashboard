@@ -12,6 +12,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { createClient } from '@libsql/client'
 import { waitForMemoryHeadroom, withMemoryGuardEnv } from '@/lib/system/memory-guard'
+import { resolveConfiguredStoragePath } from '@/lib/storage-paths'
 
 const DEFAULT_US_ANALYTICS_DB = '/Volumes/こうし/stockboard-data/us/stockboard-us.db'
 type Mode = 'full' | 'raw' | 'normalize'
@@ -66,8 +67,9 @@ function numberEnv(name: string, fallback: number): number {
 }
 
 function dbPath(): string {
-  return process.env.US_ANALYTICS_DB_PATH?.trim()
-    || DEFAULT_US_ANALYTICS_DB
+  return resolveConfiguredStoragePath(path.resolve(
+    process.env.US_ANALYTICS_DB_PATH?.trim() || DEFAULT_US_ANALYTICS_DB,
+  ))
 }
 
 function checkpointEnabled(): boolean {

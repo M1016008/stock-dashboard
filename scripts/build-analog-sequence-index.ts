@@ -4,6 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { resolveUsAnalyticsDbPath } from '@/lib/db/us-analytics'
+import { resolveConfiguredStoragePath } from '@/lib/storage-paths'
 import {
   MA_SEQUENCE_BAND_COUNT,
   MA_SEQUENCE_EMBEDDING_FEATURE_LENGTH,
@@ -121,7 +122,9 @@ function normalizeMode(value: string | undefined): Mode {
 function sourcePath(market: Market): string {
   if (market === 'US') {
     const configured = process.env.US_ANALYTICS_DB_PATH?.trim()
-    const candidate = configured ? path.resolve(configured) : resolveUsAnalyticsDbPath()
+    const candidate = configured
+      ? resolveConfiguredStoragePath(path.resolve(configured))
+      : resolveUsAnalyticsDbPath()
     return fs.existsSync(candidate) ? fs.realpathSync(candidate) : candidate
   }
   const configured = process.env.STOCKBOARD_DB_PATH?.trim() || process.env.LOCAL_DB_PATH?.trim()

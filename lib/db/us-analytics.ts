@@ -1,7 +1,7 @@
 import { createClient, type Client, type InValue } from '@libsql/client'
 import fs from 'fs'
 import path from 'path'
-import { CURRENT_STORAGE_ROOT } from '@/lib/storage-paths'
+import { CURRENT_STORAGE_ROOT, resolveConfiguredStoragePath } from '@/lib/storage-paths'
 
 const DEFAULT_US_ANALYTICS_PATH = 'data/stockboard-us.db'
 const EXTERNAL_US_ANALYTICS_PATH = path.join(
@@ -26,7 +26,7 @@ export type UsAnalyticsArgs = readonly InValue[]
 
 export function resolveUsAnalyticsDbPath(): string {
   const configured = process.env.US_ANALYTICS_DB_PATH?.trim()
-  if (configured) return path.resolve(configured)
+  if (configured) return resolveConfiguredStoragePath(path.resolve(configured))
 
   const localPath = path.join(/* turbopackIgnore: true */ process.cwd(), DEFAULT_US_ANALYTICS_PATH)
   if (fs.existsSync(localPath)) return localPath

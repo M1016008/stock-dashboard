@@ -13,6 +13,7 @@ import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { acquireExclusiveUpdateLock } from '@/lib/server/update-lock'
+import { resolveConfiguredStoragePath } from '@/lib/storage-paths'
 
 type TargetName = 'jp' | 'us'
 
@@ -59,7 +60,7 @@ function resolveDefaultJpDbPath(): string {
 function resolveDefaultUsDbPath(): string {
   const configured = process.env.US_ANALYTICS_DB_PATH
   return configured
-    ? path.resolve(configured)
+    ? resolveConfiguredStoragePath(path.resolve(configured))
     : '/Volumes/こうし/stockboard-data/us/stockboard-us.db'
 }
 

@@ -13,6 +13,7 @@ import path from 'node:path'
 import { exactForwardExtremaRecomputeBars } from '@/lib/backtest/forward-extrema'
 import { ML_PRIMARY_HORIZON_LIST } from '@/lib/backtest/ml-horizons'
 import { waitForMemoryHeadroom, withMemoryGuardEnv } from '@/lib/system/memory-guard'
+import { resolveConfiguredStoragePath } from '@/lib/storage-paths'
 
 const DEFAULT_US_ANALYTICS_DB = '/Volumes/こうし/stockboard-data/us/stockboard-us.db'
 const US_ML_LOCK_PATH = path.join(
@@ -790,7 +791,9 @@ async function runDailyServing(env: NodeJS.ProcessEnv): Promise<void> {
 
 async function main(): Promise<void> {
   const mode = modeFromArg(process.argv[2])
-  const usAnalyticsDbPath = process.env.US_ANALYTICS_DB_PATH?.trim() || DEFAULT_US_ANALYTICS_DB
+  const usAnalyticsDbPath = resolveConfiguredStoragePath(path.resolve(
+    process.env.US_ANALYTICS_DB_PATH?.trim() || DEFAULT_US_ANALYTICS_DB,
+  ))
 
   if (!fs.existsSync(usAnalyticsDbPath)) {
     throw new Error(`US analytics DB not found: ${usAnalyticsDbPath}`)

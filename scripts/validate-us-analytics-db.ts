@@ -3,10 +3,13 @@
 import path from 'node:path'
 import { createClient, type Client } from '@libsql/client'
 import { expectedLatestUsTradingDate } from '@/lib/server/us-data-freshness'
+import { resolveConfiguredStoragePath } from '@/lib/storage-paths'
 import { US_ADJUSTED_PRICE_BASIS } from '@/lib/us-adjusted-ohlcv'
 
 const configuredTargetPath = process.env.US_ANALYTICS_DB_PATH?.trim()
-const TARGET_PATH = path.resolve(configuredTargetPath || 'data/stockboard-us.db')
+const TARGET_PATH = configuredTargetPath
+  ? resolveConfiguredStoragePath(path.resolve(configuredTargetPath))
+  : path.resolve('data/stockboard-us.db')
 const MIN_COPY_DONE = Number(process.env.US_ANALYTICS_MIN_COPY_DONE ?? 20500)
 const MIN_OHLCV_TICKERS = Number(process.env.US_ANALYTICS_MIN_OHLCV_TICKERS ?? 18000)
 const MIN_SNAPSHOT_TICKERS = Number(process.env.US_ANALYTICS_MIN_SNAPSHOT_TICKERS ?? 18000)

@@ -11,15 +11,16 @@ import {
   type UpdateLockHandle,
 } from '@/lib/server/update-lock'
 import { waitForMemoryHeadroom, withMemoryGuardEnv } from '@/lib/system/memory-guard'
+import { resolveConfiguredStoragePath } from '@/lib/storage-paths'
 import { MA_SEQUENCE_VERSION } from '@/lib/ml/ma-sequence'
 import { ML_PHYSICS_FEATURE_SET } from '@/lib/backtest/ml-physics'
 import { US_ADJUSTED_PRICE_BASIS } from '@/lib/us-adjusted-ohlcv'
 import { and, eq } from 'drizzle-orm'
 
-const usAnalyticsDbPath = path.resolve(
+const usAnalyticsDbPath = resolveConfiguredStoragePath(path.resolve(
   process.env.US_ANALYTICS_DB_PATH?.trim()
   || '/Volumes/こうし/stockboard-data/us/stockboard-us.db',
-)
+))
 const adjustedShadowDbPath = path.resolve(
   process.env.US_ADJUSTED_FOUNDATION_SHADOW_PATH?.trim()
   || `${usAnalyticsDbPath}.${US_ADJUSTED_PRICE_BASIS}.building`,

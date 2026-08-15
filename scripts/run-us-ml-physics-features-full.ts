@@ -6,7 +6,9 @@
 
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
+import path from 'node:path'
 import { createClient } from '@libsql/client'
+import { resolveConfiguredStoragePath } from '@/lib/storage-paths'
 
 const DEFAULT_US_ANALYTICS_DB = '/Volumes/こうし/stockboard-data/us/stockboard-us.db'
 const DEFAULT_START_DATE = '1980-12-12'
@@ -18,7 +20,9 @@ const END_OFFSET = Number(process.env.US_ML_PHYSICS_FEATURE_END_OFFSET ?? 0)
 type TickerRow = { ticker: string }
 
 function dbPath(): string {
-  return process.env.US_ANALYTICS_DB_PATH?.trim() || DEFAULT_US_ANALYTICS_DB
+  return resolveConfiguredStoragePath(path.resolve(
+    process.env.US_ANALYTICS_DB_PATH?.trim() || DEFAULT_US_ANALYTICS_DB,
+  ))
 }
 
 async function loadTickers(path: string): Promise<string[]> {

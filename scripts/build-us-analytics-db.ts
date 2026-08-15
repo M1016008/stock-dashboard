@@ -7,12 +7,15 @@ import { spawnSync } from 'node:child_process'
 import { createClient, type Client } from '@libsql/client'
 import { execAll, localDbPath } from '@/lib/db/client'
 import { ensureSchema } from '@/lib/db/migrate'
+import { resolveConfiguredStoragePath } from '@/lib/storage-paths'
 import { US_SEC_SIC_TAXONOMY } from '@/lib/us-classification'
 import { US_ADJUSTED_PRICE_BASIS } from '@/lib/us-adjusted-ohlcv'
 import { isUsInvestableSymbol } from '@/lib/us-symbol-quality'
 
 const configuredTargetPath = process.env.US_ANALYTICS_DB_PATH?.trim()
-const TARGET_PATH = path.resolve(configuredTargetPath || 'data/stockboard-us.db')
+const TARGET_PATH = configuredTargetPath
+  ? resolveConfiguredStoragePath(path.resolve(configuredTargetPath))
+  : path.resolve('data/stockboard-us.db')
 const LIMIT = Number(process.env.US_ANALYTICS_LIMIT ?? 0)
 const requestedCopyChunk = Math.max(1, Number(process.env.US_ANALYTICS_CHUNK ?? 10))
 const maxCopyChunk = Math.max(1, Number(process.env.US_ANALYTICS_MAX_CHUNK ?? 10))

@@ -5,10 +5,13 @@ import path from 'node:path'
 import { ML_PIPELINE_GENERATION_VERSION, ML_PIPELINE_NAME } from '@/lib/ml/pipeline-generation'
 import { MA_SEQUENCE_VERSION } from '@/lib/ml/ma-sequence'
 import { waitForMemoryHeadroom, withMemoryGuardEnv } from '@/lib/system/memory-guard'
+import { resolveConfiguredStoragePath } from '@/lib/storage-paths'
 import { US_ADJUSTED_PRICE_BASIS } from '@/lib/us-adjusted-ohlcv'
 
-const usAnalyticsDbPath = process.env.US_ANALYTICS_DB_PATH?.trim()
-  || '/Volumes/こうし/stockboard-data/us/stockboard-us.db'
+const usAnalyticsDbPath = resolveConfiguredStoragePath(path.resolve(
+  process.env.US_ANALYTICS_DB_PATH?.trim()
+  || '/Volumes/こうし/stockboard-data/us/stockboard-us.db',
+))
 const sourceDbPath = process.env.STOCKBOARD_DB_PATH?.trim()
   || process.env.LOCAL_DB_PATH?.trim()
   || 'data/stockboard.db'
