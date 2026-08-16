@@ -31,6 +31,13 @@ export function exactForwardExtremaRecomputeBars(horizons: readonly number[]): n
   return Math.max(...validHorizons) + 1
 }
 
+export function recentForwardExtremaLoadBars(recentDays: number, horizons: readonly number[]): number {
+  if (!Number.isFinite(recentDays) || recentDays <= 0) return 0
+  const validHorizons = horizons.filter((horizon) => Number.isInteger(horizon) && horizon > 0)
+  if (validHorizons.length === 0) return 0
+  return Math.floor(recentDays) + Math.max(...validHorizons)
+}
+
 class RangeMaxTree {
   private readonly size: number
   private readonly tree: number[]
@@ -149,4 +156,28 @@ export function computeForwardExtremaRows(input: {
   }
 
   return rows.sort((a, b) => a.date.localeCompare(b.date) || a.horizon_days - b.horizon_days)
+}
+
+export function computeRecentForwardExtremaRows(input: {
+  ticker: string
+  bars: ForwardExtremaBar[]
+  horizons: readonly number[]
+  recentDays: number
+  startDate?: string | null
+  endDate?: string | null
+}): ForwardExtremaRow[] {
+  const recentDays = Math.max(0, Math.floor(input.recentDays))
+  if (recentDays === 0) return []
+  const indexByDate = new Map(input.bars.map((bar, index) => [bar.date, index]))
+  return computeForwardExtremaRows({
+    ticker: input.ticker,
+    bars: input.bars,
+    horizons: input.horizons,
+    endDate: input.endDate,
+  }).filter((row) => {
+    const index = indexByDate.get(row.date)
+    if (index == null) return false
+    const horizonStart = Math.max(0, input.bars.length - recentDays - row.horizon_days)
+    return index >= horizonStart && (!input.startDate || row.date >= input.startDate)
+  })
 }

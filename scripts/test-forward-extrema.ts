@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict'
 import {
   computeForwardExtremaRows,
+  computeRecentForwardExtremaRows,
   exactForwardExtremaRecomputeBars,
+  recentForwardExtremaLoadBars,
   type ForwardExtremaBar,
   type ForwardExtremaRow,
 } from '@/lib/backtest/forward-extrema'
@@ -103,6 +105,34 @@ const slicedRecent = computeForwardExtremaRows({
 })
 assert.deepEqual(slicedRecent, fullRecent)
 
+const recentDays = 30
+const recentLoadBars = recentForwardExtremaLoadBars(recentDays, horizons)
+assert.equal(recentLoadBars, 230)
+const recentBars = bars.slice(-recentLoadBars)
+const recentRows = computeRecentForwardExtremaRows({
+  ticker: 'TEST',
+  bars: recentBars,
+  horizons,
+  recentDays,
+})
+for (const horizon of horizons) {
+  assert.equal(
+    recentRows.filter((row) => row.horizon_days === horizon).length,
+    recentDays,
+    `recent rows should retain ${recentDays} mature labels for horizon ${horizon}`,
+  )
+}
+
+const boundedRecentRows = computeRecentForwardExtremaRows({
+  ticker: 'TEST',
+  bars: recentBars,
+  horizons,
+  recentDays,
+  startDate: recentRows[Math.floor(recentRows.length / 2)].date,
+})
+assert.ok(boundedRecentRows.length > 0)
+assert.ok(boundedRecentRows.every((row) => row.date >= recentRows[Math.floor(recentRows.length / 2)].date))
+
 console.log(
-  `forward extrema optimization parity passed: rows=${actual.length}, exact_recompute_bars=${exactRecomputeBars}`,
+  `forward extrema optimization parity passed: rows=${actual.length}, exact_recompute_bars=${exactRecomputeBars}, recent_load_bars=${recentLoadBars}`,
 )

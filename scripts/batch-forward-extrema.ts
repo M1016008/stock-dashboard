@@ -11,6 +11,8 @@ import { execAll, execBatch, execGet, execRun, localDbPath } from '@/lib/db/clie
 import { HORIZONS as DEFAULT_HORIZONS } from '@/lib/backtest/signals'
 import {
   computeForwardExtremaRows,
+  computeRecentForwardExtremaRows,
+  recentForwardExtremaLoadBars,
   type ForwardExtremaBar as Bar,
   type ForwardExtremaRow as ExtremaRow,
 } from '@/lib/backtest/forward-extrema'
@@ -40,7 +42,7 @@ const ACTIVE_ONLY = process.env.FORWARD_EXTREMA_ACTIVE_ONLY === '1'
 const WRITE_MODEL_LABELS = process.env.FORWARD_EXTREMA_WRITE_MODEL_LABELS !== '0'
 const INCREMENTAL_UPSERT = process.env.FORWARD_EXTREMA_INCREMENTAL_UPSERT === '1'
 const RESUME_ENABLED = process.env.FORWARD_EXTREMA_RESUME === '1'
-const CHECKPOINT_VERSION = 1
+const CHECKPOINT_VERSION = 2
 
 type Checkpoint = {
   version: number
@@ -286,6 +288,15 @@ async function tickers(): Promise<string[]> {
 }
 
 function computeTicker(ticker: string, bars: Bar[]): ExtremaRow[] {
+  if (RECENT_DAYS > 0 && !END_DATE) {
+    return computeRecentForwardExtremaRows({
+      ticker,
+      bars,
+      horizons: HORIZONS,
+      recentDays: RECENT_DAYS,
+      startDate: START_DATE,
+    })
+  }
   const recentIndex = RECENT_DAYS > 0 ? Math.max(0, bars.length - RECENT_DAYS) : 0
   const startDateIndex = START_DATE ? bars.findIndex((bar) => bar.date >= START_DATE) : -1
   const startIndex = Math.max(recentIndex, startDateIndex >= 0 ? startDateIndex : 0)
@@ -298,6 +309,7 @@ async function loadBarsBatch(tickers: string[]): Promise<Map<string, Bar[]>> {
   const placeholders = tickers.map(() => '?').join(', ')
   let rows: Array<Bar & { ticker: string }>
   if (RECENT_DAYS > 0 && !END_DATE) {
+    const loadBars = recentForwardExtremaLoadBars(RECENT_DAYS, HORIZONS)
     rows = await execAll<Bar & { ticker: string }>(
       `
         SELECT ticker, date, high, low, close
@@ -310,7 +322,7 @@ async function loadBarsBatch(tickers: string[]): Promise<Map<string, Bar[]>> {
         WHERE recent_rank <= ?
         ORDER BY ticker, date
       `,
-      [...tickers, Math.floor(RECENT_DAYS)],
+      [...tickers, loadBars],
     )
   } else {
     rows = await execAll<Bar & { ticker: string }>(

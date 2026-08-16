@@ -142,6 +142,10 @@ async function main(): Promise<void> {
       console.log('Snapshots are already fresh after OHLCV fetch')
     }
 
+    // 月足MA監視はスナップショットと同じ月足共通計算を使い、6期間を差分更新する。
+    await runRequired('scripts/batch-monthly-ma-monitor.ts')
+    await lock?.heartbeat()
+
     await runRequired('scripts/batch-physical-momentum.ts', {
       // OHLCV直後の追随更新は直近日数に限定する。全期間再計算は週次ML/メンテナンスへ分離。
       PMS_RECENT_DAYS: envOrDefault('PMS_DAILY_RECENT_DAYS', '420'),

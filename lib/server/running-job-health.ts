@@ -30,12 +30,14 @@ export function runningJobIsVisible(
   nowMs = Date.now(),
   graceMs = 15 * 60 * 1_000,
 ): boolean {
+  const hints = PROCESS_HINTS.find(([pattern]) => pattern.test(job.jobType))?.[1]
+  if (hints && processText != null) {
+    const normalizedProcesses = processText.toLowerCase()
+    return hints.some((hint) => normalizedProcesses.includes(hint))
+  }
+
   if (nowMs - job.startedAt * 1_000 <= graceMs) return true
   if (recentHeartbeat(job.payloadJson, nowMs, graceMs)) return true
-
-  const hints = PROCESS_HINTS.find(([pattern]) => pattern.test(job.jobType))?.[1]
   if (!hints || processText == null) return true
-
-  const normalizedProcesses = processText.toLowerCase()
-  return hints.some((hint) => normalizedProcesses.includes(hint))
+  return false
 }

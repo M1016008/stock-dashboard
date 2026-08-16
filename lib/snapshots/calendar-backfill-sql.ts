@@ -47,6 +47,192 @@ export function buildCalendarStageClassificationStatement(
   }
 }
 
+export function buildCalendarStageBatchClassificationStatement(
+  market: SnapshotBackfillMarket,
+  tickers: readonly string[],
+): Statement {
+  if (tickers.length === 0) throw new Error('calendar stage batch requires at least one ticker')
+  const isUs = market === 'US'
+  const targetTable = isUs ? 'market_daily_snapshots' : 'daily_snapshots'
+  const placeholders = tickers.map(() => '?').join(', ')
+  const targetWhere = isUs
+    ? `market = 'US' AND ticker IN (${placeholders})`
+    : `ticker IN (${placeholders})`
+  return {
+    sql: `
+      UPDATE ${targetTable}
+      SET
+        weekly_a_stage = ${stageCase('weekly_ma_5', 'weekly_ma_13', 'weekly_ma_25')},
+        weekly_b_stage = ${stageCase('weekly_ma_25', 'weekly_ma_50', 'weekly_ma_100')},
+        monthly_a_stage = ${stageCase('monthly_ma_3', 'monthly_ma_5', 'monthly_ma_10')},
+        monthly_b_stage = ${stageCase('monthly_ma_10', 'monthly_ma_20', 'monthly_ma_25')},
+        computed_at = unixepoch()
+      WHERE ${targetWhere}
+    `,
+    args: [...tickers],
+  }
+}
+
+export function buildCalendarStageBatchBackfillStatements(
+  market: SnapshotBackfillMarket,
+  tickers: readonly string[],
+): Statement[] {
+  if (tickers.length === 0) throw new Error('calendar stage batch requires at least one ticker')
+  const isUs = market === 'US'
+  const sourceTable = isUs ? 'market_ohlcv_daily' : 'ohlcv_daily'
+  const targetTable = isUs ? 'market_daily_snapshots' : 'daily_snapshots'
+  const closeSql = isUs ? 'COALESCE(adj_close, close)' : 'close'
+  const placeholders = tickers.map(() => '?').join(', ')
+  const sourceWhere = isUs
+    ? `market = 'US' AND ticker IN (${placeholders})`
+    : `ticker IN (${placeholders})`
+  const targetWhere = isUs
+    ? `target.market = 'US' AND target.ticker = calculated.ticker`
+    : 'target.ticker = calculated.ticker'
+
+  const maSql = `
+    WITH raw AS (
+      SELECT ticker, date, ${closeSql} AS close
+      FROM ${sourceTable}
+      WHERE ${sourceWhere}
+    ),
+    boundaries AS (
+      SELECT
+        ticker,
+        date,
+        close,
+        CASE
+          WHEN julianday(date) - julianday(LAG(date) OVER (PARTITION BY ticker ORDER BY date)) > 60 THEN 1
+          ELSE 0
+        END AS starts_segment
+      FROM raw
+    ),
+    segmented AS (
+      SELECT
+        ticker,
+        date,
+        close,
+        SUM(starts_segment) OVER (
+          PARTITION BY ticker ORDER BY date ROWS UNBOUNDED PRECEDING
+        ) AS segment,
+        ${WEEK_BUCKET_SQL} AS week_bucket,
+        ${MONTH_BUCKET_SQL} AS month_bucket
+      FROM boundaries
+    ),
+    weekly_ranked AS (
+      SELECT
+        ticker,
+        segment,
+        week_bucket,
+        close,
+        ROW_NUMBER() OVER (
+          PARTITION BY ticker, segment, week_bucket ORDER BY date DESC
+        ) AS row_number
+      FROM segmented
+    ),
+    weekly_ends AS (
+      SELECT ticker, segment, week_bucket, close
+      FROM weekly_ranked
+      WHERE row_number = 1
+    ),
+    weekly_roll AS (
+      SELECT
+        ticker,
+        segment,
+        week_bucket,
+        COUNT(close) OVER (PARTITION BY ticker, segment ORDER BY week_bucket ROWS BETWEEN 4 PRECEDING AND 1 PRECEDING) AS count_4,
+        SUM(close) OVER (PARTITION BY ticker, segment ORDER BY week_bucket ROWS BETWEEN 4 PRECEDING AND 1 PRECEDING) AS sum_4,
+        COUNT(close) OVER (PARTITION BY ticker, segment ORDER BY week_bucket ROWS BETWEEN 12 PRECEDING AND 1 PRECEDING) AS count_12,
+        SUM(close) OVER (PARTITION BY ticker, segment ORDER BY week_bucket ROWS BETWEEN 12 PRECEDING AND 1 PRECEDING) AS sum_12,
+        COUNT(close) OVER (PARTITION BY ticker, segment ORDER BY week_bucket ROWS BETWEEN 24 PRECEDING AND 1 PRECEDING) AS count_24,
+        SUM(close) OVER (PARTITION BY ticker, segment ORDER BY week_bucket ROWS BETWEEN 24 PRECEDING AND 1 PRECEDING) AS sum_24,
+        COUNT(close) OVER (PARTITION BY ticker, segment ORDER BY week_bucket ROWS BETWEEN 49 PRECEDING AND 1 PRECEDING) AS count_49,
+        SUM(close) OVER (PARTITION BY ticker, segment ORDER BY week_bucket ROWS BETWEEN 49 PRECEDING AND 1 PRECEDING) AS sum_49,
+        COUNT(close) OVER (PARTITION BY ticker, segment ORDER BY week_bucket ROWS BETWEEN 99 PRECEDING AND 1 PRECEDING) AS count_99,
+        SUM(close) OVER (PARTITION BY ticker, segment ORDER BY week_bucket ROWS BETWEEN 99 PRECEDING AND 1 PRECEDING) AS sum_99
+      FROM weekly_ends
+    ),
+    monthly_ranked AS (
+      SELECT
+        ticker,
+        segment,
+        month_bucket,
+        close,
+        ROW_NUMBER() OVER (
+          PARTITION BY ticker, segment, month_bucket ORDER BY date DESC
+        ) AS row_number
+      FROM segmented
+    ),
+    monthly_ends AS (
+      SELECT ticker, segment, month_bucket, close
+      FROM monthly_ranked
+      WHERE row_number = 1
+    ),
+    monthly_roll AS (
+      SELECT
+        ticker,
+        segment,
+        month_bucket,
+        COUNT(close) OVER (PARTITION BY ticker, segment ORDER BY month_bucket ROWS BETWEEN 2 PRECEDING AND 1 PRECEDING) AS count_2,
+        SUM(close) OVER (PARTITION BY ticker, segment ORDER BY month_bucket ROWS BETWEEN 2 PRECEDING AND 1 PRECEDING) AS sum_2,
+        COUNT(close) OVER (PARTITION BY ticker, segment ORDER BY month_bucket ROWS BETWEEN 4 PRECEDING AND 1 PRECEDING) AS count_4,
+        SUM(close) OVER (PARTITION BY ticker, segment ORDER BY month_bucket ROWS BETWEEN 4 PRECEDING AND 1 PRECEDING) AS sum_4,
+        COUNT(close) OVER (PARTITION BY ticker, segment ORDER BY month_bucket ROWS BETWEEN 9 PRECEDING AND 1 PRECEDING) AS count_9,
+        SUM(close) OVER (PARTITION BY ticker, segment ORDER BY month_bucket ROWS BETWEEN 9 PRECEDING AND 1 PRECEDING) AS sum_9,
+        COUNT(close) OVER (PARTITION BY ticker, segment ORDER BY month_bucket ROWS BETWEEN 19 PRECEDING AND 1 PRECEDING) AS count_19,
+        SUM(close) OVER (PARTITION BY ticker, segment ORDER BY month_bucket ROWS BETWEEN 19 PRECEDING AND 1 PRECEDING) AS sum_19,
+        COUNT(close) OVER (PARTITION BY ticker, segment ORDER BY month_bucket ROWS BETWEEN 24 PRECEDING AND 1 PRECEDING) AS count_24,
+        SUM(close) OVER (PARTITION BY ticker, segment ORDER BY month_bucket ROWS BETWEEN 24 PRECEDING AND 1 PRECEDING) AS sum_24
+      FROM monthly_ends
+    ),
+    calculated AS (
+      SELECT
+        daily.ticker,
+        daily.date,
+        CASE WHEN weekly.count_4 = 4 THEN (weekly.sum_4 + daily.close) / 5 END AS weekly_ma_5,
+        CASE WHEN weekly.count_12 = 12 THEN (weekly.sum_12 + daily.close) / 13 END AS weekly_ma_13,
+        CASE WHEN weekly.count_24 = 24 THEN (weekly.sum_24 + daily.close) / 25 END AS weekly_ma_25,
+        CASE WHEN weekly.count_49 = 49 THEN (weekly.sum_49 + daily.close) / 50 END AS weekly_ma_50,
+        CASE WHEN weekly.count_99 = 99 THEN (weekly.sum_99 + daily.close) / 100 END AS weekly_ma_100,
+        CASE WHEN monthly.count_2 = 2 THEN (monthly.sum_2 + daily.close) / 3 END AS monthly_ma_3,
+        CASE WHEN monthly.count_4 = 4 THEN (monthly.sum_4 + daily.close) / 5 END AS monthly_ma_5,
+        CASE WHEN monthly.count_9 = 9 THEN (monthly.sum_9 + daily.close) / 10 END AS monthly_ma_10,
+        CASE WHEN monthly.count_19 = 19 THEN (monthly.sum_19 + daily.close) / 20 END AS monthly_ma_20,
+        CASE WHEN monthly.count_24 = 24 THEN (monthly.sum_24 + daily.close) / 25 END AS monthly_ma_25
+      FROM segmented AS daily
+      JOIN weekly_roll AS weekly
+        ON weekly.ticker = daily.ticker
+       AND weekly.segment = daily.segment
+       AND weekly.week_bucket = daily.week_bucket
+      JOIN monthly_roll AS monthly
+        ON monthly.ticker = daily.ticker
+       AND monthly.segment = daily.segment
+       AND monthly.month_bucket = daily.month_bucket
+    )
+    UPDATE ${targetTable} AS target
+    SET
+      weekly_ma_5 = calculated.weekly_ma_5,
+      weekly_ma_13 = calculated.weekly_ma_13,
+      weekly_ma_25 = calculated.weekly_ma_25,
+      weekly_ma_50 = calculated.weekly_ma_50,
+      weekly_ma_100 = calculated.weekly_ma_100,
+      monthly_ma_3 = calculated.monthly_ma_3,
+      monthly_ma_5 = calculated.monthly_ma_5,
+      monthly_ma_10 = calculated.monthly_ma_10,
+      monthly_ma_20 = calculated.monthly_ma_20,
+      monthly_ma_25 = calculated.monthly_ma_25,
+      computed_at = unixepoch()
+    FROM calculated
+    WHERE ${targetWhere}
+      AND target.date = calculated.date
+  `
+
+  return [
+    { sql: maSql, args: [...tickers] },
+    buildCalendarStageBatchClassificationStatement(market, tickers),
+  ]
+}
+
 export function buildCalendarStageBackfillStatements(
   market: SnapshotBackfillMarket,
   ticker: string,

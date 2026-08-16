@@ -17,6 +17,7 @@ import {
   LayoutDashboard,
   ListFilter,
   MessageSquareText,
+  Radar,
   Search,
   Star,
   type LucideIcon,
@@ -67,6 +68,7 @@ const NAV_ITEMS = [
     items: [
       { href: '/screener', label: 'スクリーナー', description: '条件で銘柄を抽出', icon: Search },
       { href: '/stage-screener', label: 'ステージスクリーナー', description: '日足・週足・月足の行列で抽出', icon: Hexagon },
+      { href: '/ma25m-monitor', label: '月足MA監視', description: '3〜25か月線と集中帯を監視', icon: Radar },
       { href: '/hex-stage', label: 'HEXステージ', description: '6ステージの分布と遷移', icon: Hexagon },
       { href: '/sectors', label: '業種分析', description: '17/33業種の強弱', icon: Building2 },
       { href: '/sector-etfs', label: '業界ETF分析', description: 'ETFで業界・テーマを確認', icon: ChartCandlestick },

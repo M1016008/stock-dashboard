@@ -756,7 +756,6 @@ async function main(): Promise<void> {
       'mlPrediction',
       'mlPhysicsCandidate',
       'mlSimilar',
-      'mlRlPolicy',
     ],
   )
   const usPrice = usDates.price
@@ -774,7 +773,6 @@ async function main(): Promise<void> {
       'mlPrediction',
       'mlPhysicsCandidate',
       'mlSimilar',
-      'mlRlPolicy',
     ],
   )
   const usCoverageIncomplete = Boolean(

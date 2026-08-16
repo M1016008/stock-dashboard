@@ -38,7 +38,17 @@ assert.equal(runningJobIsVisible({
   jobType: 'physical_momentum_us_raw_chunk',
   startedAt: oldStart,
   payloadJson: JSON.stringify({ heartbeatAt: '2026-08-11T11:55:00.000Z' }),
-}, '', now), true)
+}, '', now), false)
+assert.equal(runningJobIsVisible({
+  jobType: 'snapshot_compute',
+  startedAt: Math.floor((now - 5 * 60 * 1_000) / 1_000),
+  payloadJson: JSON.stringify({ heartbeatAt: '2026-08-11T11:59:00.000Z' }),
+}, '', now), false)
+assert.equal(runningJobIsVisible({
+  jobType: 'snapshot_compute',
+  startedAt: Math.floor((now - 5 * 60 * 1_000) / 1_000),
+  payloadJson: JSON.stringify({ heartbeatAt: '2026-08-11T11:59:00.000Z' }),
+}, 'node scripts/build-us-snapshots.ts', now), true)
 assert.equal(runningJobIsVisible({
   jobType: 'unknown_long_running_job',
   startedAt: oldStart,

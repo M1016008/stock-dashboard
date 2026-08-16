@@ -13,22 +13,22 @@ const horizons = [...new Set(
 async function main(): Promise<void> {
   if (horizons.length === 0) throw new Error('ML_HORIZONS is empty')
   const placeholders = horizons.map(() => '?').join(', ')
-  const [extremaRows, labelRows] = await Promise.all([
-    execAll<CountRow>(
-      `SELECT horizon_days AS horizon, COUNT(*) AS rows
-       FROM forward_extrema INDEXED BY fext_horizon_date_idx
-       WHERE horizon_days IN (${placeholders})
-       GROUP BY horizon_days ORDER BY horizon_days`,
-      horizons,
-    ),
-    execAll<CountRow>(
-      `SELECT horizon_days AS horizon, COUNT(*) AS rows
-       FROM ml_training_labels
-       WHERE horizon_days IN (${placeholders})
-       GROUP BY horizon_days ORDER BY horizon_days`,
-      horizons,
-    ),
-  ])
+  // These are both full-table aggregation checks. Run them sequentially so a
+  // production verification does not double SQLite's peak scan memory.
+  const extremaRows = await execAll<CountRow>(
+    `SELECT horizon_days AS horizon, COUNT(*) AS rows
+     FROM forward_extrema INDEXED BY fext_horizon_date_idx
+     WHERE horizon_days IN (${placeholders})
+     GROUP BY horizon_days ORDER BY horizon_days`,
+    horizons,
+  )
+  const labelRows = await execAll<CountRow>(
+    `SELECT horizon_days AS horizon, COUNT(*) AS rows
+     FROM ml_training_labels
+     WHERE horizon_days IN (${placeholders})
+     GROUP BY horizon_days ORDER BY horizon_days`,
+    horizons,
+  )
   const extremaByHorizon = new Map(extremaRows.map((row) => [Number(row.horizon), Number(row.rows)]))
   const labelsByHorizon = new Map(labelRows.map((row) => [Number(row.horizon), Number(row.rows)]))
   const checks = horizons.map((horizon) => {

@@ -3,7 +3,10 @@ import assert from 'node:assert/strict'
 import { DatabaseSync } from 'node:sqlite'
 import { calculateStageFromThreeMa, buildMaValuesFromOhlcv } from '@/lib/hex-stage'
 import { activeCalendarPeriodCounts, sampleCalendarPeriodEnds } from '@/lib/snapshots/calendar-periods'
-import { buildCalendarStageBackfillStatements } from '@/lib/snapshots/calendar-backfill-sql'
+import {
+  buildCalendarStageBackfillStatements,
+  buildCalendarStageBatchBackfillStatements,
+} from '@/lib/snapshots/calendar-backfill-sql'
 import { buildSnapshotCalculations } from '@/lib/snapshots/continuous-ma'
 import type { OHLCV } from '@/types/stock'
 
@@ -187,5 +190,78 @@ for (let index = 0; index < stored.length; index += 1) {
   }
 }
 sqlite.close()
+
+const batchSqlite = new DatabaseSync(':memory:')
+batchSqlite.exec(`
+  CREATE TABLE ohlcv_daily (
+    ticker TEXT NOT NULL,
+    date TEXT NOT NULL,
+    close REAL NOT NULL,
+    PRIMARY KEY (ticker, date)
+  );
+  CREATE TABLE daily_snapshots (
+    ticker TEXT NOT NULL,
+    date TEXT NOT NULL,
+    weekly_ma_5 REAL,
+    weekly_ma_13 REAL,
+    weekly_ma_25 REAL,
+    weekly_ma_50 REAL,
+    weekly_ma_100 REAL,
+    monthly_ma_3 REAL,
+    monthly_ma_5 REAL,
+    monthly_ma_10 REAL,
+    monthly_ma_20 REAL,
+    monthly_ma_25 REAL,
+    weekly_a_stage INTEGER,
+    weekly_b_stage INTEGER,
+    monthly_a_stage INTEGER,
+    monthly_b_stage INTEGER,
+    computed_at INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (ticker, date)
+  );
+`)
+const batchInsertPrice = batchSqlite.prepare('INSERT INTO ohlcv_daily(ticker, date, close) VALUES (?, ?, ?)')
+const batchInsertSnapshot = batchSqlite.prepare('INSERT INTO daily_snapshots(ticker, date) VALUES (?, ?)')
+batchSqlite.exec('BEGIN')
+for (const ticker of ['FIRST', 'SECOND']) {
+  for (const row of rows) {
+    batchInsertPrice.run(ticker, row.date, ticker === 'FIRST' ? row.close : row.close * 1.7)
+    batchInsertSnapshot.run(ticker, row.date)
+  }
+}
+batchSqlite.exec('COMMIT')
+batchSqlite.exec('BEGIN')
+for (const statement of buildCalendarStageBatchBackfillStatements('JP', ['FIRST', 'SECOND'])) {
+  batchSqlite.prepare(statement.sql).run(...statement.args)
+}
+batchSqlite.exec('COMMIT')
+for (const ticker of ['FIRST', 'SECOND']) {
+  const batchStored = batchSqlite.prepare(`
+    SELECT date,
+      weekly_ma_5, weekly_ma_13, weekly_ma_25, weekly_ma_50, weekly_ma_100,
+      monthly_ma_3, monthly_ma_5, monthly_ma_10, monthly_ma_20, monthly_ma_25,
+      weekly_a_stage, weekly_b_stage, monthly_a_stage, monthly_b_stage
+    FROM daily_snapshots WHERE ticker = ? ORDER BY date
+  `).all(ticker) as unknown as Stored[]
+  for (let index = 0; index < batchStored.length; index += 1) {
+    for (const key of calendarMaKeys) {
+      const scale = ticker === 'FIRST' ? 1 : 1.7
+      const expected = calculations[index][key]
+      assertNumberEqual(
+        batchStored[index][key],
+        expected == null ? null : expected * scale,
+        `batch SQL ${ticker} ${batchStored[index].date} ${key}`,
+      )
+    }
+    for (const key of stageKeys) {
+      assert.equal(
+        batchStored[index][key],
+        calculations[index][key],
+        `batch SQL ${ticker} ${batchStored[index].date} ${key}`,
+      )
+    }
+  }
+}
+batchSqlite.close()
 
 console.log('stage classification and calendar snapshot tests passed')

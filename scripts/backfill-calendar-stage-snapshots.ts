@@ -1,5 +1,7 @@
-import { ensureReady, execAll, execBatch, execRun } from '@/lib/db/client'
+import { ensureReady, execAll, execBatch } from '@/lib/db/client'
 import {
+  buildCalendarStageBatchBackfillStatements,
+  buildCalendarStageBatchClassificationStatement,
   buildCalendarStageBackfillStatements,
   buildCalendarStageClassificationStatement,
   CALENDAR_STAGE_VERSION,
@@ -18,6 +20,7 @@ const stagesOnly = process.env.STAGE_SNAPSHOT_BACKFILL_STAGES_ONLY === '1'
 const dryRun = process.env.STAGE_SNAPSHOT_BACKFILL_DRY_RUN === '1'
 const progressEvery = Math.max(1, Number(process.env.STAGE_SNAPSHOT_BACKFILL_PROGRESS_EVERY ?? 25))
 const pauseMs = Math.max(0, Number(process.env.STAGE_SNAPSHOT_BACKFILL_PAUSE_MS ?? 20))
+const batchSize = Math.max(1, Math.min(100, Number(process.env.STAGE_SNAPSHOT_BACKFILL_BATCH_SIZE ?? 25)))
 const lockPollSeconds = Math.max(5, Number(process.env.STAGE_SNAPSHOT_BACKFILL_LOCK_POLL_SECONDS ?? 15))
 const lockWaitHours = Math.max(1, Number(process.env.STAGE_SNAPSHOT_BACKFILL_LOCK_WAIT_HOURS ?? 24))
 const requestedTickers = process.env.TICKERS?.split(',').map((value) => value.trim().toUpperCase()).filter(Boolean)
@@ -76,15 +79,15 @@ async function loadTargets(): Promise<Target[]> {
     )
 }
 
-async function markComplete(target: Target): Promise<void> {
-  await execRun(
-    `INSERT INTO compute_state(job_type, ticker, last_processed_date, updated_at)
-     VALUES (?, ?, ?, unixepoch())
-     ON CONFLICT(job_type, ticker) DO UPDATE SET
-       last_processed_date = excluded.last_processed_date,
-       updated_at = unixepoch()`,
-    [jobType, target.ticker, target.sourceDate],
-  )
+function buildCompleteStatement(target: Target): { sql: string; args: [string, string, string] } {
+  return {
+    sql: `INSERT INTO compute_state(job_type, ticker, last_processed_date, updated_at)
+      VALUES (?, ?, ?, unixepoch())
+      ON CONFLICT(job_type, ticker) DO UPDATE SET
+        last_processed_date = excluded.last_processed_date,
+        updated_at = unixepoch()`,
+    args: [jobType, target.ticker, target.sourceDate],
+  }
 }
 
 async function waitForUpdateLock(): Promise<UpdateLockHandle> {
@@ -124,32 +127,42 @@ async function main(): Promise<void> {
   console.log(
     `calendar stage backfill: market=${market} version=${CALENDAR_STAGE_VERSION} `
       + `targets=${targets.length} pending=${pending.length} dryRun=${dryRun ? 'yes' : 'no'}`
-      + ` stagesOnly=${stagesOnly ? 'yes' : 'no'}`,
+      + ` stagesOnly=${stagesOnly ? 'yes' : 'no'} batchSize=${batchSize}`,
   )
   if (dryRun || pending.length === 0) return
 
   const updateLock = await waitForUpdateLock()
   try {
     let succeeded = 0
+    let attempted = 0
     const errors: string[] = []
     const startedAt = Date.now()
-    for (const target of pending) {
+    for (let offset = 0; offset < pending.length; offset += batchSize) {
+      const batch = pending.slice(offset, offset + batchSize)
+      const tickers = batch.map((target) => target.ticker)
       try {
-        await execBatch(stagesOnly
-          ? [buildCalendarStageClassificationStatement(market, target.ticker)]
-          : buildCalendarStageBackfillStatements(market, target.ticker))
-        await markComplete(target)
-        succeeded += 1
+        const calculations = batch.length === 1
+          ? (stagesOnly
+              ? [buildCalendarStageClassificationStatement(market, tickers[0])]
+              : buildCalendarStageBackfillStatements(market, tickers[0]))
+          : (stagesOnly
+              ? [buildCalendarStageBatchClassificationStatement(market, tickers)]
+              : buildCalendarStageBatchBackfillStatements(market, tickers))
+        await execBatch([
+          ...calculations,
+          ...batch.map(buildCompleteStatement),
+        ])
+        succeeded += batch.length
       } catch (error) {
-        errors.push(`${target.ticker}: ${error instanceof Error ? error.message : String(error)}`)
+        errors.push(`${tickers.join(',')}: ${error instanceof Error ? error.message : String(error)}`)
       }
+      attempted += batch.length
 
-      const processed = succeeded + errors.length
-      if (processed % progressEvery === 0 || processed === pending.length) {
+      if (attempted % progressEvery < batch.length || offset + batch.length === pending.length) {
         await updateLock?.heartbeat()
         const elapsedSec = Math.round((Date.now() - startedAt) / 1000)
         console.log(
-          `calendar stage backfill progress: ${processed}/${pending.length} `
+          `calendar stage backfill progress: ${attempted}/${pending.length} `
             + `succeeded=${succeeded} failed=${errors.length} elapsed=${elapsedSec}s`,
         )
       }

@@ -472,6 +472,17 @@ assert.match(dataFreshnessGuard, /const blockingLocks = activeLocks\.filter/)
 assert.match(dataFreshnessGuard, /cleanupOrphanedUpdateLocks\(EXCLUSIVE_UPDATE_JOB_TYPES\)/)
 assert.match(dataFreshnessGuard, /jpSupplementalIgnoredWriters/)
 assert.match(dataFreshnessGuard, /heavy_us_ml_process/)
+const jpDailyMlStaleBlock = dataFreshnessGuard.match(
+  /const jpMlStale = staleDateEntries\([\s\S]*?\n  \)/,
+)?.[0] ?? ''
+const usDailyStaleBlock = dataFreshnessGuard.match(
+  /const usStale = staleDateEntries\([\s\S]*?\n  \)/,
+)?.[0] ?? ''
+assert.ok(jpDailyMlStaleBlock)
+assert.ok(usDailyStaleBlock)
+assert.doesNotMatch(jpDailyMlStaleBlock, /mlRlPolicy/)
+assert.doesNotMatch(usDailyStaleBlock, /mlRlPolicy/)
+assert.match(dataFreshnessGuard, /maxDate\(query, 'ml_rl_policy_evaluations', 'evaluation_date'\)/)
 
 const kabutanMaterialNews = read('scripts/batch-kabutan-material-news.ts')
 assert.match(kabutanMaterialNews, /acquireJpStockboardUpdateLock/)
@@ -617,6 +628,13 @@ assert.match(usMlHealth, /MAX\(end_date\) OVER \(PARTITION BY horizon_days\)/)
 const usMlRunner = read('scripts/run-us-ml-job.ts')
 assert.match(usMlRunner, /US_ML_HEALTH_WRITE: '1'/)
 assert.match(usMlRunner, /runNpm\('batch:dashboard-cache'/)
+
+const usLatestUpdater = read('scripts/update-us-latest.ts')
+assert.match(
+  usLatestUpdater,
+  /numberEnv\('US_DAILY_MIN_SNAPSHOT_COVERAGE_PCT', 100\)/,
+  'US daily publication must not accept snapshot gaps that fail the strict ML health gate',
+)
 
 const featureHealth = read('scripts/batch-ml-feature-health.ts')
 assert.match(featureHealth, /ML_FEATURE_HEALTH_STRICT/)

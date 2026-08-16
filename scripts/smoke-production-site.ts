@@ -44,6 +44,7 @@ const pages: Check[] = [
   '/earnings',
   '/hex-stage',
   '/market-momentum',
+  '/ma25m-monitor',
   '/materials',
   '/screener',
   '/sector-etfs',
@@ -110,6 +111,8 @@ const apiChecks: Check[] = [
     requiredPaths: ['0.majorCategory', '0.subIndustry'],
   },
   { name: 'JP screener', path: '/api/screener?limit=5', kind: 'json' },
+  { name: 'JP monthly MA monitor', path: '/api/ma25m-monitor?period=all&limit=5', kind: 'json', requiredPaths: ['date', 'periods', 'summary.monitored', 'summary.clusters'] },
+  { name: 'JP monthly MA detail', path: '/api/ma25m-monitor/7003', kind: 'json', requiredPaths: ['ticker', 'monitors', 'clusters'] },
   { name: 'sector ETFs', path: '/api/sector-etfs', kind: 'json' },
   { name: 'sector ETF detail', path: '/api/sector-etfs/1617', kind: 'json' },
   {

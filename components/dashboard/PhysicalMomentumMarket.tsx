@@ -608,9 +608,10 @@ function StageMiniStrip({ row }: { row: MomentumRankingRow }) {
       {stages.map((item) => (
         <span
           key={item.label}
-          className="inline-flex shrink-0 items-center gap-0.5 rounded-full border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-1 py-0.5"
+          className="inline-flex shrink-0"
+          title={`${item.label}: ${item.value ?? '未算出'}`}
+          aria-label={`${item.label}: ${item.value ?? '未算出'}`}
         >
-          <span className="text-[8px] font-bold text-[var(--color-text-tertiary)]">{item.label}</span>
           <StageTag stage={item.value} size="xs" />
         </span>
       ))}

@@ -45,21 +45,29 @@ function laterDate(a: string | null, b: string | null): string | null {
   return a ?? b
 }
 
-async function recentStartDate(): Promise<string | null> {
-  if (!Number.isFinite(RECENT_DAYS) || RECENT_DAYS <= 0) return null
-  const rows = await execAll<{ date: string | null }>(
+async function recentStartDatesByHorizon(): Promise<Map<number, string>> {
+  if (!Number.isFinite(RECENT_DAYS) || RECENT_DAYS <= 0) return new Map()
+  const rows = await execAll<{ horizon: number; date: string | null }>(
     `
-    SELECT MIN(date) AS date
-    FROM (
-      SELECT DISTINCT date
-      FROM forward_extrema INDEXED BY fext_date_horizon_idx
-      ORDER BY date DESC
-      LIMIT ?
+    WITH ranked AS (
+      SELECT horizon_days AS horizon,
+             date,
+             ROW_NUMBER() OVER (PARTITION BY horizon_days ORDER BY date DESC) AS recent_rank
+      FROM forward_extrema_date_coverage
+      WHERE horizon_days IN (${horizonPlaceholders()})
     )
+    SELECT horizon, MIN(date) AS date
+    FROM ranked
+    WHERE recent_rank <= ?
+    GROUP BY horizon
     `,
-    [RECENT_DAYS],
+    [...HORIZONS, Math.floor(RECENT_DAYS)],
   )
-  return rows[0]?.date ?? null
+  return new Map(
+    rows
+      .filter((row): row is { horizon: number; date: string } => Boolean(row.date))
+      .map((row) => [Number(row.horizon), row.date]),
+  )
 }
 
 async function labelDateBounds(startDate: string | null, endDate: string | null): Promise<{ minDate: string; maxDate: string } | null> {
@@ -88,9 +96,23 @@ async function labelDateBounds(startDate: string | null, endDate: string | null)
   return { minDate: minDateValue, maxDate: maxDateValue }
 }
 
-async function syncLabelsForRange(startDate: string | null, endDate: string | null): Promise<void> {
+async function syncLabelsForRange(
+  startDate: string | null,
+  endDate: string | null,
+  recentStarts: ReadonlyMap<number, string>,
+): Promise<void> {
   const where = [`fe.horizon_days IN (${horizonPlaceholders()})`]
   const args: Array<string | number> = [...HORIZONS]
+  if (recentStarts.size > 0) {
+    const predicates: string[] = []
+    for (const horizon of HORIZONS) {
+      const recentStart = recentStarts.get(horizon)
+      if (!recentStart) continue
+      predicates.push('(fe.horizon_days = ? AND fe.date >= ?)')
+      args.push(horizon, recentStart)
+    }
+    if (predicates.length > 0) where.push(`(${predicates.join(' OR ')})`)
+  }
   if (TICKERS.length > 0) {
     where.push(`fe.ticker IN (${TICKERS.map(() => '?').join(', ')})`)
     args.push(...TICKERS)
@@ -181,7 +203,10 @@ async function main() {
     return
   }
 
-  const recentStart = await recentStartDate()
+  const recentStarts = await recentStartDatesByHorizon()
+  const recentStart = recentStarts.size > 0
+    ? [...recentStarts.values()].sort()[0]
+    : null
   const effectiveStartDate = laterDate(START_DATE, recentStart)
   const effectiveEndDate = END_DATE
 
@@ -200,13 +225,13 @@ async function main() {
     while (cursor <= bounds.maxDate) {
       const chunkEnd = minDate(addDays(cursor, DATE_CHUNK_DAYS - 1), bounds.maxDate)
       console.log(`ml labels chunk ${chunks + 1} start: horizons=${HORIZONS.join('/')}, start=${cursor}, end=${chunkEnd}`)
-      await syncLabelsForRange(cursor, chunkEnd)
+      await syncLabelsForRange(cursor, chunkEnd, recentStarts)
       chunks += 1
       console.log(`ml labels chunk ${chunks} done: horizons=${HORIZONS.join('/')}, start=${cursor}, end=${chunkEnd}`)
       cursor = addDays(chunkEnd, 1)
     }
   } else {
-    await syncLabelsForRange(effectiveStartDate, effectiveEndDate)
+    await syncLabelsForRange(effectiveStartDate, effectiveEndDate, recentStarts)
     chunks = 1
   }
 

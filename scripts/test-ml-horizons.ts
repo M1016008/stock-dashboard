@@ -33,12 +33,27 @@ for (const scriptName of criticalScripts) {
 const dailyServingCommand = packageJson.scripts['batch:ml-daily-serving-recent']
 assert.ok(dailyServingCommand.includes('batch:ml-physics-status-evaluate'), 'daily serving must refresh physics status evaluations')
 assert.ok(
+  dailyServingCommand.indexOf('batch:forward-extrema:short-recent')
+    < dailyServingCommand.indexOf('batch:ml-labels'),
+  'daily serving must refresh forward extrema before syncing ML labels',
+)
+assert.ok(
   dailyServingCommand.includes(`ML_PHYSICS_STATUS_HORIZONS=${ML_PRIMARY_HORIZON_LIST}`),
   'daily serving physics status evaluation must include every primary horizon',
 )
 assert.ok(
   packageJson.scripts['batch:ml-weekly-train'].includes(`ML_PHYSICS_STATUS_HORIZONS=${ML_PRIMARY_HORIZON_LIST}`),
   'weekly training must refresh physics status evaluations for every primary horizon',
+)
+assert.match(
+  packageJson.scripts['verify:calendar-stages:jp'],
+  /TICKERS=\$\{TICKERS:-[^}]+\}/,
+  'JP calendar stage verification must have runnable default canaries',
+)
+assert.match(
+  packageJson.scripts['verify:calendar-stages:us'],
+  /TICKERS=\$\{TICKERS:-[^}]+\}/,
+  'US calendar stage verification must have runnable default canaries',
 )
 
 const backfillSource = fs.readFileSync(path.join(process.cwd(), 'scripts/run-ml-horizon-backfill.ts'), 'utf8')

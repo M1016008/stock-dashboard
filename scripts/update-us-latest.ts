@@ -363,7 +363,7 @@ async function main() {
     }
 
     const latestSnapshots = await latestUsSnapshotDate()
-    const minimumSnapshotCoveragePct = numberEnv('US_DAILY_MIN_SNAPSHOT_COVERAGE_PCT', 99.5)
+    const minimumSnapshotCoveragePct = numberEnv('US_DAILY_MIN_SNAPSHOT_COVERAGE_PCT', 100)
     const snapshotCoverageBefore = await usSnapshotCoverage(afterOhlcv)
     const snapshotCoverageNeedsRepair = snapshotCoverageBefore.coveragePct < minimumSnapshotCoveragePct
     console.log(

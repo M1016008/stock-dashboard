@@ -9,6 +9,8 @@ if (market !== 'JP' && market !== 'US') throw new Error(`unsupported market: ${m
 const requestedTickers = process.env.TICKERS?.split(',').map((value) => value.trim().toUpperCase()).filter(Boolean)
 if (!requestedTickers?.length) throw new Error('TICKERS is required for calendar stage verification')
 const tickers = requestedTickers
+const startDate = process.env.STAGE_SNAPSHOT_VERIFY_START_DATE?.trim() || null
+const endDate = process.env.STAGE_SNAPSHOT_VERIFY_END_DATE?.trim() || null
 
 const valueKeys = [
   'weekly_ma_5', 'weekly_ma_13', 'weekly_ma_25', 'weekly_ma_50', 'weekly_ma_100',
@@ -44,16 +46,19 @@ async function loadPrices(ticker: string): Promise<OHLCV[]> {
 
 async function loadSnapshots(ticker: string): Promise<StoredSnapshot[]> {
   const columns = valueKeys.join(', ')
+  const dateWhere = [startDate ? 'date >= ?' : null, endDate ? 'date <= ?' : null].filter(Boolean)
+  const dateSql = dateWhere.length > 0 ? ` AND ${dateWhere.join(' AND ')}` : ''
+  const dateArgs = [startDate, endDate].filter((value): value is string => value != null)
   return market === 'US'
     ? execAll<StoredSnapshot>(
       `SELECT date, ${columns} FROM market_daily_snapshots
-       WHERE market = 'US' AND ticker = ? ORDER BY date`,
-      [ticker],
+       WHERE market = 'US' AND ticker = ?${dateSql} ORDER BY date`,
+      [ticker, ...dateArgs],
     )
     : execAll<StoredSnapshot>(
       `SELECT date, ${columns} FROM daily_snapshots
-       WHERE ticker = ? ORDER BY date`,
-      [ticker],
+       WHERE ticker = ?${dateSql} ORDER BY date`,
+      [ticker, ...dateArgs],
     )
 }
 
@@ -95,7 +100,16 @@ async function main(): Promise<void> {
   }
 
   const mismatches = Object.values(mismatchTotals).reduce((sum, count) => sum + count, 0)
-  console.log(JSON.stringify({ market, tickers, totalRows, mismatches, mismatchTotals, mismatchExamples }, null, 2))
+  console.log(JSON.stringify({
+    market,
+    tickers,
+    startDate,
+    endDate,
+    totalRows,
+    mismatches,
+    mismatchTotals,
+    mismatchExamples,
+  }, null, 2))
   if (mismatches > 0) process.exitCode = 1
 }
 

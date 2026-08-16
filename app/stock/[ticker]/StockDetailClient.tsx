@@ -23,6 +23,7 @@ import { EarningsCard } from '@/components/stock/EarningsCard'
 import { WatchlistButton } from '@/components/ui/WatchlistButton'
 import { StageTimeline } from '@/components/stock/StageTimeline'
 import { StockMovePeriods } from '@/components/stock/StockMovePeriods'
+import { Ma25mMonitorSummary } from '@/components/stock/Ma25mMonitorSummary'
 import { StockMlInsights } from '@/components/stock/StockMlInsights'
 import { HistoricalAnalogExplorer } from '@/components/stock/HistoricalAnalogExplorer'
 import { ScenarioProjectionChart } from '@/components/stock/ScenarioProjectionChart'
@@ -435,6 +436,7 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
 
       {activeTab === 'chart' && (
         <>
+          <Ma25mMonitorSummary ticker={ticker} analysisDate={analysisDate} />
           <div>
             <div className="section-header">ステージ変遷</div>
             <StageTimeline ticker={ticker} analysisDate={analysisDate} />
@@ -447,6 +449,7 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
               height={460}
               historyPeriod="all"
               showTimeframeSelector
+              maLinesByInterval={{ M: [3, 5, 10, 15, 20, 25] }}
               analysisDate={analysisDate}
               revealAfterAnalysis={showActual}
             />

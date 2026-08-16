@@ -117,6 +117,44 @@ class CalendarCloseAccumulator {
   }
 }
 
+export type ContinuousMonthlyMaPoint = OHLCV & {
+  values: Map<number, number | null>
+  activeDays: number
+  segmentStartDate: string
+}
+
+/**
+ * 暦月終値SMAを任意期間の配列から日次で算出する共通経路。
+ * daily_snapshots と同じ分割調整・連続履歴・当月終値の扱いを使う。
+ */
+export function buildContinuousMonthlyMaSeries(
+  rows: OHLCV[],
+  periods: readonly number[],
+): ContinuousMonthlyMaPoint[] {
+  const results: ContinuousMonthlyMaPoint[] = []
+  const normalizedPeriods = [...new Set(periods)]
+    .filter((period) => Number.isInteger(period) && period > 0)
+    .sort((left, right) => left - right)
+  if (normalizedPeriods.length === 0) return results
+
+  for (const segment of splitContinuousHistory(adjustLikelySplitOhlcv(rows))) {
+    const monthly = new CalendarCloseAccumulator(calendarMonthBucket)
+    const segmentStartDate = segment[0]?.date
+    for (let index = 0; index < segment.length; index += 1) {
+      const row = segment[index]
+      monthly.update(row)
+      results.push({
+        ...row,
+        values: new Map(normalizedPeriods.map((period) => [period, monthly.sma(period)])),
+        activeDays: index + 1,
+        segmentStartDate,
+      })
+    }
+  }
+
+  return results
+}
+
 export function buildMaValuesAtIndex(rows: OHLCV[], prefix: number[], index: number): MaValues {
   const weekly = new CalendarCloseAccumulator(calendarWeekBucket)
   const monthly = new CalendarCloseAccumulator(calendarMonthBucket)
