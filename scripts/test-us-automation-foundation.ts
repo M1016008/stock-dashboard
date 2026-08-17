@@ -464,10 +464,16 @@ assert.doesNotMatch(jpMlLearning, /acquireExclusiveUpdateLock/)
 const jpMlFreshnessGuard = read('scripts/guard-ml-freshness.ts')
 assert.match(jpMlFreshnessGuard, /acquireJpStockboardUpdateLock/)
 assert.doesNotMatch(jpMlFreshnessGuard, /acquireExclusiveUpdateLock/)
+assert.match(jpMlFreshnessGuard, /const DEFERRED_EXIT_CODE = 75/)
+assert.match(jpMlFreshnessGuard, /await recordRun\('partial'/)
 
 const dataFreshnessGuard = read('scripts/guard-data-freshness.ts')
 assert.match(dataFreshnessGuard, /ignoredWriterJobTypes: \['us_adjusted_foundation'\]/)
 assert.match(dataFreshnessGuard, /cooldownSeconds: 15 \* 60/)
+assert.match(
+  dataFreshnessGuard,
+  /label: 'com\.stockboard\.us-update-latest',[\s\S]*?cooldownSeconds: 30 \* 60/,
+)
 assert.match(dataFreshnessGuard, /const blockingLocks = activeLocks\.filter/)
 assert.match(dataFreshnessGuard, /cleanupOrphanedUpdateLocks\(EXCLUSIVE_UPDATE_JOB_TYPES\)/)
 assert.match(dataFreshnessGuard, /jpSupplementalIgnoredWriters/)
@@ -534,6 +540,11 @@ assert.match(jpMlInstaller, /ML_LEARNING_MINUTE \?\? '30'/)
 assert.match(jpMlInstaller, /ML_LEARNING_RETRY_HOUR \?\? '3'/)
 assert.match(jpMlInstaller, /ML_LEARNING_RETRY_MINUTE \?\? '0'/)
 assert.match(jpMlInstaller, /flatMap/)
+
+const jpMlFreshnessInstaller = read('scripts/install-local-ml-freshness-guard.ts')
+assert.match(jpMlFreshnessInstaller, /\{ hour: 0, minute: 15 \}/)
+assert.match(jpMlFreshnessInstaller, /\{ hour: 5, minute: 15 \}/)
+assert.match(jpMlFreshnessInstaller, /\[1, 2, 3, 4, 5, 6\]/)
 
 const usAnalyticsClient = read('lib/db/us-analytics.ts')
 assert.match(usAnalyticsClient, /stat\.dev.*stat\.ino/)

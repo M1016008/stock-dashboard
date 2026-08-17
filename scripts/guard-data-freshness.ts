@@ -141,14 +141,20 @@ const services = {
   jpMl: {
     key: 'jp-ml',
     label: 'com.stockboard.ml-freshness-guard',
-    cooldownSeconds: 2 * 60 * 60,
+    // The guard is inexpensive when fresh. Keep retries shorter than this
+    // supervisor's 30-minute cadence so a completed writer is followed by a
+    // repair promptly instead of leaving serving features stale for hours.
+    cooldownSeconds: 15 * 60,
     requiresIdleWriter: true,
     ignoredWriterJobTypes: [],
   },
   us: {
     key: 'us',
     label: 'com.stockboard.us-update-latest',
-    cooldownSeconds: 2 * 60 * 60,
+    // The US update has its own lock, coverage gates, and child retries. Once
+    // it exits, retry on the next 30-minute supervisor pass instead of
+    // leaving stale serving data until a later intraday window.
+    cooldownSeconds: 30 * 60,
     requiresIdleWriter: true,
     ignoredWriterJobTypes: [],
   },

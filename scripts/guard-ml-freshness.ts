@@ -45,6 +45,10 @@ const MIN_PHYSICS_CANDIDATES = Number(process.env.ML_FRESHNESS_MIN_PHYSICS_CANDI
 const DRY_RUN = process.env.DRY_RUN === '1'
 const REPAIR = process.env.ML_FRESHNESS_GUARD_REPAIR !== '0'
 const STALE_LOCK_MINUTES = envNumber('ML_FRESHNESS_STALE_LOCK_MINUTES', 30)
+// launchd does not automatically retry a one-shot job after a successful
+// process exit. A deferred run therefore uses the temporary-failure status so
+// the cross-market freshness guard can immediately schedule another attempt.
+const DEFERRED_EXIT_CODE = 75
 const ACTIVE_ML_PROCESS_PATTERNS = [
   'npm run batch:ml-',
   'npm run batch:us-ml-',
@@ -427,6 +431,7 @@ async function clearStaleOwnLock(): Promise<string[]> {
 }
 
 async function recordRun(status: string, startedAt: number, actions: string[], errorSummary: string | null): Promise<void> {
+  if (DRY_RUN) return
   await execRun(
     `
     INSERT INTO batch_runs (
@@ -455,6 +460,16 @@ async function recordRun(status: string, startedAt: number, actions: string[], e
   )
 }
 
+async function defer(
+  startedAt: number,
+  actions: string[],
+  reason: string,
+): Promise<void> {
+  console.warn(`[ml-freshness-guard] deferred: ${reason}`)
+  await recordRun('partial', startedAt, actions, `deferred: ${reason}`)
+  process.exitCode = DEFERRED_EXIT_CODE
+}
+
 async function main() {
   process.env.USE_LOCAL_DB = process.env.USE_LOCAL_DB ?? '1'
   process.env.SQLITE_BUSY_RETRIES = process.env.SQLITE_BUSY_RETRIES ?? '12'
@@ -462,7 +477,8 @@ async function main() {
   await clearStaleOwnLock()
   const lock = await acquireJpStockboardUpdateLock(JOB_TYPE, envNumber('ML_FRESHNESS_GUARD_LOCK_SECONDS', 6 * 60 * 60))
   if (!lock) {
-    console.log('[ml-freshness-guard] skipped: guard lock is already active')
+    console.warn('[ml-freshness-guard] deferred: JP writer or guard lock is already active')
+    process.exitCode = DEFERRED_EXIT_CODE
     return
   }
 
@@ -482,8 +498,7 @@ async function main() {
     const activeLocks = await getActiveUpdateLocks(BLOCKING_LOCKS)
     if (activeLocks.length > 0) {
       const summary = activeLocks.map((row) => `${row.jobType}@${new Date(row.heartbeatAt * 1000).toISOString()}`).join(', ')
-      console.log(`[ml-freshness-guard] skipped: active writer/ML locks observed: ${summary}`)
-      await recordRun('success', startedAt, actions, `skipped: active locks ${summary}`)
+      await defer(startedAt, actions, `active writer/ML locks observed: ${summary}`)
       return
     }
 
@@ -493,8 +508,7 @@ async function main() {
         .slice(0, 5)
         .map((row) => `${row.pid}:${row.command.slice(0, 140)}`)
         .join(' | ')
-      console.log(`[ml-freshness-guard] skipped: active ML process observed: ${summary}`)
-      await recordRun('success', startedAt, actions, `skipped: active ML process ${summary}`)
+      await defer(startedAt, actions, `active ML process observed: ${summary}`)
       return
     }
 
@@ -510,6 +524,16 @@ async function main() {
       await runRequired('ml:freshness-check')
       await recordRun('success', startedAt, actions, 'fresh')
       console.log('[ml-freshness-guard] finished: fresh')
+      return
+    }
+
+    if (DRY_RUN || !REPAIR) {
+      console.log(
+        `[ml-freshness-guard] inspection only: ${bad.map((check) => `${check.key}:${check.status}`).join(', ')}`,
+      )
+      if (!DRY_RUN) {
+        await recordRun('partial', startedAt, actions, `repair disabled: ${bad.map((check) => check.key).join(', ')}`)
+      }
       return
     }
 

@@ -64,7 +64,7 @@ const steps: Step[] = [
     script: 'auto-ml-freshness-guard:install',
     env: {
       ...baseEnv,
-      ML_FRESHNESS_GUARD_TIMES: process.env.ML_FRESHNESS_GUARD_TIMES ?? '23:45',
+      ML_FRESHNESS_GUARD_TIMES: process.env.ML_FRESHNESS_GUARD_TIMES ?? '00:15,05:15,08:15',
     },
   },
   {
@@ -122,7 +122,7 @@ console.log('Kabutan dashboard news: every 60 minutes')
 console.log('Kabutan themes: daily 21:00 JST, recovery checks 22:00/23:00, waits safely for the DB writer')
 console.log('US prices/analytics/ML: Tue-Sat 06:30, 10:30 JST')
 console.log('JP ML serving: Mon-Fri 03:00 JST, JP exchange holidays skipped')
-console.log('JP ML freshness guard: Mon-Fri 23:45 JST')
+console.log('JP ML freshness guard: Mon-Sat 00:15, 05:15, 08:15 JST')
 console.log('All-data recovery guard: after login and every 30 minutes; stale services only')
 console.log('Weekly optimization: Sunday 00:30 JST, sequential JP/US ML, indexes, cache, and DB maintenance')
 console.log('DB maintenance: daily 01:30/05:30/12:30/15:30 JST, retries safely around active writers')

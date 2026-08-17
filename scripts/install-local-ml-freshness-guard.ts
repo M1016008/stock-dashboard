@@ -30,7 +30,12 @@ type GuardTime = {
 }
 
 const DEFAULT_GUARD_TIMES: GuardTime[] = [
-  { hour: 23, minute: 45 },
+  // The first check follows the regular post-close ML serving run. Morning
+  // retries close the hole where that run overlapped an active writer or
+  // completed after the first check. Saturday covers Friday's close.
+  { hour: 0, minute: 15 },
+  { hour: 5, minute: 15 },
+  { hour: 8, minute: 15 },
 ]
 
 function xmlEscape(value: string): string {
@@ -69,11 +74,12 @@ function calendar(hour: number, minute: number, weekday: number): string {
   ].join('\n')
 }
 
-function weekdaySchedule(times: GuardTime[]): string {
-  // launchd Weekday: 1=Monday ... 6=Saturday, 0/7=Sunday.
+function recoverySchedule(times: GuardTime[]): string {
+  // launchd Weekday: 1=Monday ... 6=Saturday, 0/7=Sunday. Saturday is
+  // required to repair a Friday post-close run without waiting for Monday.
   // The guard checks the latest available JP price date, so exchange holidays
   // naturally become no-op checks when no new price date exists.
-  return [1, 2, 3, 4, 5]
+  return [1, 2, 3, 4, 5, 6]
     .flatMap((weekday) => times.map((time) => calendar(time.hour, time.minute, weekday)))
     .join('\n')
 }
@@ -120,7 +126,7 @@ const plist = `<?xml version="1.0" encoding="UTF-8"?>
   </array>
   <key>StartCalendarInterval</key>
   <array>
-${weekdaySchedule(times)}
+${recoverySchedule(times)}
   </array>
   <key>StandardOutPath</key>
   <string>${xmlEscape(path.join(logDir, 'ml-freshness-guard.log'))}</string>
@@ -144,5 +150,5 @@ execFileSync('launchctl', ['bootstrap', `gui/${uid}`, plistPath], { stdio: 'inhe
 execFileSync('launchctl', ['enable', `gui/${uid}/${label}`], { stdio: 'inherit' })
 
 console.log(`launchd registered: ${plistPath}`)
-console.log(`schedule: Mon-Fri ${times.map((time) => `${String(time.hour).padStart(2, '0')}:${String(time.minute).padStart(2, '0')}`).join(', ')} JST`)
+console.log(`schedule: Mon-Sat ${times.map((time) => `${String(time.hour).padStart(2, '0')}:${String(time.minute).padStart(2, '0')}`).join(', ')} JST`)
 console.log(`logs: ${path.join(logDir, 'ml-freshness-guard.log')}`)
