@@ -23,6 +23,183 @@ import { resampleOhlcv, smaAt } from './timeframes'
 
 export type StageLevel = 1 | 2 | 3 | 4 | 5 | 6
 
+export type StageTransitionDirection =
+  | 'improve'
+  | 'deteriorate'
+  | 'jump_improve'
+  | 'jump_deteriorate'
+  | 'stable'
+  | 'invalid'
+
+export interface StageTransitionInfo {
+  from: StageLevel
+  to: StageLevel
+  direction: StageTransitionDirection
+  forwardDistance: number
+  backwardDistance: number
+  isCycleAdjacent: boolean
+}
+
+export interface StageTransitionCell {
+  from: StageLevel
+  to: StageLevel
+  direction: StageTransitionDirection
+  forwardDistance: number
+  backwardDistance: number
+  isCycleAdjacent: boolean
+  label: string
+}
+
+export const STAGE_CYCLE: ReadonlyArray<StageLevel> = [1, 2, 3, 4, 5, 6]
+export const STAGE_COUNT = STAGE_CYCLE.length
+
+const STAGE_TO_INDEX: Record<StageLevel, number> = {
+  1: 0,
+  2: 1,
+  3: 2,
+  4: 3,
+  5: 4,
+  6: 5,
+}
+
+/**
+ * 6段階循環に対する遷移分類を1箇所で定義
+ * - forwardDistance: from -> to への循環順距離
+ * - backwardDistance: to -> from への循環順距離
+ * - 1歩進行を改善、1歩後退を悪化として扱う
+ * - 2〜4ステップは飛躍（jump）として扱う
+ */
+function classifyStageTransition(from: StageLevel, to: StageLevel): Omit<StageTransitionInfo, 'from' | 'to'> {
+  const fromIdx = STAGE_TO_INDEX[from]
+  const toIdx = STAGE_TO_INDEX[to]
+  const rawForward = (toIdx - fromIdx + STAGE_COUNT) % STAGE_COUNT
+  const forwardDistance = rawForward === 0 ? 0 : rawForward
+  const backwardDistance = (STAGE_COUNT - forwardDistance) % STAGE_COUNT
+
+  let direction: StageTransitionDirection = 'invalid'
+  if (from === to) {
+    direction = 'stable'
+  } else if (forwardDistance === 1) {
+    direction = 'improve'
+  } else if (backwardDistance === 1) {
+    direction = 'deteriorate'
+  } else if (forwardDistance > 1 && forwardDistance < STAGE_COUNT - 1) {
+    direction = 'jump_improve'
+  } else if (backwardDistance > 1 && backwardDistance < STAGE_COUNT - 1) {
+    direction = 'jump_deteriorate'
+  }
+
+  return {
+    direction,
+    forwardDistance,
+    backwardDistance,
+    isCycleAdjacent: direction === 'improve' || direction === 'deteriorate',
+  }
+}
+
+export const STAGE_TRANSITION_MATRIX: StageTransitionCell[][] = STAGE_CYCLE.map((from) =>
+  STAGE_CYCLE.map((to) => {
+    const { direction, forwardDistance, backwardDistance, isCycleAdjacent } = classifyStageTransition(from, to)
+    const labelMap: Record<StageTransitionDirection, string> = {
+      stable: '据置',
+      improve: '循環順',
+      deteriorate: '逆循環',
+      jump_improve: '飛躍改善',
+      jump_deteriorate: '飛躍悪化',
+      invalid: '不明',
+    }
+
+    return {
+      from,
+      to,
+      direction,
+      forwardDistance,
+      backwardDistance,
+      isCycleAdjacent,
+      label: labelMap[direction],
+    }
+  }),
+)
+
+export const STAGE_DIRECTION_META: Record<
+  StageTransitionDirection,
+  { title: string; rgb: string; text: string; tone: string; description: string }
+> = {
+  stable: {
+    title: '据置',
+    rgb: '120, 113, 108',
+    text: 'var(--color-text-tertiary)',
+    tone: 'neutral',
+    description: '同一ステージを維持（前後で循環距離0）',
+  },
+  improve: {
+    title: '改善',
+    rgb: '22, 163, 74',
+    text: '#166534',
+    tone: 'up',
+    description: '循環順で1ステップ移動（1→2, 6→1）',
+  },
+  deteriorate: {
+    title: '悪化',
+    rgb: '37, 99, 235',
+    text: '#1d4ed8',
+    tone: 'down',
+    description: '循環逆順で1ステップ移動（3→2, 1→6）',
+  },
+  jump_improve: {
+    title: '大幅改善',
+    rgb: '6, 95, 70',
+    text: '#065f46',
+    tone: 'up',
+    description: '循環順で2〜4ステップ移動（例: 1→4）',
+  },
+  jump_deteriorate: {
+    title: '大幅悪化',
+    rgb: '217, 119, 6',
+    text: '#92400e',
+    tone: 'down',
+    description: '循環逆順で2〜4ステップ移動（例: 4→1）',
+  },
+  invalid: {
+    title: '不明',
+    rgb: '120, 113, 108',
+    text: 'var(--color-text-tertiary)',
+    tone: 'neutral',
+    description: 'ステージが未計算または不正のため遷移方向を判定できません',
+  },
+}
+
+export function isStage(value: number | null): value is StageLevel {
+  return value === 1 || value === 2 || value === 3 || value === 4 || value === 5 || value === 6
+}
+
+export function getStageTransitionInfo(from: number | null, to: number | null): StageTransitionInfo | null {
+  if (!isStage(from) || !isStage(to)) return null
+  const { direction, forwardDistance, backwardDistance, isCycleAdjacent } = classifyStageTransition(from, to)
+  return { from, to, direction, forwardDistance, backwardDistance, isCycleAdjacent }
+}
+
+export function getStageTransitionDirection(from: number | null, to: number | null): StageTransitionDirection {
+  return getStageTransitionInfo(from, to)?.direction ?? 'invalid'
+}
+
+export function getStageTransitionTone(
+  direction: StageTransitionDirection,
+): 'up' | 'down' | 'watch' | 'neutral' {
+  switch (direction) {
+    case 'improve':
+    case 'jump_improve':
+      return 'up'
+    case 'deteriorate':
+    case 'jump_deteriorate':
+      return 'down'
+    case 'stable':
+      return 'neutral'
+    default:
+      return 'watch'
+  }
+}
+
 export const STAGE_COMPARISON_RELATIVE_EPSILON = 1e-10
 
 export interface MaValues {

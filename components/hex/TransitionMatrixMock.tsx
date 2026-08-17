@@ -2,6 +2,7 @@
 // 期間内のステージ遷移を、行=移動前 / 列=移動先のフローマップとして表示する。
 
 import { STAGE_BG_COLORS, STAGE_BORDER_COLORS, STAGE_LABELS } from '@/lib/hex-stage'
+import { STAGE_DIRECTION_META, getStageTransitionInfo, type StageTransitionDirection } from '@/lib/hex-stage'
 import { getTransitionMatrix, type Timescale, type Period } from '@/lib/queries/hex'
 import type { UniverseFilterValue } from '@/lib/market-universe'
 
@@ -23,26 +24,47 @@ const TIMESCALE_LABEL: Record<Timescale, string> = {
   monthly_b: '月足B',
 }
 
-type Relation = 'cycle' | 'reverse' | 'jump'
+type Relation = StageTransitionDirection
 
-const RELATION_META: Record<Relation, { label: string; rgb: string; text: string; note: string }> = {
-  cycle: {
-    label: '循環順',
-    rgb: '22, 163, 74',
-    text: '#14532d',
-    note: '1→2→3→4→5→6→1 の向き',
+const RELATION_META: Record<
+  Relation,
+  { label: string; rgb: string; text: string; note: string }
+> = {
+  stable: {
+    label: STAGE_DIRECTION_META.stable.title,
+    rgb: STAGE_DIRECTION_META.stable.rgb,
+    text: STAGE_DIRECTION_META.stable.text,
+    note: STAGE_DIRECTION_META.stable.description,
   },
-  reverse: {
-    label: '逆方向',
-    rgb: '37, 99, 235',
-    text: '#1e3a8a',
-    note: '循環と反対向きの戻り',
+  improve: {
+    label: STAGE_DIRECTION_META.improve.title,
+    rgb: STAGE_DIRECTION_META.improve.rgb,
+    text: STAGE_DIRECTION_META.improve.text,
+    note: STAGE_DIRECTION_META.improve.description,
   },
-  jump: {
-    label: '大きな変化',
-    rgb: '217, 119, 6',
-    text: '#713f12',
-    note: '隣接ステージを飛ばす変化',
+  deteriorate: {
+    label: STAGE_DIRECTION_META.deteriorate.title,
+    rgb: STAGE_DIRECTION_META.deteriorate.rgb,
+    text: STAGE_DIRECTION_META.deteriorate.text,
+    note: STAGE_DIRECTION_META.deteriorate.description,
+  },
+  jump_improve: {
+    label: STAGE_DIRECTION_META.jump_improve.title,
+    rgb: STAGE_DIRECTION_META.jump_improve.rgb,
+    text: STAGE_DIRECTION_META.jump_improve.text,
+    note: STAGE_DIRECTION_META.jump_improve.description,
+  },
+  jump_deteriorate: {
+    label: STAGE_DIRECTION_META.jump_deteriorate.title,
+    rgb: STAGE_DIRECTION_META.jump_deteriorate.rgb,
+    text: STAGE_DIRECTION_META.jump_deteriorate.text,
+    note: STAGE_DIRECTION_META.jump_deteriorate.description,
+  },
+  invalid: {
+    label: STAGE_DIRECTION_META.invalid.title,
+    rgb: STAGE_DIRECTION_META.invalid.rgb,
+    text: STAGE_DIRECTION_META.invalid.text,
+    note: STAGE_DIRECTION_META.invalid.description,
   },
 }
 
@@ -66,10 +88,19 @@ export async function TransitionMatrixMock({
   const totals = cells.reduce(
     (acc, cell) => {
       const relation = getRelation(cell.from_stage, cell.to_stage)
-      acc[relation] += cell.count
+      if (relation !== 'stable') {
+        acc[relation] += cell.count
+      }
       return acc
     },
-    { cycle: 0, reverse: 0, jump: 0 } satisfies Record<Relation, number>,
+    {
+      improve: 0,
+      deteriorate: 0,
+      jump_improve: 0,
+      jump_deteriorate: 0,
+      stable: 0,
+      invalid: 0,
+    } satisfies Record<Relation, number>,
   )
   const topRoutes = [...cells].sort((a, b) => b.count - a.count).slice(0, 4)
   const top = topRoutes[0]
@@ -95,16 +126,16 @@ export async function TransitionMatrixMock({
           detail={top ? `${top.count.toLocaleString()}件 / ${formatPct(top.count, total)}` : '遷移なし'}
         />
         <SummaryTile
-          label={RELATION_META.cycle.label}
-          value={`${totals.cycle.toLocaleString()}件`}
-          detail={RELATION_META.cycle.note}
-          tone="cycle"
+          label={RELATION_META.improve.label}
+          value={`${totals.improve.toLocaleString()}件`}
+          detail={RELATION_META.improve.note}
+          tone="improve"
         />
         <SummaryTile
-          label={RELATION_META.reverse.label}
-          value={`${totals.reverse.toLocaleString()}件`}
-          detail={RELATION_META.reverse.note}
-          tone="reverse"
+          label={RELATION_META.deteriorate.label}
+          value={`${totals.deteriorate.toLocaleString()}件`}
+          detail={RELATION_META.deteriorate.note}
+          tone="deteriorate"
         />
       </div>
 
@@ -133,11 +164,11 @@ export async function TransitionMatrixMock({
           </div>
         </div>
 
-        <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-[1fr_1.35fr]">
-          <div className="rounded-[6px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] p-3">
+      <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-[1fr_1.35fr]">
+        <div className="rounded-[6px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] p-3">
             <div className="mb-2 text-[11px] font-semibold text-[var(--color-text-primary)]">色の読み方</div>
             <div className="flex flex-wrap gap-2">
-              {(Object.keys(RELATION_META) as Relation[]).map((key) => {
+              {(Object.keys(RELATION_META) as Array<Exclude<Relation, 'stable' | 'invalid'>>).map((key) => {
                 const meta = RELATION_META[key]
                 return (
                   <span
@@ -348,11 +379,9 @@ function MiniStage({ stage }: { stage: number }) {
 }
 
 function getRelation(from: number, to: number): Relation {
-  const forwardSteps = (to - from + 6) % 6
-  const backwardSteps = (from - to + 6) % 6
-  if (forwardSteps === 1) return 'cycle'
-  if (backwardSteps === 1) return 'reverse'
-  return 'jump'
+  const info = getStageTransitionInfo(from, to)
+  if (!info) return 'invalid'
+  return info.direction
 }
 
 function formatPct(count: number, total: number): string {

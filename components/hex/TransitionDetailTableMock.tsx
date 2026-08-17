@@ -3,6 +3,7 @@
 
 import Link from 'next/link'
 import { calculateAngle } from '@/lib/hex-stage'
+import { STAGE_DIRECTION_META, getStageTransitionInfo, type StageTransitionDirection } from '@/lib/hex-stage'
 import { getPhysicsHorizonForPeriod, getTransitionDetail, type Timescale, type Period, type TransitionDetailRow } from '@/lib/queries/hex'
 import type { UniverseFilterValue } from '@/lib/market-universe'
 
@@ -74,6 +75,20 @@ function stageScore(stage: number | null) {
   if (stage == null) return 0
   const score: Record<number, number> = { 1: 3, 6: 2, 2: 1, 5: 0, 3: -1, 4: -2 }
   return score[stage] ?? 0
+}
+
+function transitionDirectionLabel(from: number | null, to: number | null) {
+  const info = getStageTransitionInfo(from, to)
+  return STAGE_DIRECTION_META[info?.direction ?? 'invalid'].title
+}
+
+function transitionDirectionTone(direction: StageTransitionDirection) {
+  if (!direction) return 0
+  if (direction === 'improve') return 1
+  if (direction === 'jump_improve') return 2
+  if (direction === 'deteriorate') return -1
+  if (direction === 'jump_deteriorate') return -2
+  return 0
 }
 
 function flowWord(current: number | null, previous: number | null) {
@@ -223,7 +238,10 @@ function physicsRankDriver(direction: 'up' | 'down' | 'wait', rank: number | nul
 
 function buildAnalysis(row: TransitionDetailRow) {
   const horizon = row.physics_horizon_days ?? null
-  const stageDelta = stageScore(row.to_stage) - stageScore(row.from_stage)
+  const transition = getStageTransitionInfo(row.from_stage, row.to_stage)
+  const transitionDirection = transition?.direction ?? 'invalid'
+  const transitionTone = transitionDirectionTone(transitionDirection)
+  const transitionLabel = STAGE_DIRECTION_META[transitionDirection].title
   const currentStages = [row.daily_a, row.daily_b, row.weekly_a, row.weekly_b, row.monthly_a, row.monthly_b]
   const multiStageScore = currentStages.reduce<number>((sum, stage) => sum + stageScore(stage), 0)
   const stageRiskCount = currentStages.filter((stage) => stage === 3 || stage === 4).length
@@ -294,8 +312,10 @@ function buildAnalysis(row: TransitionDetailRow) {
   const physicsWaitScore = rankScore(row.physics_wait_rank, 80) * 8
   const classicUpScore = rankScore(row.ml_up_rank, 80) * 8
   const classicDownScore = rankScore(row.ml_down_rank, 80) * 8
-  const stageUpScore = Math.max(0, stageDelta) * 7 + Math.max(0, multiStageScore) * 1.2 + stageBullCount * 2
-  const stageDownScore = Math.max(0, -stageDelta) * 7 + Math.max(0, -multiStageScore) * 1.2 + stageRiskCount * 3
+  const stageUpScore =
+    (transitionTone > 0 ? transitionTone * 8 : 0) + Math.max(0, multiStageScore) * 1.2 + stageBullCount * 2
+  const stageDownScore =
+    (transitionTone < 0 ? Math.abs(transitionTone) * 8 : 0) + Math.max(0, -multiStageScore) * 1.2 + stageRiskCount * 3
   const physicalUpScore =
     Math.max(0, maBias) * 6 +
     Math.max(0, angleBias) * 5 +
@@ -336,13 +356,13 @@ function buildAnalysis(row: TransitionDetailRow) {
   } else if (upForce >= 58 && forceGap >= -8) {
     label = '好転'
     tone = 'up'
-  } else if (stageDelta > 0 || upForce >= 50) {
+  } else if (transitionTone > 0 || upForce >= 50) {
     label = '好転候補'
     tone = 'watch'
-  } else if (stageDelta < 0 && maBias >= 1) {
+  } else if (transitionTone < 0 && maBias >= 1) {
     label = '一時調整'
     tone = 'watch'
-  } else if (downForce >= 50 || stageDelta < 0) {
+  } else if (downForce >= 50 || transitionTone < 0) {
     label = '悪化注意'
     tone = 'down'
   }
@@ -358,7 +378,7 @@ function buildAnalysis(row: TransitionDetailRow) {
             ? 'up'
             : 'down'
   const drivers = [
-    stageDelta > 0 ? 'ステージ改善' : stageDelta < 0 ? 'ステージ悪化' : null,
+    transitionDirection !== 'stable' && transitionDirection !== 'invalid' ? `ステージ遷移: ${transitionLabel}` : null,
     angleBias > 0 ? 'SMA角度上向き' : angleBias < 0 ? 'SMA角度下向き' : null,
     upAcceleration > 0 && dominantDirection === 'up' ? '上向き加速' : downAcceleration > 0 && dominantDirection === 'down' ? '下向き加速' : null,
     bullishExpansion ? 'MA束上方拡散' : bearishExpansion ? 'MA束下方拡散' : isCompression ? 'MA束収縮' : null,

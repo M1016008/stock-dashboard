@@ -2,16 +2,27 @@
 // Phase 4 C5: 6×6 遷移マトリクス (teal opacity ヒートマップ)
 
 import { Card, CardHeader } from '@/components/ui/Card'
+import { STAGE_DIRECTION_META, getStageTransitionInfo } from '@/lib/hex-stage'
 import { getTransitionMatrix, type Timescale, type Period } from '@/lib/queries/hex'
 
 export async function TransitionMatrix({ timescale, period }: { timescale: Timescale; period: Period }) {
   const cells = await getTransitionMatrix(timescale, period)
   const max = cells.reduce((m, c) => Math.max(m, c.count), 0)
   const get = (from: number, to: number) => cells.find(c => c.from_stage === from && c.to_stage === to)?.count ?? 0
+  const classify = (from: number, to: number) => {
+    const info = getStageTransitionInfo(from, to)
+    if (!info) return null
+    return info.direction
+  }
 
   // 最大流量メッセージ
   const topCell = [...cells].sort((a, b) => b.count - a.count)[0]
-  const rareJumps = cells.filter(c => Math.abs(c.from_stage - c.to_stage) >= 3 && c.count > 0)
+  const rareJumps = cells.filter((c) => {
+    const direction = classify(c.from_stage, c.to_stage)
+    return direction === 'jump_improve' || direction === 'jump_deteriorate'
+  })
+  const improveJumps = rareJumps.filter(c => classify(c.from_stage, c.to_stage) === 'jump_improve')
+  const deteriorateJumps = rareJumps.filter(c => classify(c.from_stage, c.to_stage) === 'jump_deteriorate')
 
   return (
     <Card>
@@ -51,9 +62,17 @@ export async function TransitionMatrix({ timescale, period }: { timescale: Times
         )}
         {rareJumps.length > 0 && (
           <span className="text-[var(--color-pattern-700)]">
-            注目: 大ジャンプ{rareJumps.length} 件 (例 {rareJumps[0].from_stage}→{rareJumps[0].to_stage})
+            注目: 大幅ジャンプ {rareJumps.length} 件 (改善 {improveJumps.length} / 悪化 {deteriorateJumps.length}) 例:
+            {` ${rareJumps[0].from_stage}→${rareJumps[0].to_stage}`}
           </span>
         )}
+        <span>
+          判定はサイクリック6ステージ遷移で
+          <span className="font-semibold text-[var(--color-text-primary)]">
+            {` ${STAGE_DIRECTION_META.jump_improve.title}/${STAGE_DIRECTION_META.jump_deteriorate.title}`}
+          </span>
+          を大幅変化として分類
+        </span>
       </div>
     </Card>
   )
