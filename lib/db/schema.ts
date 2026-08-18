@@ -755,6 +755,40 @@ export const dailySnapshots = sqliteTable(
   }),
 )
 
+// 業種・細分類ごとの6ステージ構造集計。個別銘柄のMA構造を構成比と
+// 遷移で集約するため、株価水準の平均は保存しない。
+export const sectorStructureDaily = sqliteTable(
+  'sector_structure_daily',
+  {
+    taxonomy:               text('taxonomy').notNull(),
+    groupKey:               text('group_key').notNull(),
+    groupName:              text('group_name').notNull(),
+    parentGroup:            text('parent_group'),
+    date:                   text('date').notNull(),
+    nStocks:                integer('n_stocks').notNull(),
+    validStageCount:        integer('valid_stage_count').notNull(),
+    strengthScore:          real('strength_score'),
+    transitionChangeScore:  real('transition_change_score').notNull(),
+    momentum5d:             real('momentum_5d'),
+    momentum10d:            real('momentum_10d'),
+    momentum20d:            real('momentum_20d'),
+    propagationDirection:   text('propagation_direction').notNull().default('neutral'),
+    propagationPhase:       integer('propagation_phase').notNull().default(0),
+    propagationLabel:       text('propagation_label').notNull(),
+    improvingCount:         integer('improving_count').notNull().default(0),
+    deterioratingCount:     integer('deteriorating_count').notNull().default(0),
+    stableCount:            integer('stable_count').notNull().default(0),
+    axisJson:               text('axis_json').notNull(),
+    compositionJson:        text('composition_json').notNull(),
+    computedAt:             integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.taxonomy, t.groupKey, t.date] }),
+    taxonomyDateIdx: index('sector_structure_taxonomy_date_idx').on(t.taxonomy, t.date),
+    dateMomentumIdx: index('sector_structure_date_momentum_idx').on(t.date, t.momentum10d),
+  }),
+)
+
 // 旧25M互換テーブル。新規処理はmonthly_ma_monitor_*へ統合済み。
 export const ma25mMonitorDaily = sqliteTable(
   'ma25m_monitor_daily',

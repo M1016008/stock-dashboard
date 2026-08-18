@@ -28,8 +28,10 @@ function statusFor(gap: number | null, warnDays: number, failDays: number): 'ok'
 }
 
 async function main() {
-  const warnDays = Number(process.env.ML_FRESHNESS_WARN_DAYS ?? 3)
-  const failDays = Number(process.env.ML_FRESHNESS_FAIL_DAYS ?? 7)
+  // Serving outputs are displayed against the current JP price date. A
+  // one-day lag is therefore a failed daily refresh, not an acceptable delay.
+  const warnDays = Number(process.env.ML_FRESHNESS_WARN_DAYS ?? 1)
+  const failDays = Number(process.env.ML_FRESHNESS_FAIL_DAYS ?? 1)
   const priceDate = await maxDate(`SELECT MAX(date) AS date FROM ohlcv_daily`)
   const checks = [
     {

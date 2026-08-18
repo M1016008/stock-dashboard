@@ -826,6 +826,35 @@ const STATEMENTS = [
     computed_at INTEGER NOT NULL DEFAULT (unixepoch()),
     PRIMARY KEY (axis, from_stage, to_stage)
   )`,
+  // ─── 業種・細分類の6ステージ構造集計 ───
+  `CREATE TABLE IF NOT EXISTS sector_structure_daily (
+    taxonomy TEXT NOT NULL,
+    group_key TEXT NOT NULL,
+    group_name TEXT NOT NULL,
+    parent_group TEXT,
+    date TEXT NOT NULL,
+    n_stocks INTEGER NOT NULL,
+    valid_stage_count INTEGER NOT NULL,
+    strength_score REAL,
+    transition_change_score REAL NOT NULL,
+    momentum_5d REAL,
+    momentum_10d REAL,
+    momentum_20d REAL,
+    propagation_direction TEXT NOT NULL DEFAULT 'neutral',
+    propagation_phase INTEGER NOT NULL DEFAULT 0,
+    propagation_label TEXT NOT NULL,
+    improving_count INTEGER NOT NULL DEFAULT 0,
+    deteriorating_count INTEGER NOT NULL DEFAULT 0,
+    stable_count INTEGER NOT NULL DEFAULT 0,
+    axis_json TEXT NOT NULL,
+    composition_json TEXT NOT NULL,
+    computed_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (taxonomy, group_key, date)
+  )`,
+  `CREATE INDEX IF NOT EXISTS sector_structure_taxonomy_date_idx
+    ON sector_structure_daily(taxonomy, date)`,
+  `CREATE INDEX IF NOT EXISTS sector_structure_date_momentum_idx
+    ON sector_structure_daily(date, momentum_10d)`,
   // ─── Phase 4: 主要指数 OHLC (J-Quants /indices/bars/daily) ───
   `CREATE TABLE IF NOT EXISTS indices_daily (
     code TEXT NOT NULL,

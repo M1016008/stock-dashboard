@@ -41,6 +41,19 @@ assert.ok(
   dailyServingCommand.includes(`ML_PHYSICS_STATUS_HORIZONS=${ML_PRIMARY_HORIZON_LIST}`),
   'daily serving physics status evaluation must include every primary horizon',
 )
+const fastServingSource = fs.readFileSync(path.join(process.cwd(), 'scripts/run-ml-serving-fast.ts'), 'utf8')
+assert.ok(
+  fastServingSource.includes("await runRequired('batch:ml-short-labels'")
+    && fastServingSource.includes("await runRequired('batch:ml-rl-policy'")
+    && fastServingSource.includes("await runRequired('batch:ml-physics-status-evaluate'"),
+  'fast daily serving must refresh the RL policy and physics status when a new JP price date arrives',
+)
+const updateLatestSource = fs.readFileSync(path.join(process.cwd(), 'scripts/update-latest.ts'), 'utf8')
+assert.ok(
+  updateLatestSource.includes("'scripts/run-ml-serving-fast.ts'")
+    && updateLatestSource.includes('needsFastMlServing(afterCritical)'),
+  'JP update-latest must start fast ML serving whenever a newly published price date leaves serving ML stale',
+)
 assert.ok(
   packageJson.scripts['batch:ml-weekly-train'].includes(`ML_PHYSICS_STATUS_HORIZONS=${ML_PRIMARY_HORIZON_LIST}`),
   'weekly training must refresh physics status evaluations for every primary horizon',

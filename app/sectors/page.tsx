@@ -4,14 +4,18 @@ import { ExternalLink } from 'lucide-react'
 import {
   getSectorAnalysisBoard,
   getSectorConstituents,
+  getSectorStructureBoard,
   normalizeSectorConstituentSort,
   type SectorClassification,
   type SectorConstituentResult,
   type SectorConstituentSortKey,
+  type SectorHeatmapClassification,
   type SectorHeatmapRow,
   type SectorPeriod,
   type SectorPeriodSummary,
 } from '@/lib/queries/sectors'
+import { SectorStructureBoard } from '@/components/sectors/SectorStructureBoard'
+import type { SectorStructureTaxonomy } from '@/lib/sector-structure'
 import { getMlObjectiveValidation, getMlSectorRankings, type MlSectorRanking } from '@/lib/queries/ml-insights'
 import { MlObjectiveValidationBoard } from '@/components/sectors/MlObjectiveValidationBoard'
 import { MlSectorRankingBoard } from '@/components/sectors/MlSectorRankingBoard'
@@ -120,6 +124,24 @@ function parseSectorPeriod(value: string | null): SectorPeriod {
   return value === 'week' || value === 'month' ? value : 'today'
 }
 
+function parseSectorStructureTaxonomy(value: string | null): SectorStructureTaxonomy {
+  if (value === '17' || value === '33' || value === 'subIndustry') return value
+  return 'major'
+}
+
+type HeatmapTaxonomy = 'overview' | SectorHeatmapClassification
+
+function parseHeatmapTaxonomy(value: string | null): HeatmapTaxonomy {
+  if (value === '17' || value === '33' || value === 'major' || value === 'subIndustry') return value
+  return 'overview'
+}
+
+function heatmapLabel(classification: SectorHeatmapClassification): string {
+  if (classification === 'major') return '四季報60分類'
+  if (classification === 'subIndustry') return '業種細分類'
+  return `${classification}業種`
+}
+
 function buildSectorsHref(params: Record<string, string | number | null | undefined>) {
   const sp = new URLSearchParams()
   for (const [key, value] of Object.entries(params)) {
@@ -203,33 +225,49 @@ function HeatmapGrid({
   baseParams,
 }: {
   rows: SectorHeatmapRow[]
-  classification: '17' | '33'
+  classification: SectorHeatmapClassification
   selected: SelectedSector | null
   baseParams: BaseSectorParams
 }) {
   if (rows.length === 0) {
     return (
       <div className="rounded-[8px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-4 py-8 text-center text-[13px] font-semibold text-[var(--color-text-tertiary)]">
-        {classification}業種データなし
+        {heatmapLabel(classification)}データなし
       </div>
     )
   }
   return (
-    <div className={`grid grid-cols-2 gap-2 sm:grid-cols-3 ${classification === '17' ? 'lg:grid-cols-5 xl:grid-cols-6' : 'lg:grid-cols-6 xl:grid-cols-8'}`}>
+    <div className={`grid grid-cols-2 gap-2 sm:grid-cols-3 ${
+      classification === '17'
+        ? 'lg:grid-cols-5 xl:grid-cols-6'
+        : classification === '33'
+          ? 'lg:grid-cols-6 xl:grid-cols-8'
+          : classification === 'major'
+            ? 'lg:grid-cols-6 xl:grid-cols-8'
+            : 'lg:grid-cols-7 xl:grid-cols-9'
+    }`}>
       {rows.map((row) => {
         const c = colorFor(row.avg_change ?? 0)
         const positive = row.avg_change > 0
         const negative = row.avg_change < 0
-        const isSelected = selected?.classification === classification && selected.sectorName === row.sector_name
-        const href = buildSectorsHref({
-          ...baseParams,
-          sectorType: classification,
-          sectorName: row.sector_name,
-          sectorPeriod: baseParams.sectorPeriod,
-          sectorSort: 'changePct',
-          sectorDir: 'desc',
-          sectorMargin: null,
-        })
+        const isBuiltInClassification = classification === '17' || classification === '33'
+        const isSelected = isBuiltInClassification && selected?.classification === classification && selected.sectorName === row.sector_name
+        const href = isBuiltInClassification
+          ? buildSectorsHref({
+              ...baseParams,
+              sectorType: classification,
+              sectorName: row.sector_name,
+              sectorPeriod: baseParams.sectorPeriod,
+              sectorSort: 'changePct',
+              sectorDir: 'desc',
+              sectorMargin: null,
+            })
+          : `/screener?${new URLSearchParams({
+              ...(baseParams.universe ? { universe: baseParams.universe } : {}),
+              ...(classification === 'major'
+                ? { majorCategory: row.sector_name }
+                : { majorCategory: row.sector_parent_name ?? '', subIndustry: row.sector_name }),
+            }).toString()}`
         return (
           <Link
             key={`${classification}-${row.sector_code ?? row.sector_name}`}
@@ -244,6 +282,11 @@ function HeatmapGrid({
             <div className="line-clamp-2 text-[12px] font-bold leading-snug text-[var(--color-text-primary)]">
               {row.sector_name}
             </div>
+            {classification === 'subIndustry' && row.sector_parent_name && (
+              <div className="mt-0.5 truncate text-[9px] font-bold text-[var(--color-text-tertiary)]" title={row.sector_parent_name}>
+                {row.sector_parent_name}
+              </div>
+            )}
             <div className="mt-3 flex items-end justify-between gap-2">
               <span className="text-[10px] font-bold text-[var(--color-text-tertiary)] tabular-nums">
                 {row.n_stocks.toLocaleString()}銘柄
@@ -374,7 +417,7 @@ function ClassificationPeriodCard({
   baseParams,
 }: {
   period: SectorPeriodSummary
-  classification: '17' | '33'
+  classification: SectorHeatmapClassification
   rows: SectorHeatmapRow[]
   selected: SelectedSector | null
   baseParams: BaseSectorParams
@@ -398,14 +441,14 @@ function ClassificationPeriodCard({
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3 border-b-2 border-[var(--color-brand-700)] bg-[var(--color-surface-subtle)] px-3 py-2">
         <div className="min-w-0 border-l-4 border-[var(--color-market-red)] pl-2">
           <h2 className="text-[14px] font-bold text-[var(--color-brand-900)]">
-            {classification}業種・{period.label}ヒートマップ
+            {heatmapLabel(classification)}・{period.label}ヒートマップ
           </h2>
           <p className="mt-1 text-[11px] font-semibold text-[var(--color-text-tertiary)]">
             {period.description} / {period.baseDate} → {period.latestDate}
           </p>
         </div>
         <span className="rounded-full border border-[var(--color-border-default)] bg-white px-2.5 py-1 text-[11px] font-bold text-[var(--color-text-secondary)]">
-          {rows.length.toLocaleString()} 業種
+          {rows.length.toLocaleString()} 分類
         </span>
       </div>
 
@@ -436,7 +479,7 @@ function ClassificationPeriodCard({
           全件ランキングを表示
         </summary>
         <div className="p-3">
-          <RankingTable title={`${classification}業種 全件ランキング`} rows={sorted} />
+          <RankingTable title={`${heatmapLabel(classification)} 全件ランキング`} rows={sorted} />
         </div>
       </details>
     </section>
@@ -453,7 +496,7 @@ function ClassificationSection({
 }: {
   title: string
   description: string
-  classification: '17' | '33'
+  classification: SectorHeatmapClassification
   periods: SectorPeriodSummary[]
   selected: SelectedSector | null
   baseParams: BaseSectorParams
@@ -470,7 +513,15 @@ function ClassificationSection({
             key={`${classification}-${period.period}`}
             period={period}
             classification={classification}
-            rows={classification === '17' ? period.rows17 : period.rows33}
+            rows={
+              classification === '17'
+                ? period.rows17
+                : classification === '33'
+                  ? period.rows33
+                  : classification === 'major'
+                    ? period.rowsMajor
+                    : period.rowsSubIndustry
+            }
             selected={selected}
             baseParams={baseParams}
           />
@@ -729,6 +780,10 @@ export default async function SectorsPage({
     sectorSort?: string | string[]
     sectorDir?: string | string[]
     sectorMargin?: string | string[]
+    view?: string | string[]
+    structureTaxonomy?: string | string[]
+    heatmapTaxonomy?: string | string[]
+    heatmapPeriod?: string | string[]
   }>
 }) {
   const sp = searchParams ? await searchParams : {}
@@ -742,11 +797,30 @@ export default async function SectorsPage({
     : null
   const selectedSort = normalizeSectorConstituentSort(firstParam(sp.sectorSort), firstParam(sp.sectorDir))
   const selectedMargin = firstParam(sp.sectorMargin)
-  const [board, mlRankingData, objectiveValidationData] = await Promise.all([
-    getSectorAnalysisBoard(universeFilter),
-    getMlSectorRankings({ limit: 1000 }),
-    getMlObjectiveValidation({ limit: 80 }),
-  ])
+  const structureView = firstParam(sp.view) === 'structure'
+  const structureTaxonomy = parseSectorStructureTaxonomy(firstParam(sp.structureTaxonomy))
+  const heatmapTaxonomy = parseHeatmapTaxonomy(firstParam(sp.heatmapTaxonomy))
+  const heatmapPeriod = parseSectorPeriod(firstParam(sp.heatmapPeriod))
+  const showBuiltInPanels = heatmapTaxonomy === 'overview' || heatmapTaxonomy === '17' || heatmapTaxonomy === '33'
+  const heatmapClassifications = heatmapTaxonomy === 'overview'
+    ? ['17', '33'] as const
+    : [heatmapTaxonomy] as const
+  const structureBoard = structureView
+    ? await getSectorStructureBoard(structureTaxonomy)
+    : null
+  const performanceData = structureView
+    ? null
+    : await Promise.all([
+        getSectorAnalysisBoard(universeFilter, {
+          classifications: heatmapClassifications,
+          periods: heatmapTaxonomy === 'subIndustry' ? [heatmapPeriod] : undefined,
+        }),
+        showBuiltInPanels ? getMlSectorRankings({ limit: 1000 }) : Promise.resolve({ asOfDate: null, rows: [] }),
+        showBuiltInPanels ? getMlObjectiveValidation({ limit: 80 }) : Promise.resolve({ rows: [] }),
+      ])
+  const board = performanceData?.[0] ?? { latestDate: null, periods: [], universe: universeFilter }
+  const mlRankingData = performanceData?.[1] ?? { asOfDate: null, rows: [] }
+  const objectiveValidationData = performanceData?.[2] ?? { rows: [] }
   const latestDate = board.latestDate
   const mlRankingHighlights = selectMlSectorRankingHighlights(mlRankingData.rows)
   const selectedPeriodSummary = selectedSector
@@ -786,53 +860,120 @@ export default async function SectorsPage({
   return (
     <div className="sb-page">
       <div className="sb-page-title">
-        <h1>業種分析（17業種・33業種）</h1>
+        <h1>{structureView ? '業種構造分析' : '業種分析ヒートマップ'}</h1>
         <p>
-          J-Quantsの17業種分類・33業種分類を使い、本日・今週・今月の業種別の強弱を一覧で確認できます。
+          {structureView
+            ? 'JP全上場銘柄の6ステージ構造を、17/33業種と四季報60分類・細分類ごとに集約して確認します。'
+            : 'J-Quantsの17/33業種分類と四季報60分類・業種細分類を使い、本日・今週・今月の強弱を一覧で確認できます。'}
         </p>
       </div>
 
       <div className="sb-section" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
-        <span className="sb-tab sb-on">17業種</span>
-        <span className="sb-tab sb-on">33業種</span>
-        <span className="sb-tab sb-on">本日</span>
-        <span className="sb-tab sb-on">今週</span>
-        <span className="sb-tab sb-on">今月</span>
-        {universeMeta && <span className="sb-tab sb-on">{universeMeta.shortLabel}</span>}
+        <Link href="/sectors" className={`sb-tab ${!structureView ? 'sb-on' : ''}`}>騰落率</Link>
+        <Link href="/sectors?view=structure&structureTaxonomy=major#sector-structure" className={`sb-tab ${structureView ? 'sb-on' : ''}`}>構造変化</Link>
+        {!structureView && <>
+          {([
+            ['overview', '17/33業種'],
+            ['major', '四季報60分類'],
+            ['subIndustry', '業種細分類'],
+          ] as const).map(([key, label]) => (
+            <Link
+              key={key}
+              href={`/sectors?${new URLSearchParams({
+                ...(universeFilter ? { universe: universeFilter } : {}),
+                ...(key === 'overview' ? {} : { heatmapTaxonomy: key }),
+              }).toString()}#sector-heatmaps`}
+              className={`sb-tab ${heatmapTaxonomy === key ? 'sb-on' : ''}`}
+            >
+              {label}
+            </Link>
+          ))}
+          {heatmapTaxonomy === 'subIndustry'
+            ? ([
+                ['today', '本日'],
+                ['week', '今週'],
+                ['month', '今月'],
+              ] as const).map(([period, label]) => (
+                <Link
+                  key={period}
+                  href={`/sectors?${new URLSearchParams({
+                    ...(universeFilter ? { universe: universeFilter } : {}),
+                    heatmapTaxonomy: 'subIndustry',
+                    heatmapPeriod: period,
+                  }).toString()}#sector-heatmaps`}
+                  className={`sb-tab ${heatmapPeriod === period ? 'sb-on' : ''}`}
+                >
+                  {label}
+                </Link>
+              ))
+            : <><span className="sb-tab sb-on">本日</span><span className="sb-tab sb-on">今週</span><span className="sb-tab sb-on">今月</span></>}
+        </>}
+        {structureView && <span className="sb-tab sb-on">6ステージ遷移</span>}
+        {!structureView && universeMeta && <span className="sb-tab sb-on">{universeMeta.shortLabel}</span>}
         <span className="sb-t" style={{ marginLeft: 'auto', fontSize: 11 }}>
-          基準日: {latestDate ?? '---'}
+          基準日: {structureView ? structureBoard?.latestDate ?? '---' : latestDate ?? '---'}
         </span>
       </div>
 
-      {board.periods.length === 0 ? (
+      {structureView && structureBoard ? (
+        <SectorStructureBoard board={structureBoard} />
+      ) : board.periods.length === 0 ? (
         <div className="sb-section" style={{ textAlign: 'center', color: 'var(--color-text-tertiary)', fontWeight: 700 }}>
           業種データがありません。J-Quantsの上場銘柄情報と株価データを取得してください。
         </div>
       ) : (
         <div className="space-y-7">
-          <SectorConstituentBoard
-            result={selectedConstituents}
-            periodLabel={selectedPeriodLabel}
-            baseParams={selectedListParams}
-          />
-          <MlSectorRankingBoard rows={mlRankingHighlights} asOfDate={mlRankingData.asOfDate} />
-          <MlObjectiveValidationBoard rows={objectiveValidationData.rows} />
-          <ClassificationSection
-            title="17業種ヒートマップ・ランキング"
-            description="市場全体を17業種にまとめ、本日・今週・今月の大きな資金の向きを確認します。"
-            classification="17"
-            periods={board.periods}
-            selected={selectedSector}
-            baseParams={baseSectorParams}
-          />
-          <ClassificationSection
-            title="33業種ヒートマップ・ランキング"
-            description="33業種でより細かく分解し、どの業種が相対的に強いか、弱いかを確認します。"
-            classification="33"
-            periods={board.periods}
-            selected={selectedSector}
-            baseParams={baseSectorParams}
-          />
+          {showBuiltInPanels && <>
+            <SectorConstituentBoard
+              result={selectedConstituents}
+              periodLabel={selectedPeriodLabel}
+              baseParams={selectedListParams}
+            />
+            <MlSectorRankingBoard rows={mlRankingHighlights} asOfDate={mlRankingData.asOfDate} />
+            <MlObjectiveValidationBoard rows={objectiveValidationData.rows} />
+          </>}
+          {(heatmapTaxonomy === 'overview' || heatmapTaxonomy === '17') && (
+            <ClassificationSection
+              title="17業種ヒートマップ・ランキング"
+              description="市場全体を17業種にまとめ、本日・今週・今月の大きな資金の向きを確認します。"
+              classification="17"
+              periods={board.periods}
+              selected={selectedSector}
+              baseParams={baseSectorParams}
+            />
+          )}
+          {(heatmapTaxonomy === 'overview' || heatmapTaxonomy === '33') && (
+            <ClassificationSection
+              title="33業種ヒートマップ・ランキング"
+              description="33業種でより細かく分解し、どの業種が相対的に強いか、弱いかを確認します。"
+              classification="33"
+              periods={board.periods}
+              selected={selectedSector}
+              baseParams={baseSectorParams}
+            />
+          )}
+          <div id="sector-heatmaps">
+            {heatmapTaxonomy === 'major' && (
+              <ClassificationSection
+                title="四季報60分類ヒートマップ・ランキング"
+                description="個別銘柄ページと同じ四季報60分類で、分類内の平均騰落・上昇下落銘柄数・PMSを比較します。カードから該当分類のスクリーナーを開けます。"
+                classification="major"
+                periods={board.periods}
+                selected={null}
+                baseParams={baseSectorParams}
+              />
+            )}
+            {heatmapTaxonomy === 'subIndustry' && (
+              <ClassificationSection
+                title="業種細分類ヒートマップ・ランキング"
+                description="四季報60分類の配下にある細分類を横断し、より早い資金流入・流出を確認します。カードから親分類を保持したスクリーナーを開けます。"
+                classification="subIndustry"
+                periods={board.periods}
+                selected={null}
+                baseParams={baseSectorParams}
+              />
+            )}
+          </div>
         </div>
       )}
     </div>

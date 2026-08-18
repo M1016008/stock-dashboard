@@ -123,6 +123,8 @@
     "batch:pattern-stats": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/batch-pattern-stats.ts",
     "batch:pattern-stats:short": "USE_LOCAL_DB=1 PATTERN_STAT_HORIZONS=2,3,4,5,10,15 tsx --env-file=.env.local scripts/batch-pattern-stats.ts",
     "batch:stage-transitions": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/batch-stage-transitions.ts",
+    "batch:sector-structure": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/batch-sector-structure.ts",
+    "test:sector-structure": "tsx --env-file=.env.local scripts/test-sector-structure.ts",
     "batch:listed-info": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/batch-listed-info.ts",
     "batch:shares-outstanding": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/batch-shares-outstanding.ts",
     "batch:credit-short": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/batch-credit-short.ts",

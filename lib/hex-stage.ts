@@ -53,6 +53,37 @@ export interface StageTransitionCell {
 export const STAGE_CYCLE: ReadonlyArray<StageLevel> = [1, 2, 3, 4, 5, 6]
 export const STAGE_COUNT = STAGE_CYCLE.length
 
+// 数字の大小ではなく、各MA配列が示す構造上の強さを補助的に表す値。
+// 遷移の正本は下の明示的な隣接遷移であり、この値は飛び越し遷移の
+// 向きとグループ集計の「現在強度」を安定して扱うためだけに使う。
+export const STAGE_STRUCTURE_STRENGTH: Record<StageLevel, number> = {
+  1: 100, // パーフェクトオーダー
+  2: 60,  // 強気構造内の調整
+  3: 20,  // 弱気移行
+  4: 0,   // リバースパーフェクトオーダー
+  5: 40,  // 反発初期
+  6: 75,  // 強気移行
+}
+
+// 6ステージは 1→2→3→4→5→6→1 の形で遷移しうるが、
+// その番号順を「改善」と解釈してはいけない。MA構造の意味に従う
+// 悪化経路は 1→2→3→4、改善経路は 4→5→6→1 である。
+// この定義を全画面・全バッチの遷移正本とする。
+const ADJACENT_TRANSITION_DIRECTION: Partial<Record<`${StageLevel}-${StageLevel}`, StageTransitionDirection>> = {
+  '1-2': 'deteriorate',
+  '2-3': 'deteriorate',
+  '3-4': 'deteriorate',
+  '4-5': 'improve',
+  '5-6': 'improve',
+  '6-1': 'improve',
+  '2-1': 'improve',
+  '3-2': 'improve',
+  '4-3': 'improve',
+  '5-4': 'deteriorate',
+  '6-5': 'deteriorate',
+  '1-6': 'deteriorate',
+}
+
 const STAGE_TO_INDEX: Record<StageLevel, number> = {
   1: 0,
   2: 1,
@@ -64,10 +95,9 @@ const STAGE_TO_INDEX: Record<StageLevel, number> = {
 
 /**
  * 6段階循環に対する遷移分類を1箇所で定義
- * - forwardDistance: from -> to への循環順距離
- * - backwardDistance: to -> from への循環順距離
- * - 1歩進行を改善、1歩後退を悪化として扱う
- * - 2〜4ステップは飛躍（jump）として扱う
+ * - forward/backwardDistance は番号上の循環距離として監査用に残す
+ * - 改善・悪化の正本は ADJACENT_TRANSITION_DIRECTION と構造強度
+ * - 隣接遷移は明示定義、飛び越し遷移は構造強度差で方向を決める
  */
 function classifyStageTransition(from: StageLevel, to: StageLevel): Omit<StageTransitionInfo, 'from' | 'to'> {
   const fromIdx = STAGE_TO_INDEX[from]
@@ -79,14 +109,14 @@ function classifyStageTransition(from: StageLevel, to: StageLevel): Omit<StageTr
   let direction: StageTransitionDirection = 'invalid'
   if (from === to) {
     direction = 'stable'
-  } else if (forwardDistance === 1) {
-    direction = 'improve'
-  } else if (backwardDistance === 1) {
-    direction = 'deteriorate'
-  } else if (forwardDistance > 1 && forwardDistance < STAGE_COUNT - 1) {
-    direction = 'jump_improve'
-  } else if (backwardDistance > 1 && backwardDistance < STAGE_COUNT - 1) {
-    direction = 'jump_deteriorate'
+  } else {
+    const adjacent = ADJACENT_TRANSITION_DIRECTION[`${from}-${to}`]
+    if (adjacent) {
+      direction = adjacent
+    } else {
+      const strengthDelta = STAGE_STRUCTURE_STRENGTH[to] - STAGE_STRUCTURE_STRENGTH[from]
+      direction = strengthDelta >= 0 ? 'jump_improve' : 'jump_deteriorate'
+    }
   }
 
   return {
@@ -102,8 +132,8 @@ export const STAGE_TRANSITION_MATRIX: StageTransitionCell[][] = STAGE_CYCLE.map(
     const { direction, forwardDistance, backwardDistance, isCycleAdjacent } = classifyStageTransition(from, to)
     const labelMap: Record<StageTransitionDirection, string> = {
       stable: '据置',
-      improve: '循環順',
-      deteriorate: '逆循環',
+      improve: '改善',
+      deteriorate: '悪化',
       jump_improve: '飛躍改善',
       jump_deteriorate: '飛躍悪化',
       invalid: '不明',
@@ -137,28 +167,28 @@ export const STAGE_DIRECTION_META: Record<
     rgb: '22, 163, 74',
     text: '#166534',
     tone: 'up',
-    description: '循環順で1ステップ移動（1→2, 6→1）',
+    description: 'MA構造の改善方向へ1ステップ移動（4→5、5→6、6→1、2→1、3→2、4→3）',
   },
   deteriorate: {
     title: '悪化',
     rgb: '37, 99, 235',
     text: '#1d4ed8',
     tone: 'down',
-    description: '循環逆順で1ステップ移動（3→2, 1→6）',
+    description: 'MA構造の悪化方向へ1ステップ移動（1→2、2→3、3→4、1→6、6→5、5→4）',
   },
   jump_improve: {
     title: '大幅改善',
     rgb: '6, 95, 70',
     text: '#065f46',
     tone: 'up',
-    description: '循環順で2〜4ステップ移動（例: 1→4）',
+    description: '隣接を飛び越えて構造強度が改善した遷移',
   },
   jump_deteriorate: {
     title: '大幅悪化',
     rgb: '217, 119, 6',
     text: '#92400e',
     tone: 'down',
-    description: '循環逆順で2〜4ステップ移動（例: 4→1）',
+    description: '隣接を飛び越えて構造強度が悪化した遷移',
   },
   invalid: {
     title: '不明',

@@ -17,6 +17,7 @@ export const EXCLUSIVE_UPDATE_JOB_TYPES = [
   'calendar_stage_backfill_jp',
   'calendar_stage_backfill_us',
   'stage_transitions',
+  'sector_structure',
 ] as const
 
 export const JP_STOCKBOARD_UPDATE_JOB_TYPES = [
@@ -30,6 +31,7 @@ export const JP_STOCKBOARD_UPDATE_JOB_TYPES = [
   'db_maintenance',
   'calendar_stage_backfill_jp',
   'stage_transitions',
+  'sector_structure',
 ] as const
 
 export const US_ISOLATED_UPDATE_JOB_TYPES = [
@@ -84,6 +86,7 @@ const SQLITE_WRITER_PROCESS_PATTERNS = [
   /scripts\/(?:batch-forward-extrema|batch-earnings(?:-times)?|build-serving-|batch-kabutan-(?:material-news|themes)|maintenance-db)\S*\.(?:ts|js)\b/,
   /scripts\/backfill-calendar-stage-snapshots\.(?:ts|js)\b/,
   /scripts\/batch-stage-transitions\.(?:ts|js)\b/,
+  /scripts\/batch-sector-structure\.(?:ts|js)\b/,
 ] as const
 
 type ProcessRow = {

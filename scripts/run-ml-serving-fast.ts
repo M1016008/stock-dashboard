@@ -156,6 +156,31 @@ async function fillMissingPhysicsFeatures(priceDate: string): Promise<void> {
   if (remaining > 0) throw new Error(`physics feature missing latest remains after ${maxPasses} passes: ${remaining}`)
 }
 
+async function refreshDailyRlAndPhysicsStatus(priceDate: string): Promise<void> {
+  const policyDate = await maxDate('ml_rl_policy_evaluations', 'evaluation_date')
+  if (!policyDate || policyDate < priceDate) {
+    await runRequired('batch:ml-short-labels', {
+      ML_SHORT_HORIZONS: process.env.ML_SHORT_HORIZONS ?? ML_PRIMARY_HORIZON_LIST,
+      ML_SHORT_LABEL_RECENT_DAYS: process.env.ML_SHORT_LABEL_RECENT_DAYS ?? process.env.ML_DAILY_RL_RECENT_DAYS ?? '60',
+      ML_SHORT_LABEL_START_DATE: process.env.ML_FULL_START_DATE ?? '1900-01-01',
+      ML_SHORT_WRITE_RL_STATES: '1',
+    })
+    await runRequired('batch:ml-rl-policy', {
+      ML_RL_HORIZONS: process.env.ML_RL_HORIZONS ?? ML_PRIMARY_HORIZON_LIST,
+      ML_RL_RECENT_DAYS: process.env.ML_RL_RECENT_DAYS ?? process.env.ML_DAILY_RL_RECENT_DAYS ?? '60',
+      ML_RL_START_DATE: process.env.ML_FULL_START_DATE ?? '1900-01-01',
+    })
+  }
+
+  if (process.env.ML_DAILY_REFRESH_PHYSICS_STATUS !== '0') {
+    await runRequired('batch:ml-physics-status-evaluate', {
+      ML_PHYSICS_STATUS_HORIZONS: process.env.ML_PHYSICS_STATUS_HORIZONS ?? ML_PRIMARY_HORIZON_LIST,
+      ML_PHYSICS_STATUS_RECENT_DAYS: process.env.ML_PHYSICS_STATUS_RECENT_DAYS ?? process.env.ML_DAILY_STATUS_RECENT_DAYS ?? '60',
+      ML_PHYSICS_STATUS_START_DATE: process.env.ML_FULL_START_DATE ?? '1900-01-01',
+    })
+  }
+}
+
 function installSignalHandlers(): void {
   const stop = (signal: NodeJS.Signals) => {
     console.error(`Received ${signal}; stopping fast ML serving child process`)
@@ -200,6 +225,7 @@ async function main(): Promise<void> {
     ML_PHYSICS_HORIZONS: process.env.ML_PHYSICS_HORIZONS ?? ML_PRIMARY_HORIZON_LIST,
   })
   await runRequired('batch:ml-insights')
+  await refreshDailyRlAndPhysicsStatus(priceDate)
   await runRequired('batch:historical-universe')
   await runRequired('batch:ml-feature-health', {
     ML_FEATURE_HEALTH_STRICT: '1',

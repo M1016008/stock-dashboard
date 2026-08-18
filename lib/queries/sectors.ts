@@ -1,12 +1,15 @@
 import { execAll, execGet } from '@/lib/db/client'
 import { type UniverseFilterValue, universeSqlCondition } from '@/lib/market-universe'
+import { SECTOR_STRUCTURE_AXES, type AxisStructureSummary, type SectorStructureAxisKey, type SectorStructureTaxonomy } from '@/lib/sector-structure'
 
 export type SectorClassification = '17' | '33'
+export type SectorHeatmapClassification = SectorClassification | 'major' | 'subIndustry'
 export type SectorPeriod = 'today' | 'week' | 'month'
 
 export interface SectorHeatmapRow {
   sector_code: string | null
   sector_name: string
+  sector_parent_name: string | null
   n_stocks: number
   avg_change: number
   advancing_count: number
@@ -24,12 +27,42 @@ export interface SectorPeriodSummary {
   baseDate: string
   rows17: SectorHeatmapRow[]
   rows33: SectorHeatmapRow[]
+  rowsMajor: SectorHeatmapRow[]
+  rowsSubIndustry: SectorHeatmapRow[]
 }
 
 export interface SectorAnalysisBoard {
   latestDate: string | null
   periods: SectorPeriodSummary[]
   universe: UniverseFilterValue
+}
+
+export interface SectorStructureRow {
+  taxonomy: SectorStructureTaxonomy
+  groupKey: string
+  groupName: string
+  parentGroup: string | null
+  date: string
+  nStocks: number
+  validStageCount: number
+  strengthScore: number | null
+  transitionChangeScore: number
+  momentum5d: number | null
+  momentum10d: number | null
+  momentum20d: number | null
+  propagationDirection: 'improving' | 'deteriorating' | 'neutral'
+  propagationPhase: number
+  propagationLabel: string
+  improvingCount: number
+  deterioratingCount: number
+  stableCount: number
+  axes?: Record<SectorStructureAxisKey, AxisStructureSummary>
+}
+
+export interface SectorStructureBoard {
+  latestDate: string | null
+  taxonomy: SectorStructureTaxonomy
+  rows: SectorStructureRow[]
 }
 
 export type SectorConstituentSortKey =
@@ -148,23 +181,45 @@ async function resolveBaseDate(period: SectorPeriod, latestDate: string): Promis
   return await getPreviousMonthEndTradingDate(latestDate) ?? getPreviousTradingDate(latestDate)
 }
 
-function sectorColumns(classification: SectorClassification) {
+function sectorColumns(classification: SectorHeatmapClassification) {
   if (classification === '17') {
     return {
       code: 'tu.sector17_code',
       name: `COALESCE(NULLIF(tu.sector17_name, ''), 'その他')`,
+      parent: 'NULL',
       hasName: `tu.sector17_name IS NOT NULL AND tu.sector17_name <> ''`,
+      classificationJoin: '',
+    }
+  }
+  if (classification === '33') {
+    return {
+      code: 'tu.sector33_code',
+      name: `COALESCE(NULLIF(tu.sector33_name, ''), 'その他')`,
+      parent: 'NULL',
+      hasName: `tu.sector33_name IS NOT NULL AND tu.sector33_name <> ''`,
+      classificationJoin: '',
+    }
+  }
+  if (classification === 'major') {
+    return {
+      code: 'sc.major_category',
+      name: 'sc.major_category',
+      parent: 'NULL',
+      hasName: `sc.major_category IS NOT NULL AND sc.major_category <> ''`,
+      classificationJoin: 'JOIN stock_classification sc ON sc.ticker = tu.ticker',
     }
   }
   return {
-    code: 'tu.sector33_code',
-    name: `COALESCE(NULLIF(tu.sector33_name, ''), 'その他')`,
-    hasName: `tu.sector33_name IS NOT NULL AND tu.sector33_name <> ''`,
+    code: `sc.major_category || char(31) || sc.sub_industry`,
+    name: 'sc.sub_industry',
+    parent: 'sc.major_category',
+    hasName: `sc.major_category IS NOT NULL AND sc.major_category <> '' AND sc.sub_industry IS NOT NULL AND sc.sub_industry <> ''`,
+    classificationJoin: 'JOIN stock_classification sc ON sc.ticker = tu.ticker',
   }
 }
 
 export async function getSectorHeatmapRows(
-  classification: SectorClassification,
+  classification: SectorHeatmapClassification,
   latestDate: string,
   baseDate: string,
   universeFilter: UniverseFilterValue = null,
@@ -188,6 +243,7 @@ export async function getSectorHeatmapRows(
           tu.ticker,
           ${cols.code} AS sector_code,
           ${cols.name} AS sector_name,
+          ${cols.parent} AS sector_parent_name,
           CASE
             WHEN base_px.close > 0 THEN 100.0 * (latest_px.close - base_px.close) / base_px.close
           END AS change_pct,
@@ -195,6 +251,7 @@ export async function getSectorHeatmapRows(
           pm.physical_force_score AS pfs,
           pm.physical_energy_score AS pes
         FROM ticker_universe tu
+        ${cols.classificationJoin}
         JOIN latest_px ON latest_px.ticker = tu.ticker
         JOIN base_px ON base_px.ticker = tu.ticker
         LEFT JOIN physical_momentum_metrics pm ON pm.market = 'JP' AND pm.symbol = tu.ticker AND pm.date = ?
@@ -205,6 +262,7 @@ export async function getSectorHeatmapRows(
       SELECT
         sector_code,
         sector_name,
+        sector_parent_name,
         COUNT(*) AS n_stocks,
         COALESCE(AVG(change_pct), 0) AS avg_change,
         SUM(CASE WHEN change_pct > 0 THEN 1 ELSE 0 END) AS advancing_count,
@@ -213,24 +271,36 @@ export async function getSectorHeatmapRows(
         AVG(pfs) AS avg_pfs,
         AVG(pes) AS avg_pes
       FROM priced
-      GROUP BY sector_code, sector_name
+      GROUP BY sector_code, sector_name, sector_parent_name
       ORDER BY avg_change DESC
     `,
     [latestDate, baseDate, latestDate, ...universe.params],
   )
 }
 
-export async function getSectorAnalysisBoard(universeFilter: UniverseFilterValue = null): Promise<SectorAnalysisBoard> {
+export async function getSectorAnalysisBoard(
+  universeFilter: UniverseFilterValue = null,
+  options: {
+    classifications?: readonly SectorHeatmapClassification[]
+    periods?: readonly SectorPeriod[]
+  } = {},
+): Promise<SectorAnalysisBoard> {
   const latestDate = await getLatestPriceDate()
   if (!latestDate) return { latestDate: null, periods: [], universe: universeFilter }
 
+  const classifications = new Set<SectorHeatmapClassification>(options.classifications ?? ['17', '33'])
+  const periodMetas = options.periods?.length
+    ? PERIODS.filter((meta) => options.periods?.includes(meta.period))
+    : PERIODS
   const periods: SectorPeriodSummary[] = []
-  for (const periodMeta of PERIODS) {
+  for (const periodMeta of periodMetas) {
     const baseDate = await resolveBaseDate(periodMeta.period, latestDate)
     if (!baseDate) continue
-    const [rows17, rows33] = await Promise.all([
-      getSectorHeatmapRows('17', latestDate, baseDate, universeFilter),
-      getSectorHeatmapRows('33', latestDate, baseDate, universeFilter),
+    const [rows17, rows33, rowsMajor, rowsSubIndustry] = await Promise.all([
+      classifications.has('17') ? getSectorHeatmapRows('17', latestDate, baseDate, universeFilter) : Promise.resolve([]),
+      classifications.has('33') ? getSectorHeatmapRows('33', latestDate, baseDate, universeFilter) : Promise.resolve([]),
+      classifications.has('major') ? getSectorHeatmapRows('major', latestDate, baseDate, universeFilter) : Promise.resolve([]),
+      classifications.has('subIndustry') ? getSectorHeatmapRows('subIndustry', latestDate, baseDate, universeFilter) : Promise.resolve([]),
     ])
     periods.push({
       ...periodMeta,
@@ -238,10 +308,105 @@ export async function getSectorAnalysisBoard(universeFilter: UniverseFilterValue
       baseDate,
       rows17,
       rows33,
+      rowsMajor,
+      rowsSubIndustry,
     })
   }
 
   return { latestDate, periods, universe: universeFilter }
+}
+
+function parseAxisJson(raw: string): Record<SectorStructureAxisKey, AxisStructureSummary> {
+  const fallback = Object.fromEntries(SECTOR_STRUCTURE_AXES.map((axis) => [axis.key, {
+    validCount: 0,
+    stages: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 },
+    strength: null,
+    improving: 0,
+    deteriorating: 0,
+    stable: 0,
+    jumpImproving: 0,
+    jumpDeteriorating: 0,
+    changeScore: 0,
+  }])) as Record<SectorStructureAxisKey, AxisStructureSummary>
+  try {
+    const parsed = JSON.parse(raw) as Partial<Record<SectorStructureAxisKey, AxisStructureSummary>>
+    for (const axis of SECTOR_STRUCTURE_AXES) {
+      const value = parsed[axis.key]
+      if (value && typeof value === 'object') fallback[axis.key] = { ...fallback[axis.key], ...value }
+    }
+  } catch {
+    // 集計途中または旧レコードは空の構成比として表示し、画面を落とさない。
+  }
+  return fallback
+}
+
+export async function getSectorStructureBoard(
+  taxonomy: SectorStructureTaxonomy = 'major',
+): Promise<SectorStructureBoard> {
+  const latest = await execGet<{ date: string | null }>(`
+    SELECT MAX(date) AS date FROM sector_structure_daily WHERE taxonomy = ?
+  `, [taxonomy])
+  if (!latest?.date) return { latestDate: null, taxonomy, rows: [] }
+  const raw = await execAll<{
+    taxonomy: SectorStructureTaxonomy
+    groupKey: string
+    groupName: string
+    parentGroup: string | null
+    date: string
+    nStocks: number
+    validStageCount: number
+    strengthScore: number | null
+    transitionChangeScore: number
+    momentum5d: number | null
+    momentum10d: number | null
+    momentum20d: number | null
+    propagationDirection: 'improving' | 'deteriorating' | 'neutral'
+    propagationPhase: number
+    propagationLabel: string
+    improvingCount: number
+    deterioratingCount: number
+    stableCount: number
+    axisJson: string
+  }>(`
+    SELECT
+      taxonomy,
+      group_key AS groupKey,
+      group_name AS groupName,
+      parent_group AS parentGroup,
+      date,
+      n_stocks AS nStocks,
+      valid_stage_count AS validStageCount,
+      strength_score AS strengthScore,
+      transition_change_score AS transitionChangeScore,
+      momentum_5d AS momentum5d,
+      momentum_10d AS momentum10d,
+      momentum_20d AS momentum20d,
+      propagation_direction AS propagationDirection,
+      propagation_phase AS propagationPhase,
+      propagation_label AS propagationLabel,
+      improving_count AS improvingCount,
+      deteriorating_count AS deterioratingCount,
+      stable_count AS stableCount,
+      axis_json AS axisJson
+    FROM sector_structure_daily
+    WHERE taxonomy = ? AND date = ?
+    ORDER BY momentum_10d DESC, strength_score DESC, group_name
+  `, [taxonomy, latest.date])
+  // 軽量な一覧では軸別の大きなJSONを送らず、詳細展開に使う上位24件だけに付与する。
+  const detailKeys = new Set(
+    [...raw]
+      .sort((a, b) => Math.abs(b.momentum10d ?? 0) - Math.abs(a.momentum10d ?? 0))
+      .slice(0, 24)
+      .map((row) => row.groupKey),
+  )
+  return {
+    latestDate: latest.date,
+    taxonomy,
+    rows: raw.map(({ axisJson, ...row }) => ({
+      ...row,
+      ...(detailKeys.has(row.groupKey) ? { axes: parseAxisJson(axisJson) } : {}),
+    })),
+  }
 }
 
 function normalizeSortKey(value: string | null | undefined): SectorConstituentSortKey {

@@ -157,6 +157,16 @@ function currentJstHour(): number {
   return Number.isFinite(hour) ? hour % 24 : new Date().getHours()
 }
 
+function needsFastMlServing(freshness: Awaited<ReturnType<typeof getDataFreshness>>): boolean {
+  return freshness.needsMlFeatureUpdate
+    || freshness.needsMlCandidateUpdate
+    || freshness.needsMlPredictionUpdate
+    || freshness.needsMlPhysicsFeatureUpdate
+    || freshness.needsMlPhysicsCandidateUpdate
+    || freshness.needsMlSimilarUpdate
+    || freshness.needsMlRlPolicyUpdate
+}
+
 async function main() {
   const runStartedJstHour = currentJstHour()
   const configuredLockLeaseSeconds = Number(process.env.UPDATE_LATEST_LOCK_SECONDS)
@@ -246,6 +256,24 @@ async function main() {
       || afterCritical.needsDashboardCacheUpdate
     ) {
       throw new Error('Critical market data refresh did not reach the expected trading date')
+    }
+
+    // Keep serving ML in lockstep with the newly published JP price date. The
+    // full retraining/governance path remains weekly; this is a bounded delta
+    // refresh that must finish before candidates are shown as current.
+    const fullDailyMlRequested = process.env.SKIP_DAILY_ML !== '1'
+      && process.env.UPDATE_LATEST_RUN_DAILY_ML === '1'
+    if (!fullDailyMlRequested && process.env.UPDATE_LATEST_RUN_FAST_ML !== '0' && needsFastMlServing(afterCritical)) {
+      const mlError = await runOptional(
+        'daily-ml-serving',
+        'scripts/run-ml-serving-fast.ts',
+        { UPDATE_CHILD_TIMEOUT_MINUTES: process.env.UPDATE_FAST_ML_TIMEOUT_MINUTES ?? '75' },
+        heartbeat,
+      )
+      if (mlError) optionalErrors.push(mlError)
+      await lock.heartbeat()
+    } else if (!fullDailyMlRequested) {
+      console.log('Fast daily ML serving is already current or disabled')
     }
 
     const optionalAfterHour = Number(process.env.UPDATE_LATEST_OPTIONAL_AFTER_HOUR ?? '0')

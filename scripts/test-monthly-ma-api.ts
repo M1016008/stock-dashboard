@@ -116,7 +116,9 @@ async function main(): Promise<void> {
   assert.ok(tickerSearch.rows.length > 0)
   assert.ok(tickerSearch.rows.every((row) => row.ticker === '7003'))
   assert.ok(tickerSearch.rows.every((row) => row.stageCode === '435241'))
-  assert.ok(tickerSearch.rows.every((row) => row.currentVolume === 1_718_400))
+  // Volume is live market data, so assert the API contract rather than a
+  // historical point value that changes after every daily refresh.
+  assert.ok(tickerSearch.rows.every((row) => row.currentVolume != null && row.currentVolume >= 0))
   assert.ok(tickerSearch.rows.every((row) => row.avgVolume30 != null && row.avgVolume30 > 0))
 
   const margin = await list(`period=all&marginType=${encodeURIComponent('貸借')}`)

@@ -146,6 +146,11 @@ async function main(): Promise<void> {
     await runRequired('scripts/batch-monthly-ma-monitor.ts')
     await lock?.heartbeat()
 
+    // 個別銘柄の6ステージを業種・細分類ごとに集計する。スナップショット
+    // 更新の直後に走らせ、画面の構造変化表示だけが古く残らないようにする。
+    await runRequired('scripts/batch-sector-structure.ts', { SECTOR_STRUCTURE_SKIP_LOCK: '1' })
+    await lock?.heartbeat()
+
     await runRequired('scripts/batch-physical-momentum.ts', {
       // OHLCV直後の追随更新は直近日数に限定する。全期間再計算は週次ML/メンテナンスへ分離。
       PMS_RECENT_DAYS: envOrDefault('PMS_DAILY_RECENT_DAYS', '420'),
