@@ -197,7 +197,7 @@ interface FinancialSummary {
   forecastAnnualDividend: number | null
 }
 
-type StockDetailTab = 'overview' | 'shikiho' | 'chart' | 'scenario' | 'ml'
+type StockDetailTab = 'overview' | 'chart' | 'scenario' | 'ml'
 
 export function StockDetailClient({ ticker }: StockDetailClientProps) {
   const [quote, setQuote] = useState<StockQuote | null>(null)
@@ -298,7 +298,12 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
   useEffect(() => {
     const readTab = () => {
       const hash = window.location.hash.replace('#', '')
-      if (hash === 'shikiho' || hash === 'chart' || hash === 'scenario' || hash === 'ml' || hash === 'overview') {
+      if (hash === 'shikiho') {
+        setActiveTab('overview')
+        const url = new URL(window.location.href)
+        url.hash = 'overview'
+        window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`)
+      } else if (hash === 'chart' || hash === 'scenario' || hash === 'ml' || hash === 'overview') {
         setActiveTab(hash)
       }
     }
@@ -447,15 +452,15 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
               J-Quants日足の価格データを取得できませんでした。
             </div>
           )}
-          <div className="stock-info-grid">
-            <BasicInfoCard ticker={ticker} quote={displayedQuote} analysisDate={analysisDate} />
-            <MarketSnapshotCard
-              ticker={ticker}
-              marginInfo={marginInfo}
-              fallbackType={displayMarginType}
-              analysisDate={analysisDate}
-            />
-          </div>
+          <OverviewBasicInfoPanel
+            ticker={ticker}
+            quote={displayedQuote}
+            marginInfo={marginInfo}
+            fallbackType={displayMarginType}
+            analysisDate={analysisDate}
+            shikihoInfo={shikihoInfo}
+            loading={loading}
+          />
           {analysisDate
             ? <CurrentOnlyDataNotice label="財務・株主・保有情報は現在情報のため、過去分析モードでは非表示にしています。" />
             : <CompanyIntelligencePanel info={overviewInfo} />}
@@ -464,10 +469,6 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
             : <EarningsCard ticker={ticker} />}
           <PhysicalMomentumSection ticker={ticker} analysisDate={analysisDate} />
         </>
-      )}
-
-      {activeTab === 'shikiho' && (
-        <ShikihoProfileView info={shikihoInfo} loading={loading} />
       )}
 
       {activeTab === 'chart' && (
@@ -539,7 +540,6 @@ function StockDetailTabs({
 }) {
   const tabs = [
     { id: 'overview' as const, label: '概要', icon: LayoutDashboard },
-    { id: 'shikiho' as const, label: '四季報', icon: BookOpenText },
     { id: 'chart' as const, label: 'チャート・6ステージ', icon: ChartCandlestick },
     { id: 'scenario' as const, label: 'シナリオ', icon: NotebookPen },
     { id: 'ml' as const, label: '本質類似・ML', icon: BrainCircuit },
@@ -569,7 +569,67 @@ function StockDetailTabs({
   )
 }
 
-function ShikihoProfileView({
+function OverviewBasicInfoPanel({
+  ticker,
+  quote,
+  marginInfo,
+  fallbackType,
+  analysisDate,
+  shikihoInfo,
+  loading,
+}: {
+  ticker: string
+  quote: StockQuote | null
+  marginInfo: StockMarginInfo | null
+  fallbackType?: string | null
+  analysisDate: string | null
+  shikihoInfo: ShikihoInfo | null
+  loading: boolean
+}) {
+  return (
+    <section className="card overflow-hidden">
+      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-4 py-3">
+        <div className="flex items-center gap-2.5">
+          <LayoutDashboard size={16} className="text-[var(--color-brand-700)]" aria-hidden="true" />
+          <div>
+            <h2 className="text-[12px] font-semibold text-[var(--color-text-primary)]">基本情報</h2>
+            <div className="mt-0.5 text-[9px] font-semibold text-[var(--color-text-tertiary)]">
+              市場データ J-Quants / 企業情報 会社四季報CSV
+            </div>
+          </div>
+        </div>
+        <div className="font-mono text-[9px] font-medium text-[var(--color-text-tertiary)]">
+          基準日 {quote?.priceDate ?? analysisDate ?? '---'}
+        </div>
+      </header>
+
+      <div className="grid lg:grid-cols-2">
+        <div className="border-b border-[var(--color-border-default)] p-3 lg:border-b-0 lg:border-r">
+          <BasicInfoCard ticker={ticker} quote={quote} analysisDate={analysisDate} embedded />
+        </div>
+        <div className="p-3">
+          <MarketSnapshotCard
+            ticker={ticker}
+            marginInfo={marginInfo}
+            fallbackType={fallbackType}
+            analysisDate={analysisDate}
+            embedded
+          />
+        </div>
+      </div>
+
+      {analysisDate
+        ? (
+          <div className="border-t border-[var(--color-border-default)] p-3">
+            <CurrentOnlyDataNotice label="会社四季報は現在情報のため、過去分析モードでは非表示にしています。" compact />
+          </div>
+        )
+        : <ShikihoOverviewSection info={shikihoInfo} loading={loading} />}
+    </section>
+  )
+}
+
+function ShikihoOverviewSection({
   info,
   loading,
 }: {
@@ -580,17 +640,19 @@ function ShikihoProfileView({
 
   if (!profile) {
     return (
-      <section className="card flex min-h-64 items-center justify-center px-4 text-center">
-        <div aria-live="polite">
-          <BookOpenText className="mx-auto text-[var(--color-text-tertiary)]" size={28} aria-hidden="true" />
-          <div className="mt-3 text-[12px] font-black text-[var(--color-text-primary)]">
-            {loading ? '四季報情報を読み込んでいます' : '四季報情報は未収録です'}
-          </div>
-          {!loading && (
-            <div className="mt-1 text-[10px] font-bold text-[var(--color-text-tertiary)]">
-              次回の四季報CSV同期時に更新されます
+      <section className="flex min-h-24 items-center justify-center border-t border-[var(--color-border-default)] px-4 text-center">
+        <div aria-live="polite" className="flex items-center gap-3">
+          <BookOpenText className="text-[var(--color-text-tertiary)]" size={22} aria-hidden="true" />
+          <div className="text-left">
+            <div className="text-[11px] font-semibold text-[var(--color-text-primary)]">
+              {loading ? '四季報情報を読み込んでいます' : '四季報情報は未収録です'}
             </div>
-          )}
+            {!loading && (
+              <div className="mt-1 text-[9px] font-medium text-[var(--color-text-tertiary)]">
+                次回の四季報CSV同期時に更新されます
+              </div>
+            )}
+          </div>
         </div>
       </section>
     )
@@ -604,69 +666,53 @@ function ShikihoProfileView({
   ]
 
   return (
-    <section className="card overflow-hidden">
-      <div className="h-1 bg-[var(--color-market-red)]" aria-hidden="true" />
-      <header className="flex flex-wrap items-center justify-between gap-4 border-b border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-5 py-4">
-        <div className="flex min-w-0 items-center gap-3.5">
-          <div className="flex size-10 shrink-0 items-center justify-center border border-[var(--color-border-default)] bg-white text-[var(--color-brand-700)] shadow-sm">
-            <BookOpenText size={20} aria-hidden="true" />
-          </div>
-          <div className="min-w-0">
-            <h2 className="text-[15px] font-black text-[var(--color-text-primary)]">会社四季報</h2>
-            <div className="mt-1 flex flex-wrap items-center gap-x-2 text-[9px] font-bold text-[var(--color-text-tertiary)]">
-              <span>{info?.source ?? '会社四季報CSV'}</span>
-              <span className="text-[var(--color-border-strong)]" aria-hidden="true">/</span>
-              <span>企業の現在地と業績材料</span>
-            </div>
-          </div>
+    <section className="border-t border-[var(--color-border-default)]">
+      <header className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 px-3 py-2">
+        <div className="flex min-w-0 items-center gap-2">
+          <BookOpenText size={14} className="shrink-0 text-[var(--color-brand-700)]" aria-hidden="true" />
+          <h3 className="font-semibold text-[var(--color-text-primary)]" style={{ fontSize: '11px' }}>会社四季報</h3>
+          <span className="text-[9px] font-normal text-[var(--color-text-tertiary)]">
+            {info?.source ?? '会社四季報CSV'}
+          </span>
         </div>
-        <dl className="grid min-w-full grid-cols-2 border-t border-[var(--color-border-soft)] pt-3 text-left sm:min-w-0 sm:border-l sm:border-t-0 sm:pl-5 sm:pt-0 sm:text-right">
-          <div className="pr-4 sm:px-4">
-            <dt className="text-[8px] font-black text-[var(--color-text-tertiary)]">収録号</dt>
-            <dd className="mt-1 whitespace-nowrap text-[10px] font-black text-[var(--color-text-primary)]">{profile.issueLabel ?? '---'}</dd>
+        <dl className="flex items-center text-[9px] text-[var(--color-text-tertiary)]">
+          <div className="flex items-center gap-1.5 pr-3">
+            <dt>収録号</dt>
+            <dd className="font-semibold text-[var(--color-text-primary)]">{profile.issueLabel ?? '---'}</dd>
           </div>
-          <div className="border-l border-[var(--color-border-soft)] pl-4">
-            <dt className="text-[8px] font-black text-[var(--color-text-tertiary)]">発売日</dt>
-            <dd className="mt-1 whitespace-nowrap text-[10px] font-black text-[var(--color-text-primary)]">{profile.releaseDate ?? '---'}</dd>
+          <div className="flex items-center gap-1.5 border-l border-[var(--color-border-soft)] pl-3">
+            <dt>発売日</dt>
+            <dd className="font-semibold text-[var(--color-text-primary)]">{profile.releaseDate ?? '---'}</dd>
           </div>
         </dl>
       </header>
 
-      <div className="border-b border-[var(--color-border-default)]">
-        <div className="flex items-center justify-between gap-3 px-5 py-2.5">
-          <div className="text-[10px] font-black text-[var(--color-text-secondary)]">主要指標</div>
-          <div className="text-[8px] font-bold text-[var(--color-text-tertiary)]">会社予想・直近実績</div>
-        </div>
-        <div className="grid grid-cols-2 border-t border-[var(--color-border-soft)] lg:grid-cols-4">
-          {metrics.map((metric, index) => (
-            <div
-              key={metric.label}
-              className={`flex min-h-[92px] flex-col justify-center px-5 py-3.5 ${index % 2 === 0 ? 'border-r' : ''} ${index < 2 ? 'border-b' : ''} border-[var(--color-border-soft)] lg:border-b-0 lg:border-r`}
-            >
-              <div className="text-[9px] font-black text-[var(--color-text-tertiary)]">{metric.label}</div>
-              <div className={`mt-1.5 font-mono text-[22px] font-black leading-none ${metric.accent}`}>{metric.value}</div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <div className="grid lg:grid-cols-5">
-        <div className="border-b border-[var(--color-border-default)] lg:col-span-2 lg:border-b-0 lg:border-r">
-          <div className="flex items-center gap-2 border-b border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-5 py-3">
-            <Building2 size={14} className="text-[var(--color-brand-700)]" aria-hidden="true" />
-            <h3 className="text-[10px] font-black text-[var(--color-text-secondary)]">企業プロフィール</h3>
+      <div className="grid border-t border-[var(--color-border-soft)] lg:grid-cols-5">
+        <div className="border-b border-[var(--color-border-default)] px-3 py-2.5 lg:col-span-2 lg:border-b-0 lg:border-r">
+          <div className="flex items-center justify-between gap-3">
+            <h3 className="font-semibold text-[var(--color-text-secondary)]" style={{ fontSize: '11px' }}>四季報サマリー</h3>
+            <span className="text-[9px] font-normal text-[var(--color-text-tertiary)]">会社予想・直近実績</span>
           </div>
-          <ShikihoNarrativeSection index="01" title="特色" body={profile.companyFeature} />
-          <ShikihoNarrativeSection index="02" title="連結事業" body={profile.consolidatedBusiness} bordered />
+          <div className="mt-0.5 grid grid-cols-2 gap-x-4">
+            {metrics.map((metric) => (
+              <div key={metric.label} className="flex items-baseline justify-between gap-2 border-b border-[var(--color-border-soft)] py-1.5">
+                <div className="text-[10px] font-normal text-[var(--color-text-tertiary)]">{metric.label}</div>
+                <div className={`font-mono text-[14px] font-semibold leading-none ${metric.accent}`}>{metric.value}</div>
+              </div>
+            ))}
+          </div>
+          <div className="mt-0.5">
+            <ShikihoNarrativeSection index="01" title="特色" body={profile.companyFeature} />
+            <ShikihoNarrativeSection index="02" title="連結事業" body={profile.consolidatedBusiness} bordered />
+          </div>
         </div>
 
-        <div className="lg:col-span-3">
-          <div className="flex items-center gap-2 border-b border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-5 py-3">
-            <FileSearch size={14} className="text-[var(--color-market-red)]" aria-hidden="true" />
-            <h3 className="text-[10px] font-black text-[var(--color-text-secondary)]">業績展望・注目点</h3>
+        <div className="px-3 py-2.5 lg:col-span-3">
+          <h3 className="font-semibold text-[var(--color-text-secondary)]" style={{ fontSize: '11px' }}>業績展望・注目点</h3>
+          <div className="mt-0.5">
+            <ShikihoArticle index="01" headline={profile.headline1} description={profile.description1} />
+            <ShikihoArticle index="02" headline={profile.headline2} description={profile.description2} bordered />
           </div>
-          <ShikihoArticle index="01" headline={profile.headline1} description={profile.description1} />
-          <ShikihoArticle index="02" headline={profile.headline2} description={profile.description2} bordered />
         </div>
       </div>
     </section>
@@ -685,12 +731,12 @@ function ShikihoNarrativeSection({
   bordered?: boolean
 }) {
   return (
-    <section className={`px-5 py-4 ${bordered ? 'border-t border-[var(--color-border-soft)]' : ''}`}>
-      <div className="flex items-center gap-2">
-        <span className="font-mono text-[9px] font-black text-[var(--color-brand-600)]">{index}</span>
-        <h4 className="text-[11px] font-black text-[var(--color-brand-800)]">{title}</h4>
+    <section className={`py-2 ${bordered ? 'border-t border-[var(--color-border-soft)]' : ''}`}>
+      <div className="flex items-center gap-1.5">
+        <span className="font-mono text-[9px] font-semibold text-[var(--color-brand-600)]">{index}</span>
+        <h4 className="text-[10px] font-semibold text-[var(--color-brand-800)]">{title}</h4>
       </div>
-      <p className="mt-2.5 whitespace-pre-wrap text-[12px] font-medium leading-[1.9] text-[var(--color-text-primary)]">
+      <p className="mt-1 whitespace-pre-wrap text-[11px] font-normal leading-[1.6] text-[var(--color-text-primary)]">
         {body ?? '---'}
       </p>
     </section>
@@ -709,12 +755,12 @@ function ShikihoArticle({
   bordered?: boolean
 }) {
   return (
-    <article className={`px-5 py-4 ${bordered ? 'border-t border-[var(--color-border-soft)]' : ''}`}>
-      <div className="flex items-start gap-3.5">
-        <span className="flex size-6 shrink-0 items-center justify-center border border-red-200 bg-red-50 font-mono text-[9px] font-black text-[var(--color-market-red)]">{index}</span>
+    <article className={`py-2 ${bordered ? 'border-t border-[var(--color-border-soft)]' : ''}`}>
+      <div className="flex items-start gap-2">
+        <span className="shrink-0 pt-0.5 font-mono text-[9px] font-semibold text-[var(--color-market-red)]">{index}</span>
         <div className="min-w-0">
-          <h4 className="text-[14px] font-black leading-6 text-[var(--color-text-primary)]">{headline ?? '---'}</h4>
-          <p className="mt-2 whitespace-pre-wrap text-[12px] font-medium leading-[1.9] text-[var(--color-text-secondary)]">
+          <h4 className="text-[12px] font-semibold leading-5 text-[var(--color-text-primary)]">{headline ?? '---'}</h4>
+          <p className="mt-1 whitespace-pre-wrap text-[11px] font-normal leading-[1.6] text-[var(--color-text-secondary)]">
             {description ?? '---'}
           </p>
         </div>
@@ -3355,14 +3401,16 @@ function MarketSnapshotCard({
   marginInfo,
   fallbackType,
   analysisDate,
+  embedded = false,
 }: {
   ticker: string
   marginInfo: StockMarginInfo | null
   fallbackType?: string | null
   analysisDate: string | null
+  embedded?: boolean
 }) {
   return (
-    <div className="card" style={marketSnapshotCardStyle}>
+    <div className={embedded ? '' : 'card'} style={embedded ? undefined : marketSnapshotCardStyle}>
       <div style={marketSnapshotGridStyle}>
         <PerformanceCard ticker={ticker} embedded analysisDate={analysisDate} />
         {analysisDate
@@ -3486,10 +3534,12 @@ function BasicInfoCard({
   ticker,
   quote,
   analysisDate,
+  embedded = false,
 }: {
   ticker: string
   quote: StockQuote | null
   analysisDate: string | null
+  embedded?: boolean
 }) {
   const [latestStage, setLatestStage] = useState<SummaryStageEntry | null>(null)
   const [physical, setPhysical] = useState<PhysicalMomentumResponse | null>(null)
@@ -3579,9 +3629,9 @@ function BasicInfoCard({
   const decision = buildBasicDecisionSummary(latestStage, physical, ml, quote)
 
   return (
-    <div className="card" style={{ padding: '12px' }}>
+    <div className={embedded ? '' : 'card'} style={{ padding: embedded ? 0 : '12px' }}>
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '8px', marginBottom: '8px' }}>
-        <div style={{ fontSize: '11px', fontWeight: 600 }}>基本情報</div>
+        <div style={{ fontSize: '11px', fontWeight: 600 }}>{embedded ? '市場・テクニカル' : '基本情報'}</div>
         {latestStage?.date && (
           <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
             基準日 {latestStage.date}
