@@ -19,7 +19,7 @@ import { and, eq } from 'drizzle-orm'
 
 const usAnalyticsDbPath = resolveConfiguredStoragePath(path.resolve(
   process.env.US_ANALYTICS_DB_PATH?.trim()
-  || '/Volumes/こうし/stockboard-data/us/stockboard-us.db',
+  || '/Volumes/OWC Express 1M2 80G/stockboard-data/us/stockboard-us.db',
 ))
 const adjustedShadowDbPath = path.resolve(
   process.env.US_ADJUSTED_FOUNDATION_SHADOW_PATH?.trim()

@@ -5,6 +5,7 @@ import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
 import type { CSSProperties } from 'react'
 import {
   BrainCircuit,
+  BookOpenText,
   Building2,
   ChartCandlestick,
   FileSearch,
@@ -144,6 +145,29 @@ interface StockOverviewInfo {
   }
 }
 
+interface ShikihoProfile {
+  ticker: string
+  forecastPer: number | null
+  actualPbr: number | null
+  forecastRoe: number | null
+  dividendYield: number | null
+  headline1: string | null
+  description1: string | null
+  headline2: string | null
+  description2: string | null
+  issueLabel: string | null
+  releaseDate: string | null
+  companyFeature: string | null
+  consolidatedBusiness: string | null
+  updatedAt: number
+}
+
+interface ShikihoInfo {
+  ticker: string
+  profile: ShikihoProfile | null
+  source: string
+}
+
 interface FinancialSummary {
   disclosureDate: string
   disclosureTime: string | null
@@ -173,13 +197,14 @@ interface FinancialSummary {
   forecastAnnualDividend: number | null
 }
 
-type StockDetailTab = 'overview' | 'chart' | 'scenario' | 'ml'
+type StockDetailTab = 'overview' | 'shikiho' | 'chart' | 'scenario' | 'ml'
 
 export function StockDetailClient({ ticker }: StockDetailClientProps) {
   const [quote, setQuote] = useState<StockQuote | null>(null)
   const [smaster, setSmaster] = useState<SectorMasterRow | null>(null)
   const [marginInfo, setMarginInfo] = useState<StockMarginInfo | null>(null)
   const [overviewInfo, setOverviewInfo] = useState<StockOverviewInfo | null>(null)
+  const [shikihoInfo, setShikihoInfo] = useState<ShikihoInfo | null>(null)
   const [loading, setLoading] = useState(true)
   const [analysisDate, setAnalysisDate] = useState<string | null>(null)
   const [showActual, setShowActual] = useState(false)
@@ -199,7 +224,7 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
 
   useEffect(() => {
     let cancelled = false
-    let pending = 4
+    let pending = 5
     const done = () => {
       pending -= 1
       if (!cancelled && pending <= 0) setLoading(false)
@@ -207,6 +232,7 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
     async function fetchData() {
       setLoading(true)
       setOverviewInfo(null)
+      setShikihoInfo(null)
       fetch(`/api/quote/${encodeURIComponent(ticker)}`, { cache: 'no-store' })
         .then((res) => res.ok ? res.json() : null)
         .then((data) => { if (!cancelled && data) setQuote(data) })
@@ -229,6 +255,12 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
         .then((res) => res.ok ? res.json() : null)
         .then((data) => { if (!cancelled && data) setOverviewInfo(data) })
         .catch((error) => console.error('Failed to fetch stock overview:', error))
+        .finally(done)
+
+      fetch(`/api/shikiho/${encodeURIComponent(ticker)}`, { cache: 'no-store' })
+        .then((res) => res.ok ? res.json() : null)
+        .then((data) => { if (!cancelled && data) setShikihoInfo(data) })
+        .catch((error) => console.error('Failed to fetch Shikiho profile:', error))
         .finally(done)
     }
     fetchData()
@@ -266,7 +298,7 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
   useEffect(() => {
     const readTab = () => {
       const hash = window.location.hash.replace('#', '')
-      if (hash === 'chart' || hash === 'scenario' || hash === 'ml' || hash === 'overview') {
+      if (hash === 'shikiho' || hash === 'chart' || hash === 'scenario' || hash === 'ml' || hash === 'overview') {
         setActiveTab(hash)
       }
     }
@@ -434,6 +466,10 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
         </>
       )}
 
+      {activeTab === 'shikiho' && (
+        <ShikihoProfileView info={shikihoInfo} loading={loading} />
+      )}
+
       {activeTab === 'chart' && (
         <>
           <Ma25mMonitorSummary ticker={ticker} analysisDate={analysisDate} />
@@ -503,6 +539,7 @@ function StockDetailTabs({
 }) {
   const tabs = [
     { id: 'overview' as const, label: '概要', icon: LayoutDashboard },
+    { id: 'shikiho' as const, label: '四季報', icon: BookOpenText },
     { id: 'chart' as const, label: 'チャート・6ステージ', icon: ChartCandlestick },
     { id: 'scenario' as const, label: 'シナリオ', icon: NotebookPen },
     { id: 'ml' as const, label: '本質類似・ML', icon: BrainCircuit },
@@ -530,6 +567,168 @@ function StockDetailTabs({
       })}
     </nav>
   )
+}
+
+function ShikihoProfileView({
+  info,
+  loading,
+}: {
+  info: ShikihoInfo | null
+  loading: boolean
+}) {
+  const profile = info?.profile ?? null
+
+  if (!profile) {
+    return (
+      <section className="card flex min-h-64 items-center justify-center px-4 text-center">
+        <div aria-live="polite">
+          <BookOpenText className="mx-auto text-[var(--color-text-tertiary)]" size={28} aria-hidden="true" />
+          <div className="mt-3 text-[12px] font-black text-[var(--color-text-primary)]">
+            {loading ? '四季報情報を読み込んでいます' : '四季報情報は未収録です'}
+          </div>
+          {!loading && (
+            <div className="mt-1 text-[10px] font-bold text-[var(--color-text-tertiary)]">
+              次回の四季報CSV同期時に更新されます
+            </div>
+          )}
+        </div>
+      </section>
+    )
+  }
+
+  const metrics = [
+    { label: '予想PER', value: formatShikihoMultiple(profile.forecastPer), accent: 'text-[var(--color-market-red)]' },
+    { label: '実績PBR', value: formatShikihoMultiple(profile.actualPbr), accent: 'text-[var(--color-brand-700)]' },
+    { label: '予想ROE', value: formatShikihoPercent(profile.forecastRoe), accent: 'text-emerald-700' },
+    { label: '配当利回り', value: formatShikihoPercent(profile.dividendYield), accent: 'text-amber-700' },
+  ]
+
+  return (
+    <section className="card overflow-hidden">
+      <div className="h-1 bg-[var(--color-market-red)]" aria-hidden="true" />
+      <header className="flex flex-wrap items-center justify-between gap-4 border-b border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-5 py-4">
+        <div className="flex min-w-0 items-center gap-3.5">
+          <div className="flex size-10 shrink-0 items-center justify-center border border-[var(--color-border-default)] bg-white text-[var(--color-brand-700)] shadow-sm">
+            <BookOpenText size={20} aria-hidden="true" />
+          </div>
+          <div className="min-w-0">
+            <h2 className="text-[15px] font-black text-[var(--color-text-primary)]">会社四季報</h2>
+            <div className="mt-1 flex flex-wrap items-center gap-x-2 text-[9px] font-bold text-[var(--color-text-tertiary)]">
+              <span>{info?.source ?? '会社四季報CSV'}</span>
+              <span className="text-[var(--color-border-strong)]" aria-hidden="true">/</span>
+              <span>企業の現在地と業績材料</span>
+            </div>
+          </div>
+        </div>
+        <dl className="grid min-w-full grid-cols-2 border-t border-[var(--color-border-soft)] pt-3 text-left sm:min-w-0 sm:border-l sm:border-t-0 sm:pl-5 sm:pt-0 sm:text-right">
+          <div className="pr-4 sm:px-4">
+            <dt className="text-[8px] font-black text-[var(--color-text-tertiary)]">収録号</dt>
+            <dd className="mt-1 whitespace-nowrap text-[10px] font-black text-[var(--color-text-primary)]">{profile.issueLabel ?? '---'}</dd>
+          </div>
+          <div className="border-l border-[var(--color-border-soft)] pl-4">
+            <dt className="text-[8px] font-black text-[var(--color-text-tertiary)]">発売日</dt>
+            <dd className="mt-1 whitespace-nowrap text-[10px] font-black text-[var(--color-text-primary)]">{profile.releaseDate ?? '---'}</dd>
+          </div>
+        </dl>
+      </header>
+
+      <div className="border-b border-[var(--color-border-default)]">
+        <div className="flex items-center justify-between gap-3 px-5 py-2.5">
+          <div className="text-[10px] font-black text-[var(--color-text-secondary)]">主要指標</div>
+          <div className="text-[8px] font-bold text-[var(--color-text-tertiary)]">会社予想・直近実績</div>
+        </div>
+        <div className="grid grid-cols-2 border-t border-[var(--color-border-soft)] lg:grid-cols-4">
+          {metrics.map((metric, index) => (
+            <div
+              key={metric.label}
+              className={`flex min-h-[92px] flex-col justify-center px-5 py-3.5 ${index % 2 === 0 ? 'border-r' : ''} ${index < 2 ? 'border-b' : ''} border-[var(--color-border-soft)] lg:border-b-0 lg:border-r`}
+            >
+              <div className="text-[9px] font-black text-[var(--color-text-tertiary)]">{metric.label}</div>
+              <div className={`mt-1.5 font-mono text-[22px] font-black leading-none ${metric.accent}`}>{metric.value}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid lg:grid-cols-5">
+        <div className="border-b border-[var(--color-border-default)] lg:col-span-2 lg:border-b-0 lg:border-r">
+          <div className="flex items-center gap-2 border-b border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-5 py-3">
+            <Building2 size={14} className="text-[var(--color-brand-700)]" aria-hidden="true" />
+            <h3 className="text-[10px] font-black text-[var(--color-text-secondary)]">企業プロフィール</h3>
+          </div>
+          <ShikihoNarrativeSection index="01" title="特色" body={profile.companyFeature} />
+          <ShikihoNarrativeSection index="02" title="連結事業" body={profile.consolidatedBusiness} bordered />
+        </div>
+
+        <div className="lg:col-span-3">
+          <div className="flex items-center gap-2 border-b border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-5 py-3">
+            <FileSearch size={14} className="text-[var(--color-market-red)]" aria-hidden="true" />
+            <h3 className="text-[10px] font-black text-[var(--color-text-secondary)]">業績展望・注目点</h3>
+          </div>
+          <ShikihoArticle index="01" headline={profile.headline1} description={profile.description1} />
+          <ShikihoArticle index="02" headline={profile.headline2} description={profile.description2} bordered />
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function ShikihoNarrativeSection({
+  index,
+  title,
+  body,
+  bordered = false,
+}: {
+  index: string
+  title: string
+  body: string | null
+  bordered?: boolean
+}) {
+  return (
+    <section className={`px-5 py-4 ${bordered ? 'border-t border-[var(--color-border-soft)]' : ''}`}>
+      <div className="flex items-center gap-2">
+        <span className="font-mono text-[9px] font-black text-[var(--color-brand-600)]">{index}</span>
+        <h4 className="text-[11px] font-black text-[var(--color-brand-800)]">{title}</h4>
+      </div>
+      <p className="mt-2.5 whitespace-pre-wrap text-[12px] font-medium leading-[1.9] text-[var(--color-text-primary)]">
+        {body ?? '---'}
+      </p>
+    </section>
+  )
+}
+
+function ShikihoArticle({
+  index,
+  headline,
+  description,
+  bordered = false,
+}: {
+  index: string
+  headline: string | null
+  description: string | null
+  bordered?: boolean
+}) {
+  return (
+    <article className={`px-5 py-4 ${bordered ? 'border-t border-[var(--color-border-soft)]' : ''}`}>
+      <div className="flex items-start gap-3.5">
+        <span className="flex size-6 shrink-0 items-center justify-center border border-red-200 bg-red-50 font-mono text-[9px] font-black text-[var(--color-market-red)]">{index}</span>
+        <div className="min-w-0">
+          <h4 className="text-[14px] font-black leading-6 text-[var(--color-text-primary)]">{headline ?? '---'}</h4>
+          <p className="mt-2 whitespace-pre-wrap text-[12px] font-medium leading-[1.9] text-[var(--color-text-secondary)]">
+            {description ?? '---'}
+          </p>
+        </div>
+      </div>
+    </article>
+  )
+}
+
+function formatShikihoMultiple(value: number | null): string {
+  return value == null || !Number.isFinite(value) ? '---' : `${value.toFixed(2)}倍`
+}
+
+function formatShikihoPercent(value: number | null): string {
+  return value == null || !Number.isFinite(value) ? '---' : `${value.toFixed(2)}%`
 }
 
 interface PhysicalMomentumApiRow {

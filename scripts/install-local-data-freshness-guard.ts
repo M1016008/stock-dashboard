@@ -18,7 +18,7 @@ const intervalSeconds = Math.max(
   Number(process.env.DATA_FRESHNESS_GUARD_INTERVAL_SECONDS ?? '900') || 900,
 )
 const defaultUsDb = process.env.US_ANALYTICS_DB_PATH?.trim()
-  || '/Volumes/こうし/stockboard-data/us/stockboard-us.db'
+  || '/Volumes/OWC Express 1M2 80G/stockboard-data/us/stockboard-us.db'
 const pathEnv = [
   '/opt/homebrew/bin',
   '/usr/local/bin',

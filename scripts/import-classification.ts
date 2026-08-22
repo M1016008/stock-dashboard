@@ -11,7 +11,7 @@
 //   - CSV、または Excel の1シート目に「コード」「大分類」「業種細分類」列を含む
 
 import { db, client } from '@/lib/db/client'
-import { stockClassification } from '@/lib/db/schema'
+import { stockClassification, stockShikihoProfiles } from '@/lib/db/schema'
 import { sql } from 'drizzle-orm'
 import fs from 'node:fs'
 import { ensureSchema } from '@/lib/db/migrate'
@@ -37,6 +37,7 @@ async function main() {
   const source = await readClassificationSource(SOURCE_PATH)
   validateClassificationSource(source, classificationValidationOptionsFromEnv())
   const records = source.records
+  const profiles = source.profiles
   console.log(
     `Sheet "${source.sheetName}": ${source.rawRowCount} rows, `
     + `${source.majorCategoryCount} major categories, ${source.subIndustryCount} sub-industries, `
@@ -78,8 +79,39 @@ async function main() {
     inserted += chunk.length
   }
 
+  let profileInserted = 0
+  for (let i = 0; i < profiles.length; i += CHUNK) {
+    const chunk = profiles.slice(i, i + CHUNK)
+    await db
+      .insert(stockShikihoProfiles)
+      .values(chunk)
+      .onConflictDoUpdate({
+        target: stockShikihoProfiles.ticker,
+        set: {
+          forecastPer: sql`excluded.forecast_per`,
+          actualPbr: sql`excluded.actual_pbr`,
+          forecastRoe: sql`excluded.forecast_roe`,
+          dividendYield: sql`excluded.dividend_yield`,
+          headline1: sql`excluded.headline_1`,
+          description1: sql`excluded.description_1`,
+          headline2: sql`excluded.headline_2`,
+          description2: sql`excluded.description_2`,
+          issueLabel: sql`excluded.issue_label`,
+          releaseDate: sql`excluded.release_date`,
+          companyFeature: sql`excluded.company_feature`,
+          consolidatedBusiness: sql`excluded.consolidated_business`,
+          updatedAt: new Date(),
+        },
+      })
+    profileInserted += chunk.length
+  }
+
   const pruneResult = await client.execute(`
     DELETE FROM stock_classification
+    WHERE ticker NOT IN (SELECT ticker FROM classification_import_tickers)
+  `)
+  const profilePruneResult = await client.execute(`
+    DELETE FROM stock_shikiho_profiles
     WHERE ticker NOT IN (SELECT ticker FROM classification_import_tickers)
   `)
   await client.execute('DELETE FROM classification_import_tickers')
@@ -94,11 +126,16 @@ async function main() {
   const rowCount = await db
     .select({ n: sql<number>`COUNT(*)` })
     .from(stockClassification)
+  const profileCount = await db
+    .select({ n: sql<number>`COUNT(*)` })
+    .from(stockShikihoProfiles)
 
   console.log(
     `完了: ソース ${inserted} 件 / DB合計 ${rowCount[0]?.n ?? 0} 件 / `
     + `大分類 ${majorCount[0]?.n ?? 0} 種 / 業種細分類 ${subCount[0]?.n ?? 0} 種 / `
-    + `旧分類削除 ${pruneResult.rowsAffected} 件`,
+    + `四季報プロフィール ${profileInserted}/${profileCount[0]?.n ?? 0} 件 / `
+    + `旧分類削除 ${pruneResult.rowsAffected} 件 / `
+    + `旧プロフィール削除 ${profilePruneResult.rowsAffected} 件`,
   )
 }
 

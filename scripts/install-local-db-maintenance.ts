@@ -89,7 +89,7 @@ const command = [
   'export DB_MAINT_CHECK_MODE=${DB_MAINT_CHECK_MODE:-smoke}',
   'export DB_MAINT_STALE_BATCH_TTL_HOURS=${DB_MAINT_STALE_BATCH_TTL_HOURS:-6}',
   'export DB_MAINT_CLEAN_STALE_WITH_ACTIVE=${DB_MAINT_CLEAN_STALE_WITH_ACTIVE:-1}',
-  `export US_ANALYTICS_DB_PATH=${JSON.stringify(process.env.US_ANALYTICS_DB_PATH?.trim() || '/Volumes/こうし/stockboard-data/us/stockboard-us.db')}`,
+  `export US_ANALYTICS_DB_PATH=${JSON.stringify(process.env.US_ANALYTICS_DB_PATH?.trim() || '/Volumes/OWC Express 1M2 80G/stockboard-data/us/stockboard-us.db')}`,
   'npm run db:maintenance',
 ].join(' && ')
 

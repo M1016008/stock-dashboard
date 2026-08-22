@@ -1,8 +1,8 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
-export const LEGACY_STORAGE_ROOT = '/Volumes/OWC Express 1M2 80G'
-export const CURRENT_STORAGE_ROOT = '/Volumes/こうし'
+export const LEGACY_STORAGE_ROOT = '/Volumes/こうし'
+export const CURRENT_STORAGE_ROOT = '/Volumes/OWC Express 1M2 80G'
 
 export function resolveConfiguredStoragePath(
   configuredPath: string,

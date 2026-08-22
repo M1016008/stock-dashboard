@@ -6,10 +6,27 @@ export type ClassificationRecord = {
   subIndustry: string
 }
 
+export type ShikihoProfileRecord = {
+  ticker: string
+  forecastPer: number | null
+  actualPbr: number | null
+  forecastRoe: number | null
+  dividendYield: number | null
+  headline1: string | null
+  description1: string | null
+  headline2: string | null
+  description2: string | null
+  issueLabel: string | null
+  releaseDate: string | null
+  companyFeature: string | null
+  consolidatedBusiness: string | null
+}
+
 export type ClassificationSourceData = {
   sheetName: string
   rawRowCount: number
   records: ClassificationRecord[]
+  profiles: ShikihoProfileRecord[]
   skippedRows: number
   recoveredMissingSubIndustries: string[]
   invalidSubIndustries: string[]
@@ -30,6 +47,18 @@ export type ClassificationValidationOptions = {
 }
 
 const MISSING_SUB_INDUSTRY = '未分類'
+
+function optionalText(value: string | undefined): string | null {
+  const normalized = value?.trim()
+  return normalized && normalized !== '―' ? normalized : null
+}
+
+function optionalNumber(value: string | undefined): number | null {
+  const normalized = optionalText(value)?.replaceAll(',', '')
+  if (normalized == null) return null
+  const parsed = Number(normalized)
+  return Number.isFinite(parsed) ? parsed : null
+}
 
 function pick(row: string[], headerIndexes: Map<string, number>, keys: string[]): string | undefined {
   for (const key of keys) {
@@ -67,6 +96,7 @@ export async function readClassificationSource(sourcePath: string): Promise<Clas
   }
   const rows = spreadsheet.rows.slice(1).filter((row) => row.some((value) => value.trim() !== ''))
   const recordsByTicker = new Map<string, ClassificationRecord>()
+  const profilesByTicker = new Map<string, ShikihoProfileRecord>()
   const tickerCounts = new Map<string, number>()
   const invalidTickers = new Set<string>()
   const recoveredMissingSubIndustries = new Set<string>()
@@ -96,9 +126,25 @@ export async function readClassificationSource(sourcePath: string): Promise<Clas
     }
     tickerCounts.set(ticker, (tickerCounts.get(ticker) ?? 0) + 1)
     recordsByTicker.set(ticker, { ticker, majorCategory, subIndustry })
+    profilesByTicker.set(ticker, {
+      ticker,
+      forecastPer: optionalNumber(pick(row, headerIndexes, ['予想PER（倍）', '予想PER', 'forecast_per'])),
+      actualPbr: optionalNumber(pick(row, headerIndexes, ['実績PBR（倍）', '実績PBR', 'actual_pbr'])),
+      forecastRoe: optionalNumber(pick(row, headerIndexes, ['予想ROE（％）', '予想ROE', 'forecast_roe'])),
+      dividendYield: optionalNumber(pick(row, headerIndexes, ['配当利回り（％）', '配当利回り', 'dividend_yield'])),
+      headline1: optionalText(pick(row, headerIndexes, ['四季報見出し1', 'headline_1'])),
+      description1: optionalText(pick(row, headerIndexes, ['四季報説明文1', 'description_1'])),
+      headline2: optionalText(pick(row, headerIndexes, ['四季報見出し2', 'headline_2'])),
+      description2: optionalText(pick(row, headerIndexes, ['四季報説明文2', 'description_2'])),
+      issueLabel: optionalText(pick(row, headerIndexes, ['四季報号', 'issue_label'])),
+      releaseDate: optionalText(pick(row, headerIndexes, ['四季報発売日', 'release_date'])),
+      companyFeature: optionalText(pick(row, headerIndexes, ['特色', 'company_feature'])),
+      consolidatedBusiness: optionalText(pick(row, headerIndexes, ['連結事業', 'consolidated_business'])),
+    })
   }
 
   const records = Array.from(recordsByTicker.values())
+  const profiles = Array.from(profilesByTicker.values())
   const subIndustryParents = new Map<string, Set<string>>()
   for (const record of records) {
     const parents = subIndustryParents.get(record.subIndustry) ?? new Set<string>()
@@ -110,6 +156,7 @@ export async function readClassificationSource(sourcePath: string): Promise<Clas
     sheetName: spreadsheet.sheetName,
     rawRowCount: rows.length,
     records,
+    profiles,
     skippedRows,
     recoveredMissingSubIndustries: Array.from(recoveredMissingSubIndustries).sort(),
     invalidSubIndustries: Array.from(invalidSubIndustries).sort(),

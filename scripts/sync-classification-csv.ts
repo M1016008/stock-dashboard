@@ -15,20 +15,21 @@ import {
 } from '@/lib/classification-source'
 
 type SyncState = {
-  schemaVersion: 3
+  schemaVersion: 4
   sourcePath: string
   databasePath: string
   sha256: string
   sourceSize: number
   sourceMtimeMs: number
   sourceRecordCount: number
+  shikihoProfileCount: number
   majorCategoryCount: number
   subIndustryCount: number
   recoveredMissingSubIndustryCount: number
   syncedAt: string
 }
 
-const DEFAULT_SOURCE_PATH = '/Volumes/こうし/会社四季報CSV/会社四季報_最新.csv'
+const DEFAULT_SOURCE_PATH = '/Volumes/OWC Express 1M2 80G/会社四季報CSV/会社四季報_最新.csv'
 const sourcePath = path.resolve(process.env.CLASSIFICATION_FILE?.trim() || DEFAULT_SOURCE_PATH)
 const databasePath = path.resolve(
   process.env.STOCKBOARD_DB_PATH?.trim()
@@ -83,14 +84,24 @@ function acquireLock(): number | null {
   }
 }
 
-async function databaseClassificationCount(): Promise<number> {
-  if (!fs.existsSync(databasePath)) return 0
+async function databaseImportCounts(): Promise<{ classifications: number; profiles: number }> {
+  if (!fs.existsSync(databasePath)) return { classifications: 0, profiles: 0 }
   const database = createClient({ url: `file:${databasePath}` })
   try {
-    const result = await database.execute('SELECT COUNT(*) AS count FROM stock_classification')
-    return Number(result.rows[0]?.count ?? 0)
+    const classificationResult = await database.execute('SELECT COUNT(*) AS count FROM stock_classification')
+    let profiles = 0
+    try {
+      const profileResult = await database.execute('SELECT COUNT(*) AS count FROM stock_shikiho_profiles')
+      profiles = Number(profileResult.rows[0]?.count ?? 0)
+    } catch {
+      // The next import creates the profile table through ensureSchema().
+    }
+    return {
+      classifications: Number(classificationResult.rows[0]?.count ?? 0),
+      profiles,
+    }
   } catch {
-    return 0
+    return { classifications: 0, profiles: 0 }
   } finally {
     database.close()
   }
@@ -124,14 +135,15 @@ async function main(): Promise<void> {
 
     const sourceSha256 = sha256(sourcePath)
     const previous = readState()
-    const databaseCount = await databaseClassificationCount()
+    const databaseCounts = await databaseImportCounts()
     if (
       !forceSync
-      && previous?.schemaVersion === 3
+      && previous?.schemaVersion === 4
       && previous.sourcePath === sourcePath
       && previous.databasePath === databasePath
       && previous.sha256 === sourceSha256
-      && databaseCount === previous.sourceRecordCount
+      && databaseCounts.classifications === previous.sourceRecordCount
+      && databaseCounts.profiles === previous.shikihoProfileCount
     ) {
       console.log(`Classification source unchanged since ${previous.syncedAt}; no import needed.`)
       return
@@ -165,6 +177,7 @@ async function main(): Promise<void> {
 
     console.log(
       `Classification update detected: records=${source.records.length}, `
+      + `shikihoProfiles=${source.profiles.length}, `
       + `majorCategories=${source.majorCategoryCount}, subIndustries=${source.subIndustryCount}, `
       + `recoveredMissingSubIndustries=${source.recoveredMissingSubIndustries.length}, `
       + `size=${before.size}, modified=${new Date(before.mtimeMs).toISOString()}`,
@@ -184,20 +197,28 @@ async function main(): Promise<void> {
       )
     }
 
-    const importedDatabaseCount = await databaseClassificationCount()
-    if (importedDatabaseCount !== source.records.length) {
+    const importedDatabaseCounts = await databaseImportCounts()
+    if (importedDatabaseCounts.classifications !== source.records.length) {
       throw new Error(
-        `Classification DB verification failed: rows=${importedDatabaseCount}, source=${source.records.length}`,
+        `Classification DB verification failed: rows=${importedDatabaseCounts.classifications}, `
+        + `source=${source.records.length}`,
+      )
+    }
+    if (importedDatabaseCounts.profiles !== source.profiles.length) {
+      throw new Error(
+        `Shikiho profile DB verification failed: rows=${importedDatabaseCounts.profiles}, `
+        + `source=${source.profiles.length}`,
       )
     }
     const state: SyncState = {
-      schemaVersion: 3,
+      schemaVersion: 4,
       sourcePath,
       databasePath,
       sha256: sourceSha256,
       sourceSize: before.size,
       sourceMtimeMs: before.mtimeMs,
       sourceRecordCount: source.records.length,
+      shikihoProfileCount: source.profiles.length,
       majorCategoryCount: source.majorCategoryCount,
       subIndustryCount: source.subIndustryCount,
       recoveredMissingSubIndustryCount: source.recoveredMissingSubIndustries.length,

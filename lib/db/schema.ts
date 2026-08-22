@@ -1201,6 +1201,33 @@ export const stockClassification = sqliteTable(
 )
 
 // ─────────────────────────────────────
+// 15b. 会社四季報プロフィール
+//      分類CSVに同梱される評価指標・企業概要・記事本文。
+// ─────────────────────────────────────
+export const stockShikihoProfiles = sqliteTable(
+  'stock_shikiho_profiles',
+  {
+    ticker:               text('ticker').primaryKey(),
+    forecastPer:          real('forecast_per'),
+    actualPbr:            real('actual_pbr'),
+    forecastRoe:          real('forecast_roe'),
+    dividendYield:        real('dividend_yield'),
+    headline1:            text('headline_1'),
+    description1:         text('description_1'),
+    headline2:            text('headline_2'),
+    description2:         text('description_2'),
+    issueLabel:           text('issue_label'),
+    releaseDate:          text('release_date'),
+    companyFeature:       text('company_feature'),
+    consolidatedBusiness: text('consolidated_business'),
+    updatedAt:            integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    issueIdx: index('idx_shikiho_profiles_issue').on(t.issueLabel),
+  }),
+)
+
+// ─────────────────────────────────────
 // 16. Phase 4: 信用残・空売り (J-Quants /markets/weekly_margin_interest)
 // ─────────────────────────────────────
 export const weeklyMarginInterest = sqliteTable(

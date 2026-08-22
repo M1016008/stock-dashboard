@@ -3,8 +3,8 @@ import fs from 'node:fs'
 import { ML_PRIMARY_HORIZON_LIST } from '@/lib/backtest/ml-horizons'
 import { waitForMemoryHeadroom, withMemoryGuardEnv } from '@/lib/system/memory-guard'
 
-const JP_DB = '/Volumes/こうし/stock-dashboard/stockboard.db'
-const US_DB = '/Volumes/こうし/stockboard-data/us/stockboard-us.db'
+const JP_DB = '/Volumes/OWC Express 1M2 80G/stock-dashboard/stockboard.db'
+const US_DB = '/Volumes/OWC Express 1M2 80G/stockboard-data/us/stockboard-us.db'
 const TARGET_HORIZON = '200'
 
 type Market = 'jp' | 'us'

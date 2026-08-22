@@ -10,7 +10,7 @@ import path from 'node:path'
 import { createClient } from '@libsql/client'
 import { resolveConfiguredStoragePath } from '@/lib/storage-paths'
 
-const DEFAULT_US_ANALYTICS_DB = '/Volumes/こうし/stockboard-data/us/stockboard-us.db'
+const DEFAULT_US_ANALYTICS_DB = '/Volumes/OWC Express 1M2 80G/stockboard-data/us/stockboard-us.db'
 const DEFAULT_START_DATE = '1980-12-12'
 
 const TICKER_CHUNK = Math.max(1, Number(process.env.US_ML_PHYSICS_FEATURE_TICKER_CHUNK ?? 200))

@@ -10,7 +10,7 @@ import { US_ADJUSTED_PRICE_BASIS } from '@/lib/us-adjusted-ohlcv'
 
 const usAnalyticsDbPath = resolveConfiguredStoragePath(path.resolve(
   process.env.US_ANALYTICS_DB_PATH?.trim()
-  || '/Volumes/こうし/stockboard-data/us/stockboard-us.db',
+  || '/Volumes/OWC Express 1M2 80G/stockboard-data/us/stockboard-us.db',
 ))
 const sourceDbPath = process.env.STOCKBOARD_DB_PATH?.trim()
   || process.env.LOCAL_DB_PATH?.trim()

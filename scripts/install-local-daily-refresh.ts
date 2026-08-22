@@ -19,7 +19,7 @@ const baseEnv: NodeJS.ProcessEnv = {
   USE_LOCAL_DB: '1',
   SQLITE_BUSY_TIMEOUT_MS: process.env.SQLITE_BUSY_TIMEOUT_MS ?? '15000',
   SQLITE_BUSY_RETRIES: process.env.SQLITE_BUSY_RETRIES ?? '12',
-  US_ANALYTICS_DB_PATH: process.env.US_ANALYTICS_DB_PATH?.trim() || '/Volumes/こうし/stockboard-data/us/stockboard-us.db',
+  US_ANALYTICS_DB_PATH: process.env.US_ANALYTICS_DB_PATH?.trim() || '/Volumes/OWC Express 1M2 80G/stockboard-data/us/stockboard-us.db',
 }
 
 const steps: Step[] = [

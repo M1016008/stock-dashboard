@@ -24,7 +24,7 @@ const scheduleWeekday = Number(process.env.WEEKLY_OPTIMIZATION_WEEKDAY ?? '0')
 const scheduleHour = Number(process.env.WEEKLY_OPTIMIZATION_HOUR ?? '0')
 const scheduleMinute = Number(process.env.WEEKLY_OPTIMIZATION_MINUTE ?? '30')
 const defaultUsDb = process.env.US_ANALYTICS_DB_PATH?.trim()
-  || '/Volumes/こうし/stockboard-data/us/stockboard-us.db'
+  || '/Volumes/OWC Express 1M2 80G/stockboard-data/us/stockboard-us.db'
 const pathEnv = [
   '/opt/homebrew/bin',
   '/usr/local/bin',

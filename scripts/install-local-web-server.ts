@@ -35,7 +35,7 @@ const webDbMmapMb = integerEnv('STOCKBOARD_WEB_DB_MMAP_MB', 256, 0, 1024)
 const analogDbCacheMb = integerEnv('STOCKBOARD_ANALOG_DB_CACHE_MB', 96, 8, 256)
 const analogDbMmapMb = integerEnv('STOCKBOARD_ANALOG_DB_MMAP_MB', 512, 0, 1024)
 const usAnalyticsDbPath = process.env.US_ANALYTICS_DB_PATH?.trim()
-  || '/Volumes/こうし/stockboard-data/us/stockboard-us.db'
+  || '/Volumes/OWC Express 1M2 80G/stockboard-data/us/stockboard-us.db'
 const healthIntervalSeconds = integerEnv('STOCKBOARD_WEB_HEALTH_INTERVAL_SECONDS', 60, 30, 3600)
 const healthTimeoutSeconds = integerEnv('STOCKBOARD_WEB_HEALTH_TIMEOUT_SECONDS', 20, 5, 120)
 const healthFailureThreshold = integerEnv('STOCKBOARD_WEB_HEALTH_FAILURE_THRESHOLD', 3, 2, 10)

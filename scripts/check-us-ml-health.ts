@@ -15,7 +15,7 @@ const stockboardDbLooksUs = stockboardDbPath != null && /stockboard-us\.db$/i.te
 const dbPath = path.resolve(
   process.env.US_ANALYTICS_DB_PATH?.trim()
   || (stockboardDbLooksUs ? stockboardDbPath : undefined)
-  || '/Volumes/こうし/stockboard-data/us/stockboard-us.db',
+  || '/Volumes/OWC Express 1M2 80G/stockboard-data/us/stockboard-us.db',
 )
 const WRITE_HEALTH = process.env.US_ML_HEALTH_WRITE === '1'
 const PROFILE_QUERIES = process.env.US_ML_HEALTH_PROFILE === '1'

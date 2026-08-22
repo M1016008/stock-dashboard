@@ -60,7 +60,7 @@ const supportDir = path.join(os.homedir(), 'Library', 'Application Support', 'St
 const lockPath = path.join(supportDir, 'weekly-optimization.lock')
 const statePath = path.join(supportDir, 'weekly-optimization-state.json')
 const dryRun = process.argv.includes('--dry-run') || process.env.WEEKLY_OPTIMIZATION_DRY_RUN === '1'
-const defaultUsDb = '/Volumes/こうし/stockboard-data/us/stockboard-us.db'
+const defaultUsDb = '/Volumes/OWC Express 1M2 80G/stockboard-data/us/stockboard-us.db'
 let activeChild: ChildProcess | null = null
 let lockOwned = false
 let shutdownSignal: NodeJS.Signals | null = null

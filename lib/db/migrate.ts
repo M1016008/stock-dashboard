@@ -875,6 +875,25 @@ const STATEMENTS = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_classification_major ON stock_classification(major_category)`,
   `CREATE INDEX IF NOT EXISTS idx_classification_sub ON stock_classification(sub_industry)`,
+  // ─── 会社四季報プロフィール ───
+  `CREATE TABLE IF NOT EXISTS stock_shikiho_profiles (
+    ticker TEXT PRIMARY KEY,
+    forecast_per REAL,
+    actual_pbr REAL,
+    forecast_roe REAL,
+    dividend_yield REAL,
+    headline_1 TEXT,
+    description_1 TEXT,
+    headline_2 TEXT,
+    description_2 TEXT,
+    issue_label TEXT,
+    release_date TEXT,
+    company_feature TEXT,
+    consolidated_business TEXT,
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_shikiho_profiles_issue
+    ON stock_shikiho_profiles(issue_label)`,
   // ─── Phase 4: 信用残・空売り (J-Quants /markets/weekly_margin_interest) ───
   `CREATE TABLE IF NOT EXISTS weekly_margin_interest (
     ticker TEXT NOT NULL,

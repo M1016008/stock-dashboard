@@ -12,7 +12,7 @@ import {
 } from '@/lib/ml/pipeline-generation'
 import { resolveConfiguredStoragePath } from '@/lib/storage-paths'
 
-const DEFAULT_US_DB = '/Volumes/こうし/stockboard-data/us/stockboard-us.db'
+const DEFAULT_US_DB = '/Volumes/OWC Express 1M2 80G/stockboard-data/us/stockboard-us.db'
 
 function marketFromEnv(value: string | undefined): MlPipelineMarket {
   const normalized = value?.trim().toUpperCase()
