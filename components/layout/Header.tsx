@@ -6,20 +6,12 @@ import { useEffect, useRef, useState } from 'react'
 import {
   Activity,
   BarChart3,
-  Building2,
-  CalendarDays,
-  ChartCandlestick,
   ChevronDown,
-  FlaskConical,
-  Gem,
+  Clock3,
   Globe2,
-  Hexagon,
-  LayoutDashboard,
   ListFilter,
-  MessageSquareText,
-  Radar,
   Search,
-  Star,
+  X,
   type LucideIcon,
 } from 'lucide-react'
 import { COMMODITY_INSTRUMENTS } from '@/lib/commodities'
@@ -37,126 +29,19 @@ import {
   type UniverseFilterId,
 } from '@/lib/market-universe'
 import { isValidTickerForMarket } from '@/lib/markets'
-
-type HeaderArea = 'jp' | 'us' | 'commodities'
-
-type NavLinkItem = {
-  href: string
-  label: string
-  description?: string
-  icon: LucideIcon
-  includeInGroupActive?: boolean
-}
-
-type NavEntry =
-  | (NavLinkItem & { kind: 'link' })
-  | {
-      kind: 'menu'
-      id: string
-      label: string
-      icon: LucideIcon
-      items: readonly NavLinkItem[]
-    }
-
-const NAV_ITEMS = [
-  { kind: 'link', href: '/', label: 'ダッシュボード', icon: LayoutDashboard },
-  {
-    kind: 'menu',
-    id: 'discover',
-    label: '探す',
-    icon: Search,
-    items: [
-      { href: '/screener', label: 'スクリーナー', description: '条件で銘柄を抽出', icon: Search },
-      { href: '/stage-screener', label: 'ステージスクリーナー', description: '日足・週足・月足の行列で抽出', icon: Hexagon },
-      { href: '/ma25m-monitor', label: '月足MA監視', description: '3〜25か月線と集中帯を監視', icon: Radar },
-      { href: '/hex-stage', label: 'HEXステージ', description: '6ステージの分布と遷移', icon: Hexagon },
-      { href: '/sectors', label: '業種分析', description: '17/33業種の強弱', icon: Building2 },
-      { href: '/sector-etfs', label: '業界ETF分析', description: 'ETFで業界・テーマを確認', icon: ChartCandlestick },
-      { href: '/themes', label: 'テーマ', description: '株探人気テーマと関連銘柄', icon: ListFilter },
-      { href: '/materials', label: '材料', description: '材料ニュースと関連銘柄', icon: ListFilter },
-      {
-        href: '/ai/ma-lens#historical-pattern-search',
-        label: '過去パターン検索',
-        description: '過去の形に近い現在銘柄',
-        icon: ChartCandlestick,
-        includeInGroupActive: false,
-      },
-    ],
-  },
-  {
-    kind: 'menu',
-    id: 'ai-analysis',
-    label: 'AI分析',
-    icon: Activity,
-    items: [
-      { href: '/ai/research', label: 'AI銘柄リサーチ', description: '会話で条件化しDB根拠で候補表示', icon: MessageSquareText },
-      { href: '/ai/ma-lens', label: 'AI Lens', description: 'MA形状・物理特徴量・類似候補', icon: Activity },
-      { href: '/ai/transitions', label: 'パターン遷移', description: '過去パターンの遷移分析', icon: ChartCandlestick },
-      { href: '/backtest', label: '過去検証', description: 'シグナルと期待値を検証', icon: FlaskConical },
-      { href: '/chart-drill', label: 'チャートドリル', description: '初動察知を反復練習', icon: ChartCandlestick },
-      { href: '/trade/workbench', label: '売買候補', description: '根拠つき注文案の下書き', icon: FlaskConical },
-    ],
-  },
-  { kind: 'link', href: '/earnings', label: '決算', icon: CalendarDays },
-  {
-    kind: 'menu',
-    id: 'watch',
-    label: 'ウォッチ',
-    icon: Star,
-    items: [
-      { href: '/watchlist', label: 'ウォッチリスト', description: '保存した監視銘柄', icon: Star },
-      { href: '/custom-charts', label: '合成チャート', description: '数式で独自チャートを作成', icon: ChartCandlestick },
-    ],
-  },
-] as const satisfies readonly NavEntry[]
-
-const US_NAV_ITEMS = [
-  { kind: 'link', href: '/us', label: 'US概要', icon: LayoutDashboard },
-  {
-    kind: 'menu',
-    id: 'us-discover',
-    label: '探す',
-    icon: Search,
-    items: [
-      { href: '/us/screener', label: 'USスクリーナー', description: '米国株を条件で抽出', icon: Search },
-      { href: '/us/stage-screener', label: 'USステージスクリーナー', description: '日足・週足・月足の行列で抽出', icon: Hexagon },
-      { href: '/ai/research?market=US', label: 'AI銘柄リサーチ', description: '米国株も自然言語で探索', icon: MessageSquareText },
-      { href: '/chart-drill?market=US', label: 'チャートドリル', description: 'US過去チャートで初動練習', icon: ChartCandlestick },
-    ],
-  },
-  {
-    kind: 'menu',
-    id: 'us-analysis',
-    label: '分析',
-    icon: Activity,
-    items: [
-      { href: '/us/analysis/ml-lens', label: 'US AI Lens', description: 'US物理特徴量・ML候補・類似局面', icon: Activity },
-      { href: '/us/analysis/transitions', label: 'USステージ遷移', description: 'US日足・週足・月足の構造分析', icon: ChartCandlestick },
-      { href: '/us/analysis/backtest', label: 'US過去検証', description: 'USモデル・物理状態・RLを検証', icon: FlaskConical },
-    ],
-  },
-  {
-    kind: 'menu',
-    id: 'us-watch',
-    label: 'ウォッチ',
-    icon: Star,
-    items: [
-      { href: '/watchlist', label: 'ウォッチリスト', description: '保存した監視銘柄', icon: Star },
-      { href: '/custom-charts', label: '合成チャート', description: '数式で独自チャートを作成', icon: ChartCandlestick },
-    ],
-  },
-] as const satisfies readonly NavEntry[]
-
-const COMMODITY_NAV_ITEMS = [
-  { href: '/commodities', label: '概要', icon: LayoutDashboard },
-  { href: '/commodities/screener', label: 'スクリーナー', icon: Search },
-  { href: '/commodities/jp/1540', label: '金 JP', icon: Gem },
-  { href: '/commodities/jp/1671', label: '原油 JP', icon: ChartCandlestick },
-  { href: '/commodities/us/GLD', label: 'Gold US', icon: ChartCandlestick },
-] as const
+import {
+  NAVIGATION_BY_AREA,
+  PAGE_CATALOG,
+  PAGE_CATALOG_ENTRIES,
+  QUICK_COMMAND_PAGE_IDS_BY_AREA,
+  type HeaderArea,
+  type NavigationEntry,
+  type PageId,
+} from '@/components/layout/navigation'
 
 interface ClockData {
   date: string
+  shortDate: string
   jst: string
   ldn: string
   nyc: string
@@ -187,13 +72,23 @@ function fmtDate(now: Date): string {
   return `${d.year}-${d.month}-${d.day} (${d.weekday})`
 }
 
+function fmtShortDate(now: Date): string {
+  return new Intl.DateTimeFormat('ja-JP', {
+    month: 'numeric',
+    day: 'numeric',
+    weekday: 'short',
+    timeZone: 'Asia/Tokyo',
+  }).format(now)
+}
+
 function useClocks(): ClockData {
-  const [data, setData] = useState<ClockData>({ date: '', jst: '', ldn: '', nyc: '' })
+  const [data, setData] = useState<ClockData>({ date: '', shortDate: '', jst: '', ldn: '', nyc: '' })
   useEffect(() => {
     const tick = () => {
       const now = new Date()
       setData({
         date: fmtDate(now),
+        shortDate: fmtShortDate(now),
         jst: fmtTime(now, 'Asia/Tokyo'),
         ldn: fmtTime(now, 'Europe/London'),
         nyc: fmtTime(now, 'America/New_York'),
@@ -284,6 +179,7 @@ type QuickSearchResult = {
   href: string
   badge: string
   meta?: string | null
+  searchText?: string
 }
 
 const COMMODITY_SEARCH_RESULTS: QuickSearchResult[] = COMMODITY_INSTRUMENTS.map((item) => ({
@@ -296,23 +192,23 @@ const COMMODITY_SEARCH_RESULTS: QuickSearchResult[] = COMMODITY_INSTRUMENTS.map(
   meta: `${item.commodity} / ${item.productType}`,
 }))
 
-const COMMAND_SEARCH_RESULTS: QuickSearchResult[] = [
-  { key: 'command:dashboard', ticker: '開く', name: 'ダッシュボード', market: 'COMMAND', href: '/', badge: '機能', meta: '今日の市場判断と売買候補' },
-  { key: 'command:jp-screener', ticker: '探す', name: '日本株スクリーナー', market: 'COMMAND', href: '/screener', badge: '機能', meta: '条件・6ステージ・PMSで抽出' },
-  { key: 'command:us-screener', ticker: '探す', name: 'USスクリーナー', market: 'COMMAND', href: '/us/screener', badge: '機能', meta: '米国株を条件で抽出' },
-  { key: 'command:us-stage-screener', ticker: '探す', name: 'USステージスクリーナー', market: 'COMMAND', href: '/us/stage-screener', badge: '機能', meta: '日足・週足・月足のB×A行列で抽出' },
-  { key: 'command:us-ml-lens', ticker: '分析', name: 'US AI Lens', market: 'COMMAND', href: '/us/analysis/ml-lens', badge: 'US機能', meta: 'US物理特徴量・ML候補・類似局面' },
-  { key: 'command:us-transitions', ticker: '分析', name: 'USステージ遷移', market: 'COMMAND', href: '/us/analysis/transitions', badge: 'US機能', meta: 'US日足・週足・月足の構造分析' },
-  { key: 'command:us-backtest', ticker: '検証', name: 'US過去検証', market: 'COMMAND', href: '/us/analysis/backtest', badge: 'US機能', meta: 'USモデル・物理状態・RLを検証' },
-  { key: 'command:analogs', ticker: '分析', name: '本質類似局面', market: 'COMMAND', href: '/ai/ma-lens#historical-pattern-search', badge: '機能', meta: 'MA構造が近い過去局面・現在銘柄' },
-  { key: 'command:research', ticker: '相談', name: 'AI銘柄リサーチ', market: 'COMMAND', href: '/ai/research', badge: '機能', meta: '自然言語をDB条件へ変換' },
-  { key: 'command:watchlist', ticker: '監視', name: 'ウォッチリスト', market: 'COMMAND', href: '/watchlist', badge: '機能', meta: '保存した監視銘柄' },
-  { key: 'command:custom-chart', ticker: '作成', name: '合成チャート', market: 'COMMAND', href: '/custom-charts', badge: '機能', meta: '複数銘柄を数式で合成' },
-  { key: 'command:earnings', ticker: '確認', name: '決算カレンダー', market: 'COMMAND', href: '/earnings', badge: '機能', meta: '決算予定と発表後の値動き' },
-  { key: 'command:materials', ticker: '確認', name: '材料ニュース', market: 'COMMAND', href: '/materials', badge: '機能', meta: '材料と関連銘柄を6ステージで確認' },
-  { key: 'command:themes', ticker: '探す', name: 'テーマ', market: 'COMMAND', href: '/themes', badge: '機能', meta: '人気テーマと関連銘柄' },
-  { key: 'command:backtest', ticker: '検証', name: '過去検証', market: 'COMMAND', href: '/backtest', badge: '機能', meta: 'シグナルと期待値を検証' },
-]
+const COMMAND_SEARCH_RESULTS: QuickSearchResult[] = PAGE_CATALOG_ENTRIES.map(([pageId, page]) => ({
+  key: `command:${pageId}`,
+  ticker: page.commandVerb,
+  name: page.label,
+  market: 'COMMAND',
+  href: page.href,
+  badge: page.commandBadge,
+  meta: page.description,
+  searchText: page.searchTerms,
+}))
+
+const COMMAND_SEARCH_RESULTS_BY_PAGE_ID = new Map<PageId, QuickSearchResult>(
+  PAGE_CATALOG_ENTRIES.map(([pageId]) => [
+    pageId,
+    COMMAND_SEARCH_RESULTS.find((result) => result.key === `command:${pageId}`)!,
+  ]),
+)
 
 function normalizeTickerQuery(value: string): string {
   return value.trim().replace(/\.T$/i, '').toUpperCase()
@@ -351,7 +247,7 @@ function commandMatches(query: string): QuickSearchResult[] {
   const normalized = query.trim().toLowerCase()
   if (!normalized) return []
   return COMMAND_SEARCH_RESULTS.filter((result) => (
-    `${result.name} ${result.meta ?? ''} ${result.ticker}`.toLowerCase().includes(normalized)
+    `${result.name} ${result.meta ?? ''} ${result.searchText ?? ''} ${result.ticker}`.toLowerCase().includes(normalized)
   ))
 }
 
@@ -387,19 +283,24 @@ function fallbackSearchHref(query: string, area: HeaderArea): string | null {
 function TickerQuickSearch({ area }: { area: HeaderArea }) {
   const router = useRouter()
   const rootRef = useRef<HTMLDivElement>(null)
-  const inputRef = useRef<HTMLInputElement>(null)
+  const desktopInputRef = useRef<HTMLInputElement>(null)
+  const mobileInputRef = useRef<HTMLInputElement>(null)
   const requestIdRef = useRef(0)
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<QuickSearchResult[]>([])
   const [recentSymbols, setRecentSymbols] = useState<WorkspaceSymbol[]>([])
   const [activeIndex, setActiveIndex] = useState(0)
   const [open, setOpen] = useState(false)
+  const [mobileOpen, setMobileOpen] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     const onPointerDown = (event: PointerEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false)
+      if (!rootRef.current?.contains(event.target as Node)) {
+        setOpen(false)
+        setMobileOpen(false)
+      }
     }
     document.addEventListener('pointerdown', onPointerDown)
     return () => document.removeEventListener('pointerdown', onPointerDown)
@@ -410,8 +311,13 @@ function TickerQuickSearch({ area }: { area: HeaderArea }) {
     const onShortcut = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault()
-        inputRef.current?.focus()
         setOpen(true)
+        if (window.matchMedia('(max-width: 639px)').matches) {
+          setMobileOpen(true)
+          window.requestAnimationFrame(() => mobileInputRef.current?.focus())
+        } else {
+          desktopInputRef.current?.focus()
+        }
       }
     }
     syncRecent()
@@ -494,6 +400,7 @@ function TickerQuickSearch({ area }: { area: HeaderArea }) {
 
   const navigateTo = (href: string) => {
     setOpen(false)
+    setMobileOpen(false)
     setQuery('')
     setResults([])
     router.push(href)
@@ -508,20 +415,9 @@ function TickerQuickSearch({ area }: { area: HeaderArea }) {
     badge: symbol.market,
     meta: '最近見た銘柄',
   }))
-  const quickCommands = COMMAND_SEARCH_RESULTS.filter((result) => {
-    if (area === 'us') return [
-      '/us/screener',
-      '/us/stage-screener',
-      '/us/analysis/ml-lens',
-      '/us/analysis/transitions',
-      '/us/analysis/backtest',
-      '/ai/research',
-      '/custom-charts',
-      '/watchlist',
-    ].includes(result.href)
-    if (area === 'commodities') return ['/custom-charts', '/watchlist'].includes(result.href)
-    return ['/', '/screener', '/ai/ma-lens#historical-pattern-search', '/watchlist'].includes(result.href)
-  })
+  const quickCommands = QUICK_COMMAND_PAGE_IDS_BY_AREA[area]
+    .map((pageId) => COMMAND_SEARCH_RESULTS_BY_PAGE_ID.get(pageId))
+    .filter((result): result is QuickSearchResult => Boolean(result))
   const visibleResults = query.trim() ? results : [...recentResults, ...quickCommands].slice(0, 8)
 
   const submitCurrent = () => {
@@ -534,95 +430,168 @@ function TickerQuickSearch({ area }: { area: HeaderArea }) {
     if (fallback) navigateTo(fallback)
   }
 
+  const onSearchKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      setOpen(true)
+      setActiveIndex((current) => Math.min(current + 1, Math.max(visibleResults.length - 1, 0)))
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      setActiveIndex((current) => Math.max(current - 1, 0))
+    } else if (event.key === 'Escape') {
+      setOpen(false)
+      setMobileOpen(false)
+    } else if (event.key === 'Enter') {
+      event.preventDefault()
+      submitCurrent()
+    }
+  }
+
+  const renderResultPanel = (mobile = false) => (
+    <div
+      className={mobile
+        ? 'max-h-[min(70vh,560px)] overflow-y-auto border-t border-[var(--color-border-default)] bg-white'
+        : 'absolute left-0 right-0 top-[calc(100%+6px)] z-[70] overflow-hidden rounded-[5px] border border-[var(--color-border-strong)] bg-white shadow-[0_18px_42px_rgba(16,32,52,0.22)]'}
+    >
+      <div className="border-b border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-3 py-2 text-[10px] font-bold text-[var(--color-text-tertiary)]">
+        {query.trim() ? '銘柄・分類・機能を検索 / Enterで移動' : '最近見た銘柄・よく使う機能'}
+      </div>
+      {loading && (
+        <div className="px-3 py-3 text-[12px] font-semibold text-[var(--color-text-secondary)]">検索中...</div>
+      )}
+      {!loading && error && (
+        <div className="px-3 py-3 text-[12px] font-semibold text-[var(--color-price-down)]">{error}</div>
+      )}
+      {!loading && !error && visibleResults.length === 0 && (
+        <div className="px-3 py-3 text-[12px] font-semibold text-[var(--color-text-secondary)]">
+          候補が見つかりません
+        </div>
+      )}
+      {!loading &&
+        !error &&
+        visibleResults.map((result, index) => (
+          <button
+            key={result.key}
+            type="button"
+            className={`flex w-full items-center gap-2 px-3 py-2.5 text-left transition-colors ${
+              index === activeIndex ? 'bg-[var(--color-surface-subtle)]' : 'bg-white hover:bg-[var(--color-surface-subtle)]'
+            }`}
+            onMouseEnter={() => setActiveIndex(index)}
+            onClick={() => navigateTo(result.href)}
+          >
+            <span className="inline-flex h-6 min-w-12 items-center justify-center rounded-[3px] border border-[var(--color-border-default)] bg-white px-1.5 text-[11px] font-black text-[var(--color-brand-900)]">
+              {result.ticker}
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-[12px] font-bold text-[var(--color-text-primary)]">{result.name}</span>
+              {result.meta && (
+                <span className="mt-0.5 block truncate text-[10px] font-semibold text-[var(--color-text-tertiary)]">
+                  {result.meta}
+                </span>
+              )}
+            </span>
+            <span className="shrink-0 rounded-[3px] bg-[var(--color-brand-50)] px-1.5 py-0.5 text-[10px] font-black text-[var(--color-brand-800)]">
+              {result.badge}
+            </span>
+          </button>
+        ))}
+    </div>
+  )
+
   return (
-    <div ref={rootRef} className="relative order-last w-full sm:order-none sm:min-w-[220px] sm:flex-1 md:max-w-[380px] xl:max-w-[460px]">
-      <form
-        role="search"
-        className="relative"
-        onSubmit={(event) => {
-          event.preventDefault()
-          submitCurrent()
+    <div ref={rootRef} className="header-quick-search relative shrink-0 sm:min-w-[220px] sm:flex-1 md:max-w-[380px] xl:max-w-[460px]">
+      <div className="hidden sm:block">
+        <form
+          role="search"
+          className="relative"
+          onSubmit={(event) => {
+            event.preventDefault()
+            submitCurrent()
+          }}
+        >
+          <Search size={14} strokeWidth={2.3} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--color-text-tertiary)]" />
+          <input
+            ref={desktopInputRef}
+            value={query}
+            onChange={(event) => {
+              setQuery(event.target.value)
+              setOpen(true)
+            }}
+            onFocus={() => setOpen(true)}
+            onKeyDown={onSearchKeyDown}
+            placeholder="銘柄・分類・機能を検索 ⌘K"
+            aria-label="銘柄・分類・機能検索"
+            aria-expanded={open && visibleResults.length > 0}
+            className="h-8 w-full rounded-[4px] border border-[var(--color-border-default)] bg-white py-1 pl-8 pr-3 text-[12px] font-semibold text-[var(--color-text-primary)] outline-none transition-colors placeholder:text-[var(--color-text-tertiary)] focus:border-[var(--color-brand-700)] focus:ring-2 focus:ring-[rgba(37,99,235,0.16)]"
+          />
+        </form>
+        {open && (query.trim() || visibleResults.length > 0) && renderResultPanel()}
+      </div>
+
+      <button
+        type="button"
+        className="inline-flex h-8 w-8 items-center justify-center rounded-[3px] border border-[var(--color-border-default)] bg-white text-[var(--color-brand-800)] sm:hidden"
+        aria-label="銘柄・分類・機能を検索"
+        aria-expanded={mobileOpen}
+        onClick={() => {
+          setMobileOpen(true)
+          setOpen(true)
+          window.requestAnimationFrame(() => mobileInputRef.current?.focus())
         }}
       >
-        <Search
-          size={14}
-          strokeWidth={2.3}
-          className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--color-text-tertiary)]"
-        />
-        <input
-          ref={inputRef}
-          value={query}
-          onChange={(event) => {
-            setQuery(event.target.value)
-            setOpen(true)
-          }}
-          onFocus={() => setOpen(true)}
-          onKeyDown={(event) => {
-            if (event.key === 'ArrowDown') {
-              event.preventDefault()
-              setOpen(true)
-              setActiveIndex((current) => Math.min(current + 1, Math.max(visibleResults.length - 1, 0)))
-            } else if (event.key === 'ArrowUp') {
-              event.preventDefault()
-              setActiveIndex((current) => Math.max(current - 1, 0))
-            } else if (event.key === 'Escape') {
-              setOpen(false)
-            } else if (event.key === 'Enter') {
-              event.preventDefault()
-              submitCurrent()
-            }
-          }}
-          placeholder="銘柄・分類・機能を検索 ⌘K"
-          aria-label="銘柄・分類・機能検索"
-          aria-expanded={open && visibleResults.length > 0}
-          className="h-8 w-full rounded-[4px] border border-[var(--color-border-default)] bg-white py-1 pl-8 pr-3 text-[12px] font-semibold text-[var(--color-text-primary)] outline-none transition-colors placeholder:text-[var(--color-text-tertiary)] focus:border-[var(--color-brand-700)] focus:ring-2 focus:ring-[rgba(37,99,235,0.16)]"
-        />
-      </form>
+        <Search size={16} strokeWidth={2.3} />
+      </button>
 
-      {open && (query.trim() || visibleResults.length > 0) && (
-        <div className="absolute left-0 right-0 top-[calc(100%+6px)] z-[70] overflow-hidden rounded-[5px] border border-[var(--color-border-strong)] bg-white shadow-[0_18px_42px_rgba(16,32,52,0.22)]">
-          <div className="border-b border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-3 py-2 text-[10px] font-bold text-[var(--color-text-tertiary)]">
-            {query.trim() ? '銘柄・分類・機能を検索 / Enterで移動' : '最近見た銘柄・よく使う機能'}
-          </div>
-          {loading && (
-            <div className="px-3 py-3 text-[12px] font-semibold text-[var(--color-text-secondary)]">検索中...</div>
-          )}
-          {!loading && error && (
-            <div className="px-3 py-3 text-[12px] font-semibold text-[var(--color-price-down)]">{error}</div>
-          )}
-          {!loading && !error && visibleResults.length === 0 && (
-            <div className="px-3 py-3 text-[12px] font-semibold text-[var(--color-text-secondary)]">
-              候補が見つかりません
-            </div>
-          )}
-          {!loading &&
-            !error &&
-            visibleResults.map((result, index) => (
+      {mobileOpen && (
+        <div
+          className="fixed inset-0 z-[90] bg-[rgba(16,32,52,0.36)] p-3 sm:hidden"
+          onClick={() => {
+            setMobileOpen(false)
+            setOpen(false)
+          }}
+        >
+          <div
+            className="overflow-hidden rounded-[5px] border border-[var(--color-border-strong)] bg-white shadow-[0_18px_42px_rgba(16,32,52,0.28)]"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <form
+              role="search"
+              className="flex items-center gap-2 p-2"
+              onSubmit={(event) => {
+                event.preventDefault()
+                submitCurrent()
+              }}
+            >
+              <div className="relative min-w-0 flex-1">
+                <Search size={15} strokeWidth={2.3} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--color-text-tertiary)]" />
+                <input
+                  ref={mobileInputRef}
+                  value={query}
+                  onChange={(event) => {
+                    setQuery(event.target.value)
+                    setOpen(true)
+                  }}
+                  onKeyDown={onSearchKeyDown}
+                  placeholder="銘柄・分類・機能を検索"
+                  aria-label="銘柄・分類・機能検索"
+                  aria-expanded={visibleResults.length > 0}
+                  className="h-10 w-full rounded-[4px] border border-[var(--color-border-default)] bg-white py-1 pl-8 pr-3 text-[13px] font-semibold text-[var(--color-text-primary)] outline-none focus:border-[var(--color-brand-700)] focus:ring-2 focus:ring-[rgba(37,99,235,0.16)]"
+                />
+              </div>
               <button
-                key={result.key}
                 type="button"
-                className={`flex w-full items-center gap-2 px-3 py-2.5 text-left transition-colors ${
-                  index === activeIndex ? 'bg-[var(--color-surface-subtle)]' : 'bg-white hover:bg-[var(--color-surface-subtle)]'
-                }`}
-                onMouseEnter={() => setActiveIndex(index)}
-                onClick={() => navigateTo(result.href)}
+                className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-[3px] text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-subtle)]"
+                aria-label="検索を閉じる"
+                onClick={() => {
+                  setMobileOpen(false)
+                  setOpen(false)
+                }}
               >
-                <span className="inline-flex h-6 min-w-12 items-center justify-center rounded-[3px] border border-[var(--color-border-default)] bg-white px-1.5 text-[11px] font-black text-[var(--color-brand-900)]">
-                  {result.ticker}
-                </span>
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[12px] font-bold text-[var(--color-text-primary)]">{result.name}</span>
-                  {result.meta && (
-                    <span className="mt-0.5 block truncate text-[10px] font-semibold text-[var(--color-text-tertiary)]">
-                      {result.meta}
-                    </span>
-                  )}
-                </span>
-                <span className="shrink-0 rounded-[3px] bg-[var(--color-brand-50)] px-1.5 py-0.5 text-[10px] font-black text-[var(--color-brand-800)]">
-                  {result.badge}
-                </span>
+                <X size={18} />
               </button>
-            ))}
+            </form>
+            {renderResultPanel(true)}
+          </div>
         </div>
       )}
     </div>
@@ -642,9 +611,12 @@ export function Header() {
       : 'jp'
   const isUsArea = area === 'us'
   const isCommodityArea = area === 'commodities'
-  const navItems = isCommodityArea ? COMMODITY_NAV_ITEMS : isUsArea ? US_NAV_ITEMS : NAV_ITEMS
+  const navItems: readonly NavigationEntry[] = NAVIGATION_BY_AREA[area]
   const navRef = useRef<HTMLDivElement>(null)
+  const clockRef = useRef<HTMLDivElement>(null)
+  const menuPanelRef = useRef<HTMLDivElement>(null)
   const [openMenu, setOpenMenu] = useState<string | null>(null)
+  const [clocksOpen, setClocksOpen] = useState(false)
   const [marketStatus, setMarketStatus] = useState<'open' | 'closed'>('closed')
   const clocks = useClocks()
   const activeUniverse = area === 'jp' ? parseUniverseFilter(searchParams.get(UNIVERSE_FILTER_PARAM)) : null
@@ -664,9 +636,13 @@ export function Header() {
   useEffect(() => {
     const onPointerDown = (event: PointerEvent) => {
       if (!navRef.current?.contains(event.target as Node)) setOpenMenu(null)
+      if (!clockRef.current?.contains(event.target as Node)) setClocksOpen(false)
     }
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setOpenMenu(null)
+      if (event.key === 'Escape') {
+        setOpenMenu(null)
+        setClocksOpen(false)
+      }
     }
     document.addEventListener('pointerdown', onPointerDown)
     document.addEventListener('keydown', onKeyDown)
@@ -676,6 +652,11 @@ export function Header() {
     }
   }, [])
 
+  useEffect(() => {
+    setOpenMenu(null)
+    setClocksOpen(false)
+  }, [pathname, requestedMarket])
+
   const isActive = (href: string) => {
     const path = hrefPath(href)
     if (path === '/') return pathname === '/'
@@ -683,14 +664,11 @@ export function Header() {
     return pathname === path || pathname.startsWith(`${path}/`)
   }
 
-  const isEntryActive = (entry: NavEntry | (typeof US_NAV_ITEMS)[number] | (typeof COMMODITY_NAV_ITEMS)[number]) => {
-    if ('kind' in entry && entry.kind === 'menu') {
-      return entry.items.some((item) => {
-        const includeInGroupActive = 'includeInGroupActive' in item ? item.includeInGroupActive : undefined
-        return includeInGroupActive !== false && isActive(item.href)
-      })
+  const isEntryActive = (entry: NavigationEntry) => {
+    if (entry.kind === 'menu') {
+      return entry.sections.some((section) => section.pageIds.some((pageId) => isActive(PAGE_CATALOG[pageId].href)))
     }
-    return isActive(entry.href)
+    return isActive(PAGE_CATALOG[entry.pageId].href)
   }
 
   const scopedHref = (href: string) => {
@@ -706,105 +684,109 @@ export function Header() {
     return query ? `${pathname}?${query}` : pathname
   }
 
-  const renderNavEntry = (entry: NavEntry | (typeof US_NAV_ITEMS)[number] | (typeof COMMODITY_NAV_ITEMS)[number], compact = false) => {
+  const focusFirstMenuItem = () => {
+    window.requestAnimationFrame(() => {
+      menuPanelRef.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus()
+    })
+  }
+
+  const renderNavEntry = (entry: NavigationEntry) => {
     const active = isEntryActive(entry)
-    const baseClasses = `inline-flex h-9 shrink-0 items-center gap-2.5 rounded-[2px] border ${compact ? 'px-3.5 text-[12px]' : 'px-4 text-[13px]'} font-bold leading-none transition-colors ${
+    const baseClasses = `header-nav-entry inline-flex h-10 min-w-0 items-center justify-center gap-1 rounded-[2px] border px-1 text-[11px] font-bold leading-none transition-colors sm:h-9 sm:flex-none sm:gap-2.5 sm:px-4 sm:text-[13px] ${
       active
         ? 'border-[var(--color-market-red-dark)] bg-[var(--color-market-red)] text-white shadow-[inset_0_-2px_0_rgba(0,0,0,0.16)]'
         : 'border-[#2a71b8] bg-[#075aa7] text-white hover:border-[#9fc0e5] hover:bg-[#0c67bd]'
     }`
 
-    if (!('kind' in entry) || entry.kind === 'link') {
+    if (entry.kind === 'link') {
+      const page = PAGE_CATALOG[entry.pageId]
       return (
         <Link
-          key={entry.href}
-          href={scopedHref(entry.href)}
+          key={entry.pageId}
+          href={scopedHref(page.href)}
           prefetch={false}
           className={baseClasses}
           onClick={() => setOpenMenu(null)}
         >
           <NavIcon icon={entry.icon} active={active} />
-          <span className="whitespace-nowrap">{entry.label}</span>
+          <span className="whitespace-nowrap sm:hidden">{entry.shortLabel}</span>
+          <span className="hidden whitespace-nowrap sm:inline">{entry.label}</span>
         </Link>
       )
     }
 
     const menuOpen = openMenu === entry.id
     return (
-      <div
+      <button
         key={entry.id}
-        className="relative shrink-0"
-        onMouseEnter={() => setOpenMenu(entry.id)}
-        onMouseLeave={() => setOpenMenu(null)}
+        type="button"
+        className={baseClasses}
+        data-testid={`nav-menu-${entry.id}`}
+        aria-haspopup="menu"
+        aria-controls={`nav-menu-panel-${entry.id}`}
+        aria-expanded={menuOpen}
+        onMouseEnter={() => {
+          if (window.matchMedia('(min-width: 640px) and (hover: hover)').matches) setOpenMenu(entry.id)
+        }}
+        onClick={() => {
+          const desktopHover = window.matchMedia('(min-width: 640px) and (hover: hover)').matches
+          setOpenMenu((current) => desktopHover ? entry.id : current === entry.id ? null : entry.id)
+        }}
+        onKeyDown={(event) => {
+          if (event.key === 'ArrowDown') {
+            event.preventDefault()
+            setOpenMenu(entry.id)
+            focusFirstMenuItem()
+          }
+        }}
       >
-        <button
-          type="button"
-          className={baseClasses}
-          data-testid={`nav-menu-${entry.id}`}
-          aria-haspopup="menu"
-          aria-expanded={menuOpen}
-          onClick={() => setOpenMenu(menuOpen ? null : entry.id)}
-        >
-          <NavIcon icon={entry.icon} active={active || menuOpen} />
-          <span className="whitespace-nowrap">{entry.label}</span>
-          <ChevronDown
-            size={14}
-            strokeWidth={2.4}
-            className={`transition-transform ${menuOpen ? 'rotate-180' : ''}`}
-          />
-        </button>
-
-        {menuOpen && (
-          <div
-            role="menu"
-            data-testid={`nav-menu-panel-${entry.id}`}
-            className="absolute left-0 top-full z-50 w-[280px] rounded-[4px] border border-[var(--color-border-strong)] bg-white p-1.5 text-[var(--color-text-primary)] shadow-[0_14px_36px_rgba(16,32,52,0.24)]"
-          >
-            {entry.items.map((item) => {
-              const itemActive = isActive(item.href)
-              const ItemIcon = item.icon
-              return (
-                <Link
-                  key={item.href}
-                  href={scopedHref(item.href)}
-                  prefetch={false}
-                  role="menuitem"
-                  className={`flex min-h-[54px] items-center gap-3 rounded-[3px] border px-3 py-2 text-left transition-colors ${
-                    itemActive
-                      ? 'border-[var(--color-market-red)] bg-[var(--color-surface-subtle)] text-[var(--color-brand-900)]'
-                      : 'border-transparent hover:border-[var(--color-border-default)] hover:bg-[var(--color-surface-subtle)]'
-                  }`}
-                  onClick={() => setOpenMenu(null)}
-                >
-                  <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-[3px] border border-[var(--color-border-default)] bg-white text-[var(--color-brand-800)]">
-                    <ItemIcon size={16} strokeWidth={2.3} />
-                  </span>
-                  <span className="min-w-0">
-                    <span className="block text-[13px] font-black leading-tight">{item.label}</span>
-                    {item.description && (
-                      <span className="mt-1 block text-[11px] font-semibold leading-snug text-[var(--color-text-tertiary)]">
-                        {item.description}
-                      </span>
-                    )}
-                  </span>
-                </Link>
-              )
-            })}
-          </div>
-        )}
-      </div>
+        <NavIcon icon={entry.icon} active={active || menuOpen} />
+        <span className="whitespace-nowrap sm:hidden">{entry.shortLabel}</span>
+        <span className="hidden whitespace-nowrap sm:inline">{entry.label}</span>
+        <ChevronDown
+          size={14}
+          strokeWidth={2.4}
+          className={`hidden transition-transform sm:block ${menuOpen ? 'rotate-180' : ''}`}
+        />
+      </button>
     )
+  }
+
+  const openMenuEntry = navItems.find((entry): entry is Extract<NavigationEntry, { kind: 'menu' }> => (
+    entry.kind === 'menu' && entry.id === openMenu
+  ))
+  const openMenuColumns = openMenuEntry
+    ? ([1, 2] as const)
+        .map((column) => openMenuEntry.sections.filter((section) => (section.column ?? 1) === column))
+        .filter((sections) => sections.length > 0)
+    : []
+
+  const onMenuPanelKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
+    const items = Array.from(menuPanelRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? [])
+    if (items.length === 0) return
+    event.preventDefault()
+    const current = items.indexOf(document.activeElement as HTMLElement)
+    if (event.key === 'Home') items[0].focus()
+    else if (event.key === 'End') items[items.length - 1].focus()
+    else if (event.key === 'ArrowDown') items[(current + 1 + items.length) % items.length].focus()
+    else items[(current - 1 + items.length) % items.length].focus()
   }
 
   return (
     <header className="relative z-30 border-b border-[var(--color-border-strong)] bg-white shadow-[0_1px_3px_rgba(16,32,52,0.12)]">
       <div className="border-b border-[var(--color-border-default)] bg-[var(--color-surface-subtle)]">
-        <div className="mx-auto flex min-h-10 w-full max-w-[1480px] flex-wrap items-center justify-between gap-2 px-5 py-1.5 sm:px-8 lg:px-10 xl:px-12">
-          <Link href={isCommodityArea ? '/commodities' : isUsArea ? '/us' : scopedHref('/')} prefetch={false} className="flex shrink-0 items-center gap-2.5">
+        <div className="header-top-row mx-auto flex min-h-10 w-full max-w-[1480px] flex-wrap items-center justify-between gap-2 px-3 py-1 sm:px-8 sm:py-1.5 lg:px-10 xl:px-12">
+          <Link
+            href={isCommodityArea ? '/commodities' : isUsArea ? '/us' : scopedHref('/')}
+            prefetch={false}
+            aria-label="StockBoard ホーム"
+            className="flex shrink-0 items-center gap-2.5"
+          >
             <div className="flex h-7 w-7 items-center justify-center rounded-[3px] bg-[var(--color-brand-800)] text-white shadow-sm">
               <BarChart3 size={16} strokeWidth={2.5} />
             </div>
-            <div className="leading-tight">
+            <div className="header-brand-copy leading-tight">
               <div className="text-[16px] font-bold tracking-normal text-[var(--color-brand-900)]">StockBoard</div>
               <div className="hidden text-[10px] font-bold text-[var(--color-text-tertiary)] sm:block">
                 {isCommodityArea ? 'Commodity ETF Console' : isUsArea ? 'US Market Console' : 'J-Quants Market Console'}
@@ -844,7 +826,7 @@ export function Header() {
               href={universeToggleHref('nikkei225')}
               prefetch={false}
               aria-pressed={activeUniverse === 'nikkei225'}
-              className={`hidden h-8 shrink-0 items-center gap-1.5 rounded-[4px] border px-2.5 text-[11px] font-bold transition-colors md:inline-flex ${
+              className={`hidden h-8 shrink-0 items-center gap-1.5 rounded-[4px] border px-2.5 text-[11px] font-bold transition-colors lg:inline-flex ${
                 activeUniverse === 'nikkei225'
                   ? 'border-[var(--color-market-red)] bg-white text-[var(--color-market-red)] shadow-sm'
                   : 'border-[var(--color-border-default)] bg-white text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-subtle)]'
@@ -869,7 +851,7 @@ export function Header() {
                 href={universeToggleHref('nikkei225')}
                 prefetch={false}
                 aria-pressed={activeUniverse === 'nikkei225'}
-                className={`rounded-[3px] px-2 py-1 text-[11px] font-bold ${
+                className={`hidden rounded-[3px] px-2 py-1 text-[11px] font-bold ${
                   activeUniverse === 'nikkei225'
                     ? 'bg-[var(--color-market-red)] text-white'
                     : 'text-[var(--color-text-secondary)]'
@@ -895,10 +877,11 @@ export function Header() {
             </Link>
           </div>
 
-          <div className="header-market-context shrink-0 items-center gap-1.5">
-            <span className="inline-flex h-6 items-center gap-1.5 rounded-[3px] border border-[var(--color-border-default)] bg-white px-2 text-[11px] font-bold text-[var(--color-text-secondary)]">
-              <Activity size={12} />
-              {isCommodityArea ? '商品ETF' : isUsArea ? 'NYSE' : '東証'}
+          <div ref={clockRef} className="header-market-context relative shrink-0 items-center gap-1.5">
+            <span className="inline-flex h-6 items-center gap-1 rounded-[3px] border border-[var(--color-border-default)] bg-white px-1.5 text-[10px] font-bold text-[var(--color-text-secondary)] sm:gap-1.5 sm:px-2 sm:text-[11px]">
+              <Activity size={12} className="header-market-status-icon" />
+              <span className="header-market-short-label">{isCommodityArea ? 'COM' : isUsArea ? 'US' : 'JP'}</span>
+              <span className="header-market-long-label">{isCommodityArea ? '商品ETF' : isUsArea ? 'NYSE' : '東証'}</span>
               <span
                 style={{
                   color:
@@ -911,25 +894,124 @@ export function Header() {
               </span>
             </span>
             <span
-              className="inline-flex h-6 items-center rounded-[3px] border border-[var(--color-border-default)] bg-white px-2 text-[11px] font-semibold text-[var(--color-text-primary)] tabular-nums"
+              className="inline-flex h-6 items-center rounded-[3px] border border-[var(--color-border-default)] bg-white px-1.5 text-[10px] font-semibold text-[var(--color-text-primary)] tabular-nums sm:px-2 sm:text-[11px]"
               suppressHydrationWarning
             >
-              {clocks.date || '----/--/--'}
+              <span className="header-market-short-label">{clocks.shortDate || '--/--'}</span>
+              <span className="header-market-long-label">{clocks.date || '----/--/--'}</span>
             </span>
-            <ClockChip label="TYO" time={clocks.jst} />
-            <div className="flex items-center gap-1.5">
+            <div className="header-clock-inline items-center gap-1.5">
+              <ClockChip label="TYO" time={clocks.jst} />
               <ClockChip label="LDN" time={clocks.ldn} />
               <ClockChip label="NYC" time={clocks.nyc} />
             </div>
+            <button
+              type="button"
+              className="header-clock-toggle h-6 w-6 items-center justify-center rounded-[3px] border border-[var(--color-border-default)] bg-white text-[var(--color-brand-800)]"
+              aria-label="市場時計を表示"
+              aria-expanded={clocksOpen}
+              onClick={() => setClocksOpen((current) => !current)}
+            >
+              <Clock3 size={12} />
+            </button>
+            {clocksOpen && (
+              <div className="header-clock-popover absolute right-0 top-[calc(100%+5px)] z-[75] items-center gap-1.5 rounded-[4px] border border-[var(--color-border-strong)] bg-white p-2 shadow-[0_12px_28px_rgba(16,32,52,0.22)]">
+                <ClockChip label="TYO" time={clocks.jst} />
+                <ClockChip label="LDN" time={clocks.ldn} />
+                <ClockChip label="NYC" time={clocks.nyc} />
+              </div>
+            )}
           </div>
         </div>
       </div>
 
       <div className="bg-[var(--color-brand-800)]">
-        <div ref={navRef} className="mx-auto flex min-h-12 w-full max-w-[1480px] items-center justify-between gap-4 px-5 py-1.5 sm:px-8 lg:px-10 xl:px-12">
-          <nav className="header-primary-nav min-w-0 flex-1 items-center gap-2 overflow-visible">
+        <div
+          ref={navRef}
+          className="relative mx-auto flex min-h-12 w-full max-w-[1480px] items-center justify-between gap-4 px-3 py-1 sm:px-8 sm:py-1.5 lg:px-10 xl:px-12"
+        >
+          <nav aria-label="主要ナビゲーション" className="header-primary-nav min-w-0 flex-1 items-center gap-1 overflow-visible sm:gap-2">
             {navItems.map((item) => renderNavEntry(item))}
           </nav>
+
+          {openMenuEntry && (
+            <div
+              ref={menuPanelRef}
+              id={`nav-menu-panel-${openMenuEntry.id}`}
+              role="menu"
+              data-testid={`nav-menu-panel-${openMenuEntry.id}`}
+              aria-label={openMenuEntry.label}
+              className={`header-nav-panel absolute left-3 right-3 top-[calc(100%+30px)] z-50 max-h-[calc(100vh-142px)] overflow-y-auto rounded-[5px] border border-[var(--color-border-strong)] bg-white p-2 text-[var(--color-text-primary)] shadow-[0_16px_38px_rgba(16,32,52,0.25)] sm:left-8 sm:right-auto sm:max-w-[calc(100vw-64px)] sm:p-3 lg:left-10 xl:left-12 ${openMenuColumns.length === 1 ? 'sm:w-[420px]' : 'sm:w-[720px]'}`}
+              onKeyDown={onMenuPanelKeyDown}
+            >
+              {area === 'jp' && openMenuEntry.id === 'market' && (
+                <div className="mb-2 flex items-center justify-between gap-3 border-b border-[var(--color-border-default)] pb-2 sm:hidden">
+                  <span className="text-[10px] font-bold text-[var(--color-text-tertiary)]">表示対象</span>
+                  <Link
+                    href={universeToggleHref('nikkei225')}
+                    prefetch={false}
+                    aria-pressed={activeUniverse === 'nikkei225'}
+                    className={`inline-flex h-8 items-center gap-1.5 rounded-[3px] border px-2.5 text-[11px] font-bold ${
+                      activeUniverse === 'nikkei225'
+                        ? 'border-[var(--color-market-red)] bg-[var(--color-market-red)] text-white'
+                        : 'border-[var(--color-border-default)] bg-white text-[var(--color-text-secondary)]'
+                    }`}
+                    onClick={() => setOpenMenu(null)}
+                  >
+                    <ListFilter size={13} />
+                    日経225だけ表示
+                  </Link>
+                </div>
+              )}
+              <div className={`grid grid-cols-1 gap-2 sm:gap-3 ${openMenuColumns.length > 1 ? 'sm:grid-cols-2' : ''}`}>
+                {openMenuColumns.map((sections, columnIndex) => (
+                  <div key={columnIndex} className="min-w-0 space-y-2">
+                    {sections.map((section) => (
+                      <section key={section.id} aria-labelledby={`nav-section-${section.id}`} className="min-w-0">
+                        <div
+                          id={`nav-section-${section.id}`}
+                          className="border-b border-[var(--color-border-default)] px-2 pb-1.5 pt-1 text-[10px] font-black text-[var(--color-brand-800)]"
+                        >
+                          {section.label}
+                        </div>
+                        <div className="mt-1 space-y-0.5">
+                          {section.pageIds.map((pageId) => {
+                            const page = PAGE_CATALOG[pageId]
+                            const ItemIcon = page.icon
+                            const itemActive = isActive(page.href)
+                            return (
+                              <Link
+                                key={pageId}
+                                href={scopedHref(page.href)}
+                                prefetch={false}
+                                role="menuitem"
+                                className={`flex min-h-[50px] items-center gap-3 rounded-[3px] border px-2.5 py-2 text-left transition-colors ${
+                                  itemActive
+                                    ? 'border-[var(--color-market-red)] bg-[var(--color-surface-subtle)] text-[var(--color-brand-900)]'
+                                    : 'border-transparent hover:border-[var(--color-border-default)] hover:bg-[var(--color-surface-subtle)]'
+                                }`}
+                                onClick={() => setOpenMenu(null)}
+                              >
+                                <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-[3px] border border-[var(--color-border-default)] bg-white text-[var(--color-brand-800)]">
+                                  <ItemIcon size={16} strokeWidth={2.3} />
+                                </span>
+                                <span className="min-w-0">
+                                  <span className="block text-[13px] font-black leading-tight">{page.label}</span>
+                                  <span className="mt-1 block text-[11px] font-semibold leading-snug text-[var(--color-text-tertiary)]">
+                                    {page.description}
+                                  </span>
+                                </span>
+                              </Link>
+                            )
+                          })}
+                        </div>
+                      </section>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </header>

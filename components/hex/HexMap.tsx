@@ -12,7 +12,7 @@ import { STAGE_BG_COLORS, STAGE_BORDER_COLORS, STAGE_LABELS } from '@/lib/hex-st
 import { MarginBadges } from '@/components/ui/MarginBadges'
 import { StageDots } from '@/components/ui/StageDots'
 
-interface Stock {
+export interface HexMapStock {
   code: string
   name: string
   sector_large: string
@@ -94,7 +94,7 @@ function angleFlow(angle: number | null | undefined, prev: number | null | undef
   }
 }
 
-function maAlignmentLabel(stock: Stock) {
+function maAlignmentLabel(stock: HexMapStock) {
   const values = [stock.sma_angles?.sma5, stock.sma_angles?.sma25, stock.sma_angles?.sma75]
   const up = values.filter((v) => v != null && v > 0.08).length
   const down = values.filter((v) => v != null && v < -0.08).length
@@ -159,7 +159,7 @@ const US_MARKET_CAP_RANGES: { id: string; label: string }[] = [
 // 銘柄テーブルの初期表示件数 /「もっと見る」増分。4,000+ 行の一括描画を避ける。
 const ROW_STEP = 100
 
-export default function HexMap({ data, market = 'JP' }: { data: Stock[]; timeframe?: Timeframe; market?: 'JP' | 'US' }) {
+export default function HexMap({ data, market = 'JP' }: { data: HexMapStock[]; timeframe?: Timeframe; market?: 'JP' | 'US' }) {
   const isUs = market === 'US'
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -199,8 +199,8 @@ export default function HexMap({ data, market = 'JP' }: { data: Stock[]; timefra
       for (const tf of tfs) {
         const sel = selections[tf]
         if (sel.size === 0) continue
-        const a = d[`${tf}_a_stage` as keyof Stock] as number | null | undefined
-        const b = d[`${tf}_b_stage` as keyof Stock] as number | null | undefined
+        const a = d[`${tf}_a_stage` as keyof HexMapStock] as number | null | undefined
+        const b = d[`${tf}_b_stage` as keyof HexMapStock] as number | null | undefined
         if (a == null || b == null) { pass = false; break }
         if (!sel.has(`${b}-${a}`)) { pass = false; break }
       }
@@ -209,7 +209,7 @@ export default function HexMap({ data, market = 'JP' }: { data: Stock[]; timefra
     return result
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, selections, hasSelection])
-  const filterByMarketCap = (stock: Stock) => {
+  const filterByMarketCap = (stock: HexMapStock) => {
     if (isUs) {
       const val = stock.market_cap
       switch (selectedMarketCapRange) {
@@ -515,7 +515,7 @@ export default function HexMap({ data, market = 'JP' }: { data: Stock[]; timefra
   )
 }
 
-function MaFlowCell({ stock }: { stock: Stock }) {
+function MaFlowCell({ stock }: { stock: HexMapStock }) {
   const alignment = maAlignmentLabel(stock)
   const flows = [
     ['5日', angleFlow(stock.sma_angles?.sma5, stock.prev_sma_angles?.sma5)],
@@ -568,7 +568,7 @@ function MaFlowCell({ stock }: { stock: Stock }) {
 function StageMatrix({
   data, timeframe, label, selectedCells, filteredTickers, anySelection, onCellClick, onClearTimeframe,
 }: {
-  data: Stock[]
+  data: HexMapStock[]
   timeframe: Timeframe
   label: string
   /** このタイムフレームで選択されているセルの "b-a" キー集合 */
@@ -585,8 +585,8 @@ function StageMatrix({
     const m: { count: number; sel: number }[][] =
       Array.from({ length: 7 }, () => Array.from({ length: 7 }, () => ({ count: 0, sel: 0 })))
     let t = 0
-    const aField = `${timeframe}_a_stage` as keyof Stock
-    const bField = `${timeframe}_b_stage` as keyof Stock
+    const aField = `${timeframe}_a_stage` as keyof HexMapStock
+    const bField = `${timeframe}_b_stage` as keyof HexMapStock
     for (const d of data) {
       const a = d[aField] as number | null | undefined
       const b = d[bField] as number | null | undefined

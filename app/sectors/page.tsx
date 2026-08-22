@@ -6,6 +6,7 @@ import {
   getSectorConstituents,
   getSectorStructureBoard,
   normalizeSectorConstituentSort,
+  resolveSectorStructureParentFromGroup,
   type SectorClassification,
   type SectorConstituentResult,
   type SectorConstituentSortKey,
@@ -782,6 +783,8 @@ export default async function SectorsPage({
     sectorMargin?: string | string[]
     view?: string | string[]
     structureTaxonomy?: string | string[]
+    structureGroup?: string | string[]
+    structureParent?: string | string[]
     heatmapTaxonomy?: string | string[]
     heatmapPeriod?: string | string[]
   }>
@@ -799,14 +802,29 @@ export default async function SectorsPage({
   const selectedMargin = firstParam(sp.sectorMargin)
   const structureView = firstParam(sp.view) === 'structure'
   const structureTaxonomy = parseSectorStructureTaxonomy(firstParam(sp.structureTaxonomy))
+  const structureGroup = firstParam(sp.structureGroup)
+  const structureParent = firstParam(sp.structureParent)
   const heatmapTaxonomy = parseHeatmapTaxonomy(firstParam(sp.heatmapTaxonomy))
   const heatmapPeriod = parseSectorPeriod(firstParam(sp.heatmapPeriod))
   const showBuiltInPanels = heatmapTaxonomy === 'overview' || heatmapTaxonomy === '17' || heatmapTaxonomy === '33'
   const heatmapClassifications = heatmapTaxonomy === 'overview'
     ? ['17', '33'] as const
     : [heatmapTaxonomy] as const
+  let resolvedStructureParent = structureParent
+  if (structureView && (structureTaxonomy === 'subIndustry' || structureTaxonomy === '33') && !resolvedStructureParent) {
+    resolvedStructureParent = await resolveSectorStructureParentFromGroup(structureTaxonomy, structureGroup)
+    if (!resolvedStructureParent) {
+      const parentTaxonomy = structureTaxonomy === 'subIndustry' ? 'major' : '17'
+      const parentBoard = await getSectorStructureBoard(parentTaxonomy, { universeFilter })
+      resolvedStructureParent = parentBoard.rows.find((row) => row.groupKey === parentBoard.selectedGroupKey)?.groupName ?? null
+    }
+  }
   const structureBoard = structureView
-    ? await getSectorStructureBoard(structureTaxonomy)
+    ? await getSectorStructureBoard(structureTaxonomy, {
+        selectedGroupKey: structureGroup,
+        parentFilter: resolvedStructureParent,
+        universeFilter,
+      })
     : null
   const performanceData = structureView
     ? null
@@ -870,7 +888,11 @@ export default async function SectorsPage({
 
       <div className="sb-section" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
         <Link href="/sectors" className={`sb-tab ${!structureView ? 'sb-on' : ''}`}>騰落率</Link>
-        <Link href="/sectors?view=structure&structureTaxonomy=major#sector-structure" className={`sb-tab ${structureView ? 'sb-on' : ''}`}>構造変化</Link>
+        <Link href={`/sectors?${new URLSearchParams({
+          view: 'structure',
+          structureTaxonomy: 'major',
+          ...(universeFilter ? { universe: universeFilter } : {}),
+        }).toString()}#sector-structure`} className={`sb-tab ${structureView ? 'sb-on' : ''}`}>構造変化</Link>
         {!structureView && <>
           {([
             ['overview', '17/33業種'],
@@ -908,8 +930,8 @@ export default async function SectorsPage({
               ))
             : <><span className="sb-tab sb-on">本日</span><span className="sb-tab sb-on">今週</span><span className="sb-tab sb-on">今月</span></>}
         </>}
-        {structureView && <span className="sb-tab sb-on">6ステージ遷移</span>}
-        {!structureView && universeMeta && <span className="sb-tab sb-on">{universeMeta.shortLabel}</span>}
+        {structureView && <span className="sb-tab sb-on">6ステージ分布</span>}
+        {universeMeta && <span className="sb-tab sb-on">{universeMeta.shortLabel}</span>}
         <span className="sb-t" style={{ marginLeft: 'auto', fontSize: 11 }}>
           基準日: {structureView ? structureBoard?.latestDate ?? '---' : latestDate ?? '---'}
         </span>

@@ -25,6 +25,8 @@ interface HexStock {
   sector_small: string | null
   sector17_name: string | null
   sector33_name: string | null
+  major_category: string | null
+  sub_industry: string | null
   market_segment: string | null
   margin_type: string | null
   market_cap: number
@@ -80,7 +82,9 @@ interface UniRow {
   ticker: string
   name: string | null
   shares_outstanding: number | null
+  sector17_code: string | null
   sector17_name: string | null
+  sector33_code: string | null
   sector33_name: string | null
   market_segment: string | null
   margin_type: string | null
@@ -202,6 +206,11 @@ export async function GET(request: NextRequest) {
     const timeframe = (searchParams.get('timeframe') ?? 'daily') as 'daily' | 'weekly' | 'monthly'
     const requestedDate = searchParams.get('date')
     const view = searchParams.get('view')
+    const taxonomy = searchParams.get('taxonomy')
+    const requestedGroup = searchParams.get('group')?.trim() || null
+    const classificationTaxonomy = taxonomy === '17' || taxonomy === '33' || taxonomy === 'major' || taxonomy === 'subIndustry'
+      ? taxonomy
+      : null
     const universeFilter = parseUniverseFilter(searchParams.get(UNIVERSE_FILTER_PARAM))
 
     const date = await resolveSnapshotDate(requestedDate)
@@ -298,7 +307,7 @@ export async function GET(request: NextRequest) {
       // 念のため変数として残す
       Promise.resolve(null),
       execAll<UniRow>(
-        `SELECT ticker, name, shares_outstanding, sector17_name, sector33_name, market_segment, margin_type
+        `SELECT ticker, name, shares_outstanding, sector17_code, sector17_name, sector33_code, sector33_name, market_segment, margin_type
          FROM ticker_universe WHERE active = 1`,
       ),
       execAll<ClassRow>(
@@ -351,7 +360,26 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    const rows: HexStock[] = curr.map((s) => {
+    const scopedCurr = classificationTaxonomy && requestedGroup
+      ? curr.filter((snapshot) => {
+          const universeRow = uniMap.get(snapshot.ticker)
+          const classificationRow = klassMap.get(snapshot.ticker)
+          if (classificationTaxonomy === '17') {
+            return (universeRow?.sector17_code || universeRow?.sector17_name) === requestedGroup
+          }
+          if (classificationTaxonomy === '33') {
+            return (universeRow?.sector33_code || universeRow?.sector33_name) === requestedGroup
+          }
+          if (classificationTaxonomy === 'major') {
+            return classificationRow?.major_category === requestedGroup
+          }
+          return classificationRow?.major_category && classificationRow?.sub_industry
+            ? `${classificationRow.major_category}\u001f${classificationRow.sub_industry}` === requestedGroup
+            : false
+        })
+      : curr
+
+    const rows: HexStock[] = scopedCurr.map((s) => {
       const p1 = prev1Map.get(s.ticker)
       const p2 = prev2Map.get(s.ticker)
       const px = priceMap.get(s.ticker)
@@ -406,6 +434,8 @@ export async function GET(request: NextRequest) {
         sector_small: sectorSmall,
         sector17_name: u?.sector17_name ?? null,
         sector33_name: u?.sector33_name ?? null,
+        major_category: k?.major_category ?? null,
+        sub_industry: k?.sub_industry ?? null,
         market_segment: u?.market_segment ?? null,
         margin_type: u?.margin_type ?? null,
         market_cap: marketCap,
@@ -440,7 +470,11 @@ export async function GET(request: NextRequest) {
       date,
       timeframe,
       source: 'jquants',
-      filters: { universe: universeFilter },
+      filters: {
+        universe: universeFilter,
+        taxonomy: classificationTaxonomy,
+        group: requestedGroup,
+      },
     })
   } catch (error) {
     console.error('Hex API error:', error)

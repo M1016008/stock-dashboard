@@ -1,6 +1,20 @@
 import { execAll, execGet } from '@/lib/db/client'
 import { type UniverseFilterValue, universeSqlCondition } from '@/lib/market-universe'
 import { SECTOR_STRUCTURE_AXES, type AxisStructureSummary, type SectorStructureAxisKey, type SectorStructureTaxonomy } from '@/lib/sector-structure'
+import {
+  calculateSectorMarketBaseline,
+  calculateSectorStageDeltas,
+  findDominantStageChange,
+  parseSectorStageComposition,
+  type SectorDominantStageChange,
+  type SectorMarketBaseline,
+  type SectorStageComposition,
+  type SectorStageDeltas,
+} from '@/lib/sector-stage-distribution'
+import {
+  buildSectorStructureSeries,
+  type SectorStructureSourceRow,
+} from '@/lib/sector-structure-series'
 
 export type SectorClassification = '17' | '33'
 export type SectorHeatmapClassification = SectorClassification | 'major' | 'subIndustry'
@@ -56,12 +70,20 @@ export interface SectorStructureRow {
   improvingCount: number
   deterioratingCount: number
   stableCount: number
+  composition: SectorStageComposition
+  dominantChange: SectorDominantStageChange | null
   axes?: Record<SectorStructureAxisKey, AxisStructureSummary>
+  stageDeltas?: SectorStageDeltas
 }
 
 export interface SectorStructureBoard {
   latestDate: string | null
+  previousDate: string | null
   taxonomy: SectorStructureTaxonomy
+  universe: UniverseFilterValue
+  parentFilter: string | null
+  selectedGroupKey: string | null
+  marketBaseline: SectorMarketBaseline
   rows: SectorStructureRow[]
 }
 
@@ -340,71 +362,294 @@ function parseAxisJson(raw: string): Record<SectorStructureAxisKey, AxisStructur
   return fallback
 }
 
+async function getSector33ParentMap(): Promise<Map<string, string>> {
+  const rows = await execAll<{ groupKey: string; parentGroup: string }>(`
+    SELECT
+      COALESCE(NULLIF(sector33_code, ''), sector33_name) AS groupKey,
+      MIN(sector17_name) AS parentGroup
+    FROM ticker_universe
+    WHERE active = 1
+      AND sector33_name IS NOT NULL AND sector33_name <> ''
+      AND sector17_name IS NOT NULL AND sector17_name <> ''
+    GROUP BY COALESCE(NULLIF(sector33_code, ''), sector33_name)
+    HAVING COUNT(DISTINCT sector17_name) = 1
+  `)
+  return new Map(rows.map((row) => [row.groupKey, row.parentGroup]))
+}
+
+export async function resolveSectorStructureParentFromGroup(
+  taxonomy: SectorStructureTaxonomy,
+  groupKey: string | null | undefined,
+): Promise<string | null> {
+  const cleanGroupKey = groupKey?.trim() || null
+  if (!cleanGroupKey) return null
+  if (taxonomy === 'subIndustry') {
+    const separator = cleanGroupKey.indexOf('\u001f')
+    return separator > 0 ? cleanGroupKey.slice(0, separator) : null
+  }
+  if (taxonomy === '33') return (await getSector33ParentMap()).get(cleanGroupKey) ?? null
+  return null
+}
+
+function compositionFromAxes(
+  axes: Record<SectorStructureAxisKey, AxisStructureSummary>,
+): SectorStageComposition {
+  return Object.fromEntries(SECTOR_STRUCTURE_AXES.map((axis) => [
+    axis.key,
+    { ...axes[axis.key].stages },
+  ])) as SectorStageComposition
+}
+
+async function loadUniverseSectorStructureRows(
+  taxonomy: SectorStructureTaxonomy,
+  requestedDate: string,
+  universeFilter: Exclude<UniverseFilterValue, null>,
+): Promise<{
+  latestDate: string | null
+  previousDate: string | null
+  rows: Array<SectorStructureRow & {
+    axes: Record<SectorStructureAxisKey, AxisStructureSummary>
+    stageDeltas: SectorStageDeltas
+  }>
+}> {
+  const universe = universeSqlCondition('tu.ticker', universeFilter)
+  const sourceRows = await execAll<SectorStructureSourceRow>(`
+    WITH selected_dates AS (
+      SELECT date
+      FROM (
+        SELECT DISTINCT date
+        FROM daily_snapshots
+        WHERE date <= ?
+        ORDER BY date DESC
+        LIMIT 21
+      )
+    ),
+    source AS (
+      SELECT
+        s.ticker,
+        s.date,
+        s.daily_a_stage AS dailyA,
+        s.daily_b_stage AS dailyB,
+        s.weekly_a_stage AS weeklyA,
+        s.weekly_b_stage AS weeklyB,
+        s.monthly_a_stage AS monthlyA,
+        s.monthly_b_stage AS monthlyB,
+        LAG(s.daily_a_stage) OVER (PARTITION BY s.ticker ORDER BY s.date) AS prevDailyA,
+        LAG(s.daily_b_stage) OVER (PARTITION BY s.ticker ORDER BY s.date) AS prevDailyB,
+        LAG(s.weekly_a_stage) OVER (PARTITION BY s.ticker ORDER BY s.date) AS prevWeeklyA,
+        LAG(s.weekly_b_stage) OVER (PARTITION BY s.ticker ORDER BY s.date) AS prevWeeklyB,
+        LAG(s.monthly_a_stage) OVER (PARTITION BY s.ticker ORDER BY s.date) AS prevMonthlyA,
+        LAG(s.monthly_b_stage) OVER (PARTITION BY s.ticker ORDER BY s.date) AS prevMonthlyB
+      FROM daily_snapshots AS s
+      INNER JOIN selected_dates AS d ON d.date = s.date
+    )
+    SELECT
+      source.*,
+      tu.sector17_code AS sector17Code,
+      tu.sector17_name AS sector17Name,
+      tu.sector33_code AS sector33Code,
+      tu.sector33_name AS sector33Name,
+      sc.major_category AS majorCategory,
+      sc.sub_industry AS subIndustry
+    FROM source
+    INNER JOIN ticker_universe AS tu ON tu.ticker = source.ticker AND tu.active = 1
+    LEFT JOIN stock_classification AS sc ON sc.ticker = source.ticker
+    WHERE source.date > (SELECT MIN(date) FROM selected_dates)
+      AND ${universe.sql}
+    ORDER BY source.date, source.ticker
+  `, [requestedDate, ...universe.params])
+
+  const series = buildSectorStructureSeries(sourceRows, [taxonomy])
+  const dates = [...new Set(series.map((row) => row.date))].sort((a, b) => b.localeCompare(a))
+  const latestDate = dates[0] ?? null
+  const previousDate = dates[1] ?? null
+  if (!latestDate) return { latestDate: null, previousDate: null, rows: [] }
+
+  const sector33Parents = taxonomy === '33' ? await getSector33ParentMap() : new Map<string, string>()
+  const previousByGroup = new Map(
+    series
+      .filter((row) => row.date === previousDate)
+      .map((row) => [row.groupKey, compositionFromAxes(row.axes)]),
+  )
+  const rows = series
+    .filter((row) => row.date === latestDate)
+    .map((row) => {
+      const composition = compositionFromAxes(row.axes)
+      const previousComposition = previousByGroup.get(row.groupKey) ?? null
+      const stageDeltas = calculateSectorStageDeltas(composition, previousComposition)
+      return {
+        ...row,
+        parentGroup: row.parentGroup ?? sector33Parents.get(row.groupKey) ?? null,
+        composition,
+        stageDeltas,
+        dominantChange: previousComposition ? findDominantStageChange(stageDeltas) : null,
+      }
+    })
+  return { latestDate, previousDate, rows }
+}
+
 export async function getSectorStructureBoard(
   taxonomy: SectorStructureTaxonomy = 'major',
+  options: {
+    selectedGroupKey?: string | null
+    parentFilter?: string | null
+    requestedDate?: string | null
+    includeAxesForAll?: boolean
+    universeFilter?: UniverseFilterValue
+  } = {},
 ): Promise<SectorStructureBoard> {
+  const universeFilter = options.universeFilter ?? null
+  const requestedDate = options.requestedDate && /^\d{4}-\d{2}-\d{2}$/.test(options.requestedDate)
+    ? options.requestedDate
+    : null
   const latest = await execGet<{ date: string | null }>(`
-    SELECT MAX(date) AS date FROM sector_structure_daily WHERE taxonomy = ?
-  `, [taxonomy])
-  if (!latest?.date) return { latestDate: null, taxonomy, rows: [] }
-  const raw = await execAll<{
-    taxonomy: SectorStructureTaxonomy
-    groupKey: string
-    groupName: string
-    parentGroup: string | null
-    date: string
-    nStocks: number
-    validStageCount: number
-    strengthScore: number | null
-    transitionChangeScore: number
-    momentum5d: number | null
-    momentum10d: number | null
-    momentum20d: number | null
-    propagationDirection: 'improving' | 'deteriorating' | 'neutral'
-    propagationPhase: number
-    propagationLabel: string
-    improvingCount: number
-    deterioratingCount: number
-    stableCount: number
-    axisJson: string
-  }>(`
-    SELECT
-      taxonomy,
-      group_key AS groupKey,
-      group_name AS groupName,
-      parent_group AS parentGroup,
-      date,
-      n_stocks AS nStocks,
-      valid_stage_count AS validStageCount,
-      strength_score AS strengthScore,
-      transition_change_score AS transitionChangeScore,
-      momentum_5d AS momentum5d,
-      momentum_10d AS momentum10d,
-      momentum_20d AS momentum20d,
-      propagation_direction AS propagationDirection,
-      propagation_phase AS propagationPhase,
-      propagation_label AS propagationLabel,
-      improving_count AS improvingCount,
-      deteriorating_count AS deterioratingCount,
-      stable_count AS stableCount,
-      axis_json AS axisJson
+    SELECT MAX(date) AS date
     FROM sector_structure_daily
-    WHERE taxonomy = ? AND date = ?
-    ORDER BY momentum_10d DESC, strength_score DESC, group_name
-  `, [taxonomy, latest.date])
-  // 軽量な一覧では軸別の大きなJSONを送らず、詳細展開に使う上位24件だけに付与する。
-  const detailKeys = new Set(
-    [...raw]
-      .sort((a, b) => Math.abs(b.momentum10d ?? 0) - Math.abs(a.momentum10d ?? 0))
-      .slice(0, 24)
-      .map((row) => row.groupKey),
-  )
+    WHERE taxonomy = ?
+      ${requestedDate ? 'AND date <= ?' : ''}
+  `, requestedDate ? [taxonomy, requestedDate] : [taxonomy])
+  if (!latest?.date) {
+    return {
+      latestDate: null,
+      previousDate: null,
+      taxonomy,
+      universe: universeFilter,
+      parentFilter: null,
+      selectedGroupKey: null,
+      marketBaseline: calculateSectorMarketBaseline([]),
+      rows: [],
+    }
+  }
+  let resolvedLatestDate = latest.date
+  let resolvedPreviousDate: string | null = null
+  let prepared: Array<SectorStructureRow & {
+    axes: Record<SectorStructureAxisKey, AxisStructureSummary>
+    stageDeltas: SectorStageDeltas
+  }>
+
+  if (universeFilter) {
+    const dynamicBoard = await loadUniverseSectorStructureRows(taxonomy, latest.date, universeFilter)
+    resolvedLatestDate = dynamicBoard.latestDate ?? latest.date
+    resolvedPreviousDate = dynamicBoard.previousDate
+    prepared = dynamicBoard.rows
+  } else {
+    const previous = await execGet<{ date: string | null }>(`
+      SELECT MAX(date) AS date
+      FROM sector_structure_daily
+      WHERE taxonomy = ? AND date < ?
+    `, [taxonomy, latest.date])
+    resolvedPreviousDate = previous?.date ?? null
+    const raw = await execAll<{
+      taxonomy: SectorStructureTaxonomy
+      groupKey: string
+      groupName: string
+      parentGroup: string | null
+      date: string
+      nStocks: number
+      validStageCount: number
+      strengthScore: number | null
+      transitionChangeScore: number
+      momentum5d: number | null
+      momentum10d: number | null
+      momentum20d: number | null
+      propagationDirection: 'improving' | 'deteriorating' | 'neutral'
+      propagationPhase: number
+      propagationLabel: string
+      improvingCount: number
+      deterioratingCount: number
+      stableCount: number
+      axisJson: string
+      compositionJson: string
+      previousCompositionJson: string | null
+    }>(`
+      SELECT
+        current.taxonomy,
+        current.group_key AS groupKey,
+        current.group_name AS groupName,
+        current.parent_group AS parentGroup,
+        current.date,
+        current.n_stocks AS nStocks,
+        current.valid_stage_count AS validStageCount,
+        current.strength_score AS strengthScore,
+        current.transition_change_score AS transitionChangeScore,
+        current.momentum_5d AS momentum5d,
+        current.momentum_10d AS momentum10d,
+        current.momentum_20d AS momentum20d,
+        current.propagation_direction AS propagationDirection,
+        current.propagation_phase AS propagationPhase,
+        current.propagation_label AS propagationLabel,
+        current.improving_count AS improvingCount,
+        current.deteriorating_count AS deterioratingCount,
+        current.stable_count AS stableCount,
+        current.axis_json AS axisJson,
+        current.composition_json AS compositionJson,
+        previous.composition_json AS previousCompositionJson
+      FROM sector_structure_daily AS current
+      LEFT JOIN sector_structure_daily AS previous
+        ON previous.taxonomy = current.taxonomy
+       AND previous.group_key = current.group_key
+       AND previous.date = ?
+      WHERE current.taxonomy = ? AND current.date = ?
+      ORDER BY current.momentum_10d DESC, current.strength_score DESC, current.group_name
+    `, [resolvedPreviousDate ?? '', taxonomy, latest.date])
+
+    const sector33Parents = taxonomy === '33' ? await getSector33ParentMap() : new Map<string, string>()
+    prepared = raw.map(({ axisJson, compositionJson, previousCompositionJson, ...row }) => {
+      const composition = parseSectorStageComposition(compositionJson)
+      const previousComposition = previousCompositionJson
+        ? parseSectorStageComposition(previousCompositionJson)
+        : null
+      const stageDeltas = calculateSectorStageDeltas(composition, previousComposition)
+      return {
+        ...row,
+        parentGroup: row.parentGroup ?? sector33Parents.get(row.groupKey) ?? null,
+        composition,
+        axes: parseAxisJson(axisJson),
+        stageDeltas,
+        dominantChange: previousComposition ? findDominantStageChange(stageDeltas) : null,
+      }
+    })
+  }
+  const marketBaseline = calculateSectorMarketBaseline(prepared)
+  const inferredParent = await resolveSectorStructureParentFromGroup(taxonomy, options.selectedGroupKey)
+  const requestedParent = options.parentFilter?.trim() || inferredParent
+  const parentRows = requestedParent
+    ? prepared.filter((row) => row.parentGroup === requestedParent)
+    : prepared
+  const isChildTaxonomy = taxonomy === 'subIndustry' || taxonomy === '33'
+  const fallbackParent = isChildTaxonomy
+    ? [...prepared]
+        .sort((a, b) => Math.abs(b.momentum10d ?? 0) - Math.abs(a.momentum10d ?? 0))[0]
+        ?.parentGroup ?? null
+    : null
+  const resolvedParent = requestedParent && parentRows.length > 0
+    ? requestedParent
+    : fallbackParent
+  const fallbackRows = resolvedParent
+    ? prepared.filter((row) => row.parentGroup === resolvedParent)
+    : prepared
+  const rowsInScope = requestedParent && parentRows.length > 0 ? parentRows : fallbackRows
+  const requestedGroup = options.selectedGroupKey?.trim() || null
+  const defaultGroup = [...rowsInScope]
+    .sort((a, b) => Math.abs(b.momentum10d ?? 0) - Math.abs(a.momentum10d ?? 0))[0]
+    ?.groupKey ?? null
+  const selectedGroupKey = requestedGroup && rowsInScope.some((row) => row.groupKey === requestedGroup)
+    ? requestedGroup
+    : defaultGroup
+
   return {
-    latestDate: latest.date,
+    latestDate: resolvedLatestDate,
+    previousDate: resolvedPreviousDate,
     taxonomy,
-    rows: raw.map(({ axisJson, ...row }) => ({
+    universe: universeFilter,
+    parentFilter: resolvedParent,
+    selectedGroupKey,
+    marketBaseline,
+    rows: rowsInScope.map(({ axes, stageDeltas, ...row }) => ({
       ...row,
-      ...(detailKeys.has(row.groupKey) ? { axes: parseAxisJson(axisJson) } : {}),
+      ...(options.includeAxesForAll || row.groupKey === selectedGroupKey
+        ? { axes, stageDeltas }
+        : {}),
     })),
   }
 }

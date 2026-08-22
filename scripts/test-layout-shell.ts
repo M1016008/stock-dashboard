@@ -18,7 +18,7 @@ assert.doesNotMatch(
   'Header must not establish a second sticky layer inside site-header-stack.',
 )
 assert.equal(
-  (header.match(/<nav className="header-primary-nav/g) ?? []).length,
+  (header.match(/<nav[^>]*className="header-primary-nav/g) ?? []).length,
   1,
   'The primary navigation must render once instead of relying on competing responsive copies.',
 )
@@ -32,30 +32,35 @@ assert.match(
   /\.header-primary-nav\s*\{[\s\S]*?display:\s*flex;[\s\S]*?\}/,
   'The primary navigation must be visible without a responsive utility override.',
 )
-assert.doesNotMatch(
+assert.match(
+  css,
+  /\.header-primary-nav\s*\{[\s\S]*?flex-wrap:\s*nowrap;[\s\S]*?\}/,
+  'Primary navigation must stay on one line at every viewport width.',
+)
+assert.match(
+  css,
+  /\.header-nav-entry\s*\{[\s\S]*?flex:\s*1 1 0;[\s\S]*?\}/,
+  'Mobile navigation entries must share the available row width.',
+)
+assert.match(
+  css,
+  /\.header-clock-inline\s*\{[\s\S]*?display:\s*none;[\s\S]*?\}/,
+  'Detailed market clocks must be collapsed on mobile.',
+)
+assert.match(
+  css,
+  /@media\s*\(min-width:\s*1440px\)[\s\S]*?\.header-clock-inline\s*\{[\s\S]*?display:\s*flex;[\s\S]*?\}/,
+  'Detailed market clocks must remain visible on wide screens.',
+)
+assert.match(
   header,
-  /header-market-context[^"]*\bhidden\b/,
-  'Market clocks must never depend on a hidden responsive utility.',
+  /className="header-clock-toggle[\s\S]*?aria-expanded=\{clocksOpen\}/,
+  'Mobile users must be able to expand the detailed market clocks.',
 )
 assert.match(
-  css,
-  /\.header-primary-nav\s*,\s*\.header-market-context\s*\{[\s\S]*?display:\s*flex;[\s\S]*?\}/,
-  'Primary navigation and market clocks must be visible at every viewport width.',
-)
-assert.match(
-  css,
-  /\.header-market-context\s*\{[\s\S]*?max-width:\s*100%;[\s\S]*?flex-wrap:\s*wrap;[\s\S]*?\}/,
-  'Market clocks must wrap instead of disappearing when space is limited.',
-)
-assert.doesNotMatch(
   header,
-  /max-w-\[1480px\][^"]*\blg:flex-nowrap\b/,
-  'The header top row must be allowed to wrap when all clocks do not fit.',
-)
-assert.match(
-  css,
-  /@media\s*\(min-width:\s*1024px\)[\s\S]*?\.header-primary-nav\s*\{[\s\S]*?flex-wrap:\s*nowrap;[\s\S]*?\}/,
-  'Desktop navigation must remain on one line.',
+  /openMenuColumns\.length > 1 \? 'sm:grid-cols-2' : ''/,
+  'Grouped desktop navigation must use a two-column menu.',
 )
 assert.match(
   css,

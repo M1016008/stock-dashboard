@@ -188,22 +188,83 @@ body[data-density='compact'] table td {
   display: none;
 }
 
+.header-brand-copy {
+  display: none;
+}
+
+.header-top-row {
+  flex-wrap: nowrap;
+}
+
 .header-market-switcher-compact,
 .header-primary-nav,
-.header-market-context {
+.header-market-context,
+.header-clock-toggle,
+.header-clock-popover {
   display: flex;
 }
 
 .header-primary-nav {
-  flex-wrap: wrap;
+  width: 100%;
+  flex-wrap: nowrap;
+}
+
+.header-nav-entry {
+  flex: 1 1 0;
 }
 
 .header-market-context {
+  flex: 0 0 auto;
+  justify-content: flex-end;
   max-width: 100%;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+}
+
+.header-clock-inline {
+  display: none;
+}
+
+.header-market-status-icon {
+  display: none;
+}
+
+.header-market-long-label {
+  display: none;
+}
+
+.header-clock-popover {
+  white-space: nowrap;
+}
+
+@media (min-width: 640px) {
+  .header-top-row {
+    flex-wrap: wrap;
+  }
+
+  .header-nav-entry {
+    flex: 0 0 auto;
+  }
+
+  .header-market-context {
+    flex: 0 0 auto;
+  }
+
+  .header-quick-search {
+    flex: 0 1 220px;
+    width: 220px;
+    min-width: 180px;
+    max-width: 240px;
+  }
+
 }
 
 @media (min-width: 768px) {
+  .header-brand-copy {
+    display: block;
+  }
+}
+
+@media (min-width: 1024px) {
   .header-market-switcher {
     display: flex;
   }
@@ -211,11 +272,31 @@ body[data-density='compact'] table td {
   .header-market-switcher-compact {
     display: none;
   }
+
+  .header-quick-search {
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 220px;
+    max-width: 380px;
+  }
 }
 
-@media (min-width: 1024px) {
-  .header-primary-nav {
-    flex-wrap: nowrap;
+@media (min-width: 1440px) {
+  .header-market-status-icon {
+    display: block;
+  }
+  .header-market-short-label {
+    display: none;
+  }
+
+  .header-market-long-label,
+  .header-clock-inline {
+    display: flex;
+  }
+
+  .header-clock-toggle,
+  .header-clock-popover {
+    display: none;
   }
 }
 
@@ -226,7 +307,7 @@ body[data-density='compact'] table td {
 }
 
 @media (max-width: 1439px) {
-  html { scroll-padding-top: 160px; }
+  html { scroll-padding-top: 142px; }
 }
 
 @media (min-width: 1440px) {
