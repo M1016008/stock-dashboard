@@ -88,7 +88,7 @@ assert.equal((topTabs.match(/\{ id: '/g) ?? []).length, 5)
 
 const fundamentalWorkspace = stockDetailSource.slice(
   stockDetailSource.indexOf('function FundamentalWorkspace'),
-  stockDetailSource.indexOf('function OverviewBasicInfoPanel'),
+  stockDetailSource.indexOf('function OverviewWorkspace'),
 )
 const fundamentalLabels = ['サマリー', '業績', '財務', 'バリュエーション', '株主還元', '企業情報']
 previousIndex = -1
@@ -98,9 +98,14 @@ for (const label of fundamentalLabels) {
   previousIndex = index
 }
 
-const overview = stockDetailSource.slice(
+const overviewRoute = stockDetailSource.slice(
   stockDetailSource.indexOf("{activeTab === 'overview'"),
   stockDetailSource.indexOf("{activeTab === 'chart'"),
+)
+assert.match(overviewRoute, /<OverviewWorkspace/)
+const overview = stockDetailSource.slice(
+  stockDetailSource.indexOf('function OverviewWorkspace'),
+  stockDetailSource.indexOf('function OverviewBasicInfoPanel'),
 )
 const overviewOrder = [
   '<OverviewBasicInfoPanel',
@@ -113,6 +118,16 @@ for (const marker of overviewOrder) {
   assert.ok(index > previousIndex, `overview order: ${marker}`)
   previousIndex = index
 }
+assert.equal(
+  (overview.match(/fetch\(physicalUrl/g) ?? []).length,
+  1,
+  'Overview must fetch physical momentum exactly once and share it by props',
+)
+const basicInfoCard = stockDetailSource.slice(
+  stockDetailSource.indexOf('function BasicInfoCard'),
+  stockDetailSource.indexOf('function buildBasicDecisionSummary'),
+)
+assert.doesNotMatch(basicInfoCard, /\/api\/physical-momentum/, 'BasicInfoCard must not issue a duplicate physical request')
 
 for (const legacyHash of ['performance', 'financial', 'valuation', 'returns', 'company']) {
   assert.match(stockDetailSource, new RegExp(`hash === '${legacyHash}'`))

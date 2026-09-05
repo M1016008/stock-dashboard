@@ -11,7 +11,9 @@ import { dailySnapshots, ohlcvDaily } from '@/lib/db/schema'
 import { activeCalendarPeriodCounts, sampleCalendarPeriodEnds } from '@/lib/snapshots/calendar-periods'
 import { getActiveSegmentStart, REQUIRED_ACTIVE_PERIODS, stageWithEnoughHistory } from '@/lib/snapshots/continuous-ma'
 import {
+  DEFAULT_STAGE_TIMELINE_DISPLAY_COUNTS,
   MAX_STAGE_HISTORY_TRADING_DAYS,
+  MAX_STAGE_TIMELINE_DISPLAY_COUNTS,
   selectStageHistoryWindow,
 } from '@/lib/stage-history-window'
 import { normalizeMarket, normalizeTickerForMarket } from '@/lib/markets'
@@ -68,16 +70,6 @@ type SnapshotRow = Pick<typeof dailySnapshots.$inferSelect,
 >
 
 const GRANULARITIES = new Set<Granularity>(['daily', 'weekly', 'monthly'])
-const DEFAULT_COUNTS: Record<Granularity, number> = {
-  daily: 60,
-  weekly: 26,
-  monthly: 24,
-}
-const MAX_COUNTS: Record<Granularity, number> = {
-  daily: 300,
-  weekly: 104,
-  monthly: 120,
-}
 const RANGE_MAX_COUNT = 3000
 
 function parseGranularity(value: string | null): Granularity {
@@ -165,8 +157,8 @@ export async function GET(
     const countParam = searchParams.get('count') ?? (granularity === 'weekly' ? searchParams.get('weeks') : null)
     const count = parseCount(
       countParam,
-      hasDateRange ? RANGE_MAX_COUNT : DEFAULT_COUNTS[granularity],
-      hasDateRange ? RANGE_MAX_COUNT : MAX_COUNTS[granularity],
+      hasDateRange ? RANGE_MAX_COUNT : DEFAULT_STAGE_TIMELINE_DISPLAY_COUNTS[granularity],
+      hasDateRange ? RANGE_MAX_COUNT : MAX_STAGE_TIMELINE_DISPLAY_COUNTS[granularity],
     )
 
     // 該当銘柄の snapshot を日付昇順で全件取得

@@ -4,6 +4,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { STAGE_BORDER_COLORS, STAGE_LABELS } from '@/lib/hex-stage'
 import type { MarketCode } from '@/lib/markets'
+import {
+  DEFAULT_STAGE_TIMELINE_DISPLAY_COUNTS,
+  STAGE_TIMELINE_DISPLAY_PRESETS,
+} from '@/lib/stage-history-window'
 
 interface StageEntry {
   date: string
@@ -59,30 +63,7 @@ const GRANULARITIES: { key: Granularity; label: string; subtitle: string }[] = [
   { key: 'monthly', label: '月毎', subtitle: '各月末営業日時点の3本MA配列' },
 ]
 
-const PRESETS: Record<Granularity, { label: string; count: number }[]> = {
-  daily: [
-    { label: '20D', count: 20 },
-    { label: '60D', count: 60 },
-    { label: '120D', count: 120 },
-    { label: '300D', count: 300 },
-  ],
-  weekly: [
-    { label: '13W', count: 13 },
-    { label: '26W', count: 26 },
-    { label: '52W', count: 52 },
-  ],
-  monthly: [
-    { label: '12M', count: 12 },
-    { label: '24M', count: 24 },
-    { label: '60M', count: 60 },
-  ],
-}
-
-const DEFAULT_COUNTS: Record<Granularity, number> = {
-  daily: 60,
-  weekly: 13,
-  monthly: 24,
-}
+const DISPLAY_SUFFIX: Record<Granularity, string> = { daily: 'D', weekly: 'W', monthly: 'M' }
 
 /**
  * 選択粒度に応じたステージ変遷をグリッド表示。
@@ -101,7 +82,7 @@ export function StageTimeline({
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [granularity, setGranularity] = useState<Granularity>('weekly')
-  const [count, setCount] = useState(DEFAULT_COUNTS.weekly)
+  const [count, setCount] = useState(DEFAULT_STAGE_TIMELINE_DISPLAY_COUNTS.weekly)
   const timelineScrollRef = useRef<HTMLDivElement>(null)
 
   const selectedGranularity = GRANULARITIES.find((item) => item.key === granularity) ?? GRANULARITIES[1]
@@ -151,7 +132,7 @@ export function StageTimeline({
 
   function selectGranularity(next: Granularity) {
     setGranularity(next)
-    setCount(DEFAULT_COUNTS[next])
+    setCount(DEFAULT_STAGE_TIMELINE_DISPLAY_COUNTS[next])
   }
 
   const hasVisibleSelection = selectedRange
@@ -203,15 +184,15 @@ export function StageTimeline({
             ))}
           </div>
           <div style={segmentedControl} aria-label="表示期間">
-            {PRESETS[granularity].map((preset) => (
+            {STAGE_TIMELINE_DISPLAY_PRESETS[granularity].map((preset) => (
               <button
-                key={preset.label}
+                key={preset}
                 type="button"
-                onClick={() => setCount(preset.count)}
-                style={segmentButton(count === preset.count)}
-                title={`直近${preset.count}${granularity === 'daily' ? '営業日' : granularity === 'weekly' ? '週' : 'か月'}を表示`}
+                onClick={() => setCount(preset)}
+                style={segmentButton(count === preset)}
+                title={`直近${preset}${granularity === 'daily' ? '営業日' : granularity === 'weekly' ? '週' : 'か月'}を表示`}
               >
-                {preset.label}
+                {preset}{DISPLAY_SUFFIX[granularity]}
               </button>
             ))}
           </div>

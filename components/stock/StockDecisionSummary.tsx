@@ -30,6 +30,7 @@ interface StockDecisionSummaryProps {
   analysisDate: string | null
   quote: StockQuote | null
   variant?: 'overview' | 'fundamental'
+  physicalMomentum?: StockDecisionPhysicalMomentum | null
 }
 
 interface PhysicalMomentumRow {
@@ -43,20 +44,20 @@ interface PhysicalMomentumRow {
   physicalEnergyScore: number | null
 }
 
-interface PhysicalMomentumSummary {
+export interface StockDecisionPhysicalMomentum {
   latest: PhysicalMomentumRow | null
   history: PhysicalMomentumRow[]
   trend: 'rising' | 'falling' | 'flat' | null
   rank: number | null
   totalRanked: number
-  latestScoredDate: string | null
-  isScoreFresh: boolean
-  scoreSource: 'stored' | 'runtime_raw' | null
+  latestScoredDate?: string | null
+  isScoreFresh?: boolean
+  scoreSource?: 'stored' | 'runtime_raw' | null
 }
 
 interface SummaryState {
   financial: FinancialOverviewReadModel | null
-  physical: PhysicalMomentumSummary | null
+  physical: StockDecisionPhysicalMomentum | null
   sector: StockSectorContext | null
 }
 
@@ -89,7 +90,13 @@ function metric(
   return { label, value: formatFinancialSummaryValue(point, format, { forecast, signed }) }
 }
 
-export function StockDecisionSummary({ ticker, analysisDate, quote, variant = 'overview' }: StockDecisionSummaryProps) {
+export function StockDecisionSummary({
+  ticker,
+  analysisDate,
+  quote,
+  variant = 'overview',
+  physicalMomentum,
+}: StockDecisionSummaryProps) {
   const [data, setData] = useState<SummaryState>({ financial: null, physical: null, sector: null })
   const [loading, setLoading] = useState(true)
   const [financialError, setFinancialError] = useState(false)
@@ -101,7 +108,8 @@ export function StockDecisionSummary({ ticker, analysisDate, quote, variant = 'o
     setLoading(true)
     setFinancialError(false)
     setData({ financial: null, physical: null, sector: null })
-    let pending = variant === 'overview' ? 3 : 1
+    const hasSharedPhysicalMomentum = physicalMomentum !== undefined
+    let pending = variant === 'overview' ? (hasSharedPhysicalMomentum ? 2 : 3) : 1
     const done = () => {
       pending -= 1
       if (!controller.signal.aborted && pending === 0) setLoading(false)
@@ -114,8 +122,8 @@ export function StockDecisionSummary({ ticker, analysisDate, quote, variant = 'o
         if (!controller.signal.aborted) setFinancialError(true)
       })
       .finally(done)
-    if (variant === 'overview') {
-      getJson<PhysicalMomentumSummary>(urls.physical, controller.signal)
+    if (variant === 'overview' && !hasSharedPhysicalMomentum) {
+      getJson<StockDecisionPhysicalMomentum>(urls.physical, controller.signal)
         .then((physical) => {
           if (!controller.signal.aborted) setData((current) => ({ ...current, physical }))
         })
@@ -129,7 +137,7 @@ export function StockDecisionSummary({ ticker, analysisDate, quote, variant = 'o
         .finally(done)
     }
     return () => controller.abort()
-  }, [analysisDate, ticker, variant])
+  }, [analysisDate, physicalMomentum !== undefined, ticker, variant])
 
   const axes = useMemo(() => {
     const financial = data.financial
@@ -183,18 +191,19 @@ export function StockDecisionSummary({ ticker, analysisDate, quote, variant = 'o
     ] satisfies AxisDisplay[]
   }, [data.financial])
 
-  const latestPhysical = data.physical?.latest ?? null
+  const effectivePhysical = physicalMomentum !== undefined ? physicalMomentum : data.physical
+  const latestPhysical = effectivePhysical?.latest ?? null
   const physicalView = buildPhysicalMomentumView({
     pms: latestPhysical?.physicalMomentumScore,
     pfs: latestPhysical?.physicalForceScore,
     pes: latestPhysical?.physicalEnergyScore,
-    trend: data.physical?.trend ?? null,
+    trend: effectivePhysical?.trend ?? null,
   })
   const maSummary = summarizeMaStructure(latestPhysical)
   const financialAsOf = data.financial?.asOf ?? analysisDate ?? quote?.priceDate ?? '---'
-  const physicalAsOf = data.physical?.scoreSource === 'runtime_raw'
+  const physicalAsOf = effectivePhysical?.scoreSource === 'runtime_raw'
     ? latestPhysical?.date ?? '---'
-    : data.physical?.latestScoredDate ?? latestPhysical?.date ?? '---'
+    : effectivePhysical?.latestScoredDate ?? latestPhysical?.date ?? '---'
   const sectorAsOf = data.sector?.date ?? '---'
   const sectorHref = data.sector ? (() => {
     const params = new URLSearchParams({
@@ -231,7 +240,7 @@ export function StockDecisionSummary({ ticker, analysisDate, quote, variant = 'o
           <div className="flex flex-col gap-2 border-t border-[var(--color-border-default)] px-4 py-2.5 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1 text-[9px] font-bold text-[var(--color-text-tertiary)]">
               <span>MA構造 <b className="text-[var(--color-text-primary)]">{maSummary}</b></span>
-              <span>PMS市場順位 <b className="font-mono text-[var(--color-text-primary)]">{data.physical?.rank == null ? '—' : `${data.physical.rank} / ${data.physical.totalRanked}銘柄`}</b></span>
+              <span>PMS市場順位 <b className="font-mono text-[var(--color-text-primary)]">{effectivePhysical?.rank == null ? '—' : `${effectivePhysical.rank} / ${effectivePhysical.totalRanked}銘柄`}</b></span>
               <span>33業種平均との差 <b className="font-mono text-[var(--color-text-primary)]">{data.sector?.marketDifference == null ? '—' : `${data.sector.marketDifference >= 0 ? '+' : ''}${data.sector.marketDifference.toFixed(1)}pt`}</b></span>
               <span>業種10日変化 <b className="font-mono text-[var(--color-text-primary)]">{data.sector?.momentum10d == null ? '—' : `${data.sector.momentum10d >= 0 ? '+' : ''}${data.sector.momentum10d.toFixed(1)}`}</b></span>
             </div>

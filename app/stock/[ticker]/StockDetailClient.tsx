@@ -48,6 +48,7 @@ import {
   type StockAnalysisReview,
 } from '@/components/stock/HistoricalAnalysisModeBar'
 import { findTicker } from '@/lib/master/tickers'
+import { buildStockDecisionSummaryUrls } from '@/lib/stock-decision-summary'
 import { STAGE_BG_COLORS, STAGE_BORDER_COLORS, STAGE_LABELS } from '@/lib/hex-stage'
 import { buildShortTermCheck, formatShortTermStrength, type ShortTermCheckTone } from '@/lib/short-term-check'
 import { physicsStatusTone, type PhysicsStatus } from '@/lib/ml/physics-analysis'
@@ -474,29 +475,22 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
       />
 
       {activeTab === 'overview' && (
-        <>
-          {!loading && !quote && (
-            <div className="card" style={missingPriceNoticeStyle}>
-              J-Quants日足の価格データを取得できませんでした。
-            </div>
-          )}
-          <OverviewBasicInfoPanel
-            ticker={ticker}
-            quote={displayedQuote}
-            marginInfo={marginInfo}
-            fallbackType={displayMarginType}
-            analysisDate={analysisDate}
-            classifications={{
-              marketSegment: displayMarketSegment,
-              sector17: displaySectorLarge,
-              sector33: displaySector33,
-              majorCategory: displayMajorCategory,
-              subIndustry: displaySubIndustry,
-            }}
-          />
-          <StockDecisionSummary ticker={ticker} analysisDate={analysisDate} quote={displayedQuote} variant="overview" />
-          <FinancialPerformanceTimeline ticker={ticker} analysisDate={analysisDate} />
-        </>
+        <OverviewWorkspace
+          ticker={ticker}
+          quote={quote}
+          displayedQuote={displayedQuote}
+          marginInfo={marginInfo}
+          fallbackType={displayMarginType}
+          analysisDate={analysisDate}
+          loading={loading}
+          classifications={{
+            marketSegment: displayMarketSegment,
+            sector17: displaySectorLarge,
+            sector33: displaySector33,
+            majorCategory: displayMajorCategory,
+            subIndustry: displaySubIndustry,
+          }}
+        />
       )}
 
       {activeTab === 'chart' && (
@@ -702,6 +696,80 @@ function FundamentalWorkspace({
   )
 }
 
+function OverviewWorkspace({
+  ticker,
+  quote,
+  displayedQuote,
+  marginInfo,
+  fallbackType,
+  analysisDate,
+  loading,
+  classifications,
+}: {
+  ticker: string
+  quote: StockQuote | null
+  displayedQuote: StockQuote | null
+  marginInfo: StockMarginInfo | null
+  fallbackType?: string | null
+  analysisDate: string | null
+  loading: boolean
+  classifications: {
+    marketSegment?: string | null
+    sector17?: string | null
+    sector33?: string | null
+    majorCategory?: string | null
+    subIndustry?: string | null
+  }
+}) {
+  const [physicalMomentum, setPhysicalMomentum] = useState<PhysicalMomentumResponse | null>(null)
+  const [physicalMomentumLoading, setPhysicalMomentumLoading] = useState(true)
+
+  useEffect(() => {
+    const controller = new AbortController()
+    const physicalUrl = buildStockDecisionSummaryUrls(ticker, analysisDate).physical
+    setPhysicalMomentum(null)
+    setPhysicalMomentumLoading(true)
+    fetch(physicalUrl, { cache: 'no-store', signal: controller.signal })
+      .then((response) => response.ok ? response.json() : Promise.reject(new Error(`HTTP ${response.status}`)))
+      .then((value) => {
+        if (!controller.signal.aborted) setPhysicalMomentum(value as PhysicalMomentumResponse)
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (!controller.signal.aborted) setPhysicalMomentumLoading(false)
+      })
+    return () => controller.abort()
+  }, [analysisDate, ticker])
+
+  return (
+    <>
+      {!loading && !quote && (
+        <div className="card" style={missingPriceNoticeStyle}>
+          J-Quants日足の価格データを取得できませんでした。
+        </div>
+      )}
+      <OverviewBasicInfoPanel
+        ticker={ticker}
+        quote={displayedQuote}
+        marginInfo={marginInfo}
+        fallbackType={fallbackType}
+        analysisDate={analysisDate}
+        classifications={classifications}
+        physicalMomentum={physicalMomentum}
+        physicalMomentumLoading={physicalMomentumLoading}
+      />
+      <StockDecisionSummary
+        ticker={ticker}
+        analysisDate={analysisDate}
+        quote={displayedQuote}
+        variant="overview"
+        physicalMomentum={physicalMomentum}
+      />
+      <FinancialPerformanceTimeline ticker={ticker} analysisDate={analysisDate} />
+    </>
+  )
+}
+
 function OverviewBasicInfoPanel({
   ticker,
   quote,
@@ -709,6 +777,8 @@ function OverviewBasicInfoPanel({
   fallbackType,
   analysisDate,
   classifications,
+  physicalMomentum,
+  physicalMomentumLoading,
 }: {
   ticker: string
   quote: StockQuote | null
@@ -722,6 +792,8 @@ function OverviewBasicInfoPanel({
     majorCategory?: string | null
     subIndustry?: string | null
   }
+  physicalMomentum: PhysicalMomentumResponse | null
+  physicalMomentumLoading: boolean
 }) {
   return (
     <section className="card overflow-hidden">
@@ -742,7 +814,14 @@ function OverviewBasicInfoPanel({
 
       <div className="grid lg:grid-cols-2">
         <div className="border-b border-[var(--color-border-default)] p-3 lg:border-b-0 lg:border-r">
-          <BasicInfoCard ticker={ticker} quote={quote} analysisDate={analysisDate} embedded />
+          <BasicInfoCard
+            ticker={ticker}
+            quote={quote}
+            analysisDate={analysisDate}
+            physical={physicalMomentum}
+            physicalLoading={physicalMomentumLoading}
+            embedded
+          />
         </div>
         <div className="p-3">
           <MarketSnapshotCard
@@ -3691,15 +3770,18 @@ function BasicInfoCard({
   ticker,
   quote,
   analysisDate,
+  physical,
+  physicalLoading,
   embedded = false,
 }: {
   ticker: string
   quote: StockQuote | null
   analysisDate: string | null
+  physical: PhysicalMomentumResponse | null
+  physicalLoading: boolean
   embedded?: boolean
 }) {
   const [latestStage, setLatestStage] = useState<SummaryStageEntry | null>(null)
-  const [physical, setPhysical] = useState<PhysicalMomentumResponse | null>(null)
   const [ml, setMl] = useState<BasicMlResponse | null>(null)
   const [summaryLoading, setSummaryLoading] = useState(true)
   const [showSignalDetails, setShowSignalDetails] = useState(false)
@@ -3710,22 +3792,19 @@ function BasicInfoCard({
     setSummaryLoading(true)
 
     const stageParams = new URLSearchParams({ granularity: 'daily', count: '1' })
-    const physicalParams = new URLSearchParams({ market: 'JP', limit: '40' })
     const mlParams = new URLSearchParams({ ticker: code, limit: '6' })
     if (analysisDate) {
       stageParams.set('startDate', '1900-01-01')
       stageParams.set('endDate', analysisDate)
-      physicalParams.set('date', analysisDate)
       mlParams.set('date', analysisDate)
       mlParams.set('fallback', '1')
     }
 
     Promise.allSettled([
       fetch(`/api/stage-history/${encodeURIComponent(code)}?${stageParams.toString()}`, { cache: 'no-store' }).then((res) => res.ok ? res.json() : null),
-      fetch(`/api/physical-momentum/${encodeURIComponent(code)}?${physicalParams.toString()}`, { cache: 'no-store' }).then((res) => res.ok ? res.json() : null),
       fetch(`/api/ml/current-similars?${mlParams.toString()}`, { cache: 'no-store' }).then((res) => res.ok ? res.json() : null),
     ])
-      .then(([stageResult, physicalResult, mlResult]) => {
+      .then(([stageResult, mlResult]) => {
         if (cancelled) return
         if (stageResult.status === 'fulfilled') {
           const history = Array.isArray(stageResult.value?.history) ? stageResult.value.history : []
@@ -3733,7 +3812,6 @@ function BasicInfoCard({
         } else {
           setLatestStage(null)
         }
-        setPhysical(physicalResult.status === 'fulfilled' ? physicalResult.value as PhysicalMomentumResponse | null : null)
         setMl(mlResult.status === 'fulfilled' ? mlResult.value as BasicMlResponse | null : null)
       })
       .finally(() => {
@@ -3784,6 +3862,7 @@ function BasicInfoCard({
     { label: '52週高値', value: quote?.fiftyTwoWeekHigh != null ? `¥${quote.fiftyTwoWeekHigh.toLocaleString('ja-JP', { maximumFractionDigits: 1 })}` : '---' },
     { label: '52週安値', value: quote?.fiftyTwoWeekLow != null ? `¥${quote.fiftyTwoWeekLow.toLocaleString('ja-JP', { maximumFractionDigits: 1 })}` : '---' },
   ]
+  const combinedLoading = summaryLoading || physicalLoading
   const decision = buildBasicDecisionSummary(latestStage, physical, ml, quote)
   const physics = buildBasicPhysicsSummary(ml, summaryLoading)
 
@@ -3843,7 +3922,7 @@ function BasicInfoCard({
       <div style={basicStageBlockStyle}>
         <div style={basicSubHeaderStyle}>
           <strong>6ステージ</strong>
-          <span>{summaryLoading ? '読込中' : latestStage ? buildStageCode(latestStage) : '未取得'}</span>
+          <span>{combinedLoading ? '読込中' : latestStage ? buildStageCode(latestStage) : '未取得'}</span>
         </div>
         {latestStage ? (
           <div style={basicStageGridStyle}>
@@ -3852,7 +3931,7 @@ function BasicInfoCard({
             ))}
           </div>
         ) : (
-          <p style={basicMutedTextStyle}>{summaryLoading ? '最新ステージを確認しています。' : '最新ステージデータがありません。'}</p>
+          <p style={basicMutedTextStyle}>{combinedLoading ? '最新ステージを確認しています。' : '最新ステージデータがありません。'}</p>
         )}
       </div>
 

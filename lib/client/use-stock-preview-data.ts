@@ -9,6 +9,13 @@ interface CacheEntry {
   usedAt: number
 }
 
+interface PreviewState {
+  key: string
+  data: StockPreviewData | null
+  loading: boolean
+  error: string | null
+}
+
 const previewCache = new Map<string, CacheEntry>()
 const MAX_CACHE_ENTRIES = 80
 const LATEST_TTL_MS = 60_000
@@ -40,26 +47,27 @@ export function useStockPreviewData(input: {
     () => cacheKey(input.ticker, input.market, asOf, Boolean(input.includeChart)),
     [asOf, input.includeChart, input.market, input.ticker],
   )
-  const cached = previewCache.get(key)
-  const [data, setData] = useState<StockPreviewData | null>(cached && cached.expiresAt > Date.now() ? cached.data : null)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [state, setState] = useState<PreviewState>(() => {
+    const cached = previewCache.get(key)
+    return {
+      key,
+      data: cached && cached.expiresAt > Date.now() ? cached.data : null,
+      loading: false,
+      error: null,
+    }
+  })
 
   useEffect(() => {
     if (!input.enabled) return
     const hit = previewCache.get(key)
     if (hit && hit.expiresAt > Date.now()) {
       hit.usedAt = Date.now()
-      setData(hit.data)
-      setLoading(false)
-      setError(null)
+      setState({ key, data: hit.data, loading: false, error: null })
       return
     }
 
     const controller = new AbortController()
-    setData(null)
-    setLoading(true)
-    setError(null)
+    setState({ key, data: null, loading: true, error: null })
     const params = new URLSearchParams({ market: input.market })
     if (asOf) params.set('as_of', asOf)
     if (input.includeChart) params.set('include', 'chart')
@@ -78,17 +86,22 @@ export function useStockPreviewData(input: {
         const now = Date.now()
         previewCache.set(key, { data: next, expiresAt: now + (asOf ? PIT_TTL_MS : LATEST_TTL_MS), usedAt: now })
         pruneCache()
-        setData(next)
+        setState({ key, data: next, loading: false, error: null })
       })
       .catch((reason: unknown) => {
         if (controller.signal.aborted) return
-        setError(reason instanceof Error ? reason.message : 'データを取得できませんでした。')
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setLoading(false)
+        setState({
+          key,
+          data: null,
+          loading: false,
+          error: reason instanceof Error ? reason.message : 'データを取得できませんでした。',
+        })
       })
     return () => controller.abort()
   }, [asOf, input.enabled, input.includeChart, input.market, input.ticker, key])
 
-  return { data, loading, error, cacheKey: key }
+  const current = state.key === key
+    ? state
+    : { key, data: null, loading: input.enabled, error: null }
+  return { data: current.data, loading: current.loading, error: current.error, cacheKey: key }
 }

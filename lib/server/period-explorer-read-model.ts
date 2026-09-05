@@ -198,6 +198,39 @@ type BaseDbRow = Record<string, unknown> & {
   end_monthly_b: number | null
 }
 
+type EndpointDbRow = Pick<BaseDbRow, 'ticker' | 'start_close' | 'end_close'>
+type ProfileDbRow = Pick<BaseDbRow,
+  | 'ticker'
+  | 'name'
+  | 'current_shares'
+  | 'market_segment'
+  | 'margin_type'
+  | 'sector17'
+  | 'sector33'
+  | 'major_category'
+  | 'sub_industry'
+  | 'historical_status'
+>
+type TechnicalDbRow = Pick<BaseDbRow,
+  | 'ticker'
+  | 'start_ma25'
+  | 'start_ma75'
+  | 'end_ma25'
+  | 'end_ma75'
+  | 'start_daily_a'
+  | 'start_daily_b'
+  | 'start_weekly_a'
+  | 'start_weekly_b'
+  | 'start_monthly_a'
+  | 'start_monthly_b'
+  | 'end_daily_a'
+  | 'end_daily_b'
+  | 'end_weekly_a'
+  | 'end_weekly_b'
+  | 'end_monthly_a'
+  | 'end_monthly_b'
+>
+
 type RangeDbRow = {
   ticker: string
   period_high: number | null
@@ -207,6 +240,8 @@ type RangeDbRow = {
   avg_turnover: number | null
   total_turnover: number | null
 }
+
+type RangeStatsScope = 'full' | 'price' | 'volume' | 'turnover'
 
 type VolatilityDbRow = {
   ticker: string
@@ -219,7 +254,7 @@ type VolatilityDbRow = {
 
 const CALENDAR_TTL_MS = 5 * 60_000
 const RESPONSE_TTL_MS = 5 * 60_000
-const CACHE_VERSION = 4
+const CACHE_VERSION = 5
 const NIKKEI225_SET = new Set<string>(NIKKEI225_TICKERS)
 
 export class PeriodExplorerInputError extends Error {}
@@ -325,6 +360,36 @@ function emptyStockRow(row: BaseDbRow, taxonomy: PeriodExplorerTaxonomy): Period
   return rowValue
 }
 
+function applyTechnicalData(row: PeriodExplorerStockRow, value: TechnicalDbRow | undefined): void {
+  if (!value) return
+  row.startStages = stagesFromDb(value as BaseDbRow, 'start')
+  row.endStages = stagesFromDb(value as BaseDbRow, 'end')
+  row.stageCode = stageCode(row.endStages)
+  row.stageSummary = summarizeStagePeriod(row.startStages, row.endStages)
+  const startMa25 = asNumber(value.start_ma25)
+  const startMa75 = asNumber(value.start_ma75)
+  const endMa25 = asNumber(value.end_ma25)
+  const endMa75 = asNumber(value.end_ma75)
+  row.ma25DeviationPct = safeRatioPct(row.endClose, endMa25)
+  row.ma75DeviationPct = safeRatioPct(row.endClose, endMa75)
+  row.maSpreadStartPct = startMa25 != null && startMa75 != null && row.startClose > 0
+    ? Math.abs(startMa25 - startMa75) / row.startClose * 100
+    : null
+  row.maSpreadEndPct = endMa25 != null && endMa75 != null && row.endClose > 0
+    ? Math.abs(endMa25 - endMa75) / row.endClose * 100
+    : null
+  row.maConvergencePct = row.maSpreadStartPct != null && row.maSpreadEndPct != null
+    ? row.maSpreadStartPct - row.maSpreadEndPct
+    : null
+  row.maExpansionPct = row.maSpreadStartPct != null && row.maSpreadEndPct != null
+    ? row.maSpreadEndPct - row.maSpreadStartPct
+    : null
+  row.goldenCross = startMa25 != null && startMa75 != null && endMa25 != null && endMa75 != null
+    && startMa25 <= startMa75 && endMa25 > endMa75
+  row.deadCross = startMa25 != null && startMa75 != null && endMa25 != null && endMa75 != null
+    && startMa25 >= startMa75 && endMa25 < endMa75
+}
+
 export async function getPeriodExplorerCalendar(): Promise<string[]> {
   const cached = globalForPeriodExplorer.periodExplorerCalendar
   if (cached && cached.expiresAt > Date.now()) return cached.dates
@@ -388,35 +453,101 @@ export async function resolvePeriodExplorerDateRange(from?: string | null, to?: 
   }
 }
 
-async function loadBaseRows(range: PeriodExplorerDateRange, taxonomy: PeriodExplorerTaxonomy): Promise<PeriodExplorerStockRow[]> {
-  const rows = await execAll<BaseDbRow>(`
-    SELECT e.ticker,
-           COALESCE(u.name, h.name, e.ticker) AS name,
-           s.close AS start_close, e.close AS end_close,
-           u.shares_outstanding AS current_shares,
-           COALESCE(u.market_segment, h.market_segment) AS market_segment,
-           COALESCE(u.margin_type, h.margin_type) AS margin_type,
-           COALESCE(u.sector17_name, h.sector17_name) AS sector17,
-           COALESCE(u.sector33_name, h.sector33_name) AS sector33,
-           sc.major_category, sc.sub_industry, h.status AS historical_status,
-           ss.ma_25 AS start_ma25, ss.ma_75 AS start_ma75,
-           es.ma_25 AS end_ma25, es.ma_75 AS end_ma75,
-           ss.daily_a_stage AS start_daily_a, ss.daily_b_stage AS start_daily_b,
-           ss.weekly_a_stage AS start_weekly_a, ss.weekly_b_stage AS start_weekly_b,
-           ss.monthly_a_stage AS start_monthly_a, ss.monthly_b_stage AS start_monthly_b,
-           es.daily_a_stage AS end_daily_a, es.daily_b_stage AS end_daily_b,
-           es.weekly_a_stage AS end_weekly_a, es.weekly_b_stage AS end_weekly_b,
-           es.monthly_a_stage AS end_monthly_a, es.monthly_b_stage AS end_monthly_b
-    FROM ohlcv_daily s
-    INNER JOIN ohlcv_daily e ON e.ticker = s.ticker AND e.date = ?
-    LEFT JOIN ticker_universe u ON u.ticker = e.ticker
-    LEFT JOIN historical_universe h ON h.ticker = e.ticker
-    LEFT JOIN stock_classification sc ON sc.ticker = e.ticker
-    LEFT JOIN daily_snapshots ss ON ss.ticker = e.ticker AND ss.date = s.date
-    LEFT JOIN daily_snapshots es ON es.ticker = e.ticker AND es.date = e.date
-    WHERE s.date = ? AND s.close > 0 AND e.close > 0
-  `, [range.adoptedTo, range.adoptedFrom])
-  return rows.map((row) => emptyStockRow(row, taxonomy))
+async function loadTechnicalRows(
+  range: PeriodExplorerDateRange,
+  tickers?: string[],
+): Promise<Map<string, TechnicalDbRow>> {
+  const result = new Map<string, TechnicalDbRow>()
+  const chunks = tickers?.length
+    ? Array.from({ length: Math.ceil(tickers.length / 400) }, (_, index) => tickers.slice(index * 400, index * 400 + 400))
+    : [null]
+  for (const chunk of chunks) {
+    const tickerWhere = chunk ? `AND ss.ticker IN (${chunk.map(() => '?').join(',')})` : ''
+    const rows = await execAll<TechnicalDbRow>(`
+      SELECT ss.ticker,
+             ss.ma_25 AS start_ma25, ss.ma_75 AS start_ma75,
+             es.ma_25 AS end_ma25, es.ma_75 AS end_ma75,
+             ss.daily_a_stage AS start_daily_a, ss.daily_b_stage AS start_daily_b,
+             ss.weekly_a_stage AS start_weekly_a, ss.weekly_b_stage AS start_weekly_b,
+             ss.monthly_a_stage AS start_monthly_a, ss.monthly_b_stage AS start_monthly_b,
+             es.daily_a_stage AS end_daily_a, es.daily_b_stage AS end_daily_b,
+             es.weekly_a_stage AS end_weekly_a, es.weekly_b_stage AS end_weekly_b,
+             es.monthly_a_stage AS end_monthly_a, es.monthly_b_stage AS end_monthly_b
+      FROM daily_snapshots ss
+      INNER JOIN daily_snapshots es ON es.ticker = ss.ticker AND es.date = ?
+      WHERE ss.date = ? ${tickerWhere}
+    `, [range.adoptedTo, range.adoptedFrom, ...(chunk ?? [])])
+    for (const row of rows) result.set(String(row.ticker), row)
+  }
+  return result
+}
+
+async function loadBaseRows(
+  range: PeriodExplorerDateRange,
+  taxonomy: PeriodExplorerTaxonomy,
+  includeAllTechnical: boolean,
+): Promise<PeriodExplorerStockRow[]> {
+  const [endpoints, profiles, technical] = await Promise.all([
+    execAll<EndpointDbRow>(`
+      SELECT e.ticker, s.close AS start_close, e.close AS end_close
+      FROM ohlcv_daily s
+      INNER JOIN ohlcv_daily e ON e.ticker = s.ticker AND e.date = ?
+      WHERE s.date = ? AND s.close > 0 AND e.close > 0
+    `, [range.adoptedTo, range.adoptedFrom]),
+    execAll<ProfileDbRow>(`
+      SELECT source.ticker,
+             COALESCE(u.name, h.name, source.ticker) AS name,
+             u.shares_outstanding AS current_shares,
+             COALESCE(u.market_segment, h.market_segment) AS market_segment,
+             COALESCE(u.margin_type, h.margin_type) AS margin_type,
+             COALESCE(u.sector17_name, h.sector17_name) AS sector17,
+             COALESCE(u.sector33_name, h.sector33_name) AS sector33,
+             sc.major_category, sc.sub_industry, h.status AS historical_status
+      FROM (
+        SELECT ticker FROM historical_universe
+        UNION
+        SELECT ticker FROM ticker_universe
+      ) source
+      LEFT JOIN historical_universe h ON h.ticker = source.ticker
+      LEFT JOIN ticker_universe u ON u.ticker = source.ticker
+      LEFT JOIN stock_classification sc ON sc.ticker = source.ticker
+    `),
+    includeAllTechnical ? loadTechnicalRows(range) : Promise.resolve(new Map<string, TechnicalDbRow>()),
+  ])
+  const profilesByTicker = new Map(profiles.map((row) => [String(row.ticker), row]))
+  return endpoints.map((endpoint) => {
+    const profile = profilesByTicker.get(String(endpoint.ticker))
+    const technicalRow = technical.get(String(endpoint.ticker))
+    const source = {
+      ...endpoint,
+      name: profile?.name ?? endpoint.ticker,
+      current_shares: profile?.current_shares ?? null,
+      market_segment: profile?.market_segment ?? null,
+      margin_type: profile?.margin_type ?? null,
+      sector17: profile?.sector17 ?? null,
+      sector33: profile?.sector33 ?? null,
+      major_category: profile?.major_category ?? null,
+      sub_industry: profile?.sub_industry ?? null,
+      historical_status: profile?.historical_status ?? null,
+      start_ma25: technicalRow?.start_ma25 ?? null,
+      start_ma75: technicalRow?.start_ma75 ?? null,
+      end_ma25: technicalRow?.end_ma25 ?? null,
+      end_ma75: technicalRow?.end_ma75 ?? null,
+      start_daily_a: technicalRow?.start_daily_a ?? null,
+      start_daily_b: technicalRow?.start_daily_b ?? null,
+      start_weekly_a: technicalRow?.start_weekly_a ?? null,
+      start_weekly_b: technicalRow?.start_weekly_b ?? null,
+      start_monthly_a: technicalRow?.start_monthly_a ?? null,
+      start_monthly_b: technicalRow?.start_monthly_b ?? null,
+      end_daily_a: technicalRow?.end_daily_a ?? null,
+      end_daily_b: technicalRow?.end_daily_b ?? null,
+      end_weekly_a: technicalRow?.end_weekly_a ?? null,
+      end_weekly_b: technicalRow?.end_weekly_b ?? null,
+      end_monthly_a: technicalRow?.end_monthly_a ?? null,
+      end_monthly_b: technicalRow?.end_monthly_b ?? null,
+    } satisfies BaseDbRow
+    return emptyStockRow(source, taxonomy)
+  })
 }
 
 async function loadPitShares(asOf: string, tickers: string[]): Promise<Map<string, number>> {
@@ -481,18 +612,49 @@ async function applyPitMarketCaps(rows: PeriodExplorerStockRow[], asOf: string):
   }
 }
 
-async function loadRangeStats(from: string, to: string, tickers?: string[]): Promise<Map<string, RangeDbRow>> {
+function shortCalendarRange(from: string, to: string): boolean {
+  const fromMs = Date.parse(`${from}T00:00:00Z`)
+  const toMs = Date.parse(`${to}T00:00:00Z`)
+  return Number.isFinite(fromMs) && Number.isFinite(toMs) && toMs - fromMs <= 180 * 86_400_000
+}
+
+function rangeStatsSelect(scope: RangeStatsScope): string {
+  if (scope === 'price') {
+    return `MAX(high) AS period_high, MIN(low) AS period_low,
+            NULL AS avg_volume, NULL AS max_volume, NULL AS avg_turnover, NULL AS total_turnover`
+  }
+  if (scope === 'volume') {
+    return `NULL AS period_high, NULL AS period_low,
+            AVG(volume) AS avg_volume, MAX(volume) AS max_volume,
+            NULL AS avg_turnover, NULL AS total_turnover`
+  }
+  if (scope === 'turnover') {
+    return `NULL AS period_high, NULL AS period_low, NULL AS avg_volume, NULL AS max_volume,
+            AVG(close * volume) AS avg_turnover, SUM(close * volume) AS total_turnover`
+  }
+  return `MAX(high) AS period_high, MIN(low) AS period_low,
+          AVG(volume) AS avg_volume, MAX(volume) AS max_volume,
+          AVG(close * volume) AS avg_turnover, SUM(close * volume) AS total_turnover`
+}
+
+async function loadRangeStats(
+  from: string,
+  to: string,
+  tickers?: string[],
+  scope: RangeStatsScope = 'full',
+): Promise<Map<string, RangeDbRow>> {
   const result = new Map<string, RangeDbRow>()
   const chunks = tickers && tickers.length > 0
     ? Array.from({ length: Math.ceil(tickers.length / 400) }, (_, index) => tickers.slice(index * 400, index * 400 + 400))
     : [null]
   for (const chunk of chunks) {
     const tickerWhere = chunk ? `AND ticker IN (${chunk.map(() => '?').join(',')})` : ''
+    // SQLiteは短期全銘柄集計でも(ticker,date)主キーのskip-scanを選ぶことがある。
+    // 短期だけ(date,ticker)を指定し、長期や銘柄限定ではGROUP BYに有利な既定計画へ任せる。
+    const indexHint = !chunk && shortCalendarRange(from, to) ? 'INDEXED BY ohlcv_date_ticker_idx' : ''
     const rows = await execAll<RangeDbRow>(`
-      SELECT ticker, MAX(high) AS period_high, MIN(low) AS period_low,
-             AVG(volume) AS avg_volume, MAX(volume) AS max_volume,
-             AVG(close * volume) AS avg_turnover, SUM(close * volume) AS total_turnover
-      FROM ohlcv_daily
+      SELECT ticker, ${rangeStatsSelect(scope)}
+      FROM ohlcv_daily ${indexHint}
       WHERE date BETWEEN ? AND ? ${tickerWhere}
       GROUP BY ticker
     `, [from, to, ...(chunk ?? [])])
@@ -523,23 +685,30 @@ async function load52WeekStats(from: string, to: string, tickers?: string[]): Pr
   return result
 }
 
-async function loadVolatilityStats(from: string, to: string, tickers?: string[]): Promise<Map<string, VolatilityDbRow>> {
+async function loadVolatilityStats(
+  from: string,
+  to: string,
+  previousTradingDate: string | null,
+  tickers?: string[],
+): Promise<Map<string, VolatilityDbRow>> {
   const result = new Map<string, VolatilityDbRow>()
   const chunks = tickers && tickers.length > 0
     ? Array.from({ length: Math.ceil(tickers.length / 300) }, (_, index) => tickers.slice(index * 300, index * 300 + 300))
     : [null]
   for (const chunk of chunks) {
     const tickerWhere = chunk ? `AND ticker IN (${chunk.map(() => '?').join(',')})` : ''
+    const calculationFrom = previousTradingDate ?? from
+    const indexHint = !chunk && shortCalendarRange(calculationFrom, to) ? 'INDEXED BY ohlcv_date_ticker_idx' : ''
     const rows = await execAll<VolatilityDbRow>(`
       WITH ordered AS (
         SELECT ticker, date, open, high, low, close,
                LAG(close) OVER (PARTITION BY ticker ORDER BY date) AS previous_close,
                LAG(high) OVER (PARTITION BY ticker ORDER BY date) AS previous_high,
                LAG(low) OVER (PARTITION BY ticker ORDER BY date) AS previous_low
-        FROM ohlcv_daily
+        FROM ohlcv_daily ${indexHint}
         WHERE date BETWEEN ? AND ? ${tickerWhere}
       ), returns AS (
-        SELECT ticker, open, previous_high, previous_low,
+        SELECT ticker, date, open, previous_high, previous_low,
                CASE WHEN previous_close > 0 THEN (close / previous_close - 1.0) * 100.0 ELSE NULL END AS daily_return
         FROM ordered
       )
@@ -549,11 +718,25 @@ async function loadVolatilityStats(from: string, to: string, tickers?: string[])
              SUM(CASE WHEN previous_high IS NOT NULL AND open > previous_high THEN 1 ELSE 0 END) AS gap_up_count,
              SUM(CASE WHEN previous_low IS NOT NULL AND open < previous_low THEN 1 ELSE 0 END) AS gap_down_count
       FROM returns
+      WHERE date BETWEEN ? AND ?
       GROUP BY ticker
-    `, [from, to, ...(chunk ?? [])])
+    `, [calculationFrom, to, ...(chunk ?? []), from, to])
     for (const row of rows) result.set(String(row.ticker), row)
   }
   return result
+}
+
+function rangeStatsScopeForQuery(
+  ranking: PeriodExplorerRankingKey,
+  requiresRangeStats: boolean,
+  forceFull: boolean,
+): RangeStatsScope | null {
+  if (forceFull) return 'full'
+  if (!requiresRangeStats) return null
+  if (['max_rise', 'max_fall', 'drawdown_from_high', 'rebound_from_low', 'period_range'].includes(ranking)) return 'price'
+  if (['avg_volume', 'max_volume', 'volume_increase'].includes(ranking)) return 'volume'
+  if (['avg_turnover', 'total_turnover', 'turnover_increase'].includes(ranking)) return 'turnover'
+  return 'full'
 }
 
 function applyRangeStats(row: PeriodExplorerStockRow, current: RangeDbRow | undefined, previous?: RangeDbRow): void {
@@ -740,21 +923,32 @@ export async function queryPeriodExplorer(input: PeriodExplorerInput = {}): Prom
   if (cached) return { ...cached.payload, cacheHit: true, elapsedMs: Date.now() - startedAt }
 
   const definition = PERIOD_EXPLORER_RANKING_MAP.get(normalized.ranking)!
-  let rows = await loadBaseRows(range, normalized.taxonomy)
+  const technicalFiltersActive = PERIOD_EXPLORER_AXIS_KEYS.some((axis) => Boolean(normalized.filters.stages?.[axis]?.length))
+    || normalized.filters.ma25Position != null
+    || normalized.filters.ma75Position != null
+  const needAllTechnical = definition.category === 'technical'
+    || normalized.ranking === 'sector_stage_improve'
+    || technicalFiltersActive
+  let rows = await loadBaseRows(range, normalized.taxonomy, needAllTechnical)
   const optionRows = rows
   const rangeFiltersActive = normalized.filters.avgVolumeMin != null || normalized.filters.avgVolumeMax != null
     || normalized.filters.avgTurnoverMin != null || normalized.filters.avgTurnoverMax != null
   const rangeSortActive = normalized.sort === 'avgVolume' || normalized.sort === 'avgTurnover'
-  const needAllRangeStats = Boolean(definition.requiresRangeStats || definition.requiresPreviousRange || rangeFiltersActive || rangeSortActive || definition.resultKind === 'sectors')
+  const forceFullRangeStats = Boolean(rangeFiltersActive || rangeSortActive || definition.resultKind === 'sectors')
+  const rangeStatsScope = rangeStatsScopeForQuery(
+    normalized.ranking,
+    Boolean(definition.requiresRangeStats || definition.requiresPreviousRange),
+    forceFullRangeStats,
+  )
   const needAll52Week = Boolean(definition.requires52Week || normalized.filters.high52WithinPct != null || normalized.filters.low52WithinPct != null)
   const needAllPitShares = normalized.filters.marketCapMin != null || normalized.filters.marketCapMax != null || normalized.sort === 'marketCap'
 
   let currentStats = new Map<string, RangeDbRow>()
   let previousStats = new Map<string, RangeDbRow>()
-  if (needAllRangeStats) {
-    currentStats = await loadRangeStats(range.adoptedFrom, range.adoptedTo)
+  if (rangeStatsScope) {
+    currentStats = await loadRangeStats(range.adoptedFrom, range.adoptedTo, undefined, rangeStatsScope)
     if (definition.requiresPreviousRange && range.previousFrom && range.previousTo) {
-      previousStats = await loadRangeStats(range.previousFrom, range.previousTo)
+      previousStats = await loadRangeStats(range.previousFrom, range.previousTo, undefined, rangeStatsScope)
     }
     for (const row of rows) applyRangeStats(row, currentStats.get(row.ticker), previousStats.get(row.ticker))
   }
@@ -763,7 +957,7 @@ export async function queryPeriodExplorer(input: PeriodExplorerInput = {}): Prom
     for (const row of rows) apply52Week(row, stats.get(row.ticker))
   }
   if (definition.requiresVolatility) {
-    const stats = await loadVolatilityStats(range.adoptedFrom, range.adoptedTo)
+    const stats = await loadVolatilityStats(range.adoptedFrom, range.adoptedTo, range.previousTo)
     for (const row of rows) applyVolatility(row, stats.get(row.ticker))
   }
   if (needAllPitShares) {
@@ -804,12 +998,16 @@ export async function queryPeriodExplorer(input: PeriodExplorerInput = {}): Prom
     rows.sort((a, b) => compareRows(a, b, normalized.sort, normalized.direction))
     total = rows.length
     const pageRows = rows.slice(normalized.offset, normalized.offset + normalized.limit)
+    if (!needAllTechnical && pageRows.length > 0) {
+      const technical = await loadTechnicalRows(range, pageRows.map((row) => row.ticker))
+      for (const row of pageRows) applyTechnicalData(row, technical.get(row.ticker))
+    }
     if (!needAllPitShares && pageRows.length > 0) {
       await applyPitMarketCaps(pageRows, range.adoptedTo)
     }
-    if (!needAllRangeStats && pageRows.length > 0) {
+    if (rangeStatsScope !== 'full' && pageRows.length > 0) {
       currentStats = await loadRangeStats(range.adoptedFrom, range.adoptedTo, pageRows.map((row) => row.ticker))
-      for (const row of pageRows) applyRangeStats(row, currentStats.get(row.ticker))
+      for (const row of pageRows) applyRangeStats(row, currentStats.get(row.ticker), previousStats.get(row.ticker))
     }
     responseRows = pageRows
     responseRows.forEach((row, index) => { row.rank = normalized.offset + index + 1 })

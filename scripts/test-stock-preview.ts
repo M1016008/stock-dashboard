@@ -41,7 +41,7 @@ async function main() {
   assert.equal(pit.price, Number(directPitPrice.close))
   assert.ok(pit.priceDate <= pitDate)
   assert.ok((pit.chart?.length ?? 0) > 1200, 'Quick Chart should include enough warm-up history for the monthly 60MA')
-  assert.ok((pit.chart?.length ?? 0) <= 2600)
+  assert.ok((pit.chart?.length ?? 0) <= 1400)
   assert.equal(pit.chart?.at(-1)?.date, pit.priceDate)
   assert.ok(pit.chart?.every((row) => row.date <= pitDate))
   assert.deepEqual(pit.stages, {
@@ -64,6 +64,8 @@ async function main() {
   assert.match(hookSource, /controller\.abort\(\)/, 'stale requests must be aborted')
   assert.match(hookSource, /LATEST_TTL_MS = 60_000/)
   assert.match(hookSource, /PIT_TTL_MS = 24 \* 60 \* 60 \* 1000/)
+  assert.match(hookSource, /state\.key === key/, 'a ticker change must invalidate stale preview data synchronously')
+  assert.match(hookSource, /MAX_CACHE_ENTRIES = 80/, 'preview LRU must remain bounded')
 
   const integrationFiles = [
     'app/period-explorer/PeriodExplorerClient.tsx',

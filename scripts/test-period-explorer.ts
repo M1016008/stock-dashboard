@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { execGet } from '@/lib/db/client'
+import { execAll, execGet } from '@/lib/db/client'
 import {
   calculatePeriodPriceMetrics,
   summarizeStagePeriod,
@@ -20,6 +20,58 @@ function assertSorted(values: number[], direction: 'asc' | 'desc', label: string
   for (let index = 1; index < values.length; index += 1) {
     if (direction === 'asc') assert.ok(values[index - 1] <= values[index], `${label} must be ascending`)
     else assert.ok(values[index - 1] >= values[index], `${label} must be descending`)
+  }
+}
+
+type BoundaryPriceRow = { date: string; open: number; high: number; low: number; close: number }
+
+async function assertVolatilityBoundary(from: string, to: string) {
+  const response = await queryPeriodExplorer({ from, to, ranking: 'realized_volatility', limit: 10 })
+  const sample = stockRows(response)[0]
+  assert.ok(sample, 'volatility ranking must return a sample stock')
+  const rows = await execAll<BoundaryPriceRow>(`
+    SELECT date, open, high, low, close
+    FROM ohlcv_daily
+    WHERE ticker = ? AND date <= ?
+      AND date >= COALESCE(
+        (SELECT MAX(date) FROM ohlcv_daily WHERE ticker = ? AND date < ?),
+        ?
+      )
+    ORDER BY date
+  `, [sample.ticker, response.range.adoptedTo, sample.ticker, response.range.adoptedFrom, response.range.adoptedFrom])
+  const selectedRows = rows.filter((row) => row.date >= response.range.adoptedFrom)
+  const returns: number[] = []
+  let gapUpCount = 0
+  let gapDownCount = 0
+  for (const row of selectedRows) {
+    const index = rows.findIndex((candidate) => candidate.date === row.date)
+    const previous = index > 0 ? rows[index - 1] : null
+    if (!previous || previous.close <= 0) continue
+    returns.push((row.close / previous.close - 1) * 100)
+    if (row.open > previous.high) gapUpCount += 1
+    if (row.open < previous.low) gapDownCount += 1
+  }
+  assert.equal(returns.length, selectedRows.length, 'the selected first day must have a previous-close input')
+  const mean = returns.reduce((sum, value) => sum + value, 0) / returns.length
+  const variance = returns.reduce((sum, value) => sum + (value - mean) ** 2, 0) / (returns.length - 1)
+  const realizedVolatilityPct = Math.sqrt(variance)
+  assert.ok(Math.abs(realizedVolatilityPct - sample.realizedVolatilityPct!) < 1e-9)
+  assert.equal(sample.gapUpCount, gapUpCount)
+  assert.equal(sample.gapDownCount, gapDownCount)
+  const first = selectedRows[0]
+  const previous = rows[rows.findIndex((row) => row.date === first.date) - 1]
+  return {
+    ticker: sample.ticker,
+    from: response.range.adoptedFrom,
+    to: response.range.adoptedTo,
+    firstClose: first.close,
+    previousClose: previous.close,
+    firstReturnPct: returns[0],
+    firstGap: first.open > previous.high ? 'up' : first.open < previous.low ? 'down' : 'none',
+    observations: returns.length,
+    realizedVolatilityPct,
+    gapUpCount,
+    gapDownCount,
   }
 }
 
@@ -66,6 +118,9 @@ assert.ok(Math.abs(manualReturn - sample.periodReturnPct!) < 1e-9, 'period retur
 
 const downward = await queryPeriodExplorer({ from: from20, to: latest, ranking: 'return_down', limit: 20 })
 assertSorted(stockRows(downward).map((row) => row.rankingValue!), 'asc', 'downward ranking')
+
+const boundary = await assertVolatilityBoundary(from20, latest)
+const shiftedBoundary = await assertVolatilityBoundary(calendar[calendar.indexOf(from20) + 1], latest)
 
 const volume = await queryPeriodExplorer({ from: from20, to: latest, ranking: 'avg_volume', limit: 10 })
 const volumeSample = stockRows(volume)[0]
@@ -142,6 +197,8 @@ console.log(JSON.stringify({
   sectorSample: sectors.rows.slice(0, 3).map((row) => ({ sector: row.rowType === 'sector' ? row.sector : null, value: row.rankingValue })),
   compoundFilter: { total: filtered.total, rowsChecked: filteredRows.length },
   pitRange: pit.range,
+  volatilityBoundary: boundary,
+  shiftedVolatilityBoundary: shiftedBoundary,
 }, null, 2))
 }
 

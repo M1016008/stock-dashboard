@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict'
 import {
+  DEFAULT_STAGE_TIMELINE_DISPLAY_COUNTS,
   STAGE_HISTORY_TRADING_DAY_PRESETS,
+  STAGE_TIMELINE_DISPLAY_PRESETS,
   selectStageHistoryWindow,
 } from '@/lib/stage-history-window'
+import { sampleCalendarPeriodEnds } from '@/lib/snapshots/calendar-periods'
 
 type TestRow = {
   date: string
@@ -42,6 +45,8 @@ function assertNestedAndStable(
 }
 
 const rows = buildTradingDays(1500)
+
+// 200/600/1200はAPIが日次ソースを切り出して週/月へ集約するための窓。
 const windows = STAGE_HISTORY_TRADING_DAY_PRESETS.map((days) => (
   selectStageHistoryWindow(rows, 'weekly', days)
 ))
@@ -80,10 +85,22 @@ const recentListing = selectStageHistoryWindow(rows.slice(-83), 'daily', 1200)
 assert.equal(recentListing.metadata.sourceTradingDays, 83)
 assert.equal(recentListing.metadata.displayPoints, 83)
 
+// 現行UIの20D/60D/120D/300Dは最終描画点数であり、上のソース窓とは別契約。
+assert.deepEqual(STAGE_TIMELINE_DISPLAY_PRESETS.daily, [20, 60, 120, 300])
+assert.deepEqual(STAGE_TIMELINE_DISPLAY_PRESETS.weekly, [13, 26, 52])
+assert.deepEqual(STAGE_TIMELINE_DISPLAY_PRESETS.monthly, [12, 24, 60])
+assert.deepEqual(DEFAULT_STAGE_TIMELINE_DISPLAY_COUNTS, { daily: 60, weekly: 13, monthly: 24 })
+for (const count of STAGE_TIMELINE_DISPLAY_PRESETS.daily) {
+  const displayRows = sampleCalendarPeriodEnds(rows, 'daily', count)
+  assert.equal(displayRows.length, count)
+  assert.equal(displayRows.at(-1)?.date, rows.at(-1)?.date)
+}
+
 console.log(JSON.stringify({
   ok: true,
   unit: 'active_trading_days',
   ranges: windows.map((window) => window.metadata),
   pitEndDate,
   recentListing: recentListing.metadata,
+  uiDisplayPresets: STAGE_TIMELINE_DISPLAY_PRESETS,
 }, null, 2))

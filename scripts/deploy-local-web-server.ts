@@ -20,6 +20,9 @@ const webOrigin = `http://127.0.0.1:${process.env.STOCKBOARD_WEB_PORT || '3000'}
 const healthUrl = `${webOrigin}/api/health`
 const analogHealthUrl = `http://127.0.0.1:${process.env.STOCKBOARD_ANALOG_PORT || '3105'}/api/health`
 const requiredStagedRoutes = [
+  '/period-explorer/page',
+  '/api/period-explorer/route',
+  '/api/stock-preview/[ticker]/route',
   '/api/financial-overview/[ticker]/route',
   '/api/financial-performance-timeline/[ticker]/route',
   '/api/financial-performance-detail/[ticker]/route',

@@ -49,7 +49,8 @@ interface UsProfileRow {
 
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/
 const QUICK_VIEW_ROWS = 252
-const QUICK_CHART_ROWS = 2600
+// 月足60MAに必要な約5年分を確保しつつ、popoverへ全履歴を送らない。
+const QUICK_CHART_ROWS = 1400
 
 export class StockPreviewInputError extends Error {}
 
