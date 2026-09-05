@@ -258,6 +258,18 @@ async function main() {
       throw new Error('Critical market data refresh did not reach the expected trading date')
     }
 
+    // Price publication and Valuation/Screening Serving form one release unit.
+    // These steps must run even when the optional heavy-refresh window is closed.
+    await runRequired('scripts/backfill-valuation-serving.ts', {
+      UPDATE_CHILD_TIMEOUT_MINUTES: process.env.UPDATE_VALUATION_SERVING_TIMEOUT_MINUTES ?? '30',
+    }, heartbeat)
+    await lock.heartbeat()
+    await runRequired('scripts/backfill-integrated-screener.ts', {
+      UPDATE_CHILD_TIMEOUT_MINUTES: process.env.UPDATE_INTEGRATED_SCREENER_TIMEOUT_MINUTES ?? '10',
+      INTEGRATED_SCREENER_FORCE: '1',
+    }, heartbeat)
+    await lock.heartbeat()
+
     // Keep serving ML in lockstep with the newly published JP price date. The
     // full retraining/governance path remains weekly; this is a bounded delta
     // refresh that must finish before candidates are shown as current.
@@ -305,6 +317,9 @@ async function main() {
         }],
         ['serving-backtest', 'scripts/build-serving-backtest.ts', {}],
         ['serving-stock', 'scripts/build-serving-stock.ts', {}],
+        ['saved-screening-evaluations', 'scripts/evaluate-saved-screeners.ts', {
+          UPDATE_CHILD_TIMEOUT_MINUTES: process.env.UPDATE_SAVED_SCREENING_TIMEOUT_MINUTES ?? '10',
+        }],
       ]
 
       for (const [label, script, env] of optionalScripts) {

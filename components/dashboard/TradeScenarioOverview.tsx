@@ -2,6 +2,7 @@ import Link from 'next/link'
 import { ArrowUpRight } from 'lucide-react'
 import { ArchiveTradeScenarioButton } from '@/components/dashboard/ArchiveTradeScenarioButton'
 import { StageTag } from '@/components/ui/StageTag'
+import { StockPreviewTrigger } from '@/components/stock-preview/StockPreviewTrigger'
 import { getTradeScenarioOverview } from '@/lib/trade-scenarios/server'
 import type { TradeScenarioDirection, TradeScenarioOverviewItem } from '@/lib/trade-scenarios/types'
 
@@ -113,6 +114,7 @@ function ScenarioListRow({ item }: { item: TradeScenarioOverviewItem }) {
             <span className="max-w-[240px] truncate text-[12px] font-bold text-[var(--color-text-primary)]">
               {item.name ?? item.ticker}
             </span>
+            <StockPreviewTrigger ticker={item.ticker} analysisDate={item.currentDate ?? item.anchorDate} context="home" />
           </div>
           <div className="mt-1.5 text-[10px] font-semibold text-[var(--color-text-tertiary)]">
             {item.anchorDate}基準 / {item.horizonDays}営業日 / 残り{item.outcome.remainingDays}営業日

@@ -20,6 +20,7 @@ import { IndustryBadges } from '@/components/ui/IndustryBadges'
 import { MarginBadges } from '@/components/ui/MarginBadges'
 import { StageDots } from '@/components/ui/StageDots'
 import { BacktestHighlightChart, type HighlightChartPoint } from '@/components/charts/BacktestHighlightChart'
+import { StockPreviewTrigger } from '@/components/stock-preview/StockPreviewTrigger'
 
 type DateOption = {
   date: string
@@ -862,7 +863,10 @@ export default function BacktestPage() {
                       <Fragment key={key}>
                         <tr>
                           <td>
-                            <Link href={`/stock/${row.ticker}`} className="bt-code">{row.ticker}</Link>
+                            <span className="inline-flex items-center gap-1">
+                              <Link href={`/stock/${row.ticker}?date=${encodeURIComponent(row.date)}#overview`} className="bt-code">{row.ticker}</Link>
+                              <StockPreviewTrigger ticker={row.ticker} analysisDate={row.date} context="backtest" />
+                            </span>
                           </td>
                           <td>
                             <div className="bt-name">{row.name ?? row.ticker}</div>

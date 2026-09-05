@@ -4,19 +4,12 @@ import {
   type JFinsSummaryRow,
   type JMarginAlertRow,
 } from '@/lib/jquants'
+import { upsertFinancialFoundationRows } from '@/lib/server/financial-foundation-store'
 
 function numberOrNull(value: string | number | null | undefined): number | null {
   if (value === '' || value == null) return null
   const parsed = Number(value)
   return Number.isFinite(parsed) ? parsed : null
-}
-
-function firstNumber(...values: Array<string | number | null | undefined>): number | null {
-  for (const value of values) {
-    const parsed = numberOrNull(value)
-    if (parsed != null) return parsed
-  }
-  return null
 }
 
 function disclosureNo(row: JFinsSummaryRow): string {
@@ -53,6 +46,9 @@ export async function upsertFinancialSummaryRows(
   rows: JFinsSummaryRow[],
   importedAt = Math.floor(Date.now() / 1000),
 ): Promise<number> {
+  // Keep the legacy summary table for existing readers, while the normalized
+  // foundation preserves current/next forecasts and every disclosure snapshot.
+  await upsertFinancialFoundationRows(rows, importedAt)
   let inserted = 0
   for (const row of rows) {
     if (!row.DiscDate || !row.Code) continue
@@ -125,11 +121,11 @@ export async function upsertFinancialSummaryRows(
         numberOrNull(row.CashEq),
         numberOrNull(row.DivAnn),
         numberOrNull(row.PayoutRatioAnn),
-        firstNumber(row.FSales, row.NxFSales),
-        firstNumber(row.FOP, row.NxFOP),
-        firstNumber(row.FNP, row.NxFNp),
-        firstNumber(row.FEPS, row.NxFEPS),
-        firstNumber(row.FDivAnn, row.NxFDivAnn),
+        numberOrNull(row.FSales),
+        numberOrNull(row.FOP),
+        numberOrNull(row.FNP),
+        numberOrNull(row.FEPS),
+        numberOrNull(row.FDivAnn),
         importedAt,
       ],
     })

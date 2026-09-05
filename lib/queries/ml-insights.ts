@@ -329,6 +329,7 @@ export async function getCurrentSimilars(params: {
   ticker?: string | null
   date?: string | null
   limit?: number
+  computedAtOrBeforeEpoch?: number | null
 } = {}): Promise<{ asOfDate: string | null; rows: CurrentSimilarInsight[] }> {
   const asOfDate = params.date ?? await latestCompleteSimilarDate()
   if (!asOfDate) return { asOfDate: null, rows: [] }
@@ -336,7 +337,9 @@ export async function getCurrentSimilars(params: {
   const ticker = params.ticker?.trim()
   const where = ticker ? 'as_of_date = ? AND base_ticker = ?' : 'as_of_date = ?'
   const args: Array<string | number> = ticker ? [asOfDate, ticker] : [asOfDate]
-  const filteredWhere = `${where} AND similarity_score >= ?`
+  const createdClause = params.computedAtOrBeforeEpoch == null ? '' : ' AND computed_at <= ?'
+  if (params.computedAtOrBeforeEpoch != null) args.push(params.computedAtOrBeforeEpoch)
+  const filteredWhere = `${where}${createdClause} AND similarity_score >= ?`
   let rows = await execAll<SimilarRow>(
     `
     SELECT as_of_date, base_ticker, rank, similar_ticker, similarity_score,
@@ -353,8 +356,8 @@ export async function getCurrentSimilars(params: {
       `
       SELECT as_of_date, base_ticker, rank, similar_ticker, similarity_score,
              base_direction, similar_direction, payload_json, reason_json
-      FROM serving_current_similars
-      WHERE ${where}
+    FROM serving_current_similars
+      WHERE ${where}${createdClause}
         AND similarity_score >= ?
       ORDER BY rank ASC
       LIMIT ?
@@ -870,6 +873,9 @@ export async function getMlPredictionHistory(params: {
 }): Promise<{ ticker: string; rows: MlPredictionHistoryRow[] }> {
   const ticker = params.ticker.replace(/\.T$/i, '').trim()
   const limit = Math.min(300, Math.max(1, params.limit ?? 80))
+  const cutoffEpoch = params.date
+    ? Math.floor(Date.parse(`${params.date}T23:59:59.999+09:00`) / 1000)
+    : null
   const rows = await execAll<{
     as_of_date: string
     horizon_days: number
@@ -891,17 +897,22 @@ export async function getMlPredictionHistory(params: {
            p.model_name, p.explanation_json,
            o.return_pct, o.max_return_pct, o.min_return_pct, o.hit_label, o.miss_label, o.outcome_json
     FROM ml_predictions p
+    LEFT JOIN ml_models m ON m.model_name = p.model_name
     LEFT JOIN ml_prediction_outcomes o
       ON o.as_of_date = p.as_of_date
      AND o.horizon_days = p.horizon_days
      AND o.direction = p.direction
      AND o.ticker = p.ticker
+     ${params.date ? 'AND o.evaluated_at <= ?' : ''}
     WHERE p.ticker = ?
       ${params.date ? 'AND p.as_of_date <= ?' : ''}
+      ${params.date ? 'AND p.created_at <= ? AND m.trained_at <= ?' : ''}
     ORDER BY p.as_of_date DESC, p.horizon_days ASC, p.direction ASC
     LIMIT ?
     `,
-    params.date ? [ticker, params.date, limit] : [ticker, limit],
+    params.date
+      ? [cutoffEpoch!, ticker, params.date, cutoffEpoch!, cutoffEpoch!, limit]
+      : [ticker, limit],
   )
   return {
     ticker,

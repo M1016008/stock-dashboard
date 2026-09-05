@@ -3,18 +3,20 @@
 
 import { NextResponse } from 'next/server'
 import { execGet, ensureReady } from '@/lib/db/client'
+import { isTickerInUniverse, parseUniverseFilter } from '@/lib/market-universe'
 import { decodePathSegment } from '@/lib/url-path'
 
 export const dynamic = 'force-dynamic'
 
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ ticker: string }> },
 ) {
   try {
     await ensureReady()
     const { ticker } = await params
     const decoded = decodePathSegment(ticker)
+    const universe = parseUniverseFilter(new URL(request.url).searchParams.get('universe'))
     // .T サフィックスが無い場合（例: "7203"）は補完して両方試す
     const candidates = decoded.endsWith('.T')
       ? [decoded]
@@ -70,8 +72,17 @@ export async function GET(
       )
       if (row) break
     }
-    if (!row) return NextResponse.json({ master: null })
-    return NextResponse.json({ master: row })
+    if (!row) {
+      return NextResponse.json({
+        master: null,
+        eligible: isTickerInUniverse(decoded, universe),
+      })
+    }
+    const resolvedTicker = typeof row.ticker === 'string' ? row.ticker : decoded
+    return NextResponse.json({
+      master: row,
+      eligible: isTickerInUniverse(resolvedTicker, universe),
+    })
   } catch (error) {
     return NextResponse.json({ error: (error as Error).message }, { status: 500 })
   }

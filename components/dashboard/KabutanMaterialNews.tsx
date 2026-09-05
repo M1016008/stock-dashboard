@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import { StockPreviewTrigger } from '@/components/stock-preview/StockPreviewTrigger'
 import { Card, CardHeader } from '@/components/ui/Card'
 import {
   getKabutanGoodBadDisclosureNews,
@@ -239,7 +240,10 @@ function ArticleStockTable({
               </td>
               <td className="px-3 py-2">
                 <div className="grid gap-1">
-                  <span className="text-[12px] font-black text-[var(--color-brand-900)]">{row.name}</span>
+                  <span className="flex min-w-0 items-center gap-1">
+                    <span className="min-w-0 truncate text-[12px] font-black text-[var(--color-brand-900)]">{row.name}</span>
+                    <StockPreviewTrigger ticker={row.ticker} context="home" />
+                  </span>
                   <span className={`w-fit rounded-full border px-2 py-0.5 text-[10px] font-black ${materialToneClass(row.materialTone)}`}>
                     {materialToneLabel(row.materialTone)}
                   </span>
@@ -423,14 +427,16 @@ function CompactNewsList({
                 {stocks.length > 0 && (
                   <div className="mt-1 flex min-w-0 flex-wrap gap-1">
                     {stocks.map((stock) => (
-                      <Link
-                        key={`${article.articleId}-${stock.ticker}`}
-                        href={`/stock/${encodeURIComponent(stock.ticker)}`}
-                        prefetch={false}
-                        className="border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-1.5 py-0.5 text-[10px] font-black text-[var(--color-brand-800)] hover:bg-white"
-                      >
-                        {stock.ticker} {stock.name}
-                      </Link>
+                      <span key={`${article.articleId}-${stock.ticker}`} className="inline-flex min-w-0 items-center gap-0.5 border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] pl-1.5 pr-0.5 text-[10px] font-black text-[var(--color-brand-800)]">
+                        <Link
+                          href={`/stock/${encodeURIComponent(stock.ticker)}`}
+                          prefetch={false}
+                          className="min-w-0 truncate py-0.5 hover:text-[var(--color-market-red)]"
+                        >
+                          {stock.ticker} {stock.name}
+                        </Link>
+                        <StockPreviewTrigger ticker={stock.ticker} context="home" />
+                      </span>
                     ))}
                   </div>
                 )}

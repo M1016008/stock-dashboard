@@ -16,8 +16,25 @@ const livePath = path.join(cwd, liveName)
 const stagePath = path.join(cwd, stageName)
 const previousPath = path.join(cwd, previousName)
 const legacyPath = path.join(cwd, '.next')
-const healthUrl = `http://127.0.0.1:${process.env.STOCKBOARD_WEB_PORT || '3000'}/api/health`
+const webOrigin = `http://127.0.0.1:${process.env.STOCKBOARD_WEB_PORT || '3000'}`
+const healthUrl = `${webOrigin}/api/health`
 const analogHealthUrl = `http://127.0.0.1:${process.env.STOCKBOARD_ANALOG_PORT || '3105'}/api/health`
+const requiredStagedRoutes = [
+  '/api/financial-overview/[ticker]/route',
+  '/api/financial-performance-timeline/[ticker]/route',
+  '/api/financial-performance-detail/[ticker]/route',
+  '/api/financial-detail/[ticker]/route',
+  '/api/valuation-detail/[ticker]/route',
+  '/api/shareholder-returns/[ticker]/route',
+  '/api/company-information/[ticker]/route',
+  '/api/similarity-comparison/[ticker]/route',
+  '/api/integrated-screener/route',
+  '/api/integrated-screener/reason/route',
+  '/api/integrated-screener/interpret/route',
+  '/api/integrated-screener/saved/route',
+  '/api/integrated-screener/saved/[id]/route',
+  '/api/integrated-screener/saved/[id]/reason/route',
+] as const
 
 function removeGenerated(pathname: string): void {
   fs.rmSync(pathname, { recursive: true, force: true })
@@ -45,6 +62,16 @@ function waitForHealth(url: string, timeoutSeconds = 60): boolean {
   return false
 }
 
+function assertRequiredRoutes(buildPath: string): void {
+  const manifestPath = path.join(buildPath, 'server', 'app-paths-manifest.json')
+  if (!fs.existsSync(manifestPath)) throw new Error(`Staged route manifest is missing: ${manifestPath}`)
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as Record<string, string>
+  const missing = requiredStagedRoutes.filter((route) => !manifest[route])
+  if (missing.length > 0) {
+    throw new Error(`Staged build is missing required Phase 1-13 routes: ${missing.join(', ')}`)
+  }
+}
+
 removeGenerated(stagePath)
 runNpm('test:layout-shell')
 runNpm('test:status-health')
@@ -68,6 +95,7 @@ runNpm('build', {
 if (!fs.existsSync(path.join(stagePath, 'BUILD_ID'))) {
   throw new Error(`Staged build is incomplete: ${stagePath}`)
 }
+assertRequiredRoutes(stagePath)
 
 removeGenerated(previousPath)
 const hadPreviousBuild = fs.existsSync(livePath)
@@ -82,6 +110,10 @@ try {
   if (!waitForHealth(analogHealthUrl)) {
     throw new Error(`Analog worker did not recover within 60 seconds: ${analogHealthUrl}`)
   }
+  runNpm('test:site-smoke', {
+    ...process.env,
+    STOCKBOARD_SMOKE_BASE_URL: webOrigin,
+  })
   console.log(`deployed: ${livePath}`)
   console.log(`health: ${healthUrl}`)
   console.log(`analog health: ${analogHealthUrl}`)

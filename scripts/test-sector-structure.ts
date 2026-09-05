@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict'
 import { getStageTransitionDirection } from '@/lib/hex-stage'
-import { calculateGroupStructure, propagationFromAxisMomentum } from '@/lib/sector-structure'
+import {
+  calculateDirectionalStageAlignment,
+  calculateGroupStructure,
+  calculateTrendStructureMetrics,
+  propagationFromAxisMomentum,
+  trendStructureBand,
+} from '@/lib/sector-structure'
 
 // Stage番号の昇順は改善順ではない。MA構造の意味に沿う遷移を固定する。
 assert.equal(getStageTransitionDirection(1, 2), 'deteriorate')
@@ -50,5 +56,26 @@ const propagation = propagationFromAxisMomentum({
 assert.equal(propagation.direction, 'improving')
 assert.equal(propagation.phase, 3)
 assert.match(propagation.label, /日足A → 日足B → 週足A/)
+
+const trend = calculateTrendStructureMetrics({
+  stages: { dailyA: 1, dailyB: 1, weeklyA: 1, weeklyB: 1, monthlyA: 1, monthlyB: 1 },
+  ma: { ma5: 104, ma25: 103, ma75: 102, ma300: 101 },
+  previousMa: { ma5: 100, ma25: 100, ma75: 100, ma300: 100 },
+})
+assert.equal(trend.stageScore, 100)
+assert.equal(trend.maUpCount, 4)
+assert.equal(trend.maDirectionScore, 100)
+assert.equal(trend.trendScore, 100)
+assert.equal(trendStructureBand(trend.trendScore)?.key, 'strong_up')
+assert.equal(trendStructureBand(60)?.key, 'up')
+assert.equal(trendStructureBand(50)?.key, 'neutral')
+assert.equal(trendStructureBand(40)?.key, 'down')
+assert.equal(trendStructureBand(20)?.key, 'strong_down')
+assert.ok(calculateDirectionalStageAlignment({ weeklyA: 1, weeklyB: 1, monthlyA: 1, monthlyB: 1 }, 'up') > 90)
+assert.equal(calculateTrendStructureMetrics({
+  stages: {},
+  ma: { ma5: 104, ma25: 103, ma75: 102, ma300: 101 },
+  previousMa: { ma5: 100, ma25: 100, ma75: 100, ma300: 100 },
+}).trendScore, null)
 
 console.log('sector structure tests passed')

@@ -1,7 +1,7 @@
 // components/stock/StageTimeline.tsx
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { STAGE_BORDER_COLORS, STAGE_LABELS } from '@/lib/hex-stage'
 import type { MarketCode } from '@/lib/markets'
 
@@ -64,6 +64,7 @@ const PRESETS: Record<Granularity, { label: string; count: number }[]> = {
     { label: '20D', count: 20 },
     { label: '60D', count: 60 },
     { label: '120D', count: 120 },
+    { label: '300D', count: 300 },
   ],
   weekly: [
     { label: '13W', count: 13 },
@@ -101,34 +102,52 @@ export function StageTimeline({
   const [error, setError] = useState('')
   const [granularity, setGranularity] = useState<Granularity>('weekly')
   const [count, setCount] = useState(DEFAULT_COUNTS.weekly)
+  const timelineScrollRef = useRef<HTMLDivElement>(null)
 
   const selectedGranularity = GRANULARITIES.find((item) => item.key === granularity) ?? GRANULARITIES[1]
 
   useEffect(() => {
-    let cancelled = false
+    const controller = new AbortController()
     setLoading(true)
     setError('')
+    setEntries([])
     const params = new URLSearchParams({
       market,
       granularity,
       count: String(count),
     })
     if (analysisDate) {
-      params.set('startDate', '1900-01-01')
       params.set('endDate', analysisDate)
     }
-    fetch(`/api/stage-history/${encodeURIComponent(ticker)}?${params.toString()}`, { cache: 'no-store' })
-      .then((r) => r.json())
+    fetch(`/api/stage-history/${encodeURIComponent(ticker)}?${params.toString()}`, {
+      cache: 'no-store',
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        const data = await response.json()
+        if (!response.ok) throw new Error(data.message ?? data.error ?? `HTTP ${response.status}`)
+        return data
+      })
       .then((d) => {
-        if (cancelled) return
         if (d.error) throw new Error(d.error)
         setEntries(d.history ?? [])
         setActiveStartDate(d.activeStartDate ?? null)
       })
-      .catch((e) => { if (!cancelled) setError((e as Error).message) })
-      .finally(() => { if (!cancelled) setLoading(false) })
-    return () => { cancelled = true }
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return
+        setError(error instanceof Error ? error.message : String(error))
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false)
+      })
+    return () => controller.abort()
   }, [analysisDate, ticker, market, granularity, count])
+
+  useEffect(() => {
+    const container = timelineScrollRef.current
+    if (!container || entries.length === 0) return
+    container.scrollLeft = container.scrollWidth
+  }, [entries])
 
   function selectGranularity(next: Granularity) {
     setGranularity(next)
@@ -183,12 +202,14 @@ export function StageTimeline({
               </button>
             ))}
           </div>
-          <div style={segmentedControl}>
+          <div style={segmentedControl} aria-label="表示期間">
             {PRESETS[granularity].map((preset) => (
               <button
                 key={preset.label}
+                type="button"
                 onClick={() => setCount(preset.count)}
                 style={segmentButton(count === preset.count)}
+                title={`直近${preset.count}${granularity === 'daily' ? '営業日' : granularity === 'weekly' ? '週' : 'か月'}を表示`}
               >
                 {preset.label}
               </button>
@@ -204,8 +225,8 @@ export function StageTimeline({
       ) : entries.length === 0 ? (
         <p style={{ fontSize: '11px', color: 'var(--text-muted)', textAlign: 'center', padding: '16px 0' }}>データなし</p>
       ) : (
-        <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '10px' }}>
+        <div ref={timelineScrollRef} style={{ overflowX: 'auto' }}>
+          <table style={{ width: 'max-content', minWidth: '100%', borderCollapse: 'collapse', fontSize: '10px' }}>
             <thead>
               <tr>
                 <th style={{ ...stickyTh, textAlign: 'left' }}>系統</th>

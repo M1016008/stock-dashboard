@@ -4,6 +4,7 @@
 import Link from 'next/link'
 import { Card, CardHeader } from '@/components/ui/Card'
 import { StageTag } from '@/components/ui/StageTag'
+import { StockPreviewTrigger } from '@/components/stock-preview/StockPreviewTrigger'
 import { getCachedCreditShortDashboard } from '@/lib/queries/dashboard-cache'
 
 function fmtM(v: number | null | undefined) {
@@ -86,15 +87,18 @@ export async function CreditShortPanel() {
                 {data.stockRows.map((row) => (
                   <tr key={row.ticker} className="hover:bg-[var(--color-surface-subtle)]">
                     <td className="px-3 py-2.5">
-                      <Link
-                        href={stockHref(row.ticker)}
-                        prefetch={false}
-                        className="block max-w-[200px] rounded-[4px] px-1 py-0.5 hover:bg-white hover:shadow-sm"
-                        aria-label={`${row.ticker} ${row.name ?? ''} の個別銘柄ページへ移動`}
-                      >
-                        <span className="block font-bold tabular-nums text-[var(--color-brand-800)] hover:underline">{row.ticker}</span>
-                        <span className="mt-1 block truncate text-[12px] font-semibold text-[var(--color-text-primary)]">{row.name ?? row.ticker}</span>
-                      </Link>
+                      <div className="flex max-w-[230px] items-center gap-1">
+                        <Link
+                          href={stockHref(row.ticker)}
+                          prefetch={false}
+                          className="min-w-0 flex-1 rounded-[4px] px-1 py-0.5 hover:bg-white hover:shadow-sm"
+                          aria-label={`${row.ticker} ${row.name ?? ''} の個別銘柄ページへ移動`}
+                        >
+                          <span className="block font-bold tabular-nums text-[var(--color-brand-800)] hover:underline">{row.ticker}</span>
+                          <span className="mt-1 block truncate text-[12px] font-semibold text-[var(--color-text-primary)]">{row.name ?? row.ticker}</span>
+                        </Link>
+                        <StockPreviewTrigger ticker={row.ticker} context="home" />
+                      </div>
                     </td>
                     <td className="px-3 py-2.5 text-[12px] font-semibold text-[var(--color-text-secondary)]">{row.sectorName ?? 'その他'}</td>
                     <td className="px-3 py-2.5 text-right tabular-nums">

@@ -222,7 +222,7 @@ function CandidateRows({
   onToggleCompare: (candidate: HexSelectorCandidate) => void
 }) {
   if (result.candidates.length === 0) {
-    return <div className="px-4 py-10 text-center text-[12px] font-semibold text-[var(--color-text-tertiary)]">この条件に合う候補はありません。</div>
+    return <div className="px-4 py-10 text-center text-[12px] font-semibold text-[var(--color-text-tertiary)]">表示中の抽出条件を満たす銘柄はありません。</div>
   }
   return (
     <>
@@ -230,7 +230,7 @@ function CandidateRows({
         <table className="w-full min-w-[1040px] border-collapse">
           <thead>
             <tr className="bg-[var(--color-surface-subtle)] text-left text-[9px] font-bold text-[var(--color-text-tertiary)]">
-              <th className="border-b px-3 py-2">候補</th>
+              <th className="border-b px-3 py-2">銘柄</th>
               <th className="border-b px-3 py-2">6桁ステージ</th>
               <th className="border-b px-3 py-2">選別理由</th>
               <th className="border-b px-3 py-2">警戒点</th>
@@ -426,6 +426,15 @@ export function HexSectorSelector({
     : board.taxonomy === '17'
       ? { taxonomy: '33', parent: selectedRow.groupName, label: '33業種で絞る' }
       : null
+  const directionLabel = direction === 'up' ? '上昇' : '下落'
+  const modeLabel = mode === 'emerging' ? '初動' : '継続'
+  const candidateTitle = `${selectedRow.groupName}の${directionLabel}${modeLabel}候補`
+  const eligibilityLabel = mode === 'emerging'
+    ? `6軸のうち${direction === 'up' ? '改善' : '悪化'}遷移が1つ以上`
+    : `週足・月足の${directionLabel}整合度が58%以上`
+  const rankingLabel = mode === 'emerging'
+    ? `${direction === 'up' ? '改善' : '悪化'}軸数 → 5条件一致数 → MA方向 → PMS → ML順位`
+    : `上位足整合度 → 5条件一致数 → MA方向 → PMS → ML順位`
 
   return (
     <div className="space-y-3">
@@ -485,7 +494,7 @@ export function HexSectorSelector({
                 const selected = row.groupKey === selectedRow.groupKey
                 const primary = mode === 'emerging'
                   ? `構造変化 ${fmtSigned(row.transitionChangeScore)}`
-                  : `構造強度 ${fmt(row.strengthScore)}`
+                  : `トレンド構造 ${fmt(row.trendStructureScore)}`
                 return (
                   <Link key={row.groupKey} href={href({ group: row.groupKey, parent: board.parentFilter }, true)} className={`grid grid-cols-[20px_minmax(0,1fr)_72px] items-center gap-2 border-b border-[var(--color-border-soft)] px-3 py-2.5 ${selected ? 'bg-white shadow-[inset_3px_0_0_var(--color-brand-700)]' : 'hover:bg-white'}`}>
                     <span className="text-[9px] font-bold tabular-nums text-[var(--color-text-tertiary)]">{index + 1}</span>
@@ -514,7 +523,8 @@ export function HexSectorSelector({
                 <h3 className="truncate text-[13px] font-bold text-[var(--color-brand-900)]">{selectedRow.groupName}</h3>
                 <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-[9px] font-semibold text-[var(--color-text-tertiary)]">
                   <span>銘柄数 <b className="text-[var(--color-text-primary)]">{selectedRow.nStocks}</b></span>
-                  <span>構造強度 <b className="text-[var(--color-text-primary)]">{fmt(selectedRow.strengthScore)}</b></span>
+                  <span>トレンド構造 <b className="text-[var(--color-text-primary)]">{fmt(selectedRow.trendStructureScore)}</b></span>
+                  <span>ステージ構成 <b className="text-[var(--color-text-primary)]">{fmt(selectedRow.strengthScore)}</b></span>
                   <span>構造変化 <b className={tone(selectedRow.transitionChangeScore)}>{fmtSigned(selectedRow.transitionChangeScore)}</b></span>
                   <span>10日 <b className={tone(selectedRow.momentum10d)}>{fmtSigned(selectedRow.momentum10d)}</b></span>
                   <span>{selectedRow.propagationLabel}</span>
@@ -534,8 +544,12 @@ export function HexSectorSelector({
       <section className="overflow-hidden rounded-[8px] border border-[var(--color-border-default)] bg-white shadow-[var(--shadow-card)]">
         <header className="flex flex-col gap-2 border-b border-[var(--color-border-default)] px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h2 className="text-[13px] font-bold text-[var(--color-brand-900)]">条件に合う候補銘柄</h2>
-            <p className="mt-0.5 text-[9px] font-semibold text-[var(--color-text-tertiary)]">{candidates ? `${candidates.total}候補の上位${candidates.candidates.length}件` : '候補を計算できませんでした'} · 単一スコアではなく5条件を個別照合</p>
+            <h2 className="text-[13px] font-bold text-[var(--color-brand-900)]">{candidateTitle}</h2>
+            <p className="mt-1 text-[9px] font-semibold leading-relaxed text-[var(--color-text-tertiary)]">
+              <span className="font-bold text-[var(--color-text-secondary)]">抽出条件:</span> {eligibilityLabel}
+              <span className="mx-1.5">/</span><span className="font-bold text-[var(--color-text-secondary)]">順位付け:</span> {rankingLabel}
+            </p>
+            <p className="mt-0.5 text-[9px] font-semibold text-[var(--color-text-tertiary)]">{candidates ? `抽出${candidates.total}銘柄の上位${candidates.candidates.length}件` : '抽出結果を計算できませんでした'} · 5条件の合否は各銘柄に表示</p>
           </div>
           <button type="button" onClick={() => setAdvancedOpen((value) => !value)} className="inline-flex h-8 items-center justify-center gap-1.5 rounded-[5px] border border-[var(--color-border-default)] px-3 text-[10px] font-bold text-[var(--color-brand-800)] hover:bg-[var(--color-surface-subtle)]">
             <SlidersHorizontal size={13} />{advancedOpen ? '高度なHEX条件を閉じる' : '高度なHEX条件を調整'}

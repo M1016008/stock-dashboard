@@ -12,6 +12,7 @@ import {
   Trash2,
 } from 'lucide-react'
 import { WatchlistButton } from '@/components/ui/WatchlistButton'
+import { StockPreviewTrigger } from '@/components/stock-preview/StockPreviewTrigger'
 import { useWatchlistStore } from '@/lib/watchlist-store'
 import {
   getCompareSymbols,
@@ -397,13 +398,16 @@ function WatchSection({
                       <WatchlistButton ticker={row.ticker} market={row.market} size="sm" />
                     </td>
                     <td style={td}>
-                      <Link
-                        href={href}
-                        prefetch={false}
-                        className="font-[var(--font-mono)] font-bold text-[var(--color-brand-700)] no-underline hover:text-[var(--color-market-red)]"
-                      >
-                        {row.ticker}
-                      </Link>
+                      <span className="inline-flex items-center gap-1">
+                        <Link
+                          href={href}
+                          prefetch={false}
+                          className="font-[var(--font-mono)] font-bold text-[var(--color-brand-700)] no-underline hover:text-[var(--color-market-red)]"
+                        >
+                          {row.ticker}
+                        </Link>
+                        <StockPreviewTrigger ticker={row.ticker} market={row.market} context="watchlist" />
+                      </span>
                     </td>
                     <td style={td} className="max-w-[240px] truncate">{name}</td>
                     <td style={tdR}>{formatPrice(quote?.price, row.market)}</td>

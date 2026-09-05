@@ -337,14 +337,66 @@ export interface JFinsSummaryRow {
   PayoutRatioAnn?: string    // 配当性向
   FSales?: string            // 通期会社予想 売上高
   FOP?: string               // 通期会社予想 営業利益
+  FOdP?: string              // 通期会社予想 経常利益
   FNP?: string               // 通期会社予想 純利益
   FEPS?: string              // 通期会社予想 EPS
   FDivAnn?: string           // 通期会社予想 年間配当
   NxFSales?: string          // 次期会社予想 売上高
   NxFOP?: string             // 次期会社予想 営業利益
+  NxFOdP?: string            // 次期会社予想 経常利益
   NxFNp?: string             // 次期会社予想 純利益
+  NxFNP?: string             // API表記差への互換エイリアス
   NxFEPS?: string            // 次期会社予想 EPS
   NxFDivAnn?: string         // 次期会社予想 年間配当
+  NxtFYSt?: string           // 次期会計年度開始日
+  NxtFYEn?: string           // 次期会計年度終了日
+  FSales2Q?: string
+  FOP2Q?: string
+  FOdP2Q?: string
+  FNP2Q?: string
+  FEPS2Q?: string
+  NxFSales2Q?: string
+  NxFOP2Q?: string
+  NxFOdP2Q?: string
+  NxFNp2Q?: string
+  NxFEPS2Q?: string
+  NCSales?: string
+  NCOP?: string
+  NCOdP?: string
+  NCNP?: string
+  NCEPS?: string
+  NCTA?: string
+  NCEq?: string
+  NCEqAR?: string
+  NCBPS?: string
+  NCShEq?: string
+  NCROE?: string
+  FNCSales?: string
+  FNCOP?: string
+  FNCOdP?: string
+  FNCNP?: string
+  FNCEPS?: string
+  NxFNCSales?: string
+  NxFNCOP?: string
+  NxFNCOdP?: string
+  NxFNCNP?: string
+  NxFNCEPS?: string
+  FNCSales2Q?: string
+  FNCOP2Q?: string
+  FNCOdP2Q?: string
+  FNCNP2Q?: string
+  FNCEPS2Q?: string
+  NxFNCSales2Q?: string
+  NxFNCOP2Q?: string
+  NxFNCOdP2Q?: string
+  NxFNCNP2Q?: string
+  NxFNCEPS2Q?: string
+  FPayoutRatioAnn?: string
+  NxFPayoutRatioAnn?: string
+  RetroRst?: string | boolean
+  ChgAcEst?: string | boolean
+  ChgByASRev?: string | boolean
+  ChgNoASRev?: string | boolean
   ShOutFY: string            // 期末発行済株式数
   TrShFY: string             // 期末自己株式数
   AvgSh: string              // 期中平均株式数
@@ -403,6 +455,50 @@ export async function fetchJQuantsFinsSummaryByDate(date: string): Promise<JFins
   } while (paginationKey)
 
   return all
+}
+
+// ─────────────────────────────────────
+// API: 財務諸表詳細 (/fins/details) — Premium プラン
+// ─────────────────────────────────────
+
+export interface JFinsDetailsRow {
+  DiscDate: string
+  DiscTime: string
+  Code: string
+  DiscNo: string
+  DocType: string
+  FS: Record<string, string>
+}
+
+interface JFinsDetailsResponse {
+  data?: JFinsDetailsRow[]
+  pagination_key?: string
+  cursor?: string
+}
+
+/**
+ * J-Quantsの標準化済みBS/PL/CFを取得する。契約対象外の403は呼び出し側へ
+ * 明示的に返し、EDINET fallbackと値を混ぜない。
+ */
+export async function fetchJQuantsFinsDetails(ticker: string): Promise<JFinsDetailsRow[]> {
+  const apiKey = getApiKey()
+  const params = new URLSearchParams({ code: toJQuantsCode(ticker) })
+  const rows: JFinsDetailsRow[] = []
+  let paginationKey: string | undefined
+  do {
+    if (paginationKey) params.set('pagination_key', paginationKey)
+    const response = await fetch(`${BASE_URL}/fins/details?${params}`, {
+      headers: { 'x-api-key': apiKey },
+    })
+    if (!response.ok) {
+      const message = await response.text()
+      throw new Error(`J-Quants fins/details failed (${ticker}): HTTP ${response.status} ${message}`)
+    }
+    const payload = await response.json() as JFinsDetailsResponse
+    rows.push(...(payload.data ?? []))
+    paginationKey = payload.pagination_key
+  } while (paginationKey)
+  return rows
 }
 
 // ─────────────────────────────────────

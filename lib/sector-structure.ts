@@ -45,6 +45,126 @@ export type GroupStageInput = {
   previousStages: Partial<Record<SectorStructureAxisKey, number | null>>
 }
 
+export type MovingAverageSet = {
+  ma5: number | null
+  ma25: number | null
+  ma75: number | null
+  ma300: number | null
+}
+
+export type TrendStructureBand = 'strong_up' | 'up' | 'neutral' | 'down' | 'strong_down'
+
+export type TrendStructureMetrics = {
+  stageScore: number | null
+  maDirectionScore: number | null
+  trendScore: number | null
+  maUpCount: number
+  maDownCount: number
+  maFlatCount: number
+  maValidCount: number
+}
+
+export const TREND_STRUCTURE_BANDS: Array<{
+  key: TrendStructureBand
+  label: string
+  shortLabel: string
+  min: number
+  max: number
+}> = [
+  { key: 'strong_up', label: '強い上昇構造', shortLabel: '強い上昇', min: 80, max: 100 },
+  { key: 'up', label: '上昇構造', shortLabel: '上昇', min: 60, max: 79.999 },
+  { key: 'neutral', label: '中立・移行', shortLabel: '中立', min: 40.001, max: 59.999 },
+  { key: 'down', label: '下落構造', shortLabel: '下落', min: 20.001, max: 40 },
+  { key: 'strong_down', label: '強い下落構造', shortLabel: '強い下落', min: 0, max: 20 },
+]
+
+const MA_SLOPE_DEADBAND_PCT = 0.04
+
+export function trendStructureBand(score: number | null | undefined) {
+  if (score == null || !Number.isFinite(score)) return null
+  const bounded = Math.max(0, Math.min(100, score))
+  const key: TrendStructureBand = bounded >= 80
+    ? 'strong_up'
+    : bounded >= 60
+      ? 'up'
+      : bounded > 40
+        ? 'neutral'
+        : bounded > 20
+          ? 'down'
+          : 'strong_down'
+  return TREND_STRUCTURE_BANDS.find((band) => band.key === key) ?? null
+}
+
+export function calculateStageCompositionScore(
+  stages: Partial<Record<SectorStructureAxisKey, number | null>>,
+): number | null {
+  let weightedTotal = 0
+  let weightTotal = 0
+  for (const axis of SECTOR_STRUCTURE_AXES) {
+    const stage = stages[axis.key] ?? null
+    if (!isStage(stage)) continue
+    weightedTotal += STAGE_STRUCTURE_STRENGTH[stage] * axis.weight
+    weightTotal += axis.weight
+  }
+  return weightTotal > 0 ? weightedTotal / weightTotal : null
+}
+
+function maSlopePct(current: number | null, previous: number | null) {
+  if (current == null || previous == null || previous <= 0) return null
+  return 100 * (current - previous) / previous
+}
+
+export function calculateTrendStructureMetrics({
+  stages,
+  ma,
+  previousMa,
+}: {
+  stages: Partial<Record<SectorStructureAxisKey, number | null>>
+  ma: MovingAverageSet
+  previousMa: MovingAverageSet
+}): TrendStructureMetrics {
+  const stageScore = calculateStageCompositionScore(stages)
+  const slopes = (['ma5', 'ma25', 'ma75', 'ma300'] as const)
+    .map((key) => maSlopePct(ma[key], previousMa[key]))
+    .filter((value): value is number => value != null && Number.isFinite(value))
+  const maUpCount = slopes.filter((value) => value > MA_SLOPE_DEADBAND_PCT).length
+  const maDownCount = slopes.filter((value) => value < -MA_SLOPE_DEADBAND_PCT).length
+  const maFlatCount = slopes.length - maUpCount - maDownCount
+  const maDirectionScore = slopes.length > 0
+    ? (100 * maUpCount + 50 * maFlatCount) / slopes.length
+    : null
+  const trendScore = stageScore == null
+    ? null
+    : maDirectionScore != null
+      ? 0.7 * stageScore + 0.3 * maDirectionScore
+      : stageScore
+
+  return {
+    stageScore,
+    maDirectionScore,
+    trendScore,
+    maUpCount,
+    maDownCount,
+    maFlatCount,
+    maValidCount: slopes.length,
+  }
+}
+
+export function calculateDirectionalStageAlignment(
+  stages: Partial<Record<SectorStructureAxisKey, number | null>>,
+  direction: 'up' | 'down',
+) {
+  const values = (['weeklyA', 'weeklyB', 'monthlyA', 'monthlyB'] as const)
+    .map((axis) => {
+      const stage = stages[axis] ?? null
+      return isStage(stage) ? (STAGE_STRUCTURE_STRENGTH[stage] - 50) / 50 : null
+    })
+    .filter((value): value is number => value != null && Number.isFinite(value))
+  if (values.length === 0) return 0
+  const average = values.reduce((sum, value) => sum + value, 0) / values.length
+  return Math.round(Math.max(0, Math.min(1, direction === 'up' ? (average + 1) / 2 : (1 - average) / 2)) * 100)
+}
+
 function emptyAxisSummary(): AxisStructureSummary {
   return {
     validCount: 0,

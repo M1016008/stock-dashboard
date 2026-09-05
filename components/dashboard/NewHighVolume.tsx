@@ -6,6 +6,7 @@ import { Card, CardHeader } from '@/components/ui/Card'
 import { IndustryBadges } from '@/components/ui/IndustryBadges'
 import { MarginBadges } from '@/components/ui/MarginBadges'
 import { StageTag } from '@/components/ui/StageTag'
+import { StockPreviewTrigger } from '@/components/stock-preview/StockPreviewTrigger'
 import { getCachedMarketMovers } from '@/lib/queries/dashboard-cache'
 import type { NewHighVolumeRow } from '@/lib/queries/dashboard'
 import { filterRowsByUniverse, getUniverseFilterMeta, type UniverseFilterValue } from '@/lib/market-universe'
@@ -72,11 +73,13 @@ function MoverLane({
   hint,
   rows,
   kind,
+  analysisDate,
 }: {
   title: string
   hint: string
   rows: NewHighVolumeRow[]
   kind: 'high' | 'low' | 'volume'
+  analysisDate: string | null
 }) {
   const visibleRows = rows.slice(0, MAX_INITIAL_ROWS_PER_LANE)
   const hiddenCount = Math.max(0, rows.length - visibleRows.length)
@@ -109,16 +112,14 @@ function MoverLane({
             {visibleRows.map((row) => {
               const tone = row.changePct > 0 ? 'text-[var(--color-price-up)]' : row.changePct < 0 ? 'text-[var(--color-price-down)]' : ''
               return (
-                <Link
+                <div
                   key={`${row.category}-${row.ticker}`}
-                  href={stockHref(row.ticker)}
-                  prefetch={false}
                   className="grid min-w-[800px] grid-cols-[58px_minmax(160px,1fr)_72px_178px_70px_64px_58px_96px] items-center gap-2 px-3 py-2.5 text-[13px] font-medium hover:bg-white hover:shadow-sm"
-                  aria-label={`${row.ticker} ${row.name ?? ''} の個別銘柄ページへ移動`}
                 >
-                  <span className="tabular-nums font-bold text-[var(--color-brand-800)]">{row.ticker}</span>
-                  <span className="min-w-0">
-                    <span className="block truncate font-semibold">{row.name ?? row.ticker}</span>
+                  <Link href={stockHref(row.ticker)} prefetch={false} className="tabular-nums font-bold text-[var(--color-brand-800)] hover:underline">{row.ticker}</Link>
+                  <span className="flex min-w-0 items-center gap-1">
+                    <Link href={stockHref(row.ticker)} prefetch={false} className="min-w-0 flex-1 truncate font-semibold hover:text-[var(--color-brand-700)]">{row.name ?? row.ticker}</Link>
+                    <StockPreviewTrigger ticker={row.ticker} analysisDate={analysisDate} context="home" />
                   </span>
                   <MarginBadges
                     marginType={row.marginType}
@@ -136,7 +137,7 @@ function MoverLane({
                   <span className={`text-right tabular-nums ${tone}`}>{fmtPct(row.changePct)}</span>
                   <span className="text-right tabular-nums text-[var(--color-text-secondary)]">{fmtRatio(row.volumeRatio)}</span>
                   <StageCodeTags row={row} />
-                </Link>
+                </div>
               )
             })}
             {hiddenCount > 0 && (
@@ -169,9 +170,9 @@ export async function NewHighVolume({
     <Card>
       <CardHeader title="新高値・新安値・出来高急増" hint={`${universeMeta ? `${universeMeta.shortLabel} / ` : ''}252日レンジ / 出来高30日平均比`} />
       <div className="grid grid-cols-1 gap-3 xl:grid-cols-3">
-        <MoverLane title="新高値" hint="252日高値を更新" rows={movers.newHighs} kind="high" />
-        <MoverLane title="新安値" hint="252日安値を更新" rows={movers.newLows} kind="low" />
-        <MoverLane title="出来高急増" hint="30日平均の2倍以上" rows={movers.volumeSpikes} kind="volume" />
+        <MoverLane title="新高値" hint="252日高値を更新" rows={movers.newHighs} kind="high" analysisDate={date ?? null} />
+        <MoverLane title="新安値" hint="252日安値を更新" rows={movers.newLows} kind="low" analysisDate={date ?? null} />
+        <MoverLane title="出来高急増" hint="30日平均の2倍以上" rows={movers.volumeSpikes} kind="volume" analysisDate={date ?? null} />
       </div>
     </Card>
   )

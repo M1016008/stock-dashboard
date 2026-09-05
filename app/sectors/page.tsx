@@ -1,6 +1,5 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
-import { ExternalLink } from 'lucide-react'
 import {
   getSectorAnalysisBoard,
   getSectorConstituents,
@@ -23,6 +22,7 @@ import { MlSectorRankingBoard } from '@/components/sectors/MlSectorRankingBoard'
 import { getUniverseFilterMeta, parseUniverseFilter } from '@/lib/market-universe'
 import { MarginBadges } from '@/components/ui/MarginBadges'
 import { StageTag } from '@/components/ui/StageTag'
+import { StockPreviewTrigger } from '@/components/stock-preview/StockPreviewTrigger'
 
 export const metadata: Metadata = {
   title: '業種分析 — StockBoard',
@@ -713,10 +713,10 @@ function SectorConstituentBoard({
             {result.rows.map((row) => (
               <tr key={row.ticker} className="hover:bg-[var(--color-surface-subtle)]">
                 <td className="py-2 pl-2 pr-3">
-                  <Link href={`/stock/${row.ticker}`} prefetch={false} className="inline-flex items-center gap-1 font-mono font-bold text-[var(--color-brand-900)] hover:text-[var(--color-market-red)]">
-                    {row.ticker}
-                    <ExternalLink size={11} />
-                  </Link>
+                  <span className="inline-flex items-center gap-1">
+                    <Link href={`/stock/${row.ticker}`} prefetch={false} className="font-mono font-bold text-[var(--color-brand-900)] hover:text-[var(--color-market-red)]">{row.ticker}</Link>
+                    <StockPreviewTrigger ticker={row.ticker} analysisDate={result.latestDate} context="industry" />
+                  </span>
                 </td>
                 <td className="max-w-[230px] truncate py-2 pr-3 font-semibold text-[var(--color-text-primary)]">
                   {row.name ?? row.ticker}
@@ -785,6 +785,7 @@ export default async function SectorsPage({
     structureTaxonomy?: string | string[]
     structureGroup?: string | string[]
     structureParent?: string | string[]
+    date?: string | string[]
     heatmapTaxonomy?: string | string[]
     heatmapPeriod?: string | string[]
   }>
@@ -804,6 +805,10 @@ export default async function SectorsPage({
   const structureTaxonomy = parseSectorStructureTaxonomy(firstParam(sp.structureTaxonomy))
   const structureGroup = firstParam(sp.structureGroup)
   const structureParent = firstParam(sp.structureParent)
+  const structureDateParam = firstParam(sp.date)
+  const structureDate = structureDateParam && /^\d{4}-\d{2}-\d{2}$/.test(structureDateParam)
+    ? structureDateParam
+    : null
   const heatmapTaxonomy = parseHeatmapTaxonomy(firstParam(sp.heatmapTaxonomy))
   const heatmapPeriod = parseSectorPeriod(firstParam(sp.heatmapPeriod))
   const showBuiltInPanels = heatmapTaxonomy === 'overview' || heatmapTaxonomy === '17' || heatmapTaxonomy === '33'
@@ -815,7 +820,10 @@ export default async function SectorsPage({
     resolvedStructureParent = await resolveSectorStructureParentFromGroup(structureTaxonomy, structureGroup)
     if (!resolvedStructureParent) {
       const parentTaxonomy = structureTaxonomy === 'subIndustry' ? 'major' : '17'
-      const parentBoard = await getSectorStructureBoard(parentTaxonomy, { universeFilter })
+      const parentBoard = await getSectorStructureBoard(parentTaxonomy, {
+        requestedDate: structureDate,
+        universeFilter,
+      })
       resolvedStructureParent = parentBoard.rows.find((row) => row.groupKey === parentBoard.selectedGroupKey)?.groupName ?? null
     }
   }
@@ -823,6 +831,7 @@ export default async function SectorsPage({
     ? await getSectorStructureBoard(structureTaxonomy, {
         selectedGroupKey: structureGroup,
         parentFilter: resolvedStructureParent,
+        requestedDate: structureDate,
         universeFilter,
       })
     : null
@@ -874,6 +883,7 @@ export default async function SectorsPage({
         sectorMargin: selectedMargin,
       }
     : baseSectorParams
+  const universeScopeLabel = universeMeta?.label ?? 'JP全上場銘柄'
 
   return (
     <div className="sb-page">
@@ -881,8 +891,8 @@ export default async function SectorsPage({
         <h1>{structureView ? '業種構造分析' : '業種分析ヒートマップ'}</h1>
         <p>
           {structureView
-            ? 'JP全上場銘柄の6ステージ構造を、17/33業種と四季報60分類・細分類ごとに集約して確認します。'
-            : 'J-Quantsの17/33業種分類と四季報60分類・業種細分類を使い、本日・今週・今月の強弱を一覧で確認できます。'}
+            ? `${universeScopeLabel}の6ステージ構造を、17/33業種と四季報60分類・細分類ごとに集約して確認します。`
+            : `${universeMeta ? `${universeMeta.label}を対象に、` : ''}J-Quantsの17/33業種分類と四季報60分類・業種細分類を使い、本日・今週・今月の強弱を一覧で確認できます。`}
         </p>
       </div>
 

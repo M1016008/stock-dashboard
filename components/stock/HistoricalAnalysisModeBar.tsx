@@ -115,6 +115,8 @@ export function HistoricalAnalysisModeBar({
       return
     }
     let cancelled = false
+    setReview(null)
+    onReviewChange?.(null)
     setLoading(true)
     setError('')
     const params = new URLSearchParams({ market, date: analysisDate })
@@ -151,21 +153,21 @@ export function HistoricalAnalysisModeBar({
 
   return (
     <section
-      className={`border px-3 py-3 shadow-[0_1px_3px_rgba(16,32,52,0.08)] ${
+      className={`border px-3 py-2 shadow-[0_1px_3px_rgba(16,32,52,0.08)] ${
         analysisDate
           ? 'border-amber-300 bg-amber-50'
           : 'border-[var(--color-border-default)] bg-white'
       }`}
       aria-label="過去時点で再分析"
     >
-      <div className="flex flex-wrap items-center gap-3">
-        <div className="flex min-w-[220px] flex-1 items-start gap-2">
-          <CalendarClock className={analysisDate ? 'mt-0.5 text-amber-700' : 'mt-0.5 text-[var(--color-brand-700)]'} size={18} />
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        <div className="flex min-w-[220px] flex-1 items-center gap-2">
+          <CalendarClock className={analysisDate ? 'text-amber-700' : 'text-[var(--color-brand-700)]'} size={16} />
           <div>
-            <div className="text-[13px] font-black text-[var(--color-brand-900)]">
+            <div className="text-[12px] font-black text-[var(--color-brand-900)]">
               {analysisDate ? '過去分析モード' : '過去時点で再分析'}
             </div>
-            <p className="mt-0.5 text-[11px] font-semibold leading-5 text-[var(--color-text-secondary)]">
+            <p className="text-[10px] font-semibold leading-4 text-[var(--color-text-secondary)]">
               {analysisDate
                 ? `${resolvedDate}より後の情報を分析から除外しています。`
                 : '当時までの価格・MA・6ステージ・PMS・MLだけで判断を再構成します。'}
@@ -181,7 +183,7 @@ export function HistoricalAnalysisModeBar({
               aria-label="前の取引日"
               disabled={!review?.adjacent.previousDate}
               onClick={() => review?.adjacent.previousDate && applyDate(review.adjacent.previousDate)}
-              className="inline-flex size-9 items-center justify-center border border-amber-300 bg-white text-amber-800 disabled:cursor-not-allowed disabled:opacity-35"
+              className="inline-flex size-8 items-center justify-center border border-amber-300 bg-white text-amber-800 disabled:cursor-not-allowed disabled:opacity-35"
             >
               <ChevronLeft size={16} />
             </button>
@@ -191,14 +193,14 @@ export function HistoricalAnalysisModeBar({
             value={draft}
             max={latestDate ?? undefined}
             onChange={(event) => setDraft(event.target.value)}
-            className="h-9 border border-[var(--color-border-default)] bg-white px-2.5 font-mono text-[12px] font-bold text-[var(--color-brand-900)]"
+            className="h-8 border border-[var(--color-border-default)] bg-white px-2.5 font-mono text-[11px] font-bold text-[var(--color-brand-900)]"
             aria-label="分析基準日"
           />
           <button
             type="button"
             disabled={!draft}
             onClick={() => applyDate(draft)}
-            className="h-9 border border-[var(--color-brand-900)] bg-[var(--color-brand-900)] px-3 text-[11px] font-black text-white disabled:opacity-40"
+            className="h-8 border border-[var(--color-brand-900)] bg-[var(--color-brand-900)] px-3 text-[10px] font-black text-white disabled:opacity-40"
           >
             この日で再分析
           </button>
@@ -210,7 +212,7 @@ export function HistoricalAnalysisModeBar({
                 aria-label="次の取引日"
                 disabled={!review?.adjacent.nextDate}
                 onClick={() => review?.adjacent.nextDate && applyDate(review.adjacent.nextDate)}
-                className="inline-flex size-9 items-center justify-center border border-amber-300 bg-white text-amber-800 disabled:cursor-not-allowed disabled:opacity-35"
+                className="inline-flex size-8 items-center justify-center border border-amber-300 bg-white text-amber-800 disabled:cursor-not-allowed disabled:opacity-35"
               >
                 <ChevronRight size={16} />
               </button>
@@ -221,7 +223,7 @@ export function HistoricalAnalysisModeBar({
                   onShowActualChange(false)
                   onDateChange(null)
                 }}
-                className="inline-flex h-9 items-center gap-1.5 border border-[var(--color-border-default)] bg-white px-3 text-[11px] font-black text-[var(--color-text-secondary)]"
+                className="inline-flex h-8 items-center gap-1.5 border border-[var(--color-border-default)] bg-white px-3 text-[10px] font-black text-[var(--color-text-secondary)]"
               >
                 <RotateCcw size={14} />
                 最新に戻す

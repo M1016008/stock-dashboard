@@ -7,6 +7,7 @@ import { buildChartWindowWithMa, type OhlcvPoint, type StagePoint } from '@/lib/
 import { physicsSimilarity } from '@/lib/ml/physics-similarity'
 import { LOW_CONFIDENCE_SIMILARITY_SCORE, MIN_DISPLAY_SIMILARITY_SCORE } from '@/lib/ml/similarity-threshold'
 import { analyzePhysicsProfile } from '@/lib/ml/physics-analysis'
+import { getJpMlPitAvailability } from '@/lib/server/ml-pit'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 30
@@ -606,17 +607,40 @@ export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
     const ticker = searchParams.get('ticker')?.replace(/\.T$/i, '').trim() || null
-    const date = searchParams.get('date')?.trim() || null
+    const rawDate = searchParams.get('date')?.trim() ?? ''
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(rawDate) ? rawDate : null
     const limit = Math.min(100, Math.max(1, Number(searchParams.get('limit') ?? (ticker ? 8 : 20))))
     const includeCases = searchParams.get('includeCases') === '1'
-    const allowFallbackScan = includeCases || searchParams.get('fallback') === '1'
-    const result = await getCurrentSimilars({ ticker, date, limit })
+    const pit = date ? await getJpMlPitAvailability(date) : null
+    if (pit?.availability === 'unavailable') {
+      return NextResponse.json({
+        asOfDate: date,
+        featureAsOfDate: pit.featureDate,
+        ticker,
+        physicsAnalysis: null,
+        minSimilarityScore: MIN_DISPLAY_SIMILARITY_SCORE,
+        referenceSimilarityScore: MIN_DISPLAY_SIMILARITY_SCORE,
+        count: 0,
+        similars: [],
+        caseStudies: [],
+        source: 'none',
+        availability: pit.availability,
+        availabilityReason: pit.availabilityReason,
+      })
+    }
+    const allowFallbackScan = !date && (includeCases || searchParams.get('fallback') === '1')
+    const result = await getCurrentSimilars({
+      ticker,
+      date,
+      limit,
+      computedAtOrBeforeEpoch: pit?.cutoffEpoch ?? null,
+    })
     const fallback = ticker && allowFallbackScan ? await fallbackTickerSimilars(ticker, date, limit) : null
-    const baseProfile = ticker ? await loadBaseFeatureProfile(ticker, date) : null
+    const baseProfile = ticker && !date ? await loadBaseFeatureProfile(ticker, date) : null
     const finalResult = ticker && result.rows.length === 0 && fallback
       ? fallback
       : result
-    const caseStudies = includeCases && ticker && fallback?.context ? await buildCaseStudies(fallback.context) : []
+    const caseStudies = includeCases && !date && ticker && fallback?.context ? await buildCaseStudies(fallback.context) : []
     const physicsAnalysis = ticker && (fallback?.context || baseProfile)
       ? analyzePhysicsProfile((fallback?.context?.base ?? baseProfile?.base)?.profile ?? null)
       : null
@@ -636,6 +660,8 @@ export async function GET(request: NextRequest) {
       source: result.rows.length > 0
         ? 'serving_current_similars'
         : fallback?.source ?? (baseProfile ? `${baseProfile.source}_profile` : 'none'),
+      availability: 'available',
+      availabilityReason: null,
     })
   } catch (error) {
     console.error('current similars API error:', error)

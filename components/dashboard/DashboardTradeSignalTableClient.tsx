@@ -3,6 +3,7 @@
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { useEffect, useMemo, useState } from 'react'
+import { StockPreviewTrigger } from '@/components/stock-preview/StockPreviewTrigger'
 import { StageTag } from '@/components/ui/StageTag'
 import { formatShortTermStrength } from '@/lib/short-term-check'
 import type {
@@ -300,7 +301,10 @@ function SignalRow({ row, index }: { row: DashboardTradeSignalRow; index: number
           <Link href={row.href} prefetch={false} className="font-mono text-[15px] font-black text-[var(--color-brand-800)] hover:underline">
             {row.ticker}
           </Link>
-          <span className="line-clamp-1 text-[12px] font-bold text-[var(--color-text-primary)]">{row.name}</span>
+          <Link href={row.href} prefetch={false} className="min-w-0 flex-1 truncate text-[12px] font-bold text-[var(--color-text-primary)] hover:text-[var(--color-brand-700)]">
+            {row.name}
+          </Link>
+          <StockPreviewTrigger ticker={row.ticker} market={row.market} analysisDate={row.date} context="home" />
         </div>
         <div className="mt-1 grid grid-cols-[auto_auto_1fr] items-end gap-x-2 gap-y-0.5">
           <div className="font-mono text-[14px] font-black text-[var(--color-text-primary)]">{fmtPrice(row.price, row.market)}</div>

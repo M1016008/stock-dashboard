@@ -47,12 +47,14 @@ for (const area of Object.keys(NAVIGATION_BY_AREA) as HeaderArea[]) {
 }
 
 assert.equal(PAGE_CATALOG.marketMomentum.href, '/market-momentum')
+assert.equal(PAGE_CATALOG.periodExplorer.href, '/period-explorer')
 assert.equal(PAGE_CATALOG.sectorStructure.href, '/sectors?view=structure')
 assert.equal(PAGE_CATALOG.historicalPatterns.href, '/ai/ma-lens#historical-pattern-search')
 assert.equal(PAGE_CATALOG.usAiResearch.href, '/ai/research?market=US')
 assert.equal(PAGE_CATALOG.usChartDrill.href, '/chart-drill?market=US')
 
 assert.ok(navPageIds('jp').includes('sectors'), 'Industry analysis must remain under Market & Industry.')
+assert.ok(navPageIds('jp').includes('periodExplorer'), 'Period Explorer must be available under stock discovery.')
 assert.ok(navPageIds('jp').includes('hexStage'), 'Market-wide six-stage analysis must remain under Analysis & AI.')
 assert.ok(navPageIds('jp').includes('ma25mMonitor'), 'Monthly MA monitoring must move to Monitor.')
 assert.ok(navPageIds('jp').includes('customCharts'), 'Synthetic charts must move to Analysis & AI.')

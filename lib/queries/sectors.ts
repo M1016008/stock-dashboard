@@ -1,6 +1,12 @@
 import { execAll, execGet } from '@/lib/db/client'
 import { type UniverseFilterValue, universeSqlCondition } from '@/lib/market-universe'
-import { SECTOR_STRUCTURE_AXES, type AxisStructureSummary, type SectorStructureAxisKey, type SectorStructureTaxonomy } from '@/lib/sector-structure'
+import {
+  calculateTrendStructureMetrics,
+  SECTOR_STRUCTURE_AXES,
+  type AxisStructureSummary,
+  type SectorStructureAxisKey,
+  type SectorStructureTaxonomy,
+} from '@/lib/sector-structure'
 import {
   calculateSectorMarketBaseline,
   calculateSectorStageDeltas,
@@ -60,6 +66,11 @@ export interface SectorStructureRow {
   nStocks: number
   validStageCount: number
   strengthScore: number | null
+  trendStructureScore: number | null
+  maUpBreadth: number | null
+  upwardStockRatio: number | null
+  downwardStockRatio: number | null
+  trendCoverage: number | null
   transitionChangeScore: number
   momentum5d: number | null
   momentum10d: number | null
@@ -76,15 +87,60 @@ export interface SectorStructureRow {
   stageDeltas?: SectorStageDeltas
 }
 
+type SectorTrendSourceRow = {
+  ticker: string
+  sector17Code: string | null
+  sector17Name: string | null
+  sector33Code: string | null
+  sector33Name: string | null
+  majorCategory: string | null
+  subIndustry: string | null
+  dailyA: number | null
+  dailyB: number | null
+  weeklyA: number | null
+  weeklyB: number | null
+  monthlyA: number | null
+  monthlyB: number | null
+  ma5: number | null
+  ma25: number | null
+  ma75: number | null
+  ma300: number | null
+  previousMa5: number | null
+  previousMa25: number | null
+  previousMa75: number | null
+  previousMa300: number | null
+}
+
+type SectorTrendAggregate = {
+  trendStructureScore: number | null
+  maUpBreadth: number | null
+  upwardStockRatio: number | null
+  downwardStockRatio: number | null
+  trendCoverage: number | null
+}
+
 export interface SectorStructureBoard {
   latestDate: string | null
   previousDate: string | null
+  requestedDate: string | null
   taxonomy: SectorStructureTaxonomy
   universe: UniverseFilterValue
   parentFilter: string | null
   selectedGroupKey: string | null
   marketBaseline: SectorMarketBaseline
+  marketTrendStructureScore: number | null
+  marketEnvironment: SectorMarketEnvironment
   rows: SectorStructureRow[]
+}
+
+export interface SectorMarketEnvironment {
+  label: '上昇優勢' | '中立・選別' | '下落優勢' | '算出待ち'
+  tone: 'positive' | 'neutral' | 'negative'
+  structureScore: number | null
+  pmsPositiveRatio: number | null
+  pfsPositiveRatio: number | null
+  pmsDate: string | null
+  sampleCount: number
 }
 
 export type SectorConstituentSortKey =
@@ -400,6 +456,113 @@ function compositionFromAxes(
   ])) as SectorStageComposition
 }
 
+function trendGroupKey(row: SectorTrendSourceRow, taxonomy: SectorStructureTaxonomy): string | null {
+  if (taxonomy === '17') return row.sector17Name ? row.sector17Code ?? row.sector17Name : null
+  if (taxonomy === '33') return row.sector33Name ? row.sector33Code ?? row.sector33Name : null
+  if (taxonomy === 'major') return row.majorCategory
+  return row.majorCategory && row.subIndustry ? `${row.majorCategory}\u001f${row.subIndustry}` : null
+}
+
+async function loadSectorTrendMetrics(
+  taxonomy: SectorStructureTaxonomy,
+  date: string,
+  universeFilter: UniverseFilterValue,
+): Promise<Map<string, SectorTrendAggregate>> {
+  const previousDate = (await execGet<{ date: string | null }>(`
+    SELECT MAX(date) AS date FROM daily_snapshots WHERE date < ?
+  `, [date]))?.date ?? null
+  const universe = universeSqlCondition('tu.ticker', universeFilter)
+  const rows = await execAll<SectorTrendSourceRow>(`
+    SELECT
+      current.ticker,
+      tu.sector17_code AS sector17Code,
+      tu.sector17_name AS sector17Name,
+      tu.sector33_code AS sector33Code,
+      tu.sector33_name AS sector33Name,
+      sc.major_category AS majorCategory,
+      sc.sub_industry AS subIndustry,
+      current.daily_a_stage AS dailyA,
+      current.daily_b_stage AS dailyB,
+      current.weekly_a_stage AS weeklyA,
+      current.weekly_b_stage AS weeklyB,
+      current.monthly_a_stage AS monthlyA,
+      current.monthly_b_stage AS monthlyB,
+      current.ma_5 AS ma5,
+      current.ma_25 AS ma25,
+      current.ma_75 AS ma75,
+      current.ma_300 AS ma300,
+      previous.ma_5 AS previousMa5,
+      previous.ma_25 AS previousMa25,
+      previous.ma_75 AS previousMa75,
+      previous.ma_300 AS previousMa300
+    FROM daily_snapshots AS current INDEXED BY snapshots_date_idx
+    INNER JOIN ticker_universe AS tu ON tu.ticker = current.ticker AND tu.active = 1
+    LEFT JOIN stock_classification AS sc ON sc.ticker = current.ticker
+    LEFT JOIN daily_snapshots AS previous
+      ON previous.ticker = current.ticker AND previous.date = ?
+    WHERE current.date = ?
+      ${universe.sql ? `AND ${universe.sql}` : ''}
+  `, [previousDate ?? '', date, ...universe.params])
+
+  const pending = new Map<string, {
+    stockCount: number
+    trendCount: number
+    trendTotal: number
+    upwardCount: number
+    downwardCount: number
+    maUpCount: number
+    maValidCount: number
+  }>()
+  for (const row of rows) {
+    const groupKey = trendGroupKey(row, taxonomy)
+    if (!groupKey) continue
+    const metrics = calculateTrendStructureMetrics({
+      stages: {
+        dailyA: row.dailyA,
+        dailyB: row.dailyB,
+        weeklyA: row.weeklyA,
+        weeklyB: row.weeklyB,
+        monthlyA: row.monthlyA,
+        monthlyB: row.monthlyB,
+      },
+      ma: { ma5: row.ma5, ma25: row.ma25, ma75: row.ma75, ma300: row.ma300 },
+      previousMa: {
+        ma5: row.previousMa5,
+        ma25: row.previousMa25,
+        ma75: row.previousMa75,
+        ma300: row.previousMa300,
+      },
+    })
+    const aggregate = pending.get(groupKey) ?? {
+      stockCount: 0,
+      trendCount: 0,
+      trendTotal: 0,
+      upwardCount: 0,
+      downwardCount: 0,
+      maUpCount: 0,
+      maValidCount: 0,
+    }
+    aggregate.stockCount += 1
+    if (metrics.trendScore != null) {
+      aggregate.trendCount += 1
+      aggregate.trendTotal += metrics.trendScore
+      if (metrics.trendScore >= 60) aggregate.upwardCount += 1
+      if (metrics.trendScore <= 40) aggregate.downwardCount += 1
+    }
+    aggregate.maUpCount += metrics.maUpCount
+    aggregate.maValidCount += metrics.maValidCount
+    pending.set(groupKey, aggregate)
+  }
+
+  return new Map(Array.from(pending.entries()).map(([groupKey, aggregate]) => [groupKey, {
+    trendStructureScore: aggregate.trendCount > 0 ? aggregate.trendTotal / aggregate.trendCount : null,
+    maUpBreadth: aggregate.maValidCount > 0 ? 100 * aggregate.maUpCount / aggregate.maValidCount : null,
+    upwardStockRatio: aggregate.trendCount > 0 ? 100 * aggregate.upwardCount / aggregate.trendCount : null,
+    downwardStockRatio: aggregate.trendCount > 0 ? 100 * aggregate.downwardCount / aggregate.trendCount : null,
+    trendCoverage: aggregate.stockCount > 0 ? 100 * aggregate.trendCount / aggregate.stockCount : null,
+  }]))
+}
+
 async function loadUniverseSectorStructureRows(
   taxonomy: SectorStructureTaxonomy,
   requestedDate: string,
@@ -480,12 +643,74 @@ async function loadUniverseSectorStructureRows(
       return {
         ...row,
         parentGroup: row.parentGroup ?? sector33Parents.get(row.groupKey) ?? null,
+        trendStructureScore: row.strengthScore,
+        maUpBreadth: null,
+        upwardStockRatio: null,
+        downwardStockRatio: null,
+        trendCoverage: row.nStocks > 0 ? 100 : null,
         composition,
         stageDeltas,
         dominantChange: previousComposition ? findDominantStageChange(stageDeltas) : null,
       }
     })
   return { latestDate, previousDate, rows }
+}
+
+async function loadSectorMarketEnvironment(
+  structureDate: string,
+  universeFilter: UniverseFilterValue,
+  structureScore: number | null,
+): Promise<SectorMarketEnvironment> {
+  const latest = await execGet<{ date: string | null }>(`
+    SELECT MAX(date) AS date
+    FROM physical_momentum_metrics
+    WHERE market = 'JP' AND date <= ?
+  `, [structureDate]).catch(() => null)
+  if (!latest?.date) {
+    return {
+      label: structureScore == null ? '算出待ち' : '中立・選別',
+      tone: 'neutral',
+      structureScore,
+      pmsPositiveRatio: null,
+      pfsPositiveRatio: null,
+      pmsDate: null,
+      sampleCount: 0,
+    }
+  }
+  const universe = universeSqlCondition('tu.ticker', universeFilter)
+  const aggregate = await execGet<{
+    sampleCount: number
+    pmsCount: number
+    pfsCount: number
+    pmsPositive: number
+    pfsPositive: number
+  }>(`
+    SELECT
+      COUNT(*) AS sampleCount,
+      SUM(CASE WHEN pm.physical_momentum_score IS NOT NULL THEN 1 ELSE 0 END) AS pmsCount,
+      SUM(CASE WHEN pm.physical_force_score IS NOT NULL THEN 1 ELSE 0 END) AS pfsCount,
+      SUM(CASE WHEN pm.physical_momentum_score > 0 THEN 1 ELSE 0 END) AS pmsPositive,
+      SUM(CASE WHEN pm.physical_force_score > 0 THEN 1 ELSE 0 END) AS pfsPositive
+    FROM physical_momentum_metrics AS pm
+    INNER JOIN ticker_universe AS tu ON tu.ticker = pm.symbol AND tu.active = 1
+    WHERE pm.market = 'JP' AND pm.date = ?
+      ${universe.sql ? `AND ${universe.sql}` : ''}
+  `, [latest.date, ...universe.params])
+  const pmsCount = Number(aggregate?.pmsCount ?? 0)
+  const pfsCount = Number(aggregate?.pfsCount ?? 0)
+  const pmsPositiveRatio = pmsCount > 0 ? 100 * Number(aggregate?.pmsPositive ?? 0) / pmsCount : null
+  const pfsPositiveRatio = pfsCount > 0 ? 100 * Number(aggregate?.pfsPositive ?? 0) / pfsCount : null
+  const positive = (structureScore ?? 50) >= 58 && (pmsPositiveRatio ?? 50) >= 52 && (pfsPositiveRatio ?? 50) >= 50
+  const negative = (structureScore ?? 50) <= 42 && (pmsPositiveRatio ?? 50) < 48 && (pfsPositiveRatio ?? 50) < 48
+  return {
+    label: positive ? '上昇優勢' : negative ? '下落優勢' : '中立・選別',
+    tone: positive ? 'positive' : negative ? 'negative' : 'neutral',
+    structureScore,
+    pmsPositiveRatio,
+    pfsPositiveRatio,
+    pmsDate: latest.date,
+    sampleCount: Number(aggregate?.sampleCount ?? 0),
+  }
 }
 
 export async function getSectorStructureBoard(
@@ -495,6 +720,7 @@ export async function getSectorStructureBoard(
     parentFilter?: string | null
     requestedDate?: string | null
     includeAxesForAll?: boolean
+    includeAllRows?: boolean
     universeFilter?: UniverseFilterValue
   } = {},
 ): Promise<SectorStructureBoard> {
@@ -512,11 +738,22 @@ export async function getSectorStructureBoard(
     return {
       latestDate: null,
       previousDate: null,
+      requestedDate,
       taxonomy,
       universe: universeFilter,
       parentFilter: null,
       selectedGroupKey: null,
       marketBaseline: calculateSectorMarketBaseline([]),
+      marketTrendStructureScore: null,
+      marketEnvironment: {
+        label: '算出待ち',
+        tone: 'neutral',
+        structureScore: null,
+        pmsPositiveRatio: null,
+        pfsPositiveRatio: null,
+        pmsDate: null,
+        sampleCount: 0,
+      },
       rows: [],
     }
   }
@@ -603,6 +840,11 @@ export async function getSectorStructureBoard(
       return {
         ...row,
         parentGroup: row.parentGroup ?? sector33Parents.get(row.groupKey) ?? null,
+        trendStructureScore: row.strengthScore,
+        maUpBreadth: null,
+        upwardStockRatio: null,
+        downwardStockRatio: null,
+        trendCoverage: row.nStocks > 0 ? 100 : null,
         composition,
         axes: parseAxisJson(axisJson),
         stageDeltas,
@@ -610,7 +852,21 @@ export async function getSectorStructureBoard(
       }
     })
   }
+  const trendMetrics = await loadSectorTrendMetrics(taxonomy, resolvedLatestDate, universeFilter)
+  prepared = prepared.map((row) => ({
+    ...row,
+    ...(trendMetrics.get(row.groupKey) ?? {}),
+  }))
   const marketBaseline = calculateSectorMarketBaseline(prepared)
+  const marketTrendWeight = prepared.reduce((sum, row) => sum + (row.trendStructureScore != null ? row.nStocks : 0), 0)
+  const marketTrendStructureScore = marketTrendWeight > 0
+    ? prepared.reduce((sum, row) => sum + (row.trendStructureScore ?? 0) * (row.trendStructureScore != null ? row.nStocks : 0), 0) / marketTrendWeight
+    : null
+  const marketEnvironment = await loadSectorMarketEnvironment(
+    resolvedLatestDate,
+    universeFilter,
+    marketTrendStructureScore,
+  )
   const inferredParent = await resolveSectorStructureParentFromGroup(taxonomy, options.selectedGroupKey)
   const requestedParent = options.parentFilter?.trim() || inferredParent
   const parentRows = requestedParent
@@ -628,7 +884,11 @@ export async function getSectorStructureBoard(
   const fallbackRows = resolvedParent
     ? prepared.filter((row) => row.parentGroup === resolvedParent)
     : prepared
-  const rowsInScope = requestedParent && parentRows.length > 0 ? parentRows : fallbackRows
+  const rowsInScope = options.includeAllRows
+    ? prepared
+    : requestedParent && parentRows.length > 0
+      ? parentRows
+      : fallbackRows
   const requestedGroup = options.selectedGroupKey?.trim() || null
   const defaultGroup = [...rowsInScope]
     .sort((a, b) => Math.abs(b.momentum10d ?? 0) - Math.abs(a.momentum10d ?? 0))[0]
@@ -640,11 +900,14 @@ export async function getSectorStructureBoard(
   return {
     latestDate: resolvedLatestDate,
     previousDate: resolvedPreviousDate,
+    requestedDate,
     taxonomy,
     universe: universeFilter,
     parentFilter: resolvedParent,
     selectedGroupKey,
     marketBaseline,
+    marketTrendStructureScore,
+    marketEnvironment,
     rows: rowsInScope.map(({ axes, stageDeltas, ...row }) => ({
       ...row,
       ...(options.includeAxesForAll || row.groupKey === selectedGroupKey

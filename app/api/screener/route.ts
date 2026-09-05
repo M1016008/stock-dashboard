@@ -17,6 +17,7 @@ import { getTickersByMarket } from '@/lib/master/tickers'
 import { buildShortTermCheck, type ShortTermCheckLabel } from '@/lib/short-term-check'
 import { ML_PHYSICS_FEATURE_SET, type PhysicsFeatureProfile } from '@/lib/backtest/ml-physics'
 import { analyzePhysicsProfile, type PhysicsStatus } from '@/lib/ml/physics-analysis'
+import { loadPhysicsStatusCalibration, type PhysicsStatusCalibration } from '@/lib/queries/physics-status-calibration'
 import { readServingCache, stableCacheKey, writeServingCache } from '@/lib/api/serving-cache'
 
 export const dynamic = 'force-dynamic'
@@ -198,18 +199,6 @@ interface ScreenerStockRow {
   shortTermCheckMlText: string
 }
 
-type PhysicsStatusCalibration = {
-  statusLabel: PhysicsStatus
-  targetDirection: 'up' | 'down' | 'wait'
-  horizonDays: number
-  sampleCount: number
-  hitRate: number | null
-  baseRate: number | null
-  lift: number | null
-  confidenceScore: number | null
-  evaluationDate: string
-}
-
 type ScreenerSortKey =
   | keyof ScreenerStockRow
   | 'earningsLastElapsedDays'
@@ -237,7 +226,7 @@ const PHYSICAL_STATUS_HORIZONS = [5, 10, 20, 40, 60, 90, 200] as const
 const JP_TICKER_MASTER_MAP = new Map(getTickersByMarket('JP').map((ticker) => [ticker.ticker, ticker]))
 const SCREENER_BUILT_ROWS_CACHE_TTL_MS = Number(process.env.SCREENER_BUILT_ROWS_CACHE_TTL_MS ?? 6 * 60 * 60 * 1000)
 const SCREENER_BUILT_ROWS_CACHE_NAMESPACE = 'screener_built_rows_v2'
-const SCREENER_BUILT_ROWS_LOGIC_VERSION = 'short-term-physics-risk-cap-classification-v2'
+const SCREENER_BUILT_ROWS_LOGIC_VERSION = 'short-term-physics-risk-cap-classification-v3'
 
 async function latestSnapshotDate(): Promise<string | null> {
   const row = await execGet<{ d: string | null }>(`SELECT MAX(date) AS d FROM daily_snapshots`)
@@ -692,66 +681,6 @@ async function loadClassificationVersion(): Promise<string> {
 function parsePhysicalStatusHorizon(value: string | null): number {
   const parsed = Number(value ?? process.env.SCREENER_PHYSICS_STATUS_HORIZON ?? 20)
   return PHYSICAL_STATUS_HORIZONS.includes(parsed as typeof PHYSICAL_STATUS_HORIZONS[number]) ? parsed : 20
-}
-
-async function loadPhysicsStatusCalibration(horizonDays: number): Promise<Map<PhysicsStatus, PhysicsStatusCalibration>> {
-  const rows = await execAll<{
-    status_label: string
-    target_direction: 'up' | 'down' | 'wait'
-    horizon_days: number
-    sample_count: number
-    hit_rate: number | null
-    base_rate: number | null
-    lift: number | null
-    confidence_score: number | null
-    evaluation_date: string
-  }>(
-    `
-    WITH latest AS (
-      SELECT MAX(evaluation_date) AS evaluation_date
-      FROM ml_physics_status_evaluations
-      WHERE feature_set = ?
-        AND horizon_days = ?
-        AND sample_count > 0
-    )
-    SELECT
-      e.status_label,
-      e.target_direction,
-      e.horizon_days,
-      e.sample_count,
-      e.hit_rate,
-      e.base_rate,
-      e.lift,
-      e.confidence_score,
-      e.evaluation_date
-    FROM ml_physics_status_evaluations e
-    INNER JOIN latest l ON l.evaluation_date = e.evaluation_date
-    WHERE e.feature_set = ?
-      AND e.horizon_days = ?
-      AND e.sample_count > 0
-    `,
-    [ML_PHYSICS_FEATURE_SET, horizonDays, ML_PHYSICS_FEATURE_SET, horizonDays],
-  ).catch((error: unknown) => {
-    const message = error instanceof Error ? error.message : String(error)
-    if (message.includes('no such table')) return []
-    throw error
-  })
-
-  const map = new Map<PhysicsStatus, PhysicsStatusCalibration>()
-  for (const row of rows) {
-    map.set(row.status_label as PhysicsStatus, {
-      statusLabel: row.status_label as PhysicsStatus,
-      targetDirection: row.target_direction,
-      horizonDays: Number(row.horizon_days),
-      sampleCount: Number(row.sample_count ?? 0),
-      hitRate: row.hit_rate,
-      baseRate: row.base_rate,
-      lift: row.lift,
-      confidenceScore: row.confidence_score,
-      evaluationDate: row.evaluation_date,
-    })
-  }
-  return map
 }
 
 const PHYSICAL_STATUS_SCORE_BASE: Record<Exclude<PhysicsStatus, '算出待ち'>, number> = {
@@ -1295,7 +1224,7 @@ async function loadBuiltRows(
     loadSnapshotByDate(date),
     loadSectorMap(),
     loadClassificationMap(),
-    loadPhysicsStatusCalibration(physicalStatusHorizon),
+    loadPhysicsStatusCalibration(physicalStatusHorizon, date),
   ])
   const rows = snapshots
     .map((s) => buildResultRow(s, sectorMap, classificationMap, physicsStatusCalibration))

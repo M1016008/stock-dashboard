@@ -6,6 +6,7 @@ import { Card, CardHeader } from '@/components/ui/Card'
 import { IndustryBadges } from '@/components/ui/IndustryBadges'
 import { MarginBadges } from '@/components/ui/MarginBadges'
 import { StageTag } from '@/components/ui/StageTag'
+import { StockPreviewTrigger } from '@/components/stock-preview/StockPreviewTrigger'
 import { getCachedStereoscopicSignals } from '@/lib/queries/dashboard-cache'
 import {
   addUniverseToHref,
@@ -86,19 +87,22 @@ export async function StereoscopicSignals({
               {rows.map((row) => (
                 <tr key={row.ticker} className="hover:bg-[var(--color-surface-subtle)]">
                   <td className="py-3 pl-2 pr-3">
-                    <Link
-                      href={stockHref(row.ticker)}
-                      prefetch={false}
-                      className="block max-w-[230px] rounded-[4px] px-1 py-0.5 hover:bg-white hover:shadow-sm"
-                      aria-label={`${row.ticker} ${row.name ?? ''} の個別銘柄ページへ移動`}
-                    >
-                      <span className="block font-bold tabular-nums text-[var(--color-brand-800)] hover:underline">
-                        {row.ticker}
-                      </span>
-                      <span className="mt-1 block truncate text-[12px] font-semibold text-[var(--color-text-primary)]">
-                        {row.name ?? row.ticker}
-                      </span>
-                    </Link>
+                    <div className="flex max-w-[260px] items-center gap-1">
+                      <Link
+                        href={stockHref(row.ticker)}
+                        prefetch={false}
+                        className="min-w-0 flex-1 rounded-[4px] px-1 py-0.5 hover:bg-white hover:shadow-sm"
+                        aria-label={`${row.ticker} ${row.name ?? ''} の個別銘柄ページへ移動`}
+                      >
+                        <span className="block font-bold tabular-nums text-[var(--color-brand-800)] hover:underline">
+                          {row.ticker}
+                        </span>
+                        <span className="mt-1 block truncate text-[12px] font-semibold text-[var(--color-text-primary)]">
+                          {row.name ?? row.ticker}
+                        </span>
+                      </Link>
+                      <StockPreviewTrigger ticker={row.ticker} analysisDate={date ?? null} context="home" />
+                    </div>
                   </td>
                   <td className="py-3 pr-3">
                     <MarginBadges

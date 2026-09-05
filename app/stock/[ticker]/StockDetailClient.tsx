@@ -1,17 +1,22 @@
 // app/stock/[ticker]/StockDetailClient.tsx
 'use client'
 
-import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
+import Link from 'next/link'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
 import {
   BrainCircuit,
   BookOpenText,
   Building2,
   ChartCandlestick,
+  ChevronRight,
   FileSearch,
   GitCompareArrows,
   LayoutDashboard,
+  Landmark,
   NotebookPen,
+  Scale,
+  TrendingUp,
   Users,
   WalletCards,
 } from 'lucide-react'
@@ -30,6 +35,14 @@ import { HistoricalAnalogExplorer } from '@/components/stock/HistoricalAnalogExp
 import { ScenarioProjectionChart } from '@/components/stock/ScenarioProjectionChart'
 import { TradeScenarioNotebook } from '@/components/stock/TradeScenarioNotebook'
 import { StockScenarioAiPanel } from '@/components/stock/StockScenarioAiPanel'
+import { StockDecisionSummary } from '@/components/stock/StockDecisionSummary'
+import { FinancialPerformanceTimeline } from '@/components/stock/FinancialPerformanceTimeline'
+import { FinancialPerformanceDetail } from '@/components/stock/FinancialPerformanceDetail'
+import { FinancialDetail } from '@/components/stock/FinancialDetail'
+import { ValuationDetail } from '@/components/stock/ValuationDetail'
+import { ShareholderReturnsDetail } from '@/components/stock/ShareholderReturnsDetail'
+import { CompanyInformationDetail } from '@/components/stock/CompanyInformationDetail'
+import { SimilarityComparisonDetail } from '@/components/stock/SimilarityComparisonDetail'
 import {
   HistoricalAnalysisModeBar,
   type StockAnalysisReview,
@@ -37,6 +50,7 @@ import {
 import { findTicker } from '@/lib/master/tickers'
 import { STAGE_BG_COLORS, STAGE_BORDER_COLORS, STAGE_LABELS } from '@/lib/hex-stage'
 import { buildShortTermCheck, formatShortTermStrength, type ShortTermCheckTone } from '@/lib/short-term-check'
+import { physicsStatusTone, type PhysicsStatus } from '@/lib/ml/physics-analysis'
 import {
   buildPhysicalMomentumView,
   buildPhysicalRawMetricView,
@@ -197,19 +211,29 @@ interface FinancialSummary {
   forecastAnnualDividend: number | null
 }
 
-type StockDetailTab = 'overview' | 'chart' | 'scenario' | 'ml'
+type StockDetailTab = 'overview' | 'chart' | 'fundamental' | 'scenario' | 'ml'
+type FundamentalTab = 'summary' | 'performance' | 'financial' | 'valuation' | 'returns' | 'company'
+
+const FUNDAMENTAL_HASHES: Record<Exclude<FundamentalTab, 'summary'>, string> = {
+  performance: 'performance',
+  financial: 'financial',
+  valuation: 'valuation',
+  returns: 'returns',
+  company: 'company',
+}
 
 export function StockDetailClient({ ticker }: StockDetailClientProps) {
   const [quote, setQuote] = useState<StockQuote | null>(null)
   const [smaster, setSmaster] = useState<SectorMasterRow | null>(null)
   const [marginInfo, setMarginInfo] = useState<StockMarginInfo | null>(null)
-  const [overviewInfo, setOverviewInfo] = useState<StockOverviewInfo | null>(null)
   const [shikihoInfo, setShikihoInfo] = useState<ShikihoInfo | null>(null)
   const [loading, setLoading] = useState(true)
   const [analysisDate, setAnalysisDate] = useState<string | null>(null)
+  const [analysisParamsReady, setAnalysisParamsReady] = useState(false)
   const [showActual, setShowActual] = useState(false)
   const [analysisReview, setAnalysisReview] = useState<StockAnalysisReview | null>(null)
   const [activeTab, setActiveTab] = useState<StockDetailTab>('overview')
+  const [fundamentalTab, setFundamentalTab] = useState<FundamentalTab>('summary')
   const [compared, setCompared] = useState(false)
 
   const hardcoded = findTicker(ticker)
@@ -220,18 +244,18 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
     const validDate = date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : null
     setAnalysisDate(validDate)
     setShowActual(Boolean(validDate && params.get('actual') === '1'))
+    setAnalysisParamsReady(true)
   }, [ticker])
 
   useEffect(() => {
     let cancelled = false
-    let pending = 5
+    let pending = 4
     const done = () => {
       pending -= 1
       if (!cancelled && pending <= 0) setLoading(false)
     }
     async function fetchData() {
       setLoading(true)
-      setOverviewInfo(null)
       setShikihoInfo(null)
       fetch(`/api/quote/${encodeURIComponent(ticker)}`, { cache: 'no-store' })
         .then((res) => res.ok ? res.json() : null)
@@ -249,12 +273,6 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
         .then((res) => res.ok ? res.json() : null)
         .then((data) => { if (!cancelled && data) setMarginInfo(data) })
         .catch((error) => console.error('Failed to fetch stock margin:', error))
-        .finally(done)
-
-      fetch(`/api/stock-overview/${encodeURIComponent(ticker)}`, { cache: 'no-store' })
-        .then((res) => res.ok ? res.json() : null)
-        .then((data) => { if (!cancelled && data) setOverviewInfo(data) })
-        .catch((error) => console.error('Failed to fetch stock overview:', error))
         .finally(done)
 
       fetch(`/api/shikiho/${encodeURIComponent(ticker)}`, { cache: 'no-store' })
@@ -278,7 +296,9 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
   const displayCode = ticker.replace('.T', '')
   const name = smaster?.name ?? hardcoded?.name ?? quote?.name ?? '---'
   const displayedQuote = useMemo<StockQuote | null>(() => {
-    if (!analysisDate || !analysisReview?.available) return quote
+    if (!analysisParamsReady) return null
+    if (!analysisDate) return quote
+    if (!analysisReview?.available) return null
     const base = analysisReview.base
     return {
       ticker,
@@ -293,16 +313,23 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
       fiftyTwoWeekHigh: base.fiftyTwoWeekHigh ?? undefined,
       fiftyTwoWeekLow: base.fiftyTwoWeekLow ?? undefined,
     }
-  }, [analysisDate, analysisReview, name, quote, ticker])
+  }, [analysisDate, analysisParamsReady, analysisReview, name, quote, ticker])
 
   useEffect(() => {
     const readTab = () => {
       const hash = window.location.hash.replace('#', '')
       if (hash === 'shikiho') {
-        setActiveTab('overview')
+        setActiveTab('fundamental')
+        setFundamentalTab('company')
         const url = new URL(window.location.href)
-        url.hash = 'overview'
+        url.hash = 'company'
         window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`)
+      } else if (hash === 'performance' || hash === 'financial' || hash === 'valuation' || hash === 'returns' || hash === 'company') {
+        setActiveTab('fundamental')
+        setFundamentalTab(hash)
+      } else if (hash === 'fundamental') {
+        setActiveTab('fundamental')
+        setFundamentalTab('summary')
       } else if (hash === 'chart' || hash === 'scenario' || hash === 'ml' || hash === 'overview') {
         setActiveTab(hash)
       }
@@ -321,12 +348,22 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
 
   const selectTab = (tab: StockDetailTab) => {
     setActiveTab(tab)
+    if (tab === 'fundamental') setFundamentalTab('summary')
     const url = new URL(window.location.href)
     url.hash = tab
     window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`)
   }
 
+  const selectFundamentalTab = (tab: FundamentalTab) => {
+    setActiveTab('fundamental')
+    setFundamentalTab(tab)
+    const url = new URL(window.location.href)
+    url.hash = tab === 'summary' ? 'fundamental' : FUNDAMENTAL_HASHES[tab]
+    window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`)
+  }
+
   const updateAnalysisDate = useCallback((date: string | null) => {
+    setAnalysisReview(null)
     setAnalysisDate(date)
     if (!date) {
       setShowActual(false)
@@ -385,15 +422,6 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
             </h1>
           </div>
 
-          <div className="hidden flex-wrap gap-1.5 lg:flex">
-            {displayMarginType && <Pill label={displayMarginType} />}
-            {displayMarketSegment && <Pill label={`市場: ${displayMarketSegment}`} accent />}
-            {displaySectorLarge && <Pill label={`17業種: ${displaySectorLarge}`} />}
-            {displaySector33 && <Pill label={`33業種: ${displaySector33}`} />}
-            {displayMajorCategory && <Pill label={`60分類: ${displayMajorCategory}`} accent />}
-            {displaySubIndustry && <Pill label={`細分類: ${displaySubIndustry}`} />}
-          </div>
-
           <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '8px' }}>
             <button
               type="button"
@@ -422,15 +450,15 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
                 </div>
               </div>
             )}
+            {analysisParamsReady && analysisDate && !displayedQuote && (
+              <div className="min-w-[112px] text-right" aria-label="過去終値を読み込み中">
+                <div className="font-mono text-lg font-black text-[var(--color-text-tertiary)]">—</div>
+                <div className="mt-1 text-[9px] font-bold text-[var(--color-text-tertiary)]">過去終値を読込中</div>
+              </div>
+            )}
             {loading && <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>読込中...</span>}
           </div>
         </div>
-        {(displayMajorCategory || displaySubIndustry) && (
-          <div className="flex flex-wrap gap-1.5 border-t border-[var(--color-border-subtle)] px-3 py-2 lg:hidden">
-            {displayMajorCategory && <Pill label={`60分類: ${displayMajorCategory}`} accent />}
-            {displaySubIndustry && <Pill label={`細分類: ${displaySubIndustry}`} />}
-          </div>
-        )}
         <StockDetailTabs active={activeTab} onSelect={selectTab} />
       </div>
 
@@ -458,16 +486,16 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
             marginInfo={marginInfo}
             fallbackType={displayMarginType}
             analysisDate={analysisDate}
-            shikihoInfo={shikihoInfo}
-            loading={loading}
+            classifications={{
+              marketSegment: displayMarketSegment,
+              sector17: displaySectorLarge,
+              sector33: displaySector33,
+              majorCategory: displayMajorCategory,
+              subIndustry: displaySubIndustry,
+            }}
           />
-          {analysisDate
-            ? <CurrentOnlyDataNotice label="財務・株主・保有情報は現在情報のため、過去分析モードでは非表示にしています。" />
-            : <CompanyIntelligencePanel info={overviewInfo} />}
-          {analysisDate
-            ? <CurrentOnlyDataNotice label="決算予定は現在情報のため、過去分析モードでは非表示にしています。" />
-            : <EarningsCard ticker={ticker} />}
-          <PhysicalMomentumSection ticker={ticker} analysisDate={analysisDate} />
+          <StockDecisionSummary ticker={ticker} analysisDate={analysisDate} quote={displayedQuote} variant="overview" />
+          <FinancialPerformanceTimeline ticker={ticker} analysisDate={analysisDate} />
         </>
       )}
 
@@ -491,7 +519,20 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
               revealAfterAnalysis={showActual}
             />
           </div>
+          <PhysicalMomentumSection ticker={ticker} analysisDate={analysisDate} />
         </>
+      )}
+
+      {activeTab === 'fundamental' && (
+        <FundamentalWorkspace
+          ticker={ticker}
+          analysisDate={analysisDate}
+          quote={displayedQuote}
+          active={fundamentalTab}
+          onSelect={selectFundamentalTab}
+          shikihoInfo={shikihoInfo}
+          loading={loading}
+        />
       )}
 
       {activeTab === 'scenario' && (
@@ -522,6 +563,7 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
 
       {activeTab === 'ml' && (
         <>
+          <SimilarityComparisonDetail ticker={ticker} analysisDate={analysisDate} />
           <HistoricalAnalogExplorer ticker={ticker} analysisDate={analysisDate} />
           <StockMlInsights ticker={ticker} analysisDate={analysisDate} />
         </>
@@ -538,11 +580,16 @@ function StockDetailTabs({
   active: StockDetailTab
   onSelect: (tab: StockDetailTab) => void
 }) {
+  const activeTabRef = useRef<HTMLButtonElement | null>(null)
+  useEffect(() => {
+    activeTabRef.current?.scrollIntoView({ behavior: 'auto', block: 'nearest', inline: 'center' })
+  }, [active])
   const tabs = [
     { id: 'overview' as const, label: '概要', icon: LayoutDashboard },
     { id: 'chart' as const, label: 'チャート・6ステージ', icon: ChartCandlestick },
+    { id: 'fundamental' as const, label: 'ファンダメンタル', icon: Landmark },
     { id: 'scenario' as const, label: 'シナリオ', icon: NotebookPen },
-    { id: 'ml' as const, label: '本質類似・ML', icon: BrainCircuit },
+    { id: 'ml' as const, label: '類似・比較', icon: BrainCircuit },
   ]
   return (
     <nav className="flex overflow-x-auto border-t border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-2" aria-label="個別銘柄分析">
@@ -551,6 +598,7 @@ function StockDetailTabs({
         return (
           <button
             key={tab.id}
+            ref={active === tab.id ? activeTabRef : undefined}
             type="button"
             onClick={() => onSelect(tab.id)}
             className={`inline-flex h-9 shrink-0 items-center gap-1.5 border-b-2 px-3 text-[11px] font-black ${
@@ -569,22 +617,111 @@ function StockDetailTabs({
   )
 }
 
+function FundamentalWorkspace({
+  ticker,
+  analysisDate,
+  quote,
+  active,
+  onSelect,
+  shikihoInfo,
+  loading,
+}: {
+  ticker: string
+  analysisDate: string | null
+  quote: StockQuote | null
+  active: FundamentalTab
+  onSelect: (tab: FundamentalTab) => void
+  shikihoInfo: ShikihoInfo | null
+  loading: boolean
+}) {
+  const activeTabRef = useRef<HTMLButtonElement | null>(null)
+  useEffect(() => {
+    activeTabRef.current?.scrollIntoView({ behavior: 'auto', block: 'nearest', inline: 'center' })
+  }, [active])
+  const tabs = [
+    { id: 'summary' as const, label: 'サマリー', icon: LayoutDashboard },
+    { id: 'performance' as const, label: '業績', icon: TrendingUp },
+    { id: 'financial' as const, label: '財務', icon: Landmark },
+    { id: 'valuation' as const, label: 'バリュエーション', icon: Scale },
+    { id: 'returns' as const, label: '株主還元', icon: WalletCards },
+    { id: 'company' as const, label: '企業情報', icon: Building2 },
+  ]
+
+  return (
+    <section className="space-y-3" aria-labelledby="fundamental-workspace-title">
+      <div className="overflow-hidden border border-[var(--color-border-default)] bg-white">
+        <header className="flex flex-wrap items-center justify-between gap-2 bg-[var(--color-brand-50)] px-4 py-2.5">
+          <div>
+            <h2 id="fundamental-workspace-title" className="text-[13px] font-black text-[var(--color-brand-900)]">ファンダメンタル</h2>
+            <p className="mt-0.5 text-[9px] font-semibold text-[var(--color-text-tertiary)]">業績・財務・評価・還元・企業情報を同じ分析基準日で確認</p>
+          </div>
+          <span className="font-mono text-[9px] font-bold text-[var(--color-text-tertiary)]">基準日 {analysisDate ?? quote?.priceDate ?? '---'}</span>
+        </header>
+        <nav className="flex overflow-x-auto border-t border-[var(--color-border-default)] bg-[var(--color-surface-subtle)]" aria-label="ファンダメンタル分析">
+          {tabs.map(({ id, label, icon: Icon }) => (
+            <button
+              key={id}
+              ref={active === id ? activeTabRef : undefined}
+              type="button"
+              onClick={() => onSelect(id)}
+              className={`inline-flex h-9 shrink-0 items-center gap-1.5 border-b-2 px-3 text-[10px] font-black ${
+                active === id
+                  ? 'border-[var(--color-brand-700)] bg-white text-[var(--color-brand-900)]'
+                  : 'border-transparent text-[var(--color-text-secondary)] hover:bg-white'
+              }`}
+              aria-current={active === id ? 'page' : undefined}
+            >
+              <Icon size={13} aria-hidden="true" />
+              {label}
+            </button>
+          ))}
+        </nav>
+      </div>
+
+      {active === 'summary' && <StockDecisionSummary ticker={ticker} analysisDate={analysisDate} quote={quote} variant="fundamental" />}
+      {active === 'performance' && (
+        <>
+          <FinancialPerformanceDetail ticker={ticker} analysisDate={analysisDate} />
+          {analysisDate
+            ? <CurrentOnlyDataNotice label="決算予定は現在情報のため、過去分析モードでは非表示にしています。" />
+            : <EarningsCard ticker={ticker} />}
+        </>
+      )}
+      {active === 'financial' && <FinancialDetail ticker={ticker} analysisDate={analysisDate} />}
+      {active === 'valuation' && <ValuationDetail ticker={ticker} analysisDate={analysisDate} />}
+      {active === 'returns' && <ShareholderReturnsDetail ticker={ticker} analysisDate={analysisDate} />}
+      {active === 'company' && (
+        <>
+          <CompanyInformationDetail ticker={ticker} analysisDate={analysisDate} />
+          {analysisDate
+            ? <CurrentOnlyDataNotice label="会社四季報は現在情報のため、過去分析モードでは非表示にしています。" />
+            : <section className="card overflow-hidden"><ShikihoOverviewSection info={shikihoInfo} loading={loading} /></section>}
+        </>
+      )}
+    </section>
+  )
+}
+
 function OverviewBasicInfoPanel({
   ticker,
   quote,
   marginInfo,
   fallbackType,
   analysisDate,
-  shikihoInfo,
-  loading,
+  classifications,
 }: {
   ticker: string
   quote: StockQuote | null
   marginInfo: StockMarginInfo | null
   fallbackType?: string | null
   analysisDate: string | null
-  shikihoInfo: ShikihoInfo | null
-  loading: boolean
+  classifications: {
+    marketSegment?: string | null
+    sector17?: string | null
+    sector33?: string | null
+    majorCategory?: string | null
+    subIndustry?: string | null
+  }
 }) {
   return (
     <section className="card overflow-hidden">
@@ -618,14 +755,49 @@ function OverviewBasicInfoPanel({
         </div>
       </div>
 
-      {analysisDate
-        ? (
-          <div className="border-t border-[var(--color-border-default)] p-3">
-            <CurrentOnlyDataNotice label="会社四季報は現在情報のため、過去分析モードでは非表示にしています。" compact />
-          </div>
-        )
-        : <ShikihoOverviewSection info={shikihoInfo} loading={loading} />}
+      <StockClassificationBar {...classifications} analysisDate={analysisDate} />
     </section>
+  )
+}
+
+function StockClassificationBar({
+  marketSegment,
+  sector17,
+  sector33,
+  majorCategory,
+  subIndustry,
+  analysisDate,
+}: {
+  marketSegment?: string | null
+  sector17?: string | null
+  sector33?: string | null
+  majorCategory?: string | null
+  subIndustry?: string | null
+  analysisDate: string | null
+}) {
+  const classifications = [
+    ['市場', marketSegment],
+    ['17業種', sector17],
+    ['33業種', sector33],
+    ['独自60分類', majorCategory],
+    ['独自細分類', subIndustry],
+  ].filter((row): row is [string, string] => Boolean(row[1]))
+  if (classifications.length === 0) return null
+  return (
+    <div className="border-t border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-4 py-2.5">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        <div className="flex shrink-0 items-center gap-1.5 text-[10px] font-black text-[var(--color-brand-800)]"><Building2 size={13} />分類</div>
+        {classifications.map(([label, value]) => (
+          <div key={label} className="min-w-0">
+            <span className="mr-1 text-[8px] font-bold text-[var(--color-text-tertiary)]">{label}</span>
+            <strong className="text-[10px] font-black text-[var(--color-text-primary)]">{value}</strong>
+          </div>
+        ))}
+        <span className="ml-auto text-[8px] font-semibold text-[var(--color-text-tertiary)]">
+          17/33業種: J-Quants / 独自分類: 会社四季報CSV連携{analysisDate ? '・現在属性' : ''}
+        </span>
+      </div>
+    </div>
   )
 }
 
@@ -3496,23 +3668,6 @@ function InfoLine({ label, value }: { label: string; value: string }) {
   )
 }
 
-function Pill({ label, accent }: { label: string; accent?: boolean }) {
-  return (
-    <span style={{
-      display: 'inline-block',
-      padding: '2px 8px',
-      fontSize: '10px',
-      fontFamily: 'var(--font-mono)',
-      background: accent ? 'var(--accent-dim)' : 'var(--bg-elevated)',
-      color: accent ? 'var(--accent-primary)' : 'var(--text-secondary)',
-      border: `1px solid ${accent ? 'var(--accent-primary)' : 'var(--border-base)'}`,
-      borderRadius: 'var(--radius-sm)',
-    }}>
-      {label}
-    </span>
-  )
-}
-
 type BasicMlSimilar = {
   similarDirection: 'up' | 'down' | null
   similarityScore: number
@@ -3524,9 +3679,11 @@ type BasicMlResponse = {
   count?: number
   similars?: BasicMlSimilar[]
   physicsAnalysis?: {
-    physicsStatus?: string | null
+    physicsStatus?: PhysicsStatus | null
     pullbackVerdict?: string | null
     summary?: string | null
+    watchPoints?: string[]
+    riskNotes?: string[]
   } | null
 }
 
@@ -3545,6 +3702,7 @@ function BasicInfoCard({
   const [physical, setPhysical] = useState<PhysicalMomentumResponse | null>(null)
   const [ml, setMl] = useState<BasicMlResponse | null>(null)
   const [summaryLoading, setSummaryLoading] = useState(true)
+  const [showSignalDetails, setShowSignalDetails] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -3627,6 +3785,7 @@ function BasicInfoCard({
     { label: '52週安値', value: quote?.fiftyTwoWeekLow != null ? `¥${quote.fiftyTwoWeekLow.toLocaleString('ja-JP', { maximumFractionDigits: 1 })}` : '---' },
   ]
   const decision = buildBasicDecisionSummary(latestStage, physical, ml, quote)
+  const physics = buildBasicPhysicsSummary(ml, summaryLoading)
 
   return (
     <div className={embedded ? '' : 'card'} style={{ padding: embedded ? 0 : '12px' }}>
@@ -3638,9 +3797,9 @@ function BasicInfoCard({
           </span>
         )}
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '4px 8px' }}>
+      <div className="grid grid-cols-1 gap-x-2 gap-y-1 sm:grid-cols-2">
         {items.map(({ label, value, detail, color }) => (
-          <div key={label} style={{
+          <div key={label} className="min-w-0" style={{
             display: 'flex',
             justifyContent: 'space-between',
             alignItems: 'flex-start',
@@ -3652,6 +3811,9 @@ function BasicInfoCard({
             <span style={{ minWidth: 0, textAlign: 'right' }}>
               <span style={{
                 display: 'block',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
                 fontFamily: 'var(--font-mono)',
                 fontSize: '11px',
                 color: color ?? 'var(--text-primary)',
@@ -3667,6 +3829,8 @@ function BasicInfoCard({
                   fontSize: '9px',
                   color: 'var(--text-muted)',
                   whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
                 }}>
                   {detail}
                 </span>
@@ -3692,37 +3856,76 @@ function BasicInfoCard({
         )}
       </div>
 
-      <div style={{ ...basicDecisionStyle, borderColor: decision.border, background: decision.background }}>
-        <div style={basicDecisionHeaderStyle}>
-          <span style={basicDecisionLabelStyle}>短期チェック</span>
-          <strong style={{ color: decision.color }}>{decision.label}</strong>
-          <span style={{
-            marginLeft: 'auto',
-            padding: '2px 7px',
-            borderRadius: 999,
-            border: `1px solid ${decision.border}`,
-            color: decision.color,
-            background: 'rgba(255,255,255,0.62)',
-            fontSize: '10px',
-            fontFamily: 'var(--font-mono)',
-            fontWeight: 900,
-            whiteSpace: 'nowrap',
-          }}>
-            {formatShortTermStrength(decision.label, decision.score)}
-          </span>
-        </div>
-        <p style={basicDecisionDescriptionStyle}>{decision.description}</p>
-        <div style={basicReasonRowStyle}>
-          {decision.reasons.map((reason) => (
-            <span key={reason} style={basicReasonPillStyle}>{reason}</span>
-          ))}
-        </div>
-        {decision.mlText && (
-          <div style={basicMlLineStyle}>
-            <span>ML類似</span>
-            <b>{decision.mlText}</b>
+      <div style={basicSignalBlockStyle}>
+        <button
+          type="button"
+          className="flex w-full items-center gap-2 py-1 text-left text-[10px] font-black text-[var(--color-text-primary)] sm:hidden"
+          aria-expanded={showSignalDetails}
+          aria-controls="basic-signal-details"
+          onClick={() => setShowSignalDetails((current) => !current)}
+        >
+          <span>短期チェック・物理状態</span>
+          <span className="ml-auto truncate text-[9px] text-[var(--color-text-tertiary)]">{decision.label} / {physics.label}</span>
+          <ChevronRight size={13} className={`shrink-0 transition-transform ${showSignalDetails ? 'rotate-90' : ''}`} aria-hidden="true" />
+        </button>
+        <div id="basic-signal-details" className={`${showSignalDetails ? 'block' : 'hidden'} sm:block`}>
+          <div className="hidden sm:flex" style={basicSignalTitleStyle}>
+            <strong>短期チェック・物理状態</strong>
+            <span>スクリーナー共通判定</span>
           </div>
-        )}
+          <div style={basicSignalGridStyle}>
+          <section
+            aria-label="短期チェック"
+            style={{ ...basicSignalPaneStyle, borderLeftColor: decision.color, background: decision.background }}
+          >
+            <div style={basicDecisionHeaderStyle}>
+              <span style={basicDecisionLabelStyle}>短期チェック</span>
+              <strong style={{ color: decision.color }}>{decision.label}</strong>
+              <span style={{ ...basicSignalBadgeStyle, borderColor: decision.border, color: decision.color }}>
+                {formatShortTermStrength(decision.label, decision.score)}
+              </span>
+            </div>
+            <p style={basicDecisionDescriptionStyle}>{decision.description}</p>
+            <div style={basicReasonRowStyle}>
+              {decision.reasons.map((reason) => (
+                <span key={reason} style={basicReasonPillStyle}>{reason}</span>
+              ))}
+            </div>
+            {decision.mlText && (
+              <div style={basicMlLineStyle}>
+                <span>ML類似</span>
+                <b>{decision.mlText}</b>
+              </div>
+            )}
+          </section>
+
+          <section
+            aria-label="物理状態"
+            style={{ ...basicSignalPaneStyle, borderLeftColor: physics.color, background: physics.background }}
+          >
+            <div style={basicDecisionHeaderStyle}>
+              <span style={basicDecisionLabelStyle}>物理状態</span>
+              <strong style={{ color: physics.color }}>{physics.label}</strong>
+              {physics.pullbackVerdict && (
+                <span style={{ ...basicSignalBadgeStyle, borderColor: physics.border, color: physics.color }}>
+                  {physics.pullbackVerdict}
+                </span>
+              )}
+            </div>
+            <p style={basicDecisionDescriptionStyle}>{physics.description}</p>
+            {physics.watchPoint && (
+              <div style={basicPhysicsPointStyle}>
+                <span>確認点</span>
+                <b>{physics.watchPoint}</b>
+              </div>
+            )}
+            <div style={basicMlLineStyle}>
+              <span>物理特徴量基準日</span>
+              <b>{physics.asOfDate ?? '---'}</b>
+            </div>
+          </section>
+          </div>
+        </div>
       </div>
     </div>
   )
@@ -3799,6 +4002,25 @@ function buildBasicDecisionSummary(
   }
 }
 
+function buildBasicPhysicsSummary(ml: BasicMlResponse | null, loading: boolean) {
+  const analysis = ml?.physicsAnalysis ?? null
+  const label: PhysicsStatus | '読込中' = loading
+    ? '読込中'
+    : analysis?.physicsStatus ?? '算出待ち'
+  const style = physicsToneStyle(analysis?.physicsStatus ?? '算出待ち')
+
+  return {
+    label,
+    pullbackVerdict: loading ? null : analysis?.pullbackVerdict ?? null,
+    description: loading
+      ? '移動平均線の位置、傾き、加速度、乖離の状態を確認しています。'
+      : analysis?.summary ?? '物理特徴量が未生成のため、現在の状態を判定できません。',
+    watchPoint: loading ? null : analysis?.watchPoints?.[0] ?? analysis?.riskNotes?.[0] ?? null,
+    asOfDate: ml?.featureAsOfDate ?? ml?.asOfDate ?? null,
+    ...style,
+  }
+}
+
 function shortTermToneStyle(tone: ShortTermCheckTone) {
   if (tone === 'bullish') {
     return { color: 'var(--price-up)', border: 'rgba(22, 163, 74, 0.32)', background: 'rgba(22, 163, 74, 0.07)' }
@@ -3811,6 +4033,20 @@ function shortTermToneStyle(tone: ShortTermCheckTone) {
   }
   if (tone === 'weak') {
     return { color: '#1d4ed8', border: 'rgba(37, 99, 235, 0.24)', background: 'rgba(37, 99, 235, 0.06)' }
+  }
+  return { color: 'var(--text-secondary)', border: 'var(--border-subtle)', background: 'var(--bg-elevated)' }
+}
+
+function physicsToneStyle(status: PhysicsStatus) {
+  const tone = physicsStatusTone(status)
+  if (tone === 'red') {
+    return { color: 'var(--color-market-red)', border: 'rgba(220, 38, 38, 0.3)', background: 'rgba(220, 38, 38, 0.055)' }
+  }
+  if (tone === 'blue') {
+    return { color: 'var(--price-down)', border: 'rgba(37, 99, 235, 0.3)', background: 'rgba(37, 99, 235, 0.055)' }
+  }
+  if (tone === 'amber') {
+    return { color: '#b45309', border: 'rgba(217, 119, 6, 0.3)', background: 'rgba(245, 158, 11, 0.07)' }
   }
   return { color: 'var(--text-secondary)', border: 'var(--border-subtle)', background: 'var(--bg-elevated)' }
 }
@@ -3888,11 +4124,47 @@ const basicMutedTextStyle: CSSProperties = {
   lineHeight: 1.5,
 }
 
-const basicDecisionStyle: CSSProperties = {
+const basicSignalBlockStyle: CSSProperties = {
   marginTop: '10px',
+  paddingTop: '10px',
+  borderTop: '1px solid var(--border-subtle)',
+}
+
+const basicSignalTitleStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'baseline',
+  justifyContent: 'space-between',
+  gap: '8px',
+  marginBottom: '6px',
+  color: 'var(--text-primary)',
+  fontSize: '11px',
+}
+
+const basicSignalGridStyle: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(min(220px, 100%), 1fr))',
+  gap: '6px',
+}
+
+const basicSignalPaneStyle: CSSProperties = {
+  minWidth: 0,
+  borderLeft: '3px solid var(--border-subtle)',
+  padding: '8px 9px',
+}
+
+const basicSignalBadgeStyle: CSSProperties = {
+  marginLeft: 'auto',
+  maxWidth: '48%',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  padding: '2px 7px',
+  borderRadius: '999px',
   border: '1px solid var(--border-subtle)',
-  borderRadius: '8px',
-  padding: '9px',
+  background: 'rgba(255,255,255,0.72)',
+  fontSize: '9px',
+  fontFamily: 'var(--font-mono)',
+  fontWeight: 900,
+  whiteSpace: 'nowrap',
 }
 
 const basicDecisionHeaderStyle: CSSProperties = {
@@ -3942,4 +4214,15 @@ const basicMlLineStyle: CSSProperties = {
   paddingTop: '6px',
   color: 'var(--text-muted)',
   fontSize: '10px',
+}
+
+const basicPhysicsPointStyle: CSSProperties = {
+  marginTop: '7px',
+  display: 'grid',
+  gridTemplateColumns: 'auto minmax(0, 1fr)',
+  gap: '6px',
+  alignItems: 'start',
+  color: 'var(--text-muted)',
+  fontSize: '9px',
+  lineHeight: 1.45,
 }

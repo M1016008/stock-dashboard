@@ -1308,6 +1308,419 @@ export const stockFinancialSummaries = sqliteTable(
   }),
 )
 
+// Normalized financial foundation. The legacy summary table above remains for
+// existing screens; these tables preserve disclosure-time semantics and lineage.
+export const financialDisclosures = sqliteTable(
+  'financial_disclosures',
+  {
+    eventId:             text('event_id').primaryKey(),
+    ticker:              text('ticker').notNull(),
+    publishedAt:         text('published_at').notNull(),
+    source:              text('source').notNull(),
+    disclosureId:        text('disclosure_id').notNull(),
+    documentType:        text('document_type'),
+    accountingStandard:  text('accounting_standard').notNull(),
+    correctionStatus:    text('correction_status').notNull(),
+    metadataJson:        text('metadata_json').notNull().default('{}'),
+    importedAt:          integer('imported_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    tickerPublishedIdx: index('financial_disclosures_ticker_published_idx')
+      .on(t.ticker, t.publishedAt),
+    sourceDisclosureIdx: index('financial_disclosures_source_disclosure_idx')
+      .on(t.source, t.disclosureId),
+  }),
+)
+
+export const normalizedFinancialFacts = sqliteTable(
+  'normalized_financial_facts',
+  {
+    factId:              text('fact_id').primaryKey(),
+    eventId:             text('event_id').notNull(),
+    ticker:              text('ticker').notNull(),
+    publishedAt:         text('published_at').notNull(),
+    periodStart:         text('period_start'),
+    periodEnd:           text('period_end').notNull(),
+    fiscalYearStart:     text('fiscal_year_start'),
+    fiscalYearEnd:       text('fiscal_year_end'),
+    targetFiscalYear:    integer('target_fiscal_year'),
+    periodKind:          text('period_kind').notNull(),
+    accumulationKind:    text('accumulation_kind').notNull(),
+    valueKind:           text('value_kind').notNull(),
+    metric:              text('metric').notNull(),
+    value:               real('value').notNull(),
+    unit:                text('unit').notNull(),
+    currency:            text('currency'),
+    consolidationScope:  text('consolidation_scope').notNull(),
+    accountingStandard:  text('accounting_standard').notNull(),
+    correctionStatus:    text('correction_status').notNull(),
+    source:              text('source').notNull(),
+    sourceField:         text('source_field'),
+    disclosureId:        text('disclosure_id').notNull(),
+    isDerived:           integer('is_derived', { mode: 'boolean' }).notNull().default(false),
+    derivationMethod:    text('derivation_method'),
+    inputFactIdsJson:    text('input_fact_ids_json').notNull().default('[]'),
+    definitionVersion:   text('definition_version'),
+    importedAt:          integer('imported_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    tickerMetricPeriodIdx: index('normalized_financial_facts_ticker_metric_period_idx')
+      .on(t.ticker, t.metric, t.periodEnd, t.publishedAt),
+    eventIdx: index('normalized_financial_facts_event_idx').on(t.eventId),
+    derivationIdx: index('normalized_financial_facts_derivation_idx')
+      .on(t.ticker, t.isDerived, t.accumulationKind, t.periodEnd),
+  }),
+)
+
+export const detailedFinancialFacts = sqliteTable(
+  'detailed_financial_facts',
+  {
+    factId:              text('fact_id').primaryKey(),
+    eventId:             text('event_id').notNull(),
+    ticker:              text('ticker').notNull(),
+    publishedAt:         text('published_at').notNull(),
+    periodStart:         text('period_start'),
+    periodEnd:           text('period_end').notNull(),
+    valueKind:           text('value_kind').notNull(),
+    metric:              text('metric').notNull(),
+    value:               real('value').notNull(),
+    unit:                text('unit').notNull(),
+    currency:            text('currency'),
+    consolidationScope:  text('consolidation_scope').notNull(),
+    accountingStandard:  text('accounting_standard').notNull(),
+    correctionStatus:    text('correction_status').notNull(),
+    source:              text('source').notNull(),
+    sourceConcept:       text('source_concept').notNull(),
+    sourceNamespace:     text('source_namespace'),
+    contextRef:          text('context_ref').notNull(),
+    dimensionsJson:      text('dimensions_json').notNull().default('[]'),
+    disclosureId:        text('disclosure_id').notNull(),
+    documentId:          text('document_id'),
+    sourcePriority:      integer('source_priority').notNull(),
+    derivationMethod:    text('derivation_method'),
+    inputFactIdsJson:    text('input_fact_ids_json').notNull().default('[]'),
+    definitionVersion:   text('definition_version'),
+    importedAt:          integer('imported_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    tickerMetricPeriodIdx: index('detailed_financial_facts_ticker_metric_period_idx')
+      .on(t.ticker, t.metric, t.periodEnd, t.publishedAt),
+    disclosureIdx: index('detailed_financial_facts_disclosure_idx').on(t.disclosureId),
+    sourceConceptIdx: index('detailed_financial_facts_source_concept_idx')
+      .on(t.source, t.sourceConcept),
+  }),
+)
+
+export const financialForecastSnapshots = sqliteTable(
+  'financial_forecast_snapshots',
+  {
+    snapshotId:          text('snapshot_id').primaryKey(),
+    eventId:             text('event_id').notNull(),
+    ticker:              text('ticker').notNull(),
+    publishedAt:         text('published_at').notNull(),
+    targetFiscalYear:    integer('target_fiscal_year').notNull(),
+    targetPeriodStart:   text('target_period_start'),
+    targetPeriodEnd:     text('target_period_end').notNull(),
+    forecastScope:       text('forecast_scope').notNull(),
+    forecastPeriod:      text('forecast_period').notNull(),
+    metric:              text('metric').notNull(),
+    value:               real('value').notNull(),
+    unit:                text('unit').notNull(),
+    currency:            text('currency'),
+    consolidationScope:  text('consolidation_scope').notNull(),
+    accountingStandard:  text('accounting_standard').notNull(),
+    source:              text('source').notNull(),
+    sourceField:         text('source_field').notNull(),
+    disclosureId:        text('disclosure_id').notNull(),
+    importedAt:          integer('imported_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pitIdx: index('financial_forecast_snapshots_pit_idx')
+      .on(t.ticker, t.metric, t.targetFiscalYear, t.publishedAt),
+    eventIdx: index('financial_forecast_snapshots_event_idx').on(t.eventId),
+  }),
+)
+
+export const calculatedFinancialMetrics = sqliteTable(
+  'calculated_financial_metrics',
+  {
+    valueId:             text('value_id').primaryKey(),
+    ticker:              text('ticker').notNull(),
+    asOf:                text('as_of').notNull(),
+    periodStart:         text('period_start'),
+    periodEnd:           text('period_end'),
+    metric:              text('metric').notNull(),
+    value:               real('value').notNull(),
+    unit:                text('unit').notNull(),
+    consolidationScope:  text('consolidation_scope').notNull(),
+    accountingStandard:  text('accounting_standard').notNull(),
+    definitionVersion:   text('definition_version').notNull(),
+    derivationMethod:    text('derivation_method').notNull(),
+    inputFactIdsJson:    text('input_fact_ids_json').notNull(),
+    source:              text('source').notNull().default('calculated'),
+    computedAt:          integer('computed_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    tickerMetricAsOfIdx: index('calculated_financial_metrics_ticker_metric_asof_idx')
+      .on(t.ticker, t.metric, t.asOf),
+  }),
+)
+
+export const valuationMetricBases = sqliteTable(
+  'valuation_metric_bases',
+  {
+    basisId:                      text('basis_id').primaryKey(),
+    ticker:                       text('ticker').notNull(),
+    effectiveDate:                text('effective_date').notNull(),
+    transformsJson:               text('transforms_json').notNull(),
+    inputFactIdsJson:             text('input_fact_ids_json').notNull(),
+    metricDefinitionVersionsJson: text('metric_definition_versions_json').notNull(),
+    forecastSnapshotId:           text('forecast_snapshot_id'),
+    calculatedAt:                 integer('calculated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    tickerDateIdx: index('valuation_metric_bases_ticker_date_idx').on(t.ticker, t.effectiveDate),
+  }),
+)
+
+export const valuationDailyServing = sqliteTable(
+  'valuation_daily_serving',
+  {
+    ticker:             text('ticker').notNull(),
+    valuationDate:      text('valuation_date').notNull(),
+    priceDate:          text('price_date').notNull(),
+    price:              real('price').notNull(),
+    isTradingDay:       integer('is_trading_day', { mode: 'boolean' }).notNull().default(true),
+    per:                real('per'),
+    forwardPer:         real('forward_per'),
+    pbr:                real('pbr'),
+    psr:                real('psr'),
+    fcfYield:           real('fcf_yield'),
+    evEbitda:           real('ev_ebitda'),
+    netDebt:            real('net_debt'),
+    dividendYield:      real('dividend_yield'),
+    roe:                real('roe'),
+    revenueGrowth:      real('revenue_growth'),
+    enterpriseValue:    real('enterprise_value'),
+    ebitda:             real('ebitda'),
+    peerForwardPer:     real('peer_forward_per'),
+    peerPbr:            real('peer_pbr'),
+    peerFcfYield:       real('peer_fcf_yield'),
+    peerRoe:            real('peer_roe'),
+    peerRevenueGrowth:  real('peer_revenue_growth'),
+    peerEvEbitda:       real('peer_ev_ebitda'),
+    basisId:            text('basis_id').notNull(),
+    forecastSnapshotId: text('forecast_snapshot_id'),
+    calculatedAt:       integer('calculated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.ticker, t.valuationDate] }),
+    dateTickerIdx: index('valuation_daily_serving_date_ticker_idx').on(t.valuationDate, t.ticker),
+  }),
+)
+
+export const valuationServingCheckpoints = sqliteTable(
+  'valuation_serving_checkpoints',
+  {
+    ticker:              text('ticker').primaryKey(),
+    status:              text('status').notNull(),
+    historyStartDate:    text('history_start_date'),
+    latestValuationDate: text('latest_valuation_date'),
+    latestPriceDate:     text('latest_price_date'),
+    sourceImportedAt:    integer('source_imported_at').notNull().default(0),
+    sourceRowCount:      integer('source_row_count').notNull().default(0),
+    definitionSignature:text('definition_signature').notNull(),
+    persistedRows:       integer('persisted_rows').notNull().default(0),
+    errorMessage:        text('error_message'),
+    calculatedAt:        integer('calculated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+    updatedAt:           integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    statusIdx: index('valuation_serving_checkpoints_status_idx').on(t.status, t.ticker),
+  }),
+)
+
+// Integrated JP screener serving layer. The latest date is materialized during
+// daily updates; historical as-of dates are materialized once on demand.
+export const stockScreeningServing = sqliteTable(
+  'stock_screening_serving',
+  {
+    ticker: text('ticker').notNull(),
+    asOf: text('as_of').notNull(),
+    snapshotDate: text('snapshot_date').notNull(),
+    valuationDate: text('valuation_date'),
+    name: text('name').notNull(),
+    marketSegment: text('market_segment'),
+    sector17: text('sector17'),
+    sector33: text('sector33'),
+    majorCategory: text('major_category'),
+    subIndustry: text('sub_industry'),
+    price: real('price'),
+    marketCap: real('market_cap'),
+    revenue: real('revenue'),
+    revenueGrowth: real('revenue_growth'),
+    epsGrowth: real('eps_growth'),
+    revenueCagr3y: real('revenue_cagr_3y'),
+    revenueCagr5y: real('revenue_cagr_5y'),
+    operatingMargin: real('operating_margin'),
+    roe: real('roe'),
+    roa: real('roa'),
+    equityRatio: real('equity_ratio'),
+    standardFcf: real('standard_fcf'),
+    fcfYield: real('fcf_yield'),
+    netDebt: real('net_debt'),
+    roic: real('roic'),
+    per: real('per'),
+    forwardPer: real('forward_per'),
+    pbr: real('pbr'),
+    psr: real('psr'),
+    evEbitda: real('ev_ebitda'),
+    perPercentile5y: real('per_percentile_5y'),
+    pbrPercentile5y: real('pbr_percentile_5y'),
+    sectorValuationPercentile: real('sector_valuation_percentile'),
+    forecastDividendYield: real('forecast_dividend_yield'),
+    payoutRatio: real('payout_ratio'),
+    forecastDps: real('forecast_dps'),
+    dpsYoy: real('dps_yoy'),
+    consecutiveIncreaseYears: integer('consecutive_increase_years'),
+    consecutiveNonDecreaseYears: integer('consecutive_non_decrease_years'),
+    dpsCagr3y: real('dps_cagr_3y'),
+    dpsCagr5y: real('dps_cagr_5y'),
+    forecastRevenueGrowth: real('forecast_revenue_growth'),
+    forecastOperatingProfitGrowth: real('forecast_operating_profit_growth'),
+    forecastEpsGrowth: real('forecast_eps_growth'),
+    latestForecastRevisionRate: real('latest_forecast_revision_rate'),
+    latestForecastRevisionDirection: text('latest_forecast_revision_direction'),
+    hasCurrentForecast: integer('has_current_forecast', { mode: 'boolean' }),
+    hasNextForecast: integer('has_next_forecast', { mode: 'boolean' }),
+    dailyAStage: integer('daily_a_stage'),
+    dailyBStage: integer('daily_b_stage'),
+    weeklyAStage: integer('weekly_a_stage'),
+    weeklyBStage: integer('weekly_b_stage'),
+    monthlyAStage: integer('monthly_a_stage'),
+    monthlyBStage: integer('monthly_b_stage'),
+    stageCode: text('stage_code'),
+    sectorStructureScore: real('sector_structure_score'),
+    sectorRank: integer('sector_rank'),
+    pms: real('pms'),
+    pfs: real('pfs'),
+    maStructure: text('ma_structure'),
+    shortTermCheck: text('short_term_check'),
+    shortTermScore: real('short_term_score'),
+    creditRatio: real('credit_ratio'),
+    longMargin: real('long_margin'),
+    shortMargin: real('short_margin'),
+    longMarginChange: real('long_margin_change'),
+    shortMarginChange: real('short_margin_change'),
+    sourceVersion: text('source_version').notNull(),
+    calculatedAt: integer('calculated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.ticker, t.asOf] }),
+    asOfTickerIdx: index('stock_screening_serving_asof_ticker_idx').on(t.asOf, t.ticker),
+    sortGrowthIdx: index('stock_screening_serving_growth_idx').on(t.asOf, t.revenueGrowth, t.ticker),
+    sortRoeIdx: index('stock_screening_serving_roe_idx').on(t.asOf, t.roe, t.ticker),
+    sortForwardPerIdx: index('stock_screening_serving_forward_per_idx').on(t.asOf, t.forwardPer, t.ticker),
+    sortDividendIdx: index('stock_screening_serving_dividend_idx').on(t.asOf, t.forecastDividendYield, t.ticker),
+    sortStructureIdx: index('stock_screening_serving_structure_idx').on(t.asOf, t.sectorStructureScore, t.pms, t.ticker),
+  }),
+)
+
+export const stockScreeningServingDates = sqliteTable('stock_screening_serving_dates', {
+  asOf: text('as_of').primaryKey(),
+  snapshotDate: text('snapshot_date').notNull(),
+  valuationDate: text('valuation_date'),
+  rowCount: integer('row_count').notNull().default(0),
+  sourceVersion: text('source_version').notNull(),
+  status: text('status').notNull(),
+  errorMessage: text('error_message'),
+  calculatedAt: integer('calculated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+})
+
+export const savedScreeningDefinitions = sqliteTable(
+  'saved_screening_definitions',
+  {
+    id: text('id').primaryKey(),
+    name: text('name').notNull(),
+    definitionVersion: integer('definition_version').notNull().default(1),
+    stateJson: text('state_json').notNull(),
+    conditionsJson: text('conditions_json').notNull(),
+    conditionSignature: text('condition_signature').notNull(),
+    active: integer('active', { mode: 'boolean' }).notNull().default(true),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+    updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    activeIdx: index('saved_screening_definitions_active_idx').on(t.active, t.updatedAt),
+  }),
+)
+
+export const savedScreeningEvaluations = sqliteTable(
+  'saved_screening_evaluations',
+  {
+    evaluationId: text('evaluation_id').primaryKey(),
+    definitionId: text('definition_id').notNull(),
+    definitionVersion: integer('definition_version').notNull(),
+    evaluatedAt: integer('evaluated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+    asOf: text('as_of').notNull(),
+    snapshotDate: text('snapshot_date').notNull(),
+    previousEvaluationId: text('previous_evaluation_id'),
+    previousAsOf: text('previous_as_of'),
+    conditionsJson: text('conditions_json').notNull(),
+    matchedCount: integer('matched_count').notNull().default(0),
+    newCount: integer('new_count').notNull().default(0),
+    stayCount: integer('stay_count').notNull().default(0),
+    outCount: integer('out_count').notNull().default(0),
+    elapsedMs: integer('elapsed_ms').notNull().default(0),
+    status: text('status').notNull(),
+    errorMessage: text('error_message'),
+  },
+  (t) => ({
+    definitionDateIdx: index('saved_screening_evaluations_definition_date_idx')
+      .on(t.definitionId, t.definitionVersion, t.asOf),
+  }),
+)
+
+export const savedScreeningEvaluationMembers = sqliteTable(
+  'saved_screening_evaluation_members',
+  {
+    evaluationId: text('evaluation_id').notNull(),
+    ticker: text('ticker').notNull(),
+    name: text('name').notNull(),
+    status: text('status').notNull(),
+    previousValuesJson: text('previous_values_json'),
+    currentValuesJson: text('current_values_json'),
+    changesJson: text('changes_json'),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.evaluationId, t.ticker] }),
+    statusIdx: index('saved_screening_evaluation_members_status_idx')
+      .on(t.evaluationId, t.status, t.ticker),
+  }),
+)
+
+export const financialFoundationBackfillCheckpoints = sqliteTable(
+  'financial_foundation_backfill_checkpoints',
+  {
+    checkpointType: text('checkpoint_type').notNull(),
+    checkpointKey:  text('checkpoint_key').notNull(),
+    status:         text('status').notNull(),
+    sourceRows:     integer('source_rows').notNull().default(0),
+    persistedRows:  integer('persisted_rows').notNull().default(0),
+    detailsJson:    text('details_json').notNull().default('{}'),
+    errorMessage:   text('error_message'),
+    startedAt:      integer('started_at', { mode: 'timestamp' }),
+    finishedAt:     integer('finished_at', { mode: 'timestamp' }),
+    updatedAt:      integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.checkpointType, t.checkpointKey] }),
+    statusIdx: index('financial_foundation_backfill_status_idx')
+      .on(t.checkpointType, t.status, t.checkpointKey),
+  }),
+)
+
 export const dailyMarginAlerts = sqliteTable(
   'daily_margin_alerts',
   {
@@ -1352,6 +1765,44 @@ export const edinetDocuments = sqliteTable(
   },
   (t) => ({
     tickerTypeIdx: index('edinet_documents_ticker_type_idx').on(t.ticker, t.documentType, t.submittedAt),
+  }),
+)
+
+export const edinetCompanySnapshots = sqliteTable(
+  'edinet_company_snapshots',
+  {
+    documentId:             text('document_id').primaryKey(),
+    ticker:                 text('ticker').notNull(),
+    edinetCode:              text('edinet_code'),
+    documentType:            text('document_type').notNull(),
+    filerName:               text('filer_name'),
+    publishedAt:             text('published_at').notNull(),
+    periodStart:             text('period_start'),
+    periodEnd:               text('period_end'),
+    fiscalYear:              integer('fiscal_year'),
+    accountingStandard:      text('accounting_standard').notNull().default('UNKNOWN'),
+    correctionStatus:        text('correction_status').notNull().default('original'),
+    consolidationScope:      text('consolidation_scope').notNull().default('mixed'),
+    companyOverviewJson:     text('company_overview_json').notNull().default('{}'),
+    employeeInformationJson:text('employee_information_json').notNull().default('{}'),
+    officerInformationJson: text('officer_information_json').notNull().default('{}'),
+    segmentInformationJson: text('segment_information_json').notNull().default('{}'),
+    hasCompanyOverview:      integer('has_company_overview', { mode: 'boolean' }).notNull().default(false),
+    employeeSnapshotCount:   integer('employee_snapshot_count').notNull().default(0),
+    officerCount:            integer('officer_count').notNull().default(0),
+    segmentCount:            integer('segment_count').notNull().default(0),
+    geographicAreaCount:     integer('geographic_area_count').notNull().default(0),
+    majorCustomerCount:      integer('major_customer_count').notNull().default(0),
+    majorShareholderCount:   integer('major_shareholder_count').notNull().default(0),
+    policyHoldingCount:      integer('policy_holding_count').notNull().default(0),
+    xbrlFactCount:           integer('xbrl_fact_count').notNull().default(0),
+    parserVersion:           text('parser_version').notNull(),
+    source:                  text('source').notNull().default('edinet'),
+    importedAt:              integer('imported_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    tickerPitIdx: index('edinet_company_snapshots_ticker_pit_idx')
+      .on(t.ticker, t.publishedAt, t.periodEnd),
   }),
 )
 

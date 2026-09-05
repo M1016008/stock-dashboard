@@ -47,6 +47,14 @@ yarn-error.log*
 next-env.d.ts
 
 # local SQLite DB and API snapshot cache
+/data/*.db
+/data/*.db-journal
+/data/*.db-shm
+/data/*.db-wal
+/data/**/*.db
+/data/**/*.db-journal
+/data/**/*.db-shm
+/data/**/*.db-wal
 /data/stockboard.db
 /data/stockboard.db-journal
 /data/stockboard.db-shm
@@ -63,6 +71,9 @@ next-env.d.ts
 /data/snapshots/
 /data/analog-encoder-shadow/
 /.venv-analog-encoder/
+# local browser captures and other disposable QA artifacts
+/tmp/
+/undefined
 # 独自分類 Excel (Yoshio 個人の分析資産。各人ローカルに置く)
 /data/classification.xlsx
 

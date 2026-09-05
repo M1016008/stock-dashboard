@@ -10,6 +10,10 @@ import { db, execAll } from '@/lib/db/client'
 import { dailySnapshots, ohlcvDaily } from '@/lib/db/schema'
 import { activeCalendarPeriodCounts, sampleCalendarPeriodEnds } from '@/lib/snapshots/calendar-periods'
 import { getActiveSegmentStart, REQUIRED_ACTIVE_PERIODS, stageWithEnoughHistory } from '@/lib/snapshots/continuous-ma'
+import {
+  MAX_STAGE_HISTORY_TRADING_DAYS,
+  selectStageHistoryWindow,
+} from '@/lib/stage-history-window'
 import { normalizeMarket, normalizeTickerForMarket } from '@/lib/markets'
 import { asc, eq } from 'drizzle-orm'
 
@@ -70,7 +74,7 @@ const DEFAULT_COUNTS: Record<Granularity, number> = {
   monthly: 24,
 }
 const MAX_COUNTS: Record<Granularity, number> = {
-  daily: 250,
+  daily: 300,
   weekly: 104,
   monthly: 120,
 }
@@ -141,6 +145,23 @@ export async function GET(
       return NextResponse.json({ error: 'invalid_range', message: 'startDate must be before endDate' }, { status: 400 })
     }
     const hasDateRange = Boolean(startDate && endDate)
+    const rawLookbackTradingDays = searchParams.get('lookbackTradingDays')
+    const parsedLookbackTradingDays = Number(rawLookbackTradingDays)
+    if (
+      rawLookbackTradingDays !== null
+      && (!Number.isInteger(parsedLookbackTradingDays)
+        || parsedLookbackTradingDays <= 0
+        || parsedLookbackTradingDays > MAX_STAGE_HISTORY_TRADING_DAYS)
+    ) {
+      return NextResponse.json(
+        {
+          error: 'invalid_lookback',
+          message: `lookbackTradingDays must be an integer from 1 to ${MAX_STAGE_HISTORY_TRADING_DAYS}`,
+        },
+        { status: 400 },
+      )
+    }
+    const lookbackTradingDays = rawLookbackTradingDays === null ? null : parsedLookbackTradingDays
     const countParam = searchParams.get('count') ?? (granularity === 'weekly' ? searchParams.get('weeks') : null)
     const count = parseCount(
       countParam,
@@ -228,10 +249,13 @@ export async function GET(
         .where(eq(ohlcvDaily.ticker, ticker))
         .orderBy(asc(ohlcvDaily.date))
 
-    const priceDates = priceRows.map((row) => ({ date: row.date }))
-    const closeByDate = new Map(priceRows.map((row) => [row.date, row.close]))
-    const firstPriceDate = priceRows[0]?.date ?? null
-    const activeStartDate = getActiveSegmentStart(priceRows)
+    const eligiblePriceRows = endDate
+      ? priceRows.filter((row) => row.date <= endDate)
+      : priceRows
+    const priceDates = eligiblePriceRows.map((row) => ({ date: row.date }))
+    const closeByDate = new Map(eligiblePriceRows.map((row) => [row.date, row.close]))
+    const firstPriceDate = eligiblePriceRows[0]?.date ?? null
+    const activeStartDate = getActiveSegmentStart(eligiblePriceRows)
     const displayActiveStartDate =
       activeStartDate && firstPriceDate && activeStartDate !== firstPriceDate
         ? activeStartDate
@@ -242,17 +266,25 @@ export async function GET(
     const activeDayByDate = new Map(activePriceDates.map((row, index) => [row.date, index + 1]))
     const activeWeekByDate = activeCalendarPeriodCounts(activePriceDates, 'weekly')
     const activeMonthByDate = activeCalendarPeriodCounts(activePriceDates, 'monthly')
-    const snapshots = activeStartDate
+    const activeSnapshots = activeStartDate
       ? all.filter((snap) => snap.date >= activeStartDate)
       : all
+    const snapshots = endDate
+      ? activeSnapshots.filter((snap) => snap.date <= endDate)
+      : activeSnapshots
 
     if (snapshots.length === 0) {
       return NextResponse.json({ ticker, history: [], total: 0, activeStartDate: displayActiveStartDate })
     }
 
-    const selectedSnapshots = hasDateRange && startDate && endDate
-      ? snapshots.filter((snap) => snap.date >= startDate && snap.date <= endDate).slice(-count)
-      : sampleCalendarPeriodEnds(snapshots, granularity, count)
+    const lookbackWindow = lookbackTradingDays === null
+      ? null
+      : selectStageHistoryWindow(snapshots, granularity, lookbackTradingDays, endDate)
+    const selectedSnapshots = lookbackWindow?.displayRows ?? (
+      hasDateRange && startDate && endDate
+        ? snapshots.filter((snap) => snap.date >= startDate && snap.date <= endDate).slice(-count)
+        : sampleCalendarPeriodEnds(snapshots, granularity, count)
+    )
 
     const entries = selectedSnapshots.map((snap) => {
       const activePeriods = {
@@ -270,6 +302,12 @@ export async function GET(
       total: entries.length,
       granularity,
       count,
+      range: lookbackWindow
+        ? {
+          unit: 'active_trading_days',
+          ...lookbackWindow.metadata,
+        }
+        : null,
       requestedRange: hasDateRange ? { startDate, endDate } : null,
       activeStartDate: displayActiveStartDate,
     })

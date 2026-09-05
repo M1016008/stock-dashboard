@@ -7,6 +7,7 @@ import {
   type MarketMomentumGroupId,
 } from '@/lib/market-momentum-groups'
 import { StageTag } from '@/components/ui/StageTag'
+import { StockPreviewTrigger } from '@/components/stock-preview/StockPreviewTrigger'
 
 type MomentumSummaryRow = {
   date: string | null
@@ -436,6 +437,7 @@ export async function PhysicalMomentumMarket({
             scoreLabel="PFS"
             href={marketMomentumRankingHref(rankingGroup, 'initial', date)}
             tone="warning"
+            analysisDate={date}
           />
           <MomentumRankingPanel
             title="継続"
@@ -445,6 +447,7 @@ export async function PhysicalMomentumMarket({
             scoreLabel="PMS"
             href={marketMomentumRankingHref(rankingGroup, 'continuation', date)}
             tone="up"
+            analysisDate={date}
           />
           <MomentumRankingPanel
             title="失速"
@@ -454,6 +457,7 @@ export async function PhysicalMomentumMarket({
             scoreLabel="PFS"
             href={marketMomentumRankingHref(rankingGroup, 'stall', date)}
             tone="down"
+            analysisDate={date}
           />
           <MomentumRankingPanel
             title="下落警戒"
@@ -463,6 +467,7 @@ export async function PhysicalMomentumMarket({
             scoreLabel="PMS"
             href={marketMomentumRankingHref(rankingGroup, 'drop', date)}
             tone="down"
+            analysisDate={date}
           />
         </div>
       </div>
@@ -542,6 +547,7 @@ function MomentumRankingPanel({
   scoreLabel,
   href,
   tone,
+  analysisDate,
 }: {
   title: string
   badge: string
@@ -550,6 +556,7 @@ function MomentumRankingPanel({
   scoreLabel: string
   href: string
   tone: 'up' | 'down' | 'warning'
+  analysisDate?: string | null
 }) {
   return (
     <div className="overflow-hidden rounded-[8px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)]">
@@ -567,11 +574,12 @@ function MomentumRankingPanel({
           <div key={`${title}-${row.ticker}`} className="grid grid-cols-[28px_minmax(0,1fr)_auto] items-center gap-2 px-3 py-2">
             <div className="font-mono text-[12px] font-bold text-[var(--color-text-tertiary)]">{index + 1}</div>
             <div className="min-w-0">
-              <div className="flex min-w-0 items-center gap-2">
+              <div className="flex min-w-0 items-center gap-1">
                 <Link href={`/stock/${encodeURIComponent(row.ticker)}`} prefetch={false} className="font-mono text-[12px] font-bold text-[var(--color-brand-800)] hover:underline">
                   {row.ticker}
                 </Link>
                 <span className="truncate text-[11px] font-bold text-[var(--color-text-primary)]">{row.name ?? row.ticker}</span>
+                <StockPreviewTrigger ticker={row.ticker} analysisDate={analysisDate} context="home" />
               </div>
               <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px] font-semibold text-[var(--color-text-tertiary)]">
                 <span>{row.marketSegment ?? '市場未分類'}</span>

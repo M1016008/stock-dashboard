@@ -110,8 +110,8 @@ function sectorRankingMetric(
   const raw = mode === 'emerging'
     ? signed(row.transitionChangeScore, direction)
     : direction === 'up'
-      ? (row.strengthScore ?? 50) - 50
-      : 50 - (row.strengthScore ?? 50)
+      ? (row.trendStructureScore ?? row.strengthScore ?? 50) - 50
+      : 50 - (row.trendStructureScore ?? row.strengthScore ?? 50)
   const reliability = sectorSampleReliability(row.nStocks)
 
   // Small groups stay visible, but a sharp move in only a few stocks should not
@@ -147,7 +147,7 @@ export function analyzeHexSelectorCandidate(
   input: HexSelectorCandidateInput,
   sector: Pick<
     SectorStructureRow,
-    'strengthScore' | 'transitionChangeScore' | 'momentum10d' | 'propagationDirection' | 'nStocks'
+    'strengthScore' | 'trendStructureScore' | 'transitionChangeScore' | 'momentum10d' | 'propagationDirection' | 'nStocks'
   >,
   mode: HexSelectorMode,
   direction: HexSelectorDirection,
@@ -174,8 +174,8 @@ export function analyzeHexSelectorCandidate(
   const sectorMatches = mode === 'emerging'
     ? signed(sector.transitionChangeScore, direction) > 0 || sector.propagationDirection === expectedPropagation
     : direction === 'up'
-      ? (sector.strengthScore ?? 0) >= 55 && signed(sector.momentum10d, direction) >= 0
-      : (sector.strengthScore ?? 100) <= 45 && signed(sector.momentum10d, direction) >= 0
+      ? (sector.trendStructureScore ?? sector.strengthScore ?? 0) >= 60 && signed(sector.momentum10d, direction) >= 0
+      : (sector.trendStructureScore ?? sector.strengthScore ?? 100) <= 40 && signed(sector.momentum10d, direction) >= 0
   const transitionMatches = matchingTransitions.length > 0
   const higherMatches = higherAlignment >= 58
   const maConfirms = maMatches >= 2
@@ -186,7 +186,7 @@ export function analyzeHexSelectorCandidate(
       label: '業種構造',
       detail: mode === 'emerging'
         ? `構造変化 ${fmtSigned(sector.transitionChangeScore)}`
-        : `構造強度 ${fmtSigned(sector.strengthScore)}`,
+        : `トレンド構造 ${fmtSigned(sector.trendStructureScore ?? sector.strengthScore)}`,
       passed: sectorMatches,
     },
     {

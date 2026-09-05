@@ -56,6 +56,8 @@ interface CandlestickChartProps {
   enableRangeDragSelect?: boolean
   analysisDate?: string | null
   revealAfterAnalysis?: boolean
+  historyData?: OHLCV[]
+  compact?: boolean
   onVisibleRangeChange?: (range: ChartDateRange, interval: TvInterval, source?: 'visible' | 'drag') => void
 }
 
@@ -108,6 +110,8 @@ export function CandlestickChart({
   enableRangeDragSelect = false,
   analysisDate = null,
   revealAfterAnalysis = false,
+  historyData,
+  compact = false,
   onVisibleRangeChange,
 }: CandlestickChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -156,6 +160,12 @@ export function CandlestickChart({
 
   // データフェッチ
   useEffect(() => {
+    if (historyData) {
+      setData(historyData)
+      setLoading(false)
+      setError(null)
+      return
+    }
     let cancelled = false
     setLoading(true)
     setError(null)
@@ -173,7 +183,7 @@ export function CandlestickChart({
         setLoading(false)
       })
     return () => { cancelled = true }
-  }, [ticker, fetchPeriod, market])
+  }, [ticker, fetchPeriod, historyData, market])
 
   // 日足 → 指定時間軸に集約 + MA 計算用に整形
   const { grouped, candles, mas, resolvedAnalysisDate } = useMemo(() => {
@@ -276,6 +286,23 @@ export function CandlestickChart({
       }])
     }
 
+    if (compact) {
+      const volumeSeries = chart.addSeries(HistogramSeries, {
+        priceFormat: { type: 'volume' },
+        priceScaleId: 'volume',
+        priceLineVisible: false,
+        lastValueVisible: false,
+      })
+      volumeSeries.priceScale().applyOptions({
+        scaleMargins: { top: 0.78, bottom: 0 },
+      })
+      volumeSeries.setData(grouped.map((row) => ({
+        time: dateToTime(row.date),
+        value: row.volume,
+        color: row.close >= row.open ? 'rgba(220,38,38,0.34)' : 'rgba(37,99,235,0.34)',
+      })))
+    }
+
     // MA 各種
     for (const [index, period] of selectedMAs.entries()) {
       const series = chart.addSeries(LineSeries, {
@@ -369,7 +396,9 @@ export function CandlestickChart({
   }, [
     candleDates,
     candles,
+    compact,
     effectiveInterval,
+    grouped,
     height,
     mas,
     resolvedAnalysisDate,
@@ -516,6 +545,7 @@ export function CandlestickChart({
               <button
                 key={option}
                 type="button"
+                role="tab"
                 onClick={() => setActiveInterval(option)}
                 style={timeframeButtonStyle(option === effectiveInterval)}
                 aria-selected={option === effectiveInterval}
@@ -525,8 +555,8 @@ export function CandlestickChart({
             ))}
           </div>
         )}
-        <span style={{ fontSize: '10px', color: 'var(--text-muted)', letterSpacing: '0.08em' }}>MA:</span>
-        {effectiveMaLines.map((period, index) => (
+        {!compact && <span style={{ fontSize: '10px', color: 'var(--text-muted)', letterSpacing: '0.08em' }}>MA:</span>}
+        {!compact && effectiveMaLines.map((period, index) => (
           <label key={period} style={{
             display: 'flex',
             alignItems: 'center',
@@ -564,7 +594,7 @@ export function CandlestickChart({
           </div>
         )}
       </div>
-      <TimeframeSummaryBar summary={timeframeSummary} />
+      {!compact && <TimeframeSummaryBar summary={timeframeSummary} />}
 
       {/* チャートコンテナ */}
       <div style={{ position: 'relative', height }}>

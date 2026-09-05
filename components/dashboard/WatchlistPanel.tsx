@@ -7,6 +7,7 @@ import Link from 'next/link'
 import { useEffect, useState } from 'react'
 import { Card, CardHeader } from '@/components/ui/Card'
 import { StageTag } from '@/components/ui/StageTag'
+import { StockPreviewTrigger } from '@/components/stock-preview/StockPreviewTrigger'
 import { useWatchlistStore } from '@/lib/watchlist-store'
 
 interface Quote {
@@ -66,19 +67,18 @@ export function WatchlistPanel() {
           {rows.map(r => {
             const tone = r.changePercent > 0 ? 'text-[var(--color-price-up)]' : r.changePercent < 0 ? 'text-[var(--color-price-down)]' : ''
             return (
-              <Link
+              <div
                 key={r.ticker}
-                href={`/stock/${r.ticker}`}
                 className="grid grid-cols-[58px_1fr_80px_80px_36px] items-center gap-3 rounded-[8px] px-2 py-2.5 text-[14px] font-medium hover:bg-[var(--color-surface-subtle)]"
               >
-                <span className="tabular-nums text-[var(--color-text-secondary)]">{r.ticker}</span>
-                <span className="truncate">{r.name}</span>
+                <Link href={`/stock/${r.ticker}`} className="tabular-nums text-[var(--color-text-secondary)] hover:text-[var(--color-brand-700)]">{r.ticker}</Link>
+                <span className="flex min-w-0 items-center gap-1"><Link href={`/stock/${r.ticker}`} className="min-w-0 flex-1 truncate hover:text-[var(--color-brand-700)]">{r.name}</Link><StockPreviewTrigger ticker={r.ticker} context="home" /></span>
                 <span className="tabular-nums text-right">{r.price.toLocaleString()}</span>
                 <span className={`tabular-nums text-right ${tone}`}>
                   {(r.changePercent > 0 ? '+' : '') + r.changePercent.toFixed(2) + '%'}
                 </span>
                 <StageTag stage={r.daily_a_stage ?? null} size="xs" />
-              </Link>
+              </div>
             )
           })}
         </div>

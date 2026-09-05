@@ -95,9 +95,13 @@ type ApiResponse = {
       hitLabel: boolean
     } | null
   }>
+  availability?: 'available' | 'unavailable'
+  availabilityReason?: string | null
 }
 
 type MlBackendStatus = {
+  availability?: 'available' | 'unavailable'
+  availabilityReason?: string | null
   modelDate?: string | null
   evaluationDate?: string | null
   validationRuns?: number | null
@@ -592,7 +596,7 @@ export function StockMlInsights({
         .then((result) => result ?? { rows: [] })
     const statusEndpoint = market === 'US'
       ? `/api/us/ml-status/${encodeURIComponent(code)}${analysisDate ? `?date=${encodeURIComponent(analysisDate)}` : ''}`
-      : '/api/ml/reliability-status'
+      : `/api/ml/reliability-status${analysisDate ? `?date=${encodeURIComponent(analysisDate)}` : ''}`
     Promise.all([
       requiredJson<Partial<ApiResponse>>(`${similarEndpoint}?${similarParams.toString()}`),
       historyRequest,
@@ -608,13 +612,15 @@ export function StockMlInsights({
             similars: Array.isArray(similarJson.similars) ? similarJson.similars : [],
             caseStudies: [],
             predictions: Array.isArray(historyJson?.rows) ? historyJson.rows : [],
+            availability: similarJson.availability,
+            availabilityReason: similarJson.availabilityReason,
           })
           setBackendStatus(statusJson)
         }
       })
       .catch(() => {
         if (!cancelled) {
-          setData({ asOfDate: null, featureAsOfDate: null, source: null, physicsAnalysis: null, similars: [], caseStudies: [], predictions: [] })
+          setData({ asOfDate: null, featureAsOfDate: null, source: null, physicsAnalysis: null, similars: [], caseStudies: [], predictions: [], availability: 'unavailable', availabilityReason: 'load_failed' })
           setBackendStatus(null)
         }
       })
@@ -638,6 +644,20 @@ export function StockMlInsights({
     validationSamples: reliabilityBackend.validationSamples,
     healthIssueCount: reliabilityBackend.healthIssueCount,
   }) : null
+  if (analysisDate && data?.availability === 'unavailable') {
+    const noModel = data.availabilityReason === 'no_model_as_of'
+    return (
+      <div className="card" style={{ padding: 12 }}>
+        <div className="section-header" style={{ marginBottom: 8 }}>ML類似候補</div>
+        <div className="border border-amber-200 bg-amber-50 px-3 py-3 text-[12px] font-bold text-amber-900">
+          {noModel ? '当時利用可能なモデルなし' : '当時利用可能なML結果を確認できません。'}
+          <div className="mt-1 text-[10px] font-semibold text-amber-800">
+            {analysisDate}より後に作成されたモデル・検証情報・予測結果は代用表示していません。
+          </div>
+        </div>
+      </div>
+    )
+  }
   const loadCaseStudies = () => {
     if (market === 'US' || casesLoading || casesLoaded) return
     setCasesLoading(true)

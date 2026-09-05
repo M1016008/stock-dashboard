@@ -2,6 +2,7 @@ import Link from 'next/link'
 import { Card, CardHeader } from '@/components/ui/Card'
 import { MarginBadges } from '@/components/ui/MarginBadges'
 import { StageTag } from '@/components/ui/StageTag'
+import { StockPreviewTrigger } from '@/components/stock-preview/StockPreviewTrigger'
 import { type EarningsRow } from '@/lib/queries/dashboard'
 import { getDashboardEarningsAlertsCached } from '@/lib/queries/dashboard-earnings-alerts-cache'
 import type { UniverseFilterValue } from '@/lib/market-universe'
@@ -88,22 +89,20 @@ function SignalChips({ row }: { row: EarningsRow }) {
   )
 }
 
-function UpcomingRow({ row }: { row: EarningsRow }) {
+function UpcomingRow({ row, analysisDate }: { row: EarningsRow; analysisDate: string | null }) {
   const daysText = row.daysLeft <= 0 ? '当日' : `${row.daysLeft}日後`
   return (
-    <Link
-      href={stockHref(row.ticker)}
-      prefetch={false}
+    <div
       className="grid grid-cols-[54px_minmax(0,1fr)_auto] items-center gap-2 px-3 py-2.5 hover:bg-[var(--color-surface-subtle)]"
     >
       <div>
-        <div className="font-mono text-[12px] font-black text-[var(--color-brand-800)]">{row.ticker}</div>
+        <Link href={stockHref(row.ticker)} prefetch={false} className="font-mono text-[12px] font-black text-[var(--color-brand-800)] hover:underline">{row.ticker}</Link>
         <div className="mt-0.5 rounded-full bg-[var(--color-surface-subtle)] px-1.5 py-0.5 text-center text-[9px] font-black text-[var(--color-text-secondary)]">
           {daysText}
         </div>
       </div>
       <div className="min-w-0">
-        <div className="truncate text-[12px] font-black text-[var(--color-text-primary)]">{row.name ?? row.ticker}</div>
+        <div className="flex min-w-0 items-center gap-1"><Link href={stockHref(row.ticker)} prefetch={false} className="min-w-0 flex-1 truncate text-[12px] font-black text-[var(--color-text-primary)] hover:text-[var(--color-brand-700)]">{row.name ?? row.ticker}</Link><StockPreviewTrigger ticker={row.ticker} analysisDate={analysisDate} context="home" /></div>
         <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px] font-bold text-[var(--color-text-tertiary)]">
           <span>{row.announce_date}</span>
           <span>{row.sector17Name ?? '業種未分類'}</span>
@@ -120,20 +119,18 @@ function UpcomingRow({ row }: { row: EarningsRow }) {
         </div>
         <div className="mt-0.5 text-[9px] font-bold text-[var(--color-text-tertiary)]">出来高 {fmtVolume(row.avgVolume30)}</div>
       </div>
-    </Link>
+    </div>
   )
 }
 
-function CompletedRow({ row }: { row: EarningsRow }) {
+function CompletedRow({ row, analysisDate }: { row: EarningsRow; analysisDate: string | null }) {
   return (
-    <Link
-      href={stockHref(row.ticker)}
-      prefetch={false}
+    <div
       className="grid grid-cols-[54px_minmax(0,1fr)_auto] items-center gap-2 px-3 py-2.5 hover:bg-[var(--color-surface-subtle)]"
     >
-      <div className="font-mono text-[12px] font-black text-[var(--color-brand-800)]">{row.ticker}</div>
+      <Link href={stockHref(row.ticker)} prefetch={false} className="font-mono text-[12px] font-black text-[var(--color-brand-800)] hover:underline">{row.ticker}</Link>
       <div className="min-w-0">
-        <div className="truncate text-[12px] font-black text-[var(--color-text-primary)]">{row.name ?? row.ticker}</div>
+        <div className="flex min-w-0 items-center gap-1"><Link href={stockHref(row.ticker)} prefetch={false} className="min-w-0 flex-1 truncate text-[12px] font-black text-[var(--color-text-primary)] hover:text-[var(--color-brand-700)]">{row.name ?? row.ticker}</Link><StockPreviewTrigger ticker={row.ticker} analysisDate={analysisDate} context="home" /></div>
         <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px] font-bold text-[var(--color-text-tertiary)]">
           <span>{row.announce_date}</span>
           <span>{row.postEarningsTradingDays == null ? '発表後' : `発表後${row.postEarningsTradingDays}営業日`}</span>
@@ -146,7 +143,7 @@ function CompletedRow({ row }: { row: EarningsRow }) {
         </div>
         <div className="mt-0.5 text-[9px] font-bold text-[var(--color-text-tertiary)]">発表後</div>
       </div>
-    </Link>
+    </div>
   )
 }
 
@@ -195,7 +192,7 @@ export async function DashboardEarningsAlerts({
               <div className="text-[10px] font-bold text-[var(--color-text-tertiary)]">近い日付 + 注意ラベル + 出来高</div>
             </div>
             <div className="divide-y divide-[var(--color-border-soft)]">
-              {upcoming.map((row) => <UpcomingRow key={`upcoming-${row.ticker}-${row.announce_date}`} row={row} />)}
+              {upcoming.map((row) => <UpcomingRow key={`upcoming-${row.ticker}-${row.announce_date}`} row={row} analysisDate={date} />)}
               {upcoming.length === 0 && (
                 <div className="px-3 py-8 text-center text-[12px] font-bold text-[var(--color-text-tertiary)]">表示対象の決算予定はありません</div>
               )}
@@ -207,7 +204,7 @@ export async function DashboardEarningsAlerts({
               <div className="text-[10px] font-bold text-[var(--color-text-tertiary)]">発表後の値動き</div>
             </div>
             <div className="divide-y divide-[var(--color-border-soft)]">
-              {completed.map((row) => <CompletedRow key={`completed-${row.ticker}-${row.announce_date}`} row={row} />)}
+              {completed.map((row) => <CompletedRow key={`completed-${row.ticker}-${row.announce_date}`} row={row} analysisDate={date} />)}
               {completed.length === 0 && (
                 <div className="px-3 py-8 text-center text-[12px] font-bold text-[var(--color-text-tertiary)]">発表後フォロー対象はありません</div>
               )}

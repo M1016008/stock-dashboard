@@ -3,6 +3,7 @@ import {
   BarChart3,
   Building2,
   CalendarDays,
+  CalendarRange,
   ChartCandlestick,
   FlaskConical,
   Hexagon,
@@ -108,6 +109,15 @@ export const PAGE_CATALOG = {
     commandVerb: '探す',
     commandBadge: '探索',
     searchTerms: '日本株 条件検索',
+  },
+  periodExplorer: {
+    href: '/period-explorer',
+    label: '期間ランキング',
+    description: '任意期間の値動き・Stage・流動性から候補を探索',
+    icon: CalendarRange,
+    commandVerb: '探す',
+    commandBadge: '探索',
+    searchTerms: '期間分析 騰落率 出来高 業種ランキング',
   },
   stageScreener: {
     href: '/stage-screener',
@@ -357,7 +367,7 @@ export const NAVIGATION_BY_AREA = {
       shortLabel: '探索',
       icon: Search,
       sections: [
-        { id: 'filters', label: '条件から探す', pageIds: ['screener', 'stageScreener'], column: 1 },
+        { id: 'filters', label: '条件から探す', pageIds: ['screener', 'periodExplorer', 'stageScreener'], column: 1 },
         { id: 'conversation', label: '対話で探す', pageIds: ['aiResearch'], column: 2 },
       ],
     },

@@ -4,6 +4,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { StageDots } from '@/components/ui/StageDots'
+import { StockPreviewTrigger } from '@/components/stock-preview/StockPreviewTrigger'
 
 interface EarningsEntry {
   date: string
@@ -263,9 +264,12 @@ export function EarningsCalendar({ defaultDays = 14 }: { defaultDays?: DaysOptio
                     <tr key={`${e.date}-${e.ticker}`} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
                       <td style={{ ...td, fontFamily: 'var(--font-mono)' }}>{e.date}</td>
                       <td style={td}>
-                        <Link href={`/stock/${encodeURIComponent(e.ticker)}`} style={{ color: 'var(--accent-primary)', fontFamily: 'var(--font-mono)', textDecoration: 'none', fontWeight: 600 }}>
-                          {e.displayCode}
-                        </Link>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                          <Link href={`/stock/${encodeURIComponent(e.ticker)}`} style={{ color: 'var(--accent-primary)', fontFamily: 'var(--font-mono)', textDecoration: 'none', fontWeight: 600 }}>
+                            {e.displayCode}
+                          </Link>
+                          <StockPreviewTrigger ticker={e.ticker} context="home" />
+                        </span>
                       </td>
                       <td style={td}>{e.name}</td>
                       <td style={tdR}>{e.price?.toLocaleString('ja-JP', { maximumFractionDigits: 2 }) ?? '---'}</td>

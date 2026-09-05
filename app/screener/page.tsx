@@ -7,10 +7,12 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { Columns3, Filter, GitCompareArrows, RotateCcw } from 'lucide-react'
 import { toTvSymbol, buildTvWatchlistText } from '@/lib/tv-format'
 import { WatchlistButton } from '@/components/ui/WatchlistButton'
+import { StockPreviewTrigger } from '@/components/stock-preview/StockPreviewTrigger'
 import { StageDots } from '@/components/ui/StageDots'
 import { MarketDateCalendar } from '@/components/ui/MarketDateCalendar'
 import { SavedViewManager } from '@/components/ui/SavedViewManager'
 import { getCompareSymbols, toggleComparedSymbol } from '@/lib/client/stock-workspace'
+import { IntegratedScreener } from '@/components/screener/IntegratedScreener'
 import { replaceCurrentUrlFilters } from '@/lib/client/url-filter-state'
 import { getUniverseFilterMeta, parseUniverseFilter, UNIVERSE_FILTER_PARAM } from '@/lib/market-universe'
 import { formatShortTermStrength, SHORT_TERM_CHECK_LABELS, type ShortTermCheckLabel } from '@/lib/short-term-check'
@@ -419,7 +421,7 @@ interface AvailableDate {
   tickers: number
 }
 
-export default function ScreenerPage() {
+function LegacyScreenerPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const activeUniverse = parseUniverseFilter(searchParams.get(UNIVERSE_FILTER_PARAM))
@@ -1978,9 +1980,12 @@ export default function ScreenerPage() {
                           </div>
                         </td>
                         <td style={td}>
-                          <Link href={`/stock/${encodeURIComponent(r.ticker)}`} style={{ color: 'var(--accent-primary)', fontFamily: 'var(--font-mono)', textDecoration: 'none', fontWeight: 600 }}>
-                            {r.ticker.replace('.T', '')}
-                          </Link>
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                            <Link href={`/stock/${encodeURIComponent(r.ticker)}`} style={{ color: 'var(--accent-primary)', fontFamily: 'var(--font-mono)', textDecoration: 'none', fontWeight: 600 }}>
+                              {r.ticker.replace('.T', '')}
+                            </Link>
+                            <StockPreviewTrigger ticker={r.ticker} analysisDate={referenceDate} context="screener" />
+                          </span>
                         </td>
                         <td style={td}>
                           <button
@@ -3110,3 +3115,22 @@ const th: React.CSSProperties = {
 const thR: React.CSSProperties = { ...th, textAlign: 'right' }
 const td: React.CSSProperties = { padding: '8px 12px', fontSize: '12px', color: 'var(--text-primary)', whiteSpace: 'nowrap' }
 const tdR: React.CSSProperties = { ...td, textAlign: 'right', fontFamily: 'var(--font-mono)' }
+
+export default function ScreenerPage() {
+  const router = useRouter()
+  const searchParams = useSearchParams()
+  const mode = searchParams.get('mode') === 'legacy' ? 'legacy' : 'integrated'
+  const setMode = (next: 'integrated' | 'legacy') => {
+    const params = new URLSearchParams(searchParams.toString())
+    if (next === 'legacy') params.set('mode', 'legacy')
+    else params.delete('mode')
+    router.replace(`/screener${params.size > 0 ? `?${params.toString()}` : ''}`, { scroll: false })
+  }
+  return <>
+    <div className="mx-4 mt-3 flex h-9 items-center border border-[var(--color-border-default)] bg-white p-0.5 max-[640px]:mx-2.5">
+      <button type="button" onClick={() => setMode('integrated')} className={`h-7 flex-1 px-3 text-[11px] font-black ${mode === 'integrated' ? 'bg-[var(--color-brand-700)] text-white' : 'text-[var(--color-text-secondary)]'}`}>統合スクリーナー</button>
+      <button type="button" onClick={() => setMode('legacy')} className={`h-7 flex-1 px-3 text-[11px] font-black ${mode === 'legacy' ? 'bg-[var(--color-brand-700)] text-white' : 'text-[var(--color-text-secondary)]'}`}>従来テクニカル</button>
+    </div>
+    {mode === 'integrated' ? <IntegratedScreener /> : <LegacyScreenerPage />}
+  </>
+}

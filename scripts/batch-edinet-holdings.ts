@@ -8,6 +8,7 @@ import {
   parseMajorShareholders,
   parsePolicyHoldings,
 } from '@/lib/edinet-xbrl'
+import { XbrlFactReader } from '@/lib/edinet-xbrl-facts'
 
 const API_BASE = 'https://api.edinet-fsa.go.jp/api/v2'
 const LOOKBACK_DAYS = Math.max(1, Number(process.env.EDINET_LOOKBACK_DAYS ?? 7))
@@ -141,8 +142,9 @@ async function updateDatasetStatus(
 }
 
 async function processAnnualReport(document: EdinetDocument, ticker: string, xml: string) {
-  const major = parseMajorShareholders(xml)
-  const policy = parsePolicyHoldings(xml)
+  const reader = new XbrlFactReader(xml)
+  const major = parseMajorShareholders(reader)
+  const policy = parsePolicyHoldings(reader)
   const statements: Array<{ sql: string; args: Array<string | number | null> }> = [
     { sql: `DELETE FROM major_shareholders WHERE document_id = ?`, args: [document.docID] },
     { sql: `DELETE FROM policy_holdings WHERE document_id = ?`, args: [document.docID] },
