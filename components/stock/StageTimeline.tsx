@@ -20,6 +20,20 @@ interface StageEntry {
   close: number | null
 }
 
+export interface StageTimelineSnapshot {
+  status: 'loading' | 'available' | 'missing' | 'error'
+  date: string | null
+  stages: {
+    dailyA: number | null
+    dailyB: number | null
+    weeklyA: number | null
+    weeklyB: number | null
+    monthlyA: number | null
+    monthlyB: number | null
+  } | null
+  message: string | null
+}
+
 interface DateRange {
   startDate: string
   endDate: string
@@ -31,12 +45,36 @@ export interface StageRangeSelection extends DateRange {
   systemKey: StageKey
 }
 
+export function StageTimelineValue({
+  stage,
+  onSelect,
+}: {
+  stage: number
+  onSelect?: () => void
+}) {
+  const title = `S${stage}: ${STAGE_LABELS[stage]}`
+  if (onSelect) {
+    return (
+      <button
+        type="button"
+        onClick={onSelect}
+        title={title}
+        style={stageButtonStyle(stage, true)}
+      >{stage}</button>
+    )
+  }
+  return (
+    <span title={title} style={stageButtonStyle(stage, false)}>{stage}</span>
+  )
+}
+
 interface StageTimelineProps {
   ticker: string
   market?: MarketCode
   analysisDate?: string | null
   selectedRange?: DateRange | null
   onStageRangeSelect?: (selection: StageRangeSelection) => void
+  onSnapshotChange?: (snapshot: StageTimelineSnapshot) => void
 }
 
 type Granularity = 'daily' | 'weekly' | 'monthly'
@@ -76,6 +114,7 @@ export function StageTimeline({
   analysisDate = null,
   selectedRange,
   onStageRangeSelect,
+  onSnapshotChange,
 }: StageTimelineProps) {
   const [entries, setEntries] = useState<StageEntry[]>([])
   const [activeStartDate, setActiveStartDate] = useState<string | null>(null)
@@ -92,6 +131,7 @@ export function StageTimeline({
     setLoading(true)
     setError('')
     setEntries([])
+    onSnapshotChange?.({ status: 'loading', date: null, stages: null, message: null })
     const params = new URLSearchParams({
       market,
       granularity,
@@ -111,18 +151,40 @@ export function StageTimeline({
       })
       .then((d) => {
         if (d.error) throw new Error(d.error)
-        setEntries(d.history ?? [])
+        const history = (d.history ?? []) as StageEntry[]
+        const latest = history.at(-1) ?? null
+        setEntries(history)
         setActiveStartDate(d.activeStartDate ?? null)
+        onSnapshotChange?.(latest ? {
+          status: 'available',
+          date: latest.date,
+          stages: {
+            dailyA: latest.daily_a_stage,
+            dailyB: latest.daily_b_stage,
+            weeklyA: latest.weekly_a_stage,
+            weeklyB: latest.weekly_b_stage,
+            monthlyA: latest.monthly_a_stage,
+            monthlyB: latest.monthly_b_stage,
+          },
+          message: null,
+        } : {
+          status: 'missing',
+          date: null,
+          stages: null,
+          message: '基準日時点のStage履歴がありません',
+        })
       })
       .catch((error: unknown) => {
         if (controller.signal.aborted) return
-        setError(error instanceof Error ? error.message : String(error))
+        const message = error instanceof Error ? error.message : String(error)
+        setError(message)
+        onSnapshotChange?.({ status: 'error', date: null, stages: null, message })
       })
       .finally(() => {
         if (!controller.signal.aborted) setLoading(false)
       })
     return () => controller.abort()
-  }, [analysisDate, ticker, market, granularity, count])
+  }, [analysisDate, ticker, market, granularity, count, onSnapshotChange])
 
   useEffect(() => {
     const container = timelineScrollRef.current
@@ -157,10 +219,11 @@ export function StageTimeline({
   }
 
   return (
-    <div className="card" style={{ padding: '12px' }}>
+    <section className="card" style={{ padding: '12px' }} aria-labelledby="stage-timeline-title">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', marginBottom: '8px', flexWrap: 'wrap' }}>
         <div>
-          <div style={{ fontSize: '11px', fontWeight: 600 }}>ステージ変遷（{selectedGranularity.label}）</div>
+          <div className="text-[9px] font-black uppercase tracking-[0.08em] text-[var(--color-text-tertiary)]">Stage history</div>
+          <h2 id="stage-timeline-title" className="mt-0.5 text-[13px] font-black text-[var(--color-text-primary)]">ステージ変遷（{selectedGranularity.label}）</h2>
           <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
             {selectedGranularity.subtitle}
             {activeStartDate ? ` / 連続データ開始 ${activeStartDate}` : ''}
@@ -176,8 +239,11 @@ export function StageTimeline({
             {GRANULARITIES.map((item) => (
               <button
                 key={item.key}
+                type="button"
                 onClick={() => selectGranularity(item.key)}
                 style={segmentButton(granularity === item.key)}
+                className="min-h-11 px-2.5 sm:min-h-8"
+                aria-pressed={granularity === item.key}
               >
                 {item.label}
               </button>
@@ -190,7 +256,9 @@ export function StageTimeline({
                 type="button"
                 onClick={() => setCount(preset)}
                 style={segmentButton(count === preset)}
+                className="min-h-11 px-2.5 sm:min-h-8"
                 title={`直近${preset}${granularity === 'daily' ? '営業日' : granularity === 'weekly' ? '週' : 'か月'}を表示`}
+                aria-pressed={count === preset}
               >
                 {preset}{DISPLAY_SUFFIX[granularity]}
               </button>
@@ -211,29 +279,27 @@ export function StageTimeline({
             <thead>
               <tr>
                 <th style={{ ...stickyTh, textAlign: 'left' }}>系統</th>
-                {entries.map((e) => (
-                  <th key={e.date} style={dateHeaderStyle(selectedRange ? isDateWithinRange(e.date, selectedRange) : false)}>
+                {entries.map((e, index) => (
+                  <th key={e.date} style={dateHeaderStyle(selectedRange ? isDateWithinRange(e.date, selectedRange) : false, index === entries.length - 1)}>
                     {e.date.slice(5)}
                   </th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {SYSTEMS.map((sys) => (
+              {SYSTEMS.map((sys, systemIndex) => (
                 <tr key={sys.key}>
-                  <td style={{ ...stickyTd, fontWeight: 600 }}>{sys.label}</td>
+                  <td style={{ ...stickyTd, fontWeight: 600, ...(systemIndex === 2 || systemIndex === 4 ? timeframeDividerStyle : {}) }}>{sys.label}</td>
                   {entries.map((e, index) => {
                     const v = e[sys.key] as number | null
                     const inSelectedRange = selectedRange ? isDateWithinRange(e.date, selectedRange) : false
                     return (
-                      <td key={e.date} style={cellStyle(inSelectedRange)}>
+                      <td key={e.date} style={{ ...cellStyle(inSelectedRange, index === entries.length - 1), ...(systemIndex === 2 || systemIndex === 4 ? timeframeDividerStyle : {}) }}>
                         {v ? (
-                          <button
-                            type="button"
-                            onClick={() => selectStageSegment(sys, index)}
-                            title={`S${v}: ${STAGE_LABELS[v]}`}
-                            style={stageButtonStyle(v, Boolean(onStageRangeSelect))}
-                          >{v}</button>
+                          <StageTimelineValue
+                            stage={v}
+                            onSelect={onStageRangeSelect ? () => selectStageSegment(sys, index) : undefined}
+                          />
                         ) : (
                           <span style={{ color: 'var(--text-muted)' }}>-</span>
                         )}
@@ -246,7 +312,7 @@ export function StageTimeline({
           </table>
         </div>
       )}
-    </div>
+    </section>
   )
 }
 
@@ -260,11 +326,12 @@ const th: React.CSSProperties = {
   whiteSpace: 'nowrap',
 }
 
-function dateHeaderStyle(active: boolean): React.CSSProperties {
+function dateHeaderStyle(active: boolean, current: boolean): React.CSSProperties {
   return {
     ...th,
-    background: active ? 'rgba(250, 204, 21, 0.16)' : undefined,
-    color: active ? 'var(--accent-primary)' : th.color,
+    background: active ? 'rgba(250, 204, 21, 0.16)' : current ? 'var(--bg-elevated)' : undefined,
+    color: active ? 'var(--accent-primary)' : current ? 'var(--text-primary)' : th.color,
+    fontWeight: current ? 800 : th.fontWeight,
   }
 }
 
@@ -279,12 +346,12 @@ const stickyTh: React.CSSProperties = {
   whiteSpace: 'nowrap',
 }
 
-function cellStyle(active: boolean): React.CSSProperties {
+function cellStyle(active: boolean, current: boolean): React.CSSProperties {
   return {
     padding: '4px 6px',
     textAlign: 'center',
     borderBottom: '1px solid var(--border-subtle)',
-    background: active ? 'rgba(250, 204, 21, 0.16)' : undefined,
+    background: active ? 'rgba(250, 204, 21, 0.16)' : current ? 'var(--bg-elevated)' : undefined,
     boxShadow: active ? 'inset 0 2px 0 rgba(245, 158, 11, 0.28), inset 0 -2px 0 rgba(245, 158, 11, 0.18)' : undefined,
   }
 }
@@ -330,6 +397,10 @@ const stickyTd: React.CSSProperties = {
   borderBottom: '1px solid var(--border-subtle)',
 }
 
+const timeframeDividerStyle: React.CSSProperties = {
+  borderTop: '3px solid var(--border-base)',
+}
+
 const segmentedControl: React.CSSProperties = {
   display: 'inline-flex',
   border: '1px solid var(--border-base)',
@@ -339,7 +410,6 @@ const segmentedControl: React.CSSProperties = {
 
 function segmentButton(active: boolean): React.CSSProperties {
   return {
-    padding: '3px 10px',
     fontSize: '10px',
     fontFamily: 'var(--font-mono)',
     background: active ? 'var(--accent-primary)' : 'transparent',

@@ -123,6 +123,11 @@ export type ContinuousMonthlyMaPoint = OHLCV & {
   segmentStartDate: string
 }
 
+export interface ContinuousMonthlyMaSeriesOptions {
+  /** Set false only when the caller has already supplied split-adjusted prices. */
+  adjustSplits?: boolean
+}
+
 /**
  * 暦月終値SMAを任意期間の配列から日次で算出する共通経路。
  * daily_snapshots と同じ分割調整・連続履歴・当月終値の扱いを使う。
@@ -130,6 +135,7 @@ export type ContinuousMonthlyMaPoint = OHLCV & {
 export function buildContinuousMonthlyMaSeries(
   rows: OHLCV[],
   periods: readonly number[],
+  options: ContinuousMonthlyMaSeriesOptions = {},
 ): ContinuousMonthlyMaPoint[] {
   const results: ContinuousMonthlyMaPoint[] = []
   const normalizedPeriods = [...new Set(periods)]
@@ -137,7 +143,8 @@ export function buildContinuousMonthlyMaSeries(
     .sort((left, right) => left - right)
   if (normalizedPeriods.length === 0) return results
 
-  for (const segment of splitContinuousHistory(adjustLikelySplitOhlcv(rows))) {
+  const normalizedRows = options.adjustSplits === false ? rows : adjustLikelySplitOhlcv(rows)
+  for (const segment of splitContinuousHistory(normalizedRows)) {
     const monthly = new CalendarCloseAccumulator(calendarMonthBucket)
     const segmentStartDate = segment[0]?.date
     for (let index = 0; index < segment.length; index += 1) {

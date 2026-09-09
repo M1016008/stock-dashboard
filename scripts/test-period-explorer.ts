@@ -104,6 +104,7 @@ const upward = await queryPeriodExplorer({ from: from20, to: latest, ranking: 'r
 const upwardRows = stockRows(upward)
 assert.equal(upward.range.tradingDays, 20)
 assert.ok(upwardRows.length > 0)
+assert.equal(upward.total, upward.universeTotal, 'unfiltered result count must equal the ranking universe')
 assertSorted(upwardRows.map((row) => row.rankingValue!), 'desc', 'upward ranking')
 
 const sample = upwardRows[0]
@@ -164,6 +165,7 @@ const filtered = await queryPeriodExplorer({
 })
 const filteredRows = stockRows(filtered)
 assert.ok(filtered.total > 0, 'compound filter should retain real stocks')
+assert.ok(filtered.total < filtered.universeTotal, 'filtered result must expose the original ranking-universe count')
 for (const row of filteredRows) {
   assert.equal(row.marketSegment, primeMarket)
   assert.ok(row.marketCap != null && row.marketCap >= 50_000_000_000)

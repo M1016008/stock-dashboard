@@ -9,6 +9,7 @@ interface PerformanceCardProps {
   market?: 'JP' | 'US'
   embedded?: boolean
   analysisDate?: string | null
+  mobileExpanded?: boolean
 }
 
 interface PerfRow {
@@ -73,6 +74,7 @@ export function PerformanceCard({
   market = 'JP',
   embedded = false,
   analysisDate = null,
+  mobileExpanded = true,
 }: PerformanceCardProps) {
   const [perf, setPerf] = useState<PerfRow[]>([])
   const [ytd, setYtd] = useState<YtdInfo | null>(null)
@@ -123,11 +125,12 @@ export function PerformanceCard({
         {perf.length === 0 && loading && (
           <div style={{ gridColumn: 'span 6', textAlign: 'center', fontSize: '11px', color: 'var(--text-muted)' }}>計算中...</div>
         )}
-        {perf.map(({ label, value }) => {
+        {perf.map(({ label, value }, index) => {
           const isUp = (value ?? 0) >= 0
           const color = value == null ? 'var(--text-muted)' : isUp ? 'var(--price-up)' : 'var(--price-down)'
+          const mobilePrimary = index === 0 || index === 2
           return (
-            <div key={label} style={{
+            <div key={label} className={`${mobileExpanded || mobilePrimary ? 'block' : 'hidden'} sm:block`} style={{
               padding: '8px',
               background: 'var(--bg-elevated)',
               borderRadius: 'var(--radius-sm)',
@@ -143,23 +146,25 @@ export function PerformanceCard({
         })}
       </div>
       {ytd && (
-        <div className="stock-ytd-strip">
-          <div>
-            <span>年初来高値</span>
-            <strong>{formatPrice(ytd.high)}</strong>
-            <small>{ytd.highDate ?? '-'}</small>
-          </div>
-          <div>
-            <span>年初来安値</span>
-            <strong>{formatPrice(ytd.low)}</strong>
-            <small>{ytd.lowDate ?? '-'}</small>
-          </div>
-          <div>
-            <span>年初来騰落率</span>
-            <strong className={(ytd.returnPct ?? 0) >= 0 ? 'price-up' : 'price-down'}>
-              {ytd.returnPct == null ? '---' : `${ytd.returnPct >= 0 ? '+' : ''}${ytd.returnPct.toFixed(2)}%`}
-            </strong>
-            <small>暦年初の最初の取引日から</small>
+        <div className={mobileExpanded ? '' : 'hidden sm:block'}>
+          <div className="stock-ytd-strip">
+            <div>
+              <span>年初来高値</span>
+              <strong>{formatPrice(ytd.high)}</strong>
+              <small>{ytd.highDate ?? '-'}</small>
+            </div>
+            <div>
+              <span>年初来安値</span>
+              <strong>{formatPrice(ytd.low)}</strong>
+              <small>{ytd.lowDate ?? '-'}</small>
+            </div>
+            <div>
+              <span>年初来騰落率</span>
+              <strong className={(ytd.returnPct ?? 0) >= 0 ? 'price-up' : 'price-down'}>
+                {ytd.returnPct == null ? '---' : `${ytd.returnPct >= 0 ? '+' : ''}${ytd.returnPct.toFixed(2)}%`}
+              </strong>
+              <small>暦年初の最初の取引日から</small>
+            </div>
           </div>
         </div>
       )}

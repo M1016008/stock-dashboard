@@ -27,7 +27,7 @@ import { CandlestickChart } from '@/components/charts/CandlestickChart'
 import { PerformanceCard } from '@/components/stock/PerformanceCard'
 import { EarningsCard } from '@/components/stock/EarningsCard'
 import { WatchlistButton } from '@/components/ui/WatchlistButton'
-import { StageTimeline } from '@/components/stock/StageTimeline'
+import { StageTimeline, type StageTimelineSnapshot } from '@/components/stock/StageTimeline'
 import { StockMovePeriods } from '@/components/stock/StockMovePeriods'
 import { Ma25mMonitorSummary } from '@/components/stock/Ma25mMonitorSummary'
 import { StockMlInsights } from '@/components/stock/StockMlInsights'
@@ -48,7 +48,11 @@ import {
   type StockAnalysisReview,
 } from '@/components/stock/HistoricalAnalysisModeBar'
 import { findTicker } from '@/lib/master/tickers'
-import { buildStockDecisionSummaryUrls } from '@/lib/stock-decision-summary'
+import {
+  buildStockDecisionSummaryUrls,
+  formatTechnicalSnapshotDateLabel,
+  selectPhysicalMomentumScoreRow,
+} from '@/lib/stock-decision-summary'
 import { STAGE_BG_COLORS, STAGE_BORDER_COLORS, STAGE_LABELS } from '@/lib/hex-stage'
 import { buildShortTermCheck, formatShortTermStrength, type ShortTermCheckTone } from '@/lib/short-term-check'
 import { physicsStatusTone, type PhysicsStatus } from '@/lib/ml/physics-analysis'
@@ -213,14 +217,13 @@ interface FinancialSummary {
 }
 
 type StockDetailTab = 'overview' | 'chart' | 'fundamental' | 'scenario' | 'ml'
-type FundamentalTab = 'summary' | 'performance' | 'financial' | 'valuation' | 'returns' | 'company'
+type FundamentalTab = 'summary' | 'performance' | 'financial' | 'valuation' | 'returns'
 
 const FUNDAMENTAL_HASHES: Record<Exclude<FundamentalTab, 'summary'>, string> = {
   performance: 'performance',
   financial: 'financial',
   valuation: 'valuation',
   returns: 'returns',
-  company: 'company',
 }
 
 export function StockDetailClient({ ticker }: StockDetailClientProps) {
@@ -317,15 +320,22 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
   }, [analysisDate, analysisParamsReady, analysisReview, name, quote, ticker])
 
   useEffect(() => {
+    let legacyFocusTimer: number | null = null
     const readTab = () => {
       const hash = window.location.hash.replace('#', '')
-      if (hash === 'shikiho') {
-        setActiveTab('fundamental')
-        setFundamentalTab('company')
+      const legacyQueryTab = new URLSearchParams(window.location.search).get('tab')
+      if (hash === 'company' || hash === 'shikiho' || legacyQueryTab === 'company' || legacyQueryTab === 'shikiho') {
+        setActiveTab('overview')
+        setFundamentalTab('summary')
         const url = new URL(window.location.href)
-        url.hash = 'company'
+        url.searchParams.delete('tab')
+        url.hash = 'overview'
         window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`)
-      } else if (hash === 'performance' || hash === 'financial' || hash === 'valuation' || hash === 'returns' || hash === 'company') {
+        if (legacyFocusTimer != null) window.clearTimeout(legacyFocusTimer)
+        legacyFocusTimer = window.setTimeout(() => {
+          document.getElementById('company-basic-info')?.scrollIntoView({ behavior: 'auto', block: 'start' })
+        }, 0)
+      } else if (hash === 'performance' || hash === 'financial' || hash === 'valuation' || hash === 'returns') {
         setActiveTab('fundamental')
         setFundamentalTab(hash)
       } else if (hash === 'fundamental') {
@@ -342,6 +352,7 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
     window.addEventListener('hashchange', readTab)
     window.addEventListener(WORKSPACE_EVENT, syncCompared)
     return () => {
+      if (legacyFocusTimer != null) window.clearTimeout(legacyFocusTimer)
       window.removeEventListener('hashchange', readTab)
       window.removeEventListener(WORKSPACE_EVENT, syncCompared)
     }
@@ -392,7 +403,7 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
   }, [analysisDate])
 
   return (
-    <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+    <div className="flex flex-col gap-3 p-3 sm:gap-4 sm:p-4">
 
       <div className="stock-detail-sticky border border-[var(--color-border-default)] bg-white shadow-[0_2px_8px_rgba(16,32,52,0.12)]">
         {/* ヘッダー */}
@@ -403,24 +414,32 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
           padding: '10px 12px 8px',
           flexWrap: 'wrap',
         }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
+          <div className="flex w-full min-w-0 flex-none flex-wrap items-center gap-x-3 gap-y-2.5 sm:w-auto sm:flex-1">
             <span style={{ fontSize: '22px', lineHeight: 1 }}>
               <WatchlistButton ticker={ticker} size="md" />
             </span>
-            <h1 style={{ display: 'flex', minWidth: 0, alignItems: 'center', gap: '8px', margin: 0, flexWrap: 'wrap' }}>
+            <h1 style={{ display: 'flex', minWidth: 0, alignItems: 'baseline', gap: '8px', margin: 0, flexWrap: 'wrap' }}>
               <span style={{
                 fontFamily: 'var(--font-mono)',
                 fontSize: '22px',
-                fontWeight: 700,
+                fontWeight: 800,
                 color: 'var(--accent-primary)',
               }}>
                 {displayCode}
               </span>
               <MarketBadge />
-              <span style={{ minWidth: 0, fontSize: '14px', color: 'var(--text-primary)', fontWeight: 600 }}>
+              <span className="min-w-0 text-[16px] font-bold leading-tight text-[var(--text-primary)] sm:text-[17px]">
                 {name}
               </span>
             </h1>
+            <StockHeaderClassifications
+              marketSegment={displayMarketSegment}
+              sector17={displaySectorLarge}
+              sector33={displaySector33}
+              majorCategory={displayMajorCategory}
+              subIndustry={displaySubIndustry}
+              analysisDate={analysisDate}
+            />
           </div>
 
           <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -490,31 +509,16 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
             majorCategory: displayMajorCategory,
             subIndustry: displaySubIndustry,
           }}
+          shikihoInfo={shikihoInfo}
         />
       )}
 
       {activeTab === 'chart' && (
-        <>
-          <Ma25mMonitorSummary ticker={ticker} analysisDate={analysisDate} />
-          <div>
-            <div className="section-header">ステージ変遷</div>
-            <StageTimeline ticker={ticker} analysisDate={analysisDate} />
-          </div>
-          <div>
-            <div className="section-header">マルチタイムフレームチャート</div>
-            <CandlestickChart
-              ticker={ticker}
-              interval="D"
-              height={460}
-              historyPeriod="all"
-              showTimeframeSelector
-              maLinesByInterval={{ M: [3, 5, 10, 15, 20, 25] }}
-              analysisDate={analysisDate}
-              revealAfterAnalysis={showActual}
-            />
-          </div>
-          <PhysicalMomentumSection ticker={ticker} analysisDate={analysisDate} />
-        </>
+        <ChartWorkspace
+          ticker={ticker}
+          analysisDate={analysisDate}
+          showActual={showActual}
+        />
       )}
 
       {activeTab === 'fundamental' && (
@@ -524,8 +528,6 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
           quote={displayedQuote}
           active={fundamentalTab}
           onSelect={selectFundamentalTab}
-          shikihoInfo={shikihoInfo}
-          loading={loading}
         />
       )}
 
@@ -595,7 +597,7 @@ function StockDetailTabs({
             ref={active === tab.id ? activeTabRef : undefined}
             type="button"
             onClick={() => onSelect(tab.id)}
-            className={`inline-flex h-9 shrink-0 items-center gap-1.5 border-b-2 px-3 text-[11px] font-black ${
+            className={`inline-flex h-11 shrink-0 items-center gap-1.5 border-b-2 px-3 text-[11px] font-black sm:h-9 ${
               active === tab.id
                 ? 'border-[var(--color-market-red)] bg-white text-[var(--color-brand-900)]'
                 : 'border-transparent text-[var(--color-text-secondary)] hover:bg-white'
@@ -611,22 +613,241 @@ function StockDetailTabs({
   )
 }
 
+type TechnicalMomentumSnapshot = {
+  status: 'loading' | 'available' | 'missing' | 'error'
+  scoreDate: string | null
+  maDate: string | null
+  pms: number | null
+  pfs: number | null
+  pes: number | null
+  isScoreFresh: boolean | null
+  scoreSource: PhysicalMomentumResponse['scoreSource']
+  maStructure: string | null
+  maDescription: string | null
+  message: string | null
+}
+
+const CHART_STAGE_AXES: Array<{
+  key: keyof NonNullable<StageTimelineSnapshot['stages']>
+  label: string
+}> = [
+  { key: 'dailyA', label: '日A' },
+  { key: 'dailyB', label: '日B' },
+  { key: 'weeklyA', label: '週A' },
+  { key: 'weeklyB', label: '週B' },
+  { key: 'monthlyA', label: '月A' },
+  { key: 'monthlyB', label: '月B' },
+]
+
+function ChartWorkspace({
+  ticker,
+  analysisDate,
+  showActual,
+}: {
+  ticker: string
+  analysisDate: string | null
+  showActual: boolean
+}) {
+  const [stageSnapshot, setStageSnapshot] = useState<StageTimelineSnapshot>({
+    status: 'loading',
+    date: null,
+    stages: null,
+    message: null,
+  })
+  const [momentumSnapshot, setMomentumSnapshot] = useState<TechnicalMomentumSnapshot>({
+    status: 'loading',
+    scoreDate: null,
+    maDate: null,
+    pms: null,
+    pfs: null,
+    pes: null,
+    isScoreFresh: null,
+    scoreSource: null,
+    maStructure: null,
+    maDescription: null,
+    message: null,
+  })
+  const handleStageSnapshot = useCallback((snapshot: StageTimelineSnapshot) => {
+    setStageSnapshot(snapshot)
+  }, [])
+  const handleMomentumSnapshot = useCallback((snapshot: TechnicalMomentumSnapshot) => {
+    setMomentumSnapshot(snapshot)
+  }, [])
+
+  useEffect(() => {
+    setStageSnapshot({ status: 'loading', date: null, stages: null, message: null })
+    setMomentumSnapshot({
+      status: 'loading',
+      scoreDate: null,
+      maDate: null,
+      pms: null,
+      pfs: null,
+      pes: null,
+      isScoreFresh: null,
+      scoreSource: null,
+      maStructure: null,
+      maDescription: null,
+      message: null,
+    })
+  }, [analysisDate, ticker])
+
+  return (
+    <div className="space-y-3" aria-label="チャート・6ステージ分析">
+      <TechnicalChartSnapshot stage={stageSnapshot} momentum={momentumSnapshot} analysisDate={analysisDate} />
+
+      <StageTimeline
+        ticker={ticker}
+        analysisDate={analysisDate}
+        onSnapshotChange={handleStageSnapshot}
+      />
+
+      <section className="overflow-hidden border border-[var(--color-border-default)] bg-white" aria-labelledby="main-chart-title">
+        <header className="flex flex-wrap items-end justify-between gap-2 border-b border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-3 py-2.5">
+          <div>
+            <div className="text-[9px] font-black uppercase tracking-[0.08em] text-[var(--color-text-tertiary)]">Price &amp; moving averages</div>
+            <h2 id="main-chart-title" className="mt-0.5 text-[13px] font-black text-[var(--color-text-primary)]">マルチタイムフレームチャート</h2>
+          </div>
+          <span className="text-[9px] font-semibold text-[var(--color-text-tertiary)]">Stageの形を価格・MA・出来高で確認</span>
+        </header>
+        <div className="px-2 pb-2 sm:px-3 sm:pb-3">
+          <CandlestickChart
+            ticker={ticker}
+            interval="D"
+            height={460}
+            historyPeriod="all"
+            showTimeframeSelector
+            maLinesByInterval={{ M: [3, 5, 10, 15, 20, 25] }}
+            analysisDate={analysisDate}
+            revealAfterAnalysis={showActual}
+          />
+        </div>
+      </section>
+
+      <PhysicalMomentumSection
+        ticker={ticker}
+        analysisDate={analysisDate}
+        onSnapshotChange={handleMomentumSnapshot}
+      />
+
+      <Ma25mMonitorSummary ticker={ticker} analysisDate={analysisDate} />
+    </div>
+  )
+}
+
+function TechnicalChartSnapshot({
+  stage,
+  momentum,
+  analysisDate,
+}: {
+  stage: StageTimelineSnapshot
+  momentum: TechnicalMomentumSnapshot
+  analysisDate: string | null
+}) {
+  const stageCode = stage.stages
+    ? CHART_STAGE_AXES.map(({ key }) => stage.stages?.[key] ?? '-').join('')
+    : '------'
+  const referenceDateLabel = formatTechnicalSnapshotDateLabel({
+    stageDate: stage.date,
+    scoreDate: momentum.scoreDate,
+    maDate: momentum.maDate,
+    analysisDate,
+  })
+  const stageMessage = stage.status === 'loading'
+    ? 'Stageを読込中'
+    : stage.status === 'error'
+      ? `Stage取得エラー: ${stage.message ?? '詳細不明'}`
+      : stage.status === 'missing'
+        ? stage.message ?? 'Stage履歴なし'
+        : `現在Stage ${stageCode}`
+  const stateTitle = momentum.status === 'available'
+    ? momentum.maStructure ?? 'MA力場は未判定'
+    : momentum.status === 'loading'
+      ? '運動状態を読込中'
+      : momentum.status === 'error'
+        ? 'PMS取得エラー'
+        : 'PMS未計算'
+
+  return (
+    <section className="overflow-hidden border border-[var(--color-border-default)] bg-white" aria-labelledby="technical-snapshot-title">
+      <header className="flex flex-wrap items-start justify-between gap-2 border-b border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-3 py-2.5">
+        <div>
+          <div className="text-[9px] font-black uppercase tracking-[0.08em] text-[var(--color-text-tertiary)]">Technical snapshot</div>
+          <h2 id="technical-snapshot-title" className="mt-0.5 text-[13px] font-black text-[var(--color-text-primary)]">現在のテクニカル構造</h2>
+        </div>
+        <span className="font-mono text-[9px] font-bold text-[var(--color-text-tertiary)]">{referenceDateLabel}</span>
+      </header>
+
+      <div className="grid gap-3 p-3 lg:grid-cols-[minmax(190px,0.8fr)_minmax(380px,1.6fr)_minmax(270px,1fr)] lg:items-stretch">
+        <div className="flex min-w-0 flex-col justify-center border-b border-[var(--color-border-soft)] pb-3 lg:border-b-0 lg:border-r lg:pb-0 lg:pr-4">
+          <span className="text-[9px] font-bold text-[var(--color-text-tertiary)]">現在地</span>
+          <strong className="mt-1 text-[17px] font-black leading-tight text-[var(--color-text-primary)]">{stateTitle}</strong>
+          <span className="mt-1 text-[10px] font-semibold leading-4 text-[var(--color-text-secondary)]">{momentum.maDescription ?? stageMessage}</span>
+        </div>
+
+        <div className="min-w-0">
+          <div className="mb-1.5 flex items-center justify-between gap-2">
+            <span className="text-[9px] font-bold text-[var(--color-text-tertiary)]">6 Stage</span>
+            <span className="font-mono text-[11px] font-black text-[var(--color-text-primary)]">{stageCode}</span>
+          </div>
+          <div className="grid grid-cols-6 gap-1" aria-label={`6ステージ ${stageCode}`}>
+            {CHART_STAGE_AXES.map(({ key, label }) => {
+              const value = stage.stages?.[key] ?? null
+              return (
+                <div key={key} className="min-w-0 text-center">
+                  <div className="text-[9px] font-bold text-[var(--color-text-tertiary)]">{label}</div>
+                  <div
+                    className="mt-1 flex min-h-10 flex-col items-center justify-center border text-white"
+                    style={{
+                      background: value ? STAGE_BG_COLORS[value] : 'var(--color-surface-subtle)',
+                      borderColor: value ? STAGE_BORDER_COLORS[value] : 'var(--color-border-default)',
+                      color: value ? '#fff' : 'var(--color-text-tertiary)',
+                    }}
+                    title={value ? `S${value}: ${STAGE_LABELS[value]}` : stageMessage}
+                  >
+                    <strong className="font-mono text-[14px] leading-none">{value ? `S${value}` : '—'}</strong>
+                    {value && <span className="mt-0.5 text-[9px] font-bold leading-tight">{STAGE_LABELS[value]}</span>}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-3 gap-1.5 border-t border-[var(--color-border-soft)] pt-3 lg:border-l lg:border-t-0 lg:pl-4 lg:pt-0">
+          {[
+            { code: 'PMS', label: '運動状態', value: momentum.pms },
+            { code: 'PFS', label: '足元の力', value: momentum.pfs },
+            { code: 'PES', label: '熱量', value: momentum.pes },
+          ].map((metric) => (
+            <div key={metric.code} className="flex min-w-0 flex-col justify-center bg-[var(--color-surface-subtle)] px-2 py-2 text-center">
+              <span className="text-[9px] font-black text-[var(--color-text-tertiary)]">{metric.code}</span>
+              <strong className="mt-0.5 font-mono text-[15px] font-black text-[var(--color-text-primary)]">{fmtScore(metric.value)}</strong>
+              <span className="mt-0.5 text-[9px] font-semibold leading-tight text-[var(--color-text-tertiary)]">{metric.label}</span>
+            </div>
+          ))}
+          {momentum.status !== 'available' && (
+            <div className="col-span-3 text-[9px] font-semibold text-[var(--color-text-tertiary)]">
+              {momentum.status === 'loading' ? 'PMS/PFS/PESを読込中' : momentum.message ?? 'PMS/PFS/PESは利用できません'}
+            </div>
+          )}
+        </div>
+      </div>
+    </section>
+  )
+}
+
 function FundamentalWorkspace({
   ticker,
   analysisDate,
   quote,
   active,
   onSelect,
-  shikihoInfo,
-  loading,
 }: {
   ticker: string
   analysisDate: string | null
   quote: StockQuote | null
   active: FundamentalTab
   onSelect: (tab: FundamentalTab) => void
-  shikihoInfo: ShikihoInfo | null
-  loading: boolean
 }) {
   const activeTabRef = useRef<HTMLButtonElement | null>(null)
   useEffect(() => {
@@ -638,31 +859,32 @@ function FundamentalWorkspace({
     { id: 'financial' as const, label: '財務', icon: Landmark },
     { id: 'valuation' as const, label: 'バリュエーション', icon: Scale },
     { id: 'returns' as const, label: '株主還元', icon: WalletCards },
-    { id: 'company' as const, label: '企業情報', icon: Building2 },
   ]
 
   return (
-    <section className="space-y-3" aria-labelledby="fundamental-workspace-title">
-      <div className="overflow-hidden border border-[var(--color-border-default)] bg-white">
-        <header className="flex flex-wrap items-center justify-between gap-2 bg-[var(--color-brand-50)] px-4 py-2.5">
+    <section className="space-y-6 bg-white pb-2" aria-labelledby="fundamental-workspace-title">
+      <div className="overflow-hidden border-y border-[var(--color-border-soft)] bg-white">
+        <header className="flex flex-wrap items-end justify-between gap-2 border-b border-[var(--color-border-soft)] px-4 py-3 sm:px-5">
           <div>
-            <h2 id="fundamental-workspace-title" className="text-[13px] font-black text-[var(--color-brand-900)]">ファンダメンタル</h2>
-            <p className="mt-0.5 text-[9px] font-semibold text-[var(--color-text-tertiary)]">業績・財務・評価・還元・企業情報を同じ分析基準日で確認</p>
+            <h2 id="fundamental-workspace-title" className="text-[15px] font-bold text-[var(--color-text-primary)]">ファンダメンタル</h2>
+            <p className="mt-1 text-[10px] font-medium text-[var(--color-text-tertiary)]">業績から評価、株主還元へ順に読み解く</p>
           </div>
-          <span className="font-mono text-[9px] font-bold text-[var(--color-text-tertiary)]">基準日 {analysisDate ?? quote?.priceDate ?? '---'}</span>
+          <span className="font-mono text-[10px] font-semibold text-[var(--color-text-tertiary)]">基準日 {analysisDate ?? quote?.priceDate ?? '---'}</span>
         </header>
-        <nav className="flex overflow-x-auto border-t border-[var(--color-border-default)] bg-[var(--color-surface-subtle)]" aria-label="ファンダメンタル分析">
+        <nav className="flex overflow-x-auto bg-white px-2 sm:px-3" aria-label="ファンダメンタル分析" role="tablist">
           {tabs.map(({ id, label, icon: Icon }) => (
             <button
               key={id}
               ref={active === id ? activeTabRef : undefined}
               type="button"
               onClick={() => onSelect(id)}
-              className={`inline-flex h-9 shrink-0 items-center gap-1.5 border-b-2 px-3 text-[10px] font-black ${
+              className={`inline-flex h-11 shrink-0 items-center gap-1.5 border-b-2 px-3 text-[11px] font-bold sm:h-9 ${
                 active === id
                   ? 'border-[var(--color-brand-700)] bg-white text-[var(--color-brand-900)]'
                   : 'border-transparent text-[var(--color-text-secondary)] hover:bg-white'
               }`}
+              role="tab"
+              aria-selected={active === id}
               aria-current={active === id ? 'page' : undefined}
             >
               <Icon size={13} aria-hidden="true" />
@@ -674,24 +896,11 @@ function FundamentalWorkspace({
 
       {active === 'summary' && <StockDecisionSummary ticker={ticker} analysisDate={analysisDate} quote={quote} variant="fundamental" />}
       {active === 'performance' && (
-        <>
-          <FinancialPerformanceDetail ticker={ticker} analysisDate={analysisDate} />
-          {analysisDate
-            ? <CurrentOnlyDataNotice label="決算予定は現在情報のため、過去分析モードでは非表示にしています。" />
-            : <EarningsCard ticker={ticker} />}
-        </>
+        <FinancialPerformanceDetail ticker={ticker} analysisDate={analysisDate} />
       )}
       {active === 'financial' && <FinancialDetail ticker={ticker} analysisDate={analysisDate} />}
       {active === 'valuation' && <ValuationDetail ticker={ticker} analysisDate={analysisDate} />}
       {active === 'returns' && <ShareholderReturnsDetail ticker={ticker} analysisDate={analysisDate} />}
-      {active === 'company' && (
-        <>
-          <CompanyInformationDetail ticker={ticker} analysisDate={analysisDate} />
-          {analysisDate
-            ? <CurrentOnlyDataNotice label="会社四季報は現在情報のため、過去分析モードでは非表示にしています。" />
-            : <section className="card overflow-hidden"><ShikihoOverviewSection info={shikihoInfo} loading={loading} /></section>}
-        </>
-      )}
     </section>
   )
 }
@@ -705,6 +914,7 @@ function OverviewWorkspace({
   analysisDate,
   loading,
   classifications,
+  shikihoInfo,
 }: {
   ticker: string
   quote: StockQuote | null
@@ -720,6 +930,7 @@ function OverviewWorkspace({
     majorCategory?: string | null
     subIndustry?: string | null
   }
+  shikihoInfo: ShikihoInfo | null
 }) {
   const [physicalMomentum, setPhysicalMomentum] = useState<PhysicalMomentumResponse | null>(null)
   const [physicalMomentumLoading, setPhysicalMomentumLoading] = useState(true)
@@ -729,20 +940,30 @@ function OverviewWorkspace({
     const physicalUrl = buildStockDecisionSummaryUrls(ticker, analysisDate).physical
     setPhysicalMomentum(null)
     setPhysicalMomentumLoading(true)
-    fetch(physicalUrl, { cache: 'no-store', signal: controller.signal })
-      .then((response) => response.ok ? response.json() : Promise.reject(new Error(`HTTP ${response.status}`)))
-      .then((value) => {
-        if (!controller.signal.aborted) setPhysicalMomentum(value as PhysicalMomentumResponse)
-      })
-      .catch(() => undefined)
-      .finally(() => {
-        if (!controller.signal.aborted) setPhysicalMomentumLoading(false)
-      })
-    return () => controller.abort()
+    const requestTimer = window.setTimeout(() => {
+      const hash = window.location.hash.replace('#', '')
+      if (hash && hash !== 'overview' && hash !== 'company' && hash !== 'shikiho') {
+        setPhysicalMomentumLoading(false)
+        return
+      }
+      fetch(physicalUrl, { cache: 'no-store', signal: controller.signal })
+        .then((response) => response.ok ? response.json() : Promise.reject(new Error(`HTTP ${response.status}`)))
+        .then((value) => {
+          if (!controller.signal.aborted) setPhysicalMomentum(value as PhysicalMomentumResponse)
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          if (!controller.signal.aborted) setPhysicalMomentumLoading(false)
+        })
+    }, 0)
+    return () => {
+      window.clearTimeout(requestTimer)
+      controller.abort()
+    }
   }, [analysisDate, ticker])
 
   return (
-    <>
+    <div className="space-y-4 md:space-y-6">
       {!loading && !quote && (
         <div className="card" style={missingPriceNoticeStyle}>
           J-Quants日足の価格データを取得できませんでした。
@@ -757,6 +978,8 @@ function OverviewWorkspace({
         classifications={classifications}
         physicalMomentum={physicalMomentum}
         physicalMomentumLoading={physicalMomentumLoading}
+        shikihoInfo={shikihoInfo}
+        loading={loading}
       />
       <StockDecisionSummary
         ticker={ticker}
@@ -766,7 +989,7 @@ function OverviewWorkspace({
         physicalMomentum={physicalMomentum}
       />
       <FinancialPerformanceTimeline ticker={ticker} analysisDate={analysisDate} />
-    </>
+    </div>
   )
 }
 
@@ -779,6 +1002,8 @@ function OverviewBasicInfoPanel({
   classifications,
   physicalMomentum,
   physicalMomentumLoading,
+  shikihoInfo,
+  loading,
 }: {
   ticker: string
   quote: StockQuote | null
@@ -794,52 +1019,102 @@ function OverviewBasicInfoPanel({
   }
   physicalMomentum: PhysicalMomentumResponse | null
   physicalMomentumLoading: boolean
+  shikihoInfo: ShikihoInfo | null
+  loading: boolean
 }) {
   return (
-    <section className="card overflow-hidden">
-      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-4 py-3">
-        <div className="flex items-center gap-2.5">
-          <LayoutDashboard size={16} className="text-[var(--color-brand-700)]" aria-hidden="true" />
-          <div>
-            <h2 className="text-[12px] font-semibold text-[var(--color-text-primary)]">基本情報</h2>
-            <div className="mt-0.5 text-[9px] font-semibold text-[var(--color-text-tertiary)]">
-              市場データ J-Quants / 企業情報 会社四季報CSV
+    <>
+      <section id="company-basic-info" className="scroll-mt-32 overflow-hidden border border-[var(--color-border-default)] bg-white shadow-[0_1px_3px_rgba(16,32,52,0.05)]" aria-labelledby="company-basic-info-title">
+        <header className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--color-border-soft)] px-3 py-3 sm:gap-3 sm:px-4 sm:py-3.5">
+          <div className="flex items-center gap-2.5">
+            <LayoutDashboard size={16} className="text-[var(--color-brand-700)]" aria-hidden="true" />
+            <div>
+              <h2 id="company-basic-info-title" className="text-[14px] font-bold text-[var(--color-text-primary)]">基本情報</h2>
+              <div className="mt-0.5 text-[10px] font-medium text-[var(--color-text-tertiary)]">
+                市場データ J-Quants / 企業情報 会社四季報CSV
+              </div>
             </div>
           </div>
-        </div>
-        <div className="font-mono text-[9px] font-medium text-[var(--color-text-tertiary)]">
-          基準日 {quote?.priceDate ?? analysisDate ?? '---'}
-        </div>
-      </header>
+          <div className="font-mono text-[10px] font-medium text-[var(--color-text-tertiary)]">
+            基準日 {quote?.priceDate ?? analysisDate ?? '---'}
+          </div>
+        </header>
 
-      <div className="grid lg:grid-cols-2">
-        <div className="border-b border-[var(--color-border-default)] p-3 lg:border-b-0 lg:border-r">
-          <BasicInfoCard
-            ticker={ticker}
-            quote={quote}
-            analysisDate={analysisDate}
-            physical={physicalMomentum}
-            physicalLoading={physicalMomentumLoading}
-            embedded
-          />
+        <div className="grid gap-4 px-3 py-3 sm:px-4 sm:py-4 lg:grid-cols-[minmax(0,1.08fr)_minmax(0,.92fr)] lg:gap-8">
+          <div className="min-w-0">
+            <BasicInfoCard
+              ticker={ticker}
+              quote={quote}
+              analysisDate={analysisDate}
+              physical={physicalMomentum}
+              physicalLoading={physicalMomentumLoading}
+              embedded
+            />
+          </div>
+          <div className="min-w-0">
+            <MarketSnapshotCard
+              ticker={ticker}
+              marginInfo={marginInfo}
+              fallbackType={fallbackType}
+              analysisDate={analysisDate}
+              embedded
+            />
+          </div>
         </div>
-        <div className="p-3">
-          <MarketSnapshotCard
-            ticker={ticker}
-            marginInfo={marginInfo}
-            fallbackType={fallbackType}
-            analysisDate={analysisDate}
-            embedded
-          />
-        </div>
-      </div>
 
-      <StockClassificationBar {...classifications} analysisDate={analysisDate} />
-    </section>
+        <div className="mx-3 border-t border-[var(--color-border-soft)] py-3 sm:mx-4 sm:py-3.5">
+          {analysisDate
+            ? <CurrentOnlyDataNotice label="決算予定は現在情報のため、過去分析モードでは非表示にしています。" compact />
+            : <EarningsCard ticker={ticker} compact />}
+        </div>
+        {analysisDate
+          ? (
+            <div className="mx-3 border-t border-[var(--color-border-soft)] py-3 sm:mx-4">
+              <CurrentOnlyDataNotice label="会社四季報の会社概要は現在情報のため、過去分析モードでは表示していません。分類は現在属性として表示しています。" compact />
+            </div>
+          )
+          : <ShikihoOverviewSection info={shikihoInfo} loading={loading} />}
+        <OverviewCompanyDetails ticker={ticker} analysisDate={analysisDate} />
+      </section>
+    </>
   )
 }
 
-function StockClassificationBar({
+function OverviewCompanyDetails({ ticker, analysisDate }: { ticker: string; analysisDate: string | null }) {
+  const [expanded, setExpanded] = useState(false)
+  return (
+    <>
+      <section className="mx-3 overflow-hidden border-t border-[var(--color-border-soft)] sm:mx-4" aria-label="EDINET企業情報詳細">
+        <button
+          type="button"
+          className="flex min-h-11 w-full items-center gap-3 py-2.5 text-left hover:bg-[var(--color-surface-subtle)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-brand-700)]"
+          aria-expanded={expanded}
+          aria-controls="overview-company-details"
+          onClick={() => setExpanded((current) => !current)}
+        >
+          <FileSearch size={15} className="shrink-0 text-[var(--color-brand-700)]" aria-hidden="true" />
+          <span className="min-w-0">
+            <strong className="block text-[12px] font-bold text-[var(--color-text-primary)]">EDINET企業情報</strong>
+            <span className="mt-0.5 block text-[10px] font-medium text-[var(--color-text-tertiary)]">
+              事業・セグメント・従業員・役員・株主情報を法定開示で確認
+            </span>
+          </span>
+          <span className="ml-auto shrink-0 text-[10px] font-bold text-[var(--color-brand-700)]">
+            {expanded ? '閉じる' : '詳細を見る'}
+          </span>
+          <ChevronRight size={14} className={`shrink-0 transition-transform ${expanded ? 'rotate-90' : ''}`} aria-hidden="true" />
+        </button>
+      </section>
+      {expanded && (
+        <div id="overview-company-details">
+          <CompanyInformationDetail ticker={ticker} analysisDate={analysisDate} />
+        </div>
+      )}
+    </>
+  )
+}
+
+function StockHeaderClassifications({
   marketSegment,
   sector17,
   sector33,
@@ -855,27 +1130,30 @@ function StockClassificationBar({
   analysisDate: string | null
 }) {
   const classifications = [
-    ['市場', marketSegment],
-    ['17業種', sector17],
-    ['33業種', sector33],
-    ['独自60分類', majorCategory],
-    ['独自細分類', subIndustry],
-  ].filter((row): row is [string, string] => Boolean(row[1]))
+    { label: '市場', value: marketSegment, priority: 'primary' },
+    { label: '33業種', value: sector33, priority: 'primary' },
+    { label: '独自60分類', value: majorCategory, priority: 'primary' },
+    { label: '独自細分類', value: subIndustry, priority: 'primary' },
+    { label: '17業種', value: sector17, priority: 'secondary' },
+  ].filter((row): row is { label: string; value: string; priority: string } => Boolean(row.value))
   if (classifications.length === 0) return null
   return (
-    <div className="border-t border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-4 py-2.5">
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-        <div className="flex shrink-0 items-center gap-1.5 text-[10px] font-black text-[var(--color-brand-800)]"><Building2 size={13} />分類</div>
-        {classifications.map(([label, value]) => (
-          <div key={label} className="min-w-0">
-            <span className="mr-1 text-[8px] font-bold text-[var(--color-text-tertiary)]">{label}</span>
-            <strong className="text-[10px] font-black text-[var(--color-text-primary)]">{value}</strong>
-          </div>
-        ))}
-        <span className="ml-auto text-[8px] font-semibold text-[var(--color-text-tertiary)]">
-          17/33業種: J-Quants / 独自分類: 会社四季報CSV連携{analysisDate ? '・現在属性' : ''}
+    <div className="flex w-full min-w-0 max-w-full flex-none flex-wrap items-center gap-1.5 sm:w-auto sm:flex-initial" aria-label={`銘柄分類${analysisDate ? '（現在属性）' : ''}`}>
+      {classifications.map(({ label, value, priority }) => (
+        <span
+          key={label}
+          title={`${label}: ${value}${analysisDate ? '（現在属性）' : ''}`}
+          className={`inline-flex max-w-full shrink-0 items-start gap-1 rounded-[4px] border px-2 py-1 leading-tight ${
+            priority === 'primary'
+              ? 'border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] text-[var(--color-text-primary)]'
+              : 'border-[var(--color-border-soft)] bg-white text-[var(--color-text-tertiary)]'
+          }`}
+        >
+          <span className="shrink-0 text-[9px] font-medium opacity-75">{label}</span>
+          <strong className={`min-w-0 whitespace-normal break-words ${priority === 'primary' ? 'text-[10px] font-bold' : 'text-[9px] font-semibold'}`}>{value}</strong>
         </span>
-      </div>
+      ))}
+      {analysisDate && <span className="text-[9px] font-medium text-[var(--color-text-tertiary)]">現在属性</span>}
     </div>
   )
 }
@@ -891,15 +1169,15 @@ function ShikihoOverviewSection({
 
   if (!profile) {
     return (
-      <section className="flex min-h-24 items-center justify-center border-t border-[var(--color-border-default)] px-4 text-center">
+      <section className="flex min-h-20 items-center justify-center border-t border-[var(--color-border-soft)] px-4 text-center">
         <div aria-live="polite" className="flex items-center gap-3">
-          <BookOpenText className="text-[var(--color-text-tertiary)]" size={22} aria-hidden="true" />
+          <BookOpenText className="text-[var(--color-text-tertiary)]" size={18} aria-hidden="true" />
           <div className="text-left">
-            <div className="text-[11px] font-semibold text-[var(--color-text-primary)]">
-              {loading ? '四季報情報を読み込んでいます' : '四季報情報は未収録です'}
+            <div className="text-[12px] font-semibold text-[var(--color-text-primary)]">
+              {loading ? '会社概要を読み込んでいます' : '四季報の会社概要は未収録です'}
             </div>
             {!loading && (
-              <div className="mt-1 text-[9px] font-medium text-[var(--color-text-tertiary)]">
+              <div className="mt-1 text-[10px] font-medium text-[var(--color-text-tertiary)]">
                 次回の四季報CSV同期時に更新されます
               </div>
             )}
@@ -910,61 +1188,65 @@ function ShikihoOverviewSection({
   }
 
   const metrics = [
-    { label: '予想PER', value: formatShikihoMultiple(profile.forecastPer), accent: 'text-[var(--color-market-red)]' },
-    { label: '実績PBR', value: formatShikihoMultiple(profile.actualPbr), accent: 'text-[var(--color-brand-700)]' },
-    { label: '予想ROE', value: formatShikihoPercent(profile.forecastRoe), accent: 'text-emerald-700' },
-    { label: '配当利回り', value: formatShikihoPercent(profile.dividendYield), accent: 'text-amber-700' },
+    { label: '予想PER', value: formatShikihoMultiple(profile.forecastPer) },
+    { label: '実績PBR', value: formatShikihoMultiple(profile.actualPbr) },
+    { label: '予想ROE', value: formatShikihoPercent(profile.forecastRoe) },
+    { label: '配当利回り', value: formatShikihoPercent(profile.dividendYield) },
   ]
 
   return (
-    <section className="border-t border-[var(--color-border-default)]">
-      <header className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 px-3 py-2">
+    <section className="border-t border-[var(--color-border-soft)] px-3 py-2.5 sm:px-4 sm:py-4">
+      <header className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
         <div className="flex min-w-0 items-center gap-2">
           <BookOpenText size={14} className="shrink-0 text-[var(--color-brand-700)]" aria-hidden="true" />
-          <h3 className="font-semibold text-[var(--color-text-primary)]" style={{ fontSize: '11px' }}>会社四季報</h3>
-          <span className="text-[9px] font-normal text-[var(--color-text-tertiary)]">
+          <h3 className="text-[13px] font-bold text-[var(--color-text-primary)]">会社四季報</h3>
+          <span className="text-[10px] font-normal text-[var(--color-text-tertiary)]">
             {info?.source ?? '会社四季報CSV'}
           </span>
         </div>
-        <dl className="flex items-center text-[9px] text-[var(--color-text-tertiary)]">
-          <div className="flex items-center gap-1.5 pr-3">
+        <dl className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-[var(--color-text-tertiary)]">
+          <div className="flex items-center gap-1.5">
             <dt>収録号</dt>
             <dd className="font-semibold text-[var(--color-text-primary)]">{profile.issueLabel ?? '---'}</dd>
           </div>
-          <div className="flex items-center gap-1.5 border-l border-[var(--color-border-soft)] pl-3">
+          <div className="flex items-center gap-1.5">
             <dt>発売日</dt>
             <dd className="font-semibold text-[var(--color-text-primary)]">{profile.releaseDate ?? '---'}</dd>
           </div>
         </dl>
       </header>
 
-      <div className="grid border-t border-[var(--color-border-soft)] lg:grid-cols-5">
-        <div className="border-b border-[var(--color-border-default)] px-3 py-2.5 lg:col-span-2 lg:border-b-0 lg:border-r">
+      <div className="mt-2.5 grid gap-3 sm:mt-4 sm:gap-5 lg:grid-cols-2 lg:gap-8">
+        <div>
+          <ShikihoNarrativeSection index="01" title="会社概要" body={profile.companyFeature} />
+        </div>
+        <div>
+          <ShikihoNarrativeSection index="02" title="連結事業" body={profile.consolidatedBusiness} />
+        </div>
+      </div>
+
+      <div className="mt-3 grid gap-3 border-t border-[var(--color-border-soft)] pt-2.5 sm:mt-5 sm:gap-5 sm:pt-4 lg:grid-cols-5 lg:gap-8">
+        <section className="lg:col-span-2" aria-labelledby="shikiho-metrics-title">
           <div className="flex items-center justify-between gap-3">
-            <h3 className="font-semibold text-[var(--color-text-secondary)]" style={{ fontSize: '11px' }}>四季報サマリー</h3>
-            <span className="text-[9px] font-normal text-[var(--color-text-tertiary)]">会社予想・直近実績</span>
+            <h4 id="shikiho-metrics-title" className="text-[11px] font-bold text-[var(--color-text-secondary)]">四季報サマリー</h4>
+            <span className="text-[9px] font-medium text-[var(--color-text-tertiary)]">現在情報</span>
           </div>
-          <div className="mt-0.5 grid grid-cols-2 gap-x-4">
+          <div className="mt-1.5 grid grid-cols-2 gap-x-4 gap-y-1 rounded-[6px] bg-[var(--color-surface-subtle)] px-3 py-2 sm:mt-2 sm:gap-x-5 sm:gap-y-2 sm:py-2.5">
             {metrics.map((metric) => (
-              <div key={metric.label} className="flex items-baseline justify-between gap-2 border-b border-[var(--color-border-soft)] py-1.5">
-                <div className="text-[10px] font-normal text-[var(--color-text-tertiary)]">{metric.label}</div>
-                <div className={`font-mono text-[14px] font-semibold leading-none ${metric.accent}`}>{metric.value}</div>
+              <div key={metric.label} className="flex min-w-0 items-baseline justify-between gap-2 py-1">
+                <div className="truncate text-[10px] font-medium text-[var(--color-text-tertiary)]">{metric.label}</div>
+                <div className="shrink-0 font-mono text-[14px] font-bold leading-none text-[var(--color-text-primary)]">{metric.value}</div>
               </div>
             ))}
           </div>
-          <div className="mt-0.5">
-            <ShikihoNarrativeSection index="01" title="特色" body={profile.companyFeature} />
-            <ShikihoNarrativeSection index="02" title="連結事業" body={profile.consolidatedBusiness} bordered />
-          </div>
-        </div>
-
-        <div className="px-3 py-2.5 lg:col-span-3">
-          <h3 className="font-semibold text-[var(--color-text-secondary)]" style={{ fontSize: '11px' }}>業績展望・注目点</h3>
-          <div className="mt-0.5">
+        </section>
+        <section className="lg:col-span-3" aria-labelledby="shikiho-outlook-title">
+          <h4 id="shikiho-outlook-title" className="text-[11px] font-bold text-[var(--color-text-secondary)]">業績展望・注目点</h4>
+          <div className="mt-1">
             <ShikihoArticle index="01" headline={profile.headline1} description={profile.description1} />
             <ShikihoArticle index="02" headline={profile.headline2} description={profile.description2} bordered />
           </div>
-        </div>
+        </section>
       </div>
     </section>
   )
@@ -982,12 +1264,12 @@ function ShikihoNarrativeSection({
   bordered?: boolean
 }) {
   return (
-    <section className={`py-2 ${bordered ? 'border-t border-[var(--color-border-soft)]' : ''}`}>
-      <div className="flex items-center gap-1.5">
-        <span className="font-mono text-[9px] font-semibold text-[var(--color-brand-600)]">{index}</span>
-        <h4 className="text-[10px] font-semibold text-[var(--color-brand-800)]">{title}</h4>
+    <section className={bordered ? 'border-t border-[var(--color-border-soft)] py-2' : ''}>
+      <div className="flex items-center gap-2">
+        <span className="font-mono text-[9px] font-semibold text-[var(--color-text-tertiary)]">{index}</span>
+        <h4 className="text-[11px] font-bold text-[var(--color-text-secondary)]">{title}</h4>
       </div>
-      <p className="mt-1 whitespace-pre-wrap text-[11px] font-normal leading-[1.6] text-[var(--color-text-primary)]">
+      <p className="mt-1.5 whitespace-pre-wrap text-[11px] font-normal leading-[1.65] text-[var(--color-text-primary)] sm:text-[12px] sm:leading-[1.75]">
         {body ?? '---'}
       </p>
     </section>
@@ -1006,12 +1288,12 @@ function ShikihoArticle({
   bordered?: boolean
 }) {
   return (
-    <article className={`py-2 ${bordered ? 'border-t border-[var(--color-border-soft)]' : ''}`}>
+    <article className={`py-1.5 sm:py-2.5 ${bordered ? 'border-t border-[var(--color-border-soft)]' : ''}`}>
       <div className="flex items-start gap-2">
-        <span className="shrink-0 pt-0.5 font-mono text-[9px] font-semibold text-[var(--color-market-red)]">{index}</span>
+        <span className="shrink-0 pt-0.5 font-mono text-[9px] font-semibold text-[var(--color-text-tertiary)]">{index}</span>
         <div className="min-w-0">
-          <h4 className="text-[12px] font-semibold leading-5 text-[var(--color-text-primary)]">{headline ?? '---'}</h4>
-          <p className="mt-1 whitespace-pre-wrap text-[11px] font-normal leading-[1.6] text-[var(--color-text-secondary)]">
+          <h4 className="text-[12px] font-bold leading-5 text-[var(--color-text-primary)] sm:text-[13px]">{headline ?? '---'}</h4>
+          <p className="mt-1 whitespace-pre-wrap text-[11px] font-normal leading-[1.6] text-[var(--color-text-secondary)] sm:text-[12px] sm:leading-[1.7]">
             {description ?? '---'}
           </p>
         </div>
@@ -1139,13 +1421,62 @@ interface PhysicalPlanResponse {
   horizons: PhysicalPlanHorizon[]
 }
 
-function PhysicalMomentumSection({ ticker, analysisDate }: { ticker: string; analysisDate: string | null }) {
+function technicalMomentumSnapshotFromResponse(payload: PhysicalMomentumResponse): TechnicalMomentumSnapshot {
+  const latest = payload.latest
+  if (!latest) {
+    return {
+      status: 'missing',
+      scoreDate: null,
+      maDate: null,
+      pms: null,
+      pfs: null,
+      pes: null,
+      isScoreFresh: payload.isScoreFresh ?? false,
+      scoreSource: payload.scoreSource ?? null,
+      maStructure: null,
+      maDescription: null,
+      message: 'PMS/PFS/PESは未計算です',
+    }
+  }
+  const previous = [...(payload.history ?? [])].reverse().find((row) => row.date < latest.date) ?? null
+  const field = buildMaFieldInsight(latest, previous)
+  const { scoreDate, scoreRow } = selectPhysicalMomentumScoreRow({
+    latest,
+    history: payload.history,
+    latestScoredDate: payload.latestScoredDate,
+    isScoreFresh: payload.isScoreFresh,
+  })
+  return {
+    status: 'available',
+    scoreDate,
+    maDate: latest.date,
+    pms: scoreRow?.physicalMomentumScore ?? null,
+    pfs: scoreRow?.physicalForceScore ?? null,
+    pes: scoreRow?.physicalEnergyScore ?? null,
+    isScoreFresh: payload.isScoreFresh ?? (scoreDate === latest.date),
+    scoreSource: payload.scoreSource ?? null,
+    maStructure: field.label,
+    maDescription: field.description,
+    message: scoreDate && !scoreRow ? 'PMS/PFS/PESのスコア行を確認できません' : null,
+  }
+}
+
+function PhysicalMomentumSection({
+  ticker,
+  analysisDate,
+  onSnapshotChange,
+}: {
+  ticker: string
+  analysisDate: string | null
+  onSnapshotChange?: (snapshot: TechnicalMomentumSnapshot) => void
+}) {
   const [data, setData] = useState<PhysicalMomentumResponse | null>(null)
   const [plan, setPlan] = useState<PhysicalPlanResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [planLoading, setPlanLoading] = useState(true)
   const [planError, setPlanError] = useState('')
+  const [mobileDetailsOpen, setMobileDetailsOpen] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -1153,6 +1484,20 @@ function PhysicalMomentumSection({ ticker, analysisDate }: { ticker: string; ana
     setError('')
     setPlanLoading(true)
     setPlanError('')
+    setMobileDetailsOpen(false)
+    onSnapshotChange?.({
+      status: 'loading',
+      scoreDate: null,
+      maDate: null,
+      pms: null,
+      pfs: null,
+      pes: null,
+      isScoreFresh: null,
+      scoreSource: null,
+      maStructure: null,
+      maDescription: null,
+      message: null,
+    })
     const planParams = analysisDate ? `?date=${encodeURIComponent(analysisDate)}` : ''
     Promise.allSettled([
       fetch(`/api/physical-momentum/${encodeURIComponent(ticker)}?market=JP&limit=260${analysisDate ? `&date=${encodeURIComponent(analysisDate)}` : ''}`, { cache: 'no-store' })
@@ -1163,9 +1508,25 @@ function PhysicalMomentumSection({ ticker, analysisDate }: { ticker: string; ana
       .then(([momentumResult, planResult]) => {
         if (cancelled) return
         if (momentumResult.status === 'fulfilled') {
-          setData(momentumResult.value)
+          const payload = momentumResult.value as PhysicalMomentumResponse
+          setData(payload)
+          onSnapshotChange?.(technicalMomentumSnapshotFromResponse(payload))
         } else {
-          setError((momentumResult.reason as Error).message)
+          const message = (momentumResult.reason as Error).message
+          setError(message)
+          onSnapshotChange?.({
+            status: 'error',
+            scoreDate: null,
+            maDate: null,
+            pms: null,
+            pfs: null,
+            pes: null,
+            isScoreFresh: null,
+            scoreSource: null,
+            maStructure: null,
+            maDescription: null,
+            message,
+          })
         }
         if (planResult.status === 'fulfilled') {
           setPlan(planResult.value)
@@ -1180,7 +1541,7 @@ function PhysicalMomentumSection({ ticker, analysisDate }: { ticker: string; ana
         }
       })
     return () => { cancelled = true }
-  }, [ticker, analysisDate])
+  }, [ticker, analysisDate, onSnapshotChange])
 
   const latest = data?.latest ?? null
   const momentumHistoryCount = data?.history?.length ?? 0
@@ -1311,22 +1672,38 @@ function PhysicalMomentumSection({ ticker, analysisDate }: { ticker: string; ana
 
           <PhysicalActionPoints latest={latest} trend={data?.trend ?? null} field={fieldInsight} />
 
-          <PhysicalTradePlanCards loading={planLoading} error={planError} plan={plan} />
-
-          <div style={physicalBodyGridStyle}>
+          <div className="mb-2.5">
             <PhysicalMaFieldMap latest={latest} previous={previous} />
-            <div style={physicalBreakdownPanelStyle}>
-              <div style={physicalMiniHeaderStyle}>
-                <strong>内訳</strong>
-                <span>騰落率は%・変化はptで表示。比較不能な生値は出さず、市場内の強弱はPMS/PFS/PESで見ます。</span>
+          </div>
+
+          <button
+            type="button"
+            className="mb-2 inline-flex min-h-11 w-full items-center justify-between border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-3 text-left text-[11px] font-black text-[var(--color-text-primary)] sm:hidden"
+            onClick={() => setMobileDetailsOpen((open) => !open)}
+            aria-expanded={mobileDetailsOpen}
+            aria-controls="physical-momentum-details"
+          >
+            <span>観察プラン・内訳・PMS推移</span>
+            <ChevronRight size={15} className={`transition-transform ${mobileDetailsOpen ? 'rotate-90' : ''}`} aria-hidden="true" />
+          </button>
+
+          <div id="physical-momentum-details" className={`${mobileDetailsOpen ? 'block' : 'hidden'} sm:block`}>
+            <PhysicalTradePlanCards loading={planLoading} error={planError} plan={plan} />
+
+            <div style={physicalBodyGridStyle}>
+              <div style={physicalBreakdownPanelStyle}>
+                <div style={physicalMiniHeaderStyle}>
+                  <strong>内訳</strong>
+                  <span>騰落率は%・変化はptで表示。比較不能な生値は出さず、市場内の強弱はPMS/PFS/PESで見ます。</span>
+                </div>
+                <div style={physicalBreakdownGridStyle}>
+                  <PhysicalBreakdown label={velocityMetric.label} help={velocityMetric.detail} value={velocityMetric.value} tone={latest.velocity} />
+                  <PhysicalBreakdown label={accelerationMetric.label} help={accelerationMetric.detail} value={accelerationMetric.value} tone={latest.acceleration} />
+                  <PhysicalBreakdown label={forceMetric.label} help={forceMetric.detail} value={forceMetric.value} tone={latest.force} />
+                </div>
               </div>
-              <div style={physicalBreakdownGridStyle}>
-                <PhysicalBreakdown label={velocityMetric.label} help={velocityMetric.detail} value={velocityMetric.value} tone={latest.velocity} />
-                <PhysicalBreakdown label={accelerationMetric.label} help={accelerationMetric.detail} value={accelerationMetric.value} tone={latest.acceleration} />
-                <PhysicalBreakdown label={forceMetric.label} help={forceMetric.detail} value={forceMetric.value} tone={latest.force} />
-              </div>
+              <PhysicalMomentumSparkline history={data?.history ?? []} />
             </div>
-            <PhysicalMomentumSparkline history={data?.history ?? []} />
           </div>
         </>
       )}
@@ -3660,13 +4037,56 @@ function MarketSnapshotCard({
   analysisDate: string | null
   embedded?: boolean
 }) {
+  const [mobileExpanded, setMobileExpanded] = useState(false)
+  const latestMargin = marginInfo?.latest
+  const latestMarginHistory = marginInfo?.history?.[0]
+  const mobileDetailsId = `market-snapshot-details-${ticker.replace(/[^a-zA-Z0-9_-]/g, '-')}`
   return (
     <div className={embedded ? '' : 'card'} style={embedded ? undefined : marketSnapshotCardStyle}>
-      <div style={marketSnapshotGridStyle}>
-        <PerformanceCard ticker={ticker} embedded analysisDate={analysisDate} />
-        {analysisDate
-          ? <CurrentOnlyDataNotice label="信用残は現在情報のため、過去の短期判断には含めていません。" compact />
-          : <MarginInfoCard info={marginInfo} fallbackType={fallbackType} embedded />}
+      <div className="sm:hidden">
+        <div className="flex items-center gap-2">
+          <strong className="text-[10px] font-black text-[var(--color-text-primary)]">市場・信用</strong>
+          {analysisDate ? (
+            <span className="text-[9px] font-bold text-[var(--color-text-tertiary)]">信用残は現在情報のため非表示</span>
+          ) : (
+            <>
+              <MarginBadges
+                marginType={latestMargin?.marginType ?? fallbackType}
+                creditRatio={latestMargin?.creditRatio ?? null}
+                shortRatio={latestMargin?.shortRatio ?? null}
+                compact
+              />
+              <span className="ml-auto font-mono text-[9px] font-bold text-[var(--color-text-secondary)]">
+                信用倍率 {latestMargin?.creditRatio == null ? '---' : `${latestMargin.creditRatio.toFixed(2)}倍`}
+              </span>
+            </>
+          )}
+        </div>
+        {!analysisDate && (
+          <div className="mt-1 text-[9px] font-semibold text-[var(--color-text-tertiary)]">
+            基準週 {latestMargin?.asOfDate ?? latestMarginHistory?.date ?? '---'}
+          </div>
+        )}
+      </div>
+      <div className="mt-2 border-t border-[var(--color-border-soft)] pt-2 sm:mt-0 sm:border-0 sm:pt-0">
+        <PerformanceCard ticker={ticker} embedded analysisDate={analysisDate} mobileExpanded={mobileExpanded} />
+      </div>
+      <button
+        type="button"
+        className="mt-1 flex min-h-11 w-full items-center border-t border-[var(--color-border-soft)] py-2 text-left text-[10px] font-bold text-[var(--color-brand-700)] sm:hidden"
+        aria-expanded={mobileExpanded}
+        aria-controls={mobileDetailsId}
+        onClick={() => setMobileExpanded((current) => !current)}
+      >
+        その他の騰落率・信用残
+        <ChevronRight size={12} className={`ml-auto transition-transform ${mobileExpanded ? 'rotate-90' : ''}`} aria-hidden="true" />
+      </button>
+      <div id={mobileDetailsId} className={`${mobileExpanded ? 'block' : 'hidden'} mt-1 sm:mt-0 sm:block`}>
+        <div style={marketSnapshotGridStyle}>
+          {analysisDate
+            ? <CurrentOnlyDataNotice label="信用残は現在情報のため、過去の短期判断には含めていません。" compact />
+            : <MarginInfoCard info={marginInfo} fallbackType={fallbackType} embedded />}
+        </div>
       </div>
     </div>
   )
@@ -3737,12 +4157,11 @@ function InfoLine({ label, value }: { label: string; value: string }) {
       display: 'flex',
       justifyContent: 'space-between',
       alignItems: 'baseline',
-      padding: '4px 0',
-      borderBottom: '1px solid var(--border-subtle)',
+      padding: '3px 0',
       gap: '8px',
     }}>
-      <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{label}</span>
-      <span style={{ fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-primary)', textAlign: 'right' }}>{value}</span>
+      <span style={{ fontSize: '10px', fontWeight: 500, color: 'var(--text-muted)' }}>{label}</span>
+      <span style={{ fontFamily: 'var(--font-mono)', fontSize: '11px', fontWeight: 600, color: 'var(--text-primary)', textAlign: 'right' }}>{value}</span>
     </div>
   )
 }
@@ -3839,6 +4258,12 @@ function BasicInfoCard({
     : macd
       ? `MACD ${macd.value.toFixed(2)} / Signal ${macd.signal.toFixed(2)}`
       : '日足データ不足'
+  const highDistance = quote?.price != null && quote.fiftyTwoWeekHigh != null && quote.fiftyTwoWeekHigh > 0
+    ? ((quote.price / quote.fiftyTwoWeekHigh) - 1) * 100
+    : null
+  const lowDistance = quote?.price != null && quote.fiftyTwoWeekLow != null && quote.fiftyTwoWeekLow > 0
+    ? ((quote.price / quote.fiftyTwoWeekLow) - 1) * 100
+    : null
   const items = [
     { label: '時価総額', value: quote?.marketCap != null ? `${(quote.marketCap / 1e8).toLocaleString('ja-JP', { maximumFractionDigits: 0 })} 億円` : '---' },
     { label: '出来高', value: quote?.volume ? quote.volume.toLocaleString('ja-JP') : '---' },
@@ -3859,8 +4284,16 @@ function BasicInfoCard({
           ? 'var(--color-market-blue)'
           : 'var(--text-primary)',
     },
-    { label: '52週高値', value: quote?.fiftyTwoWeekHigh != null ? `¥${quote.fiftyTwoWeekHigh.toLocaleString('ja-JP', { maximumFractionDigits: 1 })}` : '---' },
-    { label: '52週安値', value: quote?.fiftyTwoWeekLow != null ? `¥${quote.fiftyTwoWeekLow.toLocaleString('ja-JP', { maximumFractionDigits: 1 })}` : '---' },
+    {
+      label: '52週高値',
+      value: quote?.fiftyTwoWeekHigh != null ? `¥${quote.fiftyTwoWeekHigh.toLocaleString('ja-JP', { maximumFractionDigits: 1 })}` : '---',
+      detail: highDistance == null ? undefined : `高値比 ${fmtPct(highDistance)}`,
+    },
+    {
+      label: '52週安値',
+      value: quote?.fiftyTwoWeekLow != null ? `¥${quote.fiftyTwoWeekLow.toLocaleString('ja-JP', { maximumFractionDigits: 1 })}` : '---',
+      detail: lowDistance == null ? undefined : `安値比 ${fmtPct(lowDistance)}`,
+    },
   ]
   const combinedLoading = summaryLoading || physicalLoading
   const decision = buildBasicDecisionSummary(latestStage, physical, ml, quote)
@@ -3868,25 +4301,24 @@ function BasicInfoCard({
 
   return (
     <div className={embedded ? '' : 'card'} style={{ padding: embedded ? 0 : '12px' }}>
-      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '8px', marginBottom: '8px' }}>
-        <div style={{ fontSize: '11px', fontWeight: 600 }}>{embedded ? '市場・テクニカル' : '基本情報'}</div>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '8px', marginBottom: '10px' }}>
+        <div style={{ fontSize: '12px', fontWeight: 700 }}>{embedded ? '市場・テクニカル' : '基本情報'}</div>
         {latestStage?.date && (
-          <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
+          <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', fontWeight: 500 }}>
             基準日 {latestStage.date}
           </span>
         )}
       </div>
-      <div className="grid grid-cols-1 gap-x-2 gap-y-1 sm:grid-cols-2">
+      <div className="grid grid-cols-1 gap-x-5 gap-y-1 sm:grid-cols-2">
         {items.map(({ label, value, detail, color }) => (
           <div key={label} className="min-w-0" style={{
             display: 'flex',
             justifyContent: 'space-between',
             alignItems: 'flex-start',
-            padding: '4px 0',
-            borderBottom: '1px solid var(--border-subtle)',
+            padding: '3px 0',
             gap: '8px',
           }}>
-            <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{label}</span>
+            <span style={{ fontSize: '10px', fontWeight: 500, color: 'var(--text-muted)' }}>{label}</span>
             <span style={{ minWidth: 0, textAlign: 'right' }}>
               <span style={{
                 display: 'block',
@@ -3896,7 +4328,7 @@ function BasicInfoCard({
                 fontFamily: 'var(--font-mono)',
                 fontSize: '11px',
                 color: color ?? 'var(--text-primary)',
-                fontWeight: color ? 800 : 400,
+                fontWeight: color ? 800 : 600,
               }}>
                 {value}
               </span>
@@ -3905,7 +4337,7 @@ function BasicInfoCard({
                   display: 'block',
                   marginTop: '1px',
                   fontFamily: 'var(--font-mono)',
-                  fontSize: '9px',
+                  fontSize: '10px',
                   color: 'var(--text-muted)',
                   whiteSpace: 'nowrap',
                   overflow: 'hidden',
@@ -3938,7 +4370,7 @@ function BasicInfoCard({
       <div style={basicSignalBlockStyle}>
         <button
           type="button"
-          className="flex w-full items-center gap-2 py-1 text-left text-[10px] font-black text-[var(--color-text-primary)] sm:hidden"
+          className="flex min-h-11 w-full items-center gap-2 py-2 text-left text-[10px] font-black text-[var(--color-text-primary)] sm:hidden"
           aria-expanded={showSignalDetails}
           aria-controls="basic-signal-details"
           onClick={() => setShowSignalDetails((current) => !current)}
@@ -4131,8 +4563,8 @@ function physicsToneStyle(status: PhysicsStatus) {
 }
 
 const basicStageBlockStyle: CSSProperties = {
-  marginTop: '10px',
-  paddingTop: '10px',
+  marginTop: '12px',
+  paddingTop: '12px',
   borderTop: '1px solid var(--border-subtle)',
 }
 
@@ -4141,7 +4573,7 @@ const basicSubHeaderStyle: CSSProperties = {
   alignItems: 'baseline',
   justifyContent: 'space-between',
   gap: '8px',
-  marginBottom: '6px',
+  marginBottom: '8px',
   color: 'var(--text-primary)',
   fontSize: '11px',
 }
@@ -4149,14 +4581,14 @@ const basicSubHeaderStyle: CSSProperties = {
 const basicStageGridStyle: CSSProperties = {
   display: 'grid',
   gridTemplateColumns: 'repeat(6, minmax(0, 1fr))',
-  gap: '4px',
+  gap: '5px',
 }
 
 const basicStageCellStyle: CSSProperties = {
   minWidth: 0,
   border: '1px solid var(--border-subtle)',
   borderRadius: '6px',
-  padding: '5px 3px',
+  padding: '6px 3px',
   display: 'grid',
   justifyItems: 'center',
   gap: '1px',
@@ -4188,12 +4620,12 @@ const basicStageCellNumberStyle: CSSProperties = {
 const basicStageCellTextStyle: CSSProperties = {
   maxWidth: '100%',
   color: 'var(--text-secondary)',
-  fontSize: '8px',
+  fontSize: '9px',
   fontWeight: 700,
-  lineHeight: 1.1,
-  whiteSpace: 'nowrap',
-  overflow: 'hidden',
-  textOverflow: 'ellipsis',
+  lineHeight: 1.15,
+  textAlign: 'center',
+  whiteSpace: 'normal',
+  wordBreak: 'keep-all',
 }
 
 const basicMutedTextStyle: CSSProperties = {
@@ -4204,8 +4636,8 @@ const basicMutedTextStyle: CSSProperties = {
 }
 
 const basicSignalBlockStyle: CSSProperties = {
-  marginTop: '10px',
-  paddingTop: '10px',
+  marginTop: '12px',
+  paddingTop: '12px',
   borderTop: '1px solid var(--border-subtle)',
 }
 
@@ -4222,13 +4654,13 @@ const basicSignalTitleStyle: CSSProperties = {
 const basicSignalGridStyle: CSSProperties = {
   display: 'grid',
   gridTemplateColumns: 'repeat(auto-fit, minmax(min(220px, 100%), 1fr))',
-  gap: '6px',
+  gap: '8px',
 }
 
 const basicSignalPaneStyle: CSSProperties = {
   minWidth: 0,
-  borderLeft: '3px solid var(--border-subtle)',
-  padding: '8px 9px',
+  borderLeft: '2px solid var(--border-subtle)',
+  padding: '8px 10px',
 }
 
 const basicSignalBadgeStyle: CSSProperties = {

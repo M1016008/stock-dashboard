@@ -138,6 +138,7 @@ export interface PeriodExplorerResponse {
   range: PeriodExplorerDateRange
   rows: Array<PeriodExplorerStockRow | PeriodExplorerSectorRow>
   total: number
+  universeTotal: number
   limit: number
   offset: number
   excluded: {
@@ -254,7 +255,7 @@ type VolatilityDbRow = {
 
 const CALENDAR_TTL_MS = 5 * 60_000
 const RESPONSE_TTL_MS = 5 * 60_000
-const CACHE_VERSION = 5
+const CACHE_VERSION = 6
 const NIKKEI225_SET = new Set<string>(NIKKEI225_TICKERS)
 
 export class PeriodExplorerInputError extends Error {}
@@ -824,6 +825,7 @@ function matchesFilters(row: PeriodExplorerStockRow, filters: PeriodExplorerFilt
   if (filters.markets?.length && (!row.marketSegment || !filters.markets.includes(row.marketSegment))) return false
   if (filters.sectors?.length && (!row.selectedSector || !filters.sectors.includes(row.selectedSector))) return false
   if (filters.marginTypes?.length && (!row.marginType || !filters.marginTypes.includes(row.marginType))) return false
+  if ((filters.marketCapMin != null || filters.marketCapMax != null) && row.marketCapBasis !== 'pit') return false
   if (!inRange(row.marketCap, filters.marketCapMin, filters.marketCapMax)) return false
   if (!inRange(row.avgVolume, filters.avgVolumeMin, filters.avgVolumeMax)) return false
   if (!inRange(row.avgTurnover, filters.avgTurnoverMin, filters.avgTurnoverMax)) return false
@@ -964,6 +966,15 @@ export async function queryPeriodExplorer(input: PeriodExplorerInput = {}): Prom
     await applyPitMarketCaps(rows, range.adoptedTo)
   }
 
+  let universeTotal = 0
+  if (definition.resultKind === 'sectors') {
+    universeTotal = buildSectorRows(rows, normalized.ranking)
+      .filter((row) => row.rankingValue != null && Number.isFinite(row.rankingValue)).length
+  } else {
+    for (const row of rows) row.rankingValue = rankingValue(row, normalized.ranking)
+    universeTotal = rows.filter((row) => row.rankingValue != null && Number.isFinite(row.rankingValue)).length
+  }
+
   rows = rows.filter((row) => matchesFilters(row, normalized.filters))
   const matchedFilterCount = rows.length
   let missingRankingValue = 0
@@ -1024,6 +1035,7 @@ export async function queryPeriodExplorer(input: PeriodExplorerInput = {}): Prom
     range,
     rows: responseRows,
     total,
+    universeTotal,
     limit: normalized.limit,
     offset: normalized.offset,
     excluded: {

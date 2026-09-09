@@ -77,12 +77,15 @@ export function Ma25mMonitorSummary({ ticker, analysisDate }: { ticker: string; 
   const clusters = payload?.clusters ?? []
 
   return (
-    <section className="border border-[var(--color-border-default)] bg-white" aria-label="月足移動平均線監視">
-      <div className="flex flex-wrap items-center gap-2 border-b border-[var(--color-border-default)] bg-[var(--color-brand-50)] px-3 py-2">
+    <section className="border border-[var(--color-border-default)] bg-white" aria-labelledby="monthly-ma-structure-title">
+      <div className="flex flex-wrap items-center gap-2 border-b border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-3 py-2">
         <Radar size={15} className="text-[var(--color-brand-700)]" />
-        <h2 className="text-[11px] font-black text-[var(--color-brand-900)]">月足MA接近レーダー</h2>
+        <div className="min-w-0">
+          <div className="text-[9px] font-black uppercase tracking-[0.08em] text-[var(--color-text-tertiary)]">Long-term structure</div>
+          <h2 id="monthly-ma-structure-title" className="text-[12px] font-black text-[var(--color-text-primary)]">月足長期構造 <span className="font-bold text-[var(--color-text-tertiary)]">/ MA接近レーダー</span></h2>
+        </div>
         {payload?.date && <span className="font-mono text-[9px] font-bold text-[var(--color-text-tertiary)]">{payload.date}</span>}
-        <Link href={`/ma25m-monitor?q=${encodeURIComponent(ticker)}`} className="ml-auto text-[10px] font-black text-[var(--color-brand-700)] hover:underline">監視一覧</Link>
+        <Link href={`/ma25m-monitor?q=${encodeURIComponent(ticker)}`} className="ml-auto inline-flex min-h-11 items-center text-[10px] font-black text-[var(--color-brand-700)] hover:underline sm:min-h-8">監視一覧</Link>
       </div>
       {loading ? (
         <div className="px-3 py-4 text-[11px] font-bold text-[var(--color-text-tertiary)]">読込中…</div>

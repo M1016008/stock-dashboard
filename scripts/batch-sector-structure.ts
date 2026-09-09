@@ -3,6 +3,7 @@
 
 import { client, db, ensureReady, execAll } from '@/lib/db/client'
 import { batchRuns } from '@/lib/db/schema'
+import { historicalUniverseMembershipSql } from '@/lib/historical-universe'
 import { SECTOR_STRUCTURE_AXES } from '@/lib/sector-structure'
 import {
   buildSectorStructureSeries,
@@ -27,6 +28,12 @@ async function latestDates(): Promise<string[]> {
 }
 
 async function loadRows(startDate: string, endDate: string): Promise<SectorStructureSourceRow[]> {
+  const historicalMembership = historicalUniverseMembershipSql(
+    'source.date',
+    'hu',
+    'tu',
+    'source.ticker IS NOT NULL',
+  )
   return execAll<SectorStructureSourceRow>(`
     WITH source AS (
       SELECT
@@ -49,16 +56,18 @@ async function loadRows(startDate: string, endDate: string): Promise<SectorStruc
     )
     SELECT
       source.*,
-      tu.sector17_code AS sector17Code,
-      tu.sector17_name AS sector17Name,
-      tu.sector33_code AS sector33Code,
-      tu.sector33_name AS sector33Name,
+      COALESCE(hu.sector17_code, tu.sector17_code) AS sector17Code,
+      COALESCE(hu.sector17_name, tu.sector17_name) AS sector17Name,
+      COALESCE(hu.sector33_code, tu.sector33_code) AS sector33Code,
+      COALESCE(hu.sector33_name, tu.sector33_name) AS sector33Name,
       sc.major_category AS majorCategory,
       sc.sub_industry AS subIndustry
     FROM source
-    INNER JOIN ticker_universe AS tu ON tu.ticker = source.ticker AND tu.active = 1
+    LEFT JOIN historical_universe AS hu ON hu.ticker = source.ticker
+    LEFT JOIN ticker_universe AS tu ON tu.ticker = source.ticker
     LEFT JOIN stock_classification AS sc ON sc.ticker = source.ticker
     WHERE source.date > ?
+      AND ${historicalMembership}
     ORDER BY source.date, source.ticker
   `, [startDate, endDate, startDate])
 }

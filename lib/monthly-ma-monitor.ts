@@ -174,7 +174,7 @@ function valueAtLag(values: number[], index: number, lag: number): number | null
   return index >= lag ? values[index - lag] : null
 }
 
-function regressionSlope(values: number[]): number {
+export function regressionSlope(values: number[]): number {
   if (values.length < 2) return 0
   const xMean = (values.length - 1) / 2
   const yMean = values.reduce((sum, value) => sum + value, 0) / values.length

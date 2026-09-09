@@ -10,11 +10,11 @@ import {
   Line,
   LineChart,
   ReferenceLine,
-  ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
 } from 'recharts'
+import { MeasuredChartFrame } from '@/components/charts/MeasuredChartFrame'
 import {
   FINANCIAL_PERFORMANCE_DETAIL_METRICS,
   type FinancialForecastRevisionDirection,
@@ -152,10 +152,19 @@ export function FinancialPerformanceDetail({ ticker, analysisDate }: FinancialPe
   const [model, setModel] = useState<FinancialPerformanceDetailReadModel | null>(null)
   const [mode, setMode] = useState<FinancialTimelineMode>('FY')
   const [range, setRange] = useState<TimelineRange>('5')
-  const [mobileMetric, setMobileMetric] = useState<FinancialPerformanceDetailMetric>('revenue')
+  const [selectedMetric, setSelectedMetric] = useState<FinancialPerformanceDetailMetric>('revenue')
   const [profitabilityView, setProfitabilityView] = useState<ProfitabilityView>('margins')
+  const [isDesktopLayout, setIsDesktopLayout] = useState<boolean | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+
+  useEffect(() => {
+    const media = window.matchMedia('(min-width: 1024px)')
+    const update = () => setIsDesktopLayout(media.matches)
+    update()
+    media.addEventListener('change', update)
+    return () => media.removeEventListener('change', update)
+  }, [])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -186,29 +195,29 @@ export function FinancialPerformanceDetail({ ticker, analysisDate }: FinancialPe
   }
 
   return (
-    <section className="space-y-3" aria-labelledby="performance-detail-title">
-      <header className="border border-[var(--color-border-default)] bg-white">
-        <div className="flex flex-wrap items-start justify-between gap-2 bg-[var(--color-brand-50)] px-4 py-3">
+    <section className="space-y-6 bg-white" aria-labelledby="performance-detail-title">
+      <header className="border-y border-[var(--color-border-soft)] bg-white">
+        <div className="flex flex-wrap items-end justify-between gap-2 border-b border-[var(--color-border-soft)] px-4 py-3.5 sm:px-5">
           <div className="flex min-w-0 items-center gap-2">
             <TrendingUp size={17} className="shrink-0 text-[var(--color-brand-700)]" aria-hidden="true" />
             <div>
-              <h2 id="performance-detail-title" className="text-[13px] font-black text-[var(--color-brand-900)]">業績</h2>
-              <p className="text-[9px] font-semibold text-[var(--color-text-tertiary)]">実績・会社予想・収益性を同じ基準日で確認</p>
+              <h2 id="performance-detail-title" className="text-[15px] font-bold text-[var(--color-text-primary)]">業績</h2>
+              <p className="mt-1 text-[10px] font-medium text-[var(--color-text-tertiary)]">実績の方向と会社予想を同じ時間軸で確認</p>
             </div>
           </div>
-          <div className="font-mono text-[9px] font-bold text-[var(--color-text-tertiary)]">分析基準日 {model.asOf}</div>
+          <div className="font-mono text-[10px] font-semibold text-[var(--color-text-tertiary)]">分析基準日 {model.asOf}</div>
         </div>
         <PerformanceSummary model={model} />
       </header>
 
-      <section className="overflow-hidden border border-[var(--color-border-default)] bg-white" aria-labelledby="performance-chart-title">
-        <div className="border-b border-[var(--color-border-default)] bg-[var(--color-brand-50)] px-3 py-2.5 sm:px-4">
+      <section className="overflow-hidden border-y border-[var(--color-border-soft)] bg-white" aria-labelledby="performance-chart-title">
+        <div className="border-b border-[var(--color-border-soft)] px-4 py-3 sm:px-5">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2">
               <BarChart3 size={15} className="text-[var(--color-brand-700)]" aria-hidden="true" />
-              <h3 id="performance-chart-title" className="text-[11px] font-black text-[var(--color-brand-900)]">業績グラフ</h3>
+              <h3 id="performance-chart-title" className="text-[13px] font-bold text-[var(--color-text-primary)]">業績グラフ</h3>
             </div>
-            <span className="text-[8px] font-semibold text-[var(--color-text-tertiary)]">実績と会社予想を線種・塗り・ラベルで区別</span>
+            <span className="text-[10px] font-medium text-[var(--color-text-tertiary)]">実績と会社予想を塗り・輪郭・ラベルで区別</span>
           </div>
           <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
             <SegmentedControl label="期間種別" options={MODE_OPTIONS} value={mode} onChange={setMode} />
@@ -220,27 +229,20 @@ export function FinancialPerformanceDetail({ ticker, analysisDate }: FinancialPe
           <EmptyState>この期間種別で表示できるデータがありません。</EmptyState>
         ) : (
           <>
-            <div className="hidden grid-cols-2 lg:grid">
-              {FINANCIAL_PERFORMANCE_DETAIL_METRICS.map((metric) => (
-                <PerformanceChart key={metric} metric={metric} periods={periods} />
-              ))}
-            </div>
-            <div className="lg:hidden">
-              <MetricSwitch value={mobileMetric} onChange={setMobileMetric} />
-              <PerformanceChart metric={mobileMetric} periods={periods} mobile />
-            </div>
+            <MetricSwitch value={selectedMetric} onChange={setSelectedMetric} />
+            <PerformanceChart metric={selectedMetric} periods={periods} />
             <PerformanceRawTable periods={periods} />
           </>
         )}
       </section>
 
-      <section className="overflow-hidden border border-[var(--color-border-default)] bg-white" aria-labelledby="profitability-title">
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--color-border-default)] bg-[var(--color-brand-50)] px-3 py-2.5 sm:px-4">
+      <section className="overflow-hidden border-y border-[var(--color-border-soft)] bg-white" aria-labelledby="profitability-title">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--color-border-soft)] px-4 py-3 sm:px-5">
           <div className="flex items-center gap-2">
             <TrendingUp size={15} className="text-[var(--color-brand-700)]" aria-hidden="true" />
             <div>
-              <h3 id="profitability-title" className="text-[11px] font-black text-[var(--color-brand-900)]">収益性</h3>
-              <p className="text-[8px] font-semibold text-[var(--color-text-tertiary)]">同一期間・会計基準・連結区分の値だけで算定</p>
+              <h3 id="profitability-title" className="text-[13px] font-bold text-[var(--color-text-primary)]">収益性</h3>
+              <p className="mt-1 text-[10px] font-medium text-[var(--color-text-tertiary)]">同一期間・会計基準・連結区分の値だけで算定</p>
             </div>
           </div>
           <div className="lg:hidden">
@@ -252,13 +254,16 @@ export function FinancialPerformanceDetail({ ticker, analysisDate }: FinancialPe
             />
           </div>
         </div>
-        <div className="hidden grid-cols-2 lg:grid">
-          <ProfitabilityChart periods={periods} view="margins" />
-          <ProfitabilityChart periods={periods} view="returns" />
-        </div>
-        <div className="lg:hidden">
+        {isDesktopLayout == null ? (
+          <div className="grid h-[235px] place-items-center text-[10px] font-bold text-[var(--color-text-tertiary)]">グラフを準備中...</div>
+        ) : isDesktopLayout ? (
+          <div className="grid grid-cols-2">
+            <ProfitabilityChart periods={periods} view="margins" />
+            <ProfitabilityChart periods={periods} view="returns" />
+          </div>
+        ) : (
           <ProfitabilityChart periods={periods} view={profitabilityView} />
-        </div>
+        )}
       </section>
 
       <ForecastHistoryTable rows={model.forecastHistory} />
@@ -269,7 +274,7 @@ export function FinancialPerformanceDetail({ ticker, analysisDate }: FinancialPe
 function PerformanceSummary({ model }: { model: FinancialPerformanceDetailReadModel }) {
   const summary = model.summary
   return (
-    <div className="grid divide-y divide-[var(--color-border-soft)] lg:grid-cols-[1.15fr_0.85fr_1fr] lg:divide-x lg:divide-y-0">
+    <div className="grid gap-y-1 px-1 py-1 sm:px-2 lg:grid-cols-[1.35fr_0.75fr_0.9fr] lg:gap-x-2">
       <SummaryBlock title="直近業績" subtitle="LTM優先・FY補完">
         <div className="grid grid-cols-2 gap-x-4 gap-y-2">
           <SummaryMetric label="売上高" value={summary.scale.revenue} kind="amount" primary />
@@ -299,10 +304,10 @@ function PerformanceSummary({ model }: { model: FinancialPerformanceDetailReadMo
 
 function SummaryBlock({ title, subtitle, children }: { title: string; subtitle: string; children: React.ReactNode }) {
   return (
-    <article className="min-w-0 px-4 py-3">
+    <article className="min-w-0 px-4 py-3 sm:px-3">
       <div className="mb-2 flex items-baseline justify-between gap-2">
-        <h3 className="text-[10px] font-black text-[var(--color-brand-900)]">{title}</h3>
-        <span className="text-[8px] font-semibold text-[var(--color-text-tertiary)]">{subtitle}</span>
+        <h3 className="text-[11px] font-bold text-[var(--color-text-secondary)]">{title}</h3>
+        <span className="text-[9px] font-medium text-[var(--color-text-tertiary)]">{subtitle}</span>
       </div>
       {children}
     </article>
@@ -322,11 +327,11 @@ function SummaryMetric({
 }) {
   return (
     <div className="min-w-0" title={value.reason ?? value.periodLabel ?? undefined}>
-      <div className="truncate text-[8px] font-bold text-[var(--color-text-tertiary)]">{label}</div>
-      <div className={`truncate font-mono font-black text-[var(--color-text-primary)] ${primary ? 'text-[15px]' : 'text-[12px]'}`}>
+      <div className="truncate text-[10px] font-semibold text-[var(--color-text-tertiary)]">{label}</div>
+      <div className={`truncate font-mono font-black text-[var(--color-text-primary)] ${primary ? 'text-[19px]' : 'text-[14px]'}`}>
         {displaySummaryValue(value, kind)}
       </div>
-      <div className="truncate text-[7px] font-semibold text-[var(--color-text-tertiary)]">
+      <div className="truncate text-[9px] font-medium text-[var(--color-text-tertiary)]">
         {value.availability === 'not_applicable' ? 'N/A' : value.periodLabel ?? value.reason ?? 'データなし'}
       </div>
     </div>
@@ -346,7 +351,7 @@ function SegmentedControl<T extends string>({
 }) {
   return (
     <div className="flex min-w-0 items-center gap-1.5">
-      <span className="shrink-0 text-[8px] font-black text-[var(--color-text-tertiary)]">{label}</span>
+      <span className="shrink-0 text-[10px] font-bold text-[var(--color-text-tertiary)]">{label}</span>
       <div className="flex min-w-0 overflow-x-auto border border-[var(--color-border-default)] bg-white">
         {options.map((option) => (
           <button
@@ -354,7 +359,7 @@ function SegmentedControl<T extends string>({
             type="button"
             onClick={() => onChange(option.value)}
             aria-pressed={value === option.value}
-            className={`h-7 shrink-0 border-r border-[var(--color-border-default)] px-2 text-[9px] font-black last:border-r-0 sm:px-2.5 ${
+            className={`h-8 shrink-0 border-r border-[var(--color-border-default)] px-2.5 text-[10px] font-bold last:border-r-0 ${
               value === option.value
                 ? 'bg-[var(--color-brand-900)] text-white'
                 : 'text-[var(--color-text-secondary)]'
@@ -376,15 +381,17 @@ function MetricSwitch({
   onChange: (metric: FinancialPerformanceDetailMetric) => void
 }) {
   return (
-    <div className="grid grid-cols-4 border-b border-[var(--color-border-soft)] px-3 py-2">
+    <div className="flex overflow-x-auto border-b border-[var(--color-border-soft)] px-3 py-2 sm:px-5" aria-label="業績グラフの表示指標">
       {FINANCIAL_PERFORMANCE_DETAIL_METRICS.map((metric) => (
         <button
           key={metric}
           type="button"
           onClick={() => onChange(metric)}
           aria-pressed={value === metric}
-          className={`h-8 border border-r-0 border-[var(--color-border-default)] text-[9px] font-black last:border-r ${
-            value === metric ? 'bg-[var(--color-brand-900)] text-white' : 'bg-white text-[var(--color-text-secondary)]'
+          className={`h-9 min-w-24 shrink-0 border-b-2 px-4 text-[10px] font-bold ${
+            value === metric
+              ? 'border-[var(--color-brand-700)] text-[var(--color-brand-900)]'
+              : 'border-transparent text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-subtle)]'
           }`}
         >
           {METRIC_LABELS[metric]}
@@ -396,7 +403,7 @@ function MetricSwitch({
 
 function ForecastLegend({ note }: { note: string | null }) {
   return (
-    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-[var(--color-border-soft)] px-3 py-1.5 text-[8px] font-bold text-[var(--color-text-tertiary)] sm:px-4">
+    <div className="flex flex-wrap items-center gap-x-5 gap-y-1 border-b border-[var(--color-border-soft)] px-4 py-2 text-[10px] font-semibold text-[var(--color-text-tertiary)] sm:px-5">
       <LegendSwatch kind="actual" label="実績" />
       <LegendSwatch kind="current" label="当期会社予想" />
       <LegendSwatch kind="next" label="翌期会社予想" />
@@ -421,37 +428,50 @@ function LegendSwatch({ kind, label }: { kind: 'actual' | 'current' | 'next'; la
 function PerformanceChart({
   metric,
   periods,
-  mobile = false,
 }: {
   metric: FinancialPerformanceDetailMetric
   periods: FinancialPerformanceDetailPeriod[]
-  mobile?: boolean
 }) {
   const data = chartData(periods, metric)
   const hasData = data.some((datum) => datum.actual != null || datum.currentForecast != null || datum.nextForecast != null)
+  const latestValue = displayTimelineValue([...periods].reverse().find((period) => period.metrics[metric])?.metrics[metric] ?? null, metric)
+  if (!hasData) {
+    return (
+      <article className="px-4 py-5 sm:px-5" aria-label={`${METRIC_LABELS[metric]} データなし`}>
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <h4 className="text-[13px] font-bold text-[var(--color-text-primary)]">{METRIC_LABELS[metric]}</h4>
+          <span className="font-mono text-[15px] font-semibold text-[var(--color-text-tertiary)]">—</span>
+        </div>
+        <p className="mt-2 border-l-2 border-[var(--color-border-default)] pl-3 text-[10px] font-medium leading-5 text-[var(--color-text-tertiary)]">
+          {METRIC_LABELS[metric]}はこの基準では取得できません。
+        </p>
+      </article>
+    )
+  }
   return (
-    <article className="min-w-0 border-b border-[var(--color-border-soft)] lg:border-r lg:[&:nth-child(2n)]:border-r-0">
-      <div className="flex items-center justify-between border-b border-[var(--color-border-soft)] px-3 py-2 sm:px-4">
-        <h4 className="text-[10px] font-black text-[var(--color-brand-900)]">{METRIC_LABELS[metric]}</h4>
-        <span className="font-mono text-[10px] font-black text-[var(--color-text-primary)]">
-          {displayTimelineValue([...periods].reverse().find((period) => period.metrics[metric])?.metrics[metric] ?? null, metric)}
+    <article className="min-w-0 px-3 pb-2 pt-3 sm:px-5 sm:pt-4">
+      <div className="flex items-end justify-between gap-3 px-1">
+        <div>
+          <h4 className="text-[13px] font-bold text-[var(--color-text-secondary)]">{METRIC_LABELS[metric]}</h4>
+          <p className="mt-0.5 text-[9px] font-medium text-[var(--color-text-tertiary)]">選択期間の実績と会社予想</p>
+        </div>
+        <span className="font-mono text-[22px] font-semibold leading-none text-[var(--color-text-primary)] sm:text-[26px]">
+          {latestValue}
         </span>
       </div>
-      <div className={mobile ? 'h-[210px] px-1 py-2' : 'h-[225px] px-2 py-2'}>
-        {!hasData ? <EmptyState>データなし</EmptyState> : (
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: 3 }} barCategoryGap="22%">
-              <CartesianGrid vertical={false} stroke="var(--color-border-soft)" strokeDasharray="2 2" />
-              <XAxis dataKey="label" tick={{ fontSize: 8, fill: 'var(--color-text-tertiary)' }} tickLine={false} minTickGap={12} interval="preserveStartEnd" />
-              <YAxis tick={{ fontSize: 8, fill: 'var(--color-text-tertiary)' }} tickFormatter={(value) => compactNumber(Number(value), metric)} axisLine={false} tickLine={false} width={49} />
-              <ReferenceLine y={0} stroke="var(--color-border-strong)" />
-              <Tooltip cursor={{ fill: 'var(--color-surface-subtle)' }} content={<PerformanceTooltip metric={metric} />} />
-              <Bar dataKey="actual" name="実績" fill="var(--color-brand-700)" maxBarSize={22} isAnimationActive={false} />
-              <Bar dataKey="currentForecast" name="当期会社予想" fill="white" stroke="var(--color-brand-700)" strokeWidth={1.6} maxBarSize={22} isAnimationActive={false} />
-              <Bar dataKey="nextForecast" name="翌期会社予想" fill="var(--color-brand-50)" stroke="var(--color-brand-700)" strokeWidth={1.6} strokeDasharray="3 2" maxBarSize={22} isAnimationActive={false} />
-            </BarChart>
-          </ResponsiveContainer>
-        )}
+      <div className="h-[250px] py-3 sm:h-[330px] sm:py-4">
+        <MeasuredChartFrame className="h-full">
+          {({ width, height }) => <BarChart width={width} height={height} data={data} margin={{ top: 8, right: 10, left: 0, bottom: 3 }} barCategoryGap="28%">
+            <CartesianGrid vertical={false} stroke="var(--color-border-soft)" strokeOpacity={0.7} />
+            <XAxis dataKey="label" tick={{ fontSize: 10, fill: 'var(--color-text-tertiary)' }} tickLine={false} axisLine={false} minTickGap={24} interval="preserveStartEnd" />
+            <YAxis tick={{ fontSize: 10, fill: 'var(--color-text-tertiary)' }} tickFormatter={(value) => compactNumber(Number(value), metric)} axisLine={false} tickLine={false} width={54} />
+            <ReferenceLine y={0} stroke="var(--color-border-strong)" />
+            <Tooltip cursor={{ fill: 'var(--color-surface-subtle)' }} content={<PerformanceTooltip metric={metric} />} />
+            <Bar dataKey="actual" name="実績" fill="var(--color-brand-700)" maxBarSize={30} isAnimationActive={false} />
+            <Bar dataKey="currentForecast" name="当期会社予想" fill="white" stroke="var(--color-brand-700)" strokeWidth={1.6} maxBarSize={30} isAnimationActive={false} />
+            <Bar dataKey="nextForecast" name="翌期会社予想" fill="var(--color-brand-50)" stroke="var(--color-brand-700)" strokeWidth={1.6} strokeDasharray="3 2" maxBarSize={30} isAnimationActive={false} />
+          </BarChart>}
+        </MeasuredChartFrame>
       </div>
     </article>
   )
@@ -478,7 +498,7 @@ function PerformanceTooltip({
       </div>
       {value?.yoyPercent != null && <div className="mt-1">前年同期比 <b className="font-mono">{signedPercent(value.yoyPercent)}</b></div>}
       {value?.revision && <div className="mt-1 border-t border-[var(--color-border-soft)] pt-1">前回 {compactNumber(value.revision.previousValue, metric)} / 修正 <b>{signedPercent(value.revision.ratePercent)}</b></div>}
-      <div className="mt-1 font-mono text-[8px] text-[var(--color-text-tertiary)]">公表 {value?.publishedAt.slice(0, 10) ?? '---'}</div>
+      <div className="mt-1 font-mono text-[9px] text-[var(--color-text-tertiary)]">公表 {value?.publishedAt.slice(0, 10) ?? '---'}</div>
     </div>
   )
 }
@@ -504,25 +524,25 @@ function ProfitabilityChart({
   const activeKeys = keys.filter(({ key }) => data.some((datum) => datum[key as keyof ChartDatum] != null))
   const hasData = activeKeys.length > 0
   return (
-    <article className="min-w-0 border-b border-[var(--color-border-soft)] lg:border-r lg:last:border-r-0">
-      <div className="border-b border-[var(--color-border-soft)] px-3 py-2 text-[10px] font-black text-[var(--color-brand-900)] sm:px-4">
+    <article className="min-w-0 border-b border-[var(--color-border-soft)] lg:border-b-0 lg:border-r lg:last:border-r-0">
+      <div className="px-3 pb-1 pt-3 text-[10px] font-black text-[var(--color-brand-900)] sm:px-4">
         {view === 'margins' ? '利益率' : '資本効率'}
       </div>
       <div className="h-[235px] px-2 py-2">
         {!hasData ? <EmptyState>{view === 'margins' ? '利益率を算定できるデータがありません。' : 'FYまたはLTMで算定可能なROE・ROAがありません。'}</EmptyState> : (
-          <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={data} margin={{ top: 8, right: 12, left: 0, bottom: 3 }}>
-              <CartesianGrid vertical={false} stroke="var(--color-border-soft)" strokeDasharray="2 2" />
-              <XAxis dataKey="label" tick={{ fontSize: 8, fill: 'var(--color-text-tertiary)' }} tickLine={false} minTickGap={12} interval="preserveStartEnd" />
-              <YAxis tick={{ fontSize: 8, fill: 'var(--color-text-tertiary)' }} tickFormatter={(value) => `${Number(value).toFixed(0)}%`} axisLine={false} tickLine={false} width={38} />
+          <MeasuredChartFrame className="h-full">
+            {({ width, height }) => <LineChart width={width} height={height} data={data} margin={{ top: 8, right: 12, left: 0, bottom: 3 }}>
+              <CartesianGrid vertical={false} stroke="var(--color-border-soft)" />
+              <XAxis dataKey="label" tick={{ fontSize: 10, fill: 'var(--color-text-tertiary)' }} tickLine={false} axisLine={false} minTickGap={16} interval="preserveStartEnd" />
+              <YAxis tick={{ fontSize: 10, fill: 'var(--color-text-tertiary)' }} tickFormatter={(value) => `${Number(value).toFixed(0)}%`} axisLine={false} tickLine={false} width={42} />
               <ReferenceLine y={0} stroke="var(--color-border-strong)" />
               <Tooltip formatter={(value) => [`${Number(value).toFixed(1)}%`]} labelFormatter={(label) => String(label)} />
               <Legend wrapperStyle={{ fontSize: 9 }} />
               {activeKeys.map(({ key, label, stroke, dash }) => (
                 <Line key={key} type="monotone" dataKey={key} name={label} stroke={stroke} strokeWidth={1.8} strokeDasharray={dash} dot={{ r: 2.5 }} connectNulls={false} isAnimationActive={false} />
               ))}
-            </LineChart>
-          </ResponsiveContainer>
+            </LineChart>}
+          </MeasuredChartFrame>
         )}
       </div>
     </article>
@@ -531,13 +551,13 @@ function ProfitabilityChart({
 
 function PerformanceRawTable({ periods }: { periods: FinancialPerformanceDetailPeriod[] }) {
   return (
-    <div className="border-t border-[var(--color-border-default)]">
-      <div className="flex items-center justify-between bg-[var(--color-surface-subtle)] px-3 py-2 sm:px-4">
+    <details className="group border-t border-[var(--color-border-soft)]">
+      <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between px-4 py-2 sm:px-5 [&::-webkit-details-marker]:hidden">
         <span className="inline-flex items-center gap-1.5 text-[10px] font-black text-[var(--color-brand-900)]"><Table2 size={13} />原表</span>
-        <span className="text-[8px] font-semibold text-[var(--color-text-tertiary)]">グラフと同じ期間・基準日</span>
-      </div>
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[920px] border-collapse text-right text-[9px]">
+        <span className="text-[10px] font-medium text-[var(--color-text-tertiary)]">グラフと同じ期間・基準日 / 開いて確認</span>
+      </summary>
+      <div className="overflow-x-auto border-t border-[var(--color-border-soft)]">
+        <table className="w-full min-w-[920px] border-collapse text-right text-[10px]">
           <thead>
             <tr className="border-y border-[var(--color-border-default)] bg-white text-[var(--color-text-tertiary)]">
               <th className="px-3 py-2 text-left">期間</th>
@@ -568,26 +588,26 @@ function PerformanceRawTable({ periods }: { periods: FinancialPerformanceDetailP
           </tbody>
         </table>
       </div>
-    </div>
+    </details>
   )
 }
 
 function ForecastHistoryTable({ rows }: { rows: FinancialPerformanceDetailReadModel['forecastHistory'] }) {
   return (
-    <section className="overflow-hidden border border-[var(--color-border-default)] bg-white" aria-labelledby="forecast-history-title">
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--color-border-default)] bg-[var(--color-brand-50)] px-3 py-2.5 sm:px-4">
+    <details className="group overflow-hidden border-y border-[var(--color-border-soft)] bg-white" aria-labelledby="forecast-history-title">
+      <summary className="flex min-h-12 cursor-pointer list-none flex-wrap items-center justify-between gap-2 px-4 py-2.5 sm:px-5 [&::-webkit-details-marker]:hidden">
         <div className="flex items-center gap-2">
           <History size={15} className="text-[var(--color-brand-700)]" aria-hidden="true" />
           <div>
-            <h3 id="forecast-history-title" className="text-[11px] font-black text-[var(--color-brand-900)]">会社予想修正履歴</h3>
-            <p className="text-[8px] font-semibold text-[var(--color-text-tertiary)]">対象年度ごとの前回予想と修正率</p>
+            <h3 id="forecast-history-title" className="text-[12px] font-bold text-[var(--color-text-primary)]">会社予想修正履歴</h3>
+            <p className="text-[10px] font-medium text-[var(--color-text-tertiary)]">対象年度ごとの前回予想と修正率</p>
           </div>
         </div>
-        <span className="text-[8px] font-semibold text-[var(--color-text-tertiary)]">{rows.length}件 / PIT基準日以前のみ</span>
-      </div>
+        <span className="text-[10px] font-medium text-[var(--color-text-tertiary)]">{rows.length}件 / PIT基準日以前のみ / 開いて確認</span>
+      </summary>
       {rows.length === 0 ? <EmptyState>指定日時点で会社予想履歴がありません。</EmptyState> : (
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[1060px] border-collapse text-right text-[9px]">
+        <div className="overflow-x-auto border-t border-[var(--color-border-soft)]">
+          <table className="w-full min-w-[1060px] border-collapse text-right text-[10px]">
             <thead>
               <tr className="border-b border-[var(--color-border-default)] text-[var(--color-text-tertiary)]">
                 <th className="px-3 py-2 text-left">公表日</th>
@@ -613,7 +633,7 @@ function ForecastHistoryTable({ rows }: { rows: FinancialPerformanceDetailReadMo
           </table>
         </div>
       )}
-    </section>
+    </details>
   )
 }
 
@@ -633,7 +653,7 @@ function RevisionMetricCell({ metric, value }: { metric: FinancialPerformanceDet
   return (
     <div>
       <div className="font-mono font-black text-[var(--color-text-primary)]">{displayTimelineValue({ value: value.value, unit: value.unit, publishedAt: '', source: 'jquants', inputIds: [], definitionVersion: null, yoyPercent: null, revision: null }, metric)}</div>
-      <div className="mt-0.5 whitespace-nowrap text-[7px] font-semibold text-[var(--color-text-tertiary)]">
+      <div className="mt-0.5 whitespace-nowrap text-[9px] font-medium text-[var(--color-text-tertiary)]">
         {value.previousValue == null
           ? '前回予想なし'
           : `前回 ${compactNumber(value.previousValue, metric)} / ${signedPercent(value.revisionPercent)}`}

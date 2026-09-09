@@ -14,11 +14,11 @@ import {
   BarChart,
   CartesianGrid,
   Legend,
-  ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
 } from 'recharts'
+import { MeasuredChartFrame } from '@/components/charts/MeasuredChartFrame'
 import type {
   DividendDirection,
   DividendForecastRevision,
@@ -149,33 +149,40 @@ export function ShareholderReturnsDetail({ ticker, analysisDate }: ShareholderRe
   }
 
   return (
-    <section className="space-y-3" aria-labelledby="shareholder-returns-title">
-      <header className="flex flex-wrap items-start justify-between gap-2 border border-[var(--color-border-default)] bg-[var(--color-brand-50)] px-4 py-3">
+    <section className="space-y-6 bg-white" aria-labelledby="shareholder-returns-title">
+      <header className="flex flex-wrap items-end justify-between gap-2 border-y border-[var(--color-border-soft)] bg-white px-4 py-3.5 sm:px-5">
         <div className="flex min-w-0 items-center gap-2">
           <WalletCards size={17} className="shrink-0 text-[var(--color-brand-700)]" aria-hidden="true" />
           <div>
-            <h2 id="shareholder-returns-title" className="text-[13px] font-black text-[var(--color-brand-900)]">株主還元</h2>
-            <p className="text-[9px] font-semibold text-[var(--color-text-tertiary)]">配当の推移・会社予想・持続可能性を同じ基準日で確認</p>
+            <h2 id="shareholder-returns-title" className="text-[15px] font-bold text-[var(--color-text-primary)]">株主還元</h2>
+            <p className="mt-1 text-[10px] font-medium text-[var(--color-text-tertiary)]">配当の推移、会社予想、持続可能性を同じ基準日で確認</p>
           </div>
         </div>
-        <div className="text-right font-mono text-[9px] font-bold text-[var(--color-text-tertiary)]">
+        <div className="text-right font-mono text-[10px] font-semibold text-[var(--color-text-tertiary)]">
           <div>分析基準日 {model.asOf}</div>
           <div>価格日 {model.priceDate ?? '—'}</div>
         </div>
       </header>
 
-      <CurrentReturns model={model} />
-      <DividendDirectionSummary model={model} />
+      <section className="overflow-hidden border-y border-[var(--color-border-soft)] bg-white" aria-label="現在の還元と配当の方向性">
+        <CurrentReturns model={model} />
+        <DividendDirectionSummary model={model} />
+      </section>
       <DividendHistory model={model} rows={visibleRows} window={window} onWindowChange={setWindow} />
       <ForecastRevisionHistory
         rows={model.forecastRevisions}
         showAll={showAllRevisions}
         onToggle={() => setShowAllRevisions((value) => !value)}
       />
-      <div className="grid gap-3 xl:grid-cols-2">
-        <Sustainability model={model} />
-        <BuybacksAndTotalReturns model={model} />
-      </div>
+      <details className="border-y border-[var(--color-border-soft)] bg-white">
+        <summary className="cursor-pointer px-4 py-3 text-[11px] font-bold text-[var(--color-text-secondary)] sm:px-5">
+          持続可能性・自社株買いを確認
+        </summary>
+        <div className="grid gap-3 border-t border-[var(--color-border-default)] p-3 xl:grid-cols-2">
+          <Sustainability model={model} />
+          <BuybacksAndTotalReturns model={model} />
+        </div>
+      </details>
       <DefinitionNotes model={model} />
     </section>
   )
@@ -193,31 +200,31 @@ function CurrentReturns({ model }: { model: ShareholderReturnsReadModel }) {
     ['FCF Yield', model.current.fcfYield],
   ]
   return (
-    <section className="overflow-hidden border border-[var(--color-border-default)] bg-white" aria-labelledby="current-returns-title">
+    <div aria-labelledby="current-returns-title">
       <SectionHeading icon={CircleDollarSign} id="current-returns-title" title="現在の還元" subtitle="予想と実績を混同せず、欠損はゼロ補完しない" />
-      <div className="grid grid-cols-3 gap-px bg-[var(--color-border-soft)]">
-        {primary.map(([label, value, note]) => (
-          <article key={label} className="min-w-0 bg-white px-2.5 py-3 sm:px-4">
-            <div className="truncate text-[8px] font-black text-[var(--color-text-secondary)] sm:text-[9px]">{label}</div>
-            <div className="mt-1 font-mono text-[15px] font-black text-[var(--color-text-primary)] sm:text-[19px]">{valueText(value)}</div>
-            <div className="mt-1 line-clamp-2 text-[7px] font-semibold leading-3 text-[var(--color-text-tertiary)] sm:text-[8px]">{value.value == null ? value.reason : note}</div>
+      <div className="grid grid-cols-3 border-b border-[var(--color-border-soft)] sm:grid-cols-[1.25fr_1fr_1fr]">
+        {primary.map(([label, value, note], index) => (
+          <article key={label} className="min-w-0 border-r border-[var(--color-border-soft)] bg-white px-2.5 py-4 last:border-r-0 sm:px-5">
+            <div className="truncate text-[10px] font-bold text-[var(--color-text-secondary)]">{label}</div>
+            <div className={`mt-1 font-mono font-semibold text-[var(--color-text-primary)] ${index === 0 ? 'text-[21px] sm:text-[24px]' : 'text-[18px] sm:text-[20px]'}`}>{valueText(value)}</div>
+            <div className="mt-1 line-clamp-2 text-[9px] font-medium leading-4 text-[var(--color-text-tertiary)]">{value.value == null ? value.reason : note}</div>
           </article>
         ))}
       </div>
-      <div className="grid grid-cols-3 border-t border-[var(--color-border-default)] bg-[var(--color-surface-subtle)]">
+      <div className="grid grid-cols-3 bg-white">
         {secondary.map(([label, value]) => (
           <div key={label} className="min-w-0 border-r border-[var(--color-border-soft)] px-2.5 py-2 last:border-r-0 sm:px-4">
-            <div className="truncate text-[7px] font-bold text-[var(--color-text-tertiary)] sm:text-[8px]">{label}</div>
-            <div className="mt-0.5 truncate font-mono text-[11px] font-black text-[var(--color-text-primary)] sm:text-[12px]">{valueText(value)}</div>
+            <div className="truncate text-[9px] font-semibold text-[var(--color-text-tertiary)]">{label}</div>
+            <div className="mt-0.5 truncate font-mono text-[12px] font-bold text-[var(--color-text-primary)] sm:text-[13px]">{valueText(value)}</div>
           </div>
         ))}
       </div>
       {model.isFinancialSector && (
-        <p className="border-t border-[var(--color-border-default)] px-4 py-2 text-[8px] font-semibold text-[var(--color-text-secondary)]">
+        <p className="border-t border-[var(--color-border-soft)] px-4 py-2 text-[10px] font-medium text-[var(--color-text-secondary)]">
           金融業では配当指標を表示し、通常企業用の標準FCF・FCF YieldはN/Aとしています。
         </p>
       )}
-    </section>
+    </div>
   )
 }
 
@@ -230,22 +237,22 @@ function DividendDirectionSummary({ model }: { model: ShareholderReturnsReadMode
     ['DPS 5年CAGR', model.direction.dpsCagr5y],
   ]
   return (
-    <section className="overflow-hidden border border-[var(--color-border-default)] bg-white" aria-labelledby="dividend-direction-title">
+    <div className="border-t border-[var(--color-border-soft)]" aria-labelledby="dividend-direction-title">
       <SectionHeading icon={Repeat2} id="dividend-direction-title" title="配当の方向性" subtitle="株式分割を補正した実績DPSで判定" />
-      <div className="grid grid-cols-2 gap-px bg-[var(--color-border-soft)] sm:grid-cols-5">
+      <div className="grid grid-cols-2 border-t border-[var(--color-border-soft)] sm:grid-cols-5">
         {values.map(([label, value]) => (
-          <div key={label} className="bg-white px-3 py-2.5">
-            <div className="text-[8px] font-bold text-[var(--color-text-tertiary)]">{label}</div>
-            <div className="mt-0.5 font-mono text-[14px] font-black text-[var(--color-text-primary)]">{valueText(value)}</div>
+          <div key={label} className="border-r border-[var(--color-border-soft)] bg-white px-3 py-3 last:border-r-0 sm:px-4">
+            <div className="text-[10px] font-semibold text-[var(--color-text-tertiary)]">{label}</div>
+            <div className="mt-1 font-mono text-[15px] font-bold text-[var(--color-text-primary)]">{valueText(value)}</div>
           </div>
         ))}
       </div>
       {model.history.adjustments.length > 0 && (
-        <div className="border-t border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-3 py-2 text-[8px] font-semibold text-[var(--color-text-secondary)]">
+        <div className="border-t border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-3 py-2 text-[10px] font-medium text-[var(--color-text-secondary)]">
           補正検出: {model.history.adjustments.map((item) => `FY${item.fromFiscalYear}→FY${item.toFiscalYear} ${item.factor}倍`).join(' / ')}
         </div>
       )}
-    </section>
+    </div>
   )
 }
 
@@ -266,13 +273,13 @@ function DividendHistory({
     forecastDps: row.forecastDps.value ?? undefined,
   }))
   return (
-    <section className="overflow-hidden border border-[var(--color-border-default)] bg-white" aria-labelledby="dividend-history-title">
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-4 py-2.5">
+    <section className="overflow-hidden border-y border-[var(--color-border-soft)] bg-white" aria-labelledby="dividend-history-title">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--color-border-soft)] px-4 py-3 sm:px-5">
         <div className="flex items-center gap-2">
           <History size={15} className="text-[var(--color-brand-700)]" aria-hidden="true" />
           <div>
-            <h3 id="dividend-history-title" className="text-[11px] font-black text-[var(--color-text-primary)]">配当履歴</h3>
-            <p className="text-[8px] font-semibold text-[var(--color-text-tertiary)]">実績DPSは塗り、会社予想DPSは白抜きの破線</p>
+            <h3 id="dividend-history-title" className="text-[13px] font-bold text-[var(--color-text-primary)]">配当履歴</h3>
+            <p className="mt-1 text-[10px] font-medium text-[var(--color-text-tertiary)]">実績DPSは塗り、会社予想DPSは白抜きの破線</p>
           </div>
         </div>
         <div className="inline-flex border border-[var(--color-border-default)] bg-white">
@@ -281,7 +288,7 @@ function DividendHistory({
               key={option.id}
               type="button"
               onClick={() => onWindowChange(option.id)}
-              className={`h-7 border-r border-[var(--color-border-default)] px-2 text-[9px] font-black last:border-r-0 ${window === option.id ? 'bg-[var(--color-brand-900)] text-white' : 'text-[var(--color-text-secondary)]'}`}
+              className={`h-8 border-r border-[var(--color-border-default)] px-2.5 text-[10px] font-bold last:border-r-0 ${window === option.id ? 'bg-[var(--color-brand-900)] text-white' : 'text-[var(--color-text-secondary)]'}`}
               aria-pressed={window === option.id}
             >
               {option.label}
@@ -289,18 +296,11 @@ function DividendHistory({
           ))}
         </div>
       </div>
-      <div className="h-56 min-w-0 px-1 pt-3 sm:h-64 sm:px-4">
-        <ResponsiveContainer
-          width="100%"
-          height="100%"
-          minWidth={0}
-          minHeight={0}
-          initialDimension={{ width: 320, height: 224 }}
-        >
-          <BarChart data={chartData} margin={{ top: 4, right: 8, bottom: 4, left: 0 }} barCategoryGap="24%">
+      <MeasuredChartFrame className="h-60 px-1 pt-3 sm:h-72 sm:px-4">
+        {({ width, height }) => <BarChart width={width} height={height} data={chartData} margin={{ top: 4, right: 8, bottom: 4, left: 0 }} barCategoryGap="24%">
             <CartesianGrid stroke="var(--color-border-soft)" vertical={false} />
-            <XAxis dataKey="fiscalYear" tick={{ fontSize: 8, fill: 'var(--color-text-tertiary)', fontWeight: 700 }} tickLine={false} axisLine={false} />
-            <YAxis tick={{ fontSize: 8, fill: 'var(--color-text-tertiary)' }} tickLine={false} axisLine={false} width={38} />
+            <XAxis dataKey="fiscalYear" tick={{ fontSize: 10, fill: 'var(--color-text-tertiary)', fontWeight: 600 }} tickLine={false} axisLine={false} />
+            <YAxis tick={{ fontSize: 10, fill: 'var(--color-text-tertiary)' }} tickLine={false} axisLine={false} width={42} />
             <Tooltip
               formatter={(value, name) => [`¥${Number(value).toLocaleString('ja-JP', { maximumFractionDigits: 1 })}`, name === 'actualDps' ? '実績DPS' : '会社予想DPS']}
               labelStyle={{ fontSize: 10, fontWeight: 800 }}
@@ -309,12 +309,11 @@ function DividendHistory({
             <Legend wrapperStyle={{ fontSize: 9, fontWeight: 700 }} formatter={(value) => value === 'actualDps' ? '実績DPS' : '会社予想DPS'} />
             <Bar dataKey="actualDps" fill="var(--color-brand-700)" maxBarSize={34} />
             <Bar dataKey="forecastDps" fill="white" stroke="var(--color-market-red)" strokeWidth={2} strokeDasharray="4 2" maxBarSize={34} />
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
+        </BarChart>}
+      </MeasuredChartFrame>
       <div className="overflow-x-auto border-t border-[var(--color-border-default)]">
         <table className="w-full min-w-[760px] border-collapse text-left">
-          <thead className="bg-[var(--color-surface-subtle)] text-[8px] font-black text-[var(--color-text-secondary)]">
+          <thead className="bg-[var(--color-surface-subtle)] text-[10px] font-bold text-[var(--color-text-secondary)]">
             <tr>
               <th className="px-3 py-2">年度</th>
               <th className="px-3 py-2 text-right">DPS</th>
@@ -325,7 +324,7 @@ function DividendHistory({
               <th className="px-3 py-2">公表日</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-[var(--color-border-soft)] text-[9px]">
+          <tbody className="divide-y divide-[var(--color-border-soft)] text-[10px]">
             {rows.map((row) => {
               const forecast = row.forecastDps.availability === 'available'
               return (
@@ -340,14 +339,14 @@ function DividendHistory({
                   <td className="px-3 py-2 text-right font-mono">{valueText(row.eps)}</td>
                   <td className="px-3 py-2 text-right font-mono">{valueText(row.payoutRatio)}</td>
                   <td className="px-3 py-2 text-right font-mono">{valueText(row.dividendYield)}</td>
-                  <td className="px-3 py-2 font-mono text-[8px] text-[var(--color-text-tertiary)]">{row.publishedAt ? row.publishedAt.slice(0, 10) : '—'}</td>
+                  <td className="px-3 py-2 font-mono text-[9px] text-[var(--color-text-tertiary)]">{row.publishedAt ? row.publishedAt.slice(0, 10) : '—'}</td>
                 </tr>
               )
             })}
           </tbody>
         </table>
       </div>
-      <p className="border-t border-[var(--color-border-default)] px-3 py-2 text-[7px] font-semibold text-[var(--color-text-tertiary)]">
+      <p className="border-t border-[var(--color-border-soft)] px-3 py-2 text-[9px] font-medium text-[var(--color-text-tertiary)]">
         {model.history.adjustmentMethod} 期末株価ベース利回りは比較用の実績値で、現在の予想利回りとは定義が異なります。
       </p>
     </section>
@@ -365,14 +364,18 @@ function ForecastRevisionHistory({
 }) {
   const visible = showAll ? rows : rows.slice(0, 12)
   return (
-    <section className="overflow-hidden border border-[var(--color-border-default)] bg-white" aria-labelledby="forecast-revision-title">
-      <SectionHeading icon={History} id="forecast-revision-title" title="PIT配当予想の修正履歴" subtitle="公表日ごとの予想を保持し、当期・翌期を区別" />
-      {visible.length === 0 ? (
-        <div className="px-4 py-6 text-center text-[9px] font-semibold text-[var(--color-text-tertiary)]">指定日時点で配当予想履歴はありません。</div>
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[760px] border-collapse text-left">
-            <thead className="bg-[var(--color-surface-subtle)] text-[8px] font-black text-[var(--color-text-secondary)]">
+    <details className="overflow-hidden border-y border-[var(--color-border-soft)] bg-white">
+      <summary id="forecast-revision-title" className="cursor-pointer px-4 py-3 text-[11px] font-bold text-[var(--color-text-secondary)] sm:px-5">
+        PIT配当予想の修正履歴
+        <span className="ml-2 text-[9px] font-medium text-[var(--color-text-tertiary)]">公表日ごとの当期・翌期予想</span>
+      </summary>
+      <div className="border-t border-[var(--color-border-default)]">
+        {visible.length === 0 ? (
+          <div className="px-4 py-6 text-center text-[10px] font-semibold text-[var(--color-text-tertiary)]">指定日時点で配当予想履歴はありません。</div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[760px] border-collapse text-left">
+            <thead className="bg-[var(--color-surface-subtle)] text-[10px] font-bold text-[var(--color-text-secondary)]">
               <tr>
                 <th className="px-3 py-2">公表日</th>
                 <th className="px-3 py-2">対象年度</th>
@@ -384,7 +387,7 @@ function ForecastRevisionHistory({
                 <th className="px-3 py-2">判定</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-[var(--color-border-soft)] text-[9px]">
+            <tbody className="divide-y divide-[var(--color-border-soft)] text-[10px]">
               {visible.map((row) => (
                 <tr key={row.key}>
                   <td className="px-3 py-2 font-mono">{row.publishedAt.slice(0, 10)}</td>
@@ -398,15 +401,16 @@ function ForecastRevisionHistory({
                 </tr>
               ))}
             </tbody>
-          </table>
-        </div>
-      )}
-      {rows.length > 12 && (
-        <button type="button" onClick={onToggle} className="w-full border-t border-[var(--color-border-default)] py-2 text-[9px] font-black text-[var(--color-brand-700)]">
-          {showAll ? '最新12件に戻す' : `全${rows.length}件を表示`}
-        </button>
-      )}
-    </section>
+            </table>
+          </div>
+        )}
+        {rows.length > 12 && (
+          <button type="button" onClick={onToggle} className="min-h-11 w-full border-t border-[var(--color-border-default)] py-2 text-[10px] font-black text-[var(--color-brand-700)]">
+            {showAll ? '最新12件に戻す' : `全${rows.length}件を表示`}
+          </button>
+        )}
+      </div>
+    </details>
   )
 }
 
@@ -421,18 +425,18 @@ function Sustainability({ model }: { model: ShareholderReturnsReadModel }) {
   return (
     <section className="overflow-hidden border border-[var(--color-border-default)] bg-white" aria-labelledby="sustainability-title">
       <SectionHeading icon={ShieldCheck} id="sustainability-title" title="持続可能性" subtitle="利益とキャッシュフローの事実を分けて確認" />
-      <div className="grid grid-cols-2 gap-px bg-[var(--color-border-soft)] sm:grid-cols-3">
+      <div className="grid grid-cols-2 border-t border-[var(--color-border-soft)] sm:grid-cols-3">
         {values.map(([label, value, note]) => (
-          <div key={label} className="bg-white px-3 py-2.5">
-            <div className="text-[8px] font-bold text-[var(--color-text-tertiary)]">{label}</div>
-            <div className="mt-0.5 font-mono text-[13px] font-black text-[var(--color-text-primary)]">{valueText(value)}</div>
-            <div className="mt-0.5 text-[7px] font-semibold leading-3 text-[var(--color-text-tertiary)]">{value.value == null ? value.reason : note}</div>
+          <div key={label} className="border-r border-[var(--color-border-soft)] bg-white px-3 py-3 sm:px-4">
+            <div className="text-[10px] font-semibold text-[var(--color-text-tertiary)]">{label}</div>
+            <div className="mt-1 font-mono text-[14px] font-bold text-[var(--color-text-primary)]">{valueText(value)}</div>
+            <div className="mt-1 text-[9px] font-medium leading-4 text-[var(--color-text-tertiary)]">{value.value == null ? value.reason : note}</div>
           </div>
         ))}
       </div>
       <div className="border-t border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-3 py-2">
         {model.sustainability.facts.map((fact) => (
-          <p key={fact} className="flex items-start gap-1.5 text-[8px] font-semibold text-[var(--color-text-secondary)]">
+          <p key={fact} className="flex items-start gap-1.5 text-[10px] font-medium text-[var(--color-text-secondary)]">
             <Info size={10} className="mt-0.5 shrink-0" aria-hidden="true" />
             {fact}
           </p>
@@ -449,11 +453,11 @@ function BuybacksAndTotalReturns({ model }: { model: ShareholderReturnsReadModel
       <SectionHeading icon={Repeat2} id="buyback-title" title="自社株買い・総還元" subtitle="取得できる事実だけを表示" />
       <div className="px-4 py-3">
         <div className="text-[9px] font-black text-[var(--color-text-primary)]">自己株式控除後株式数の推移</div>
-        <p className="mt-0.5 text-[8px] font-semibold leading-4 text-[var(--color-text-tertiary)]">{model.buybacks.reason}</p>
+        <p className="mt-1 text-[10px] font-medium leading-5 text-[var(--color-text-tertiary)]">{model.buybacks.reason}</p>
         {recent.length > 0 && (
           <div className="mt-2 divide-y divide-[var(--color-border-soft)] border-y border-[var(--color-border-soft)]">
             {recent.map((row) => (
-              <div key={row.fiscalYear} className="grid grid-cols-[52px_1fr_auto] items-center gap-2 py-1.5 text-[8px]">
+              <div key={row.fiscalYear} className="grid grid-cols-[60px_1fr_auto] items-center gap-2 py-2 text-[10px]">
                 <span className="font-mono font-black text-[var(--color-text-primary)]">FY{row.fiscalYear}</span>
                 <span className="truncate font-mono text-[var(--color-text-secondary)]">{Math.round(row.splitAdjustedNetShares).toLocaleString('ja-JP')}株</span>
                 <span className="font-mono font-bold text-[var(--color-text-secondary)]">{row.netShareChangePercent == null ? '—' : signedValue(row.netShareChangePercent, '%')}</span>
@@ -464,17 +468,17 @@ function BuybacksAndTotalReturns({ model }: { model: ShareholderReturnsReadModel
       </div>
       <div className="grid grid-cols-2 gap-px border-t border-[var(--color-border-default)] bg-[var(--color-border-soft)]">
         <div className="bg-[var(--color-surface-subtle)] px-3 py-2.5">
-          <div className="text-[8px] font-bold text-[var(--color-text-tertiary)]">年間自社株買い額</div>
-          <div className="mt-0.5 font-mono text-[12px] font-black text-[var(--color-text-primary)]">—</div>
-          <div className="mt-0.5 text-[7px] font-semibold text-[var(--color-text-tertiary)]">構造化データ未保存</div>
+          <div className="text-[10px] font-semibold text-[var(--color-text-tertiary)]">年間自社株買い額</div>
+          <div className="mt-1 font-mono text-[13px] font-bold text-[var(--color-text-primary)]">—</div>
+          <div className="mt-1 text-[9px] font-medium text-[var(--color-text-tertiary)]">構造化データ未保存</div>
         </div>
         <div className="bg-[var(--color-surface-subtle)] px-3 py-2.5">
-          <div className="text-[8px] font-bold text-[var(--color-text-tertiary)]">総還元利回り</div>
-          <div className="mt-0.5 font-mono text-[12px] font-black text-[var(--color-text-primary)]">—</div>
-          <div className="mt-0.5 text-[7px] font-semibold text-[var(--color-text-tertiary)]">自社株買い額不足のため未算定</div>
+          <div className="text-[10px] font-semibold text-[var(--color-text-tertiary)]">総還元利回り</div>
+          <div className="mt-1 font-mono text-[13px] font-bold text-[var(--color-text-primary)]">—</div>
+          <div className="mt-1 text-[9px] font-medium text-[var(--color-text-tertiary)]">自社株買い額不足のため未算定</div>
         </div>
       </div>
-      <p className="border-t border-[var(--color-border-default)] px-3 py-2 text-[7px] font-semibold text-[var(--color-text-tertiary)]">{model.totalReturns.reason}</p>
+      <p className="border-t border-[var(--color-border-soft)] px-3 py-2 text-[9px] font-medium text-[var(--color-text-tertiary)]">{model.totalReturns.reason}</p>
     </section>
   )
 }
@@ -487,16 +491,16 @@ function DefinitionNotes({ model }: { model: ShareholderReturnsReadModel }) {
     model.definitions.fcfYield,
   ]
   return (
-    <details className="border border-[var(--color-border-default)] bg-white">
+    <details className="border-y border-[var(--color-border-soft)] bg-white">
       <summary className="cursor-pointer px-4 py-2.5 text-[9px] font-black text-[var(--color-text-secondary)]">指標定義・PIT・株式分割補正</summary>
       <div className="space-y-2 border-t border-[var(--color-border-default)] px-4 py-3">
         {definitions.map((definition) => (
           <div key={definition.key}>
-            <div className="text-[8px] font-black text-[var(--color-text-primary)]">{definition.displayName} <span className="font-mono text-[7px] text-[var(--color-text-tertiary)]">{definition.version}</span></div>
-            <div className="text-[8px] font-semibold text-[var(--color-text-secondary)]">{definition.formula}</div>
+            <div className="text-[10px] font-bold text-[var(--color-text-primary)]">{definition.displayName} <span className="font-mono text-[9px] text-[var(--color-text-tertiary)]">{definition.version}</span></div>
+            <div className="text-[10px] font-medium text-[var(--color-text-secondary)]">{definition.formula}</div>
           </div>
         ))}
-        <div className="text-[8px] font-semibold leading-4 text-[var(--color-text-secondary)]">
+        <div className="text-[10px] font-medium leading-5 text-[var(--color-text-secondary)]">
           会社予想・実績・EPS・FCFはすべて公表日時が分析基準日以前のものだけを使用します。DPS CAGRは {model.definitions.dpsCagr.formula}。株式数の機械的補正は表示単位を揃えるためのもので、将来の配当情報を補完するものではありません。
         </div>
       </div>
@@ -516,11 +520,11 @@ function SectionHeading({
   subtitle: string
 }) {
   return (
-    <header className="flex items-center gap-2 border-b border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-4 py-2.5">
+    <header className="flex items-center gap-2 border-b border-[var(--color-border-soft)] px-4 py-3 sm:px-5">
       <Icon size={15} className="shrink-0 text-[var(--color-brand-700)]" aria-hidden="true" />
       <div>
-        <h3 id={id} className="text-[11px] font-black text-[var(--color-text-primary)]">{title}</h3>
-        <p className="text-[8px] font-semibold text-[var(--color-text-tertiary)]">{subtitle}</p>
+        <h3 id={id} className="text-[13px] font-bold text-[var(--color-text-primary)]">{title}</h3>
+        <p className="mt-1 text-[10px] font-medium text-[var(--color-text-tertiary)]">{subtitle}</p>
       </div>
     </header>
   )

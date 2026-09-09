@@ -7,11 +7,11 @@ import {
   Line,
   LineChart,
   ReferenceLine,
-  ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
 } from 'recharts'
+import { MeasuredChartFrame } from '@/components/charts/MeasuredChartFrame'
 import {
   VALUATION_HISTORY_METRICS,
   VALUATION_PEER_METRICS,
@@ -91,7 +91,7 @@ function RangeBar({ stats, unit }: { stats: ValuationRangeStatistics; unit: stri
           />
         )}
       </div>
-      <div className="flex justify-between font-mono text-[8px] font-bold text-[var(--color-text-tertiary)]">
+      <div className="flex justify-between font-mono text-[9px] font-semibold text-[var(--color-text-tertiary)]">
         <span>5% {metricNumber(low, unit)}</span>
         <span>95% {metricNumber(high, unit)}</span>
       </div>
@@ -139,16 +139,16 @@ export function ValuationDetail({ ticker, analysisDate }: ValuationDetailProps) 
   }
 
   return (
-    <section className="space-y-3" aria-labelledby="valuation-detail-title">
-      <header className="flex flex-wrap items-start justify-between gap-2 border border-[var(--color-border-default)] bg-[var(--color-brand-50)] px-4 py-3">
+    <section className="space-y-6 bg-white" aria-labelledby="valuation-detail-title">
+      <header className="flex flex-wrap items-end justify-between gap-2 border-y border-[var(--color-border-soft)] bg-white px-4 py-3.5 sm:px-5">
         <div className="flex min-w-0 items-center gap-2">
           <Scale size={17} className="shrink-0 text-[var(--color-brand-700)]" aria-hidden="true" />
           <div>
-            <h2 id="valuation-detail-title" className="text-[13px] font-black text-[var(--color-brand-900)]">Valuation</h2>
-            <p className="text-[9px] font-semibold text-[var(--color-text-tertiary)]">現在の評価 → 自社過去 → 同業比較</p>
+            <h2 id="valuation-detail-title" className="text-[15px] font-bold text-[var(--color-text-primary)]">Valuation</h2>
+            <p className="mt-1 text-[10px] font-medium text-[var(--color-text-tertiary)]">現在の評価 → 自社過去 → 同業比較</p>
           </div>
         </div>
-        <div className="text-right font-mono text-[9px] font-bold text-[var(--color-text-tertiary)]">
+        <div className="text-right font-mono text-[10px] font-semibold text-[var(--color-text-tertiary)]">
           <div>分析基準日 {model.asOf}</div>
           <div>価格日 {model.priceDate ?? '—'}</div>
         </div>
@@ -173,20 +173,20 @@ export function ValuationDetail({ ticker, analysisDate }: ValuationDetailProps) 
 function CurrentValuation({ model }: { model: ValuationDetailReadModel }) {
   const visibleSecondary = model.current.secondary.filter((value) => value.availability !== 'missing')
   return (
-    <section className="overflow-hidden border border-[var(--color-border-default)] bg-white" aria-labelledby="current-valuation-title">
+    <section className="overflow-hidden border-y border-[var(--color-border-soft)] bg-white" aria-labelledby="current-valuation-title">
       <SectionHeading icon={CircleGauge} id="current-valuation-title" title="現在の評価" subtitle="評価の断定ではなく、同じ基準日の事実を表示" />
       <div className="grid grid-cols-2 gap-px bg-[var(--color-border-soft)] md:grid-cols-4">
         {model.current.primary.map((value, index) => (
           <article key={value.metric} className="min-h-20 bg-white px-3 py-2.5 md:min-h-24 md:px-4">
             <div>
-              <div className="text-[9px] font-black text-[var(--color-text-secondary)]">{value.label}</div>
-              <div className="mt-0.5 text-[8px] font-semibold text-[var(--color-text-tertiary)]">
+              <div className="text-[10px] font-bold text-[var(--color-text-secondary)]">{value.label}</div>
+              <div className="mt-0.5 text-[9px] font-medium text-[var(--color-text-tertiary)]">
                 {index === 0 ? '会社予想ベース' : value.metric === 'fcf_yield' ? '標準FCFベース' : '現在値'}
               </div>
             </div>
             <div className="mt-1.5 text-left md:mt-2">
-              <div className="font-mono text-[17px] font-black text-[var(--color-text-primary)] md:text-[18px]">{valueText(value)}</div>
-              <div className="max-w-52 text-[8px] font-semibold text-[var(--color-text-tertiary)] md:max-w-none">
+              <div className="font-mono text-[19px] font-black text-[var(--color-text-primary)] md:text-[21px]">{valueText(value)}</div>
+              <div className="max-w-52 text-[9px] font-medium text-[var(--color-text-tertiary)] md:max-w-none">
                 {value.availability === 'available'
                   ? value.flags.includes('negative_fcf') ? '負のFCF' : value.periodEnd ?? model.priceDate ?? ''
                   : value.reason}
@@ -196,11 +196,11 @@ function CurrentValuation({ model }: { model: ValuationDetailReadModel }) {
         ))}
       </div>
       {visibleSecondary.length > 0 && (
-        <div className="flex flex-wrap gap-x-5 gap-y-2 border-t border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-4 py-2.5">
+        <div className="flex flex-wrap gap-x-6 gap-y-2 border-t border-[var(--color-border-soft)] px-4 py-3 sm:px-5">
           {visibleSecondary.map((value) => (
             <div key={value.metric} className="flex min-w-32 items-baseline justify-between gap-2 md:block">
-              <span className="text-[8px] font-bold text-[var(--color-text-tertiary)]">{value.label}</span>
-              <strong className="font-mono text-[11px] text-[var(--color-text-primary)]">{valueText(value)}</strong>
+              <span className="text-[10px] font-semibold text-[var(--color-text-tertiary)]">{value.label}</span>
+              <strong className="font-mono text-[12px] text-[var(--color-text-primary)]">{valueText(value)}</strong>
             </div>
           ))}
         </div>
@@ -208,7 +208,7 @@ function CurrentValuation({ model }: { model: ValuationDetailReadModel }) {
       {model.current.cautions.length > 0 && (
         <div className="border-t border-[var(--color-border-default)] px-4 py-2">
           {model.current.cautions.map((caution) => (
-            <p key={caution} className="flex items-start gap-1.5 text-[8px] font-semibold text-[var(--color-text-secondary)]">
+            <p key={caution} className="flex items-start gap-1.5 text-[10px] font-medium text-[var(--color-text-secondary)]">
               <Info size={11} className="mt-0.5 shrink-0" aria-hidden="true" />
               {caution}
             </p>
@@ -241,7 +241,7 @@ function HistoricalRange({
     ? model.peers.sector33.metrics[metric as ValuationPeerMetric].median
     : null
   return (
-    <section className="overflow-hidden border border-[var(--color-border-default)] bg-white" aria-labelledby="valuation-history-title">
+    <section className="overflow-hidden border-y border-[var(--color-border-soft)] bg-white" aria-labelledby="valuation-history-title">
       <SectionHeading icon={History} id="valuation-history-title" title="自社過去レンジ" subtitle="各時点で公表済みだった財務・予想だけを使用" />
       <div className="flex gap-1 overflow-x-auto border-t border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-2 py-1.5">
         {VALUATION_HISTORY_METRICS.map((option) => (
@@ -249,7 +249,7 @@ function HistoricalRange({
             key={option}
             type="button"
             onClick={() => onMetricChange(option)}
-            className={`h-7 shrink-0 border px-2.5 text-[9px] font-black ${metric === option ? 'border-[var(--color-brand-700)] bg-white text-[var(--color-brand-900)]' : 'border-transparent text-[var(--color-text-secondary)]'}`}
+            className={`h-9 shrink-0 border px-3 text-[10px] font-bold ${metric === option ? 'border-[var(--color-brand-700)] bg-white text-[var(--color-brand-900)]' : 'border-transparent text-[var(--color-text-secondary)]'}`}
           >
             {model.history[option].label}
           </button>
@@ -257,19 +257,14 @@ function HistoricalRange({
       </div>
       <div className="grid lg:grid-cols-[minmax(0,1fr)_300px]">
         <div className="min-w-0 px-3 py-3 sm:px-4">
-          <div className="mb-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <div className="grid w-full grid-cols-3 gap-x-3 gap-y-1 sm:w-auto sm:gap-x-5">
-              <CompactStat label="現在" value={metricNumber(stats.current, selected.unit)} strong />
-              <CompactStat label={`${HISTORY_WINDOWS.find((item) => item.value === window)?.label}中央値`} value={metricNumber(stats.median, selected.unit)} />
-              <CompactStat label="33業種中央値" value={metricNumber(peerMedian, selected.unit)} />
-            </div>
-            <div className="flex shrink-0 self-end border border-[var(--color-border-default)] sm:self-auto">
+          <div className="mb-2 flex justify-end">
+            <div className="flex shrink-0 border border-[var(--color-border-default)]">
               {HISTORY_WINDOWS.map((option) => (
                 <button
                   key={option.value}
                   type="button"
                   onClick={() => onWindowChange(option.value)}
-                  className={`h-7 px-2 text-[8px] font-black ${window === option.value ? 'bg-[var(--color-brand-900)] text-white' : 'bg-white text-[var(--color-text-secondary)]'}`}
+                  className={`h-8 px-2.5 text-[10px] font-bold ${window === option.value ? 'bg-[var(--color-brand-900)] text-white' : 'bg-white text-[var(--color-text-secondary)]'}`}
                 >
                   {option.label}
                 </button>
@@ -278,11 +273,11 @@ function HistoricalRange({
           </div>
           <div className="h-40 sm:h-52">
             {chartPoints.length > 1 ? (
-              <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={160}>
-                <LineChart data={chartPoints} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
+              <MeasuredChartFrame className="h-full">
+                {({ width, height }) => <LineChart width={width} height={height} data={chartPoints} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
                   <CartesianGrid stroke="var(--color-border-soft)" vertical={false} />
-                  <XAxis dataKey="date" tick={{ fontSize: 8 }} minTickGap={44} tickFormatter={(value) => String(value).slice(2, 7)} />
-                  <YAxis tick={{ fontSize: 8 }} width={40} domain={['auto', 'auto']} tickFormatter={(value) => Number(value).toFixed(1)} />
+                  <XAxis dataKey="date" tick={{ fontSize: 10 }} minTickGap={44} tickFormatter={(value) => String(value).slice(2, 7)} />
+                  <YAxis tick={{ fontSize: 10 }} width={44} domain={['auto', 'auto']} tickFormatter={(value) => Number(value).toFixed(1)} />
                   <Tooltip
                     labelFormatter={(label) => String(label)}
                     formatter={(value) => [metricNumber(Number(value), selected.unit), selected.label]}
@@ -290,27 +285,35 @@ function HistoricalRange({
                   />
                   {stats.median != null && <ReferenceLine y={stats.median} stroke="var(--color-text-tertiary)" strokeDasharray="4 3" />}
                   <Line type="monotone" dataKey="value" stroke="var(--color-brand-700)" strokeWidth={1.8} dot={false} isAnimationActive={false} />
-                </LineChart>
-              </ResponsiveContainer>
+                </LineChart>}
+              </MeasuredChartFrame>
             ) : (
               <div className="grid h-full place-items-center text-[9px] font-semibold text-[var(--color-text-tertiary)]">PIT履歴が不足しています。</div>
             )}
           </div>
         </div>
-        <aside className="space-y-3 border-t border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-4 py-3 lg:border-l lg:border-t-0">
+        <aside className="space-y-4 border-t border-[var(--color-border-soft)] bg-white px-4 py-4 sm:px-5 lg:border-l lg:border-t-0">
+          <div className="border-b border-[var(--color-border-soft)] pb-4">
+            <div className="text-[9px] font-semibold text-[var(--color-text-tertiary)]">{selected.label}の現在位置</div>
+            <div className="mt-1 font-mono text-[26px] font-semibold leading-none text-[var(--color-text-primary)]">{metricNumber(stats.current, selected.unit)}</div>
+            <div className="mt-3 space-y-1 text-[10px] font-medium text-[var(--color-text-secondary)]">
+              <p>{HISTORY_WINDOWS.find((item) => item.value === window)?.label}中央値 <b className="font-mono">{metricNumber(stats.median, selected.unit)}</b></p>
+              <p>33業種中央値 <b className="font-mono">{metricNumber(peerMedian, selected.unit)}</b></p>
+              <p>過去{HISTORY_WINDOWS.find((item) => item.value === window)?.label}の <b className="font-mono">{stats.percentile == null ? '—' : `${stats.percentile.toFixed(0)}%`}</b> 水準</p>
+            </div>
+          </div>
           <RangeBar stats={stats} unit={selected.unit} />
           <div className="grid grid-cols-2 gap-x-4 gap-y-2">
-            <CompactStat label="現在Percentile" value={stats.percentile == null ? '—' : `${stats.percentile.toFixed(0)}%`} strong />
             <CompactStat label="中央値比" value={signedPercent(stats.versusMedianPercent)} />
             <CompactStat label="実際の最小値" value={metricNumber(stats.minimum, selected.unit)} />
             <CompactStat label="実際の最大値" value={metricNumber(stats.maximum, selected.unit)} />
           </div>
-          <p className="text-[8px] font-semibold leading-relaxed text-[var(--color-text-tertiary)]">
+          <p className="text-[10px] font-medium leading-relaxed text-[var(--color-text-tertiary)]">
             {stats.observationCount.toLocaleString()}営業日
             {stats.observationStartDate ? ` / ${stats.observationStartDate}〜${stats.observationEndDate}` : ''}
             {!stats.fullWindow ? ` / ${HISTORY_WINDOWS.find((item) => item.value === window)?.label}未満` : ''}
           </p>
-          {selected.note && <p className="text-[8px] font-bold text-[var(--color-text-secondary)]">{selected.note}</p>}
+          {selected.note && <p className="text-[10px] font-semibold text-[var(--color-text-secondary)]">{selected.note}</p>}
         </aside>
       </div>
     </section>
@@ -329,7 +332,7 @@ function PeerComparison({
   const rows = VALUATION_PEER_METRICS.map((metric) => peer.metrics[metric]).filter((row) => row.displayable)
   const hiddenEv = !peer.metrics.ev_ebitda.displayable
   return (
-    <section className="overflow-hidden border border-[var(--color-border-default)] bg-white" aria-labelledby="valuation-peers-title">
+    <section className="overflow-hidden border-y border-[var(--color-border-soft)] bg-white" aria-labelledby="valuation-peers-title">
       <SectionHeading icon={Users} id="valuation-peers-title" title="同業比較" subtitle="数値の高低を割安・割高とは断定しません">
         <div className="flex border border-[var(--color-border-default)]">
           {(['sector33', 'custom60'] as const).map((option) => (
@@ -337,7 +340,7 @@ function PeerComparison({
               key={option}
               type="button"
               onClick={() => onTaxonomyChange(option)}
-              className={`h-7 px-2.5 text-[8px] font-black ${taxonomy === option ? 'bg-[var(--color-brand-900)] text-white' : 'bg-white text-[var(--color-text-secondary)]'}`}
+              className={`h-8 px-3 text-[10px] font-bold ${taxonomy === option ? 'bg-[var(--color-brand-900)] text-white' : 'bg-white text-[var(--color-text-secondary)]'}`}
             >
               {option === 'sector33' ? '33業種' : '独自60分類'}
             </button>
@@ -346,13 +349,13 @@ function PeerComparison({
       </SectionHeading>
       <div className="flex items-center justify-between gap-2 border-t border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-4 py-2">
         <div className="min-w-0">
-          <span className="text-[8px] font-bold text-[var(--color-text-tertiary)]">{peer.label}</span>
-          <strong className="ml-2 text-[10px] font-black text-[var(--color-text-primary)]">{peer.groupName ?? '未分類'}</strong>
+          <span className="text-[10px] font-semibold text-[var(--color-text-tertiary)]">{peer.label}</span>
+          <strong className="ml-2 text-[11px] font-bold text-[var(--color-text-primary)]">{peer.groupName ?? '未分類'}</strong>
         </div>
         <span className="shrink-0 font-mono text-[9px] font-bold text-[var(--color-text-tertiary)]">対象 {peer.peerCount}銘柄</span>
       </div>
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[720px] border-collapse text-[9px]">
+        <table className="w-full min-w-[720px] border-collapse text-[10px]">
           <thead className="bg-white text-[var(--color-text-tertiary)]">
             <tr>
               <th className="border-b border-[var(--color-border-default)] px-3 py-2 text-left">指標</th>
@@ -382,7 +385,7 @@ function PeerComparison({
         </table>
       </div>
       {hiddenEv && (
-        <p className="border-t border-[var(--color-border-soft)] px-4 py-2 text-[8px] font-semibold text-[var(--color-text-tertiary)]">
+        <p className="border-t border-[var(--color-border-soft)] px-4 py-2 text-[10px] font-medium text-[var(--color-text-tertiary)]">
           EV/EBITDAは有効値8銘柄以上かつカバレッジ25%以上の場合だけ比較表へ表示します。
         </p>
       )}
@@ -407,8 +410,8 @@ function Definitions({ model }: { model: ValuationDetailReadModel }) {
           return (
             <div key={metric} className="border-b border-[var(--color-border-soft)] px-4 py-3 odd:md:border-r">
               <div className="text-[9px] font-black text-[var(--color-text-primary)]">{definition.displayName}</div>
-              <div className="mt-1 text-[8px] leading-relaxed text-[var(--color-text-secondary)]">{definition.formula}</div>
-              <div className="mt-1 font-mono text-[7px] text-[var(--color-text-tertiary)]">{definition.dataSource} / {definition.version}</div>
+              <div className="mt-1 text-[10px] leading-relaxed text-[var(--color-text-secondary)]">{definition.formula}</div>
+              <div className="mt-1 font-mono text-[9px] text-[var(--color-text-tertiary)]">{definition.dataSource} / {definition.version}</div>
             </div>
           )
         })}
@@ -420,8 +423,8 @@ function Definitions({ model }: { model: ValuationDetailReadModel }) {
 function CompactStat({ label, value, strong = false }: { label: string; value: string; strong?: boolean }) {
   return (
     <div className="min-w-0">
-      <div className="truncate text-[7px] font-bold text-[var(--color-text-tertiary)]">{label}</div>
-      <div className={`truncate font-mono font-black text-[var(--color-text-primary)] ${strong ? 'text-[13px]' : 'text-[10px]'}`}>{value}</div>
+      <div className="truncate text-[9px] font-semibold text-[var(--color-text-tertiary)]">{label}</div>
+      <div className={`truncate font-mono font-black text-[var(--color-text-primary)] ${strong ? 'text-[14px]' : 'text-[11px]'}`}>{value}</div>
     </div>
   )
 }
@@ -440,12 +443,12 @@ function SectionHeading({
   children?: React.ReactNode
 }) {
   return (
-    <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5">
+    <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 sm:px-5">
       <div className="flex min-w-0 items-center gap-2">
         <Icon size={14} className="shrink-0 text-[var(--color-brand-700)]" aria-hidden="true" />
         <div>
-          <h3 id={id} className="text-[11px] font-black text-[var(--color-brand-900)]">{title}</h3>
-          <p className="text-[8px] font-semibold text-[var(--color-text-tertiary)]">{subtitle}</p>
+          <h3 id={id} className="text-[13px] font-bold text-[var(--color-text-primary)]">{title}</h3>
+          <p className="mt-1 text-[10px] font-medium text-[var(--color-text-tertiary)]">{subtitle}</p>
         </div>
       </div>
       {children}

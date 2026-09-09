@@ -43,9 +43,10 @@ interface SnapshotInfo {
 
 interface Props {
   ticker: string
+  compact?: boolean
 }
 
-export function EarningsCard({ ticker }: Props) {
+export function EarningsCard({ ticker, compact = false }: Props) {
   const [data, setData] = useState<SnapshotInfo | null>(null)
   const [loading, setLoading] = useState(true)
 
@@ -62,14 +63,14 @@ export function EarningsCard({ ticker }: Props) {
 
   if (loading) {
     return (
-      <div className="card" style={{ padding: '12px', fontSize: '11px', color: 'var(--text-muted)' }}>
+      <div className={compact ? '' : 'card'} style={{ padding: compact ? 0 : '12px', fontSize: '11px', color: 'var(--text-muted)' }}>
         決算情報読込中…
       </div>
     )
   }
 
   if (!data || (!data.earningsLastDate && !data.earningsNextDate)) {
-    return null
+    return compact ? <div className="text-[10px] font-semibold text-[var(--color-text-tertiary)]">決算日情報は未取得です。</div> : null
   }
 
   const today = todayIsoJst()
@@ -100,6 +101,46 @@ export function EarningsCard({ ticker }: Props) {
     data.earningsNextPredictionModeCount != null
       ? `過去${data.earningsNextPredictionSampleCount}回のうち${data.earningsNextPredictionModeCount}回が${data.earningsNextPredictedTime}前後に開示`
       : null
+
+  if (compact) {
+    return (
+      <section aria-label="決算日" className="grid gap-2 sm:grid-cols-[60px_minmax(0,1fr)_minmax(0,1.35fr)] sm:items-center sm:gap-4">
+        <div className="order-1 text-[11px] font-bold text-[var(--color-text-primary)]">決算</div>
+        <div className="order-3 min-w-0 border-t border-[var(--color-border-soft)] pt-2 sm:order-2 sm:border-0 sm:pt-0">
+          <div className="text-[9px] font-medium text-[var(--color-text-tertiary)]">前回発表</div>
+          <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 font-mono text-[12px] font-semibold text-[var(--color-text-primary)]">
+            <span>{formatJapaneseDate(lastDisplayDate)}</span>
+            {data.earningsLastActualTime && <span>{data.earningsLastActualTime}</span>}
+            {daysSinceLast != null && daysSinceLast >= 0 && (
+              <span className="font-sans text-[9px] font-medium text-[var(--color-text-tertiary)]">{daysSinceLast}日前</span>
+            )}
+          </div>
+        </div>
+        <div className="order-2 min-w-0 sm:order-3">
+          <div className="flex flex-wrap items-center gap-1.5 text-[9px] font-medium text-[var(--color-text-tertiary)]">
+            <span>{nextKind === 'estimated' ? '次回予想' : '次回予定'}</span>
+            {nextKind && (
+              <span
+                className="rounded-[3px] border px-1.5 py-0.5 text-[9px] font-bold"
+                style={{ borderColor: nextTone.border, background: nextTone.bg, color: nextTone.color }}
+              >
+                {nextKind === 'confirmed' ? '確定' : nextKind === 'estimated' ? '推定' : nextKind === 'cached' ? '参考' : '未発表'}
+              </span>
+            )}
+          </div>
+          <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-[13px] font-black" style={{ color: nextTone.color }}>
+            <span>{formatJapaneseDate(data.earningsNextDate)}</span>
+            {data.earningsNextDate && timeKind !== 'unknown' && <span className="text-[11px]">{timeLabel}</span>}
+            {daysToNext != null && (
+              <span className="font-sans text-[9px] font-black">
+                {daysToNext === 0 ? '本日' : daysToNext > 0 ? `あと${daysToNext}日` : `${-daysToNext}日経過`}
+              </span>
+            )}
+          </div>
+        </div>
+      </section>
+    )
+  }
 
   return (
     <div className="card" style={{ padding: '12px', display: 'flex', gap: '24px', flexWrap: 'wrap' }}>

@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   CalendarRange,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   CircleHelp,
@@ -61,6 +62,7 @@ const QUICK_RANGES = [
   { key: '20d', label: '20営業日', tradingDays: 20 },
   { key: '60d', label: '60営業日', tradingDays: 60 },
   { key: '120d', label: '120営業日', tradingDays: 120 },
+  { key: '300d', label: '300営業日', tradingDays: 300 },
   { key: '250d', label: '250営業日', tradingDays: 250 },
   { key: '1m', label: '1か月', months: 1 },
   { key: '3m', label: '3か月', months: 3 },
@@ -68,6 +70,31 @@ const QUICK_RANGES = [
   { key: '1y', label: '1年', months: 12 },
   { key: 'ytd', label: '年初来', ytd: true },
 ] as const
+
+const MARKET_CAP_PRESETS = [
+  { value: '5000000000', label: '50億円以上' },
+  { value: '10000000000', label: '100億円以上' },
+  { value: '30000000000', label: '300億円以上' },
+  { value: '100000000000', label: '1,000億円以上' },
+  { value: '300000000000', label: '3,000億円以上' },
+  { value: '1000000000000', label: '1兆円以上' },
+]
+
+const TURNOVER_PRESETS = [
+  { value: '10000000', label: '1,000万円以上' },
+  { value: '50000000', label: '5,000万円以上' },
+  { value: '100000000', label: '1億円以上' },
+  { value: '300000000', label: '3億円以上' },
+  { value: '1000000000', label: '10億円以上' },
+]
+
+const VOLUME_PRESETS = [
+  { value: '10000', label: '1万株以上' },
+  { value: '50000', label: '5万株以上' },
+  { value: '100000', label: '10万株以上' },
+  { value: '500000', label: '50万株以上' },
+  { value: '1000000', label: '100万株以上' },
+]
 
 function fmtDate(value: string): string {
   return value ? value.replaceAll('-', '/') : '—'
@@ -182,7 +209,12 @@ function chipLabel(key: string, value: string): string {
 
 function activeFilterEntries(params: URLSearchParams): Array<{ key: string; value: string }> {
   const keys = ['market', 'sector', 'margin', 'marketCapMin', 'marketCapMax', 'avgTurnoverMin', 'avgTurnoverMax', 'avgVolumeMin', 'avgVolumeMax', 'priceMin', 'priceMax', 'ma25', 'ma75', 'high52WithinPct', 'low52WithinPct', 'universe', ...PERIOD_EXPLORER_AXIS_KEYS.map((axis) => `stage_${axis}`)]
-  return keys.flatMap((key) => params.get(key) ? [{ key, value: params.get(key)! }] : [])
+  return keys.flatMap((key) => {
+    const value = params.get(key)
+    if (!value) return []
+    if (key === 'market') return value.split(',').filter(Boolean).map((market) => ({ key, value: market }))
+    return [{ key, value }]
+  })
 }
 
 export function PeriodExplorerClient({ calendarDates, defaultFrom, defaultTo }: Props) {
@@ -304,6 +336,16 @@ export function PeriodExplorerClient({ calendarDates, defaultFrom, defaultTo }: 
     })
   }
 
+  function toggleListParam(key: string, value: string) {
+    replaceParams((params) => {
+      const current = (params.get(key) ?? '').split(',').filter(Boolean)
+      const next = current.includes(value) ? current.filter((item) => item !== value) : [...current, value]
+      if (next.length) params.set(key, next.join(','))
+      else params.delete(key)
+      params.delete('offset')
+    })
+  }
+
   function clearFilters(full = false) {
     replaceParams((params) => {
       for (const entry of activeFilterEntries(params)) params.delete(entry.key)
@@ -379,7 +421,25 @@ export function PeriodExplorerClient({ calendarDates, defaultFrom, defaultTo }: 
             {categoryRankings.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}
           </select>
           <span className="inline-flex min-w-0 flex-1 items-center gap-1 truncate text-[10px] font-semibold text-[var(--color-text-tertiary)]" title={definition.description}><CircleHelp size={12} className="shrink-0" /><span className="truncate">{definition.description}</span></span>
-          <button type="button" aria-expanded={filtersOpen} onClick={() => setFiltersOpen((value) => !value)} className="inline-flex h-9 shrink-0 items-center gap-1 border border-[var(--color-border-default)] bg-white px-3 text-[11px] font-black text-[var(--color-text-secondary)] sm:ml-auto"><Filter size={13} />絞り込み{filterEntries.length > 0 ? ` ${filterEntries.length}` : ''}</button>
+        </div>
+      </section>
+
+      <section className="max-w-full overflow-visible border-y border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-3 py-2" aria-label="銘柄絞り込み">
+        <div className="flex w-full min-w-0 items-center gap-2">
+          <span className="hidden shrink-0 text-[10px] font-black text-[var(--color-brand-950)] sm:block">銘柄絞り込み</span>
+          <div className="hidden min-w-0 flex-1 items-center gap-1.5 sm:flex">
+            <MarketFilterMenu
+              options={response?.options.markets ?? []}
+              selected={(searchParams.get('market') ?? '').split(',').filter(Boolean)}
+              onToggle={(value) => toggleListParam('market', value)}
+              onClear={() => setSimpleParam('market', '')}
+            />
+            <CompactPresetSelect label="時価総額" value={searchParams.get('marketCapMin') ?? ''} presets={MARKET_CAP_PRESETS} onChange={(value) => setSimpleParam('marketCapMin', value)} />
+            <CompactPresetSelect label="売買代金" value={searchParams.get('avgTurnoverMin') ?? ''} presets={TURNOVER_PRESETS} onChange={(value) => setSimpleParam('avgTurnoverMin', value)} />
+            <CompactPresetSelect label="出来高" value={searchParams.get('avgVolumeMin') ?? ''} presets={VOLUME_PRESETS} onChange={(value) => setSimpleParam('avgVolumeMin', value)} />
+            <StageFilterMenu params={searchParams} onToggle={toggleStage} />
+          </div>
+          <button type="button" aria-expanded={filtersOpen} onClick={() => setFiltersOpen((value) => !value)} className="inline-flex h-8 w-full min-w-0 items-center justify-center gap-1 border border-[var(--color-border-default)] bg-white px-2.5 text-[10px] font-black text-[var(--color-text-secondary)] sm:ml-auto sm:w-auto sm:shrink-0"><Filter size={12} />{filtersOpen ? '閉じる' : '詳細条件'}{filterEntries.length > 0 ? ` ${filterEntries.length}` : ''}</button>
         </div>
       </section>
 
@@ -388,10 +448,13 @@ export function PeriodExplorerClient({ calendarDates, defaultFrom, defaultTo }: 
           <h2 className="inline-flex items-center gap-1 text-[12px] font-black text-[var(--color-brand-950)]"><SlidersHorizontal size={14} />絞り込み条件</h2>
           <button type="button" onClick={() => clearFilters(false)} className="text-[10px] font-bold text-[var(--color-brand-700)]">期間を残して全解除</button>
         </div>
+        <div className="mt-3 border-b border-[var(--color-border-soft)] pb-3 sm:hidden">
+          <p className="mb-1.5 text-[9px] font-black text-[var(--color-text-tertiary)]">市場（複数選択可）</p>
+          <MarketOptionButtons options={response?.options.markets ?? []} selected={(searchParams.get('market') ?? '').split(',').filter(Boolean)} onToggle={(value) => toggleListParam('market', value)} />
+        </div>
         <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
           <FilterSelect label="分類" value={taxonomy} onChange={(value) => setSimpleParam('taxonomy', value)} options={TAXONOMIES} />
           <FilterSelect label="業種" value={searchParams.get('sector') ?? ''} onChange={(value) => setSimpleParam('sector', value)} options={[{ value: '', label: 'すべて' }, ...(response?.options.sectors ?? []).map((item) => ({ value: item.value, label: `${item.value} (${item.count})` }))]} />
-          <FilterSelect label="市場" value={searchParams.get('market') ?? ''} onChange={(value) => setSimpleParam('market', value)} options={[{ value: '', label: 'すべて' }, ...(response?.options.markets ?? []).map((item) => ({ value: item.value, label: `${item.value} (${item.count})` }))]} />
           <FilterSelect label="貸借 / 信用" value={searchParams.get('margin') ?? ''} onChange={(value) => setSimpleParam('margin', value)} options={[{ value: '', label: 'すべて' }, ...(response?.options.marginTypes ?? []).map((item) => ({ value: item.value, label: `${item.value} (${item.count})` }))]} />
           <FilterSelect label="指数" value={searchParams.get('universe') ?? ''} onChange={(value) => setSimpleParam('universe', value)} options={[{ value: '', label: '全銘柄' }, { value: 'nikkei225', label: '日経225 (現在構成)' }]} />
           <FilterSelect label="25MA位置" value={searchParams.get('ma25') ?? ''} onChange={(value) => setSimpleParam('ma25', value)} options={[{ value: '', label: '指定なし' }, { value: 'above', label: '株価が上' }, { value: 'below', label: '株価が下' }]} />
@@ -419,15 +482,16 @@ export function PeriodExplorerClient({ calendarDates, defaultFrom, defaultTo }: 
       </section>}
 
       {filterEntries.length > 0 && <div className="flex flex-wrap items-center gap-1.5">
-        <span className="text-[10px] font-black text-[var(--color-text-tertiary)]">適用中</span>
-        {filterEntries.map((entry) => <button key={`${entry.key}-${entry.value}`} type="button" onClick={() => setSimpleParam(entry.key, '')} className="inline-flex items-center gap-1 border border-[var(--color-brand-100)] bg-[var(--color-brand-50)] px-2 py-1 text-[10px] font-bold text-[var(--color-brand-800)]">{chipLabel(entry.key, entry.value)}<X size={10} /></button>)}
+        <span className="text-[10px] font-black text-[var(--color-text-tertiary)]">条件</span>
+        {filterEntries.map((entry) => <button key={`${entry.key}-${entry.value}`} type="button" onClick={() => entry.key === 'market' ? toggleListParam(entry.key, entry.value) : setSimpleParam(entry.key, '')} className="inline-flex items-center gap-1 whitespace-nowrap border border-[var(--color-brand-100)] bg-[var(--color-brand-50)] px-2 py-1 text-[10px] font-bold text-[var(--color-brand-800)]">{chipLabel(entry.key, entry.value)}<X size={10} /></button>)}
+        <button type="button" onClick={() => clearFilters(false)} className="ml-auto whitespace-nowrap text-[10px] font-bold text-[var(--color-brand-700)]">条件をクリア</button>
       </div>}
 
       <section className="min-h-[360px] border-t border-[var(--color-border-strong)] bg-white">
         <div className="flex flex-wrap items-center gap-2 border-b border-[var(--color-border-default)] px-3 py-2">
           <div>
             <h2 className="text-[13px] font-black text-[var(--color-brand-950)]">{definition.label}ランキング</h2>
-            <p className="text-[9px] font-semibold text-[var(--color-text-tertiary)]">{response ? `${response.total.toLocaleString('ja-JP')}件` : '集計中'} / {fmtDate(response?.range.adoptedFrom ?? draftFrom)} ～ {fmtDate(response?.range.adoptedTo ?? draftTo)}</p>
+            <p className="text-[9px] font-semibold text-[var(--color-text-tertiary)]">{response ? `${response.total.toLocaleString('ja-JP')} / ${response.universeTotal.toLocaleString('ja-JP')}${response.resultKind === 'stocks' ? '銘柄' : '業種'}` : '集計中'} ｜ {fmtDate(response?.range.adoptedFrom ?? draftFrom)} ～ {fmtDate(response?.range.adoptedTo ?? draftTo)}</p>
           </div>
           <label className="ml-auto flex items-center gap-1 text-[10px] font-bold text-[var(--color-text-tertiary)]">表示
             <select value={limit} onChange={(event) => setSimpleParam('limit', event.target.value)} className="h-7 border border-[var(--color-border-default)] bg-white px-1 text-[10px] font-bold">{[50, 100, 200, 500].map((value) => <option key={value} value={value}>{value}</option>)}</select>
@@ -465,6 +529,57 @@ function FilterNumber({ label, value, placeholder, onApply }: { label: string; v
   return <label className="text-[9px] font-black text-[var(--color-text-tertiary)]">{label}<input type="number" min="0" value={draft} placeholder={placeholder} onChange={(event) => setDraft(event.target.value)} onBlur={() => onApply(draft)} onKeyDown={(event) => { if (event.key === 'Enter') onApply(draft) }} className="mt-1 h-8 w-full min-w-0 border border-[var(--color-border-default)] bg-white px-1.5 text-[10px] font-bold tabular-nums" /></label>
 }
 
+function CompactPresetSelect({ label, value, presets, onChange }: { label: string; value: string; presets: Array<{ value: string; label: string }>; onChange: (value: string) => void }) {
+  const known = !value || presets.some((preset) => preset.value === value)
+  return <label className="inline-flex h-8 min-w-0 items-center gap-1 border border-[var(--color-border-default)] bg-white px-2 text-[9px] font-black text-[var(--color-text-tertiary)]">
+    <span className="shrink-0">{label}</span>
+    <select value={value} onChange={(event) => onChange(event.target.value)} className="min-w-0 max-w-[124px] bg-transparent text-[10px] font-bold text-[var(--color-text-secondary)] outline-none">
+      <option value="">指定なし</option>
+      {!known && <option value={value}>カスタム設定</option>}
+      {presets.map((preset) => <option key={preset.value} value={preset.value}>{preset.label}</option>)}
+    </select>
+  </label>
+}
+
+function MarketOptionButtons({ options, selected, onToggle }: { options: Array<{ value: string; count: number }>; selected: string[]; onToggle: (value: string) => void }) {
+  return <div className="flex flex-wrap gap-1">
+    {options.map((option) => {
+      const active = selected.includes(option.value)
+      return <button key={option.value} type="button" aria-pressed={active} onClick={() => onToggle(option.value)} className={`whitespace-nowrap border px-2 py-1 text-[10px] font-bold [word-break:keep-all] ${active ? 'border-[var(--color-brand-700)] bg-[var(--color-brand-50)] text-[var(--color-brand-800)]' : 'border-[var(--color-border-default)] bg-white text-[var(--color-text-secondary)]'}`}>{option.value} <span className="text-[9px] font-semibold text-[var(--color-text-tertiary)]">{option.count}</span></button>
+    })}
+  </div>
+}
+
+function MarketFilterMenu({ options, selected, onToggle, onClear }: { options: Array<{ value: string; count: number }>; selected: string[]; onToggle: (value: string) => void; onClear: () => void }) {
+  return <details className="group relative shrink-0 [&_summary::-webkit-details-marker]:hidden">
+    <summary className="inline-flex h-8 cursor-pointer list-none items-center gap-1 border border-[var(--color-border-default)] bg-white px-2 text-[10px] font-bold text-[var(--color-text-secondary)]">
+      市場 {selected.length > 0 ? `${selected.length}件` : 'すべて'}<ChevronDown size={11} className="transition-transform group-open:rotate-180" />
+    </summary>
+    <div className="absolute left-0 top-[calc(100%+4px)] z-30 w-[300px] border border-[var(--color-border-strong)] bg-white p-2 shadow-lg">
+      <div className="mb-2 flex items-center justify-between"><span className="text-[9px] font-black text-[var(--color-text-tertiary)]">複数選択可</span>{selected.length > 0 && <button type="button" onClick={onClear} className="text-[9px] font-bold text-[var(--color-brand-700)]">全解除</button>}</div>
+      <MarketOptionButtons options={options} selected={selected} onToggle={onToggle} />
+    </div>
+  </details>
+}
+
+function StageFilterMenu({ params, onToggle }: { params: URLSearchParams; onToggle: (axis: PeriodExplorerAxisKey, stage: number) => void }) {
+  const selectedCount = PERIOD_EXPLORER_AXIS_KEYS.reduce((sum, axis) => sum + (params.get(`stage_${axis}`) ?? '').split(',').filter(Boolean).length, 0)
+  return <details className="group relative ml-auto shrink-0 [&_summary::-webkit-details-marker]:hidden">
+    <summary className="inline-flex h-8 cursor-pointer list-none items-center gap-1 border border-[var(--color-border-default)] bg-white px-2 text-[10px] font-bold text-[var(--color-text-secondary)]">
+      6軸Stage {selectedCount > 0 ? `${selectedCount}件` : '指定なし'}<ChevronDown size={11} className="transition-transform group-open:rotate-180" />
+    </summary>
+    <div className="absolute right-0 top-[calc(100%+4px)] z-30 w-[340px] border border-[var(--color-border-strong)] bg-white p-3 shadow-lg">
+      <p className="mb-2 text-[9px] font-semibold text-[var(--color-text-tertiary)]">同じ軸はOR、軸どうしはAND</p>
+      <div className="space-y-2">
+        {PERIOD_EXPLORER_AXIS_KEYS.map((axis) => {
+          const selected = (params.get(`stage_${axis}`) ?? '').split(',').map(Number)
+          return <div key={axis} className="flex items-center gap-1.5"><span className="w-10 shrink-0 text-[10px] font-black text-[var(--color-text-secondary)]">{PERIOD_EXPLORER_AXIS_LABELS[axis].replace('足', '')}</span>{[1, 2, 3, 4, 5, 6].map((stage) => <button key={stage} type="button" aria-label={`${PERIOD_EXPLORER_AXIS_LABELS[axis]} Stage ${stage}`} onClick={() => onToggle(axis, stage)} aria-pressed={selected.includes(stage)} className={selected.includes(stage) ? 'outline outline-2 outline-[var(--color-brand-700)] outline-offset-1' : ''}><StageTag stage={stage} size="sm" /></button>)}</div>
+        })}
+      </div>
+    </div>
+  </details>
+}
+
 function SortButton({ children, sortKey, onSort, align = 'left' }: { children: ReactNode; sortKey: string; onSort: (key: string) => void; align?: 'left' | 'right' }) {
   return <button type="button" onClick={() => onSort(sortKey)} className={`w-full whitespace-nowrap font-inherit hover:text-[var(--color-brand-800)] ${align === 'right' ? 'text-right' : 'text-left'}`}>{children}</button>
 }
@@ -472,32 +587,35 @@ function SortButton({ children, sortKey, onSort, align = 'left' }: { children: R
 function StockResults({ rows, ranking, duplicateReturn, adoptedTo, onSort }: { rows: PeriodExplorerStockRow[]; ranking: PeriodExplorerRankingKey; duplicateReturn: boolean; adoptedTo: string; onSort: (key: string) => void }) {
   return <>
     <div className="hidden overflow-x-auto sm:block">
-      <table className="min-w-[1120px] w-full border-collapse text-[11px]">
+      <table className="w-full min-w-[1160px] table-fixed border-collapse text-[11px]">
+        <colgroup>
+          <col className="w-[44px]" /><col className="w-[238px]" /><col className="w-[104px]" /><col className="w-[205px]" /><col className="w-[86px]" />
+          {!duplicateReturn && <col className="w-[82px]" />}<col className="w-[150px]" /><col className="w-[96px]" /><col className="hidden w-[64px] min-[1360px]:table-column" /><col className="w-[102px]" /><col className="w-[108px]" /><col className="hidden w-[104px] min-[1360px]:table-column" />
+        </colgroup>
         <thead className="sticky top-0 z-10 bg-[var(--color-surface-subtle)] text-[9px] font-black text-[var(--color-text-tertiary)]">
           <tr className="border-b border-[var(--color-border-default)]">
-            <th className="w-9 px-1.5 py-2 text-right">Rank</th><th className="w-14 px-1.5 py-2 text-left">コード</th><th className="min-w-[140px] px-1.5 py-2 text-left">銘柄</th>
-            <th className="w-24 px-1.5 py-2 text-right"><SortButton sortKey="ranking" onSort={onSort} align="right">ランキング値</SortButton></th>
-            <th className="w-[185px] px-1.5 py-2 text-left">6軸Stage</th><th className="w-20 px-1.5 py-2 text-right"><SortButton sortKey="price" onSort={onSort} align="right">株価</SortButton></th>
-            {!duplicateReturn && <th className="w-20 px-1.5 py-2 text-right"><SortButton sortKey="periodReturn" onSort={onSort} align="right">期間騰落率</SortButton></th>}
-            <th className="min-w-[110px] px-1.5 py-2 text-left">業種</th><th className="w-[76px] px-1.5 py-2 text-left">市場</th><th className="w-16 px-1.5 py-2 text-left">貸/信</th>
-            <th className="w-24 px-1.5 py-2 text-right"><SortButton sortKey="marketCap" onSort={onSort} align="right">時価総額</SortButton></th>
-            <th className="w-24 px-1.5 py-2 text-right"><SortButton sortKey="avgTurnover" onSort={onSort} align="right">平均売買代金</SortButton></th>
-            <th className="w-24 px-2 py-2 text-right"><SortButton sortKey="avgVolume" onSort={onSort} align="right">平均出来高</SortButton></th>
+            <th className="whitespace-nowrap px-1.5 py-2 text-right">Rank</th><th className="whitespace-nowrap px-2 py-2 text-left">銘柄</th>
+            <th className="whitespace-nowrap px-2 py-2 text-right"><SortButton sortKey="ranking" onSort={onSort} align="right">ランキング値</SortButton></th>
+            <th className="whitespace-nowrap px-2 py-2 text-left">6軸Stage</th><th className="whitespace-nowrap px-2 py-2 text-right"><SortButton sortKey="price" onSort={onSort} align="right">株価</SortButton></th>
+            {!duplicateReturn && <th className="whitespace-nowrap px-2 py-2 text-right"><SortButton sortKey="periodReturn" onSort={onSort} align="right">期間騰落率</SortButton></th>}
+            <th className="whitespace-nowrap px-2 py-2 text-left">業種</th><th className="whitespace-nowrap px-2 py-2 text-left [word-break:keep-all]">市場</th><th className="hidden whitespace-nowrap px-2 py-2 text-left [word-break:keep-all] min-[1360px]:table-cell">貸/信</th>
+            <th className="whitespace-nowrap px-2 py-2 text-right"><SortButton sortKey="marketCap" onSort={onSort} align="right">時価総額</SortButton></th>
+            <th className="whitespace-nowrap px-2 py-2 text-right"><SortButton sortKey="avgTurnover" onSort={onSort} align="right">平均売買代金</SortButton></th>
+            <th className="hidden whitespace-nowrap px-2 py-2 text-right min-[1360px]:table-cell"><SortButton sortKey="avgVolume" onSort={onSort} align="right">平均出来高</SortButton></th>
           </tr>
         </thead>
         <tbody className="divide-y divide-[var(--color-border-subtle)]">
-          {rows.map((row) => <tr key={row.ticker} className="hover:bg-[var(--color-surface-subtle)]">
-            <td className="px-2 py-2.5 text-right font-black tabular-nums text-[var(--color-text-tertiary)]">{row.rank}</td>
-            <td className="px-2 py-2.5 text-left font-mono font-bold text-[var(--color-brand-800)]">{row.ticker}</td>
-            <td className="px-2 py-2.5 text-left"><span className="inline-flex max-w-full items-center gap-1"><Link href={`/stock/${encodeURIComponent(row.ticker)}?date=${encodeURIComponent(adoptedTo)}#overview`} className="truncate font-black text-[var(--color-brand-950)] hover:text-[var(--color-brand-700)] hover:underline">{row.name}</Link><StockPreviewTrigger ticker={row.ticker} analysisDate={adoptedTo} context="periodExplorer" />{row.historicalOnly && <span className="ml-1 border border-[var(--color-border-soft)] px-1 py-0.5 text-[8px] font-bold text-[var(--color-text-tertiary)]">履歴</span>}</span></td>
-            <td className={`px-2 py-2.5 text-right font-black tabular-nums ${tone(row.rankingValue)}`}>{rankingText(row.rankingValue, ranking)}</td>
-            <td className="px-2 py-2.5"><GroupedStageCode row={row} /></td>
-            <td className="px-2 py-2.5 text-right font-bold tabular-nums">{fmtNumber(row.endClose)}円</td>
-            {!duplicateReturn && <td className={`px-2 py-2.5 text-right font-bold tabular-nums ${tone(row.periodReturnPct)}`}>{fmtPercent(row.periodReturnPct)}</td>}
-            <td className="max-w-[170px] truncate px-2 py-2.5 text-left font-semibold" title={row.selectedSector ?? ''}>{row.selectedSector ?? '未分類'}</td>
-            <td className="px-2 py-2.5 text-left text-[10px] font-semibold">{row.marketSegment ?? '未設定'}</td><td className="px-2 py-2.5 text-left text-[10px] font-semibold">{row.marginType ?? '未設定'}</td>
-            <td className="px-2 py-2.5 text-right font-bold tabular-nums" title={row.marketCapBasis === 'pit' ? '終了日時点で公表済みの株式数' : row.marketCapBasis === 'current' ? '現在株式数による参考値' : '株式数未取得'}>{fmtCurrency(row.marketCap)}{row.marketCapBasis === 'current' && <sup className="ml-0.5 text-[8px] text-amber-700">現</sup>}</td>
-            <td className="px-2 py-2.5 text-right font-bold tabular-nums">{fmtCurrency(row.avgTurnover)}</td><td className="px-3 py-2.5 text-right font-bold tabular-nums">{fmtVolume(row.avgVolume)}</td>
+          {rows.map((row) => <tr key={row.ticker} className="h-[58px] hover:bg-[var(--color-surface-subtle)]">
+            <td className="whitespace-nowrap px-1.5 py-2 text-right font-black tabular-nums text-[var(--color-text-tertiary)]">{row.rank}</td>
+            <td className="overflow-hidden px-2 py-2 text-left"><span className="flex min-w-0 items-center gap-1.5"><Link href={`/stock/${encodeURIComponent(row.ticker)}?date=${encodeURIComponent(adoptedTo)}#overview`} className="flex min-w-0 items-baseline gap-2 text-[var(--color-brand-950)] hover:text-[var(--color-brand-700)] hover:underline"><span className="shrink-0 font-mono text-[10px] font-bold text-[var(--color-brand-800)]">{row.ticker}</span><span className="truncate font-black">{row.name}</span></Link><StockPreviewTrigger ticker={row.ticker} analysisDate={adoptedTo} context="periodExplorer" />{row.historicalOnly && <span className="shrink-0 border border-[var(--color-border-soft)] px-1 py-0.5 text-[8px] font-bold text-[var(--color-text-tertiary)]">履歴</span>}</span></td>
+            <td className={`whitespace-nowrap px-2 py-2 text-right font-black tabular-nums ${tone(row.rankingValue)}`}>{rankingText(row.rankingValue, ranking)}</td>
+            <td className="overflow-hidden px-2 py-2"><GroupedStageCode row={row} /></td>
+            <td className="whitespace-nowrap px-2 py-2 text-right font-bold tabular-nums">{fmtNumber(row.endClose)}円</td>
+            {!duplicateReturn && <td className={`whitespace-nowrap px-2 py-2 text-right font-bold tabular-nums ${tone(row.periodReturnPct)}`}>{fmtPercent(row.periodReturnPct)}</td>}
+            <td className="truncate px-2 py-2 text-left font-semibold" title={row.selectedSector ?? ''}>{row.selectedSector ?? '未分類'}</td>
+            <td className="px-2 py-2 text-left"><span className="inline-flex max-w-full whitespace-nowrap border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-1.5 py-0.5 text-[9px] font-bold [word-break:keep-all]">{row.marketSegment ?? '未設定'}</span></td><td className="hidden whitespace-nowrap px-2 py-2 text-left text-[10px] font-semibold [word-break:keep-all] min-[1360px]:table-cell">{row.marginType ?? '未設定'}</td>
+            <td className="whitespace-nowrap px-2 py-2 text-right font-bold tabular-nums" title={row.marketCapBasis === 'pit' ? '終了日時点で公表済みの株式数' : row.marketCapBasis === 'current' ? '現在株式数による参考値' : '株式数未取得'}>{fmtCurrency(row.marketCap)}{row.marketCapBasis === 'current' && <sup className="ml-0.5 text-[8px] text-amber-700">現</sup>}</td>
+            <td className="whitespace-nowrap px-2 py-2 text-right font-bold tabular-nums">{fmtCurrency(row.avgTurnover)}</td><td className="hidden whitespace-nowrap px-2 py-2 text-right font-bold tabular-nums min-[1360px]:table-cell">{fmtVolume(row.avgVolume)}</td>
           </tr>)}
         </tbody>
       </table>

@@ -1,4 +1,5 @@
 import { execAll, execGet } from '@/lib/db/client'
+import { historicalUniverseMembershipSql } from '@/lib/historical-universe'
 import { type UniverseFilterValue, universeSqlCondition } from '@/lib/market-universe'
 import {
   calculateTrendStructureMetrics,
@@ -471,14 +472,20 @@ async function loadSectorTrendMetrics(
   const previousDate = (await execGet<{ date: string | null }>(`
     SELECT MAX(date) AS date FROM daily_snapshots WHERE date < ?
   `, [date]))?.date ?? null
-  const universe = universeSqlCondition('tu.ticker', universeFilter)
+  const universe = universeSqlCondition('current.ticker', universeFilter)
+  const historicalMembership = historicalUniverseMembershipSql(
+    'current.date',
+    'hu',
+    'tu',
+    'current.ticker IS NOT NULL',
+  )
   const rows = await execAll<SectorTrendSourceRow>(`
     SELECT
       current.ticker,
-      tu.sector17_code AS sector17Code,
-      tu.sector17_name AS sector17Name,
-      tu.sector33_code AS sector33Code,
-      tu.sector33_name AS sector33Name,
+      COALESCE(hu.sector17_code, tu.sector17_code) AS sector17Code,
+      COALESCE(hu.sector17_name, tu.sector17_name) AS sector17Name,
+      COALESCE(hu.sector33_code, tu.sector33_code) AS sector33Code,
+      COALESCE(hu.sector33_name, tu.sector33_name) AS sector33Name,
       sc.major_category AS majorCategory,
       sc.sub_industry AS subIndustry,
       current.daily_a_stage AS dailyA,
@@ -496,11 +503,13 @@ async function loadSectorTrendMetrics(
       previous.ma_75 AS previousMa75,
       previous.ma_300 AS previousMa300
     FROM daily_snapshots AS current INDEXED BY snapshots_date_idx
-    INNER JOIN ticker_universe AS tu ON tu.ticker = current.ticker AND tu.active = 1
+    LEFT JOIN historical_universe AS hu ON hu.ticker = current.ticker
+    LEFT JOIN ticker_universe AS tu ON tu.ticker = current.ticker
     LEFT JOIN stock_classification AS sc ON sc.ticker = current.ticker
     LEFT JOIN daily_snapshots AS previous
       ON previous.ticker = current.ticker AND previous.date = ?
     WHERE current.date = ?
+      AND ${historicalMembership}
       ${universe.sql ? `AND ${universe.sql}` : ''}
   `, [previousDate ?? '', date, ...universe.params])
 
@@ -575,7 +584,13 @@ async function loadUniverseSectorStructureRows(
     stageDeltas: SectorStageDeltas
   }>
 }> {
-  const universe = universeSqlCondition('tu.ticker', universeFilter)
+  const universe = universeSqlCondition('source.ticker', universeFilter)
+  const historicalMembership = historicalUniverseMembershipSql(
+    'source.date',
+    'hu',
+    'tu',
+    'source.ticker IS NOT NULL',
+  )
   const sourceRows = await execAll<SectorStructureSourceRow>(`
     WITH selected_dates AS (
       SELECT date
@@ -608,16 +623,18 @@ async function loadUniverseSectorStructureRows(
     )
     SELECT
       source.*,
-      tu.sector17_code AS sector17Code,
-      tu.sector17_name AS sector17Name,
-      tu.sector33_code AS sector33Code,
-      tu.sector33_name AS sector33Name,
+      COALESCE(hu.sector17_code, tu.sector17_code) AS sector17Code,
+      COALESCE(hu.sector17_name, tu.sector17_name) AS sector17Name,
+      COALESCE(hu.sector33_code, tu.sector33_code) AS sector33Code,
+      COALESCE(hu.sector33_name, tu.sector33_name) AS sector33Name,
       sc.major_category AS majorCategory,
       sc.sub_industry AS subIndustry
     FROM source
-    INNER JOIN ticker_universe AS tu ON tu.ticker = source.ticker AND tu.active = 1
+    LEFT JOIN historical_universe AS hu ON hu.ticker = source.ticker
+    LEFT JOIN ticker_universe AS tu ON tu.ticker = source.ticker
     LEFT JOIN stock_classification AS sc ON sc.ticker = source.ticker
     WHERE source.date > (SELECT MIN(date) FROM selected_dates)
+      AND ${historicalMembership}
       AND ${universe.sql}
     ORDER BY source.date, source.ticker
   `, [requestedDate, ...universe.params])
@@ -677,7 +694,13 @@ async function loadSectorMarketEnvironment(
       sampleCount: 0,
     }
   }
-  const universe = universeSqlCondition('tu.ticker', universeFilter)
+  const universe = universeSqlCondition('pm.symbol', universeFilter)
+  const historicalMembership = historicalUniverseMembershipSql(
+    'pm.date',
+    'hu',
+    'tu',
+    'pm.symbol IS NOT NULL',
+  )
   const aggregate = await execGet<{
     sampleCount: number
     pmsCount: number
@@ -692,8 +715,10 @@ async function loadSectorMarketEnvironment(
       SUM(CASE WHEN pm.physical_momentum_score > 0 THEN 1 ELSE 0 END) AS pmsPositive,
       SUM(CASE WHEN pm.physical_force_score > 0 THEN 1 ELSE 0 END) AS pfsPositive
     FROM physical_momentum_metrics AS pm
-    INNER JOIN ticker_universe AS tu ON tu.ticker = pm.symbol AND tu.active = 1
+    LEFT JOIN historical_universe AS hu ON hu.ticker = pm.symbol
+    LEFT JOIN ticker_universe AS tu ON tu.ticker = pm.symbol
     WHERE pm.market = 'JP' AND pm.date = ?
+      AND ${historicalMembership}
       ${universe.sql ? `AND ${universe.sql}` : ''}
   `, [latest.date, ...universe.params])
   const pmsCount = Number(aggregate?.pmsCount ?? 0)

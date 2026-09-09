@@ -21,6 +21,67 @@ export interface StockDecisionSummaryUrls {
   sector: string
 }
 
+export interface TechnicalSnapshotSourceDates {
+  stageDate: string | null
+  scoreDate: string | null
+  maDate: string | null
+  analysisDate?: string | null
+}
+
+export interface DatedPhysicalScoreRow {
+  date: string
+  physicalMomentumScore: number | null
+  physicalForceScore: number | null
+  physicalEnergyScore: number | null
+}
+
+export function selectPhysicalMomentumScoreRow<T extends DatedPhysicalScoreRow>({
+  latest,
+  history,
+  latestScoredDate,
+  isScoreFresh,
+}: {
+  latest: T
+  history: T[]
+  latestScoredDate: string | null | undefined
+  isScoreFresh: boolean | undefined
+}): { scoreDate: string | null; scoreRow: T | null } {
+  const latestHasScores = latest.physicalMomentumScore != null
+    && latest.physicalForceScore != null
+    && latest.physicalEnergyScore != null
+  const scoreDate = latestScoredDate
+    ?? (isScoreFresh !== false && latestHasScores ? latest.date : null)
+  const scoreRow = scoreDate === latest.date
+    ? latest
+    : history.find((row) => row.date === scoreDate) ?? null
+  return { scoreDate, scoreRow }
+}
+
+export function formatTechnicalSnapshotDateLabel({
+  stageDate,
+  scoreDate,
+  maDate,
+  analysisDate = null,
+}: TechnicalSnapshotSourceDates): string {
+  if (stageDate && scoreDate && stageDate === scoreDate && (!maDate || maDate === stageDate)) {
+    return `基準日 ${stageDate}`
+  }
+
+  const groups = new Map<string, string[]>()
+  for (const [label, date] of [['Stage', stageDate], ['PMS', scoreDate], ['MA', maDate]] as const) {
+    if (!date) continue
+    const labels = groups.get(date) ?? []
+    labels.push(label)
+    groups.set(date, labels)
+  }
+  if (groups.size > 0) {
+    return [...groups.entries()]
+      .map(([date, labels]) => `${labels.join('・')} ${date}`)
+      .join(' / ')
+  }
+  return analysisDate ? `分析基準 ${analysisDate}` : '基準日 ---'
+}
+
 function compactNumber(value: number): string {
   const absolute = Math.abs(value)
   if (absolute >= 1e12) return `${(value / 1e12).toLocaleString('ja-JP', { maximumFractionDigits: 2 })}兆円`

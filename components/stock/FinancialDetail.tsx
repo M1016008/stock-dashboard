@@ -19,11 +19,11 @@ import {
   Legend,
   Line,
   ReferenceLine,
-  ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
 } from 'recharts'
+import { MeasuredChartFrame } from '@/components/charts/MeasuredChartFrame'
 import type {
   FinancialDetailBalancePeriod,
   FinancialDetailCashFlowPeriod,
@@ -155,29 +155,31 @@ export function FinancialDetail({ ticker, analysisDate }: FinancialDetailProps) 
   }
 
   return (
-    <section className="space-y-3" aria-labelledby="financial-detail-title">
-      <header className="overflow-hidden border border-[var(--color-border-default)] bg-white">
-        <div className="flex flex-wrap items-start justify-between gap-2 bg-[var(--color-brand-50)] px-4 py-3">
+    <section className="space-y-6 bg-white" aria-labelledby="financial-detail-title">
+      <header className="overflow-hidden border-y border-[var(--color-border-soft)] bg-white">
+        <div className="flex flex-wrap items-end justify-between gap-2 border-b border-[var(--color-border-soft)] px-4 py-3.5 sm:px-5">
           <div className="flex min-w-0 items-center gap-2">
             <Landmark size={17} className="shrink-0 text-[var(--color-brand-700)]" aria-hidden="true" />
             <div>
-              <h2 id="financial-detail-title" className="text-[13px] font-black text-[var(--color-brand-900)]">財務</h2>
-              <p className="text-[9px] font-semibold text-[var(--color-text-tertiary)]">財務状態・キャッシュフロー・資本効率を同じ基準日で確認</p>
+              <h2 id="financial-detail-title" className="text-[15px] font-bold text-[var(--color-text-primary)]">財務</h2>
+              <p className="mt-1 text-[10px] font-medium text-[var(--color-text-tertiary)]">財務状態、キャッシュフロー、資本効率を同じ基準日で確認</p>
             </div>
           </div>
-          <div className="font-mono text-[9px] font-bold text-[var(--color-text-tertiary)]">分析基準日 {model.asOf}</div>
+          <div className="font-mono text-[10px] font-semibold text-[var(--color-text-tertiary)]">分析基準日 {model.asOf}</div>
         </div>
-        <nav className="grid grid-cols-5 border-t border-[var(--color-border-default)] bg-[var(--color-surface-subtle)]" aria-label="財務内メニュー">
+        <nav className="grid grid-cols-5 bg-white px-2 sm:px-3" aria-label="財務内メニュー" role="tablist">
           {SUBTABS.map((tab) => (
             <button
               key={tab.id}
               type="button"
               onClick={() => setSubtab(tab.id)}
               aria-current={subtab === tab.id ? 'page' : undefined}
-              className={`h-9 min-w-0 border-r border-[var(--color-border-default)] px-1 text-[10px] font-black last:border-r-0 sm:px-3 ${
+              aria-selected={subtab === tab.id}
+              role="tab"
+              className={`h-11 min-w-0 border-b-2 px-1 text-[11px] font-bold sm:px-3 ${
                 subtab === tab.id
-                  ? 'bg-white text-[var(--color-brand-900)] shadow-[inset_0_-2px_0_var(--color-market-red)]'
-                  : 'text-[var(--color-text-secondary)] hover:bg-white'
+                  ? 'border-[var(--color-brand-700)] text-[var(--color-brand-900)]'
+                  : 'border-transparent text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-subtle)]'
               }`}
             >
               {tab.label}
@@ -187,7 +189,7 @@ export function FinancialDetail({ ticker, analysisDate }: FinancialDetailProps) 
       </header>
 
       {model.isFinancialSector && (
-        <div className="border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-3 py-2 text-[9px] font-semibold text-[var(--color-text-secondary)]">
+        <div className="border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-4 py-2.5 text-[10px] font-medium text-[var(--color-text-secondary)]">
           銀行・保険・証券等では一般事業会社と定義が異なる営業利益率・純利益率・簡易FCFをN/Aとしています。原数値をゼロには置換していません。
         </div>
       )}
@@ -204,45 +206,41 @@ export function FinancialDetail({ ticker, analysisDate }: FinancialDetailProps) 
 function FinancialSummary({ model }: { model: FinancialDetailReadModel }) {
   const summary = model.summary
   return (
-    <section className="overflow-hidden border border-[var(--color-border-default)] bg-white" aria-labelledby="financial-summary-title">
+    <section className="overflow-hidden border-y border-[var(--color-border-soft)] bg-white" aria-labelledby="financial-summary-title">
       <SectionHeader icon={Scale} title="財務まとめ" subtitle="正規化factの最新LTM・FY・時点値を使い分け" id="financial-summary-title" />
-      <div className="grid divide-y divide-[var(--color-border-soft)] lg:grid-cols-2 lg:divide-x lg:divide-y-0">
-        <div className="grid divide-y divide-[var(--color-border-soft)] sm:grid-cols-2 sm:divide-x sm:divide-y-0">
-          <SummaryBlock title="収益性" note={model.isFinancialSector ? '業種特性を反映' : 'LTM優先'} icon={Activity}>
-            <SummaryGrid values={[
-              ['営業利益率', summary.profitability.operatingMargin, 'operating_margin'],
-              ['純利益率', summary.profitability.netMargin, 'net_margin'],
-              ['ROE', summary.profitability.roe, 'roe'],
-              ['ROA', summary.profitability.roa, 'roa'],
-            ]} model={model} />
-          </SummaryBlock>
-          <SummaryBlock title="財務健全性" note="最新開示時点" icon={Landmark}>
-            <SummaryGrid values={[
-              ['自己資本比率', summary.financialHealth.equityRatio, 'equity_ratio'],
-              ['総資産', summary.financialHealth.totalAssets, null],
-              ['自己資本', summary.financialHealth.equity, null],
-              ['BPS', summary.financialHealth.bps, 'bps'],
-            ]} model={model} />
-          </SummaryBlock>
-        </div>
-        <div className="grid divide-y divide-[var(--color-border-soft)] sm:grid-cols-2 sm:divide-x sm:divide-y-0">
-          <SummaryBlock title="キャッシュフロー" note="LTM優先・FY補完" icon={WalletCards}>
-            <SummaryGrid values={[
-              ['営業CF', summary.cashFlow.operatingCashFlow, null],
-              ['投資CF', summary.cashFlow.investingCashFlow, null],
-              ['財務CF', summary.cashFlow.financingCashFlow, null],
-              ['簡易FCF', summary.cashFlow.simpleFcf, 'simple_fcf'],
-            ]} model={model} />
-          </SummaryBlock>
-          <SummaryBlock title="資本効率" note="平均残高を使用" icon={CircleDollarSign}>
-            <SummaryGrid values={[
-              ['ROE', summary.capitalEfficiency.roe, 'roe'],
-              ['ROA', summary.capitalEfficiency.roa, 'roa'],
-              ['EPS', summary.capitalEfficiency.eps, 'eps'],
-              ['BPS', summary.capitalEfficiency.bps, 'bps'],
-            ]} model={model} />
-          </SummaryBlock>
-        </div>
+      <div className="grid gap-x-6 gap-y-2 px-1 py-1 sm:grid-cols-2 lg:grid-cols-[0.95fr_1.05fr_1.2fr_0.8fr]">
+        <SummaryBlock title="収益性" note={model.isFinancialSector ? '業種特性を反映' : 'LTM優先'} icon={Activity}>
+          <SummaryGrid values={[
+            ['営業利益率', summary.profitability.operatingMargin, 'operating_margin'],
+            ['純利益率', summary.profitability.netMargin, 'net_margin'],
+            ['ROE', summary.profitability.roe, 'roe'],
+            ['ROA', summary.profitability.roa, 'roa'],
+          ]} primaryLabels={['営業利益率']} model={model} />
+        </SummaryBlock>
+        <SummaryBlock title="財務健全性" note="最新開示時点" icon={Landmark}>
+          <SummaryGrid values={[
+            ['自己資本比率', summary.financialHealth.equityRatio, 'equity_ratio'],
+            ['総資産', summary.financialHealth.totalAssets, null],
+            ['自己資本', summary.financialHealth.equity, null],
+            ['BPS', summary.financialHealth.bps, 'bps'],
+          ]} primaryLabels={['自己資本比率']} model={model} />
+        </SummaryBlock>
+        <SummaryBlock title="キャッシュフロー" note="LTM優先・FY補完" icon={WalletCards}>
+          <SummaryGrid values={[
+            ['営業CF', summary.cashFlow.operatingCashFlow, null],
+            ['投資CF', summary.cashFlow.investingCashFlow, null],
+            ['財務CF', summary.cashFlow.financingCashFlow, null],
+            ['簡易FCF', summary.cashFlow.simpleFcf, 'simple_fcf'],
+          ]} primaryLabels={['営業CF', '簡易FCF']} model={model} />
+        </SummaryBlock>
+        <SummaryBlock title="資本効率" note="平均残高を使用" icon={CircleDollarSign}>
+          <SummaryGrid values={[
+            ['ROE', summary.capitalEfficiency.roe, 'roe'],
+            ['ROA', summary.capitalEfficiency.roa, 'roa'],
+            ['EPS', summary.capitalEfficiency.eps, 'eps'],
+            ['BPS', summary.capitalEfficiency.bps, 'bps'],
+          ]} primaryLabels={['ROE']} model={model} />
+        </SummaryBlock>
       </div>
       <DefinitionPanel model={model} keys={['operating_margin', 'net_margin', 'roe', 'roa', 'equity_ratio', 'eps', 'bps', 'simple_fcf']} />
     </section>
@@ -265,9 +263,9 @@ function SummaryBlock({
       <div className="mb-2 flex items-center justify-between gap-2">
         <div className="flex items-center gap-1.5">
           <Icon size={13} className="text-[var(--color-brand-700)]" aria-hidden="true" />
-          <h3 className="text-[10px] font-black text-[var(--color-brand-900)]">{title}</h3>
+          <h3 className="text-[11px] font-bold text-[var(--color-text-secondary)]">{title}</h3>
         </div>
-        <span className="text-[8px] font-semibold text-[var(--color-text-tertiary)]">{note}</span>
+        <span className="text-[9px] font-medium text-[var(--color-text-tertiary)]">{note}</span>
       </div>
       {children}
     </article>
@@ -276,23 +274,25 @@ function SummaryBlock({
 
 function SummaryGrid({
   values,
+  primaryLabels,
   model,
 }: {
   values: Array<[string, FinancialDetailValue, FinancialDetailDefinitionKey | null]>
+  primaryLabels: string[]
   model: FinancialDetailReadModel
 }) {
   return (
     <div className="grid grid-cols-2 gap-x-4 gap-y-2">
-      {values.map(([label, value, definition], index) => (
+      {values.map(([label, value, definition]) => (
         <div key={label} className="min-w-0" title={value.reason ?? value.periodLabel ?? undefined}>
-          <div className="flex items-center gap-1 text-[8px] font-bold text-[var(--color-text-tertiary)]">
+          <div className="flex items-center gap-1 text-[10px] font-semibold text-[var(--color-text-tertiary)]">
             <span className="truncate">{label}</span>
             {definition && <DefinitionInfo definition={model.definitions[definition]} />}
           </div>
-          <div className={`truncate font-mono font-black text-[var(--color-text-primary)] ${index === 0 ? 'text-[15px]' : 'text-[12px]'}`}>
+          <div className={`truncate font-mono text-[var(--color-text-primary)] ${primaryLabels.includes(label) ? 'text-[19px] font-semibold' : 'text-[14px] font-medium'}`}>
             {valueText(value)}
           </div>
-          <div className="truncate text-[7px] font-semibold text-[var(--color-text-tertiary)]">
+          <div className="truncate text-[9px] font-medium text-[var(--color-text-tertiary)]">
             {value.availability === 'not_applicable' ? '業種特性上、対象外' : value.periodLabel ?? value.reason ?? 'データなし'}
           </div>
         </div>
@@ -305,7 +305,7 @@ function FinancialMetrics({ model }: { model: FinancialDetailReadModel }) {
   const [basis, setBasis] = useState<'FY' | 'LTM'>('FY')
   const periods = model.metricPeriods[basis]
   return (
-    <section className="overflow-hidden border border-[var(--color-border-default)] bg-white" aria-labelledby="financial-metrics-title">
+    <section className="overflow-hidden border-y border-[var(--color-border-soft)] bg-white" aria-labelledby="financial-metrics-title">
       <SectionHeader icon={Table2} title="財務・収益性指標" subtitle="FYとLTMを混同せず表示" id="financial-metrics-title">
         <SegmentedControl
           label="期間"
@@ -315,7 +315,7 @@ function FinancialMetrics({ model }: { model: FinancialDetailReadModel }) {
         />
       </SectionHeader>
       <div className="overflow-x-auto">
-        <table className="min-w-[1040px] w-full border-collapse text-right text-[9px]">
+        <table className="min-w-[1040px] w-full border-collapse text-right text-[10px]">
           <thead className="bg-[var(--color-surface-subtle)] text-[var(--color-text-tertiary)]">
             <tr>
               <th className="sticky left-0 z-10 min-w-24 border-b border-r border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-3 py-2 text-left">期間</th>
@@ -336,7 +336,7 @@ function FinancialMetrics({ model }: { model: FinancialDetailReadModel }) {
               <tr key={period.key} className="border-b border-[var(--color-border-soft)] last:border-b-0">
                 <td className="sticky left-0 z-10 border-r border-[var(--color-border-default)] bg-white px-3 py-2 text-left">
                   <div className="font-black text-[var(--color-brand-900)]">{period.label}</div>
-                  <div className="font-mono text-[7px] text-[var(--color-text-tertiary)]">{period.accountingStandard}</div>
+                  <div className="font-mono text-[9px] text-[var(--color-text-tertiary)]">{period.accountingStandard}</div>
                 </td>
                 {METRIC_COLUMNS.map((column) => (
                   <td key={column.key} className="px-3 py-2 font-mono font-bold text-[var(--color-text-primary)]" title={period.metrics[column.key].reason ?? undefined}>
@@ -362,7 +362,7 @@ function ProfitAndLoss({ model }: { model: FinancialDetailReadModel }) {
     value: chartValue(period.metrics[metric]),
   }))
   return (
-    <section className="overflow-hidden border border-[var(--color-border-default)] bg-white" aria-labelledby="financial-pl-title">
+    <section className="overflow-hidden border-y border-[var(--color-border-soft)] bg-white" aria-labelledby="financial-pl-title">
       <SectionHeader icon={BarChart3} title="P/L" subtitle="IFRSの経常利益は別概念で代用しません" id="financial-pl-title">
         <SegmentedControl label="期間" options={MODE_OPTIONS} value={mode} onChange={setMode} />
       </SectionHeader>
@@ -371,7 +371,7 @@ function ProfitAndLoss({ model }: { model: FinancialDetailReadModel }) {
         <>
           <SingleSeriesChart data={chartData} label={PL_METRICS.find((item) => item.key === metric)?.label ?? ''} />
           <div className="overflow-x-auto border-t border-[var(--color-border-soft)]">
-            <table className="min-w-[760px] w-full border-collapse text-right text-[9px]">
+            <table className="min-w-[760px] w-full border-collapse text-right text-[10px]">
               <thead className="bg-[var(--color-surface-subtle)] text-[var(--color-text-tertiary)]">
                 <tr>
                   <th className="sticky left-0 z-10 min-w-24 border-b border-r border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-3 py-2 text-left">期間</th>
@@ -408,7 +408,7 @@ function BalanceSheet({ model }: { model: FinancialDetailReadModel }) {
     value: chartValue(period.metrics[metric]),
   }))
   return (
-    <section className="overflow-hidden border border-[var(--color-border-default)] bg-white" aria-labelledby="financial-bs-title">
+    <section className="overflow-hidden border-y border-[var(--color-border-soft)] bg-white" aria-labelledby="financial-bs-title">
       <SectionHeader icon={Landmark} title="B/S" subtitle="時点値のためLTM化しません" id="financial-bs-title">
         <SegmentedControl
           label="時点"
@@ -422,7 +422,7 @@ function BalanceSheet({ model }: { model: FinancialDetailReadModel }) {
         <>
           <SingleSeriesChart data={chartData} label={BS_METRICS.find((item) => item.key === metric)?.label ?? ''} />
           <div className="overflow-x-auto border-t border-[var(--color-border-soft)]">
-            <table className="min-w-[660px] w-full border-collapse text-right text-[9px]">
+            <table className="min-w-[660px] w-full border-collapse text-right text-[10px]">
               <thead className="bg-[var(--color-surface-subtle)] text-[var(--color-text-tertiary)]">
                 <tr>
                   <th className="sticky left-0 z-10 min-w-24 border-b border-r border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-3 py-2 text-left">時点</th>
@@ -470,7 +470,7 @@ function CashFlow({ model }: { model: FinancialDetailReadModel }) {
     simple: chartValue(period.metrics.simpleFcf),
   }))
   return (
-    <section className="overflow-hidden border border-[var(--color-border-default)] bg-white" aria-labelledby="financial-cf-title">
+    <section className="overflow-hidden border-y border-[var(--color-border-soft)] bg-white" aria-labelledby="financial-cf-title">
       <SectionHeader icon={WalletCards} title="C/F" subtitle="簡易FCFは営業CF + 投資CF" id="financial-cf-title">
         <SegmentedControl label="期間" options={MODE_OPTIONS} value={mode} onChange={setMode} />
       </SectionHeader>
@@ -481,13 +481,13 @@ function CashFlow({ model }: { model: FinancialDetailReadModel }) {
           value={view}
           onChange={setView}
         />
-        <span className="hidden text-[8px] font-semibold text-[var(--color-text-tertiary)] sm:block">標準FCF（営業CF − Capex）とは区別しています</span>
+        <span className="hidden text-[10px] font-medium text-[var(--color-text-tertiary)] sm:block">標準FCF（営業CF − Capex）とは区別しています</span>
       </div>
       {periods.length === 0 ? <EmptyState /> : (
         <>
           <CashFlowChart data={data} view={view} />
           <div className="overflow-x-auto border-t border-[var(--color-border-soft)]">
-            <table className="min-w-[680px] w-full border-collapse text-right text-[9px]">
+            <table className="min-w-[680px] w-full border-collapse text-right text-[10px]">
               <thead className="bg-[var(--color-surface-subtle)] text-[var(--color-text-tertiary)]">
                 <tr>
                   <th className="sticky left-0 z-10 min-w-24 border-b border-r border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-3 py-2 text-left">期間</th>
@@ -533,12 +533,12 @@ function SectionHeader({
   children?: React.ReactNode
 }) {
   return (
-    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--color-border-default)] bg-[var(--color-brand-50)] px-3 py-2.5 sm:px-4">
+    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--color-border-soft)] px-4 py-3 sm:px-5">
       <div className="flex items-center gap-2">
         <Icon size={15} className="text-[var(--color-brand-700)]" aria-hidden="true" />
         <div>
-          <h3 id={id} className="text-[11px] font-black text-[var(--color-brand-900)]">{title}</h3>
-          <p className="text-[8px] font-semibold text-[var(--color-text-tertiary)]">{subtitle}</p>
+          <h3 id={id} className="text-[13px] font-bold text-[var(--color-text-primary)]">{title}</h3>
+          <p className="mt-1 text-[10px] font-medium text-[var(--color-text-tertiary)]">{subtitle}</p>
         </div>
       </div>
       {children}
@@ -559,7 +559,7 @@ function SegmentedControl<T extends string>({
 }) {
   return (
     <div className="flex min-w-0 items-center gap-1.5">
-      <span className="shrink-0 text-[8px] font-black text-[var(--color-text-tertiary)]">{label}</span>
+      <span className="shrink-0 text-[10px] font-bold text-[var(--color-text-tertiary)]">{label}</span>
       <div className="flex min-w-0 overflow-x-auto border border-[var(--color-border-default)] bg-white">
         {options.map((option) => (
           <button
@@ -567,7 +567,7 @@ function SegmentedControl<T extends string>({
             type="button"
             onClick={() => onChange(option.value)}
             aria-pressed={value === option.value}
-            className={`h-7 shrink-0 border-r border-[var(--color-border-default)] px-2 text-[9px] font-black last:border-r-0 sm:px-2.5 ${
+            className={`h-8 shrink-0 border-r border-[var(--color-border-default)] px-2.5 text-[10px] font-bold last:border-r-0 ${
               value === option.value ? 'bg-[var(--color-brand-900)] text-white' : 'text-[var(--color-text-secondary)]'
             }`}
           >
@@ -596,7 +596,7 @@ function MetricButtons<T extends string>({
           type="button"
           onClick={() => onChange(option.key)}
           aria-pressed={value === option.key}
-          className={`h-7 shrink-0 border border-r-0 border-[var(--color-border-default)] px-2.5 text-[9px] font-black last:border-r ${
+          className={`h-8 shrink-0 border border-r-0 border-[var(--color-border-default)] px-2.5 text-[10px] font-bold last:border-r ${
             value === option.key ? 'bg-[var(--color-brand-900)] text-white' : 'bg-white text-[var(--color-text-secondary)]'
           }`}
         >
@@ -609,18 +609,16 @@ function MetricButtons<T extends string>({
 
 function SingleSeriesChart({ data, label }: { data: Array<{ label: string; value?: number }>; label: string }) {
   return (
-    <div className="h-56 px-2 py-3 sm:h-64 sm:px-4">
-      <ResponsiveContainer width="100%" height="100%">
-        <BarChart data={data} margin={{ top: 6, right: 8, bottom: 0, left: 4 }}>
+    <MeasuredChartFrame className="h-56 px-2 py-3 sm:h-64 sm:px-4">
+      {({ width, height }) => <BarChart width={width} height={height} data={data} margin={{ top: 6, right: 8, bottom: 0, left: 4 }}>
           <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--color-border-soft)" />
-          <XAxis dataKey="label" tick={{ fontSize: 8 }} interval="preserveStartEnd" />
-          <YAxis tick={{ fontSize: 8 }} tickFormatter={(value) => compactNumber(Number(value))} width={44} />
+          <XAxis dataKey="label" tick={{ fontSize: 10 }} interval="preserveStartEnd" />
+          <YAxis tick={{ fontSize: 10 }} tickFormatter={(value) => compactNumber(Number(value))} width={48} />
           <Tooltip formatter={(value) => [compactNumber(Number(value)), label]} />
           <ReferenceLine y={0} stroke="var(--color-border-strong)" />
           <Bar dataKey="value" name={label} fill="var(--color-brand-700)" radius={[2, 2, 0, 0]} maxBarSize={40} />
-        </BarChart>
-      </ResponsiveContainer>
-    </div>
+      </BarChart>}
+    </MeasuredChartFrame>
   )
 }
 
@@ -632,12 +630,11 @@ function CashFlowChart({
   view: CashFlowView
 }) {
   return (
-    <div className="h-64 px-2 py-3 sm:h-72 sm:px-4">
-      <ResponsiveContainer width="100%" height="100%">
-        <ComposedChart data={data} margin={{ top: 6, right: 8, bottom: 0, left: 4 }}>
+    <MeasuredChartFrame className="h-64 px-2 py-3 sm:h-72 sm:px-4">
+      {({ width, height }) => <ComposedChart width={width} height={height} data={data} margin={{ top: 6, right: 8, bottom: 0, left: 4 }}>
           <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--color-border-soft)" />
-          <XAxis dataKey="label" tick={{ fontSize: 8 }} interval="preserveStartEnd" />
-          <YAxis tick={{ fontSize: 8 }} tickFormatter={(value) => compactNumber(Number(value))} width={44} />
+          <XAxis dataKey="label" tick={{ fontSize: 10 }} interval="preserveStartEnd" />
+          <YAxis tick={{ fontSize: 10 }} tickFormatter={(value) => compactNumber(Number(value))} width={48} />
           <Tooltip formatter={(value, name) => [compactNumber(Number(value)), String(name)]} />
           <ReferenceLine y={0} stroke="var(--color-border-strong)" />
           {view === 'three' ? (
@@ -650,9 +647,8 @@ function CashFlowChart({
           ) : (
             <Line dataKey="simple" name="簡易FCF" stroke="var(--color-brand-700)" strokeWidth={2} strokeDasharray="5 3" dot={{ r: 3 }} connectNulls={false} />
           )}
-        </ComposedChart>
-      </ResponsiveContainer>
-    </div>
+      </ComposedChart>}
+    </MeasuredChartFrame>
   )
 }
 
@@ -664,7 +660,7 @@ function PeriodCell({
   return (
     <td className="sticky left-0 z-10 border-r border-[var(--color-border-default)] bg-white px-3 py-2 text-left">
       <div className="font-black text-[var(--color-brand-900)]">{period.label}</div>
-      <div className="font-mono text-[7px] text-[var(--color-text-tertiary)]">{period.accountingStandard}</div>
+      <div className="font-mono text-[9px] text-[var(--color-text-tertiary)]">{period.accountingStandard}</div>
     </td>
   )
 }
@@ -706,7 +702,7 @@ function DefinitionPanel({
         {uniqueKeys.map((key) => {
           const definition = model.definitions[key]
           return (
-            <div key={key} className="border-l-2 border-[var(--color-border-strong)] pl-2 text-[8px] leading-4 text-[var(--color-text-secondary)]">
+            <div key={key} className="border-l-2 border-[var(--color-border-strong)] pl-2 text-[10px] leading-5 text-[var(--color-text-secondary)]">
               <div className="font-black text-[var(--color-text-primary)]">{definition.displayName} <span className="font-mono font-semibold text-[var(--color-text-tertiary)]">{definition.version}</span></div>
               <div>{definition.formula}</div>
               <div>期間 {definition.periodBasis} / 出典 {definition.dataSource}</div>
