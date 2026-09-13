@@ -207,6 +207,16 @@ assert.match(chartWorkspace, /Price &amp; moving averages/)
 assert.match(chartWorkspace, /formatTechnicalSnapshotDateLabel/)
 assert.match(chartWorkspace, /scoreDate: momentum\.scoreDate/)
 assert.match(chartWorkspace, /maDate: momentum\.maDate/)
+const technicalSnapshot = stockDetailSource.slice(
+  stockDetailSource.indexOf('function TechnicalChartSnapshot'),
+  stockDetailSource.indexOf('function FundamentalWorkspace'),
+)
+assert.match(technicalSnapshot, /background: value \? STAGE_BG_COLORS\[value\]/)
+assert.match(technicalSnapshot, /borderColor: value \? STAGE_BORDER_COLORS\[value\]/)
+assert.match(technicalSnapshot, /<strong className="font-mono text-\[14px\] leading-none text-\[var\(--color-text-primary\)\]">/)
+assert.match(technicalSnapshot, /<span className="mt-0\.5 text-\[9px\] font-bold leading-tight text-\[var\(--color-text-secondary\)\]">/)
+assert.doesNotMatch(technicalSnapshot, /text-white/)
+assert.doesNotMatch(technicalSnapshot, /color: value \? '#fff'/)
 
 const physicalMomentumSection = stockDetailSource.slice(
   stockDetailSource.indexOf('function PhysicalMomentumSection'),
@@ -284,8 +294,25 @@ assert.match(overviewBasicInfo, /<ShikihoOverviewSection/)
 assert.match(overviewBasicInfo, /<OverviewCompanyDetails/)
 assert.match(overviewBasicInfo, /<EarningsCard ticker=\{ticker\} compact/)
 assert.doesNotMatch(overviewBasicInfo, /<StockClassificationBar/)
+assert.match(overviewBasicInfo, /data-overview-basic-grid/)
+assert.match(overviewBasicInfo, /className="grid items-start gap-x-4 gap-y-3/)
+assert.match(overviewBasicInfo, /marketSnapshot=\{\(/)
 assert.match(stockDetailSource, /<CompanyInformationDetail ticker=\{ticker\} analysisDate=\{analysisDate\} \/>/)
 assert.match(stockDetailSource, /会社四季報の会社概要は現在情報のため/)
+
+assert.match(basicInfoCard, /className=\{embedded \? 'contents' : 'card'\}/)
+assert.match(basicInfoCard, /lg:order-3 lg:col-span-2/)
+assert.match(basicInfoCard, /data-overview-signal-row/)
+const marginInfoCard = stockDetailSource.slice(
+  stockDetailSource.indexOf('function MarginInfoCard'),
+  stockDetailSource.indexOf('const marketSnapshotCardStyle'),
+)
+assert.match(marginInfoCard, /data-margin-info/)
+assert.match(marginInfoCard, /grid-cols-1[^\"]+sm:grid-cols-2/)
+assert.doesNotMatch(marginInfoCard, /min-h-|h-full|flex-grow|gridTemplateColumns/)
+for (const label of ['基準週', '信用倍率', '買残', '売残', '買残増減', '売残増減']) {
+  assert.match(marginInfoCard, new RegExp(`label="${label}"`))
+}
 
 const stockHeader = stockDetailSource.slice(
   stockDetailSource.indexOf('<div className="stock-detail-sticky'),
@@ -296,10 +323,28 @@ const headerClassifications = stockDetailSource.slice(
   stockDetailSource.indexOf('function StockHeaderClassifications'),
   stockDetailSource.indexOf('function ShikihoOverviewSection'),
 )
-for (const label of ['市場', '33業種', '独自60分類', '独自細分類', '17業種']) {
-  assert.match(headerClassifications, new RegExp(`label: '${label}'`))
+const orderedHeaderClassifications = ['市場', '17業種', '33業種', '独自60分類', '独自細分類']
+for (const label of orderedHeaderClassifications) {
+  assert.match(headerClassifications, new RegExp(`item\\('${label}'`))
 }
-assert.ok(headerClassifications.indexOf("label: '33業種'") < headerClassifications.indexOf("label: '17業種'"))
+for (let index = 1; index < orderedHeaderClassifications.length; index += 1) {
+  assert.ok(
+    headerClassifications.indexOf(`item('${orderedHeaderClassifications[index - 1]}'`) <
+      headerClassifications.indexOf(`item('${orderedHeaderClassifications[index]}'`),
+  )
+}
+assert.match(headerClassifications, /data-classification-group=\{group\.key\}/)
+for (const group of ['market', 'official', 'custom']) {
+  assert.match(headerClassifications, new RegExp(`key: '${group}'`))
+}
+for (const groupLabel of ['市場属性', '公式業種分類', '独自分類']) {
+  assert.match(headerClassifications, new RegExp(`label: '${groupLabel}'`))
+}
+assert.match(headerClassifications, /value\?\.trim\(\)/)
+assert.match(headerClassifications, /text-\[9px\] font-medium text-\[var\(--color-text-tertiary\)\]/)
+assert.match(headerClassifications, /text-\[10px\] font-bold/)
+assert.match(headerClassifications, /group\.tone === 'official'/)
+assert.match(headerClassifications, /group\.tone === 'custom'/)
 assert.doesNotMatch(headerClassifications, /\btruncate\b/)
 assert.match(headerClassifications, /whitespace-normal break-words/)
 assert.doesNotMatch(stockDetailSource, /function StockClassificationBar/)

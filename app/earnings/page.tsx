@@ -142,7 +142,7 @@ export default async function EarningsPage({
     : 'データ未取り込み'
 
   return (
-    <div className="mx-auto flex w-full max-w-[1420px] flex-col gap-5">
+    <div className="flex w-full flex-col gap-5">
       <PageTitle
         title="決算"
         subtitle={subtitle}

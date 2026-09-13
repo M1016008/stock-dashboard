@@ -11,6 +11,7 @@ import path from 'node:path'
 
 const webLabel = 'com.stockboard.web'
 const analogLabel = 'com.stockboard.analog-search'
+const historicalScanLabel = 'com.stockboard.trigger-historical-scan'
 const healthLabel = 'com.stockboard.web-health'
 const cwd = process.cwd()
 const home = os.homedir()
@@ -20,9 +21,12 @@ const logDir = path.join(home, 'Library', 'Logs', 'StockBoard')
 const stateDir = path.join(home, 'Library', 'Application Support', 'StockBoard')
 const webPlistPath = path.join(launchAgentsDir, `${webLabel}.plist`)
 const analogPlistPath = path.join(launchAgentsDir, `${analogLabel}.plist`)
+const historicalScanPlistPath = path.join(launchAgentsDir, `${historicalScanLabel}.plist`)
 const healthPlistPath = path.join(launchAgentsDir, `${healthLabel}.plist`)
 const healthScriptPath = path.join(stateDir, 'check-web-health.zsh')
 const nextBin = path.join(cwd, 'node_modules', 'next', 'dist', 'bin', 'next')
+const tsxBin = path.join(cwd, 'node_modules', 'tsx', 'dist', 'cli.mjs')
+const historicalScanScript = path.join(cwd, 'scripts', 'run-trigger-historical-scan-worker.ts')
 const liveDistDir = process.env.STOCKBOARD_WEB_DIST_DIR || '.next-live'
 const buildIdPath = path.join(cwd, liveDistDir, 'BUILD_ID')
 const port = integerEnv('STOCKBOARD_WEB_PORT', 3000, 1, 65535)
@@ -97,6 +101,9 @@ function bootstrap(plistPath: string, attempts = 6): void {
 
 if (!fs.existsSync(nextBin)) {
   throw new Error(`Next.js executable was not found: ${nextBin}`)
+}
+if (!fs.existsSync(tsxBin) || !fs.existsSync(historicalScanScript)) {
+  throw new Error('Historical Trigger Scan worker runtime is incomplete.')
 }
 if (!fs.existsSync(buildIdPath)) {
   throw new Error(`Production build is missing: ${buildIdPath}. Run npm run web:deploy before web:install.`)
@@ -222,6 +229,59 @@ const analogPlist = `<?xml version="1.0" encoding="UTF-8"?>
 </plist>
 `
 
+const historicalScanPlist = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>${historicalScanLabel}</string>
+  <key>WorkingDirectory</key>
+  <string>${xmlEscape(cwd)}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${xmlEscape(process.execPath)}</string>
+    <string>${xmlEscape(tsxBin)}</string>
+    <string>--env-file=.env.local</string>
+    <string>${xmlEscape(historicalScanScript)}</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>NODE_ENV</key><string>production</string>
+    <key>NODE_OPTIONS</key><string>--max-old-space-size=2048</string>
+    <key>PATH</key><string>${xmlEscape(pathEnv)}</string>
+    <key>SKIP_SCHEMA_ENSURE</key><string>1</string>
+    <key>STOCKBOARD_DB_CACHE_MB</key><string>64</string>
+    <key>STOCKBOARD_DB_MMAP_MB</key><string>256</string>
+    <key>STOCKBOARD_DB_READ_CONCURRENCY</key><string>1</string>
+    <key>SQLITE_BUSY_RETRIES</key><string>3</string>
+    <key>SQLITE_BUSY_TIMEOUT_MS</key><string>60000</string>
+    <key>STOCKBOARD_HISTORICAL_SCAN_DIR</key><string>${xmlEscape(path.join(stateDir, 'historical-trigger-scans'))}</string>
+    <key>STOCKBOARD_OUTCOME_ANALYSIS_DIR</key><string>${xmlEscape(path.join(stateDir, 'trigger-outcomes'))}</string>
+    <key>USE_LOCAL_DB</key><string>1</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>Nice</key>
+  <integer>10</integer>
+  <key>SoftResourceLimits</key>
+  <dict>
+    <key>NumberOfFiles</key><integer>65536</integer>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>${xmlEscape(path.join(logDir, 'trigger-historical-scan.log'))}</string>
+  <key>StandardErrorPath</key>
+  <string>${xmlEscape(path.join(logDir, 'trigger-historical-scan.err'))}</string>
+</dict>
+</plist>
+`
+
 const healthScript = `#!/bin/zsh
 set -u
 
@@ -293,16 +353,20 @@ const healthPlist = `<?xml version="1.0" encoding="UTF-8"?>
 
 fs.writeFileSync(webPlistPath, webPlist)
 fs.writeFileSync(analogPlistPath, analogPlist)
+fs.writeFileSync(historicalScanPlistPath, historicalScanPlist)
 fs.writeFileSync(healthPlistPath, healthPlist)
 fs.writeFileSync(healthScriptPath, healthScript, { mode: 0o755 })
 
 bootout(healthLabel)
 bootout(webLabel)
 bootout(analogLabel)
+bootout(historicalScanLabel)
 sleep(750)
 
 bootstrap(analogPlistPath)
 execFileSync('launchctl', ['enable', `gui/${uid}/${analogLabel}`], { stdio: 'inherit' })
+bootstrap(historicalScanPlistPath)
+execFileSync('launchctl', ['enable', `gui/${uid}/${historicalScanLabel}`], { stdio: 'inherit' })
 bootstrap(webPlistPath)
 execFileSync('launchctl', ['enable', `gui/${uid}/${webLabel}`], { stdio: 'inherit' })
 bootstrap(healthPlistPath)
@@ -314,6 +378,7 @@ console.log(
   `analog worker: ${analogLabel} http://127.0.0.1:${analogPort} `
   + `(heap ${analogHeapMb} MB, standard I/O + low CPU priority)`,
 )
+console.log(`historical scan worker: ${historicalScanLabel} (heap 2048 MB, concurrency 1)`)
 console.log(
   `health monitor: ${healthLabel} checks web + analog every ${healthIntervalSeconds}s `
   + `(timeout ${healthTimeoutSeconds}s, restart after ${healthFailureThreshold} failures)`,

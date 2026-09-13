@@ -5,6 +5,7 @@ import {
   CalendarDays,
   CalendarRange,
   ChartCandlestick,
+  Crosshair,
   FlaskConical,
   Hexagon,
   LayoutDashboard,
@@ -227,6 +228,15 @@ export const PAGE_CATALOG = {
     commandBadge: '監視',
     searchTerms: '月足 移動平均',
   },
+  triggerDiscovery: {
+    href: '/trigger-discovery',
+    label: '条件トリガー',
+    description: '上向きの月足MAへ接近する銘柄を探索',
+    icon: Crosshair,
+    commandVerb: '監視',
+    commandBadge: '監視',
+    searchTerms: 'Trigger Discovery 月足 MA 接近 条件',
+  },
   usDashboard: {
     href: '/us',
     label: '米国株ダッシュボード',
@@ -390,7 +400,7 @@ export const NAVIGATION_BY_AREA = {
       shortLabel: '監視',
       icon: Star,
       sections: [
-        { id: 'continuous-monitoring', label: '継続監視', pageIds: ['watchlist', 'ma25mMonitor'], column: 1 },
+        { id: 'continuous-monitoring', label: '継続監視', pageIds: ['watchlist', 'ma25mMonitor', 'triggerDiscovery'], column: 1 },
       ],
     },
   ],

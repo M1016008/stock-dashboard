@@ -424,7 +424,7 @@ export function UsStockDetailClient({
 
   if (status === 'loading' || status === 'idle') {
     return (
-      <div className="mx-auto flex min-h-[420px] w-full max-w-[1480px] items-center justify-center">
+      <div className="flex min-h-[420px] w-full items-center justify-center">
         <div className="inline-flex items-center gap-2 text-[13px] font-bold text-[var(--color-text-secondary)]">
           <Loader2 size={16} className="animate-spin" />
           US銘柄データを読み込み中...
@@ -435,7 +435,7 @@ export function UsStockDetailClient({
 
   if (status === 'error' || !quote) {
     return (
-      <div className="mx-auto flex w-full max-w-[1480px] flex-col gap-4">
+      <div className="flex w-full flex-col gap-4">
         <Link href="/us/screener" className="inline-flex items-center gap-2 text-[12px] font-bold text-[var(--color-brand-700)] hover:text-[var(--color-market-red)]">
           <ArrowLeft size={14} /> USスクリーナーへ戻る
         </Link>
@@ -450,7 +450,7 @@ export function UsStockDetailClient({
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-[1480px] flex-col gap-5">
+    <div className="flex w-full flex-col gap-5">
       <div className="stock-detail-sticky border border-[var(--color-border-default)] bg-white shadow-[0_2px_8px_rgba(16,32,52,0.12)]">
         <div className="flex flex-wrap items-start justify-between gap-3 p-3">
           <div className="min-w-0">

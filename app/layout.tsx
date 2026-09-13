@@ -33,10 +33,10 @@ export default function RootLayout({
           </Suspense>
           <DataStatusBar />
         </div>
-        <main className="mx-auto w-full max-w-[1480px] px-5 py-5 sm:px-8 lg:px-10 lg:py-7 xl:px-12">
+        <main className="page-wide py-5 lg:py-7">
           {children}
         </main>
-        <footer className="mx-auto w-full max-w-[1480px] px-5 pb-8 pt-3 text-[11px] text-[var(--color-text-tertiary)] sm:px-8 lg:px-10 xl:px-12">
+        <footer className="page-wide pb-8 pt-3 text-[11px] text-[var(--color-text-tertiary)]">
           表示内容は過去データに基づく統計的観測です。投資判断は自己責任で行ってください。
         </footer>
         <AssistantDrawer />

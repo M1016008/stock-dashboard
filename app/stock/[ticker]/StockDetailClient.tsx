@@ -3,7 +3,7 @@
 
 import Link from 'next/link'
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { CSSProperties } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
 import {
   BrainCircuit,
   BookOpenText,
@@ -796,16 +796,15 @@ function TechnicalChartSnapshot({
                 <div key={key} className="min-w-0 text-center">
                   <div className="text-[9px] font-bold text-[var(--color-text-tertiary)]">{label}</div>
                   <div
-                    className="mt-1 flex min-h-10 flex-col items-center justify-center border text-white"
+                    className="mt-1 flex min-h-10 flex-col items-center justify-center border"
                     style={{
                       background: value ? STAGE_BG_COLORS[value] : 'var(--color-surface-subtle)',
                       borderColor: value ? STAGE_BORDER_COLORS[value] : 'var(--color-border-default)',
-                      color: value ? '#fff' : 'var(--color-text-tertiary)',
                     }}
                     title={value ? `S${value}: ${STAGE_LABELS[value]}` : stageMessage}
                   >
-                    <strong className="font-mono text-[14px] leading-none">{value ? `S${value}` : '—'}</strong>
-                    {value && <span className="mt-0.5 text-[9px] font-bold leading-tight">{STAGE_LABELS[value]}</span>}
+                    <strong className="font-mono text-[14px] leading-none text-[var(--color-text-primary)]">{value ? `S${value}` : '—'}</strong>
+                    {value && <span className="mt-0.5 text-[9px] font-bold leading-tight text-[var(--color-text-secondary)]">{STAGE_LABELS[value]}</span>}
                   </div>
                 </div>
               )
@@ -1040,26 +1039,29 @@ function OverviewBasicInfoPanel({
           </div>
         </header>
 
-        <div className="grid gap-4 px-3 py-3 sm:px-4 sm:py-4 lg:grid-cols-[minmax(0,1.08fr)_minmax(0,.92fr)] lg:gap-8">
-          <div className="min-w-0">
-            <BasicInfoCard
-              ticker={ticker}
-              quote={quote}
-              analysisDate={analysisDate}
-              physical={physicalMomentum}
-              physicalLoading={physicalMomentumLoading}
-              embedded
-            />
-          </div>
-          <div className="min-w-0">
-            <MarketSnapshotCard
-              ticker={ticker}
-              marginInfo={marginInfo}
-              fallbackType={fallbackType}
-              analysisDate={analysisDate}
-              embedded
-            />
-          </div>
+        <div
+          className="grid items-start gap-x-4 gap-y-3 px-3 py-3 sm:px-4 sm:py-4 lg:grid-cols-[minmax(0,1.08fr)_minmax(0,.92fr)] lg:gap-x-8"
+          data-overview-basic-grid
+        >
+          <BasicInfoCard
+            ticker={ticker}
+            quote={quote}
+            analysisDate={analysisDate}
+            physical={physicalMomentum}
+            physicalLoading={physicalMomentumLoading}
+            embedded
+            marketSnapshot={(
+              <div className="min-w-0" data-overview-market-column>
+                <MarketSnapshotCard
+                  ticker={ticker}
+                  marginInfo={marginInfo}
+                  fallbackType={fallbackType}
+                  analysisDate={analysisDate}
+                  embedded
+                />
+              </div>
+            )}
+          />
         </div>
 
         <div className="mx-3 border-t border-[var(--color-border-soft)] py-3 sm:mx-4 sm:py-3.5">
@@ -1129,28 +1131,61 @@ function StockHeaderClassifications({
   subIndustry?: string | null
   analysisDate: string | null
 }) {
-  const classifications = [
-    { label: '市場', value: marketSegment, priority: 'primary' },
-    { label: '33業種', value: sector33, priority: 'primary' },
-    { label: '独自60分類', value: majorCategory, priority: 'primary' },
-    { label: '独自細分類', value: subIndustry, priority: 'primary' },
-    { label: '17業種', value: sector17, priority: 'secondary' },
-  ].filter((row): row is { label: string; value: string; priority: string } => Boolean(row.value))
-  if (classifications.length === 0) return null
+  const item = (label: string, value?: string | null) => (
+    value?.trim() ? { label, value } : null
+  )
+  const classificationGroups = [
+    {
+      key: 'market',
+      label: '市場属性',
+      tone: 'market',
+      items: [item('市場', marketSegment)],
+    },
+    {
+      key: 'official',
+      label: '公式業種分類',
+      tone: 'official',
+      items: [item('17業種', sector17), item('33業種', sector33)],
+    },
+    {
+      key: 'custom',
+      label: '独自分類',
+      tone: 'custom',
+      items: [item('独自60分類', majorCategory), item('独自細分類', subIndustry)],
+    },
+  ].map((group) => ({
+    ...group,
+    items: group.items.filter((entry): entry is { label: string; value: string } => entry !== null),
+  })).filter((group) => group.items.length > 0)
+  if (classificationGroups.length === 0) return null
   return (
-    <div className="flex w-full min-w-0 max-w-full flex-none flex-wrap items-center gap-1.5 sm:w-auto sm:flex-initial" aria-label={`銘柄分類${analysisDate ? '（現在属性）' : ''}`}>
-      {classifications.map(({ label, value, priority }) => (
+    <div className="flex w-full min-w-0 max-w-full flex-none flex-wrap items-center gap-x-3 gap-y-1.5 sm:w-auto sm:flex-initial" aria-label={`銘柄分類${analysisDate ? '（現在属性）' : ''}`}>
+      {classificationGroups.map((group) => (
         <span
-          key={label}
-          title={`${label}: ${value}${analysisDate ? '（現在属性）' : ''}`}
-          className={`inline-flex max-w-full shrink-0 items-start gap-1 rounded-[4px] border px-2 py-1 leading-tight ${
-            priority === 'primary'
-              ? 'border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] text-[var(--color-text-primary)]'
-              : 'border-[var(--color-border-soft)] bg-white text-[var(--color-text-tertiary)]'
-          }`}
+          key={group.key}
+          className="inline-flex max-w-full flex-wrap items-center gap-1"
+          role="group"
+          aria-label={group.label}
+          data-classification-group={group.key}
         >
-          <span className="shrink-0 text-[9px] font-medium opacity-75">{label}</span>
-          <strong className={`min-w-0 whitespace-normal break-words ${priority === 'primary' ? 'text-[10px] font-bold' : 'text-[9px] font-semibold'}`}>{value}</strong>
+          {group.items.map(({ label, value }) => (
+            <span
+              key={label}
+              title={`${label}: ${value}${analysisDate ? '（現在属性）' : ''}`}
+              className={`inline-flex max-w-full shrink-0 items-baseline gap-1.5 rounded-[4px] border px-2 py-1 leading-none ${
+                group.tone === 'market'
+                  ? 'border-[var(--color-border-default)] bg-white'
+                  : group.tone === 'official'
+                    ? 'border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)]'
+                    : 'border-[var(--color-brand-100)] bg-[var(--color-brand-50)]'
+              }`}
+            >
+              <span className="shrink-0 text-[9px] font-medium text-[var(--color-text-tertiary)]">{label}</span>
+              <strong className={`min-w-0 whitespace-normal break-words text-[10px] font-bold ${
+                group.tone === 'custom' ? 'text-[var(--color-brand-900)]' : 'text-[var(--color-text-primary)]'
+              }`}>{value}</strong>
+            </span>
+          ))}
         </span>
       ))}
       {analysisDate && <span className="text-[9px] font-medium text-[var(--color-text-tertiary)]">現在属性</span>}
@@ -4112,9 +4147,16 @@ function MarginInfoCard({
   const latest = info?.latest
   const latestHistory = info?.history?.[0]
   return (
-    <div className={embedded ? '' : 'card'} style={embedded ? marginEmbeddedStyle : { padding: '12px' }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', marginBottom: '8px' }}>
-        <div style={{ fontSize: '11px', fontWeight: 600 }}>貸借/信用</div>
+    <div
+      className={embedded ? '' : 'card'}
+      style={embedded ? marginEmbeddedStyle : { padding: '12px' }}
+      data-margin-info
+    >
+      <div className="flex items-start justify-between gap-2">
+        <div>
+          <div className="text-[11px] font-semibold text-[var(--color-text-primary)]">貸借/信用</div>
+          <div className="mt-0.5 text-[9px] font-medium text-[var(--color-text-tertiary)]">週次信用残</div>
+        </div>
         <MarginBadges
           marginType={latest?.marginType ?? fallbackType}
           creditRatio={latest?.creditRatio ?? null}
@@ -4122,8 +4164,7 @@ function MarginInfoCard({
           compact
         />
       </div>
-      <div className="mb-1 text-[9px] font-black text-[var(--color-text-tertiary)]">週次信用残</div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '4px 8px' }}>
+      <div className="mt-1.5 grid grid-cols-1 gap-x-6 gap-y-0 sm:grid-cols-2">
         <InfoLine label="基準週" value={latest?.asOfDate ?? latestHistory?.date ?? '---'} />
         <InfoLine label="信用倍率" value={latest?.creditRatio == null ? '---' : `${latest.creditRatio.toFixed(2)}倍`} />
         <InfoLine label="買残" value={fmtShares(latest?.longMargin ?? latestHistory?.longMargin)} />
@@ -4192,6 +4233,7 @@ function BasicInfoCard({
   physical,
   physicalLoading,
   embedded = false,
+  marketSnapshot,
 }: {
   ticker: string
   quote: StockQuote | null
@@ -4199,6 +4241,7 @@ function BasicInfoCard({
   physical: PhysicalMomentumResponse | null
   physicalLoading: boolean
   embedded?: boolean
+  marketSnapshot?: ReactNode
 }) {
   const [latestStage, setLatestStage] = useState<SummaryStageEntry | null>(null)
   const [ml, setMl] = useState<BasicMlResponse | null>(null)
@@ -4300,74 +4343,80 @@ function BasicInfoCard({
   const physics = buildBasicPhysicsSummary(ml, summaryLoading)
 
   return (
-    <div className={embedded ? '' : 'card'} style={{ padding: embedded ? 0 : '12px' }}>
-      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '8px', marginBottom: '10px' }}>
-        <div style={{ fontSize: '12px', fontWeight: 700 }}>{embedded ? '市場・テクニカル' : '基本情報'}</div>
-        {latestStage?.date && (
-          <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', fontWeight: 500 }}>
-            基準日 {latestStage.date}
-          </span>
-        )}
-      </div>
-      <div className="grid grid-cols-1 gap-x-5 gap-y-1 sm:grid-cols-2">
-        {items.map(({ label, value, detail, color }) => (
-          <div key={label} className="min-w-0" style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'flex-start',
-            padding: '3px 0',
-            gap: '8px',
-          }}>
-            <span style={{ fontSize: '10px', fontWeight: 500, color: 'var(--text-muted)' }}>{label}</span>
-            <span style={{ minWidth: 0, textAlign: 'right' }}>
-              <span style={{
-                display: 'block',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-                fontFamily: 'var(--font-mono)',
-                fontSize: '11px',
-                color: color ?? 'var(--text-primary)',
-                fontWeight: color ? 800 : 600,
-              }}>
-                {value}
-              </span>
-              {detail && (
+    <div className={embedded ? 'contents' : 'card'} style={embedded ? undefined : { padding: '12px' }}>
+      <div className={embedded ? 'order-1 min-w-0' : ''} data-overview-technical-column={embedded ? '' : undefined}>
+        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '8px', marginBottom: '10px' }}>
+          <div style={{ fontSize: '12px', fontWeight: 700 }}>{embedded ? '市場・テクニカル' : '基本情報'}</div>
+          {latestStage?.date && (
+            <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', fontWeight: 500 }}>
+              基準日 {latestStage.date}
+            </span>
+          )}
+        </div>
+        <div className="grid grid-cols-1 gap-x-5 gap-y-1 sm:grid-cols-2">
+          {items.map(({ label, value, detail, color }) => (
+            <div key={label} className="min-w-0" style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'flex-start',
+              padding: '3px 0',
+              gap: '8px',
+            }}>
+              <span style={{ fontSize: '10px', fontWeight: 500, color: 'var(--text-muted)' }}>{label}</span>
+              <span style={{ minWidth: 0, textAlign: 'right' }}>
                 <span style={{
                   display: 'block',
-                  marginTop: '1px',
-                  fontFamily: 'var(--font-mono)',
-                  fontSize: '10px',
-                  color: 'var(--text-muted)',
-                  whiteSpace: 'nowrap',
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: '11px',
+                  color: color ?? 'var(--text-primary)',
+                  fontWeight: color ? 800 : 600,
                 }}>
-                  {detail}
+                  {value}
                 </span>
-              )}
-            </span>
-          </div>
-        ))}
-      </div>
-
-      <div style={basicStageBlockStyle}>
-        <div style={basicSubHeaderStyle}>
-          <strong>6ステージ</strong>
-          <span>{combinedLoading ? '読込中' : latestStage ? buildStageCode(latestStage) : '未取得'}</span>
+                {detail && (
+                  <span style={{
+                    display: 'block',
+                    marginTop: '1px',
+                    fontFamily: 'var(--font-mono)',
+                    fontSize: '10px',
+                    color: 'var(--text-muted)',
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                  }}>
+                    {detail}
+                  </span>
+                )}
+              </span>
+            </div>
+          ))}
         </div>
-        {latestStage ? (
-          <div style={basicStageGridStyle}>
-            {SUMMARY_STAGE_KEYS.map(({ key, label }) => (
-              <SixStageCell key={key} label={label} stage={latestStage[key]} />
-            ))}
+
+        <div style={basicStageBlockStyle}>
+          <div style={basicSubHeaderStyle}>
+            <strong>6ステージ</strong>
+            <span>{combinedLoading ? '読込中' : latestStage ? buildStageCode(latestStage) : '未取得'}</span>
           </div>
-        ) : (
-          <p style={basicMutedTextStyle}>{combinedLoading ? '最新ステージを確認しています。' : '最新ステージデータがありません。'}</p>
-        )}
+          {latestStage ? (
+            <div style={basicStageGridStyle}>
+              {SUMMARY_STAGE_KEYS.map(({ key, label }) => (
+                <SixStageCell key={key} label={label} stage={latestStage[key]} />
+              ))}
+            </div>
+          ) : (
+            <p style={basicMutedTextStyle}>{combinedLoading ? '最新ステージを確認しています。' : '最新ステージデータがありません。'}</p>
+          )}
+        </div>
       </div>
 
-      <div style={basicSignalBlockStyle}>
+      <div
+        className={embedded ? 'order-2 min-w-0 lg:order-3 lg:col-span-2' : ''}
+        style={embedded ? basicSignalEmbeddedStyle : basicSignalBlockStyle}
+        data-overview-signal-row={embedded ? '' : undefined}
+      >
         <button
           type="button"
           className="flex min-h-11 w-full items-center gap-2 py-2 text-left text-[10px] font-black text-[var(--color-text-primary)] sm:hidden"
@@ -4438,6 +4487,11 @@ function BasicInfoCard({
           </div>
         </div>
       </div>
+      {marketSnapshot && (
+        <div className="order-3 min-w-0 lg:order-2">
+          {marketSnapshot}
+        </div>
+      )}
     </div>
   )
 }
@@ -4638,6 +4692,11 @@ const basicMutedTextStyle: CSSProperties = {
 const basicSignalBlockStyle: CSSProperties = {
   marginTop: '12px',
   paddingTop: '12px',
+  borderTop: '1px solid var(--border-subtle)',
+}
+
+const basicSignalEmbeddedStyle: CSSProperties = {
+  paddingTop: '10px',
   borderTop: '1px solid var(--border-subtle)',
 }
 

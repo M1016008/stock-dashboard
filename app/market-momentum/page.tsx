@@ -614,7 +614,7 @@ export default async function MarketMomentumPage({
   const weak = ratio(summary?.weakPms ?? 0, count)
 
   return (
-    <div className="mx-auto flex w-full max-w-[1420px] flex-col gap-4">
+    <div className="flex w-full flex-col gap-4">
       <PageTitle
         title={`${group.label} モメンタム詳細`}
         subtitle={`${summary?.date ?? '---'} 大引け基準 / ${group.description}`}

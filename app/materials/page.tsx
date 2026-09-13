@@ -19,7 +19,7 @@ function MaterialNewsFallback() {
 
 export default function MaterialsPage() {
   return (
-    <div className="mx-auto flex w-full max-w-[1500px] flex-col gap-5">
+    <div className="flex w-full flex-col gap-5">
       <PageTitle
         title="材料ニュース"
         subtitle="材料を見出しで終わらせず、関連銘柄の6ステージ・短期チェック・流動性まで同じ画面で確認します。"

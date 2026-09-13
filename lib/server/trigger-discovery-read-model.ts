@@ -1,7 +1,14 @@
 import { execAll } from '@/lib/db/client'
 import { historicalUniverseMembershipSql } from '@/lib/historical-universe'
 import { MONTHLY_MA_MONITOR_PERIODS } from '@/lib/monthly-ma-monitor'
-import { buildContinuousMonthlyMaSeries } from '@/lib/snapshots/continuous-ma'
+import { buildContinuousMonthlyMaSeries, splitContinuousHistory } from '@/lib/snapshots/continuous-ma'
+import { calendarWeekStart, resampleOhlcv } from '@/lib/timeframes'
+import {
+  DEFAULT_TRIGGER_DISCOVERY_TIMEFRAME,
+  attachBiweeklyMovingAverages,
+  buildBiweeklyBarsFromWeekly,
+  type TriggerDiscoveryTimeframe,
+} from '@/lib/trigger-discovery-timeframe'
 import {
   DEFAULT_MA_ZONE_TRIGGER_CONFIG,
   evaluateMaZoneTrigger,
@@ -10,31 +17,38 @@ import {
   type MaZoneTriggerConfig,
   type MaZoneTriggerObservation,
   type TriggerApproachDirection,
+  type TriggerPricePosition,
   type TriggerStatus,
 } from '@/lib/trigger-discovery-engine'
 import type { OHLCV } from '@/types/stock'
+import { calculateTriggerScore, type TriggerScoreBreakdown } from '@/lib/trigger-score'
+import {
+  TRIGGER_DISCOVERY_STAGE_AXES,
+  type TriggerDiscoverySortKey,
+  type TriggerDiscoveryStageAxis,
+  type TriggerDiscoveryStageFilters,
+  type TriggerDiscoveryStageFilterValue,
+} from '@/lib/trigger-discovery-contract'
 
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/
 const DEFAULT_LIQUIDITY_LOOKBACK_SESSIONS = 20
 const DEFAULT_MAX_PRICE_STALENESS_SESSIONS = 3
 const DEFAULT_PAGE_LIMIT = 100
-const MAX_PAGE_LIMIT = 500
+const MAX_PAGE_LIMIT = 10_000
 const MAX_LIQUIDITY_LOOKBACK_SESSIONS = 252
 const MAX_PRICE_STALENESS_SESSIONS = 60
 const GENERIC_WARMUP_CALENDAR_DAYS = 160
 const GENERIC_SESSION_CALENDAR_MULTIPLIER = 4
+const BIWEEKLY_HISTORY_BUFFER_WEEKS = 10
 
 export type TriggerDiscoveryFreshness = 'CURRENT' | 'STALE_ACCEPTED'
 export type TriggerDiscoveryMaPath = 'fast' | 'generic'
-export type TriggerDiscoverySortKey =
-  | 'ticker'
-  | 'price'
-  | 'zoneDistance'
-  | 'ma1Distance'
-  | 'ma2Distance'
-  | 'averageVolume'
-  | 'averageTradingValue'
-  | 'approachVelocity'
+export type {
+  TriggerDiscoverySortKey,
+  TriggerDiscoveryStageAxis,
+  TriggerDiscoveryStageFilters,
+  TriggerDiscoveryStageFilterValue,
+} from '@/lib/trigger-discovery-contract'
 
 export type TriggerDiscoveryRejectionReason =
   | 'PIT_UNIVERSE'
@@ -61,10 +75,45 @@ export interface TriggerDiscoveryInput {
   averageTradingValueMax?: number | null
   liquidityLookbackSessions?: number
   maxPriceStalenessSessions?: number
+  stageFilters?: TriggerDiscoveryStageFilters
   sortBy?: TriggerDiscoverySortKey
   sortDirection?: 'asc' | 'desc'
   limit?: number
   offset?: number
+  /** Internal lifecycle audit only. These tickers do not alter the candidate universe. */
+  observeTickers?: string[]
+}
+
+export type TriggerDiscoveryObservationDisposition =
+  | 'FINAL_CANDIDATE'
+  | 'STAGE_FILTER_EXIT'
+  | 'UNIVERSE_FILTER_EXIT'
+  | 'CORE_CONDITION_EXIT'
+  | 'TRIGGER_EXIT'
+  | 'DATA_UNAVAILABLE'
+
+export interface TriggerDiscoveryObservation {
+  ticker: string
+  disposition: TriggerDiscoveryObservationDisposition
+  exclusionReason: TriggerDiscoveryRejectionReason | 'STAGE_FILTER' | null
+  triggerStatus: TriggerStatus | null
+  pricePosition: TriggerPricePosition | null
+  bothRising: boolean | null
+  fromAbove: boolean | null
+  approachDirection: TriggerApproachDirection | null
+  zoneUpper: number | null
+  zoneLower: number | null
+  zoneDistancePct: number | null
+  price: number | null
+  triggerScore: number | null
+  priceDate: string | null
+  maDate: string | null
+  stageDate: string | null
+  universeFilterPassed: boolean
+  priceFilterPassed: boolean | null
+  liquidityFilterPassed: boolean | null
+  stageFilterPassed: boolean | null
+  dataAvailable: boolean
 }
 
 export interface TriggerDiscoveryCandidateSnapshot {
@@ -86,6 +135,17 @@ export interface TriggerDiscoveryFilteredCandidate extends TriggerDiscoveryCandi
   liquidityComplete: boolean
 }
 
+export interface TriggerDiscoveryStageSnapshot {
+  ticker: string
+  date: string
+  dayAStage: number | null
+  dayBStage: number | null
+  weekAStage: number | null
+  weekBStage: number | null
+  monthAStage: number | null
+  monthBStage: number | null
+}
+
 export interface TriggerDiscoveryRow {
   ticker: string
   companyName: string
@@ -94,6 +154,7 @@ export interface TriggerDiscoveryRow {
   resolvedAsOf: string
   priceDate: string
   maDate: string
+  stageDate: string | null
   price: number
   priceStalenessSessions: number
   priceFreshness: TriggerDiscoveryFreshness
@@ -108,6 +169,8 @@ export interface TriggerDiscoveryRow {
   ma2Value: number
   ma1Trend: MaTrend
   ma2Trend: MaTrend
+  ma1SlopePct: number
+  ma2SlopePct: number
   bothRising: boolean
   zoneUpper: number
   zoneLower: number
@@ -120,18 +183,49 @@ export interface TriggerDiscoveryRow {
   triggerStatus: TriggerStatus
   matched: true
   maPath: TriggerDiscoveryMaPath
+  triggerScore: number
+  scoreBreakdown: TriggerScoreBreakdown
+  dayAStage: number | null
+  dayBStage: number | null
+  weekAStage: number | null
+  weekBStage: number | null
+  monthAStage: number | null
+  monthBStage: number | null
+  stageAvailable: boolean
+  stageComplete: boolean
 }
+
+type TriggerDiscoveryRowWithoutStage = Omit<TriggerDiscoveryRow,
+  | 'stageDate'
+  | 'dayAStage'
+  | 'dayBStage'
+  | 'weekAStage'
+  | 'weekBStage'
+  | 'monthAStage'
+  | 'monthBStage'
+  | 'stageAvailable'
+  | 'stageComplete'
+  | 'triggerScore'
+  | 'scoreBreakdown'>
+
+type TriggerDiscoveryRowWithStage = Omit<TriggerDiscoveryRow, 'triggerScore' | 'scoreBreakdown'>
 
 export interface TriggerDiscoveryDiagnostics {
   counts: {
     universe: number
     afterMarket: number
     afterStalePrice: number
+    currentPrice: number
+    staleAccepted: number
     afterPrice: number
     afterVolume: number
     afterTradingValue: number
     evaluated: number
     matched: number
+    afterStageFilter: number
+    stageRows: number
+    stageComplete: number
+    stageIncomplete: number
   }
   rejected: Record<TriggerDiscoveryRejectionReason, number>
   performance: {
@@ -139,10 +233,23 @@ export interface TriggerDiscoveryDiagnostics {
     dbQueryMs: number
     maPreparationMs: number
     engineEvaluationMs: number
+    stageJoinMs: number
+    scoreCalculationMs: number
     totalMs: number
     fastPathEvaluated: number
     genericPathEvaluated: number
+    biweekly?: TriggerDiscoveryBiweeklyPerformance
   }
+}
+
+export interface TriggerDiscoveryBiweeklyPerformance {
+  weeklyRowsLoaded: number
+  currentWeekDailyRowsLoaded: number
+  weeklyHistoryQueryMs: number
+  currentWeekQueryMs: number
+  weeklyAssemblyMs: number
+  biweeklyAggregationMs: number
+  maCalculationMs: number
 }
 
 export interface TriggerDiscoveryResult {
@@ -152,12 +259,15 @@ export interface TriggerDiscoveryResult {
   triggerConfig: MaZoneTriggerConfig
   liquidityLookbackSessions: number
   maxPriceStalenessSessions: number
+  totalTriggerMatched: number
   totalMatched: number
   rows: TriggerDiscoveryRow[]
   limit: number
   offset: number
   hasMore: boolean
   diagnostics: TriggerDiscoveryDiagnostics
+  /** Present only when the internal observeTickers input is supplied. */
+  observations?: TriggerDiscoveryObservation[]
 }
 
 interface TimedLoad<T> {
@@ -165,6 +275,7 @@ interface TimedLoad<T> {
   queryCount: number
   queryMs: number
   preparationMs?: number
+  biweekly?: TriggerDiscoveryBiweeklyPerformance
 }
 
 export interface TriggerDiscoveryDataSource {
@@ -179,6 +290,7 @@ export interface TriggerDiscoveryDataSource {
     ma1Period: number
     ma2Period: number
     oldestObservationDate: string
+    requiredObservations: number
   }): Promise<TimedLoad<Map<string, MaZoneTriggerObservation[]>>>
   loadGenericMaObservations(input: {
     candidates: TriggerDiscoveryFilteredCandidate[]
@@ -186,11 +298,23 @@ export interface TriggerDiscoveryDataSource {
     ma2Period: number
     requiredObservations: number
   }): Promise<TimedLoad<Map<string, MaZoneTriggerObservation[]>>>
+  loadBiweeklyMaObservations?(input: {
+    candidates: TriggerDiscoveryFilteredCandidate[]
+    ma1Period: number
+    ma2Period: number
+    requiredObservations: number
+  }): Promise<TimedLoad<Map<string, MaZoneTriggerObservation[]>>>
+  loadStageSnapshots(input: {
+    tickers: string[]
+    resolvedAsOf: string
+  }): Promise<TimedLoad<Map<string, TriggerDiscoveryStageSnapshot>>>
 }
 
 export interface TriggerDiscoveryExecutionOptions {
   dataSource?: TriggerDiscoveryDataSource
   maPath?: 'auto' | TriggerDiscoveryMaPath
+  /** The public request parser validates this before selecting the calculation path. */
+  timeframe?: TriggerDiscoveryTimeframe
 }
 
 export class TriggerDiscoveryInputError extends Error {
@@ -213,15 +337,35 @@ type CandidateSqlRow = {
 
 type StoredMaSqlRow = {
   ticker: string
-  period: number
   date: string
   close: number
-  ma_value: number
+  ma1_value: number
+  ma2_value: number
 }
 
 type GenericMaSqlRow = OHLCV & {
   ticker: string
   is_recent: number
+}
+
+type WeeklyOhlcvSqlRow = OHLCV & {
+  ticker: string
+  week_start_date: string
+}
+
+type DailyOhlcvSqlRow = OHLCV & {
+  ticker: string
+}
+
+type StageSnapshotSqlRow = {
+  ticker: string
+  date: string
+  daily_a_stage: number | null
+  daily_b_stage: number | null
+  weekly_a_stage: number | null
+  weekly_b_stage: number | null
+  monthly_a_stage: number | null
+  monthly_b_stage: number | null
 }
 
 function elapsedMs(startedAt: number): number {
@@ -235,7 +379,9 @@ function finiteNumber(value: unknown): number | null {
 }
 
 function assertIsoDate(value: string): void {
-  if (!DATE_PATTERN.test(value) || Number.isNaN(Date.parse(`${value}T00:00:00Z`))) {
+  const parsed = new Date(`${value}T00:00:00Z`)
+  if (!DATE_PATTERN.test(value) || Number.isNaN(parsed.valueOf())
+    || parsed.toISOString().slice(0, 10) !== value) {
     throw new TriggerDiscoveryInputError('asOf must use YYYY-MM-DD format')
   }
 }
@@ -271,6 +417,46 @@ function valuesCte(candidates: TriggerDiscoveryFilteredCandidate[]): { sql: stri
   return {
     sql: candidates.map(() => '(?, ?)').join(', '),
     args: candidates.flatMap((candidate) => [candidate.ticker, candidate.priceDate]),
+  }
+}
+
+function tickerValuesCte(tickers: string[]): { sql: string; args: string[] } {
+  return {
+    sql: tickers.map(() => '(?)').join(', '),
+    args: tickers,
+  }
+}
+
+function stageValue(value: number | null): number | null {
+  return value == null ? null : Number(value)
+}
+
+export function attachTriggerDiscoveryStage(
+  row: TriggerDiscoveryRowWithoutStage,
+  snapshot: TriggerDiscoveryStageSnapshot | undefined,
+): TriggerDiscoveryRowWithStage {
+  const exactSnapshot = snapshot?.date === row.resolvedAsOf ? snapshot : undefined
+  const stages = exactSnapshot
+    ? [
+        exactSnapshot.dayAStage,
+        exactSnapshot.dayBStage,
+        exactSnapshot.weekAStage,
+        exactSnapshot.weekBStage,
+        exactSnapshot.monthAStage,
+        exactSnapshot.monthBStage,
+      ]
+    : []
+  return {
+    ...row,
+    stageDate: exactSnapshot?.date ?? null,
+    dayAStage: exactSnapshot?.dayAStage ?? null,
+    dayBStage: exactSnapshot?.dayBStage ?? null,
+    weekAStage: exactSnapshot?.weekAStage ?? null,
+    weekBStage: exactSnapshot?.weekBStage ?? null,
+    monthAStage: exactSnapshot?.monthAStage ?? null,
+    monthBStage: exactSnapshot?.monthBStage ?? null,
+    stageAvailable: exactSnapshot != null,
+    stageComplete: exactSnapshot != null && stages.every((stage) => stage != null),
   }
 }
 
@@ -317,68 +503,140 @@ export function filterTriggerDiscoveryCandidates(input: {
   averageTradingValueMax: number | null
   liquidityLookbackSessions: number
   maxPriceStalenessSessions: number
+  observeTickers?: ReadonlySet<string>
 }): {
   candidates: TriggerDiscoveryFilteredCandidate[]
-  counts: Omit<TriggerDiscoveryDiagnostics['counts'], 'evaluated' | 'matched'>
+  counts: Omit<TriggerDiscoveryDiagnostics['counts'],
+    | 'evaluated'
+    | 'matched'
+    | 'afterStageFilter'
+    | 'stageRows'
+    | 'stageComplete'
+    | 'stageIncomplete'>
   rejected: Record<TriggerDiscoveryRejectionReason, number>
+  observed: Map<string, TriggerDiscoveryObservation>
 } {
   const rejected = emptyRejected()
   const selectedMarkets = input.markets == null ? null : new Set(input.markets)
-  const marketRows = input.candidates.filter((candidate) => {
-    const accepted = selectedMarkets == null || selectedMarkets.has(candidate.market)
-    if (!accepted) rejected.MARKET_FILTER += 1
-    return accepted
+  const observed = new Map<string, TriggerDiscoveryObservation>()
+  const marketRows: TriggerDiscoveryCandidateSnapshot[] = []
+  const freshRows: TriggerDiscoveryFilteredCandidate[] = []
+  const priceRows: TriggerDiscoveryFilteredCandidate[] = []
+  const volumeRows: TriggerDiscoveryFilteredCandidate[] = []
+  const tradingValueRows: TriggerDiscoveryFilteredCandidate[] = []
+  const volumeFilterEnabled = input.averageVolumeMin != null || input.averageVolumeMax != null
+  const tradingValueFilterEnabled = input.averageTradingValueMin != null
+    || input.averageTradingValueMax != null
+
+  const observation = (
+    candidate: TriggerDiscoveryCandidateSnapshot,
+    overrides: Partial<TriggerDiscoveryObservation>,
+  ): TriggerDiscoveryObservation => ({
+    ticker: candidate.ticker,
+    disposition: 'UNIVERSE_FILTER_EXIT',
+    exclusionReason: null,
+    triggerStatus: null,
+    pricePosition: null,
+    bothRising: null,
+    fromAbove: null,
+    approachDirection: null,
+    zoneUpper: null,
+    zoneLower: null,
+    zoneDistancePct: null,
+    price: candidate.price,
+    triggerScore: null,
+    priceDate: candidate.priceDate,
+    maDate: null,
+    stageDate: null,
+    universeFilterPassed: false,
+    priceFilterPassed: null,
+    liquidityFilterPassed: null,
+    stageFilterPassed: null,
+    dataAvailable: candidate.price != null && candidate.priceDate != null,
+    ...overrides,
   })
-  const freshRows = marketRows.flatMap((candidate): TriggerDiscoveryFilteredCandidate[] => {
+
+  for (const candidate of input.candidates) {
+    const isObserved = input.observeTickers?.has(candidate.ticker) ?? false
+    if (selectedMarkets != null && !selectedMarkets.has(candidate.market)) {
+      rejected.MARKET_FILTER += 1
+      if (isObserved) observed.set(candidate.ticker, observation(candidate, { exclusionReason: 'MARKET_FILTER' }))
+      continue
+    }
+    marketRows.push(candidate)
     if (candidate.price == null || !candidate.priceDate) {
       rejected.STALE_PRICE += 1
-      return []
+      if (isObserved) observed.set(candidate.ticker, observation(candidate, {
+        disposition: 'DATA_UNAVAILABLE', exclusionReason: 'STALE_PRICE', universeFilterPassed: true,
+        dataAvailable: false,
+      }))
+      continue
     }
     const staleness = countSessionsAfter(candidate.priceDate, input.marketSessionsDescending)
     if (staleness > input.maxPriceStalenessSessions) {
       rejected.STALE_PRICE += 1
-      return []
+      if (isObserved) observed.set(candidate.ticker, observation(candidate, {
+        disposition: 'DATA_UNAVAILABLE', exclusionReason: 'STALE_PRICE', universeFilterPassed: true,
+        dataAvailable: false,
+      }))
+      continue
     }
-    return [{
+    const filteredCandidate: TriggerDiscoveryFilteredCandidate = {
       ...candidate,
       price: candidate.price,
       priceDate: candidate.priceDate,
       priceStalenessSessions: staleness,
       priceFreshness: staleness === 0 ? 'CURRENT' : 'STALE_ACCEPTED',
       liquidityComplete: candidate.liquidityObservationCount >= input.liquidityLookbackSessions,
-    }]
-  })
-  const priceRows = freshRows.filter((candidate) => {
-    const accepted = inInclusiveRange(candidate.price, input.priceMin, input.priceMax)
-    if (!accepted) rejected.PRICE_FILTER += 1
-    return accepted
-  })
-  const volumeFilterEnabled = input.averageVolumeMin != null || input.averageVolumeMax != null
-  const volumeRows = priceRows.filter((candidate) => {
-    const accepted = !volumeFilterEnabled
-      || inInclusiveRange(candidate.averageVolume, input.averageVolumeMin, input.averageVolumeMax)
-    if (!accepted) rejected.VOLUME_FILTER += 1
-    return accepted
-  })
-  const tradingValueFilterEnabled = input.averageTradingValueMin != null
-    || input.averageTradingValueMax != null
-  const tradingValueRows = volumeRows.filter((candidate) => {
-    const accepted = !tradingValueFilterEnabled
-      || inInclusiveRange(candidate.averageTradingValue, input.averageTradingValueMin, input.averageTradingValueMax)
-    if (!accepted) rejected.TRADING_VALUE_FILTER += 1
-    return accepted
-  })
+    }
+    freshRows.push(filteredCandidate)
+    if (!inInclusiveRange(filteredCandidate.price, input.priceMin, input.priceMax)) {
+      rejected.PRICE_FILTER += 1
+      if (isObserved) observed.set(candidate.ticker, observation(candidate, {
+        exclusionReason: 'PRICE_FILTER', universeFilterPassed: true, priceFilterPassed: false,
+      }))
+      continue
+    }
+    priceRows.push(filteredCandidate)
+    if (volumeFilterEnabled
+      && !inInclusiveRange(filteredCandidate.averageVolume, input.averageVolumeMin, input.averageVolumeMax)) {
+      rejected.VOLUME_FILTER += 1
+      if (isObserved) observed.set(candidate.ticker, observation(candidate, {
+        exclusionReason: 'VOLUME_FILTER', universeFilterPassed: true,
+        priceFilterPassed: true, liquidityFilterPassed: false,
+      }))
+      continue
+    }
+    volumeRows.push(filteredCandidate)
+    if (tradingValueFilterEnabled
+      && !inInclusiveRange(filteredCandidate.averageTradingValue, input.averageTradingValueMin, input.averageTradingValueMax)) {
+      rejected.TRADING_VALUE_FILTER += 1
+      if (isObserved) observed.set(candidate.ticker, observation(candidate, {
+        exclusionReason: 'TRADING_VALUE_FILTER', universeFilterPassed: true,
+        priceFilterPassed: true, liquidityFilterPassed: false,
+      }))
+      continue
+    }
+    tradingValueRows.push(filteredCandidate)
+    if (isObserved) observed.set(candidate.ticker, observation(candidate, {
+      disposition: 'DATA_UNAVAILABLE', universeFilterPassed: true,
+      priceFilterPassed: true, liquidityFilterPassed: true,
+    }))
+  }
   return {
     candidates: tradingValueRows,
     counts: {
       universe: input.candidates.length,
       afterMarket: marketRows.length,
       afterStalePrice: freshRows.length,
+      currentPrice: freshRows.filter((candidate) => candidate.priceFreshness === 'CURRENT').length,
+      staleAccepted: freshRows.filter((candidate) => candidate.priceFreshness === 'STALE_ACCEPTED').length,
       afterPrice: priceRows.length,
       afterVolume: volumeRows.length,
       afterTradingValue: tradingValueRows.length,
     },
     rejected,
+    observed,
   }
 }
 
@@ -397,20 +655,43 @@ function statusOrder(status: TriggerStatus): number {
   return 3
 }
 
-function numericSortValue(row: TriggerDiscoveryRow, key: TriggerDiscoverySortKey): number | string {
+const STAGE_AXES: TriggerDiscoveryStageAxis[] = [...TRIGGER_DISCOVERY_STAGE_AXES]
+
+function numericSortValue(row: TriggerDiscoveryRow, key: TriggerDiscoverySortKey): number | string | null {
   switch (key) {
     case 'ticker': return row.ticker
+    case 'triggerStatus': return statusOrder(row.triggerStatus)
     case 'price': return row.price
     case 'zoneDistance': return Math.abs(row.zoneDistancePct)
     case 'ma1Distance': return Math.abs(row.ma1DistancePct)
     case 'ma2Distance': return Math.abs(row.ma2DistancePct)
-    case 'averageVolume': return row.averageVolume ?? Number.POSITIVE_INFINITY
-    case 'averageTradingValue': return row.averageTradingValue ?? Number.POSITIVE_INFINITY
+    case 'averageVolume': return row.averageVolume
+    case 'averageTradingValue': return row.averageTradingValue
     case 'approachVelocity': return row.approachVelocityPctPointsPerSession
+    case 'triggerScore': return row.triggerScore
+    case 'dayAStage': return row.dayAStage
+    case 'dayBStage': return row.dayBStage
+    case 'weekAStage': return row.weekAStage
+    case 'weekBStage': return row.weekBStage
+    case 'monthAStage': return row.monthAStage
+    case 'monthBStage': return row.monthBStage
   }
 }
 
-function sortRows(
+export function filterTriggerDiscoveryRowsByStage(
+  rows: TriggerDiscoveryRow[],
+  filters?: TriggerDiscoveryStageFilters,
+): TriggerDiscoveryRow[] {
+  if (!filters) return rows
+  return rows.filter((row) => STAGE_AXES.every((axis) => {
+    const selected = filters[axis]
+    if (!selected?.length) return true
+    const value = row[axis]
+    return value == null ? selected.includes('unknown') : selected.includes(value as TriggerDiscoveryStageFilterValue)
+  }))
+}
+
+export function sortTriggerDiscoveryRows(
   rows: TriggerDiscoveryRow[],
   sortBy?: TriggerDiscoverySortKey,
   direction: 'asc' | 'desc' = 'asc',
@@ -425,6 +706,10 @@ function sortRows(
     }
     const leftValue = numericSortValue(left, sortBy)
     const rightValue = numericSortValue(right, sortBy)
+    if (leftValue == null || rightValue == null) {
+      if (leftValue == null && rightValue == null) return left.ticker.localeCompare(right.ticker)
+      return leftValue == null ? 1 : -1
+    }
     const compared = typeof leftValue === 'string' && typeof rightValue === 'string'
       ? leftValue.localeCompare(rightValue)
       : Number(leftValue) - Number(rightValue)
@@ -432,6 +717,19 @@ function sortRows(
       ? left.ticker.localeCompare(right.ticker)
       : compared * (direction === 'desc' ? -1 : 1)
   })
+}
+
+function validateStageFilters(filters?: TriggerDiscoveryStageFilters): void {
+  if (!filters) return
+  for (const [axis, values] of Object.entries(filters)) {
+    if (!STAGE_AXES.includes(axis as TriggerDiscoveryStageAxis) || !Array.isArray(values)) {
+      throw new TriggerDiscoveryInputError('stageFilters contains an invalid axis')
+    }
+    if (values.some((value) => value !== 'unknown'
+      && (!Number.isInteger(value) || Number(value) < 1 || Number(value) > 6))) {
+      throw new TriggerDiscoveryInputError(`${axis} must contain Stage 1-6 or unknown`)
+    }
+  }
 }
 
 export function createTriggerDiscoverySqlDataSource(): TriggerDiscoveryDataSource {
@@ -511,41 +809,74 @@ export function createTriggerDiscoverySqlDataSource(): TriggerDiscoveryDataSourc
       }
     },
 
-    async loadStoredMaObservations({ candidates, ma1Period, ma2Period, oldestObservationDate }) {
+    async loadStoredMaObservations({
+      candidates,
+      ma1Period,
+      ma2Period,
+      oldestObservationDate,
+      requiredObservations,
+    }) {
       if (candidates.length === 0) return { value: new Map(), queryCount: 0, queryMs: 0 }
-      const candidateByTicker = new Map(candidates.map((candidate) => [candidate.ticker, candidate]))
-      const newestObservationDate = candidates.reduce(
-        (newest, candidate) => candidate.priceDate > newest ? candidate.priceDate : newest,
-        candidates[0].priceDate,
-      )
+      const candidateRows = valuesCte(candidates)
       const queryStartedAt = performance.now()
       const rows = await execAll<StoredMaSqlRow>(`
-        SELECT monitor.ticker, monitor.period, monitor.date, monitor.close, monitor.ma_value
-        FROM monthly_ma_monitor_daily AS monitor
-        WHERE monitor.period IN (?, ?)
-          AND monitor.date BETWEEN ? AND ?
-        ORDER BY monitor.ticker, monitor.date, monitor.period
-      `, [ma1Period, ma2Period, oldestObservationDate, newestObservationDate])
+        WITH candidates(ticker, price_date) AS (VALUES ${candidateRows.sql})
+        SELECT ma1.ticker,
+               ma1.date,
+               ma1.close,
+               ma1.ma_value AS ma1_value,
+               ma2.ma_value AS ma2_value
+        FROM candidates
+        CROSS JOIN monthly_ma_monitor_daily AS ma1
+          INDEXED BY monthly_ma_monitor_ticker_period_date_idx
+        CROSS JOIN monthly_ma_monitor_daily AS ma2
+          INDEXED BY monthly_ma_monitor_ticker_period_date_idx
+        WHERE ma1.ticker = candidates.ticker
+          AND ma1.period = ?
+          AND ma1.date BETWEEN MAX(COALESCE((
+            SELECT cutoff.date
+            FROM monthly_ma_monitor_daily AS cutoff
+              INDEXED BY monthly_ma_monitor_ticker_period_date_idx
+            INNER JOIN monthly_ma_monitor_daily AS cutoff_pair
+              INDEXED BY monthly_ma_monitor_ticker_period_date_idx
+              ON cutoff_pair.ticker = cutoff.ticker
+             AND cutoff_pair.period = ?
+             AND cutoff_pair.date = cutoff.date
+            WHERE cutoff.ticker = candidates.ticker
+              AND cutoff.period = ?
+              AND cutoff.date <= candidates.price_date
+            ORDER BY cutoff.date DESC
+            LIMIT 1 OFFSET ?
+          ), ?), ?)
+          AND candidates.price_date
+          AND ma2.ticker = ma1.ticker
+          AND ma2.period = ?
+          AND ma2.date = ma1.date
+      `, [
+        ...candidateRows.args,
+        ma1Period,
+        ma2Period,
+        ma1Period,
+        requiredObservations - 1,
+        oldestObservationDate,
+        oldestObservationDate,
+        ma2Period,
+      ])
       const queryMs = elapsedMs(queryStartedAt)
       const preparationStartedAt = performance.now()
-      const paired = new Map<string, Map<string, { price: number; ma1?: number; ma2?: number }>>()
-      for (const row of rows) {
-        const candidate = candidateByTicker.get(row.ticker)
-        if (!candidate || row.date > candidate.priceDate) continue
-        const byDate = paired.get(row.ticker) ?? new Map()
-        const point = byDate.get(row.date) ?? { price: Number(row.close) }
-        if (Number(row.period) === ma1Period) point.ma1 = Number(row.ma_value)
-        if (Number(row.period) === ma2Period) point.ma2 = Number(row.ma_value)
-        byDate.set(row.date, point)
-        paired.set(row.ticker, byDate)
-      }
       const value = new Map<string, MaZoneTriggerObservation[]>()
-      for (const [ticker, byDate] of paired) {
-        value.set(ticker, [...byDate.entries()].flatMap(([date, point]) => (
-          point.ma1 == null || point.ma2 == null
-            ? []
-            : [{ date, price: point.price, ma1: point.ma1, ma2: point.ma2 }]
-        )))
+      for (const row of rows) {
+        const observations = value.get(row.ticker) ?? []
+        observations.push({
+          date: row.date,
+          price: Number(row.close),
+          ma1: Number(row.ma1_value),
+          ma2: Number(row.ma2_value),
+        })
+        value.set(row.ticker, observations)
+      }
+      for (const observations of value.values()) {
+        observations.sort((left, right) => left.date.localeCompare(right.date))
       }
       return {
         value,
@@ -666,6 +997,224 @@ export function createTriggerDiscoverySqlDataSource(): TriggerDiscoveryDataSourc
         preparationMs: elapsedMs(preparationStartedAt),
       }
     },
+
+    async loadBiweeklyMaObservations({ candidates, ma1Period, ma2Period, requiredObservations }) {
+      if (candidates.length === 0) {
+        return {
+          value: new Map(),
+          queryCount: 0,
+          queryMs: 0,
+          preparationMs: 0,
+          biweekly: {
+            weeklyRowsLoaded: 0,
+            currentWeekDailyRowsLoaded: 0,
+            weeklyHistoryQueryMs: 0,
+            currentWeekQueryMs: 0,
+            weeklyAssemblyMs: 0,
+            biweeklyAggregationMs: 0,
+            maCalculationMs: 0,
+          },
+        }
+      }
+
+      const candidateByTicker = new Map(candidates.map((candidate) => [candidate.ticker, candidate]))
+      const weekStartByTicker = new Map(
+        candidates.map((candidate) => [candidate.ticker, calendarWeekStart(candidate.priceDate)]),
+      )
+      const maximumPeriod = Math.max(ma1Period, ma2Period)
+      const requiredBiweeklyBars = maximumPeriod + requiredObservations - 1
+      const requiredWeeklyBars = requiredBiweeklyBars * 2 + 1
+      const oldestPriceDate = candidates.reduce(
+        (oldest, candidate) => candidate.priceDate < oldest ? candidate.priceDate : oldest,
+        candidates[0].priceDate,
+      )
+      const newestPriceDate = candidates.reduce(
+        (newest, candidate) => candidate.priceDate > newest ? candidate.priceDate : newest,
+        candidates[0].priceDate,
+      )
+      const oldestCurrentWeekStart = candidates.reduce((oldest, candidate) => {
+        const weekStart = weekStartByTicker.get(candidate.ticker)!
+        return weekStart < oldest ? weekStart : oldest
+      }, weekStartByTicker.get(candidates[0].ticker)!)
+      const historyStart = dateDaysBefore(
+        oldestPriceDate,
+        (requiredWeeklyBars + BIWEEKLY_HISTORY_BUFFER_WEEKS) * 7,
+      )
+      const candidateTickers = tickerValuesCte(candidates.map((candidate) => candidate.ticker))
+
+      const weeklyQueryStartedAt = performance.now()
+      const weeklyRows = await execAll<WeeklyOhlcvSqlRow>(`
+        WITH candidates(ticker) AS (VALUES ${candidateTickers.sql}), latest_weekly AS (
+          SELECT weekly.ticker, weekly.week_start_date, MAX(weekly.date) AS date
+          FROM weekly_ohlcv AS weekly
+          INNER JOIN candidates ON candidates.ticker = weekly.ticker
+          WHERE weekly.date BETWEEN ? AND ?
+          GROUP BY weekly.ticker, weekly.week_start_date
+        )
+        SELECT weekly.ticker,
+               weekly.date,
+               weekly.week_start_date,
+               weekly.open,
+               weekly.high,
+               weekly.low,
+               weekly.close,
+               weekly.volume
+        FROM latest_weekly
+        INNER JOIN weekly_ohlcv AS weekly
+          ON weekly.ticker = latest_weekly.ticker
+         AND weekly.week_start_date = latest_weekly.week_start_date
+         AND weekly.date = latest_weekly.date
+        ORDER BY weekly.ticker, weekly.date
+      `, [...candidateTickers.args, historyStart, newestPriceDate])
+      const weeklyHistoryQueryMs = elapsedMs(weeklyQueryStartedAt)
+
+      const currentWeekQueryStartedAt = performance.now()
+      const currentWeekDailyRows = await execAll<DailyOhlcvSqlRow>(`
+        WITH candidates(ticker) AS (VALUES ${candidateTickers.sql})
+        SELECT daily.ticker, daily.date, daily.open, daily.high, daily.low, daily.close, daily.volume
+        FROM ohlcv_daily AS daily
+        INNER JOIN candidates ON candidates.ticker = daily.ticker
+        WHERE daily.date BETWEEN ? AND ?
+        ORDER BY daily.ticker, daily.date
+      `, [...candidateTickers.args, oldestCurrentWeekStart, newestPriceDate])
+      const currentWeekQueryMs = elapsedMs(currentWeekQueryStartedAt)
+
+      const preparationStartedAt = performance.now()
+      const weeklyByTicker = new Map<string, OHLCV[]>()
+      for (const row of weeklyRows) {
+        const candidate = candidateByTicker.get(row.ticker)
+        const currentWeekStart = weekStartByTicker.get(row.ticker)
+        if (!candidate || !currentWeekStart || row.date > candidate.priceDate
+          || row.week_start_date >= currentWeekStart) continue
+        const rows = weeklyByTicker.get(row.ticker) ?? []
+        rows.push({
+          date: row.date,
+          open: Number(row.open),
+          high: Number(row.high),
+          low: Number(row.low),
+          close: Number(row.close),
+          volume: Number(row.volume),
+        })
+        weeklyByTicker.set(row.ticker, rows)
+      }
+
+      const currentDailyByTicker = new Map<string, OHLCV[]>()
+      for (const row of currentWeekDailyRows) {
+        const candidate = candidateByTicker.get(row.ticker)
+        const currentWeekStart = weekStartByTicker.get(row.ticker)
+        if (!candidate || !currentWeekStart || row.date < currentWeekStart || row.date > candidate.priceDate) continue
+        const rows = currentDailyByTicker.get(row.ticker) ?? []
+        rows.push({
+          date: row.date,
+          open: Number(row.open),
+          high: Number(row.high),
+          low: Number(row.low),
+          close: Number(row.close),
+          volume: Number(row.volume),
+        })
+        currentDailyByTicker.set(row.ticker, rows)
+      }
+
+      const assembledWeekly = new Map<string, OHLCV[]>()
+      for (const candidate of candidates) {
+        const history = (weeklyByTicker.get(candidate.ticker) ?? []).slice(-requiredWeeklyBars)
+        const currentWeek = resampleOhlcv(
+          currentDailyByTicker.get(candidate.ticker) ?? [],
+          { timeframe: 'week', multiplier: 1 },
+        )
+        assembledWeekly.set(
+          candidate.ticker,
+          [...history, ...currentWeek].sort((left, right) => left.date.localeCompare(right.date)),
+        )
+      }
+      const weeklyAssemblyMs = elapsedMs(preparationStartedAt)
+
+      let biweeklyAggregationMs = 0
+      let maCalculationMs = 0
+      const value = new Map<string, MaZoneTriggerObservation[]>()
+      for (const [ticker, weekly] of assembledWeekly) {
+        const points = splitContinuousHistory(weekly).flatMap((segment) => {
+          const aggregationStartedAt = performance.now()
+          const biweekly = buildBiweeklyBarsFromWeekly(segment)
+          biweeklyAggregationMs += performance.now() - aggregationStartedAt
+
+          const maStartedAt = performance.now()
+          const withMa = attachBiweeklyMovingAverages(
+            biweekly,
+            [ma1Period, ma2Period],
+            segment[0]?.date ?? '',
+          )
+          maCalculationMs += performance.now() - maStartedAt
+          return withMa
+        })
+        value.set(ticker, points.flatMap((point) => {
+          const ma1 = point.values.get(ma1Period)
+          const ma2 = point.values.get(ma2Period)
+          return ma1 == null || ma2 == null
+            ? []
+            : [{ date: point.date, price: point.close, ma1, ma2 }]
+        }).slice(-requiredObservations))
+      }
+
+      const biweekly = {
+        weeklyRowsLoaded: weeklyRows.length,
+        currentWeekDailyRowsLoaded: currentWeekDailyRows.length,
+        weeklyHistoryQueryMs,
+        currentWeekQueryMs,
+        weeklyAssemblyMs,
+        biweeklyAggregationMs: Math.round(biweeklyAggregationMs * 1000) / 1000,
+        maCalculationMs: Math.round(maCalculationMs * 1000) / 1000,
+      }
+      return {
+        value,
+        queryCount: 2,
+        queryMs: weeklyHistoryQueryMs + currentWeekQueryMs,
+        preparationMs: weeklyAssemblyMs + biweekly.biweeklyAggregationMs + biweekly.maCalculationMs,
+        biweekly,
+      }
+    },
+
+    async loadStageSnapshots({ tickers, resolvedAsOf }) {
+      if (tickers.length === 0) return { value: new Map(), queryCount: 0, queryMs: 0 }
+      const candidates = tickerValuesCte(tickers)
+      const queryStartedAt = performance.now()
+      const rows = await execAll<StageSnapshotSqlRow>(`
+        WITH candidates(ticker) AS (VALUES ${candidates.sql})
+        SELECT snapshots.ticker,
+               snapshots.date,
+               snapshots.daily_a_stage,
+               snapshots.daily_b_stage,
+               snapshots.weekly_a_stage,
+               snapshots.weekly_b_stage,
+               snapshots.monthly_a_stage,
+               snapshots.monthly_b_stage
+        FROM candidates
+        INNER JOIN daily_snapshots AS snapshots
+          ON snapshots.ticker = candidates.ticker
+         AND snapshots.date = ?
+      `, [...candidates.args, resolvedAsOf])
+      const queryMs = elapsedMs(queryStartedAt)
+      const preparationStartedAt = performance.now()
+      const value = new Map<string, TriggerDiscoveryStageSnapshot>()
+      for (const row of rows) {
+        value.set(row.ticker, {
+          ticker: row.ticker,
+          date: row.date,
+          dayAStage: stageValue(row.daily_a_stage),
+          dayBStage: stageValue(row.daily_b_stage),
+          weekAStage: stageValue(row.weekly_a_stage),
+          weekBStage: stageValue(row.weekly_b_stage),
+          monthAStage: stageValue(row.monthly_a_stage),
+          monthBStage: stageValue(row.monthly_b_stage),
+        })
+      }
+      return {
+        value,
+        queryCount: 1,
+        queryMs,
+        preparationMs: elapsedMs(preparationStartedAt),
+      }
+    },
   }
 }
 
@@ -675,6 +1224,15 @@ export async function getTriggerDiscovery(
 ): Promise<TriggerDiscoveryResult> {
   const totalStartedAt = performance.now()
   assertIsoDate(input.asOf)
+  validateStageFilters(input.stageFilters)
+  const timeframe = options.timeframe ?? DEFAULT_TRIGGER_DISCOVERY_TIMEFRAME
+  if (timeframe !== 'MONTHLY' && timeframe !== 'BIWEEKLY') {
+    throw new TriggerDiscoveryInputError('timeframe must be MONTHLY or BIWEEKLY')
+  }
+  const observeTickerSet = new Set(input.observeTickers ?? [])
+  if (observeTickerSet.size > MAX_PAGE_LIMIT) {
+    throw new TriggerDiscoveryInputError(`observeTickers must contain at most ${MAX_PAGE_LIMIT} tickers`)
+  }
   const triggerConfig: MaZoneTriggerConfig = {
     ...DEFAULT_MA_ZONE_TRIGGER_CONFIG,
     ...input.triggerConfig,
@@ -714,6 +1272,7 @@ export async function getTriggerDiscovery(
   let queryCount = 0
   let dbQueryMs = 0
   let maPreparationMs = 0
+  let biweeklyPerformance: TriggerDiscoveryBiweeklyPerformance | undefined
   const sessionsLoad = await dataSource.loadMarketSessions(input.asOf, sessionLimit)
   queryCount += sessionsLoad.queryCount
   dbQueryMs += sessionsLoad.queryMs
@@ -728,16 +1287,18 @@ export async function getTriggerDiscovery(
       triggerConfig,
       liquidityLookbackSessions,
       maxPriceStalenessSessions,
+      totalTriggerMatched: 0,
       totalMatched: 0,
       rows: [],
       limit,
       offset,
       hasMore: false,
       diagnostics: {
-        counts: { universe: 0, afterMarket: 0, afterStalePrice: 0, afterPrice: 0, afterVolume: 0, afterTradingValue: 0, evaluated: 0, matched: 0 },
+        counts: { universe: 0, afterMarket: 0, afterStalePrice: 0, currentPrice: 0, staleAccepted: 0, afterPrice: 0, afterVolume: 0, afterTradingValue: 0, evaluated: 0, matched: 0, afterStageFilter: 0, stageRows: 0, stageComplete: 0, stageIncomplete: 0 },
         rejected,
-        performance: { queryCount, dbQueryMs, maPreparationMs: 0, engineEvaluationMs: 0, totalMs: elapsedMs(totalStartedAt), fastPathEvaluated: 0, genericPathEvaluated: 0 },
+        performance: { queryCount, dbQueryMs, maPreparationMs: 0, engineEvaluationMs: 0, stageJoinMs: 0, scoreCalculationMs: 0, totalMs: elapsedMs(totalStartedAt), fastPathEvaluated: 0, genericPathEvaluated: 0 },
       },
+      observations: input.observeTickers == null ? undefined : [],
     }
   }
 
@@ -760,12 +1321,41 @@ export async function getTriggerDiscovery(
     averageTradingValueMax,
     liquidityLookbackSessions,
     maxPriceStalenessSessions,
+    observeTickers: observeTickerSet,
   })
   Object.assign(rejected, filtered.rejected)
+  const lifecycleObservations = new Map<string, TriggerDiscoveryObservation>()
+  for (const ticker of observeTickerSet) {
+    lifecycleObservations.set(ticker, {
+      ticker,
+      disposition: 'UNIVERSE_FILTER_EXIT',
+      exclusionReason: 'PIT_UNIVERSE',
+      triggerStatus: null,
+      pricePosition: null,
+      bothRising: null,
+      fromAbove: null,
+      approachDirection: null,
+      zoneUpper: null,
+      zoneLower: null,
+      zoneDistancePct: null,
+      price: null,
+      triggerScore: null,
+      priceDate: null,
+      maDate: null,
+      stageDate: null,
+      universeFilterPassed: false,
+      priceFilterPassed: null,
+      liquidityFilterPassed: null,
+      stageFilterPassed: null,
+      dataAvailable: false,
+    })
+  }
+  for (const [ticker, observation] of filtered.observed) lifecycleObservations.set(ticker, observation)
 
   const observations = new Map<string, { rows: MaZoneTriggerObservation[]; path: TriggerDiscoveryMaPath }>()
   const storedPeriods = new Set<number>(MONTHLY_MA_MONITOR_PERIODS)
-  const canUseFastPath = storedPeriods.has(triggerConfig.ma1Period)
+  const canUseFastPath = timeframe === 'MONTHLY'
+    && storedPeriods.has(triggerConfig.ma1Period)
     && storedPeriods.has(triggerConfig.ma2Period)
   if (options.maPath === 'fast' && !canUseFastPath) {
     throw new TriggerDiscoveryInputError('fast MA path is unavailable for the requested periods')
@@ -778,6 +1368,7 @@ export async function getTriggerDiscovery(
       ma1Period: triggerConfig.ma1Period,
       ma2Period: triggerConfig.ma2Period,
       oldestObservationDate: marketSessions.at(-1)!,
+      requiredObservations,
     })
     queryCount += fastLoad.queryCount
     dbQueryMs += fastLoad.queryMs
@@ -805,15 +1396,28 @@ export async function getTriggerDiscovery(
     genericCandidates = fallback
   }
   if (!useFastPath || genericCandidates.length > 0) {
-    const genericLoad = await dataSource.loadGenericMaObservations({
-      candidates: genericCandidates,
-      ma1Period: triggerConfig.ma1Period,
-      ma2Period: triggerConfig.ma2Period,
-      requiredObservations,
-    })
+    const genericLoad = timeframe === 'BIWEEKLY'
+      ? await (() => {
+          if (!dataSource.loadBiweeklyMaObservations) {
+            throw new TriggerDiscoveryInputError('Biweekly MA data source is unavailable')
+          }
+          return dataSource.loadBiweeklyMaObservations({
+            candidates: genericCandidates,
+            ma1Period: triggerConfig.ma1Period,
+            ma2Period: triggerConfig.ma2Period,
+            requiredObservations,
+          })
+        })()
+      : await dataSource.loadGenericMaObservations({
+          candidates: genericCandidates,
+          ma1Period: triggerConfig.ma1Period,
+          ma2Period: triggerConfig.ma2Period,
+          requiredObservations,
+        })
     queryCount += genericLoad.queryCount
     dbQueryMs += genericLoad.queryMs
     maPreparationMs += genericLoad.preparationMs ?? 0
+    biweeklyPerformance = genericLoad.biweekly
     for (const candidate of genericCandidates) {
       observations.set(candidate.ticker, {
         rows: genericLoad.value.get(candidate.ticker) ?? [],
@@ -823,7 +1427,7 @@ export async function getTriggerDiscovery(
   }
 
   const engineStartedAt = performance.now()
-  const matchedRows: TriggerDiscoveryRow[] = []
+  const matchedRows: TriggerDiscoveryRowWithoutStage[] = []
   let fastPathEvaluated = 0
   let genericPathEvaluated = 0
   for (const candidate of filtered.candidates) {
@@ -835,6 +1439,39 @@ export async function getTriggerDiscovery(
       asOf: resolvedAsOf,
       config: triggerConfig,
     })
+    if (observeTickerSet.has(candidate.ticker)) {
+      const snapshot = trigger.snapshot
+      const reason = rejectionForTrigger(trigger)
+      lifecycleObservations.set(candidate.ticker, {
+        ticker: candidate.ticker,
+        disposition: trigger.availability !== 'available'
+          ? 'DATA_UNAVAILABLE'
+          : !trigger.bothRising || !trigger.fromAbove
+            ? 'CORE_CONDITION_EXIT'
+            : trigger.matched
+              ? 'FINAL_CANDIDATE'
+              : 'TRIGGER_EXIT',
+        exclusionReason: trigger.matched ? null : reason,
+        triggerStatus: trigger.status,
+        pricePosition: snapshot?.pricePosition ?? null,
+        bothRising: trigger.availability === 'available' ? trigger.bothRising : null,
+        fromAbove: trigger.availability === 'available' ? trigger.fromAbove : null,
+        approachDirection: trigger.approachDirection,
+        zoneUpper: snapshot?.zoneUpper ?? null,
+        zoneLower: snapshot?.zoneLower ?? null,
+        zoneDistancePct: snapshot?.zoneDistancePct ?? null,
+        price: snapshot?.price ?? candidate.price,
+        triggerScore: null,
+        priceDate: candidate.priceDate,
+        maDate: trigger.observationDate,
+        stageDate: null,
+        universeFilterPassed: true,
+        priceFilterPassed: true,
+        liquidityFilterPassed: true,
+        stageFilterPassed: null,
+        dataAvailable: trigger.availability === 'available',
+      })
+    }
     if (!trigger.matched || !trigger.snapshot || !trigger.observationDate
       || !trigger.ma1Trend || !trigger.ma2Trend || !trigger.approachDirection
       || trigger.approachVelocityPctPointsPerSession == null) {
@@ -863,6 +1500,8 @@ export async function getTriggerDiscovery(
       ma2Value: trigger.snapshot.ma2,
       ma1Trend: trigger.ma1Trend,
       ma2Trend: trigger.ma2Trend,
+      ma1SlopePct: trigger.ma1SlopePct ?? 0,
+      ma2SlopePct: trigger.ma2SlopePct ?? 0,
       bothRising: trigger.bothRising,
       zoneUpper: trigger.snapshot.zoneUpper,
       zoneLower: trigger.snapshot.zoneLower,
@@ -878,7 +1517,58 @@ export async function getTriggerDiscovery(
     })
   }
   const engineEvaluationMs = elapsedMs(engineStartedAt)
-  const sorted = sortRows(matchedRows, input.sortBy, input.sortDirection)
+  const stageLoad = await dataSource.loadStageSnapshots({
+    tickers: matchedRows.map((row) => row.ticker),
+    resolvedAsOf,
+  })
+  queryCount += stageLoad.queryCount
+  dbQueryMs += stageLoad.queryMs
+  const stageJoinMs = stageLoad.queryMs + (stageLoad.preparationMs ?? 0)
+  const unscoredRows = matchedRows.map((row) => attachTriggerDiscoveryStage(
+    row,
+    stageLoad.value.get(row.ticker),
+  ))
+  const scoreStartedAt = performance.now()
+  const rowsWithStages: TriggerDiscoveryRow[] = unscoredRows.map((row) => {
+    const score = calculateTriggerScore({
+      triggerStatus: row.triggerStatus,
+      fromAbove: row.fromAbove,
+      zoneDistancePct: row.zoneDistancePct,
+      maxApproachDistancePct: triggerConfig.maxApproachDistancePct,
+      approachVelocityPctPointsPerSession: row.approachVelocityPctPointsPerSession,
+      ma1SlopePct: row.ma1SlopePct,
+      ma2SlopePct: row.ma2SlopePct,
+      averageTradingValue: row.averageTradingValue,
+      dayAStage: row.dayAStage,
+      dayBStage: row.dayBStage,
+      weekAStage: row.weekAStage,
+      weekBStage: row.weekBStage,
+      monthAStage: row.monthAStage,
+      monthBStage: row.monthBStage,
+    })
+    return {
+      ...row,
+      triggerScore: score.totalScore,
+      scoreBreakdown: score.scoreBreakdown,
+    }
+  })
+  const scoreCalculationMs = elapsedMs(scoreStartedAt)
+  const filteredByStage = filterTriggerDiscoveryRowsByStage(rowsWithStages, input.stageFilters)
+  const stageAcceptedTickers = new Set(filteredByStage.map((row) => row.ticker))
+  for (const row of rowsWithStages) {
+    if (!observeTickerSet.has(row.ticker)) continue
+    const stageFilterPassed = stageAcceptedTickers.has(row.ticker)
+    lifecycleObservations.set(row.ticker, {
+      ...lifecycleObservations.get(row.ticker)!,
+      disposition: stageFilterPassed ? 'FINAL_CANDIDATE' : 'STAGE_FILTER_EXIT',
+      exclusionReason: stageFilterPassed ? null : 'STAGE_FILTER',
+      triggerStatus: row.triggerStatus,
+      triggerScore: row.triggerScore,
+      stageDate: row.stageDate,
+      stageFilterPassed,
+    })
+  }
+  const sorted = sortTriggerDiscoveryRows(filteredByStage, input.sortBy, input.sortDirection)
   const rows = sorted.slice(offset, offset + limit)
   return {
     contractVersion: 'trigger-discovery-v1',
@@ -887,6 +1577,7 @@ export async function getTriggerDiscovery(
     triggerConfig,
     liquidityLookbackSessions,
     maxPriceStalenessSessions,
+    totalTriggerMatched: rowsWithStages.length,
     totalMatched: sorted.length,
     rows,
     limit,
@@ -896,7 +1587,11 @@ export async function getTriggerDiscovery(
       counts: {
         ...filtered.counts,
         evaluated: filtered.candidates.length,
-        matched: sorted.length,
+        matched: rowsWithStages.length,
+        afterStageFilter: filteredByStage.length,
+        stageRows: rowsWithStages.filter((row) => row.stageAvailable).length,
+        stageComplete: rowsWithStages.filter((row) => row.stageComplete).length,
+        stageIncomplete: rowsWithStages.filter((row) => !row.stageComplete).length,
       },
       rejected,
       performance: {
@@ -904,10 +1599,16 @@ export async function getTriggerDiscovery(
         dbQueryMs,
         maPreparationMs,
         engineEvaluationMs,
+        stageJoinMs,
+        scoreCalculationMs,
         totalMs: elapsedMs(totalStartedAt),
         fastPathEvaluated,
         genericPathEvaluated,
+        ...(biweeklyPerformance ? { biweekly: biweeklyPerformance } : {}),
       },
     },
+    observations: input.observeTickers == null
+      ? undefined
+      : [...lifecycleObservations.values()].sort((left, right) => left.ticker.localeCompare(right.ticker)),
   }
 }

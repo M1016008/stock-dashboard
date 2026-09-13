@@ -1,6 +1,6 @@
 // lib/db/schema.ts
 import { sql } from 'drizzle-orm'
-import { sqliteTable, text, integer, real, primaryKey, index } from 'drizzle-orm/sqlite-core'
+import { sqliteTable, text, integer, real, primaryKey, index, uniqueIndex } from 'drizzle-orm/sqlite-core'
 
 // ─────────────────────────────────────
 // 1. 株価・OHLCVデータ
@@ -1697,6 +1697,439 @@ export const savedScreeningEvaluationMembers = sqliteTable(
     pk: primaryKey({ columns: [t.evaluationId, t.ticker] }),
     statusIdx: index('saved_screening_evaluation_members_status_idx')
       .on(t.evaluationId, t.status, t.ticker),
+  }),
+)
+
+export const triggerDefinitions = sqliteTable(
+  'trigger_definitions',
+  {
+    id: text('id').primaryKey(),
+    name: text('name').notNull(),
+    evaluationConfigJson: text('evaluation_config_json').notNull(),
+    viewConfigJson: text('view_config_json').notNull(),
+    evaluationSignature: text('evaluation_signature').notNull(),
+    evaluationVersion: integer('evaluation_version').notNull().default(1),
+    engineVersion: integer('engine_version').notNull(),
+    scoreVersion: integer('score_version').notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+    updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+    archivedAt: integer('archived_at', { mode: 'timestamp' }),
+  },
+  (t) => ({
+    activeIdx: index('trigger_definitions_active_idx').on(t.archivedAt, t.updatedAt),
+  }),
+)
+
+export const historicalTriggerScanJobs = sqliteTable(
+  'historical_trigger_scan_jobs',
+  {
+    id: text('id').primaryKey(),
+    status: text('status').notNull(),
+    requestJson: text('request_json').notNull(),
+    requestSignature: text('request_signature').notNull(),
+    sourceFingerprint: text('source_fingerprint').notNull(),
+    requestedStart: text('requested_start').notNull(),
+    requestedEnd: text('requested_end').notNull(),
+    resolvedStart: text('resolved_start'),
+    resolvedEnd: text('resolved_end'),
+    timeframe: text('timeframe').notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+    startedAt: integer('started_at', { mode: 'timestamp' }),
+    completedAt: integer('completed_at', { mode: 'timestamp' }),
+    heartbeatAt: integer('heartbeat_at', { mode: 'timestamp' }),
+    totalTradingDays: integer('total_trading_days').notNull().default(0),
+    processedTradingDays: integer('processed_trading_days').notNull().default(0),
+    resultLocation: text('result_location'),
+    resultSizeBytes: integer('result_size_bytes').notNull().default(0),
+    durationMs: real('duration_ms').notNull().default(0),
+    serializationMs: real('serialization_ms').notNull().default(0),
+    errorCategory: text('error_category'),
+    cancelRequested: integer('cancel_requested', { mode: 'boolean' }).notNull().default(false),
+    ownerToken: text('owner_token'),
+    attemptCount: integer('attempt_count').notNull().default(0),
+    expiresAt: integer('expires_at', { mode: 'timestamp' }).notNull(),
+  },
+  (t) => ({
+    statusCreatedIdx: index('historical_trigger_scan_jobs_status_created_idx')
+      .on(t.status, t.createdAt),
+    signatureIdx: index('historical_trigger_scan_jobs_signature_idx')
+      .on(t.requestSignature, t.sourceFingerprint, t.completedAt),
+    expiresIdx: index('historical_trigger_scan_jobs_expires_idx').on(t.expiresAt),
+  }),
+)
+
+export const triggerOutcomeAnalysisJobs = sqliteTable(
+  'trigger_outcome_analysis_jobs',
+  {
+    id: text('id').primaryKey(),
+    status: text('status').notNull(),
+    historicalScanJobId: text('historical_scan_job_id').notNull(),
+    requestJson: text('request_json').notNull(),
+    requestSignature: text('request_signature').notNull(),
+    sourceFingerprint: text('source_fingerprint').notNull(),
+    analysisCutoffDate: text('analysis_cutoff_date'),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+    startedAt: integer('started_at', { mode: 'timestamp' }),
+    completedAt: integer('completed_at', { mode: 'timestamp' }),
+    heartbeatAt: integer('heartbeat_at', { mode: 'timestamp' }),
+    totalEvents: integer('total_events').notNull().default(0),
+    processedEvents: integer('processed_events').notNull().default(0),
+    totalTickers: integer('total_tickers').notNull().default(0),
+    processedTickers: integer('processed_tickers').notNull().default(0),
+    resultLocation: text('result_location'),
+    resultSizeBytes: integer('result_size_bytes').notNull().default(0),
+    durationMs: real('duration_ms').notNull().default(0),
+    sqlMs: real('sql_ms').notNull().default(0),
+    calculationMs: real('calculation_ms').notNull().default(0),
+    aggregationMs: real('aggregation_ms').notNull().default(0),
+    serializationMs: real('serialization_ms').notNull().default(0),
+    saveMs: real('save_ms').notNull().default(0),
+    errorCategory: text('error_category'),
+    cancelRequested: integer('cancel_requested', { mode: 'boolean' }).notNull().default(false),
+    ownerToken: text('owner_token'),
+    attemptCount: integer('attempt_count').notNull().default(0),
+    expiresAt: integer('expires_at', { mode: 'timestamp' }).notNull(),
+  },
+  (t) => ({
+    statusCreatedIdx: index('trigger_outcome_analysis_jobs_status_created_idx')
+      .on(t.status, t.createdAt),
+    sourceIdx: index('trigger_outcome_analysis_jobs_source_idx')
+      .on(t.historicalScanJobId, t.requestSignature, t.sourceFingerprint, t.completedAt),
+    expiresIdx: index('trigger_outcome_analysis_jobs_expires_idx').on(t.expiresAt),
+  }),
+)
+
+export const triggerEvaluations = sqliteTable(
+  'trigger_evaluations',
+  {
+    id: text('id').primaryKey(),
+    definitionId: text('definition_id').notNull().references(() => triggerDefinitions.id),
+    evaluationVersion: integer('evaluation_version').notNull(),
+    engineVersion: integer('engine_version').notNull(),
+    scoreVersion: integer('score_version').notNull(),
+    runSignature: text('run_signature').notNull(),
+    evaluationConfigSignature: text('evaluation_config_signature').notNull(),
+    evaluationConfigSnapshotJson: text('evaluation_config_snapshot_json').notNull(),
+    requestedAsOf: text('requested_as_of').notNull(),
+    resolvedAsOf: text('resolved_as_of').notNull(),
+    startedAt: integer('started_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+    completedAt: integer('completed_at', { mode: 'timestamp' }),
+    status: text('status').notNull(),
+    pitUniverseCount: integer('pit_universe_count').notNull().default(0),
+    currentPriceCount: integer('current_price_count').notNull().default(0),
+    staleAcceptedCount: integer('stale_accepted_count').notNull().default(0),
+    triggerEvaluatedCount: integer('trigger_evaluated_count').notNull().default(0),
+    triggerMatchedCount: integer('trigger_matched_count').notNull().default(0),
+    finalMatchedCount: integer('final_matched_count').notNull().default(0),
+    durationMs: integer('duration_ms').notNull().default(0),
+    discoveryDurationMs: integer('discovery_duration_ms').notNull().default(0),
+    snapshotTransformMs: integer('snapshot_transform_ms').notNull().default(0),
+    persistenceDurationMs: integer('persistence_duration_ms').notNull().default(0),
+    discoveryQueryCount: integer('discovery_query_count').notNull().default(0),
+    discoveryDbQueryMs: real('discovery_db_query_ms').notNull().default(0),
+    attemptCount: integer('attempt_count').notNull().default(1),
+    errorCategory: text('error_category'),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    runSignatureIdx: uniqueIndex('trigger_evaluations_run_signature_idx').on(t.runSignature),
+    definitionDateIdx: index('trigger_evaluations_definition_date_idx')
+      .on(t.definitionId, t.resolvedAsOf, t.createdAt),
+  }),
+)
+
+export const triggerEvaluationMembers = sqliteTable(
+  'trigger_evaluation_members',
+  {
+    evaluationId: text('evaluation_id').notNull().references(() => triggerEvaluations.id),
+    ticker: text('ticker').notNull(),
+    companyName: text('company_name').notNull(),
+    market: text('market'),
+    triggerStatus: text('trigger_status').notNull(),
+    price: real('price').notNull(),
+    ma1Value: real('ma1_value').notNull(),
+    ma2Value: real('ma2_value').notNull(),
+    zoneUpper: real('zone_upper').notNull(),
+    zoneLower: real('zone_lower').notNull(),
+    zoneDistancePct: real('zone_distance_pct').notNull(),
+    ma1DistancePct: real('ma1_distance_pct').notNull(),
+    ma2DistancePct: real('ma2_distance_pct').notNull(),
+    approachVelocity: real('approach_velocity').notNull(),
+    averageVolume: real('average_volume'),
+    averageTradingValue: real('average_trading_value'),
+    dayAStage: integer('day_a_stage'),
+    dayBStage: integer('day_b_stage'),
+    weekAStage: integer('week_a_stage'),
+    weekBStage: integer('week_b_stage'),
+    monthAStage: integer('month_a_stage'),
+    monthBStage: integer('month_b_stage'),
+    stageAvailable: integer('stage_available', { mode: 'boolean' }).notNull(),
+    stageComplete: integer('stage_complete', { mode: 'boolean' }).notNull(),
+    triggerScore: real('trigger_score').notNull(),
+    scoreBreakdownJson: text('score_breakdown_json').notNull(),
+    priceDate: text('price_date').notNull(),
+    maDate: text('ma_date').notNull(),
+    stageDate: text('stage_date'),
+    priceFreshness: text('price_freshness').notNull(),
+    priceStalenessSessions: integer('price_staleness_sessions').notNull(),
+    liquidityLookbackSessions: integer('liquidity_lookback_sessions').notNull(),
+    liquidityObservationCount: integer('liquidity_observation_count').notNull(),
+    liquidityComplete: integer('liquidity_complete', { mode: 'boolean' }).notNull(),
+    ma1Period: integer('ma1_period').notNull(),
+    ma2Period: integer('ma2_period').notNull(),
+    ma1Trend: text('ma1_trend').notNull(),
+    ma2Trend: text('ma2_trend').notNull(),
+    ma1SlopePct: real('ma1_slope_pct').notNull(),
+    ma2SlopePct: real('ma2_slope_pct').notNull(),
+    bothRising: integer('both_rising', { mode: 'boolean' }).notNull(),
+    fromAbove: integer('from_above', { mode: 'boolean' }).notNull(),
+    approachDirection: text('approach_direction').notNull(),
+    maPath: text('ma_path').notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.evaluationId, t.ticker] }),
+    statusIdx: index('trigger_evaluation_members_status_idx')
+      .on(t.evaluationId, t.triggerStatus, t.ticker),
+  }),
+)
+
+export const triggerEvaluationObservations = sqliteTable(
+  'trigger_evaluation_observations',
+  {
+    evaluationId: text('evaluation_id').notNull().references(() => triggerEvaluations.id),
+    ticker: text('ticker').notNull(),
+    disposition: text('disposition').notNull(),
+    exclusionReason: text('exclusion_reason'),
+    triggerStatus: text('trigger_status'),
+    pricePosition: text('price_position'),
+    bothRising: integer('both_rising', { mode: 'boolean' }),
+    fromAbove: integer('from_above', { mode: 'boolean' }),
+    approachDirection: text('approach_direction'),
+    zoneUpper: real('zone_upper'),
+    zoneLower: real('zone_lower'),
+    zoneDistancePct: real('zone_distance_pct'),
+    price: real('price'),
+    triggerScore: real('trigger_score'),
+    priceDate: text('price_date'),
+    maDate: text('ma_date'),
+    stageDate: text('stage_date'),
+    universeFilterPassed: integer('universe_filter_passed', { mode: 'boolean' }).notNull(),
+    priceFilterPassed: integer('price_filter_passed', { mode: 'boolean' }),
+    liquidityFilterPassed: integer('liquidity_filter_passed', { mode: 'boolean' }),
+    stageFilterPassed: integer('stage_filter_passed', { mode: 'boolean' }),
+    dataAvailable: integer('data_available', { mode: 'boolean' }).notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.evaluationId, t.ticker] }),
+  }),
+)
+
+export const triggerLifecycleEvents = sqliteTable(
+  'trigger_lifecycle_events',
+  {
+    id: text('id').primaryKey(),
+    definitionId: text('definition_id').notNull().references(() => triggerDefinitions.id),
+    evaluationVersion: integer('evaluation_version').notNull(),
+    previousEvaluationId: text('previous_evaluation_id').references(() => triggerEvaluations.id),
+    currentEvaluationId: text('current_evaluation_id').notNull().references(() => triggerEvaluations.id),
+    ticker: text('ticker').notNull(),
+    eventType: text('event_type').notNull(),
+    previousTriggerStatus: text('previous_trigger_status'),
+    currentTriggerStatus: text('current_trigger_status'),
+    exitReason: text('exit_reason'),
+    previousScore: real('previous_score'),
+    currentScore: real('current_score'),
+    previousPrice: real('previous_price'),
+    currentPrice: real('current_price'),
+    currentPricePosition: text('current_price_position'),
+    currentZoneUpper: real('current_zone_upper'),
+    currentZoneLower: real('current_zone_lower'),
+    currentZoneDistancePct: real('current_zone_distance_pct'),
+    resolvedAsOf: text('resolved_as_of').notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    identityIdx: uniqueIndex('trigger_lifecycle_events_identity_idx')
+      .on(t.currentEvaluationId, t.ticker, t.eventType),
+    definitionDateIdx: index('trigger_lifecycle_events_definition_date_idx')
+      .on(t.definitionId, t.evaluationVersion, t.resolvedAsOf),
+  }),
+)
+
+export const triggerEvaluationBatches = sqliteTable(
+  'trigger_evaluation_batches',
+  {
+    id: text('id').primaryKey(),
+    source: text('source').notNull(),
+    requestedAsOf: text('requested_as_of').notNull(),
+    resolvedAsOf: text('resolved_as_of').notNull(),
+    startedAt: integer('started_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+    completedAt: integer('completed_at', { mode: 'timestamp' }),
+    status: text('status').notNull(),
+    ownerToken: text('owner_token'),
+    heartbeatAt: integer('heartbeat_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+    definitionCount: integer('definition_count').notNull().default(0),
+    attemptedCount: integer('attempted_count').notNull().default(0),
+    completedCount: integer('completed_count').notNull().default(0),
+    reusedCount: integer('reused_count').notNull().default(0),
+    failedCount: integer('failed_count').notNull().default(0),
+    skippedCount: integer('skipped_count').notNull().default(0),
+    evaluationCount: integer('evaluation_count').notNull().default(0),
+    lifecycleEventCount: integer('lifecycle_event_count').notNull().default(0),
+    durationMs: real('duration_ms').notNull().default(0),
+    errorCategory: text('error_category'),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    sourceDateIdx: uniqueIndex('trigger_evaluation_batches_source_date_idx')
+      .on(t.source, t.resolvedAsOf),
+    statusIdx: index('trigger_evaluation_batches_status_idx').on(t.status, t.resolvedAsOf),
+  }),
+)
+
+export const triggerEvaluationBatchItems = sqliteTable(
+  'trigger_evaluation_batch_items',
+  {
+    batchId: text('batch_id').notNull().references(() => triggerEvaluationBatches.id),
+    definitionId: text('definition_id').notNull().references(() => triggerDefinitions.id),
+    definitionName: text('definition_name').notNull().default(''),
+    viewConfigJson: text('view_config_json').notNull().default('{"sort":null,"pageSize":50}'),
+    evaluationVersion: integer('evaluation_version').notNull(),
+    evaluationConfigSignature: text('evaluation_config_signature').notNull(),
+    engineVersion: integer('engine_version').notNull(),
+    scoreVersion: integer('score_version').notNull(),
+    evaluationId: text('evaluation_id'),
+    status: text('status').notNull(),
+    lifecycleEventCount: integer('lifecycle_event_count').notNull().default(0),
+    durationMs: real('duration_ms').notNull().default(0),
+    errorCategory: text('error_category'),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+    updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.batchId, t.definitionId] }),
+    statusIdx: index('trigger_evaluation_batch_items_status_idx')
+      .on(t.batchId, t.status, t.definitionId),
+  }),
+)
+
+export const triggerNotificationSettings = sqliteTable('trigger_notification_settings', {
+  definitionId: text('definition_id').primaryKey().references(() => triggerDefinitions.id, { onDelete: 'cascade' }),
+  dailyDigestEnabled: integer('daily_digest_enabled', { mode: 'boolean' }).notNull().default(false),
+  lifecycleAlertEnabled: integer('lifecycle_alert_enabled', { mode: 'boolean' }).notNull().default(false),
+  maxCandidatesInDigest: integer('max_candidates_in_digest').notNull().default(10),
+  includeNew: integer('include_new', { mode: 'boolean' }).notNull().default(true),
+  includeReEntry: integer('include_re_entry', { mode: 'boolean' }).notNull().default(true),
+  includeStatusChangedToNear: integer('include_status_changed_to_near', { mode: 'boolean' }).notNull().default(true),
+  includeStatusChangedToInZone: integer('include_status_changed_to_in_zone', { mode: 'boolean' }).notNull().default(true),
+  includeRebounded: integer('include_rebounded', { mode: 'boolean' }).notNull().default(true),
+  includeBrokeBelowZone: integer('include_broke_below_zone', { mode: 'boolean' }).notNull().default(true),
+  includeCoreConditionExit: integer('include_core_condition_exit', { mode: 'boolean' }).notNull().default(false),
+  includeStageFilterExit: integer('include_stage_filter_exit', { mode: 'boolean' }).notNull().default(false),
+  includeUniverseFilterExit: integer('include_universe_filter_exit', { mode: 'boolean' }).notNull().default(false),
+  includeDataUnavailable: integer('include_data_unavailable', { mode: 'boolean' }).notNull().default(false),
+  includeOtherExited: integer('include_other_exited', { mode: 'boolean' }).notNull().default(false),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+})
+
+export const notificationDeliveryProfiles = sqliteTable(
+  'notification_delivery_profiles',
+  {
+    id: text('id').primaryKey(),
+    provider: text('provider').notNull(),
+    recipientEmail: text('recipient_email').notNull(),
+    enabled: integer('enabled', { mode: 'boolean' }).notNull().default(false),
+    baseUrl: text('base_url').notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+    updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    providerEnabledIdx: index('notification_delivery_profiles_provider_enabled_idx')
+      .on(t.provider, t.enabled, t.id),
+  }),
+)
+
+export const notificationOutbox = sqliteTable(
+  'notification_outbox',
+  {
+    id: text('id').primaryKey(),
+    batchId: text('batch_id').notNull().references(() => triggerEvaluationBatches.id),
+    notificationType: text('notification_type').notNull(),
+    status: text('status').notNull(),
+    notificationPolicyVersion: integer('notification_policy_version').notNull(),
+    dedupeKey: text('dedupe_key').notNull(),
+    subject: text('subject').notNull(),
+    textBody: text('text_body').notNull(),
+    htmlBody: text('html_body').notNull(),
+    payloadJson: text('payload_json').notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+    readyAt: integer('ready_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+    sendAttemptCount: integer('send_attempt_count').notNull().default(0),
+    sentAt: integer('sent_at', { mode: 'timestamp' }),
+    lastErrorCategory: text('last_error_category'),
+    deliveryProfileId: text('delivery_profile_id'),
+    deliveryProvider: text('delivery_provider'),
+    providerMessageId: text('provider_message_id'),
+    providerThreadId: text('provider_thread_id'),
+    deliveryRetryable: integer('delivery_retryable', { mode: 'boolean' }),
+    deliveryStartedAt: integer('delivery_started_at', { mode: 'timestamp' }),
+  },
+  (t) => ({
+    dedupeIdx: uniqueIndex('notification_outbox_dedupe_idx').on(t.dedupeKey),
+    batchTypePolicyIdx: uniqueIndex('notification_outbox_batch_type_policy_idx').on(
+      t.batchId,
+      t.notificationType,
+      t.notificationPolicyVersion,
+    ),
+    statusReadyIdx: index('notification_outbox_status_ready_idx').on(t.status, t.readyAt, t.createdAt),
+  }),
+)
+
+export const notificationDeliveryAttempts = sqliteTable(
+  'notification_delivery_attempts',
+  {
+    id: text('id').primaryKey(),
+    outboxId: text('outbox_id').notNull().references(() => notificationOutbox.id, { onDelete: 'restrict' }),
+    deliveryProfileId: text('delivery_profile_id').notNull()
+      .references(() => notificationDeliveryProfiles.id, { onDelete: 'restrict' }),
+    attemptNumber: integer('attempt_number').notNull(),
+    provider: text('provider').notNull(),
+    startedAt: integer('started_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+    completedAt: integer('completed_at', { mode: 'timestamp' }),
+    status: text('status').notNull(),
+    errorCategory: text('error_category'),
+    retryable: integer('retryable', { mode: 'boolean' }),
+    providerMessageId: text('provider_message_id'),
+    providerThreadId: text('provider_thread_id'),
+    durationMs: real('duration_ms').notNull().default(0),
+  },
+  (t) => ({
+    outboxAttemptIdx: uniqueIndex('notification_delivery_attempts_outbox_attempt_idx')
+      .on(t.outboxId, t.attemptNumber),
+    profileStartedIdx: index('notification_delivery_attempts_profile_started_idx')
+      .on(t.deliveryProfileId, t.startedAt),
+  }),
+)
+
+export const triggerNotificationCompositionRuns = sqliteTable(
+  'trigger_notification_composition_runs',
+  {
+    id: text('id').primaryKey(),
+    batchId: text('batch_id').notNull().references(() => triggerEvaluationBatches.id),
+    notificationPolicyVersion: integer('notification_policy_version').notNull(),
+    startedAt: integer('started_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+    completedAt: integer('completed_at', { mode: 'timestamp' }),
+    status: text('status').notNull(),
+    createdCount: integer('created_count').notNull().default(0),
+    reusedCount: integer('reused_count').notNull().default(0),
+    durationMs: real('duration_ms').notNull().default(0),
+    errorCategory: text('error_category'),
+  },
+  (t) => ({
+    batchIdx: index('trigger_notification_composition_runs_batch_idx').on(t.batchId, t.startedAt),
   }),
 )
 

@@ -168,7 +168,7 @@ export default function WatchlistPage() {
   const savedCount = tickers.length + usTickers.length
 
   return (
-    <main className="mx-auto flex w-full max-w-[1480px] flex-col gap-4 px-3 py-4 sm:px-4">
+    <main className="flex w-full flex-col gap-4 px-3 py-4 sm:px-4">
       <header className="flex flex-wrap items-start justify-between gap-3 border-b border-[var(--border-subtle)] pb-3">
         <div>
           <h1 className="flex items-center gap-2 font-[var(--font-display)] text-[18px] font-bold text-[var(--text-primary)]">

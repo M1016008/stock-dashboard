@@ -13,6 +13,7 @@ type Check = {
   requiredPaths?: string[]
   nonEmptyPaths?: string[]
   expectedValues?: Record<string, string | number | boolean>
+  expectedStatus?: number
 }
 
 type CheckResult = {
@@ -61,6 +62,7 @@ const pages: Check[] = [
   `/themes/${encodeURIComponent('フィジカルAI')}`,
   '/themes',
   '/trade/workbench',
+  '/trigger-discovery',
   '/us',
   '/us/analysis/backtest',
   '/us/analysis/ml-lens',
@@ -241,6 +243,194 @@ const apiChecks: Check[] = [
   },
   { name: 'JP monthly MA monitor', path: '/api/ma25m-monitor?period=all&limit=5', kind: 'json', requiredPaths: ['date', 'periods', 'summary.monitored', 'summary.clusters'] },
   { name: 'JP monthly MA detail', path: '/api/ma25m-monitor/7003', kind: 'json', requiredPaths: ['ticker', 'monitors', 'clusters'] },
+  {
+    name: 'Trigger Discovery options',
+    path: '/api/trigger-discovery/options',
+    kind: 'json',
+    requiredPaths: ['latestAsOf', 'markets'],
+    nonEmptyPaths: ['markets'],
+    expectedValues: { contractVersion: 'trigger-discovery-options-v1' },
+  },
+  {
+    name: 'Saved Trigger definitions',
+    path: '/api/trigger-discovery/saved',
+    kind: 'json',
+    requiredPaths: ['definitions'],
+    expectedValues: { contractVersion: 'saved-trigger-definition-v1' },
+  },
+  {
+    name: 'Trigger Discovery search PIT',
+    path: '/api/trigger-discovery/search',
+    kind: 'json',
+    method: 'POST',
+    body: {
+      requestedAsOf: pitAsOf,
+      ma1Period: 20,
+      ma2Period: 25,
+      page: 1,
+      pageSize: 25,
+    },
+    requiredPaths: [
+      'meta.pitUniverseCount',
+      'meta.timeframe',
+      'meta.triggerEvaluatedCount',
+      'meta.matchedCount',
+      'rows',
+      'rows.0.triggerScore',
+      'rows.0.scoreBreakdown.total',
+      'rows.0.scoreBreakdown.stageCoverage',
+    ],
+    nonEmptyPaths: ['rows'],
+    expectedValues: {
+      contractVersion: 'trigger-discovery-search-v1',
+      'meta.requestedAsOf': pitAsOf,
+      'meta.timeframe': 'MONTHLY',
+      'criteria.ma1Period': 20,
+      'criteria.ma2Period': 25,
+    },
+  },
+  {
+    name: 'Trigger Discovery Biweekly search PIT',
+    path: '/api/trigger-discovery/search',
+    kind: 'json',
+    method: 'POST',
+    body: {
+      requestedAsOf: pitAsOf,
+      timeframe: 'BIWEEKLY',
+      ma1Period: 20,
+      ma2Period: 25,
+      markets: ['プライム'],
+      priceMin: 500,
+      averageTradingValueMin: 100000000,
+      page: 1,
+      pageSize: 25,
+    },
+    requiredPaths: ['meta.timeframe', 'meta.matchedCount', 'rows', 'rows.0.triggerScore'],
+    nonEmptyPaths: ['rows'],
+    expectedValues: {
+      contractVersion: 'trigger-discovery-search-v1',
+      'meta.requestedAsOf': pitAsOf,
+      'meta.timeframe': 'BIWEEKLY',
+    },
+  },
+  {
+    name: 'Trigger Discovery historical period scan',
+    path: '/api/trigger-discovery/historical-scan',
+    kind: 'json',
+    method: 'POST',
+    body: {
+      startDate: '2999-01-01',
+      endDate: '2999-01-05',
+      timeframe: 'MONTHLY',
+      ma1Period: 20,
+      ma2Period: 25,
+      eventLimit: 10,
+    },
+    requiredPaths: [
+      'scanMeta.requestedStartDate',
+      'scanMeta.requestedEndDate',
+      'scanMeta.tradingDayCount',
+      'summary.totalEventCount',
+      'dailyCounts',
+      'events',
+      'performance.queryCount',
+    ],
+    expectedValues: {
+      contractVersion: 'trigger-discovery-historical-scan-v1',
+      'scanMeta.requestedStartDate': '2999-01-01',
+      'scanMeta.requestedEndDate': '2999-01-05',
+      'scanMeta.tradingDayCount': 0,
+    },
+  },
+  {
+    name: 'Trigger Discovery historical scan jobs',
+    path: '/api/trigger-discovery/historical-scan/jobs?limit=1',
+    kind: 'json',
+    requiredPaths: ['jobs'],
+    expectedValues: {
+      contractVersion: 'trigger-discovery-historical-scan-job-v1',
+    },
+  },
+  {
+    name: 'Trigger Outcome create route',
+    path: '/api/trigger-discovery/historical-scan/jobs/00000000-0000-4000-8000-000000000000/outcomes',
+    kind: 'json',
+    method: 'POST',
+    body: { eventFilter: 'NEAR_ENTERED', horizons: [20, 60, 120, 245] },
+    expectedStatus: 404,
+    expectedValues: { error: 'historical_scan_job_not_found' },
+  },
+  {
+    name: 'Trigger Outcome status route',
+    path: '/api/trigger-discovery/outcome-jobs/00000000-0000-4000-8000-000000000000',
+    kind: 'json',
+    expectedStatus: 404,
+    expectedValues: { error: 'outcome_analysis_job_not_found' },
+  },
+  {
+    name: 'Trigger Outcome result route',
+    path: '/api/trigger-discovery/outcome-jobs/00000000-0000-4000-8000-000000000000/result',
+    kind: 'json',
+    expectedStatus: 404,
+    expectedValues: { error: 'outcome_analysis_job_not_found' },
+  },
+  {
+    name: 'Trigger Outcome segmentation route',
+    path: '/api/trigger-discovery/outcome-jobs/00000000-0000-4000-8000-000000000000/segments?dimension=scoreBand',
+    kind: 'json',
+    expectedStatus: 404,
+    expectedValues: { error: 'outcome_analysis_job_not_found' },
+  },
+  {
+    name: 'Trigger Outcome robustness route',
+    path: '/api/trigger-discovery/outcome-jobs/00000000-0000-4000-8000-000000000000/robustness',
+    kind: 'json',
+    expectedStatus: 404,
+    expectedValues: { error: 'outcome_analysis_job_not_found' },
+  },
+  {
+    name: 'Trigger Discovery Mini Charts PIT',
+    path: '/api/trigger-discovery/mini-charts',
+    kind: 'json',
+    method: 'POST',
+    body: {
+      tickers: ['7003', '7203'],
+      requestedAsOf: pitAsOf,
+      ma1Period: 20,
+      ma2Period: 25,
+    },
+    requiredPaths: ['resolvedAsOf', 'timeframe', 'displayPoints', 'charts', 'performance.queryCount'],
+    nonEmptyPaths: ['charts'],
+    expectedValues: {
+      contractVersion: 'trigger-discovery-mini-charts-v1',
+      requestedAsOf: pitAsOf,
+      timeframe: 'MONTHLY',
+      ma1Period: 20,
+      ma2Period: 25,
+    },
+  },
+  {
+    name: 'Trigger Discovery Biweekly Mini Charts PIT',
+    path: '/api/trigger-discovery/mini-charts',
+    kind: 'json',
+    method: 'POST',
+    body: {
+      tickers: ['7003', '7203'],
+      requestedAsOf: pitAsOf,
+      timeframe: 'BIWEEKLY',
+      ma1Period: 20,
+      ma2Period: 25,
+    },
+    requiredPaths: ['resolvedAsOf', 'timeframe', 'displayPoints', 'charts', 'performance.biweekly.weeklyHistoryQueryMs'],
+    nonEmptyPaths: ['charts'],
+    expectedValues: {
+      contractVersion: 'trigger-discovery-mini-charts-v1',
+      requestedAsOf: pitAsOf,
+      timeframe: 'BIWEEKLY',
+      ma1Period: 20,
+      ma2Period: 25,
+    },
+  },
   { name: 'sector ETFs', path: '/api/sector-etfs', kind: 'json' },
   { name: 'sector ETF detail', path: '/api/sector-etfs/1617', kind: 'json' },
   {
@@ -378,7 +568,10 @@ async function runCheck(check: Check): Promise<CheckResult> {
     })
     status = response.status
     const body = await response.text()
-    if (!response.ok) throw new Error(`HTTP ${response.status}: ${body.slice(0, 240)}`)
+    const expectedStatus = check.expectedStatus ?? 200
+    if (response.status !== expectedStatus) {
+      throw new Error(`HTTP ${response.status}, expected ${expectedStatus}: ${body.slice(0, 240)}`)
+    }
 
     if (check.kind === 'html') {
       if (!body.toLowerCase().includes('<!doctype html')) throw new Error('HTML document marker is missing')
@@ -390,7 +583,7 @@ async function runCheck(check: Check): Promise<CheckResult> {
         throw new Error('Response is not valid JSON')
       }
       const topLevelError = getPath(json, 'error')
-      if (typeof topLevelError === 'string' && topLevelError.trim()) {
+      if (expectedStatus < 400 && typeof topLevelError === 'string' && topLevelError.trim()) {
         throw new Error(`JSON error: ${topLevelError}`)
       }
       for (const requiredPath of check.requiredPaths ?? []) {

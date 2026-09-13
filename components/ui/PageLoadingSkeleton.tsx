@@ -6,7 +6,7 @@ export function PageLoadingSkeleton({
   sections?: number
 }) {
   return (
-    <div className="mx-auto flex w-full max-w-[1500px] animate-pulse flex-col gap-4" role="status" aria-live="polite">
+    <div className="flex w-full animate-pulse flex-col gap-4" role="status" aria-live="polite">
       <span className="sr-only">{title}</span>
       <div className="border-b border-[var(--color-border-default)] pb-4">
         <div className="h-4 w-28 bg-[var(--color-surface-muted)]" />

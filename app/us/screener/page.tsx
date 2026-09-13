@@ -11,7 +11,7 @@ export const metadata: Metadata = {
 
 export default function UsScreenerPage() {
   return (
-    <div className="mx-auto w-full max-w-[1600px]">
+    <div className="w-full">
       <UsScreenerClient />
     </div>
   )

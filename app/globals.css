@@ -77,9 +77,22 @@
   --radius-badge: 6px;
   --radius-tag:   3px;
 
-  /* === フォント === */
-  --font-sans: Arial, Helvetica, "Hiragino Kaku Gothic ProN", "Hiragino Sans", Meiryo, "Yu Gothic", sans-serif;
+  /* === フォント / 基本タイプスケール === */
+  --font-sans: "Meiryo UI", Meiryo, "Hiragino Sans", "Yu Gothic UI", "Yu Gothic", sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --text-xs: 13px;
+  --text-xs--line-height: 1.45;
+  --text-sm: 14px;
+  --text-sm--line-height: 1.5;
+  --text-base: 15px;
+  --text-base--line-height: 1.55;
+  --text-lg: 18px;
+  --text-lg--line-height: 1.4;
+  --text-xl: 20px;
+  --text-xl--line-height: 1.35;
+  --text-2xl: 24px;
+  --text-2xl--line-height: 1.25;
 }
 
 /* ─── 旧トークン互換レイヤー (Phase 1〜3 で書かれた既存コンポーネントが参照) ─── */
@@ -120,6 +133,26 @@
 
   --font-display: var(--font-sans);
 
+  /* サイト全体の役割別Typography。旧px utilityも下の互換ブリッジから参照する。 */
+  --type-page-title-size: clamp(22px, 2.2vw, 25px);
+  --type-section-title-size: 15px;
+  --type-card-title-size: 14px;
+  --type-body-size: 14px;
+  --type-table-size: 13px;
+  --type-label-size: 12px;
+  --type-helper-size: 11px;
+  --type-micro-size: 10px;
+  --type-nav-size: 13px;
+  --type-number-primary-size: 24px;
+  --type-number-secondary-size: 18px;
+  --type-body-line-height: 1.55;
+  --type-compact-line-height: 1.4;
+
+  /* サイト共通の横幅contract。viewport幅に応じたgutterは外側余白として扱う。 */
+  --page-gutter: clamp(16px, 2vw, 32px);
+  --page-standard-max: 1360px;
+  --page-wide-max: 1680px;
+
   --space-xs: 4px;
   --space-sm: 8px;
   --space-md: 16px;
@@ -145,16 +178,34 @@ body {
     linear-gradient(180deg, #f8fbff 0, #edf3f8 260px, #edf3f8 100%);
   color: var(--color-text-primary);
   font-family: var(--font-sans);
-  font-size: 13px;
-  line-height: 1.5;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
   -webkit-font-smoothing: antialiased;
   font-feature-settings: 'tnum' 1, 'cv11' 1;
+}
+
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
 }
 
 body[data-density='compact'] {
   --space-md: 12px;
   --space-lg: 18px;
 }
+
+.page-standard,
+.page-wide,
+.page-fluid {
+  width: calc(100% - var(--page-gutter) - var(--page-gutter));
+  margin-inline: auto;
+}
+
+.page-standard { max-width: var(--page-standard-max); }
+.page-wide { max-width: var(--page-wide-max); }
+.page-fluid { max-width: none; }
 
 body[data-density='compact'] main {
   padding-top: 14px;
@@ -347,21 +398,21 @@ body[data-density='compact'] table td {
 
 /* ─── タイポグラフィ階層 (Phase 4 仕様) ─── */
 h1 {
-  font-size: clamp(22px, 2.2vw, 25px);
+  font-size: var(--type-page-title-size);
   font-weight: 700;
   letter-spacing: 0;
   line-height: 1.15;
   margin: 0;
 }
 h2 {
-  font-size: 14px;
+  font-size: var(--type-section-title-size);
   font-weight: 700;
   letter-spacing: 0;
   line-height: 1.3;
   margin: 0;
 }
 h3 {
-  font-size: 13px;
+  font-size: var(--type-card-title-size);
   font-weight: 600;
   line-height: 1.4;
   margin: 0;
@@ -375,9 +426,45 @@ h3 {
   font-variant-numeric: tabular-nums;
   letter-spacing: 0;
 }
-.num-lg { font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: 0; }
-.num-md { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: 0; }
-.num-sm { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.num-lg { font-size: var(--type-number-primary-size); font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: 0; }
+.num-md { font-size: var(--type-number-secondary-size); font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: 0; }
+.num-sm { font-size: var(--type-body-size); font-weight: 600; font-variant-numeric: tabular-nums; }
+
+/*
+ * 旧画面の任意px指定を役割別スケールへ集約する互換ブリッジ。
+ * 個別componentへfont-sizeを追加せず、既存の密度差を保ったまま一段読みやすくする。
+ */
+.text-\[7px\],
+.text-\[8px\] { font-size: var(--type-micro-size); }
+.text-\[9px\],
+.text-\[10px\] { font-size: var(--type-helper-size); }
+.text-\[11px\] { font-size: var(--type-label-size); }
+.text-\[12px\] { font-size: var(--type-table-size); }
+.text-\[13px\] { font-size: var(--type-body-size); }
+.text-\[14px\] { font-size: var(--type-section-title-size); }
+.text-\[15px\] { font-size: 16px; }
+.text-\[16px\] { font-size: 17px; }
+.text-\[17px\] { font-size: var(--type-number-secondary-size); }
+.text-\[18px\],
+.text-\[19px\] { font-size: 20px; }
+.text-\[20px\],
+.text-\[21px\] { font-size: 22px; }
+.text-\[22px\],
+.text-\[23px\] { font-size: var(--type-number-primary-size); }
+
+@media (min-width: 640px) {
+  .sm\:text-\[10px\] { font-size: var(--type-helper-size); }
+  .sm\:text-\[11px\] { font-size: var(--type-label-size); }
+  .sm\:text-\[12px\] { font-size: var(--type-table-size); }
+  .sm\:text-\[13px\] { font-size: var(--type-body-size); }
+  .sm\:text-\[17px\] { font-size: var(--type-number-secondary-size); }
+  .sm\:text-\[20px\] { font-size: 22px; }
+  .sm\:text-\[22px\] { font-size: var(--type-number-primary-size); }
+}
+
+@media (min-width: 768px) {
+  .md\:text-\[21px\] { font-size: 22px; }
+}
 
 /* ─── 価格カラー (短縮ユーティリティ) ─── */
 .price-up   { color: var(--color-price-up); }
@@ -388,7 +475,7 @@ h3 {
 
 /* ─── 旧コンポーネント互換: section-header / card / accent-line ─── */
 .section-header {
-  font-size: 11px;
+  font-size: var(--type-label-size);
   letter-spacing: 0;
   color: var(--color-brand-800);
   border-bottom: 2px solid var(--color-brand-700);
@@ -438,14 +525,14 @@ h3 {
 .stock-ytd-strip small {
   display: block;
   color: var(--color-text-tertiary);
-  font-size: 10px;
+  font-size: var(--type-helper-size);
 }
 .stock-ytd-strip strong {
   display: block;
   margin-top: 2px;
   color: var(--color-brand-900);
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: var(--type-body-size);
 }
 .stock-move-card {
   padding: 12px;
@@ -460,12 +547,12 @@ h3 {
 }
 .stock-move-head h2 {
   color: var(--color-brand-900);
-  font-size: 13px;
+  font-size: var(--type-body-size);
 }
 .stock-move-head p {
   margin: 2px 0 0;
   color: var(--color-text-tertiary);
-  font-size: 11px;
+  font-size: var(--type-label-size);
 }
 .stock-move-list {
   display: flex;
@@ -493,7 +580,7 @@ h3 {
   border-radius: 3px;
   padding: 2px 6px;
   color: #fff;
-  font-size: 10px;
+  font-size: var(--type-helper-size);
   font-weight: 800;
   text-align: center;
 }
@@ -508,13 +595,13 @@ h3 {
 .stock-move-item > button strong {
   color: var(--color-brand-900);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--type-table-size);
 }
 .stock-move-item > button em {
   justify-self: start;
   border-radius: 999px;
   padding: 3px 8px;
-  font-size: 10px;
+  font-size: var(--type-helper-size);
   font-style: normal;
   font-weight: 800;
   white-space: nowrap;
@@ -542,7 +629,7 @@ h3 {
 .stock-move-item > button b,
 .stock-move-item > button small {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--type-label-size);
 }
 .stock-move-detail {
   padding: 10px;
@@ -564,13 +651,13 @@ h3 {
 .stock-move-summary strong {
   display: block;
   color: var(--color-brand-900);
-  font-size: 13px;
+  font-size: var(--type-body-size);
   line-height: 1.45;
 }
 .stock-move-summary p {
   margin: 3px 0 0;
   color: var(--color-text-secondary);
-  font-size: 12px;
+  font-size: var(--type-table-size);
   line-height: 1.6;
 }
 .stock-move-signal-grid {
@@ -606,20 +693,20 @@ h3 {
 .stock-move-signal-grid small {
   display: block;
   color: var(--color-text-tertiary);
-  font-size: 10px;
+  font-size: var(--type-helper-size);
   line-height: 1.35;
 }
 .stock-move-signal-grid strong {
   display: block;
   margin: 3px 0;
   color: var(--color-brand-900);
-  font-size: 12px;
+  font-size: var(--type-table-size);
   line-height: 1.4;
 }
 .stock-move-detail p {
   margin: 0 0 8px;
   color: var(--color-text-secondary);
-  font-size: 12px;
+  font-size: var(--type-table-size);
   line-height: 1.6;
 }
 .stock-move-detail .stock-move-note {
@@ -638,13 +725,13 @@ h3 {
 }
 .stock-move-detail dt {
   color: var(--color-text-tertiary);
-  font-size: 11px;
+  font-size: var(--type-label-size);
   font-weight: 700;
 }
 .stock-move-detail dd {
   margin: 0;
   color: var(--color-text-primary);
-  font-size: 12px;
+  font-size: var(--type-table-size);
 }
 
 .accent-line {
@@ -697,7 +784,16 @@ code {
 
 main table {
   border-collapse: collapse;
+  font-size: var(--type-table-size);
+  line-height: 1.45;
   font-variant-numeric: tabular-nums;
+}
+
+main table.text-\[9px\],
+main table.text-\[10px\],
+main table.text-\[11px\],
+main table.text-\[12px\] {
+  font-size: var(--type-table-size);
 }
 
 main th {
@@ -740,7 +836,7 @@ main td {
   text-align: center;
   line-height: 14px;
   font-weight: 500;
-  font-size: 9px;
+  font-size: var(--type-micro-size);
   margin-right: 1px;
   font-variant-numeric: tabular-nums;
   vertical-align: middle;
@@ -756,7 +852,7 @@ main td {
   text-align: center;
   line-height: 13px;
   font-weight: 500;
-  font-size: 9px;
+  font-size: var(--type-micro-size);
   font-variant-numeric: tabular-nums;
 }
 
@@ -779,18 +875,18 @@ main td {
 .sb-hd h2,
 .sb-hd > .sb-h2 {
   margin: 0;
-  font-size: 13px;
+  font-size: var(--type-section-title-size);
   font-weight: 700;
   line-height: 1.3;
   letter-spacing: 0;
 }
 .sb-hd > .sb-h2-sm {
   margin: 0;
-  font-size: 13px;
+  font-size: var(--type-card-title-size);
   font-weight: 500;
 }
 .sb-hd > .sb-sub {
-  font-size: 11px;
+  font-size: var(--type-label-size);
   color: var(--color-text-tertiary);
 }
 
@@ -829,14 +925,15 @@ main td {
 .sb-page-title h1,
 .sb-page-title h2 {
   margin: 0 0 2px;
-  font-size: 22px;
+  font-size: var(--type-page-title-size);
   font-weight: 700;
   letter-spacing: 0;
   color: var(--color-brand-900);
 }
 .sb-page-title p {
   margin: 0;
-  font-size: 12px;
+  font-size: var(--type-table-size);
+  line-height: var(--type-body-line-height);
   color: var(--color-text-tertiary);
 }
 
@@ -868,7 +965,8 @@ main td {
 /* テーブル: モック準拠 */
 .sb-tbl {
   width: 100%;
-  font-size: 12px;
+  font-size: var(--type-table-size);
+  line-height: 1.45;
   border-collapse: collapse;
   font-variant-numeric: tabular-nums;
   table-layout: fixed;
@@ -877,7 +975,7 @@ main td {
   padding: 7px 9px;
   text-align: left;
   font-weight: 700;
-  font-size: 11px;
+  font-size: var(--type-label-size);
   color: var(--color-brand-800);
   background: var(--color-surface-muted);
   border-bottom: 1px solid var(--color-border-default);
@@ -906,7 +1004,7 @@ main td {
   border: 1px solid var(--color-border-default);
   border-left: 3px solid var(--color-market-red);
   border-radius: 3px;
-  font-size: 11px;
+  font-size: var(--type-label-size);
   font-weight: 500;
 }
 .sb-chip .sb-x { color: #a5b4fc; cursor: pointer; }
@@ -918,14 +1016,14 @@ main td {
   border: 1px dashed var(--color-border-default);
   color: var(--color-text-secondary);
   border-radius: 3px;
-  font-size: 11px;
+  font-size: var(--type-label-size);
   cursor: pointer;
 }
 
 /* タブ (本日/今週/今月 や 6 タイムスケール) */
 .sb-tab {
   padding: 5px 10px;
-  font-size: 12px;
+  font-size: var(--type-nav-size);
   color: var(--color-text-secondary);
   cursor: pointer;
   border: 1px solid var(--color-border-default);
@@ -947,7 +1045,7 @@ main td {
   padding: 5px 6px;
   border-radius: 3px;
   border: 1px solid rgba(185, 201, 223, 0.72);
-  font-size: 9px;
+  font-size: var(--type-micro-size);
   font-variant-numeric: tabular-nums;
   min-height: 38px;
   display: flex;
@@ -961,12 +1059,12 @@ main td {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 9px;
+  font-size: var(--type-micro-size);
 }
 .sb-cell .sb-cell-v {
   font-weight: 500;
   margin-top: 1px;
-  font-size: 9px;
+  font-size: var(--type-micro-size);
 }
 
 /* 6×6 マトリクス */
@@ -974,7 +1072,7 @@ main td {
   display: inline-grid;
   grid-template-columns: 34px repeat(6, 1fr);
   width: 100%;
-  font-size: 11px;
+  font-size: var(--type-label-size);
   font-variant-numeric: tabular-nums;
   text-align: center;
   border: 1px solid var(--color-border-default);
@@ -991,7 +1089,7 @@ main td {
 .sb-mx .sb-mx-h {
   background: var(--color-surface-subtle);
   color: var(--color-text-tertiary);
-  font-size: 10px;
+  font-size: var(--type-helper-size);
 }
 .sb-mx-diag { background: #f1efe8; color: var(--color-text-tertiary); }
 
@@ -1003,22 +1101,22 @@ main td {
   padding: 6px 10px;
   border: 1px solid var(--color-border-soft);
   border-radius: 3px;
-  font-size: 12px;
+  font-size: var(--type-nav-size);
   color: var(--color-text-secondary);
   background: var(--color-surface-base);
 }
 
 /* KPI 数値ブロック */
 .sb-kpi { display: flex; flex-direction: column; gap: 4px; }
-.sb-kpi .sb-kpi-lbl { font-size: 11px; color: var(--color-text-tertiary); }
+.sb-kpi .sb-kpi-lbl { font-size: var(--type-label-size); color: var(--color-text-tertiary); }
 .sb-kpi .sb-kpi-v {
-  font-size: 17px;
-  font-weight: 500;
+  font-size: var(--type-number-secondary-size);
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
   letter-spacing: 0;
 }
 .sb-kpi .sb-kpi-sub {
-  font-size: 10px;
+  font-size: var(--type-helper-size);
   color: var(--color-text-tertiary);
   font-variant-numeric: tabular-nums;
 }
@@ -1027,7 +1125,7 @@ main td {
 .sb-nav {
   display: flex;
   gap: 2px;
-  font-size: 12px;
+  font-size: var(--type-nav-size);
   flex-wrap: wrap;
   justify-content: flex-end;
 }
@@ -1072,7 +1170,7 @@ main td {
   background: var(--color-surface-subtle);
   padding: 7px 9px;
   color: var(--color-brand-800);
-  font-size: 12px;
+  font-size: var(--type-table-size);
   font-weight: 700;
 }
 .bt-control select {
@@ -1080,7 +1178,7 @@ main td {
   flex: 1;
   height: 26px;
   padding: 2px 7px;
-  font-size: 12px;
+  font-size: var(--type-table-size);
   font-weight: 600;
 }
 .bt-calendar-card {
@@ -1107,13 +1205,13 @@ main td {
 }
 .bt-calendar-head span {
   color: var(--color-text-secondary);
-  font-size: 12px;
+  font-size: var(--type-table-size);
   font-weight: 700;
 }
 .bt-calendar-head strong {
   color: var(--color-brand-900);
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: var(--type-body-size);
 }
 .bt-calendar-actions {
   display: grid;
@@ -1142,7 +1240,7 @@ main td {
   height: 28px;
   min-width: 0;
   padding: 2px 8px;
-  font-size: 12px;
+  font-size: var(--type-table-size);
   font-weight: 700;
 }
 .bt-weekdays,
@@ -1153,7 +1251,7 @@ main td {
 .bt-weekdays {
   padding: 7px 8px 4px;
   color: var(--color-text-tertiary);
-  font-size: 10px;
+  font-size: var(--type-helper-size);
   font-weight: 800;
   text-align: center;
 }
@@ -1179,12 +1277,12 @@ main td {
 }
 .bt-day span {
   color: var(--color-text-primary);
-  font-size: 12px;
+  font-size: var(--type-table-size);
   font-weight: 800;
 }
 .bt-day small {
   color: var(--color-text-tertiary);
-  font-size: 10px;
+  font-size: var(--type-helper-size);
   font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
@@ -1222,7 +1320,7 @@ main td {
 }
 .bt-date-meta span {
   color: var(--color-text-tertiary);
-  font-size: 10px;
+  font-size: var(--type-helper-size);
   font-weight: 800;
 }
 .bt-date-meta strong {
@@ -1235,7 +1333,7 @@ main td {
 .bt-date-meta p {
   margin: 4px 0 0;
   color: var(--color-text-secondary);
-  font-size: 11px;
+  font-size: var(--type-label-size);
   line-height: 1.45;
 }
 .bt-signal-strip {
@@ -1255,7 +1353,7 @@ main td {
   border-radius: 3px;
   background: var(--color-surface-field);
   color: var(--color-text-secondary);
-  font-size: 11px;
+  font-size: var(--type-label-size);
   font-weight: 700;
   cursor: pointer;
 }
@@ -1277,7 +1375,7 @@ main td {
   border-radius: 3px;
   background: var(--color-surface-field);
   color: var(--color-text-secondary);
-  font-size: 11px;
+  font-size: var(--type-label-size);
   font-weight: 700;
 }
 .bt-alert {
@@ -1286,7 +1384,7 @@ main td {
   background: var(--color-price-up-bg);
   color: var(--color-price-up-strong);
   padding: 9px 11px;
-  font-size: 12px;
+  font-size: var(--type-table-size);
   font-weight: 700;
 }
 .bt-summary-grid {
@@ -1313,7 +1411,7 @@ main td {
 .bt-metric span {
   display: block;
   color: var(--color-text-tertiary);
-  font-size: 11px;
+  font-size: var(--type-label-size);
   font-weight: 700;
 }
 .bt-metric strong {
@@ -1327,7 +1425,7 @@ main td {
 .bt-metric p {
   margin: 4px 0 0;
   color: var(--color-text-secondary);
-  font-size: 11px;
+  font-size: var(--type-label-size);
 }
 .bt-main-grid {
   display: grid;
@@ -1347,13 +1445,13 @@ main td {
 }
 .bt-card-head.compact { min-height: 44px; }
 .bt-card-head h2 {
-  font-size: 13px;
+  font-size: var(--type-body-size);
   color: var(--color-brand-900);
 }
 .bt-card-head p {
   margin: 2px 0 0;
   color: var(--color-text-tertiary);
-  font-size: 11px;
+  font-size: var(--type-label-size);
 }
 .bt-loading {
   border: 1px solid var(--color-border-default);
@@ -1361,7 +1459,7 @@ main td {
   border-radius: 3px;
   padding: 3px 8px;
   color: var(--color-brand-700);
-  font-size: 11px;
+  font-size: var(--type-label-size);
   font-weight: 700;
 }
 .bt-table-wrap { overflow-x: auto; }
@@ -1386,7 +1484,7 @@ main td {
 .bt-sub {
   margin-top: 1px;
   color: var(--color-text-tertiary);
-  font-size: 10px;
+  font-size: var(--type-helper-size);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1405,7 +1503,7 @@ main td {
   border-radius: 3px;
   background: var(--color-surface-field);
   color: var(--color-brand-800);
-  font-size: 10px;
+  font-size: var(--type-helper-size);
   font-weight: 700;
 }
 .bt-detail-btn {
@@ -1418,7 +1516,7 @@ main td {
   background: #fff;
   color: var(--color-brand-800);
   padding: 0 7px;
-  font-size: 10px;
+  font-size: var(--type-helper-size);
   font-weight: 700;
   cursor: pointer;
 }
@@ -1438,7 +1536,7 @@ main td {
   border-top: 1px solid var(--color-border-default);
   padding: 12px;
   color: var(--color-text-secondary);
-  font-size: 12px;
+  font-size: var(--type-table-size);
 }
 .bt-detail-grid {
   display: grid;
@@ -1448,7 +1546,7 @@ main td {
 .bt-detail-box h3 {
   margin: 0 0 6px;
   color: var(--color-brand-900);
-  font-size: 12px;
+  font-size: var(--type-table-size);
 }
 .bt-detail-box p {
   margin: 0 0 8px;
@@ -1487,11 +1585,11 @@ main td {
 }
 .bt-detail-topline strong {
   color: var(--color-brand-900);
-  font-size: 13px;
+  font-size: var(--type-body-size);
 }
 .bt-detail-topline span {
   color: var(--color-text-tertiary);
-  font-size: 11px;
+  font-size: var(--type-label-size);
   font-weight: 700;
 }
 .bt-detail-grid.rich {
@@ -1509,7 +1607,7 @@ main td {
   border-bottom: 1px solid var(--color-border-soft);
   background: var(--color-surface-subtle);
   padding: 8px 10px;
-  font-size: 11px;
+  font-size: var(--type-label-size);
 }
 .bt-highlight-chart-meta span,
 .bt-highlight-chart-meta strong,
@@ -1537,7 +1635,7 @@ main td {
   padding-left: 13px;
   color: var(--color-text-tertiary);
   font-style: normal;
-  font-size: 10px;
+  font-size: var(--type-helper-size);
   font-weight: 700;
 }
 .bt-ma-legend em::before {
@@ -1594,14 +1692,14 @@ main td {
   display: block;
   color: var(--color-brand-900);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--type-helper-size);
   line-height: 1.1;
 }
 .bt-chart-stage-layer small {
   display: block;
   color: var(--color-text-tertiary);
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: var(--type-micro-size);
   line-height: 1.1;
 }
 .bt-stage-ribbon {
@@ -1627,11 +1725,11 @@ main td {
 }
 .bt-stage-ribbon small {
   color: var(--color-text-tertiary);
-  font-size: 9px;
+  font-size: var(--type-micro-size);
 }
 .bt-stage-ribbon b {
   color: var(--color-brand-900);
-  font-size: 11px;
+  font-size: var(--type-label-size);
 }
 .bt-chart-empty {
   border: 1px solid var(--color-border-default);
@@ -1639,7 +1737,7 @@ main td {
   padding: 18px;
   text-align: center;
   color: var(--color-text-tertiary);
-  font-size: 12px;
+  font-size: var(--type-table-size);
 }
 .bt-insight-grid {
   display: grid;
@@ -1680,7 +1778,7 @@ main td {
   padding: 4px 7px;
   color: var(--color-brand-800);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--type-helper-size);
   font-weight: 700;
 }
 .bt-similar-cases {
@@ -1760,16 +1858,16 @@ main td {
 }
 .bt-candidate-card span {
   color: var(--color-text-tertiary);
-  font-size: 10px;
+  font-size: var(--type-helper-size);
   font-weight: 800;
 }
 .bt-candidate-card strong {
   color: var(--color-brand-900);
-  font-size: 13px;
+  font-size: var(--type-body-size);
 }
 .bt-candidate-card small {
   color: var(--color-text-tertiary);
-  font-size: 10px;
+  font-size: var(--type-helper-size);
 }
 .bt-candidate-card dl {
   display: grid;
@@ -1783,14 +1881,14 @@ main td {
 }
 .bt-candidate-card dt {
   color: var(--color-text-tertiary);
-  font-size: 10px;
+  font-size: var(--type-helper-size);
   font-weight: 800;
 }
 .bt-candidate-card dd {
   margin: 0;
   color: var(--color-text-secondary);
   font-family: var(--font-sans);
-  font-size: 11px;
+  font-size: var(--type-label-size);
   line-height: 1.45;
 }
 .bt-evidence-list {
@@ -1846,20 +1944,20 @@ main td {
   background: var(--color-brand-700);
   color: #fff;
   border-radius: 3px;
-  font-size: 11px;
+  font-size: var(--type-label-size);
   font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
 .bt-rank a {
   color: var(--color-brand-900);
-  font-size: 12px;
+  font-size: var(--type-table-size);
   font-weight: 700;
   text-decoration: none;
 }
 .bt-rank p {
   margin: 1px 0 0;
   color: var(--color-text-tertiary);
-  font-size: 10px;
+  font-size: var(--type-helper-size);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1871,7 +1969,7 @@ main td {
 }
 .bt-empty {
   color: var(--color-text-tertiary);
-  font-size: 12px;
+  font-size: var(--type-table-size);
   padding: 8px;
 }
 .bt-sector-bars {
@@ -1886,7 +1984,7 @@ main td {
   align-items: center;
   gap: 7px;
   color: var(--color-text-secondary);
-  font-size: 11px;
+  font-size: var(--type-label-size);
 }
 .bt-sector-bars div div {
   height: 8px;
@@ -1918,7 +2016,7 @@ main td {
   background: var(--color-surface-field);
   color: var(--color-brand-800);
   padding: 7px 8px;
-  font-size: 11px;
+  font-size: var(--type-label-size);
   font-weight: 700;
   font-family: var(--font-mono);
 }

@@ -12,7 +12,7 @@ export const metadata: Metadata = {
 
 export default function CustomChartsPage() {
   return (
-    <div className="mx-auto w-full max-w-[1480px] space-y-4 px-5 py-5 sm:px-8 lg:px-10 xl:px-12">
+    <div className="w-full space-y-4">
       <PageTitle
         title="合成チャート"
         subtitle="複数銘柄のOHLCVを数式で合成し、独自のライン/ロウソク足チャートとして表示します。"

@@ -8,6 +8,8 @@ import { eq } from 'drizzle-orm'
 import { db } from '@/lib/db/client'
 import { batchRuns } from '@/lib/db/schema'
 import { getDataFreshness } from '@/lib/server/data-freshness'
+import { runDailyTriggerEvaluations } from '@/lib/server/trigger-daily-evaluations'
+import { composeTriggerNotificationsForBatch } from '@/lib/server/trigger-notification-composition'
 import { acquireExclusiveUpdateLock } from '@/lib/server/update-lock'
 
 type RunResult = {
@@ -317,6 +319,42 @@ async function main(): Promise<void> {
     ) {
       throw new Error('Post-OHLCV refresh did not complete snapshot/feature/cache freshness')
     }
+
+    if (!after.latestOhlcvDate) {
+      throw new Error('Trigger daily evaluation requires a completed OHLCV data date')
+    }
+    console.log(`Trigger daily evaluation start: data date ${after.latestOhlcvDate}`)
+    const triggerBatch = await runDailyTriggerEvaluations({
+      requestedAsOf: after.latestOhlcvDate,
+      resolvedAsOf: after.latestOhlcvDate,
+    })
+    console.log('Trigger daily evaluation complete:', {
+      batchId: triggerBatch.batch?.id ?? null,
+      status: triggerBatch.batch?.status ?? null,
+      reusedBatch: triggerBatch.reusedBatch,
+      definitions: triggerBatch.batch?.definitionCount ?? 0,
+      evaluations: triggerBatch.batch?.evaluationCount ?? 0,
+      lifecycleEvents: triggerBatch.batch?.lifecycleEventCount ?? 0,
+    })
+    if (triggerBatch.batch?.status === 'COMPLETED_WITH_ERRORS') {
+      console.error(`Trigger daily evaluation completed with ${triggerBatch.batch.failedCount} definition error(s)`)
+    }
+    if (triggerBatch.batch) {
+      try {
+        const notificationResult = await composeTriggerNotificationsForBatch({ batchId: triggerBatch.batch.id })
+        console.log('Trigger notification composition complete:', {
+          batchId: notificationResult.batchId,
+          created: notificationResult.createdCount,
+          reused: notificationResult.reusedCount,
+          notifications: notificationResult.notifications.map((item) => item.notificationType),
+          totalMs: Number(notificationResult.performance.totalMs.toFixed(2)),
+        })
+      } catch (error) {
+        // Notification composition is a separate responsibility and must not roll back market data or evaluations.
+        console.error('Trigger notification composition failed:', error)
+      }
+    }
+    await lock?.heartbeat()
 
     await db
       .update(batchRuns)

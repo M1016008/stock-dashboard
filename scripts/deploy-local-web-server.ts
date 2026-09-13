@@ -37,6 +37,12 @@ const requiredStagedRoutes = [
   '/api/integrated-screener/saved/route',
   '/api/integrated-screener/saved/[id]/route',
   '/api/integrated-screener/saved/[id]/reason/route',
+  '/api/trigger-discovery/historical-scan/jobs/route',
+  '/api/trigger-discovery/historical-scan/jobs/[jobId]/route',
+  '/api/trigger-discovery/historical-scan/jobs/[jobId]/result/route',
+  '/api/trigger-discovery/historical-scan/jobs/[jobId]/outcomes/route',
+  '/api/trigger-discovery/outcome-jobs/[jobId]/route',
+  '/api/trigger-discovery/outcome-jobs/[jobId]/result/route',
 ] as const
 
 function removeGenerated(pathname: string): void {
@@ -75,6 +81,15 @@ function assertRequiredRoutes(buildPath: string): void {
   }
 }
 
+function assertLaunchAgentRunning(label: string): void {
+  const result = spawnSync('/bin/launchctl', ['print', `gui/${process.getuid?.()}/${label}`], {
+    encoding: 'utf8',
+  })
+  if (result.status !== 0 || !result.stdout.includes('state = running')) {
+    throw new Error(`LaunchAgent is not running: ${label}`)
+  }
+}
+
 removeGenerated(stagePath)
 runNpm('test:layout-shell')
 runNpm('test:status-health')
@@ -90,6 +105,7 @@ runNpm('test:us-screener-period-metrics')
 runNpm('test:us-automation-foundation')
 runNpm('test:physical-plan')
 runNpm('test:timeframes')
+runNpm('test:trigger-discovery-outcomes')
 runNpm('build', {
   ...process.env,
   NEXT_DIST_DIR: stageName,
@@ -99,6 +115,7 @@ if (!fs.existsSync(path.join(stagePath, 'BUILD_ID'))) {
   throw new Error(`Staged build is incomplete: ${stagePath}`)
 }
 assertRequiredRoutes(stagePath)
+runNpm('db:ensure-schema')
 
 removeGenerated(previousPath)
 const hadPreviousBuild = fs.existsSync(livePath)
@@ -107,6 +124,7 @@ fs.renameSync(stagePath, livePath)
 
 try {
   runNpm('web:install')
+  assertLaunchAgentRunning('com.stockboard.trigger-historical-scan')
   if (!waitForHealth(healthUrl)) {
     throw new Error(`Health check did not recover within 60 seconds: ${healthUrl}`)
   }

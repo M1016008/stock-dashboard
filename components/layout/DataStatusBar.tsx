@@ -210,7 +210,7 @@ export function DataStatusBar() {
 
   return (
     <div className="border-b border-[var(--color-border-soft)] bg-white">
-      <div className="relative mx-auto flex min-h-7 w-full max-w-[1480px] items-center justify-between gap-3 px-5 sm:px-8 lg:px-10 xl:px-12">
+      <div className="page-wide relative flex min-h-7 items-center justify-between gap-3">
         <button
           type="button"
           onClick={() => setOpen((current) => !current)}

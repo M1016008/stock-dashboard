@@ -317,7 +317,7 @@ export default async function UsHomePage() {
       ? '下落構造を警戒'
       : '方向感を確認'
   return (
-    <div className="mx-auto flex w-full max-w-[1420px] flex-col gap-5">
+    <div className="flex w-full flex-col gap-5">
       <PageTitle
         title="米国株ダッシュボード"
         subtitle="6ステージの市場構造から、いま確認すべき銘柄と分析画面へ最短で移動します。"

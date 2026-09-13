@@ -7,6 +7,7 @@ import {
   type TriggerDiscoveryCandidateSnapshot,
   type TriggerDiscoveryDataSource,
   type TriggerDiscoveryFilteredCandidate,
+  type TriggerDiscoveryStageSnapshot,
 } from '@/lib/server/trigger-discovery-read-model'
 import type { MaZoneTriggerObservation } from '@/lib/trigger-discovery-engine'
 
@@ -81,6 +82,11 @@ equal(filter({ priceMin: 500, averageVolumeMin: 1_000, averageTradingValueMin: 6
 equal(filter().candidates.find((row) => row.ticker === '1005')?.liquidityComplete, false, 'short histories use their available observations and disclose incompleteness')
 equal(filter().rejected.STALE_PRICE, 1, 'prices older than three market sessions are excluded by default')
 equal(filter({ maxPriceStalenessSessions: 0 }).candidates.some((row) => row.ticker === '1002'), false, 'zero tolerance requires the resolved market date')
+equal(
+  filter({ priceMin: 500, observeTickers: new Set(['1003']) }).observed.get('1003')?.exclusionReason,
+  'PRICE_FILTER',
+  'observed previous members retain the exact cheap-filter exit reason',
+)
 
 equal(isHistoricalUniverseMemberAt({
   asOf: '2024-06-30', currentActive: false, historicalRecordExists: true,
@@ -97,7 +103,9 @@ equal(isHistoricalUniverseMemberAt({
 
 class FixtureSource implements TriggerDiscoveryDataSource {
   genericCalls = 0
+  biweeklyCalls = 0
   fastCalls = 0
+  fastRequiredObservations: number[] = []
   private readonly candidates: TriggerDiscoveryCandidateSnapshot[]
   private readonly observations: Map<string, MaZoneTriggerObservation[]>
 
@@ -120,14 +128,39 @@ class FixtureSource implements TriggerDiscoveryDataSource {
     return { value: this.candidates, queryCount: 1, queryMs: 1 }
   }
 
-  async loadStoredMaObservations(input: { candidates: TriggerDiscoveryFilteredCandidate[] }) {
+  async loadStoredMaObservations(input: {
+    candidates: TriggerDiscoveryFilteredCandidate[]
+    requiredObservations: number
+  }) {
     this.fastCalls += 1
+    this.fastRequiredObservations.push(input.requiredObservations)
     return { value: new Map(input.candidates.map((candidate) => [candidate.ticker, this.observations.get(candidate.ticker) ?? []])), queryCount: 1, queryMs: 1 }
   }
 
   async loadGenericMaObservations(input: { candidates: TriggerDiscoveryFilteredCandidate[] }) {
     this.genericCalls += 1
     return { value: new Map(input.candidates.map((candidate) => [candidate.ticker, this.observations.get(candidate.ticker) ?? []])), queryCount: 1, queryMs: 1 }
+  }
+
+  async loadBiweeklyMaObservations(input: { candidates: TriggerDiscoveryFilteredCandidate[] }) {
+    this.biweeklyCalls += 1
+    return {
+      value: new Map(input.candidates.map((candidate) => [candidate.ticker, this.observations.get(candidate.ticker) ?? []])),
+      queryCount: 1,
+      queryMs: 1,
+    }
+  }
+
+  async loadStageSnapshots(input: { tickers: string[]; resolvedAsOf: string }) {
+    const snapshots = new Map<string, TriggerDiscoveryStageSnapshot>([
+      ['1001', { ticker: '1001', date: input.resolvedAsOf, dayAStage: 1, dayBStage: 2, weekAStage: 3, weekBStage: 4, monthAStage: 5, monthBStage: 6 }],
+      ['1002', { ticker: '1002', date: input.resolvedAsOf, dayAStage: 6, dayBStage: 5, weekAStage: null, weekBStage: 3, monthAStage: 2, monthBStage: 1 }],
+    ])
+    return {
+      value: new Map([...snapshots].filter(([ticker]) => input.tickers.includes(ticker))),
+      queryCount: input.tickers.length > 0 ? 1 : 0,
+      queryMs: input.tickers.length > 0 ? 1 : 0,
+    }
   }
 }
 
@@ -142,12 +175,36 @@ async function main() {
   equal(result.requestedAsOf, '2026-09-06', 'requested non-trading asOf is preserved')
   equal(result.resolvedAsOf, '2026-09-04', 'asOf resolves to the latest prior market session')
   equal(result.diagnostics.counts.evaluated, 2, 'only cheap-filter survivors reach the Trigger Engine')
-  equal(result.diagnostics.performance.queryCount, 3, 'fast path query count is constant')
+  equal(result.diagnostics.performance.queryCount, 4, 'fast path plus bulk Stage query count is constant')
   equal(source.fastCalls, 1, 'saved 20M/25M periods use the fast path')
+  equal(source.fastRequiredObservations.join(','), '21', 'saved MA SQL receives the Engine observation requirement')
   equal(source.genericCalls, 0, 'complete fast-path input does not call generic loading')
   check(result.rows.every((row) => row.matched && row.maPath === 'fast'), 'Discovery returns matched rows only')
   check(result.rows.every((row) => row.maDate <= result.resolvedAsOf!), 'future MA observations never pass resolvedAsOf')
   check(result.rows.every((row) => row.priceDate <= result.resolvedAsOf!), 'future price observations never pass resolvedAsOf')
+
+  const observedResult = await getTriggerDiscovery({
+    asOf: '2026-09-04',
+    stageFilters: { dayAStage: [2] },
+    observeTickers: ['1001', '1003', '1004', '9999'],
+    limit: 500,
+  }, { dataSource: new FixtureSource() })
+  const observed = new Map(observedResult.observations?.map((row) => [row.ticker, row]))
+  equal(observed.get('1001')?.disposition, 'STAGE_FILTER_EXIT', 'core matches excluded by Stage are distinguished')
+  equal(observed.get('1004')?.disposition, 'DATA_UNAVAILABLE', 'stale prices are not treated as Trigger failures')
+  equal(observed.get('9999')?.exclusionReason, 'PIT_UNIVERSE', 'tickers absent from the PIT universe are explicit')
+  equal(observedResult.diagnostics.performance.queryCount, 4, 'observing previous members adds no discovery query')
+
+  const customLookbackSource = new FixtureSource()
+  await getTriggerDiscovery({
+    asOf: '2026-09-04',
+    triggerConfig: { slopeLookbackSessions: 5, approachLookbackSessions: 7 },
+  }, { dataSource: customLookbackSource })
+  equal(
+    customLookbackSource.fastRequiredObservations.join(','),
+    '8',
+    'saved MA observation requirement follows max configured lookback plus current observation',
+  )
 
   const genericSource = new FixtureSource()
   const generic = await getTriggerDiscovery({
@@ -160,6 +217,16 @@ async function main() {
   equal(generic.rows.length, 1, 'pagination limits returned matched rows')
   equal(generic.hasMore, generic.totalMatched > 1, 'pagination metadata is deterministic')
 
+  const biweeklySource = new FixtureSource()
+  const biweekly = await getTriggerDiscovery({
+    asOf: '2026-09-04',
+    limit: 500,
+  }, { dataSource: biweeklySource, timeframe: 'BIWEEKLY' })
+  equal(biweeklySource.fastCalls, 0, 'Biweekly never uses the Monthly saved-MA fast path')
+  equal(biweeklySource.genericCalls, 0, 'Biweekly does not use the Monthly generic series adapter')
+  equal(biweeklySource.biweeklyCalls, 1, 'Biweekly uses one bulk timeframe-series load')
+  check(biweekly.rows.every((row) => row.maPath === 'generic'), 'Biweekly results disclose generic MA calculation')
+
   const paritySource = new FixtureSource()
   const fast = await getTriggerDiscovery({ asOf: '2026-09-04', limit: 500 }, { dataSource: paritySource, maPath: 'fast' })
   const genericParity = await getTriggerDiscovery({ asOf: '2026-09-04', limit: 500 }, { dataSource: paritySource, maPath: 'generic' })
@@ -167,6 +234,14 @@ async function main() {
 
   await assert.rejects(
     () => getTriggerDiscovery({ asOf: '2026-09-04', priceMin: 100, priceMax: 99 }, { dataSource: new FixtureSource() }),
+    TriggerDiscoveryInputError,
+  )
+  assertions += 1
+  await assert.rejects(
+    () => getTriggerDiscovery(
+      { asOf: '2026-09-04' },
+      { dataSource: new FixtureSource(), maPath: 'fast', timeframe: 'BIWEEKLY' },
+    ),
     TriggerDiscoveryInputError,
   )
   assertions += 1

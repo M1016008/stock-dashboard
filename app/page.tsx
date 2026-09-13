@@ -79,7 +79,7 @@ export default async function DashboardPage({
   ].filter((date): date is { date: string } => date != null)
 
   return (
-    <div className="mx-auto flex w-full max-w-[1420px] flex-col gap-5">
+    <div className="flex w-full flex-col gap-5">
       <PageTitle
         title="ダッシュボード"
         subtitle={subtitle}

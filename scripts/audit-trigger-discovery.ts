@@ -5,19 +5,75 @@ import {
   getTriggerDiscovery,
   type TriggerDiscoveryFilteredCandidate,
   type TriggerDiscoveryInput,
+  type TriggerDiscoveryResult,
 } from '@/lib/server/trigger-discovery-read-model'
-import { evaluateMaZoneTrigger } from '@/lib/trigger-discovery-engine'
-import { execGet } from '@/lib/db/client'
+import {
+  DEFAULT_MA_ZONE_TRIGGER_CONFIG,
+  evaluateMaZoneTrigger,
+} from '@/lib/trigger-discovery-engine'
+import { execAll, execGet } from '@/lib/db/client'
 
 const AS_OF = process.env.TRIGGER_DISCOVERY_AS_OF ?? '2026-09-07'
 const dataSource = createTriggerDiscoverySqlDataSource()
 
 const cases: Array<{ id: string; input: TriggerDiscoveryInput }> = [
-  { id: 'A', input: { asOf: AS_OF, triggerConfig: { ma1Period: 20, ma2Period: 25 }, limit: 100 } },
-  { id: 'B', input: { asOf: AS_OF, triggerConfig: { ma1Period: 20, ma2Period: 25 }, markets: ['プライム', 'スタンダード'], priceMin: 500, averageTradingValueMin: 100_000_000, limit: 100 } },
-  { id: 'C', input: { asOf: AS_OF, triggerConfig: { ma1Period: 20, ma2Period: 50 }, limit: 100 } },
-  { id: 'D', input: { asOf: AS_OF, triggerConfig: { ma1Period: 50, ma2Period: 100 }, limit: 100 } },
+  { id: 'A', input: { asOf: AS_OF, triggerConfig: { ma1Period: 20, ma2Period: 25 }, limit: 500 } },
+  { id: 'B', input: { asOf: AS_OF, triggerConfig: { ma1Period: 20, ma2Period: 25 }, markets: ['プライム', 'スタンダード'], priceMin: 500, averageTradingValueMin: 100_000_000, limit: 500 } },
+  { id: 'C', input: { asOf: AS_OF, triggerConfig: { ma1Period: 20, ma2Period: 50 }, limit: 500 } },
+  { id: 'D', input: { asOf: AS_OF, triggerConfig: { ma1Period: 50, ma2Period: 100 }, limit: 500 } },
 ]
+
+type RawStageRow = {
+  ticker: string
+  date: string
+  daily_a_stage: number | null
+  daily_b_stage: number | null
+  weekly_a_stage: number | null
+  weekly_b_stage: number | null
+  monthly_a_stage: number | null
+  monthly_b_stage: number | null
+}
+
+async function auditAttachedStages(result: TriggerDiscoveryResult) {
+  const samples = result.rows.slice(0, 5)
+  if (!result.resolvedAsOf || samples.length === 0) return
+  const placeholders = samples.map(() => '?').join(', ')
+  const rawRows = await execAll<RawStageRow>(`
+    SELECT ticker, date,
+           daily_a_stage, daily_b_stage,
+           weekly_a_stage, weekly_b_stage,
+           monthly_a_stage, monthly_b_stage
+    FROM daily_snapshots
+    WHERE date = ? AND ticker IN (${placeholders})
+  `, [result.resolvedAsOf, ...samples.map((row) => row.ticker)])
+  const rawByTicker = new Map(rawRows.map((row) => [row.ticker, row]))
+  const comparisons = samples.map((row) => {
+    const raw = rawByTicker.get(row.ticker)
+    const attached = [
+      row.dayAStage, row.dayBStage, row.weekAStage,
+      row.weekBStage, row.monthAStage, row.monthBStage,
+    ]
+    const expected = raw
+      ? [
+          raw.daily_a_stage, raw.daily_b_stage, raw.weekly_a_stage,
+          raw.weekly_b_stage, raw.monthly_a_stage, raw.monthly_b_stage,
+        ]
+      : [null, null, null, null, null, null]
+    assert.deepEqual(attached, expected, `${row.ticker} six-axis Stage values`)
+    assert.equal(row.stageDate, raw?.date ?? null, `${row.ticker} exact Stage date`)
+    assert.equal(row.stageAvailable, raw != null, `${row.ticker} Stage row availability`)
+    assert.equal(row.stageComplete, raw != null && expected.every((stage) => stage != null), `${row.ticker} Stage completeness`)
+    return { ticker: row.ticker, stageDate: row.stageDate, attached, expected }
+  })
+  console.log(JSON.stringify({ stageDirectComparison: comparisons }))
+  console.log(JSON.stringify({
+    stageMissingExamples: {
+      complete: result.rows.find((row) => row.stageComplete)?.ticker ?? null,
+      partial: result.rows.find((row) => row.stageAvailable && !row.stageComplete)?.ticker ?? null,
+      noSnapshot: result.rows.find((row) => !row.stageAvailable)?.ticker ?? null,
+    },
+  }))
+}
 
 async function runCase(testCase: typeof cases[number], pass: 'cold' | 'warm') {
   const result = await getTriggerDiscovery(testCase.input)
@@ -35,6 +91,10 @@ async function runCase(testCase: typeof cases[number], pass: 'cold' | 'warm') {
 }
 
 async function parityAt(asOf: string, tickers: string[]) {
+  const requiredObservations = Math.max(
+    DEFAULT_MA_ZONE_TRIGGER_CONFIG.slopeLookbackSessions,
+    DEFAULT_MA_ZONE_TRIGGER_CONFIG.approachLookbackSessions,
+  ) + 1
   const sessions = await dataSource.loadMarketSessions(asOf, 32)
   const resolvedAsOf = sessions.value[0]
   assert.ok(resolvedAsOf)
@@ -63,10 +123,11 @@ async function parityAt(asOf: string, tickers: string[]) {
   const fast = await dataSource.loadStoredMaObservations({
     ...input,
     oldestObservationDate: sessions.value.at(-1)!,
+    requiredObservations,
   })
   const generic = await dataSource.loadGenericMaObservations({
     ...input,
-    requiredObservations: 21,
+    requiredObservations,
   })
   const comparisons = filtered.map((candidate: TriggerDiscoveryFilteredCandidate) => {
     const fastResult = evaluateMaZoneTrigger({ observations: fast.value.get(candidate.ticker) ?? [], asOf: resolvedAsOf })
@@ -140,7 +201,8 @@ async function main() {
   await parityAt(AS_OF, ['7003', '7203', '8306', '4502', '7974'])
   await parityAt('2026-08-25', ['7003', '7203', '8306'])
   for (const testCase of cases) {
-    await runCase(testCase, 'cold')
+    const cold = await runCase(testCase, 'cold')
+    if (testCase.id === 'A') await auditAttachedStages(cold)
     await runCase(testCase, 'warm')
   }
 }

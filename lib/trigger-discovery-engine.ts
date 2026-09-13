@@ -1,9 +1,11 @@
 import { regressionSlope } from '@/lib/monthly-ma-monitor'
 import { buildContinuousMonthlyMaSeries } from '@/lib/snapshots/continuous-ma'
+import { buildContinuousBiweeklyMaSeries } from '@/lib/trigger-discovery-timeframe'
 import type { OHLCV } from '@/types/stock'
 
 export const TRIGGER_MA_PERIOD_MIN = 2
 export const TRIGGER_MA_PERIOD_MAX = 120
+export const TRIGGER_ENGINE_VERSION = 1
 
 export type MaTrend = 'RISING' | 'FLAT' | 'FALLING'
 export type TriggerPricePosition = 'ABOVE_ZONE' | 'IN_ZONE' | 'BELOW_ZONE'
@@ -344,6 +346,26 @@ export function evaluateMonthlyMaPullbackTrigger(input: {
   const source = input.rows.filter((row) => row.date <= input.asOf)
   const monthlySeries = buildContinuousMonthlyMaSeries(source, [config.ma1Period, config.ma2Period])
   const observations = monthlySeries.flatMap((row) => {
+    const ma1 = row.values.get(config.ma1Period)
+    const ma2 = row.values.get(config.ma2Period)
+    return ma1 == null || ma2 == null ? [] : [{ date: row.date, price: row.close, ma1, ma2 }]
+  })
+  return evaluateMaZoneTrigger({ observations, asOf: input.asOf, config })
+}
+
+export function evaluateBiweeklyMaPullbackTrigger(input: {
+  rows: OHLCV[]
+  asOf: string
+  config?: Partial<MaZoneTriggerConfig>
+}): MaZoneTriggerResult {
+  const config = { ...DEFAULT_MA_ZONE_TRIGGER_CONFIG, ...input.config }
+  validateMaZoneTriggerConfig(config)
+  const source = input.rows.filter((row) => row.date <= input.asOf)
+  const biweeklySeries = buildContinuousBiweeklyMaSeries(
+    source,
+    [config.ma1Period, config.ma2Period],
+  )
+  const observations = biweeklySeries.flatMap((row) => {
     const ma1 = row.values.get(config.ma1Period)
     const ma2 = row.values.get(config.ma2Period)
     return ma1 == null || ma2 == null ? [] : [{ date: row.date, price: row.close, ma1, ma2 }]

@@ -12,6 +12,8 @@ export interface TimeframeSpec {
   multiplier: number
 }
 
+export const CALENDAR_WEEK_ANCHOR_MONDAY = '1970-01-05'
+
 export const CHART_INTERVAL_OPTIONS: Array<{
   code: ChartIntervalCode
   label: string
@@ -193,9 +195,13 @@ function mergeCandle(current: OHLCV | null, row: OHLCV): OHLCV {
 }
 
 export function calendarWeekBucket(isoDate: string): number {
-  const monday = mondayUtc(isoDate)
-  const epochMonday = Date.UTC(1970, 0, 5)
-  return Math.floor((monday.getTime() - epochMonday) / (7 * 86_400_000))
+  const monday = Date.parse(`${calendarWeekStart(isoDate)}T00:00:00Z`)
+  const epochMonday = Date.parse(`${CALENDAR_WEEK_ANCHOR_MONDAY}T00:00:00Z`)
+  return Math.floor((monday - epochMonday) / (7 * 86_400_000))
+}
+
+export function calendarWeekStart(isoDate: string): string {
+  return mondayUtc(isoDate).toISOString().slice(0, 10)
 }
 
 export function calendarMonthBucket(isoDate: string): number {

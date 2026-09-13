@@ -776,7 +776,7 @@ export function Header() {
   return (
     <header className="relative z-30 border-b border-[var(--color-border-strong)] bg-white shadow-[0_1px_3px_rgba(16,32,52,0.12)]">
       <div className="border-b border-[var(--color-border-default)] bg-[var(--color-surface-subtle)]">
-        <div className="header-top-row mx-auto flex min-h-10 w-full max-w-[1480px] flex-wrap items-center justify-between gap-2 px-3 py-1 sm:px-8 sm:py-1.5 lg:px-10 xl:px-12">
+        <div className="header-top-row page-wide flex min-h-10 flex-wrap items-center justify-between gap-2 py-1 sm:py-1.5">
           <Link
             href={isCommodityArea ? '/commodities' : isUsArea ? '/us' : scopedHref('/')}
             prefetch={false}
@@ -838,11 +838,11 @@ export function Header() {
             </Link>
           )}
 
-          <div className="header-market-switcher-compact shrink-0 items-center gap-1 rounded-[4px] border border-[var(--color-border-default)] bg-white p-1">
+          <div className="header-market-switcher-compact shrink-0 items-center gap-0.5 rounded-[4px] border border-[var(--color-border-default)] bg-white p-0.5 sm:gap-1 sm:p-1">
             <Link
               href={scopedHref('/')}
               prefetch={false}
-              className={`rounded-[3px] px-2 py-1 text-[11px] font-bold ${area === 'jp' ? 'bg-[var(--color-brand-800)] text-white' : 'text-[var(--color-text-secondary)]'}`}
+              className={`rounded-[3px] px-1.5 py-1 text-[11px] font-bold sm:px-2 ${area === 'jp' ? 'bg-[var(--color-brand-800)] text-white' : 'text-[var(--color-text-secondary)]'}`}
             >
               JP
             </Link>
@@ -864,14 +864,14 @@ export function Header() {
             <Link
               href="/us"
               prefetch={false}
-              className={`rounded-[3px] px-2 py-1 text-[11px] font-bold ${isUsArea ? 'bg-[var(--color-brand-800)] text-white' : 'text-[var(--color-text-secondary)]'}`}
+              className={`rounded-[3px] px-1.5 py-1 text-[11px] font-bold sm:px-2 ${isUsArea ? 'bg-[var(--color-brand-800)] text-white' : 'text-[var(--color-text-secondary)]'}`}
             >
               US
             </Link>
             <Link
               href="/commodities"
               prefetch={false}
-              className={`rounded-[3px] px-2 py-1 text-[11px] font-bold ${isCommodityArea ? 'bg-[var(--color-brand-800)] text-white' : 'text-[var(--color-text-secondary)]'}`}
+              className={`rounded-[3px] px-1.5 py-1 text-[11px] font-bold sm:px-2 ${isCommodityArea ? 'bg-[var(--color-brand-800)] text-white' : 'text-[var(--color-text-secondary)]'}`}
             >
               COM
             </Link>
@@ -928,7 +928,7 @@ export function Header() {
       <div className="bg-[var(--color-brand-800)]">
         <div
           ref={navRef}
-          className="relative mx-auto flex min-h-12 w-full max-w-[1480px] items-center justify-between gap-4 px-3 py-1 sm:px-8 sm:py-1.5 lg:px-10 xl:px-12"
+          className="page-wide relative flex min-h-12 items-center justify-between gap-4 py-1 sm:py-1.5"
         >
           <nav aria-label="主要ナビゲーション" className="header-primary-nav min-w-0 flex-1 items-center gap-1 overflow-visible sm:gap-2">
             {navItems.map((item) => renderNavEntry(item))}
@@ -941,7 +941,7 @@ export function Header() {
               role="menu"
               data-testid={`nav-menu-panel-${openMenuEntry.id}`}
               aria-label={openMenuEntry.label}
-              className={`header-nav-panel absolute left-3 right-3 top-[calc(100%+30px)] z-50 max-h-[calc(100vh-142px)] overflow-y-auto rounded-[5px] border border-[var(--color-border-strong)] bg-white p-2 text-[var(--color-text-primary)] shadow-[0_16px_38px_rgba(16,32,52,0.25)] sm:left-8 sm:right-auto sm:max-w-[calc(100vw-64px)] sm:p-3 lg:left-10 xl:left-12 ${openMenuColumns.length === 1 ? 'sm:w-[420px]' : 'sm:w-[720px]'}`}
+              className={`header-nav-panel absolute left-0 right-0 top-[calc(100%+30px)] z-50 max-h-[calc(100vh-142px)] overflow-y-auto rounded-[5px] border border-[var(--color-border-strong)] bg-white p-2 text-[var(--color-text-primary)] shadow-[0_16px_38px_rgba(16,32,52,0.25)] sm:right-auto sm:max-w-[calc(100vw-64px)] sm:p-3 ${openMenuColumns.length === 1 ? 'sm:w-[420px]' : 'sm:w-[720px]'}`}
               onKeyDown={onMenuPanelKeyDown}
             >
               {area === 'jp' && openMenuEntry.id === 'market' && (
