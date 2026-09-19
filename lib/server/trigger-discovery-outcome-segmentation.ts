@@ -2,7 +2,7 @@ import { createReadStream } from 'node:fs'
 import { readFile, stat } from 'node:fs/promises'
 import { createInterface } from 'node:readline'
 import { execGet } from '@/lib/db/client'
-import { historicalScanResultPaths } from '@/lib/server/trigger-discovery-historical-scan-jobs'
+import { historicalScanResultPaths, isHistoricalScanJobResultCurrent } from '@/lib/server/trigger-discovery-historical-scan-jobs'
 import {
   addOutcomeRowToSummary,
   createOutcomeSummaryAccumulator,
@@ -18,6 +18,7 @@ import type {
 } from '@/lib/trigger-discovery-outcome-contract'
 import {
   TRIGGER_OUTCOME_SCORE_BANDS,
+  TRIGGER_OUTCOME_SPREAD_BUCKETS,
   TRIGGER_OUTCOME_SEGMENTATION_CONTRACT_VERSION,
   TRIGGER_OUTCOME_SEGMENT_COMPARISON_CONTRACT_VERSION,
   TRIGGER_OUTCOME_SEGMENT_DIMENSIONS,
@@ -25,6 +26,7 @@ import {
   type TriggerOutcomeComparisonCompatibility,
   type TriggerOutcomeComparisonDifference,
   type TriggerOutcomeScoreBand,
+  type TriggerOutcomeSpreadBucket,
   type TriggerOutcomeSegmentationResponse,
   type TriggerOutcomeSegmentationSourceMetadata,
   type TriggerOutcomeSegmentComparisonResponse,
@@ -58,7 +60,15 @@ const STAGE_FIELD_BY_DIMENSION = {
   'stage:weekB': 'weekBStage',
   'stage:monthA': 'monthAStage',
   'stage:monthB': 'monthBStage',
-} as const satisfies Record<Exclude<TriggerOutcomeSegmentDimension, 'scoreBand'>, keyof TriggerOutcomeRow>
+} as const satisfies Record<Exclude<TriggerOutcomeSegmentDimension, 'scoreBand' | 'spreadExpansion'>, keyof TriggerOutcomeRow>
+
+export function spreadBucketForOutcomeRow(row: TriggerOutcomeRow): TriggerOutcomeSpreadBucket {
+  if (row.snapshotBasis !== 'CURRENT' || !row.spreadDiagnosticDate || row.spreadDiagnosticDate > row.eventDate
+    || row.spreadExpansionAvailable !== true || typeof row.bullishMaOrder !== 'boolean'
+    || !Number.isFinite(row.maSpreadPct) || !Number.isFinite(row.maSpreadSlope)
+    || !Number.isFinite(row.maSpreadExpansionRatio)) return 'UNKNOWN'
+  return row.spreadExpansionPass === true ? 'PASS' : row.spreadExpansionPass === false ? 'FAIL' : 'UNKNOWN'
+}
 
 export class TriggerOutcomeSegmentationInputError extends Error {
   constructor(message: string) {
@@ -138,18 +148,20 @@ function stageBucket(value: unknown): TriggerOutcomeStageBucket {
     : 'UNKNOWN'
 }
 
-function dimensionValue(
+export function dimensionValue(
   row: TriggerOutcomeRow,
   dimension: TriggerOutcomeSegmentDimension,
 ): TriggerOutcomeSegmentValue {
   if (dimension === 'scoreBand') return scoreBandForOutcomeScore(row.triggerScore)
+  if (dimension === 'spreadExpansion') return spreadBucketForOutcomeRow(row)
   return stageBucket(row[STAGE_FIELD_BY_DIMENSION[dimension]])
 }
 
 function valuesForDimension(
   dimension: TriggerOutcomeSegmentDimension,
 ): readonly TriggerOutcomeSegmentValue[] {
-  return dimension === 'scoreBand' ? TRIGGER_OUTCOME_SCORE_BANDS : TRIGGER_OUTCOME_STAGE_BUCKETS
+  return dimension === 'scoreBand' ? TRIGGER_OUTCOME_SCORE_BANDS
+    : dimension === 'spreadExpansion' ? TRIGGER_OUTCOME_SPREAD_BUCKETS : TRIGGER_OUTCOME_STAGE_BUCKETS
 }
 
 function cartesianValues(
@@ -256,6 +268,14 @@ export function sourceMetadata(
         lookbackSessions: historical.criteria.liquidityLookbackSessions,
         maxPriceStalenessSessions: historical.criteria.maxPriceStalenessSessions,
       },
+      triggerCore: {
+        maxApproachDistancePct: historical.criteria.maxApproachDistancePct,
+        nearDistancePct: historical.criteria.nearDistancePct,
+        spreadExpansionEnabled: historical.criteria.spreadExpansionEnabled ?? false,
+        spreadLookbackIntervals: historical.criteria.spreadLookbackIntervals ?? 4,
+        minExpansionRatio: historical.criteria.minExpansionRatio ?? 0.7,
+        requireBullishMaOrder: historical.criteria.requireBullishMaOrder ?? true,
+      },
       historicalStage: historical.criteria.stageFilters,
       outcomeStage: outcome.request.stageFilters,
       outcomeScore: { min: outcome.request.triggerScoreMin, max: outcome.request.triggerScoreMax },
@@ -265,6 +285,10 @@ export function sourceMetadata(
     horizons: outcome.request.horizons,
     historicalUniverseCaveat: historical.scanMeta.universeNote,
     observationIndependenceNote: outcome.metadata.observationIndependenceNote,
+    scanCounts: {
+      uniqueCandidates: historical.summary.uniqueCandidateCount,
+      totalEvents: historical.summary.totalEventCount,
+    },
   }
 }
 
@@ -309,6 +333,7 @@ export async function loadSegmentationSource(id: string): Promise<{
   rowsFile: string
   historicalEventsFile: string
   manifestLoadMs: number
+  outcomeExpiresAt: number
 }> {
   const row = await outcomeJobSourceRow(id)
   if (!row) throw new TriggerOutcomeSegmentationSourceError('outcome_analysis_job_not_found')
@@ -317,6 +342,9 @@ export async function loadSegmentationSource(id: string): Promise<{
   }
   if (Number(row.expires_at) <= nowSeconds()) {
     throw new TriggerOutcomeSegmentationSourceError('outcome_analysis_job_result_expired')
+  }
+  if (!await isHistoricalScanJobResultCurrent(row.historical_scan_job_id)) {
+    throw new TriggerOutcomeSegmentationSourceError('historical_scan_source_metadata_expired')
   }
   const outcomePaths = outcomeResultPaths(id)
   const historicalPaths = historicalScanResultPaths(row.historical_scan_job_id)
@@ -345,6 +373,7 @@ export async function loadSegmentationSource(id: string): Promise<{
     rowsFile: outcomePaths.rowsByDate,
     historicalEventsFile: historicalPaths.events,
     manifestLoadMs: performance.now() - startedAt,
+    outcomeExpiresAt: Number(row.expires_at),
   }
 }
 
@@ -362,6 +391,7 @@ export async function getOutcomeSegmentation(input: {
   let parsingMs = 0
   let groupingMs = 0
   let rowsRead = 0
+  let rowsWithSpreadDiagnostics = 0
   let peakHeapBytes = process.memoryUsage().heapUsed
   let peakRssBytes = process.memoryUsage().rss
   const streamStartedAt = performance.now()
@@ -372,6 +402,13 @@ export async function getOutcomeSegmentation(input: {
       if (!line) continue
       const parsingStartedAt = performance.now()
       const row = JSON.parse(line) as TriggerOutcomeRow
+      if (typeof row.spreadExpansionAvailable === 'boolean'
+        && typeof row.spreadExpansionPass === 'boolean'
+        && typeof row.bullishMaOrder === 'boolean'
+        && typeof row.spreadDiagnosticDate === 'string'
+        && (row.spreadExpansionAvailable === false
+          || (Number.isFinite(row.maSpreadPct) && Number.isFinite(row.maSpreadSlope)
+            && Number.isFinite(row.maSpreadExpansionRatio)))) rowsWithSpreadDiagnostics += 1
       parsingMs += performance.now() - parsingStartedAt
       const groupingStartedAt = performance.now()
       const values = dimensions.map((dimension) => dimensionValue(row, dimension))
@@ -416,6 +453,12 @@ export async function getOutcomeSegmentation(input: {
     contractVersion: TRIGGER_OUTCOME_SEGMENTATION_CONTRACT_VERSION,
     meta: {
       dimensions,
+      ...(dimensions.includes('spreadExpansion') ? {
+        analysisType: 'CONDITIONED_EVENT_COMPARISON' as const,
+        spreadDiagnosticsStatus: rowsWithSpreadDiagnostics === 0
+          ? 'SPREAD_DIAGNOSTICS_UNAVAILABLE' as const
+          : rowsWithSpreadDiagnostics === rowsRead ? 'AVAILABLE' as const : 'PARTIAL' as const,
+      } : {}),
       smallSampleThreshold,
       source: sourceMetadata(source.outcome, source.historical),
       generatedAt: new Date().toISOString(),
@@ -453,6 +496,7 @@ function compatibility(
   if (!sameValue(left.filters.markets, right.filters.markets)) differences.push('marketFilters')
   if (!sameValue(left.filters.price, right.filters.price)) differences.push('priceFilters')
   if (!sameValue(left.filters.liquidity, right.filters.liquidity)) differences.push('liquidityFilters')
+  if (!sameValue(left.filters.triggerCore, right.filters.triggerCore)) differences.push('triggerFilters')
   if (!sameValue(
     [left.filters.historicalStage, left.filters.outcomeStage],
     [right.filters.historicalStage, right.filters.outcomeStage],
@@ -464,7 +508,7 @@ function compatibility(
   const sameDateRange = !differences.includes('requestedScanPeriod')
     && !differences.includes('resolvedScanPeriod')
   const samePopulationFilters = ![
-    'marketFilters', 'priceFilters', 'liquidityFilters', 'stageFilters',
+    'marketFilters', 'priceFilters', 'liquidityFilters', 'triggerFilters', 'stageFilters',
   ].some((difference) => differences.includes(difference as TriggerOutcomeComparisonDifference))
   return {
     differences,
@@ -516,6 +560,8 @@ export async function compareOutcomeSegments(value: unknown): Promise<TriggerOut
   })
   const response: TriggerOutcomeSegmentComparisonResponse = {
     contractVersion: TRIGGER_OUTCOME_SEGMENT_COMPARISON_CONTRACT_VERSION,
+    analysisType: left.meta.source.historicalScanJobId === right.meta.source.historicalScanJobId
+      ? 'EVENT_SELECTOR_COMPARISON' : 'OPERATIONAL_SCAN_COMPARISON',
     dimensions: request.dimensions,
     left,
     right,

@@ -10,7 +10,44 @@ import type {
 } from '@/lib/trigger-discovery-outcome-segmentation'
 
 export const TRIGGER_OUTCOME_ROBUSTNESS_CONTRACT_VERSION =
-  'trigger-discovery-outcome-robustness-v1' as const
+  'trigger-discovery-outcome-robustness-v2' as const
+export const TRIGGER_EPISODE_ALGORITHM_VERSION = 'trigger-episode-v1' as const
+
+export interface TriggerOutcomeEpisodeMetadata {
+  episodeKey: string
+  ticker: string
+  observedEpisodeStartDate: string | null
+  observedFromDate: string
+  episodeEndDate: string | null
+  leftCensored: boolean
+  rightCensored: boolean
+  startEventType: string
+  selectedEventCount: number
+  selectedAnchorEventDate: string | null
+  selectedAnchorEventType: string | null
+  selectedAnchorSourceSequence: number | null
+  excludedForSequenceIntegrity: boolean
+  excludedForMappingIntegrity: boolean
+}
+
+export interface TriggerOutcomeEpisodeDiagnostics {
+  observedEpisodeCount: number
+  selectedEpisodeCount: number
+  leftCensoredCount: number
+  rightCensoredCount: number
+  selectedLeftCensoredCount: number
+  selectedRightCensoredCount: number
+  sequenceAnomalyCount: number
+  excludedForSequenceIntegrity: number
+  excludedForMappingIntegrity: number
+  mappedOutcomeRows: number
+  unmappedOutcomeRows: number
+  ambiguousOutcomeRows: number
+  episodesWithOneSelectedEvent: number
+  episodesWithRepeatedSelectedEvents: number
+  selectedEventsPerEpisode: { mean: number | null; median: number | null; p95: number | null; max: number }
+  episodeToEventObservationRatio: number | null
+}
 
 export const TRIGGER_OUTCOME_ANALYSIS_UNITS = [
   'EVENT',
@@ -38,6 +75,8 @@ export interface TriggerOutcomeRobustnessDelta {
   horizonSessions: TriggerOutcomeHorizon
   medianReturn: number | null
   positiveReturnRatio: number | null
+  p25Return: number | null
+  p75Return: number | null
   medianMfe: number | null
   medianMae: number | null
 }
@@ -75,6 +114,8 @@ export interface TriggerOutcomeRobustnessPerformance {
   historicalArtifactReadMs: number
   historicalParsingMs: number
   episodeBuildMs: number
+  outcomeMappingMs: number
+  dedupMs: number
   tickerAggregationMs: number
   segmentationMs: number
   percentileMs: number
@@ -93,6 +134,7 @@ export interface TriggerOutcomeRobustnessResponse {
   contractVersion: typeof TRIGGER_OUTCOME_ROBUSTNESS_CONTRACT_VERSION
   meta: {
     dimensions: TriggerOutcomeSegmentDimension[]
+    episodeAlgorithmVersion: typeof TRIGGER_EPISODE_ALGORITHM_VERSION
     smallSampleThreshold: number
     source: TriggerOutcomeSegmentationSourceMetadata
     definitions: {
@@ -112,9 +154,17 @@ export interface TriggerOutcomeRobustnessResponse {
       episodeSource: 'SAVED_HISTORICAL_EVENT_NDJSON'
     }
     generatedAt: string
+    expiresAt: string
     performance: TriggerOutcomeRobustnessPerformance
   }
   overall: TriggerOutcomeRobustnessBlock
+  episodeDiagnostics: TriggerOutcomeEpisodeDiagnostics
+  episodePage: {
+    offset: number
+    limit: number
+    totalCount: number
+    episodes: TriggerOutcomeEpisodeMetadata[]
+  }
   segmentation: {
     dimensions: TriggerOutcomeSegmentDimension[]
     groups: TriggerOutcomeRobustnessSegmentGroup[]
@@ -122,9 +172,14 @@ export interface TriggerOutcomeRobustnessResponse {
   integrity: {
     sourceRowsMatchedToHistoricalEvents: boolean
     unmatchedOutcomeRowCount: number
+    ambiguousOutcomeRowCount: number
+    sequenceAnomalyCount: number
     eventSummaryMatchesSavedOutcome: boolean
     overallCountInvariant: boolean
     segmentCountInvariants: boolean
+    episodeSegmentCountMatchesOverall: boolean
+    episodeSegmentEligibleMatchesOverall: Record<string, boolean>
+    episodeSegmentWeightedMeanMatchesOverall: Record<string, boolean>
     sourceArtifactsReadOnly: true
   }
 }

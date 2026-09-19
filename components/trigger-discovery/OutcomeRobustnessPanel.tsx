@@ -27,13 +27,14 @@ import {
 } from '@/lib/trigger-discovery-outcome-robustness'
 import {
   TRIGGER_OUTCOME_SCORE_BANDS,
+  TRIGGER_OUTCOME_SPREAD_BUCKETS,
   TRIGGER_OUTCOME_STAGE_BUCKETS,
   type TriggerOutcomeSegmentDimension,
 } from '@/lib/trigger-discovery-outcome-segmentation'
 
-type RobustnessScope = 'overall' | 'score' | 'stage' | 'pair'
+type RobustnessScope = 'overall' | 'score' | 'spread' | 'stage' | 'pair'
 type RobustnessMetric = 'medianReturn' | 'positiveReturnRatio' | 'medianMfe' | 'medianMae'
-type StageDimension = Exclude<TriggerOutcomeSegmentDimension, 'scoreBand'>
+type StageDimension = Exclude<TriggerOutcomeSegmentDimension, 'scoreBand' | 'spreadExpansion'>
 
 interface Props {
   active: boolean
@@ -77,6 +78,7 @@ const UNIT_ELIGIBILITY_DESCRIPTIONS: Record<TriggerOutcomeAnalysisUnit, string> 
 const SCOPE_OPTIONS: ReadonlyArray<{ value: RobustnessScope; label: string }> = [
   { value: 'overall', label: '全体' },
   { value: 'score', label: 'Score帯' },
+  { value: 'spread', label: 'MA間隔拡大' },
   { value: 'stage', label: 'Stage別' },
   { value: 'pair', label: 'Stage組み合わせ' },
 ]
@@ -196,6 +198,7 @@ function RobustnessHelp() {
     >
       <div className="space-y-2 leading-5">
         <p>同じ銘柄・同じTrigger局面で複数回発生するEventの影響を除いた場合に、Outcomeがどの程度変わるかを確認します。</p>
+        <p>候補入りからEXITEDまでを1 Episodeとし、その期間の最初の対象Eventを採用します。NEAR分析とZone分析ではAnchor日が異なる場合があります。</p>
         <p>本分析は同一銘柄・同一Trigger局面で繰り返し発生するEventの影響を確認するもので、統計的有意性を判定するものではありません。</p>
         <p>銘柄均等では、同じ銘柄の複数Episodeについて各HorizonのOutcome中央値を銘柄の代表値にします。</p>
       </div>
@@ -219,7 +222,9 @@ function SmallSampleIndicator() {
   )
 }
 
-function ObservationFunnel({ block }: { block: TriggerOutcomeRobustnessBlock }) {
+function ObservationFunnel({ response }: { response: TriggerOutcomeRobustnessResponse }) {
+  const block = response.overall
+  const diagnostics = response.episodeDiagnostics
   const values = [
     ['Event', block.diagnostics.sourceEventCount],
     ['Episode', block.diagnostics.episodeObservationCount],
@@ -245,6 +250,10 @@ function ObservationFunnel({ block }: { block: TriggerOutcomeRobustnessBlock }) 
           <div><dt className="text-[var(--color-text-tertiary)]">tickerあたりEpisode数 中央 / P90 / 最大</dt><dd className="mt-0.5 font-semibold tabular-nums text-[var(--color-text-primary)]">{block.diagnostics.episodesPerTicker.median ?? 'N/A'} / {block.diagnostics.episodesPerTicker.p90 ?? 'N/A'} / {block.diagnostics.episodesPerTicker.max}</dd></div>
           <div><dt className="text-[var(--color-text-tertiary)]">上位10銘柄Event占有率</dt><dd className="mt-0.5 font-semibold tabular-nums text-[var(--color-text-primary)]">{formatRatio(block.diagnostics.top10TickerEventShare)}</dd></div>
           <div><dt className="text-[var(--color-text-tertiary)]">Scan開始時点Episode</dt><dd className="mt-0.5 font-semibold tabular-nums text-[var(--color-text-primary)]">{block.diagnostics.selectedSyntheticBaselineEpisodeCount.toLocaleString('ja-JP')} / {block.diagnostics.syntheticBaselineEpisodeCount.toLocaleString('ja-JP')}</dd></div>
+          <div><dt className="text-[var(--color-text-tertiary)]">対象Event 2件以上のEpisode</dt><dd className="mt-0.5 font-semibold tabular-nums text-[var(--color-text-primary)]">{diagnostics.episodesWithRepeatedSelectedEvents.toLocaleString('ja-JP')}件</dd></div>
+          <div><dt className="text-[var(--color-text-tertiary)]">対象Event / Episode 平均・中央値・P95・最大</dt><dd className="mt-0.5 font-semibold tabular-nums text-[var(--color-text-primary)]">{diagnostics.selectedEventsPerEpisode.mean?.toFixed(2) ?? 'N/A'} / {diagnostics.selectedEventsPerEpisode.median ?? 'N/A'} / {diagnostics.selectedEventsPerEpisode.p95 ?? 'N/A'} / {diagnostics.selectedEventsPerEpisode.max}</dd></div>
+          <div><dt className="text-[var(--color-text-tertiary)]">Scan開始前から継続 / 終了時継続中</dt><dd className="mt-0.5 font-semibold tabular-nums text-[var(--color-text-primary)]">{diagnostics.selectedLeftCensoredCount} / {diagnostics.selectedRightCensoredCount}</dd></div>
+          <div><dt className="text-[var(--color-text-tertiary)]">Episode / Event 観測数比</dt><dd className="mt-0.5 font-semibold tabular-nums text-[var(--color-text-primary)]">{formatRatio(diagnostics.episodeToEventObservationRatio)}</dd></div>
         </dl>
       </details>
     </div>
@@ -263,7 +272,9 @@ function SummaryTable({ block, horizon }: {
           <tr className="border-b border-[var(--color-border)]">
             <th className="px-3 py-2 text-left">観測単位</th>
             <th className="px-2 py-2 text-right">Observation数</th>
+            <th className="px-2 py-2 text-right">銘柄数</th>
             <th className="px-2 py-2 text-right">Eligible</th>
+            <th className="px-2 py-2 text-right">Unavailable</th>
             <th className="px-2 py-2 text-right">Median Return</th>
             <th className="px-2 py-2 text-right">Eventとの差</th>
             <th className="px-2 py-2 text-right">プラス比率</th>
@@ -284,7 +295,9 @@ function SummaryTable({ block, horizon }: {
               <tr key={unit} className="border-b border-[var(--color-border-soft)] bg-white last:border-b-0">
                 <th className="px-3 py-2.5 text-left font-medium text-[var(--color-text-primary)]"><span className="inline-flex items-center gap-1">{UNIT_LABELS[unit]} <UnitHelp unit={unit} /></span></th>
                 <td className="px-2 py-2.5 text-right tabular-nums">{unitSummary.observationCount.toLocaleString('ja-JP')}</td>
+                <td className="px-2 py-2.5 text-right tabular-nums">{unitSummary.uniqueTickerCount.toLocaleString('ja-JP')}</td>
                 <td className="px-2 py-2.5 text-right tabular-nums"><span className="inline-flex items-center justify-end gap-1.5"><span className="text-[9px] text-[var(--color-text-tertiary)]">{UNIT_ELIGIBLE_LABELS[unit]}</span> {summary?.eligibleCount.toLocaleString('ja-JP') ?? 0}{summary?.smallSample && summary.eligibleCount > 0 && <SmallSampleIndicator />}</span></td>
+                <td className="px-2 py-2.5 text-right tabular-nums">{summary?.unavailableCount.toLocaleString('ja-JP') ?? 0}</td>
                 <td className="px-2 py-2.5 text-right font-semibold tabular-nums">{unavailable ? 'N/A' : formatPercent(summary.medianReturn)}</td>
                 <td className="px-2 py-2.5 text-right tabular-nums text-[var(--color-text-secondary)]">{unit === 'EVENT' ? '基準' : formatPercent(delta)}</td>
                 <td className="px-2 py-2.5 text-right tabular-nums">{unavailable ? 'N/A' : formatRatio(summary.positiveReturnRatio)}</td>
@@ -384,14 +397,15 @@ function SegmentComparisonTable({ response, dimension, horizon, metric }: {
   metric: RobustnessMetric
 }) {
   const groups = response.segmentation?.groups ?? []
-  const orderedValues = dimension === 'scoreBand' ? TRIGGER_OUTCOME_SCORE_BANDS : TRIGGER_OUTCOME_STAGE_BUCKETS
+  const orderedValues = dimension === 'scoreBand' ? TRIGGER_OUTCOME_SCORE_BANDS
+    : dimension === 'spreadExpansion' ? TRIGGER_OUTCOME_SPREAD_BUCKETS : TRIGGER_OUTCOME_STAGE_BUCKETS
   const groupsByValue = new Map(groups.map((group) => [String(group.keys[dimension] ?? 'UNKNOWN'), group]))
   return (
     <div className="overflow-x-auto border-y border-[var(--color-border)]">
       <table className="w-full min-w-[820px] border-collapse text-[10px]">
         <thead className="bg-[var(--color-surface-muted)] text-[var(--color-text-secondary)]">
           <tr className="border-b border-[var(--color-border)]">
-            <th className="px-3 py-2 text-left">{dimension === 'scoreBand' ? 'Score帯' : dimensionLabel(dimension as StageDimension)}</th>
+            <th className="px-3 py-2 text-left">{dimension === 'scoreBand' ? 'Score帯' : dimension === 'spreadExpansion' ? 'MA間隔拡大' : dimensionLabel(dimension as StageDimension)}</th>
             {TRIGGER_OUTCOME_ANALYSIS_UNITS.map((unit) => <th key={unit} className="px-3 py-2 text-right">{UNIT_LABELS[unit]}<span className="block text-[9px] font-normal">{METRIC_OPTIONS.find((option) => option.value === metric)?.label}</span></th>)}
           </tr>
         </thead>
@@ -403,6 +417,7 @@ function SegmentComparisonTable({ response, dimension, horizon, metric }: {
                 <th className="px-3 py-2.5 text-left font-medium text-[var(--color-text-primary)]">
                   {dimension === 'scoreBand'
                     ? SCORE_LABELS[value] ?? value
+                    : dimension === 'spreadExpansion' ? value === 'PASS' ? '拡大条件あり' : value === 'FAIL' ? '拡大条件なし' : '判定不能'
                     : value === 'UNKNOWN' ? '不明' : <span className="inline-flex items-center gap-1.5"><StageTag stage={Number(value.slice(1))} size="xs" /><span>{value}</span></span>}
                 </th>
                 {TRIGGER_OUTCOME_ANALYSIS_UNITS.map((unit) => {
@@ -569,6 +584,7 @@ export function OutcomeRobustnessPanel({ active, outcomeJobId, horizon, onHorizo
 
   const dimensions = useMemo<TriggerOutcomeSegmentDimension[]>(() => {
     if (scope === 'score') return ['scoreBand']
+    if (scope === 'spread') return ['spreadExpansion']
     if (scope === 'stage') return [stageDimension]
     if (scope === 'pair') return [rowDimension, columnDimension]
     return []
@@ -583,7 +599,7 @@ export function OutcomeRobustnessPanel({ active, outcomeJobId, horizon, onHorizo
   useEffect(() => {
     if (!active || !outcomeJobId) return
     const cached = RESPONSE_CACHE.get(cacheKey)
-    if (cached) {
+    if (cached && Date.parse(cached.meta.expiresAt) > Date.now()) {
       setResponse(cached)
       setError(null)
       setLoading(false)
@@ -637,7 +653,14 @@ export function OutcomeRobustnessPanel({ active, outcomeJobId, horizon, onHorizo
 
       {visibleResponse && (
         <div className="mt-4 space-y-5">
-          <ObservationFunnel block={visibleResponse.overall} />
+          <ObservationFunnel response={visibleResponse} />
+          {(visibleResponse.episodeDiagnostics.sequenceAnomalyCount > 0
+            || visibleResponse.episodeDiagnostics.unmappedOutcomeRows > 0
+            || visibleResponse.episodeDiagnostics.ambiguousOutcomeRows > 0) && (
+            <p role="alert" className="border-l-2 border-amber-500 bg-amber-50 px-3 py-2 text-[10px] text-amber-900">
+              Event順序異常 {visibleResponse.episodeDiagnostics.sequenceAnomalyCount}件 / 対応不能 {visibleResponse.episodeDiagnostics.unmappedOutcomeRows}件 / 曖昧 {visibleResponse.episodeDiagnostics.ambiguousOutcomeRows}件。順序異常 {visibleResponse.episodeDiagnostics.excludedForSequenceIntegrity} Episode、対応曖昧 {visibleResponse.episodeDiagnostics.excludedForMappingIntegrity} Episodeを除外しています。
+            </p>
+          )}
 
           <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
             <div className="flex max-w-full gap-1 overflow-x-auto pb-1" aria-label="観測単位の分析範囲">
@@ -669,6 +692,7 @@ export function OutcomeRobustnessPanel({ active, outcomeJobId, horizon, onHorizo
           {scope === 'pair' && <div className="flex flex-wrap items-center gap-3 text-[10px] text-[var(--color-text-secondary)]"><label>縦軸<select value={rowDimension} onChange={(event) => setRowDimension(event.target.value as StageDimension)} className="ml-1 h-8 rounded-[3px] border border-[var(--color-border)] bg-white px-2 text-[10px]">{STAGE_DIMENSIONS.map((option) => <option key={option.value} value={option.value} disabled={option.value === columnDimension}>{option.label}</option>)}</select></label><label>横軸<select value={columnDimension} onChange={(event) => setColumnDimension(event.target.value as StageDimension)} className="ml-1 h-8 rounded-[3px] border border-[var(--color-border)] bg-white px-2 text-[10px]">{STAGE_DIMENSIONS.map((option) => <option key={option.value} value={option.value} disabled={option.value === rowDimension}>{option.label}</option>)}</select></label><span className="text-[9px] text-[var(--color-text-tertiary)]">3方式で同じColor Scaleを使用します。</span></div>}
 
           {scope === 'score' && visibleResponse.segmentation && <section><h6 className="mb-2 text-[11px] font-semibold text-[var(--color-text-primary)]">Score帯別の3方式比較</h6><SegmentComparisonTable response={visibleResponse} dimension="scoreBand" horizon={horizon} metric={metric} /></section>}
+          {scope === 'spread' && visibleResponse.segmentation && <section><h6 className="mb-2 text-[11px] font-semibold text-[var(--color-text-primary)]">MA間隔拡大別の3方式比較</h6><SegmentComparisonTable response={visibleResponse} dimension="spreadExpansion" horizon={horizon} metric={metric} /></section>}
           {scope === 'stage' && visibleResponse.segmentation && <section><h6 className="mb-2 text-[11px] font-semibold text-[var(--color-text-primary)]">{dimensionLabel(stageDimension)}別の3方式比較</h6><SegmentComparisonTable response={visibleResponse} dimension={stageDimension} horizon={horizon} metric={metric} /></section>}
           {scope === 'pair' && visibleResponse.segmentation && pairScale && (
             <section className="space-y-4">

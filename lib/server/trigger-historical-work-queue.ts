@@ -12,6 +12,13 @@ import {
   executeOutcomeAnalysisJob,
   recoverStaleOutcomeJobs,
 } from '@/lib/server/trigger-discovery-outcome-jobs'
+import {
+  acquireHistoricalWorker,
+  createWorkerIdentity,
+  recoverWorkerJobs,
+  releaseHistoricalWorker,
+  type WorkerIdentity,
+} from '@/lib/server/trigger-historical-worker-ownership'
 
 const DEFAULT_POLL_MS = 2_000
 const CLEANUP_INTERVAL_MS = 60 * 60 * 1_000
@@ -35,27 +42,30 @@ async function nextWorkType(): Promise<WorkType | null> {
   return row?.job_type ?? null
 }
 
-export async function runTriggerHistoricalWorkOnce(): Promise<{
+export async function runTriggerHistoricalWorkOnce(
+  identity?: WorkerIdentity,
+  shutdownSignal?: AbortSignal,
+): Promise<{
   jobType: WorkType
   jobId: string
   status: string
 } | null> {
   const type = await nextWorkType()
   if (type === 'HISTORICAL_SCAN') {
-    const row = await claimNextHistoricalScanJob(randomUUID())
+    const row = await claimNextHistoricalScanJob(identity?.jobOwner() ?? randomUUID())
     if (!row) return null
     try {
-      return { jobType: type, jobId: row.id, status: await executeHistoricalScanJob(row) }
+      return { jobType: type, jobId: row.id, status: await executeHistoricalScanJob(row, { shutdownSignal }) }
     } catch (error) {
       console.error(`[trigger-historical-worker] type=${type} job=${row.id} failed`, error)
       return { jobType: type, jobId: row.id, status: 'FAILED' }
     }
   }
   if (type === 'OUTCOME_ANALYSIS') {
-    const row = await claimNextOutcomeJob(randomUUID())
+    const row = await claimNextOutcomeJob(identity?.jobOwner() ?? randomUUID())
     if (!row) return null
     try {
-      return { jobType: type, jobId: row.id, status: await executeOutcomeAnalysisJob(row) }
+      return { jobType: type, jobId: row.id, status: await executeOutcomeAnalysisJob(row, shutdownSignal) }
     } catch (error) {
       console.error(`[trigger-historical-worker] type=${type} job=${row.id} failed`, error)
       return { jobType: type, jobId: row.id, status: 'FAILED' }
@@ -67,42 +77,68 @@ export async function runTriggerHistoricalWorkOnce(): Promise<{
 export async function runTriggerHistoricalWorkLoop(): Promise<void> {
   const pollMs = boundedIntegerEnv('TRIGGER_HISTORICAL_SCAN_POLL_MS', DEFAULT_POLL_MS, 250, 30_000)
   let stopping = false
-  const stop = () => { stopping = true }
+  const shutdown = new AbortController()
+  const stop = () => { stopping = true; shutdown.abort() }
   process.once('SIGTERM', stop)
   process.once('SIGINT', stop)
-  let lastCleanupAt = 0
-  while (!stopping) {
-    try {
-      await cleanupExpiredHistoricalScanJobs()
-      await cleanupExpiredOutcomeJobs()
-      lastCleanupAt = Date.now()
-      const recovered = {
-        historical: await recoverStaleHistoricalScanJobs(),
-        outcome: await recoverStaleOutcomeJobs(),
-      }
-      console.log(`[trigger-historical-worker] started concurrency=1 recovered=${JSON.stringify(recovered)}`)
-      break
-    } catch (error) {
-      console.error('[trigger-historical-worker] startup retry', error)
-      await new Promise((resolve) => setTimeout(resolve, pollMs))
-    }
+  const identity = createWorkerIdentity()
+  if (!await acquireHistoricalWorker(identity)) {
+    process.removeListener('SIGTERM', stop)
+    process.removeListener('SIGINT', stop)
+    console.log('[trigger-historical-worker] another worker owns the queue; exiting')
+    return
   }
-  while (!stopping) {
-    try {
-      if (Date.now() - lastCleanupAt >= CLEANUP_INTERVAL_MS) {
+  let lastCleanupAt = 0
+  let lastRecoveryAt = 0
+  try {
+    while (!stopping) {
+      try {
+        const recoveryStartedAt = performance.now()
+        const recovered = {
+          historical: await recoverWorkerJobs('historical_trigger_scan_jobs', 'startup'),
+          outcome: await recoverWorkerJobs('trigger_outcome_analysis_jobs', 'startup'),
+        }
         await cleanupExpiredHistoricalScanJobs()
         await cleanupExpiredOutcomeJobs()
         lastCleanupAt = Date.now()
+        lastRecoveryAt = lastCleanupAt
+        console.log(`[trigger-historical-worker] started concurrency=1 instance=${identity.owner}`
+          + ` recoveryMs=${(performance.now() - recoveryStartedAt).toFixed(1)}`
+          + ` recovered=${JSON.stringify(recovered)}`)
+        break
+      } catch (error) {
+        console.error('[trigger-historical-worker] startup retry', error)
+        await new Promise((resolve) => setTimeout(resolve, pollMs))
       }
-      const result = await runTriggerHistoricalWorkOnce()
-      if (result) {
-        console.log(`[trigger-historical-worker] type=${result.jobType} job=${result.jobId} status=${result.status}`)
-        continue
-      }
-    } catch (error) {
-      console.error('[trigger-historical-worker] poll retry', error)
     }
-    await new Promise((resolve) => setTimeout(resolve, pollMs))
+    while (!stopping) {
+      try {
+        if (Date.now() - lastCleanupAt >= CLEANUP_INTERVAL_MS) {
+          await cleanupExpiredHistoricalScanJobs()
+          await cleanupExpiredOutcomeJobs()
+          lastCleanupAt = Date.now()
+        }
+        const result = await runTriggerHistoricalWorkOnce(identity, shutdown.signal)
+        if (result) {
+          console.log(`[trigger-historical-worker] type=${result.jobType} job=${result.jobId} status=${result.status}`)
+          continue
+        }
+        if (Date.now() - lastRecoveryAt >= 30_000) {
+          await recoverStaleHistoricalScanJobs()
+          await recoverStaleOutcomeJobs()
+          await recoverWorkerJobs('historical_trigger_scan_jobs', 'startup')
+          await recoverWorkerJobs('trigger_outcome_analysis_jobs', 'startup')
+          lastRecoveryAt = Date.now()
+        }
+      } catch (error) {
+        console.error('[trigger-historical-worker] poll retry', error)
+      }
+      await new Promise((resolve) => setTimeout(resolve, pollMs))
+    }
+  } finally {
+    await releaseHistoricalWorker(identity)
+    process.removeListener('SIGTERM', stop)
+    process.removeListener('SIGINT', stop)
+    console.log('[trigger-historical-worker] stopped')
   }
-  console.log('[trigger-historical-worker] stopped')
 }

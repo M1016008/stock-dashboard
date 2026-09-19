@@ -40,7 +40,16 @@ export interface TriggerEvaluationSummary {
   createdAt: string
 }
 
-export type TriggerEvaluationMember = Omit<TriggerDiscoveryRow, 'requestedAsOf' | 'resolvedAsOf' | 'matched'>
+export type TriggerEvaluationMember = Omit<TriggerDiscoveryRow,
+  | 'requestedAsOf'
+  | 'resolvedAsOf'
+  | 'matched'
+  | 'maSpreadPct'
+  | 'maSpreadSlope'
+  | 'maSpreadExpansionRatio'
+  | 'maSpreadExpanding'
+  | 'bullishMaOrder'
+  | 'spreadExpansionAvailable'>
 
 export interface TriggerEvaluationRunResponse {
   contractVersion: typeof TRIGGER_EVALUATION_CONTRACT_VERSION

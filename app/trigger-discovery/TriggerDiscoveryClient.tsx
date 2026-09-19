@@ -1,7 +1,14 @@
 'use client'
 
 import Link from 'next/link'
-import { type ReactNode, useEffect, useId, useRef, useState } from 'react'
+import {
+  type MouseEvent as ReactMouseEvent,
+  type ReactNode,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+} from 'react'
 import {
   ArrowDown,
   ArrowUp,
@@ -45,6 +52,14 @@ import {
 } from '@/lib/trigger-discovery-timeframe'
 import type { TriggerHistoricalScanRequest } from '@/lib/trigger-discovery-historical-scan-contract'
 import {
+  parseTriggerDiscoveryNavigationSnapshot,
+  serializeTriggerDiscoveryNavigationSnapshot,
+  TRIGGER_DISCOVERY_NAVIGATION_HISTORY_KEY,
+  TRIGGER_DISCOVERY_NAVIGATION_STORAGE_KEY,
+  type TriggerDiscoveryNavigationDraft,
+  type TriggerDiscoveryNavigationPayload,
+} from '@/lib/client/trigger-discovery-navigation-restore'
+import {
   DEFAULT_TRIGGER_MAX_PRICE_STALENESS_SESSIONS,
   SAVED_TRIGGER_CONTRACT_VERSION,
   savedTriggerConfigsFromSearchRequest,
@@ -84,20 +99,10 @@ interface Props {
   options: TriggerDiscoveryOptionsResponse
 }
 
-interface DraftState {
-  asOf: string
-  ma1Period: string
-  ma2Period: string
-  maxDistance: string
-  nearDistance: string
-  priceMin: string
-  priceMax: string
-  averageVolumeMin: string
-  averageVolumeMax: string
-  averageTradingValueMin: string
-  averageTradingValueMax: string
-  liquidityLookbackSessions: string
-}
+type DraftState = TriggerDiscoveryNavigationDraft
+type DraftStringKey = {
+  [Key in keyof DraftState]: DraftState[Key] extends string ? Key : never
+}[keyof DraftState]
 
 type SaveMode = 'create' | 'update' | 'copy' | 'rename'
 type DiscoveryMode = 'current' | 'period'
@@ -150,6 +155,9 @@ function activeCriteriaSummary(request: TriggerDiscoverySearchRequest | null): s
   }
   const stageAxisCount = Object.values(request.stageFilters ?? {}).filter((values) => values?.length).length
   if (stageAxisCount > 0) parts.push(`Stage条件 ${stageAxisCount}軸`)
+  if (request.spreadExpansionEnabled) {
+    parts.push(`MA間隔拡大 ${request.spreadLookbackIntervals ?? 4}区間 / ${Math.round((request.minExpansionRatio ?? 0.7) * 100)}%`)
+  }
   return parts.join(' ・ ')
 }
 
@@ -170,27 +178,30 @@ function SortButton({
   activeSort,
   onSort,
   ariaLabel,
+  align = 'start',
 }: {
   label: string
   sortKey: TriggerDiscoverySortKey
   activeSort: TriggerDiscoverySearchRequest['sort']
   onSort: (key: TriggerDiscoverySortKey) => void
   ariaLabel?: string
+  align?: 'start' | 'center' | 'end'
 }) {
   const active = activeSort?.key === sortKey
+  const alignment = align === 'end' ? 'justify-end' : align === 'center' ? 'justify-center' : 'justify-start'
   return (
     <button
       type="button"
       onClick={() => onSort(sortKey)}
-      className="inline-flex items-center gap-0.5 whitespace-nowrap font-medium text-[var(--color-text-secondary)] hover:text-[var(--color-brand-700)]"
+      className={`inline-flex w-full items-center ${alignment} gap-0.5 whitespace-nowrap rounded-[2px] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-[var(--color-brand-200)] ${active ? 'font-semibold text-[var(--color-brand-800)]' : 'font-medium text-[var(--color-text-secondary)] hover:text-[var(--color-brand-700)]'}`}
       aria-label={`${ariaLabel ?? label}で並べ替え${active ? `（現在${activeSort?.direction === 'asc' ? '昇順' : '降順'}）` : ''}`}
     >
       {label}
       {active && activeSort?.direction === 'asc'
-        ? <ArrowUp size={11} aria-hidden />
+        ? <ArrowUp size={12} className="text-[var(--color-brand-700)]" aria-hidden />
         : active && activeSort?.direction === 'desc'
-          ? <ArrowDown size={11} aria-hidden />
-          : <span className="w-[11px] text-center text-[9px] text-[var(--color-text-tertiary)]">↕</span>}
+          ? <ArrowDown size={12} className="text-[var(--color-brand-700)]" aria-hidden />
+          : <span className="w-[11px] text-center text-[9px] text-[var(--color-text-tertiary)] opacity-40">↕</span>}
     </button>
   )
 }
@@ -267,6 +278,10 @@ export function TriggerDiscoveryClient({ options }: Props) {
     ma2Period: '25',
     maxDistance: '5',
     nearDistance: '2',
+    spreadExpansionEnabled: false,
+    spreadLookbackIntervals: String(DEFAULT_MA_ZONE_TRIGGER_CONFIG.spreadLookbackIntervals),
+    minExpansionRatioPct: String(DEFAULT_MA_ZONE_TRIGGER_CONFIG.minExpansionRatio * 100),
+    requireBullishMaOrder: true,
     priceMin: '',
     priceMax: '',
     averageVolumeMin: '',
@@ -291,6 +306,9 @@ export function TriggerDiscoveryClient({ options }: Props) {
   const [error, setError] = useState<string | null>(null)
   const requestSequence = useRef(0)
   const abortController = useRef<AbortController | null>(null)
+  const resultsTableRef = useRef<HTMLDivElement | null>(null)
+  const pendingScrollRestore = useRef<TriggerDiscoveryNavigationPayload['scroll'] | null>(null)
+  const restoredNavigation = useRef(false)
   const miniChartSequence = useRef(0)
   const miniChartAbortController = useRef<AbortController | null>(null)
   const miniChartCache = useRef(new Map<string, TriggerDiscoveryMiniChart>())
@@ -308,7 +326,7 @@ export function TriggerDiscoveryClient({ options }: Props) {
   const [savedMessage, setSavedMessage] = useState<string | null>(null)
   const numberFormatter = new Intl.NumberFormat('ja-JP', { maximumFractionDigits: 0 })
 
-  const updateDraft = (key: keyof DraftState, value: string) => {
+  const updateDraft = (key: DraftStringKey, value: string) => {
     setDraft((current) => ({ ...current, [key]: value }))
   }
 
@@ -317,6 +335,8 @@ export function TriggerDiscoveryClient({ options }: Props) {
     const ma2Period = Number(draft.ma2Period)
     const maxApproachDistancePct = Number(draft.maxDistance)
     const nearDistancePct = Number(draft.nearDistance)
+    const spreadLookbackIntervals = Number(draft.spreadLookbackIntervals)
+    const minExpansionRatio = Number(draft.minExpansionRatioPct) / 100
     const liquidityLookbackSessions = Number(draft.liquidityLookbackSessions)
     if (!/^\d{4}-\d{2}-\d{2}$/.test(requestedAsOf)) throw new Error('基準日を指定してください。')
     if (![ma1Period, ma2Period].every((value) => Number.isInteger(value) && value >= 2 && value <= 120)) {
@@ -328,6 +348,12 @@ export function TriggerDiscoveryClient({ options }: Props) {
     }
     if (!Number.isFinite(nearDistancePct) || nearDistancePct < 0 || nearDistancePct > maxApproachDistancePct) {
       throw new Error('Near閾値は0以上、Trigger距離以下で指定してください。')
+    }
+    if (!Number.isInteger(spreadLookbackIntervals) || spreadLookbackIntervals < 2 || spreadLookbackIntervals > 24) {
+      throw new Error('MA間隔の比較区間は2〜24で指定してください。')
+    }
+    if (!Number.isFinite(minExpansionRatio) || minExpansionRatio < 0 || minExpansionRatio > 1) {
+      throw new Error('MA間隔の拡大区間比率は0〜100%で指定してください。')
     }
     if (!Number.isInteger(liquidityLookbackSessions) || liquidityLookbackSessions < 1 || liquidityLookbackSessions > 252) {
       throw new Error('平均期間は1〜252営業日で指定してください。')
@@ -353,6 +379,10 @@ export function TriggerDiscoveryClient({ options }: Props) {
       minimumAboveZoneRatio: effectiveEngineConfig.minimumAboveZoneRatio,
       maxApproachDistancePct,
       nearDistancePct,
+      spreadExpansionEnabled: draft.spreadExpansionEnabled,
+      spreadLookbackIntervals,
+      minExpansionRatio,
+      requireBullishMaOrder: draft.requireBullishMaOrder,
       markets: selectedMarkets.length ? selectedMarkets : undefined,
       priceMin: ranges[0][1],
       priceMax: ranges[0][2],
@@ -386,6 +416,10 @@ export function TriggerDiscoveryClient({ options }: Props) {
       minimumAboveZoneRatio: request.minimumAboveZoneRatio,
       maxApproachDistancePct: request.maxApproachDistancePct,
       nearDistancePct: request.nearDistancePct,
+      spreadExpansionEnabled: request.spreadExpansionEnabled,
+      spreadLookbackIntervals: request.spreadLookbackIntervals,
+      minExpansionRatio: request.minExpansionRatio,
+      requireBullishMaOrder: request.requireBullishMaOrder,
       markets: request.markets,
       priceMin: request.priceMin,
       priceMax: request.priceMax,
@@ -491,6 +525,7 @@ export function TriggerDiscoveryClient({ options }: Props) {
     && response.meta.resolvedAsOf < options.latestAsOf,
   )
   const criteriaSummary = activeCriteriaSummary(lastRequest)
+  const spreadExpansionActive = response?.criteria.spreadExpansionEnabled ?? false
 
   const activeSavedTrigger = savedTriggers.find((definition) => definition.id === activeSavedId) ?? null
   let hasUnsavedChanges = false
@@ -531,6 +566,62 @@ export function TriggerDiscoveryClient({ options }: Props) {
     setMiniChartFailedKeys(new Set())
   }
 
+  const preserveBeforeStockNavigation = (event: ReactMouseEvent<HTMLAnchorElement>) => {
+    if (
+      event.defaultPrevented
+      || event.button !== 0
+      || event.metaKey
+      || event.ctrlKey
+      || event.shiftKey
+      || event.altKey
+      || mode !== 'current'
+      || !response
+      || !lastRequest
+    ) return
+
+    try {
+      const returnToken = window.crypto.randomUUID()
+      const returnUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`
+      const payload: TriggerDiscoveryNavigationPayload = {
+        mode: 'current',
+        timeframe,
+        draft,
+        selectedMarkets,
+        stageFilters,
+        effectiveEngineConfig,
+        viewConfig,
+        response,
+        lastRequest,
+        builderOpen,
+        selectedSavedId,
+        activeSavedId,
+        scroll: {
+          windowY: window.scrollY,
+          resultsTableX: resultsTableRef.current?.scrollLeft ?? 0,
+          resultsTableY: resultsTableRef.current?.scrollTop ?? 0,
+        },
+      }
+      window.sessionStorage.setItem(
+        TRIGGER_DISCOVERY_NAVIGATION_STORAGE_KEY,
+        serializeTriggerDiscoveryNavigationSnapshot({ returnToken, returnUrl, payload }),
+      )
+      const historyState = typeof window.history.state === 'object' && window.history.state !== null
+        ? window.history.state as Record<string, unknown>
+        : {}
+      window.history.replaceState(
+        { ...historyState, [TRIGGER_DISCOVERY_NAVIGATION_HISTORY_KEY]: returnToken },
+        '',
+        window.location.href,
+      )
+    } catch {
+      try {
+        window.sessionStorage.removeItem(TRIGGER_DISCOVERY_NAVIGATION_STORAGE_KEY)
+      } catch {
+        // Navigation still works when session storage is unavailable.
+      }
+    }
+  }
+
   const loadSavedTrigger = async () => {
     if (!selectedSavedId) return
     setSavedBusy(true)
@@ -555,6 +646,14 @@ export function TriggerDiscoveryClient({ options }: Props) {
         ma2Period: String(request.ma2Period),
         maxDistance: String(request.maxApproachDistancePct),
         nearDistance: String(request.nearDistancePct),
+        spreadExpansionEnabled: request.spreadExpansionEnabled ?? false,
+        spreadLookbackIntervals: String(
+          request.spreadLookbackIntervals ?? DEFAULT_MA_ZONE_TRIGGER_CONFIG.spreadLookbackIntervals,
+        ),
+        minExpansionRatioPct: String(
+          (request.minExpansionRatio ?? DEFAULT_MA_ZONE_TRIGGER_CONFIG.minExpansionRatio) * 100,
+        ),
+        requireBullishMaOrder: request.requireBullishMaOrder ?? true,
         priceMin: request.priceMin == null ? '' : String(request.priceMin),
         priceMax: request.priceMax == null ? '' : String(request.priceMax),
         averageVolumeMin: request.averageVolumeMin == null ? '' : String(request.averageVolumeMin),
@@ -664,6 +763,62 @@ export function TriggerDiscoveryClient({ options }: Props) {
   }, [])
 
   useEffect(() => {
+    const historyState = typeof window.history.state === 'object' && window.history.state !== null
+      ? window.history.state as Record<string, unknown>
+      : {}
+    let serializedSnapshot: string | null = null
+    try {
+      serializedSnapshot = window.sessionStorage.getItem(TRIGGER_DISCOVERY_NAVIGATION_STORAGE_KEY)
+    } catch {
+      return
+    }
+    const snapshot = parseTriggerDiscoveryNavigationSnapshot({
+      serialized: serializedSnapshot,
+      historyToken: historyState[TRIGGER_DISCOVERY_NAVIGATION_HISTORY_KEY],
+      currentUrl: `${window.location.pathname}${window.location.search}${window.location.hash}`,
+    })
+    if (!snapshot) return
+
+    try {
+      window.sessionStorage.removeItem(TRIGGER_DISCOVERY_NAVIGATION_STORAGE_KEY)
+    } catch {
+      // The validated in-memory snapshot can still be restored for this mount.
+    }
+    const nextHistoryState = { ...historyState }
+    delete nextHistoryState[TRIGGER_DISCOVERY_NAVIGATION_HISTORY_KEY]
+    window.history.replaceState(nextHistoryState, '', window.location.href)
+
+    abortController.current?.abort()
+    miniChartAbortController.current?.abort()
+    requestSequence.current += 1
+    miniChartSequence.current += 1
+    restoredNavigation.current = true
+    pendingScrollRestore.current = snapshot.payload.scroll
+    setMode('current')
+    setTimeframe(snapshot.payload.timeframe)
+    setDraft({
+      ...snapshot.payload.draft,
+      spreadExpansionEnabled: snapshot.payload.draft.spreadExpansionEnabled ?? false,
+      spreadLookbackIntervals: snapshot.payload.draft.spreadLookbackIntervals
+        ?? String(DEFAULT_MA_ZONE_TRIGGER_CONFIG.spreadLookbackIntervals),
+      minExpansionRatioPct: snapshot.payload.draft.minExpansionRatioPct
+        ?? String(DEFAULT_MA_ZONE_TRIGGER_CONFIG.minExpansionRatio * 100),
+      requireBullishMaOrder: snapshot.payload.draft.requireBullishMaOrder ?? true,
+    })
+    setSelectedMarkets(snapshot.payload.selectedMarkets)
+    setStageFilters(snapshot.payload.stageFilters)
+    setEffectiveEngineConfig(snapshot.payload.effectiveEngineConfig)
+    setViewConfig(snapshot.payload.viewConfig)
+    setResponse(snapshot.payload.response)
+    setLastRequest(snapshot.payload.lastRequest)
+    setBuilderOpen(snapshot.payload.builderOpen)
+    setSelectedSavedId(snapshot.payload.selectedSavedId)
+    setActiveSavedId(snapshot.payload.activeSavedId)
+    setLoading(false)
+    setError(null)
+  }, [])
+
+  useEffect(() => {
     miniChartAbortController.current?.abort()
     const sequence = ++miniChartSequence.current
     if (!response?.meta.resolvedAsOf || response.rows.length === 0) {
@@ -734,6 +889,7 @@ export function TriggerDiscoveryClient({ options }: Props) {
 
   useEffect(() => {
     const params = new URL(window.location.href).searchParams
+    if (restoredNavigation.current) return
     if (params.get('mode') === 'period') setMode('period')
     const requestedAsOf = params.get('asOf')
     const requestedTimeframe = params.get('timeframe')
@@ -747,13 +903,40 @@ export function TriggerDiscoveryClient({ options }: Props) {
     if (requestedMa2 && /^\d+$/.test(requestedMa2)) setDraft((current) => ({ ...current, ma2Period: requestedMa2 }))
   }, [])
 
+  useEffect(() => {
+    if (!response || !pendingScrollRestore.current) return
+    const scroll = pendingScrollRestore.current
+    pendingScrollRestore.current = null
+    let secondFrame = 0
+    let settleTimer = 0
+    const restoreScroll = () => {
+      if (resultsTableRef.current) {
+        resultsTableRef.current.scrollLeft = scroll.resultsTableX
+        resultsTableRef.current.scrollTop = scroll.resultsTableY
+      }
+      window.scrollTo({ top: scroll.windowY, left: 0, behavior: 'instant' })
+    }
+    const firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(() => {
+        restoreScroll()
+        // Native history restoration can settle after the first painted frame.
+        settleTimer = window.setTimeout(restoreScroll, 120)
+      })
+    })
+    return () => {
+      window.cancelAnimationFrame(firstFrame)
+      if (secondFrame) window.cancelAnimationFrame(secondFrame)
+      if (settleTimer) window.clearTimeout(settleTimer)
+    }
+  }, [response])
+
   const changeMode = (next: DiscoveryMode) => {
     setMode(next)
     setBuilderOpen(true)
     setError(null)
     const url = new URL(window.location.href)
     url.searchParams.set('mode', next)
-    window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`)
+    window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`)
   }
 
   const stageFilterControls = (showApply: boolean) => (
@@ -811,15 +994,23 @@ export function TriggerDiscoveryClient({ options }: Props) {
       </nav>
 
       {mode === 'current' && response && !builderOpen && (
-        <section data-trigger-compact-summary aria-labelledby="trigger-results" className="border-b border-[var(--color-border)] py-3">
-          <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+        <section data-trigger-compact-summary aria-labelledby="trigger-results" className="border-b border-[var(--color-border)] bg-[var(--color-surface-subtle)] px-2 py-2.5 sm:px-3">
+          <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
             <div className="min-w-0">
-              <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-                <h2 id="trigger-results" className="text-[13px] font-medium text-[var(--color-text-secondary)]">
-                  候補 <strong className="text-[20px] font-semibold tabular-nums text-[var(--color-text-primary)]">{response.meta.matchedCount.toLocaleString('ja-JP')}件</strong>
+              <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
+                <h2 id="trigger-results" className="inline-flex items-baseline gap-1">
+                  <span className="text-[11px] font-medium text-[var(--color-text-tertiary)]">候補</span>
+                  <strong data-trigger-candidate-count className="text-[22px] font-semibold leading-none tabular-nums text-[var(--color-text-primary)]">{response.meta.matchedCount.toLocaleString('ja-JP')}</strong>
+                  <span className="text-[12px] font-medium text-[var(--color-text-secondary)]">件</span>
                 </h2>
-                <span className="text-[12px] tabular-nums text-[var(--color-text-secondary)]">評価日 {response.meta.resolvedAsOf ?? '—'}</span>
-                <span className="text-[12px] font-medium text-[var(--color-text-secondary)]">{response.meta.timeframe === 'BIWEEKLY' ? '2週足' : '月足'} {response.criteria.ma1Period}/{response.criteria.ma2Period}</span>
+                <span className="inline-flex items-baseline gap-1 text-[11px]">
+                  <span className="text-[var(--color-text-tertiary)]">評価日</span>
+                  <strong className="font-medium tabular-nums text-[var(--color-text-secondary)]">{response.meta.resolvedAsOf ?? '—'}</strong>
+                </span>
+                <span className="inline-flex items-baseline gap-1 text-[11px] text-[var(--color-text-secondary)]">
+                  <strong className="font-semibold">{response.meta.timeframe === 'BIWEEKLY' ? '2週足' : '月足'}</strong>
+                  <span className="tabular-nums">{response.criteria.ma1Period}/{response.criteria.ma2Period}</span>
+                </span>
                 {isHistoricalResult && <span className="rounded-[3px] border border-[var(--color-border)] bg-[var(--color-surface-muted)] px-1.5 py-0.5 text-[10px] font-semibold text-[var(--color-text-secondary)]">過去検証</span>}
               </div>
               {isHistoricalResult && (
@@ -827,8 +1018,8 @@ export function TriggerDiscoveryClient({ options }: Props) {
                   指定日 {response.meta.requestedAsOf} / 評価日 {response.meta.resolvedAsOf ?? '—'}
                 </p>
               )}
-              <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[10px] leading-5 text-[var(--color-text-tertiary)]">
-                <p className="min-w-0 flex-1 truncate">適用中 {criteriaSummary}</p>
+              <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] leading-5 text-[var(--color-text-tertiary)]">
+                <p className="min-w-0 flex-1 truncate"><span className="font-medium text-[var(--color-text-secondary)]">適用条件</span> {criteriaSummary}</p>
                 <details className="shrink-0">
                   <summary className="cursor-pointer select-none font-medium hover:text-[var(--color-text-secondary)]">評価内訳</summary>
                   <p className="mt-1 flex flex-wrap gap-x-3 gap-y-1">
@@ -849,7 +1040,7 @@ export function TriggerDiscoveryClient({ options }: Props) {
               data-trigger-builder-toggle
               aria-expanded="false"
               onClick={() => setBuilderOpen(true)}
-              className="inline-flex h-9 shrink-0 items-center justify-center gap-1.5 self-start rounded-[3px] border border-[var(--color-border)] bg-white px-3 text-[11px] font-medium text-[var(--color-brand-700)] hover:bg-[var(--color-surface-subtle)] lg:self-center"
+              className="inline-flex h-8 shrink-0 items-center justify-center gap-1.5 self-start rounded-[3px] border border-[var(--color-border)] bg-white px-2.5 text-[10px] font-medium text-[var(--color-text-secondary)] outline-none hover:border-[var(--color-brand-300)] hover:text-[var(--color-brand-700)] focus-visible:ring-2 focus-visible:ring-[var(--color-brand-200)] sm:self-center"
             >
               <SlidersHorizontal size={13} aria-hidden /> 条件を変更
             </button>
@@ -1020,6 +1211,46 @@ export function TriggerDiscoveryClient({ options }: Props) {
             </dl>
           </div>
         </div>
+        <details className="group mt-4">
+          <summary className="inline-flex cursor-pointer list-none items-center gap-1.5 text-[11px] font-medium text-[var(--color-brand-700)]">
+            <SlidersHorizontal size={13} aria-hidden /> Trigger詳細条件
+            {draft.spreadExpansionEnabled && <span className="rounded-[3px] bg-[var(--color-brand-50)] px-1.5 py-0.5 text-[9px] font-semibold text-[var(--color-brand-800)]">MA間隔拡大 ON</span>}
+          </summary>
+          <div className="mt-3 border-l-2 border-[var(--color-border-soft)] pl-3">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="inline-flex items-center gap-1 text-[12px] font-medium text-[var(--color-text-primary)]">
+                <label className="inline-flex cursor-pointer items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={draft.spreadExpansionEnabled}
+                    onChange={(event) => setDraft((current) => ({
+                      ...current,
+                      spreadExpansionEnabled: event.target.checked,
+                    }))}
+                    className="h-4 w-4 rounded border-[var(--color-border)] accent-[var(--color-brand-700)]"
+                  />
+                  MA間隔拡大
+                </label>
+                <HelpPopover title="MA間隔拡大" align="start">
+                  <p>MA1とMA2がともに上昇し、MA1がMA2を上回った状態で、両者の相対間隔が拡大傾向にある銘柄だけを抽出します。</p>
+                  <p className="text-[10px] text-[var(--color-text-tertiary)]">一時的な縮小を許容するため、単純な連続拡大ではなく、間隔率のSlopeと拡大区間比率を組み合わせて判定します。</p>
+                  <p className="border-t border-[var(--color-border-soft)] pt-2 text-[10px] text-[var(--color-text-tertiary)]">2本が同じ速度で平行上昇する場合、「2本とも上向き」でもMA間隔拡大には該当しないことがあります。</p>
+                </HelpPopover>
+              </div>
+              <span className="text-[10px] text-[var(--color-text-tertiary)]">既定OFF・Trigger Scoreへの加点なし</span>
+            </div>
+            {draft.spreadExpansionEnabled && (
+              <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3 lg:max-w-[660px]">
+                <Field label="比較区間数" value={draft.spreadLookbackIntervals} onChange={(value) => updateDraft('spreadLookbackIntervals', value)} suffix="区間" type="number" min={2} max={24} />
+                <Field label="最低拡大区間比率" value={draft.minExpansionRatioPct} onChange={(value) => updateDraft('minExpansionRatioPct', value)} suffix="%" type="number" min={0} max={100} />
+                <div className="rounded-[3px] bg-[var(--color-surface-subtle)] px-2.5 py-2 text-[10px] leading-5 text-[var(--color-text-secondary)]">
+                  <span className="block text-[9px] font-medium text-[var(--color-text-tertiary)]">上方順序</span>
+                  MA1がMA2より上（固定）
+                </div>
+              </div>
+            )}
+          </div>
+        </details>
       </section>
 
       <section aria-labelledby="universe-conditions" className="border-b border-[var(--color-border)] py-5">
@@ -1151,31 +1382,32 @@ export function TriggerDiscoveryClient({ options }: Props) {
           <div className="py-14 text-center text-[13px] text-[var(--color-text-secondary)]">この条件に一致するTrigger候補はありません。</div>
         ) : (
           <>
-            <div data-trigger-results-table className={`relative ${builderOpen ? 'mt-3' : ''} overflow-x-auto border-y border-[var(--color-border)] lg:max-h-[min(72vh,760px)] lg:overflow-auto ${loading ? 'opacity-65' : ''}`} aria-busy={loading}>
+            <div ref={resultsTableRef} data-trigger-results-table className={`relative ${builderOpen ? 'mt-3' : ''} overflow-x-auto border-y border-[var(--color-border)] bg-white lg:max-h-[min(72vh,760px)] lg:overflow-auto ${loading ? 'opacity-65' : ''}`} aria-busy={loading}>
               {loading && <div className="absolute right-2 top-2 z-30 inline-flex items-center gap-1 rounded bg-white/95 px-2 py-1 text-[10px] text-[var(--color-brand-700)] shadow-sm"><LoaderCircle size={12} className="animate-spin" />再検索中</div>}
-              <table className="w-full min-w-[1390px] border-collapse text-[13px]">
+              <table className={`w-full ${spreadExpansionActive ? 'min-w-[1490px]' : 'min-w-[1390px]'} border-collapse text-[13px]`}>
                 <thead className="sticky top-0 z-30 bg-[var(--color-surface-muted)] text-[var(--color-text-secondary)] shadow-[0_1px_0_var(--color-border)]">
                   <tr className="border-b border-[var(--color-border)]">
-                    <th data-column="stock" aria-sort={sortAria('ticker')} className="sticky left-0 z-40 w-[168px] bg-[var(--color-surface-muted)] px-2 py-2 text-left"><SortButton label="銘柄" sortKey="ticker" activeSort={activeSort} onSort={changeSort} /></th>
-                    <th data-column="status" aria-sort={sortAria('triggerStatus')} className="w-[82px] px-2 py-2 text-left"><SortButton label="Status" sortKey="triggerStatus" activeSort={activeSort} onSort={changeSort} /></th>
-                    <th data-column="score" aria-sort={sortAria('triggerScore')} className="w-[64px] px-1 py-2 text-center"><SortButton label="Score" ariaLabel="Trigger Score" sortKey="triggerScore" activeSort={activeSort} onSort={changeSort} /></th>
-                    <th data-column="chart" className="w-[180px] border-l border-[var(--color-border-soft)] px-2 py-2 text-center text-[10px] font-semibold tracking-[0.04em]">MINI CHART</th>
-                    <th data-column="price" aria-sort={sortAria('price')} className="w-[78px] px-2 py-2 text-right"><SortButton label="株価" sortKey="price" activeSort={activeSort} onSort={changeSort} /></th>
-                    <th data-column="market" className="w-[84px] px-2 py-2 text-left">市場</th>
-                    <th data-column="zone" aria-sort={sortAria('zoneDistance')} className="w-[92px] border-l border-[var(--color-border-soft)] px-2 py-2 text-right"><SortButton label="Zone距離" sortKey="zoneDistance" activeSort={activeSort} onSort={changeSort} /></th>
-                    <th data-column="ma1" aria-sort={sortAria('ma1Distance')} className="w-[88px] px-2 py-2 text-right"><SortButton label={`${response.criteria.ma1Period}${response.meta.timeframe === 'BIWEEKLY' ? '本' : 'M'}距離`} sortKey="ma1Distance" activeSort={activeSort} onSort={changeSort} /></th>
-                    <th data-column="ma2" aria-sort={sortAria('ma2Distance')} className="w-[88px] px-2 py-2 text-right"><SortButton label={`${response.criteria.ma2Period}${response.meta.timeframe === 'BIWEEKLY' ? '本' : 'M'}距離`} sortKey="ma2Distance" activeSort={activeSort} onSort={changeSort} /></th>
-                    <th data-column="trading-value" aria-sort={sortAria('averageTradingValue')} className="w-[112px] border-l border-[var(--color-border-soft)] px-2 py-2 text-right"><SortButton label="平均売買代金" sortKey="averageTradingValue" activeSort={activeSort} onSort={changeSort} /></th>
-                    <th data-column="volume" aria-sort={sortAria('averageVolume')} className="w-[102px] px-2 py-2 text-right"><SortButton label="平均出来高" sortKey="averageVolume" activeSort={activeSort} onSort={changeSort} /></th>
-                    <th data-column="stage" className="w-[188px] border-l border-[var(--color-border-soft)] px-2 py-1.5 text-center">
+                    <th data-column="stock" aria-sort={sortAria('ticker')} className="sticky left-0 z-40 w-[168px] bg-[var(--color-surface-muted)] px-2 py-1 text-left shadow-[4px_0_7px_-7px_rgba(15,23,42,.28)]"><SortButton label="銘柄" sortKey="ticker" activeSort={activeSort} onSort={changeSort} /></th>
+                    <th data-column="status" aria-sort={sortAria('triggerStatus')} className="w-[82px] px-2 py-1 text-left"><SortButton label="Status" sortKey="triggerStatus" activeSort={activeSort} onSort={changeSort} /></th>
+                    <th data-column="score" aria-sort={sortAria('triggerScore')} className="w-[64px] px-1 py-1 text-center"><SortButton label="Score" ariaLabel="Trigger Score" sortKey="triggerScore" activeSort={activeSort} onSort={changeSort} align="center" /></th>
+                    <th data-column="chart" className="w-[168px] px-2 py-1 text-center text-[10px] font-semibold tracking-[0.04em]">MINI CHART</th>
+                    <th data-column="price" data-group-start aria-sort={sortAria('price')} className="w-[78px] border-l border-[var(--color-border)] px-2 py-1 text-right"><SortButton label="株価" sortKey="price" activeSort={activeSort} onSort={changeSort} align="end" /></th>
+                    <th data-column="market" className="w-[84px] px-2 py-1 text-left">市場</th>
+                    <th data-column="zone" aria-sort={sortAria('zoneDistance')} className="w-[92px] px-2 py-1 text-right"><SortButton label="Zone距離" sortKey="zoneDistance" activeSort={activeSort} onSort={changeSort} align="end" /></th>
+                    <th data-column="ma1" aria-sort={sortAria('ma1Distance')} className="w-[88px] px-2 py-1 text-right"><SortButton label={`${response.criteria.ma1Period}${response.meta.timeframe === 'BIWEEKLY' ? '本' : 'M'}距離`} sortKey="ma1Distance" activeSort={activeSort} onSort={changeSort} align="end" /></th>
+                    <th data-column="ma2" aria-sort={sortAria('ma2Distance')} className="w-[88px] px-2 py-1 text-right"><SortButton label={`${response.criteria.ma2Period}${response.meta.timeframe === 'BIWEEKLY' ? '本' : 'M'}距離`} sortKey="ma2Distance" activeSort={activeSort} onSort={changeSort} align="end" /></th>
+                    {spreadExpansionActive && <th data-column="ma-spread" className="w-[96px] px-2 py-1 text-right">MA間隔</th>}
+                    <th data-column="trading-value" data-group-start aria-sort={sortAria('averageTradingValue')} className="w-[112px] border-l border-[var(--color-border)] px-2 py-1 text-right"><SortButton label="平均売買代金" sortKey="averageTradingValue" activeSort={activeSort} onSort={changeSort} align="end" /></th>
+                    <th data-column="volume" aria-sort={sortAria('averageVolume')} className="w-[102px] px-2 py-1 text-right"><SortButton label="平均出来高" sortKey="averageVolume" activeSort={activeSort} onSort={changeSort} align="end" /></th>
+                    <th data-column="stage" data-group-start className="w-[188px] border-l border-[var(--color-border)] px-2 py-1 text-center">
                       <span className="block text-[9px] font-semibold tracking-[0.06em]">6 STAGE</span>
-                      <span className="mt-1 grid grid-cols-6 gap-1">
+                      <span className="mt-0.5 grid grid-cols-6 gap-1">
                         {TRIGGER_DISCOVERY_STAGE_AXES.map((axis) => (
-                          <SortButton key={axis} label={STAGE_AXIS_LABELS[axis]} sortKey={axis} activeSort={activeSort} onSort={changeSort} />
+                          <SortButton key={axis} label={STAGE_AXIS_LABELS[axis]} sortKey={axis} activeSort={activeSort} onSort={changeSort} align="center" />
                         ))}
                       </span>
                     </th>
-                    <th data-column="watchlist" className="w-10 border-l border-[var(--color-border-soft)] px-1 py-2 text-center"><span className="sr-only">ウォッチ</span></th>
+                    <th data-column="watchlist" data-group-start className="w-10 border-l border-[var(--color-border)] px-1 py-1 text-center"><span className="sr-only">ウォッチ</span></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1189,16 +1421,16 @@ export function TriggerDiscoveryClient({ options }: Props) {
                       ma2Period: response.criteria.ma2Period,
                     })
                     return <tr key={row.ticker} className="border-b border-[var(--color-border-soft)] bg-white transition-colors hover:bg-[var(--color-surface-subtle)]">
-                      <td data-column="stock" className="sticky left-0 z-20 bg-inherit px-2 py-2 shadow-[5px_0_8px_-8px_rgba(15,23,42,.35)]">
-                        <Link href={`/stock/${row.ticker}`} className="block min-w-0 leading-tight hover:text-[var(--color-brand-700)]">
+                      <td data-column="stock" className="sticky left-0 z-20 bg-inherit px-2 py-1.5 shadow-[4px_0_7px_-7px_rgba(15,23,42,.28)]">
+                        <Link href={`/stock/${row.ticker}`} onClick={preserveBeforeStockNavigation} className="block min-w-0 leading-tight hover:text-[var(--color-brand-700)]">
                           <span className="block text-[13px] font-semibold tabular-nums text-[var(--color-text-primary)]">{row.ticker}</span>
-                          <span className="mt-1 block max-w-[152px] truncate text-[11px] font-normal text-[var(--color-text-secondary)]" title={row.companyName}>{row.companyName}</span>
+                          <span className="mt-0.5 block max-w-[152px] truncate text-[11px] font-normal text-[var(--color-text-secondary)]" title={row.companyName}>{row.companyName}</span>
                         </Link>
                         {row.priceFreshness === 'STALE_ACCEPTED' && <span className="mt-1 block text-[9px] text-amber-700">価格 {row.priceDate}（{row.priceStalenessSessions}営業日前）</span>}
                       </td>
-                      <td data-column="status" className="px-2 py-2"><span className={`inline-flex whitespace-nowrap rounded-[3px] border px-1.5 py-1 text-[10px] font-semibold ${STATUS_STYLES[row.triggerStatus]}`}>{STATUS_LABELS[row.triggerStatus]}</span></td>
-                      <td data-column="score" className="px-1 py-2 text-center"><TriggerScoreCell triggerScore={row.triggerScore} scoreBreakdown={row.scoreBreakdown} /></td>
-                      <td data-column="chart" className="border-l border-[var(--color-border-soft)] px-2 py-1">
+                      <td data-column="status" className="px-2 py-1.5"><span className={`inline-flex whitespace-nowrap rounded-[3px] border px-1.5 py-0.5 text-[10px] font-semibold ${STATUS_STYLES[row.triggerStatus]}`}>{STATUS_LABELS[row.triggerStatus]}</span></td>
+                      <td data-column="score" className="px-1 py-1.5 text-center"><TriggerScoreCell triggerScore={row.triggerScore} scoreBreakdown={row.scoreBreakdown} /></td>
+                      <td data-column="chart" className="px-2 py-0.5">
                         <TriggerMiniChart
                           chart={miniChartCache.current.get(chartKey)}
                           loading={miniChartLoadingKeys.has(chartKey)}
@@ -1208,19 +1440,25 @@ export function TriggerDiscoveryClient({ options }: Props) {
                           ma2Period={response.criteria.ma2Period}
                         />
                       </td>
-                      <td data-column="price" className="px-2 py-2 text-right font-medium tabular-nums text-[var(--color-text-primary)]">{numberFormatter.format(row.price)}</td>
-                      <td data-column="market" className="px-2 py-2"><span className="inline-flex max-w-[76px] truncate whitespace-nowrap rounded-[3px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-text-secondary)]" title={row.market ?? '市場区分なし'}>{row.market ?? '—'}</span></td>
-                      <td data-column="zone" className="border-l border-[var(--color-border-soft)] px-2 py-2 text-right font-semibold tabular-nums text-[var(--color-text-primary)]">{percent(row.zoneDistancePct)}</td>
-                      <td data-column="ma1" className="px-2 py-2 text-right tabular-nums text-[var(--color-text-secondary)]">{percent(row.ma1DistancePct)}</td>
-                      <td data-column="ma2" className="px-2 py-2 text-right tabular-nums text-[var(--color-text-secondary)]">{percent(row.ma2DistancePct)}</td>
-                      <td data-column="trading-value" className="border-l border-[var(--color-border-soft)] px-2 py-2 text-right tabular-nums text-[var(--color-text-secondary)]">{compactAmount(row.averageTradingValue)}</td>
-                      <td data-column="volume" className="px-2 py-2 text-right tabular-nums text-[var(--color-text-secondary)]">{numberOrDash(row.averageVolume, numberFormatter)}</td>
-                      <td data-column="stage" className="border-l border-[var(--color-border-soft)] px-2 py-2">
+                      <td data-column="price" data-group-start className="border-l border-[var(--color-border)] px-2 py-1.5 text-right font-medium tabular-nums text-[var(--color-text-primary)]">{numberFormatter.format(row.price)}</td>
+                      <td data-column="market" className="px-2 py-1.5"><span className="inline-flex max-w-[76px] truncate whitespace-nowrap rounded-[3px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-text-secondary)]" title={row.market ?? '市場区分なし'}>{row.market ?? '—'}</span></td>
+                      <td data-column="zone" className="px-2 py-1.5 text-right font-semibold tabular-nums text-[var(--color-text-primary)]">{percent(row.zoneDistancePct)}</td>
+                      <td data-column="ma1" className="px-2 py-1.5 text-right font-normal tabular-nums text-[var(--color-text-secondary)]">{percent(row.ma1DistancePct)}</td>
+                      <td data-column="ma2" className="px-2 py-1.5 text-right font-normal tabular-nums text-[var(--color-text-secondary)]">{percent(row.ma2DistancePct)}</td>
+                      {spreadExpansionActive && (
+                        <td data-column="ma-spread" className="px-2 py-1.5 text-right tabular-nums" title={row.maSpreadSlope == null ? undefined : `Slope ${row.maSpreadSlope.toFixed(3)}pt / observation`}>
+                          <span className="block font-medium text-[var(--color-text-primary)]">{row.maSpreadPct == null ? '—' : percent(row.maSpreadPct)}</span>
+                          <span className="block text-[9px] text-[var(--color-text-tertiary)]">拡大 {row.maSpreadExpansionRatio == null ? '—' : `${Math.round(row.maSpreadExpansionRatio * 100)}%`}</span>
+                        </td>
+                      )}
+                      <td data-column="trading-value" data-group-start className="border-l border-[var(--color-border)] px-2 py-1.5 text-right tabular-nums text-[var(--color-text-secondary)]">{compactAmount(row.averageTradingValue)}</td>
+                      <td data-column="volume" className="px-2 py-1.5 text-right tabular-nums text-[var(--color-text-secondary)]">{numberOrDash(row.averageVolume, numberFormatter)}</td>
+                      <td data-column="stage" data-group-start className="border-l border-[var(--color-border)] px-2 py-1.5">
                         <span className="grid grid-cols-6 gap-1">
                           {TRIGGER_DISCOVERY_STAGE_AXES.map((axis) => <StageTag key={axis} stage={row[axis]} size="xs" className="w-full" />)}
                         </span>
                       </td>
-                      <td data-column="watchlist" className="border-l border-[var(--color-border-soft)] px-1 py-2 text-center"><WatchlistButton ticker={row.ticker} size="sm" /></td>
+                      <td data-column="watchlist" data-group-start className="border-l border-[var(--color-border)] px-1 py-1.5 text-center"><WatchlistButton ticker={row.ticker} size="sm" /></td>
                     </tr>
                   })}
                 </tbody>

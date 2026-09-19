@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { execGet, execRun } from '@/lib/db/client'
-import { historicalScanResultPaths } from '@/lib/server/trigger-discovery-historical-scan-jobs'
+import { historicalScanResultPaths, historicalScanResultSignature } from '@/lib/server/trigger-discovery-historical-scan-jobs'
 import { aggregateOutcomeRows } from '@/lib/server/trigger-discovery-outcome-analysis'
 import { outcomeResultPaths } from '@/lib/server/trigger-discovery-outcome-jobs'
 import {
@@ -10,6 +10,7 @@ import {
   getOutcomeRobustness,
   parseOutcomeRobustnessDimensions,
   TriggerOutcomeSegmentationInputError,
+  TriggerOutcomeSegmentationSourceError,
 } from '@/lib/server/trigger-discovery-outcome-robustness'
 import type {
   TriggerHistoricalScanEvent,
@@ -217,9 +218,9 @@ async function writeFixture(input: {
   await execRun(`INSERT INTO historical_trigger_scan_jobs (
     id,status,request_json,request_signature,source_fingerprint,requested_start,requested_end,
     resolved_start,resolved_end,timeframe,created_at,completed_at,result_location,result_size_bytes,expires_at
-  ) VALUES (?, 'COMPLETED', '{}', 'robustness-source', 'robustness-source', '2025-01-01', '2025-12-31',
+  ) VALUES (?, 'COMPLETED', '{}', ?, 'robustness-source', '2025-01-01', '2025-12-31',
     '2025-01-02', '2025-12-30', ?, ?, ?, ?, 1, ?)`,
-  [historicalId, timeframe, now, now, historicalId, now + 86_400])
+  [historicalId, historicalScanResultSignature('{}'), timeframe, now, now, historicalId, now + 86_400])
   await execRun(`INSERT INTO trigger_outcome_analysis_jobs (
     id,status,historical_scan_job_id,request_json,request_signature,source_fingerprint,
     analysis_cutoff_date,created_at,completed_at,total_events,processed_events,total_tickers,
@@ -311,6 +312,47 @@ async function main(): Promise<void> {
   assert.equal(direct.observations.length, 3)
   assert.equal(new Set(direct.observations.map((item) => item.episodeId)).size, 2)
   assert.equal(new Set(direct.observations.map((item) => item.row.ticker)).size, 1)
+  assert.equal(direct.sequenceAnomalyCount, 0)
+  assert.equal(direct.mappedOutcomeRowCount, 3)
+  assert.equal(direct.unmatchedOutcomeRowCount, 0)
+  assert.equal(direct.ambiguousOutcomeRowCount, 0)
+  assert.deepEqual(direct.episodes.map((episode) => [
+    episode.observedEpisodeStartDate, episode.episodeEndDate,
+    episode.selectedEventCount, episode.selectedAnchorEventDate, episode.rightCensored,
+  ]), [
+    ['2025-01-02', '2025-01-09', 2, '2025-01-03', false],
+    ['2025-01-10', null, 1, '2025-01-13', true],
+  ])
+  assert.equal(direct.observations[0]?.row, selected[0], 'first NEAR Outcome row stays byte-identical')
+
+  const zoneRows = [outcome(lifecycle[2]!, 0.2), outcome(lifecycle[4]!, 0.8)]
+  const zone = assignOutcomeRowsToEpisodes({ rows: zoneRows, historicalEvents: lifecycle })
+  assert.equal(zone.episodes[0]?.selectedAnchorEventDate, '2025-01-06')
+  assert.equal(zone.episodes[0]?.selectedEventCount, 2)
+  assert.equal(zone.observations[0]?.row, zoneRows[0])
+  assert.notEqual(zone.episodes[0]?.selectedAnchorEventDate, direct.episodes[0]?.selectedAnchorEventDate)
+
+  const noNear = assignOutcomeRowsToEpisodes({ rows: [], historicalEvents: lifecycle })
+  assert.equal(noNear.episodes.length, 2)
+  assert.equal(noNear.observations.length, 0)
+  const anomalous = assignOutcomeRowsToEpisodes({
+    rows: [outcome(lifecycle[0]!, 0.1)],
+    historicalEvents: [lifecycle[0]!, lifecycle[0]!, lifecycle[5]!],
+  })
+  assert.ok(anomalous.sequenceAnomalyCount > 0)
+  assert.equal(anomalous.excludedForSequenceIntegrity, 1)
+  assert.equal(anomalous.observations.length, 0)
+  assert.equal(anomalous.ambiguousOutcomeRowCount, 1)
+  const unmatched = assignOutcomeRowsToEpisodes({ rows: [selected[0]!], historicalEvents: [] })
+  assert.equal(unmatched.unmatchedOutcomeRowCount, 1)
+  const ambiguous = assignOutcomeRowsToEpisodes({
+    rows: [outcome(lifecycle[1]!, 0.1), outcome(lifecycle[1]!, 0.2)],
+    historicalEvents: lifecycle,
+  })
+  assert.equal(ambiguous.sequenceAnomalyCount, 0)
+  assert.equal(ambiguous.ambiguousOutcomeRowCount, 2)
+  assert.equal(ambiguous.excludedForMappingIntegrity, 1)
+  assert.equal(ambiguous.observations.length, 0, 'do not promote a later row as the anchor')
 
   const baselineNear = event({
     date: '2025-01-03', ticker: '7203', eventType: 'STATUS_CHANGED',
@@ -325,6 +367,8 @@ async function main(): Promise<void> {
   })
   assert.equal(baselineDirect.syntheticBaselineEpisodeCount, 1)
   assert.equal(baselineDirect.observations[0]?.syntheticBaseline, true)
+  assert.equal(baselineDirect.episodes[0]?.observedEpisodeStartDate, null)
+  assert.equal(baselineDirect.episodes[0]?.episodeEndDate, '2025-01-09')
 
   const repeatedFixture = await writeFixture({
     events: [...lifecycle, baselineNear, baselineExit].sort((left, right) => (
@@ -337,7 +381,7 @@ async function main(): Promise<void> {
   })
   fixtures.push(repeatedFixture)
   const hashesBefore = await Promise.all(repeatedFixture.files.map(sha256))
-  const result = await getOutcomeRobustness({ outcomeJobId: repeatedFixture.outcomeId })
+  const result = await getOutcomeRobustness({ outcomeJobId: repeatedFixture.outcomeId, episodeLimit: 20 })
   assert.equal(result.overall.diagnostics.sourceEventCount, 4)
   assert.equal(result.overall.diagnostics.episodeObservationCount, 3)
   assert.equal(result.overall.diagnostics.uniqueTickerCount, 2)
@@ -350,9 +394,18 @@ async function main(): Promise<void> {
   assert.equal(result.integrity.eventSummaryMatchesSavedOutcome, true)
   assert.equal(result.integrity.sourceRowsMatchedToHistoricalEvents, true)
   assert.equal(result.meta.performance.ohlcvQueryCount, 0)
-  assert.equal(result.meta.performance.dbQueryCount, 1)
+  assert.equal(result.meta.performance.dbQueryCount, 2)
   assert.equal(result.meta.performance.outcomeRowsRead, 4)
   assert.equal(result.meta.performance.historicalEventsRead, 10)
+  assert.equal(result.episodeDiagnostics.episodesWithRepeatedSelectedEvents, 1)
+  assert.equal(result.episodeDiagnostics.episodesWithOneSelectedEvent, 2)
+  assert.equal(result.episodeDiagnostics.selectedRightCensoredCount, 1)
+  assert.equal(result.episodeDiagnostics.sequenceAnomalyCount, 0)
+  assert.equal(result.episodeDiagnostics.mappedOutcomeRows, 4)
+  assert.equal(result.episodeDiagnostics.unmappedOutcomeRows, 0)
+  assert.equal(result.episodeDiagnostics.ambiguousOutcomeRows, 0)
+  assert.equal(result.episodePage.episodes.length, 3)
+  assert.equal(result.episodePage.episodes[0]?.selectedAnchorEventDate, '2025-01-03')
   assert.equal(horizon(result.overall.units.EVENT.horizons, 120).eligibleCount, 2)
   assert.equal(horizon(result.overall.units.EPISODE.horizons, 120).eligibleCount, 1)
   assert.equal(horizon(result.overall.units.TICKER_EQUAL_WEIGHT.horizons, 120).eligibleCount, 1)
@@ -368,7 +421,17 @@ async function main(): Promise<void> {
       dimensions: [dimension],
     })
     assert.equal(segmented.integrity.segmentCountInvariants, true)
+    assert.equal(segmented.integrity.episodeSegmentCountMatchesOverall, true)
+    assert.ok(Object.values(segmented.integrity.episodeSegmentEligibleMatchesOverall).every(Boolean))
+    assert.ok(Object.values(segmented.integrity.episodeSegmentWeightedMeanMatchesOverall).every(Boolean))
     assert.equal(segmented.segmentation?.groups.length, dimension === 'scoreBand' ? 5 : 7)
+    if (dimension === 'scoreBand') {
+      const low = segmented.segmentation?.groups.find((group) => group.keys.scoreBand === 'LOW')
+      const midHigh = segmented.segmentation?.groups.find((group) => group.keys.scoreBand === 'MID_HIGH')
+      assert.equal(low?.units.EPISODE.observationCount, 1)
+      assert.equal(midHigh?.units.EVENT.observationCount, 1)
+      assert.equal(midHigh?.units.EPISODE.observationCount, 0)
+    }
   }
   const pair = await getOutcomeRobustness({
     outcomeJobId: repeatedFixture.outcomeId,
@@ -376,6 +439,7 @@ async function main(): Promise<void> {
   })
   assert.equal(pair.segmentation?.groups.length, 49)
   assert.equal(pair.integrity.segmentCountInvariants, true)
+  assert.equal(pair.integrity.episodeSegmentCountMatchesOverall, true)
   const hashesAfter = await Promise.all(repeatedFixture.files.map(sha256))
   assert.deepEqual(hashesAfter, hashesBefore)
 
@@ -398,6 +462,16 @@ async function main(): Promise<void> {
   assert.equal(independent.overall.units.EPISODE.observationCount, 3)
   assert.equal(independent.overall.units.TICKER_EQUAL_WEIGHT.observationCount, 3)
 
+  await execRun('UPDATE historical_trigger_scan_jobs SET expires_at=? WHERE id=?', [
+    Math.floor(Date.now() / 1_000) - 1,
+    independentFixture.historicalId,
+  ])
+  await assert.rejects(
+    () => getOutcomeRobustness({ outcomeJobId: independentFixture.outcomeId }),
+    (error: unknown) => error instanceof TriggerOutcomeSegmentationSourceError
+      && error.code === 'historical_scan_event_artifact_expired',
+  )
+
   assert.deepEqual(await sideEffects(), effectsBefore)
   console.log(JSON.stringify({
     passed: true,
@@ -413,6 +487,7 @@ async function main(): Promise<void> {
     pairCellsChecked: pair.segmentation?.groups.length,
     ohlcvQueries: result.meta.performance.ohlcvQueryCount,
     artifactHashesUnchanged: true,
+    expiredHistoricalSourceRejected: true,
     sideEffectsUnchanged: true,
   }, null, 2))
   await cleanup(fixtures)

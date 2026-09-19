@@ -5,6 +5,8 @@ import type { OHLCV } from '@/types/stock'
 
 export const TRIGGER_MA_PERIOD_MIN = 2
 export const TRIGGER_MA_PERIOD_MAX = 120
+export const TRIGGER_SPREAD_LOOKBACK_INTERVALS_MIN = 2
+export const TRIGGER_SPREAD_LOOKBACK_INTERVALS_MAX = 24
 export const TRIGGER_ENGINE_VERSION = 1
 
 export type MaTrend = 'RISING' | 'FLAT' | 'FALLING'
@@ -24,6 +26,10 @@ export interface MaZoneTriggerConfig {
   slopeTolerancePct: number
   approachVelocityTolerancePctPerSession: number
   numericTolerance: number
+  spreadExpansionEnabled: boolean
+  spreadLookbackIntervals: number
+  minExpansionRatio: number
+  requireBullishMaOrder: boolean
 }
 
 export const DEFAULT_MA_ZONE_TRIGGER_CONFIG: Readonly<MaZoneTriggerConfig> = Object.freeze({
@@ -37,6 +43,10 @@ export const DEFAULT_MA_ZONE_TRIGGER_CONFIG: Readonly<MaZoneTriggerConfig> = Obj
   slopeTolerancePct: 0.01,
   approachVelocityTolerancePctPerSession: 0.001,
   numericTolerance: 1e-9,
+  spreadExpansionEnabled: false,
+  spreadLookbackIntervals: 4,
+  minExpansionRatio: 0.7,
+  requireBullishMaOrder: true,
 })
 
 export interface MaZoneTriggerObservation {
@@ -44,6 +54,51 @@ export interface MaZoneTriggerObservation {
   price: number
   ma1: number
   ma2: number
+}
+
+export interface MaSpreadExpansionResult {
+  available: boolean
+  maSpreadPct: number | null
+  maSpreadSlope: number | null
+  maSpreadExpansionRatio: number | null
+  expandingIntervals: number | null
+  bullishMaOrder: boolean
+  passed: boolean
+}
+
+export function evaluateMaSpreadExpansion(input: {
+  observations: readonly MaZoneTriggerObservation[]
+  config: Pick<MaZoneTriggerConfig,
+    'spreadLookbackIntervals' | 'minExpansionRatio' | 'numericTolerance'
+    | 'slopeTolerancePct' | 'requireBullishMaOrder'>
+  bothRising: boolean
+}): MaSpreadExpansionResult {
+  const { observations, config, bothRising } = input
+  const count = config.spreadLookbackIntervals + 1
+  const spreadRows = observations.slice(-count)
+  const available = spreadRows.length === count && spreadRows.every(isValidObservation)
+  const current = spreadRows.at(-1)
+  const bullishMaOrder = Boolean(current && finitePositive(current.ma1) && finitePositive(current.ma2)
+    && current.ma1 - current.ma2 > config.numericTolerance * relativeTolerance(current.ma1, current.ma2))
+  if (!available) {
+    return { available: false, maSpreadPct: null, maSpreadSlope: null,
+      maSpreadExpansionRatio: null, expandingIntervals: null, bullishMaOrder, passed: false }
+  }
+  const spreadValues = spreadRows.map((row) => ((row.ma1 - row.ma2) / row.ma2) * 100)
+  const maSpreadPct = spreadValues.at(-1) ?? null
+  const maSpreadSlope = regressionSlope(spreadValues)
+  const tolerance = Math.max(config.numericTolerance, config.slopeTolerancePct / config.spreadLookbackIntervals)
+  const expandingIntervals = spreadValues.slice(1).filter((value, index) => (
+    value - spreadValues[index] > tolerance
+  )).length
+  const maSpreadExpansionRatio = expandingIntervals / config.spreadLookbackIntervals
+  return {
+    available: true, maSpreadPct, maSpreadSlope, maSpreadExpansionRatio,
+    expandingIntervals, bullishMaOrder,
+    passed: bothRising && (!config.requireBullishMaOrder || bullishMaOrder)
+      && maSpreadSlope > tolerance
+      && maSpreadExpansionRatio + config.numericTolerance >= config.minExpansionRatio,
+  }
 }
 
 export interface MaZoneSnapshot {
@@ -78,6 +133,12 @@ export interface MaZoneTriggerResult {
   aboveZoneRatio: number | null
   approachDirection: TriggerApproachDirection | null
   approachVelocityPctPointsPerSession: number | null
+  maSpreadPct: number | null
+  maSpreadSlope: number | null
+  maSpreadExpansionRatio: number | null
+  maSpreadExpanding: boolean
+  bullishMaOrder: boolean
+  spreadExpansionAvailable: boolean
   observationsUsed: number
 }
 
@@ -110,6 +171,12 @@ export function validateMaZoneTriggerConfig(config: MaZoneTriggerConfig): void {
   }
   validateInteger('slopeLookbackSessions', config.slopeLookbackSessions, 1, 120)
   validateInteger('approachLookbackSessions', config.approachLookbackSessions, 2, 120)
+  validateInteger(
+    'spreadLookbackIntervals',
+    config.spreadLookbackIntervals,
+    TRIGGER_SPREAD_LOOKBACK_INTERVALS_MIN,
+    TRIGGER_SPREAD_LOOKBACK_INTERVALS_MAX,
+  )
   if (!Number.isFinite(config.minimumAboveZoneRatio)
     || config.minimumAboveZoneRatio < 0
     || config.minimumAboveZoneRatio > 1) {
@@ -125,6 +192,17 @@ export function validateMaZoneTriggerConfig(config: MaZoneTriggerConfig): void {
     || config.nearDistancePct > config.maxApproachDistancePct) {
     throw new TriggerConfigError('nearDistancePct must be between zero and maxApproachDistancePct')
   }
+  if (!Number.isFinite(config.minExpansionRatio)
+    || config.minExpansionRatio < 0
+    || config.minExpansionRatio > 1) {
+    throw new TriggerConfigError('minExpansionRatio must be between 0 and 1')
+  }
+  if (typeof config.spreadExpansionEnabled !== 'boolean') {
+    throw new TriggerConfigError('spreadExpansionEnabled must be a boolean')
+  }
+  if (typeof config.requireBullishMaOrder !== 'boolean') {
+    throw new TriggerConfigError('requireBullishMaOrder must be a boolean')
+  }
   for (const [name, value] of [
     ['slopeTolerancePct', config.slopeTolerancePct],
     ['approachVelocityTolerancePctPerSession', config.approachVelocityTolerancePctPerSession],
@@ -134,6 +212,14 @@ export function validateMaZoneTriggerConfig(config: MaZoneTriggerConfig): void {
       throw new TriggerConfigError(`${name} must be zero or greater`)
     }
   }
+}
+
+export function requiredMaZoneTriggerObservations(config: MaZoneTriggerConfig): number {
+  return Math.max(
+    config.slopeLookbackSessions,
+    config.approachLookbackSessions,
+    config.spreadExpansionEnabled ? config.spreadLookbackIntervals : 0,
+  ) + 1
 }
 
 export function classifyMaTrend(changePct: number, tolerancePct: number): MaTrend {
@@ -206,6 +292,12 @@ function unavailableResult(
     aboveZoneRatio: null,
     approachDirection: null,
     approachVelocityPctPointsPerSession: null,
+    maSpreadPct: null,
+    maSpreadSlope: null,
+    maSpreadExpansionRatio: null,
+    maSpreadExpanding: false,
+    bullishMaOrder: false,
+    spreadExpansionAvailable: false,
     observationsUsed,
   }
 }
@@ -228,10 +320,7 @@ export function evaluateMaZoneTrigger(input: {
     throw new TriggerConfigError('asOf must use YYYY-MM-DD format')
   }
 
-  const requiredObservations = Math.max(
-    config.slopeLookbackSessions,
-    config.approachLookbackSessions,
-  ) + 1
+  const requiredObservations = requiredMaZoneTriggerObservations(config)
   const asOfRows = input.observations
     .filter((row) => row.date <= input.asOf)
     .slice()
@@ -267,6 +356,11 @@ export function evaluateMaZoneTrigger(input: {
   const ma1Trend = classifyMaTrend(ma1SlopePct, config.slopeTolerancePct)
   const ma2Trend = classifyMaTrend(ma2SlopePct, config.slopeTolerancePct)
   const bothRising = ma1Trend === 'RISING' && ma2Trend === 'RISING'
+
+  const spread = evaluateMaSpreadExpansion({ observations: recent, config, bothRising })
+  const { available: spreadExpansionAvailable, maSpreadPct, maSpreadSlope,
+    maSpreadExpansionRatio, bullishMaOrder, passed: maSpreadExpanding } = spread
+  const spreadConditionPassed = !config.spreadExpansionEnabled || maSpreadExpanding
 
   const approachRows = recent.slice(-(config.approachLookbackSessions + 1))
   const approachSnapshots = approachRows.map((row) => calculateMaZoneSnapshot(
@@ -304,13 +398,13 @@ export function evaluateMaZoneTrigger(input: {
     status = 'BELOW_ZONE'
   } else if (snapshot.pricePosition === 'IN_ZONE') {
     status = 'IN_ZONE'
-    matched = bothRising && fromAbove
+    matched = bothRising && fromAbove && spreadConditionPassed
   } else if (eligibleApproach && snapshot.zoneDistancePct <= config.nearDistancePct + config.numericTolerance) {
     status = 'NEAR'
-    matched = true
+    matched = spreadConditionPassed
   } else if (eligibleApproach && snapshot.zoneDistancePct <= config.maxApproachDistancePct + config.numericTolerance) {
     status = 'APPROACHING'
-    matched = true
+    matched = spreadConditionPassed
   }
 
   return {
@@ -332,6 +426,12 @@ export function evaluateMaZoneTrigger(input: {
     aboveZoneRatio,
     approachDirection,
     approachVelocityPctPointsPerSession: approachVelocity,
+    maSpreadPct,
+    maSpreadSlope,
+    maSpreadExpansionRatio,
+    maSpreadExpanding,
+    bullishMaOrder,
+    spreadExpansionAvailable,
     observationsUsed: recent.length,
   }
 }

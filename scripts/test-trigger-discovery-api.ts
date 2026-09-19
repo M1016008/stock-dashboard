@@ -22,7 +22,17 @@ assert.deepEqual(defaults.input.triggerConfig, {
   minimumAboveZoneRatio: 0.7,
   maxApproachDistancePct: 5,
   nearDistancePct: 2,
+  spreadExpansionEnabled: false,
+  spreadLookbackIntervals: 4,
+  minExpansionRatio: 0.7,
+  requireBullishMaOrder: true,
 })
+assert.equal(parses({ spreadExpansionEnabled: true }).input.triggerConfig?.spreadExpansionEnabled, true)
+assert.notEqual(
+  triggerDiscoveryBaseSearchKey(defaults.input, defaults.timeframe),
+  triggerDiscoveryBaseSearchKey(parses({ spreadExpansionEnabled: true }).input, defaults.timeframe),
+  'Spread OFF and ON must not share a search cache entry',
+)
 assert.equal(defaults.page, 1)
 assert.equal(defaults.pageSize, 50)
 assert.equal(defaults.input.offset, 0)
@@ -67,6 +77,9 @@ for (const invalid of [
   { ma1Period: 1 },
   { ma1Period: 20, ma2Period: 20 },
   { maxApproachDistancePct: 1, nearDistancePct: 2 },
+  { spreadLookbackIntervals: 1 },
+  { spreadLookbackIntervals: 25 },
+  { minExpansionRatio: 1.01 },
 ]) {
   assert.throws(() => parses(invalid), TriggerConfigError)
 }
@@ -82,6 +95,8 @@ for (const invalid of [
   { sort: { key: 'unknown', direction: 'asc' } },
   { stageFilters: { weeklyStage: [1] } },
   { stageFilters: { dayAStage: [0] } },
+  { spreadExpansionEnabled: 'true' },
+  { requireBullishMaOrder: 1 },
 ]) {
   assert.throws(() => parseTriggerDiscoverySearchRequest({ requestedAsOf: '2026-09-06', ...invalid }), TriggerDiscoveryInputError)
 }

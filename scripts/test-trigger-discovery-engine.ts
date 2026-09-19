@@ -39,6 +39,20 @@ function evaluate(rows: MaZoneTriggerObservation[], overrides: Partial<MaZoneTri
   })
 }
 
+function spreadObservations(spreads: number[]): MaZoneTriggerObservation[] {
+  return spreads.map((spread, index) => {
+    const ma2 = 100 + index * 10
+    const ma1 = ma2 * (1 + spread / 100)
+    const priceRatio = [1.10, 1.08, 1.06, 1.04, 1.02][index] ?? 1.02
+    return {
+      date: `2026-02-${String(index + 1).padStart(2, '0')}`,
+      price: Math.max(ma1, ma2) * priceRatio,
+      ma1,
+      ma2,
+    }
+  })
+}
+
 assert.equal(classifyMaTrend(0.02, 0.01), 'RISING')
 assert.equal(classifyMaTrend(0.01, 0.01), 'FLAT')
 assert.equal(classifyMaTrend(-0.02, 0.01), 'FALLING')
@@ -52,6 +66,66 @@ assert.equal(risingToward.approachDirection, 'TOWARD_ZONE')
 assert.ok((risingToward.approachVelocityPctPointsPerSession ?? 0) > 0)
 assert.equal(risingToward.status, 'NEAR')
 assert.equal(risingToward.matched, true)
+
+const spreadConfig: Partial<MaZoneTriggerConfig> = {
+  spreadExpansionEnabled: true,
+  spreadLookbackIntervals: 4,
+  minExpansionRatio: 0.7,
+  requireBullishMaOrder: true,
+}
+const steadilyExpanding = evaluate(spreadObservations([1, 2, 3, 4, 5]), spreadConfig)
+assert.equal(steadilyExpanding.matched, true)
+assert.equal(steadilyExpanding.maSpreadExpanding, true)
+assert.equal(steadilyExpanding.bullishMaOrder, true)
+assert.equal(steadilyExpanding.spreadExpansionAvailable, true)
+assert.equal(steadilyExpanding.maSpreadExpansionRatio, 1)
+assert.ok((steadilyExpanding.maSpreadSlope ?? 0) > 0)
+assert.ok(Math.abs((steadilyExpanding.maSpreadPct ?? 0) - 5) < 1e-9)
+
+const noisyExpansion = evaluate(spreadObservations([2, 2.8, 2.7, 4.1, 5]), spreadConfig)
+assert.equal(noisyExpansion.maSpreadExpansionRatio, 0.75)
+assert.equal(noisyExpansion.maSpreadExpanding, true)
+assert.equal(noisyExpansion.matched, true)
+
+const shrinkingSpread = evaluate(spreadObservations([5, 4, 3, 2, 1]), spreadConfig)
+assert.equal(shrinkingSpread.maSpreadExpanding, false)
+assert.equal(shrinkingSpread.matched, false)
+const flatSpread = evaluate(spreadObservations([3, 3, 3, 3, 3]), spreadConfig)
+assert.equal(flatSpread.maSpreadExpansionRatio, 0)
+assert.equal(flatSpread.maSpreadExpanding, false)
+assert.equal(flatSpread.matched, false)
+const halfExpanding = evaluate(spreadObservations([2, 3, 2.5, 4, 3.5]), spreadConfig)
+assert.equal(halfExpanding.maSpreadExpansionRatio, 0.5)
+assert.equal(halfExpanding.maSpreadExpanding, false)
+const ratioPassSlopeFail = evaluate(spreadObservations([5, 0, 1, 2, 3]), spreadConfig)
+assert.equal(ratioPassSlopeFail.maSpreadExpansionRatio, 0.75)
+assert.ok((ratioPassSlopeFail.maSpreadSlope ?? 1) <= 0)
+assert.equal(ratioPassSlopeFail.maSpreadExpanding, false)
+const bearishOrder = evaluate(spreadObservations([-2, -3, -4, -5, -6]), spreadConfig)
+assert.equal(bearishOrder.bullishMaOrder, false)
+assert.equal(bearishOrder.maSpreadExpanding, false)
+assert.equal(bearishOrder.matched, false)
+const crossedToBullish = evaluate(spreadObservations([-2, -1, 1, 3, 5]), spreadConfig)
+assert.equal(crossedToBullish.bullishMaOrder, true)
+assert.equal(crossedToBullish.maSpreadExpanding, true)
+assert.equal(crossedToBullish.matched, true)
+const equalOrder = evaluate(spreadObservations([-2, -1, 1, 2, 0]), spreadConfig)
+assert.equal(equalOrder.bullishMaOrder, false)
+assert.equal(equalOrder.maSpreadExpanding, false)
+const insufficientSpread = evaluate(spreadObservations([1, 2, 3, 4]), {
+  ...spreadConfig,
+  slopeLookbackSessions: 2,
+  approachLookbackSessions: 2,
+})
+assert.equal(insufficientSpread.availability, 'insufficient_history')
+assert.equal(insufficientSpread.spreadExpansionAvailable, false)
+assert.equal(insufficientSpread.matched, false)
+
+const explicitOff = evaluate(spreadObservations([5, 4, 3, 2, 1]), {
+  spreadExpansionEnabled: false,
+})
+const implicitOff = evaluate(spreadObservations([5, 4, 3, 2, 1]))
+assert.deepEqual(explicitOff, implicitOff, 'missing Spread config must remain exact OFF semantics')
 
 const onlyMa1Rising = evaluate(observations({
   prices: [112, 111, 110, 108, 105],

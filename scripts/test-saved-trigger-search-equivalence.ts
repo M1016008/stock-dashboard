@@ -42,6 +42,10 @@ async function main() {
       ma2Period: 25,
       maxApproachDistancePct: 5,
       nearDistancePct: 2,
+      spreadExpansionEnabled: true,
+      spreadLookbackIntervals: 4,
+      minExpansionRatio: 0.7,
+      requireBullishMaOrder: true,
       averageTradingValueMin: 100_000_000,
       stageFilters: {},
       sort: { key: 'triggerScore', direction: 'desc' },
@@ -61,6 +65,9 @@ async function main() {
 
     assert.equal(loadedResult.meta.matchedCount, manualResult.meta.matchedCount)
     assert.equal(loadedResult.meta.timeframe, 'BIWEEKLY')
+    assert.equal(loadedResult.criteria.spreadExpansionEnabled, true)
+    assert.equal(loadedResult.criteria.spreadLookbackIntervals, 4)
+    assert.equal(loadedResult.criteria.minExpansionRatio, 0.7)
     assert.deepEqual(loadedResult.criteria, manualResult.criteria)
     assert.deepEqual(loadedResult.rows, manualResult.rows)
     assert.equal(loadedResult.performance.queryCount, 0, 'identical loaded conditions reuse the existing Discovery cache')

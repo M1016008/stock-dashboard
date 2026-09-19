@@ -44,6 +44,10 @@ export interface TriggerDiscoverySearchRequest {
   minimumAboveZoneRatio?: number
   maxApproachDistancePct?: number
   nearDistancePct?: number
+  spreadExpansionEnabled?: boolean
+  spreadLookbackIntervals?: number
+  minExpansionRatio?: number
+  requireBullishMaOrder?: boolean
   markets?: Array<string | null>
   priceMin?: number | null
   priceMax?: number | null
@@ -71,6 +75,12 @@ export interface TriggerDiscoverySearchRow {
   zoneDistancePct: number
   ma1DistancePct: number
   ma2DistancePct: number
+  maSpreadPct: number | null
+  maSpreadSlope: number | null
+  maSpreadExpansionRatio: number | null
+  maSpreadExpanding: boolean
+  bullishMaOrder: boolean
+  spreadExpansionAvailable: boolean
   averageVolume: number | null
   averageTradingValue: number | null
   triggerScore: number
@@ -114,6 +124,10 @@ export interface TriggerDiscoverySearchResponse {
     ma2Period: number
     maxApproachDistancePct: number
     nearDistancePct: number
+    spreadExpansionEnabled: boolean
+    spreadLookbackIntervals: number
+    minExpansionRatio: number
+    requireBullishMaOrder: boolean
     liquidityLookbackSessions: number
     markets: Array<string | null> | null
     stageFilters: TriggerDiscoveryStageFilters

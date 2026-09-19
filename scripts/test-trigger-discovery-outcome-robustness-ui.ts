@@ -4,7 +4,7 @@ import fs from 'node:fs'
 const segmentation = fs.readFileSync('components/trigger-discovery/OutcomeSegmentationPanel.tsx', 'utf8')
 const robustness = fs.readFileSync('components/trigger-discovery/OutcomeRobustnessPanel.tsx', 'utf8')
 
-assert.ok(segmentation.includes("type SegmentTab = 'score' | 'stage' | 'pair' | 'compare' | 'robustness'"))
+assert.ok(segmentation.includes("type SegmentTab = 'score' | 'spread' | 'stage' | 'pair' | 'compare' | 'robustness'"))
 assert.ok(segmentation.includes("{ value: 'robustness', label: '観測単位' }"))
 assert.ok(segmentation.includes("tab === 'robustness'"), 'the new analysis must stay inside the existing segmentation tabs')
 assert.ok(segmentation.includes('<OutcomeRobustnessPanel'), 'the robustness panel must be connected to the completed Outcome job')
@@ -28,6 +28,11 @@ for (const text of [
   '代表となるEventで、そのHorizonの将来データが揃うEpisodeをeligibleとして集計します。',
   'そのHorizonでeligibleなEpisodeが1件以上ある銘柄をeligibleとして集計します。',
   'Score帯別の3方式比較',
+  'MA間隔拡大別の3方式比較',
+  '対象Event 2件以上のEpisode',
+  'Episode / Event 観測数比',
+  'Event順序異常',
+  '候補入りからEXITEDまでを1 Episode',
   'Stage組み合わせ',
   '選択Segment詳細',
   '3方式で同じColor Scaleを使用します。',
@@ -54,6 +59,8 @@ assert.ok(robustness.includes('/robustness?${params}'), 'the UI must use the der
 assert.ok(robustness.includes('AbortController'), 'leaving or changing dimensions must abort stale requests')
 assert.ok(robustness.includes('requestSequence.current'), 'stale responses must not overwrite newer state')
 assert.ok(robustness.includes('RESPONSE_CACHE'), 'identical outcome job and dimensions must be cached in session')
+assert.ok(robustness.includes('Date.parse(cached.meta.expiresAt) > Date.now()'), 'derived cache must not outlive its source artifacts')
+assert.ok(robustness.includes("if (scope === 'spread') return ['spreadExpansion']"), 'spread comparison must use saved Outcome diagnostics')
 assert.ok(robustness.includes('if (!active) return null'), 'leaving the tab must remove the robustness UI')
 assert.ok(robustness.includes('connectNulls={false}'), 'eligible=0 chart points must stay missing')
 assert.ok(robustness.includes("summary.eligibleCount === 0"), 'eligible=0 must be rendered as N/A')

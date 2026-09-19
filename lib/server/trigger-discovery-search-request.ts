@@ -46,6 +46,14 @@ function integer(source: Record<string, unknown>, key: string, fallback: number)
   return value
 }
 
+function boolean(source: Record<string, unknown>, key: string, fallback: boolean): boolean {
+  const value = source[key] ?? fallback
+  if (typeof value !== 'boolean') {
+    throw new TriggerDiscoveryInputError(`${key} must be a boolean`)
+  }
+  return value
+}
+
 function parseMarkets(value: unknown): Array<string | null> | undefined {
   if (value == null) return undefined
   try {
@@ -118,6 +126,23 @@ export function parseTriggerDiscoverySearchRequest(value: unknown): {
   const minimumAboveZoneRatio = optionalNumber(source, 'minimumAboveZoneRatio') ?? DEFAULT_MA_ZONE_TRIGGER_CONFIG.minimumAboveZoneRatio
   const maxApproachDistancePct = optionalNumber(source, 'maxApproachDistancePct') ?? 5
   const nearDistancePct = optionalNumber(source, 'nearDistancePct') ?? 2
+  const spreadExpansionEnabled = boolean(
+    source,
+    'spreadExpansionEnabled',
+    DEFAULT_MA_ZONE_TRIGGER_CONFIG.spreadExpansionEnabled,
+  )
+  const spreadLookbackIntervals = integer(
+    source,
+    'spreadLookbackIntervals',
+    DEFAULT_MA_ZONE_TRIGGER_CONFIG.spreadLookbackIntervals,
+  )
+  const minExpansionRatio = optionalNumber(source, 'minExpansionRatio')
+    ?? DEFAULT_MA_ZONE_TRIGGER_CONFIG.minExpansionRatio
+  const requireBullishMaOrder = boolean(
+    source,
+    'requireBullishMaOrder',
+    DEFAULT_MA_ZONE_TRIGGER_CONFIG.requireBullishMaOrder,
+  )
   const liquidityLookbackSessions = integer(source, 'liquidityLookbackSessions', 20)
   const maxPriceStalenessSessions = integer(source, 'maxPriceStalenessSessions', DEFAULT_TRIGGER_MAX_PRICE_STALENESS_SESSIONS)
   if (liquidityLookbackSessions < 1 || liquidityLookbackSessions > 252) {
@@ -135,6 +160,10 @@ export function parseTriggerDiscoverySearchRequest(value: unknown): {
     minimumAboveZoneRatio,
     maxApproachDistancePct,
     nearDistancePct,
+    spreadExpansionEnabled,
+    spreadLookbackIntervals,
+    minExpansionRatio,
+    requireBullishMaOrder,
   })
   const page = integer(source, 'page', 1)
   const pageSize = integer(source, 'pageSize', 50)
@@ -162,6 +191,10 @@ export function parseTriggerDiscoverySearchRequest(value: unknown): {
     minimumAboveZoneRatio,
     maxApproachDistancePct,
     nearDistancePct,
+    spreadExpansionEnabled,
+    spreadLookbackIntervals,
+    minExpansionRatio,
+    requireBullishMaOrder,
     markets,
     priceMin: optionalNumber(source, 'priceMin'),
     priceMax: optionalNumber(source, 'priceMax'),
@@ -191,6 +224,10 @@ export function parseTriggerDiscoverySearchRequest(value: unknown): {
         minimumAboveZoneRatio,
         maxApproachDistancePct,
         nearDistancePct,
+        spreadExpansionEnabled,
+        spreadLookbackIntervals,
+        minExpansionRatio,
+        requireBullishMaOrder,
       },
       markets,
       priceMin: request.priceMin,

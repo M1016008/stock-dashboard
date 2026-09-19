@@ -561,12 +561,16 @@ export function HistoricalOutcomeWorkspace({ historicalJob, scanResult }: Props)
 
   const sourceConditions = useMemo(() => {
     const markets = scanResult.criteria.markets?.filter((market): market is string => Boolean(market)) ?? []
-    return [
+    const conditions = [
       `${scanResult.scanMeta.timeframe === 'BIWEEKLY' ? '2週足' : '月足'} ${scanResult.scanMeta.ma1Period}/${scanResult.scanMeta.ma2Period}`,
       `${scanResult.scanMeta.resolvedStartDate ?? scanResult.scanMeta.requestedStartDate}〜${scanResult.scanMeta.resolvedEndDate ?? scanResult.scanMeta.requestedEndDate}`,
       markets.length ? markets.join(' / ') : '全市場',
       `Trigger距離 ${scanResult.criteria.maxApproachDistancePct}%`,
     ]
+    if (scanResult.criteria.spreadExpansionEnabled) {
+      conditions.push(`MA間隔拡大 ${scanResult.criteria.spreadLookbackIntervals ?? 4}区間 / ${Math.round((scanResult.criteria.minExpansionRatio ?? 0.7) * 100)}%`)
+    }
+    return conditions
   }, [scanResult])
 
   return (
@@ -718,19 +722,6 @@ export function HistoricalOutcomeWorkspace({ historicalJob, scanResult }: Props)
             </section>
           )}
 
-          {jobs[detailSelector]?.status === 'COMPLETED' && jobs[detailSelector]?.resultAvailable && (
-            <OutcomeSegmentationPanel
-              historicalJob={historicalJob}
-              scanResult={scanResult}
-              primarySelector={detailSelector}
-              primaryOutcomeJob={jobs[detailSelector]!}
-              nearOutcomeJob={jobs.NEAR_ENTERED}
-              zoneOutcomeJob={jobs.IN_ZONE_ENTERED}
-              horizon={detailHorizon}
-              onHorizonChange={setDetailHorizon}
-            />
-          )}
-
           {detailResult && hasAnyDetailEvents && (
             <section aria-labelledby="outcome-events-heading" className="border-t border-[var(--color-border)] pt-4">
               <div className="flex flex-wrap items-end justify-between gap-3">
@@ -802,6 +793,18 @@ export function HistoricalOutcomeWorkspace({ historicalJob, scanResult }: Props)
                 </>
               )}
             </section>
+          )}
+
+          {jobs[detailSelector]?.status === 'COMPLETED' && jobs[detailSelector]?.resultAvailable && (
+            <OutcomeSegmentationPanel
+              scanResult={scanResult}
+              primarySelector={detailSelector}
+              primaryOutcomeJob={jobs[detailSelector]!}
+              nearOutcomeJob={jobs.NEAR_ENTERED}
+              zoneOutcomeJob={jobs.IN_ZONE_ENTERED}
+              horizon={detailHorizon}
+              onHorizonChange={setDetailHorizon}
+            />
           )}
         </div>
       )}

@@ -241,8 +241,9 @@ const historicalScanPlist = `<?xml version="1.0" encoding="UTF-8"?>
   <key>ProgramArguments</key>
   <array>
     <string>${xmlEscape(process.execPath)}</string>
-    <string>${xmlEscape(tsxBin)}</string>
     <string>--env-file=.env.local</string>
+    <string>--import</string>
+    <string>tsx</string>
     <string>${xmlEscape(historicalScanScript)}</string>
   </array>
   <key>EnvironmentVariables</key>

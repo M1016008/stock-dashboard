@@ -24,6 +24,7 @@ import {
 } from '@/lib/server/trigger-discovery-outcome-jobs'
 import {
   claimNextHistoricalScanJob,
+  historicalScanResultSignature,
   historicalScanResultPaths,
 } from '@/lib/server/trigger-discovery-historical-scan-jobs'
 import type { TriggerHistoricalScanEvent } from '@/lib/trigger-discovery-historical-scan-contract'
@@ -64,6 +65,13 @@ function fixtureEvent(index: number, status: 'NEAR' | 'IN_ZONE'): TriggerHistori
     ma1: 95,
     ma2: 90,
     zoneDistancePct: 1,
+    maSpreadPct: 5.555555555555555,
+    maSpreadSlope: 0.6,
+    maSpreadExpansionRatio: 0.75,
+    spreadExpansionPass: true,
+    spreadExpansionAvailable: true,
+    bullishMaOrder: true,
+    spreadDiagnosticDate: '2025-01-02',
     triggerScore: 60 + index,
     scoreBreakdown: scoreBreakdown(60 + index),
     priceDate: '2025-01-02',
@@ -124,9 +132,9 @@ async function createCompletedSource(events: TriggerHistoricalScanEvent[]): Prom
     requested_end, resolved_start, resolved_end, timeframe, created_at, completed_at,
     heartbeat_at, total_trading_days, processed_trading_days, result_location,
     result_size_bytes, duration_ms, serialization_ms, expires_at
-  ) VALUES (?, 'COMPLETED', '{}', 'fixture-request', 'fixture-source', '2025-01-02',
+  ) VALUES (?, 'COMPLETED', '{}', ?, 'fixture-source', '2025-01-02',
     '2025-12-31', '2025-01-02', '2025-12-31', 'MONTHLY', ?, ?, ?, 250, 250,
-    ?, 1, 1, 1, ?)`, [id, now, now, now, id, now + 86_400])
+    ?, 1, 1, 1, ?)`, [id, historicalScanResultSignature('{}'), now, now, now, id, now + 86_400])
   const paths = historicalScanResultPaths(id)
   await mkdir(paths.manifest.slice(0, paths.manifest.lastIndexOf('/')), { recursive: true })
   await writeFile(paths.manifest, JSON.stringify({ contractVersion: 'trigger-discovery-historical-scan-v1' }))
@@ -153,6 +161,14 @@ async function main() {
   const event = fixtureEvent(0, 'NEAR')
   const series = fixtureSeries(event.ticker, event.price)
   const direct = calculateEventOutcome(event, series)
+  assert.equal(direct.spreadExpansionPass, true)
+  assert.equal(direct.spreadExpansionAvailable, true)
+  assert.equal(direct.spreadDiagnosticDate, event.date)
+  assert.equal(direct.maSpreadPct, event.maSpreadPct)
+  assert.equal(direct.maSpreadSlope, event.maSpreadSlope)
+  assert.equal(direct.maSpreadExpansionRatio, event.maSpreadExpansionRatio)
+  assert.equal(direct.anchorPrice, event.price)
+  assert.equal(direct.triggerScore, event.triggerScore)
   assert.equal(direct.availability20, 'AVAILABLE')
   assert.ok(Math.abs((direct.return20 ?? 99) - 0.2) < 1e-12,
     '20-session return must use the exact 20th future row')
@@ -290,7 +306,7 @@ async function main() {
     analysis_cutoff_date,created_at,started_at,heartbeat_at,owner_token,attempt_count,expires_at
   ) VALUES (?, 'RUNNING', ?, '{}', 'stale', 'stale', '2025-12-31', ?, ?, ?, 'stale-owner', 1, ?)`,
   [staleId, sourceId, now - 1_000, now - 1_000, now - 1_000, now + 86_400])
-  const recovered = await recoverStaleOutcomeJobs(() => Date.now())
+  const recovered = await recoverStaleOutcomeJobs(() => Date.now(), () => false)
   assert.equal(recovered.requeued, 1)
   assert.equal((await getOutcomeAnalysisJob(staleId))?.status, 'QUEUED')
 
@@ -316,6 +332,20 @@ async function main() {
     'Historical Scan must not start while an Outcome job is running')
   await execRun(`UPDATE trigger_outcome_analysis_jobs SET status='CANCELLED', owner_token=NULL WHERE id=?`, [staleId])
   await execRun(`UPDATE historical_trigger_scan_jobs SET status='CANCELLED' WHERE id=?`, [queuedHistoricalId])
+
+  await execRun('UPDATE historical_trigger_scan_jobs SET request_signature=? WHERE id=?',
+    ['legacy-algorithm', sourceId])
+  assert.equal((await getOutcomeAnalysisJob(nearStart.jobId))?.resultAvailable, false)
+  assert.equal(await getOutcomeAnalysisResult({
+    id: nearStart.jobId,
+    query: { offset: 0, limit: 10, sortBy: 'eventDate', sortOrder: 'asc' },
+  }), 'EXPIRED')
+  await assert.rejects(() => createOutcomeAnalysisJob({ eventFilter: 'ALL', horizons: [20] }, sourceId),
+    (error: unknown) => error instanceof TriggerOutcomeSourceError
+      && error.code === 'historical_scan_job_result_expired')
+  await execRun('UPDATE historical_trigger_scan_jobs SET request_signature=? WHERE id=?',
+    [historicalScanResultSignature('{}'), sourceId])
+  assert.equal((await getOutcomeAnalysisJob(nearStart.jobId))?.resultAvailable, true)
 
   await execRun(`UPDATE historical_trigger_scan_jobs SET status='RUNNING' WHERE id=?`, [sourceId])
   await assert.rejects(() => createOutcomeAnalysisJob({ eventFilter: 'ALL', horizons: [20] }, sourceId),

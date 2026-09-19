@@ -55,6 +55,10 @@ async function main() {
       minimumAboveZoneRatio: 0.75,
       maxApproachDistancePct: 4,
       nearDistancePct: 1.5,
+      spreadExpansionEnabled: true,
+      spreadLookbackIntervals: 4,
+      minExpansionRatio: 0.7,
+      requireBullishMaOrder: true,
       markets: [secondMarket, firstMarket, secondMarket],
       priceMin: 500,
       priceMax: 50_000,
@@ -82,6 +86,7 @@ async function main() {
     assert.equal(definition.name, `${namePrefix}primary`)
     assert.equal(definition.evaluationVersion, 1)
     assert.equal(definition.evaluationConfig.timeframe, 'BIWEEKLY')
+    assert.equal(definition.evaluationConfig.triggerCore.spreadExpansionEnabled, true)
     assert.equal(definition.engineVersion, 1)
     assert.equal(definition.scoreVersion, 1)
     assert.equal(definition.evaluationSignature.length, 64)
@@ -130,6 +135,9 @@ async function main() {
     const changes: Array<[string, (copy: SavedTriggerEvaluationConfig) => void]> = [
       ['MA', (copy) => { copy.triggerCore.ma2Period = 25 }],
       ['distance', (copy) => { copy.triggerCore.maxApproachDistancePct = 3 }],
+      ['Spread toggle', (copy) => { copy.triggerCore.spreadExpansionEnabled = !copy.triggerCore.spreadExpansionEnabled }],
+      ['Spread lookback', (copy) => { copy.triggerCore.spreadLookbackIntervals = 6 }],
+      ['Spread ratio', (copy) => { copy.triggerCore.minExpansionRatio = 0.8 }],
       ['market', (copy) => { copy.universe.markets = [firstMarket] }],
       ['liquidity', (copy) => { copy.universe.averageTradingValueMin = 100_000_000 }],
       ['Stage', (copy) => { copy.stageFilters.dayAStage = [1, 2] }],
@@ -172,6 +180,11 @@ async function main() {
     const legacySignature = 'legacy-monthly-signature'.padEnd(64, '0')
     const legacyConfig = structuredClone(configs.evaluationConfig) as Partial<SavedTriggerEvaluationConfig>
     delete legacyConfig.timeframe
+    const legacyCore = legacyConfig.triggerCore as Partial<SavedTriggerEvaluationConfig['triggerCore']>
+    delete legacyCore.spreadExpansionEnabled
+    delete legacyCore.spreadLookbackIntervals
+    delete legacyCore.minExpansionRatio
+    delete legacyCore.requireBullishMaOrder
     await execRun(`INSERT INTO trigger_definitions (
       id, name, evaluation_config_json, view_config_json, evaluation_signature,
       evaluation_version, engine_version, score_version
@@ -181,6 +194,10 @@ async function main() {
     ])
     const legacyRead = await getSavedTriggerDefinition(legacyId)
     assert.equal(legacyRead.evaluationConfig.timeframe, 'MONTHLY', 'missing legacy timeframe means Monthly')
+    assert.equal(legacyRead.evaluationConfig.triggerCore.spreadExpansionEnabled, false, 'missing legacy Spread means OFF')
+    assert.equal(legacyRead.evaluationConfig.triggerCore.spreadLookbackIntervals, 4)
+    assert.equal(legacyRead.evaluationConfig.triggerCore.minExpansionRatio, 0.7)
+    assert.equal(legacyRead.evaluationConfig.triggerCore.requireBullishMaOrder, true)
     await updateSavedTriggerDefinition(legacyId, {
       name: `${namePrefix}legacy-monthly-renamed`,
       evaluationConfig: legacyRead.evaluationConfig,

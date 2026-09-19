@@ -37,6 +37,10 @@ export interface SavedTriggerEvaluationConfig {
     minimumAboveZoneRatio: number
     maxApproachDistancePct: number
     nearDistancePct: number
+    spreadExpansionEnabled: boolean
+    spreadLookbackIntervals: number
+    minExpansionRatio: number
+    requireBullishMaOrder: boolean
   }
   universe: {
     markets: Array<string | null>
@@ -111,6 +115,14 @@ function integer(value: unknown, label: string, min: number, max: number): numbe
     throw new SavedTriggerValidationError(`${label} must be an integer between ${min} and ${max}`)
   }
   return parsed
+}
+
+function optionalBoolean(value: unknown, label: string, fallback: boolean): boolean {
+  if (value == null) return fallback
+  if (typeof value !== 'boolean') {
+    throw new SavedTriggerValidationError(`${label} must be a boolean`)
+  }
+  return value
 }
 
 function optionalNonNegative(value: unknown, label: string): number | null {
@@ -206,6 +218,26 @@ export function canonicalizeSavedTriggerEvaluationConfig(
     minimumAboveZoneRatio: finiteNumber(core.minimumAboveZoneRatio, 'minimumAboveZoneRatio'),
     maxApproachDistancePct: finiteNumber(core.maxApproachDistancePct, 'maxApproachDistancePct'),
     nearDistancePct: finiteNumber(core.nearDistancePct, 'nearDistancePct'),
+    spreadExpansionEnabled: optionalBoolean(
+      core.spreadExpansionEnabled,
+      'spreadExpansionEnabled',
+      DEFAULT_MA_ZONE_TRIGGER_CONFIG.spreadExpansionEnabled,
+    ),
+    spreadLookbackIntervals: integer(
+      core.spreadLookbackIntervals ?? DEFAULT_MA_ZONE_TRIGGER_CONFIG.spreadLookbackIntervals,
+      'spreadLookbackIntervals',
+      2,
+      24,
+    ),
+    minExpansionRatio: finiteNumber(
+      core.minExpansionRatio ?? DEFAULT_MA_ZONE_TRIGGER_CONFIG.minExpansionRatio,
+      'minExpansionRatio',
+    ),
+    requireBullishMaOrder: optionalBoolean(
+      core.requireBullishMaOrder,
+      'requireBullishMaOrder',
+      DEFAULT_MA_ZONE_TRIGGER_CONFIG.requireBullishMaOrder,
+    ),
   }
   try {
     validateMaZoneTriggerConfig({
@@ -276,6 +308,14 @@ export function savedTriggerConfigsFromSearchRequest(request: TriggerDiscoverySe
         minimumAboveZoneRatio: request.minimumAboveZoneRatio ?? DEFAULT_MA_ZONE_TRIGGER_CONFIG.minimumAboveZoneRatio,
         maxApproachDistancePct: request.maxApproachDistancePct ?? DEFAULT_MA_ZONE_TRIGGER_CONFIG.maxApproachDistancePct,
         nearDistancePct: request.nearDistancePct ?? DEFAULT_MA_ZONE_TRIGGER_CONFIG.nearDistancePct,
+        spreadExpansionEnabled: request.spreadExpansionEnabled
+          ?? DEFAULT_MA_ZONE_TRIGGER_CONFIG.spreadExpansionEnabled,
+        spreadLookbackIntervals: request.spreadLookbackIntervals
+          ?? DEFAULT_MA_ZONE_TRIGGER_CONFIG.spreadLookbackIntervals,
+        minExpansionRatio: request.minExpansionRatio
+          ?? DEFAULT_MA_ZONE_TRIGGER_CONFIG.minExpansionRatio,
+        requireBullishMaOrder: request.requireBullishMaOrder
+          ?? DEFAULT_MA_ZONE_TRIGGER_CONFIG.requireBullishMaOrder,
       },
       universe: {
         markets: request.markets ?? [],
@@ -312,6 +352,10 @@ export function searchRequestFromSavedTrigger(
     minimumAboveZoneRatio: triggerCore.minimumAboveZoneRatio,
     maxApproachDistancePct: triggerCore.maxApproachDistancePct,
     nearDistancePct: triggerCore.nearDistancePct,
+    spreadExpansionEnabled: triggerCore.spreadExpansionEnabled,
+    spreadLookbackIntervals: triggerCore.spreadLookbackIntervals,
+    minExpansionRatio: triggerCore.minExpansionRatio,
+    requireBullishMaOrder: triggerCore.requireBullishMaOrder,
     markets: universe.markets.length ? universe.markets : undefined,
     priceMin: universe.priceMin,
     priceMax: universe.priceMax,

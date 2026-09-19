@@ -6,11 +6,15 @@ const historicalWorkspace = fs.readFileSync('components/trigger-discovery/Histor
 const outcomeWorkspace = fs.readFileSync('components/trigger-discovery/HistoricalOutcomeWorkspace.tsx', 'utf8')
 const outcomeSegmentation = fs.readFileSync('components/trigger-discovery/OutcomeSegmentationPanel.tsx', 'utf8')
 const outcomeRobustness = fs.readFileSync('components/trigger-discovery/OutcomeRobustnessPanel.tsx', 'utf8')
+const recentOutcomeRoute = fs.readFileSync('app/api/trigger-discovery/outcome-jobs/recent/route.ts', 'utf8')
 const historicalResultRoute = fs.readFileSync('app/api/trigger-discovery/historical-scan/jobs/[jobId]/result/route.ts', 'utf8')
 const historicalJobService = fs.readFileSync('lib/server/trigger-discovery-historical-scan-jobs.ts', 'utf8')
 const notificationPanel = fs.readFileSync('components/trigger-discovery/TriggerNotificationSettingsPanel.tsx', 'utf8')
+const scoreCell = fs.readFileSync('components/trigger-discovery/TriggerScoreCell.tsx', 'utf8')
+const miniChart = fs.readFileSync('components/trigger-discovery/TriggerMiniChart.tsx', 'utf8')
 const dataPopover = fs.readFileSync('components/shared/DataPopover.tsx', 'utf8')
 const navigation = fs.readFileSync('components/layout/navigation.ts', 'utf8')
+const navigationRestore = fs.readFileSync('lib/client/trigger-discovery-navigation-restore.ts', 'utf8')
 
 for (const text of ['日A', '日B', '週A', '週B', '月A', '月B']) {
   assert.ok(client.includes(text), `${text} must remain visible in the Stage contract`)
@@ -97,6 +101,9 @@ assert.ok(client.includes('row.averageVolume'), 'the result table must use the e
 assert.ok(client.indexOf('compactAmount(row.averageTradingValue)') < client.indexOf('numberOrDash(row.averageVolume'), 'average trading value must precede average volume')
 assert.ok(client.includes("aria-sort={sortAria('triggerScore')}"), 'sortable columns must expose their active direction through aria-sort')
 assert.ok(client.includes('現在${activeSort?.direction'), 'sort control labels must announce the active direction')
+assert.ok(client.includes("active ? 'font-semibold text-[var(--color-brand-800)]'"), 'only the active sort must receive the strongest header treatment')
+assert.ok(client.includes('opacity-40">↕</span>'), 'inactive sort arrows must remain available without competing for attention')
+assert.equal((client.match(/data-group-start/g) ?? []).length, 8, 'four visual column groups must be marked in both header and body')
 assert.ok(client.includes('評価内訳'), 'technical result counts must remain available as secondary detail')
 assert.ok(client.includes('criteriaSummary'), 'active result criteria must remain visible above the table')
 assert.ok(client.includes('const [builderOpen, setBuilderOpen] = useState(true)'), 'the condition builder must be open before the first search')
@@ -106,19 +113,45 @@ assert.ok(client.includes("{(!response || builderOpen) && <div data-trigger-buil
 assert.ok(client.includes('data-trigger-compact-summary'), 'successful searches must expose the compact results summary')
 assert.ok(client.includes('data-trigger-builder-toggle'), 'focus mode must provide a condition-editing control')
 assert.ok(client.includes('条件を変更'), 'focus mode must let users reopen the existing builder')
-assert.ok(client.includes('候補 <strong'), 'the candidate count must lead the compact summary')
+assert.ok(client.includes('data-trigger-candidate-count'), 'the candidate value must lead the compact summary with independent visual emphasis')
+assert.ok(client.includes('<span className="text-[11px] font-medium text-[var(--color-text-tertiary)]">候補</span>'), 'the candidate label must remain secondary to its value')
+assert.ok(client.includes('<span className="text-[12px] font-medium text-[var(--color-text-secondary)]">件</span>'), 'the candidate unit must remain secondary to its value')
 assert.ok(client.includes('評価日 {response.meta.resolvedAsOf'), 'the resolved evaluation date must remain visible in focus mode')
 assert.ok(client.includes("response.meta.timeframe === 'BIWEEKLY' ? '2週足' : '月足'"), 'the result timeframe and MA pair must remain visible in focus mode')
-assert.ok(client.includes('適用中 {criteriaSummary}'), 'active major conditions must remain visible in focus mode')
+assert.ok(client.includes('適用条件</span> {criteriaSummary}'), 'active major conditions must remain visible in focus mode')
+assert.ok(scoreCell.includes('border border-transparent bg-transparent'), 'Trigger Score must read as a value rather than a large button')
+assert.ok(scoreCell.includes('hover:bg-[var(--color-surface-subtle)]'), 'Trigger Score must retain an interactive affordance for its explanation')
+assert.ok(miniChart.includes('const WIDTH = 156'), 'Mini Chart must use the compact result-cell width')
+assert.ok(miniChart.includes('const HEIGHT = 56'), 'Mini Chart must reduce row height without losing its price shape')
+assert.ok(miniChart.includes('strokeWidth="1.55"'), 'the compact close line must remain easy to read')
 for (const text of ['Trigger距離 ${request.maxApproachDistancePct}%', 'Near ${request.nearDistancePct}%', "'2本とも上向き'", "'上から接近'"]) {
   assert.ok(client.includes(text), `the compact summary must retain the active condition ${text}`)
 }
 assert.ok(client.includes('指定日 {response.meta.requestedAsOf} / 評価日'), 'historical as-of focus mode must distinguish requested and evaluated dates')
+assert.ok(client.includes('MA間隔拡大'), 'Spread Expansion must be available as an advanced Trigger condition')
+assert.ok(client.includes('spreadExpansionEnabled: draft.spreadExpansionEnabled'), 'Spread Expansion must enter the same search request as existing Trigger conditions')
+assert.ok(client.includes("spreadExpansionActive && <th data-column=\"ma-spread\""), 'MA Spread result column must only appear when the filter is active')
+assert.ok(client.includes('既定OFF・Trigger Scoreへの加点なし'), 'Spread help must make optional/filter-only semantics explicit')
 assert.ok(client.indexOf('data-trigger-compact-summary') < client.indexOf('data-trigger-results-table'), 'the compact summary must immediately precede the result area')
 assert.ok(client.includes('setBuilderOpen(true)'), 'saved-trigger loading and mode changes must return to the editable builder')
 assert.ok(client.includes('この条件に一致するTrigger候補はありません。'), 'empty results must explain the current condition has no candidates')
 assert.ok(client.includes('WatchlistButton'), 'existing Watchlist integration must be reused')
 assert.ok(client.includes("href={`/stock/${row.ticker}`}"), 'stock detail route must be preserved')
+assert.ok(client.includes('onClick={preserveBeforeStockNavigation}'), 'stock navigation must preserve the current result workspace before leaving')
+assert.ok(client.includes('window.sessionStorage.setItem('), 'navigation restore must use sessionStorage rather than persistent storage or URL payloads')
+assert.ok(client.includes('parseTriggerDiscoveryNavigationSnapshot'), 'browser Back must validate the stored navigation snapshot before restoring it')
+assert.ok(client.includes('setResponse(snapshot.payload.response)'), 'browser Back must restore the exact paginated response without rerunning Search')
+assert.ok(client.includes('setLastRequest(snapshot.payload.lastRequest)'), 'sort, page, filters, and PIT request metadata must be restored together')
+assert.ok(client.includes('setBuilderOpen(snapshot.payload.builderOpen)'), 'Focus/Builder state must be restored')
+assert.ok(client.includes('resultsTableRef.current.scrollLeft = scroll.resultsTableX'), 'result-table horizontal scroll must be restored after render')
+assert.ok(client.includes('resultsTableRef.current.scrollTop = scroll.resultsTableY'), 'result-table vertical scroll must be restored after render')
+assert.ok(client.includes("window.scrollTo({ top: scroll.windowY, left: 0, behavior: 'instant' })"), 'page scroll must be restored after render')
+assert.ok(client.includes('if (restoredNavigation.current) return'), 'URL defaults must not overwrite a validated Back restoration')
+assert.ok(navigationRestore.includes("mode: 'current'"), 'navigation snapshots must be scoped to current/single as-of searches')
+assert.ok(navigationRestore.includes('TRIGGER_DISCOVERY_NAVIGATION_TTL_MS = 30 * 60 * 1000'), 'navigation snapshots must expire quickly')
+assert.ok(navigationRestore.includes('value.returnToken !== input.historyToken'), 'a direct visit must not restore an unrelated previous result')
+assert.equal(navigationRestore.includes('localStorage'), false, 'large result snapshots must not persist in localStorage')
+assert.equal(navigationRestore.includes('miniChart'), false, 'Mini Chart series must not be stored in the navigation snapshot')
 for (const text of ['保存済みTrigger', '条件を保存', '別名で保存', '名前変更', '変更あり']) {
   assert.ok(client.includes(text), `${text} must remain in the Saved Trigger UI`)
 }
@@ -246,6 +279,9 @@ for (const parameter of ['eventType', 'currentStatus', 'eventDate', 'eventSearch
 }
 
 assert.ok(historicalWorkspace.includes('HistoricalOutcomeWorkspace'), 'Completed Historical results must include the Outcome workspace')
+assert.ok(historicalWorkspace.includes('className="min-w-0 xl:col-span-2 xl:row-start-2"'), 'Outcome workspace must use the full Wide layout beneath the scan results')
+assert.ok(historicalWorkspace.includes('xl:col-start-2 xl:row-start-1'), 'Recent scans must stay in the compact desktop side rail')
+assert.ok(historicalWorkspace.indexOf('<HistoricalOutcomeWorkspace') < historicalWorkspace.indexOf('<aside aria-labelledby="recent-historical-scans"'), 'On mobile, Outcome analysis must follow Event detail before recent scan history')
 for (const text of [
   'その後の値動き',
   'NEAR入り',
@@ -289,12 +325,13 @@ assert.equal(outcomeWorkspace.includes('TriggerMiniChart'), false, 'Outcome rows
 assert.equal(outcomeWorkspace.includes("from '@/lib/trigger-discovery-engine'"), false, 'Outcome UI must not import or rerun the Trigger Engine')
 
 assert.ok(outcomeWorkspace.includes('OutcomeSegmentationPanel'), 'Outcome Segmentation must appear inside the existing Outcome workspace')
-assert.ok(outcomeWorkspace.indexOf('<OutcomeSegmentationPanel') < outcomeWorkspace.indexOf('detailResult && hasAnyDetailEvents'), 'Outcome Segmentation must appear before Event detail')
+assert.ok(outcomeWorkspace.indexOf('<OutcomeSegmentationPanel') > outcomeWorkspace.indexOf('detailResult && hasAnyDetailEvents'), 'Outcome Segmentation must follow Event detail')
 assert.ok(outcomeWorkspace.includes('horizon={detailHorizon}') && outcomeWorkspace.includes('onHorizonChange={setDetailHorizon}'), 'Segmentation must share the existing Outcome horizon state')
 for (const text of [
   '条件別に見る',
-  'Trigger発生時のScoreやStageごとに、その後の値動きを分解して確認します。',
+  'Trigger発生時のScore・MA間隔・Stageごとに、その後の値動きを分解して確認します。',
   'Score帯',
+  'MA間隔拡大',
   'Stage別',
   'Stage組み合わせ',
   '比較',
@@ -311,7 +348,7 @@ for (const text of [
   'S1〜S6は循環的な相場構造を表す分類で、数字の大小がそのまま強弱順位を意味するものではありません。',
   'NEAR入り vs Zone入り',
   '別の期間・時間軸',
-  '比較元と比較先で母集団条件が異なります',
+  '同条件比較ではありません',
   'この比較は統計的に独立したRandomized comparisonではありません。',
 ]) {
   assert.ok(outcomeSegmentation.includes(text), `Outcome Segmentation UI must include ${text}`)
@@ -324,15 +361,24 @@ assert.ok(outcomeSegmentation.includes('Heatmap凡例'), 'Heatmap must include a
 assert.ok(outcomeSegmentation.includes("summary.eligibleCount > 0 ? metricValue"), 'eligible=0 must remain N/A instead of becoming zero percent')
 assert.ok(outcomeSegmentation.includes('/segments?${params}'), 'Segment views must use the saved Segments API')
 assert.ok(outcomeSegmentation.includes("fetch('/api/trigger-discovery/outcome-segment-comparisons'"), 'comparisons must use the server comparison API')
-assert.ok(outcomeSegmentation.includes("fetch('/api/trigger-discovery/historical-scan/jobs?limit=20'"), 'timeframe comparison must reuse the completed Historical Job list')
-assert.ok(!outcomeSegmentation.includes('[expanded, tab, comparisonKind, historicalJobsLoaded, historicalJobsLoading]'), 'Historical Job lazy-load effect must not abort itself when loading state changes')
-assert.ok(outcomeSegmentation.includes('/outcomes`'), 'comparison Outcome generation must reuse the existing Outcome start API')
-assert.ok(outcomeSegmentation.includes("setComparisonKind('source'); setComparisonData(null); setComparisonError(null); setComparisonLoading(false)"), 'switching comparison sources must clear aborted-request loading state')
+assert.ok(outcomeSegmentation.includes("fetch('/api/trigger-discovery/outcome-jobs/recent'"), 'timeframe comparison must list saved completed Outcome jobs')
+assert.equal(outcomeSegmentation.includes('/outcomes`'), false, 'comparison must not start a new Outcome calculation')
+assert.ok(recentOutcomeRoute.includes('listRecentCompletedOutcomeJobs'), 'recent Outcome API must be read-only')
+assert.ok(outcomeSegmentation.includes('OverallComparisonTable response={visibleComparisonData} horizon={horizon}'), 'comparison must show same-horizon overall statistics before segments')
+assert.ok(outcomeSegmentation.includes('ScoreBandCards response={visibleSegmentData} horizon={horizon}'), 'Score view must show median, positive ratio and eligible before details')
+assert.ok(outcomeSegmentation.includes("band === 'UNKNOWN' && group.eventCount === 0"), 'empty UNKNOWN Score band must not create a vacant card')
+assert.ok(outcomeSegmentation.includes("group.eventCount > 0 && (group.keys[rowDimension] === 'UNKNOWN' || group.keys[columnDimension] === 'UNKNOWN')"), 'Stage heatmap must retain UNKNOWN only when events exist')
 assert.ok(outcomeSegmentation.includes('AbortController'), 'stale segmentation requests must be abortable')
 assert.ok(outcomeSegmentation.includes('segmentCache.current') && outcomeSegmentation.includes('comparisonCache.current'), 'identical segmentation requests must be reused in session')
 assert.equal(outcomeSegmentation.includes('TriggerMiniChart'), false, 'Segmentation must not load Mini Charts or OHLCV')
 assert.equal(outcomeSegmentation.includes("from '@/lib/trigger-discovery-engine'"), false, 'Segmentation UI must not import the Trigger Engine')
 assert.ok(outcomeSegmentation.includes('OutcomeRobustnessPanel'), 'Outcome robustness must stay inside the existing segmentation workspace')
+assert.ok(outcomeSegmentation.includes("dimensions.includes('spreadExpansion')") === false, 'Spread grouping is server-owned, not calculated in the UI')
+assert.ok(outcomeSegmentation.includes('dimension="spreadExpansion"'), 'The existing Outcome workspace must expose same-event Spread grouping')
+assert.ok(outcomeSegmentation.includes('CONDITIONED_EVENT_COMPARISON') === false, 'Primary comparison label is carried by the API contract')
+assert.ok(outcomeSegmentation.includes('OPERATIONAL_SCAN_COMPARISON'), 'Separate Scan comparisons must have a distinct operational label')
+assert.ok(outcomeSegmentation.includes('SPREAD_DIAGNOSTICS_UNAVAILABLE'), 'Old Outcome artifacts must expose missing diagnostics')
+assert.ok(outcomeSegmentation.includes('拡大条件あり') && outcomeSegmentation.includes('拡大条件なし'), 'Spread groups must be selectable')
 assert.ok(outcomeRobustness.includes('/robustness?${params}'), 'Outcome robustness must use its derived read-only API')
 assert.equal(outcomeRobustness.includes('/result?'), false, 'Outcome robustness must not fetch all Outcome Event rows')
 assert.equal(outcomeRobustness.includes('historical-scan/jobs'), false, 'Outcome robustness must not fetch Historical Events into the browser')

@@ -1,21 +1,18 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronDown, CircleHelp, LoaderCircle, Play, Scale } from 'lucide-react'
+import { ChevronDown, CircleHelp, LoaderCircle, Scale } from 'lucide-react'
 import { DataPopover } from '@/components/shared/DataPopover'
 import { StageTag } from '@/components/ui/StageTag'
 import { OutcomeRobustnessPanel } from '@/components/trigger-discovery/OutcomeRobustnessPanel'
 import type { TriggerHistoricalScanResponse } from '@/lib/trigger-discovery-historical-scan-contract'
-import type {
-  TriggerHistoricalScanJobListResponse,
-  TriggerHistoricalScanJobSummary,
-} from '@/lib/trigger-discovery-historical-scan-job'
 import {
   TRIGGER_OUTCOME_HORIZONS,
   type TriggerOutcomeEventSelector,
   type TriggerOutcomeHorizon,
-  type TriggerOutcomeJobStartResponse,
   type TriggerOutcomeJobSummary,
+  type TriggerOutcomeRecentJob,
+  type TriggerOutcomeRecentJobListResponse,
 } from '@/lib/trigger-discovery-outcome-contract'
 import {
   TRIGGER_OUTCOME_SCORE_BANDS,
@@ -28,14 +25,13 @@ import {
 } from '@/lib/trigger-discovery-outcome-segmentation'
 
 type OutcomeSelector = 'NEAR_ENTERED' | 'IN_ZONE_ENTERED' | 'ENTERED' | 'RE_ENTRY'
-type SegmentTab = 'score' | 'stage' | 'pair' | 'compare' | 'robustness'
+type SegmentTab = 'score' | 'spread' | 'stage' | 'pair' | 'compare' | 'robustness'
 type SegmentMetric = 'medianReturn' | 'positiveReturnRatio' | 'medianMfe' | 'medianMae'
-type StageDimension = Exclude<TriggerOutcomeSegmentDimension, 'scoreBand'>
+type StageDimension = Exclude<TriggerOutcomeSegmentDimension, 'scoreBand' | 'spreadExpansion'>
 type ComparisonKind = 'event' | 'source'
 type ComparisonView = 'score' | 'stage' | 'pair'
 
 interface Props {
-  historicalJob: TriggerHistoricalScanJobSummary
   scanResult: TriggerHistoricalScanResponse
   primarySelector: OutcomeSelector
   primaryOutcomeJob: TriggerOutcomeJobSummary
@@ -47,9 +43,10 @@ interface Props {
 
 const SEGMENT_TABS: ReadonlyArray<{ value: SegmentTab; label: string }> = [
   { value: 'score', label: 'Score帯' },
+  { value: 'spread', label: 'MA間隔拡大' },
   { value: 'stage', label: 'Stage別' },
   { value: 'pair', label: 'Stage組み合わせ' },
-  { value: 'compare', label: '比較' },
+  { value: 'compare', label: '月足 vs 2週足' },
   { value: 'robustness', label: '観測単位' },
 ]
 
@@ -130,14 +127,10 @@ function sourceLabel(source: TriggerOutcomeSegmentationResponse['meta']['source'
   return `${timeframe} ${source.maPeriods.ma1}${unit} / ${source.maPeriods.ma2}${unit}`
 }
 
-function scanJobLabel(job: TriggerHistoricalScanJobSummary): string {
+function recentOutcomeLabel(job: TriggerOutcomeRecentJob): string {
   const timeframe = job.timeframe === 'BIWEEKLY' ? '2週足' : '月足'
   const unit = job.timeframe === 'BIWEEKLY' ? '本' : 'か月'
-  const ma1 = job.request.ma1Period ?? 20
-  const ma2 = job.request.ma2Period ?? 25
-  const from = job.resolvedStartDate ?? job.requestedStartDate
-  const to = job.resolvedEndDate ?? job.requestedEndDate
-  return `${timeframe} ${ma1}${unit}/${ma2}${unit}｜${from}〜${to}`
+  return `${timeframe} ${job.ma1Period}${unit}/${job.ma2Period}${unit}｜${SELECTOR_LABELS[job.eventSelector] ?? job.eventSelector}｜${job.resolvedStartDate ?? job.requestedStartDate}〜${job.resolvedEndDate ?? job.requestedEndDate}｜MA間隔拡大 ${job.spreadExpansionEnabled ? 'ON' : 'OFF'}`
 }
 
 function sourceSummaryFromScan(
@@ -210,9 +203,45 @@ function MethodHelp({ kind }: { kind: 'score' | 'stage' | 'events' }) {
 
 function SegmentLabel({ value, dimension }: { value: string; dimension: TriggerOutcomeSegmentDimension }) {
   if (dimension === 'scoreBand') return <span className="font-semibold">{SCORE_LABELS[value] ?? value}</span>
+  if (dimension === 'spreadExpansion') return <span className="font-semibold">{value === 'PASS' ? '拡大条件あり' : value === 'FAIL' ? '拡大条件なし' : '判定不能'}</span>
   if (value === 'UNKNOWN') return <span className="text-[var(--color-text-secondary)]">不明</span>
   const stage = Number(value.slice(1))
   return <span className="inline-flex items-center gap-1.5"><StageTag stage={stage} size="xs" /><span>S{stage}</span></span>
+}
+
+function ScoreBandCards({ response, horizon }: { response: TriggerOutcomeSegmentationResponse; horizon: TriggerOutcomeHorizon }) {
+  const groups = new Map(response.segmentation.groups.map((group) => [group.keys.scoreBand, group]))
+  return (
+    <div className="grid gap-x-5 gap-y-4 sm:grid-cols-2 xl:grid-cols-4">
+      {TRIGGER_OUTCOME_SCORE_BANDS.map((band) => {
+        const group = groups.get(band)
+        if (!group || (band === 'UNKNOWN' && group.eventCount === 0)) return null
+        const summary = horizonSummary(group, horizon)
+        const eligible = summary?.eligibleCount ?? 0
+        return (
+          <article key={band} className="min-w-0 border-t border-[var(--color-border)] pt-3">
+            <div className="flex items-center justify-between gap-2">
+              <h6 className="text-[11px] font-semibold text-[var(--color-text-primary)]">{SCORE_LABELS[band]}</h6>
+              {summary?.smallSample && eligible > 0 && <SmallSampleIndicator />}
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-3">
+              <div><span className="block text-[9px] text-[var(--color-text-secondary)]">中央値</span><strong className="text-[17px] tabular-nums text-[var(--color-text-primary)]">{eligible ? formatPercent(summary!.medianReturn) : 'N/A'}</strong></div>
+              <div><span className="block text-[9px] text-[var(--color-text-secondary)]">プラス比率</span><strong className="text-[15px] tabular-nums text-[var(--color-text-primary)]">{eligible ? formatRatio(summary!.positiveReturnRatio) : 'N/A'}</strong></div>
+            </div>
+            <p className="mt-2 text-[10px] tabular-nums text-[var(--color-text-secondary)]">Eligible {eligible.toLocaleString('ja-JP')} / {group.eventCount.toLocaleString('ja-JP')} Event <span className="mx-1">·</span> {group.uniqueTickerCount.toLocaleString('ja-JP')}銘柄</p>
+            <p className="text-[9px] tabular-nums text-[var(--color-text-tertiary)]">将来データ不足 {summary?.censoredCount.toLocaleString('ja-JP') ?? '0'}件</p>
+            <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 border-t border-[var(--color-border-soft)] pt-2 text-[9px] text-[var(--color-text-secondary)]">
+              {([
+                ['Q25', summary?.p25Return], ['Q75', summary?.p75Return],
+                ['MFE', summary?.medianMfe], ['MAE', summary?.medianMae],
+                ['Mean', summary?.meanReturn],
+              ] as const).map(([label, value]) => <div key={label} className="flex justify-between gap-1"><dt>{label}</dt><dd className="tabular-nums text-[var(--color-text-primary)]">{eligible ? formatPercent(value ?? null) : 'N/A'}</dd></div>)}
+            </dl>
+          </article>
+        )
+      })}
+    </div>
+  )
 }
 
 function SegmentTable({
@@ -220,22 +249,26 @@ function SegmentTable({
   dimension,
   horizon,
   selectedMetric,
+  visibleSpreadBucket = 'ALL',
 }: {
   response: TriggerOutcomeSegmentationResponse
   dimension: TriggerOutcomeSegmentDimension
   horizon: TriggerOutcomeHorizon
   selectedMetric: SegmentMetric
+  visibleSpreadBucket?: 'ALL' | 'PASS' | 'FAIL'
 }) {
   return (
     <div className="overflow-x-auto border-y border-[var(--color-border)]">
       <table className="w-full min-w-[930px] border-collapse text-[10px]">
         <thead className="bg-[var(--color-surface-muted)] text-[var(--color-text-secondary)]">
           <tr className="border-b border-[var(--color-border)]">
-            <th className="px-3 py-2 text-left">{dimension === 'scoreBand' ? 'Score帯' : dimensionLabel(dimension as StageDimension)}</th>
+            <th className="px-3 py-2 text-left">{dimension === 'scoreBand' ? 'Score帯' : dimension === 'spreadExpansion' ? 'MA間隔拡大' : dimensionLabel(dimension as StageDimension)}</th>
             <th className="px-2 py-2 text-right">Event</th>
             <th className="px-2 py-2 text-right">銘柄</th>
             <th className="px-2 py-2 text-right">Eligible</th>
+            <th className="px-2 py-2 text-right">将来不足</th>
             <th className={`px-2 py-2 text-right ${selectedMetric === 'medianReturn' ? 'text-[var(--color-brand-800)]' : ''}`}>Median</th>
+            <th className="px-2 py-2 text-right">Mean</th>
             <th className={`px-2 py-2 text-right ${selectedMetric === 'positiveReturnRatio' ? 'text-[var(--color-brand-800)]' : ''}`}>プラス比率</th>
             <th className="px-2 py-2 text-right">Q25–Q75</th>
             <th className={`px-2 py-2 text-right ${selectedMetric === 'medianMfe' ? 'text-[var(--color-brand-800)]' : ''}`}>MFE</th>
@@ -243,7 +276,10 @@ function SegmentTable({
           </tr>
         </thead>
         <tbody>
-          {response.segmentation.groups.map((group) => {
+          {response.segmentation.groups.filter((group) => (
+            (dimension !== 'spreadExpansion' || visibleSpreadBucket === 'ALL' || group.keys.spreadExpansion === visibleSpreadBucket)
+            && (group.keys[dimension] !== 'UNKNOWN' || group.eventCount > 0)
+          )).map((group) => {
             const value = String(group.keys[dimension] ?? 'UNKNOWN')
             const summary = horizonSummary(group, horizon)
             const unavailable = !summary || summary.eligibleCount === 0
@@ -252,8 +288,10 @@ function SegmentTable({
                 <th className="px-3 py-2.5 text-left font-medium text-[var(--color-text-primary)]"><SegmentLabel value={value} dimension={dimension} /></th>
                 <td className="px-2 py-2.5 text-right tabular-nums">{group.eventCount.toLocaleString('ja-JP')}</td>
                 <td className="px-2 py-2.5 text-right tabular-nums">{group.uniqueTickerCount.toLocaleString('ja-JP')}</td>
-                <td className="px-2 py-2.5 text-right tabular-nums"><span className="inline-flex items-center justify-end gap-1.5">{summary?.eligibleCount.toLocaleString('ja-JP') ?? '0'}{summary?.smallSample && <SmallSampleIndicator />}</span></td>
+                <td className="px-2 py-2.5 text-right tabular-nums"><span className="inline-flex items-center justify-end gap-1.5">{summary?.eligibleCount.toLocaleString('ja-JP') ?? '0'} / {group.eventCount.toLocaleString('ja-JP')}{summary?.smallSample && summary.eligibleCount > 0 && <SmallSampleIndicator />}</span></td>
+                <td className="px-2 py-2.5 text-right tabular-nums">{summary?.censoredCount.toLocaleString('ja-JP') ?? '0'}</td>
                 <td className="px-2 py-2.5 text-right font-semibold tabular-nums">{unavailable ? 'N/A' : formatPercent(summary.medianReturn)}</td>
+                <td className="px-2 py-2.5 text-right tabular-nums">{unavailable ? 'N/A' : formatPercent(summary.meanReturn)}</td>
                 <td className="px-2 py-2.5 text-right tabular-nums">{unavailable ? 'N/A' : formatRatio(summary.positiveReturnRatio)}</td>
                 <td className="px-2 py-2.5 text-right tabular-nums text-[var(--color-text-secondary)]">{unavailable ? 'N/A' : `${formatPercent(summary.p25Return)} – ${formatPercent(summary.p75Return)}`}</td>
                 <td className="px-2 py-2.5 text-right tabular-nums">{unavailable ? 'N/A' : formatPercent(summary.medianMfe)}</td>
@@ -318,6 +356,7 @@ function groupTitle(
   return [
     `${dimensionLabel(rowDimension)} ${row} / ${dimensionLabel(columnDimension)} ${column}`,
     `Event ${group.eventCount}件、銘柄 ${group.uniqueTickerCount}件、Eligible ${summary?.eligibleCount ?? 0}件`,
+    `将来データ不足 ${summary?.censoredCount ?? 0}件`,
     `Median ${formatPercent(summary?.medianReturn ?? null)}、Mean ${formatPercent(summary?.meanReturn ?? null)}`,
     `プラス比率 ${formatRatio(summary?.positiveReturnRatio ?? null)}、Q25/Q75 ${formatPercent(summary?.p25Return ?? null)} / ${formatPercent(summary?.p75Return ?? null)}`,
     `MFE ${formatPercent(summary?.medianMfe ?? null)}、MAE ${formatPercent(summary?.medianMae ?? null)}`,
@@ -349,17 +388,19 @@ function SegmentHeatmap({
     `${group.keys[rowDimension] ?? 'UNKNOWN'}|${group.keys[columnDimension] ?? 'UNKNOWN'}`,
     group,
   ])), [response, rowDimension, columnDimension])
+  const buckets = TRIGGER_OUTCOME_STAGE_BUCKETS.filter((bucket) => bucket !== 'UNKNOWN' || response.segmentation.groups.some((group) =>
+    group.eventCount > 0 && (group.keys[rowDimension] === 'UNKNOWN' || group.keys[columnDimension] === 'UNKNOWN')))
   const legend = heatLegendLabels(scale, metric)
   return (
     <div className="min-w-0">
       {title && <h6 className="mb-2 text-[11px] font-semibold text-[var(--color-text-primary)]">{title}</h6>}
       <div className="max-w-full overflow-x-auto pb-1">
-        <div className="grid min-w-[620px] grid-cols-[74px_repeat(7,minmax(68px,1fr))] gap-1" role="grid" aria-label={`${dimensionLabel(rowDimension)}と${dimensionLabel(columnDimension)}のOutcome Heatmap`}>
+        <div className="grid min-w-[620px] gap-1" style={{ gridTemplateColumns: `74px repeat(${buckets.length}, minmax(68px, 1fr))` }} role="grid" aria-label={`${dimensionLabel(rowDimension)}と${dimensionLabel(columnDimension)}のOutcome Heatmap`}>
           <div className="flex items-end px-1 pb-1 text-[9px] leading-4 text-[var(--color-text-tertiary)]">{dimensionLabel(rowDimension)} ↓<br />{dimensionLabel(columnDimension)} →</div>
-          {TRIGGER_OUTCOME_STAGE_BUCKETS.map((bucket) => <div key={bucket} role="columnheader" className="flex min-h-8 items-center justify-center text-[9px] font-semibold text-[var(--color-text-secondary)]">{stageLabel(bucket)}</div>)}
-          {TRIGGER_OUTCOME_STAGE_BUCKETS.flatMap((rowBucket) => [
+          {buckets.map((bucket) => <div key={bucket} role="columnheader" className="flex min-h-8 items-center justify-center text-[9px] font-semibold text-[var(--color-text-secondary)]">{stageLabel(bucket)}</div>)}
+          {buckets.flatMap((rowBucket) => [
             <div key={`row-${rowBucket}`} role="rowheader" className="flex min-h-[54px] items-center px-1 text-[9px] font-semibold text-[var(--color-text-secondary)]">{stageLabel(rowBucket)}</div>,
-            ...TRIGGER_OUTCOME_STAGE_BUCKETS.map((columnBucket) => {
+            ...buckets.map((columnBucket) => {
               const group = groups.get(`${rowBucket}|${columnBucket}`)
               const summary = group ? horizonSummary(group, horizon) : null
               const value = summary && summary.eligibleCount > 0 ? metricValue(summary, metric) : null
@@ -434,6 +475,7 @@ function SegmentDetail({
           ['Event数', group?.eventCount.toLocaleString('ja-JP') ?? '0'],
           ['銘柄数', group?.uniqueTickerCount.toLocaleString('ja-JP') ?? '0'],
           ['Eligible', summary?.eligibleCount.toLocaleString('ja-JP') ?? '0'],
+          ['将来不足', summary?.censoredCount.toLocaleString('ja-JP') ?? '0'],
           ['Median', unavailable ? 'N/A' : formatPercent(summary.medianReturn)],
           ['Mean', unavailable ? 'N/A' : formatPercent(summary.meanReturn)],
           ['プラス比率', unavailable ? 'N/A' : formatRatio(summary.positiveReturnRatio)],
@@ -490,25 +532,70 @@ function ComparisonTable({
   )
 }
 
+function OverallComparisonTable({ response, horizon }: { response: TriggerOutcomeSegmentComparisonResponse; horizon: TriggerOutcomeHorizon }) {
+  const left = response.left.overall
+  const right = response.right.overall
+  const leftSummary = left.horizons.find((item) => item.horizonSessions === horizon)
+  const rightSummary = right.horizons.find((item) => item.horizonSessions === horizon)
+  const leftEligible = leftSummary?.eligibleCount ?? 0
+  const rightEligible = rightSummary?.eligibleCount ?? 0
+  const rows: Array<[string, string, string]> = [
+    ['Event', left.selectedEventCount.toLocaleString('ja-JP'), right.selectedEventCount.toLocaleString('ja-JP')],
+    ['銘柄', left.uniqueTickerCount.toLocaleString('ja-JP'), right.uniqueTickerCount.toLocaleString('ja-JP')],
+    ['Eligible / Event', `${leftEligible.toLocaleString('ja-JP')} / ${left.selectedEventCount.toLocaleString('ja-JP')}`, `${rightEligible.toLocaleString('ja-JP')} / ${right.selectedEventCount.toLocaleString('ja-JP')}`],
+    ['将来データ不足', leftSummary?.censoredCount.toLocaleString('ja-JP') ?? '0', rightSummary?.censoredCount.toLocaleString('ja-JP') ?? '0'],
+    ['Median', leftEligible ? formatPercent(leftSummary!.medianReturn) : 'N/A', rightEligible ? formatPercent(rightSummary!.medianReturn) : 'N/A'],
+    ['プラス比率', leftEligible ? formatRatio(leftSummary!.positiveReturnRatio) : 'N/A', rightEligible ? formatRatio(rightSummary!.positiveReturnRatio) : 'N/A'],
+    ['Q25', leftEligible ? formatPercent(leftSummary!.p25Return) : 'N/A', rightEligible ? formatPercent(rightSummary!.p25Return) : 'N/A'],
+    ['Q75', leftEligible ? formatPercent(leftSummary!.p75Return) : 'N/A', rightEligible ? formatPercent(rightSummary!.p75Return) : 'N/A'],
+    ['MFE', leftEligible ? formatPercent(leftSummary!.medianMfe) : 'N/A', rightEligible ? formatPercent(rightSummary!.medianMfe) : 'N/A'],
+    ['MAE', leftEligible ? formatPercent(leftSummary!.medianMae) : 'N/A', rightEligible ? formatPercent(rightSummary!.medianMae) : 'N/A'],
+  ]
+  return (
+    <div className="max-w-full overflow-x-auto border-y border-[var(--color-border)]">
+      <table className="w-full min-w-[560px] border-collapse text-[10px]">
+        <thead><tr className="bg-[var(--color-surface-muted)] text-[var(--color-text-secondary)]"><th className="px-3 py-2 text-left">{HORIZON_LABELS[horizon]}後</th><th className="px-3 py-2 text-right">左: {sourceLabel(response.left.meta.source)}</th><th className="px-3 py-2 text-right">右: {sourceLabel(response.right.meta.source)}</th></tr></thead>
+        <tbody>{rows.map(([label, leftValue, rightValue]) => <tr key={label} className="border-t border-[var(--color-border-soft)]"><th className="px-3 py-2 text-left font-medium text-[var(--color-text-secondary)]">{label}</th><td className="px-3 py-2 text-right tabular-nums">{leftValue}</td><td className="px-3 py-2 text-right tabular-nums">{rightValue}</td></tr>)}</tbody>
+      </table>
+    </div>
+  )
+}
+
 function CompatibilitySummary({ response }: { response: TriggerOutcomeSegmentComparisonResponse }) {
   const labels: Record<string, string> = {
-    timeframe: '時間軸', maPeriods: 'MA期間', requestedScanPeriod: '指定期間', resolvedScanPeriod: '取引日期間', marketFilters: '市場', priceFilters: '価格', liquidityFilters: '流動性', stageFilters: 'Stage条件', eventSelector: 'Event種類', scoreFilters: 'Score条件', horizons: '表示期間', analysisCutoffDate: '分析可能日',
+    timeframe: '時間軸', maPeriods: 'MA期間', requestedScanPeriod: '指定期間', resolvedScanPeriod: '取引日期間', marketFilters: '市場', priceFilters: '価格', liquidityFilters: '流動性', triggerFilters: 'Trigger条件', stageFilters: 'Stage条件', eventSelector: 'Event種類', scoreFilters: 'Score条件', horizons: '表示期間', analysisCutoffDate: '分析可能日',
   }
   return (
     <div className="border-l-2 border-[var(--color-brand-500)] bg-[var(--color-surface-subtle)] px-3 py-2 text-[9px] leading-5 text-[var(--color-text-secondary)]">
+      {response.analysisType === 'OPERATIONAL_SCAN_COMPARISON' && <p className="font-semibold text-[var(--color-text-primary)]">OPERATIONAL_SCAN_COMPARISON：別Scanの運用比較。Candidate集合・Event日も異なり得ます。</p>}
       <div className="flex flex-wrap gap-x-5 gap-y-1">
         <span><strong className="text-[var(--color-text-primary)]">左:</strong> {sourceLabel(response.left.meta.source)} / {SELECTOR_LABELS[response.left.meta.source.eventSelector] ?? response.left.meta.source.eventSelector}</span>
         <span><strong className="text-[var(--color-text-primary)]">右:</strong> {sourceLabel(response.right.meta.source)} / {SELECTOR_LABELS[response.right.meta.source.eventSelector] ?? response.right.meta.source.eventSelector}</span>
       </div>
       <p>相違: {response.compatibility.differences.length ? response.compatibility.differences.map((difference) => labels[difference] ?? difference).join(' / ') : 'なし'}</p>
-      {(!response.compatibility.samePopulationFilters || !response.compatibility.sameDateRange) && <p className="text-amber-900">比較元と比較先で母集団条件が異なります。</p>}
+      {response.compatibility.differences.length > 0 && <p className="text-amber-900">同条件比較ではありません。条件差を確認してから数値を読んでください。</p>}
       <p className="text-[var(--color-text-tertiary)]">この比較は統計的に独立したRandomized comparisonではありません。数値と母数を並べて確認してください。</p>
+      {response.analysisType === 'OPERATIONAL_SCAN_COMPARISON' && (() => {
+        const left = response.left.meta.source
+        const right = response.right.meta.source
+        const matchingExceptSpread = response.compatibility.differences.length === 1
+          && response.compatibility.differences[0] === 'triggerFilters'
+          && left.filters.triggerCore.spreadExpansionEnabled !== right.filters.triggerCore.spreadExpansionEnabled
+          && left.filters.triggerCore.spreadLookbackIntervals === right.filters.triggerCore.spreadLookbackIntervals
+          && left.filters.triggerCore.minExpansionRatio === right.filters.triggerCore.minExpansionRatio
+          && left.filters.triggerCore.requireBullishMaOrder === right.filters.triggerCore.requireBullishMaOrder
+        if (!matchingExceptSpread) return <p>MA間隔拡大以外にも条件差があります。候補削減率は表示しません。</p>
+        const off = left.filters.triggerCore.spreadExpansionEnabled ? response.right : response.left
+        const on = left.filters.triggerCore.spreadExpansionEnabled ? response.left : response.right
+        const offCandidates = off.meta.source.scanCounts.uniqueCandidates
+        const onCandidates = on.meta.source.scanCounts.uniqueCandidates
+        return <p>MA間隔拡大 OFF → ON：候補銘柄 {offCandidates.toLocaleString('ja-JP')} → {onCandidates.toLocaleString('ja-JP')}件{offCandidates > 0 ? `（${((offCandidates - onCandidates) / offCandidates * 100).toFixed(1)}%減）` : ''} / {SELECTOR_LABELS[off.meta.source.eventSelector] ?? off.meta.source.eventSelector} Event {off.overall.selectedEventCount.toLocaleString('ja-JP')} → {on.overall.selectedEventCount.toLocaleString('ja-JP')}件。これは改善率ではありません。</p>
+      })()}
     </div>
   )
 }
 
 export function OutcomeSegmentationPanel({
-  historicalJob,
   scanResult,
   primarySelector,
   primaryOutcomeJob,
@@ -519,6 +606,7 @@ export function OutcomeSegmentationPanel({
 }: Props) {
   const [expanded, setExpanded] = useState(false)
   const [tab, setTab] = useState<SegmentTab>('score')
+  const [spreadView, setSpreadView] = useState<'ALL' | 'PASS' | 'FAIL'>('ALL')
   const [metric, setMetric] = useState<SegmentMetric>('medianReturn')
   const [stageDimension, setStageDimension] = useState<StageDimension>('stage:monthA')
   const [rowDimension, setRowDimension] = useState<StageDimension>('stage:weekA')
@@ -532,14 +620,10 @@ export function OutcomeSegmentationPanel({
   const [comparisonData, setComparisonData] = useState<TriggerOutcomeSegmentComparisonResponse | null>(null)
   const [comparisonLoading, setComparisonLoading] = useState(false)
   const [comparisonError, setComparisonError] = useState<string | null>(null)
-  const [historicalJobs, setHistoricalJobs] = useState<TriggerHistoricalScanJobSummary[]>([])
-  const [historicalJobsLoaded, setHistoricalJobsLoaded] = useState(false)
-  const [historicalJobsLoading, setHistoricalJobsLoading] = useState(false)
-  const [selectedHistoricalJobId, setSelectedHistoricalJobId] = useState('')
-  const [comparisonOutcomeJobId, setComparisonOutcomeJobId] = useState('')
-  const [comparisonOutcomeJob, setComparisonOutcomeJob] = useState<TriggerOutcomeJobSummary | null>(null)
-  const [comparisonOutcomeBusy, setComparisonOutcomeBusy] = useState(false)
-  const [comparisonOutcomeMessage, setComparisonOutcomeMessage] = useState<string | null>(null)
+  const [recentOutcomeJobs, setRecentOutcomeJobs] = useState<TriggerOutcomeRecentJob[]>([])
+  const [recentJobsLoaded, setRecentJobsLoaded] = useState(false)
+  const [recentJobsLoading, setRecentJobsLoading] = useState(false)
+  const [selectedComparisonJobId, setSelectedComparisonJobId] = useState('')
   const segmentCache = useRef(new Map<string, TriggerOutcomeSegmentationResponse>())
   const comparisonCache = useRef(new Map<string, TriggerOutcomeSegmentComparisonResponse>())
   const segmentSequence = useRef(0)
@@ -547,6 +631,7 @@ export function OutcomeSegmentationPanel({
 
   const dimensions = useMemo<TriggerOutcomeSegmentDimension[]>(() => {
     if (tab === 'score') return ['scoreBand']
+    if (tab === 'spread') return ['spreadExpansion']
     if (tab === 'stage') return [stageDimension]
     if (tab === 'robustness') return []
     return [rowDimension, columnDimension]
@@ -564,6 +649,7 @@ export function OutcomeSegmentationPanel({
     if (cached) {
       setSegmentData(cached)
       setSegmentError(null)
+      setSegmentLoading(false)
       return
     }
     const controller = new AbortController()
@@ -590,53 +676,28 @@ export function OutcomeSegmentationPanel({
   }, [expanded, tab, primaryOutcomeJob.jobId, primaryOutcomeJob.status, primaryOutcomeJob.resultAvailable, dimensionKey])
 
   useEffect(() => {
-    if (!expanded || tab !== 'compare' || comparisonKind !== 'source' || historicalJobsLoaded || historicalJobsLoading) return
+    if (!expanded || tab !== 'compare' || comparisonKind !== 'source' || recentJobsLoaded) return
     const controller = new AbortController()
-    setHistoricalJobsLoading(true)
-    void fetch('/api/trigger-discovery/historical-scan/jobs?limit=20', { cache: 'no-store', signal: controller.signal })
+    setRecentJobsLoading(true)
+    void fetch('/api/trigger-discovery/outcome-jobs/recent', { cache: 'no-store', signal: controller.signal })
       .then(async (response) => {
-        if (!response.ok) throw new Error(await apiErrorMessage(response, '期間検証履歴を取得できませんでした。'))
-        return response.json() as Promise<TriggerHistoricalScanJobListResponse>
+        if (!response.ok) throw new Error(await apiErrorMessage(response, '保存済みOutcome履歴を取得できませんでした。'))
+        return response.json() as Promise<TriggerOutcomeRecentJobListResponse>
       })
       .then((body) => {
         if (!controller.signal.aborted) {
-          setHistoricalJobs(body.jobs)
-          setHistoricalJobsLoaded(true)
+          setRecentOutcomeJobs(body.jobs)
+          setRecentJobsLoaded(true)
         }
       })
       .catch((error) => {
-        if (!controller.signal.aborted) setComparisonError(error instanceof Error ? error.message : '期間検証履歴を取得できませんでした。')
+        if (!controller.signal.aborted) setComparisonError(error instanceof Error ? error.message : '保存済みOutcome履歴を取得できませんでした。')
       })
       .finally(() => {
-        if (!controller.signal.aborted) setHistoricalJobsLoading(false)
+        if (!controller.signal.aborted) setRecentJobsLoading(false)
       })
     return () => controller.abort()
-  }, [expanded, tab, comparisonKind, historicalJobsLoaded])
-
-  useEffect(() => {
-    if (!comparisonOutcomeJobId) return
-    const controller = new AbortController()
-    let timer: ReturnType<typeof setTimeout> | null = null
-    let stopped = false
-    const poll = async () => {
-      try {
-        const response = await fetch(`/api/trigger-discovery/outcome-jobs/${comparisonOutcomeJobId}`, { cache: 'no-store', signal: controller.signal })
-        if (!response.ok) throw new Error(await apiErrorMessage(response, '比較用Outcomeの状態を取得できませんでした。'))
-        const body = await response.json() as TriggerOutcomeJobSummary
-        if (stopped) return
-        setComparisonOutcomeJob(body)
-        if (!['COMPLETED', 'FAILED', 'CANCELLED'].includes(body.status)) timer = setTimeout(poll, 1_500)
-      } catch (error) {
-        if (!controller.signal.aborted && !stopped) setComparisonError(error instanceof Error ? error.message : '比較用Outcomeの状態を取得できませんでした。')
-      }
-    }
-    void poll()
-    return () => {
-      stopped = true
-      controller.abort()
-      if (timer) clearTimeout(timer)
-    }
-  }, [comparisonOutcomeJobId])
+  }, [expanded, tab, comparisonKind, recentJobsLoaded])
 
   const comparisonDimensions = useMemo<TriggerOutcomeSegmentDimension[]>(() => (
     comparisonView === 'score' ? ['scoreBand'] : comparisonView === 'stage' ? [stageDimension] : [rowDimension, columnDimension]
@@ -644,7 +705,7 @@ export function OutcomeSegmentationPanel({
   const comparisonDimensionKey = comparisonDimensions.join(',')
   const eventLeftId = nearOutcomeJob?.status === 'COMPLETED' && nearOutcomeJob.resultAvailable ? nearOutcomeJob.jobId : ''
   const eventRightId = zoneOutcomeJob?.status === 'COMPLETED' && zoneOutcomeJob.resultAvailable ? zoneOutcomeJob.jobId : ''
-  const sourceRightId = comparisonOutcomeJob?.status === 'COMPLETED' && comparisonOutcomeJob.resultAvailable ? comparisonOutcomeJob.jobId : ''
+  const sourceRightId = recentOutcomeJobs.some((job) => job.jobId === selectedComparisonJobId) ? selectedComparisonJobId : ''
   const comparisonLeftId = comparisonKind === 'event' ? eventLeftId : primaryOutcomeJob.jobId
   const comparisonRightId = comparisonKind === 'event' ? eventRightId : sourceRightId
   const visibleComparisonData = comparisonData?.dimensions.join(',') === comparisonDimensionKey
@@ -660,6 +721,7 @@ export function OutcomeSegmentationPanel({
     if (cached) {
       setComparisonData(cached)
       setComparisonError(null)
+      setComparisonLoading(false)
       return
     }
     const controller = new AbortController()
@@ -687,49 +749,29 @@ export function OutcomeSegmentationPanel({
     return () => controller.abort()
   }, [expanded, tab, comparisonLeftId, comparisonRightId, comparisonDimensionKey])
 
-  const candidateJobs = useMemo(() => historicalJobs
-    .filter((job) => job.jobId !== historicalJob.jobId && job.status === 'COMPLETED' && job.resultAvailable)
+  const candidateJobs = useMemo(() => recentOutcomeJobs
+    .filter((job) => job.jobId !== primaryOutcomeJob.jobId)
     .sort((left, right) => {
-      const leftOpposite = left.timeframe !== historicalJob.timeframe ? 1 : 0
-      const rightOpposite = right.timeframe !== historicalJob.timeframe ? 1 : 0
+      const leftOpposite = left.timeframe !== scanResult.scanMeta.timeframe ? 1 : 0
+      const rightOpposite = right.timeframe !== scanResult.scanMeta.timeframe ? 1 : 0
       if (leftOpposite !== rightOpposite) return rightOpposite - leftOpposite
-      return (right.completedAt ?? right.createdAt).localeCompare(left.completedAt ?? left.createdAt)
-    }), [historicalJobs, historicalJob.jobId, historicalJob.timeframe])
-  const selectedHistoricalJob = candidateJobs.find((job) => job.jobId === selectedHistoricalJobId) ?? null
-
-  const startComparisonOutcome = async () => {
-    if (!selectedHistoricalJob) return
-    setComparisonOutcomeBusy(true)
-    setComparisonError(null)
-    setComparisonOutcomeMessage(null)
-    setComparisonOutcomeJobId('')
-    setComparisonOutcomeJob(null)
-    try {
-      const response = await fetch(`/api/trigger-discovery/historical-scan/jobs/${selectedHistoricalJob.jobId}/outcomes`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...primaryOutcomeJob.request,
-          historicalScanJobId: selectedHistoricalJob.jobId,
-          eventFilter: primarySelector,
-          horizons: [...TRIGGER_OUTCOME_HORIZONS],
-        }),
-        cache: 'no-store',
-      })
-      if (!response.ok) throw new Error(await apiErrorMessage(response, '比較用Outcomeを開始できませんでした。'))
-      const body = await response.json() as TriggerOutcomeJobStartResponse
-      setComparisonOutcomeJobId(body.jobId)
-      setComparisonOutcomeMessage(body.reused ? '保存済みの比較用Outcomeを再利用します。' : '比較用Outcomeの分析を開始しました。')
-    } catch (error) {
-      setComparisonError(error instanceof Error ? error.message : '比較用Outcomeを開始できませんでした。')
-    } finally {
-      setComparisonOutcomeBusy(false)
-    }
-  }
+      return right.completedAt.localeCompare(left.completedAt)
+    }), [recentOutcomeJobs, primaryOutcomeJob.jobId, scanResult.scanMeta.timeframe])
+  const selectedComparisonJob = candidateJobs.find((job) => job.jobId === selectedComparisonJobId) ?? null
 
   const sourceSummary = visibleSegmentData?.meta.source
     ? [sourceLabel(visibleSegmentData.meta.source), SELECTOR_LABELS[visibleSegmentData.meta.source.eventSelector] ?? visibleSegmentData.meta.source.eventSelector, `${visibleSegmentData.meta.source.scanPeriod.resolvedStartDate ?? visibleSegmentData.meta.source.scanPeriod.requestedStartDate}〜${visibleSegmentData.meta.source.scanPeriod.resolvedEndDate ?? visibleSegmentData.meta.source.scanPeriod.requestedEndDate}`, `分析可能データ ${visibleSegmentData.meta.source.analysisCutoffDate}まで`]
     : sourceSummaryFromScan(scanResult, primarySelector, primaryOutcomeJob.analysisCutoffDate)
+  const sourceFilters = visibleSegmentData?.meta.source.filters
+  const sourceFilterLabels = sourceFilters ? [
+    sourceFilters.markets?.length ? `市場 ${sourceFilters.markets.map((market) => market ?? '不明').join(' / ')}` : null,
+    sourceFilters.outcomeScore.min != null || sourceFilters.outcomeScore.max != null
+      ? `Score ${sourceFilters.outcomeScore.min ?? 0}〜${sourceFilters.outcomeScore.max ?? 100}` : null,
+    Object.keys(sourceFilters.outcomeStage).length ? 'Outcome Stage条件あり' : null,
+    Object.keys(sourceFilters.historicalStage).length ? 'Scan Stage条件あり' : null,
+    sourceFilters.triggerCore.spreadExpansionEnabled ? 'MA間隔拡大 ON' : null,
+    sourceFilters.outcomeTicker ? `銘柄 ${sourceFilters.outcomeTicker}` : null,
+  ].filter((item): item is string => item !== null) : []
 
   const pairScale = visibleSegmentData ? heatScale([visibleSegmentData], horizon, metric) : null
   const compareScale = visibleComparisonData ? heatScale([visibleComparisonData.left, visibleComparisonData.right], horizon, metric) : null
@@ -752,7 +794,7 @@ export function OutcomeSegmentationPanel({
       >
         <span>
           <span id="outcome-segmentation-heading" className="inline-flex items-center gap-1.5 text-[12px] font-semibold text-[var(--color-text-primary)]"><Scale size={14} aria-hidden />条件別に見る</span>
-          <span className="mt-0.5 block text-[9px] leading-5 text-[var(--color-text-tertiary)]">Trigger発生時のScoreやStageごとに、その後の値動きを分解して確認します。</span>
+          <span className="mt-0.5 block text-[9px] leading-5 text-[var(--color-text-tertiary)]">Trigger発生時のScore・MA間隔・Stageごとに、その後の値動きを分解して確認します。</span>
         </span>
         <ChevronDown size={15} className={`mt-1 shrink-0 text-[var(--color-text-tertiary)] transition-transform ${expanded ? 'rotate-180' : ''}`} aria-hidden />
       </button>
@@ -761,8 +803,11 @@ export function OutcomeSegmentationPanel({
         <div id="outcome-segmentation-content" className="mt-4">
           <div className="flex flex-wrap gap-x-5 gap-y-1 border-l-2 border-[var(--color-border)] pl-3 text-[9px] text-[var(--color-text-secondary)]">
             {sourceSummary.map((item) => <span key={item}>{item}</span>)}
+            {visibleSegmentData && <span>Event {visibleSegmentData.overall.selectedEventCount.toLocaleString('ja-JP')}件 / {visibleSegmentData.overall.uniqueTickerCount.toLocaleString('ja-JP')}銘柄</span>}
             <MethodHelp kind="events" />
           </div>
+          {sourceFilterLabels.length > 0 && <div className="mt-2 flex flex-wrap gap-1.5" aria-label="元Outcomeの条件">{sourceFilterLabels.map((label) => <span key={label} className="rounded-[3px] bg-[var(--color-surface-muted)] px-2 py-1 text-[9px] text-[var(--color-text-secondary)]">{label}</span>)}</div>}
+          <p className="mt-2 text-[9px] leading-5 text-[var(--color-text-secondary)]">Historical Trigger Eventの記述統計です。Triggerの良し悪しや将来リターンを保証しません。同一銘柄の複数Eventは完全に独立した観測ではありません。各期間の将来価格が揃わないEventは、その期間のEligibleから除外します。</p>
 
           <div className="mt-3 flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
             <div
@@ -794,6 +839,13 @@ export function OutcomeSegmentationPanel({
           </div>
 
           {tab === 'score' && <div className="mt-3 flex items-center gap-1 text-[9px] text-[var(--color-text-secondary)]"><MethodHelp kind="score" /><span>ScoreはTrigger条件への適合度であり、その後のリターン評価ではありません。</span></div>}
+          {tab === 'spread' && <div className="mt-3 space-y-2 text-[10px] leading-5 text-[var(--color-text-secondary)]">
+            <p><strong className="text-[var(--color-text-primary)]">同一Event集合の比較</strong>。Event日・基準価格・Scoreを固定し、当日のMA間隔拡大条件で分けています。判定不能は条件なしに混ぜません。</p>
+            {scanResult.criteria.spreadExpansionEnabled && <p className="text-amber-900">元ScanがMA間隔拡大ONのため、条件なしのEventは原則含まれません。同条件のOFF Scanで分析すると両群を比較できます。</p>}
+            <div className="flex gap-1" aria-label="MA間隔拡大グループ">
+              {([['ALL', 'すべて'], ['PASS', '拡大条件あり'], ['FAIL', '拡大条件なし']] as const).map(([value, label]) => <button key={value} type="button" aria-pressed={spreadView === value} onClick={() => setSpreadView(value)} className={`h-8 rounded-[3px] border px-2.5 text-[10px] ${spreadView === value ? 'border-[var(--color-brand-700)] bg-[var(--color-brand-50)] font-semibold text-[var(--color-brand-800)]' : 'border-[var(--color-border)] bg-white'}`}>{label}</button>)}
+            </div>
+          </div>}
           {(tab === 'stage' || tab === 'pair') && <div className="mt-3 flex items-center gap-1 text-[9px] text-[var(--color-text-secondary)]"><MethodHelp kind="stage" /><span>S1〜S6は強弱順位ではなく、循環的な相場構造です。</span></div>}
 
           {tab === 'stage' && (
@@ -810,9 +862,12 @@ export function OutcomeSegmentationPanel({
           )}
 
           {segmentError && tab !== 'compare' && <div role="alert" className="mt-3 border-l-2 border-red-500 bg-red-50 px-3 py-2 text-[10px] text-red-800">{segmentError}</div>}
-          {segmentLoading && tab !== 'compare' && <div role="status" className="mt-4 inline-flex items-center gap-2 text-[10px] text-[var(--color-brand-700)]"><LoaderCircle size={13} className="animate-spin" aria-hidden />条件別Outcomeを読み込み中</div>}
+          {segmentLoading && tab !== 'compare' && <div role="status" className="mt-4 inline-flex items-center gap-2 text-[10px] text-[var(--color-brand-700)]"><LoaderCircle size={13} className="animate-spin" aria-hidden />条件別データを集計しています…</div>}
 
-          {!segmentLoading && visibleSegmentData && tab === 'score' && <div className="mt-3"><SegmentTable response={visibleSegmentData} dimension="scoreBand" horizon={horizon} selectedMetric={metric} /></div>}
+          {!segmentLoading && visibleSegmentData && tab === 'score' && <div className="mt-3"><ScoreBandCards response={visibleSegmentData} horizon={horizon} /></div>}
+          {!segmentLoading && visibleSegmentData && tab === 'spread' && (visibleSegmentData.meta.spreadDiagnosticsStatus === 'SPREAD_DIAGNOSTICS_UNAVAILABLE'
+            ? <p role="status" className="mt-3 border-l-2 border-amber-400 bg-amber-50 px-3 py-2 text-[10px] text-amber-900">SPREAD_DIAGNOSTICS_UNAVAILABLE：この保存済みOutcomeに当時のMA診断値はありません。元の期間検証から再実行してください。現在データで補完しません。</p>
+            : <div className="mt-3">{visibleSegmentData.meta.spreadDiagnosticsStatus === 'PARTIAL' && <p className="mb-2 text-[10px] text-amber-900">一部の保存済みEventに診断値がありません。補完せずUNKNOWNに含めています。</p>}<p className="mb-2 text-[9px] text-[var(--color-text-tertiary)]">PASS + FAIL + UNKNOWN = {visibleSegmentData.overall.selectedEventCount.toLocaleString('ja-JP')} Event。Eligible 30件未満は参考値です。</p><SegmentTable response={visibleSegmentData} dimension="spreadExpansion" horizon={horizon} selectedMetric={metric} visibleSpreadBucket={spreadView} /></div>)}
           {!segmentLoading && visibleSegmentData && tab === 'stage' && <div className="mt-3"><SegmentTable response={visibleSegmentData} dimension={stageDimension} horizon={horizon} selectedMetric={metric} /></div>}
           {!segmentLoading && visibleSegmentData && tab === 'pair' && pairScale && (
             <div className="mt-3 space-y-4">
@@ -845,23 +900,18 @@ export function OutcomeSegmentationPanel({
 
               {comparisonKind === 'source' && (
                 <div className="mt-3 border-y border-[var(--color-border-soft)] py-3">
-                  <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)_auto] lg:items-end">
+                  <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)] lg:items-end">
                     <div className="text-[9px] leading-5 text-[var(--color-text-secondary)]"><strong className="block text-[10px] text-[var(--color-text-primary)]">比較元</strong>{sourceSummaryFromScan(scanResult, primarySelector, primaryOutcomeJob.analysisCutoffDate).join(' / ')}</div>
-                    <label className="text-[9px] text-[var(--color-text-secondary)]">比較先の完了済み期間検証
-                      <select value={selectedHistoricalJobId} onChange={(event) => { setSelectedHistoricalJobId(event.target.value); setComparisonOutcomeJobId(''); setComparisonOutcomeJob(null); setComparisonOutcomeMessage(null); setComparisonData(null); setComparisonLoading(false) }} className="mt-1 block h-9 w-full rounded-[3px] border border-[var(--color-border)] bg-white px-2 text-[10px]">
+                    <label className="text-[9px] text-[var(--color-text-secondary)]">比較先の保存済みOutcome
+                      <select value={selectedComparisonJobId} onChange={(event) => { setSelectedComparisonJobId(event.target.value); setComparisonData(null); setComparisonLoading(false); setComparisonError(null) }} className="mt-1 block h-9 w-full rounded-[3px] border border-[var(--color-border)] bg-white px-2 text-[10px]">
                         <option value="">選択してください</option>
-                        {candidateJobs.map((job) => <option key={job.jobId} value={job.jobId}>{scanJobLabel(job)}｜実行 {job.completedAt?.slice(0, 10) ?? job.createdAt.slice(0, 10)}</option>)}
+                        {candidateJobs.map((job) => <option key={job.jobId} value={job.jobId}>{recentOutcomeLabel(job)}｜完了 {job.completedAt.slice(0, 10)}</option>)}
                       </select>
                     </label>
-                    <button type="button" disabled={!selectedHistoricalJob || comparisonOutcomeBusy || Boolean(comparisonOutcomeJob && !['COMPLETED', 'FAILED', 'CANCELLED'].includes(comparisonOutcomeJob.status))} onClick={() => void startComparisonOutcome()} className="inline-flex h-9 items-center justify-center gap-1.5 rounded-[3px] border border-[var(--color-brand-700)] bg-[var(--color-brand-700)] px-3 text-[10px] font-semibold text-white disabled:opacity-45"><Play size={12} aria-hidden />比較を実行</button>
                   </div>
-                  {historicalJobsLoading && <p role="status" className="mt-2 inline-flex items-center gap-1 text-[9px] text-[var(--color-text-secondary)]"><LoaderCircle size={11} className="animate-spin" />履歴を読み込み中</p>}
-                  {historicalJobsLoaded && candidateJobs.length === 0 && <p className="mt-2 text-[9px] text-[var(--color-text-secondary)]">比較できる別の完了済み期間検証がありません。ここから新しいScanは自動実行しません。</p>}
-                  {selectedHistoricalJob && <p className="mt-2 text-[9px] leading-5 text-[var(--color-text-secondary)]">比較先: {scanJobLabel(selectedHistoricalJob)} / 市場 {(selectedHistoricalJob.request.markets?.filter(Boolean).join(' / ')) || '全市場'} / Event {SELECTOR_LABELS[primarySelector]}</p>}
-                  {comparisonOutcomeMessage && <p className="mt-2 text-[9px] text-[var(--color-brand-800)]">{comparisonOutcomeMessage}</p>}
-                  {comparisonOutcomeJob && !['COMPLETED', 'FAILED', 'CANCELLED'].includes(comparisonOutcomeJob.status) && <div className="mt-2"><div className="flex justify-between text-[9px] text-[var(--color-text-secondary)]"><span>比較用Outcomeを分析中</span><span>{comparisonOutcomeJob.progress.processedEvents.toLocaleString('ja-JP')} / {comparisonOutcomeJob.progress.totalEvents.toLocaleString('ja-JP')} Event</span></div><div className="mt-1 h-1.5 overflow-hidden rounded-full bg-[var(--color-surface-muted)]"><div className="h-full bg-[var(--color-brand-600)]" style={{ width: `${comparisonOutcomeJob.progress.totalEvents ? Math.min(100, comparisonOutcomeJob.progress.processedEvents / comparisonOutcomeJob.progress.totalEvents * 100) : 0}%` }} /></div></div>}
-                  {comparisonOutcomeJob?.status === 'FAILED' && <p className="mt-2 text-[9px] text-red-800">比較用Outcomeの分析に失敗しました。</p>}
-                  {comparisonOutcomeJob?.status === 'CANCELLED' && <p className="mt-2 text-[9px] text-[var(--color-text-secondary)]">比較用Outcomeの分析はキャンセルされました。</p>}
+                  {recentJobsLoading && <p role="status" className="mt-2 inline-flex items-center gap-1 text-[9px] text-[var(--color-text-secondary)]"><LoaderCircle size={11} className="animate-spin" />保存済みOutcomeを読み込み中</p>}
+                  {recentJobsLoaded && candidateJobs.length === 0 && <p className="mt-2 text-[9px] text-[var(--color-text-secondary)]">比較できる別の保存済みOutcomeがありません。比較のために新しい分析は開始しません。</p>}
+                  {selectedComparisonJob && <p className="mt-2 text-[9px] leading-5 text-[var(--color-text-secondary)]">比較先: {recentOutcomeLabel(selectedComparisonJob)}</p>}
                 </div>
               )}
 
@@ -870,6 +920,7 @@ export function OutcomeSegmentationPanel({
               {!comparisonLoading && visibleComparisonData && (
                 <div className="mt-3 space-y-4">
                   <CompatibilitySummary response={visibleComparisonData} />
+                  <OverallComparisonTable response={visibleComparisonData} horizon={horizon} />
                   {comparisonView !== 'pair' ? (
                     <ComparisonTable response={visibleComparisonData} dimension={comparisonView === 'score' ? 'scoreBand' : stageDimension} horizon={horizon} metric={metric} />
                   ) : compareScale ? (

@@ -438,6 +438,7 @@ export function HistoricalScanWorkspace({ buildRequest }: Props) {
                     {selectedJob.requestedStartDate}〜{selectedJob.requestedEndDate}
                   </strong>
                   <span className="text-[10px] text-[var(--color-text-secondary)]">{selectedJob.timeframe === 'BIWEEKLY' ? '2週足' : '月足'} {selectedJob.request.ma1Period}/{selectedJob.request.ma2Period}</span>
+                  {selectedJob.request.spreadExpansionEnabled && <span className="rounded-[3px] bg-[var(--color-brand-50)] px-1.5 py-0.5 text-[9px] font-medium text-[var(--color-brand-800)]">MA間隔拡大</span>}
                 </div>
                 <div className="flex items-center gap-2">
                   {active && (
@@ -650,16 +651,21 @@ export function HistoricalScanWorkspace({ buildRequest }: Props) {
                 </div>
               </section>
 
-              <HistoricalOutcomeWorkspace
-                key={selectedJob.jobId}
-                historicalJob={selectedJob}
-                scanResult={result}
-              />
             </div>
           )}
         </div>
 
-        <aside aria-labelledby="recent-historical-scans" className="min-w-0 border-t border-[var(--color-border)] pt-3 xl:border-l xl:border-t-0 xl:pl-4 xl:pt-0">
+        {result && selectedJob && (
+          <div className="min-w-0 xl:col-span-2 xl:row-start-2">
+            <HistoricalOutcomeWorkspace
+              key={selectedJob.jobId}
+              historicalJob={selectedJob}
+              scanResult={result}
+            />
+          </div>
+        )}
+
+        <aside aria-labelledby="recent-historical-scans" className="min-w-0 border-t border-[var(--color-border)] pt-3 xl:col-start-2 xl:row-start-1 xl:border-l xl:border-t-0 xl:pl-4 xl:pt-0">
           <div className="flex items-center justify-between gap-2">
             <h3 id="recent-historical-scans" className="text-[11px] font-semibold text-[var(--color-text-primary)]">最近の期間検証</h3>
             <button type="button" disabled={jobsLoading} onClick={() => { setJobsLoading(true); void refreshJobs().catch((loadError) => setError(loadError instanceof Error ? loadError.message : '履歴を更新できませんでした。')).finally(() => setJobsLoading(false)) }} className="inline-flex h-7 w-7 items-center justify-center rounded-[3px] text-[var(--color-text-tertiary)] hover:bg-[var(--color-surface-muted)] disabled:opacity-40" aria-label="期間検証履歴を更新"><RotateCcw size={12} className={jobsLoading ? 'animate-spin' : ''} /></button>
@@ -677,7 +683,7 @@ export function HistoricalScanWorkspace({ buildRequest }: Props) {
                       <span className={`rounded-[3px] border px-1.5 py-0.5 text-[9px] font-medium ${jobExpired ? 'border-amber-200 bg-amber-50 text-amber-800' : JOB_STATUS_STYLES[job.status]}`}>{jobExpired ? '期限切れ' : JOB_STATUS_LABELS[job.status]}</span>
                     </div>
                     <div className="mt-1 truncate text-[10px] font-medium tabular-nums text-[var(--color-text-primary)]">{job.requestedStartDate}〜{job.requestedEndDate}</div>
-                    <div className="mt-0.5 text-[9px] text-[var(--color-text-secondary)]">{job.timeframe === 'BIWEEKLY' ? '2週足' : '月足'} · MA {job.request.ma1Period}/{job.request.ma2Period} · {job.progress.processedTradingDays}/{job.progress.totalTradingDays}日</div>
+                    <div className="mt-0.5 text-[9px] text-[var(--color-text-secondary)]">{job.timeframe === 'BIWEEKLY' ? '2週足' : '月足'} · MA {job.request.ma1Period}/{job.request.ma2Period}{job.request.spreadExpansionEnabled ? ' · 間隔拡大' : ''} · {job.progress.processedTradingDays}/{job.progress.totalTradingDays}日</div>
                   </button>
                 )
               })}

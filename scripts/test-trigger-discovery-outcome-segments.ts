@@ -2,9 +2,9 @@ import assert from 'node:assert/strict'
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { execGet, execRun } from '@/lib/db/client'
-import { historicalScanResultPaths } from '@/lib/server/trigger-discovery-historical-scan-jobs'
+import { historicalScanResultPaths, historicalScanResultSignature } from '@/lib/server/trigger-discovery-historical-scan-jobs'
 import { aggregateOutcomeRows } from '@/lib/server/trigger-discovery-outcome-analysis'
-import { outcomeResultPaths } from '@/lib/server/trigger-discovery-outcome-jobs'
+import { listRecentCompletedOutcomeJobs, outcomeResultPaths } from '@/lib/server/trigger-discovery-outcome-jobs'
 import {
   aggregateOutcomeSegmentsFromRows,
   compareOutcomeSegments,
@@ -125,6 +125,13 @@ function independentValue(item: TriggerOutcomeRow, dimension: TriggerOutcomeSegm
     if (score < 80) return 'MID_HIGH'
     return 'HIGH'
   }
+  if (dimension === 'spreadExpansion') {
+    if (item.snapshotBasis !== 'CURRENT' || !item.spreadDiagnosticDate
+      || item.spreadDiagnosticDate > item.eventDate || item.spreadExpansionAvailable !== true
+      || typeof item.bullishMaOrder !== 'boolean' || !Number.isFinite(item.maSpreadPct)
+      || !Number.isFinite(item.maSpreadSlope) || !Number.isFinite(item.maSpreadExpansionRatio)) return 'UNKNOWN'
+    return item.spreadExpansionPass === true ? 'PASS' : item.spreadExpansionPass === false ? 'FAIL' : 'UNKNOWN'
+  }
   const field = `${dimension.slice(6)}Stage` as keyof TriggerOutcomeRow
   const stage = item[field]
   return Number.isInteger(stage) && Number(stage) >= 1 && Number(stage) <= 6
@@ -173,7 +180,10 @@ function assertGroupsExact(
   }
 }
 
-function historicalManifest(timeframe: 'MONTHLY' | 'BIWEEKLY'): TriggerHistoricalScanResponse {
+function historicalManifest(
+  timeframe: 'MONTHLY' | 'BIWEEKLY',
+  spreadExpansionEnabled = false,
+): TriggerHistoricalScanResponse {
   return {
     contractVersion: 'trigger-discovery-historical-scan-v1',
     scanMeta: {
@@ -187,6 +197,10 @@ function historicalManifest(timeframe: 'MONTHLY' | 'BIWEEKLY'): TriggerHistorica
     },
     criteria: {
       maxApproachDistancePct: 5, nearDistancePct: 2,
+      spreadExpansionEnabled,
+      spreadLookbackIntervals: 4,
+      minExpansionRatio: 0.7,
+      requireBullishMaOrder: true,
       liquidityLookbackSessions: 20, maxPriceStalenessSessions: 3,
       markets: ['プライム'], priceMin: 100, priceMax: null,
       averageVolumeMin: 10_000, averageVolumeMax: null,
@@ -214,6 +228,7 @@ function historicalManifest(timeframe: 'MONTHLY' | 'BIWEEKLY'): TriggerHistorica
 async function writeCompletedFixture(input: {
   rows: TriggerOutcomeRow[]
   timeframe: 'MONTHLY' | 'BIWEEKLY'
+  spreadExpansionEnabled?: boolean
   eventFilter?: 'NEAR_ENTERED' | 'IN_ZONE_ENTERED'
 }): Promise<{ historicalId: string; outcomeId: string; rowsPath: string }> {
   const historicalId = randomUUID()
@@ -222,12 +237,15 @@ async function writeCompletedFixture(input: {
   await execRun(`INSERT INTO historical_trigger_scan_jobs (
     id,status,request_json,request_signature,source_fingerprint,requested_start,requested_end,
     resolved_start,resolved_end,timeframe,created_at,completed_at,result_location,result_size_bytes,expires_at
-  ) VALUES (?, 'COMPLETED', '{}', 'segment-source', 'segment-source', '2025-01-01', '2025-12-31',
+  ) VALUES (?, 'COMPLETED', '{}', ?, 'segment-source', '2025-01-01', '2025-12-31',
     '2025-01-06', '2025-12-30', ?, ?, ?, ?, 1, ?)`,
-  [historicalId, input.timeframe, now, now, historicalId, now + 86_400])
+  [historicalId, historicalScanResultSignature('{}'), input.timeframe, now, now, historicalId, now + 86_400])
   const historicalPaths = historicalScanResultPaths(historicalId)
   await mkdir(historicalPaths.manifest.slice(0, historicalPaths.manifest.lastIndexOf('/')), { recursive: true })
-  await writeFile(historicalPaths.manifest, JSON.stringify(historicalManifest(input.timeframe)))
+  await writeFile(historicalPaths.manifest, JSON.stringify(historicalManifest(
+    input.timeframe,
+    input.spreadExpansionEnabled,
+  )))
   await writeFile(historicalPaths.events, '')
   const request: TriggerOutcomeRequest = {
     historicalScanJobId: historicalId,
@@ -341,9 +359,26 @@ async function main(): Promise<void> {
   assert.equal(repeated?.uniqueTickerCount, 1)
 
   const rows = Array.from({ length: 85 }, (_, index) => row(index))
+  const spreadRows = rows.map((item, index) => ({
+    ...item,
+    snapshotBasis: index === 80 ? 'PREVIOUS' as const : 'CURRENT' as const,
+    spreadDiagnosticDate: index === 70 ? '2026-01-01' : index === 69 ? '2025-03-15' : item.eventDate,
+    spreadExpansionAvailable: index < 80,
+    spreadExpansionPass: index < 35,
+    bullishMaOrder: index < 35,
+    maSpreadPct: index < 35 ? 4.5 : -1.2,
+    maSpreadSlope: index < 35 ? 0.5 : -0.2,
+    maSpreadExpansionRatio: index < 35 ? 0.75 : 0.25,
+  }))
   const monthly = await writeCompletedFixture({ rows, timeframe: 'MONTHLY' })
+  const monthlyConditioned = await writeCompletedFixture({ rows: spreadRows, timeframe: 'MONTHLY' })
   const biweekly = await writeCompletedFixture({ rows, timeframe: 'BIWEEKLY' })
-  const cleanupIds = [monthly, biweekly]
+  const monthlySpread = await writeCompletedFixture({
+    rows,
+    timeframe: 'MONTHLY',
+    spreadExpansionEnabled: true,
+  })
+  const cleanupIds = [monthly, monthlyConditioned, biweekly, monthlySpread]
   const beforeHash = createHash('sha256').update(await readFile(monthly.rowsPath)).digest('hex')
 
   const scoreResult = await getOutcomeSegmentation({
@@ -361,6 +396,19 @@ async function main(): Promise<void> {
   assert.equal(scoreResult.integrity.eventCountMatchesOverall, true)
   assert.ok(Object.values(scoreResult.integrity.eligibleCountsMatchOverall).every(Boolean))
   assert.ok(Object.values(scoreResult.integrity.weightedMeanMatchesOverall).every(Boolean))
+
+  const oldSpread = await getOutcomeSegmentation({ outcomeJobId: monthly.outcomeId, dimensions: ['spreadExpansion'] })
+  assert.equal(oldSpread.meta.analysisType, 'CONDITIONED_EVENT_COMPARISON')
+  assert.equal(oldSpread.meta.spreadDiagnosticsStatus, 'SPREAD_DIAGNOSTICS_UNAVAILABLE')
+  assert.deepEqual(oldSpread.segmentation.groups.map((group) => group.eventCount), [0, 0, 85])
+  const conditioned = await getOutcomeSegmentation({ outcomeJobId: monthlyConditioned.outcomeId, dimensions: ['spreadExpansion'] })
+  assert.equal(conditioned.meta.spreadDiagnosticsStatus, 'AVAILABLE')
+  assert.deepEqual(conditioned.segmentation.groups.map((group) => group.eventCount), [35, 44, 6])
+  assertGroupsExact(spreadRows, ['spreadExpansion'], conditioned.segmentation.groups)
+  assert.equal(conditioned.integrity.eventCountMatchesOverall, true)
+  assert.ok(Object.values(conditioned.integrity.eligibleCountsMatchOverall).every(Boolean))
+  assert.ok(Object.values(conditioned.integrity.weightedMeanMatchesOverall).every(Boolean))
+  assert.equal(conditioned.meta.performance.ohlcvQueryCount, 0)
 
   for (const dimension of [
     'stage:dayA', 'stage:dayB', 'stage:weekA', 'stage:weekB', 'stage:monthA', 'stage:monthB',
@@ -397,6 +445,22 @@ async function main(): Promise<void> {
   assert.equal(comparison.compatibility.sameMaPeriods, false)
   assert.equal(comparison.left.meta.source.maPeriods.unit, 'MONTHLY_BARS')
   assert.equal(comparison.right.meta.source.maPeriods.unit, 'BIWEEKLY_BARS')
+  const recent = await listRecentCompletedOutcomeJobs()
+  assert.ok(recent.some((job) => job.jobId === monthly.outcomeId && job.timeframe === 'MONTHLY'))
+  assert.ok(recent.some((job) => job.jobId === biweekly.outcomeId && job.timeframe === 'BIWEEKLY'))
+  assert.ok(recent.every((job) => job.eventSelector === 'NEAR_ENTERED'))
+
+  const spreadComparison = await compareOutcomeSegments({
+    leftOutcomeJobId: monthly.outcomeId,
+    rightOutcomeJobId: monthlySpread.outcomeId,
+    dimensions: ['scoreBand'],
+  })
+  assert.deepEqual(spreadComparison.compatibility.differences, ['triggerFilters'])
+  assert.equal(spreadComparison.analysisType, 'OPERATIONAL_SCAN_COMPARISON')
+  assert.equal(spreadComparison.compatibility.samePopulationFilters, false)
+  assert.equal(spreadComparison.right.meta.source.filters.triggerCore.spreadExpansionEnabled, true)
+  assert.equal(spreadComparison.right.meta.source.filters.triggerCore.spreadLookbackIntervals, 4)
+  assert.equal(spreadComparison.right.meta.source.filters.triggerCore.minExpansionRatio, 0.7)
 
   const afterHash = createHash('sha256').update(await readFile(monthly.rowsPath)).digest('hex')
   assert.equal(afterHash, beforeHash, 'Segmentation must not mutate Outcome Result rows')
@@ -431,6 +495,15 @@ async function main(): Promise<void> {
 
   const missingHistorical = await writeCompletedFixture({ rows: rows.slice(0, 3), timeframe: 'MONTHLY' })
   cleanupIds.push(missingHistorical)
+  await execRun('UPDATE historical_trigger_scan_jobs SET request_signature=? WHERE id=?',
+    ['legacy-algorithm', missingHistorical.historicalId])
+  await assert.rejects(
+    () => getOutcomeSegmentation({ outcomeJobId: missingHistorical.outcomeId, dimensions: ['scoreBand'] }),
+    (error: unknown) => error instanceof TriggerOutcomeSegmentationSourceError
+      && error.code === 'historical_scan_source_metadata_expired',
+  )
+  await execRun('UPDATE historical_trigger_scan_jobs SET request_signature=? WHERE id=?',
+    [historicalScanResultSignature('{}'), missingHistorical.historicalId])
   await rm(historicalScanResultPaths(missingHistorical.historicalId).manifest, { force: true })
   await assert.rejects(
     () => getOutcomeSegmentation({ outcomeJobId: missingHistorical.outcomeId, dimensions: ['scoreBand'] }),
@@ -449,6 +522,8 @@ async function main(): Promise<void> {
     eventHashUnchanged: true,
     sideEffectsUnchanged: true,
     comparisonDifferences: comparison.compatibility.differences,
+    spreadComparisonDifferences: spreadComparison.compatibility.differences,
+    conditionedEventGroups: conditioned.segmentation.groups.map((group) => ({ bucket: group.keys.spreadExpansion, count: group.eventCount })),
   }, null, 2))
   await execRun('DELETE FROM trigger_outcome_analysis_jobs WHERE id=?', [queuedId])
   await cleanup(cleanupIds)

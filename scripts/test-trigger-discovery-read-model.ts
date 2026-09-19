@@ -206,6 +206,34 @@ async function main() {
     'saved MA observation requirement follows max configured lookback plus current observation',
   )
 
+  const spreadLookbackSource = new FixtureSource()
+  const spreadResult = await getTriggerDiscovery({
+    asOf: '2026-09-04',
+    triggerConfig: {
+      slopeLookbackSessions: 5,
+      approachLookbackSessions: 7,
+      spreadExpansionEnabled: true,
+      spreadLookbackIntervals: 10,
+      minExpansionRatio: 0.7,
+      requireBullishMaOrder: true,
+    },
+    limit: 500,
+  }, { dataSource: spreadLookbackSource })
+  equal(
+    spreadLookbackSource.fastRequiredObservations.join(','),
+    '11',
+    'Spread Expansion adds its interval lookback plus the current observation to the bulk MA requirement',
+  )
+  check(
+    spreadResult.rows.every((row) => row.spreadExpansionAvailable && row.maSpreadExpanding),
+    'Spread Expansion result fields are carried from the shared Engine into matched rows',
+  )
+  equal(
+    spreadResult.diagnostics.performance.queryCount,
+    4,
+    'Spread Expansion reuses the existing bulk MA and Stage queries without N+1 reads',
+  )
+
   const genericSource = new FixtureSource()
   const generic = await getTriggerDiscovery({
     asOf: '2026-09-04',

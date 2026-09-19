@@ -6,8 +6,8 @@ import type {
 } from '@/lib/trigger-discovery-contract'
 import type { TriggerDiscoveryTimeframe } from '@/lib/trigger-discovery-timeframe'
 
-const WIDTH = 164
-const HEIGHT = 62
+const WIDTH = 156
+const HEIGHT = 56
 const PAD_X = 3
 const PAD_Y = 5
 
@@ -75,11 +75,11 @@ export function TriggerMiniChart({
   ma2Period: number
 }) {
   if (loading) {
-    return <div className="h-[62px] w-[164px] animate-pulse rounded-[3px] bg-[var(--color-surface-muted)]" aria-label="Mini Chartを読み込み中" />
+    return <div className="h-[56px] w-[156px] animate-pulse rounded-[3px] bg-[var(--color-surface-muted)]" aria-label="Mini Chartを読み込み中" />
   }
   if (failed || !chart || chart.availability !== 'available' || chart.points.length < 2) {
     return (
-      <div className="flex h-[62px] w-[164px] items-center justify-center text-[10px] text-[var(--color-text-tertiary)]">
+      <div className="flex h-[56px] w-[156px] items-center justify-center text-[10px] text-[var(--color-text-tertiary)]">
         {chart?.availability === 'insufficient_history' ? '履歴不足' : '—'}
       </div>
     )
@@ -104,7 +104,7 @@ export function TriggerMiniChart({
   return (
     <svg
       viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
-      className="block h-[62px] w-[164px]"
+      className="block h-[56px] w-[156px]"
       role="img"
       aria-label={`${chart.ticker} ${timeframeLabel}。終値、${ma1Period}${periodUnit}移動平均、${ma2Period}${periodUnit}移動平均。最新 ${chart.latestPointDate ?? '不明'}`}
     >
@@ -112,10 +112,10 @@ export function TriggerMiniChart({
       {zonePolygons(chart.points, x, y).map((points, index) => (
         <polygon key={index} points={points} fill="var(--color-brand-100)" opacity="0.55" />
       ))}
-      {ma1Paths.map((path, index) => <path key={`ma1-${index}`} d={path} fill="none" stroke="#2563eb" strokeWidth="1.15" vectorEffect="non-scaling-stroke" />)}
-      {ma2Paths.map((path, index) => <path key={`ma2-${index}`} d={path} fill="none" stroke="#d97706" strokeWidth="1.15" vectorEffect="non-scaling-stroke" />)}
-      {closePaths.map((path, index) => <path key={`close-${index}`} d={path} fill="none" stroke="var(--color-text-primary)" strokeWidth="1.45" vectorEffect="non-scaling-stroke" />)}
-      <circle cx={x(chart.points.length - 1)} cy={y(latest.close)} r="1.8" fill="var(--color-text-primary)" />
+      {ma1Paths.map((path, index) => <path key={`ma1-${index}`} d={path} fill="none" stroke="#2563eb" strokeWidth="1.2" vectorEffect="non-scaling-stroke" />)}
+      {ma2Paths.map((path, index) => <path key={`ma2-${index}`} d={path} fill="none" stroke="#d97706" strokeWidth="1.2" vectorEffect="non-scaling-stroke" />)}
+      {closePaths.map((path, index) => <path key={`close-${index}`} d={path} fill="none" stroke="var(--color-text-primary)" strokeWidth="1.55" vectorEffect="non-scaling-stroke" />)}
+      <circle cx={x(chart.points.length - 1)} cy={y(latest.close)} r="1.9" fill="var(--color-text-primary)" />
     </svg>
   )
 }

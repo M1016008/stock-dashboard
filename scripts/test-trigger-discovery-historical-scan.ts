@@ -41,6 +41,12 @@ function fixture(status: 'APPROACHING' | 'NEAR' | 'IN_ZONE'): TriggerHistoricalS
     scoreBreakdown: calculated.scoreBreakdown,
     price: 100, ma1: 98, ma2: 96,
     zoneDistancePct: status === 'IN_ZONE' ? 0 : status === 'NEAR' ? 1 : 4,
+    maSpreadPct: 2.083333333333333,
+    maSpreadSlope: 0.4,
+    maSpreadExpansionRatio: 0.75,
+    spreadExpansionPass: true,
+    spreadExpansionAvailable: true,
+    bullishMaOrder: true,
     priceDate: '2026-01-01', maDate: '2026-01-01', stageDate: '2026-01-01',
     dayAStage: 1, dayBStage: 1, weekAStage: 1,
     weekBStage: 1, monthAStage: 1, monthBStage: 1,
@@ -121,6 +127,21 @@ function assertEventFixture(): void {
   })
   assert.deepEqual(eventTypes, ['STATUS_CHANGED', 'EXITED', 'RE_ENTRY'])
 
+  const diagnosticEvent = deriveHistoricalScanEvents({
+    date: '2026-01-02', previous: new Map(),
+    current: new Map([['TEST', fixture('NEAR')]]), seen: new Set(),
+  })[0]!
+  assert.equal(diagnosticEvent.spreadExpansionPass, true)
+  assert.equal(diagnosticEvent.spreadExpansionAvailable, true)
+  assert.equal(diagnosticEvent.maSpreadExpansionRatio, 0.75)
+  assert.equal(diagnosticEvent.spreadDiagnosticDate, '2026-01-01')
+  const exited = deriveHistoricalScanEvents({
+    date: '2026-01-03', previous: new Map([['TEST', fixture('NEAR')]]),
+    current: new Map(), seen: new Set(['TEST']),
+  })[0]!
+  assert.equal(exited.snapshotBasis, 'PREVIOUS')
+  assert.equal(exited.spreadDiagnosticDate, '2026-01-01')
+
   const introduced = new Map([['NEW', { ...fixture('APPROACHING'), ticker: 'NEW' }]])
   assert.deepEqual(
     deriveHistoricalScanEvents({
@@ -136,19 +157,34 @@ function assertEventFixture(): void {
 async function compareSingleDay(
   date: string,
   timeframe: 'MONTHLY' | 'BIWEEKLY',
+  spreadExpansionEnabled = false,
 ): Promise<{ matched: number; totalMs: number }> {
   let scanRows: TriggerDiscoveryRow[] = []
   const scan = await getTriggerHistoricalScan({
     requestedStartDate: date,
     requestedEndDate: date,
     timeframe,
-    criteria: { triggerConfig: { ma1Period: 20, ma2Period: 25 } },
+    criteria: { triggerConfig: {
+      ma1Period: 20,
+      ma2Period: 25,
+      spreadExpansionEnabled,
+      spreadLookbackIntervals: 4,
+      minExpansionRatio: 0.7,
+      requireBullishMaOrder: true,
+    } },
     eventOffset: 0,
     eventLimit: 100,
   }, { onDay: (_day, rows) => { scanRows = rows } })
   const single = await getTriggerDiscovery({
     asOf: date,
-    triggerConfig: { ma1Period: 20, ma2Period: 25 },
+    triggerConfig: {
+      ma1Period: 20,
+      ma2Period: 25,
+      spreadExpansionEnabled,
+      spreadLookbackIntervals: 4,
+      minExpansionRatio: 0.7,
+      requireBullishMaOrder: true,
+    },
     limit: 10_000,
   }, { timeframe })
   assert.equal(scan.scanMeta.resolvedStartDate, single.resolvedAsOf)
@@ -156,6 +192,66 @@ async function compareSingleDay(
   assert.equal(scan.summary.totalEventCount, 0, 'first scan day is a baseline')
   assertRowsEqual(scanRows, single.rows, `${timeframe} ${date}`)
   return { matched: scanRows.length, totalMs: scan.performance.totalMs }
+}
+
+async function compareSpreadPeriodWithSingleDays(): Promise<{
+  tradingDays: number
+  firstDate: string
+  lastDate: string
+}> {
+  const rowsByDate = new Map<string, TriggerDiscoveryRow[]>()
+  const triggerConfig = {
+    ma1Period: 20,
+    ma2Period: 25,
+    spreadExpansionEnabled: true,
+    spreadLookbackIntervals: 4,
+    minExpansionRatio: 0.7,
+    requireBullishMaOrder: true,
+  }
+  const scan = await getTriggerHistoricalScan({
+    requestedStartDate: '2026-08-03',
+    requestedEndDate: '2026-08-31',
+    timeframe: 'MONTHLY',
+    criteria: { triggerConfig },
+    eventOffset: 0,
+    eventLimit: 10,
+  }, { onDay: (date, rows) => { rowsByDate.set(date, rows) } })
+  const dates = scan.dailyCounts.map((day) => day.date)
+  assert.ok(dates.length >= 20, 'Spread parity audit requires at least 20 trading days')
+  for (const date of dates) {
+    const single = await getTriggerDiscovery({
+      asOf: date,
+      triggerConfig,
+      limit: 10_000,
+    }, { timeframe: 'MONTHLY' })
+    assert.equal(single.resolvedAsOf, date, `${date}: single-day Spread PIT resolution`)
+    assertRowsEqual(rowsByDate.get(date) ?? [], single.rows, `MONTHLY Spread period parity ${date}`)
+  }
+  return {
+    tradingDays: dates.length,
+    firstDate: dates[0],
+    lastDate: dates.at(-1)!,
+  }
+}
+
+async function compareSparseMonthlyHistory(): Promise<void> {
+  const rowsByDate = new Map<string, TriggerDiscoveryRow[]>()
+  const scan = await getTriggerHistoricalScan({
+    requestedStartDate: '2025-02-27',
+    requestedEndDate: '2025-03-04',
+    timeframe: 'MONTHLY',
+    criteria: { triggerConfig: { ma1Period: 20, ma2Period: 25 } },
+    eventOffset: 0,
+    eventLimit: 10,
+  }, { onDay: (date, rows) => { rowsByDate.set(date, rows) } })
+  for (const date of ['2025-02-28', '2025-03-03', '2025-03-04']) {
+    const single = await getTriggerDiscovery({ asOf: date, limit: 10_000 }, { timeframe: 'MONTHLY' })
+    assert.equal(scan.dailyCounts.find((day) => day.date === date)?.candidateCount, single.totalMatched)
+    assertRowsEqual(rowsByDate.get(date) ?? [], single.rows, `sparse monthly history ${date}`)
+  }
+  assert.ok(rowsByDate.get('2025-02-28')?.some((row) => row.ticker === '2523'))
+  assert.ok(rowsByDate.get('2025-02-28')?.some((row) => row.ticker === '1479'))
+  assert.ok(rowsByDate.get('2025-03-03')?.some((row) => row.ticker === '2560'))
 }
 
 async function main() {
@@ -195,6 +291,12 @@ async function main() {
 
   const monthly = await compareSingleDay('2026-08-25', 'MONTHLY')
   const biweekly = await compareSingleDay('2026-08-25', 'BIWEEKLY')
+  const monthlySpread = await compareSingleDay('2026-08-25', 'MONTHLY', true)
+  const biweeklySpread = await compareSingleDay('2026-08-25', 'BIWEEKLY', true)
+  await compareSparseMonthlyHistory()
+  const spreadPeriodParity = process.env.SPREAD_PERIOD_PARITY === '1'
+    ? await compareSpreadPeriodWithSingleDays()
+    : null
 
   const fiveDay = await getTriggerHistoricalScan({
     requestedStartDate: '2026-08-24',
@@ -264,7 +366,7 @@ async function main() {
 
   const after = await sideEffects()
   assert.deepEqual(after, before, 'Historical scan must remain read-only')
-  console.log(JSON.stringify({ monthly, biweekly, fiveDay: fiveDay.summary,
+  console.log(JSON.stringify({ monthly, biweekly, monthlySpread, biweeklySpread, spreadPeriodParity, fiveDay: fiveDay.summary,
     weekend: weekend.scanMeta, sideEffectsBefore: before, sideEffectsAfter: after }, null, 2))
   console.log('Trigger Discovery historical period scan tests passed')
 }

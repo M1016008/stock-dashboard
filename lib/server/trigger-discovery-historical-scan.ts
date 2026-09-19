@@ -27,6 +27,7 @@ import {
 import {
   DEFAULT_MA_ZONE_TRIGGER_CONFIG,
   evaluateMaZoneTrigger,
+  requiredMaZoneTriggerObservations,
   type MaZoneTriggerConfig,
   type MaZoneTriggerObservation,
 } from '@/lib/trigger-discovery-engine'
@@ -237,6 +238,7 @@ function buildMonthlyObservations(
   sourceByTicker: Map<string, OHLCV[]>,
   dailyStart: string,
   config: MaZoneTriggerConfig,
+  earlierDailyStarts: Map<string, string> = new Map(),
 ): Map<string, MaZoneTriggerObservation[]> {
   const result = new Map<string, MaZoneTriggerObservation[]>()
   for (const [ticker, rows] of sourceByTicker) {
@@ -245,7 +247,7 @@ function buildMonthlyObservations(
       [config.ma1Period, config.ma2Period],
       { adjustSplits: false },
     ).flatMap((point, barIndex) => {
-      if (point.date < dailyStart) return []
+      if (point.date < (earlierDailyStarts.get(ticker) ?? dailyStart)) return []
       const ma1 = point.values.get(config.ma1Period)
       const ma2 = point.values.get(config.ma2Period)
       return ma1 == null || ma2 == null
@@ -272,7 +274,7 @@ function groupStoredMonthlyRows(rows: StoredMonthlySqlRow[]): Map<string, MaZone
   return result
 }
 
-function buildBiweeklySeries(
+export function buildBiweeklySeries(
   rows: WeeklySqlRow[],
   config: MaZoneTriggerConfig,
 ): BiweeklyTickerSeries {
@@ -314,7 +316,7 @@ function buildBiweeklySeries(
   return { segments }
 }
 
-function currentBiweeklyObservations(
+export function currentBiweeklyObservations(
   prepared: BiweeklyTickerSeries | undefined,
   priceDate: string,
   price: number,
@@ -439,6 +441,12 @@ function historicalSnapshot(row: TriggerDiscoveryRow): TriggerHistoricalScanCand
     ma1: row.ma1Value,
     ma2: row.ma2Value,
     zoneDistancePct: row.zoneDistancePct,
+    maSpreadPct: row.maSpreadPct,
+    maSpreadSlope: row.maSpreadSlope,
+    maSpreadExpansionRatio: row.maSpreadExpansionRatio,
+    spreadExpansionPass: row.maSpreadExpanding,
+    spreadExpansionAvailable: row.spreadExpansionAvailable,
+    bullishMaOrder: row.bullishMaOrder,
     priceDate: row.priceDate,
     maDate: row.maDate,
     stageDate: row.stageDate,
@@ -480,6 +488,13 @@ export function deriveHistoricalScanEvents(input: {
     ma1: snapshot.ma1,
     ma2: snapshot.ma2,
     zoneDistancePct: snapshot.zoneDistancePct,
+    maSpreadPct: snapshot.maSpreadPct,
+    maSpreadSlope: snapshot.maSpreadSlope,
+    maSpreadExpansionRatio: snapshot.maSpreadExpansionRatio,
+    spreadExpansionPass: snapshot.spreadExpansionPass,
+    spreadExpansionAvailable: snapshot.spreadExpansionAvailable,
+    bullishMaOrder: snapshot.bullishMaOrder,
+    spreadDiagnosticDate: snapshot.maDate,
     triggerScore: snapshot.triggerScore,
     scoreBreakdown: snapshot.scoreBreakdown,
     priceDate: snapshot.priceDate,
@@ -540,6 +555,10 @@ function emptyResponse(input: {
     criteria: {
       maxApproachDistancePct: input.config.maxApproachDistancePct,
       nearDistancePct: input.config.nearDistancePct,
+      spreadExpansionEnabled: input.config.spreadExpansionEnabled,
+      spreadLookbackIntervals: input.config.spreadLookbackIntervals,
+      minExpansionRatio: input.config.minExpansionRatio,
+      requireBullishMaOrder: input.config.requireBullishMaOrder,
       liquidityLookbackSessions: input.criteria.liquidityLookbackSessions ?? 20,
       maxPriceStalenessSessions: input.criteria.maxPriceStalenessSessions ?? 3,
       markets: input.criteria.markets ?? null,
@@ -612,10 +631,7 @@ export async function getTriggerHistoricalScan(input: {
     ...DEFAULT_MA_ZONE_TRIGGER_CONFIG,
     ...input.criteria.triggerConfig,
   }
-  const requiredObservations = Math.max(
-    config.slopeLookbackSessions,
-    config.approachLookbackSessions,
-  ) + 1
+  const requiredObservations = requiredMaZoneTriggerObservations(config)
   const liquidityLookbackSessions = input.criteria.liquidityLookbackSessions ?? 20
   const maxPriceStalenessSessions = input.criteria.maxPriceStalenessSessions ?? 3
 
@@ -747,8 +763,47 @@ export async function getTriggerHistoricalScan(input: {
   let storedMonthlyObservations = new Map<string, MaZoneTriggerObservation[]>()
   let biweeklyByTicker = new Map<string, BiweeklyTickerSeries>()
   if (input.timeframe === 'MONTHLY') {
+    const earlierDailyStarts = new Map<string, string>()
+    const sparse = [...sourceByTicker.keys()].filter((ticker) => {
+      const daily = dailyByTicker.get(ticker)?.rows ?? []
+      return upperBound(daily, resolvedStartDate, (row) => row.date) < requiredObservations
+    })
+    for (let offset = 0; offset < sparse.length; offset += 250) {
+      const tickers = sparse.slice(offset, offset + 250)
+      queryStartedAt = performance.now()
+      const earlier = await execAll<DailySqlRow>(`
+        WITH requested(ticker) AS (VALUES ${tickers.map(() => '(?)').join(', ')}), ranked AS (
+          SELECT o.ticker, o.date, o.close, o.volume,
+                 ROW_NUMBER() OVER (PARTITION BY o.ticker ORDER BY o.date DESC) AS recent_rank
+          FROM ohlcv_daily AS o
+          INNER JOIN requested AS r ON r.ticker=o.ticker
+          WHERE o.date>=? AND o.date<?
+        )
+        SELECT ticker, date, close, volume, 0 AS is_full_daily
+        FROM ranked WHERE recent_rank<=?
+      `, [...tickers, historyStart, dailyStart, requiredObservations])
+      sqlMs.ohlcv += elapsedMs(queryStartedAt)
+      queryCount += 1
+      sourceOhlcvRows += earlier.length
+      const earlierByTicker = new Map<string, OHLCV[]>()
+      for (const row of earlier) {
+        const points = earlierByTicker.get(row.ticker) ?? []
+        points.push({
+          date: row.date, open: Number(row.close), high: Number(row.close),
+          low: Number(row.close), close: Number(row.close), volume: Number(row.volume),
+        })
+        earlierByTicker.set(row.ticker, points)
+      }
+      for (const [ticker, points] of earlierByTicker) {
+        const first = points.reduce((oldest, point) => point.date < oldest ? point.date : oldest, dailyStart)
+        earlierDailyStarts.set(ticker, first)
+        const byDate = new Map((sourceByTicker.get(ticker) ?? []).map((row) => [row.date, row]))
+        for (const point of points) byDate.set(point.date, point)
+        sourceByTicker.set(ticker, [...byDate.values()].sort((left, right) => left.date.localeCompare(right.date)))
+      }
+    }
     const maStartedAt = performance.now()
-    monthlyObservations = buildMonthlyObservations(sourceByTicker, dailyStart, config)
+    monthlyObservations = buildMonthlyObservations(sourceByTicker, dailyStart, config, earlierDailyStarts)
     maPreparationMs += elapsedMs(maStartedAt)
 
     queryStartedAt = performance.now()
@@ -941,6 +996,12 @@ export async function getTriggerHistoricalScan(input: {
         ma1SlopePct: trigger.ma1SlopePct ?? 0,
         ma2SlopePct: trigger.ma2SlopePct ?? 0,
         bothRising: trigger.bothRising,
+        maSpreadPct: trigger.maSpreadPct,
+        maSpreadSlope: trigger.maSpreadSlope,
+        maSpreadExpansionRatio: trigger.maSpreadExpansionRatio,
+        maSpreadExpanding: trigger.maSpreadExpanding,
+        bullishMaOrder: trigger.bullishMaOrder,
+        spreadExpansionAvailable: trigger.spreadExpansionAvailable,
         zoneUpper: trigger.snapshot.zoneUpper,
         zoneLower: trigger.snapshot.zoneLower,
         zoneDistancePct: trigger.snapshot.zoneDistancePct,
@@ -1108,6 +1169,10 @@ export async function getTriggerHistoricalScan(input: {
     criteria: {
       maxApproachDistancePct: config.maxApproachDistancePct,
       nearDistancePct: config.nearDistancePct,
+      spreadExpansionEnabled: config.spreadExpansionEnabled,
+      spreadLookbackIntervals: config.spreadLookbackIntervals,
+      minExpansionRatio: config.minExpansionRatio,
+      requireBullishMaOrder: config.requireBullishMaOrder,
       liquidityLookbackSessions,
       maxPriceStalenessSessions,
       markets: input.criteria.markets ?? null,

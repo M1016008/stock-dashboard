@@ -52,6 +52,14 @@ export interface TriggerOutcomeRow {
   currentStatus: TriggerStatus | null
   anchorPrice: number
   triggerScore: number
+  snapshotBasis?: 'CURRENT' | 'PREVIOUS'
+  spreadDiagnosticDate?: string | null
+  spreadExpansionPass?: boolean
+  spreadExpansionAvailable?: boolean
+  bullishMaOrder?: boolean
+  maSpreadPct?: number | null
+  maSpreadSlope?: number | null
+  maSpreadExpansionRatio?: number | null
   dayAStage: number | null
   dayBStage: number | null
   weekAStage: number | null
@@ -161,6 +169,25 @@ export interface TriggerOutcomeJobSummary {
   resultSizeBytes: number
   resultAvailable: boolean
   errorCategory: string | null
+}
+
+export interface TriggerOutcomeRecentJob {
+  jobId: string
+  historicalScanJobId: string
+  eventSelector: TriggerOutcomeEventSelector
+  timeframe: 'MONTHLY' | 'BIWEEKLY'
+  ma1Period: number
+  ma2Period: number
+  requestedStartDate: string
+  requestedEndDate: string
+  resolvedStartDate: string | null
+  resolvedEndDate: string | null
+  spreadExpansionEnabled: boolean
+  completedAt: string
+}
+
+export interface TriggerOutcomeRecentJobListResponse {
+  jobs: TriggerOutcomeRecentJob[]
 }
 
 export interface TriggerOutcomeJobStartResponse {

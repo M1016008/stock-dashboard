@@ -12,6 +12,7 @@ import {
 import {
   DEFAULT_MA_ZONE_TRIGGER_CONFIG,
   evaluateMaZoneTrigger,
+  requiredMaZoneTriggerObservations,
   validateMaZoneTriggerConfig,
   type MaTrend,
   type MaZoneTriggerConfig,
@@ -59,6 +60,7 @@ export type TriggerDiscoveryRejectionReason =
   | 'STALE_PRICE'
   | 'INSUFFICIENT_HISTORY'
   | 'MA_NOT_BOTH_RISING'
+  | 'MA_SPREAD_NOT_EXPANDING'
   | 'NOT_FROM_ABOVE'
   | 'NOT_APPROACHING'
   | 'TOO_FAR'
@@ -172,6 +174,12 @@ export interface TriggerDiscoveryRow {
   ma1SlopePct: number
   ma2SlopePct: number
   bothRising: boolean
+  maSpreadPct: number | null
+  maSpreadSlope: number | null
+  maSpreadExpansionRatio: number | null
+  maSpreadExpanding: boolean
+  bullishMaOrder: boolean
+  spreadExpansionAvailable: boolean
   zoneUpper: number
   zoneLower: number
   zoneDistancePct: number
@@ -480,6 +488,7 @@ function emptyRejected(): Record<TriggerDiscoveryRejectionReason, number> {
     STALE_PRICE: 0,
     INSUFFICIENT_HISTORY: 0,
     MA_NOT_BOTH_RISING: 0,
+    MA_SPREAD_NOT_EXPANDING: 0,
     NOT_FROM_ABOVE: 0,
     NOT_APPROACHING: 0,
     TOO_FAR: 0,
@@ -640,10 +649,15 @@ export function filterTriggerDiscoveryCandidates(input: {
   }
 }
 
-function rejectionForTrigger(result: ReturnType<typeof evaluateMaZoneTrigger>): TriggerDiscoveryRejectionReason {
+function rejectionForTrigger(
+  result: ReturnType<typeof evaluateMaZoneTrigger>,
+  spreadExpansionEnabled = false,
+): TriggerDiscoveryRejectionReason {
   if (result.availability !== 'available') return 'INSUFFICIENT_HISTORY'
   if (!result.bothRising) return 'MA_NOT_BOTH_RISING'
   if (!result.fromAbove) return 'NOT_FROM_ABOVE'
+  if (spreadExpansionEnabled && !result.spreadExpansionAvailable) return 'INSUFFICIENT_HISTORY'
+  if (spreadExpansionEnabled && !result.maSpreadExpanding) return 'MA_SPREAD_NOT_EXPANDING'
   if (result.approachDirection !== 'TOWARD_ZONE' && result.status !== 'IN_ZONE') return 'NOT_APPROACHING'
   return 'TOO_FAR'
 }
@@ -955,7 +969,8 @@ export function createTriggerDiscoverySqlDataSource(): TriggerDiscoveryDataSourc
           ORDER BY ticker, date, is_recent
         `, [historyStart, newestPriceDate, recentStart, newestPriceDate])
       }
-      const queryMs = elapsedMs(queryStartedAt)
+      let queryMs = elapsedMs(queryStartedAt)
+      let queryCount = 1
       const preparationStartedAt = performance.now()
       const grouped = new Map<string, { byDate: Map<string, OHLCV>; recentDates: Set<string> }>()
       for (const row of rows) {
@@ -972,6 +987,36 @@ export function createTriggerDiscoverySqlDataSource(): TriggerDiscoveryDataSourc
         })
         if (Number(row.is_recent) === 1) group.recentDates.add(row.date)
         grouped.set(row.ticker, group)
+      }
+      if (candidates.length > 200) {
+        const sparse = candidates.filter((candidate) =>
+          (grouped.get(candidate.ticker)?.recentDates.size ?? 0) < requiredObservations)
+        for (let offset = 0; offset < sparse.length; offset += 250) {
+          const cte = valuesCte(sparse.slice(offset, offset + 250))
+          const startedAt = performance.now()
+          const recent = await execAll<GenericMaSqlRow>(`
+            WITH candidates(ticker, price_date) AS (VALUES ${cte.sql}), ranked AS (
+              SELECT o.ticker, o.date, o.open, o.high, o.low, o.close, o.volume,
+                     ROW_NUMBER() OVER (PARTITION BY o.ticker ORDER BY o.date DESC) AS recent_rank
+              FROM ohlcv_daily AS o
+              INNER JOIN candidates AS c ON c.ticker=o.ticker AND o.date<=c.price_date
+              WHERE o.date>=?
+            )
+            SELECT ticker, date, open, high, low, close, volume, 1 AS is_recent
+            FROM ranked WHERE recent_rank<=?
+          `, [...cte.args, historyStart, requiredObservations])
+          queryMs += elapsedMs(startedAt)
+          queryCount += 1
+          for (const row of recent) {
+            const group = grouped.get(row.ticker) ?? { byDate: new Map<string, OHLCV>(), recentDates: new Set<string>() }
+            group.byDate.set(row.date, {
+              date: row.date, open: Number(row.open), high: Number(row.high),
+              low: Number(row.low), close: Number(row.close), volume: Number(row.volume),
+            })
+            group.recentDates.add(row.date)
+            grouped.set(row.ticker, group)
+          }
+        }
       }
       const value = new Map<string, MaZoneTriggerObservation[]>()
       for (const [ticker, group] of grouped) {
@@ -992,7 +1037,7 @@ export function createTriggerDiscoverySqlDataSource(): TriggerDiscoveryDataSourc
       }
       return {
         value,
-        queryCount: 1,
+        queryCount,
         queryMs,
         preparationMs: elapsedMs(preparationStartedAt),
       }
@@ -1262,10 +1307,7 @@ export async function getTriggerDiscovery(
   validateRange('averageVolume', averageVolumeMin, averageVolumeMax)
   validateRange('averageTradingValue', averageTradingValueMin, averageTradingValueMax)
 
-  const requiredObservations = Math.max(
-    triggerConfig.slopeLookbackSessions,
-    triggerConfig.approachLookbackSessions,
-  ) + 1
+  const requiredObservations = requiredMaZoneTriggerObservations(triggerConfig)
   const sessionLimit = Math.max(requiredObservations, liquidityLookbackSessions)
     + maxPriceStalenessSessions + 5
   const dataSource = options.dataSource ?? createTriggerDiscoverySqlDataSource()
@@ -1441,12 +1483,13 @@ export async function getTriggerDiscovery(
     })
     if (observeTickerSet.has(candidate.ticker)) {
       const snapshot = trigger.snapshot
-      const reason = rejectionForTrigger(trigger)
+      const reason = rejectionForTrigger(trigger, triggerConfig.spreadExpansionEnabled)
       lifecycleObservations.set(candidate.ticker, {
         ticker: candidate.ticker,
         disposition: trigger.availability !== 'available'
           ? 'DATA_UNAVAILABLE'
           : !trigger.bothRising || !trigger.fromAbove
+              || (triggerConfig.spreadExpansionEnabled && !trigger.maSpreadExpanding)
             ? 'CORE_CONDITION_EXIT'
             : trigger.matched
               ? 'FINAL_CANDIDATE'
@@ -1475,7 +1518,7 @@ export async function getTriggerDiscovery(
     if (!trigger.matched || !trigger.snapshot || !trigger.observationDate
       || !trigger.ma1Trend || !trigger.ma2Trend || !trigger.approachDirection
       || trigger.approachVelocityPctPointsPerSession == null) {
-      rejected[rejectionForTrigger(trigger)] += 1
+      rejected[rejectionForTrigger(trigger, triggerConfig.spreadExpansionEnabled)] += 1
       continue
     }
     matchedRows.push({
@@ -1503,6 +1546,12 @@ export async function getTriggerDiscovery(
       ma1SlopePct: trigger.ma1SlopePct ?? 0,
       ma2SlopePct: trigger.ma2SlopePct ?? 0,
       bothRising: trigger.bothRising,
+      maSpreadPct: trigger.maSpreadPct,
+      maSpreadSlope: trigger.maSpreadSlope,
+      maSpreadExpansionRatio: trigger.maSpreadExpansionRatio,
+      maSpreadExpanding: trigger.maSpreadExpanding,
+      bullishMaOrder: trigger.bullishMaOrder,
+      spreadExpansionAvailable: trigger.spreadExpansionAvailable,
       zoneUpper: trigger.snapshot.zoneUpper,
       zoneLower: trigger.snapshot.zoneLower,
       zoneDistancePct: trigger.snapshot.zoneDistancePct,

@@ -7,7 +7,8 @@ import os from 'node:os'
 import path from 'node:path'
 import type { Transaction } from '@libsql/client'
 import { client, ensureReady, execAll, execGet, execRun } from '@/lib/db/client'
-import { historicalScanResultPaths } from '@/lib/server/trigger-discovery-historical-scan-jobs'
+import { historicalScanResultPaths, isHistoricalScanJobResultCurrent } from '@/lib/server/trigger-discovery-historical-scan-jobs'
+import { recoverWorkerJobs } from '@/lib/server/trigger-historical-worker-ownership'
 import {
   aggregateOutcomeRows,
   calculateEventOutcome,
@@ -26,6 +27,7 @@ import {
   type TriggerOutcomeJobStartResponse,
   type TriggerOutcomeJobStatus,
   type TriggerOutcomeJobSummary,
+  type TriggerOutcomeRecentJob,
   type TriggerOutcomeManifest,
   type TriggerOutcomeRequest,
   type TriggerOutcomeResultResponse,
@@ -33,13 +35,13 @@ import {
 } from '@/lib/trigger-discovery-outcome-contract'
 import type {
   TriggerHistoricalScanEvent,
+  TriggerHistoricalScanRequest,
   TriggerHistoricalScanResponse,
 } from '@/lib/trigger-discovery-historical-scan-contract'
 
 const DEFAULT_JOB_TTL_DAYS = 7
 const DEFAULT_REUSE_SECONDS = 15 * 60
 const DEFAULT_STALE_SECONDS = 3 * 60
-const MAX_ATTEMPTS = 2
 const OHLCV_TICKER_BATCH_SIZE = 200
 const MAX_RESULT_PAGE_SIZE = 1_000
 const JOB_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
@@ -282,6 +284,9 @@ async function checkedHistoricalSource(id: string): Promise<{
   if (Number(row.expires_at) <= nowSeconds()) {
     throw new TriggerOutcomeSourceError('historical_scan_job_result_expired')
   }
+  if (!await isHistoricalScanJobResultCurrent(row.id)) {
+    throw new TriggerOutcomeSourceError('historical_scan_job_result_expired')
+  }
   const paths = historicalScanResultPaths(row.id)
   try {
     const [manifestJson, eventsStat] = await Promise.all([
@@ -346,7 +351,9 @@ async function filesAvailable(id: string): Promise<boolean> {
 
 async function jobSummary(row: TriggerOutcomeJobRow): Promise<TriggerOutcomeJobSummary> {
   const available = row.status === 'COMPLETED' && row.result_location === row.id
-    && Number(row.expires_at) > nowSeconds() && await filesAvailable(row.id)
+    && Number(row.expires_at) > nowSeconds()
+    && await isHistoricalScanJobResultCurrent(row.historical_scan_job_id)
+    && await filesAvailable(row.id)
   return {
     contractVersion: TRIGGER_DISCOVERY_OUTCOME_JOB_CONTRACT_VERSION,
     jobId: row.id,
@@ -435,6 +442,44 @@ export async function getOutcomeAnalysisJob(id: string): Promise<TriggerOutcomeJ
   return row ? jobSummary(row) : null
 }
 
+export async function listRecentCompletedOutcomeJobs(limit = 20): Promise<TriggerOutcomeRecentJob[]> {
+  await ensureReady()
+  const rows = await execAll<TriggerOutcomeJobRow & {
+    scan_request_json: string
+    timeframe: 'MONTHLY' | 'BIWEEKLY'
+    requested_start: string
+    requested_end: string
+    resolved_start: string | null
+    resolved_end: string | null
+  }>(`SELECT o.*, h.request_json AS scan_request_json, h.timeframe,
+      h.requested_start, h.requested_end, h.resolved_start, h.resolved_end
+    FROM trigger_outcome_analysis_jobs o
+    JOIN historical_trigger_scan_jobs h ON h.id = o.historical_scan_job_id
+    WHERE o.status = 'COMPLETED' AND o.result_location = o.id AND o.expires_at > unixepoch()
+      AND h.status = 'COMPLETED' AND h.expires_at > unixepoch()
+    ORDER BY o.completed_at DESC LIMIT ?`, [Math.max(1, Math.min(limit, 20))])
+  const available = await Promise.all(rows.map(async (row) => {
+    if (!await filesAvailable(row.id)) return null
+    const request = parseStoredRequest(row)
+    const scanRequest = JSON.parse(row.scan_request_json) as TriggerHistoricalScanRequest
+    return {
+      jobId: row.id,
+      historicalScanJobId: row.historical_scan_job_id,
+      eventSelector: request.eventFilter,
+      timeframe: row.timeframe,
+      ma1Period: scanRequest.ma1Period ?? 20,
+      ma2Period: scanRequest.ma2Period ?? 25,
+      requestedStartDate: row.requested_start,
+      requestedEndDate: row.requested_end,
+      resolvedStartDate: row.resolved_start,
+      resolvedEndDate: row.resolved_end,
+      spreadExpansionEnabled: Boolean(scanRequest.spreadExpansionEnabled),
+      completedAt: isoDateTime(Number(row.completed_at))!,
+    } satisfies TriggerOutcomeRecentJob
+  }))
+  return available.filter((job): job is TriggerOutcomeRecentJob => job !== null)
+}
+
 export async function cancelOutcomeAnalysisJob(id: string): Promise<TriggerOutcomeJobSummary | null> {
   if (!JOB_ID_PATTERN.test(id)) return null
   await ensureReady()
@@ -478,50 +523,19 @@ function staleSeconds(): number {
   return boundedIntegerEnv('TRIGGER_OUTCOME_STALE_SECONDS', DEFAULT_STALE_SECONDS, 30, 3_600)
 }
 
-export async function recoverStaleOutcomeJobs(now: () => number = Date.now): Promise<{
+export async function recoverStaleOutcomeJobs(
+  now: () => number = Date.now,
+  processAudit?: () => boolean | null,
+): Promise<{
   requeued: number
   failed: number
   cancelled: number
 }> {
-  const current = nowSeconds(now)
-  const cutoff = current - staleSeconds()
-  await ensureReady()
-  const tx = await beginWriteTransaction()
-  try {
-    const cancelled = await tx.execute({
-      sql: `UPDATE trigger_outcome_analysis_jobs SET status='CANCELLED', completed_at=?,
-        owner_token=NULL, heartbeat_at=?, error_category=NULL
-        WHERE status='CANCEL_REQUESTED' AND COALESCE(heartbeat_at, started_at, created_at)<=?`,
-      args: [current, current, cutoff],
-    })
-    const failed = await tx.execute({
-      sql: `UPDATE trigger_outcome_analysis_jobs SET status='FAILED', completed_at=?, owner_token=NULL,
-        heartbeat_at=?, error_category='worker_stale_after_retry'
-        WHERE status='RUNNING' AND COALESCE(heartbeat_at, started_at, created_at)<=? AND attempt_count>=?`,
-      args: [current, current, cutoff, MAX_ATTEMPTS],
-    })
-    const requeued = await tx.execute({
-      sql: `UPDATE trigger_outcome_analysis_jobs SET status='QUEUED', started_at=NULL, owner_token=NULL,
-        heartbeat_at=?, processed_events=0, processed_tickers=0, error_category='worker_recovered'
-        WHERE status='RUNNING' AND COALESCE(heartbeat_at, started_at, created_at)<=? AND attempt_count<?`,
-      args: [current, cutoff, MAX_ATTEMPTS],
-    })
-    await tx.commit()
-    return {
-      requeued: Number(requeued.rowsAffected),
-      failed: Number(failed.rowsAffected),
-      cancelled: Number(cancelled.rowsAffected),
-    }
-  } catch (error) {
-    await tx.rollback().catch(() => undefined)
-    throw error
-  } finally {
-    tx.close()
-  }
+  return recoverWorkerJobs('trigger_outcome_analysis_jobs', 'stale', now, staleSeconds(), processAudit)
 }
 
 export async function claimNextOutcomeJob(
-  ownerToken = randomUUID(),
+  ownerToken: string = randomUUID(),
   now: () => number = Date.now,
 ): Promise<TriggerOutcomeJobRow | null> {
   const current = nowSeconds(now)
@@ -637,11 +651,17 @@ function outcomeErrorCategory(error: unknown): string {
   return 'outcome_analysis_failed'
 }
 
-export async function executeOutcomeAnalysisJob(row: TriggerOutcomeJobRow): Promise<TriggerOutcomeJobStatus> {
+export async function executeOutcomeAnalysisJob(
+  row: TriggerOutcomeJobRow,
+  shutdownSignal?: AbortSignal,
+): Promise<TriggerOutcomeJobStatus> {
   if (row.status !== 'RUNNING' || !row.owner_token) throw new Error('outcome_job_not_claimed')
   const startedAt = performance.now()
   const ownerToken = row.owner_token
   const controller = new AbortController()
+  const onShutdown = () => controller.abort()
+  shutdownSignal?.addEventListener('abort', onShutdown, { once: true })
+  if (shutdownSignal?.aborted) controller.abort()
   const paths = outcomeResultPaths(row.id)
   await mkdir(outcomeResultRoot(), { recursive: true })
   await removeOutcomeFiles(row.id)
@@ -702,6 +722,7 @@ export async function executeOutcomeAnalysisJob(row: TriggerOutcomeJobRow): Prom
       const priceRows = await execAll<OutcomeOhlcvRow>(`SELECT ticker, date, high, low, close
         FROM ohlcv_daily WHERE ticker IN (${placeholders}) AND date>=? AND date<=?
         ORDER BY ticker, date`, [...tickerBatch, earliestEventDate, currentSource.analysisCutoffDate])
+      if (controller.signal.aborted) throw new DOMException('Worker stopping', 'AbortError')
       sqlMs += performance.now() - sqlStartedAt
       queryCount += 1
       ohlcvRowCount += priceRows.length
@@ -735,6 +756,7 @@ export async function executeOutcomeAnalysisJob(row: TriggerOutcomeJobRow): Prom
         processedTickers, totalTickers: tickers.length,
       })
     }
+    if (controller.signal.aborted) throw new DOMException('Worker stopping', 'AbortError')
     const completeOutcomes = outcomes.filter((outcome): outcome is TriggerOutcomeRow => Boolean(outcome))
     const aggregationStartedAt = performance.now()
     const summaries = aggregateOutcomeRows(completeOutcomes, request.horizons)
@@ -827,7 +849,7 @@ export async function executeOutcomeAnalysisJob(row: TriggerOutcomeJobRow): Prom
     }
     const resultSize = fileStats.reduce((sum, file) => sum + file.size, 0)
     const durationMs = performance.now() - startedAt
-    await client.execute({
+    const completed = await client.execute({
       sql: `UPDATE trigger_outcome_analysis_jobs SET status='COMPLETED', completed_at=unixepoch(),
         heartbeat_at=unixepoch(), owner_token=NULL, processed_events=?, total_events=?,
         processed_tickers=?, total_tickers=?, result_location=?, result_size_bytes=?, duration_ms=?,
@@ -837,9 +859,34 @@ export async function executeOutcomeAnalysisJob(row: TriggerOutcomeJobRow): Prom
         row.id, resultSize, durationMs, sqlMs, calculationMs, aggregationMs, serializationMs, saveMs,
         row.id, ownerToken],
     })
+    if (Number(completed.rowsAffected) !== 1) {
+      await removeOutcomeFiles(row.id)
+      await execRun(`UPDATE trigger_outcome_analysis_jobs SET status='CANCELLED',
+        completed_at=unixepoch(), heartbeat_at=unixepoch(), owner_token=NULL,
+        result_location=NULL, result_size_bytes=0, error_category=NULL
+        WHERE id=? AND owner_token=? AND status='CANCEL_REQUESTED'`, [row.id, ownerToken])
+      return 'CANCELLED'
+    }
     return 'COMPLETED'
   } catch (error) {
     await removeOutcomeFiles(row.id).catch(() => undefined)
+    if (shutdownSignal?.aborted) {
+      const cancelled = await client.execute({
+        sql: `UPDATE trigger_outcome_analysis_jobs SET status='CANCELLED',
+          completed_at=unixepoch(), heartbeat_at=unixepoch(), owner_token=NULL,
+          result_location=NULL, result_size_bytes=0, error_category=NULL
+          WHERE id=? AND owner_token=? AND status='CANCEL_REQUESTED'`,
+        args: [row.id, ownerToken],
+      })
+      if (Number(cancelled.rowsAffected) === 0) {
+        await execRun(`UPDATE trigger_outcome_analysis_jobs SET status='QUEUED', started_at=NULL,
+          heartbeat_at=unixepoch(), owner_token=NULL, processed_events=0, processed_tickers=0,
+          attempt_count=MAX(0,attempt_count-1),
+          result_location=NULL, result_size_bytes=0, error_category='worker_recovered'
+          WHERE id=? AND owner_token=? AND status='RUNNING'`, [row.id, ownerToken])
+      }
+      return Number(cancelled.rowsAffected) > 0 ? 'CANCELLED' : 'QUEUED'
+    }
     const cancelled = error instanceof DOMException && error.name === 'AbortError'
     await execRun(`UPDATE trigger_outcome_analysis_jobs SET status=?, completed_at=unixepoch(),
       heartbeat_at=unixepoch(), owner_token=NULL, result_location=NULL, result_size_bytes=0,
@@ -851,6 +898,8 @@ export async function executeOutcomeAnalysisJob(row: TriggerOutcomeJobRow): Prom
     ]).catch(() => undefined)
     if (!cancelled) throw error
     return 'CANCELLED'
+  } finally {
+    shutdownSignal?.removeEventListener('abort', onShutdown)
   }
 }
 
@@ -927,7 +976,8 @@ export async function getOutcomeAnalysisResult(input: {
   const row = await jobRow(input.id)
   if (!row) return null
   if (row.status !== 'COMPLETED') return 'NOT_READY'
-  if (Number(row.expires_at) <= nowSeconds()) return 'EXPIRED'
+  if (Number(row.expires_at) <= nowSeconds()
+    || !await isHistoricalScanJobResultCurrent(row.historical_scan_job_id)) return 'EXPIRED'
   const paths = outcomeResultPaths(row.id)
   try {
     const manifest = JSON.parse(

@@ -20,9 +20,9 @@ export function TriggerScoreCell({ triggerScore, scoreBreakdown }: Props) {
       <button
         type="button"
         aria-label={ariaLabel}
-        className="inline-flex min-w-[50px] items-baseline justify-center rounded-[3px] border border-[var(--color-border)] bg-[var(--color-surface-subtle)] px-1.5 py-1 text-center text-[13px] font-semibold tabular-nums text-[var(--color-text-primary)] outline-none hover:border-[var(--color-brand-300)] focus-visible:ring-2 focus-visible:ring-[var(--color-brand-200)]"
+        className="inline-flex min-w-[50px] items-baseline justify-center rounded-[3px] border border-transparent bg-transparent px-1.5 py-0.5 text-center text-[13px] font-semibold tabular-nums text-[var(--color-text-primary)] outline-none hover:border-[var(--color-border-soft)] hover:bg-[var(--color-surface-subtle)] focus-visible:ring-2 focus-visible:ring-[var(--color-brand-200)]"
       >
-        {Math.round(triggerScore)}<span className="ml-0.5 text-[8px] font-normal text-[var(--color-text-tertiary)]">/100</span>
+        {Math.round(triggerScore)}<span className="ml-0.5 text-[9px] font-normal text-[var(--color-text-tertiary)]">/100</span>
       </button>
       <div role="tooltip" className="pointer-events-none invisible absolute left-0 top-full z-40 mt-1 w-[250px] rounded-[4px] border border-[var(--color-border)] bg-white p-3 text-left opacity-0 shadow-lg transition group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100">
         <div className="flex items-baseline justify-between border-b border-[var(--color-border-soft)] pb-2">

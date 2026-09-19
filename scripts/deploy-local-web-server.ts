@@ -106,6 +106,7 @@ runNpm('test:us-automation-foundation')
 runNpm('test:physical-plan')
 runNpm('test:timeframes')
 runNpm('test:trigger-discovery-outcomes')
+runNpm('test:trigger-worker-recovery')
 runNpm('build', {
   ...process.env,
   NEXT_DIST_DIR: stageName,

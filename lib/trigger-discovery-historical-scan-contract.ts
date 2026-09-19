@@ -36,6 +36,12 @@ export interface TriggerHistoricalScanCandidateSnapshot {
   ma1: number
   ma2: number
   zoneDistancePct: number
+  maSpreadPct?: number | null
+  maSpreadSlope?: number | null
+  maSpreadExpansionRatio?: number | null
+  spreadExpansionPass?: boolean
+  spreadExpansionAvailable?: boolean
+  bullishMaOrder?: boolean
   priceDate: string
   maDate: string
   stageDate: string | null
@@ -59,6 +65,13 @@ export interface TriggerHistoricalScanEvent {
   ma1: number
   ma2: number
   zoneDistancePct: number
+  maSpreadPct?: number | null
+  maSpreadSlope?: number | null
+  maSpreadExpansionRatio?: number | null
+  spreadExpansionPass?: boolean
+  spreadExpansionAvailable?: boolean
+  bullishMaOrder?: boolean
+  spreadDiagnosticDate?: string | null
   triggerScore: number
   scoreBreakdown: TriggerScoreBreakdown
   priceDate: string
@@ -134,6 +147,10 @@ export interface TriggerHistoricalScanResponse {
   criteria: {
     maxApproachDistancePct: number
     nearDistancePct: number
+    spreadExpansionEnabled?: boolean
+    spreadLookbackIntervals?: number
+    minExpansionRatio?: number
+    requireBullishMaOrder?: boolean
     liquidityLookbackSessions: number
     maxPriceStalenessSessions: number
     markets: Array<string | null> | null

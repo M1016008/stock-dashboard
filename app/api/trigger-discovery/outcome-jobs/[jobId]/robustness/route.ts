@@ -24,6 +24,8 @@ export async function GET(request: Request, context: RouteContext) {
     const result = await getOutcomeRobustness({
       outcomeJobId: (await context.params).jobId,
       dimensions: parseOutcomeRobustnessUrl(request.url),
+      episodeOffset: Number(new URL(request.url).searchParams.get('episodeOffset') ?? 0),
+      episodeLimit: Number(new URL(request.url).searchParams.get('episodeLimit') ?? 0),
     })
     return NextResponse.json(result, {
       headers: { 'Cache-Control': 'private, no-store, max-age=0' },
@@ -33,7 +35,11 @@ export async function GET(request: Request, context: RouteContext) {
       return NextResponse.json({ error: 'invalid_request', message: error.message }, { status: 400 })
     }
     if (error instanceof TriggerOutcomeSegmentationSourceError) {
-      return NextResponse.json({ error: error.code }, { status: sourceStatus(error) })
+      return NextResponse.json({
+        error: error.code === 'historical_scan_event_artifact_expired'
+          || error.code === 'historical_scan_source_metadata_expired'
+          ? 'EPISODE_SOURCE_EXPIRED' : error.code,
+      }, { status: sourceStatus(error) })
     }
     console.error('[trigger-discovery/outcome-robustness:get]', error)
     return NextResponse.json({ error: 'outcome_robustness_unavailable' }, { status: 500 })

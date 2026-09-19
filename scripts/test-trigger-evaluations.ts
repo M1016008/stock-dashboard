@@ -36,7 +36,10 @@ function sampleRow(ma2Period = 25): TriggerDiscoveryRow {
     liquidityLookbackSessions: 20, liquidityObservationCount: 20, liquidityComplete: true,
     ma1Period: 20, ma2Period, ma1Value: 5000, ma2Value: 4900,
     ma1Trend: 'RISING', ma2Trend: 'RISING', ma1SlopePct: 0.8, ma2SlopePct: 0.5,
-    bothRising: true, zoneUpper: 5000, zoneLower: 4900,
+    bothRising: true, maSpreadPct: 2.041, maSpreadSlope: 0.2,
+    maSpreadExpansionRatio: 0.75, maSpreadExpanding: true,
+    bullishMaOrder: true, spreadExpansionAvailable: true,
+    zoneUpper: 5000, zoneLower: 4900,
     zoneDistancePct: 2, ma1DistancePct: 2, ma2DistancePct: 4.081,
     fromAbove: true, approachDirection: 'TOWARD_ZONE',
     approachVelocityPctPointsPerSession: 0.2, triggerStatus: 'NEAR', matched: true,
@@ -65,7 +68,7 @@ function sampleResult(ma2Period = 25): TriggerDiscoveryResult {
     totalTriggerMatched: 2, totalMatched: 1, rows: [row], limit: 10_000, offset: 0, hasMore: false,
     diagnostics: {
       counts: { universe: 4200, afterMarket: 4200, afterStalePrice: 4190, currentPrice: 4180, staleAccepted: 10, afterPrice: 4190, afterVolume: 4190, afterTradingValue: 4190, evaluated: 4190, matched: 2, afterStageFilter: 1, stageRows: 1, stageComplete: 1, stageIncomplete: 0 },
-      rejected: { PIT_UNIVERSE: 0, MARKET_FILTER: 0, PRICE_FILTER: 0, VOLUME_FILTER: 0, TRADING_VALUE_FILTER: 0, STALE_PRICE: 10, INSUFFICIENT_HISTORY: 0, MA_NOT_BOTH_RISING: 0, NOT_FROM_ABOVE: 0, NOT_APPROACHING: 0, TOO_FAR: 4188 },
+      rejected: { PIT_UNIVERSE: 0, MARKET_FILTER: 0, PRICE_FILTER: 0, VOLUME_FILTER: 0, TRADING_VALUE_FILTER: 0, STALE_PRICE: 10, INSUFFICIENT_HISTORY: 0, MA_NOT_BOTH_RISING: 0, MA_SPREAD_NOT_EXPANDING: 0, NOT_FROM_ABOVE: 0, NOT_APPROACHING: 0, TOO_FAR: 4188 },
       performance: { queryCount: 4, dbQueryMs: 10, maPreparationMs: 1, engineEvaluationMs: 2, stageJoinMs: 1, scoreCalculationMs: 0.2, totalMs: 14, fastPathEvaluated: 4190, genericPathEvaluated: 0 },
     },
   }

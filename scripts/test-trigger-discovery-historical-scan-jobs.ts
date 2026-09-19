@@ -229,6 +229,24 @@ async function main() {
   const cancelledQueued = await cancelHistoricalScanJob(first.jobId)
   assert.equal(cancelledQueued?.status, 'CANCELLED')
 
+  const spreadJob = await createHistoricalScanJob({
+    startDate: '2999-01-01',
+    endDate: '2999-01-10',
+    timeframe: 'MONTHLY',
+    ma1Period: 20,
+    ma2Period: 25,
+    spreadExpansionEnabled: true,
+    spreadLookbackIntervals: 4,
+    minExpansionRatio: 0.7,
+    requireBullishMaOrder: true,
+  })
+  assert.notEqual(spreadJob.jobId, first.jobId, 'Spread ON must have a distinct Historical Job signature')
+  const storedSpreadJob = await getHistoricalScanJob(spreadJob.jobId)
+  assert.equal(storedSpreadJob?.request.spreadExpansionEnabled, true)
+  assert.equal(storedSpreadJob?.request.spreadLookbackIntervals, 4)
+  assert.equal(storedSpreadJob?.request.minExpansionRatio, 0.7)
+  assert.equal(await cancelHistoricalScanJob(spreadJob.jobId).then((job) => job?.status), 'CANCELLED')
+
   const completedStart = await createHistoricalScanJob({
     startDate: '2999-02-01', endDate: '2999-02-10', timeframe: 'MONTHLY', ma1Period: 20, ma2Period: 25,
   })
@@ -387,6 +405,18 @@ async function main() {
   assert.equal(reusedCompleted.jobId, completedStart.jobId)
   assert.equal(reusedCompleted.status, 'COMPLETED')
 
+  const signatureRow = await execGet<{ request_signature: string }>(
+    'SELECT request_signature FROM historical_trigger_scan_jobs WHERE id=?', [completedStart.jobId],
+  )
+  assert.ok(signatureRow)
+  await execRun('UPDATE historical_trigger_scan_jobs SET request_signature=? WHERE id=?',
+    ['legacy-algorithm', completedStart.jobId])
+  assert.equal((await getHistoricalScanJob(completedStart.jobId))?.resultAvailable, false)
+  assert.equal(await getHistoricalScanJobResult({ id: completedStart.jobId, eventOffset: 0, eventLimit: 10 }), 'EXPIRED')
+  await execRun('UPDATE historical_trigger_scan_jobs SET request_signature=? WHERE id=?',
+    [signatureRow.request_signature, completedStart.jobId])
+  assert.equal((await getHistoricalScanJob(completedStart.jobId))?.resultAvailable, true)
+
   await execRun('UPDATE historical_trigger_scan_jobs SET expires_at=1 WHERE id=?', [completedStart.jobId])
   assert.equal(
     await getHistoricalScanJobResult({ id: completedStart.jobId, eventOffset: 0, eventLimit: 100 }),
@@ -428,13 +458,13 @@ async function main() {
   const staleClaim = await claimNextHistoricalScanJob('55555555-5555-4555-8555-555555555555')
   assert.equal(staleClaim?.id, staleStart.jobId)
   await execRun(`UPDATE historical_trigger_scan_jobs SET heartbeat_at=1 WHERE id=?`, [staleStart.jobId])
-  const recovery = await recoverStaleHistoricalScanJobs(() => Date.now() + 10 * 60_000)
+  const recovery = await recoverStaleHistoricalScanJobs(() => Date.now() + 10 * 60_000, () => false)
   assert.equal(recovery.requeued, 1)
   assert.equal((await getHistoricalScanJob(staleStart.jobId))?.status, 'QUEUED')
   await execRun(`UPDATE historical_trigger_scan_jobs SET
     status='RUNNING', owner_token='stale-owner', heartbeat_at=1, attempt_count=2
     WHERE id=?`, [staleStart.jobId])
-  const exhaustedRecovery = await recoverStaleHistoricalScanJobs(() => Date.now() + 20 * 60_000)
+  const exhaustedRecovery = await recoverStaleHistoricalScanJobs(() => Date.now() + 20 * 60_000, () => false)
   assert.equal(exhaustedRecovery.failed, 1)
   assert.equal((await getHistoricalScanJob(staleStart.jobId))?.status, 'FAILED')
 
