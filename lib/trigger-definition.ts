@@ -41,6 +41,8 @@ export interface SavedTriggerEvaluationConfig {
     spreadLookbackIntervals: number
     minExpansionRatio: number
     requireBullishMaOrder: boolean
+    belowZoneToleranceEnabled: boolean
+    maxBelowZonePct: number
   }
   universe: {
     markets: Array<string | null>
@@ -62,6 +64,7 @@ export interface SavedTriggerViewConfig {
     direction: TriggerDiscoverySortDirection
   } | null
   pageSize: (typeof SAVED_TRIGGER_PAGE_SIZES)[number]
+  statusFilter?: TriggerDiscoverySearchRequest['statusFilter']
 }
 
 export interface SavedTriggerDefinition {
@@ -238,6 +241,15 @@ export function canonicalizeSavedTriggerEvaluationConfig(
       'requireBullishMaOrder',
       DEFAULT_MA_ZONE_TRIGGER_CONFIG.requireBullishMaOrder,
     ),
+    belowZoneToleranceEnabled: optionalBoolean(
+      core.belowZoneToleranceEnabled,
+      'belowZoneToleranceEnabled',
+      DEFAULT_MA_ZONE_TRIGGER_CONFIG.belowZoneToleranceEnabled,
+    ),
+    maxBelowZonePct: finiteNumber(
+      core.maxBelowZonePct ?? DEFAULT_MA_ZONE_TRIGGER_CONFIG.maxBelowZonePct,
+      'maxBelowZonePct',
+    ),
   }
   try {
     validateMaZoneTriggerConfig({
@@ -288,7 +300,15 @@ export function canonicalizeSavedTriggerViewConfig(value: unknown): SavedTrigger
       direction: sortSource.direction,
     }
   }
-  return { sort, pageSize: pageSize as SavedTriggerViewConfig['pageSize'] }
+  const statusFilter = source.statusFilter ?? null
+  if (statusFilter !== null && statusFilter !== 'APPROACHING' && statusFilter !== 'NEAR'
+    && statusFilter !== 'IN_ZONE' && statusFilter !== 'BELOW_ZONE') {
+    throw new SavedTriggerValidationError('statusFilter must be APPROACHING, NEAR, IN_ZONE or BELOW_ZONE')
+  }
+  return {
+    sort, pageSize: pageSize as SavedTriggerViewConfig['pageSize'],
+    ...(statusFilter ? { statusFilter: statusFilter as SavedTriggerViewConfig['statusFilter'] } : {}),
+  }
 }
 
 export function savedTriggerConfigsFromSearchRequest(request: TriggerDiscoverySearchRequest): {
@@ -316,6 +336,10 @@ export function savedTriggerConfigsFromSearchRequest(request: TriggerDiscoverySe
           ?? DEFAULT_MA_ZONE_TRIGGER_CONFIG.minExpansionRatio,
         requireBullishMaOrder: request.requireBullishMaOrder
           ?? DEFAULT_MA_ZONE_TRIGGER_CONFIG.requireBullishMaOrder,
+        belowZoneToleranceEnabled: request.belowZoneToleranceEnabled
+          ?? DEFAULT_MA_ZONE_TRIGGER_CONFIG.belowZoneToleranceEnabled,
+        maxBelowZonePct: request.maxBelowZonePct
+          ?? DEFAULT_MA_ZONE_TRIGGER_CONFIG.maxBelowZonePct,
       },
       universe: {
         markets: request.markets ?? [],
@@ -333,6 +357,7 @@ export function savedTriggerConfigsFromSearchRequest(request: TriggerDiscoverySe
     viewConfig: canonicalizeSavedTriggerViewConfig({
       sort: request.sort ?? null,
       pageSize: request.pageSize ?? 50,
+      statusFilter: request.statusFilter ?? null,
     }),
   }
 }
@@ -356,6 +381,8 @@ export function searchRequestFromSavedTrigger(
     spreadLookbackIntervals: triggerCore.spreadLookbackIntervals,
     minExpansionRatio: triggerCore.minExpansionRatio,
     requireBullishMaOrder: triggerCore.requireBullishMaOrder,
+    belowZoneToleranceEnabled: triggerCore.belowZoneToleranceEnabled,
+    maxBelowZonePct: triggerCore.maxBelowZonePct,
     markets: universe.markets.length ? universe.markets : undefined,
     priceMin: universe.priceMin,
     priceMax: universe.priceMax,
@@ -369,6 +396,7 @@ export function searchRequestFromSavedTrigger(
     sort: definition.viewConfig.sort,
     page: 1,
     pageSize: definition.viewConfig.pageSize,
+    statusFilter: definition.viewConfig.statusFilter,
   }
 }
 

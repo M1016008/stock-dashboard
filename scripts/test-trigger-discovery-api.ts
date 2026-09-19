@@ -26,7 +26,17 @@ assert.deepEqual(defaults.input.triggerConfig, {
   spreadLookbackIntervals: 4,
   minExpansionRatio: 0.7,
   requireBullishMaOrder: true,
+  belowZoneToleranceEnabled: false,
+  maxBelowZonePct: 3,
 })
+assert.equal(parses({ belowZoneToleranceEnabled: true, maxBelowZonePct: 3 }).input.triggerConfig?.belowZoneToleranceEnabled, true)
+assert.equal(parses({ statusFilter: 'BELOW_ZONE' }).request.statusFilter, 'BELOW_ZONE')
+assert.equal(triggerDiscoveryBaseSearchKey(defaults.input, defaults.timeframe),
+  triggerDiscoveryBaseSearchKey(parses({ statusFilter: 'BELOW_ZONE' }).input, defaults.timeframe),
+  'view filter must reuse the same base evaluation')
+assert.notEqual(triggerDiscoveryBaseSearchKey(defaults.input, defaults.timeframe),
+  triggerDiscoveryBaseSearchKey(parses({ belowZoneToleranceEnabled: true }).input, defaults.timeframe),
+  'Below tolerance ON must have a distinct evaluation key')
 assert.equal(parses({ spreadExpansionEnabled: true }).input.triggerConfig?.spreadExpansionEnabled, true)
 assert.notEqual(
   triggerDiscoveryBaseSearchKey(defaults.input, defaults.timeframe),
@@ -80,6 +90,8 @@ for (const invalid of [
   { spreadLookbackIntervals: 1 },
   { spreadLookbackIntervals: 25 },
   { minExpansionRatio: 1.01 },
+  { maxBelowZonePct: 0 },
+  { maxBelowZonePct: 20.01 },
 ]) {
   assert.throws(() => parses(invalid), TriggerConfigError)
 }
@@ -97,6 +109,8 @@ for (const invalid of [
   { stageFilters: { dayAStage: [0] } },
   { spreadExpansionEnabled: 'true' },
   { requireBullishMaOrder: 1 },
+  { belowZoneToleranceEnabled: 'true' },
+  { statusFilter: 'UNKNOWN' },
 ]) {
   assert.throws(() => parseTriggerDiscoverySearchRequest({ requestedAsOf: '2026-09-06', ...invalid }), TriggerDiscoveryInputError)
 }

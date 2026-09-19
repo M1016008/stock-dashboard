@@ -21,6 +21,8 @@ export interface TriggerDiscoveryNavigationDraft {
   spreadLookbackIntervals: string
   minExpansionRatioPct: string
   requireBullishMaOrder: boolean
+  belowZoneToleranceEnabled?: boolean
+  maxBelowZonePct?: string
   priceMin: string
   priceMax: string
   averageVolumeMin: string

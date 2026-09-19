@@ -82,6 +82,7 @@ export function parseTriggerHistoricalScanRequest(value: unknown): {
     sort: _sort,
     page: _page,
     pageSize: _pageSize,
+    statusFilter: _statusFilter,
     ...sharedRequest
   } = parsed.request
   const request: TriggerHistoricalScanRequest = {

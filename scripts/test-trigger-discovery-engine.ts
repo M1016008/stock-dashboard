@@ -223,6 +223,53 @@ const belowZone = evaluate(observations({ prices: [112, 108, 104, 98, 93] }))
 assert.equal(belowZone.status, 'BELOW_ZONE')
 assert.equal(belowZone.matched, false)
 
+const overshootRows = observations({
+  prices: [125, 124, 123, 122, 98],
+  ma1: [100, 102, 104, 106, 108],
+  ma2: [96, 97, 98, 99, 100],
+})
+const overshoot = (price: number, overrides: Partial<MaZoneTriggerConfig> = {}) => evaluate(
+  overshootRows.map((row, index) => index === 4 ? { ...row, price } : row),
+  { belowZoneToleranceEnabled: true, maxBelowZonePct: 3, ...overrides },
+)
+assert.equal(overshoot(98).fromAbove, true)
+assert.equal(overshoot(98).bothRising, true)
+assert.equal(overshoot(98).status, 'BELOW_ZONE')
+assert.equal(overshoot(98).snapshot?.zoneDistancePct, -2)
+assert.equal(overshoot(98).matched, true)
+const crossedThroughZone = evaluate(observations({
+  prices: [125, 120, 110, 104, 98],
+  ma1: [100, 102, 104, 106, 108],
+  ma2: [96, 97, 98, 99, 100],
+}), { belowZoneToleranceEnabled: true, maxBelowZonePct: 3 })
+assert.equal(crossedThroughZone.status, 'BELOW_ZONE')
+assert.equal(crossedThroughZone.fromAbove, true)
+assert.equal(crossedThroughZone.matched, true, 'passing through the Zone before a small overshoot remains eligible')
+assert.equal(overshoot(98, { belowZoneToleranceEnabled: false }).matched, false)
+assert.deepEqual(overshoot(98, { belowZoneToleranceEnabled: false }),
+  evaluate(overshootRows), 'explicit OFF and missing field must be identical')
+for (const price of [99, 97.001, 97]) assert.equal(overshoot(price).matched, true, `${price} within 3%`)
+for (const price of [96.999, 93, 90, 80]) assert.equal(overshoot(price).matched, false, `${price} outside 3%`)
+assert.equal(overshoot(100).status, 'IN_ZONE')
+assert.equal(overshoot(100).matched, true)
+assert.equal(overshoot(98, { maxBelowZonePct: 1 }).matched, false)
+assert.equal(overshoot(98, { maxBelowZonePct: 2 }).matched, true)
+assert.equal(overshoot(98, { maxBelowZonePct: 5 }).matched, true)
+assert.equal(overshoot(98, { spreadExpansionEnabled: true }).matched, true, 'Spread ON + Below ON')
+assert.equal(overshoot(98, { spreadExpansionEnabled: true, belowZoneToleranceEnabled: false }).matched, false)
+assert.equal(overshoot(98, { spreadExpansionEnabled: true, minExpansionRatio: 1, requireBullishMaOrder: true }).maSpreadExpanding, true)
+assert.equal(overshoot(98, { spreadExpansionEnabled: true, minExpansionRatio: 1 }).matched, true)
+assert.equal(overshoot(98, { slopeTolerancePct: 100 }).matched, false, 'both MA rising is still required')
+assert.equal(evaluate(observations({ prices: [90, 91, 92, 93, 98], ma1: [104, 105, 106, 107, 108],
+  ma2: [96, 97, 98, 99, 100] }), { belowZoneToleranceEnabled: true }).matched, false,
+  'rising into Zone from below is never an approach from above')
+const pitOvershoot = evaluateMaZoneTrigger({
+  observations: [...overshootRows, { date: '2026-12-31', price: 999, ma1: 999, ma2: 900 }],
+  asOf: overshootRows.at(-1)!.date,
+  config: { ...config, belowZoneToleranceEnabled: true, maxBelowZonePct: 3 },
+})
+assert.deepEqual(pitOvershoot, overshoot(98), 'future observations must not alter the historical match')
+
 const insufficient = evaluate(observations({ prices: [110, 108, 106] }))
 assert.equal(insufficient.availability, 'insufficient_history')
 assert.equal(insufficient.status, 'NOT_MATCHED')
@@ -239,6 +286,9 @@ assert.throws(() => evaluate(risingToward.snapshot ? observations({ prices: [112
 assert.throws(() => evaluate(observations({ prices: [112, 111, 110, 108, 105] }), { ma1Period: 1 }), TriggerConfigError)
 assert.throws(() => evaluate(observations({ prices: [112, 111, 110, 108, 105] }), { ma2Period: 121 }), TriggerConfigError)
 assert.throws(() => evaluate(observations({ prices: [112, 111, 110, 108, 105] }), { maxApproachDistancePct: 101 }), TriggerConfigError)
+for (const maxBelowZonePct of [0, -1, 20.01, Number.NaN]) {
+  assert.throws(() => overshoot(98, { maxBelowZonePct }), TriggerConfigError)
+}
 assert.throws(() => calculateMaZoneSnapshot(Number.POSITIVE_INFINITY, 100, 90), TypeError)
 
 const pitRows = observations({ prices: [112, 111, 110, 108, 105] })

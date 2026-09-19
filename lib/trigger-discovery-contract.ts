@@ -48,6 +48,9 @@ export interface TriggerDiscoverySearchRequest {
   spreadLookbackIntervals?: number
   minExpansionRatio?: number
   requireBullishMaOrder?: boolean
+  belowZoneToleranceEnabled?: boolean
+  maxBelowZonePct?: number
+  statusFilter?: 'APPROACHING' | 'NEAR' | 'IN_ZONE' | 'BELOW_ZONE' | null
   markets?: Array<string | null>
   priceMin?: number | null
   priceMax?: number | null
@@ -128,6 +131,9 @@ export interface TriggerDiscoverySearchResponse {
     spreadLookbackIntervals: number
     minExpansionRatio: number
     requireBullishMaOrder: boolean
+    belowZoneToleranceEnabled?: boolean
+    maxBelowZonePct?: number
+    statusFilter?: TriggerDiscoverySearchRequest['statusFilter']
     liquidityLookbackSessions: number
     markets: Array<string | null> | null
     stageFilters: TriggerDiscoveryStageFilters

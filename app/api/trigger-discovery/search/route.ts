@@ -57,8 +57,11 @@ export async function POST(request: NextRequest) {
     const base = await getBaseResult(parsed)
     const result = base.result
     const stageFiltered = filterTriggerDiscoveryRowsByStage(result.rows, parsed.request.stageFilters)
+    const statusFiltered = parsed.request.statusFilter
+      ? stageFiltered.filter((row) => row.triggerStatus === parsed.request.statusFilter)
+      : stageFiltered
     const sorted = sortTriggerDiscoveryRows(
-      stageFiltered,
+      statusFiltered,
       parsed.request.sort?.key,
       parsed.request.sort?.direction,
     )
@@ -90,6 +93,9 @@ export async function POST(request: NextRequest) {
         spreadLookbackIntervals: result.triggerConfig.spreadLookbackIntervals,
         minExpansionRatio: result.triggerConfig.minExpansionRatio,
         requireBullishMaOrder: result.triggerConfig.requireBullishMaOrder,
+        belowZoneToleranceEnabled: result.triggerConfig.belowZoneToleranceEnabled,
+        maxBelowZonePct: result.triggerConfig.maxBelowZonePct,
+        statusFilter: parsed.request.statusFilter ?? null,
         liquidityLookbackSessions: result.liquidityLookbackSessions,
         markets: parsed.request.markets ?? null,
         stageFilters: parsed.request.stageFilters ?? {},

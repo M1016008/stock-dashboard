@@ -7,6 +7,7 @@ export const TRIGGER_MA_PERIOD_MIN = 2
 export const TRIGGER_MA_PERIOD_MAX = 120
 export const TRIGGER_SPREAD_LOOKBACK_INTERVALS_MIN = 2
 export const TRIGGER_SPREAD_LOOKBACK_INTERVALS_MAX = 24
+export const TRIGGER_MAX_BELOW_ZONE_PCT = 20
 export const TRIGGER_ENGINE_VERSION = 1
 
 export type MaTrend = 'RISING' | 'FLAT' | 'FALLING'
@@ -30,6 +31,8 @@ export interface MaZoneTriggerConfig {
   spreadLookbackIntervals: number
   minExpansionRatio: number
   requireBullishMaOrder: boolean
+  belowZoneToleranceEnabled: boolean
+  maxBelowZonePct: number
 }
 
 export const DEFAULT_MA_ZONE_TRIGGER_CONFIG: Readonly<MaZoneTriggerConfig> = Object.freeze({
@@ -47,6 +50,8 @@ export const DEFAULT_MA_ZONE_TRIGGER_CONFIG: Readonly<MaZoneTriggerConfig> = Obj
   spreadLookbackIntervals: 4,
   minExpansionRatio: 0.7,
   requireBullishMaOrder: true,
+  belowZoneToleranceEnabled: false,
+  maxBelowZonePct: 3,
 })
 
 export interface MaZoneTriggerObservation {
@@ -202,6 +207,13 @@ export function validateMaZoneTriggerConfig(config: MaZoneTriggerConfig): void {
   }
   if (typeof config.requireBullishMaOrder !== 'boolean') {
     throw new TriggerConfigError('requireBullishMaOrder must be a boolean')
+  }
+  if (typeof config.belowZoneToleranceEnabled !== 'boolean') {
+    throw new TriggerConfigError('belowZoneToleranceEnabled must be a boolean')
+  }
+  if (!Number.isFinite(config.maxBelowZonePct)
+    || config.maxBelowZonePct <= 0 || config.maxBelowZonePct > TRIGGER_MAX_BELOW_ZONE_PCT) {
+    throw new TriggerConfigError(`maxBelowZonePct must be greater than zero and at most ${TRIGGER_MAX_BELOW_ZONE_PCT}`)
   }
   for (const [name, value] of [
     ['slopeTolerancePct', config.slopeTolerancePct],
@@ -396,6 +408,9 @@ export function evaluateMaZoneTrigger(input: {
   let matched = false
   if (snapshot.pricePosition === 'BELOW_ZONE') {
     status = 'BELOW_ZONE'
+    matched = config.belowZoneToleranceEnabled
+      && snapshot.zoneDistancePct + config.maxBelowZonePct >= -config.numericTolerance
+      && bothRising && fromAbove && spreadConditionPassed
   } else if (snapshot.pricePosition === 'IN_ZONE') {
     status = 'IN_ZONE'
     matched = bothRising && fromAbove && spreadConditionPassed

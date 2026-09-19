@@ -17,7 +17,7 @@ export type TriggerHistoricalScanEventType =
 
 export interface TriggerHistoricalScanRequest extends Omit<
   TriggerDiscoverySearchRequest,
-  'requestedAsOf' | 'sort' | 'page' | 'pageSize'
+  'requestedAsOf' | 'sort' | 'page' | 'pageSize' | 'statusFilter'
 > {
   startDate: string
   endDate: string
@@ -151,6 +151,8 @@ export interface TriggerHistoricalScanResponse {
     spreadLookbackIntervals?: number
     minExpansionRatio?: number
     requireBullishMaOrder?: boolean
+    belowZoneToleranceEnabled?: boolean
+    maxBelowZonePct?: number
     liquidityLookbackSessions: number
     maxPriceStalenessSessions: number
     markets: Array<string | null> | null

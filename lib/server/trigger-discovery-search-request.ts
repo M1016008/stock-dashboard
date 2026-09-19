@@ -143,6 +143,14 @@ export function parseTriggerDiscoverySearchRequest(value: unknown): {
     'requireBullishMaOrder',
     DEFAULT_MA_ZONE_TRIGGER_CONFIG.requireBullishMaOrder,
   )
+  const belowZoneToleranceEnabled = boolean(source, 'belowZoneToleranceEnabled', false)
+  const maxBelowZonePct = optionalNumber(source, 'maxBelowZonePct')
+    ?? DEFAULT_MA_ZONE_TRIGGER_CONFIG.maxBelowZonePct
+  const statusFilter = source.statusFilter ?? null
+  if (statusFilter !== null && statusFilter !== 'APPROACHING' && statusFilter !== 'NEAR'
+    && statusFilter !== 'IN_ZONE' && statusFilter !== 'BELOW_ZONE') {
+    throw new TriggerDiscoveryInputError('statusFilter must be APPROACHING, NEAR, IN_ZONE or BELOW_ZONE')
+  }
   const liquidityLookbackSessions = integer(source, 'liquidityLookbackSessions', 20)
   const maxPriceStalenessSessions = integer(source, 'maxPriceStalenessSessions', DEFAULT_TRIGGER_MAX_PRICE_STALENESS_SESSIONS)
   if (liquidityLookbackSessions < 1 || liquidityLookbackSessions > 252) {
@@ -164,6 +172,8 @@ export function parseTriggerDiscoverySearchRequest(value: unknown): {
     spreadLookbackIntervals,
     minExpansionRatio,
     requireBullishMaOrder,
+    belowZoneToleranceEnabled,
+    maxBelowZonePct,
   })
   const page = integer(source, 'page', 1)
   const pageSize = integer(source, 'pageSize', 50)
@@ -195,6 +205,9 @@ export function parseTriggerDiscoverySearchRequest(value: unknown): {
     spreadLookbackIntervals,
     minExpansionRatio,
     requireBullishMaOrder,
+    belowZoneToleranceEnabled,
+    maxBelowZonePct,
+    statusFilter: statusFilter as TriggerDiscoverySearchRequest['statusFilter'],
     markets,
     priceMin: optionalNumber(source, 'priceMin'),
     priceMax: optionalNumber(source, 'priceMax'),
@@ -228,6 +241,8 @@ export function parseTriggerDiscoverySearchRequest(value: unknown): {
         spreadLookbackIntervals,
         minExpansionRatio,
         requireBullishMaOrder,
+        belowZoneToleranceEnabled,
+        maxBelowZonePct,
       },
       markets,
       priceMin: request.priceMin,

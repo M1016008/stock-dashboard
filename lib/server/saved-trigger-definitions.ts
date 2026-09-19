@@ -63,9 +63,12 @@ export function validateSavedTriggerId(id: string): void {
 }
 
 function evaluationSignature(config: SavedTriggerEvaluationConfig): string {
+  const { belowZoneToleranceEnabled, maxBelowZonePct, ...legacyCore } = config.triggerCore
   const canonicalPayload = JSON.stringify({
     version: SAVED_TRIGGER_EVALUATION_CONFIG_VERSION,
-    config,
+    config: belowZoneToleranceEnabled
+      ? config
+      : { ...config, triggerCore: legacyCore },
   })
   return createHash('sha256').update(canonicalPayload).digest('hex')
 }

@@ -101,7 +101,7 @@ interface Props {
 
 type DraftState = TriggerDiscoveryNavigationDraft
 type DraftStringKey = {
-  [Key in keyof DraftState]: DraftState[Key] extends string ? Key : never
+  [Key in keyof DraftState]-?: NonNullable<DraftState[Key]> extends string ? Key : never
 }[keyof DraftState]
 
 type SaveMode = 'create' | 'update' | 'copy' | 'rename'
@@ -158,6 +158,8 @@ function activeCriteriaSummary(request: TriggerDiscoverySearchRequest | null): s
   if (request.spreadExpansionEnabled) {
     parts.push(`MA間隔拡大 ${request.spreadLookbackIntervals ?? 4}区間 / ${Math.round((request.minExpansionRatio ?? 0.7) * 100)}%`)
   }
+  if (request.belowZoneToleranceEnabled) parts.push(`Zone下抜け ${request.maxBelowZonePct ?? 3}%まで`)
+  if (request.statusFilter) parts.push(`表示: ${STATUS_LABELS[request.statusFilter]}`)
   return parts.join(' ・ ')
 }
 
@@ -282,6 +284,8 @@ export function TriggerDiscoveryClient({ options }: Props) {
     spreadLookbackIntervals: String(DEFAULT_MA_ZONE_TRIGGER_CONFIG.spreadLookbackIntervals),
     minExpansionRatioPct: String(DEFAULT_MA_ZONE_TRIGGER_CONFIG.minExpansionRatio * 100),
     requireBullishMaOrder: true,
+    belowZoneToleranceEnabled: false,
+    maxBelowZonePct: String(DEFAULT_MA_ZONE_TRIGGER_CONFIG.maxBelowZonePct),
     priceMin: '',
     priceMax: '',
     averageVolumeMin: '',
@@ -298,7 +302,7 @@ export function TriggerDiscoveryClient({ options }: Props) {
     minimumAboveZoneRatio: DEFAULT_MA_ZONE_TRIGGER_CONFIG.minimumAboveZoneRatio,
     maxPriceStalenessSessions: DEFAULT_TRIGGER_MAX_PRICE_STALENESS_SESSIONS,
   })
-  const [viewConfig, setViewConfig] = useState<SavedTriggerViewConfig>({ sort: null, pageSize: 50 })
+  const [viewConfig, setViewConfig] = useState<SavedTriggerViewConfig>({ sort: null, pageSize: 50, statusFilter: null })
   const [response, setResponse] = useState<TriggerDiscoverySearchResponse | null>(null)
   const [lastRequest, setLastRequest] = useState<TriggerDiscoverySearchRequest | null>(null)
   const [builderOpen, setBuilderOpen] = useState(true)
@@ -337,6 +341,7 @@ export function TriggerDiscoveryClient({ options }: Props) {
     const nearDistancePct = Number(draft.nearDistance)
     const spreadLookbackIntervals = Number(draft.spreadLookbackIntervals)
     const minExpansionRatio = Number(draft.minExpansionRatioPct) / 100
+    const maxBelowZonePct = Number(draft.maxBelowZonePct ?? DEFAULT_MA_ZONE_TRIGGER_CONFIG.maxBelowZonePct)
     const liquidityLookbackSessions = Number(draft.liquidityLookbackSessions)
     if (!/^\d{4}-\d{2}-\d{2}$/.test(requestedAsOf)) throw new Error('基準日を指定してください。')
     if (![ma1Period, ma2Period].every((value) => Number.isInteger(value) && value >= 2 && value <= 120)) {
@@ -354,6 +359,9 @@ export function TriggerDiscoveryClient({ options }: Props) {
     }
     if (!Number.isFinite(minExpansionRatio) || minExpansionRatio < 0 || minExpansionRatio > 1) {
       throw new Error('MA間隔の拡大区間比率は0〜100%で指定してください。')
+    }
+    if (!Number.isFinite(maxBelowZonePct) || maxBelowZonePct <= 0 || maxBelowZonePct > 20) {
+      throw new Error('最大下抜け幅は0より大きく20%以下で指定してください。')
     }
     if (!Number.isInteger(liquidityLookbackSessions) || liquidityLookbackSessions < 1 || liquidityLookbackSessions > 252) {
       throw new Error('平均期間は1〜252営業日で指定してください。')
@@ -383,6 +391,8 @@ export function TriggerDiscoveryClient({ options }: Props) {
       spreadLookbackIntervals,
       minExpansionRatio,
       requireBullishMaOrder: draft.requireBullishMaOrder,
+      belowZoneToleranceEnabled: draft.belowZoneToleranceEnabled ?? false,
+      maxBelowZonePct,
       markets: selectedMarkets.length ? selectedMarkets : undefined,
       priceMin: ranges[0][1],
       priceMax: ranges[0][2],
@@ -396,6 +406,7 @@ export function TriggerDiscoveryClient({ options }: Props) {
       sort: viewConfig.sort,
       page: 1,
       pageSize: viewConfig.pageSize,
+      statusFilter: viewConfig.statusFilter ?? null,
     }
   }
 
@@ -420,6 +431,8 @@ export function TriggerDiscoveryClient({ options }: Props) {
       spreadLookbackIntervals: request.spreadLookbackIntervals,
       minExpansionRatio: request.minExpansionRatio,
       requireBullishMaOrder: request.requireBullishMaOrder,
+      belowZoneToleranceEnabled: request.belowZoneToleranceEnabled,
+      maxBelowZonePct: request.maxBelowZonePct,
       markets: request.markets,
       priceMin: request.priceMin,
       priceMax: request.priceMax,
@@ -509,6 +522,11 @@ export function TriggerDiscoveryClient({ options }: Props) {
     if (!lastRequest) return
     setViewConfig((current) => ({ ...current, pageSize: pageSize as SavedTriggerViewConfig['pageSize'] }))
     void runSearch({ ...lastRequest, stageFilters, pageSize, page: 1 })
+  }
+
+  const changeStatusFilter = (statusFilter: SavedTriggerViewConfig['statusFilter']) => {
+    setViewConfig((current) => ({ ...current, statusFilter }))
+    if (lastRequest) void runSearch({ ...lastRequest, statusFilter, page: 1 })
   }
 
   const activeSort = lastRequest?.sort ?? null
@@ -654,6 +672,8 @@ export function TriggerDiscoveryClient({ options }: Props) {
           (request.minExpansionRatio ?? DEFAULT_MA_ZONE_TRIGGER_CONFIG.minExpansionRatio) * 100,
         ),
         requireBullishMaOrder: request.requireBullishMaOrder ?? true,
+        belowZoneToleranceEnabled: request.belowZoneToleranceEnabled ?? false,
+        maxBelowZonePct: String(request.maxBelowZonePct ?? DEFAULT_MA_ZONE_TRIGGER_CONFIG.maxBelowZonePct),
         priceMin: request.priceMin == null ? '' : String(request.priceMin),
         priceMax: request.priceMax == null ? '' : String(request.priceMax),
         averageVolumeMin: request.averageVolumeMin == null ? '' : String(request.averageVolumeMin),
@@ -804,6 +824,9 @@ export function TriggerDiscoveryClient({ options }: Props) {
       minExpansionRatioPct: snapshot.payload.draft.minExpansionRatioPct
         ?? String(DEFAULT_MA_ZONE_TRIGGER_CONFIG.minExpansionRatio * 100),
       requireBullishMaOrder: snapshot.payload.draft.requireBullishMaOrder ?? true,
+      belowZoneToleranceEnabled: snapshot.payload.draft.belowZoneToleranceEnabled ?? false,
+      maxBelowZonePct: snapshot.payload.draft.maxBelowZonePct
+        ?? String(DEFAULT_MA_ZONE_TRIGGER_CONFIG.maxBelowZonePct),
     })
     setSelectedMarkets(snapshot.payload.selectedMarkets)
     setStageFilters(snapshot.payload.stageFilters)
@@ -1215,6 +1238,7 @@ export function TriggerDiscoveryClient({ options }: Props) {
           <summary className="inline-flex cursor-pointer list-none items-center gap-1.5 text-[11px] font-medium text-[var(--color-brand-700)]">
             <SlidersHorizontal size={13} aria-hidden /> Trigger詳細条件
             {draft.spreadExpansionEnabled && <span className="rounded-[3px] bg-[var(--color-brand-50)] px-1.5 py-0.5 text-[9px] font-semibold text-[var(--color-brand-800)]">MA間隔拡大 ON</span>}
+            {draft.belowZoneToleranceEnabled && <span className="rounded-[3px] bg-[var(--color-brand-50)] px-1.5 py-0.5 text-[9px] font-semibold text-[var(--color-brand-800)]">Zone下抜け ON</span>}
           </summary>
           <div className="mt-3 border-l-2 border-[var(--color-border-soft)] pl-3">
             <div className="flex flex-wrap items-start justify-between gap-3">
@@ -1247,6 +1271,21 @@ export function TriggerDiscoveryClient({ options }: Props) {
                   <span className="block text-[9px] font-medium text-[var(--color-text-tertiary)]">上方順序</span>
                   MA1がMA2より上（固定）
                 </div>
+              </div>
+            )}
+          </div>
+          <div className="mt-3 border-l-2 border-[var(--color-border-soft)] pl-3">
+            <label className="inline-flex cursor-pointer items-center gap-2 text-[12px] font-medium text-[var(--color-text-primary)]">
+              <input type="checkbox" checked={draft.belowZoneToleranceEnabled ?? false}
+                onChange={(event) => setDraft((current) => ({ ...current, belowZoneToleranceEnabled: event.target.checked }))}
+                className="h-4 w-4 rounded border-[var(--color-border)] accent-[var(--color-brand-700)]" />
+              Zone下抜けも候補に含める
+            </label>
+            <p className="mt-1 text-[10px] text-[var(--color-text-secondary)]">株価が上からTrigger Zoneへ接近し、Zone下限を少しだけ下回った銘柄も候補に含めます。</p>
+            {draft.belowZoneToleranceEnabled && (
+              <div className="mt-2 max-w-[220px]">
+                <Field label="最大下抜け幅" value={draft.maxBelowZonePct ?? '3'} onChange={(value) => updateDraft('maxBelowZonePct', value)} suffix="%" type="number" min={0.01} max={20} />
+                <p className="mt-1 text-[10px] text-[var(--color-text-tertiary)]">例：3%ならZone下限から0〜3%下のBELOW_ZONEを許容します。</p>
               </div>
             )}
           </div>
@@ -1372,6 +1411,20 @@ export function TriggerDiscoveryClient({ options }: Props) {
         </div>}
 
         {builderOpen && stageFilterControls(true)}
+        {response && (
+          <label className="my-2 inline-flex items-center gap-2 text-[11px] text-[var(--color-text-secondary)]">
+            Status表示
+            <select aria-label="Status表示フィルター" value={lastRequest?.statusFilter ?? ''}
+              disabled={loading} onChange={(event) => changeStatusFilter(event.target.value as SavedTriggerViewConfig['statusFilter'] || null)}
+              className="h-8 rounded-[3px] border border-[var(--color-border)] bg-white px-2 text-[11px] text-[var(--color-text-primary)]">
+              <option value="">すべて</option>
+              <option value="APPROACHING">APPROACHING</option>
+              <option value="NEAR">NEAR</option>
+              <option value="IN_ZONE">IN_ZONE</option>
+              <option value="BELOW_ZONE">BELOW_ZONE</option>
+            </select>
+          </label>
+        )}
 
         {!response ? (
           <div className="py-16 text-center">

@@ -11,6 +11,7 @@ import {
   updateSavedTriggerDefinition,
 } from '@/lib/server/saved-trigger-definitions'
 import { parseTriggerDiscoverySearchRequest } from '@/lib/server/trigger-discovery-search-request'
+import { getTriggerDiscovery } from '@/lib/server/trigger-discovery-read-model'
 import type { TriggerDiscoverySearchRequest } from '@/lib/trigger-discovery-contract'
 import {
   SavedTriggerValidationError,
@@ -107,6 +108,27 @@ async function main() {
     assert.equal(parsedLoaded.timeframe, 'BIWEEKLY')
     assert.equal(parsedManual.timeframe, 'BIWEEKLY')
 
+    const belowRequest: TriggerDiscoverySearchRequest = {
+      requestedAsOf: '2026-09-18', timeframe: 'BIWEEKLY', ma1Period: 25, ma2Period: 44,
+      belowZoneToleranceEnabled: true, maxBelowZonePct: 3, statusFilter: 'BELOW_ZONE',
+      page: 1, pageSize: 50, stageFilters: {},
+    }
+    const belowDefinition = await createSavedTriggerDefinition({
+      name: `${namePrefix}2w-below`, ...savedTriggerConfigsFromSearchRequest(belowRequest),
+    })
+    createdIds.push(belowDefinition.id)
+    const loadedBelow = searchRequestFromSavedTrigger(await getSavedTriggerDefinition(belowDefinition.id), belowRequest.requestedAsOf)
+    assert.equal(loadedBelow.statusFilter, 'BELOW_ZONE')
+    const savedParsed = parseTriggerDiscoverySearchRequest(loadedBelow)
+    const manualParsed = parseTriggerDiscoverySearchRequest(belowRequest)
+    assert.deepEqual(savedParsed.input.triggerConfig, manualParsed.input.triggerConfig,
+      'saved 2W 25/44 Below config matches manual evaluation')
+    assert.equal(savedParsed.input.asOf, manualParsed.input.asOf)
+    assert.deepEqual(savedParsed.input.stageFilters, manualParsed.input.stageFilters)
+    const manualResult = await getTriggerDiscovery({ ...manualParsed.input, limit: 10_000, offset: 0 }, { timeframe: 'BIWEEKLY' })
+    const savedResult = await getTriggerDiscovery({ ...savedParsed.input, limit: 10_000, offset: 0 }, { timeframe: 'BIWEEKLY' })
+    assert.deepEqual(savedResult.rows, manualResult.rows, 'saved 2W Below candidate values and ordering match manual')
+
     definition = await updateSavedTriggerDefinition(definition.id, { name: `${namePrefix}renamed` })
     assert.equal(definition.evaluationVersion, 1, 'rename does not change evaluationVersion')
 
@@ -115,6 +137,13 @@ async function main() {
     assert.equal(definition.evaluationVersion, 1, 'sort change does not change evaluationVersion')
     definition = await updateSavedTriggerDefinition(definition.id, { viewConfig: { ...sortOnly, pageSize: 100 } })
     assert.equal(definition.evaluationVersion, 1, 'page size change does not change evaluationVersion')
+    const signatureBeforeStatusFilter = definition.evaluationSignature
+    definition = await updateSavedTriggerDefinition(definition.id, {
+      viewConfig: { ...definition.viewConfig, statusFilter: 'BELOW_ZONE' },
+    })
+    assert.equal(definition.evaluationVersion, 1, 'Status view filter must not change evaluationVersion')
+    assert.equal(definition.evaluationSignature, signatureBeforeStatusFilter)
+    assert.equal(searchRequestFromSavedTrigger(definition, '2026-09-10').statusFilter, 'BELOW_ZONE')
 
     const engineVersion = definition.engineVersion
     const scoreVersion = definition.scoreVersion
@@ -138,6 +167,10 @@ async function main() {
       ['Spread toggle', (copy) => { copy.triggerCore.spreadExpansionEnabled = !copy.triggerCore.spreadExpansionEnabled }],
       ['Spread lookback', (copy) => { copy.triggerCore.spreadLookbackIntervals = 6 }],
       ['Spread ratio', (copy) => { copy.triggerCore.minExpansionRatio = 0.8 }],
+      ['Below toggle', (copy) => { copy.triggerCore.belowZoneToleranceEnabled = true }],
+      ['Below threshold 3 to 2', (copy) => { copy.triggerCore.maxBelowZonePct = 2 }],
+      ['Below threshold 2 to 5', (copy) => { copy.triggerCore.maxBelowZonePct = 5 }],
+      ['Below toggle off', (copy) => { copy.triggerCore.belowZoneToleranceEnabled = false }],
       ['market', (copy) => { copy.universe.markets = [firstMarket] }],
       ['liquidity', (copy) => { copy.universe.averageTradingValueMin = 100_000_000 }],
       ['Stage', (copy) => { copy.stageFilters.dayAStage = [1, 2] }],
@@ -185,6 +218,8 @@ async function main() {
     delete legacyCore.spreadLookbackIntervals
     delete legacyCore.minExpansionRatio
     delete legacyCore.requireBullishMaOrder
+    delete legacyCore.belowZoneToleranceEnabled
+    delete legacyCore.maxBelowZonePct
     await execRun(`INSERT INTO trigger_definitions (
       id, name, evaluation_config_json, view_config_json, evaluation_signature,
       evaluation_version, engine_version, score_version
@@ -198,6 +233,8 @@ async function main() {
     assert.equal(legacyRead.evaluationConfig.triggerCore.spreadLookbackIntervals, 4)
     assert.equal(legacyRead.evaluationConfig.triggerCore.minExpansionRatio, 0.7)
     assert.equal(legacyRead.evaluationConfig.triggerCore.requireBullishMaOrder, true)
+    assert.equal(legacyRead.evaluationConfig.triggerCore.belowZoneToleranceEnabled, false)
+    assert.equal(legacyRead.evaluationConfig.triggerCore.maxBelowZonePct, 3)
     await updateSavedTriggerDefinition(legacyId, {
       name: `${namePrefix}legacy-monthly-renamed`,
       evaluationConfig: legacyRead.evaluationConfig,
