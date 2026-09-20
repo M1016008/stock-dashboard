@@ -32,6 +32,7 @@ def path(breach=True, reclaim=True, end20="2026-07-22", end60="2026-09-24", cuto
                      "firstZoneUpperReclaimDate": upper_reclaim_date if reclaim else None,
                      "maxZoneUndershootLowPct": -4.5,
                      "tradingSessionsToDeepest": 5, "totalBelowZoneSessions": 4,
+                     "longestConsecutiveBelowZoneSessions": 3,
                      "sessionsFromHitToLowerReclaim": 10}}
             for days in (20, 60)]}}
 
@@ -87,6 +88,8 @@ class Phase15FContracts(unittest.TestCase):
         self.assertEqual(descriptor["band"], "<=-10%")
         self.assertEqual(descriptor["deepest20Pct"], -4.5)
         self.assertEqual(descriptor["belowZoneSessions"], 4)
+        self.assertEqual(descriptor["longestBelowZoneStreak"], 3)
+        self.assertEqual(descriptor["firstLowerReclaimDate"], "2026-07-08")
         self.assertTrue(descriptor["lowerReclaim"])
         self.assertIsNone(prospective.path_descriptor(candidate(mfe=.099), path(), "2026-09-30", True))
         self.assertIsNone(prospective.path_descriptor(candidate(), None, "2026-09-30", True))
@@ -154,6 +157,8 @@ class Phase15FContracts(unittest.TestCase):
         self.assertEqual(result["predictionSha256"], "e" * 64)
         self.assertEqual(result["labelSummary"]["A_MFE10_MAE5"]["positive"], 1)
         self.assertEqual(result["pathBandSummary"]["bands"]["(0,+10%]"]["events"], 1)
+        self.assertEqual(len(result["nearPathEvents"]), 1)
+        self.assertEqual(result["nearPathEvents"][0]["pathStatus"], "AVAILABLE")
         self.assertEqual(result["belowZoneSelectedEvents"], 1)
         self.assertEqual(result["belowZoneMissingCompletePath"], 0)
         self.assertEqual(result["productionMlGate"], "NO")

@@ -141,6 +141,15 @@ class Phase15EContracts(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "existing_phase15e_artifact_changed"):
                 research.write_reproducible(path_name, {"x": 2})
 
+    def test_forward_batch_publish_failure_leaves_no_partial_result(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path_name = Path(tmp) / "forward-batches" / "batch.json"
+            with patch.object(monitor.os, "link", side_effect=OSError("interrupted_before_publish")):
+                with self.assertRaisesRegex(OSError, "interrupted_before_publish"):
+                    monitor.write_once(path_name, {"batchId": "batch"})
+            self.assertFalse(path_name.exists())
+            self.assertFalse(list(path_name.parent.glob("*.pending")))
+
 
 if __name__ == "__main__":
     unittest.main()

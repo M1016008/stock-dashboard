@@ -157,7 +157,9 @@ def path_descriptor(row, path_row, cutoff, require_mfe10):
             "deepest60Pct": p60["maxZoneUndershootLowPct"],
             "timeToDeepest": p60["tradingSessionsToDeepest"],
             "belowZoneSessions": p60["totalBelowZoneSessions"],
+            "longestBelowZoneStreak": p60["longestConsecutiveBelowZoneSessions"],
             "lowerReclaim": p60["firstZoneLowerReclaimDate"] is not None,
+            "firstLowerReclaimDate": p60["firstZoneLowerReclaimDate"],
             "upperReclaim": p60["firstZoneUpperReclaimDate"] is not None,
             "sessionsToLowerReclaim": p60["sessionsFromHitToLowerReclaim"],
             "firstUpperReclaimDate": p60["firstZoneUpperReclaimDate"],
@@ -225,7 +227,7 @@ def build_batch(batch, near_manifest_path, below_manifest_path, output):
     near_paths, near_path_sha = checked_paths(near_manifest, accepted_keys)
     selected = [by_key[accepted["eventKey"]] for accepted in batch["records"]]
     prediction_sha = replay_predictions(selected, batch["records"], original["featureColumns"])
-    labels, path_band_records, mfe10_count = [], [], 0
+    labels, near_path_events, path_band_records, mfe10_count = [], [], [], 0
     for accepted in batch["records"]:
         row = by_key[accepted["eventKey"]]
         if any(accepted[field] != row[field] for field in ("eventKey", "episodeKey", "ticker", "eventDate")) \
@@ -238,9 +240,19 @@ def build_batch(batch, near_manifest_path, below_manifest_path, output):
                           if item["labelHorizonSessions"] == 60)
         if anchored60["labelAvailable"] and anchored60["mfe"] >= .10:
             mfe10_count += 1
-        descriptor = path_descriptor(row, near_paths[row["eventKey"]], batch["labelMaturityCutoff"], True)
+        descriptor = path_descriptor(row, near_paths[row["eventKey"]], batch["labelMaturityCutoff"], False)
         if descriptor:
-            path_band_records.append(descriptor)
+            descriptor["pathStatus"] = "AVAILABLE"
+            near_path_events.append(descriptor)
+            if anchored60["mfe"] >= .10:
+                path_band_records.append({**descriptor, "band": terminal_band(anchored60["return"])})
+        else:
+            near_path_events.append({"eventKey": row["eventKey"], "episodeKey": row["episodeKey"],
+                                     "ticker": row["ticker"], "eventDate": row["eventDate"],
+                                     "labelMaturityDate": anchored60["labelAvailableDate"],
+                                     "pathStatus": "MISSING_COMPLETE_PATH", "band": None,
+                                     "return60": anchored60["return"], "mfe60": anchored60["mfe"],
+                                     "mae60": anchored60["mae"]})
     below_manifest, below_rows = audited_below_rows(below_manifest_path, below_baseline, versions)
     if below_manifest["analysisCutoffDate"] != batch["labelMaturityCutoff"]:
         raise ValueError("below_cutoff_mismatch")
@@ -303,6 +315,7 @@ def build_batch(batch, near_manifest_path, below_manifest_path, output):
             "nearPathArtifactSha256": near_path_sha, "belowPathArtifactSha256": below_path_sha,
             "forwardSummary": batch["summary"], "labels": labels,
             "labelSummary": summarize_labels(labels),
+            "nearPathEvents": near_path_events,
             "pathBandEvents": path_band_records,
             "mfe10EventCount": mfe10_count,
             "mfe10MissingCompletePath": mfe10_count - len(path_band_records),

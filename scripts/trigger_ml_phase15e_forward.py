@@ -12,6 +12,7 @@ import resource
 import sqlite3
 import sys
 import time
+import uuid
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
@@ -45,11 +46,16 @@ def load_plan():
 
 def write_once(path: Path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("x") as stream:
-        json.dump(value, stream, ensure_ascii=False, indent=2, allow_nan=False)
-        stream.write("\n")
-        stream.flush()
-        os.fsync(stream.fileno())
+    pending = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.pending")
+    try:
+        with pending.open("x") as stream:
+            json.dump(value, stream, ensure_ascii=False, indent=2, allow_nan=False)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.link(pending, path)
+    finally:
+        pending.unlink(missing_ok=True)
 
 
 def records_for(rows, probabilities, cutoff):
