@@ -26,11 +26,13 @@ import {
 } from 'recharts'
 import { MeasuredChartFrame } from '@/components/charts/MeasuredChartFrame'
 import { HistoricalOutcomeWorkspace } from '@/components/trigger-discovery/HistoricalOutcomeWorkspace'
+import { TriggerFollowUpDrawer } from '@/components/trigger-discovery/TriggerFollowUpDrawer'
 import { TriggerScoreCell } from '@/components/trigger-discovery/TriggerScoreCell'
 import { StageTag } from '@/components/ui/StageTag'
 import { TRIGGER_DISCOVERY_STAGE_AXES } from '@/lib/trigger-discovery-contract'
 import type {
   TriggerHistoricalScanEventType,
+  TriggerHistoricalScanEvent,
   TriggerHistoricalScanRequest,
   TriggerHistoricalScanResponse,
 } from '@/lib/trigger-discovery-historical-scan-contract'
@@ -188,6 +190,7 @@ export function HistoricalScanWorkspace({ buildRequest }: Props) {
   const [eventDate, setEventDate] = useState('')
   const [eventOffset, setEventOffset] = useState(0)
   const [eventLimit, setEventLimit] = useState(100)
+  const [followUpEvent, setFollowUpEvent] = useState<TriggerHistoricalScanEvent | null>(null)
   const cancelRequestedJob = useRef<string | null>(null)
   const listSequence = useRef(0)
 
@@ -324,6 +327,7 @@ export function HistoricalScanWorkspace({ buildRequest }: Props) {
       setEventSearch('')
       setEventSearchDraft('')
       setEventDate('')
+      setFollowUpEvent(null)
       setSelectedJob(null)
       setResult(null)
       setSelectedJobId(body.jobId)
@@ -371,6 +375,7 @@ export function HistoricalScanWorkspace({ buildRequest }: Props) {
   }
 
   const openJob = (job: TriggerHistoricalScanJobSummary) => {
+    setFollowUpEvent(null)
     cancelRequestedJob.current = null
     setSelectedJobId(job.jobId)
     setSelectedJob(job)
@@ -603,6 +608,7 @@ export function HistoricalScanWorkspace({ buildRequest }: Props) {
                           <th className="px-2 py-2 text-center">Score</th>
                           <th className="px-2 py-2 text-right">Zone距離</th>
                           {TRIGGER_DISCOVERY_STAGE_AXES.map((axis) => <th key={axis} className="px-1 py-2 text-center">{{ dayAStage: '日A', dayBStage: '日B', weekAStage: '週A', weekBStage: '週B', monthAStage: '月A', monthBStage: '月B' }[axis]}</th>)}
+                          <th className="px-2 py-2 text-right">その後</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -629,6 +635,9 @@ export function HistoricalScanWorkspace({ buildRequest }: Props) {
                               <td className="px-2 py-2 text-center align-top"><TriggerScoreCell triggerScore={event.triggerScore} scoreBreakdown={event.scoreBreakdown} /></td>
                               <td className="whitespace-nowrap px-2 py-2 text-right align-top font-medium tabular-nums text-[var(--color-text-primary)]">{formatPercent(event.zoneDistancePct)}</td>
                               {TRIGGER_DISCOVERY_STAGE_AXES.map((axis) => <td key={axis} className="px-1 py-2 text-center align-top"><StageTag stage={event[axis]} size="xs" /></td>)}
+                              <td className="whitespace-nowrap px-2 py-2 text-right align-top">
+                                <button type="button" disabled={!event.eventKey} onClick={() => setFollowUpEvent(event)} className="rounded-[3px] border border-[var(--color-border)] bg-white px-2 py-1 text-[10px] font-medium text-[var(--color-brand-700)] hover:border-[var(--color-brand-300)] hover:bg-[var(--color-brand-50)] disabled:cursor-not-allowed disabled:opacity-40" aria-label={`${event.ticker} ${event.date} のその後を見る`}>その後を見る</button>
+                              </td>
                             </tr>
                           )
                         })}
@@ -691,6 +700,15 @@ export function HistoricalScanWorkspace({ buildRequest }: Props) {
           )}
         </aside>
       </div>
+      {followUpEvent && selectedJob && <TriggerFollowUpDrawer
+        jobId={selectedJob.jobId}
+        event={followUpEvent}
+        timeframe={result?.scanMeta.timeframe ?? selectedJob.timeframe ?? 'MONTHLY'}
+        ma1Period={selectedJob.request.ma1Period ?? 20}
+        ma2Period={selectedJob.request.ma2Period ?? 25}
+        criteria={result?.criteria ?? null}
+        onClose={() => setFollowUpEvent(null)}
+      />}
     </section>
   )
 }

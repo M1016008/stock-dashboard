@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { rm } from 'node:fs/promises'
+import { GET as getFollowUpRoute } from '@/app/api/trigger-discovery/historical-scan/jobs/[jobId]/events/[eventKey]/follow-up/route'
 import { execAll, execGet, execRun } from '@/lib/db/client'
 import {
   cancelHistoricalScanJob,
@@ -8,6 +9,7 @@ import {
   executeHistoricalScanJob,
   getHistoricalScanJob,
   getHistoricalScanJobResult,
+  getHistoricalScanEventByKey,
   historicalScanResultPaths,
   parseHistoricalScanResultPagination,
   recoverStaleHistoricalScanJobs,
@@ -225,6 +227,7 @@ async function main() {
   assert.equal(duplicate.reused, true)
   assert.equal((await getHistoricalScanJob(first.jobId))?.progress.processedTradingDays, 0)
   assert.equal(await getHistoricalScanJobResult({ id: first.jobId, eventOffset: 0, eventLimit: 10 }), 'NOT_READY')
+  assert.equal(await getHistoricalScanEventByKey({ id: first.jobId, eventKey: 'e0' }), 'NOT_READY')
 
   const cancelledQueued = await cancelHistoricalScanJob(first.jobId)
   assert.equal(cancelledQueued?.status, 'CANCELLED')
@@ -274,7 +277,16 @@ async function main() {
   assert.equal(lastPage.events.length, 100)
   assert.equal(lastPage.eventPage.hasMore, false)
   assert.equal(firstPage.events[0].ticker, '1000')
+  assert.equal(firstPage.events[0].eventKey, 'e0')
   assert.equal(lastPage.events[0].ticker, '1900')
+  assert.equal(lastPage.events[0].eventKey, 'ep0')
+  const byKey = await getHistoricalScanEventByKey({ id: completedStart.jobId, eventKey: lastPage.events[0].eventKey! })
+  assert.ok(byKey && typeof byKey === 'object')
+  assert.equal(byKey.event.ticker, '1900')
+  assert.equal(byKey.event.price, 1000)
+  assert.equal(byKey.timeframe, 'MONTHLY')
+  assert.equal(await getHistoricalScanEventByKey({ id: completedStart.jobId, eventKey: 'einvalid!' }), null)
+  assert.equal(await getHistoricalScanEventByKey({ id: completedStart.jobId, eventKey: 'ezzzzzz' }), null)
 
   const descendingFirst = await getHistoricalScanJobResult({
     id: completedStart.jobId, eventOffset: 0, eventLimit: 100, eventOrder: 'desc',
@@ -299,6 +311,8 @@ async function main() {
   assert.equal(entered.eventPage.totalCount, 250)
   assert.ok(entered.events.every((item) => item.eventType === 'ENTERED'))
   assert.equal(entered.events[0].ticker, '1996')
+  assert.equal(entered.events[0].eventKey, 'ero')
+  assert.equal((await getHistoricalScanEventByKey({ id: completedStart.jobId, eventKey: entered.events[0].eventKey! }) as { event: TriggerHistoricalScanEvent }).event.ticker, '1996')
 
   const nearEntries = await getHistoricalScanJobResult({
     id: completedStart.jobId,
@@ -413,6 +427,12 @@ async function main() {
     ['legacy-algorithm', completedStart.jobId])
   assert.equal((await getHistoricalScanJob(completedStart.jobId))?.resultAvailable, false)
   assert.equal(await getHistoricalScanJobResult({ id: completedStart.jobId, eventOffset: 0, eventLimit: 10 }), 'EXPIRED')
+  assert.equal(await getHistoricalScanEventByKey({ id: completedStart.jobId, eventKey: 'e0' }), 'EXPIRED')
+  const expiredRoute = await getFollowUpRoute(
+    new Request(`http://localhost/api/trigger-discovery/historical-scan/jobs/${completedStart.jobId}/events/e0/follow-up`),
+    { params: Promise.resolve({ jobId: completedStart.jobId, eventKey: 'e0' }) },
+  )
+  assert.equal(expiredRoute.status, 410)
   await execRun('UPDATE historical_trigger_scan_jobs SET request_signature=? WHERE id=?',
     [signatureRow.request_signature, completedStart.jobId])
   assert.equal((await getHistoricalScanJob(completedStart.jobId))?.resultAvailable, true)
@@ -422,6 +442,7 @@ async function main() {
     await getHistoricalScanJobResult({ id: completedStart.jobId, eventOffset: 0, eventLimit: 100 }),
     'EXPIRED',
   )
+  assert.equal(await getHistoricalScanEventByKey({ id: completedStart.jobId, eventKey: 'e0' }), 'EXPIRED')
   assert.equal((await getHistoricalScanJob(completedStart.jobId))?.resultAvailable, false)
 
   const secondClaim = await claimNextHistoricalScanJob('33333333-3333-4333-8333-333333333333')

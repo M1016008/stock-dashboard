@@ -41,8 +41,14 @@ const requiredStagedRoutes = [
   '/api/trigger-discovery/historical-scan/jobs/[jobId]/route',
   '/api/trigger-discovery/historical-scan/jobs/[jobId]/result/route',
   '/api/trigger-discovery/historical-scan/jobs/[jobId]/outcomes/route',
+  '/api/trigger-discovery/historical-scan/jobs/[jobId]/events/[eventKey]/follow-up/route',
   '/api/trigger-discovery/outcome-jobs/[jobId]/route',
   '/api/trigger-discovery/outcome-jobs/[jobId]/result/route',
+  '/api/trigger-discovery/outcome-jobs/[jobId]/path-research/route',
+  '/api/trigger-discovery/path-research/jobs/[jobId]/route',
+  '/api/trigger-discovery/path-research/jobs/[jobId]/segments/route',
+  '/api/trigger-discovery/ml-datasets/route',
+  '/api/trigger-discovery/ml-datasets/[datasetId]/route',
 ] as const
 
 function removeGenerated(pathname: string): void {
@@ -77,7 +83,7 @@ function assertRequiredRoutes(buildPath: string): void {
   const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as Record<string, string>
   const missing = requiredStagedRoutes.filter((route) => !manifest[route])
   if (missing.length > 0) {
-    throw new Error(`Staged build is missing required Phase 1-13 routes: ${missing.join(', ')}`)
+    throw new Error(`Staged build is missing required routes: ${missing.join(', ')}`)
   }
 }
 
@@ -106,6 +112,12 @@ runNpm('test:us-automation-foundation')
 runNpm('test:physical-plan')
 runNpm('test:timeframes')
 runNpm('test:trigger-discovery-outcomes')
+runNpm('test:trigger-path')
+runNpm('test:trigger-path-research')
+runNpm('test:trigger-path-research-worker')
+runNpm('test:trigger-ml-dataset')
+runNpm('test:trigger-ml-dataset-worker')
+runNpm('test:trigger-follow-up-ui')
 runNpm('test:trigger-worker-recovery')
 runNpm('build', {
   ...process.env,

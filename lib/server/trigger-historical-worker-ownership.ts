@@ -5,7 +5,7 @@ import { client, ensureReady, execAll, execGet } from '@/lib/db/client'
 const LOCK_TYPE = 'trigger_historical_worker'
 const LOCK_SECONDS = 10 * 365 * 86_400
 const MAX_ATTEMPTS = 2
-type JobTable = 'historical_trigger_scan_jobs' | 'trigger_outcome_analysis_jobs'
+type JobTable = 'historical_trigger_scan_jobs' | 'trigger_outcome_analysis_jobs' | 'trigger_path_research_jobs' | 'trigger_ml_dataset_jobs'
 type RecoveryMode = 'startup' | 'stale'
 
 export type WorkerIdentity = { owner: string; jobOwner: () => string }

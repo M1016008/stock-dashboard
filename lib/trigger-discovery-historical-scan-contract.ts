@@ -54,6 +54,8 @@ export interface TriggerHistoricalScanCandidateSnapshot {
 }
 
 export interface TriggerHistoricalScanEvent {
+  /** Stable within the immutable scan artifact; added when reading paginated results. */
+  eventKey?: string
   date: string
   ticker: string
   companyName: string

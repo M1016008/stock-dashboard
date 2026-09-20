@@ -427,6 +427,11 @@ export async function claimNextHistoricalScanJob(
         SELECT 1 FROM trigger_outcome_analysis_jobs
         WHERE status IN ('RUNNING','CANCEL_REQUESTED')
       )
+      AND NOT EXISTS (
+        SELECT 1 FROM trigger_path_research_jobs
+        WHERE status IN ('RUNNING','CANCEL_REQUESTED')
+      )
+      AND NOT EXISTS (SELECT 1 FROM trigger_ml_dataset_jobs WHERE status IN ('RUNNING','CANCEL_REQUESTED'))
     ORDER BY created_at, id LIMIT 1`)
   if (!candidate) return null
   await ensureReady()
@@ -445,6 +450,11 @@ export async function claimNextHistoricalScanJob(
             SELECT 1 FROM trigger_outcome_analysis_jobs
             WHERE status IN ('RUNNING','CANCEL_REQUESTED')
           )
+          AND NOT EXISTS (
+            SELECT 1 FROM trigger_path_research_jobs
+            WHERE status IN ('RUNNING','CANCEL_REQUESTED')
+          )
+          AND NOT EXISTS (SELECT 1 FROM trigger_ml_dataset_jobs WHERE status IN ('RUNNING','CANCEL_REQUESTED'))
         RETURNING *`,
     args: [current, current, ownerToken, candidate.id, candidate.id],
   })
@@ -803,6 +813,55 @@ function eventMatches(
     || event.companyName.normalize('NFKC').toLocaleLowerCase('ja-JP').includes(needle)
 }
 
+export function historicalEventKey(sequence: number): string {
+  return `e${sequence.toString(36)}`
+}
+
+function historicalEventSequence(key: string): number | null {
+  if (!/^e(?:0|[1-9a-z][0-9a-z]*)$/.test(key) || key.length > 12) return null
+  const sequence = Number.parseInt(key.slice(1), 36)
+  return Number.isSafeInteger(sequence) && sequence >= 0 && historicalEventKey(sequence) === key
+    ? sequence : null
+}
+
+export async function getHistoricalScanEventByKey(input: { id: string; eventKey: string }): Promise<
+  | { event: TriggerHistoricalScanEvent; timeframe: TriggerHistoricalScanResponse['scanMeta']['timeframe']; ma1Period: number; ma2Period: number }
+  | null | 'NOT_READY' | 'EXPIRED'
+> {
+  const sequence = historicalEventSequence(input.eventKey)
+  if (sequence == null) return null
+  const row = await jobRow(input.id)
+  if (!row) return null
+  if (row.status !== 'COMPLETED') return 'NOT_READY'
+  if (Number(row.expires_at) <= nowSeconds() || !hasCurrentResultDefinition(row)) return 'EXPIRED'
+  const paths = historicalScanResultPaths(row.id)
+  try {
+    const manifest = JSON.parse(await readFile(/* turbopackIgnore: true */ paths.manifest, 'utf8')) as TriggerHistoricalScanResponse
+    if (sequence >= manifest.summary.totalEventCount) return null
+    const inputFile = createReadStream(/* turbopackIgnore: true */ paths.events, { encoding: 'utf8' })
+    const lines = createInterface({ input: inputFile, crlfDelay: Infinity })
+    let index = 0
+    try {
+      for await (const line of lines) {
+        if (!line) continue
+        if (index++ !== sequence) continue
+        return {
+          event: { ...JSON.parse(line) as TriggerHistoricalScanEvent, eventKey: input.eventKey },
+          timeframe: manifest.scanMeta.timeframe,
+          ma1Period: manifest.scanMeta.ma1Period,
+          ma2Period: manifest.scanMeta.ma2Period,
+        }
+      }
+    } finally {
+      lines.close()
+      inputFile.destroy()
+    }
+    return 'EXPIRED'
+  } catch {
+    return 'EXPIRED'
+  }
+}
+
 async function readAscendingEventPage(
   file: string,
   offset: number,
@@ -817,12 +876,14 @@ async function readAscendingEventPage(
   const input = createReadStream(file, { encoding: 'utf8' })
   const lines = createInterface({ input, crlfDelay: Infinity })
   let matchedCount = 0
+  let sourceSequence = 0
   try {
     for await (const line of lines) {
       if (!line) continue
       const event = JSON.parse(line) as TriggerHistoricalScanEvent
+      const eventKey = historicalEventKey(sourceSequence++)
       if (!eventMatches(event, eventType, currentStatus, eventDate, eventSearch)) continue
-      if (matchedCount >= offset && events.length < limit) events.push(event)
+      if (matchedCount >= offset && events.length < limit) events.push({ ...event, eventKey })
       matchedCount += 1
       if (knownTotalCount != null && events.length >= limit) break
     }
@@ -883,12 +944,14 @@ async function readDescendingEventPage(
   const input = createReadStream(file, { encoding: 'utf8' })
   const lines = createInterface({ input, crlfDelay: Infinity })
   let matchedIndex = 0
+  let sourceSequence = 0
   try {
     for await (const line of lines) {
       if (!line) continue
       const event = JSON.parse(line) as TriggerHistoricalScanEvent
+      const eventKey = historicalEventKey(sourceSequence++)
       if (!eventMatches(event, eventType, currentStatus, eventDate, eventSearch)) continue
-      if (matchedIndex >= chronologicalStart && matchedIndex < chronologicalEnd) selected.push(event)
+      if (matchedIndex >= chronologicalStart && matchedIndex < chronologicalEnd) selected.push({ ...event, eventKey })
       matchedIndex += 1
       if (matchedIndex >= chronologicalEnd) break
     }

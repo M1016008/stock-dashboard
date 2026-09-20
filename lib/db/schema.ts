@@ -1799,6 +1799,75 @@ export const triggerOutcomeAnalysisJobs = sqliteTable(
   }),
 )
 
+export const triggerPathResearchJobs = sqliteTable(
+  'trigger_path_research_jobs',
+  {
+    id: text('id').primaryKey(),
+    status: text('status').notNull(),
+    outcomeJobId: text('outcome_job_id').notNull(),
+    historicalScanJobId: text('historical_scan_job_id').notNull(),
+    sourceFingerprint: text('source_fingerprint').notNull(),
+    analysisCutoffDate: text('analysis_cutoff_date').notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+    startedAt: integer('started_at', { mode: 'timestamp' }),
+    completedAt: integer('completed_at', { mode: 'timestamp' }),
+    heartbeatAt: integer('heartbeat_at', { mode: 'timestamp' }),
+    totalEvents: integer('total_events').notNull().default(0),
+    processedEvents: integer('processed_events').notNull().default(0),
+    totalTickers: integer('total_tickers').notNull().default(0),
+    processedTickers: integer('processed_tickers').notNull().default(0),
+    resultLocation: text('result_location'),
+    resultSizeBytes: integer('result_size_bytes').notNull().default(0),
+    durationMs: real('duration_ms').notNull().default(0),
+    errorCategory: text('error_category'),
+    cancelRequested: integer('cancel_requested', { mode: 'boolean' }).notNull().default(false),
+    ownerToken: text('owner_token'),
+    attemptCount: integer('attempt_count').notNull().default(0),
+    expiresAt: integer('expires_at', { mode: 'timestamp' }).notNull(),
+  },
+  (t) => ({
+    statusCreatedIdx: index('trigger_path_research_jobs_status_created_idx')
+      .on(t.status, t.createdAt),
+    sourceIdx: index('trigger_path_research_jobs_source_idx')
+      .on(t.outcomeJobId, t.sourceFingerprint, t.completedAt),
+    expiresIdx: index('trigger_path_research_jobs_expires_idx').on(t.expiresAt),
+  }),
+)
+
+export const triggerMlDatasetJobs = sqliteTable(
+  'trigger_ml_dataset_jobs',
+  {
+    id: text('id').primaryKey(),
+    status: text('status').notNull(),
+    pathResearchJobId: text('path_research_job_id').notNull(),
+    outcomeJobId: text('outcome_job_id').notNull(),
+    historicalScanJobId: text('historical_scan_job_id').notNull(),
+    sourceFingerprint: text('source_fingerprint').notNull(),
+    splitPolicyJson: text('split_policy_json').notNull(),
+    analysisCutoffDate: text('analysis_cutoff_date').notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+    startedAt: integer('started_at', { mode: 'timestamp' }),
+    completedAt: integer('completed_at', { mode: 'timestamp' }),
+    heartbeatAt: integer('heartbeat_at', { mode: 'timestamp' }),
+    totalEvents: integer('total_events').notNull().default(0),
+    processedEvents: integer('processed_events').notNull().default(0),
+    totalTickers: integer('total_tickers').notNull().default(0),
+    processedTickers: integer('processed_tickers').notNull().default(0),
+    resultLocation: text('result_location'),
+    resultSizeBytes: integer('result_size_bytes').notNull().default(0),
+    resultSha256: text('result_sha256'),
+    durationMs: real('duration_ms').notNull().default(0),
+    errorCategory: text('error_category'),
+    cancelRequested: integer('cancel_requested', { mode: 'boolean' }).notNull().default(false),
+    ownerToken: text('owner_token'),
+    attemptCount: integer('attempt_count').notNull().default(0),
+  },
+  (t) => ({
+    statusCreatedIdx: index('trigger_ml_dataset_jobs_status_created_idx').on(t.status, t.createdAt),
+    sourceIdx: index('trigger_ml_dataset_jobs_source_idx').on(t.pathResearchJobId, t.createdAt),
+  }),
+)
+
 export const triggerEvaluations = sqliteTable(
   'trigger_evaluations',
   {

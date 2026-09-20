@@ -13,6 +13,11 @@ import {
   recoverStaleOutcomeJobs,
 } from '@/lib/server/trigger-discovery-outcome-jobs'
 import {
+  claimNextPathResearchJob, cleanupExpiredPathResearchJobs, executePathResearchJob,
+  recoverStalePathResearchJobs,
+} from '@/lib/server/trigger-path-research-jobs'
+import { claimNextMlDatasetJob, executeMlDatasetJob, recoverStaleMlDatasetJobs } from '@/lib/server/trigger-ml-dataset-jobs'
+import {
   acquireHistoricalWorker,
   createWorkerIdentity,
   recoverWorkerJobs,
@@ -23,7 +28,7 @@ import {
 const DEFAULT_POLL_MS = 2_000
 const CLEANUP_INTERVAL_MS = 60 * 60 * 1_000
 
-type WorkType = 'HISTORICAL_SCAN' | 'OUTCOME_ANALYSIS'
+type WorkType = 'HISTORICAL_SCAN' | 'OUTCOME_ANALYSIS' | 'PATH_RESEARCH' | 'ML_DATASET'
 
 function boundedIntegerEnv(name: string, fallback: number, min: number, max: number): number {
   const parsed = Number(process.env[name])
@@ -38,6 +43,12 @@ async function nextWorkType(): Promise<WorkType | null> {
       UNION ALL
       SELECT 'OUTCOME_ANALYSIS' AS job_type, created_at, id
       FROM trigger_outcome_analysis_jobs WHERE status='QUEUED'
+      UNION ALL
+      SELECT 'PATH_RESEARCH' AS job_type, created_at, id
+      FROM trigger_path_research_jobs WHERE status='QUEUED'
+      UNION ALL
+      SELECT 'ML_DATASET' AS job_type, created_at, id
+      FROM trigger_ml_dataset_jobs WHERE status='QUEUED'
     ) ORDER BY created_at, id LIMIT 1`)
   return row?.job_type ?? null
 }
@@ -71,6 +82,26 @@ export async function runTriggerHistoricalWorkOnce(
       return { jobType: type, jobId: row.id, status: 'FAILED' }
     }
   }
+  if (type === 'PATH_RESEARCH') {
+    const row = await claimNextPathResearchJob(identity?.jobOwner() ?? randomUUID())
+    if (!row) return null
+    try {
+      return { jobType: type, jobId: row.id, status: await executePathResearchJob(row, shutdownSignal) }
+    } catch (error) {
+      console.error(`[trigger-historical-worker] type=${type} job=${row.id} failed`, error)
+      return { jobType: type, jobId: row.id, status: 'FAILED' }
+    }
+  }
+  if (type === 'ML_DATASET') {
+    const row = await claimNextMlDatasetJob(identity?.jobOwner() ?? randomUUID())
+    if (!row) return null
+    try {
+      return { jobType: type, jobId: row.id, status: await executeMlDatasetJob(row, shutdownSignal) }
+    } catch (error) {
+      console.error(`[trigger-historical-worker] type=${type} job=${row.id} failed`, error)
+      return { jobType: type, jobId: row.id, status: 'FAILED' }
+    }
+  }
   return null
 }
 
@@ -97,9 +128,12 @@ export async function runTriggerHistoricalWorkLoop(): Promise<void> {
         const recovered = {
           historical: await recoverWorkerJobs('historical_trigger_scan_jobs', 'startup'),
           outcome: await recoverWorkerJobs('trigger_outcome_analysis_jobs', 'startup'),
+          pathResearch: await recoverWorkerJobs('trigger_path_research_jobs', 'startup'),
+          mlDataset: await recoverWorkerJobs('trigger_ml_dataset_jobs', 'startup'),
         }
         await cleanupExpiredHistoricalScanJobs()
         await cleanupExpiredOutcomeJobs()
+        await cleanupExpiredPathResearchJobs()
         lastCleanupAt = Date.now()
         lastRecoveryAt = lastCleanupAt
         console.log(`[trigger-historical-worker] started concurrency=1 instance=${identity.owner}`
@@ -116,6 +150,7 @@ export async function runTriggerHistoricalWorkLoop(): Promise<void> {
         if (Date.now() - lastCleanupAt >= CLEANUP_INTERVAL_MS) {
           await cleanupExpiredHistoricalScanJobs()
           await cleanupExpiredOutcomeJobs()
+          await cleanupExpiredPathResearchJobs()
           lastCleanupAt = Date.now()
         }
         const result = await runTriggerHistoricalWorkOnce(identity, shutdown.signal)
@@ -126,8 +161,12 @@ export async function runTriggerHistoricalWorkLoop(): Promise<void> {
         if (Date.now() - lastRecoveryAt >= 30_000) {
           await recoverStaleHistoricalScanJobs()
           await recoverStaleOutcomeJobs()
+          await recoverStalePathResearchJobs()
+          await recoverStaleMlDatasetJobs()
           await recoverWorkerJobs('historical_trigger_scan_jobs', 'startup')
           await recoverWorkerJobs('trigger_outcome_analysis_jobs', 'startup')
+          await recoverWorkerJobs('trigger_path_research_jobs', 'startup')
+          await recoverWorkerJobs('trigger_ml_dataset_jobs', 'startup')
           lastRecoveryAt = Date.now()
         }
       } catch (error) {

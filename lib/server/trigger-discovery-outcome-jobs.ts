@@ -543,6 +543,8 @@ export async function claimNextOutcomeJob(
     WHERE status='QUEUED'
       AND NOT EXISTS (SELECT 1 FROM trigger_outcome_analysis_jobs WHERE status IN ('RUNNING','CANCEL_REQUESTED'))
       AND NOT EXISTS (SELECT 1 FROM historical_trigger_scan_jobs WHERE status IN ('RUNNING','CANCEL_REQUESTED'))
+      AND NOT EXISTS (SELECT 1 FROM trigger_path_research_jobs WHERE status IN ('RUNNING','CANCEL_REQUESTED'))
+      AND NOT EXISTS (SELECT 1 FROM trigger_ml_dataset_jobs WHERE status IN ('RUNNING','CANCEL_REQUESTED'))
     ORDER BY created_at, id LIMIT 1`)
   if (!candidate) return null
   const claimed = await client.execute({
@@ -555,6 +557,10 @@ export async function claimNextOutcomeJob(
         AND NOT EXISTS (SELECT 1 FROM trigger_outcome_analysis_jobs
           WHERE status IN ('RUNNING','CANCEL_REQUESTED') AND id<>?)
         AND NOT EXISTS (SELECT 1 FROM historical_trigger_scan_jobs
+          WHERE status IN ('RUNNING','CANCEL_REQUESTED'))
+        AND NOT EXISTS (SELECT 1 FROM trigger_path_research_jobs
+          WHERE status IN ('RUNNING','CANCEL_REQUESTED'))
+        AND NOT EXISTS (SELECT 1 FROM trigger_ml_dataset_jobs
           WHERE status IN ('RUNNING','CANCEL_REQUESTED')) RETURNING *`,
     args: [current, current, ownerToken, candidate.id, candidate.id],
   })

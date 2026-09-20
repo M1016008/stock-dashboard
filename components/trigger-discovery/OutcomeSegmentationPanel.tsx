@@ -5,6 +5,7 @@ import { ChevronDown, CircleHelp, LoaderCircle, Scale } from 'lucide-react'
 import { DataPopover } from '@/components/shared/DataPopover'
 import { StageTag } from '@/components/ui/StageTag'
 import { OutcomeRobustnessPanel } from '@/components/trigger-discovery/OutcomeRobustnessPanel'
+import { PathResearchPanel } from '@/components/trigger-discovery/PathResearchPanel'
 import type { TriggerHistoricalScanResponse } from '@/lib/trigger-discovery-historical-scan-contract'
 import {
   TRIGGER_OUTCOME_HORIZONS,
@@ -25,7 +26,7 @@ import {
 } from '@/lib/trigger-discovery-outcome-segmentation'
 
 type OutcomeSelector = 'NEAR_ENTERED' | 'IN_ZONE_ENTERED' | 'ENTERED' | 'RE_ENTRY'
-type SegmentTab = 'score' | 'spread' | 'stage' | 'pair' | 'compare' | 'robustness'
+type SegmentTab = 'score' | 'spread' | 'stage' | 'pair' | 'compare' | 'robustness' | 'path'
 type SegmentMetric = 'medianReturn' | 'positiveReturnRatio' | 'medianMfe' | 'medianMae'
 type StageDimension = Exclude<TriggerOutcomeSegmentDimension, 'scoreBand' | 'spreadExpansion'>
 type ComparisonKind = 'event' | 'source'
@@ -48,6 +49,7 @@ const SEGMENT_TABS: ReadonlyArray<{ value: SegmentTab; label: string }> = [
   { value: 'pair', label: 'Stage組み合わせ' },
   { value: 'compare', label: '月足 vs 2週足' },
   { value: 'robustness', label: '観測単位' },
+  { value: 'path', label: 'Path分析' },
 ]
 
 const METRIC_OPTIONS: ReadonlyArray<{ value: SegmentMetric; label: string; shortLabel: string }> = [
@@ -633,7 +635,7 @@ export function OutcomeSegmentationPanel({
     if (tab === 'score') return ['scoreBand']
     if (tab === 'spread') return ['spreadExpansion']
     if (tab === 'stage') return [stageDimension]
-    if (tab === 'robustness') return []
+    if (tab === 'robustness' || tab === 'path') return []
     return [rowDimension, columnDimension]
   }, [tab, stageDimension, rowDimension, columnDimension])
   const dimensionKey = dimensions.join(',')
@@ -643,7 +645,7 @@ export function OutcomeSegmentationPanel({
     : null
 
   useEffect(() => {
-    if (!expanded || tab === 'compare' || tab === 'robustness' || primaryOutcomeJob.status !== 'COMPLETED' || !primaryOutcomeJob.resultAvailable) return
+    if (!expanded || tab === 'compare' || tab === 'robustness' || tab === 'path' || primaryOutcomeJob.status !== 'COMPLETED' || !primaryOutcomeJob.resultAvailable) return
     const cacheKey = `${primaryOutcomeJob.jobId}|${dimensionKey}`
     const cached = segmentCache.current.get(cacheKey)
     if (cached) {
@@ -861,8 +863,8 @@ export function OutcomeSegmentationPanel({
             </div>
           )}
 
-          {segmentError && tab !== 'compare' && <div role="alert" className="mt-3 border-l-2 border-red-500 bg-red-50 px-3 py-2 text-[10px] text-red-800">{segmentError}</div>}
-          {segmentLoading && tab !== 'compare' && <div role="status" className="mt-4 inline-flex items-center gap-2 text-[10px] text-[var(--color-brand-700)]"><LoaderCircle size={13} className="animate-spin" aria-hidden />条件別データを集計しています…</div>}
+          {segmentError && tab !== 'compare' && tab !== 'path' && <div role="alert" className="mt-3 border-l-2 border-red-500 bg-red-50 px-3 py-2 text-[10px] text-red-800">{segmentError}</div>}
+          {segmentLoading && tab !== 'compare' && tab !== 'path' && <div role="status" className="mt-4 inline-flex items-center gap-2 text-[10px] text-[var(--color-brand-700)]"><LoaderCircle size={13} className="animate-spin" aria-hidden />条件別データを集計しています…</div>}
 
           {!segmentLoading && visibleSegmentData && tab === 'score' && <div className="mt-3"><ScoreBandCards response={visibleSegmentData} horizon={horizon} /></div>}
           {!segmentLoading && visibleSegmentData && tab === 'spread' && (visibleSegmentData.meta.spreadDiagnosticsStatus === 'SPREAD_DIAGNOSTICS_UNAVAILABLE'
@@ -882,6 +884,7 @@ export function OutcomeSegmentationPanel({
             horizon={horizon}
             onHorizonChange={onHorizonChange}
           />
+          <PathResearchPanel active={expanded && tab === 'path'} outcomeJobId={primaryOutcomeJob.jobId} horizon={horizon} />
 
           {tab === 'compare' && (
             <div className="mt-3">
