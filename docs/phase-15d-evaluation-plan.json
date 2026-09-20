@@ -1,0 +1,51 @@
+{
+  "phase": "15D",
+  "purpose": "Independent cohort and truly forward temporal replication; descriptive research only",
+  "preRegistration": "Freeze before reading any Phase 15D forward or independent-cohort outcome labels",
+  "source15cExperimentSpecSha256": "4b1ae3f4ac878ab7857e56ff52563cb4c5b0b8ea408bf0331dbd5906f1785e38",
+  "source15cDatasetId": "9977384f-9d87-441c-98b7-2f3b8a818067",
+  "source15cDatasetSha256": "7431a27b6b4219fc7d77b02fb07c26066982fef7c06b6a7b7dd34942dbe52577",
+  "primaryModel": {
+    "task": "D0 / snapshot-forward MFE60 >= 0.10",
+    "training": "15C sealed-test model fitted on pre-2025-01-06 labeled data; no Phase 15B Test or Phase 15D data used for fit",
+    "encoderSha256": "e8948a1d266ea8c3107096b95d3923dcfb18c93549b7111cbec1c64ff9201469",
+    "logisticSha256": "8a920f4225804563ce8b7de9c01ed81b2d5a8b036520af5ed9232410bbc80932",
+    "lightgbmSha256": "82d5fd020f3036bbb621288ddd4c2981f80374ae411b25749618aed04e11665b"
+  },
+  "modelContract": {
+    "featureRegistry": "Exact ordered Phase 15C feature list; D0 EVENT-only subset",
+    "forbidden": "future/outcome/label and all direct or indirect volume, liquidity, trading-value and turnover features; total Trigger Score forbidden",
+    "preprocessing": "Saved 15C train-only numeric median, 1%-99% clipping, standard-deviation scaling and missing indicators; saved train-only categorical one-hot vocabulary with MISSING and UNKNOWN buckets",
+    "families": "Saved 15C alpha-10 Logistic and deterministic 120-round LightGBM; no fit, tuning or calibration update on forward holdout",
+    "seed": 1514,
+    "target": "snapshot-forward MFE >= 0.10",
+    "primaryCheckpoint": "D0",
+    "secondaryCheckpoints": ["D5", "D10", "D20"],
+    "horizonMarketSessions": 60
+  },
+  "sourceCohorts": [
+    {"id": "monthly_near_forward", "timeframe": "MONTHLY", "ma1": 20, "ma2": 25, "selector": "NEAR_ENTERED", "sourceStart": "2022-09-13", "eventAfter": "2025-09-12", "scanThrough": "2026-06-23", "analysisCutoff": "2026-09-18", "sourceJobId": "fd8c9c13-50c6-489b-bb3c-e735c7eae92d"},
+    {"id": "biweekly_near", "timeframe": "BIWEEKLY", "ma1": 25, "ma2": 44, "selector": "NEAR_ENTERED", "sourceStart": "2022-09-13", "scanThrough": "2025-09-12", "analysisCutoff": "2026-09-18", "sourceJobId": "7e16ef00-0103-43e5-a195-a20cec772a85"},
+    {"id": "monthly_zone", "timeframe": "MONTHLY", "ma1": 20, "ma2": 25, "selector": "IN_ZONE_ENTERED", "sourceStart": "2022-09-13", "scanThrough": "2025-09-12", "analysisCutoff": "2026-09-18", "sourceJobId": "fd8c9c13-50c6-489b-bb3c-e735c7eae92d"},
+    {"id": "biweekly_zone", "timeframe": "BIWEEKLY", "ma1": 25, "ma2": 44, "selector": "IN_ZONE_ENTERED", "sourceStart": "2022-09-13", "scanThrough": "2025-09-12", "analysisCutoff": "2026-09-18", "sourceJobId": "7e16ef00-0103-43e5-a195-a20cec772a85"},
+    {"id": "monthly_below_zone", "timeframe": "MONTHLY", "ma1": 20, "ma2": 25, "sourceStart": "2022-09-13", "scanThrough": "2025-09-12", "analysisCutoff": "2026-09-18", "belowZoneToleranceEnabled": true, "maxBelowZonePct": 3, "selector": "STATUS_CHANGED with currentStatus BELOW_ZONE; no dedicated Outcome selector; first audit events and feasibility"}
+  ],
+  "commonSourceFilters": "Copy the audited 15B Monthly or Biweekly research request without changing other fields or thresholds",
+  "forwardEligibility": {
+    "eventDateStrictlyAfter": "2025-09-12",
+    "analysisCutoff": "2026-09-18",
+    "lastEventDateByCheckpointFrom7203MarketCalendar": {"D0": "2026-06-23", "D5": "2026-06-16", "D10": "2026-06-09", "D20": "2026-05-26"},
+    "rule": "featureAsOfDate + 60 market sessions must be <= cutoff; actual label availability must be true; exclude episodes with first event <= 2025-09-12"
+  },
+  "independentCohortEvaluation": {
+    "frozenTransfer": "Apply saved D0 models unchanged to eligible cohort rows",
+    "withinCohortWalkForward": "Same three 140-session pre-2025 Validation folds as 15C with episode isolation and strict label-availability purge; no hyperparameter changes",
+    "nativeFinalTest": "Single separately logged evaluation of source cohort 2025-01-06 onward after validation; never used for tuning",
+    "smallSample": "Report event/episode/ticker and positive/negative counts first; suppress ML interpretation when fewer than 40 eligible rows or only one class"
+  },
+  "metrics": ["ROC-AUC", "PR-AUC", "LogLoss", "Brier", "prevalence", "five prediction-quantile calibration bins", "Q1-Q5 count/rate/median return/median MFE/median MAE/return Q25/Q75", "feature and label drift"],
+  "secondaryControls": ["D0 forwardReturn60 > 0", "D0 forwardReturn60 regression"],
+  "minimumReporting": ["events", "episodes", "tickers", "positive", "negative", "D0/D5/D10/D20 eligible", "source and feature date bounds", "event and episode overlap", "direct and transitive liquidity feature count", "runtime", "memory", "artifact bytes"],
+  "noRetuneRule": "Never change cohort, MA pair, event selector, feature list, model, seed, target, date boundary or reporting rule after looking at outcomes; the Phase 15C 0.666 is reference only",
+  "productionMlGate": "NO"
+}

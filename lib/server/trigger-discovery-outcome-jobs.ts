@@ -457,6 +457,7 @@ export async function listRecentCompletedOutcomeJobs(limit = 20): Promise<Trigge
     JOIN historical_trigger_scan_jobs h ON h.id = o.historical_scan_job_id
     WHERE o.status = 'COMPLETED' AND o.result_location = o.id AND o.expires_at > unixepoch()
       AND h.status = 'COMPLETED' AND h.expires_at > unixepoch()
+      AND COALESCE(json_extract(h.request_json, '$.researchLongRange'), 0) = 0
     ORDER BY o.completed_at DESC LIMIT ?`, [Math.max(1, Math.min(limit, 20))])
   const available = await Promise.all(rows.map(async (row) => {
     if (!await filesAvailable(row.id)) return null

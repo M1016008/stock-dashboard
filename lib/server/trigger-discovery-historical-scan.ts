@@ -429,7 +429,7 @@ function candidateSnapshot(
   }
 }
 
-function historicalSnapshot(row: TriggerDiscoveryRow): TriggerHistoricalScanCandidateSnapshot {
+export function historicalSnapshot(row: TriggerDiscoveryRow): TriggerHistoricalScanCandidateSnapshot {
   return {
     ticker: row.ticker,
     companyName: row.companyName,
@@ -728,15 +728,17 @@ export async function getTriggerHistoricalScan(input: {
   queryStartedAt = performance.now()
   const dailySqlRows = input.timeframe === 'MONTHLY'
     ? await execAll<DailySqlRow>(`
-        WITH month_ends AS (
-          SELECT ticker, substr(date, 1, 7) AS month_key, MAX(date) AS date
+        WITH month_edges AS (
+          SELECT ticker, substr(date, 1, 7) AS month_key,
+                 MIN(date) AS first_date, MAX(date) AS last_date
           FROM ohlcv_daily
           WHERE date >= ? AND date < ?
           GROUP BY ticker, month_key
         )
         SELECT o.ticker, o.date, o.close, o.volume, 0 AS is_full_daily
-        FROM month_ends
-        INNER JOIN ohlcv_daily AS o ON o.ticker=month_ends.ticker AND o.date=month_ends.date
+        FROM month_edges
+        INNER JOIN ohlcv_daily AS o ON o.ticker=month_edges.ticker
+          AND o.date IN (month_edges.first_date, month_edges.last_date)
         UNION ALL
         SELECT ticker, date, close, volume, 1 AS is_full_daily
         FROM ohlcv_daily

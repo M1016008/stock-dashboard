@@ -163,7 +163,7 @@ async function removeJobFiles(jobId: string): Promise<void> {
   await Promise.all(Object.values(paths).map((file) => rm(file, { force: true })))
 }
 
-async function sourceFingerprint(): Promise<string> {
+export async function historicalScanSourceFingerprint(): Promise<string> {
   const row = await execGet<SourceFingerprintRow>(`SELECT
     (SELECT MAX(date) FROM ohlcv_daily) AS ohlcv_date,
     (SELECT MAX(date) FROM weekly_ohlcv) AS weekly_date,
@@ -280,7 +280,7 @@ export async function createHistoricalScanJob(
   if (totalDays > MAX_HISTORICAL_SCAN_TRADING_DAYS) {
     throw new RangeError(`historical scan supports at most ${MAX_HISTORICAL_SCAN_TRADING_DAYS} trading days`)
   }
-  const fingerprint = await sourceFingerprint()
+  const fingerprint = await historicalScanSourceFingerprint()
   const requestSignature = historicalScanRequestSignature(request)
   const now = nowSeconds()
   const reuseSeconds = boundedIntegerEnv(
@@ -349,7 +349,9 @@ export async function getHistoricalScanJob(id: string): Promise<TriggerHistorica
 export async function listHistoricalScanJobs(limit = 20): Promise<TriggerHistoricalScanJobListResponse> {
   const boundedLimit = Math.max(1, Math.min(20, Math.trunc(limit)))
   const rows = await execAll<TriggerHistoricalScanJobRow>(
-    'SELECT * FROM historical_trigger_scan_jobs ORDER BY created_at DESC LIMIT ?',
+    `SELECT * FROM historical_trigger_scan_jobs
+      WHERE COALESCE(json_extract(request_json, '$.researchLongRange'), 0) = 0
+      ORDER BY created_at DESC LIMIT ?`,
     [boundedLimit],
   )
   return {

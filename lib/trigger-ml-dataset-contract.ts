@@ -243,6 +243,8 @@ export interface TriggerMlDatasetManifest {
   sourceOutcomeJobId: string
   sourcePathResearchJobId: string
   sourceSha256: { scan: string; outcome: string; path: string }
+  researchProvenance?: import('@/lib/trigger-discovery-historical-scan-contract').TriggerHistoricalScanResponse['researchProvenance']
+  temporalFolds?: Array<{ id: string; validationStart: string; testStart: string; embargoSessions: number }>
   featureSchemaVersion: typeof TRIGGER_ML_FEATURE_SCHEMA_VERSION
   labelSchemaVersion: typeof TRIGGER_ML_LABEL_SCHEMA_VERSION
   pathSchemaVersion: string

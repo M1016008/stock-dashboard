@@ -130,6 +130,16 @@ export interface TriggerHistoricalScanPerformance {
 
 export interface TriggerHistoricalScanResponse {
   contractVersion: typeof TRIGGER_DISCOVERY_HISTORICAL_SCAN_CONTRACT_VERSION
+  researchProvenance?: {
+    mode: 'RESEARCH_LONG_RANGE_CHUNKED'
+    version: number
+    sourceDateRange: { start: string; end: string }
+    chunkSessions: number
+    chunkRanges: Array<[string, string]>
+    engineVersion: string
+    sourceFingerprint: string
+    eventsSha256: string
+  }
   scanMeta: {
     requestedStartDate: string
     resolvedStartDate: string | null

@@ -238,6 +238,8 @@ export async function executeMlDatasetJob(row: Row, shutdownSignal?: AbortSignal
         sourceHistoricalScanJobId: row.historical_scan_job_id,
         sourceOutcomeJobId: row.outcome_job_id, sourcePathResearchJobId: row.path_research_job_id,
         sourceSha256: checked.hashes,
+        ...(checked.outcome.historical.researchProvenance
+          ? { researchProvenance: checked.outcome.historical.researchProvenance } : {}),
         featureSchemaVersion: TRIGGER_ML_FEATURE_SCHEMA_VERSION,
         labelSchemaVersion: TRIGGER_ML_LABEL_SCHEMA_VERSION,
         pathSchemaVersion: TRIGGER_PATH_CONTRACT_VERSION,
@@ -245,6 +247,11 @@ export async function executeMlDatasetJob(row: Row, shutdownSignal?: AbortSignal
         featureColumns: TRIGGER_ML_FEATURE_REGISTRY,
         labelColumns: TRIGGER_ML_LABEL_REGISTRY,
         ...built.summary,
+        ...(checked.outcome.historical.researchProvenance ? { temporalFolds: [{
+          id: 'fold1', validationStart: built.summary.splitPolicy.validationStart,
+          testStart: built.summary.splitPolicy.testStart,
+          embargoSessions: built.summary.splitPolicy.embargoSessions,
+        }] } : {}),
         timeframe: checked.outcome.historical.scanMeta.timeframe,
         ma1Period: checked.outcome.historical.scanMeta.ma1Period,
         ma2Period: checked.outcome.historical.scanMeta.ma2Period,

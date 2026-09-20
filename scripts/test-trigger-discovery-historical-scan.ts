@@ -158,6 +158,7 @@ async function compareSingleDay(
   date: string,
   timeframe: 'MONTHLY' | 'BIWEEKLY',
   spreadExpansionEnabled = false,
+  expectedTickers: string[] = [],
 ): Promise<{ matched: number; totalMs: number }> {
   let scanRows: TriggerDiscoveryRow[] = []
   const scan = await getTriggerHistoricalScan({
@@ -191,6 +192,9 @@ async function compareSingleDay(
   assert.equal(scan.scanMeta.baselineCandidateCount, single.totalMatched)
   assert.equal(scan.summary.totalEventCount, 0, 'first scan day is a baseline')
   assertRowsEqual(scanRows, single.rows, `${timeframe} ${date}`)
+  for (const ticker of expectedTickers) {
+    assert.ok(scanRows.some((row) => row.ticker === ticker), `${timeframe} ${date}: ${ticker} must be present`)
+  }
   return { matched: scanRows.length, totalMs: scan.performance.totalMs }
 }
 
@@ -290,6 +294,7 @@ async function main() {
   }), /at most 520 trading days/)
 
   const monthly = await compareSingleDay('2026-08-25', 'MONTHLY')
+  const earlySparseMonthly = await compareSingleDay('2023-01-10', 'MONTHLY', false, ['2050', '2066'])
   const biweekly = await compareSingleDay('2026-08-25', 'BIWEEKLY')
   const monthlySpread = await compareSingleDay('2026-08-25', 'MONTHLY', true)
   const biweeklySpread = await compareSingleDay('2026-08-25', 'BIWEEKLY', true)
@@ -366,7 +371,8 @@ async function main() {
 
   const after = await sideEffects()
   assert.deepEqual(after, before, 'Historical scan must remain read-only')
-  console.log(JSON.stringify({ monthly, biweekly, monthlySpread, biweeklySpread, spreadPeriodParity, fiveDay: fiveDay.summary,
+  console.log(JSON.stringify({ monthly, earlySparseMonthly, biweekly, monthlySpread, biweeklySpread,
+    spreadPeriodParity, fiveDay: fiveDay.summary,
     weekend: weekend.scanMeta, sideEffectsBefore: before, sideEffectsAfter: after }, null, 2))
   console.log('Trigger Discovery historical period scan tests passed')
 }

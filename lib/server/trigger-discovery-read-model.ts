@@ -935,6 +935,10 @@ export function createTriggerDiscoverySqlDataSource(): TriggerDiscoveryDataSourc
                      ORDER BY o.date DESC
                    ) AS month_rank,
                    ROW_NUMBER() OVER (
+                     PARTITION BY o.ticker, substr(o.date, 1, 7)
+                     ORDER BY o.date ASC
+                   ) AS month_first_rank,
+                   ROW_NUMBER() OVER (
                      PARTITION BY o.ticker
                      ORDER BY o.date DESC
                    ) AS recent_rank
@@ -947,21 +951,23 @@ export function createTriggerDiscoverySqlDataSource(): TriggerDiscoveryDataSourc
           SELECT ticker, date, open, high, low, close, volume,
                  CASE WHEN recent_rank <= ? THEN 1 ELSE 0 END AS is_recent
           FROM bounded
-          WHERE month_rank = 1 OR recent_rank <= ?
+          WHERE month_rank = 1 OR month_first_rank = 1 OR recent_rank <= ?
           ORDER BY ticker, date
         `, [...cte.args, historyStart, requiredObservations, requiredObservations])
       } else {
         rows = await execAll<GenericMaSqlRow>(`
-          WITH month_ends AS (
-            SELECT ticker, substr(date, 1, 7) AS month_key, MAX(date) AS date
+          WITH month_edges AS (
+            SELECT ticker, substr(date, 1, 7) AS month_key,
+                   MIN(date) AS first_date, MAX(date) AS last_date
             FROM ohlcv_daily
             WHERE date BETWEEN ? AND ?
             GROUP BY ticker, month_key
           )
           SELECT o.ticker, o.date, o.open, o.high, o.low, o.close, o.volume, 0 AS is_recent
-          FROM month_ends
+          FROM month_edges
           INNER JOIN ohlcv_daily AS o
-            ON o.ticker = month_ends.ticker AND o.date = month_ends.date
+            ON o.ticker = month_edges.ticker
+            AND o.date IN (month_edges.first_date, month_edges.last_date)
           UNION ALL
           SELECT o.ticker, o.date, o.open, o.high, o.low, o.close, o.volume, 1 AS is_recent
           FROM ohlcv_daily AS o
