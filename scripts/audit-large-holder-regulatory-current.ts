@@ -17,6 +17,7 @@ import { resolveRevisionChains, type RevisionFiling } from '@/lib/large-holders/
 import { downloadEdinetPublicArchiveBytes, downloadEdinetPublicXbrl,
   type EdinetDocumentIndexRow } from '@/lib/server/edinet-api'
 import { classifyFromFiling, classForCategory, type InvestorCategory } from '@/lib/large-holders/classification'
+import { currentPositionEntityId } from '@/lib/large-holders/entity-adjudications'
 import { archiveOfficialRaw, decisionHash, derivedFact, sha256, verifyArchivedLineage,
   type RawEvidence } from '@/lib/large-holders/evidence-provenance'
 
@@ -72,14 +73,17 @@ const revisions = resolveRevisionChains(all(`SELECT f.document_id,f.filing_type,
     reportSerialNumber: num(row.report_serial_number), submissionCount: num(row.submission_count) })), certificationDate)
 const effective = new Set(revisions.filter((row) => row.isEffectiveRevision).map((row) => row.documentId))
 const latest = new Map<string, Row>()
-const positions = all(`SELECT p.document_id,p.holder_key,p.ticker,p.entity_id,f.submitted_at,f.obligation_date
-  FROM large_holder_positions p JOIN large_holder_filings f USING(document_id)`)
+const positions = all(`SELECT p.document_id,p.holder_key,p.ticker,p.entity_id,p.reported_shares,
+  p.reported_holding_pct,f.submitted_at,f.obligation_date,f.issuer_edinet_code,
+  f.filer_edinet_code,f.report_serial_number,s.xbrl_sha256
+  FROM large_holder_positions p JOIN large_holder_filings f USING(document_id)
+  LEFT JOIN large_holder_source_documents s USING(document_id)`)
   .filter((row) => effective.has(str(row.document_id)))
 positions.sort((a, b) => str(b.obligation_date ?? b.submitted_at).localeCompare(str(a.obligation_date ?? a.submitted_at))
   || str(b.submitted_at).localeCompare(str(a.submitted_at))
   || str(b.document_id).localeCompare(str(a.document_id)))
 for (const position of positions) {
-  const key = `${position.entity_id}:${position.ticker}`
+  const key = `${phase16a8 ? currentPositionEntityId(position) : position.entity_id}:${position.ticker}`
   if (!latest.has(key)) latest.set(key, position)
 }
 const latestKeys = new Set([...latest.values()].map((row) => `${row.document_id}:${row.holder_key}`))
@@ -557,7 +561,7 @@ async function main() {
     elapsedMs: Date.now() - started, maxRssBytes: process.resourceUsage().maxRSS * 1024,
     rssBytesAtReport: process.memoryUsage().rss, dbWrites: 0, deploy: false }
   console.log(JSON.stringify(result, null, 2))
-  if (mismatches || independentChecks < 20 || superseded !== 54
+  if (mismatches || independentChecks < 20 || superseded !== (phase16a8 ? 55 : 54)
     || (phase16a8 && !phase16a8Gate)) process.exitCode = 1
 }
 

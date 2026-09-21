@@ -34,9 +34,24 @@ async function main() {
   const snapshot = JSON.parse(await readFile(snapshotPath, 'utf8')) as RankingSnapshot
   const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as {
     lineages: { positionKey: string; entityId: string; decision: { amount: number } }[] }
-  assert.equal(snapshot.publicCurrentValuationReadyCount, 179)
-  assert.equal(snapshot.currentPositionCount, 224)
-  assert.equal(snapshot.investors.length, 165)
+  assert.equal(snapshot.publicCurrentValuationReadyCount, 178)
+  assert.equal(snapshot.currentPositionCount, 223)
+  assert.equal(snapshot.investors.length, 164)
+  assert.ok(!snapshot.investors.some((item) => item.investorEntityId === 'lh_4b4bdd801d865a0c6c577ad03f57bd26'))
+  const reviewed = snapshot.investors.find((item) => item.investorEntityId === 'lh_44ef9d6d00842f13476768dc59f0c222')!
+  assert.deepEqual(reviewed.positions.filter((position) => position.ticker === '6459')
+    .map((position) => position.documentId), ['S100YX61'])
+  assert.ok(snapshot.filings.find((filing) => filing.documentId === 'S100YQZ0')
+    ?.investorEntityIds.includes(reviewed.investorEntityId))
+  const nameTickerEntities = new Map<string, Set<string>>()
+  for (const investor of snapshot.investors) for (const position of investor.positions) {
+    const key = `${investor.displayName.normalize('NFKC').replace(/\s/g, '')}:${position.ticker}`
+    const entities = nameTickerEntities.get(key) ?? new Set<string>()
+    entities.add(investor.investorEntityId)
+    nameTickerEntities.set(key, entities)
+  }
+  const duplicateGroups = [...nameTickerEntities.values()].filter((entities) => entities.size > 1).length
+  assert.equal(duplicateGroups, 0)
   const db = new DatabaseSync(dbPath, { readOnly: true })
   db.exec('PRAGMA query_only=ON')
   try {
@@ -80,7 +95,7 @@ async function main() {
     assert.ok(checked.filter((item) => item.investorClass === 'INDIVIDUAL').length >= 10)
     assert.ok(checked.filter((item) => item.investorClass === 'INSTITUTIONAL').length >= 10)
     assert.equal(new Set(snapshot.investors.flatMap((item) => item.positions
-      .map((position) => `${item.investorEntityId}:${position.ticker}`))).size, 224)
+      .map((position) => `${item.investorEntityId}:${position.ticker}`))).size, 223)
     assert.equal(snapshot.activities.filter((activity) => {
       const filing = snapshot.filings.find((item) => item.documentId === activity.documentId)
       return !filing || filing.filingType === 'AMENDMENT'
@@ -159,16 +174,16 @@ async function main() {
       return response.json() as Promise<{ total: number; rows: unknown[] }>
     }
     const total = await status('TOTAL_VALUE')
-    assert.equal(total.total, 165)
+    assert.equal(total.total, 164)
     const individuals = await status('TOTAL_VALUE', '&investorClass=INDIVIDUAL')
     const institutions = await status('TOTAL_VALUE', '&investorClass=INSTITUTIONAL')
-    assert.equal(individuals.total, 56)
+    assert.equal(individuals.total, 55)
     assert.equal(institutions.total, 25)
-    assert.equal((await status('TOTAL_VALUE', '&completeness=COMPLETE')).total, 131)
+    assert.equal((await status('TOTAL_VALUE', '&completeness=COMPLETE')).total, 130)
     assert.equal((await status('TOTAL_VALUE', '&completeness=PARTIAL')).total, 7)
     assert.equal((await status('TOTAL_VALUE', '&completeness=NONE')).total, 27)
     const investment = await status('TOTAL_VALUE', '&basis=INVESTMENT_AUTHORITY')
-    assert.equal(investment.total, 165)
+    assert.equal(investment.total, 164)
     const page1 = await status('TOTAL_VALUE', '&pageSize=10&page=1')
     const page2 = await status('TOTAL_VALUE', '&pageSize=10&page=2')
     const ids = [...page1.rows, ...page2.rows].map((row) =>
@@ -184,7 +199,7 @@ async function main() {
     assert.deepEqual(names, [...names].sort((a, b) => a.localeCompare(b, 'ja')))
     const actualMarket = firstMarket(snapshot)
     const marketRows = await status('TOTAL_VALUE', `&market=${encodeURIComponent(actualMarket)}`)
-    assert.ok(marketRows.total > 0 && marketRows.total < 165)
+    assert.ok(marketRows.total > 0 && marketRows.total < 164)
     for (const row of marketRows.rows) {
       const item = row as { investorEntityId: string; rankingValue: number | null }
       const expected = snapshot.investors.find((investor) => investor.investorEntityId === item.investorEntityId)!
@@ -219,7 +234,7 @@ async function main() {
     console.log(JSON.stringify({ passed: true, independentlyCheckedInvestors: checked.length,
       individual: checked.filter((item) => item.investorClass === 'INDIVIDUAL').length,
       institutional: checked.filter((item) => item.investorClass === 'INSTITUTIONAL').length,
-      mismatch: 0, jointDuplicates: 0, amendmentFalseActivity: 0,
+      mismatch: 0, jointDuplicates: duplicateGroups, amendmentFalseActivity: 0,
       activity: Object.fromEntries(['NEW_5PCT','INCREASE','DECREASE']
         .map((type) => [type, snapshot.activities.filter((item) => item.eventType === type).length])) }))
   } finally { db.close() }
