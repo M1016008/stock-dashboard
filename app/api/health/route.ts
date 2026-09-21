@@ -1,11 +1,11 @@
 import path from 'node:path'
-import { anyStorageFatal, configForDatabase, hasStorageFatalLatch, inspectStorage, requiresExternalStorageGuard } from '@/lib/storage/external-storage-guard'
+import { anyStorageFatal, anyStorageUncertain, configForDatabase, guardForDatabase, hasStorageFatalLatch, hasStorageUncertainMarker, requiresExternalStorageGuard } from '@/lib/storage/external-storage-guard'
 import { resolveConfiguredStoragePath } from '@/lib/storage-paths'
 
 export const dynamic = 'force-dynamic'
 
 export async function GET() {
-  let storageStatus: 'available' | 'unavailable' = 'available'
+  let storageStatus: 'available' | 'verifying' | 'unavailable' = 'available'
   if (!process.env.TURSO_DATABASE_URL || process.env.USE_LOCAL_DB === '1') {
     const configured = process.env.STOCKBOARD_DB_PATH || process.env.LOCAL_DB_PATH
     const dbPath = configured ? resolveConfiguredStoragePath(configured) : path.join(process.cwd(), 'data', 'stockboard.db')
@@ -14,7 +14,8 @@ export async function GET() {
       else if (requiresExternalStorageGuard(dbPath)) {
         const config = configForDatabase(dbPath, 'web-health')
         if (hasStorageFatalLatch(config)) storageStatus = 'unavailable'
-        else inspectStorage(config)
+        else if (anyStorageUncertain() || hasStorageUncertainMarker(config)) storageStatus = 'verifying'
+        else guardForDatabase(dbPath, 'web-health').assertWritable()
       }
     } catch {
       storageStatus = 'unavailable'

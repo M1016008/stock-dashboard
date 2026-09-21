@@ -110,13 +110,24 @@ export async function recoverStorage(
   if (!hasStorageFatalLatch(config) || latestIncident(dir).incidentId !== incidentId) {
     throw new Error('Storage incident state changed during recovery observation')
   }
+  const uncertainMarkers = fs.readdirSync(dir).filter((name) => /^PROBE_UNCERTAIN-\d+$/.test(name))
+  for (const marker of uncertainMarkers) {
+    const pid = Number(marker.slice('PROBE_UNCERTAIN-'.length))
+    try {
+      process.kill(pid, 0)
+      throw new Error(`Probe owner remains alive: ${pid}`)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ESRCH') continue
+      throw error
+    }
+  }
 
   const resolvedAt = new Date().toISOString()
   const record = {
     incidentId, incidentTimestamp: incident.timestamp, originalErrorCode: incident.errorCode,
     resolvedAt, resolution, operatorAction: 'storage:recover',
     preflight: { uuidMatch: true, dbOnExpectedDevice: true, freeSpacePass: true, noActiveDbHandles: true },
-    observations, intervalMs, newStorageErrors: 0,
+    observations, intervalMs, newStorageErrors: 0, archivedStaleProbeMarkers: uncertainMarkers.length,
   }
   const recordPath = path.join(dir, `recovery-${incidentId}.json`)
   const archivedLatch = path.join(dir, `FAILED_SAFE.resolved-${incidentId}`)
@@ -125,6 +136,9 @@ export async function recoverStorage(
     fs.writeFileSync(descriptor, `${JSON.stringify(record, null, 2)}\n`)
     fs.fsyncSync(descriptor)
   } finally { fs.closeSync(descriptor) }
+  for (const marker of uncertainMarkers) {
+    fs.renameSync(path.join(dir, marker), path.join(dir, `${marker}.resolved-${incidentId}`))
+  }
   fs.renameSync(storageFatalLatchPath(config), archivedLatch)
   return { incidentId, checks: observations, resolvedAt }
 }

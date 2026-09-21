@@ -13,6 +13,12 @@ async function main() {
     process.env.STOCK_DATA_VOLUME_UUID = 'fixture-uuid'
     process.env.STOCK_DATA_INCIDENT_DIR = incidentDirectory
     process.env.EXTERNAL_STORAGE_REQUIRED = 'true'
+    const marker = path.join(incidentDirectory, `PROBE_UNCERTAIN-${process.pid}`)
+    fs.writeFileSync(marker, 'fixture\n')
+    const verifying = await GET()
+    assert.equal(verifying.status, 503)
+    assert.equal((await verifying.json() as Record<string, unknown>).storageStatus, 'verifying')
+    fs.unlinkSync(marker)
     const response = await GET()
     assert.equal(response.status, 503)
     const body = await response.json() as Record<string, unknown>

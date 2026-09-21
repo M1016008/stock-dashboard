@@ -5,7 +5,7 @@ import path from 'node:path'
 import { NextRequest } from 'next/server'
 import { proxy } from '../proxy'
 import {
-  ExternalStorageGuard, StorageUnavailableError, inspectStorage, inspectWritableTargetPath, isStorageIoError, requiresExternalStorageGuard,
+  ExternalStorageGuard, StorageUnavailableError, inspectStorage, inspectWritableTargetPath, isStorageIoError, mountTableContains, requiresExternalStorageGuard,
   type GuardConfig, type StorageProbe, type VolumeIdentity,
 } from '@/lib/storage/external-storage-guard'
 
@@ -26,6 +26,7 @@ let volume = healthyVolume
 let probeCalls = 0
 const probe: StorageProbe = {
   volume: () => { probeCalls++; return mounted ? volume : null },
+  mountPresent: () => mounted,
   realpath: (value) => value,
   stat: (value) => ({ dev: 42, isFile: () => value === db || value.endsWith('-wal') || value.endsWith('-shm'), isDirectory: () => value === mount }),
   exists: (value) => mounted && (value === mount || (present && value === db)),
@@ -36,6 +37,12 @@ function expectCode(code: string, fn: () => unknown): void {
 }
 
 try {
+  assert.equal(mountTableContains('/dev/disk5s1 on /Volumes/OWC Express 1M2 80G (apfs, local, journaled)',
+    '/Volumes/OWC Express 1M2 80G'), true)
+  assert.equal(mountTableContains('/dev/disk5s1 on /Volumes/OWC Express 1M2 80G copy (apfs, local)',
+    '/Volumes/OWC Express 1M2 80G'), false)
+  assert.equal(mountTableContains('/dev/disk5s1 on /Volumes/OWC\\040Express\\0401M2\\04080G (apfs, local)',
+    '/Volumes/OWC Express 1M2 80G'), true)
   assert.equal(inspectStorage(config, probe).uuid, 'test-uuid')
   assert.equal(inspectWritableTargetPath(config, probe).uuid, 'test-uuid')
   assert.equal(inspectWritableTargetPath({ ...config, dbPath: `${mount}/new/output.db` }, probe).uuid, 'test-uuid')
@@ -57,9 +64,65 @@ try {
     volume: () => { throw new StorageUnavailableError('PROBE_FAILED', 'volume identity probe timed out') },
   }
   expectCode('PROBE_FAILED', () => inspectStorage(config, failedProbe))
-  const probeFailure = new ExternalStorageGuard(config, failedProbe)
+  let transientCalls = 0
+  let writesDuringUncertainty = 0
+  let transientGuard: ExternalStorageGuard
+  transientGuard = new ExternalStorageGuard(config, {
+    ...probe,
+    volume: () => {
+      transientCalls++
+      if (transientCalls === 1) throw new StorageUnavailableError('PROBE_FAILED', 'diskutil timeout', {
+        probeStage: 'DISKUTIL_INFO', startedAt: new Date().toISOString(), durationMs: 8_000,
+        exitStatus: null, signal: 'SIGTERM', stderr: null,
+      })
+      return healthyVolume
+    },
+  }, { wait: () => {
+    assert.equal(transientGuard.status, 'PROBE_UNCERTAIN')
+    assert.equal(fs.existsSync(path.join(tmp, `PROBE_UNCERTAIN-${process.pid}`)), true)
+    expectCode('PROBE_FAILED', () => { transientGuard.assertWritable(); writesDuringUncertainty++ })
+    const peer = new ExternalStorageGuard(config, probe)
+    expectCode('PROBE_FAILED', () => { peer.assertWritable(); writesDuringUncertainty++ })
+  } })
+  transientGuard.assertWritable(true)
+  assert.equal(transientGuard.status, 'HEALTHY')
+  assert.equal(transientCalls, 2)
+  assert.equal(writesDuringUncertainty, 0)
+  assert.equal(transientGuard.probeMetrics.recoveredTransientCount, 1)
+  assert.equal(fs.existsSync(path.join(tmp, 'FAILED_SAFE')), false)
+  assert.equal(fs.existsSync(path.join(tmp, `PROBE_UNCERTAIN-${process.pid}`)), false)
+  const parseGuard = new ExternalStorageGuard(config, {
+    ...probe, volume: (() => {
+      let attempts = 0
+      return () => {
+        if (++attempts === 1) throw new StorageUnavailableError('PROBE_FAILED', 'plutil parse failure', {
+          probeStage: 'PLUTIL_PARSE', startedAt: new Date().toISOString(), durationMs: 1,
+          exitStatus: 1, signal: null, stderr: null,
+        })
+        return healthyVolume
+      }
+    })(),
+  }, { wait: () => undefined })
+  parseGuard.assertWritable(true)
+  assert.equal(parseGuard.status, 'HEALTHY')
+  let mountTableCalls = 0
+  const mountTableGuard = new ExternalStorageGuard(config, {
+    ...probe,
+    mountPresent: () => {
+      if (++mountTableCalls === 1) throw new StorageUnavailableError('PROBE_FAILED', 'mount table timeout', {
+        probeStage: 'MOUNT_TABLE', startedAt: new Date().toISOString(), durationMs: 8_000,
+        exitStatus: null, signal: 'SIGTERM', stderr: null,
+      })
+      return true
+    },
+  }, { wait: () => undefined })
+  mountTableGuard.assertWritable(true)
+  assert.equal(mountTableGuard.status, 'HEALTHY')
+  assert.equal(mountTableCalls >= 3, true)
+  const probeFailure = new ExternalStorageGuard(config, failedProbe, { wait: () => undefined })
   expectCode('PROBE_FAILED', () => probeFailure.assertWritable(true))
-  assert.equal(probeFailure.status, 'FAILED_SAFE', 'probe failure must remain fail-closed')
+  assert.equal(probeFailure.status, 'FAILED_SAFE', 'three failed certifications require manual recovery')
+  assert.equal(probeFailure.probeMetrics.fullCount, 3)
   fs.unlinkSync(path.join(tmp, 'FAILED_SAFE'))
 
   mounted = false
@@ -134,6 +197,30 @@ try {
   mounted = true
   assert.equal(isStorageIoError(new Error('database or disk is full')), true)
   assert.equal(fs.readFileSync(incidentFile, 'utf8').includes('test-uuid'), false, 'incidents must not expose UUID')
+  const events = fs.readFileSync(path.join(tmp, 'probe-events.ndjson'), 'utf8')
+  assert.match(events, /DISKUTIL_INFO/)
+  assert.match(events, /PLUTIL_PARSE/)
+  assert.match(events, /MOUNT_TABLE/)
+  assert.match(events, /TRANSIENT_PROBE_FAILURE_RECOVERED/)
+
+  let changedDevice = false
+  const deviceGuard = new ExternalStorageGuard(config, {
+    ...probe,
+    stat: (value) => ({ dev: changedDevice ? 43 : 42,
+      isFile: () => value === db, isDirectory: () => value === mount }),
+  }, { wait: () => undefined })
+  deviceGuard.assertWritable(true)
+  changedDevice = true
+  expectCode('VOLUME_IDENTITY_LOST', () => deviceGuard.assertWritable(true))
+  assert.equal(deviceGuard.status, 'FAILED_SAFE')
+  fs.unlinkSync(path.join(tmp, 'FAILED_SAFE'))
+  const staleMarker = path.join(tmp, 'PROBE_UNCERTAIN-999999999')
+  fs.writeFileSync(staleMarker, 'fixture\n')
+  const staleOwnerGuard = new ExternalStorageGuard(config, probe)
+  expectCode('FATAL_STORAGE_IO', () => staleOwnerGuard.assertWritable())
+  assert.equal(staleOwnerGuard.status, 'FAILED_SAFE')
+  fs.unlinkSync(staleMarker)
+  fs.unlinkSync(path.join(tmp, 'FAILED_SAFE'))
 
   const absentMount = `/Volumes/stockboard-guard-never-mounted-${process.pid}`
   const oldDbPath = process.env.STOCKBOARD_DB_PATH

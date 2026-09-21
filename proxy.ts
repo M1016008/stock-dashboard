@@ -6,7 +6,7 @@
 
 import { NextResponse, type NextRequest } from 'next/server'
 import path from 'node:path'
-import { anyStorageFatal, guardForDatabase, requiresExternalStorageGuard } from './lib/storage/external-storage-guard'
+import { anyStorageFatal, anyStorageUncertain, guardForDatabase, requiresExternalStorageGuard } from './lib/storage/external-storage-guard'
 import { resolveConfiguredStoragePath } from './lib/storage-paths'
 
 const SHARE_AUTH_REALM = 'StockBoard shared preview'
@@ -99,7 +99,7 @@ export function proxy(req: NextRequest) {
   const pathname = req.nextUrl.pathname
   // Health reports storage degradation without hiding the running web process.
   if (pathname === '/api/health') return NextResponse.next()
-  if (anyStorageFatal()) return unavailable('STORAGE_UNAVAILABLE')
+  if (anyStorageFatal() || anyStorageUncertain()) return unavailable('STORAGE_UNAVAILABLE')
 
   if (!process.env.TURSO_DATABASE_URL || process.env.USE_LOCAL_DB === '1') {
     const configured = process.env.STOCKBOARD_DB_PATH || process.env.LOCAL_DB_PATH

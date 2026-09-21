@@ -149,7 +149,7 @@ export async function runTriggerHistoricalWorkLoop(): Promise<void> {
     return
   }
   // Cheap device/DB identity checks between long write batches; the guard
-  // refreshes the UUID only once per minute and latches any failure.
+  // refreshes the UUID every five minutes and confirms uncertain probe failures.
   const storageHeartbeat = storage ? setInterval(() => {
     try { storage.assertWritable() }
     catch (error) {
