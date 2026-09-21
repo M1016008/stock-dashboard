@@ -91,6 +91,21 @@ def is_storage_error(error):
     return False
 
 
+def companion_requires_full_probe(companion, real_mount, mount_dev):
+    if not companion.exists():
+        return False
+    try:
+        real_companion = companion.resolve(strict=True)
+        companion_dev = companion.stat().st_dev
+    except FileNotFoundError:
+        if companion.exists():
+            raise
+        return True
+    if not real_companion.is_relative_to(real_mount) or companion_dev != mount_dev:
+        raise StorageFatal("SQLite companion is outside expected volume")
+    return False
+
+
 class StorageGuard:
     def __init__(self, target, *, probe=volume_info, clock=time.monotonic, wait=time.sleep):
         self.target = Path(target).absolute()
@@ -179,9 +194,8 @@ class StorageGuard:
             raise StorageFatal("DB is not a file on the expected device")
         for suffix in ("-wal", "-shm"):
             companion = Path(str(self.target) + suffix)
-            if companion.exists() and (not companion.resolve(strict=True).is_relative_to(real_mount)
-                                       or companion.stat().st_dev != mount_dev):
-                raise StorageFatal("SQLite companion is outside expected volume")
+            if companion_requires_full_probe(companion, real_mount, mount_dev):
+                identity = True
         if identity:
             info = self.probe(self.mount)
             if info.get("MountPoint") != str(self.mount) or not info.get("VolumeUUID"):

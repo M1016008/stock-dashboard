@@ -17,6 +17,7 @@
 - Missing mount/DB, device or UUID mismatch, read-only or low-space state, and actual SQLite/OS I/O errors remain immediate `FAILED_SAFE`. Three unresolved probe attempts also promote to `FAILED_SAFE`. A permanent latch requires manual `storage:recover`; no automatic fatal recovery is introduced.
 - Probe events and fatal incidents record the stage (`MOUNT_TABLE`, `DISKUTIL_INFO`, `PLUTIL_PARSE`, `STATFS`, `REALPATH`, `STAT_DEVICE`, `UUID_COMPARE`) and safe command diagnostics. Public health returns only `available`, `verifying`, or `unavailable`, never device identity or UUID.
 - The same uncertain/confirmed-fatal distinction applies to the Python writer guard.
+- If SQLite removes a WAL/SHM companion between its existence and identity checks, Node and Python require full UUID recertification instead of treating the ordinary `ENOENT` race as a permanent storage failure. A still-present but unreadable companion remains fatal.
 - Two isolated 20-minute fixture observations completed `HEALTHY` with zero failures: 4 full / 1,074 lightweight checks and 4 full / 1,084 lightweight checks. The final fixture run measured full-probe average 0.5 ms / p95 1 ms and lightweight average 0.023 ms / p95 below 1 ms. These fixture timings do not represent `diskutil` on the physical volume.
 - Five read-only physical full probes measured 193.71, 156.00, 164.34, 148.23, and 166.18 ms (average 165.69 ms). A 10,000-call in-process guard benchmark averaged 0.063 ms per call (p95 0.078 ms, p99 0.183 ms); it did not write to the production DB.
 

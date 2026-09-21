@@ -7,7 +7,7 @@ from pathlib import Path
 import sqlite3
 import tempfile
 
-from external_storage_guard import GuardedConnection, ProbeUncertain, StorageFatal, StorageGuard, is_storage_error
+from external_storage_guard import GuardedConnection, ProbeUncertain, StorageFatal, StorageGuard, companion_requires_full_probe, is_storage_error
 
 
 with tempfile.TemporaryDirectory(prefix="storage-guard-python-") as temporary:
@@ -88,6 +88,19 @@ with tempfile.TemporaryDirectory(prefix="storage-guard-python-") as temporary:
     assert attempts[0] == 2 and uncertain_writes[0] == 0
     assert not recovered.uncertain_marker.exists()
     assert not (Path(temporary) / "FAILED_SAFE").exists()
+
+    class DisappearingCompanion:
+        def __init__(self):
+            self.present = True
+
+        def exists(self):
+            return self.present
+
+        def resolve(self, strict=False):
+            self.present = False
+            raise FileNotFoundError("WAL was removed after existence check")
+
+    assert companion_requires_full_probe(DisappearingCompanion(), Path(temporary), 42)
 
     parse_guard = StorageGuard(Path(temporary) / "fixture.db", clock=lambda: 15.0, wait=lambda _: None)
     parse_attempts = [0]

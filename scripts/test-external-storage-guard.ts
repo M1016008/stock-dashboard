@@ -105,6 +105,26 @@ try {
   }, { wait: () => undefined })
   parseGuard.assertWritable(true)
   assert.equal(parseGuard.status, 'HEALTHY')
+  let raceEnabled = false
+  let walPresent = true
+  const raceGuard = new ExternalStorageGuard(config, {
+    ...probe,
+    exists: (value) => value === `${db}-wal` ? raceEnabled && walPresent : probe.exists(value),
+    realpath: (value) => {
+      if (value === `${db}-wal` && raceEnabled && walPresent) {
+        walPresent = false
+        throw Object.assign(new Error('WAL was removed after existence check'), { code: 'ENOENT' })
+      }
+      return value
+    },
+  })
+  raceGuard.assertWritable(true)
+  raceEnabled = true
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1_100)
+  raceGuard.assertWritable()
+  assert.equal(raceGuard.status, 'HEALTHY')
+  assert.equal(raceGuard.probeMetrics.fullCount, 2, 'companion removal requires full UUID revalidation')
+  assert.equal(fs.existsSync(path.join(tmp, 'FAILED_SAFE')), false)
   let mountTableCalls = 0
   const mountTableGuard = new ExternalStorageGuard(config, {
     ...probe,

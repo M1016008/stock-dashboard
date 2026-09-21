@@ -394,9 +394,15 @@ export class ExternalStorageGuard {
       for (const suffix of ['-wal', '-shm']) {
         const companion = `${dbPath}${suffix}`
         if (!this.probe.exists(companion)) continue
-        const realCompanion = this.probe.realpath(companion)
-        if (!contained(currentMount, realCompanion) || this.probe.stat(realCompanion).dev !== mountStat.dev) {
-          fail('VOLUME_IDENTITY_LOST', `${suffix} identity changed`, 'STAT_DEVICE')
+        try {
+          const realCompanion = this.probe.realpath(companion)
+          if (!contained(currentMount, realCompanion) || this.probe.stat(realCompanion).dev !== mountStat.dev) {
+            fail('VOLUME_IDENTITY_LOST', `${suffix} identity changed`, 'STAT_DEVICE')
+          }
+        } catch (error) {
+          if (errorCode(error) !== 'ENOENT' || this.probe.exists(companion)) throw error
+          // SQLite may remove a companion after the existence check; certify the full UUID before proceeding.
+          this.fullIdentity()
         }
       }
     } finally { this.recordDuration('lightweight', Date.now() - started) }
