@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-const PROBE_COMMAND_TIMEOUT_MS = 2_000
+const PROBE_COMMAND_TIMEOUT_MS = 8_000
 
 export type StorageFailureCode =
   | 'VOLUME_NOT_MOUNTED' | 'VOLUME_UUID_MISMATCH' | 'PROBE_FAILED' | 'DB_OUTSIDE_EXPECTED_VOLUME'
@@ -20,6 +20,13 @@ export type ProbeDiagnostics = {
   exitStatus: number | null
   signal: string | null
   stderr: string | null
+}
+
+type ConfirmationAttempt = {
+  attempt: number
+  inProcessIdentity: boolean
+  uuidVerified: boolean
+  probe: ProbeDiagnostics | null
 }
 
 export class StorageUnavailableError extends Error {
@@ -327,6 +334,7 @@ export class ExternalStorageGuard {
   private fullProbeCount = 0
   private lightweightProbeCount = 0
   private recoveredTransientCount = 0
+  private confirmationAttempts: ConfirmationAttempt[] = []
   private readonly uncertainMarker: string
 
   constructor(readonly config: GuardConfig, private readonly probe: StorageProbe = systemStorageProbe,
@@ -432,6 +440,8 @@ export class ExternalStorageGuard {
 
   private confirmProbe(initial: StorageUnavailableError): void {
     this.uncertain = true
+    this.confirmationAttempts = [{ attempt: 1, inProcessIdentity: false,
+      uuidVerified: false, probe: initial.probeDiagnostics ?? null }]
     try {
       fs.mkdirSync(internalIncidentDir(this.config), { recursive: true, mode: 0o700 })
       fs.writeFileSync(this.uncertainMarker, `${new Date().toISOString()}\n`, { flag: 'wx', mode: 0o600 })
@@ -440,18 +450,25 @@ export class ExternalStorageGuard {
       throw this.fatal
     }
     this.recordProbeEvent('PROBE_UNCERTAIN', initial)
-    for (const delayMs of [1_000, 2_000]) {
+    for (const [index, delayMs] of [1_000, 2_000].entries()) {
+      let inProcessIdentity = false
       try {
-        this.lightweightIdentity(true)
+        this.lightweightIdentity()
+        inProcessIdentity = true
         ;(this.options.wait ?? ((ms) => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms) }))(delayMs)
-        this.lightweightIdentity(true)
+        this.lightweightIdentity()
         this.fullIdentity()
+        this.confirmationAttempts.push({ attempt: index + 2, inProcessIdentity,
+          uuidVerified: true, probe: null })
         fs.unlinkSync(this.uncertainMarker)
         this.uncertain = false
         this.recoveredTransientCount++
         this.recordProbeEvent('TRANSIENT_PROBE_FAILURE_RECOVERED', initial)
+        this.confirmationAttempts = []
         return
       } catch (error) {
+        this.confirmationAttempts.push({ attempt: index + 2, inProcessIdentity,
+          uuidVerified: false, probe: error instanceof StorageUnavailableError ? error.probeDiagnostics ?? null : null })
         if (!(error instanceof StorageUnavailableError) || error.storageCode !== 'PROBE_FAILED') {
           this.markFatal(error)
           throw this.fatal
@@ -536,6 +553,7 @@ export class ExternalStorageGuard {
         errorCode: this.fatal.storageCode, errorMessage: safeErrorMessage(error),
         sqliteCode: errorCode(error), lastSuccessfulStorageCheck: this.lastSuccessfulStorageCheck,
         probe: error instanceof StorageUnavailableError ? error.probeDiagnostics ?? null : null,
+        confirmationAttempts: this.confirmationAttempts.length ? this.confirmationAttempts : null,
         actionTaken: 'FAILED_SAFE_NO_RETRY_NO_DB_WRITE',
       }
       fs.appendFileSync(path.join(incidentDir, 'incidents.ndjson'), `${JSON.stringify(incident)}\n`, { mode: 0o600 })
