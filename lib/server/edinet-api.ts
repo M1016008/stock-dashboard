@@ -9,11 +9,16 @@ export interface EdinetDocumentIndexRow {
   edinetCode?: string | null
   secCode?: string | null
   filerName?: string | null
+  docDescription?: string | null
   docTypeCode?: string | null
+  issuerEdinetCode?: string | null
+  parentDocID?: string | null
   submitDateTime?: string | null
   periodStart?: string | null
   periodEnd?: string | null
   withdrawalStatus?: string | null
+  disclosureStatus?: string | null
+  opeDateTime?: string | null
   xbrlFlag?: string | null
 }
 
@@ -65,10 +70,10 @@ export async function listEdinetDocuments(date: string): Promise<EdinetDocumentI
   return payload.results ?? []
 }
 
-export async function downloadEdinetPublicXbrl(
+async function downloadEdinetPublicArchive(
   documentId: string,
   maxArchiveBytes = 80 * 1024 * 1024,
-): Promise<string> {
+): Promise<{ xml: string; coverHtml: string | null; archiveDateHint: string | null }> {
   const params = new URLSearchParams({ type: '1', 'Subscription-Key': apiKey() })
   const response = await edinetFetch(
     `${API_BASE}/documents/${encodeURIComponent(documentId)}?${params}`,
@@ -79,11 +84,48 @@ export async function downloadEdinetPublicXbrl(
   const bytes = new Uint8Array(await response.arrayBuffer())
   if (bytes.byteLength > maxArchiveBytes) throw new Error(`EDINET archive too large: ${bytes.byteLength} bytes`)
   const files = unzipSync(bytes, {
-    filter: (file) => /XBRL\/PublicDoc\/.*\.xbrl$/i.test(file.name),
+    filter: (file) => /XBRL\/PublicDoc\/.*\.xbrl$/i.test(file.name)
+      || /^PublicDoc\/0000000_header\.htm$/i.test(file.name),
   })
-  const xbrl = Object.entries(files).sort((left, right) => right[1].byteLength - left[1].byteLength)[0]
+  const xbrl = Object.entries(files).filter(([name]) => /XBRL\/PublicDoc\/.*\.xbrl$/i.test(name))
+    .sort((left, right) => right[1].byteLength - left[1].byteLength)[0]
   if (!xbrl) throw new Error(`EDINET document ${documentId}: PublicDoc XBRL not found`)
-  return new TextDecoder('utf-8').decode(xbrl[1])
+  const cover = files['PublicDoc/0000000_header.htm']
+  return {
+    xml: new TextDecoder('utf-8').decode(xbrl[1]),
+    coverHtml: cover ? new TextDecoder('utf-8').decode(cover) : null,
+    archiveDateHint: xbrl[0].match(/_(\d{4}-\d{2}-\d{2})\.xbrl$/i)?.[1] ?? null,
+  }
+}
+
+export async function downloadEdinetPublicXbrl(
+  documentId: string,
+  maxArchiveBytes = 80 * 1024 * 1024,
+): Promise<string> {
+  return (await downloadEdinetPublicArchive(documentId, maxArchiveBytes)).xml
+}
+
+export async function downloadEdinetPublicArchiveBytes(
+  documentId: string,
+  maxArchiveBytes = 80 * 1024 * 1024,
+): Promise<Uint8Array> {
+  const params = new URLSearchParams({ type: '1', 'Subscription-Key': apiKey() })
+  const response = await edinetFetch(
+    `${API_BASE}/documents/${encodeURIComponent(documentId)}?${params}`,
+    `EDINET raw archive ${documentId}`,
+  )
+  const contentLength = Number(response.headers.get('content-length') ?? 0)
+  if (contentLength > maxArchiveBytes) throw new Error(`EDINET archive too large: ${contentLength} bytes`)
+  const bytes = new Uint8Array(await response.arrayBuffer())
+  if (bytes.byteLength > maxArchiveBytes) throw new Error(`EDINET archive too large: ${bytes.byteLength}`)
+  return bytes
+}
+
+export async function downloadEdinetPublicXbrlWithCover(
+  documentId: string,
+  maxArchiveBytes = 80 * 1024 * 1024,
+): Promise<{ xml: string; coverHtml: string | null; archiveDateHint: string | null }> {
+  return downloadEdinetPublicArchive(documentId, maxArchiveBytes)
 }
 
 export function tickerFromEdinetSecurityCode(secCode?: string | null): string | null {

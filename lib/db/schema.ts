@@ -2373,6 +2373,225 @@ export const largeHoldingReports = sqliteTable(
   }),
 )
 
+export const largeHolderFilings = sqliteTable('large_holder_filings', {
+  documentId: text('document_id').primaryKey(),
+  filingType: text('filing_type').notNull(),
+  submittedAt: text('submitted_at').notNull(),
+  obligationDate: text('obligation_date'),
+  referenceDate: text('reference_date'),
+  parentDocumentId: text('parent_document_id'),
+  correctedDocumentId: text('corrected_document_id'),
+  previousFilingId: text('previous_filing_id'),
+  filerEdinetCode: text('filer_edinet_code'),
+  filerName: text('filer_name'),
+  schemaRegime: text('schema_regime').notNull().default('UNKNOWN'),
+  rootFilingId: text('root_filing_id'),
+  revisionSequence: integer('revision_sequence'),
+  reportSerialNumber: integer('report_serial_number'),
+  reportSerialSource: text('report_serial_source'),
+  submissionCount: integer('submission_count'),
+  issuerEdinetCode: text('issuer_edinet_code'),
+  issuerSecurityCode: text('issuer_security_code'),
+  issuerName: text('issuer_name'),
+  ticker: text('ticker'),
+  primaryHolderName: text('primary_holder_name'),
+  groupShares: real('group_shares'),
+  groupHoldingPct: real('group_holding_pct'),
+  sourceUrl: text('source_url').notNull(),
+  rawIndexJson: text('raw_index_json').notNull(),
+  rawParsedPayloadJson: text('raw_parsed_payload_json'),
+  parserVersion: text('parser_version').notNull(),
+  status: text('status').notNull(),
+  withdrawnAt: text('withdrawn_at'),
+  errorMessage: text('error_message'),
+  importedAt: integer('imported_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+})
+
+export const investorEntities = sqliteTable('investor_entities', {
+  entityId: text('entity_id').primaryKey(),
+  canonicalName: text('canonical_name').notNull(),
+  displayName: text('display_name').notNull(),
+  investorType: text('investor_type').notNull().default('UNCLASSIFIED'),
+  investorClass: text('investor_class').notNull().default('UNCLASSIFIED'),
+  isIndividual: integer('is_individual', { mode: 'boolean' }).notNull().default(false),
+  jurisdiction: text('jurisdiction'),
+  classificationConfidence: text('classification_confidence').notNull().default('UNCLASSIFIED'),
+  classificationEvidence: text('classification_evidence'),
+  classificationSource: text('classification_source'),
+  manualOverride: integer('manual_override', { mode: 'boolean' }).notNull().default(false),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+})
+
+export const investorAliases = sqliteTable('investor_aliases', {
+  identityKey: text('identity_key').primaryKey(),
+  entityId: text('entity_id').notNull().references(() => investorEntities.entityId),
+  rawHolderName: text('raw_holder_name').notNull(),
+  rawHolderAddress: text('raw_holder_address'),
+  filerEdinetCode: text('filer_edinet_code'),
+  matchConfidence: text('match_confidence').notNull(),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+})
+
+export const investorEntityRelations = sqliteTable('investor_entity_relations', {
+  entityId: text('entity_id').notNull().references(() => investorEntities.entityId),
+  relatedEntityId: text('related_entity_id').notNull().references(() => investorEntities.entityId),
+  status: text('status').notNull(),
+  evidence: text('evidence'),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+}, (t) => ({ pk: primaryKey({ columns: [t.entityId, t.relatedEntityId] }) }))
+
+export const largeHolderGroups = sqliteTable('large_holder_groups', {
+  documentId: text('document_id').primaryKey().references(() => largeHolderFilings.documentId),
+  primaryEntityId: text('primary_entity_id').references(() => investorEntities.entityId),
+  groupShares: real('group_shares'),
+  groupHoldingPct: real('group_holding_pct'),
+  participantCount: integer('participant_count').notNull(),
+})
+
+export const largeHolderSourceDocuments = sqliteTable('large_holder_source_documents', {
+  documentId: text('document_id').primaryKey().references(() => largeHolderFilings.documentId),
+  xbrlSha256: text('xbrl_sha256').notNull(),
+  xbrlXml: text('xbrl_xml').notNull(),
+  capturedAt: integer('captured_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+})
+
+export const largeHolderPositions = sqliteTable('large_holder_positions', {
+  documentId: text('document_id').notNull().references(() => largeHolderFilings.documentId),
+  holderKey: text('holder_key').notNull(),
+  ticker: text('ticker').notNull(),
+  entityId: text('entity_id').notNull().references(() => investorEntities.entityId),
+  holdingGroupId: text('holding_group_id').notNull().references(() => largeHolderGroups.documentId),
+  holderRole: text('holder_role').notNull(),
+  reportedShares: real('reported_shares'),
+  reportedHoldingPct: real('reported_holding_pct'),
+  previousReportedShares: real('previous_reported_shares'),
+  previousHoldingPct: real('previous_holding_pct'),
+  sharesDelta: real('shares_delta'),
+  holdingPctDelta: real('holding_pct_delta'),
+  obligationDate: text('obligation_date'),
+  referenceDate: text('reference_date'),
+  ordinaryShareCandidate: real('ordinary_share_candidate'),
+  valuationEligibleShares: real('valuation_eligible_shares'),
+  reportedEquivalentShares: real('reported_equivalent_shares'),
+  valuationCoveragePct: real('valuation_coverage_pct'),
+  valuationBasis: text('valuation_basis').notNull(),
+  valuationConfidence: text('valuation_confidence').notNull().default('UNCONFIRMED'),
+  valuationStatus: text('valuation_status').notNull().default('NOT_PROVEN'),
+  valuationEvidenceJson: text('valuation_evidence_json').notNull().default('[]'),
+  securityComponentsJson: text('security_components_json').notNull().default('[]'),
+  securityBreakdownJson: text('security_breakdown_json').notNull().default('[]'),
+  deductionsJson: text('deductions_json').notNull().default('[]'),
+  marketPriceEligibleUnits: real('market_price_eligible_units'),
+  marketPriceStatus: text('market_price_status').notNull().default('NOT_APPLICABLE'),
+  marketPriceReason: text('market_price_reason').notNull().default('not_assessed'),
+  marketPriceBasisJson: text('market_price_basis_json').notNull().default('{}'),
+  marketPriceEvidenceJson: text('market_price_evidence_json').notNull().default('{}'),
+  marketPriceCloseDate: text('market_price_close_date'),
+  marketPriceClose: real('market_price_close'),
+}, (t) => ({ pk: primaryKey({ columns: [t.documentId, t.holderKey] }) }))
+
+export const largeHolderInstrumentMaster = sqliteTable('large_holder_instrument_master', {
+  instrumentId: text('instrument_id').notNull(),
+  sourceAsOf: text('source_as_of').notNull(),
+  issuerEdinetCode: text('issuer_edinet_code'),
+  issuerName: text('issuer_name').notNull(),
+  officialSecurityCode: text('official_security_code').notNull(),
+  officialSecurityCodeRaw: text('official_security_code_raw').notNull(),
+  jpxShortCode: text('jpx_short_code'),
+  isin: text('isin'),
+  instrumentName: text('instrument_name').notNull(),
+  instrumentType: text('instrument_type').notNull(),
+  securityClass: text('security_class').notNull(),
+  quantityUnit: text('quantity_unit').notNull(),
+  priceUnit: text('price_unit').notNull(),
+  market: text('market').notNull(),
+  listingStatus: text('listing_status').notNull(),
+  listedFrom: text('listed_from'),
+  listedTo: text('listed_to'),
+  priceSeriesId: text('price_series_id'),
+  sourceAuthority: text('source_authority').notNull(),
+  sourceUrlOrReference: text('source_url_or_reference').notNull(),
+  sourceEvidence: text('source_evidence').notNull(),
+  sourceHash: text('source_hash').notNull(),
+  mappingStatus: text('mapping_status').notNull(),
+  mappingConfidence: text('mapping_confidence').notNull(),
+  createdAt: integer('created_at').notNull().default(sql`(unixepoch())`),
+  updatedAt: integer('updated_at').notNull().default(sql`(unixepoch())`),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.instrumentId, t.sourceAsOf] }),
+  codeDateIdx: index('large_holder_instrument_code_date_idx').on(t.officialSecurityCodeRaw, t.sourceAsOf),
+}))
+
+export const largeHolderEdinetCodeBridge = sqliteTable('large_holder_edinet_code_bridge', {
+  edinetCode: text('edinet_code').notNull(),
+  snapshotDate: text('snapshot_date').notNull(),
+  securityCode: text('security_code').notNull(),
+  submitterName: text('submitter_name').notNull(),
+  listingStatus: text('listing_status').notNull(),
+  sourceUrl: text('source_url').notNull(),
+  archiveSha256: text('archive_sha256').notNull(),
+  sourceEvidence: text('source_evidence').notNull(),
+  sourceHash: text('source_hash').notNull(),
+}, (t) => ({ pk: primaryKey({ columns: [t.edinetCode, t.snapshotDate] }),
+  securityIdx: index('large_holder_edinet_bridge_security_idx').on(t.securityCode, t.snapshotDate) }))
+
+export const largeHolderIssuerCapitalStructure = sqliteTable('large_holder_issuer_capital_structure', {
+  issuerEdinetCode: text('issuer_edinet_code').notNull(),
+  sourceDocumentId: text('source_document_id').notNull(),
+  sourceSubmittedAt: text('source_submitted_at').notNull(),
+  reportingDate: text('reporting_date').notNull(),
+  sourceUrl: text('source_url').notNull(),
+  sourceEvidence: text('source_evidence').notNull(),
+  sourceHash: text('source_hash').notNull(),
+  classesJson: text('classes_json').notNull(),
+  tableComplete: integer('table_complete', { mode: 'boolean' }).notNull(),
+}, (t) => ({ pk: primaryKey({ columns: [t.issuerEdinetCode, t.sourceDocumentId] }),
+  pitIdx: index('large_holder_capital_pit_idx').on(t.issuerEdinetCode, t.sourceSubmittedAt) }))
+
+export const largeHolderPriceEvidence = sqliteTable('large_holder_price_evidence', {
+  instrumentId: text('instrument_id').notNull(),
+  priceDate: text('price_date').notNull(),
+  officialSecurityCodeRaw: text('official_security_code_raw').notNull(),
+  rawClose: real('raw_close'),
+  adjustedClose: real('adjusted_close'),
+  localClose: real('local_close'),
+  sourceAuthority: text('source_authority').notNull(),
+  sourceUrlOrReference: text('source_url_or_reference').notNull(),
+  sourceEvidence: text('source_evidence'),
+  sourceHash: text('source_hash').notNull(),
+  createdAt: integer('created_at').notNull().default(sql`(unixepoch())`),
+}, (t) => ({ pk: primaryKey({ columns: [t.instrumentId, t.priceDate] }) }))
+
+export const largeHolderPositionCertifications = sqliteTable('large_holder_position_certifications', {
+  documentId: text('document_id').notNull().references(() => largeHolderFilings.documentId),
+  holderKey: text('holder_key').notNull(),
+  instrumentId: text('instrument_id'),
+  mappingStatus: text('mapping_status').notNull(),
+  priceSeriesMappingStatus: text('price_series_mapping_status').notNull(),
+  publicStatus: text('public_status').notNull(),
+  pitValuationReady: integer('pit_valuation_ready', { mode: 'boolean' }).notNull().default(false),
+  quantityUnit: text('quantity_unit').notNull(),
+  priceUnit: text('price_unit').notNull(),
+  eligibleUnits: real('eligible_units'),
+  priceDate: text('price_date'),
+  pricePerUnit: real('price_per_unit'),
+  estimatedValueYen: real('estimated_value_yen'),
+  currentValueYen: real('current_value_yen'),
+  certificationMethod: text('certification_method').notNull().default('OTHER'),
+  certificationStrength: text('certification_strength').notNull().default('NONE'),
+  certificationEvidenceJson: text('certification_evidence_json').notNull().default('[]'),
+  evidenceJson: text('evidence_json').notNull(),
+  assessedAt: integer('assessed_at').notNull().default(sql`(unixepoch())`),
+}, (t) => ({ pk: primaryKey({ columns: [t.documentId, t.holderKey] }) }))
+
+export const investorIdentityReviews = sqliteTable('investor_identity_reviews', {
+  identityKey: text('identity_key').primaryKey(),
+  reason: text('reason').notNull(),
+  status: text('status').notNull().default('PENDING'),
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+})
+
 export const stockExternalDataStatus = sqliteTable(
   'stock_external_data_status',
   {
