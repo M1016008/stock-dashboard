@@ -9,6 +9,7 @@ import {
   FlaskConical,
   Hexagon,
   LayoutDashboard,
+  Landmark,
   ListFilter,
   MessageSquareText,
   Radar,
@@ -237,6 +238,15 @@ export const PAGE_CATALOG = {
     commandBadge: '監視',
     searchTerms: 'Trigger Discovery 月足 MA 接近 条件',
   },
+  largeHolders: {
+    href: '/large-holders',
+    label: '大口投資家',
+    description: '大量保有報告書から保有状況と変化を確認',
+    icon: Landmark,
+    commandVerb: '確認',
+    commandBadge: '市場',
+    searchTerms: '大量保有 個人 機関 EDINET 投資家',
+  },
   usDashboard: {
     href: '/us',
     label: '米国株ダッシュボード',
@@ -401,6 +411,7 @@ export const NAVIGATION_BY_AREA = {
       icon: Star,
       sections: [
         { id: 'continuous-monitoring', label: '継続監視', pageIds: ['watchlist', 'ma25mMonitor', 'triggerDiscovery'], column: 1 },
+        { id: 'ownership', label: '開示を確認', pageIds: ['largeHolders'], column: 1 },
       ],
     },
   ],

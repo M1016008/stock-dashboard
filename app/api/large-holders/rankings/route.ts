@@ -25,14 +25,24 @@ export async function GET(request: Request) {
     const { page, pageSize } = paging(params)
     const market = params.get('market'), industry17 = params.get('industry17'),
       industry33 = params.get('industry33')
+    const search = (params.get('search') ?? '').trim().toLocaleLowerCase('ja')
+    if (search.length > 100) throw new Error('invalid_search')
     const snapshot = await getRankingSnapshot()
     const eligible = snapshot.investors.filter((investor) =>
       (investorClass === 'ALL' || investor.investorClass === investorClass)
-      && (completeness === 'ALL' || investor.portfolioCompleteness === completeness))
+      && (completeness === 'ALL' || investor.portfolioCompleteness === completeness)
+      && (!search || investor.displayName.toLocaleLowerCase('ja').includes(search)
+        || investor.aliases.some((alias) => alias.toLocaleLowerCase('ja').includes(search))))
     const positionMatches = (position: InvestorSummary['positions'][number]) =>
       (!market || position.market === market) && (!industry17 || position.industry17 === industry17)
       && (!industry33 || position.industry33 === industry33)
     const byId = new Map(eligible.map((investor) => [investor.investorEntityId, investor]))
+    const latestActivity = new Map<string, HolderActivity>()
+    for (const activity of snapshot.activities) {
+      const previous = latestActivity.get(activity.investorEntityId)
+      if (!previous || activity.obligationDate > previous.obligationDate)
+        latestActivity.set(activity.investorEntityId, activity)
+    }
     const compare = (a: { value: number | null; name: string; date: string | null },
       b: { value: number | null; name: string; date: string | null }) => {
       if (sort === 'name_asc') return a.name.localeCompare(b.name, 'ja')
@@ -50,13 +60,21 @@ export async function GET(request: Request) {
               displayName: investor.displayName, investorClass: investor.investorClass,
               investorType: investor.investorType, aliases: investor.aliases,
               positions: investor.positions.filter(positionMatches) }) : investor
+          const largestOnBasis = selected.positions.filter((position) => position.holdingBasis === basis
+            && position.estimatedCurrentValue != null)
+            .toSorted((a, b) => b.estimatedCurrentValue! - a.estimatedCurrentValue!)[0]
           return { ...investor, positions: undefined,
             selectedPositionCount: selected.totalRelevantPositionCount,
             selectedValuedPositionCount: selected.valuedPositionCount,
             selectedPortfolioCompleteness: selected.portfolioCompleteness,
+            latestActivityType: latestActivity.get(investor.investorEntityId)?.eventType ?? null,
+            latestActivityDate: latestActivity.get(investor.investorEntityId)?.obligationDate ?? null,
+            rankingLargestPositionTicker: largestOnBasis?.ticker ?? null,
+            rankingLargestPositionValue: largestOnBasis?.estimatedCurrentValue ?? null,
             rankingBasis: basis, rankingValue: basisValue(selected, basis),
             rankingValueLabel: basis === 'OWNERSHIP' ? '所有等ベース推定時価' : '運用権限ベース推定時価' }
         })
+        .filter((row) => row.rankingValue != null || completeness === 'NONE')
         .sort((a, b) => compare({ value: a.rankingValue, name: a.displayName, date: a.latestFilingDate },
           { value: b.rankingValue, name: b.displayName, date: b.latestFilingDate }))
       return Response.json({ ...paginate(rows, page, pageSize), rankingType, investorClass,
