@@ -13,9 +13,11 @@
 //   - 大量データは offset/limit ページングで取得
 
 import { createClient } from '@libsql/client'
+import { openGuardedWritableTargetClient } from '@/lib/storage/guarded-libsql-client'
 import { ensureSchema } from '@/lib/db/migrate'
 import path from 'node:path'
 import fs from 'node:fs'
+import { assertWritableTargetPath } from '@/lib/storage/external-storage-guard'
 
 const TURSO_URL = process.env.TURSO_DATABASE_URL
 const TURSO_TOKEN = process.env.TURSO_AUTH_TOKEN
@@ -27,10 +29,11 @@ if (!TURSO_URL) {
 }
 
 // data ディレクトリを先に作る
+assertWritableTargetPath(LOCAL_DB, 'turso-to-local-target')
 fs.mkdirSync(path.dirname(LOCAL_DB), { recursive: true })
 
 const turso = createClient({ url: TURSO_URL, authToken: TURSO_TOKEN })
-const local = createClient({ url: `file:${LOCAL_DB}` })
+const local = openGuardedWritableTargetClient(LOCAL_DB, 'turso-to-local-target')
 
 // テーブルごとのコピー定義
 interface TableSpec {

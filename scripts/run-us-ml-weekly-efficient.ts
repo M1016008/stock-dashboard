@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process'
-import { createClient } from '@libsql/client'
+import { openExistingGuardedClient } from '@/lib/storage/guarded-libsql-client'
+import { isStorageIoError } from '@/lib/storage/external-storage-guard'
 import fs from 'node:fs'
 import path from 'node:path'
 import { ML_PIPELINE_GENERATION_VERSION, ML_PIPELINE_NAME } from '@/lib/ml/pipeline-generation'
@@ -70,7 +71,7 @@ function pruneValidatedPromotedBackups(): void {
 }
 
 async function metadataValue(key: string): Promise<string | null> {
-  const client = createClient({ url: `file:${usAnalyticsDbPath}` })
+  const client = openExistingGuardedClient(usAnalyticsDbPath, 'us-ml-weekly')
   try {
     const table = await client.execute(
       `SELECT 1
@@ -91,7 +92,7 @@ async function metadataValue(key: string): Promise<string | null> {
 }
 
 async function analyticsMaxPriceDate(): Promise<string | null> {
-  const client = createClient({ url: `file:${usAnalyticsDbPath}` })
+  const client = openExistingGuardedClient(usAnalyticsDbPath, 'us-ml-weekly')
   try {
     const row = await client.execute('SELECT MAX(date) AS value FROM ohlcv_daily')
     const value = row.rows[0]?.value
@@ -103,7 +104,7 @@ async function analyticsMaxPriceDate(): Promise<string | null> {
 
 async function analogMetadataValue(key: string): Promise<string | null> {
   if (!fs.existsSync(usAnalogDbPath)) return null
-  const client = createClient({ url: `file:${usAnalogDbPath}` })
+  const client = openExistingGuardedClient(usAnalogDbPath, 'us-ml-weekly-analog')
   try {
     const row = await client.execute({
       sql: 'SELECT value FROM analog_sequence_meta WHERE key = ?',
@@ -111,7 +112,8 @@ async function analogMetadataValue(key: string): Promise<string | null> {
     })
     const value = row.rows[0]?.value
     return value == null ? null : String(value)
-  } catch {
+  } catch (error) {
+    if (isStorageIoError(error)) throw error
     return null
   } finally {
     client.close()
@@ -158,7 +160,7 @@ async function adjustedFoundationIsCurrent(): Promise<boolean> {
 }
 
 async function auditedFullHistoryBaselineExists(): Promise<boolean> {
-  const client = createClient({ url: `file:${usAnalyticsDbPath}` })
+  const client = openExistingGuardedClient(usAnalyticsDbPath, 'us-ml-weekly')
   try {
     const table = await client.execute(
       `SELECT 1

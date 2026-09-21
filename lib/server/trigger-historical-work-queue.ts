@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto'
-import { execGet } from '@/lib/db/client'
+import { spawn } from 'node:child_process'
+import { execGet, localDbPath } from '@/lib/db/client'
+import { guardForDatabase, isStorageIoError, requiresExternalStorageGuard, type ExternalStorageGuard } from '@/lib/storage/external-storage-guard'
 import {
   cleanupExpiredHistoricalScanJobs,
   claimNextHistoricalScanJob,
@@ -29,6 +31,19 @@ const DEFAULT_POLL_MS = 2_000
 const CLEANUP_INTERVAL_MS = 60 * 60 * 1_000
 
 type WorkType = 'HISTORICAL_SCAN' | 'OUTCOME_ANALYSIS' | 'PATH_RESEARCH' | 'ML_DATASET'
+
+function workerStorage(): ExternalStorageGuard | null {
+  return requiresExternalStorageGuard(localDbPath) ? guardForDatabase(localDbPath, 'trigger-historical-worker') : null
+}
+
+async function withJobSleepProtection<T>(operation: () => Promise<T>): Promise<T> {
+  if (process.platform !== 'darwin') return operation()
+  // Hold an idle-sleep assertion only while a claimed write job is running.
+  const assertion = spawn('/usr/bin/caffeinate', ['-i', '-w', String(process.pid)], { stdio: 'ignore' })
+  assertion.on('error', (error) => console.error('[trigger-historical-worker] caffeinate unavailable', error))
+  try { return await operation() }
+  finally { assertion.kill('SIGTERM') }
+}
 
 function boundedIntegerEnv(name: string, fallback: number, min: number, max: number): number {
   const parsed = Number(process.env[name])
@@ -65,47 +80,61 @@ export async function runTriggerHistoricalWorkOnce(
   if (type === 'HISTORICAL_SCAN') {
     const row = await claimNextHistoricalScanJob(identity?.jobOwner() ?? randomUUID())
     if (!row) return null
+    const storage = workerStorage()
+    storage?.setOperationContext(type, row.id)
     try {
-      return { jobType: type, jobId: row.id, status: await executeHistoricalScanJob(row, { shutdownSignal }) }
+      return { jobType: type, jobId: row.id, status: await withJobSleepProtection(() => executeHistoricalScanJob(row, { shutdownSignal })) }
     } catch (error) {
+      if (isStorageIoError(error)) throw error
       console.error(`[trigger-historical-worker] type=${type} job=${row.id} failed`, error)
       return { jobType: type, jobId: row.id, status: 'FAILED' }
-    }
+    } finally { storage?.clearOperationContext(row.id) }
   }
   if (type === 'OUTCOME_ANALYSIS') {
     const row = await claimNextOutcomeJob(identity?.jobOwner() ?? randomUUID())
     if (!row) return null
+    const storage = workerStorage()
+    storage?.setOperationContext(type, row.id)
     try {
-      return { jobType: type, jobId: row.id, status: await executeOutcomeAnalysisJob(row, shutdownSignal) }
+      return { jobType: type, jobId: row.id, status: await withJobSleepProtection(() => executeOutcomeAnalysisJob(row, shutdownSignal)) }
     } catch (error) {
+      if (isStorageIoError(error)) throw error
       console.error(`[trigger-historical-worker] type=${type} job=${row.id} failed`, error)
       return { jobType: type, jobId: row.id, status: 'FAILED' }
-    }
+    } finally { storage?.clearOperationContext(row.id) }
   }
   if (type === 'PATH_RESEARCH') {
     const row = await claimNextPathResearchJob(identity?.jobOwner() ?? randomUUID())
     if (!row) return null
+    const storage = workerStorage()
+    storage?.setOperationContext(type, row.id)
     try {
-      return { jobType: type, jobId: row.id, status: await executePathResearchJob(row, shutdownSignal) }
+      return { jobType: type, jobId: row.id, status: await withJobSleepProtection(() => executePathResearchJob(row, shutdownSignal)) }
     } catch (error) {
+      if (isStorageIoError(error)) throw error
       console.error(`[trigger-historical-worker] type=${type} job=${row.id} failed`, error)
       return { jobType: type, jobId: row.id, status: 'FAILED' }
-    }
+    } finally { storage?.clearOperationContext(row.id) }
   }
   if (type === 'ML_DATASET') {
     const row = await claimNextMlDatasetJob(identity?.jobOwner() ?? randomUUID())
     if (!row) return null
+    const storage = workerStorage()
+    storage?.setOperationContext(type, row.id)
     try {
-      return { jobType: type, jobId: row.id, status: await executeMlDatasetJob(row, shutdownSignal) }
+      return { jobType: type, jobId: row.id, status: await withJobSleepProtection(() => executeMlDatasetJob(row, shutdownSignal)) }
     } catch (error) {
+      if (isStorageIoError(error)) throw error
       console.error(`[trigger-historical-worker] type=${type} job=${row.id} failed`, error)
       return { jobType: type, jobId: row.id, status: 'FAILED' }
-    }
+    } finally { storage?.clearOperationContext(row.id) }
   }
   return null
 }
 
 export async function runTriggerHistoricalWorkLoop(): Promise<void> {
+  const storage = workerStorage()
+  storage?.assertWritable(true)
   const pollMs = boundedIntegerEnv('TRIGGER_HISTORICAL_SCAN_POLL_MS', DEFAULT_POLL_MS, 250, 30_000)
   let stopping = false
   const shutdown = new AbortController()
@@ -119,6 +148,16 @@ export async function runTriggerHistoricalWorkLoop(): Promise<void> {
     console.log('[trigger-historical-worker] another worker owns the queue; exiting')
     return
   }
+  // Cheap device/DB identity checks between long write batches; the guard
+  // refreshes the UUID only once per minute and latches any failure.
+  const storageHeartbeat = storage ? setInterval(() => {
+    try { storage.assertWritable() }
+    catch (error) {
+      console.error('[trigger-historical-worker] storage failed safe', error)
+      stop()
+    }
+  }, 30_000) : null
+  storageHeartbeat?.unref()
   let lastCleanupAt = 0
   let lastRecoveryAt = 0
   try {
@@ -141,12 +180,14 @@ export async function runTriggerHistoricalWorkLoop(): Promise<void> {
           + ` recovered=${JSON.stringify(recovered)}`)
         break
       } catch (error) {
+        if (storage && isStorageIoError(error)) storage.classify(error)
         console.error('[trigger-historical-worker] startup retry', error)
         await new Promise((resolve) => setTimeout(resolve, pollMs))
       }
     }
     while (!stopping) {
       try {
+        storage?.assertWritable()
         if (Date.now() - lastCleanupAt >= CLEANUP_INTERVAL_MS) {
           await cleanupExpiredHistoricalScanJobs()
           await cleanupExpiredOutcomeJobs()
@@ -170,12 +211,14 @@ export async function runTriggerHistoricalWorkLoop(): Promise<void> {
           lastRecoveryAt = Date.now()
         }
       } catch (error) {
+        if (storage && isStorageIoError(error)) storage.classify(error)
         console.error('[trigger-historical-worker] poll retry', error)
       }
       await new Promise((resolve) => setTimeout(resolve, pollMs))
     }
   } finally {
-    await releaseHistoricalWorker(identity)
+    if (storageHeartbeat) clearInterval(storageHeartbeat)
+    if (!storage?.fatalError) await releaseHistoricalWorker(identity)
     process.removeListener('SIGTERM', stop)
     process.removeListener('SIGINT', stop)
     console.log('[trigger-historical-worker] stopped')

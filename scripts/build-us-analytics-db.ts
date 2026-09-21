@@ -4,10 +4,12 @@
 import path from 'node:path'
 import fs from 'node:fs'
 import { spawnSync } from 'node:child_process'
-import { createClient, type Client } from '@libsql/client'
+import { type Client } from '@libsql/client'
+import { openGuardedWritableTargetClient } from '@/lib/storage/guarded-libsql-client'
 import { execAll, localDbPath } from '@/lib/db/client'
 import { ensureSchema } from '@/lib/db/migrate'
 import { resolveConfiguredStoragePath } from '@/lib/storage-paths'
+import { assertWritableTargetPath, guardForDatabase, isStorageIoError, requiresExternalStorageGuard } from '@/lib/storage/external-storage-guard'
 import { US_SEC_SIC_TAXONOMY } from '@/lib/us-classification'
 import { US_ADJUSTED_PRICE_BASIS } from '@/lib/us-adjusted-ohlcv'
 import { isUsInvestableSymbol } from '@/lib/us-symbol-quality'
@@ -88,17 +90,24 @@ function sqlLiteral(value: string): string {
 }
 
 function runSqlite(dbPath: string, sql: string): string {
+  const guard = requiresExternalStorageGuard(dbPath) ? guardForDatabase(dbPath, 'us-analytics-native-sqlite') : null
+  guard?.assertWritable()
   const result = spawnSync('sqlite3', ['-batch', dbPath], {
     input: sql,
     encoding: 'utf8',
     maxBuffer: 1024 * 1024 * 32,
   })
-  if (result.error) throw result.error
+  if (result.error) {
+    if (guard && isStorageIoError(result.error)) guard.classify(result.error)
+    throw result.error
+  }
   if (result.status !== 0) {
-    throw new Error(
+    const error = new Error(
       `sqlite3 failed (${result.status ?? 'signal'}${result.signal ? `/${result.signal}` : ''}): `
       + `${result.stderr || result.stdout || 'no output'}`,
     )
+    if (guard && isStorageIoError(error)) guard.classify(error)
+    throw error
   }
   return result.stdout
 }
@@ -407,12 +416,13 @@ async function markPriceBasisIfComplete(client: Client, expectedCount: number): 
 
 async function main() {
   assertSafeTarget()
+  assertWritableTargetPath(TARGET_PATH, 'us-analytics-build')
   console.log(`US analytics target: ${TARGET_PATH}`)
   console.log(
     `US analytics chunks: tickers=${COPY_CHUNK}, statements=${BATCH_CHUNK}, native=${NATIVE_COPY ? NATIVE_COPY_CHUNK : 'off'}`,
   )
   fs.mkdirSync(path.dirname(TARGET_PATH), { recursive: true })
-  let target = createClient({ url: `file:${TARGET_PATH}` })
+  let target = openGuardedWritableTargetClient(TARGET_PATH, 'us-analytics-build')
   await ensureTarget(target)
   await ensureSchema(target)
 
@@ -481,7 +491,7 @@ async function main() {
       `US analytics latest sync: ohlcvRows=${synced.ohlcvRows} after=${synced.ohlcvAfter ?? 'none'}, snapshots=${synced.snapshotRows} after=${synced.snapshotAfter ?? 'none'}`,
     )
   }
-  if (nativeCopyAvailable) target = createClient({ url: `file:${TARGET_PATH}` })
+  if (nativeCopyAvailable) target = openGuardedWritableTargetClient(TARGET_PATH, 'us-analytics-build')
   const doneRows = await target.execute({
     sql: REBUILD_PRICE_BASIS
       ? `SELECT ticker FROM us_analytics_copy_state WHERE status = 'done' AND price_basis = ?`
@@ -492,7 +502,7 @@ async function main() {
   const pendingTickers = tickers.filter((ticker) => !done.has(ticker))
   if (nativeCopyAvailable) target.close()
   if (nativeCopyPending(pendingTickers, done.size)) {
-    const finalTarget = createClient({ url: `file:${TARGET_PATH}` })
+    const finalTarget = openGuardedWritableTargetClient(TARGET_PATH, 'us-analytics-build')
     try {
       await markPriceBasisIfComplete(finalTarget, tickers.length)
     } finally {

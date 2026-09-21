@@ -14,6 +14,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { acquireExclusiveUpdateLock } from '@/lib/server/update-lock'
 import { resolveConfiguredStoragePath } from '@/lib/storage-paths'
+import { guardForDatabase, requiresExternalStorageGuard } from '@/lib/storage/external-storage-guard'
 
 type TargetName = 'jp' | 'us'
 
@@ -357,6 +358,10 @@ function maintainTarget(target: Target): MaintenanceResult {
 }
 
 async function main(): Promise<void> {
+  const targets = parseTargets()
+  for (const target of targets) {
+    if (requiresExternalStorageGuard(target.dbPath)) guardForDatabase(target.dbPath, 'db-maintenance').assertWritable(true)
+  }
   const lock = await acquireExclusiveUpdateLock('db_maintenance', 30 * 60)
   if (!lock) {
     console.log(JSON.stringify({
@@ -368,7 +373,7 @@ async function main(): Promise<void> {
   }
 
   try {
-    const results = parseTargets().map(maintainTarget)
+    const results = targets.map(maintainTarget)
     console.log(JSON.stringify({
       generatedAt: new Date().toISOString(),
       dryRun: process.env.DRY_RUN === '1',

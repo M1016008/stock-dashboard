@@ -18,6 +18,7 @@ __pycache__/
 # next.js
 /.next/
 /.next-dev/
+/.next-storage-qa/
 /.next-live/
 /.next-live-next/
 /.next-live-prev/

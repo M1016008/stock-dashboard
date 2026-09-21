@@ -7,7 +7,7 @@
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
-import { createClient } from '@libsql/client'
+import { openExistingGuardedClient } from '@/lib/storage/guarded-libsql-client'
 import { resolveConfiguredStoragePath } from '@/lib/storage-paths'
 
 const DEFAULT_US_ANALYTICS_DB = '/Volumes/OWC Express 1M2 80G/stockboard-data/us/stockboard-us.db'
@@ -26,7 +26,7 @@ function dbPath(): string {
 }
 
 async function loadTickers(path: string): Promise<string[]> {
-  const client = createClient({ url: `file:${path}` })
+  const client = openExistingGuardedClient(path, 'us-ml-physics')
   await client.execute('PRAGMA busy_timeout=60000')
   const rows = await client.execute(`
     SELECT ticker

@@ -1,7 +1,8 @@
 // Validate that the US analytics SQLite is complete enough before running ML.
 
 import path from 'node:path'
-import { createClient, type Client } from '@libsql/client'
+import { type Client } from '@libsql/client'
+import { openExistingGuardedClient } from '@/lib/storage/guarded-libsql-client'
 import { expectedLatestUsTradingDate } from '@/lib/server/us-data-freshness'
 import { resolveConfiguredStoragePath } from '@/lib/storage-paths'
 import { US_ADJUSTED_PRICE_BASIS } from '@/lib/us-adjusted-ohlcv'
@@ -52,7 +53,7 @@ function assertThreshold(name: string, actual: number, expected: number): string
 }
 
 async function main() {
-  const target = createClient({ url: `file:${TARGET_PATH}` })
+  const target = openExistingGuardedClient(TARGET_PATH, 'us-analytics-validation')
 
   // The copy ledger is updated in the same transaction as each ticker copy. Use it for
   // routine validation instead of rescanning nearly 100 million rows across both tables.

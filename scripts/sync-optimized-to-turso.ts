@@ -5,6 +5,7 @@
 // history は全期間OHLCV/ステージ履歴を日付レンジで再開可能に同期する。
 
 import { createClient, type Client, type InValue } from '@libsql/client'
+import { openExistingGuardedClient } from '@/lib/storage/guarded-libsql-client'
 import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
@@ -85,7 +86,7 @@ if (!fs.existsSync(LOCAL_DB)) {
   process.exit(1)
 }
 
-const local = createClient({ url: `file:${LOCAL_DB}` })
+const local = openExistingGuardedClient(LOCAL_DB, 'optimized-turso-source')
 const remote = createClient({ url: REMOTE_URL, authToken: REMOTE_TOKEN })
 
 async function tableExists(client: Client, table: string): Promise<boolean> {

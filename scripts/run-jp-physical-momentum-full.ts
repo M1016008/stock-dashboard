@@ -7,8 +7,9 @@
 
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
-import { createClient } from '@libsql/client'
+import { openExistingGuardedClient } from '@/lib/storage/guarded-libsql-client'
 import { localDbPath } from '@/lib/db/client'
+import { guardForDatabase, requiresExternalStorageGuard } from '@/lib/storage/external-storage-guard'
 
 type Mode = 'full' | 'raw' | 'normalize'
 type CountRow = { count: number }
@@ -38,7 +39,7 @@ function modeFromArg(value: string | undefined): Mode {
 }
 
 async function countJpDbRows(path: string): Promise<{ tickers: number; dates: number }> {
-  const client = createClient({ url: `file:${path}` })
+  const client = openExistingGuardedClient(path, 'jp-physical-momentum')
   await client.execute('PRAGMA busy_timeout=60000')
   const tickerRows = await client.execute('SELECT COUNT(DISTINCT ticker) AS count FROM ohlcv_daily')
   const dateRows = RECENT_DAYS > 0
@@ -101,6 +102,7 @@ async function runNpmWithRetry(script: string, env: NodeJS.ProcessEnv): Promise<
 async function main(): Promise<void> {
   const mode = modeFromArg(process.argv[2])
   const path = localDbPath
+  if (requiresExternalStorageGuard(path)) guardForDatabase(path, 'jp-physical-momentum').assertWritable(true)
   if (!fs.existsSync(path)) throw new Error(`JP DB not found: ${path}`)
 
   const { tickers, dates } = await countJpDbRows(path)

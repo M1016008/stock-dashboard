@@ -8,6 +8,7 @@ import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { configForDatabase, inspectStorage } from '../lib/storage/external-storage-guard'
 
 const webLabel = 'com.stockboard.web'
 const analogLabel = 'com.stockboard.analog-search'
@@ -40,6 +41,20 @@ const analogDbCacheMb = integerEnv('STOCKBOARD_ANALOG_DB_CACHE_MB', 96, 8, 256)
 const analogDbMmapMb = integerEnv('STOCKBOARD_ANALOG_DB_MMAP_MB', 512, 0, 1024)
 const usAnalyticsDbPath = process.env.US_ANALYTICS_DB_PATH?.trim()
   || '/Volumes/OWC Express 1M2 80G/stockboard-data/us/stockboard-us.db'
+const primaryDbPath = process.env.STOCKBOARD_DB_PATH?.trim() ?? ''
+// Machine-specific settings are supplied at install time, never checked into source.
+if (!primaryDbPath || process.env.EXTERNAL_STORAGE_REQUIRED === 'false') {
+  throw new Error('Production install requires STOCKBOARD_DB_PATH and enabled external storage protection')
+}
+const storageConfig = configForDatabase(primaryDbPath, 'launch-agent-install')
+inspectStorage(storageConfig)
+const storageEnvironment = `
+    <key>EXTERNAL_STORAGE_REQUIRED</key><string>true</string>
+    <key>STOCKBOARD_DB_PATH</key><string>${xmlEscape(primaryDbPath)}</string>
+    <key>STOCK_DATA_MOUNT_PATH</key><string>${xmlEscape(storageConfig.mountPath)}</string>
+    <key>STOCK_DATA_VOLUME_UUID</key><string>${xmlEscape(storageConfig.volumeUuid)}</string>
+    <key>STOCK_DATA_MIN_FREE_BYTES</key><string>${storageConfig.minFreeBytes}</string>
+    <key>STOCK_DATA_MIN_FREE_PERCENT</key><string>${storageConfig.minFreePercent}</string>`
 const healthIntervalSeconds = integerEnv('STOCKBOARD_WEB_HEALTH_INTERVAL_SECONDS', 60, 30, 3600)
 const healthTimeoutSeconds = integerEnv('STOCKBOARD_WEB_HEALTH_TIMEOUT_SECONDS', 20, 5, 120)
 const healthFailureThreshold = integerEnv('STOCKBOARD_WEB_HEALTH_FAILURE_THRESHOLD', 3, 2, 10)
@@ -148,6 +163,7 @@ const webPlist = `<?xml version="1.0" encoding="UTF-8"?>
     <key>US_SQLITE_BUSY_RETRIES</key><string>3</string>
     <key>US_ANALYTICS_DB_PATH</key><string>${xmlEscape(usAnalyticsDbPath)}</string>
     <key>USE_LOCAL_DB</key><string>1</string>
+    ${storageEnvironment}
   </dict>
   <key>RunAtLoad</key>
   <true/>
@@ -206,6 +222,7 @@ const analogPlist = `<?xml version="1.0" encoding="UTF-8"?>
     <key>US_SQLITE_BUSY_RETRIES</key><string>3</string>
     <key>US_ANALYTICS_DB_PATH</key><string>${xmlEscape(usAnalyticsDbPath)}</string>
     <key>USE_LOCAL_DB</key><string>1</string>
+    ${storageEnvironment}
   </dict>
   <key>RunAtLoad</key>
   <true/>
@@ -260,11 +277,14 @@ const historicalScanPlist = `<?xml version="1.0" encoding="UTF-8"?>
     <key>STOCKBOARD_HISTORICAL_SCAN_DIR</key><string>${xmlEscape(path.join(stateDir, 'historical-trigger-scans'))}</string>
     <key>STOCKBOARD_OUTCOME_ANALYSIS_DIR</key><string>${xmlEscape(path.join(stateDir, 'trigger-outcomes'))}</string>
     <key>USE_LOCAL_DB</key><string>1</string>
+    ${storageEnvironment}
   </dict>
   <key>RunAtLoad</key>
   <true/>
   <key>KeepAlive</key>
-  <true/>
+  <false/>
+  <key>StartInterval</key>
+  <integer>300</integer>
   <key>ThrottleInterval</key>
   <integer>30</integer>
   <key>ProcessType</key>
@@ -291,7 +311,8 @@ check_service() {
   local label="$2"
   local count_file="$3"
 
-  if /usr/bin/curl --silent --fail --max-time ${healthTimeoutSeconds} "$health_url" | /usr/bin/grep --quiet '"status":"ok"'; then
+  local response=$(/usr/bin/curl --silent --max-time ${healthTimeoutSeconds} "$health_url" 2>/dev/null)
+  if [[ "$response" == *'"status":"ok"'* ]] || [[ "$response" == *'"appStatus":"running"'* && "$response" == *'"storageStatus":"unavailable"'* ]]; then
     /bin/echo 0 > "$count_file"
     return
   fi
@@ -309,6 +330,10 @@ check_service() {
 
   if (( count >= ${healthFailureThreshold} )); then
     /bin/echo 0 > "$count_file"
+    if ! ${shellQuote(process.execPath)} --import tsx ${shellQuote(path.join(cwd, 'scripts', 'storage-safety.ts'))} preflight >/dev/null 2>&1; then
+      /bin/echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) storage unavailable; restart deferred for $label"
+      return
+    fi
     /bin/launchctl kickstart -k "gui/$UID/$label"
     /bin/echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) restarted $label after $count failures"
   fi
@@ -333,6 +358,13 @@ const healthPlist = `<?xml version="1.0" encoding="UTF-8"?>
 <dict>
   <key>Label</key>
   <string>${healthLabel}</string>
+  <key>WorkingDirectory</key>
+  <string>${xmlEscape(cwd)}</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>NODE_ENV</key><string>production</string>
+    ${storageEnvironment}
+  </dict>
   <key>ProgramArguments</key>
   <array>
     <string>/bin/zsh</string>

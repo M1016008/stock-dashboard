@@ -5,6 +5,9 @@
 // 各ルートの export const dynamic = 'force-dynamic' / revalidate = 0 と多重に保険をかけている。
 
 import { NextResponse, type NextRequest } from 'next/server'
+import path from 'node:path'
+import { anyStorageFatal, guardForDatabase, requiresExternalStorageGuard } from './lib/storage/external-storage-guard'
+import { resolveConfiguredStoragePath } from './lib/storage-paths'
 
 const SHARE_AUTH_REALM = 'StockBoard shared preview'
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
@@ -94,6 +97,23 @@ function isAuthorized(req: NextRequest): boolean {
 
 export function proxy(req: NextRequest) {
   const pathname = req.nextUrl.pathname
+  // Health reports storage degradation without hiding the running web process.
+  if (pathname === '/api/health') return NextResponse.next()
+  if (anyStorageFatal()) return unavailable('STORAGE_UNAVAILABLE')
+
+  if (!process.env.TURSO_DATABASE_URL || process.env.USE_LOCAL_DB === '1') {
+    const configured = process.env.STOCKBOARD_DB_PATH || process.env.LOCAL_DB_PATH
+    const dbPath = configured
+      ? resolveConfiguredStoragePath(configured)
+      : path.join(process.cwd(), 'data', 'stockboard.db')
+    if (requiresExternalStorageGuard(dbPath)) {
+      try {
+        guardForDatabase(dbPath, 'web').assertWritable()
+      } catch {
+        return unavailable('STORAGE_UNAVAILABLE')
+      }
+    }
+  }
 
   if (isShareMode()) {
     const hasCredentials = Boolean(

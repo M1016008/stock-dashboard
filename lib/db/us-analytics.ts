@@ -1,7 +1,9 @@
-import { createClient, type Client, type InValue } from '@libsql/client'
+import { type Client, type InValue } from '@libsql/client'
+import { openExistingGuardedClient } from '@/lib/storage/guarded-libsql-client'
 import fs from 'fs'
 import path from 'path'
 import { CURRENT_STORAGE_ROOT, resolveConfiguredStoragePath } from '@/lib/storage-paths'
+import { guardForDatabase, isStorageIoError, requiresExternalStorageGuard } from '@/lib/storage/external-storage-guard'
 
 const DEFAULT_US_ANALYTICS_PATH = 'data/stockboard-us.db'
 const EXTERNAL_US_ANALYTICS_PATH = path.join(
@@ -81,15 +83,18 @@ function retireClient(client: Client): void {
 
 function getGeneration(): UsAnalyticsGeneration {
   const dbPath = resolveUsAnalyticsDbPath()
+  const guard = requiresExternalStorageGuard(dbPath) ? guardForDatabase(dbPath, 'us-analytics-read') : null
+  guard?.assertWritable()
   const identity = fileIdentity(dbPath)
   const current = globalForUsAnalytics.usAnalyticsGeneration
   if (!current || current.path !== dbPath || current.identity !== identity) {
     const next = {
-      client: createClient({ url: `file:${dbPath}` }),
+      client: openExistingGuardedClient(dbPath, 'us-analytics-read'),
       identity,
       path: dbPath,
     }
     globalForUsAnalytics.usAnalyticsGeneration = next
+    guard?.setFatalHandler(() => { try { next.client.close() } catch { /* best effort */ } })
     if (current) retireClient(current.client)
     return next
   }
@@ -135,11 +140,18 @@ export async function execUsAnalyticsAll<T = Record<string, unknown>>(
     throw new Error(`US analytics DB not found: ${resolveUsAnalyticsDbPath()}`)
   }
   const generation = getGeneration()
-  await ensurePragmas(generation)
-  const res = await withBusyRetry(
-    () => generation.client.execute({ sql, args: args as InValue[] }),
-  )
-  return res.rows.map((row) => ({ ...row })) as unknown as T[]
+  const guard = requiresExternalStorageGuard(generation.path) ? guardForDatabase(generation.path) : null
+  guard?.assertWritable()
+  try {
+    await ensurePragmas(generation)
+    const res = await withBusyRetry(
+      () => generation.client.execute({ sql, args: args as InValue[] }),
+    )
+    return res.rows.map((row) => ({ ...row })) as unknown as T[]
+  } catch (error) {
+    if (guard && isStorageIoError(error)) guard.classify(error)
+    throw error
+  }
 }
 
 export async function execUsAnalyticsGet<T = Record<string, unknown>>(

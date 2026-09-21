@@ -8,7 +8,7 @@ import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { createClient } from '@libsql/client'
+import { openExistingGuardedClient } from '@/lib/storage/guarded-libsql-client'
 import { resolveConfiguredStoragePath } from '@/lib/storage-paths'
 import { waitForMemoryHeadroom, withMemoryGuardEnv } from '@/lib/system/memory-guard'
 
@@ -293,7 +293,7 @@ function steps(): Step[] {
 
 async function snapshotModels(dbPath: string | undefined): Promise<ModelSnapshotRow[] | null> {
   if (!dbPath || !fs.existsSync(dbPath)) return null
-  const client = createClient({ url: `file:${dbPath}` })
+  const client = openExistingGuardedClient(dbPath, 'weekly-model-snapshot')
   try {
     await client.execute('PRAGMA busy_timeout=60000')
     const table = await client.execute(
@@ -327,7 +327,7 @@ function modelGroup(row: Pick<ModelSnapshotRow, 'model_type' | 'direction' | 'ho
 
 async function restoreValidatedModels(dbPath: string, snapshot: ModelSnapshotRow[]): Promise<number> {
   if (snapshot.length === 0) return 0
-  const client = createClient({ url: `file:${dbPath}` })
+  const client = openExistingGuardedClient(dbPath, 'weekly-model-restore')
   try {
     await client.execute('PRAGMA busy_timeout=60000')
     const current = await client.execute(`

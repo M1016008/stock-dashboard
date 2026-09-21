@@ -1,4 +1,5 @@
-import { createClient } from '@libsql/client'
+import { openExistingGuardedClient } from '@/lib/storage/guarded-libsql-client'
+import { assertWritableTargetPath } from '@/lib/storage/external-storage-guard'
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -105,7 +106,7 @@ function acquireLock(directory: string, market: Market): boolean {
 }
 
 async function scalarText(dbPath: string, sql: string, args: string[] = []): Promise<string | null> {
-  const client = createClient({ url: `file:${dbPath}` })
+  const client = openExistingGuardedClient(dbPath, 'analog-encoder-source')
   try {
     await client.execute('PRAGMA query_only=ON')
     await client.execute('PRAGMA busy_timeout=60000')
@@ -210,6 +211,7 @@ async function main(): Promise<void> {
   const sourceDb = sourceDbPath(market)
   const indexDb = resolveAnalogSequenceIndexPath(market)
   const outputDir = outputDirectory(market, sourceDb)
+  assertWritableTargetPath(outputDir, 'analog-encoder-output')
   const readyDate = await assertReady(market, sourceDb, indexDb)
   if (!readyDate) {
     process.exitCode = 75

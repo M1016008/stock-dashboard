@@ -1,4 +1,6 @@
-import { createClient, type Client, type InValue } from '@libsql/client'
+import { type Client, type InValue } from '@libsql/client'
+import { openExistingGuardedClient } from '@/lib/storage/guarded-libsql-client'
+import { guardForDatabase, isStorageIoError, requiresExternalStorageGuard } from '@/lib/storage/external-storage-guard'
 import fs from 'node:fs'
 import path from 'node:path'
 import { localDbPath } from '@/lib/db/client'
@@ -108,13 +110,14 @@ export function hasAnalogSequenceIndex(market: AnalogSequenceMarket): boolean {
 
 function getClient(market: AnalogSequenceMarket): Client {
   const dbPath = resolveAnalogSequenceIndexPath(market)
+  if (requiresExternalStorageGuard(dbPath)) guardForDatabase(dbPath, 'analog-sequence-read').assertWritable()
   globalForAnalogIndex.analogSequenceClients ??= {}
   globalForAnalogIndex.analogSequencePaths ??= {}
   if (
     !globalForAnalogIndex.analogSequenceClients[market]
     || globalForAnalogIndex.analogSequencePaths[market] !== dbPath
   ) {
-    globalForAnalogIndex.analogSequenceClients[market] = createClient({ url: `file:${dbPath}` })
+    globalForAnalogIndex.analogSequenceClients[market] = openExistingGuardedClient(dbPath, 'analog-sequence-read')
     globalForAnalogIndex.analogSequencePaths[market] = dbPath
     if (globalForAnalogIndex.analogSequenceReady) delete globalForAnalogIndex.analogSequenceReady[market]
   }
@@ -155,9 +158,17 @@ async function execute<T>(
   sql: string,
   args: readonly InValue[] = [],
 ): Promise<T[]> {
-  await ensureReady(market)
-  const result = await getClient(market).execute({ sql, args: [...args] })
-  return result.rows.map((row) => ({ ...row })) as unknown as T[]
+  const dbPath = resolveAnalogSequenceIndexPath(market)
+  const guard = requiresExternalStorageGuard(dbPath) ? guardForDatabase(dbPath, 'analog-sequence-read') : null
+  guard?.assertWritable()
+  try {
+    await ensureReady(market)
+    const result = await getClient(market).execute({ sql, args: [...args] })
+    return result.rows.map((row) => ({ ...row })) as unknown as T[]
+  } catch (error) {
+    if (guard && isStorageIoError(error)) guard.classify(error)
+    throw error
+  }
 }
 
 function decodeBlob(value: ArrayBuffer | Uint8Array): Uint8Array {
@@ -235,7 +246,8 @@ export async function readAnalogSequenceIndexMeta(
       priceChunksSourceDate: values.get('price_chunks_source_date') ?? null,
       priceChunksCompleted: values.get('price_chunks_completed') === '1',
     }
-  } catch {
+  } catch (error) {
+    if (isStorageIoError(error)) throw error
     return null
   }
 }

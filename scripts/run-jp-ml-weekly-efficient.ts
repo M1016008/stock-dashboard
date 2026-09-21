@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process'
-import { createClient } from '@libsql/client'
+import { openExistingGuardedClient } from '@/lib/storage/guarded-libsql-client'
+import { isStorageIoError } from '@/lib/storage/external-storage-guard'
 import path from 'node:path'
 import {
   canRefreshLegacyBaselineForCalendarStages,
@@ -19,7 +20,7 @@ const jpDbPath = resolveConfiguredStoragePath(path.resolve(
 type BaselineAction = 'delta' | 'calendar-stage-refresh' | 'full'
 
 async function baselineAction(): Promise<BaselineAction> {
-  const client = createClient({ url: `file:${jpDbPath}` })
+  const client = openExistingGuardedClient(jpDbPath, 'jp-ml-weekly')
   try {
     await client.execute(`PRAGMA busy_timeout=${Number(process.env.SQLITE_BUSY_TIMEOUT_MS ?? 60_000)}`)
     const existing = await readMlPipelineState(client, 'JP')
@@ -38,6 +39,7 @@ async function baselineAction(): Promise<BaselineAction> {
       )
       return hasAuditedFullHistoryBaseline(adopted.state) ? 'delta' : 'full'
     } catch (error) {
+      if (isStorageIoError(error)) throw error
       console.log(
         `JP weekly: audited full-history baseline is unavailable; initial full run required (${error instanceof Error ? error.message : String(error)})`,
       )
