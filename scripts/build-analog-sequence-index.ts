@@ -1,4 +1,6 @@
-import { createClient, type Client, type InValue } from '@libsql/client'
+import { type Client, type InValue } from '@libsql/client'
+import { openExistingGuardedClient, openGuardedWritableTargetClient } from '@/lib/storage/guarded-libsql-client'
+import { assertWritableTargetPath } from '@/lib/storage/external-storage-guard'
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -517,11 +519,12 @@ async function main(): Promise<void> {
   const source = sourcePath(market)
   const target = targetPath(market, source)
   if (!fs.existsSync(source)) throw new Error(`Source DB not found: ${source}`)
+  assertWritableTargetPath(target, 'analog-sequence-build-target')
   fs.mkdirSync(path.dirname(target), { recursive: true })
   if (!acquireProcessLock(target)) return
 
-  const sourceClient = createClient({ url: `file:${source}` })
-  const targetClient = createClient({ url: `file:${target}` })
+  const sourceClient = openExistingGuardedClient(source, 'analog-sequence-build-source')
+  const targetClient = openGuardedWritableTargetClient(target, 'analog-sequence-build-target')
   await sourceClient.execute(`PRAGMA busy_timeout=${SQLITE_BUSY_TIMEOUT_MS}`)
   await sourceClient.execute('PRAGMA query_only=ON')
   await sourceClient.execute('PRAGMA temp_store=FILE')

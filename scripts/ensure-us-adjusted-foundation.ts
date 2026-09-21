@@ -1,7 +1,7 @@
 import { execFileSync, spawn } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
-import { createClient } from '@libsql/client'
+import { openExistingGuardedClient } from '@/lib/storage/guarded-libsql-client'
 import { db, ensureReady, execGet } from '@/lib/db/client'
 import { marketDataRuns } from '@/lib/db/schema'
 import {
@@ -12,6 +12,7 @@ import {
 } from '@/lib/server/update-lock'
 import { waitForMemoryHeadroom, withMemoryGuardEnv } from '@/lib/system/memory-guard'
 import { resolveConfiguredStoragePath } from '@/lib/storage-paths'
+import { assertWritableTargetPath } from '@/lib/storage/external-storage-guard'
 import { MA_SEQUENCE_VERSION } from '@/lib/ml/ma-sequence'
 import { ML_PHYSICS_FEATURE_SET } from '@/lib/backtest/ml-physics'
 import { US_ADJUSTED_PRICE_BASIS } from '@/lib/us-adjusted-ohlcv'
@@ -331,7 +332,7 @@ async function analyticsPriceBasisIsCurrent(): Promise<boolean> {
 
 async function analyticsMetadataValue(dbPath: string, key: string): Promise<string | null> {
   if (!fs.existsSync(dbPath)) return null
-  const client = createClient({ url: `file:${dbPath}` })
+  const client = openExistingGuardedClient(dbPath, 'us-adjusted-foundation')
   try {
     const table = await client.execute(
       `SELECT 1 AS present
@@ -352,7 +353,7 @@ async function analyticsMetadataValue(dbPath: string, key: string): Promise<stri
 }
 
 async function writeAnalyticsMetadata(dbPath: string, key: string, value: string): Promise<void> {
-  const client = createClient({ url: `file:${dbPath}` })
+  const client = openExistingGuardedClient(dbPath, 'us-adjusted-foundation')
   try {
     await client.execute({
       sql: `
@@ -369,7 +370,7 @@ async function writeAnalyticsMetadata(dbPath: string, key: string, value: string
 
 async function analogMetadataValue(dbPath: string, key: string): Promise<string | null> {
   if (!fs.existsSync(dbPath)) return null
-  const client = createClient({ url: `file:${dbPath}` })
+  const client = openExistingGuardedClient(dbPath, 'us-adjusted-foundation')
   try {
     const row = await client.execute({
       sql: `SELECT value FROM analog_sequence_meta WHERE key = ?`,
@@ -405,7 +406,7 @@ async function analogGenerationIsCurrent(dbPath: string, sourceDate: string): Pr
 
 async function analyticsMaxPriceDate(dbPath: string): Promise<string | null> {
   if (!fs.existsSync(dbPath)) return null
-  const client = createClient({ url: `file:${dbPath}` })
+  const client = openExistingGuardedClient(dbPath, 'us-adjusted-foundation')
   try {
     const row = await client.execute('SELECT MAX(date) AS value FROM ohlcv_daily')
     const value = row.rows[0]?.value
@@ -453,7 +454,7 @@ async function seedAdjustedAnalyticsShadow(): Promise<boolean> {
 
 async function adjustedForwardExtremaBaselineExists(dbPath: string): Promise<boolean> {
   if (!fs.existsSync(dbPath)) return false
-  const client = createClient({ url: `file:${dbPath}` })
+  const client = openExistingGuardedClient(dbPath, 'us-adjusted-foundation')
   try {
     const row = await client.execute(`
       SELECT
@@ -474,7 +475,7 @@ async function adjustedForwardExtremaBaselineExists(dbPath: string): Promise<boo
 
 async function reusableAdjustedDerivedBaselineExists(dbPath: string): Promise<boolean> {
   if (!fs.existsSync(dbPath)) return false
-  const client = createClient({ url: `file:${dbPath}` })
+  const client = openExistingGuardedClient(dbPath, 'us-adjusted-foundation')
   try {
     const row = await client.execute(`
       SELECT
@@ -493,7 +494,7 @@ async function reusableAdjustedDerivedBaselineExists(dbPath: string): Promise<bo
 
 async function reusablePhysicsLabelBaselineExists(dbPath: string): Promise<boolean> {
   if (!fs.existsSync(dbPath)) return false
-  const client = createClient({ url: `file:${dbPath}` })
+  const client = openExistingGuardedClient(dbPath, 'us-adjusted-foundation')
   try {
     const featureStartResult = await client.execute({
       sql: `
@@ -566,7 +567,7 @@ async function updateFoundationRun(
 
 async function checkpointDb(dbPath: string): Promise<void> {
   if (!fs.existsSync(dbPath)) return
-  const client = createClient({ url: `file:${dbPath}` })
+  const client = openExistingGuardedClient(dbPath, 'us-adjusted-foundation')
   try {
     await client.execute('PRAGMA wal_checkpoint(TRUNCATE)')
   } finally {
@@ -760,6 +761,8 @@ async function buildAdjustedShadow(onStage: (stage: FoundationStage) => Promise<
 }
 
 async function main(): Promise<void> {
+  assertWritableTargetPath(adjustedShadowDbPath, 'us-adjusted-shadow')
+  assertWritableTargetPath(adjustedAnalogShadowDbPath, 'us-adjusted-analog-shadow')
   await ensureReady()
   let [sourceCurrent, analyticsCurrent] = await Promise.all([
     sourceSnapshotBasisIsCurrent(),

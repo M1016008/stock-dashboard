@@ -1,4 +1,4 @@
-import { createClient } from '@libsql/client'
+import { openExistingGuardedClient } from '@/lib/storage/guarded-libsql-client'
 import fs from 'node:fs'
 import path from 'node:path'
 import {
@@ -40,7 +40,7 @@ async function main(): Promise<void> {
   const dbPath = databasePath(market)
   if (!fs.existsSync(dbPath)) throw new Error(`${market} database not found: ${dbPath}`)
 
-  const client = createClient({ url: `file:${dbPath}` })
+  const client = openExistingGuardedClient(dbPath, 'ml-pipeline-generation')
   try {
     await client.execute(`PRAGMA busy_timeout=${Number(process.env.SQLITE_BUSY_TIMEOUT_MS ?? 60_000)}`)
     if (action === 'verify-or-adopt') {

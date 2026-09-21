@@ -5,13 +5,14 @@
 
 import { execFileSync, spawn } from 'node:child_process'
 import path from 'node:path'
-import { createClient } from '@libsql/client'
+import { openExistingGuardedClient } from '@/lib/storage/guarded-libsql-client'
 import { execGet } from '@/lib/db/client'
 import { execUsAnalyticsGet } from '@/lib/db/us-analytics'
 import { acquireUsStockboardUpdateLock } from '@/lib/server/update-lock'
 import { expectedLatestUsTradingDate } from '@/lib/server/us-data-freshness'
 import { waitForMemoryHeadroom, withMemoryGuardEnv } from '@/lib/system/memory-guard'
 import { resolveConfiguredStoragePath } from '@/lib/storage-paths'
+import { guardForDatabase, requiresExternalStorageGuard } from '@/lib/storage/external-storage-guard'
 import { US_ADJUSTED_PRICE_BASIS } from '@/lib/us-adjusted-ohlcv'
 import { usInvestableSymbolSql } from '@/lib/us-symbol-quality'
 
@@ -158,7 +159,7 @@ async function writeUsAnalyticsMetadata(
   dbPath: string,
   entries: Array<[key: string, value: string]>,
 ): Promise<void> {
-  const client = createClient({ url: `file:${dbPath}` })
+  const client = openExistingGuardedClient(dbPath, 'us-update-latest')
   try {
     await client.execute('PRAGMA busy_timeout=30000')
     await client.batch(entries.map(([key, value]) => ({
@@ -264,6 +265,9 @@ async function main() {
       throw new Error('US_ANALYTICS_DB_PATH is required for US latest update. Point it at the external SSD analytics DB before running.')
     }
     const usAnalyticsDbPath = resolveConfiguredStoragePath(path.resolve(configuredUsAnalyticsDbPath))
+    if (requiresExternalStorageGuard(usAnalyticsDbPath)) {
+      guardForDatabase(usAnalyticsDbPath, 'us-update-latest').assertWritable(true)
+    }
     process.env.US_ANALYTICS_DB_PATH = usAnalyticsDbPath
 
     try {

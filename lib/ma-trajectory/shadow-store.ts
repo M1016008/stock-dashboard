@@ -1,5 +1,6 @@
-import { createClient } from '@libsql/client'
 import fs from 'node:fs'
+import { guardForDatabase, requiresExternalStorageGuard } from '@/lib/storage/external-storage-guard'
+import { openExistingGuardedClient } from '@/lib/storage/guarded-libsql-client'
 import {
   MA_TRAJECTORY_FEATURE_VERSION,
   MA_TRAJECTORY_MODEL_VERSION,
@@ -87,11 +88,12 @@ export async function readMaTrajectoryProjection(params: {
   }
 
   const dbPath = resolveMaTrajectoryShadowDbPath(market)
+  if (requiresExternalStorageGuard(dbPath)) guardForDatabase(dbPath, 'ma-trajectory-shadow').assertWritable(true)
   if (!fs.existsSync(dbPath)) {
     return { ok: true, available: false, market, ticker, horizonSessions: params.horizon, reason: 'shadow_not_found' }
   }
 
-  const client = createClient({ url: `file:${dbPath}` })
+  const client = openExistingGuardedClient(dbPath, 'ma-trajectory-shadow')
   try {
     await client.execute('PRAGMA query_only=ON')
     await client.execute('PRAGMA busy_timeout=5000')

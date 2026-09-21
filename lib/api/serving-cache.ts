@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto'
-import fs from 'node:fs'
 import path from 'node:path'
-import { createClient, type Client, type InValue } from '@libsql/client'
+import { type Client, type InValue } from '@libsql/client'
 import { localDbPath } from '@/lib/db/client'
+import { openExistingGuardedClient } from '@/lib/storage/guarded-libsql-client'
 
 type CacheRow = {
   payload_json: string
@@ -73,8 +73,7 @@ function getClient(): Client {
     !globalForServingCache.servingCacheClient
     || globalForServingCache.servingCachePath !== dbPath
   ) {
-    fs.mkdirSync(path.dirname(dbPath), { recursive: true })
-    globalForServingCache.servingCacheClient = createClient({ url: `file:${dbPath}` })
+    globalForServingCache.servingCacheClient = openExistingGuardedClient(dbPath, 'serving-cache')
     globalForServingCache.servingCachePath = dbPath
     delete globalForServingCache.servingCacheReady
   }

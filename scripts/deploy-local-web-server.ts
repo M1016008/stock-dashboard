@@ -128,7 +128,11 @@ if (!fs.existsSync(path.join(stagePath, 'BUILD_ID'))) {
   throw new Error(`Staged build is incomplete: ${stagePath}`)
 }
 assertRequiredRoutes(stagePath)
-runNpm('db:ensure-schema')
+if (process.env.STOCKBOARD_DEPLOY_SKIP_SCHEMA === '1') {
+  console.log('Schema ensure skipped for a code-only deployment (STOCKBOARD_DEPLOY_SKIP_SCHEMA=1)')
+} else {
+  runNpm('db:ensure-schema')
+}
 
 removeGenerated(previousPath)
 const hadPreviousBuild = fs.existsSync(livePath)

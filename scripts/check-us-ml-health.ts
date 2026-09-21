@@ -5,7 +5,8 @@
 // the freshness points needed by the US pages without touching heavyweight
 // maintenance tables.
 
-import { createClient, type Client, type InValue } from '@libsql/client'
+import { type Client, type InValue } from '@libsql/client'
+import { openExistingGuardedClient } from '@/lib/storage/guarded-libsql-client'
 import path from 'path'
 import { ML_PHYSICS_FEATURE_SET } from '@/lib/backtest/ml-physics'
 import { ML_PRIMARY_HORIZONS } from '@/lib/backtest/ml-horizons'
@@ -32,7 +33,7 @@ type HealthRow = {
   payload?: Record<string, unknown>
 }
 
-const client: Client = createClient({ url: `file:${dbPath}` })
+const client: Client = openExistingGuardedClient(dbPath, 'us-ml-health')
 
 function profileQuery(sql: string, startedAt: number): void {
   if (!PROFILE_QUERIES) return

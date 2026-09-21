@@ -14,6 +14,7 @@ import { exactForwardExtremaRecomputeBars } from '@/lib/backtest/forward-extrema
 import { ML_PRIMARY_HORIZON_LIST } from '@/lib/backtest/ml-horizons'
 import { waitForMemoryHeadroom, withMemoryGuardEnv } from '@/lib/system/memory-guard'
 import { resolveConfiguredStoragePath } from '@/lib/storage-paths'
+import { guardForDatabase, requiresExternalStorageGuard } from '@/lib/storage/external-storage-guard'
 
 const DEFAULT_US_ANALYTICS_DB = '/Volumes/OWC Express 1M2 80G/stockboard-data/us/stockboard-us.db'
 const US_ML_LOCK_PATH = path.join(
@@ -121,13 +122,15 @@ async function runNpmOnce(script: string, env: NodeJS.ProcessEnv, overrides: Env
 }
 
 function sqliteInt(dbPath: string, sql: string): number {
-  const output = execFileSync('sqlite3', ['-cmd', '.timeout 30000', dbPath, sql], { encoding: 'utf8' }).trim()
+  if (requiresExternalStorageGuard(dbPath)) guardForDatabase(dbPath, 'us-ml-readonly-cli').assertWritable()
+  const output = execFileSync('sqlite3', ['-readonly', '-cmd', '.timeout 30000', dbPath, sql], { encoding: 'utf8' }).trim()
   const value = Number(output)
   return Number.isFinite(value) ? value : 0
 }
 
 function sqliteText(dbPath: string, sql: string): string {
-  return execFileSync('sqlite3', ['-cmd', '.timeout 30000', dbPath, sql], { encoding: 'utf8' }).trim()
+  if (requiresExternalStorageGuard(dbPath)) guardForDatabase(dbPath, 'us-ml-readonly-cli').assertWritable()
+  return execFileSync('sqlite3', ['-readonly', '-cmd', '.timeout 30000', dbPath, sql], { encoding: 'utf8' }).trim()
 }
 
 function checkpointDirectory(env: NodeJS.ProcessEnv): string {

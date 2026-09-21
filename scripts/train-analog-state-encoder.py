@@ -1049,8 +1049,12 @@ def write_shadow_database(
     query_metrics: list[dict[str, Any]],
     rankings: list[dict[str, Any]],
 ) -> None:
+    from external_storage_guard import connect_writer, requires_guard, StorageGuard
+
+    if requires_guard(shadow_db):
+        StorageGuard(shadow_db).assert_writable(force=True)
     shadow_db.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(shadow_db)
+    connection = connect_writer(shadow_db)
     connection.execute("PRAGMA journal_mode=WAL")
     connection.execute("PRAGMA synchronous=NORMAL")
     connection.executescript(

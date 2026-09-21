@@ -3132,8 +3132,12 @@ def write_shadow(
     query_rows: list[dict[str, Any]],
     predictions: list[tuple[str, str, int, str]],
 ) -> int:
+    from external_storage_guard import connect_writer, requires_guard, StorageGuard
+
+    if requires_guard(shadow_db):
+        StorageGuard(shadow_db).assert_writable(force=True)
     shadow_db.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(shadow_db)
+    connection = connect_writer(shadow_db)
     ensure_shadow_schema(connection)
     status = "shadow_passed" if report["gate"]["passed"] else "shadow_rejected"
     cursor = connection.execute(
@@ -3205,7 +3209,8 @@ def write_shadow(
 def existing_completed_run(shadow_db: Path, market: str, source_date: str) -> bool:
     if not shadow_db.exists():
         return False
-    connection = sqlite3.connect(shadow_db)
+    from external_storage_guard import connect_writer
+    connection = connect_writer(shadow_db)
     try:
         ensure_shadow_schema(connection)
         row = connection.execute(
@@ -3226,7 +3231,8 @@ def existing_completed_run(shadow_db: Path, market: str, source_date: str) -> bo
 def latest_model_run(shadow_db: Path, market: str, include_rejected: bool) -> dict[str, Any] | None:
     if not shadow_db.exists():
         return None
-    connection = sqlite3.connect(shadow_db)
+    from external_storage_guard import connect_writer
+    connection = connect_writer(shadow_db)
     try:
         ensure_shadow_schema(connection)
         eligibility = "" if include_rejected else "AND promotion_eligible=1"
@@ -3719,7 +3725,8 @@ def main() -> None:
             args.force = True
             args.write_rejected_predictions = True
             result = run(args)
-            connection = sqlite3.connect(args.shadow_db)
+            from external_storage_guard import connect_writer
+            connection = connect_writer(args.shadow_db)
             run_count = int(connection.execute("SELECT COUNT(*) FROM ma_trajectory_runs").fetchone()[0])
             prediction_count = int(connection.execute("SELECT COUNT(*) FROM ma_trajectory_predictions").fetchone()[0])
             connection.close()

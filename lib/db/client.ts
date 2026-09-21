@@ -17,6 +17,7 @@ import { ensureSchema } from './migrate'
 import { resolveConfiguredStoragePath } from '../storage-paths'
 import path from 'path'
 import fs from 'fs'
+import { guardForDatabase, isStorageIoError, requiresExternalStorageGuard, type ExternalStorageGuard } from '../storage/external-storage-guard'
 
 const TURSO_URL = process.env.TURSO_DATABASE_URL
 const TURSO_TOKEN = process.env.TURSO_AUTH_TOKEN
@@ -35,8 +36,6 @@ function buildClientUrl(): { url: string; authToken?: string; isCloud: boolean }
   if (TURSO_URL && !FORCE_LOCAL) {
     return { url: TURSO_URL, authToken: TURSO_TOKEN, isCloud: true }
   }
-  // ローカルファイル。dataディレクトリを先に作る
-  fs.mkdirSync(path.dirname(localDbPath), { recursive: true })
   return { url: `file:${localDbPath}`, isCloud: false }
 }
 
@@ -53,11 +52,84 @@ const globalForDb = global as unknown as {
   }
 }
 
-export const client: Client =
-  globalForDb.libsql ??
-  createClient({ url: cfg.url, authToken: cfg.authToken })
+function storageGuard(): ExternalStorageGuard | null {
+  if (cfg.isCloud) return null
+  const requiresGuard = requiresExternalStorageGuard(localDbPath)
+  return requiresGuard ? guardForDatabase(localDbPath) : null
+}
 
-if (process.env.NODE_ENV !== 'production') globalForDb.libsql = client
+function realClient(): Client {
+  const guard = storageGuard()
+  guard?.assertWritable()
+  if (!globalForDb.libsql) {
+    try {
+      // Local test fixtures retain their existing auto-create behavior. External DBs never do.
+      if (!guard && !cfg.isCloud) fs.mkdirSync(path.dirname(localDbPath), { recursive: true })
+      globalForDb.libsql = createClient({ url: cfg.url, authToken: cfg.authToken })
+      guard?.setFatalHandler(() => {
+        try { globalForDb.libsql?.close() } catch { /* best effort */ }
+      })
+    } catch (error) {
+      if (guard && isStorageIoError(error)) guard.classify(error)
+      throw error
+    }
+  }
+  return globalForDb.libsql
+}
+
+function guardedResult<T>(value: T, guard: ExternalStorageGuard | null): T {
+  if (value && typeof (value as unknown as Promise<unknown>).then === 'function') {
+    return (value as unknown as Promise<unknown>).catch((error) => {
+      if (guard) guard.classify(error)
+      throw error
+    }) as T
+  }
+  return value
+}
+
+function guardedTransaction<T extends object>(transaction: T, guard: ExternalStorageGuard | null): T {
+  return new Proxy(transaction, {
+    get(target, property) {
+      const member = Reflect.get(target, property)
+      if (typeof member !== 'function') return member
+      return (...args: unknown[]) => {
+        if (property !== 'close') guard?.assertWritable()
+        try { return guardedResult(Reflect.apply(member, target, args), guard) }
+        catch (error) {
+          if (guard && isStorageIoError(error)) guard.classify(error)
+          throw error
+        }
+      }
+    },
+  })
+}
+
+// Defer file open until the first operation, so a missing SSD cannot create an empty DB
+// during module import or production build.
+export const client: Client = new Proxy({ __libsqlProxy: true } as unknown as Client, {
+  get(_target, property) {
+    if (property === 'then') return undefined
+    if (property === 'constructor') return Object
+    if (property === '__libsqlProxy') return true
+    const actual = realClient()
+    const member = Reflect.get(actual, property)
+    if (typeof member !== 'function') return member
+    return (...args: unknown[]) => {
+      const guard = storageGuard()
+      guard?.assertWritable()
+      try {
+        const result = guardedResult(Reflect.apply(member, actual, args), guard)
+        if (property === 'transaction') {
+          return (result as Promise<object>).then((transaction) => guardedTransaction(transaction, guard))
+        }
+        return result
+      } catch (error) {
+        if (guard && isStorageIoError(error)) guard.classify(error)
+        throw error
+      }
+    }
+  },
+})
 
 export const db = drizzle(client, { schema })
 export const isCloud = cfg.isCloud
@@ -167,6 +239,7 @@ async function withBusyRetry<T>(fn: () => Promise<T>): Promise<T> {
     try {
       return await fn()
     } catch (error) {
+      if (isStorageIoError(error)) throw error
       if (!isBusyError(error) || attempt >= max) throw error
       await sleep(Math.min(2500, 120 * 2 ** attempt))
     }

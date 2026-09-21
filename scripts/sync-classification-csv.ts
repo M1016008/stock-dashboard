@@ -4,7 +4,7 @@
 
 import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
-import { createClient } from '@libsql/client'
+import { openExistingGuardedClient } from '@/lib/storage/guarded-libsql-client'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -86,7 +86,7 @@ function acquireLock(): number | null {
 
 async function databaseImportCounts(): Promise<{ classifications: number; profiles: number }> {
   if (!fs.existsSync(databasePath)) return { classifications: 0, profiles: 0 }
-  const database = createClient({ url: `file:${databasePath}` })
+  const database = openExistingGuardedClient(databasePath, 'classification-sync')
   try {
     const classificationResult = await database.execute('SELECT COUNT(*) AS count FROM stock_classification')
     let profiles = 0

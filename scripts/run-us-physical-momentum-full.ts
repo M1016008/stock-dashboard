@@ -10,7 +10,7 @@ import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { createClient } from '@libsql/client'
+import { openExistingGuardedClient } from '@/lib/storage/guarded-libsql-client'
 import { waitForMemoryHeadroom, withMemoryGuardEnv } from '@/lib/system/memory-guard'
 import { resolveConfiguredStoragePath } from '@/lib/storage-paths'
 
@@ -89,7 +89,7 @@ function modeFromArg(value: string | undefined): Mode {
 }
 
 async function usDbProfile(dbFile: string): Promise<DbProfile> {
-  const client = createClient({ url: `file:${dbFile}` })
+  const client = openExistingGuardedClient(dbFile, 'us-physical-momentum')
   await client.execute('PRAGMA busy_timeout=60000')
   try {
     const tickerRows = RECENT_DAYS > 0
