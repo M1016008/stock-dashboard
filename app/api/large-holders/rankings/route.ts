@@ -74,7 +74,6 @@ export async function GET(request: Request) {
             rankingBasis: basis, rankingValue: basisValue(selected, basis),
             rankingValueLabel: basis === 'OWNERSHIP' ? '所有等ベース推定時価' : '運用権限ベース推定時価' }
         })
-        .filter((row) => row.rankingValue != null || completeness === 'NONE')
         .sort((a, b) => compare({ value: a.rankingValue, name: a.displayName, date: a.latestFilingDate },
           { value: b.rankingValue, name: b.displayName, date: b.latestFilingDate }))
       return Response.json({ ...paginate(rows, page, pageSize), rankingType, investorClass,
