@@ -6,6 +6,7 @@ import { basename, dirname, join } from 'node:path'
 import { unzipSync } from 'fflate'
 import { sha256, verifyArchivedLineage, type RawEvidence, type PositionLineage } from '@/lib/large-holders/evidence-provenance'
 import { resolveRevisionChains, type RevisionFiling } from '@/lib/large-holders/revision-chain'
+import { currentPositionEntityId, OZAKI_ATSUSHI_SUCCESSION } from '@/lib/large-holders/entity-adjudications'
 import { classifyEffectiveTransition, POSITION_FINGERPRINT_SQL, summarizeInvestor, type HoldingBasis, type HolderActivity,
   type InvestorClass, type RankedPosition, type RankingSnapshot } from '@/lib/large-holders/ranking-core'
 
@@ -117,7 +118,8 @@ async function main() {
     if (revisions.some((row) => row.unresolvedReason)) throw new Error('revision_chain_unresolved')
     const effective = new Map(revisions.filter((row) => row.isEffectiveRevision).map((row) => [row.documentId, row]))
     const filingById = new Map(filings.map((row) => [str(row.document_id), row]))
-    const positions = all(`SELECT p.*,f.issuer_name,f.issuer_edinet_code,f.issuer_security_code,f.submitted_at,
+    const positions = all(`SELECT p.*,f.issuer_name,f.issuer_edinet_code,f.issuer_security_code,
+      f.filer_edinet_code,f.report_serial_number,f.submitted_at,
       f.obligation_date AS filing_obligation_date,f.filing_type,f.source_url,
       s.xbrl_sha256 FROM large_holder_positions p JOIN large_holder_filings f USING(document_id)
       LEFT JOIN large_holder_source_documents s USING(document_id)`)
@@ -126,7 +128,7 @@ async function main() {
     for (const row of positions.toSorted((a, b) => date(b).localeCompare(date(a))
       || str(b.submitted_at).localeCompare(str(a.submitted_at))
       || str(b.document_id).localeCompare(str(a.document_id)))) {
-      const key = `${row.entity_id}:${row.ticker}`
+      const key = `${currentPositionEntityId(row)}:${row.ticker}`
       if (!newest.has(key)) newest.set(key, row)
     }
     const current = [...newest.values()]
@@ -153,7 +155,10 @@ async function main() {
     }
     const aliases = new Map<string, string[]>()
     for (const row of all('SELECT entity_id,raw_holder_name FROM investor_aliases')) {
-      const id = str(row.entity_id), list = aliases.get(id) ?? []
+      const rawId = str(row.entity_id)
+      const id = rawId === OZAKI_ATSUSHI_SUCCESSION.priorEntityId
+        ? OZAKI_ATSUSHI_SUCCESSION.canonicalEntityId : rawId
+      const list = aliases.get(id) ?? []
       if (!list.includes(str(row.raw_holder_name))) list.push(str(row.raw_holder_name))
       aliases.set(id, list)
     }
@@ -224,7 +229,7 @@ async function main() {
       .map((row) => [`${row.investorEntityId}:${row.ticker}`, row.estimatedCurrentValue! / row.certifiedUnits!]))
     const series = new Map<string, Row[]>()
     for (const row of positions) {
-      const key = `${row.entity_id}:${row.ticker}`
+      const key = `${currentPositionEntityId(row)}:${row.ticker}`
       series.set(key, [...(series.get(key) ?? []), row])
     }
     const activities: HolderActivity[] = []
@@ -253,8 +258,8 @@ async function main() {
           sameCertifiedInstrument: compatibleDirect(latestRow, row)
             && (!previous || compatibleDirect(previous, row))
             && legalBasis(row) === cert.holdingBasis })
-        if (transition) activities.push({ eventType: transition.eventType, investorEntityId: str(row.entity_id),
-          investorClass: classByEntity.get(str(row.entity_id))!, ticker: str(row.ticker),
+        if (transition) activities.push({ eventType: transition.eventType, investorEntityId: currentPositionEntityId(row),
+          investorClass: classByEntity.get(currentPositionEntityId(row))!, ticker: str(row.ticker),
           issuerName: optional(row.issuer_name), documentId: str(row.document_id),
           filingDate: str(root.submitted_at).slice(0, 10), obligationDate: eventDate,
           reportedHoldingPct: afterPct, previousHoldingPct: beforePct,
@@ -275,7 +280,7 @@ async function main() {
         sourceVerified: verifiedDocs.has(row.documentId),
         rootFilingId: row.rootFilingId!, isCorrection: row.isCorrection,
         investorEntityIds: [...new Set(positions.filter((position) => position.document_id === row.documentId)
-          .map((position) => str(position.entity_id)))],
+          .map((position) => currentPositionEntityId(position)))],
       }
     })
     const snapshot: RankingSnapshot = { version: 1, certificationAsOf: manifest.asOf,
