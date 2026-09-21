@@ -155,11 +155,15 @@ try {
   }, { wait: () => undefined })
   mountTableGuard.assertWritable(true)
   assert.equal(mountTableGuard.status, 'HEALTHY')
-  assert.equal(mountTableCalls >= 3, true)
+  assert.equal(mountTableCalls, 2, 'confirmation uses in-process identity before the final mount and UUID check')
   const probeFailure = new ExternalStorageGuard(config, failedProbe, { wait: () => undefined })
   expectCode('PROBE_FAILED', () => probeFailure.assertWritable(true))
   assert.equal(probeFailure.status, 'FAILED_SAFE', 'three failed certifications require manual recovery')
   assert.equal(probeFailure.probeMetrics.fullCount, 3)
+  const failedIncident = JSON.parse(fs.readFileSync(path.join(tmp, 'incidents.ndjson'), 'utf8').trim().split('\n').at(-1)!)
+  assert.deepEqual(failedIncident.confirmationAttempts.map((attempt: { attempt: number }) => attempt.attempt), [1, 2, 3])
+  assert.equal(failedIncident.confirmationAttempts.every((attempt: { uuidVerified: boolean }) => !attempt.uuidVerified), true)
+  assert.equal(failedIncident.confirmationAttempts[1].inProcessIdentity, true)
   fs.unlinkSync(path.join(tmp, 'FAILED_SAFE'))
 
   mounted = false
