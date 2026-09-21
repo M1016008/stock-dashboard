@@ -241,9 +241,17 @@ export function inspectStorage(config: GuardConfig, probe: StorageProbe = system
   for (const suffix of ['-wal', '-shm']) {
     const companion = `${dbPath}${suffix}`
     if (!probe.exists(companion)) continue
-    const realCompanion = probe.realpath(companion)
-    if (!contained(realMount, realCompanion) || probe.stat(realCompanion).dev !== mountDevice) {
-      fail('DB_OUTSIDE_EXPECTED_VOLUME', `${suffix} is outside expected volume`)
+    try {
+      const realCompanion = probe.realpath(companion)
+      if (!contained(realMount, realCompanion) || probe.stat(realCompanion).dev !== mountDevice) {
+        fail('DB_OUTSIDE_EXPECTED_VOLUME', `${suffix} is outside expected volume`)
+      }
+    } catch (error) {
+      if (errorCode(error) !== 'ENOENT' || probe.exists(companion)) throw error
+      throw new StorageUnavailableError('PROBE_FAILED', `STORAGE_UNAVAILABLE: ${suffix} changed during identity probe`, {
+        probeStage: 'REALPATH', startedAt: new Date().toISOString(), durationMs: 0,
+        exitStatus: null, signal: null, stderr: null,
+      })
     }
   }
   return volume

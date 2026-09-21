@@ -125,6 +125,23 @@ try {
   assert.equal(raceGuard.status, 'HEALTHY')
   assert.equal(raceGuard.probeMetrics.fullCount, 2, 'companion removal requires full UUID revalidation')
   assert.equal(fs.existsSync(path.join(tmp, 'FAILED_SAFE')), false)
+  let fullWalPresent = true
+  const fullRaceGuard = new ExternalStorageGuard(config, {
+    ...probe,
+    exists: (value) => value === `${db}-wal` ? fullWalPresent : probe.exists(value),
+    realpath: (value) => {
+      if (value === `${db}-wal` && fullWalPresent) {
+        fullWalPresent = false
+        throw Object.assign(new Error('WAL was removed during full probe'), { code: 'ENOENT' })
+      }
+      return value
+    },
+  }, { wait: () => undefined })
+  fullRaceGuard.assertWritable(true)
+  assert.equal(fullRaceGuard.status, 'HEALTHY')
+  assert.equal(fullRaceGuard.probeMetrics.fullCount, 2)
+  assert.equal(fullRaceGuard.probeMetrics.recoveredTransientCount, 1)
+  assert.equal(fs.existsSync(path.join(tmp, 'FAILED_SAFE')), false)
   let mountTableCalls = 0
   const mountTableGuard = new ExternalStorageGuard(config, {
     ...probe,
