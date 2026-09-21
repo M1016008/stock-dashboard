@@ -5,7 +5,7 @@ import path from 'node:path'
 import { NextRequest } from 'next/server'
 import { proxy } from '../proxy'
 import {
-  ExternalStorageGuard, inspectStorage, inspectWritableTargetPath, isStorageIoError, requiresExternalStorageGuard,
+  ExternalStorageGuard, StorageUnavailableError, inspectStorage, inspectWritableTargetPath, isStorageIoError, requiresExternalStorageGuard,
   type GuardConfig, type StorageProbe, type VolumeIdentity,
 } from '@/lib/storage/external-storage-guard'
 
@@ -51,6 +51,16 @@ try {
   guard.assertWritable(true)
   if (guard.status === 'HEALTHY') opens++
   assert.equal(opens, 1)
+
+  const failedProbe: StorageProbe = {
+    ...probe,
+    volume: () => { throw new StorageUnavailableError('PROBE_FAILED', 'volume identity probe timed out') },
+  }
+  expectCode('PROBE_FAILED', () => inspectStorage(config, failedProbe))
+  const probeFailure = new ExternalStorageGuard(config, failedProbe)
+  expectCode('PROBE_FAILED', () => probeFailure.assertWritable(true))
+  assert.equal(probeFailure.status, 'FAILED_SAFE', 'probe failure must remain fail-closed')
+  fs.unlinkSync(path.join(tmp, 'FAILED_SAFE'))
 
   mounted = false
   expectCode('VOLUME_NOT_MOUNTED', () => inspectStorage(config, probe))

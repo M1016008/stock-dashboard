@@ -1,10 +1,10 @@
 # External SQLite storage safety
 
-This change is not active on the existing production build until it is separately reviewed and deployed. Do not unplug or remount the SSD to test it.
+The external-storage guard is active in the production build. Do not unplug or remount the SSD to test it.
 
 ## Deployment status
 
-The source is ready for a separately approved production deployment. It is **not installed yet**: the currently loaded historical worker still has `KeepAlive=true` and does not contain the machine-local storage environment. Deployment must use the plan below as one controlled maintenance operation. Never unplug or remount the SSD as a test. The primary DB has not run `quick_check`: active DB handles make that operation unsafe. This is a maintenance-window action and not a source deploy blocker.
+The machine-local mount and UUID settings are installed outside Git. The historical worker uses `KeepAlive=false`, `StartInterval=300`, and `ThrottleInterval=30`. A read-only `quick_check` completed successfully during the INFRA-S1C maintenance window. Production incidents still require manual recovery; the mounted volume alone does not clear the fail-safe latch.
 
 ## Local configuration
 
@@ -20,7 +20,7 @@ Optional thresholds: `STOCK_DATA_MIN_FREE_BYTES` defaults to 50 GiB and `STOCK_D
 
 The guard checks the exact mount point, UUID, resolved DB path, device ID, writable state, available capacity, and existing WAL/SHM locations. The first check and a periodic UUID refresh use `diskutil`; requests between refreshes use cheap filesystem identity checks. Once a process records a fatal storage incident, it never reopens or retries that DB. A new process must pass preflight after the physical issue is resolved.
 
-A fatal incident also creates an internal-volume `FAILED_SAFE` latch. A launchd restart cannot reopen SQLite while that latch exists. Clearing it is a deliberate recovery action after inspection; the application has no `--force` bypass.
+A fatal incident also creates an internal-volume `FAILED_SAFE` latch. A launchd restart cannot reopen SQLite while that latch exists. `npm run storage:recover` requires an explicit incident ID and classification, zero DB handles, 21 identity observations over 10 minutes, matching UUID and volume identity, sufficient space, and no new storage errors in macOS logs. It archives the latch and records the resolution on the internal volume; there is no automatic or `--force` bypass.
 
 ## Production writer inventory
 
@@ -50,7 +50,7 @@ Python Phase 15/research scripts using `mode=ro` are read-only and excluded. Syn
 
 `npm run storage:status` is read-only and does not open SQLite. `npm run storage:diagnose` opens SQLite read-only to inspect PRAGMAs and shows recent disk arbitration evidence. `npm run storage:guard-test` uses fake volume/DB probes; it does not touch the SSD. `npm run storage:db-quick-check` is manual-only, refuses to run while any DB/WAL/SHM handle is present, opens SQLite read-only, and runs `PRAGMA quick_check`. On this 547 GB DB it may take a long time. Never schedule it automatically.
 
-Do not delete WAL/SHM, run VACUUM, repair the filesystem, or change `synchronous` while writers are active. The source historical plist uses `KeepAlive=false`, `StartInterval=300`, and `ThrottleInterval=30`; the installed plist remains unchanged until deployment. Heavy historical/outcome/path/dataset jobs hold `caffeinate -i` only while a claimed job runs.
+Do not delete WAL/SHM, run VACUUM, repair the filesystem, or change `synchronous` while writers are active. The installed historical plist uses `KeepAlive=false`, `StartInterval=300`, and `ThrottleInterval=30`. Heavy historical/outcome/path/dataset jobs hold `caffeinate -i` only while a claimed job runs.
 
 ## Durability benchmark
 
@@ -60,8 +60,10 @@ An isolated WAL test DB on the same external APFS filesystem measured 150 one-ro
 
 1. Do not restart writers automatically. Preserve the DB, WAL, and SHM together.
 2. Inspect the internal incident log and confirm the physical connection, mount point, and UUID.
-3. Ensure all DB clients have exited before attempting a manual quick check; do not forcibly stop an active writer merely to run the check.
-4. After a clean preflight and any necessary independent integrity review, start a new worker process at its normal schedule.
+3. Gracefully stop all DB clients and disable their LaunchAgents temporarily. Confirm `lsof` reports no DB/WAL/SHM handles.
+4. Review macOS logs for actual NVMe timeout, APFS I/O, and unmount evidence. If an actual I/O failure occurred, plan another maintenance `quick_check`.
+5. Run `npm run storage:recover -- --incident-id <id> --resolution <classification>` only after the cause and current state are reviewed. A stable mount alone is insufficient; the command observes identity for 10 minutes and archives the latch with a resolution record.
+6. Start Web, small workers, then Historical/other heavy workers in stages. Check health, quote, stock page, and Trigger options before allowing heavy workloads.
 
 ## Integrity maintenance window
 
@@ -77,7 +79,7 @@ An isolated WAL test DB on the same external APFS filesystem measured 150 one-ro
 
 Quiesce writers, then use an APFS snapshot or SQLite backup API to create a coherent image and copy it to independent storage. An offline DB+WAL+SHM copy is acceptable only after all handles close. A live `cp` of the DB alone is not a backup. Add an off-device/NAS copy in a separate phase.
 
-## Deployment plan (not executed here)
+## Deployment and restart checklist
 
 1. Configure mount, UUID, DB path, and thresholds outside Git.
 2. Enter maintenance and install generated LaunchAgents.

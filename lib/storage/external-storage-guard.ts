@@ -5,7 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 
 export type StorageFailureCode =
-  | 'VOLUME_NOT_MOUNTED' | 'VOLUME_UUID_MISMATCH' | 'DB_OUTSIDE_EXPECTED_VOLUME'
+  | 'VOLUME_NOT_MOUNTED' | 'VOLUME_UUID_MISMATCH' | 'PROBE_FAILED' | 'DB_OUTSIDE_EXPECTED_VOLUME'
   | 'DB_NOT_FOUND' | 'VOLUME_READ_ONLY' | 'INSUFFICIENT_STORAGE'
   | 'MOUNT_IDENTITY_UNKNOWN' | 'VOLUME_IDENTITY_LOST' | 'FATAL_STORAGE_IO'
 
@@ -33,6 +33,19 @@ export type StorageProbe = {
   exists(filePath: string): boolean
 }
 
+function classifyMountProbeFailure(mountPath: string): never {
+  let mounts: string
+  try {
+    mounts = execFileSync('/sbin/mount', { encoding: 'utf8', timeout: 8_000, maxBuffer: 2_000_000 })
+  } catch {
+    throw new StorageUnavailableError('PROBE_FAILED', 'STORAGE_UNAVAILABLE: mount table probe failed')
+  }
+  if (!mounts.includes(` on ${mountPath} (`)) {
+    throw new StorageUnavailableError('VOLUME_NOT_MOUNTED', 'STORAGE_UNAVAILABLE: expected volume is absent from mount table')
+  }
+  throw new StorageUnavailableError('PROBE_FAILED', 'STORAGE_UNAVAILABLE: volume identity probe failed while mount remains listed')
+}
+
 function diskutilVolume(mountPath: string): VolumeIdentity | null {
   if (process.platform !== 'darwin') return null
   try {
@@ -42,7 +55,7 @@ function diskutilVolume(mountPath: string): VolumeIdentity | null {
     const info = JSON.parse(execFileSync('/usr/bin/plutil', ['-convert', 'json', '-o', '-', '-'], {
       input: plist, encoding: 'utf8', timeout: 8_000,
     })) as Record<string, unknown>
-    if (info.MountPoint !== mountPath) return null
+    if (info.MountPoint !== mountPath) classifyMountProbeFailure(mountPath)
     const stats = fs.statfsSync(mountPath, { bigint: true })
     return {
       mountPoint: String(info.MountPoint),
@@ -52,8 +65,9 @@ function diskutilVolume(mountPath: string): VolumeIdentity | null {
       freeBytes: Number(stats.bavail * stats.bsize),
       totalBytes: Number(stats.blocks * stats.bsize),
     }
-  } catch {
-    return null
+  } catch (error) {
+    if (error instanceof StorageUnavailableError) throw error
+    classifyMountProbeFailure(mountPath)
   }
 }
 
@@ -103,7 +117,10 @@ function verifiedVolume(config: GuardConfig, probe: StorageProbe): {
 } {
   const mountPath = path.resolve(config.mountPath)
   if (!config.volumeUuid || !path.isAbsolute(config.mountPath)) fail('MOUNT_IDENTITY_UNKNOWN', 'mount identity is not configured')
-  if (!probe.exists(mountPath)) fail('VOLUME_NOT_MOUNTED', 'expected mount is missing')
+  if (!probe.exists(mountPath)) {
+    if (probe === systemStorageProbe && process.platform === 'darwin') classifyMountProbeFailure(mountPath)
+    fail('VOLUME_NOT_MOUNTED', 'expected mount is missing')
+  }
   const volume = probe.volume(mountPath)
   if (!volume || volume.mountPoint !== mountPath) fail('VOLUME_NOT_MOUNTED', 'expected volume is not mounted at this path')
   if (!volume.uuid) fail('MOUNT_IDENTITY_UNKNOWN', 'mounted volume UUID is unavailable')
