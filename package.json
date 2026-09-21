@@ -55,7 +55,7 @@
     "test:trigger-path-research": "tsx scripts/test-trigger-path-research.ts",
     "test:trigger-path-research-worker": "NODE_ENV=test EXTERNAL_STORAGE_REQUIRED=false USE_LOCAL_DB=1 STOCKBOARD_DB_PATH=/tmp/stockboard-trigger-path-research-worker-test.db tsx --env-file=.env.local scripts/test-trigger-path-research-worker.ts",
     "test:trigger-ml-dataset": "tsx scripts/test-trigger-ml-dataset.ts",
-    "test:trigger-ml-dataset-worker": "tsx scripts/test-trigger-ml-dataset-worker.ts",
+    "test:trigger-ml-dataset-worker": "NODE_ENV=test EXTERNAL_STORAGE_REQUIRED=false tsx scripts/test-trigger-ml-dataset-worker.ts",
     "audit:trigger-ml-dataset": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/audit-trigger-ml-dataset.ts",
     "audit:trigger-path-research": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/audit-trigger-path-research.ts",
     "test:trigger-follow-up-ui": "tsx scripts/test-trigger-follow-up-ui.ts",
