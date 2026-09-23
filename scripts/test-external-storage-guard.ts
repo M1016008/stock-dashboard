@@ -5,7 +5,7 @@ import path from 'node:path'
 import { NextRequest } from 'next/server'
 import { proxy } from '../proxy'
 import {
-  ExternalStorageGuard, StorageUnavailableError, inspectStorage, inspectWritableTargetPath, isStorageIoError, mountTableContains, requiresExternalStorageGuard,
+  ExternalStorageGuard, StorageUnavailableError, inspectReadableVolumeIdentity, inspectStorage, inspectWritableTargetPath, isStorageIoError, mountTableContains, requiresExternalStorageGuard,
   type GuardConfig, type StorageProbe, type VolumeIdentity,
 } from '@/lib/storage/external-storage-guard'
 
@@ -46,6 +46,67 @@ try {
   assert.equal(inspectStorage(config, probe).uuid, 'test-uuid')
   assert.equal(inspectWritableTargetPath(config, probe).uuid, 'test-uuid')
   assert.equal(inspectWritableTargetPath({ ...config, dbPath: `${mount}/new/output.db` }, probe).uuid, 'test-uuid')
+
+  const optionalIncidentDir = path.join(tmp, 'optional-read')
+  const optionalDb = `${mount}/ma-trajectory-shadow/shadow.db`
+  const optionalConfig = { ...config, dbPath: optionalDb, incidentDir: optionalIncidentDir, jobType: 'optional-read' }
+  let optionalMounted = true
+  let optionalExists = false
+  let optionalVolume = healthyVolume
+  const optionalProbe: StorageProbe = {
+    volume: () => optionalMounted ? optionalVolume : null,
+    mountPresent: () => optionalMounted,
+    realpath: (value) => value,
+    stat: (value) => ({
+      dev: 42,
+      isFile: () => value === optionalDb,
+      isDirectory: () => value === mount,
+    }),
+    exists: (value) => optionalMounted && (value === mount || (optionalExists && value === optionalDb)),
+  }
+  const optionalMissing = new ExternalStorageGuard(optionalConfig, optionalProbe)
+  optionalMissing.assertReadableVolumeIdentity(true)
+  assert.equal(optionalMissing.status, 'HEALTHY')
+  assert.equal(fs.existsSync(path.join(optionalIncidentDir, 'FAILED_SAFE')), false,
+    'missing optional artifact must not create the shared fatal latch')
+  optionalVolume = { ...healthyVolume, writable: false, freeBytes: 1 }
+  assert.equal(inspectReadableVolumeIdentity(optionalConfig, optionalProbe).uuid, 'test-uuid',
+    'read identity must not require write capacity or free-space headroom')
+  optionalVolume = healthyVolume
+  optionalExists = true
+  assert.equal(inspectReadableVolumeIdentity(optionalConfig, optionalProbe).uuid, 'test-uuid')
+  optionalExists = false
+  assert.throws(() => optionalMissing.classifyOptionalRead(Object.assign(new Error('artifact missing'), { code: 'ENOENT' })),
+    (error: { code?: string }) => error.code === 'ENOENT')
+  assert.equal(fs.existsSync(path.join(optionalIncidentDir, 'FAILED_SAFE')), false)
+
+  optionalMounted = false
+  expectCode('VOLUME_NOT_MOUNTED', () => optionalMissing.assertReadableVolumeIdentity(true))
+  assert.equal(optionalMissing.status, 'FAILED_SAFE')
+  assert.equal(fs.existsSync(path.join(optionalIncidentDir, 'FAILED_SAFE')), true)
+  fs.unlinkSync(path.join(optionalIncidentDir, 'FAILED_SAFE'))
+  optionalMounted = true
+  optionalVolume = { ...healthyVolume, uuid: 'wrong-uuid' }
+  const optionalWrongUuid = new ExternalStorageGuard(optionalConfig, optionalProbe)
+  expectCode('VOLUME_UUID_MISMATCH', () => optionalWrongUuid.assertReadableVolumeIdentity(true))
+  assert.equal(fs.existsSync(path.join(optionalIncidentDir, 'FAILED_SAFE')), true)
+  fs.unlinkSync(path.join(optionalIncidentDir, 'FAILED_SAFE'))
+  optionalVolume = healthyVolume
+  const optionalIo = new ExternalStorageGuard(optionalConfig, optionalProbe)
+  optionalIo.assertReadableVolumeIdentity(true)
+  expectCode('FATAL_STORAGE_IO', () => optionalIo.classifyOptionalRead(
+    Object.assign(new Error('simulated optional read I/O error'), { code: 'EIO' })))
+  assert.equal(fs.existsSync(path.join(optionalIncidentDir, 'FAILED_SAFE')), true)
+  fs.unlinkSync(path.join(optionalIncidentDir, 'FAILED_SAFE'))
+
+  const requiredIncidentDir = path.join(tmp, 'required-missing')
+  const requiredMissing = new ExternalStorageGuard({ ...config, incidentDir: requiredIncidentDir }, {
+    ...probe,
+    exists: (value) => value === mount,
+  })
+  expectCode('DB_NOT_FOUND', () => requiredMissing.assertWritable(true))
+  assert.equal(requiredMissing.status, 'FAILED_SAFE', 'missing primary DB must remain fatal')
+  assert.equal(fs.existsSync(path.join(requiredIncidentDir, 'FAILED_SAFE')), true)
   const originalNodeEnv = process.env.NODE_ENV
   Reflect.set(process.env, 'NODE_ENV', 'production')
   try { assert.equal(requiresExternalStorageGuard('/tmp/misconfigured-production.db'), true) }

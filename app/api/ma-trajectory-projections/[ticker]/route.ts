@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { normalizeMaTrajectoryHorizon, type MaTrajectoryMarket } from '@/lib/ma-trajectory/core'
 import { readMaTrajectoryProjection } from '@/lib/ma-trajectory/shadow-store'
+import { StorageUnavailableError } from '@/lib/storage/external-storage-guard'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -29,6 +30,12 @@ export async function GET(
     })
   } catch (error) {
     console.error('MA trajectory projection API error:', error)
+    if (error instanceof StorageUnavailableError) {
+      return NextResponse.json(
+        { ok: false, error: 'storage_unavailable' },
+        { status: 503, headers: { 'Cache-Control': 'no-store' } },
+      )
+    }
     return NextResponse.json(
       { ok: false, error: 'ma_trajectory_projection_failed' },
       { status: 500 },

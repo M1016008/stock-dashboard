@@ -3,6 +3,8 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { createClient } from '@libsql/client'
+import { NextRequest } from 'next/server'
+import { GET as getMaTrajectoryProjection } from '@/app/api/ma-trajectory-projections/[ticker]/route'
 import {
   buildMaSpaceFeatureVector,
   deriveMaTrajectoryEvents,
@@ -97,6 +99,9 @@ assert.match(store, /MA_TRAJECTORY_ALLOW_UNPROMOTED/)
 assert.match(store, /MA_TRAJECTORY_US_ENABLED/)
 assert.match(store, /r\.model_version = \?/)
 assert.match(store, /r\.feature_version = \?/)
+assert.match(store, /openOptionalGuardedReadOnlyClient/)
+assert.doesNotMatch(store, /assertWritable/)
+assert.match(route, /storage_unavailable/)
 assert.match(wrapper, /JP_STOCKBOARD_UPDATE_JOB_TYPES/)
 assert.match(wrapper, /US_ISOLATED_UPDATE_JOB_TYPES/)
 assert.match(wrapper, /ohlcv_price_basis/)
@@ -236,6 +241,16 @@ async function testApiStore(): Promise<void> {
   restoreClient.close()
   const unsupportedUs = await readMaTrajectoryProjection({ market: 'US', ticker: 'AAPL', horizon: 60 })
   assert.equal(unsupportedUs.available, false)
+  process.env.MA_TRAJECTORY_SHADOW_DB_PATH_JP = path.join(temporaryDirectory, 'not-generated.db')
+  const missingOptional = await readMaTrajectoryProjection({ market: 'JP', ticker: '5801', horizon: 60 })
+  assert.equal(missingOptional.available, false)
+  if (!missingOptional.available) assert.equal(missingOptional.reason, 'shadow_not_found')
+  const missingResponse = await getMaTrajectoryProjection(
+    new NextRequest('http://127.0.0.1:3000/api/ma-trajectory-projections/5801?market=JP&horizon=60'),
+    { params: Promise.resolve({ ticker: '5801' }) },
+  )
+  assert.equal(missingResponse.status, 200)
+  assert.deepEqual(await missingResponse.json(), missingOptional)
   if (originalShadowPath == null) delete process.env.MA_TRAJECTORY_SHADOW_DB_PATH_JP
   else process.env.MA_TRAJECTORY_SHADOW_DB_PATH_JP = originalShadowPath
 }

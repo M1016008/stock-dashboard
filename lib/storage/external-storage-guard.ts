@@ -172,7 +172,9 @@ function contained(mountPath: string, dbPath: string): boolean {
   return relative !== '' && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)
 }
 
-function verifiedVolume(config: GuardConfig, probe: StorageProbe): {
+type IdentityRequirement = 'REQUIRED_WRITABLE' | 'OPTIONAL_READ'
+
+function verifiedVolume(config: GuardConfig, probe: StorageProbe, requirement: IdentityRequirement = 'REQUIRED_WRITABLE'): {
   mountPath: string; realMount: string; mountDevice: number | bigint; volume: VolumeIdentity
 } {
   const mountPath = path.resolve(config.mountPath)
@@ -186,9 +188,11 @@ function verifiedVolume(config: GuardConfig, probe: StorageProbe): {
   if (!volume || volume.mountPoint !== mountPath) fail('VOLUME_NOT_MOUNTED', 'expected volume is not mounted at this path')
   if (!volume.uuid) fail('MOUNT_IDENTITY_UNKNOWN', 'mounted volume UUID is unavailable')
   if (volume.uuid.toUpperCase() !== config.volumeUuid.toUpperCase()) fail('VOLUME_UUID_MISMATCH', 'mounted volume UUID differs', 'UUID_COMPARE')
-  if (!volume.writable) fail('VOLUME_READ_ONLY', 'mounted volume is read-only')
-  if (volume.freeBytes < config.minFreeBytes || volume.freeBytes / Math.max(volume.totalBytes, 1) * 100 < config.minFreePercent) {
-    fail('INSUFFICIENT_STORAGE', 'available capacity is below the configured threshold')
+  if (requirement === 'REQUIRED_WRITABLE') {
+    if (!volume.writable) fail('VOLUME_READ_ONLY', 'mounted volume is read-only')
+    if (volume.freeBytes < config.minFreeBytes || volume.freeBytes / Math.max(volume.totalBytes, 1) * 100 < config.minFreePercent) {
+      fail('INSUFFICIENT_STORAGE', 'available capacity is below the configured threshold')
+    }
   }
   const realMount = probe.realpath(mountPath)
   const mountStat = probe.stat(realMount)
@@ -218,6 +222,25 @@ export function inspectWritableTargetPath(config: GuardConfig, probe: StoragePro
       }
     }
   }
+  return volume
+}
+
+// Optional read artifacts may be absent, but their configured location must
+// still resolve to the expected mounted volume before absence is accepted.
+export function inspectReadableVolumeIdentity(config: GuardConfig, probe: StorageProbe = systemStorageProbe): VolumeIdentity {
+  const { mountPath, realMount, mountDevice, volume } = verifiedVolume(config, probe, 'OPTIONAL_READ')
+  const target = path.resolve(config.dbPath)
+  if (!contained(mountPath, target)) fail('DB_OUTSIDE_EXPECTED_VOLUME', 'target is outside expected mount')
+  let ancestor = target
+  while (!probe.exists(ancestor) && ancestor !== mountPath) ancestor = path.dirname(ancestor)
+  const realAncestor = probe.realpath(ancestor)
+  if (realAncestor !== realMount && !contained(realMount, realAncestor)) {
+    fail('DB_OUTSIDE_EXPECTED_VOLUME', 'target parent resolves outside expected mount')
+  }
+  const ancestorStat = probe.stat(realAncestor)
+  if (ancestorStat.dev !== mountDevice) fail('DB_OUTSIDE_EXPECTED_VOLUME', 'target parent is on another device', 'STAT_DEVICE')
+  if (ancestor === target && !ancestorStat.isFile()) fail('DB_OUTSIDE_EXPECTED_VOLUME', 'existing target is not a file')
+  if (ancestor !== target && !ancestorStat.isDirectory()) fail('DB_OUTSIDE_EXPECTED_VOLUME', 'target parent is not a directory')
   return volume
 }
 
@@ -278,6 +301,20 @@ export function isStorageIoError(error: unknown): boolean {
   if (code && /^(SQLITE_IOERR(?:_\w+)?|SQLITE_CANTOPEN(?:_\w+)?|SQLITE_READONLY(?:_\w+)?|SQLITE_FULL|EIO|ENODEV|ENOENT|EROFS|ENOSPC)$/.test(code)) return true
   const message = error instanceof Error ? error.message : ''
   return /\b(SQLITE_IOERR|SQLITE_CANTOPEN|SQLITE_READONLY|SQLITE_FULL|EIO|ENODEV|EROFS|ENOSPC)\b|disk I\/O error|database or disk is full|readonly database/i.test(message)
+}
+
+function isOptionalReadVolumeFatal(error: unknown): boolean {
+  if (error instanceof StorageUnavailableError) {
+    return error.storageCode === 'VOLUME_NOT_MOUNTED'
+      || error.storageCode === 'VOLUME_UUID_MISMATCH'
+      || error.storageCode === 'MOUNT_IDENTITY_UNKNOWN'
+      || error.storageCode === 'VOLUME_IDENTITY_LOST'
+      || error.storageCode === 'FATAL_STORAGE_IO'
+  }
+  const code = errorCode(error)
+  if (code && /^(SQLITE_IOERR(?:_\w+)?|EIO|ENODEV)$/.test(code)) return true
+  const message = error instanceof Error ? error.message : ''
+  return /\b(SQLITE_IOERR|EIO|ENODEV)\b|disk I\/O error/i.test(message)
 }
 
 function safeErrorMessage(error: unknown): string {
@@ -371,10 +408,11 @@ export class ExternalStorageGuard {
     if (samples.length > 256) samples.shift()
   }
 
-  private fullIdentity(): void {
+  private fullIdentity(requirement: IdentityRequirement = 'REQUIRED_WRITABLE'): void {
     const started = Date.now()
     try {
-      inspectStorage(this.config, this.probe)
+      if (requirement === 'OPTIONAL_READ') inspectReadableVolumeIdentity(this.config, this.probe)
+      else inspectStorage(this.config, this.probe)
       const realMount = this.probe.realpath(path.resolve(this.config.mountPath))
       const device = this.probe.stat(realMount).dev
       if ((this.knownMountRealpath && realMount !== this.knownMountRealpath)
@@ -387,7 +425,7 @@ export class ExternalStorageGuard {
     } finally { this.recordDuration('full', Date.now() - started) }
   }
 
-  private lightweightIdentity(includeMountTable = false): void {
+  private lightweightIdentity(includeMountTable = false, requirement: IdentityRequirement = 'REQUIRED_WRITABLE'): void {
     const started = Date.now()
     try {
       const mountPath = path.resolve(this.config.mountPath)
@@ -395,19 +433,23 @@ export class ExternalStorageGuard {
       if (includeMountTable && this.probe.mountPresent && !this.probe.mountPresent(mountPath)) {
         fail('VOLUME_NOT_MOUNTED', 'expected volume is absent from mount table', 'MOUNT_TABLE')
       }
-      if (!this.probe.exists(mountPath) || !this.probe.exists(dbPath)) {
-        fail('VOLUME_IDENTITY_LOST', 'mount or DB disappeared', 'REALPATH')
+      if (!this.probe.exists(mountPath) || (requirement === 'REQUIRED_WRITABLE' && !this.probe.exists(dbPath))) {
+        fail('VOLUME_IDENTITY_LOST', requirement === 'REQUIRED_WRITABLE' ? 'mount or DB disappeared' : 'mount disappeared', 'REALPATH')
       }
       const currentMount = this.probe.realpath(mountPath)
-      const currentDb = this.probe.realpath(dbPath)
       const mountStat = this.probe.stat(currentMount)
-      const dbStat = this.probe.stat(currentDb)
-      if (!mountStat.isDirectory() || !dbStat.isFile() || !contained(currentMount, currentDb)
-        || mountStat.dev !== dbStat.dev || (this.knownMountRealpath && currentMount !== this.knownMountRealpath)
+      let currentTarget = dbPath
+      while (!this.probe.exists(currentTarget) && currentTarget !== mountPath) currentTarget = path.dirname(currentTarget)
+      const currentTargetRealpath = this.probe.realpath(currentTarget)
+      const targetStat = this.probe.stat(currentTargetRealpath)
+      if (!mountStat.isDirectory()
+        || (requirement === 'REQUIRED_WRITABLE' ? !targetStat.isFile() : currentTarget === dbPath ? !targetStat.isFile() : !targetStat.isDirectory())
+        || (currentTargetRealpath !== currentMount && !contained(currentMount, currentTargetRealpath))
+        || mountStat.dev !== targetStat.dev || (this.knownMountRealpath && currentMount !== this.knownMountRealpath)
         || (this.knownDevice !== null && mountStat.dev !== this.knownDevice)) {
-        fail('VOLUME_IDENTITY_LOST', 'mount device or DB identity changed', 'STAT_DEVICE')
+        fail('VOLUME_IDENTITY_LOST', 'mount device or target identity changed', 'STAT_DEVICE')
       }
-      for (const suffix of ['-wal', '-shm']) {
+      for (const suffix of requirement === 'REQUIRED_WRITABLE' ? ['-wal', '-shm'] : []) {
         const companion = `${dbPath}${suffix}`
         if (!this.probe.exists(companion)) continue
         try {
@@ -418,7 +460,7 @@ export class ExternalStorageGuard {
         } catch (error) {
           if (errorCode(error) !== 'ENOENT' || this.probe.exists(companion)) throw error
           // SQLite may remove a companion after the existence check; certify the full UUID before proceeding.
-          this.fullIdentity()
+          this.fullIdentity(requirement)
         }
       }
     } finally { this.recordDuration('lightweight', Date.now() - started) }
@@ -438,7 +480,7 @@ export class ExternalStorageGuard {
     }
   }
 
-  private confirmProbe(initial: StorageUnavailableError): void {
+  private confirmProbe(initial: StorageUnavailableError, requirement: IdentityRequirement): void {
     this.uncertain = true
     this.confirmationAttempts = [{ attempt: 1, inProcessIdentity: false,
       uuidVerified: false, probe: initial.probeDiagnostics ?? null }]
@@ -453,11 +495,11 @@ export class ExternalStorageGuard {
     for (const [index, delayMs] of [1_000, 2_000].entries()) {
       let inProcessIdentity = false
       try {
-        this.lightweightIdentity()
+        this.lightweightIdentity(false, requirement)
         inProcessIdentity = true
         ;(this.options.wait ?? ((ms) => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms) }))(delayMs)
-        this.lightweightIdentity()
-        this.fullIdentity()
+        this.lightweightIdentity(false, requirement)
+        this.fullIdentity(requirement)
         this.confirmationAttempts.push({ attempt: index + 2, inProcessIdentity,
           uuidVerified: true, probe: null })
         fs.unlinkSync(this.uncertainMarker)
@@ -479,7 +521,7 @@ export class ExternalStorageGuard {
     throw this.fatal
   }
 
-  assertWritable(forceIdentity = false): void {
+  private assertIdentity(requirement: IdentityRequirement, forceIdentity = false): void {
     if (this.fatal) throw this.fatal
     if (this.uncertain) throw new StorageUnavailableError('PROBE_FAILED', 'storage identity confirmation is in progress')
     if (hasStorageFatalLatch(this.config)) {
@@ -503,26 +545,43 @@ export class ExternalStorageGuard {
     const now = Date.now()
     try {
       if (forceIdentity || now - this.lastIdentityAt >= (this.options.fullIntervalMs ?? 300_000) || !this.lastIdentityAt) {
-        this.fullIdentity()
+        this.fullIdentity(requirement)
       } else if (now - this.lastCheckAt >= 1_000) {
-        this.lightweightIdentity()
+        this.lightweightIdentity(false, requirement)
       }
       this.lastCheckAt = Date.now()
       this.lastSuccessfulStorageCheck = new Date(this.lastCheckAt).toISOString()
     } catch (error) {
       if (error instanceof StorageUnavailableError && error.storageCode === 'PROBE_FAILED') {
-        this.confirmProbe(error)
+        this.confirmProbe(error, requirement)
         this.lastCheckAt = Date.now()
         this.lastSuccessfulStorageCheck = new Date(this.lastCheckAt).toISOString()
         return
       }
+      if (requirement === 'OPTIONAL_READ' && !isOptionalReadVolumeFatal(error)) throw error
       this.markFatal(error)
       throw this.fatal
     }
   }
 
+  assertWritable(forceIdentity = false): void {
+    this.assertIdentity('REQUIRED_WRITABLE', forceIdentity)
+  }
+
+  assertReadableVolumeIdentity(forceIdentity = false): void {
+    this.assertIdentity('OPTIONAL_READ', forceIdentity)
+  }
+
   classify(error: unknown): never {
     if (isStorageIoError(error)) {
+      this.markFatal(error)
+      throw this.fatal
+    }
+    throw error
+  }
+
+  classifyOptionalRead(error: unknown): never {
+    if (isOptionalReadVolumeFatal(error)) {
       this.markFatal(error)
       throw this.fatal
     }
