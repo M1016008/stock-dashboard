@@ -113,11 +113,57 @@ async function main() {
      WHERE d.date = ?`,
     [snapshotMaxDate ?? ''],
   )
+  // Snapshot generation intentionally requires a current price and at least five
+  // price observations. Validate against that same eligible universe while the
+  // separate OHLCV coverage gate continues to protect total active coverage.
+  const snapshotEligibleUniverse = await scalarNumberWithArgs(
+    target,
+    `SELECT COUNT(*) AS value
+     FROM ticker_universe u
+     WHERE u.active = 1
+       AND EXISTS (
+         SELECT 1
+         FROM ohlcv_daily latest INDEXED BY ohlcv_date_ticker_idx
+         WHERE latest.date = ? AND latest.ticker = u.ticker
+       )
+       AND EXISTS (
+         SELECT 1
+         FROM ohlcv_daily history INDEXED BY sqlite_autoindex_ohlcv_daily_1
+         WHERE history.ticker = u.ticker
+         ORDER BY history.date DESC
+         LIMIT 1 OFFSET 4
+       )`,
+    [ohlcvMaxDate ?? ''],
+  )
+  const latestSnapshotEligibleTickers = await scalarNumberWithArgs(
+    target,
+    `SELECT COUNT(*) AS value
+     FROM ticker_universe u
+     WHERE u.active = 1
+       AND EXISTS (
+         SELECT 1
+         FROM ohlcv_daily latest INDEXED BY ohlcv_date_ticker_idx
+         WHERE latest.date = ? AND latest.ticker = u.ticker
+       )
+       AND EXISTS (
+         SELECT 1
+         FROM ohlcv_daily history INDEXED BY sqlite_autoindex_ohlcv_daily_1
+         WHERE history.ticker = u.ticker
+         ORDER BY history.date DESC
+         LIMIT 1 OFFSET 4
+       )
+       AND EXISTS (
+         SELECT 1
+         FROM daily_snapshots snapshot INDEXED BY snapshots_date_ticker_idx
+         WHERE snapshot.date = ? AND snapshot.ticker = u.ticker
+       )`,
+    [ohlcvMaxDate ?? '', snapshotMaxDate ?? ''],
+  )
   const latestOhlcvCoveragePct = activeUniverse > 0
     ? 100 * latestOhlcvActiveTickers / activeUniverse
     : 0
-  const latestSnapshotCoveragePct = activeUniverse > 0
-    ? 100 * latestSnapshotActiveTickers / activeUniverse
+  const latestSnapshotCoveragePct = snapshotEligibleUniverse > 0
+    ? 100 * latestSnapshotEligibleTickers / snapshotEligibleUniverse
     : 0
   const priceBasis = await scalarText(
     target,
@@ -198,7 +244,8 @@ async function main() {
       `expectedDate=${EXPECTED_DATE}`,
       `activeUniverse=${activeUniverse}`,
       `latestOhlcvCoverage=${latestOhlcvActiveTickers}/${activeUniverse}(${latestOhlcvCoveragePct.toFixed(2)}%)`,
-      `latestSnapshotCoverage=${latestSnapshotActiveTickers}/${activeUniverse}(${latestSnapshotCoveragePct.toFixed(2)}%)`,
+      `latestSnapshotActive=${latestSnapshotActiveTickers}/${activeUniverse}`,
+      `latestSnapshotCoverage=${latestSnapshotEligibleTickers}/${snapshotEligibleUniverse}(${latestSnapshotCoveragePct.toFixed(2)}%)`,
       `priceBasis=${priceBasis ?? '-'}`,
       `derivedPriceBasis=${derivedPriceBasis ?? '-'}`,
       `derivedPriceDate=${derivedPriceDate ?? '-'}`,

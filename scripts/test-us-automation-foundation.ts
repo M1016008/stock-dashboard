@@ -256,6 +256,13 @@ const analyticsValidation = read('scripts/validate-us-analytics-db.ts')
 assert.match(analyticsValidation, /US_ANALYTICS_MIN_LATEST_COVERAGE_PCT/)
 assert.match(analyticsValidation, /expectedLatestUsTradingDate/)
 assert.match(analyticsValidation, /latestSnapshotCoveragePct/)
+assert.match(analyticsValidation, /snapshotEligibleUniverse/)
+assert.match(analyticsValidation, /latestSnapshotEligibleTickers/)
+assert.match(analyticsValidation, /LIMIT 1 OFFSET 4/)
+assert.match(
+  analyticsValidation,
+  /100 \* latestSnapshotEligibleTickers \/ snapshotEligibleUniverse/,
+)
 assert.match(analyticsValidation, /US_ADJUSTED_PRICE_BASIS/)
 assert.match(analyticsValidation, /US_ANALYTICS_REQUIRE_DERIVED_BASIS/)
 assert.match(analyticsValidation, /US_ANALYTICS_DEEP_COUNTS/)
