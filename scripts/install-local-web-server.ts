@@ -150,6 +150,7 @@ const webPlist = `<?xml version="1.0" encoding="UTF-8"?>
   <key>EnvironmentVariables</key>
   <dict>
     <key>NODE_ENV</key><string>production</string>
+    <key>STOCKBOARD_PROCESS_ROLE</key><string>web</string>
     <key>NODE_OPTIONS</key><string>--max-old-space-size=${heapMb}</string>
     <key>NEXT_DIST_DIR</key><string>${liveDistDir}</string>
     <key>ANALOG_SEARCH_PROXY_URL</key><string>http://127.0.0.1:${analogPort}</string>
@@ -207,6 +208,7 @@ const analogPlist = `<?xml version="1.0" encoding="UTF-8"?>
   <key>EnvironmentVariables</key>
   <dict>
     <key>NODE_ENV</key><string>production</string>
+    <key>STOCKBOARD_PROCESS_ROLE</key><string>analog-search</string>
     <key>NODE_OPTIONS</key><string>--max-old-space-size=${analogHeapMb}</string>
     <key>NEXT_DIST_DIR</key><string>${liveDistDir}</string>
     <key>ANALOG_SEARCH_WORKER</key><string>1</string>
@@ -266,6 +268,7 @@ const historicalScanPlist = `<?xml version="1.0" encoding="UTF-8"?>
   <key>EnvironmentVariables</key>
   <dict>
     <key>NODE_ENV</key><string>production</string>
+    <key>STOCKBOARD_PROCESS_ROLE</key><string>historical-scan</string>
     <key>NODE_OPTIONS</key><string>--max-old-space-size=2048</string>
     <key>PATH</key><string>${xmlEscape(pathEnv)}</string>
     <key>SKIP_SCHEMA_ENSURE</key><string>1</string>
@@ -363,6 +366,7 @@ const healthPlist = `<?xml version="1.0" encoding="UTF-8"?>
   <key>EnvironmentVariables</key>
   <dict>
     <key>NODE_ENV</key><string>production</string>
+    <key>STOCKBOARD_PROCESS_ROLE</key><string>web-health</string>
     ${storageEnvironment}
   </dict>
   <key>ProgramArguments</key>

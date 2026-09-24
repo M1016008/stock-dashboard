@@ -21,6 +21,7 @@ const baseEnv: NodeJS.ProcessEnv = {
   SQLITE_BUSY_RETRIES: process.env.SQLITE_BUSY_RETRIES ?? '12',
   US_ANALYTICS_DB_PATH: process.env.US_ANALYTICS_DB_PATH?.trim() || '/Volumes/OWC Express 1M2 80G/stockboard-data/us/stockboard-us.db',
 }
+const forceReinstall = process.env.STOCKBOARD_FORCE_REINSTALL === '1'
 
 const steps: Step[] = [
   {
@@ -98,12 +99,13 @@ function runningPid(label: string): string | null {
 
 for (const step of steps) {
   const pid = runningPid(step.label)
-  if (pid) {
+  if (pid && !forceReinstall) {
     console.log(`\n▶ ${step.name}: skipped because ${step.label} is running (pid=${pid})`)
     continue
   }
+  if (pid) console.log(`\n▶ ${step.name}: replacing ${step.label} from the current release worktree (pid=${pid})`)
 
-  console.log(`\n▶ ${step.name}: npm run ${step.script}`)
+  if (!pid) console.log(`\n▶ ${step.name}: npm run ${step.script}`)
   const result = spawnSync('npm', ['run', step.script], {
     cwd: process.cwd(),
     env: step.env ?? baseEnv,

@@ -13,6 +13,7 @@ const day = Number(process.env.TRIGGER_ML_MONITOR_WEEKDAY ?? 6)
 const hour = Number(process.env.TRIGGER_ML_MONITOR_HOUR ?? 9)
 const minute = Number(process.env.TRIGGER_ML_MONITOR_MINUTE ?? 0)
 const uid = typeof process.getuid === 'function' ? process.getuid() : Number(process.env.UID)
+const forceReinstall = process.env.STOCKBOARD_FORCE_REINSTALL === '1'
 
 if (![day, hour, minute].every(Number.isInteger) || day < 0 || day > 7
   || hour < 0 || hour > 23 || minute < 0 || minute > 59) {
@@ -51,7 +52,7 @@ const content = `<?xml version="1.0" encoding="UTF-8"?>
 fs.mkdirSync(agents, { recursive: true })
 fs.mkdirSync(logs, { recursive: true })
 const existing = spawnSync('launchctl', ['print', `gui/${uid}/${label}`], { encoding: 'utf8' })
-if (existing.status === 0 && /state = running/.test(existing.stdout)) {
+if (existing.status === 0 && /state = running/.test(existing.stdout) && !forceReinstall) {
   throw new Error('frozen_monitor_running; do not replace a live scheduler')
 }
 fs.writeFileSync(plist, content, { mode: 0o600 })

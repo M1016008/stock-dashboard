@@ -141,6 +141,17 @@ fs.renameSync(stagePath, livePath)
 
 try {
   runNpm('web:install')
+  const unifiedRuntimeEnv = {
+    ...process.env,
+    STOCKBOARD_FORCE_REINSTALL: '1',
+  }
+  runNpm('auto-daily-refresh:install', unifiedRuntimeEnv)
+  runNpm('trigger:ml-monitor-install', unifiedRuntimeEnv)
+  runNpm('storage:runtime-audit', {
+    ...process.env,
+    STOCKBOARD_EXPECTED_WORKTREE: cwd,
+    STOCKBOARD_RUNTIME_AUDIT_REQUIRE_CURRENT: '1',
+  })
   assertLaunchAgentRunning('com.stockboard.trigger-historical-scan')
   if (!waitForHealth(healthUrl)) {
     throw new Error(`Health check did not recover within 60 seconds: ${healthUrl}`)
