@@ -1,6 +1,6 @@
 import { type Client, type InValue } from '@libsql/client'
-import { openExistingGuardedClient } from '@/lib/storage/guarded-libsql-client'
-import { guardForDatabase, isStorageIoError, requiresExternalStorageGuard } from '@/lib/storage/external-storage-guard'
+import { openOptionalGuardedReadOnlyClient } from '@/lib/storage/guarded-libsql-client'
+import { isStorageIoError } from '@/lib/storage/external-storage-guard'
 import fs from 'node:fs'
 import path from 'node:path'
 import { localDbPath } from '@/lib/db/client'
@@ -108,16 +108,17 @@ export function hasAnalogSequenceIndex(market: AnalogSequenceMarket): boolean {
   return fs.existsSync(resolveAnalogSequenceIndexPath(market))
 }
 
-function getClient(market: AnalogSequenceMarket): Client {
+function getClient(market: AnalogSequenceMarket): Client | null {
   const dbPath = resolveAnalogSequenceIndexPath(market)
-  if (requiresExternalStorageGuard(dbPath)) guardForDatabase(dbPath, 'analog-sequence-read').assertWritable()
   globalForAnalogIndex.analogSequenceClients ??= {}
   globalForAnalogIndex.analogSequencePaths ??= {}
   if (
     !globalForAnalogIndex.analogSequenceClients[market]
     || globalForAnalogIndex.analogSequencePaths[market] !== dbPath
   ) {
-    globalForAnalogIndex.analogSequenceClients[market] = openExistingGuardedClient(dbPath, 'analog-sequence-read')
+    const client = openOptionalGuardedReadOnlyClient(dbPath, 'analog-sequence-read')
+    if (!client) return null
+    globalForAnalogIndex.analogSequenceClients[market] = client
     globalForAnalogIndex.analogSequencePaths[market] = dbPath
     if (globalForAnalogIndex.analogSequenceReady) delete globalForAnalogIndex.analogSequenceReady[market]
   }
@@ -128,6 +129,7 @@ async function ensureReady(market: AnalogSequenceMarket): Promise<void> {
   globalForAnalogIndex.analogSequenceReady ??= {}
   if (!globalForAnalogIndex.analogSequenceReady[market]) {
     const client = getClient(market)
+    if (!client) throw new Error('analog_sequence_index_unavailable')
     globalForAnalogIndex.analogSequenceReady[market] = Promise.resolve()
       .then(async () => {
         await client.execute(`PRAGMA busy_timeout=${positiveInteger(process.env.SQLITE_BUSY_TIMEOUT_MS, 60_000)}`)
@@ -158,15 +160,13 @@ async function execute<T>(
   sql: string,
   args: readonly InValue[] = [],
 ): Promise<T[]> {
-  const dbPath = resolveAnalogSequenceIndexPath(market)
-  const guard = requiresExternalStorageGuard(dbPath) ? guardForDatabase(dbPath, 'analog-sequence-read') : null
-  guard?.assertWritable()
   try {
     await ensureReady(market)
-    const result = await getClient(market).execute({ sql, args: [...args] })
+    const client = getClient(market)
+    if (!client) throw new Error('analog_sequence_index_unavailable')
+    const result = await client.execute({ sql, args: [...args] })
     return result.rows.map((row) => ({ ...row })) as unknown as T[]
   } catch (error) {
-    if (guard && isStorageIoError(error)) guard.classify(error)
     throw error
   }
 }

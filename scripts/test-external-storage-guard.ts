@@ -5,7 +5,7 @@ import path from 'node:path'
 import { NextRequest } from 'next/server'
 import { proxy } from '../proxy'
 import {
-  ExternalStorageGuard, StorageUnavailableError, inspectReadableVolumeIdentity, inspectStorage, inspectWritableTargetPath, isStorageIoError, mountTableContains, requiresExternalStorageGuard,
+  ExternalStorageGuard, StorageUnavailableError, certifyVolumeIdentitySingleFlight, inspectReadableVolumeIdentity, inspectStorage, inspectWritableTargetPath, isStorageIoError, mountTableContains, requiresExternalStorageGuard, storageProbeCoordinationPaths,
   type GuardConfig, type StorageProbe, type VolumeIdentity,
 } from '@/lib/storage/external-storage-guard'
 
@@ -46,6 +46,34 @@ try {
   assert.equal(inspectStorage(config, probe).uuid, 'test-uuid')
   assert.equal(inspectWritableTargetPath(config, probe).uuid, 'test-uuid')
   assert.equal(inspectWritableTargetPath({ ...config, dbPath: `${mount}/new/output.db` }, probe).uuid, 'test-uuid')
+
+  const coordinatedMount = path.join(tmp, 'coordinated-mount')
+  const coordinationDir = path.join(tmp, 'probe-coordination')
+  fs.mkdirSync(coordinatedMount)
+  let certifications = 0
+  const coordinatedVolume = { ...healthyVolume, mountPoint: coordinatedMount }
+  assert.equal(certifyVolumeIdentitySingleFlight(coordinatedMount, () => {
+    certifications++
+    return coordinatedVolume
+  }, { coordinationDir, cacheTtlMs: 10_000 }).uuid, 'test-uuid')
+  assert.equal(certifyVolumeIdentitySingleFlight(coordinatedMount, () => {
+    certifications++
+    return coordinatedVolume
+  }, { coordinationDir, cacheTtlMs: 10_000 }).uuid, 'test-uuid')
+  assert.equal(certifications, 1, 'same-volume certifications share the short-lived process result')
+
+  const contendedMount = path.join(tmp, 'contended-mount')
+  fs.mkdirSync(contendedMount)
+  const contendedPaths = storageProbeCoordinationPaths(contendedMount, coordinationDir)
+  fs.mkdirSync(path.dirname(contendedPaths.lockPath), { recursive: true })
+  fs.writeFileSync(contendedPaths.lockPath, JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }))
+  let contendedCertifications = 0
+  expectCode('PROBE_FAILED', () => certifyVolumeIdentitySingleFlight(contendedMount, () => {
+    contendedCertifications++
+    return { ...healthyVolume, mountPoint: contendedMount }
+  }, { coordinationDir, cacheTtlMs: 0, waitMs: 5, pollMs: 1 }))
+  assert.equal(contendedCertifications, 0, 'a contending caller must not start a second full probe')
+  fs.unlinkSync(contendedPaths.lockPath)
 
   const optionalIncidentDir = path.join(tmp, 'optional-read')
   const optionalDb = `${mount}/ma-trajectory-shadow/shadow.db`
@@ -98,6 +126,19 @@ try {
     Object.assign(new Error('simulated optional read I/O error'), { code: 'EIO' })))
   assert.equal(fs.existsSync(path.join(optionalIncidentDir, 'FAILED_SAFE')), true)
   fs.unlinkSync(path.join(optionalIncidentDir, 'FAILED_SAFE'))
+
+  const rebuildableIncidentDir = path.join(tmp, 'rebuildable-cache')
+  const rebuildable = new ExternalStorageGuard({ ...config, incidentDir: rebuildableIncidentDir }, probe)
+  rebuildable.assertWritable(true)
+  assert.throws(() => rebuildable.classifyRebuildableCache(
+    Object.assign(new Error('database disk image is malformed'), { code: 'SQLITE_CORRUPT' })))
+  assert.equal(fs.existsSync(path.join(rebuildableIncidentDir, 'FAILED_SAFE')), false,
+    'cache-local corruption must not create the shared fatal latch')
+  expectCode('FATAL_STORAGE_IO', () => rebuildable.classifyRebuildableCache(
+    Object.assign(new Error('simulated cache I/O error'), { code: 'EIO' })))
+  assert.equal(fs.existsSync(path.join(rebuildableIncidentDir, 'FAILED_SAFE')), true,
+    'actual cache volume I/O failure remains volume-fatal')
+  fs.unlinkSync(path.join(rebuildableIncidentDir, 'FAILED_SAFE'))
 
   const requiredIncidentDir = path.join(tmp, 'required-missing')
   const requiredMissing = new ExternalStorageGuard({ ...config, incidentDir: requiredIncidentDir }, {
@@ -166,6 +207,24 @@ try {
   }, { wait: () => undefined })
   parseGuard.assertWritable(true)
   assert.equal(parseGuard.status, 'HEALTHY')
+  let threeFailuresThenSuccess = 0
+  const serializedRecovery = new ExternalStorageGuard(config, {
+    ...probe,
+    volume: () => {
+      threeFailuresThenSuccess++
+      if (threeFailuresThenSuccess <= 3) {
+        throw new StorageUnavailableError('PROBE_FAILED', 'serialized diskutil failure', {
+          probeStage: 'DISKUTIL_INFO', startedAt: new Date().toISOString(), durationMs: 8_000,
+          exitStatus: null, signal: 'SIGPIPE', stderr: null,
+        })
+      }
+      return healthyVolume
+    },
+  }, { wait: () => undefined })
+  serializedRecovery.assertWritable(true)
+  assert.equal(threeFailuresThenSuccess, 4)
+  assert.equal(serializedRecovery.status, 'HEALTHY')
+  assert.equal(fs.existsSync(path.join(tmp, 'FAILED_SAFE')), false)
   let raceEnabled = false
   let walPresent = true
   const raceGuard = new ExternalStorageGuard(config, {
@@ -220,9 +279,9 @@ try {
   const probeFailure = new ExternalStorageGuard(config, failedProbe, { wait: () => undefined })
   expectCode('PROBE_FAILED', () => probeFailure.assertWritable(true))
   assert.equal(probeFailure.status, 'FAILED_SAFE', 'three failed certifications require manual recovery')
-  assert.equal(probeFailure.probeMetrics.fullCount, 3)
+  assert.equal(probeFailure.probeMetrics.fullCount, 4)
   const failedIncident = JSON.parse(fs.readFileSync(path.join(tmp, 'incidents.ndjson'), 'utf8').trim().split('\n').at(-1)!)
-  assert.deepEqual(failedIncident.confirmationAttempts.map((attempt: { attempt: number }) => attempt.attempt), [1, 2, 3])
+  assert.deepEqual(failedIncident.confirmationAttempts.map((attempt: { attempt: number }) => attempt.attempt), [1, 2, 3, 4])
   assert.equal(failedIncident.confirmationAttempts.every((attempt: { uuidVerified: boolean }) => !attempt.uuidVerified), true)
   assert.equal(failedIncident.confirmationAttempts[1].inProcessIdentity, true)
   fs.unlinkSync(path.join(tmp, 'FAILED_SAFE'))

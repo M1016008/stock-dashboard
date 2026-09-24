@@ -2,7 +2,7 @@ import { createClient, type Client } from '@libsql/client'
 import fs from 'node:fs'
 import { configForDatabase, guardForDatabase, inspectWritableTargetPath, isStorageIoError, requiresExternalStorageGuard, type ExternalStorageGuard } from './external-storage-guard'
 
-type GuardedAccess = 'REQUIRED_WRITABLE' | 'OPTIONAL_READ'
+type GuardedAccess = 'REQUIRED_WRITABLE' | 'OPTIONAL_READ' | 'REBUILDABLE_CACHE'
 
 function wrapObject<T extends object>(value: T, guard: ExternalStorageGuard, access: GuardedAccess = 'REQUIRED_WRITABLE'): T {
   return new Proxy(value, {
@@ -19,10 +19,13 @@ function wrapObject<T extends object>(value: T, guard: ExternalStorageGuard, acc
           if (!result || typeof result.then !== 'function') return result
           return result.then((resolved: unknown) => property === 'transaction' && resolved && typeof resolved === 'object'
             ? wrapObject(resolved, guard, access) : resolved).catch((error: unknown) => (
-              access === 'OPTIONAL_READ' ? guard.classifyOptionalRead(error) : guard.classify(error)
+              access === 'REQUIRED_WRITABLE' ? guard.classify(error)
+                : access === 'REBUILDABLE_CACHE' ? guard.classifyRebuildableCache(error)
+                  : guard.classifyOptionalRead(error)
             ))
         } catch (error) {
-          if (access === 'OPTIONAL_READ') guard.classifyOptionalRead(error)
+          if (access === 'REBUILDABLE_CACHE') guard.classifyRebuildableCache(error)
+          else if (access === 'OPTIONAL_READ') guard.classifyOptionalRead(error)
           else if (isStorageIoError(error)) guard.classify(error)
           throw error
         }
@@ -81,4 +84,25 @@ export function openGuardedWritableTargetClient(dbPath: string, jobType: string)
   }
   guard.setFatalHandler(() => { try { client.close() } catch { /* best effort */ } })
   return wrapObject(client, guard)
+}
+
+// Rebuildable caches require a healthy writable volume, but cache-local open,
+// schema, or corruption failures must not poison the primary DB latch.
+export function openRebuildableGuardedClient(dbPath: string, jobType: string): Client {
+  if (!requiresExternalStorageGuard(dbPath)) return createClient({ url: `file:${dbPath}` })
+  inspectWritableTargetPath(configForDatabase(dbPath, jobType))
+  const guard = guardForDatabase(dbPath, jobType)
+  let client!: Client
+  try {
+    if (!fs.existsSync(dbPath)) {
+      try { fs.closeSync(fs.openSync(dbPath, 'wx', 0o600)) }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error }
+    }
+    client = createClient({ url: `file:${dbPath}` })
+    guard.assertWritable(true)
+  } catch (error) {
+    guard.classifyRebuildableCache(error)
+  }
+  guard.setFatalHandler(() => { try { client.close() } catch { /* best effort */ } })
+  return wrapObject(client, guard, 'REBUILDABLE_CACHE')
 }

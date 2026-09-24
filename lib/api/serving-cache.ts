@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import path from 'node:path'
 import { type Client, type InValue } from '@libsql/client'
 import { localDbPath } from '@/lib/db/client'
-import { openExistingGuardedClient } from '@/lib/storage/guarded-libsql-client'
+import { openOptionalGuardedReadOnlyClient, openRebuildableGuardedClient } from '@/lib/storage/guarded-libsql-client'
 
 type CacheRow = {
   payload_json: string
@@ -12,6 +12,7 @@ type CacheRow = {
 const globalForServingCache = global as unknown as {
   servingCacheClient?: Client
   servingCachePath?: string
+  servingCacheAccess?: 'READ' | 'WRITE'
   servingCacheReady?: Promise<void>
   servingCacheLastCleanupAt?: number
   servingCacheWriteQueue?: Promise<void>
@@ -26,6 +27,15 @@ function numberEnv(name: string, fallback: number): number {
 function isBusyError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error)
   return /SQLITE_BUSY|database is locked/i.test(message)
+}
+
+function isCacheLocalFailure(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  const code = error && typeof error === 'object'
+    ? String((error as { code?: unknown; rawCode?: unknown }).code ?? (error as { rawCode?: unknown }).rawCode ?? '')
+    : ''
+  return /^(ENOENT|SQLITE_CORRUPT|SQLITE_NOTADB|SQLITE_SCHEMA|SQLITE_NOTFOUND)$/.test(code)
+    || /no such table|database disk image is malformed|file is not a database|schema (?:has )?changed/i.test(message)
 }
 
 function sleep(ms: number): Promise<void> {
@@ -67,24 +77,48 @@ export function resolveServingCacheDbPath(): string {
     : path.join(path.dirname(localDbPath), 'stockboard-serving-cache.db')
 }
 
-function getClient(): Client {
+function resetClient(): void {
+  try { globalForServingCache.servingCacheClient?.close() } catch { /* best effort */ }
+  delete globalForServingCache.servingCacheClient
+  delete globalForServingCache.servingCachePath
+  delete globalForServingCache.servingCacheAccess
+  delete globalForServingCache.servingCacheReady
+}
+
+function preparePath(dbPath: string): void {
+  if (globalForServingCache.servingCachePath && globalForServingCache.servingCachePath !== dbPath) resetClient()
+}
+
+function getReadClient(): Client | null {
   const dbPath = resolveServingCacheDbPath()
-  if (
-    !globalForServingCache.servingCacheClient
-    || globalForServingCache.servingCachePath !== dbPath
-  ) {
-    globalForServingCache.servingCacheClient = openExistingGuardedClient(dbPath, 'serving-cache')
+  preparePath(dbPath)
+  if (!globalForServingCache.servingCacheClient) {
+    const client = openOptionalGuardedReadOnlyClient(dbPath, 'serving-cache-read')
+    if (!client) return null
+    globalForServingCache.servingCacheClient = client
     globalForServingCache.servingCachePath = dbPath
-    delete globalForServingCache.servingCacheReady
+    globalForServingCache.servingCacheAccess = 'READ'
   }
   return globalForServingCache.servingCacheClient
 }
 
-async function ensureServingCacheReady(): Promise<void> {
+function getWriteClient(): Client {
+  const dbPath = resolveServingCacheDbPath()
+  preparePath(dbPath)
+  if (!globalForServingCache.servingCacheClient || globalForServingCache.servingCacheAccess !== 'WRITE') {
+    resetClient()
+    globalForServingCache.servingCacheClient = openRebuildableGuardedClient(dbPath, 'serving-cache-write')
+    globalForServingCache.servingCachePath = dbPath
+    globalForServingCache.servingCacheAccess = 'WRITE'
+  }
+  return globalForServingCache.servingCacheClient
+}
+
+async function ensureServingCacheReady(): Promise<Client> {
   if (!globalForServingCache.servingCacheReady) {
     globalForServingCache.servingCacheReady = Promise.resolve()
       .then(async () => {
-        const client = getClient()
+        const client = getWriteClient()
         const busyTimeoutMs = Math.max(1_000, numberEnv('SERVING_CACHE_BUSY_TIMEOUT_MS', 15_000))
         await client.execute(`PRAGMA busy_timeout=${busyTimeoutMs}`)
         await client.execute('PRAGMA synchronous=NORMAL')
@@ -127,6 +161,7 @@ async function ensureServingCacheReady(): Promise<void> {
       })
   }
   await globalForServingCache.servingCacheReady
+  return getWriteClient()
 }
 
 export function stableCacheKey(value: unknown): string {
@@ -139,9 +174,10 @@ export async function readServingCache<T>(
   ttlMs: number,
 ): Promise<{ payload: T; generatedAt: number } | null> {
   try {
-    await ensureServingCacheReady()
+    const client = getReadClient()
+    if (!client) return null
     const minGeneratedAt = Date.now() - ttlMs
-    const result = await withBusyRetry(() => getClient().execute({
+    const result = await withBusyRetry(() => client.execute({
       sql: `
         SELECT payload_json, generated_at_ms
         FROM api_serving_cache
@@ -164,9 +200,15 @@ export async function readServingCache<T>(
       return null
     }
   } catch (error) {
-    if (!isBusyError(error)) throw error
-    warnBusyOnce('read')
-    return null
+    if (isBusyError(error)) {
+      warnBusyOnce('read')
+      return null
+    }
+    if (isCacheLocalFailure(error)) {
+      resetClient()
+      return null
+    }
+    throw error
   }
 }
 
@@ -179,10 +221,10 @@ export async function writeServingCache<T>(
 ): Promise<void> {
   await serializeWrite(async () => {
     try {
-      await ensureServingCacheReady()
+      const client = await ensureServingCacheReady()
       const now = Math.floor(Date.now() / 1000)
       const expiresAt = Math.floor((generatedAt + ttlMs) / 1000)
-      await withBusyRetry(() => getClient().execute({
+      await withBusyRetry(() => client.execute({
         sql: `
           INSERT INTO api_serving_cache (
             namespace,
@@ -217,7 +259,7 @@ export async function writeServingCache<T>(
       if (Date.now() - lastCleanupAt < cleanupIntervalMs) return
       globalForServingCache.servingCacheLastCleanupAt = Date.now()
       try {
-        await withBusyRetry(() => getClient().execute({
+        await withBusyRetry(() => client.execute({
           sql: 'DELETE FROM api_serving_cache WHERE expires_at <= ?',
           args: [now],
         }))
@@ -226,8 +268,15 @@ export async function writeServingCache<T>(
         warnBusyOnce('cleanup')
       }
     } catch (error) {
-      if (!isBusyError(error)) throw error
-      warnBusyOnce('write')
+      if (isBusyError(error)) {
+        warnBusyOnce('write')
+        return
+      }
+      if (isCacheLocalFailure(error)) {
+        resetClient()
+        return
+      }
+      throw error
     }
   })
 }

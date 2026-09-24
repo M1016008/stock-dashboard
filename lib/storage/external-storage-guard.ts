@@ -1,10 +1,14 @@
 import { execFileSync } from 'node:child_process'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
 const PROBE_COMMAND_TIMEOUT_MS = 8_000
+const PROBE_CERTIFICATION_CACHE_MS = 2_000
+const PROBE_COORDINATION_WAIT_MS = 20_000
+const PROBE_COORDINATION_POLL_MS = 50
+const PROBE_COORDINATION_STALE_MS = 30_000
 
 export type StorageFailureCode =
   | 'VOLUME_NOT_MOUNTED' | 'VOLUME_UUID_MISMATCH' | 'PROBE_FAILED' | 'DB_OUTSIDE_EXPECTED_VOLUME'
@@ -92,8 +96,165 @@ function classifyMountProbeFailure(mountPath: string, original?: StorageUnavaila
   throw original ?? new StorageUnavailableError('PROBE_FAILED', 'STORAGE_UNAVAILABLE: volume identity probe failed while mount remains listed')
 }
 
-function diskutilVolume(mountPath: string): VolumeIdentity | null {
-  if (process.platform !== 'darwin') return null
+type CertifiedVolumeIdentity = {
+  version: 1
+  mountPath: string
+  mountDevice: string
+  certifiedAt: number
+  volume: VolumeIdentity
+}
+
+type ProbeCoordinationOptions = {
+  coordinationDir?: string
+  cacheTtlMs?: number
+  waitMs?: number
+  pollMs?: number
+  wait?: (ms: number) => void
+}
+
+const globalForProbeCoordination = globalThis as typeof globalThis & {
+  stockboardCertifiedVolumes?: Map<string, CertifiedVolumeIdentity>
+}
+
+function probeCoordinationDirectory(configured?: string): string {
+  const fallback = path.join(os.homedir(), 'Library', 'Application Support', 'StockBoard', 'storage-incidents')
+  const candidate = path.resolve(/* turbopackIgnore: true */ configured?.trim() || process.env.STOCK_DATA_INCIDENT_DIR?.trim() || fallback)
+  return candidate.startsWith('/Volumes/') ? fallback : candidate
+}
+
+export function storageProbeCoordinationPaths(mountPath: string, coordinationDir?: string): {
+  cachePath: string
+  lockPath: string
+} {
+  const key = createHash('sha256').update(path.resolve(mountPath)).digest('hex').slice(0, 24)
+  const directory = probeCoordinationDirectory(coordinationDir)
+  return {
+    cachePath: path.join(directory, `volume-certification-${key}.json`),
+    lockPath: path.join(directory, `volume-certification-${key}.lock`),
+  }
+}
+
+function mountDevice(mountPath: string): string | null {
+  try { return String(fs.statSync(fs.realpathSync(mountPath)).dev) }
+  catch { return null }
+}
+
+function readCertifiedVolume(cachePath: string, mountPath: string, ttlMs: number): CertifiedVolumeIdentity | null {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(cachePath, 'utf8')) as CertifiedVolumeIdentity
+    const age = Date.now() - Number(parsed.certifiedAt)
+    const device = mountDevice(mountPath)
+    if (parsed.version !== 1 || parsed.mountPath !== path.resolve(mountPath)
+      || age < 0 || age >= ttlMs || !device || parsed.mountDevice !== device) return null
+    return parsed
+  } catch { return null }
+}
+
+function writeCertifiedVolume(cachePath: string, certified: CertifiedVolumeIdentity): void {
+  const temporary = `${cachePath}.${process.pid}.${randomUUID()}.tmp`
+  const descriptor = fs.openSync(temporary, 'wx', 0o600)
+  try {
+    fs.writeFileSync(descriptor, `${JSON.stringify(certified)}\n`)
+    fs.fsyncSync(descriptor)
+  } finally { fs.closeSync(descriptor) }
+  fs.renameSync(temporary, cachePath)
+}
+
+function lockOwnerAlive(lockPath: string): boolean {
+  try {
+    const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8')) as { pid?: number }
+    if (!Number.isInteger(lock.pid) || Number(lock.pid) <= 0) return false
+    process.kill(Number(lock.pid), 0)
+    return true
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ESRCH' || error instanceof SyntaxError) return false
+    return true
+  }
+}
+
+export function certifyVolumeIdentitySingleFlight(
+  mountPath: string,
+  certify: () => VolumeIdentity,
+  options: ProbeCoordinationOptions = {},
+): VolumeIdentity {
+  const resolvedMount = path.resolve(mountPath)
+  const ttlMs = options.cacheTtlMs ?? PROBE_CERTIFICATION_CACHE_MS
+  const waitMs = options.waitMs ?? PROBE_COORDINATION_WAIT_MS
+  const pollMs = options.pollMs ?? PROBE_COORDINATION_POLL_MS
+  const wait = options.wait ?? ((ms: number) => {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+  })
+  const paths = storageProbeCoordinationPaths(resolvedMount, options.coordinationDir)
+  const started = Date.now()
+  globalForProbeCoordination.stockboardCertifiedVolumes ??= new Map()
+
+  for (;;) {
+    const processCached = globalForProbeCoordination.stockboardCertifiedVolumes.get(resolvedMount)
+    const device = mountDevice(resolvedMount)
+    if (processCached && Date.now() - processCached.certifiedAt < ttlMs
+      && device && processCached.mountDevice === device) return processCached.volume
+    const shared = readCertifiedVolume(paths.cachePath, resolvedMount, ttlMs)
+    if (shared) {
+      globalForProbeCoordination.stockboardCertifiedVolumes.set(resolvedMount, shared)
+      return shared.volume
+    }
+
+    fs.mkdirSync(path.dirname(paths.lockPath), { recursive: true, mode: 0o700 })
+    let descriptor: number | null = null
+    try {
+      descriptor = fs.openSync(/* turbopackIgnore: true */ paths.lockPath, 'wx', 0o600)
+      fs.writeFileSync(descriptor, `${JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() })}\n`)
+      fs.fsyncSync(descriptor)
+    } catch (error) {
+      if (descriptor !== null) {
+        fs.closeSync(descriptor)
+        try { fs.unlinkSync(paths.lockPath) } catch { /* best effort; stale-lock handling remains fail closed */ }
+      }
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw probeFailure('DISKUTIL_INFO', started, error)
+      try {
+        const stale = Date.now() - fs.statSync(/* turbopackIgnore: true */ paths.lockPath).mtimeMs > PROBE_COORDINATION_STALE_MS
+        if (stale && !lockOwnerAlive(paths.lockPath)) {
+          fs.unlinkSync(paths.lockPath)
+          continue
+        }
+      } catch (lockError) {
+        if ((lockError as NodeJS.ErrnoException).code === 'ENOENT') continue
+        throw probeFailure('DISKUTIL_INFO', started, lockError)
+      }
+      if (Date.now() - started >= waitMs) {
+        throw new StorageUnavailableError('PROBE_FAILED', 'STORAGE_UNAVAILABLE: serialized identity probe wait timed out', {
+          probeStage: 'DISKUTIL_INFO', startedAt: new Date(started).toISOString(), durationMs: Date.now() - started,
+          exitStatus: null, signal: null, stderr: null,
+        })
+      }
+      wait(pollMs)
+      continue
+    }
+
+    try {
+      const cachedAfterLock = readCertifiedVolume(paths.cachePath, resolvedMount, ttlMs)
+      if (cachedAfterLock) {
+        globalForProbeCoordination.stockboardCertifiedVolumes.set(resolvedMount, cachedAfterLock)
+        return cachedAfterLock.volume
+      }
+      const volume = certify()
+      const currentDevice = mountDevice(resolvedMount)
+      if (!currentDevice) fail('VOLUME_NOT_MOUNTED', 'expected volume disappeared during certification', 'STAT_DEVICE')
+      const certified: CertifiedVolumeIdentity = {
+        version: 1, mountPath: resolvedMount, mountDevice: currentDevice, certifiedAt: Date.now(), volume,
+      }
+      writeCertifiedVolume(paths.cachePath, certified)
+      globalForProbeCoordination.stockboardCertifiedVolumes.set(resolvedMount, certified)
+      return volume
+    } finally {
+      if (descriptor !== null) fs.closeSync(descriptor)
+      try { fs.unlinkSync(paths.lockPath) }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+    }
+  }
+}
+
+function runDiskutilVolume(mountPath: string): VolumeIdentity {
   let plist: Buffer
   let info: Record<string, unknown>
   let started = Date.now()
@@ -125,6 +286,11 @@ function diskutilVolume(mountPath: string): VolumeIdentity | null {
     freeBytes: Number(stats.bavail * stats.bsize),
     totalBytes: Number(stats.blocks * stats.bsize),
   }
+}
+
+function diskutilVolume(mountPath: string): VolumeIdentity | null {
+  if (process.platform !== 'darwin') return null
+  return certifyVolumeIdentitySingleFlight(mountPath, () => runDiskutilVolume(mountPath))
 }
 
 export const systemStorageProbe: StorageProbe = {
@@ -317,6 +483,16 @@ function isOptionalReadVolumeFatal(error: unknown): boolean {
   return /\b(SQLITE_IOERR|EIO|ENODEV)\b|disk I\/O error/i.test(message)
 }
 
+function isRebuildableCacheVolumeFatal(error: unknown): boolean {
+  if (error instanceof StorageUnavailableError) {
+    return error.storageCode !== 'DB_NOT_FOUND' && error.storageCode !== 'PROBE_FAILED'
+  }
+  const code = errorCode(error)
+  if (code && /^(SQLITE_IOERR(?:_\w+)?|SQLITE_READONLY(?:_\w+)?|SQLITE_FULL|EIO|ENODEV|EROFS|ENOSPC)$/.test(code)) return true
+  const message = error instanceof Error ? error.message : ''
+  return /\b(SQLITE_IOERR|SQLITE_READONLY|SQLITE_FULL|EIO|ENODEV|EROFS|ENOSPC)\b|disk I\/O error|database or disk is full|readonly database/i.test(message)
+}
+
 function safeErrorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error)
   return message.replace(/(token|secret|password|authorization|api[_-]?key)\s*[:=]\s*\S+/gi, '$1=[redacted]').slice(0, 400)
@@ -492,7 +668,7 @@ export class ExternalStorageGuard {
       throw this.fatal
     }
     this.recordProbeEvent('PROBE_UNCERTAIN', initial)
-    for (const [index, delayMs] of [1_000, 2_000].entries()) {
+    for (const [index, delayMs] of [1_000, 2_000, 4_000].entries()) {
       let inProcessIdentity = false
       try {
         this.lightweightIdentity(false, requirement)
@@ -582,6 +758,14 @@ export class ExternalStorageGuard {
 
   classifyOptionalRead(error: unknown): never {
     if (isOptionalReadVolumeFatal(error)) {
+      this.markFatal(error)
+      throw this.fatal
+    }
+    throw error
+  }
+
+  classifyRebuildableCache(error: unknown): never {
+    if (isRebuildableCacheVolumeFatal(error)) {
       this.markFatal(error)
       throw this.fatal
     }
