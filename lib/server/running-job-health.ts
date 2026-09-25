@@ -5,6 +5,7 @@ type RunningJobCandidate = {
 }
 
 const PROCESS_HINTS: Array<[RegExp, string[]]> = [
+  [/^tiingo_ohlcv$/i, ['batch-us-ohlcv']],
   [/^physical_momentum_/i, ['batch-physical-momentum']],
   [/^forward_extrema(?:_|$)/i, ['batch-forward-extrema']],
   [/^ml_learning(?:_|$)/i, ['run-ml-learning']],

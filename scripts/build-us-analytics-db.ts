@@ -128,6 +128,7 @@ FROM update_locks
 WHERE status = 'running'
   AND lease_expires_at > unixepoch()
   AND job_type <> 'us_adjusted_foundation'
+  AND job_type <> 'trigger_historical_worker'
   ${SOURCE_WRITER_JOB_TO_IGNORE ? `AND job_type <> ${sqlLiteral(SOURCE_WRITER_JOB_TO_IGNORE)}` : ''}
 LIMIT 1;
 `).trim()

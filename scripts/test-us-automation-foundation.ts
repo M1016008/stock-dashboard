@@ -413,6 +413,11 @@ assert.match(usAnalyticsBuilder, /US_ANALYTICS_NATIVE_BUSY_RETRIES/)
 assert.match(usAnalyticsBuilder, /US analytics copy lock retry/)
 assert.match(usAnalyticsBuilder, /waitForSharedSourceWriter/)
 assert.match(usAnalyticsBuilder, /US analytics copy yielding to shared source writer/)
+assert.match(
+  usAnalyticsBuilder,
+  /job_type <> 'trigger_historical_worker'/,
+  'US analytics copy must not treat the long-lived historical worker ownership lock as a source writer',
+)
 assert.match(usAnalyticsBuilder, /job_type <> 'us_adjusted_foundation'/)
 assert.match(usAnalyticsBuilder, /US_ANALYTICS_SOURCE_WRITER_JOB_TO_IGNORE/)
 assert.match(usAnalyticsBuilder, /\.timeout 5000/)
@@ -463,6 +468,12 @@ assert.match(jpLatestUpdate, /jobType !== 'us_adjusted_foundation'/)
 assert.match(jpLatestUpdate, /acquireDailyUpdateLock/)
 assert.match(jpLatestUpdate, /UPDATE_LOCK_WAIT_SECONDS/)
 assert.match(jpLatestUpdate, /process\.exitCode = 75/)
+assert.match(jpLatestUpdate, /UPDATE_LATEST_OPTIONAL_WINDOW_END_HOUR \?\? '6'/)
+assert.match(
+  jpLatestUpdate,
+  /runStartedJstHour < optionalAfterHour[\s\S]*?&& !inOvernightOptionalWindow/,
+  'JP optional refresh must treat the post-close window as spanning midnight',
+)
 
 const jpMlLearning = read('scripts/run-ml-learning.ts')
 assert.match(jpMlLearning, /acquireJpStockboardUpdateLock/)
@@ -482,6 +493,11 @@ assert.match(
   /label: 'com\.stockboard\.us-update-latest',[\s\S]*?cooldownSeconds: 30 \* 60/,
 )
 assert.match(dataFreshnessGuard, /const blockingLocks = activeLocks\.filter/)
+assert.match(dataFreshnessGuard, /nonWriterOwnershipJobTypes = \[[\s\S]*?'trigger_historical_worker'/)
+assert.match(
+  dataFreshnessGuard,
+  /!nonWriterOwnershipJobTypes\.includes\([\s\S]*?&& !ignoredWriterJobTypes\.includes/,
+)
 assert.match(dataFreshnessGuard, /cleanupOrphanedUpdateLocks\(EXCLUSIVE_UPDATE_JOB_TYPES\)/)
 assert.match(dataFreshnessGuard, /jpSupplementalIgnoredWriters/)
 assert.match(dataFreshnessGuard, /heavy_us_ml_process/)

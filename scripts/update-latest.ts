@@ -289,9 +289,14 @@ async function main() {
     }
 
     const optionalAfterHour = Number(process.env.UPDATE_LATEST_OPTIONAL_AFTER_HOUR ?? '0')
+    const optionalWindowEndHour = Number(process.env.UPDATE_LATEST_OPTIONAL_WINDOW_END_HOUR ?? '6')
+    const inOvernightOptionalWindow = Number.isFinite(optionalWindowEndHour)
+      && optionalWindowEndHour > 0
+      && runStartedJstHour < optionalWindowEndHour
     const beforeOptionalWindow = Number.isFinite(optionalAfterHour)
       && optionalAfterHour > 0
       && runStartedJstHour < optionalAfterHour
+      && !inOvernightOptionalWindow
     if (process.env.UPDATE_LATEST_CRITICAL_ONLY === '1' || beforeOptionalWindow) {
       const reason = beforeOptionalWindow
         ? `scheduled heavy refresh window starts at ${optionalAfterHour}:00 JST (run started at ${runStartedJstHour}:xx)`

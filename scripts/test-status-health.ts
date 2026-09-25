@@ -35,6 +35,14 @@ assert.equal(runningJobIsVisible({
   startedAt: oldStart,
 }, 'node scripts/batch-forward-extrema.ts', now), true)
 assert.equal(runningJobIsVisible({
+  jobType: 'tiingo_ohlcv',
+  startedAt: oldStart,
+}, '', now), false)
+assert.equal(runningJobIsVisible({
+  jobType: 'tiingo_ohlcv',
+  startedAt: oldStart,
+}, 'node scripts/batch-us-ohlcv.ts', now), true)
+assert.equal(runningJobIsVisible({
   jobType: 'physical_momentum_us_raw_chunk',
   startedAt: oldStart,
   payloadJson: JSON.stringify({ heartbeatAt: '2026-08-11T11:55:00.000Z' }),
