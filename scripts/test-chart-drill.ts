@@ -1,4 +1,8 @@
 import assert from 'node:assert/strict'
+import { NextRequest } from 'next/server'
+import { POST } from '../app/api/chart-drill/answer/route'
+import { chartDrillAnswerErrorResponse } from '../lib/chart-drill/http'
+import { ChartDrillProblemError, decodeProblemId } from '../lib/chart-drill/server'
 import {
   answerIsCorrect,
   computeOutcome,
@@ -90,4 +94,63 @@ assert.equal(passOutcome.actual, 'pass')
 assert.equal(passOutcome.thresholdHit, false)
 assert.equal(answerIsCorrect('pass', passOutcome), true)
 
-console.log('chart-drill scoring tests passed')
+const validProblemPayload = {
+  v: 1,
+  market: 'JP',
+  ticker: '7003',
+  asOfDate: '2026-09-25',
+  horizonDays: 10,
+  thresholdPct: 5,
+  direction: 'up',
+  target: 'jp',
+  difficulty: 'intermediate',
+}
+const validProblemId = Buffer.from(JSON.stringify(validProblemPayload), 'utf8').toString('base64url')
+assert.deepEqual(decodeProblemId(validProblemId), validProblemPayload)
+assert.throws(
+  () => decodeProblemId('not-base64'),
+  (error: unknown) => error instanceof ChartDrillProblemError && error.code === 'INVALID_PROBLEM_ID',
+)
+
+async function testAnswerApiErrors() {
+  const missing = await POST(new NextRequest('http://localhost/api/chart-drill/answer', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ answer: 'pass' }),
+  }))
+  assert.equal(missing.status, 400)
+  assert.deepEqual(await missing.json(), {
+    error: 'invalid_problem_id',
+    message: '問題IDが不正です。次の問題を取得してください。',
+  })
+
+  const malformed = await POST(new NextRequest('http://localhost/api/chart-drill/answer', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ problemId: 'not-base64', answer: 'pass' }),
+  }))
+  assert.equal(malformed.status, 400)
+  assert.equal((await malformed.json()).error, 'invalid_problem_id')
+
+  const notFound = chartDrillAnswerErrorResponse(new ChartDrillProblemError(
+    'PROBLEM_NOT_FOUND',
+    '対象の問題が見つかりません。次の問題を取得してください。',
+  ))
+  assert.equal(notFound.status, 404)
+  assert.equal((await notFound.json()).error, 'chart_drill_problem_not_found')
+
+  const internal = chartDrillAnswerErrorResponse(new Error('SQL failed at /private/path with secret'))
+  assert.equal(internal.status, 500)
+  const internalBody = await internal.json() as { error: string; message: string }
+  assert.equal(internalBody.error, 'chart_drill_internal_error')
+  assert.equal(internalBody.message.includes('SQL'), false)
+  assert.equal(internalBody.message.includes('/private/path'), false)
+  assert.equal(internalBody.message.includes('secret'), false)
+}
+
+testAnswerApiErrors()
+  .then(() => console.log('chart-drill scoring and API error tests passed'))
+  .catch((error) => {
+    console.error(error)
+    process.exitCode = 1
+  })

@@ -59,6 +59,18 @@ type RawSeriesRow = {
   physical_energy_score: number | null
 }
 
+export type ChartDrillProblemErrorCode = 'INVALID_PROBLEM_ID' | 'PROBLEM_NOT_FOUND'
+
+export class ChartDrillProblemError extends Error {
+  constructor(
+    public readonly code: ChartDrillProblemErrorCode,
+    message: string,
+  ) {
+    super(message)
+    this.name = 'ChartDrillProblemError'
+  }
+}
+
 type ProblemPayload = {
   v: 1
   market: DrillMarket
@@ -141,8 +153,11 @@ export async function answerDrillQuestion(params: DrillAnswerParams): Promise<Dr
   const payload = decodeProblemId(params.problemId)
   const rows = await loadSeries(payload.market, payload.ticker, payload.asOfDate)
   const index = rows.findIndex((row) => row.date === payload.asOfDate)
-  if (index < LOOKBACK_CANDLES || index < 0 || index + payload.horizonDays >= rows.length) {
-    throw new Error('問題の価格データを再取得できませんでした。別の問題を出題してください。')
+  if (index < 0 || index < LOOKBACK_CANDLES || index + payload.horizonDays >= rows.length) {
+    throw new ChartDrillProblemError(
+      'PROBLEM_NOT_FOUND',
+      '対象の問題が見つかりません。次の問題を取得してください。',
+    )
   }
   const question = buildQuestionFromIndex(rows, index, payload, false)
   const future = rows.slice(index + 1, index + 1 + payload.horizonDays)
@@ -651,24 +666,60 @@ function encodeProblemId(payload: ProblemPayload): string {
   return Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url')
 }
 
-function decodeProblemId(problemId: string): ProblemPayload {
+export function decodeProblemId(problemId: string): ProblemPayload {
   try {
-    const parsed = JSON.parse(Buffer.from(problemId, 'base64url').toString('utf8')) as Partial<ProblemPayload>
-    if (parsed.v !== 1 || !parsed.market || !parsed.ticker || !parsed.asOfDate) throw new Error('invalid payload')
+    if (!problemId || problemId.length > 4096 || !/^[A-Za-z0-9_-]+$/.test(problemId)) {
+      throw new Error('invalid encoding')
+    }
+    const decoded = Buffer.from(problemId, 'base64url')
+    if (decoded.toString('base64url') !== problemId) throw new Error('non-canonical encoding')
+    const parsed = JSON.parse(decoded.toString('utf8')) as Partial<ProblemPayload>
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('invalid payload')
+    if (parsed.v !== 1 || (parsed.market !== 'JP' && parsed.market !== 'US')) throw new Error('invalid identity')
+    if (typeof parsed.ticker !== 'string' || !parsed.ticker.trim() || parsed.ticker.length > 64) throw new Error('invalid ticker')
+    if (typeof parsed.asOfDate !== 'string' || !isIsoDate(parsed.asOfDate)) throw new Error('invalid date')
+    if (typeof parsed.horizonDays !== 'number' || !Number.isInteger(parsed.horizonDays)
+      || parsed.horizonDays < 1 || parsed.horizonDays > MAX_HORIZON) {
+      throw new Error('invalid horizon')
+    }
+    if (typeof parsed.thresholdPct !== 'number' || !Number.isFinite(parsed.thresholdPct)
+      || parsed.thresholdPct < 0.5 || parsed.thresholdPct > 80) {
+      throw new Error('invalid threshold')
+    }
+    if (parsed.direction !== 'up' && parsed.direction !== 'down' && parsed.direction !== 'mixed') {
+      throw new Error('invalid direction')
+    }
+    if (parsed.target !== 'jp' && parsed.target !== 'us' && parsed.target !== 'etf'
+      && parsed.target !== 'commodity' && parsed.target !== 'watchlist' && parsed.target !== 'all') {
+      throw new Error('invalid target')
+    }
+    if (parsed.difficulty !== 'beginner' && parsed.difficulty !== 'intermediate'
+      && parsed.difficulty !== 'advanced' && parsed.difficulty !== 'practical') {
+      throw new Error('invalid difficulty')
+    }
     return {
       v: 1,
-      market: parsed.market === 'US' ? 'US' : 'JP',
+      market: parsed.market,
       ticker: String(parsed.ticker).trim().toUpperCase().replace(/\.T$/i, ''),
-      asOfDate: String(parsed.asOfDate),
-      horizonDays: clampInt(Number(parsed.horizonDays), 1, MAX_HORIZON),
-      thresholdPct: clampNumber(Number(parsed.thresholdPct), 0.5, 80),
-      direction: normalizeDirection(parsed.direction),
-      target: normalizeTarget(parsed.target),
-      difficulty: normalizeDifficulty(parsed.difficulty),
+      asOfDate: parsed.asOfDate,
+      horizonDays: parsed.horizonDays,
+      thresholdPct: parsed.thresholdPct,
+      direction: parsed.direction,
+      target: parsed.target,
+      difficulty: parsed.difficulty,
     }
   } catch {
-    throw new Error('問題IDを読み取れませんでした。次の問題を取得してください。')
+    throw new ChartDrillProblemError(
+      'INVALID_PROBLEM_ID',
+      '問題IDが不正です。次の問題を取得してください。',
+    )
   }
+}
+
+function isIsoDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
+  const date = new Date(`${value}T00:00:00Z`)
+  return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value
 }
 
 function normalizeDirection(value: unknown): DrillDirection {
