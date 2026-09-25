@@ -22,6 +22,7 @@ const CACHE_TTL_MS = 60_000
 const CACHE_LIMIT = 6
 const globalForTriggerSearch = globalThis as typeof globalThis & {
   triggerDiscoverySearchCache?: Map<string, { expiresAt: number; result: TriggerDiscoveryResult }>
+  triggerDiscoverySearchInFlight?: Map<string, Promise<TriggerDiscoveryResult>>
 }
 
 async function getBaseResult(parsed: ReturnType<typeof parseTriggerDiscoverySearchRequest>): Promise<{
@@ -37,7 +38,13 @@ async function getBaseResult(parsed: ReturnType<typeof parseTriggerDiscoverySear
   const key = triggerDiscoveryBaseSearchKey(parsed.input, parsed.timeframe)
   const cached = cache.get(key)
   if (cached) return { result: cached.result, cacheHit: true }
-  const result = await getTriggerDiscovery({
+
+  const inFlight = globalForTriggerSearch.triggerDiscoverySearchInFlight ?? new Map()
+  globalForTriggerSearch.triggerDiscoverySearchInFlight = inFlight
+  const pending = inFlight.get(key)
+  if (pending) return { result: await pending, cacheHit: true }
+
+  const task = getTriggerDiscovery({
       ...parsed.input,
       stageFilters: undefined,
       sortBy: undefined,
@@ -45,9 +52,15 @@ async function getBaseResult(parsed: ReturnType<typeof parseTriggerDiscoverySear
       limit: 10_000,
       offset: 0,
     }, { timeframe: parsed.timeframe })
-  cache.set(key, { result, expiresAt: now + CACHE_TTL_MS })
-  while (cache.size > CACHE_LIMIT) cache.delete(cache.keys().next().value!)
-  return { result, cacheHit: false }
+  inFlight.set(key, task)
+  try {
+    const result = await task
+    cache.set(key, { result, expiresAt: Date.now() + CACHE_TTL_MS })
+    while (cache.size > CACHE_LIMIT) cache.delete(cache.keys().next().value!)
+    return { result, cacheHit: false }
+  } finally {
+    if (inFlight.get(key) === task) inFlight.delete(key)
+  }
 }
 
 export async function POST(request: NextRequest) {

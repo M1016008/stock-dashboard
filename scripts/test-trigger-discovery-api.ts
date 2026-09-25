@@ -1,10 +1,17 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { TriggerConfigError } from '@/lib/trigger-discovery-engine'
 import { TriggerDiscoveryInputError } from '@/lib/server/trigger-discovery-read-model'
 import {
   parseTriggerDiscoverySearchRequest,
   triggerDiscoveryBaseSearchKey,
 } from '@/lib/server/trigger-discovery-search-request'
+
+const searchRoute = readFileSync('app/api/trigger-discovery/search/route.ts', 'utf8')
+assert.match(searchRoute, /triggerDiscoverySearchInFlight/)
+assert.match(searchRoute, /const pending = inFlight\.get\(key\)/)
+assert.match(searchRoute, /if \(pending\) return \{ result: await pending, cacheHit: true \}/)
+assert.match(searchRoute, /if \(inFlight\.get\(key\) === task\) inFlight\.delete\(key\)/)
 
 function parses(overrides: Record<string, unknown> = {}) {
   return parseTriggerDiscoverySearchRequest({ requestedAsOf: '2026-09-06', ...overrides })

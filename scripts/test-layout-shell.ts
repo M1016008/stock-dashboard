@@ -10,6 +10,7 @@ const adminDb = fs.readFileSync(path.join(root, 'app/admin/db/page.tsx'), 'utf8'
 const customChartsPage = fs.readFileSync(path.join(root, 'app/custom-charts/page.tsx'), 'utf8')
 const customChartsClient = fs.readFileSync(path.join(root, 'app/custom-charts/CustomChartsClient.tsx'), 'utf8')
 const customFormulaChart = fs.readFileSync(path.join(root, 'components/charts/CustomFormulaChart.tsx'), 'utf8')
+const dashboard = fs.readFileSync(path.join(root, 'app/page.tsx'), 'utf8')
 
 assert.match(
   layout,
@@ -112,6 +113,11 @@ assert.match(
   customFormulaChart,
   /className="h-\[430px\] w-full min-w-0 max-w-full/,
   'The formula chart container must resize within the available viewport width.',
+)
+assert.match(
+  dashboard,
+  /<KabutanMaterialNews compact \/>/,
+  'The dashboard must use the compact material-news view instead of serializing full article tables.',
 )
 
 console.log('layout shell regression tests passed')
