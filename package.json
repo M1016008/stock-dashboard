@@ -19,6 +19,7 @@
     "test:large-holder-operations": "tsx scripts/test-large-holder-operations.ts",
     "test:large-holder-daily-plan": "tsx scripts/test-large-holder-daily-plan.ts",
     "test:large-holder-source-quarantine": "tsx scripts/test-large-holder-source-quarantine.ts",
+    "test:large-holder-production-smoke": "tsx scripts/test-large-holder-production-smoke.ts",
     "test:env-file-non-execution": "tsx scripts/test-env-file-non-execution.ts",
     "large-holders:auto-install": "tsx scripts/install-local-large-holder-update.ts",
     "build": "next build",

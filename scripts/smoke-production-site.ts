@@ -1,6 +1,8 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { assertLargeHolderIdentity, assertLargeHolderInvariant, largeHolderInvariant,
+  type LargeHolderIdentity, type LargeHolderInvariant } from './lib/large-holder-production-smoke'
 
 type CheckKind = 'html' | 'json'
 
@@ -14,6 +16,8 @@ type Check = {
   nonEmptyPaths?: string[]
   expectedValues?: Record<string, string | number | boolean>
   expectedStatus?: number
+  requiredText?: string[]
+  forbiddenText?: string[]
 }
 
 type CheckResult = {
@@ -688,6 +692,25 @@ function isNonEmpty(value: unknown): boolean {
   return value != null
 }
 
+function validateJson(check: Check, json: unknown, expectedStatus: number): void {
+  const topLevelError = getPath(json, 'error')
+  if (expectedStatus < 400 && typeof topLevelError === 'string' && topLevelError.trim()) {
+    throw new Error(`JSON error: ${topLevelError}`)
+  }
+  for (const requiredPath of check.requiredPaths ?? []) {
+    if (getPath(json, requiredPath) == null) throw new Error(`Missing JSON path: ${requiredPath}`)
+  }
+  for (const nonEmptyPath of check.nonEmptyPaths ?? []) {
+    if (!isNonEmpty(getPath(json, nonEmptyPath))) throw new Error(`Empty JSON path: ${nonEmptyPath}`)
+  }
+  for (const [expectedPath, expectedValue] of Object.entries(check.expectedValues ?? {})) {
+    const actualValue = getPath(json, expectedPath)
+    if (actualValue !== expectedValue) {
+      throw new Error(`Unexpected JSON value at ${expectedPath}: expected=${JSON.stringify(expectedValue)} actual=${JSON.stringify(actualValue)}`)
+    }
+  }
+}
+
 async function runCheck(check: Check): Promise<CheckResult> {
   const startedAt = performance.now()
   const controller = new AbortController()
@@ -715,6 +738,12 @@ async function runCheck(check: Check): Promise<CheckResult> {
 
     if (check.kind === 'html') {
       if (!body.toLowerCase().includes('<!doctype html')) throw new Error('HTML document marker is missing')
+      for (const marker of check.requiredText ?? []) {
+        if (!body.includes(marker)) throw new Error(`HTML marker is missing: ${marker}`)
+      }
+      for (const marker of check.forbiddenText ?? []) {
+        if (body.includes(marker)) throw new Error(`Forbidden HTML marker is present: ${marker}`)
+      }
     } else {
       let json: unknown
       try {
@@ -722,22 +751,7 @@ async function runCheck(check: Check): Promise<CheckResult> {
       } catch {
         throw new Error('Response is not valid JSON')
       }
-      const topLevelError = getPath(json, 'error')
-      if (expectedStatus < 400 && typeof topLevelError === 'string' && topLevelError.trim()) {
-        throw new Error(`JSON error: ${topLevelError}`)
-      }
-      for (const requiredPath of check.requiredPaths ?? []) {
-        if (getPath(json, requiredPath) == null) throw new Error(`Missing JSON path: ${requiredPath}`)
-      }
-      for (const nonEmptyPath of check.nonEmptyPaths ?? []) {
-        if (!isNonEmpty(getPath(json, nonEmptyPath))) throw new Error(`Empty JSON path: ${nonEmptyPath}`)
-      }
-      for (const [expectedPath, expectedValue] of Object.entries(check.expectedValues ?? {})) {
-        const actualValue = getPath(json, expectedPath)
-        if (actualValue !== expectedValue) {
-          throw new Error(`Unexpected JSON value at ${expectedPath}: expected=${JSON.stringify(expectedValue)} actual=${JSON.stringify(actualValue)}`)
-        }
-      }
+      validateJson(check, json, expectedStatus)
     }
 
     return {
@@ -762,6 +776,178 @@ async function runCheck(check: Check): Promise<CheckResult> {
   } finally {
     clearTimeout(timeout)
   }
+}
+
+async function fetchJsonPayload(check: Check,
+  validate?: (payload: unknown) => void): Promise<{ result: CheckResult; payload: unknown }> {
+  const startedAt = performance.now()
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), timeoutMs)
+  let status: number | null = null
+  let bytes = 0
+  try {
+    const response = await fetch(`${baseUrl}${check.path}`, {
+      method: 'GET', cache: 'no-store', redirect: 'follow', signal: controller.signal,
+      headers: { 'user-agent': 'StockBoard production smoke audit' },
+    })
+    status = response.status
+    const body = await response.text()
+    bytes = Buffer.byteLength(body)
+    if (response.status !== 200) throw new Error(`HTTP ${response.status}, expected 200: ${body.slice(0, 240)}`)
+    const payload = JSON.parse(body) as unknown
+    validateJson(check, payload, 200)
+    validate?.(payload)
+    return { payload, result: { name: check.name, path: check.path, ok: true, status,
+      elapsedMs: Math.round(performance.now() - startedAt), bytes, error: null } }
+  } catch (error) {
+    return { payload: null, result: { name: check.name, path: check.path, ok: false, status,
+      elapsedMs: Math.round(performance.now() - startedAt), bytes,
+      error: error instanceof Error ? error.message : String(error) } }
+  } finally { clearTimeout(timeout) }
+}
+
+async function readExpectedJpMarketDate(): Promise<string> {
+  const response = await fetch(`${baseUrl}/api/status/overview`, {
+    cache: 'no-store', signal: AbortSignal.timeout(timeoutMs),
+    headers: { 'user-agent': 'StockBoard production smoke audit' },
+  })
+  if (!response.ok) throw new Error(`Freshness overview returned HTTP ${response.status}`)
+  const payload = await response.json() as unknown
+  const expected = getPath(payload, 'jp.expected')
+  const price = getPath(payload, 'jp.price')
+  if (typeof expected !== 'string' || !expected) throw new Error('JP expected market date is missing')
+  if (price !== expected) throw new Error(`JP price is not current: expected=${expected} actual=${String(price)}`)
+  return expected
+}
+
+const largeHolderStorageErrors = [
+  'certified_snapshot_stale',
+  'certified_snapshot_missing',
+  'certified_snapshot_not_configured',
+  'large_holder_read_model_unavailable',
+]
+
+async function runLargeHolderSmokeChecks(): Promise<CheckResult[]> {
+  const results: CheckResult[] = []
+  let expectedPriceDate = ''
+  let identity: LargeHolderIdentity | null = null
+  let invariant: LargeHolderInvariant | null = null
+  let investorId = 'fixture-unavailable'
+  let ticker = 'NONE'
+  let documentId = 'NONE0'
+
+  try { expectedPriceDate = await readExpectedJpMarketDate() } catch (error) {
+    expectedPriceDate = `unavailable:${error instanceof Error ? error.message : String(error)}`
+  }
+
+  const addJson = async (check: Check, validate?: (payload: unknown) => void) => {
+    const checked = await fetchJsonPayload(check, validate)
+    results.push(checked.result)
+    return checked.payload
+  }
+  const validateIdentity = (payload: unknown) => {
+    if (!identity) throw new Error('Large Holder baseline identity is unavailable')
+    assertLargeHolderIdentity(payload, identity, expectedPriceDate)
+  }
+
+  const overview = await addJson({ name: 'Large Holder API overview',
+    path: '/api/large-holders/overview', kind: 'json',
+    requiredPaths: ['snapshotId', 'snapshotStatus', 'certificationAsOf', 'priceDate',
+      'currentPositionCount', 'investorCount', 'activityCounts', 'quarantines',
+      'publicCurrentValuationReadyCount'] }, (payload) => {
+      invariant = largeHolderInvariant(payload, expectedPriceDate)
+      identity = invariant
+    })
+  if (overview && typeof overview === 'object') {
+    const quarantines = getPath(overview, 'quarantines')
+    if (!Array.isArray(quarantines)
+      || quarantines.length !== getPath(overview, 'quarantinedDocumentCount')) {
+      results[results.length - 1] = { ...results[results.length - 1], ok: false,
+        error: 'Large Holder quarantine metadata is inconsistent' }
+    }
+  }
+
+  const rankings = await addJson({ name: 'Large Holder API rankings',
+    path: '/api/large-holders/rankings?pageSize=1', kind: 'json',
+    requiredPaths: ['rows.0.investorEntityId', 'total', 'snapshotId', 'priceDate'],
+    nonEmptyPaths: ['rows'] }, validateIdentity)
+  const rankingInvestorId = getPath(rankings, 'rows.0.investorEntityId')
+  if (typeof rankingInvestorId === 'string' && rankingInvestorId) investorId = rankingInvestorId
+
+  await addJson({ name: 'Large Holder API activity',
+    path: '/api/large-holders/activity?period=ALL&pageSize=1', kind: 'json',
+    requiredPaths: ['rows.0.documentId', 'rows.0.investorEntityId', 'rows.0.ticker', 'total',
+      'snapshotId', 'priceDate'], nonEmptyPaths: ['rows'] }, validateIdentity)
+
+  const investors = await addJson({ name: 'Large Holder API investors',
+    path: '/api/large-holders/investors?pageSize=1', kind: 'json',
+    requiredPaths: ['rows.0.investorEntityId', 'total', 'snapshotId', 'priceDate'],
+    nonEmptyPaths: ['rows'] }, validateIdentity)
+  const discoveredInvestorId = getPath(investors, 'rows.0.investorEntityId')
+  if (typeof discoveredInvestorId === 'string' && discoveredInvestorId) investorId = discoveredInvestorId
+
+  const investorPath = `/api/large-holders/investors/${encodeURIComponent(investorId)}`
+  const investor = await addJson({ name: 'Large Holder API investor detail', path: investorPath, kind: 'json',
+    requiredPaths: ['identity.investorEntityId', 'positions.0.ticker',
+      'positions.0.documentId', 'snapshotId', 'priceDate'],
+    nonEmptyPaths: ['positions', 'filingTimeline'] }, (payload) => {
+      validateIdentity(payload)
+      if (getPath(payload, 'identity.investorEntityId') !== investorId) {
+        throw new Error('Large Holder investor fixture identity mismatch')
+      }
+  })
+  const discoveredTicker = getPath(investor, 'positions.0.ticker')
+  const discoveredDocumentId = getPath(investor, 'positions.0.documentId')
+  if (typeof discoveredTicker === 'string' && discoveredTicker) ticker = discoveredTicker
+  if (typeof discoveredDocumentId === 'string' && discoveredDocumentId) documentId = discoveredDocumentId
+
+  await addJson({ name: 'Large Holder API stock integration',
+    path: `/api/large-holders/stocks/${encodeURIComponent(ticker)}`, kind: 'json',
+    requiredPaths: ['ticker', 'latestDisclosedLargeHolders', 'snapshotId', 'priceDate'],
+    nonEmptyPaths: ['latestDisclosedLargeHolders'] }, (payload) => {
+      validateIdentity(payload)
+      if (getPath(payload, 'ticker') !== ticker) throw new Error('Large Holder stock fixture mismatch')
+    })
+
+  await addJson({ name: 'Large Holder API filing source',
+    path: `/api/large-holders/filings/${encodeURIComponent(documentId)}`, kind: 'json',
+    requiredPaths: ['filing.documentId', 'evidence.authority', 'evidence.sourceSha256',
+      'snapshotId', 'priceDate'], nonEmptyPaths: ['positions'],
+    expectedValues: { 'evidence.authority': 'EDINET' } }, (payload) => {
+      validateIdentity(payload)
+      if (getPath(payload, 'filing.documentId') !== documentId) {
+        throw new Error('Large Holder filing fixture mismatch')
+      }
+    })
+
+  const pageChecks: Check[] = [
+    { name: 'Large Holder page overview', path: '/large-holders', kind: 'html',
+      requiredText: ['大口投資家 Intelligence'], forbiddenText: largeHolderStorageErrors },
+    { name: 'Large Holder page rankings', path: '/large-holders/rankings', kind: 'html',
+      requiredText: ['大口投資家ランキング'], forbiddenText: largeHolderStorageErrors },
+    { name: 'Large Holder page activity', path: '/large-holders/activity', kind: 'html',
+      requiredText: ['保有変化'], forbiddenText: largeHolderStorageErrors },
+    { name: 'Large Holder page investor detail',
+      path: `/large-holders/investors/${encodeURIComponent(investorId)}`, kind: 'html',
+      requiredText: ['大量保有報告書 · 直近開示ベース'], forbiddenText: largeHolderStorageErrors },
+  ]
+  for (const check of pageChecks) results.push(await runCheck(check))
+
+  try {
+    const final = await fetch(`${baseUrl}/api/large-holders/overview`, {
+      cache: 'no-store', signal: AbortSignal.timeout(timeoutMs),
+      headers: { 'user-agent': 'StockBoard production smoke audit' },
+    })
+    const finalPayload = await final.json() as unknown
+    if (!final.ok) throw new Error(`HTTP ${final.status}: ${JSON.stringify(finalPayload).slice(0, 240)}`)
+    if (!invariant) throw new Error('Large Holder baseline invariant is unavailable')
+    assertLargeHolderInvariant(invariant, finalPayload, expectedPriceDate)
+  } catch (error) {
+    const last = results.length - 1
+    results[last] = { ...results[last], ok: false,
+      error: `Large Holder post-smoke invariance failed: ${error instanceof Error ? error.message : String(error)}` }
+  }
+  return results
 }
 
 async function runSavedEvaluationCheck(): Promise<CheckResult> {
@@ -884,6 +1070,13 @@ async function main(): Promise<void> {
   results.push(savedEvaluationResult)
   console.log(`${(savedEvaluationResult.ok ? 'ok' : 'FAIL').padEnd(4)} ${String(savedEvaluationResult.elapsedMs).padStart(6)}ms ${savedEvaluationResult.name}`)
   if (savedEvaluationResult.error) console.error(`     ${savedEvaluationResult.error}`)
+
+  const largeHolderResults = await runLargeHolderSmokeChecks()
+  for (const result of largeHolderResults) {
+    results.push(result)
+    console.log(`${(result.ok ? 'ok' : 'FAIL').padEnd(4)} ${String(result.elapsedMs).padStart(6)}ms ${result.name}`)
+    if (result.error) console.error(`     ${result.error}`)
+  }
 
   const failed = results.filter((result) => !result.ok)
   const report = {
