@@ -116,7 +116,7 @@ export default function AdminDbPage() {
   const filteredUniverse = universeFilter.trim() ? (universe?.items ?? []) : []
 
   return (
-    <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+    <div className="min-w-0 max-w-full" style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
       <div style={headerRow}>
         <div>
           <h1 style={{ fontFamily: 'var(--font-display)', fontSize: '16px', fontWeight: 700 }}>運用ステータス</h1>
@@ -136,7 +136,7 @@ export default function AdminDbPage() {
       )}
 
       {/* サマリーカード */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px' }}>
+      <div className="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-3">
         <SummaryCard
           label="総レコード数"
           value={stats?.totalRecords?.toLocaleString() ?? '---'}
@@ -159,41 +159,43 @@ export default function AdminDbPage() {
             手動実行ボタンは誤操作防止のため停止しました。J-Quants更新、スナップショット計算、ML更新は定期ジョブまたはCLIから実行してください。
           </div>
 
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '11px' }}>
-            <thead>
-              <tr style={{ background: 'var(--bg-elevated)', borderBottom: '1px solid var(--border-dim)' }}>
-                <th style={headStyle}>#</th>
-                <th style={headStyle}>job</th>
-                <th style={headStyle}>status</th>
-                <th style={headStyleR}>銘柄数</th>
-                <th style={headStyleR}>成功 / 失敗</th>
-                <th style={headStyleR}>行数</th>
-                <th style={headStyle}>開始</th>
-                <th style={headStyle}>所要</th>
-              </tr>
-            </thead>
-            <tbody>
-              {runs.length === 0 && (
-                <tr><td colSpan={8} style={{ ...cellStyle, textAlign: 'center', color: 'var(--text-muted)' }}>履歴なし</td></tr>
-              )}
-              {runs.map(run => (
-                <tr key={run.id} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-                  <td style={{ ...cellStyle, color: 'var(--text-muted)' }}>{run.id}</td>
-                  <td style={cellStyle}>{run.jobType === 'ohlcv_fetch' ? 'OHLCV' : 'Snapshots'}</td>
-                  <td style={cellStyle}>
-                    <StatusBadge status={run.status} />
-                  </td>
-                  <td style={cellStyleR}>{run.totalTickers?.toLocaleString() ?? '-'}</td>
-                  <td style={cellStyleR}>
-                    {run.succeeded ?? '-'} / {run.failed === null ? '-' : run.failed}
-                  </td>
-                  <td style={cellStyleR}>{run.rowsInserted?.toLocaleString() ?? '-'}</td>
-                  <td style={{ ...cellStyle, color: 'var(--text-muted)' }}>{fmtTs(run.startedAt)}</td>
-                  <td style={{ ...cellStyle, color: 'var(--text-muted)' }}>{fmtDuration(run.startedAt, run.finishedAt)}</td>
+          <div className="min-w-0 max-w-full overflow-x-auto">
+            <table style={{ width: '100%', minWidth: '560px', borderCollapse: 'collapse', fontSize: '11px' }}>
+              <thead>
+                <tr style={{ background: 'var(--bg-elevated)', borderBottom: '1px solid var(--border-dim)' }}>
+                  <th style={headStyle}>#</th>
+                  <th style={headStyle}>job</th>
+                  <th style={headStyle}>status</th>
+                  <th style={headStyleR}>銘柄数</th>
+                  <th style={headStyleR}>成功 / 失敗</th>
+                  <th style={headStyleR}>行数</th>
+                  <th style={headStyle}>開始</th>
+                  <th style={headStyle}>所要</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {runs.length === 0 && (
+                  <tr><td colSpan={8} style={{ ...cellStyle, textAlign: 'center', color: 'var(--text-muted)' }}>履歴なし</td></tr>
+                )}
+                {runs.map(run => (
+                  <tr key={run.id} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                    <td style={{ ...cellStyle, color: 'var(--text-muted)' }}>{run.id}</td>
+                    <td style={cellStyle}>{run.jobType === 'ohlcv_fetch' ? 'OHLCV' : 'Snapshots'}</td>
+                    <td style={cellStyle}>
+                      <StatusBadge status={run.status} />
+                    </td>
+                    <td style={cellStyleR}>{run.totalTickers?.toLocaleString() ?? '-'}</td>
+                    <td style={cellStyleR}>
+                      {run.succeeded ?? '-'} / {run.failed === null ? '-' : run.failed}
+                    </td>
+                    <td style={cellStyleR}>{run.rowsInserted?.toLocaleString() ?? '-'}</td>
+                    <td style={{ ...cellStyle, color: 'var(--text-muted)' }}>{fmtTs(run.startedAt)}</td>
+                    <td style={{ ...cellStyle, color: 'var(--text-muted)' }}>{fmtDuration(run.startedAt, run.finishedAt)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       </section>
 
@@ -219,7 +221,8 @@ export default function AdminDbPage() {
             {universeLoading && (
               <div style={{ marginTop: '6px', fontSize: '10px', color: 'var(--text-muted)' }}>検索中...</div>
             )}
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '11px', marginTop: '8px' }}>
+            <div className="min-w-0 max-w-full overflow-x-auto">
+              <table style={{ width: '100%', minWidth: '420px', borderCollapse: 'collapse', fontSize: '11px', marginTop: '8px' }}>
               <thead>
                 <tr style={{ background: 'var(--bg-elevated)', borderBottom: '1px solid var(--border-dim)' }}>
                   <th style={headStyle}>ticker</th>
@@ -250,7 +253,8 @@ export default function AdminDbPage() {
                   </tr>
                 ))}
               </tbody>
-            </table>
+              </table>
+            </div>
             {universeFilter && !universeLoading && (universe?.matched ?? 0) > filteredUniverse.length && (
               <div style={{ marginTop: '6px', fontSize: '10px', color: 'var(--text-muted)', textAlign: 'right' }}>
                 該当 {(universe?.matched ?? 0).toLocaleString()} 件のうち先頭 {filteredUniverse.length.toLocaleString()} 件
@@ -268,7 +272,8 @@ export default function AdminDbPage() {
             大規模テーブルはANALYZE統計の概算値を表示
           </span>
         </div>
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+        <div className="min-w-0 max-w-full overflow-x-auto">
+          <table style={{ width: '100%', minWidth: '460px', borderCollapse: 'collapse', fontSize: '12px' }}>
           <thead>
             <tr style={{ background: 'var(--bg-elevated)', borderBottom: '1px solid var(--border-dim)' }}>
               <th style={headStyle}>テーブル名</th>
@@ -291,12 +296,13 @@ export default function AdminDbPage() {
               <tr><td colSpan={3} style={{ ...cellStyle, textAlign: 'center', color: 'var(--text-muted)' }}>データなし</td></tr>
             )}
           </tbody>
-        </table>
+          </table>
+        </div>
       </div>
 
       {/* 補足 */}
       <div className="card" style={{ padding: '12px', fontSize: '11px', color: 'var(--text-muted)', lineHeight: 1.6 }}>
-        <p style={{ margin: 0 }}>
+        <p style={{ margin: 0, overflowWrap: 'anywhere' }}>
           📁 DB パス: <code>{stats?.dbPath ?? '---'}</code>
         </p>
       </div>
@@ -329,7 +335,7 @@ function StatusBadge({ status }: { status: string }) {
 
 function SummaryCard({ label, value, unit }: { label: string; value: string; unit: string }) {
   return (
-    <div className="card" style={{ padding: '12px' }}>
+    <div className="card min-w-0" style={{ padding: '12px' }}>
       <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '4px' }}>{label}</div>
       <div style={{ fontFamily: 'var(--font-mono)', fontSize: '20px', fontWeight: 600 }}>
         {value} <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{unit}</span>

@@ -192,7 +192,7 @@ export function CustomFormulaChart({ evaluation, loading, chartType = 'line' }: 
   }
 
   return (
-    <div className="space-y-3">
+    <div className="min-w-0 max-w-full space-y-3">
       <div className="grid gap-2 sm:grid-cols-4">
         {summary.map((item) => (
           <div key={item.label} className="rounded-[4px] border border-[var(--color-border-default)] bg-white px-3 py-2">
@@ -211,9 +211,9 @@ export function CustomFormulaChart({ evaluation, loading, chartType = 'line' }: 
           </div>
         ))}
       </div>
-      <div ref={containerRef} className="h-[430px] w-full rounded-[4px] border border-[var(--color-border-default)] bg-white" />
+      <div ref={containerRef} className="h-[430px] w-full min-w-0 max-w-full rounded-[4px] border border-[var(--color-border-default)] bg-white" />
       <div className="grid gap-2 md:grid-cols-3">
-        <div className="rounded-[4px] border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-3 py-2 text-[12px] font-semibold text-[var(--color-text-secondary)]">
+        <div className="min-w-0 [overflow-wrap:anywhere] rounded-[4px] border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-3 py-2 text-[12px] font-semibold text-[var(--color-text-secondary)]">
           <span className="font-black text-[var(--color-brand-900)]">式</span> {evaluation.normalizedFormula}
         </div>
         <div className="rounded-[4px] border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-3 py-2 text-[12px] font-semibold text-[var(--color-text-secondary)]">
