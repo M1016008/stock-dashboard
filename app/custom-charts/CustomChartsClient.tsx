@@ -647,8 +647,8 @@ export function CustomChartsClient() {
   })
 
   return (
-    <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
-      <div className="space-y-4">
+    <div className="grid min-w-0 max-w-full gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+      <div className="min-w-0 space-y-4">
         <Card size="lg">
           <CardHeader
             title="数式"
@@ -662,13 +662,13 @@ export function CustomChartsClient() {
                   key={template.id}
                   type="button"
                   onClick={() => applyTemplate(template)}
-                  className="group flex min-h-[72px] items-start gap-3 rounded-[4px] border border-[var(--color-border-default)] bg-white px-3 py-3 text-left transition-colors hover:border-[var(--color-brand-700)] hover:bg-[var(--color-brand-50)]"
+                  className="group flex min-h-[72px] min-w-0 items-start gap-3 rounded-[4px] border border-[var(--color-border-default)] bg-white px-3 py-3 text-left transition-colors hover:border-[var(--color-brand-700)] hover:bg-[var(--color-brand-50)]"
                 >
                   <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-[3px] border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] text-[var(--color-brand-800)] group-hover:border-[var(--color-brand-700)] group-hover:bg-white">
                     <Sparkles size={15} strokeWidth={2.4} />
                   </span>
                   <span className="min-w-0 flex-1">
-                    <span className="flex items-center gap-2">
+                    <span className="flex min-w-0 items-center gap-2">
                       <span className="truncate text-[13px] font-black text-[var(--color-brand-900)]">{template.label}</span>
                       <span className="shrink-0 rounded-[3px] bg-[var(--color-market-red)] px-1.5 py-0.5 text-[10px] font-black text-white">{template.badge}</span>
                     </span>
@@ -679,7 +679,7 @@ export function CustomChartsClient() {
             </div>
 
             <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_260px]">
-              <label className="block">
+              <label className="block min-w-0">
                 <span className="mb-1 block text-[11px] font-black text-[var(--color-text-tertiary)]">チャート名</span>
                 <input
                   value={name}
@@ -687,7 +687,7 @@ export function CustomChartsClient() {
                   className="h-10 w-full rounded-[4px] border border-[var(--color-border-default)] bg-white px-3 text-[13px] font-bold text-[var(--color-text-primary)] outline-none focus:border-[var(--color-brand-700)]"
                 />
               </label>
-              <label className="block">
+              <label className="block min-w-0">
                 <span className="mb-1 block text-[11px] font-black text-[var(--color-text-tertiary)]">銘柄候補</span>
                 <div className="relative">
                   <Search size={15} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--color-text-tertiary)]" />
@@ -731,7 +731,7 @@ export function CustomChartsClient() {
                 value={formula}
                 onChange={(event) => setFormula(event.target.value)}
                 rows={3}
-                className="w-full rounded-[4px] border border-[var(--color-border-default)] bg-white px-3 py-2 font-mono text-[14px] font-bold text-[var(--color-brand-900)] outline-none focus:border-[var(--color-brand-700)]"
+                className="w-full min-w-0 max-w-full rounded-[4px] border border-[var(--color-border-default)] bg-white px-3 py-2 font-mono text-[14px] font-bold text-[var(--color-brand-900)] outline-none focus:border-[var(--color-brand-700)]"
               />
             </label>
 
@@ -922,7 +922,7 @@ export function CustomChartsClient() {
         </Card>
       </div>
 
-      <aside className="space-y-4">
+      <aside className="min-w-0 space-y-4">
         <Card size="sm" className="xl:sticky xl:top-[132px]">
           <CardHeader title="保存" hint={activeChart ? `${activeChart.source}:${activeChart.id}` : '未選択'} />
           <div className="grid gap-2">

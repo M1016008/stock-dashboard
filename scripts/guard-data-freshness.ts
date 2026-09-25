@@ -110,6 +110,11 @@ const legacyWeeklyLabels = [
   'com.stockboard.ml-weekly-governance',
   'com.stockboard.us-ml-weekly',
 ] as const
+const nonWriterOwnershipJobTypes = [
+  // Long-lived singleton ownership for the read-mostly historical worker.
+  // It does not participate in the JP/US SQLite writer lock contract.
+  'trigger_historical_worker',
+] as const
 
 function disabledLaunchdLabels(): Set<string> {
   const result = spawnSync('launchctl', ['print-disabled', `gui/${uid}`], {
@@ -684,7 +689,9 @@ async function maybeTrigger(
   }
   const ignoredWriterJobTypes: readonly string[] = service.ignoredWriterJobTypes
   const blockingLocks = activeLocks.filter(
-    (lock) => !ignoredWriterJobTypes.includes(lock.jobType),
+    (lock) => !nonWriterOwnershipJobTypes.includes(
+      lock.jobType as (typeof nonWriterOwnershipJobTypes)[number],
+    ) && !ignoredWriterJobTypes.includes(lock.jobType),
   )
   if (service.requiresIdleWriter && blockingLocks.length > 0) {
     return {

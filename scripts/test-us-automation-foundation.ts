@@ -256,6 +256,13 @@ const analyticsValidation = read('scripts/validate-us-analytics-db.ts')
 assert.match(analyticsValidation, /US_ANALYTICS_MIN_LATEST_COVERAGE_PCT/)
 assert.match(analyticsValidation, /expectedLatestUsTradingDate/)
 assert.match(analyticsValidation, /latestSnapshotCoveragePct/)
+assert.match(analyticsValidation, /snapshotEligibleUniverse/)
+assert.match(analyticsValidation, /latestSnapshotEligibleTickers/)
+assert.match(analyticsValidation, /LIMIT 1 OFFSET 4/)
+assert.match(
+  analyticsValidation,
+  /100 \* latestSnapshotEligibleTickers \/ snapshotEligibleUniverse/,
+)
 assert.match(analyticsValidation, /US_ADJUSTED_PRICE_BASIS/)
 assert.match(analyticsValidation, /US_ANALYTICS_REQUIRE_DERIVED_BASIS/)
 assert.match(analyticsValidation, /US_ANALYTICS_DEEP_COUNTS/)
@@ -406,6 +413,11 @@ assert.match(usAnalyticsBuilder, /US_ANALYTICS_NATIVE_BUSY_RETRIES/)
 assert.match(usAnalyticsBuilder, /US analytics copy lock retry/)
 assert.match(usAnalyticsBuilder, /waitForSharedSourceWriter/)
 assert.match(usAnalyticsBuilder, /US analytics copy yielding to shared source writer/)
+assert.match(
+  usAnalyticsBuilder,
+  /job_type <> 'trigger_historical_worker'/,
+  'US analytics copy must not treat the long-lived historical worker ownership lock as a source writer',
+)
 assert.match(usAnalyticsBuilder, /job_type <> 'us_adjusted_foundation'/)
 assert.match(usAnalyticsBuilder, /US_ANALYTICS_SOURCE_WRITER_JOB_TO_IGNORE/)
 assert.match(usAnalyticsBuilder, /\.timeout 5000/)
@@ -456,6 +468,12 @@ assert.match(jpLatestUpdate, /jobType !== 'us_adjusted_foundation'/)
 assert.match(jpLatestUpdate, /acquireDailyUpdateLock/)
 assert.match(jpLatestUpdate, /UPDATE_LOCK_WAIT_SECONDS/)
 assert.match(jpLatestUpdate, /process\.exitCode = 75/)
+assert.match(jpLatestUpdate, /UPDATE_LATEST_OPTIONAL_WINDOW_END_HOUR \?\? '6'/)
+assert.match(
+  jpLatestUpdate,
+  /runStartedJstHour < optionalAfterHour[\s\S]*?&& !inOvernightOptionalWindow/,
+  'JP optional refresh must treat the post-close window as spanning midnight',
+)
 
 const jpMlLearning = read('scripts/run-ml-learning.ts')
 assert.match(jpMlLearning, /acquireJpStockboardUpdateLock/)
@@ -475,6 +493,11 @@ assert.match(
   /label: 'com\.stockboard\.us-update-latest',[\s\S]*?cooldownSeconds: 30 \* 60/,
 )
 assert.match(dataFreshnessGuard, /const blockingLocks = activeLocks\.filter/)
+assert.match(dataFreshnessGuard, /nonWriterOwnershipJobTypes = \[[\s\S]*?'trigger_historical_worker'/)
+assert.match(
+  dataFreshnessGuard,
+  /!nonWriterOwnershipJobTypes\.includes\([\s\S]*?&& !ignoredWriterJobTypes\.includes/,
+)
 assert.match(dataFreshnessGuard, /cleanupOrphanedUpdateLocks\(EXCLUSIVE_UPDATE_JOB_TYPES\)/)
 assert.match(dataFreshnessGuard, /jpSupplementalIgnoredWriters/)
 assert.match(dataFreshnessGuard, /heavy_us_ml_process/)
@@ -558,6 +581,14 @@ const usHexRoute = read('app/api/us/hex/route.ts')
 assert.match(usHexRoute, /FROM market_universe u INDEXED BY market_universe_market_active_idx/)
 assert.doesNotMatch(usHexRoute, /asset_type, 'Stock'\) IN \('Stock', 'ETF'\)/)
 assert.doesNotMatch(usHexRoute, /COALESCE\(cur\.adj_close, cur\.close\) >= 0\.1/)
+assert.match(usHexRoute, /hitResponse\?: SerializedJson/)
+assert.match(usHexRoute, /cached\.hitResponse \?\?= serializeJson/)
+assert.match(usHexRoute, /serializedJsonResponse\(request, cached\.hitResponse\)/)
+const usHexDatesRoute = read('app/api/us/hex/available-dates/route.ts')
+assert.match(usHexDatesRoute, /WITH RECURSIVE recent_dates\(date, position\)/)
+assert.match(usHexDatesRoute, /snapshot\.date < recent_dates\.date/)
+assert.match(usHexDatesRoute, /const countWindow = Math\.min\(limit, 500\)/)
+assert.doesNotMatch(usHexDatesRoute, /GROUP BY date/)
 const usSnapshotBuilder = read('scripts/build-us-snapshots.ts')
 assert.match(usSnapshotBuilder, /usInvestableSymbolSql\('u\.ticker'\)/)
 assert.match(usSnapshotBuilder, /US snapshots progress/)

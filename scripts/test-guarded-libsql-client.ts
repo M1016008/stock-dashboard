@@ -2,7 +2,8 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { readServingCache } from '@/lib/api/serving-cache'
+import { readAnalogSequenceIndexMeta } from '@/lib/db/analog-sequence-index'
+import { readServingCache, writeServingCache } from '@/lib/api/serving-cache'
 import { openExistingGuardedClient } from '@/lib/storage/guarded-libsql-client'
 
 async function main(): Promise<void> {
@@ -15,6 +16,26 @@ async function main(): Promise<void> {
     const result = await client.execute('SELECT value FROM fixture')
     assert.equal(Number(result.rows[0]?.value), 7)
     client.close()
+
+    const cachePath = path.join(directory, 'rebuildable', 'serving-cache.db')
+    fs.mkdirSync(path.dirname(cachePath), { recursive: true })
+    process.env.SERVING_CACHE_DB_PATH = cachePath
+    assert.equal(await readServingCache('storage-guard-fixture', 'missing', 1000), null)
+    assert.equal(fs.existsSync(cachePath), false, 'a read miss must not create the rebuildable cache')
+    await writeServingCache('storage-guard-fixture', 'created', { ok: true }, 60_000)
+    assert.equal(fs.existsSync(cachePath), true, 'the write path may rebuild the optional cache')
+    assert.deepEqual((await readServingCache<{ ok: boolean }>('storage-guard-fixture', 'created', 60_000))?.payload, { ok: true })
+
+    const invalidCachePath = path.join(directory, 'invalid-serving-cache.db')
+    fs.writeFileSync(invalidCachePath, 'not a sqlite database')
+    process.env.SERVING_CACHE_DB_PATH = invalidCachePath
+    assert.equal(await readServingCache('storage-guard-fixture', 'invalid', 1000), null,
+      'cache-local corruption must degrade to a miss')
+
+    const missingAnalogPath = path.join(directory, 'missing-analog-sequence.db')
+    process.env.ANALOG_JP_DB_PATH = missingAnalogPath
+    assert.equal(await readAnalogSequenceIndexMeta('JP'), null)
+    assert.equal(fs.existsSync(missingAnalogPath), false, 'an optional analog read must not create its artifact')
 
     const absentMount = `/Volumes/stockboard-guarded-client-missing-${process.pid}`
     process.env.STOCK_DATA_MOUNT_PATH = absentMount

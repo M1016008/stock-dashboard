@@ -6,6 +6,11 @@ const root = process.cwd()
 const layout = fs.readFileSync(path.join(root, 'app/layout.tsx'), 'utf8')
 const header = fs.readFileSync(path.join(root, 'components/layout/Header.tsx'), 'utf8')
 const css = fs.readFileSync(path.join(root, 'app/globals.css'), 'utf8')
+const adminDb = fs.readFileSync(path.join(root, 'app/admin/db/page.tsx'), 'utf8')
+const customChartsPage = fs.readFileSync(path.join(root, 'app/custom-charts/page.tsx'), 'utf8')
+const customChartsClient = fs.readFileSync(path.join(root, 'app/custom-charts/CustomChartsClient.tsx'), 'utf8')
+const customFormulaChart = fs.readFileSync(path.join(root, 'components/charts/CustomFormulaChart.tsx'), 'utf8')
+const dashboard = fs.readFileSync(path.join(root, 'app/page.tsx'), 'utf8')
 
 assert.match(
   layout,
@@ -83,6 +88,36 @@ assert.doesNotMatch(
   css,
   /html\s*,\s*body\s*\{\s*height:\s*100%;\s*\}/,
   'A fixed body height constrains sticky elements on long pages.',
+)
+
+assert.match(
+  adminDb,
+  /className="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-3"/,
+  'Admin DB summary cards must stack before the small breakpoint.',
+)
+assert.ok(
+  (adminDb.match(/className="min-w-0 max-w-full overflow-x-auto"/g) ?? []).length >= 3,
+  'Admin DB data tables must scroll inside their own wrappers instead of widening the document.',
+)
+assert.match(
+  customChartsPage,
+  /className="w-full min-w-0 max-w-full space-y-4"/,
+  'The custom charts page must permit its content to shrink within the page shell.',
+)
+assert.match(
+  customChartsClient,
+  /className="grid min-w-0 max-w-full gap-4 xl:grid-cols-\[minmax\(0,1fr\)_360px\]"/,
+  'The custom charts workspace must not inherit the min-content width of its chart controls.',
+)
+assert.match(
+  customFormulaChart,
+  /className="h-\[430px\] w-full min-w-0 max-w-full/,
+  'The formula chart container must resize within the available viewport width.',
+)
+assert.match(
+  dashboard,
+  /<KabutanMaterialNews compact \/>/,
+  'The dashboard must use the compact material-news view instead of serializing full article tables.',
 )
 
 console.log('layout shell regression tests passed')

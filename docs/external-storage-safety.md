@@ -22,6 +22,10 @@ The guard checks the exact mount point, UUID, resolved DB path, device ID, writa
 
 A fatal incident also creates an internal-volume `FAILED_SAFE` latch. A launchd restart cannot reopen SQLite while that latch exists. `npm run storage:recover` requires an explicit incident ID and classification, zero DB handles, 21 identity observations over 10 minutes, matching UUID and volume identity, sufficient space, and no new storage errors in macOS logs. It archives the latch and records the resolution on the internal volume; there is no automatic or `--force` bypass.
 
+## Optional read artifacts
+
+An optional read artifact must certify the configured mount, volume UUID, and device identity before checking the artifact itself. Once that volume identity is healthy, a missing optional file is a feature-local unavailable state and must not create the shared `FAILED_SAFE` latch. Mount loss, UUID or device mismatch, and confirmed `EIO`/`SQLITE_IOERR` remain volume-fatal. Required primary databases continue to require the database file, writable volume, and free-space threshold.
+
 ## Production writer inventory
 
 All production-reachable local SQLite writers are covered. `npm run storage:guard-test` enforces that no direct local libSQL/Python SQLite writer bypasses the guarded factories.

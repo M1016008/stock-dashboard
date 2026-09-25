@@ -94,6 +94,7 @@ type RawRow = {
 
 type CacheValue = {
   expiresAt: number
+  hitResponse?: SerializedJson
   payload: {
     success: true
     data: UsHexRow[]
@@ -132,6 +133,11 @@ const globalForUsHex = globalThis as typeof globalThis & {
 const cache = globalForUsHex.usHexCache ?? new Map<string, CacheValue>()
 globalForUsHex.usHexCache = cache
 
+type SerializedJson = {
+  plain: string
+  gzip: Uint8Array<ArrayBuffer> | null
+}
+
 function numeric(value: unknown): number | null {
   if (value == null || value === '') return null
   const parsed = typeof value === 'number' ? value : Number(value)
@@ -143,15 +149,26 @@ function percentChange(current: number | null, previous: number | null): number 
   return 100 * (current - previous) / previous
 }
 
-function jsonResponse(request: NextRequest, payload: unknown): NextResponse {
-  const json = JSON.stringify(payload)
+function serializeJson(payload: unknown): SerializedJson {
+  const plain = JSON.stringify(payload)
+  return {
+    plain,
+    gzip: plain.length > 1024 ? Uint8Array.from(gzipSync(plain)) : null,
+  }
+}
+
+function serializedJsonResponse(request: NextRequest, serialized: SerializedJson): NextResponse {
   const headers = new Headers({ 'content-type': 'application/json; charset=utf-8' })
-  if (json.length > 1024 && /\bgzip\b/i.test(request.headers.get('accept-encoding') ?? '')) {
+  if (serialized.gzip && /\bgzip\b/i.test(request.headers.get('accept-encoding') ?? '')) {
     headers.set('content-encoding', 'gzip')
     headers.set('vary', 'Accept-Encoding')
-    return new NextResponse(gzipSync(json), { headers })
+    return new NextResponse(serialized.gzip, { headers })
   }
-  return new NextResponse(json, { headers })
+  return new NextResponse(serialized.plain, { headers })
+}
+
+function jsonResponse(request: NextRequest, payload: unknown): NextResponse {
+  return serializedJsonResponse(request, serializeJson(payload))
 }
 
 async function resolveDate(requested: string | null): Promise<string | null> {
@@ -220,7 +237,8 @@ export async function GET(request: NextRequest) {
     const cacheKey = `all-investable-v2:${date}:${timeframe}`
     const cached = cache.get(cacheKey)
     if (cached && cached.expiresAt > Date.now()) {
-      return jsonResponse(request, { ...cached.payload, cache: 'hit' })
+      cached.hitResponse ??= serializeJson({ ...cached.payload, cache: 'hit' })
+      return serializedJsonResponse(request, cached.hitResponse)
     }
 
     const [rows, physicalMomentum, universe] = await Promise.all([
