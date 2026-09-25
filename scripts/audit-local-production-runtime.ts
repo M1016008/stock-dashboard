@@ -2,6 +2,7 @@ import { execFileSync, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { launchAgentStorageIdentityKeys } from './lib/launchagent-storage-environment'
 
 export const productionLaunchAgentLabels = [
   'com.stockboard.web',
@@ -37,6 +38,7 @@ type RuntimeRow = {
   head: string | null
   buildId: string | null
   environmentKeys: string[]
+  missingStorageEnvironmentKeys: string[]
 }
 
 function commandText(command: string, args: string[], cwd?: string): string | null {
@@ -63,6 +65,7 @@ function runtimeRow(label: string): RuntimeRow {
     return {
       label, pid: null, state: 'missing', loaded: false, configuredCwd: null,
       actualCwd: null, head: null, buildId: null, environmentKeys: [],
+      missingStorageEnvironmentKeys: [...launchAgentStorageIdentityKeys],
     }
   }
   const plist = readPlist(plistPath)
@@ -72,6 +75,7 @@ function runtimeRow(label: string): RuntimeRow {
   const stateMatch = launch?.match(/\bstate = ([^\n]+)/)
   const pid = pidMatch ? Number(pidMatch[1]) : null
   const buildPath = configuredCwd ? path.join(configuredCwd, '.next-live', 'BUILD_ID') : null
+  const environmentKeys = Object.keys(plist.EnvironmentVariables ?? {}).sort()
   return {
     label,
     pid,
@@ -81,7 +85,9 @@ function runtimeRow(label: string): RuntimeRow {
     actualCwd: processCwd(pid),
     head: configuredCwd ? commandText('/usr/bin/git', ['rev-parse', 'HEAD'], configuredCwd) : null,
     buildId: buildPath && fs.existsSync(buildPath) ? fs.readFileSync(buildPath, 'utf8').trim() : null,
-    environmentKeys: Object.keys(plist.EnvironmentVariables ?? {}).sort(),
+    environmentKeys,
+    missingStorageEnvironmentKeys: launchAgentStorageIdentityKeys
+      .filter((key) => !environmentKeys.includes(key)),
   }
 }
 
@@ -98,6 +104,9 @@ console.table(rows.map((row) => ({
   actualCwd: row.actualCwd ?? '-',
   head: row.head?.slice(0, 12) ?? '-',
   build: row.buildId ?? '-',
+  storageEnv: row.missingStorageEnvironmentKeys.length === 0
+    ? 'PASS'
+    : `missing:${row.missingStorageEnvironmentKeys.length}`,
 })))
 console.log(JSON.stringify({ expectedWorktree, expectedHead, rows }))
 
@@ -105,7 +114,8 @@ if (requireCurrent) {
   const mismatches = rows.filter((row) => !row.loaded
     || row.configuredCwd !== expectedWorktree
     || row.head !== expectedHead
-    || (row.actualCwd !== null && row.actualCwd !== expectedWorktree))
+    || (row.actualCwd !== null && row.actualCwd !== expectedWorktree)
+    || row.missingStorageEnvironmentKeys.length > 0)
   if (mismatches.length > 0) {
     throw new Error(`production_runtime_version_mismatch:${mismatches.map((row) => row.label).join(',')}`)
   }

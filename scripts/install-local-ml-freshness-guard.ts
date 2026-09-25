@@ -7,6 +7,7 @@ import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { launchAgentStorageEnvironmentXml } from './lib/launchagent-storage-environment'
 
 const label = 'com.stockboard.ml-freshness-guard'
 const cwd = process.cwd()
@@ -118,6 +119,7 @@ const plist = `<?xml version="1.0" encoding="UTF-8"?>
   <string>${label}</string>
   <key>WorkingDirectory</key>
   <string>${xmlEscape(cwd)}</string>
+${launchAgentStorageEnvironmentXml('  ')}
   <key>ProgramArguments</key>
   <array>
     <string>/bin/zsh</string>
