@@ -24,7 +24,7 @@
     "test:large-holder-production-smoke": "tsx scripts/test-large-holder-production-smoke.ts",
     "test:env-file-non-execution": "tsx scripts/test-env-file-non-execution.ts",
     "large-holders:auto-install": "tsx scripts/install-local-large-holder-update.ts",
-    "build": "next build",
+    "build": "next build --webpack",
     "test:timeframes": "tsx scripts/test-timeframes.ts",
     "test:ma25m-monitor": "tsx scripts/test-ma25m-monitor.ts",
     "test:monthly-ma-monitor": "tsx scripts/test-monthly-ma-monitor.ts",
