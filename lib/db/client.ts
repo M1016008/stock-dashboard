@@ -94,6 +94,9 @@ function guardedTransaction<T extends object>(transaction: T, guard: ExternalSto
       if (typeof member !== 'function') return member
       return (...args: unknown[]) => {
         if (property !== 'close') guard?.assertWritable()
+        if (property === 'execute' || property === 'batch')
+          (globalThis as { __phase16dQaSqlQuery?: (count?: number) => void })
+            .__phase16dQaSqlQuery?.(property === 'batch' && Array.isArray(args[0]) ? args[0].length : 1)
         try { return guardedResult(Reflect.apply(member, target, args), guard) }
         catch (error) {
           if (guard && isStorageIoError(error)) guard.classify(error)
@@ -117,6 +120,9 @@ export const client: Client = new Proxy({ __libsqlProxy: true } as unknown as Cl
     return (...args: unknown[]) => {
       const guard = storageGuard()
       guard?.assertWritable()
+      if (property === 'execute' || property === 'batch')
+        (globalThis as { __phase16dQaSqlQuery?: (count?: number) => void })
+          .__phase16dQaSqlQuery?.(property === 'batch' && Array.isArray(args[0]) ? args[0].length : 1)
       try {
         const result = guardedResult(Reflect.apply(member, actual, args), guard)
         if (property === 'transaction') {
@@ -133,6 +139,15 @@ export const client: Client = new Proxy({ __libsqlProxy: true } as unknown as Cl
 
 export const db = drizzle(client, { schema })
 export const isCloud = cfg.isCloud
+
+export async function closeLocalClientBeforeExternalWriter(): Promise<void> {
+  if (cfg.isCloud) return
+  if (globalForDb.sqlitePragmasReady) await globalForDb.sqlitePragmasReady
+  globalForDb.libsql?.close()
+  delete globalForDb.libsql
+  delete globalForDb.sqlitePragmasReady
+  delete globalForDb.schemaReady
+}
 
 function boundedIntegerEnv(name: string, fallback: number, min: number, max: number): number {
   const value = Number(process.env[name])

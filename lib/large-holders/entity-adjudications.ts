@@ -11,8 +11,12 @@ export const OZAKI_ATSUSHI_SUCCESSION = {
   priorFilings: {
     S100YI0J: { serial: 16, member: 'FilerLargeVolumeHolder5Member',
       xbrlSha256: 'd5f86c5ac5ef9c6d150fb6a36211a52c3eaa5d02bb80ffeb46d8c872853ec302' },
+    S100Z2FB: { serial: 16, member: 'FilerLargeVolumeHolder5Member',
+      xbrlSha256: '8ddccb150d05e9c244cdd55a331c637cbd75fb17c528a70607bec77d614afc95' },
     S100YQZ0: { serial: 17, member: 'FilerLargeVolumeHolder4Member',
       xbrlSha256: '4fd0d3ce575b1440283bdf11a7038495524de9f9fbae1a50058cf278c881f868' },
+    S100Z2FD: { serial: 17, member: 'FilerLargeVolumeHolder4Member',
+      xbrlSha256: '13ffec57609b4cd4c437847df31769490be2ee9fb564e91958cdfcbfec4db831' },
   },
   currentFiling: 'S100YX61',
 } as const

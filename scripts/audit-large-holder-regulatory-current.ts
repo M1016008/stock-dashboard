@@ -18,12 +18,15 @@ import { downloadEdinetPublicArchiveBytes, downloadEdinetPublicXbrl,
   type EdinetDocumentIndexRow } from '@/lib/server/edinet-api'
 import { classifyFromFiling, classForCategory, type InvestorCategory } from '@/lib/large-holders/classification'
 import { currentPositionEntityId } from '@/lib/large-holders/entity-adjudications'
+import { guardForDatabase, requiresExternalStorageGuard } from '@/lib/storage/external-storage-guard'
+import { blockedTickerSet, readQuarantineScopes } from '@/lib/server/large-holders/quarantine-scope'
 import { archiveOfficialRaw, decisionHash, derivedFact, sha256, verifyArchivedLineage,
   type RawEvidence } from '@/lib/large-holders/evidence-provenance'
 
 type Row = Record<string, string | number | null>
 const path = process.env.STOCKBOARD_DB_PATH
 if (!path) throw new Error('STOCKBOARD_DB_PATH required')
+if (requiresExternalStorageGuard(path)) guardForDatabase(path).assertWritable(true)
 const started = Date.now()
 const { DatabaseSync } = createRequire(`${process.cwd()}/package.json`)('node:sqlite') as {
   DatabaseSync: new (filename: string, options: { readOnly: boolean }) => {
@@ -41,6 +44,7 @@ const nullable = (value: unknown) => value == null ? null : String(value)
 const num = (value: unknown) => value == null ? null : Number(value)
 const hash = (s: string) => createHash('sha256').update(s).digest('hex')
 const phase16a8 = process.argv.includes('--phase-16a8')
+const operational = process.argv.includes('--operational')
 const archiveRoot = process.env.LARGE_HOLDER_EVIDENCE_DIR
   ?? join(homedir(), 'Library', 'Application Support', 'StockBoard', 'large-holder-evidence', 'phase-16a8')
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -52,6 +56,7 @@ const asOf = process.argv.find((arg) => arg.startsWith('--as-of='))?.slice(8)
 if (!/^\d{4}-\d{2}-\d{2}$/.test(asOf)) throw new Error('Invalid as-of')
 const certificationDate = process.argv.find((arg) => arg.startsWith('--certified-on='))?.slice(15)
   ?? new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Tokyo' })
+const blockedTickers = blockedTickerSet(readQuarantineScopes(db as never, certificationDate))
 const marketDate = str(one('SELECT MAX(date) AS d FROM ohlcv_daily')?.d)
 const rows = all(`SELECT p.*,f.issuer_edinet_code,f.issuer_security_code,f.issuer_name,
   f.submitted_at,f.obligation_date AS filing_obligation_date,f.raw_index_json,
@@ -59,7 +64,8 @@ const rows = all(`SELECT p.*,f.issuer_edinet_code,f.issuer_security_code,f.issue
   JOIN large_holder_filings f USING(document_id)
   JOIN large_holder_source_documents s USING(document_id)
   WHERE p.market_price_status IN ('FULL_DIRECT','PARTIAL_DIRECT') ORDER BY p.document_id,p.holder_key`)
-if (rows.length !== 233) throw new Error(`Research population changed: ${rows.length}`)
+if (!operational && rows.length !== 233) throw new Error(`Research population changed: ${rows.length}`)
+if (operational && rows.length < 20) throw new Error('Operational research population unexpectedly small')
 const revisions = resolveRevisionChains(all(`SELECT f.document_id,f.filing_type,f.submitted_at,
   f.obligation_date,f.corrected_document_id,f.previous_filing_id,f.issuer_edinet_code,
   f.issuer_security_code,f.withdrawn_at,f.status,f.report_serial_number,f.submission_count,
@@ -78,7 +84,7 @@ const positions = all(`SELECT p.document_id,p.holder_key,p.ticker,p.entity_id,p.
   f.filer_edinet_code,f.report_serial_number,s.xbrl_sha256
   FROM large_holder_positions p JOIN large_holder_filings f USING(document_id)
   LEFT JOIN large_holder_source_documents s USING(document_id)`)
-  .filter((row) => effective.has(str(row.document_id)))
+  .filter((row) => effective.has(str(row.document_id)) && !blockedTickers.has(str(row.ticker)))
 positions.sort((a, b) => str(b.obligation_date ?? b.submitted_at).localeCompare(str(a.obligation_date ?? a.submitted_at))
   || str(b.submitted_at).localeCompare(str(a.submitted_at))
   || str(b.document_id).localeCompare(str(a.document_id)))
@@ -149,10 +155,24 @@ async function officialRows(url: string): Promise<{ rows: Record<string, unknown
   do {
     const query = new URLSearchParams({ date: asOf })
     if (page) query.set('pagination_key', page)
-    const response = await fetch(`${url}?${query}`, { headers: { 'x-api-key': key },
-      signal: AbortSignal.timeout(30_000) })
-    if (!response.ok) throw new Error(`J-Quants ${response.status} at ${url}`)
-    const raw = await response.text()
+    let raw: string | null = null
+    for (let attempt = 0; attempt < 3 && raw == null; attempt++) {
+      try {
+        const response = await fetch(`${url}?${query}`, { headers: { 'x-api-key': key },
+          signal: AbortSignal.timeout(30_000) })
+        if (!response.ok) {
+          if (response.status < 500 && response.status !== 429)
+            throw new Error(`J-Quants ${response.status} at ${url}`)
+          throw new Error(`J-Quants transient ${response.status} at ${url}`)
+        }
+        raw = await response.text()
+      } catch (error) {
+        if (attempt === 2 || (error instanceof Error && /^J-Quants 4(?!29)/.test(error.message)))
+          throw error
+        await pause(1_500 * (attempt + 1))
+      }
+    }
+    if (raw == null) throw new Error('J-Quants response unavailable')
     const body = JSON.parse(raw) as { data?: Record<string, unknown>[]; pagination_key?: string }
     if (!Array.isArray(body.data)) throw new Error('Official data missing')
     if (phase16a8) {
@@ -236,7 +256,8 @@ async function main() {
     const prior = JSON.parse(await readFile(reuseManifest, 'utf8')) as {
       asOf: string; edinetSources?: (RawEvidence & { documentId: string })[];
       rawSources?: RawEvidence[] }
-    if (prior.asOf !== asOf) throw new Error('prior_manifest_scope_mismatch')
+    if (prior.asOf !== asOf && (!operational || prior.asOf > asOf))
+      throw new Error('prior_manifest_scope_mismatch')
     for (const source of prior.rawSources ?? []) {
       if (source.authority === 'FSA' || source.authority === 'JPX')
         previouslyReferenced.set(source.reference, source)
@@ -561,7 +582,7 @@ async function main() {
     elapsedMs: Date.now() - started, maxRssBytes: process.resourceUsage().maxRSS * 1024,
     rssBytesAtReport: process.memoryUsage().rss, dbWrites: 0, deploy: false }
   console.log(JSON.stringify(result, null, 2))
-  if (mismatches || independentChecks < 20 || superseded !== (phase16a8 ? 55 : 54)
+  if (mismatches || independentChecks < 20 || (!operational && superseded !== (phase16a8 ? 55 : 54))
     || (phase16a8 && !phase16a8Gate)) process.exitCode = 1
 }
 

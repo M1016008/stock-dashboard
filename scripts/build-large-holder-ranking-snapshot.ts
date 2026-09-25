@@ -1,14 +1,17 @@
 // Read-only, offline materialization. Never run this on an API request path.
 // @ts-expect-error The pinned Node types predate Node 24's built-in SQLite module.
 import { DatabaseSync } from 'node:sqlite'
-import { readFile, mkdir, writeFile } from 'node:fs/promises'
+import { readFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { unzipSync } from 'fflate'
 import { sha256, verifyArchivedLineage, type RawEvidence, type PositionLineage } from '@/lib/large-holders/evidence-provenance'
 import { resolveRevisionChains, type RevisionFiling } from '@/lib/large-holders/revision-chain'
 import { currentPositionEntityId, OZAKI_ATSUSHI_SUCCESSION } from '@/lib/large-holders/entity-adjudications'
+import { guardForDatabase, requiresExternalStorageGuard } from '@/lib/storage/external-storage-guard'
 import { classifyEffectiveTransition, POSITION_FINGERPRINT_SQL, summarizeInvestor, type HoldingBasis, type HolderActivity,
   type InvestorClass, type RankedPosition, type RankingSnapshot } from '@/lib/large-holders/ranking-core'
+import { writeImmutableSnapshot } from '@/lib/large-holders/snapshot-publication'
+import { blockedTickerSet, readQuarantineScopes } from '@/lib/server/large-holders/quarantine-scope'
 
 type Row = Record<string, string | number | null>
 type CertifiedLineage = PositionLineage & { entityId: string; ticker: string;
@@ -57,6 +60,7 @@ async function main() {
   const manifestPath = process.argv[2]
   const dbPath = process.env.STOCKBOARD_DB_PATH
   if (!manifestPath || !dbPath) throw new Error('Usage: STOCKBOARD_DB_PATH=... tsx build-large-holder-ranking-snapshot.ts <manifest>')
+  if (requiresExternalStorageGuard(dbPath)) guardForDatabase(dbPath).assertWritable(true)
   const manifestBytes = await readFile(manifestPath)
   const digest = sha256(manifestBytes)
   if (basename(manifestPath) !== `${digest}.json`) throw new Error('manifest_digest_mismatch')
@@ -93,6 +97,8 @@ async function main() {
   const all = (sql: string) => db.prepare(sql).all() as Row[]
   const one = (sql: string) => db.prepare(sql).get() as Row | undefined
   try {
+    const quarantines = readQuarantineScopes(db, manifest.certificationDate)
+    const blockedTickers = blockedTickerSet(quarantines)
     const marketDate = str(one('SELECT MAX(date) d FROM ohlcv_daily')?.d)
     const priceDate = str(one('SELECT MAX(price_date) d FROM large_holder_price_evidence')?.d)
     if (manifest.asOf !== marketDate || manifest.asOf !== priceDate)
@@ -118,12 +124,21 @@ async function main() {
     if (revisions.some((row) => row.unresolvedReason)) throw new Error('revision_chain_unresolved')
     const effective = new Map(revisions.filter((row) => row.isEffectiveRevision).map((row) => [row.documentId, row]))
     const filingById = new Map(filings.map((row) => [str(row.document_id), row]))
-    const positions = all(`SELECT p.*,f.issuer_name,f.issuer_edinet_code,f.issuer_security_code,
+    const allPositions = all(`SELECT p.*,f.issuer_name,f.issuer_edinet_code,f.issuer_security_code,
       f.filer_edinet_code,f.report_serial_number,f.submitted_at,
       f.obligation_date AS filing_obligation_date,f.filing_type,f.source_url,
       s.xbrl_sha256 FROM large_holder_positions p JOIN large_holder_filings f USING(document_id)
       LEFT JOIN large_holder_source_documents s USING(document_id)`)
       .filter((row) => effective.has(str(row.document_id)))
+    const blockedRows = allPositions.filter((row) => blockedTickers.has(str(row.ticker)))
+    const positions = allPositions.filter((row) => !blockedTickers.has(str(row.ticker)))
+    const blockedByEntity = new Map<string, Set<string>>()
+    for (const row of blockedRows) {
+      const id = currentPositionEntityId(row)
+      const set = blockedByEntity.get(id) ?? new Set<string>()
+      set.add(str(row.ticker))
+      blockedByEntity.set(id, set)
+    }
     const newest = new Map<string, Row>()
     for (const row of positions.toSorted((a, b) => date(b).localeCompare(date(a))
       || str(b.submitted_at).localeCompare(str(a.submitted_at))
@@ -203,10 +218,12 @@ async function main() {
     const byEntity = new Map<string, RankedPosition[]>()
     for (const position of outputPositions) byEntity.set(position.investorEntityId,
       [...(byEntity.get(position.investorEntityId) ?? []), position])
-    const investors = [...byEntity].map(([id, rows]) => summarizeInvestor({
+    const investors = [...new Set([...byEntity.keys(), ...blockedByEntity.keys()])].map((id) => summarizeInvestor({
       investorEntityId: id, displayName: str(entityRows.get(id)?.display_name),
-      investorClass: classByEntity.get(id)!, investorType: str(entityRows.get(id)?.investor_type),
-      aliases: aliases.get(id) ?? [], positions: rows.toSorted((a, b) => a.ticker.localeCompare(b.ticker)),
+      investorClass: classByEntity.get(id) ?? 'UNCLASSIFIED',
+      investorType: str(entityRows.get(id)?.investor_type),
+      aliases: aliases.get(id) ?? [], blockedPositionCount: blockedByEntity.get(id)?.size ?? 0,
+      positions: (byEntity.get(id) ?? []).toSorted((a, b) => a.ticker.localeCompare(b.ticker)),
     })).sort((a, b) => a.investorEntityId.localeCompare(b.investorEntityId))
     // Only archived, independently matched source documents may produce a public activity.
     const verifiedDocs = new Set<string>()
@@ -271,7 +288,8 @@ async function main() {
         previous = row
       }
     }
-    const filingDetails = revisions.filter((row) => row.isEffectiveRevision).map((row) => {
+    const filingDetails = revisions.filter((row) => row.isEffectiveRevision
+      && !blockedTickers.has(str(filingById.get(row.documentId)?.ticker))).map((row) => {
       const item = filingById.get(row.documentId)!
       return { documentId: row.documentId, filingType: str(filingById.get(row.rootFilingId!)?.filing_type),
         filingDate: str(item.submitted_at).slice(0, 10), obligationDate: optional(item.obligation_date),
@@ -283,6 +301,13 @@ async function main() {
           .map((position) => currentPositionEntityId(position)))],
       }
     })
+    const quarantineMetadata: NonNullable<RankingSnapshot['quarantineMetadata']> = {
+      quarantinedDocumentCount: quarantines.length,
+      quarantinedPositionScopeCount: quarantines.reduce((count, scope) =>
+        count + scope.affectedHolderMembers.length, 0),
+      affectedIssuerCount: blockedTickers.size,
+      affectedInvestorCount: blockedByEntity.size,
+      quarantineReasons: quarantines.length ? { HOLDER_COUNT_INTERNAL_INCONSISTENCY: quarantines.length } : {} }
     const snapshot: RankingSnapshot = { version: 1, certificationAsOf: manifest.asOf,
       certificationDate: manifest.certificationDate, manifestSha256: digest,
       activityEvidenceManifestSha256, effectiveFilingArchiveComplete,
@@ -293,16 +318,17 @@ async function main() {
       positionFingerprintSha256: sha256(JSON.stringify(all(POSITION_FINGERPRINT_SQL))),
       publicCurrentValuationReadyCount: outputPositions.filter((row) => row.valuationStatus === 'PUBLIC_CURRENT_VALUATION_READY').length,
       currentPositionCount: outputPositions.length, investors, activities,
+      quarantines: quarantines.map((scope) => ({ documentId: scope.documentId,
+        ticker: scope.ticker, issuerName: scope.issuerName, reasonCode: scope.reasonCode,
+        sourceSha256: scope.sourceSha256, affectedHolderCount: scope.affectedHolderMembers.length,
+        knownPriorInvestorEntityIds: [...new Set(blockedRows.filter((row) => row.ticker === scope.ticker)
+          .map((row) => currentPositionEntityId(row)))].sort() })),
+      quarantineMetadata,
       filings: filingDetails }
     if (snapshot.publicCurrentValuationReadyCount !== manifest.lineages.length)
       throw new Error('public_ready_count_mismatch')
-    const bytes = JSON.stringify(snapshot)
     const outputDir = process.env.LARGE_HOLDER_RANKING_DIR ?? join(dirname(dirname(manifestPath)), 'rankings')
-    await mkdir(outputDir, { recursive: true, mode: 0o700 })
-    const outputPath = join(outputDir, `${sha256(bytes)}.json`)
-    try { await writeFile(outputPath, bytes, { flag: 'wx', mode: 0o600 }) }
-    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST'
-      || await readFile(outputPath, 'utf8') !== bytes) throw error }
+    const outputPath = await writeImmutableSnapshot(outputDir, snapshot)
     console.log(JSON.stringify({ snapshotPath: outputPath, manifestSha256: digest,
       publicReady: snapshot.publicCurrentValuationReadyCount, positions: snapshot.currentPositionCount,
       investors: investors.length, classes: Object.fromEntries(['INDIVIDUAL','INSTITUTIONAL','OTHER','UNCLASSIFIED']

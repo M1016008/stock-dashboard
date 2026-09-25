@@ -11,6 +11,7 @@ const MASTER_URL = 'https://api.jquants.com/v2/equities/master'
 const BARS_URL = 'https://api.jquants.com/v2/equities/bars/daily'
 const JPX_LIST_URL = 'https://www.jpx.co.jp/markets/statistics-equities/misc/tvdivq0000001vg2-att/data_j.xlsx'
 const reassessOnly = process.argv.includes('--reassess-only')
+const operational = process.argv.includes('--operational')
 const flag = process.argv.slice(2).find((value) => value.startsWith('--as-of='))
 const asOf = flag?.slice('--as-of='.length)
 const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Tokyo' })
@@ -118,7 +119,8 @@ async function main() {
     JOIN large_holder_source_documents s USING(document_id)
     WHERE p.market_price_status IN ('FULL_DIRECT','PARTIAL_DIRECT')
     ORDER BY p.document_id,p.holder_key`)).rows as CandidateRow[]
-  if (candidates.length !== 233) throw new Error(`Candidate universe changed: ${candidates.length}`)
+  if (!operational && candidates.length !== 233) throw new Error(`Candidate universe changed: ${candidates.length}`)
+  if (operational && candidates.length < 20) throw new Error('Operational candidate universe unexpectedly small')
   const jpx = reassessOnly ? new Map<string, { name: string; category: string }>() : await jpxAugustList()
   const byDate = new Map<string, CandidateRow[]>()
   for (const candidate of candidates) {

@@ -1,0 +1,47 @@
+# Phase 16D-4: Source, Credential, and Shadow Gate
+
+## Gate status
+
+Phase 16D-4 Complete: **NO**. Production Canary Gate: **NO-GO**. Phase 16E Gate: **NO-GO**. No production DB write, deployment, scheduler enablement, commit, or push was performed. INFRA-S2 remains `BLOCKED_BY_NO_DESTINATION`.
+
+## Credential incident
+
+At approximately 2026-09-22 12:07 JST, a zsh command sourced `/Users/yoshio/dev/stock-dashboard/.claude/worktrees/ops-external-storage-safety/.env.local` once. That file is **not** a shell script: it has 5,144 lines and includes command substitutions and executable shell commands. Its early lines could read the clipboard into `OPENAI_KEY` and rewrite a local `.env.local`; the local file mtime changed at the incident time. The observed stdout was only a generic success statement, not a credential value. The source file contains no `security` command. A metadata-only Keychain query for relevant OpenAI/StockBoard services found 0 matching items; no password data was requested. The zsh history file predates the incident. No secret value is recorded in this report.
+
+Classification: **POSSIBLE_CREDENTIAL_OVERWRITE**, with no observed secret disclosure or Keychain write. The preincident local key value is not available for comparison, so the overwrite cannot be excluded. Verify the intended local credential through a trusted channel; targeted rotation is appropriate if the current value is unexpected or any exposure is found. Do not perform blanket rotation on this evidence alone.
+
+Environment loading now uses the nonexecuting `@next/env.loadEnvConfig` parser. `npm run test:env-file-non-execution` covers `$()`, backticks, spaces, and quotes and confirms no command executes. Do not shell-source `.env` files.
+
+## S100Z2WE official-source adjudication
+
+Official EDINET ZIP and full fact inventory are stored under `/Volumes/OWC Express 1M2 80G/stock-dashboard/qa/phase16d-shadow/phase16d4-official-evidence/` (mode 0600). Official ZIP SHA-256: `0583caccb9a6fe0ea56b25eb466f5c91009265a22c3fb325dbe8d7138e12c67d`. XBRL SHA-256: `8bb22620485e05aa26c094779d70054bfc76ad2e96e964d09658bd34fe0ab760`. The freshly downloaded XML matched the earlier shadow source byte-for-byte.
+
+The cover's `jplvh_cor:TotalNumberOfFilersAndJointHoldersCoverPage` at `FilingDateInstant`, unit `xbrli:pure`, is 13. There are 14 distinct, named and addressed holder-axis members, each with positive current shares. Member 14 is BlackRock Investment Management (UK) Limited with 7,443,209 current shares, 0.46% current holding and 0.17% previous holding. The source provides previous holding ratio, but not a separate previous-share count for this member. It is not a zero-current, duplicate, aggregate, or taxonomy-only member. Its legal-basis facts are retained in the full inventory. The other reviewed mismatches `S100Z34W` (cover 2, members 3, all positive) and `S100Z3AM` (cover 6, members 7, one zero-current) are not used to infer a general parser rule.
+
+Disposition: **QUARANTINED_SOURCE_INCONSISTENCY** for this exact document and raw XBRL SHA. The registry records issuer 4502, count 13/14/14, review date and version 16D-4. Changed SHA or a different document fails closed. No holder is silently dropped and no Stage, ranking, or valuation rule is relaxed.
+
+## Fresh shadow Daily
+
+Fresh read-only production seed: `/Volumes/OWC Express 1M2 80G/stock-dashboard/qa/phase16d-shadow/run-20260922-d4-1/`. Baseline hashes and counts matched: 170 filings, 318 positions, 170 source documents, baseline snapshot `c87f5e4ea278a47d41a652e6d52674ccdee73515fb008fe40fc30cd8c16cb86a`.
+
+The 2026-09-18 real Daily examined 61 target documents: 59 READY, 2 reviewed quarantine, 0 failed parser, 0 unknown review-required. Five earlier correction ancestors were added separately, bringing the shadow to 236 source filings. The first attempt stopped at a transient JPX fetch timeout after ingestion; direct JPX retry returned HTTP 200. The second process completed and published snapshot `ec71c9726b01aa1463baffb59cf8a54aa1665d2530ead890278f13acdff77ab5` as `VALIDATED_WITH_QUARANTINE`. Its status is `CURRENT`; positions 223 -> 313, investors 164 -> 210, public valuation-ready 178 -> 183, activities 19 -> 21. Both quarantined issuers (7956, 8136) have zero published positions, activities, or filing rows. Independent raw-price-times-certified-units checks: **183/183 exact, 0 mismatch**. Ticker 6459 has 6 distinct position entities, no pair duplicate and no fake activity.
+
+An idempotent fresh-process rerun had 0 missing/new documents, rechecked the 2 reviewed quarantine documents, returned `UNCHANGED` with the same snapshot ID, and did not create a duplicate activity or snapshot.
+
+QA instrumentation is opt-in and shadow-scoped. Initial ingestion before the transient timeout made 83 EDINET requests and 16,075 counted SQL operations (including the parent process); its wall time was 148 seconds and peak per-process RSS was 195 MB. The successful retry made 79 EDINET requests, 106 official-market requests (including JPX), 1,189 counted SQL operations, took 1,082 seconds and peaked at 234 MB RSS. Within that retry, official price/instrument audit took 914 seconds, regulatory certification 125 seconds, activity archive 31 seconds, and snapshot materialization about 1 second. These are process-level counts; a timeout/retry is not a clean cold-run latency sample. Shadow DB grew from 52,920,320 to 58,081,280 bytes through the Daily snapshot.
+
+## Backfill, classification, and reliability
+
+The real 2026-09-17 to 2026-09-19 backfill used three one-day chunks. `S100Z2WE` was ingested as reviewed quarantine; unknown review count stayed 0. Chunks 09-17 and 09-18 reached `PUBLISHED`. The configured shadow-only interruption then terminated the process as intended. A new process with `--resume` skipped those two completed chunks and finished 09-19 as `UNCHANGED` (0 source documents on the nontrading date). A same-range rerun skipped all three chunks. The new immutable snapshot `6c94bcb9f11a62eca21f43921d93d41fecc0af10a01f835b659ed73642934f4e` is `VALIDATED_WITH_QUARANTINE`: 359 positions, 233 investors, 190 valuation-ready, 21 activities, and exactly three reviewed quarantines affecting tickers 4502, 7956, and 8136. Their published positions, activities, and filing rows are all 0. Independent raw-price-times-certified-units checks: **190/190 exact, 0 mismatch**. Ticker 6459 has 6 distinct entity/ticker positions and no fake activity. SQLite `integrity_check=ok`.
+
+On the same shadow, the official XBRL fact `IndividualOrCorporation=法人（株式会社）` for an otherwise unclassified holder in `S100Z118` supported a narrowly scoped `OTHER_CORPORATION` review. The append-only review ledger has one hash-validated decision. `snapshot-refresh` published `3a61eaee943dda97cb925be8a5dcb1e41d8234f90842aed2ce2d0e964fce15b6`; the holder changed from `UNCLASSIFIED` to `OTHER`, while the raw position fingerprint, certification manifest and position count were identical. The DB file length did not change.
+
+Three further **fresh-process executions of the exact Daily command** each returned `UNCHANGED`. After each process closed, SQLite header page-count times page-size equaled the 59,891,712-byte file length and `PRAGMA integrity_check` returned `ok`. These are idempotent daily-path runs, not three independent cold full-ingest rebuilds.
+
+Instrumented backfill (including the controlled interruption) made 96 EDINET requests, 93 official-market requests and 17,706 counted SQL operations, took about 800 seconds and peaked at 300 MiB per process. Its first-chunk ingestion took 134 seconds, official price/instrument audit 617 seconds, regulatory certification 29 seconds, activity archive 9 seconds, and snapshot materialization about 1 second. The resume needed one EDINET index request and about 3 seconds; same-range rerun fetched nothing. Across all shadow QA stages, measured totals were 275 EDINET requests, 200 official-market requests and 35,438 counted SQL operations. The metrics counter includes SQLite and local-libSQL statements; it does not claim a production-query profile. Shadow DB grew from 52,920,320 to 59,891,712 bytes (6,971,392 bytes). No shadow storage incident file was created.
+
+## Production monitoring and remaining gates
+
+During the heavy shadow work, production `/api/health` stayed HTTP 200 with `overall=healthy` and `storageStatus=available`; `/api/quote/7003` stayed HTTP 200 (final observed latency 63 ms). A one-hour macOS kernel-log check found 0 matching NVMe/APFS timeout, I/O-error, or eject events. No large-holder LaunchAgent was loaded.
+
+The credential incident remains **REVIEW**, not a confirmed exposure and not an unconditional rotation requirement: the preincident local credential cannot be compared. The three requested **real-data pipeline failpoints** (`SNAPSHOT_GENERATION`, `BEFORE_PUBLISH`, `AFTER_PUBLISH`) were not executed. The next-business-session **price-only refresh** was not executed; on 2026-09-22 JST the next post-09-18 business session was still in progress, so using an unfinished official close would violate the price-evidence contract. Existing isolated atomic-publication unit regression passed, but it is not a substitute for the requested real-data failpoints. These mandatory gaps keep the Phase 16D-4 and production canary gates **NO-GO**. No estimated-value ranking or production scheduler is enabled by this work.

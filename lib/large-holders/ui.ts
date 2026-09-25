@@ -41,6 +41,17 @@ export type ActivityRow = HolderActivity & {
 }
 export type ResponseMeta = {
   certificationAsOf: string
+  snapshotStatus?: 'VALIDATED' | 'VALIDATED_WITH_QUARANTINE'
+  quarantinedDocumentCount?: number
+  quarantinedPositionScopeCount?: number
+  affectedIssuerCount?: number
+  affectedInvestorCount?: number
+  quarantineReasons?: Record<string, number>
+  quarantines?: { documentId: string; ticker: string; issuerName: string | null;
+    reasonCode: string; sourceSha256: string; affectedHolderCount: number;
+    knownPriorInvestorEntityIds?: string[] }[]
+  snapshotId?: string | null
+  snapshotGeneratedAt?: string | null
   latestEdinetDataAt: string | null
   latestPositionDate: string | null
   priceDate: string

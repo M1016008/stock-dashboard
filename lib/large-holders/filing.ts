@@ -74,6 +74,22 @@ export type LargeHolderFiling = {
   sourceUrl: string
 }
 
+export class HolderCountMismatchError extends Error {
+  readonly reasonCode = 'HOLDER_COUNT_INTERNAL_INCONSISTENCY'
+  constructor(
+    readonly documentId: string,
+    readonly coverDeclaredCount: number,
+    readonly parsedLegalHolderCount: number,
+    readonly rawAxisMemberCount: number,
+    readonly affectedHolderMembers: { member: string; name: string; address: string | null; shares: number | null }[],
+    readonly issuerSecurityCode: string | null,
+    readonly issuerName: string | null,
+    readonly sourceSha256: string,
+  ) {
+    super(`Holder count mismatch: declared ${coverDeclaredCount}, parsed ${parsedLegalHolderCount}`)
+  }
+}
+
 const HOLDER_AXIS = 'FilersLargeVolumeHoldersAndJointHoldersAxis'
 const date = (value?: string | null): string | null => {
   const match = value?.match(/\d{4}-\d{2}-\d{2}/)
@@ -231,7 +247,12 @@ export function parseLargeHolderFiling(
   if (holders.length === 0) throw new Error('No individually identified holders in XBRL')
   const declaredCount = number(root, 'TotalNumberOfFilersAndJointHoldersCoverPage')
   if (declaredCount != null && declaredCount !== holders.length) {
-    throw new Error(`Holder count mismatch: declared ${declaredCount}, parsed ${holders.length}`)
+    throw new HolderCountMismatchError(row.docID, declaredCount, holders.length, groups.size,
+      holders.map((holder) => ({ member: holder.key, name: holder.name,
+        address: holder.address, shares: holder.shares })),
+      issuerFact(root, 'SecurityCodeOfIssuer')?.value ?? null,
+      issuerFact(root, 'NameOfIssuer')?.value ?? null,
+      createHash('sha256').update(xml).digest('hex'))
   }
   const initial = holders.findIndex((holder) => holder.role === 'PRIMARY')
   // A cover-page representative may include a title; XBRL holder 1 is the filer.

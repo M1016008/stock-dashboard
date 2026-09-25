@@ -39,6 +39,7 @@ export type InvestorSummary = {
   valuedPositionCount: number
   totalRelevantPositionCount: number
   unvaluedPositionCount: number
+  blockedPositionCount?: number
   portfolioCompleteness: Completeness
   largestPositionTicker: string | null
   largestPositionValue: number | null
@@ -108,6 +109,12 @@ export type RankingSnapshot = {
   currentPositionCount: number
   investors: InvestorSummary[]
   activities: HolderActivity[]
+  quarantines?: { documentId: string; ticker: string; issuerName: string | null;
+    reasonCode: 'HOLDER_COUNT_INTERNAL_INCONSISTENCY'; sourceSha256: string;
+    affectedHolderCount: number; knownPriorInvestorEntityIds?: string[] }[]
+  quarantineMetadata?: { quarantinedDocumentCount: number; quarantinedPositionScopeCount: number;
+    affectedIssuerCount: number; affectedInvestorCount: number;
+    quarantineReasons: Record<string, number> }
   filings: { documentId: string; filingType: string; filingDate: string;
     obligationDate: string | null; issuerName: string | null; ticker: string | null;
     sourceUrl: string; sourceSha256: string | null; sourceVerified: boolean; rootFilingId: string;
@@ -120,14 +127,16 @@ export const POSITION_FINGERPRINT_SQL = `SELECT document_id,holder_key,ticker,en
   ORDER BY document_id,holder_key`
 
 export function summarizeInvestor(input: Pick<InvestorSummary,
-  'investorEntityId' | 'displayName' | 'investorClass' | 'investorType' | 'aliases' | 'positions'>): InvestorSummary {
+  'investorEntityId' | 'displayName' | 'investorClass' | 'investorType' | 'aliases' | 'positions'>
+  & { blockedPositionCount?: number }): InvestorSummary {
   const valued = input.positions.filter((position) => position.estimatedCurrentValue !== null)
   const sum = (basis?: HoldingBasis): number | null => {
     const selected = valued.filter((position) => !basis || position.holdingBasis === basis)
     return selected.length ? selected.reduce((total, position) => total + position.estimatedCurrentValue!, 0) : null
   }
   const biggest = valued.toSorted((a, b) => b.estimatedCurrentValue! - a.estimatedCurrentValue!)[0]
-  const total = input.positions.length
+  const blocked = input.blockedPositionCount ?? 0
+  const total = input.positions.length + blocked
   return { ...input,
     estimatedCurrentValue: sum(),
     ownershipEstimatedValue: sum('OWNERSHIP'),
@@ -136,7 +145,7 @@ export function summarizeInvestor(input: Pick<InvestorSummary,
     otherEstimatedValue: sum('OTHER'),
     valuedPositionCount: valued.length,
     totalRelevantPositionCount: total,
-    unvaluedPositionCount: total - valued.length,
+    unvaluedPositionCount: total - valued.length, blockedPositionCount: blocked,
     portfolioCompleteness: valued.length === 0 ? 'NONE' : valued.length === total ? 'COMPLETE' : 'PARTIAL',
     largestPositionTicker: biggest?.ticker ?? null,
     largestPositionValue: biggest?.estimatedCurrentValue ?? null,
@@ -153,5 +162,6 @@ export const LARGE_HOLDER_DISCLAIMER = {
   disclosureBasis: '直近開示ベース',
   coverageWarning: '大量保有報告で観測可能なPositionのみ。5%未満など未観測の保有は含みません。',
   partialWarning: 'PARTIALは算定可能なPositionだけの合計であり、完全なポートフォリオ総額ではありません。',
+  sourceQuarantineWarning: '原資料内の不整合により認定できない開示は集計対象外となる場合があります。',
   institutionalBasisWarning: '所有等ベースと運用権限ベースは法的性質が異なります。合計値を自己保有額・投資額と解釈しないでください。',
 } as const

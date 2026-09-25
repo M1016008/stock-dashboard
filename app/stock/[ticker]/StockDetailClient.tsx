@@ -37,6 +37,7 @@ import { TradeScenarioNotebook } from '@/components/stock/TradeScenarioNotebook'
 import { StockScenarioAiPanel } from '@/components/stock/StockScenarioAiPanel'
 import { StockDecisionSummary } from '@/components/stock/StockDecisionSummary'
 import { FinancialPerformanceTimeline } from '@/components/stock/FinancialPerformanceTimeline'
+import { StockLargeHolders } from '@/components/large-holders/StockLargeHolders'
 import { FinancialPerformanceDetail } from '@/components/stock/FinancialPerformanceDetail'
 import { FinancialDetail } from '@/components/stock/FinancialDetail'
 import { ValuationDetail } from '@/components/stock/ValuationDetail'
@@ -501,6 +502,7 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
           marginInfo={marginInfo}
           fallbackType={displayMarginType}
           analysisDate={analysisDate}
+          analysisParamsReady={analysisParamsReady}
           loading={loading}
           classifications={{
             marketSegment: displayMarketSegment,
@@ -911,6 +913,7 @@ function OverviewWorkspace({
   marginInfo,
   fallbackType,
   analysisDate,
+  analysisParamsReady,
   loading,
   classifications,
   shikihoInfo,
@@ -921,6 +924,7 @@ function OverviewWorkspace({
   marginInfo: StockMarginInfo | null
   fallbackType?: string | null
   analysisDate: string | null
+  analysisParamsReady: boolean
   loading: boolean
   classifications: {
     marketSegment?: string | null
@@ -988,6 +992,8 @@ function OverviewWorkspace({
         physicalMomentum={physicalMomentum}
       />
       <FinancialPerformanceTimeline ticker={ticker} analysisDate={analysisDate} />
+      <StockLargeHolders ticker={ticker} analysisDate={analysisDate}
+        analysisParamsReady={analysisParamsReady} />
     </div>
   )
 }

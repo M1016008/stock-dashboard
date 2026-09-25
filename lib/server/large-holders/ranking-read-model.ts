@@ -2,11 +2,15 @@
 import { DatabaseSync } from 'node:sqlite'
 import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
-import { basename } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { LARGE_HOLDER_DISCLAIMER, POSITION_FINGERPRINT_SQL, type HoldingBasis, type HolderActivity,
   type InvestorClass, type InvestorSummary, type RankingSnapshot } from '@/lib/large-holders/ranking-core'
+import { readPublishedPointer, readPublishedSnapshot, type PublishedSnapshot } from '@/lib/large-holders/snapshot-publication'
+import { currentPositionFingerprint, priceUpdateCompleted } from '@/lib/server/large-holders/current-fingerprint'
+import { readReviewLedger } from '@/lib/server/large-holders/review-ledger'
+import { reviewDigest } from '@/lib/large-holders/entity-review'
 
-let cached: { path: string; snapshot: RankingSnapshot } | null = null
+let cached: { path: string; snapshot: RankingSnapshot; publication: PublishedSnapshot | null } | null = null
 const sha256 = (value: Uint8Array | string) => createHash('sha256').update(value).digest('hex')
 
 export class RankingUnavailable extends Error {
@@ -14,20 +18,40 @@ export class RankingUnavailable extends Error {
 }
 
 export async function getRankingSnapshot(): Promise<RankingSnapshot> {
-  const path = process.env.LARGE_HOLDER_RANKING_SNAPSHOT_PATH
+  const currentPath = process.env.LARGE_HOLDER_RANKING_CURRENT_PATH
+  const publication = currentPath ? await readPublishedPointer(currentPath)
+    .catch(() => { throw new RankingUnavailable('certified_snapshot_pointer_unavailable') }) : null
+  if (publication && reviewDigest(await readReviewLedger().catch(() => {
+    throw new RankingUnavailable('entity_review_ledger_unavailable')
+  })) !== publication.reviewHash) throw new RankingUnavailable('certified_snapshot_stale_review')
+  const path = currentPath && publication
+    ? join(dirname(currentPath), `${publication.snapshotId}.json`)
+    : process.env.LARGE_HOLDER_RANKING_SNAPSHOT_PATH
   const dbPath = process.env.STOCKBOARD_DB_PATH
   if (!path || !dbPath) throw new RankingUnavailable('certified_snapshot_not_configured')
   if (!cached || cached.path !== path) {
-    const bytes = await readFile(path).catch(() => { throw new RankingUnavailable('certified_snapshot_missing') })
-    if (basename(path) !== `${sha256(bytes)}.json`) throw new RankingUnavailable('snapshot_digest_mismatch')
-    const snapshot = JSON.parse(bytes.toString('utf8')) as RankingSnapshot
+    const snapshot = currentPath
+      ? (await readPublishedSnapshot(currentPath)
+        .catch(() => { throw new RankingUnavailable('certified_snapshot_pointer_invalid') })).snapshot
+      : await (async () => {
+        const bytes = await readFile(path).catch(() => { throw new RankingUnavailable('certified_snapshot_missing') })
+        if (basename(path) !== `${sha256(bytes)}.json`) throw new RankingUnavailable('snapshot_digest_mismatch')
+        return JSON.parse(bytes.toString('utf8')) as RankingSnapshot
+      })()
     if (snapshot.version !== 1 || snapshot.publicCurrentValuationReadyCount < 20
       || snapshot.certificationAsOf !== snapshot.priceDate
       || snapshot.investors.reduce((n, investor) => n + investor.positions.length, 0) !== snapshot.currentPositionCount
       || snapshot.investors.reduce((n, investor) => n + investor.valuedPositionCount, 0)
         !== snapshot.publicCurrentValuationReadyCount) throw new RankingUnavailable('snapshot_contract_invalid')
-    cached = { path, snapshot }
+    cached = { path, snapshot, publication }
+  } else if (publication && (cached.publication?.snapshotId !== publication.snapshotId
+    || cached.snapshot.priceDate !== publication.priceDate
+    || cached.snapshot.positionFingerprintSha256 !== publication.positionHash
+    || cached.snapshot.manifestSha256 !== publication.certificationHash
+    || cached.snapshot.latestEdinetDataAt !== publication.sourceEdinetCutoff)) {
+    throw new RankingUnavailable('certified_snapshot_pointer_invalid')
   }
+  if (publication && cached) cached.publication = publication
   // Three indexed/small-table reads fail closed as soon as a newer disclosure or market date arrives.
   const db = new DatabaseSync(dbPath, { readOnly: true })
   db.exec('PRAGMA query_only=ON')
@@ -36,13 +60,23 @@ export async function getRankingSnapshot(): Promise<RankingSnapshot> {
       MAX(submitted_at) maxSubmittedAt FROM large_holder_filings`).get() as Record<string, unknown>
     const price = db.prepare('SELECT MAX(price_date) d FROM large_holder_price_evidence').get() as Record<string, unknown>
     const market = db.prepare('SELECT MAX(date) d FROM ohlcv_daily').get() as Record<string, unknown>
-    const positionFingerprint = sha256(JSON.stringify(db.prepare(POSITION_FINGERPRINT_SQL).all()))
+    const positionFingerprint = publication ? null
+      : sha256(JSON.stringify(db.prepare(POSITION_FINGERPRINT_SQL).all()))
     const snapshot = cached.snapshot
-    if (Number(filing.count) !== snapshot.filingWatermark.count
-      || Number(filing.maxImportedAt ?? 0) !== Number(snapshot.filingWatermark.maxImportedAt ?? 0)
-      || String(filing.maxSubmittedAt ?? '') !== String(snapshot.filingWatermark.maxSubmittedAt ?? '')
-      || String(price.d ?? '') !== snapshot.priceDate || String(market.d ?? '') !== snapshot.priceDate
-      || positionFingerprint !== snapshot.positionFingerprintSha256)
+    const stale = publication
+      ? String(price.d ?? '') !== snapshot.priceDate || String(market.d ?? '') !== snapshot.priceDate
+        || Number(filing.count) !== publication.sourceFilingCount
+        || Number(filing.maxImportedAt ?? 0) !== Number(publication.sourceLatestImportedAt ?? 0)
+        || String(filing.maxSubmittedAt ?? '') !== String(publication.sourceLatestSubmittedAt ?? '')
+        || !priceUpdateCompleted(db, String(market.d ?? ''))
+        || currentPositionFingerprint(db, new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Tokyo' }))
+          !== publication.currentPositionHash
+      : Number(filing.count) !== snapshot.filingWatermark.count
+        || Number(filing.maxImportedAt ?? 0) !== Number(snapshot.filingWatermark.maxImportedAt ?? 0)
+        || String(filing.maxSubmittedAt ?? '') !== String(snapshot.filingWatermark.maxSubmittedAt ?? '')
+        || String(price.d ?? '') !== snapshot.priceDate || String(market.d ?? '') !== snapshot.priceDate
+        || positionFingerprint !== snapshot.positionFingerprintSha256
+    if (stale)
       throw new RankingUnavailable('certified_snapshot_stale')
     return snapshot
   } finally { db.close() }
@@ -50,6 +84,17 @@ export async function getRankingSnapshot(): Promise<RankingSnapshot> {
 
 export function responseMeta(snapshot: RankingSnapshot) {
   return { certificationAsOf: snapshot.certificationAsOf,
+    snapshotStatus: snapshot.quarantines?.length ? 'VALIDATED_WITH_QUARANTINE' : 'VALIDATED',
+    quarantinedDocumentCount: snapshot.quarantines?.length ?? 0,
+    quarantinedPositionScopeCount: snapshot.quarantines?.reduce((count, item) =>
+      count + item.affectedHolderCount, 0) ?? 0,
+    affectedIssuerCount: new Set(snapshot.quarantines?.map((item) => item.ticker) ?? []).size,
+    affectedInvestorCount: new Set(snapshot.quarantines?.flatMap((item) =>
+      item.knownPriorInvestorEntityIds ?? []) ?? []).size,
+    quarantineReasons: snapshot.quarantineMetadata?.quarantineReasons ?? {},
+    quarantines: snapshot.quarantines ?? [],
+    snapshotId: cached?.snapshot === snapshot ? cached.publication?.snapshotId ?? basename(cached.path, '.json') : null,
+    snapshotGeneratedAt: cached?.snapshot === snapshot ? cached.publication?.generatedAt ?? null : null,
     valuationManifestSha256: snapshot.manifestSha256,
     activityEvidenceManifestSha256: snapshot.activityEvidenceManifestSha256,
     latestEdinetDataAt: snapshot.latestEdinetDataAt,

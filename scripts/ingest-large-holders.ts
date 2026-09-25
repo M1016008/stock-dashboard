@@ -1,7 +1,8 @@
 import { client, ensureReady } from '@/lib/db/client'
-import { isLargeHolderDocument, parseLargeHolderFiling } from '@/lib/large-holders/filing'
+import { HolderCountMismatchError, isLargeHolderDocument, parseLargeHolderFiling } from '@/lib/large-holders/filing'
 import { downloadEdinetPublicXbrl, listEdinetDocuments } from '@/lib/server/edinet-api'
-import { LARGE_HOLDER_PARSER_VERSION, recordLargeHolderWithdrawal, storeLargeHolderFiling } from '@/lib/server/large-holders/ingest'
+import { LARGE_HOLDER_PARSER_VERSION, recordHolderCountInconsistency,
+  recordLargeHolderWithdrawal, storeLargeHolderFiling } from '@/lib/server/large-holders/ingest'
 import { resolveCorrectionAncestors } from '@/lib/server/large-holders/resolve-document'
 
 const flags = new Map(process.argv.slice(2).map((arg) => {
@@ -24,6 +25,7 @@ async function main(): Promise<void> {
   let skipped = 0
   let failed = 0
   let review = 0
+  let quarantined = 0
   let withdrawals = 0
   let resolvedOrigins = 0
   const indexCache = new Map<string, Awaited<ReturnType<typeof listEdinetDocuments>>>()
@@ -67,8 +69,9 @@ async function main(): Promise<void> {
         }
       }
       processed += 1
+      let xml: string | null = null
       try {
-        const xml = await downloadEdinetPublicXbrl(row.docID)
+        xml = await downloadEdinetPublicXbrl(row.docID)
         const filing = parseLargeHolderFiling(row, xml)
         if (filing.filingType === 'AMENDMENT') {
           const ancestors = await resolveCorrectionAncestors(filing, indexCache)
@@ -83,10 +86,18 @@ async function main(): Promise<void> {
             correctedDocumentId: filing.correctedDocumentId, valuationEligible: filing.holders.filter((h) => h.valuationEligibleShares != null).length }))
         } else if (await storeLargeHolderFiling(row, filing, xml) === 'review') review += 1
       } catch (error) {
+        if (!dryRun && xml && error instanceof HolderCountMismatchError) {
+          const disposition = await recordHolderCountInconsistency(row, xml, error)
+          if (disposition === 'QUARANTINED') {
+            quarantined += 1
+            await new Promise((resolve) => setTimeout(resolve, 650))
+            continue
+          }
+        }
         failed += 1
         const message = error instanceof Error ? error.message : String(error)
         console.error(`${row.docID} parse/store failed: ${message}`)
-        if (!dryRun) await client.execute({
+        if (!dryRun && !(error instanceof HolderCountMismatchError)) await client.execute({
           sql: `INSERT INTO large_holder_filings
             (document_id, filing_type, submitted_at, issuer_edinet_code, source_url,
               raw_index_json, parser_version, status, error_message)
@@ -104,7 +115,8 @@ async function main(): Promise<void> {
       await new Promise((resolve) => setTimeout(resolve, 650))
     }
   }
-  console.log(JSON.stringify({ examined, processed, skipped, failed, review, withdrawals, resolvedOrigins, dryRun }))
+  console.log(JSON.stringify({ examined, processed, skipped, failed, review,
+    quarantined, withdrawals, resolvedOrigins, dryRun }))
   if (failed > 0) process.exitCode = 1
 }
 

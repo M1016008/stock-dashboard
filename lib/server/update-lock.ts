@@ -18,6 +18,7 @@ export const EXCLUSIVE_UPDATE_JOB_TYPES = [
   'calendar_stage_backfill_us',
   'stage_transitions',
   'sector_structure',
+  'large_holder_daily',
 ] as const
 
 export const JP_STOCKBOARD_UPDATE_JOB_TYPES = [
@@ -32,6 +33,7 @@ export const JP_STOCKBOARD_UPDATE_JOB_TYPES = [
   'calendar_stage_backfill_jp',
   'stage_transitions',
   'sector_structure',
+  'large_holder_daily',
 ] as const
 
 export const US_ISOLATED_UPDATE_JOB_TYPES = [
@@ -87,6 +89,7 @@ const SQLITE_WRITER_PROCESS_PATTERNS = [
   /scripts\/backfill-calendar-stage-snapshots\.(?:ts|js)\b/,
   /scripts\/batch-stage-transitions\.(?:ts|js)\b/,
   /scripts\/batch-sector-structure\.(?:ts|js)\b/,
+  /scripts\/(?:run-large-holder-operations|ingest-large-holders|audit-large-holder-instruments)\.(?:ts|js)\b/,
 ] as const
 
 type ProcessRow = {

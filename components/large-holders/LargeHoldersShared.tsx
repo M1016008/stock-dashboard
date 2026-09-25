@@ -59,16 +59,26 @@ export function CompletenessBadge({ completeness, valued, total }: {
 }
 
 export function AsOfLine({ meta }: { meta: ResponseMeta }) {
-  return <div className="flex flex-wrap gap-x-5 gap-y-1 text-[12px] text-[var(--color-text-secondary)]">
+  return <div className="text-[12px] text-[var(--color-text-secondary)]">
+    {meta.snapshotStatus === 'VALIDATED_WITH_QUARANTINE' && <details className="mb-2 border-l-2 border-amber-500 pl-2 text-amber-900">
+      <summary className="cursor-pointer">最新開示のうち{meta.quarantinedDocumentCount}件は原資料内の不整合により集計対象外です</summary>
+      <ul className="mt-1 space-y-0.5">{meta.quarantines?.map((item) => <li key={item.documentId}>
+        {item.documentId} / {item.issuerName ?? item.ticker} / {item.reasonCode}
+      </li>)}</ul>
+    </details>}
+    <div className="flex flex-wrap gap-x-5 gap-y-1">
     <span>保有情報 <strong className="font-medium text-[var(--color-text-primary)]">{date(meta.latestPositionDate ?? meta.certificationAsOf)}</strong> 直近開示ベース</span>
     <span>価格 <strong className="font-medium text-[var(--color-text-primary)]">{date(meta.priceDate)}</strong> 終値</span>
     <span>認定 <strong className="font-medium text-[var(--color-text-primary)]">{date(meta.certificationAsOf)}</strong></span>
+    <span>EDINET最終提出 <strong className="font-medium text-[var(--color-text-primary)]">{meta.latestEdinetDataAt ? new Date(meta.latestEdinetDataAt).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' }) : '—'}</strong></span>
+    <span>Snapshot生成 <strong className="font-medium text-[var(--color-text-primary)]">{meta.snapshotGeneratedAt ? new Date(meta.snapshotGeneratedAt).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' }) : '—'}</strong></span>
+    </div>
   </div>
 }
 
 export function HolderDisclaimer() {
   return <p className="border-t border-[var(--border-subtle)] pt-3 text-[12px] leading-relaxed text-[var(--color-text-secondary)]">
-    本ランキングは大量保有報告書で確認可能な直近開示ポジションを基にした参考値です。5%未満の保有等は含まれない場合があります。推定時価は取得原価や実際の投資元本を示しません。
+    本ランキングは大量保有報告書で確認可能な直近開示ポジションを基にした参考値です。5%未満の保有等は含まれない場合があります。原資料内の不整合により認定できない開示は集計対象外となる場合があります。推定時価は取得原価や実際の投資元本を示しません。
   </p>
 }
 

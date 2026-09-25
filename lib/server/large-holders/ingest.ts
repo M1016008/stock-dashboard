@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto'
 import { client, ensureReady } from '@/lib/db/client'
-import { type LargeHolderFiling } from '@/lib/large-holders/filing'
+import { HolderCountMismatchError, type LargeHolderFiling } from '@/lib/large-holders/filing'
+import { reviewedSourceQuarantine, SOURCE_QUARANTINE_STATUS,
+  SOURCE_REVIEW_REQUIRED_STATUS } from '@/lib/large-holders/source-quarantine'
 import { resolveRevisionChains, type RevisionFiling } from '@/lib/large-holders/revision-chain'
 import { classifyFromFiling, classForCategory, INVESTOR_CATEGORIES, type InvestorCategory } from '@/lib/large-holders/classification'
 import { assessMarketPriceHolding } from '@/lib/large-holders/market-price-eligibility'
@@ -8,6 +10,58 @@ import { marketPriceEvidence } from './market-price-evidence'
 import type { EdinetDocumentIndexRow } from '@/lib/server/edinet-api'
 
 export const LARGE_HOLDER_PARSER_VERSION = '16a6-1'
+
+export async function recordHolderCountInconsistency(row: EdinetDocumentIndexRow, xml: string,
+  error: HolderCountMismatchError): Promise<'QUARANTINED' | 'REVIEW_REQUIRED'> {
+  await ensureReady()
+  const reviewed = reviewedSourceQuarantine(error, LARGE_HOLDER_PARSER_VERSION)
+  const status = reviewed ? SOURCE_QUARANTINE_STATUS : SOURCE_REVIEW_REQUIRED_STATUS
+  const sourceSha = hash(xml)
+  if (sourceSha !== error.sourceSha256 || !row.submitDateTime)
+    throw new Error('holder_count_evidence_changed')
+  const tx = await client.transaction('write')
+  try {
+    const prior = await tx.execute({
+      sql: 'SELECT xbrl_sha256 FROM large_holder_source_documents WHERE document_id=?', args: [row.docID],
+    })
+    if (prior.rows.length && String(prior.rows[0].xbrl_sha256) !== sourceSha)
+      throw new Error(`immutable_large_holder_source_changed:${row.docID}`)
+    await tx.execute({ sql: `INSERT INTO large_holder_filings (
+      document_id,filing_type,submitted_at,issuer_edinet_code,issuer_security_code,
+      issuer_name,ticker,primary_holder_name,source_url,raw_index_json,
+      raw_parsed_payload_json,parser_version,status,error_message
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      ON CONFLICT(document_id) DO UPDATE SET
+      status=excluded.status,error_message=excluded.error_message,
+      raw_parsed_payload_json=excluded.raw_parsed_payload_json,
+      parser_version=excluded.parser_version`,
+      args: [row.docID, row.docTypeCode === '360' ? 'AMENDMENT' : 'UNPARSED',
+        row.submitDateTime, row.issuerEdinetCode ?? null, error.issuerSecurityCode,
+        error.issuerName, tickerFromIssuer(error.issuerSecurityCode), row.filerName ?? null,
+        `https://disclosure2.edinet-fsa.go.jp/WZEK0040.aspx?${encodeURIComponent(row.docID)}`,
+        JSON.stringify(row), JSON.stringify(reviewed ?? {
+          documentId: row.docID, disposition: 'REVIEW_REQUIRED_SOURCE_INCONSISTENCY',
+          reasonCode: error.reasonCode, coverDeclaredCount: error.coverDeclaredCount,
+          parsedLegalHolderCount: error.parsedLegalHolderCount,
+          rawAxisMemberCount: error.rawAxisMemberCount,
+          affectedHolderMembers: error.affectedHolderMembers,
+          sourceSha256: sourceSha, parserVersion: LARGE_HOLDER_PARSER_VERSION,
+          reviewStatus: 'PENDING',
+        }), LARGE_HOLDER_PARSER_VERSION, status, error.message],
+    })
+    if (!prior.rows.length) await tx.execute({
+      sql: `INSERT INTO large_holder_source_documents (document_id,xbrl_sha256,xbrl_xml)
+        VALUES (?,?,?)`, args: [row.docID, sourceSha, xml],
+    })
+    const positionCount = await tx.execute({
+      sql: 'SELECT COUNT(*) AS count FROM large_holder_positions WHERE document_id=?', args: [row.docID],
+    })
+    if (Number(positionCount.rows[0]?.count) !== 0)
+      throw new Error('quarantine_existing_positions_requires_review')
+    await tx.commit()
+    return reviewed ? 'QUARANTINED' : 'REVIEW_REQUIRED'
+  } catch (cause) { await tx.rollback(); throw cause }
+}
 
 type DbExecutor = Pick<typeof client, 'execute'>
 
