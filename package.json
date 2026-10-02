@@ -134,6 +134,8 @@
     "test:manual-import-removal": "tsx scripts/test-manual-import-removal.ts",
     "test:layout-shell": "tsx scripts/test-layout-shell.ts",
     "test:daily-close-report": "tsx scripts/test-daily-close-report.ts",
+    "test:claude-dispatcher": "tsx scripts/test-claude-code-dispatcher.ts",
+    "claude:dispatch": "tsx scripts/claude-dispatch.ts",
     "test:header-navigation": "tsx scripts/test-header-navigation.ts",
     "test:period-explorer": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/test-period-explorer.ts",
     "test:stock-preview": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/test-stock-preview.ts",
