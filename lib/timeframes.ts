@@ -7,9 +7,25 @@ export type ChartIntervalCode =
   | 'M' | '2M' | '3M' | '6M'
   | 'Y' | '2Y' | '3Y' | '5Y'
 
+export const CLOSE_TIMEFRAMES = [
+  'D', '2D', '3D', '5D',
+  'W', '2W', '3W', '5W',
+  'M', '2M', '3M', '5M',
+] as const
+
+export type CloseTimeframe = (typeof CLOSE_TIMEFRAMES)[number]
+export type TimeframeIntervalCode = ChartIntervalCode | CloseTimeframe
+
 export interface TimeframeSpec {
   timeframe: TimeframeUnit
   multiplier: number
+}
+
+export interface TimeframeBucketContext {
+  tradingDateIndex: ReadonlyMap<string, number>
+  tradingYearDateIndex: ReadonlyMap<string, number>
+  tradingYearWeekIndex: ReadonlyMap<string, number>
+  anchorDate: string | null
 }
 
 export const CALENDAR_WEEK_ANCHOR_MONDAY = '1970-01-05'
@@ -40,8 +56,13 @@ export const CHART_INTERVAL_OPTIONS: Array<{
 
 const OPTION_BY_CODE = new Map(CHART_INTERVAL_OPTIONS.map((option) => [option.code, option]))
 
-export function intervalToSpec(interval: ChartIntervalCode): TimeframeSpec {
-  return OPTION_BY_CODE.get(interval)?.spec ?? { timeframe: 'day', multiplier: 1 }
+export function intervalToSpec(interval: TimeframeIntervalCode): TimeframeSpec {
+  const configured = OPTION_BY_CODE.get(interval as ChartIntervalCode)?.spec
+  if (configured) return configured
+  const match = /^(\d+)?([DWM])$/.exec(interval)
+  if (!match) return { timeframe: 'day', multiplier: 1 }
+  const unit = match[2] === 'W' ? 'week' : match[2] === 'M' ? 'month' : 'day'
+  return { timeframe: unit, multiplier: Number(match[1] ?? '1') }
 }
 
 export function intervalLabel(interval: ChartIntervalCode): string {
@@ -91,7 +112,78 @@ export function specToIntervalCode(spec: TimeframeSpec): ChartIntervalCode | nul
   return null
 }
 
-export function resampleOhlcv(rows: OHLCV[], spec: TimeframeSpec): OHLCV[] {
+export function createTimeframeBucketContext(tradingDates: readonly string[]): TimeframeBucketContext {
+  const uniqueDates = [...new Set(tradingDates)].sort()
+  const tradingYearDateIndex = new Map<string, number>()
+  const tradingYearWeekIndex = new Map<string, number>()
+  const nextDateIndexByYear = new Map<string, number>()
+  const weekIndexByYear = new Map<string, Map<string, number>>()
+
+  for (const date of uniqueDates) {
+    const year = date.slice(0, 4)
+    const dateIndex = nextDateIndexByYear.get(year) ?? 0
+    tradingYearDateIndex.set(date, dateIndex)
+    nextDateIndexByYear.set(year, dateIndex + 1)
+
+    const weekStart = calendarWeekStart(date)
+    const yearWeeks = weekIndexByYear.get(year) ?? new Map<string, number>()
+    if (!weekIndexByYear.has(year)) weekIndexByYear.set(year, yearWeeks)
+    let weekIndex = yearWeeks.get(weekStart)
+    if (weekIndex == null) {
+      weekIndex = yearWeeks.size
+      yearWeeks.set(weekStart, weekIndex)
+    }
+    tradingYearWeekIndex.set(date, weekIndex)
+  }
+
+  return {
+    tradingDateIndex: new Map(uniqueDates.map((date, index) => [date, index])),
+    tradingYearDateIndex,
+    tradingYearWeekIndex,
+    anchorDate: uniqueDates[0] ?? null,
+  }
+}
+
+export function getTimeframeBucketKey(
+  isoDate: string,
+  spec: TimeframeSpec,
+  context?: TimeframeBucketContext,
+): string {
+  const multiplier = Math.max(1, Math.floor(spec.multiplier))
+
+  if (spec.timeframe === 'day') {
+    if (multiplier === 1) return `day:${isoDate}`
+    const tradingIndex = context?.tradingYearDateIndex.get(isoDate)
+    if (tradingIndex == null) {
+      throw new Error(`Trading-year session index is required for ${multiplier}D bucket: ${isoDate}`)
+    }
+    return `day:${isoDate.slice(0, 4)}:${multiplier}:${Math.floor(tradingIndex / multiplier)}`
+  }
+
+  if (spec.timeframe === 'week' && multiplier > 1) {
+    const tradingWeekIndex = context?.tradingYearWeekIndex.get(isoDate)
+    if (tradingWeekIndex == null) {
+      throw new Error(`Trading-year week index is required for ${multiplier}W bucket: ${isoDate}`)
+    }
+    return `week:${isoDate.slice(0, 4)}:${multiplier}:${Math.floor(tradingWeekIndex / multiplier)}`
+  }
+
+  if (spec.timeframe === 'month') {
+    const month = Number(isoDate.slice(5, 7)) - 1
+    return `month:${isoDate.slice(0, 4)}:${multiplier}:${Math.floor(month / multiplier)}`
+  }
+
+  const rawKey = spec.timeframe === 'week'
+    ? calendarWeekBucket(isoDate)
+    : yearBucket(isoDate)
+  return `${spec.timeframe}:${multiplier}:${Math.floor(rawKey / multiplier)}`
+}
+
+export function resampleOhlcv(
+  rows: OHLCV[],
+  spec: TimeframeSpec,
+  context?: TimeframeBucketContext,
+): OHLCV[] {
   const multiplier = Math.max(1, Math.floor(spec.multiplier))
   const sorted = rows
     .filter((row) => row.date && Number.isFinite(row.open) && Number.isFinite(row.high) && Number.isFinite(row.low) && Number.isFinite(row.close))
@@ -102,21 +194,12 @@ export function resampleOhlcv(rows: OHLCV[], spec: TimeframeSpec): OHLCV[] {
     return sorted.map((row) => ({ ...row }))
   }
 
-  if (spec.timeframe === 'day') {
-    return aggregateConsecutive(sorted, multiplier)
-  }
-
+  const bucketContext = context ?? createTimeframeBucketContext(sorted.map((row) => row.date))
   const grouped: OHLCV[] = []
-  let currentKey: number | null = null
+  let currentKey: string | null = null
   let current: OHLCV | null = null
   for (const row of sorted) {
-    const rawKey = spec.timeframe === 'week'
-      ? calendarWeekBucket(row.date)
-      : spec.timeframe === 'month'
-        ? calendarMonthBucket(row.date)
-        : yearBucket(row.date)
-    // Fixed epoch buckets keep 2x/3x candles identical regardless of the requested history window.
-    const key = Math.floor(rawKey / multiplier)
+    const key = getTimeframeBucketKey(row.date, { ...spec, multiplier }, bucketContext)
 
     if (key !== currentKey) {
       if (current) grouped.push(current)
@@ -169,16 +252,6 @@ export function angleDeg(current: number | null | undefined, previous: number | 
   if (current == null || previous == null || !Number.isFinite(current) || !Number.isFinite(previous) || previous === 0 || bars <= 0) return null
   const slope = (((current - previous) / previous) * 100) / bars
   return Math.atan(slope) * (180 / Math.PI)
-}
-
-function aggregateConsecutive(rows: OHLCV[], size: number): OHLCV[] {
-  const grouped: OHLCV[] = []
-  for (let i = 0; i < rows.length; i += size) {
-    const slice = rows.slice(i, i + size)
-    if (slice.length === 0) continue
-    grouped.push(slice.reduce((current, row, index) => index === 0 ? { ...row } : mergeCandle(current, row), slice[0]))
-  }
-  return grouped
 }
 
 function mergeCandle(current: OHLCV | null, row: OHLCV): OHLCV {

@@ -1,0 +1,35 @@
+//@version=6
+indicator("StockBoard MTF Close Oracle", overlay = false, precision = 0)
+
+bool isOneDayChart = timeframe.isdaily and timeframe.multiplier == 1
+bool isRegularSession = syminfo.session == session.regular
+
+if barstate.isfirst and not isOneDayChart
+    runtime.error("StockBoard MTF Close Oracle must run on a 1D chart.")
+
+if barstate.isfirst and not isRegularSession
+    runtime.error("StockBoard MTF Close Oracle requires the regular exchange session.")
+
+int exchangeDate = year * 10000 + month * 100 + dayofmonth
+bool confirmed = barstate.isconfirmed
+
+// These plots are intentionally Data Window-only. TradingView includes their
+// numeric values in Export chart data without adding visual noise to the chart.
+plot(exchangeDate, "SB_EXCHANGE_DATE", display = display.data_window)
+plot(confirmed ? 1 : 0, "SB_BAR_CONFIRMED", display = display.data_window)
+plot(isRegularSession ? 1 : 0, "SB_SESSION_REGULAR", display = display.data_window)
+
+plot(confirmed and time_close == time_close("1D") ? 1 : 0, "SB_MTF_D", display = display.data_window)
+plot(confirmed and time_close == time_close("2D") ? 1 : 0, "SB_MTF_2D", display = display.data_window)
+plot(confirmed and time_close == time_close("3D") ? 1 : 0, "SB_MTF_3D", display = display.data_window)
+plot(confirmed and time_close == time_close("5D") ? 1 : 0, "SB_MTF_5D", display = display.data_window)
+
+plot(confirmed and time_close == time_close("1W") ? 1 : 0, "SB_MTF_W", display = display.data_window)
+plot(confirmed and time_close == time_close("2W") ? 1 : 0, "SB_MTF_2W", display = display.data_window)
+plot(confirmed and time_close == time_close("3W") ? 1 : 0, "SB_MTF_3W", display = display.data_window)
+plot(confirmed and time_close == time_close("5W") ? 1 : 0, "SB_MTF_5W", display = display.data_window)
+
+plot(confirmed and time_close == time_close("1M") ? 1 : 0, "SB_MTF_M", display = display.data_window)
+plot(confirmed and time_close == time_close("2M") ? 1 : 0, "SB_MTF_2M", display = display.data_window)
+plot(confirmed and time_close == time_close("3M") ? 1 : 0, "SB_MTF_3M", display = display.data_window)
+plot(confirmed and time_close == time_close("5M") ? 1 : 0, "SB_MTF_5M", display = display.data_window)

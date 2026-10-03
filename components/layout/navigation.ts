@@ -103,6 +103,15 @@ export const PAGE_CATALOG = {
     commandBadge: 'イベント',
     searchTerms: '業績 発表',
   },
+  mtfCloseCalendar: {
+    href: '/mtf-close-calendar',
+    label: 'MTF確定日',
+    description: '複数時間足の確定日を月間表示',
+    icon: CalendarRange,
+    commandVerb: '確認',
+    commandBadge: '市場',
+    searchTerms: 'MTF Close Calendar ローソク足 確定日 マルチタイムフレーム',
+  },
   screener: {
     href: '/screener',
     label: 'スクリーナー',
@@ -377,7 +386,7 @@ export const NAVIGATION_BY_AREA = {
       sections: [
         { id: 'market-overview', label: '市場全体', pageIds: ['marketMomentum'], column: 1 },
         { id: 'industries', label: '業種・テーマ', pageIds: ['sectors', 'sectorEtfs', 'themes'], column: 2 },
-        { id: 'events', label: 'イベント', pageIds: ['earnings', 'materials'], column: 1 },
+        { id: 'events', label: 'イベント', pageIds: ['earnings', 'mtfCloseCalendar', 'materials'], column: 1 },
       ],
     },
     {

@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict'
 import {
+  createTimeframeBucketContext,
   defaultMaLinesForInterval,
   intervalLabel,
   parseInterval,
   resampleOhlcv,
   specToIntervalCode,
 } from '@/lib/timeframes'
+import { getJpTradingDates } from '@/lib/server/jp-market-calendar'
 import type { OHLCV } from '@/types/stock'
 
 const rows: OHLCV[] = [
@@ -18,6 +20,7 @@ const rows: OHLCV[] = [
   { date: '2026-02-13', open: 127, high: 131, low: 120, close: 121, volume: 7_000 },
   { date: '2026-03-02', open: 122, high: 140, low: 119, close: 136, volume: 8_000 },
 ]
+const tradingViewContext = createTimeframeBucketContext(getJpTradingDates('2026-01-01', '2026-12-31'))
 
 function candleKey(row: OHLCV) {
   return {
@@ -30,25 +33,31 @@ function candleKey(row: OHLCV) {
   }
 }
 
-const twoDay = resampleOhlcv(rows, { timeframe: 'day', multiplier: 2 }).map(candleKey)
-assert.deepEqual(twoDay[0], { date: '2026-01-30', open: 100, high: 112, low: 95, close: 108, volume: 3_000 })
-assert.deepEqual(twoDay[1], { date: '2026-02-03', open: 109, high: 120, low: 107, close: 113, volume: 7_000 })
+const twoDay = resampleOhlcv(rows, { timeframe: 'day', multiplier: 2 }, tradingViewContext).map(candleKey)
+assert.deepEqual(twoDay[0], { date: '2026-01-29', open: 100, high: 110, low: 95, close: 105, volume: 1_000 })
+assert.deepEqual(twoDay[1], { date: '2026-02-02', open: 106, high: 120, low: 101, close: 118, volume: 5_000 })
 
-const threeDay = resampleOhlcv(rows, { timeframe: 'day', multiplier: 3 }).map(candleKey)
-assert.deepEqual(threeDay[0], { date: '2026-02-02', open: 100, high: 120, low: 95, close: 118, volume: 6_000 })
-assert.deepEqual(threeDay[1], { date: '2026-02-09', open: 117, high: 130, low: 111, close: 128, volume: 15_000 })
+const threeDay = resampleOhlcv(rows, { timeframe: 'day', multiplier: 3 }, tradingViewContext).map(candleKey)
+assert.deepEqual(threeDay[0], { date: '2026-01-29', open: 100, high: 110, low: 95, close: 105, volume: 1_000 })
+assert.deepEqual(threeDay[1], { date: '2026-02-03', open: 106, high: 120, low: 101, close: 113, volume: 9_000 })
+
+const fiveDay = resampleOhlcv(rows, { timeframe: 'day', multiplier: 5 }, tradingViewContext).map(candleKey)
+assert.deepEqual(fiveDay[0], { date: '2026-02-02', open: 100, high: 120, low: 95, close: 118, volume: 6_000 })
 
 const weekly = resampleOhlcv(rows, { timeframe: 'week', multiplier: 1 }).map(candleKey)
 assert.deepEqual(weekly[0], { date: '2026-01-30', open: 100, high: 112, low: 95, close: 108, volume: 3_000 })
 assert.deepEqual(weekly[1], { date: '2026-02-06', open: 109, high: 124, low: 107, close: 122, volume: 12_000 })
 
-const twoWeek = resampleOhlcv(rows, { timeframe: 'week', multiplier: 2 }).map(candleKey)
+const twoWeek = resampleOhlcv(rows, { timeframe: 'week', multiplier: 2 }, tradingViewContext).map(candleKey)
 assert.deepEqual(twoWeek[0], { date: '2026-01-30', open: 100, high: 112, low: 95, close: 108, volume: 3_000 })
 assert.deepEqual(twoWeek[1], { date: '2026-02-13', open: 109, high: 131, low: 107, close: 121, volume: 25_000 })
 
-const threeWeek = resampleOhlcv(rows, { timeframe: 'week', multiplier: 3 }).map(candleKey)
+const threeWeek = resampleOhlcv(rows, { timeframe: 'week', multiplier: 3 }, tradingViewContext).map(candleKey)
 assert.deepEqual(threeWeek[0], { date: '2026-02-13', open: 100, high: 131, low: 95, close: 121, volume: 28_000 })
 assert.deepEqual(threeWeek[1], { date: '2026-03-02', open: 122, high: 140, low: 119, close: 136, volume: 8_000 })
+
+const fiveWeek = resampleOhlcv(rows, { timeframe: 'week', multiplier: 5 }, tradingViewContext).map(candleKey)
+assert.deepEqual(fiveWeek[0], { date: '2026-02-06', open: 100, high: 124, low: 95, close: 122, volume: 15_000 })
 
 const monthly = resampleOhlcv(rows, { timeframe: 'month', multiplier: 1 }).map(candleKey)
 assert.deepEqual(monthly[0], { date: '2026-01-30', open: 100, high: 112, low: 95, close: 108, volume: 3_000 })
@@ -60,6 +69,9 @@ assert.deepEqual(twoMonth[1], { date: '2026-03-02', open: 122, high: 140, low: 1
 
 const threeMonth = resampleOhlcv(rows, { timeframe: 'month', multiplier: 3 }).map(candleKey)
 assert.deepEqual(threeMonth[0], { date: '2026-03-02', open: 100, high: 140, low: 95, close: 136, volume: 36_000 })
+
+const fiveMonth = resampleOhlcv(rows, { timeframe: 'month', multiplier: 5 }).map(candleKey)
+assert.deepEqual(fiveMonth[0], { date: '2026-03-02', open: 100, high: 140, low: 95, close: 136, volume: 36_000 })
 
 const halfYearRows: OHLCV[] = [
   ...rows,

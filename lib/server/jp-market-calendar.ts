@@ -116,6 +116,43 @@ export function jpMarketClosureReason(date: string): string | null {
   return null
 }
 
+export function isJpMarketTradingDate(date: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}$/.test(date) && jpMarketClosureReason(date) === null
+}
+
+export function getNextJpTradingDate(date: string, maxLookaheadDays = 14): string | null {
+  let value = new Date(dateFromYmd(date).getTime() + MS_PER_DAY)
+  for (let offset = 0; offset < maxLookaheadDays; offset += 1) {
+    const candidate = formatUtcDate(value)
+    if (isJpMarketTradingDate(candidate)) return candidate
+    value = new Date(value.getTime() + MS_PER_DAY)
+  }
+  return null
+}
+
+export function getPreviousJpTradingDate(date: string, maxLookbackDays = 14): string | null {
+  let value = new Date(dateFromYmd(date).getTime() - MS_PER_DAY)
+  for (let offset = 0; offset < maxLookbackDays; offset += 1) {
+    const candidate = formatUtcDate(value)
+    if (isJpMarketTradingDate(candidate)) return candidate
+    value = new Date(value.getTime() - MS_PER_DAY)
+  }
+  return null
+}
+
+export function getJpTradingDates(from: string, to: string): string[] {
+  const start = dateFromYmd(from)
+  const end = dateFromYmd(to)
+  if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || start > end) return []
+
+  const dates: string[] = []
+  for (let time = start.getTime(); time <= end.getTime(); time += MS_PER_DAY) {
+    const date = formatUtcDate(new Date(time))
+    if (isJpMarketTradingDate(date)) dates.push(date)
+  }
+  return dates
+}
+
 export function rollBackToJpTradingDate(date: Date): Date {
   const value = new Date(date)
   while (jpMarketClosureReason(formatUtcDate(value))) {
