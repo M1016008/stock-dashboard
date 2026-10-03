@@ -3,7 +3,7 @@ import { execAll, execGet } from '@/lib/db/client'
 import { getTriggerHistoricalScan } from '@/lib/server/trigger-discovery-historical-scan'
 import { getTriggerDiscovery, type TriggerDiscoveryRow } from '@/lib/server/trigger-discovery-read-model'
 import type { TriggerDiscoveryTimeframe } from '@/lib/trigger-discovery-timeframe'
-import { calendarWeekBucket } from '@/lib/timeframes'
+import { tradingViewWeekBucketOrdinal } from '@/lib/timeframes'
 
 type SideEffects = {
   evaluations: number
@@ -167,7 +167,7 @@ async function main() {
     WHERE date BETWEEN ? AND ? ORDER BY date
   `, [RANGE_START, RANGE_END])).map((row) => row.date)
   const monthlyDates = boundaryDates(dates, (date) => date.slice(0, 7))
-  const biweeklyDates = boundaryDates(dates, (date) => Math.floor(calendarWeekBucket(date) / 2))
+  const biweeklyDates = boundaryDates(dates, (date) => tradingViewWeekBucketOrdinal(date, 2))
 
   const mode = process.env.HISTORICAL_SCAN_AUDIT_MODE ?? 'all'
   const output: Record<string, unknown> = { mode, before }

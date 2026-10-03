@@ -8,7 +8,7 @@ export const TRIGGER_MA_PERIOD_MAX = 120
 export const TRIGGER_SPREAD_LOOKBACK_INTERVALS_MIN = 2
 export const TRIGGER_SPREAD_LOOKBACK_INTERVALS_MAX = 24
 export const TRIGGER_MAX_BELOW_ZONE_PCT = 20
-export const TRIGGER_ENGINE_VERSION = 1
+export const TRIGGER_ENGINE_VERSION = 2
 
 export type MaTrend = 'RISING' | 'FLAT' | 'FALLING'
 export type TriggerPricePosition = 'ABOVE_ZONE' | 'IN_ZONE' | 'BELOW_ZONE'

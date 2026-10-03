@@ -37,7 +37,7 @@ import {
   type TriggerDiscoveryTimeframe,
 } from '@/lib/trigger-discovery-timeframe'
 import { calculateTriggerScore } from '@/lib/trigger-score'
-import { calendarWeekBucket, calendarWeekStart } from '@/lib/timeframes'
+import { calendarWeekStart, tradingViewWeekBucketOrdinal } from '@/lib/timeframes'
 import type { OHLCV } from '@/types/stock'
 
 const MONTHLY_HISTORY_BUFFER_DAYS = 160
@@ -281,7 +281,7 @@ export function buildBiweeklySeries(
   const segments = splitContinuousHistory(rows).map((weeklyRows): BiweeklySegment => {
     const bars = buildBiweeklyBarsFromWeekly(weeklyRows).map((row) => ({
       ...row,
-      bucket: Math.floor(calendarWeekBucket(row.date) / 2),
+      bucket: tradingViewWeekBucketOrdinal(row.date, 2),
     }))
     const points = attachBiweeklyMovingAverages(
       bars,
@@ -297,7 +297,7 @@ export function buildBiweeklySeries(
             price: point.close,
             ma1,
             ma2,
-            bucket: Math.floor(calendarWeekBucket(point.date) / 2),
+            bucket: tradingViewWeekBucketOrdinal(point.date, 2),
             barIndex,
           }]
     })
@@ -326,7 +326,7 @@ export function currentBiweeklyObservations(
 ): MaZoneTriggerObservation[] {
   if (!prepared) return []
   const currentWeekStart = calendarWeekStart(priceDate)
-  const currentBucket = Math.floor(calendarWeekBucket(priceDate) / 2)
+  const currentBucket = tradingViewWeekBucketOrdinal(priceDate, 2)
   let selected: BiweeklySegment | null = null
   let priorWeeklyDate: string | null = null
   for (const segment of prepared.segments) {

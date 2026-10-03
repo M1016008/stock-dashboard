@@ -4,11 +4,11 @@ import {
   type MaZoneTriggerConfig,
 } from '@/lib/trigger-discovery-engine'
 import {
-  BIWEEKLY_ANCHOR_MONDAY,
   buildBiweeklyBarsFromDaily,
   buildBiweeklyBarsFromWeekly,
   buildContinuousBiweeklyMaSeriesFromWeekly,
 } from '@/lib/trigger-discovery-timeframe'
+import { resampleOhlcv, tradingViewWeekBucketOrdinal } from '@/lib/timeframes'
 import type { OHLCV } from '@/types/stock'
 
 function bar(date: string, open: number, high: number, low: number, close: number, volume: number): OHLCV {
@@ -27,8 +27,6 @@ function weeklyRowsFromBiweeklyCloses(closes: number[], start = '2026-01-09'): O
     bar(addDays(start, index * 14 + 7), close, close + 2, close - 2, close, 200 + index),
   ])
 }
-
-assert.equal(BIWEEKLY_ANCHOR_MONDAY, '1970-01-05')
 
 const completeTwoWeeks = buildBiweeklyBarsFromDaily([
   bar('2026-01-05', 100, 104, 99, 103, 1_000),
@@ -50,13 +48,24 @@ const yearBoundary = buildBiweeklyBarsFromWeekly([
   bar('2023-12-29', 80, 90, 75, 88, 100),
   bar('2024-01-05', 89, 98, 86, 96, 200),
 ])
-assert.deepEqual(yearBoundary, [bar('2024-01-05', 80, 98, 75, 96, 300)])
+assert.deepEqual(yearBoundary, [
+  bar('2023-12-29', 80, 90, 75, 88, 100),
+  bar('2024-01-05', 89, 98, 86, 96, 200),
+])
 
 const isoWeek53 = buildBiweeklyBarsFromWeekly([
   bar('2020-12-31', 50, 55, 48, 54, 150),
   bar('2021-01-08', 55, 60, 52, 59, 250),
 ])
-assert.deepEqual(isoWeek53, [bar('2021-01-08', 50, 60, 48, 59, 400)])
+assert.deepEqual(isoWeek53, [
+  bar('2020-12-31', 50, 55, 48, 54, 150),
+  bar('2021-01-08', 55, 60, 52, 59, 250),
+])
+
+assert.notEqual(
+  tradingViewWeekBucketOrdinal('2023-12-29', 2),
+  tradingViewWeekBucketOrdinal('2024-01-05', 2),
+)
 
 const holidayWeek = buildBiweeklyBarsFromDaily([
   bar('2026-05-01', 200, 205, 198, 204, 1_000),
@@ -74,6 +83,10 @@ const stableSource = [
   bar('2026-02-06', 14, 16, 13, 15, 50),
   bar('2026-02-13', 15, 17, 14, 16, 60),
 ]
+assert.deepEqual(
+  buildBiweeklyBarsFromWeekly(stableSource),
+  resampleOhlcv(stableSource, { timeframe: 'week', multiplier: 2 }),
+)
 const stableAtA = buildBiweeklyBarsFromWeekly(stableSource.slice(0, 2))
 const stableAtPlusOneWeek = buildBiweeklyBarsFromWeekly(stableSource.slice(0, 3))
 const stableAtPlusTwoWeeks = buildBiweeklyBarsFromWeekly(stableSource.slice(0, 4))

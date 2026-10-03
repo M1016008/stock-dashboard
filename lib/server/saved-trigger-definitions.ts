@@ -12,6 +12,7 @@ import {
   type SavedTriggerEvaluationConfig,
   type SavedTriggerViewConfig,
 } from '@/lib/trigger-definition'
+import { TRIGGER_ENGINE_VERSION } from '@/lib/trigger-discovery-engine'
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
@@ -83,18 +84,24 @@ async function allowedMarkets(): Promise<Set<string | null>> {
 }
 
 function rowToDefinition(row: TriggerDefinitionRow): SavedTriggerDefinition {
+  const evaluationConfig = canonicalizeSavedTriggerEvaluationConfig(
+    parseJson(row.evaluation_config_json, 'evaluation_config_json'),
+    { allowLegacyTimeframe: true },
+  )
   return {
     id: row.id,
     name: row.name,
-    evaluationConfig: canonicalizeSavedTriggerEvaluationConfig(
-      parseJson(row.evaluation_config_json, 'evaluation_config_json'),
-      { allowLegacyTimeframe: true },
-    ),
+    evaluationConfig,
     viewConfig: canonicalizeSavedTriggerViewConfig(
       parseJson(row.view_config_json, 'view_config_json'),
     ),
     evaluationVersion: Number(row.evaluation_version),
-    engineVersion: Number(row.engine_version),
+    // Existing BIWEEKLY definitions adopt the unified TradingView 2W engine
+    // without rewriting production rows. Persisted v1 evaluations remain
+    // immutable and new runs receive a distinct engine-version signature.
+    engineVersion: evaluationConfig.timeframe === 'BIWEEKLY'
+      ? Math.max(Number(row.engine_version), TRIGGER_ENGINE_VERSION)
+      : Number(row.engine_version),
     scoreVersion: Number(row.score_version),
     evaluationSignature: row.evaluation_signature,
     createdAt: isoDateTime(row.created_at)!,

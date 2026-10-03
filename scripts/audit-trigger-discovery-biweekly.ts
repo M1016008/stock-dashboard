@@ -5,7 +5,7 @@ import {
   getTriggerDiscovery,
   type TriggerDiscoveryFilteredCandidate,
 } from '@/lib/server/trigger-discovery-read-model'
-import { calendarWeekBucket } from '@/lib/timeframes'
+import { tradingViewWeekBucketOrdinal } from '@/lib/timeframes'
 import type { OHLCV } from '@/types/stock'
 
 const AS_OF = process.env.AS_OF ?? '2026-09-11'
@@ -31,7 +31,7 @@ function average(values: number[]): number {
 function manualBiweekly(weekly: WeeklyRow[]): OHLCV[] {
   const buckets = new Map<number, OHLCV>()
   for (const row of weekly.slice().sort((left, right) => left.date.localeCompare(right.date))) {
-    const key = Math.floor(calendarWeekBucket(row.week_start_date) / 2)
+    const key = tradingViewWeekBucketOrdinal(row.date, 2)
     const current = buckets.get(key)
     buckets.set(key, current == null ? {
       date: row.date,
@@ -150,7 +150,7 @@ async function main() {
 
   console.log(JSON.stringify({
     timeframe: 'BIWEEKLY',
-    anchorMonday: '1970-01-05',
+    bucketDefinition: 'TradingView-compatible year-reset 2W',
     requestedAsOf: AS_OF,
     resolvedAsOf: discovery.resolvedAsOf,
     universeCount: discovery.diagnostics.counts.universe,

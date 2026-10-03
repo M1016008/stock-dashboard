@@ -1130,8 +1130,8 @@ export function TriggerDiscoveryClient({ options }: Props) {
             <h2 id="trigger-conditions" className="text-[14px] font-semibold text-[var(--color-text-primary)]">1. Trigger条件</h2>
             <p className="mt-0.5 text-[10px] text-[var(--color-text-tertiary)]">{timeframe === 'BIWEEKLY' ? '2週足' : '月足'} / 2本とも上向き / 上から接近</p>
           </div>
-          <span className="text-[10px] text-[var(--color-text-tertiary)]" title={timeframe === 'BIWEEKLY' ? '2週足は、週足を2本ずつ束ねて作成します。' : '月足を基準に移動平均線を計算します。'}>
-            {timeframe === 'BIWEEKLY' ? '2週足は週足2本を束ねて計算' : '月足終値を基準に計算'}
+          <span className="text-[10px] text-[var(--color-text-tertiary)]" title={timeframe === 'BIWEEKLY' ? '2週足は、TradingView準拠の年次2週bucketで作成します。' : '月足を基準に移動平均線を計算します。'}>
+            {timeframe === 'BIWEEKLY' ? 'TradingView準拠の2週足で計算' : '月足終値を基準に計算'}
           </span>
         </div>
         <div className={`grid grid-cols-2 gap-2 sm:grid-cols-4 ${mode === 'period' ? 'lg:grid-cols-[110px_110px_110px_130px_145px_145px_1fr]' : 'lg:grid-cols-[120px_120px_120px_140px_160px_1fr]'}`}>

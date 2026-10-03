@@ -22,7 +22,7 @@ for (const text of ['日A', '日B', '週A', '週B', '月A', '月B']) {
 for (const text of ['Triggerを検索', 'Stageで絞り込む', 'PIT Universe', 'Stale accepted']) {
   assert.ok(client.includes(text), `${text} must remain in the Trigger Discovery UI`)
 }
-for (const text of ['月足', '2週足', '2週足は、週足を2本ずつ束ねて作成します。', "timeframe === 'BIWEEKLY' ? '本' : 'か月'"]) {
+for (const text of ['月足', '2週足', '2週足は、TradingView準拠の年次2週bucketで作成します。', "timeframe === 'BIWEEKLY' ? '本' : 'か月'"]) {
   assert.ok(client.includes(text), `${text} must remain in the Timeframe UI contract`)
 }
 for (const text of [

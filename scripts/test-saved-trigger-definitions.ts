@@ -88,7 +88,7 @@ async function main() {
     assert.equal(definition.evaluationVersion, 1)
     assert.equal(definition.evaluationConfig.timeframe, 'BIWEEKLY')
     assert.equal(definition.evaluationConfig.triggerCore.spreadExpansionEnabled, true)
-    assert.equal(definition.engineVersion, 1)
+    assert.equal(definition.engineVersion, 2)
     assert.equal(definition.scoreVersion, 1)
     assert.equal(definition.evaluationSignature.length, 64)
     assert.equal(JSON.stringify(definition).includes('2026-08-25'), false, 'requestedAsOf must not be persisted')
@@ -208,6 +208,22 @@ async function main() {
       evaluationConfig: { ...configs.evaluationConfig, timeframe: 'WEEKLY' },
       viewConfig: configs.viewConfig,
     }), SavedTriggerValidationError)
+
+    const legacyBiweeklyId = randomUUID()
+    await execRun(`INSERT INTO trigger_definitions (
+      id, name, evaluation_config_json, view_config_json, evaluation_signature,
+      evaluation_version, engine_version, score_version
+    ) VALUES (?, ?, ?, ?, ?, 1, 1, ?)`, [
+      legacyBiweeklyId, `${namePrefix}legacy-biweekly`, JSON.stringify(configs.evaluationConfig),
+      JSON.stringify(configs.viewConfig), configs.evaluationConfig.timeframe.padEnd(64, '0'), scoreVersion,
+    ])
+    const upgradedBiweekly = await getSavedTriggerDefinition(legacyBiweeklyId)
+    assert.equal(upgradedBiweekly.engineVersion, 2, 'legacy 2W definitions use the TradingView engine')
+    const legacyBiweeklyStored = await execGet<{ engine_version: number }>(
+      'SELECT engine_version FROM trigger_definitions WHERE id=?',
+      [legacyBiweeklyId],
+    )
+    assert.equal(legacyBiweeklyStored?.engine_version, 1, 'read-time compatibility does not rewrite stored history')
 
     const legacyId = randomUUID()
     const legacySignature = 'legacy-monthly-signature'.padEnd(64, '0')

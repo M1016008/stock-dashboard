@@ -1,8 +1,6 @@
 import { adjustLikelySplitOhlcv } from '@/lib/physical-momentum'
 import { splitContinuousHistory } from '@/lib/snapshots/continuous-ma'
 import {
-  CALENDAR_WEEK_ANCHOR_MONDAY,
-  calendarWeekBucket,
   resampleOhlcv,
   smaSeries,
 } from '@/lib/timeframes'
@@ -11,7 +9,6 @@ import type { OHLCV } from '@/types/stock'
 export type TriggerDiscoveryTimeframe = 'MONTHLY' | 'BIWEEKLY'
 
 export const DEFAULT_TRIGGER_DISCOVERY_TIMEFRAME: TriggerDiscoveryTimeframe = 'MONTHLY'
-export const BIWEEKLY_ANCHOR_MONDAY = CALENDAR_WEEK_ANCHOR_MONDAY
 
 export type ContinuousBiweeklyMaPoint = OHLCV & {
   values: Map<number, number | null>
@@ -49,38 +46,9 @@ export function attachBiweeklyMovingAverages(
   }))
 }
 
-/**
- * Pair the canonical Monday-start weekly candles into fixed 14-day buckets.
- * Trigger Discovery intentionally retains the 1970-01-05 anchor contract, so
- * appending future weeks cannot change any earlier bucket assignment.
- */
+/** Build TradingView-compatible 2W candles from canonical weekly candles. */
 export function buildBiweeklyBarsFromWeekly(weeklyRows: OHLCV[]): OHLCV[] {
-  const sorted = weeklyRows.slice().sort((left, right) => left.date.localeCompare(right.date))
-  const grouped: OHLCV[] = []
-  let currentKey: number | null = null
-  let current: OHLCV | null = null
-
-  for (const row of sorted) {
-    const key = Math.floor(calendarWeekBucket(row.date) / 2)
-    if (key !== currentKey) {
-      if (current) grouped.push(current)
-      currentKey = key
-      current = { ...row }
-      continue
-    }
-    current = {
-      date: row.date,
-      open: current!.open,
-      high: Math.max(current!.high, row.high),
-      low: Math.min(current!.low, row.low),
-      close: row.close,
-      volume: current!.volume + row.volume,
-      adjustedClose: row.adjustedClose ?? current!.adjustedClose ?? null,
-    }
-  }
-
-  if (current) grouped.push(current)
-  return grouped
+  return resampleOhlcv(weeklyRows, { timeframe: 'week', multiplier: 2 })
 }
 
 /** Build the canonical weekly series first, then pair those weekly candles. */

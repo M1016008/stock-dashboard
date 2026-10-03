@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { execAll, execGet, execRun } from '@/lib/db/client'
 import type { TriggerDiscoveryResult, TriggerDiscoveryRow } from '@/lib/server/trigger-discovery-read-model'
 import {
@@ -131,6 +131,35 @@ async function main() {
     const oldAfterEdit = await getTriggerEvaluationDetail({ evaluationId: saturday.evaluation.id })
     assert.equal(oldAfterEdit.evaluation.evaluationConfigSnapshot.triggerCore.ma2Period, 25)
     assert.equal(oldAfterEdit.members[0].ma2Period, 25)
+
+    const versionedDefinition = await createSavedTriggerDefinition({ name: `${prefix}engine-version`, ...configs })
+    const versionOneRunSignature = createHash('sha256').update(JSON.stringify({
+      definitionId: versionedDefinition.id,
+      evaluationVersion: versionedDefinition.evaluationVersion,
+      engineVersion: 1,
+      scoreVersion: versionedDefinition.scoreVersion,
+      evaluationConfigSignature: versionedDefinition.evaluationSignature,
+      resolvedAsOf: '2026-09-11',
+    })).digest('hex')
+    const versionOneEvaluationId = randomUUID()
+    await execRun(`INSERT INTO trigger_evaluations (
+      id, definition_id, evaluation_version, engine_version, score_version,
+      run_signature, evaluation_config_signature, evaluation_config_snapshot_json,
+      requested_as_of, resolved_as_of, status, completed_at
+    ) VALUES (?, ?, ?, 1, ?, ?, ?, ?, '2026-09-11', '2026-09-11', 'COMPLETED', unixepoch())`, [
+      versionOneEvaluationId, versionedDefinition.id, versionedDefinition.evaluationVersion,
+      versionedDefinition.scoreVersion, versionOneRunSignature, versionedDefinition.evaluationSignature,
+      JSON.stringify(versionedDefinition.evaluationConfig),
+    ])
+    const versionTwoEvaluation = await evaluateSavedTriggerDefinition(
+      versionedDefinition.id,
+      '2026-09-11',
+      { resolveAsOf: async () => '2026-09-11', discover: async () => sampleResult() },
+    )
+    assert.equal(versionTwoEvaluation.reused, false, 'engine v1 evaluation must not be reused by engine v2')
+    assert.notEqual(versionTwoEvaluation.evaluation.id, versionOneEvaluationId)
+    assert.equal(versionTwoEvaluation.evaluation.engineVersion, 2)
+    assert.equal((await getTriggerEvaluationDetail({ evaluationId: versionOneEvaluationId })).evaluation.engineVersion, 1)
 
     const legacyEvaluationId = randomUUID()
     const legacySnapshot = structuredClone(configs.evaluationConfig) as Partial<typeof configs.evaluationConfig>
