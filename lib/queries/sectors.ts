@@ -1,101 +1,1173 @@
-// lib/queries/sectors.ts
-//
-// Phase 4 業種別 (/sectors) 用集計。
-//
-// 業種分類のフォールバック規則 (銘柄ごと):
-//   1. stock_classification.major_category (Yoshio 独自分類 Excel)
-//   2. ticker_universe.sector17_name (J-Quants/JPX Sector17)
-//   3. 'その他'
-//
-// 業種細分類も同様: classification.sub_industry → Sector33 → 'その他'
-
 import { execAll, execGet } from '@/lib/db/client'
+import { historicalUniverseMembershipSql } from '@/lib/historical-universe'
+import { type UniverseFilterValue, universeSqlCondition } from '@/lib/market-universe'
+import {
+  calculateTrendStructureMetrics,
+  SECTOR_STRUCTURE_AXES,
+  type AxisStructureSummary,
+  type SectorStructureAxisKey,
+  type SectorStructureTaxonomy,
+} from '@/lib/sector-structure'
+import {
+  calculateSectorMarketBaseline,
+  calculateSectorStageDeltas,
+  findDominantStageChange,
+  parseSectorStageComposition,
+  type SectorDominantStageChange,
+  type SectorMarketBaseline,
+  type SectorStageComposition,
+  type SectorStageDeltas,
+} from '@/lib/sector-stage-distribution'
+import {
+  buildSectorStructureSeries,
+  type SectorStructureSourceRow,
+} from '@/lib/sector-structure-series'
 
-export interface SectorRow {
+export type SectorClassification = '17' | '33'
+export type SectorHeatmapClassification = SectorClassification | 'major' | 'subIndustry'
+export type SectorPeriod = 'today' | 'week' | 'month'
+
+export interface SectorHeatmapRow {
+  sector_code: string | null
   sector_name: string
+  sector_parent_name: string | null
   n_stocks: number
   avg_change: number
-  stage_up_count: number    // Stage 1+2
-  stage_down_count: number  // Stage 4+5
+  advancing_count: number
+  declining_count: number
+  avg_pms: number | null
+  avg_pfs: number | null
+  avg_pes: number | null
 }
 
-// 大分類フォールバック式 (Yoshio 独自 → JPX Sector17 → その他)
-const MAJOR_EXPR = `COALESCE(sc.major_category, tu.sector17_name, 'その他')`
-// 業種細分類フォールバック式 (Yoshio 独自 → JPX Sector33 → その他)
-const SUB_EXPR = `COALESCE(sc.sub_industry, tu.sector33_name, 'その他')`
+export interface SectorPeriodSummary {
+  period: SectorPeriod
+  label: string
+  description: string
+  latestDate: string
+  baseDate: string
+  rows17: SectorHeatmapRow[]
+  rows33: SectorHeatmapRow[]
+  rowsMajor: SectorHeatmapRow[]
+  rowsSubIndustry: SectorHeatmapRow[]
+}
 
-export async function getSectorRows(): Promise<{ rows: SectorRow[]; classificationCount: number }> {
-  const latest = (await execGet<{ d: string | null }>(`SELECT MAX(date) AS d FROM ohlcv_daily`))?.d
-  if (!latest) return { rows: [], classificationCount: 0 }
-  const prev = (await execGet<{ d: string | null }>(`SELECT MAX(date) AS d FROM ohlcv_daily WHERE date < ?`, [latest]))?.d
-  if (!prev) return { rows: [], classificationCount: 0 }
-  const latestSnap = (await execGet<{ d: string | null }>(`SELECT MAX(date) AS d FROM daily_snapshots`))?.d ?? latest
+export interface SectorAnalysisBoard {
+  latestDate: string | null
+  periods: SectorPeriodSummary[]
+  universe: UniverseFilterValue
+}
 
-  const cntRow = await execGet<{ n: number }>(`SELECT COUNT(*) AS n FROM stock_classification`)
-  const classificationCount = cntRow?.n ?? 0
+export interface SectorStructureRow {
+  taxonomy: SectorStructureTaxonomy
+  groupKey: string
+  groupName: string
+  parentGroup: string | null
+  date: string
+  nStocks: number
+  validStageCount: number
+  strengthScore: number | null
+  trendStructureScore: number | null
+  maUpBreadth: number | null
+  upwardStockRatio: number | null
+  downwardStockRatio: number | null
+  trendCoverage: number | null
+  transitionChangeScore: number
+  momentum5d: number | null
+  momentum10d: number | null
+  momentum20d: number | null
+  propagationDirection: 'improving' | 'deteriorating' | 'neutral'
+  propagationPhase: number
+  propagationLabel: string
+  improvingCount: number
+  deterioratingCount: number
+  stableCount: number
+  composition: SectorStageComposition
+  dominantChange: SectorDominantStageChange | null
+  axes?: Record<SectorStructureAxisKey, AxisStructureSummary>
+  stageDeltas?: SectorStageDeltas
+}
 
-  const rows = await execAll<SectorRow>(
+type SectorTrendSourceRow = {
+  ticker: string
+  sector17Code: string | null
+  sector17Name: string | null
+  sector33Code: string | null
+  sector33Name: string | null
+  majorCategory: string | null
+  subIndustry: string | null
+  dailyA: number | null
+  dailyB: number | null
+  weeklyA: number | null
+  weeklyB: number | null
+  monthlyA: number | null
+  monthlyB: number | null
+  ma5: number | null
+  ma25: number | null
+  ma75: number | null
+  ma300: number | null
+  previousMa5: number | null
+  previousMa25: number | null
+  previousMa75: number | null
+  previousMa300: number | null
+}
+
+type SectorTrendAggregate = {
+  trendStructureScore: number | null
+  maUpBreadth: number | null
+  upwardStockRatio: number | null
+  downwardStockRatio: number | null
+  trendCoverage: number | null
+}
+
+export interface SectorStructureBoard {
+  latestDate: string | null
+  previousDate: string | null
+  requestedDate: string | null
+  taxonomy: SectorStructureTaxonomy
+  universe: UniverseFilterValue
+  parentFilter: string | null
+  selectedGroupKey: string | null
+  marketBaseline: SectorMarketBaseline
+  marketTrendStructureScore: number | null
+  marketEnvironment: SectorMarketEnvironment
+  rows: SectorStructureRow[]
+}
+
+export interface SectorMarketEnvironment {
+  label: '上昇優勢' | '中立・選別' | '下落優勢' | '算出待ち'
+  tone: 'positive' | 'neutral' | 'negative'
+  structureScore: number | null
+  pmsPositiveRatio: number | null
+  pfsPositiveRatio: number | null
+  pmsDate: string | null
+  sampleCount: number
+}
+
+export type SectorConstituentSortKey =
+  | 'ticker'
+  | 'name'
+  | 'price'
+  | 'changePct'
+  | 'volume'
+  | 'avgVolume30'
+  | 'avgVolume60'
+  | 'marginType'
+  | 'stageCode'
+  | 'marketSegment'
+  | 'pms'
+  | 'pfs'
+  | 'pes'
+
+export type SectorConstituentSortDir = 'asc' | 'desc'
+
+export interface SectorConstituentRow {
+  ticker: string
+  name: string | null
+  marketSegment: string | null
+  marginType: string | null
+  sector17Name: string | null
+  sector33Name: string | null
+  price: number | null
+  changePct: number | null
+  volume: number | null
+  avgVolume30: number | null
+  avgVolume60: number | null
+  stageCode: string | null
+  dailyAStage: number | null
+  dailyBStage: number | null
+  weeklyAStage: number | null
+  weeklyBStage: number | null
+  monthlyAStage: number | null
+  monthlyBStage: number | null
+  pms: number | null
+  pfs: number | null
+  pes: number | null
+}
+
+export interface SectorConstituentSummary {
+  totalCount: number
+  marginTypeCounts: Array<{ marginType: string; count: number }>
+  avgChangePct: number | null
+  totalVolume: number
+  avgVolume30: number | null
+  avgPms: number | null
+  avgPfs: number | null
+  avgPes: number | null
+}
+
+export interface SectorConstituentResult {
+  classification: SectorClassification
+  sectorName: string
+  latestDate: string
+  baseDate: string
+  sortKey: SectorConstituentSortKey
+  sortDir: SectorConstituentSortDir
+  marginType: string | null
+  rows: SectorConstituentRow[]
+  summary: SectorConstituentSummary
+}
+
+const PERIODS: Array<{ period: SectorPeriod; label: string; description: string }> = [
+  { period: 'today', label: '本日', description: '前営業日終値比' },
+  { period: 'week', label: '今週', description: '直近5営業日前比' },
+  { period: 'month', label: '今月', description: '前月最終営業日比' },
+]
+
+async function getLatestPriceDate(): Promise<string | null> {
+  return (await execGet<{ d: string | null }>(`SELECT MAX(date) AS d FROM ohlcv_daily`))?.d ?? null
+}
+
+async function getPreviousTradingDate(date: string): Promise<string | null> {
+  return (await execGet<{ d: string | null }>(
+    `SELECT MAX(date) AS d FROM ohlcv_daily WHERE date < ?`,
+    [date],
+  ))?.d ?? null
+}
+
+async function getNthPreviousTradingDate(date: string, sessions: number): Promise<string | null> {
+  const row = await execGet<{ d: string | null }>(
     `
-    WITH t AS (SELECT ticker, close FROM ohlcv_daily WHERE date = ?),
-         y AS (SELECT ticker, close FROM ohlcv_daily WHERE date = ?),
-         st AS (SELECT ticker, daily_a_stage FROM daily_snapshots WHERE date = ?)
-    SELECT
-      ${MAJOR_EXPR} AS sector_name,
-      COUNT(*) AS n_stocks,
-      AVG(100.0 * (t.close - y.close) / y.close) AS avg_change,
-      SUM(CASE WHEN st.daily_a_stage IN (1, 2) THEN 1 ELSE 0 END) AS stage_up_count,
-      SUM(CASE WHEN st.daily_a_stage IN (4, 5) THEN 1 ELSE 0 END) AS stage_down_count
-    FROM ticker_universe tu
-    LEFT JOIN stock_classification sc ON sc.ticker = tu.ticker
-    JOIN t USING (ticker)
-    JOIN y USING (ticker)
-    LEFT JOIN st USING (ticker)
-    WHERE tu.active = 1
-    GROUP BY ${MAJOR_EXPR}
-    HAVING n_stocks >= 1
-    ORDER BY avg_change DESC
+      SELECT date AS d
+      FROM (
+        SELECT DISTINCT date
+        FROM ohlcv_daily
+        WHERE date <= ?
+        ORDER BY date DESC
+        LIMIT ?
+      )
+      ORDER BY date ASC
+      LIMIT 1
     `,
-    [latest, prev, latestSnap],
+    [date, sessions + 1],
   )
-  return { rows, classificationCount }
+  return row?.d ?? null
 }
 
-// ─── 選択中の大分類に属する業種細分類一覧 ───
-export interface SubSectorRow {
-  sub_industry: string
-  n_stocks: number
-  avg_change: number
-  upRatio: number  // Stage 1+2 比率
-  topTickers: string  // カンマ区切り 3 銘柄
+async function getPreviousMonthEndTradingDate(date: string): Promise<string | null> {
+  return (await execGet<{ d: string | null }>(
+    `SELECT MAX(date) AS d FROM ohlcv_daily WHERE date < date(?, 'start of month')`,
+    [date],
+  ))?.d ?? null
 }
-export async function getSubSectorsFor(majorCategory: string): Promise<SubSectorRow[]> {
-  const latest = (await execGet<{ d: string | null }>(`SELECT MAX(date) AS d FROM ohlcv_daily`))?.d
-  if (!latest) return []
-  const prev = (await execGet<{ d: string | null }>(`SELECT MAX(date) AS d FROM ohlcv_daily WHERE date < ?`, [latest]))?.d
-  if (!prev) return []
-  const latestSnap = (await execGet<{ d: string | null }>(`SELECT MAX(date) AS d FROM daily_snapshots`))?.d ?? latest
 
-  return await execAll<SubSectorRow>(
+async function resolveBaseDate(period: SectorPeriod, latestDate: string): Promise<string | null> {
+  if (period === 'today') return getPreviousTradingDate(latestDate)
+  if (period === 'week') {
+    const base = await getNthPreviousTradingDate(latestDate, 5)
+    return base && base !== latestDate ? base : getPreviousTradingDate(latestDate)
+  }
+  return await getPreviousMonthEndTradingDate(latestDate) ?? getPreviousTradingDate(latestDate)
+}
+
+function sectorColumns(classification: SectorHeatmapClassification) {
+  if (classification === '17') {
+    return {
+      code: 'tu.sector17_code',
+      name: `COALESCE(NULLIF(tu.sector17_name, ''), 'その他')`,
+      parent: 'NULL',
+      hasName: `tu.sector17_name IS NOT NULL AND tu.sector17_name <> ''`,
+      classificationJoin: '',
+    }
+  }
+  if (classification === '33') {
+    return {
+      code: 'tu.sector33_code',
+      name: `COALESCE(NULLIF(tu.sector33_name, ''), 'その他')`,
+      parent: 'NULL',
+      hasName: `tu.sector33_name IS NOT NULL AND tu.sector33_name <> ''`,
+      classificationJoin: '',
+    }
+  }
+  if (classification === 'major') {
+    return {
+      code: 'sc.major_category',
+      name: 'sc.major_category',
+      parent: 'NULL',
+      hasName: `sc.major_category IS NOT NULL AND sc.major_category <> ''`,
+      classificationJoin: 'JOIN stock_classification sc ON sc.ticker = tu.ticker',
+    }
+  }
+  return {
+    code: `sc.major_category || char(31) || sc.sub_industry`,
+    name: 'sc.sub_industry',
+    parent: 'sc.major_category',
+    hasName: `sc.major_category IS NOT NULL AND sc.major_category <> '' AND sc.sub_industry IS NOT NULL AND sc.sub_industry <> ''`,
+    classificationJoin: 'JOIN stock_classification sc ON sc.ticker = tu.ticker',
+  }
+}
+
+export async function getSectorHeatmapRows(
+  classification: SectorHeatmapClassification,
+  latestDate: string,
+  baseDate: string,
+  universeFilter: UniverseFilterValue = null,
+): Promise<SectorHeatmapRow[]> {
+  const cols = sectorColumns(classification)
+  const universe = universeSqlCondition('tu.ticker', universeFilter)
+  return execAll<SectorHeatmapRow>(
     `
-    WITH t AS (SELECT ticker, close FROM ohlcv_daily WHERE date = ?),
-         y AS (SELECT ticker, close FROM ohlcv_daily WHERE date = ?),
-         st AS (SELECT ticker, daily_a_stage FROM daily_snapshots WHERE date = ?)
-    SELECT
-      ${SUB_EXPR} AS sub_industry,
-      COUNT(*) AS n_stocks,
-      AVG(100.0 * (t.close - y.close) / y.close) AS avg_change,
-      CAST(SUM(CASE WHEN st.daily_a_stage IN (1, 2) THEN 1 ELSE 0 END) AS REAL) / COUNT(*) AS upRatio,
-      GROUP_CONCAT(tu.ticker, ',') AS topTickers
-    FROM ticker_universe tu
-    LEFT JOIN stock_classification sc ON sc.ticker = tu.ticker
-    JOIN t USING (ticker)
-    JOIN y USING (ticker)
-    LEFT JOIN st USING (ticker)
-    WHERE tu.active = 1 AND ${MAJOR_EXPR} = ?
-    GROUP BY ${SUB_EXPR}
-    HAVING n_stocks >= 1
-    ORDER BY avg_change DESC
+      WITH latest_px AS (
+        SELECT ticker, close
+        FROM ohlcv_daily
+        WHERE date = ?
+      ),
+      base_px AS (
+        SELECT ticker, close
+        FROM ohlcv_daily
+        WHERE date = ?
+      ),
+      priced AS (
+        SELECT
+          tu.ticker,
+          ${cols.code} AS sector_code,
+          ${cols.name} AS sector_name,
+          ${cols.parent} AS sector_parent_name,
+          CASE
+            WHEN base_px.close > 0 THEN 100.0 * (latest_px.close - base_px.close) / base_px.close
+          END AS change_pct,
+          pm.physical_momentum_score AS pms,
+          pm.physical_force_score AS pfs,
+          pm.physical_energy_score AS pes
+        FROM ticker_universe tu
+        ${cols.classificationJoin}
+        JOIN latest_px ON latest_px.ticker = tu.ticker
+        JOIN base_px ON base_px.ticker = tu.ticker
+        LEFT JOIN physical_momentum_metrics pm ON pm.market = 'JP' AND pm.symbol = tu.ticker AND pm.date = ?
+        WHERE tu.active = 1
+          AND ${cols.hasName}
+          ${universe.sql ? `AND ${universe.sql}` : ''}
+      )
+      SELECT
+        sector_code,
+        sector_name,
+        sector_parent_name,
+        COUNT(*) AS n_stocks,
+        COALESCE(AVG(change_pct), 0) AS avg_change,
+        SUM(CASE WHEN change_pct > 0 THEN 1 ELSE 0 END) AS advancing_count,
+        SUM(CASE WHEN change_pct < 0 THEN 1 ELSE 0 END) AS declining_count,
+        AVG(pms) AS avg_pms,
+        AVG(pfs) AS avg_pfs,
+        AVG(pes) AS avg_pes
+      FROM priced
+      GROUP BY sector_code, sector_name, sector_parent_name
+      ORDER BY avg_change DESC
     `,
-    [latest, prev, latestSnap, majorCategory],
+    [latestDate, baseDate, latestDate, ...universe.params],
   )
+}
+
+export async function getSectorAnalysisBoard(
+  universeFilter: UniverseFilterValue = null,
+  options: {
+    classifications?: readonly SectorHeatmapClassification[]
+    periods?: readonly SectorPeriod[]
+  } = {},
+): Promise<SectorAnalysisBoard> {
+  const latestDate = await getLatestPriceDate()
+  if (!latestDate) return { latestDate: null, periods: [], universe: universeFilter }
+
+  const classifications = new Set<SectorHeatmapClassification>(options.classifications ?? ['17', '33'])
+  const periodMetas = options.periods?.length
+    ? PERIODS.filter((meta) => options.periods?.includes(meta.period))
+    : PERIODS
+  const periods: SectorPeriodSummary[] = []
+  for (const periodMeta of periodMetas) {
+    const baseDate = await resolveBaseDate(periodMeta.period, latestDate)
+    if (!baseDate) continue
+    const [rows17, rows33, rowsMajor, rowsSubIndustry] = await Promise.all([
+      classifications.has('17') ? getSectorHeatmapRows('17', latestDate, baseDate, universeFilter) : Promise.resolve([]),
+      classifications.has('33') ? getSectorHeatmapRows('33', latestDate, baseDate, universeFilter) : Promise.resolve([]),
+      classifications.has('major') ? getSectorHeatmapRows('major', latestDate, baseDate, universeFilter) : Promise.resolve([]),
+      classifications.has('subIndustry') ? getSectorHeatmapRows('subIndustry', latestDate, baseDate, universeFilter) : Promise.resolve([]),
+    ])
+    periods.push({
+      ...periodMeta,
+      latestDate,
+      baseDate,
+      rows17,
+      rows33,
+      rowsMajor,
+      rowsSubIndustry,
+    })
+  }
+
+  return { latestDate, periods, universe: universeFilter }
+}
+
+function parseAxisJson(raw: string): Record<SectorStructureAxisKey, AxisStructureSummary> {
+  const fallback = Object.fromEntries(SECTOR_STRUCTURE_AXES.map((axis) => [axis.key, {
+    validCount: 0,
+    stages: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 },
+    strength: null,
+    improving: 0,
+    deteriorating: 0,
+    stable: 0,
+    jumpImproving: 0,
+    jumpDeteriorating: 0,
+    changeScore: 0,
+  }])) as Record<SectorStructureAxisKey, AxisStructureSummary>
+  try {
+    const parsed = JSON.parse(raw) as Partial<Record<SectorStructureAxisKey, AxisStructureSummary>>
+    for (const axis of SECTOR_STRUCTURE_AXES) {
+      const value = parsed[axis.key]
+      if (value && typeof value === 'object') fallback[axis.key] = { ...fallback[axis.key], ...value }
+    }
+  } catch {
+    // 集計途中または旧レコードは空の構成比として表示し、画面を落とさない。
+  }
+  return fallback
+}
+
+async function getSector33ParentMap(): Promise<Map<string, string>> {
+  const rows = await execAll<{ groupKey: string; parentGroup: string }>(`
+    SELECT
+      COALESCE(NULLIF(sector33_code, ''), sector33_name) AS groupKey,
+      MIN(sector17_name) AS parentGroup
+    FROM ticker_universe
+    WHERE active = 1
+      AND sector33_name IS NOT NULL AND sector33_name <> ''
+      AND sector17_name IS NOT NULL AND sector17_name <> ''
+    GROUP BY COALESCE(NULLIF(sector33_code, ''), sector33_name)
+    HAVING COUNT(DISTINCT sector17_name) = 1
+  `)
+  return new Map(rows.map((row) => [row.groupKey, row.parentGroup]))
+}
+
+export async function resolveSectorStructureParentFromGroup(
+  taxonomy: SectorStructureTaxonomy,
+  groupKey: string | null | undefined,
+): Promise<string | null> {
+  const cleanGroupKey = groupKey?.trim() || null
+  if (!cleanGroupKey) return null
+  if (taxonomy === 'subIndustry') {
+    const separator = cleanGroupKey.indexOf('\u001f')
+    return separator > 0 ? cleanGroupKey.slice(0, separator) : null
+  }
+  if (taxonomy === '33') return (await getSector33ParentMap()).get(cleanGroupKey) ?? null
+  return null
+}
+
+function compositionFromAxes(
+  axes: Record<SectorStructureAxisKey, AxisStructureSummary>,
+): SectorStageComposition {
+  return Object.fromEntries(SECTOR_STRUCTURE_AXES.map((axis) => [
+    axis.key,
+    { ...axes[axis.key].stages },
+  ])) as SectorStageComposition
+}
+
+function trendGroupKey(row: SectorTrendSourceRow, taxonomy: SectorStructureTaxonomy): string | null {
+  if (taxonomy === '17') return row.sector17Name ? row.sector17Code ?? row.sector17Name : null
+  if (taxonomy === '33') return row.sector33Name ? row.sector33Code ?? row.sector33Name : null
+  if (taxonomy === 'major') return row.majorCategory
+  return row.majorCategory && row.subIndustry ? `${row.majorCategory}\u001f${row.subIndustry}` : null
+}
+
+async function loadSectorTrendMetrics(
+  taxonomy: SectorStructureTaxonomy,
+  date: string,
+  universeFilter: UniverseFilterValue,
+): Promise<Map<string, SectorTrendAggregate>> {
+  const previousDate = (await execGet<{ date: string | null }>(`
+    SELECT MAX(date) AS date FROM daily_snapshots WHERE date < ?
+  `, [date]))?.date ?? null
+  const universe = universeSqlCondition('current.ticker', universeFilter)
+  const historicalMembership = historicalUniverseMembershipSql(
+    'current.date',
+    'hu',
+    'tu',
+    'current.ticker IS NOT NULL',
+  )
+  const rows = await execAll<SectorTrendSourceRow>(`
+    SELECT
+      current.ticker,
+      COALESCE(hu.sector17_code, tu.sector17_code) AS sector17Code,
+      COALESCE(hu.sector17_name, tu.sector17_name) AS sector17Name,
+      COALESCE(hu.sector33_code, tu.sector33_code) AS sector33Code,
+      COALESCE(hu.sector33_name, tu.sector33_name) AS sector33Name,
+      sc.major_category AS majorCategory,
+      sc.sub_industry AS subIndustry,
+      current.daily_a_stage AS dailyA,
+      current.daily_b_stage AS dailyB,
+      current.weekly_a_stage AS weeklyA,
+      current.weekly_b_stage AS weeklyB,
+      current.monthly_a_stage AS monthlyA,
+      current.monthly_b_stage AS monthlyB,
+      current.ma_5 AS ma5,
+      current.ma_25 AS ma25,
+      current.ma_75 AS ma75,
+      current.ma_300 AS ma300,
+      previous.ma_5 AS previousMa5,
+      previous.ma_25 AS previousMa25,
+      previous.ma_75 AS previousMa75,
+      previous.ma_300 AS previousMa300
+    FROM daily_snapshots AS current INDEXED BY snapshots_date_idx
+    LEFT JOIN historical_universe AS hu ON hu.ticker = current.ticker
+    LEFT JOIN ticker_universe AS tu ON tu.ticker = current.ticker
+    LEFT JOIN stock_classification AS sc ON sc.ticker = current.ticker
+    LEFT JOIN daily_snapshots AS previous
+      ON previous.ticker = current.ticker AND previous.date = ?
+    WHERE current.date = ?
+      AND ${historicalMembership}
+      ${universe.sql ? `AND ${universe.sql}` : ''}
+  `, [previousDate ?? '', date, ...universe.params])
+
+  const pending = new Map<string, {
+    stockCount: number
+    trendCount: number
+    trendTotal: number
+    upwardCount: number
+    downwardCount: number
+    maUpCount: number
+    maValidCount: number
+  }>()
+  for (const row of rows) {
+    const groupKey = trendGroupKey(row, taxonomy)
+    if (!groupKey) continue
+    const metrics = calculateTrendStructureMetrics({
+      stages: {
+        dailyA: row.dailyA,
+        dailyB: row.dailyB,
+        weeklyA: row.weeklyA,
+        weeklyB: row.weeklyB,
+        monthlyA: row.monthlyA,
+        monthlyB: row.monthlyB,
+      },
+      ma: { ma5: row.ma5, ma25: row.ma25, ma75: row.ma75, ma300: row.ma300 },
+      previousMa: {
+        ma5: row.previousMa5,
+        ma25: row.previousMa25,
+        ma75: row.previousMa75,
+        ma300: row.previousMa300,
+      },
+    })
+    const aggregate = pending.get(groupKey) ?? {
+      stockCount: 0,
+      trendCount: 0,
+      trendTotal: 0,
+      upwardCount: 0,
+      downwardCount: 0,
+      maUpCount: 0,
+      maValidCount: 0,
+    }
+    aggregate.stockCount += 1
+    if (metrics.trendScore != null) {
+      aggregate.trendCount += 1
+      aggregate.trendTotal += metrics.trendScore
+      if (metrics.trendScore >= 60) aggregate.upwardCount += 1
+      if (metrics.trendScore <= 40) aggregate.downwardCount += 1
+    }
+    aggregate.maUpCount += metrics.maUpCount
+    aggregate.maValidCount += metrics.maValidCount
+    pending.set(groupKey, aggregate)
+  }
+
+  return new Map(Array.from(pending.entries()).map(([groupKey, aggregate]) => [groupKey, {
+    trendStructureScore: aggregate.trendCount > 0 ? aggregate.trendTotal / aggregate.trendCount : null,
+    maUpBreadth: aggregate.maValidCount > 0 ? 100 * aggregate.maUpCount / aggregate.maValidCount : null,
+    upwardStockRatio: aggregate.trendCount > 0 ? 100 * aggregate.upwardCount / aggregate.trendCount : null,
+    downwardStockRatio: aggregate.trendCount > 0 ? 100 * aggregate.downwardCount / aggregate.trendCount : null,
+    trendCoverage: aggregate.stockCount > 0 ? 100 * aggregate.trendCount / aggregate.stockCount : null,
+  }]))
+}
+
+async function loadUniverseSectorStructureRows(
+  taxonomy: SectorStructureTaxonomy,
+  requestedDate: string,
+  universeFilter: Exclude<UniverseFilterValue, null>,
+): Promise<{
+  latestDate: string | null
+  previousDate: string | null
+  rows: Array<SectorStructureRow & {
+    axes: Record<SectorStructureAxisKey, AxisStructureSummary>
+    stageDeltas: SectorStageDeltas
+  }>
+}> {
+  const universe = universeSqlCondition('source.ticker', universeFilter)
+  const historicalMembership = historicalUniverseMembershipSql(
+    'source.date',
+    'hu',
+    'tu',
+    'source.ticker IS NOT NULL',
+  )
+  const sourceRows = await execAll<SectorStructureSourceRow>(`
+    WITH selected_dates AS (
+      SELECT date
+      FROM (
+        SELECT DISTINCT date
+        FROM daily_snapshots
+        WHERE date <= ?
+        ORDER BY date DESC
+        LIMIT 21
+      )
+    ),
+    source AS (
+      SELECT
+        s.ticker,
+        s.date,
+        s.daily_a_stage AS dailyA,
+        s.daily_b_stage AS dailyB,
+        s.weekly_a_stage AS weeklyA,
+        s.weekly_b_stage AS weeklyB,
+        s.monthly_a_stage AS monthlyA,
+        s.monthly_b_stage AS monthlyB,
+        LAG(s.daily_a_stage) OVER (PARTITION BY s.ticker ORDER BY s.date) AS prevDailyA,
+        LAG(s.daily_b_stage) OVER (PARTITION BY s.ticker ORDER BY s.date) AS prevDailyB,
+        LAG(s.weekly_a_stage) OVER (PARTITION BY s.ticker ORDER BY s.date) AS prevWeeklyA,
+        LAG(s.weekly_b_stage) OVER (PARTITION BY s.ticker ORDER BY s.date) AS prevWeeklyB,
+        LAG(s.monthly_a_stage) OVER (PARTITION BY s.ticker ORDER BY s.date) AS prevMonthlyA,
+        LAG(s.monthly_b_stage) OVER (PARTITION BY s.ticker ORDER BY s.date) AS prevMonthlyB
+      FROM daily_snapshots AS s
+      INNER JOIN selected_dates AS d ON d.date = s.date
+    )
+    SELECT
+      source.*,
+      COALESCE(hu.sector17_code, tu.sector17_code) AS sector17Code,
+      COALESCE(hu.sector17_name, tu.sector17_name) AS sector17Name,
+      COALESCE(hu.sector33_code, tu.sector33_code) AS sector33Code,
+      COALESCE(hu.sector33_name, tu.sector33_name) AS sector33Name,
+      sc.major_category AS majorCategory,
+      sc.sub_industry AS subIndustry
+    FROM source
+    LEFT JOIN historical_universe AS hu ON hu.ticker = source.ticker
+    LEFT JOIN ticker_universe AS tu ON tu.ticker = source.ticker
+    LEFT JOIN stock_classification AS sc ON sc.ticker = source.ticker
+    WHERE source.date > (SELECT MIN(date) FROM selected_dates)
+      AND ${historicalMembership}
+      AND ${universe.sql}
+    ORDER BY source.date, source.ticker
+  `, [requestedDate, ...universe.params])
+
+  const series = buildSectorStructureSeries(sourceRows, [taxonomy])
+  const dates = [...new Set(series.map((row) => row.date))].sort((a, b) => b.localeCompare(a))
+  const latestDate = dates[0] ?? null
+  const previousDate = dates[1] ?? null
+  if (!latestDate) return { latestDate: null, previousDate: null, rows: [] }
+
+  const sector33Parents = taxonomy === '33' ? await getSector33ParentMap() : new Map<string, string>()
+  const previousByGroup = new Map(
+    series
+      .filter((row) => row.date === previousDate)
+      .map((row) => [row.groupKey, compositionFromAxes(row.axes)]),
+  )
+  const rows = series
+    .filter((row) => row.date === latestDate)
+    .map((row) => {
+      const composition = compositionFromAxes(row.axes)
+      const previousComposition = previousByGroup.get(row.groupKey) ?? null
+      const stageDeltas = calculateSectorStageDeltas(composition, previousComposition)
+      return {
+        ...row,
+        parentGroup: row.parentGroup ?? sector33Parents.get(row.groupKey) ?? null,
+        trendStructureScore: row.strengthScore,
+        maUpBreadth: null,
+        upwardStockRatio: null,
+        downwardStockRatio: null,
+        trendCoverage: row.nStocks > 0 ? 100 : null,
+        composition,
+        stageDeltas,
+        dominantChange: previousComposition ? findDominantStageChange(stageDeltas) : null,
+      }
+    })
+  return { latestDate, previousDate, rows }
+}
+
+async function loadSectorMarketEnvironment(
+  structureDate: string,
+  universeFilter: UniverseFilterValue,
+  structureScore: number | null,
+): Promise<SectorMarketEnvironment> {
+  const latest = await execGet<{ date: string | null }>(`
+    SELECT MAX(date) AS date
+    FROM physical_momentum_metrics
+    WHERE market = 'JP' AND date <= ?
+  `, [structureDate]).catch(() => null)
+  if (!latest?.date) {
+    return {
+      label: structureScore == null ? '算出待ち' : '中立・選別',
+      tone: 'neutral',
+      structureScore,
+      pmsPositiveRatio: null,
+      pfsPositiveRatio: null,
+      pmsDate: null,
+      sampleCount: 0,
+    }
+  }
+  const universe = universeSqlCondition('pm.symbol', universeFilter)
+  const historicalMembership = historicalUniverseMembershipSql(
+    'pm.date',
+    'hu',
+    'tu',
+    'pm.symbol IS NOT NULL',
+  )
+  const aggregate = await execGet<{
+    sampleCount: number
+    pmsCount: number
+    pfsCount: number
+    pmsPositive: number
+    pfsPositive: number
+  }>(`
+    SELECT
+      COUNT(*) AS sampleCount,
+      SUM(CASE WHEN pm.physical_momentum_score IS NOT NULL THEN 1 ELSE 0 END) AS pmsCount,
+      SUM(CASE WHEN pm.physical_force_score IS NOT NULL THEN 1 ELSE 0 END) AS pfsCount,
+      SUM(CASE WHEN pm.physical_momentum_score > 0 THEN 1 ELSE 0 END) AS pmsPositive,
+      SUM(CASE WHEN pm.physical_force_score > 0 THEN 1 ELSE 0 END) AS pfsPositive
+    FROM physical_momentum_metrics AS pm
+    LEFT JOIN historical_universe AS hu ON hu.ticker = pm.symbol
+    LEFT JOIN ticker_universe AS tu ON tu.ticker = pm.symbol
+    WHERE pm.market = 'JP' AND pm.date = ?
+      AND ${historicalMembership}
+      ${universe.sql ? `AND ${universe.sql}` : ''}
+  `, [latest.date, ...universe.params])
+  const pmsCount = Number(aggregate?.pmsCount ?? 0)
+  const pfsCount = Number(aggregate?.pfsCount ?? 0)
+  const pmsPositiveRatio = pmsCount > 0 ? 100 * Number(aggregate?.pmsPositive ?? 0) / pmsCount : null
+  const pfsPositiveRatio = pfsCount > 0 ? 100 * Number(aggregate?.pfsPositive ?? 0) / pfsCount : null
+  const positive = (structureScore ?? 50) >= 58 && (pmsPositiveRatio ?? 50) >= 52 && (pfsPositiveRatio ?? 50) >= 50
+  const negative = (structureScore ?? 50) <= 42 && (pmsPositiveRatio ?? 50) < 48 && (pfsPositiveRatio ?? 50) < 48
+  return {
+    label: positive ? '上昇優勢' : negative ? '下落優勢' : '中立・選別',
+    tone: positive ? 'positive' : negative ? 'negative' : 'neutral',
+    structureScore,
+    pmsPositiveRatio,
+    pfsPositiveRatio,
+    pmsDate: latest.date,
+    sampleCount: Number(aggregate?.sampleCount ?? 0),
+  }
+}
+
+export async function getSectorStructureBoard(
+  taxonomy: SectorStructureTaxonomy = 'major',
+  options: {
+    selectedGroupKey?: string | null
+    parentFilter?: string | null
+    requestedDate?: string | null
+    includeAxesForAll?: boolean
+    includeAllRows?: boolean
+    universeFilter?: UniverseFilterValue
+  } = {},
+): Promise<SectorStructureBoard> {
+  const universeFilter = options.universeFilter ?? null
+  const requestedDate = options.requestedDate && /^\d{4}-\d{2}-\d{2}$/.test(options.requestedDate)
+    ? options.requestedDate
+    : null
+  const latest = await execGet<{ date: string | null }>(`
+    SELECT MAX(date) AS date
+    FROM sector_structure_daily
+    WHERE taxonomy = ?
+      ${requestedDate ? 'AND date <= ?' : ''}
+  `, requestedDate ? [taxonomy, requestedDate] : [taxonomy])
+  if (!latest?.date) {
+    return {
+      latestDate: null,
+      previousDate: null,
+      requestedDate,
+      taxonomy,
+      universe: universeFilter,
+      parentFilter: null,
+      selectedGroupKey: null,
+      marketBaseline: calculateSectorMarketBaseline([]),
+      marketTrendStructureScore: null,
+      marketEnvironment: {
+        label: '算出待ち',
+        tone: 'neutral',
+        structureScore: null,
+        pmsPositiveRatio: null,
+        pfsPositiveRatio: null,
+        pmsDate: null,
+        sampleCount: 0,
+      },
+      rows: [],
+    }
+  }
+  let resolvedLatestDate = latest.date
+  let resolvedPreviousDate: string | null = null
+  let prepared: Array<SectorStructureRow & {
+    axes: Record<SectorStructureAxisKey, AxisStructureSummary>
+    stageDeltas: SectorStageDeltas
+  }>
+
+  if (universeFilter) {
+    const dynamicBoard = await loadUniverseSectorStructureRows(taxonomy, latest.date, universeFilter)
+    resolvedLatestDate = dynamicBoard.latestDate ?? latest.date
+    resolvedPreviousDate = dynamicBoard.previousDate
+    prepared = dynamicBoard.rows
+  } else {
+    const previous = await execGet<{ date: string | null }>(`
+      SELECT MAX(date) AS date
+      FROM sector_structure_daily
+      WHERE taxonomy = ? AND date < ?
+    `, [taxonomy, latest.date])
+    resolvedPreviousDate = previous?.date ?? null
+    const raw = await execAll<{
+      taxonomy: SectorStructureTaxonomy
+      groupKey: string
+      groupName: string
+      parentGroup: string | null
+      date: string
+      nStocks: number
+      validStageCount: number
+      strengthScore: number | null
+      transitionChangeScore: number
+      momentum5d: number | null
+      momentum10d: number | null
+      momentum20d: number | null
+      propagationDirection: 'improving' | 'deteriorating' | 'neutral'
+      propagationPhase: number
+      propagationLabel: string
+      improvingCount: number
+      deterioratingCount: number
+      stableCount: number
+      axisJson: string
+      compositionJson: string
+      previousCompositionJson: string | null
+    }>(`
+      SELECT
+        current.taxonomy,
+        current.group_key AS groupKey,
+        current.group_name AS groupName,
+        current.parent_group AS parentGroup,
+        current.date,
+        current.n_stocks AS nStocks,
+        current.valid_stage_count AS validStageCount,
+        current.strength_score AS strengthScore,
+        current.transition_change_score AS transitionChangeScore,
+        current.momentum_5d AS momentum5d,
+        current.momentum_10d AS momentum10d,
+        current.momentum_20d AS momentum20d,
+        current.propagation_direction AS propagationDirection,
+        current.propagation_phase AS propagationPhase,
+        current.propagation_label AS propagationLabel,
+        current.improving_count AS improvingCount,
+        current.deteriorating_count AS deterioratingCount,
+        current.stable_count AS stableCount,
+        current.axis_json AS axisJson,
+        current.composition_json AS compositionJson,
+        previous.composition_json AS previousCompositionJson
+      FROM sector_structure_daily AS current
+      LEFT JOIN sector_structure_daily AS previous
+        ON previous.taxonomy = current.taxonomy
+       AND previous.group_key = current.group_key
+       AND previous.date = ?
+      WHERE current.taxonomy = ? AND current.date = ?
+      ORDER BY current.momentum_10d DESC, current.strength_score DESC, current.group_name
+    `, [resolvedPreviousDate ?? '', taxonomy, latest.date])
+
+    const sector33Parents = taxonomy === '33' ? await getSector33ParentMap() : new Map<string, string>()
+    prepared = raw.map(({ axisJson, compositionJson, previousCompositionJson, ...row }) => {
+      const composition = parseSectorStageComposition(compositionJson)
+      const previousComposition = previousCompositionJson
+        ? parseSectorStageComposition(previousCompositionJson)
+        : null
+      const stageDeltas = calculateSectorStageDeltas(composition, previousComposition)
+      return {
+        ...row,
+        parentGroup: row.parentGroup ?? sector33Parents.get(row.groupKey) ?? null,
+        trendStructureScore: row.strengthScore,
+        maUpBreadth: null,
+        upwardStockRatio: null,
+        downwardStockRatio: null,
+        trendCoverage: row.nStocks > 0 ? 100 : null,
+        composition,
+        axes: parseAxisJson(axisJson),
+        stageDeltas,
+        dominantChange: previousComposition ? findDominantStageChange(stageDeltas) : null,
+      }
+    })
+  }
+  const trendMetrics = await loadSectorTrendMetrics(taxonomy, resolvedLatestDate, universeFilter)
+  prepared = prepared.map((row) => ({
+    ...row,
+    ...(trendMetrics.get(row.groupKey) ?? {}),
+  }))
+  const marketBaseline = calculateSectorMarketBaseline(prepared)
+  const marketTrendWeight = prepared.reduce((sum, row) => sum + (row.trendStructureScore != null ? row.nStocks : 0), 0)
+  const marketTrendStructureScore = marketTrendWeight > 0
+    ? prepared.reduce((sum, row) => sum + (row.trendStructureScore ?? 0) * (row.trendStructureScore != null ? row.nStocks : 0), 0) / marketTrendWeight
+    : null
+  const marketEnvironment = await loadSectorMarketEnvironment(
+    resolvedLatestDate,
+    universeFilter,
+    marketTrendStructureScore,
+  )
+  const inferredParent = await resolveSectorStructureParentFromGroup(taxonomy, options.selectedGroupKey)
+  const requestedParent = options.parentFilter?.trim() || inferredParent
+  const parentRows = requestedParent
+    ? prepared.filter((row) => row.parentGroup === requestedParent)
+    : prepared
+  const isChildTaxonomy = taxonomy === 'subIndustry' || taxonomy === '33'
+  const fallbackParent = isChildTaxonomy
+    ? [...prepared]
+        .sort((a, b) => Math.abs(b.momentum10d ?? 0) - Math.abs(a.momentum10d ?? 0))[0]
+        ?.parentGroup ?? null
+    : null
+  const resolvedParent = requestedParent && parentRows.length > 0
+    ? requestedParent
+    : fallbackParent
+  const fallbackRows = resolvedParent
+    ? prepared.filter((row) => row.parentGroup === resolvedParent)
+    : prepared
+  const rowsInScope = options.includeAllRows
+    ? prepared
+    : requestedParent && parentRows.length > 0
+      ? parentRows
+      : fallbackRows
+  const requestedGroup = options.selectedGroupKey?.trim() || null
+  const defaultGroup = [...rowsInScope]
+    .sort((a, b) => Math.abs(b.momentum10d ?? 0) - Math.abs(a.momentum10d ?? 0))[0]
+    ?.groupKey ?? null
+  const selectedGroupKey = requestedGroup && rowsInScope.some((row) => row.groupKey === requestedGroup)
+    ? requestedGroup
+    : defaultGroup
+
+  return {
+    latestDate: resolvedLatestDate,
+    previousDate: resolvedPreviousDate,
+    requestedDate,
+    taxonomy,
+    universe: universeFilter,
+    parentFilter: resolvedParent,
+    selectedGroupKey,
+    marketBaseline,
+    marketTrendStructureScore,
+    marketEnvironment,
+    rows: rowsInScope.map(({ axes, stageDeltas, ...row }) => ({
+      ...row,
+      ...(options.includeAxesForAll || row.groupKey === selectedGroupKey
+        ? { axes, stageDeltas }
+        : {}),
+    })),
+  }
+}
+
+function normalizeSortKey(value: string | null | undefined): SectorConstituentSortKey {
+  if (
+    value === 'ticker' ||
+    value === 'name' ||
+    value === 'price' ||
+    value === 'changePct' ||
+    value === 'volume' ||
+    value === 'avgVolume30' ||
+    value === 'avgVolume60' ||
+    value === 'marginType' ||
+    value === 'stageCode' ||
+    value === 'marketSegment' ||
+    value === 'pms' ||
+    value === 'pfs' ||
+    value === 'pes'
+  ) {
+    return value
+  }
+  return 'changePct'
+}
+
+function normalizeSortDir(value: string | null | undefined): SectorConstituentSortDir {
+  return value === 'asc' ? 'asc' : 'desc'
+}
+
+function constituentOrderBy(sortKey: SectorConstituentSortKey, sortDir: SectorConstituentSortDir): string {
+  const dir = sortDir === 'asc' ? 'ASC' : 'DESC'
+  const nulls = sortDir === 'asc' ? 'ASC' : 'DESC'
+  const orderMap: Record<SectorConstituentSortKey, string> = {
+    ticker: `ticker ${dir}`,
+    name: `name ${dir}, ticker ASC`,
+    price: `price IS NULL ASC, price ${dir}, ticker ASC`,
+    changePct: `changePct IS NULL ASC, changePct ${dir}, ticker ASC`,
+    volume: `volume IS NULL ASC, volume ${dir}, ticker ASC`,
+    avgVolume30: `avgVolume30 IS NULL ASC, avgVolume30 ${dir}, ticker ASC`,
+    avgVolume60: `avgVolume60 IS NULL ASC, avgVolume60 ${dir}, ticker ASC`,
+    marginType: `marginType IS NULL ASC, marginType ${dir}, ticker ASC`,
+    stageCode: `stageCode IS NULL ASC, stageCode ${dir}, ticker ASC`,
+    marketSegment: `marketSegment IS NULL ASC, marketSegment ${dir}, ticker ASC`,
+    pms: `pms IS NULL ASC, pms ${dir}, ticker ASC`,
+    pfs: `pfs IS NULL ASC, pfs ${dir}, ticker ASC`,
+    pes: `pes IS NULL ASC, pes ${dir}, ticker ASC`,
+  }
+  return orderMap[sortKey] ?? `changePct IS NULL ${nulls}, changePct ${dir}, ticker ASC`
+}
+
+export function normalizeSectorConstituentSort(
+  sortKey?: string | null,
+  sortDir?: string | null,
+): { sortKey: SectorConstituentSortKey; sortDir: SectorConstituentSortDir } {
+  return {
+    sortKey: normalizeSortKey(sortKey),
+    sortDir: normalizeSortDir(sortDir),
+  }
+}
+
+export async function getSectorConstituents({
+  classification,
+  sectorName,
+  latestDate,
+  baseDate,
+  sortKey,
+  sortDir,
+  marginType,
+  universeFilter = null,
+  limit = 1000,
+}: {
+  classification: SectorClassification
+  sectorName: string
+  latestDate: string
+  baseDate: string
+  sortKey?: string | null
+  sortDir?: string | null
+  marginType?: string | null
+  universeFilter?: UniverseFilterValue
+  limit?: number
+}): Promise<SectorConstituentResult> {
+  const normalized = normalizeSectorConstituentSort(sortKey, sortDir)
+  const cols = sectorColumns(classification)
+  const universe = universeSqlCondition('tu.ticker', universeFilter)
+  const cleanMarginType = marginType?.trim() || null
+  const maxRows = Math.min(1000, Math.max(1, Math.floor(limit)))
+  const params: Array<string | number> = [latestDate, baseDate, latestDate, latestDate, latestDate, latestDate, sectorName]
+  if (cleanMarginType) params.push(cleanMarginType)
+  params.push(...universe.params)
+  params.push(maxRows)
+
+  const rows = await execAll<SectorConstituentRow>(
+    `
+      WITH latest_px AS (
+        SELECT ticker, close, volume
+        FROM ohlcv_daily
+        WHERE date = ?
+      ),
+      base_px AS (
+        SELECT ticker, close
+        FROM ohlcv_daily
+        WHERE date = ?
+      ),
+      latest_snap AS (
+        SELECT
+          ticker,
+          daily_a_stage,
+          daily_b_stage,
+          weekly_a_stage,
+          weekly_b_stage,
+          monthly_a_stage,
+          monthly_b_stage
+        FROM daily_snapshots
+        WHERE date = ?
+      )
+      SELECT
+        tu.ticker AS ticker,
+        tu.name AS name,
+        tu.market_segment AS marketSegment,
+        tu.margin_type AS marginType,
+        tu.sector17_name AS sector17Name,
+        tu.sector33_name AS sector33Name,
+        latest_px.close AS price,
+        CASE
+          WHEN base_px.close > 0 THEN 100.0 * (latest_px.close - base_px.close) / base_px.close
+        END AS changePct,
+        latest_px.volume AS volume,
+        (
+          SELECT ROUND(AVG(volume))
+          FROM (
+            SELECT od.volume
+            FROM ohlcv_daily od
+            WHERE od.ticker = tu.ticker AND od.date <= ?
+            ORDER BY od.date DESC
+            LIMIT 30
+          )
+        ) AS avgVolume30,
+        (
+          SELECT ROUND(AVG(volume))
+          FROM (
+            SELECT od.volume
+            FROM ohlcv_daily od
+            WHERE od.ticker = tu.ticker AND od.date <= ?
+            ORDER BY od.date DESC
+            LIMIT 60
+          )
+        ) AS avgVolume60,
+        CASE
+          WHEN latest_snap.daily_a_stage IS NOT NULL
+            AND latest_snap.daily_b_stage IS NOT NULL
+            AND latest_snap.weekly_a_stage IS NOT NULL
+            AND latest_snap.weekly_b_stage IS NOT NULL
+            AND latest_snap.monthly_a_stage IS NOT NULL
+            AND latest_snap.monthly_b_stage IS NOT NULL
+          THEN
+            CAST(latest_snap.daily_a_stage AS TEXT) ||
+            CAST(latest_snap.daily_b_stage AS TEXT) ||
+            CAST(latest_snap.weekly_a_stage AS TEXT) ||
+            CAST(latest_snap.weekly_b_stage AS TEXT) ||
+            CAST(latest_snap.monthly_a_stage AS TEXT) ||
+            CAST(latest_snap.monthly_b_stage AS TEXT)
+        END AS stageCode,
+        latest_snap.daily_a_stage AS dailyAStage,
+        latest_snap.daily_b_stage AS dailyBStage,
+        latest_snap.weekly_a_stage AS weeklyAStage,
+        latest_snap.weekly_b_stage AS weeklyBStage,
+        latest_snap.monthly_a_stage AS monthlyAStage,
+        latest_snap.monthly_b_stage AS monthlyBStage,
+        pm.physical_momentum_score AS pms,
+        pm.physical_force_score AS pfs,
+        pm.physical_energy_score AS pes
+      FROM ticker_universe tu
+      JOIN latest_px ON latest_px.ticker = tu.ticker
+      JOIN base_px ON base_px.ticker = tu.ticker
+      LEFT JOIN latest_snap ON latest_snap.ticker = tu.ticker
+      LEFT JOIN physical_momentum_metrics pm ON pm.market = 'JP' AND pm.symbol = tu.ticker AND pm.date = ?
+      WHERE tu.active = 1
+        AND ${cols.hasName}
+        AND ${cols.name} = ?
+        ${cleanMarginType ? 'AND COALESCE(NULLIF(tu.margin_type, \'\'), \'未設定\') = ?' : ''}
+        ${universe.sql ? `AND ${universe.sql}` : ''}
+      ORDER BY ${constituentOrderBy(normalized.sortKey, normalized.sortDir)}
+      LIMIT ?
+    `,
+    params,
+  )
+
+  const totalCount = rows.length
+  const totalVolume = rows.reduce((sum, row) => sum + (row.volume ?? 0), 0)
+  const avgChangeValues = rows.map((row) => row.changePct).filter((value): value is number => value != null && Number.isFinite(value))
+  const avgVolumeValues = rows.map((row) => row.avgVolume30).filter((value): value is number => value != null && Number.isFinite(value))
+  const pmsValues = rows.map((row) => row.pms).filter((value): value is number => value != null && Number.isFinite(value))
+  const pfsValues = rows.map((row) => row.pfs).filter((value): value is number => value != null && Number.isFinite(value))
+  const pesValues = rows.map((row) => row.pes).filter((value): value is number => value != null && Number.isFinite(value))
+  const marginCounts = new Map<string, number>()
+  for (const row of rows) {
+    const key = row.marginType?.trim() || '未設定'
+    marginCounts.set(key, (marginCounts.get(key) ?? 0) + 1)
+  }
+
+  return {
+    classification,
+    sectorName,
+    latestDate,
+    baseDate,
+    sortKey: normalized.sortKey,
+    sortDir: normalized.sortDir,
+    marginType: cleanMarginType,
+    rows,
+    summary: {
+      totalCount,
+      marginTypeCounts: Array.from(marginCounts.entries())
+        .map(([type, count]) => ({ marginType: type, count }))
+        .sort((a, b) => b.count - a.count || a.marginType.localeCompare(b.marginType, 'ja')),
+      avgChangePct: avgChangeValues.length > 0
+        ? avgChangeValues.reduce((sum, value) => sum + value, 0) / avgChangeValues.length
+        : null,
+      totalVolume,
+      avgVolume30: avgVolumeValues.length > 0
+        ? avgVolumeValues.reduce((sum, value) => sum + value, 0) / avgVolumeValues.length
+        : null,
+      avgPms: pmsValues.length > 0
+        ? pmsValues.reduce((sum, value) => sum + value, 0) / pmsValues.length
+        : null,
+      avgPfs: pfsValues.length > 0
+        ? pfsValues.reduce((sum, value) => sum + value, 0) / pfsValues.length
+        : null,
+      avgPes: pesValues.length > 0
+        ? pesValues.reduce((sum, value) => sum + value, 0) / pesValues.length
+        : null,
+    },
+  }
 }

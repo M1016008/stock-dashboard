@@ -1,0 +1,51 @@
+{
+  "phase": "15E",
+  "createdAt": "2026-09-20T14:34:28Z",
+  "purpose": "Frozen prospective monitoring and separate outcome-aligned offline research",
+  "productionMlGate": "NO",
+  "trackA": {
+    "source15dPlanSha256": "3f16282f235368c3f96a701685eca7f94f45fb7730856efbfe224564a9787f04",
+    "frozenSpecSha256": "4b1ae3f4ac878ab7857e56ff52563cb4c5b0b8ea408bf0331dbd5906f1785e38",
+    "modelId": "phase15c-20260920-v2/D0-60-mfe10/logistic",
+    "modelEncoderSha256": "e8948a1d266ea8c3107096b95d3923dcfb18c93549b7111cbec1c64ff9201469",
+    "modelLogisticSha256": "8a920f4225804563ce8b7de9c01ed81b2d5a8b036520af5ed9232410bbc80932",
+    "baselineDatasetId": "4acc445c-1871-422e-92bc-51401023e767",
+    "baselineLabelMaturityCutoff": "2026-09-18",
+    "previousEvaluatedEventCutoff": "2026-06-23",
+    "selection": "Monthly 20/25 NEAR_ENTERED D0; eventDate strictly after previous evaluated cutoff; event+60 market-session label matured by new analysis cutoff; source scan complete through that maturity date; exclude previously used event, ticker/date and episode identities",
+    "noRefit": true,
+    "metrics": ["rocAuc", "prAuc", "logLoss", "brier", "five calibration bins", "Q1-Q5 rate and median return/MFE/MAE"],
+    "cumulative": "Initial Phase 15D forward cohort plus every append-only accepted batch; compute from frozen per-event predictions, never average batch AUCs"
+  },
+  "trackB": {
+    "sourceDatasetId": "9977384f-9d87-441c-98b7-2f3b8a818067",
+    "sourceDatasetSha256": "7431a27b6b4219fc7d77b02fb07c26066982fef7c06b6a7b7dd34942dbe52577",
+    "sourcePathResearchJobId": "3de926c5-d18a-4b31-a325-82737560b27f",
+    "testStart": "2025-01-06",
+    "folds": "Exact three 140-session primary60 pre-Test folds from frozen Phase 15C specification",
+    "checkpoints": ["D0", "D5", "D10"],
+    "families": ["logistic primary", "LightGBM secondary"],
+    "seed": 1514,
+    "featurePolicy": "Only existing immutable registry; D0 EVENT features only; D5/D10 CHECKPOINT features no later than featureAsOfDate; direct and transitive liquidity features zero",
+    "labels": [
+      {"labelId": "A_MFE10_MAE5", "definition": "snapshotForward60.mfe >= 0.10 AND snapshotForward60.mae >= -0.05", "population": "Monthly NEAR_ENTERED with mature 60-session snapshot-forward label", "checkpoint": "D0,D5,D10", "createdAfterPhase15D": true},
+      {"labelId": "B_RETURN_POS_MAE5", "definition": "snapshotForward60.return > 0 AND snapshotForward60.mae >= -0.05", "population": "Monthly NEAR_ENTERED with mature 60-session snapshot-forward label", "checkpoint": "D0,D5,D10", "createdAfterPhase15D": true},
+      {"labelId": "C_LOWER_RECLAIM_RETURN_POS", "definition": "first close below dynamic Zone Lower within event+20 sessions AND first close reclaim of dynamic Zone Lower by event+20 sessions AND eventAnchored60.return > 0", "population": "Conditional subset: Monthly NEAR_ENTERED whose 20-session Path has a close below dynamic Zone Lower; 20-session Path and event-anchored 60-session label both mature; this future-conditioned cohort cannot be used as a D0 live filter", "checkpoint": "D0,D5,D10", "createdAfterPhase15D": true},
+      {"labelId": "D_LOWER_RECLAIM_MFE10_MAE8", "definition": "first close below dynamic Zone Lower within event+20 sessions AND first close reclaim of dynamic Zone Lower by event+20 sessions AND eventAnchored60.mfe >= 0.10 AND eventAnchored60.mae >= -0.08", "population": "Same future-conditioned lower-close-breach subset as C", "checkpoint": "D0,D5,D10", "createdAfterPhase15D": true}
+    ],
+    "noSelectionUsingTestOrForward": true,
+    "noHardCodedDepthBand": true
+  },
+  "trackC": {
+    "population": "Pre-Test D0 Monthly NEAR_ENTERED with available 60-session event-anchored MFE >= 0.10 and a complete 60-session Path",
+    "terminalReturnBands": [">+10%", "(0,+10%]", "(-10%,0]", "<=-10%"],
+    "pathHorizonSessions": 60,
+    "causalClaims": false
+  },
+  "trackD": {
+    "sourceDatasetId": "7661f69c-f084-4239-921c-9a2dca813eac",
+    "sourcePathResearchJobId": "18d0d857-b56d-4adb-b97e-2742b53f0fce",
+    "population": "Phase 15D Monthly BELOW_ZONE D0 eligible events, separate descriptive cohort; no model improvement or forward reuse for label selection",
+    "pathHorizonSessions": 20
+  }
+}

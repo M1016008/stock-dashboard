@@ -3,6 +3,8 @@
 //
 // 接続先は環境変数で切替:
 //   - TURSO_DATABASE_URL が設定されていれば Turso (cloud)
+//   - USE_LOCAL_DB=1 の場合は Turso を無視してローカルファイル
+//   - STOCKBOARD_DB_PATH があればその SQLite を使う
 //   - 未設定なら ./data/stockboard.db (ローカルファイル)
 //
 // すべての DB アクセスは非同期 (await) で行う。
@@ -12,23 +14,29 @@ import { createClient, type Client, type InValue } from '@libsql/client'
 import { drizzle } from 'drizzle-orm/libsql'
 import * as schema from './schema'
 import { ensureSchema } from './migrate'
+import { resolveConfiguredStoragePath } from '../storage-paths'
 import path from 'path'
 import fs from 'fs'
+import { guardForDatabase, isStorageIoError, requiresExternalStorageGuard, type ExternalStorageGuard } from '../storage/external-storage-guard'
 
 const TURSO_URL = process.env.TURSO_DATABASE_URL
 const TURSO_TOKEN = process.env.TURSO_AUTH_TOKEN
 // USE_LOCAL_DB=1 で Turso を無視してローカル DB を強制 (バッチ用)
 const FORCE_LOCAL = process.env.USE_LOCAL_DB === '1'
 
-const LOCAL_DB_PATH = path.join(process.cwd(), 'data', 'stockboard.db')
+const configuredLocalDbPath =
+  process.env.STOCKBOARD_DB_ROLE === 'us-analytics' && process.env.US_ANALYTICS_DB_PATH
+    ? process.env.US_ANALYTICS_DB_PATH
+    : process.env.STOCKBOARD_DB_PATH || process.env.LOCAL_DB_PATH
+export const localDbPath = configuredLocalDbPath
+  ? resolveConfiguredStoragePath(configuredLocalDbPath)
+  : path.join(process.cwd(), 'data', 'stockboard.db')
 
 function buildClientUrl(): { url: string; authToken?: string; isCloud: boolean } {
   if (TURSO_URL && !FORCE_LOCAL) {
     return { url: TURSO_URL, authToken: TURSO_TOKEN, isCloud: true }
   }
-  // ローカルファイル。dataディレクトリを先に作る
-  fs.mkdirSync(path.dirname(LOCAL_DB_PATH), { recursive: true })
-  return { url: `file:${LOCAL_DB_PATH}`, isCloud: false }
+  return { url: `file:${localDbPath}`, isCloud: false }
 }
 
 const cfg = buildClientUrl()
@@ -37,22 +45,154 @@ const cfg = buildClientUrl()
 const globalForDb = global as unknown as {
   libsql?: Client
   schemaReady?: Promise<void>
+  sqlitePragmasReady?: Promise<void>
+  readQueue?: {
+    active: number
+    waiters: Array<() => void>
+  }
 }
 
-export const client: Client =
-  globalForDb.libsql ??
-  createClient({ url: cfg.url, authToken: cfg.authToken })
+function storageGuard(): ExternalStorageGuard | null {
+  if (cfg.isCloud) return null
+  const requiresGuard = requiresExternalStorageGuard(localDbPath)
+  return requiresGuard ? guardForDatabase(localDbPath) : null
+}
 
-if (process.env.NODE_ENV !== 'production') globalForDb.libsql = client
+function realClient(): Client {
+  const guard = storageGuard()
+  guard?.assertWritable()
+  if (!globalForDb.libsql) {
+    try {
+      // Local test fixtures retain their existing auto-create behavior. External DBs never do.
+      if (!guard && !cfg.isCloud) fs.mkdirSync(path.dirname(localDbPath), { recursive: true })
+      globalForDb.libsql = createClient({ url: cfg.url, authToken: cfg.authToken })
+      guard?.setFatalHandler(() => {
+        try { globalForDb.libsql?.close() } catch { /* best effort */ }
+      })
+    } catch (error) {
+      if (guard && isStorageIoError(error)) guard.classify(error)
+      throw error
+    }
+  }
+  return globalForDb.libsql
+}
+
+function guardedResult<T>(value: T, guard: ExternalStorageGuard | null): T {
+  if (value && typeof (value as unknown as Promise<unknown>).then === 'function') {
+    return (value as unknown as Promise<unknown>).catch((error) => {
+      if (guard) guard.classify(error)
+      throw error
+    }) as T
+  }
+  return value
+}
+
+function guardedTransaction<T extends object>(transaction: T, guard: ExternalStorageGuard | null): T {
+  return new Proxy(transaction, {
+    get(target, property) {
+      const member = Reflect.get(target, property)
+      if (typeof member !== 'function') return member
+      return (...args: unknown[]) => {
+        if (property !== 'close') guard?.assertWritable()
+        if (property === 'execute' || property === 'batch')
+          (globalThis as { __phase16dQaSqlQuery?: (count?: number) => void })
+            .__phase16dQaSqlQuery?.(property === 'batch' && Array.isArray(args[0]) ? args[0].length : 1)
+        try { return guardedResult(Reflect.apply(member, target, args), guard) }
+        catch (error) {
+          if (guard && isStorageIoError(error)) guard.classify(error)
+          throw error
+        }
+      }
+    },
+  })
+}
+
+// Defer file open until the first operation, so a missing SSD cannot create an empty DB
+// during module import or production build.
+export const client: Client = new Proxy({ __libsqlProxy: true } as unknown as Client, {
+  get(_target, property) {
+    if (property === 'then') return undefined
+    if (property === 'constructor') return Object
+    if (property === '__libsqlProxy') return true
+    const actual = realClient()
+    const member = Reflect.get(actual, property)
+    if (typeof member !== 'function') return member
+    return (...args: unknown[]) => {
+      const guard = storageGuard()
+      guard?.assertWritable()
+      if (property === 'execute' || property === 'batch')
+        (globalThis as { __phase16dQaSqlQuery?: (count?: number) => void })
+          .__phase16dQaSqlQuery?.(property === 'batch' && Array.isArray(args[0]) ? args[0].length : 1)
+      try {
+        const result = guardedResult(Reflect.apply(member, actual, args), guard)
+        if (property === 'transaction') {
+          return (result as Promise<object>).then((transaction) => guardedTransaction(transaction, guard))
+        }
+        return result
+      } catch (error) {
+        if (guard && isStorageIoError(error)) guard.classify(error)
+        throw error
+      }
+    }
+  },
+})
 
 export const db = drizzle(client, { schema })
 export const isCloud = cfg.isCloud
+
+export async function closeLocalClientBeforeExternalWriter(): Promise<void> {
+  if (cfg.isCloud) return
+  if (globalForDb.sqlitePragmasReady) await globalForDb.sqlitePragmasReady
+  globalForDb.libsql?.close()
+  delete globalForDb.libsql
+  delete globalForDb.sqlitePragmasReady
+  delete globalForDb.schemaReady
+}
+
+function boundedIntegerEnv(name: string, fallback: number, min: number, max: number): number {
+  const value = Number(process.env[name])
+  if (!Number.isInteger(value)) return fallback
+  return Math.max(min, Math.min(max, value))
+}
+
+async function ensureLocalSqlitePragmas(): Promise<void> {
+  if (cfg.isCloud) return
+  if (!globalForDb.sqlitePragmasReady) {
+    globalForDb.sqlitePragmasReady = Promise.resolve()
+      .then(async () => {
+        const busyTimeoutMs = boundedIntegerEnv('SQLITE_BUSY_TIMEOUT_MS', 60_000, 1_000, 300_000)
+        const cacheMb = boundedIntegerEnv('STOCKBOARD_DB_CACHE_MB', 32, 8, 256)
+        const mmapMb = boundedIntegerEnv('STOCKBOARD_DB_MMAP_MB', 256, 0, 1_024)
+        await client.execute('PRAGMA synchronous=NORMAL')
+        await client.execute(`PRAGMA busy_timeout=${busyTimeoutMs}`)
+        await client.execute(`PRAGMA cache_size=-${cacheMb * 1_024}`)
+        await client.execute(`PRAGMA mmap_size=${mmapMb * 1_024 * 1_024}`)
+        const journalMode = await client.execute('PRAGMA journal_mode')
+        const mode = String(
+          journalMode.rows[0]?.journal_mode
+          ?? journalMode.rows[0]?.['journal_mode']
+          ?? '',
+        ).toLowerCase()
+        if (mode !== 'wal') await client.execute('PRAGMA journal_mode=WAL')
+      })
+      .catch((e) => {
+        delete globalForDb.sqlitePragmasReady
+        throw e
+      })
+  }
+  await globalForDb.sqlitePragmasReady
+}
 
 /**
  * スキーマ初期化を 1 回だけ走らせる。
  * 各 API ルートで `await ensureReady()` を呼ぶことでテーブル存在を担保する。
  */
 export async function ensureReady(): Promise<void> {
+  await ensureLocalSqlitePragmas()
+  if (
+    process.env.SKIP_SCHEMA_ENSURE === '1'
+    || process.env.TECHNICAL_SIGNAL_PROCESS_CHILD === '1'
+  ) return
   if (!globalForDb.schemaReady) {
     globalForDb.schemaReady = ensureSchema(client).catch((e) => {
       // 失敗時はキャッシュをクリアして次回再試行できるようにする
@@ -78,12 +218,43 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+function queryLabel(sql: string): string {
+  return sql.replace(/\s+/g, ' ').trim().slice(0, 180)
+}
+
+async function acquireReadSlot(): Promise<() => void> {
+  const configured = Number(process.env.STOCKBOARD_DB_READ_CONCURRENCY ?? 0)
+  if (!Number.isFinite(configured) || configured <= 0) return () => undefined
+  const limit = Math.min(8, Math.max(1, Math.floor(configured)))
+  globalForDb.readQueue ??= { active: 0, waiters: [] }
+  const queue = globalForDb.readQueue
+  if (queue.active >= limit) {
+    await new Promise<void>((resolve) => {
+      queue.waiters.push(resolve)
+    })
+  } else {
+    queue.active += 1
+  }
+  let released = false
+  return () => {
+    if (released) return
+    released = true
+    const next = queue.waiters.shift()
+    if (next) {
+      setImmediate(next)
+    } else {
+      queue.active = Math.max(0, queue.active - 1)
+    }
+  }
+}
+
 async function withBusyRetry<T>(fn: () => Promise<T>): Promise<T> {
   const max = Number(process.env.SQLITE_BUSY_RETRIES ?? 8)
   for (let attempt = 0; ; attempt++) {
     try {
       return await fn()
     } catch (error) {
+      if (isStorageIoError(error)) throw error
       if (!isBusyError(error) || attempt >= max) throw error
       await sleep(Math.min(2500, 120 * 2 ** attempt))
     }
@@ -92,8 +263,20 @@ async function withBusyRetry<T>(fn: () => Promise<T>): Promise<T> {
 
 export async function execAll<T = Record<string, unknown>>(sql: string, args: Args = []): Promise<T[]> {
   await ensureReady()
-  const res = await withBusyRetry(() => client.execute({ sql, args: args as InValue[] }))
-  return res.rows.map((row) => ({ ...row })) as unknown as T[]
+  const release = await acquireReadSlot()
+  const startedAt = Date.now()
+  const trace = process.env.STOCKBOARD_DB_QUERY_LOGS === '1'
+  if (trace) console.info(`[db-read] start ${queryLabel(sql)}`)
+  try {
+    const res = await withBusyRetry(() => client.execute({ sql, args: args as InValue[] }))
+    const elapsedMs = Date.now() - startedAt
+    if (trace || elapsedMs >= 2_000) {
+      console.info(`[db-read] done ${elapsedMs}ms ${queryLabel(sql)}`)
+    }
+    return res.rows.map((row) => ({ ...row })) as unknown as T[]
+  } finally {
+    release()
+  }
 }
 
 export async function execGet<T = Record<string, unknown>>(sql: string, args: Args = []): Promise<T | undefined> {

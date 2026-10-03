@@ -1,23 +1,11 @@
 import type { Metadata } from 'next'
-import { Inter, Noto_Sans_JP } from 'next/font/google'
 import { Suspense } from 'react'
 import { Header } from '@/components/layout/Header'
-import { DataAutoUpdater } from '@/components/layout/DataAutoUpdater'
+import { DataStatusBar } from '@/components/layout/DataStatusBar'
+import { StockWorkspaceDock } from '@/components/layout/StockWorkspaceDock'
 import { FreshDataRefresher } from '@/components/layout/FreshDataRefresher'
+import { AssistantDrawer } from '@/components/assistant/AssistantDrawer'
 import './globals.css'
-
-const inter = Inter({
-  subsets: ['latin'],
-  variable: '--font-sans-next',
-  display: 'swap',
-})
-
-const notoJP = Noto_Sans_JP({
-  subsets: ['latin'],
-  weight: ['400', '500', '700'],
-  variable: '--font-jp-next',
-  display: 'swap',
-})
 
 export const metadata: Metadata = {
   title: 'StockBoard',
@@ -34,19 +22,25 @@ export default function RootLayout({
   children: React.ReactNode
 }) {
   return (
-    <html lang="ja" className={`${inter.variable} ${notoJP.variable}`}>
+    <html lang="ja" suppressHydrationWarning>
       <body className="min-h-screen bg-[var(--bg-void)] font-sans text-[var(--color-text-primary)] antialiased">
         <Suspense fallback={null}>
-          <DataAutoUpdater />
           <FreshDataRefresher />
         </Suspense>
-        <Header />
-        <main className="mx-auto max-w-[1580px] px-4 py-5 sm:px-6 lg:px-8 lg:py-7">
+        <div className="site-header-stack">
+          <Suspense fallback={null}>
+            <Header />
+          </Suspense>
+          <DataStatusBar />
+        </div>
+        <main className="page-wide py-5 lg:py-7">
           {children}
         </main>
-        <footer className="mx-auto max-w-[1580px] px-4 pb-8 pt-3 text-[11px] text-[var(--color-text-tertiary)] sm:px-6 lg:px-8">
+        <footer className="page-wide pb-8 pt-3 text-[11px] text-[var(--color-text-tertiary)]">
           表示内容は過去データに基づく統計的観測です。投資判断は自己責任で行ってください。
         </footer>
+        <AssistantDrawer />
+        <StockWorkspaceDock />
       </body>
     </html>
   )

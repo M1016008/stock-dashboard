@@ -10,7 +10,9 @@
 // 出力: HexMap が期待する Stock[] 形 + date / count
 
 import { NextRequest, NextResponse } from 'next/server'
+import { gzipSync } from 'zlib'
 import { execAll, execGet } from '@/lib/db/client'
+import { filterRowsByUniverse, parseUniverseFilter, universeSqlCondition, UNIVERSE_FILTER_PARAM } from '@/lib/market-universe'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
@@ -21,6 +23,12 @@ interface HexStock {
   name: string
   sector_large: string
   sector_small: string | null
+  sector17_name: string | null
+  sector33_name: string | null
+  major_category: string | null
+  sub_industry: string | null
+  market_segment: string | null
+  margin_type: string | null
   market_cap: number
   price: number
   daily_change: number
@@ -29,30 +37,19 @@ interface HexStock {
   months3_change: number
   months6_change: number
   ytd_change: number
-  stage: number
-  stage_a: number | null
-  stage_b: number | null
+  stage: number | null
   daily_a_stage: number | null
   daily_b_stage: number | null
   weekly_a_stage: number | null
   weekly_b_stage: number | null
   monthly_a_stage: number | null
   monthly_b_stage: number | null
-  prev_daily_a_stage: number | null
-  prev_daily_b_stage: number | null
-  prev_weekly_a_stage: number | null
-  prev_weekly_b_stage: number | null
-  prev_monthly_a_stage: number | null
-  prev_monthly_b_stage: number | null
-  prev_prev_daily_a_stage: number | null
-  prev_prev_daily_b_stage: number | null
-  prev_prev_weekly_a_stage: number | null
-  prev_prev_weekly_b_stage: number | null
-  prev_prev_monthly_a_stage: number | null
-  prev_prev_monthly_b_stage: number | null
   sma_angles: { sma5: number | null; sma25: number | null; sma75: number | null; sma300: number | null }
   prev_sma_angles: { sma5: number | null; sma25: number | null; sma75: number | null; sma300: number | null }
-  prev_prev_sma_angles: { sma5: number | null; sma25: number | null; sma75: number | null; sma300: number | null }
+  ml_candidate_direction: 'up' | 'down' | null
+  ml_candidate_rank: number | null
+  ml_candidate_summary: string | null
+  physical_momentum_score: number | null
 }
 
 interface SnapshotRow {
@@ -85,14 +82,44 @@ interface UniRow {
   ticker: string
   name: string | null
   shares_outstanding: number | null
+  sector17_code: string | null
   sector17_name: string | null
+  sector33_code: string | null
   sector33_name: string | null
+  market_segment: string | null
+  margin_type: string | null
 }
 
 interface ClassRow {
   ticker: string
   major_category: string
   sub_industry: string
+}
+
+interface MlCandidateRow {
+  ticker: string
+  direction: 'up' | 'down'
+  rank: number
+  explanation_json: string | null
+}
+
+interface PhysicalMomentumRow {
+  ticker: string
+  physical_momentum_score: number | null
+}
+
+function jsonResponse(request: NextRequest, payload: unknown): NextResponse {
+  const json = JSON.stringify(payload)
+  const headers = new Headers({
+    'content-type': 'application/json; charset=utf-8',
+  })
+  const acceptEncoding = request.headers.get('accept-encoding') ?? ''
+  if (json.length > 1024 && /\bgzip\b/i.test(acceptEncoding)) {
+    headers.set('content-encoding', 'gzip')
+    headers.set('vary', 'Accept-Encoding')
+    return new NextResponse(gzipSync(json), { headers })
+  }
+  return new NextResponse(json, { headers })
 }
 
 /** 日付より前の最近営業日 */
@@ -109,12 +136,43 @@ async function latestSnapshotDate(): Promise<string | null> {
   return row?.d ?? null
 }
 
+async function resolveSnapshotDate(requestedDate: string | null): Promise<string | null> {
+  if (requestedDate && /^\d{4}-\d{2}-\d{2}$/.test(requestedDate)) {
+    const row = await execGet<{ d: string | null }>(
+      `SELECT MAX(date) AS d FROM daily_snapshots WHERE date <= ?`,
+      [requestedDate],
+    )
+    if (row?.d) return row.d
+  }
+  return latestSnapshotDate()
+}
+
 async function loadSnapshots(date: string): Promise<SnapshotRow[]> {
   return execAll<SnapshotRow>(
-    `SELECT ticker, date,
-            daily_a_stage, daily_b_stage, weekly_a_stage, weekly_b_stage, monthly_a_stage, monthly_b_stage,
-            ma_5, ma_25, ma_75, ma_300
-     FROM daily_snapshots WHERE date = ?`,
+    `
+    SELECT ticker, date,
+           daily_a_stage, daily_b_stage, weekly_a_stage, weekly_b_stage, monthly_a_stage, monthly_b_stage,
+           ma_5, ma_25, ma_75, ma_300
+    FROM (
+      SELECT
+        ticker,
+        date,
+        daily_a_stage,
+        daily_b_stage,
+        weekly_a_stage,
+        weekly_b_stage,
+        monthly_a_stage,
+        monthly_b_stage,
+        ma_5,
+        ma_25,
+        ma_75,
+        ma_300,
+        ROW_NUMBER() OVER (PARTITION BY ticker, date ORDER BY computed_at DESC) AS rn
+      FROM daily_snapshots
+      WHERE date = ?
+    )
+    WHERE rn = 1
+    `,
     [date],
   )
 }
@@ -132,22 +190,80 @@ function smaAngle(curr: number | null, past: number | null): number | null {
   return ratio * 100
 }
 
+function parseMlSummary(raw: string | null): string | null {
+  if (!raw) return null
+  try {
+    const parsed = JSON.parse(raw) as { summary?: string; watchPoints?: string[] }
+    return parsed.summary ?? parsed.watchPoints?.[0] ?? null
+  } catch {
+    return null
+  }
+}
+
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
     const timeframe = (searchParams.get('timeframe') ?? 'daily') as 'daily' | 'weekly' | 'monthly'
     const requestedDate = searchParams.get('date')
+    const view = searchParams.get('view')
+    const taxonomy = searchParams.get('taxonomy')
+    const requestedGroup = searchParams.get('group')?.trim() || null
+    const classificationTaxonomy = taxonomy === '17' || taxonomy === '33' || taxonomy === 'major' || taxonomy === 'subIndustry'
+      ? taxonomy
+      : null
+    const universeFilter = parseUniverseFilter(searchParams.get(UNIVERSE_FILTER_PARAM))
 
-    const date = requestedDate ?? (await latestSnapshotDate())
+    const date = await resolveSnapshotDate(requestedDate)
     if (!date) {
-      return NextResponse.json({
+      return jsonResponse(request, {
         success: true,
         data: [],
         count: 0,
         cached: false,
         date: null,
         timeframe,
+        filters: { universe: universeFilter },
         notice: 'OHLCV データ未取り込み。npm run batch:ohlcv を先に実行してください。',
+      })
+    }
+
+    if (view === 'summary') {
+      const universe = universeSqlCondition('ds.ticker', universeFilter)
+      const rows = await execAll<{
+        code: string
+        sector_large: string | null
+        daily_a_stage: number | null
+        weekly_a_stage: number | null
+        monthly_a_stage: number | null
+        physical_momentum_score: number | null
+      }>(
+        `
+        SELECT
+          ds.ticker AS code,
+          COALESCE(tu.sector17_name, sc.major_category, 'その他') AS sector_large,
+          ds.daily_a_stage,
+          ds.weekly_a_stage,
+          ds.monthly_a_stage,
+          pm.physical_momentum_score
+        FROM daily_snapshots ds
+        LEFT JOIN ticker_universe tu ON tu.ticker = ds.ticker
+        LEFT JOIN stock_classification sc ON sc.ticker = ds.ticker
+        LEFT JOIN physical_momentum_metrics pm ON pm.market = 'JP' AND pm.symbol = ds.ticker AND pm.date = ds.date
+        WHERE ds.date = ?
+        ${universe.sql ? `AND ${universe.sql}` : ''}
+        `,
+        [date, ...universe.params],
+      )
+      return jsonResponse(request, {
+        success: true,
+        data: rows,
+        count: rows.length,
+        cached: true,
+        date,
+        timeframe,
+        source: 'jquants',
+        view,
+        filters: { universe: universeFilter },
       })
     }
 
@@ -155,7 +271,7 @@ export async function GET(request: NextRequest) {
     const prev2 = prev1 ? await prevSnapshotDate(prev1) : null
 
     // 並列ロード
-    const [curr, prev1Snap, prev2Snap, prices, prices1Y, uni, klass] = await Promise.all([
+    const [currAll, prev1Snap, prev2Snap, prices, prices1Y, uni, klass, mlCandidates, physicalMomentum] = await Promise.all([
       loadSnapshots(date),
       prev1 ? loadSnapshots(prev1) : Promise.resolve([] as SnapshotRow[]),
       prev2 ? loadSnapshots(prev2) : Promise.resolve([] as SnapshotRow[]),
@@ -191,36 +307,95 @@ export async function GET(request: NextRequest) {
       // 念のため変数として残す
       Promise.resolve(null),
       execAll<UniRow>(
-        `SELECT ticker, name, shares_outstanding, sector17_name, sector33_name
+        `SELECT ticker, name, shares_outstanding, sector17_code, sector17_name, sector33_code, sector33_name, market_segment, margin_type
          FROM ticker_universe WHERE active = 1`,
       ),
       execAll<ClassRow>(
         `SELECT ticker, major_category, sub_industry FROM stock_classification`,
       ),
+      execAll<MlCandidateRow>(
+        `
+        WITH d AS (
+          SELECT MAX(as_of_date) AS as_of_date
+          FROM serving_ml_candidates
+          WHERE as_of_date <= ?
+        )
+        SELECT ticker, direction, rank, explanation_json
+        FROM serving_ml_candidates
+        WHERE as_of_date = (SELECT as_of_date FROM d)
+          AND rank <= 160
+        `,
+        [date],
+      ),
+      execAll<PhysicalMomentumRow>(
+        `
+        SELECT
+          symbol AS ticker,
+          physical_momentum_score
+        FROM physical_momentum_metrics
+        WHERE market = 'JP'
+          AND date = ?
+        `,
+        [date],
+      ),
     ])
     void prices1Y
+    const curr = filterRowsByUniverse(currAll, universeFilter)
 
     const prev1Map = indexByTicker(prev1Snap)
     const prev2Map = indexByTicker(prev2Snap)
     const priceMap = indexByTicker(prices)
     const uniMap = indexByTicker(uni)
     const klassMap = indexByTicker(klass)
+    const physicalMap = indexByTicker(physicalMomentum)
+    const mlMap = new Map<string, { direction: 'up' | 'down'; rank: number; summary: string | null }>()
+    for (const row of mlCandidates) {
+      const existing = mlMap.get(row.ticker)
+      if (!existing || row.rank < existing.rank) {
+        mlMap.set(row.ticker, {
+          direction: row.direction,
+          rank: row.rank,
+          summary: parseMlSummary(row.explanation_json),
+        })
+      }
+    }
 
-    const rows: HexStock[] = curr.map((s) => {
+    const scopedCurr = classificationTaxonomy && requestedGroup
+      ? curr.filter((snapshot) => {
+          const universeRow = uniMap.get(snapshot.ticker)
+          const classificationRow = klassMap.get(snapshot.ticker)
+          if (classificationTaxonomy === '17') {
+            return (universeRow?.sector17_code || universeRow?.sector17_name) === requestedGroup
+          }
+          if (classificationTaxonomy === '33') {
+            return (universeRow?.sector33_code || universeRow?.sector33_name) === requestedGroup
+          }
+          if (classificationTaxonomy === 'major') {
+            return classificationRow?.major_category === requestedGroup
+          }
+          return classificationRow?.major_category && classificationRow?.sub_industry
+            ? `${classificationRow.major_category}\u001f${classificationRow.sub_industry}` === requestedGroup
+            : false
+        })
+      : curr
+
+    const rows: HexStock[] = scopedCurr.map((s) => {
       const p1 = prev1Map.get(s.ticker)
       const p2 = prev2Map.get(s.ticker)
       const px = priceMap.get(s.ticker)
       const u = uniMap.get(s.ticker)
       const k = klassMap.get(s.ticker)
+      const ml = mlMap.get(s.ticker)
+      const pm = physicalMap.get(s.ticker)
 
       // 銘柄ごとフォールバック: Yoshio 独自分類 → JPX Sector17/33 → 'その他'
       const sectorLarge =
-        k?.major_category ??
         u?.sector17_name ??
+        k?.major_category ??
         'その他'
       const sectorSmall =
-        k?.sub_industry ??
         u?.sector33_name ??
+        k?.sub_industry ??
         'その他'
 
       const close = px?.close ?? 0
@@ -248,15 +423,21 @@ export async function GET(request: NextRequest) {
       const monthly_b = s.monthly_b_stage
 
       const stageNow =
-        timeframe === 'weekly' ? (weekly_a ?? 1) :
-        timeframe === 'monthly' ? (monthly_a ?? 1) :
-        (daily_a ?? 1)
+        timeframe === 'weekly' ? weekly_a :
+        timeframe === 'monthly' ? monthly_a :
+        daily_a
 
       return {
         code: s.ticker,
         name: u?.name ?? s.ticker,
         sector_large: sectorLarge,
         sector_small: sectorSmall,
+        sector17_name: u?.sector17_name ?? null,
+        sector33_name: u?.sector33_name ?? null,
+        major_category: k?.major_category ?? null,
+        sub_industry: k?.sub_industry ?? null,
+        market_segment: u?.market_segment ?? null,
+        margin_type: u?.margin_type ?? null,
         market_cap: marketCap,
         price: close,
         daily_change: px?.perf_1d ?? 0,
@@ -266,33 +447,22 @@ export async function GET(request: NextRequest) {
         months6_change: px?.perf_6m ?? 0,
         ytd_change: px?.perf_ytd ?? 0,
         stage: stageNow,
-        stage_a: daily_a,
-        stage_b: daily_b,
         daily_a_stage: daily_a,
         daily_b_stage: daily_b,
         weekly_a_stage: weekly_a,
         weekly_b_stage: weekly_b,
         monthly_a_stage: monthly_a,
         monthly_b_stage: monthly_b,
-        prev_daily_a_stage:   p1?.daily_a_stage   ?? null,
-        prev_daily_b_stage:   p1?.daily_b_stage   ?? null,
-        prev_weekly_a_stage:  p1?.weekly_a_stage  ?? null,
-        prev_weekly_b_stage:  p1?.weekly_b_stage  ?? null,
-        prev_monthly_a_stage: p1?.monthly_a_stage ?? null,
-        prev_monthly_b_stage: p1?.monthly_b_stage ?? null,
-        prev_prev_daily_a_stage:   p2?.daily_a_stage   ?? null,
-        prev_prev_daily_b_stage:   p2?.daily_b_stage   ?? null,
-        prev_prev_weekly_a_stage:  p2?.weekly_a_stage  ?? null,
-        prev_prev_weekly_b_stage:  p2?.weekly_b_stage  ?? null,
-        prev_prev_monthly_a_stage: p2?.monthly_a_stage ?? null,
-        prev_prev_monthly_b_stage: p2?.monthly_b_stage ?? null,
         sma_angles: smaAngles,
         prev_sma_angles: prevSmaAngles,
-        prev_prev_sma_angles: prevSmaAngles,
+        ml_candidate_direction: ml?.direction ?? null,
+        ml_candidate_rank: ml?.rank ?? null,
+        ml_candidate_summary: ml?.summary ?? null,
+        physical_momentum_score: pm?.physical_momentum_score ?? null,
       }
     })
 
-    return NextResponse.json({
+    return jsonResponse(request, {
       success: true,
       data: rows,
       count: rows.length,
@@ -300,6 +470,11 @@ export async function GET(request: NextRequest) {
       date,
       timeframe,
       source: 'jquants',
+      filters: {
+        universe: universeFilter,
+        taxonomy: classificationTaxonomy,
+        group: requestedGroup,
+      },
     })
   } catch (error) {
     console.error('Hex API error:', error)

@@ -37,6 +37,13 @@ export function toJQuantsCode(ticker: string): string {
   return ticker.replace(/\.T$/i, '')
 }
 
+export function fromJQuantsCode(code: string): string {
+  const normalized = toJQuantsCode(code)
+  return normalized.length === 5 && normalized.endsWith('0')
+    ? normalized.slice(0, -1)
+    : normalized
+}
+
 // ─────────────────────────────────────
 // API: 日足 OHLCV (/equities/bars/daily)
 // ─────────────────────────────────────
@@ -129,6 +136,88 @@ export async function fetchJQuantsDaily(
 
 export interface JQuantsDailyByDateRow extends OHLCV {
   ticker: string
+  adjustmentFactor: number
+}
+
+export function hasJQuantsCorporateAction(adjustmentFactor: number | null | undefined): boolean {
+  return typeof adjustmentFactor === 'number'
+    && Number.isFinite(adjustmentFactor)
+    && Math.abs(adjustmentFactor - 1) > Number.EPSILON
+}
+
+const JQUANTS_CORPORATE_ACTION_BOUNDARY_FACTORS = [
+  0.1,
+  0.125,
+  0.2,
+  0.25,
+  1 / 3,
+  0.5,
+  2 / 3,
+  1.5,
+  2,
+  3,
+  4,
+  5,
+  8,
+  10,
+] as const
+
+export function isLikelyJQuantsCorporateActionBoundary(input: {
+  previousDate: string | null | undefined
+  currentDate: string | null | undefined
+  previousClose: number | null | undefined
+  currentClose: number | null | undefined
+}): boolean {
+  const previousClose = input.previousClose
+  const currentClose = input.currentClose
+  if (
+    typeof previousClose !== 'number'
+    || !Number.isFinite(previousClose)
+    || previousClose <= 0
+    || typeof currentClose !== 'number'
+    || !Number.isFinite(currentClose)
+    || currentClose <= 0
+    || !input.previousDate
+    || !input.currentDate
+  ) {
+    return false
+  }
+
+  const gapDays = (
+    Date.parse(`${input.currentDate}T00:00:00Z`)
+    - Date.parse(`${input.previousDate}T00:00:00Z`)
+  ) / 86_400_000
+  if (!Number.isFinite(gapDays) || gapDays <= 0 || gapDays > 10) return false
+
+  const priceRatio = currentClose / previousClose
+  const nearestFactor = JQUANTS_CORPORATE_ACTION_BOUNDARY_FACTORS.reduce((best, candidate) => (
+    Math.abs(Math.log(priceRatio / candidate)) < Math.abs(Math.log(priceRatio / best))
+      ? candidate
+      : best
+  ))
+
+  return Math.abs(Math.log(priceRatio / nearestFactor)) <= Math.log(1.12)
+}
+
+export function shouldApplyJQuantsLegacyAdjustment(input: {
+  adjustmentFactor: number | null | undefined
+  adjustedProviderStartClose: number | null | undefined
+  existingProviderStartClose: number | null | undefined
+  legacyLastClose: number | null | undefined
+}): boolean {
+  const factor = input.adjustmentFactor
+  const adjustedClose = input.adjustedProviderStartClose
+  if (!hasJQuantsCorporateAction(factor) || factor! <= 0 || !adjustedClose || adjustedClose <= 0) {
+    return false
+  }
+
+  const referenceCloses = [input.existingProviderStartClose, input.legacyLastClose]
+    .filter((value): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0)
+
+  return referenceCloses.some((referenceClose) => {
+    const observedFactor = adjustedClose / referenceClose
+    return Math.abs(Math.log(observedFactor / factor!)) <= Math.log(1.35)
+  })
 }
 
 export async function fetchJQuantsDailyByDate(date: string): Promise<JQuantsDailyByDateRow[]> {
@@ -150,7 +239,8 @@ export async function fetchJQuantsDailyByDate(date: string): Promise<JQuantsDail
       const ohlcv = toOhlcv(row)
       if (!ohlcv) continue
       all.push({
-        ticker: toJQuantsCode(row.Code).replace(/0$/, ''),
+        ticker: fromJQuantsCode(row.Code),
+        adjustmentFactor: row.AdjFactor ?? 1,
         ...ohlcv,
       })
     }
@@ -238,13 +328,75 @@ export interface JFinsSummaryRow {
   Eq: string                 // 自己資本
   EqAR: string               // 自己資本比率
   BPS: string                // 1株あたり純資産
-  Div1Q: string              // 期別配当
-  Div2Q: string
-  Div3Q: string
-  DivFY: string              // 期末配当
-  DivAnn: string             // 年間配当
-  FDivAnn: string            // 予想年間配当
-  PayoutRatioAnn: string     // 配当性向
+  OdP?: string               // 経常利益
+  CFO?: string               // 営業キャッシュフロー
+  CFI?: string               // 投資キャッシュフロー
+  CFF?: string               // 財務キャッシュフロー
+  CashEq?: string            // 現金及び現金同等物
+  DivAnn?: string            // 年間配当
+  PayoutRatioAnn?: string    // 配当性向
+  FSales?: string            // 通期会社予想 売上高
+  FOP?: string               // 通期会社予想 営業利益
+  FOdP?: string              // 通期会社予想 経常利益
+  FNP?: string               // 通期会社予想 純利益
+  FEPS?: string              // 通期会社予想 EPS
+  FDivAnn?: string           // 通期会社予想 年間配当
+  NxFSales?: string          // 次期会社予想 売上高
+  NxFOP?: string             // 次期会社予想 営業利益
+  NxFOdP?: string            // 次期会社予想 経常利益
+  NxFNp?: string             // 次期会社予想 純利益
+  NxFNP?: string             // API表記差への互換エイリアス
+  NxFEPS?: string            // 次期会社予想 EPS
+  NxFDivAnn?: string         // 次期会社予想 年間配当
+  NxtFYSt?: string           // 次期会計年度開始日
+  NxtFYEn?: string           // 次期会計年度終了日
+  FSales2Q?: string
+  FOP2Q?: string
+  FOdP2Q?: string
+  FNP2Q?: string
+  FEPS2Q?: string
+  NxFSales2Q?: string
+  NxFOP2Q?: string
+  NxFOdP2Q?: string
+  NxFNp2Q?: string
+  NxFEPS2Q?: string
+  NCSales?: string
+  NCOP?: string
+  NCOdP?: string
+  NCNP?: string
+  NCEPS?: string
+  NCTA?: string
+  NCEq?: string
+  NCEqAR?: string
+  NCBPS?: string
+  NCShEq?: string
+  NCROE?: string
+  FNCSales?: string
+  FNCOP?: string
+  FNCOdP?: string
+  FNCNP?: string
+  FNCEPS?: string
+  NxFNCSales?: string
+  NxFNCOP?: string
+  NxFNCOdP?: string
+  NxFNCNP?: string
+  NxFNCEPS?: string
+  FNCSales2Q?: string
+  FNCOP2Q?: string
+  FNCOdP2Q?: string
+  FNCNP2Q?: string
+  FNCEPS2Q?: string
+  NxFNCSales2Q?: string
+  NxFNCOP2Q?: string
+  NxFNCOdP2Q?: string
+  NxFNCNP2Q?: string
+  NxFNCEPS2Q?: string
+  FPayoutRatioAnn?: string
+  NxFPayoutRatioAnn?: string
+  RetroRst?: string | boolean
+  ChgAcEst?: string | boolean
+  ChgByASRev?: string | boolean
+  ChgNoASRev?: string | boolean
   ShOutFY: string            // 期末発行済株式数
   TrShFY: string             // 期末自己株式数
   AvgSh: string              // 期中平均株式数
@@ -283,15 +435,149 @@ export async function fetchJQuantsFinsSummary(ticker: string): Promise<JFinsSumm
   return all
 }
 
+export async function fetchJQuantsFinsSummaryByDate(date: string): Promise<JFinsSummaryRow[]> {
+  const apiKey = getApiKey()
+  const all: JFinsSummaryRow[] = []
+  let paginationKey: string | undefined
+
+  do {
+    const params = new URLSearchParams({ date })
+    if (paginationKey) params.set('pagination_key', paginationKey)
+    const res = await fetch(`${BASE_URL}/fins/summary?${params.toString()}`, {
+      headers: { 'x-api-key': apiKey },
+    })
+    if (!res.ok) {
+      throw new Error(`J-Quants fins/summary 失敗 (${date}): ${res.status} ${await res.text()}`)
+    }
+    const json = await res.json() as JFinsSummaryResponse
+    all.push(...(json.data ?? []))
+    paginationKey = json.pagination_key
+  } while (paginationKey)
+
+  return all
+}
+
 // ─────────────────────────────────────
-// 派生: PER / PBR / ROE / 配当利回り を計算して返す
+// API: 財務諸表詳細 (/fins/details) — Premium プラン
+// ─────────────────────────────────────
+
+export interface JFinsDetailsRow {
+  DiscDate: string
+  DiscTime: string
+  Code: string
+  DiscNo: string
+  DocType: string
+  FS: Record<string, string>
+}
+
+interface JFinsDetailsResponse {
+  data?: JFinsDetailsRow[]
+  pagination_key?: string
+  cursor?: string
+}
+
+/**
+ * J-Quantsの標準化済みBS/PL/CFを取得する。契約対象外の403は呼び出し側へ
+ * 明示的に返し、EDINET fallbackと値を混ぜない。
+ */
+export async function fetchJQuantsFinsDetails(ticker: string): Promise<JFinsDetailsRow[]> {
+  const apiKey = getApiKey()
+  const params = new URLSearchParams({ code: toJQuantsCode(ticker) })
+  const rows: JFinsDetailsRow[] = []
+  let paginationKey: string | undefined
+  do {
+    if (paginationKey) params.set('pagination_key', paginationKey)
+    const response = await fetch(`${BASE_URL}/fins/details?${params}`, {
+      headers: { 'x-api-key': apiKey },
+    })
+    if (!response.ok) {
+      const message = await response.text()
+      throw new Error(`J-Quants fins/details failed (${ticker}): HTTP ${response.status} ${message}`)
+    }
+    const payload = await response.json() as JFinsDetailsResponse
+    rows.push(...(payload.data ?? []))
+    paginationKey = payload.pagination_key
+  } while (paginationKey)
+  return rows
+}
+
+// ─────────────────────────────────────
+// API: 日々公表信用取引残高 (/markets/margin-alert)
+// ─────────────────────────────────────
+
+export interface JMarginAlertRow {
+  PubDate: string
+  Code: string
+  AppDate: string
+  PubReason?: Record<string, string> | string | null
+  ShrtOut?: number | null
+  ShrtOutChg?: number | null
+  ShrtOutRatio?: number | null
+  LongOut?: number | null
+  LongOutChg?: number | null
+  LongOutRatio?: number | null
+  SLRatio?: number | null
+  ShrtNegOut?: number | null
+  ShrtNegOutChg?: number | null
+  ShrtStdOut?: number | null
+  ShrtStdOutChg?: number | null
+  LongNegOut?: number | null
+  LongNegOutChg?: number | null
+  LongStdOut?: number | null
+  LongStdOutChg?: number | null
+  TSEMrgnRegCls?: string | null
+}
+
+interface JMarginAlertResponse {
+  data?: JMarginAlertRow[]
+  pagination_key?: string
+}
+
+export async function fetchJQuantsMarginAlert(options: {
+  ticker?: string
+  date?: string
+  from?: string
+  to?: string
+} = {}): Promise<JMarginAlertRow[]> {
+  const apiKey = getApiKey()
+  const all: JMarginAlertRow[] = []
+  let paginationKey: string | undefined
+
+  do {
+    const params = new URLSearchParams()
+    if (options.ticker) params.set('code', toJQuantsCode(options.ticker))
+    if (options.date) {
+      params.set('date', options.date)
+    } else {
+      if (options.from) params.set('from', options.from)
+      if (options.to) params.set('to', options.to)
+    }
+    if (paginationKey) params.set('pagination_key', paginationKey)
+    const res = await fetch(`${BASE_URL}/markets/margin-alert${params.size > 0 ? `?${params}` : ''}`, {
+      headers: { 'x-api-key': apiKey },
+    })
+    if (!res.ok) {
+      throw new Error(`J-Quants markets/margin-alert 失敗: ${res.status} ${await res.text()}`)
+    }
+    const json = await res.json() as JMarginAlertResponse
+    all.push(...(json.data ?? []))
+    paginationKey = json.pagination_key
+  } while (paginationKey)
+
+  return all.sort((a, b) => (
+    a.AppDate.localeCompare(b.AppDate)
+    || a.PubDate.localeCompare(b.PubDate)
+    || a.Code.localeCompare(b.Code)
+  ))
+}
+
+// ─────────────────────────────────────
+// 派生: PBR / ROE などを計算して返す
 // ─────────────────────────────────────
 
 export interface FundamentalsResult {
-  per?: number           // current_price / EPS_annual
   pbr?: number           // current_price / BPS
   roe?: number           // NP / Eq * 100  (%)
-  dividendYield?: number // DivAnn / current_price * 100  (%)
   eps?: number           // 1 株純利益 (円)
   bps?: number           // 1 株純資産 (円)
   netProfit?: number     // 純利益 (円)
@@ -303,7 +589,7 @@ export interface FundamentalsResult {
 }
 
 /**
- * 財務サマリ + 現在価格から PER/PBR/ROE/配当利回りを計算。
+ * 財務サマリ + 現在価格から PBR/ROE などを計算。
  * - 通期 (FY) の最新レコードを優先、なければ直近の四半期を使う。
  * - 値が空欄のフィールドは undefined にする。
  */
@@ -336,7 +622,6 @@ export function computeFundamentals(
   const bps      = num(latest.BPS)
   const np       = num(latest.NP)
   const eq       = num(latest.Eq)
-  const divAnn   = num(latest.DivAnn) ?? num(latest.FDivAnn)
   const shOut    = num(latest.ShOutFY)
 
   const result: FundamentalsResult = {
@@ -350,9 +635,7 @@ export function computeFundamentals(
   }
 
   if (currentPrice != null && currentPrice > 0) {
-    if (eps != null && eps > 0)    result.per = currentPrice / eps
     if (bps != null && bps > 0)    result.pbr = currentPrice / bps
-    if (divAnn != null)            result.dividendYield = (divAnn / currentPrice) * 100
   }
 
   if (np != null && eq != null && eq > 0) {
@@ -403,6 +686,27 @@ export async function fetchJQuantsWeeklyMargin(ticker: string, from?: string): P
       // Standard プラン外なら 403。空配列で吸収する。
       if (res.status === 403 || res.status === 404) return []
       throw new Error(`J-Quants margin-interest 失敗: ${res.status} ${await res.text()}`)
+    }
+    const json = await res.json() as JMarginResponse
+    all.push(...(json.data ?? []))
+    paginationKey = json.pagination_key
+  } while (paginationKey)
+  return all
+}
+
+export async function fetchJQuantsWeeklyMarginByDate(date: string): Promise<JMarginRow[]> {
+  const apiKey = getApiKey()
+  const all: JMarginRow[] = []
+  let paginationKey: string | undefined
+  do {
+    const params = new URLSearchParams({ date })
+    if (paginationKey) params.set('pagination_key', paginationKey)
+    const res = await fetch(`${BASE_URL}/markets/margin-interest?${params}`, {
+      headers: { 'x-api-key': apiKey },
+    })
+    if (!res.ok) {
+      if (res.status === 403 || res.status === 404) return []
+      throw new Error(`J-Quants margin-interest(date) 失敗: ${res.status} ${await res.text()}`)
     }
     const json = await res.json() as JMarginResponse
     all.push(...(json.data ?? []))

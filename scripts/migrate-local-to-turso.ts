@@ -12,10 +12,11 @@
 //   - 既に Turso 側にデータがある場合は (date, ticker) 等のキーで上書き
 
 import { createClient } from '@libsql/client'
+import { openExistingGuardedClient } from '@/lib/storage/guarded-libsql-client'
 import path from 'path'
 import fs from 'fs'
 
-const LOCAL_DB = path.join(process.cwd(), 'data', 'stockboard.db')
+const LOCAL_DB = process.env.STOCKBOARD_DB_PATH || process.env.LOCAL_DB_PATH || path.join(process.cwd(), 'data', 'stockboard.db')
 const REMOTE_URL = process.env.TURSO_DATABASE_URL
 const REMOTE_TOKEN = process.env.TURSO_AUTH_TOKEN
 
@@ -29,7 +30,7 @@ if (!fs.existsSync(LOCAL_DB)) {
   process.exit(1)
 }
 
-const local = createClient({ url: `file:${LOCAL_DB}` })
+const local = openExistingGuardedClient(LOCAL_DB, 'local-to-turso-source')
 const remote = createClient({ url: REMOTE_URL, authToken: REMOTE_TOKEN })
 
 const TABLES = [

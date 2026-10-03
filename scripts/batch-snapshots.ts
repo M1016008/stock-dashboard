@@ -5,28 +5,28 @@
 // 使い方:
 //   npm run batch:snapshots                       # active な ticker_universe を全件処理
 //   TICKERS=7203,6758 npm run batch:snapshots     # 環境変数で銘柄を絞ってテスト
+//   TICKERS=7203 SNAPSHOT_FORCE_REBUILD=1 npm run batch:snapshots
+//                                                 # 企業行動修復後に既存行も再計算
 //
 // 動作:
 //   - 各銘柄について daily_snapshots の最新日付を確認、それ以降の日付分のみ計算
-//   - 各日について OHLCV を slice (その日まで) → buildMaValuesFromOhlcv → calculateAllStages
+//   - 日足の累積和と暦週・暦月の終値を使って各日の MA/ステージを線形時間で計算
 //   - チャンク単位で UPSERT (onConflictDoNothing で冪等)
 //   - 銘柄単位で失敗してもバッチは継続、失敗銘柄は batch_runs.error_summary に記録
 //
 // パフォーマンス注:
-//   各日で OHLCV を slice して再計算するため銘柄あたり O(n²)。
-//   2年分 = 約 500 日 × 4000 銘柄 = 200万計算。約 5〜10 分目安。
-//   将来データ量が増えたら累積計算に最適化する余地あり。
+//   銘柄ごとに O(n) で計算し、書き込みはチャンク化する。
 
-import { db, execAll, execGet } from '@/lib/db/client'
+import { db, execAll, execGet, execRun } from '@/lib/db/client'
 import { dailySnapshots, batchRuns, computeState } from '@/lib/db/schema'
-import { calculateAllStages, type MaValues } from '@/lib/hex-stage'
+import { buildSnapshotCalculations, MIN_SNAPSHOT_DATA_POINTS } from '@/lib/snapshots/continuous-ma'
 import type { OHLCV } from '@/types/stock'
 import { eq, sql } from 'drizzle-orm'
 
-const MIN_DATA_POINTS = 5  // これ以下では何も計算できない (ma_5 すら出ない)
 const CONCURRENCY = Math.max(1, Number(process.env.SNAPSHOT_CONCURRENCY ?? 4))
 const PROGRESS_EVERY = Number(process.env.SNAPSHOT_PROGRESS_EVERY ?? 200)
 const LOOKBACK_DAYS = Number(process.env.SNAPSHOT_LOOKBACK_DAYS ?? 900)
+const FORCE_REBUILD = process.env.SNAPSHOT_FORCE_REBUILD === '1'
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 
 async function withDbRetry<T>(fn: () => Promise<T>): Promise<T> {
@@ -42,54 +42,44 @@ async function withDbRetry<T>(fn: () => Promise<T>): Promise<T> {
   throw new Error('unreachable')
 }
 
-function buildClosePrefix(rows: OHLCV[]): number[] {
-  const prefix = [0]
-  for (const row of rows) {
-    prefix.push(prefix[prefix.length - 1] + row.close)
-  }
-  return prefix
-}
-
-function dailySmaAt(prefix: number[], index: number, period: number): number | null {
-  const end = index + 1
-  if (end < period) return null
-  return (prefix[end] - prefix[end - period]) / period
-}
-
-function sampledSmaAt(rows: OHLCV[], index: number, step: number, period: number): number | null {
-  const firstIndex = index - (period - 1) * step
-  if (firstIndex < 0) return null
-  let sum = 0
-  for (let i = 0; i < period; i++) {
-    sum += rows[index - i * step].close
-  }
-  return sum / period
-}
-
-function buildMaValuesAtIndex(rows: OHLCV[], prefix: number[], index: number): MaValues {
-  return {
-    ma_5: dailySmaAt(prefix, index, 5),
-    ma_25: dailySmaAt(prefix, index, 25),
-    ma_75: dailySmaAt(prefix, index, 75),
-    ma_150: dailySmaAt(prefix, index, 150),
-    ma_300: dailySmaAt(prefix, index, 300),
-    weekly_ma_5: sampledSmaAt(rows, index, 5, 5),
-    weekly_ma_13: sampledSmaAt(rows, index, 5, 13),
-    weekly_ma_25: sampledSmaAt(rows, index, 5, 25),
-    weekly_ma_50: sampledSmaAt(rows, index, 5, 50),
-    weekly_ma_100: sampledSmaAt(rows, index, 5, 100),
-    monthly_ma_3: sampledSmaAt(rows, index, 21, 3),
-    monthly_ma_5: sampledSmaAt(rows, index, 21, 5),
-    monthly_ma_10: sampledSmaAt(rows, index, 21, 10),
-    monthly_ma_20: sampledSmaAt(rows, index, 21, 20),
-    monthly_ma_25: sampledSmaAt(rows, index, 21, 25),
-  }
-}
-
 function dateDaysBefore(date: string, days: number): string {
   const d = new Date(`${date}T00:00:00Z`)
   d.setUTCDate(d.getUTCDate() - days)
   return d.toISOString().slice(0, 10)
+}
+
+type SnapshotComputeResult = {
+  count: number
+  dates: string[]
+}
+
+async function refreshSnapshotDateCache(dates: Iterable<string>): Promise<void> {
+  const uniqueDates = Array.from(new Set(dates)).sort()
+  if (uniqueDates.length === 0) return
+
+  await execRun(`
+    CREATE TABLE IF NOT EXISTS serving_daily_snapshot_dates (
+      date TEXT PRIMARY KEY,
+      tickers INTEGER NOT NULL,
+      computed_at INTEGER NOT NULL DEFAULT (unixepoch())
+    )
+  `)
+
+  const CHUNK = 200
+  for (let i = 0; i < uniqueDates.length; i += CHUNK) {
+    const chunk = uniqueDates.slice(i, i + CHUNK)
+    const placeholders = chunk.map(() => '?').join(', ')
+    await execRun(
+      `
+        INSERT OR REPLACE INTO serving_daily_snapshot_dates (date, tickers, computed_at)
+        SELECT date, COUNT(*) AS tickers, unixepoch()
+        FROM daily_snapshots
+        WHERE date IN (${placeholders})
+        GROUP BY date
+      `,
+      chunk,
+    )
+  }
 }
 
 async function markSnapshotState(ticker: string, lastProcessedDate: string): Promise<void> {
@@ -105,7 +95,7 @@ async function markSnapshotState(ticker: string, lastProcessedDate: string): Pro
     })
 }
 
-async function computeSnapshotsForTicker(ticker: string): Promise<number> {
+async function computeSnapshotsForTicker(ticker: string): Promise<SnapshotComputeResult> {
   const [state, existing] = await Promise.all([
     execGet<{ lastProcessedDate: string | null }>(
       `SELECT last_processed_date AS lastProcessedDate FROM compute_state WHERE job_type = 'snapshot_compute' AND ticker = ?`,
@@ -116,10 +106,12 @@ async function computeSnapshotsForTicker(ticker: string): Promise<number> {
       [ticker],
     ),
   ])
-  const lastSnapshotDate = [state?.lastProcessedDate, existing?.maxDate]
-    .filter((date): date is string => Boolean(date))
-    .sort()
-    .at(-1) ?? null
+  const lastSnapshotDate = FORCE_REBUILD
+    ? null
+    : [state?.lastProcessedDate, existing?.maxDate]
+        .filter((date): date is string => Boolean(date))
+        .sort()
+        .at(-1) ?? null
   const startDate = lastSnapshotDate ? dateDaysBefore(lastSnapshotDate, LOOKBACK_DAYS) : null
 
   const rows = await execAll<OHLCV>(
@@ -133,29 +125,23 @@ async function computeSnapshotsForTicker(ticker: string): Promise<number> {
     startDate ? [ticker, startDate] : [ticker],
   )
 
-  if (rows.length < MIN_DATA_POINTS) {
+  if (rows.length < MIN_SNAPSHOT_DATA_POINTS) {
     const latestOhlcvDate = rows[rows.length - 1]?.date
     if (latestOhlcvDate) await markSnapshotState(ticker, latestOhlcvDate)
-    return 0
+    return { count: 0, dates: [] }
   }
-  const closePrefix = buildClosePrefix(rows)
 
   // 各日に対してスナップショットを計算
   type SnapshotRow = typeof dailySnapshots.$inferInsert
   const newSnapshots: SnapshotRow[] = []
-  for (let i = 0; i < rows.length; i++) {
-    const date = rows[i].date
+  for (const calculation of buildSnapshotCalculations(rows)) {
+    const { date, activeDays: _activeDays, segmentStartDate: _segmentStartDate, ...snapshotValues } = calculation
     if (lastSnapshotDate && date <= lastSnapshotDate) continue
-    if (i + 1 < MIN_DATA_POINTS) continue
-
-    const ma = buildMaValuesAtIndex(rows, closePrefix, i)
-    const stages = calculateAllStages(ma)
 
     newSnapshots.push({
       ticker,
       date,
-      ...ma,
-      ...stages,
+      ...snapshotValues,
     })
   }
 
@@ -164,18 +150,45 @@ async function computeSnapshotsForTicker(ticker: string): Promise<number> {
     if (latestOhlcvDate && (!lastSnapshotDate || latestOhlcvDate > lastSnapshotDate)) {
       await markSnapshotState(ticker, latestOhlcvDate)
     }
-    return 0
+    return { count: 0, dates: [] }
   }
 
   // チャンク分割で INSERT (libSQL の SQL長制限対策)
   const CHUNK = 200
   for (let i = 0; i < newSnapshots.length; i += CHUNK) {
-    await withDbRetry(() =>
-      db
-        .insert(dailySnapshots)
-        .values(newSnapshots.slice(i, i + CHUNK))
-        .onConflictDoNothing(),  // 既存日付は触らない (冪等)
-    )
+    const chunk = newSnapshots.slice(i, i + CHUNK)
+    await withDbRetry(() => {
+      const insert = db.insert(dailySnapshots).values(chunk)
+      if (!FORCE_REBUILD) return insert.onConflictDoNothing()
+
+      return insert.onConflictDoUpdate({
+        target: [dailySnapshots.ticker, dailySnapshots.date],
+        set: {
+          ma_5: sql`excluded.ma_5`,
+          ma_25: sql`excluded.ma_25`,
+          ma_75: sql`excluded.ma_75`,
+          ma_150: sql`excluded.ma_150`,
+          ma_300: sql`excluded.ma_300`,
+          weekly_ma_5: sql`excluded.weekly_ma_5`,
+          weekly_ma_13: sql`excluded.weekly_ma_13`,
+          weekly_ma_25: sql`excluded.weekly_ma_25`,
+          weekly_ma_50: sql`excluded.weekly_ma_50`,
+          weekly_ma_100: sql`excluded.weekly_ma_100`,
+          monthly_ma_3: sql`excluded.monthly_ma_3`,
+          monthly_ma_5: sql`excluded.monthly_ma_5`,
+          monthly_ma_10: sql`excluded.monthly_ma_10`,
+          monthly_ma_20: sql`excluded.monthly_ma_20`,
+          monthly_ma_25: sql`excluded.monthly_ma_25`,
+          daily_a_stage: sql`excluded.daily_a_stage`,
+          daily_b_stage: sql`excluded.daily_b_stage`,
+          weekly_a_stage: sql`excluded.weekly_a_stage`,
+          weekly_b_stage: sql`excluded.weekly_b_stage`,
+          monthly_a_stage: sql`excluded.monthly_a_stage`,
+          monthly_b_stage: sql`excluded.monthly_b_stage`,
+          computedAt: sql`unixepoch()`,
+        },
+      })
+    })
   }
 
   const latestDate = newSnapshots[newSnapshots.length - 1]?.date
@@ -183,7 +196,10 @@ async function computeSnapshotsForTicker(ticker: string): Promise<number> {
     await markSnapshotState(ticker, latestDate)
   }
 
-  return newSnapshots.length
+  return {
+    count: newSnapshots.length,
+    dates: newSnapshots.map((snapshot) => snapshot.date),
+  }
 }
 
 async function main() {
@@ -226,8 +242,9 @@ async function main() {
   let failed = 0
   let rowsInserted = 0
   const errors: string[] = []
+  const touchedSnapshotDates = new Set<string>()
 
-  console.log(`Snapshot 計算開始: ${tickers.length} 銘柄 (CONCURRENCY=${CONCURRENCY})`)
+  console.log(`Snapshot 計算開始: ${tickers.length} 銘柄 (CONCURRENCY=${CONCURRENCY}, FORCE_REBUILD=${FORCE_REBUILD})`)
   const startTime = Date.now()
   let nextIndex = 0
   let processed = 0
@@ -239,9 +256,10 @@ async function main() {
       if (!item) return
       const { ticker } = item
       try {
-        const count = await computeSnapshotsForTicker(ticker)
+        const result = await computeSnapshotsForTicker(ticker)
         succeeded++
-        rowsInserted += count
+        rowsInserted += result.count
+        for (const date of result.dates) touchedSnapshotDates.add(date)
       } catch (err) {
         failed++
         const msg = `${ticker}: ${err instanceof Error ? err.message : String(err)}`
@@ -261,6 +279,8 @@ async function main() {
   await Promise.all(
     Array.from({ length: Math.min(CONCURRENCY, tickers.length) }, (_, i) => worker(i + 1)),
   )
+
+  await refreshSnapshotDateCache(touchedSnapshotDates)
 
   const finalStatus =
     failed === 0 ? 'success' :

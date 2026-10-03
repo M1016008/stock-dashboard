@@ -12,8 +12,31 @@
 //   - 既存 stage_transitions を削除して再投入 (冪等)
 
 import { db, client } from '@/lib/db/client'
-import { stageTransitions, batchRuns } from '@/lib/db/schema'
+import { batchRuns } from '@/lib/db/schema'
+import { acquireExclusiveUpdateLock, type UpdateLockHandle } from '@/lib/server/update-lock'
 import { eq } from 'drizzle-orm'
+
+const LOCK_POLL_MS = Math.max(5_000, Number(process.env.STAGE_TRANSITIONS_LOCK_POLL_SECONDS ?? 15) * 1_000)
+const LOCK_WAIT_MS = Math.max(LOCK_POLL_MS, Number(process.env.STAGE_TRANSITIONS_LOCK_WAIT_HOURS ?? 24) * 60 * 60 * 1_000)
+
+function wait(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds))
+}
+
+async function acquireLockOrWait(): Promise<UpdateLockHandle> {
+  const startedAt = Date.now()
+  let lastNoticeAt = 0
+  while (Date.now() - startedAt < LOCK_WAIT_MS) {
+    const lock = await acquireExclusiveUpdateLock('stage_transitions')
+    if (lock) return lock
+    if (Date.now() - lastNoticeAt >= 60_000) {
+      console.log('stage transition aggregation waiting for the StockBoard writer lock')
+      lastNoticeAt = Date.now()
+    }
+    await wait(LOCK_POLL_MS)
+  }
+  throw new Error(`writer lock was not available within ${Math.round(LOCK_WAIT_MS / 60_000)} minutes`)
+}
 
 const AXES = [
   { key: 'daily_a',   col: 'daily_a_stage'   },
@@ -52,34 +75,48 @@ async function aggregateAxis(axisKey: string, columnName: string): Promise<Array
   }))
 }
 
-async function main() {
+async function aggregateAndPersist(lock: UpdateLockHandle): Promise<void> {
   const [run] = await db
     .insert(batchRuns)
     .values({ jobType: 'stage_transitions', startedAt: new Date(), status: 'running' })
     .returning({ id: batchRuns.id })
   const runId = run.id
 
-  console.log('既存 stage_transitions 削除...')
-  await db.delete(stageTransitions)
-
   let totalInserted = 0
   const startTime = Date.now()
+  const records: Array<{
+    axis: string
+    from_stage: number
+    to_stage: number
+    count: number
+  }> = []
 
   for (const axis of AXES) {
+    await lock.heartbeat()
     console.log(`\n=== ${axis.key} (column: ${axis.col}) ===`)
     const cells = await aggregateAxis(axis.key, axis.col)
     console.log(`  ${cells.length} セル (${cells.reduce((s, c) => s + c.count, 0).toLocaleString()} 遷移)`)
 
-    if (cells.length === 0) continue
-    const records = cells.map(c => ({
+    records.push(...cells.map(c => ({
       axis:        axis.key,
       from_stage:  c.from_stage,
       to_stage:    c.to_stage,
       count:       c.count,
-    }))
-    await db.insert(stageTransitions).values(records)
-    totalInserted += records.length
+    })))
   }
+
+  console.log('\n全6軸の集計完了。既存値を原子的に置換...')
+  await client.batch([
+    { sql: 'DELETE FROM stage_transitions', args: [] },
+    ...records.map((record) => ({
+      sql: `
+        INSERT INTO stage_transitions(axis, from_stage, to_stage, count, computed_at)
+        VALUES (?, ?, ?, ?, unixepoch())
+      `,
+      args: [record.axis, record.from_stage, record.to_stage, record.count],
+    })),
+  ])
+  totalInserted = records.length
 
   await db
     .update(batchRuns)
@@ -92,6 +129,15 @@ async function main() {
 
   const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1)
   console.log(`\n完了: ${totalInserted} セル (6軸計, ${elapsedSec}s)`)
+}
+
+async function main(): Promise<void> {
+  const lock = await acquireLockOrWait()
+  try {
+    await aggregateAndPersist(lock)
+  } finally {
+    await lock.release()
+  }
 }
 
 main().catch(err => {

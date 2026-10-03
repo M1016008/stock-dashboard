@@ -1,17 +1,34 @@
 // types/stock.ts
 export interface StockQuote {
   ticker: string;
-  market: 'JP';
+  market: 'JP' | 'US';
   name: string;
   price: number;
   change: number;
   changePercent: number;
   volume: number;
+  priceDate?: string;
+  previousPriceDate?: string;
+  priceQualityWarning?: string;
+  isPriceDiscontinuous?: boolean;
   marketCap?: number;
-  currency: 'JPY';
+  currency: 'JPY' | 'USD';
   fiftyTwoWeekHigh?: number;
   fiftyTwoWeekLow?: number;
   averageDailyVolume10Day?: number;
+  technicals?: {
+    asOfDate: string;
+    averageVolume30: number | null;
+    averageVolumeObservationCount: number;
+    macd: {
+      relation: 'golden' | 'dead' | 'neutral';
+      value: number;
+      signal: number;
+      histogram: number;
+      lastCrossType: 'golden' | 'dead' | null;
+      lastCrossDate: string | null;
+    } | null;
+  };
   exchange?: string;
 }
 
@@ -22,14 +39,13 @@ export interface OHLCV {
   low: number;
   close: number;
   volume: number;
+  adjustedClose?: number | null;
 }
 
 export interface Fundamentals {
-  per?: number;
   pbr?: number;
   roe?: number;
   eps?: number;
-  dividendYield?: number;
   revenue?: number;
   operatingIncome?: number;
   // 業種情報 (PHASE 9)

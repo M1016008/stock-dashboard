@@ -1,68 +1,79 @@
 // app/api/admin/universe/route.ts
-// 銘柄ユニバースの一覧 + 一括追加。
-import { NextResponse } from 'next/server'
-import { db, ensureReady } from '@/lib/db/client'
-import { tickerUniverse } from '@/lib/db/schema'
-import { asc, sql } from 'drizzle-orm'
+// 銘柄ユニバースの一覧。画面/APIからの一括追加は停止。
+import { NextRequest, NextResponse } from 'next/server'
+import { adminWriteDisabledResponse } from '@/lib/admin-write-disabled'
+import { ensureReady, execAll, execGet } from '@/lib/db/client'
 
 export const dynamic = 'force-dynamic'
 
-export async function GET() {
-  await ensureReady()
-  const rows = await db
-    .select()
-    .from(tickerUniverse)
-    .orderBy(asc(tickerUniverse.ticker))
+type UniverseStats = {
+  total: number
+  active: number
+}
 
-  // 統計
-  const total = rows.length
-  const active = rows.filter(r => r.active).length
+type UniverseItem = {
+  ticker: string
+  name: string | null
+  active: number
+  addedAt: number
+}
+
+export async function GET(request: NextRequest) {
+  await ensureReady()
+  const params = request.nextUrl.searchParams
+  const query = (params.get('q') ?? '').trim().slice(0, 100)
+  const rawLimit = Number(params.get('limit') ?? 50)
+  const rawOffset = Number(params.get('offset') ?? 0)
+  const limit = Number.isFinite(rawLimit) ? Math.min(100, Math.max(0, Math.floor(rawLimit))) : 50
+  const offset = Number.isFinite(rawOffset) ? Math.max(0, Math.floor(rawOffset)) : 0
+  const stats = await execGet<UniverseStats>(
+    `
+      SELECT
+        COUNT(*) AS total,
+        SUM(CASE WHEN active = 1 THEN 1 ELSE 0 END) AS active
+      FROM ticker_universe
+    `,
+  )
+  const total = Number(stats?.total ?? 0)
+  const active = Number(stats?.active ?? 0)
+  const pattern = `%${query}%`
+  const matched = query
+    ? Number((await execGet<{ count: number }>(
+        `
+          SELECT COUNT(*) AS count
+          FROM ticker_universe
+          WHERE ticker LIKE ? OR COALESCE(name, '') LIKE ?
+        `,
+        [pattern, pattern],
+      ))?.count ?? 0)
+    : total
+  const rows = limit > 0
+    ? await execAll<UniverseItem>(
+        `
+          SELECT ticker, name, active, added_at AS addedAt
+          FROM ticker_universe
+          ${query ? `WHERE ticker LIKE ? OR COALESCE(name, '') LIKE ?` : ''}
+          ORDER BY ticker ASC
+          LIMIT ? OFFSET ?
+        `,
+        query ? [pattern, pattern, limit, offset] : [limit, offset],
+      )
+    : []
 
   return NextResponse.json({
     total,
     active,
     inactive: total - active,
-    items: rows,
+    matched,
+    limit,
+    offset,
+    items: rows.map((row) => ({
+      ...row,
+      active: Boolean(row.active),
+    })),
   })
 }
 
-export async function POST(request: Request) {
-  await ensureReady()
-  const body = await request.json().catch(() => null) as { tickers?: string[] | string } | null
-  if (!body) return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
-
-  // 文字列 (改行区切り) または配列を受ける
-  const raw: string[] = Array.isArray(body.tickers)
-    ? body.tickers
-    : (body.tickers ?? '').split(/[\s,]+/)
-
-  const tickers = raw
-    .map(t => t.trim())
-    // .T サフィックスは strip
-    .map(t => t.replace(/\.T$/i, ''))
-    .filter(t => t.length > 0)
-
-  if (tickers.length === 0) {
-    return NextResponse.json({ error: 'No valid tickers' }, { status: 400 })
-  }
-
-  // INSERT OR IGNORE 相当
-  for (const ticker of tickers) {
-    await db
-      .insert(tickerUniverse)
-      .values({ ticker, active: true })
-      .onConflictDoUpdate({
-        target: tickerUniverse.ticker,
-        // 既存があれば active を立て直すだけ (再有効化動作)
-        set: { active: true },
-      })
-  }
-
-  // 件数更新
-  const totalRow = await db
-    .select({ c: sql<number>`COUNT(*)` })
-    .from(tickerUniverse)
-  const total = totalRow[0]?.c ?? 0
-
-  return NextResponse.json({ added: tickers.length, total })
+export async function POST() {
+  return adminWriteDisabledResponse('銘柄ユニバース追加')
 }

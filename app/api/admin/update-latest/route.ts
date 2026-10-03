@@ -1,6 +1,5 @@
-import { spawn } from 'node:child_process'
-import path from 'node:path'
 import { NextResponse } from 'next/server'
+import { adminWriteDisabledResponse } from '@/lib/admin-write-disabled'
 import { getDataFreshness } from '@/lib/server/data-freshness'
 
 export const dynamic = 'force-dynamic'
@@ -16,36 +15,5 @@ export async function GET() {
 }
 
 export async function POST() {
-  if (!process.env.JQUANTS_API_KEY) {
-    return NextResponse.json(
-      { started: false, error: 'JQUANTS_API_KEY is not set' },
-      { status: 412 },
-    )
-  }
-
-  const freshness = await getDataFreshness()
-  if (freshness.running) {
-    return NextResponse.json({ started: false, running: true, freshness })
-  }
-  if (!freshness.needsUpdate) {
-    return NextResponse.json({ started: false, running: false, freshness })
-  }
-
-  const child = spawn('npx', ['tsx', '--env-file=.env.local', 'scripts/update-latest.ts'], {
-    cwd: process.cwd(),
-    detached: true,
-    stdio: 'ignore',
-    env: {
-      ...process.env,
-      USE_LOCAL_DB: '1',
-    },
-  })
-  child.unref()
-
-  return NextResponse.json({
-    started: true,
-    pid: child.pid,
-    script: path.join('scripts', 'update-latest.ts'),
-    freshness,
-  })
+  return adminWriteDisabledResponse('最新データ自動更新')
 }

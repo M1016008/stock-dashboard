@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { execAll } from '@/lib/db/client'
+import { normalizeMarket, normalizeTickerForMarket } from '@/lib/markets'
 import {
-  buildChartWindow,
+  buildChartWindowWithMa,
   buildVolumeSummary,
   pct,
   type MoveDirection,
@@ -69,16 +70,31 @@ function stageCode(row: StageRow): string {
   return values.map((value) => value == null ? '-' : String(value)).join('')
 }
 
-async function stagePath(ticker: string, startDate: string, endDate: string): Promise<StagePoint[]> {
-  const rows = await execAll<StageRow>(
-    `
-    SELECT date, daily_a_stage, daily_b_stage, weekly_a_stage, weekly_b_stage, monthly_a_stage, monthly_b_stage
-    FROM daily_snapshots
-    WHERE ticker = ? AND date >= ? AND date <= ?
-    ORDER BY date
-    `,
-    [ticker, startDate, endDate],
-  )
+async function stagePath(
+  ticker: string,
+  startDate: string,
+  endDate: string,
+  market: 'JP' | 'US',
+): Promise<StagePoint[]> {
+  const rows = market === 'US'
+    ? await execAll<StageRow>(
+      `
+      SELECT date, daily_a_stage, daily_b_stage, weekly_a_stage, weekly_b_stage, monthly_a_stage, monthly_b_stage
+      FROM market_daily_snapshots
+      WHERE market = 'US' AND ticker = ? AND date >= ? AND date <= ?
+      ORDER BY date
+      `,
+      [ticker, startDate, endDate],
+    )
+    : await execAll<StageRow>(
+      `
+      SELECT date, daily_a_stage, daily_b_stage, weekly_a_stage, weekly_b_stage, monthly_a_stage, monthly_b_stage
+      FROM daily_snapshots
+      WHERE ticker = ? AND date >= ? AND date <= ?
+      ORDER BY date
+      `,
+      [ticker, startDate, endDate],
+    )
   const path: StagePoint[] = []
   for (const row of rows) {
     const code = stageCode(row)
@@ -150,30 +166,55 @@ export async function GET(
 ) {
   try {
     const { ticker: rawTicker } = await context.params
-    const ticker = decodeURIComponent(rawTicker).replace(/\.T$/i, '')
     const { searchParams } = new URL(request.url)
+    const market = normalizeMarket(searchParams.get('market'))
+    const ticker = normalizeTickerForMarket(rawTicker, market)
     const limit = Math.min(12, Math.max(1, Number(searchParams.get('limit') ?? 8)))
+    const rawDate = searchParams.get('date')?.trim() ?? ''
+    const asOfDate = /^\d{4}-\d{2}-\d{2}$/.test(rawDate) ? rawDate : null
+    const dateFilter = asOfDate ? 'AND date <= ?' : ''
 
-    const history = await execAll<OhlcvPoint>(
-      `
-      SELECT date, open, high, low, close, volume
-      FROM ohlcv_daily
-      WHERE ticker = ?
-      ORDER BY date
-      `,
-      [ticker],
-    )
+    const history = market === 'US'
+      ? await execAll<OhlcvPoint>(
+        `
+        SELECT
+          date,
+          CASE WHEN adj_open IS NOT NULL THEN adj_open WHEN adj_close IS NOT NULL AND close <> 0 THEN open * adj_close / close ELSE open END AS open,
+          CASE WHEN adj_high IS NOT NULL THEN adj_high WHEN adj_close IS NOT NULL AND close <> 0 THEN high * adj_close / close ELSE high END AS high,
+          CASE WHEN adj_low IS NOT NULL THEN adj_low WHEN adj_close IS NOT NULL AND close <> 0 THEN low * adj_close / close ELSE low END AS low,
+          COALESCE(adj_close, close) AS close,
+          COALESCE(adj_volume, volume) AS volume
+        FROM market_ohlcv_daily
+        WHERE market = 'US' AND ticker = ?
+          ${dateFilter}
+        ORDER BY date
+        `,
+        asOfDate ? [ticker, asOfDate] : [ticker],
+      )
+      : await execAll<OhlcvPoint>(
+        `
+        SELECT date, open, high, low, close, volume
+        FROM ohlcv_daily
+        WHERE ticker = ?
+          ${dateFilter}
+        ORDER BY date
+        `,
+        asOfDate ? [ticker, asOfDate] : [ticker],
+      )
 
-    const serving = await execAll<ServingMoveRow>(
-      `
-      SELECT direction, rank, start_date, end_date, return_pct, trading_days, stage_path_json, payload_json
-      FROM serving_stock_move_periods
-      WHERE ticker = ?
-      ORDER BY direction, rank
-      LIMIT ?
-      `,
-      [ticker, limit],
-    )
+    const serving = market === 'JP'
+      ? await execAll<ServingMoveRow>(
+        `
+        SELECT direction, rank, start_date, end_date, return_pct, trading_days, stage_path_json, payload_json
+        FROM serving_stock_move_periods
+        WHERE ticker = ?
+          ${asOfDate ? 'AND end_date <= ?' : ''}
+        ORDER BY direction, rank
+        LIMIT ?
+        `,
+        asOfDate ? [ticker, asOfDate, limit] : [ticker, limit],
+      )
+      : []
 
     let moves: MoveCandidate[] = serving.map((row) => {
       const start = history.find((item) => item.date === row.start_date)
@@ -199,16 +240,16 @@ export async function GET(
     }
 
     const enriched = await Promise.all(moves.map(async (move) => {
-      const path = move.stagePath.length > 0 ? move.stagePath : await stagePath(ticker, move.startDate, move.endDate)
+      const path = move.stagePath.length > 0 ? move.stagePath : await stagePath(ticker, move.startDate, move.endDate, market)
       return {
         ...move,
         stagePath: path,
-        chartSeries: buildChartWindow(history, move.startDate, move.endDate),
+        chartSeries: buildChartWindowWithMa(history, move.startDate, move.endDate),
         volumeSummary: buildVolumeSummary(history, move.startDate, move.endDate),
       }
     }))
 
-    return NextResponse.json({ ticker, moves: enriched })
+    return NextResponse.json({ ticker, market, moves: enriched })
   } catch (error) {
     console.error('Stock move periods API error:', error)
     return NextResponse.json(

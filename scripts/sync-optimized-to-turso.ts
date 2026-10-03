@@ -5,12 +5,13 @@
 // history は全期間OHLCV/ステージ履歴を日付レンジで再開可能に同期する。
 
 import { createClient, type Client, type InValue } from '@libsql/client'
+import { openExistingGuardedClient } from '@/lib/storage/guarded-libsql-client'
 import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { ensureSchema } from '@/lib/db/migrate'
 
-const LOCAL_DB = path.join(process.cwd(), 'data', 'stockboard.db')
+const LOCAL_DB = process.env.STOCKBOARD_DB_PATH || process.env.LOCAL_DB_PATH || path.join(process.cwd(), 'data', 'stockboard.db')
 const REMOTE_URL = process.env.TURSO_DATABASE_URL
 const REMOTE_TOKEN = process.env.TURSO_AUTH_TOKEN
 
@@ -85,7 +86,7 @@ if (!fs.existsSync(LOCAL_DB)) {
   process.exit(1)
 }
 
-const local = createClient({ url: `file:${LOCAL_DB}` })
+const local = openExistingGuardedClient(LOCAL_DB, 'optimized-turso-source')
 const remote = createClient({ url: REMOTE_URL, authToken: REMOTE_TOKEN })
 
 async function tableExists(client: Client, table: string): Promise<boolean> {
@@ -308,6 +309,7 @@ function specsFor(modes: Set<string>): CopySpec[] {
       { mode: 'baseline', table: 'pattern_stats', partition: 'all', where: 'count >= 40', label: 'pattern_stats N>=40' },
       { mode: 'baseline', table: 'weekly_margin_interest', partition: 'date', dateColumn: 'date', latestDates: 180 },
       { mode: 'baseline', table: 'short_selling_positions', partition: 'date', dateColumn: 'date', latestDates: 180 },
+      { mode: 'baseline', table: 'serving_margin_latest', partition: 'all' },
       { mode: 'baseline', table: 'earnings_calendar', partition: 'date', dateColumn: 'announce_date', latestDates: 240 },
       { mode: 'baseline', table: 'serving_stock_metrics', partition: 'all' },
       { mode: 'baseline', table: 'serving_stock_move_periods', partition: 'all' },
@@ -318,12 +320,22 @@ function specsFor(modes: Set<string>): CopySpec[] {
     specs.push(
       { mode: 'backtest', table: 'serving_latest_signals', partition: 'date', dateColumn: 'date' },
       { mode: 'backtest', table: 'serving_signal_stats', partition: 'all' },
+      { mode: 'backtest', table: 'signal_return_stats', partition: 'all', where: 'count >= 40', label: 'signal_return_stats N>=40' },
       { mode: 'backtest', table: 'serving_backtest_dates', partition: 'all' },
       { mode: 'backtest', table: 'serving_backtest_summaries', partition: 'date', dateColumn: 'date' },
       { mode: 'backtest', table: 'serving_backtest_results', partition: 'date', dateColumn: 'date' },
       { mode: 'backtest', table: 'serving_backtest_details', partition: 'date', dateColumn: 'date' },
       { mode: 'backtest', table: 'serving_signal_evidence', partition: 'date', dateColumn: 'date' },
       { mode: 'backtest', table: 'serving_similar_cases', partition: 'date', dateColumn: 'source_date' },
+      { mode: 'backtest', table: 'serving_ml_candidates', partition: 'date', dateColumn: 'as_of_date' },
+      { mode: 'backtest', table: 'serving_ml_physics_candidates', partition: 'date', dateColumn: 'as_of_date' },
+      { mode: 'backtest', table: 'serving_current_similars', partition: 'date', dateColumn: 'as_of_date' },
+      { mode: 'backtest', table: 'serving_ml_sector_rankings', partition: 'date', dateColumn: 'as_of_date' },
+      { mode: 'backtest', table: 'serving_ml_performance', partition: 'date', dateColumn: 'as_of_date' },
+      { mode: 'backtest', table: 'ml_model_evaluations', partition: 'date', dateColumn: 'evaluation_date' },
+      { mode: 'backtest', table: 'ml_similarity_evaluations', partition: 'date', dateColumn: 'as_of_date' },
+      { mode: 'backtest', table: 'ml_rl_policy_evaluations', partition: 'date', dateColumn: 'evaluation_date' },
+      { mode: 'backtest', table: 'ml_feature_health_checks', partition: 'date', dateColumn: 'check_date' },
     )
   }
 

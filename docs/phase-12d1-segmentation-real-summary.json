@@ -1,0 +1,812 @@
+[
+  {
+    "label": "monthly1y_near_score",
+    "dimensions": [
+      "scoreBand"
+    ],
+    "timeframe": "MONTHLY",
+    "eventSelector": "NEAR_ENTERED",
+    "events": 2066,
+    "uniqueTickers": 721,
+    "cells": 5,
+    "hash": "73617c0e44efde50ecc5b50cff52d83a3d7b93380253315a2027817ae5e28ce3",
+    "performance": {
+      "totalMs": 62.43450000000007,
+      "manifestLoadMs": 2.430917000000022,
+      "ndjsonReadMs": 13.790627999994399,
+      "parsingMs": 7.855353000003674,
+      "groupingMs": 5.671936000002006,
+      "percentileMs": 11.11220800000001,
+      "serializationMs": 0.13112499999999727,
+      "dbQueryCount": 1,
+      "ohlcvQueryCount": 0,
+      "rowsRead": 2066,
+      "peakHeapBytes": 32461488,
+      "peakRssBytes": 159498240,
+      "resultBytes": 11376
+    },
+    "source": {
+      "historicalScanJobId": "90851e3c-b97b-48c5-b879-9a7f2180e018",
+      "outcomeJobId": "aedec268-9601-4f02-be5c-2dd22d52debe",
+      "eventSelector": "NEAR_ENTERED",
+      "timeframe": "MONTHLY",
+      "maPeriods": {
+        "ma1": 20,
+        "ma2": 25,
+        "unit": "MONTHLY_BARS"
+      },
+      "scanPeriod": {
+        "requestedStartDate": "2024-05-07",
+        "requestedEndDate": "2025-05-02",
+        "resolvedStartDate": "2024-05-07",
+        "resolvedEndDate": "2025-05-02"
+      },
+      "filters": {
+        "markets": [
+          "プライム"
+        ],
+        "price": {
+          "min": null,
+          "max": null
+        },
+        "liquidity": {
+          "averageVolumeMin": null,
+          "averageVolumeMax": null,
+          "averageTradingValueMin": null,
+          "averageTradingValueMax": null,
+          "lookbackSessions": 20,
+          "maxPriceStalenessSessions": 3
+        },
+        "triggerCore": {
+          "maxApproachDistancePct": 5,
+          "nearDistancePct": 2,
+          "spreadExpansionEnabled": false,
+          "spreadLookbackIntervals": 4,
+          "minExpansionRatio": 0.7,
+          "requireBullishMaOrder": true
+        },
+        "historicalStage": {},
+        "outcomeStage": {},
+        "outcomeScore": {
+          "min": null,
+          "max": null
+        },
+        "outcomeTicker": null
+      },
+      "analysisCutoffDate": "2026-09-18",
+      "horizons": [
+        20,
+        60,
+        120,
+        245
+      ],
+      "historicalUniverseCaveat": "現在保持している全取引履歴から、各基準日の上場期間を復元しています。",
+      "observationIndependenceNote": "同一銘柄の複数イベントを含むため、各観測は統計的に完全独立ではありません。",
+      "scanCounts": {
+        "uniqueCandidates": 1153,
+        "totalEvents": 13807
+      }
+    },
+    "spreadDiagnosticsStatus": null
+  },
+  {
+    "label": "monthly1y_near_monthA",
+    "dimensions": [
+      "stage:monthA"
+    ],
+    "timeframe": "MONTHLY",
+    "eventSelector": "NEAR_ENTERED",
+    "events": 2066,
+    "uniqueTickers": 721,
+    "cells": 7,
+    "hash": "73617c0e44efde50ecc5b50cff52d83a3d7b93380253315a2027817ae5e28ce3",
+    "performance": {
+      "totalMs": 31.389375000000086,
+      "manifestLoadMs": 0.4510840000000371,
+      "ndjsonReadMs": 9.706602999997813,
+      "parsingMs": 7.198342000003549,
+      "groupingMs": 4.587220999998635,
+      "percentileMs": 8.683958000000075,
+      "serializationMs": 0.19733399999995527,
+      "dbQueryCount": 1,
+      "ohlcvQueryCount": 0,
+      "rowsRead": 2066,
+      "peakHeapBytes": 35055192,
+      "peakRssBytes": 175652864,
+      "resultBytes": 15071
+    },
+    "source": {
+      "historicalScanJobId": "90851e3c-b97b-48c5-b879-9a7f2180e018",
+      "outcomeJobId": "aedec268-9601-4f02-be5c-2dd22d52debe",
+      "eventSelector": "NEAR_ENTERED",
+      "timeframe": "MONTHLY",
+      "maPeriods": {
+        "ma1": 20,
+        "ma2": 25,
+        "unit": "MONTHLY_BARS"
+      },
+      "scanPeriod": {
+        "requestedStartDate": "2024-05-07",
+        "requestedEndDate": "2025-05-02",
+        "resolvedStartDate": "2024-05-07",
+        "resolvedEndDate": "2025-05-02"
+      },
+      "filters": {
+        "markets": [
+          "プライム"
+        ],
+        "price": {
+          "min": null,
+          "max": null
+        },
+        "liquidity": {
+          "averageVolumeMin": null,
+          "averageVolumeMax": null,
+          "averageTradingValueMin": null,
+          "averageTradingValueMax": null,
+          "lookbackSessions": 20,
+          "maxPriceStalenessSessions": 3
+        },
+        "triggerCore": {
+          "maxApproachDistancePct": 5,
+          "nearDistancePct": 2,
+          "spreadExpansionEnabled": false,
+          "spreadLookbackIntervals": 4,
+          "minExpansionRatio": 0.7,
+          "requireBullishMaOrder": true
+        },
+        "historicalStage": {},
+        "outcomeStage": {},
+        "outcomeScore": {
+          "min": null,
+          "max": null
+        },
+        "outcomeTicker": null
+      },
+      "analysisCutoffDate": "2026-09-18",
+      "horizons": [
+        20,
+        60,
+        120,
+        245
+      ],
+      "historicalUniverseCaveat": "現在保持している全取引履歴から、各基準日の上場期間を復元しています。",
+      "observationIndependenceNote": "同一銘柄の複数イベントを含むため、各観測は統計的に完全独立ではありません。",
+      "scanCounts": {
+        "uniqueCandidates": 1153,
+        "totalEvents": 13807
+      }
+    },
+    "spreadDiagnosticsStatus": null
+  },
+  {
+    "label": "monthly1y_zone_monthA",
+    "dimensions": [
+      "stage:monthA"
+    ],
+    "timeframe": "MONTHLY",
+    "eventSelector": "IN_ZONE_ENTERED",
+    "events": 1276,
+    "uniqueTickers": 729,
+    "cells": 7,
+    "hash": "a3e05a1f696b8ecc79420df981d3a14406b932330631d10425e0ae6a531e36f0",
+    "performance": {
+      "totalMs": 17.29712500000005,
+      "manifestLoadMs": 0.5941249999999627,
+      "ndjsonReadMs": 4.546762000001991,
+      "parsingMs": 4.282005999998773,
+      "groupingMs": 2.5393989999992073,
+      "percentileMs": 4.717666000000008,
+      "serializationMs": 0.15354200000001583,
+      "dbQueryCount": 1,
+      "ohlcvQueryCount": 0,
+      "rowsRead": 1276,
+      "peakHeapBytes": 40999488,
+      "peakRssBytes": 182435840,
+      "resultBytes": 15247
+    },
+    "source": {
+      "historicalScanJobId": "90851e3c-b97b-48c5-b879-9a7f2180e018",
+      "outcomeJobId": "0d899c61-2b09-4116-9376-fbfb7ad6fc4b",
+      "eventSelector": "IN_ZONE_ENTERED",
+      "timeframe": "MONTHLY",
+      "maPeriods": {
+        "ma1": 20,
+        "ma2": 25,
+        "unit": "MONTHLY_BARS"
+      },
+      "scanPeriod": {
+        "requestedStartDate": "2024-05-07",
+        "requestedEndDate": "2025-05-02",
+        "resolvedStartDate": "2024-05-07",
+        "resolvedEndDate": "2025-05-02"
+      },
+      "filters": {
+        "markets": [
+          "プライム"
+        ],
+        "price": {
+          "min": null,
+          "max": null
+        },
+        "liquidity": {
+          "averageVolumeMin": null,
+          "averageVolumeMax": null,
+          "averageTradingValueMin": null,
+          "averageTradingValueMax": null,
+          "lookbackSessions": 20,
+          "maxPriceStalenessSessions": 3
+        },
+        "triggerCore": {
+          "maxApproachDistancePct": 5,
+          "nearDistancePct": 2,
+          "spreadExpansionEnabled": false,
+          "spreadLookbackIntervals": 4,
+          "minExpansionRatio": 0.7,
+          "requireBullishMaOrder": true
+        },
+        "historicalStage": {},
+        "outcomeStage": {},
+        "outcomeScore": {
+          "min": null,
+          "max": null
+        },
+        "outcomeTicker": null
+      },
+      "analysisCutoffDate": "2026-09-18",
+      "horizons": [
+        20,
+        60,
+        120,
+        245
+      ],
+      "historicalUniverseCaveat": "現在保持している全取引履歴から、各基準日の上場期間を復元しています。",
+      "observationIndependenceNote": "同一銘柄の複数イベントを含むため、各観測は統計的に完全独立ではありません。",
+      "scanCounts": {
+        "uniqueCandidates": 1153,
+        "totalEvents": 13807
+      }
+    },
+    "spreadDiagnosticsStatus": null
+  },
+  {
+    "label": "biweekly1y_near_score",
+    "dimensions": [
+      "scoreBand"
+    ],
+    "timeframe": "BIWEEKLY",
+    "eventSelector": "NEAR_ENTERED",
+    "events": 2214,
+    "uniqueTickers": 551,
+    "cells": 5,
+    "hash": "33f49181728bccc50345bac3f187ffcdaa3d65810e07185f34bb1618387eb5cd",
+    "performance": {
+      "totalMs": 33.91820900000005,
+      "manifestLoadMs": 0.7778749999999945,
+      "ndjsonReadMs": 10.528697999996098,
+      "parsingMs": 7.328545000002691,
+      "groupingMs": 3.687882000001082,
+      "percentileMs": 10.956916999999976,
+      "serializationMs": 0.11824999999998909,
+      "dbQueryCount": 1,
+      "ohlcvQueryCount": 0,
+      "rowsRead": 2214,
+      "peakHeapBytes": 51230728,
+      "peakRssBytes": 188661760,
+      "resultBytes": 11122
+    },
+    "source": {
+      "historicalScanJobId": "191a7040-8138-467b-86fa-866d168b4fa2",
+      "outcomeJobId": "4a2eca50-9d21-4e17-b604-5b57aa1beea1",
+      "eventSelector": "NEAR_ENTERED",
+      "timeframe": "BIWEEKLY",
+      "maPeriods": {
+        "ma1": 20,
+        "ma2": 25,
+        "unit": "BIWEEKLY_BARS"
+      },
+      "scanPeriod": {
+        "requestedStartDate": "2024-05-07",
+        "requestedEndDate": "2025-05-02",
+        "resolvedStartDate": "2024-05-07",
+        "resolvedEndDate": "2025-05-02"
+      },
+      "filters": {
+        "markets": [
+          "プライム"
+        ],
+        "price": {
+          "min": null,
+          "max": null
+        },
+        "liquidity": {
+          "averageVolumeMin": null,
+          "averageVolumeMax": null,
+          "averageTradingValueMin": null,
+          "averageTradingValueMax": null,
+          "lookbackSessions": 20,
+          "maxPriceStalenessSessions": 3
+        },
+        "triggerCore": {
+          "maxApproachDistancePct": 5,
+          "nearDistancePct": 2,
+          "spreadExpansionEnabled": false,
+          "spreadLookbackIntervals": 4,
+          "minExpansionRatio": 0.7,
+          "requireBullishMaOrder": true
+        },
+        "historicalStage": {},
+        "outcomeStage": {},
+        "outcomeScore": {
+          "min": null,
+          "max": null
+        },
+        "outcomeTicker": null
+      },
+      "analysisCutoffDate": "2026-09-18",
+      "horizons": [
+        20,
+        60,
+        120,
+        245
+      ],
+      "historicalUniverseCaveat": "現在保持している全取引履歴から、各基準日の上場期間を復元しています。",
+      "observationIndependenceNote": "同一銘柄の複数イベントを含むため、各観測は統計的に完全独立ではありません。",
+      "scanCounts": {
+        "uniqueCandidates": 769,
+        "totalEvents": 10747
+      }
+    },
+    "spreadDiagnosticsStatus": null
+  },
+  {
+    "label": "biweekly1y_near_weekA_monthA",
+    "dimensions": [
+      "stage:weekA",
+      "stage:monthA"
+    ],
+    "timeframe": "BIWEEKLY",
+    "eventSelector": "NEAR_ENTERED",
+    "events": 2214,
+    "uniqueTickers": 551,
+    "cells": 49,
+    "hash": "33f49181728bccc50345bac3f187ffcdaa3d65810e07185f34bb1618387eb5cd",
+    "performance": {
+      "totalMs": 32.021165999999994,
+      "manifestLoadMs": 0.5297920000000431,
+      "ndjsonReadMs": 7.76786599999582,
+      "parsingMs": 8.069763000002922,
+      "groupingMs": 5.112955000001193,
+      "percentileMs": 8.890791000000036,
+      "serializationMs": 0.8402499999999691,
+      "dbQueryCount": 1,
+      "ohlcvQueryCount": 0,
+      "rowsRead": 2214,
+      "peakHeapBytes": 59329472,
+      "peakRssBytes": 208437248,
+      "resultBytes": 79084
+    },
+    "source": {
+      "historicalScanJobId": "191a7040-8138-467b-86fa-866d168b4fa2",
+      "outcomeJobId": "4a2eca50-9d21-4e17-b604-5b57aa1beea1",
+      "eventSelector": "NEAR_ENTERED",
+      "timeframe": "BIWEEKLY",
+      "maPeriods": {
+        "ma1": 20,
+        "ma2": 25,
+        "unit": "BIWEEKLY_BARS"
+      },
+      "scanPeriod": {
+        "requestedStartDate": "2024-05-07",
+        "requestedEndDate": "2025-05-02",
+        "resolvedStartDate": "2024-05-07",
+        "resolvedEndDate": "2025-05-02"
+      },
+      "filters": {
+        "markets": [
+          "プライム"
+        ],
+        "price": {
+          "min": null,
+          "max": null
+        },
+        "liquidity": {
+          "averageVolumeMin": null,
+          "averageVolumeMax": null,
+          "averageTradingValueMin": null,
+          "averageTradingValueMax": null,
+          "lookbackSessions": 20,
+          "maxPriceStalenessSessions": 3
+        },
+        "triggerCore": {
+          "maxApproachDistancePct": 5,
+          "nearDistancePct": 2,
+          "spreadExpansionEnabled": false,
+          "spreadLookbackIntervals": 4,
+          "minExpansionRatio": 0.7,
+          "requireBullishMaOrder": true
+        },
+        "historicalStage": {},
+        "outcomeStage": {},
+        "outcomeScore": {
+          "min": null,
+          "max": null
+        },
+        "outcomeTicker": null
+      },
+      "analysisCutoffDate": "2026-09-18",
+      "horizons": [
+        20,
+        60,
+        120,
+        245
+      ],
+      "historicalUniverseCaveat": "現在保持している全取引履歴から、各基準日の上場期間を復元しています。",
+      "observationIndependenceNote": "同一銘柄の複数イベントを含むため、各観測は統計的に完全独立ではありません。",
+      "scanCounts": {
+        "uniqueCandidates": 769,
+        "totalEvents": 10747
+      }
+    },
+    "spreadDiagnosticsStatus": null
+  },
+  {
+    "label": "biweekly1y_near_spread",
+    "dimensions": [
+      "spreadExpansion"
+    ],
+    "timeframe": "BIWEEKLY",
+    "eventSelector": "NEAR_ENTERED",
+    "events": 2214,
+    "uniqueTickers": 551,
+    "cells": 3,
+    "hash": "33f49181728bccc50345bac3f187ffcdaa3d65810e07185f34bb1618387eb5cd",
+    "performance": {
+      "totalMs": 33.00554199999988,
+      "manifestLoadMs": 0.5625840000000153,
+      "ndjsonReadMs": 7.45332299998222,
+      "parsingMs": 7.861935000008771,
+      "groupingMs": 4.385909000008951,
+      "percentileMs": 12.025416999999834,
+      "serializationMs": 0.09512500000005275,
+      "dbQueryCount": 1,
+      "ohlcvQueryCount": 0,
+      "rowsRead": 2214,
+      "peakHeapBytes": 59038400,
+      "peakRssBytes": 211746816,
+      "resultBytes": 8508
+    },
+    "source": {
+      "historicalScanJobId": "191a7040-8138-467b-86fa-866d168b4fa2",
+      "outcomeJobId": "4a2eca50-9d21-4e17-b604-5b57aa1beea1",
+      "eventSelector": "NEAR_ENTERED",
+      "timeframe": "BIWEEKLY",
+      "maPeriods": {
+        "ma1": 20,
+        "ma2": 25,
+        "unit": "BIWEEKLY_BARS"
+      },
+      "scanPeriod": {
+        "requestedStartDate": "2024-05-07",
+        "requestedEndDate": "2025-05-02",
+        "resolvedStartDate": "2024-05-07",
+        "resolvedEndDate": "2025-05-02"
+      },
+      "filters": {
+        "markets": [
+          "プライム"
+        ],
+        "price": {
+          "min": null,
+          "max": null
+        },
+        "liquidity": {
+          "averageVolumeMin": null,
+          "averageVolumeMax": null,
+          "averageTradingValueMin": null,
+          "averageTradingValueMax": null,
+          "lookbackSessions": 20,
+          "maxPriceStalenessSessions": 3
+        },
+        "triggerCore": {
+          "maxApproachDistancePct": 5,
+          "nearDistancePct": 2,
+          "spreadExpansionEnabled": false,
+          "spreadLookbackIntervals": 4,
+          "minExpansionRatio": 0.7,
+          "requireBullishMaOrder": true
+        },
+        "historicalStage": {},
+        "outcomeStage": {},
+        "outcomeScore": {
+          "min": null,
+          "max": null
+        },
+        "outcomeTicker": null
+      },
+      "analysisCutoffDate": "2026-09-18",
+      "horizons": [
+        20,
+        60,
+        120,
+        245
+      ],
+      "historicalUniverseCaveat": "現在保持している全取引履歴から、各基準日の上場期間を復元しています。",
+      "observationIndependenceNote": "同一銘柄の複数イベントを含むため、各観測は統計的に完全独立ではありません。",
+      "scanCounts": {
+        "uniqueCandidates": 769,
+        "totalEvents": 10747
+      }
+    },
+    "spreadDiagnosticsStatus": "AVAILABLE"
+  },
+  {
+    "label": "monthly2y_near_score",
+    "dimensions": [
+      "scoreBand"
+    ],
+    "timeframe": "MONTHLY",
+    "eventSelector": "NEAR_ENTERED",
+    "events": 3025,
+    "uniqueTickers": 915,
+    "cells": 5,
+    "hash": "66bd8b309528d1aef3c4c6afb67d83c85e9e3ea27355cf014723c490a18d1fda",
+    "performance": {
+      "totalMs": 100.84508399999982,
+      "manifestLoadMs": 2.190249999999878,
+      "ndjsonReadMs": 29.92606400000841,
+      "parsingMs": 19.824089000004278,
+      "groupingMs": 18.747096999987434,
+      "percentileMs": 29.50949999999989,
+      "serializationMs": 0.12779199999999946,
+      "dbQueryCount": 1,
+      "ohlcvQueryCount": 0,
+      "rowsRead": 3025,
+      "peakHeapBytes": 59547976,
+      "peakRssBytes": 203309056,
+      "resultBytes": 11471
+    },
+    "source": {
+      "historicalScanJobId": "0884c65e-d175-4ff7-a0db-a02b13f97491",
+      "outcomeJobId": "82ffccbe-1f3a-46d9-8b60-5a672af527fd",
+      "eventSelector": "NEAR_ENTERED",
+      "timeframe": "MONTHLY",
+      "maPeriods": {
+        "ma1": 20,
+        "ma2": 25,
+        "unit": "MONTHLY_BARS"
+      },
+      "scanPeriod": {
+        "requestedStartDate": "2023-05-08",
+        "requestedEndDate": "2025-05-02",
+        "resolvedStartDate": "2023-05-08",
+        "resolvedEndDate": "2025-05-02"
+      },
+      "filters": {
+        "markets": [
+          "プライム"
+        ],
+        "price": {
+          "min": null,
+          "max": null
+        },
+        "liquidity": {
+          "averageVolumeMin": null,
+          "averageVolumeMax": null,
+          "averageTradingValueMin": null,
+          "averageTradingValueMax": null,
+          "lookbackSessions": 20,
+          "maxPriceStalenessSessions": 3
+        },
+        "triggerCore": {
+          "maxApproachDistancePct": 5,
+          "nearDistancePct": 2,
+          "spreadExpansionEnabled": false,
+          "spreadLookbackIntervals": 4,
+          "minExpansionRatio": 0.7,
+          "requireBullishMaOrder": true
+        },
+        "historicalStage": {},
+        "outcomeStage": {},
+        "outcomeScore": {
+          "min": null,
+          "max": null
+        },
+        "outcomeTicker": null
+      },
+      "analysisCutoffDate": "2026-09-18",
+      "horizons": [
+        20,
+        60,
+        120,
+        245
+      ],
+      "historicalUniverseCaveat": "現在保持している全取引履歴から、各基準日の上場期間を復元しています。",
+      "observationIndependenceNote": "同一銘柄の複数イベントを含むため、各観測は統計的に完全独立ではありません。",
+      "scanCounts": {
+        "uniqueCandidates": 1303,
+        "totalEvents": 20409
+      }
+    },
+    "spreadDiagnosticsStatus": null
+  },
+  {
+    "label": "monthly2y_near_weekA_monthA",
+    "dimensions": [
+      "stage:weekA",
+      "stage:monthA"
+    ],
+    "timeframe": "MONTHLY",
+    "eventSelector": "NEAR_ENTERED",
+    "events": 3025,
+    "uniqueTickers": 915,
+    "cells": 49,
+    "hash": "66bd8b309528d1aef3c4c6afb67d83c85e9e3ea27355cf014723c490a18d1fda",
+    "performance": {
+      "totalMs": 59.885749999999916,
+      "manifestLoadMs": 0.8038329999999405,
+      "ndjsonReadMs": 19.274319000007154,
+      "parsingMs": 14.31165599999963,
+      "groupingMs": 9.62498399999322,
+      "percentileMs": 14.31162500000005,
+      "serializationMs": 0.8456249999999272,
+      "dbQueryCount": 1,
+      "ohlcvQueryCount": 0,
+      "rowsRead": 3025,
+      "peakHeapBytes": 62710512,
+      "peakRssBytes": 213417984,
+      "resultBytes": 80414
+    },
+    "source": {
+      "historicalScanJobId": "0884c65e-d175-4ff7-a0db-a02b13f97491",
+      "outcomeJobId": "82ffccbe-1f3a-46d9-8b60-5a672af527fd",
+      "eventSelector": "NEAR_ENTERED",
+      "timeframe": "MONTHLY",
+      "maPeriods": {
+        "ma1": 20,
+        "ma2": 25,
+        "unit": "MONTHLY_BARS"
+      },
+      "scanPeriod": {
+        "requestedStartDate": "2023-05-08",
+        "requestedEndDate": "2025-05-02",
+        "resolvedStartDate": "2023-05-08",
+        "resolvedEndDate": "2025-05-02"
+      },
+      "filters": {
+        "markets": [
+          "プライム"
+        ],
+        "price": {
+          "min": null,
+          "max": null
+        },
+        "liquidity": {
+          "averageVolumeMin": null,
+          "averageVolumeMax": null,
+          "averageTradingValueMin": null,
+          "averageTradingValueMax": null,
+          "lookbackSessions": 20,
+          "maxPriceStalenessSessions": 3
+        },
+        "triggerCore": {
+          "maxApproachDistancePct": 5,
+          "nearDistancePct": 2,
+          "spreadExpansionEnabled": false,
+          "spreadLookbackIntervals": 4,
+          "minExpansionRatio": 0.7,
+          "requireBullishMaOrder": true
+        },
+        "historicalStage": {},
+        "outcomeStage": {},
+        "outcomeScore": {
+          "min": null,
+          "max": null
+        },
+        "outcomeTicker": null
+      },
+      "analysisCutoffDate": "2026-09-18",
+      "horizons": [
+        20,
+        60,
+        120,
+        245
+      ],
+      "historicalUniverseCaveat": "現在保持している全取引履歴から、各基準日の上場期間を復元しています。",
+      "observationIndependenceNote": "同一銘柄の複数イベントを含むため、各観測は統計的に完全独立ではありません。",
+      "scanCounts": {
+        "uniqueCandidates": 1303,
+        "totalEvents": 20409
+      }
+    },
+    "spreadDiagnosticsStatus": null
+  },
+  {
+    "label": "existing3mo_near_spread",
+    "dimensions": [
+      "spreadExpansion"
+    ],
+    "timeframe": "MONTHLY",
+    "eventSelector": "NEAR_ENTERED",
+    "events": 1006,
+    "uniqueTickers": 571,
+    "cells": 3,
+    "hash": "5be88291c56a5b8e53df1540a177cc63578d22bf70eb31e1b5d9d9c2e8dc8f8e",
+    "performance": {
+      "totalMs": 15.248833000000104,
+      "manifestLoadMs": 1.0742079999999987,
+      "ndjsonReadMs": 3.9863499999964915,
+      "parsingMs": 3.6043920000042817,
+      "groupingMs": 1.8162579999993795,
+      "percentileMs": 4.015666999999894,
+      "serializationMs": 0.094333000000006,
+      "dbQueryCount": 1,
+      "ohlcvQueryCount": 0,
+      "rowsRead": 1006,
+      "peakHeapBytes": 52047968,
+      "peakRssBytes": 216563712,
+      "resultBytes": 8557
+    },
+    "source": {
+      "historicalScanJobId": "6e833147-5f87-4b8b-b98c-a57391cd9f04",
+      "outcomeJobId": "4ea44a97-12b4-4253-a96d-4d3d9bf15497",
+      "eventSelector": "NEAR_ENTERED",
+      "timeframe": "MONTHLY",
+      "maPeriods": {
+        "ma1": 20,
+        "ma2": 25,
+        "unit": "MONTHLY_BARS"
+      },
+      "scanPeriod": {
+        "requestedStartDate": "2025-02-03",
+        "requestedEndDate": "2025-05-02",
+        "resolvedStartDate": "2025-02-03",
+        "resolvedEndDate": "2025-05-02"
+      },
+      "filters": {
+        "markets": null,
+        "price": {
+          "min": null,
+          "max": null
+        },
+        "liquidity": {
+          "averageVolumeMin": null,
+          "averageVolumeMax": null,
+          "averageTradingValueMin": null,
+          "averageTradingValueMax": null,
+          "lookbackSessions": 20,
+          "maxPriceStalenessSessions": 3
+        },
+        "triggerCore": {
+          "maxApproachDistancePct": 5,
+          "nearDistancePct": 2,
+          "spreadExpansionEnabled": false,
+          "spreadLookbackIntervals": 4,
+          "minExpansionRatio": 0.7,
+          "requireBullishMaOrder": true
+        },
+        "historicalStage": {},
+        "outcomeStage": {},
+        "outcomeScore": {
+          "min": null,
+          "max": null
+        },
+        "outcomeTicker": null
+      },
+      "analysisCutoffDate": "2026-09-18",
+      "horizons": [
+        20,
+        60,
+        120,
+        245
+      ],
+      "historicalUniverseCaveat": "現在保持している全取引履歴から、各基準日の上場期間を復元しています。",
+      "observationIndependenceNote": "同一銘柄の複数イベントを含むため、各観測は統計的に完全独立ではありません。",
+      "scanCounts": {
+        "uniqueCandidates": 1296,
+        "totalEvents": 7030
+      }
+    },
+    "spreadDiagnosticsStatus": "AVAILABLE"
+  }
+]

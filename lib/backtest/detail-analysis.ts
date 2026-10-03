@@ -7,6 +7,13 @@ export type OhlcvPoint = {
   volume: number | null
 }
 
+export type ChartPointWithMa = OhlcvPoint & {
+  ma5: number | null
+  ma25: number | null
+  ma75: number | null
+  ma200: number | null
+}
+
 export type StagePoint = {
   date: string
   code: string
@@ -76,12 +83,41 @@ export type SimilarPatternStats = {
   cases: SimilarPatternCase[]
 }
 
+export type MlCandidate = {
+  ticker: string
+  name: string | null
+  sectorLarge: string | null
+  direction: 'up' | 'down'
+  rank: number
+  asOfDate: string
+  close: number | null
+  confidenceLabel: string
+  stageCode: string | null
+  maOrder: string | null
+  reason: {
+    stage: string
+    maAngle: string
+    maDistance: string
+    pricePosition: string
+    mlEvidence: string
+  }
+  watchPoints: string[]
+}
+
+export type MaCandidateAnalysis = {
+  asOfDate: string | null
+  up: MlCandidate[]
+  down: MlCandidate[]
+  comment: string
+}
+
 export type AnalysisComment = {
   source: 'openai' | 'template'
   summary: string
   evidence: string[]
   watchPoints: string[]
   riskNotes: string[]
+  candidateComment: string
   similarPatternComment: string
 }
 
@@ -129,6 +165,62 @@ export function buildChartWindow(rows: OhlcvPoint[], startDate: string, endDate:
   if (startIndex < 0) return []
   const safeEnd = endIndex >= startIndex ? endIndex : startIndex
   return rows.slice(Math.max(0, startIndex - before), Math.min(rows.length, safeEnd + after + 1))
+}
+
+function smaSeries(rows: OhlcvPoint[], period: number): Array<number | null> {
+  const values: Array<number | null> = []
+  let sum = 0
+  let valid = 0
+
+  for (let i = 0; i < rows.length; i += 1) {
+    const close = rows[i]?.close
+    if (close != null && Number.isFinite(close)) {
+      sum += close
+      valid += 1
+    }
+
+    if (i >= period) {
+      const oldClose = rows[i - period]?.close
+      if (oldClose != null && Number.isFinite(oldClose)) {
+        sum -= oldClose
+        valid -= 1
+      }
+    }
+
+    values.push(i >= period - 1 && valid === period ? round(sum / period, 2) : null)
+  }
+
+  return values
+}
+
+export function buildChartWindowWithMa(
+  rows: OhlcvPoint[],
+  startDate: string,
+  endDate: string | null,
+  before = 35,
+  after = 18,
+): ChartPointWithMa[] {
+  const startIndex = findIndexByDate(rows, startDate)
+  const endIndex = endDate ? findIndexByDate(rows, endDate) : startIndex
+  if (startIndex < 0) return []
+  const safeEnd = endIndex >= startIndex ? endIndex : startIndex
+  const ma5 = smaSeries(rows, 5)
+  const ma25 = smaSeries(rows, 25)
+  const ma75 = smaSeries(rows, 75)
+  const ma200 = smaSeries(rows, 200)
+  const from = Math.max(0, startIndex - before)
+  const to = Math.min(rows.length, safeEnd + after + 1)
+
+  return rows.slice(from, to).map((row, offset) => {
+    const index = from + offset
+    return {
+      ...row,
+      ma5: ma5[index] ?? null,
+      ma25: ma25[index] ?? null,
+      ma75: ma75[index] ?? null,
+      ma200: ma200[index] ?? null,
+    }
+  })
 }
 
 export function buildMovePeriod(
@@ -316,32 +408,37 @@ export function buildTemplateComment(input: {
   volume: VolumeSummary
   ma: MaAnalysis
   similar: SimilarPatternStats
+  candidates?: MaCandidateAnalysis | null
 }): AnalysisComment {
   const directionLabel = input.move.direction === 'up' ? '上昇' : '下落'
   const stageText = input.stagePath.length > 0 ? input.stagePath.map((item) => item.code).join(' → ') : '確認できません'
   const moveText = input.move.endDate
     ? `${input.move.startDate}から${input.move.endDate}までに${fmtPct(input.move.returnPct)}動きました。`
     : `${input.move.startDate}からの対象期間を確認しています。`
+  const candidateCount = (input.candidates?.up.length ?? 0) + (input.candidates?.down.length ?? 0)
+  const candidateText = candidateCount > 0
+    ? `最新データでは、6桁ステージとMA形状が近い候補を${candidateCount}件抽出しています。候補理由はステージ、MA角度、MA距離、株価位置、ML根拠の5軸で確認します。`
+    : '最新データからのMA候補はまだ生成されていません。ML候補生成バッチ後に表示されます。'
   const similarText = input.similar.sampleSize > 0
-    ? `似たステージ・MA位置・出来高条件の過去事例は${input.similar.sampleSize}件あり、最大上昇が10%を超えた割合は${fmtPct(input.similar.upRate == null ? null : input.similar.upRate * 100)}、平均最大上昇は${fmtPct(input.similar.avgMaxReturnPct)}でした。`
-    : '類似パターンはまだ十分に蓄積されていません。'
+    ? `参考として、過去に同じ6桁ステージへ近かった事例は${input.similar.sampleSize}件あります。今後は過去比較より、最新日のMA候補を優先して見ます。`
+    : candidateText
 
   return {
     source: 'template',
-    summary: `${input.ticker}は、${moveText}この間の6桁ステージ遷移は「${stageText}」です。値幅だけでなく、出来高と移動平均線の変化を一緒に確認すると、次の候補探しに使いやすくなります。`,
+    summary: `${input.ticker}は、${moveText}この間の6桁ステージ遷移は「${stageText}」です。次の候補探しでは、出来高よりもMAの並び、角度、距離、株価位置を優先して確認します。`,
     evidence: [
-      input.volume.comment,
       ...input.ma.facts.slice(0, 4),
       `移動平均線の並びは「${input.ma.maOrder}」です。`,
+      `6桁ステージ遷移は「${stageText}」です。`,
     ],
     watchPoints: [
       input.ma.recentHigh != null
-        ? `直近高値${fmtNum(input.ma.recentHigh)}円を出来高を伴って超えられるかを確認します。`
-        : '直近高値を出来高を伴って超えられるかを確認します。',
+        ? `直近高値${fmtNum(input.ma.recentHigh)}円までの距離と、5日SMAの上を保てるかを確認します。`
+        : '直近高値までの距離と、5日SMAの上を保てるかを確認します。',
       input.ma.daysHeldAboveSma5
         ? `5日SMAの上を維持できている日数は${input.ma.daysHeldAboveSma5}営業日です。この維持が続くかを見ます。`
         : '終値が5日SMAの上に戻り、その状態を維持できるかを見ます。',
-      '同じ6桁ステージ遷移に出来高増加が重なる銘柄を優先して比較します。',
+      '5日、25日、75日、200日の傾きが同じ方向へそろうかを確認します。',
     ],
     riskNotes: [
       '5日SMAを再び下回る場合は、一時的な反発で終わる可能性があります。',
@@ -349,6 +446,7 @@ export function buildTemplateComment(input: {
         ? '上昇率は過去の結果であり、同じ条件でも必ず再現するわけではありません。'
         : '下落局面では反発の見込みより、下げ止まりの確認を先に見る必要があります。',
     ],
+    candidateComment: candidateText,
     similarPatternComment: similarText,
   }
 }

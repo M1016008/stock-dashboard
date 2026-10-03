@@ -160,7 +160,9 @@ async function main() {
   console.log(`weekly_ohlcv complete: ${total} rows`)
 }
 
-main().catch((error) => {
+main().then(() => {
+  process.exit(0)
+}).catch((error) => {
   console.error('batch-weekly-ohlcv failed:', error)
   process.exit(1)
 })

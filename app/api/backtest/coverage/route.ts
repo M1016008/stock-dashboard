@@ -1,7 +1,29 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { execGet } from '@/lib/db/client'
+import { readServingCache, writeServingCache } from '@/lib/api/serving-cache'
 
 export const dynamic = 'force-dynamic'
+
+const CACHE_TTL_MS = 6 * 60 * 60 * 1000
+const CACHE_NAMESPACE = 'backtest_coverage_v2'
+
+type CoveragePayload = {
+  horizon: number
+  market: ReturnType<typeof toPayload>
+  indices: ReturnType<typeof toPayload>
+  feature: ReturnType<typeof toPayload>
+  backtest: ReturnType<typeof toPayload> & { label: string }
+  excluded: {
+    days: number
+    reasons: string[]
+  }
+  cache?: {
+    hit: boolean
+    generatedAt: string
+  }
+}
+
+const coverageCache = new Map<number, { generatedAt: number; payload: CoveragePayload }>()
 
 type RangeCount = {
   start_date: string | null
@@ -31,6 +53,33 @@ async function indexedDateRange(table: 'ohlcv_daily' | 'indices_daily' | 'model_
   }
 }
 
+async function indexedBacktestRange(horizon: number): Promise<RangeCount> {
+  const compact = await rangeCount(`
+    SELECT MIN(date) AS start_date, MAX(date) AS end_date, COUNT(*) AS days
+    FROM forward_extrema_date_coverage
+    WHERE horizon_days = ?
+  `, [horizon])
+  if (compact.days > 0) return compact
+
+  const [start, end] = await Promise.all([
+    execGet<{ date: string | null }>(`
+      SELECT date FROM forward_extrema INDEXED BY fext_horizon_date_idx
+      WHERE horizon_days = ? ORDER BY date ASC LIMIT 1
+    `, [horizon]),
+    execGet<{ date: string | null }>(`
+      SELECT date FROM forward_extrema INDEXED BY fext_horizon_date_idx
+      WHERE horizon_days = ? ORDER BY date DESC LIMIT 1
+    `, [horizon]),
+  ])
+  if (!start?.date || !end?.date) return { start_date: null, end_date: null, days: 0 }
+  const count = await execGet<{ days: number }>(`
+    SELECT COUNT(*) AS days
+    FROM (SELECT DISTINCT date FROM ohlcv_daily INDEXED BY ohlcv_date_idx
+          WHERE date BETWEEN ? AND ?)
+  `, [start.date, end.date])
+  return { start_date: start.date, end_date: end.date, days: Number(count?.days ?? 0) }
+}
+
 function toPayload(row: RangeCount) {
   return {
     startDate: row.start_date,
@@ -43,21 +92,34 @@ export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
     const horizon = Number(searchParams.get('horizon') ?? 40)
-    const safeHorizon = [5, 20, 30, 40, 60, 90, 180].includes(horizon) ? horizon : 40
+    const safeHorizon = [5, 20, 30, 40, 60, 90, 180, 200].includes(horizon) ? horizon : 40
+
+    const cached = coverageCache.get(safeHorizon)
+    if (cached && Date.now() - cached.generatedAt < CACHE_TTL_MS) {
+      return NextResponse.json({
+        ...cached.payload,
+        cache: { hit: true, generatedAt: new Date(cached.generatedAt).toISOString() },
+      })
+    }
+    const stored = await readServingCache<CoveragePayload>(CACHE_NAMESPACE, String(safeHorizon), CACHE_TTL_MS)
+    if (stored) {
+      coverageCache.set(safeHorizon, { generatedAt: stored.generatedAt, payload: stored.payload })
+      return NextResponse.json({
+        ...stored.payload,
+        cache: { hit: true, generatedAt: new Date(stored.generatedAt).toISOString(), store: 'db' },
+      })
+    }
 
     const [market, indices, feature, backtest] = await Promise.all([
       indexedDateRange('ohlcv_daily', 'ohlcv_date_idx'),
       indexedDateRange('indices_daily', 'indices_date_idx'),
       indexedDateRange('model_features', 'model_features_date_idx'),
-      rangeCount(`
-        SELECT MIN(date) AS start_date, MAX(date) AS end_date, COUNT(DISTINCT date) AS days
-        FROM forward_extrema INDEXED BY fext_horizon_date_idx
-        WHERE horizon_days = ?
-      `, [safeHorizon])
+      indexedBacktestRange(safeHorizon),
     ])
     const excludedDays = Math.max(0, market.days - backtest.days)
 
-    return NextResponse.json({
+    const generatedAt = Date.now()
+    const payload: CoveragePayload = {
       horizon: safeHorizon,
       market: toPayload(market),
       indices: toPayload(indices),
@@ -75,7 +137,14 @@ export async function GET(request: NextRequest) {
           'データ欠損または売買停止',
         ],
       },
+      cache: { hit: false, generatedAt: new Date(generatedAt).toISOString() },
+    }
+    coverageCache.set(safeHorizon, { generatedAt, payload })
+    writeServingCache(CACHE_NAMESPACE, String(safeHorizon), payload, CACHE_TTL_MS, generatedAt).catch((error) => {
+      console.warn('Failed to write backtest coverage cache:', error)
     })
+
+    return NextResponse.json(payload)
   } catch (error) {
     console.error('Backtest coverage API error:', error)
     return NextResponse.json(

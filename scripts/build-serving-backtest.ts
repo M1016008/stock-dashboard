@@ -112,12 +112,43 @@ function envInt(name: string, fallback: number, min = 0): number {
 const LATEST_LIMIT = envInt('SERVING_LATEST_LIMIT', 300, 1)
 const DATE_LIMIT = envInt('SERVING_DATE_LIMIT', 260, 0)
 const SUMMARY_DATE_CHUNK = envInt('SERVING_SUMMARY_DATE_CHUNK', DATE_LIMIT === 0 ? 40 : 60, 1)
-const RESULT_DATE_CHUNK = envInt('SERVING_RESULT_DATE_CHUNK', DATE_LIMIT === 0 ? 5 : 20, 1)
-const EVIDENCE_DATE_CHUNK = envInt('SERVING_EVIDENCE_DATE_CHUNK', DATE_LIMIT === 0 ? 5 : 20, 1)
+const RESULT_DATE_CHUNK = envInt('SERVING_RESULT_DATE_CHUNK', 20, 1)
+const EVIDENCE_DATE_CHUNK = envInt('SERVING_EVIDENCE_DATE_CHUNK', 20, 1)
+const EVIDENCE_DATE_LIMIT = envInt('SERVING_EVIDENCE_DATE_LIMIT', DATE_LIMIT, 0)
 const DETAIL_PER_DATE_HORIZON = envInt('SERVING_DETAIL_PER_DATE_HORIZON', 20, 0)
 const SIMILAR_SOURCE_LIMIT = envInt('SERVING_SIMILAR_SOURCE_LIMIT', 30, 0)
 const CHUNK = 250
-const HORIZONS = [5, 20, 30, 40, 60, 90, 180] as const
+const HORIZONS = [5, 10, 20, 40, 60, 90, 200] as const
+const SERVING_STAGES = ['latest', 'dates', 'summaries', 'results', 'evidence', 'details', 'similar'] as const
+type ServingStage = (typeof SERVING_STAGES)[number]
+
+function stageIndex(value: string | undefined, fallback: number): number {
+  if (!value) return fallback
+  const index = SERVING_STAGES.indexOf(value.trim() as ServingStage)
+  if (index < 0) throw new Error(`Unknown serving stage: ${value}`)
+  return index
+}
+
+const START_STAGE_INDEX = stageIndex(process.env.SERVING_START_STAGE, 0)
+const STOP_STAGE_INDEX = stageIndex(process.env.SERVING_STOP_AFTER_STAGE, SERVING_STAGES.length - 1)
+
+function shouldRunStage(stage: ServingStage): boolean {
+  const index = SERVING_STAGES.indexOf(stage)
+  return index >= START_STAGE_INDEX && index <= STOP_STAGE_INDEX
+}
+
+const RESULT_INDEXES = [
+  `CREATE INDEX IF NOT EXISTS serving_backtest_results_sort_idx ON serving_backtest_results(date, horizon_days, max_return_pct)`,
+  `CREATE INDEX IF NOT EXISTS serving_backtest_results_horizon_date_idx ON serving_backtest_results(horizon_days, date DESC)`,
+  `CREATE INDEX IF NOT EXISTS serving_backtest_results_ticker_idx ON serving_backtest_results(ticker, date)`,
+] as const
+const RESULT_INDEX_NAMES = [
+  'serving_backtest_results_sort_idx',
+  'serving_backtest_results_horizon_date_idx',
+  'serving_backtest_results_ticker_idx',
+] as const
+const EVIDENCE_INDEX =
+  `CREATE INDEX IF NOT EXISTS serving_signal_evidence_date_idx ON serving_signal_evidence(date, signal_code)`
 
 function scoreSignals(row: LatestFeature): number {
   const codes = (row.signal_codes ?? '').split(',').filter(Boolean)
@@ -148,7 +179,9 @@ async function buildLatestSignals(date: string): Promise<void> {
   const rows = await execAll<LatestFeature>(
     `
     SELECT
-      mf.date, mf.ticker, u.name, sm.sector_large, sm.sector_small,
+      mf.date, mf.ticker, u.name,
+      COALESCE(u.sector17_name, sm.sector_large) AS sector_large,
+      COALESCE(u.sector33_name, sm.sector_small) AS sector_small,
       mf.close, mf.volume, mf.volume_ratio_20, mf.range_pct, mf.atr20_pct,
       mf.ma25_pos_pct, mf.pattern_code, mf.signal_codes
     FROM model_features mf
@@ -232,23 +265,33 @@ async function buildSignalStats(): Promise<void> {
 }
 
 async function buildBacktestDates(): Promise<string[]> {
-  const limitSql = DATE_LIMIT > 0 ? `LIMIT ?` : ''
+  const dateFilter = DATE_LIMIT > 0
+    ? `AND mf.date IN (
+        SELECT date
+        FROM (
+          SELECT DISTINCT date
+          FROM forward_extrema
+          ORDER BY date DESC
+          LIMIT ?
+        )
+      )`
+    : ''
   const args = DATE_LIMIT > 0 ? [DATE_LIMIT] : []
   const rows = await execAll<{ date: string; total_tickers: number; signal_tickers: number }>(
     `
     SELECT
-      date,
+      mf.date,
       COUNT(*) AS total_tickers,
-      SUM(CASE WHEN signal_codes IS NOT NULL AND signal_codes <> '' THEN 1 ELSE 0 END) AS signal_tickers
-    FROM model_features
+      SUM(CASE WHEN mf.signal_codes IS NOT NULL AND mf.signal_codes <> '' THEN 1 ELSE 0 END) AS signal_tickers
+    FROM model_features mf
     WHERE EXISTS (
       SELECT 1
       FROM forward_extrema fe
-      WHERE fe.ticker = model_features.ticker AND fe.date = model_features.date
+      WHERE fe.ticker = mf.ticker AND fe.date = mf.date
     )
-    GROUP BY date
-    ORDER BY date DESC
-    ${limitSql}
+    ${dateFilter}
+    GROUP BY mf.date
+    ORDER BY mf.date DESC
     `,
     args,
   )
@@ -454,24 +497,39 @@ async function buildBacktestSummaries(dates: string[]): Promise<void> {
 }
 
 async function buildBacktestResults(dates: string[]): Promise<void> {
-  if (DATE_LIMIT === 0) await execRun(`DELETE FROM serving_backtest_results`)
-  else await deleteServingDates('serving_backtest_results', 'date', dates)
+  const suspendIndexes = DATE_LIMIT === 0
+  if (suspendIndexes) {
+    console.log('serving_backtest_results: suspending secondary indexes')
+    for (const name of RESULT_INDEX_NAMES) await execRun(`DROP INDEX IF EXISTS ${name}`)
+  }
 
-  const started = Date.now()
-  let inserted = 0
-  const totalChunks = Math.ceil(dates.length / RESULT_DATE_CHUNK)
-  for (let i = 0; i < dates.length; i += RESULT_DATE_CHUNK) {
-    const chunkDates = dates.slice(i, i + RESULT_DATE_CHUNK)
-    const rows = await execAll<BacktestServingRow>(
+  try {
+    if (DATE_LIMIT === 0) await execRun(`DELETE FROM serving_backtest_results`)
+
+    const started = Date.now()
+    const totalChunks = Math.ceil(dates.length / RESULT_DATE_CHUNK)
+    for (let i = 0; i < dates.length; i += RESULT_DATE_CHUNK) {
+      const chunkDates = dates.slice(i, i + RESULT_DATE_CHUNK)
+      if (DATE_LIMIT > 0) {
+        await deleteServingDates('serving_backtest_results', 'date', chunkDates)
+      }
+      await execRun(
       `
+      INSERT OR REPLACE INTO serving_backtest_results
+        (date, horizon_days, ticker, name, sector_large, sector_small, market_segment,
+         pattern_code, daily_a_stage, daily_b_stage, weekly_a_stage, weekly_b_stage,
+         monthly_a_stage, monthly_b_stage, open, high, low, close, volume,
+         volume_ratio_20, range_pct, atr20_pct, ma5_pos_pct, ma25_pos_pct, ma75_pos_pct,
+         signal_codes, return_pct, max_return_pct, max_return_date, days_to_max,
+         min_return_pct, min_return_date, days_to_min, hit_10, hit_20, hit_40, computed_at)
       SELECT
         mf.date,
         fe.horizon_days,
         mf.ticker,
         u.name,
-        sm.sector_large,
-        sm.sector_small,
-        sm.market_segment,
+        COALESCE(u.sector17_name, sm.sector_large) AS sector_large,
+        COALESCE(u.sector33_name, sm.sector_small) AS sector_small,
+        COALESCE(u.market_segment, sm.market_segment) AS market_segment,
         mf.pattern_code,
         mf.daily_a_stage,
         mf.daily_b_stage,
@@ -500,7 +558,8 @@ async function buildBacktestResults(dates: string[]): Promise<void> {
         fe.days_to_min,
         fe.hit_10,
         fe.hit_20,
-        fe.hit_40
+        fe.hit_40,
+        unixepoch()
       FROM model_features mf
       INNER JOIN forward_extrema fe ON fe.ticker = mf.ticker AND fe.date = mf.date
       LEFT JOIN ohlcv_daily o ON o.ticker = mf.ticker AND o.date = mf.date
@@ -508,72 +567,64 @@ async function buildBacktestResults(dates: string[]): Promise<void> {
       LEFT JOIN sector_master sm ON sm.ticker = mf.ticker
       WHERE mf.date IN (${chunkDates.map(() => '?').join(', ')})
       `,
-      chunkDates,
-    )
-    for (let j = 0; j < rows.length; j += CHUNK) {
-      await execBatch(rows.slice(j, j + CHUNK).map((row) => ({
-        sql: `
-          INSERT OR REPLACE INTO serving_backtest_results
-            (date, horizon_days, ticker, name, sector_large, sector_small, market_segment,
-             pattern_code, daily_a_stage, daily_b_stage, weekly_a_stage, weekly_b_stage,
-             monthly_a_stage, monthly_b_stage, open, high, low, close, volume,
-             volume_ratio_20, range_pct, atr20_pct, ma5_pos_pct, ma25_pos_pct, ma75_pos_pct,
-             signal_codes, return_pct, max_return_pct, max_return_date, days_to_max,
-             min_return_pct, min_return_date, days_to_min, hit_10, hit_20, hit_40, computed_at)
-          VALUES (${Array.from({ length: 36 }, () => '?').join(', ')}, unixepoch())
-        `,
-        args: [
-          row.date, row.horizon_days, row.ticker, row.name, row.sector_large, row.sector_small, row.market_segment,
-          row.pattern_code, row.daily_a_stage, row.daily_b_stage, row.weekly_a_stage, row.weekly_b_stage,
-          row.monthly_a_stage, row.monthly_b_stage, row.open, row.high, row.low, row.close, row.volume,
-          row.volume_ratio_20, row.range_pct, row.atr20_pct, row.ma5_pos_pct, row.ma25_pos_pct, row.ma75_pos_pct,
-          row.signal_codes, row.return_pct, row.max_return_pct, row.max_return_date, row.days_to_max,
-          row.min_return_pct, row.min_return_date, row.days_to_min, row.hit_10, row.hit_20, row.hit_40,
-        ],
-      })))
-      inserted += Math.min(CHUNK, rows.length - j)
-    }
+        chunkDates,
+      )
 
-    const chunkNo = Math.floor(i / RESULT_DATE_CHUNK) + 1
-    if (chunkNo % 10 === 0 || chunkNo === totalChunks) {
-      const elapsed = ((Date.now() - started) / 60000).toFixed(1)
-      console.log(`serving_backtest_results chunk ${chunkNo}/${totalChunks} rows=${inserted.toLocaleString()} elapsed=${elapsed}m`)
+      const chunkNo = Math.floor(i / RESULT_DATE_CHUNK) + 1
+      if (chunkNo % 10 === 0 || chunkNo === totalChunks) {
+        const elapsed = ((Date.now() - started) / 60000).toFixed(1)
+        console.log(`serving_backtest_results chunk ${chunkNo}/${totalChunks} elapsed=${elapsed}m`)
+      }
+    }
+  } finally {
+    if (suspendIndexes) {
+      console.log('serving_backtest_results: restoring secondary indexes')
+      for (const sql of RESULT_INDEXES) await execRun(sql)
     }
   }
 }
 
 async function buildSignalEvidence(dates: string[]): Promise<void> {
-  if (DATE_LIMIT === 0) await execRun(`DELETE FROM serving_signal_evidence`)
-  else await deleteServingDates('serving_signal_evidence', 'date', dates)
+  const suspendIndex = DATE_LIMIT === 0
+  if (suspendIndex) await execRun(`DROP INDEX IF EXISTS serving_signal_evidence_date_idx`)
 
-  let inserted = 0
-  const totalChunks = Math.ceil(dates.length / EVIDENCE_DATE_CHUNK)
-  for (let i = 0; i < dates.length; i += EVIDENCE_DATE_CHUNK) {
-    const chunkDates = dates.slice(i, i + EVIDENCE_DATE_CHUNK)
-    const rows = await execAll<TechnicalSignalRow>(
+  try {
+    if (DATE_LIMIT === 0) await execRun(`DELETE FROM serving_signal_evidence`)
+
+    let inserted = 0
+    const totalChunks = Math.ceil(dates.length / EVIDENCE_DATE_CHUNK)
+    for (let i = 0; i < dates.length; i += EVIDENCE_DATE_CHUNK) {
+      const chunkDates = dates.slice(i, i + EVIDENCE_DATE_CHUNK)
+      if (DATE_LIMIT > 0) {
+        await deleteServingDates('serving_signal_evidence', 'date', chunkDates)
+      }
+      const rows = await execAll<TechnicalSignalRow>(
       `
       SELECT ticker, date, timescale, ma_period, signal_code, signal_strength,
              direction, label, score_component, value_json
       FROM technical_signals
       WHERE date IN (${chunkDates.map(() => '?').join(', ')})
       `,
-      chunkDates,
-    )
-    for (let j = 0; j < rows.length; j += CHUNK) {
-      await execBatch(rows.slice(j, j + CHUNK).map((row) => ({
+        chunkDates,
+      )
+      for (let j = 0; j < rows.length; j += CHUNK) {
+        await execBatch(rows.slice(j, j + CHUNK).map((row) => ({
         sql: `
           INSERT OR REPLACE INTO serving_signal_evidence
             (ticker, date, signal_code, label, reason_json, computed_at)
           VALUES (?, ?, ?, ?, ?, unixepoch())
         `,
         args: [row.ticker, row.date, row.signal_code, row.label, JSON.stringify(reasonForSignal(row))],
-      })))
-      inserted += Math.min(CHUNK, rows.length - j)
+        })))
+        inserted += Math.min(CHUNK, rows.length - j)
+      }
+      const chunkNo = Math.floor(i / EVIDENCE_DATE_CHUNK) + 1
+      if (chunkNo % 20 === 0 || chunkNo === totalChunks) {
+        console.log(`serving_signal_evidence chunk ${chunkNo}/${totalChunks} rows=${inserted.toLocaleString()}`)
+      }
     }
-    const chunkNo = Math.floor(i / EVIDENCE_DATE_CHUNK) + 1
-    if (chunkNo % 20 === 0 || chunkNo === totalChunks) {
-      console.log(`serving_signal_evidence chunk ${chunkNo}/${totalChunks} rows=${inserted.toLocaleString()}`)
-    }
+  } finally {
+    if (suspendIndex) await execRun(EVIDENCE_INDEX)
   }
 }
 
@@ -672,29 +723,59 @@ async function buildSimilarCases(date: string): Promise<void> {
     [date, SIMILAR_SOURCE_LIMIT],
   )
 
+  type SimilarCaseRow = {
+    pattern_code: string
+    ticker: string
+    date: string
+    max_return_pct: number | null
+    days_to_max: number | null
+    ma25_pos_pct: number | null
+    volume_ratio_20: number | null
+  }
+  const patterns = [...new Set(sources.flatMap((source) => source.pattern_code ? [source.pattern_code] : []))]
+  const candidateLimit = Math.max(16, sources.length + 8)
+  const candidateRows = patterns.length > 0
+    ? await execAll<SimilarCaseRow>(
+        `
+        WITH ranked AS (
+          SELECT
+            result.pattern_code,
+            result.ticker,
+            result.date,
+            result.max_return_pct,
+            result.days_to_max,
+            result.ma25_pos_pct,
+            result.volume_ratio_20,
+            ROW_NUMBER() OVER (
+              PARTITION BY result.pattern_code
+              ORDER BY result.max_return_pct DESC
+            ) AS candidate_rank
+          FROM serving_backtest_results result
+          WHERE result.horizon_days = 40
+            AND result.pattern_code IN (${patterns.map(() => '?').join(', ')})
+            AND result.date < ?
+        )
+        SELECT pattern_code, ticker, date, max_return_pct, days_to_max, ma25_pos_pct, volume_ratio_20
+        FROM ranked
+        WHERE candidate_rank <= ?
+        ORDER BY pattern_code, candidate_rank
+        `,
+        [...patterns, date, candidateLimit],
+      )
+    : []
+  const candidatesByPattern = new Map<string, SimilarCaseRow[]>()
+  for (const row of candidateRows) {
+    const rows = candidatesByPattern.get(row.pattern_code) ?? []
+    rows.push(row)
+    candidatesByPattern.set(row.pattern_code, rows)
+  }
+
   const statements: Array<{ sql: string; args: Array<string | number> }> = []
   for (const source of sources) {
     if (!source.pattern_code) continue
-    const cases = await execAll<{
-      ticker: string
-      date: string
-      max_return_pct: number | null
-      days_to_max: number | null
-      ma25_pos_pct: number | null
-      volume_ratio_20: number | null
-    }>(
-      `
-      SELECT mf.ticker, mf.date, fe.max_return_pct, fe.days_to_max, mf.ma25_pos_pct, mf.volume_ratio_20
-      FROM model_features mf
-      INNER JOIN forward_extrema fe ON fe.ticker = mf.ticker AND fe.date = mf.date AND fe.horizon_days = 40
-      WHERE mf.pattern_code = ?
-        AND mf.date < ?
-        AND mf.ticker <> ?
-      ORDER BY fe.max_return_pct DESC
-      LIMIT 8
-      `,
-      [source.pattern_code, source.date, source.ticker],
-    )
+    const cases = (candidatesByPattern.get(source.pattern_code) ?? [])
+      .filter((row) => row.ticker !== source.ticker)
+      .slice(0, 8)
     for (const [index, row] of cases.entries()) {
       const distance =
         Math.abs((source.ma25_pos_pct ?? 0) - (row.ma25_pos_pct ?? 0)) +
@@ -731,18 +812,30 @@ async function main() {
     return
   }
   console.log(`serving build for ${date}: date_limit=${DATE_LIMIT || 'all'}, summary_date_chunk=${SUMMARY_DATE_CHUNK}`)
-  await buildLatestSignals(date)
-  await buildSignalStats()
+  if (process.env.SERVING_ONLY_SIMILAR === '1') {
+    await buildSimilarCases(date)
+    return
+  }
+  if (START_STAGE_INDEX > STOP_STAGE_INDEX) throw new Error('SERVING_START_STAGE must not follow SERVING_STOP_AFTER_STAGE')
+  if (shouldRunStage('latest')) {
+    await buildLatestSignals(date)
+    await buildSignalStats()
+  }
   const dates = await buildBacktestDates()
-  await buildBacktestSummaries(dates)
-  await buildBacktestResults(dates)
-  await buildSignalEvidence(dates)
-  await buildBacktestDetails(dates)
-  await buildSimilarCases(date)
+  if (shouldRunStage('summaries')) await buildBacktestSummaries(dates)
+  if (shouldRunStage('results')) await buildBacktestResults(dates)
+  if (shouldRunStage('evidence')) {
+    const evidenceDates = EVIDENCE_DATE_LIMIT > 0 ? dates.slice(0, EVIDENCE_DATE_LIMIT) : dates
+    await buildSignalEvidence(evidenceDates)
+  }
+  if (shouldRunStage('details')) await buildBacktestDetails(dates)
+  if (shouldRunStage('similar')) await buildSimilarCases(date)
   console.log('serving build complete')
 }
 
-main().catch((error) => {
-  console.error('build-serving-backtest failed:', error)
-  process.exit(1)
-})
+main()
+  .then(() => process.exit(0))
+  .catch((error) => {
+    console.error('build-serving-backtest failed:', error)
+    process.exit(1)
+  })

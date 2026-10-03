@@ -1,0 +1,1269 @@
+'use client'
+
+import Link from 'next/link'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import {
+  ArrowLeft,
+  BarChart3,
+  BrainCircuit,
+  ChartCandlestick,
+  GitCompareArrows,
+  LayoutDashboard,
+  Loader2,
+  NotebookPen,
+} from 'lucide-react'
+import { CandlestickChart } from '@/components/charts/CandlestickChart'
+import { Card, CardHeader } from '@/components/ui/Card'
+import { PriceDisplay } from '@/components/ui/PriceDisplay'
+import { WatchlistButton } from '@/components/ui/WatchlistButton'
+import { StageTimeline } from '@/components/stock/StageTimeline'
+import { ScenarioProjectionChart } from '@/components/stock/ScenarioProjectionChart'
+import { StockScenarioAiPanel } from '@/components/stock/StockScenarioAiPanel'
+import { StockMovePeriods } from '@/components/stock/StockMovePeriods'
+import { TradeScenarioNotebook } from '@/components/stock/TradeScenarioNotebook'
+import { HistoricalAnalogExplorer } from '@/components/stock/HistoricalAnalogExplorer'
+import { StockMlInsights } from '@/components/stock/StockMlInsights'
+import { PerformanceCard } from '@/components/stock/PerformanceCard'
+import {
+  HistoricalAnalysisModeBar,
+  type StockAnalysisReview,
+} from '@/components/stock/HistoricalAnalysisModeBar'
+import type { StockQuote } from '@/types/stock'
+import type { NextUsEarnings } from '@/lib/queries/us-earnings'
+import {
+  buildPhysicalMomentumView,
+  buildPhysicalRawMetricView,
+  describePhysicalScore,
+  type PhysicalMomentumTone,
+} from '@/lib/physical-momentum-view'
+import {
+  physicalPlanDirectionLabel,
+  physicalPlanStatisticsLabel,
+  type PhysicalPlanDecision,
+} from '@/lib/physical-plan'
+import { buildShortTermCheck, formatShortTermStrength, type ShortTermCheckResult } from '@/lib/short-term-check'
+import {
+  isComparedSymbol,
+  recordRecentSymbol,
+  toggleComparedSymbol,
+  WORKSPACE_EVENT,
+} from '@/lib/client/stock-workspace'
+
+type Status = 'idle' | 'loading' | 'ready' | 'error'
+type UsStockDetailTab = 'overview' | 'chart' | 'scenario' | 'ml'
+
+interface PhysicalMomentumApiRow {
+  date: string
+  physicalMomentumScore: number | null
+  physicalForceScore: number | null
+  physicalEnergyScore: number | null
+  velocity: number | null
+  acceleration: number | null
+  momentum?: number | null
+  force: number | null
+  ma5Angle?: number | null
+  ma25Angle?: number | null
+  ma75Angle?: number | null
+  ma200Angle?: number | null
+  maAngleAvg?: number | null
+  energy: number | null
+}
+
+interface PhysicalMomentumResponse {
+  latest: PhysicalMomentumApiRow | null
+  history: PhysicalMomentumApiRow[]
+  rank: number | null
+  totalRanked: number
+  trend: 'rising' | 'falling' | 'flat' | null
+  source?: 'main' | 'us_analytics'
+  requestedDate?: string | null
+  timeframeViews?: PhysicalMomentumTimeframeView[]
+}
+
+interface PhysicalMomentumTimeframeView {
+  interval: 'D' | '2D' | 'W' | 'M'
+  label: string
+  basis: string
+  latestDate: string | null
+  scoreSource: 'market_z' | 'local_timeframe_z'
+  physicalMomentumScore: number | null
+  physicalForceScore: number | null
+  physicalEnergyScore: number | null
+  trend: 'rising' | 'falling' | 'flat' | null
+}
+
+interface UsPhysicalPlanLevel {
+  label: string
+  value: number | null
+  distancePct: number | null
+}
+
+interface UsPhysicalPlanLevels {
+  baseDate: string
+  close: number
+  support: UsPhysicalPlanLevel
+  resistance: UsPhysicalPlanLevel
+  breakdown: UsPhysicalPlanLevel
+}
+
+interface UsPhysicalPlanCandidate {
+  direction: 'up' | 'down' | 'wait'
+  rank: number
+  score: number
+  asOfDate: string
+}
+
+interface UsPhysicalPlanHorizon {
+  label: string
+  horizonDays: number
+  description: string
+  statusLabel: string
+  targetDirection: 'up' | 'down' | 'wait' | null
+  hitRate: number | null
+  baseRate: number | null
+  lift: number | null
+  avgMaxReturnPct: number | null
+  avgMinReturnPct: number | null
+  sampleCount: number | null
+  evaluationDate: string | null
+  confidenceLabel: string
+  candidates: UsPhysicalPlanCandidate[]
+  levels: UsPhysicalPlanLevels | null
+  suggestion: {
+    tone: 'positive' | 'negative' | 'neutral' | 'warning'
+    stance: string
+    headline: string
+    summary: string
+    checklist: string[]
+    conditionLabel: string
+    invalidation: string
+    decision: PhysicalPlanDecision
+  }
+}
+
+interface UsPhysicalPlanResponse {
+  ok: boolean
+  available: boolean
+  market?: string
+  ticker: string
+  featureAsOfDate?: string | null
+  priceAsOfDate?: string | null
+  note?: string
+  horizons: UsPhysicalPlanHorizon[]
+}
+
+type UsMlStatusTone = 'ok' | 'info' | 'warn' | 'missing'
+
+interface UsMlStatusItem {
+  key: string
+  label: string
+  status: UsMlStatusTone
+  badge: string
+  date: string | null
+  count: number | null
+  detail: string
+  evidence: string[]
+}
+
+interface UsMlStatusResponse {
+  ok: boolean
+  market: 'US'
+  ticker: string
+  dbAvailable: boolean
+  requestedDate?: string | null
+  featureSet: string
+  modelType: string
+  summary: {
+    status: UsMlStatusTone
+    label: string
+    detail: string
+    latestMarketDate?: string | null
+    healthCheckDate?: string | null
+  }
+  items: UsMlStatusItem[]
+}
+
+interface StageHistoryEntry {
+  daily_a_stage: number | null
+  daily_b_stage: number | null
+  weekly_a_stage: number | null
+  weekly_b_stage: number | null
+  monthly_a_stage: number | null
+  monthly_b_stage: number | null
+}
+
+function fmtNumber(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(value)) return '-'
+  return value.toLocaleString('en-US')
+}
+
+function fmtMoney(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(value)) return '-'
+  if (value >= 1e12) return `$${(value / 1e12).toFixed(2)}T`
+  if (value >= 1e9) return `$${(value / 1e9).toFixed(2)}B`
+  if (value >= 1e6) return `$${(value / 1e6).toFixed(1)}M`
+  return `$${Math.round(value).toLocaleString('en-US')}`
+}
+
+function fmtScore(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(value)) return '-'
+  return value.toFixed(2)
+}
+
+function fmtRate(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(value)) return '-'
+  return `${(value * 100).toFixed(1)}%`
+}
+
+function fmtPctRaw(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(value)) return '-'
+  return `${value >= 0 ? '+' : ''}${value.toFixed(1)}%`
+}
+
+function fmtUsd(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(value)) return '-'
+  return `$${value.toLocaleString('en-US', { maximumFractionDigits: value >= 100 ? 1 : 2 })}`
+}
+
+function Stat({
+  label,
+  value,
+  detail,
+  tone = 'default',
+}: {
+  label: string
+  value: string
+  detail?: string
+  tone?: 'default' | 'up' | 'down'
+}) {
+  const valueClass = tone === 'up'
+    ? 'text-[var(--color-market-red)]'
+    : tone === 'down'
+      ? 'text-[var(--color-market-blue)]'
+      : 'text-[var(--color-brand-900)]'
+  return (
+    <div className="rounded-[4px] border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-3 py-2">
+      <div className="text-[10px] font-bold text-[var(--color-text-tertiary)]">{label}</div>
+      <div className={`mt-1 break-words text-[14px] font-bold leading-5 ${valueClass}`}>{value}</div>
+      {detail && (
+        <div className="mt-1 break-words font-mono text-[9px] font-semibold leading-4 text-[var(--color-text-tertiary)]">
+          {detail}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function momentumTonePanelClass(tone: PhysicalMomentumTone) {
+  if (tone === 'up') return 'border-red-200 bg-red-50 text-red-700'
+  if (tone === 'down') return 'border-blue-200 bg-blue-50 text-blue-700'
+  if (tone === 'warning') return 'border-amber-200 bg-amber-50 text-amber-800'
+  return 'border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] text-[var(--color-text-secondary)]'
+}
+
+function momentumToneMiniClass(tone: PhysicalMomentumTone) {
+  if (tone === 'up') return 'border-red-200 bg-red-50 text-red-800'
+  if (tone === 'down') return 'border-blue-200 bg-blue-50 text-blue-800'
+  if (tone === 'warning') return 'border-amber-200 bg-amber-50 text-amber-800'
+  return 'border-[var(--color-border-default)] bg-white text-[var(--color-text-secondary)]'
+}
+
+function shortTermPanelClass(label: string) {
+  if (label === '強気優勢') return 'border-red-200 bg-white/70 text-red-800'
+  if (label === '好転候補') return 'border-rose-200 bg-white/70 text-rose-800'
+  if (label === '弱含み注意') return 'border-blue-200 bg-white/70 text-blue-800'
+  if (label === '下落警戒') return 'border-sky-200 bg-white/70 text-sky-900'
+  return 'border-[var(--color-border-default)] bg-white/70 text-[var(--color-text-secondary)]'
+}
+
+function timeframeToneCardClass(tone: PhysicalMomentumTone) {
+  if (tone === 'up') return 'border-red-200 bg-red-50 text-red-800'
+  if (tone === 'down') return 'border-blue-200 bg-blue-50 text-blue-800'
+  if (tone === 'warning') return 'border-amber-200 bg-amber-50 text-amber-900'
+  return 'border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] text-[var(--color-text-secondary)]'
+}
+
+function usMlStatusPanelClass(status: UsMlStatusTone) {
+  if (status === 'ok') return 'border-emerald-200 bg-emerald-50 text-emerald-900'
+  if (status === 'info') return 'border-sky-200 bg-sky-50 text-sky-900'
+  if (status === 'warn') return 'border-amber-200 bg-amber-50 text-amber-900'
+  return 'border-blue-200 bg-blue-50 text-blue-900'
+}
+
+function usMlStatusBadgeClass(status: UsMlStatusTone) {
+  if (status === 'ok') return 'border-emerald-300 bg-white text-emerald-800'
+  if (status === 'info') return 'border-sky-300 bg-white text-sky-800'
+  if (status === 'warn') return 'border-amber-300 bg-white text-amber-800'
+  return 'border-blue-300 bg-white text-blue-800'
+}
+
+export function UsStockDetailClient({
+  ticker,
+  initialQuote,
+  initialNextEarnings,
+  initialError,
+}: {
+  ticker: string
+  initialQuote?: StockQuote | null
+  initialNextEarnings?: NextUsEarnings | null
+  initialError?: string | null
+}) {
+  const normalizedTicker = useMemo(() => ticker.toUpperCase(), [ticker])
+  const [status, setStatus] = useState<Status>(initialQuote ? 'ready' : initialError ? 'error' : 'idle')
+  const [quote, setQuote] = useState<StockQuote | null>(initialQuote ?? null)
+  const [error, setError] = useState<string | null>(initialError ?? null)
+  const [analysisDate, setAnalysisDate] = useState<string | null>(null)
+  const [showActual, setShowActual] = useState(false)
+  const [analysisReview, setAnalysisReview] = useState<StockAnalysisReview | null>(null)
+  const [activeTab, setActiveTab] = useState<UsStockDetailTab>('overview')
+  const [compared, setCompared] = useState(false)
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const date = params.get('date')
+    const validDate = date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : null
+    setAnalysisDate(validDate)
+    setShowActual(Boolean(validDate && params.get('actual') === '1'))
+  }, [normalizedTicker])
+
+  useEffect(() => {
+    if (initialQuote || initialError) return
+    let cancelled = false
+    setStatus('loading')
+    setError(null)
+    fetch(`/api/us/quote/${encodeURIComponent(normalizedTicker)}`, { cache: 'no-store' })
+      .then(async (res) => {
+        if (!res.ok) {
+          const body = await res.json().catch(() => null)
+          throw new Error(body?.message ?? `HTTP ${res.status}`)
+        }
+        return res.json()
+      })
+      .then((data: StockQuote) => {
+        if (cancelled) return
+        setQuote(data)
+        setStatus('ready')
+      })
+      .catch((err) => {
+        if (cancelled) return
+        setError(err instanceof Error ? err.message : String(err))
+        setStatus('error')
+      })
+    return () => { cancelled = true }
+  }, [normalizedTicker, initialQuote, initialError])
+
+  const updateAnalysisDate = useCallback((date: string | null) => {
+    setAnalysisDate(date)
+    if (!date) {
+      setShowActual(false)
+      setAnalysisReview(null)
+    }
+    const url = new URL(window.location.href)
+    if (date) {
+      url.searchParams.set('date', date)
+    } else {
+      url.searchParams.delete('date')
+      url.searchParams.delete('actual')
+    }
+    window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`)
+  }, [])
+
+  const updateShowActual = useCallback((show: boolean) => {
+    setShowActual(show)
+    const url = new URL(window.location.href)
+    if (show && analysisDate) {
+      url.searchParams.set('actual', '1')
+    } else {
+      url.searchParams.delete('actual')
+    }
+    window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`)
+  }, [analysisDate])
+
+  const displayedQuote = useMemo<StockQuote | null>(() => {
+    if (!quote || !analysisDate || !analysisReview?.available) return quote
+    const base = analysisReview.base
+    return {
+      ...quote,
+      price: base.close,
+      change: base.change ?? 0,
+      changePercent: base.changePercent ?? 0,
+      volume: base.volume,
+      priceDate: base.date,
+      fiftyTwoWeekHigh: base.fiftyTwoWeekHigh ?? undefined,
+      fiftyTwoWeekLow: base.fiftyTwoWeekLow ?? undefined,
+      marketCap: undefined,
+    }
+  }, [analysisDate, analysisReview, quote])
+
+  useEffect(() => {
+    if (!quote) return
+    const readTab = () => {
+      const hash = window.location.hash.replace('#', '')
+      if (hash === 'chart' || hash === 'scenario' || hash === 'ml' || hash === 'overview') {
+        setActiveTab(hash)
+      }
+    }
+    const syncCompared = () => setCompared(isComparedSymbol('US', quote.ticker))
+    readTab()
+    syncCompared()
+    recordRecentSymbol({ market: 'US', ticker: quote.ticker, name: quote.name })
+    window.addEventListener('hashchange', readTab)
+    window.addEventListener(WORKSPACE_EVENT, syncCompared)
+    return () => {
+      window.removeEventListener('hashchange', readTab)
+      window.removeEventListener(WORKSPACE_EVENT, syncCompared)
+    }
+  }, [quote])
+
+  const selectTab = (tab: UsStockDetailTab) => {
+    setActiveTab(tab)
+    const url = new URL(window.location.href)
+    url.hash = tab
+    window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`)
+  }
+
+  if (status === 'loading' || status === 'idle') {
+    return (
+      <div className="flex min-h-[420px] w-full items-center justify-center">
+        <div className="inline-flex items-center gap-2 text-[13px] font-bold text-[var(--color-text-secondary)]">
+          <Loader2 size={16} className="animate-spin" />
+          US銘柄データを読み込み中...
+        </div>
+      </div>
+    )
+  }
+
+  if (status === 'error' || !quote) {
+    return (
+      <div className="flex w-full flex-col gap-4">
+        <Link href="/us/screener" className="inline-flex items-center gap-2 text-[12px] font-bold text-[var(--color-brand-700)] hover:text-[var(--color-market-red)]">
+          <ArrowLeft size={14} /> USスクリーナーへ戻る
+        </Link>
+        <Card>
+          <CardHeader title={`${normalizedTicker} のUSデータが見つかりません`} hint="market_ohlcv_daily / US" />
+          <p className="text-[13px] font-semibold text-[var(--color-text-secondary)]">
+            {error ?? '米国株の日次データが未取得です。'} データ更新状況を確認してください。
+          </p>
+        </Card>
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex w-full flex-col gap-5">
+      <div className="stock-detail-sticky border border-[var(--color-border-default)] bg-white shadow-[0_2px_8px_rgba(16,32,52,0.12)]">
+        <div className="flex flex-wrap items-start justify-between gap-3 p-3">
+          <div className="min-w-0">
+            <Link href="/us/screener" className="mb-2 inline-flex items-center gap-2 text-[11px] font-bold text-[var(--color-brand-700)] hover:text-[var(--color-market-red)]">
+              <ArrowLeft size={13} /> USスクリーナー
+            </Link>
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="text-[22px] font-bold leading-none text-[var(--color-brand-900)]">{quote.ticker}</h1>
+              <span className="rounded-[3px] border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-2 py-1 text-[10px] font-bold text-[var(--color-text-secondary)]">
+                {quote.exchange ?? 'US'}
+              </span>
+              <span className="rounded-[3px] border border-[var(--color-border-default)] bg-white px-2 py-1 text-[10px] font-bold text-[var(--color-brand-700)]">
+                US EOD
+              </span>
+            </div>
+            <div className="mt-1.5 truncate text-[13px] font-semibold text-[var(--color-text-secondary)]">{quote.name}</div>
+          </div>
+          <div className="ml-auto flex items-center gap-2 text-right">
+            <WatchlistButton ticker={quote.ticker} market="US" size="md" />
+            <button
+              type="button"
+              onClick={() => setCompared(toggleComparedSymbol({ market: 'US', ticker: quote.ticker, name: quote.name }))}
+              className={`inline-flex h-8 items-center gap-1.5 border px-2.5 text-[11px] font-black ${
+                compared
+                  ? 'border-[var(--color-market-red)] bg-[var(--color-price-up-bg)] text-[var(--color-market-red)]'
+                  : 'border-[var(--color-border-default)] bg-white text-[var(--color-text-secondary)]'
+              }`}
+              title={compared ? '比較から外す' : '比較へ追加'}
+            >
+              <GitCompareArrows size={14} />
+              <span className="hidden sm:inline">{compared ? '比較中' : '比較'}</span>
+            </button>
+            <div>
+              <PriceDisplay
+                value={displayedQuote?.price ?? quote.price}
+                change={quote.isPriceDiscontinuous ? undefined : displayedQuote?.change ?? quote.change}
+                changePercent={quote.isPriceDiscontinuous ? undefined : displayedQuote?.changePercent ?? quote.changePercent}
+                currency="USD"
+                size="lg"
+              />
+              <div className="mt-1 text-[10px] font-semibold text-[var(--color-text-tertiary)]">
+                {analysisDate
+                  ? `過去終値 ${displayedQuote?.priceDate ?? analysisDate}`
+                  : quote.priceDate ? `価格日 ${quote.priceDate}` : 'US株'}
+              </div>
+            </div>
+          </div>
+        </div>
+        {quote.priceQualityWarning && (
+          <div className="mx-3 mb-2 rounded-[4px] border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] font-bold leading-5 text-amber-800">
+            {quote.priceQualityWarning}
+          </div>
+        )}
+        <UsStockDetailTabs active={activeTab} onSelect={selectTab} />
+      </div>
+
+      <HistoricalAnalysisModeBar
+        ticker={quote.ticker}
+        market="US"
+        analysisDate={analysisDate}
+        latestDate={quote.priceDate}
+        showActual={showActual}
+        onDateChange={updateAnalysisDate}
+        onShowActualChange={updateShowActual}
+        onReviewChange={setAnalysisReview}
+      />
+
+      {activeTab === 'overview' && (
+        <>
+          <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-7">
+            <Stat label="出来高" value={fmtNumber(displayedQuote?.volume ?? quote.volume)} />
+            <Stat
+              label={quote.technicals?.averageVolumeObservationCount &&
+                quote.technicals.averageVolumeObservationCount < 30
+                ? `${quote.technicals.averageVolumeObservationCount}日平均出来高`
+                : '30日平均出来高'}
+              value={analysisDate || quote.technicals?.averageVolume30 == null
+                ? '-'
+                : fmtNumber(Math.round(quote.technicals.averageVolume30))}
+              detail={!analysisDate && quote.technicals?.asOfDate ? `基準 ${quote.technicals.asOfDate}` : undefined}
+            />
+            <Stat
+              label="MACD (12・26・9)"
+              value={analysisDate
+                ? '-'
+                : quote.technicals?.macd?.relation === 'golden'
+                  ? 'ゴールデンクロス側'
+                  : quote.technicals?.macd?.relation === 'dead'
+                    ? 'デッドクロス側'
+                    : quote.technicals?.macd?.relation === 'neutral'
+                      ? '中立'
+                      : '-'}
+              detail={!analysisDate && quote.technicals?.macd
+                ? quote.technicals.macd.lastCrossDate
+                  ? `直近${quote.technicals.macd.lastCrossType === 'golden' ? 'GC' : 'DC'} ${quote.technicals.macd.lastCrossDate}`
+                  : `MACD ${quote.technicals.macd.value.toFixed(2)} / Signal ${quote.technicals.macd.signal.toFixed(2)}`
+                : undefined}
+              tone={!analysisDate && quote.technicals?.macd?.relation === 'golden'
+                ? 'up'
+                : !analysisDate && quote.technicals?.macd?.relation === 'dead'
+                  ? 'down'
+                  : 'default'}
+            />
+            <Stat label="時価総額" value={analysisDate ? '-' : fmtMoney(quote.marketCap)} />
+            <Stat label="52週高値" value={displayedQuote?.fiftyTwoWeekHigh == null ? '-' : `$${displayedQuote.fiftyTwoWeekHigh.toFixed(2)}`} />
+            <Stat label="52週安値" value={displayedQuote?.fiftyTwoWeekLow == null ? '-' : `$${displayedQuote.fiftyTwoWeekLow.toFixed(2)}`} />
+            <Stat
+              label="次回決算予定"
+              value={analysisDate
+                ? '-'
+                : initialNextEarnings?.reportDate ?? '予定未取得'}
+              detail={!analysisDate && initialNextEarnings
+                ? `${
+                    initialNextEarnings.hour === 'bmo' ? '寄付前'
+                      : initialNextEarnings.hour === 'dmh' ? '取引時間中'
+                        : initialNextEarnings.hour === 'amc' ? '引け後'
+                          : '時刻未定'
+                  }${
+                    initialNextEarnings.fiscalYear && initialNextEarnings.fiscalQuarter
+                      ? ` / ${initialNextEarnings.fiscalYear} Q${initialNextEarnings.fiscalQuarter}`
+                      : ''
+                  } / Finnhub`
+                : undefined}
+            />
+          </section>
+          <Card>
+            <PerformanceCard
+              ticker={quote.ticker}
+              market="US"
+              embedded
+              analysisDate={analysisDate}
+            />
+          </Card>
+          <UsPhysicalMomentumSection
+            ticker={quote.ticker}
+            analysisDate={analysisDate}
+            changePercent={quote.isPriceDiscontinuous ? null : quote.changePercent}
+          />
+          <UsPhysicalPlanSection ticker={quote.ticker} analysisDate={analysisDate} />
+        </>
+      )}
+
+      {activeTab === 'chart' && (
+        <>
+          <Card size="lg">
+            <CardHeader title="ステージ変遷" hint="日足A/B・週足A/B・月足A/B" />
+            <StageTimeline ticker={quote.ticker} market="US" analysisDate={analysisDate} />
+          </Card>
+          <Card size="lg">
+            <CardHeader title="マルチタイムフレームチャート" hint="日・週・月・年" />
+            <CandlestickChart
+              ticker={quote.ticker}
+              market="US"
+              interval="D"
+              height={460}
+              historyPeriod="all"
+              showTimeframeSelector
+              analysisDate={analysisDate}
+              revealAfterAnalysis={showActual}
+            />
+          </Card>
+        </>
+      )}
+
+      {activeTab === 'scenario' && (
+        <>
+          <TradeScenarioNotebook
+            ticker={quote.ticker}
+            market="US"
+            name={quote.name ?? quote.ticker}
+            quote={displayedQuote}
+            selectedRange={null}
+            context={{
+              exchange: quote.exchange,
+              currency: quote.currency,
+              source: 'US EOD',
+            }}
+          />
+          <ScenarioProjectionChart
+            ticker={quote.ticker}
+            market="US"
+            name={quote.name ?? quote.ticker}
+            analysisDate={analysisDate}
+            showActual={showActual}
+            onUseLatest={() => updateAnalysisDate(null)}
+          />
+          <StockMovePeriods ticker={quote.ticker} market="US" analysisDate={analysisDate} />
+          <StockScenarioAiPanel ticker={quote.ticker} market="US" name={quote.name ?? quote.ticker} analysisDate={analysisDate} />
+        </>
+      )}
+
+      {activeTab === 'ml' && (
+        <>
+          <HistoricalAnalogExplorer ticker={quote.ticker} market="US" analysisDate={analysisDate} />
+          <StockMlInsights ticker={quote.ticker} market="US" analysisDate={analysisDate} />
+          <UsMlStatusSection ticker={quote.ticker} analysisDate={analysisDate} />
+        </>
+      )}
+    </div>
+  )
+}
+
+function UsStockDetailTabs({
+  active,
+  onSelect,
+}: {
+  active: UsStockDetailTab
+  onSelect: (tab: UsStockDetailTab) => void
+}) {
+  const tabs = [
+    { id: 'overview' as const, label: '概要', icon: LayoutDashboard },
+    { id: 'chart' as const, label: 'チャート・6ステージ', icon: ChartCandlestick },
+    { id: 'scenario' as const, label: 'シナリオ', icon: NotebookPen },
+    { id: 'ml' as const, label: '本質類似・ML', icon: BrainCircuit },
+  ]
+  return (
+    <nav className="flex overflow-x-auto border-t border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-2" aria-label="US個別銘柄分析">
+      {tabs.map((tab) => {
+        const Icon = tab.icon
+        return (
+          <button
+            key={tab.id}
+            type="button"
+            onClick={() => onSelect(tab.id)}
+            className={`inline-flex h-9 shrink-0 items-center gap-1.5 border-b-2 px-3 text-[11px] font-black ${
+              active === tab.id
+                ? 'border-[var(--color-market-red)] bg-white text-[var(--color-brand-900)]'
+                : 'border-transparent text-[var(--color-text-secondary)] hover:bg-white'
+            }`}
+            aria-current={active === tab.id ? 'page' : undefined}
+          >
+            <Icon size={14} />
+            {tab.label}
+          </button>
+        )
+      })}
+    </nav>
+  )
+}
+
+function UsMlStatusSection({ ticker, analysisDate }: { ticker: string; analysisDate: string | null }) {
+  const [data, setData] = useState<UsMlStatusResponse | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    setError('')
+    const params = new URLSearchParams()
+    if (analysisDate) params.set('date', analysisDate)
+    const query = params.toString()
+    fetch(`/api/us/ml-status/${encodeURIComponent(ticker)}${query ? `?${query}` : ''}`, { cache: 'no-store' })
+      .then((res) => res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`)))
+      .then((payload: UsMlStatusResponse) => {
+        if (!cancelled) setData(payload)
+      })
+      .catch((e) => {
+        if (!cancelled) setError(e instanceof Error ? e.message : String(e))
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => { cancelled = true }
+  }, [ticker, analysisDate])
+
+  return (
+    <Card size="lg">
+      <CardHeader
+        title="US ML連携ステータス"
+        hint="価格・PMS・特徴量・類似候補・物理ML・検証/RLをUS分析DBから実データ確認"
+      />
+      {loading ? (
+        <div className="rounded-[6px] border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] p-4 text-[12px] font-bold text-[var(--color-text-tertiary)]">
+          US ML連携状況を確認中...
+        </div>
+      ) : error ? (
+        <div className="rounded-[6px] border border-blue-200 bg-blue-50 p-4 text-[12px] font-bold text-blue-900">
+          US MLステータス取得エラー: {error}
+        </div>
+      ) : !data?.dbAvailable ? (
+        <div className="rounded-[6px] border border-blue-200 bg-blue-50 p-4 text-[12px] font-bold leading-6 text-blue-900">
+          US分析DBが見つからないため、ML連携状況を確認できません。価格・チャート側は別データで表示される場合があります。
+        </div>
+      ) : data ? (
+        <div className="grid gap-4">
+          <div className={`rounded-[8px] border p-4 ${usMlStatusPanelClass(data.summary.status)}`}>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <div className="text-[11px] font-black opacity-75">結論</div>
+                <div className="mt-1 text-[20px] font-black leading-7">{data.summary.label}</div>
+                <p className="mt-2 text-[12px] font-bold leading-6">{data.summary.detail}</p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <span className="rounded-full border border-current/20 bg-white/80 px-3 py-1 text-[10px] font-black">
+                  {data.featureSet}
+                </span>
+                <span className="rounded-full border border-current/20 bg-white/80 px-3 py-1 text-[10px] font-black">
+                  市場日 {data.summary.latestMarketDate ?? '-'}
+                </span>
+                {data.summary.healthCheckDate && (
+                  <span className="rounded-full border border-current/20 bg-white/80 px-3 py-1 text-[10px] font-black">
+                    健康診断 {data.summary.healthCheckDate}
+                  </span>
+                )}
+                {analysisDate && (
+                  <span className="rounded-full border border-current/20 bg-white/80 px-3 py-1 text-[10px] font-black">
+                    {analysisDate}時点
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {data.items.map((item) => (
+              <UsMlStatusItemCard key={item.key} item={item} />
+            ))}
+          </div>
+          <div className="rounded-[6px] border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] p-3 text-[11px] font-bold leading-5 text-[var(--color-text-secondary)]">
+            物理ML候補ランキングは「最新トップ候補」を示すため、全銘柄が候補入りするわけではありません。候補外でも、価格・6ステージ・PMS・特徴量・類似検索・観察プランは個別銘柄分析に利用できます。
+          </div>
+        </div>
+      ) : null}
+    </Card>
+  )
+}
+
+function UsMlStatusItemCard({ item }: { item: UsMlStatusItem }) {
+  return (
+    <article className={`rounded-[6px] border p-4 ${usMlStatusPanelClass(item.status)}`}>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="text-[12px] font-black leading-5">{item.label}</div>
+          <div className="mt-1 text-[10px] font-bold opacity-75">
+            {item.date ?? '日付なし'}{item.count != null ? ` / ${item.count.toLocaleString('en-US')}件` : ''}
+          </div>
+        </div>
+        <span className={`shrink-0 rounded-full border px-2 py-1 text-[10px] font-black ${usMlStatusBadgeClass(item.status)}`}>
+          {item.badge}
+        </span>
+      </div>
+      <p className="mt-3 text-[12px] font-bold leading-6">{item.detail}</p>
+      {item.evidence.length > 0 && (
+        <div className="mt-3 flex flex-wrap gap-1.5">
+          {item.evidence.slice(0, 4).map((line) => (
+            <span key={line} className="rounded-full border border-current/15 bg-white/80 px-2 py-1 text-[10px] font-black">
+              {line}
+            </span>
+          ))}
+        </div>
+      )}
+    </article>
+  )
+}
+
+function UsPhysicalMomentumSection({
+  ticker,
+  analysisDate,
+  changePercent,
+}: {
+  ticker: string
+  analysisDate: string | null
+  changePercent: number | null | undefined
+}) {
+  const [data, setData] = useState<PhysicalMomentumResponse | null>(null)
+  const [stageLatest, setStageLatest] = useState<StageHistoryEntry | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    setError('')
+    const params = new URLSearchParams({ market: 'US', limit: '260' })
+    if (analysisDate) params.set('date', analysisDate)
+    const stageParams = new URLSearchParams({ market: 'US', granularity: 'daily', count: '1' })
+    if (analysisDate) {
+      stageParams.set('startDate', '1900-01-01')
+      stageParams.set('endDate', analysisDate)
+    }
+    Promise.allSettled([
+      fetch(`/api/physical-momentum/${encodeURIComponent(ticker)}?${params.toString()}`, { cache: 'no-store' })
+        .then((res) => res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))),
+      fetch(`/api/stage-history/${encodeURIComponent(ticker)}?${stageParams.toString()}`, { cache: 'no-store' })
+        .then((res) => res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))),
+    ])
+      .then(([momentumResult, stageResult]) => {
+        if (cancelled) return
+        if (momentumResult.status === 'fulfilled') {
+          setData(momentumResult.value)
+        } else {
+          setError((momentumResult.reason as Error).message)
+        }
+        if (stageResult.status === 'fulfilled') {
+          const history = Array.isArray(stageResult.value?.history) ? stageResult.value.history : []
+          setStageLatest(history[history.length - 1] ?? null)
+        } else {
+          setStageLatest(null)
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => { cancelled = true }
+  }, [ticker, analysisDate])
+
+  const latest = data?.latest ?? null
+  const momentumHistoryCount = data?.history?.length ?? 0
+  const isMomentumCoverageSparse = momentumHistoryCount < 20
+  const view = latest && !isMomentumCoverageSparse ? buildPhysicalMomentumView({
+    pms: latest.physicalMomentumScore,
+    pfs: latest.physicalForceScore,
+    pes: latest.physicalEnergyScore,
+    trend: data?.trend ?? null,
+    rank: data?.rank ?? null,
+    total: data?.totalRanked ?? 0,
+  }) : null
+  const shortTermCheck: ShortTermCheckResult | null = latest ? buildShortTermCheck({
+    stages: stageLatest ? {
+      dailyA: stageLatest.daily_a_stage,
+      dailyB: stageLatest.daily_b_stage,
+      weeklyA: stageLatest.weekly_a_stage,
+      weeklyB: stageLatest.weekly_b_stage,
+      monthlyA: stageLatest.monthly_a_stage,
+      monthlyB: stageLatest.monthly_b_stage,
+    } : null,
+    physicalMomentumScore: latest.physicalMomentumScore,
+    physicalForceScore: latest.physicalForceScore,
+    changePercent,
+  }) : null
+  const velocityMetric = buildPhysicalRawMetricView('velocity', latest?.velocity)
+  const accelerationMetric = buildPhysicalRawMetricView('acceleration', latest?.acceleration)
+  const forceMetric = buildPhysicalRawMetricView('force', latest?.force)
+
+  return (
+    <Card>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="inline-flex items-center gap-2 text-[13px] font-black text-[var(--color-brand-900)]">
+            <BarChart3 size={15} /> Physical Momentum
+          </div>
+          <p className="mt-1 text-[12px] font-semibold leading-6 text-[var(--color-text-secondary)]">
+            PMSは買い/売りの予測ではなく、時間軸ごとの運動状態です。日足・2日足・週足・月足で結論を分けて見ます。
+            株式分割・併合を補正し、相対出来高と価格水準に依存しないMA傾斜で比較します。
+            {data?.source === 'us_analytics' ? ' US分析DBの学習用データを参照しています。' : ''}
+          </p>
+        </div>
+        {latest && <span className="rounded-full border border-[var(--color-border-default)] bg-white px-3 py-1 text-[11px] font-black text-[var(--color-text-secondary)]">{latest.date}</span>}
+      </div>
+      {loading ? (
+        <p className="mt-3 text-[12px] font-bold text-[var(--color-text-tertiary)]">PMSを読込中...</p>
+      ) : error ? (
+        <p className="mt-3 text-[12px] font-bold text-[var(--color-market-blue)]">PMS取得エラー: {error}</p>
+      ) : !latest ? (
+        <p className="mt-3 text-[12px] font-bold text-[var(--color-text-tertiary)]">
+          US PMSは未計算です。US physical momentum バッチ生成後にここへ表示されます。
+        </p>
+      ) : (
+        <div className="mt-3 grid gap-3">
+          {isMomentumCoverageSparse && (
+            <div className="rounded-[8px] border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] font-bold leading-6 text-amber-800">
+              <div className="font-black">結論は保留中</div>
+              <div>
+                PMS履歴が{momentumHistoryCount}営業日分しかありません。全期間PMSを再生成中または未完了のため、
+                いまはPMS/PFS/PESの数値を投資判断の結論として扱わず、チャート・MA・ステージを優先してください。
+              </div>
+            </div>
+          )}
+          <UsPhysicalTimeframeConclusion views={data?.timeframeViews ?? []} />
+          {!isMomentumCoverageSparse && (
+          <div className={`rounded-[8px] border p-4 ${momentumTonePanelClass(view?.tone ?? 'neutral')}`}>
+            <div className="grid gap-3 lg:grid-cols-[1.15fr_1fr]">
+              <div>
+                <div className="inline-flex items-center rounded-full border border-current/20 bg-white/70 px-2.5 py-1 text-[10px] font-black opacity-80">
+                  日足20営業日の結論
+                </div>
+                <div className="mt-2 text-[24px] font-black leading-tight">{view?.label ?? '方向待ち'}</div>
+                <p className="mt-2 max-w-[760px] text-[13px] font-bold leading-6">
+                  {view?.summary}
+                </p>
+              </div>
+              <div className="rounded-[6px] border border-current/15 bg-white/70 p-3">
+                <div className="text-[10px] font-black opacity-70">根拠</div>
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {view?.badges.map((badge) => (
+                    <span key={badge} className="rounded-full border border-current/20 bg-white px-2 py-1 text-[10px] font-black">
+                      {badge}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            </div>
+            {shortTermCheck && (
+              <div className={`mt-3 rounded-[6px] border px-3 py-2 ${shortTermPanelClass(shortTermCheck.label)}`}>
+                <div className="flex flex-wrap items-baseline gap-2">
+                  <span className="text-[10px] font-black opacity-75">短期チェック</span>
+                  <span className="text-[15px] font-black">{shortTermCheck.label}</span>
+                  <span className="rounded-full border border-current/20 bg-white px-2 py-0.5 font-mono text-[10px] font-black">
+                    {formatShortTermStrength(shortTermCheck.label, shortTermCheck.score)}
+                  </span>
+                </div>
+                <p className="mt-1 text-[11px] font-bold leading-5">{shortTermCheck.description}</p>
+              </div>
+            )}
+          </div>
+          )}
+          <div className="grid gap-3 lg:grid-cols-[0.9fr_1.4fr]">
+            <div className="grid gap-2 sm:grid-cols-3 lg:grid-cols-1">
+              <Stat
+                label="PMS 総合"
+                value={fmtScore(latest.physicalMomentumScore)}
+                detail={describePhysicalScore('pms', latest.physicalMomentumScore)}
+              />
+              <Stat
+                label="PFS 足元の力"
+                value={fmtScore(latest.physicalForceScore)}
+                detail={describePhysicalScore('pfs', latest.physicalForceScore)}
+              />
+              <Stat
+                label="PES 値幅/過熱"
+                value={fmtScore(latest.physicalEnergyScore)}
+                detail={describePhysicalScore('pes', latest.physicalEnergyScore)}
+              />
+            </div>
+            <div className="grid gap-3">
+              <div>
+                <div className="text-[13px] font-black text-[var(--color-text-primary)]">だから、どう見る？</div>
+                <p className="mt-1 text-[11px] font-bold leading-5 text-[var(--color-text-tertiary)]">
+                  買い目線と空売り目線を分けて、次に確認する条件だけを表示します。
+                </p>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
+                {view?.checks.map((check) => (
+                  <div key={`${check.label}-${check.text}`} className={`rounded-[6px] border p-3 ${momentumToneMiniClass(check.tone)}`}>
+                    <div className="text-[10px] font-black opacity-75">{check.label}</div>
+                    <div className="mt-1 text-[12px] font-black leading-5">{check.text}</div>
+                  </div>
+                ))}
+              </div>
+              <div className="grid gap-2 sm:grid-cols-3">
+                <Stat
+                  label={velocityMetric.label}
+                  value={velocityMetric.value}
+                  detail={velocityMetric.detail}
+                  tone={velocityMetric.tone === 'neutral' ? 'default' : velocityMetric.tone}
+                />
+                <Stat
+                  label={accelerationMetric.label}
+                  value={accelerationMetric.value}
+                  detail={accelerationMetric.detail}
+                  tone={accelerationMetric.tone === 'neutral' ? 'default' : accelerationMetric.tone}
+                />
+                <Stat
+                  label={forceMetric.label}
+                  value={forceMetric.value}
+                  detail={forceMetric.detail}
+                  tone={forceMetric.tone === 'neutral' ? 'default' : forceMetric.tone}
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </Card>
+  )
+}
+
+function UsPhysicalTimeframeConclusion({ views }: { views: PhysicalMomentumTimeframeView[] }) {
+  if (views.length === 0) return null
+  const primary = views.find((view) => view.interval === 'D') ?? views[0]
+  const primaryBuilt = buildPhysicalMomentumView({
+    pms: primary.physicalMomentumScore,
+    pfs: primary.physicalForceScore,
+    pes: primary.physicalEnergyScore,
+    trend: primary.trend,
+  })
+
+  return (
+    <div className="rounded-[8px] border border-[var(--color-border-default)] bg-white p-3">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <div>
+          <div className="text-[13px] font-black text-[var(--color-text-primary)]">時間軸別の結論</div>
+          <div className="mt-1 text-[11px] font-bold leading-5 text-[var(--color-text-tertiary)]">
+            総合: 日足は{primaryBuilt.label}。2日足・週足・月足で同じ方向かを確認。
+          </div>
+        </div>
+      </div>
+      <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+        {views.map((view) => {
+          const built = buildPhysicalMomentumView({
+            pms: view.physicalMomentumScore,
+            pfs: view.physicalForceScore,
+            pes: view.physicalEnergyScore,
+            trend: view.trend,
+          })
+          return (
+            <div key={view.interval} className={`rounded-[6px] border p-3 ${timeframeToneCardClass(built.tone)}`}>
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <div className="text-[10px] font-black opacity-70">{view.label}</div>
+                  <div className="mt-1 text-[14px] font-black leading-5">{built.label}</div>
+                </div>
+                <span className="rounded-full border border-current/25 bg-white px-2 py-0.5 font-mono text-[10px] font-black">{view.interval}</span>
+              </div>
+              <div className="mt-2 flex flex-wrap gap-2 font-mono text-[10px] font-black">
+                <span>PMS {describePhysicalScore('pms', view.physicalMomentumScore)} ({fmtScore(view.physicalMomentumScore)})</span>
+                <span>PFS {describePhysicalScore('pfs', view.physicalForceScore)} ({fmtScore(view.physicalForceScore)})</span>
+                <span>PES {describePhysicalScore('pes', view.physicalEnergyScore)} ({fmtScore(view.physicalEnergyScore)})</span>
+              </div>
+              <div className="mt-2 text-[11px] font-bold leading-5">{built.stance}</div>
+              <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] font-bold opacity-75">
+                <span>{view.basis}</span>
+                <span>{view.latestDate ?? '-'}</span>
+                <span>{view.scoreSource === 'market_z' ? '市場比較' : '時間軸内比較'}</span>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+      <p className="mt-2 text-[11px] font-bold leading-5 text-[var(--color-text-tertiary)]">
+        日足はUS市場横断Z、2日足・週足・月足は銘柄内の時間軸Zです。いずれも分布の裾1%を抑えた標準化で、
+        時間軸が違う数値同士は直接比較しません。
+      </p>
+    </div>
+  )
+}
+
+function UsPhysicalPlanSection({ ticker, analysisDate }: { ticker: string; analysisDate: string | null }) {
+  const [plan, setPlan] = useState<UsPhysicalPlanResponse | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    setError('')
+    const params = new URLSearchParams({ market: 'US' })
+    if (analysisDate) params.set('date', analysisDate)
+    fetch(`/api/stock-physical-plan/${encodeURIComponent(ticker)}?${params.toString()}`, { cache: 'no-store' })
+      .then((res) => res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`)))
+      .then((payload) => {
+        if (!cancelled) setPlan(payload)
+      })
+      .catch((e) => {
+        if (!cancelled) setError((e as Error).message)
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => { cancelled = true }
+  }, [ticker, analysisDate])
+
+  return (
+    <Card>
+      <CardHeader
+        title="短期・中期・長期の観察プラン"
+        hint="期間別MA構造・PMS/PFS・物理ML・過去統計を照合"
+      />
+      {loading ? (
+        <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+          {['短期', '中期', '長期', '超長期'].map((label) => (
+            <div key={label} className="min-h-[150px] rounded-[6px] border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] p-3">
+              <div className="text-[12px] font-black text-[var(--color-text-tertiary)]">{label}</div>
+            </div>
+          ))}
+        </div>
+      ) : error ? (
+        <p className="text-[12px] font-bold text-[var(--color-market-blue)]">観察プラン取得エラー: {error}</p>
+      ) : !plan?.available || plan.horizons.length === 0 ? (
+        <div className="rounded-[6px] border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] p-4 text-[12px] font-bold leading-6 text-[var(--color-text-secondary)]">
+          US物理ML特徴量がまだ不足しています。US MLバッチ完了後に、短期・中期・長期の観察プランを表示します。
+        </div>
+      ) : (
+        <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+          {plan.horizons.map((horizon) => (
+            <UsPhysicalPlanCard key={`${horizon.label}-${horizon.horizonDays}`} horizon={horizon} />
+          ))}
+        </div>
+      )}
+      {plan?.available && (
+        <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] font-bold text-[var(--color-text-tertiary)]">
+          <span>特徴量: {plan.featureAsOfDate ?? '-'}</span>
+          <span>価格: {plan.priceAsOfDate ?? '-'}</span>
+          <span>{analysisDate ? `${analysisDate}時点で再構成` : '最新データで再構成'}</span>
+        </div>
+      )}
+    </Card>
+  )
+}
+
+function UsPhysicalPlanCard({ horizon }: { horizon: UsPhysicalPlanHorizon }) {
+  const toneClass =
+    horizon.suggestion.tone === 'positive'
+      ? 'border-red-200 bg-red-50'
+      : horizon.suggestion.tone === 'negative'
+        ? 'border-blue-200 bg-blue-50'
+        : horizon.suggestion.tone === 'warning'
+          ? 'border-amber-200 bg-amber-50'
+          : 'border-[var(--color-border-default)] bg-white'
+  const headlineClass =
+    horizon.suggestion.tone === 'positive'
+      ? 'text-red-700'
+      : horizon.suggestion.tone === 'negative'
+        ? 'text-blue-700'
+        : horizon.suggestion.tone === 'warning'
+          ? 'text-amber-700'
+          : 'text-[var(--color-brand-900)]'
+  const dotClass =
+    horizon.suggestion.tone === 'positive'
+      ? 'bg-red-600'
+      : horizon.suggestion.tone === 'negative'
+        ? 'bg-blue-600'
+        : horizon.suggestion.tone === 'warning'
+          ? 'bg-amber-600'
+          : 'bg-[var(--color-brand-900)]'
+  const topCandidates = horizon.candidates.slice().sort((a, b) => a.rank - b.rank).slice(0, 3)
+
+  return (
+    <article className={`flex min-w-0 flex-col rounded-[6px] border p-3 ${toneClass}`}>
+      <div className="flex items-start justify-between gap-2">
+        <div>
+          <div className="text-[11px] font-black text-[var(--color-text-tertiary)]">{horizon.label}</div>
+          <h3 className={`mt-0.5 text-[14px] font-black leading-5 ${headlineClass}`}>
+            {horizon.suggestion.headline}
+          </h3>
+        </div>
+        <span className="shrink-0 rounded-full border border-current bg-white/70 px-2 py-1 text-[10px] font-black text-[var(--color-text-secondary)]">
+          {horizon.horizonDays}営業日
+        </span>
+      </div>
+      <p className="mt-2 text-[11px] font-bold leading-5 text-[var(--color-brand-900)]">{horizon.suggestion.stance}</p>
+      <UsPhysicalPlanLevels levels={horizon.levels} />
+      <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] font-black text-[var(--color-text-secondary)]">
+        <span className="rounded-full border border-current/15 bg-white/70 px-2 py-1">
+          構造 {physicalPlanDirectionLabel(horizon.suggestion.decision.structureDirection)}
+        </span>
+        <span className="rounded-full border border-current/15 bg-white/70 px-2 py-1">
+          PMS/PFS {physicalPlanDirectionLabel(horizon.suggestion.decision.momentumDirection)}
+        </span>
+        {horizon.suggestion.decision.candidateDirection !== 'wait' && (
+          <span className="rounded-full border border-current/15 bg-white/70 px-2 py-1">
+            物理ML {physicalPlanDirectionLabel(horizon.suggestion.decision.candidateDirection)}
+          </span>
+        )}
+        <span className="rounded-full border border-current/15 bg-white/70 px-2 py-1">
+          {physicalPlanStatisticsLabel(horizon.suggestion.decision.statisticsQuality)}
+        </span>
+      </div>
+      <div className="mt-2 grid grid-cols-3 gap-1.5">
+        <Stat label="的中率" value={fmtRate(horizon.hitRate)} />
+        <Stat label="基準率" value={fmtRate(horizon.baseRate)} />
+        <Stat label="Lift" value={horizon.lift == null ? '-' : horizon.lift.toFixed(2)} />
+      </div>
+      <div className="mt-2 space-y-1">
+        {horizon.suggestion.checklist.slice(0, 2).map((item) => (
+          <div key={item} className="flex gap-2 text-[11px] font-bold leading-5 text-[var(--color-brand-900)]">
+            <span className={`mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full ${dotClass}`} />
+            <span>{item}</span>
+          </div>
+        ))}
+      </div>
+      <div className="mt-2 rounded-[4px] border border-[var(--color-border-default)] bg-white/80 px-2.5 py-2 text-[10px] font-bold leading-5 text-[var(--color-text-secondary)]">
+        <strong className="block text-[var(--color-brand-900)]">{horizon.suggestion.conditionLabel}</strong>
+        {horizon.suggestion.invalidation}
+      </div>
+      <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[10px]">
+        {topCandidates.length > 0 ? topCandidates.map((candidate) => (
+          <span key={`${candidate.direction}-${candidate.rank}`} className="rounded-full border border-[var(--color-border-default)] bg-white px-2 py-1 font-black text-[var(--color-text-secondary)]">
+            {candidate.direction === 'up' ? '上昇' : candidate.direction === 'down' ? '下落' : '待機'} #{candidate.rank}
+          </span>
+        )) : (
+          <span className="rounded-full border border-[var(--color-border-default)] bg-white px-2 py-1 font-black text-[var(--color-text-secondary)]">
+            物理ML上位外
+          </span>
+        )}
+        {horizon.sampleCount != null && (
+          <span className="rounded-full border border-[var(--color-border-default)] bg-white px-2 py-1 font-black text-[var(--color-text-secondary)]">
+            検証 n={horizon.sampleCount.toLocaleString('en-US')}
+          </span>
+        )}
+        <span className="ml-auto font-bold text-[var(--color-text-tertiary)]">
+          {horizon.evaluationDate ? `検証 ${horizon.evaluationDate}` : '検証日 -'}
+        </span>
+      </div>
+    </article>
+  )
+}
+
+function UsPhysicalPlanLevels({ levels }: { levels: UsPhysicalPlanLevels | null }) {
+  if (!levels) return null
+  return (
+    <div className="mt-2">
+      <div className="flex items-center justify-between border-y border-[var(--color-border-default)] py-1.5 text-[10px] font-black text-[var(--color-text-tertiary)]">
+        <span>基準 {levels.baseDate}</span>
+        <strong className="font-mono text-[12px] text-[var(--color-brand-900)]">{fmtUsd(levels.close)}</strong>
+      </div>
+      <div className="mt-1.5 grid grid-cols-3 gap-1.5">
+        <UsPhysicalPlanLevel label="支持" level={levels.support} />
+        <UsPhysicalPlanLevel label="抵抗" level={levels.resistance} />
+        <UsPhysicalPlanLevel label="割れ注意" level={levels.breakdown} />
+      </div>
+    </div>
+  )
+}
+
+function UsPhysicalPlanLevel({ label, level }: { label: string; level: UsPhysicalPlanLevel }) {
+  return (
+    <div className="min-w-0 rounded-[4px] border border-[var(--color-border-default)] bg-white/80 px-2 py-1.5">
+      <div className="text-[9px] font-black text-[var(--color-text-tertiary)]">{label}</div>
+      <div className="mt-0.5 font-mono text-[12px] font-black text-[var(--color-brand-900)]">{fmtUsd(level.value)}</div>
+      <div className="mt-0.5 truncate text-[9px] font-bold text-[var(--color-text-secondary)]">
+        {level.label}{level.distancePct != null ? ` ${fmtPctRaw(level.distancePct)}` : ''}
+      </div>
+    </div>
+  )
+}

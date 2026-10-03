@@ -1,0 +1,424 @@
+// scripts/install-local-web-server.ts
+//
+// Register the production Next.js server and a lightweight health monitor as
+// launchd agents. The monitor restarts the server after three consecutive
+// failed health checks.
+
+import { execFileSync } from 'node:child_process'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { configForDatabase, inspectStorage } from '../lib/storage/external-storage-guard'
+
+const webLabel = 'com.stockboard.web'
+const analogLabel = 'com.stockboard.analog-search'
+const historicalScanLabel = 'com.stockboard.trigger-historical-scan'
+const healthLabel = 'com.stockboard.web-health'
+const cwd = process.cwd()
+const home = os.homedir()
+const uid = typeof process.getuid === 'function' ? process.getuid() : Number(process.env.UID)
+const launchAgentsDir = path.join(home, 'Library', 'LaunchAgents')
+const logDir = path.join(home, 'Library', 'Logs', 'StockBoard')
+const stateDir = path.join(home, 'Library', 'Application Support', 'StockBoard')
+const webPlistPath = path.join(launchAgentsDir, `${webLabel}.plist`)
+const analogPlistPath = path.join(launchAgentsDir, `${analogLabel}.plist`)
+const historicalScanPlistPath = path.join(launchAgentsDir, `${historicalScanLabel}.plist`)
+const healthPlistPath = path.join(launchAgentsDir, `${healthLabel}.plist`)
+const healthScriptPath = path.join(stateDir, 'check-web-health.zsh')
+const nextBin = path.join(cwd, 'node_modules', 'next', 'dist', 'bin', 'next')
+const tsxBin = path.join(cwd, 'node_modules', 'tsx', 'dist', 'cli.mjs')
+const historicalScanScript = path.join(cwd, 'scripts', 'run-trigger-historical-scan-worker.ts')
+const liveDistDir = process.env.STOCKBOARD_WEB_DIST_DIR || '.next-live'
+const buildIdPath = path.join(cwd, liveDistDir, 'BUILD_ID')
+const port = integerEnv('STOCKBOARD_WEB_PORT', 3000, 1, 65535)
+const host = '127.0.0.1'
+const analogPort = integerEnv('STOCKBOARD_ANALOG_PORT', 3105, 1, 65535)
+const heapMb = integerEnv('STOCKBOARD_WEB_MAX_OLD_SPACE_MB', 2048, 512, 8192)
+const analogHeapMb = integerEnv('STOCKBOARD_ANALOG_MAX_OLD_SPACE_MB', 1536, 512, 4096)
+const webDbCacheMb = integerEnv('STOCKBOARD_WEB_DB_CACHE_MB', 32, 8, 256)
+const webDbMmapMb = integerEnv('STOCKBOARD_WEB_DB_MMAP_MB', 256, 0, 1024)
+const analogDbCacheMb = integerEnv('STOCKBOARD_ANALOG_DB_CACHE_MB', 96, 8, 256)
+const analogDbMmapMb = integerEnv('STOCKBOARD_ANALOG_DB_MMAP_MB', 512, 0, 1024)
+const usAnalyticsDbPath = process.env.US_ANALYTICS_DB_PATH?.trim()
+  || '/Volumes/OWC Express 1M2 80G/stockboard-data/us/stockboard-us.db'
+const primaryDbPath = process.env.STOCKBOARD_DB_PATH?.trim() ?? ''
+// Machine-specific settings are supplied at install time, never checked into source.
+if (!primaryDbPath || process.env.EXTERNAL_STORAGE_REQUIRED === 'false') {
+  throw new Error('Production install requires STOCKBOARD_DB_PATH and enabled external storage protection')
+}
+const storageConfig = configForDatabase(primaryDbPath, 'launch-agent-install')
+inspectStorage(storageConfig)
+const storageEnvironment = `
+    <key>EXTERNAL_STORAGE_REQUIRED</key><string>true</string>
+    <key>STOCKBOARD_DB_PATH</key><string>${xmlEscape(primaryDbPath)}</string>
+    <key>STOCK_DATA_MOUNT_PATH</key><string>${xmlEscape(storageConfig.mountPath)}</string>
+    <key>STOCK_DATA_VOLUME_UUID</key><string>${xmlEscape(storageConfig.volumeUuid)}</string>
+    <key>STOCK_DATA_MIN_FREE_BYTES</key><string>${storageConfig.minFreeBytes}</string>
+    <key>STOCK_DATA_MIN_FREE_PERCENT</key><string>${storageConfig.minFreePercent}</string>`
+const healthIntervalSeconds = integerEnv('STOCKBOARD_WEB_HEALTH_INTERVAL_SECONDS', 60, 30, 3600)
+const healthTimeoutSeconds = integerEnv('STOCKBOARD_WEB_HEALTH_TIMEOUT_SECONDS', 20, 5, 120)
+const healthFailureThreshold = integerEnv('STOCKBOARD_WEB_HEALTH_FAILURE_THRESHOLD', 3, 2, 10)
+const pathEnv = [
+  '/opt/homebrew/bin',
+  '/usr/local/bin',
+  '/usr/bin',
+  '/bin',
+  '/usr/sbin',
+  '/sbin',
+].join(':')
+
+function integerEnv(name: string, fallback: number, min: number, max: number): number {
+  const parsed = Number(process.env[name])
+  if (!Number.isInteger(parsed)) return fallback
+  return Math.max(min, Math.min(max, parsed))
+}
+
+function xmlEscape(value: string): string {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&apos;')
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`
+}
+
+function bootout(label: string): void {
+  try {
+    execFileSync('launchctl', ['bootout', `gui/${uid}/${label}`], { stdio: 'ignore' })
+  } catch {
+    // The service may not be registered yet.
+  }
+}
+
+function sleep(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+}
+
+function bootstrap(plistPath: string, attempts = 6): void {
+  let lastError: unknown
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      execFileSync('launchctl', ['bootstrap', `gui/${uid}`, plistPath], {
+        stdio: attempt === attempts ? 'inherit' : 'ignore',
+      })
+      return
+    } catch (error) {
+      lastError = error
+      if (attempt < attempts) sleep(500 * attempt)
+    }
+  }
+  throw lastError
+}
+
+if (!fs.existsSync(nextBin)) {
+  throw new Error(`Next.js executable was not found: ${nextBin}`)
+}
+if (!fs.existsSync(tsxBin) || !fs.existsSync(historicalScanScript)) {
+  throw new Error('Historical Trigger Scan worker runtime is incomplete.')
+}
+if (!fs.existsSync(buildIdPath)) {
+  throw new Error(`Production build is missing: ${buildIdPath}. Run npm run web:deploy before web:install.`)
+}
+
+fs.mkdirSync(launchAgentsDir, { recursive: true })
+fs.mkdirSync(logDir, { recursive: true })
+fs.mkdirSync(stateDir, { recursive: true })
+
+const webPlist = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>${webLabel}</string>
+  <key>WorkingDirectory</key>
+  <string>${xmlEscape(cwd)}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${xmlEscape(process.execPath)}</string>
+    <string>${xmlEscape(nextBin)}</string>
+    <string>start</string>
+    <string>-p</string>
+    <string>${port}</string>
+    <string>-H</string>
+    <string>${host}</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>NODE_ENV</key><string>production</string>
+    <key>STOCKBOARD_PROCESS_ROLE</key><string>web</string>
+    <key>NODE_OPTIONS</key><string>--max-old-space-size=${heapMb}</string>
+    <key>NEXT_DIST_DIR</key><string>${liveDistDir}</string>
+    <key>ANALOG_SEARCH_PROXY_URL</key><string>http://127.0.0.1:${analogPort}</string>
+    <key>PATH</key><string>${xmlEscape(pathEnv)}</string>
+    <key>SKIP_SCHEMA_ENSURE</key><string>1</string>
+    <key>STOCKBOARD_DB_CACHE_MB</key><string>${webDbCacheMb}</string>
+    <key>STOCKBOARD_DB_MMAP_MB</key><string>${webDbMmapMb}</string>
+    <key>STOCKBOARD_DB_READ_CONCURRENCY</key><string>2</string>
+    <key>SQLITE_BUSY_RETRIES</key><string>3</string>
+    <key>SQLITE_BUSY_TIMEOUT_MS</key><string>5000</string>
+    <key>US_SQLITE_BUSY_RETRIES</key><string>3</string>
+    <key>US_ANALYTICS_DB_PATH</key><string>${xmlEscape(usAnalyticsDbPath)}</string>
+    <key>USE_LOCAL_DB</key><string>1</string>
+    ${storageEnvironment}
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+  <key>ProcessType</key>
+  <string>Standard</string>
+  <key>Nice</key>
+  <integer>0</integer>
+  <key>SoftResourceLimits</key>
+  <dict>
+    <key>NumberOfFiles</key><integer>65536</integer>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>${xmlEscape(path.join(logDir, 'web.log'))}</string>
+  <key>StandardErrorPath</key>
+  <string>${xmlEscape(path.join(logDir, 'web.err'))}</string>
+</dict>
+</plist>
+`
+
+const analogPlist = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>${analogLabel}</string>
+  <key>WorkingDirectory</key>
+  <string>${xmlEscape(cwd)}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${xmlEscape(process.execPath)}</string>
+    <string>${xmlEscape(nextBin)}</string>
+    <string>start</string>
+    <string>-p</string>
+    <string>${analogPort}</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>NODE_ENV</key><string>production</string>
+    <key>STOCKBOARD_PROCESS_ROLE</key><string>analog-search</string>
+    <key>NODE_OPTIONS</key><string>--max-old-space-size=${analogHeapMb}</string>
+    <key>NEXT_DIST_DIR</key><string>${liveDistDir}</string>
+    <key>ANALOG_SEARCH_WORKER</key><string>1</string>
+    <key>ANALOG_SEQUENCE_APPROXIMATE_LIMIT</key><string>400</string>
+    <key>ANALOG_SEQUENCE_RECENCY_SHORTLIST_LIMIT</key><string>260</string>
+    <key>PATH</key><string>${xmlEscape(pathEnv)}</string>
+    <key>SKIP_SCHEMA_ENSURE</key><string>1</string>
+    <key>STOCKBOARD_DB_CACHE_MB</key><string>${analogDbCacheMb}</string>
+    <key>STOCKBOARD_DB_MMAP_MB</key><string>${analogDbMmapMb}</string>
+    <key>STOCKBOARD_DB_READ_CONCURRENCY</key><string>2</string>
+    <key>SQLITE_BUSY_RETRIES</key><string>3</string>
+    <key>SQLITE_BUSY_TIMEOUT_MS</key><string>5000</string>
+    <key>US_SQLITE_BUSY_RETRIES</key><string>3</string>
+    <key>US_ANALYTICS_DB_PATH</key><string>${xmlEscape(usAnalyticsDbPath)}</string>
+    <key>USE_LOCAL_DB</key><string>1</string>
+    ${storageEnvironment}
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+  <key>ProcessType</key>
+  <string>Standard</string>
+  <key>Nice</key>
+  <integer>12</integer>
+  <key>SoftResourceLimits</key>
+  <dict>
+    <key>NumberOfFiles</key><integer>65536</integer>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>${xmlEscape(path.join(logDir, 'analog-search.log'))}</string>
+  <key>StandardErrorPath</key>
+  <string>${xmlEscape(path.join(logDir, 'analog-search.err'))}</string>
+</dict>
+</plist>
+`
+
+const historicalScanPlist = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>${historicalScanLabel}</string>
+  <key>WorkingDirectory</key>
+  <string>${xmlEscape(cwd)}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${xmlEscape(process.execPath)}</string>
+    <string>--env-file=.env.local</string>
+    <string>--import</string>
+    <string>tsx</string>
+    <string>${xmlEscape(historicalScanScript)}</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>NODE_ENV</key><string>production</string>
+    <key>STOCKBOARD_PROCESS_ROLE</key><string>historical-scan</string>
+    <key>NODE_OPTIONS</key><string>--max-old-space-size=2048</string>
+    <key>PATH</key><string>${xmlEscape(pathEnv)}</string>
+    <key>SKIP_SCHEMA_ENSURE</key><string>1</string>
+    <key>STOCKBOARD_DB_CACHE_MB</key><string>64</string>
+    <key>STOCKBOARD_DB_MMAP_MB</key><string>256</string>
+    <key>STOCKBOARD_DB_READ_CONCURRENCY</key><string>1</string>
+    <key>SQLITE_BUSY_RETRIES</key><string>3</string>
+    <key>SQLITE_BUSY_TIMEOUT_MS</key><string>60000</string>
+    <key>STOCKBOARD_HISTORICAL_SCAN_DIR</key><string>${xmlEscape(path.join(stateDir, 'historical-trigger-scans'))}</string>
+    <key>STOCKBOARD_OUTCOME_ANALYSIS_DIR</key><string>${xmlEscape(path.join(stateDir, 'trigger-outcomes'))}</string>
+    <key>USE_LOCAL_DB</key><string>1</string>
+    ${storageEnvironment}
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <false/>
+  <key>StartInterval</key>
+  <integer>300</integer>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>Nice</key>
+  <integer>10</integer>
+  <key>SoftResourceLimits</key>
+  <dict>
+    <key>NumberOfFiles</key><integer>65536</integer>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>${xmlEscape(path.join(logDir, 'trigger-historical-scan.log'))}</string>
+  <key>StandardErrorPath</key>
+  <string>${xmlEscape(path.join(logDir, 'trigger-historical-scan.err'))}</string>
+</dict>
+</plist>
+`
+
+const healthScript = `#!/bin/zsh
+set -u
+
+check_service() {
+  local health_url="$1"
+  local label="$2"
+  local count_file="$3"
+
+  local response=$(/usr/bin/curl --silent --max-time ${healthTimeoutSeconds} "$health_url" 2>/dev/null)
+  if [[ "$response" == *'"status":"ok"'* ]] || [[ "$response" == *'"appStatus":"running"'* && "$response" == *'"storageStatus":"unavailable"'* ]]; then
+    /bin/echo 0 > "$count_file"
+    return
+  fi
+
+  local count=0
+  if [[ -f "$count_file" ]]; then
+    count=$(/bin/cat "$count_file" 2>/dev/null || /bin/echo 0)
+  fi
+  if ! [[ "$count" =~ ^[0-9]+$ ]]; then
+    count=0
+  fi
+  count=$((count + 1))
+  /bin/echo "$count" > "$count_file"
+  /bin/echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $label health check failed count=$count"
+
+  if (( count >= ${healthFailureThreshold} )); then
+    /bin/echo 0 > "$count_file"
+    if ! ${shellQuote(process.execPath)} --import tsx ${shellQuote(path.join(cwd, 'scripts', 'storage-safety.ts'))} preflight >/dev/null 2>&1; then
+      /bin/echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) storage unavailable; restart deferred for $label"
+      return
+    fi
+    /bin/launchctl kickstart -k "gui/$UID/$label"
+    /bin/echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) restarted $label after $count failures"
+  fi
+}
+
+check_service \
+  ${shellQuote(`http://127.0.0.1:${port}/api/health`)} \
+  ${shellQuote(webLabel)} \
+  ${shellQuote(path.join(stateDir, 'web-health-failures'))}
+check_service \
+  ${shellQuote(`http://127.0.0.1:${analogPort}/api/health`)} \
+  ${shellQuote(analogLabel)} \
+  ${shellQuote(path.join(stateDir, 'analog-health-failures'))}
+
+exit 0
+`
+
+const healthPlist = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>${healthLabel}</string>
+  <key>WorkingDirectory</key>
+  <string>${xmlEscape(cwd)}</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>NODE_ENV</key><string>production</string>
+    <key>STOCKBOARD_PROCESS_ROLE</key><string>web-health</string>
+    ${storageEnvironment}
+  </dict>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>${xmlEscape(healthScriptPath)}</string>
+  </array>
+  <key>StartInterval</key>
+  <integer>${healthIntervalSeconds}</integer>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>${xmlEscape(path.join(logDir, 'web-health.log'))}</string>
+  <key>StandardErrorPath</key>
+  <string>${xmlEscape(path.join(logDir, 'web-health.err'))}</string>
+</dict>
+</plist>
+`
+
+fs.writeFileSync(webPlistPath, webPlist)
+fs.writeFileSync(analogPlistPath, analogPlist)
+fs.writeFileSync(historicalScanPlistPath, historicalScanPlist)
+fs.writeFileSync(healthPlistPath, healthPlist)
+fs.writeFileSync(healthScriptPath, healthScript, { mode: 0o755 })
+
+bootout(healthLabel)
+bootout(webLabel)
+bootout(analogLabel)
+bootout(historicalScanLabel)
+sleep(750)
+
+bootstrap(analogPlistPath)
+execFileSync('launchctl', ['enable', `gui/${uid}/${analogLabel}`], { stdio: 'inherit' })
+bootstrap(historicalScanPlistPath)
+execFileSync('launchctl', ['enable', `gui/${uid}/${historicalScanLabel}`], { stdio: 'inherit' })
+bootstrap(webPlistPath)
+execFileSync('launchctl', ['enable', `gui/${uid}/${webLabel}`], { stdio: 'inherit' })
+bootstrap(healthPlistPath)
+execFileSync('launchctl', ['enable', `gui/${uid}/${healthLabel}`], { stdio: 'inherit' })
+execFileSync('launchctl', ['kickstart', `gui/${uid}/${webLabel}`], { stdio: 'inherit' })
+
+console.log(`web service: ${webLabel} http://${host}:${port}`)
+console.log(
+  `analog worker: ${analogLabel} http://127.0.0.1:${analogPort} `
+  + `(heap ${analogHeapMb} MB, standard I/O + low CPU priority)`,
+)
+console.log(`historical scan worker: ${historicalScanLabel} (heap 2048 MB, concurrency 1)`)
+console.log(
+  `health monitor: ${healthLabel} checks web + analog every ${healthIntervalSeconds}s `
+  + `(timeout ${healthTimeoutSeconds}s, restart after ${healthFailureThreshold} failures)`,
+)
+console.log(`heap limit: ${heapMb} MB`)
+console.log(`logs: ${path.join(logDir, 'web.log')}`)

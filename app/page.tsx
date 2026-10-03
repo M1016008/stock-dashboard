@@ -8,17 +8,21 @@
 import type { Metadata } from 'next'
 import { Suspense } from 'react'
 import { PageTitle } from '@/components/layout/PageTitle'
-import { StereoscopicSignals } from '@/components/dashboard/StereoscopicSignals'
-import { NewHighVolume } from '@/components/dashboard/NewHighVolume'
-import { SectorHeatmap } from '@/components/dashboard/SectorHeatmap'
-import { CreditShortPanel } from '@/components/dashboard/CreditShortPanel'
-import { PatternStatsTop } from '@/components/dashboard/PatternStatsTop'
-import { EarningsCalendarPanel } from '@/components/dashboard/EarningsCalendarPanel'
-import { getCachedLatestDate } from '@/lib/queries/dashboard-cache'
+import { AiResearchShortcuts } from '@/components/dashboard/AiResearchShortcuts'
+import { DashboardWorkspace } from '@/components/dashboard/DashboardWorkspace'
+import { DashboardEarningsAlerts } from '@/components/dashboard/DashboardEarningsAlerts'
+import { PhysicalMomentumMarket } from '@/components/dashboard/PhysicalMomentumMarket'
+import { DashboardTradeSignalTable } from '@/components/dashboard/DashboardTradeSignalTable'
+import { TradeScenarioOverview } from '@/components/dashboard/TradeScenarioOverview'
+import { DashboardDateSelector } from '@/components/dashboard/DashboardDateSelector'
+import { KabutanMaterialNews } from '@/components/dashboard/KabutanMaterialNews'
+import { getLatestDate } from '@/lib/queries/dashboard'
+import { getDashboardDateOption } from '@/lib/queries/dashboard-cache'
+import { getUniverseFilterMeta, parseUniverseFilter } from '@/lib/market-universe'
 
 export const metadata: Metadata = {
   title: 'ダッシュボード — StockBoard',
-  description: 'J-Quants データに基づく市場サマリーとパターン統計',
+  description: 'J-Quants データに基づく市場サマリーと注目銘柄の確認',
 }
 
 // Yoshio 要望: ページを開いたら毎回最新の DB を反映する (Next のキャッシュを完全無効化)
@@ -48,35 +52,98 @@ function SectionFallback({ height = 80 }: { height?: number }) {
   )
 }
 
-export default async function DashboardPage() {
-  const latest = await getCachedLatestDate()
-  const subtitle = latest ? `${latest} 大引け基準` : 'データ未取り込み'
+export default async function DashboardPage({
+  searchParams,
+}: {
+  searchParams?: Promise<{ date?: string | string[]; universe?: string | string[]; scenarioInterval?: string | string[] }>
+}) {
+  const sp = searchParams ? await searchParams : {}
+  const requested = typeof sp.date === 'string' ? sp.date : null
+  const scenarioInterval = typeof sp.scenarioInterval === 'string' ? sp.scenarioInterval : null
+  const universeFilter = parseUniverseFilter(sp.universe)
+  const universeMeta = getUniverseFilterMeta(universeFilter)
+  const [latestAvailable, requestedDateOption] = await Promise.all([
+    getLatestDate(),
+    getDashboardDateOption(requested),
+  ])
+  const requestedExists = Boolean(requestedDateOption)
+  const selectedDate = requestedExists && requested !== latestAvailable ? requested : null
+  const targetDate = requestedExists ? requested : latestAvailable
+  const dashboardDate = targetDate
+  const subtitle = dashboardDate
+    ? `${dashboardDate} 大引け基準${selectedDate ? '（過去日表示）' : ''}`
+    : 'データ未取り込み'
+  const initialDates = [
+    latestAvailable ? { date: latestAvailable } : null,
+    selectedDate && selectedDate !== latestAvailable ? { date: selectedDate } : null,
+  ].filter((date): date is { date: string } => date != null)
 
   return (
-    <div className="mx-auto flex w-full max-w-[1580px] flex-col gap-5">
+    <div className="flex w-full flex-col gap-5">
       <PageTitle
         title="ダッシュボード"
         subtitle={subtitle}
-        badge="パターン統計 最新反映"
+        badge={universeMeta ? `${universeMeta.shortLabel} / ${selectedDate ? '過去日表示' : '最新データ反映'}` : selectedDate ? '過去日表示' : '最新データ反映'}
       />
-      <Suspense fallback={<SectionFallback height={360} />}>
-        <StereoscopicSignals />
-      </Suspense>
-      <Suspense fallback={<SectionFallback height={420} />}>
-        <NewHighVolume />
-      </Suspense>
-      <Suspense fallback={<SectionFallback height={260} />}>
-        <PatternStatsTop />
-      </Suspense>
-      <Suspense fallback={<SectionFallback height={420} />}>
-        <CreditShortPanel />
-      </Suspense>
-      <Suspense fallback={<SectionFallback height={240} />}>
-        <SectorHeatmap />
-      </Suspense>
-      <Suspense fallback={<SectionFallback height={200} />}>
-        <EarningsCalendarPanel />
-      </Suspense>
+      <DashboardDateSelector dates={initialDates} selectedDate={selectedDate} />
+      <DashboardWorkspace
+        sections={[
+          {
+            id: 'trade-overview',
+            label: '市場判断とシナリオ',
+            content: (
+              <Suspense fallback={<SectionFallback height={300} />}>
+                <TradeScenarioOverview date={dashboardDate} />
+              </Suspense>
+            ),
+          },
+          {
+            id: 'signals',
+            label: '売買候補',
+            content: (
+              <Suspense fallback={<SectionFallback height={430} />}>
+                <DashboardTradeSignalTable date={dashboardDate} universe={universeFilter} scenarioInterval={scenarioInterval} />
+              </Suspense>
+            ),
+          },
+          {
+            id: 'momentum',
+            label: '市場モメンタム',
+            content: (
+              <Suspense fallback={<SectionFallback height={150} />}>
+                <PhysicalMomentumMarket date={dashboardDate} universe={universeFilter} />
+              </Suspense>
+            ),
+          },
+          {
+            id: 'earnings',
+            label: '決算注意',
+            content: (
+              <Suspense fallback={<SectionFallback height={360} />}>
+                <DashboardEarningsAlerts date={dashboardDate} universe={universeFilter} />
+              </Suspense>
+            ),
+          },
+          {
+            id: 'materials',
+            label: '材料',
+            content: (
+              <Suspense fallback={<SectionFallback height={300} />}>
+                <KabutanMaterialNews compact />
+              </Suspense>
+            ),
+          },
+          {
+            id: 'research',
+            label: '次の分析',
+            content: (
+              <Suspense fallback={<SectionFallback height={220} />}>
+                <AiResearchShortcuts date={dashboardDate} universe={universeFilter} />
+              </Suspense>
+            ),
+          },
+        ]}
+      />
     </div>
   )
 }

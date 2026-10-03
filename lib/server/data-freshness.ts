@@ -1,18 +1,31 @@
 import { execAll, execGet } from '@/lib/db/client'
+import { rollBackToJpTradingDate } from '@/lib/server/jp-market-calendar'
 import { getActiveUpdateLocks } from '@/lib/server/update-lock'
+import { MAX_CONTINUOUS_HISTORY_GAP_DAYS, MIN_SNAPSHOT_DATA_POINTS } from '@/lib/snapshots/continuous-ma'
 
 const UPDATE_JOB_TYPES = [
   'update_latest',
   'ohlcv_fetch:jquants',
   'snapshot_compute',
+  'post_ohlcv_refresh',
   'feature_compute',
+  'technical_signals',
+  'ml_features',
+  'ml_context_features',
+  'ml_physics_features',
+  'ml_physics_candidates',
+  'ml_current_similars',
+  'ml_similarity_evaluate',
+  'ml_rl_policy',
+  'ml_feature_health',
+  'serving_backtest',
   'indices',
   'earnings_calendar',
   'dashboard_cache',
 ]
-const RUNNING_JOB_TTL_SECONDS = 6 * 60 * 60
+const LOCK_MANAGED_JOB_TYPES = new Set(['update_latest', 'post_ohlcv_refresh'])
+const RUNNING_JOB_TTL_SECONDS = 45 * 60
 const MIN_COVERAGE_RATIO = 1
-const MIN_SNAPSHOT_OHLCV_ROWS = 5
 const JQUANTS_DAILY_READY_MINUTES = 16 * 60 + 30
 
 type MaxDateRow = {
@@ -42,6 +55,17 @@ export type DataFreshness = {
   latestIndexDate: string | null
   latestEarningsDate: string | null
   latestDashboardCacheDate: string | null
+  latestPhysicalMomentumDate: string | null
+  latestPhysicalMomentumScoreDate: string | null
+  latestFeatureDate: string | null
+  latestModelFeatureDate: string | null
+  latestMlFeatureDate: string | null
+  latestMlCandidateDate: string | null
+  latestMlPredictionDate: string | null
+  latestMlPhysicsFeatureDate: string | null
+  latestMlPhysicsCandidateDate: string | null
+  latestMlSimilarDate: string | null
+  latestMlRlPolicyDate: string | null
   activeTickerCount: number
   staleOhlcvTickerCount: number
   staleSnapshotTickerCount: number
@@ -52,6 +76,16 @@ export type DataFreshness = {
   needsOhlcvUpdate: boolean
   needsSnapshotUpdate: boolean
   needsDashboardCacheUpdate: boolean
+  needsPhysicalMomentumUpdate: boolean
+  needsFeatureUpdate: boolean
+  needsModelFeatureUpdate: boolean
+  needsMlFeatureUpdate: boolean
+  needsMlCandidateUpdate: boolean
+  needsMlPredictionUpdate: boolean
+  needsMlPhysicsFeatureUpdate: boolean
+  needsMlPhysicsCandidateUpdate: boolean
+  needsMlSimilarUpdate: boolean
+  needsMlRlPolicyUpdate: boolean
   needsUpdate: boolean
   running: boolean
   runningJobs: RunningJob[]
@@ -87,29 +121,41 @@ function formatDate(date: Date): string {
   return `${y}-${m}-${d}`
 }
 
-function previousWeekday(date: Date): Date {
-  const d = new Date(date)
-  do {
-    d.setUTCDate(d.getUTCDate() - 1)
-  } while (d.getUTCDay() === 0 || d.getUTCDay() === 6)
-  return d
-}
-
 export function expectedLatestTradingDate(now = new Date()): string {
   const parts = jstParts(now)
   const jstDate = new Date(Date.UTC(parts.year, parts.month - 1, parts.day))
-  const weekday = jstDate.getUTCDay()
   const minuteOfDay = parts.hour * 60 + parts.minute
 
-  if (weekday === 0) return formatDate(previousWeekday(jstDate))
-  if (weekday === 6) return formatDate(previousWeekday(jstDate))
-  if (minuteOfDay < JQUANTS_DAILY_READY_MINUTES) return formatDate(previousWeekday(jstDate))
-  return formatDate(jstDate)
+  if (minuteOfDay < JQUANTS_DAILY_READY_MINUTES) {
+    jstDate.setUTCDate(jstDate.getUTCDate() - 1)
+  }
+  return formatDate(rollBackToJpTradingDate(jstDate))
 }
 
 async function maxDate(tableName: string, columnName: string): Promise<string | null> {
   const row = await execGet<MaxDateRow>(`SELECT MAX(${columnName}) AS maxDate FROM ${tableName}`)
   return row?.maxDate ?? null
+}
+
+async function loadLatestPhysicalMomentumDate(requireScores: boolean): Promise<string | null> {
+  const scoreFilter = requireScores
+    ? `
+        AND physical_momentum_score IS NOT NULL
+        AND physical_force_score IS NOT NULL
+        AND physical_energy_score IS NOT NULL
+      `
+    : ''
+  const row = await execGet<{ date: string | null }>(
+    `
+      SELECT date
+      FROM physical_momentum_metrics
+      WHERE market = 'JP'
+        ${scoreFilter}
+      ORDER BY date DESC
+      LIMIT 1
+    `,
+  )
+  return row?.date ?? null
 }
 
 async function dateCoverage(tableName: string): Promise<{ latestCount: number; baselineCount: number }> {
@@ -143,6 +189,17 @@ export async function getDataFreshness(now = new Date()): Promise<DataFreshness>
     latestIndexDate,
     latestEarningsDate,
     latestDashboardCacheDate,
+    latestPhysicalMomentumDate,
+    latestPhysicalMomentumScoreDate,
+    latestFeatureDate,
+    latestModelFeatureDate,
+    latestMlFeatureDate,
+    latestMlCandidateDate,
+    latestMlPredictionDate,
+    latestMlPhysicsFeatureDate,
+    latestMlPhysicsCandidateDate,
+    latestMlSimilarDate,
+    latestMlRlPolicyDate,
     ohlcvCoverage,
     snapshotCoverage,
     snapshotEligibleCoverage,
@@ -154,6 +211,17 @@ export async function getDataFreshness(now = new Date()): Promise<DataFreshness>
     maxDate('indices_daily', 'date'),
     maxDate('earnings_calendar', 'announce_date'),
     maxDate('dashboard_cache', 'date'),
+    loadLatestPhysicalMomentumDate(false),
+    loadLatestPhysicalMomentumDate(true),
+    maxDate('feature_snapshots', 'date'),
+    maxDate('model_features', 'date'),
+    maxDate('ml_feature_vectors', 'date'),
+    maxDate('serving_ml_candidates', 'as_of_date'),
+    maxDate('ml_predictions', 'as_of_date'),
+    maxDate('ml_feature_vectors_v2', 'date'),
+    maxDate('serving_ml_physics_candidates', 'as_of_date'),
+    maxDate('serving_current_similars', 'as_of_date'),
+    maxDate('ml_rl_policy_evaluations', 'evaluation_date'),
     dateCoverage('ohlcv_daily'),
     dateCoverage('daily_snapshots'),
     execGet<{ eligibleSnapshotRows: number }>(
@@ -170,15 +238,42 @@ export async function getDataFreshness(now = new Date()): Promise<DataFreshness>
           AND (
             SELECT COUNT(*)
             FROM (
-              SELECT 1
+              SELECT h.date
               FROM ohlcv_daily h
               WHERE h.ticker = u.ticker
                 AND h.date <= ?
+              ORDER BY h.date DESC
               LIMIT ?
             )
           ) >= ?
+          AND NOT EXISTS (
+            SELECT 1
+            FROM (
+              SELECT
+                date,
+                LEAD(date) OVER (ORDER BY date) AS next_date
+              FROM (
+                SELECT h.date
+                FROM ohlcv_daily h
+                WHERE h.ticker = u.ticker
+                  AND h.date <= ?
+                ORDER BY h.date DESC
+                LIMIT ?
+              )
+            )
+            WHERE next_date IS NOT NULL
+              AND julianday(next_date) - julianday(date) > ?
+          )
       `,
-      [expectedTradingDate, expectedTradingDate, MIN_SNAPSHOT_OHLCV_ROWS, MIN_SNAPSHOT_OHLCV_ROWS],
+      [
+        expectedTradingDate,
+        expectedTradingDate,
+        MIN_SNAPSHOT_DATA_POINTS,
+        MIN_SNAPSHOT_DATA_POINTS,
+        expectedTradingDate,
+        MIN_SNAPSHOT_DATA_POINTS,
+        MAX_CONTINUOUS_HISTORY_GAP_DAYS,
+      ],
     ),
     execGet<{ expectedRows: number }>(
       `SELECT expected_rows AS expectedRows FROM jquants_daily_coverage WHERE date = ?`,
@@ -211,13 +306,32 @@ export async function getDataFreshness(now = new Date()): Promise<DataFreshness>
             AND (
               SELECT COUNT(*)
               FROM (
-                SELECT 1
+                SELECT h.date
                 FROM ohlcv_daily h
                 WHERE h.ticker = u.ticker
                   AND h.date <= ?
+                ORDER BY h.date DESC
                 LIMIT ?
               )
             ) >= ?
+            AND NOT EXISTS (
+              SELECT 1
+              FROM (
+                SELECT
+                  date,
+                  LEAD(date) OVER (ORDER BY date) AS next_date
+                FROM (
+                  SELECT h.date
+                  FROM ohlcv_daily h
+                  WHERE h.ticker = u.ticker
+                    AND h.date <= ?
+                  ORDER BY h.date DESC
+                  LIMIT ?
+                )
+              )
+              WHERE next_date IS NOT NULL
+                AND julianday(next_date) - julianday(date) > ?
+            )
             AND NOT EXISTS (
               SELECT 1
               FROM daily_snapshots s
@@ -233,8 +347,11 @@ export async function getDataFreshness(now = new Date()): Promise<DataFreshness>
         expectedTradingDate,
         expectedTradingDate,
         expectedTradingDate,
-        MIN_SNAPSHOT_OHLCV_ROWS,
-        MIN_SNAPSHOT_OHLCV_ROWS,
+        MIN_SNAPSHOT_DATA_POINTS,
+        MIN_SNAPSHOT_DATA_POINTS,
+        expectedTradingDate,
+        MIN_SNAPSHOT_DATA_POINTS,
+        MAX_CONTINUOUS_HISTORY_GAP_DAYS,
         expectedTradingDate,
       ],
     ),
@@ -278,7 +395,12 @@ export async function getDataFreshness(now = new Date()): Promise<DataFreshness>
     startedAt: lock.startedAt,
     source: 'update_locks',
   }))
-  const runningJobs = [...lockRunningJobs, ...batchRunningJobs]
+  const activeLockJobTypes = new Set(activeLocks.map((lock) => lock.jobType))
+  const reliableBatchRunningJobs = batchRunningJobs.filter((job) => {
+    if (!LOCK_MANAGED_JOB_TYPES.has(job.jobType)) return true
+    return activeLockJobTypes.has(job.jobType)
+  })
+  const runningJobs = [...lockRunningJobs, ...reliableBatchRunningJobs]
 
   const activeTickerCount = Number(tickerCoverage?.activeTickerCount ?? 0)
   const staleOhlcvTickerCount = Number(tickerCoverage?.staleOhlcvTickerCount ?? activeTickerCount)
@@ -307,6 +429,41 @@ export async function getDataFreshness(now = new Date()): Promise<DataFreshness>
   const needsDashboardCacheUpdate =
     !!latestSnapshotDate
     && (!latestDashboardCacheDate || latestDashboardCacheDate < latestSnapshotDate)
+  const needsPhysicalMomentumUpdate =
+    !!latestOhlcvDate
+    && (
+      !latestPhysicalMomentumDate
+      || latestPhysicalMomentumDate < latestOhlcvDate
+      || !latestPhysicalMomentumScoreDate
+      || latestPhysicalMomentumScoreDate < latestOhlcvDate
+    )
+  const needsFeatureUpdate =
+    !!latestSnapshotDate
+    && (!latestFeatureDate || latestFeatureDate < latestSnapshotDate)
+  const needsModelFeatureUpdate =
+    !!latestSnapshotDate
+    && (!latestModelFeatureDate || latestModelFeatureDate < latestSnapshotDate)
+  const needsMlFeatureUpdate =
+    !!latestSnapshotDate
+    && (!latestMlFeatureDate || latestMlFeatureDate < latestSnapshotDate)
+  const needsMlCandidateUpdate =
+    !!latestMlFeatureDate
+    && (!latestMlCandidateDate || latestMlCandidateDate < latestMlFeatureDate)
+  const needsMlPredictionUpdate =
+    !!latestMlCandidateDate
+    && (!latestMlPredictionDate || latestMlPredictionDate < latestMlCandidateDate)
+  const needsMlPhysicsFeatureUpdate =
+    !!latestSnapshotDate
+    && (!latestMlPhysicsFeatureDate || latestMlPhysicsFeatureDate < latestSnapshotDate)
+  const needsMlPhysicsCandidateUpdate =
+    !!latestMlPhysicsFeatureDate
+    && (!latestMlPhysicsCandidateDate || latestMlPhysicsCandidateDate < latestMlPhysicsFeatureDate)
+  const needsMlSimilarUpdate =
+    !!latestMlPhysicsFeatureDate
+    && (!latestMlSimilarDate || latestMlSimilarDate < latestMlPhysicsFeatureDate)
+  const needsMlRlPolicyUpdate =
+    !!latestMlPhysicsFeatureDate
+    && (!latestMlRlPolicyDate || latestMlRlPolicyDate < latestMlPhysicsFeatureDate)
 
   return {
     expectedTradingDate,
@@ -315,6 +472,17 @@ export async function getDataFreshness(now = new Date()): Promise<DataFreshness>
     latestIndexDate,
     latestEarningsDate,
     latestDashboardCacheDate,
+    latestPhysicalMomentumDate,
+    latestPhysicalMomentumScoreDate,
+    latestFeatureDate,
+    latestModelFeatureDate,
+    latestMlFeatureDate,
+    latestMlCandidateDate,
+    latestMlPredictionDate,
+    latestMlPhysicsFeatureDate,
+    latestMlPhysicsCandidateDate,
+    latestMlSimilarDate,
+    latestMlRlPolicyDate,
     activeTickerCount,
     staleOhlcvTickerCount,
     staleSnapshotTickerCount,
@@ -325,7 +493,30 @@ export async function getDataFreshness(now = new Date()): Promise<DataFreshness>
     needsOhlcvUpdate,
     needsSnapshotUpdate,
     needsDashboardCacheUpdate,
-    needsUpdate: needsOhlcvUpdate || needsSnapshotUpdate || needsDashboardCacheUpdate,
+    needsPhysicalMomentumUpdate,
+    needsFeatureUpdate,
+    needsModelFeatureUpdate,
+    needsMlFeatureUpdate,
+    needsMlCandidateUpdate,
+    needsMlPredictionUpdate,
+    needsMlPhysicsFeatureUpdate,
+    needsMlPhysicsCandidateUpdate,
+    needsMlSimilarUpdate,
+    needsMlRlPolicyUpdate,
+    needsUpdate:
+      needsOhlcvUpdate
+      || needsSnapshotUpdate
+      || needsDashboardCacheUpdate
+      || needsPhysicalMomentumUpdate
+      || needsFeatureUpdate
+      || needsModelFeatureUpdate
+      || needsMlFeatureUpdate
+      || needsMlCandidateUpdate
+      || needsMlPredictionUpdate
+      || needsMlPhysicsFeatureUpdate
+      || needsMlPhysicsCandidateUpdate
+      || needsMlSimilarUpdate
+      || needsMlRlPolicyUpdate,
     running: runningJobs.length > 0,
     runningJobs,
     lastRun: lastRun ?? null,

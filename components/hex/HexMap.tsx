@@ -5,48 +5,43 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { Search, Copy, Check } from 'lucide-react'
+import { replaceCurrentUrlFilters } from '@/lib/client/url-filter-state'
 import { STAGE_BG_COLORS, STAGE_BORDER_COLORS, STAGE_LABELS } from '@/lib/hex-stage'
+import { MarginBadges } from '@/components/ui/MarginBadges'
 import { StageDots } from '@/components/ui/StageDots'
 
-interface Stock {
+export interface HexMapStock {
   code: string
   name: string
   sector_large: string
   market_cap: number
-  stage: number
-  stage_a?: number | null
-  stage_b?: number | null
+  stage: number | null
   sector_small?: string | null
-  price: number
-  daily_change?: number
-  weekly_change?: number
-  monthly_change?: number
-  months3_change?: number
-  months6_change?: number
-  ytd_change?: number
+  sector17_name?: string | null
+  sector33_name?: string | null
+  market_segment?: string | null
+  margin_type?: string | null
+  price: number | null
+  daily_change?: number | null
+  weekly_change?: number | null
+  monthly_change?: number | null
+  months3_change?: number | null
+  months6_change?: number | null
+  ytd_change?: number | null
+  data_status?: 'ready' | 'partial_stage' | 'snapshot_pending' | 'price_pending'
   daily_a_stage?: number | null
   daily_b_stage?: number | null
   weekly_a_stage?: number | null
   weekly_b_stage?: number | null
   monthly_a_stage?: number | null
   monthly_b_stage?: number | null
-  prev_daily_a_stage?: number | null
-  prev_daily_b_stage?: number | null
-  prev_weekly_a_stage?: number | null
-  prev_weekly_b_stage?: number | null
-  prev_monthly_a_stage?: number | null
-  prev_monthly_b_stage?: number | null
-  prev_prev_daily_a_stage?: number | null
-  prev_prev_daily_b_stage?: number | null
-  prev_prev_weekly_a_stage?: number | null
-  prev_prev_weekly_b_stage?: number | null
-  prev_prev_monthly_a_stage?: number | null
-  prev_prev_monthly_b_stage?: number | null
   sma_angles?: { sma5: number | null; sma25: number | null; sma75: number | null; sma300: number | null }
   prev_sma_angles?: { sma5: number | null; sma25: number | null; sma75: number | null; sma300: number | null }
-  prev_prev_sma_angles?: { sma5: number | null; sma25: number | null; sma75: number | null; sma300: number | null }
+  ml_candidate_direction?: 'up' | 'down' | null
+  ml_candidate_rank?: number | null
+  ml_candidate_summary?: string | null
 }
 
 type Timeframe = 'daily' | 'weekly' | 'monthly'
@@ -57,12 +52,12 @@ const TIMEFRAMES: { key: Timeframe; label: string }[] = [
   { key: 'monthly', label: '月足' },
 ]
 
-const formatPercent = (val?: number) => {
+const formatPercent = (val?: number | null) => {
   if (val === undefined || val === null) return '-'
   return `${val > 0 ? '+' : ''}${val.toFixed(2)}%`
 }
 
-const getPercentStyle = (val?: number | string): React.CSSProperties => {
+const getPercentStyle = (val?: number | string | null): React.CSSProperties => {
   if (val === undefined || val === null || val === '') return { color: '#9ca3af' }
   const num = Number(val)
   if (isNaN(num)) return { color: '#9ca3af' }
@@ -71,16 +66,49 @@ const getPercentStyle = (val?: number | string): React.CSSProperties => {
   return { color: '#6b7280' }
 }
 
-const formatAngle = (angle: number | null | undefined) => {
-  if (angle === null || angle === undefined) return '―'
-  return `${angle > 0 ? '+' : ''}${angle}°`
+type FlowTone = 'up' | 'down' | 'flat'
+
+function angleFlow(angle: number | null | undefined, prev: number | null | undefined) {
+  if (angle == null || !Number.isFinite(angle)) return { label: '未計算', tone: 'flat' as FlowTone, pct: '-' }
+  const pct = `${angle > 0 ? '+' : ''}${angle.toFixed(2)}%`
+  const direction = angle > 0.08 ? '上向き' : angle < -0.08 ? '下向き' : '横ばい'
+  const delta = prev == null || !Number.isFinite(prev) ? null : angle - prev
+  if (delta == null || Math.abs(delta) < 0.04) {
+    return {
+      label: direction === '横ばい' ? '横ばい維持' : `${direction}維持`,
+      tone: direction === '上向き' ? 'up' as FlowTone : direction === '下向き' ? 'down' as FlowTone : 'flat' as FlowTone,
+      pct,
+    }
+  }
+  if (delta > 0) {
+    return {
+      label: direction === '下向き' ? '下げ鈍化' : direction === '横ばい' ? '上向き化' : '上向き加速',
+      tone: direction === '下向き' ? 'flat' as FlowTone : 'up' as FlowTone,
+      pct,
+    }
+  }
+  return {
+    label: direction === '上向き' ? '上げ鈍化' : direction === '横ばい' ? '下向き化' : '下向き加速',
+    tone: direction === '上向き' ? 'flat' as FlowTone : 'down' as FlowTone,
+    pct,
+  }
 }
 
-const getAngleStyle = (angle: number | null | undefined): React.CSSProperties => {
-  if (angle === null || angle === undefined) return { color: '#9ca3af' }
-  if (angle > 0) return { color: '#16a34a', fontWeight: 'bold' }
-  if (angle < 0) return { color: '#ef4444', fontWeight: 'bold' }
-  return { color: '#6b7280' }
+function maAlignmentLabel(stock: HexMapStock) {
+  const values = [stock.sma_angles?.sma5, stock.sma_angles?.sma25, stock.sma_angles?.sma75]
+  const up = values.filter((v) => v != null && v > 0.08).length
+  const down = values.filter((v) => v != null && v < -0.08).length
+  if (up >= 3) return { label: '短中長の上向きが揃う', tone: 'up' as FlowTone }
+  if (down >= 3) return { label: '短中長の下向きが揃う', tone: 'down' as FlowTone }
+  if (up >= 2) return { label: '上向き優勢', tone: 'up' as FlowTone }
+  if (down >= 2) return { label: '下向き優勢', tone: 'down' as FlowTone }
+  return { label: '方向確認中', tone: 'flat' as FlowTone }
+}
+
+function flowToneClass(tone: FlowTone) {
+  if (tone === 'up') return 'border-green-200 bg-green-50 text-green-700'
+  if (tone === 'down') return 'border-red-200 bg-red-50 text-red-700'
+  return 'border-gray-200 bg-gray-50 text-gray-600'
 }
 
 type CellKey = string // "b-a"
@@ -92,6 +120,25 @@ const emptySelections = (): Selections => ({
   monthly: new Set(),
 })
 
+const CELL_FILTER_PARAMS: Record<Timeframe, string> = {
+  daily: 'dailyCells',
+  weekly: 'weeklyCells',
+  monthly: 'monthlyCells',
+}
+
+function parseCellSelection(value: string | null): Set<CellKey> {
+  if (!value) return new Set()
+  return new Set(value.split(',').filter((key) => /^[1-6]-[1-6]$/.test(key)))
+}
+
+function initialSelections(searchParams: ReturnType<typeof useSearchParams>): Selections {
+  return {
+    daily: parseCellSelection(searchParams.get(CELL_FILTER_PARAMS.daily)),
+    weekly: parseCellSelection(searchParams.get(CELL_FILTER_PARAMS.weekly)),
+    monthly: parseCellSelection(searchParams.get(CELL_FILTER_PARAMS.monthly)),
+  }
+}
+
 const MARKET_CAP_RANGES: { id: string; label: string }[] = [
   { id: 'all',      label: '全て' },
   { id: '-50',      label: '〜50億' },
@@ -100,17 +147,42 @@ const MARKET_CAP_RANGES: { id: string; label: string }[] = [
   { id: '300-1000', label: '300〜1,000億' },
   { id: '1000-',    label: '1,000億〜' },
 ]
+const US_MARKET_CAP_RANGES: { id: string; label: string }[] = [
+  { id: 'all', label: '全て' },
+  { id: '-300m', label: '〜$300M' },
+  { id: '300m-2b', label: '$300M〜$2B' },
+  { id: '2b-10b', label: '$2B〜$10B' },
+  { id: '10b-200b', label: '$10B〜$200B' },
+  { id: '200b-', label: '$200B〜' },
+]
 
 // 銘柄テーブルの初期表示件数 /「もっと見る」増分。4,000+ 行の一括描画を避ける。
 const ROW_STEP = 100
 
-export default function HexMap({ data }: { data: Stock[]; timeframe?: Timeframe }) {
+export default function HexMap({ data, market = 'JP' }: { data: HexMapStock[]; timeframe?: Timeframe; market?: 'JP' | 'US' }) {
+  const isUs = market === 'US'
   const router = useRouter()
+  const searchParams = useSearchParams()
+  const marketCapRanges = isUs ? US_MARKET_CAP_RANGES : MARKET_CAP_RANGES
   const [copiedCode, setCopiedCode] = useState<string | null>(null)
-  const [searchTerm, setSearchTerm] = useState('')
-  const [selections, setSelections] = useState<Selections>(emptySelections)
-  const [selectedMarketCapRange, setSelectedMarketCapRange] = useState<string>('all')
+  const [searchTerm, setSearchTerm] = useState(() => searchParams.get('q') ?? '')
+  const [selections, setSelections] = useState<Selections>(() => initialSelections(searchParams))
+  const [selectedMarketCapRange, setSelectedMarketCapRange] = useState<string>(() => {
+    const value = searchParams.get('marketCap') ?? 'all'
+    return marketCapRanges.some((range) => range.id === value) ? value : 'all'
+  })
   const [rowLimit, setRowLimit] = useState(ROW_STEP)
+  const hasMarketCapData = data.some((stock) => stock.market_cap > 0)
+
+  useEffect(() => {
+    replaceCurrentUrlFilters({
+      q: searchTerm.trim(),
+      marketCap: selectedMarketCapRange === 'all' ? null : selectedMarketCapRange,
+      [CELL_FILTER_PARAMS.daily]: Array.from(selections.daily).sort().join(','),
+      [CELL_FILTER_PARAMS.weekly]: Array.from(selections.weekly).sort().join(','),
+      [CELL_FILTER_PARAMS.monthly]: Array.from(selections.monthly).sort().join(','),
+    })
+  }, [searchTerm, selectedMarketCapRange, selections])
 
   // 選択数の合計（任意のセルが1つでも選ばれているか）
   const totalSelectedCells = selections.daily.size + selections.weekly.size + selections.monthly.size
@@ -127,8 +199,8 @@ export default function HexMap({ data }: { data: Stock[]; timeframe?: Timeframe 
       for (const tf of tfs) {
         const sel = selections[tf]
         if (sel.size === 0) continue
-        const a = d[`${tf}_a_stage` as keyof Stock] as number | null | undefined
-        const b = d[`${tf}_b_stage` as keyof Stock] as number | null | undefined
+        const a = d[`${tf}_a_stage` as keyof HexMapStock] as number | null | undefined
+        const b = d[`${tf}_b_stage` as keyof HexMapStock] as number | null | undefined
         if (a == null || b == null) { pass = false; break }
         if (!sel.has(`${b}-${a}`)) { pass = false; break }
       }
@@ -137,7 +209,18 @@ export default function HexMap({ data }: { data: Stock[]; timeframe?: Timeframe 
     return result
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, selections, hasSelection])
-  const filterByMarketCap = (stock: Stock) => {
+  const filterByMarketCap = (stock: HexMapStock) => {
+    if (isUs) {
+      const val = stock.market_cap
+      switch (selectedMarketCapRange) {
+        case '-300m': return val > 0 && val < 300e6
+        case '300m-2b': return val >= 300e6 && val < 2e9
+        case '2b-10b': return val >= 2e9 && val < 10e9
+        case '10b-200b': return val >= 10e9 && val < 200e9
+        case '200b-': return val >= 200e9
+        default: return true
+      }
+    }
     const val = stock.market_cap / 100000000
     switch (selectedMarketCapRange) {
       case '-50': return val < 50
@@ -248,7 +331,7 @@ export default function HexMap({ data }: { data: Stock[]; timeframe?: Timeframe 
               <>
                 <span className="text-gray-300 leading-none">|</span>
                 <span className="px-2.5 py-1 text-[11px] leading-none bg-gray-50 border border-gray-200 rounded-full">
-                  {MARKET_CAP_RANGES.find((r) => r.id === selectedMarketCapRange)?.label}
+                  {marketCapRanges.find((r) => r.id === selectedMarketCapRange)?.label}
                 </span>
               </>
             )}
@@ -258,34 +341,39 @@ export default function HexMap({ data }: { data: Stock[]; timeframe?: Timeframe 
         {/* 時価総額フィルタ */}
         <div className="flex flex-wrap gap-1.5 items-center">
           <span className="text-[11px] text-gray-500 mr-1 leading-none">時価総額</span>
-          {MARKET_CAP_RANGES.map((range) => {
+          {marketCapRanges.map((range) => {
             const active = selectedMarketCapRange === range.id
             return (
               <button
                 key={range.id}
+                disabled={range.id !== 'all' && !hasMarketCapData}
                 onClick={() => setSelectedMarketCapRange(range.id)}
                 className={`px-2.5 py-1 text-[11px] leading-none font-mono rounded-full border ${
                   active
                     ? 'bg-indigo-600 text-white border-indigo-600'
                     : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
-                }`}
+                } disabled:cursor-not-allowed disabled:opacity-40`}
               >
                 {range.label}
               </button>
             )
           })}
+          {isUs && !hasMarketCapData && (
+            <span className="text-[10px] font-semibold text-amber-700">発行済株式数が未連携のため無効</span>
+          )}
         </div>
       </div>
 
       {/* 銘柄テーブル */}
       <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full text-xs" style={{ minWidth: '1400px', borderCollapse: 'collapse' }}>
+          <table className="w-full text-xs" style={{ minWidth: '1620px', borderCollapse: 'collapse' }}>
             <thead className="bg-gray-50 sticky top-0 z-10">
               <tr style={{ borderBottom: '1px solid #e5e7eb' }}>
                 <th scope="col" className="px-3 py-2 text-left font-medium text-gray-500 whitespace-nowrap">コード</th>
                 <th scope="col" className="px-3 py-2 text-left font-medium text-gray-500 whitespace-nowrap">銘柄名</th>
-                <th scope="col" className="px-3 py-2 text-left font-medium text-gray-500 whitespace-nowrap">セクター</th>
+                <th scope="col" className="px-3 py-2 text-left font-medium text-gray-500 whitespace-nowrap">銘柄区分</th>
+                <th scope="col" className="px-3 py-2 text-left font-medium text-gray-500 whitespace-nowrap">市場 / 業種</th>
                 <th scope="col" className="px-3 py-2 text-right font-medium text-gray-500 whitespace-nowrap">株価</th>
                 <th scope="col" className="px-3 py-2 text-right font-medium text-gray-500 whitespace-nowrap">時価総額</th>
                 <th scope="col" className="px-3 py-2 text-right font-medium text-gray-500 whitespace-nowrap">日%</th>
@@ -295,15 +383,15 @@ export default function HexMap({ data }: { data: Stock[]; timeframe?: Timeframe 
                 <th scope="col" className="px-3 py-2 text-right font-medium text-gray-500 whitespace-nowrap">6M</th>
                 <th scope="col" className="px-3 py-2 text-right font-medium text-gray-500 whitespace-nowrap">YTD</th>
                 <th scope="col" className="px-3 py-2 text-left font-medium text-gray-500 whitespace-nowrap">ステージ (日A/B 週A/B 月A/B)</th>
-                <th scope="col" className="px-3 py-2 text-right font-medium text-gray-500 whitespace-nowrap" title="SMA角度（SMA5/25/75/300）">SMA角度</th>
+                <th scope="col" className="px-3 py-2 text-left font-medium text-gray-500 whitespace-nowrap" title="SMAの傾きが、前回から加速しているか鈍化しているかを表示">MAの流れ / ML示唆</th>
               </tr>
             </thead>
             <tbody>
               {visible.slice(0, rowLimit).map((s) => (
                 <tr
                   key={s.code}
-                  onClick={() => router.push(`/stock/${encodeURIComponent(s.code)}`)}
-                  onKeyDown={(e) => { if (e.key === 'Enter') router.push(`/stock/${encodeURIComponent(s.code)}`) }}
+                  onClick={() => router.push(`${isUs ? '/us/stock' : '/stock'}/${encodeURIComponent(s.code)}`)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') router.push(`${isUs ? '/us/stock' : '/stock'}/${encodeURIComponent(s.code)}`) }}
                   tabIndex={0}
                   role="link"
                   aria-label={`${s.name} の詳細を開く`}
@@ -330,18 +418,60 @@ export default function HexMap({ data }: { data: Stock[]; timeframe?: Timeframe 
                     </button>
                   </td>
                   <td className="px-3 py-2 font-medium text-gray-900 whitespace-nowrap">{s.name}</td>
+                  <td className="px-3 py-2 whitespace-nowrap">
+                    <div className="flex flex-wrap items-center gap-1">
+                      <MarginBadges marginType={s.margin_type} compact emptyLabel={isUs ? 'Stock' : '未取得'} />
+                      {isUs && s.data_status && s.data_status !== 'ready' && (
+                        <span
+                          className={`rounded-full border px-2 py-0.5 text-[10px] font-bold leading-tight whitespace-nowrap ${
+                            s.data_status === 'price_pending'
+                              ? 'border-amber-200 bg-amber-50 text-amber-700'
+                              : s.data_status === 'snapshot_pending'
+                                ? 'border-blue-200 bg-blue-50 text-blue-700'
+                                : 'border-gray-200 bg-gray-50 text-gray-600'
+                          }`}
+                        >
+                          {s.data_status === 'price_pending'
+                            ? '当日価格待ち'
+                            : s.data_status === 'snapshot_pending'
+                              ? 'Stage生成待ち'
+                              : '履歴蓄積中'}
+                        </span>
+                      )}
+                    </div>
+                  </td>
                   <td className="px-3 py-2 text-gray-500 whitespace-nowrap">
-                    <span>{s.sector_large}</span>
-                    {s.sector_small && (
+                    {s.market_segment && (
+                      <>
+                        <span>{s.market_segment}</span>
+                        <span className="text-gray-300 mx-1">/</span>
+                      </>
+                    )}
+                    <span>{isUs ? 'Sector' : '17'}: {s.sector17_name ?? s.sector_large}</span>
+                    {(s.sector33_name ?? s.sector_small) && (
                       <>
                         <span className="text-gray-300 mx-1">/</span>
-                        <span>{s.sector_small}</span>
+                        <span>{isUs ? 'Industry' : '33'}: {s.sector33_name ?? s.sector_small}</span>
                       </>
                     )}
                   </td>
-                  <td className="px-3 py-2 text-right font-mono whitespace-nowrap">{s.price.toLocaleString()}</td>
+                  <td className="px-3 py-2 text-right font-mono whitespace-nowrap">
+                    {s.price == null
+                      ? '-'
+                      : isUs
+                        ? `$${s.price.toLocaleString('en-US', { maximumFractionDigits: 2 })}`
+                        : s.price.toLocaleString()}
+                  </td>
                   <td className="px-3 py-2 text-right font-mono text-gray-600 whitespace-nowrap">
-                    {Math.round(s.market_cap / 1e8).toLocaleString()}<span className="text-[10px] text-gray-400 ml-0.5">億</span>
+                    {isUs
+                      ? s.market_cap > 0
+                        ? s.market_cap >= 1e12
+                          ? `$${(s.market_cap / 1e12).toFixed(2)}T`
+                          : s.market_cap >= 1e9
+                            ? `$${(s.market_cap / 1e9).toFixed(1)}B`
+                            : `$${(s.market_cap / 1e6).toFixed(0)}M`
+                        : '-'
+                      : <>{Math.round(s.market_cap / 1e8).toLocaleString()}<span className="text-[10px] text-gray-400 ml-0.5">億</span></>}
                   </td>
                   <td className="px-3 py-2 text-right font-mono whitespace-nowrap" style={getPercentStyle(s.daily_change)}>{formatPercent(s.daily_change)}</td>
                   <td className="px-3 py-2 text-right font-mono whitespace-nowrap" style={getPercentStyle(s.weekly_change)}>{formatPercent(s.weekly_change)}</td>
@@ -355,26 +485,14 @@ export default function HexMap({ data }: { data: Stock[]; timeframe?: Timeframe 
                       size={18}
                     />
                   </td>
-                  <td className="px-3 py-2 text-right font-mono text-[11px] whitespace-nowrap" title="SMA5° / SMA25° / SMA75° / SMA300°">
-                    {s.sma_angles ? (
-                      <span className="inline-flex gap-1.5">
-                        <span style={getAngleStyle(s.sma_angles.sma5)}>{formatAngle(s.sma_angles.sma5)}</span>
-                        <span className="text-gray-300">/</span>
-                        <span style={getAngleStyle(s.sma_angles.sma25)}>{formatAngle(s.sma_angles.sma25)}</span>
-                        <span className="text-gray-300">/</span>
-                        <span style={getAngleStyle(s.sma_angles.sma75)}>{formatAngle(s.sma_angles.sma75)}</span>
-                        <span className="text-gray-300">/</span>
-                        <span style={getAngleStyle(s.sma_angles.sma300)}>{formatAngle(s.sma_angles.sma300)}</span>
-                      </span>
-                    ) : (
-                      <span className="text-gray-400">---</span>
-                    )}
+                  <td className="px-3 py-2 text-left text-[11px] whitespace-nowrap">
+                    <MaFlowCell stock={s} />
                   </td>
                 </tr>
               ))}
               {visible.length === 0 && (
                 <tr>
-                  <td colSpan={13} className="text-center py-10 text-xs text-gray-400">
+                  <td colSpan={14} className="text-center py-10 text-xs text-gray-400">
                     {searchTerm
                       ? `"${searchTerm}" に一致する銘柄が見つかりませんでした`
                       : '該当する銘柄がありません'}
@@ -397,6 +515,50 @@ export default function HexMap({ data }: { data: Stock[]; timeframe?: Timeframe 
   )
 }
 
+function MaFlowCell({ stock }: { stock: HexMapStock }) {
+  const alignment = maAlignmentLabel(stock)
+  const flows = [
+    ['5日', angleFlow(stock.sma_angles?.sma5, stock.prev_sma_angles?.sma5)],
+    ['25日', angleFlow(stock.sma_angles?.sma25, stock.prev_sma_angles?.sma25)],
+    ['75日', angleFlow(stock.sma_angles?.sma75, stock.prev_sma_angles?.sma75)],
+    ['300日', angleFlow(stock.sma_angles?.sma300, stock.prev_sma_angles?.sma300)],
+  ] as const
+  const mlTone = stock.ml_candidate_direction === 'up' ? 'up' : stock.ml_candidate_direction === 'down' ? 'down' : 'flat'
+  const mlLabel = stock.ml_candidate_direction === 'up'
+    ? `ML上昇候補 #${stock.ml_candidate_rank}`
+    : stock.ml_candidate_direction === 'down'
+      ? `ML下落警戒 #${stock.ml_candidate_rank}`
+      : 'ML候補外'
+
+  return (
+    <div className="flex min-w-[310px] flex-col gap-1.5">
+      <div className="flex flex-wrap gap-1">
+        <span className={`rounded-full border px-2 py-[2px] text-[10px] font-semibold ${flowToneClass(alignment.tone)}`}>
+          {alignment.label}
+        </span>
+        <span className={`rounded-full border px-2 py-[2px] text-[10px] font-semibold ${flowToneClass(mlTone)}`}>
+          {mlLabel}
+        </span>
+      </div>
+      <div className="grid grid-cols-4 gap-1">
+        {flows.map(([name, flow]) => (
+          <span
+            key={name}
+            className={`rounded-[5px] border px-1.5 py-1 text-center leading-tight ${flowToneClass(flow.tone)}`}
+            title={`${name}MA変化率 ${flow.pct}`}
+          >
+            <b className="block text-[10px]">{name}</b>
+            <span className="text-[9px]">{flow.label}</span>
+          </span>
+        ))}
+      </div>
+      <div className="max-w-[430px] truncate text-[10px] leading-4 text-gray-500" title={stock.ml_candidate_summary ?? undefined}>
+        {stock.ml_candidate_summary ?? '傾きの加速/鈍化と、次のステージ更新を確認します。'}
+      </div>
+    </div>
+  )
+}
+
 /* ─────────────────────────────────────────────────────────────────
  * StageMatrix
  * 1 つのタイムフレームについて、Bステージ(縦) × Aステージ(横) の 6×6 マトリクス。
@@ -406,7 +568,7 @@ export default function HexMap({ data }: { data: Stock[]; timeframe?: Timeframe 
 function StageMatrix({
   data, timeframe, label, selectedCells, filteredTickers, anySelection, onCellClick, onClearTimeframe,
 }: {
-  data: Stock[]
+  data: HexMapStock[]
   timeframe: Timeframe
   label: string
   /** このタイムフレームで選択されているセルの "b-a" キー集合 */
@@ -423,8 +585,8 @@ function StageMatrix({
     const m: { count: number; sel: number }[][] =
       Array.from({ length: 7 }, () => Array.from({ length: 7 }, () => ({ count: 0, sel: 0 })))
     let t = 0
-    const aField = `${timeframe}_a_stage` as keyof Stock
-    const bField = `${timeframe}_b_stage` as keyof Stock
+    const aField = `${timeframe}_a_stage` as keyof HexMapStock
+    const bField = `${timeframe}_b_stage` as keyof HexMapStock
     for (const d of data) {
       const a = d[aField] as number | null | undefined
       const b = d[bField] as number | null | undefined

@@ -16,8 +16,11 @@ import {
   Sigma,
   Target,
 } from 'lucide-react'
+import { IndustryBadges } from '@/components/ui/IndustryBadges'
+import { MarginBadges } from '@/components/ui/MarginBadges'
 import { StageDots } from '@/components/ui/StageDots'
 import { BacktestHighlightChart, type HighlightChartPoint } from '@/components/charts/BacktestHighlightChart'
+import { StockPreviewTrigger } from '@/components/stock-preview/StockPreviewTrigger'
 
 type DateOption = {
   date: string
@@ -31,7 +34,10 @@ type BacktestResult = {
   name: string | null
   sector_large: string | null
   sector_small: string | null
+  sector17_name: string | null
+  sector33_name: string | null
   market_segment: string | null
+  margin_type: string | null
   pattern_code: string | null
   daily_a_stage: number | null
   daily_b_stage: number | null
@@ -109,17 +115,108 @@ type SignalStat = {
   }
 }
 
-type SimilarCase = {
-  rank: number
+type MlCandidate = {
+  asOfDate: string
+  direction: 'up' | 'down'
   ticker: string
   name: string | null
-  date: string
-  similarity: number | null
-  payload: {
-    max_return_pct?: number | null
-    days_to_max?: number | null
-    return_pct?: number | null
+  sectorLarge: string | null
+  rank: number
+  close: number | null
+  confidenceLabel: string
+  stageCode: string | null
+  maOrder: string | null
+  reason: {
+    stage?: string
+    maAngle?: string
+    maDistance?: string
+    pricePosition?: string
+    mlEvidence?: string
   }
+  explanation?: {
+    summary?: string
+    watchPoints?: string[]
+    riskNotes?: string[]
+  }
+}
+
+type CurrentSimilarInsight = {
+  asOfDate: string
+  baseTicker: string
+  rank: number
+  similarTicker: string
+  similarityScore: number
+  baseDirection: 'up' | 'down' | null
+  similarDirection: 'up' | 'down' | null
+  payload: {
+    base?: {
+      name?: string | null
+      stageCode?: string | null
+      maOrder?: string | null
+    }
+    similar?: {
+      name?: string | null
+      stageCode?: string | null
+      maOrder?: string | null
+    }
+  }
+  reason: Record<string, string>
+}
+
+type MlSectorRanking = {
+  asOfDate: string
+  sectorType: '17' | '33'
+  sectorName: string
+  direction: 'up' | 'down'
+  candidateCount: number
+  avgScore: number | null
+  representativeTickers: Array<{ ticker: string; rank?: number; score?: number }>
+}
+
+type MlPerformance = {
+  asOfDate: string
+  direction: 'up' | 'down'
+  horizonDays: number
+  sectorType: string
+  sectorName: string
+  sampleCount: number
+  upRate: number | null
+  downRate: number | null
+  medianReturnPct: number | null
+  avgReturnPct: number | null
+  payload?: {
+    mode?: string
+    modelName?: string | null
+    precisionAt20?: number | null
+    precisionAt50?: number | null
+    precisionAt80?: number | null
+    hitRate?: number | null
+    maxDrawdownPct?: number | null
+    metrics?: {
+      accuracy?: number
+      positiveRate?: number
+    }
+  }
+}
+
+type MlModelStatus = {
+  latestFeatureDate: string | null
+  latestPredictionDate: string | null
+  latestEvaluationDate: string | null
+  models: Array<{
+    modelName: string
+    modelType: string
+    direction: 'up' | 'down'
+    horizonDays: number
+    trainedAt: number | string | null
+    metrics: {
+      trainStartDate?: string
+      trainEndDate?: string
+      samples?: number
+      accuracy?: number
+      positiveRate?: number
+    }
+  }>
 }
 
 type BacktestDetail = {
@@ -197,12 +294,19 @@ type BacktestDetail = {
       daysToMax: number | null
     }>
   } | null
+  maCandidateAnalysis: {
+    asOfDate: string | null
+    up: MlCandidate[]
+    down: MlCandidate[]
+    comment: string
+  } | null
   analysisComment: {
     source: 'openai' | 'template'
     summary: string
     evidence: string[]
     watchPoints: string[]
     riskNotes: string[]
+    candidateComment: string
     similarPatternComment: string
   } | null
 }
@@ -216,7 +320,7 @@ type CoverageInfo = {
   excluded: { days: number; reasons: string[] }
 }
 
-const HORIZONS = [5, 20, 30, 40, 60, 90, 180]
+const HORIZONS = [5, 20, 30, 40, 60, 90, 180, 200]
 const EMPTY_RESULTS: BacktestResult[] = []
 
 const SIGNAL_OPTIONS = [
@@ -306,7 +410,7 @@ function compactSignal(code: string): string {
   if (labels[code]) return labels[code]
   if (code.includes('ma_cross_up')) return 'MA上抜け'
   if (code.includes('ma_upper_touch')) return 'MA上タッチ'
-  if (code.includes('ma_cross_down')) return 'MA下割れ'
+  if (code.includes('ma_cross_down')) return 'MA下抜け'
   if (code.includes('ma_lower_touch')) return 'MA下タッチ'
   if (code.includes('ma_touch')) return 'MA接触'
   return code
@@ -323,11 +427,19 @@ export default function BacktestPage() {
   const [calendarMonth, setCalendarMonth] = useState('')
   const [horizon, setHorizon] = useState(40)
   const [preset, setPreset] = useState<typeof RETURN_PRESETS[number]['key']>('all')
+  const [selectedSector17, setSelectedSector17] = useState('')
+  const [selectedSector33, setSelectedSector33] = useState('')
   const [selectedSignals, setSelectedSignals] = useState<Set<string>>(new Set())
   const [query, setQuery] = useState<QueryResponse | null>(null)
   const [latestSignals, setLatestSignals] = useState<LatestSignal[]>([])
   const [signalStats, setSignalStats] = useState<SignalStat[]>([])
-  const [similarCases, setSimilarCases] = useState<SimilarCase[]>([])
+  const [candidateMode, setCandidateMode] = useState<'both' | 'up' | 'down'>('both')
+  const [mlCandidates, setMlCandidates] = useState<MlCandidate[]>([])
+  const [mlCandidateNotice, setMlCandidateNotice] = useState('')
+  const [currentSimilars, setCurrentSimilars] = useState<CurrentSimilarInsight[]>([])
+  const [mlSectorRankings, setMlSectorRankings] = useState<MlSectorRanking[]>([])
+  const [mlPerformance, setMlPerformance] = useState<MlPerformance[]>([])
+  const [mlModelStatus, setMlModelStatus] = useState<MlModelStatus | null>(null)
   const [expandedKey, setExpandedKey] = useState('')
   const [details, setDetails] = useState<Record<string, BacktestDetail>>({})
   const [coverage, setCoverage] = useState<CoverageInfo | null>(null)
@@ -383,6 +495,8 @@ export default function BacktestPage() {
     if (activePreset.min != null) params.set('returnMin', String(activePreset.min))
     if (activePreset.max != null) params.set('returnMax', String(activePreset.max))
     if (activePreset.target != null) params.set('targetPct', String(activePreset.target))
+    if (selectedSector17) params.set('sector17', selectedSector17)
+    if (selectedSector33) params.set('sector33', selectedSector33)
     if (selectedSignals.size > 0) params.set('signals', Array.from(selectedSignals).join(','))
 
     fetch(`/api/backtest/query?${params}`, { cache: 'no-store' })
@@ -405,7 +519,7 @@ export default function BacktestPage() {
       .catch(() => { /* query result is primary */ })
 
     return () => { cancelled = true }
-  }, [selectedDate, horizon, preset, selectedSignals])
+  }, [selectedDate, horizon, preset, selectedSignals, selectedSector17, selectedSector33])
 
   const summary = query?.summary
   const rows = query?.results ?? EMPTY_RESULTS
@@ -427,28 +541,72 @@ export default function BacktestPage() {
   const sectorCounts = useMemo(() => {
     const map = new Map<string, number>()
     for (const row of rows) {
-      const key = row.sector_large ?? 'その他'
+      const key = row.sector17_name ?? row.sector_large ?? 'その他'
       map.set(key, (map.get(key) ?? 0) + 1)
     }
     return Array.from(map.entries()).sort((a, b) => b[1] - a[1]).slice(0, 8)
   }, [rows])
+  const sector17Options = useMemo(() => {
+    const map = new Map<string, number>()
+    for (const row of rows) {
+      const key = row.sector17_name
+      if (key) map.set(key, (map.get(key) ?? 0) + 1)
+    }
+    return Array.from(map.entries()).sort((a, b) => b[1] - a[1])
+  }, [rows])
+  const sector33Options = useMemo(() => {
+    const map = new Map<string, number>()
+    for (const row of rows) {
+      if (selectedSector17 && row.sector17_name !== selectedSector17) continue
+      const key = row.sector33_name
+      if (key) map.set(key, (map.get(key) ?? 0) + 1)
+    }
+    return Array.from(map.entries()).sort((a, b) => b[1] - a[1])
+  }, [rows, selectedSector17])
 
   useEffect(() => {
-    const first = rows[0]
-    if (!first) {
-      setSimilarCases([])
-      return
-    }
     let cancelled = false
-    fetch(`/api/backtest/similar?ticker=${first.ticker}&date=${first.date}`, { cache: 'no-store' })
+    fetch(`/api/backtest/ml-candidates?direction=${candidateMode}&limit=10`, { cache: 'no-store' })
       .then((res) => res.json())
       .then((data) => {
         if (cancelled) return
-        setSimilarCases(data.cases ?? [])
+        setMlCandidates(Array.isArray(data.candidates) ? data.candidates : [])
+        setMlCandidateNotice(typeof data.notice === 'string' ? data.notice : '')
       })
-      .catch(() => { if (!cancelled) setSimilarCases([]) })
+      .catch(() => {
+        if (!cancelled) {
+          setMlCandidates([])
+          setMlCandidateNotice('ML候補データを取得できませんでした。')
+        }
+      })
     return () => { cancelled = true }
-  }, [rows])
+  }, [candidateMode])
+
+  useEffect(() => {
+    let cancelled = false
+    Promise.all([
+      fetch('/api/ml/current-similars?limit=12', { cache: 'no-store' }).then((res) => res.json()),
+      fetch(`/api/ml/sector-rankings?direction=${candidateMode}&limit=12`, { cache: 'no-store' }).then((res) => res.json()),
+      fetch(`/api/ml/performance?direction=${candidateMode}&sectorType=all&limit=12`, { cache: 'no-store' }).then((res) => res.json()),
+      fetch('/api/ml/model-status', { cache: 'no-store' }).then((res) => res.json()),
+    ])
+      .then(([similarData, sectorData, performanceData, statusData]) => {
+        if (cancelled) return
+        setCurrentSimilars(Array.isArray(similarData.similars) ? similarData.similars : [])
+        setMlSectorRankings(Array.isArray(sectorData.rankings) ? sectorData.rankings : [])
+        setMlPerformance(Array.isArray(performanceData.performance) ? performanceData.performance : [])
+        setMlModelStatus(statusData && !statusData.error ? statusData : null)
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setCurrentSimilars([])
+          setMlSectorRankings([])
+          setMlPerformance([])
+          setMlModelStatus(null)
+        }
+      })
+    return () => { cancelled = true }
+  }, [candidateMode])
 
   function toggleSignal(code: string) {
     setSelectedSignals((prev) => {
@@ -489,11 +647,19 @@ export default function BacktestPage() {
       .finally(() => setDetailLoading((current) => current === key ? '' : current))
   }
 
+  function candidatesFor(detail: BacktestDetail): MlCandidate[] {
+    const up = detail.maCandidateAnalysis?.up ?? []
+    const down = detail.maCandidateAnalysis?.down ?? []
+    if (candidateMode === 'up') return up
+    if (candidateMode === 'down') return down
+    return [...up.slice(0, 4), ...down.slice(0, 4)]
+  }
+
   return (
     <div className="sb-page">
       <div className="sb-page-title">
         <h1>過去検証・シグナル分析</h1>
-        <p>ステージ、ローソク足、移動平均線、出来高を組み合わせ、過去の上昇到達率を検証します。</p>
+        <p>6桁ステージと移動平均線の形から、過去検証と現在の候補銘柄をつなげて確認します。</p>
       </div>
 
       <div className="backtest-shell">
@@ -582,6 +748,44 @@ export default function BacktestPage() {
           </div>
         </section>
 
+        <section className="bt-signal-strip" aria-label="J-Quants業種フィルタ">
+          <span className="bt-chip ghost">J-Quants業種</span>
+          <select
+            className="bt-inline-select"
+            value={selectedSector17}
+            onChange={(e) => {
+              setSelectedSector17(e.target.value)
+              setSelectedSector33('')
+            }}
+            aria-label="17業種分類で絞り込み"
+          >
+            <option value="">17業種すべて</option>
+            {sector17Options.map(([sector, count]) => (
+              <option key={sector} value={sector}>{sector}（{count}）</option>
+            ))}
+          </select>
+          <select
+            className="bt-inline-select"
+            value={selectedSector33}
+            onChange={(e) => setSelectedSector33(e.target.value)}
+            aria-label="33業種分類で絞り込み"
+          >
+            <option value="">33業種すべて</option>
+            {sector33Options.map(([sector, count]) => (
+              <option key={sector} value={sector}>{sector}（{count}）</option>
+            ))}
+          </select>
+          {(selectedSector17 || selectedSector33) && (
+            <button
+              className="bt-chip ghost"
+              type="button"
+              onClick={() => { setSelectedSector17(''); setSelectedSector33('') }}
+            >
+              業種クリア
+            </button>
+          )}
+        </section>
+
         <section className="bt-signal-strip">
           {SIGNAL_OPTIONS.map((item) => {
             const active = selectedSignals.has(item.code)
@@ -654,15 +858,27 @@ export default function BacktestPage() {
                     const key = detailKey(row)
                     const detail = details[key]
                     const expanded = expandedKey === key
+                    const detailCandidates = detail ? candidatesFor(detail) : []
                     return (
                       <Fragment key={key}>
                         <tr>
                           <td>
-                            <Link href={`/stock/${row.ticker}`} className="bt-code">{row.ticker}</Link>
+                            <span className="inline-flex items-center gap-1">
+                              <Link href={`/stock/${row.ticker}?date=${encodeURIComponent(row.date)}#overview`} className="bt-code">{row.ticker}</Link>
+                              <StockPreviewTrigger ticker={row.ticker} analysisDate={row.date} context="backtest" />
+                            </span>
                           </td>
                           <td>
                             <div className="bt-name">{row.name ?? row.ticker}</div>
-                            <div className="bt-sub">{row.sector_large ?? 'その他'} / {row.market_segment ?? '-'}</div>
+                            <div className="bt-sub">
+                              <MarginBadges marginType={row.margin_type} compact />
+                              <IndustryBadges
+                                sector17={row.sector17_name ?? row.sector_large}
+                                sector33={row.sector33_name ?? row.sector_small}
+                                marketSegment={row.market_segment}
+                                compact
+                              />
+                            </div>
                           </td>
                           <td>
                             <StageDots
@@ -732,11 +948,11 @@ export default function BacktestPage() {
                                       </dl>
                                     </div>
                                     <div>
-                                      <h3>出来高とステージ</h3>
+                                      <h3>MA構造とステージ</h3>
                                       <dl>
-                                        <div><dt>出来高推移</dt><dd>{detail.volumeSummary?.comment ?? '-'}</dd></div>
-                                        <div><dt>期間平均</dt><dd>{fmtNum(detail.volumeSummary?.periodAverage)}</dd></div>
-                                        <div><dt>最大出来高</dt><dd>{fmtNum(detail.volumeSummary?.maxVolume)} / {detail.volumeSummary?.maxVolumeDate ?? '-'}</dd></div>
+                                        <div><dt>MA並び</dt><dd>{detail.maAnalysis?.maOrder ?? '-'}</dd></div>
+                                        <div><dt>5日MA維持</dt><dd>{detail.maAnalysis?.daysHeldAboveSma5 ?? '-'}営業日</dd></div>
+                                        <div><dt>直近高値距離</dt><dd>{fmtPct(detail.maAnalysis?.distanceToRecentHighPct)}</dd></div>
                                         <div><dt>6桁ステージ</dt><dd>{stagePathText(detail.selectedStagePath ?? [])}</dd></div>
                                       </dl>
                                     </div>
@@ -747,6 +963,7 @@ export default function BacktestPage() {
                                     highlightStart={detail.movePeriod?.startDate ?? row.date}
                                     highlightEnd={detail.movePeriod?.endDate ?? null}
                                     direction={detail.move}
+                                    stagePath={detail.selectedStagePath}
                                     startPrice={detail.movePeriod?.startPrice}
                                     endPrice={detail.movePeriod?.endPrice}
                                     returnPct={detail.movePeriod?.returnPct}
@@ -774,24 +991,40 @@ export default function BacktestPage() {
                                     </div>
                                   )}
 
-                                  <div className="bt-similar-box">
-                                    <h3>類似パターン比較</h3>
-                                    <p>{detail.analysisComment?.similarPatternComment ?? '類似パターンはまだ十分に蓄積されていません。'}</p>
-                                    <div className="bt-similar-metrics">
-                                      <span>事例 {detail.similarPatternStats?.sampleSize ?? 0}件</span>
-                                      <span>10%超え {fmtPct(detail.similarPatternStats?.upRate == null ? null : detail.similarPatternStats.upRate * 100)}</span>
-                                      <span>5%下落 {fmtPct(detail.similarPatternStats?.downRate == null ? null : detail.similarPatternStats.downRate * 100)}</span>
-                                      <span>平均最大上昇 {fmtPct(detail.similarPatternStats?.avgMaxReturnPct)}</span>
-                                      <span>平均最大下落 {fmtPct(detail.similarPatternStats?.avgMinReturnPct)}</span>
+                                  <div className="bt-similar-box bt-ml-candidate-box">
+                                    <div className="bt-candidate-head">
+                                      <div>
+                                        <h3>現在のMA候補</h3>
+                                        <p>{detail.analysisComment?.candidateComment ?? detail.maCandidateAnalysis?.comment ?? 'ML候補はまだ生成されていません。'}</p>
+                                      </div>
+                                      <div className="bt-candidate-toggle" aria-label="候補方向">
+                                        <button type="button" data-active={candidateMode === 'both'} onClick={() => setCandidateMode('both')}>両方</button>
+                                        <button type="button" data-active={candidateMode === 'up'} onClick={() => setCandidateMode('up')}>上昇</button>
+                                        <button type="button" data-active={candidateMode === 'down'} onClick={() => setCandidateMode('down')}>下落</button>
+                                      </div>
                                     </div>
-                                    {(detail.similarPatternStats?.cases ?? []).length > 0 && (
-                                      <div className="bt-similar-cases">
-                                        {(detail.similarPatternStats?.cases ?? []).slice(0, 6).map((item) => (
-                                          <Link key={`${item.ticker}-${item.date}`} href={`/stock/${item.ticker}`}>
-                                            {item.ticker} <small>{item.date}</small> <b>{fmtPct(item.maxReturnPct)}</b>
+                                    {detailCandidates.length > 0 ? (
+                                      <div className="bt-candidate-grid">
+                                        {detailCandidates.map((item) => (
+                                          <Link key={`${item.direction}-${item.ticker}`} href={`/stock/${item.ticker}`} className="bt-candidate-card" data-direction={item.direction}>
+                                            <div>
+                                              <span>{item.direction === 'up' ? '上昇候補' : '下落警戒'} #{item.rank}</span>
+                                              <strong>{item.ticker} {item.name ?? ''}</strong>
+                                              <small>{item.sectorLarge ?? '-'} / {item.confidenceLabel}</small>
+                                            </div>
+                                            <dl>
+                                              <div><dt>6ステージ</dt><dd>{item.stageCode ?? '-'}</dd></div>
+                                              <div><dt>MA並び</dt><dd>{item.maOrder ?? '-'}</dd></div>
+                                              <div><dt>MA角度</dt><dd>{item.reason.maAngle ?? '-'}</dd></div>
+                                              <div><dt>MA距離</dt><dd>{item.reason.maDistance ?? '-'}</dd></div>
+                                              <div><dt>株価位置</dt><dd>{item.reason.pricePosition ?? '-'}</dd></div>
+                                              <div><dt>ML根拠</dt><dd>{item.reason.mlEvidence ?? '-'}</dd></div>
+                                            </dl>
                                           </Link>
                                         ))}
                                       </div>
+                                    ) : (
+                                      <p className="bt-empty">ML候補は未作成です。batch:ml-candidates 実行後に表示されます。</p>
                                     )}
                                   </div>
                                 </div>
@@ -853,23 +1086,121 @@ export default function BacktestPage() {
             <section className="sb-card bt-side-card">
               <div className="bt-card-head compact">
                 <div>
-                  <h2>類似局面</h2>
-                  <p>先頭銘柄に近い過去事例</p>
+                  <h2>現在のMA候補</h2>
+                  <p>{mlCandidateNotice || '最新日の6ステージ・MA形状'}</p>
                 </div>
                 <Search size={17} />
               </div>
+              <div className="bt-candidate-toggle side" aria-label="候補方向">
+                <button type="button" data-active={candidateMode === 'both'} onClick={() => setCandidateMode('both')}>両方</button>
+                <button type="button" data-active={candidateMode === 'up'} onClick={() => setCandidateMode('up')}>上昇</button>
+                <button type="button" data-active={candidateMode === 'down'} onClick={() => setCandidateMode('down')}>下落</button>
+              </div>
               <div className="bt-rank-list">
-                {similarCases.slice(0, 6).map((item) => (
-                  <div className="bt-rank" key={`${item.ticker}-${item.date}`}>
+                {mlCandidates.slice(0, 8).map((item) => (
+                  <div className="bt-rank" key={`${item.direction}-${item.ticker}`}>
                     <span className="bt-rank-no">{item.rank}</span>
                     <div>
                       <Link href={`/stock/${item.ticker}`}>{item.ticker} {item.name ?? ''}</Link>
-                      <p>{item.date} / 最大 {fmtPct(item.payload.max_return_pct)}</p>
+                      <p>{item.direction === 'up' ? '上昇候補' : '下落警戒'} / {item.stageCode ?? '-'} / {item.confidenceLabel}</p>
                     </div>
-                    <strong>{item.payload.days_to_max ?? '-'}</strong>
+                    <strong>{item.maOrder?.split(' > ')[0] ?? '-'}</strong>
                   </div>
                 ))}
-                {similarCases.length === 0 && <p className="bt-empty">類似局面データは未作成です</p>}
+                {mlCandidates.length === 0 && <p className="bt-empty">ML候補データは未作成です</p>}
+              </div>
+            </section>
+
+            <section className="sb-card bt-side-card">
+              <div className="bt-card-head compact">
+                <div>
+                  <h2>現在類似銘柄</h2>
+                  <p>最新データでMA形状と6ステージが近い銘柄</p>
+                </div>
+                <LineChart size={17} />
+              </div>
+              <div className="bt-rank-list">
+                {currentSimilars.slice(0, 6).map((item) => (
+                  <div className="bt-rank" key={`${item.baseTicker}-${item.similarTicker}-${item.rank}`}>
+                    <span className="bt-rank-no">{item.rank}</span>
+                    <div>
+                      <Link href={`/stock/${item.baseTicker}`}>{item.baseTicker}</Link>
+                      <p>
+                        → <Link href={`/stock/${item.similarTicker}`}>{item.similarTicker}</Link>
+                        {' / '}
+                        {item.payload.similar?.stageCode ?? '-'}
+                      </p>
+                    </div>
+                    <strong>{Math.round(item.similarityScore * 100)}%</strong>
+                  </div>
+                ))}
+                {currentSimilars.length === 0 && <p className="bt-empty">類似度80%以上の現在類似データはありません</p>}
+              </div>
+            </section>
+
+            <section className="sb-card bt-side-card">
+              <div className="bt-card-head compact">
+                <div>
+                  <h2>ML業種ランキング</h2>
+                  <p>上昇/下落候補が集まる17・33業種</p>
+                </div>
+                <BarChart3 size={17} />
+              </div>
+              <div className="bt-rank-list">
+                {mlSectorRankings.slice(0, 7).map((item, index) => (
+                  <div className="bt-rank" key={`${item.sectorType}-${item.direction}-${item.sectorName}`}>
+                    <span className="bt-rank-no">{index + 1}</span>
+                    <div>
+                      <strong style={{ color: 'var(--color-brand-900)', textAlign: 'left' }}>
+                        {item.sectorType}業種: {item.sectorName}
+                      </strong>
+                      <p>
+                        {item.direction === 'up' ? '上昇候補' : '下落警戒'} {item.candidateCount}件
+                        {item.representativeTickers.length > 0 ? ` / ${item.representativeTickers.slice(0, 3).map((row) => row.ticker).join(', ')}` : ''}
+                      </p>
+                    </div>
+                    <strong>{item.avgScore == null ? '-' : Math.round(item.avgScore * 100)}</strong>
+                  </div>
+                ))}
+                {mlSectorRankings.length === 0 && <p className="bt-empty">ML業種ランキングは未作成です</p>}
+              </div>
+            </section>
+
+            <section className="sb-card bt-side-card">
+              <div className="bt-card-head compact">
+                <div>
+                  <h2>MLモデル成績</h2>
+                  <p>学習モデルが過去データ上で抽出した候補群</p>
+                </div>
+                <Sigma size={17} />
+              </div>
+              <div className="bt-rank-list">
+                {mlPerformance.filter((item) => item.sectorType === 'all').slice(0, 6).map((item, index) => {
+                  const mainRate = item.direction === 'up' ? item.upRate : item.downRate
+                  const accuracy = item.payload?.metrics?.accuracy
+                  const precision = item.payload?.precisionAt20
+                  return (
+                    <div className="bt-rank" key={`${item.asOfDate}-${item.direction}-${item.horizonDays}-${item.sectorName}-${item.payload?.modelName ?? index}`}>
+                      <span className="bt-rank-no">{item.horizonDays}</span>
+                      <div>
+                        <strong style={{ color: 'var(--color-brand-900)', textAlign: 'left' }}>
+                          {item.direction === 'up' ? '上昇候補' : '下落警戒'} / {item.horizonDays}営業日
+                        </strong>
+                        <p>
+                          N={item.sampleCount.toLocaleString()}
+                          {' / '}
+                          {precision == null
+                            ? item.medianReturnPct == null
+                              ? `学習精度 ${accuracy == null ? '-' : `${Math.round(accuracy * 100)}%`}`
+                              : `中央値 ${fmtPct(item.medianReturnPct)}`
+                            : `上位20的中 ${Math.round(precision * 100)}%`}
+                        </p>
+                      </div>
+                      <strong>{mainRate == null ? (precision == null ? (accuracy == null ? '-' : `${Math.round(accuracy * 100)}%`) : `${Math.round(precision * 100)}%`) : `${Math.round(mainRate * 100)}%`}</strong>
+                    </div>
+                  )
+                })}
+                {mlPerformance.length === 0 && <p className="bt-empty">モデル成績は未作成です</p>}
               </div>
             </section>
 
@@ -905,10 +1236,29 @@ export default function BacktestPage() {
                 <Sigma size={17} />
               </div>
               <div className="bt-ml-note">
-                <span>model_features</span>
-                <span>model_labels</span>
-                <span>forward_extrema</span>
-                <span>serving_*</span>
+                <span>特徴量 {mlModelStatus?.latestFeatureDate ?? '-'}</span>
+                <span>予測 {mlModelStatus?.latestPredictionDate ?? '-'}</span>
+                <span>評価 {mlModelStatus?.latestEvaluationDate ?? '-'}</span>
+                <span>モデル {mlModelStatus?.models.length ?? 0}世代</span>
+              </div>
+              <div className="bt-rank-list" style={{ marginTop: 12 }}>
+                {(mlModelStatus?.models ?? []).slice(0, 4).map((model) => (
+                  <div className="bt-rank" key={model.modelName}>
+                    <span className="bt-rank-no">{model.horizonDays}</span>
+                    <div>
+                      <strong style={{ color: 'var(--color-brand-900)', textAlign: 'left' }}>
+                        {model.direction === 'up' ? '上昇' : '下落'}モデル
+                      </strong>
+                      <p>
+                        {model.metrics.trainStartDate ?? '2008-05-07'}〜{model.metrics.trainEndDate ?? '-'}
+                        {' / '}
+                        N={Number(model.metrics.samples ?? 0).toLocaleString()}
+                      </p>
+                    </div>
+                    <strong>{model.metrics.accuracy == null ? '-' : `${Math.round(model.metrics.accuracy * 100)}%`}</strong>
+                  </div>
+                ))}
+                {!mlModelStatus?.models?.length && <p className="bt-empty">モデル状態は未作成です</p>}
               </div>
             </section>
           </aside>

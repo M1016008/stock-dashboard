@@ -6,6 +6,10 @@ import type { OHLCV } from '@/types/stock'
 
 interface PerformanceCardProps {
   ticker: string
+  market?: 'JP' | 'US'
+  embedded?: boolean
+  analysisDate?: string | null
+  mobileExpanded?: boolean
 }
 
 interface PerfRow {
@@ -65,7 +69,13 @@ function yearToDateInfo(ohlcv: OHLCV[]): YtdInfo {
  * 直近の変化率を一目で確認できるカード
  * 1日 / 1週 / 1ヶ月 / 3ヶ月 / 6ヶ月 / 年初来
  */
-export function PerformanceCard({ ticker }: PerformanceCardProps) {
+export function PerformanceCard({
+  ticker,
+  market = 'JP',
+  embedded = false,
+  analysisDate = null,
+  mobileExpanded = true,
+}: PerformanceCardProps) {
   const [perf, setPerf] = useState<PerfRow[]>([])
   const [ytd, setYtd] = useState<YtdInfo | null>(null)
   const [loading, setLoading] = useState(true)
@@ -73,37 +83,54 @@ export function PerformanceCard({ ticker }: PerformanceCardProps) {
   useEffect(() => {
     let cancelled = false
     setLoading(true)
-    fetch(`/api/history/${encodeURIComponent(ticker)}?period=1y`, { cache: 'no-store' })
+    setPerf([])
+    setYtd(null)
+    const period = analysisDate ? 'all' : '1y'
+    const historyPath = market === 'US' ? '/api/us/history' : '/api/history'
+    fetch(`${historyPath}/${encodeURIComponent(ticker)}?period=${period}`, { cache: 'no-store' })
       .then((r) => r.json())
       .then((d: OHLCV[] | { error: string }) => {
         if (cancelled || !Array.isArray(d)) return
+        const rows = analysisDate ? d.filter((row) => row.date <= analysisDate).slice(-260) : d
         setPerf([
-          { label: '1日', value: pctFromHistory(d, 1) },
-          { label: '1週', value: pctFromHistory(d, 5) },
-          { label: '1ヶ月', value: pctFromHistory(d, 21) },
-          { label: '3ヶ月', value: pctFromHistory(d, 63) },
-          { label: '6ヶ月', value: pctFromHistory(d, 126) },
-          { label: '年初来', value: pctYearToDate(d) },
+          { label: '1日', value: pctFromHistory(rows, 1) },
+          { label: '1週', value: pctFromHistory(rows, 5) },
+          { label: '1ヶ月', value: pctFromHistory(rows, 21) },
+          { label: '3ヶ月', value: pctFromHistory(rows, 63) },
+          { label: '6ヶ月', value: pctFromHistory(rows, 126) },
+          { label: '年初来', value: pctYearToDate(rows) },
         ])
-        setYtd(yearToDateInfo(d))
+        setYtd(yearToDateInfo(rows))
       })
       .catch(() => { /* ignore */ })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [ticker])
+  }, [analysisDate, market, ticker])
+
+  const formatPrice = (value: number | null) => {
+    if (value == null) return '---'
+    return new Intl.NumberFormat(market === 'US' ? 'en-US' : 'ja-JP', {
+      style: 'currency',
+      currency: market === 'US' ? 'USD' : 'JPY',
+      maximumFractionDigits: market === 'US' ? 2 : 0,
+    }).format(value)
+  }
 
   return (
-    <div className="card stock-performance-card">
-      <div style={{ fontSize: '11px', fontWeight: 600, marginBottom: '8px' }}>直近の変化率</div>
+    <div className={embedded ? '' : 'card stock-performance-card'} style={embedded ? { minWidth: 0 } : undefined}>
+      <div style={{ fontSize: '11px', fontWeight: 600, marginBottom: '8px' }}>
+        {analysisDate ? `${analysisDate}時点の変化率` : '直近の変化率'}
+      </div>
       <div className="stock-perf-grid">
         {perf.length === 0 && loading && (
           <div style={{ gridColumn: 'span 6', textAlign: 'center', fontSize: '11px', color: 'var(--text-muted)' }}>計算中...</div>
         )}
-        {perf.map(({ label, value }) => {
+        {perf.map(({ label, value }, index) => {
           const isUp = (value ?? 0) >= 0
           const color = value == null ? 'var(--text-muted)' : isUp ? 'var(--price-up)' : 'var(--price-down)'
+          const mobilePrimary = index === 0 || index === 2
           return (
-            <div key={label} style={{
+            <div key={label} className={`${mobileExpanded || mobilePrimary ? 'block' : 'hidden'} sm:block`} style={{
               padding: '8px',
               background: 'var(--bg-elevated)',
               borderRadius: 'var(--radius-sm)',
@@ -119,23 +146,25 @@ export function PerformanceCard({ ticker }: PerformanceCardProps) {
         })}
       </div>
       {ytd && (
-        <div className="stock-ytd-strip">
-          <div>
-            <span>年初来高値</span>
-            <strong>{ytd.high == null ? '---' : `¥${Math.round(ytd.high).toLocaleString('ja-JP')}`}</strong>
-            <small>{ytd.highDate ?? '-'}</small>
-          </div>
-          <div>
-            <span>年初来安値</span>
-            <strong>{ytd.low == null ? '---' : `¥${Math.round(ytd.low).toLocaleString('ja-JP')}`}</strong>
-            <small>{ytd.lowDate ?? '-'}</small>
-          </div>
-          <div>
-            <span>年初来騰落率</span>
-            <strong className={(ytd.returnPct ?? 0) >= 0 ? 'price-up' : 'price-down'}>
-              {ytd.returnPct == null ? '---' : `${ytd.returnPct >= 0 ? '+' : ''}${ytd.returnPct.toFixed(2)}%`}
-            </strong>
-            <small>暦年初の最初の取引日から</small>
+        <div className={mobileExpanded ? '' : 'hidden sm:block'}>
+          <div className="stock-ytd-strip">
+            <div>
+              <span>年初来高値</span>
+              <strong>{formatPrice(ytd.high)}</strong>
+              <small>{ytd.highDate ?? '-'}</small>
+            </div>
+            <div>
+              <span>年初来安値</span>
+              <strong>{formatPrice(ytd.low)}</strong>
+              <small>{ytd.lowDate ?? '-'}</small>
+            </div>
+            <div>
+              <span>年初来騰落率</span>
+              <strong className={(ytd.returnPct ?? 0) >= 0 ? 'price-up' : 'price-down'}>
+                {ytd.returnPct == null ? '---' : `${ytd.returnPct >= 0 ? '+' : ''}${ytd.returnPct.toFixed(2)}%`}
+              </strong>
+              <small>暦年初の最初の取引日から</small>
+            </div>
           </div>
         </div>
       )}

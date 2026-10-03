@@ -3,6 +3,7 @@
 
 import { getStageCircle, type Timescale } from '@/lib/queries/hex'
 import { STAGE_LABELS } from '@/lib/hex-stage'
+import type { UniverseFilterValue } from '@/lib/market-universe'
 
 const STAGE_FILL: Record<number, { bg: string; text: string }> = {
   1: { bg: '#dcfce7', text: '#14532d' },
@@ -13,8 +14,16 @@ const STAGE_FILL: Record<number, { bg: string; text: string }> = {
   6: { bg: '#f3e8ff', text: '#581c87' },
 }
 
-export async function SixStageCircleMock({ timescale }: { timescale: Timescale }) {
-  const rows = await getStageCircle(timescale)
+export async function SixStageCircleMock({
+  timescale,
+  universe = null,
+  asOfDate = null,
+}: {
+  timescale: Timescale
+  universe?: UniverseFilterValue
+  asOfDate?: string | null
+}) {
+  const rows = await getStageCircle(timescale, universe, asOfDate)
   const total = rows.reduce((a, r) => a + r.count, 0)
   if (total === 0) {
     return <div className="sb-card sb-card-pad sb-t" style={{ textAlign: 'center', fontSize: 12 }}>ステージ分布データなし</div>

@@ -5,6 +5,7 @@
 // 使い方:
 //   USE_LOCAL_DB=1 npx tsx --env-file=.env.local scripts/batch-features.ts
 //   TICKERS=7203,6758 USE_LOCAL_DB=1 npx tsx --env-file=.env.local scripts/batch-features.ts
+//   TICKERS=7203 FEATURE_FORCE_REBUILD=1 USE_LOCAL_DB=1 npx tsx --env-file=.env.local scripts/batch-features.ts
 //
 // 動作:
 //   - active な ticker_universe を順に処理
@@ -32,6 +33,7 @@ const HISTORICAL_PERCENTILE_LOOKBACK = 250
 
 const PROGRESS_EVERY = 50
 const LOOKBACK_DAYS = Number(process.env.FEATURE_LOOKBACK_DAYS ?? 900)
+const FORCE_REBUILD = process.env.FEATURE_FORCE_REBUILD === '1'
 
 // timescale ごとの MA カラム名 (daily_snapshots 上)
 const MA_COLUMNS: Record<Timescale, readonly [string, string, string, string, string]> = {
@@ -115,10 +117,12 @@ async function computeFeaturesForTicker(ticker: string): Promise<number> {
       [ticker],
     ),
   ])
-  const lastFeatureDate = [state?.lastProcessedDate, existing?.maxDate]
-    .filter((date): date is string => Boolean(date))
-    .sort()
-    .at(-1) ?? null
+  const lastFeatureDate = FORCE_REBUILD
+    ? null
+    : [state?.lastProcessedDate, existing?.maxDate]
+        .filter((date): date is string => Boolean(date))
+        .sort()
+        .at(-1) ?? null
   const startDate = lastFeatureDate ? dateDaysBefore(lastFeatureDate, LOOKBACK_DAYS) : null
 
   const snapshots = await execAll<Record<string, number | string | null>>(
@@ -281,10 +285,53 @@ async function computeFeaturesForTicker(ticker: string): Promise<number> {
   // チャンク INSERT
   const CHUNK = 200
   for (let i = 0; i < features.length; i += CHUNK) {
-    await db
+    const insert = db
       .insert(featureSnapshots)
       .values(features.slice(i, i + CHUNK))
-      .onConflictDoNothing()
+    if (!FORCE_REBUILD) {
+      await insert.onConflictDoNothing()
+      continue
+    }
+
+    await insert.onConflictDoUpdate({
+      target: [featureSnapshots.ticker, featureSnapshots.date, featureSnapshots.timescale],
+      set: {
+        bin_order_a_12: sql`excluded.bin_order_a_12`,
+        bin_order_a_13: sql`excluded.bin_order_a_13`,
+        bin_order_a_23: sql`excluded.bin_order_a_23`,
+        bin_order_b_12: sql`excluded.bin_order_b_12`,
+        bin_order_b_13: sql`excluded.bin_order_b_13`,
+        bin_order_b_23: sql`excluded.bin_order_b_23`,
+        rel_dist_a_12: sql`excluded.rel_dist_a_12`,
+        rel_dist_a_13: sql`excluded.rel_dist_a_13`,
+        rel_dist_a_23: sql`excluded.rel_dist_a_23`,
+        rel_dist_b_12: sql`excluded.rel_dist_b_12`,
+        rel_dist_b_13: sql`excluded.rel_dist_b_13`,
+        rel_dist_b_23: sql`excluded.rel_dist_b_23`,
+        divergence_a: sql`excluded.divergence_a`,
+        divergence_b: sql`excluded.divergence_b`,
+        divergence_a_delta: sql`excluded.divergence_a_delta`,
+        divergence_b_delta: sql`excluded.divergence_b_delta`,
+        fan_uniformity: sql`excluded.fan_uniformity`,
+        divergence_percentile: sql`excluded.divergence_percentile`,
+        stage_a_age: sql`excluded.stage_a_age`,
+        stage_b_age: sql`excluded.stage_b_age`,
+        slope_m1: sql`excluded.slope_m1`,
+        accel_m1: sql`excluded.accel_m1`,
+        slope_m2: sql`excluded.slope_m2`,
+        accel_m2: sql`excluded.accel_m2`,
+        slope_m3: sql`excluded.slope_m3`,
+        accel_m3: sql`excluded.accel_m3`,
+        slope_m4: sql`excluded.slope_m4`,
+        accel_m4: sql`excluded.accel_m4`,
+        slope_m5: sql`excluded.slope_m5`,
+        accel_m5: sql`excluded.accel_m5`,
+        angle_synchrony: sql`excluded.angle_synchrony`,
+        stage_a_oh: sql`excluded.stage_a_oh`,
+        stage_b_oh: sql`excluded.stage_b_oh`,
+        computed_at: sql`unixepoch()`,
+      },
+    })
   }
 
   const latestDate = features[features.length - 1]?.date
@@ -335,7 +382,7 @@ async function main() {
   let rowsInserted = 0
   const errors: string[] = []
 
-  console.log(`Feature compute 開始: ${tickers.length} 銘柄`)
+  console.log(`Feature compute 開始: ${tickers.length} 銘柄 (FORCE_REBUILD=${FORCE_REBUILD})`)
   const startTime = Date.now()
 
   for (const [i, { ticker }] of tickers.entries()) {

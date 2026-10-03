@@ -1,0 +1,4 @@
+# Offline research environment only. Do not install into the Next.js server runtime.
+numpy==2.5.1
+scipy==1.18.0
+lightgbm==4.7.0

@@ -44,6 +44,7 @@ type MovePeriod = {
 
 const CHUNK = 250
 const TICKER_LIMIT = Number(process.env.SERVING_STOCK_LIMIT ?? 0)
+const TICKER_FILTER = process.env.SERVING_STOCK_TICKER?.trim()
 const UP_THRESHOLD = Number(process.env.SERVING_STOCK_UP_THRESHOLD ?? 30)
 const DOWN_THRESHOLD = Number(process.env.SERVING_STOCK_DOWN_THRESHOLD ?? -20)
 const MAX_PERIODS = Number(process.env.SERVING_STOCK_PERIODS ?? 5)
@@ -178,8 +179,13 @@ async function buildTicker(ticker: TickerRow): Promise<Array<{ sql: string; args
     ...detectMovePeriods(history, 'down'),
   ]
 
-  const statements: Array<{ sql: string; args: Array<string | number | null> }> = [{
-    sql: `
+  const statements: Array<{ sql: string; args: Array<string | number | null> }> = [
+    {
+      sql: `DELETE FROM serving_stock_move_periods WHERE ticker = ?`,
+      args: [ticker.ticker],
+    },
+    {
+      sql: `
       INSERT OR REPLACE INTO serving_stock_metrics
         (ticker, as_of_date, payload_json, computed_at)
       VALUES (?, ?, ?, unixepoch())
@@ -216,7 +222,8 @@ async function buildTicker(ticker: TickerRow): Promise<Array<{ sql: string; args
         stageCode: stageCode(stages[stages.length - 1]),
       }),
     ],
-  }]
+    },
+  ]
 
   for (const direction of ['up', 'down'] as const) {
     let rank = 1
@@ -248,21 +255,26 @@ async function buildTicker(ticker: TickerRow): Promise<Array<{ sql: string; args
 
 async function main() {
   const limitSql = TICKER_LIMIT > 0 ? `LIMIT ?` : ''
-  const args = TICKER_LIMIT > 0 ? [TICKER_LIMIT] : []
+  const filterSql = TICKER_FILTER ? `AND u.ticker = ?` : ''
+  const args: Array<string | number> = []
+  if (TICKER_FILTER) args.push(TICKER_FILTER)
+  if (TICKER_LIMIT > 0) args.push(TICKER_LIMIT)
   const tickers = await execAll<TickerRow>(
     `
-    SELECT u.ticker, u.name, sm.market_segment, sm.sector_large, sm.sector_small
+    SELECT u.ticker, u.name,
+           COALESCE(u.market_segment, sm.market_segment) AS market_segment,
+           COALESCE(u.sector17_name, sm.sector_large) AS sector_large,
+           COALESCE(u.sector33_name, sm.sector_small) AS sector_small
     FROM ticker_universe u
     LEFT JOIN sector_master sm ON sm.ticker = u.ticker
     WHERE EXISTS (SELECT 1 FROM ohlcv_daily o WHERE o.ticker = u.ticker)
+      ${filterSql}
     ORDER BY u.ticker
     ${limitSql}
     `,
     args,
   )
   console.log(`serving stock build: tickers=${tickers.length}`)
-  await execRun(`DELETE FROM serving_stock_metrics`)
-  await execRun(`DELETE FROM serving_stock_move_periods`)
 
   let buffered: Array<{ sql: string; args: Array<string | number | null> }> = []
   for (const [index, ticker] of tickers.entries()) {

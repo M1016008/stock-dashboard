@@ -13,15 +13,224 @@
 // 期間設定:
 //   日足 A: SMA 5/25/75
 //   日足 B: SMA 75/150/300
-//   週足 A: WMA 5/13/25
-//   週足 B: WMA 25/50/100
-//   月足 A: MMA 3/5/10
-//   月足 B: MMA 10/20/25
+//   週足 A: 暦週 SMA 5/13/25
+//   週足 B: 暦週 SMA 25/50/100
+//   月足 A: 暦月 SMA 3/5/10
+//   月足 B: 暦月 SMA 10/20/25
 
 import type { OHLCV } from '@/types/stock'
-import { calcSMA } from './indicators'
+import { resampleOhlcv, smaAt } from './timeframes'
 
 export type StageLevel = 1 | 2 | 3 | 4 | 5 | 6
+
+export type StageTransitionDirection =
+  | 'improve'
+  | 'deteriorate'
+  | 'jump_improve'
+  | 'jump_deteriorate'
+  | 'stable'
+  | 'invalid'
+
+export interface StageTransitionInfo {
+  from: StageLevel
+  to: StageLevel
+  direction: StageTransitionDirection
+  forwardDistance: number
+  backwardDistance: number
+  isCycleAdjacent: boolean
+}
+
+export interface StageTransitionCell {
+  from: StageLevel
+  to: StageLevel
+  direction: StageTransitionDirection
+  forwardDistance: number
+  backwardDistance: number
+  isCycleAdjacent: boolean
+  label: string
+}
+
+export const STAGE_CYCLE: ReadonlyArray<StageLevel> = [1, 2, 3, 4, 5, 6]
+export const STAGE_COUNT = STAGE_CYCLE.length
+
+// 数字の大小ではなく、各MA配列が示す構造上の強さを補助的に表す値。
+// 遷移の正本は下の明示的な隣接遷移であり、この値は飛び越し遷移の
+// 向きとグループ集計の「現在強度」を安定して扱うためだけに使う。
+export const STAGE_STRUCTURE_STRENGTH: Record<StageLevel, number> = {
+  1: 100, // パーフェクトオーダー
+  2: 60,  // 強気構造内の調整
+  3: 20,  // 弱気移行
+  4: 0,   // リバースパーフェクトオーダー
+  5: 40,  // 反発初期
+  6: 75,  // 強気移行
+}
+
+// 6ステージは 1→2→3→4→5→6→1 の形で遷移しうるが、
+// その番号順を「改善」と解釈してはいけない。MA構造の意味に従う
+// 悪化経路は 1→2→3→4、改善経路は 4→5→6→1 である。
+// この定義を全画面・全バッチの遷移正本とする。
+const ADJACENT_TRANSITION_DIRECTION: Partial<Record<`${StageLevel}-${StageLevel}`, StageTransitionDirection>> = {
+  '1-2': 'deteriorate',
+  '2-3': 'deteriorate',
+  '3-4': 'deteriorate',
+  '4-5': 'improve',
+  '5-6': 'improve',
+  '6-1': 'improve',
+  '2-1': 'improve',
+  '3-2': 'improve',
+  '4-3': 'improve',
+  '5-4': 'deteriorate',
+  '6-5': 'deteriorate',
+  '1-6': 'deteriorate',
+}
+
+const STAGE_TO_INDEX: Record<StageLevel, number> = {
+  1: 0,
+  2: 1,
+  3: 2,
+  4: 3,
+  5: 4,
+  6: 5,
+}
+
+/**
+ * 6段階循環に対する遷移分類を1箇所で定義
+ * - forward/backwardDistance は番号上の循環距離として監査用に残す
+ * - 改善・悪化の正本は ADJACENT_TRANSITION_DIRECTION と構造強度
+ * - 隣接遷移は明示定義、飛び越し遷移は構造強度差で方向を決める
+ */
+function classifyStageTransition(from: StageLevel, to: StageLevel): Omit<StageTransitionInfo, 'from' | 'to'> {
+  const fromIdx = STAGE_TO_INDEX[from]
+  const toIdx = STAGE_TO_INDEX[to]
+  const rawForward = (toIdx - fromIdx + STAGE_COUNT) % STAGE_COUNT
+  const forwardDistance = rawForward === 0 ? 0 : rawForward
+  const backwardDistance = (STAGE_COUNT - forwardDistance) % STAGE_COUNT
+
+  let direction: StageTransitionDirection = 'invalid'
+  if (from === to) {
+    direction = 'stable'
+  } else {
+    const adjacent = ADJACENT_TRANSITION_DIRECTION[`${from}-${to}`]
+    if (adjacent) {
+      direction = adjacent
+    } else {
+      const strengthDelta = STAGE_STRUCTURE_STRENGTH[to] - STAGE_STRUCTURE_STRENGTH[from]
+      direction = strengthDelta >= 0 ? 'jump_improve' : 'jump_deteriorate'
+    }
+  }
+
+  return {
+    direction,
+    forwardDistance,
+    backwardDistance,
+    isCycleAdjacent: direction === 'improve' || direction === 'deteriorate',
+  }
+}
+
+export const STAGE_TRANSITION_MATRIX: StageTransitionCell[][] = STAGE_CYCLE.map((from) =>
+  STAGE_CYCLE.map((to) => {
+    const { direction, forwardDistance, backwardDistance, isCycleAdjacent } = classifyStageTransition(from, to)
+    const labelMap: Record<StageTransitionDirection, string> = {
+      stable: '据置',
+      improve: '改善',
+      deteriorate: '悪化',
+      jump_improve: '飛躍改善',
+      jump_deteriorate: '飛躍悪化',
+      invalid: '不明',
+    }
+
+    return {
+      from,
+      to,
+      direction,
+      forwardDistance,
+      backwardDistance,
+      isCycleAdjacent,
+      label: labelMap[direction],
+    }
+  }),
+)
+
+export const STAGE_DIRECTION_META: Record<
+  StageTransitionDirection,
+  { title: string; rgb: string; text: string; tone: string; description: string }
+> = {
+  stable: {
+    title: '据置',
+    rgb: '120, 113, 108',
+    text: 'var(--color-text-tertiary)',
+    tone: 'neutral',
+    description: '同一ステージを維持（前後で循環距離0）',
+  },
+  improve: {
+    title: '改善',
+    rgb: '22, 163, 74',
+    text: '#166534',
+    tone: 'up',
+    description: 'MA構造の改善方向へ1ステップ移動（4→5、5→6、6→1、2→1、3→2、4→3）',
+  },
+  deteriorate: {
+    title: '悪化',
+    rgb: '37, 99, 235',
+    text: '#1d4ed8',
+    tone: 'down',
+    description: 'MA構造の悪化方向へ1ステップ移動（1→2、2→3、3→4、1→6、6→5、5→4）',
+  },
+  jump_improve: {
+    title: '大幅改善',
+    rgb: '6, 95, 70',
+    text: '#065f46',
+    tone: 'up',
+    description: '隣接を飛び越えて構造強度が改善した遷移',
+  },
+  jump_deteriorate: {
+    title: '大幅悪化',
+    rgb: '217, 119, 6',
+    text: '#92400e',
+    tone: 'down',
+    description: '隣接を飛び越えて構造強度が悪化した遷移',
+  },
+  invalid: {
+    title: '不明',
+    rgb: '120, 113, 108',
+    text: 'var(--color-text-tertiary)',
+    tone: 'neutral',
+    description: 'ステージが未計算または不正のため遷移方向を判定できません',
+  },
+}
+
+export function isStage(value: number | null): value is StageLevel {
+  return value === 1 || value === 2 || value === 3 || value === 4 || value === 5 || value === 6
+}
+
+export function getStageTransitionInfo(from: number | null, to: number | null): StageTransitionInfo | null {
+  if (!isStage(from) || !isStage(to)) return null
+  const { direction, forwardDistance, backwardDistance, isCycleAdjacent } = classifyStageTransition(from, to)
+  return { from, to, direction, forwardDistance, backwardDistance, isCycleAdjacent }
+}
+
+export function getStageTransitionDirection(from: number | null, to: number | null): StageTransitionDirection {
+  return getStageTransitionInfo(from, to)?.direction ?? 'invalid'
+}
+
+export function getStageTransitionTone(
+  direction: StageTransitionDirection,
+): 'up' | 'down' | 'watch' | 'neutral' {
+  switch (direction) {
+    case 'improve':
+    case 'jump_improve':
+      return 'up'
+    case 'deteriorate':
+    case 'jump_deteriorate':
+      return 'down'
+    case 'stable':
+      return 'neutral'
+    default:
+      return 'watch'
+  }
+}
+
+export const STAGE_COMPARISON_RELATIVE_EPSILON = 1e-10
 
 export interface MaValues {
   ma_5: number | null
@@ -53,19 +262,24 @@ export interface StageResult {
 /**
  * 3本の移動平均線（ma1, ma2, ma3）の並び順からステージを判定
  */
-function calculateStageFromThreeMa(
+export function calculateStageFromThreeMa(
   ma1: number | null,
   ma2: number | null,
   ma3: number | null,
 ): number | null {
   if (ma1 === null || ma2 === null || ma3 === null) return null
 
-  if (ma1 > ma2 && ma2 > ma3) return 1
-  if (ma2 > ma1 && ma1 > ma3) return 2
-  if (ma2 > ma3 && ma3 > ma1) return 3
-  if (ma3 > ma2 && ma2 > ma1) return 4
-  if (ma3 > ma1 && ma1 > ma2) return 5
-  if (ma1 > ma3 && ma3 > ma2) return 6
+  const greaterThan = (left: number, right: number): boolean => {
+    const tolerance = STAGE_COMPARISON_RELATIVE_EPSILON * Math.max(1, Math.abs(left), Math.abs(right))
+    return left - right > tolerance
+  }
+
+  if (greaterThan(ma1, ma2) && greaterThan(ma2, ma3)) return 1
+  if (greaterThan(ma2, ma1) && greaterThan(ma1, ma3)) return 2
+  if (greaterThan(ma2, ma3) && greaterThan(ma3, ma1)) return 3
+  if (greaterThan(ma3, ma2) && greaterThan(ma2, ma1)) return 4
+  if (greaterThan(ma3, ma1) && greaterThan(ma1, ma2)) return 5
+  if (greaterThan(ma1, ma3) && greaterThan(ma3, ma2)) return 6
 
   // 等しい値がある場合は判定不能
   return null
@@ -108,41 +322,22 @@ export function calculateAllStages(ma: MaValues): StageResult {
 // OHLCV から MA を計算するヘルパー（stock-dashboard 固有）
 // ─────────────────────────────────────────────────────────
 
-/** 日足 OHLCV を週足/月足に集約 */
-function aggregate(ohlcv: OHLCV[], groupSize: number): OHLCV[] {
-  if (groupSize <= 1) return ohlcv
-  const result: OHLCV[] = []
-  for (let i = 0; i < ohlcv.length; i += groupSize) {
-    const slice = ohlcv.slice(i, i + groupSize)
-    if (slice.length === 0) continue
-    result.push({
-      date: slice[slice.length - 1].date,
-      open: slice[0].open,
-      high: Math.max(...slice.map((d) => d.high)),
-      low: Math.min(...slice.map((d) => d.low)),
-      close: slice[slice.length - 1].close,
-      volume: slice.reduce((s, d) => s + d.volume, 0),
-    })
-  }
-  return result
-}
-
 function lastSma(ohlcv: OHLCV[], period: number): number | null {
-  const arr = calcSMA(ohlcv, period)
-  return arr[arr.length - 1] ?? null
+  return smaAt(ohlcv, period)
 }
 
 /** Yahoo Finance の日足 OHLCV から MA 値一式を計算 */
 export function buildMaValuesFromOhlcv(ohlcv: OHLCV[]): MaValues {
-  const weekly = aggregate(ohlcv, 5)
-  const monthly = aggregate(ohlcv, 21)
+  const daily = resampleOhlcv(ohlcv, { timeframe: 'day', multiplier: 1 })
+  const weekly = resampleOhlcv(daily, { timeframe: 'week', multiplier: 1 })
+  const monthly = resampleOhlcv(daily, { timeframe: 'month', multiplier: 1 })
 
   return {
-    ma_5: lastSma(ohlcv, 5),
-    ma_25: lastSma(ohlcv, 25),
-    ma_75: lastSma(ohlcv, 75),
-    ma_150: lastSma(ohlcv, 150),
-    ma_300: lastSma(ohlcv, 300),
+    ma_5: lastSma(daily, 5),
+    ma_25: lastSma(daily, 25),
+    ma_75: lastSma(daily, 75),
+    ma_150: lastSma(daily, 150),
+    ma_300: lastSma(daily, 300),
     weekly_ma_5: lastSma(weekly, 5),
     weekly_ma_13: lastSma(weekly, 13),
     weekly_ma_25: lastSma(weekly, 25),

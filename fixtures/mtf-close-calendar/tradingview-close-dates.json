@@ -1,0 +1,6212 @@
+{
+  "schemaVersion": 2,
+  "status": "PASS",
+  "oracle": {
+    "symbol": "TSE:7203",
+    "market": "JP",
+    "chartTimeframe": "1D",
+    "exchangeTimezone": "Asia/Tokyo",
+    "session": "regular",
+    "from": "2025-01-01",
+    "to": "2026-10-02"
+  },
+  "sessionContext": {
+    "anchorDate": "2000-01-04",
+    "coverageFrom": "2008-05-07",
+    "coverageTo": "2026-10-02",
+    "calendarSource": "MARKET_OHLCV_AND_JP_HOLIDAY_RULES"
+  },
+  "observations": [
+    {
+      "date": "2025-01-06",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2025-01-07",
+      "sessionOrdinal": 6131,
+      "nextSessionOrdinal": 6132,
+      "tradingYearSessionIndex": 0,
+      "nextTradingYearSessionIndex": 1,
+      "tradingYearWeekIndex": 0,
+      "nextTradingYearWeekIndex": 0
+    },
+    {
+      "date": "2025-01-07",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2025-01-08",
+      "sessionOrdinal": 6132,
+      "nextSessionOrdinal": 6133,
+      "tradingYearSessionIndex": 1,
+      "nextTradingYearSessionIndex": 2,
+      "tradingYearWeekIndex": 0,
+      "nextTradingYearWeekIndex": 0
+    },
+    {
+      "date": "2025-01-08",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D"
+      ],
+      "nextTradingDate": "2025-01-09",
+      "sessionOrdinal": 6133,
+      "nextSessionOrdinal": 6134,
+      "tradingYearSessionIndex": 2,
+      "nextTradingYearSessionIndex": 3,
+      "tradingYearWeekIndex": 0,
+      "nextTradingYearWeekIndex": 0
+    },
+    {
+      "date": "2025-01-09",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2025-01-10",
+      "sessionOrdinal": 6134,
+      "nextSessionOrdinal": 6135,
+      "tradingYearSessionIndex": 3,
+      "nextTradingYearSessionIndex": 4,
+      "tradingYearWeekIndex": 0,
+      "nextTradingYearWeekIndex": 0
+    },
+    {
+      "date": "2025-01-10",
+      "expectedCloseTimeframes": [
+        "D",
+        "5D",
+        "W"
+      ],
+      "nextTradingDate": "2025-01-14",
+      "sessionOrdinal": 6135,
+      "nextSessionOrdinal": 6136,
+      "tradingYearSessionIndex": 4,
+      "nextTradingYearSessionIndex": 5,
+      "tradingYearWeekIndex": 0,
+      "nextTradingYearWeekIndex": 1
+    },
+    {
+      "date": "2025-01-14",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D"
+      ],
+      "nextTradingDate": "2025-01-15",
+      "sessionOrdinal": 6136,
+      "nextSessionOrdinal": 6137,
+      "tradingYearSessionIndex": 5,
+      "nextTradingYearSessionIndex": 6,
+      "tradingYearWeekIndex": 1,
+      "nextTradingYearWeekIndex": 1
+    },
+    {
+      "date": "2025-01-15",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2025-01-16",
+      "sessionOrdinal": 6137,
+      "nextSessionOrdinal": 6138,
+      "tradingYearSessionIndex": 6,
+      "nextTradingYearSessionIndex": 7,
+      "tradingYearWeekIndex": 1,
+      "nextTradingYearWeekIndex": 1
+    },
+    {
+      "date": "2025-01-16",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2025-01-17",
+      "sessionOrdinal": 6138,
+      "nextSessionOrdinal": 6139,
+      "tradingYearSessionIndex": 7,
+      "nextTradingYearSessionIndex": 8,
+      "tradingYearWeekIndex": 1,
+      "nextTradingYearWeekIndex": 1
+    },
+    {
+      "date": "2025-01-17",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D",
+        "W",
+        "2W"
+      ],
+      "nextTradingDate": "2025-01-20",
+      "sessionOrdinal": 6139,
+      "nextSessionOrdinal": 6140,
+      "tradingYearSessionIndex": 8,
+      "nextTradingYearSessionIndex": 9,
+      "tradingYearWeekIndex": 1,
+      "nextTradingYearWeekIndex": 2
+    },
+    {
+      "date": "2025-01-20",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "5D"
+      ],
+      "nextTradingDate": "2025-01-21",
+      "sessionOrdinal": 6140,
+      "nextSessionOrdinal": 6141,
+      "tradingYearSessionIndex": 9,
+      "nextTradingYearSessionIndex": 10,
+      "tradingYearWeekIndex": 2,
+      "nextTradingYearWeekIndex": 2
+    },
+    {
+      "date": "2025-01-21",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2025-01-22",
+      "sessionOrdinal": 6141,
+      "nextSessionOrdinal": 6142,
+      "tradingYearSessionIndex": 10,
+      "nextTradingYearSessionIndex": 11,
+      "tradingYearWeekIndex": 2,
+      "nextTradingYearWeekIndex": 2
+    },
+    {
+      "date": "2025-01-22",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D"
+      ],
+      "nextTradingDate": "2025-01-23",
+      "sessionOrdinal": 6142,
+      "nextSessionOrdinal": 6143,
+      "tradingYearSessionIndex": 11,
+      "nextTradingYearSessionIndex": 12,
+      "tradingYearWeekIndex": 2,
+      "nextTradingYearWeekIndex": 2
+    },
+    {
+      "date": "2025-01-23",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2025-01-24",
+      "sessionOrdinal": 6143,
+      "nextSessionOrdinal": 6144,
+      "tradingYearSessionIndex": 12,
+      "nextTradingYearSessionIndex": 13,
+      "tradingYearWeekIndex": 2,
+      "nextTradingYearWeekIndex": 2
+    },
+    {
+      "date": "2025-01-24",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "W",
+        "3W"
+      ],
+      "nextTradingDate": "2025-01-27",
+      "sessionOrdinal": 6144,
+      "nextSessionOrdinal": 6145,
+      "tradingYearSessionIndex": 13,
+      "nextTradingYearSessionIndex": 14,
+      "tradingYearWeekIndex": 2,
+      "nextTradingYearWeekIndex": 3
+    },
+    {
+      "date": "2025-01-27",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D",
+        "5D"
+      ],
+      "nextTradingDate": "2025-01-28",
+      "sessionOrdinal": 6145,
+      "nextSessionOrdinal": 6146,
+      "tradingYearSessionIndex": 14,
+      "nextTradingYearSessionIndex": 15,
+      "tradingYearWeekIndex": 3,
+      "nextTradingYearWeekIndex": 3
+    },
+    {
+      "date": "2025-01-28",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2025-01-29",
+      "sessionOrdinal": 6146,
+      "nextSessionOrdinal": 6147,
+      "tradingYearSessionIndex": 15,
+      "nextTradingYearSessionIndex": 16,
+      "tradingYearWeekIndex": 3,
+      "nextTradingYearWeekIndex": 3
+    },
+    {
+      "date": "2025-01-29",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2025-01-30",
+      "sessionOrdinal": 6147,
+      "nextSessionOrdinal": 6148,
+      "tradingYearSessionIndex": 16,
+      "nextTradingYearSessionIndex": 17,
+      "tradingYearWeekIndex": 3,
+      "nextTradingYearWeekIndex": 3
+    },
+    {
+      "date": "2025-01-30",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D"
+      ],
+      "nextTradingDate": "2025-01-31",
+      "sessionOrdinal": 6148,
+      "nextSessionOrdinal": 6149,
+      "tradingYearSessionIndex": 17,
+      "nextTradingYearSessionIndex": 18,
+      "tradingYearWeekIndex": 3,
+      "nextTradingYearWeekIndex": 3
+    },
+    {
+      "date": "2025-01-31",
+      "expectedCloseTimeframes": [
+        "D",
+        "W",
+        "2W",
+        "M"
+      ],
+      "nextTradingDate": "2025-02-03",
+      "sessionOrdinal": 6149,
+      "nextSessionOrdinal": 6150,
+      "tradingYearSessionIndex": 18,
+      "nextTradingYearSessionIndex": 19,
+      "tradingYearWeekIndex": 3,
+      "nextTradingYearWeekIndex": 4
+    },
+    {
+      "date": "2025-02-03",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "5D"
+      ],
+      "nextTradingDate": "2025-02-04",
+      "sessionOrdinal": 6150,
+      "nextSessionOrdinal": 6151,
+      "tradingYearSessionIndex": 19,
+      "nextTradingYearSessionIndex": 20,
+      "tradingYearWeekIndex": 4,
+      "nextTradingYearWeekIndex": 4
+    },
+    {
+      "date": "2025-02-04",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D"
+      ],
+      "nextTradingDate": "2025-02-05",
+      "sessionOrdinal": 6151,
+      "nextSessionOrdinal": 6152,
+      "tradingYearSessionIndex": 20,
+      "nextTradingYearSessionIndex": 21,
+      "tradingYearWeekIndex": 4,
+      "nextTradingYearWeekIndex": 4
+    },
+    {
+      "date": "2025-02-05",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2025-02-06",
+      "sessionOrdinal": 6152,
+      "nextSessionOrdinal": 6153,
+      "tradingYearSessionIndex": 21,
+      "nextTradingYearSessionIndex": 22,
+      "tradingYearWeekIndex": 4,
+      "nextTradingYearWeekIndex": 4
+    },
+    {
+      "date": "2025-02-06",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2025-02-07",
+      "sessionOrdinal": 6153,
+      "nextSessionOrdinal": 6154,
+      "tradingYearSessionIndex": 22,
+      "nextTradingYearSessionIndex": 23,
+      "tradingYearWeekIndex": 4,
+      "nextTradingYearWeekIndex": 4
+    },
+    {
+      "date": "2025-02-07",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D",
+        "W",
+        "5W"
+      ],
+      "nextTradingDate": "2025-02-10",
+      "sessionOrdinal": 6154,
+      "nextSessionOrdinal": 6155,
+      "tradingYearSessionIndex": 23,
+      "nextTradingYearSessionIndex": 24,
+      "tradingYearWeekIndex": 4,
+      "nextTradingYearWeekIndex": 5
+    },
+    {
+      "date": "2025-02-10",
+      "expectedCloseTimeframes": [
+        "D",
+        "5D"
+      ],
+      "nextTradingDate": "2025-02-12",
+      "sessionOrdinal": 6155,
+      "nextSessionOrdinal": 6156,
+      "tradingYearSessionIndex": 24,
+      "nextTradingYearSessionIndex": 25,
+      "tradingYearWeekIndex": 5,
+      "nextTradingYearWeekIndex": 5
+    },
+    {
+      "date": "2025-02-12",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2025-02-13",
+      "sessionOrdinal": 6156,
+      "nextSessionOrdinal": 6157,
+      "tradingYearSessionIndex": 25,
+      "nextTradingYearSessionIndex": 26,
+      "tradingYearWeekIndex": 5,
+      "nextTradingYearWeekIndex": 5
+    },
+    {
+      "date": "2025-02-13",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D"
+      ],
+      "nextTradingDate": "2025-02-14",
+      "sessionOrdinal": 6157,
+      "nextSessionOrdinal": 6158,
+      "tradingYearSessionIndex": 26,
+      "nextTradingYearSessionIndex": 27,
+      "tradingYearWeekIndex": 5,
+      "nextTradingYearWeekIndex": 5
+    },
+    {
+      "date": "2025-02-14",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "W",
+        "2W",
+        "3W"
+      ],
+      "nextTradingDate": "2025-02-17",
+      "sessionOrdinal": 6158,
+      "nextSessionOrdinal": 6159,
+      "tradingYearSessionIndex": 27,
+      "nextTradingYearSessionIndex": 28,
+      "tradingYearWeekIndex": 5,
+      "nextTradingYearWeekIndex": 6
+    },
+    {
+      "date": "2025-02-17",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2025-02-18",
+      "sessionOrdinal": 6159,
+      "nextSessionOrdinal": 6160,
+      "tradingYearSessionIndex": 28,
+      "nextTradingYearSessionIndex": 29,
+      "tradingYearWeekIndex": 6,
+      "nextTradingYearWeekIndex": 6
+    },
+    {
+      "date": "2025-02-18",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D",
+        "5D"
+      ],
+      "nextTradingDate": "2025-02-19",
+      "sessionOrdinal": 6160,
+      "nextSessionOrdinal": 6161,
+      "tradingYearSessionIndex": 29,
+      "nextTradingYearSessionIndex": 30,
+      "tradingYearWeekIndex": 6,
+      "nextTradingYearWeekIndex": 6
+    },
+    {
+      "date": "2025-02-19",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2025-02-20",
+      "sessionOrdinal": 6161,
+      "nextSessionOrdinal": 6162,
+      "tradingYearSessionIndex": 30,
+      "nextTradingYearSessionIndex": 31,
+      "tradingYearWeekIndex": 6,
+      "nextTradingYearWeekIndex": 6
+    },
+    {
+      "date": "2025-02-20",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2025-02-21",
+      "sessionOrdinal": 6162,
+      "nextSessionOrdinal": 6163,
+      "tradingYearSessionIndex": 31,
+      "nextTradingYearSessionIndex": 32,
+      "tradingYearWeekIndex": 6,
+      "nextTradingYearWeekIndex": 6
+    },
+    {
+      "date": "2025-02-21",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D",
+        "W"
+      ],
+      "nextTradingDate": "2025-02-25",
+      "sessionOrdinal": 6163,
+      "nextSessionOrdinal": 6164,
+      "tradingYearSessionIndex": 32,
+      "nextTradingYearSessionIndex": 33,
+      "tradingYearWeekIndex": 6,
+      "nextTradingYearWeekIndex": 7
+    },
+    {
+      "date": "2025-02-25",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2025-02-26",
+      "sessionOrdinal": 6164,
+      "nextSessionOrdinal": 6165,
+      "tradingYearSessionIndex": 33,
+      "nextTradingYearSessionIndex": 34,
+      "tradingYearWeekIndex": 7,
+      "nextTradingYearWeekIndex": 7
+    },
+    {
+      "date": "2025-02-26",
+      "expectedCloseTimeframes": [
+        "D",
+        "5D"
+      ],
+      "nextTradingDate": "2025-02-27",
+      "sessionOrdinal": 6165,
+      "nextSessionOrdinal": 6166,
+      "tradingYearSessionIndex": 34,
+      "nextTradingYearSessionIndex": 35,
+      "tradingYearWeekIndex": 7,
+      "nextTradingYearWeekIndex": 7
+    },
+    {
+      "date": "2025-02-27",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D"
+      ],
+      "nextTradingDate": "2025-02-28",
+      "sessionOrdinal": 6166,
+      "nextSessionOrdinal": 6167,
+      "tradingYearSessionIndex": 35,
+      "nextTradingYearSessionIndex": 36,
+      "tradingYearWeekIndex": 7,
+      "nextTradingYearWeekIndex": 7
+    },
+    {
+      "date": "2025-02-28",
+      "expectedCloseTimeframes": [
+        "D",
+        "W",
+        "2W",
+        "M",
+        "2M"
+      ],
+      "nextTradingDate": "2025-03-03",
+      "sessionOrdinal": 6167,
+      "nextSessionOrdinal": 6168,
+      "tradingYearSessionIndex": 36,
+      "nextTradingYearSessionIndex": 37,
+      "tradingYearWeekIndex": 7,
+      "nextTradingYearWeekIndex": 8
+    },
+    {
+      "date": "2025-03-03",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2025-03-04",
+      "sessionOrdinal": 6168,
+      "nextSessionOrdinal": 6169,
+      "tradingYearSessionIndex": 37,
+      "nextTradingYearSessionIndex": 38,
+      "tradingYearWeekIndex": 8,
+      "nextTradingYearWeekIndex": 8
+    },
+    {
+      "date": "2025-03-04",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D"
+      ],
+      "nextTradingDate": "2025-03-05",
+      "sessionOrdinal": 6169,
+      "nextSessionOrdinal": 6170,
+      "tradingYearSessionIndex": 38,
+      "nextTradingYearSessionIndex": 39,
+      "tradingYearWeekIndex": 8,
+      "nextTradingYearWeekIndex": 8
+    },
+    {
+      "date": "2025-03-05",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "5D"
+      ],
+      "nextTradingDate": "2025-03-06",
+      "sessionOrdinal": 6170,
+      "nextSessionOrdinal": 6171,
+      "tradingYearSessionIndex": 39,
+      "nextTradingYearSessionIndex": 40,
+      "tradingYearWeekIndex": 8,
+      "nextTradingYearWeekIndex": 8
+    },
+    {
+      "date": "2025-03-06",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2025-03-07",
+      "sessionOrdinal": 6171,
+      "nextSessionOrdinal": 6172,
+      "tradingYearSessionIndex": 40,
+      "nextTradingYearSessionIndex": 41,
+      "tradingYearWeekIndex": 8,
+      "nextTradingYearWeekIndex": 8
+    },
+    {
+      "date": "2025-03-07",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D",
+        "W",
+        "3W"
+      ],
+      "nextTradingDate": "2025-03-10",
+      "sessionOrdinal": 6172,
+      "nextSessionOrdinal": 6173,
+      "tradingYearSessionIndex": 41,
+      "nextTradingYearSessionIndex": 42,
+      "tradingYearWeekIndex": 8,
+      "nextTradingYearWeekIndex": 9
+    },
+    {
+      "date": "2025-03-10",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2025-03-11",
+      "sessionOrdinal": 6173,
+      "nextSessionOrdinal": 6174,
+      "tradingYearSessionIndex": 42,
+      "nextTradingYearSessionIndex": 43,
+      "tradingYearWeekIndex": 9,
+      "nextTradingYearWeekIndex": 9
+    },
+    {
+      "date": "2025-03-11",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2025-03-12",
+      "sessionOrdinal": 6174,
+      "nextSessionOrdinal": 6175,
+      "tradingYearSessionIndex": 43,
+      "nextTradingYearSessionIndex": 44,
+      "tradingYearWeekIndex": 9,
+      "nextTradingYearWeekIndex": 9
+    },
+    {
+      "date": "2025-03-12",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D",
+        "5D"
+      ],
+      "nextTradingDate": "2025-03-13",
+      "sessionOrdinal": 6175,
+      "nextSessionOrdinal": 6176,
+      "tradingYearSessionIndex": 44,
+      "nextTradingYearSessionIndex": 45,
+      "tradingYearWeekIndex": 9,
+      "nextTradingYearWeekIndex": 9
+    },
+    {
+      "date": "2025-03-13",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2025-03-14",
+      "sessionOrdinal": 6176,
+      "nextSessionOrdinal": 6177,
+      "tradingYearSessionIndex": 45,
+      "nextTradingYearSessionIndex": 46,
+      "tradingYearWeekIndex": 9,
+      "nextTradingYearWeekIndex": 9
+    },
+    {
+      "date": "2025-03-14",
+      "expectedCloseTimeframes": [
+        "D",
+        "W",
+        "2W",
+        "5W"
+      ],
+      "nextTradingDate": "2025-03-17",
+      "sessionOrdinal": 6177,
+      "nextSessionOrdinal": 6178,
+      "tradingYearSessionIndex": 46,
+      "nextTradingYearSessionIndex": 47,
+      "tradingYearWeekIndex": 9,
+      "nextTradingYearWeekIndex": 10
+    },
+    {
+      "date": "2025-03-17",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D"
+      ],
+      "nextTradingDate": "2025-03-18",
+      "sessionOrdinal": 6178,
+      "nextSessionOrdinal": 6179,
+      "tradingYearSessionIndex": 47,
+      "nextTradingYearSessionIndex": 48,
+      "tradingYearWeekIndex": 10,
+      "nextTradingYearWeekIndex": 10
+    },
+    {
+      "date": "2025-03-18",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2025-03-19",
+      "sessionOrdinal": 6179,
+      "nextSessionOrdinal": 6180,
+      "tradingYearSessionIndex": 48,
+      "nextTradingYearSessionIndex": 49,
+      "tradingYearWeekIndex": 10,
+      "nextTradingYearWeekIndex": 10
+    },
+    {
+      "date": "2025-03-19",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "5D"
+      ],
+      "nextTradingDate": "2025-03-21",
+      "sessionOrdinal": 6180,
+      "nextSessionOrdinal": 6181,
+      "tradingYearSessionIndex": 49,
+      "nextTradingYearSessionIndex": 50,
+      "tradingYearWeekIndex": 10,
+      "nextTradingYearWeekIndex": 10
+    },
+    {
+      "date": "2025-03-21",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D",
+        "W"
+      ],
+      "nextTradingDate": "2025-03-24",
+      "sessionOrdinal": 6181,
+      "nextSessionOrdinal": 6182,
+      "tradingYearSessionIndex": 50,
+      "nextTradingYearSessionIndex": 51,
+      "tradingYearWeekIndex": 10,
+      "nextTradingYearWeekIndex": 11
+    },
+    {
+      "date": "2025-03-24",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2025-03-25",
+      "sessionOrdinal": 6182,
+      "nextSessionOrdinal": 6183,
+      "tradingYearSessionIndex": 51,
+      "nextTradingYearSessionIndex": 52,
+      "tradingYearWeekIndex": 11,
+      "nextTradingYearWeekIndex": 11
+    },
+    {
+      "date": "2025-03-25",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2025-03-26",
+      "sessionOrdinal": 6183,
+      "nextSessionOrdinal": 6184,
+      "tradingYearSessionIndex": 52,
+      "nextTradingYearSessionIndex": 53,
+      "tradingYearWeekIndex": 11,
+      "nextTradingYearWeekIndex": 11
+    },
+    {
+      "date": "2025-03-26",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D"
+      ],
+      "nextTradingDate": "2025-03-27",
+      "sessionOrdinal": 6184,
+      "nextSessionOrdinal": 6185,
+      "tradingYearSessionIndex": 53,
+      "nextTradingYearSessionIndex": 54,
+      "tradingYearWeekIndex": 11,
+      "nextTradingYearWeekIndex": 11
+    },
+    {
+      "date": "2025-03-27",
+      "expectedCloseTimeframes": [
+        "D",
+        "5D"
+      ],
+      "nextTradingDate": "2025-03-28",
+      "sessionOrdinal": 6185,
+      "nextSessionOrdinal": 6186,
+      "tradingYearSessionIndex": 54,
+      "nextTradingYearSessionIndex": 55,
+      "tradingYearWeekIndex": 11,
+      "nextTradingYearWeekIndex": 11
+    },
+    {
+      "date": "2025-03-28",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "W",
+        "2W",
+        "3W"
+      ],
+      "nextTradingDate": "2025-03-31",
+      "sessionOrdinal": 6186,
+      "nextSessionOrdinal": 6187,
+      "tradingYearSessionIndex": 55,
+      "nextTradingYearSessionIndex": 56,
+      "tradingYearWeekIndex": 11,
+      "nextTradingYearWeekIndex": 12
+    },
+    {
+      "date": "2025-03-31",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D",
+        "M",
+        "3M"
+      ],
+      "nextTradingDate": "2025-04-01",
+      "sessionOrdinal": 6187,
+      "nextSessionOrdinal": 6188,
+      "tradingYearSessionIndex": 56,
+      "nextTradingYearSessionIndex": 57,
+      "tradingYearWeekIndex": 12,
+      "nextTradingYearWeekIndex": 12
+    },
+    {
+      "date": "2025-04-01",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2025-04-02",
+      "sessionOrdinal": 6188,
+      "nextSessionOrdinal": 6189,
+      "tradingYearSessionIndex": 57,
+      "nextTradingYearSessionIndex": 58,
+      "tradingYearWeekIndex": 12,
+      "nextTradingYearWeekIndex": 12
+    },
+    {
+      "date": "2025-04-02",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2025-04-03",
+      "sessionOrdinal": 6189,
+      "nextSessionOrdinal": 6190,
+      "tradingYearSessionIndex": 58,
+      "nextTradingYearSessionIndex": 59,
+      "tradingYearWeekIndex": 12,
+      "nextTradingYearWeekIndex": 12
+    },
+    {
+      "date": "2025-04-03",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D",
+        "5D"
+      ],
+      "nextTradingDate": "2025-04-04",
+      "sessionOrdinal": 6190,
+      "nextSessionOrdinal": 6191,
+      "tradingYearSessionIndex": 59,
+      "nextTradingYearSessionIndex": 60,
+      "tradingYearWeekIndex": 12,
+      "nextTradingYearWeekIndex": 12
+    },
+    {
+      "date": "2025-04-04",
+      "expectedCloseTimeframes": [
+        "D",
+        "W"
+      ],
+      "nextTradingDate": "2025-04-07",
+      "sessionOrdinal": 6191,
+      "nextSessionOrdinal": 6192,
+      "tradingYearSessionIndex": 60,
+      "nextTradingYearSessionIndex": 61,
+      "tradingYearWeekIndex": 12,
+      "nextTradingYearWeekIndex": 13
+    },
+    {
+      "date": "2025-04-07",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2025-04-08",
+      "sessionOrdinal": 6192,
+      "nextSessionOrdinal": 6193,
+      "tradingYearSessionIndex": 61,
+      "nextTradingYearSessionIndex": 62,
+      "tradingYearWeekIndex": 13,
+      "nextTradingYearWeekIndex": 13
+    },
+    {
+      "date": "2025-04-08",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D"
+      ],
+      "nextTradingDate": "2025-04-09",
+      "sessionOrdinal": 6193,
+      "nextSessionOrdinal": 6194,
+      "tradingYearSessionIndex": 62,
+      "nextTradingYearSessionIndex": 63,
+      "tradingYearWeekIndex": 13,
+      "nextTradingYearWeekIndex": 13
+    },
+    {
+      "date": "2025-04-09",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2025-04-10",
+      "sessionOrdinal": 6194,
+      "nextSessionOrdinal": 6195,
+      "tradingYearSessionIndex": 63,
+      "nextTradingYearSessionIndex": 64,
+      "tradingYearWeekIndex": 13,
+      "nextTradingYearWeekIndex": 13
+    },
+    {
+      "date": "2025-04-10",
+      "expectedCloseTimeframes": [
+        "D",
+        "5D"
+      ],
+      "nextTradingDate": "2025-04-11",
+      "sessionOrdinal": 6195,
+      "nextSessionOrdinal": 6196,
+      "tradingYearSessionIndex": 64,
+      "nextTradingYearSessionIndex": 65,
+      "tradingYearWeekIndex": 13,
+      "nextTradingYearWeekIndex": 13
+    },
+    {
+      "date": "2025-04-11",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D",
+        "W",
+        "2W"
+      ],
+      "nextTradingDate": "2025-04-14",
+      "sessionOrdinal": 6196,
+      "nextSessionOrdinal": 6197,
+      "tradingYearSessionIndex": 65,
+      "nextTradingYearSessionIndex": 66,
+      "tradingYearWeekIndex": 13,
+      "nextTradingYearWeekIndex": 14
+    },
+    {
+      "date": "2025-04-14",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2025-04-15",
+      "sessionOrdinal": 6197,
+      "nextSessionOrdinal": 6198,
+      "tradingYearSessionIndex": 66,
+      "nextTradingYearSessionIndex": 67,
+      "tradingYearWeekIndex": 14,
+      "nextTradingYearWeekIndex": 14
+    },
+    {
+      "date": "2025-04-15",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2025-04-16",
+      "sessionOrdinal": 6198,
+      "nextSessionOrdinal": 6199,
+      "tradingYearSessionIndex": 67,
+      "nextTradingYearSessionIndex": 68,
+      "tradingYearWeekIndex": 14,
+      "nextTradingYearWeekIndex": 14
+    },
+    {
+      "date": "2025-04-16",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D"
+      ],
+      "nextTradingDate": "2025-04-17",
+      "sessionOrdinal": 6199,
+      "nextSessionOrdinal": 6200,
+      "tradingYearSessionIndex": 68,
+      "nextTradingYearSessionIndex": 69,
+      "tradingYearWeekIndex": 14,
+      "nextTradingYearWeekIndex": 14
+    },
+    {
+      "date": "2025-04-17",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "5D"
+      ],
+      "nextTradingDate": "2025-04-18",
+      "sessionOrdinal": 6200,
+      "nextSessionOrdinal": 6201,
+      "tradingYearSessionIndex": 69,
+      "nextTradingYearSessionIndex": 70,
+      "tradingYearWeekIndex": 14,
+      "nextTradingYearWeekIndex": 14
+    },
+    {
+      "date": "2025-04-18",
+      "expectedCloseTimeframes": [
+        "D",
+        "W",
+        "3W",
+        "5W"
+      ],
+      "nextTradingDate": "2025-04-21",
+      "sessionOrdinal": 6201,
+      "nextSessionOrdinal": 6202,
+      "tradingYearSessionIndex": 70,
+      "nextTradingYearSessionIndex": 71,
+      "tradingYearWeekIndex": 14,
+      "nextTradingYearWeekIndex": 15
+    },
+    {
+      "date": "2025-04-21",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D"
+      ],
+      "nextTradingDate": "2025-04-22",
+      "sessionOrdinal": 6202,
+      "nextSessionOrdinal": 6203,
+      "tradingYearSessionIndex": 71,
+      "nextTradingYearSessionIndex": 72,
+      "tradingYearWeekIndex": 15,
+      "nextTradingYearWeekIndex": 15
+    },
+    {
+      "date": "2025-04-22",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2025-04-23",
+      "sessionOrdinal": 6203,
+      "nextSessionOrdinal": 6204,
+      "tradingYearSessionIndex": 72,
+      "nextTradingYearSessionIndex": 73,
+      "tradingYearWeekIndex": 15,
+      "nextTradingYearWeekIndex": 15
+    },
+    {
+      "date": "2025-04-23",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2025-04-24",
+      "sessionOrdinal": 6204,
+      "nextSessionOrdinal": 6205,
+      "tradingYearSessionIndex": 73,
+      "nextTradingYearSessionIndex": 74,
+      "tradingYearWeekIndex": 15,
+      "nextTradingYearWeekIndex": 15
+    },
+    {
+      "date": "2025-04-24",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D",
+        "5D"
+      ],
+      "nextTradingDate": "2025-04-25",
+      "sessionOrdinal": 6205,
+      "nextSessionOrdinal": 6206,
+      "tradingYearSessionIndex": 74,
+      "nextTradingYearSessionIndex": 75,
+      "tradingYearWeekIndex": 15,
+      "nextTradingYearWeekIndex": 15
+    },
+    {
+      "date": "2025-04-25",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "W",
+        "2W"
+      ],
+      "nextTradingDate": "2025-04-28",
+      "sessionOrdinal": 6206,
+      "nextSessionOrdinal": 6207,
+      "tradingYearSessionIndex": 75,
+      "nextTradingYearSessionIndex": 76,
+      "tradingYearWeekIndex": 15,
+      "nextTradingYearWeekIndex": 16
+    },
+    {
+      "date": "2025-04-28",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2025-04-30",
+      "sessionOrdinal": 6207,
+      "nextSessionOrdinal": 6208,
+      "tradingYearSessionIndex": 76,
+      "nextTradingYearSessionIndex": 77,
+      "tradingYearWeekIndex": 16,
+      "nextTradingYearWeekIndex": 16
+    },
+    {
+      "date": "2025-04-30",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D",
+        "M",
+        "2M"
+      ],
+      "nextTradingDate": "2025-05-01",
+      "sessionOrdinal": 6208,
+      "nextSessionOrdinal": 6209,
+      "tradingYearSessionIndex": 77,
+      "nextTradingYearSessionIndex": 78,
+      "tradingYearWeekIndex": 16,
+      "nextTradingYearWeekIndex": 16
+    },
+    {
+      "date": "2025-05-01",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2025-05-02",
+      "sessionOrdinal": 6209,
+      "nextSessionOrdinal": 6210,
+      "tradingYearSessionIndex": 78,
+      "nextTradingYearSessionIndex": 79,
+      "tradingYearWeekIndex": 16,
+      "nextTradingYearWeekIndex": 16
+    },
+    {
+      "date": "2025-05-02",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "5D",
+        "W"
+      ],
+      "nextTradingDate": "2025-05-07",
+      "sessionOrdinal": 6210,
+      "nextSessionOrdinal": 6211,
+      "tradingYearSessionIndex": 79,
+      "nextTradingYearSessionIndex": 80,
+      "tradingYearWeekIndex": 16,
+      "nextTradingYearWeekIndex": 17
+    },
+    {
+      "date": "2025-05-07",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D"
+      ],
+      "nextTradingDate": "2025-05-08",
+      "sessionOrdinal": 6211,
+      "nextSessionOrdinal": 6212,
+      "tradingYearSessionIndex": 80,
+      "nextTradingYearSessionIndex": 81,
+      "tradingYearWeekIndex": 17,
+      "nextTradingYearWeekIndex": 17
+    },
+    {
+      "date": "2025-05-08",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2025-05-09",
+      "sessionOrdinal": 6212,
+      "nextSessionOrdinal": 6213,
+      "tradingYearSessionIndex": 81,
+      "nextTradingYearSessionIndex": 82,
+      "tradingYearWeekIndex": 17,
+      "nextTradingYearWeekIndex": 17
+    },
+    {
+      "date": "2025-05-09",
+      "expectedCloseTimeframes": [
+        "D",
+        "W",
+        "2W",
+        "3W"
+      ],
+      "nextTradingDate": "2025-05-12",
+      "sessionOrdinal": 6213,
+      "nextSessionOrdinal": 6214,
+      "tradingYearSessionIndex": 82,
+      "nextTradingYearSessionIndex": 83,
+      "tradingYearWeekIndex": 17,
+      "nextTradingYearWeekIndex": 18
+    },
+    {
+      "date": "2025-05-12",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D"
+      ],
+      "nextTradingDate": "2025-05-13",
+      "sessionOrdinal": 6214,
+      "nextSessionOrdinal": 6215,
+      "tradingYearSessionIndex": 83,
+      "nextTradingYearSessionIndex": 84,
+      "tradingYearWeekIndex": 18,
+      "nextTradingYearWeekIndex": 18
+    },
+    {
+      "date": "2025-05-13",
+      "expectedCloseTimeframes": [
+        "D",
+        "5D"
+      ],
+      "nextTradingDate": "2025-05-14",
+      "sessionOrdinal": 6215,
+      "nextSessionOrdinal": 6216,
+      "tradingYearSessionIndex": 84,
+      "nextTradingYearSessionIndex": 85,
+      "tradingYearWeekIndex": 18,
+      "nextTradingYearWeekIndex": 18
+    },
+    {
+      "date": "2025-05-14",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2025-05-15",
+      "sessionOrdinal": 6216,
+      "nextSessionOrdinal": 6217,
+      "tradingYearSessionIndex": 85,
+      "nextTradingYearSessionIndex": 86,
+      "tradingYearWeekIndex": 18,
+      "nextTradingYearWeekIndex": 18
+    },
+    {
+      "date": "2025-05-15",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D"
+      ],
+      "nextTradingDate": "2025-05-16",
+      "sessionOrdinal": 6217,
+      "nextSessionOrdinal": 6218,
+      "tradingYearSessionIndex": 86,
+      "nextTradingYearSessionIndex": 87,
+      "tradingYearWeekIndex": 18,
+      "nextTradingYearWeekIndex": 18
+    },
+    {
+      "date": "2025-05-16",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "W"
+      ],
+      "nextTradingDate": "2025-05-19",
+      "sessionOrdinal": 6218,
+      "nextSessionOrdinal": 6219,
+      "tradingYearSessionIndex": 87,
+      "nextTradingYearSessionIndex": 88,
+      "tradingYearWeekIndex": 18,
+      "nextTradingYearWeekIndex": 19
+    },
+    {
+      "date": "2025-05-19",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2025-05-20",
+      "sessionOrdinal": 6219,
+      "nextSessionOrdinal": 6220,
+      "tradingYearSessionIndex": 88,
+      "nextTradingYearSessionIndex": 89,
+      "tradingYearWeekIndex": 19,
+      "nextTradingYearWeekIndex": 19
+    },
+    {
+      "date": "2025-05-20",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D",
+        "5D"
+      ],
+      "nextTradingDate": "2025-05-21",
+      "sessionOrdinal": 6220,
+      "nextSessionOrdinal": 6221,
+      "tradingYearSessionIndex": 89,
+      "nextTradingYearSessionIndex": 90,
+      "tradingYearWeekIndex": 19,
+      "nextTradingYearWeekIndex": 19
+    },
+    {
+      "date": "2025-05-21",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2025-05-22",
+      "sessionOrdinal": 6221,
+      "nextSessionOrdinal": 6222,
+      "tradingYearSessionIndex": 90,
+      "nextTradingYearSessionIndex": 91,
+      "tradingYearWeekIndex": 19,
+      "nextTradingYearWeekIndex": 19
+    },
+    {
+      "date": "2025-05-22",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2025-05-23",
+      "sessionOrdinal": 6222,
+      "nextSessionOrdinal": 6223,
+      "tradingYearSessionIndex": 91,
+      "nextTradingYearSessionIndex": 92,
+      "tradingYearWeekIndex": 19,
+      "nextTradingYearWeekIndex": 19
+    },
+    {
+      "date": "2025-05-23",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D",
+        "W",
+        "2W",
+        "5W"
+      ],
+      "nextTradingDate": "2025-05-26",
+      "sessionOrdinal": 6223,
+      "nextSessionOrdinal": 6224,
+      "tradingYearSessionIndex": 92,
+      "nextTradingYearSessionIndex": 93,
+      "tradingYearWeekIndex": 19,
+      "nextTradingYearWeekIndex": 20
+    },
+    {
+      "date": "2025-05-26",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2025-05-27",
+      "sessionOrdinal": 6224,
+      "nextSessionOrdinal": 6225,
+      "tradingYearSessionIndex": 93,
+      "nextTradingYearSessionIndex": 94,
+      "tradingYearWeekIndex": 20,
+      "nextTradingYearWeekIndex": 20
+    },
+    {
+      "date": "2025-05-27",
+      "expectedCloseTimeframes": [
+        "D",
+        "5D"
+      ],
+      "nextTradingDate": "2025-05-28",
+      "sessionOrdinal": 6225,
+      "nextSessionOrdinal": 6226,
+      "tradingYearSessionIndex": 94,
+      "nextTradingYearSessionIndex": 95,
+      "tradingYearWeekIndex": 20,
+      "nextTradingYearWeekIndex": 20
+    },
+    {
+      "date": "2025-05-28",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D"
+      ],
+      "nextTradingDate": "2025-05-29",
+      "sessionOrdinal": 6226,
+      "nextSessionOrdinal": 6227,
+      "tradingYearSessionIndex": 95,
+      "nextTradingYearSessionIndex": 96,
+      "tradingYearWeekIndex": 20,
+      "nextTradingYearWeekIndex": 20
+    },
+    {
+      "date": "2025-05-29",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2025-05-30",
+      "sessionOrdinal": 6227,
+      "nextSessionOrdinal": 6228,
+      "tradingYearSessionIndex": 96,
+      "nextTradingYearSessionIndex": 97,
+      "tradingYearWeekIndex": 20,
+      "nextTradingYearWeekIndex": 20
+    },
+    {
+      "date": "2025-05-30",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "W",
+        "3W",
+        "M",
+        "5M"
+      ],
+      "nextTradingDate": "2025-06-02",
+      "sessionOrdinal": 6228,
+      "nextSessionOrdinal": 6229,
+      "tradingYearSessionIndex": 97,
+      "nextTradingYearSessionIndex": 98,
+      "tradingYearWeekIndex": 20,
+      "nextTradingYearWeekIndex": 21
+    },
+    {
+      "date": "2025-06-02",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D"
+      ],
+      "nextTradingDate": "2025-06-03",
+      "sessionOrdinal": 6229,
+      "nextSessionOrdinal": 6230,
+      "tradingYearSessionIndex": 98,
+      "nextTradingYearSessionIndex": 99,
+      "tradingYearWeekIndex": 21,
+      "nextTradingYearWeekIndex": 21
+    },
+    {
+      "date": "2025-06-03",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "5D"
+      ],
+      "nextTradingDate": "2025-06-04",
+      "sessionOrdinal": 6230,
+      "nextSessionOrdinal": 6231,
+      "tradingYearSessionIndex": 99,
+      "nextTradingYearSessionIndex": 100,
+      "tradingYearWeekIndex": 21,
+      "nextTradingYearWeekIndex": 21
+    },
+    {
+      "date": "2025-06-04",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2025-06-05",
+      "sessionOrdinal": 6231,
+      "nextSessionOrdinal": 6232,
+      "tradingYearSessionIndex": 100,
+      "nextTradingYearSessionIndex": 101,
+      "tradingYearWeekIndex": 21,
+      "nextTradingYearWeekIndex": 21
+    },
+    {
+      "date": "2025-06-05",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D"
+      ],
+      "nextTradingDate": "2025-06-06",
+      "sessionOrdinal": 6232,
+      "nextSessionOrdinal": 6233,
+      "tradingYearSessionIndex": 101,
+      "nextTradingYearSessionIndex": 102,
+      "tradingYearWeekIndex": 21,
+      "nextTradingYearWeekIndex": 21
+    },
+    {
+      "date": "2025-06-06",
+      "expectedCloseTimeframes": [
+        "D",
+        "W",
+        "2W"
+      ],
+      "nextTradingDate": "2025-06-09",
+      "sessionOrdinal": 6233,
+      "nextSessionOrdinal": 6234,
+      "tradingYearSessionIndex": 102,
+      "nextTradingYearSessionIndex": 103,
+      "tradingYearWeekIndex": 21,
+      "nextTradingYearWeekIndex": 22
+    },
+    {
+      "date": "2025-06-09",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2025-06-10",
+      "sessionOrdinal": 6234,
+      "nextSessionOrdinal": 6235,
+      "tradingYearSessionIndex": 103,
+      "nextTradingYearSessionIndex": 104,
+      "tradingYearWeekIndex": 22,
+      "nextTradingYearWeekIndex": 22
+    },
+    {
+      "date": "2025-06-10",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D",
+        "5D"
+      ],
+      "nextTradingDate": "2025-06-11",
+      "sessionOrdinal": 6235,
+      "nextSessionOrdinal": 6236,
+      "tradingYearSessionIndex": 104,
+      "nextTradingYearSessionIndex": 105,
+      "tradingYearWeekIndex": 22,
+      "nextTradingYearWeekIndex": 22
+    },
+    {
+      "date": "2025-06-11",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2025-06-12",
+      "sessionOrdinal": 6236,
+      "nextSessionOrdinal": 6237,
+      "tradingYearSessionIndex": 105,
+      "nextTradingYearSessionIndex": 106,
+      "tradingYearWeekIndex": 22,
+      "nextTradingYearWeekIndex": 22
+    },
+    {
+      "date": "2025-06-12",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2025-06-13",
+      "sessionOrdinal": 6237,
+      "nextSessionOrdinal": 6238,
+      "tradingYearSessionIndex": 106,
+      "nextTradingYearSessionIndex": 107,
+      "tradingYearWeekIndex": 22,
+      "nextTradingYearWeekIndex": 22
+    },
+    {
+      "date": "2025-06-13",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D",
+        "W"
+      ],
+      "nextTradingDate": "2025-06-16",
+      "sessionOrdinal": 6238,
+      "nextSessionOrdinal": 6239,
+      "tradingYearSessionIndex": 107,
+      "nextTradingYearSessionIndex": 108,
+      "tradingYearWeekIndex": 22,
+      "nextTradingYearWeekIndex": 23
+    },
+    {
+      "date": "2025-06-16",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2025-06-17",
+      "sessionOrdinal": 6239,
+      "nextSessionOrdinal": 6240,
+      "tradingYearSessionIndex": 108,
+      "nextTradingYearSessionIndex": 109,
+      "tradingYearWeekIndex": 23,
+      "nextTradingYearWeekIndex": 23
+    },
+    {
+      "date": "2025-06-17",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "5D"
+      ],
+      "nextTradingDate": "2025-06-18",
+      "sessionOrdinal": 6240,
+      "nextSessionOrdinal": 6241,
+      "tradingYearSessionIndex": 109,
+      "nextTradingYearSessionIndex": 110,
+      "tradingYearWeekIndex": 23,
+      "nextTradingYearWeekIndex": 23
+    },
+    {
+      "date": "2025-06-18",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D"
+      ],
+      "nextTradingDate": "2025-06-19",
+      "sessionOrdinal": 6241,
+      "nextSessionOrdinal": 6242,
+      "tradingYearSessionIndex": 110,
+      "nextTradingYearSessionIndex": 111,
+      "tradingYearWeekIndex": 23,
+      "nextTradingYearWeekIndex": 23
+    },
+    {
+      "date": "2025-06-19",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2025-06-20",
+      "sessionOrdinal": 6242,
+      "nextSessionOrdinal": 6243,
+      "tradingYearSessionIndex": 111,
+      "nextTradingYearSessionIndex": 112,
+      "tradingYearWeekIndex": 23,
+      "nextTradingYearWeekIndex": 23
+    },
+    {
+      "date": "2025-06-20",
+      "expectedCloseTimeframes": [
+        "D",
+        "W",
+        "2W",
+        "3W"
+      ],
+      "nextTradingDate": "2025-06-23",
+      "sessionOrdinal": 6243,
+      "nextSessionOrdinal": 6244,
+      "tradingYearSessionIndex": 112,
+      "nextTradingYearSessionIndex": 113,
+      "tradingYearWeekIndex": 23,
+      "nextTradingYearWeekIndex": 24
+    },
+    {
+      "date": "2025-06-23",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D"
+      ],
+      "nextTradingDate": "2025-06-24",
+      "sessionOrdinal": 6244,
+      "nextSessionOrdinal": 6245,
+      "tradingYearSessionIndex": 113,
+      "nextTradingYearSessionIndex": 114,
+      "tradingYearWeekIndex": 24,
+      "nextTradingYearWeekIndex": 24
+    },
+    {
+      "date": "2025-06-24",
+      "expectedCloseTimeframes": [
+        "D",
+        "5D"
+      ],
+      "nextTradingDate": "2025-06-25",
+      "sessionOrdinal": 6245,
+      "nextSessionOrdinal": 6246,
+      "tradingYearSessionIndex": 114,
+      "nextTradingYearSessionIndex": 115,
+      "tradingYearWeekIndex": 24,
+      "nextTradingYearWeekIndex": 24
+    },
+    {
+      "date": "2025-06-25",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2025-06-26",
+      "sessionOrdinal": 6246,
+      "nextSessionOrdinal": 6247,
+      "tradingYearSessionIndex": 115,
+      "nextTradingYearSessionIndex": 116,
+      "tradingYearWeekIndex": 24,
+      "nextTradingYearWeekIndex": 24
+    },
+    {
+      "date": "2025-06-26",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D"
+      ],
+      "nextTradingDate": "2025-06-27",
+      "sessionOrdinal": 6247,
+      "nextSessionOrdinal": 6248,
+      "tradingYearSessionIndex": 116,
+      "nextTradingYearSessionIndex": 117,
+      "tradingYearWeekIndex": 24,
+      "nextTradingYearWeekIndex": 24
+    },
+    {
+      "date": "2025-06-27",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "W",
+        "5W"
+      ],
+      "nextTradingDate": "2025-06-30",
+      "sessionOrdinal": 6248,
+      "nextSessionOrdinal": 6249,
+      "tradingYearSessionIndex": 117,
+      "nextTradingYearSessionIndex": 118,
+      "tradingYearWeekIndex": 24,
+      "nextTradingYearWeekIndex": 25
+    },
+    {
+      "date": "2025-06-30",
+      "expectedCloseTimeframes": [
+        "D",
+        "M",
+        "2M",
+        "3M"
+      ],
+      "nextTradingDate": "2025-07-01",
+      "sessionOrdinal": 6249,
+      "nextSessionOrdinal": 6250,
+      "tradingYearSessionIndex": 118,
+      "nextTradingYearSessionIndex": 119,
+      "tradingYearWeekIndex": 25,
+      "nextTradingYearWeekIndex": 25
+    },
+    {
+      "date": "2025-07-01",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D",
+        "5D"
+      ],
+      "nextTradingDate": "2025-07-02",
+      "sessionOrdinal": 6250,
+      "nextSessionOrdinal": 6251,
+      "tradingYearSessionIndex": 119,
+      "nextTradingYearSessionIndex": 120,
+      "tradingYearWeekIndex": 25,
+      "nextTradingYearWeekIndex": 25
+    },
+    {
+      "date": "2025-07-02",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2025-07-03",
+      "sessionOrdinal": 6251,
+      "nextSessionOrdinal": 6252,
+      "tradingYearSessionIndex": 120,
+      "nextTradingYearSessionIndex": 121,
+      "tradingYearWeekIndex": 25,
+      "nextTradingYearWeekIndex": 25
+    },
+    {
+      "date": "2025-07-03",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2025-07-04",
+      "sessionOrdinal": 6252,
+      "nextSessionOrdinal": 6253,
+      "tradingYearSessionIndex": 121,
+      "nextTradingYearSessionIndex": 122,
+      "tradingYearWeekIndex": 25,
+      "nextTradingYearWeekIndex": 25
+    },
+    {
+      "date": "2025-07-04",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D",
+        "W",
+        "2W"
+      ],
+      "nextTradingDate": "2025-07-07",
+      "sessionOrdinal": 6253,
+      "nextSessionOrdinal": 6254,
+      "tradingYearSessionIndex": 122,
+      "nextTradingYearSessionIndex": 123,
+      "tradingYearWeekIndex": 25,
+      "nextTradingYearWeekIndex": 26
+    },
+    {
+      "date": "2025-07-07",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2025-07-08",
+      "sessionOrdinal": 6254,
+      "nextSessionOrdinal": 6255,
+      "tradingYearSessionIndex": 123,
+      "nextTradingYearSessionIndex": 124,
+      "tradingYearWeekIndex": 26,
+      "nextTradingYearWeekIndex": 26
+    },
+    {
+      "date": "2025-07-08",
+      "expectedCloseTimeframes": [
+        "D",
+        "5D"
+      ],
+      "nextTradingDate": "2025-07-09",
+      "sessionOrdinal": 6255,
+      "nextSessionOrdinal": 6256,
+      "tradingYearSessionIndex": 124,
+      "nextTradingYearSessionIndex": 125,
+      "tradingYearWeekIndex": 26,
+      "nextTradingYearWeekIndex": 26
+    },
+    {
+      "date": "2025-07-09",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D"
+      ],
+      "nextTradingDate": "2025-07-10",
+      "sessionOrdinal": 6256,
+      "nextSessionOrdinal": 6257,
+      "tradingYearSessionIndex": 125,
+      "nextTradingYearSessionIndex": 126,
+      "tradingYearWeekIndex": 26,
+      "nextTradingYearWeekIndex": 26
+    },
+    {
+      "date": "2025-07-10",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2025-07-11",
+      "sessionOrdinal": 6257,
+      "nextSessionOrdinal": 6258,
+      "tradingYearSessionIndex": 126,
+      "nextTradingYearSessionIndex": 127,
+      "tradingYearWeekIndex": 26,
+      "nextTradingYearWeekIndex": 26
+    },
+    {
+      "date": "2025-07-11",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "W",
+        "3W"
+      ],
+      "nextTradingDate": "2025-07-14",
+      "sessionOrdinal": 6258,
+      "nextSessionOrdinal": 6259,
+      "tradingYearSessionIndex": 127,
+      "nextTradingYearSessionIndex": 128,
+      "tradingYearWeekIndex": 26,
+      "nextTradingYearWeekIndex": 27
+    },
+    {
+      "date": "2025-07-14",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D"
+      ],
+      "nextTradingDate": "2025-07-15",
+      "sessionOrdinal": 6259,
+      "nextSessionOrdinal": 6260,
+      "tradingYearSessionIndex": 128,
+      "nextTradingYearSessionIndex": 129,
+      "tradingYearWeekIndex": 27,
+      "nextTradingYearWeekIndex": 27
+    },
+    {
+      "date": "2025-07-15",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "5D"
+      ],
+      "nextTradingDate": "2025-07-16",
+      "sessionOrdinal": 6260,
+      "nextSessionOrdinal": 6261,
+      "tradingYearSessionIndex": 129,
+      "nextTradingYearSessionIndex": 130,
+      "tradingYearWeekIndex": 27,
+      "nextTradingYearWeekIndex": 27
+    },
+    {
+      "date": "2025-07-16",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2025-07-17",
+      "sessionOrdinal": 6261,
+      "nextSessionOrdinal": 6262,
+      "tradingYearSessionIndex": 130,
+      "nextTradingYearSessionIndex": 131,
+      "tradingYearWeekIndex": 27,
+      "nextTradingYearWeekIndex": 27
+    },
+    {
+      "date": "2025-07-17",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D"
+      ],
+      "nextTradingDate": "2025-07-18",
+      "sessionOrdinal": 6262,
+      "nextSessionOrdinal": 6263,
+      "tradingYearSessionIndex": 131,
+      "nextTradingYearSessionIndex": 132,
+      "tradingYearWeekIndex": 27,
+      "nextTradingYearWeekIndex": 27
+    },
+    {
+      "date": "2025-07-18",
+      "expectedCloseTimeframes": [
+        "D",
+        "W",
+        "2W"
+      ],
+      "nextTradingDate": "2025-07-22",
+      "sessionOrdinal": 6263,
+      "nextSessionOrdinal": 6264,
+      "tradingYearSessionIndex": 132,
+      "nextTradingYearSessionIndex": 133,
+      "tradingYearWeekIndex": 27,
+      "nextTradingYearWeekIndex": 28
+    },
+    {
+      "date": "2025-07-22",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2025-07-23",
+      "sessionOrdinal": 6264,
+      "nextSessionOrdinal": 6265,
+      "tradingYearSessionIndex": 133,
+      "nextTradingYearSessionIndex": 134,
+      "tradingYearWeekIndex": 28,
+      "nextTradingYearWeekIndex": 28
+    },
+    {
+      "date": "2025-07-23",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D",
+        "5D"
+      ],
+      "nextTradingDate": "2025-07-24",
+      "sessionOrdinal": 6265,
+      "nextSessionOrdinal": 6266,
+      "tradingYearSessionIndex": 134,
+      "nextTradingYearSessionIndex": 135,
+      "tradingYearWeekIndex": 28,
+      "nextTradingYearWeekIndex": 28
+    },
+    {
+      "date": "2025-07-24",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2025-07-25",
+      "sessionOrdinal": 6266,
+      "nextSessionOrdinal": 6267,
+      "tradingYearSessionIndex": 135,
+      "nextTradingYearSessionIndex": 136,
+      "tradingYearWeekIndex": 28,
+      "nextTradingYearWeekIndex": 28
+    },
+    {
+      "date": "2025-07-25",
+      "expectedCloseTimeframes": [
+        "D",
+        "W"
+      ],
+      "nextTradingDate": "2025-07-28",
+      "sessionOrdinal": 6267,
+      "nextSessionOrdinal": 6268,
+      "tradingYearSessionIndex": 136,
+      "nextTradingYearSessionIndex": 137,
+      "tradingYearWeekIndex": 28,
+      "nextTradingYearWeekIndex": 29
+    },
+    {
+      "date": "2025-07-28",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D"
+      ],
+      "nextTradingDate": "2025-07-29",
+      "sessionOrdinal": 6268,
+      "nextSessionOrdinal": 6269,
+      "tradingYearSessionIndex": 137,
+      "nextTradingYearSessionIndex": 138,
+      "tradingYearWeekIndex": 29,
+      "nextTradingYearWeekIndex": 29
+    },
+    {
+      "date": "2025-07-29",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2025-07-30",
+      "sessionOrdinal": 6269,
+      "nextSessionOrdinal": 6270,
+      "tradingYearSessionIndex": 138,
+      "nextTradingYearSessionIndex": 139,
+      "tradingYearWeekIndex": 29,
+      "nextTradingYearWeekIndex": 29
+    },
+    {
+      "date": "2025-07-30",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "5D"
+      ],
+      "nextTradingDate": "2025-07-31",
+      "sessionOrdinal": 6270,
+      "nextSessionOrdinal": 6271,
+      "tradingYearSessionIndex": 139,
+      "nextTradingYearSessionIndex": 140,
+      "tradingYearWeekIndex": 29,
+      "nextTradingYearWeekIndex": 29
+    },
+    {
+      "date": "2025-07-31",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D",
+        "M"
+      ],
+      "nextTradingDate": "2025-08-01",
+      "sessionOrdinal": 6271,
+      "nextSessionOrdinal": 6272,
+      "tradingYearSessionIndex": 140,
+      "nextTradingYearSessionIndex": 141,
+      "tradingYearWeekIndex": 29,
+      "nextTradingYearWeekIndex": 29
+    },
+    {
+      "date": "2025-08-01",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "W",
+        "2W",
+        "3W",
+        "5W"
+      ],
+      "nextTradingDate": "2025-08-04",
+      "sessionOrdinal": 6272,
+      "nextSessionOrdinal": 6273,
+      "tradingYearSessionIndex": 141,
+      "nextTradingYearSessionIndex": 142,
+      "tradingYearWeekIndex": 29,
+      "nextTradingYearWeekIndex": 30
+    },
+    {
+      "date": "2025-08-04",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2025-08-05",
+      "sessionOrdinal": 6273,
+      "nextSessionOrdinal": 6274,
+      "tradingYearSessionIndex": 142,
+      "nextTradingYearSessionIndex": 143,
+      "tradingYearWeekIndex": 30,
+      "nextTradingYearWeekIndex": 30
+    },
+    {
+      "date": "2025-08-05",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D"
+      ],
+      "nextTradingDate": "2025-08-06",
+      "sessionOrdinal": 6274,
+      "nextSessionOrdinal": 6275,
+      "tradingYearSessionIndex": 143,
+      "nextTradingYearSessionIndex": 144,
+      "tradingYearWeekIndex": 30,
+      "nextTradingYearWeekIndex": 30
+    },
+    {
+      "date": "2025-08-06",
+      "expectedCloseTimeframes": [
+        "D",
+        "5D"
+      ],
+      "nextTradingDate": "2025-08-07",
+      "sessionOrdinal": 6275,
+      "nextSessionOrdinal": 6276,
+      "tradingYearSessionIndex": 144,
+      "nextTradingYearSessionIndex": 145,
+      "tradingYearWeekIndex": 30,
+      "nextTradingYearWeekIndex": 30
+    },
+    {
+      "date": "2025-08-07",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2025-08-08",
+      "sessionOrdinal": 6276,
+      "nextSessionOrdinal": 6277,
+      "tradingYearSessionIndex": 145,
+      "nextTradingYearSessionIndex": 146,
+      "tradingYearWeekIndex": 30,
+      "nextTradingYearWeekIndex": 30
+    },
+    {
+      "date": "2025-08-08",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D",
+        "W"
+      ],
+      "nextTradingDate": "2025-08-12",
+      "sessionOrdinal": 6277,
+      "nextSessionOrdinal": 6278,
+      "tradingYearSessionIndex": 146,
+      "nextTradingYearSessionIndex": 147,
+      "tradingYearWeekIndex": 30,
+      "nextTradingYearWeekIndex": 31
+    },
+    {
+      "date": "2025-08-12",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2025-08-13",
+      "sessionOrdinal": 6278,
+      "nextSessionOrdinal": 6279,
+      "tradingYearSessionIndex": 147,
+      "nextTradingYearSessionIndex": 148,
+      "tradingYearWeekIndex": 31,
+      "nextTradingYearWeekIndex": 31
+    },
+    {
+      "date": "2025-08-13",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2025-08-14",
+      "sessionOrdinal": 6279,
+      "nextSessionOrdinal": 6280,
+      "tradingYearSessionIndex": 148,
+      "nextTradingYearSessionIndex": 149,
+      "tradingYearWeekIndex": 31,
+      "nextTradingYearWeekIndex": 31
+    },
+    {
+      "date": "2025-08-14",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D",
+        "5D"
+      ],
+      "nextTradingDate": "2025-08-15",
+      "sessionOrdinal": 6280,
+      "nextSessionOrdinal": 6281,
+      "tradingYearSessionIndex": 149,
+      "nextTradingYearSessionIndex": 150,
+      "tradingYearWeekIndex": 31,
+      "nextTradingYearWeekIndex": 31
+    },
+    {
+      "date": "2025-08-15",
+      "expectedCloseTimeframes": [
+        "D",
+        "W",
+        "2W"
+      ],
+      "nextTradingDate": "2025-08-18",
+      "sessionOrdinal": 6281,
+      "nextSessionOrdinal": 6282,
+      "tradingYearSessionIndex": 150,
+      "nextTradingYearSessionIndex": 151,
+      "tradingYearWeekIndex": 31,
+      "nextTradingYearWeekIndex": 32
+    },
+    {
+      "date": "2025-08-18",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2025-08-19",
+      "sessionOrdinal": 6282,
+      "nextSessionOrdinal": 6283,
+      "tradingYearSessionIndex": 151,
+      "nextTradingYearSessionIndex": 152,
+      "tradingYearWeekIndex": 32,
+      "nextTradingYearWeekIndex": 32
+    },
+    {
+      "date": "2025-08-19",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D"
+      ],
+      "nextTradingDate": "2025-08-20",
+      "sessionOrdinal": 6283,
+      "nextSessionOrdinal": 6284,
+      "tradingYearSessionIndex": 152,
+      "nextTradingYearSessionIndex": 153,
+      "tradingYearWeekIndex": 32,
+      "nextTradingYearWeekIndex": 32
+    },
+    {
+      "date": "2025-08-20",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2025-08-21",
+      "sessionOrdinal": 6284,
+      "nextSessionOrdinal": 6285,
+      "tradingYearSessionIndex": 153,
+      "nextTradingYearSessionIndex": 154,
+      "tradingYearWeekIndex": 32,
+      "nextTradingYearWeekIndex": 32
+    },
+    {
+      "date": "2025-08-21",
+      "expectedCloseTimeframes": [
+        "D",
+        "5D"
+      ],
+      "nextTradingDate": "2025-08-22",
+      "sessionOrdinal": 6285,
+      "nextSessionOrdinal": 6286,
+      "tradingYearSessionIndex": 154,
+      "nextTradingYearSessionIndex": 155,
+      "tradingYearWeekIndex": 32,
+      "nextTradingYearWeekIndex": 32
+    },
+    {
+      "date": "2025-08-22",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D",
+        "W",
+        "3W"
+      ],
+      "nextTradingDate": "2025-08-25",
+      "sessionOrdinal": 6286,
+      "nextSessionOrdinal": 6287,
+      "tradingYearSessionIndex": 155,
+      "nextTradingYearSessionIndex": 156,
+      "tradingYearWeekIndex": 32,
+      "nextTradingYearWeekIndex": 33
+    },
+    {
+      "date": "2025-08-25",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2025-08-26",
+      "sessionOrdinal": 6287,
+      "nextSessionOrdinal": 6288,
+      "tradingYearSessionIndex": 156,
+      "nextTradingYearSessionIndex": 157,
+      "tradingYearWeekIndex": 33,
+      "nextTradingYearWeekIndex": 33
+    },
+    {
+      "date": "2025-08-26",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2025-08-27",
+      "sessionOrdinal": 6288,
+      "nextSessionOrdinal": 6289,
+      "tradingYearSessionIndex": 157,
+      "nextTradingYearSessionIndex": 158,
+      "tradingYearWeekIndex": 33,
+      "nextTradingYearWeekIndex": 33
+    },
+    {
+      "date": "2025-08-27",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D"
+      ],
+      "nextTradingDate": "2025-08-28",
+      "sessionOrdinal": 6289,
+      "nextSessionOrdinal": 6290,
+      "tradingYearSessionIndex": 158,
+      "nextTradingYearSessionIndex": 159,
+      "tradingYearWeekIndex": 33,
+      "nextTradingYearWeekIndex": 33
+    },
+    {
+      "date": "2025-08-28",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "5D"
+      ],
+      "nextTradingDate": "2025-08-29",
+      "sessionOrdinal": 6290,
+      "nextSessionOrdinal": 6291,
+      "tradingYearSessionIndex": 159,
+      "nextTradingYearSessionIndex": 160,
+      "tradingYearWeekIndex": 33,
+      "nextTradingYearWeekIndex": 33
+    },
+    {
+      "date": "2025-08-29",
+      "expectedCloseTimeframes": [
+        "D",
+        "W",
+        "2W",
+        "M",
+        "2M"
+      ],
+      "nextTradingDate": "2025-09-01",
+      "sessionOrdinal": 6291,
+      "nextSessionOrdinal": 6292,
+      "tradingYearSessionIndex": 160,
+      "nextTradingYearSessionIndex": 161,
+      "tradingYearWeekIndex": 33,
+      "nextTradingYearWeekIndex": 34
+    },
+    {
+      "date": "2025-09-01",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D"
+      ],
+      "nextTradingDate": "2025-09-02",
+      "sessionOrdinal": 6292,
+      "nextSessionOrdinal": 6293,
+      "tradingYearSessionIndex": 161,
+      "nextTradingYearSessionIndex": 162,
+      "tradingYearWeekIndex": 34,
+      "nextTradingYearWeekIndex": 34
+    },
+    {
+      "date": "2025-09-02",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2025-09-03",
+      "sessionOrdinal": 6293,
+      "nextSessionOrdinal": 6294,
+      "tradingYearSessionIndex": 162,
+      "nextTradingYearSessionIndex": 163,
+      "tradingYearWeekIndex": 34,
+      "nextTradingYearWeekIndex": 34
+    },
+    {
+      "date": "2025-09-03",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2025-09-04",
+      "sessionOrdinal": 6294,
+      "nextSessionOrdinal": 6295,
+      "tradingYearSessionIndex": 163,
+      "nextTradingYearSessionIndex": 164,
+      "tradingYearWeekIndex": 34,
+      "nextTradingYearWeekIndex": 34
+    },
+    {
+      "date": "2025-09-04",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D",
+        "5D"
+      ],
+      "nextTradingDate": "2025-09-05",
+      "sessionOrdinal": 6295,
+      "nextSessionOrdinal": 6296,
+      "tradingYearSessionIndex": 164,
+      "nextTradingYearSessionIndex": 165,
+      "tradingYearWeekIndex": 34,
+      "nextTradingYearWeekIndex": 34
+    },
+    {
+      "date": "2025-09-05",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "W",
+        "5W"
+      ],
+      "nextTradingDate": "2025-09-08",
+      "sessionOrdinal": 6296,
+      "nextSessionOrdinal": 6297,
+      "tradingYearSessionIndex": 165,
+      "nextTradingYearSessionIndex": 166,
+      "tradingYearWeekIndex": 34,
+      "nextTradingYearWeekIndex": 35
+    },
+    {
+      "date": "2025-09-08",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2025-09-09",
+      "sessionOrdinal": 6297,
+      "nextSessionOrdinal": 6298,
+      "tradingYearSessionIndex": 166,
+      "nextTradingYearSessionIndex": 167,
+      "tradingYearWeekIndex": 35,
+      "nextTradingYearWeekIndex": 35
+    },
+    {
+      "date": "2025-09-09",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D"
+      ],
+      "nextTradingDate": "2025-09-10",
+      "sessionOrdinal": 6298,
+      "nextSessionOrdinal": 6299,
+      "tradingYearSessionIndex": 167,
+      "nextTradingYearSessionIndex": 168,
+      "tradingYearWeekIndex": 35,
+      "nextTradingYearWeekIndex": 35
+    },
+    {
+      "date": "2025-09-10",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2025-09-11",
+      "sessionOrdinal": 6299,
+      "nextSessionOrdinal": 6300,
+      "tradingYearSessionIndex": 168,
+      "nextTradingYearSessionIndex": 169,
+      "tradingYearWeekIndex": 35,
+      "nextTradingYearWeekIndex": 35
+    },
+    {
+      "date": "2025-09-11",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "5D"
+      ],
+      "nextTradingDate": "2025-09-12",
+      "sessionOrdinal": 6300,
+      "nextSessionOrdinal": 6301,
+      "tradingYearSessionIndex": 169,
+      "nextTradingYearSessionIndex": 170,
+      "tradingYearWeekIndex": 35,
+      "nextTradingYearWeekIndex": 35
+    },
+    {
+      "date": "2025-09-12",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D",
+        "W",
+        "2W",
+        "3W"
+      ],
+      "nextTradingDate": "2025-09-16",
+      "sessionOrdinal": 6301,
+      "nextSessionOrdinal": 6302,
+      "tradingYearSessionIndex": 170,
+      "nextTradingYearSessionIndex": 171,
+      "tradingYearWeekIndex": 35,
+      "nextTradingYearWeekIndex": 36
+    },
+    {
+      "date": "2025-09-16",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2025-09-17",
+      "sessionOrdinal": 6302,
+      "nextSessionOrdinal": 6303,
+      "tradingYearSessionIndex": 171,
+      "nextTradingYearSessionIndex": 172,
+      "tradingYearWeekIndex": 36,
+      "nextTradingYearWeekIndex": 36
+    },
+    {
+      "date": "2025-09-17",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2025-09-18",
+      "sessionOrdinal": 6303,
+      "nextSessionOrdinal": 6304,
+      "tradingYearSessionIndex": 172,
+      "nextTradingYearSessionIndex": 173,
+      "tradingYearWeekIndex": 36,
+      "nextTradingYearWeekIndex": 36
+    },
+    {
+      "date": "2025-09-18",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D"
+      ],
+      "nextTradingDate": "2025-09-19",
+      "sessionOrdinal": 6304,
+      "nextSessionOrdinal": 6305,
+      "tradingYearSessionIndex": 173,
+      "nextTradingYearSessionIndex": 174,
+      "tradingYearWeekIndex": 36,
+      "nextTradingYearWeekIndex": 36
+    },
+    {
+      "date": "2025-09-19",
+      "expectedCloseTimeframes": [
+        "D",
+        "5D",
+        "W"
+      ],
+      "nextTradingDate": "2025-09-22",
+      "sessionOrdinal": 6305,
+      "nextSessionOrdinal": 6306,
+      "tradingYearSessionIndex": 174,
+      "nextTradingYearSessionIndex": 175,
+      "tradingYearWeekIndex": 36,
+      "nextTradingYearWeekIndex": 37
+    },
+    {
+      "date": "2025-09-22",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2025-09-24",
+      "sessionOrdinal": 6306,
+      "nextSessionOrdinal": 6307,
+      "tradingYearSessionIndex": 175,
+      "nextTradingYearSessionIndex": 176,
+      "tradingYearWeekIndex": 37,
+      "nextTradingYearWeekIndex": 37
+    },
+    {
+      "date": "2025-09-24",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D"
+      ],
+      "nextTradingDate": "2025-09-25",
+      "sessionOrdinal": 6307,
+      "nextSessionOrdinal": 6308,
+      "tradingYearSessionIndex": 176,
+      "nextTradingYearSessionIndex": 177,
+      "tradingYearWeekIndex": 37,
+      "nextTradingYearWeekIndex": 37
+    },
+    {
+      "date": "2025-09-25",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2025-09-26",
+      "sessionOrdinal": 6308,
+      "nextSessionOrdinal": 6309,
+      "tradingYearSessionIndex": 177,
+      "nextTradingYearSessionIndex": 178,
+      "tradingYearWeekIndex": 37,
+      "nextTradingYearWeekIndex": 37
+    },
+    {
+      "date": "2025-09-26",
+      "expectedCloseTimeframes": [
+        "D",
+        "W",
+        "2W"
+      ],
+      "nextTradingDate": "2025-09-29",
+      "sessionOrdinal": 6309,
+      "nextSessionOrdinal": 6310,
+      "tradingYearSessionIndex": 178,
+      "nextTradingYearSessionIndex": 179,
+      "tradingYearWeekIndex": 37,
+      "nextTradingYearWeekIndex": 38
+    },
+    {
+      "date": "2025-09-29",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D",
+        "5D"
+      ],
+      "nextTradingDate": "2025-09-30",
+      "sessionOrdinal": 6310,
+      "nextSessionOrdinal": 6311,
+      "tradingYearSessionIndex": 179,
+      "nextTradingYearSessionIndex": 180,
+      "tradingYearWeekIndex": 38,
+      "nextTradingYearWeekIndex": 38
+    },
+    {
+      "date": "2025-09-30",
+      "expectedCloseTimeframes": [
+        "D",
+        "M",
+        "3M"
+      ],
+      "nextTradingDate": "2025-10-01",
+      "sessionOrdinal": 6311,
+      "nextSessionOrdinal": 6312,
+      "tradingYearSessionIndex": 180,
+      "nextTradingYearSessionIndex": 181,
+      "tradingYearWeekIndex": 38,
+      "nextTradingYearWeekIndex": 38
+    },
+    {
+      "date": "2025-10-01",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2025-10-02",
+      "sessionOrdinal": 6312,
+      "nextSessionOrdinal": 6313,
+      "tradingYearSessionIndex": 181,
+      "nextTradingYearSessionIndex": 182,
+      "tradingYearWeekIndex": 38,
+      "nextTradingYearWeekIndex": 38
+    },
+    {
+      "date": "2025-10-02",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D"
+      ],
+      "nextTradingDate": "2025-10-03",
+      "sessionOrdinal": 6313,
+      "nextSessionOrdinal": 6314,
+      "tradingYearSessionIndex": 182,
+      "nextTradingYearSessionIndex": 183,
+      "tradingYearWeekIndex": 38,
+      "nextTradingYearWeekIndex": 38
+    },
+    {
+      "date": "2025-10-03",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "W",
+        "3W"
+      ],
+      "nextTradingDate": "2025-10-06",
+      "sessionOrdinal": 6314,
+      "nextSessionOrdinal": 6315,
+      "tradingYearSessionIndex": 183,
+      "nextTradingYearSessionIndex": 184,
+      "tradingYearWeekIndex": 38,
+      "nextTradingYearWeekIndex": 39
+    },
+    {
+      "date": "2025-10-06",
+      "expectedCloseTimeframes": [
+        "D",
+        "5D"
+      ],
+      "nextTradingDate": "2025-10-07",
+      "sessionOrdinal": 6315,
+      "nextSessionOrdinal": 6316,
+      "tradingYearSessionIndex": 184,
+      "nextTradingYearSessionIndex": 185,
+      "tradingYearWeekIndex": 39,
+      "nextTradingYearWeekIndex": 39
+    },
+    {
+      "date": "2025-10-07",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D"
+      ],
+      "nextTradingDate": "2025-10-08",
+      "sessionOrdinal": 6316,
+      "nextSessionOrdinal": 6317,
+      "tradingYearSessionIndex": 185,
+      "nextTradingYearSessionIndex": 186,
+      "tradingYearWeekIndex": 39,
+      "nextTradingYearWeekIndex": 39
+    },
+    {
+      "date": "2025-10-08",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2025-10-09",
+      "sessionOrdinal": 6317,
+      "nextSessionOrdinal": 6318,
+      "tradingYearSessionIndex": 186,
+      "nextTradingYearSessionIndex": 187,
+      "tradingYearWeekIndex": 39,
+      "nextTradingYearWeekIndex": 39
+    },
+    {
+      "date": "2025-10-09",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2025-10-10",
+      "sessionOrdinal": 6318,
+      "nextSessionOrdinal": 6319,
+      "tradingYearSessionIndex": 187,
+      "nextTradingYearSessionIndex": 188,
+      "tradingYearWeekIndex": 39,
+      "nextTradingYearWeekIndex": 39
+    },
+    {
+      "date": "2025-10-10",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D",
+        "W",
+        "2W",
+        "5W"
+      ],
+      "nextTradingDate": "2025-10-14",
+      "sessionOrdinal": 6319,
+      "nextSessionOrdinal": 6320,
+      "tradingYearSessionIndex": 188,
+      "nextTradingYearSessionIndex": 189,
+      "tradingYearWeekIndex": 39,
+      "nextTradingYearWeekIndex": 40
+    },
+    {
+      "date": "2025-10-14",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "5D"
+      ],
+      "nextTradingDate": "2025-10-15",
+      "sessionOrdinal": 6320,
+      "nextSessionOrdinal": 6321,
+      "tradingYearSessionIndex": 189,
+      "nextTradingYearSessionIndex": 190,
+      "tradingYearWeekIndex": 40,
+      "nextTradingYearWeekIndex": 40
+    },
+    {
+      "date": "2025-10-15",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2025-10-16",
+      "sessionOrdinal": 6321,
+      "nextSessionOrdinal": 6322,
+      "tradingYearSessionIndex": 190,
+      "nextTradingYearSessionIndex": 191,
+      "tradingYearWeekIndex": 40,
+      "nextTradingYearWeekIndex": 40
+    },
+    {
+      "date": "2025-10-16",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D"
+      ],
+      "nextTradingDate": "2025-10-17",
+      "sessionOrdinal": 6322,
+      "nextSessionOrdinal": 6323,
+      "tradingYearSessionIndex": 191,
+      "nextTradingYearSessionIndex": 192,
+      "tradingYearWeekIndex": 40,
+      "nextTradingYearWeekIndex": 40
+    },
+    {
+      "date": "2025-10-17",
+      "expectedCloseTimeframes": [
+        "D",
+        "W"
+      ],
+      "nextTradingDate": "2025-10-20",
+      "sessionOrdinal": 6323,
+      "nextSessionOrdinal": 6324,
+      "tradingYearSessionIndex": 192,
+      "nextTradingYearSessionIndex": 193,
+      "tradingYearWeekIndex": 40,
+      "nextTradingYearWeekIndex": 41
+    },
+    {
+      "date": "2025-10-20",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2025-10-21",
+      "sessionOrdinal": 6324,
+      "nextSessionOrdinal": 6325,
+      "tradingYearSessionIndex": 193,
+      "nextTradingYearSessionIndex": 194,
+      "tradingYearWeekIndex": 41,
+      "nextTradingYearWeekIndex": 41
+    },
+    {
+      "date": "2025-10-21",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D",
+        "5D"
+      ],
+      "nextTradingDate": "2025-10-22",
+      "sessionOrdinal": 6325,
+      "nextSessionOrdinal": 6326,
+      "tradingYearSessionIndex": 194,
+      "nextTradingYearSessionIndex": 195,
+      "tradingYearWeekIndex": 41,
+      "nextTradingYearWeekIndex": 41
+    },
+    {
+      "date": "2025-10-22",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2025-10-23",
+      "sessionOrdinal": 6326,
+      "nextSessionOrdinal": 6327,
+      "tradingYearSessionIndex": 195,
+      "nextTradingYearSessionIndex": 196,
+      "tradingYearWeekIndex": 41,
+      "nextTradingYearWeekIndex": 41
+    },
+    {
+      "date": "2025-10-23",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2025-10-24",
+      "sessionOrdinal": 6327,
+      "nextSessionOrdinal": 6328,
+      "tradingYearSessionIndex": 196,
+      "nextTradingYearSessionIndex": 197,
+      "tradingYearWeekIndex": 41,
+      "nextTradingYearWeekIndex": 41
+    },
+    {
+      "date": "2025-10-24",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D",
+        "W",
+        "2W",
+        "3W"
+      ],
+      "nextTradingDate": "2025-10-27",
+      "sessionOrdinal": 6328,
+      "nextSessionOrdinal": 6329,
+      "tradingYearSessionIndex": 197,
+      "nextTradingYearSessionIndex": 198,
+      "tradingYearWeekIndex": 41,
+      "nextTradingYearWeekIndex": 42
+    },
+    {
+      "date": "2025-10-27",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2025-10-28",
+      "sessionOrdinal": 6329,
+      "nextSessionOrdinal": 6330,
+      "tradingYearSessionIndex": 198,
+      "nextTradingYearSessionIndex": 199,
+      "tradingYearWeekIndex": 42,
+      "nextTradingYearWeekIndex": 42
+    },
+    {
+      "date": "2025-10-28",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "5D"
+      ],
+      "nextTradingDate": "2025-10-29",
+      "sessionOrdinal": 6330,
+      "nextSessionOrdinal": 6331,
+      "tradingYearSessionIndex": 199,
+      "nextTradingYearSessionIndex": 200,
+      "tradingYearWeekIndex": 42,
+      "nextTradingYearWeekIndex": 42
+    },
+    {
+      "date": "2025-10-29",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D"
+      ],
+      "nextTradingDate": "2025-10-30",
+      "sessionOrdinal": 6331,
+      "nextSessionOrdinal": 6332,
+      "tradingYearSessionIndex": 200,
+      "nextTradingYearSessionIndex": 201,
+      "tradingYearWeekIndex": 42,
+      "nextTradingYearWeekIndex": 42
+    },
+    {
+      "date": "2025-10-30",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2025-10-31",
+      "sessionOrdinal": 6332,
+      "nextSessionOrdinal": 6333,
+      "tradingYearSessionIndex": 201,
+      "nextTradingYearSessionIndex": 202,
+      "tradingYearWeekIndex": 42,
+      "nextTradingYearWeekIndex": 42
+    },
+    {
+      "date": "2025-10-31",
+      "expectedCloseTimeframes": [
+        "D",
+        "W",
+        "M",
+        "2M",
+        "5M"
+      ],
+      "nextTradingDate": "2025-11-04",
+      "sessionOrdinal": 6333,
+      "nextSessionOrdinal": 6334,
+      "tradingYearSessionIndex": 202,
+      "nextTradingYearSessionIndex": 203,
+      "tradingYearWeekIndex": 42,
+      "nextTradingYearWeekIndex": 43
+    },
+    {
+      "date": "2025-11-04",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D"
+      ],
+      "nextTradingDate": "2025-11-05",
+      "sessionOrdinal": 6334,
+      "nextSessionOrdinal": 6335,
+      "tradingYearSessionIndex": 203,
+      "nextTradingYearSessionIndex": 204,
+      "tradingYearWeekIndex": 43,
+      "nextTradingYearWeekIndex": 43
+    },
+    {
+      "date": "2025-11-05",
+      "expectedCloseTimeframes": [
+        "D",
+        "5D"
+      ],
+      "nextTradingDate": "2025-11-06",
+      "sessionOrdinal": 6335,
+      "nextSessionOrdinal": 6336,
+      "tradingYearSessionIndex": 204,
+      "nextTradingYearSessionIndex": 205,
+      "tradingYearWeekIndex": 43,
+      "nextTradingYearWeekIndex": 43
+    },
+    {
+      "date": "2025-11-06",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2025-11-07",
+      "sessionOrdinal": 6336,
+      "nextSessionOrdinal": 6337,
+      "tradingYearSessionIndex": 205,
+      "nextTradingYearSessionIndex": 206,
+      "tradingYearWeekIndex": 43,
+      "nextTradingYearWeekIndex": 43
+    },
+    {
+      "date": "2025-11-07",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D",
+        "W",
+        "2W"
+      ],
+      "nextTradingDate": "2025-11-10",
+      "sessionOrdinal": 6337,
+      "nextSessionOrdinal": 6338,
+      "tradingYearSessionIndex": 206,
+      "nextTradingYearSessionIndex": 207,
+      "tradingYearWeekIndex": 43,
+      "nextTradingYearWeekIndex": 44
+    },
+    {
+      "date": "2025-11-10",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2025-11-11",
+      "sessionOrdinal": 6338,
+      "nextSessionOrdinal": 6339,
+      "tradingYearSessionIndex": 207,
+      "nextTradingYearSessionIndex": 208,
+      "tradingYearWeekIndex": 44,
+      "nextTradingYearWeekIndex": 44
+    },
+    {
+      "date": "2025-11-11",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2025-11-12",
+      "sessionOrdinal": 6339,
+      "nextSessionOrdinal": 6340,
+      "tradingYearSessionIndex": 208,
+      "nextTradingYearSessionIndex": 209,
+      "tradingYearWeekIndex": 44,
+      "nextTradingYearWeekIndex": 44
+    },
+    {
+      "date": "2025-11-12",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D",
+        "5D"
+      ],
+      "nextTradingDate": "2025-11-13",
+      "sessionOrdinal": 6340,
+      "nextSessionOrdinal": 6341,
+      "tradingYearSessionIndex": 209,
+      "nextTradingYearSessionIndex": 210,
+      "tradingYearWeekIndex": 44,
+      "nextTradingYearWeekIndex": 44
+    },
+    {
+      "date": "2025-11-13",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2025-11-14",
+      "sessionOrdinal": 6341,
+      "nextSessionOrdinal": 6342,
+      "tradingYearSessionIndex": 210,
+      "nextTradingYearSessionIndex": 211,
+      "tradingYearWeekIndex": 44,
+      "nextTradingYearWeekIndex": 44
+    },
+    {
+      "date": "2025-11-14",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "W",
+        "3W",
+        "5W"
+      ],
+      "nextTradingDate": "2025-11-17",
+      "sessionOrdinal": 6342,
+      "nextSessionOrdinal": 6343,
+      "tradingYearSessionIndex": 211,
+      "nextTradingYearSessionIndex": 212,
+      "tradingYearWeekIndex": 44,
+      "nextTradingYearWeekIndex": 45
+    },
+    {
+      "date": "2025-11-17",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D"
+      ],
+      "nextTradingDate": "2025-11-18",
+      "sessionOrdinal": 6343,
+      "nextSessionOrdinal": 6344,
+      "tradingYearSessionIndex": 212,
+      "nextTradingYearSessionIndex": 213,
+      "tradingYearWeekIndex": 45,
+      "nextTradingYearWeekIndex": 45
+    },
+    {
+      "date": "2025-11-18",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2025-11-19",
+      "sessionOrdinal": 6344,
+      "nextSessionOrdinal": 6345,
+      "tradingYearSessionIndex": 213,
+      "nextTradingYearSessionIndex": 214,
+      "tradingYearWeekIndex": 45,
+      "nextTradingYearWeekIndex": 45
+    },
+    {
+      "date": "2025-11-19",
+      "expectedCloseTimeframes": [
+        "D",
+        "5D"
+      ],
+      "nextTradingDate": "2025-11-20",
+      "sessionOrdinal": 6345,
+      "nextSessionOrdinal": 6346,
+      "tradingYearSessionIndex": 214,
+      "nextTradingYearSessionIndex": 215,
+      "tradingYearWeekIndex": 45,
+      "nextTradingYearWeekIndex": 45
+    },
+    {
+      "date": "2025-11-20",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D"
+      ],
+      "nextTradingDate": "2025-11-21",
+      "sessionOrdinal": 6346,
+      "nextSessionOrdinal": 6347,
+      "tradingYearSessionIndex": 215,
+      "nextTradingYearSessionIndex": 216,
+      "tradingYearWeekIndex": 45,
+      "nextTradingYearWeekIndex": 45
+    },
+    {
+      "date": "2025-11-21",
+      "expectedCloseTimeframes": [
+        "D",
+        "W",
+        "2W"
+      ],
+      "nextTradingDate": "2025-11-25",
+      "sessionOrdinal": 6347,
+      "nextSessionOrdinal": 6348,
+      "tradingYearSessionIndex": 216,
+      "nextTradingYearSessionIndex": 217,
+      "tradingYearWeekIndex": 45,
+      "nextTradingYearWeekIndex": 46
+    },
+    {
+      "date": "2025-11-25",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2025-11-26",
+      "sessionOrdinal": 6348,
+      "nextSessionOrdinal": 6349,
+      "tradingYearSessionIndex": 217,
+      "nextTradingYearSessionIndex": 218,
+      "tradingYearWeekIndex": 46,
+      "nextTradingYearWeekIndex": 46
+    },
+    {
+      "date": "2025-11-26",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D"
+      ],
+      "nextTradingDate": "2025-11-27",
+      "sessionOrdinal": 6349,
+      "nextSessionOrdinal": 6350,
+      "tradingYearSessionIndex": 218,
+      "nextTradingYearSessionIndex": 219,
+      "tradingYearWeekIndex": 46,
+      "nextTradingYearWeekIndex": 46
+    },
+    {
+      "date": "2025-11-27",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "5D"
+      ],
+      "nextTradingDate": "2025-11-28",
+      "sessionOrdinal": 6350,
+      "nextSessionOrdinal": 6351,
+      "tradingYearSessionIndex": 219,
+      "nextTradingYearSessionIndex": 220,
+      "tradingYearWeekIndex": 46,
+      "nextTradingYearWeekIndex": 46
+    },
+    {
+      "date": "2025-11-28",
+      "expectedCloseTimeframes": [
+        "D",
+        "W",
+        "M"
+      ],
+      "nextTradingDate": "2025-12-01",
+      "sessionOrdinal": 6351,
+      "nextSessionOrdinal": 6352,
+      "tradingYearSessionIndex": 220,
+      "nextTradingYearSessionIndex": 221,
+      "tradingYearWeekIndex": 46,
+      "nextTradingYearWeekIndex": 47
+    },
+    {
+      "date": "2025-12-01",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D"
+      ],
+      "nextTradingDate": "2025-12-02",
+      "sessionOrdinal": 6352,
+      "nextSessionOrdinal": 6353,
+      "tradingYearSessionIndex": 221,
+      "nextTradingYearSessionIndex": 222,
+      "tradingYearWeekIndex": 47,
+      "nextTradingYearWeekIndex": 47
+    },
+    {
+      "date": "2025-12-02",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2025-12-03",
+      "sessionOrdinal": 6353,
+      "nextSessionOrdinal": 6354,
+      "tradingYearSessionIndex": 222,
+      "nextTradingYearSessionIndex": 223,
+      "tradingYearWeekIndex": 47,
+      "nextTradingYearWeekIndex": 47
+    },
+    {
+      "date": "2025-12-03",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2025-12-04",
+      "sessionOrdinal": 6354,
+      "nextSessionOrdinal": 6355,
+      "tradingYearSessionIndex": 223,
+      "nextTradingYearSessionIndex": 224,
+      "tradingYearWeekIndex": 47,
+      "nextTradingYearWeekIndex": 47
+    },
+    {
+      "date": "2025-12-04",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D",
+        "5D"
+      ],
+      "nextTradingDate": "2025-12-05",
+      "sessionOrdinal": 6355,
+      "nextSessionOrdinal": 6356,
+      "tradingYearSessionIndex": 224,
+      "nextTradingYearSessionIndex": 225,
+      "tradingYearWeekIndex": 47,
+      "nextTradingYearWeekIndex": 47
+    },
+    {
+      "date": "2025-12-05",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "W",
+        "2W",
+        "3W"
+      ],
+      "nextTradingDate": "2025-12-08",
+      "sessionOrdinal": 6356,
+      "nextSessionOrdinal": 6357,
+      "tradingYearSessionIndex": 225,
+      "nextTradingYearSessionIndex": 226,
+      "tradingYearWeekIndex": 47,
+      "nextTradingYearWeekIndex": 48
+    },
+    {
+      "date": "2025-12-08",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2025-12-09",
+      "sessionOrdinal": 6357,
+      "nextSessionOrdinal": 6358,
+      "tradingYearSessionIndex": 226,
+      "nextTradingYearSessionIndex": 227,
+      "tradingYearWeekIndex": 48,
+      "nextTradingYearWeekIndex": 48
+    },
+    {
+      "date": "2025-12-09",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D"
+      ],
+      "nextTradingDate": "2025-12-10",
+      "sessionOrdinal": 6358,
+      "nextSessionOrdinal": 6359,
+      "tradingYearSessionIndex": 227,
+      "nextTradingYearSessionIndex": 228,
+      "tradingYearWeekIndex": 48,
+      "nextTradingYearWeekIndex": 48
+    },
+    {
+      "date": "2025-12-10",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2025-12-11",
+      "sessionOrdinal": 6359,
+      "nextSessionOrdinal": 6360,
+      "tradingYearSessionIndex": 228,
+      "nextTradingYearSessionIndex": 229,
+      "tradingYearWeekIndex": 48,
+      "nextTradingYearWeekIndex": 48
+    },
+    {
+      "date": "2025-12-11",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "5D"
+      ],
+      "nextTradingDate": "2025-12-12",
+      "sessionOrdinal": 6360,
+      "nextSessionOrdinal": 6361,
+      "tradingYearSessionIndex": 229,
+      "nextTradingYearSessionIndex": 230,
+      "tradingYearWeekIndex": 48,
+      "nextTradingYearWeekIndex": 48
+    },
+    {
+      "date": "2025-12-12",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D",
+        "W"
+      ],
+      "nextTradingDate": "2025-12-15",
+      "sessionOrdinal": 6361,
+      "nextSessionOrdinal": 6362,
+      "tradingYearSessionIndex": 230,
+      "nextTradingYearSessionIndex": 231,
+      "tradingYearWeekIndex": 48,
+      "nextTradingYearWeekIndex": 49
+    },
+    {
+      "date": "2025-12-15",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2025-12-16",
+      "sessionOrdinal": 6362,
+      "nextSessionOrdinal": 6363,
+      "tradingYearSessionIndex": 231,
+      "nextTradingYearSessionIndex": 232,
+      "tradingYearWeekIndex": 49,
+      "nextTradingYearWeekIndex": 49
+    },
+    {
+      "date": "2025-12-16",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2025-12-17",
+      "sessionOrdinal": 6363,
+      "nextSessionOrdinal": 6364,
+      "tradingYearSessionIndex": 232,
+      "nextTradingYearSessionIndex": 233,
+      "tradingYearWeekIndex": 49,
+      "nextTradingYearWeekIndex": 49
+    },
+    {
+      "date": "2025-12-17",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D"
+      ],
+      "nextTradingDate": "2025-12-18",
+      "sessionOrdinal": 6364,
+      "nextSessionOrdinal": 6365,
+      "tradingYearSessionIndex": 233,
+      "nextTradingYearSessionIndex": 234,
+      "tradingYearWeekIndex": 49,
+      "nextTradingYearWeekIndex": 49
+    },
+    {
+      "date": "2025-12-18",
+      "expectedCloseTimeframes": [
+        "D",
+        "5D"
+      ],
+      "nextTradingDate": "2025-12-19",
+      "sessionOrdinal": 6365,
+      "nextSessionOrdinal": 6366,
+      "tradingYearSessionIndex": 234,
+      "nextTradingYearSessionIndex": 235,
+      "tradingYearWeekIndex": 49,
+      "nextTradingYearWeekIndex": 49
+    },
+    {
+      "date": "2025-12-19",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "W",
+        "2W",
+        "5W"
+      ],
+      "nextTradingDate": "2025-12-22",
+      "sessionOrdinal": 6366,
+      "nextSessionOrdinal": 6367,
+      "tradingYearSessionIndex": 235,
+      "nextTradingYearSessionIndex": 236,
+      "tradingYearWeekIndex": 49,
+      "nextTradingYearWeekIndex": 50
+    },
+    {
+      "date": "2025-12-22",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D"
+      ],
+      "nextTradingDate": "2025-12-23",
+      "sessionOrdinal": 6367,
+      "nextSessionOrdinal": 6368,
+      "tradingYearSessionIndex": 236,
+      "nextTradingYearSessionIndex": 237,
+      "tradingYearWeekIndex": 50,
+      "nextTradingYearWeekIndex": 50
+    },
+    {
+      "date": "2025-12-23",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2025-12-24",
+      "sessionOrdinal": 6368,
+      "nextSessionOrdinal": 6369,
+      "tradingYearSessionIndex": 237,
+      "nextTradingYearSessionIndex": 238,
+      "tradingYearWeekIndex": 50,
+      "nextTradingYearWeekIndex": 50
+    },
+    {
+      "date": "2025-12-24",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2025-12-25",
+      "sessionOrdinal": 6369,
+      "nextSessionOrdinal": 6370,
+      "tradingYearSessionIndex": 238,
+      "nextTradingYearSessionIndex": 239,
+      "tradingYearWeekIndex": 50,
+      "nextTradingYearWeekIndex": 50
+    },
+    {
+      "date": "2025-12-25",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D",
+        "5D"
+      ],
+      "nextTradingDate": "2025-12-26",
+      "sessionOrdinal": 6370,
+      "nextSessionOrdinal": 6371,
+      "tradingYearSessionIndex": 239,
+      "nextTradingYearSessionIndex": 240,
+      "tradingYearWeekIndex": 50,
+      "nextTradingYearWeekIndex": 50
+    },
+    {
+      "date": "2025-12-26",
+      "expectedCloseTimeframes": [
+        "D",
+        "W",
+        "3W"
+      ],
+      "nextTradingDate": "2025-12-29",
+      "sessionOrdinal": 6371,
+      "nextSessionOrdinal": 6372,
+      "tradingYearSessionIndex": 240,
+      "nextTradingYearSessionIndex": 241,
+      "tradingYearWeekIndex": 50,
+      "nextTradingYearWeekIndex": 51
+    },
+    {
+      "date": "2025-12-29",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2025-12-30",
+      "sessionOrdinal": 6372,
+      "nextSessionOrdinal": 6373,
+      "tradingYearSessionIndex": 241,
+      "nextTradingYearSessionIndex": 242,
+      "tradingYearWeekIndex": 51,
+      "nextTradingYearWeekIndex": 51
+    },
+    {
+      "date": "2025-12-30",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D",
+        "5D",
+        "W",
+        "2W",
+        "3W",
+        "5W",
+        "M",
+        "2M",
+        "3M",
+        "5M"
+      ],
+      "nextTradingDate": "2026-01-05",
+      "sessionOrdinal": 6373,
+      "nextSessionOrdinal": 6374,
+      "tradingYearSessionIndex": 242,
+      "nextTradingYearSessionIndex": 0,
+      "tradingYearWeekIndex": 51,
+      "nextTradingYearWeekIndex": 0
+    },
+    {
+      "date": "2026-01-05",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2026-01-06",
+      "sessionOrdinal": 6374,
+      "nextSessionOrdinal": 6375,
+      "tradingYearSessionIndex": 0,
+      "nextTradingYearSessionIndex": 1,
+      "tradingYearWeekIndex": 0,
+      "nextTradingYearWeekIndex": 0
+    },
+    {
+      "date": "2026-01-06",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2026-01-07",
+      "sessionOrdinal": 6375,
+      "nextSessionOrdinal": 6376,
+      "tradingYearSessionIndex": 1,
+      "nextTradingYearSessionIndex": 2,
+      "tradingYearWeekIndex": 0,
+      "nextTradingYearWeekIndex": 0
+    },
+    {
+      "date": "2026-01-07",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D"
+      ],
+      "nextTradingDate": "2026-01-08",
+      "sessionOrdinal": 6376,
+      "nextSessionOrdinal": 6377,
+      "tradingYearSessionIndex": 2,
+      "nextTradingYearSessionIndex": 3,
+      "tradingYearWeekIndex": 0,
+      "nextTradingYearWeekIndex": 0
+    },
+    {
+      "date": "2026-01-08",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2026-01-09",
+      "sessionOrdinal": 6377,
+      "nextSessionOrdinal": 6378,
+      "tradingYearSessionIndex": 3,
+      "nextTradingYearSessionIndex": 4,
+      "tradingYearWeekIndex": 0,
+      "nextTradingYearWeekIndex": 0
+    },
+    {
+      "date": "2026-01-09",
+      "expectedCloseTimeframes": [
+        "D",
+        "5D",
+        "W"
+      ],
+      "nextTradingDate": "2026-01-13",
+      "sessionOrdinal": 6378,
+      "nextSessionOrdinal": 6379,
+      "tradingYearSessionIndex": 4,
+      "nextTradingYearSessionIndex": 5,
+      "tradingYearWeekIndex": 0,
+      "nextTradingYearWeekIndex": 1
+    },
+    {
+      "date": "2026-01-13",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D"
+      ],
+      "nextTradingDate": "2026-01-14",
+      "sessionOrdinal": 6379,
+      "nextSessionOrdinal": 6380,
+      "tradingYearSessionIndex": 5,
+      "nextTradingYearSessionIndex": 6,
+      "tradingYearWeekIndex": 1,
+      "nextTradingYearWeekIndex": 1
+    },
+    {
+      "date": "2026-01-14",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2026-01-15",
+      "sessionOrdinal": 6380,
+      "nextSessionOrdinal": 6381,
+      "tradingYearSessionIndex": 6,
+      "nextTradingYearSessionIndex": 7,
+      "tradingYearWeekIndex": 1,
+      "nextTradingYearWeekIndex": 1
+    },
+    {
+      "date": "2026-01-15",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2026-01-16",
+      "sessionOrdinal": 6381,
+      "nextSessionOrdinal": 6382,
+      "tradingYearSessionIndex": 7,
+      "nextTradingYearSessionIndex": 8,
+      "tradingYearWeekIndex": 1,
+      "nextTradingYearWeekIndex": 1
+    },
+    {
+      "date": "2026-01-16",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D",
+        "W",
+        "2W"
+      ],
+      "nextTradingDate": "2026-01-19",
+      "sessionOrdinal": 6382,
+      "nextSessionOrdinal": 6383,
+      "tradingYearSessionIndex": 8,
+      "nextTradingYearSessionIndex": 9,
+      "tradingYearWeekIndex": 1,
+      "nextTradingYearWeekIndex": 2
+    },
+    {
+      "date": "2026-01-19",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "5D"
+      ],
+      "nextTradingDate": "2026-01-20",
+      "sessionOrdinal": 6383,
+      "nextSessionOrdinal": 6384,
+      "tradingYearSessionIndex": 9,
+      "nextTradingYearSessionIndex": 10,
+      "tradingYearWeekIndex": 2,
+      "nextTradingYearWeekIndex": 2
+    },
+    {
+      "date": "2026-01-20",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2026-01-21",
+      "sessionOrdinal": 6384,
+      "nextSessionOrdinal": 6385,
+      "tradingYearSessionIndex": 10,
+      "nextTradingYearSessionIndex": 11,
+      "tradingYearWeekIndex": 2,
+      "nextTradingYearWeekIndex": 2
+    },
+    {
+      "date": "2026-01-21",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D"
+      ],
+      "nextTradingDate": "2026-01-22",
+      "sessionOrdinal": 6385,
+      "nextSessionOrdinal": 6386,
+      "tradingYearSessionIndex": 11,
+      "nextTradingYearSessionIndex": 12,
+      "tradingYearWeekIndex": 2,
+      "nextTradingYearWeekIndex": 2
+    },
+    {
+      "date": "2026-01-22",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2026-01-23",
+      "sessionOrdinal": 6386,
+      "nextSessionOrdinal": 6387,
+      "tradingYearSessionIndex": 12,
+      "nextTradingYearSessionIndex": 13,
+      "tradingYearWeekIndex": 2,
+      "nextTradingYearWeekIndex": 2
+    },
+    {
+      "date": "2026-01-23",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "W",
+        "3W"
+      ],
+      "nextTradingDate": "2026-01-26",
+      "sessionOrdinal": 6387,
+      "nextSessionOrdinal": 6388,
+      "tradingYearSessionIndex": 13,
+      "nextTradingYearSessionIndex": 14,
+      "tradingYearWeekIndex": 2,
+      "nextTradingYearWeekIndex": 3
+    },
+    {
+      "date": "2026-01-26",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D",
+        "5D"
+      ],
+      "nextTradingDate": "2026-01-27",
+      "sessionOrdinal": 6388,
+      "nextSessionOrdinal": 6389,
+      "tradingYearSessionIndex": 14,
+      "nextTradingYearSessionIndex": 15,
+      "tradingYearWeekIndex": 3,
+      "nextTradingYearWeekIndex": 3
+    },
+    {
+      "date": "2026-01-27",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2026-01-28",
+      "sessionOrdinal": 6389,
+      "nextSessionOrdinal": 6390,
+      "tradingYearSessionIndex": 15,
+      "nextTradingYearSessionIndex": 16,
+      "tradingYearWeekIndex": 3,
+      "nextTradingYearWeekIndex": 3
+    },
+    {
+      "date": "2026-01-28",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2026-01-29",
+      "sessionOrdinal": 6390,
+      "nextSessionOrdinal": 6391,
+      "tradingYearSessionIndex": 16,
+      "nextTradingYearSessionIndex": 17,
+      "tradingYearWeekIndex": 3,
+      "nextTradingYearWeekIndex": 3
+    },
+    {
+      "date": "2026-01-29",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D"
+      ],
+      "nextTradingDate": "2026-01-30",
+      "sessionOrdinal": 6391,
+      "nextSessionOrdinal": 6392,
+      "tradingYearSessionIndex": 17,
+      "nextTradingYearSessionIndex": 18,
+      "tradingYearWeekIndex": 3,
+      "nextTradingYearWeekIndex": 3
+    },
+    {
+      "date": "2026-01-30",
+      "expectedCloseTimeframes": [
+        "D",
+        "W",
+        "2W",
+        "M"
+      ],
+      "nextTradingDate": "2026-02-02",
+      "sessionOrdinal": 6392,
+      "nextSessionOrdinal": 6393,
+      "tradingYearSessionIndex": 18,
+      "nextTradingYearSessionIndex": 19,
+      "tradingYearWeekIndex": 3,
+      "nextTradingYearWeekIndex": 4
+    },
+    {
+      "date": "2026-02-02",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "5D"
+      ],
+      "nextTradingDate": "2026-02-03",
+      "sessionOrdinal": 6393,
+      "nextSessionOrdinal": 6394,
+      "tradingYearSessionIndex": 19,
+      "nextTradingYearSessionIndex": 20,
+      "tradingYearWeekIndex": 4,
+      "nextTradingYearWeekIndex": 4
+    },
+    {
+      "date": "2026-02-03",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D"
+      ],
+      "nextTradingDate": "2026-02-04",
+      "sessionOrdinal": 6394,
+      "nextSessionOrdinal": 6395,
+      "tradingYearSessionIndex": 20,
+      "nextTradingYearSessionIndex": 21,
+      "tradingYearWeekIndex": 4,
+      "nextTradingYearWeekIndex": 4
+    },
+    {
+      "date": "2026-02-04",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2026-02-05",
+      "sessionOrdinal": 6395,
+      "nextSessionOrdinal": 6396,
+      "tradingYearSessionIndex": 21,
+      "nextTradingYearSessionIndex": 22,
+      "tradingYearWeekIndex": 4,
+      "nextTradingYearWeekIndex": 4
+    },
+    {
+      "date": "2026-02-05",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2026-02-06",
+      "sessionOrdinal": 6396,
+      "nextSessionOrdinal": 6397,
+      "tradingYearSessionIndex": 22,
+      "nextTradingYearSessionIndex": 23,
+      "tradingYearWeekIndex": 4,
+      "nextTradingYearWeekIndex": 4
+    },
+    {
+      "date": "2026-02-06",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D",
+        "W",
+        "5W"
+      ],
+      "nextTradingDate": "2026-02-09",
+      "sessionOrdinal": 6397,
+      "nextSessionOrdinal": 6398,
+      "tradingYearSessionIndex": 23,
+      "nextTradingYearSessionIndex": 24,
+      "tradingYearWeekIndex": 4,
+      "nextTradingYearWeekIndex": 5
+    },
+    {
+      "date": "2026-02-09",
+      "expectedCloseTimeframes": [
+        "D",
+        "5D"
+      ],
+      "nextTradingDate": "2026-02-10",
+      "sessionOrdinal": 6398,
+      "nextSessionOrdinal": 6399,
+      "tradingYearSessionIndex": 24,
+      "nextTradingYearSessionIndex": 25,
+      "tradingYearWeekIndex": 5,
+      "nextTradingYearWeekIndex": 5
+    },
+    {
+      "date": "2026-02-10",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2026-02-12",
+      "sessionOrdinal": 6399,
+      "nextSessionOrdinal": 6400,
+      "tradingYearSessionIndex": 25,
+      "nextTradingYearSessionIndex": 26,
+      "tradingYearWeekIndex": 5,
+      "nextTradingYearWeekIndex": 5
+    },
+    {
+      "date": "2026-02-12",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D"
+      ],
+      "nextTradingDate": "2026-02-13",
+      "sessionOrdinal": 6400,
+      "nextSessionOrdinal": 6401,
+      "tradingYearSessionIndex": 26,
+      "nextTradingYearSessionIndex": 27,
+      "tradingYearWeekIndex": 5,
+      "nextTradingYearWeekIndex": 5
+    },
+    {
+      "date": "2026-02-13",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "W",
+        "2W",
+        "3W"
+      ],
+      "nextTradingDate": "2026-02-16",
+      "sessionOrdinal": 6401,
+      "nextSessionOrdinal": 6402,
+      "tradingYearSessionIndex": 27,
+      "nextTradingYearSessionIndex": 28,
+      "tradingYearWeekIndex": 5,
+      "nextTradingYearWeekIndex": 6
+    },
+    {
+      "date": "2026-02-16",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2026-02-17",
+      "sessionOrdinal": 6402,
+      "nextSessionOrdinal": 6403,
+      "tradingYearSessionIndex": 28,
+      "nextTradingYearSessionIndex": 29,
+      "tradingYearWeekIndex": 6,
+      "nextTradingYearWeekIndex": 6
+    },
+    {
+      "date": "2026-02-17",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D",
+        "5D"
+      ],
+      "nextTradingDate": "2026-02-18",
+      "sessionOrdinal": 6403,
+      "nextSessionOrdinal": 6404,
+      "tradingYearSessionIndex": 29,
+      "nextTradingYearSessionIndex": 30,
+      "tradingYearWeekIndex": 6,
+      "nextTradingYearWeekIndex": 6
+    },
+    {
+      "date": "2026-02-18",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2026-02-19",
+      "sessionOrdinal": 6404,
+      "nextSessionOrdinal": 6405,
+      "tradingYearSessionIndex": 30,
+      "nextTradingYearSessionIndex": 31,
+      "tradingYearWeekIndex": 6,
+      "nextTradingYearWeekIndex": 6
+    },
+    {
+      "date": "2026-02-19",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2026-02-20",
+      "sessionOrdinal": 6405,
+      "nextSessionOrdinal": 6406,
+      "tradingYearSessionIndex": 31,
+      "nextTradingYearSessionIndex": 32,
+      "tradingYearWeekIndex": 6,
+      "nextTradingYearWeekIndex": 6
+    },
+    {
+      "date": "2026-02-20",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D",
+        "W"
+      ],
+      "nextTradingDate": "2026-02-24",
+      "sessionOrdinal": 6406,
+      "nextSessionOrdinal": 6407,
+      "tradingYearSessionIndex": 32,
+      "nextTradingYearSessionIndex": 33,
+      "tradingYearWeekIndex": 6,
+      "nextTradingYearWeekIndex": 7
+    },
+    {
+      "date": "2026-02-24",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2026-02-25",
+      "sessionOrdinal": 6407,
+      "nextSessionOrdinal": 6408,
+      "tradingYearSessionIndex": 33,
+      "nextTradingYearSessionIndex": 34,
+      "tradingYearWeekIndex": 7,
+      "nextTradingYearWeekIndex": 7
+    },
+    {
+      "date": "2026-02-25",
+      "expectedCloseTimeframes": [
+        "D",
+        "5D"
+      ],
+      "nextTradingDate": "2026-02-26",
+      "sessionOrdinal": 6408,
+      "nextSessionOrdinal": 6409,
+      "tradingYearSessionIndex": 34,
+      "nextTradingYearSessionIndex": 35,
+      "tradingYearWeekIndex": 7,
+      "nextTradingYearWeekIndex": 7
+    },
+    {
+      "date": "2026-02-26",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D"
+      ],
+      "nextTradingDate": "2026-02-27",
+      "sessionOrdinal": 6409,
+      "nextSessionOrdinal": 6410,
+      "tradingYearSessionIndex": 35,
+      "nextTradingYearSessionIndex": 36,
+      "tradingYearWeekIndex": 7,
+      "nextTradingYearWeekIndex": 7
+    },
+    {
+      "date": "2026-02-27",
+      "expectedCloseTimeframes": [
+        "D",
+        "W",
+        "2W",
+        "M",
+        "2M"
+      ],
+      "nextTradingDate": "2026-03-02",
+      "sessionOrdinal": 6410,
+      "nextSessionOrdinal": 6411,
+      "tradingYearSessionIndex": 36,
+      "nextTradingYearSessionIndex": 37,
+      "tradingYearWeekIndex": 7,
+      "nextTradingYearWeekIndex": 8
+    },
+    {
+      "date": "2026-03-02",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2026-03-03",
+      "sessionOrdinal": 6411,
+      "nextSessionOrdinal": 6412,
+      "tradingYearSessionIndex": 37,
+      "nextTradingYearSessionIndex": 38,
+      "tradingYearWeekIndex": 8,
+      "nextTradingYearWeekIndex": 8
+    },
+    {
+      "date": "2026-03-03",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D"
+      ],
+      "nextTradingDate": "2026-03-04",
+      "sessionOrdinal": 6412,
+      "nextSessionOrdinal": 6413,
+      "tradingYearSessionIndex": 38,
+      "nextTradingYearSessionIndex": 39,
+      "tradingYearWeekIndex": 8,
+      "nextTradingYearWeekIndex": 8
+    },
+    {
+      "date": "2026-03-04",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "5D"
+      ],
+      "nextTradingDate": "2026-03-05",
+      "sessionOrdinal": 6413,
+      "nextSessionOrdinal": 6414,
+      "tradingYearSessionIndex": 39,
+      "nextTradingYearSessionIndex": 40,
+      "tradingYearWeekIndex": 8,
+      "nextTradingYearWeekIndex": 8
+    },
+    {
+      "date": "2026-03-05",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2026-03-06",
+      "sessionOrdinal": 6414,
+      "nextSessionOrdinal": 6415,
+      "tradingYearSessionIndex": 40,
+      "nextTradingYearSessionIndex": 41,
+      "tradingYearWeekIndex": 8,
+      "nextTradingYearWeekIndex": 8
+    },
+    {
+      "date": "2026-03-06",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D",
+        "W",
+        "3W"
+      ],
+      "nextTradingDate": "2026-03-09",
+      "sessionOrdinal": 6415,
+      "nextSessionOrdinal": 6416,
+      "tradingYearSessionIndex": 41,
+      "nextTradingYearSessionIndex": 42,
+      "tradingYearWeekIndex": 8,
+      "nextTradingYearWeekIndex": 9
+    },
+    {
+      "date": "2026-03-09",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2026-03-10",
+      "sessionOrdinal": 6416,
+      "nextSessionOrdinal": 6417,
+      "tradingYearSessionIndex": 42,
+      "nextTradingYearSessionIndex": 43,
+      "tradingYearWeekIndex": 9,
+      "nextTradingYearWeekIndex": 9
+    },
+    {
+      "date": "2026-03-10",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2026-03-11",
+      "sessionOrdinal": 6417,
+      "nextSessionOrdinal": 6418,
+      "tradingYearSessionIndex": 43,
+      "nextTradingYearSessionIndex": 44,
+      "tradingYearWeekIndex": 9,
+      "nextTradingYearWeekIndex": 9
+    },
+    {
+      "date": "2026-03-11",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D",
+        "5D"
+      ],
+      "nextTradingDate": "2026-03-12",
+      "sessionOrdinal": 6418,
+      "nextSessionOrdinal": 6419,
+      "tradingYearSessionIndex": 44,
+      "nextTradingYearSessionIndex": 45,
+      "tradingYearWeekIndex": 9,
+      "nextTradingYearWeekIndex": 9
+    },
+    {
+      "date": "2026-03-12",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2026-03-13",
+      "sessionOrdinal": 6419,
+      "nextSessionOrdinal": 6420,
+      "tradingYearSessionIndex": 45,
+      "nextTradingYearSessionIndex": 46,
+      "tradingYearWeekIndex": 9,
+      "nextTradingYearWeekIndex": 9
+    },
+    {
+      "date": "2026-03-13",
+      "expectedCloseTimeframes": [
+        "D",
+        "W",
+        "2W",
+        "5W"
+      ],
+      "nextTradingDate": "2026-03-16",
+      "sessionOrdinal": 6420,
+      "nextSessionOrdinal": 6421,
+      "tradingYearSessionIndex": 46,
+      "nextTradingYearSessionIndex": 47,
+      "tradingYearWeekIndex": 9,
+      "nextTradingYearWeekIndex": 10
+    },
+    {
+      "date": "2026-03-16",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D"
+      ],
+      "nextTradingDate": "2026-03-17",
+      "sessionOrdinal": 6421,
+      "nextSessionOrdinal": 6422,
+      "tradingYearSessionIndex": 47,
+      "nextTradingYearSessionIndex": 48,
+      "tradingYearWeekIndex": 10,
+      "nextTradingYearWeekIndex": 10
+    },
+    {
+      "date": "2026-03-17",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2026-03-18",
+      "sessionOrdinal": 6422,
+      "nextSessionOrdinal": 6423,
+      "tradingYearSessionIndex": 48,
+      "nextTradingYearSessionIndex": 49,
+      "tradingYearWeekIndex": 10,
+      "nextTradingYearWeekIndex": 10
+    },
+    {
+      "date": "2026-03-18",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "5D"
+      ],
+      "nextTradingDate": "2026-03-19",
+      "sessionOrdinal": 6423,
+      "nextSessionOrdinal": 6424,
+      "tradingYearSessionIndex": 49,
+      "nextTradingYearSessionIndex": 50,
+      "tradingYearWeekIndex": 10,
+      "nextTradingYearWeekIndex": 10
+    },
+    {
+      "date": "2026-03-19",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D",
+        "W"
+      ],
+      "nextTradingDate": "2026-03-23",
+      "sessionOrdinal": 6424,
+      "nextSessionOrdinal": 6425,
+      "tradingYearSessionIndex": 50,
+      "nextTradingYearSessionIndex": 51,
+      "tradingYearWeekIndex": 10,
+      "nextTradingYearWeekIndex": 11
+    },
+    {
+      "date": "2026-03-23",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2026-03-24",
+      "sessionOrdinal": 6425,
+      "nextSessionOrdinal": 6426,
+      "tradingYearSessionIndex": 51,
+      "nextTradingYearSessionIndex": 52,
+      "tradingYearWeekIndex": 11,
+      "nextTradingYearWeekIndex": 11
+    },
+    {
+      "date": "2026-03-24",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2026-03-25",
+      "sessionOrdinal": 6426,
+      "nextSessionOrdinal": 6427,
+      "tradingYearSessionIndex": 52,
+      "nextTradingYearSessionIndex": 53,
+      "tradingYearWeekIndex": 11,
+      "nextTradingYearWeekIndex": 11
+    },
+    {
+      "date": "2026-03-25",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D"
+      ],
+      "nextTradingDate": "2026-03-26",
+      "sessionOrdinal": 6427,
+      "nextSessionOrdinal": 6428,
+      "tradingYearSessionIndex": 53,
+      "nextTradingYearSessionIndex": 54,
+      "tradingYearWeekIndex": 11,
+      "nextTradingYearWeekIndex": 11
+    },
+    {
+      "date": "2026-03-26",
+      "expectedCloseTimeframes": [
+        "D",
+        "5D"
+      ],
+      "nextTradingDate": "2026-03-27",
+      "sessionOrdinal": 6428,
+      "nextSessionOrdinal": 6429,
+      "tradingYearSessionIndex": 54,
+      "nextTradingYearSessionIndex": 55,
+      "tradingYearWeekIndex": 11,
+      "nextTradingYearWeekIndex": 11
+    },
+    {
+      "date": "2026-03-27",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "W",
+        "2W",
+        "3W"
+      ],
+      "nextTradingDate": "2026-03-30",
+      "sessionOrdinal": 6429,
+      "nextSessionOrdinal": 6430,
+      "tradingYearSessionIndex": 55,
+      "nextTradingYearSessionIndex": 56,
+      "tradingYearWeekIndex": 11,
+      "nextTradingYearWeekIndex": 12
+    },
+    {
+      "date": "2026-03-30",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D"
+      ],
+      "nextTradingDate": "2026-03-31",
+      "sessionOrdinal": 6430,
+      "nextSessionOrdinal": 6431,
+      "tradingYearSessionIndex": 56,
+      "nextTradingYearSessionIndex": 57,
+      "tradingYearWeekIndex": 12,
+      "nextTradingYearWeekIndex": 12
+    },
+    {
+      "date": "2026-03-31",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "M",
+        "3M"
+      ],
+      "nextTradingDate": "2026-04-01",
+      "sessionOrdinal": 6431,
+      "nextSessionOrdinal": 6432,
+      "tradingYearSessionIndex": 57,
+      "nextTradingYearSessionIndex": 58,
+      "tradingYearWeekIndex": 12,
+      "nextTradingYearWeekIndex": 12
+    },
+    {
+      "date": "2026-04-01",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2026-04-02",
+      "sessionOrdinal": 6432,
+      "nextSessionOrdinal": 6433,
+      "tradingYearSessionIndex": 58,
+      "nextTradingYearSessionIndex": 59,
+      "tradingYearWeekIndex": 12,
+      "nextTradingYearWeekIndex": 12
+    },
+    {
+      "date": "2026-04-02",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D",
+        "5D"
+      ],
+      "nextTradingDate": "2026-04-03",
+      "sessionOrdinal": 6433,
+      "nextSessionOrdinal": 6434,
+      "tradingYearSessionIndex": 59,
+      "nextTradingYearSessionIndex": 60,
+      "tradingYearWeekIndex": 12,
+      "nextTradingYearWeekIndex": 12
+    },
+    {
+      "date": "2026-04-03",
+      "expectedCloseTimeframes": [
+        "D",
+        "W"
+      ],
+      "nextTradingDate": "2026-04-06",
+      "sessionOrdinal": 6434,
+      "nextSessionOrdinal": 6435,
+      "tradingYearSessionIndex": 60,
+      "nextTradingYearSessionIndex": 61,
+      "tradingYearWeekIndex": 12,
+      "nextTradingYearWeekIndex": 13
+    },
+    {
+      "date": "2026-04-06",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2026-04-07",
+      "sessionOrdinal": 6435,
+      "nextSessionOrdinal": 6436,
+      "tradingYearSessionIndex": 61,
+      "nextTradingYearSessionIndex": 62,
+      "tradingYearWeekIndex": 13,
+      "nextTradingYearWeekIndex": 13
+    },
+    {
+      "date": "2026-04-07",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D"
+      ],
+      "nextTradingDate": "2026-04-08",
+      "sessionOrdinal": 6436,
+      "nextSessionOrdinal": 6437,
+      "tradingYearSessionIndex": 62,
+      "nextTradingYearSessionIndex": 63,
+      "tradingYearWeekIndex": 13,
+      "nextTradingYearWeekIndex": 13
+    },
+    {
+      "date": "2026-04-08",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2026-04-09",
+      "sessionOrdinal": 6437,
+      "nextSessionOrdinal": 6438,
+      "tradingYearSessionIndex": 63,
+      "nextTradingYearSessionIndex": 64,
+      "tradingYearWeekIndex": 13,
+      "nextTradingYearWeekIndex": 13
+    },
+    {
+      "date": "2026-04-09",
+      "expectedCloseTimeframes": [
+        "D",
+        "5D"
+      ],
+      "nextTradingDate": "2026-04-10",
+      "sessionOrdinal": 6438,
+      "nextSessionOrdinal": 6439,
+      "tradingYearSessionIndex": 64,
+      "nextTradingYearSessionIndex": 65,
+      "tradingYearWeekIndex": 13,
+      "nextTradingYearWeekIndex": 13
+    },
+    {
+      "date": "2026-04-10",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D",
+        "W",
+        "2W"
+      ],
+      "nextTradingDate": "2026-04-13",
+      "sessionOrdinal": 6439,
+      "nextSessionOrdinal": 6440,
+      "tradingYearSessionIndex": 65,
+      "nextTradingYearSessionIndex": 66,
+      "tradingYearWeekIndex": 13,
+      "nextTradingYearWeekIndex": 14
+    },
+    {
+      "date": "2026-04-13",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2026-04-14",
+      "sessionOrdinal": 6440,
+      "nextSessionOrdinal": 6441,
+      "tradingYearSessionIndex": 66,
+      "nextTradingYearSessionIndex": 67,
+      "tradingYearWeekIndex": 14,
+      "nextTradingYearWeekIndex": 14
+    },
+    {
+      "date": "2026-04-14",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2026-04-15",
+      "sessionOrdinal": 6441,
+      "nextSessionOrdinal": 6442,
+      "tradingYearSessionIndex": 67,
+      "nextTradingYearSessionIndex": 68,
+      "tradingYearWeekIndex": 14,
+      "nextTradingYearWeekIndex": 14
+    },
+    {
+      "date": "2026-04-15",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D"
+      ],
+      "nextTradingDate": "2026-04-16",
+      "sessionOrdinal": 6442,
+      "nextSessionOrdinal": 6443,
+      "tradingYearSessionIndex": 68,
+      "nextTradingYearSessionIndex": 69,
+      "tradingYearWeekIndex": 14,
+      "nextTradingYearWeekIndex": 14
+    },
+    {
+      "date": "2026-04-16",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "5D"
+      ],
+      "nextTradingDate": "2026-04-17",
+      "sessionOrdinal": 6443,
+      "nextSessionOrdinal": 6444,
+      "tradingYearSessionIndex": 69,
+      "nextTradingYearSessionIndex": 70,
+      "tradingYearWeekIndex": 14,
+      "nextTradingYearWeekIndex": 14
+    },
+    {
+      "date": "2026-04-17",
+      "expectedCloseTimeframes": [
+        "D",
+        "W",
+        "3W",
+        "5W"
+      ],
+      "nextTradingDate": "2026-04-20",
+      "sessionOrdinal": 6444,
+      "nextSessionOrdinal": 6445,
+      "tradingYearSessionIndex": 70,
+      "nextTradingYearSessionIndex": 71,
+      "tradingYearWeekIndex": 14,
+      "nextTradingYearWeekIndex": 15
+    },
+    {
+      "date": "2026-04-20",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D"
+      ],
+      "nextTradingDate": "2026-04-21",
+      "sessionOrdinal": 6445,
+      "nextSessionOrdinal": 6446,
+      "tradingYearSessionIndex": 71,
+      "nextTradingYearSessionIndex": 72,
+      "tradingYearWeekIndex": 15,
+      "nextTradingYearWeekIndex": 15
+    },
+    {
+      "date": "2026-04-21",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2026-04-22",
+      "sessionOrdinal": 6446,
+      "nextSessionOrdinal": 6447,
+      "tradingYearSessionIndex": 72,
+      "nextTradingYearSessionIndex": 73,
+      "tradingYearWeekIndex": 15,
+      "nextTradingYearWeekIndex": 15
+    },
+    {
+      "date": "2026-04-22",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2026-04-23",
+      "sessionOrdinal": 6447,
+      "nextSessionOrdinal": 6448,
+      "tradingYearSessionIndex": 73,
+      "nextTradingYearSessionIndex": 74,
+      "tradingYearWeekIndex": 15,
+      "nextTradingYearWeekIndex": 15
+    },
+    {
+      "date": "2026-04-23",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D",
+        "5D"
+      ],
+      "nextTradingDate": "2026-04-24",
+      "sessionOrdinal": 6448,
+      "nextSessionOrdinal": 6449,
+      "tradingYearSessionIndex": 74,
+      "nextTradingYearSessionIndex": 75,
+      "tradingYearWeekIndex": 15,
+      "nextTradingYearWeekIndex": 15
+    },
+    {
+      "date": "2026-04-24",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "W",
+        "2W"
+      ],
+      "nextTradingDate": "2026-04-27",
+      "sessionOrdinal": 6449,
+      "nextSessionOrdinal": 6450,
+      "tradingYearSessionIndex": 75,
+      "nextTradingYearSessionIndex": 76,
+      "tradingYearWeekIndex": 15,
+      "nextTradingYearWeekIndex": 16
+    },
+    {
+      "date": "2026-04-27",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2026-04-28",
+      "sessionOrdinal": 6450,
+      "nextSessionOrdinal": 6451,
+      "tradingYearSessionIndex": 76,
+      "nextTradingYearSessionIndex": 77,
+      "tradingYearWeekIndex": 16,
+      "nextTradingYearWeekIndex": 16
+    },
+    {
+      "date": "2026-04-28",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D"
+      ],
+      "nextTradingDate": "2026-04-30",
+      "sessionOrdinal": 6451,
+      "nextSessionOrdinal": 6452,
+      "tradingYearSessionIndex": 77,
+      "nextTradingYearSessionIndex": 78,
+      "tradingYearWeekIndex": 16,
+      "nextTradingYearWeekIndex": 16
+    },
+    {
+      "date": "2026-04-30",
+      "expectedCloseTimeframes": [
+        "D",
+        "M",
+        "2M"
+      ],
+      "nextTradingDate": "2026-05-01",
+      "sessionOrdinal": 6452,
+      "nextSessionOrdinal": 6453,
+      "tradingYearSessionIndex": 78,
+      "nextTradingYearSessionIndex": 79,
+      "tradingYearWeekIndex": 16,
+      "nextTradingYearWeekIndex": 16
+    },
+    {
+      "date": "2026-05-01",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "5D",
+        "W"
+      ],
+      "nextTradingDate": "2026-05-07",
+      "sessionOrdinal": 6453,
+      "nextSessionOrdinal": 6454,
+      "tradingYearSessionIndex": 79,
+      "nextTradingYearSessionIndex": 80,
+      "tradingYearWeekIndex": 16,
+      "nextTradingYearWeekIndex": 17
+    },
+    {
+      "date": "2026-05-07",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D"
+      ],
+      "nextTradingDate": "2026-05-08",
+      "sessionOrdinal": 6454,
+      "nextSessionOrdinal": 6455,
+      "tradingYearSessionIndex": 80,
+      "nextTradingYearSessionIndex": 81,
+      "tradingYearWeekIndex": 17,
+      "nextTradingYearWeekIndex": 17
+    },
+    {
+      "date": "2026-05-08",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "W",
+        "2W",
+        "3W"
+      ],
+      "nextTradingDate": "2026-05-11",
+      "sessionOrdinal": 6455,
+      "nextSessionOrdinal": 6456,
+      "tradingYearSessionIndex": 81,
+      "nextTradingYearSessionIndex": 82,
+      "tradingYearWeekIndex": 17,
+      "nextTradingYearWeekIndex": 18
+    },
+    {
+      "date": "2026-05-11",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2026-05-12",
+      "sessionOrdinal": 6456,
+      "nextSessionOrdinal": 6457,
+      "tradingYearSessionIndex": 82,
+      "nextTradingYearSessionIndex": 83,
+      "tradingYearWeekIndex": 18,
+      "nextTradingYearWeekIndex": 18
+    },
+    {
+      "date": "2026-05-12",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D"
+      ],
+      "nextTradingDate": "2026-05-13",
+      "sessionOrdinal": 6457,
+      "nextSessionOrdinal": 6458,
+      "tradingYearSessionIndex": 83,
+      "nextTradingYearSessionIndex": 84,
+      "tradingYearWeekIndex": 18,
+      "nextTradingYearWeekIndex": 18
+    },
+    {
+      "date": "2026-05-13",
+      "expectedCloseTimeframes": [
+        "D",
+        "5D"
+      ],
+      "nextTradingDate": "2026-05-14",
+      "sessionOrdinal": 6458,
+      "nextSessionOrdinal": 6459,
+      "tradingYearSessionIndex": 84,
+      "nextTradingYearSessionIndex": 85,
+      "tradingYearWeekIndex": 18,
+      "nextTradingYearWeekIndex": 18
+    },
+    {
+      "date": "2026-05-14",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2026-05-15",
+      "sessionOrdinal": 6459,
+      "nextSessionOrdinal": 6460,
+      "tradingYearSessionIndex": 85,
+      "nextTradingYearSessionIndex": 86,
+      "tradingYearWeekIndex": 18,
+      "nextTradingYearWeekIndex": 18
+    },
+    {
+      "date": "2026-05-15",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D",
+        "W"
+      ],
+      "nextTradingDate": "2026-05-18",
+      "sessionOrdinal": 6460,
+      "nextSessionOrdinal": 6461,
+      "tradingYearSessionIndex": 86,
+      "nextTradingYearSessionIndex": 87,
+      "tradingYearWeekIndex": 18,
+      "nextTradingYearWeekIndex": 19
+    },
+    {
+      "date": "2026-05-18",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2026-05-19",
+      "sessionOrdinal": 6461,
+      "nextSessionOrdinal": 6462,
+      "tradingYearSessionIndex": 87,
+      "nextTradingYearSessionIndex": 88,
+      "tradingYearWeekIndex": 19,
+      "nextTradingYearWeekIndex": 19
+    },
+    {
+      "date": "2026-05-19",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2026-05-20",
+      "sessionOrdinal": 6462,
+      "nextSessionOrdinal": 6463,
+      "tradingYearSessionIndex": 88,
+      "nextTradingYearSessionIndex": 89,
+      "tradingYearWeekIndex": 19,
+      "nextTradingYearWeekIndex": 19
+    },
+    {
+      "date": "2026-05-20",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D",
+        "5D"
+      ],
+      "nextTradingDate": "2026-05-21",
+      "sessionOrdinal": 6463,
+      "nextSessionOrdinal": 6464,
+      "tradingYearSessionIndex": 89,
+      "nextTradingYearSessionIndex": 90,
+      "tradingYearWeekIndex": 19,
+      "nextTradingYearWeekIndex": 19
+    },
+    {
+      "date": "2026-05-21",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2026-05-22",
+      "sessionOrdinal": 6464,
+      "nextSessionOrdinal": 6465,
+      "tradingYearSessionIndex": 90,
+      "nextTradingYearSessionIndex": 91,
+      "tradingYearWeekIndex": 19,
+      "nextTradingYearWeekIndex": 19
+    },
+    {
+      "date": "2026-05-22",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "W",
+        "2W",
+        "5W"
+      ],
+      "nextTradingDate": "2026-05-25",
+      "sessionOrdinal": 6465,
+      "nextSessionOrdinal": 6466,
+      "tradingYearSessionIndex": 91,
+      "nextTradingYearSessionIndex": 92,
+      "tradingYearWeekIndex": 19,
+      "nextTradingYearWeekIndex": 20
+    },
+    {
+      "date": "2026-05-25",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D"
+      ],
+      "nextTradingDate": "2026-05-26",
+      "sessionOrdinal": 6466,
+      "nextSessionOrdinal": 6467,
+      "tradingYearSessionIndex": 92,
+      "nextTradingYearSessionIndex": 93,
+      "tradingYearWeekIndex": 20,
+      "nextTradingYearWeekIndex": 20
+    },
+    {
+      "date": "2026-05-26",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2026-05-27",
+      "sessionOrdinal": 6467,
+      "nextSessionOrdinal": 6468,
+      "tradingYearSessionIndex": 93,
+      "nextTradingYearSessionIndex": 94,
+      "tradingYearWeekIndex": 20,
+      "nextTradingYearWeekIndex": 20
+    },
+    {
+      "date": "2026-05-27",
+      "expectedCloseTimeframes": [
+        "D",
+        "5D"
+      ],
+      "nextTradingDate": "2026-05-28",
+      "sessionOrdinal": 6468,
+      "nextSessionOrdinal": 6469,
+      "tradingYearSessionIndex": 94,
+      "nextTradingYearSessionIndex": 95,
+      "tradingYearWeekIndex": 20,
+      "nextTradingYearWeekIndex": 20
+    },
+    {
+      "date": "2026-05-28",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D"
+      ],
+      "nextTradingDate": "2026-05-29",
+      "sessionOrdinal": 6469,
+      "nextSessionOrdinal": 6470,
+      "tradingYearSessionIndex": 95,
+      "nextTradingYearSessionIndex": 96,
+      "tradingYearWeekIndex": 20,
+      "nextTradingYearWeekIndex": 20
+    },
+    {
+      "date": "2026-05-29",
+      "expectedCloseTimeframes": [
+        "D",
+        "W",
+        "3W",
+        "M",
+        "5M"
+      ],
+      "nextTradingDate": "2026-06-01",
+      "sessionOrdinal": 6470,
+      "nextSessionOrdinal": 6471,
+      "tradingYearSessionIndex": 96,
+      "nextTradingYearSessionIndex": 97,
+      "tradingYearWeekIndex": 20,
+      "nextTradingYearWeekIndex": 21
+    },
+    {
+      "date": "2026-06-01",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2026-06-02",
+      "sessionOrdinal": 6471,
+      "nextSessionOrdinal": 6472,
+      "tradingYearSessionIndex": 97,
+      "nextTradingYearSessionIndex": 98,
+      "tradingYearWeekIndex": 21,
+      "nextTradingYearWeekIndex": 21
+    },
+    {
+      "date": "2026-06-02",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D"
+      ],
+      "nextTradingDate": "2026-06-03",
+      "sessionOrdinal": 6472,
+      "nextSessionOrdinal": 6473,
+      "tradingYearSessionIndex": 98,
+      "nextTradingYearSessionIndex": 99,
+      "tradingYearWeekIndex": 21,
+      "nextTradingYearWeekIndex": 21
+    },
+    {
+      "date": "2026-06-03",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "5D"
+      ],
+      "nextTradingDate": "2026-06-04",
+      "sessionOrdinal": 6473,
+      "nextSessionOrdinal": 6474,
+      "tradingYearSessionIndex": 99,
+      "nextTradingYearSessionIndex": 100,
+      "tradingYearWeekIndex": 21,
+      "nextTradingYearWeekIndex": 21
+    },
+    {
+      "date": "2026-06-04",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2026-06-05",
+      "sessionOrdinal": 6474,
+      "nextSessionOrdinal": 6475,
+      "tradingYearSessionIndex": 100,
+      "nextTradingYearSessionIndex": 101,
+      "tradingYearWeekIndex": 21,
+      "nextTradingYearWeekIndex": 21
+    },
+    {
+      "date": "2026-06-05",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D",
+        "W",
+        "2W"
+      ],
+      "nextTradingDate": "2026-06-08",
+      "sessionOrdinal": 6475,
+      "nextSessionOrdinal": 6476,
+      "tradingYearSessionIndex": 101,
+      "nextTradingYearSessionIndex": 102,
+      "tradingYearWeekIndex": 21,
+      "nextTradingYearWeekIndex": 22
+    },
+    {
+      "date": "2026-06-08",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2026-06-09",
+      "sessionOrdinal": 6476,
+      "nextSessionOrdinal": 6477,
+      "tradingYearSessionIndex": 102,
+      "nextTradingYearSessionIndex": 103,
+      "tradingYearWeekIndex": 22,
+      "nextTradingYearWeekIndex": 22
+    },
+    {
+      "date": "2026-06-09",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2026-06-10",
+      "sessionOrdinal": 6477,
+      "nextSessionOrdinal": 6478,
+      "tradingYearSessionIndex": 103,
+      "nextTradingYearSessionIndex": 104,
+      "tradingYearWeekIndex": 22,
+      "nextTradingYearWeekIndex": 22
+    },
+    {
+      "date": "2026-06-10",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D",
+        "5D"
+      ],
+      "nextTradingDate": "2026-06-11",
+      "sessionOrdinal": 6478,
+      "nextSessionOrdinal": 6479,
+      "tradingYearSessionIndex": 104,
+      "nextTradingYearSessionIndex": 105,
+      "tradingYearWeekIndex": 22,
+      "nextTradingYearWeekIndex": 22
+    },
+    {
+      "date": "2026-06-11",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2026-06-12",
+      "sessionOrdinal": 6479,
+      "nextSessionOrdinal": 6480,
+      "tradingYearSessionIndex": 105,
+      "nextTradingYearSessionIndex": 106,
+      "tradingYearWeekIndex": 22,
+      "nextTradingYearWeekIndex": 22
+    },
+    {
+      "date": "2026-06-12",
+      "expectedCloseTimeframes": [
+        "D",
+        "W"
+      ],
+      "nextTradingDate": "2026-06-15",
+      "sessionOrdinal": 6480,
+      "nextSessionOrdinal": 6481,
+      "tradingYearSessionIndex": 106,
+      "nextTradingYearSessionIndex": 107,
+      "tradingYearWeekIndex": 22,
+      "nextTradingYearWeekIndex": 23
+    },
+    {
+      "date": "2026-06-15",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D"
+      ],
+      "nextTradingDate": "2026-06-16",
+      "sessionOrdinal": 6481,
+      "nextSessionOrdinal": 6482,
+      "tradingYearSessionIndex": 107,
+      "nextTradingYearSessionIndex": 108,
+      "tradingYearWeekIndex": 23,
+      "nextTradingYearWeekIndex": 23
+    },
+    {
+      "date": "2026-06-16",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2026-06-17",
+      "sessionOrdinal": 6482,
+      "nextSessionOrdinal": 6483,
+      "tradingYearSessionIndex": 108,
+      "nextTradingYearSessionIndex": 109,
+      "tradingYearWeekIndex": 23,
+      "nextTradingYearWeekIndex": 23
+    },
+    {
+      "date": "2026-06-17",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "5D"
+      ],
+      "nextTradingDate": "2026-06-18",
+      "sessionOrdinal": 6483,
+      "nextSessionOrdinal": 6484,
+      "tradingYearSessionIndex": 109,
+      "nextTradingYearSessionIndex": 110,
+      "tradingYearWeekIndex": 23,
+      "nextTradingYearWeekIndex": 23
+    },
+    {
+      "date": "2026-06-18",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D"
+      ],
+      "nextTradingDate": "2026-06-19",
+      "sessionOrdinal": 6484,
+      "nextSessionOrdinal": 6485,
+      "tradingYearSessionIndex": 110,
+      "nextTradingYearSessionIndex": 111,
+      "tradingYearWeekIndex": 23,
+      "nextTradingYearWeekIndex": 23
+    },
+    {
+      "date": "2026-06-19",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "W",
+        "2W",
+        "3W"
+      ],
+      "nextTradingDate": "2026-06-22",
+      "sessionOrdinal": 6485,
+      "nextSessionOrdinal": 6486,
+      "tradingYearSessionIndex": 111,
+      "nextTradingYearSessionIndex": 112,
+      "tradingYearWeekIndex": 23,
+      "nextTradingYearWeekIndex": 24
+    },
+    {
+      "date": "2026-06-22",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2026-06-23",
+      "sessionOrdinal": 6486,
+      "nextSessionOrdinal": 6487,
+      "tradingYearSessionIndex": 112,
+      "nextTradingYearSessionIndex": 113,
+      "tradingYearWeekIndex": 24,
+      "nextTradingYearWeekIndex": 24
+    },
+    {
+      "date": "2026-06-23",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D"
+      ],
+      "nextTradingDate": "2026-06-24",
+      "sessionOrdinal": 6487,
+      "nextSessionOrdinal": 6488,
+      "tradingYearSessionIndex": 113,
+      "nextTradingYearSessionIndex": 114,
+      "tradingYearWeekIndex": 24,
+      "nextTradingYearWeekIndex": 24
+    },
+    {
+      "date": "2026-06-24",
+      "expectedCloseTimeframes": [
+        "D",
+        "5D"
+      ],
+      "nextTradingDate": "2026-06-25",
+      "sessionOrdinal": 6488,
+      "nextSessionOrdinal": 6489,
+      "tradingYearSessionIndex": 114,
+      "nextTradingYearSessionIndex": 115,
+      "tradingYearWeekIndex": 24,
+      "nextTradingYearWeekIndex": 24
+    },
+    {
+      "date": "2026-06-25",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2026-06-26",
+      "sessionOrdinal": 6489,
+      "nextSessionOrdinal": 6490,
+      "tradingYearSessionIndex": 115,
+      "nextTradingYearSessionIndex": 116,
+      "tradingYearWeekIndex": 24,
+      "nextTradingYearWeekIndex": 24
+    },
+    {
+      "date": "2026-06-26",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D",
+        "W",
+        "5W"
+      ],
+      "nextTradingDate": "2026-06-29",
+      "sessionOrdinal": 6490,
+      "nextSessionOrdinal": 6491,
+      "tradingYearSessionIndex": 116,
+      "nextTradingYearSessionIndex": 117,
+      "tradingYearWeekIndex": 24,
+      "nextTradingYearWeekIndex": 25
+    },
+    {
+      "date": "2026-06-29",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2026-06-30",
+      "sessionOrdinal": 6491,
+      "nextSessionOrdinal": 6492,
+      "tradingYearSessionIndex": 117,
+      "nextTradingYearSessionIndex": 118,
+      "tradingYearWeekIndex": 25,
+      "nextTradingYearWeekIndex": 25
+    },
+    {
+      "date": "2026-06-30",
+      "expectedCloseTimeframes": [
+        "D",
+        "M",
+        "2M",
+        "3M"
+      ],
+      "nextTradingDate": "2026-07-01",
+      "sessionOrdinal": 6492,
+      "nextSessionOrdinal": 6493,
+      "tradingYearSessionIndex": 118,
+      "nextTradingYearSessionIndex": 119,
+      "tradingYearWeekIndex": 25,
+      "nextTradingYearWeekIndex": 25
+    },
+    {
+      "date": "2026-07-01",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D",
+        "5D"
+      ],
+      "nextTradingDate": "2026-07-02",
+      "sessionOrdinal": 6493,
+      "nextSessionOrdinal": 6494,
+      "tradingYearSessionIndex": 119,
+      "nextTradingYearSessionIndex": 120,
+      "tradingYearWeekIndex": 25,
+      "nextTradingYearWeekIndex": 25
+    },
+    {
+      "date": "2026-07-02",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2026-07-03",
+      "sessionOrdinal": 6494,
+      "nextSessionOrdinal": 6495,
+      "tradingYearSessionIndex": 120,
+      "nextTradingYearSessionIndex": 121,
+      "tradingYearWeekIndex": 25,
+      "nextTradingYearWeekIndex": 25
+    },
+    {
+      "date": "2026-07-03",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "W",
+        "2W"
+      ],
+      "nextTradingDate": "2026-07-06",
+      "sessionOrdinal": 6495,
+      "nextSessionOrdinal": 6496,
+      "tradingYearSessionIndex": 121,
+      "nextTradingYearSessionIndex": 122,
+      "tradingYearWeekIndex": 25,
+      "nextTradingYearWeekIndex": 26
+    },
+    {
+      "date": "2026-07-06",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D"
+      ],
+      "nextTradingDate": "2026-07-07",
+      "sessionOrdinal": 6496,
+      "nextSessionOrdinal": 6497,
+      "tradingYearSessionIndex": 122,
+      "nextTradingYearSessionIndex": 123,
+      "tradingYearWeekIndex": 26,
+      "nextTradingYearWeekIndex": 26
+    },
+    {
+      "date": "2026-07-07",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2026-07-08",
+      "sessionOrdinal": 6497,
+      "nextSessionOrdinal": 6498,
+      "tradingYearSessionIndex": 123,
+      "nextTradingYearSessionIndex": 124,
+      "tradingYearWeekIndex": 26,
+      "nextTradingYearWeekIndex": 26
+    },
+    {
+      "date": "2026-07-08",
+      "expectedCloseTimeframes": [
+        "D",
+        "5D"
+      ],
+      "nextTradingDate": "2026-07-09",
+      "sessionOrdinal": 6498,
+      "nextSessionOrdinal": 6499,
+      "tradingYearSessionIndex": 124,
+      "nextTradingYearSessionIndex": 125,
+      "tradingYearWeekIndex": 26,
+      "nextTradingYearWeekIndex": 26
+    },
+    {
+      "date": "2026-07-09",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D"
+      ],
+      "nextTradingDate": "2026-07-10",
+      "sessionOrdinal": 6499,
+      "nextSessionOrdinal": 6500,
+      "tradingYearSessionIndex": 125,
+      "nextTradingYearSessionIndex": 126,
+      "tradingYearWeekIndex": 26,
+      "nextTradingYearWeekIndex": 26
+    },
+    {
+      "date": "2026-07-10",
+      "expectedCloseTimeframes": [
+        "D",
+        "W",
+        "3W"
+      ],
+      "nextTradingDate": "2026-07-13",
+      "sessionOrdinal": 6500,
+      "nextSessionOrdinal": 6501,
+      "tradingYearSessionIndex": 126,
+      "nextTradingYearSessionIndex": 127,
+      "tradingYearWeekIndex": 26,
+      "nextTradingYearWeekIndex": 27
+    },
+    {
+      "date": "2026-07-13",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2026-07-14",
+      "sessionOrdinal": 6501,
+      "nextSessionOrdinal": 6502,
+      "tradingYearSessionIndex": 127,
+      "nextTradingYearSessionIndex": 128,
+      "tradingYearWeekIndex": 27,
+      "nextTradingYearWeekIndex": 27
+    },
+    {
+      "date": "2026-07-14",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D"
+      ],
+      "nextTradingDate": "2026-07-15",
+      "sessionOrdinal": 6502,
+      "nextSessionOrdinal": 6503,
+      "tradingYearSessionIndex": 128,
+      "nextTradingYearSessionIndex": 129,
+      "tradingYearWeekIndex": 27,
+      "nextTradingYearWeekIndex": 27
+    },
+    {
+      "date": "2026-07-15",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "5D"
+      ],
+      "nextTradingDate": "2026-07-16",
+      "sessionOrdinal": 6503,
+      "nextSessionOrdinal": 6504,
+      "tradingYearSessionIndex": 129,
+      "nextTradingYearSessionIndex": 130,
+      "tradingYearWeekIndex": 27,
+      "nextTradingYearWeekIndex": 27
+    },
+    {
+      "date": "2026-07-16",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2026-07-17",
+      "sessionOrdinal": 6504,
+      "nextSessionOrdinal": 6505,
+      "tradingYearSessionIndex": 130,
+      "nextTradingYearSessionIndex": 131,
+      "tradingYearWeekIndex": 27,
+      "nextTradingYearWeekIndex": 27
+    },
+    {
+      "date": "2026-07-17",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D",
+        "W",
+        "2W"
+      ],
+      "nextTradingDate": "2026-07-21",
+      "sessionOrdinal": 6505,
+      "nextSessionOrdinal": 6506,
+      "tradingYearSessionIndex": 131,
+      "nextTradingYearSessionIndex": 132,
+      "tradingYearWeekIndex": 27,
+      "nextTradingYearWeekIndex": 28
+    },
+    {
+      "date": "2026-07-21",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2026-07-22",
+      "sessionOrdinal": 6506,
+      "nextSessionOrdinal": 6507,
+      "tradingYearSessionIndex": 132,
+      "nextTradingYearSessionIndex": 133,
+      "tradingYearWeekIndex": 28,
+      "nextTradingYearWeekIndex": 28
+    },
+    {
+      "date": "2026-07-22",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2026-07-23",
+      "sessionOrdinal": 6507,
+      "nextSessionOrdinal": 6508,
+      "tradingYearSessionIndex": 133,
+      "nextTradingYearSessionIndex": 134,
+      "tradingYearWeekIndex": 28,
+      "nextTradingYearWeekIndex": 28
+    },
+    {
+      "date": "2026-07-23",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D",
+        "5D"
+      ],
+      "nextTradingDate": "2026-07-24",
+      "sessionOrdinal": 6508,
+      "nextSessionOrdinal": 6509,
+      "tradingYearSessionIndex": 134,
+      "nextTradingYearSessionIndex": 135,
+      "tradingYearWeekIndex": 28,
+      "nextTradingYearWeekIndex": 28
+    },
+    {
+      "date": "2026-07-24",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "W"
+      ],
+      "nextTradingDate": "2026-07-27",
+      "sessionOrdinal": 6509,
+      "nextSessionOrdinal": 6510,
+      "tradingYearSessionIndex": 135,
+      "nextTradingYearSessionIndex": 136,
+      "tradingYearWeekIndex": 28,
+      "nextTradingYearWeekIndex": 29
+    },
+    {
+      "date": "2026-07-27",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2026-07-28",
+      "sessionOrdinal": 6510,
+      "nextSessionOrdinal": 6511,
+      "tradingYearSessionIndex": 136,
+      "nextTradingYearSessionIndex": 137,
+      "tradingYearWeekIndex": 29,
+      "nextTradingYearWeekIndex": 29
+    },
+    {
+      "date": "2026-07-28",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D"
+      ],
+      "nextTradingDate": "2026-07-29",
+      "sessionOrdinal": 6511,
+      "nextSessionOrdinal": 6512,
+      "tradingYearSessionIndex": 137,
+      "nextTradingYearSessionIndex": 138,
+      "tradingYearWeekIndex": 29,
+      "nextTradingYearWeekIndex": 29
+    },
+    {
+      "date": "2026-07-29",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2026-07-30",
+      "sessionOrdinal": 6512,
+      "nextSessionOrdinal": 6513,
+      "tradingYearSessionIndex": 138,
+      "nextTradingYearSessionIndex": 139,
+      "tradingYearWeekIndex": 29,
+      "nextTradingYearWeekIndex": 29
+    },
+    {
+      "date": "2026-07-30",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "5D"
+      ],
+      "nextTradingDate": "2026-07-31",
+      "sessionOrdinal": 6513,
+      "nextSessionOrdinal": 6514,
+      "tradingYearSessionIndex": 139,
+      "nextTradingYearSessionIndex": 140,
+      "tradingYearWeekIndex": 29,
+      "nextTradingYearWeekIndex": 29
+    },
+    {
+      "date": "2026-07-31",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D",
+        "W",
+        "2W",
+        "3W",
+        "5W",
+        "M"
+      ],
+      "nextTradingDate": "2026-08-03",
+      "sessionOrdinal": 6514,
+      "nextSessionOrdinal": 6515,
+      "tradingYearSessionIndex": 140,
+      "nextTradingYearSessionIndex": 141,
+      "tradingYearWeekIndex": 29,
+      "nextTradingYearWeekIndex": 30
+    },
+    {
+      "date": "2026-08-03",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2026-08-04",
+      "sessionOrdinal": 6515,
+      "nextSessionOrdinal": 6516,
+      "tradingYearSessionIndex": 141,
+      "nextTradingYearSessionIndex": 142,
+      "tradingYearWeekIndex": 30,
+      "nextTradingYearWeekIndex": 30
+    },
+    {
+      "date": "2026-08-04",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2026-08-05",
+      "sessionOrdinal": 6516,
+      "nextSessionOrdinal": 6517,
+      "tradingYearSessionIndex": 142,
+      "nextTradingYearSessionIndex": 143,
+      "tradingYearWeekIndex": 30,
+      "nextTradingYearWeekIndex": 30
+    },
+    {
+      "date": "2026-08-05",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D"
+      ],
+      "nextTradingDate": "2026-08-06",
+      "sessionOrdinal": 6517,
+      "nextSessionOrdinal": 6518,
+      "tradingYearSessionIndex": 143,
+      "nextTradingYearSessionIndex": 144,
+      "tradingYearWeekIndex": 30,
+      "nextTradingYearWeekIndex": 30
+    },
+    {
+      "date": "2026-08-06",
+      "expectedCloseTimeframes": [
+        "D",
+        "5D"
+      ],
+      "nextTradingDate": "2026-08-07",
+      "sessionOrdinal": 6518,
+      "nextSessionOrdinal": 6519,
+      "tradingYearSessionIndex": 144,
+      "nextTradingYearSessionIndex": 145,
+      "tradingYearWeekIndex": 30,
+      "nextTradingYearWeekIndex": 30
+    },
+    {
+      "date": "2026-08-07",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "W"
+      ],
+      "nextTradingDate": "2026-08-10",
+      "sessionOrdinal": 6519,
+      "nextSessionOrdinal": 6520,
+      "tradingYearSessionIndex": 145,
+      "nextTradingYearSessionIndex": 146,
+      "tradingYearWeekIndex": 30,
+      "nextTradingYearWeekIndex": 31
+    },
+    {
+      "date": "2026-08-10",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D"
+      ],
+      "nextTradingDate": "2026-08-12",
+      "sessionOrdinal": 6520,
+      "nextSessionOrdinal": 6521,
+      "tradingYearSessionIndex": 146,
+      "nextTradingYearSessionIndex": 147,
+      "tradingYearWeekIndex": 31,
+      "nextTradingYearWeekIndex": 31
+    },
+    {
+      "date": "2026-08-12",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2026-08-13",
+      "sessionOrdinal": 6521,
+      "nextSessionOrdinal": 6522,
+      "tradingYearSessionIndex": 147,
+      "nextTradingYearSessionIndex": 148,
+      "tradingYearWeekIndex": 31,
+      "nextTradingYearWeekIndex": 31
+    },
+    {
+      "date": "2026-08-13",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2026-08-14",
+      "sessionOrdinal": 6522,
+      "nextSessionOrdinal": 6523,
+      "tradingYearSessionIndex": 148,
+      "nextTradingYearSessionIndex": 149,
+      "tradingYearWeekIndex": 31,
+      "nextTradingYearWeekIndex": 31
+    },
+    {
+      "date": "2026-08-14",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D",
+        "5D",
+        "W",
+        "2W"
+      ],
+      "nextTradingDate": "2026-08-17",
+      "sessionOrdinal": 6523,
+      "nextSessionOrdinal": 6524,
+      "tradingYearSessionIndex": 149,
+      "nextTradingYearSessionIndex": 150,
+      "tradingYearWeekIndex": 31,
+      "nextTradingYearWeekIndex": 32
+    },
+    {
+      "date": "2026-08-17",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2026-08-18",
+      "sessionOrdinal": 6524,
+      "nextSessionOrdinal": 6525,
+      "tradingYearSessionIndex": 150,
+      "nextTradingYearSessionIndex": 151,
+      "tradingYearWeekIndex": 32,
+      "nextTradingYearWeekIndex": 32
+    },
+    {
+      "date": "2026-08-18",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2026-08-19",
+      "sessionOrdinal": 6525,
+      "nextSessionOrdinal": 6526,
+      "tradingYearSessionIndex": 151,
+      "nextTradingYearSessionIndex": 152,
+      "tradingYearWeekIndex": 32,
+      "nextTradingYearWeekIndex": 32
+    },
+    {
+      "date": "2026-08-19",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D"
+      ],
+      "nextTradingDate": "2026-08-20",
+      "sessionOrdinal": 6526,
+      "nextSessionOrdinal": 6527,
+      "tradingYearSessionIndex": 152,
+      "nextTradingYearSessionIndex": 153,
+      "tradingYearWeekIndex": 32,
+      "nextTradingYearWeekIndex": 32
+    },
+    {
+      "date": "2026-08-20",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2026-08-21",
+      "sessionOrdinal": 6527,
+      "nextSessionOrdinal": 6528,
+      "tradingYearSessionIndex": 153,
+      "nextTradingYearSessionIndex": 154,
+      "tradingYearWeekIndex": 32,
+      "nextTradingYearWeekIndex": 32
+    },
+    {
+      "date": "2026-08-21",
+      "expectedCloseTimeframes": [
+        "D",
+        "5D",
+        "W",
+        "3W"
+      ],
+      "nextTradingDate": "2026-08-24",
+      "sessionOrdinal": 6528,
+      "nextSessionOrdinal": 6529,
+      "tradingYearSessionIndex": 154,
+      "nextTradingYearSessionIndex": 155,
+      "tradingYearWeekIndex": 32,
+      "nextTradingYearWeekIndex": 33
+    },
+    {
+      "date": "2026-08-24",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D"
+      ],
+      "nextTradingDate": "2026-08-25",
+      "sessionOrdinal": 6529,
+      "nextSessionOrdinal": 6530,
+      "tradingYearSessionIndex": 155,
+      "nextTradingYearSessionIndex": 156,
+      "tradingYearWeekIndex": 33,
+      "nextTradingYearWeekIndex": 33
+    },
+    {
+      "date": "2026-08-25",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2026-08-26",
+      "sessionOrdinal": 6530,
+      "nextSessionOrdinal": 6531,
+      "tradingYearSessionIndex": 156,
+      "nextTradingYearSessionIndex": 157,
+      "tradingYearWeekIndex": 33,
+      "nextTradingYearWeekIndex": 33
+    },
+    {
+      "date": "2026-08-26",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2026-08-27",
+      "sessionOrdinal": 6531,
+      "nextSessionOrdinal": 6532,
+      "tradingYearSessionIndex": 157,
+      "nextTradingYearSessionIndex": 158,
+      "tradingYearWeekIndex": 33,
+      "nextTradingYearWeekIndex": 33
+    },
+    {
+      "date": "2026-08-27",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D"
+      ],
+      "nextTradingDate": "2026-08-28",
+      "sessionOrdinal": 6532,
+      "nextSessionOrdinal": 6533,
+      "tradingYearSessionIndex": 158,
+      "nextTradingYearSessionIndex": 159,
+      "tradingYearWeekIndex": 33,
+      "nextTradingYearWeekIndex": 33
+    },
+    {
+      "date": "2026-08-28",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "5D",
+        "W",
+        "2W"
+      ],
+      "nextTradingDate": "2026-08-31",
+      "sessionOrdinal": 6533,
+      "nextSessionOrdinal": 6534,
+      "tradingYearSessionIndex": 159,
+      "nextTradingYearSessionIndex": 160,
+      "tradingYearWeekIndex": 33,
+      "nextTradingYearWeekIndex": 34
+    },
+    {
+      "date": "2026-08-31",
+      "expectedCloseTimeframes": [
+        "D",
+        "M",
+        "2M"
+      ],
+      "nextTradingDate": "2026-09-01",
+      "sessionOrdinal": 6534,
+      "nextSessionOrdinal": 6535,
+      "tradingYearSessionIndex": 160,
+      "nextTradingYearSessionIndex": 161,
+      "tradingYearWeekIndex": 34,
+      "nextTradingYearWeekIndex": 34
+    },
+    {
+      "date": "2026-09-01",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D"
+      ],
+      "nextTradingDate": "2026-09-02",
+      "sessionOrdinal": 6535,
+      "nextSessionOrdinal": 6536,
+      "tradingYearSessionIndex": 161,
+      "nextTradingYearSessionIndex": 162,
+      "tradingYearWeekIndex": 34,
+      "nextTradingYearWeekIndex": 34
+    },
+    {
+      "date": "2026-09-02",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2026-09-03",
+      "sessionOrdinal": 6536,
+      "nextSessionOrdinal": 6537,
+      "tradingYearSessionIndex": 162,
+      "nextTradingYearSessionIndex": 163,
+      "tradingYearWeekIndex": 34,
+      "nextTradingYearWeekIndex": 34
+    },
+    {
+      "date": "2026-09-03",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2026-09-04",
+      "sessionOrdinal": 6537,
+      "nextSessionOrdinal": 6538,
+      "tradingYearSessionIndex": 163,
+      "nextTradingYearSessionIndex": 164,
+      "tradingYearWeekIndex": 34,
+      "nextTradingYearWeekIndex": 34
+    },
+    {
+      "date": "2026-09-04",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D",
+        "5D",
+        "W",
+        "5W"
+      ],
+      "nextTradingDate": "2026-09-07",
+      "sessionOrdinal": 6538,
+      "nextSessionOrdinal": 6539,
+      "tradingYearSessionIndex": 164,
+      "nextTradingYearSessionIndex": 165,
+      "tradingYearWeekIndex": 34,
+      "nextTradingYearWeekIndex": 35
+    },
+    {
+      "date": "2026-09-07",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2026-09-08",
+      "sessionOrdinal": 6539,
+      "nextSessionOrdinal": 6540,
+      "tradingYearSessionIndex": 165,
+      "nextTradingYearSessionIndex": 166,
+      "tradingYearWeekIndex": 35,
+      "nextTradingYearWeekIndex": 35
+    },
+    {
+      "date": "2026-09-08",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2026-09-09",
+      "sessionOrdinal": 6540,
+      "nextSessionOrdinal": 6541,
+      "tradingYearSessionIndex": 166,
+      "nextTradingYearSessionIndex": 167,
+      "tradingYearWeekIndex": 35,
+      "nextTradingYearWeekIndex": 35
+    },
+    {
+      "date": "2026-09-09",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D"
+      ],
+      "nextTradingDate": "2026-09-10",
+      "sessionOrdinal": 6541,
+      "nextSessionOrdinal": 6542,
+      "tradingYearSessionIndex": 167,
+      "nextTradingYearSessionIndex": 168,
+      "tradingYearWeekIndex": 35,
+      "nextTradingYearWeekIndex": 35
+    },
+    {
+      "date": "2026-09-10",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2026-09-11",
+      "sessionOrdinal": 6542,
+      "nextSessionOrdinal": 6543,
+      "tradingYearSessionIndex": 168,
+      "nextTradingYearSessionIndex": 169,
+      "tradingYearWeekIndex": 35,
+      "nextTradingYearWeekIndex": 35
+    },
+    {
+      "date": "2026-09-11",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "5D",
+        "W",
+        "2W",
+        "3W"
+      ],
+      "nextTradingDate": "2026-09-14",
+      "sessionOrdinal": 6543,
+      "nextSessionOrdinal": 6544,
+      "tradingYearSessionIndex": 169,
+      "nextTradingYearSessionIndex": 170,
+      "tradingYearWeekIndex": 35,
+      "nextTradingYearWeekIndex": 36
+    },
+    {
+      "date": "2026-09-14",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D"
+      ],
+      "nextTradingDate": "2026-09-15",
+      "sessionOrdinal": 6544,
+      "nextSessionOrdinal": 6545,
+      "tradingYearSessionIndex": 170,
+      "nextTradingYearSessionIndex": 171,
+      "tradingYearWeekIndex": 36,
+      "nextTradingYearWeekIndex": 36
+    },
+    {
+      "date": "2026-09-15",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2026-09-16",
+      "sessionOrdinal": 6545,
+      "nextSessionOrdinal": 6546,
+      "tradingYearSessionIndex": 171,
+      "nextTradingYearSessionIndex": 172,
+      "tradingYearWeekIndex": 36,
+      "nextTradingYearWeekIndex": 36
+    },
+    {
+      "date": "2026-09-16",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2026-09-17",
+      "sessionOrdinal": 6546,
+      "nextSessionOrdinal": 6547,
+      "tradingYearSessionIndex": 172,
+      "nextTradingYearSessionIndex": 173,
+      "tradingYearWeekIndex": 36,
+      "nextTradingYearWeekIndex": 36
+    },
+    {
+      "date": "2026-09-17",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D"
+      ],
+      "nextTradingDate": "2026-09-18",
+      "sessionOrdinal": 6547,
+      "nextSessionOrdinal": 6548,
+      "tradingYearSessionIndex": 173,
+      "nextTradingYearSessionIndex": 174,
+      "tradingYearWeekIndex": 36,
+      "nextTradingYearWeekIndex": 36
+    },
+    {
+      "date": "2026-09-18",
+      "expectedCloseTimeframes": [
+        "D",
+        "5D",
+        "W"
+      ],
+      "nextTradingDate": "2026-09-24",
+      "sessionOrdinal": 6548,
+      "nextSessionOrdinal": 6549,
+      "tradingYearSessionIndex": 174,
+      "nextTradingYearSessionIndex": 175,
+      "tradingYearWeekIndex": 36,
+      "nextTradingYearWeekIndex": 37
+    },
+    {
+      "date": "2026-09-24",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2026-09-25",
+      "sessionOrdinal": 6549,
+      "nextSessionOrdinal": 6550,
+      "tradingYearSessionIndex": 175,
+      "nextTradingYearSessionIndex": 176,
+      "tradingYearWeekIndex": 37,
+      "nextTradingYearWeekIndex": 37
+    },
+    {
+      "date": "2026-09-25",
+      "expectedCloseTimeframes": [
+        "D",
+        "3D",
+        "W",
+        "2W"
+      ],
+      "nextTradingDate": "2026-09-28",
+      "sessionOrdinal": 6550,
+      "nextSessionOrdinal": 6551,
+      "tradingYearSessionIndex": 176,
+      "nextTradingYearSessionIndex": 177,
+      "tradingYearWeekIndex": 37,
+      "nextTradingYearWeekIndex": 38
+    },
+    {
+      "date": "2026-09-28",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D"
+      ],
+      "nextTradingDate": "2026-09-29",
+      "sessionOrdinal": 6551,
+      "nextSessionOrdinal": 6552,
+      "tradingYearSessionIndex": 177,
+      "nextTradingYearSessionIndex": 178,
+      "tradingYearWeekIndex": 38,
+      "nextTradingYearWeekIndex": 38
+    },
+    {
+      "date": "2026-09-29",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2026-09-30",
+      "sessionOrdinal": 6552,
+      "nextSessionOrdinal": 6553,
+      "tradingYearSessionIndex": 178,
+      "nextTradingYearSessionIndex": 179,
+      "tradingYearWeekIndex": 38,
+      "nextTradingYearWeekIndex": 38
+    },
+    {
+      "date": "2026-09-30",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "3D",
+        "5D",
+        "M",
+        "3M"
+      ],
+      "nextTradingDate": "2026-10-01",
+      "sessionOrdinal": 6553,
+      "nextSessionOrdinal": 6554,
+      "tradingYearSessionIndex": 179,
+      "nextTradingYearSessionIndex": 180,
+      "tradingYearWeekIndex": 38,
+      "nextTradingYearWeekIndex": 38
+    },
+    {
+      "date": "2026-10-01",
+      "expectedCloseTimeframes": [
+        "D"
+      ],
+      "nextTradingDate": "2026-10-02",
+      "sessionOrdinal": 6554,
+      "nextSessionOrdinal": 6555,
+      "tradingYearSessionIndex": 180,
+      "nextTradingYearSessionIndex": 181,
+      "tradingYearWeekIndex": 38,
+      "nextTradingYearWeekIndex": 38
+    },
+    {
+      "date": "2026-10-02",
+      "expectedCloseTimeframes": [
+        "D",
+        "2D",
+        "W",
+        "3W"
+      ],
+      "nextTradingDate": "2026-10-05",
+      "sessionOrdinal": 6555,
+      "nextSessionOrdinal": 6556,
+      "tradingYearSessionIndex": 181,
+      "nextTradingYearSessionIndex": 182,
+      "tradingYearWeekIndex": 38,
+      "nextTradingYearWeekIndex": 39
+    }
+  ]
+}

@@ -6,6 +6,7 @@ import {
   ComposedChart, Line, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend,
 } from 'recharts'
 import type { OHLCV } from '@/types/stock'
+import { movingAverageColor } from '@/lib/chart-colors'
 import { calcSMA } from '@/lib/indicators'
 
 const INDICES = [
@@ -28,12 +29,6 @@ const TIMEFRAMES: { key: Timeframe; label: string; period: '6mo' | '1y' | '2y'; 
 ]
 
 const MA_OPTIONS = [5, 25, 75]
-
-const MA_COLORS: Record<number, string> = {
-  5: '#22c55e',
-  25: '#f59e0b',
-  75: '#a855f7',
-}
 
 const CANDLE_UP = '#22c55e'
 const CANDLE_DOWN = '#ef4444'
@@ -305,9 +300,9 @@ export function IndicesChart() {
                   padding: '3px 8px',
                   fontSize: '10px',
                   fontFamily: 'var(--font-mono)',
-                  background: enabled ? MA_COLORS[p] : 'transparent',
-                  color: enabled ? '#fff' : MA_COLORS[p],
-                  border: `1px solid ${MA_COLORS[p]}`,
+                  background: enabled ? movingAverageColor(p) : 'transparent',
+                  color: enabled ? '#fff' : movingAverageColor(p),
+                  border: `1px solid ${movingAverageColor(p)}`,
                   borderRadius: 'var(--radius-sm)',
                   cursor: 'pointer',
                 }}
@@ -397,13 +392,13 @@ export function IndicesChart() {
 
               {/* 移動平均（共通） */}
               {enabledMAs.includes(5) && (
-                <Line type="monotone" dataKey="ma5" stroke={MA_COLORS[5]} strokeWidth={1} dot={false} name="MA5" isAnimationActive={false} />
+                <Line type="monotone" dataKey="ma5" stroke={movingAverageColor(5)} strokeWidth={1} dot={false} name="MA5" isAnimationActive={false} />
               )}
               {enabledMAs.includes(25) && (
-                <Line type="monotone" dataKey="ma25" stroke={MA_COLORS[25]} strokeWidth={1} dot={false} name="MA25" isAnimationActive={false} />
+                <Line type="monotone" dataKey="ma25" stroke={movingAverageColor(25)} strokeWidth={1} dot={false} name="MA25" isAnimationActive={false} />
               )}
               {enabledMAs.includes(75) && (
-                <Line type="monotone" dataKey="ma75" stroke={MA_COLORS[75]} strokeWidth={1} dot={false} name="MA75" isAnimationActive={false} />
+                <Line type="monotone" dataKey="ma75" stroke={movingAverageColor(75)} strokeWidth={1} dot={false} name="MA75" isAnimationActive={false} />
               )}
             </ComposedChart>
           </ResponsiveContainer>
