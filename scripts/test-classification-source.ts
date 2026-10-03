@@ -27,7 +27,8 @@ async function main(): Promise<void> {
         '増益', '主力事業が伸長', '新展開', '海外市場を開拓',
         '2026年3集夏号', '2026年6月17日', '接続部品に強み', '電子部品100',
       ].join(','),
-      '総合スーパー,8273,08/06,',
+      '総合スーパー,8273,,10/02',
+      '総合スーパー,8276,08/06,',
       '仮分類,9999,123,08/06',
     ].join('\n'),
     'utf8',
@@ -36,10 +37,11 @@ async function main(): Promise<void> {
   const source = await readClassificationSource(sourcePath)
   assert.deepEqual(source.records, [
     { ticker: '6806', majorCategory: '電子部品・産業用電子機器', subIndustry: 'コネクター' },
-    { ticker: '8273', majorCategory: '総合スーパー', subIndustry: '未分類' },
+    { ticker: '8273', majorCategory: '総合スーパー', subIndustry: '' },
+    { ticker: '8276', majorCategory: '総合スーパー', subIndustry: '未分類' },
     { ticker: '9999', majorCategory: '仮分類', subIndustry: '123' },
   ])
-  assert.deepEqual(source.recoveredMissingSubIndustries, ['8273'])
+  assert.deepEqual(source.recoveredMissingSubIndustries, ['8276'])
   assert.deepEqual(source.invalidSubIndustries, ['9999:123'])
   assert.deepEqual(source.profiles[0], {
     ticker: '6806',
@@ -59,9 +61,9 @@ async function main(): Promise<void> {
   assert.equal(source.profiles[1]?.forecastPer, null)
   assert.throws(
     () => validateClassificationSource(source, {
-      minRecords: 3,
+      minRecords: 4,
       expectedMajorCategories: 3,
-      minSubIndustries: 3,
+      minSubIndustries: 4,
       maxSkippedRows: 0,
       maxRecoveredMissingSubIndustries: 1,
       maxDuplicateTickers: 0,
@@ -70,9 +72,9 @@ async function main(): Promise<void> {
   )
   assert.throws(
     () => validateClassificationSource(source, {
-      minRecords: 3,
+      minRecords: 4,
       expectedMajorCategories: 3,
-      minSubIndustries: 3,
+      minSubIndustries: 4,
       maxSkippedRows: 0,
       maxRecoveredMissingSubIndustries: 0,
       maxDuplicateTickers: 0,

@@ -69,6 +69,18 @@ function pick(row: string[], headerIndexes: Map<string, number>, keys: string[])
   return undefined
 }
 
+function pickAllowEmpty(
+  row: string[],
+  headerIndexes: Map<string, number>,
+  keys: string[],
+): string | undefined {
+  for (const key of keys) {
+    const index = headerIndexes.get(key)
+    if (index != null) return String(row[index] ?? '').trim()
+  }
+  return undefined
+}
+
 function normalizeTicker(value: string): string {
   const code = value.replace(/\.T$/i, '').replace(/\.JP$/i, '').trim().toUpperCase()
   return /^\d+$/.test(code) ? code.padStart(4, '0') : code
@@ -106,8 +118,12 @@ export async function readClassificationSource(sourcePath: string): Promise<Clas
   for (const row of rows) {
     const codeRaw = pick(row, headerIndexes, ['コード', 'Code', 'code', 'ticker', '銘柄コード'])
     const majorCategory = pick(row, headerIndexes, ['大分類', '業種大分類', 'major_category', 'Major'])
-    const subIndustryRaw = pick(row, headerIndexes, ['業種細分類', '業種', '業界', 'sub_industry', 'SubIndustry'])
-    if (!codeRaw || !majorCategory || !subIndustryRaw) {
+    const subIndustryRaw = pickAllowEmpty(
+      row,
+      headerIndexes,
+      ['業種細分類', '業種', '業界', 'sub_industry', 'SubIndustry'],
+    )
+    if (!codeRaw || !majorCategory || subIndustryRaw == null) {
       skippedRows += 1
       continue
     }
