@@ -15,6 +15,16 @@ import {
   type ClaudeDesignBuildResult,
   type PageDesignBuildOutput,
 } from '@/lib/server/claude-code-design-build'
+import {
+  UI_DESIGN_PROJECT_ID,
+  UI_DESIGN_SCHEMA,
+  UI_DESIGN_SYSTEM_PROMPT,
+  runClaudeCodeUiDesign,
+  type ClaudeUiDesignRequest,
+  type ClaudeUiDesignResult,
+  type UiDesignMode,
+  type UiDesignOutput,
+} from '@/lib/server/claude-code-ui-design'
 
 // Claude Code subscription の汎用 dispatcher。
 // 呼び出し側は task と JSON input だけを渡し、prompt / schema / model / timeout は
@@ -27,6 +37,10 @@ export const CLAUDE_TASK_IDS = [
   'design_review',
   'final_review',
   'page_design_build',
+  'ui_design_review',
+  'ui_design_build',
+  'ui_revision',
+  'ui_final_qa',
 ] as const
 
 export type ClaudeTaskId = typeof CLAUDE_TASK_IDS[number]
@@ -56,6 +70,10 @@ export type ClaudeTaskOutputMap = {
   design_review: DesignReviewOutput
   final_review: FinalReviewOutput
   page_design_build: PageDesignBuildOutput
+  ui_design_review: UiDesignOutput
+  ui_design_build: UiDesignOutput
+  ui_revision: UiDesignOutput
+  ui_final_qa: UiDesignOutput
 }
 
 export const MARKET_NARRATIVE_HEADLINE_MAX = 80
@@ -249,6 +267,54 @@ function validatePageDesignBuild(value: unknown): Validation<PageDesignBuildOutp
   return { ok: true, value: { summary: summary.value, changedFiles: changedFiles.value, artifacts, tests, remainingIssues: remainingIssues.value } }
 }
 
+function validateUiDesignOutput(value: unknown): Validation<UiDesignOutput> {
+  if (!isRecord(value)) return { ok: false, reason: 'not_object' }
+  const keys = ['summary', 'concept', 'changedFiles', 'artifacts', 'tests', 'findings', 'remainingIssues', 'revisionRecommended'] as const
+  const extra = strictKeys(value, keys)
+  if (extra) return { ok: false, reason: extra }
+  const summary = textValue(value.summary, 'summary', 2_000, true)
+  const concept = textValue(value.concept, 'concept', 4_000, true)
+  const changedFiles = stringArray(value.changedFiles, 'changedFiles', { max: 100, itemMax: 500 })
+  const findings = stringArray(value.findings, 'findings', { max: 50, itemMax: 1_000 })
+  const remainingIssues = stringArray(value.remainingIssues, 'remainingIssues', { max: 50, itemMax: 1_000 })
+  if (!summary.ok) return summary
+  if (!concept.ok) return concept
+  if (!changedFiles.ok) return changedFiles
+  if (!findings.ok) return findings
+  if (!remainingIssues.ok) return remainingIssues
+  if (typeof value.revisionRecommended !== 'boolean') return { ok: false, reason: 'revision_recommended_invalid' }
+  if (!Array.isArray(value.artifacts) || value.artifacts.length > 100) return { ok: false, reason: 'artifacts_invalid' }
+  const artifacts: UiDesignOutput['artifacts'] = []
+  for (const item of value.artifacts) {
+    if (!isRecord(item) || strictKeys(item, ['kind', 'path']) || !['png', 'html', 'json'].includes(String(item.kind))) return { ok: false, reason: 'artifact_invalid' }
+    const artifactPath = textValue(item.path, 'artifact_path', 1_000)
+    if (!artifactPath.ok) return artifactPath
+    artifacts.push({ kind: item.kind as 'png' | 'html' | 'json', path: artifactPath.value })
+  }
+  if (!Array.isArray(value.tests) || value.tests.length > 50) return { ok: false, reason: 'tests_invalid' }
+  const tests: UiDesignOutput['tests'] = []
+  for (const item of value.tests) {
+    if (!isRecord(item) || strictKeys(item, ['name', 'status', 'detail']) || !['pass', 'fail'].includes(String(item.status))) return { ok: false, reason: 'test_invalid' }
+    const name = textValue(item.name, 'test_name', 200)
+    const detail = typeof item.detail === 'string' && item.detail.length <= 1_000 ? item.detail.trim() : null
+    if (!name.ok || detail == null) return { ok: false, reason: 'test_invalid' }
+    tests.push({ name: name.value, status: item.status as 'pass' | 'fail', detail })
+  }
+  return {
+    ok: true,
+    value: {
+      summary: summary.value,
+      concept: concept.value,
+      changedFiles: changedFiles.value,
+      artifacts,
+      tests,
+      findings: findings.value,
+      remainingIssues: remainingIssues.value,
+      revisionRecommended: value.revisionRecommended,
+    },
+  }
+}
+
 const PAGE_REVIEW_SCHEMA: Record<string, unknown> = {
   type: 'object', additionalProperties: false, required: ['summary', 'strengths', 'issues', 'suggestedChanges'],
   properties: {
@@ -296,7 +362,7 @@ type TaskProfile<T extends ClaudeTaskId = ClaudeTaskId> = {
   validateInput: (value: unknown) => Validation<Record<string, unknown>>
   validateOutput: (value: unknown) => Validation<ClaudeTaskOutputMap[T]>
   buildPrompt: (input: Record<string, unknown>) => string
-  execution: 'structured' | 'design_build'
+  execution: 'structured' | 'design_build' | 'ui_design'
 }
 
 function inputObject(requiredTextField?: string): (value: unknown) => Validation<Record<string, unknown>> {
@@ -307,6 +373,19 @@ function inputObject(requiredTextField?: string): (value: unknown) => Validation
       if (!required.ok) return required
     }
     return { ok: true, value }
+  }
+}
+
+function uiDesignInput(requirePreviousOutput = false): (value: unknown) => Validation<Record<string, unknown>> {
+  return (value) => {
+    if (!isRecord(value)) return { ok: false, reason: 'input_not_object' }
+    if (value.project !== UI_DESIGN_PROJECT_ID) return { ok: false, reason: 'project_not_allowed' }
+    const request = textValue(value.request, 'request', 20_000, true)
+    if (!request.ok) return request
+    if (value.context != null && !isRecord(value.context)) return { ok: false, reason: 'context_not_object' }
+    if (requirePreviousOutput && (typeof value.previousOutputDir !== 'string' || !value.previousOutputDir.trim())) return { ok: false, reason: 'previous_output_required' }
+    if (value.previousOutputDir != null && typeof value.previousOutputDir !== 'string') return { ok: false, reason: 'previous_output_invalid' }
+    return { ok: true, value: { ...value, request: request.value } }
   }
 }
 
@@ -360,6 +439,30 @@ export const CLAUDE_TASK_PROFILES: Readonly<Record<ClaudeTaskId, TaskProfile>> =
     buildPrompt: jsonPrompt('Page Design Labを実装・生成してください。', 'page_design_build_input'),
     execution: 'design_build',
   },
+  ui_design_review: {
+    id: 'ui_design_review', model: 'sonnet', timeoutMs: 10 * 60_000, maxInputBytes: 80_000,
+    systemPrompt: UI_DESIGN_SYSTEM_PROMPT, jsonSchema: UI_DESIGN_SCHEMA,
+    validateInput: uiDesignInput(), validateOutput: validateUiDesignOutput,
+    buildPrompt: jsonPrompt('Trigger Discovery UIをread-onlyで調査してください。', 'ui_design_review_input'), execution: 'ui_design',
+  },
+  ui_design_build: {
+    id: 'ui_design_build', model: 'sonnet', timeoutMs: 25 * 60_000, maxInputBytes: 120_000,
+    systemPrompt: UI_DESIGN_SYSTEM_PROMPT, jsonSchema: UI_DESIGN_SCHEMA,
+    validateInput: uiDesignInput(), validateOutput: validateUiDesignOutput,
+    buildPrompt: jsonPrompt('Trigger Discovery Design Labを設計・実装・描画してください。', 'ui_design_build_input'), execution: 'ui_design',
+  },
+  ui_revision: {
+    id: 'ui_revision', model: 'sonnet', timeoutMs: 25 * 60_000, maxInputBytes: 120_000,
+    systemPrompt: UI_DESIGN_SYSTEM_PROMPT, jsonSchema: UI_DESIGN_SCHEMA,
+    validateInput: uiDesignInput(true), validateOutput: validateUiDesignOutput,
+    buildPrompt: jsonPrompt('Trigger Discovery Design Labを1回だけ修正・再描画してください。', 'ui_revision_input'), execution: 'ui_design',
+  },
+  ui_final_qa: {
+    id: 'ui_final_qa', model: 'sonnet', timeoutMs: 10 * 60_000, maxInputBytes: 120_000,
+    systemPrompt: UI_DESIGN_SYSTEM_PROMPT, jsonSchema: UI_DESIGN_SCHEMA,
+    validateInput: uiDesignInput(true), validateOutput: validateUiDesignOutput,
+    buildPrompt: jsonPrompt('Trigger Discovery Design Labをread-onlyで最終評価してください。', 'ui_final_qa_input'), execution: 'ui_design',
+  },
 }
 
 export function getClaudeTaskProfile(task: string): TaskProfile | null {
@@ -375,6 +478,7 @@ export type ClaudeDispatchResult<T extends ClaudeTaskId = ClaudeTaskId> =
 export type ClaudeDispatcherDeps = {
   runAdapter?: (request: ClaudeCodeRequest) => Promise<ClaudeCodeResult>
   runDesignBuild?: (request: ClaudeDesignBuildRequest) => Promise<ClaudeDesignBuildResult>
+  runUiDesign?: (request: ClaudeUiDesignRequest) => Promise<ClaudeUiDesignResult>
   timeoutMs?: number
 }
 
@@ -402,13 +506,32 @@ export async function dispatchClaudeCode<T extends ClaudeTaskId>(
     return dispatchFailure(request.task, 'INPUT_TOO_LARGE', `maxInputBytes=${profile.maxInputBytes}`) as ClaudeDispatchResult<T>
   }
 
-  let result: ClaudeCodeResult | ClaudeDesignBuildResult
+  let result: ClaudeCodeResult | ClaudeDesignBuildResult | ClaudeUiDesignResult
   try {
     if (profile.execution === 'design_build') {
       const runDesignBuild = deps.runDesignBuild ?? runClaudeCodeDesignBuild
       result = await runDesignBuild({
         instruction: String(input.value.request), model: profile.model,
         systemPrompt: profile.systemPrompt, jsonSchema: profile.jsonSchema,
+        timeoutMs: deps.timeoutMs ?? profile.timeoutMs,
+      })
+    } else if (profile.execution === 'ui_design') {
+      const runUiDesign = deps.runUiDesign ?? runClaudeCodeUiDesign
+      const modeByTask: Record<string, UiDesignMode> = {
+        ui_design_review: 'review',
+        ui_design_build: 'build',
+        ui_revision: 'revision',
+        ui_final_qa: 'final_qa',
+      }
+      result = await runUiDesign({
+        mode: modeByTask[profile.id],
+        project: UI_DESIGN_PROJECT_ID,
+        instruction: String(input.value.request),
+        context: isRecord(input.value.context) ? input.value.context : undefined,
+        previousOutputDir: typeof input.value.previousOutputDir === 'string' ? input.value.previousOutputDir : undefined,
+        model: profile.model,
+        systemPrompt: profile.systemPrompt,
+        jsonSchema: profile.jsonSchema,
         timeoutMs: deps.timeoutMs ?? profile.timeoutMs,
       })
     } else {

@@ -20,6 +20,17 @@ import {
   type ClaudeDesignBuildRequest,
   type ClaudeDesignBuildResult,
 } from '@/lib/server/claude-code-design-build'
+import {
+  UI_DESIGN_OUTPUT_ROOT,
+  UI_DESIGN_PROJECT_ID,
+  UI_DESIGN_WORKTREE,
+  buildUiDesignArgs,
+  changedUiSourceFiles,
+  isUiDesignEditablePath,
+  uiDesignCommands,
+  type ClaudeUiDesignRequest,
+  type ClaudeUiDesignResult,
+} from '@/lib/server/claude-code-ui-design'
 
 const validOutputs = {
   market_narrative: { headline: '見出し', paragraphs: ['段落'] },
@@ -28,6 +39,10 @@ const validOutputs = {
   design_review: { overallAssessment: '良好', hierarchyIssues: [], spacingIssues: [], typographyIssues: [], chartIssues: [], recommendations: ['維持'] },
   final_review: { blockingIssues: [], nonBlockingIssues: ['軽微'], suggestedFixes: ['確認'] },
   page_design_build: { summary: '完了', changedFiles: ['components/reports/design-lab/page06/styles.ts'], artifacts: [], tests: [{ name: 'typecheck', status: 'pass', detail: '' }], remainingIssues: [] },
+  ui_design_review: { summary: '調査完了', concept: '高密度ワークベンチ', changedFiles: [], artifacts: [], tests: [], findings: ['結果優先'], remainingIssues: [], revisionRecommended: false },
+  ui_design_build: { summary: '初版完了', concept: '高密度ワークベンチ', changedFiles: ['components/trigger-discovery/design-lab/view.tsx'], artifacts: [], tests: [], findings: [], remainingIssues: [], revisionRecommended: false },
+  ui_revision: { summary: '修正完了', concept: '高密度ワークベンチ', changedFiles: ['components/trigger-discovery/design-lab/view.tsx'], artifacts: [], tests: [], findings: [], remainingIssues: [], revisionRecommended: false },
+  ui_final_qa: { summary: 'QA完了', concept: '高密度ワークベンチ', changedFiles: [], artifacts: [], tests: [], findings: [], remainingIssues: [], revisionRecommended: false },
 } as const
 
 const validInputs: Record<ClaudeTaskId, Record<string, unknown>> = {
@@ -37,6 +52,10 @@ const validInputs: Record<ClaudeTaskId, Record<string, unknown>> = {
   design_review: { page: 'Page 06 visual description' },
   final_review: { document: 'Final document content' },
   page_design_build: { project: 'page06', request: '表を読みやすくする' },
+  ui_design_review: { project: UI_DESIGN_PROJECT_ID, request: '現在画面を調査する' },
+  ui_design_build: { project: UI_DESIGN_PROJECT_ID, request: 'Design Labを実装する' },
+  ui_revision: { project: UI_DESIGN_PROJECT_ID, request: 'QA指摘を修正する', previousOutputDir: `${UI_DESIGN_OUTPUT_ROOT}/runs/fixture-build` },
+  ui_final_qa: { project: UI_DESIGN_PROJECT_ID, request: '完成版を確認する', previousOutputDir: `${UI_DESIGN_OUTPUT_ROOT}/runs/fixture-build` },
 }
 
 function adapterSuccess(output: unknown, capture?: ClaudeCodeRequest[]): (request: ClaudeCodeRequest) => Promise<ClaudeCodeResult> {
@@ -68,13 +87,14 @@ async function unitTests() {
     const result = await dispatchClaudeCode({ task: id, input: validInputs[id] }, {
       runAdapter: adapterSuccess(validOutputs[id], captured),
       runDesignBuild: async () => ({ ok: true, text: '', structuredOutput: validOutputs.page_design_build, provider: CLAUDE_CODE_PROVIDER, model: 'claude-sonnet-5-5', durationMs: 7 }),
+      runUiDesign: async (request) => ({ ok: true, text: '', structuredOutput: validOutputs[id as keyof typeof validOutputs], provider: CLAUDE_CODE_PROVIDER, model: 'claude-sonnet-5-5', durationMs: request.mode.length }),
     })
     assert.equal(result.ok, true, id)
     if (!result.ok) continue
     assert.equal(result.task, id)
     assert.equal(result.provider, CLAUDE_CODE_PROVIDER)
     assert.deepEqual(result.data, validOutputs[id])
-    if (id === 'page_design_build') {
+    if (id === 'page_design_build' || id.startsWith('ui_')) {
       assert.equal(captured.length, 0)
     } else {
       assert.equal(captured.length, 1)
@@ -86,6 +106,8 @@ async function unitTests() {
 
   const invalidInputs: Array<[ClaudeTaskId, unknown]> = [
     ['market_narrative', null], ['page_review', {}], ['copy_edit', { text: '' }], ['design_review', { page: 1 }], ['final_review', { document: '' }], ['page_design_build', { project: 'other', request: 'x' }],
+    ['ui_design_review', { project: 'other', request: 'x' }], ['ui_design_build', { project: UI_DESIGN_PROJECT_ID, request: '' }],
+    ['ui_revision', { project: UI_DESIGN_PROJECT_ID, request: 'x' }], ['ui_final_qa', { project: UI_DESIGN_PROJECT_ID, request: 'x' }],
   ]
   for (const [task, input] of invalidInputs) {
     const result = await dispatchClaudeCode({ task, input }, { runAdapter: async () => { throw new Error('must not run') } })
@@ -131,6 +153,28 @@ async function unitTests() {
   assert.equal(isPage06EditablePath('scripts/lib/design-lab-page06-render.ts'), true)
   assert.equal(isPage06EditablePath('app/page.tsx'), false)
   assert.deepEqual(changedSourceFiles(new Map([['a', '1'], ['b', '1']]), new Map([['a', '2'], ['b', '1'], ['c', '1']])), ['a', 'c'])
+
+  const uiRequest: ClaudeUiDesignRequest = {
+    mode: 'build', project: UI_DESIGN_PROJECT_ID, instruction: '改善する', model: 'sonnet', timeoutMs: 1,
+    systemPrompt: 'system', jsonSchema: {},
+  }
+  const uiOutputDir = `${UI_DESIGN_OUTPUT_ROOT}/runs/test-build`
+  const uiArgs = buildUiDesignArgs(uiRequest, uiOutputDir)
+  for (const flag of ['--restricted', '--safe-mode', '--no-session-persistence', '--no-chrome', '--strict-mcp-config']) assert.ok(uiArgs.includes(flag), flag)
+  assert.equal(uiArgs[uiArgs.indexOf('--permission-mode') + 1], 'acceptEdits')
+  const uiAllowed = uiArgs[uiArgs.indexOf('--allowedTools') + 1]
+  assert.ok(uiAllowed.includes(UI_DESIGN_WORKTREE))
+  assert.ok(uiAllowed.includes(uiOutputDir))
+  for (const forbidden of ['git commit', 'git push', 'npm run web:deploy']) assert.ok(!uiAllowed.includes(forbidden), forbidden)
+  const uiCommands = uiDesignCommands(uiOutputDir)
+  assert.ok(uiAllowed.includes(uiCommands.test))
+  assert.ok(uiAllowed.includes(uiCommands.typecheck))
+  assert.ok(uiAllowed.includes(uiCommands.render))
+  assert.equal(isUiDesignEditablePath('components/trigger-discovery/design-lab/view.tsx'), true)
+  assert.equal(isUiDesignEditablePath('app/ui-design-lab/trigger-discovery/page.tsx'), false)
+  assert.equal(isUiDesignEditablePath('app/trigger-discovery/TriggerDiscoveryClient.tsx'), false)
+  assert.equal(isUiDesignEditablePath('app/api/trigger-discovery/search/route.ts'), false)
+  assert.deepEqual(changedUiSourceFiles(new Map([['a', '1']]), new Map([['a', '2'], ['b', '1']])), ['a', 'b'])
 
   // stdin CLI: unknown task は adapter/Claude を呼ばず、stdout は単一 JSON のみ。
   const tsx = path.resolve('node_modules/.bin/tsx')
