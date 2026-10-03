@@ -1,5 +1,6 @@
 // Research-only: official instrument/quote evidence. Never called by the web server.
 import ExcelJS from 'exceljs'
+import { get } from 'node:https'
 import { client, ensureReady } from '@/lib/db/client'
 import { XbrlFactReader } from '@/lib/edinet-xbrl-facts'
 import { classifyOfficialInstrument, certifyPosition, evidenceHash, normalizedIssuerName,
@@ -52,10 +53,23 @@ async function officialRows<T>(baseUrl: string, date: string): Promise<T[]> {
 }
 
 async function jpxAugustList(): Promise<Map<string, { name: string; category: string }>> {
-  const response = await fetch(JPX_LIST_URL)
-  if (!response.ok) throw new Error(`JPX listed issues ${response.status}`)
+  const bytes = await new Promise<Buffer>((resolve, reject) => {
+    const request = get(JPX_LIST_URL, { family: 4 }, (response) => {
+      if (response.statusCode !== 200) {
+        response.resume()
+        reject(new Error(`JPX listed issues ${response.statusCode ?? 'unknown'}`))
+        return
+      }
+      const chunks: Buffer[] = []
+      response.on('data', (chunk: Buffer) => chunks.push(chunk))
+      response.on('end', () => resolve(Buffer.concat(chunks)))
+      response.on('error', reject)
+    })
+    request.setTimeout(30_000, () => request.destroy(new Error('JPX listed issues timeout')))
+    request.on('error', reject)
+  })
   const workbook = new ExcelJS.Workbook()
-  await workbook.xlsx.load(await response.arrayBuffer() as never)
+  await workbook.xlsx.load(bytes as never)
   const sheet = workbook.worksheets[0]
   if (!sheet || String(sheet.getRow(1).getCell(2).value) !== 'コード') throw new Error('JPX sheet structure changed')
   const result = new Map<string, { name: string; category: string }>()
