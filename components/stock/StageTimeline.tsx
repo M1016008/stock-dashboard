@@ -1,7 +1,7 @@
 // components/stock/StageTimeline.tsx
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { STAGE_BORDER_COLORS, STAGE_LABELS } from '@/lib/hex-stage'
 import type { MarketCode } from '@/lib/markets'
 import {
@@ -102,11 +102,63 @@ const GRANULARITIES: { key: Granularity; label: string; subtitle: string }[] = [
 ]
 
 const DISPLAY_SUFFIX: Record<Granularity, string> = { daily: 'D', weekly: 'W', monthly: 'M' }
+const RUN_UNITS: Record<Granularity, string> = { daily: '日', weekly: '週', monthly: 'か月' }
+
+type HistoryView = 'timeline' | 'classic'
+const HISTORY_VIEWS: { key: HistoryView; label: string }[] = [
+  { key: 'timeline', label: 'Timeline' },
+  { key: 'classic', label: 'Classic' },
+]
+// 表示形式はタブ内の閲覧状態だけなので sessionStorage に留める(DB/APIには保存しない)
+const HISTORY_VIEW_STORAGE_KEY = 'stockboard:stage-history-view'
+
+function readStoredHistoryView(): HistoryView {
+  try {
+    return window.sessionStorage.getItem(HISTORY_VIEW_STORAGE_KEY) === 'classic' ? 'classic' : 'timeline'
+  } catch {
+    return 'timeline'
+  }
+}
+
+interface StageRun {
+  stage: number | null
+  startIndex: number
+  endIndex: number
+  length: number
+}
+
+function buildRuns(entries: StageEntry[], key: StageKey): StageRun[] {
+  const runs: StageRun[] = []
+  entries.forEach((entry, index) => {
+    const stage = entry[key] || null
+    const last = runs[runs.length - 1]
+    if (last && last.stage === stage) {
+      last.endIndex = index
+      last.length += 1
+    } else {
+      runs.push({ stage, startIndex: index, endIndex: index, length: 1 })
+    }
+  })
+  return runs
+}
+
+function buildTicks(entries: StageEntry[], granularity: Granularity): Array<{ index: number; label: string }> {
+  if (entries.length === 0) return []
+  const wanted = Math.min(entries.length, 5)
+  const indexes = new Set<number>()
+  for (let i = 0; i < wanted; i += 1) {
+    indexes.add(wanted === 1 ? 0 : Math.round((i * (entries.length - 1)) / (wanted - 1)))
+  }
+  return [...indexes].map((index) => ({
+    index,
+    label: granularity === 'monthly' ? entries[index].date.slice(0, 7) : entries[index].date.slice(2),
+  }))
+}
 
 /**
- * 選択粒度に応じたステージ変遷をグリッド表示。
- * 行: 日足A/B、週足A/B、月足A/B
- * 列: 日毎 / 週毎 / 月毎の日付
+ * 選択粒度に応じたステージ変遷を表示。同じ取得結果を2形式で切り替える。
+ * Timeline: 系統ごとの連続期間レーン(幅=同一ステージの継続期間数)
+ * Classic: 行=系統、列=日付のグリッド(従来表示)
  */
 export function StageTimeline({
   ticker,
@@ -122,7 +174,21 @@ export function StageTimeline({
   const [error, setError] = useState('')
   const [granularity, setGranularity] = useState<Granularity>('weekly')
   const [count, setCount] = useState(DEFAULT_STAGE_TIMELINE_DISPLAY_COUNTS.weekly)
-  const timelineScrollRef = useRef<HTMLDivElement>(null)
+  const [view, setView] = useState<HistoryView>('timeline')
+  const classicScrollRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    setView(readStoredHistoryView())
+  }, [])
+
+  function selectView(next: HistoryView) {
+    setView(next)
+    try {
+      window.sessionStorage.setItem(HISTORY_VIEW_STORAGE_KEY, next)
+    } catch {
+      // sessionStorage が使えない環境ではマウント中の状態だけ保持する
+    }
+  }
 
   const selectedGranularity = GRANULARITIES.find((item) => item.key === granularity) ?? GRANULARITIES[1]
 
@@ -187,10 +253,22 @@ export function StageTimeline({
   }, [analysisDate, ticker, market, granularity, count, onSnapshotChange])
 
   useEffect(() => {
-    const container = timelineScrollRef.current
-    if (!container || entries.length === 0) return
+    const container = classicScrollRef.current
+    if (view !== 'classic' || !container || entries.length === 0) return
     container.scrollLeft = container.scrollWidth
-  }, [entries])
+  }, [entries, view])
+
+  const lanes = useMemo(() => SYSTEMS.map((system) => ({ system, runs: buildRuns(entries, system.key) })), [entries])
+  const ticks = useMemo(() => buildTicks(entries, granularity), [entries, granularity])
+  const runUnit = RUN_UNITS[granularity]
+  const selectionSpan = useMemo(() => {
+    if (!selectedRange || entries.length === 0) return null
+    const first = entries.findIndex((entry) => isDateWithinRange(entry.date, selectedRange))
+    if (first < 0) return null
+    let last = first
+    while (last + 1 < entries.length && isDateWithinRange(entries[last + 1].date, selectedRange)) last += 1
+    return { first, last }
+  }, [entries, selectedRange])
 
   function selectGranularity(next: Granularity) {
     setGranularity(next)
@@ -235,6 +313,21 @@ export function StageTimeline({
           )}
         </div>
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          <div style={segmentedControl} role="group" aria-label="ステージ変遷の表示形式">
+            {HISTORY_VIEWS.map((item) => (
+              <button
+                key={item.key}
+                type="button"
+                onClick={() => selectView(item.key)}
+                style={segmentButton(view === item.key)}
+                className="min-h-11 px-2.5 focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--color-brand-900)] sm:min-h-8"
+                aria-pressed={view === item.key}
+                aria-controls="stage-history-body"
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
           <div style={segmentedControl}>
             {GRANULARITIES.map((item) => (
               <button
@@ -273,14 +366,15 @@ export function StageTimeline({
         <p style={{ fontSize: '11px', color: 'var(--text-muted)', textAlign: 'center', padding: '16px 0' }}>計算中...</p>
       ) : entries.length === 0 ? (
         <p style={{ fontSize: '11px', color: 'var(--text-muted)', textAlign: 'center', padding: '16px 0' }}>データなし</p>
-      ) : (
-        <div ref={timelineScrollRef} style={{ overflowX: 'auto' }}>
+      ) : view === 'classic' ? (
+        <div id="stage-history-body" ref={classicScrollRef} style={{ overflowX: 'auto' }}>
           <table style={{ width: 'max-content', minWidth: '100%', borderCollapse: 'collapse', fontSize: '10px' }}>
+            <caption className="sr-only">系統別ステージの日付別一覧(右端が最新)</caption>
             <thead>
               <tr>
-                <th style={{ ...stickyTh, textAlign: 'left' }}>系統</th>
+                <th scope="col" style={{ ...stickyTh, textAlign: 'left' }}>系統</th>
                 {entries.map((e, index) => (
-                  <th key={e.date} style={dateHeaderStyle(selectedRange ? isDateWithinRange(e.date, selectedRange) : false, index === entries.length - 1)}>
+                  <th key={e.date} scope="col" style={dateHeaderStyle(selectedRange ? isDateWithinRange(e.date, selectedRange) : false, index === entries.length - 1)}>
                     {e.date.slice(5)}
                   </th>
                 ))}
@@ -289,7 +383,7 @@ export function StageTimeline({
             <tbody>
               {SYSTEMS.map((sys, systemIndex) => (
                 <tr key={sys.key}>
-                  <td style={{ ...stickyTd, fontWeight: 600, ...(systemIndex === 2 || systemIndex === 4 ? timeframeDividerStyle : {}) }}>{sys.label}</td>
+                  <th scope="row" style={{ ...stickyTd, fontWeight: 600, textAlign: 'left', ...(systemIndex === 2 || systemIndex === 4 ? timeframeDividerStyle : {}) }}>{sys.label}</th>
                   {entries.map((e, index) => {
                     const v = e[sys.key] as number | null
                     const inSelectedRange = selectedRange ? isDateWithinRange(e.date, selectedRange) : false
@@ -311,9 +405,120 @@ export function StageTimeline({
             </tbody>
           </table>
         </div>
+      ) : (
+        <div id="stage-history-body" className="min-w-0">
+          <div className="grid grid-cols-[40px_minmax(0,1fr)_64px] items-end gap-x-2 pb-1 text-[9px] font-bold text-[var(--color-text-tertiary)]">
+            <span>系統</span>
+            <span>連続期間(幅=継続長)</span>
+            <span className="text-right">現在</span>
+          </div>
+          <div className="relative">
+            {selectionSpan && (
+              <div className="pointer-events-none absolute inset-y-0 left-[48px] right-[72px] z-[1]" aria-hidden="true">
+                <span
+                  className="absolute inset-y-0 border-x-2 border-amber-500 bg-amber-300/20"
+                  style={{
+                    left: `${(selectionSpan.first / entries.length) * 100}%`,
+                    width: `${((selectionSpan.last - selectionSpan.first + 1) / entries.length) * 100}%`,
+                  }}
+                />
+              </div>
+            )}
+            {lanes.map(({ system, runs }, laneIndex) => {
+              const current = runs[runs.length - 1]
+              const currentStage = current?.stage ?? null
+              return (
+                <div
+                  key={system.key}
+                  className={`grid grid-cols-[40px_minmax(0,1fr)_64px] items-center gap-x-2 ${laneIndex % 2 === 0 ? 'pt-0.5' : 'pb-1.5'}`}
+                  role="group"
+                  aria-label={currentStage ? `${system.label} 現在S${currentStage} 連続${current.length}${runUnit}` : `${system.label} 現在データなし`}
+                >
+                  <span className="text-[10px] font-black text-[var(--color-text-secondary)]">{system.label}</span>
+                  <div className="flex h-6 min-w-0 overflow-hidden bg-[var(--color-surface-subtle)]">
+                    {runs.map((run) => {
+                      const range = `${entries[run.startIndex].date}〜${entries[run.endIndex].date}(${run.length}${runUnit})`
+                      const title = run.stage ? `${system.label} S${run.stage}: ${STAGE_LABELS[run.stage]} ${range}` : `${system.label} データなし ${range}`
+                      const style: React.CSSProperties = {
+                        flex: `${run.length} 1 0`,
+                        minWidth: 2,
+                        background: run.stage ? STAGE_BORDER_COLORS[run.stage] : 'transparent',
+                      }
+                      const label = run.stage && run.length >= 3 ? `S${run.stage}` : ''
+                      const className = 'flex items-center justify-center overflow-hidden border-r border-white font-mono text-[10px] font-bold text-white last:border-r-0'
+                      return run.stage && onStageRangeSelect ? (
+                        <button
+                          key={run.startIndex}
+                          type="button"
+                          onClick={() => selectStageSegment(system, run.startIndex)}
+                          title={title}
+                          aria-label={title}
+                          style={style}
+                          className={`${className} cursor-pointer p-0 hover:brightness-110 focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--color-brand-900)]`}
+                        >{label}</button>
+                      ) : (
+                        <span key={run.startIndex} title={title} style={style} className={className}>{label}</span>
+                      )
+                    })}
+                  </div>
+                  <span className="truncate text-right font-mono text-[10px] font-black text-[var(--color-text-primary)]">
+                    {currentStage ? <>S{currentStage}<span className="font-semibold text-[var(--color-text-tertiary)]"> ×{current.length}{runUnit}</span></> : '—'}
+                  </span>
+                </div>
+              )
+            })}
+          </div>
+          <div className="grid grid-cols-[40px_minmax(0,1fr)_64px] gap-x-2 pt-1">
+            <span />
+            <div className="relative h-3.5">
+              {ticks.map((tick, tickIndex) => {
+                const position = ((tick.index + 0.5) / entries.length) * 100
+                const align = tickIndex === 0 ? '' : tickIndex === ticks.length - 1 ? '-translate-x-full' : '-translate-x-1/2'
+                return (
+                  <span
+                    key={tick.index}
+                    className={`absolute top-0 whitespace-nowrap font-mono text-[9px] font-semibold text-[var(--color-text-tertiary)] ${align}`}
+                    style={{ left: tickIndex === 0 ? 0 : `${position}%` }}
+                  >{tick.label}</span>
+                )
+              })}
+            </div>
+            <span />
+          </div>
+        </div>
       )}
     </section>
   )
+}
+
+function stageButtonStyle(stage: number, clickable: boolean): React.CSSProperties {
+  return {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '20px',
+    height: '20px',
+    borderRadius: '3px',
+    background: STAGE_BORDER_COLORS[stage],
+    color: '#fff',
+    fontWeight: 700,
+    fontSize: '10px',
+    fontFamily: 'var(--font-mono)',
+    border: 'none',
+    cursor: clickable ? 'pointer' : 'default',
+    padding: 0,
+  }
+}
+
+function isDateWithinRange(date: string, range: DateRange): boolean {
+  return date >= range.startDate && date <= range.endDate
+}
+
+const rangeOutsideStyle: React.CSSProperties = {
+  marginTop: '4px',
+  color: 'var(--accent-primary)',
+  fontSize: '10px',
+  fontFamily: 'var(--font-mono)',
 }
 
 const th: React.CSSProperties = {
@@ -354,36 +559,6 @@ function cellStyle(active: boolean, current: boolean): React.CSSProperties {
     background: active ? 'rgba(250, 204, 21, 0.16)' : current ? 'var(--bg-elevated)' : undefined,
     boxShadow: active ? 'inset 0 2px 0 rgba(245, 158, 11, 0.28), inset 0 -2px 0 rgba(245, 158, 11, 0.18)' : undefined,
   }
-}
-
-function stageButtonStyle(stage: number, clickable: boolean): React.CSSProperties {
-  return {
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: '20px',
-    height: '20px',
-    borderRadius: '3px',
-    background: STAGE_BORDER_COLORS[stage],
-    color: '#fff',
-    fontWeight: 700,
-    fontSize: '10px',
-    fontFamily: 'var(--font-mono)',
-    border: 'none',
-    cursor: clickable ? 'pointer' : 'default',
-    padding: 0,
-  }
-}
-
-function isDateWithinRange(date: string, range: DateRange): boolean {
-  return date >= range.startDate && date <= range.endDate
-}
-
-const rangeOutsideStyle: React.CSSProperties = {
-  marginTop: '4px',
-  color: 'var(--accent-primary)',
-  fontSize: '10px',
-  fontFamily: 'var(--font-mono)',
 }
 
 const stickyTd: React.CSSProperties = {

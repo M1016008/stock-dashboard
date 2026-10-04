@@ -132,6 +132,10 @@ const stageTimelineSource = readFileSync(
   new URL('../components/stock/StageTimeline.tsx', import.meta.url),
   'utf8',
 )
+const analysisVisualsSource = readFileSync(
+  new URL('../components/stock/StockAnalysisVisuals.tsx', import.meta.url),
+  'utf8',
+)
 const ma25mSource = readFileSync(
   new URL('../components/stock/Ma25mMonitorSummary.tsx', import.meta.url),
   'utf8',
@@ -179,8 +183,8 @@ const chartWorkspace = stockDetailSource.slice(
 )
 const chartOrder = [
   '<TechnicalChartSnapshot',
-  '<StageTimeline\n',
   '<CandlestickChart',
+  '<StageTimeline\n',
   '<PhysicalMomentumSection',
   '<Ma25mMonitorSummary',
 ]
@@ -214,13 +218,16 @@ const technicalSnapshot = stockDetailSource.slice(
 assert.match(technicalSnapshot, /background: value \? STAGE_BG_COLORS\[value\]/)
 assert.match(technicalSnapshot, /borderColor: value \? STAGE_BORDER_COLORS\[value\]/)
 assert.match(technicalSnapshot, /<strong className="font-mono text-\[14px\] leading-none text-\[var\(--color-text-primary\)\]">/)
-assert.match(technicalSnapshot, /<span className="mt-0\.5 text-\[9px\] font-bold leading-tight text-\[var\(--color-text-secondary\)\]">/)
+assert.match(technicalSnapshot, /CHART_STAGE_AXES\.map/)
+assert.match(technicalSnapshot, /<MaAngleStrip/)
+assert.doesNotMatch(technicalSnapshot, /StageAlignmentBar|Stage Distribution|Stage分布/)
+assert.match(technicalSnapshot, /<ScoreRuler code="PMS"/)
 assert.doesNotMatch(technicalSnapshot, /text-white/)
 assert.doesNotMatch(technicalSnapshot, /color: value \? '#fff'/)
 
 const physicalMomentumSection = stockDetailSource.slice(
   stockDetailSource.indexOf('function PhysicalMomentumSection'),
-  stockDetailSource.indexOf('function PhysicalScoreCard'),
+  stockDetailSource.indexOf('function trendText'),
 )
 assert.equal((physicalMomentumSection.match(/\/api\/physical-momentum\//g) ?? []).length, 1)
 assert.equal((physicalMomentumSection.match(/\/api\/stock-physical-plan\//g) ?? []).length, 1)
@@ -232,10 +239,18 @@ assert.ok(physicalMomentumSection.indexOf('<PhysicalMaFieldMap') < physicalMomen
 
 assert.equal((stageTimelineSource.match(/fetch\(`\/api\/stage-history\//g) ?? []).length, 1)
 assert.match(stageTimelineSource, /onSnapshotChange\?\.\(latest \? \{/)
-assert.match(stageTimelineSource, /onSelect=\{onStageRangeSelect \? \(\) => selectStageSegment\(sys, index\) : undefined\}/)
+assert.match(stageTimelineSource, /onClick=\{\(\) => selectStageSegment\(system, run\.startIndex\)\}/)
+assert.match(stageTimelineSource, /buildRuns\(entries, system\.key\)/)
+assert.match(stageTimelineSource, /連続期間\(幅=継続長\)/)
 assert.match(stageTimelineSource, /aria-pressed=\{granularity === item\.key\}/)
 assert.match(stageTimelineSource, /aria-pressed=\{count === preset\}/)
 assert.match(stageTimelineSource, /min-h-11[^"]+sm:min-h-8/)
+assert.match(stageTimelineSource, /\{ key: 'timeline', label: 'Timeline' \}/)
+assert.match(stageTimelineSource, /\{ key: 'classic', label: 'Classic' \}/)
+assert.match(stageTimelineSource, /window\.sessionStorage\.getItem\(HISTORY_VIEW_STORAGE_KEY\)/)
+assert.match(stageTimelineSource, /window\.sessionStorage\.setItem\(HISTORY_VIEW_STORAGE_KEY, next\)/)
+assert.match(stageTimelineSource, /view === 'classic'/)
+assert.equal((stageTimelineSource.match(/fetch\(`\/api\/stage-history\//g) ?? []).length, 1, 'Timeline and Classic must share one stage-history fetch')
 assert.match(ma25mSource, /月足長期構造/)
 assert.match(ma25mSource, /MA接近レーダー/)
 const overview = stockDetailSource.slice(
@@ -264,6 +279,9 @@ assert.ok(
 )
 assert.match(overview, /hash !== 'overview' && hash !== 'company' && hash !== 'shikiho'/)
 assert.match(overview, /window\.clearTimeout\(requestTimer\)/)
+assert.match(stockDetailSource, /shortTerm\.reading/)
+assert.match(stockDetailSource, /function shortTermSideReading/)
+assert.match(stockDetailSource, /何が支え、何が逆向き・中立か/)
 const basicInfoCard = stockDetailSource.slice(
   stockDetailSource.indexOf('function BasicInfoCard'),
   stockDetailSource.indexOf('function buildBasicDecisionSummary'),
@@ -389,21 +407,22 @@ for (const label of stageLabels) {
 
 assert.ok(summarySource.indexOf('Market Structure') < summarySource.indexOf('Fundamental Summary'))
 assert.doesNotMatch(summarySource, /function StageStrip/)
-assert.match(summarySource, /33業種 構造順位/)
+assert.match(summarySource, /33業種の構造順位/)
 assert.match(summarySource, /\$\{data\.sector\.rank\} \/ \$\{data\.sector\.totalGroups\}区分/)
 assert.match(summarySource, /6軸Stage 70% \+ MA方向 30%/)
-assert.match(summarySource, /業種平均スコアの全区分順位（その他含む）/)
+assert.match(summarySource, /順位はその他を含む全区分/)
 assert.match(summarySource, /if \(variant === 'overview'\) \{\s+getJson<StockSectorContextResult>\(urls\.sector/)
 assert.equal((summarySource.match(/urls\.sector/g) ?? []).length, 1, 'sector context must be fetched exactly once')
 assert.match(summarySource, /sectorAvailability: 'error'/)
 assert.match(summarySource, /33業種平均との差/)
-const marketMetric = summarySource.slice(
-  summarySource.indexOf('function MarketMetric'),
-  summarySource.indexOf('function DesktopAxis'),
-)
-assert.doesNotMatch(marketMetric, /\btruncate\b/)
-assert.match(marketMetric, /break-words/)
-assert.match(summarySource, /grid grid-cols-2 gap-2/)
+assert.match(summarySource, /<RankStrip/)
+assert.match(summarySource, /<ScoreRuler code="PMS"/)
+assert.match(summarySource, /<MetricLadder title=\{group\.ladderTitle\}/)
+assert.match(analysisVisualsSource, /clamp\(value, -2\.5, 2\.5\)/)
+assert.match(analysisVisualsSource, /-2\.5から\+2\.5のZスコア目盛り/)
+assert.match(analysisVisualsSource, /export function PeerPositionRow/)
+assert.match(analysisVisualsSource, /export function BoundedMeter/)
+assert.doesNotMatch(analysisVisualsSource, /StageAlignmentBar/)
 assert.doesNotMatch(stockDetailSource.slice(
   stockDetailSource.indexOf('const basicStageCellTextStyle'),
   stockDetailSource.indexOf('const basicMutedTextStyle'),

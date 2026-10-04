@@ -10,13 +10,13 @@ import {
   LineStyle,
   ColorType,
   type IChartApi,
-  type ISeriesApi,
   type UTCTimestamp,
 } from 'lightweight-charts'
 import type { OHLCV } from '@/types/stock'
 import { movingAverageColor } from '@/lib/chart-colors'
 import type { MarketCode } from '@/lib/markets'
 import type { ChartIntervalCode } from '@/lib/timeframes'
+import { ScoreRuler, StackedShareBar } from '@/components/stock/StockAnalysisVisuals'
 
 type ScenarioInterval = ChartIntervalCode
 type ProjectionDirection = 'up' | 'down' | 'range'
@@ -123,17 +123,6 @@ interface ScenarioProjectionChartProps {
   onUseLatest?: () => void
 }
 
-interface ScenarioEndpointLabel {
-  id: string
-  rank: number
-  label: string
-  direction: ProjectionDirection
-  score: number
-  color: string
-  x: number
-  y: number
-}
-
 const TABS: Array<{ interval: ScenarioInterval; label: string; horizonDays: number; note: string }> = [
   { interval: 'D', label: '日足', horizonDays: 5, note: '5営業日' },
   { interval: '2D', label: '2日足', horizonDays: 10, note: '10営業日' },
@@ -220,41 +209,23 @@ function buildDirectionSummary(data: ProjectionResponse) {
   const secondPct = ranked[1]?.[1] ?? 0
   const gap = leaderPct - secondPct
   const primary: SummaryDirection = leaderPct < 38 || gap < 6 ? 'mixed' : leader
-  const leadScenario =
-    data.scenarios.find((scenario) => scenario.direction === (primary === 'mixed' ? leader : primary)) ??
-    data.scenarios[0]
-  const reasonParts = (leadScenario?.scoreBreakdown ?? [])
-    .filter((part) => part.value > 0)
-    .sort((a, b) => b.value - a.value)
-    .slice(0, 4)
-
   const primaryLabel: Record<SummaryDirection, string> = {
-    up: '上昇シナリオ優勢',
-    down: '下落シナリオ優勢',
-    range: '横ばい・様子見優勢',
-    mixed: '方向感は拮抗',
+    up: '上昇方向の比重が最大',
+    down: '下落方向の比重が最大',
+    range: '横ばいの比重が最大',
+    mixed: '方向別の比重は拮抗',
   }
-
-  const headline = `結論: ${primaryLabel[primary]}`
-  const description = primary === 'mixed'
-    ? `上昇 ${totals.up.toFixed(1)}% / 下落 ${totals.down.toFixed(1)}% / 横ばい ${totals.range.toFixed(1)}% で、優勢方向の差が小さい状態です。`
-    : `${directionLabel(primary)}が相対優勢 ${leaderPct.toFixed(1)}%。最上位候補は「${leadScenario?.label ?? '-'}」です。`
 
   return {
     primary,
-    leader,
-    headline,
-    description,
+    headline: primaryLabel[primary],
     totals,
-    leadScenario,
-    reasonParts,
   }
 }
 
 function ScenarioCanvas({ data, market }: { data: ProjectionResponse; market: MarketCode }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
-  const [endpointLabels, setEndpointLabels] = useState<ScenarioEndpointLabel[]>([])
 
   useEffect(() => {
     if (!containerRef.current || data.chart.candles.length === 0) return
@@ -320,7 +291,6 @@ function ScenarioCanvas({ data, market }: { data: ProjectionResponse; market: Ma
       series.setData(points.map((point) => ({ time: dateToTime(point.date), value: point.value })))
     }
 
-    const scenarioSeries: Array<{ scenario: ProjectionScenario; series: ISeriesApi<'Line'> }> = []
     for (const scenario of data.scenarios) {
       const tone = scenarioLineStyle(scenario)
       const series = chart.addSeries(LineSeries, {
@@ -331,7 +301,6 @@ function ScenarioCanvas({ data, market }: { data: ProjectionResponse; market: Ma
         lastValueVisible: false,
       })
       series.setData(scenario.points.map((point) => ({ time: dateToTime(point.date), value: point.value })))
-      scenarioSeries.push({ scenario, series })
     }
 
     if (data.realized?.points.length) {
@@ -351,55 +320,14 @@ function ScenarioCanvas({ data, market }: { data: ProjectionResponse; market: Ma
 
     chart.timeScale().fitContent()
     chartRef.current = chart
-    const updateEndpointLabels = () => {
-      const container = containerRef.current
-      if (!container) return
-      const width = container.clientWidth
-      const height = container.clientHeight
-      const next = scenarioSeries.flatMap(({ scenario, series }) => {
-        const last = scenario.points[scenario.points.length - 1]
-        if (!last) return []
-        const x = chart.timeScale().timeToCoordinate(dateToTime(last.date))
-        const y = series.priceToCoordinate(last.value)
-        if (x == null || y == null) return []
-        const tone = scenarioLineStyle(scenario)
-        return [{
-          id: scenario.id,
-          rank: scenario.probabilityRank,
-          label: scenario.label,
-          direction: scenario.direction,
-          score: scenario.score,
-          color: tone.color,
-          x: Math.max(8, Math.min(width - 148, x + 6)),
-          y: Math.max(8, Math.min(height - 32, y - 12)),
-        }]
-      }).sort((a, b) => a.y - b.y)
-
-      const minY = 8
-      const maxY = Math.max(minY, height - 32)
-      for (let i = 1; i < next.length; i += 1) {
-        if (next[i].y - next[i - 1].y < 26) next[i].y = next[i - 1].y + 26
-      }
-      const overflow = next.length ? next[next.length - 1].y - maxY : 0
-      if (overflow > 0) {
-        for (const item of next) item.y = Math.max(minY, item.y - overflow)
-      }
-      for (let i = 1; i < next.length; i += 1) {
-        if (next[i].y - next[i - 1].y < 26) next[i].y = Math.min(maxY, next[i - 1].y + 26)
-      }
-      setEndpointLabels(next)
-    }
-    requestAnimationFrame(updateEndpointLabels)
     const resize = () => {
       if (containerRef.current && chartRef.current) {
         chartRef.current.applyOptions({ width: containerRef.current.clientWidth })
-        requestAnimationFrame(updateEndpointLabels)
       }
     }
     window.addEventListener('resize', resize)
     return () => {
       window.removeEventListener('resize', resize)
-      setEndpointLabels([])
       if (chartRef.current) {
         chartRef.current.remove()
         chartRef.current = null
@@ -407,31 +335,35 @@ function ScenarioCanvas({ data, market }: { data: ProjectionResponse; market: Ma
     }
   }, [data])
 
+  const rankedScenarios = [...data.scenarios].sort((a, b) => a.probabilityRank - b.probabilityRank)
+
   return (
-    <div style={chartWrapStyle}>
+    <>
+      <div style={chartWrapStyle}>
       <div ref={containerRef} style={{ height: 420, width: '100%' }} />
-      {endpointLabels.map((item) => (
-        <div
-          key={item.id}
-          style={{
-            ...endpointLabelStyle,
-            left: item.x,
-            top: item.y,
-            borderColor: item.color,
-            color: item.color,
-          }}
-          title={`#${item.rank} ${directionLabel(item.direction)} ${item.label} / score ${item.score}`}
-        >
-          <span style={{ ...endpointLabelNumberStyle, background: item.color }}>#{item.rank}</span>
-          <span>{item.label}</span>
-        </div>
-      ))}
       <div style={chartOverlayBadgeStyle}>
         点線は将来シナリオ
         {data.realized?.points.length ? ' / 緑実線は事後実績' : ''}
         {' / '}基準 {data.baseDate} {fmtPrice(data.basePrice, market)}
       </div>
-    </div>
+      </div>
+      <ol style={scenarioRailStyle} aria-label="シナリオ順位（チャート線の凡例）">
+        {rankedScenarios.map((scenario) => {
+          const tone = scenarioLineStyle(scenario)
+          return (
+            <li
+              key={scenario.id}
+              style={{ ...scenarioRailItemStyle, borderColor: tone.color, color: tone.color }}
+              title={`#${scenario.probabilityRank} ${directionLabel(scenario.direction)} ${scenario.label} / score ${scenario.score}`}
+            >
+              <span style={{ ...endpointLabelNumberStyle, background: tone.color }}>#{scenario.probabilityRank}</span>
+              <span style={scenarioRailLabelStyle}>{scenario.label}</span>
+              <span style={scenarioRailScoreStyle}>{scenario.score}</span>
+            </li>
+          )
+        })}
+      </ol>
+    </>
   )
 }
 
@@ -549,7 +481,7 @@ export function ScenarioProjectionChart({
         ? `PMS ${sourceDates.physicalMomentum}`
         : null,
       sourceDates?.calibration ? `検証 ${sourceDates.calibration}` : null,
-      data.llmNarrative?.used ? `AI説明 ${data.llmNarrative.model}` : 'ローカル説明',
+      data.llmNarrative?.used ? `AI説明 ${data.llmNarrative.model}` : 'ルールベース説明',
     ].filter(Boolean)
     return parts.join(' / ')
   }, [data])
@@ -603,7 +535,7 @@ export function ScenarioProjectionChart({
       const payload = await res.json()
       if (!res.ok) throw new Error(payload.message ?? payload.error ?? `HTTP ${res.status}`)
       setSavedIds((prev) => new Set([...prev, scenario.id]))
-      setMessage('売買シナリオノートに保存しました。')
+      setMessage('シナリオメモに保存しました。')
       window.dispatchEvent(new CustomEvent('trade-scenario-saved', { detail: { ticker, market, scenarioId: payload.scenario?.id } }))
     } catch (e) {
       setError((e as Error).message)
@@ -615,23 +547,22 @@ export function ScenarioProjectionChart({
   return (
     <section className="card" style={sectionStyle}>
       <div style={headerStyle}>
-        <div>
-          <div className="section-header" style={headerTitleStyle}>シナリオチャート</div>
-          <p style={subTextStyle}>
-            既存データ、物理モメンタム、MA状態、ML候補から複数の値動きシナリオを点線で可視化します。
-            {analysisDate ? ` 基準日は${analysisDate}以前のデータに固定しています。` : ''}
-          </p>
+        <div className="section-header" style={headerTitleStyle}>
+          シナリオ
+          {analysisDate && <span className="ml-2 font-mono text-[11px] font-semibold text-[var(--text-muted)]">{analysisDate}以前に固定</span>}
         </div>
-        <span style={badgeStyle}>予測断定ではありません</span>
+        <span style={badgeStyle}>将来を断定するものではありません</span>
       </div>
 
-      <div style={tabRowStyle}>
+      <div style={horizonLabelStyle}>評価する期間</div>
+      <div style={tabRowStyle} role="group" aria-label="評価する期間">
         {TABS.map((tab) => (
           <button
             key={tab.interval}
             type="button"
             onClick={() => setActiveTab(tab)}
             style={tabButtonStyle(tab.interval === activeTab.interval)}
+            aria-pressed={tab.interval === activeTab.interval}
           >
             <strong>{tab.label}</strong>
             <span>{tab.note}</span>
@@ -640,31 +571,23 @@ export function ScenarioProjectionChart({
       </div>
 
       {loading ? (
-        <div style={emptyStyle}>シナリオを生成中...</div>
+        <div style={emptyStyle}>シナリオを生成中…</div>
       ) : error ? (
-        <div style={{ ...emptyStyle, color: 'var(--price-down)' }}>シナリオ取得エラー: {error}</div>
+        <div style={{ ...emptyStyle, color: 'var(--price-down)' }}>シナリオを取得できませんでした({error})</div>
       ) : !data || scenarios.length === 0 ? (
-        <div style={emptyStyle}>{data?.message ?? 'シナリオ生成に必要な価格データがありません。'}</div>
+        <div style={emptyStyle}>{data?.message ?? '価格データが不足しているため、シナリオを表示できません。'}</div>
       ) : (
         <div style={loadedStackStyle}>
           <DirectionSummaryPanel data={data} />
-          <div style={bodyGridStyle}>
-            <div style={chartPanelStyle}>
+          <div style={chartPanelStyle}>
               <div style={summaryBarStyle}>
-                <div>
-                  <strong>{data.statusLabel}</strong>
-                  <span>{sourceText}</span>
-                </div>
-                {topScenario && (
-                  <div style={topScenarioStyle}>
-                    最上位: {topScenario.label} / score {topScenario.score}
-                  </div>
-                )}
+                <strong>{data.statusLabel}</strong>
+                <span>{sourceText}</span>
               </div>
               <div style={freshnessNoticeStyle(data.sourceDates.featureDerived === true)}>
                 {data.sourceDates.featureDerived
-                  ? `保存済み物理特徴量が最新価格日と異なるため、${data.sourceDates.price} の足から物理状態を再計算して表示しています。`
-                  : `保存済み物理特徴量と価格データを使って ${data.sourceDates.price} 基準で表示しています。`}
+                  ? `物理状態を ${data.sourceDates.price} の足から再計算`
+                  : `保存済み物理特徴量・${data.sourceDates.price} 基準`}
                 <button type="button" onClick={regenerateLatest} style={refreshButtonStyle}>
                   {analysisDate ? '最新モードへ' : '最新で再生成'}
                 </button>
@@ -693,66 +616,36 @@ export function ScenarioProjectionChart({
                 <span><i style={{ background: '#f59e0b' }} />横ばい</span>
                 <span><i style={{ background: '#2563eb' }} />下落</span>
                 {data.realized?.points.length ? <span><i style={{ background: '#047857' }} />事後実績</span> : null}
-                <span>点線の終点 #n が右側カードの #n と対応</span>
+                <span>#n = 下のシナリオ順位</span>
               </div>
               <p style={noteStyle}>{data.note}</p>
-            </div>
-            <div style={scenarioListStyle}>
-              {message && <div style={messageStyle}>{message}</div>}
-              {scenarios.map((scenario) => {
-                const tone = scenarioTone(scenario.direction, scenario.probabilityRank)
-                const saved = savedIds.has(scenario.id)
-                return (
-                  <article key={scenario.id} style={{ ...scenarioCardStyle, borderColor: tone.border, background: tone.bg }}>
-                    <div style={scenarioTopStyle}>
-                      <div>
-                        <span style={scenarioLineChipStyle}>
-                          <i style={{ ...scenarioLineSampleStyle, borderColor: tone.color }} />
-                          <span style={{ ...scenarioRankBadgeStyle, background: tone.color }}>#{scenario.probabilityRank}</span>
-                          <span>{directionLabel(scenario.direction)}</span>
-                        </span>
-                        <strong style={{ ...scenarioTitleStyle, color: tone.color }}>{scenario.label}</strong>
-                      </div>
-                      <div style={scoreBoxStyle}>
-                        <span style={scoreMainStyle}>{scenario.score}/100</span>
-                        <span>相対{scenario.relativeWeightPct.toFixed(1)}%</span>
-                        <span>信頼{confidenceLabel(scenario.score)}</span>
-                      </div>
-                    </div>
-                    <p style={scenarioNarrativeStyle}>{scenario.narrative}</p>
-                    <div style={scoreBreakdownStyle}>
-                      {scenario.scoreBreakdown.map((part) => (
-                        <ScorePart key={`${scenario.id}-${part.key}`} part={part} />
-                      ))}
-                    </div>
-                    <div style={metricGridStyle}>
-                      <Metric label="目標" value={fmtPrice(scenario.targetPrice, market)} />
-                      <Metric label="撤退" value={fmtPrice(scenario.stopPrice, market)} />
-                      <Metric label="上値" value={fmtPrice(scenario.upperGuidePrice, market)} />
-                      <Metric label="下値" value={fmtPrice(scenario.lowerGuidePrice, market)} />
-                    </div>
-                    <div style={evidenceRowStyle}>
-                      {scenario.evidence.slice(0, 4).map((item) => (
-                        <span key={item}>{item}</span>
-                      ))}
-                    </div>
-                    <div style={invalidationStyle}>
-                      <strong>崩れる条件</strong>
-                      <span>{scenario.invalidation}</span>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => saveScenario(scenario)}
-                      disabled={savingId === scenario.id || saved}
-                      style={saveButtonStyle(saved)}
-                    >
-                      {saved ? '保存済み' : savingId === scenario.id ? '保存中...' : 'このシナリオを保存'}
-                    </button>
-                  </article>
-                )
-              })}
-            </div>
           </div>
+          <CalibrationStrip stats={data.stats} calibrationDate={data.sourceDates.calibration} />
+          {message && <div style={messageStyle}>{message}</div>}
+          {topScenario && (
+            <LeadScenarioMatrix
+              scenario={topScenario}
+              data={data}
+              market={market}
+              saved={savedIds.has(topScenario.id)}
+              saving={savingId === topScenario.id}
+              onSave={() => saveScenario(topScenario)}
+            />
+          )}
+          {scenarios.length > 1 && (
+            <div className="grid gap-1.5" aria-label="その他のシナリオ">
+              {scenarios.slice(1).map((scenario) => (
+                <CompactScenarioRow
+                  key={scenario.id}
+                  scenario={scenario}
+                  market={market}
+                  saved={savedIds.has(scenario.id)}
+                  saving={savingId === scenario.id}
+                  onSave={() => saveScenario(scenario)}
+                />
+              ))}
+            </div>
+          )}
         </div>
       )}
     </section>
@@ -762,47 +655,227 @@ export function ScenarioProjectionChart({
 function DirectionSummaryPanel({ data }: { data: ProjectionResponse }) {
   const summary = buildDirectionSummary(data)
   const tone = summaryTone(summary.primary)
-  const bars: Array<{ direction: ProjectionDirection; label: string; value: number }> = [
-    { direction: 'up', label: '上昇', value: summary.totals.up },
-    { direction: 'down', label: '下落', value: summary.totals.down },
-    { direction: 'range', label: '横ばい', value: summary.totals.range },
-  ]
-
   return (
-    <div style={{ ...directionSummaryStyle, borderColor: tone.border, background: tone.bg }}>
-      <div style={directionSummaryMainStyle}>
-        <div>
-          <span style={directionEyebrowStyle}>結論ファースト</span>
-          <strong style={{ ...directionHeadlineStyle, color: tone.color }}>{summary.headline}</strong>
-          <p style={directionDescriptionStyle}>{summary.description}</p>
-        </div>
-        <div style={directionTotalGridStyle}>
-          {bars.map((bar) => {
-            const barTone = scenarioTone(bar.direction, 1)
-            return (
-              <div key={bar.direction} style={directionTotalStyle}>
-                <div style={directionTotalLabelStyle}>
-                  <span>{bar.label}</span>
-                  <strong>{bar.value.toFixed(1)}%</strong>
-                </div>
-                <div style={directionTrackStyle}>
-                  <span style={{ ...directionBarStyle, width: `${Math.min(100, bar.value)}%`, background: barTone.color }} />
-                </div>
-              </div>
-            )
-          })}
-        </div>
+    <div className="grid gap-2 border p-3" style={{ borderColor: tone.border, background: tone.bg }}>
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
+        <strong className="text-[16px] font-black" style={{ color: tone.color }}>{summary.headline}</strong>
+        <span className="text-[10px] font-semibold text-[var(--text-muted)]">方向別の相対ウェイト合計</span>
       </div>
-      <div style={directionReasonGridStyle}>
-        {summary.reasonParts.map((part) => (
-          <div key={`${summary.leadScenario?.id}-${part.key}`} style={directionReasonStyle}>
-            <span>{part.label}</span>
-            <strong>{fmtContribution(part.value)}</strong>
-            <small>{part.detail}</small>
+      <StackedShareBar
+        segments={[
+          { key: 'up', label: '上昇', value: summary.totals.up, color: '#dc2626' },
+          { key: 'range', label: '横ばい', value: summary.totals.range, color: '#b45309' },
+          { key: 'down', label: '下落', value: summary.totals.down, color: '#2563eb' },
+        ]}
+      />
+    </div>
+  )
+}
+
+function CalibrationStrip({ stats, calibrationDate }: { stats: ProjectionResponse['stats']; calibrationDate: string | null }) {
+  const pct = (value: number | null) => (value == null || !Number.isFinite(value) ? null : `${(value * 100).toFixed(0)}%`)
+  const items = [
+    { label: '的中率', value: pct(stats.hitRate), ratio: stats.hitRate },
+    { label: '基準率', value: pct(stats.baseRate), ratio: stats.baseRate },
+    { label: 'lift', value: stats.lift == null ? null : `×${stats.lift.toFixed(2)}`, ratio: null },
+    { label: '平均最大上昇', value: stats.avgMaxReturnPct == null ? null : fmtPercent(stats.avgMaxReturnPct), ratio: null },
+    { label: '平均最大下落', value: stats.avgMinReturnPct == null ? null : fmtPercent(stats.avgMinReturnPct), ratio: null },
+    { label: 'ATR', value: stats.atrPct == null ? null : `${stats.atrPct.toFixed(2)}%`, ratio: null },
+  ].filter((item) => item.value != null)
+  if (items.length === 0) return null
+  return (
+    <section className="border border-[var(--border-subtle)] bg-white" aria-label="過去検証の保存値">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--border-subtle)] px-3 py-1.5 text-[10px] font-black text-[var(--text-secondary)]">
+        <span>過去検証(保存値)</span>
+        <span className="font-mono font-semibold text-[var(--text-muted)]">{calibrationDate ? `検証 ${calibrationDate}` : '検証日なし'}</span>
+      </div>
+      <div className="grid grid-cols-2 gap-px bg-[var(--border-subtle)] sm:grid-cols-3 lg:grid-cols-6">
+        {items.map((item) => (
+          <div key={item.label} className="min-w-0 bg-white px-3 py-2">
+            <div className="text-[9px] font-bold text-[var(--text-muted)]">{item.label}</div>
+            <div className="mt-0.5 font-mono text-[14px] font-black text-[var(--text-primary)]">{item.value}</div>
+            <div className="mt-1 h-1 bg-[var(--bg-elevated)]" aria-hidden="true">
+              {item.ratio != null && <div className="h-full bg-[var(--color-brand-700)]" style={{ width: `${Math.min(100, Math.max(0, item.ratio * 100))}%` }} />}
+            </div>
           </div>
         ))}
       </div>
+    </section>
+  )
+}
+
+function ScoreRow({ part }: { part: ScenarioScoreBreakdown }) {
+  const positive = part.value >= 0
+  const ratio = Math.min(1, Math.abs(part.value) / Math.max(1, part.max))
+  return (
+    <div className="grid h-6 grid-cols-[minmax(0,1fr)_minmax(56px,.8fr)_56px] items-center gap-2" title={part.detail}>
+      <span className="truncate text-[10px] font-bold text-[var(--text-secondary)]">{part.label}</span>
+      <span className="block h-2 bg-[var(--bg-elevated)]" aria-hidden="true">
+        <span className="block h-full" style={{ width: `${ratio * 100}%`, background: positive ? 'rgba(220, 38, 38, 0.7)' : 'rgba(37, 99, 235, 0.7)' }} />
+      </span>
+      <strong className="text-right font-mono text-[10px] font-black" style={{ color: positive ? 'var(--price-up)' : 'var(--price-down)' }}>
+        {fmtContribution(part.value)}<span className="font-semibold text-[var(--text-muted)]">/{part.max}</span>
+      </strong>
     </div>
+  )
+}
+
+function PriceLadder({ scenario, basePrice, market }: { scenario: ProjectionScenario; basePrice: number; market: MarketCode }) {
+  const levels = [
+    { key: 'upper', label: '上値', price: scenario.upperGuidePrice, color: '#9ca3af' },
+    { key: 'target', label: '目標', price: scenario.targetPrice, color: '#047857' },
+    { key: 'base', label: '基準', price: basePrice, color: 'var(--text-primary)' },
+    { key: 'stop', label: '見直し', price: scenario.stopPrice, color: '#b45309' },
+    { key: 'lower', label: '下値', price: scenario.lowerGuidePrice, color: '#9ca3af' },
+  ].flatMap((level) => (level.price == null || !Number.isFinite(level.price) ? [] : [{ ...level, price: level.price }]))
+    .sort((a, b) => b.price - a.price)
+  const min = Math.min(...levels.map((level) => level.price))
+  const max = Math.max(...levels.map((level) => level.price))
+  return (
+    <div className="divide-y divide-[var(--border-subtle)] border-y border-[var(--border-subtle)]">
+      {levels.map((level) => {
+        const ratio = max === min ? 0.5 : (level.price - min) / (max - min)
+        return (
+          <div key={level.key} className="grid h-6 grid-cols-[40px_minmax(0,1fr)_72px] items-center gap-2">
+            <span className={`text-[10px] ${level.key === 'base' ? 'font-black text-[var(--text-primary)]' : 'font-bold text-[var(--text-muted)]'}`}>{level.label}</span>
+            <span className="relative block h-3" aria-hidden="true">
+              <span className="absolute inset-x-0 top-1/2 h-px bg-[var(--border-subtle)]" />
+              <span
+                className="absolute top-1/2 h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full border border-white ring-1 ring-[var(--border-subtle)]"
+                style={{ left: `calc(6px + (100% - 12px) * ${ratio})`, background: level.color }}
+              />
+            </span>
+            <strong className="truncate text-right font-mono text-[10px] font-black text-[var(--text-primary)]">{fmtPrice(level.price, market)}</strong>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function RankChip({ scenario, color }: { scenario: ProjectionScenario; color: string }) {
+  return (
+    <span className="inline-flex shrink-0 items-center gap-1.5 text-[10px] font-black text-[var(--text-muted)]">
+      <span className="inline-flex h-5 min-w-7 items-center justify-center px-1.5 font-mono text-[10px] text-white" style={{ background: color, borderRadius: 999 }}>#{scenario.probabilityRank}</span>
+      {directionLabel(scenario.direction)}
+    </span>
+  )
+}
+
+function LeadScenarioMatrix({
+  scenario,
+  data,
+  market,
+  saved,
+  saving,
+  onSave,
+}: {
+  scenario: ProjectionScenario
+  data: ProjectionResponse
+  market: MarketCode
+  saved: boolean
+  saving: boolean
+  onSave: () => void
+}) {
+  const tone = scenarioTone(scenario.direction, scenario.probabilityRank)
+  const evidence = scenario.evidence.slice(0, 4)
+  return (
+    <article className="border bg-white" style={{ borderColor: tone.border }} aria-label={`最上位シナリオ ${scenario.label}`}>
+      <header className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b px-3 py-2" style={{ borderColor: tone.border, background: tone.bg }}>
+        <div className="flex min-w-0 items-center gap-2">
+          <RankChip scenario={scenario} color={tone.color} />
+          <strong className="min-w-0 truncate text-[14px] font-black" style={{ color: tone.color }}>{scenario.label}</strong>
+        </div>
+        <div className="font-mono text-[11px] font-black text-[var(--text-primary)]">
+          {scenario.score}/100 <span className="font-semibold text-[var(--text-muted)]">相対{scenario.relativeWeightPct.toFixed(1)}% ・ 信頼{confidenceLabel(scenario.score)}</span>
+        </div>
+      </header>
+      <div className="grid gap-x-6 gap-y-4 p-3 lg:grid-cols-3">
+        <section className="min-w-0" aria-label="現在の状態と根拠">
+          <h4 className="mb-1.5 text-[11px] font-black text-[var(--text-secondary)]">現在の状態</h4>
+          <div className="mb-1.5 truncate text-[12px] font-black text-[var(--text-primary)]" title={data.statusLabel}>{data.statusLabel}</div>
+          <div className="space-y-1">
+            <ScoreRuler code="PMS" label="運動状態" value={data.stats.pms} text={fmtScore(data.stats.pms)} />
+            <ScoreRuler code="PFS" label="足元の力" value={data.stats.pfs} text={fmtScore(data.stats.pfs)} />
+            <ScoreRuler code="PES" label="熱量" value={data.stats.pes} text={fmtScore(data.stats.pes)} />
+          </div>
+          {evidence.length > 0 && (
+            <ul className="mt-2 grid gap-0.5 border-t border-[var(--border-subtle)] pt-1.5">
+              {evidence.map((item) => (
+                <li key={item} className="flex gap-1.5 text-[10px] font-semibold leading-4 text-[var(--text-secondary)]">
+                  <span className="mt-1.5 h-1 w-1 shrink-0 bg-[var(--text-muted)]" aria-hidden="true" />
+                  <span className="min-w-0 break-words">{item}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+        <section className="min-w-0" aria-label="スコア寄与">
+          <h4 className="mb-1.5 text-[11px] font-black text-[var(--text-secondary)]">スコア寄与 <span className="font-semibold text-[var(--text-muted)]">値/上限</span></h4>
+          <div className="divide-y divide-[var(--border-subtle)] border-y border-[var(--border-subtle)]">
+            {scenario.scoreBreakdown.map((part) => <ScoreRow key={`${scenario.id}-${part.key}`} part={part} />)}
+          </div>
+        </section>
+        <section className="min-w-0" aria-label="価格水準">
+          <h4 className="mb-1.5 text-[11px] font-black text-[var(--text-secondary)]">価格水準 <span className="font-semibold text-[var(--text-muted)]">高い順</span></h4>
+          <PriceLadder scenario={scenario} basePrice={data.basePrice} market={market} />
+        </section>
+      </div>
+      <footer className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--border-subtle)] px-3 py-2">
+        <div className="min-w-0 flex-1 border-l-[3px] border-[var(--accent-primary)] pl-2 text-[11px] font-semibold leading-4 text-[var(--text-secondary)]">
+          <b className="mr-1.5 font-black text-[var(--text-primary)]">見方が変わる条件</b>{scenario.invalidation}
+        </div>
+        <button type="button" onClick={onSave} disabled={saving || saved} style={saveButtonStyle(saved)}>
+          {saved ? '保存済み' : saving ? '保存中…' : 'メモに残す'}
+        </button>
+      </footer>
+    </article>
+  )
+}
+
+function CompactScenarioRow({
+  scenario,
+  market,
+  saved,
+  saving,
+  onSave,
+}: {
+  scenario: ProjectionScenario
+  market: MarketCode
+  saved: boolean
+  saving: boolean
+  onSave: () => void
+}) {
+  const tone = scenarioTone(scenario.direction, scenario.probabilityRank)
+  const weight = Math.min(100, Math.max(0, scenario.relativeWeightPct))
+  return (
+    <article className="border bg-white" style={{ borderColor: tone.border }}>
+      <div className="grid items-center gap-x-3 gap-y-1.5 px-3 py-2 sm:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)_auto]">
+        <div className="flex min-w-0 items-center gap-2">
+          <RankChip scenario={scenario} color={tone.color} />
+          <strong className="min-w-0 truncate text-[12px] font-black" style={{ color: tone.color }} title={scenario.label}>{scenario.label}</strong>
+        </div>
+        <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2" title={`相対ウェイト ${scenario.relativeWeightPct.toFixed(1)}%`}>
+          <span className="block h-2 bg-[var(--bg-elevated)]" aria-hidden="true">
+            <span className="block h-full" style={{ width: `${weight}%`, background: tone.color }} />
+          </span>
+          <span className="font-mono text-[10px] font-black text-[var(--text-primary)]">{scenario.score}/100 ・ {scenario.relativeWeightPct.toFixed(1)}%</span>
+        </div>
+        <button type="button" onClick={onSave} disabled={saving || saved} style={saveButtonStyle(saved)} className="justify-self-start sm:justify-self-end">
+          {saved ? '保存済み' : saving ? '保存中…' : 'メモに残す'}
+        </button>
+      </div>
+      <details className="border-t border-[var(--border-subtle)]">
+        <summary className="flex min-h-8 cursor-pointer items-center gap-3 px-3 text-[10px] font-black text-[var(--text-muted)]">
+          <span>水準・見方が変わる条件</span>
+          <span className="truncate font-mono font-semibold">目標 {fmtPrice(scenario.targetPrice, market)} ・ 見直し {fmtPrice(scenario.stopPrice, market)}</span>
+        </summary>
+        <div className="grid gap-1 px-3 pb-2 text-[10px] font-semibold leading-4 text-[var(--text-secondary)]">
+          <div className="font-mono">上値 {fmtPrice(scenario.upperGuidePrice, market)} ・ 下値 {fmtPrice(scenario.lowerGuidePrice, market)}</div>
+          <div className="border-l-[3px] border-[var(--accent-primary)] pl-2">{scenario.invalidation}</div>
+        </div>
+      </details>
+    </article>
   )
 }
 
@@ -811,31 +884,6 @@ function Metric({ label, value }: { label: string; value: string }) {
     <div style={metricStyle}>
       <span>{label}</span>
       <strong>{value}</strong>
-    </div>
-  )
-}
-
-function ScorePart({ part }: { part: ScenarioScoreBreakdown }) {
-  const positive = part.value >= 0
-  const magnitude = Math.min(100, Math.round((Math.abs(part.value) / Math.max(1, part.max)) * 100))
-  return (
-    <div style={scorePartStyle} title={part.detail}>
-      <div style={scorePartHeaderStyle}>
-        <span>{part.label}</span>
-        <strong style={{ color: positive ? 'var(--price-up)' : 'var(--price-down)' }}>
-          {fmtContribution(part.value)}
-        </strong>
-      </div>
-      <div style={scorePartTrackStyle}>
-        <span
-          style={{
-            ...scorePartBarStyle,
-            width: `${magnitude}%`,
-            background: positive ? 'rgba(220, 38, 38, 0.58)' : 'rgba(37, 99, 235, 0.58)',
-          }}
-        />
-      </div>
-      <span style={scorePartDetailStyle}>{part.detail}</span>
     </div>
   )
 }
@@ -857,13 +905,6 @@ const headerTitleStyle: CSSProperties = {
   margin: 0,
   fontSize: 18,
   lineHeight: 1.35,
-}
-
-const subTextStyle: CSSProperties = {
-  margin: '4px 0 0',
-  color: 'var(--text-muted)',
-  fontSize: 12,
-  lineHeight: 1.6,
 }
 
 const badgeStyle: CSSProperties = {
@@ -898,110 +939,9 @@ function tabButtonStyle(active: boolean): CSSProperties {
   }
 }
 
-const bodyGridStyle: CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(min(440px, 100%), 1fr))',
-  gap: 10,
-  alignItems: 'start',
-}
-
 const loadedStackStyle: CSSProperties = {
   display: 'grid',
   gap: 12,
-}
-
-const directionSummaryStyle: CSSProperties = {
-  border: '1px solid var(--border-subtle)',
-  borderRadius: 8,
-  padding: 12,
-  display: 'grid',
-  gap: 12,
-}
-
-const directionSummaryMainStyle: CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: 'minmax(0, 1.15fr) minmax(min(360px, 100%), 0.85fr)',
-  gap: 10,
-  alignItems: 'center',
-}
-
-const directionEyebrowStyle: CSSProperties = {
-  display: 'inline-flex',
-  width: 'fit-content',
-  border: '1px solid var(--border-subtle)',
-  borderRadius: 999,
-  background: 'rgba(255,255,255,0.78)',
-  color: 'var(--text-secondary)',
-  fontSize: 11,
-  fontWeight: 900,
-  padding: '4px 8px',
-  marginBottom: 6,
-}
-
-const directionHeadlineStyle: CSSProperties = {
-  display: 'block',
-  fontSize: 20,
-  fontWeight: 950,
-  letterSpacing: 0,
-}
-
-const directionDescriptionStyle: CSSProperties = {
-  margin: '4px 0 0',
-  color: 'var(--text-secondary)',
-  fontSize: 13,
-  lineHeight: 1.6,
-  fontWeight: 700,
-}
-
-const directionTotalGridStyle: CSSProperties = {
-  display: 'grid',
-  gap: 7,
-}
-
-const directionTotalStyle: CSSProperties = {
-  display: 'grid',
-  gap: 4,
-}
-
-const directionTotalLabelStyle: CSSProperties = {
-  display: 'flex',
-  justifyContent: 'space-between',
-  gap: 8,
-  color: 'var(--text-secondary)',
-  fontSize: 12,
-  fontWeight: 900,
-}
-
-const directionTrackStyle: CSSProperties = {
-  height: 7,
-  borderRadius: 999,
-  background: 'rgba(255,255,255,0.75)',
-  border: '1px solid rgba(0,0,0,0.04)',
-  overflow: 'hidden',
-}
-
-const directionBarStyle: CSSProperties = {
-  display: 'block',
-  height: '100%',
-  borderRadius: 999,
-}
-
-const directionReasonGridStyle: CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(min(190px, 100%), 1fr))',
-  gap: 6,
-}
-
-const directionReasonStyle: CSSProperties = {
-  border: '1px solid var(--border-subtle)',
-  borderRadius: 8,
-  background: 'rgba(255,255,255,0.82)',
-  padding: 9,
-  display: 'grid',
-  gap: 4,
-  color: 'var(--text-secondary)',
-  fontSize: 11,
-  fontWeight: 800,
 }
 
 const chartPanelStyle: CSSProperties = {
@@ -1065,35 +1005,45 @@ const refreshNoticeStyle: CSSProperties = {
   marginBottom: 10,
 }
 
-const topScenarioStyle: CSSProperties = {
-  fontFamily: 'var(--font-mono)',
-  fontSize: 11,
-  color: 'var(--text-muted)',
-}
-
 const chartWrapStyle: CSSProperties = {
   position: 'relative',
   minHeight: 420,
 }
 
-const endpointLabelStyle: CSSProperties = {
-  position: 'absolute',
-  zIndex: 4,
+const scenarioRailStyle: CSSProperties = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 6,
+  listStyle: 'none',
+  margin: 0,
+  padding: '8px 0 0',
+}
+
+const scenarioRailItemStyle: CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
   gap: 5,
-  maxWidth: 136,
+  minWidth: 0,
+  maxWidth: '100%',
   border: '1px solid',
   borderRadius: 999,
-  background: 'rgba(255,255,255,0.92)',
-  boxShadow: '0 2px 8px rgba(15, 23, 42, 0.12)',
+  background: '#fff',
   fontSize: 11,
   fontWeight: 900,
   padding: '3px 8px 3px 3px',
-  pointerEvents: 'none',
-  whiteSpace: 'nowrap',
+}
+
+const scenarioRailLabelStyle: CSSProperties = {
+  minWidth: 0,
   overflow: 'hidden',
   textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+}
+
+const scenarioRailScoreStyle: CSSProperties = {
+  fontFamily: 'var(--font-mono)',
+  fontSize: 10,
+  opacity: 0.8,
 }
 
 const endpointLabelNumberStyle: CSSProperties = {
@@ -1140,146 +1090,6 @@ const noteStyle: CSSProperties = {
   lineHeight: 1.65,
 }
 
-const scenarioListStyle: CSSProperties = {
-  display: 'grid',
-  gap: 10,
-  maxHeight: 680,
-  overflow: 'auto',
-  paddingRight: 2,
-}
-
-const scenarioCardStyle: CSSProperties = {
-  border: '1px solid var(--border-subtle)',
-  borderRadius: 8,
-  padding: 12,
-  display: 'grid',
-  gap: 10,
-}
-
-const scenarioTopStyle: CSSProperties = {
-  display: 'flex',
-  justifyContent: 'space-between',
-  alignItems: 'flex-start',
-  gap: 10,
-}
-
-const scenarioLineChipStyle: CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 6,
-  color: 'var(--text-muted)',
-  fontSize: 11,
-  fontWeight: 900,
-}
-
-const scenarioLineSampleStyle: CSSProperties = {
-  width: 28,
-  borderTop: '2px dashed',
-}
-
-const scenarioRankBadgeStyle: CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  borderRadius: 999,
-  color: '#fff',
-  minWidth: 28,
-  height: 20,
-  padding: '0 6px',
-  fontFamily: 'var(--font-mono)',
-  fontSize: 10,
-}
-
-const scenarioTitleStyle: CSSProperties = {
-  display: 'block',
-  marginTop: 3,
-  fontSize: 15,
-  fontWeight: 900,
-}
-
-const scoreBoxStyle: CSSProperties = {
-  border: '1px solid var(--border-subtle)',
-  borderRadius: 8,
-  background: '#fff',
-  color: 'var(--text-secondary)',
-  fontSize: 11,
-  fontWeight: 900,
-  padding: '6px 8px',
-  whiteSpace: 'nowrap',
-  display: 'grid',
-  gap: 2,
-  justifyItems: 'end',
-}
-
-const scoreMainStyle: CSSProperties = {
-  fontFamily: 'var(--font-mono)',
-  color: 'var(--text-primary)',
-  fontSize: 14,
-  lineHeight: 1,
-}
-
-const scenarioNarrativeStyle: CSSProperties = {
-  margin: 0,
-  color: 'var(--text-secondary)',
-  fontSize: 12,
-  lineHeight: 1.65,
-}
-
-const scoreBreakdownStyle: CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(min(170px, 100%), 1fr))',
-  gap: 6,
-}
-
-const scorePartStyle: CSSProperties = {
-  border: '1px solid var(--border-subtle)',
-  borderRadius: 7,
-  background: 'rgba(255,255,255,0.82)',
-  padding: 7,
-  display: 'grid',
-  gap: 5,
-  minWidth: 0,
-}
-
-const scorePartHeaderStyle: CSSProperties = {
-  display: 'flex',
-  justifyContent: 'space-between',
-  gap: 6,
-  alignItems: 'center',
-  color: 'var(--text-secondary)',
-  fontSize: 12,
-  fontWeight: 900,
-}
-
-const scorePartTrackStyle: CSSProperties = {
-  position: 'relative',
-  height: 5,
-  borderRadius: 999,
-  background: 'rgba(0,0,0,0.06)',
-  overflow: 'hidden',
-}
-
-const scorePartBarStyle: CSSProperties = {
-  display: 'block',
-  height: '100%',
-  borderRadius: 999,
-}
-
-const scorePartDetailStyle: CSSProperties = {
-  overflowWrap: 'anywhere',
-  whiteSpace: 'normal',
-  color: 'var(--text-muted)',
-  fontSize: 11,
-  lineHeight: 1.45,
-  fontWeight: 700,
-}
-
-const metricGridStyle: CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
-  gap: 6,
-}
-
 const metricStyle: CSSProperties = {
   border: '1px solid var(--border-subtle)',
   borderRadius: 7,
@@ -1291,23 +1101,11 @@ const metricStyle: CSSProperties = {
   fontSize: 11,
 }
 
-const evidenceRowStyle: CSSProperties = {
-  display: 'flex',
-  flexWrap: 'wrap',
-  gap: 6,
-  color: 'var(--text-secondary)',
+const horizonLabelStyle: CSSProperties = {
+  color: 'var(--text-muted)',
   fontSize: 11,
   fontWeight: 800,
-}
-
-const invalidationStyle: CSSProperties = {
-  borderTop: '1px solid var(--border-subtle)',
-  paddingTop: 8,
-  display: 'grid',
-  gap: 4,
-  color: 'var(--text-secondary)',
-  fontSize: 12,
-  lineHeight: 1.55,
+  marginBottom: 4,
 }
 
 function saveButtonStyle(saved: boolean): CSSProperties {

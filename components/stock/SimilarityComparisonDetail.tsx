@@ -7,7 +7,6 @@ import {
   Check,
   ChevronRight,
   GitCompareArrows,
-  Info,
   LoaderCircle,
   Plus,
   RotateCcw,
@@ -25,6 +24,13 @@ import {
   YAxis,
 } from 'recharts'
 import { STAGE_BG_COLORS, STAGE_BORDER_COLORS } from '@/lib/hex-stage'
+import {
+  PEER_ZONE_LABELS,
+  PeerPositionRow,
+  peerZone,
+  type PeerBandPoint,
+  type PeerZone,
+} from '@/components/stock/StockAnalysisVisuals'
 import type {
   ComparisonCompany,
   ComparisonDistribution,
@@ -70,7 +76,7 @@ const METRIC_SECTIONS: MetricSection[] = [
     ],
   },
   {
-    label: 'Quality',
+    label: '収益性・財務の質',
     rows: [
       { key: 'operatingMargin', label: '営業利益率', format: 'percent' },
       { key: 'roe', label: 'ROE', format: 'percent' },
@@ -79,11 +85,11 @@ const METRIC_SECTIONS: MetricSection[] = [
     ],
   },
   {
-    label: 'Valuation',
+    label: '割安度・評価指標',
     rows: [
-      { key: 'forwardPer', label: 'Forward PER', format: 'multiple' },
+      { key: 'forwardPer', label: '予想PER', format: 'multiple' },
       { key: 'pbr', label: 'PBR', format: 'multiple' },
-      { key: 'fcfYield', label: 'FCF Yield', format: 'percent' },
+      { key: 'fcfYield', label: 'FCF利回り', format: 'percent' },
       { key: 'evEbitda', label: 'EV/EBITDA', format: 'multiple' },
     ],
   },
@@ -107,9 +113,9 @@ const METRIC_SECTIONS: MetricSection[] = [
 
 const SCATTER_OPTIONS = [
   { id: 'roe-pbr', label: 'ROE × PBR', x: 'roe' as const, y: 'pbr' as const, xLabel: 'ROE', yLabel: 'PBR', xFormat: 'percent' as const, yFormat: 'multiple' as const },
-  { id: 'growth-forward', label: '成長 × Forward PER', x: 'revenueGrowth' as const, y: 'forwardPer' as const, xLabel: '売上成長率', yLabel: 'Forward PER', xFormat: 'percent' as const, yFormat: 'multiple' as const },
-  { id: 'fcf-roe', label: 'FCF Yield × ROE', x: 'fcfYield' as const, y: 'roe' as const, xLabel: 'FCF Yield', yLabel: 'ROE', xFormat: 'percent' as const, yFormat: 'percent' as const },
-  { id: 'structure-forward', label: '構造 × Forward PER', x: 'sectorStructureScore' as const, y: 'forwardPer' as const, xLabel: '業種構造', yLabel: 'Forward PER', xFormat: 'score' as const, yFormat: 'multiple' as const },
+  { id: 'growth-forward', label: '成長 × 予想PER', x: 'revenueGrowth' as const, y: 'forwardPer' as const, xLabel: '売上成長率', yLabel: '予想PER', xFormat: 'percent' as const, yFormat: 'multiple' as const },
+  { id: 'fcf-roe', label: 'FCF利回り × ROE', x: 'fcfYield' as const, y: 'roe' as const, xLabel: 'FCF利回り', yLabel: 'ROE', xFormat: 'percent' as const, yFormat: 'percent' as const },
+  { id: 'structure-forward', label: '構造 × 予想PER', x: 'sectorStructureScore' as const, y: 'forwardPer' as const, xLabel: '業種構造', yLabel: '予想PER', xFormat: 'score' as const, yFormat: 'multiple' as const },
 ]
 
 function fmtNumber(value: number, format: MetricFormat, compact = false): string {
@@ -154,17 +160,77 @@ function StageStrip({ company }: { company: ComparisonCompany }) {
   )
 }
 
+function stageMatch(base: string | null | undefined, other: string | null | undefined): { same: number; total: number } | null {
+  if (!base || !other) return null
+  let same = 0
+  let total = 0
+  for (let index = 0; index < Math.min(base.length, other.length); index += 1) {
+    if (!/\d/.test(base[index]) || !/\d/.test(other[index])) continue
+    total += 1
+    if (base[index] === other[index]) same += 1
+  }
+  return total > 0 ? { same, total } : null
+}
+
+interface PositionRow {
+  metric: MetricRow
+  p25: number
+  median: number
+  p75: number
+  target: PeerBandPoint
+  peers: PeerBandPoint[]
+  zone: PeerZone
+  /** 中央値からの距離をP25–P75幅で割った値。指標どうしの並べ替えにだけ使う */
+  scaled: number
+}
+
+function SummaryList({
+  title,
+  tone,
+  rows,
+  empty,
+}: {
+  title: string
+  tone: string
+  rows: PositionRow[]
+  empty: string
+}) {
+  return (
+    <div className="min-w-0 border-t-2 bg-white px-2.5 py-2" style={{ borderTopColor: tone }}>
+      <div className="text-[10px] font-black text-[var(--color-text-secondary)]">{title}</div>
+      {rows.length === 0 ? (
+        <div className="mt-1 text-[10px] font-semibold text-[var(--color-text-tertiary)]">{empty}</div>
+      ) : (
+        <ul className="m-0 mt-1 grid gap-0.5 p-0">
+          {rows.map((row) => (
+            <li key={row.metric.key} className="grid grid-cols-[minmax(0,1fr)_auto] items-baseline gap-2 text-[10px] leading-4">
+              <span className="truncate font-bold text-[var(--color-text-primary)]">{row.metric.label}</span>
+              <span className="whitespace-nowrap font-mono">
+                <b className="text-[var(--color-market-red)]">{row.target.text}</b>
+                <span className="ml-1 text-[9px] font-semibold text-[var(--color-text-tertiary)]">中央 {fmtNumber(row.median, row.metric.format, true)}</span>
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
 function CandidateButton({
   candidate,
   selected,
   disabled,
+  baseStageCode,
   onToggle,
 }: {
   candidate: SimilarityCandidate
   selected: boolean
   disabled: boolean
+  baseStageCode: string | null
   onToggle: () => void
 }) {
+  const match = stageMatch(baseStageCode, candidate.stageCode)
   return (
     <button
       type="button"
@@ -186,10 +252,19 @@ function CandidateButton({
           {selected ? <Check size={12} /> : <Plus size={12} />}
         </span>
       </span>
-      <span className="mt-1 block text-[9px] font-semibold text-[var(--color-text-tertiary)]">{candidate.reason}</span>
-      <span className="mt-1 flex items-center justify-between gap-2 font-mono text-[9px] font-bold text-[var(--color-text-secondary)]">
+      <span className="mt-1.5 grid grid-cols-[auto_1fr] gap-x-1.5 gap-y-0.5 text-[9px] leading-4">
+        <span className="font-black text-[var(--color-brand-800)]">似ている点</span>
+        <span className="font-semibold text-[var(--color-text-secondary)]">{candidate.reason}</span>
+        {match && (
+          <>
+            <span className="font-black text-[var(--color-text-tertiary)]">Stage</span>
+            <span className="font-mono font-semibold text-[var(--color-text-tertiary)]">基準と一致 {match.same}/{match.total}軸</span>
+          </>
+        )}
+      </span>
+      <span className="mt-1.5 flex items-center justify-between gap-2 border-t border-[var(--color-border-soft)] pt-1 font-mono text-[9px] font-bold text-[var(--color-text-secondary)]">
         <span>{candidate.score == null ? '分類一致' : `類似 ${candidate.score.toFixed(1)}`}</span>
-        <span>{candidate.coveragePercent == null ? candidate.stageCode ?? '------' : `比較 ${candidate.coveragePercent.toFixed(0)}%`}</span>
+        <span>{candidate.coveragePercent == null ? candidate.stageCode ?? '------' : `指標カバー率 ${candidate.coveragePercent.toFixed(0)}%`}</span>
       </span>
     </button>
   )
@@ -255,8 +330,69 @@ export function SimilarityComparisonDetail({ ticker, analysisDate = null }: Simi
   const scatterData = useMemo(() => (model?.companies ?? []).flatMap((company) => {
     const x = company.metrics[scatterOption.x].value
     const y = company.metrics[scatterOption.y].value
-    return x == null || y == null ? [] : [{ ticker: company.ticker, name: company.name ?? company.ticker, x, y, isBase: company.isBase }]
+    return x == null || y == null ? [] : [{
+      ticker: company.isBase ? `対象 ${company.ticker}` : company.ticker,
+      name: company.name ?? company.ticker,
+      x,
+      y,
+      isBase: company.isBase,
+    }]
   }), [model, scatterOption])
+
+  const baseCompany = model?.companies.find((company) => company.isBase) ?? null
+  const bandSections = useMemo(() => {
+    if (!model || !baseCompany) return []
+    const peers = model.companies.filter((company) => !company.isBase)
+    return METRIC_SECTIONS.map((section) => ({
+      label: section.label,
+      rows: section.rows.flatMap((metric): PositionRow[] => {
+        const distribution = model.sectorDistribution.metrics[metric.key]
+        const baseValue = baseCompany.metrics[metric.key]
+        if (
+          !distribution ||
+          distribution.percentile25 == null ||
+          distribution.median == null ||
+          distribution.percentile75 == null ||
+          distribution.percentile75 <= distribution.percentile25 ||
+          baseValue.availability !== 'available' ||
+          baseValue.value == null
+        ) return []
+        const point = (key: string, label: string, value: number): PeerBandPoint => ({ key, label, value, text: fmtNumber(value, metric.format) })
+        return [{
+          metric,
+          p25: distribution.percentile25,
+          median: distribution.median,
+          p75: distribution.percentile75,
+          target: point(baseCompany.ticker, baseCompany.ticker, baseValue.value),
+          peers: peers.flatMap((company) => {
+            const value = company.metrics[metric.key]
+            return value.availability === 'available' && value.value != null ? [point(company.ticker, company.ticker, value.value)] : []
+          }),
+          zone: peerZone(baseValue.value, distribution.percentile25, distribution.median, distribution.percentile75),
+          scaled: (baseValue.value - distribution.median) / (distribution.percentile75 - distribution.percentile25),
+        }]
+      }),
+    })).filter((section) => section.rows.length > 0)
+  }, [model, baseCompany])
+  const positionSummary = useMemo(() => {
+    const rows = bandSections.flatMap((section) => section.rows)
+    return {
+      high: rows.filter((row) => row.zone === 'above').sort((a, b) => b.scaled - a.scaled).slice(0, 3),
+      low: rows.filter((row) => row.zone === 'below').sort((a, b) => a.scaled - b.scaled).slice(0, 3),
+      typical: rows.filter((row) => row.zone === 'lower' || row.zone === 'upper').sort((a, b) => Math.abs(a.scaled) - Math.abs(b.scaled)).slice(0, 3),
+      total: rows.length,
+    }
+  }, [bandSections])
+  // 近い銘柄は既存の候補順位(財務類似の類似度順)をそのまま上位3社表示する
+  const closestGroup = model?.candidateGroups.find((group) => group.kind === 'financial' && group.candidates.length > 0)
+    ?? model?.candidateGroups.find((group) => group.candidates.length > 0)
+    ?? null
+  const closestPeers = closestGroup?.candidates.slice(0, 3) ?? []
+  const stageMatchByTicker = new Map((model?.companies ?? []).flatMap((company) => {
+    if (company.isBase) return []
+    const match = stageMatch(baseCompany?.stageCode, company.stageCode)
+    return match ? [[company.ticker, match] as const] : []
+  }))
 
   const toggleCandidate = (candidate: SimilarityCandidate) => {
     setSelected((current) => {
@@ -272,33 +408,107 @@ export function SimilarityComparisonDetail({ ticker, analysisDate = null }: Simi
         <div className="flex min-w-0 items-start gap-2.5">
           <GitCompareArrows size={17} className="mt-0.5 shrink-0 text-[var(--color-brand-700)]" aria-hidden="true" />
           <div>
-            <h2 id="similarity-comparison-title" className="text-[13px] font-black text-[var(--color-brand-900)]">類似・比較</h2>
-            <p className="mt-0.5 text-[9px] font-semibold text-[var(--color-text-tertiary)]">似ている理由を分けて、同じ基準日で横比較</p>
+            <h2 id="similarity-comparison-title" className="text-[13px] font-black text-[var(--color-brand-900)]">① 同業・財務の比較</h2>
+            {baseCompany && (
+              <p className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[10px] font-bold text-[var(--color-text-secondary)]">
+                <span className="inline-flex h-5 items-center bg-[var(--color-market-red)] px-1.5 text-[9px] font-black text-white">対象</span>
+                <span className="font-mono font-black text-[var(--color-text-primary)]">{baseCompany.ticker}</span>
+                <span>{baseCompany.name}</span>
+                <span className="text-[var(--color-text-tertiary)]">／ 33業種 {model?.sectorDistribution.groupName ?? '分類なし'}の分布と比較</span>
+              </p>
+            )}
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <span className="font-mono text-[9px] font-bold text-[var(--color-text-tertiary)]">基準日 {model?.asOf ?? analysisDate ?? '---'}</span>
-          <button
-            type="button"
-            onClick={() => model && setSelected(model.recommendations)}
-            disabled={!model || loading}
-            className="inline-flex h-8 items-center gap-1.5 bg-[var(--color-brand-700)] px-3 text-[10px] font-black text-white hover:bg-[var(--color-brand-800)] disabled:opacity-60"
-          >
-            <GitCompareArrows size={13} />この銘柄を基準に比較
-          </button>
-        </div>
+        <span className="font-mono text-[9px] font-bold text-[var(--color-text-tertiary)]">基準日 {model?.asOf ?? analysisDate ?? '---'}</span>
       </header>
 
       {error && <div className="border-b border-red-200 bg-red-50 px-4 py-3 text-[10px] font-bold text-red-800">{error}</div>}
       {!model && loading && (
         <div className="flex min-h-32 items-center justify-center gap-2 text-[11px] font-bold text-[var(--color-text-tertiary)]">
-          <LoaderCircle size={15} className="animate-spin" />候補と比較指標を準備中
+          <LoaderCircle size={15} className="animate-spin" />読み込み中…
         </div>
       )}
 
       {model && (
         <>
+          <section className="border-b border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-3 py-3 sm:px-4" aria-labelledby="similarity-summary-title">
+            <h3 id="similarity-summary-title" className="mb-2 text-[11px] font-black text-[var(--color-text-primary)]">
+              要約 <span className="font-semibold text-[var(--color-text-tertiary)]">業種分布(P25・中央値・P75)に対する対象の位置 ・ 比較できた指標 {positionSummary.total}</span>
+            </h3>
+            <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+              <SummaryList title="業種内で高い側(P75超)" tone="var(--color-brand-700)" rows={positionSummary.high} empty="P75を超える指標はありません" />
+              <SummaryList title="業種内で低い側(P25未満)" tone="var(--color-text-secondary)" rows={positionSummary.low} empty="P25を下回る指標はありません" />
+              <SummaryList title="業種並み(中央値に近い順)" tone="var(--color-border-default)" rows={positionSummary.typical} empty="P25–P75内の指標はありません" />
+              <div className="min-w-0 border-t-2 border-[var(--color-market-red)] bg-white px-2.5 py-2">
+                <div className="text-[10px] font-black text-[var(--color-text-secondary)]">近い銘柄 <span className="font-semibold text-[var(--color-text-tertiary)]">{closestGroup?.label ?? ''}</span></div>
+                {closestPeers.length === 0 ? (
+                  <div className="mt-1 text-[10px] font-semibold text-[var(--color-text-tertiary)]">候補はありません</div>
+                ) : (
+                  <ol className="m-0 mt-1 grid gap-0.5 p-0">
+                    {closestPeers.map((candidate) => {
+                      const match = stageMatch(baseCompany?.stageCode, candidate.stageCode)
+                      return (
+                        <li key={candidate.ticker} className="grid grid-cols-[minmax(0,1fr)_auto] items-baseline gap-2 text-[10px] leading-4">
+                          <span className="min-w-0 truncate">
+                            <span className="font-mono font-black text-[var(--color-brand-800)]">{candidate.ticker}</span>
+                            <span className="ml-1 font-bold text-[var(--color-text-primary)]">{candidate.name ?? '名称未取得'}</span>
+                          </span>
+                          <span className="whitespace-nowrap font-mono text-[9px] font-bold text-[var(--color-text-secondary)]">
+                            {candidate.score == null ? '分類一致' : `類似 ${candidate.score.toFixed(1)}`}
+                            {match && <span className="ml-1 text-[var(--color-text-tertiary)]">Stage {match.same}/{match.total}</span>}
+                          </span>
+                        </li>
+                      )
+                    })}
+                  </ol>
+                )}
+              </div>
+            </div>
+          </section>
+
+          <section className="border-b border-[var(--color-border-default)] px-3 py-3 sm:px-4" aria-labelledby="peer-band-title">
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
+              <h3 id="peer-band-title" className="text-[11px] font-black text-[var(--color-text-primary)]">
+                指標ごとの位置 <span className="font-semibold text-[var(--color-text-tertiary)]">{model.sectorDistribution.groupName ?? '分類なし'}</span>
+              </h3>
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[9px] font-semibold text-[var(--color-text-tertiary)]" aria-label="凡例">
+                <span className="inline-flex items-center gap-1"><i className="inline-block h-3 w-[3px] bg-[var(--color-market-red)]" />対象 {baseCompany?.ticker ?? ticker.replace('.T', '')}</span>
+                <span className="inline-flex items-center gap-1"><i className="inline-block h-2.5 w-4 bg-[var(--color-brand-100)]" />P25–P75</span>
+                <span className="inline-flex items-center gap-1"><i className="inline-block h-3 w-px bg-[var(--color-brand-900)]" />中央値</span>
+                <span className="inline-flex items-center gap-1"><i className="inline-block h-2 w-2 rounded-full bg-[var(--color-text-tertiary)]" />比較銘柄</span>
+                <span className="inline-flex items-center gap-1">◀▶ 目盛り外</span>
+              </div>
+            </div>
+            {bandSections.length === 0 ? (
+              <div className="border border-dashed border-[var(--color-border-default)] px-3 py-4 text-center text-[10px] font-semibold text-[var(--color-text-tertiary)]">分布と比べられる指標がありません</div>
+            ) : (
+              <div className="grid gap-x-8 gap-y-3 lg:grid-cols-2">
+                {bandSections.map((section) => (
+                  <div key={section.label} className="min-w-0">
+                    <div className="mb-0.5 text-[9px] font-black text-[var(--color-brand-900)]">{section.label}</div>
+                    <div className="divide-y divide-[var(--color-border-soft)] border-y border-[var(--color-border-soft)]">
+                      {section.rows.map((row) => (
+                        <PeerPositionRow
+                          key={row.metric.key}
+                          label={row.metric.label}
+                          p25={row.p25}
+                          median={row.median}
+                          p75={row.p75}
+                          target={row.target}
+                          peers={row.peers}
+                          medianText={fmtNumber(row.median, row.metric.format, true)}
+                          summary={`対象${row.target.text}(${PEER_ZONE_LABELS[row.zone]})、P25 ${fmtNumber(row.p25, row.metric.format)}、中央値 ${fmtNumber(row.median, row.metric.format)}、P75 ${fmtNumber(row.p75, row.metric.format)}`}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+
           <div className="border-b border-[var(--color-border-default)] px-3 py-3 sm:px-4">
+            <div className="mb-2 text-[11px] font-black text-[var(--color-text-primary)]">比較銘柄を選ぶ</div>
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto" role="tablist" aria-label="類似候補の種類">
                 {CANDIDATE_KINDS.map((item) => {
@@ -327,19 +537,27 @@ export function SimilarityComparisonDetail({ ticker, analysisDate = null }: Simi
                   candidate={candidate}
                   selected={selectedSet.has(candidate.ticker)}
                   disabled={selected.length >= 8}
+                  baseStageCode={baseCompany?.stageCode ?? null}
                   onToggle={() => toggleCandidate(candidate)}
                 />
               ))}
-              {activeGroup?.candidates.length === 0 && <div className="py-3 text-[10px] font-semibold text-[var(--color-text-tertiary)]">この基準日で表示できる候補はありません。</div>}
+              {activeGroup?.candidates.length === 0 && <div className="py-3 text-[10px] font-semibold text-[var(--color-text-tertiary)]">この基準日に該当する候補はありません</div>}
             </div>
           </div>
 
           <div className="border-b border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-3 py-2 sm:px-4">
             <div className="flex items-center gap-1.5 overflow-x-auto">
+              <span className="shrink-0 text-[9px] font-black text-[var(--color-text-tertiary)]">比較中</span>
               {model.companies.map((company) => (
-                <span key={company.ticker} className={`inline-flex h-7 shrink-0 items-center gap-1 border px-2 text-[9px] font-bold ${company.isBase ? 'border-[var(--color-brand-700)] bg-white text-[var(--color-brand-900)]' : 'border-[var(--color-border-default)] bg-white text-[var(--color-text-secondary)]'}`}>
+                <span key={company.ticker} className={`inline-flex h-7 shrink-0 items-center gap-1 border px-2 text-[9px] font-bold ${company.isBase ? 'border-[var(--color-market-red)] bg-white text-[var(--color-text-primary)]' : 'border-[var(--color-border-default)] bg-white text-[var(--color-text-secondary)]'}`}>
+                  {company.isBase && <span className="bg-[var(--color-market-red)] px-1 text-[8px] font-black text-white">対象</span>}
                   <span className="font-mono font-black">{company.ticker}</span>
                   <span className="max-w-24 truncate">{company.name}</span>
+                  {!company.isBase && stageMatchByTicker.has(company.ticker) && (
+                    <span className="font-mono text-[8px] text-[var(--color-text-tertiary)]" title="対象と6ステージが一致した軸数">
+                      Stage {stageMatchByTicker.get(company.ticker)?.same}/{stageMatchByTicker.get(company.ticker)?.total}
+                    </span>
+                  )}
                   {!company.isBase && (
                     <button type="button" onClick={() => setSelected((current) => current.filter((code) => code !== company.ticker))} title="比較から外す" aria-label={`${company.ticker}を比較から外す`}>
                       <X size={11} />
@@ -348,19 +566,26 @@ export function SimilarityComparisonDetail({ ticker, analysisDate = null }: Simi
                 </span>
               ))}
               <button type="button" onClick={() => setSelected(model.recommendations)} className="inline-flex h-7 shrink-0 items-center gap-1 px-2 text-[9px] font-bold text-[var(--color-text-tertiary)] hover:bg-white">
-                <RotateCcw size={11} />推奨へ戻す
+                <RotateCcw size={11} />初期選択に戻す
               </button>
               {loading && <LoaderCircle size={13} className="ml-1 animate-spin text-[var(--color-brand-700)]" />}
             </div>
           </div>
 
-          <div className="overflow-x-auto" aria-label="銘柄比較表">
+          <details className="group border-b border-[var(--color-border-default)]">
+            <summary className="flex min-h-11 cursor-pointer list-none items-center gap-2 px-3 text-[11px] font-black text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-subtle)] focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--color-brand-700)] sm:px-4 [&::-webkit-details-marker]:hidden">
+              <ChevronRight size={13} className="transition-transform group-open:rotate-90" aria-hidden="true" />
+              数値表(全指標・全銘柄)
+              <span className="ml-auto font-mono text-[9px] font-semibold text-[var(--color-text-tertiary)]">{model.companies.length}社</span>
+            </summary>
+          <div className="overflow-x-auto border-t border-[var(--color-border-soft)]" aria-label="銘柄比較表">
             <table className="min-w-max border-collapse text-[10px]">
               <thead className="sticky top-0 z-10 bg-white">
                 <tr>
                   <th className="sticky left-0 z-20 min-w-32 border-b border-r border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-3 py-2 text-left text-[9px] font-black text-[var(--color-text-secondary)]">比較指標</th>
                   {model.companies.map((company) => (
-                    <th key={company.ticker} className={`min-w-36 border-b border-r border-[var(--color-border-default)] px-3 py-2 text-center ${company.isBase ? 'bg-[var(--color-brand-50)]' : 'bg-white'}`}>
+                    <th key={company.ticker} className={`min-w-36 border-b border-r border-[var(--color-border-default)] px-3 py-2 text-center ${company.isBase ? 'border-t-[3px] border-t-[var(--color-market-red)] bg-[var(--color-brand-50)]' : 'bg-white'}`}>
+                      {company.isBase && <span className="mb-0.5 inline-block bg-[var(--color-market-red)] px-1 text-[8px] font-black text-white">対象</span>}
                       <Link href={`/stock/${company.ticker}${analysisDate ? `?date=${encodeURIComponent(analysisDate)}` : ''}#ml`} className="font-mono text-[11px] font-black text-[var(--color-brand-800)] hover:underline">
                         {company.ticker} <ChevronRight size={10} className="inline" />
                       </Link>
@@ -399,8 +624,9 @@ export function SimilarityComparisonDetail({ ticker, analysisDate = null }: Simi
               </tbody>
             </table>
           </div>
+          </details>
 
-          <div className="grid border-t border-[var(--color-border-default)] lg:grid-cols-[minmax(0,1fr)_230px]">
+          <div className="grid">
             <div className="min-w-0 px-3 py-3 sm:px-4">
               <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
@@ -409,7 +635,7 @@ export function SimilarityComparisonDetail({ ticker, analysisDate = null }: Simi
                 </div>
                 <div className="flex max-w-full gap-1 overflow-x-auto" role="tablist" aria-label="散布図指標">
                   {SCATTER_OPTIONS.map((option) => (
-                    <button key={option.id} type="button" onClick={() => setScatterId(option.id)} className={`h-7 shrink-0 border px-2 text-[9px] font-bold ${scatterId === option.id ? 'border-[var(--color-brand-700)] bg-[var(--color-brand-700)] text-white' : 'border-[var(--color-border-default)] bg-white text-[var(--color-text-secondary)]'}`}>
+                    <button key={option.id} type="button" onClick={() => setScatterId(option.id)} role="tab" aria-selected={scatterId === option.id} className={`h-7 shrink-0 border px-2 text-[9px] font-bold ${scatterId === option.id ? 'border-[var(--color-brand-700)] bg-[var(--color-brand-700)] text-white' : 'border-[var(--color-border-default)] bg-white text-[var(--color-text-secondary)]'}`}>
                       {option.label}
                     </button>
                   ))}
@@ -424,7 +650,7 @@ export function SimilarityComparisonDetail({ ticker, analysisDate = null }: Simi
                       <YAxis type="number" dataKey="y" name={scatterOption.yLabel} tick={{ fontSize: 9 }} tickFormatter={(value) => fmtNumber(Number(value), scatterOption.yFormat, true)} width={52} />
                       <Tooltip cursor={{ strokeDasharray: '3 3' }} formatter={(value, name) => fmtNumber(Number(value), name === 'x' ? scatterOption.xFormat : scatterOption.yFormat, true)} labelFormatter={(_, payload) => payload?.[0]?.payload?.name ?? ''} />
                       <Scatter data={scatterData}>
-                        {scatterData.map((point) => <Cell key={point.ticker} fill={point.isBase ? 'var(--color-market-red)' : 'var(--color-brand-600)'} stroke="white" strokeWidth={1.5} />)}
+                        {scatterData.map((point) => <Cell key={point.ticker} fill={point.isBase ? 'var(--color-market-red)' : 'var(--color-text-tertiary)'} stroke={point.isBase ? 'var(--color-market-red)' : 'white'} strokeWidth={point.isBase ? 4 : 1.5} />)}
                         <LabelList dataKey="ticker" position="top" fontSize={9} fontWeight={800} fill="var(--color-text-secondary)" />
                       </Scatter>
                     </ScatterChart>
@@ -434,18 +660,17 @@ export function SimilarityComparisonDetail({ ticker, analysisDate = null }: Simi
                 )}
               </div>
             </div>
-            <aside className="border-t border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-4 py-3 lg:border-l lg:border-t-0">
-              <h3 className="text-[10px] font-black text-[var(--color-text-primary)]">比較条件</h3>
-              <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 text-[9px]">
-                <dt className="font-semibold text-[var(--color-text-tertiary)]">基準日</dt><dd className="font-mono font-bold text-[var(--color-text-secondary)]">{model.asOf}</dd>
-                <dt className="font-semibold text-[var(--color-text-tertiary)]">Valuation</dt><dd className="font-mono font-bold text-[var(--color-text-secondary)]">{model.valuationDate ?? '—'}</dd>
-                <dt className="font-semibold text-[var(--color-text-tertiary)]">構造</dt><dd className="font-mono font-bold text-[var(--color-text-secondary)]">{model.structureDate ?? '—'}</dd>
-                <dt className="font-semibold text-[var(--color-text-tertiary)]">財務候補</dt><dd className="font-mono font-bold text-[var(--color-text-secondary)]">{model.coverage.financialFeatureUniverse.toLocaleString()}社</dd>
-                <dt className="font-semibold text-[var(--color-text-tertiary)]">同業母数</dt><dd className="font-mono font-bold text-[var(--color-text-secondary)]">{model.coverage.sectorPeers}社</dd>
-              </dl>
-              <p className="mt-3 flex gap-1.5 text-[8px] font-semibold leading-4 text-[var(--color-text-tertiary)]"><Info size={11} className="mt-0.5 shrink-0" />財務類似は共有できた指標だけで計算し、欠損を0に置き換えません。「比較%」は使えた重みの割合です。</p>
-            </aside>
           </div>
+          <footer
+            className="flex flex-wrap gap-x-4 gap-y-0.5 border-t border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-3 py-1.5 font-mono text-[9px] font-semibold text-[var(--color-text-tertiary)] sm:px-4"
+            title="財務類似は共有できた指標だけで計算し、欠損を0に置き換えません"
+          >
+            <span>基準日 {model.asOf}</span>
+            <span>評価 {model.valuationDate ?? '—'}</span>
+            <span>構造 {model.structureDate ?? '—'}</span>
+            <span>財務候補 {model.coverage.financialFeatureUniverse.toLocaleString()}社</span>
+            <span>同業母数 {model.coverage.sectorPeers}社</span>
+          </footer>
         </>
       )}
     </section>
