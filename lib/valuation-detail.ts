@@ -1,4 +1,5 @@
 import type { MetricDefinition, FinancialMetricKey } from '@/lib/financial-metrics'
+import type { MedianComparison } from '@/lib/valuation-comparison'
 
 export const VALUATION_HISTORY_METRICS = [
   'forward_per',
@@ -73,6 +74,7 @@ export interface ValuationRangeStatistics {
   displayMaximum: number | null
   percentile: number | null
   versusMedianPercent: number | null
+  medianComparison: MedianComparison
 }
 
 export interface ValuationMetricHistory {
@@ -96,6 +98,7 @@ export interface ValuationPeerMetricComparison {
   percentile75: number | null
   targetPercentile: number | null
   versusMedianPercent: number | null
+  medianComparison: MedianComparison
   validCount: number
   peerCount: number
   coveragePercent: number

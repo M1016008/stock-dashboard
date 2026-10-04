@@ -57,6 +57,7 @@ export interface ScenarioScoreBreakdown {
   value: number
   max: number
   detail: string
+  availability: 'available' | 'unavailable'
 }
 
 export interface ProjectionResponse {
@@ -328,6 +329,7 @@ function scoreBreakdown(input: {
       value: round(scoreFromStatus(status, direction), 1) ?? 0,
       max: 18,
       detail: `${status} / ${direction === 'up' ? '上昇' : direction === 'down' ? '下落' : '横ばい'}方向との整合`,
+      availability: 'available',
     },
     {
       key: 'physical_momentum',
@@ -335,6 +337,7 @@ function scoreBreakdown(input: {
       value: round(scoreFromMomentum(momentum, direction), 1) ?? 0,
       max: 18,
       detail: `PMS ${fmtSigned(momentum?.physicalMomentumScore, 2)} / PFS ${fmtSigned(momentum?.physicalForceScore, 2)} / PES ${fmtSigned(momentum?.physicalEnergyScore, 2)}`,
+      availability: momentum ? 'available' : 'unavailable',
     },
     {
       key: 'ma_structure',
@@ -342,6 +345,7 @@ function scoreBreakdown(input: {
       value: round(scoreFromMaStructure(stats, metrics, basePrice, direction), 1) ?? 0,
       max: 14,
       detail: `5MA角度 ${fmtSigned(metrics?.sma5Velocity5)} / 25MA角度 ${fmtSigned(metrics?.sma25Velocity5)} / 価格25MA乖離 ${fmtSigned(metrics?.priceToSma25)}%`,
+      availability: metrics ? 'available' : 'unavailable',
     },
     {
       key: 'ml_candidate',
@@ -349,6 +353,7 @@ function scoreBreakdown(input: {
       value: round(scoreFromCandidates(candidates, direction), 1) ?? 0,
       max: 18,
       detail: candidateEvidence(candidates, direction) ?? '物理ML上位候補には未掲載',
+      availability: 'available',
     },
     {
       key: 'historical_validation',
@@ -358,6 +363,7 @@ function scoreBreakdown(input: {
       detail: finite(calibration?.hitRate) && finite(calibration?.baseRate)
         ? `的中${Math.round((calibration.hitRate ?? 0) * 100)}% / base ${Math.round((calibration.baseRate ?? 0) * 100)}% / lift ${fmtSigned(calibration.lift, 2)}`
         : '該当ステータスの検証値なし',
+      availability: calibration ? 'available' : 'unavailable',
     },
   ]
 }
@@ -756,6 +762,7 @@ function buildScenarios(input: {
         value: round(boundedAdjustment, 1) ?? boundedAdjustment,
         max: 14,
         detail: adjustmentDetail || '支持線・抵抗線・収縮/拡散の位置関係',
+        availability: 'available',
       })
     }
     return {

@@ -14,6 +14,7 @@ import type {
   SimilarityCandidateGroup,
   SimilarityComparisonReadModel,
 } from '@/lib/similarity-comparison'
+import { quantile, validValuationPeerValue } from '@/lib/valuation-comparison'
 
 const CACHE_TTL_MS = 60_000
 const MAX_SELECTED = 8
@@ -34,6 +35,15 @@ type ProfileFeatureRow = {
   forwardPer: number | null
   pbr: number | null
   psr: number | null
+  fcfYield: number | null
+  evEbitda: number | null
+  roe: number | null
+  revenueGrowth: number | null
+}
+
+type PeerDistributionRow = {
+  forwardPer: number | null
+  pbr: number | null
   fcfYield: number | null
   evEbitda: number | null
   roe: number | null
@@ -101,17 +111,6 @@ function positive(value: unknown): number | null {
 
 function isFinancialProfile(row: ProfileFeatureRow): boolean {
   return FINANCIAL_PATTERN.test(`${row.sector33Name ?? ''} ${row.custom60Name ?? ''}`)
-}
-
-function quantile(values: number[], ratio: number): number | null {
-  const sorted = values.filter(Number.isFinite).sort((a, b) => a - b)
-  if (sorted.length === 0) return null
-  if (sorted.length === 1) return sorted[0]
-  const position = (sorted.length - 1) * ratio
-  const lower = Math.floor(position)
-  const upper = Math.ceil(position)
-  if (lower === upper) return sorted[lower]
-  return sorted[lower] + (sorted[upper] - sorted[lower]) * (position - lower)
 }
 
 function round(value: number | null, digits = 2): number | null {
@@ -263,9 +262,9 @@ function distribution(metric: ComparisonMetricKey, values: Array<number | null>,
     metric,
     validCount: valid.length,
     peerCount,
-    percentile25: round(quantile(valid, 0.25)),
-    median: round(quantile(valid, 0.5)),
-    percentile75: round(quantile(valid, 0.75)),
+    percentile25: quantile(valid, 0.25),
+    median: quantile(valid, 0.5),
+    percentile75: quantile(valid, 0.75),
   }
 }
 
@@ -481,13 +480,33 @@ async function buildModel(
   })
 
   const sectorPeers = profiles.filter((row) => base.sector33Name && row.sector33Name === base.sector33Name)
+  const peerDistributionRows = base.sector33Name ? await execAll<PeerDistributionRow>(`
+    SELECT
+      serving.peer_forward_per AS forwardPer,
+      serving.peer_pbr AS pbr,
+      serving.peer_fcf_yield AS fcfYield,
+      serving.peer_ev_ebitda AS evEbitda,
+      serving.peer_roe AS roe,
+      serving.peer_revenue_growth AS revenueGrowth
+    FROM ticker_universe universe
+    INNER JOIN valuation_daily_serving serving
+      ON serving.ticker = universe.ticker
+     AND serving.valuation_date = (
+       SELECT latest.valuation_date
+       FROM valuation_daily_serving latest
+       WHERE latest.ticker = universe.ticker AND latest.valuation_date <= ?
+       ORDER BY latest.valuation_date DESC
+       LIMIT 1
+     )
+    WHERE universe.active = 1 AND universe.sector33_name = ?
+  `, [asOf, base.sector33Name]) : []
   const distributions: Partial<Record<ComparisonMetricKey, ComparisonDistribution>> = {
-    revenueGrowth: distribution('revenueGrowth', sectorPeers.map((row) => numeric(row.revenueGrowth)), sectorPeers.length),
-    roe: distribution('roe', sectorPeers.map((row) => numeric(row.roe)), sectorPeers.length),
-    forwardPer: distribution('forwardPer', sectorPeers.map((row) => positive(row.forwardPer)), sectorPeers.length),
-    pbr: distribution('pbr', sectorPeers.map((row) => positive(row.pbr)), sectorPeers.length),
-    fcfYield: distribution('fcfYield', sectorPeers.map((row) => numeric(row.fcfYield)), sectorPeers.length),
-    evEbitda: distribution('evEbitda', sectorPeers.map((row) => positive(row.evEbitda)), sectorPeers.length),
+    revenueGrowth: distribution('revenueGrowth', peerDistributionRows.map((row) => validValuationPeerValue('revenueGrowth', row.revenueGrowth) ? row.revenueGrowth : null), sectorPeers.length),
+    roe: distribution('roe', peerDistributionRows.map((row) => validValuationPeerValue('roe', row.roe) ? row.roe : null), sectorPeers.length),
+    forwardPer: distribution('forwardPer', peerDistributionRows.map((row) => validValuationPeerValue('forwardPer', row.forwardPer) ? row.forwardPer : null), sectorPeers.length),
+    pbr: distribution('pbr', peerDistributionRows.map((row) => validValuationPeerValue('pbr', row.pbr) ? row.pbr : null), sectorPeers.length),
+    fcfYield: distribution('fcfYield', peerDistributionRows.map((row) => validValuationPeerValue('fcfYield', row.fcfYield) ? row.fcfYield : null), sectorPeers.length),
+    evEbitda: distribution('evEbitda', peerDistributionRows.map((row) => validValuationPeerValue('evEbitda', row.evEbitda) ? row.evEbitda : null), sectorPeers.length),
   }
 
   return {
@@ -507,15 +526,17 @@ async function buildModel(
     selectedTickers,
     companies,
     sectorDistribution: {
-      label: 'J-Quants 33業種',
+      label: 'J-Quants 33業種（PIT）',
       groupName: base.sector33Name,
       metrics: distributions,
+      definition: '基準日以前の最新PIT peer値を用いた33業種分布',
     },
     coverage: {
       activeUniverse: profiles.length,
       financialFeatureUniverse: financialRanked.filter(({ similarity }) => similarity != null).length + 1,
       sectorPeers: sectorPeers.length,
       selectedCompanies: companies.length,
+      baseFinancialMetricCoveragePercent: 100 * FINANCIAL_FEATURES.filter((feature) => feature.value(base) != null).length / FINANCIAL_FEATURES.length,
     },
   }
 }

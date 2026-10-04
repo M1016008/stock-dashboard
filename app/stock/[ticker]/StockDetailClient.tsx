@@ -1768,24 +1768,24 @@ function PhysicalStateSummary({
   const delta20 = last != null && before20 != null ? last - before20 : null
   const rows: Array<{ label: string; body: ReactNode }> = [
     {
-      label: '根拠',
+      label: '主要指標',
       body: (
-        <>
-          PMS <b className="font-mono" style={{ color: scoreTone(scoreRow?.physicalMomentumScore) }}>{formatDelta(scoreRow?.physicalMomentumScore)}</b>
-          <span className="text-[var(--color-text-tertiary)]">{rank && total ? `(${rank.toLocaleString('ja-JP')}/${total.toLocaleString('ja-JP')}位)` : ''}</span>
-          {' ・ '}PFS <b className="font-mono" style={{ color: scoreTone(scoreRow?.physicalForceScore) }}>{formatDelta(scoreRow?.physicalForceScore)}</b>
-          {' ・ '}PES <b className="font-mono">{formatDelta(scoreRow?.physicalEnergyScore)}</b>
-          {' ・ '}20日騰落率 <b className="font-mono">{velocityText}</b>
-          {' ・ '}MA <b style={{ color: field?.color }}>{field?.label ?? '—'}</b>
-        </>
+        <span className="grid gap-x-4 gap-y-1 sm:grid-cols-3">
+          <span><span className="text-[var(--color-text-tertiary)]">20日構造 PMS</span> <b className="font-mono" style={{ color: scoreTone(scoreRow?.physicalMomentumScore) }}>{formatDelta(scoreRow?.physicalMomentumScore)}</b></span>
+          <span><span className="text-[var(--color-text-tertiary)]">足元 PFS</span> <b className="font-mono" style={{ color: scoreTone(scoreRow?.physicalForceScore) }}>{formatDelta(scoreRow?.physicalForceScore)}</b></span>
+          <span><span className="text-[var(--color-text-tertiary)]">熱量 PES</span> <b className="font-mono">{formatDelta(scoreRow?.physicalEnergyScore)}</b></span>
+        </span>
       ),
     },
     {
-      label: '変化',
+      label: '詳細',
       body: (
         <>
           PMS {trendArrow(trend)} <b>{trendText(trend)}</b>
+          <span className="text-[var(--color-text-tertiary)]">{rank && total ? ` ・ 市場内 ${rank.toLocaleString('ja-JP')}/${total.toLocaleString('ja-JP')}位` : ''}</span>
           {delta20 != null && <> ・ 20日変化 <b className="font-mono" style={{ color: scoreTone(delta20) }}>{formatDelta(delta20)}</b></>}
+          {' ・ '}20日騰落率 <b className="font-mono">{velocityText}</b>
+          {' ・ '}MA <b style={{ color: field?.color }}>{field?.label ?? '—'}</b>
           {field?.spreadChangeDeg != null && (
             <> ・ MA角度幅 <b className="font-mono">{field.spreadDeg?.toFixed(1)}°</b> 前回比 <b className="font-mono">{fmtDeg(field.spreadChangeDeg)}</b>({field.spreadChangeDeg > 0 ? '拡大' : field.spreadChangeDeg < 0 ? '縮小' : '不変'})</>
           )}
@@ -1795,13 +1795,14 @@ function PhysicalStateSummary({
   ]
   return (
     <section
-      className="mb-2.5 grid gap-x-5 gap-y-2 border border-[var(--color-border-default)] bg-white px-3 py-2.5 md:grid-cols-[minmax(170px,.7fr)_minmax(0,2fr)]"
+      className="mb-2.5 grid gap-x-5 gap-y-2 border border-[var(--color-border-default)] bg-white px-3 py-2.5 md:grid-cols-[minmax(220px,.85fr)_minmax(0,2fr)]"
       style={{ borderLeft: `3px solid ${color}` }}
       aria-label="日足の運動状態"
     >
       <div className="min-w-0">
         <div className="text-[10px] font-black text-[var(--color-text-tertiary)]">現在の状態(日足・20営業日)</div>
         <strong className="mt-0.5 block text-[18px] font-black leading-tight" style={{ color }}>{view.label}</strong>
+        <p className="m-0 mt-1 text-[10px] font-semibold leading-4 text-[var(--color-text-secondary)]">{view.summary}</p>
       </div>
       <dl className="m-0 grid min-w-0 gap-1">
         {rows.map((row) => (
@@ -4412,7 +4413,7 @@ function buildShortTermEvidence(
     ? null
     : `${shortTermSideReading('短期', shortSide)}。${shortTermSideReading('中期', mediumSide)}。`
 
-  return { sides: [shortSide, mediumSide], agreement, reading, conditions: conditions.slice(0, 4) }
+  return { sides: [shortSide, mediumSide], agreement, reading, conditions: conditions.slice(0, 3) }
 }
 
 /** 根拠の向きを「何が支え、何が逆向き・中立か」の一文にまとめる(各項目の向き判定をそのまま使う) */

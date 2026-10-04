@@ -45,6 +45,7 @@ import {
   type ValuationRangeStatistics,
   type ValuationValue,
 } from '@/lib/valuation-detail'
+import { compareWithMedian, quantile, validValuationPeerValue } from '@/lib/valuation-comparison'
 
 type PriceRow = { ticker: string; date: string; close: number }
 type ProfileRow = {
@@ -248,16 +249,6 @@ function valuationValue(
   return unavailableValue(metric, 'missing', `${definition.displayName}の必要入力が指定日時点で揃っていません。`)
 }
 
-function quantile(values: number[], probability: number): number | null {
-  if (values.length === 0) return null
-  const sorted = [...values].sort((a, b) => a - b)
-  const position = (sorted.length - 1) * probability
-  const lower = Math.floor(position)
-  const upper = Math.ceil(position)
-  if (lower === upper) return sorted[lower]
-  return sorted[lower] + (sorted[upper] - sorted[lower]) * (position - lower)
-}
-
 function percentileOf(values: number[], target: number | null): number | null {
   if (target == null || values.length === 0) return null
   return 100 * values.filter((value) => {
@@ -276,6 +267,8 @@ function rangeStatistics(
   const values = points.filter((point) => point.date >= start && point.date <= endDate).map((point) => point.value)
   const observations = points.filter((point) => point.date >= start && point.date <= endDate)
   const median = quantile(values, 0.5)
+  const unit = points[0]?.metric === 'fcf_yield' ? 'PERCENT' : 'MULTIPLE'
+  const medianComparison = compareWithMedian(current, median, unit)
   return {
     window,
     observationCount: values.length,
@@ -289,7 +282,8 @@ function rangeStatistics(
     displayMinimum: quantile(values, 0.05),
     displayMaximum: quantile(values, 0.95),
     percentile: percentileOf(values, current),
-    versusMedianPercent: current != null && median != null && median !== 0 ? ((current / median) - 1) * 100 : null,
+    versusMedianPercent: medianComparison.kind === 'ratio_percent' ? medianComparison.value : null,
+    medianComparison,
   }
 }
 
@@ -535,12 +529,6 @@ async function calculatePitPeerMetrics(
   return output
 }
 
-function validPeerValue(metric: ValuationPeerMetric, value: number | undefined): value is number {
-  if (value == null || !Number.isFinite(value)) return false
-  if (metric === 'fcf_yield' || metric === 'roe' || metric === 'revenue_growth') return true
-  return value > 0
-}
-
 function peerMetricComparison(
   metric: ValuationPeerMetric,
   profiles: ProfileRow[],
@@ -549,24 +537,27 @@ function peerMetricComparison(
 ): ValuationPeerMetricComparison {
   const values = profiles
     .map((profile) => peerMetrics.get(profile.ticker)?.get(metric))
-    .filter((value): value is number => validPeerValue(metric, value))
-  const targetValue = target.availability === 'available' && validPeerValue(metric, target.value ?? undefined)
+    .filter((value): value is number => validValuationPeerValue(metric, value))
+  const targetValue = target.availability === 'available' && validValuationPeerValue(metric, target.value)
     ? target.value
     : null
   const median = quantile(values, 0.5)
   const coveragePercent = profiles.length > 0 ? 100 * values.length / profiles.length : 0
   const sampleEnough = values.length >= 8 && coveragePercent >= 25
   const displayable = metric === 'ev_ebitda' ? sampleEnough : values.length >= 3
+  const unit = metric === 'fcf_yield' || metric === 'roe' || metric === 'revenue_growth' ? 'PERCENT' : 'MULTIPLE'
+  const medianComparison = compareWithMedian(targetValue, median, unit)
   return {
     metric,
     label: METRIC_DEFINITION_REGISTRY[metric].displayName,
-    unit: metric === 'fcf_yield' || metric === 'roe' || metric === 'revenue_growth' ? 'PERCENT' : 'MULTIPLE',
+    unit,
     target,
     median,
     percentile25: quantile(values, 0.25),
     percentile75: quantile(values, 0.75),
     targetPercentile: percentileOf(values, targetValue),
-    versusMedianPercent: targetValue != null && median != null && median !== 0 ? ((targetValue / median) - 1) * 100 : null,
+    versusMedianPercent: medianComparison.kind === 'ratio_percent' ? medianComparison.value : null,
+    medianComparison,
     validCount: values.length,
     peerCount: profiles.length,
     coveragePercent,
@@ -586,7 +577,7 @@ function peerGroup(
 ): ValuationPeerGroup {
   return {
     taxonomy,
-    label: taxonomy === 'sector33' ? 'J-Quants 33業種' : '独自60分類',
+    label: taxonomy === 'sector33' ? 'J-Quants 33業種（PIT）' : '独自60分類（PIT）',
     groupName,
     peerCount: profiles.length,
     metrics: Object.fromEntries(VALUATION_PEER_METRICS.map((metric) => [

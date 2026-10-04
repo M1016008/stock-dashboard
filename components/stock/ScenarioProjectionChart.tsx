@@ -54,6 +54,7 @@ interface ScenarioScoreBreakdown {
   value: number
   max: number
   detail: string
+  availability: 'available' | 'unavailable'
 }
 
 interface ProjectionResponse {
@@ -634,7 +635,7 @@ export function ScenarioProjectionChart({
           )}
           {scenarios.length > 1 && (
             <div className="grid gap-1.5" aria-label="その他のシナリオ">
-              {scenarios.slice(1).map((scenario) => (
+              {scenarios.slice(1, 3).map((scenario) => (
                 <CompactScenarioRow
                   key={scenario.id}
                   scenario={scenario}
@@ -644,6 +645,28 @@ export function ScenarioProjectionChart({
                   onSave={() => saveScenario(scenario)}
                 />
               ))}
+              {scenarios.length > 3 && (
+                <details className="border border-[var(--border-subtle)] bg-[var(--bg-elevated)]">
+                  <summary className="flex min-h-9 cursor-pointer items-center px-3 text-[10px] font-black text-[var(--text-secondary)]">
+                    その他のシナリオ {scenarios.length - 3}件
+                    {scenarios.slice(3).some((scenario) => scenario.scoreBreakdown.some((part) => part.availability === 'unavailable')) && (
+                      <span className="ml-2 font-semibold text-[var(--text-muted)]">判定不能の入力あり</span>
+                    )}
+                  </summary>
+                  <div className="grid gap-1.5 border-t border-[var(--border-subtle)] p-1.5">
+                    {scenarios.slice(3).map((scenario) => (
+                      <CompactScenarioRow
+                        key={scenario.id}
+                        scenario={scenario}
+                        market={market}
+                        saved={savedIds.has(scenario.id)}
+                        saving={savingId === scenario.id}
+                        onSave={() => saveScenario(scenario)}
+                      />
+                    ))}
+                  </div>
+                </details>
+              )}
             </div>
           )}
         </div>
@@ -705,6 +728,14 @@ function CalibrationStrip({ stats, calibrationDate }: { stats: ProjectionRespons
 }
 
 function ScoreRow({ part }: { part: ScenarioScoreBreakdown }) {
+  if (part.availability === 'unavailable') {
+    return (
+      <div className="grid min-h-7 grid-cols-[minmax(0,1fr)_auto] items-center gap-2" title={part.detail}>
+        <span className="truncate text-[10px] font-bold text-[var(--text-secondary)]">{part.label}</span>
+        <strong className="text-right text-[10px] font-black text-[var(--text-muted)]">判定不能</strong>
+      </div>
+    )
+  }
   const positive = part.value >= 0
   const ratio = Math.min(1, Math.abs(part.value) / Math.max(1, part.max))
   return (

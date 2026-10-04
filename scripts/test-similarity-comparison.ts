@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { getSimilarityComparisonReadModel } from '@/lib/server/similarity-comparison-read-model'
+import { getValuationDetailReadModel } from '@/lib/server/valuation-detail-read-model'
 
 const TICKERS = ['7203', '7003', '8306', '4755', '4502', '7974'] as const
 const FINANCIAL_PATTERN = /銀行|保険|証券|金融/
@@ -17,6 +18,8 @@ for (const ticker of TICKERS) {
   assert.deepEqual(model.companies.map((company) => company.ticker), model.selectedTickers)
   assert.equal(model.companies.filter((company) => company.isBase).length, 1)
   assert.ok(model.coverage.activeUniverse >= 4_500)
+  assert.ok(model.coverage.baseFinancialMetricCoveragePercent >= 0 && model.coverage.baseFinancialMetricCoveragePercent <= 100)
+  assert.equal(model.sectorDistribution.label, 'J-Quants 33業種（PIT）')
   assert.ok(model.asOf >= (model.valuationDate ?? '0000-00-00'))
   assert.ok(model.asOf >= (model.structureDate ?? '0000-00-00'))
   const stats = Object.values(model.sectorDistribution.metrics)
@@ -39,6 +42,26 @@ for (const ticker of TICKERS) {
     selected: model.selectedTickers,
     elapsedMs: Date.now() - startedAt,
   }))
+}
+
+for (const ticker of ['7203', '9501']) {
+  const [similarity, valuation] = await Promise.all([
+    getSimilarityComparisonReadModel(ticker),
+    getValuationDetailReadModel(ticker),
+  ])
+  const pairs = [
+    ['forwardPer', 'forward_per'],
+    ['pbr', 'pbr'],
+    ['fcfYield', 'fcf_yield'],
+    ['roe', 'roe'],
+    ['revenueGrowth', 'revenue_growth'],
+    ['evEbitda', 'ev_ebitda'],
+  ] as const
+  for (const [similarityKey, valuationKey] of pairs) {
+    const actual = similarity.sectorDistribution.metrics[similarityKey]?.median ?? null
+    const expected = valuation.peers.sector33.metrics[valuationKey].median
+    assert.equal(actual, expected, `${ticker}: ${similarityKey} must use the same PIT peer median in Fundamentals and Similarity`)
+  }
 }
 
 for (const asOf of ['2026-05-29', '2026-07-31']) {

@@ -24,6 +24,7 @@ import {
   type ValuationRangeStatistics,
   type ValuationValue,
 } from '@/lib/valuation-detail'
+import type { MedianComparison } from '@/lib/valuation-comparison'
 
 interface ValuationDetailProps {
   ticker: string
@@ -57,9 +58,9 @@ function metricNumber(value: number | null, unit: string | null): string {
 }
 
 function availabilityText(availability: ValuationAvailability): string {
-  if (availability === 'not_applicable') return 'N/A'
-  if (availability === 'not_meaningful') return 'N/M'
-  return '—'
+  if (availability === 'not_applicable') return '対象外'
+  if (availability === 'not_meaningful') return '算出不能'
+  return 'データなし'
 }
 
 function valueText(value: ValuationValue): string {
@@ -68,9 +69,25 @@ function valueText(value: ValuationValue): string {
     : availabilityText(value.availability)
 }
 
-function signedPercent(value: number | null): string {
-  if (value == null) return '—'
-  return `${value > 0 ? '+' : ''}${value.toFixed(1)}%`
+function comparisonLabel(comparison: MedianComparison): string {
+  if (comparison.kind === 'ratio_percent') return '中央値比'
+  if (comparison.kind === 'percentage_point') return '中央値差'
+  if (comparison.kind === 'absolute_difference') return '平均との差'
+  return '中央値比較'
+}
+
+function comparisonText(comparison: MedianComparison, unit: string | null): string {
+  if (comparison.value == null) return '—'
+  const sign = comparison.value > 0 ? '+' : ''
+  if (comparison.kind === 'ratio_percent') return `${sign}${comparison.value.toFixed(1)}%`
+  if (comparison.kind === 'percentage_point') return `${sign}${comparison.value.toFixed(2)}pt`
+  return `${sign}${metricNumber(comparison.value, unit)}`
+}
+
+function comparisonReason(comparison: MedianComparison): string | null {
+  return comparison.kind === 'percentage_point' || comparison.kind === 'absolute_difference'
+    ? '負値・0近傍・符号跨ぎを含むため差で表示'
+    : null
 }
 
 function RangeBar({ stats, unit }: { stats: ValuationRangeStatistics; unit: string }) {
@@ -171,7 +188,7 @@ export function ValuationDetail({ ticker, analysisDate }: ValuationDetailProps) 
 }
 
 function CurrentValuation({ model }: { model: ValuationDetailReadModel }) {
-  const visibleSecondary = model.current.secondary.filter((value) => value.availability !== 'missing')
+  const visibleSecondary = model.current.secondary
   return (
     <section className="overflow-hidden border-y border-[var(--color-border-soft)] bg-white" aria-labelledby="current-valuation-title">
       <SectionHeading icon={CircleGauge} id="current-valuation-title" title="現在の評価" subtitle="評価の断定ではなく、同じ基準日の事実を表示" />
@@ -198,9 +215,12 @@ function CurrentValuation({ model }: { model: ValuationDetailReadModel }) {
       {visibleSecondary.length > 0 && (
         <div className="flex flex-wrap gap-x-6 gap-y-2 border-t border-[var(--color-border-soft)] px-4 py-3 sm:px-5">
           {visibleSecondary.map((value) => (
-            <div key={value.metric} className="flex min-w-32 items-baseline justify-between gap-2 md:block">
+            <div key={value.metric} className="min-w-32" title={value.reason ?? undefined}>
+              <div className="flex items-baseline justify-between gap-2 md:block">
               <span className="text-[10px] font-semibold text-[var(--color-text-tertiary)]">{value.label}</span>
               <strong className="font-mono text-[12px] text-[var(--color-text-primary)]">{valueText(value)}</strong>
+              </div>
+              {value.availability !== 'available' && value.reason && <div className="mt-0.5 max-w-48 text-[8px] font-medium leading-3 text-[var(--color-text-tertiary)]">{value.reason}</div>}
             </div>
           ))}
         </div>
@@ -304,12 +324,15 @@ function HistoricalRange({
           </div>
           <RangeBar stats={stats} unit={selected.unit} />
           <div className="grid grid-cols-2 gap-x-4 gap-y-2">
-            <CompactStat label="中央値比" value={signedPercent(stats.versusMedianPercent)} />
+            <CompactStat label={comparisonLabel(stats.medianComparison)} value={comparisonText(stats.medianComparison, selected.unit)} />
             <CompactStat label="実際の最小値" value={metricNumber(stats.minimum, selected.unit)} />
             <CompactStat label="実際の最大値" value={metricNumber(stats.maximum, selected.unit)} />
           </div>
+          <div className="flex flex-wrap items-center gap-1.5 text-[10px] font-bold text-[var(--color-text-secondary)]">
+            <span className="border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-2 py-1 font-mono">観測 n={stats.observationCount.toLocaleString()}</span>
+            {!stats.fullWindow && <span className="border border-amber-300 bg-amber-50 px-2 py-1 text-amber-800">観測期間が限定的</span>}
+          </div>
           <p className="text-[10px] font-medium leading-relaxed text-[var(--color-text-tertiary)]">
-            {stats.observationCount.toLocaleString()}営業日
             {stats.observationStartDate ? ` / ${stats.observationStartDate}〜${stats.observationEndDate}` : ''}
             {!stats.fullWindow ? ` / ${HISTORY_WINDOWS.find((item) => item.value === window)?.label}未満` : ''}
           </p>
@@ -364,7 +387,7 @@ function PeerComparison({
               <th className="border-b border-[var(--color-border-default)] px-3 py-2 text-right">中央値</th>
               <th className="border-b border-[var(--color-border-default)] px-3 py-2 text-right">75 percentile</th>
               <th className="border-b border-[var(--color-border-default)] px-3 py-2 text-right">業種内位置</th>
-              <th className="border-b border-[var(--color-border-default)] px-3 py-2 text-right">中央値比</th>
+              <th className="border-b border-[var(--color-border-default)] px-3 py-2 text-right">中央値との比較</th>
               <th className="border-b border-[var(--color-border-default)] px-3 py-2 text-right">有効母数</th>
             </tr>
           </thead>
@@ -377,7 +400,10 @@ function PeerComparison({
                 <td className="px-3 py-2 text-right font-mono font-black">{metricNumber(row.median, row.unit)}</td>
                 <td className="px-3 py-2 text-right font-mono">{metricNumber(row.percentile75, row.unit)}</td>
                 <td className="px-3 py-2 text-right font-mono">{row.targetPercentile == null ? '—' : `${row.targetPercentile.toFixed(0)}%`}</td>
-                <td className="px-3 py-2 text-right font-mono">{signedPercent(row.versusMedianPercent)}</td>
+                <td className="px-3 py-2 text-right font-mono" title={comparisonReason(row.medianComparison) ?? undefined}>
+                  <span className="block text-[8px] font-semibold text-[var(--color-text-tertiary)]">{comparisonLabel(row.medianComparison)}</span>
+                  {comparisonText(row.medianComparison, row.unit)}
+                </td>
                 <td className="px-3 py-2 text-right font-mono">{row.validCount}/{row.peerCount}</td>
               </tr>
             ))}
@@ -389,6 +415,10 @@ function PeerComparison({
           EV/EBITDAは有効値8銘柄以上かつカバレッジ25%以上の場合だけ比較表へ表示します。
         </p>
       )}
+      <p className="border-t border-[var(--color-border-soft)] px-4 py-2 text-[9px] font-medium text-[var(--color-text-tertiary)]">
+        対象外 = 指標の適用対象外 / 算出不能 = 入力はあるが倍率等を意味ある値にできない / データなし = 必要入力を確認できない。
+        負値・0近傍・符号跨ぎは比率ではなく差で表示します。
+      </p>
     </section>
   )
 }
