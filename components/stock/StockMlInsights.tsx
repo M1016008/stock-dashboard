@@ -439,7 +439,7 @@ function buildMlReading(rows: SimilarInsight[], analysis: PhysicsAnalysis | null
     direction === 'up' && ['上昇加速', '上昇継続', '押し目形成', '反発準備'].includes(analysis.physicsStatus) ? '物理ステータスとも整合' :
     direction === 'down' && ['失速警戒', '下落加速', '過熱注意'].includes(analysis.physicsStatus) ? '物理ステータスとも整合' :
     direction === 'mixed' ? '物理ステータスで最終確認' :
-    direction === 'neutral' ? '方向ラベル未付与' :
+    direction === 'neutral' ? '方向は未確定' :
     '物理ステータスと差分あり'
   return {
     ...tone,
@@ -648,7 +648,7 @@ export function StockMlInsights({
     const noModel = data.availabilityReason === 'no_model_as_of'
     return (
       <div className="card" style={{ padding: 12 }}>
-        <div className="section-header" style={{ marginBottom: 8 }}>ML類似候補</div>
+        <div className="section-header" style={{ marginBottom: 8 }}>③ 値動きの近い銘柄</div>
         <div className="border border-amber-200 bg-amber-50 px-3 py-3 text-[12px] font-bold text-amber-900">
           {noModel ? '当時利用可能なモデルなし' : '当時利用可能なML結果を確認できません。'}
           <div className="mt-1 text-[10px] font-semibold text-amber-800">
@@ -679,13 +679,13 @@ export function StockMlInsights({
 
   return (
     <div className="card" style={{ padding: 12 }}>
-      <div className="section-header" style={{ marginBottom: 8 }}>
-        ML類似候補
+      <div className="section-header" style={{ marginBottom: 4 }}>
+        ③ 値動きの近い銘柄
       </div>
       <p style={{ margin: '0 0 10px', fontSize: 12, fontWeight: 600, color: 'var(--text-muted)', lineHeight: 1.6 }}>
-        {analysisDate ? `${analysisDate}以前のデータ上で` : '最新データ上で'}、6桁ステージと5/25/75/200日MAの角度・距離感が近い銘柄です。
-        90%以上は強い類似、80〜90%は参考類似、80%未満は「低確信の近似」として慎重に表示します。
-        {data?.featureAsOfDate ? ` ML特徴量基準日: ${data.featureAsOfDate}` : data?.asOfDate ? ` 基準日: ${data.asOfDate}` : ''}
+        {analysisDate ? `${analysisDate}以前のデータで` : '最新データで'}、6桁ステージと5/25/75/200日MAの角度・距離が近い順。
+        類似度は90%以上=強い類似、80〜90%=参考、80%未満=低確信。
+        {data?.featureAsOfDate ? ` 特徴量基準日 ${data.featureAsOfDate}` : data?.asOfDate ? ` 基準日 ${data.asOfDate}` : ''}
       </p>
       <div style={{ display: 'grid', gap: 8 }}>
         {!data && Array.from({ length: 3 }).map((_, index) => (
@@ -705,7 +705,7 @@ export function StockMlInsights({
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
               <strong style={{ fontSize: 13, color: mlReading.color }}>{mlReading.label}</strong>
               <span style={{ fontSize: 10, fontWeight: 800, color: 'var(--text-muted)' }}>
-                ML類似候補の読み方
+                近い銘柄の読み方
               </span>
             </div>
             <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
@@ -738,7 +738,7 @@ export function StockMlInsights({
             fontWeight: 700,
             color: 'var(--text-muted)',
           }}>
-            ML類似候補は現在ありません。ML特徴量が未生成、または十分に近いMA形状がない場合は表示しません。
+            該当する銘柄はありません(特徴量が未生成、または十分に近いMA形状がないため)
           </div>
         )}
         {data && rows.map((row) => {
@@ -802,7 +802,7 @@ export function StockMlInsights({
                   disabled={casesLoading}
                   className="rounded-full border border-[var(--color-border-soft)] bg-white px-3 py-1.5 text-[11px] font-bold text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-subtle)] disabled:opacity-60"
                 >
-                  {casesLoading ? '読み込み中...' : 'ケースを表示'}
+                  {casesLoading ? '読み込み中…' : 'ケースを表示'}
                 </button>
               )}
               {casesLoaded && caseStudies.length === 0 && (

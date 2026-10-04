@@ -223,7 +223,7 @@ export function TradeScenarioNotebook({
       })
       const payload = await res.json()
       if (!res.ok) throw new Error(payload.message ?? payload.error ?? `HTTP ${res.status}`)
-      setMessage('売買シナリオを保存しました。')
+      setMessage('シナリオメモを保存しました。')
       setForm(initialForm(quote?.price))
       await reload()
     } catch (e) {
@@ -256,9 +256,9 @@ export function TradeScenarioNotebook({
     <section className="card" style={notebookStyle}>
       <div style={headerStyle}>
         <div>
-          <div className="section-header" style={{ margin: 0 }}>売買シナリオノート</div>
+          <div className="section-header" style={{ margin: 0 }}>シナリオメモ <span style={{ fontWeight: 600, fontSize: 11, color: 'var(--text-muted)' }}>自分の仮説を残す</span></div>
           <p style={subTextStyle}>
-            実注文ではなく、分析時点の仮説を保存して後日答え合わせする練習機能です。
+            注文は出ません。分析時点の仮説を保存し、後日の値動きと照らして振り返ります。
           </p>
         </div>
         <span style={virtualBadgeStyle}>仮説検証用</span>
@@ -357,13 +357,13 @@ export function TradeScenarioNotebook({
 
         <div style={listPanelStyle}>
           <div style={miniHeaderStyle}>
-            <strong>保存済みシナリオ</strong>
-            <span>{loading ? '読込中...' : `${scenarios.length}件`}</span>
+            <strong>保存したメモ</strong>
+            <span>{loading ? '読み込み中…' : `${scenarios.length}件`}</span>
           </div>
           {loading ? (
-            <p style={emptyStyle}>読込中...</p>
+            <p style={emptyStyle}>読み込み中…</p>
           ) : scenarios.length === 0 ? (
-            <p style={emptyStyle}>まだシナリオはありません。チャートやステージ範囲を見ながら仮説を保存できます。</p>
+            <p style={emptyStyle}>保存したシナリオはまだありません</p>
           ) : (
             <div style={scenarioListStyle}>
               {scenarios.map((scenario) => (

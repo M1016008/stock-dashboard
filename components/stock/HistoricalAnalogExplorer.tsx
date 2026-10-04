@@ -215,7 +215,7 @@ const PROFILE_OPTIONS: Array<{
   {
     value: 'balanced',
     label: '標準',
-    description: '日・週・月・年足の構造を総合して探します。迷った場合はこちら。',
+    description: '日・週・月・年足の構造を総合します(迷ったらこちら)',
     weights: '日足40%・週足25%・月足20%・年足15%',
   },
   {
@@ -633,7 +633,7 @@ export function HistoricalAnalogExplorer({
         cache: 'no-store',
       })
       const json = await response.json()
-      if (!response.ok) throw new Error(json.error ?? '本質類似局面の検索に失敗しました。')
+      if (!response.ok) throw new Error(json.error ?? '過去の近い局面を検索できませんでした。')
       const next = json as AnalogResponse
       setData((current) => {
         if (!append || !current) return next
@@ -662,7 +662,7 @@ export function HistoricalAnalogExplorer({
       if (!append) setData(null)
       setError(searchError instanceof Error
         ? searchError.message
-        : '本質類似局面の検索に失敗しました。')
+        : '過去の近い局面を検索できませんでした。')
     } finally {
       if (append) setLoadingMore(false)
       else setLoading(false)
@@ -757,10 +757,10 @@ export function HistoricalAnalogExplorer({
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <ScanSearch size={17} className="shrink-0 text-teal-700" aria-hidden="true" />
-            <h2 className="text-[14px] font-black text-[var(--color-text-primary)]">本質類似局面</h2>
+            <h2 className="text-[14px] font-black text-[var(--color-text-primary)]">② 過去の近い局面</h2>
           </div>
           <p className="mt-1 text-[10px] font-bold text-[var(--color-text-tertiary)]">
-            指定期間の日足・週足・月足・年足を照合し、比較チャートは14時間軸で表示
+            指定期間の日足〜年足を照合し、似た形だった過去を14時間軸のチャートで並べて確認
           </p>
         </div>
         <button
@@ -770,7 +770,7 @@ export function HistoricalAnalogExplorer({
           className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-[4px] bg-teal-700 px-3 text-[12px] font-black text-white hover:bg-teal-800 disabled:cursor-wait disabled:opacity-60"
         >
           {started ? <RefreshCw size={14} className={busy ? 'animate-spin' : ''} /> : <ScanSearch size={14} />}
-          {loading ? '精密検索中' : loadingMore ? '候補を追加中' : started ? '条件を反映して再検索' : '本質類似局面を検索'}
+          {loading ? '精密検索中' : loadingMore ? '候補を追加中' : started ? '条件を反映して再検索' : '過去の近い局面を検索'}
         </button>
       </div>
 
@@ -1303,7 +1303,7 @@ export function HistoricalAnalogExplorer({
 
           {data.analogs.length === 0 ? (
             <div className="mx-3 my-4 border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-3 py-5 text-center text-[12px] font-bold text-[var(--color-text-tertiary)] sm:mx-4">
-              指定条件に合う本質類似局面は見つかりませんでした。
+              指定条件に合う過去の近い局面は見つかりませんでした。
             </div>
           ) : displayedAnalogs.length === 0 ? (
             <div className="mx-3 my-4 border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-3 py-5 text-center text-[12px] font-bold text-[var(--color-text-tertiary)] sm:mx-4">

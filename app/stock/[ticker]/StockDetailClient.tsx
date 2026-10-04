@@ -2,7 +2,7 @@
 'use client'
 
 import Link from 'next/link'
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import {
   BrainCircuit,
@@ -35,8 +35,9 @@ import { HistoricalAnalogExplorer } from '@/components/stock/HistoricalAnalogExp
 import { ScenarioProjectionChart } from '@/components/stock/ScenarioProjectionChart'
 import { TradeScenarioNotebook } from '@/components/stock/TradeScenarioNotebook'
 import { StockScenarioAiPanel } from '@/components/stock/StockScenarioAiPanel'
-import { StockDecisionSummary } from '@/components/stock/StockDecisionSummary'
 import { FinancialPerformanceTimeline } from '@/components/stock/FinancialPerformanceTimeline'
+import { StockDecisionSummary } from '@/components/stock/StockDecisionSummary'
+import { DivergingBar, ScoreRuler } from '@/components/stock/StockAnalysisVisuals'
 import { StockLargeHolders } from '@/components/large-holders/StockLargeHolders'
 import { FinancialPerformanceDetail } from '@/components/stock/FinancialPerformanceDetail'
 import { FinancialDetail } from '@/components/stock/FinancialDetail'
@@ -60,8 +61,6 @@ import { physicsStatusTone, type PhysicsStatus } from '@/lib/ml/physics-analysis
 import {
   buildPhysicalMomentumView,
   buildPhysicalRawMetricView,
-  describePhysicalScore,
-  type PhysicalMomentumCheck,
   type PhysicalMomentumTone,
 } from '@/lib/physical-momentum-view'
 import {
@@ -474,7 +473,7 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
             {analysisParamsReady && analysisDate && !displayedQuote && (
               <div className="min-w-[112px] text-right" aria-label="過去終値を読み込み中">
                 <div className="font-mono text-lg font-black text-[var(--color-text-tertiary)]">—</div>
-                <div className="mt-1 text-[9px] font-bold text-[var(--color-text-tertiary)]">過去終値を読込中</div>
+                <div className="mt-1 text-[9px] font-bold text-[var(--color-text-tertiary)]">過去終値を読み込み中</div>
               </div>
             )}
             {loading && <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>読込中...</span>}
@@ -535,6 +534,14 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
 
       {activeTab === 'scenario' && (
         <>
+          <ScenarioProjectionChart
+            ticker={ticker}
+            name={name}
+            analysisDate={analysisDate}
+            showActual={showActual}
+            onUseLatest={() => updateAnalysisDate(null)}
+          />
+          <StockMovePeriods ticker={ticker} analysisDate={analysisDate} />
           <TradeScenarioNotebook
             ticker={ticker}
             name={name}
@@ -546,14 +553,6 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
               sector17: displaySectorLarge,
               sector33: displaySector33,
             }}
-          />
-          <StockMovePeriods ticker={ticker} analysisDate={analysisDate} />
-          <ScenarioProjectionChart
-            ticker={ticker}
-            name={name}
-            analysisDate={analysisDate}
-            showActual={showActual}
-            onUseLatest={() => updateAnalysisDate(null)}
           />
           <StockScenarioAiPanel ticker={ticker} name={name} analysisDate={analysisDate} />
         </>
@@ -626,6 +625,7 @@ type TechnicalMomentumSnapshot = {
   scoreSource: PhysicalMomentumResponse['scoreSource']
   maStructure: string | null
   maDescription: string | null
+  maAngles?: MaAngleSet | null
   message: string | null
 }
 
@@ -640,6 +640,8 @@ const CHART_STAGE_AXES: Array<{
   { key: 'monthlyA', label: '月A' },
   { key: 'monthlyB', label: '月B' },
 ]
+
+const STAGE_TIMEFRAME_LABELS = ['日足', '週足', '月足'] as const
 
 function ChartWorkspace({
   ticker,
@@ -694,24 +696,13 @@ function ChartWorkspace({
   }, [analysisDate, ticker])
 
   return (
-    <div className="space-y-3" aria-label="チャート・6ステージ分析">
-      <TechnicalChartSnapshot stage={stageSnapshot} momentum={momentumSnapshot} analysisDate={analysisDate} />
-
-      <StageTimeline
-        ticker={ticker}
-        analysisDate={analysisDate}
-        onSnapshotChange={handleStageSnapshot}
-      />
-
-      <section className="overflow-hidden border border-[var(--color-border-default)] bg-white" aria-labelledby="main-chart-title">
-        <header className="flex flex-wrap items-end justify-between gap-2 border-b border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-3 py-2.5">
-          <div>
-            <div className="text-[9px] font-black uppercase tracking-[0.08em] text-[var(--color-text-tertiary)]">Price &amp; moving averages</div>
-            <h2 id="main-chart-title" className="mt-0.5 text-[13px] font-black text-[var(--color-text-primary)]">マルチタイムフレームチャート</h2>
-          </div>
-          <span className="text-[9px] font-semibold text-[var(--color-text-tertiary)]">Stageの形を価格・MA・出来高で確認</span>
+    <div className="space-y-4" aria-label="チャート・6ステージ分析">
+      <section className="overflow-hidden border border-[var(--color-border-default)] bg-white" aria-labelledby="main-chart-title" data-section="Price &amp; moving averages">
+        <header className="flex flex-wrap items-end justify-between gap-2 border-b border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-3 py-2">
+          <h2 id="main-chart-title" className="text-[12px] font-black text-[var(--color-text-secondary)]">価格と移動平均</h2>
         </header>
-        <div className="px-2 pb-2 sm:px-3 sm:pb-3">
+        <TechnicalChartSnapshot stage={stageSnapshot} momentum={momentumSnapshot} analysisDate={analysisDate} embedded />
+        <div className="px-2 pb-2 pt-2 sm:px-3 sm:pb-3">
           <CandlestickChart
             ticker={ticker}
             interval="D"
@@ -725,13 +716,22 @@ function ChartWorkspace({
         </div>
       </section>
 
-      <PhysicalMomentumSection
+      <StageTimeline
         ticker={ticker}
         analysisDate={analysisDate}
-        onSnapshotChange={handleMomentumSnapshot}
+        onSnapshotChange={handleStageSnapshot}
       />
 
-      <Ma25mMonitorSummary ticker={ticker} analysisDate={analysisDate} />
+      <div className="space-y-4">
+        <PhysicalMomentumSection
+          ticker={ticker}
+          analysisDate={analysisDate}
+          onSnapshotChange={handleMomentumSnapshot}
+        />
+        <div id="chart-long-term" className="scroll-mt-28">
+          <Ma25mMonitorSummary ticker={ticker} analysisDate={analysisDate} />
+        </div>
+      </div>
     </div>
   )
 }
@@ -740,10 +740,12 @@ function TechnicalChartSnapshot({
   stage,
   momentum,
   analysisDate,
+  embedded = false,
 }: {
   stage: StageTimelineSnapshot
   momentum: TechnicalMomentumSnapshot
   analysisDate: string | null
+  embedded?: boolean
 }) {
   const stageCode = stage.stages
     ? CHART_STAGE_AXES.map(({ key }) => stage.stages?.[key] ?? '-').join('')
@@ -755,80 +757,81 @@ function TechnicalChartSnapshot({
     analysisDate,
   })
   const stageMessage = stage.status === 'loading'
-    ? 'Stageを読込中'
+    ? '6ステージを読み込み中'
     : stage.status === 'error'
-      ? `Stage取得エラー: ${stage.message ?? '詳細不明'}`
+      ? `6ステージを取得できませんでした(${stage.message ?? '詳細不明'})`
       : stage.status === 'missing'
-        ? stage.message ?? 'Stage履歴なし'
-        : `現在Stage ${stageCode}`
+        ? stage.message ?? '6ステージの履歴がありません'
+        : `現在の6ステージ ${stageCode}`
   const stateTitle = momentum.status === 'available'
-    ? momentum.maStructure ?? 'MA力場は未判定'
+    ? momentum.maStructure ?? 'MA構造は未判定'
     : momentum.status === 'loading'
-      ? '運動状態を読込中'
+      ? '運動状態を読み込み中'
       : momentum.status === 'error'
-        ? 'PMS取得エラー'
-        : 'PMS未計算'
+        ? 'PMSを取得できませんでした'
+        : 'PMSは未算出'
 
   return (
-    <section className="overflow-hidden border border-[var(--color-border-default)] bg-white" aria-labelledby="technical-snapshot-title">
-      <header className="flex flex-wrap items-start justify-between gap-2 border-b border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-3 py-2.5">
-        <div>
-          <div className="text-[9px] font-black uppercase tracking-[0.08em] text-[var(--color-text-tertiary)]">Technical snapshot</div>
-          <h2 id="technical-snapshot-title" className="mt-0.5 text-[13px] font-black text-[var(--color-text-primary)]">現在のテクニカル構造</h2>
-        </div>
+    <section className={embedded ? 'overflow-hidden border-b border-[var(--color-border-soft)] bg-white' : 'overflow-hidden border border-[var(--color-border-default)] bg-white'} aria-labelledby="technical-snapshot-title" data-section="Technical snapshot">
+      <header className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-3 py-1.5">
+        <h2 id="technical-snapshot-title" className="text-[12px] font-black text-[var(--color-text-secondary)]">現在の技術構造</h2>
         <span className="font-mono text-[9px] font-bold text-[var(--color-text-tertiary)]">{referenceDateLabel}</span>
       </header>
 
-      <div className="grid gap-3 p-3 lg:grid-cols-[minmax(190px,0.8fr)_minmax(380px,1.6fr)_minmax(270px,1fr)] lg:items-stretch">
-        <div className="flex min-w-0 flex-col justify-center border-b border-[var(--color-border-soft)] pb-3 lg:border-b-0 lg:border-r lg:pb-0 lg:pr-4">
-          <span className="text-[9px] font-bold text-[var(--color-text-tertiary)]">現在地</span>
-          <strong className="mt-1 text-[17px] font-black leading-tight text-[var(--color-text-primary)]">{stateTitle}</strong>
-          <span className="mt-1 text-[10px] font-semibold leading-4 text-[var(--color-text-secondary)]">{momentum.maDescription ?? stageMessage}</span>
-        </div>
-
-        <div className="min-w-0">
-          <div className="mb-1.5 flex items-center justify-between gap-2">
-            <span className="text-[9px] font-bold text-[var(--color-text-tertiary)]">6 Stage</span>
-            <span className="font-mono text-[11px] font-black text-[var(--color-text-primary)]">{stageCode}</span>
-          </div>
-          <div className="grid grid-cols-6 gap-1" aria-label={`6ステージ ${stageCode}`}>
-            {CHART_STAGE_AXES.map(({ key, label }) => {
-              const value = stage.stages?.[key] ?? null
-              return (
-                <div key={key} className="min-w-0 text-center">
-                  <div className="text-[9px] font-bold text-[var(--color-text-tertiary)]">{label}</div>
-                  <div
-                    className="mt-1 flex min-h-10 flex-col items-center justify-center border"
-                    style={{
-                      background: value ? STAGE_BG_COLORS[value] : 'var(--color-surface-subtle)',
-                      borderColor: value ? STAGE_BORDER_COLORS[value] : 'var(--color-border-default)',
-                    }}
-                    title={value ? `S${value}: ${STAGE_LABELS[value]}` : stageMessage}
-                  >
-                    <strong className="font-mono text-[14px] leading-none text-[var(--color-text-primary)]">{value ? `S${value}` : '—'}</strong>
-                    {value && <span className="mt-0.5 text-[9px] font-bold leading-tight text-[var(--color-text-secondary)]">{STAGE_LABELS[value]}</span>}
+      <div className={`grid gap-x-6 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)] ${embedded ? 'gap-y-2 p-2 sm:px-3' : 'gap-y-4 p-3'}`}>
+        <div className="min-w-0 space-y-2.5">
+          <div>
+            <div className="mb-1 flex items-center justify-between gap-2 text-[10px] font-bold text-[var(--color-text-tertiary)]">
+              <span>6ステージ 短期→長期</span>
+              <span className="font-mono font-black text-[var(--color-text-primary)]">{stageCode}</span>
+            </div>
+            <div className="grid grid-cols-3 gap-2" aria-label={`6ステージ ${stageCode}`}>
+              {[0, 2, 4].map((start) => (
+                <div key={start} className="min-w-0">
+                  <div className="mb-0.5 text-center text-[9px] font-black text-[var(--color-text-secondary)]">{STAGE_TIMEFRAME_LABELS[start / 2]}</div>
+                  <div className="grid grid-cols-2 gap-0.5">
+                    {CHART_STAGE_AXES.slice(start, start + 2).map(({ key, label }) => {
+                      const value = stage.stages?.[key] ?? null
+                      return (
+                        <div key={key} className="min-w-0 text-center">
+                          <div
+                            className={`flex ${embedded ? 'h-9' : 'h-11'} flex-col items-center justify-center border`}
+                            style={{
+                              background: value ? STAGE_BG_COLORS[value] : 'var(--color-surface-subtle)',
+                              borderColor: value ? STAGE_BORDER_COLORS[value] : 'var(--color-border-default)',
+                            }}
+                            title={value ? `${label} S${value}: ${STAGE_LABELS[value]}` : stageMessage}
+                          >
+                            <span className="text-[8px] font-bold leading-none text-[var(--color-text-tertiary)]">{label}</span>
+                            <strong className="font-mono text-[14px] leading-none text-[var(--color-text-primary)]">{value ? `S${value}` : '—'}</strong>
+                            {value && <span className="mt-0.5 w-full truncate px-0.5 text-[8px] font-bold leading-tight text-[var(--color-text-secondary)]">{STAGE_LABELS[value]}</span>}
+                          </div>
+                        </div>
+                      )
+                    })}
                   </div>
                 </div>
-              )
-            })}
+              ))}
+            </div>
+            {stage.status !== 'available' && <div className="mt-1 text-[10px] font-semibold text-[var(--color-text-tertiary)]">{stageMessage}</div>}
+          </div>
+          <div>
+            <div className="mb-1 text-[10px] font-bold text-[var(--color-text-tertiary)]">MAの向き 短期→長期</div>
+            <MaAngleStrip angles={momentum.maAngles ?? null} compact={embedded} />
           </div>
         </div>
 
-        <div className="grid grid-cols-3 gap-1.5 border-t border-[var(--color-border-soft)] pt-3 lg:border-l lg:border-t-0 lg:pl-4 lg:pt-0">
-          {[
-            { code: 'PMS', label: '運動状態', value: momentum.pms },
-            { code: 'PFS', label: '足元の力', value: momentum.pfs },
-            { code: 'PES', label: '熱量', value: momentum.pes },
-          ].map((metric) => (
-            <div key={metric.code} className="flex min-w-0 flex-col justify-center bg-[var(--color-surface-subtle)] px-2 py-2 text-center">
-              <span className="text-[9px] font-black text-[var(--color-text-tertiary)]">{metric.code}</span>
-              <strong className="mt-0.5 font-mono text-[15px] font-black text-[var(--color-text-primary)]">{fmtScore(metric.value)}</strong>
-              <span className="mt-0.5 text-[9px] font-semibold leading-tight text-[var(--color-text-tertiary)]">{metric.label}</span>
-            </div>
-          ))}
+        <div className="min-w-0 space-y-2 border-t border-[var(--color-border-soft)] pt-3 lg:border-l lg:border-t-0 lg:pl-6 lg:pt-0">
+          <div className="flex items-baseline justify-between gap-2">
+            <span className="text-[10px] font-bold text-[var(--color-text-tertiary)]">MA力場</span>
+            <strong className="min-w-0 truncate text-[13px] font-black text-[var(--color-text-primary)]" title={momentum.maDescription ?? undefined}>{stateTitle}</strong>
+          </div>
+          <ScoreRuler code="PMS" label="運動状態" value={momentum.pms} text={fmtScore(momentum.pms)} />
+          <ScoreRuler code="PFS" label="足元の力" value={momentum.pfs} text={fmtScore(momentum.pfs)} />
+          <ScoreRuler code="PES" label="熱量" value={momentum.pes} text={fmtScore(momentum.pes)} />
           {momentum.status !== 'available' && (
-            <div className="col-span-3 text-[9px] font-semibold text-[var(--color-text-tertiary)]">
-              {momentum.status === 'loading' ? 'PMS/PFS/PESを読込中' : momentum.message ?? 'PMS/PFS/PESは利用できません'}
+            <div className="text-[10px] font-semibold text-[var(--color-text-tertiary)]">
+              {momentum.status === 'loading' ? 'PMS/PFS/PESを読み込み中' : momentum.message ?? 'PMS/PFS/PESは表示できません'}
             </div>
           )}
         </div>
@@ -863,12 +866,12 @@ function FundamentalWorkspace({
   ]
 
   return (
-    <section className="space-y-6 bg-white pb-2" aria-labelledby="fundamental-workspace-title">
+    <section className="space-y-4 bg-white pb-2" aria-labelledby="fundamental-workspace-title">
       <div className="overflow-hidden border-y border-[var(--color-border-soft)] bg-white">
         <header className="flex flex-wrap items-end justify-between gap-2 border-b border-[var(--color-border-soft)] px-4 py-3 sm:px-5">
           <div>
             <h2 id="fundamental-workspace-title" className="text-[15px] font-bold text-[var(--color-text-primary)]">ファンダメンタル</h2>
-            <p className="mt-1 text-[10px] font-medium text-[var(--color-text-tertiary)]">業績から評価、株主還元へ順に読み解く</p>
+            <p className="mt-1 text-[11px] font-medium text-[var(--color-text-tertiary)]">成長・収益性・評価・株主還元を並べて確認し、各タブで深掘り</p>
           </div>
           <span className="font-mono text-[10px] font-semibold text-[var(--color-text-tertiary)]">基準日 {analysisDate ?? quote?.priceDate ?? '---'}</span>
         </header>
@@ -1034,7 +1037,7 @@ function OverviewBasicInfoPanel({
           <div className="flex items-center gap-2.5">
             <LayoutDashboard size={16} className="text-[var(--color-brand-700)]" aria-hidden="true" />
             <div>
-              <h2 id="company-basic-info-title" className="text-[14px] font-bold text-[var(--color-text-primary)]">基本情報</h2>
+              <h2 id="company-basic-info-title" className="text-[14px] font-bold text-[var(--color-text-primary)]">サマリー</h2>
               <div className="mt-0.5 text-[10px] font-medium text-[var(--color-text-tertiary)]">
                 市場データ J-Quants / 企業情報 会社四季報CSV
               </div>
@@ -1498,6 +1501,7 @@ function technicalMomentumSnapshotFromResponse(payload: PhysicalMomentumResponse
     scoreSource: payload.scoreSource ?? null,
     maStructure: field.label,
     maDescription: field.description,
+    maAngles: maAngleSet(latest),
     message: scoreDate && !scoreRow ? 'PMS/PFS/PESのスコア行を確認できません' : null,
   }
 }
@@ -1606,8 +1610,13 @@ function PhysicalMomentumSection({
     ? [...(data?.history ?? [])].reverse().find((row) => row.date < latest.date) ?? null
     : null
   const fieldInsight = latest ? buildMaFieldInsight(latest, previous) : null
-  const insight = latest && !isMomentumCoverageSparse
-    ? buildPhysicalMomentumInsight(latest, data?.rank ?? null, data?.totalRanked ?? 0, data?.trend ?? null, fieldInsight)
+  const scoreRow = latest && data
+    ? selectPhysicalMomentumScoreRow({
+      latest,
+      history: data.history ?? [],
+      latestScoredDate: data.latestScoredDate,
+      isScoreFresh: data.isScoreFresh,
+    }).scoreRow
     : null
   const velocityMetric = buildPhysicalRawMetricView('velocity', latest?.velocity)
   const accelerationMetric = buildPhysicalRawMetricView('acceleration', latest?.acceleration)
@@ -1619,7 +1628,7 @@ function PhysicalMomentumSection({
         <div>
           <div className="section-header" style={{ margin: 0 }}>Physical Momentum</div>
           <div style={physicalSubTextStyle}>
-            PMSは買い/売りの予測ではなく、時間軸ごとの運動状態です。日足・2日足・週足・月足で結論を分けて見ます。
+            方向(PFS)・強さ(PMS)・熱量(PES)とMAの傾きを、時間軸ごとに並べた運動状態です。予測ではありません。
           </div>
         </div>
         {latest && (
@@ -1656,66 +1665,30 @@ function PhysicalMomentumSection({
               </span>
             </div>
           )}
-          <PhysicalTimeframeConclusionPanel views={data?.timeframeViews ?? []} />
-          {insight && (
-            <div style={physicalHeroStyle}>
-              <div style={physicalHeroMainStyle}>
-                <div style={{ ...physicalHeroLabelStyle, color: insight.color }}>日足20営業日の結論</div>
-                <div style={{ ...physicalHeroTitleStyle, color: insight.color }}>{insight.label}</div>
-                <p style={physicalHeroDescriptionStyle}>{insight.description}</p>
-              </div>
-              <div style={physicalReasonPanelStyle}>
-                <div style={physicalReasonPanelTitleStyle}>根拠</div>
-                <div style={physicalReasonListStyle}>
-                  {insight.reasons.map((reason) => (
-                    <span key={reason} style={physicalReasonPillStyle}>{reason}</span>
-                  ))}
-                </div>
-              </div>
-              <PhysicalMomentumGauge
-                value={latest.physicalMomentumScore}
-                rank={data?.rank ?? null}
-                total={data?.totalRanked ?? 0}
-                trend={data?.trend ?? null}
-              />
-            </div>
+          {!isMomentumCoverageSparse && (
+            <PhysicalStateSummary
+              scoreRow={scoreRow}
+              history={data?.history ?? []}
+              rank={data?.rank ?? null}
+              total={data?.totalRanked ?? 0}
+              trend={data?.trend ?? null}
+              field={fieldInsight}
+              velocityText={velocityMetric.value}
+            />
           )}
 
-          <div style={physicalScoreGridStyle}>
-            <PhysicalScoreCard
-              label="総合的な運動状態"
-              code="PMS"
-              title="方向+熱量の合成"
-              value={latest.physicalMomentumScore}
-              sub={data?.rank && data.totalRanked ? `市場順位 ${data.rank}/${data.totalRanked}` : '市場順位 -'}
-              guide="高い=買いではなく、20営業日の方向・力・熱量が市場内で強い状態。足元の向きはPFSで確認"
-              trend={data?.trend ?? null}
-            />
-            <PhysicalScoreCard
-              label="足元の力"
-              code="PFS"
-              title="初動/失速"
-              value={latest.physicalForceScore}
-              sub={physicalSignalText(latest.physicalForceScore, 'force')}
-              guide="加速度とForce。上向き/下向きの力が増えているかを見る"
-              trend={null}
-            />
-            <PhysicalScoreCard
-              label="動きの熱量"
-              code="PES"
-              title="値幅/過熱"
-              value={latest.physicalEnergyScore}
-              sub={physicalSignalText(latest.physicalEnergyScore, 'energy')}
-              guide="高いほど大きく動いた状態。方向ではなく、過熱・巻き戻しリスクも含めて見る"
-              trend={null}
-            />
-          </div>
-
-          <PhysicalActionPoints latest={latest} trend={data?.trend ?? null} field={fieldInsight} />
-
-          <div className="mb-2.5">
+          <div className="mb-2.5 grid gap-2.5 lg:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]">
+            <PhysicalTimeframeConclusionPanel views={data?.timeframeViews ?? []} />
             <PhysicalMaFieldMap latest={latest} previous={previous} />
           </div>
+
+          <PhysicalActionPoints
+            pms={scoreRow?.physicalMomentumScore ?? null}
+            pfs={scoreRow?.physicalForceScore ?? null}
+            pes={scoreRow?.physicalEnergyScore ?? null}
+            trend={data?.trend ?? null}
+            field={fieldInsight}
+          />
 
           <button
             type="button"
@@ -1735,7 +1708,7 @@ function PhysicalMomentumSection({
               <div style={physicalBreakdownPanelStyle}>
                 <div style={physicalMiniHeaderStyle}>
                   <strong>内訳</strong>
-                  <span>騰落率は%・変化はptで表示。比較不能な生値は出さず、市場内の強弱はPMS/PFS/PESで見ます。</span>
+                  <span>日足の生の運動量。市場内の強弱はPMS/PFS/PESで比較</span>
                 </div>
                 <div style={physicalBreakdownGridStyle}>
                   <PhysicalBreakdown label={velocityMetric.label} help={velocityMetric.detail} value={velocityMetric.value} tone={latest.velocity} />
@@ -1752,129 +1725,145 @@ function PhysicalMomentumSection({
   )
 }
 
-function PhysicalScoreCard({
-  label,
-  code,
-  title,
-  value,
-  sub,
-  guide,
-  trend,
-  valueFormatter = fmtScore,
-}: {
-  label: string
-  code: string
-  title: string
-  value: number | null
-  sub: string
-  guide: string
-  trend: 'rising' | 'falling' | 'flat' | null
-  valueFormatter?: (value: number | null | undefined) => string
-}) {
-  const tone = value == null ? 'var(--text-muted)' : value >= 0 ? 'var(--price-up)' : 'var(--price-down)'
-  const pct = scoreBarPercent(value)
-  return (
-    <div style={physicalScoreCardStyle}>
-      <div style={physicalScoreTopStyle}>
-        <span style={physicalScoreLabelWrapStyle}>
-          <span style={physicalScoreLabelStyle}>{label}</span>
-          <span style={physicalScoreCodeStyle}>{code}</span>
-        </span>
-        <strong style={{ color: tone }}>{valueFormatter(value)}</strong>
-      </div>
-      <div style={physicalScoreTitleStyle}>{title}</div>
-      <div style={physicalMeterTrackStyle}>
-        <span style={{ ...physicalMeterFillStyle, width: `${pct}%`, background: tone }} />
-      </div>
-      <small style={physicalScoreSubStyle}>
-        {trend === 'rising' ? '上昇中 / ' : trend === 'falling' ? '低下中 / ' : trend === 'flat' ? '横ばい / ' : ''}
-        {sub}
-      </small>
-      <span style={physicalScoreGuideStyle}>{guide}</span>
-    </div>
-  )
+function trendText(trend: PhysicalMomentumResponse['trend']): string {
+  return trend === 'rising' ? '上昇中' : trend === 'falling' ? '低下中' : trend === 'flat' ? '横ばい' : '推移未判定'
 }
 
-function PhysicalMomentumGauge({
-  value,
+function trendArrow(trend: PhysicalMomentumResponse['trend']): string {
+  return trend === 'rising' ? '↗' : trend === 'falling' ? '↘' : trend === 'flat' ? '→' : '·'
+}
+
+/** 日足の結論 → 根拠 → 変化点 を3行で示す。数値はAPI値と既存の判定関数の出力のみ。 */
+function PhysicalStateSummary({
+  scoreRow,
+  history,
   rank,
   total,
   trend,
+  field,
+  velocityText,
 }: {
-  value: number | null
+  scoreRow: PhysicalMomentumApiRow | null
+  history: PhysicalMomentumApiRow[]
   rank: number | null
   total: number
   trend: PhysicalMomentumResponse['trend']
+  field: PhysicalMaFieldInsight | null
+  velocityText: string
 }) {
-  const pct = scoreBarPercent(value)
-  const tone = value == null ? 'var(--text-muted)' : value >= 0 ? 'var(--price-up)' : 'var(--price-down)'
-  const fillLeft = value == null || !Number.isFinite(value) ? 50 : value >= 0 ? 50 : pct
-  const fillWidth = value == null || !Number.isFinite(value) ? 0 : Math.abs(pct - 50)
-  const rankText = rank && total ? `市場 ${rank.toLocaleString('ja-JP')}位 / ${total.toLocaleString('ja-JP')}銘柄` : '市場順位 -'
+  const view = buildPhysicalMomentumView({
+    pms: scoreRow?.physicalMomentumScore,
+    pfs: scoreRow?.physicalForceScore,
+    pes: scoreRow?.physicalEnergyScore,
+    trend,
+    rank,
+    total,
+    fieldLabel: field?.label,
+  })
+  const color = physicalToneColor(view.tone)
+  // PMS推移チャートの「20日変化」と同じ取り方(スコアのある行の20本前との差)
+  const scored = history.filter((row) => row.physicalMomentumScore != null && Number.isFinite(row.physicalMomentumScore))
+  const last = scored.at(-1)?.physicalMomentumScore ?? null
+  const before20 = scored.length >= 21 ? scored[scored.length - 21].physicalMomentumScore : null
+  const delta20 = last != null && before20 != null ? last - before20 : null
+  const rows: Array<{ label: string; body: ReactNode }> = [
+    {
+      label: '根拠',
+      body: (
+        <>
+          PMS <b className="font-mono" style={{ color: scoreTone(scoreRow?.physicalMomentumScore) }}>{formatDelta(scoreRow?.physicalMomentumScore)}</b>
+          <span className="text-[var(--color-text-tertiary)]">{rank && total ? `(${rank.toLocaleString('ja-JP')}/${total.toLocaleString('ja-JP')}位)` : ''}</span>
+          {' ・ '}PFS <b className="font-mono" style={{ color: scoreTone(scoreRow?.physicalForceScore) }}>{formatDelta(scoreRow?.physicalForceScore)}</b>
+          {' ・ '}PES <b className="font-mono">{formatDelta(scoreRow?.physicalEnergyScore)}</b>
+          {' ・ '}20日騰落率 <b className="font-mono">{velocityText}</b>
+          {' ・ '}MA <b style={{ color: field?.color }}>{field?.label ?? '—'}</b>
+        </>
+      ),
+    },
+    {
+      label: '変化',
+      body: (
+        <>
+          PMS {trendArrow(trend)} <b>{trendText(trend)}</b>
+          {delta20 != null && <> ・ 20日変化 <b className="font-mono" style={{ color: scoreTone(delta20) }}>{formatDelta(delta20)}</b></>}
+          {field?.spreadChangeDeg != null && (
+            <> ・ MA角度幅 <b className="font-mono">{field.spreadDeg?.toFixed(1)}°</b> 前回比 <b className="font-mono">{fmtDeg(field.spreadChangeDeg)}</b>({field.spreadChangeDeg > 0 ? '拡大' : field.spreadChangeDeg < 0 ? '縮小' : '不変'})</>
+          )}
+        </>
+      ),
+    },
+  ]
   return (
-    <div style={physicalGaugeStyle}>
-      <div style={physicalGaugeValueRowStyle}>
-        <span>PMS</span>
-        <strong style={{ color: tone }}>{fmtScore(value)}</strong>
+    <section
+      className="mb-2.5 grid gap-x-5 gap-y-2 border border-[var(--color-border-default)] bg-white px-3 py-2.5 md:grid-cols-[minmax(170px,.7fr)_minmax(0,2fr)]"
+      style={{ borderLeft: `3px solid ${color}` }}
+      aria-label="日足の運動状態"
+    >
+      <div className="min-w-0">
+        <div className="text-[10px] font-black text-[var(--color-text-tertiary)]">現在の状態(日足・20営業日)</div>
+        <strong className="mt-0.5 block text-[18px] font-black leading-tight" style={{ color }}>{view.label}</strong>
       </div>
-      <div style={physicalGaugeTrackStyle}>
-        <span style={physicalGaugeZeroStyle} />
-        <span style={{ ...physicalGaugeFillStyle, left: `${fillLeft}%`, width: `${fillWidth}%`, background: tone }} />
-      </div>
-      <div style={physicalGaugeScaleStyle}>
-        <span>弱い -2</span>
-        <span>平均 0</span>
-        <span>強い +2</span>
-      </div>
-      <div style={physicalGaugeMetaStyle}>
-        <span>{rankText}</span>
-        <b>{trend === 'rising' ? '上昇中' : trend === 'falling' ? '低下中' : trend === 'flat' ? '横ばい' : '方向未判定'}</b>
-      </div>
-    </div>
+      <dl className="m-0 grid min-w-0 gap-1">
+        {rows.map((row) => (
+          <div key={row.label} className="grid grid-cols-[32px_minmax(0,1fr)] gap-2 text-[11px] font-semibold leading-5 text-[var(--color-text-secondary)]">
+            <dt className="font-black text-[var(--color-text-tertiary)]">{row.label}</dt>
+            <dd className="m-0 min-w-0 break-words">{row.body}</dd>
+          </div>
+        ))}
+      </dl>
+    </section>
   )
 }
 
+function scoreTone(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value) || value === 0) return 'var(--text-primary)'
+  return value > 0 ? 'var(--price-up)' : 'var(--price-down)'
+}
+
+// buildPhysicalMomentumView の方向判定と同じ閾値(PFS ±0.35、PMS ±1)
+const PHYSICAL_FORCE_THRESHOLD = 0.35
+const PHYSICAL_STRONG_PMS = 1
+
 function PhysicalTimeframeConclusionPanel({ views }: { views: PhysicalMomentumTimeframeView[] }) {
   if (views.length === 0) return null
-  const primary = views.find((view) => view.interval === 'D') ?? views[0]
-  const primaryView = buildPhysicalMomentumView({
-    pms: primary.physicalMomentumScore,
-    pfs: primary.physicalForceScore,
-    pes: primary.physicalEnergyScore,
-    trend: primary.trend,
-  })
-  const longerViews = views.filter((view) => view.interval !== 'D')
-  const longerLabels = longerViews
-    .map((view) => {
-      const built = buildPhysicalMomentumView({
-        pms: view.physicalMomentumScore,
-        pfs: view.physicalForceScore,
-        pes: view.physicalEnergyScore,
-        trend: view.trend,
-      })
-      return `${view.interval}:${built.label}`
-    })
-    .join(' / ')
+  const forceUp = views.filter((view) => (view.physicalForceScore ?? 0) >= PHYSICAL_FORCE_THRESHOLD).length
+  const forceDown = views.filter((view) => (view.physicalForceScore ?? 0) <= -PHYSICAL_FORCE_THRESHOLD).length
+  const strong = views.filter((view) => (view.physicalMomentumScore ?? 0) >= PHYSICAL_STRONG_PMS).length
+  const weak = views.filter((view) => (view.physicalMomentumScore ?? 0) <= -PHYSICAL_STRONG_PMS).length
+  const alignment = forceUp === views.length
+    ? 'すべての時間軸で上向き'
+    : forceDown === views.length
+      ? 'すべての時間軸で下向き'
+      : forceUp > 0 && forceDown > 0
+        ? '時間軸で向きが分かれる'
+        : forceUp > 0 || forceDown > 0
+          ? '一部の時間軸だけに向き'
+          : 'どの時間軸も向きは中立'
 
   return (
-    <div style={physicalTimeframePanelStyle}>
-      <div style={physicalMiniHeaderStyle}>
-        <strong>時間軸別の結論</strong>
-        <span>
-          総合: 日足は{primaryView.label}
-          {longerLabels ? ` / ${longerLabels}` : ''}
+    <section className="min-w-0 border border-[var(--color-border-default)] bg-white" aria-labelledby="physical-timeframe-title">
+      <header className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 border-b border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-2.5 py-1.5">
+        <h3 id="physical-timeframe-title" className="text-[11px] font-black text-[var(--color-text-primary)]">時間軸の整合 <span className="font-bold text-[var(--color-text-secondary)]">{alignment}</span></h3>
+        <span className="font-mono text-[9px] font-bold text-[var(--color-text-tertiary)]">
+          方向PFS ▲{forceUp} ▼{forceDown} ・ 強さPMS 強{strong} 弱{weak} / {views.length}
         </span>
+      </header>
+      <div className="hidden grid-cols-[48px_minmax(92px,1.2fr)_repeat(3,minmax(0,1fr))] gap-x-2 border-b border-[var(--color-border-soft)] px-2.5 py-1 text-[9px] font-bold text-[var(--color-text-tertiary)] sm:grid">
+        <span>時間軸</span>
+        <span>判定・PMS推移</span>
+        <span>PMS 強さ</span>
+        <span>PFS 方向</span>
+        <span>PES 熱量</span>
       </div>
-      <div style={physicalTimeframeGridStyle}>
+      <div className="divide-y divide-[var(--color-border-soft)]">
         {views.map((view) => (
           <PhysicalTimeframeConclusionCard key={view.interval} view={view} />
         ))}
       </div>
-      <p style={physicalTimeframeNoteStyle}>
-        日足は市場横断Z、2日足・週足・月足は銘柄内の時間軸Zです。いずれも分布の裾1%を抑えた標準化で、
-        時間軸が違う数値同士は直接比較しません。
+      <p className="m-0 border-t border-[var(--color-border-soft)] px-2.5 py-1 text-[9px] font-semibold leading-4 text-[var(--color-text-tertiary)]">
+        日足=市場横断Z、2日足・週足・月足=銘柄内の時間軸Z。向きと強さの比較に使い、行どうしの数値は直接比べません。
       </p>
-    </div>
+    </section>
   )
 }
 
@@ -1886,40 +1875,33 @@ function PhysicalTimeframeConclusionCard({ view }: { view: PhysicalMomentumTimef
     trend: view.trend,
   })
   const color = physicalToneColor(built.tone)
-  const scoreTone = view.physicalMomentumScore == null
-    ? 'var(--text-muted)'
-    : view.physicalMomentumScore >= 0
-      ? 'var(--price-up)'
-      : 'var(--price-down)'
   return (
-    <div style={{ ...physicalTimeframeCardStyle, borderColor: `${color}66`, background: physicalTimeframeCardBackground(built.tone) }}>
-      <div style={physicalTimeframeCardTopStyle}>
-        <div>
-          <span style={physicalTimeframeLabelStyle}>{view.label}</span>
-          <strong style={{ ...physicalTimeframeTitleStyle, color }}>{built.label}</strong>
-        </div>
-        <span style={{ ...physicalTimeframeBadgeStyle, borderColor: `${color}66`, color }}>{view.interval}</span>
-      </div>
-      <div style={physicalTimeframeMetricRowStyle}>
-        <span>PMS <b style={{ color: scoreTone }}>{describePhysicalScore('pms', view.physicalMomentumScore)} ({fmtScore(view.physicalMomentumScore)})</b></span>
-        <span>PFS <b>{describePhysicalScore('pfs', view.physicalForceScore)} ({fmtScore(view.physicalForceScore)})</b></span>
-        <span>PES <b>{describePhysicalScore('pes', view.physicalEnergyScore)} ({fmtScore(view.physicalEnergyScore)})</b></span>
-      </div>
-      <p style={physicalTimeframeStanceStyle}>{built.stance}</p>
-      <div style={physicalTimeframeMetaStyle}>
-        <span>{view.basis}</span>
-        <span>{view.latestDate ?? '-'}</span>
-        <span>{view.scoreSource === 'market_z' ? '市場比較' : '時間軸内比較'}</span>
-      </div>
+    <div
+      className="grid grid-cols-[48px_minmax(0,1fr)] items-center gap-x-2 gap-y-1 px-2.5 py-1.5 sm:grid-cols-[48px_minmax(92px,1.2fr)_repeat(3,minmax(0,1fr))]"
+      title={`${view.label} ${view.basis} ${view.latestDate ?? ''} ${view.scoreSource === 'market_z' ? '市場比較' : '時間軸内比較'}`}
+    >
+      <span className="min-w-0">
+        <span className="block text-[10px] font-black text-[var(--color-text-primary)]">{view.label}</span>
+        <span className="block font-mono text-[8px] font-semibold text-[var(--color-text-tertiary)]">{view.scoreSource === 'market_z' ? '市場比較' : '銘柄内'}</span>
+      </span>
+      <span className="min-w-0">
+        <strong className="block truncate text-[11px] font-black" style={{ color }}>{built.label}</strong>
+        <span className="block text-[9px] font-semibold text-[var(--color-text-tertiary)]">PMS {trendArrow(view.trend)} {trendText(view.trend)}</span>
+      </span>
+      <span className="col-span-2 grid grid-cols-3 gap-2 sm:contents">
+        {([
+          ['PMS', view.physicalMomentumScore],
+          ['PFS', view.physicalForceScore],
+          ['PES', view.physicalEnergyScore],
+        ] as const).map(([code, value]) => (
+          <span key={code} className="min-w-0">
+            <span className="block text-[8px] font-bold text-[var(--color-text-tertiary)] sm:hidden">{code}</span>
+            <DivergingBar label={`${view.label} ${code}`} value={value} text={formatDelta(value)} neutral={code === 'PES'} />
+          </span>
+        ))}
+      </span>
     </div>
   )
-}
-
-function physicalTimeframeCardBackground(tone: PhysicalMomentumTone): string {
-  if (tone === 'up') return 'rgba(220, 38, 38, 0.055)'
-  if (tone === 'down') return 'rgba(37, 99, 235, 0.055)'
-  if (tone === 'warning') return 'rgba(245, 158, 11, 0.075)'
-  return 'var(--bg-elevated)'
 }
 
 function PhysicalBreakdown({ label, help, value, tone }: { label: string; help: string; value: string; tone?: number | null }) {
@@ -1935,72 +1917,38 @@ function PhysicalBreakdown({ label, help, value, tone }: { label: string; help: 
 
 function PhysicalMaFieldMap({ latest, previous }: { latest: PhysicalMomentumApiRow; previous: PhysicalMomentumApiRow | null }) {
   const field = buildMaFieldInsight(latest, previous)
-  const angles = [
-    { label: '5MA', value: latest.ma5Angle },
-    { label: '25MA', value: latest.ma25Angle },
-    { label: '75MA', value: latest.ma75Angle },
-    { label: '200MA', value: latest.ma200Angle },
-  ]
-  const angleNodes = angles.map((angle) => {
-    const deg = angleDeg(angle.value)
-    return {
-      ...angle,
-      deg,
-      arrow: angleDirectionArrow(deg),
-      labelText: angleDirectionLabel(deg),
-      color: angleDirectionColor(deg),
-    }
-  })
+  const angles = maAngleSet(latest)
+  const inputs = maFieldInputs(angles)
 
   return (
-    <div style={physicalFieldPanelStyle}>
-      <div style={physicalMiniHeaderStyle}>
-        <strong>MA力場</strong>
-        <span>平均ではなく、短期から長期への力の伝わり方を見ます。</span>
-      </div>
-      <div style={physicalFieldSummaryStyle}>
-        <strong style={{ color: field.color }}>{field.label}</strong>
-        <span>{field.description}</span>
-      </div>
-      <div style={physicalFieldMetaStyle}>
-        <span>角度幅 {field.spreadDeg == null ? '-' : `${field.spreadDeg.toFixed(1)}°`}</span>
-        <span>{field.spreadChangeDeg == null ? '変化 -' : `前回比 ${field.spreadChangeDeg >= 0 ? '+' : ''}${field.spreadChangeDeg.toFixed(1)}°`}</span>
-      </div>
-      <div style={physicalFieldFlowStyle}>
-        {angleNodes.map((node, index) => (
-          <Fragment key={node.label}>
-            <div style={{ ...physicalFieldNodeStyle, borderColor: node.color }}>
-              <span style={physicalFieldNodeLabelStyle}>{node.label}</span>
-              <strong style={{ ...physicalFieldNodeArrowStyle, color: node.color }}>{node.arrow}</strong>
-              <span style={physicalFieldNodeMetaStyle}>{node.labelText}</span>
-              <small style={physicalFieldNodeDegreeStyle}>{node.deg == null ? '-' : `${node.deg.toFixed(1)}°`}</small>
+    <section className="min-w-0 border border-[var(--color-border-default)] bg-white" aria-labelledby="physical-ma-field-title">
+      <header className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 border-b border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-2.5 py-1.5">
+        <h3 id="physical-ma-field-title" className="text-[11px] font-black text-[var(--color-text-primary)]">
+          MA力場 <span style={{ color: field.color }}>{field.label}</span>
+        </h3>
+        <span className="font-mono text-[9px] font-bold text-[var(--color-text-tertiary)]">
+          角度幅 {field.spreadDeg == null ? '—' : `${field.spreadDeg.toFixed(1)}°`} ・ 前回比 {fmtDeg(field.spreadChangeDeg)}
+        </span>
+      </header>
+      <div className="space-y-2 px-2.5 py-2">
+        <MaAngleStrip angles={angles} />
+        <dl className="m-0 grid grid-cols-3 gap-px bg-[var(--color-border-soft)] text-center">
+          {[
+            { label: '短期平均 5・25MA', value: fmtDeg(inputs.shortAvg), tone: inputs.shortAvg },
+            { label: '長期平均 75・200MA', value: fmtDeg(inputs.longAvg), tone: inputs.longAvg },
+            { label: `上向き/下向き ±${MA_FIELD_THRESHOLD_DEG}°超`, value: `${inputs.up}/${inputs.down}本`, tone: null },
+          ].map((item) => (
+            <div key={item.label} className="min-w-0 bg-white px-1 py-1">
+              <dt className="truncate text-[9px] font-bold text-[var(--color-text-tertiary)]">{item.label}</dt>
+              <dd className="m-0 font-mono text-[12px] font-black" style={{ color: angleDirectionColor(item.tone) }}>{item.value}</dd>
             </div>
-            {index < angleNodes.length - 1 && (
-              <span style={physicalFieldConnectorStyle}>→</span>
-            )}
-          </Fragment>
-        ))}
+          ))}
+        </dl>
+        <p className="m-0 text-[9px] font-semibold leading-4 text-[var(--color-text-tertiary)]">
+          判定は短期・長期の平均角度(±{MA_FIELD_THRESHOLD_DEG}°)と向きのそろった本数で決まります。
+        </p>
       </div>
-      <div style={physicalAngleRowsStyle}>
-        {angles.map((angle) => {
-          const deg = angleDeg(angle.value)
-          const tone = deg == null ? 'var(--text-muted)' : deg >= 0 ? 'var(--price-up)' : 'var(--price-down)'
-          const pct = angleBarPercent(deg)
-          const left = deg == null ? 50 : deg >= 0 ? 50 : pct
-          const width = deg == null ? 0 : Math.abs(pct - 50)
-          return (
-            <div key={angle.label} style={physicalAngleRowStyle}>
-              <span>{angle.label}</span>
-              <div style={physicalAngleTrackStyle}>
-                <i style={physicalAngleZeroStyle} />
-                <b style={{ ...physicalAngleFillStyle, left: `${left}%`, width: `${width}%`, background: tone }} />
-              </div>
-              <strong style={{ color: tone }}>{deg == null ? '-' : `${deg.toFixed(1)}°`}</strong>
-            </div>
-          )
-        })}
-      </div>
-    </div>
+    </section>
   )
 }
 
@@ -2205,34 +2153,71 @@ function PhysicalTrendChip({ label, value, tone }: { label: string; value: strin
   )
 }
 
+// buildPhysicalMomentumView が使う判定の境界(PMS ±1、PFS ±0.35、PES +1 / -0.35)
+const PHYSICAL_BOUNDARIES: Array<{ code: 'PMS' | 'PFS' | 'PES'; label: string; marks: number[] }> = [
+  { code: 'PMS', label: '強さ', marks: [-PHYSICAL_STRONG_PMS, PHYSICAL_STRONG_PMS] },
+  { code: 'PFS', label: '方向', marks: [-PHYSICAL_FORCE_THRESHOLD, PHYSICAL_FORCE_THRESHOLD] },
+  { code: 'PES', label: '熱量', marks: [-0.35, 1] },
+]
+
+function nearestBoundaryText(value: number | null, marks: number[]): string {
+  if (value == null || !Number.isFinite(value)) return '未算出'
+  const below = marks.filter((mark) => mark <= value).sort((a, b) => b - a)[0]
+  const above = marks.filter((mark) => mark > value).sort((a, b) => a - b)[0]
+  const parts: string[] = []
+  if (above != null) parts.push(`${formatDelta(above)}まで +${(above - value).toFixed(2)}`)
+  if (below != null) parts.push(`${formatDelta(below)}まで -${(value - below).toFixed(2)}`)
+  return parts.join(' / ')
+}
+
+/** 日足の判定ラベルが変わる境界と現在値の距離を示す(助言ではなく判定条件の可視化) */
 function PhysicalActionPoints({
-  latest,
+  pms,
+  pfs,
+  pes,
   trend,
   field,
 }: {
-  latest: PhysicalMomentumApiRow
+  pms: number | null
+  pfs: number | null
+  pes: number | null
   trend: PhysicalMomentumResponse['trend']
   field: PhysicalMaFieldInsight | null
 }) {
-  const points = buildPhysicalActionPoints(latest, trend, field)
+  const values: Record<'PMS' | 'PFS' | 'PES', number | null> = { PMS: pms, PFS: pfs, PES: pes }
+  const label = buildPhysicalMomentumView({ pms, pfs, pes, trend, fieldLabel: field?.label }).label
   return (
-    <div style={physicalActionPanelStyle}>
-      <div style={physicalMiniHeaderStyle}>
-        <strong>だから、どう見る？</strong>
-        <span>買い目線と空売り目線を分けて、次に確認する条件だけを表示します。</span>
+    <section className="mb-2.5 border border-[var(--color-border-default)] bg-white" aria-labelledby="physical-boundary-title">
+      <header className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 border-b border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-2.5 py-1.5">
+        <h3 id="physical-boundary-title" className="text-[11px] font-black text-[var(--color-text-primary)]">見方が変わる位置 <span className="font-bold text-[var(--color-text-secondary)]">日足「{label}」の判定境界</span></h3>
+        <span className="text-[9px] font-semibold text-[var(--color-text-tertiary)]">縦線=判定の境界 ・ 印=現在値</span>
+      </header>
+      <div className="divide-y divide-[var(--color-border-soft)] px-2.5">
+        {PHYSICAL_BOUNDARIES.map(({ code, label: axisLabel, marks }) => {
+          const value = values[code]
+          const valid = value != null && Number.isFinite(value)
+          const at = (point: number) => ((Math.max(-2.5, Math.min(2.5, point)) + 2.5) / 5) * 100
+          return (
+            <div key={code} className="grid grid-cols-[56px_minmax(0,1fr)] items-center gap-x-2 gap-y-0.5 py-1.5 sm:grid-cols-[64px_minmax(0,1.4fr)_minmax(0,1fr)]">
+              <span className="text-[10px] font-black text-[var(--color-text-secondary)]">{code} <span className="font-semibold text-[var(--color-text-tertiary)]">{axisLabel}</span></span>
+              <span className="relative block h-5" role="img" aria-label={`${code} ${valid ? formatDelta(value) : '未算出'}、判定境界 ${marks.map(formatDelta).join('と')}`}>
+                <span className="absolute inset-x-0 top-1/2 h-1.5 -translate-y-1/2 bg-[var(--color-surface-subtle)] ring-1 ring-[var(--color-border-soft)]" />
+                {marks.map((mark) => (
+                  <span key={mark} className="absolute top-0 h-5 w-px bg-[var(--color-text-secondary)]" style={{ left: `${at(mark)}%` }} />
+                ))}
+                {valid && (
+                  <span className="absolute top-0.5 h-4 w-2 -translate-x-1/2 border border-white" style={{ left: `${at(value)}%`, background: code === 'PES' ? 'var(--color-brand-900)' : scoreTone(value) === 'var(--text-primary)' ? 'var(--color-brand-900)' : scoreTone(value) }} />
+                )}
+              </span>
+              <span className="col-span-2 font-mono text-[10px] font-semibold text-[var(--color-text-secondary)] sm:col-span-1">
+                <b className="text-[var(--color-text-primary)]">{valid ? formatDelta(value) : '—'}</b>
+                <span className="ml-1.5 text-[var(--color-text-tertiary)]">{nearestBoundaryText(value, marks)}</span>
+              </span>
+            </div>
+          )
+        })}
       </div>
-      <div style={physicalActionListStyle}>
-        {points.map((point, index) => (
-          <div key={`${point.label}-${point.text}`} style={{ ...physicalActionItemStyle, ...physicalActionToneStyle(point.tone) }}>
-            <span style={{ ...physicalActionIndexStyle, ...physicalActionIndexToneStyle(point.tone) }}>{index + 1}</span>
-            <span>
-              <strong style={physicalActionLabelStyle}>{point.label}</strong>
-              <span>{point.text}</span>
-            </span>
-          </div>
-        ))}
-      </div>
-    </div>
+    </section>
   )
 }
 
@@ -2493,6 +2478,123 @@ function buildMaFieldInsight(latest: PhysicalMomentumApiRow, previous: PhysicalM
   return { label, description, color, spreadDeg, spreadChangeDeg }
 }
 
+interface MaAngleSet {
+  ma5: number | null
+  ma25: number | null
+  ma75: number | null
+  ma200: number | null
+}
+
+const MA_ANGLE_KEYS: Array<{ key: keyof MaAngleSet; label: string }> = [
+  { key: 'ma5', label: '5MA' },
+  { key: 'ma25', label: '25MA' },
+  { key: 'ma75', label: '75MA' },
+  { key: 'ma200', label: '200MA' },
+]
+
+/** APIのラジアン角を度に直すだけの表示変換 */
+function maAngleSet(row: Pick<PhysicalMomentumApiRow, 'ma5Angle' | 'ma25Angle' | 'ma75Angle' | 'ma200Angle'>): MaAngleSet {
+  return {
+    ma5: angleDeg(row.ma5Angle),
+    ma25: angleDeg(row.ma25Angle),
+    ma75: angleDeg(row.ma75Angle),
+    ma200: angleDeg(row.ma200Angle),
+  }
+}
+
+function MaAngleStrip({ angles, compact = false }: { angles: MaAngleSet | null; compact?: boolean }) {
+  return (
+    <div className="grid grid-cols-4 gap-0.5" role="list" aria-label="移動平均線の傾き(短期→長期)">
+      {MA_ANGLE_KEYS.map(({ key, label }) => {
+        const deg = angles?.[key] ?? null
+        const color = angleDirectionColor(deg)
+        return (
+          <div
+            key={key}
+            role="listitem"
+            className={`flex min-w-0 flex-col items-center justify-center overflow-hidden border bg-white px-1 py-0.5 sm:flex-row sm:gap-1 sm:py-0 ${compact ? 'sm:h-8' : 'sm:h-10'}`}
+            style={{ borderColor: deg == null ? 'var(--color-border-default)' : color }}
+            title={`${label} ${angleDirectionLabel(deg)}${deg == null ? '' : ` ${deg.toFixed(1)}°`}`}
+          >
+            <span className="text-[9px] font-bold text-[var(--color-text-tertiary)]">{label}</span>
+            <strong className="hidden text-[14px] leading-none sm:inline" style={{ color }} aria-hidden="true">{angleDirectionArrow(deg)}</strong>
+            <span className="whitespace-nowrap font-mono text-[10px] font-black" style={{ color }}>
+              <span className="sm:hidden" aria-hidden="true">{angleDirectionArrow(deg)} </span>
+              <span className="sr-only">{angleDirectionLabel(deg)} </span>{deg == null ? '—' : `${deg >= 0 ? '+' : ''}${deg.toFixed(1)}°`}
+            </span>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+interface MaFieldInputs {
+  shortAvg: number | null
+  longAvg: number | null
+  up: number
+  down: number
+  total: number
+}
+
+// buildMaFieldInsight と同じ入力(短期=5・25MA平均、長期=75・200MA平均、±0.2°)を表示用に取り出す
+function maFieldInputs(angles: MaAngleSet): MaFieldInputs {
+  const all = [angles.ma5, angles.ma25, angles.ma75, angles.ma200].filter((value): value is number => value != null)
+  return {
+    shortAvg: averageFinite([angles.ma5, angles.ma25]),
+    longAvg: averageFinite([angles.ma75, angles.ma200]),
+    up: all.filter((value) => value > MA_FIELD_THRESHOLD_DEG).length,
+    down: all.filter((value) => value < -MA_FIELD_THRESHOLD_DEG).length,
+    total: all.length,
+  }
+}
+
+const MA_FIELD_THRESHOLD_DEG = 0.2
+const MA_FIELD_SPREAD_SHIFT_DEG = 5
+
+function fmtDeg(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return '—'
+  return `${value >= 0 ? '+' : ''}${value.toFixed(1)}°`
+}
+
+/** MA力場ラベルが変わる境界を、現在の入力値と並べて文章化する(判定ロジックの閾値をそのまま使う) */
+function maFieldChangeConditions(label: string, inputs: MaFieldInputs): string[] {
+  const short = `短期平均(5・25MA)${fmtDeg(inputs.shortAvg)}`
+  const long = `長期平均(75・200MA)${fmtDeg(inputs.longAvg)}`
+  const t = MA_FIELD_THRESHOLD_DEG
+  if (label === '下方向へ力が拡散') {
+    return [
+      `${short}が-${t}°以上になると外れる(+${t}°超なら「短期上向き・長期収縮」)`,
+      `${long}が-${t}°以上になると外れる`,
+      `下向きのMA ${inputs.down}/${inputs.total}本(3本未満で外れる)`,
+    ]
+  }
+  if (label === '上方向へ力が拡散') {
+    return [
+      `${short}が+${t}°以下になると外れる(-${t}°未満なら「短期調整・長期残存」)`,
+      `${long}が+${t}°以下になると外れる`,
+      `上向きのMA ${inputs.up}/${inputs.total}本(3本未満で外れる)`,
+    ]
+  }
+  if (label === '短期上向き・長期収縮') {
+    return [
+      `${long}が-${t}°以上になると外れる(+${t}°超・上向き3本以上なら「上方向へ力が拡散」)`,
+      `${short}が+${t}°以下になると外れる`,
+    ]
+  }
+  if (label === '短期調整・長期残存') {
+    return [
+      `${long}が+${t}°以下になると外れる(-${t}°未満・下向き3本以上なら「下方向へ力が拡散」)`,
+      `${short}が-${t}°以上になると外れる`,
+    ]
+  }
+  if (label === 'MA力場未判定') return ['MA角度が3本以上そろうと判定されます']
+  return [
+    `短期・長期の平均がともに±${t}°を超えて同じ向きにそろい、同じ向きが3本以上で「上/下方向へ力が拡散」`,
+    `角度幅の前回比が±${MA_FIELD_SPREAD_SHIFT_DEG}°を超えると「拡散中/収縮中」`,
+  ]
+}
+
 function angleDeg(value: number | null | undefined): number | null {
   if (value == null || !Number.isFinite(value)) return null
   return (value * 180) / Math.PI
@@ -2507,12 +2609,6 @@ function averageFinite(values: Array<number | null>): number | null {
 function angularSpread(values: number[]): number | null {
   if (values.length === 0) return null
   return Math.max(...values) - Math.min(...values)
-}
-
-function angleBarPercent(value: number | null): number {
-  if (value == null || !Number.isFinite(value)) return 50
-  const clipped = Math.max(-75, Math.min(75, value))
-  return ((clipped + 75) / 150) * 100
 }
 
 function angleDirectionArrow(value: number | null): string {
@@ -2543,95 +2639,6 @@ function physicalToneColor(tone: PhysicalMomentumTone): string {
   if (tone === 'down') return 'var(--price-down)'
   if (tone === 'warning') return '#b45309'
   return 'var(--text-secondary)'
-}
-
-function physicalActionToneStyle(tone: PhysicalMomentumTone): CSSProperties {
-  if (tone === 'up') {
-    return {
-      borderColor: 'rgba(220, 38, 38, 0.28)',
-      background: 'linear-gradient(135deg, rgba(220, 38, 38, 0.08), #fff 72%)',
-      color: 'var(--text-primary)',
-    }
-  }
-  if (tone === 'down') {
-    return {
-      borderColor: 'rgba(37, 99, 235, 0.30)',
-      background: 'linear-gradient(135deg, rgba(37, 99, 235, 0.09), #fff 72%)',
-      color: 'var(--text-primary)',
-    }
-  }
-  if (tone === 'warning') {
-    return {
-      borderColor: 'rgba(245, 158, 11, 0.34)',
-      background: 'linear-gradient(135deg, rgba(245, 158, 11, 0.12), #fff 72%)',
-      color: 'var(--text-primary)',
-    }
-  }
-  return {}
-}
-
-function physicalActionIndexToneStyle(tone: PhysicalMomentumTone): CSSProperties {
-  const color = physicalToneColor(tone)
-  return {
-    color,
-    borderColor: color,
-    background: tone === 'neutral' ? 'var(--bg-elevated)' : '#fff',
-  }
-}
-
-function buildPhysicalMomentumInsight(
-  latest: PhysicalMomentumApiRow,
-  rank: number | null,
-  total: number,
-  trend: PhysicalMomentumResponse['trend'],
-  field: PhysicalMaFieldInsight | null,
-) {
-  const view = buildPhysicalMomentumView({
-    pms: latest.physicalMomentumScore,
-    pfs: latest.physicalForceScore,
-    pes: latest.physicalEnergyScore,
-    trend,
-    rank,
-    total,
-    fieldLabel: field?.label,
-  })
-
-  return {
-    label: view.label,
-    description: view.summary,
-    color: physicalToneColor(view.tone),
-    reasons: view.badges,
-  }
-}
-
-function buildPhysicalActionPoints(
-  latest: PhysicalMomentumApiRow,
-  trend: PhysicalMomentumResponse['trend'],
-  field: PhysicalMaFieldInsight | null,
-): PhysicalMomentumCheck[] {
-  return buildPhysicalMomentumView({
-    pms: latest.physicalMomentumScore,
-    pfs: latest.physicalForceScore,
-    pes: latest.physicalEnergyScore,
-    trend,
-    fieldLabel: field?.label,
-  }).checks
-}
-
-function physicalSignalText(value: number | null | undefined, kind: 'force' | 'energy'): string {
-  if (value == null || !Number.isFinite(value)) return kind === 'force' ? '力の変化未判定' : 'エネルギー未判定'
-  if (kind === 'force') {
-    if (value >= 1) return '上向きの力が強い'
-    if (value >= 0.35) return '上向きの力あり'
-    if (value <= -1) return '下向きの力が強い'
-    if (value <= -0.35) return '下向きの力あり'
-    return '力の変化は中立'
-  }
-  if (value >= 1) return '運動エネルギーが高い'
-  if (value >= 0.35) return '運動エネルギーあり'
-  if (value <= -1) return '運動エネルギーが弱い'
-  if (value <= -0.35) return '運動エネルギーはやや弱い'
-  return '運動エネルギーは中立'
 }
 
 function fmtRate(value: number | null | undefined): string {
@@ -2666,12 +2673,6 @@ function tradePlanToneStyle(tone: PhysicalPlanHorizon['suggestion']['tone']) {
     return { color: '#b45309', border: 'rgba(245, 158, 11, 0.36)', background: 'rgba(245, 158, 11, 0.08)' }
   }
   return { color: 'var(--text-secondary)', border: 'var(--border-subtle)', background: 'var(--bg-elevated)' }
-}
-
-function scoreBarPercent(value: number | null | undefined): number {
-  if (value == null || !Number.isFinite(value)) return 50
-  const clipped = Math.max(-2.5, Math.min(2.5, value))
-  return ((clipped + 2.5) / 5) * 100
 }
 
 function fmtScore(value: number | null | undefined): string {
@@ -2783,364 +2784,6 @@ const physicalDateBadgeStyle: CSSProperties = {
   fontSize: '11px',
   fontWeight: 700,
   padding: '4px 8px',
-}
-
-const physicalHeroStyle: CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(min(240px, 100%), 1fr))',
-  gap: '10px',
-  alignItems: 'stretch',
-  border: '1px solid var(--border-subtle)',
-  borderRadius: 'var(--radius-sm)',
-  background: 'linear-gradient(180deg, #fff, var(--bg-elevated))',
-  padding: '12px',
-  marginBottom: '10px',
-}
-
-const physicalHeroMainStyle: CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: '6px',
-  minWidth: 0,
-}
-
-const physicalHeroLabelStyle: CSSProperties = {
-  alignSelf: 'flex-start',
-  border: '1px solid currentColor',
-  borderRadius: '999px',
-  background: '#fff',
-  color: 'var(--text-muted)',
-  fontSize: '10px',
-  fontWeight: 800,
-  padding: '3px 8px',
-}
-
-const physicalHeroTitleStyle: CSSProperties = {
-  fontSize: '24px',
-  fontWeight: 800,
-  lineHeight: 1.15,
-}
-
-const physicalHeroDescriptionStyle: CSSProperties = {
-  margin: 0,
-  color: 'var(--text-secondary)',
-  fontSize: '12px',
-  lineHeight: 1.65,
-}
-
-const physicalTimeframePanelStyle: CSSProperties = {
-  border: '1px solid var(--border-subtle)',
-  borderRadius: 'var(--radius-sm)',
-  background: 'linear-gradient(180deg, #fff, var(--bg-elevated))',
-  padding: '12px',
-  marginBottom: '10px',
-}
-
-const physicalTimeframeGridStyle: CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(min(210px, 100%), 1fr))',
-  gap: '10px',
-}
-
-const physicalTimeframeCardStyle: CSSProperties = {
-  border: '1px solid var(--border-subtle)',
-  borderRadius: 'var(--radius-sm)',
-  padding: '10px',
-  display: 'grid',
-  gap: '8px',
-  minWidth: 0,
-}
-
-const physicalTimeframeCardTopStyle: CSSProperties = {
-  display: 'flex',
-  justifyContent: 'space-between',
-  gap: '8px',
-  alignItems: 'flex-start',
-}
-
-const physicalTimeframeLabelStyle: CSSProperties = {
-  display: 'block',
-  color: 'var(--text-muted)',
-  fontSize: '10px',
-  fontWeight: 800,
-}
-
-const physicalTimeframeTitleStyle: CSSProperties = {
-  display: 'block',
-  marginTop: '3px',
-  fontSize: '15px',
-  lineHeight: 1.25,
-}
-
-const physicalTimeframeBadgeStyle: CSSProperties = {
-  border: '1px solid currentColor',
-  borderRadius: '999px',
-  background: '#fff',
-  fontFamily: 'var(--font-mono)',
-  fontSize: '10px',
-  fontWeight: 900,
-  padding: '3px 7px',
-}
-
-const physicalTimeframeMetricRowStyle: CSSProperties = {
-  display: 'flex',
-  flexWrap: 'wrap',
-  gap: '6px',
-  color: 'var(--text-secondary)',
-  fontFamily: 'var(--font-mono)',
-  fontSize: '11px',
-  fontWeight: 800,
-}
-
-const physicalTimeframeStanceStyle: CSSProperties = {
-  margin: 0,
-  color: 'var(--text-primary)',
-  fontSize: '12px',
-  fontWeight: 700,
-  lineHeight: 1.55,
-}
-
-const physicalTimeframeMetaStyle: CSSProperties = {
-  display: 'flex',
-  flexWrap: 'wrap',
-  gap: '6px',
-  color: 'var(--text-muted)',
-  fontSize: '10px',
-  fontWeight: 700,
-}
-
-const physicalTimeframeNoteStyle: CSSProperties = {
-  margin: '10px 0 0',
-  color: 'var(--text-muted)',
-  fontSize: '11px',
-  lineHeight: 1.6,
-}
-
-const physicalReasonPanelStyle: CSSProperties = {
-  border: '1px solid var(--border-subtle)',
-  borderRadius: 'var(--radius-sm)',
-  background: 'rgba(255,255,255,0.72)',
-  padding: '10px',
-  minWidth: 0,
-}
-
-const physicalReasonPanelTitleStyle: CSSProperties = {
-  color: 'var(--text-muted)',
-  fontSize: '10px',
-  fontWeight: 800,
-  marginBottom: '8px',
-}
-
-const physicalReasonListStyle: CSSProperties = {
-  display: 'flex',
-  flexWrap: 'wrap',
-  gap: '6px',
-}
-
-const physicalReasonPillStyle: CSSProperties = {
-  border: '1px solid var(--border-subtle)',
-  borderRadius: '999px',
-  background: '#fff',
-  color: 'var(--text-secondary)',
-  fontSize: '10px',
-  fontWeight: 700,
-  padding: '4px 8px',
-}
-
-const physicalGaugeStyle: CSSProperties = {
-  border: '1px solid var(--border-subtle)',
-  borderRadius: 'var(--radius-sm)',
-  background: '#fff',
-  padding: '10px',
-  display: 'flex',
-  flexDirection: 'column',
-  justifyContent: 'center',
-  gap: '8px',
-  minWidth: 0,
-}
-
-const physicalGaugeValueRowStyle: CSSProperties = {
-  display: 'flex',
-  alignItems: 'baseline',
-  justifyContent: 'space-between',
-  gap: '8px',
-}
-
-const physicalGaugeTrackStyle: CSSProperties = {
-  position: 'relative',
-  height: '10px',
-  borderRadius: '999px',
-  background: 'var(--bg-surface)',
-  border: '1px solid var(--border-subtle)',
-  overflow: 'hidden',
-}
-
-const physicalGaugeFillStyle: CSSProperties = {
-  position: 'absolute',
-  left: 0,
-  top: 0,
-  bottom: 0,
-  borderRadius: '999px',
-  opacity: 0.85,
-}
-
-const physicalGaugeZeroStyle: CSSProperties = {
-  position: 'absolute',
-  left: '50%',
-  top: 0,
-  bottom: 0,
-  width: '1px',
-  background: 'var(--text-muted)',
-  opacity: 0.5,
-  zIndex: 1,
-}
-
-const physicalGaugeScaleStyle: CSSProperties = {
-  display: 'flex',
-  justifyContent: 'space-between',
-  color: 'var(--text-muted)',
-  fontFamily: 'var(--font-mono)',
-  fontSize: '9px',
-}
-
-const physicalGaugeMetaStyle: CSSProperties = {
-  display: 'flex',
-  alignItems: 'baseline',
-  justifyContent: 'space-between',
-  gap: '8px',
-  color: 'var(--text-secondary)',
-  fontSize: '10px',
-}
-
-const physicalScoreGridStyle: CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
-  gap: '8px',
-  marginBottom: '10px',
-}
-
-const physicalScoreCardStyle: CSSProperties = {
-  border: '1px solid var(--border-subtle)',
-  borderRadius: 'var(--radius-sm)',
-  background: 'var(--bg-elevated)',
-  padding: '10px',
-  display: 'flex',
-  flexDirection: 'column',
-  gap: '6px',
-}
-
-const physicalScoreTopStyle: CSSProperties = {
-  display: 'flex',
-  alignItems: 'baseline',
-  justifyContent: 'space-between',
-  gap: '8px',
-}
-
-const physicalScoreLabelWrapStyle: CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: '5px',
-  minWidth: 0,
-}
-
-const physicalScoreLabelStyle: CSSProperties = {
-  color: 'var(--text-primary)',
-  fontSize: '11px',
-  fontWeight: 800,
-}
-
-const physicalScoreCodeStyle: CSSProperties = {
-  border: '1px solid var(--border-subtle)',
-  borderRadius: '999px',
-  background: '#fff',
-  color: 'var(--text-muted)',
-  fontFamily: 'var(--font-mono)',
-  fontSize: '9px',
-  fontWeight: 800,
-  padding: '1px 5px',
-}
-
-const physicalScoreTitleStyle: CSSProperties = {
-  color: 'var(--text-primary)',
-  fontSize: '12px',
-  fontWeight: 800,
-}
-
-const physicalMeterTrackStyle: CSSProperties = {
-  height: '5px',
-  borderRadius: '999px',
-  background: 'var(--bg-surface)',
-  overflow: 'hidden',
-}
-
-const physicalMeterFillStyle: CSSProperties = {
-  display: 'block',
-  height: '100%',
-  borderRadius: '999px',
-  opacity: 0.82,
-}
-
-const physicalScoreSubStyle: CSSProperties = {
-  color: 'var(--text-secondary)',
-  fontSize: '10px',
-  lineHeight: 1.4,
-}
-
-const physicalScoreGuideStyle: CSSProperties = {
-  color: 'var(--text-muted)',
-  fontSize: '10px',
-  lineHeight: 1.45,
-}
-
-const physicalActionPanelStyle: CSSProperties = {
-  border: '1px solid var(--border-subtle)',
-  borderRadius: 'var(--radius-sm)',
-  background: 'linear-gradient(180deg, #fff 0%, var(--bg-elevated) 100%)',
-  padding: '10px',
-  marginBottom: '10px',
-}
-
-const physicalActionListStyle: CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(min(220px, 100%), 1fr))',
-  gap: '7px',
-}
-
-const physicalActionItemStyle: CSSProperties = {
-  border: '1px solid var(--border-subtle)',
-  borderRadius: 'var(--radius-sm)',
-  background: '#fff',
-  color: 'var(--text-secondary)',
-  display: 'grid',
-  gridTemplateColumns: '22px minmax(0, 1fr)',
-  gap: '7px',
-  alignItems: 'start',
-  fontSize: '11px',
-  lineHeight: 1.55,
-  padding: '8px',
-}
-
-const physicalActionLabelStyle: CSSProperties = {
-  display: 'block',
-  color: 'var(--text-primary)',
-  fontSize: '11px',
-  fontWeight: 900,
-  marginBottom: '2px',
-}
-
-const physicalActionIndexStyle: CSSProperties = {
-  width: '20px',
-  height: '20px',
-  borderRadius: '999px',
-  background: 'var(--bg-elevated)',
-  border: '1px solid var(--border-subtle)',
-  color: 'var(--text-primary)',
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  fontFamily: 'var(--font-mono)',
-  fontSize: '10px',
-  fontWeight: 800,
 }
 
 const physicalTradePlanPanelStyle: CSSProperties = {
@@ -3372,14 +3015,6 @@ const physicalBreakdownPanelStyle: CSSProperties = {
   padding: '8px',
 }
 
-const physicalFieldPanelStyle: CSSProperties = {
-  border: '1px solid var(--border-subtle)',
-  borderRadius: 'var(--radius-sm)',
-  background: '#fff',
-  padding: '8px',
-  minWidth: 0,
-}
-
 const physicalMiniHeaderStyle: CSSProperties = {
   display: 'flex',
   alignItems: 'baseline',
@@ -3388,122 +3023,6 @@ const physicalMiniHeaderStyle: CSSProperties = {
   color: 'var(--text-secondary)',
   fontSize: '11px',
   marginBottom: '8px',
-}
-
-const physicalFieldSummaryStyle: CSSProperties = {
-  border: '1px solid var(--border-subtle)',
-  borderRadius: 'var(--radius-sm)',
-  background: 'var(--bg-elevated)',
-  padding: '8px',
-  display: 'flex',
-  flexDirection: 'column',
-  gap: '4px',
-  marginBottom: '8px',
-}
-
-const physicalFieldMetaStyle: CSSProperties = {
-  display: 'flex',
-  justifyContent: 'space-between',
-  gap: '8px',
-  color: 'var(--text-muted)',
-  fontFamily: 'var(--font-mono)',
-  fontSize: '10px',
-  marginBottom: '8px',
-}
-
-const physicalFieldFlowStyle: CSSProperties = {
-  display: 'flex',
-  flexWrap: 'wrap',
-  alignItems: 'center',
-  justifyContent: 'center',
-  gap: '5px',
-  marginBottom: '9px',
-}
-
-const physicalFieldNodeStyle: CSSProperties = {
-  minWidth: '64px',
-  flex: '1 1 64px',
-  border: '1px solid var(--border-subtle)',
-  borderRadius: 'var(--radius-sm)',
-  background: 'var(--bg-elevated)',
-  padding: '7px 6px',
-  display: 'grid',
-  justifyItems: 'center',
-  gap: '2px',
-}
-
-const physicalFieldNodeLabelStyle: CSSProperties = {
-  color: 'var(--text-muted)',
-  fontFamily: 'var(--font-mono)',
-  fontSize: '9px',
-  fontWeight: 800,
-}
-
-const physicalFieldNodeArrowStyle: CSSProperties = {
-  fontSize: '18px',
-  lineHeight: 1,
-}
-
-const physicalFieldNodeMetaStyle: CSSProperties = {
-  color: 'var(--text-secondary)',
-  fontSize: '9px',
-  fontWeight: 800,
-  whiteSpace: 'nowrap',
-}
-
-const physicalFieldNodeDegreeStyle: CSSProperties = {
-  color: 'var(--text-muted)',
-  fontFamily: 'var(--font-mono)',
-  fontSize: '9px',
-}
-
-const physicalFieldConnectorStyle: CSSProperties = {
-  color: 'var(--text-muted)',
-  fontSize: '11px',
-  textAlign: 'center',
-  opacity: 0.72,
-}
-
-const physicalAngleRowsStyle: CSSProperties = {
-  display: 'grid',
-  gap: '6px',
-}
-
-const physicalAngleRowStyle: CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: '42px minmax(0, 1fr) 58px',
-  alignItems: 'center',
-  gap: '8px',
-  color: 'var(--text-secondary)',
-  fontFamily: 'var(--font-mono)',
-  fontSize: '10px',
-}
-
-const physicalAngleTrackStyle: CSSProperties = {
-  position: 'relative',
-  height: '7px',
-  borderRadius: '999px',
-  background: 'var(--bg-surface)',
-  overflow: 'hidden',
-}
-
-const physicalAngleZeroStyle: CSSProperties = {
-  position: 'absolute',
-  left: '50%',
-  top: 0,
-  bottom: 0,
-  width: '1px',
-  background: 'var(--text-muted)',
-  opacity: 0.5,
-  zIndex: 1,
-}
-
-const physicalAngleFillStyle: CSSProperties = {
-  position: 'absolute',
-  top: 0,
-  bottom: 0,
-  borderRadius: '999px',
-  opacity: 0.82,
 }
 
 const physicalBreakdownGridStyle: CSSProperties = {
@@ -4160,7 +3679,7 @@ function MarginInfoCard({
     >
       <div className="flex items-start justify-between gap-2">
         <div>
-          <div className="text-[11px] font-semibold text-[var(--color-text-primary)]">貸借/信用</div>
+          <div className="text-[11px] font-semibold text-[var(--color-text-primary)]">信用取引(週次)</div>
           <div className="mt-0.5 text-[9px] font-medium text-[var(--color-text-tertiary)]">週次信用残</div>
         </div>
         <MarginBadges
@@ -4313,6 +3832,10 @@ function BasicInfoCard({
   const lowDistance = quote?.price != null && quote.fiftyTwoWeekLow != null && quote.fiftyTwoWeekLow > 0
     ? ((quote.price / quote.fiftyTwoWeekLow) - 1) * 100
     : null
+  const rangePosition = quote?.price != null && quote.fiftyTwoWeekHigh != null && quote.fiftyTwoWeekLow != null &&
+    quote.fiftyTwoWeekHigh > quote.fiftyTwoWeekLow
+    ? Math.min(100, Math.max(0, ((quote.price - quote.fiftyTwoWeekLow) / (quote.fiftyTwoWeekHigh - quote.fiftyTwoWeekLow)) * 100))
+    : null
   const items = [
     { label: '時価総額', value: quote?.marketCap != null ? `${(quote.marketCap / 1e8).toLocaleString('ja-JP', { maximumFractionDigits: 0 })} 億円` : '---' },
     { label: '出来高', value: quote?.volume ? quote.volume.toLocaleString('ja-JP') : '---' },
@@ -4348,11 +3871,127 @@ function BasicInfoCard({
   const decision = buildBasicDecisionSummary(latestStage, physical, ml, quote)
   const physics = buildBasicPhysicsSummary(ml, summaryLoading)
 
+  const latestPhysical = physical?.latest ?? null
+  const previousPhysical = latestPhysical
+    ? [...(physical?.history ?? [])].reverse().find((row) => row.date < latestPhysical.date) ?? null
+    : null
+  const field = latestPhysical ? buildMaFieldInsight(latestPhysical, previousPhysical) : null
+  const angles = latestPhysical ? maAngleSet(latestPhysical) : null
+  const fieldInputs = angles ? maFieldInputs(angles) : null
+  const changeConditions = field && fieldInputs ? maFieldChangeConditions(field.label, fieldInputs) : []
+  const stageClose = latestStage?.close ?? null
+  const priceVsMa = latestStage && stageClose != null && Number.isFinite(stageClose)
+    ? ([
+      ['5日', latestStage.ma_5],
+      ['25日', latestStage.ma_25],
+      ['75日', latestStage.ma_75],
+      ['300日', latestStage.ma_300],
+    ] as const).map(([label, ma]) => ({
+      label,
+      position: ma == null || !Number.isFinite(ma)
+        ? null
+        : stageClose > ma ? 'above' as const : stageClose < ma ? 'below' as const : 'equal' as const,
+    }))
+    : []
+  const shortTerm = buildShortTermEvidence(latestStage, physical, ml, quote, decision)
+  const stateLoading = physicalLoading && !latestPhysical
+
   return (
     <div className={embedded ? 'contents' : 'card'} style={embedded ? undefined : { padding: '12px' }}>
+      <section
+        className={`${embedded ? 'order-first min-w-0 lg:col-span-2' : 'mb-3'} border border-[var(--color-border-default)] bg-white`}
+        style={{ borderLeftWidth: 3, borderLeftColor: field?.color ?? 'var(--color-border-default)' }}
+        aria-labelledby={`overview-current-state-${ticker.replace(/[^a-zA-Z0-9_-]/g, '-')}`}
+        data-overview-current-state
+      >
+        <div className="grid gap-x-6 gap-y-3 px-3 py-3 sm:px-4 lg:grid-cols-[minmax(0,.85fr)_minmax(0,1.5fr)]">
+          <div className="min-w-0">
+            <div className="flex items-baseline justify-between gap-2">
+              <span className="text-[10px] font-black text-[var(--color-text-tertiary)]">現在の状態 <span className="font-bold">MA力場</span></span>
+              <span className="font-mono text-[10px] font-medium text-[var(--color-text-tertiary)]">{latestPhysical?.date ?? ''}</span>
+            </div>
+            <h3
+              id={`overview-current-state-${ticker.replace(/[^a-zA-Z0-9_-]/g, '-')}`}
+              className="mt-1 text-[22px] font-black leading-tight"
+              style={{ color: field?.color ?? 'var(--color-text-tertiary)' }}
+            >
+              {field?.label ?? (stateLoading ? '読み込み中' : 'MA力場未判定')}
+            </h3>
+            {fieldInputs && (
+              <p className="mt-1.5 text-[11px] font-semibold leading-5 text-[var(--color-text-secondary)]">
+                4本のMAのうち±{MA_FIELD_THRESHOLD_DEG}°超で上向き<b className="font-mono">{fieldInputs.up}</b>本・下向き<b className="font-mono">{fieldInputs.down}</b>本。
+                短期平均<b className="font-mono" style={{ color: angleDirectionColor(fieldInputs.shortAvg) }}>{fmtDeg(fieldInputs.shortAvg)}</b>、
+                長期平均<b className="font-mono" style={{ color: angleDirectionColor(fieldInputs.longAvg) }}>{fmtDeg(fieldInputs.longAvg)}</b>
+                {field?.spreadChangeDeg != null && (
+                  <>。角度幅は前回比<b className="font-mono">{fmtDeg(field.spreadChangeDeg)}</b>({field.spreadChangeDeg > 0 ? '広がる' : field.spreadChangeDeg < 0 ? '狭まる' : '変わらず'})</>
+                )}
+              </p>
+            )}
+          </div>
+          <dl className="m-0 grid min-w-0 gap-2">
+            <div className="grid min-w-0 gap-1 sm:grid-cols-[64px_minmax(0,1fr)] sm:items-center sm:gap-2">
+              <dt className="text-[10px] font-bold text-[var(--color-text-tertiary)]">MAの傾き</dt>
+              <dd className="m-0 min-w-0"><MaAngleStrip angles={angles} compact /></dd>
+            </div>
+            <div className="grid min-w-0 gap-1 sm:grid-cols-[64px_minmax(0,1fr)] sm:items-center sm:gap-2">
+              <dt className="text-[10px] font-bold text-[var(--color-text-tertiary)]">終値とMA</dt>
+              <dd className="m-0 grid min-w-0 grid-cols-4 gap-0.5">
+                {priceVsMa.length === 0 ? (
+                  <span className="col-span-4 text-[10px] font-semibold text-[var(--color-text-tertiary)]">{combinedLoading ? '読み込み中' : '未取得'}</span>
+                ) : priceVsMa.map(({ label, position }) => (
+                  <span
+                    key={label}
+                    className="flex h-7 min-w-0 items-center justify-center gap-1 border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] text-[10px] font-bold text-[var(--color-text-secondary)]"
+                    title={`終値は${label}MAの${position === 'above' ? '上' : position === 'below' ? '下' : position === 'equal' ? '同値' : '—'}`}
+                  >
+                    {label}
+                    <b style={{ color: position === 'above' ? 'var(--price-up)' : position === 'below' ? 'var(--price-down)' : 'var(--color-text-tertiary)' }}>
+                      {position === 'above' ? '上' : position === 'below' ? '下' : position === 'equal' ? '同' : '—'}
+                    </b>
+                  </span>
+                ))}
+              </dd>
+            </div>
+            <div className="grid min-w-0 gap-1 sm:grid-cols-[64px_minmax(0,1fr)] sm:items-start sm:gap-2">
+              <dt className="text-[10px] font-bold text-[var(--color-text-tertiary)] sm:pt-1">6ステージ</dt>
+              <dd className="m-0 min-w-0">
+                {latestStage ? (
+                  <div className="grid grid-cols-3 gap-1.5">
+                    {[0, 2, 4].map((start) => (
+                      <div key={start} className="min-w-0">
+                        <div className="mb-0.5 text-center text-[9px] font-black text-[var(--color-text-secondary)]">{STAGE_TIMEFRAME_LABELS[start / 2]}</div>
+                        <div style={basicStagePairStyle}>
+                          {SUMMARY_STAGE_KEYS.slice(start, start + 2).map(({ key, label }) => (
+                            <SixStageCell key={key} label={label} stage={latestStage[key]} />
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p style={basicMutedTextStyle}>{combinedLoading ? '最新ステージを確認しています。' : '最新ステージデータがありません。'}</p>
+                )}
+              </dd>
+            </div>
+          </dl>
+        </div>
+        {changeConditions.length > 0 && (
+          <div className="grid gap-x-3 gap-y-1 border-t border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-3 py-2 sm:grid-cols-[auto_minmax(0,1fr)] sm:px-4">
+            <span className="text-[10px] font-black text-[var(--color-text-secondary)]">見方が変わる条件</span>
+            <ul className="m-0 grid gap-x-5 gap-y-0.5 p-0 text-[10px] font-semibold leading-4 text-[var(--color-text-secondary)] md:grid-cols-2">
+              {changeConditions.map((condition) => (
+                <li key={condition} className="flex gap-1.5">
+                  <span className="mt-1.5 h-1 w-1 shrink-0 bg-[var(--color-text-tertiary)]" aria-hidden="true" />
+                  <span className="min-w-0">{condition}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </section>
       <div className={embedded ? 'order-1 min-w-0' : ''} data-overview-technical-column={embedded ? '' : undefined}>
         <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '8px', marginBottom: '10px' }}>
-          <div style={{ fontSize: '12px', fontWeight: 700 }}>{embedded ? '市場・テクニカル' : '基本情報'}</div>
+          <div style={{ fontSize: '12px', fontWeight: 700 }}>{embedded ? '市場・テクニカル' : 'サマリー'}</div>
           {latestStage?.date && (
             <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', fontWeight: 500 }}>
               基準日 {latestStage.date}
@@ -4401,21 +4040,20 @@ function BasicInfoCard({
           ))}
         </div>
 
-        <div style={basicStageBlockStyle}>
-          <div style={basicSubHeaderStyle}>
-            <strong>6ステージ</strong>
-            <span>{combinedLoading ? '読込中' : latestStage ? buildStageCode(latestStage) : '未取得'}</span>
+        {rangePosition != null && quote?.fiftyTwoWeekLow != null && quote.fiftyTwoWeekHigh != null && (
+          <div
+            className="mt-2 grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 font-mono text-[10px] font-semibold text-[var(--color-text-tertiary)]"
+            role="img"
+            aria-label={`52週安値${quote.fiftyTwoWeekLow}円から高値${quote.fiftyTwoWeekHigh}円の間での現在価格の位置 ${rangePosition.toFixed(0)}%`}
+          >
+            <span>52週 安値</span>
+            <span className="relative block h-4">
+              <span className="absolute inset-x-0 top-1/2 h-1.5 -translate-y-1/2 bg-[var(--color-surface-subtle)] ring-1 ring-[var(--color-border-soft)]" />
+              <span className="absolute top-0 h-4 w-2 -translate-x-1/2 border border-white bg-[var(--color-brand-900)]" style={{ left: `${rangePosition}%` }} />
+            </span>
+            <span>高値 <b className="text-[var(--color-text-primary)]">{rangePosition.toFixed(0)}%</b></span>
           </div>
-          {latestStage ? (
-            <div style={basicStageGridStyle}>
-              {SUMMARY_STAGE_KEYS.map(({ key, label }) => (
-                <SixStageCell key={key} label={label} stage={latestStage[key]} />
-              ))}
-            </div>
-          ) : (
-            <p style={basicMutedTextStyle}>{combinedLoading ? '最新ステージを確認しています。' : '最新ステージデータがありません。'}</p>
-          )}
-        </div>
+        )}
       </div>
 
       <div
@@ -4430,67 +4068,76 @@ function BasicInfoCard({
           aria-controls="basic-signal-details"
           onClick={() => setShowSignalDetails((current) => !current)}
         >
-          <span>短期チェック・物理状態</span>
-          <span className="ml-auto truncate text-[9px] text-[var(--color-text-tertiary)]">{decision.label} / {physics.label}</span>
+          <span>短期チェック</span>
+          <span className="ml-auto truncate text-[9px] text-[var(--color-text-tertiary)]">{combinedLoading ? '読み込み中' : `${decision.label} / ${shortTerm.agreement.label}`}</span>
           <ChevronRight size={13} className={`shrink-0 transition-transform ${showSignalDetails ? 'rotate-90' : ''}`} aria-hidden="true" />
         </button>
         <div id="basic-signal-details" className={`${showSignalDetails ? 'block' : 'hidden'} sm:block`}>
-          <div className="hidden sm:flex" style={basicSignalTitleStyle}>
-            <strong>短期チェック・物理状態</strong>
-            <span>スクリーナー共通判定</span>
-          </div>
-          <div style={basicSignalGridStyle}>
           <section
             aria-label="短期チェック"
+            className="grid gap-x-5 gap-y-3 md:grid-cols-[minmax(150px,.7fr)_minmax(0,1.6fr)_minmax(0,1.1fr)]"
             style={{ ...basicSignalPaneStyle, borderLeftColor: decision.color, background: decision.background }}
           >
-            <div style={basicDecisionHeaderStyle}>
-              <span style={basicDecisionLabelStyle}>短期チェック</span>
-              <strong style={{ color: decision.color }}>{decision.label}</strong>
-              <span style={{ ...basicSignalBadgeStyle, borderColor: decision.border, color: decision.color }}>
-                {formatShortTermStrength(decision.label, decision.score)}
-              </span>
-            </div>
-            <p style={basicDecisionDescriptionStyle}>{decision.description}</p>
-            <div style={basicReasonRowStyle}>
-              {decision.reasons.map((reason) => (
-                <span key={reason} style={basicReasonPillStyle}>{reason}</span>
-              ))}
-            </div>
-            {decision.mlText && (
-              <div style={basicMlLineStyle}>
-                <span>ML類似</span>
-                <b>{decision.mlText}</b>
-              </div>
-            )}
-          </section>
-
-          <section
-            aria-label="物理状態"
-            style={{ ...basicSignalPaneStyle, borderLeftColor: physics.color, background: physics.background }}
-          >
-            <div style={basicDecisionHeaderStyle}>
-              <span style={basicDecisionLabelStyle}>物理状態</span>
-              <strong style={{ color: physics.color }}>{physics.label}</strong>
-              {physics.pullbackVerdict && (
-                <span style={{ ...basicSignalBadgeStyle, borderColor: physics.border, color: physics.color }}>
-                  {physics.pullbackVerdict}
+            <div className="min-w-0">
+              <div style={basicDecisionLabelStyle}>短期チェック <span className="font-semibold">現在</span></div>
+              <strong className="mt-0.5 block text-[16px] font-black leading-tight" style={{ color: decision.color }}>
+                {combinedLoading ? '読み込み中' : decision.label}
+              </strong>
+              {!combinedLoading && (
+                <span className="mt-1 inline-block" style={{ ...basicSignalBadgeStyle, marginLeft: 0, maxWidth: '100%', borderColor: decision.border, color: decision.color }}>
+                  {formatShortTermStrength(decision.label, decision.score)}
                 </span>
               )}
-            </div>
-            <p style={basicDecisionDescriptionStyle}>{physics.description}</p>
-            {physics.watchPoint && (
-              <div style={basicPhysicsPointStyle}>
-                <span>確認点</span>
-                <b>{physics.watchPoint}</b>
+              <div className="mt-2 text-[10px] font-bold text-[var(--color-text-secondary)]">
+                短期と中期 <b style={{ color: shortTerm.agreement.color }}>{shortTerm.agreement.label}</b>
               </div>
-            )}
-            <div style={basicMlLineStyle}>
-              <span>物理特徴量基準日</span>
-              <b>{physics.asOfDate ?? '---'}</b>
+              {!combinedLoading && shortTerm.reading && (
+                <p className="m-0 mt-1 text-[10px] font-semibold leading-4 text-[var(--color-text-secondary)]">{shortTerm.reading}</p>
+              )}
+            </div>
+
+            <div className="min-w-0">
+              <div style={basicDecisionLabelStyle}>根拠</div>
+              <div className="mt-1 grid gap-2 sm:grid-cols-2 md:grid-cols-1 lg:grid-cols-2">
+                {shortTerm.sides.map((side) => (
+                  <div key={side.key} className="min-w-0 border-t border-[var(--color-border-soft)] pt-1">
+                    <div className="flex items-baseline justify-between gap-2 text-[10px] font-black text-[var(--color-text-primary)]">
+                      <span>{side.label}</span>
+                      <span className="font-mono text-[9px] font-bold text-[var(--color-text-tertiary)]">▲{side.up} ▼{side.down}</span>
+                    </div>
+                    <ul className="m-0 mt-0.5 grid gap-0.5 p-0">
+                      {side.items.map((item) => (
+                        <li key={item.label} className="grid grid-cols-[12px_minmax(0,1fr)_auto] items-baseline gap-1 text-[10px] leading-4">
+                          <span aria-hidden="true" className="font-mono text-[9px] font-black" style={{ color: directionColor(item.direction) }}>{directionGlyph(item.direction)}</span>
+                          <span className="truncate font-semibold text-[var(--color-text-tertiary)]">{item.label}</span>
+                          <b className="truncate text-right font-mono text-[10px] text-[var(--color-text-primary)]">
+                            <span className="sr-only">{directionWord(item.direction)} </span>{item.value}
+                          </b>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-1.5 flex flex-wrap gap-x-3 text-[9px] font-semibold text-[var(--color-text-tertiary)]">
+                <span>値動きの近い銘柄 <b className="text-[var(--color-text-secondary)]">{decision.mlText}</b></span>
+                {physics.pullbackVerdict && <span>押し目判定 <b className="text-[var(--color-text-secondary)]">{physics.pullbackVerdict}</b></span>}
+                <span>物理特徴量 {physics.asOfDate ?? '---'}</span>
+              </div>
+            </div>
+
+            <div className="min-w-0">
+              <div style={basicDecisionLabelStyle}>見方が変わる条件</div>
+              <ul className="m-0 mt-1 grid gap-1 p-0">
+                {shortTerm.conditions.map((condition) => (
+                  <li key={condition} className="flex gap-1.5 text-[10px] font-semibold leading-4 text-[var(--color-text-secondary)]">
+                    <span className="mt-1.5 h-1 w-1 shrink-0 bg-[var(--color-text-tertiary)]" aria-hidden="true" />
+                    <span className="min-w-0">{condition}</span>
+                  </li>
+                ))}
+              </ul>
             </div>
           </section>
-          </div>
         </div>
       </div>
       {marketSnapshot && (
@@ -4514,11 +4161,6 @@ function SixStageCell({ label, stage }: { label: string; stage: number | null })
       <small style={basicStageCellTextStyle}>{validStage ? shortStageLabel(validStage) : '不足'}</small>
     </div>
   )
-}
-
-function buildStageCode(row: SummaryStageEntry | null): string {
-  if (!row) return '------'
-  return SUMMARY_STAGE_KEYS.map(({ key }) => normalizeStage(row[key]) ?? '-').join('')
 }
 
 function normalizeStage(stage: number | null | undefined): number | null {
@@ -4592,6 +4234,208 @@ function buildBasicPhysicsSummary(ml: BasicMlResponse | null, loading: boolean) 
   }
 }
 
+type EvidenceDirection = 'up' | 'down' | 'flat' | null
+
+interface ShortTermEvidenceItem {
+  label: string
+  /** 結論文で使う短い名前 */
+  name: string
+  value: string
+  direction: EvidenceDirection
+}
+
+interface ShortTermEvidenceSide {
+  key: 'short' | 'medium'
+  label: string
+  items: ShortTermEvidenceItem[]
+  up: number
+  down: number
+  direction: EvidenceDirection
+}
+
+// lib/short-term-check と同じ閾値・区分を表示用に参照する(判定そのものは buildShortTermCheck の結果を使う)
+const SHORT_TERM_PFS_THRESHOLD = 0.8
+const SHORT_TERM_CHANGE_THRESHOLD = 2
+const SHORT_TERM_PMS_LEVEL = 0.35
+const SHORT_TERM_STRONG_PCT = 40
+const SHORT_TERM_LEAN_PCT = 14
+const PHYSICS_UP_STATUSES = ['上昇加速', '上昇継続', '押し目形成', '反発準備']
+const PHYSICS_DOWN_STATUSES = ['過熱注意', '失速警戒', '下落加速']
+
+function stageSide(stage: number | null | undefined): EvidenceDirection {
+  const value = normalizeStage(stage)
+  if (value == null) return null
+  if (value === 1 || value === 6) return 'up'
+  if (value === 3 || value === 4) return 'down'
+  return 'flat'
+}
+
+function tallyDirection(directions: EvidenceDirection[]): EvidenceDirection {
+  const known = directions.filter((direction): direction is Exclude<EvidenceDirection, null> => direction != null)
+  if (known.length === 0) return null
+  const up = known.filter((direction) => direction === 'up').length
+  const down = known.filter((direction) => direction === 'down').length
+  return up > down ? 'up' : down > up ? 'down' : 'flat'
+}
+
+function thresholdDirection(value: number | null | undefined, threshold: number): EvidenceDirection {
+  if (value == null || !Number.isFinite(value)) return null
+  return value >= threshold ? 'up' : value <= -threshold ? 'down' : 'flat'
+}
+
+function stagePairText(a: number | null | undefined, b: number | null | undefined): string {
+  return `S${normalizeStage(a) ?? '-'}・S${normalizeStage(b) ?? '-'}`
+}
+
+function directionGlyph(direction: EvidenceDirection): string {
+  return direction === 'up' ? '▲' : direction === 'down' ? '▼' : direction === 'flat' ? '–' : '·'
+}
+
+function directionWord(direction: EvidenceDirection): string {
+  return direction === 'up' ? '上向き' : direction === 'down' ? '下向き' : direction === 'flat' ? '中立' : '未取得'
+}
+
+function directionColor(direction: EvidenceDirection): string {
+  return direction === 'up' ? 'var(--price-up)' : direction === 'down' ? 'var(--price-down)' : 'var(--color-text-tertiary)'
+}
+
+function upperStageText(stage: SummaryStageEntry): string {
+  const upper = [stage.weekly_a_stage, stage.weekly_b_stage, stage.monthly_a_stage, stage.monthly_b_stage].map(stageSide)
+  const positive = upper.filter((side) => side === 'up').length
+  const negative = upper.filter((side) => side === 'down').length
+  if (positive >= 3) return '強気整合'
+  if (negative >= 3) return '弱気整合'
+  if (positive > negative) return 'やや強い'
+  if (negative > positive) return 'やや弱い'
+  return '混在'
+}
+
+/** 短期チェックの入力を短期/中期に分け、向きと一致・不一致、判定が変わる境界を並べる */
+function buildShortTermEvidence(
+  stage: SummaryStageEntry | null,
+  physical: PhysicalMomentumResponse | null,
+  ml: BasicMlResponse | null,
+  quote: StockQuote | null,
+  decision: ReturnType<typeof buildBasicDecisionSummary>,
+) {
+  const latest = physical?.latest ?? null
+  const status = ml?.physicsAnalysis?.physicsStatus ?? null
+  const statusDirection: EvidenceDirection = status == null || status === '算出待ち'
+    ? null
+    : PHYSICS_UP_STATUSES.includes(status) ? 'up' : PHYSICS_DOWN_STATUSES.includes(status) ? 'down' : 'flat'
+  const shortItems: ShortTermEvidenceItem[] = [
+    {
+      label: '日足Stage A・B',
+      name: '日足Stage',
+      value: stage ? stagePairText(stage.daily_a_stage, stage.daily_b_stage) : '—',
+      direction: stage ? tallyDirection([stageSide(stage.daily_a_stage), stageSide(stage.daily_b_stage)]) : null,
+    },
+    {
+      label: 'PFS 足元の力',
+      name: 'PFS',
+      value: formatDelta(latest?.physicalForceScore),
+      direction: thresholdDirection(latest?.physicalForceScore, SHORT_TERM_PFS_THRESHOLD),
+    },
+    {
+      label: '当日騰落',
+      name: '当日騰落',
+      value: fmtPct(quote?.changePercent),
+      direction: thresholdDirection(quote?.changePercent, SHORT_TERM_CHANGE_THRESHOLD),
+    },
+    { label: '物理分類', name: '物理分類', value: status ?? '—', direction: statusDirection },
+  ]
+  const mediumItems: ShortTermEvidenceItem[] = [
+    {
+      label: '週足Stage A・B',
+      name: '週足Stage',
+      value: stage ? stagePairText(stage.weekly_a_stage, stage.weekly_b_stage) : '—',
+      direction: stage ? tallyDirection([stageSide(stage.weekly_a_stage), stageSide(stage.weekly_b_stage)]) : null,
+    },
+    {
+      label: '月足Stage A・B',
+      name: '月足Stage',
+      value: stage ? stagePairText(stage.monthly_a_stage, stage.monthly_b_stage) : '—',
+      direction: stage ? tallyDirection([stageSide(stage.monthly_a_stage), stageSide(stage.monthly_b_stage)]) : null,
+    },
+    {
+      label: 'PMS 20営業日',
+      name: 'PMS',
+      value: formatDelta(latest?.physicalMomentumScore),
+      direction: thresholdDirection(latest?.physicalMomentumScore, SHORT_TERM_PMS_LEVEL),
+    },
+  ]
+  const side = (key: ShortTermEvidenceSide['key'], label: string, items: ShortTermEvidenceItem[]): ShortTermEvidenceSide => ({
+    key,
+    label,
+    items,
+    up: items.filter((item) => item.direction === 'up').length,
+    down: items.filter((item) => item.direction === 'down').length,
+    direction: tallyDirection(items.map((item) => item.direction)),
+  })
+  const shortSide = side('short', '短期 日足・足元', shortItems)
+  const mediumSide = side('medium', stage ? `中期 週・月足(上位足 ${upperStageText(stage)})` : '中期 週・月足', mediumItems)
+
+  const agreement = shortSide.direction == null || mediumSide.direction == null
+    ? { label: '判定材料なし', color: 'var(--color-text-tertiary)' }
+    : shortSide.direction === mediumSide.direction && shortSide.direction !== 'flat'
+      ? { label: `一致(ともに${directionWord(shortSide.direction)})`, color: directionColor(shortSide.direction) }
+      : shortSide.direction !== 'flat' && mediumSide.direction !== 'flat'
+        ? { label: `不一致(短期${directionGlyph(shortSide.direction)} 中期${directionGlyph(mediumSide.direction)})`, color: '#b45309' }
+        : { label: `片方が中立(短期${directionGlyph(shortSide.direction)} 中期${directionGlyph(mediumSide.direction)})`, color: 'var(--color-text-secondary)' }
+
+  const boundary: Record<string, string> = {
+    強気優勢: `上昇強度が${SHORT_TERM_STRONG_PCT}%未満で「好転候補」`,
+    好転候補: `上昇強度${SHORT_TERM_STRONG_PCT}%以上で「強気優勢」、${SHORT_TERM_LEAN_PCT}%未満で「中立」`,
+    中立: `上昇強度${SHORT_TERM_LEAN_PCT}%以上で「好転候補」、下落圧力${SHORT_TERM_LEAN_PCT}%以上で「弱含み注意」`,
+    弱含み注意: `下落圧力${SHORT_TERM_STRONG_PCT}%以上で「下落警戒」、${SHORT_TERM_LEAN_PCT}%未満で「中立」`,
+    下落警戒: `下落圧力が${SHORT_TERM_STRONG_PCT}%未満で「弱含み注意」`,
+  }
+  const conditions: string[] = []
+  if (boundary[decision.label]) conditions.push(boundary[decision.label])
+  if (status && PHYSICS_DOWN_STATUSES.includes(status) && decision.label !== '下落警戒') {
+    conditions.push(`物理分類「${status}」の間は上向き側の判定が抑えられる`)
+  }
+  const bearish = decision.label === '弱含み注意' || decision.label === '下落警戒'
+  const bullish = decision.label === '強気優勢' || decision.label === '好転候補'
+  if (bearish || bullish) {
+    const aligned: EvidenceDirection = bearish ? 'down' : 'up'
+    const daily = shortItems[0]
+    const pfs = shortItems[1]
+    if (daily.direction === aligned) conditions.push(`日足Stageが${bearish ? 'S3/S4' : 'S1/S6'}から外れる`)
+    if (pfs.direction === aligned) {
+      conditions.push(`PFS ${pfs.value}が${bearish ? `-${SHORT_TERM_PFS_THRESHOLD}を上回る` : `+${SHORT_TERM_PFS_THRESHOLD}を下回る`}`)
+    }
+    if (statusDirection === aligned && status) conditions.push(`物理分類「${status}」が変わる`)
+  }
+
+  const reading = shortSide.direction == null || mediumSide.direction == null
+    ? null
+    : `${shortTermSideReading('短期', shortSide)}。${shortTermSideReading('中期', mediumSide)}。`
+
+  return { sides: [shortSide, mediumSide], agreement, reading, conditions: conditions.slice(0, 4) }
+}
+
+/** 根拠の向きを「何が支え、何が逆向き・中立か」の一文にまとめる(各項目の向き判定をそのまま使う) */
+function shortTermSideReading(title: string, side: ShortTermEvidenceSide): string {
+  const names = (direction: EvidenceDirection) => side.items.filter((item) => item.direction === direction).map((item) => item.name)
+  const up = names('up')
+  const down = names('down')
+  const flat = names('flat')
+  if (side.direction == null) return `${title}は判定材料なし`
+  if (side.direction === 'flat') {
+    return up.length === 0 && down.length === 0
+      ? `${title}は向きを示す材料がなく中立`
+      : `${title}は上向き(${up.join('・')})と下向き(${down.join('・')})が拮抗`
+  }
+  const lead = side.direction === 'up' ? up : down
+  const opposite = side.direction === 'up' ? down : up
+  const others = opposite.length + flat.length
+  let text = `${title}は${lead.join('・')}${lead.length === 1 && others > 0 ? 'のみ' : ''}が${directionWord(side.direction)}`
+  if (opposite.length > 0) text += `、${opposite.join('・')}は${directionWord(side.direction === 'up' ? 'down' : 'up')}`
+  if (flat.length > 0) text += `、${flat.join('・')}は中立`
+  return text
+}
+
 function shortTermToneStyle(tone: ShortTermCheckTone) {
   if (tone === 'bullish') {
     return { color: 'var(--price-up)', border: 'rgba(22, 163, 74, 0.32)', background: 'rgba(22, 163, 74, 0.07)' }
@@ -4622,26 +4466,10 @@ function physicsToneStyle(status: PhysicsStatus) {
   return { color: 'var(--text-secondary)', border: 'var(--border-subtle)', background: 'var(--bg-elevated)' }
 }
 
-const basicStageBlockStyle: CSSProperties = {
-  marginTop: '12px',
-  paddingTop: '12px',
-  borderTop: '1px solid var(--border-subtle)',
-}
-
-const basicSubHeaderStyle: CSSProperties = {
-  display: 'flex',
-  alignItems: 'baseline',
-  justifyContent: 'space-between',
-  gap: '8px',
-  marginBottom: '8px',
-  color: 'var(--text-primary)',
-  fontSize: '11px',
-}
-
-const basicStageGridStyle: CSSProperties = {
+const basicStagePairStyle: CSSProperties = {
   display: 'grid',
-  gridTemplateColumns: 'repeat(6, minmax(0, 1fr))',
-  gap: '5px',
+  gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+  gap: '3px',
 }
 
 const basicStageCellStyle: CSSProperties = {
@@ -4706,22 +4534,6 @@ const basicSignalEmbeddedStyle: CSSProperties = {
   borderTop: '1px solid var(--border-subtle)',
 }
 
-const basicSignalTitleStyle: CSSProperties = {
-  display: 'flex',
-  alignItems: 'baseline',
-  justifyContent: 'space-between',
-  gap: '8px',
-  marginBottom: '6px',
-  color: 'var(--text-primary)',
-  fontSize: '11px',
-}
-
-const basicSignalGridStyle: CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(min(220px, 100%), 1fr))',
-  gap: '8px',
-}
-
 const basicSignalPaneStyle: CSSProperties = {
   minWidth: 0,
   borderLeft: '2px solid var(--border-subtle)',
@@ -4743,62 +4555,8 @@ const basicSignalBadgeStyle: CSSProperties = {
   whiteSpace: 'nowrap',
 }
 
-const basicDecisionHeaderStyle: CSSProperties = {
-  display: 'flex',
-  alignItems: 'baseline',
-  justifyContent: 'space-between',
-  gap: '8px',
-}
-
 const basicDecisionLabelStyle: CSSProperties = {
   color: 'var(--text-muted)',
   fontSize: '10px',
   fontWeight: 800,
-}
-
-const basicDecisionDescriptionStyle: CSSProperties = {
-  margin: '6px 0 0',
-  color: 'var(--text-secondary)',
-  fontSize: '10px',
-  lineHeight: 1.55,
-  fontWeight: 650,
-}
-
-const basicReasonRowStyle: CSSProperties = {
-  display: 'flex',
-  flexWrap: 'wrap',
-  gap: '4px',
-  marginTop: '7px',
-}
-
-const basicReasonPillStyle: CSSProperties = {
-  border: '1px solid var(--border-subtle)',
-  borderRadius: '999px',
-  background: '#fff',
-  color: 'var(--text-secondary)',
-  padding: '2px 6px',
-  fontSize: '9px',
-  fontWeight: 800,
-}
-
-const basicMlLineStyle: CSSProperties = {
-  marginTop: '7px',
-  display: 'flex',
-  justifyContent: 'space-between',
-  gap: '8px',
-  borderTop: '1px solid var(--border-subtle)',
-  paddingTop: '6px',
-  color: 'var(--text-muted)',
-  fontSize: '10px',
-}
-
-const basicPhysicsPointStyle: CSSProperties = {
-  marginTop: '7px',
-  display: 'grid',
-  gridTemplateColumns: 'auto minmax(0, 1fr)',
-  gap: '6px',
-  alignItems: 'start',
-  color: 'var(--text-muted)',
-  fontSize: '9px',
-  lineHeight: 1.45,
 }
