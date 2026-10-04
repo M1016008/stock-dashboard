@@ -99,11 +99,13 @@ export interface SimilarityComparisonReadModel {
     label: string
     groupName: string | null
     metrics: Partial<Record<ComparisonMetricKey, ComparisonDistribution>>
+    definition: string
   }
   coverage: {
     activeUniverse: number
     financialFeatureUniverse: number
     sectorPeers: number
     selectedCompanies: number
+    baseFinancialMetricCoveragePercent: number
   }
 }

@@ -20,6 +20,14 @@ interface StageEntry {
   close: number | null
 }
 
+export interface StageStabilitySummary {
+  availableAxes: number
+  alignedAxes: number
+  dominantStage: number | null
+  transitionCount: number
+  observationCount: number
+}
+
 export interface StageTimelineSnapshot {
   status: 'loading' | 'available' | 'missing' | 'error'
   date: string | null
@@ -155,6 +163,32 @@ function buildTicks(entries: StageEntry[], granularity: Granularity): Array<{ in
   }))
 }
 
+export function summarizeStageStability(entries: StageEntry[]): StageStabilitySummary {
+  const latest = entries.at(-1)
+  const latestValues = latest ? SYSTEMS.flatMap(({ key }) => {
+    const value = latest[key]
+    return value == null ? [] : [value]
+  }) : []
+  const counts = new Map<number, number>()
+  for (const stage of latestValues) counts.set(stage, (counts.get(stage) ?? 0) + 1)
+  const dominant = [...counts.entries()].sort((left, right) => right[1] - left[1] || left[0] - right[0])[0] ?? null
+  let transitionCount = 0
+  for (const { key } of SYSTEMS) {
+    for (let index = 1; index < entries.length; index += 1) {
+      const previous = entries[index - 1][key]
+      const current = entries[index][key]
+      if (previous != null && current != null && previous !== current) transitionCount += 1
+    }
+  }
+  return {
+    availableAxes: latestValues.length,
+    alignedAxes: dominant?.[1] ?? 0,
+    dominantStage: dominant?.[0] ?? null,
+    transitionCount,
+    observationCount: entries.length,
+  }
+}
+
 /**
  * 選択粒度に応じたステージ変遷を表示。同じ取得結果を2形式で切り替える。
  * Timeline: 系統ごとの連続期間レーン(幅=同一ステージの継続期間数)
@@ -175,6 +209,7 @@ export function StageTimeline({
   const [granularity, setGranularity] = useState<Granularity>('weekly')
   const [count, setCount] = useState(DEFAULT_STAGE_TIMELINE_DISPLAY_COUNTS.weekly)
   const [view, setView] = useState<HistoryView>('timeline')
+  const [weekly13Summary, setWeekly13Summary] = useState<StageStabilitySummary | null>(null)
   const classicScrollRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -220,6 +255,7 @@ export function StageTimeline({
         const history = (d.history ?? []) as StageEntry[]
         const latest = history.at(-1) ?? null
         setEntries(history)
+        if (granularity === 'weekly' && count === 13) setWeekly13Summary(summarizeStageStability(history))
         setActiveStartDate(d.activeStartDate ?? null)
         onSnapshotChange?.(latest ? {
           status: 'available',
@@ -359,6 +395,21 @@ export function StageTimeline({
           </div>
         </div>
       </div>
+
+      {weekly13Summary && (
+        <div className="mb-2 grid gap-px border border-[var(--color-border-soft)] bg-[var(--color-border-soft)] sm:grid-cols-2" aria-label="13週のStage構造要約">
+          <div className="bg-white px-3 py-2 text-[10px] font-semibold text-[var(--color-text-secondary)]">
+            <span className="block text-[9px] font-black text-[var(--color-text-tertiary)]">現在の6軸整合度</span>
+            <b className="font-mono text-[13px] text-[var(--color-text-primary)]">{weekly13Summary.alignedAxes}/{weekly13Summary.availableAxes}軸</b>
+            {weekly13Summary.dominantStage && <span> が S{weekly13Summary.dominantStage}</span>}
+          </div>
+          <div className="bg-white px-3 py-2 text-[10px] font-semibold text-[var(--color-text-secondary)]">
+            <span className="block text-[9px] font-black text-[var(--color-text-tertiary)]">13週のStage変更</span>
+            <b className="font-mono text-[13px] text-[var(--color-text-primary)]">{weekly13Summary.transitionCount}回</b>
+            <span> / 6軸合計。方向性ではなく切替回数</span>
+          </div>
+        </div>
+      )}
 
       {error && <p style={{ fontSize: '11px', color: 'var(--price-down)' }}>エラー: {error}</p>}
 

@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   BarChart3,
   Check,
@@ -133,9 +133,19 @@ function fmtNumber(value: number, format: MetricFormat, compact = false): string
 
 function fmtValue(value: ComparisonValue, format: MetricFormat): string {
   if (value.value != null && value.availability === 'available') return fmtNumber(value.value, format)
-  if (value.availability === 'not_applicable') return 'N/A'
-  if (value.availability === 'not_meaningful') return 'N/M'
-  return '—'
+  if (value.availability === 'not_applicable') return '対象外'
+  if (value.availability === 'not_meaningful') return '算出不能'
+  return 'データなし'
+}
+
+export function paddedNumericDomain(values: number[], paddingRatio = 0.12): [number, number] {
+  const finiteValues = values.filter(Number.isFinite)
+  if (finiteValues.length === 0) return [0, 1]
+  const minimum = Math.min(...finiteValues)
+  const maximum = Math.max(...finiteValues)
+  const span = maximum - minimum
+  const padding = Math.max(Math.abs(minimum), Math.abs(maximum), 1) * (span === 0 ? 0.08 : 0) + span * paddingRatio
+  return [minimum - padding, maximum + padding]
 }
 
 function StageStrip({ company }: { company: ComparisonCompany }) {
@@ -290,9 +300,12 @@ export function SimilarityComparisonDetail({ ticker, analysisDate = null }: Simi
   const [scatterId, setScatterId] = useState(SCATTER_OPTIONS[0].id)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const resolvedRequestRef = useRef<string | null>(null)
   const selectedKey = selected.join(',')
 
   useEffect(() => {
+    const requestIdentity = `${ticker}:${analysisDate ?? 'latest'}:${selectedKey}`
+    if (resolvedRequestRef.current === requestIdentity) return
     const controller = new AbortController()
     const params = new URLSearchParams()
     if (analysisDate) params.set('as_of', analysisDate)
@@ -311,6 +324,8 @@ export function SimilarityComparisonDetail({ ticker, analysisDate = null }: Simi
       .then((body) => {
         if (controller.signal.aborted) return
         setModel(body)
+        const resolvedIdentity = `${ticker}:${analysisDate ?? 'latest'}:${body.selectedTickers.join(',')}`
+        resolvedRequestRef.current = resolvedIdentity
         if (selected.length === 0) setSelected(body.selectedTickers)
       })
       .catch((reason) => {
@@ -338,6 +353,10 @@ export function SimilarityComparisonDetail({ ticker, analysisDate = null }: Simi
       isBase: company.isBase,
     }]
   }), [model, scatterOption])
+  const scatterDomains = useMemo(() => ({
+    x: paddedNumericDomain(scatterData.map((point) => point.x)),
+    y: paddedNumericDomain(scatterData.map((point) => point.y)),
+  }), [scatterData])
 
   const baseCompany = model?.companies.find((company) => company.isBase) ?? null
   const bandSections = useMemo(() => {
@@ -464,6 +483,13 @@ export function SimilarityComparisonDetail({ ticker, analysisDate = null }: Simi
                 )}
               </div>
             </div>
+            <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 border-t border-[var(--color-border-soft)] pt-2 text-[9px] font-bold text-[var(--color-text-secondary)]">
+              <span>類似候補 <b className="font-mono text-[var(--color-text-primary)]">{closestGroup?.candidates.length ?? 0}件</b></span>
+              <span>33業種母集団 <b className="font-mono text-[var(--color-text-primary)]">{model.coverage.sectorPeers}社</b></span>
+              <span>対象指標の充足 <b className="font-mono text-[var(--color-text-primary)]">{model.coverage.baseFinancialMetricCoveragePercent.toFixed(0)}%</b></span>
+              {(closestGroup?.candidates.length ?? 0) > 0 && (closestGroup?.candidates.length ?? 0) <= 2 && <span className="border border-amber-300 bg-amber-50 px-1.5 text-amber-800">比較候補が少ないため参考値</span>}
+            </div>
+            <p className="m-0 mt-1 text-[8px] font-medium text-[var(--color-text-tertiary)]">{model.sectorDistribution.definition}</p>
           </section>
 
           <section className="border-b border-[var(--color-border-default)] px-3 py-3 sm:px-4" aria-labelledby="peer-band-title">
@@ -644,10 +670,10 @@ export function SimilarityComparisonDetail({ ticker, analysisDate = null }: Simi
               <div className="h-[230px] min-w-0">
                 {scatterData.length >= 2 ? (
                   <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={180}>
-                    <ScatterChart margin={{ top: 18, right: 18, bottom: 12, left: 4 }}>
+                    <ScatterChart margin={{ top: 30, right: 38, bottom: 18, left: 12 }}>
                       <CartesianGrid stroke="var(--color-border-soft)" strokeDasharray="3 3" />
-                      <XAxis type="number" dataKey="x" name={scatterOption.xLabel} tick={{ fontSize: 9 }} tickFormatter={(value) => fmtNumber(Number(value), scatterOption.xFormat, true)} />
-                      <YAxis type="number" dataKey="y" name={scatterOption.yLabel} tick={{ fontSize: 9 }} tickFormatter={(value) => fmtNumber(Number(value), scatterOption.yFormat, true)} width={52} />
+                      <XAxis type="number" dataKey="x" name={scatterOption.xLabel} domain={scatterDomains.x} allowDataOverflow={false} tick={{ fontSize: 9 }} tickFormatter={(value) => fmtNumber(Number(value), scatterOption.xFormat, true)} />
+                      <YAxis type="number" dataKey="y" name={scatterOption.yLabel} domain={scatterDomains.y} allowDataOverflow={false} tick={{ fontSize: 9 }} tickFormatter={(value) => fmtNumber(Number(value), scatterOption.yFormat, true)} width={58} />
                       <Tooltip cursor={{ strokeDasharray: '3 3' }} formatter={(value, name) => fmtNumber(Number(value), name === 'x' ? scatterOption.xFormat : scatterOption.yFormat, true)} labelFormatter={(_, payload) => payload?.[0]?.payload?.name ?? ''} />
                       <Scatter data={scatterData}>
                         {scatterData.map((point) => <Cell key={point.ticker} fill={point.isBase ? 'var(--color-market-red)' : 'var(--color-text-tertiary)'} stroke={point.isBase ? 'var(--color-market-red)' : 'white'} strokeWidth={point.isBase ? 4 : 1.5} />)}
@@ -670,6 +696,7 @@ export function SimilarityComparisonDetail({ ticker, analysisDate = null }: Simi
             <span>構造 {model.structureDate ?? '—'}</span>
             <span>財務候補 {model.coverage.financialFeatureUniverse.toLocaleString()}社</span>
             <span>同業母数 {model.coverage.sectorPeers}社</span>
+            <span>欠損表示: 対象外 / 算出不能 / データなし</span>
           </footer>
         </>
       )}
