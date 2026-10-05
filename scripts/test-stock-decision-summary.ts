@@ -2,7 +2,15 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { StageTimelineValue } from '@/components/stock/StageTimeline'
+import {
+  buildRuns,
+  buildStageTransitions,
+  classifyRunLabel,
+  pickTickCount,
+  StageTimelineValue,
+  summarizeStageStability,
+  type StageEntry,
+} from '@/components/stock/StageTimeline'
 import {
   buildStockDecisionSummaryUrls,
   formatFinancialSummaryValue,
@@ -181,12 +189,14 @@ const chartWorkspace = stockDetailSource.slice(
   stockDetailSource.indexOf('function ChartWorkspace'),
   stockDetailSource.indexOf('function FundamentalWorkspace'),
 )
+// 読み順: 結論+チャート+根拠 → Stage変遷 → 月足MA(Stage変遷の直後) → Physical Momentum → 指標の見方
 const chartOrder = [
   '<TechnicalChartSnapshot',
   '<CandlestickChart',
   '<StageTimeline\n',
-  '<PhysicalMomentumSection',
   '<Ma25mMonitorSummary',
+  '<PhysicalMomentumSection',
+  '<TechnicalSnapshotGuide',
 ]
 previousIndex = -1
 for (const marker of chartOrder) {
@@ -217,13 +227,64 @@ const technicalSnapshot = stockDetailSource.slice(
 )
 assert.match(technicalSnapshot, /background: value \? STAGE_BG_COLORS\[value\]/)
 assert.match(technicalSnapshot, /borderColor: value \? STAGE_BORDER_COLORS\[value\]/)
-assert.match(technicalSnapshot, /<strong className="font-mono text-\[14px\] leading-none text-\[var\(--color-text-primary\)\]">/)
+assert.match(technicalSnapshot, /<strong className="font-mono text-\[14px\] leading-tight text-\[var\(--color-text-primary\)\]">/)
 assert.match(technicalSnapshot, /CHART_STAGE_AXES\.map/)
-assert.match(technicalSnapshot, /<MaAngleStrip/)
+assert.match(technicalSnapshot, /<TechnicalMaEvidence/)
+assert.match(technicalSnapshot, /data-technical-current-state/)
+assert.match(technicalSnapshot, /data-technical-stage-map/)
+assert.match(technicalSnapshot, /data-technical-scores/)
 assert.doesNotMatch(technicalSnapshot, /StageAlignmentBar|Stage Distribution|Stage分布/)
-assert.match(technicalSnapshot, /<ScoreRuler code="PMS"/)
+assert.match(technicalSnapshot, /<ScoreThresholdBar label=\{`\$\{label\} \$\{code\}`\}/)
+assert.match(technicalSnapshot, /marks=\{marks\}/, 'Technical score panel is the canonical threshold visualization (boundary ticks)')
+assert.match(technicalSnapshot, /nearestBoundaryText\(value, marks\)/, 'Nearest-threshold facts must live in the Technical score panel')
+assert.match(technicalSnapshot, /PHYSICAL_BOUNDARIES\.map/)
+assert.match(technicalSnapshot, /\{ kind: 'pms', code: 'PMS', label: '総合の強さ', neutral: false \}/)
+assert.match(technicalSnapshot, /\{ kind: 'pfs', code: 'PFS', label: '足元の力の向き', neutral: false \}/)
+assert.match(technicalSnapshot, /\{ kind: 'pes', code: 'PES', label: '値動きの熱量', neutral: true \}/)
+assert.equal((technicalSnapshot.match(/<span className="whitespace-nowrap">-2\.5<\/span>/g) ?? []).length, 1, 'Technical snapshot must show its shared score minimum once')
+assert.equal((technicalSnapshot.match(/<span className="whitespace-nowrap">\+2\.5<\/span>/g) ?? []).length, 1, 'Technical snapshot must show its shared score maximum once')
+const technicalStageMap = technicalSnapshot.slice(
+  technicalSnapshot.indexOf('function TechnicalStageMap'),
+  technicalSnapshot.indexOf('const TECHNICAL_SCORE_ROWS'),
+)
+assert.doesNotMatch(technicalStageMap, /min-h-\[|\btruncate\b|\bh-9\b|\bh-11\b|overflow-hidden/, 'Stage map tiles use natural height and never truncate Stage names')
+assert.match(technicalStageMap, /\{STAGE_LABELS\[value\]\}/, 'Stage map must render every full Stage name')
+assert.match(technicalStageMap, /borderStyle: isException \? 'dashed' : 'solid'/, 'Exception axis is marked by a dashed outline plus the 例外 tag')
+assert.match(technicalStageMap, /grid-cols-3/)
 assert.doesNotMatch(technicalSnapshot, /text-white/)
 assert.doesNotMatch(technicalSnapshot, /color: value \? '#fff'/)
+assert.doesNotMatch(technicalSnapshot, /text-\[(?:8|9|10)px\]/, 'Information-bearing text in the technical area must be at least 11px')
+assert.doesNotMatch(technicalSnapshot, /lg:flex-1|lg:justify-between|lg:flex-col/, 'Forced equal-height stretching must not return')
+assert.doesNotMatch(technicalSnapshot, /MAの傾きはこの銘柄自身の絶対的な角度、3スコアは/, 'The repeated disclaimer paragraph is replaced by block captions')
+assert.match(technicalSnapshot, /data-technical-current-state/)
+assert.equal((technicalSnapshot.match(/text-\[20px\]/g) ?? []).length, 1, 'Current State hero is the only 20px conclusion')
+assert.match(technicalSnapshot, /角度幅/, 'MA span facts live in the canonical MA block')
+assert.match(technicalSnapshot, /maSpreadChangeDeg/)
+assert.match(technicalSnapshot, /xl:grid-cols-\[minmax\(0,1fr\)_minmax\(400px,440px\)\]/, 'Chart sits beside the evidence rail on wide screens')
+assert.doesNotMatch(technicalSnapshot, /xl:row-span-2|xl:grid-rows-\[/, 'The rail must not span rows of the chart column (that created a blank block under the chart)')
+{
+  const snapshotBody = technicalSnapshot.slice(
+    technicalSnapshot.indexOf('function TechnicalChartSnapshot'),
+    technicalSnapshot.indexOf('type MaSignal'),
+  )
+  assert.ok(
+    snapshotBody.indexOf('<TechnicalStateHero') < snapshotBody.indexOf('{chart}')
+      && snapshotBody.indexOf('<TechnicalScorePanel') < snapshotBody.indexOf('<TechnicalStageMap'),
+    'Order: Current State → chart → MA/score rail → full-width Stage map',
+  )
+  assert.doesNotMatch(
+    snapshotBody,
+    /<TechnicalStageMap[^>]*className=/,
+    'The Stage map is a full-width band below the chart/rail row; it takes no rail/column placement classes',
+  )
+}
+assert.match(technicalSnapshot, /function MaAngleBar/)
+assert.match(technicalSnapshot, /MA_STRONG_DEG/)
+assert.match(technicalSnapshot, /--color-price-flat/, 'PES uses neutral slate, never up/down colors')
+assert.match(chartWorkspace, /toolbarVariant="segmented"/)
+assert.match(chartWorkspace, /summaryVariant="strip"/)
+assert.match(chartWorkspace, /useChartHeight/)
+assert.doesNotMatch(chartWorkspace, /<PhysicalMaFieldMap|<PhysicalActionPoints/)
 
 const physicalMomentumSection = stockDetailSource.slice(
   stockDetailSource.indexOf('function PhysicalMomentumSection'),
@@ -233,9 +294,52 @@ assert.equal((physicalMomentumSection.match(/\/api\/physical-momentum\//g) ?? []
 assert.equal((physicalMomentumSection.match(/\/api\/stock-physical-plan\//g) ?? []).length, 1)
 assert.match(physicalMomentumSection, /aria-controls="physical-momentum-details"/)
 assert.match(physicalMomentumSection, /aria-expanded=\{mobileDetailsOpen\}/)
-assert.ok(physicalMomentumSection.indexOf('<PhysicalTimeframeConclusionPanel') < physicalMomentumSection.indexOf('<PhysicalTradePlanCards'))
-assert.ok(physicalMomentumSection.indexOf('<PhysicalActionPoints') < physicalMomentumSection.indexOf('id="physical-momentum-details"'))
-assert.ok(physicalMomentumSection.indexOf('<PhysicalMaFieldMap') < physicalMomentumSection.indexOf('id="physical-momentum-details"'))
+// 運動状態 → 時間軸比較 → PMS推移・内訳 → 観察プラン(モバイルでは折りたたみ)
+const physicalOrder = ['<PhysicalStateSummary', '<PhysicalTimeframeConclusionPanel', '<PhysicalMomentumSparkline', 'id="physical-momentum-details"', '<PhysicalTradePlanCards']
+previousIndex = -1
+for (const marker of physicalOrder) {
+  const index = physicalMomentumSection.indexOf(marker)
+  assert.ok(index > previousIndex, `physical momentum order: ${marker}`)
+  previousIndex = index
+}
+assert.doesNotMatch(physicalMomentumSection, /<PhysicalActionPoints|<PhysicalMaFieldMap/, 'Duplicate boundary and MA blocks were merged into the Technical blocks')
+assert.doesNotMatch(stockDetailSource, /function PhysicalActionPoints|function PhysicalMaFieldMap/)
+assert.doesNotMatch(physicalMomentumSection, /Physical Momentum<\/div>|section-header/, 'Physical Momentum uses the shared section header, not the global gray header bar')
+const physicalStateSummary = stockDetailSource.slice(
+  stockDetailSource.indexOf('function PhysicalStateSummary'),
+  stockDetailSource.indexOf('function scoreTone'),
+)
+assert.match(physicalStateSummary, /運動状態\(日足・20営業日\)/)
+assert.doesNotMatch(physicalStateSummary, /現在の状態|主要指標|MA角度幅/, 'The Physical conclusion must not compete with the Current State hero')
+assert.match(physicalStateSummary, /直近の向き/)
+assert.match(physicalStateSummary, /20日変化/)
+assert.doesNotMatch(physicalStateSummary, /borderLeft/, 'Only the Current State hero carries the colored left rule')
+const physicalPlanCards = stockDetailSource.slice(
+  stockDetailSource.indexOf('function PhysicalTradePlanCards'),
+  stockDetailSource.indexOf('interface PhysicalMaFieldInsight'),
+)
+assert.doesNotMatch(physicalPlanCards, /tone\.background|rgba\(245, 158, 11/, 'Observation plans do not use an amber/tone fill')
+assert.doesNotMatch(physicalPlanCards, /<details|<summary/, 'The plan row toggles candidates inline instead of spending a separate row on a <details> summary')
+assert.match(physicalPlanCards, /aria-expanded=\{open\}/, 'Candidates and verification dates open from a button inside the condition line')
+assert.match(physicalPlanCards, /aria-controls=\{detailsId\}/)
+assert.match(physicalPlanCards, /lg:grid-cols-\[6rem_minmax\(0,1\.5fr\)_minmax\(0,\.9fr\)_minmax\(0,1\.3fr\)\]/, 'Plan rows use one compact 4-column row on wide screens')
+{
+  const planVisible = physicalPlanCards.slice(0, physicalPlanCards.indexOf('{open && ('))
+  assert.doesNotMatch(planVisible, /\{horizon\.suggestion\.stance\}/, 'The stance sentence only repeats the chips and headline; it lives in the expanded detail')
+}
+assert.doesNotMatch(physicalStateSummary, /20日騰落率/, 'The 20-day return lives in the Physical breakdown, not in the state row')
+const physicalSparkline = stockDetailSource.slice(
+  stockDetailSource.indexOf('function PhysicalMomentumSparkline'),
+  stockDetailSource.indexOf('function PhysicalTrendChip'),
+)
+assert.doesNotMatch(physicalSparkline, /label="最新"|label="20日変化"/, 'Latest PMS and the 20-day change are shown once (chart end label / state row)')
+const physicalTimeframePanel = stockDetailSource.slice(
+  stockDetailSource.indexOf('function PhysicalTimeframeConclusionPanel'),
+  stockDetailSource.indexOf('function PhysicalBreakdown'),
+)
+assert.doesNotMatch(physicalTimeframePanel, /grid-cols-\[3\.5rem/, 'The timeframe label column must be wide enough that 短期 / 日足 never breaks mid-word')
+assert.match(physicalTimeframePanel, /sm:contents/, 'Timeframe scores stack with full-width bars on phones and become table columns from sm')
+assert.doesNotMatch(physicalMomentumSection + physicalPlanCards, /text-\[(?:8|9|10)px\]/)
 
 assert.equal((stageTimelineSource.match(/fetch\(`\/api\/stage-history\//g) ?? []).length, 1)
 assert.match(stageTimelineSource, /onSnapshotChange\?\.\(latest \? \{/)
@@ -251,8 +355,119 @@ assert.match(stageTimelineSource, /window\.sessionStorage\.getItem\(HISTORY_VIEW
 assert.match(stageTimelineSource, /window\.sessionStorage\.setItem\(HISTORY_VIEW_STORAGE_KEY, next\)/)
 assert.match(stageTimelineSource, /view === 'classic'/)
 assert.equal((stageTimelineSource.match(/fetch\(`\/api\/stage-history\//g) ?? []).length, 1, 'Timeline and Classic must share one stage-history fetch')
-assert.match(ma25mSource, /月足長期構造/)
-assert.match(ma25mSource, /MA接近レーダー/)
+
+// Stage History: every run must be identifiable without hover
+assert.equal(classifyRunLabel(Number.NaN), 'none')
+assert.equal(classifyRunLabel(0), 'none')
+assert.equal(classifyRunLabel(4), 'none')
+assert.equal(classifyRunLabel(8.9), 'none')
+assert.equal(classifyRunLabel(9), 'digit')
+assert.equal(classifyRunLabel(16), 'digit')
+assert.equal(classifyRunLabel(19.9), 'digit')
+assert.equal(classifyRunLabel(20), 'stage')
+assert.equal(classifyRunLabel(71), 'stage')
+assert.equal(classifyRunLabel(79.9), 'stage')
+assert.equal(classifyRunLabel(80), 'full')
+assert.equal(pickTickCount(0), 3)
+assert.equal(pickTickCount(100), 2)
+assert.equal(pickTickCount(228), 3)
+assert.equal(pickTickCount(334), 4)
+assert.equal(pickTickCount(1000), 5)
+
+function stageEntry(date: string, overrides: Partial<StageEntry>): StageEntry {
+  return {
+    date,
+    daily_a_stage: null,
+    daily_b_stage: null,
+    weekly_a_stage: null,
+    weekly_b_stage: null,
+    monthly_a_stage: null,
+    monthly_b_stage: null,
+    close: null,
+    ...overrides,
+  }
+}
+const stageFixture: StageEntry[] = [
+  stageEntry('2025-01-03', { daily_a_stage: 1, daily_b_stage: 3, weekly_a_stage: null }),
+  stageEntry('2025-01-10', { daily_a_stage: 1, daily_b_stage: 3, weekly_a_stage: 2 }),
+  stageEntry('2025-01-17', { daily_a_stage: 2, daily_b_stage: null, weekly_a_stage: 2 }),
+  stageEntry('2025-01-24', { daily_a_stage: 2, daily_b_stage: 4, weekly_a_stage: 5 }),
+  stageEntry('2025-01-31', { daily_a_stage: 5, daily_b_stage: 4, weekly_a_stage: 5 }),
+  stageEntry('2025-02-07', { daily_a_stage: 1, daily_b_stage: 4, weekly_a_stage: 6 }),
+]
+const stageTransitions = buildStageTransitions(stageFixture)
+assert.equal(
+  stageTransitions.length,
+  summarizeStageStability(stageFixture).transitionCount,
+  'Stage change log rows must match the transitionCount rule (non-null and different)',
+)
+assert.deepEqual(
+  stageTransitions.map((item) => [item.date, item.system, item.from, item.to, item.fromLength, item.fromTruncated, item.toStartIndex]),
+  [
+    ['2025-01-17', 'daily_a_stage', 1, 2, 2, true, 2],
+    ['2025-01-24', 'weekly_a_stage', 2, 5, 2, false, 3],
+    ['2025-01-31', 'daily_a_stage', 2, 5, 2, false, 4],
+    ['2025-02-07', 'daily_a_stage', 5, 1, 1, false, 5],
+    ['2025-02-07', 'weekly_a_stage', 5, 6, 2, false, 5],
+  ],
+  'null gaps must not create transitions; same-date moves keep system order; first run is a lower bound',
+)
+assert.deepEqual(buildStageTransitions([]), [])
+assert.deepEqual(
+  buildRuns(stageFixture, 'daily_b_stage').map((run) => [run.stage, run.startIndex, run.length]),
+  [[3, 0, 2], [null, 2, 1], [4, 3, 3]],
+)
+assert.doesNotMatch(stageTimelineSource, /run\.length >= 3/)
+assert.doesNotMatch(stageTimelineSource, /left-\[48px\] right-\[72px\]/)
+assert.match(stageTimelineSource, /classifyRunLabel\(runPx\(run\)\)/)
+assert.match(stageTimelineSource, /Stage列/)
+assert.match(stageTimelineSource, /Stage変更ログ/)
+assert.match(stageTimelineSource, /'以上'/)
+assert.match(stageTimelineSource, /buildStageTransitions\(entries\)/)
+assert.match(stageTimelineSource, /aria-expanded=\{logExpanded\}/)
+assert.match(stageTimelineSource, /new ResizeObserver\(measure\)/)
+assert.match(stageTimelineSource, /buildTicks\(entries, granularity, pickTickCount\(trackWidth\)\)/)
+assert.match(ma25mSource, /月足MAの位置/)
+assert.match(ma25mSource, /月足MAの算出履歴が不足しています/)
+assert.match(ma25mSource, /月足MAを取得できませんでした/, 'A fetch failure must not be mislabeled as insufficient history')
+assert.match(ma25mSource, /setFailed\(/)
+assert.match(ma25mSource, /再読込/)
+assert.match(ma25mSource, /@\[56rem\]:grid-cols-6/, 'Monthly cells sit in one row on wide containers')
+assert.doesNotMatch(ma25mSource, /@min-\[/, '@min-[..] container variants do not generate here; use @[..]')
+assert.doesNotMatch(ma25mSource, /violet|Long-term structure|uppercase|text-\[(?:8|9|10)px\]/, 'No Stage-colored 接近, English eyebrow or sub-11px text in the monthly block')
+assert.ok(
+  ma25mSource.indexOf('setFailed(null)') < ma25mSource.indexOf('月足MAの算出履歴が不足しています'),
+  'error state is reset on each fetch and checked before the insufficient-history branch',
+)
+
+// Stage History: legend, from→to cue, navy selection, shared controls
+assert.match(stageTimelineSource, /aria-label="Stage凡例"/)
+assert.match(stageTimelineSource, /STAGE_NUMBERS\.map/)
+assert.match(stageTimelineSource, /STAGE_LABELS\[stage\]/)
+assert.match(stageTimelineSource, /enteredFrom/)
+assert.match(stageTimelineSource, /item\.system === system\.key && item\.toStartIndex === current\.startIndex/, 'from→to must come from buildStageTransitions, not a new calculation')
+assert.doesNotMatch(stageTimelineSource, /amber|Stage history<\/div>|uppercase|text-\[(?:8|9|10)px\]/, 'Selection is navy; no English eyebrow; text stays at 11px or larger')
+assert.doesNotMatch(stageTimelineSource, /fontSize: '(?:8|9|10)px'/)
+assert.doesNotMatch(stageTimelineSource, /min-h-\[260px\]/, 'Loading state must not reserve a fixed dead area')
+assert.match(stageTimelineSource, /xl:grid-cols-3/, 'Stage change log uses the width on wide screens')
+assert.match(stageTimelineSource, /label: '日足'/)
+assert.match(stageTimelineSource, /VIEW_CAPTIONS/)
+assert.doesNotMatch(stageTimelineSource, /現在の6軸整合度/, 'The 13-week tile that repeated the Stage map sentence was removed')
+assert.match(stageTimelineSource, /13週で/)
+assert.doesNotMatch(stageTimelineSource, /数字=Stage番号/, 'The lane legend sentence was folded into the lane header (白線=Stage変更 ・ 右端=現在)')
+assert.match(stageTimelineSource, /白線=Stage変更 ・ 右端=現在/)
+assert.match(stageTimelineSource, /onStageRangeSelect \? 'min-h-11 sm:min-h-7' : 'min-h-8 sm:min-h-7'/, 'Only tappable change-log rows reserve the 44px target')
+
+// CandlestickChart: workspace refinements are opt-in and the default consumers keep the old toolbar/summary
+const candlestickSource = readFileSync(
+  new URL('../components/charts/CandlestickChart.tsx', import.meta.url),
+  'utf8',
+)
+assert.match(candlestickSource, /toolbarVariant = 'default'/)
+assert.match(candlestickSource, /summaryVariant = 'cards'/)
+assert.match(candlestickSource, /!compact && summaryVariant === 'cards' && <TimeframeSummaryBar/)
+assert.match(candlestickSource, /showTimeframeSelector && !segmented/, 'Default toolbar still renders every timeframe tab')
+assert.match(candlestickSource, /showAngle=\{effectiveInterval !== 'D'\}/)
 const overview = stockDetailSource.slice(
   stockDetailSource.indexOf('function OverviewWorkspace'),
   stockDetailSource.indexOf('function OverviewBasicInfoPanel'),
