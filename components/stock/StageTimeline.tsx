@@ -9,7 +9,7 @@ import {
   STAGE_TIMELINE_DISPLAY_PRESETS,
 } from '@/lib/stage-history-window'
 
-interface StageEntry {
+export interface StageEntry {
   date: string
   daily_a_stage: number | null
   daily_b_stage: number | null
@@ -86,7 +86,7 @@ interface StageTimelineProps {
 }
 
 type Granularity = 'daily' | 'weekly' | 'monthly'
-type StageKey =
+export type StageKey =
   | 'daily_a_stage'
   | 'daily_b_stage'
   | 'weekly_a_stage'
@@ -103,14 +103,24 @@ const SYSTEMS: { key: StageKey; label: string }[] = [
   { key: 'monthly_b_stage', label: '月足B' },
 ]
 
+// ラベルはチャートの時間軸(日足/週足/月足)と同じ語に揃える。何時点を抜き出すかは subtitle で明示する
 const GRANULARITIES: { key: Granularity; label: string; subtitle: string }[] = [
-  { key: 'daily', label: '日毎', subtitle: '各営業日時点の3本MA配列' },
-  { key: 'weekly', label: '週毎', subtitle: '各暦週の最終営業日時点の3本MA配列' },
-  { key: 'monthly', label: '月毎', subtitle: '各月末営業日時点の3本MA配列' },
+  { key: 'daily', label: '日足', subtitle: '各営業日時点の3本MA配列' },
+  { key: 'weekly', label: '週足', subtitle: '各暦週の最終営業日時点の3本MA配列' },
+  { key: 'monthly', label: '月足', subtitle: '各月末営業日時点の3本MA配列' },
 ]
 
-const DISPLAY_SUFFIX: Record<Granularity, string> = { daily: 'D', weekly: 'W', monthly: 'M' }
 const RUN_UNITS: Record<Granularity, string> = { daily: '日', weekly: '週', monthly: 'か月' }
+
+const VIEW_CAPTIONS: Record<HistoryView, string> = {
+  timeline: '遷移を継続幅で表示',
+  classic: '日付 × 系統の正確なStage',
+}
+
+const STAGE_NUMBERS = [1, 2, 3, 4, 5, 6] as const
+
+// 系統名 / 連続期間の帯 / 現在(Stage・直前からの遷移・継続長)。ヘッダ・各レーン・目盛りで列幅を共有する
+const LANE_GRID = 'sm:grid-cols-[48px_minmax(0,1fr)_120px]'
 
 type HistoryView = 'timeline' | 'classic'
 const HISTORY_VIEWS: { key: HistoryView; label: string }[] = [
@@ -128,14 +138,14 @@ function readStoredHistoryView(): HistoryView {
   }
 }
 
-interface StageRun {
+export interface StageRun {
   stage: number | null
   startIndex: number
   endIndex: number
   length: number
 }
 
-function buildRuns(entries: StageEntry[], key: StageKey): StageRun[] {
+export function buildRuns(entries: StageEntry[], key: StageKey): StageRun[] {
   const runs: StageRun[] = []
   entries.forEach((entry, index) => {
     const stage = entry[key] || null
@@ -150,9 +160,63 @@ function buildRuns(entries: StageEntry[], key: StageKey): StageRun[] {
   return runs
 }
 
-function buildTicks(entries: StageEntry[], granularity: Granularity): Array<{ index: number; label: string }> {
+export type RunLabelTier = 'none' | 'digit' | 'stage' | 'full'
+
+// 帯の実幅(px)から、はみ出さずに描けるラベルの段階を決める。'none' の期間は Stage列 で識別する
+export function classifyRunLabel(runPx: number): RunLabelTier {
+  if (!Number.isFinite(runPx) || runPx < 9) return 'none'
+  if (runPx < 20) return 'digit'
+  if (runPx < 80) return 'stage'
+  return 'full'
+}
+
+export function pickTickCount(trackWidth: number): number {
+  if (!Number.isFinite(trackWidth) || trackWidth <= 0) return 3
+  return Math.min(5, Math.max(2, Math.floor(trackWidth / 72)))
+}
+
+export interface StageTransition {
+  date: string
+  system: StageKey
+  from: number
+  to: number
+  fromLength: number
+  fromTruncated: boolean
+  toStartIndex: number
+}
+
+// summarizeStageStability と同じ規則(前後ともnullでなく、値が異なる)で変更点を列挙する。古い順、同日は SYSTEMS 順
+export function buildStageTransitions(entries: StageEntry[]): StageTransition[] {
+  const transitions: StageTransition[] = []
+  for (const { key } of SYSTEMS) {
+    const runs = buildRuns(entries, key)
+    for (let index = 1; index < entries.length; index += 1) {
+      const previous = entries[index - 1][key]
+      const current = entries[index][key]
+      if (previous == null || current == null || previous === current) continue
+      const fromRun = runs.find((run) => run.startIndex <= index - 1 && index - 1 <= run.endIndex)
+      if (!fromRun) continue
+      transitions.push({
+        date: entries[index].date,
+        system: key,
+        from: previous,
+        to: current,
+        fromLength: fromRun.length,
+        fromTruncated: fromRun.startIndex === 0,
+        toStartIndex: index,
+      })
+    }
+  }
+  return transitions.sort((left, right) => left.toStartIndex - right.toStartIndex)
+}
+
+function buildTicks(
+  entries: StageEntry[],
+  granularity: Granularity,
+  tickCount: number,
+): Array<{ index: number; label: string }> {
   if (entries.length === 0) return []
-  const wanted = Math.min(entries.length, 5)
+  const wanted = Math.min(entries.length, tickCount)
   const indexes = new Set<number>()
   for (let i = 0; i < wanted; i += 1) {
     indexes.add(wanted === 1 ? 0 : Math.round((i * (entries.length - 1)) / (wanted - 1)))
@@ -211,6 +275,9 @@ export function StageTimeline({
   const [view, setView] = useState<HistoryView>('timeline')
   const [weekly13Summary, setWeekly13Summary] = useState<StageStabilitySummary | null>(null)
   const classicScrollRef = useRef<HTMLDivElement>(null)
+  const trackRef = useRef<HTMLDivElement | null>(null)
+  const [trackWidth, setTrackWidth] = useState(0)
+  const [logExpanded, setLogExpanded] = useState(false)
 
   useEffect(() => {
     setView(readStoredHistoryView())
@@ -294,8 +361,24 @@ export function StageTimeline({
     container.scrollLeft = container.scrollWidth
   }, [entries, view])
 
+  // 帯の実幅を測り、ラベル段階と目盛り数に使う(未測定の間は 0 = 不明として Stage列 を出す)
+  useEffect(() => {
+    const track = trackRef.current
+    if (view !== 'timeline' || loading || !track) return
+    const measure = () => setTrackWidth(track.clientWidth)
+    measure()
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(measure)
+    observer.observe(track)
+    return () => observer.disconnect()
+  }, [view, loading, entries.length])
+
   const lanes = useMemo(() => SYSTEMS.map((system) => ({ system, runs: buildRuns(entries, system.key) })), [entries])
-  const ticks = useMemo(() => buildTicks(entries, granularity), [entries, granularity])
+  const transitions = useMemo(() => buildStageTransitions(entries), [entries])
+  const ticks = useMemo(
+    () => buildTicks(entries, granularity, pickTickCount(trackWidth)),
+    [entries, granularity, trackWidth],
+  )
   const runUnit = RUN_UNITS[granularity]
   const selectionSpan = useMemo(() => {
     if (!selectedRange || entries.length === 0) return null
@@ -333,30 +416,33 @@ export function StageTimeline({
   }
 
   return (
-    <section className="card" style={{ padding: '12px' }} aria-labelledby="stage-timeline-title">
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', marginBottom: '8px', flexWrap: 'wrap' }}>
-        <div>
-          <div className="text-[9px] font-black uppercase tracking-[0.08em] text-[var(--color-text-tertiary)]">Stage history</div>
-          <h2 id="stage-timeline-title" className="mt-0.5 text-[13px] font-black text-[var(--color-text-primary)]">ステージ変遷（{selectedGranularity.label}）</h2>
-          <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
-            {selectedGranularity.subtitle}
+    <section className="card p-3" aria-labelledby="stage-timeline-title">
+      <header className="mb-2 flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+        <div className="min-w-0">
+          <h2 id="stage-timeline-title" className="m-0 text-[14px] font-bold text-[var(--color-text-primary)]">ステージ変遷（{selectedGranularity.label}）</h2>
+          <p className="m-0 mt-0.5 text-[11px] font-medium leading-4 text-[var(--color-text-tertiary)]">
+            {VIEW_CAPTIONS[view]} ・ {selectedGranularity.subtitle}
             {activeStartDate ? ` / 連続データ開始 ${activeStartDate}` : ''}
-          </div>
+            {weekly13Summary && (
+              <span aria-label="13週のStage構造要約">
+                {' ・ '}13週で<b className="mx-0.5 font-mono font-bold text-[var(--color-text-primary)]">{weekly13Summary.transitionCount}回</b>切替(6軸合計・方向性ではなく切替数)
+              </span>
+            )}
+          </p>
           {selectedRange && !loading && entries.length > 0 && !hasVisibleSelection && (
             <div style={rangeOutsideStyle}>
               選択期間 {selectedRange.startDate} → {selectedRange.endDate} は現在の表示範囲外です
             </div>
           )}
         </div>
-        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-          <div style={segmentedControl} role="group" aria-label="ステージ変遷の表示形式">
+        <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-wrap sm:justify-end">
+          <div className={`${SEGMENT_GROUP} col-span-2 sm:col-span-1`} role="group" aria-label="ステージ変遷の表示形式">
             {HISTORY_VIEWS.map((item) => (
               <button
                 key={item.key}
                 type="button"
                 onClick={() => selectView(item.key)}
-                style={segmentButton(view === item.key)}
-                className="min-h-11 px-2.5 focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--color-brand-900)] sm:min-h-8"
+                className={`${segmentClass(view === item.key)} min-h-11 px-2.5 focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--color-brand-900)] sm:min-h-8`}
                 aria-pressed={view === item.key}
                 aria-controls="stage-history-body"
               >
@@ -364,68 +450,56 @@ export function StageTimeline({
               </button>
             ))}
           </div>
-          <div style={segmentedControl}>
+          <div className={SEGMENT_GROUP} role="group" aria-label="ステージの時間軸">
             {GRANULARITIES.map((item) => (
               <button
                 key={item.key}
                 type="button"
                 onClick={() => selectGranularity(item.key)}
-                style={segmentButton(granularity === item.key)}
-                className="min-h-11 px-2.5 sm:min-h-8"
+                className={`${segmentClass(granularity === item.key)} min-h-11 px-2.5 sm:min-h-8`}
                 aria-pressed={granularity === item.key}
               >
                 {item.label}
               </button>
             ))}
           </div>
-          <div style={segmentedControl} aria-label="表示期間">
+          <div className={SEGMENT_GROUP} role="group" aria-label="表示期間">
             {STAGE_TIMELINE_DISPLAY_PRESETS[granularity].map((preset) => (
               <button
                 key={preset}
                 type="button"
                 onClick={() => setCount(preset)}
-                style={segmentButton(count === preset)}
-                className="min-h-11 px-2.5 sm:min-h-8"
+                className={`${segmentClass(count === preset)} min-h-11 px-2.5 sm:min-h-8`}
                 title={`直近${preset}${granularity === 'daily' ? '営業日' : granularity === 'weekly' ? '週' : 'か月'}を表示`}
                 aria-pressed={count === preset}
               >
-                {preset}{DISPLAY_SUFFIX[granularity]}
+                {preset}{RUN_UNITS[granularity]}
               </button>
             ))}
           </div>
         </div>
-      </div>
+      </header>
 
-      {weekly13Summary && (
-        <div className="mb-2 grid gap-px border border-[var(--color-border-soft)] bg-[var(--color-border-soft)] sm:grid-cols-2" aria-label="13週のStage構造要約">
-          <div className="bg-white px-3 py-2 text-[10px] font-semibold text-[var(--color-text-secondary)]">
-            <span className="block text-[9px] font-black text-[var(--color-text-tertiary)]">現在の6軸整合度</span>
-            <b className="font-mono text-[13px] text-[var(--color-text-primary)]">{weekly13Summary.alignedAxes}/{weekly13Summary.availableAxes}軸</b>
-            {weekly13Summary.dominantStage && <span> が S{weekly13Summary.dominantStage}</span>}
-          </div>
-          <div className="bg-white px-3 py-2 text-[10px] font-semibold text-[var(--color-text-secondary)]">
-            <span className="block text-[9px] font-black text-[var(--color-text-tertiary)]">13週のStage変更</span>
-            <b className="font-mono text-[13px] text-[var(--color-text-primary)]">{weekly13Summary.transitionCount}回</b>
-            <span> / 6軸合計。方向性ではなく切替回数</span>
-          </div>
-        </div>
-      )}
-
-      {error && <p style={{ fontSize: '11px', color: 'var(--price-down)' }}>エラー: {error}</p>}
+      {error && <p className="m-0 mb-2 text-[12px] font-medium text-[var(--price-down)]">エラー: {error}</p>}
 
       {loading ? (
-        <p style={{ fontSize: '11px', color: 'var(--text-muted)', textAlign: 'center', padding: '16px 0' }}>計算中...</p>
+        <div role="status" aria-label="ステージ変遷を計算中" className="space-y-2">
+          {SYSTEMS.map(({ key }) => (
+            <div key={key} className="h-6 animate-pulse bg-[var(--color-surface-subtle)]" />
+          ))}
+          <p className="m-0 text-center text-[11px] font-medium text-[var(--color-text-tertiary)]">計算中...</p>
+        </div>
       ) : entries.length === 0 ? (
-        <p style={{ fontSize: '11px', color: 'var(--text-muted)', textAlign: 'center', padding: '16px 0' }}>データなし</p>
+        <p className="m-0 py-3 text-center text-[12px] font-medium text-[var(--color-text-tertiary)]">データなし</p>
       ) : view === 'classic' ? (
         <div id="stage-history-body" ref={classicScrollRef} style={{ overflowX: 'auto' }}>
-          <table style={{ width: 'max-content', minWidth: '100%', borderCollapse: 'collapse', fontSize: '10px' }}>
+          <table style={{ width: 'max-content', minWidth: '100%', borderCollapse: 'collapse', fontSize: '11px' }}>
             <caption className="sr-only">系統別ステージの日付別一覧(右端が最新)</caption>
             <thead>
               <tr>
                 <th scope="col" style={{ ...stickyTh, textAlign: 'left' }}>系統</th>
                 {entries.map((e, index) => (
-                  <th key={e.date} scope="col" style={dateHeaderStyle(selectedRange ? isDateWithinRange(e.date, selectedRange) : false, index === entries.length - 1)}>
+                  <th key={e.date} scope="col" aria-label={e.date} title={e.date} style={dateHeaderStyle(selectedRange ? isDateWithinRange(e.date, selectedRange) : false, index === entries.length - 1)}>
                     {e.date.slice(5)}
                   </th>
                 ))}
@@ -438,8 +512,11 @@ export function StageTimeline({
                   {entries.map((e, index) => {
                     const v = e[sys.key] as number | null
                     const inSelectedRange = selectedRange ? isDateWithinRange(e.date, selectedRange) : false
+                    const previousStage = index > 0 ? (entries[index - 1][sys.key] as number | null) : null
+                    // Stageが切り替わった列の左に細線(summarizeStageStability と同じ規則: 前後ともnullでなく値が異なる)
+                    const changed = v != null && previousStage != null && previousStage !== v
                     return (
-                      <td key={e.date} style={{ ...cellStyle(inSelectedRange, index === entries.length - 1), ...(systemIndex === 2 || systemIndex === 4 ? timeframeDividerStyle : {}) }}>
+                      <td key={e.date} style={{ ...cellStyle(inSelectedRange, index === entries.length - 1), ...(changed ? stageChangeCellStyle : {}), ...(systemIndex === 2 || systemIndex === 4 ? timeframeDividerStyle : {}) }}>
                         {v ? (
                           <StageTimelineValue
                             stage={v}
@@ -458,45 +535,78 @@ export function StageTimeline({
         </div>
       ) : (
         <div id="stage-history-body" className="min-w-0">
-          <div className="grid grid-cols-[40px_minmax(0,1fr)_64px] items-end gap-x-2 pb-1 text-[9px] font-bold text-[var(--color-text-tertiary)]">
-            <span>系統</span>
-            <span>連続期間(幅=継続長)</span>
-            <span className="text-right">現在</span>
+          <ul className="m-0 mb-2 grid list-none grid-cols-3 gap-x-2 gap-y-1 p-0 sm:gap-x-3 lg:grid-cols-6" aria-label="Stage凡例">
+            {STAGE_NUMBERS.map((stage) => (
+              <li key={stage} className="flex min-w-0 items-center gap-1.5 text-[11px] font-semibold text-[var(--color-text-secondary)]">
+                <StageMark stage={stage} />
+                <span className="min-w-0">{STAGE_LABELS[stage]}</span>
+              </li>
+            ))}
+          </ul>
+          <div className={`grid grid-cols-1 items-end gap-x-2 pb-1 text-[11px] font-bold text-[var(--color-text-tertiary)] ${LANE_GRID}`}>
+            <span className="max-sm:hidden">系統</span>
+            <span className="flex flex-wrap items-baseline justify-between gap-x-3">
+              <span>連続期間(幅=継続長)</span>
+              <span className="font-medium">白線=Stage変更 ・ 右端=現在</span>
+            </span>
+            <span className="text-right text-[var(--color-brand-900)] max-sm:hidden">現在</span>
           </div>
-          <div className="relative">
-            {selectionSpan && (
-              <div className="pointer-events-none absolute inset-y-0 left-[48px] right-[72px] z-[1]" aria-hidden="true">
-                <span
-                  className="absolute inset-y-0 border-x-2 border-amber-500 bg-amber-300/20"
-                  style={{
-                    left: `${(selectionSpan.first / entries.length) * 100}%`,
-                    width: `${((selectionSpan.last - selectionSpan.first + 1) / entries.length) * 100}%`,
-                  }}
-                />
-              </div>
-            )}
+          <div>
             {lanes.map(({ system, runs }, laneIndex) => {
               const current = runs[runs.length - 1]
               const currentStage = current?.stage ?? null
+              const currentTruncated = current?.startIndex === 0
+              const currentDuration = current ? `${current.length}${runUnit}${currentTruncated ? '以上' : ''}` : ''
+              // 現在のStageがこの表示期間内の切替で始まっている場合だけ、直前のStageを添える(buildStageTransitions の結果をそのまま使う)
+              const enteredFrom = current && currentStage
+                ? transitions.find((item) => item.system === system.key && item.toStartIndex === current.startIndex)?.from ?? null
+                : null
+              const runPx = (run: StageRun) => (trackWidth > 0 ? (trackWidth * run.length) / entries.length : 0)
+              const needsStrip = runs.some((run) => run.stage != null && classifyRunLabel(runPx(run)) === 'none')
               return (
                 <div
                   key={system.key}
-                  className={`grid grid-cols-[40px_minmax(0,1fr)_64px] items-center gap-x-2 ${laneIndex % 2 === 0 ? 'pt-0.5' : 'pb-1.5'}`}
+                  className={`grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2 gap-y-1 ${LANE_GRID} ${laneIndex === 0 ? '' : laneIndex % 2 === 0 ? 'mt-3' : 'mt-1'}`}
                   role="group"
-                  aria-label={currentStage ? `${system.label} 現在S${currentStage} 連続${current.length}${runUnit}` : `${system.label} 現在データなし`}
+                  aria-label={currentStage ? `${system.label} 現在S${currentStage} 連続${currentDuration}${enteredFrom ? ` 直前S${enteredFrom}` : ''}` : `${system.label} 現在データなし`}
                 >
-                  <span className="text-[10px] font-black text-[var(--color-text-secondary)]">{system.label}</span>
-                  <div className="flex h-6 min-w-0 overflow-hidden bg-[var(--color-surface-subtle)]">
+                  <span className="col-start-1 row-start-1 text-[11px] font-bold text-[var(--color-text-secondary)]">{system.label}</span>
+                  <span className="col-start-2 row-start-1 inline-flex items-center justify-self-end whitespace-nowrap font-mono text-[11px] font-bold text-[var(--color-text-primary)] sm:col-start-3">
+                    {currentStage ? (
+                      <>
+                        <span className="mr-1 font-sans text-[11px] font-bold text-[var(--color-brand-900)] sm:hidden">現在</span>
+                        {enteredFrom != null && (
+                          <>
+                            <StageMark stage={enteredFrom} />
+                            <span aria-hidden="true" className="mx-0.5 text-[var(--color-text-tertiary)]">→</span>
+                          </>
+                        )}
+                        <StageMark stage={currentStage} />
+                        <span className="ml-1 font-semibold text-[var(--color-text-secondary)]">{currentDuration}</span>
+                      </>
+                    ) : '—'}
+                  </span>
+                  <div
+                    ref={laneIndex === 0 ? trackRef : undefined}
+                    className="relative col-span-2 row-start-2 flex h-6 min-w-0 overflow-hidden bg-[var(--color-surface-subtle)] sm:col-span-1 sm:col-start-2 sm:row-start-1"
+                  >
                     {runs.map((run) => {
+                      const truncated = run.startIndex === 0
                       const range = `${entries[run.startIndex].date}〜${entries[run.endIndex].date}(${run.length}${runUnit})`
                       const title = run.stage ? `${system.label} S${run.stage}: ${STAGE_LABELS[run.stage]} ${range}` : `${system.label} データなし ${range}`
                       const style: React.CSSProperties = {
                         flex: `${run.length} 1 0`,
-                        minWidth: 2,
+                        minWidth: 3,
                         background: run.stage ? STAGE_BORDER_COLORS[run.stage] : 'transparent',
+                        boxShadow: truncated ? undefined : 'inset 2px 0 0 #fff',
                       }
-                      const label = run.stage && run.length >= 3 ? `S${run.stage}` : ''
-                      const className = 'flex items-center justify-center overflow-hidden border-r border-white font-mono text-[10px] font-bold text-white last:border-r-0'
+                      const tier = run.stage ? classifyRunLabel(runPx(run)) : 'none'
+                      const label = !run.stage ? ''
+                        : tier === 'full' ? `S${run.stage} · ${run.length}${runUnit}${truncated ? '+' : ''}`
+                        : tier === 'stage' ? `S${run.stage}`
+                        : tier === 'digit' ? `${run.stage}`
+                        : ''
+                      const className = 'flex items-center justify-center overflow-hidden whitespace-nowrap p-0 font-mono text-[11px] font-bold text-white'
                       return run.stage && onStageRangeSelect ? (
                         <button
                           key={run.startIndex}
@@ -505,41 +615,155 @@ export function StageTimeline({
                           title={title}
                           aria-label={title}
                           style={style}
-                          className={`${className} cursor-pointer p-0 hover:brightness-110 focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--color-brand-900)]`}
+                          className={`${className} cursor-pointer hover:brightness-110 focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--color-brand-900)]`}
                         >{label}</button>
                       ) : (
                         <span key={run.startIndex} title={title} style={style} className={className}>{label}</span>
                       )
                     })}
+                    {selectionSpan && (
+                      <span
+                        className="pointer-events-none absolute inset-y-0 z-[1] border-x-2 border-[var(--color-brand-900)] bg-[var(--color-brand-900)]/15"
+                        aria-hidden="true"
+                        style={{
+                          left: `${(selectionSpan.first / entries.length) * 100}%`,
+                          width: `${((selectionSpan.last - selectionSpan.first + 1) / entries.length) * 100}%`,
+                        }}
+                      />
+                    )}
+                    <span className="pointer-events-none absolute inset-y-0 right-0 z-[2] w-0.5 bg-[var(--color-brand-900)]" aria-hidden="true" />
                   </div>
-                  <span className="truncate text-right font-mono text-[10px] font-black text-[var(--color-text-primary)]">
-                    {currentStage ? <>S{currentStage}<span className="font-semibold text-[var(--color-text-tertiary)]"> ×{current.length}{runUnit}</span></> : '—'}
-                  </span>
+                  {needsStrip && (
+                    <div
+                      className="col-span-2 row-start-3 flex flex-wrap gap-x-0.5 gap-y-1 sm:col-span-1 sm:col-start-2 sm:row-start-2"
+                      role="list"
+                      aria-label={`${system.label} Stage列`}
+                    >
+                      {runs.map((run) => {
+                        const truncated = run.startIndex === 0
+                        const range = `${entries[run.startIndex].date}〜${entries[run.endIndex].date}(${run.length}${runUnit})`
+                        const title = run.stage ? `${system.label} S${run.stage}: ${STAGE_LABELS[run.stage]} ${range}` : `${system.label} データなし ${range}`
+                        return (
+                          <span key={run.startIndex} role="listitem" className="flex min-w-5 flex-col items-center leading-none">
+                            {run.stage ? (
+                              <StageMark
+                                stage={run.stage}
+                                title={title}
+                                onSelect={onStageRangeSelect ? () => selectStageSegment(system, run.startIndex) : undefined}
+                              />
+                            ) : (
+                              <span className="flex h-[18px] w-[18px] items-center justify-center font-mono text-[11px] text-[var(--text-muted)]" title={title}>-</span>
+                            )}
+                            <span className="mt-0.5 font-mono text-[11px] font-semibold text-[var(--color-text-tertiary)]">{run.length}{truncated ? '+' : ''}</span>
+                          </span>
+                        )
+                      })}
+                    </div>
+                  )}
                 </div>
               )
             })}
           </div>
-          <div className="grid grid-cols-[40px_minmax(0,1fr)_64px] gap-x-2 pt-1">
-            <span />
-            <div className="relative h-3.5">
+          <div className={`grid grid-cols-1 pt-2 sm:gap-x-2 ${LANE_GRID}`}>
+            <span className="max-sm:hidden" />
+            <div className="relative h-4">
               {ticks.map((tick, tickIndex) => {
                 const position = ((tick.index + 0.5) / entries.length) * 100
                 const align = tickIndex === 0 ? '' : tickIndex === ticks.length - 1 ? '-translate-x-full' : '-translate-x-1/2'
                 return (
                   <span
                     key={tick.index}
-                    className={`absolute top-0 whitespace-nowrap font-mono text-[9px] font-semibold text-[var(--color-text-tertiary)] ${align}`}
+                    className={`absolute top-0 whitespace-nowrap font-mono text-[11px] font-semibold text-[var(--color-text-tertiary)] ${align}`}
                     style={{ left: tickIndex === 0 ? 0 : `${position}%` }}
                   >{tick.label}</span>
                 )
               })}
             </div>
-            <span />
+            <span className="max-sm:hidden" />
+          </div>
+
+          <div className="mt-3 border-t border-[var(--color-border-soft)] pt-2" role="group" aria-labelledby="stage-change-log-title">
+            <div className="flex items-center justify-between gap-2">
+              <h3 id="stage-change-log-title" className="m-0 text-[12px] font-bold text-[var(--color-text-secondary)]">
+                Stage変更ログ
+                <span className="ml-1.5 font-mono text-[11px] font-medium text-[var(--color-text-tertiary)]">表示期間内 {transitions.length}件・古い順</span>
+              </h3>
+              {transitions.length > 5 && (
+                <button
+                  type="button"
+                  onClick={() => setLogExpanded((open) => !open)}
+                  aria-expanded={logExpanded}
+                  aria-controls="stage-change-log"
+                  className={`min-h-11 px-2 text-[11px] font-bold text-[var(--color-brand-700)] focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--color-brand-900)] sm:min-h-7 ${transitions.length > 8 ? '' : 'sm:hidden'}`}
+                >
+                  {logExpanded ? '最新のみ表示' : `すべて表示 (${transitions.length}件)`}
+                </button>
+              )}
+            </div>
+            {transitions.length === 0 ? (
+              <p className="m-0 py-1 text-[12px] text-[var(--text-muted)]">表示期間内にStage変更はありません</p>
+            ) : (
+              <ol id="stage-change-log" className="m-0 grid list-none gap-x-6 p-0 sm:grid-cols-2 xl:grid-cols-3">
+                {transitions.map((transition, transitionIndex) => {
+                  const system = SYSTEMS.find((item) => item.key === transition.system) ?? SYSTEMS[0]
+                  const fromDuration = `${transition.fromLength}${runUnit}${transition.fromTruncated ? '以上' : ''}`
+                  const hiddenClass = logExpanded ? '' : transitionIndex < transitions.length - 8 ? 'hidden' : transitionIndex < transitions.length - 5 ? 'max-sm:hidden' : ''
+                  const label = `${transition.date} ${system.label} S${transition.from}からS${transition.to} 前の期間${fromDuration}`
+                  const content = (
+                    <>
+                      <span className="w-[64px] shrink-0 whitespace-nowrap font-mono text-[11px] font-semibold text-[var(--color-text-secondary)]">{transition.date.slice(2)}</span>
+                      <span className="w-12 shrink-0 whitespace-nowrap text-[11px] font-bold text-[var(--color-text-secondary)]">{system.label}</span>
+                      <span className="inline-flex shrink-0 items-center gap-1" aria-hidden="true">
+                        <StageMark stage={transition.from} />
+                        <span className="text-[11px] text-[var(--color-text-tertiary)]">→</span>
+                        <StageMark stage={transition.to} />
+                      </span>
+                      <span className="font-mono text-[11px] font-semibold text-[var(--color-text-tertiary)]">前 {fromDuration}</span>
+                    </>
+                  )
+                  // 押せる行だけ44pxのタップ領域を確保する。押せない行は内容なりの高さ
+                  const rowClass = `flex w-full items-center gap-x-2 border-b border-[var(--color-border-soft)] bg-transparent px-0 text-left ${onStageRangeSelect ? 'min-h-11 sm:min-h-7' : 'min-h-8 sm:min-h-7'}`
+                  return (
+                    <li key={`${transition.system}-${transition.toStartIndex}`} className={hiddenClass}>
+                      {onStageRangeSelect ? (
+                        <button
+                          type="button"
+                          onClick={() => selectStageSegment(system, transition.toStartIndex)}
+                          aria-label={label}
+                          title={label}
+                          className={`${rowClass} cursor-pointer hover:bg-[var(--color-surface-subtle)] focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--color-brand-900)]`}
+                        >{content}</button>
+                      ) : (
+                        <div className={rowClass} title={label}>{content}</div>
+                      )}
+                    </li>
+                  )
+                })}
+              </ol>
+            )}
           </div>
         </div>
       )}
     </section>
   )
+}
+
+// Timeline用の小さなStage識別チップ(色+数字)。18pxで凡例・列・ログ・現在表示に共通
+function StageMark({ stage, title, onSelect }: { stage: number; title?: string; onSelect?: () => void }) {
+  const style: React.CSSProperties = { ...stageButtonStyle(stage, Boolean(onSelect)), width: '18px', height: '18px', flexShrink: 0 }
+  if (onSelect) {
+    return (
+      <button
+        type="button"
+        onClick={onSelect}
+        title={title}
+        aria-label={title}
+        style={style}
+        className="focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--color-brand-900)]"
+      >{stage}</button>
+    )
+  }
+  return <span title={title} style={style}>{stage}</span>
 }
 
 function stageButtonStyle(stage: number, clickable: boolean): React.CSSProperties {
@@ -553,7 +777,7 @@ function stageButtonStyle(stage: number, clickable: boolean): React.CSSPropertie
     background: STAGE_BORDER_COLORS[stage],
     color: '#fff',
     fontWeight: 700,
-    fontSize: '10px',
+    fontSize: '11px',
     fontFamily: 'var(--font-mono)',
     border: 'none',
     cursor: clickable ? 'pointer' : 'default',
@@ -567,16 +791,19 @@ function isDateWithinRange(date: string, range: DateRange): boolean {
 
 const rangeOutsideStyle: React.CSSProperties = {
   marginTop: '4px',
-  color: 'var(--accent-primary)',
-  fontSize: '10px',
+  color: 'var(--color-brand-900)',
+  fontSize: '11px',
   fontFamily: 'var(--font-mono)',
 }
+
+// 選択・現在はネイビー(アンバーはS2のStage色と衝突するため使わない)
+const SELECTED_TINT = 'color-mix(in srgb, var(--color-brand-900) 12%, transparent)'
 
 const th: React.CSSProperties = {
   padding: '4px 6px',
   fontFamily: 'var(--font-mono)',
   color: 'var(--text-muted)',
-  fontSize: '9px',
+  fontSize: '11px',
   textAlign: 'center',
   fontWeight: 500,
   whiteSpace: 'nowrap',
@@ -585,15 +812,16 @@ const th: React.CSSProperties = {
 function dateHeaderStyle(active: boolean, current: boolean): React.CSSProperties {
   return {
     ...th,
-    background: active ? 'rgba(250, 204, 21, 0.16)' : current ? 'var(--bg-elevated)' : undefined,
-    color: active ? 'var(--accent-primary)' : current ? 'var(--text-primary)' : th.color,
+    background: active ? SELECTED_TINT : current ? 'var(--bg-elevated)' : undefined,
+    color: active || current ? 'var(--color-brand-900)' : th.color,
     fontWeight: current ? 800 : th.fontWeight,
+    borderBottom: current ? '2px solid var(--color-brand-900)' : undefined,
   }
 }
 
 const stickyTh: React.CSSProperties = {
   padding: '4px 8px',
-  fontSize: '10px',
+  fontSize: '11px',
   color: 'var(--text-muted)',
   fontWeight: 500,
   position: 'sticky',
@@ -607,9 +835,13 @@ function cellStyle(active: boolean, current: boolean): React.CSSProperties {
     padding: '4px 6px',
     textAlign: 'center',
     borderBottom: '1px solid var(--border-subtle)',
-    background: active ? 'rgba(250, 204, 21, 0.16)' : current ? 'var(--bg-elevated)' : undefined,
-    boxShadow: active ? 'inset 0 2px 0 rgba(245, 158, 11, 0.28), inset 0 -2px 0 rgba(245, 158, 11, 0.18)' : undefined,
+    background: active ? SELECTED_TINT : current ? 'var(--bg-elevated)' : undefined,
+    boxShadow: active ? 'inset 0 2px 0 var(--color-brand-900), inset 0 -2px 0 var(--color-brand-900)' : undefined,
   }
+}
+
+const stageChangeCellStyle: React.CSSProperties = {
+  borderLeft: '2px solid var(--color-border-strong)',
 }
 
 const stickyTd: React.CSSProperties = {
@@ -627,21 +859,13 @@ const timeframeDividerStyle: React.CSSProperties = {
   borderTop: '3px solid var(--border-base)',
 }
 
-const segmentedControl: React.CSSProperties = {
-  display: 'inline-flex',
-  border: '1px solid var(--border-base)',
-  borderRadius: 'var(--radius-sm)',
-  overflow: 'hidden',
-}
+// 3つのセグメント(表示形式・時間軸・期間)は同じ書体・サイズ。選択中はネイビー
+const SEGMENT_GROUP = 'flex overflow-hidden border border-[var(--color-border-default)] bg-white sm:inline-flex'
 
-function segmentButton(active: boolean): React.CSSProperties {
-  return {
-    fontSize: '10px',
-    fontFamily: 'var(--font-mono)',
-    background: active ? 'var(--accent-primary)' : 'transparent',
-    color: active ? '#fff' : 'var(--text-secondary)',
-    border: 'none',
-    cursor: 'pointer',
-    whiteSpace: 'nowrap',
-  }
+function segmentClass(active: boolean): string {
+  return `flex-1 cursor-pointer whitespace-nowrap border-0 text-[12px] font-bold sm:flex-none ${
+    active
+      ? 'bg-[var(--color-brand-900)] text-white'
+      : 'bg-white text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-subtle)]'
+  }`
 }

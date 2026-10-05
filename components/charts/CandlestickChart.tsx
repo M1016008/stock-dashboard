@@ -31,6 +31,7 @@ import {
   type ChartIntervalCode,
 } from '@/lib/timeframes'
 import { movingAverageColor } from '@/lib/chart-colors'
+import { STAGE_BORDER_COLORS } from '@/lib/hex-stage'
 
 export type TvInterval = ChartIntervalCode
 
@@ -58,8 +59,15 @@ interface CandlestickChartProps {
   revealAfterAnalysis?: boolean
   historyData?: OHLCV[]
   compact?: boolean
+  /** 'segmented': 主要4足+「その他の足」select、余白なしのツールバー(オプトイン。既定は従来の全タブ表示) */
+  toolbarVariant?: 'default' | 'segmented'
+  /** 'strip': 要約をチャート直下の1〜2行にまとめる(オプトイン。既定は従来のカード表示) */
+  summaryVariant?: 'cards' | 'strip'
   onVisibleRangeChange?: (range: ChartDateRange, interval: TvInterval, source?: 'visible' | 'drag') => void
 }
+
+// segmented ツールバーで常時表示する足。残りは「その他の足」にまとめる
+const PRIMARY_TIMEFRAMES: TvInterval[] = ['D', 'W', 'M', 'Y']
 
 // 取得期間 (interval 別に必要 OHLCV 日数の目安)
 const PERIOD_BY_INTERVAL: Record<TvInterval, string> = {
@@ -112,6 +120,8 @@ export function CandlestickChart({
   revealAfterAnalysis = false,
   historyData,
   compact = false,
+  toolbarVariant = 'default',
+  summaryVariant = 'cards',
   onVisibleRangeChange,
 }: CandlestickChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -528,10 +538,34 @@ export function CandlestickChart({
     }
   }
 
+  const segmented = toolbarVariant === 'segmented'
+  const primaryTimeframes = timeframeOptions.filter((option) => PRIMARY_TIMEFRAMES.includes(option))
+  const moreTimeframes = timeframeOptions.filter((option) => !PRIMARY_TIMEFRAMES.includes(option))
+  const moreTimeframeActive = moreTimeframes.includes(effectiveInterval)
+
+  const maToggles = !compact && effectiveMaLines.map((period, index) => (
+    <label key={period} style={{
+      display: 'flex',
+      alignItems: 'center',
+      gap: '4px',
+      cursor: 'pointer',
+      fontSize: '11px',
+      fontFamily: 'var(--font-mono)',
+    }} className={segmented ? 'min-h-11 sm:min-h-8' : undefined}>
+      <input
+        type="checkbox"
+        checked={selectedMAs.includes(period)}
+        onChange={() => toggleMA(period)}
+        style={{ accentColor: maColor(period, index) }}
+      />
+      <span style={{ color: maColor(period, index) }}>{period}</span>
+    </label>
+  ))
+
   return (
     <div>
       {/* MA トグル */}
-      <div style={{
+      <div style={segmented ? segmentedToolbarStyle : {
         display: 'flex',
         gap: '12px',
         alignItems: 'center',
@@ -539,7 +573,7 @@ export function CandlestickChart({
         marginBottom: '8px',
         flexWrap: 'wrap',
       }}>
-        {showTimeframeSelector && (
+        {showTimeframeSelector && !segmented && (
           <div style={timeframeSelectorStyle} role="tablist" aria-label="チャート時間軸">
             {timeframeOptions.map((option) => (
               <button
@@ -555,25 +589,54 @@ export function CandlestickChart({
             ))}
           </div>
         )}
-        {!compact && <span style={{ fontSize: '10px', color: 'var(--text-muted)', letterSpacing: '0.08em' }}>MA:</span>}
-        {!compact && effectiveMaLines.map((period, index) => (
-          <label key={period} style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '4px',
-            cursor: 'pointer',
-            fontSize: '11px',
-            fontFamily: 'var(--font-mono)',
-          }}>
-            <input
-              type="checkbox"
-              checked={selectedMAs.includes(period)}
-              onChange={() => toggleMA(period)}
-              style={{ accentColor: maColor(period, index) }}
-            />
-            <span style={{ color: maColor(period, index) }}>{period}</span>
-          </label>
-        ))}
+        {showTimeframeSelector && segmented && (
+          <div style={segmentedGroupStyle}>
+            <div style={segmentedTimeframesStyle} role="group" aria-label="チャート時間軸">
+              {primaryTimeframes.map((option) => (
+                <button
+                  key={option}
+                  type="button"
+                  onClick={() => setActiveInterval(option)}
+                  style={segmentedTimeframeButtonStyle(option === effectiveInterval)}
+                  className="min-h-11 sm:min-h-8"
+                  aria-pressed={option === effectiveInterval}
+                >
+                  {intervalLabel(option)}
+                </button>
+              ))}
+            </div>
+            {moreTimeframes.length > 0 && (
+              <select
+                aria-label="その他の足"
+                value={moreTimeframeActive ? effectiveInterval : ''}
+                onChange={(event) => {
+                  const next = moreTimeframes.find((option) => option === event.target.value)
+                  if (next) setActiveInterval(next)
+                }}
+                style={segmentedSelectStyle(moreTimeframeActive)}
+                className="min-h-11 sm:min-h-8"
+              >
+                <option value="" disabled>その他の足</option>
+                {moreTimeframes.map((option) => (
+                  <option key={option} value={option}>{intervalLabel(option)}</option>
+                ))}
+              </select>
+            )}
+          </div>
+        )}
+        {segmented ? (
+          !compact && (
+            <div role="group" aria-label="移動平均線" style={segmentedMaGroupStyle}>
+              <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)' }}>MA</span>
+              {maToggles}
+            </div>
+          )
+        ) : (
+          <>
+            {!compact && <span style={{ fontSize: '10px', color: 'var(--text-muted)', letterSpacing: '0.08em' }}>MA:</span>}
+            {maToggles}
+          </>
+        )}
         {(canRangeDragSelect || selectedRange) && (
           <div style={toolbarRangeGroupStyle}>
             {canRangeDragSelect && (
@@ -594,7 +657,7 @@ export function CandlestickChart({
           </div>
         )}
       </div>
-      {!compact && <TimeframeSummaryBar summary={timeframeSummary} />}
+      {!compact && summaryVariant === 'cards' && <TimeframeSummaryBar summary={timeframeSummary} />}
 
       {/* チャートコンテナ */}
       <div style={{ position: 'relative', height }}>
@@ -631,6 +694,9 @@ export function CandlestickChart({
           </>
         )}
       </div>
+      {!compact && summaryVariant === 'strip' && (
+        <TimeframeSummaryStrip summary={timeframeSummary} showAngle={effectiveInterval !== 'D'} />
+      )}
     </div>
   )
 }
@@ -984,6 +1050,43 @@ function SummaryChip({ label, main, sub, tone }: { label: string; main: string; 
   )
 }
 
+/** チャート直下に置く1〜2行の要約。showAngle=false のときは傾きを出さない(日足は呼び出し側のMA傾きブロックに集約) */
+function TimeframeSummaryStrip({ summary, showAngle }: { summary: TimeframeSummary | null; showAngle: boolean }) {
+  if (!summary) return null
+  const toneColor = summaryToneColor(summary.tone)
+  const items: Array<{ key: string; text: string; sub?: string; tone: SummaryTone }> = [
+    { key: 'ma', text: `MA配置: ${summary.maStructure}`, sub: summary.maOrderDetail, tone: summary.maTone },
+    ...(showAngle ? [{ key: 'angle', text: `この足の傾き: ${summary.angleSummary}`, sub: summary.angleDetail, tone: summary.angleTone }] : []),
+    { key: 'momentum', text: summary.momentumSummary, tone: summary.momentumTone },
+    { key: 'volume', text: summary.volumeSummary, tone: summary.volumeTone },
+    { key: 'range', text: summary.rangeSummary, tone: summary.rangeTone },
+  ]
+  return (
+    <div style={summaryStripStyle} data-chart-summary="strip">
+      <div style={summaryHeaderStyle}>
+        <span style={summaryStripBadgeStyle}>
+          {summary.intervalLabel}
+          {summary.stage != null ? (
+            <span style={summaryStripStageMarkStyle(summary.stage)}>S{summary.stage}</span>
+          ) : (
+            <span>{summary.stageText}</span>
+          )}
+        </span>
+        <strong style={summaryStripHeadlineStyle(toneColor)}>{summary.headline}</strong>
+        <span style={summaryObservationStyle}>{summary.observation}</span>
+      </div>
+      <div style={summaryStripItemsStyle}>
+        {items.map((item) => (
+          <span key={item.key} style={{ color: summaryTonePalette(item.tone).text }}>
+            {item.text}
+            {item.sub && <span style={summaryStripSubStyle}> ({item.sub})</span>}
+          </span>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function stageToneColor(stage: number | null): string {
   if (stage === 1 || stage === 6) return '#16a34a'
   if (stage === 2 || stage === 5) return '#d97706'
@@ -1144,6 +1247,118 @@ const summaryBarStyle: React.CSSProperties = {
   color: 'var(--text-secondary)',
   fontSize: '12px',
   fontWeight: 700,
+}
+
+const segmentedToolbarStyle: React.CSSProperties = {
+  display: 'flex',
+  gap: '4px 12px',
+  alignItems: 'center',
+  flexWrap: 'wrap',
+  marginBottom: '8px',
+}
+
+const segmentedGroupStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: '6px',
+  maxWidth: '100%',
+}
+
+const segmentedTimeframesStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  border: '1px solid var(--color-border-default)',
+  borderRadius: 'var(--radius-sm)',
+  overflow: 'hidden',
+  background: '#fff',
+}
+
+function segmentedTimeframeButtonStyle(active: boolean): React.CSSProperties {
+  return {
+    border: 'none',
+    background: active ? 'var(--color-brand-900)' : 'transparent',
+    color: active ? '#fff' : 'var(--text-secondary)',
+    fontSize: '12px',
+    fontWeight: 700,
+    lineHeight: 1,
+    padding: '0 12px',
+    cursor: 'pointer',
+    whiteSpace: 'nowrap',
+  }
+}
+
+function segmentedSelectStyle(active: boolean): React.CSSProperties {
+  return {
+    border: `1px solid ${active ? 'var(--color-brand-900)' : 'var(--color-border-default)'}`,
+    borderRadius: 'var(--radius-sm)',
+    background: active ? 'var(--color-brand-900)' : '#fff',
+    color: active ? '#fff' : 'var(--text-secondary)',
+    fontSize: '12px',
+    fontWeight: 700,
+    padding: '0 6px',
+    cursor: 'pointer',
+  }
+}
+
+const segmentedMaGroupStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  flexWrap: 'wrap',
+  gap: '2px 12px',
+}
+
+const summaryStripStyle: React.CSSProperties = {
+  display: 'grid',
+  gap: '4px',
+  marginTop: '8px',
+  paddingTop: '8px',
+  borderTop: '1px solid var(--color-border-soft)',
+  color: 'var(--text-secondary)',
+}
+
+const summaryStripBadgeStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: '4px',
+  color: 'var(--color-brand-900)',
+  fontSize: '12px',
+  fontWeight: 700,
+}
+
+function summaryStripStageMarkStyle(stage: number): React.CSSProperties {
+  return {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: '28px',
+    height: '18px',
+    padding: '0 4px',
+    borderRadius: '3px',
+    background: STAGE_BORDER_COLORS[stage] ?? 'var(--text-muted)',
+    color: '#fff',
+    fontFamily: 'var(--font-mono)',
+    fontSize: '11px',
+    fontWeight: 700,
+  }
+}
+
+function summaryStripHeadlineStyle(color: string): React.CSSProperties {
+  return { color, fontSize: '13px', fontWeight: 700, lineHeight: 1.35 }
+}
+
+const summaryStripItemsStyle: React.CSSProperties = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: '2px 16px',
+  fontSize: '12px',
+  fontWeight: 600,
+  lineHeight: 1.5,
+}
+
+const summaryStripSubStyle: React.CSSProperties = {
+  color: 'var(--text-muted)',
+  fontFamily: 'var(--font-mono)',
+  fontSize: '11px',
+  fontWeight: 500,
 }
 
 const summaryHeaderStyle: React.CSSProperties = {
