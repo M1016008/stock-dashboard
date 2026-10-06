@@ -26,6 +26,8 @@ import type {
 } from '@/lib/server/financial-overview-read-model'
 import type { StockQuote } from '@/types/stock'
 import { BoundedMeter, MetricLadder, RankStrip, ScoreRuler, type LadderRow } from '@/components/stock/StockAnalysisVisuals'
+import { FundamentalSummaryBoard } from '@/components/stock/fundamentals/FundamentalSummaryBoard'
+import type { FundamentalTabId } from '@/components/stock/fundamentals/format'
 
 interface StockDecisionSummaryProps {
   ticker: string
@@ -33,6 +35,8 @@ interface StockDecisionSummaryProps {
   quote: StockQuote | null
   variant?: 'overview' | 'fundamental'
   physicalMomentum?: StockDecisionPhysicalMomentum | null
+  /** variant="fundamental" のときだけ使う。5軸サマリーから各サブタブへ移動する。 */
+  onSelectFundamentalTab?: (tab: FundamentalTabId) => void
 }
 
 interface PhysicalMomentumRow {
@@ -162,6 +166,7 @@ export function StockDecisionSummary({
   quote,
   variant = 'overview',
   physicalMomentum,
+  onSelectFundamentalTab,
 }: StockDecisionSummaryProps) {
   const [data, setData] = useState<SummaryState>({
     financial: null,
@@ -374,6 +379,21 @@ export function StockDecisionSummary({
     return `/sectors?${params.toString()}#sector-structure`
   })() : null
 
+  // Fundamentals の「サマリー」サブタブ専用の5軸ボード。overview(既定)の描画は下の既存JSXのまま。
+  if (variant === 'fundamental') {
+    return (
+      <FundamentalSummaryBoard
+        ticker={ticker}
+        analysisDate={analysisDate}
+        financial={data.financial}
+        loading={loading}
+        failed={financialError}
+        financialAsOf={financialAsOf}
+        onSelectTab={onSelectFundamentalTab}
+      />
+    )
+  }
+
   return (
     <div className="space-y-4 md:space-y-6">
       {variant === 'overview' && (
@@ -430,9 +450,7 @@ export function StockDecisionSummary({
       )}
 
       <section
-        className={variant === 'fundamental'
-          ? 'overflow-hidden border-y border-[var(--color-border-soft)] bg-white'
-          : 'overflow-hidden border border-[var(--color-border-default)] bg-white shadow-[0_1px_3px_rgba(16,32,52,0.05)]'}
+        className="overflow-hidden border border-[var(--color-border-default)] bg-white shadow-[0_1px_3px_rgba(16,32,52,0.05)]"
         aria-labelledby={`fundamental-summary-title-${variant}`}
         data-section="Fundamental Summary"
       >
