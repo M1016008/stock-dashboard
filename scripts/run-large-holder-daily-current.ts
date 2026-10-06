@@ -51,11 +51,23 @@ async function operation(command: 'status' | 'snapshot-refresh' | 'update-daily'
     })
     let stdout = ''
     let stderr = ''
+    let statusTimedOut = false
+    const configuredStatusTimeout = Number(process.env.LARGE_HOLDER_AUTOMATION_STATUS_TIMEOUT_SECONDS ?? 120)
+    const statusTimeoutMs = Math.max(10, Math.min(300,
+      Number.isFinite(configuredStatusTimeout) ? configuredStatusTimeout : 120)) * 1_000
+    const timeout = command === 'status' ? setTimeout(() => {
+      statusTimedOut = true
+      child.kill('SIGTERM')
+      setTimeout(() => child.kill('SIGKILL'), 5_000).unref()
+    }, statusTimeoutMs) : null
     child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString() })
     child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString() })
-    child.on('error', reject)
+    child.on('error', (error) => { if (timeout) clearTimeout(timeout); reject(error) })
     child.on('close', (code) => {
-      if (code === 0) resolve(finalJson(stdout))
+      if (timeout) clearTimeout(timeout)
+      if (statusTimedOut) {
+        reject(new Error('large_holder_status_timeout'))
+      } else if (code === 0) resolve(finalJson(stdout))
       else reject(new Error(stderr.trim().slice(-4_000) || `${command}_exit_${code}`))
     })
   })

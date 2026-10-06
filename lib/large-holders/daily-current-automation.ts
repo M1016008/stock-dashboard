@@ -75,7 +75,7 @@ export function classifyLargeHolderDailyFailure(message: string): LargeHolderDai
     return 'WAITING_FOR_PRICE_EVIDENCE'
   }
   if (/EDINET_API_KEY is not configured|source_not_ready/i.test(message)) return 'SOURCE_NOT_READY'
-  if (/ETIMEDOUT|EHOSTUNREACH|ECONNRESET|ENETUNREACH|fetch failed|HTTP 429|HTTP 5\d\d|request failed after/i.test(message)) {
+  if (/large_holder_status_timeout|ETIMEDOUT|EHOSTUNREACH|ECONNRESET|ENETUNREACH|fetch failed|HTTP 429|HTTP 5\d\d|request failed after/i.test(message)) {
     return 'FAILED_TRANSIENT'
   }
   if (/certification_gate_failed|validation_failed|materialized_snapshot_validation_failed|source_changed_during_materialization|unresolved_source_document|revision_chain_unresolved/i.test(message)) {
