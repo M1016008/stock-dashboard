@@ -26,6 +26,7 @@ assert.equal(planLargeHolderDailyCurrent(status({ state: {
 }, snapshotPriceDate: '2026-10-02', status: 'CURRENT' })).action, 'ALREADY_CURRENT')
 assert.equal(classifyLargeHolderDailyFailure('official_certification_gate_failed'), 'VALIDATION_FAILED')
 assert.equal(classifyLargeHolderDailyFailure('fetch failed cause=ETIMEDOUT'), 'FAILED_TRANSIENT')
+assert.equal(classifyLargeHolderDailyFailure('large_holder_status_timeout'), 'FAILED_TRANSIENT')
 assert.equal(planLargeHolderDailyCurrent(status({ snapshotPriceDate: '2026-10-06', status: 'CURRENT',
   certificationStatus: 'VALIDATED_WITH_QUARANTINE' })).action, 'ALREADY_CURRENT')
 assert.equal(classifyLargeHolderDailyFailure('large_holder_update_lock_busy'), 'ALREADY_RUNNING')
