@@ -53,12 +53,14 @@ export function planLargeHolderDailyCurrent(
   if (previousSnapshotDate === marketDate) {
     return { ...base, action: 'VALIDATION_FAILED', reason: 'SAME_DATE_NOT_CURRENT' }
   }
-  if (!status.state.priceBatchComplete || priceEvidenceDate !== marketDate) {
+  // The canonical snapshot refresh creates Large Holder price evidence first,
+  // then rechecks its date before building or publishing a candidate snapshot.
+  if (!status.state.priceBatchComplete) {
     return { ...base, action: 'WAITING_FOR_PRICE_EVIDENCE', reason: 'PRICE_EVIDENCE_NOT_READY' }
   }
-  return { ...base, action: 'REFRESH', reason: previousSnapshotDate
-    ? 'MARKET_DATE_ADVANCED'
-    : 'NO_CERTIFIED_SNAPSHOT' }
+  return { ...base, action: 'REFRESH', reason: priceEvidenceDate !== marketDate
+    ? 'PRICE_EVIDENCE_REFRESH_REQUIRED'
+    : previousSnapshotDate ? 'MARKET_DATE_ADVANCED' : 'NO_CERTIFIED_SNAPSHOT' }
 }
 
 export type LargeHolderDailyFailure =

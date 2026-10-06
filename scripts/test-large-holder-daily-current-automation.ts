@@ -20,7 +20,7 @@ assert.equal(planLargeHolderDailyCurrent(status({ snapshotPriceDate: '2026-10-06
 assert.equal(planLargeHolderDailyCurrent(status()).action, 'REFRESH')
 assert.equal(planLargeHolderDailyCurrent(status({ state: {
   marketDate: '2026-10-06', priceEvidenceDate: '2026-10-05', priceBatchComplete: true,
-} })).action, 'WAITING_FOR_PRICE_EVIDENCE')
+} })).action, 'REFRESH')
 assert.equal(planLargeHolderDailyCurrent(status({ state: {
   marketDate: '2026-10-02', priceEvidenceDate: '2026-10-02', priceBatchComplete: true,
 }, snapshotPriceDate: '2026-10-02', status: 'CURRENT' })).action, 'ALREADY_CURRENT')
