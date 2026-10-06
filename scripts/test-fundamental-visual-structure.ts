@@ -9,6 +9,8 @@ function source(path: string): string {
 
 const stockDetail = source('app/stock/[ticker]/StockDetailClient.tsx')
 const summary = source('components/stock/StockDecisionSummary.tsx')
+const fundamentalSummary = source('components/stock/fundamentals/FundamentalSummaryBoard.tsx')
+const fundamentalPrimitives = source('components/stock/fundamentals/primitives.tsx')
 const performance = source('components/stock/FinancialPerformanceDetail.tsx')
 const financial = source('components/stock/FinancialDetail.tsx')
 const valuation = source('components/stock/ValuationDetail.tsx')
@@ -34,25 +36,24 @@ assert.match(workspace, /aria-selected=\{active === id\}/)
 assert.match(workspace, /h-11/)
 
 assert.match(summary, /variant === 'fundamental'/)
-assert.match(summary, /function FundamentalEditorialSummary/)
-for (const label of ['売上高', '営業利益', 'EPS', 'ROE']) {
-  assert.match(summary, new RegExp(`metric\\('${label}'`), `primary summary metric: ${label}`)
+assert.match(summary, /<FundamentalSummaryBoard/)
+assert.match(summary, /if \(variant === 'fundamental'\)/)
+for (const axis of ['growth', 'profitability', 'safety', 'valuation', 'returns']) {
+  assert.match(fundamentalSummary, new RegExp(`id="${axis}"`), `Fundamental summary axis: ${axis}`)
 }
-assert.match(summary, /const ltmBasis = 'LTM \/ 直近12か月'/)
-assert.match(summary, /metric\('売上高', financial\?\.performanceAndGrowth\.ltmRevenue, 'currency'\), periodBasis: ltmBasis/)
-assert.match(summary, /metric\('営業利益', financial\?\.performanceAndGrowth\.ltmOperatingProfit, 'currency'\), periodBasis: ltmBasis/)
-assert.match(summary, /metric\('EPS', financial\?\.performanceAndGrowth\.eps, 'per_share'\), periodBasis: ltmBasis/)
-assert.match(summary, /metric\('ROE', financial\?\.quality\.roe, 'percent'\), periodBasis: ltmBasis/)
-assert.match(summary, /item\.value\.reason \?\? item\.periodBasis \?\? '直近利用可能値'/)
-assert.match(summary, /lg:grid-cols-\[minmax\(0,1\.4fr\)_minmax\(320px,1fr\)\]/)
-assert.match(summary, /業績・成長/)
-assert.match(summary, /評価・資本効率/)
+for (const label of ['成長', '収益性', '財務安全性', '株価の位置', '株主還元']) {
+  assert.match(fundamentalSummary, new RegExp(`title="${label}"|label: '${label}'`), `Fundamental summary label: ${label}`)
+}
+assert.match(fundamentalSummary, /aria-label="5軸の現在地"/)
+assert.match(fundamentalSummary, /自社過去5年の中央値/)
+assert.match(fundamentalSummary, /33業種の中央値/)
+assert.match(fundamentalSummary, /割安・割高の判定はしません/)
+assert.match(fundamentalPrimitives, /function RangeRuler/)
+assert.match(fundamentalPrimitives, /function PeerBand/)
 assert.match(overviewReadModel, /latestFact\(facts, 'revenue', 'LTM'\)/)
 assert.match(overviewReadModel, /latestFact\(facts, 'operating_profit', 'LTM'\)/)
 assert.match(metricRegistry, /key: 'eps',[\s\S]*?periodBasis: 'LTM'/)
 assert.match(metricRegistry, /key: 'roe',[\s\S]*?periodBasis: 'LTM'/)
-assert.match(summary, /補足指標/)
-assert.match(summary, /<details className="border-t/)
 
 const components = [performance, financial, valuation, returns]
 const endpoints = [
@@ -73,17 +74,13 @@ components.forEach((component, index) => {
 })
 
 assert.match(performance, /業績グラフ/)
-assert.match(performance, /実績と会社予想を塗り・輪郭・ラベルで区別/)
-assert.match(performance, /<details className="group border-t/)
-assert.match(performance, /<Table2 size=\{13\} \/>原表/)
+assert.match(performance, /実績と会社予想を同じ尺度で並べ/)
+assert.match(performance, /<PerformanceRawTable periods=\{periods\} \/>/)
 assert.match(performance, /会社予想修正履歴/)
 assert.match(performance, /window\.matchMedia\('\(min-width: 1024px\)'\)/)
-assert.doesNotMatch(performance, /hidden grid-cols-2 lg:grid/)
 assert.match(performance, /const \[selectedMetric, setSelectedMetric\]/)
-assert.match(performance, /<MetricSwitch value=\{selectedMetric\} onChange=\{setSelectedMetric\} \/>/)
 assert.match(performance, /<PerformanceChart metric=\{selectedMetric\} periods=\{periods\} \/>/)
 assert.doesNotMatch(performance, /FINANCIAL_PERFORMANCE_DETAIL_METRICS\.map\(\(metric\) => \(\s*<PerformanceChart/)
-assert.match(performance, /はこの基準では取得できません。/)
 assert.match(performance, /h-\[250px\][^\n]*sm:h-\[330px\]/)
 
 for (const tab of ['まとめ', '指標', 'P/L', 'B/S', 'C/F']) {
@@ -91,19 +88,23 @@ for (const tab of ['まとめ', '指標', 'P/L', 'B/S', 'C/F']) {
 }
 assert.match(financial, /role="tablist"/)
 assert.match(financial, /aria-selected=\{subtab === tab\.id\}/)
-assert.match(financial, /lg:grid-cols-\[0\.95fr_1\.05fr_1\.2fr_0\.8fr\]/)
-assert.match(financial, /primaryLabels=\{\['営業CF', '簡易FCF'\]\}/)
-assert.match(financial, /primaryLabels=\{\['自己資本比率'\]\}/)
+assert.match(financial, /title="4つの観点"/)
+for (const section of ['安全性', '収益性', '資本効率', 'キャッシュ創出']) {
+  assert.match(financial, new RegExp(`title="${section}"`), `Financial viewpoint: ${section}`)
+}
+assert.match(financial, /title="B\/S・P\/L・C\/Fのつながり"/)
 
-for (const section of ['現在の評価', '自社過去レンジ', '同業比較']) {
+for (const section of ['現在の評価', '自社過去と同業の中での位置', '自社過去レンジの詳細', '同業の分布']) {
   assert.match(valuation, new RegExp(section), `Valuation section: ${section}`)
 }
-assert.match(valuation, /の現在位置/)
-assert.match(valuation, /過去\{HISTORY_WINDOWS/)
+assert.match(valuation, /<RangeRuler/)
+assert.match(valuation, /<PeerBand/)
+assert.match(valuation, /割安・割高の判定や推奨はしません/)
 
 const returnsOrder = [
   '<CurrentReturns',
-  '<DividendDirectionSummary',
+  '<DividendContinuity',
+  '<DividendCapacity',
   '<DividendHistory',
   '<ForecastRevisionHistory',
 ]
@@ -113,9 +114,10 @@ for (const marker of returnsOrder) {
   assert.ok(index > cursor, `Shareholder returns order: ${marker}`)
   cursor = index
 }
-assert.match(returns, /持続可能性・自社株買いを確認/)
-assert.match(returns, /aria-label="現在の還元と配当の方向性"/)
-assert.match(returns, /<details className="overflow-hidden border-y/)
+assert.match(returns, /現在の還元/)
+assert.match(returns, /継続性\(配当の向き\)/)
+assert.match(returns, /余力\(利益とキャッシュで賄えているか\)/)
+assert.match(returns, /配当履歴/)
 for (const component of [performance, financial, valuation, returns]) {
   assert.match(component, /<MeasuredChartFrame/)
   assert.doesNotMatch(component, /<ResponsiveContainer/)

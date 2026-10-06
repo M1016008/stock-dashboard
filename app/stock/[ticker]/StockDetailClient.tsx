@@ -1356,9 +1356,9 @@ function FundamentalWorkspace({
         <header className="flex flex-wrap items-end justify-between gap-2 border-b border-[var(--color-border-soft)] px-4 py-3 sm:px-5">
           <div>
             <h2 id="fundamental-workspace-title" className="text-[15px] font-bold text-[var(--color-text-primary)]">ファンダメンタル</h2>
-            <p className="mt-1 text-[11px] font-medium text-[var(--color-text-tertiary)]">成長・収益性・評価・株主還元を並べて確認し、各タブで深掘り</p>
+            <p className="mt-1 text-[12px] font-medium text-[var(--color-text-secondary)]">現在地(サマリー) → 業績・財務の根拠 → 株価の位置 → 株主還元の順に確認</p>
           </div>
-          <span className="font-mono text-[10px] font-semibold text-[var(--color-text-tertiary)]">基準日 {analysisDate ?? quote?.priceDate ?? '---'}</span>
+          <span className="font-mono text-[11px] font-semibold text-[var(--color-text-tertiary)]">基準日 {analysisDate ?? quote?.priceDate ?? '---'}</span>
         </header>
         <nav className="flex overflow-x-auto bg-white px-2 sm:px-3" aria-label="ファンダメンタル分析" role="tablist">
           {tabs.map(({ id, label, icon: Icon }) => (
@@ -1383,7 +1383,15 @@ function FundamentalWorkspace({
         </nav>
       </div>
 
-      {active === 'summary' && <StockDecisionSummary ticker={ticker} analysisDate={analysisDate} quote={quote} variant="fundamental" />}
+      {active === 'summary' && (
+        <StockDecisionSummary
+          ticker={ticker}
+          analysisDate={analysisDate}
+          quote={quote}
+          variant="fundamental"
+          onSelectFundamentalTab={onSelect}
+        />
+      )}
       {active === 'performance' && (
         <FinancialPerformanceDetail ticker={ticker} analysisDate={analysisDate} />
       )}
