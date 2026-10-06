@@ -242,6 +242,7 @@ async function snapshotStatus() {
   if (!current) reasons.push('UNPUBLISHED')
   return { state, currentSnapshotId: current?.publication.snapshotId ?? baseline?.snapshotId ?? null,
     currentGeneratedAt: current?.publication.generatedAt ?? null,
+    certificationStatus: current?.publication.status ?? null,
     latestEdinetDataAt: baseline?.snapshot.latestEdinetDataAt ?? null,
     snapshotPriceDate: baseline?.snapshot.priceDate ?? null,
     status: reasons.length ? 'STALE' : 'CURRENT', reasons,
