@@ -249,7 +249,9 @@ const technicalStageMap = technicalSnapshot.slice(
 )
 assert.doesNotMatch(technicalStageMap, /min-h-\[|\btruncate\b|\bh-9\b|\bh-11\b|overflow-hidden/, 'Stage map tiles use natural height and never truncate Stage names')
 assert.match(technicalStageMap, /\{STAGE_LABELS\[value\]\}/, 'Stage map must render every full Stage name')
-assert.match(technicalStageMap, /borderStyle: isException \? 'dashed' : 'solid'/, 'Exception axis is marked by a dashed outline plus the 例外 tag')
+assert.match(technicalStageMap, /borderStyle: isException \? 'dashed' : 'solid'/, 'Axis outside the majority is marked with a dashed outline')
+assert.match(technicalStageMap, /多数派と異なる軸/, 'Stage summary explains that the highlighted axis differs from the majority')
+assert.match(technicalStageMap, />異なる軸<\/b>/, 'Stage cell avoids the ambiguous 例外 label')
 assert.match(technicalStageMap, /grid-cols-3/)
 assert.doesNotMatch(technicalSnapshot, /text-white/)
 assert.doesNotMatch(technicalSnapshot, /color: value \? '#fff'/)
@@ -534,8 +536,16 @@ assert.match(stockDetailSource, /<CompanyInformationDetail ticker=\{ticker\} ana
 assert.match(stockDetailSource, /会社四季報の会社概要は現在情報のため/)
 
 assert.match(basicInfoCard, /className=\{embedded \? 'contents' : 'card'\}/)
-assert.match(basicInfoCard, /lg:order-3 lg:col-span-2/)
 assert.match(basicInfoCard, /data-overview-signal-row/)
+const signalDisclosure = basicInfoCard.slice(basicInfoCard.indexOf('<SheetRow label="根拠と条件"'))
+assert.ok(basicInfoCard.includes('<SheetRow label="根拠と条件"'), 'Evidence and conditions live in one sheet row')
+assert.match(signalDisclosure, /aria-expanded=\{showSignalDetails\}/)
+assert.match(signalDisclosure, /aria-controls=\{signalDetailsId\}/)
+assert.match(signalDisclosure, /id=\{signalDetailsId\} hidden=\{!showSignalDetails\}/)
+assert.match(signalDisclosure, /shortTerm\.sides\.map/, 'Short/mid evidence keeps every side')
+assert.match(signalDisclosure, /aria-label="見方が変わる条件"/)
+assert.match(signalDisclosure, /<ConditionList conditions=\{changeConditions\} \/>/)
+assert.match(signalDisclosure, /<ConditionList conditions=\{shortTerm\.conditions\} \/>/)
 const marginInfoCard = stockDetailSource.slice(
   stockDetailSource.indexOf('function MarginInfoCard'),
   stockDetailSource.indexOf('const marketSnapshotCardStyle'),
@@ -598,6 +608,7 @@ const shikihoNarrative = stockDetailSource.slice(
   stockDetailSource.indexOf('function ShikihoArticle'),
 )
 assert.doesNotMatch(shikihoNarrative, /clampLines|WebkitLineClamp|全文表示|折りたたむ/)
+assert.doesNotMatch(shikihoOverview, /index="0\d"/, 'Shikiho sections read by headings and rules, not ordinal numbers')
 
 for (const legacyHash of ['performance', 'financial', 'valuation', 'returns']) {
   assert.match(stockDetailSource, new RegExp(`hash === '${legacyHash}'`))
