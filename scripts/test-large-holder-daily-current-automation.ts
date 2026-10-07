@@ -40,6 +40,7 @@ assert.equal(planLargeHolderDailyCurrent(status({ snapshotPriceDate: '2026-10-07
   'VALIDATION_FAILED')
 
 const runner = readFileSync('scripts/run-large-holder-daily-current.ts', 'utf8')
+const operations = readFileSync('scripts/run-large-holder-operations.ts', 'utf8')
 const installer = readFileSync('scripts/install-local-large-holder-update.ts', 'utf8')
 assert.match(runner, /snapshot-refresh/)
 assert.match(runner, /update-daily/)
@@ -51,5 +52,7 @@ assert.match(installer, /JQUANTS_API_KEY/)
 assert.match(installer, /launchAgentStorageEnvironmentXml/)
 assert.match(installer, /RunAtLoad/)
 assert.doesNotMatch(installer, /large-holders:update-daily/)
+assert.match(operations, /spawn\(process\.execPath, \['--import', 'tsx', script, \.\.\.childArgs\]/)
+assert.doesNotMatch(operations, /node_modules['"], ['"]\.bin['"], ['"]tsx/)
 
 console.log('large-holder daily CURRENT automation: PASS (A-J, canonical pipeline, bounded schedule)')

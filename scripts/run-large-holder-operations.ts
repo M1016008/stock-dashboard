@@ -167,10 +167,9 @@ function dateShift(date: string, days: number): string {
 async function child(script: string, childArgs: string[], lock: UpdateLockHandle): Promise<string> {
   storagePreflight()
   await closeLocalClientBeforeExternalWriter()
-  const commandPath = join(process.cwd(), 'node_modules', '.bin', 'tsx')
   const timeoutMs = Math.min(120, Math.max(1, Number(process.env.LARGE_HOLDER_CHILD_TIMEOUT_MINUTES ?? 75))) * 60_000
   return new Promise((resolve, reject) => {
-    const processChild = spawn(commandPath, [script, ...childArgs], {
+    const processChild = spawn(process.execPath, ['--import', 'tsx', script, ...childArgs], {
       cwd: process.cwd(), env: { ...process.env, USE_LOCAL_DB: '1', SKIP_SCHEMA_ENSURE: '1',
         LARGE_HOLDER_EVIDENCE_DIR: evidenceDir, LARGE_HOLDER_RANKING_DIR: rankingDir },
       stdio: ['ignore', 'pipe', 'pipe'],
