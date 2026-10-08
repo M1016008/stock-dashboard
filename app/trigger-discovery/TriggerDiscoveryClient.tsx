@@ -17,6 +17,7 @@ import {
   CircleHelp,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
   Copy,
   LoaderCircle,
   Pencil,
@@ -95,6 +96,18 @@ const STATUS_STYLES = {
   BELOW_ZONE: 'border-slate-200 bg-slate-50 text-slate-600',
 } as const
 
+const FOCUS_RING = 'outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand-200)]'
+const SECONDARY_BUTTON = `inline-flex h-8 shrink-0 items-center justify-center gap-1 whitespace-nowrap rounded-[3px] border border-[var(--color-border)] bg-white px-2.5 text-[11px] font-medium text-[var(--color-text-secondary)] hover:border-[var(--color-brand-300)] hover:text-[var(--color-brand-700)] disabled:cursor-not-allowed disabled:opacity-40 ${FOCUS_RING}`
+const PRIMARY_BUTTON_SMALL = `inline-flex h-8 shrink-0 items-center justify-center gap-1 whitespace-nowrap rounded-[3px] bg-[var(--color-brand-700)] px-3 text-[11px] font-semibold text-white hover:bg-[var(--color-brand-800)] disabled:cursor-not-allowed disabled:opacity-50 ${FOCUS_RING}`
+const FIELD_LABEL = 'text-[11px] font-medium text-[var(--color-text-secondary)]'
+
+const SAVE_MODE_LABELS: Record<SaveMode, string> = {
+  create: '新規保存',
+  update: '上書き保存',
+  copy: '別名で保存',
+  rename: '名前を変更',
+}
+
 interface Props {
   options: TriggerDiscoveryOptionsResponse
 }
@@ -161,6 +174,18 @@ function activeCriteriaSummary(request: TriggerDiscoverySearchRequest | null): s
   if (request.belowZoneToleranceEnabled) parts.push(`Zone下抜け ${request.maxBelowZonePct ?? 3}%まで`)
   if (request.statusFilter) parts.push(`表示: ${STATUS_LABELS[request.statusFilter]}`)
   return parts.join(' ・ ')
+}
+
+/** Display-only comparison used to flag Stage selections that have not been applied to the current result yet. */
+function sameStageFilters(
+  current: TriggerDiscoveryStageFilters,
+  applied: TriggerDiscoveryStageFilters | null | undefined,
+): boolean {
+  return TRIGGER_DISCOVERY_STAGE_AXES.every((axis) => {
+    const left = (current[axis] ?? []).map(String).sort().join(',')
+    const right = (applied?.[axis] ?? []).map(String).sort().join(',')
+    return left === right
+  })
 }
 
 function miniChartKey(input: {
@@ -246,8 +271,8 @@ function Field({ label, value, onChange, suffix, type = 'text', min, max, help, 
   const inputId = useId()
   return (
     <div className="block min-w-0">
-      <span className="mb-1 flex min-h-5 items-center justify-between gap-1 text-[10px] font-medium text-[var(--color-text-tertiary)]">
-        <span className="flex items-center gap-0.5">
+      <span className={`mb-1 flex min-h-5 items-center justify-between gap-1 ${FIELD_LABEL}`}>
+        <span className="flex min-w-0 items-center gap-0.5">
           <label htmlFor={inputId}>{label}</label>
           {help}
         </span>
@@ -261,11 +286,43 @@ function Field({ label, value, onChange, suffix, type = 'text', min, max, help, 
           min={min}
           max={max}
           onChange={(event) => onChange(event.target.value)}
-          className="min-w-0 flex-1 bg-transparent text-[13px] tabular-nums text-[var(--color-text-primary)] outline-none"
+          className={`h-full min-w-0 flex-1 rounded-none !border-0 !bg-transparent p-0 text-[13px] tabular-nums text-[var(--color-text-primary)] !shadow-none !outline-none !ring-0 focus:!border-0 focus:!bg-transparent focus:!shadow-none focus:!outline-none focus:!ring-0 focus-visible:!outline-none ${type === 'date' ? '' : 'appearance-none'}`}
         />
         {suffix && <span className="ml-1 shrink-0 text-[10px] text-[var(--color-text-tertiary)]">{suffix}</span>}
       </span>
     </div>
+  )
+}
+
+function LatestDateButton({ onClick, ariaLabel }: { onClick: () => void; ariaLabel: string }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`rounded-[2px] text-[10px] font-medium text-[var(--color-brand-700)] hover:underline ${FOCUS_RING}`}
+      aria-label={ariaLabel}
+    >
+      最新へ
+    </button>
+  )
+}
+
+/** Shared summary row for native <details>; keeps keyboard toggling and shows the current state inline. */
+function DisclosureSummary({ children, meta }: { children: ReactNode; meta?: ReactNode }) {
+  return (
+    <summary className={`inline-flex max-w-full cursor-pointer list-none flex-wrap items-center gap-x-1.5 gap-y-1 rounded-[3px] py-1 pr-1 text-[11px] font-medium text-[var(--color-brand-700)] hover:text-[var(--color-brand-800)] [&::-webkit-details-marker]:hidden ${FOCUS_RING}`}>
+      <ChevronRight size={13} className="shrink-0 transition-transform group-open:rotate-90" aria-hidden />
+      <span className="whitespace-nowrap">{children}</span>
+      {meta}
+    </summary>
+  )
+}
+
+function MetaBadge({ children, tone = 'brand' }: { children: ReactNode; tone?: 'brand' | 'amber' }) {
+  return (
+    <span className={`whitespace-nowrap rounded-[3px] px-1.5 py-0.5 text-[9px] font-semibold ${tone === 'amber' ? 'bg-amber-50 text-amber-800' : 'bg-[var(--color-brand-50)] text-[var(--color-brand-800)]'}`}>
+      {children}
+    </span>
   )
 }
 
@@ -323,6 +380,8 @@ export function TriggerDiscoveryClient({ options }: Props) {
   const [selectedSavedId, setSelectedSavedId] = useState('')
   const [activeSavedId, setActiveSavedId] = useState<string | null>(null)
   const [saveMode, setSaveMode] = useState<SaveMode | null>(null)
+  // Display-only: render the name editor next to the button that opened it.
+  const [saveEditorAt, setSaveEditorAt] = useState<'saved' | 'actions'>('saved')
   const [saveName, setSaveName] = useState('')
   const [savedLoading, setSavedLoading] = useState(true)
   const [savedBusy, setSavedBusy] = useState(false)
@@ -701,8 +760,9 @@ export function TriggerDiscoveryClient({ options }: Props) {
     }
   }
 
-  const openSaveEditor = (mode: SaveMode) => {
+  const openSaveEditor = (mode: SaveMode, placement: 'saved' | 'actions' = 'saved') => {
     setSaveMode(mode)
+    setSaveEditorAt(placement)
     setSaveName(mode === 'rename' || mode === 'update' ? activeSavedTrigger?.name ?? '' : '')
     setSavedError(null)
     setSavedMessage(null)
@@ -962,36 +1022,93 @@ export function TriggerDiscoveryClient({ options }: Props) {
     window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`)
   }
 
+  const timeframeLabel = timeframe === 'BIWEEKLY' ? '2週足' : '月足'
+  const draftMarketsLabel = selectedMarkets.length
+    ? selectedMarkets
+      .map((market) => options.markets.find((option) => option.value === market)?.label ?? market ?? '市場区分なし')
+      .join(' / ')
+    : '全市場'
+  const draftSummary = [
+    `${timeframeLabel} ${draft.ma1Period || '—'}/${draft.ma2Period || '—'}`,
+    `Trigger距離 ${draft.maxDistance || '—'}%以内`,
+    mode === 'period'
+      ? `期間 ${historicalStartDate || '—'}〜${historicalEndDate || '—'}`
+      : `基準日 ${draft.asOf || '—'}`,
+    draftMarketsLabel,
+  ].join(' ・ ')
+  const stageFilterAxisCount = TRIGGER_DISCOVERY_STAGE_AXES.filter((axis) => stageFilters[axis]?.length).length
+  const stageFiltersPending = Boolean(lastRequest) && !sameStageFilters(stageFilters, lastRequest?.stageFilters)
+  const volumeFilterActive = draft.averageVolumeMin.trim() !== '' || draft.averageVolumeMax.trim() !== ''
+
+  const saveEditor = saveMode ? (
+    <div className="flex min-w-0 flex-wrap items-center gap-2 border-l-2 border-[var(--color-brand-300)] pl-2">
+      <span className="shrink-0 text-[10px] font-semibold text-[var(--color-text-secondary)]">{SAVE_MODE_LABELS[saveMode]}</span>
+      <input
+        autoFocus
+        value={saveName}
+        maxLength={80}
+        onChange={(event) => setSaveName(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') void persistSavedTrigger()
+          if (event.key === 'Escape') setSaveMode(null)
+        }}
+        placeholder="Trigger名"
+        aria-label="Trigger名"
+        className="h-8 min-w-0 flex-1 basis-40 rounded-[3px] border border-[var(--color-border)] bg-white px-2 text-[12px] outline-none focus:border-[var(--color-brand-500)] focus:ring-1 focus:ring-[var(--color-brand-100)] sm:max-w-[320px]"
+      />
+      <button type="button" disabled={savedBusy} onClick={() => void persistSavedTrigger()} className={PRIMARY_BUTTON_SMALL}>
+        <Save size={12} aria-hidden />{saveMode === 'rename' ? '名前を更新' : saveMode === 'update' ? '変更を保存' : '保存する'}
+      </button>
+      <button type="button" disabled={savedBusy} onClick={() => setSaveMode(null)} className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-[3px] text-[var(--color-text-tertiary)] hover:bg-[var(--color-surface-muted)] ${FOCUS_RING}`} aria-label="保存をキャンセル" title="キャンセル（Esc）"><X size={13} aria-hidden /></button>
+    </div>
+  ) : null
+
   const stageFilterControls = (showApply: boolean) => (
-    <details className={`${showApply ? 'mt-3 border-y border-[var(--color-border-soft)] py-2' : 'mt-4 border-t border-[var(--color-border-soft)] pt-3'}`}>
-      <summary className="cursor-pointer list-none text-[11px] font-medium text-[var(--color-brand-700)]">Stageで絞り込む</summary>
-      <div className="mt-3 grid gap-x-5 gap-y-3 sm:grid-cols-2 lg:grid-cols-3">
-        {TRIGGER_DISCOVERY_STAGE_AXES.map((axis) => (
-          <div key={axis} className="flex items-center gap-1.5">
-            <span className="w-7 shrink-0 text-[10px] font-semibold text-[var(--color-text-secondary)]">{STAGE_AXIS_LABELS[axis]}</span>
-            {[1, 2, 3, 4, 5, 6, 'unknown'].map((value) => {
-              const typedValue = value as TriggerDiscoveryStageFilterValue
-              const selected = stageFilters[axis]?.includes(typedValue) ?? false
-              return (
-                <button
-                  key={value}
-                  type="button"
-                  onClick={() => toggleStage(axis, typedValue)}
-                  aria-label={`${STAGE_AXIS_LABELS[axis]} ${value === 'unknown' ? 'Unknown' : `Stage ${value}`}`}
-                  className={`h-7 min-w-7 rounded-[3px] border px-1 text-[10px] tabular-nums ${selected ? 'border-[var(--color-brand-600)] bg-[var(--color-brand-50)] font-semibold text-[var(--color-brand-800)]' : 'border-[var(--color-border)] bg-white text-[var(--color-text-secondary)]'}`}
-                  aria-pressed={selected}
-                >
-                  {value === 'unknown' ? '—' : value}
-                </button>
-              )
-            })}
-          </div>
-        ))}
-      </div>
-      <div className="mt-3 flex items-center gap-2">
-        {showApply && <button type="button" disabled={loading || !lastRequest} onClick={applyStageFilters} className="rounded-[3px] bg-[var(--color-brand-700)] px-3 py-1.5 text-[11px] font-medium text-white disabled:opacity-50">現在の結果へ適用</button>}
-        <button type="button" disabled={loading} onClick={() => setStageFilters({})} className="px-2 py-1.5 text-[11px] text-[var(--color-text-secondary)] hover:text-[var(--color-brand-700)]">選択をクリア</button>
-        {showApply && response && response.meta.triggerMatchedCount !== response.meta.matchedCount && <span className="text-[10px] text-[var(--color-text-tertiary)]">Trigger一致 {response.meta.triggerMatchedCount}件から絞り込み</span>}
+    <details className="group">
+      <DisclosureSummary
+        meta={(
+          <>
+            {stageFilterAxisCount > 0
+              ? <span className="font-normal text-[var(--color-text-secondary)]">{stageFilterAxisCount}軸を指定中</span>
+              : <span className="font-normal text-[var(--color-text-tertiary)]">指定なし</span>}
+            {showApply && stageFiltersPending && <MetaBadge tone="amber">未適用</MetaBadge>}
+          </>
+        )}
+      >
+        Stageで絞り込む
+      </DisclosureSummary>
+      <div className="mt-1.5 border-l-2 border-[var(--color-border-soft)] pb-1 pl-3">
+        <p className="mb-2 text-[10px] leading-4 text-[var(--color-text-tertiary)]">軸ごとに対象のStageを選びます。未選択の軸は条件に含めません。「—」はStage不明です。</p>
+        <div className="grid gap-x-6 gap-y-2 sm:grid-cols-2 xl:grid-cols-3">
+          {TRIGGER_DISCOVERY_STAGE_AXES.map((axis) => (
+            <div key={axis} className="flex items-center gap-1">
+              <span className="w-7 shrink-0 text-[10px] font-semibold text-[var(--color-text-secondary)]">{STAGE_AXIS_LABELS[axis]}</span>
+              {[1, 2, 3, 4, 5, 6, 'unknown'].map((value) => {
+                const typedValue = value as TriggerDiscoveryStageFilterValue
+                const selected = stageFilters[axis]?.includes(typedValue) ?? false
+                return (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => toggleStage(axis, typedValue)}
+                    aria-label={`${STAGE_AXIS_LABELS[axis]} ${value === 'unknown' ? 'Unknown' : `Stage ${value}`}`}
+                    className={`h-7 min-w-7 rounded-[3px] border px-1 text-[10px] tabular-nums ${FOCUS_RING} ${selected ? 'border-[var(--color-brand-600)] bg-[var(--color-brand-50)] font-semibold text-[var(--color-brand-800)]' : 'border-[var(--color-border)] bg-white text-[var(--color-text-secondary)] hover:border-[var(--color-brand-300)]'}`}
+                    aria-pressed={selected}
+                  >
+                    {value === 'unknown' ? '—' : value}
+                  </button>
+                )
+              })}
+            </div>
+          ))}
+        </div>
+        <div className="mt-2.5 flex flex-wrap items-center gap-2">
+          {showApply && (lastRequest
+            ? <button type="button" disabled={loading || !lastRequest} onClick={applyStageFilters} className={PRIMARY_BUTTON_SMALL}>現在の結果へ適用</button>
+            : <span className="text-[10px] text-[var(--color-text-tertiary)]">検索時に適用されます。</span>)}
+          <button type="button" disabled={loading || stageFilterAxisCount === 0} onClick={() => setStageFilters({})} className={`h-8 rounded-[3px] px-2 text-[11px] text-[var(--color-text-secondary)] hover:text-[var(--color-brand-700)] disabled:opacity-40 ${FOCUS_RING}`}>選択をクリア</button>
+          {showApply && response && response.meta.triggerMatchedCount !== response.meta.matchedCount && <span className="text-[10px] tabular-nums text-[var(--color-text-tertiary)]">Trigger一致 {response.meta.triggerMatchedCount.toLocaleString('ja-JP')}件から絞り込み</span>}
+        </div>
       </div>
     </details>
   )
@@ -1003,18 +1120,23 @@ export function TriggerDiscoveryClient({ options }: Props) {
         <div className="mt-1 flex flex-wrap items-end justify-between gap-3">
           <div>
             <h1 className="text-[24px] font-semibold leading-tight text-[var(--color-text-primary)]">条件トリガー</h1>
-            <p className="mt-1 text-[12px] text-[var(--color-text-secondary)]">上向きの移動平均へ上から接近する銘柄を、6軸Stageとともに探索します。</p>
+            <p className="mt-1 text-[12px] text-[var(--color-text-secondary)]">上向きの移動平均へ上から近づく銘柄を、6軸Stageと合わせて探します。</p>
           </div>
-          <span className="inline-flex items-center gap-1.5 text-[11px] text-[var(--color-text-tertiary)]">
+          <span className="inline-flex items-center gap-1.5 text-[11px] tabular-nums text-[var(--color-text-tertiary)]">
             <CalendarDays size={13} aria-hidden /> 最新データ {options.latestAsOf ?? '—'}
           </span>
         </div>
       </header>
 
-      <nav aria-label="Trigger Discoveryの検索モード" className="flex items-center gap-1 border-b border-[var(--color-border)] py-2">
-        <button type="button" aria-current={mode === 'current' ? 'page' : undefined} onClick={() => changeMode('current')} className={`h-8 rounded-[3px] px-3 text-[11px] font-semibold ${mode === 'current' ? 'bg-[var(--color-brand-800)] text-white' : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-muted)]'}`}>現在・単日時点</button>
-        <button type="button" aria-current={mode === 'period' ? 'page' : undefined} onClick={() => changeMode('period')} className={`h-8 rounded-[3px] px-3 text-[11px] font-semibold ${mode === 'period' ? 'bg-[var(--color-brand-800)] text-white' : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-muted)]'}`}>期間検証</button>
-      </nav>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 border-b border-[var(--color-border)] py-2">
+        <nav aria-label="Trigger Discoveryの検索モード" className="inline-flex shrink-0 items-center gap-0.5 rounded-[4px] border border-[var(--color-border)] bg-white p-0.5">
+          <button type="button" aria-current={mode === 'current' ? 'page' : undefined} onClick={() => changeMode('current')} className={`h-7 whitespace-nowrap rounded-[3px] px-3 text-[11px] font-semibold ${FOCUS_RING} ${mode === 'current' ? 'bg-[var(--color-brand-800)] text-white' : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-muted)]'}`}>現在・単日時点</button>
+          <button type="button" aria-current={mode === 'period' ? 'page' : undefined} onClick={() => changeMode('period')} className={`h-7 whitespace-nowrap rounded-[3px] px-3 text-[11px] font-semibold ${FOCUS_RING} ${mode === 'period' ? 'bg-[var(--color-brand-800)] text-white' : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-muted)]'}`}>期間検証</button>
+        </nav>
+        <p className="min-w-0 text-[10px] leading-4 text-[var(--color-text-tertiary)]">
+          {mode === 'current' ? '指定した1日時点で条件に合う銘柄を一覧します。' : '期間内の各営業日で条件を再現し、候補の出入りを検証します。'}
+        </p>
+      </div>
 
       {mode === 'current' && response && !builderOpen && (
         <section data-trigger-compact-summary aria-labelledby="trigger-results" className="border-b border-[var(--color-border)] bg-[var(--color-surface-subtle)] px-2 py-2.5 sm:px-3">
@@ -1044,7 +1166,7 @@ export function TriggerDiscoveryClient({ options }: Props) {
               <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] leading-5 text-[var(--color-text-tertiary)]">
                 <p className="min-w-0 flex-1 truncate"><span className="font-medium text-[var(--color-text-secondary)]">適用条件</span> {criteriaSummary}</p>
                 <details className="shrink-0">
-                  <summary className="cursor-pointer select-none font-medium hover:text-[var(--color-text-secondary)]">評価内訳</summary>
+                  <summary className={`cursor-pointer select-none rounded-[2px] font-medium hover:text-[var(--color-text-secondary)] ${FOCUS_RING}`}>評価内訳</summary>
                   <p className="mt-1 flex flex-wrap gap-x-3 gap-y-1">
                     <span>PIT Universe {response.meta.pitUniverseCount.toLocaleString('ja-JP')}</span>
                     <span>Current Price {response.meta.currentPriceCount.toLocaleString('ja-JP')}</span>
@@ -1063,7 +1185,7 @@ export function TriggerDiscoveryClient({ options }: Props) {
               data-trigger-builder-toggle
               aria-expanded="false"
               onClick={() => setBuilderOpen(true)}
-              className="inline-flex h-8 shrink-0 items-center justify-center gap-1.5 self-start rounded-[3px] border border-[var(--color-border)] bg-white px-2.5 text-[10px] font-medium text-[var(--color-text-secondary)] outline-none hover:border-[var(--color-brand-300)] hover:text-[var(--color-brand-700)] focus-visible:ring-2 focus-visible:ring-[var(--color-brand-200)] sm:self-center"
+              className="inline-flex h-8 shrink-0 items-center justify-center gap-1.5 self-start rounded-[3px] border border-[var(--color-border)] bg-white px-2.5 text-[11px] font-medium text-[var(--color-brand-700)] outline-none hover:border-[var(--color-brand-300)] hover:bg-[var(--color-brand-50)] focus-visible:ring-2 focus-visible:ring-[var(--color-brand-200)] sm:self-center"
             >
               <SlidersHorizontal size={13} aria-hidden /> 条件を変更
             </button>
@@ -1072,71 +1194,94 @@ export function TriggerDiscoveryClient({ options }: Props) {
       )}
 
       {(!response || builderOpen) && <div data-trigger-builder>
-      <section aria-labelledby="saved-trigger-heading" className="border-b border-[var(--color-border)] py-3">
+      <section aria-labelledby="saved-trigger-heading" className="border-b border-[var(--color-border)] py-2.5">
         <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
-            <span id="saved-trigger-heading" className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-[var(--color-text-primary)]">
+          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2.5 gap-y-1.5">
+            <span id="saved-trigger-heading" className="inline-flex shrink-0 items-center gap-1.5 text-[11px] font-medium text-[var(--color-text-secondary)]">
               <Bookmark size={13} aria-hidden /> 保存済みTrigger
             </span>
-            <select
-              aria-label="保存済みTrigger"
-              value={selectedSavedId}
-              disabled={savedLoading || savedBusy || savedTriggers.length === 0}
-              onChange={(event) => setSelectedSavedId(event.target.value)}
-              className="h-8 min-w-0 flex-1 rounded-[3px] border border-[var(--color-border)] bg-white px-2 text-[11px] sm:max-w-[330px]"
-            >
-              <option value="">{savedLoading ? '読み込み中…' : savedTriggers.length ? '選択してください' : '保存済みTriggerなし'}</option>
-              {savedTriggers.map((definition) => <option key={definition.id} value={definition.id}>{definition.name}｜{definition.evaluationConfig.timeframe === 'BIWEEKLY' ? '2週足' : '月足'}</option>)}
-            </select>
-            <button type="button" disabled={!selectedSavedId || savedBusy} onClick={() => void loadSavedTrigger()} className="h-8 rounded-[3px] border border-[var(--color-border)] bg-white px-3 text-[11px] font-medium text-[var(--color-brand-700)] disabled:opacity-40">読み込む</button>
+            <div className="flex min-w-0 flex-1 basis-56 items-center gap-1.5 sm:max-w-[400px]">
+              <select
+                aria-label="保存済みTrigger"
+                value={selectedSavedId}
+                disabled={savedLoading || savedBusy || savedTriggers.length === 0}
+                onChange={(event) => setSelectedSavedId(event.target.value)}
+                className="h-8 min-w-0 flex-1 rounded-[3px] border border-[var(--color-border)] bg-white px-2 text-[11px] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-brand-500)] focus:ring-1 focus:ring-[var(--color-brand-100)] disabled:text-[var(--color-text-tertiary)]"
+              >
+                <option value="">{savedLoading ? '読み込み中…' : savedTriggers.length ? '保存条件を選択' : '保存済みの条件はありません'}</option>
+                {savedTriggers.map((definition) => <option key={definition.id} value={definition.id}>{definition.name}｜{definition.evaluationConfig.timeframe === 'BIWEEKLY' ? '2週足' : '月足'}</option>)}
+              </select>
+              <button type="button" disabled={!selectedSavedId || savedBusy} onClick={() => void loadSavedTrigger()} className={`${SECONDARY_BUTTON} text-[var(--color-brand-700)]`}>読み込む</button>
+            </div>
             {activeSavedTrigger && (
-              <span className="inline-flex min-w-0 items-center gap-1 text-[10px] text-[var(--color-text-secondary)]">
-                <span className="max-w-[190px] truncate">編集中: {activeSavedTrigger.name}</span>
-                <strong className="rounded-[3px] bg-[var(--color-surface-muted)] px-1.5 py-0.5 font-medium text-[var(--color-text-secondary)]">
+              <span className="inline-flex min-w-0 max-w-full items-center gap-1.5 text-[10px] text-[var(--color-text-secondary)]">
+                <span className="shrink-0 text-[var(--color-text-tertiary)]">編集中</span>
+                <strong className="min-w-0 max-w-[220px] truncate font-medium text-[var(--color-text-primary)]" title={activeSavedTrigger.name}>{activeSavedTrigger.name}</strong>
+                <span className="shrink-0 rounded-[3px] bg-[var(--color-surface-muted)] px-1.5 py-0.5 font-medium text-[var(--color-text-secondary)]">
                   {activeSavedTrigger.evaluationConfig.timeframe === 'BIWEEKLY' ? '2週足' : '月足'}
-                </strong>
-                {hasUnsavedChanges && <strong className="rounded-[3px] bg-amber-50 px-1.5 py-0.5 font-semibold text-amber-800">変更あり</strong>}
+                </span>
+                {hasUnsavedChanges && <strong className="shrink-0 rounded-[3px] bg-amber-50 px-1.5 py-0.5 font-semibold text-amber-800">変更あり</strong>}
               </span>
             )}
           </div>
           <div className="flex flex-wrap items-center gap-1.5">
             {activeSavedTrigger && (
               <>
-                <button type="button" disabled={savedBusy || !hasUnsavedChanges} onClick={() => openSaveEditor('update')} className="inline-flex h-8 items-center gap-1 rounded-[3px] border border-[var(--color-border)] bg-white px-2.5 text-[10px] font-medium text-[var(--color-text-secondary)] disabled:opacity-40"><Save size={12} aria-hidden />保存</button>
-                <button type="button" disabled={savedBusy} onClick={() => openSaveEditor('rename')} className="inline-flex h-8 items-center gap-1 rounded-[3px] border border-[var(--color-border)] bg-white px-2.5 text-[10px] font-medium text-[var(--color-text-secondary)] disabled:opacity-40"><Pencil size={12} aria-hidden />名前変更</button>
+                <button type="button" disabled={savedBusy || !hasUnsavedChanges} onClick={() => openSaveEditor('update')} className={SECONDARY_BUTTON} title={hasUnsavedChanges ? '現在の条件で上書き保存' : '変更はありません'}><Save size={12} aria-hidden />保存</button>
+                <button type="button" disabled={savedBusy} onClick={() => openSaveEditor('rename')} className={SECONDARY_BUTTON}><Pencil size={12} aria-hidden />名前変更</button>
                 <TriggerNotificationSettingsPanel key={activeSavedTrigger.id} definition={activeSavedTrigger} />
               </>
             )}
-            <button type="button" disabled={savedBusy} onClick={() => openSaveEditor(activeSavedTrigger ? 'copy' : 'create')} className="inline-flex h-8 items-center gap-1 rounded-[3px] border border-[var(--color-border)] bg-white px-2.5 text-[10px] font-medium text-[var(--color-text-secondary)] disabled:opacity-40"><Copy size={12} aria-hidden />別名で保存</button>
-            {activeSavedTrigger && <button type="button" disabled={savedBusy} onClick={() => void archiveSavedTrigger()} className="inline-flex h-8 w-8 items-center justify-center rounded-[3px] text-[var(--color-text-tertiary)] hover:bg-red-50 hover:text-red-700 disabled:opacity-40" aria-label="保存済みTriggerをアーカイブ"><Trash2 size={13} aria-hidden /></button>}
+            <button type="button" disabled={savedBusy} onClick={() => openSaveEditor(activeSavedTrigger ? 'copy' : 'create')} className={SECONDARY_BUTTON}><Copy size={12} aria-hidden />別名で保存</button>
+            {activeSavedTrigger && <button type="button" disabled={savedBusy} onClick={() => void archiveSavedTrigger()} className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-[3px] text-[var(--color-text-tertiary)] hover:bg-red-50 hover:text-red-700 disabled:opacity-40 ${FOCUS_RING}`} aria-label="保存済みTriggerをアーカイブ" title="アーカイブ"><Trash2 size={13} aria-hidden /></button>}
           </div>
         </div>
-        {saveMode && (
-          <div className="mt-2 flex flex-wrap items-center gap-2 border-l-2 border-[var(--color-brand-300)] pl-2">
-            <input autoFocus value={saveName} maxLength={80} onChange={(event) => setSaveName(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void persistSavedTrigger() }} placeholder="Trigger名" aria-label="Trigger名" className="h-8 min-w-0 flex-1 rounded-[3px] border border-[var(--color-border)] bg-white px-2 text-[11px] sm:max-w-[360px]" />
-            <button type="button" disabled={savedBusy} onClick={() => void persistSavedTrigger()} className="inline-flex h-8 items-center gap-1 rounded-[3px] bg-[var(--color-brand-700)] px-3 text-[10px] font-semibold text-white disabled:opacity-50"><Save size={12} aria-hidden />{saveMode === 'rename' ? '名前を更新' : saveMode === 'update' ? '変更を保存' : '保存する'}</button>
-            <button type="button" disabled={savedBusy} onClick={() => setSaveMode(null)} className="inline-flex h-8 w-8 items-center justify-center rounded-[3px] text-[var(--color-text-tertiary)] hover:bg-[var(--color-surface-muted)]" aria-label="保存をキャンセル"><X size={13} aria-hidden /></button>
-          </div>
-        )}
-        <div className="mt-1.5 flex flex-wrap items-center justify-between gap-1 text-[9px] leading-4 text-[var(--color-text-tertiary)]">
-          <span>{mode === 'period' ? '開始日・終了日は保存されません。保存条件を読み込んだ後に期間を指定してください。' : '基準日は保存されません。読み込み時の最新利用可能日を使用します。'}</span>
+        {saveEditorAt === 'saved' && saveEditor && <div className="mt-2">{saveEditor}</div>}
+        <div className="mt-1.5 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-[10px] leading-4 text-[var(--color-text-tertiary)]">
+          <span>{mode === 'period' ? '開始日・終了日は保存されません。読み込み後に期間を指定してください。' : '基準日は保存されません。読み込み時は最新の利用可能日を使います。'}</span>
           {savedError ? <span role="alert" className="text-red-700">{savedError}</span> : savedMessage ? <span role="status" className="text-[var(--color-brand-700)]">{savedMessage}</span> : null}
         </div>
       </section>
 
-      <section aria-labelledby="trigger-conditions" className="border-b border-[var(--color-border)] py-5">
-        <div className="mb-3 flex items-center justify-between gap-3">
-          <div>
+      <section aria-labelledby="trigger-conditions" className="border-b border-[var(--color-border)] py-4">
+        <div className="mb-3 flex flex-wrap items-start justify-between gap-x-6 gap-y-2">
+          <div className="min-w-0">
             <h2 id="trigger-conditions" className="text-[14px] font-semibold text-[var(--color-text-primary)]">1. Trigger条件</h2>
-            <p className="mt-0.5 text-[10px] text-[var(--color-text-tertiary)]">{timeframe === 'BIWEEKLY' ? '2週足' : '月足'} / 2本とも上向き / 上から接近</p>
+            <p className="mt-0.5 text-[10px] text-[var(--color-text-tertiary)]">
+              移動平均の組み合わせと、接近とみなす距離を指定します。
+              <span className="ml-1.5 whitespace-nowrap" title={timeframe === 'BIWEEKLY' ? '2週足は、TradingView準拠の年次2週bucketで作成します。' : '月足を基準に移動平均線を計算します。'}>
+                （{timeframe === 'BIWEEKLY' ? 'TradingView準拠の2週足で計算' : '月足終値を基準に計算'}）
+              </span>
+            </p>
           </div>
-          <span className="text-[10px] text-[var(--color-text-tertiary)]" title={timeframe === 'BIWEEKLY' ? '2週足は、TradingView準拠の年次2週bucketで作成します。' : '月足を基準に移動平均線を計算します。'}>
-            {timeframe === 'BIWEEKLY' ? 'TradingView準拠の2週足で計算' : '月足終値を基準に計算'}
-          </span>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-[var(--color-text-tertiary)]">
+            <span className="font-medium">固定条件</span>
+            <dl className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <div className="flex items-center gap-1">
+                <dt>MA方向:</dt>
+                <dd className="inline-flex items-center gap-0.5 font-medium text-[var(--color-text-secondary)]">
+                  2本とも上向き
+                  <HelpPopover title="2本とも上向き" align="end">
+                    <p>MA1とMA2の両方が上向いている銘柄だけを対象とします。いずれかの移動平均線が下降している銘柄は対象外です。</p>
+                  </HelpPopover>
+                </dd>
+              </div>
+              <div className="flex items-center gap-1">
+                <dt>接近方向:</dt>
+                <dd className="inline-flex items-center gap-0.5 font-medium text-[var(--color-text-secondary)]">
+                  上から
+                  <HelpPopover title="上から接近" align="end">
+                    <p>株価がMA1〜MA2のTrigger Zoneより上にあり、そこへ向かって下落・接近している銘柄を対象とします。</p>
+                    <p className="text-[10px] text-[var(--color-text-tertiary)]">Zoneの下側から上昇して近づいている銘柄は、デフォルト条件では対象外です。</p>
+                  </HelpPopover>
+                </dd>
+              </div>
+            </dl>
+          </div>
         </div>
-        <div className={`grid grid-cols-2 gap-2 sm:grid-cols-4 ${mode === 'period' ? 'lg:grid-cols-[110px_110px_110px_130px_145px_145px_1fr]' : 'lg:grid-cols-[120px_120px_120px_140px_160px_1fr]'}`}>
+        <div className={`grid grid-cols-2 gap-x-3 gap-y-3 sm:grid-cols-3 ${mode === 'period' ? 'lg:max-w-[1000px] lg:grid-cols-6' : 'lg:max-w-[860px] lg:grid-cols-5'}`}>
           <label className="block min-w-0">
-            <span className="mb-1 block text-[10px] font-medium text-[var(--color-text-tertiary)]">足種</span>
+            <span className={`mb-1 flex min-h-5 items-center ${FIELD_LABEL}`}>足種</span>
             <select
               value={timeframe}
               onChange={(event) => {
@@ -1187,7 +1332,7 @@ export function TriggerDiscoveryClient({ options }: Props) {
                 onChange={setHistoricalEndDate}
                 type="date"
                 action={options.latestAsOf && historicalEndDate !== options.latestAsOf ? (
-                  <button type="button" onClick={() => setHistoricalEndDate(options.latestAsOf!)} className="text-[9px] font-medium text-[var(--color-brand-700)] hover:underline" aria-label={`終了日を最新利用可能日${options.latestAsOf}へ戻す`}>最新へ</button>
+                  <LatestDateButton onClick={() => setHistoricalEndDate(options.latestAsOf!)} ariaLabel={`終了日を最新利用可能日${options.latestAsOf}へ戻す`} />
                 ) : null}
               />
             </>
@@ -1198,14 +1343,7 @@ export function TriggerDiscoveryClient({ options }: Props) {
               onChange={(value) => updateDraft('asOf', value)}
               type="date"
               action={options.latestAsOf && draft.asOf !== options.latestAsOf ? (
-                <button
-                  type="button"
-                  onClick={() => updateDraft('asOf', options.latestAsOf!)}
-                  className="text-[9px] font-medium text-[var(--color-brand-700)] hover:underline"
-                  aria-label={`基準日を最新利用可能日${options.latestAsOf}へ戻す`}
-                >
-                  最新へ
-                </button>
+                <LatestDateButton onClick={() => updateDraft('asOf', options.latestAsOf!)} ariaLabel={`基準日を最新利用可能日${options.latestAsOf}へ戻す`} />
               ) : null}
               help={(
                 <HelpPopover title="基準日">
@@ -1216,32 +1354,42 @@ export function TriggerDiscoveryClient({ options }: Props) {
               )}
             />
           )}
-          <div className="col-span-2 flex items-end gap-2 sm:col-span-4 lg:col-span-1 lg:justify-end">
-            <dl className="mb-1 grid gap-0.5 text-[10px] text-[var(--color-text-tertiary)]">
-              <div className="flex items-center gap-1">
-                <dt>MA方向:</dt><dd className="font-medium text-[var(--color-text-secondary)]">2本とも上向き</dd>
-                <HelpPopover title="2本とも上向き" align="end">
-                  <p>MA1とMA2の両方が上向いている銘柄だけを対象とします。いずれかの移動平均線が下降している銘柄は対象外です。</p>
-                </HelpPopover>
-              </div>
-              <div className="flex items-center gap-1">
-                <dt>接近方向:</dt><dd className="font-medium text-[var(--color-text-secondary)]">上から</dd>
-                <HelpPopover title="上から接近" align="end">
-                  <p>株価がMA1〜MA2のTrigger Zoneより上にあり、そこへ向かって下落・接近している銘柄を対象とします。</p>
-                  <p className="text-[10px] text-[var(--color-text-tertiary)]">Zoneの下側から上昇して近づいている銘柄は、デフォルト条件では対象外です。</p>
-                </HelpPopover>
-              </div>
-            </dl>
-          </div>
         </div>
-        <details className="group mt-4">
-          <summary className="inline-flex cursor-pointer list-none items-center gap-1.5 text-[11px] font-medium text-[var(--color-brand-700)]">
-            <SlidersHorizontal size={13} aria-hidden /> Trigger詳細条件
-            {draft.spreadExpansionEnabled && <span className="rounded-[3px] bg-[var(--color-brand-50)] px-1.5 py-0.5 text-[9px] font-semibold text-[var(--color-brand-800)]">MA間隔拡大 ON</span>}
-            {draft.belowZoneToleranceEnabled && <span className="rounded-[3px] bg-[var(--color-brand-50)] px-1.5 py-0.5 text-[9px] font-semibold text-[var(--color-brand-800)]">Zone下抜け ON</span>}
-          </summary>
-          <div className="mt-3 border-l-2 border-[var(--color-border-soft)] pl-3">
-            <div className="flex flex-wrap items-start justify-between gap-3">
+        <details className="group mt-3">
+          <DisclosureSummary
+            meta={(
+              <>
+                <span className="font-normal tabular-nums text-[var(--color-text-tertiary)]">Near {draft.nearDistance || '—'}%以内</span>
+                {draft.spreadExpansionEnabled && <MetaBadge>MA間隔拡大 ON</MetaBadge>}
+                {draft.belowZoneToleranceEnabled && <MetaBadge>Zone下抜け ON</MetaBadge>}
+              </>
+            )}
+          >
+            詳細条件
+          </DisclosureSummary>
+          <div className="mt-1.5 divide-y divide-[var(--color-border-soft)] border-l-2 border-[var(--color-border-soft)] pl-3 lg:max-w-[860px]">
+            <div className="flex flex-wrap items-end gap-x-4 gap-y-1 pb-3">
+              <div className="w-[170px] max-w-full">
+                <Field
+                  label="Near距離"
+                  value={draft.nearDistance}
+                  onChange={(value) => updateDraft('nearDistance', value)}
+                  suffix="%以内"
+                  type="number"
+                  min={0}
+                  max={100}
+                  help={(
+                    <HelpPopover title="Near距離" align="start">
+                      <p>Trigger Zoneのさらに近くまで接近した銘柄を「NEAR」と判定するための距離です。</p>
+                      <p className="text-[10px] text-[var(--color-text-tertiary)]">Trigger距離5%、Near距離2%の場合、Zoneまで5%以内でAPPROACHING、2%以内でNEARになります。</p>
+                    </HelpPopover>
+                  )}
+                />
+              </div>
+              <p className="min-w-0 flex-1 basis-56 pb-2 text-[10px] leading-4 text-[var(--color-text-tertiary)]">Trigger距離以下で指定します。Zoneまでこの距離以内なら「近接」と表示します。</p>
+            </div>
+            <div className="py-3">
+            <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
               <div className="inline-flex items-center gap-1 text-[12px] font-medium text-[var(--color-text-primary)]">
                 <label className="inline-flex cursor-pointer items-center gap-2">
                   <input
@@ -1264,17 +1412,16 @@ export function TriggerDiscoveryClient({ options }: Props) {
               <span className="text-[10px] text-[var(--color-text-tertiary)]">既定OFF・Trigger Scoreへの加点なし</span>
             </div>
             {draft.spreadExpansionEnabled && (
-              <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3 lg:max-w-[660px]">
-                <Field label="比較区間数" value={draft.spreadLookbackIntervals} onChange={(value) => updateDraft('spreadLookbackIntervals', value)} suffix="区間" type="number" min={2} max={24} />
-                <Field label="最低拡大区間比率" value={draft.minExpansionRatioPct} onChange={(value) => updateDraft('minExpansionRatioPct', value)} suffix="%" type="number" min={0} max={100} />
-                <div className="rounded-[3px] bg-[var(--color-surface-subtle)] px-2.5 py-2 text-[10px] leading-5 text-[var(--color-text-secondary)]">
-                  <span className="block text-[9px] font-medium text-[var(--color-text-tertiary)]">上方順序</span>
-                  MA1がMA2より上（固定）
+              <div className="mt-2.5 flex flex-wrap items-end gap-x-3 gap-y-2">
+                <div className="grid w-full grid-cols-2 gap-x-3 sm:w-auto sm:grid-cols-[170px_170px]">
+                  <Field label="比較区間数" value={draft.spreadLookbackIntervals} onChange={(value) => updateDraft('spreadLookbackIntervals', value)} suffix="区間" type="number" min={2} max={24} />
+                  <Field label="最低拡大区間比率" value={draft.minExpansionRatioPct} onChange={(value) => updateDraft('minExpansionRatioPct', value)} suffix="%" type="number" min={0} max={100} />
                 </div>
+                <p className="pb-2 text-[10px] text-[var(--color-text-tertiary)]">上方順序: <span className="font-medium text-[var(--color-text-secondary)]">MA1がMA2より上（固定）</span></p>
               </div>
             )}
-          </div>
-          <div className="mt-3 border-l-2 border-[var(--color-border-soft)] pl-3">
+            </div>
+            <div className="pt-3">
             <label className="inline-flex cursor-pointer items-center gap-2 text-[12px] font-medium text-[var(--color-text-primary)]">
               <input type="checkbox" checked={draft.belowZoneToleranceEnabled ?? false}
                 onChange={(event) => setDraft((current) => ({ ...current, belowZoneToleranceEnabled: event.target.checked }))}
@@ -1283,84 +1430,94 @@ export function TriggerDiscoveryClient({ options }: Props) {
             </label>
             <p className="mt-1 text-[10px] text-[var(--color-text-secondary)]">株価が上からTrigger Zoneへ接近し、Zone下限を少しだけ下回った銘柄も候補に含めます。</p>
             {draft.belowZoneToleranceEnabled && (
-              <div className="mt-2 max-w-[220px]">
-                <Field label="最大下抜け幅" value={draft.maxBelowZonePct ?? '3'} onChange={(value) => updateDraft('maxBelowZonePct', value)} suffix="%" type="number" min={0.01} max={20} />
-                <p className="mt-1 text-[10px] text-[var(--color-text-tertiary)]">例：3%ならZone下限から0〜3%下のBELOW_ZONEを許容します。</p>
+              <div className="mt-2 flex flex-wrap items-end gap-x-3 gap-y-1">
+                <div className="w-[170px] max-w-full">
+                  <Field label="最大下抜け幅" value={draft.maxBelowZonePct ?? '3'} onChange={(value) => updateDraft('maxBelowZonePct', value)} suffix="%" type="number" min={0.01} max={20} />
+                </div>
+                <p className="pb-2 text-[10px] text-[var(--color-text-tertiary)]">例：3%ならZone下限から0〜3%下のBELOW_ZONEを許容します。</p>
               </div>
             )}
+            </div>
           </div>
         </details>
       </section>
 
-      <section aria-labelledby="universe-conditions" className="border-b border-[var(--color-border)] py-5">
-        <h2 id="universe-conditions" className="text-[14px] font-semibold text-[var(--color-text-primary)]">2. Universe</h2>
-        <div className="mt-3 grid gap-4 lg:grid-cols-[minmax(280px,1.3fr)_repeat(2,minmax(180px,.7fr))]">
-          <fieldset>
-            <legend className="mb-1 text-[10px] font-medium text-[var(--color-text-tertiary)]">市場（未選択はすべて）</legend>
+      <section aria-labelledby="universe-conditions" className="border-b border-[var(--color-border)] py-4">
+        <div className="mb-3 min-w-0">
+          <h2 id="universe-conditions" className="text-[14px] font-semibold text-[var(--color-text-primary)]">
+            2. 対象銘柄 <span className="ml-1 text-[11px] font-normal text-[var(--color-text-tertiary)]">Universe</span>
+          </h2>
+          <p className="mt-0.5 text-[10px] text-[var(--color-text-tertiary)]">市場・株価・売買代金で検索対象を絞ります。空欄は制限なしです。</p>
+        </div>
+        <div className="grid gap-x-5 gap-y-3 md:grid-cols-2 lg:grid-cols-[minmax(0,1.3fr)_minmax(0,.7fr)_minmax(0,.7fr)]">
+          <fieldset className="min-w-0 md:col-span-2 lg:col-span-1">
+            <legend className={`mb-1 flex min-h-5 items-center ${FIELD_LABEL}`}>市場（未選択はすべて）</legend>
             <div className="flex flex-wrap gap-1.5">
               {options.markets.map((market) => {
                 const selected = selectedMarkets.some((value) => value === market.value)
                 return (
-                  <label key={market.value ?? '__unknown__'} className={`inline-flex cursor-pointer items-center gap-1 rounded-[3px] border px-2 py-1.5 text-[11px] ${selected ? 'border-[var(--color-brand-500)] bg-[var(--color-brand-50)] text-[var(--color-brand-800)]' : 'border-[var(--color-border)] bg-white text-[var(--color-text-secondary)]'}`}>
+                  <label key={market.value ?? '__unknown__'} className={`inline-flex h-8 cursor-pointer items-center gap-1 whitespace-nowrap rounded-[3px] border px-2 text-[11px] has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-[var(--color-brand-200)] ${selected ? 'border-[var(--color-brand-500)] bg-[var(--color-brand-50)] font-medium text-[var(--color-brand-800)]' : 'border-[var(--color-border)] bg-white text-[var(--color-text-secondary)] hover:border-[var(--color-brand-300)]'}`}>
                     <input type="checkbox" className="sr-only" checked={selected} onChange={() => toggleMarket(market.value)} />
-                    {market.label}<span className="text-[9px] text-[var(--color-text-tertiary)]">{market.count.toLocaleString('ja-JP')}</span>
+                    {market.label}<span className="text-[9px] tabular-nums text-[var(--color-text-tertiary)]">{market.count.toLocaleString('ja-JP')}</span>
                   </label>
                 )
               })}
             </div>
           </fieldset>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-2 gap-x-3">
             <Field label="株価 下限" value={draft.priceMin} onChange={(value) => updateDraft('priceMin', value)} suffix="円" />
             <Field label="株価 上限" value={draft.priceMax} onChange={(value) => updateDraft('priceMax', value)} suffix="円" />
           </div>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-2 gap-x-3">
             <Field label="平均売買代金 下限" value={draft.averageTradingValueMin} onChange={(value) => updateDraft('averageTradingValueMin', value)} suffix="円" />
             <Field label="平均売買代金 上限" value={draft.averageTradingValueMax} onChange={(value) => updateDraft('averageTradingValueMax', value)} suffix="円" />
           </div>
         </div>
-        <details className="group mt-4">
-          <summary className="inline-flex cursor-pointer list-none items-center gap-1.5 text-[11px] font-medium text-[var(--color-brand-700)]">
-            <SlidersHorizontal size={13} aria-hidden /> 詳細条件
-          </summary>
-          <div className="mt-3 grid grid-cols-2 gap-2 border-l-2 border-[var(--color-border-soft)] pl-3 sm:grid-cols-4 lg:max-w-[720px]">
+        <details className="group mt-3">
+          <DisclosureSummary
+            meta={(
+              <>
+                <span className="font-normal tabular-nums text-[var(--color-text-tertiary)]">平均期間 {draft.liquidityLookbackSessions || '—'}営業日</span>
+                {volumeFilterActive && <MetaBadge>出来高 指定あり</MetaBadge>}
+              </>
+            )}
+          >
+            詳細条件
+          </DisclosureSummary>
+          <div className="mt-1.5 grid grid-cols-2 gap-x-3 gap-y-3 border-l-2 border-[var(--color-border-soft)] pl-3 sm:grid-cols-3 lg:max-w-[560px]">
             <Field label="平均出来高 下限" value={draft.averageVolumeMin} onChange={(value) => updateDraft('averageVolumeMin', value)} suffix="株" />
             <Field label="平均出来高 上限" value={draft.averageVolumeMax} onChange={(value) => updateDraft('averageVolumeMax', value)} suffix="株" />
             <Field label="平均期間" value={draft.liquidityLookbackSessions} onChange={(value) => updateDraft('liquidityLookbackSessions', value)} suffix="営業日" type="number" min={1} max={252} />
-            <Field
-              label="Near距離"
-              value={draft.nearDistance}
-              onChange={(value) => updateDraft('nearDistance', value)}
-              suffix="%以内"
-              type="number"
-              min={0}
-              max={100}
-              help={(
-                <HelpPopover title="Near距離" align="end">
-                  <p>Trigger Zoneのさらに近くまで接近した銘柄を「NEAR」と判定するための距離です。</p>
-                  <p className="text-[10px] text-[var(--color-text-tertiary)]">Trigger距離5%、Near距離2%の場合、Zoneまで5%以内でAPPROACHING、2%以内でNEARになります。</p>
-                </HelpPopover>
-              )}
-            />
           </div>
         </details>
         {mode === 'period' && (
-          <>
+          <div className="mt-1">
             {stageFilterControls(false)}
-            <p className="mt-3 text-[10px] leading-5 text-[var(--color-text-tertiary)]">指定期間内の各営業日時点でTrigger条件を評価します。休日は期間内の有効取引日に自動調整されます。</p>
-          </>
+            <p className="mt-2 text-[10px] leading-5 text-[var(--color-text-tertiary)]">指定期間内の各営業日時点でTrigger条件を評価します。休日は期間内の有効取引日に自動調整されます。</p>
+          </div>
         )}
       </section>
 
-      <div className="flex flex-wrap items-center justify-between gap-3 py-4">
-        <p className="text-[11px] text-[var(--color-text-tertiary)]">入力変更だけでは{mode === 'period' ? '期間検証' : '検索'}されません。条件を確認して実行してください。</p>
-        <div className="flex items-center gap-2">
-          <button type="button" disabled={savedBusy} onClick={() => activeSavedTrigger ? openSaveEditor('update') : openSaveEditor('create')} className="inline-flex h-9 items-center gap-1.5 rounded-[3px] border border-[var(--color-border)] bg-white px-3 text-[11px] font-medium text-[var(--color-text-secondary)] disabled:opacity-50"><Bookmark size={13} aria-hidden />条件を保存</button>
+      <div data-trigger-action-bar className="flex flex-col gap-2.5 border-b border-[var(--color-border)] py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+        <div className="min-w-0">
+          <p className="break-words text-[11px] font-medium tabular-nums text-[var(--color-text-secondary)]">{draftSummary}</p>
+          <p className="mt-0.5 text-[10px] text-[var(--color-text-tertiary)]">
+            {mode === 'period' ? '期間検証は下の「期間検証を開始」から実行します。' : '入力を変えても自動では検索しません。条件を確認して実行してください。'}
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 pr-14 sm:shrink-0 sm:justify-end">
+          {mode === 'current' && response && (
+            <button type="button" onClick={() => setBuilderOpen(false)} className={`inline-flex h-9 items-center gap-1 whitespace-nowrap rounded-[3px] px-2 text-[11px] font-medium text-[var(--color-text-secondary)] hover:text-[var(--color-brand-700)] ${FOCUS_RING}`}>
+              <ChevronUp size={13} aria-hidden />変更せずに閉じる
+            </button>
+          )}
+          <button type="button" disabled={savedBusy} onClick={() => activeSavedTrigger ? openSaveEditor('update', 'actions') : openSaveEditor('create', 'actions')} className={`${SECONDARY_BUTTON} h-9 px-3`}><Bookmark size={13} aria-hidden />条件を保存</button>
           {mode === 'current' && (
             <button
               type="button"
               disabled={loading}
               onClick={() => void submit()}
-              className="inline-flex h-10 min-w-[160px] items-center justify-center gap-2 rounded-[4px] bg-[var(--color-brand-700)] px-5 text-[13px] font-semibold text-white transition hover:bg-[var(--color-brand-800)] disabled:cursor-not-allowed disabled:opacity-60"
+              className={`inline-flex h-10 min-w-[160px] flex-1 items-center justify-center gap-2 whitespace-nowrap rounded-[4px] bg-[var(--color-brand-700)] px-5 text-[13px] font-semibold text-white transition hover:bg-[var(--color-brand-800)] disabled:cursor-not-allowed disabled:opacity-60 sm:flex-none ${FOCUS_RING}`}
             >
               {loading ? <LoaderCircle size={16} className="animate-spin" aria-hidden /> : <Search size={16} aria-hidden />}
               {loading ? '検索中…' : 'Triggerを検索'}
@@ -1368,18 +1525,19 @@ export function TriggerDiscoveryClient({ options }: Props) {
           )}
         </div>
       </div>
+      {saveEditorAt === 'actions' && saveEditor && <div className="border-b border-[var(--color-border)] py-2.5 sm:flex sm:justify-end">{saveEditor}</div>}
       </div>}
 
       {mode === 'current' && error && <div role="alert" className="mb-4 border-l-2 border-red-500 bg-red-50 px-3 py-2 text-[12px] text-red-800">{error}</div>}
 
       {mode === 'period' ? (
         <HistoricalScanWorkspace buildRequest={validateAndBuildHistoricalRequest} />
-      ) : <section aria-labelledby="trigger-results" className={builderOpen ? 'border-t border-[var(--color-border)] pt-4' : ''}>
+      ) : <section aria-labelledby="trigger-results" className={builderOpen ? 'pt-4' : ''}>
         {builderOpen && <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
             <h2 id="trigger-results" className="text-[14px] font-semibold text-[var(--color-text-primary)]">3. 検索結果</h2>
             {response && (
-              <div className="mt-2">
+              <div className="mt-1.5">
                 <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
                   {isHistoricalResult && <span className="rounded-[3px] border border-[var(--color-border)] bg-[var(--color-surface-muted)] px-1.5 py-0.5 text-[10px] font-semibold text-[var(--color-text-secondary)]">過去検証</span>}
                   <strong className="text-[20px] font-semibold tabular-nums text-[var(--color-text-primary)]">{response.meta.matchedCount.toLocaleString('ja-JP')}件</strong>
@@ -1388,7 +1546,7 @@ export function TriggerDiscoveryClient({ options }: Props) {
                 </div>
                 {criteriaSummary && <p className="mt-1 text-[10px] leading-5 text-[var(--color-text-tertiary)]">{criteriaSummary}</p>}
                 <details className="mt-1 text-[10px] text-[var(--color-text-tertiary)]">
-                  <summary className="w-fit cursor-pointer select-none font-medium hover:text-[var(--color-text-secondary)]">評価内訳</summary>
+                  <summary className={`w-fit cursor-pointer select-none rounded-[2px] font-medium hover:text-[var(--color-text-secondary)] ${FOCUS_RING}`}>評価内訳</summary>
                   <p className="mt-1 flex flex-wrap gap-x-3 gap-y-1 leading-5">
                     <span>PIT Universe {response.meta.pitUniverseCount.toLocaleString('ja-JP')}</span>
                     <span>Current Price {response.meta.currentPriceCount.toLocaleString('ja-JP')}</span>
@@ -1410,33 +1568,51 @@ export function TriggerDiscoveryClient({ options }: Props) {
           )}
         </div>}
 
-        {builderOpen && stageFilterControls(true)}
-        {response && (
-          <label className="my-2 inline-flex items-center gap-2 text-[11px] text-[var(--color-text-secondary)]">
-            Status表示
-            <select aria-label="Status表示フィルター" value={lastRequest?.statusFilter ?? ''}
-              disabled={loading} onChange={(event) => changeStatusFilter(event.target.value as SavedTriggerViewConfig['statusFilter'] || null)}
-              className="h-8 rounded-[3px] border border-[var(--color-border)] bg-white px-2 text-[11px] text-[var(--color-text-primary)]">
-              <option value="">すべて</option>
-              <option value="APPROACHING">APPROACHING</option>
-              <option value="NEAR">NEAR</option>
-              <option value="IN_ZONE">IN_ZONE</option>
-              <option value="BELOW_ZONE">BELOW_ZONE</option>
-            </select>
-          </label>
-        )}
+        <div data-trigger-result-filters className={`flex flex-col gap-0.5 ${builderOpen ? 'mt-2' : 'mt-1.5'}`}>
+          {response && (
+            <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1.5">
+              <label className="inline-flex items-center gap-1.5 text-[11px] font-medium text-[var(--color-text-secondary)]">
+                Status
+                <select value={lastRequest?.statusFilter ?? ''}
+                  disabled={loading} onChange={(event) => changeStatusFilter(event.target.value as SavedTriggerViewConfig['statusFilter'] || null)}
+                  className={`h-8 rounded-[3px] border bg-white px-2 text-[11px] font-normal text-[var(--color-text-primary)] outline-none focus:border-[var(--color-brand-500)] focus:ring-1 focus:ring-[var(--color-brand-100)] ${lastRequest?.statusFilter ? 'border-[var(--color-brand-500)]' : 'border-[var(--color-border)]'}`}>
+                  <option value="">すべて</option>
+                  <option value="APPROACHING">{STATUS_LABELS.APPROACHING}（APPROACHING）</option>
+                  <option value="NEAR">{STATUS_LABELS.NEAR}（NEAR）</option>
+                  <option value="IN_ZONE">{STATUS_LABELS.IN_ZONE}（IN_ZONE）</option>
+                  <option value="BELOW_ZONE">{STATUS_LABELS.BELOW_ZONE}（BELOW_ZONE）</option>
+                </select>
+              </label>
+              {response.rows.length > 0 && (
+                <span className="text-[11px] tabular-nums text-[var(--color-text-secondary)]">
+                  {response.meta.matchedCount.toLocaleString('ja-JP')}件中 {firstResult.toLocaleString('ja-JP')}–{lastResult.toLocaleString('ja-JP')}件を表示
+                </span>
+              )}
+            </div>
+          )}
+          {stageFilterControls(true)}
+        </div>
 
         {!response ? (
-          <div className="py-16 text-center">
-            <Search size={22} className="mx-auto text-[var(--color-text-tertiary)]" aria-hidden />
-            <p className="mt-3 text-[13px] text-[var(--color-text-secondary)]">条件を設定し、Trigger検索を実行してください。</p>
-          </div>
+          loading ? (
+            <div role="status" className="flex items-center justify-center gap-2 border-t border-[var(--color-border-soft)] py-10 text-[12px] text-[var(--color-text-secondary)]">
+              <LoaderCircle size={15} className="animate-spin text-[var(--color-brand-700)]" aria-hidden />候補を検索しています…
+            </div>
+          ) : (
+            <div className="mt-2 border-t border-[var(--color-border-soft)] py-10 text-center">
+              <Search size={20} className="mx-auto text-[var(--color-text-tertiary)]" aria-hidden />
+              <p className="mt-2 text-[12px] text-[var(--color-text-secondary)]">条件を確認して「Triggerを検索」を押すと、ここに候補が表示されます。</p>
+            </div>
+          )
         ) : response.rows.length === 0 ? (
-          <div className="py-14 text-center text-[13px] text-[var(--color-text-secondary)]">この条件に一致するTrigger候補はありません。</div>
+          <div role="status" className="mt-2 border-t border-[var(--color-border-soft)] py-10 text-center">
+            <p className="text-[13px] text-[var(--color-text-secondary)]">この条件に一致するTrigger候補はありません。</p>
+            <p className="mt-1 text-[11px] text-[var(--color-text-tertiary)]">Status・Stageの絞り込みを外すか、Trigger距離や対象銘柄の条件を広げてください。</p>
+          </div>
         ) : (
           <>
-            <div ref={resultsTableRef} data-trigger-results-table className={`relative ${builderOpen ? 'mt-3' : ''} overflow-x-auto border-y border-[var(--color-border)] bg-white lg:max-h-[min(72vh,760px)] lg:overflow-auto ${loading ? 'opacity-65' : ''}`} aria-busy={loading}>
-              {loading && <div className="absolute right-2 top-2 z-30 inline-flex items-center gap-1 rounded bg-white/95 px-2 py-1 text-[10px] text-[var(--color-brand-700)] shadow-sm"><LoaderCircle size={12} className="animate-spin" />再検索中</div>}
+            <div ref={resultsTableRef} data-trigger-results-table className={`relative mt-2 overflow-x-auto border-y border-[var(--color-border)] bg-white lg:max-h-[min(72vh,760px)] lg:overflow-auto ${loading ? 'opacity-65' : ''}`} aria-busy={loading}>
+              {loading && <div role="status" className="absolute right-2 top-2 z-30 inline-flex items-center gap-1 rounded-[3px] bg-white/95 px-2 py-1 text-[10px] text-[var(--color-brand-700)] shadow-sm"><LoaderCircle size={12} className="animate-spin" aria-hidden />再検索中</div>}
               <table className={`w-full ${spreadExpansionActive ? 'min-w-[1490px]' : 'min-w-[1390px]'} border-collapse text-[13px]`}>
                 <thead className="sticky top-0 z-30 bg-[var(--color-surface-muted)] text-[var(--color-text-secondary)] shadow-[0_1px_0_var(--color-border)]">
                   <tr className="border-b border-[var(--color-border)]">
