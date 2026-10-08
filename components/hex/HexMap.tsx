@@ -1,16 +1,35 @@
 // components/hex/HexMap.tsx
-// HEX ステージマップ。日足 / 週足 / 月足 の 6×6 (Bステージ × Aステージ) マトリクスを縦に並べ、
-// セルをクリックすると下のテーブルがその (timeframe, B, A) 組合せの銘柄に絞り込まれる。
+// HEX ステージスクリーナー。日足 / 週足 / 月足 の 6×6 (Bステージ × Aステージ) 行列で絞り込み、
+// 下の Scan Ledger（銘柄 | 価格 | 騰落 | Stage | トレンド）で比較する。
+// このファイルは状態と絞り込みの orchestration のみを持ち、表示は stage-screener/ 配下が担う。
 
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { Search, Copy, Check } from 'lucide-react'
 import { replaceCurrentUrlFilters } from '@/lib/client/url-filter-state'
-import { STAGE_BG_COLORS, STAGE_BORDER_COLORS, STAGE_LABELS } from '@/lib/hex-stage'
-import { MarginBadges } from '@/components/ui/MarginBadges'
-import { StageDots } from '@/components/ui/StageDots'
+import ResultsLedger from '@/components/hex/stage-screener/ResultsTable'
+import ResultsToolbar, { type CellChip } from '@/components/hex/stage-screener/ResultsToolbar'
+import StageMatrixPanel, {
+  TIMEFRAMES,
+  type CellKey,
+  type Selections,
+  type Timeframe,
+} from '@/components/hex/stage-screener/StageMatrixPanel'
+import ledger from '@/components/hex/stage-screener/screener.module.css'
+import {
+  compareStocks,
+  EMPTY_EXTRA,
+  matchesExtra,
+  parseOrder,
+  parseSortKey,
+  pick,
+  DEFAULT_ORDER,
+  DEFAULT_SORT,
+  type ExtraFilters,
+  type SortKey,
+  type SortOrder,
+} from '@/components/hex/stage-screener/filters'
 
 export interface HexMapStock {
   code: string
@@ -43,76 +62,6 @@ export interface HexMapStock {
   ml_candidate_rank?: number | null
   ml_candidate_summary?: string | null
 }
-
-type Timeframe = 'daily' | 'weekly' | 'monthly'
-
-const TIMEFRAMES: { key: Timeframe; label: string }[] = [
-  { key: 'daily',   label: '日足' },
-  { key: 'weekly',  label: '週足' },
-  { key: 'monthly', label: '月足' },
-]
-
-const formatPercent = (val?: number | null) => {
-  if (val === undefined || val === null) return '-'
-  return `${val > 0 ? '+' : ''}${val.toFixed(2)}%`
-}
-
-const getPercentStyle = (val?: number | string | null): React.CSSProperties => {
-  if (val === undefined || val === null || val === '') return { color: '#9ca3af' }
-  const num = Number(val)
-  if (isNaN(num)) return { color: '#9ca3af' }
-  if (num > 0) return { color: '#16a34a', fontWeight: 'bold' }
-  if (num < 0) return { color: '#ef4444', fontWeight: 'bold' }
-  return { color: '#6b7280' }
-}
-
-type FlowTone = 'up' | 'down' | 'flat'
-
-function angleFlow(angle: number | null | undefined, prev: number | null | undefined) {
-  if (angle == null || !Number.isFinite(angle)) return { label: '未計算', tone: 'flat' as FlowTone, pct: '-' }
-  const pct = `${angle > 0 ? '+' : ''}${angle.toFixed(2)}%`
-  const direction = angle > 0.08 ? '上向き' : angle < -0.08 ? '下向き' : '横ばい'
-  const delta = prev == null || !Number.isFinite(prev) ? null : angle - prev
-  if (delta == null || Math.abs(delta) < 0.04) {
-    return {
-      label: direction === '横ばい' ? '横ばい維持' : `${direction}維持`,
-      tone: direction === '上向き' ? 'up' as FlowTone : direction === '下向き' ? 'down' as FlowTone : 'flat' as FlowTone,
-      pct,
-    }
-  }
-  if (delta > 0) {
-    return {
-      label: direction === '下向き' ? '下げ鈍化' : direction === '横ばい' ? '上向き化' : '上向き加速',
-      tone: direction === '下向き' ? 'flat' as FlowTone : 'up' as FlowTone,
-      pct,
-    }
-  }
-  return {
-    label: direction === '上向き' ? '上げ鈍化' : direction === '横ばい' ? '下向き化' : '下向き加速',
-    tone: direction === '上向き' ? 'flat' as FlowTone : 'down' as FlowTone,
-    pct,
-  }
-}
-
-function maAlignmentLabel(stock: HexMapStock) {
-  const values = [stock.sma_angles?.sma5, stock.sma_angles?.sma25, stock.sma_angles?.sma75]
-  const up = values.filter((v) => v != null && v > 0.08).length
-  const down = values.filter((v) => v != null && v < -0.08).length
-  if (up >= 3) return { label: '短中長の上向きが揃う', tone: 'up' as FlowTone }
-  if (down >= 3) return { label: '短中長の下向きが揃う', tone: 'down' as FlowTone }
-  if (up >= 2) return { label: '上向き優勢', tone: 'up' as FlowTone }
-  if (down >= 2) return { label: '下向き優勢', tone: 'down' as FlowTone }
-  return { label: '方向確認中', tone: 'flat' as FlowTone }
-}
-
-function flowToneClass(tone: FlowTone) {
-  if (tone === 'up') return 'border-green-200 bg-green-50 text-green-700'
-  if (tone === 'down') return 'border-red-200 bg-red-50 text-red-700'
-  return 'border-gray-200 bg-gray-50 text-gray-600'
-}
-
-type CellKey = string // "b-a"
-type Selections = Record<Timeframe, Set<CellKey>>
 
 const emptySelections = (): Selections => ({
   daily: new Set(),
@@ -171,8 +120,31 @@ export default function HexMap({ data, market = 'JP' }: { data: HexMapStock[]; t
     const value = searchParams.get('marketCap') ?? 'all'
     return marketCapRanges.some((range) => range.id === value) ? value : 'all'
   })
+  const [extra, setExtra] = useState<ExtraFilters>(() => ({
+    segment: searchParams.get('seg') ?? '',
+    margin: isUs ? '' : searchParams.get('margin') ?? '',
+    change: pick(searchParams.get('chg'), ['', 'up', 'down'] as const, ''),
+    ma: pick(searchParams.get('ma'), ['', 'up', 'down'] as const, ''),
+    ml: pick(searchParams.get('ml'), ['', 'any', 'up', 'down'] as const, ''),
+    status: isUs ? pick(searchParams.get('status'), ['', 'ready', 'pending'] as const, '') : '',
+  }))
+  const [sortKey, setSortKey] = useState<SortKey>(() => parseSortKey(searchParams.get('sort')))
+  const [sortOrder, setSortOrder] = useState<SortOrder>(() => parseOrder(searchParams.get('order')))
   const [rowLimit, setRowLimit] = useState(ROW_STEP)
   const hasMarketCapData = data.some((stock) => stock.market_cap > 0)
+
+  useEffect(() => {
+    replaceCurrentUrlFilters({
+      seg: extra.segment,
+      margin: extra.margin,
+      chg: extra.change,
+      ma: extra.ma,
+      ml: extra.ml,
+      status: extra.status,
+      sort: sortKey === DEFAULT_SORT ? null : sortKey,
+      order: sortOrder === DEFAULT_ORDER && sortKey !== 'code' ? null : sortOrder,
+    })
+  }, [extra, sortKey, sortOrder])
 
   useEffect(() => {
     replaceCurrentUrlFilters({
@@ -232,18 +204,31 @@ export default function HexMap({ data, market = 'JP' }: { data: HexMapStock[]; t
     }
   }
 
-  // ステージ選択 + 時価総額 + 検索 すべてで絞り込み、時価総額降順でソート
+  const segmentOptions = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const s of data) if (s.market_segment) counts.set(s.market_segment, (counts.get(s.market_segment) ?? 0) + 1)
+    return Array.from(counts.entries()).sort((a, b) => b[1] - a[1])
+  }, [data])
+  const marginOptions = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const s of data) if (s.margin_type) counts.set(s.margin_type, (counts.get(s.margin_type) ?? 0) + 1)
+    return Array.from(counts.entries()).sort((a, b) => b[1] - a[1])
+  }, [data])
+
+  // ステージ選択 + 時価総額 + 検索 + 追加条件 すべてで絞り込み、選択した軸で並び替え（既定: 時価総額降順）
   const visible = useMemo(() => {
+    const term = searchTerm.trim().toLowerCase()
     return data
       .filter((s) => {
         if (hasSelection && !filteredTickers.has(s.code)) return false
         if (!filterByMarketCap(s)) return false
-        if (searchTerm && !s.code.includes(searchTerm) && !s.name.includes(searchTerm)) return false
+        if (term && !s.code.toLowerCase().includes(term) && !s.name.toLowerCase().includes(term)) return false
+        if (!matchesExtra(s, extra)) return false
         return true
       })
-      .sort((a, b) => b.market_cap - a.market_cap)
+      .sort((a, b) => compareStocks(a, b, sortKey, sortOrder))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, filteredTickers, hasSelection, selectedMarketCapRange, searchTerm])
+  }, [data, filteredTickers, hasSelection, selectedMarketCapRange, searchTerm, extra, sortKey, sortOrder])
 
   // フィルタ変更で結果が変わったら表示件数を初期値に戻す
   useEffect(() => { setRowLimit(ROW_STEP) }, [visible])
@@ -259,513 +244,98 @@ export default function HexMap({ data, market = 'JP' }: { data: HexMapStock[]; t
     })
   }
 
-  const clearAllSelections = () => setSelections(emptySelections())
   const clearTimeframeSelections = (tf: Timeframe) =>
     setSelections((cur) => ({ ...cur, [tf]: new Set<CellKey>() }))
+  const clearEverything = () => {
+    setSelections(emptySelections())
+    setSearchTerm('')
+    setSelectedMarketCapRange('all')
+    setExtra(EMPTY_EXTRA)
+  }
+  const cellChips: CellChip[] = (['daily', 'weekly', 'monthly'] as Timeframe[])
+    .filter((tf) => selections[tf].size > 0)
+    .map((tf) => ({ key: tf, label: TIMEFRAMES.find((t) => t.key === tf)?.label ?? tf, count: selections[tf].size }))
+  const handleCopy = (code: string) => {
+    navigator.clipboard?.writeText(code)
+    setCopiedCode(code)
+    setTimeout(() => setCopiedCode((cur) => (cur === code ? null : cur)), 1500)
+  }
+  const handleSort = (key: SortKey) => {
+    setSortKey(key)
+    setSortOrder(key === 'code' ? 'asc' : 'desc')
+  }
+  // 見出しクリック: 同じ列なら昇降を反転、別の列なら既定の向きで並び替え
+  const handleHeaderSort = (key: SortKey) => {
+    if (key === sortKey) setSortOrder((o) => (o === 'desc' ? 'asc' : 'desc'))
+    else handleSort(key)
+  }
 
   return (
-    <div className="flex flex-col gap-5 relative">
-      {/* 3つのタイムフレーム別マトリクスを縦に積む */}
-      <div className="flex flex-col gap-4">
-        {TIMEFRAMES.map((tf) => (
-          <StageMatrix
-            key={tf.key}
-            data={data}
-            timeframe={tf.key}
-            label={tf.label}
-            selectedCells={selections[tf.key]}
-            filteredTickers={filteredTickers}
-            anySelection={hasSelection}
-            onCellClick={(b, a, count) => toggleCell(tf.key, b, a, count)}
-            onClearTimeframe={() => clearTimeframeSelections(tf.key)}
+    <div className="flex flex-col gap-4">
+      {/* B×A ステージ行列（≥1024 は 3 時間軸を横並びで同時比較） */}
+      <StageMatrixPanel
+        data={data}
+        selections={selections}
+        filteredTickers={filteredTickers}
+        anySelection={hasSelection}
+        onToggle={toggleCell}
+        onClearTimeframe={clearTimeframeSelections}
+      />
+
+      {/* 結果面: command bar → ledger header → rows を 1 枚の面で接続 */}
+      <div className={ledger.surface}>
+        <ResultsToolbar
+          isUs={isUs}
+          searchTerm={searchTerm}
+          onSearch={setSearchTerm}
+          marketCap={selectedMarketCapRange}
+          marketCapRanges={marketCapRanges}
+          hasMarketCapData={hasMarketCapData}
+          onMarketCap={setSelectedMarketCapRange}
+          sortKey={sortKey}
+          sortOrder={sortOrder}
+          onSort={handleSort}
+          onToggleOrder={() => setSortOrder((o) => (o === 'desc' ? 'asc' : 'desc'))}
+          extra={extra}
+          onExtra={(patch) => setExtra((cur) => ({ ...cur, ...patch }))}
+          segmentOptions={segmentOptions}
+          marginOptions={marginOptions}
+          cellChips={cellChips}
+          onClearCell={(key) => clearTimeframeSelections(key as Timeframe)}
+          resultCount={visible.length}
+          totalCount={data.length}
+          onClearAll={clearEverything}
+        />
+
+        {visible.length > 0 ? (
+          <ResultsLedger
+            rows={visible.slice(0, rowLimit)}
+            isUs={isUs}
+            copiedCode={copiedCode}
+            onCopy={handleCopy}
+            onOpen={(code) => router.push(`${isUs ? '/us/stock' : '/stock'}/${encodeURIComponent(code)}`)}
+            sortKey={sortKey}
+            sortOrder={sortOrder}
+            onHeaderSort={handleHeaderSort}
           />
-        ))}
-      </div>
-
-      {/* フィルタバー: 検索 + 時価総額 + 選択セルクリア */}
-      <div className="flex flex-col gap-2 px-2 pt-2 border-t border-gray-200">
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="relative flex-1 min-w-[200px] max-w-md">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-            <input
-              type="text"
-              placeholder="コード or 銘柄名で検索..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full pl-9 pr-3 py-2 bg-white border border-gray-300 rounded-lg text-sm outline-none focus:border-indigo-500"
-            />
-          </div>
-          <span className="text-[12px] text-gray-500 inline-flex items-center flex-wrap gap-2 leading-none">
-            <span className="inline-flex items-baseline gap-1 whitespace-nowrap">
-              <strong className="text-indigo-600 text-[15px] font-bold">
-                {visible.length.toLocaleString()}
-              </strong>
-              <span>件該当</span>
+        ) : (
+          <div role="status" className={ledger.empty}>
+            <span>
+              {searchTerm.trim()
+                ? `"${searchTerm.trim()}" に一致する銘柄が見つかりませんでした`
+                : '該当する銘柄がありません'}
             </span>
-            {hasSelection && (
-              <>
-                <span className="text-gray-300 leading-none">|</span>
-                {(['daily', 'weekly', 'monthly'] as Timeframe[]).map((tf) => {
-                  const n = selections[tf].size
-                  if (n === 0) return null
-                  const label = TIMEFRAMES.find((t) => t.key === tf)?.label
-                  return (
-                    <span
-                      key={tf}
-                      className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] leading-none bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-full whitespace-nowrap"
-                    >
-                      <span>{label}</span>
-                      <strong>{n}</strong>
-                    </span>
-                  )
-                })}
-                <button
-                  onClick={clearAllSelections}
-                  className="px-2.5 py-1 text-[11px] leading-none border border-gray-300 rounded-full hover:bg-gray-50"
-                >
-                  × 全クリア
-                </button>
-              </>
-            )}
-            {selectedMarketCapRange !== 'all' && (
-              <>
-                <span className="text-gray-300 leading-none">|</span>
-                <span className="px-2.5 py-1 text-[11px] leading-none bg-gray-50 border border-gray-200 rounded-full">
-                  {marketCapRanges.find((r) => r.id === selectedMarketCapRange)?.label}
-                </span>
-              </>
-            )}
-          </span>
-        </div>
-
-        {/* 時価総額フィルタ */}
-        <div className="flex flex-wrap gap-1.5 items-center">
-          <span className="text-[11px] text-gray-500 mr-1 leading-none">時価総額</span>
-          {marketCapRanges.map((range) => {
-            const active = selectedMarketCapRange === range.id
-            return (
-              <button
-                key={range.id}
-                disabled={range.id !== 'all' && !hasMarketCapData}
-                onClick={() => setSelectedMarketCapRange(range.id)}
-                className={`px-2.5 py-1 text-[11px] leading-none font-mono rounded-full border ${
-                  active
-                    ? 'bg-indigo-600 text-white border-indigo-600'
-                    : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
-                } disabled:cursor-not-allowed disabled:opacity-40`}
-              >
-                {range.label}
-              </button>
-            )
-          })}
-          {isUs && !hasMarketCapData && (
-            <span className="text-[10px] font-semibold text-amber-700">発行済株式数が未連携のため無効</span>
-          )}
-        </div>
-      </div>
-
-      {/* 銘柄テーブル */}
-      <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs" style={{ minWidth: '1620px', borderCollapse: 'collapse' }}>
-            <thead className="bg-gray-50 sticky top-0 z-10">
-              <tr style={{ borderBottom: '1px solid #e5e7eb' }}>
-                <th scope="col" className="px-3 py-2 text-left font-medium text-gray-500 whitespace-nowrap">コード</th>
-                <th scope="col" className="px-3 py-2 text-left font-medium text-gray-500 whitespace-nowrap">銘柄名</th>
-                <th scope="col" className="px-3 py-2 text-left font-medium text-gray-500 whitespace-nowrap">銘柄区分</th>
-                <th scope="col" className="px-3 py-2 text-left font-medium text-gray-500 whitespace-nowrap">市場 / 業種</th>
-                <th scope="col" className="px-3 py-2 text-right font-medium text-gray-500 whitespace-nowrap">株価</th>
-                <th scope="col" className="px-3 py-2 text-right font-medium text-gray-500 whitespace-nowrap">時価総額</th>
-                <th scope="col" className="px-3 py-2 text-right font-medium text-gray-500 whitespace-nowrap">日%</th>
-                <th scope="col" className="px-3 py-2 text-right font-medium text-gray-500 whitespace-nowrap">週%</th>
-                <th scope="col" className="px-3 py-2 text-right font-medium text-gray-500 whitespace-nowrap">月%</th>
-                <th scope="col" className="px-3 py-2 text-right font-medium text-gray-500 whitespace-nowrap">3M</th>
-                <th scope="col" className="px-3 py-2 text-right font-medium text-gray-500 whitespace-nowrap">6M</th>
-                <th scope="col" className="px-3 py-2 text-right font-medium text-gray-500 whitespace-nowrap">YTD</th>
-                <th scope="col" className="px-3 py-2 text-left font-medium text-gray-500 whitespace-nowrap">ステージ (日A/B 週A/B 月A/B)</th>
-                <th scope="col" className="px-3 py-2 text-left font-medium text-gray-500 whitespace-nowrap" title="SMAの傾きが、前回から加速しているか鈍化しているかを表示">MAの流れ / ML示唆</th>
-              </tr>
-            </thead>
-            <tbody>
-              {visible.slice(0, rowLimit).map((s) => (
-                <tr
-                  key={s.code}
-                  onClick={() => router.push(`${isUs ? '/us/stock' : '/stock'}/${encodeURIComponent(s.code)}`)}
-                  onKeyDown={(e) => { if (e.key === 'Enter') router.push(`${isUs ? '/us/stock' : '/stock'}/${encodeURIComponent(s.code)}`) }}
-                  tabIndex={0}
-                  role="link"
-                  aria-label={`${s.name} の詳細を開く`}
-                  className="hover:bg-gray-50 focus:bg-indigo-50 cursor-pointer"
-                  style={{ borderBottom: '1px solid #f3f4f6' }}
-                >
-                  <td className="px-3 py-2 whitespace-nowrap">
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        navigator.clipboard.writeText(s.code)
-                        setCopiedCode(s.code)
-                        setTimeout(() => setCopiedCode(null), 1500)
-                      }}
-                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border text-[11px] font-mono font-medium ${
-                        copiedCode === s.code
-                          ? 'bg-green-50 border-green-200 text-green-700'
-                          : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'
-                      }`}
-                      title="コードをコピー"
-                    >
-                      {copiedCode === s.code ? <Check size={11} /> : <Copy size={11} />}
-                      {s.code.replace('.T', '')}
-                    </button>
-                  </td>
-                  <td className="px-3 py-2 font-medium text-gray-900 whitespace-nowrap">{s.name}</td>
-                  <td className="px-3 py-2 whitespace-nowrap">
-                    <div className="flex flex-wrap items-center gap-1">
-                      <MarginBadges marginType={s.margin_type} compact emptyLabel={isUs ? 'Stock' : '未取得'} />
-                      {isUs && s.data_status && s.data_status !== 'ready' && (
-                        <span
-                          className={`rounded-full border px-2 py-0.5 text-[10px] font-bold leading-tight whitespace-nowrap ${
-                            s.data_status === 'price_pending'
-                              ? 'border-amber-200 bg-amber-50 text-amber-700'
-                              : s.data_status === 'snapshot_pending'
-                                ? 'border-blue-200 bg-blue-50 text-blue-700'
-                                : 'border-gray-200 bg-gray-50 text-gray-600'
-                          }`}
-                        >
-                          {s.data_status === 'price_pending'
-                            ? '当日価格待ち'
-                            : s.data_status === 'snapshot_pending'
-                              ? 'Stage生成待ち'
-                              : '履歴蓄積中'}
-                        </span>
-                      )}
-                    </div>
-                  </td>
-                  <td className="px-3 py-2 text-gray-500 whitespace-nowrap">
-                    {s.market_segment && (
-                      <>
-                        <span>{s.market_segment}</span>
-                        <span className="text-gray-300 mx-1">/</span>
-                      </>
-                    )}
-                    <span>{isUs ? 'Sector' : '17'}: {s.sector17_name ?? s.sector_large}</span>
-                    {(s.sector33_name ?? s.sector_small) && (
-                      <>
-                        <span className="text-gray-300 mx-1">/</span>
-                        <span>{isUs ? 'Industry' : '33'}: {s.sector33_name ?? s.sector_small}</span>
-                      </>
-                    )}
-                  </td>
-                  <td className="px-3 py-2 text-right font-mono whitespace-nowrap">
-                    {s.price == null
-                      ? '-'
-                      : isUs
-                        ? `$${s.price.toLocaleString('en-US', { maximumFractionDigits: 2 })}`
-                        : s.price.toLocaleString()}
-                  </td>
-                  <td className="px-3 py-2 text-right font-mono text-gray-600 whitespace-nowrap">
-                    {isUs
-                      ? s.market_cap > 0
-                        ? s.market_cap >= 1e12
-                          ? `$${(s.market_cap / 1e12).toFixed(2)}T`
-                          : s.market_cap >= 1e9
-                            ? `$${(s.market_cap / 1e9).toFixed(1)}B`
-                            : `$${(s.market_cap / 1e6).toFixed(0)}M`
-                        : '-'
-                      : <>{Math.round(s.market_cap / 1e8).toLocaleString()}<span className="text-[10px] text-gray-400 ml-0.5">億</span></>}
-                  </td>
-                  <td className="px-3 py-2 text-right font-mono whitespace-nowrap" style={getPercentStyle(s.daily_change)}>{formatPercent(s.daily_change)}</td>
-                  <td className="px-3 py-2 text-right font-mono whitespace-nowrap" style={getPercentStyle(s.weekly_change)}>{formatPercent(s.weekly_change)}</td>
-                  <td className="px-3 py-2 text-right font-mono whitespace-nowrap" style={getPercentStyle(s.monthly_change)}>{formatPercent(s.monthly_change)}</td>
-                  <td className="px-3 py-2 text-right font-mono whitespace-nowrap" style={getPercentStyle(s.months3_change)}>{formatPercent(s.months3_change)}</td>
-                  <td className="px-3 py-2 text-right font-mono whitespace-nowrap" style={getPercentStyle(s.months6_change)}>{formatPercent(s.months6_change)}</td>
-                  <td className="px-3 py-2 text-right font-mono whitespace-nowrap" style={getPercentStyle(s.ytd_change)}>{formatPercent(s.ytd_change)}</td>
-                  <td className="px-3 py-2 whitespace-nowrap">
-                    <StageDots
-                      values={[s.daily_a_stage, s.daily_b_stage, s.weekly_a_stage, s.weekly_b_stage, s.monthly_a_stage, s.monthly_b_stage]}
-                      size={18}
-                    />
-                  </td>
-                  <td className="px-3 py-2 text-left text-[11px] whitespace-nowrap">
-                    <MaFlowCell stock={s} />
-                  </td>
-                </tr>
-              ))}
-              {visible.length === 0 && (
-                <tr>
-                  <td colSpan={14} className="text-center py-10 text-xs text-gray-400">
-                    {searchTerm
-                      ? `"${searchTerm}" に一致する銘柄が見つかりませんでした`
-                      : '該当する銘柄がありません'}
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
+            <button type="button" onClick={clearEverything} className={ledger.emptyBtn}>
+              条件をすべてクリア
+            </button>
+          </div>
+        )}
         {visible.length > rowLimit && (
-          <button
-            onClick={() => setRowLimit((n) => n + ROW_STEP)}
-            className="w-full border-t border-gray-200 py-2.5 text-[12px] font-medium text-indigo-600 hover:bg-gray-50"
-          >
-            もっと見る（{rowLimit.toLocaleString()} / {visible.length.toLocaleString()} 件 · 残り {(visible.length - rowLimit).toLocaleString()} 件）
+          <button type="button" onClick={() => setRowLimit((n) => n + ROW_STEP)} className={ledger.more}>
+            さらに表示（{rowLimit.toLocaleString()} / {visible.length.toLocaleString()} 件 · 残り {(visible.length - rowLimit).toLocaleString()} 件）
           </button>
         )}
       </div>
     </div>
-  )
-}
-
-function MaFlowCell({ stock }: { stock: HexMapStock }) {
-  const alignment = maAlignmentLabel(stock)
-  const flows = [
-    ['5日', angleFlow(stock.sma_angles?.sma5, stock.prev_sma_angles?.sma5)],
-    ['25日', angleFlow(stock.sma_angles?.sma25, stock.prev_sma_angles?.sma25)],
-    ['75日', angleFlow(stock.sma_angles?.sma75, stock.prev_sma_angles?.sma75)],
-    ['300日', angleFlow(stock.sma_angles?.sma300, stock.prev_sma_angles?.sma300)],
-  ] as const
-  const mlTone = stock.ml_candidate_direction === 'up' ? 'up' : stock.ml_candidate_direction === 'down' ? 'down' : 'flat'
-  const mlLabel = stock.ml_candidate_direction === 'up'
-    ? `ML上昇候補 #${stock.ml_candidate_rank}`
-    : stock.ml_candidate_direction === 'down'
-      ? `ML下落警戒 #${stock.ml_candidate_rank}`
-      : 'ML候補外'
-
-  return (
-    <div className="flex min-w-[310px] flex-col gap-1.5">
-      <div className="flex flex-wrap gap-1">
-        <span className={`rounded-full border px-2 py-[2px] text-[10px] font-semibold ${flowToneClass(alignment.tone)}`}>
-          {alignment.label}
-        </span>
-        <span className={`rounded-full border px-2 py-[2px] text-[10px] font-semibold ${flowToneClass(mlTone)}`}>
-          {mlLabel}
-        </span>
-      </div>
-      <div className="grid grid-cols-4 gap-1">
-        {flows.map(([name, flow]) => (
-          <span
-            key={name}
-            className={`rounded-[5px] border px-1.5 py-1 text-center leading-tight ${flowToneClass(flow.tone)}`}
-            title={`${name}MA変化率 ${flow.pct}`}
-          >
-            <b className="block text-[10px]">{name}</b>
-            <span className="text-[9px]">{flow.label}</span>
-          </span>
-        ))}
-      </div>
-      <div className="max-w-[430px] truncate text-[10px] leading-4 text-gray-500" title={stock.ml_candidate_summary ?? undefined}>
-        {stock.ml_candidate_summary ?? '傾きの加速/鈍化と、次のステージ更新を確認します。'}
-      </div>
-    </div>
-  )
-}
-
-/* ─────────────────────────────────────────────────────────────────
- * StageMatrix
- * 1 つのタイムフレームについて、Bステージ(縦) × Aステージ(横) の 6×6 マトリクス。
- * 各 B 行は「大きい長方形」のラベル＋6つの細長い長方形（A1〜A6 のセル）から成る。
- * セル内の数値はその (B, A) 組合せに該当する銘柄数。クリックで下のテーブルを絞り込む。
- * ────────────────────────────────────────────────────────────── */
-function StageMatrix({
-  data, timeframe, label, selectedCells, filteredTickers, anySelection, onCellClick, onClearTimeframe,
-}: {
-  data: HexMapStock[]
-  timeframe: Timeframe
-  label: string
-  /** このタイムフレームで選択されているセルの "b-a" キー集合 */
-  selectedCells: Set<CellKey>
-  /** 全タイムフレーム条件を AND した結果のティッカー集合 */
-  filteredTickers: Set<string>
-  /** いずれかの TF にセル選択があるか */
-  anySelection: boolean
-  onCellClick: (b: number, a: number, count: number) => void
-  onClearTimeframe: () => void
-}) {
-  // matrix[b][a] = { count: そのセルの全銘柄数, sel: フィルタ通過銘柄のうちこのセルに入る数 }
-  const { matrix, total } = useMemo(() => {
-    const m: { count: number; sel: number }[][] =
-      Array.from({ length: 7 }, () => Array.from({ length: 7 }, () => ({ count: 0, sel: 0 })))
-    let t = 0
-    const aField = `${timeframe}_a_stage` as keyof HexMapStock
-    const bField = `${timeframe}_b_stage` as keyof HexMapStock
-    for (const d of data) {
-      const a = d[aField] as number | null | undefined
-      const b = d[bField] as number | null | undefined
-      if (a == null || b == null) continue
-      if (a < 1 || a > 6 || b < 1 || b > 6) continue
-      m[b][a].count++
-      t++
-      if (filteredTickers.has(d.code)) m[b][a].sel++
-    }
-    return { matrix: m, total: t }
-  }, [data, timeframe, filteredTickers])
-
-  return (
-    <section className="bg-white border border-gray-200 rounded-lg p-3">
-      <header className="flex items-center justify-between mb-3 flex-wrap gap-x-4 gap-y-2">
-        {/* 左: タイトル + 選択状態チップ */}
-        <div className="flex items-center gap-2.5 flex-wrap">
-          <h3 className="text-sm font-bold text-gray-900 leading-none">{label}</h3>
-          {selectedCells.size > 0 ? (
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] leading-none text-indigo-700 bg-indigo-50 border border-indigo-200">
-              <span className="inline-block w-1.5 h-1.5 rounded-full bg-indigo-500" aria-hidden />
-              <span>{selectedCells.size} セル選択中</span>
-              <button
-                onClick={onClearTimeframe}
-                className="text-indigo-400 hover:text-indigo-700 leading-none"
-                title={`${label} の選択をクリア`}
-                style={{ marginLeft: 2 }}
-              >
-                ×
-              </button>
-            </span>
-          ) : anySelection ? (
-            <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[11px] leading-none text-gray-500 bg-gray-50 border border-gray-200">
-              連動表示
-            </span>
-          ) : null}
-        </div>
-
-        {/* 右: 銘柄合計 */}
-        <span className="text-[11px] text-gray-500 leading-none whitespace-nowrap inline-flex items-baseline gap-1">
-          <strong className="text-indigo-600 font-mono text-[13px] font-semibold">
-            {data.length.toLocaleString()}
-          </strong>
-          <span>銘柄</span>
-          {total < data.length && (
-            <span
-              className="text-gray-400"
-              title={`${data.length - total} 銘柄は ${label} のステージが計算できないため除外`}
-            >
-              （分類可 {total.toLocaleString()}）
-            </span>
-          )}
-        </span>
-      </header>
-
-      {/* 横スクロール可能な内側ラッパ。狭幅の画面でも A1〜A6 が切れず表示される */}
-      <div className="overflow-x-auto">
-      <div style={{ minWidth: '760px' }}>
-
-      {/* A-Stage ヘッダ行 */}
-      <div className="grid gap-1 mb-1.5" style={{ gridTemplateColumns: '90px repeat(6, minmax(96px, 1fr))' }}>
-        <div></div>
-        {[1, 2, 3, 4, 5, 6].map((a) => (
-          <div
-            key={a}
-            className="text-center font-mono whitespace-nowrap"
-            style={{ fontSize: '11px', lineHeight: 1, color: '#6b7280' }}
-          >
-            <span className="font-bold" style={{ color: STAGE_BORDER_COLORS[a] }}>A{a}</span>
-            <span style={{ marginLeft: 4, color: '#9ca3af' }}>{STAGE_LABELS[a]}</span>
-          </div>
-        ))}
-      </div>
-
-      {/* B-Stage 行 */}
-      <div className="flex flex-col gap-1">
-        {[1, 2, 3, 4, 5, 6].map((b) => (
-          <div
-            key={b}
-            className="grid gap-1"
-            style={{
-              gridTemplateColumns: '90px repeat(6, minmax(96px, 1fr))',
-              background: STAGE_BG_COLORS[b],
-              border: `1.5px solid ${STAGE_BORDER_COLORS[b]}`,
-              borderRadius: '6px',
-              padding: '3px',
-            }}
-          >
-            {/* B-stage ラベル（左の "大きい長方形" の名札部分） */}
-            <div
-              className="flex flex-col items-center justify-center font-mono leading-tight"
-              style={{ color: STAGE_BORDER_COLORS[b], padding: '4px 2px' }}
-            >
-              <span className="font-bold" style={{ fontSize: '14px', lineHeight: 1 }}>B{b}</span>
-              <span className="text-gray-700 text-center" style={{ fontSize: '10px', lineHeight: 1.2, marginTop: 3 }}>
-                {STAGE_LABELS[b]}
-              </span>
-            </div>
-
-            {/* A1..A6 の細長いセル */}
-            {[1, 2, 3, 4, 5, 6].map((a) => {
-              const cell = matrix[b][a]
-              const count = cell.count
-              const sel = cell.sel
-              const key: CellKey = `${b}-${a}`
-              const isSelected = selectedCells.has(key)
-              const empty = count === 0
-              const baseColor = STAGE_BORDER_COLORS[a]
-
-              // 表示モード:
-              //  empty       : 灰色
-              //  isSelected  : 強調（baseColor で塗りつぶし、白文字）
-              //  anySelection: 連動モード — sel > 0 を強調、sel = 0 を薄く
-              //  通常        : セル色＋件数のみ
-              let bg = '#fff'
-              let fg: string = baseColor
-              let borderColor: string = baseColor
-              let opacity = 1
-              if (empty) {
-                bg = '#fafafa'; fg = '#d1d5db'; borderColor = '#e5e7eb'
-              } else if (isSelected) {
-                bg = baseColor; fg = '#fff'; borderColor = baseColor
-              } else if (anySelection && sel === 0) {
-                opacity = 0.3
-              } else if (anySelection && sel > 0) {
-                bg = STAGE_BG_COLORS[a]
-              }
-
-              const titleParts: string[] = [`B${b} × A${a}: ${count} 銘柄`]
-              if (anySelection) titleParts.push(`条件該当: ${sel} 銘柄`)
-
-              return (
-                <button
-                  key={a}
-                  onClick={() => onCellClick(b, a, count)}
-                  disabled={empty}
-                  title={titleParts.join(' / ')}
-                  style={{
-                    background: bg,
-                    color: fg,
-                    border: `1px solid ${borderColor}`,
-                    borderRadius: '4px',
-                    padding: '6px 4px',
-                    fontFamily: 'var(--font-mono)',
-                    cursor: empty ? 'default' : 'pointer',
-                    transition: 'box-shadow 0.1s, opacity 0.15s',
-                    boxShadow: isSelected ? `0 2px 8px ${baseColor}66, inset 0 0 0 2px ${baseColor}` : 'none',
-                    opacity,
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: '0px',
-                    lineHeight: 1.0,
-                    minHeight: '46px',
-                  }}
-                >
-                  {anySelection && !isSelected && !empty ? (
-                    sel > 0 ? (
-                      <>
-                        <span style={{ fontSize: '18px', fontWeight: 700, lineHeight: 1 }}>{sel}</span>
-                        <span style={{ fontSize: '10px', opacity: 0.6, lineHeight: 1 }}>/ {count}</span>
-                      </>
-                    ) : (
-                      // 0件の場合は数字を出さず、薄く — のみ表示してノイズを減らす
-                      <span style={{ fontSize: '14px', fontWeight: 500, opacity: 0.4, lineHeight: 1 }}>—</span>
-                    )
-                  ) : (
-                    <span style={{ fontSize: '20px', fontWeight: 700, lineHeight: 1 }}>{count}</span>
-                  )}
-                </button>
-              )
-            })}
-          </div>
-        ))}
-      </div>
-
-      </div>
-      </div>
-    </section>
   )
 }

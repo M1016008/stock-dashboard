@@ -236,36 +236,37 @@ export default function HexStageMapView({ market = 'JP' }: { market?: 'JP' | 'US
         </span>
       </div>
 
-      <div className="grid grid-cols-[repeat(auto-fit,minmax(118px,1fr))] gap-2">
+      {/* Stage 別サマリー: 1 本の帯に 6 区画。色は左端の Stage バーだけに使い、値の色は PMS の符号に限定 */}
+      <div className="grid grid-cols-2 overflow-hidden rounded-[8px] border border-[var(--color-border-soft)] bg-white sm:grid-cols-3 xl:grid-cols-[repeat(auto-fit,minmax(150px,1fr))]">
         {stageMomentumStats.map(({ stage, avg, count, scoredCount }) => (
           <div
             key={stage}
-            className="rounded-[8px] border bg-white px-3 py-2"
+            className="relative border-b border-r border-[var(--color-border-soft)] py-2 pl-4 pr-3 xl:border-b-0"
             title={`Stage ${stage}: ${count.toLocaleString()}銘柄 / PMS算出済み ${scoredCount.toLocaleString()}銘柄`}
-            style={{
-              borderColor: STAGE_BORDER_COLORS[stage],
-              background: STAGE_BG_COLORS[stage],
-            }}
           >
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-[10px] font-semibold text-[var(--color-text-tertiary)]">Stage {stage}</span>
-              <span className="text-[10px] tabular-nums text-[var(--color-text-tertiary)]">{count}</span>
+            <span aria-hidden className="absolute bottom-2 left-1.5 top-2 w-[3px] rounded-full" style={{ background: STAGE_BORDER_COLORS[stage] }} />
+            <div className="flex items-baseline justify-between gap-2">
+              <span className="truncate text-[11px] text-[var(--color-text-tertiary)]">
+                <strong className="font-semibold text-[var(--color-text-primary)]">Stage {stage}</strong> {STAGE_LABELS[stage]}
+              </span>
+              <span className="font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]">{count.toLocaleString()}</span>
             </div>
-            <div className="mt-1 text-[14px] font-bold tabular-nums" style={{ color: avg == null ? 'var(--color-text-tertiary)' : avg >= 0 ? 'var(--color-market-red)' : 'var(--color-market-blue)' }}>
-              平均PMS {avg == null ? '-' : avg.toFixed(2)}
+            <div className="mt-0.5 font-mono text-[14px] font-bold tabular-nums" style={{ color: avg == null ? 'var(--color-text-tertiary)' : avg >= 0 ? 'var(--color-market-red)' : 'var(--color-market-blue)' }}>
+              <span className="mr-1 font-sans text-[11px] font-normal text-[var(--color-text-tertiary)]">平均PMS</span>
+              {avg == null ? '-' : avg.toFixed(2)}
             </div>
           </div>
         ))}
         {isUs && (
           <div
-            className="rounded-[8px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-3 py-2"
+            className="border-b border-r border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-3 py-2 xl:border-b-0"
             title="選択中の日足Stageをまだ算出できない投資対象"
           >
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-[10px] font-semibold text-[var(--color-text-tertiary)]">未算出</span>
-              <span className="text-[10px] tabular-nums text-[var(--color-text-tertiary)]">{unclassifiedCount}</span>
+            <div className="flex items-baseline justify-between gap-2">
+              <span className="text-[11px] font-semibold text-[var(--color-text-tertiary)]">未算出</span>
+              <span className="font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]">{unclassifiedCount}</span>
             </div>
-            <div className="mt-1 text-[14px] font-bold tabular-nums text-[var(--color-text-tertiary)]">
+            <div className="mt-0.5 text-[13px] font-bold text-[var(--color-text-tertiary)]">
               価格・履歴を更新中
             </div>
           </div>
@@ -366,10 +367,10 @@ export default function HexStageMapView({ market = 'JP' }: { market?: 'JP' | 'US
           className="flex w-full items-center gap-3 px-3 py-2 text-left text-[11px]"
         >
           <span className="font-medium text-[var(--color-text-primary)]">ステージ凡例</span>
-          <div className="flex flex-wrap gap-1">
+          <div className="flex flex-wrap gap-x-3 gap-y-1">
             {[1, 2, 3, 4, 5, 6].map((s) => (
-              <span key={s} style={legendChipStyle(s)} title={STAGE_LABELS[s]}>
-                <span style={{ fontWeight: 600 }}>{s}</span>
+              <span key={s} style={legendChipStyle()} title={STAGE_LABELS[s]}>
+                <span style={{ fontWeight: 700, fontFamily: 'var(--font-mono)', color: STAGE_BORDER_COLORS[s] }}>{s}</span>
                 <span>{STAGE_LABELS[s]}</span>
               </span>
             ))}
@@ -437,10 +438,9 @@ export default function HexStageMapView({ market = 'JP' }: { market?: 'JP' | 'US
       )}
 
       {/* ── HEX マップ本体 ────────────── */}
+      {/* 行列と結果面はそれぞれ自前の面を持つため、外側の枠（card inside card）は置かない */}
       {!loading && !error && filteredData.length > 0 && (
-        <div className="overflow-x-auto rounded-[8px] border border-[var(--color-border-soft)] bg-[var(--color-surface-base)] p-4">
-          <HexMap data={filteredData} timeframe={timeframe} market={market} />
-        </div>
+        <HexMap data={filteredData} timeframe={timeframe} market={market} />
       )}
     </div>
   )
@@ -478,18 +478,14 @@ const clearBtnStyle: React.CSSProperties = {
   color: 'var(--color-text-tertiary)',
 }
 
-function legendChipStyle(stage: number): React.CSSProperties {
+function legendChipStyle(): React.CSSProperties {
   return {
     display: 'inline-flex',
-    alignItems: 'center',
-    gap: '5px',
-    padding: '2px 8px',
-    fontSize: '10px',
+    alignItems: 'baseline',
+    gap: '4px',
+    fontSize: '11px',
     fontVariantNumeric: 'tabular-nums',
-    background: STAGE_BG_COLORS[stage],
-    color: STAGE_BORDER_COLORS[stage],
-    border: `1px solid ${STAGE_BORDER_COLORS[stage]}`,
-    borderRadius: '10px',
+    color: 'var(--color-text-secondary)',
     whiteSpace: 'nowrap',
   }
 }
