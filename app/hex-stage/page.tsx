@@ -10,6 +10,7 @@ import { TransitionDetailTableMock } from '@/components/hex/TransitionDetailTabl
 import HexStageMapView from '@/components/hex/HexStageMapView'
 import { HexDateSelector } from '@/components/hex/HexDateSelector'
 import { HexSectorSelector } from '@/components/hex/HexSectorSelector'
+import { StageTransitionScanner } from '@/components/hex/StageTransitionScanner'
 import { DashboardHistoricalUnavailable } from '@/components/dashboard/DashboardHistoricalUnavailable'
 import { TabRow } from '@/components/ui/TabRow'
 import { getHexDateOptions, type Timescale, type Period } from '@/lib/queries/hex'
@@ -48,17 +49,28 @@ function parseTaxonomy(value: string | null): SectorStructureTaxonomy {
   return 'major'
 }
 
+type HexStageView = 'market' | 'selector' | 'scanner'
+
 function buildViewHref(
-  view: 'market' | 'selector',
+  view: HexStageView,
   values: Record<string, string | null | undefined>,
 ) {
   const params = new URLSearchParams()
-  if (view === 'selector') params.set('view', 'selector')
+  if (view !== 'market') params.set('view', view)
   for (const [key, value] of Object.entries(values)) {
     if (value) params.set(key, value)
   }
   const query = params.toString()
   return `/hex-stage${query ? `?${query}` : ''}`
+}
+
+function flattenSearchParams(values: Record<string, string | string[] | undefined>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(values).flatMap(([key, value]) => {
+      const first = firstParam(value)
+      return first == null ? [] : [[key, first]]
+    }),
+  )
 }
 
 const TS_TABS: { key: Timescale; label: string }[] = [
@@ -114,6 +126,21 @@ export default async function HexStagePage({
     monthlyCells?: string | string[]
     marketCap?: string | string[]
     q?: string | string[]
+    from?: string | string[]
+    to?: string | string[]
+    dateFrom?: string | string[]
+    dateTo?: string | string[]
+    industry33?: string | string[]
+    marketSegment?: string | string[]
+    minPrice?: string | string[]
+    maxPrice?: string | string[]
+    minAvgVolume?: string | string[]
+    maxAvgVolume?: string | string[]
+    minAvgTurnover?: string | string[]
+    maxAvgTurnover?: string | string[]
+    sort?: string | string[]
+    page?: string | string[]
+    pageSize?: string | string[]
   }>
 }) {
   const sp = await searchParams
@@ -124,12 +151,41 @@ export default async function HexStagePage({
   const period = (VALID_PERIOD as string[]).includes(rawPeriod ?? '') ? (rawPeriod as Period) : 'today'
   const universeFilter = parseUniverseFilter(sp.universe)
   const universeMeta = getUniverseFilterMeta(universeFilter)
-  const view = firstParam(sp.view) === 'selector' ? 'selector' : 'market'
+  const rawView = firstParam(sp.view)
+  const view: HexStageView = rawView === 'selector' || rawView === 'scanner' ? rawView : 'market'
   const taxonomy = parseTaxonomy(firstParam(sp.taxonomy))
   const mode = parseHexSelectorMode(firstParam(sp.mode))
   const direction = parseHexSelectorDirection(firstParam(sp.direction))
   const requestedGroup = firstParam(sp.group)
   const requestedParent = firstParam(sp.parent)
+
+  if (view === 'scanner') {
+    const marketHref = buildViewHref('market', { universe: universeFilter })
+    const selectorHref = buildViewHref('selector', { universe: universeFilter })
+    return (
+      <div className="sb-page">
+        <div className="sb-page-title">
+          <h1>HEX ステージ分析</h1>
+          <p>
+            実観測された6桁ステージの変化を、期間・業種・流動性条件で検索します
+            {universeMeta ? ` · ${universeMeta.shortLabel}に絞り込み中` : ''}
+          </p>
+        </div>
+
+        <div className="sb-section-bd flex items-center gap-1 py-2">
+          <Link href={marketHref} className="sb-tab">市場循環</Link>
+          <Link href={selectorHref} className="sb-tab">業種から選ぶ</Link>
+          <Link href="/hex-stage?view=scanner" className="sb-tab sb-on">遷移スキャナー</Link>
+          <span className="ml-auto hidden text-[10px] font-semibold text-[var(--color-text-tertiary)] sm:inline">
+            直前の実観測から当日への変化を検索
+          </span>
+        </div>
+
+        <StageTransitionScanner initialParams={flattenSearchParams(sp)} />
+      </div>
+    )
+  }
+
   const asOf = await getDashboardAsOfState(rawDate ?? null)
   const latestDate = asOf.latestDate
   const targetDate = asOf.resolvedDate
@@ -216,6 +272,7 @@ export default async function HexStagePage({
     mode,
     direction,
   })
+  const scannerHref = buildViewHref('scanner', { universe: universeFilter })
 
   return (
     <div className="sb-page">
@@ -231,6 +288,7 @@ export default async function HexStagePage({
       <div className="sb-section-bd flex items-center gap-1 py-2">
         <Link href={marketHref} className={`sb-tab ${view === 'market' ? 'sb-on' : ''}`}>市場循環</Link>
         <Link href={selectorHref} className={`sb-tab ${view === 'selector' ? 'sb-on' : ''}`}>業種から選ぶ</Link>
+        <Link href={scannerHref} className="sb-tab">遷移スキャナー</Link>
         <span className="ml-auto hidden text-[10px] font-semibold text-[var(--color-text-tertiary)] sm:inline">
           {view === 'market' ? '市場全体の分布・遷移を確認' : '業種比較から銘柄候補を選別'}
         </span>

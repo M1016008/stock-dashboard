@@ -97,6 +97,8 @@
     "test:monthly-ma-api": "tsx scripts/test-monthly-ma-api.ts",
     "audit:monthly-ma-monitor": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/audit-monthly-ma-monitor.ts",
     "test:stage-classification": "tsx scripts/test-stage-classification.ts",
+    "test:stage-transition-scanner": "tsx scripts/test-stage-transition-scanner.ts",
+    "test:stage-transition-scanner-ui": "tsx scripts/test-stage-transition-scanner-ui.ts",
     "test:stage-history-range": "tsx scripts/test-stage-history-range.ts",
     "test:storage-paths": "tsx scripts/test-storage-paths.ts",
     "test:jquants-adjustments": "tsx scripts/test-jquants-adjustments.ts",
