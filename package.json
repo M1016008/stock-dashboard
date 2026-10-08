@@ -146,6 +146,8 @@
     "test:header-navigation": "tsx scripts/test-header-navigation.ts",
     "test:period-explorer": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/test-period-explorer.ts",
     "test:stock-preview": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/test-stock-preview.ts",
+    "test:dashboard-trade-signal-filters": "tsx scripts/test-dashboard-trade-signal-filters.ts",
+    "test:dashboard-historical-as-of": "tsx scripts/test-dashboard-historical-as-of.ts",
     "test:earnings-time": "tsx scripts/test-earnings-time.ts",
     "test:finnhub-earnings": "tsx scripts/test-finnhub-earnings.ts",
     "test:edinet-xbrl": "tsx scripts/test-edinet-xbrl.ts",

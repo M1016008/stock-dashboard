@@ -10,8 +10,10 @@ import { TransitionDetailTableMock } from '@/components/hex/TransitionDetailTabl
 import HexStageMapView from '@/components/hex/HexStageMapView'
 import { HexDateSelector } from '@/components/hex/HexDateSelector'
 import { HexSectorSelector } from '@/components/hex/HexSectorSelector'
+import { DashboardHistoricalUnavailable } from '@/components/dashboard/DashboardHistoricalUnavailable'
 import { TabRow } from '@/components/ui/TabRow'
-import { getHexDateOptions, getLatestHexDate, resolveHexAsOfDate, type Timescale, type Period } from '@/lib/queries/hex'
+import { getHexDateOptions, type Timescale, type Period } from '@/lib/queries/hex'
+import { getDashboardAsOfState } from '@/lib/queries/dashboard-as-of'
 import { getHexSelectorCandidates } from '@/lib/queries/hex-selector'
 import {
   getSectorStructureBoard,
@@ -128,11 +130,26 @@ export default async function HexStagePage({
   const direction = parseHexSelectorDirection(firstParam(sp.direction))
   const requestedGroup = firstParam(sp.group)
   const requestedParent = firstParam(sp.parent)
-  const [latestDate, targetDate] = await Promise.all([
-    getLatestHexDate(),
-    resolveHexAsOfDate(rawDate ?? null),
-  ])
+  const asOf = await getDashboardAsOfState(rawDate ?? null)
+  const latestDate = asOf.latestDate
+  const targetDate = asOf.resolvedDate
   const selectedDate = targetDate && targetDate !== latestDate ? targetDate : null
+
+  if (asOf.mode === 'unavailable') {
+    return (
+      <div className="sb-page">
+        <div className="sb-page-title">
+          <h1>HEX ステージ分析</h1>
+          <p>指定した分析基準日のデータは表示できません</p>
+        </div>
+        <DashboardHistoricalUnavailable state={asOf} />
+        <div className="mt-3 flex justify-end">
+          <Link href="/hex-stage" className="sb-tab">最新日へ戻る</Link>
+        </div>
+      </div>
+    )
+  }
+
   const initialDates = await getHexDateOptions(90, targetDate)
   let resolvedRequestedParent = requestedParent
   if (view === 'selector' && (taxonomy === 'subIndustry' || taxonomy === '33') && !resolvedRequestedParent) {
@@ -219,7 +236,13 @@ export default async function HexStagePage({
         </span>
       </div>
 
-      <HexDateSelector dates={initialDates} selectedDate={selectedDate} latestDate={latestDate} targetDate={targetDate} />
+      <HexDateSelector
+        dates={initialDates}
+        requestedDate={rawDate}
+        selectedDate={selectedDate}
+        latestDate={latestDate}
+        targetDate={targetDate}
+      />
 
       {view === 'selector' && selectorBoard ? (
         <HexSectorSelector

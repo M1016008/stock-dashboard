@@ -1,13 +1,21 @@
 import Link from 'next/link'
+import { cache } from 'react'
+import { ArrowUpRight } from 'lucide-react'
 import { execAll, execGet } from '@/lib/db/client'
 import { NIKKEI225_TICKERS, type UniverseFilterValue, universeSqlCondition } from '@/lib/market-universe'
 import {
-  marketMomentumHrefForSegment,
   marketMomentumRankingHref,
   type MarketMomentumGroupId,
 } from '@/lib/market-momentum-groups'
 import { StageTag } from '@/components/ui/StageTag'
 import { StockPreviewTrigger } from '@/components/stock-preview/StockPreviewTrigger'
+import {
+  GroupLabel,
+  MeterBar,
+  TONE_TEXT,
+  type DashboardTone,
+  signedTextClass,
+} from '@/components/dashboard/DashboardPrimitives'
 
 type MomentumSummaryRow = {
   date: string | null
@@ -20,7 +28,7 @@ type MomentumSummaryRow = {
   highPes: number
 }
 
-type MomentumGroupRow = {
+export type MomentumGroupRow = {
   label: string
   code: string | null
   count: number
@@ -32,7 +40,7 @@ type MomentumGroupRow = {
   highPes: number
 }
 
-type MomentumRankingRow = {
+export type MomentumRankingRow = {
   ticker: string
   name: string | null
   marketSegment: string | null
@@ -50,12 +58,12 @@ type MomentumRankingRow = {
   monthlyBStage: number | null
 }
 
-function ratio(part: number | null | undefined, total: number | null | undefined): number | null {
+export function ratio(part: number | null | undefined, total: number | null | undefined): number | null {
   if (part == null || total == null || !Number.isFinite(part) || !Number.isFinite(total) || total <= 0) return null
   return (part / total) * 100
 }
 
-function fmtRatio(value: number | null | undefined): string {
+export function fmtRatio(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(value)) return '---'
   return `${value.toFixed(1)}%`
 }
@@ -65,35 +73,23 @@ function fmtScore(value: number | null | undefined): string {
   return value.toFixed(2)
 }
 
-function fmtPrice(value: number | null | undefined): string {
-  if (value == null || !Number.isFinite(value)) return '---'
-  return value.toLocaleString('ja-JP', { maximumFractionDigits: 1 })
-}
-
-function fmtPct(value: number | null | undefined): string {
+export function fmtPct(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(value)) return '---'
   return `${value > 0 ? '+' : ''}${value.toFixed(2)}%`
 }
 
-function fmtCount(value: number | null | undefined): string {
+export function fmtCount(value: number | null | undefined): string {
   return Number(value ?? 0).toLocaleString('ja-JP')
 }
 
-function breadthTone(value: number | null | undefined, goodAbove = 50): 'up' | 'down' | 'neutral' {
+export function breadthTone(value: number | null | undefined, goodAbove = 50): 'up' | 'down' | 'neutral' {
   if (value == null || !Number.isFinite(value)) return 'neutral'
   if (value >= goodAbove) return 'up'
   if (value <= 100 - goodAbove) return 'down'
   return 'neutral'
 }
 
-function tileToneClass(tone: 'up' | 'down' | 'neutral' | 'warning'): string {
-  if (tone === 'up') return 'border-[rgba(185,28,28,0.22)] bg-[var(--color-price-up-bg)] text-[var(--color-price-up)]'
-  if (tone === 'down') return 'border-[rgba(30,64,175,0.22)] bg-[var(--color-price-down-bg)] text-[var(--color-price-down)]'
-  if (tone === 'warning') return 'border-[rgba(217,119,6,0.24)] bg-[#fff7ed] text-[#b45309]'
-  return 'border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] text-[var(--color-text-primary)]'
-}
-
-function marketReading(row: MomentumSummaryRow | undefined): { label: string; tone: 'up' | 'down' | 'neutral' | 'warning'; note: string } {
+function marketReading(row: MomentumSummaryRow | undefined): { label: string; tone: DashboardTone; note: string } {
   const total = Number(row?.count ?? 0)
   const pmsPlus = ratio(row?.positivePms ?? 0, total)
   const forcePlus = ratio(row?.positivePfs ?? 0, total)
@@ -112,7 +108,7 @@ function marketReading(row: MomentumSummaryRow | undefined): { label: string; to
   return { label: '中立', tone: 'neutral', note: 'PMS分布は市場平均付近です。業種ETFや個別ステージと併せて確認します。' }
 }
 
-function groupReading(row: MomentumGroupRow): { label: string; tone: 'up' | 'down' | 'neutral' | 'warning' } {
+export function groupReading(row: MomentumGroupRow): { label: string; tone: DashboardTone } {
   const pmsPlus = ratio(row.positivePms, row.count) ?? 0
   const forcePlus = ratio(row.positivePfs, row.count) ?? 0
   const strong = ratio(row.strongPms, row.count) ?? 0
@@ -132,28 +128,10 @@ function segmentOrder(label: string): number {
   return 9
 }
 
-function heatmapStyle(value: number | null | undefined): React.CSSProperties {
-  if (value == null || !Number.isFinite(value)) {
-    return {
-      background: 'var(--color-surface-subtle)',
-      borderColor: 'var(--color-border-soft)',
-      color: 'var(--color-text-secondary)',
-    }
-  }
-  const distance = Math.min(1, Math.abs(value - 50) / 35)
-  const alpha = 0.06 + distance * 0.22
-  if (value >= 50) {
-    return {
-      background: `rgba(220,38,38,${alpha})`,
-      borderColor: 'rgba(220,38,38,0.24)',
-      color: 'var(--color-price-up)',
-    }
-  }
-  return {
-    background: `rgba(37,99,235,${alpha})`,
-    borderColor: 'rgba(37,99,235,0.24)',
-    color: 'var(--color-price-down)',
-  }
+/** 既存ヒートマップの色規則 (PMSプラス比率 50% を境に赤/青) をバーの色に流用する */
+function heatTone(value: number | null | undefined): DashboardTone {
+  if (value == null || !Number.isFinite(value)) return 'neutral'
+  return value >= 50 ? 'up' : 'down'
 }
 
 function buildSectorsHref(params: Record<string, string | number | null | undefined>) {
@@ -165,17 +143,27 @@ function buildSectorsHref(params: Record<string, string | number | null | undefi
   return `/sectors${query ? `?${query}` : ''}#sector-stocks`
 }
 
+function sectorsHeatmapHref(taxonomy: '33' | 'major', universe: UniverseFilterValue): string {
+  const sp = new URLSearchParams({ heatmapTaxonomy: taxonomy })
+  if (universe) sp.set('universe', universe)
+  return `/sectors?${sp.toString()}#sector-heatmaps`
+}
+
+export function stockDetailHref(ticker: string, date?: string | null): string {
+  const base = `/stock/${encodeURIComponent(ticker)}`
+  return date ? `${base}?date=${encodeURIComponent(date)}` : base
+}
+
 function groupFromUniverse(universe: UniverseFilterValue): MarketMomentumGroupId {
   return universe === 'nikkei225' ? 'nikkei225' : 'all'
 }
 
-export async function PhysicalMomentumMarket({
-  date = null,
-  universe = null,
-}: {
-  date?: string | null
-  universe?: UniverseFilterValue
-}) {
+/**
+ * 市場モメンタムの集計を 1 リクエスト内で 1 回だけ実行する。
+ * Hero (市場の状態) と市場マップの両方が同じ結果を使うため React cache で共有する。
+ * SQL・並び順・判定は従来の PhysicalMomentumMarket から変更していない。
+ */
+export const loadMomentumMarket = cache(async (date: string | null, universe: UniverseFilterValue) => {
   const universeSql = universeSqlCondition('pm.symbol', universe)
   const dateParams = date ? [date] : []
   const nikkei225Placeholders = NIKKEI225_TICKERS.map(() => '?').join(', ')
@@ -328,12 +316,6 @@ export async function PhysicalMomentumMarket({
   ])
 
   const count = Number(row?.count ?? 0)
-  const pmsPlusRatio = ratio(row?.positivePms ?? 0, count)
-  const strongRatio = ratio(row?.strongPms ?? 0, count)
-  const weakRatio = ratio(row?.weakPms ?? 0, count)
-  const forcePlusRatio = ratio(row?.positivePfs ?? 0, count)
-  const energyHighRatio = ratio(row?.highPes ?? 0, count)
-  const reading = marketReading(row)
   const segmentGroups =
     nikkei225Row && Number(nikkei225Row.count ?? 0) > 0 ? [nikkei225Row, ...segmentRows] : segmentRows
   const sortedSegments = [...segmentGroups].sort((a, b) => {
@@ -345,124 +327,122 @@ export async function PhysicalMomentumMarket({
     const br = ratio(b.positivePms, b.count) ?? -1
     return br - ar
   })
-  const rankingGroup = groupFromUniverse(universe)
+
+  return {
+    date: row?.date ?? null,
+    count,
+    positivePms: Number(row?.positivePms ?? 0),
+    strongPms: Number(row?.strongPms ?? 0),
+    weakPms: Number(row?.weakPms ?? 0),
+    positivePfs: Number(row?.positivePfs ?? 0),
+    highPes: Number(row?.highPes ?? 0),
+    pmsPlusRatio: ratio(row?.positivePms ?? 0, count),
+    strongRatio: ratio(row?.strongPms ?? 0, count),
+    weakRatio: ratio(row?.weakPms ?? 0, count),
+    forcePlusRatio: ratio(row?.positivePfs ?? 0, count),
+    energyHighRatio: ratio(row?.highPes ?? 0, count),
+    reading: marketReading(row),
+    sortedSegments,
+    sortedSectors,
+    initialRows,
+    continuationRows,
+    stallRows,
+    dropRows,
+  }
+})
+
+export type MomentumMarketData = Awaited<ReturnType<typeof loadMomentumMarket>>
+
+/**
+ * 市場マップ: 4 つの勢いレーン (初動/継続/失速/下落警戒) と 17業種の PMS 分布。
+ * 全体判定・ブレッドス・市場区分は Dashboard 冒頭の「市場の状態」に移した。
+ */
+export async function PhysicalMomentumMarket({
+  date = null,
+  universe = null,
+}: {
+  date?: string | null
+  universe?: UniverseFilterValue
+}) {
+  const data = await loadMomentumMarket(date ?? null, universe ?? null)
+  const rankingGroup = groupFromUniverse(universe ?? null)
+  const half = Math.ceil(data.sortedSectors.length / 2)
+  const sectorColumns = [data.sortedSectors.slice(0, half), data.sortedSectors.slice(half)]
 
   return (
-    <section className="rounded-[8px] border border-[var(--color-border-default)] bg-white p-4 shadow-[var(--shadow-card)]">
-      <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
-        <div>
-          <h2 className="text-[15px] font-bold text-[var(--color-brand-900)]">市場別モメンタム分布</h2>
-          <p className="mt-1 max-w-[760px] text-[11px] font-semibold leading-relaxed text-[var(--color-text-tertiary)]">
-            日経225・プライム・スタンダード・グロース、業種ごとに個別銘柄のPMS分布を確認します。ETFチャートを見る前に、どの市場・業種で初動が広がっているかを掴むための地図です。
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center justify-end gap-2">
-          <Link href="/sector-etfs" className="rounded-full border border-[var(--color-border-soft)] px-2.5 py-1 text-[11px] font-bold text-[var(--color-brand-800)] hover:bg-[var(--color-surface-subtle)]">
-            業界ETF分析
-          </Link>
-          <Link href="/commodities" className="rounded-full border border-[var(--color-border-soft)] px-2.5 py-1 text-[11px] font-bold text-[var(--color-brand-800)] hover:bg-[var(--color-surface-subtle)]">
-            コモディティ
-          </Link>
-          <Link href="/sectors" className="rounded-full border border-[var(--color-border-soft)] px-2.5 py-1 text-[11px] font-bold text-[var(--color-brand-800)] hover:bg-[var(--color-surface-subtle)]">
-            業種分析
-          </Link>
-          <span className="font-mono text-[11px] font-bold text-[var(--color-text-tertiary)]">
-            {row?.date ?? '---'} / {count.toLocaleString()}銘柄
-          </span>
-        </div>
+    // 列は minmax(0,1fr) で固定する。暗黙の auto 列だと子の min-content (nowrap の注記など) で
+    // 列幅が画面幅を超え、390px で横スクロールが出るため
+    <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-7">
+      <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-6 gap-y-1 text-[11px] font-semibold text-[var(--color-text-tertiary)]">
+        <span className="tabular-nums">
+          PMS基準日 <span className="font-mono font-bold text-[var(--color-text-primary)]">{data.date ?? '---'}</span>
+          <span className="mx-2 text-[var(--color-border-default)]">|</span>
+          {data.count.toLocaleString('ja-JP')}銘柄
+        </span>
+        <nav aria-label="関連する分析ページ" className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 sm:gap-x-4">
+          {[
+            { href: '/sectors', label: '業種分析' },
+            { href: sectorsHeatmapHref('33', universe ?? null), label: '33業種' },
+            { href: sectorsHeatmapHref('major', universe ?? null), label: '四季報60分類' },
+            { href: '/sector-etfs', label: '業界ETF' },
+            { href: '/sector-etfs#themes', label: 'テーマETF' },
+            { href: '/commodities', label: 'コモディティ' },
+          ].map((item) => (
+            <Link
+              key={item.href}
+              href={item.href}
+              prefetch={false}
+              className="inline-flex items-center gap-0.5 font-bold text-[var(--color-brand-700)] hover:text-[var(--color-brand-900)] hover:underline"
+            >
+              {item.label}
+              <ArrowUpRight size={11} aria-hidden="true" />
+            </Link>
+          ))}
+        </nav>
       </div>
 
-      <div className={`mb-3 rounded-[8px] border px-3 py-2 ${tileToneClass(reading.tone)}`}>
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="text-[12px] font-bold">全体判定: {reading.label}</div>
-          <div className="font-mono text-[10px] font-bold opacity-80">{count.toLocaleString()}銘柄の分布で判定</div>
-        </div>
-        <p className="mt-1 text-[11px] font-semibold leading-relaxed opacity-85">{reading.note}</p>
-      </div>
-
-      <div className="grid grid-cols-2 gap-2 lg:grid-cols-5">
-        <MomentumRatioTile
-          label="プラス銘柄比率"
-          value={pmsPlusRatio}
-          count={row?.positivePms ?? 0}
-          total={count}
-          tone={breadthTone(pmsPlusRatio, 52)}
-          help="PMSが0を上回る銘柄の割合"
-        />
-        <MomentumRatioTile
-          label="強い勢い"
-          value={strongRatio}
-          count={row?.strongPms ?? 0}
-          total={count}
-          tone="up"
-          help="PMSが+1以上の上位側銘柄"
-        />
-        <MomentumRatioTile
-          label="弱い勢い"
-          value={weakRatio}
-          count={row?.weakPms ?? 0}
-          total={count}
-          tone="down"
-          help="PMSが-1以下の下位側銘柄"
-        />
-        <MomentumRatioTile
-          label="初動プラス"
-          value={forcePlusRatio}
-          count={row?.positivePfs ?? 0}
-          total={count}
-          tone={breadthTone(forcePlusRatio, 55)}
-          help="PFSが0を上回り、押し出す力がプラスの銘柄"
-        />
-        <MomentumRatioTile
-          label="熱量上位"
-          value={energyHighRatio}
-          count={row?.highPes ?? 0}
-          total={count}
-          tone="warning"
-          help="PESが+1以上で値動きの熱量が高い銘柄"
-        />
-      </div>
-
-      <div className="mt-4 border-t border-[var(--color-border-soft)] pt-4">
-        <SectionLabel
-          title="初動 / 継続 / 失速 / 下落警戒ランキング"
-          description="初動はPFS、継続はPMS、失速はPMSが残る中でのPFS悪化、下落警戒はPMS/PFSの弱さで分けます。"
-        />
-        <div className="grid grid-cols-1 gap-3 xl:grid-cols-4">
-          <MomentumRankingPanel
+      <div className="min-w-0">
+        <GroupLabel
+          meta="初動=PFS順 / 継続=PMS順 / 失速=PMSプラスかつPFSマイナス / 下落警戒=PMS逆順"
+          className="mb-2"
+        >
+          勢いの4レーン
+        </GroupLabel>
+        <div className="grid grid-cols-[minmax(0,1fr)] gap-y-5 md:grid-cols-2 md:gap-x-6 xl:grid-cols-4">
+          <MomentumLane
             title="初動"
-            badge="PFS順"
-            rows={initialRows}
+            basis="PFS順"
+            rows={data.initialRows}
             scoreKey="pfs"
             scoreLabel="PFS"
             href={marketMomentumRankingHref(rankingGroup, 'initial', date)}
             tone="warning"
             analysisDate={date}
           />
-          <MomentumRankingPanel
+          <MomentumLane
             title="継続"
-            badge="PMS順"
-            rows={continuationRows}
+            basis="PMS順"
+            rows={data.continuationRows}
             scoreKey="pms"
             scoreLabel="PMS"
             href={marketMomentumRankingHref(rankingGroup, 'continuation', date)}
             tone="up"
             analysisDate={date}
           />
-          <MomentumRankingPanel
+          <MomentumLane
             title="失速"
-            badge="PFS悪化"
-            rows={stallRows}
+            basis="PFS悪化"
+            rows={data.stallRows}
             scoreKey="pfs"
             scoreLabel="PFS"
             href={marketMomentumRankingHref(rankingGroup, 'stall', date)}
             tone="down"
             analysisDate={date}
           />
-          <MomentumRankingPanel
+          <MomentumLane
             title="下落警戒"
-            badge="PMS逆順"
-            rows={dropRows}
+            basis="PMS逆順"
+            rows={data.dropRows}
             scoreKey="pms"
             scoreLabel="PMS"
             href={marketMomentumRankingHref(rankingGroup, 'drop', date)}
@@ -472,76 +452,50 @@ export async function PhysicalMomentumMarket({
         </div>
       </div>
 
-      <div className="mt-4 border-t border-[var(--color-border-soft)] pt-4">
-        <SectionLabel
-          title="市場区分別"
-          description="日経225、プライム、スタンダード、グロースで勢いの広がりを分けて確認します。"
-        />
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-5">
-          {sortedSegments.map((segment) => (
-            <MarketSegmentTile key={segment.label} row={segment} date={date} />
-          ))}
-        </div>
+      <div className="min-w-0">
+        <GroupLabel
+          meta="PMSプラス比率の高い順。縦線は50%。行を押すと業種の構成銘柄へ"
+          className="mb-2"
+        >
+          17業種のPMS分布
+        </GroupLabel>
+        {data.sortedSectors.length === 0 ? (
+          <p className="border-y border-[var(--color-border-soft)] py-5 text-center text-[12px] font-semibold text-[var(--color-text-tertiary)]">
+            業種別に集計できる銘柄がありません
+          </p>
+        ) : (
+          <div className="grid grid-cols-[minmax(0,1fr)] gap-x-8 lg:grid-cols-2">
+            {sectorColumns.map((rows, columnIndex) => (
+              <div key={columnIndex} className="min-w-0">
+                <div className={`${columnIndex === 1 ? 'hidden lg:grid' : 'grid'} grid-cols-[minmax(0,8rem)_minmax(0,1fr)_3.5rem_3.75rem_4.75rem] items-end gap-x-3 border-y border-[var(--color-border-default)] py-1.5 text-[10px] font-bold text-[var(--color-text-tertiary)] max-sm:grid-cols-[minmax(0,6.5rem)_minmax(0,1fr)_3.5rem_3.75rem]`}>
+                  <span>業種 <span className="font-semibold">(銘柄数)</span></span>
+                  <span>PMSプラス</span>
+                  <span className="text-right">比率</span>
+                  <span className="text-right">初動+</span>
+                  <span className="text-right max-sm:hidden">強 / 弱</span>
+                </div>
+                <ol className="divide-y divide-[var(--color-border-soft)] border-b border-[var(--color-border-soft)]">
+                  {rows.map((sector, index) => (
+                    <SectorRow
+                      key={`${sector.code ?? 'x'}-${sector.label}`}
+                      row={sector}
+                      rank={columnIndex * half + index + 1}
+                      universe={universe ?? null}
+                    />
+                  ))}
+                </ol>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
-
-      <div className="mt-4 border-t border-[var(--color-border-soft)] pt-4">
-        <SectionLabel
-          title="17業種ヒートマップ"
-          description="色はPMSプラス比率。赤系は勢いが広がり、青系は弱含みです。各業種をクリックすると構成銘柄一覧へ移動します。"
-        />
-        <div className="grid grid-cols-2 gap-2 md:grid-cols-3 lg:grid-cols-6">
-          {sortedSectors.map((sector) => (
-            <SectorMomentumTile key={`${sector.code ?? 'x'}-${sector.label}`} row={sector} universe={universe} />
-          ))}
-        </div>
-      </div>
-
-      <div className="mt-4 border-t border-[var(--color-border-soft)] pt-4">
-        <SectionLabel
-          title="ETF・テーマで確認"
-          description="分布で強い場所を見つけたら、ETFやテーマチャートで実際の価格トレンドと一致しているか確認します。"
-        />
-        <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-4">
-          <ThemeBridgeCard
-            href="/sector-etfs"
-            title="TOPIX-17 業界ETF"
-            badge="業界ETF"
-            body="業種ETFのチャート、6ステージ、構成銘柄の寄与を確認します。"
-          />
-          <ThemeBridgeCard
-            href="/sector-etfs#themes"
-            title="国内テーマETF"
-            badge="テーマ"
-            body="半導体、AI、バイオ、防衛などのテーマETFで値動きの裏取りをします。"
-          />
-          <ThemeBridgeCard
-            href="/commodities"
-            title="コモディティETF"
-            badge="商品"
-            body="金、原油、天然ガス、農産物など、商品連動ETF/ETNの地合いを確認します。"
-          />
-          <ThemeBridgeCard
-            href="/sectors"
-            title="業種銘柄一覧"
-            badge="銘柄分布"
-            body="業種ごとの構成銘柄、貸借区分、出来高、ステージ、PMSを掘り下げます。"
-          />
-        </div>
-      </div>
-    </section>
+    </div>
   )
 }
 
-function scoreTextColor(value: number | null | undefined): string {
-  if (value == null || !Number.isFinite(value)) return 'text-[var(--color-text-tertiary)]'
-  if (value > 0) return 'text-[var(--color-price-up)]'
-  if (value < 0) return 'text-[var(--color-price-down)]'
-  return 'text-[var(--color-text-secondary)]'
-}
-
-function MomentumRankingPanel({
+function MomentumLane({
   title,
-  badge,
+  basis,
   rows,
   scoreKey,
   scoreLabel,
@@ -550,59 +504,83 @@ function MomentumRankingPanel({
   analysisDate,
 }: {
   title: string
-  badge: string
+  basis: string
   rows: MomentumRankingRow[]
   scoreKey: 'pms' | 'pfs' | 'pes'
   scoreLabel: string
   href: string
-  tone: 'up' | 'down' | 'warning'
+  tone: DashboardTone
   analysisDate?: string | null
 }) {
   return (
-    <div className="overflow-hidden rounded-[8px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)]">
-      <div className={`flex items-center justify-between gap-2 border-b px-3 py-2 ${tileToneClass(tone)}`}>
-        <div>
-          <div className="text-[12px] font-bold">{title}</div>
-          <div className="mt-0.5 text-[10px] font-semibold opacity-75">{badge}</div>
+    <section className="min-w-0">
+      <header className="flex min-w-0 items-baseline justify-between gap-2 border-t-2 border-[var(--color-brand-900)] py-2">
+        <div className="flex min-w-0 items-baseline gap-2">
+          <h4 className={`text-[13px] font-bold ${TONE_TEXT[tone]}`}>{title}</h4>
+          <span className="text-[10px] font-semibold text-[var(--color-text-tertiary)]">{basis}</span>
         </div>
-        <Link href={href} prefetch={false} className="rounded-full border border-current/25 bg-white/60 px-2 py-1 text-[10px] font-bold hover:bg-white">
+        <Link
+          href={href}
+          prefetch={false}
+          className="inline-flex items-center gap-0.5 text-[10px] font-bold text-[var(--color-brand-700)] hover:underline"
+          aria-label={`${title}ランキングを全件表示`}
+        >
           全件
+          <ArrowUpRight size={11} aria-hidden="true" />
         </Link>
-      </div>
-      <div className="divide-y divide-[var(--color-border-soft)] bg-white">
+      </header>
+      <ol>
         {rows.map((row, index) => (
-          <div key={`${title}-${row.ticker}`} className="grid grid-cols-[28px_minmax(0,1fr)_auto] items-center gap-2 px-3 py-2">
-            <div className="font-mono text-[12px] font-bold text-[var(--color-text-tertiary)]">{index + 1}</div>
+          <li
+            key={`${title}-${row.ticker}`}
+            className={`grid grid-cols-[16px_minmax(0,1fr)_auto] items-start gap-x-2 border-t border-[var(--color-border-soft)] py-1.5 ${index >= 5 ? 'max-md:hidden' : ''}`}
+          >
+            <span className="pt-px text-right font-mono text-[10px] font-bold tabular-nums text-[var(--color-text-tertiary)]">{index + 1}</span>
             <div className="min-w-0">
-              <div className="flex min-w-0 items-center gap-1">
-                <Link href={`/stock/${encodeURIComponent(row.ticker)}`} prefetch={false} className="font-mono text-[12px] font-bold text-[var(--color-brand-800)] hover:underline">
+              <div className="flex min-w-0 items-center gap-1.5">
+                <Link
+                  href={stockDetailHref(row.ticker, analysisDate)}
+                  prefetch={false}
+                  className="shrink-0 font-mono text-[12px] font-bold text-[var(--color-brand-800)] hover:underline"
+                >
                   {row.ticker}
                 </Link>
-                <span className="truncate text-[11px] font-bold text-[var(--color-text-primary)]">{row.name ?? row.ticker}</span>
+                <span className="min-w-0 truncate text-[11px] font-semibold text-[var(--color-text-primary)]">{row.name ?? row.ticker}</span>
                 <StockPreviewTrigger ticker={row.ticker} analysisDate={analysisDate} context="home" />
               </div>
-              <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px] font-semibold text-[var(--color-text-tertiary)]">
-                <span>{row.marketSegment ?? '市場未分類'}</span>
-                <span>{row.sector17Name ?? '業種未分類'}</span>
+              <div className="mt-1 flex min-w-0 items-center gap-2">
+                <StageSix row={row} />
+                <span className="min-w-0 truncate text-[10px] font-semibold text-[var(--color-text-tertiary)]">
+                  {row.sector17Name ?? '業種未分類'}
+                </span>
               </div>
-              <StageMiniStrip row={row} />
             </div>
             <div className="text-right">
-              <div className={`font-mono text-[14px] font-bold ${scoreTextColor(row[scoreKey])}`}>{fmtScore(row[scoreKey])}</div>
-              <div className="mt-0.5 text-[10px] font-bold text-[var(--color-text-tertiary)]">{scoreLabel}</div>
-              <div className={`mt-0.5 font-mono text-[10px] font-bold ${scoreTextColor(row.changePct)}`}>{fmtPct(row.changePct)}</div>
+              <div className={`font-mono text-[13px] font-bold tabular-nums ${signedTextClass(row[scoreKey])}`}>
+                <span className="mr-1 text-[9px] font-semibold text-[var(--color-text-tertiary)]">{scoreLabel}</span>
+                {fmtScore(row[scoreKey])}
+              </div>
+              <div className={`font-mono text-[10px] font-bold tabular-nums ${signedTextClass(row.changePct)}`}>{fmtPct(row.changePct)}</div>
             </div>
-          </div>
+          </li>
         ))}
-        {rows.length === 0 && (
-          <div className="px-3 py-4 text-center text-[11px] font-semibold text-[var(--color-text-tertiary)]">ランキング対象がありません</div>
+        {rows.length > 5 && (
+          <li className="border-t border-[var(--color-border-soft)] py-1.5 text-[10px] font-semibold text-[var(--color-text-tertiary)] md:hidden">
+            6位以降は「全件」で確認できます
+          </li>
         )}
-      </div>
-    </div>
+        {rows.length === 0 && (
+          <li className="border-t border-[var(--color-border-soft)] py-4 text-center text-[11px] font-semibold text-[var(--color-text-tertiary)]">
+            ランキング対象がありません
+          </li>
+        )}
+      </ol>
+    </section>
   )
 }
 
-function StageMiniStrip({ row }: { row: MomentumRankingRow }) {
+/** 6ステージ (日A 日B 週A 週B 月A 月B) を並びだけで示す。順序はヘッダー凡例と共通 */
+function StageSix({ row }: { row: MomentumRankingRow }) {
   const stages = [
     { label: '日A', value: row.dailyAStage },
     { label: '日B', value: row.dailyBStage },
@@ -612,72 +590,20 @@ function StageMiniStrip({ row }: { row: MomentumRankingRow }) {
     { label: '月B', value: row.monthlyBStage },
   ]
   return (
-    <div className="mt-1.5 flex w-full max-w-full items-center gap-1 overflow-x-auto whitespace-nowrap pb-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-      {stages.map((item) => (
-        <span
-          key={item.label}
-          className="inline-flex shrink-0"
-          title={`${item.label}: ${item.value ?? '未算出'}`}
-          aria-label={`${item.label}: ${item.value ?? '未算出'}`}
-        >
+    <span className="inline-flex shrink-0 items-center gap-px" aria-label={stages.map((s) => `${s.label} ${s.value ?? '未算出'}`).join(' / ')}>
+      {stages.map((item, index) => (
+        <span key={item.label} className={`inline-flex ${index === 2 || index === 4 ? 'ml-1' : ''}`} title={`${item.label}: ${item.value ?? '未算出'}`}>
           <StageTag stage={item.value} size="xs" />
         </span>
       ))}
-    </div>
+    </span>
   )
 }
 
-function SectionLabel({ title, description }: { title: string; description: string }) {
-  return (
-    <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
-      <h3 className="text-[13px] font-bold text-[var(--color-brand-900)]">{title}</h3>
-      <p className="max-w-[760px] text-[10px] font-semibold leading-relaxed text-[var(--color-text-tertiary)]">{description}</p>
-    </div>
-  )
-}
-
-function MarketSegmentTile({ row, date }: { row: MomentumGroupRow; date?: string | null }) {
+function SectorRow({ row, rank, universe }: { row: MomentumGroupRow; rank: number; universe: UniverseFilterValue }) {
   const pmsPlus = ratio(row.positivePms, row.count)
   const pfsPlus = ratio(row.positivePfs, row.count)
-  const reading = groupReading(row)
-  const width = pmsPlus == null || !Number.isFinite(pmsPlus) ? 0 : Math.max(0, Math.min(100, pmsPlus))
-  const href = marketMomentumHrefForSegment(row.label, row.code, date)
-  return (
-    <Link
-      href={href}
-      prefetch={false}
-      className={`block rounded-[8px] border px-3 py-2 transition hover:translate-y-[-1px] hover:shadow-sm ${tileToneClass(reading.tone)}`}
-      aria-label={`${row.label}の銘柄別モメンタムを見る`}
-    >
-      <div className="flex items-center justify-between gap-2">
-        <div className="text-[12px] font-bold">{row.label}</div>
-        <div className="rounded-full border border-current/25 px-2 py-0.5 text-[10px] font-bold opacity-80">{reading.label}</div>
-      </div>
-      <div className="mt-2 flex items-end justify-between gap-3">
-        <div>
-          <div className="text-[10px] font-bold opacity-70">PMSプラス</div>
-          <div className="font-mono text-[24px] font-bold leading-none">{fmtRatio(pmsPlus)}</div>
-        </div>
-        <div className="text-right text-[10px] font-bold opacity-75">
-          <div>PMS算出 {fmtCount(row.count)}銘柄</div>
-          <div>初動+ {fmtRatio(pfsPlus)}</div>
-        </div>
-      </div>
-      <div className="mt-2 h-2 overflow-hidden rounded-full bg-white/75">
-        <span className="block h-full rounded-full bg-current opacity-65" style={{ width: `${width}%` }} />
-      </div>
-      <div className="mt-2 grid grid-cols-2 gap-2 text-[10px] font-bold opacity-75">
-        <span>強い {fmtCount(row.strongPms)}</span>
-        <span>弱い {fmtCount(row.weakPms)}</span>
-      </div>
-      <div className="mt-2 text-[9px] font-bold opacity-70">クリックで銘柄一覧</div>
-    </Link>
-  )
-}
-
-function SectorMomentumTile({ row, universe }: { row: MomentumGroupRow; universe: UniverseFilterValue }) {
-  const pmsPlus = ratio(row.positivePms, row.count)
-  const pfsPlus = ratio(row.positivePfs, row.count)
+  const tone = heatTone(pmsPlus)
   const href = buildSectorsHref({
     sectorType: '17',
     sectorName: row.label,
@@ -687,68 +613,26 @@ function SectorMomentumTile({ row, universe }: { row: MomentumGroupRow; universe
     universe: universe ?? null,
   })
   return (
-    <Link
-      href={href}
-      className="rounded-[8px] border px-2.5 py-2 transition hover:translate-y-[-1px] hover:shadow-sm"
-      style={heatmapStyle(pmsPlus)}
-      prefetch={false}
-    >
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0 truncate text-[11px] font-bold text-[var(--color-text-primary)]">{row.label}</div>
-        <div className="shrink-0 font-mono text-[10px] font-bold opacity-70">{fmtCount(row.count)}</div>
-      </div>
-      <div className="mt-1 font-mono text-[18px] font-bold">{fmtRatio(pmsPlus)}</div>
-      <div className="mt-1 flex items-center justify-between gap-2 text-[9px] font-bold opacity-75">
-        <span>初動 {fmtRatio(pfsPlus)}</span>
-        <span>強{fmtCount(row.strongPms)} / 弱{fmtCount(row.weakPms)}</span>
-      </div>
-    </Link>
-  )
-}
-
-function ThemeBridgeCard({ href, title, badge, body }: { href: string; title: string; badge: string; body: string }) {
-  return (
-    <Link
-      href={href}
-      className="rounded-[8px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-3 py-2 transition hover:border-[var(--color-brand-700)] hover:bg-white"
-      prefetch={false}
-    >
-      <div className="flex items-center justify-between gap-2">
-        <div className="text-[12px] font-bold text-[var(--color-brand-900)]">{title}</div>
-        <span className="rounded-full border border-[var(--color-border-soft)] bg-white px-2 py-0.5 text-[9px] font-bold text-[var(--color-text-tertiary)]">{badge}</span>
-      </div>
-      <p className="mt-2 text-[10px] font-semibold leading-relaxed text-[var(--color-text-secondary)]">{body}</p>
-    </Link>
-  )
-}
-
-function MomentumRatioTile({
-  label,
-  value,
-  count,
-  total,
-  tone,
-  help,
-}: {
-  label: string
-  value: number | null
-  count: number
-  total: number
-  tone: 'up' | 'down' | 'neutral' | 'warning'
-  help: string
-}) {
-  const width = value == null || !Number.isFinite(value) ? 0 : Math.max(0, Math.min(100, value))
-  return (
-    <div className={`rounded-[8px] border px-3 py-2 ${tileToneClass(tone)}`}>
-      <div className="flex items-center justify-between gap-2">
-        <div className="text-[10px] font-bold opacity-75">{label}</div>
-        <div className="font-mono text-[10px] font-bold opacity-70">{count.toLocaleString()} / {total.toLocaleString()}</div>
-      </div>
-      <div className="mt-1 font-mono text-[20px] font-bold">{fmtRatio(value)}</div>
-      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/75">
-        <span className="block h-full rounded-full bg-current opacity-65" style={{ width: `${width}%` }} />
-      </div>
-      <p className="mt-2 text-[10px] font-semibold leading-relaxed opacity-75">{help}</p>
-    </div>
+    <li>
+      <Link
+        href={href}
+        prefetch={false}
+        className="grid grid-cols-[minmax(0,8rem)_minmax(0,1fr)_3.5rem_3.75rem_4.75rem] items-center gap-x-3 py-[7px] transition-colors hover:bg-[var(--color-surface-subtle)] max-sm:grid-cols-[minmax(0,6.5rem)_minmax(0,1fr)_3.5rem_3.75rem]"
+      >
+        <span className="flex min-w-0 items-baseline gap-1.5">
+          <span className="w-4 shrink-0 text-right font-mono text-[9px] font-bold tabular-nums text-[var(--color-text-tertiary)]">{rank}</span>
+          <span className="min-w-0 truncate text-[12px] font-semibold text-[var(--color-text-primary)]">{row.label}</span>
+          <span className="shrink-0 font-mono text-[9px] font-semibold tabular-nums text-[var(--color-text-tertiary)]">{fmtCount(row.count)}</span>
+        </span>
+        <MeterBar value={pmsPlus} tone={tone} midTick />
+        <span className={`text-right font-mono text-[12px] font-bold tabular-nums ${TONE_TEXT[tone]}`}>{fmtRatio(pmsPlus)}</span>
+        <span className="text-right font-mono text-[11px] font-semibold tabular-nums text-[var(--color-text-secondary)]">{fmtRatio(pfsPlus)}</span>
+        <span className="text-right font-mono text-[10px] font-semibold tabular-nums text-[var(--color-text-tertiary)] max-sm:hidden">
+          <span className={TONE_TEXT.up}>{fmtCount(row.strongPms)}</span>
+          <span className="mx-0.5">/</span>
+          <span className={TONE_TEXT.down}>{fmtCount(row.weakPms)}</span>
+        </span>
+      </Link>
+    </li>
   )
 }

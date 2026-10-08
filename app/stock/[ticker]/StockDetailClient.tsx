@@ -1034,7 +1034,7 @@ function MaAngleBar({ deg, color }: { deg: number | null; color: string }) {
   )
 }
 
-/** 既存の6軸の値だけから、最頻ステージと例外軸を表示用に集約する */
+/** 既存の6軸の値だけから、最頻ステージと多数派から異なる軸を表示用に集約する */
 function summarizeStageAxes(stages: NonNullable<StageTimelineSnapshot['stages']>) {
   const known = CHART_STAGE_AXES.flatMap(({ key, label }) => {
     const value = stages[key]
@@ -1087,7 +1087,7 @@ function TechnicalStageMap({
             <>
               {summary.known}軸中{summary.topCount}軸が S{summary.topStage} {STAGE_LABELS[summary.topStage]}
               <span className="font-medium text-[var(--color-text-secondary)]">
-                ・例外 {summary.exceptions.map(({ label, value }) => `${label} S${value} ${STAGE_LABELS[value]}`).join('・')}
+                ・多数派と異なる軸 {summary.exceptions.map(({ label, value }) => `${label} S${value} ${STAGE_LABELS[value]}`).join('・')}
               </span>
             </>
           )}
@@ -1109,7 +1109,7 @@ function TechnicalStageMap({
                   <div
                     key={key}
                     role="listitem"
-                    aria-label={value ? `${label} S${value} ${STAGE_LABELS[value]}${isException ? ' 例外' : ''}` : `${label} 未取得`}
+                    aria-label={value ? `${label} S${value} ${STAGE_LABELS[value]}${isException ? ' 多数派と異なる軸' : ''}` : `${label} 未取得`}
                     data-stage-axis={label}
                     className="flex min-w-0 flex-wrap items-baseline justify-center gap-x-1.5 border px-1.5 py-1 text-center leading-tight"
                     style={{
@@ -1122,7 +1122,7 @@ function TechnicalStageMap({
                   >
                     <span className="text-[11px] font-bold text-[var(--color-text-tertiary)]">{label}</span>
                     <strong className="font-mono text-[14px] leading-tight text-[var(--color-text-primary)]">{value ? `S${value}` : '—'}</strong>
-                    {isException && <b className="text-[11px] font-bold text-[var(--color-text-primary)]">例外</b>}
+                    {isException && <b className="text-[11px] font-bold text-[var(--color-text-primary)]">異なる軸</b>}
                     {value && <span className="break-words text-[11px] font-semibold leading-tight text-[var(--color-text-secondary)]">{STAGE_LABELS[value]}</span>}
                   </div>
                 )
@@ -1542,7 +1542,7 @@ function OverviewBasicInfoPanel({
         </header>
 
         <div
-          className="grid items-start gap-x-4 gap-y-3 px-3 py-3 sm:px-4 sm:py-4 lg:grid-cols-[minmax(0,1.08fr)_minmax(0,.92fr)] lg:gap-x-8"
+          className="grid items-start gap-x-4 gap-y-3 px-3 py-3 sm:px-4 sm:py-4 xl:grid-cols-[minmax(0,1.08fr)_minmax(0,.92fr)] xl:gap-x-8"
           data-overview-basic-grid
         >
           <BasicInfoCard
@@ -1553,7 +1553,7 @@ function OverviewBasicInfoPanel({
             physicalLoading={physicalMomentumLoading}
             embedded
             marketSnapshot={(
-              <div className="min-w-0" data-overview-market-column>
+              <div className="min-w-0 lg:contents" data-overview-market-column>
                 <MarketSnapshotCard
                   ticker={ticker}
                   marginInfo={marginInfo}
@@ -1753,13 +1753,9 @@ function ShikihoOverviewSection({
         </dl>
       </header>
 
-      <div className="mt-2.5 grid gap-3 sm:mt-4 sm:gap-5 lg:grid-cols-2 lg:gap-8">
-        <div>
-          <ShikihoNarrativeSection index="01" title="会社概要" body={profile.companyFeature} />
-        </div>
-        <div>
-          <ShikihoNarrativeSection index="02" title="連結事業" body={profile.consolidatedBusiness} />
-        </div>
+      <div className="mt-2.5 grid sm:mt-4 lg:grid-cols-2">
+        <ShikihoNarrativeSection title="会社概要" body={profile.companyFeature} />
+        <ShikihoNarrativeSection title="連結事業" body={profile.consolidatedBusiness} bordered />
       </div>
 
       <div className="mt-3 grid gap-3 border-t border-[var(--color-border-soft)] pt-2.5 sm:mt-5 sm:gap-5 sm:pt-4 lg:grid-cols-5 lg:gap-8">
@@ -1779,9 +1775,9 @@ function ShikihoOverviewSection({
         </section>
         <section className="lg:col-span-3" aria-labelledby="shikiho-outlook-title">
           <h4 id="shikiho-outlook-title" className="text-[11px] font-bold text-[var(--color-text-secondary)]">業績展望・注目点</h4>
-          <div className="mt-1">
-            <ShikihoArticle index="01" headline={profile.headline1} description={profile.description1} />
-            <ShikihoArticle index="02" headline={profile.headline2} description={profile.description2} bordered />
+          <div className="mt-1.5 border-t border-[var(--color-border-soft)]">
+            <ShikihoArticle headline={profile.headline1} description={profile.description1} />
+            <ShikihoArticle headline={profile.headline2} description={profile.description2} bordered />
           </div>
         </section>
       </div>
@@ -1790,23 +1786,25 @@ function ShikihoOverviewSection({
 }
 
 function ShikihoNarrativeSection({
-  index,
   title,
   body,
   bordered = false,
 }: {
-  index: string
   title: string
   body: string | null
   bordered?: boolean
 }) {
+  // 2本目は狭い画面では上罫線、lg の2列では左罫線で区切る(番号やカードは付けない)
   return (
-    <section className={bordered ? 'border-t border-[var(--color-border-soft)] py-2' : ''}>
-      <div className="flex items-center gap-2">
-        <span className="font-mono text-[9px] font-semibold text-[var(--color-text-tertiary)]">{index}</span>
-        <h4 className="text-[11px] font-bold text-[var(--color-text-secondary)]">{title}</h4>
-      </div>
-      <p className="mt-1.5 whitespace-pre-wrap text-[11px] font-normal leading-[1.65] text-[var(--color-text-primary)] sm:text-[12px] sm:leading-[1.75]">
+    <section
+      className={
+        bordered
+          ? 'mt-3 border-t border-[var(--color-border-soft)] pt-3 sm:mt-4 sm:pt-4 lg:mt-0 lg:border-l lg:border-t-0 lg:pl-8 lg:pt-0'
+          : 'lg:pr-8'
+      }
+    >
+      <h4 className="text-[12px] font-bold text-[var(--color-text-primary)]">{title}</h4>
+      <p className="mt-1 whitespace-pre-wrap text-[11px] font-normal leading-[1.65] text-[var(--color-text-primary)] sm:text-[12px] sm:leading-[1.75]">
         {body ?? '---'}
       </p>
     </section>
@@ -1814,27 +1812,20 @@ function ShikihoNarrativeSection({
 }
 
 function ShikihoArticle({
-  index,
   headline,
   description,
   bordered = false,
 }: {
-  index: string
   headline: string | null
   description: string | null
   bordered?: boolean
 }) {
   return (
-    <article className={`py-1.5 sm:py-2.5 ${bordered ? 'border-t border-[var(--color-border-soft)]' : ''}`}>
-      <div className="flex items-start gap-2">
-        <span className="shrink-0 pt-0.5 font-mono text-[9px] font-semibold text-[var(--color-text-tertiary)]">{index}</span>
-        <div className="min-w-0">
-          <h4 className="text-[12px] font-bold leading-5 text-[var(--color-text-primary)] sm:text-[13px]">{headline ?? '---'}</h4>
-          <p className="mt-1 whitespace-pre-wrap text-[11px] font-normal leading-[1.6] text-[var(--color-text-secondary)] sm:text-[12px] sm:leading-[1.7]">
-            {description ?? '---'}
-          </p>
-        </div>
-      </div>
+    <article className={`min-w-0 py-2 sm:py-2.5 ${bordered ? 'border-t border-[var(--color-border-soft)]' : ''}`}>
+      <h5 className="text-[12px] font-bold leading-5 text-[var(--color-text-primary)] sm:text-[13px]">{headline ?? '---'}</h5>
+      <p className="mt-1 whitespace-pre-wrap text-[11px] font-normal leading-[1.6] text-[var(--color-text-secondary)] sm:text-[12px] sm:leading-[1.7]">
+        {description ?? '---'}
+      </p>
     </article>
   )
 }
@@ -3734,7 +3725,7 @@ function MarketSnapshotCard({
   const latestMarginHistory = marginInfo?.history?.[0]
   const mobileDetailsId = `market-snapshot-details-${ticker.replace(/[^a-zA-Z0-9_-]/g, '-')}`
   return (
-    <div className={embedded ? '' : 'card'} style={embedded ? undefined : marketSnapshotCardStyle}>
+    <div className={embedded ? 'lg:contents' : 'card'} style={embedded ? undefined : marketSnapshotCardStyle}>
       <div className="sm:hidden">
         <div className="flex items-center gap-2">
           <strong className="text-[10px] font-black text-[var(--color-text-primary)]">市場・信用</strong>
@@ -3760,7 +3751,7 @@ function MarketSnapshotCard({
           </div>
         )}
       </div>
-      <div className="mt-2 border-t border-[var(--color-border-soft)] pt-2 sm:mt-0 sm:border-0 sm:pt-0">
+      <div className={`mt-2 border-t border-[var(--color-border-soft)] pt-2 sm:mt-0 sm:border-0 sm:pt-0 ${embedded ? 'min-w-0 lg:order-2' : ''}`}>
         <PerformanceCard ticker={ticker} embedded analysisDate={analysisDate} mobileExpanded={mobileExpanded} />
       </div>
       <button
@@ -3773,7 +3764,7 @@ function MarketSnapshotCard({
         その他の騰落率・信用残
         <ChevronRight size={12} className={`ml-auto transition-transform ${mobileExpanded ? 'rotate-90' : ''}`} aria-hidden="true" />
       </button>
-      <div id={mobileDetailsId} className={`${mobileExpanded ? 'block' : 'hidden'} mt-1 sm:mt-0 sm:block`}>
+      <div id={mobileDetailsId} className={`${mobileExpanded ? 'block' : 'hidden'} mt-1 sm:mt-0 sm:block ${embedded ? 'min-w-0 lg:order-2 lg:col-span-2' : ''}`}>
         <div style={marketSnapshotGridStyle}>
           {analysisDate
             ? <CurrentOnlyDataNotice label="信用残は現在情報のため、過去の短期判断には含めていません。" compact />
@@ -3809,7 +3800,7 @@ function MarginInfoCard({
       style={embedded ? marginEmbeddedStyle : { padding: '12px' }}
       data-margin-info
     >
-      <div className="flex items-start justify-between gap-2">
+      <div className={`flex items-start justify-between gap-2 ${embedded ? 'lg:justify-start lg:gap-3' : ''}`}>
         <div>
           <div className="text-[11px] font-semibold text-[var(--color-text-primary)]">信用取引(週次)</div>
           <div className="mt-0.5 text-[9px] font-medium text-[var(--color-text-tertiary)]">週次信用残</div>
@@ -3821,7 +3812,7 @@ function MarginInfoCard({
           compact
         />
       </div>
-      <div className="mt-1.5 grid grid-cols-1 gap-x-6 gap-y-0 sm:grid-cols-2">
+      <div className={`mt-1.5 grid grid-cols-1 gap-x-6 gap-y-0 sm:grid-cols-2 ${embedded ? 'lg:grid-flow-col lg:grid-cols-3 lg:grid-rows-2 lg:*:justify-start! lg:[&>*>span:first-child]:min-w-[4em]' : ''}`}>
         <InfoLine label="基準週" value={latest?.asOfDate ?? latestHistory?.date ?? '---'} />
         <InfoLine label="信用倍率" value={latest?.creditRatio == null ? '---' : `${latest.creditRatio.toFixed(2)}倍`} />
         <InfoLine label="買残" value={fmtShares(latest?.longMargin ?? latestHistory?.longMargin)} />
@@ -3890,6 +3881,7 @@ function BasicInfoCard({
   physical,
   physicalLoading,
   embedded = false,
+  earnings,
   marketSnapshot,
 }: {
   ticker: string
@@ -3898,6 +3890,9 @@ function BasicInfoCard({
   physical: PhysicalMomentumResponse | null
   physicalLoading: boolean
   embedded?: boolean
+  /** 判断シート「次回決算」行に置く内容 */
+  earnings?: ReactNode
+  /** 二次レイヤー「市場データ・需給」に続けて置く行(変化率・信用取引) */
   marketSnapshot?: ReactNode
 }) {
   const [latestStage, setLatestStage] = useState<SummaryStageEntry | null>(null)
@@ -3988,17 +3983,10 @@ function BasicInfoCard({
           ? 'var(--color-market-blue)'
           : 'var(--text-primary)',
     },
-    {
-      label: '52週高値',
-      value: quote?.fiftyTwoWeekHigh != null ? `¥${quote.fiftyTwoWeekHigh.toLocaleString('ja-JP', { maximumFractionDigits: 1 })}` : '---',
-      detail: highDistance == null ? undefined : `高値比 ${fmtPct(highDistance)}`,
-    },
-    {
-      label: '52週安値',
-      value: quote?.fiftyTwoWeekLow != null ? `¥${quote.fiftyTwoWeekLow.toLocaleString('ja-JP', { maximumFractionDigits: 1 })}` : '---',
-      detail: lowDistance == null ? undefined : `安値比 ${fmtPct(lowDistance)}`,
-    },
   ]
+  // 52週の高値・安値は判断シートの「52週の位置」行で、位置バー・高値比・安値比と一緒に1回だけ表示する
+  const fiftyTwoWeekHighText = quote?.fiftyTwoWeekHigh != null ? `¥${quote.fiftyTwoWeekHigh.toLocaleString('ja-JP', { maximumFractionDigits: 1 })}` : '---'
+  const fiftyTwoWeekLowText = quote?.fiftyTwoWeekLow != null ? `¥${quote.fiftyTwoWeekLow.toLocaleString('ja-JP', { maximumFractionDigits: 1 })}` : '---'
   const combinedLoading = summaryLoading || physicalLoading
   const decision = buildBasicDecisionSummary(latestStage, physical, ml, quote)
   const physics = buildBasicPhysicsSummary(ml, summaryLoading)
@@ -4028,269 +4016,337 @@ function BasicInfoCard({
   const shortTerm = buildShortTermEvidence(latestStage, physical, ml, quote, decision)
   const stateLoading = physicalLoading && !latestPhysical
 
+  const rowId = ticker.replace(/[^a-zA-Z0-9_-]/g, '-')
+  const signalDetailsId = `overview-signal-details-${rowId}`
+  const conditionCount = changeConditions.length + shortTerm.conditions.length
+  const evidenceSummary = shortTerm.sides
+    .map((side) => `${side.key === 'short' ? '短期' : '中期'} ${directionWord(side.direction)}(▲${side.up} ▼${side.down})`)
+    .join(' ・ ')
+
   return (
     <div className={embedded ? 'contents' : 'card'} style={embedded ? undefined : { padding: '12px' }}>
-      <section
-        className={`${embedded ? 'order-first min-w-0 lg:col-span-2' : 'mb-3'} border border-[var(--color-border-default)] bg-white`}
-        style={{ borderLeftWidth: 3, borderLeftColor: field?.color ?? 'var(--color-border-default)' }}
-        aria-labelledby={`overview-current-state-${ticker.replace(/[^a-zA-Z0-9_-]/g, '-')}`}
-        data-overview-current-state
-      >
-        <div className="grid gap-x-6 gap-y-3 px-3 py-3 sm:px-4 lg:grid-cols-[minmax(0,.85fr)_minmax(0,1.5fr)]">
-          <div className="min-w-0">
-            <div className="flex items-baseline justify-between gap-2">
-              <span className="text-[10px] font-black text-[var(--color-text-tertiary)]">現在の状態 <span className="font-bold">MA力場</span></span>
-              <span className="font-mono text-[10px] font-medium text-[var(--color-text-tertiary)]">{latestPhysical?.date ?? ''}</span>
-            </div>
-            <h3
-              id={`overview-current-state-${ticker.replace(/[^a-zA-Z0-9_-]/g, '-')}`}
-              className="mt-1 text-[22px] font-black leading-tight"
+      <div className="@container min-w-0" data-overview-current-state>
+        <SheetRow label="現在の状態" note={latestPhysical?.date ? `MA力場 ${latestPhysical.date}` : 'MA力場'}>
+          <div className="grid gap-x-6 gap-y-1 xl:@[42rem]:grid-cols-[minmax(13rem,auto)_minmax(0,1fr)] xl:@[42rem]:items-baseline">
+            <p
+              id={`overview-current-state-${rowId}`}
+              className="m-0 text-[22px] font-black leading-tight"
               style={{ color: field?.color ?? 'var(--color-text-tertiary)' }}
             >
               {field?.label ?? (stateLoading ? '読み込み中' : 'MA力場未判定')}
-            </h3>
+            </p>
             {fieldInputs && (
-              <p className="mt-1.5 text-[11px] font-semibold leading-5 text-[var(--color-text-secondary)]">
-                4本のMAのうち±{MA_FIELD_THRESHOLD_DEG}°超で上向き<b className="font-mono">{fieldInputs.up}</b>本・下向き<b className="font-mono">{fieldInputs.down}</b>本。
-                短期平均<b className="font-mono" style={{ color: angleDirectionColor(fieldInputs.shortAvg) }}>{fmtDeg(fieldInputs.shortAvg)}</b>、
-                長期平均<b className="font-mono" style={{ color: angleDirectionColor(fieldInputs.longAvg) }}>{fmtDeg(fieldInputs.longAvg)}</b>
+              <p className="m-0 text-[12px] font-medium leading-5 text-[var(--color-text-secondary)]">
+                4本のMAのうち±{MA_FIELD_THRESHOLD_DEG}°超で上向き<b className="font-mono tabular-nums">{fieldInputs.up}</b>本・下向き<b className="font-mono tabular-nums">{fieldInputs.down}</b>本。
+                短期平均<b className="font-mono tabular-nums" style={{ color: angleDirectionColor(fieldInputs.shortAvg) }}>{fmtDeg(fieldInputs.shortAvg)}</b>、
+                長期平均<b className="font-mono tabular-nums" style={{ color: angleDirectionColor(fieldInputs.longAvg) }}>{fmtDeg(fieldInputs.longAvg)}</b>
                 {field?.spreadChangeDeg != null && (
-                  <>。角度幅は前回比<b className="font-mono">{fmtDeg(field.spreadChangeDeg)}</b>({field.spreadChangeDeg > 0 ? '広がる' : field.spreadChangeDeg < 0 ? '狭まる' : '変わらず'})</>
+                  <>。角度幅は前回比<b className="font-mono tabular-nums">{fmtDeg(field.spreadChangeDeg)}</b>({field.spreadChangeDeg > 0 ? '広がる' : field.spreadChangeDeg < 0 ? '狭まる' : '変わらず'})</>
                 )}
               </p>
             )}
           </div>
-          <dl className="m-0 grid min-w-0 gap-2">
-            <div className="grid min-w-0 gap-1 sm:grid-cols-[64px_minmax(0,1fr)] sm:items-center sm:gap-2">
-              <dt className="text-[10px] font-bold text-[var(--color-text-tertiary)]">MAの傾き</dt>
-              <dd className="m-0 min-w-0"><MaAngleStrip angles={angles} compact /></dd>
-            </div>
-            <div className="grid min-w-0 gap-1 sm:grid-cols-[64px_minmax(0,1fr)] sm:items-center sm:gap-2">
-              <dt className="text-[10px] font-bold text-[var(--color-text-tertiary)]">終値とMA</dt>
-              <dd className="m-0 grid min-w-0 grid-cols-4 gap-0.5">
+        </SheetRow>
+
+        <SheetRow label="MA" note="短期 → 長期">
+          <table className="w-full max-w-[720px] table-fixed border-collapse text-left" aria-label="移動平均線の傾きと終値の位置(短期→長期)">
+            <thead>
+              <tr className="border-b border-[var(--color-border-soft)]">
+                <th scope="col" className="w-10 pb-1 sm:w-14"><span className="sr-only">項目</span></th>
+                {MA_SHEET_COLUMNS.map(({ heading }) => (
+                  <th key={heading} scope="col" className="pb-1 pr-2 text-[11px] font-bold text-[var(--color-text-tertiary)]">{heading}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <th scope="row" className="py-1.5 text-[11px] font-bold text-[var(--color-text-tertiary)]">傾き</th>
+                {MA_SHEET_COLUMNS.map(({ angleKey, angleLabel }) => {
+                  const deg = angles?.[angleKey] ?? null
+                  const color = angleDirectionColor(deg)
+                  return (
+                    <td key={angleKey} className="py-1.5 pr-2" title={`${angleLabel} ${angleDirectionLabel(deg)}${deg == null ? '' : ` ${deg.toFixed(1)}°`}`}>
+                      <span className="inline-flex items-baseline gap-0.5 whitespace-nowrap font-mono text-[12px] font-bold tabular-nums xl:text-[13px]" style={{ color }}>
+                        <span aria-hidden="true" className="text-[11px]">{angleDirectionArrow(deg)}</span>
+                        <span className="sr-only">{angleLabel} {angleDirectionLabel(deg)} </span>
+                        {deg == null ? '—' : fmtDeg(deg)}
+                      </span>
+                    </td>
+                  )
+                })}
+              </tr>
+              <tr className="border-t border-[var(--color-border-soft)]">
+                <th scope="row" className="py-1.5 text-[11px] font-bold text-[var(--color-text-tertiary)]">終値</th>
                 {priceVsMa.length === 0 ? (
-                  <span className="col-span-4 text-[10px] font-semibold text-[var(--color-text-tertiary)]">{combinedLoading ? '読み込み中' : '未取得'}</span>
+                  <td colSpan={4} className="py-1.5 text-[11px] font-semibold text-[var(--color-text-tertiary)]">{combinedLoading ? '読み込み中' : '未取得'}</td>
                 ) : priceVsMa.map(({ label, position }) => (
-                  <span
+                  <td
                     key={label}
-                    className="flex h-7 min-w-0 items-center justify-center gap-1 border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] text-[10px] font-bold text-[var(--color-text-secondary)]"
+                    className="py-1.5 pr-2"
                     title={`終値は${label}MAの${position === 'above' ? '上' : position === 'below' ? '下' : position === 'equal' ? '同値' : '—'}`}
                   >
-                    {label}
-                    <b style={{ color: position === 'above' ? 'var(--price-up)' : position === 'below' ? 'var(--price-down)' : 'var(--color-text-tertiary)' }}>
-                      {position === 'above' ? '上' : position === 'below' ? '下' : position === 'equal' ? '同' : '—'}
+                    <b
+                      className="text-[13px] font-bold"
+                      style={{ color: position === 'above' ? 'var(--price-up)' : position === 'below' ? 'var(--price-down)' : 'var(--color-text-tertiary)' }}
+                    >
+                      <span className="sr-only">{label}MAの</span>
+                      {position === 'above' ? '上' : position === 'below' ? '下' : position === 'equal' ? '同値' : '—'}
                     </b>
-                  </span>
+                  </td>
                 ))}
-              </dd>
-            </div>
-            <div className="grid min-w-0 gap-1 sm:grid-cols-[64px_minmax(0,1fr)] sm:items-start sm:gap-2">
-              <dt className="text-[10px] font-bold text-[var(--color-text-tertiary)] sm:pt-1">6ステージ</dt>
-              <dd className="m-0 min-w-0">
-                {latestStage ? (
-                  <div className="grid grid-cols-3 gap-1.5">
-                    {[0, 2, 4].map((start) => (
-                      <div key={start} className="min-w-0">
-                        <div className="mb-0.5 text-center text-[9px] font-black text-[var(--color-text-secondary)]">{STAGE_TIMEFRAME_LABELS[start / 2]}</div>
-                        <div style={basicStagePairStyle}>
-                          {SUMMARY_STAGE_KEYS.slice(start, start + 2).map(({ key, label }) => (
-                            <SixStageCell key={key} label={label} stage={latestStage[key]} />
-                          ))}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <p style={basicMutedTextStyle}>{combinedLoading ? '最新ステージを確認しています。' : '最新ステージデータがありません。'}</p>
-                )}
-              </dd>
-            </div>
-          </dl>
-        </div>
-        {changeConditions.length > 0 && (
-          <div className="grid gap-x-3 gap-y-1 border-t border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-3 py-2 sm:grid-cols-[auto_minmax(0,1fr)] sm:px-4">
-            <span className="text-[10px] font-black text-[var(--color-text-secondary)]">見方が変わる条件</span>
-            <ul className="m-0 grid gap-x-5 gap-y-0.5 p-0 text-[10px] font-semibold leading-4 text-[var(--color-text-secondary)] md:grid-cols-2">
-              {changeConditions.map((condition) => (
-                <li key={condition} className="flex gap-1.5">
-                  <span className="mt-1.5 h-1 w-1 shrink-0 bg-[var(--color-text-tertiary)]" aria-hidden="true" />
-                  <span className="min-w-0">{condition}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-      </section>
-      <div className={embedded ? 'order-1 min-w-0' : ''} data-overview-technical-column={embedded ? '' : undefined}>
-        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: '8px', marginBottom: '10px' }}>
-          <div style={{ fontSize: '12px', fontWeight: 700 }}>{embedded ? '市場・テクニカル' : 'サマリー'}</div>
-          {latestStage?.date && (
-            <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', fontWeight: 500 }}>
-              基準日 {latestStage.date}
-            </span>
+              </tr>
+            </tbody>
+          </table>
+          <p className="m-0 mt-1 text-[10px] font-medium leading-4 text-[var(--color-text-tertiary)]">
+            傾きは5・25・75・200MA、終値の位置は5・25・75・300日MA(長期列のみ期間が異なる)
+          </p>
+        </SheetRow>
+
+        <SheetRow label="6ステージ" note={latestStage?.date ?? undefined}>
+          {latestStage ? (
+            <StageRibbon stage={latestStage} />
+          ) : (
+            <p className="m-0 text-[11px] font-medium text-[var(--color-text-tertiary)]">{combinedLoading ? '最新ステージを確認しています。' : '最新ステージデータがありません。'}</p>
           )}
-        </div>
-        <div className="grid grid-cols-1 gap-x-5 gap-y-1 sm:grid-cols-2">
-          {items.map(({ label, value, detail, color }) => (
-            <div key={label} className="min-w-0" style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'flex-start',
-              padding: '3px 0',
-              gap: '8px',
-            }}>
-              <span style={{ fontSize: '10px', fontWeight: 500, color: 'var(--text-muted)' }}>{label}</span>
-              <span style={{ minWidth: 0, textAlign: 'right' }}>
-                <span style={{
-                  display: 'block',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                  fontFamily: 'var(--font-mono)',
-                  fontSize: '11px',
-                  color: color ?? 'var(--text-primary)',
-                  fontWeight: color ? 800 : 600,
-                }}>
-                  {value}
-                </span>
-                {detail && (
-                  <span style={{
-                    display: 'block',
-                    marginTop: '1px',
-                    fontFamily: 'var(--font-mono)',
-                    fontSize: '10px',
-                    color: 'var(--text-muted)',
-                    whiteSpace: 'nowrap',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                  }}>
-                    {detail}
-                  </span>
-                )}
-              </span>
-            </div>
-          ))}
-        </div>
+        </SheetRow>
 
-        {rangePosition != null && quote?.fiftyTwoWeekLow != null && quote.fiftyTwoWeekHigh != null && (
-          <div
-            className="mt-2 grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 font-mono text-[10px] font-semibold text-[var(--color-text-tertiary)]"
-            role="img"
-            aria-label={`52週安値${quote.fiftyTwoWeekLow}円から高値${quote.fiftyTwoWeekHigh}円の間での現在価格の位置 ${rangePosition.toFixed(0)}%`}
-          >
-            <span>52週 安値</span>
-            <span className="relative block h-4">
-              <span className="absolute inset-x-0 top-1/2 h-1.5 -translate-y-1/2 bg-[var(--color-surface-subtle)] ring-1 ring-[var(--color-border-soft)]" />
-              <span className="absolute top-0 h-4 w-2 -translate-x-1/2 border border-white bg-[var(--color-brand-900)]" style={{ left: `${rangePosition}%` }} />
-            </span>
-            <span>高値 <b className="text-[var(--color-text-primary)]">{rangePosition.toFixed(0)}%</b></span>
-          </div>
-        )}
-      </div>
-
-      <div
-        className={embedded ? 'order-2 min-w-0 lg:order-3 lg:col-span-2' : ''}
-        style={embedded ? basicSignalEmbeddedStyle : basicSignalBlockStyle}
-        data-overview-signal-row={embedded ? '' : undefined}
-      >
-        <button
-          type="button"
-          className="flex min-h-11 w-full items-center gap-2 py-2 text-left text-[10px] font-black text-[var(--color-text-primary)] sm:hidden"
-          aria-expanded={showSignalDetails}
-          aria-controls="basic-signal-details"
-          onClick={() => setShowSignalDetails((current) => !current)}
-        >
-          <span>短期チェック</span>
-          <span className="ml-auto truncate text-[9px] text-[var(--color-text-tertiary)]">{combinedLoading ? '読み込み中' : `${decision.label} / ${shortTerm.agreement.label}`}</span>
-          <ChevronRight size={13} className={`shrink-0 transition-transform ${showSignalDetails ? 'rotate-90' : ''}`} aria-hidden="true" />
-        </button>
-        <div id="basic-signal-details" className={`${showSignalDetails ? 'block' : 'hidden'} sm:block`}>
-          <section
-            aria-label="短期チェック"
-            className="grid gap-x-5 gap-y-3 md:grid-cols-[minmax(150px,.7fr)_minmax(0,1.6fr)_minmax(0,1.1fr)]"
-            style={{ ...basicSignalPaneStyle, borderLeftColor: decision.color, background: decision.background }}
-          >
-            <div className="min-w-0">
-              <div style={basicDecisionLabelStyle}>短期チェック <span className="font-semibold">現在</span></div>
-              <strong className="mt-0.5 block text-[16px] font-black leading-tight" style={{ color: decision.color }}>
+        <SheetRow label="短期チェック" note="現在">
+          <div data-overview-signal-row>
+            <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+              <strong className="text-[15px] font-black leading-tight" style={{ color: decision.color }}>
                 {combinedLoading ? '読み込み中' : decision.label}
               </strong>
               {!combinedLoading && (
-                <span className="mt-1 inline-block" style={{ ...basicSignalBadgeStyle, marginLeft: 0, maxWidth: '100%', borderColor: decision.border, color: decision.color }}>
+                <span className="font-mono text-[11px] font-bold tabular-nums" style={{ color: decision.color }}>
                   {formatShortTermStrength(decision.label, decision.score)}
                 </span>
               )}
-              <div className="mt-2 text-[10px] font-bold text-[var(--color-text-secondary)]">
+              <span className="text-[11px] font-semibold text-[var(--color-text-secondary)]">
                 短期と中期 <b style={{ color: shortTerm.agreement.color }}>{shortTerm.agreement.label}</b>
+              </span>
+            </div>
+            {!combinedLoading && shortTerm.reading && (
+              <p className="m-0 mt-1 text-[12px] font-medium leading-5 text-[var(--color-text-secondary)]">{shortTerm.reading}</p>
+            )}
+          </div>
+        </SheetRow>
+
+        <SheetRow label="52週の位置" note="高値・安値レンジ">
+          {quote?.fiftyTwoWeekHigh == null && quote?.fiftyTwoWeekLow == null ? (
+            <p className="m-0 text-[11px] font-medium text-[var(--color-text-tertiary)]">---</p>
+          ) : (
+            <div className="max-w-[720px]">
+              <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 text-[11px] font-medium text-[var(--color-text-tertiary)]">
+                <span>安値 <b className="font-mono text-[13px] font-semibold tabular-nums text-[var(--color-text-primary)]">{fiftyTwoWeekLowText}</b></span>
+                {rangePosition != null && (
+                  <span>レンジ内の位置 <b className="font-mono text-[15px] font-black tabular-nums text-[var(--color-text-primary)]">{rangePosition.toFixed(0)}%</b></span>
+                )}
+                <span>高値 <b className="font-mono text-[13px] font-semibold tabular-nums text-[var(--color-text-primary)]">{fiftyTwoWeekHighText}</b></span>
               </div>
-              {!combinedLoading && shortTerm.reading && (
-                <p className="m-0 mt-1 text-[10px] font-semibold leading-4 text-[var(--color-text-secondary)]">{shortTerm.reading}</p>
+              {rangePosition != null && quote?.fiftyTwoWeekLow != null && quote.fiftyTwoWeekHigh != null && (
+                <span
+                  className="relative mt-1.5 block h-3"
+                  role="img"
+                  aria-label={`52週安値${quote.fiftyTwoWeekLow}円から高値${quote.fiftyTwoWeekHigh}円の間での現在価格の位置 ${rangePosition.toFixed(0)}%`}
+                >
+                  <span className="absolute inset-x-0 top-1/2 h-1 -translate-y-1/2 bg-[var(--color-surface-subtle)] ring-1 ring-[var(--color-border-soft)]" />
+                  <span className="absolute top-0 h-3 w-[3px] -translate-x-1/2 bg-[var(--color-brand-900)]" style={{ left: `${rangePosition}%` }} />
+                </span>
               )}
-            </div>
-
-            <div className="min-w-0">
-              <div style={basicDecisionLabelStyle}>根拠</div>
-              <div className="mt-1 grid gap-2 sm:grid-cols-2 md:grid-cols-1 lg:grid-cols-2">
-                {shortTerm.sides.map((side) => (
-                  <div key={side.key} className="min-w-0 border-t border-[var(--color-border-soft)] pt-1">
-                    <div className="flex items-baseline justify-between gap-2 text-[10px] font-black text-[var(--color-text-primary)]">
-                      <span>{side.label}</span>
-                      <span className="font-mono text-[9px] font-bold text-[var(--color-text-tertiary)]">▲{side.up} ▼{side.down}</span>
-                    </div>
-                    <ul className="m-0 mt-0.5 grid gap-0.5 p-0">
-                      {side.items.map((item) => (
-                        <li key={item.label} className="grid grid-cols-[12px_minmax(0,1fr)_auto] items-baseline gap-1 text-[10px] leading-4">
-                          <span aria-hidden="true" className="font-mono text-[9px] font-black" style={{ color: directionColor(item.direction) }}>{directionGlyph(item.direction)}</span>
-                          <span className="truncate font-semibold text-[var(--color-text-tertiary)]">{item.label}</span>
-                          <b className="truncate text-right font-mono text-[10px] text-[var(--color-text-primary)]">
-                            <span className="sr-only">{directionWord(item.direction)} </span>{item.value}
-                          </b>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                ))}
-              </div>
-              <div className="mt-1.5 flex flex-wrap gap-x-3 text-[9px] font-semibold text-[var(--color-text-tertiary)]">
-                <span>値動きの近い銘柄 <b className="text-[var(--color-text-secondary)]">{decision.mlText}</b></span>
-                {physics.pullbackVerdict && <span>押し目判定 <b className="text-[var(--color-text-secondary)]">{physics.pullbackVerdict}</b></span>}
-                <span>物理特徴量 {physics.asOfDate ?? '---'}</span>
+              <div className="mt-1 flex flex-wrap justify-between gap-x-4 font-mono text-[11px] font-medium tabular-nums text-[var(--color-text-tertiary)]">
+                <span>安値比 {lowDistance == null ? '---' : fmtPct(lowDistance)}</span>
+                <span>高値比 {highDistance == null ? '---' : fmtPct(highDistance)}</span>
               </div>
             </div>
+          )}
+        </SheetRow>
 
-            <div className="min-w-0">
-              <div style={basicDecisionLabelStyle}>見方が変わる条件</div>
-              <ul className="m-0 mt-1 grid gap-1 p-0">
-                {shortTerm.conditions.map((condition) => (
-                  <li key={condition} className="flex gap-1.5 text-[10px] font-semibold leading-4 text-[var(--color-text-secondary)]">
-                    <span className="mt-1.5 h-1 w-1 shrink-0 bg-[var(--color-text-tertiary)]" aria-hidden="true" />
-                    <span className="min-w-0">{condition}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          </section>
-        </div>
+        {earnings && (
+          <SheetRow label="次回決算" note="前回発表を併記">
+            {earnings}
+          </SheetRow>
+        )}
+
+        <SheetRow label="根拠と条件" note="短期・中期・見方が変わる条件">
+          <button
+            type="button"
+            className="flex min-h-11 w-full flex-wrap items-center gap-x-3 gap-y-0.5 py-1 text-left hover:bg-[var(--color-surface-subtle)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-brand-700)] sm:min-h-9"
+            aria-expanded={showSignalDetails}
+            aria-controls={signalDetailsId}
+            onClick={() => setShowSignalDetails((current) => !current)}
+          >
+            <span className="min-w-0 text-[11px] font-semibold text-[var(--color-text-secondary)]">
+              {combinedLoading ? '読み込み中' : <>{evidenceSummary} ・ 変わる条件 <b className="font-mono tabular-nums">{conditionCount}</b>件</>}
+            </span>
+            <span className="ml-auto inline-flex shrink-0 items-center gap-1 text-[11px] font-bold text-[var(--color-brand-700)]">
+              {showSignalDetails ? '閉じる' : '根拠と条件を見る'}
+              <ChevronRight size={13} className={`transition-transform ${showSignalDetails ? 'rotate-90' : ''}`} aria-hidden="true" />
+            </span>
+          </button>
+          <div id={signalDetailsId} hidden={!showSignalDetails} className="mt-2 grid gap-x-8 gap-y-4 md:grid-cols-2 xl:grid-cols-3">
+            {shortTerm.sides.map((side) => (
+              <section key={side.key} className="min-w-0" aria-label={side.label}>
+                <div className="flex items-baseline justify-between gap-2 border-b border-[var(--color-border-soft)] pb-1">
+                  <h4 className="text-[11px] font-bold text-[var(--color-text-primary)]">{side.label}</h4>
+                  <span className="shrink-0 font-mono text-[11px] font-semibold tabular-nums text-[var(--color-text-tertiary)]">▲{side.up} ▼{side.down}</span>
+                </div>
+                <ul className="m-0 mt-1 grid gap-0.5 p-0">
+                  {side.items.map((item) => (
+                    <li key={item.label} className="grid grid-cols-[14px_minmax(0,1fr)_auto] items-baseline gap-1.5 text-[11px] leading-5">
+                      <span aria-hidden="true" className="font-mono text-[10px] font-black" style={{ color: directionColor(item.direction) }}>{directionGlyph(item.direction)}</span>
+                      <span className="font-medium text-[var(--color-text-tertiary)]">{item.label}</span>
+                      <b className="text-right font-mono text-[11px] font-semibold tabular-nums text-[var(--color-text-primary)]">
+                        <span className="sr-only">{directionWord(item.direction)} </span>{item.value}
+                      </b>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ))}
+            <section className="min-w-0 md:col-span-2 xl:col-span-1" aria-label="見方が変わる条件">
+              <h4 className="border-b border-[var(--color-border-soft)] pb-1 text-[11px] font-bold text-[var(--color-text-primary)]">見方が変わる条件</h4>
+              {changeConditions.length > 0 && (
+                <>
+                  <div className="mt-1.5 text-[11px] font-semibold text-[var(--color-text-tertiary)]">MA力場「{field?.label}」</div>
+                  <ConditionList conditions={changeConditions} />
+                </>
+              )}
+              <div className="mt-1.5 text-[11px] font-semibold text-[var(--color-text-tertiary)]">短期チェック「{decision.label}」</div>
+              {shortTerm.conditions.length > 0
+                ? <ConditionList conditions={shortTerm.conditions} />
+                : <p className="m-0 mt-0.5 text-[11px] font-medium text-[var(--color-text-tertiary)]">—</p>}
+            </section>
+            <p className="m-0 flex flex-wrap gap-x-4 gap-y-0.5 text-[11px] font-medium text-[var(--color-text-tertiary)] md:col-span-2 xl:col-span-3">
+              <span>値動きの近い銘柄 <b className="text-[var(--color-text-secondary)]">{decision.mlText}</b></span>
+              {physics.pullbackVerdict && <span>押し目判定 <b className="text-[var(--color-text-secondary)]">{physics.pullbackVerdict}</b></span>}
+              <span>物理特徴量 <span className="font-mono tabular-nums">{physics.asOfDate ?? '---'}</span></span>
+            </p>
+          </div>
+        </SheetRow>
       </div>
-      {marketSnapshot && (
-        <div className="order-3 min-w-0 lg:order-2">
+
+      <section
+        className="@container mt-2 min-w-0 border-t border-[var(--color-border-default)] pt-3"
+        aria-labelledby={`overview-market-title-${rowId}`}
+        data-overview-market-column
+      >
+        <h3 id={`overview-market-title-${rowId}`} className="text-[13px] font-bold text-[var(--color-text-primary)]">市場データ・需給</h3>
+        <div className="mt-1">
+          <SheetRow level={4} label="市場データ">
+            <dl className="m-0 grid grid-cols-2 gap-x-6 gap-y-2.5 @[46rem]:grid-cols-4">
+              {items.map(({ label, value, detail, color }) => (
+                <LedgerItem key={label} label={label} value={value} detail={detail} color={color} />
+              ))}
+            </dl>
+          </SheetRow>
           {marketSnapshot}
         </div>
-      )}
+      </section>
+    </div>
+  )
+}
+
+/** 判断シートの1行。左の共通見出し軸(sm以上は固定幅)と横罫で読む。モバイルは見出しの下に内容を縦に流す */
+function SheetRow({
+  label,
+  note,
+  level = 3,
+  children,
+}: {
+  label: string
+  note?: string
+  level?: 3 | 4
+  children: ReactNode
+}) {
+  const Heading = level === 3 ? 'h3' : 'h4'
+  return (
+    <div className="grid min-w-0 gap-x-6 gap-y-1.5 border-t border-[var(--color-border-soft)] py-3 first:border-t-0 sm:grid-cols-[7.5rem_minmax(0,1fr)]">
+      <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 sm:block">
+        <Heading
+          className={level === 3
+            ? 'text-[12px] font-bold leading-5 text-[var(--color-text-primary)]'
+            : 'text-[11px] font-bold leading-5 text-[var(--color-text-secondary)]'}
+        >
+          {label}
+        </Heading>
+        {note && <span className="block font-mono text-[10px] font-medium leading-4 text-[var(--color-text-tertiary)]">{note}</span>}
+      </div>
+      <div className="min-w-0">{children}</div>
+    </div>
+  )
+}
+
+/** 二次レイヤーの値。ラベルを上、数値(mono/tabular)を下に置き、列で比べる */
+function LedgerItem({ label, value, detail, color }: { label: string; value: string; detail?: string; color?: string }) {
+  return (
+    <div className="min-w-0">
+      <dt className="text-[11px] font-medium text-[var(--color-text-tertiary)]">{label}</dt>
+      <dd className="m-0 font-mono text-[13px] font-semibold tabular-nums" style={{ color: color ?? 'var(--color-text-primary)' }}>
+        <span className="whitespace-nowrap">{value}</span>
+        {detail && <span className="block text-[10px] font-medium text-[var(--color-text-tertiary)]">{detail}</span>}
+      </dd>
+    </div>
+  )
+}
+
+function ConditionList({ conditions }: { conditions: string[] }) {
+  return (
+    <ul className="m-0 mt-0.5 grid gap-0.5 p-0">
+      {conditions.map((condition) => (
+        <li key={condition} className="flex gap-1.5 text-[11px] font-medium leading-5 text-[var(--color-text-secondary)]">
+          <span className="mt-2 h-1 w-1 shrink-0 bg-[var(--color-text-tertiary)]" aria-hidden="true" />
+          <span className="min-w-0">{condition}</span>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+/** 傾き(physical のMA角度)と終値の位置(stage-history のMA値)を同じ列で読む列定義。長期列だけ両者の期間が異なる */
+const MA_SHEET_COLUMNS: Array<{ heading: string; angleKey: keyof MaAngleSet; angleLabel: string }> = [
+  { heading: '5日', angleKey: 'ma5', angleLabel: '5MA' },
+  { heading: '25日', angleKey: 'ma25', angleLabel: '25MA' },
+  { heading: '75日', angleKey: 'ma75', angleLabel: '75MA' },
+  { heading: '長期', angleKey: 'ma200', angleLabel: '200MA' },
+]
+
+/** 6軸Stageを日足・週足・月足の順に1本の連続リボンで並べる(区画の間は1px、時間軸の間だけ少し空ける) */
+function StageRibbon({ stage }: { stage: SummaryStageEntry }) {
+  return (
+    <div className="grid max-w-[720px] grid-cols-3 gap-1" role="group" aria-label="6ステージ(日足・週足・月足 × A・B)" data-overview-stage-ribbon>
+      {[0, 2, 4].map((start) => (
+        <div key={start} role="group" aria-label={STAGE_TIMEFRAME_LABELS[start / 2]} className="min-w-0">
+          <span className="mb-1 block text-[11px] font-bold text-[var(--color-text-secondary)]">{STAGE_TIMEFRAME_LABELS[start / 2]}</span>
+          <div className="grid grid-cols-2 gap-px">
+            {SUMMARY_STAGE_KEYS.slice(start, start + 2).map(({ key, label }) => (
+              <SixStageCell key={key} label={label} stage={stage[key]} />
+            ))}
+          </div>
+        </div>
+      ))}
     </div>
   )
 }
 
 function SixStageCell({ label, stage }: { label: string; stage: number | null }) {
   const validStage = normalizeStage(stage)
-  const color = validStage ? STAGE_BORDER_COLORS[validStage] : 'var(--border-base)'
-  const bg = validStage ? STAGE_BG_COLORS[validStage] : 'var(--bg-elevated)'
+  const color = validStage ? STAGE_BORDER_COLORS[validStage] : 'var(--color-border-default)'
+  const bg = validStage ? STAGE_BG_COLORS[validStage] : 'var(--color-surface-subtle)'
   const title = validStage ? STAGE_LABELS[validStage] : '未判定'
   return (
-    <div title={`${label}: ${title}`} style={{ ...basicStageCellStyle, borderColor: color, background: bg }}>
-      <span style={basicStageCellLabelStyle}>{label}</span>
-      <strong style={{ ...basicStageCellNumberStyle, color }}>{validStage ?? '-'}</strong>
-      <small style={basicStageCellTextStyle}>{validStage ? shortStageLabel(validStage) : '不足'}</small>
+    <div
+      title={`${label}: ${title}`}
+      className="min-w-0 px-1 pb-1.5 pt-2 text-center"
+      style={{ background: bg, boxShadow: `inset 0 3px 0 ${color}` }}
+    >
+      <span className="block text-[10px] font-bold leading-4 text-[var(--color-text-secondary)]">{label}</span>
+      <strong className="block font-mono text-[15px] font-black leading-5 text-[var(--color-text-primary)]">
+        {validStage ? `S${validStage}` : '-'}
+      </strong>
+      <span className="block text-[10px] font-semibold leading-tight text-[var(--color-text-secondary)] [word-break:keep-all]">
+        <span className="sr-only">{title} </span>
+        <span aria-hidden="true">{validStage ? shortStageLabel(validStage) : '不足'}</span>
+      </span>
     </div>
   )
 }
