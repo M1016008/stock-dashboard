@@ -179,7 +179,7 @@ async function resolveDate(requested: string | null): Promise<string | null> {
        WHERE market = 'US' AND date <= ?`,
       [requested],
     )
-    if (row?.date) return row.date
+    return row?.date ?? null
   }
   const row = await execGet<{ date: string | null }>(
     `SELECT MAX(date) AS date FROM market_daily_snapshots WHERE market = 'US'`,
@@ -230,7 +230,9 @@ export async function GET(request: NextRequest) {
         date: null,
         timeframe,
         source: 'tiingo',
-        notice: 'USステージスナップショットが未生成です。',
+        notice: requestedDate
+          ? 'No US market data is available on or before the requested date.'
+          : 'USステージスナップショットが未生成です。',
       })
     }
 

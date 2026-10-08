@@ -17,6 +17,44 @@ import { filterRowsByUniverse, parseUniverseFilter, universeSqlCondition, UNIVER
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
 
+type HexCacheEntry = {
+  expiresAt: number
+  plain: string
+  gzip: Uint8Array<ArrayBuffer> | null
+}
+
+const globalForHexCache = globalThis as typeof globalThis & {
+  __stockboardHexReadCache?: Map<string, HexCacheEntry>
+}
+const hexReadCache = globalForHexCache.__stockboardHexReadCache ?? new Map<string, HexCacheEntry>()
+globalForHexCache.__stockboardHexReadCache = hexReadCache
+
+function readHexCache(key: string): HexCacheEntry | null {
+  const entry = hexReadCache.get(key)
+  if (!entry) return null
+  if (entry.expiresAt <= Date.now()) {
+    hexReadCache.delete(key)
+    return null
+  }
+  return entry
+}
+
+function writeHexCache(key: string, payload: unknown, ttlMs: number): HexCacheEntry {
+  const plain = JSON.stringify(payload)
+  const entry: HexCacheEntry = {
+    expiresAt: Date.now() + ttlMs,
+    plain,
+    gzip: plain.length > 1024 ? Uint8Array.from(gzipSync(plain)) : null,
+  }
+  hexReadCache.set(key, entry)
+  while (hexReadCache.size > 20) {
+    const oldest = hexReadCache.keys().next().value as string | undefined
+    if (!oldest) break
+    hexReadCache.delete(oldest)
+  }
+  return entry
+}
+
 // HexMap が期待する 1 銘柄分の形 (Phase 4 後はこれが正本)
 interface HexStock {
   code: string
@@ -122,6 +160,23 @@ function jsonResponse(request: NextRequest, payload: unknown): NextResponse {
   return new NextResponse(json, { headers })
 }
 
+function cachedJsonResponse(
+  request: NextRequest,
+  entry: HexCacheEntry,
+  cacheStatus: 'HIT' | 'MISS' = 'HIT',
+): NextResponse {
+  const headers = new Headers({
+    'content-type': 'application/json; charset=utf-8',
+    'x-stockboard-read-cache': cacheStatus,
+  })
+  if (entry.gzip && /\bgzip\b/i.test(request.headers.get('accept-encoding') ?? '')) {
+    headers.set('content-encoding', 'gzip')
+    headers.set('vary', 'Accept-Encoding')
+    return new NextResponse(entry.gzip, { headers })
+  }
+  return new NextResponse(entry.plain, { headers })
+}
+
 /** 日付より前の最近営業日 */
 async function prevSnapshotDate(beforeDate: string): Promise<string | null> {
   const r = await execGet<{ d: string | null }>(
@@ -142,7 +197,7 @@ async function resolveSnapshotDate(requestedDate: string | null): Promise<string
       `SELECT MAX(date) AS d FROM daily_snapshots WHERE date <= ?`,
       [requestedDate],
     )
-    if (row?.d) return row.d
+    return row?.d ?? null
   }
   return latestSnapshotDate()
 }
@@ -153,25 +208,8 @@ async function loadSnapshots(date: string): Promise<SnapshotRow[]> {
     SELECT ticker, date,
            daily_a_stage, daily_b_stage, weekly_a_stage, weekly_b_stage, monthly_a_stage, monthly_b_stage,
            ma_5, ma_25, ma_75, ma_300
-    FROM (
-      SELECT
-        ticker,
-        date,
-        daily_a_stage,
-        daily_b_stage,
-        weekly_a_stage,
-        weekly_b_stage,
-        monthly_a_stage,
-        monthly_b_stage,
-        ma_5,
-        ma_25,
-        ma_75,
-        ma_300,
-        ROW_NUMBER() OVER (PARTITION BY ticker, date ORDER BY computed_at DESC) AS rn
-      FROM daily_snapshots
-      WHERE date = ?
-    )
-    WHERE rn = 1
+    FROM daily_snapshots
+    WHERE date = ?
     `,
     [date],
   )
@@ -223,9 +261,23 @@ export async function GET(request: NextRequest) {
         date: null,
         timeframe,
         filters: { universe: universeFilter },
-        notice: 'OHLCV データ未取り込み。npm run batch:ohlcv を先に実行してください。',
+        notice: requestedDate
+          ? '指定日以前に利用できる市場データはありません。'
+          : 'OHLCV データ未取り込み。npm run batch:ohlcv を先に実行してください。',
       })
     }
+
+    const cacheKey = [
+      'v2',
+      date,
+      timeframe,
+      view ?? 'full',
+      universeFilter ?? 'all',
+      classificationTaxonomy ?? 'none',
+      requestedGroup ?? 'none',
+    ].join('|')
+    const cachedPayload = readHexCache(cacheKey)
+    if (cachedPayload) return cachedJsonResponse(request, cachedPayload)
 
     if (view === 'summary') {
       const universe = universeSqlCondition('ds.ticker', universeFilter)
@@ -254,7 +306,7 @@ export async function GET(request: NextRequest) {
         `,
         [date, ...universe.params],
       )
-      return jsonResponse(request, {
+      const payload = {
         success: true,
         data: rows,
         count: rows.length,
@@ -264,7 +316,9 @@ export async function GET(request: NextRequest) {
         source: 'jquants',
         view,
         filters: { universe: universeFilter },
-      })
+      }
+      const cacheEntry = writeHexCache(cacheKey, payload, requestedDate ? 30 * 60_000 : 20_000)
+      return cachedJsonResponse(request, cacheEntry, 'MISS')
     }
 
     const prev1 = await prevSnapshotDate(date)
@@ -462,7 +516,7 @@ export async function GET(request: NextRequest) {
       }
     })
 
-    return jsonResponse(request, {
+    const payload = {
       success: true,
       data: rows,
       count: rows.length,
@@ -475,7 +529,9 @@ export async function GET(request: NextRequest) {
         taxonomy: classificationTaxonomy,
         group: requestedGroup,
       },
-    })
+    }
+    const cacheEntry = writeHexCache(cacheKey, payload, requestedDate ? 30 * 60_000 : 20_000)
+    return cachedJsonResponse(request, cacheEntry, 'MISS')
   } catch (error) {
     console.error('Hex API error:', error)
     return NextResponse.json(

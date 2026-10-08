@@ -39,8 +39,9 @@ export async function resolveHexAsOfDate(requestedDate: string | null = null): P
       `SELECT MAX(date) AS d FROM daily_snapshots WHERE date <= ?`,
       [requestedDate],
     )
-    if (row?.d) return row.d
+    return row?.d ?? null
   }
+  if (requestedDate) return null
   return getLatestHexDate()
 }
 

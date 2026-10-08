@@ -19,6 +19,40 @@ import { usInvestableSymbolSql } from '@/lib/us-symbol-quality'
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
 
+type StatusResponseCache = {
+  expiresAt: number
+  body: unknown
+}
+
+const globalForStatusCache = globalThis as typeof globalThis & {
+  __stockboardStatusOverviewCache?: StatusResponseCache
+  __stockboardStatusOverviewInFlight?: Promise<void>
+}
+
+function cachedStatusResponse(body: unknown): NextResponse {
+  return NextResponse.json(body, {
+    headers: {
+      'Cache-Control': 'private, no-store',
+      'X-StockBoard-Read-Cache': 'HIT',
+    },
+  })
+}
+
+function statusResponse(body: unknown, cache = true): NextResponse {
+  if (cache) {
+    globalForStatusCache.__stockboardStatusOverviewCache = {
+      body,
+      expiresAt: Date.now() + 15_000,
+    }
+  }
+  return NextResponse.json(body, {
+    headers: {
+      'Cache-Control': 'private, no-store',
+      'X-StockBoard-Read-Cache': cache ? 'MISS' : 'BYPASS',
+    },
+  })
+}
+
 const execFileAsync = promisify(execFile)
 
 type DateRow = { date: string | null }
@@ -291,6 +325,28 @@ async function loadUsFoundationProgress(
 }
 
 export async function GET() {
+  const cached = globalForStatusCache.__stockboardStatusOverviewCache
+  if (cached && cached.expiresAt > Date.now()) {
+    return cachedStatusResponse(cached.body)
+  }
+
+  const existingInFlight = globalForStatusCache.__stockboardStatusOverviewInFlight
+  if (existingInFlight) {
+    await existingInFlight.catch(() => undefined)
+    const shared = globalForStatusCache.__stockboardStatusOverviewCache
+    if (shared && shared.expiresAt > Date.now()) return cachedStatusResponse(shared.body)
+    return NextResponse.json({
+      status: 'unavailable',
+      checkedAt: new Date().toISOString(),
+      message: 'データ鮮度を取得できませんでした。',
+    }, { status: 503 })
+  }
+
+  let releaseInFlight!: () => void
+  const inFlight = new Promise<void>((resolve) => {
+    releaseInFlight = resolve
+  })
+  globalForStatusCache.__stockboardStatusOverviewInFlight = inFlight
   try {
     const jpQuery = (sql: string, args: readonly (string | number | null)[] = []) => execGet<DateRow>(sql, args)
     const usQuery = (sql: string, args: readonly (string | number | null)[] = []) => execUsAnalyticsGet<DateRow>(sql, args)
@@ -700,7 +756,7 @@ export async function GET() {
       ? latestUsSourceJobs.filter((job) => job.jobType !== 'us_adjusted_foundation')
       : latestUsSourceJobs
 
-    return NextResponse.json({
+    return statusResponse({
       status: jpFresh && usFresh && sourcesFresh ? 'ok' : 'attention',
       checkedAt: new Date().toISOString(),
       jp: {
@@ -763,5 +819,10 @@ export async function GET() {
       checkedAt: new Date().toISOString(),
       message: 'データ鮮度を取得できませんでした。',
     }, { status: 503 })
+  } finally {
+    releaseInFlight()
+    if (globalForStatusCache.__stockboardStatusOverviewInFlight === inFlight) {
+      delete globalForStatusCache.__stockboardStatusOverviewInFlight
+    }
   }
 }

@@ -22,10 +22,10 @@ export async function getLatestDate(): Promise<string | null> {
 export async function resolveTradingDate(date?: string | null): Promise<string | null> {
   if (!date) return getLatestDate()
   const row = await execGet<{ d: string | null }>(
-    `SELECT date AS d FROM daily_snapshots WHERE date = ? LIMIT 1`,
+    `SELECT MAX(date) AS d FROM daily_snapshots WHERE date <= ?`,
     [date],
   )
-  return row?.d ?? await getLatestDate()
+  return row?.d ?? null
 }
 
 function isIsoDate(value: string | null | undefined): value is string {
@@ -37,7 +37,7 @@ async function resolveMarketDateOnOrBefore(date: string): Promise<string | null>
     `SELECT MAX(date) AS d FROM daily_snapshots WHERE date <= ?`,
     [date],
   )
-  return row?.d ?? await getLatestDate()
+  return row?.d ?? null
 }
 
 // ─── 1 営業日前 (前日) ───

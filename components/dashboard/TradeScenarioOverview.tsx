@@ -1,10 +1,15 @@
 import Link from 'next/link'
+import { cache } from 'react'
 import { ArrowUpRight } from 'lucide-react'
 import { ArchiveTradeScenarioButton } from '@/components/dashboard/ArchiveTradeScenarioButton'
+import { TONE_TEXT, type DashboardTone } from '@/components/dashboard/DashboardPrimitives'
 import { StageTag } from '@/components/ui/StageTag'
 import { StockPreviewTrigger } from '@/components/stock-preview/StockPreviewTrigger'
 import { getTradeScenarioOverview } from '@/lib/trade-scenarios/server'
 import type { TradeScenarioDirection, TradeScenarioOverviewItem } from '@/lib/trade-scenarios/types'
+
+/** Hero の「今日の予定」と一覧で同じ結果を共有する。件数 6・日付の扱いは従来どおり */
+export const loadTradeScenarioOverview = cache((date: string | null) => getTradeScenarioOverview(6, date))
 
 function fmtPct(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(value)) return '---'
@@ -29,17 +34,10 @@ function directionLabel(direction: TradeScenarioDirection): string {
   return '見送り'
 }
 
-function directionTone(direction: TradeScenarioDirection): string {
-  if (direction === 'bullish') return 'text-[var(--color-price-up)] bg-[var(--color-price-up-bg)] border-[rgba(185,28,28,0.22)]'
-  if (direction === 'bearish') return 'text-[var(--color-price-down)] bg-[var(--color-price-down-bg)] border-[rgba(30,64,175,0.22)]'
-  return 'text-[var(--color-text-secondary)] bg-[var(--color-surface-subtle)] border-[var(--color-border-soft)]'
-}
-
-function priorityToneClass(tone: TradeScenarioOverviewItem['priorityTone']): string {
-  if (tone === 'up') return 'border-[rgba(185,28,28,0.28)] bg-[var(--color-price-up-bg)] text-[var(--color-price-up)]'
-  if (tone === 'down') return 'border-[rgba(30,64,175,0.28)] bg-[var(--color-price-down-bg)] text-[var(--color-price-down)]'
-  if (tone === 'warning') return 'border-[rgba(217,119,6,0.28)] bg-[#fff7ed] text-[#b45309]'
-  return 'border-[var(--color-border-soft)] bg-white text-[var(--color-text-secondary)]'
+function directionTone(direction: TradeScenarioDirection): DashboardTone {
+  if (direction === 'bullish') return 'up'
+  if (direction === 'bearish') return 'down'
+  return 'neutral'
 }
 
 function progressColor(item: TradeScenarioOverviewItem): string {
@@ -74,23 +72,25 @@ function isRemovable(item: TradeScenarioOverviewItem): boolean {
   return item.status === 'reviewed' || REMOVABLE_OUTCOMES.has(item.outcome.status)
 }
 
-function ScenarioMiniProgress({ item }: { item: TradeScenarioOverviewItem }) {
-  const progress = progressWidth(item)
-  const color = progressColor(item)
+const ROW_GRID = 'lg:grid-cols-[minmax(200px,0.95fr)_minmax(150px,0.7fr)_minmax(240px,1.25fr)_minmax(230px,1.1fr)_32px]'
+
+function ScenarioProgress({ item }: { item: TradeScenarioOverviewItem }) {
   return (
     <div className="min-w-0">
-      <div className="mb-1 flex items-center justify-between gap-2 text-[10px] font-bold text-[var(--color-text-tertiary)]">
+      <div className="relative h-[6px] overflow-hidden rounded-[2px] bg-[var(--color-surface-muted)]" aria-hidden="true">
+        <span className="absolute inset-y-0 left-0 rounded-[2px]" style={{ width: progressWidth(item), background: progressColor(item), opacity: 0.78 }} />
+        <span className="absolute inset-y-[-1px] left-1/2 w-px bg-[var(--color-text-tertiary)] opacity-60" />
+      </div>
+      <div className="mt-1 grid grid-cols-3 font-mono text-[10px] font-semibold tabular-nums text-[var(--color-text-tertiary)]">
         <span>撤退 {fmtPrice(item.stopLossPrice)}</span>
-        <span>基準 {fmtPrice(item.anchorClose)}</span>
-        <span>目標 {fmtPrice(item.targetPrice)}</span>
+        <span className="text-center">基準 {fmtPrice(item.anchorClose)}</span>
+        <span className="text-right">目標 {fmtPrice(item.targetPrice)}</span>
       </div>
-      <div className="relative h-2 overflow-hidden rounded-full border border-[var(--color-border-soft)] bg-white">
-        <span className="absolute left-0 top-0 h-full rounded-full" style={{ width: progress, background: color, opacity: 0.76 }} />
-        <span className="absolute left-1/2 top-[-2px] h-[12px] w-[2px] bg-[var(--color-text-tertiary)] opacity-50" />
-      </div>
-      <div className="mt-1 flex items-center justify-between gap-2 text-[10px] font-semibold text-[var(--color-text-tertiary)]">
-        <span>{item.currentDate ?? item.anchorDate}</span>
-        <span>現在 {fmtPrice(item.currentClose)}</span>
+      <div className="mt-0.5 flex items-baseline justify-between gap-2 text-[10px] font-semibold tabular-nums text-[var(--color-text-tertiary)]">
+        <span className="font-mono">{item.currentDate ?? item.anchorDate}</span>
+        <span>
+          現在 <span className="font-mono font-bold text-[var(--color-text-primary)]">{fmtPrice(item.currentClose)}</span>
+        </span>
       </div>
     </div>
   )
@@ -99,162 +99,133 @@ function ScenarioMiniProgress({ item }: { item: TradeScenarioOverviewItem }) {
 function ScenarioListRow({ item }: { item: TradeScenarioOverviewItem }) {
   const removable = isRemovable(item)
   const itemLabel = `${item.ticker} ${item.name ?? item.ticker}`
+  const priorityTone: DashboardTone = item.priorityTone
   return (
-    <li className="grid min-w-0 gap-3 px-3 py-3 transition-colors hover:bg-[var(--color-surface-subtle)] sm:px-4 lg:grid-cols-[minmax(180px,0.9fr)_minmax(190px,0.95fr)_minmax(260px,1.35fr)_minmax(210px,1fr)] lg:items-center lg:gap-4">
-      <div className="flex min-w-0 items-start justify-between gap-3 lg:block">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <Link
-              href={stockHref(item.ticker)}
-              prefetch={false}
-              className="font-mono text-[15px] font-bold text-[var(--color-brand-800)] hover:underline"
-            >
-              {item.ticker}
-            </Link>
-            <span className="max-w-[240px] truncate text-[12px] font-bold text-[var(--color-text-primary)]">
-              {item.name ?? item.ticker}
-            </span>
-            <StockPreviewTrigger ticker={item.ticker} analysisDate={item.currentDate ?? item.anchorDate} context="home" />
-          </div>
-          <div className="mt-1.5 text-[10px] font-semibold text-[var(--color-text-tertiary)]">
-            {item.anchorDate}基準 / {item.horizonDays}営業日 / 残り{item.outcome.remainingDays}営業日
-          </div>
-        </div>
-        <div className="flex shrink-0 items-center lg:hidden">
+    <li className={`grid min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-x-4 gap-y-2.5 py-3 transition-colors hover:bg-[var(--color-surface-subtle)] lg:items-center ${ROW_GRID}`}>
+      <div className="min-w-0">
+        <div className="flex min-w-0 items-center gap-2">
           <Link
             href={stockHref(item.ticker)}
             prefetch={false}
-            className="inline-flex h-7 w-7 items-center justify-center text-[var(--color-text-tertiary)] hover:text-[var(--color-brand-800)]"
-            aria-label={`${item.ticker}の個別銘柄ページを開く`}
-            title="個別銘柄ページを開く"
+            className="shrink-0 font-mono text-[14px] font-bold text-[var(--color-brand-800)] hover:underline"
           >
-            <ArrowUpRight size={15} />
+            {item.ticker}
           </Link>
-          {removable && <ArchiveTradeScenarioButton id={item.id} label={itemLabel} />}
+          <span className="min-w-0 truncate text-[12px] font-semibold text-[var(--color-text-primary)]">{item.name ?? item.ticker}</span>
+          <StockPreviewTrigger ticker={item.ticker} analysisDate={item.currentDate ?? item.anchorDate} context="home" />
+        </div>
+        <div className="mt-1 text-[10px] font-semibold tabular-nums text-[var(--color-text-tertiary)]">
+          <span className="font-mono">{item.anchorDate}</span>基準 · {item.horizonDays}営業日 · 残り{item.outcome.remainingDays}営業日
         </div>
       </div>
 
-      <div className="min-w-0">
-        <div className="flex flex-wrap gap-1.5">
-          <span className={`rounded-full border px-2 py-1 text-[10px] font-bold ${directionTone(item.direction)}`}>
-            {directionLabel(item.direction)}
-          </span>
-          <span className={`rounded-full border px-2 py-1 text-[10px] font-bold ${priorityToneClass(item.priorityTone)}`}>
-            {item.priorityLabel}
-          </span>
+      <div className="flex items-start justify-end gap-1 lg:order-last">
+        <Link
+          href={stockHref(item.ticker)}
+          prefetch={false}
+          className="inline-flex h-7 w-7 items-center justify-center text-[var(--color-text-tertiary)] hover:text-[var(--color-brand-800)] lg:hidden"
+          aria-label={`${item.ticker}の個別銘柄ページを開く`}
+          title="個別銘柄ページを開く"
+        >
+          <ArrowUpRight size={15} />
+        </Link>
+        {removable && <ArchiveTradeScenarioButton id={item.id} label={itemLabel} />}
+      </div>
+
+      <div className="col-span-2 min-w-0 lg:col-span-1">
+        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+          <span className={`text-[12px] font-bold ${TONE_TEXT[directionTone(item.direction)]}`}>{directionLabel(item.direction)}</span>
+          <span className={`text-[11px] font-bold ${TONE_TEXT[priorityTone]}`}>{item.priorityLabel}</span>
         </div>
-        {item.stages.length > 0 && (
-          <div className="mt-2 flex items-center gap-1">
-            {item.stages.map((stage, index) => (
-              <StageTag key={`${item.id}-${index}-${stage ?? 'x'}`} stage={stage} size="xs" />
-            ))}
-          </div>
-        )}
-        <div className="mt-2 text-[10px] font-bold text-[var(--color-text-tertiary)]">
-          {item.outcome.label}
+        <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+          {item.stages.length > 0 && (
+            <span className="inline-flex items-center gap-px">
+              {item.stages.map((stage, index) => (
+                <StageTag key={`${item.id}-${index}-${stage ?? 'x'}`} stage={stage} size="xs" />
+              ))}
+            </span>
+          )}
+          <span className="text-[10px] font-semibold text-[var(--color-text-tertiary)]">{item.outcome.label}</span>
         </div>
       </div>
 
-      <ScenarioMiniProgress item={item} />
+      <div className="col-span-2 lg:col-span-1">
+        <ScenarioProgress item={item} />
+      </div>
 
-      <div className="min-w-0">
-        <div className="grid grid-cols-3 divide-x divide-[var(--color-border-soft)]">
-          <Metric label="現在変化" value={fmtPct(item.currentReturnPct)} className={toneClass(item.currentReturnPct)} />
-          <Metric label="最大上昇" value={fmtPct(item.outcome.maxRisePct)} className={toneClass(item.outcome.maxRisePct)} />
-          <Metric label="最大下落" value={fmtPct(item.outcome.maxDrawdownPct)} className={toneClass(item.outcome.maxDrawdownPct)} />
-        </div>
-        <p className="mt-2 line-clamp-2 text-[11px] font-medium leading-relaxed text-[var(--color-text-secondary)]">
+      <div className="col-span-2 min-w-0 lg:col-span-1">
+        <dl className="grid grid-cols-3 gap-x-3">
+          {[
+            { label: '現在変化', value: item.currentReturnPct },
+            { label: '最大上昇', value: item.outcome.maxRisePct },
+            { label: '最大下落', value: item.outcome.maxDrawdownPct },
+          ].map((metric) => (
+            <div key={metric.label} className="min-w-0">
+              <dt className="text-[10px] font-semibold text-[var(--color-text-tertiary)]">{metric.label}</dt>
+              <dd className={`font-mono text-[13px] font-bold tabular-nums ${toneClass(metric.value)}`}>{fmtPct(metric.value)}</dd>
+            </div>
+          ))}
+        </dl>
+        <p className="mt-1 line-clamp-2 text-[11px] font-medium leading-relaxed text-[var(--color-text-secondary)]">
           {item.outcome.note}
         </p>
-        <div className="mt-1.5 hidden items-start justify-between gap-2 lg:flex">
-          <Link
-            href={stockHref(item.ticker)}
-            prefetch={false}
-            className="inline-flex items-center gap-1 text-[10px] font-bold text-[var(--color-brand-700)] hover:underline"
-          >
-            銘柄ページ
-            <ArrowUpRight size={12} />
-          </Link>
-          {removable && <ArchiveTradeScenarioButton id={item.id} label={itemLabel} />}
-        </div>
       </div>
     </li>
   )
 }
 
-function Metric({ label, value, className }: { label: string; value: string; className?: string }) {
-  return (
-    <div className="min-w-0 px-2 first:pl-0 last:pr-0">
-      <div className="text-[10px] font-bold text-[var(--color-text-tertiary)]">{label}</div>
-      <div className={`mt-0.5 font-mono text-[13px] font-bold ${className ?? ''}`}>{value}</div>
-    </div>
-  )
-}
-
-function SummaryStat({ label, value, tone }: { label: string; value: number; tone?: 'up' | 'down' | 'warning' }) {
-  const cls = tone === 'up'
-    ? 'text-[var(--color-price-up)]'
-    : tone === 'down'
-      ? 'text-[var(--color-price-down)]'
-      : tone === 'warning'
-        ? 'text-[#b45309]'
-        : 'text-[var(--color-text-primary)]'
-  return (
-    <div className="min-w-0 px-1 py-2 text-center sm:px-4 sm:text-left">
-      <div className="whitespace-nowrap text-[9px] font-bold text-[var(--color-text-tertiary)] sm:text-[10px]">{label}</div>
-      <div className={`mt-0.5 font-mono text-[16px] font-bold sm:text-[17px] ${cls}`}>{value.toLocaleString()}</div>
-    </div>
-  )
-}
-
 export async function TradeScenarioOverview({ date = null }: { date?: string | null }) {
-  const overview = await getTradeScenarioOverview(6, date)
+  const overview = await loadTradeScenarioOverview(date ?? null)
   const { summary, items } = overview
+  const stats: Array<{ label: string; value: number; tone: DashboardTone }> = [
+    { label: '要確認', value: summary.attention, tone: 'warning' },
+    { label: '目標到達', value: summary.targetHit, tone: 'up' },
+    { label: '撤退条件', value: summary.stopHit, tone: 'down' },
+    { label: '振り返り待ち', value: summary.reviewDue, tone: 'neutral' },
+    { label: '検証中', value: summary.pending, tone: 'neutral' },
+  ]
 
   return (
-    <section className="overflow-hidden border-y border-[var(--color-border-default)] bg-white">
-      <div className="flex flex-wrap items-start justify-between gap-2 border-b border-[var(--color-border-default)] px-3 py-3 sm:px-4">
-        <div>
-          <h3 className="text-[13px] font-black text-[var(--color-brand-900)]">売買シナリオ進捗</h3>
-          <p className="mt-1 text-[11px] font-semibold text-[var(--color-text-tertiary)]">
-            保存した仮説を、対応が必要な順に一覧表示
-          </p>
+    <div className="min-w-0">
+      <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3 pb-3">
+        <dl className="grid w-full grid-cols-5 gap-x-2 sm:flex sm:w-auto sm:gap-x-7">
+          {stats.map((stat) => (
+            <div key={stat.label} className="min-w-0">
+              <dt className="text-[10px] font-semibold leading-tight text-[var(--color-text-tertiary)] sm:whitespace-nowrap">{stat.label}</dt>
+              <dd className={`font-mono text-[18px] font-bold leading-tight tabular-nums ${stat.value > 0 ? TONE_TEXT[stat.tone] : 'text-[var(--color-text-tertiary)]'}`}>
+                {stat.value.toLocaleString('ja-JP')}
+              </dd>
+            </div>
+          ))}
+        </dl>
+        <div className="text-[11px] font-semibold text-[var(--color-text-tertiary)]">
+          保存した仮説を対応が必要な順に表示 · 全<span className="font-mono font-bold tabular-nums">{summary.total.toLocaleString('ja-JP')}</span>件
         </div>
-        <div className="font-mono text-[11px] font-bold text-[var(--color-text-tertiary)]">
-          全{summary.total.toLocaleString()}件
-        </div>
-      </div>
-
-      <div className="grid grid-cols-5 divide-x divide-[var(--color-border-soft)] border-b border-[var(--color-border-default)] bg-[var(--color-surface-subtle)]">
-        <SummaryStat label="要確認" value={summary.attention} tone="warning" />
-        <SummaryStat label="目標到達" value={summary.targetHit} tone="up" />
-        <SummaryStat label="撤退条件" value={summary.stopHit} tone="down" />
-        <SummaryStat label="振り返り待ち" value={summary.reviewDue} />
-        <SummaryStat label="検証中" value={summary.pending} />
       </div>
 
       {summary.total === 0 ? (
-        <div className="px-4 py-7 text-center">
+        <div className="border-y border-[var(--color-border-soft)] py-6 text-center">
           <div className="text-[13px] font-bold text-[var(--color-text-primary)]">まだ売買シナリオはありません</div>
-          <p className="mt-2 text-[12px] font-medium leading-relaxed text-[var(--color-text-tertiary)]">
+          <p className="mt-1.5 text-[12px] font-medium leading-relaxed text-[var(--color-text-tertiary)]">
             個別銘柄ページで「売買シナリオノート」を保存すると、ここに今日確認すべき仮説が表示されます。
           </p>
         </div>
       ) : (
         <>
-          <div className="hidden grid-cols-[minmax(180px,0.9fr)_minmax(190px,0.95fr)_minmax(260px,1.35fr)_minmax(210px,1fr)] gap-4 border-b border-[var(--color-border-soft)] bg-white px-4 py-2 text-[10px] font-black text-[var(--color-text-tertiary)] lg:grid">
+          <div className={`hidden gap-x-4 border-y border-[var(--color-border-default)] py-1.5 text-[10px] font-bold text-[var(--color-text-tertiary)] lg:grid ${ROW_GRID}`}>
             <div>銘柄・基準日</div>
             <div>判断・ステージ</div>
-            <div>価格進捗</div>
+            <div>価格進捗 (撤退 — 基準 — 目標)</div>
             <div>期間内の変化</div>
+            <div className="sr-only">操作</div>
           </div>
-          <ul className="divide-y divide-[var(--color-border-soft)]">
+          <ul className="divide-y divide-[var(--color-border-soft)] border-b border-[var(--color-border-soft)] max-lg:border-t">
             {items.map((item) => (
               <ScenarioListRow key={item.id} item={item} />
             ))}
           </ul>
         </>
       )}
-    </section>
+    </div>
   )
 }

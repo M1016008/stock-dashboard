@@ -228,6 +228,22 @@ type TradeSignalCacheRow = {
 
 let ensureTradeSignalCachePromise: Promise<void> | null = null
 
+const globalForHistoricalSignalCache = globalThis as typeof globalThis & {
+  __dashboardHistoricalSignalCache?: Map<string, DashboardTradeSignalResult>
+}
+const historicalSignalCache = globalForHistoricalSignalCache.__dashboardHistoricalSignalCache
+  ?? new Map<string, DashboardTradeSignalResult>()
+globalForHistoricalSignalCache.__dashboardHistoricalSignalCache = historicalSignalCache
+
+function writeHistoricalSignalCache(key: string, result: DashboardTradeSignalResult): void {
+  historicalSignalCache.set(key, result)
+  while (historicalSignalCache.size > 12) {
+    const oldest = historicalSignalCache.keys().next().value as string | undefined
+    if (!oldest) break
+    historicalSignalCache.delete(oldest)
+  }
+}
+
 function isSqliteBusyError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error)
   return /SQLITE_BUSY|database is locked/i.test(message)
@@ -269,20 +285,18 @@ async function resolveTradeSignalCacheDates(date: string | null, includeUs: bool
   const [jp, us] = await Promise.all([
     execGet<{ date: string | null }>(
       `
-        SELECT COALESCE(
-          (SELECT MAX(date) FROM daily_snapshots WHERE date <= ?),
-          (SELECT MAX(date) FROM daily_snapshots)
-        ) AS date
+        SELECT MAX(date) AS date
+        FROM daily_snapshots
+        WHERE date <= ?
       `,
       [requested],
     ),
     includeUs
       ? execGet<{ date: string | null }>(
         `
-          SELECT COALESCE(
-            (SELECT MAX(date) FROM market_daily_snapshots WHERE market = 'US' AND date <= ?),
-            (SELECT MAX(date) FROM market_daily_snapshots WHERE market = 'US')
-          ) AS date
+          SELECT MAX(date) AS date
+          FROM market_daily_snapshots
+          WHERE market = 'US' AND date <= ?
         `,
         [requested],
       )
@@ -1031,10 +1045,9 @@ async function loadJpRows(date: string | null, universe: UniverseFilterValue): P
   const rows = await execAll<RawSignalRow>(
     `
     WITH target AS (
-      SELECT COALESCE(
-        (SELECT MAX(date) FROM daily_snapshots WHERE date <= ?),
-        (SELECT MAX(date) FROM daily_snapshots)
-      ) AS date
+      SELECT MAX(date) AS date
+      FROM daily_snapshots
+      WHERE date <= ?
     ),
     price_date AS (
       SELECT MAX(date) AS date
@@ -1147,7 +1160,8 @@ async function loadJpRows(date: string | null, universe: UniverseFilterValue): P
       ON c_down.ticker = ds.ticker
      AND c_down.as_of_date = (SELECT date FROM classic_candidate_date)
      AND c_down.direction = 'down'
-    WHERE COALESCE(u.active, 1) = 1
+    WHERE 1 = 1
+      ${date ? '' : 'AND COALESCE(u.active, 1) = 1'}
       ${universeSql.sql ? `AND ${universeSql.sql}` : ''}
     LIMIT ?
     `,
@@ -1167,10 +1181,9 @@ async function loadJpRows(date: string | null, universe: UniverseFilterValue): P
 async function loadUsRows(date: string | null): Promise<{ rows: RawSignalRow[]; date: string | null }> {
   const target = await execGet<{ date: string | null }>(
     `
-    SELECT COALESCE(
-      (SELECT MAX(date) FROM market_daily_snapshots WHERE market = 'US' AND date <= ?),
-      (SELECT MAX(date) FROM market_daily_snapshots WHERE market = 'US')
-    ) AS date
+    SELECT MAX(date) AS date
+    FROM market_daily_snapshots
+    WHERE market = 'US' AND date <= ?
     `,
     [date ?? '9999-12-31'],
   )
@@ -1332,7 +1345,7 @@ async function loadUsRows(date: string | null): Promise<{ rows: RawSignalRow[]; 
     WHERE s.market = 'US'
       AND s.date = ?
       AND s.ticker IN (${placeholders})
-      AND COALESCE(u.active, 1) = 1
+      ${date ? '' : 'AND COALESCE(u.active, 1) = 1'}
     ORDER BY avg_volume DESC NULLS LAST, s.ticker ASC
     LIMIT ?
     `,
@@ -1365,13 +1378,15 @@ export async function getDashboardTradeSignals(params: {
   const includeUs = !params.universe
   const cacheDates = await resolveTradeSignalCacheDates(params.date ?? null, includeUs)
   const cacheKey = [
-    'v3',
+    'v4',
     `jp:${cacheDates.jpDate ?? 'none'}`,
     `us:${cacheDates.usDate ?? 'none'}`,
     `u:${cacheUniverseKey(params.universe ?? null)}`,
     `i:${scenarioInterval}`,
     `h:${scenarioHorizonDays}`,
   ].join('|')
+  const historicalCached = params.date ? historicalSignalCache.get(cacheKey) : null
+  if (historicalCached) return historicalCached
   const cached = params.forceRefresh ? null : await readTradeSignalCache(cacheKey)
   if (cached) {
     return {
@@ -1400,7 +1415,11 @@ export async function getDashboardTradeSignals(params: {
 
   const displayCandidates = selectDashboardTradeRows(candidates)
   const scenarioCandidates = await enrichScenarioSignals(displayCandidates, params.date ?? null, scenarioInterval, scenarioHorizonDays)
-  const rows = selectDashboardTradeRows(scenarioCandidates)
+  const rows = selectDashboardTradeRows(scenarioCandidates).map((row) => {
+    if (!params.date || !row.date) return row
+    const separator = row.href.includes('?') ? '&' : '?'
+    return { ...row, href: `${row.href}${separator}date=${encodeURIComponent(row.date)}` }
+  })
 
   const result = {
     rows,
@@ -1412,6 +1431,9 @@ export async function getDashboardTradeSignals(params: {
     scenarioIntervalLabel: dashboardScenarioIntervalLabel(scenarioInterval),
     scenarioHorizonDays,
   }
-  await writeTradeSignalCache(cacheKey, result)
+  // Historical rows are immutable but request-time reads must remain write-free.
+  // A dedicated batch may materialize them later if long-lived caching is needed.
+  if (params.date) writeHistoricalSignalCache(cacheKey, result)
+  else await writeTradeSignalCache(cacheKey, result)
   return result
 }

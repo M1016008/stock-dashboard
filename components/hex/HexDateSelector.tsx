@@ -6,12 +6,13 @@ import { MarketDateCalendar, type MarketDateOption } from '@/components/ui/Marke
 
 interface Props {
   dates: MarketDateOption[]
+  requestedDate: string | null
   selectedDate: string | null
   latestDate: string | null
   targetDate: string | null
 }
 
-export function HexDateSelector({ dates, selectedDate, latestDate, targetDate }: Props) {
+export function HexDateSelector({ dates, requestedDate, selectedDate, latestDate, targetDate }: Props) {
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
@@ -46,6 +47,9 @@ export function HexDateSelector({ dates, selectedDate, latestDate, targetDate }:
   }
 
   const isHistorical = Boolean(selectedDate)
+  const adjustedToPriorSession = Boolean(
+    isHistorical && requestedDate && targetDate && requestedDate !== targetDate,
+  )
 
   return (
     <div className="flex flex-wrap items-center justify-between gap-3 rounded-[8px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-3 py-3">
@@ -53,7 +57,9 @@ export function HexDateSelector({ dates, selectedDate, latestDate, targetDate }:
         <div className="text-[12px] font-bold text-[var(--color-text-secondary)]">分析基準日</div>
         <div className="mt-1 text-[11px] font-semibold text-[var(--color-text-tertiary)]">
           {isHistorical
-            ? `${targetDate}時点のステージを表示中。期間タブの「現在まで」で最新日 ${latestDate ?? '-'} への遷移を確認できます。`
+            ? adjustedToPriorSession
+              ? `指定日 ${requestedDate} は取引データがないため、直前の営業日 ${targetDate} を表示中。`
+              : `${targetDate}時点のステージを表示中。期間タブの「現在まで」で最新日 ${latestDate ?? '-'} への遷移を確認できます。`
             : `最新日 ${latestDate ?? '-'} 基準で表示中。過去日を選ぶと、その時点のHEX分析へ切り替わります。`}
         </div>
       </div>

@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import { ArrowUpRight } from 'lucide-react'
 import { StockPreviewTrigger } from '@/components/stock-preview/StockPreviewTrigger'
 import { Card, CardHeader } from '@/components/ui/Card'
 import {
@@ -397,6 +398,27 @@ function NewsSection({
   )
 }
 
+function compactToneText(tone: string | null | undefined): string {
+  if (tone === 'good') return 'text-[var(--color-price-up)]'
+  if (tone === 'bad') return 'text-[var(--color-price-down)]'
+  return 'text-[var(--color-brand-800)]'
+}
+
+function compactChangeTone(value: string | null): string {
+  if (!value) return 'text-[var(--color-text-tertiary)]'
+  if (value.startsWith('+')) return 'text-[var(--color-price-up)]'
+  if (value.startsWith('-')) return 'text-[var(--color-price-down)]'
+  return 'text-[var(--color-text-secondary)]'
+}
+
+function compactRunText(status: string | null | undefined): { label: string; className: string } {
+  if (status === 'success') return { label: '取得成功', className: 'text-[var(--color-text-tertiary)]' }
+  if (status === 'partial') return { label: '一部失敗', className: 'text-[#b45309]' }
+  if (status === 'failed') return { label: '取得失敗', className: 'text-[#b45309]' }
+  return { label: '未取得', className: 'text-[var(--color-text-tertiary)]' }
+}
+
+/** Dashboard 用: 見出し → 記事行 (時刻 | 見出し + 関連銘柄) の罫線リスト。カード・ピルは使わない */
 function CompactNewsList({
   title,
   articles,
@@ -406,13 +428,17 @@ function CompactNewsList({
 }) {
   return (
     <section className="min-w-0">
-      <h3 className="mb-2 text-[12px] font-black text-[var(--color-brand-900)]">{title}</h3>
-      <div className="divide-y divide-[var(--color-border-soft)] border-y border-[var(--color-border-soft)]">
+      <div className="mb-1 flex items-baseline justify-between gap-2">
+        <h4 className="text-[12px] font-bold text-[var(--color-brand-900)]">{title}</h4>
+        <span className="font-mono text-[10px] font-semibold tabular-nums text-[var(--color-text-tertiary)]">{articles.length}記事</span>
+      </div>
+      <ol className="divide-y divide-[var(--color-border-soft)] border-y border-[var(--color-border-soft)]">
         {articles.map((article) => {
-          const stocks = articleStockRows(article).slice(0, 3)
+          const allStocks = articleStockRows(article)
+          const stocks = allStocks.slice(0, 3)
           return (
-            <article key={article.articleId} className="grid gap-1 py-2.5 sm:grid-cols-[70px_minmax(0,1fr)]">
-              <time className="font-mono text-[10px] font-black text-[var(--color-text-tertiary)]" dateTime={article.publishedAt}>
+            <li key={article.articleId} className="grid grid-cols-[4.75rem_minmax(0,1fr)] gap-x-3 py-2">
+              <time className="pt-px font-mono text-[10px] font-semibold tabular-nums text-[var(--color-text-tertiary)]" dateTime={article.publishedAt}>
                 {formatDateTime(article.publishedAt)}
               </time>
               <div className="min-w-0">
@@ -420,34 +446,41 @@ function CompactNewsList({
                   href={article.url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="block truncate text-[12px] font-black text-[var(--color-brand-900)] hover:text-[var(--color-market-red)]"
+                  className="line-clamp-2 text-[12px] font-semibold leading-snug text-[var(--color-text-primary)] hover:text-[var(--color-brand-700)] hover:underline"
                 >
                   {article.title}
                 </a>
                 {stocks.length > 0 && (
-                  <div className="mt-1 flex min-w-0 flex-wrap gap-1">
+                  <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-0.5">
                     {stocks.map((stock) => (
-                      <span key={`${article.articleId}-${stock.ticker}`} className="inline-flex min-w-0 items-center gap-0.5 border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] pl-1.5 pr-0.5 text-[10px] font-black text-[var(--color-brand-800)]">
+                      <span key={`${article.articleId}-${stock.ticker}`} className="inline-flex min-w-0 max-w-full items-center gap-1 text-[11px]">
                         <Link
                           href={`/stock/${encodeURIComponent(stock.ticker)}`}
                           prefetch={false}
-                          className="min-w-0 truncate py-0.5 hover:text-[var(--color-market-red)]"
+                          className={`shrink-0 font-mono font-bold hover:underline ${compactToneText(stock.materialTone)}`}
                         >
-                          {stock.ticker} {stock.name}
+                          {stock.ticker}
                         </Link>
+                        <span className="min-w-0 truncate font-semibold text-[var(--color-text-secondary)]">{stock.name}</span>
+                        {stock.changeText && (
+                          <span className={`shrink-0 font-mono text-[10px] font-bold tabular-nums ${compactChangeTone(stock.changeText)}`}>{stock.changeText}</span>
+                        )}
                         <StockPreviewTrigger ticker={stock.ticker} context="home" />
                       </span>
                     ))}
+                    {allStocks.length > stocks.length && (
+                      <span className="text-[10px] font-semibold text-[var(--color-text-tertiary)]">ほか{allStocks.length - stocks.length}銘柄</span>
+                    )}
                   </div>
                 )}
               </div>
-            </article>
+            </li>
           )
         })}
         {articles.length === 0 && (
-          <p className="py-4 text-center text-[11px] font-bold text-[var(--color-text-tertiary)]">保存済み記事はありません</p>
+          <li className="py-4 text-center text-[11px] font-semibold text-[var(--color-text-tertiary)]">保存済み記事はありません</li>
         )}
-      </div>
+      </ol>
     </section>
   )
 }
@@ -460,6 +493,37 @@ export async function KabutanMaterialNews({ compact = false }: { compact?: boole
   const lastRun = movers.lastRun ?? goodBad.lastRun
   const status = lastRun?.status ?? null
   const hasError = status === 'failed' || status === 'partial'
+
+  if (compact) {
+    const run = compactRunText(status)
+    return (
+      <section aria-labelledby="dashboard-materials-heading" className="min-w-0">
+        <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 border-b-2 border-[var(--color-brand-900)] pb-1.5">
+          <h3 id="dashboard-materials-heading" className="text-[13px] font-bold text-[var(--color-brand-900)]">材料ニュース</h3>
+          <Link href="/materials" className="inline-flex items-center gap-0.5 text-[11px] font-bold text-[var(--color-brand-700)] hover:underline">
+            材料をすべて見る
+            <ArrowUpRight size={12} aria-hidden="true" />
+          </Link>
+        </div>
+        <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 py-2 text-[10px] font-semibold text-[var(--color-text-tertiary)]">
+          <span>出典: 株探 / Kabutan（見出しと関連銘柄のみ表示）</span>
+          <span className="tabular-nums">
+            最終取得 <span className="font-mono font-bold text-[var(--color-text-primary)]">{formatRunTime(lastRun?.finishedAt ?? lastRun?.startedAt)}</span>
+            <span className={`ml-1.5 font-bold ${run.className}`}>{run.label}</span>
+          </span>
+        </div>
+        {hasError && lastRun?.errorSummary && (
+          <p className="mb-2 border-l-2 border-[#d97706] pl-2 text-[11px] font-semibold leading-relaxed text-[#92400e]">
+            最新取得に一部問題があります。保存済みニュースを表示しています: {lastRun.errorSummary}
+          </p>
+        )}
+        <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-1">
+          <CompactNewsList title="前日に動いた銘柄" articles={movers.articles} />
+          <CompactNewsList title="明日の好悪材料" articles={goodBad.articles} />
+        </div>
+      </section>
+    )
+  }
 
   return (
     <Card size="lg" className="p-0">
