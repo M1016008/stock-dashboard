@@ -23,6 +23,11 @@ import { getUniverseFilterMeta, parseUniverseFilter } from '@/lib/market-univers
 import { MarginBadges } from '@/components/ui/MarginBadges'
 import { StageTag } from '@/components/ui/StageTag'
 import { StockPreviewTrigger } from '@/components/stock-preview/StockPreviewTrigger'
+import { PageTitle } from '@/components/layout/PageTitle'
+import { ViewTabs } from '@/components/ui/ViewTabs'
+import { SectionHeader } from '@/components/ui/SectionHeader'
+import { StatStrip } from '@/components/ui/StatStrip'
+import { EmptyState } from '@/components/ui/EmptyState'
 
 export const metadata: Metadata = {
   title: '業種分析 — StockBoard',
@@ -196,27 +201,14 @@ function BreadthBar({ row }: { row: SectorHeatmapRow }) {
   )
 }
 
-function SectorStatPill({
-  label,
-  value,
-  tone = 'neutral',
-}: {
-  label: string
-  value: string
-  tone?: 'up' | 'down' | 'neutral'
-}) {
-  const cls =
-    tone === 'up'
-      ? 'border-[rgba(220,38,38,0.22)] bg-[rgba(220,38,38,0.07)] text-[var(--color-price-up)]'
-      : tone === 'down'
-        ? 'border-[rgba(37,99,235,0.22)] bg-[rgba(37,99,235,0.07)] text-[var(--color-price-down)]'
-        : 'border-[var(--color-border-soft)] bg-white text-[var(--color-text-secondary)]'
-  return (
-    <span className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-bold ${cls}`}>
-      <span className="text-[var(--color-text-tertiary)]">{label}</span>
-      <span className="tabular-nums">{value}</span>
-    </span>
-  )
+function scoreTone(value: number | null | undefined): 'up' | 'down' | undefined {
+  if (value == null || !Number.isFinite(value)) return undefined
+  return value >= 0 ? 'up' : 'down'
+}
+
+function pctTone(value: number | null | undefined): 'up' | 'down' | undefined {
+  if (value == null || !Number.isFinite(value) || value === 0) return undefined
+  return value > 0 ? 'up' : 'down'
 }
 
 function HeatmapGrid({
@@ -232,9 +224,11 @@ function HeatmapGrid({
 }) {
   if (rows.length === 0) {
     return (
-      <div className="rounded-[8px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-4 py-8 text-center text-[13px] font-semibold text-[var(--color-text-tertiary)]">
-        {heatmapLabel(classification)}データなし
-      </div>
+      <EmptyState
+        className="rounded-[6px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)]"
+        title={`${heatmapLabel(classification)}のデータがありません`}
+        description="この期間の集計がまだ作成されていません。"
+      />
     )
   }
   return (
@@ -274,7 +268,8 @@ function HeatmapGrid({
             key={`${classification}-${row.sector_code ?? row.sector_name}`}
             href={href}
             prefetch={false}
-            className={`relative flex min-h-[104px] flex-col justify-between overflow-hidden rounded-[8px] border px-3 py-3 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${
+            aria-current={isSelected ? 'true' : undefined}
+            className={`relative flex min-h-[104px] min-w-0 flex-col justify-between overflow-hidden rounded-[6px] border py-2.5 pl-3.5 pr-3 transition-[border-color,box-shadow] hover:border-[var(--color-border-strong)] hover:shadow-[0_2px_8px_rgba(16,32,52,0.10)] ${
               isSelected ? 'ring-2 ring-[var(--color-brand-700)] ring-offset-1' : ''
             }`}
             style={{ backgroundColor: c.bg, borderColor: c.border }}
@@ -294,7 +289,7 @@ function HeatmapGrid({
               </span>
               <span className="flex flex-col items-end gap-1">
                 <span
-                  className="rounded-full px-2 py-0.5 text-[16px] font-bold tabular-nums"
+                  className="rounded-[4px] px-1.5 py-0.5 text-[16px] font-bold leading-tight tabular-nums"
                   style={{ color: c.text, backgroundColor: positive || negative ? c.soft : 'transparent' }}
                 >
                   {fmtPct(row.avg_change)}
@@ -322,22 +317,22 @@ function RankingTable({
   compact?: boolean
 }) {
   return (
-    <div className="rounded-[8px] border border-[var(--color-border-soft)] bg-white">
-      <div className="flex items-center justify-between border-b border-[var(--color-border-soft)] px-3 py-2">
-        <h3 className="text-[13px] font-bold text-[var(--color-text-primary)]">{title}</h3>
-        <span className="text-[11px] font-bold text-[var(--color-text-tertiary)]">
+    <div className="panel">
+      <div className="panel-head">
+        <h3>{title}</h3>
+        <span className="text-[11px] tabular-nums text-[var(--color-text-tertiary)]">
           {rows.length.toLocaleString()}件
         </span>
       </div>
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[520px] text-[12px]">
+      <div className="table-scroll">
+        <table className="w-full min-w-[440px] text-[12px]">
           <thead>
-            <tr className="text-left text-[10px] font-bold text-[var(--color-text-tertiary)]">
-              <th className="py-2 pl-3 pr-2">順位</th>
+            <tr className="text-left text-[11px] font-bold">
+              <th className="w-10 py-2 pl-3 pr-2">順位</th>
               <th className="py-2 pr-2">業種</th>
               <th className="py-2 pr-2 text-right">騰落率</th>
               <th className="py-2 pr-2 text-right">PMS</th>
-              <th className="py-2 pr-2 text-right">銘柄数</th>
+              <th className="hidden py-2 pr-2 text-right sm:table-cell">銘柄数</th>
               <th className="py-2 pr-3 text-right">上昇/下落</th>
             </tr>
           </thead>
@@ -353,7 +348,7 @@ function RankingTable({
                   </td>
                   <td className="max-w-[260px] py-2 pr-2 font-bold text-[var(--color-text-primary)]">
                     <span className="inline-flex min-w-0 items-center gap-2">
-                      <span className="h-5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: c.accent }} />
+                      <span className="h-4 w-1 shrink-0 rounded-[1px]" style={{ backgroundColor: c.accent }} />
                       <span className="truncate">{row.sector_name}</span>
                     </span>
                   </td>
@@ -363,11 +358,11 @@ function RankingTable({
                   <td className={`py-2 pr-2 text-right font-bold tabular-nums ${toneForScore(row.avg_pms)}`}>
                     {fmtScore(row.avg_pms)}
                   </td>
-                  <td className="py-2 pr-2 text-right text-[var(--color-text-secondary)] tabular-nums">
+                  <td className="hidden py-2 pr-2 text-right text-[var(--color-text-secondary)] tabular-nums sm:table-cell">
                     {row.n_stocks.toLocaleString()}
                   </td>
                   <td className="py-2 pr-3 text-right text-[var(--color-text-secondary)] tabular-nums">
-                    <span className="inline-flex min-w-[120px] flex-col items-stretch gap-1">
+                    <span className="inline-flex min-w-[96px] flex-col items-stretch gap-1">
                       <span>{row.advancing_count.toLocaleString()} / {row.declining_count.toLocaleString()}</span>
                       <span className="h-1 overflow-hidden rounded-full bg-[rgba(37,99,235,0.18)]">
                         <span
@@ -382,8 +377,8 @@ function RankingTable({
             })}
             {rows.length === 0 && (
               <tr>
-                <td colSpan={6} className="py-4 text-center text-[var(--color-text-tertiary)]">
-                  データなし
+                <td colSpan={6} className="py-6 text-center text-[var(--color-text-tertiary)]">
+                  該当する業種はありません
                 </td>
               </tr>
             )}
@@ -391,8 +386,8 @@ function RankingTable({
         </table>
       </div>
       {compact && (
-        <div className="border-t border-[var(--color-border-soft)] px-3 py-2 text-[11px] font-semibold text-[var(--color-text-tertiary)]">
-          上昇/下落は、対象期間でプラスだった銘柄数 / マイナスだった銘柄数です。
+        <div className="border-t border-[var(--color-border-soft)] px-3 py-2 text-[11px] text-[var(--color-text-tertiary)]">
+          上昇/下落は、対象期間でプラス / マイナスだった銘柄数です。
         </div>
       )}
     </div>
@@ -438,30 +433,26 @@ function ClassificationPeriodCard({
   const avgPfs = pfsValues.length > 0 ? pfsValues.reduce((sum, value) => sum + value, 0) / pfsValues.length : null
   const avgPes = pesValues.length > 0 ? pesValues.reduce((sum, value) => sum + value, 0) / pesValues.length : null
   return (
-    <section className="rounded-[10px] border border-[var(--color-border-default)] bg-white p-4 shadow-[var(--shadow-card)]">
-      <div className="mb-4 flex flex-wrap items-start justify-between gap-3 border-b-2 border-[var(--color-brand-700)] bg-[var(--color-surface-subtle)] px-3 py-2">
-        <div className="min-w-0 border-l-4 border-[var(--color-market-red)] pl-2">
-          <h2 className="text-[14px] font-bold text-[var(--color-brand-900)]">
-            {heatmapLabel(classification)}・{period.label}ヒートマップ
-          </h2>
-          <p className="mt-1 text-[11px] font-semibold text-[var(--color-text-tertiary)]">
-            {period.description} / {period.baseDate} → {period.latestDate}
-          </p>
-        </div>
-        <span className="rounded-full border border-[var(--color-border-default)] bg-white px-2.5 py-1 text-[11px] font-bold text-[var(--color-text-secondary)]">
-          {rows.length.toLocaleString()} 分類
-        </span>
-      </div>
+    <section className="min-w-0" aria-label={`${heatmapLabel(classification)} ${period.label}`}>
+      <SectionHeader
+        as="h3"
+        title={`${period.label}`}
+        description={<span className="tabular-nums">{period.description} · {period.baseDate} → {period.latestDate} · {rows.length.toLocaleString()}分類</span>}
+      />
 
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        <SectorStatPill label="上昇業種" value={`${positiveSectorCount}`} tone="up" />
-        <SectorStatPill label="下落業種" value={`${negativeSectorCount}`} tone="down" />
-        <SectorStatPill label="銘柄数" value={totalStocks.toLocaleString()} />
-        <SectorStatPill label="上昇/下落" value={`${totalAdvancing.toLocaleString()} / ${totalDeclining.toLocaleString()}`} />
-        <SectorStatPill label="平均PMS" value={fmtScore(avgPms)} tone={avgPms == null ? 'neutral' : avgPms >= 0 ? 'up' : 'down'} />
-        <SectorStatPill label="平均PFS" value={fmtScore(avgPfs)} tone={avgPfs == null ? 'neutral' : avgPfs >= 0 ? 'up' : 'down'} />
-        <SectorStatPill label="平均PES" value={fmtScore(avgPes)} tone={avgPes == null ? 'neutral' : avgPes >= 0 ? 'up' : 'down'} />
-      </div>
+      <StatStrip
+        className="mb-3"
+        label={`${heatmapLabel(classification)} ${period.label}の集計`}
+        items={[
+          { label: '上昇業種', value: positiveSectorCount.toLocaleString(), tone: 'up' },
+          { label: '下落業種', value: negativeSectorCount.toLocaleString(), tone: 'down' },
+          { label: '銘柄数', value: totalStocks.toLocaleString() },
+          { label: '上昇 / 下落銘柄', value: `${totalAdvancing.toLocaleString()} / ${totalDeclining.toLocaleString()}` },
+          { label: '平均PMS', value: fmtScore(avgPms), tone: scoreTone(avgPms) },
+          { label: '平均PFS', value: fmtScore(avgPfs), tone: scoreTone(avgPfs) },
+          { label: '平均PES', value: fmtScore(avgPes), tone: scoreTone(avgPes) },
+        ]}
+      />
 
       <HeatmapGrid
         rows={sorted}
@@ -475,11 +466,12 @@ function ClassificationPeriodCard({
         <RankingTable title="下落トップ10" rows={bottom10} compact />
       </div>
 
-      <details className="mt-4 rounded-[8px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)]">
-        <summary className="cursor-pointer px-3 py-2 text-[12px] font-bold text-[var(--color-brand-800)]">
-          全件ランキングを表示
+      <details className="group mt-3">
+        <summary className="inline-flex min-h-9 cursor-pointer list-none items-center gap-1.5 text-[12px] font-bold text-[var(--color-brand-700)] hover:text-[var(--color-brand-900)] [&::-webkit-details-marker]:hidden">
+          <span aria-hidden className="inline-block transition-transform group-open:rotate-90">▸</span>
+          全{rows.length.toLocaleString()}分類のランキングを表示
         </summary>
-        <div className="p-3">
+        <div className="mt-2">
           <RankingTable title={`${heatmapLabel(classification)} 全件ランキング`} rows={sorted} />
         </div>
       </details>
@@ -503,12 +495,9 @@ function ClassificationSection({
   baseParams: BaseSectorParams
 }) {
   return (
-    <div className="space-y-4">
-      <div className="sb-page-title">
-        <h2>{title}</h2>
-        <p>{description}</p>
-      </div>
-      <div className="grid grid-cols-1 gap-4">
+    <section className="min-w-0">
+      <SectionHeader level={1} title={title} description={description} />
+      <div className="grid grid-cols-1 gap-8">
         {periods.map((period) => (
           <ClassificationPeriodCard
             key={`${classification}-${period.period}`}
@@ -528,7 +517,7 @@ function ClassificationSection({
           />
         ))}
       </div>
-    </div>
+    </section>
   )
 }
 
@@ -577,10 +566,11 @@ function MarginFilterLink({
     <Link
       href={buildSectorsHref({ ...baseParams, sectorMargin: value })}
       prefetch={false}
-      className={`inline-flex h-7 items-center rounded-full border px-3 text-[11px] font-bold ${
+      aria-current={active ? 'true' : undefined}
+      className={`inline-flex h-8 items-center rounded-[4px] border px-3 text-[12px] font-semibold tabular-nums ${
         active
-          ? 'border-[var(--color-brand-700)] bg-[var(--color-brand-700)] text-white'
-          : 'border-[var(--color-border-default)] bg-white text-[var(--color-text-secondary)] hover:border-[var(--color-brand-300)]'
+          ? 'border-[var(--color-brand-800)] bg-[var(--color-brand-800)] text-white'
+          : 'border-[var(--color-border-default)] bg-white text-[var(--color-text-secondary)] hover:border-[var(--color-border-strong)]'
       }`}
     >
       {label}
@@ -599,8 +589,9 @@ function SectorConstituentBoard({
 }) {
   if (!result) {
     return (
-      <section id="sector-stocks" className="rounded-[8px] border border-dashed border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-4 py-3 text-[12px] font-semibold text-[var(--color-text-tertiary)]">
-        17業種・33業種のヒートマップカードをクリックすると、ここに構成銘柄一覧を表示します。貸借/信用、出来高、6ステージ、騰落率で確認できます。
+      <section id="sector-stocks" className="flex items-start gap-2 rounded-[6px] border border-dashed border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-4 py-3 text-[13px] text-[var(--color-text-secondary)]">
+        <span aria-hidden className="mt-0.5 text-[var(--color-brand-700)]">↓</span>
+        <span>下の17業種・33業種ヒートマップで業種を選ぶと、ここに構成銘柄を表示します。騰落率・出来高・6ステージ・貸借区分で並べ替えできます。</span>
       </section>
     )
   }
@@ -614,71 +605,30 @@ function SectorConstituentBoard({
   ]
 
   return (
-    <section id="sector-stocks" className="rounded-[10px] border border-[var(--color-border-default)] bg-white p-4 shadow-[var(--shadow-card)]">
-      <div className="flex flex-wrap items-start justify-between gap-3 border-b-2 border-[var(--color-brand-700)] bg-[var(--color-surface-subtle)] px-3 py-2">
-        <div className="min-w-0 border-l-4 border-[var(--color-market-red)] pl-2">
-          <h2 className="text-[15px] font-bold text-[var(--color-brand-900)]">
-            {result.classification}業種「{result.sectorName}」構成銘柄
-          </h2>
-          <p className="mt-1 text-[11px] font-semibold text-[var(--color-text-tertiary)]">
-            {periodLabel} / {result.baseDate} → {result.latestDate}
-          </p>
-        </div>
-        <span className="rounded-full border border-[var(--color-border-default)] bg-white px-2.5 py-1 text-[11px] font-bold text-[var(--color-text-secondary)]">
-          {result.rows.length.toLocaleString()}件表示
-        </span>
-      </div>
+    <section id="sector-stocks" className="min-w-0 scroll-mt-36">
+      <SectionHeader
+        level={1}
+        title={`${result.classification}業種「${result.sectorName}」構成銘柄`}
+        description={<span className="tabular-nums">{periodLabel} · {result.baseDate} → {result.latestDate} · {result.rows.length.toLocaleString()}件表示</span>}
+      />
 
-      <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-4">
-        <div className="rounded-[8px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-3 py-2">
-          <div className="text-[10px] font-bold text-[var(--color-text-tertiary)]">平均騰落率</div>
-          <div className={`mt-1 text-[18px] font-bold tabular-nums ${toneForPct(result.summary.avgChangePct)}`}>
-            {fmtPct(result.summary.avgChangePct)}
-          </div>
-        </div>
-        <div className="rounded-[8px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-3 py-2">
-          <div className="text-[10px] font-bold text-[var(--color-text-tertiary)]">合計出来高</div>
-          <div className="mt-1 text-[18px] font-bold tabular-nums text-[var(--color-brand-900)]">
-            {fmtVol(result.summary.totalVolume)}
-          </div>
-        </div>
-        <div className="rounded-[8px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-3 py-2">
-          <div className="text-[10px] font-bold text-[var(--color-text-tertiary)]">30日平均出来高</div>
-          <div className="mt-1 text-[18px] font-bold tabular-nums text-[var(--color-brand-900)]">
-            {fmtVol(result.summary.avgVolume30)}
-          </div>
-        </div>
-        <div className="rounded-[8px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-3 py-2">
-          <div className="text-[10px] font-bold text-[var(--color-text-tertiary)]">貸借/信用</div>
-          <div className="mt-1 flex flex-wrap gap-1">
-            {result.summary.marginTypeCounts.slice(0, 3).map((item) => (
-              <span key={item.marginType} className="rounded-full border border-[var(--color-border-soft)] bg-white px-2 py-0.5 text-[11px] font-bold text-[var(--color-text-secondary)]">
-                {item.marginType} {item.count}
-              </span>
-            ))}
-          </div>
-        </div>
-        <div className="rounded-[8px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-3 py-2">
-          <div className="text-[10px] font-bold text-[var(--color-text-tertiary)]">平均PMS</div>
-          <div className={`mt-1 text-[18px] font-bold tabular-nums ${toneForScore(result.summary.avgPms)}`}>
-            {fmtScore(result.summary.avgPms)}
-          </div>
-        </div>
-        <div className="rounded-[8px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-3 py-2">
-          <div className="text-[10px] font-bold text-[var(--color-text-tertiary)]">平均PFS</div>
-          <div className={`mt-1 text-[18px] font-bold tabular-nums ${toneForScore(result.summary.avgPfs)}`}>
-            {fmtScore(result.summary.avgPfs)}
-          </div>
-        </div>
-        <div className="rounded-[8px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-3 py-2">
-          <div className="text-[10px] font-bold text-[var(--color-text-tertiary)]">平均PES</div>
-          <div className={`mt-1 text-[18px] font-bold tabular-nums ${toneForScore(result.summary.avgPes)}`}>
-            {fmtScore(result.summary.avgPes)}
-          </div>
-        </div>
-      </div>
+      <StatStrip
+        label="構成銘柄の集計"
+        items={[
+          { label: '平均騰落率', value: fmtPct(result.summary.avgChangePct), tone: pctTone(result.summary.avgChangePct) },
+          { label: '合計出来高', value: fmtVol(result.summary.totalVolume) },
+          { label: '30日平均出来高', value: fmtVol(result.summary.avgVolume30) },
+          { label: '平均PMS', value: fmtScore(result.summary.avgPms), tone: scoreTone(result.summary.avgPms) },
+          { label: '平均PFS', value: fmtScore(result.summary.avgPfs), tone: scoreTone(result.summary.avgPfs) },
+          { label: '平均PES', value: fmtScore(result.summary.avgPes), tone: scoreTone(result.summary.avgPes) },
+          {
+            label: '貸借 / 信用',
+            value: result.summary.marginTypeCounts.slice(0, 3).map((item) => `${item.marginType} ${item.count}`).join(' · ') || '—',
+          },
+        ]}
+      />
 
-      <div className="mt-3 flex flex-wrap items-center gap-2">
+      <div className="mt-3 flex flex-wrap items-center gap-2" aria-label="貸借区分で絞り込み">
         {filters.map((filter) => (
           <MarginFilterLink
             key={filter.value ?? 'all'}
@@ -690,10 +640,11 @@ function SectorConstituentBoard({
         ))}
       </div>
 
-      <div className="mt-3 overflow-x-auto">
-        <table className="w-full min-w-[1320px] text-[12px]">
+      <div className="panel mt-3 hidden md:block">
+       <div className="table-scroll">
+        <table className="w-full min-w-[1180px] text-[12px]">
           <thead>
-            <tr className="text-left text-[10px] font-bold text-[var(--color-text-tertiary)]">
+            <tr className="text-left text-[11px] font-bold">
               <th className="py-2 pl-2 pr-3"><SortLink label="コード" sortKey="ticker" current={result} baseParams={baseParams} /></th>
               <th className="py-2 pr-3"><SortLink label="銘柄名" sortKey="name" current={result} baseParams={baseParams} /></th>
               <th className="py-2 pr-3"><SortLink label="貸借/信用" sortKey="marginType" current={result} baseParams={baseParams} /></th>
@@ -714,7 +665,7 @@ function SectorConstituentBoard({
               <tr key={row.ticker} className="hover:bg-[var(--color-surface-subtle)]">
                 <td className="py-2 pl-2 pr-3">
                   <span className="inline-flex items-center gap-1">
-                    <Link href={`/stock/${row.ticker}`} prefetch={false} className="font-mono font-bold text-[var(--color-brand-900)] hover:text-[var(--color-market-red)]">{row.ticker}</Link>
+                    <Link href={`/stock/${row.ticker}`} prefetch={false} className="font-mono font-bold text-[var(--color-brand-900)] hover:text-[var(--color-brand-900)]">{row.ticker}</Link>
                     <StockPreviewTrigger ticker={row.ticker} analysisDate={result.latestDate} context="industry" />
                   </span>
                 </td>
@@ -765,7 +716,38 @@ function SectorConstituentBoard({
             )}
           </tbody>
         </table>
+       </div>
       </div>
+
+      <ul className="panel mt-3 divide-y divide-[var(--color-border-soft)] md:hidden" aria-label="構成銘柄">
+        {result.rows.map((row) => (
+          <li key={row.ticker} className="px-3 py-2.5">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <span className="inline-flex items-center gap-1">
+                  <Link href={`/stock/${row.ticker}`} prefetch={false} className="font-mono text-[13px] font-bold text-[var(--color-brand-800)]">{row.ticker}</Link>
+                  <StockPreviewTrigger ticker={row.ticker} analysisDate={result.latestDate} context="industry" />
+                </span>
+                <div className="truncate text-[13px] font-semibold text-[var(--color-text-primary)]">{row.name ?? row.ticker}</div>
+              </div>
+              <div className="shrink-0 text-right tabular-nums">
+                <div className="text-[13px] font-semibold text-[var(--color-text-primary)]">{fmtPrice(row.price)}</div>
+                <div className={`text-[13px] font-bold ${toneForPct(row.changePct)}`}>{fmtPct(row.changePct)}</div>
+              </div>
+            </div>
+            <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] tabular-nums text-[var(--color-text-secondary)]">
+              <StageCode code={row.stageCode} />
+              <span>出来高 {fmtVol(row.volume)}</span>
+              <span className={toneForScore(row.pms)}>PMS {fmtScore(row.pms)}</span>
+              <span className={toneForScore(row.pfs)}>PFS {fmtScore(row.pfs)}</span>
+              <MarginBadges marginType={row.marginType} compact emptyLabel="未設定" />
+            </div>
+          </li>
+        ))}
+        {result.rows.length === 0 && (
+          <li className="px-3 py-6 text-center text-[12px] text-[var(--color-text-tertiary)]">条件に合う銘柄はありません。</li>
+        )}
+      </ul>
     </section>
   )
 }
@@ -887,74 +869,82 @@ export default async function SectorsPage({
 
   return (
     <div className="sb-page">
-      <div className="sb-page-title">
-        <h1>{structureView ? '業種構造分析' : '業種分析ヒートマップ'}</h1>
-        <p>
-          {structureView
-            ? `${universeScopeLabel}の6ステージ構造を、17/33業種と四季報60分類・細分類ごとに集約して確認します。`
-            : `${universeMeta ? `${universeMeta.label}を対象に、` : ''}J-Quantsの17/33業種分類と四季報60分類・業種細分類を使い、本日・今週・今月の強弱を一覧で確認できます。`}
-        </p>
-      </div>
-
-      <div className="sb-section" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
-        <Link href="/sectors" className={`sb-tab ${!structureView ? 'sb-on' : ''}`}>騰落率</Link>
-        <Link href={`/sectors?${new URLSearchParams({
-          view: 'structure',
-          structureTaxonomy: 'major',
-          ...(universeFilter ? { universe: universeFilter } : {}),
-        }).toString()}#sector-structure`} className={`sb-tab ${structureView ? 'sb-on' : ''}`}>構造変化</Link>
-        {!structureView && <>
-          {([
-            ['overview', '17/33業種'],
-            ['major', '四季報60分類'],
-            ['subIndustry', '業種細分類'],
-          ] as const).map(([key, label]) => (
-            <Link
-              key={key}
-              href={`/sectors?${new URLSearchParams({
+      <PageTitle
+        eyebrow="市場・業種"
+        title={structureView ? '業種別ステージ分布' : '業種分析'}
+        subtitle={structureView
+          ? `${universeScopeLabel}の6ステージ構造を、17/33業種・四季報60分類・細分類ごとに集約して比較します。`
+          : `${universeMeta ? `${universeMeta.label}を対象に、` : ''}17/33業種・四季報60分類・業種細分類の強弱を、本日・今週・今月で比較します。`}
+        badge={universeMeta?.shortLabel}
+        meta={<span>基準日 <strong className="font-semibold text-[var(--color-text-primary)]">{structureView ? structureBoard?.latestDate ?? '—' : latestDate ?? '—'}</strong></span>}
+      >
+        <ViewTabs
+          label="業種分析の表示"
+          current={structureView ? 'structure' : 'performance'}
+          items={[
+            { key: 'performance', label: '騰落率', href: `/sectors${universeFilter ? `?universe=${encodeURIComponent(universeFilter)}` : ''}` },
+            {
+              key: 'structure',
+              label: '構造変化',
+              href: `/sectors?${new URLSearchParams({
+                view: 'structure',
+                structureTaxonomy: 'major',
+                ...(universeFilter ? { universe: universeFilter } : {}),
+              }).toString()}#sector-structure`,
+            },
+          ]}
+        />
+        {!structureView && (
+          <ViewTabs
+            label="業種分類"
+            current={heatmapTaxonomy}
+            items={([
+              ['overview', '17/33業種'],
+              ['major', '四季報60分類'],
+              ['subIndustry', '業種細分類'],
+            ] as const).map(([key, label]) => ({
+              key,
+              label,
+              href: `/sectors?${new URLSearchParams({
                 ...(universeFilter ? { universe: universeFilter } : {}),
                 ...(key === 'overview' ? {} : { heatmapTaxonomy: key }),
-              }).toString()}#sector-heatmaps`}
-              className={`sb-tab ${heatmapTaxonomy === key ? 'sb-on' : ''}`}
-            >
-              {label}
-            </Link>
-          ))}
-          {heatmapTaxonomy === 'subIndustry'
-            ? ([
-                ['today', '本日'],
-                ['week', '今週'],
-                ['month', '今月'],
-              ] as const).map(([period, label]) => (
-                <Link
-                  key={period}
-                  href={`/sectors?${new URLSearchParams({
-                    ...(universeFilter ? { universe: universeFilter } : {}),
-                    heatmapTaxonomy: 'subIndustry',
-                    heatmapPeriod: period,
-                  }).toString()}#sector-heatmaps`}
-                  className={`sb-tab ${heatmapPeriod === period ? 'sb-on' : ''}`}
-                >
-                  {label}
-                </Link>
-              ))
-            : <><span className="sb-tab sb-on">本日</span><span className="sb-tab sb-on">今週</span><span className="sb-tab sb-on">今月</span></>}
-        </>}
-        {structureView && <span className="sb-tab sb-on">6ステージ分布</span>}
-        {universeMeta && <span className="sb-tab sb-on">{universeMeta.shortLabel}</span>}
-        <span className="sb-t" style={{ marginLeft: 'auto', fontSize: 11 }}>
-          基準日: {structureView ? structureBoard?.latestDate ?? '---' : latestDate ?? '---'}
-        </span>
-      </div>
+              }).toString()}#sector-heatmaps`,
+            }))}
+          />
+        )}
+        {!structureView && heatmapTaxonomy === 'subIndustry' && (
+          <ViewTabs
+            label="集計期間"
+            current={heatmapPeriod}
+            items={([
+              ['today', '本日'],
+              ['week', '今週'],
+              ['month', '今月'],
+            ] as const).map(([period, label]) => ({
+              key: period,
+              label,
+              href: `/sectors?${new URLSearchParams({
+                ...(universeFilter ? { universe: universeFilter } : {}),
+                heatmapTaxonomy: 'subIndustry',
+                heatmapPeriod: period,
+              }).toString()}#sector-heatmaps`,
+            }))}
+          />
+        )}
+        {!structureView && heatmapTaxonomy !== 'subIndustry' && (
+          <span className="text-[12px] text-[var(--color-text-tertiary)]">本日・今週・今月を縦に並べて表示</span>
+        )}
+      </PageTitle>
 
       {structureView && structureBoard ? (
         <SectorStructureBoard board={structureBoard} />
       ) : board.periods.length === 0 ? (
-        <div className="sb-section" style={{ textAlign: 'center', color: 'var(--color-text-tertiary)', fontWeight: 700 }}>
-          業種データがありません。J-Quantsの上場銘柄情報と株価データを取得してください。
-        </div>
+        <EmptyState
+          title="業種データがありません"
+          description="上場銘柄情報と株価データの取り込み後に表示されます。"
+        />
       ) : (
-        <div className="space-y-7">
+        <div className="space-y-10">
           {showBuiltInPanels && <>
             <SectorConstituentBoard
               result={selectedConstituents}
@@ -984,7 +974,7 @@ export default async function SectorsPage({
               baseParams={baseSectorParams}
             />
           )}
-          <div id="sector-heatmaps">
+          <div id="sector-heatmaps" className="scroll-mt-36">
             {heatmapTaxonomy === 'major' && (
               <ClassificationSection
                 title="四季報60分類ヒートマップ・ランキング"

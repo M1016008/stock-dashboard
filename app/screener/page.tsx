@@ -13,6 +13,8 @@ import { MarketDateCalendar } from '@/components/ui/MarketDateCalendar'
 import { SavedViewManager } from '@/components/ui/SavedViewManager'
 import { getCompareSymbols, toggleComparedSymbol } from '@/lib/client/stock-workspace'
 import { IntegratedScreener } from '@/components/screener/IntegratedScreener'
+import { PageTitle } from '@/components/layout/PageTitle'
+import { ViewTabs } from '@/components/ui/ViewTabs'
 import { replaceCurrentUrlFilters } from '@/lib/client/url-filter-state'
 import { getUniverseFilterMeta, parseUniverseFilter, UNIVERSE_FILTER_PARAM } from '@/lib/market-universe'
 import { formatShortTermStrength, SHORT_TERM_CHECK_LABELS, type ShortTermCheckLabel } from '@/lib/short-term-check'
@@ -1176,14 +1178,9 @@ function LegacyScreenerPage() {
   }
 
   return (
-    <div className="sb-page">
-      <div className="sb-page-title">
-        <h1>スクリーナー（マルチ軸ステージフィルタ）</h1>
-        <p>J-Quants由来の最新スナップショットを表示。HEXステージで絞り込み（複数系統は AND）</p>
-      </div>
-
-      <div style={{ padding: '14px 16px 16px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
-      <div className="flex flex-wrap items-center justify-between gap-2 border border-[var(--color-border-default)] bg-white px-3 py-2">
+    <div className="flex min-w-0 flex-col">
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+      <div className="flex flex-wrap items-center justify-between gap-2 rounded-[6px] border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-3 py-2">
         <SavedViewManager
           storageKey="stockboard_jp_screener_views"
           value={savedView}
@@ -1193,7 +1190,7 @@ function LegacyScreenerPage() {
           <button
             type="button"
             onClick={resetAllFilters}
-            className="inline-flex h-8 w-8 items-center justify-center border border-[var(--color-border-default)] bg-white text-[var(--color-text-secondary)]"
+            className="btn w-8 px-0"
             title="条件をリセット"
             aria-label="条件をリセット"
           >
@@ -1202,11 +1199,8 @@ function LegacyScreenerPage() {
           <button
             type="button"
             onClick={() => setFiltersExpanded((current) => !current)}
-            className={`inline-flex h-8 items-center gap-1.5 border px-2.5 text-[11px] font-black ${
-              filtersExpanded
-                ? 'border-[var(--color-brand-700)] bg-[var(--color-brand-700)] text-white'
-                : 'border-[var(--color-border-default)] bg-white text-[var(--color-text-secondary)]'
-            }`}
+            className="btn"
+            data-variant={filtersExpanded ? 'primary' : undefined}
             aria-expanded={filtersExpanded}
           >
             <Filter size={14} />
@@ -2171,7 +2165,7 @@ function ScreenerConditionPanel({
       gap: '12px',
       alignItems: 'start',
       border: '1px solid var(--border-subtle)',
-      background: 'linear-gradient(180deg, var(--bg-surface), var(--bg-elevated))',
+      background: 'var(--color-surface-subtle)',
     }}>
       <div style={{ minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginBottom: '8px' }}>
@@ -3126,11 +3120,25 @@ export default function ScreenerPage() {
     else params.delete('mode')
     router.replace(`/screener${params.size > 0 ? `?${params.toString()}` : ''}`, { scroll: false })
   }
-  return <>
-    <div className="mx-4 mt-3 flex h-9 items-center border border-[var(--color-border-default)] bg-white p-0.5 max-[640px]:mx-2.5">
-      <button type="button" onClick={() => setMode('integrated')} className={`h-7 flex-1 px-3 text-[11px] font-black ${mode === 'integrated' ? 'bg-[var(--color-brand-700)] text-white' : 'text-[var(--color-text-secondary)]'}`}>統合スクリーナー</button>
-      <button type="button" onClick={() => setMode('legacy')} className={`h-7 flex-1 px-3 text-[11px] font-black ${mode === 'legacy' ? 'bg-[var(--color-brand-700)] text-white' : 'text-[var(--color-text-secondary)]'}`}>従来テクニカル</button>
+  return (
+    <div className="flex w-full min-w-0 flex-col gap-4">
+      <PageTitle
+        eyebrow="銘柄探索"
+        title="スクリーナー"
+        subtitle={mode === 'integrated'
+          ? '業績・バリュエーション・株主還元・市場構造・テクニカルを、同じ基準日で横断して絞り込みます。'
+          : '最新スナップショットを、6ステージ・移動平均・物理指標などテクニカル条件で絞り込みます（複数の軸はAND）。'}
+      >
+        <ViewTabs
+          label="スクリーナーの種類"
+          current={mode}
+          items={[
+            { key: 'integrated', label: '統合スクリーナー', onClick: () => setMode('integrated') },
+            { key: 'legacy', label: '従来テクニカル', onClick: () => setMode('legacy') },
+          ]}
+        />
+      </PageTitle>
+      {mode === 'integrated' ? <IntegratedScreener /> : <LegacyScreenerPage />}
     </div>
-    {mode === 'integrated' ? <IntegratedScreener /> : <LegacyScreenerPage />}
-  </>
+  )
 }

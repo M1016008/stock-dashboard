@@ -33,7 +33,7 @@ export function PatternSearch({ currentCode, topPatterns }: Props) {
           value={value}
           onChange={(e) => setValue(e.target.value)}
           placeholder="パターンコード検索 (例: 111116)"
-          className="w-[220px] rounded-[6px] border border-[var(--color-border-default)] bg-[var(--color-surface-base)] px-3 py-1.5 font-mono text-[13px] tabular-nums tracking-[0.05em] outline-none focus:border-[var(--color-brand-500)]"
+          className="w-[220px] rounded-[6px] border border-[var(--color-border-default)] bg-[var(--color-surface-base)] px-3 py-1.5 font-mono text-[13px] tabular-nums outline-none focus:border-[var(--color-brand-500)]"
           maxLength={6}
         />
         <button
@@ -58,7 +58,7 @@ export function PatternSearch({ currentCode, topPatterns }: Props) {
                   key={t.pattern_code}
                   href={`/ai/transitions?code=${t.pattern_code}`}
                   onClick={() => setOpen(false)}
-                  className="rounded-[4px] px-2 py-1 text-left text-[11px] tabular-nums tracking-[0.05em] hover:bg-[var(--color-surface-muted)]"
+                  className="rounded-[4px] px-2 py-1 text-left text-[11px] tabular-nums hover:bg-[var(--color-surface-muted)]"
                 >
                   <span className="font-medium">{t.pattern_code}</span>
                   <span className="ml-1 text-[var(--color-text-tertiary)]">n={t.count.toLocaleString()}</span>

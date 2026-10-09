@@ -1,6 +1,10 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
+import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { PageTitle } from '@/components/layout/PageTitle'
+import { ViewTabs } from '@/components/ui/ViewTabs'
+import { StatStrip } from '@/components/ui/StatStrip'
+import { SectionHeader } from '@/components/ui/SectionHeader'
 import { StageTag } from '@/components/ui/StageTag'
 import { execAll, execGet } from '@/lib/db/client'
 import {
@@ -108,6 +112,12 @@ function statusFor(row: StockMomentumRow): { label: string; tone: 'up' | 'down' 
   if (pms <= -1 || pfs <= -0.8) return { label: '下落警戒', tone: 'down' }
   if (pfs > 0 && pms > 0) return { label: '前向き', tone: 'up' }
   return { label: '中立', tone: 'neutral' }
+}
+
+const TONE_MARK: Record<'up' | 'down' | 'warning', string> = {
+  up: 'var(--color-price-up)',
+  down: 'var(--color-price-down)',
+  warning: '#d97706',
 }
 
 function statusClass(tone: 'up' | 'down' | 'warning' | 'neutral'): string {
@@ -343,33 +353,12 @@ function StageStrip({ row }: { row: StockMomentumRow }) {
     { label: '月B', value: row.monthlyBStage },
   ]
   return (
-    <div className="flex max-w-full items-center gap-1 overflow-x-auto whitespace-nowrap [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+    <div className="flex items-center gap-0.5 whitespace-nowrap" aria-label="6ステージ">
       {stages.map((stage) => (
-        <span key={stage.label} className="inline-flex shrink-0 items-center gap-0.5 rounded-full border border-[var(--color-border-soft)] bg-white px-1 py-0.5">
-          <span className="text-[8px] font-bold text-[var(--color-text-tertiary)]">{stage.label}</span>
+        <span key={stage.label} className="inline-flex shrink-0 flex-col items-center" title={stage.label}>
           <StageTag stage={stage.value} size="xs" />
         </span>
       ))}
-    </div>
-  )
-}
-
-function SummaryTile({
-  label,
-  value,
-  sub,
-  tone,
-}: {
-  label: string
-  value: string
-  sub: string
-  tone: 'up' | 'down' | 'warning' | 'neutral'
-}) {
-  return (
-    <div className={`rounded-[8px] border px-3 py-2 ${statusClass(tone)}`}>
-      <div className="text-[10px] font-bold opacity-75">{label}</div>
-      <div className="mt-1 font-mono text-[22px] font-bold leading-none">{value}</div>
-      <div className="mt-2 text-[10px] font-bold opacity-75">{sub}</div>
     </div>
   )
 }
@@ -381,6 +370,7 @@ function RankingPanel({
   scoreKey,
   scoreLabel,
   tone,
+  href,
 }: {
   title: string
   badge: string
@@ -388,134 +378,160 @@ function RankingPanel({
   scoreKey: 'pms' | 'pfs' | 'pes'
   scoreLabel: string
   tone: 'up' | 'down' | 'warning'
+  href: string
 }) {
   return (
-    <section className="overflow-hidden rounded-[8px] border border-[var(--color-border-soft)] bg-white">
-      <div className={`flex items-center justify-between gap-2 border-b px-3 py-2 ${statusClass(tone)}`}>
-        <div>
-          <h2 className="text-[12px] font-bold">{title}</h2>
-          <p className="mt-0.5 text-[10px] font-semibold opacity-75">{badge}</p>
+    <section className="panel flex min-w-0 flex-col">
+      <div className="panel-head">
+        <div className="min-w-0">
+          <h2 className="flex items-center gap-1.5">
+            <span aria-hidden className="inline-block h-2.5 w-2.5 rounded-[2px]" style={{ background: TONE_MARK[tone] }} />
+            {title}
+          </h2>
+          <p>{badge}</p>
         </div>
-        <span className="rounded-full border border-current/25 bg-white/60 px-2 py-0.5 text-[10px] font-bold">
-          {rows.length}件
-        </span>
+        <span className="text-[11px] tabular-nums text-[var(--color-text-tertiary)]">上位{rows.length}件</span>
       </div>
-      <div className="divide-y divide-[var(--color-border-soft)]">
+      <div className="flex-1 divide-y divide-[var(--color-border-soft)]">
         {rows.map((row, index) => {
           const status = statusFor(row)
           return (
-            <div key={`${title}-${row.ticker}`} className="grid grid-cols-[28px_minmax(0,1fr)_auto] items-center gap-2 px-3 py-2">
-              <div className="font-mono text-[12px] font-bold text-[var(--color-text-tertiary)]">{index + 1}</div>
+            <div key={`${title}-${row.ticker}`} className="grid grid-cols-[24px_minmax(0,1fr)_auto] items-center gap-2 px-3 py-2">
+              <div className="font-mono text-[12px] tabular-nums text-[var(--color-text-tertiary)]">{index + 1}</div>
               <div className="min-w-0">
                 <div className="flex min-w-0 items-center gap-2">
-                  <Link href={`/stock/${encodeURIComponent(row.ticker)}`} prefetch={false} className="font-mono text-[12px] font-bold text-[var(--color-brand-800)] hover:underline">
+                  <Link href={`/stock/${encodeURIComponent(row.ticker)}`} prefetch={false} className="font-mono text-[12px] font-bold text-[var(--color-brand-700)] hover:underline">
                     {row.ticker}
                   </Link>
-                  <span className="truncate text-[11px] font-bold text-[var(--color-text-primary)]">{row.name ?? row.ticker}</span>
+                  <span className="truncate text-[12px] font-semibold text-[var(--color-text-primary)]">{row.name ?? row.ticker}</span>
                 </div>
-                <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px] font-semibold text-[var(--color-text-tertiary)]">
-                  <span className={`rounded-full border px-1.5 py-0.5 ${statusClass(status.tone)}`}>{status.label}</span>
-                  <span>{row.sector17Name ?? '業種未分類'}</span>
+                <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[10px] text-[var(--color-text-tertiary)]">
+                  <span className={`rounded-[3px] border px-1 py-px font-semibold ${statusClass(status.tone)}`}>{status.label}</span>
+                  <span className="truncate">{row.sector17Name ?? '業種未分類'}</span>
                   <span>{row.marginType ?? '貸借未設定'}</span>
                 </div>
               </div>
-              <div className="text-right">
-                <div className={`font-mono text-[14px] font-bold ${scoreColor(row[scoreKey])}`}>{fmtScore(row[scoreKey])}</div>
-                <div className="text-[10px] font-bold text-[var(--color-text-tertiary)]">{scoreLabel}</div>
-                <div className={`font-mono text-[10px] font-bold ${scoreColor(row.changePct)}`}>{fmtPct(row.changePct)}</div>
+              <div className="text-right tabular-nums">
+                <div className={`font-mono text-[14px] font-bold leading-tight ${scoreColor(row[scoreKey])}`}>{fmtScore(row[scoreKey])}</div>
+                <div className="text-[10px] text-[var(--color-text-tertiary)]">
+                  {scoreLabel} · <span className={scoreColor(row.changePct)}>{fmtPct(row.changePct)}</span>
+                </div>
               </div>
             </div>
           )
         })}
         {rows.length === 0 && (
-          <div className="px-3 py-5 text-center text-[11px] font-semibold text-[var(--color-text-tertiary)]">対象銘柄がありません</div>
+          <div className="px-3 py-6 text-center text-[12px] text-[var(--color-text-tertiary)]">対象銘柄がありません</div>
         )}
       </div>
+      <Link href={href} prefetch={false} className="flex min-h-9 items-center justify-center gap-1 border-t border-[var(--color-border-soft)] text-[12px] font-semibold text-[var(--color-brand-700)] hover:bg-[var(--color-surface-subtle)]">
+        全件を一覧で見る
+        <ChevronRight size={13} aria-hidden />
+      </Link>
     </section>
   )
 }
 
-function StockListTable({
-  rows,
-  rank,
-  total,
-  page,
-}: {
-  rows: StockMomentumRow[]
-  rank: ReturnType<typeof rankMeta>
-  total: number
-  page: number
-}) {
-  const first = total > 0 ? (page - 1) * STOCK_LIST_PAGE_SIZE + 1 : 0
-  const last = total > 0 ? first + rows.length - 1 : 0
+function StockListTable({ rows }: { rows: StockMomentumRow[] }) {
   return (
-    <div id="stock-list" className="scroll-mt-24 overflow-hidden rounded-[8px] border border-[var(--color-border-soft)] bg-white">
-      <div className={`border-b px-3 py-2 ${statusClass(rank.tone)}`}>
-        <h2 className="text-[13px] font-bold">{rank.label}</h2>
-        <p className="mt-1 text-[10px] font-semibold opacity-80">
-          {rank.description} 上位最大{STOCK_LIST_MAX_ROWS}件を100件ずつ表示します。現在 {first.toLocaleString()}〜{last.toLocaleString()} / {total.toLocaleString()}件です。
-        </p>
-      </div>
-      <div className="overflow-x-auto">
-        <table className="min-w-[1080px] w-full border-collapse text-[12px]">
-          <thead className="bg-[var(--color-surface-subtle)] text-[10px] text-[var(--color-text-tertiary)]">
-            <tr>
-              <th className="px-3 py-2 text-left font-bold">銘柄</th>
-              <th className="px-3 py-2 text-left font-bold">状態</th>
-              <th className="px-3 py-2 text-left font-bold">業種</th>
-              <th className="px-3 py-2 text-left font-bold">貸借</th>
-              <th className="px-3 py-2 text-right font-bold">価格</th>
-              <th className="px-3 py-2 text-right font-bold">日次</th>
-              <th className="px-3 py-2 text-right font-bold">出来高</th>
-              <th className="px-3 py-2 text-right font-bold">PMS</th>
-              <th className="px-3 py-2 text-right font-bold">PFS</th>
-              <th className="px-3 py-2 text-right font-bold">PES</th>
-              <th className="px-3 py-2 text-left font-bold">6ステージ</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-[var(--color-border-soft)]">
-            {rows.map((row) => {
-              const status = statusFor(row)
-              return (
-                <tr key={row.ticker} className="hover:bg-[var(--color-surface-subtle)]">
-                  <td className="px-3 py-2">
-                    <div className="flex min-w-0 items-center gap-2">
-                      <Link href={`/stock/${encodeURIComponent(row.ticker)}`} prefetch={false} className="font-mono font-bold text-[var(--color-brand-800)] hover:underline">
-                        {row.ticker}
-                      </Link>
-                      <span className="max-w-[180px] truncate font-bold text-[var(--color-text-primary)]">{row.name ?? row.ticker}</span>
-                    </div>
-                    <div className="mt-0.5 text-[10px] font-semibold text-[var(--color-text-tertiary)]">{row.marketSegment ?? '市場未分類'}</div>
-                  </td>
-                  <td className="px-3 py-2">
-                    <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-bold ${statusClass(status.tone)}`}>{status.label}</span>
-                  </td>
-                  <td className="px-3 py-2 text-[11px] font-semibold text-[var(--color-text-secondary)]">
-                    <div>{row.sector17Name ?? '---'}</div>
-                    <div className="mt-0.5 text-[10px] text-[var(--color-text-tertiary)]">{row.sector33Name ?? ''}</div>
-                  </td>
-                  <td className="px-3 py-2 text-[11px] font-bold text-[var(--color-text-secondary)]">{row.marginType ?? '---'}</td>
-                  <td className="px-3 py-2 text-right font-mono font-bold">{fmtPrice(row.price)}</td>
-                  <td className={`px-3 py-2 text-right font-mono font-bold ${scoreColor(row.changePct)}`}>{fmtPct(row.changePct)}</td>
-                  <td className="px-3 py-2 text-right font-mono font-bold text-[var(--color-text-secondary)]">{fmtVolume(row.volume)}</td>
-                  <td className={`px-3 py-2 text-right font-mono font-bold ${scoreColor(row.pms)}`}>{fmtScore(row.pms)}</td>
-                  <td className={`px-3 py-2 text-right font-mono font-bold ${scoreColor(row.pfs)}`}>{fmtScore(row.pfs)}</td>
-                  <td className={`px-3 py-2 text-right font-mono font-bold ${scoreColor(row.pes)}`}>{fmtScore(row.pes)}</td>
-                  <td className="px-3 py-2"><StageStrip row={row} /></td>
-                </tr>
-              )
-            })}
-            {rows.length === 0 && (
+    <>
+      <div className="panel hidden lg:block">
+        <div className="table-scroll">
+          <table className="w-full min-w-[1040px] border-collapse text-[12px]">
+            <thead className="text-[11px]">
               <tr>
-                <td colSpan={11} className="px-3 py-8 text-center text-[12px] font-semibold text-[var(--color-text-tertiary)]">
-                  対象銘柄がありません
-                </td>
+                <th className="px-3 py-2 text-left font-bold">銘柄</th>
+                <th className="px-3 py-2 text-left font-bold">状態</th>
+                <th className="px-3 py-2 text-left font-bold">業種</th>
+                <th className="px-3 py-2 text-left font-bold">貸借</th>
+                <th className="px-3 py-2 text-right font-bold">価格</th>
+                <th className="px-3 py-2 text-right font-bold">日次</th>
+                <th className="px-3 py-2 text-right font-bold">出来高</th>
+                <th className="px-3 py-2 text-right font-bold">PMS</th>
+                <th className="px-3 py-2 text-right font-bold">PFS</th>
+                <th className="px-3 py-2 text-right font-bold">PES</th>
+                <th className="px-3 py-2 text-left font-bold">6ステージ</th>
               </tr>
-            )}
-          </tbody>
-        </table>
+            </thead>
+            <tbody className="divide-y divide-[var(--color-border-soft)]">
+              {rows.map((row) => {
+                const status = statusFor(row)
+                return (
+                  <tr key={row.ticker} className="hover:bg-[#fff8e6]">
+                    <td className="px-3 py-2">
+                      <div className="flex min-w-0 items-center gap-2">
+                        <Link href={`/stock/${encodeURIComponent(row.ticker)}`} prefetch={false} className="font-mono font-bold text-[var(--color-brand-700)] hover:underline">
+                          {row.ticker}
+                        </Link>
+                        <span className="max-w-[200px] truncate font-semibold text-[var(--color-text-primary)]">{row.name ?? row.ticker}</span>
+                      </div>
+                      <div className="mt-0.5 text-[10px] text-[var(--color-text-tertiary)]">{row.marketSegment ?? '市場未分類'}</div>
+                    </td>
+                    <td className="px-3 py-2">
+                      <span className={`inline-flex rounded-[3px] border px-1.5 py-0.5 text-[10px] font-bold ${statusClass(status.tone)}`}>{status.label}</span>
+                    </td>
+                    <td className="px-3 py-2 text-[11px] text-[var(--color-text-secondary)]">
+                      <div>{row.sector17Name ?? '---'}</div>
+                      <div className="mt-0.5 text-[10px] text-[var(--color-text-tertiary)]">{row.sector33Name ?? ''}</div>
+                    </td>
+                    <td className="px-3 py-2 text-[11px] text-[var(--color-text-secondary)]">{row.marginType ?? '---'}</td>
+                    <td className="px-3 py-2 text-right font-mono">{fmtPrice(row.price)}</td>
+                    <td className={`px-3 py-2 text-right font-mono font-bold ${scoreColor(row.changePct)}`}>{fmtPct(row.changePct)}</td>
+                    <td className="px-3 py-2 text-right font-mono text-[var(--color-text-secondary)]">{fmtVolume(row.volume)}</td>
+                    <td className={`px-3 py-2 text-right font-mono font-bold ${scoreColor(row.pms)}`}>{fmtScore(row.pms)}</td>
+                    <td className={`px-3 py-2 text-right font-mono font-bold ${scoreColor(row.pfs)}`}>{fmtScore(row.pfs)}</td>
+                    <td className={`px-3 py-2 text-right font-mono font-bold ${scoreColor(row.pes)}`}>{fmtScore(row.pes)}</td>
+                    <td className="px-3 py-2"><StageStrip row={row} /></td>
+                  </tr>
+                )
+              })}
+              {rows.length === 0 && (
+                <tr>
+                  <td colSpan={11} className="px-3 py-8 text-center text-[12px] text-[var(--color-text-tertiary)]">
+                    対象銘柄がありません
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
-    </div>
+
+      <ul className="panel m-0 list-none divide-y divide-[var(--color-border-soft)] p-0 lg:hidden" aria-label="銘柄一覧">
+        {rows.map((row) => {
+          const status = statusFor(row)
+          return (
+            <li key={`${row.ticker}-m`} className="px-3 py-2.5">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <Link href={`/stock/${encodeURIComponent(row.ticker)}`} prefetch={false} className="font-mono text-[13px] font-bold text-[var(--color-brand-700)]">
+                      {row.ticker}
+                    </Link>
+                    <span className={`rounded-[3px] border px-1 py-px text-[10px] font-bold ${statusClass(status.tone)}`}>{status.label}</span>
+                  </div>
+                  <div className="truncate text-[13px] font-semibold text-[var(--color-text-primary)]">{row.name ?? row.ticker}</div>
+                  <div className="truncate text-[11px] text-[var(--color-text-tertiary)]">{row.sector17Name ?? '---'} · {row.marginType ?? '---'}</div>
+                </div>
+                <div className="shrink-0 text-right font-mono tabular-nums">
+                  <div className="text-[13px]">{fmtPrice(row.price)}</div>
+                  <div className={`text-[12px] font-bold ${scoreColor(row.changePct)}`}>{fmtPct(row.changePct)}</div>
+                </div>
+              </div>
+              <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[11px] tabular-nums">
+                <StageStrip row={row} />
+                <span className={scoreColor(row.pms)}>PMS {fmtScore(row.pms)}</span>
+                <span className={scoreColor(row.pfs)}>PFS {fmtScore(row.pfs)}</span>
+                <span className={scoreColor(row.pes)}>PES {fmtScore(row.pes)}</span>
+              </div>
+            </li>
+          )
+        })}
+        {rows.length === 0 && (
+          <li className="px-3 py-8 text-center text-[12px] text-[var(--color-text-tertiary)]">対象銘柄がありません</li>
+        )}
+      </ul>
+    </>
   )
 }
 
@@ -544,52 +560,29 @@ function StockListPagination({
 }) {
   if (pageCount <= 1) return null
   return (
-    <nav aria-label="銘柄一覧ページ" className="flex items-center justify-center gap-2">
+    <nav aria-label="銘柄一覧ページ" className="mt-3 flex items-center justify-center gap-2">
       <Link
         href={stockListPageHref(group, rank, date, Math.max(1, page - 1))}
         prefetch={false}
         aria-disabled={page <= 1}
-        className={`rounded-[4px] border px-3 py-1.5 text-[11px] font-bold ${page <= 1 ? 'pointer-events-none border-[var(--color-border-soft)] text-[var(--color-text-tertiary)]' : 'border-[var(--color-border-default)] bg-white text-[var(--color-brand-800)] hover:bg-[var(--color-surface-subtle)]'}`}
+        className={`btn ${page <= 1 ? 'pointer-events-none' : ''}`}
       >
+        <ChevronLeft size={14} aria-hidden />
         前へ
       </Link>
-      <span className="font-mono text-[11px] font-bold text-[var(--color-text-secondary)]">
+      <span className="min-w-[72px] text-center font-mono text-[12px] tabular-nums text-[var(--color-text-secondary)]">
         {page} / {pageCount}
       </span>
       <Link
         href={stockListPageHref(group, rank, date, Math.min(pageCount, page + 1))}
         prefetch={false}
         aria-disabled={page >= pageCount}
-        className={`rounded-[4px] border px-3 py-1.5 text-[11px] font-bold ${page >= pageCount ? 'pointer-events-none border-[var(--color-border-soft)] text-[var(--color-text-tertiary)]' : 'border-[var(--color-border-default)] bg-white text-[var(--color-brand-800)] hover:bg-[var(--color-surface-subtle)]'}`}
+        className={`btn ${page >= pageCount ? 'pointer-events-none' : ''}`}
       >
         次へ
+        <ChevronRight size={14} aria-hidden />
       </Link>
     </nav>
-  )
-}
-
-function GroupTabs({ active, date }: { active: MarketMomentumGroupId; date: string | null }) {
-  return (
-    <div className="flex gap-2 overflow-x-auto pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-      {MARKET_MOMENTUM_GROUP_ORDER.filter((id) => id !== 'unclassified').map((id) => {
-        const group = MARKET_MOMENTUM_GROUPS[id]
-        const selected = id === active
-        return (
-          <Link
-            key={id}
-            href={marketMomentumHref(id, date)}
-            prefetch={false}
-            className={`shrink-0 rounded-full border px-3 py-1.5 text-[12px] font-bold ${
-              selected
-                ? 'border-[var(--color-brand-700)] bg-[var(--color-brand-50)] text-[var(--color-brand-900)]'
-                : 'border-[var(--color-border-soft)] bg-white text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-subtle)]'
-            }`}
-          >
-            {group.shortLabel}
-          </Link>
-        )
-      })}
-    </div>
   )
 }
 
@@ -612,94 +605,126 @@ export default async function MarketMomentumPage({
   const pfsPlus = ratio(summary?.positivePfs ?? 0, count)
   const strong = ratio(summary?.strongPms ?? 0, count)
   const weak = ratio(summary?.weakPms ?? 0, count)
+  const first = listTotal > 0 ? (listPage - 1) * STOCK_LIST_PAGE_SIZE + 1 : 0
+  const last = listTotal > 0 ? first + allRows.length - 1 : 0
+  const activeRankKey = rankId === 'strong' ? 'continuation' : rankId === 'weak' ? 'drop' : rankId
 
   return (
-    <div className="flex w-full flex-col gap-4">
+    <div className="flex w-full min-w-0 flex-col gap-5">
       <PageTitle
-        title={`${group.label} モメンタム詳細`}
-        subtitle={`${summary?.date ?? '---'} 大引け基準 / ${group.description}`}
-        badge={`${count.toLocaleString('ja-JP')}銘柄（PMS算出済み）`}
-        rightSlot={
-          <Link href="/" className="rounded-[3px] border border-[var(--color-border-default)] bg-white px-2.5 py-1 text-[11px] font-bold text-[var(--color-brand-800)] hover:bg-[var(--color-surface-subtle)]">
+        eyebrow="市場・業種"
+        title={`${group.label}のモメンタム`}
+        subtitle={group.description}
+        meta={<>
+          <span>基準日 <strong className="font-semibold text-[var(--color-text-primary)]">{summary?.date ?? '—'}</strong> 大引け</span>
+          <span>対象 <strong className="font-semibold text-[var(--color-text-primary)]">{count.toLocaleString('ja-JP')}</strong>銘柄（PMS算出済み）</span>
+        </>}
+        rightSlot={<>
+          <Link href={screenerHrefForMarketMomentumGroup(groupId, { date: requestedDate, sort: 'physicalForceScore', dir: 'desc', pfsMin: 0 })} prefetch={false} className="btn">
+            スクリーナーで開く
+          </Link>
+          <Link href={`/hex-stage${requestedDate ? `?date=${requestedDate}` : ''}`} prefetch={false} className="btn">
+            6ステージで見る
+          </Link>
+          <Link href="/" prefetch={false} className="btn" data-variant="ghost">
             ダッシュボードへ
           </Link>
-        }
-      />
+        </>}
+      >
+        <ViewTabs
+          label="市場区分"
+          current={groupId}
+          items={MARKET_MOMENTUM_GROUP_ORDER.filter((id) => id !== 'unclassified').map((id) => ({
+            key: id,
+            label: MARKET_MOMENTUM_GROUPS[id].shortLabel,
+            href: marketMomentumHref(id, requestedDate),
+          }))}
+        />
+      </PageTitle>
 
-      <GroupTabs active={groupId} date={requestedDate} />
-
-      <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
-        <SummaryTile label="PMSプラス" value={fmtRatio(pmsPlus)} sub={`${(summary?.positivePms ?? 0).toLocaleString('ja-JP')} / ${count.toLocaleString('ja-JP')}銘柄`} tone="up" />
-        <SummaryTile label="初動プラス" value={fmtRatio(pfsPlus)} sub="PFSが0を上回る銘柄比率" tone="warning" />
-        <SummaryTile label="強い勢い" value={fmtRatio(strong)} sub={`PMS +1以上: ${(summary?.strongPms ?? 0).toLocaleString('ja-JP')}銘柄`} tone="up" />
-        <SummaryTile label="弱い/失速" value={fmtRatio(weak)} sub={`PMS -1以下: ${(summary?.weakPms ?? 0).toLocaleString('ja-JP')}銘柄`} tone="down" />
+      <div>
+        <StatStrip
+          label="モメンタムの分布"
+          items={[
+            { label: 'PMSプラス', value: fmtRatio(pmsPlus), sub: `${(summary?.positivePms ?? 0).toLocaleString('ja-JP')} / ${count.toLocaleString('ja-JP')}銘柄`, tone: 'up' },
+            { label: '初動プラス（PFS > 0）', value: fmtRatio(pfsPlus), sub: `${(summary?.positivePfs ?? 0).toLocaleString('ja-JP')}銘柄` },
+            { label: '強い勢い（PMS ≥ +1）', value: fmtRatio(strong), sub: `${(summary?.strongPms ?? 0).toLocaleString('ja-JP')}銘柄`, tone: 'up' },
+            { label: '弱い・失速（PMS ≤ −1）', value: fmtRatio(weak), sub: `${(summary?.weakPms ?? 0).toLocaleString('ja-JP')}銘柄`, tone: 'down' },
+          ]}
+        />
+        <p className="mt-2 text-[12px] leading-relaxed text-[var(--color-text-tertiary)]">
+          初動はPFS、勢いはPMS、値動きの熱量はPESで見ます。売買判断ではなく、次にチャートで確認する銘柄を絞り込むための一覧です。
+        </p>
       </div>
 
-      <div className="rounded-[8px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-3 py-2">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <p className="text-[11px] font-semibold leading-relaxed text-[var(--color-text-secondary)]">
-            初動はPFS、勢いはPMS、値動きの熱量はPESで見ます。ここでは投資判断を確定するのではなく、次にチャートで確認すべき銘柄を絞り込むための一覧として使います。
-          </p>
-          <div className="flex flex-wrap gap-2">
-            <Link href={marketMomentumRankingHref(groupId, 'initial', requestedDate)} prefetch={false} className={`rounded-full border px-2.5 py-1 text-[10px] font-bold ${rankId === 'initial' ? statusClass('warning') : 'border-[var(--color-border-soft)] bg-white text-[var(--color-brand-800)] hover:bg-[var(--color-surface-subtle)]'}`}>
-              動き出し全件
-            </Link>
-            <Link href={marketMomentumRankingHref(groupId, 'continuation', requestedDate)} prefetch={false} className={`rounded-full border px-2.5 py-1 text-[10px] font-bold ${rankId === 'continuation' ? statusClass('up') : 'border-[var(--color-border-soft)] bg-white text-[var(--color-brand-800)] hover:bg-[var(--color-surface-subtle)]'}`}>
-              継続全件
-            </Link>
-            <Link href={marketMomentumRankingHref(groupId, 'stall', requestedDate)} prefetch={false} className={`rounded-full border px-2.5 py-1 text-[10px] font-bold ${rankId === 'stall' ? statusClass('down') : 'border-[var(--color-border-soft)] bg-white text-[var(--color-brand-800)] hover:bg-[var(--color-surface-subtle)]'}`}>
-              失速全件
-            </Link>
-            <Link href={marketMomentumRankingHref(groupId, 'drop', requestedDate)} prefetch={false} className={`rounded-full border px-2.5 py-1 text-[10px] font-bold ${rankId === 'drop' ? statusClass('down') : 'border-[var(--color-border-soft)] bg-white text-[var(--color-brand-800)] hover:bg-[var(--color-surface-subtle)]'}`}>
-              下落警戒全件
-            </Link>
-            <Link href={screenerHrefForMarketMomentumGroup(groupId, { date: requestedDate, sort: 'physicalForceScore', dir: 'desc', pfsMin: 0 })} prefetch={false} className="rounded-full border border-[var(--color-border-soft)] bg-white px-2.5 py-1 text-[10px] font-bold text-[var(--color-brand-800)] hover:bg-[var(--color-surface-subtle)]">
-              スクリーナーで開く
-            </Link>
-            <Link href={`/hex-stage${requestedDate ? `?date=${requestedDate}` : ''}`} prefetch={false} className="rounded-full border border-[var(--color-border-soft)] bg-white px-2.5 py-1 text-[10px] font-bold text-[var(--color-brand-800)] hover:bg-[var(--color-surface-subtle)]">
-              HEXで見る
-            </Link>
-          </div>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 gap-3 xl:grid-cols-4">
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-2 2xl:grid-cols-4">
         <RankingPanel
           title="初動あり"
-          badge="PFS順: 力が出始めている候補"
+          badge="PFS順 · 力が出始めた候補"
           rows={initialRows}
           scoreKey="pfs"
           scoreLabel="PFS"
           tone="warning"
+          href={marketMomentumRankingHref(groupId, 'initial', requestedDate)}
         />
         <RankingPanel
           title="継続"
-          badge="PMS順: 勢いが続いている候補"
+          badge="PMS順 · 勢いが続く候補"
           rows={continuationRows}
           scoreKey="pms"
           scoreLabel="PMS"
           tone="up"
+          href={marketMomentumRankingHref(groupId, 'continuation', requestedDate)}
         />
         <RankingPanel
           title="失速"
-          badge="PFS悪化: 勢いの鈍化候補"
+          badge="PFS悪化 · 勢いの鈍化候補"
           rows={stallRows}
           scoreKey="pfs"
           scoreLabel="PFS"
           tone="down"
+          href={marketMomentumRankingHref(groupId, 'stall', requestedDate)}
         />
         <RankingPanel
           title="下落警戒"
-          badge="PMS逆順: 弱含み・警戒候補"
+          badge="PMS逆順 · 弱含み・警戒候補"
           rows={dropRows}
           scoreKey="pms"
           scoreLabel="PMS"
           tone="down"
+          href={marketMomentumRankingHref(groupId, 'drop', requestedDate)}
         />
       </div>
 
-      <StockListTable rows={allRows} rank={activeRank} total={listTotal} page={listPage} />
-      <StockListPagination group={groupId} rank={rankId} date={requestedDate} page={listPage} pageCount={listPageCount} />
+      <section id="stock-list" className="min-w-0 scroll-mt-36">
+        <SectionHeader
+          level={1}
+          title={activeRank.label}
+          description={activeRank.description}
+          actions={
+            <span className="text-[12px] tabular-nums text-[var(--color-text-tertiary)]">
+              {first.toLocaleString()}–{last.toLocaleString()} / {listTotal.toLocaleString()}件（上位最大{STOCK_LIST_MAX_ROWS}件）
+            </span>
+          }
+        />
+        <ViewTabs
+          className="mb-3"
+          label="ランキングの種類"
+          current={activeRankKey}
+          items={([
+            ['initial', '動き出し'],
+            ['continuation', '継続'],
+            ['stall', '失速'],
+            ['drop', '下落警戒'],
+          ] as const).map(([key, label]) => ({
+            key,
+            label,
+            href: marketMomentumRankingHref(groupId, key, requestedDate),
+          }))}
+        />
+        <StockListTable rows={allRows} />
+        <StockListPagination group={groupId} rank={rankId} date={requestedDate} page={listPage} pageCount={listPageCount} />
+      </section>
     </div>
   )
 }

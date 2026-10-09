@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { Search, X } from 'lucide-react'
+import { StatStrip } from '@/components/ui/StatStrip'
 import { EVENT_LABEL, RANKING_LABEL, date, exactYen, pct, positionUnits, yen,
   type ActivityRow, type BasisFilter,
   type OverviewResponse, type PagedResponse, type PeriodFilter, type RankingRow,
@@ -20,7 +21,7 @@ const PERIOD_OPTIONS: { value: PeriodFilter; label: string }[] = [
   { value: '7D', label: '7日' }, { value: '30D', label: '30日' },
   { value: '90D', label: '90日' }, { value: '1Y', label: '1年' },
 ]
-const selectClass = 'min-h-9 max-w-full border border-[var(--border-subtle)] bg-white px-2 text-[13px]'
+const selectClass = 'min-h-9 max-w-full rounded-[4px] border border-[var(--color-border-default)] bg-white px-2 text-[13px]'
 const labelClass = 'flex min-w-0 flex-col gap-1 text-[12px] text-[var(--color-text-secondary)]'
 
 function safeEnum<T extends string>(value: string | null, allowed: readonly T[], fallback: T): T {
@@ -106,23 +107,24 @@ export function LargeHoldersClient({ mode }: { mode: 'dashboard' | 'rankings' | 
   const rankingResponse = !isActivity ? data as PagedResponse<RankingRow> | null : null
 
   return <div className="min-w-0 space-y-5">
-    <HolderPageHeader title={mode === 'dashboard' ? '大口投資家 Intelligence'
+    <HolderPageHeader title={mode === 'dashboard' ? '大口投資家'
       : mode === 'rankings' ? '大口投資家ランキング' : '保有変化'}
-      subtitle="大量保有報告書から、直近開示の保有状況と変化を確認" />
+      subtitle="大量保有報告書をもとに、直近開示の保有状況と変化を確認します。" />
 
     {overviewError ? <HolderError error={overviewError} retry={() => setRetryKey((key) => key + 1)} />
       : overview && <section className="space-y-3">
         <AsOfLine meta={overview} />
-        {mode === 'dashboard' && <div className="flex flex-wrap gap-x-8 gap-y-2 border-b border-[var(--border-subtle)] pb-3">
-          <SummaryNumber label="公開評価可能Position" value={overview.publicCurrentValuationReadyCount} />
-          <SummaryNumber label="投資家" value={overview.investorCount} />
-          <SummaryNumber label="個人" value={overview.investorClassCounts.INDIVIDUAL} />
-          <SummaryNumber label="機関" value={overview.investorClassCounts.INSTITUTIONAL} />
-          <span className="self-end text-[12px] text-[var(--color-text-secondary)]">NEW {overview.activityCounts.NEW_5PCT} / 買増 {overview.activityCounts.INCREASE} / 減少 {overview.activityCounts.DECREASE}</span>
-        </div>}
+        {mode === 'dashboard' && <StatStrip label="大口投資家の集計" items={[
+          { label: '時価算定できる保有', value: overview.publicCurrentValuationReadyCount.toLocaleString('ja-JP') },
+          { label: '投資家', value: overview.investorCount.toLocaleString('ja-JP') },
+          { label: '個人', value: overview.investorClassCounts.INDIVIDUAL.toLocaleString('ja-JP') },
+          { label: '機関', value: overview.investorClassCounts.INSTITUTIONAL.toLocaleString('ja-JP') },
+          { label: '保有変化', value: `${(overview.activityCounts.NEW_5PCT + overview.activityCounts.INCREASE + overview.activityCounts.DECREASE).toLocaleString('ja-JP')}件`,
+            sub: `新規5% ${overview.activityCounts.NEW_5PCT} · 買増 ${overview.activityCounts.INCREASE} · 減少 ${overview.activityCounts.DECREASE}` },
+        ]} />}
       </section>}
 
-    <section className="space-y-3" aria-label="表示条件">
+    <section className="space-y-3 rounded-[6px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] p-3" aria-label="表示条件">
       <Segmented label="投資家種別" value={investorClass} options={CLASS_OPTIONS}
         onChange={(next) => update({ investorClass: next, basis: next === 'INDIVIDUAL' ? 'OWNERSHIP' : basis })} />
       {!isActivity && <Segmented label="ランキング種別" value={rankingType} options={RANKING_OPTIONS}
@@ -164,10 +166,10 @@ export function LargeHoldersClient({ mode }: { mode: 'dashboard' | 'rankings' | 
           <label className={labelClass}>{isActivity ? '投資家名・銘柄検索' : '投資家名検索'}
             <input value={searchDraft} onChange={(event) => setSearchDraft(event.target.value)} placeholder="投資家名"
               className={`${selectClass} w-44`} maxLength={100} /></label>
-          <button type="submit" aria-label="検索" title="検索" className="flex h-9 w-9 items-center justify-center border border-[var(--border-subtle)]"><Search size={16} /></button>
-          {suggestions.length > 0 && <div aria-label="投資家候補" className="absolute left-0 top-full z-30 mt-1 w-[min(320px,calc(100vw-32px))] border border-[var(--border-subtle)] bg-white shadow-md">
+          <button type="submit" aria-label="検索" title="検索" className="btn h-9 w-9 px-0"><Search size={16} /></button>
+          {suggestions.length > 0 && <div aria-label="投資家候補" className="absolute left-0 top-full z-30 mt-1 w-[min(320px,calc(100vw-32px))] overflow-hidden rounded-[6px] border border-[var(--color-border-default)] bg-white shadow-md">
             {suggestions.map((suggestion) => <Link key={suggestion.investorEntityId} href={`/large-holders/investors/${encodeURIComponent(suggestion.investorEntityId)}`}
-              className="block border-b border-[var(--border-subtle)] px-3 py-2 text-[13px] hover:bg-slate-50">{suggestion.displayName}</Link>)}
+              className="block border-b border-[var(--color-border-soft)] px-3 py-2 text-[13px] last:border-b-0 hover:bg-[var(--color-surface-subtle)]">{suggestion.displayName}</Link>)}
           </div>}
         </form>
         {mode !== 'dashboard' && <label className={labelClass}>表示件数
@@ -179,14 +181,16 @@ export function LargeHoldersClient({ mode }: { mode: 'dashboard' | 'rankings' | 
     </section>
 
     <section className="min-w-0 space-y-2">
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h2 className="text-[17px] font-semibold">{isActivity ? '開示による保有変化' : RANKING_LABEL[rankingType]}</h2>
-        {mode === 'dashboard' && <Link href={`/large-holders/rankings${query ? `?${query}` : ''}`} className="text-[13px] text-[var(--color-brand-600)]">詳しい条件で見る →</Link>}
+      <div className="section-head" data-level="1">
+        <div className="section-head__copy">
+          <h2>{isActivity ? '開示による保有変化' : RANKING_LABEL[rankingType]}</h2>
+          {!isActivity && <p className="section-head__desc">{basis === 'OWNERSHIP' ? '所有等ベース' : '運用権限ベース'} · 時価を算定できる認定済みの保有のみ</p>}
+        </div>
+        {mode === 'dashboard' && <div className="section-head__actions"><Link href={`/large-holders/rankings${query ? `?${query}` : ''}`} className="btn" data-size="sm">詳しい条件で見る</Link></div>}
       </div>
-      {!isActivity && <p className="text-[12px] text-[var(--color-text-secondary)]">{basis === 'OWNERSHIP' ? '所有等ベース' : '運用権限ベース'} · 算定可能な認定Positionのみ</p>}
       {error ? <HolderError error={error} retry={() => setRetryKey((key) => key + 1)} />
         : !data ? <HolderSkeleton />
-          : data.total === 0 ? <p className="border-y border-[var(--border-subtle)] py-10 text-center text-[13px] text-[var(--color-text-secondary)]">
+          : data.total === 0 ? <p className="empty-state">
             {isActivity ? 'この条件に該当する大量保有報告はありません' : 'この条件に該当する投資家はいません'}
           </p>
             : isActivity ? <><div className="md:hidden"><MobileActivityList rows={activityResponse!.rows} select={setSelectedActivity} /></div>
@@ -199,10 +203,6 @@ export function LargeHoldersClient({ mode }: { mode: 'dashboard' | 'rankings' | 
     <HolderDisclaimer />
     {selectedActivity && <ActivityDrawer event={selectedActivity} close={() => setSelectedActivity(null)} />}
   </div>
-}
-
-function SummaryNumber({ label, value }: { label: string; value: number }) {
-  return <div className="min-w-24"><div className="text-[12px] text-[var(--color-text-secondary)]">{label}</div><div className="text-[20px] font-semibold tabular-nums">{value.toLocaleString('ja-JP')}</div></div>
 }
 
 function Facet({ label, name, values, current, update }: { label: string; name: string; values: string[];
@@ -222,22 +222,22 @@ function RankingTable({ rows, rankingType, basis, page, pageSize }: {
     <thead><tr>{(total ? ['順位', '投資家', '種別', '推定時価保有総額', '算定状況', '保有銘柄数', '最大保有銘柄', '最大単一銘柄時価', '最大保有比率', '直近報告', '最近の動き']
       : newFive ? ['順位', '投資家', '種別', '銘柄', '新規保有比率', '保有株数/口数', '推定現在時価', '報告日']
         : ['順位', '投資家', '種別', '対象銘柄数', '件数', rankingType === 'DECREASE' ? '減少株式の現在時価換算' : '増加株式の現在時価換算', '直近日']).map((label) => <th key={label} className={th}>{label}</th>)}</tr></thead>
-    <tbody>{rows.map((row, index) => <tr key={row.investorEntityId + (row.documentId ?? '')} className="hover:bg-slate-50">
+    <tbody>{rows.map((row, index) => <tr key={row.investorEntityId + (row.documentId ?? '')} className="hover:bg-[#fff8e6]">
       <td className={`${td} text-[var(--color-text-secondary)]`}>{total && row.rankingValue == null ? '—' : (page - 1) * pageSize + index + 1}</td>
-      <td className={td}><Link className="font-semibold text-[var(--color-brand-600)] hover:underline" href={`/large-holders/investors/${encodeURIComponent(row.investorEntityId)}`}>{row.displayName ?? row.investorName}</Link></td>
+      <td className={td}><Link className="font-semibold text-[var(--color-brand-700)] hover:underline" href={`/large-holders/investors/${encodeURIComponent(row.investorEntityId)}`}>{row.displayName ?? row.investorName}</Link></td>
       <td className={td}><ClassBadge investorClass={row.investorClass} investorType={row.investorType} /></td>
       {total ? <>
         <td className={`${td} ${numeric} font-semibold`} title={exactYen(row.rankingValue)}>{yen(row.rankingValue)}</td>
         <td className={td}><CompletenessBadge completeness={row.selectedPortfolioCompleteness ?? row.portfolioCompleteness}
           valued={row.selectedValuedPositionCount ?? row.valuedPositionCount} total={row.selectedPositionCount ?? row.totalRelevantPositionCount} /></td>
         <td className={`${td} ${numeric}`}>{row.selectedPositionCount ?? row.totalRelevantPositionCount}</td>
-        <td className={td}>{row.rankingLargestPositionTicker ? <Link href={`/stock/${row.rankingLargestPositionTicker}`} className="text-[var(--color-brand-600)]">{row.rankingLargestPositionTicker}</Link> : '—'}</td>
+        <td className={td}>{row.rankingLargestPositionTicker ? <Link href={`/stock/${row.rankingLargestPositionTicker}`} className="text-[var(--color-brand-700)]">{row.rankingLargestPositionTicker}</Link> : '—'}</td>
         <td className={`${td} ${numeric}`}>{yen(row.rankingLargestPositionValue)}</td>
         <td className={`${td} ${numeric}`}>{pct(row.largestHoldingPct)}</td>
         <td className={td}>{date(row.latestFilingDate)}</td>
         <td className={td}>{row.latestActivityType ? `${EVENT_LABEL[row.latestActivityType]} ${date(row.latestActivityDate)}` : '—'}</td>
       </> : newFive ? <>
-        <td className={td}><Link href={`/stock/${row.ticker}`} className="text-[var(--color-brand-600)]">{row.ticker} {row.issuerName}</Link></td>
+        <td className={td}><Link href={`/stock/${row.ticker}`} className="text-[var(--color-brand-700)]">{row.ticker} {row.issuerName}</Link></td>
         <td className={`${td} ${numeric}`}>{pct(row.reportedHoldingPct)}</td>
         <td className={`${td} ${numeric}`}>{row.reportedShares == null ? '—' : positionUnits(row.reportedShares, { ticker: row.ticker ?? '', issuerName: row.issuerName ?? null })}</td>
         <td className={`${td} ${numeric}`} title={exactYen(row.estimatedCurrentValue)}>{yen(row.estimatedCurrentValue)}</td>
@@ -255,29 +255,29 @@ function RankingTable({ rows, rankingType, basis, page, pageSize }: {
 function ActivityTable({ rows, select }: { rows: ActivityRow[]; select: (event: ActivityRow) => void }) {
   return <TableScroll><table className="min-w-[1030px] w-full border-collapse text-left">
     <thead><tr>{['義務日', '変化', '投資家', '種別', '銘柄', '保有比率', '前回', '差', '保有数量', '数量差', '現在時価換算', '元報告'].map((label) => <th key={label} className={th}>{label}</th>)}</tr></thead>
-    <tbody>{rows.map((row) => <tr key={`${row.documentId}:${row.investorEntityId}:${row.ticker}`} className="cursor-pointer hover:bg-slate-50" onClick={() => select(row)}>
+    <tbody>{rows.map((row) => <tr key={`${row.documentId}:${row.investorEntityId}:${row.ticker}`} className="cursor-pointer hover:bg-[#fff8e6]" onClick={() => select(row)}>
       <td className={td}>{date(row.obligationDate)}</td><td className={td}><span className="font-semibold">{EVENT_LABEL[row.eventType]}</span></td>
-      <td className={td}><Link onClick={(event) => event.stopPropagation()} className="text-[var(--color-brand-600)]" href={`/large-holders/investors/${encodeURIComponent(row.investorEntityId)}`}>{row.investorName}</Link></td>
+      <td className={td}><Link onClick={(event) => event.stopPropagation()} className="text-[var(--color-brand-700)]" href={`/large-holders/investors/${encodeURIComponent(row.investorEntityId)}`}>{row.investorName}</Link></td>
       <td className={td}><ClassBadge investorClass={row.investorClass} investorType={row.investorType} /></td>
-      <td className={td}><Link onClick={(event) => event.stopPropagation()} className="text-[var(--color-brand-600)]" href={`/stock/${row.ticker}`}>{row.ticker} {row.issuerName}</Link></td>
+      <td className={td}><Link onClick={(event) => event.stopPropagation()} className="text-[var(--color-brand-700)]" href={`/stock/${row.ticker}`}>{row.ticker} {row.issuerName}</Link></td>
       <td className={`${td} ${numeric}`}>{pct(row.reportedHoldingPct)}</td>
       <td className={`${td} ${numeric}`}>{pct(row.previousHoldingPct)}</td>
       <td className={`${td} ${numeric}`}>{pct(row.holdingPctDelta)}</td>
       <td className={`${td} ${numeric}`}>{positionUnits(row.reportedShares, row)}</td>
       <td className={`${td} ${numeric}`}>{positionUnits(row.sharesDelta, row)}</td>
       <td className={`${td} ${numeric}`} title={exactYen(row.currentValueEquivalent)}>{yen(row.currentValueEquivalent)}</td>
-      <td className={td}><button type="button" onClick={(event) => { event.stopPropagation(); select(row) }} className="text-[var(--color-brand-600)] hover:underline">理由を見る</button></td>
+      <td className={td}><button type="button" onClick={(event) => { event.stopPropagation(); select(row) }} className="text-[var(--color-brand-700)] hover:underline">理由を見る</button></td>
     </tr>)}</tbody>
   </table></TableScroll>
 }
 
 function MobileRankingList({ rows, rankingType }: { rows: RankingRow[]; rankingType: RankingType }) {
-  return <div className="divide-y divide-[var(--border-subtle)] border-y border-[var(--border-subtle)] bg-white">
+  return <div className="divide-y divide-[var(--color-border-soft)] rounded-[6px] border border-[var(--color-border-soft)] bg-white">
     {rows.map((row) => {
       const value = rankingType === 'TOTAL_VALUE' ? row.rankingValue
         : rankingType === 'NEW_5PCT' ? row.estimatedCurrentValue : row.currentValueEquivalent
-      return <div key={row.investorEntityId + (row.documentId ?? '')} className="px-2 py-2.5">
-        <div className="flex items-start justify-between gap-2"><Link className="min-w-0 break-words font-semibold text-[var(--color-brand-600)]" href={`/large-holders/investors/${encodeURIComponent(row.investorEntityId)}`}>{row.displayName ?? row.investorName}</Link>
+      return <div key={row.investorEntityId + (row.documentId ?? '')} className="px-3 py-2.5">
+        <div className="flex items-start justify-between gap-2"><Link className="min-w-0 break-words font-semibold text-[var(--color-brand-700)]" href={`/large-holders/investors/${encodeURIComponent(row.investorEntityId)}`}>{row.displayName ?? row.investorName}</Link>
           <span className="shrink-0 text-right font-semibold tabular-nums" title={exactYen(value)}>{yen(value)}</span></div>
         <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-[var(--color-text-secondary)]"><ClassBadge investorClass={row.investorClass} investorType={row.investorType} />
           {rankingType === 'TOTAL_VALUE' ? <><span>{row.totalRelevantPositionCount}銘柄</span><CompletenessBadge completeness={row.portfolioCompleteness} valued={row.valuedPositionCount} total={row.totalRelevantPositionCount} />
@@ -290,8 +290,8 @@ function MobileRankingList({ rows, rankingType }: { rows: RankingRow[]; rankingT
 }
 
 function MobileActivityList({ rows, select }: { rows: ActivityRow[]; select: (event: ActivityRow) => void }) {
-  return <div className="divide-y divide-[var(--border-subtle)] border-y border-[var(--border-subtle)] bg-white">
-    {rows.map((row) => <button key={`${row.documentId}:${row.investorEntityId}:${row.ticker}`} type="button" onClick={() => select(row)} className="block w-full px-2 py-2.5 text-left">
+  return <div className="divide-y divide-[var(--color-border-soft)] rounded-[6px] border border-[var(--color-border-soft)] bg-white">
+    {rows.map((row) => <button key={`${row.documentId}:${row.investorEntityId}:${row.ticker}`} type="button" onClick={() => select(row)} className="block w-full px-3 py-2.5 text-left hover:bg-[var(--color-surface-subtle)]">
       <div className="flex items-start justify-between gap-2"><span className="min-w-0 break-words font-semibold">{row.investorName}</span><span className="shrink-0 font-semibold tabular-nums">{yen(row.currentValueEquivalent)}</span></div>
       <div className="mt-1 flex flex-wrap items-center gap-x-2 text-[12px] text-[var(--color-text-secondary)]"><span>{EVENT_LABEL[row.eventType]}</span><span>{row.ticker} {row.issuerName}</span><span>{pct(row.reportedHoldingPct)}</span><span>{date(row.obligationDate)}</span></div>
     </button>)}
@@ -307,7 +307,7 @@ function ActivityDrawer({ event, close }: { event: ActivityRow; close: () => voi
   return <div className="fixed inset-0 z-[80] flex justify-end bg-black/30" onClick={close}>
     <aside role="dialog" aria-modal="true" aria-label="保有変化の詳細" onClick={(event_) => event_.stopPropagation()}
       className="h-full w-full max-w-[480px] overflow-y-auto bg-white p-5 shadow-xl">
-      <div className="flex items-start justify-between gap-3 border-b border-[var(--border-subtle)] pb-3">
+      <div className="flex items-start justify-between gap-3 border-b border-[var(--color-border-soft)] pb-3">
         <div><div className="text-[12px] font-semibold text-[var(--color-text-secondary)]">{EVENT_LABEL[event.eventType]}</div><h2 className="text-[19px] font-semibold">{event.investorName}</h2><p className="text-[13px]">{event.ticker} {event.issuerName}</p></div>
         <button type="button" onClick={close} aria-label="閉じる"><X size={20} /></button>
       </div>
@@ -318,9 +318,9 @@ function ActivityDrawer({ event, close }: { event: ActivityRow; close: () => voi
         <Datum label="現在時価換算" value={yen(event.currentValueEquivalent)} /><Datum label="提出日" value={date(event.filingDate)} />
         <Datum label="報告義務日" value={date(event.obligationDate)} /><Datum label="同一書類の他主体" value={event.fellowNames.length ? event.fellowNames.join('、') : 'なし'} />
       </dl>
-      <section className="mt-6 border-t border-[var(--border-subtle)] pt-4 text-[13px]"><h3 className="font-semibold">開示原本</h3>
+      <section className="mt-6 border-t border-[var(--color-border-soft)] pt-4 text-[13px]"><h3 className="font-semibold">開示原本</h3>
         <p className="mt-2">EDINET {event.documentId} · {event.sourceVerified ? '原本照合済み' : '確認中'}</p>
-        {event.filingSourceUrl && <a href={event.filingSourceUrl} target="_blank" rel="noopener noreferrer" className="mt-2 inline-block text-[var(--color-brand-600)] hover:underline">元報告を開く ↗</a>}
+        {event.filingSourceUrl && <a href={event.filingSourceUrl} target="_blank" rel="noopener noreferrer" className="mt-2 inline-block text-[var(--color-brand-700)] hover:underline">元報告を開く ↗</a>}
       </section>
     </aside>
   </div>

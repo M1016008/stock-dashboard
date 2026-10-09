@@ -1,8 +1,12 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
+import { ArrowDownRight, ArrowUpRight, BarChart3, ChevronRight, Database, ListFilter } from 'lucide-react'
 import { PageTitle } from '@/components/layout/PageTitle'
-import { Card, CardHeader } from '@/components/ui/Card'
 import { StageTag } from '@/components/ui/StageTag'
+import { StatStrip } from '@/components/ui/StatStrip'
+import { SectionHeader } from '@/components/ui/SectionHeader'
+import { UsAnalysisNav } from '@/components/us/UsAnalysisNav'
+import { STAGE_LABELS } from '@/lib/hex-stage'
 import { execAll } from '@/lib/db/client'
 import { execUsAnalyticsAll, hasUsAnalyticsDb } from '@/lib/db/us-analytics'
 import { getUsStatusSummary } from '@/lib/us-status'
@@ -229,9 +233,9 @@ async function getUsDashboardRows(date: string | null) {
 }
 
 function StageCode({ code }: { code: string | null | undefined }) {
-  if (!code) return <span className="text-[11px] font-bold text-[var(--color-text-tertiary)]">------</span>
+  if (!code) return <span className="font-mono text-[11px] text-[var(--color-text-tertiary)]">------</span>
   return (
-    <span className="inline-flex gap-0.5">
+    <span className="inline-flex gap-0.5" aria-label={`6ステージ ${code}`}>
       {code.split('').slice(0, 6).map((digit, index) => (
         <StageTag key={`${digit}-${index}`} stage={Number(digit)} size="xs" />
       ))}
@@ -239,66 +243,107 @@ function StageCode({ code }: { code: string | null | undefined }) {
   )
 }
 
-function RankingList({ title, rows, tone }: { title: string; rows: RankingRow[]; tone: 'up' | 'down' | 'volume' }) {
-  const color = tone === 'down' ? 'text-blue-700' : tone === 'up' ? 'text-red-700' : 'text-[var(--color-brand-900)]'
+function toneClass(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(value) || value === 0) return 'text-[var(--color-text-secondary)]'
+  return value > 0 ? 'text-[var(--color-price-up)]' : 'text-[var(--color-price-down)]'
+}
+
+function RankingPanel({ title, hint, rows, tone }: { title: string; hint: string; rows: RankingRow[]; tone: 'up' | 'down' | 'volume' }) {
   return (
-    <Card>
-      <CardHeader title={title} hint="クリックで個別銘柄へ" />
-      <div className="grid gap-2">
-        {rows.map((row) => (
-          <Link
-            key={row.ticker}
-            href={`/us/stock/${encodeURIComponent(row.ticker)}`}
-            className="grid grid-cols-[72px_1fr_auto] items-center gap-2 rounded-[4px] border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-3 py-2 hover:bg-white"
-          >
-            <span className="font-mono text-[13px] font-black text-[var(--color-brand-900)]">{row.ticker}</span>
-            <span className="min-w-0">
-              <span className="block truncate text-[12px] font-bold text-[var(--color-text-primary)]">{row.name ?? '名称未登録'}</span>
-              <span className="mt-0.5 flex items-center gap-2 text-[10px] font-semibold text-[var(--color-text-tertiary)]">
-                {row.exchange ?? 'US'} <StageCode code={row.stage_code} />
-              </span>
-            </span>
-            <span className="text-right">
-              <span className="block text-[12px] font-black text-[var(--color-brand-900)]">{fmtMoney(row.price)}</span>
-              <span className={`block text-[11px] font-black ${color}`}>
-                {tone === 'volume' ? row.volume?.toLocaleString('en-US') ?? '-' : fmtPct(row.change_pct)}
-              </span>
-            </span>
-          </Link>
-        ))}
-        {rows.length === 0 && <p className="py-4 text-center text-[12px] font-bold text-[var(--color-text-tertiary)]">データなし</p>}
+    <section className="panel" aria-label={title}>
+      <div className="panel-head">
+        <div className="min-w-0">
+          <h3>{title}</h3>
+          <p>{hint}</p>
+        </div>
+        <span className="text-[11px] tabular-nums text-[var(--color-text-tertiary)]">{rows.length}件</span>
       </div>
-    </Card>
+      {rows.length === 0 ? (
+        <p className="px-4 py-8 text-center text-[13px] text-[var(--color-text-tertiary)]">この基準日のランキングはありません</p>
+      ) : (
+        <ol className="divide-y divide-[var(--color-border-soft)]">
+          {rows.map((row, index) => (
+            <li key={row.ticker}>
+              <Link
+                href={`/us/stock/${encodeURIComponent(row.ticker)}`}
+                prefetch={false}
+                className="grid grid-cols-[20px_minmax(0,1fr)_auto] items-center gap-x-3 px-4 py-2 hover:bg-[var(--color-surface-subtle)]"
+              >
+                <span className="text-right font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]">{index + 1}</span>
+                <span className="min-w-0">
+                  <span className="flex min-w-0 items-baseline gap-2">
+                    <span className="shrink-0 font-mono text-[13px] font-bold text-[var(--color-brand-800)]">{row.ticker}</span>
+                    <span className="min-w-0 truncate text-[12px] text-[var(--color-text-secondary)]">{row.name ?? '名称未登録'}</span>
+                  </span>
+                  <span className="mt-1 flex items-center gap-2 text-[11px] text-[var(--color-text-tertiary)]">
+                    <span className="w-12 shrink-0 truncate">{row.exchange ?? 'US'}</span>
+                    <StageCode code={row.stage_code} />
+                  </span>
+                </span>
+                <span className="text-right font-mono tabular-nums">
+                  <span className="block text-[13px] font-semibold text-[var(--color-text-primary)]">{fmtMoney(row.price)}</span>
+                  {tone === 'volume' ? (
+                    <span className="block text-[12px] text-[var(--color-text-secondary)]">{row.volume?.toLocaleString('en-US') ?? '-'}</span>
+                  ) : (
+                    <span className={`block text-[12px] font-semibold ${toneClass(row.change_pct)}`}>{fmtPct(row.change_pct)}</span>
+                  )}
+                </span>
+              </Link>
+            </li>
+          ))}
+        </ol>
+      )}
+    </section>
   )
 }
 
-function MlCandidateList({ title, rows, direction }: { title: string; rows: MlCandidateRow[]; direction: 'up' | 'down' }) {
+function MlCandidatePanel({ title, rows, direction }: { title: string; rows: MlCandidateRow[]; direction: 'up' | 'down' }) {
+  const Icon = direction === 'up' ? ArrowUpRight : ArrowDownRight
   return (
-    <Card>
-      <CardHeader title={title} hint="物理ML / 20営業日" />
-      <div className="grid gap-2">
-        {rows.map((row) => (
-          <Link
-            key={row.ticker}
-            href={`/us/stock/${encodeURIComponent(row.ticker)}#ml`}
-            className="grid grid-cols-[36px_72px_1fr_auto] items-center gap-2 border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-3 py-2 hover:bg-white"
-          >
-            <span className={`font-mono text-[11px] font-black ${direction === 'up' ? 'text-red-700' : 'text-blue-700'}`}>#{row.rank}</span>
-            <span className="font-mono text-[12px] font-black text-[var(--color-brand-900)]">{row.ticker}</span>
-            <span className="min-w-0">
-              <span className="block truncate text-[11px] font-bold">{row.name ?? '名称未登録'}</span>
-              <span className="mt-0.5 flex items-center gap-2 text-[9px] text-[var(--color-text-tertiary)]">
-                PMS {row.physical_momentum_score?.toFixed(2) ?? '-'} / PFS {row.physical_force_score?.toFixed(2) ?? '-'}
-              </span>
-            </span>
-            <span className="text-right font-mono text-[11px] font-black text-[var(--color-brand-900)]">
-              {row.candidate_score.toFixed(3)}
-            </span>
-          </Link>
-        ))}
-        {rows.length === 0 && <p className="py-4 text-center text-[12px] font-bold text-[var(--color-text-tertiary)]">候補データなし</p>}
+    <section className="panel" aria-label={title}>
+      <div className="panel-head">
+        <div className="flex min-w-0 items-center gap-2">
+          <Icon size={16} aria-hidden className={direction === 'up' ? 'text-[var(--color-price-up)]' : 'text-[var(--color-price-down)]'} />
+          <div className="min-w-0">
+            <h3>{title}</h3>
+            <p>物理ML・20営業日の候補順位</p>
+          </div>
+        </div>
       </div>
-    </Card>
+      {rows.length === 0 ? (
+        <p className="px-4 py-8 text-center text-[13px] text-[var(--color-text-tertiary)]">候補データがまだ生成されていません</p>
+      ) : (
+        <div className="table-scroll">
+          <table className="w-full min-w-[440px] text-[12px]">
+            <thead>
+              <tr className="border-b border-[var(--color-border-default)] text-left text-[11px] text-[var(--color-text-tertiary)]">
+                <th className="w-12 px-4 py-2 font-semibold">順位</th>
+                <th className="px-2 py-2 font-semibold">銘柄</th>
+                <th className="px-2 py-2 text-right font-semibold">PMS</th>
+                <th className="px-2 py-2 text-right font-semibold">PFS</th>
+                <th className="px-4 py-2 text-right font-semibold">スコア</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-[var(--color-border-soft)]">
+              {rows.map((row) => (
+                <tr key={row.ticker} className="hover:bg-[var(--color-surface-subtle)]">
+                  <td className="px-4 py-2 font-mono tabular-nums text-[var(--color-text-tertiary)]">{row.rank}</td>
+                  <td className="max-w-0 px-2 py-2">
+                    <Link href={`/us/stock/${encodeURIComponent(row.ticker)}#ml`} prefetch={false} className="flex min-w-0 items-baseline gap-2 hover:underline">
+                      <span className="shrink-0 font-mono text-[13px] font-bold text-[var(--color-brand-800)]">{row.ticker}</span>
+                      <span className="truncate text-[var(--color-text-secondary)]">{row.name ?? '名称未登録'}</span>
+                    </Link>
+                  </td>
+                  <td className={`px-2 py-2 text-right font-mono tabular-nums ${toneClass(row.physical_momentum_score)}`}>{row.physical_momentum_score?.toFixed(2) ?? '-'}</td>
+                  <td className={`px-2 py-2 text-right font-mono tabular-nums ${toneClass(row.physical_force_score)}`}>{row.physical_force_score?.toFixed(2) ?? '-'}</td>
+                  <td className="px-4 py-2 text-right font-mono font-semibold tabular-nums text-[var(--color-text-primary)]">{row.candidate_score.toFixed(3)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
   )
 }
 
@@ -316,139 +361,145 @@ export default async function UsHomePage() {
     : cautionPct >= constructivePct + 10
       ? '下落構造を警戒'
       : '方向感を確認'
+  const pms = dashboard.pmsSummary
   return (
-    <div className="flex w-full flex-col gap-5">
+    <div className="flex w-full min-w-0 flex-col gap-5">
       <PageTitle
+        eyebrow="米国株"
         title="米国株ダッシュボード"
-        subtitle="6ステージの市場構造から、いま確認すべき銘柄と分析画面へ最短で移動します。"
-        badge="US Market"
-      />
-      <Card size="lg">
-        <CardHeader title="今日の市場構造" hint={`基準日 ${status.snapshots.latestDate ?? '-'} / 日足Aステージ`} />
-        <div className="grid gap-4 lg:grid-cols-[1.2fr_1fr_1fr]">
-          <div className="border-l-4 border-[var(--color-brand-900)] bg-[var(--color-surface-subtle)] px-4 py-3">
-            <div className="text-[11px] font-black text-[var(--color-text-tertiary)]">現在の判断</div>
-            <div className="mt-1 text-[22px] font-black text-[var(--color-brand-900)]">{marketTone}</div>
-            <p className="mt-1 text-[12px] font-semibold leading-5 text-[var(--color-text-secondary)]">
-              上昇構造 {constructivePct.toFixed(1)}% / 警戒構造 {cautionPct.toFixed(1)}%。ランキングと6ステージを併せて確認してください。
+        subtitle="日足Aステージの市場構造を起点に、値動きの大きい銘柄と物理MLの候補を確認します。"
+        meta={<>
+          <span>価格基準日 {status.snapshots.latestDate ?? '未取得'}</span>
+          <span>PMS基準日 {pms?.date ?? '未生成'}</span>
+        </>}
+        rightSlot={(
+          <Link href="/us/screener?sort=changePct&dir=desc" prefetch={false} className="btn" data-variant="primary">
+            <ListFilter size={14} aria-hidden />
+            スクリーナーで絞り込む
+          </Link>
+        )}
+      >
+        <UsAnalysisNav current="/us" />
+      </PageTitle>
+
+      {/* 結論: 市場構造の判断と、その根拠になる構成比・PMS の要約 */}
+      <section aria-labelledby="us-structure-title" className="flex min-w-0 flex-col gap-3">
+        <SectionHeader
+          id="us-structure-title"
+          level={1}
+          title="今日の市場構造"
+          description={`日足Aステージ ${fmt(stageTotal)}銘柄の構成比`}
+        />
+        <div className="grid min-w-0 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)]">
+          <div className="flex min-w-0 flex-col justify-center gap-1">
+            <span className="text-[12px] font-semibold text-[var(--color-text-tertiary)]">現在の判断</span>
+            <strong className="text-[24px] font-bold leading-tight text-[var(--color-text-primary)]">{marketTone}</strong>
+            <p className="m-0 text-[13px] leading-6 text-[var(--color-text-secondary)]">
+              上昇構造(S1・S6) <b className="font-mono tabular-nums text-[var(--color-price-up)]">{constructivePct.toFixed(1)}%</b>
+              {' '}／ 警戒構造(S3・S4) <b className="font-mono tabular-nums text-[var(--color-price-down)]">{cautionPct.toFixed(1)}%</b>。
+              差が10ポイント未満のときは方向感を確認とします。
             </p>
           </div>
-          <Link
-            href="/us/screener?sort=stageCode&dir=asc"
-            className="border border-[var(--color-border-default)] bg-white px-4 py-3 hover:bg-[var(--color-surface-subtle)]"
-          >
-            <div className="text-[11px] font-black text-[var(--color-text-tertiary)]">上昇構造 Stage 1・6</div>
-            <div className="mt-1 text-[24px] font-black text-red-700">{fmt(constructiveCount)}</div>
-            <div className="mt-1 text-[11px] font-bold text-[var(--color-brand-900)]">該当銘柄を開く →</div>
-          </Link>
-          <Link
-            href="/us/screener?sort=stageCode&dir=desc"
-            className="border border-[var(--color-border-default)] bg-white px-4 py-3 hover:bg-[var(--color-surface-subtle)]"
-          >
-            <div className="text-[11px] font-black text-[var(--color-text-tertiary)]">警戒構造 Stage 3・4</div>
-            <div className="mt-1 text-[24px] font-black text-blue-700">{fmt(cautionCount)}</div>
-            <div className="mt-1 text-[11px] font-bold text-[var(--color-brand-900)]">下落構造を確認 →</div>
-          </Link>
-        </div>
-        <div className="mt-4 flex flex-wrap gap-2">
-          {[
-            ['/us/screener?sort=changePct&dir=desc', 'スクリーナー'],
-            ['/ai/research?market=US', 'AI銘柄リサーチ'],
-            ['/chart-drill?market=US', 'チャートドリル'],
-            ['/watchlist', 'ウォッチリスト'],
-          ].map(([href, label]) => (
-            <Link
-              key={href}
-              href={href}
-              className="border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-3 py-2 text-[12px] font-black text-[var(--color-brand-900)] hover:bg-white"
-            >
-              {label}
-            </Link>
-          ))}
-        </div>
-      </Card>
-
-      <section className="grid gap-4 xl:grid-cols-3">
-        <RankingList title="US 上昇ランキング" rows={dashboard.gainers} tone="up" />
-        <RankingList title="US 下落ランキング" rows={dashboard.losers} tone="down" />
-        <RankingList title="US 出来高ランキング" rows={dashboard.volume} tone="volume" />
-      </section>
-
-      <section className="grid gap-4 xl:grid-cols-[1fr_1fr_0.72fr]">
-        <MlCandidateList title="物理ML 上昇候補" rows={dashboard.mlUp} direction="up" />
-        <MlCandidateList title="物理ML 下落警戒" rows={dashboard.mlDown} direction="down" />
-        <Card>
-          <CardHeader title="US市場 PMS" hint={`基準日 ${dashboard.pmsSummary?.date ?? '-'}`} />
-          <div className="grid gap-2">
-            <div className="border-l-4 border-red-600 bg-red-50 px-3 py-2">
-              <div className="text-[10px] font-black text-red-700">PMSプラス</div>
-              <div className="mt-1 text-[22px] font-black text-red-800">{fmt(dashboard.pmsSummary?.positive)} 銘柄</div>
-            </div>
-            <div className="border-l-4 border-blue-600 bg-blue-50 px-3 py-2">
-              <div className="text-[10px] font-black text-blue-700">PMSマイナス</div>
-              <div className="mt-1 text-[22px] font-black text-blue-800">{fmt(dashboard.pmsSummary?.negative)} 銘柄</div>
-            </div>
-            <div className="grid grid-cols-2 gap-2 text-center">
-              <div className="bg-[var(--color-surface-subtle)] px-2 py-2">
-                <div className="text-[9px] font-black text-[var(--color-text-tertiary)]">平均PMS</div>
-                <div className="mt-1 font-mono text-[14px] font-black">{dashboard.pmsSummary?.average_pms?.toFixed(2) ?? '-'}</div>
+          <div className="min-w-0">
+            {stageTotal > 0 ? (
+              <div
+                className="flex h-3 w-full overflow-hidden rounded-[3px] bg-[var(--color-surface-muted)]"
+                role="img"
+                aria-label={`ステージ構成比 ${Array.from({ length: 6 }, (_, i) => `S${i + 1} ${fmt(stageCounts.get(i + 1) ?? 0)}`).join('、')}`}
+              >
+                {Array.from({ length: 6 }, (_, index) => index + 1).map((stage) => {
+                  const count = stageCounts.get(stage) ?? 0
+                  if (count === 0) return null
+                  return <span key={stage} style={{ width: `${(count / stageTotal) * 100}%`, background: `var(--color-stage-${stage}-text)` }} />
+                })}
               </div>
-              <div className="bg-[var(--color-surface-subtle)] px-2 py-2">
-                <div className="text-[9px] font-black text-[var(--color-text-tertiary)]">平均PFS</div>
-                <div className="mt-1 font-mono text-[14px] font-black">{dashboard.pmsSummary?.average_pfs?.toFixed(2) ?? '-'}</div>
-              </div>
-            </div>
-            <Link href="/us/screener?sort=pms&dir=desc" className="border border-[var(--color-border-default)] px-3 py-2 text-center text-[11px] font-black text-[var(--color-brand-900)]">
-              PMS順で確認
-            </Link>
+            ) : null}
+            <ul className="mt-2 grid grid-cols-2 gap-px overflow-hidden rounded-[var(--radius-card)] border border-[var(--color-border-soft)] bg-[var(--color-border-soft)] sm:grid-cols-3 xl:grid-cols-6">
+              {Array.from({ length: 6 }, (_, index) => index + 1).map((stage) => {
+                const count = stageCounts.get(stage) ?? 0
+                return (
+                  <li key={stage} className="min-w-0 bg-white">
+                    <Link
+                      href={`/us/screener?stageCode=${stage}&sort=stageCode&dir=asc`}
+                      prefetch={false}
+                      className="flex h-full min-w-0 flex-col gap-1 px-3 py-2 hover:bg-[var(--color-surface-subtle)]"
+                    >
+                      <span className="flex min-w-0 items-center gap-1.5">
+                        <StageTag stage={stage} size="sm" />
+                        <span className="truncate text-[11px] text-[var(--color-text-tertiary)]">{STAGE_LABELS[stage]}</span>
+                      </span>
+                      <span className="font-mono text-[17px] font-bold tabular-nums text-[var(--color-text-primary)]">{fmt(count)}</span>
+                      <span className="text-[11px] tabular-nums text-[var(--color-text-tertiary)]">{stageTotal > 0 ? `${((count / stageTotal) * 100).toFixed(1)}%` : '-'}</span>
+                    </Link>
+                  </li>
+                )
+              })}
+            </ul>
           </div>
-        </Card>
+        </div>
+        <StatStrip
+          label="US市場 PMS"
+          items={[
+            { label: 'PMSプラス', value: `${fmt(pms?.positive)}銘柄`, tone: 'up' },
+            { label: 'PMSマイナス', value: `${fmt(pms?.negative)}銘柄`, tone: 'down' },
+            { label: '平均PMS', value: pms?.average_pms?.toFixed(2) ?? '-', sub: '市場全体との差の平均' },
+            { label: '平均PFS', value: pms?.average_pfs?.toFixed(2) ?? '-', sub: '足元の力の向き' },
+          ]}
+        />
+        <div className="flex flex-wrap gap-2">
+          <Link href="/us/screener?sort=stageCode&dir=asc" prefetch={false} className="btn" data-size="sm">上昇構造の銘柄 <ChevronRight size={13} aria-hidden /></Link>
+          <Link href="/us/screener?sort=stageCode&dir=desc" prefetch={false} className="btn" data-size="sm">警戒構造の銘柄 <ChevronRight size={13} aria-hidden /></Link>
+          <Link href="/us/screener?sort=pms&dir=desc" prefetch={false} className="btn" data-size="sm">PMS順で確認 <ChevronRight size={13} aria-hidden /></Link>
+          <Link href="/ai/research?market=US" prefetch={false} className="btn" data-size="sm" data-variant="ghost">AI銘柄リサーチ</Link>
+          <Link href="/chart-drill?market=US" prefetch={false} className="btn" data-size="sm" data-variant="ghost">チャートドリル</Link>
+        </div>
       </section>
 
-      <Card>
-        <CardHeader title="US 6ステージ分布" hint="日足Aの現在地。各ステージから該当銘柄へ絞り込めます。" />
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6">
-          {Array.from({ length: 6 }, (_, index) => index + 1).map((stage) => (
-            <Link
-              key={stage}
-              href={`/us/screener?stageCode=${stage}&sort=stageCode&dir=asc`}
-              className="border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] p-3 hover:bg-white"
-            >
-              <div className="flex items-center justify-between gap-2">
-                <StageTag stage={stage} size="sm" />
-                <span className="text-[10px] font-black text-[var(--color-text-tertiary)]">Stage {stage}</span>
-              </div>
-              <div className="mt-2 text-[22px] font-black text-[var(--color-brand-900)]">{fmt(stageCounts.get(stage) ?? 0)}</div>
-            </Link>
-          ))}
+      <section aria-labelledby="us-ranking-title" className="flex min-w-0 flex-col gap-3">
+        <SectionHeader id="us-ranking-title" level={1} title="値動きランキング" description="前営業日比。極端な値・ワラント等は除外" />
+        <div className="grid min-w-0 gap-4 md:grid-cols-2 xl:grid-cols-3">
+          <RankingPanel title="上昇率" hint="前日比の上位" rows={dashboard.gainers} tone="up" />
+          <RankingPanel title="下落率" hint="前日比の下位" rows={dashboard.losers} tone="down" />
+          <RankingPanel title="出来高" hint="当日出来高の上位" rows={dashboard.volume} tone="volume" />
         </div>
-      </Card>
+      </section>
 
-      <details className="border border-[var(--color-border-default)] bg-white">
-        <summary className="cursor-pointer px-4 py-3 text-[12px] font-black text-[var(--color-brand-900)]">
+      <section aria-labelledby="us-ml-title" className="flex min-w-0 flex-col gap-3">
+        <SectionHeader
+          id="us-ml-title"
+          level={1}
+          title="物理MLの候補"
+          description="統計的な観測であり売買推奨ではありません"
+          actions={<Link href="/us/analysis/ml-lens" prefetch={false} className="btn" data-size="sm" data-variant="ghost">US AI Lens <ChevronRight size={13} aria-hidden /></Link>}
+        />
+        <div className="grid min-w-0 gap-4 lg:grid-cols-2">
+          <MlCandidatePanel title="上昇候補" rows={dashboard.mlUp} direction="up" />
+          <MlCandidatePanel title="下落警戒" rows={dashboard.mlDown} direction="down" />
+        </div>
+      </section>
+
+      <details className="rounded-[var(--radius-card)] border border-[var(--color-border-default)] bg-white">
+        <summary className="flex min-h-11 cursor-pointer items-center gap-2 px-4 text-[13px] font-semibold text-[var(--color-text-secondary)]">
+          <Database size={14} aria-hidden />
           データ基盤の健全性
+          <span className="ml-auto font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]">最新 {status.snapshots.latestDate ?? '-'}</span>
         </summary>
-        <div className="grid gap-3 border-t border-[var(--color-border-default)] p-4 md:grid-cols-3">
-          <div>
-            <div className="text-[11px] font-black text-[var(--color-text-tertiary)]">稼働全資産</div>
-            <div className="mt-1 text-[20px] font-black text-[var(--color-brand-900)]">{fmt(status.universe.active)} 銘柄</div>
-            <div className="text-[11px] font-semibold text-[var(--color-text-secondary)]">
-              運用対象 {fmt(status.universe.productionActive)} / 登録 {fmt(status.universe.total)}
+        <dl className="grid gap-px border-t border-[var(--color-border-soft)] bg-[var(--color-border-soft)] md:grid-cols-3">
+          {[
+            { label: '稼働全資産', value: `${fmt(status.universe.active)}銘柄`, sub: `運用対象 ${fmt(status.universe.productionActive)} / 登録 ${fmt(status.universe.total)}` },
+            { label: 'OHLCV', value: `${fmt(status.ohlcv.tickers)}銘柄`, sub: `${status.ohlcv.firstDate ?? '-'} 〜 ${status.ohlcv.latestDate ?? '-'}` },
+            { label: '6ステージ', value: `${fmt(status.snapshots.tickers)}銘柄`, sub: `最新 ${status.snapshots.latestDate ?? '-'}` },
+          ].map((item) => (
+            <div key={item.label} className="min-w-0 bg-white px-4 py-3">
+              <dt className="flex items-center gap-1.5 text-[12px] font-semibold text-[var(--color-text-tertiary)]">
+                <BarChart3 size={13} aria-hidden />
+                {item.label}
+              </dt>
+              <dd className="m-0 mt-1 font-mono text-[18px] font-bold tabular-nums text-[var(--color-text-primary)]">{item.value}</dd>
+              <dd className="m-0 mt-0.5 text-[12px] tabular-nums text-[var(--color-text-secondary)]">{item.sub}</dd>
             </div>
-          </div>
-          <div>
-            <div className="text-[11px] font-black text-[var(--color-text-tertiary)]">OHLCV</div>
-            <div className="mt-1 text-[20px] font-black text-[var(--color-brand-900)]">{fmt(status.ohlcv.tickers)} 銘柄</div>
-            <div className="text-[11px] font-semibold text-[var(--color-text-secondary)]">
-              {status.ohlcv.firstDate ?? '-'} 〜 {status.ohlcv.latestDate ?? '-'}
-            </div>
-          </div>
-          <div>
-            <div className="text-[11px] font-black text-[var(--color-text-tertiary)]">6ステージ</div>
-            <div className="mt-1 text-[20px] font-black text-[var(--color-brand-900)]">{fmt(status.snapshots.tickers)} 銘柄</div>
-            <div className="text-[11px] font-semibold text-[var(--color-text-secondary)]">最新 {status.snapshots.latestDate ?? '-'}</div>
-          </div>
-        </div>
+          ))}
+        </dl>
       </details>
     </div>
   )

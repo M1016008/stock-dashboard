@@ -1,4 +1,5 @@
 import type { MlObjectiveValidation } from '@/lib/queries/ml-insights'
+import { SectionHeader } from '@/components/ui/SectionHeader'
 
 function fmtRate(value: number | null | undefined) {
   if (value == null || !Number.isFinite(value)) return '-'
@@ -39,20 +40,20 @@ function ValidationTable({
   rows: MlObjectiveValidation[]
 }) {
   const periodLabel = rows[0]?.split === 'test'
-    ? `${rows[0]?.validationStartDate ?? '-'} → horizon別確定日`
+    ? `${rows[0]?.validationStartDate ?? '-'} → 期間ごとの確定日`
     : `${rows[0]?.validationStartDate ?? '-'} → ${rows[0]?.validationEndDate ?? '-'}`
   return (
-    <div className="rounded-[8px] border border-[var(--color-border-soft)] bg-white">
-      <div className="flex items-center justify-between border-b border-[var(--color-border-soft)] px-3 py-2">
-        <h3 className="text-[13px] font-bold text-[var(--color-text-primary)]">{title}</h3>
-        <span className="text-[10px] font-bold text-[var(--color-text-tertiary)]">
+    <div className="panel">
+      <div className="panel-head">
+        <h3>{title}</h3>
+        <span className="text-[11px] tabular-nums text-[var(--color-text-tertiary)]">
           {periodLabel}
         </span>
       </div>
-      <div className="overflow-x-auto">
+      <div className="table-scroll">
         <table className="w-full min-w-[760px] text-[12px]">
           <thead>
-            <tr className="text-left text-[10px] font-bold text-[var(--color-text-tertiary)]">
+            <tr className="text-left text-[11px] font-bold">
               <th className="py-2 pl-3 pr-2">期間</th>
               <th className="py-2 pr-2">方向</th>
               <th className="py-2 pr-2 text-right">条件</th>
@@ -73,7 +74,7 @@ function ValidationTable({
                 </td>
                 <td className={`py-2 pr-2 font-bold ${toneFor(row.direction)}`}>
                   {directionLabel(row.direction)}
-                  <span className="ml-1 rounded-full border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-1.5 py-0.5 text-[9px] text-[var(--color-text-tertiary)]">
+                  <span className="ml-1 rounded-[3px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-1.5 py-0.5 text-[9px] text-[var(--color-text-tertiary)]">
                     {variantLabel(row.variant)}
                   </span>
                 </td>
@@ -132,27 +133,24 @@ export function MlObjectiveValidationBoard({
   const train = sorted[0]
 
   return (
-    <section className="rounded-[8px] border border-[var(--color-border-default)] bg-white p-4 shadow-[var(--shadow-card)]">
-      <div className="mb-3 flex flex-wrap items-start justify-between gap-3 border-b-2 border-[var(--color-brand-700)] bg-[var(--color-surface-subtle)] px-3 py-2">
-        <div className="min-w-0 border-l-4 border-[var(--color-market-red)] pl-2">
-          <h2 className="text-[14px] font-bold text-[var(--color-brand-900)]">ML客観検証</h2>
-          <p className="mt-1 text-[11px] font-semibold leading-relaxed text-[var(--color-text-tertiary)]">
-            強化版ラベルで過去だけを学習し、検証期間と未学習テスト期間で答え合わせした結果です。
-          </p>
-        </div>
-        {train && (
-          <span className="rounded-full border border-[var(--color-border-default)] bg-white px-2.5 py-1 text-[11px] font-bold text-[var(--color-text-secondary)]">
-            学習: {train.trainStartDate ?? '-'} → {train.trainEndDate ?? '-'}
+    <section className="min-w-0">
+      <SectionHeader
+        level={1}
+        title="ML客観検証"
+        description="過去だけで学習し、検証期間と未学習のテスト期間で答え合わせした結果です。"
+        actions={train ? (
+          <span className="text-[11px] tabular-nums text-[var(--color-text-tertiary)]">
+            学習 {train.trainStartDate ?? '-'} → {train.trainEndDate ?? '-'}
           </span>
-        )}
-      </div>
+        ) : undefined}
+      />
 
       <div className="grid grid-cols-1 gap-3 2xl:grid-cols-2">
         <ValidationTable title={splitLabel('test')} rows={testRows} />
         <ValidationTable title={splitLabel('validation')} rows={validationRows} />
       </div>
 
-      <div className="mt-3 rounded-[8px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-3 py-2 text-[11px] font-semibold leading-relaxed text-[var(--color-text-tertiary)]">
+      <div className="mt-3 text-[11px] leading-relaxed text-[var(--color-text-tertiary)]">
         市場は同期間の全サンプル到達率、上位20/60はモデルスコア順の上位群です。Liftは上位60到達率 ÷ 市場到達率、逆行率は反対方向条件に入った割合です。通常表示は強化版のみで、基準版はAPIのvariant指定で確認できます。
       </div>
     </section>

@@ -197,7 +197,7 @@ function CandidateComparison({
             <button type="button" onClick={() => onRemove(candidate.ticker)} title="比較から外す" className="absolute right-1.5 top-1.5 text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)]">
               <X size={13} />
             </button>
-            <Link href={`/stock/${encodeURIComponent(candidate.ticker)}`} className="pr-4 text-[11px] font-bold text-[var(--color-brand-900)] hover:text-[var(--color-market-red)]">
+            <Link href={`/stock/${encodeURIComponent(candidate.ticker)}`} className="pr-4 text-[11px] font-bold text-[var(--color-brand-900)] hover:text-[var(--color-brand-900)]">
               {candidate.ticker} {candidate.name ?? ''}
             </Link>
             <div className="mt-1.5"><StageDots values={stageValues(candidate)} size={18} /></div>
@@ -246,7 +246,7 @@ function CandidateRows({
                   <div className="flex items-start gap-2">
                     <span className="w-5 text-[9px] font-bold tabular-nums text-[var(--color-text-tertiary)]">{index + 1}</span>
                     <div className="min-w-0">
-                      <Link href={`/stock/${encodeURIComponent(candidate.ticker)}`} className="text-[11px] font-bold text-[var(--color-brand-900)] hover:text-[var(--color-market-red)]">
+                      <Link href={`/stock/${encodeURIComponent(candidate.ticker)}`} className="text-[11px] font-bold text-[var(--color-brand-900)] hover:text-[var(--color-brand-900)]">
                         {candidate.ticker} {candidate.name ?? '名称未登録'}
                       </Link>
                       <div className="mt-0.5 text-[9px] text-[var(--color-text-tertiary)]">{candidate.marketSegment ?? '市場区分未取得'} · {fmtMarketCap(candidate.marketCap)}</div>

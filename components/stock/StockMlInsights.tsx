@@ -800,7 +800,7 @@ export function StockMlInsights({
                   type="button"
                   onClick={loadCaseStudies}
                   disabled={casesLoading}
-                  className="rounded-full border border-[var(--color-border-soft)] bg-white px-3 py-1.5 text-[11px] font-bold text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-subtle)] disabled:opacity-60"
+                  className="rounded-[4px] border border-[var(--color-border-default)] bg-white px-3 py-1.5 text-[11px] font-bold text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-subtle)] disabled:opacity-60"
                 >
                   {casesLoading ? '読み込み中…' : 'ケースを表示'}
                 </button>

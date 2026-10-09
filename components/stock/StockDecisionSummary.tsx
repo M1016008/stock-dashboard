@@ -397,7 +397,7 @@ export function StockDecisionSummary({
   return (
     <div className="space-y-4 md:space-y-6">
       {variant === 'overview' && (
-        <section className="overflow-hidden border border-[var(--color-border-default)] bg-white shadow-[0_1px_3px_rgba(16,32,52,0.05)]" aria-labelledby="market-structure-title" data-section="Market Structure">
+        <section className="overflow-hidden rounded-[var(--radius-card)] border border-[var(--color-border-default)] bg-white" aria-labelledby="market-structure-title" data-section="Market Structure">
           <header className="flex flex-wrap items-start justify-between gap-2 border-b border-[var(--color-border-soft)] px-3 py-3 sm:px-4 sm:py-3.5">
             <div>
               <h2 id="market-structure-title" className="flex items-center gap-2 text-[14px] font-bold text-[var(--color-text-primary)]"><Radar size={16} className="text-[var(--color-brand-700)]" />業種内の位置</h2>
@@ -450,7 +450,7 @@ export function StockDecisionSummary({
       )}
 
       <section
-        className="overflow-hidden border border-[var(--color-border-default)] bg-white shadow-[0_1px_3px_rgba(16,32,52,0.05)]"
+        className="overflow-hidden rounded-[var(--radius-card)] border border-[var(--color-border-default)] bg-white"
         aria-labelledby={`fundamental-summary-title-${variant}`}
         data-section="Fundamental Summary"
       >

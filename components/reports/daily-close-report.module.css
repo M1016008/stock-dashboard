@@ -29,11 +29,10 @@
 }
 
 .toolbarEyebrow {
-  color: #0f6f73;
-  font-family: var(--font-mono);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: .08em;
+  color: var(--color-brand-700);
+  font-size: var(--type-label-size);
+  font-weight: 700;
+  letter-spacing: 0;
 }
 
 .toolbarActions {
@@ -86,19 +85,55 @@
   font-size: 12px;
 }
 
+.toolbarActions .toolbarPrimary {
+  gap: 6px;
+  padding: 0 12px;
+  border-color: var(--color-brand-800);
+  background: var(--color-brand-800);
+  color: #fff;
+  font-size: var(--type-nav-size);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.toolbarActions .toolbarPrimary:hover {
+  border-color: var(--color-brand-900);
+  background: var(--color-brand-900);
+}
+
 .state {
   display: grid;
   min-height: 260px;
   place-items: center;
   border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-card);
   background: #fff;
   color: var(--color-text-secondary);
+  font-size: var(--type-table-size);
+}
+
+.stateInner {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  max-width: 520px;
+  padding: 24px 16px;
+  text-align: center;
+}
+
+.state[role="status"] .stateInner {
+  flex-direction: row;
 }
 
 .error {
-  border-color: #d6a0a0;
-  background: #fff5f5;
-  color: #8f1d1d;
+  border-color: #f0b8b8;
+  background: var(--color-price-up-bg);
+  color: var(--color-price-up-strong);
+}
+
+.error strong {
+  color: var(--color-text-primary);
 }
 
 .report {
@@ -139,7 +174,7 @@
   color: #4f6579;
   font-family: var(--font-mono);
   font-size: 9px;
-  letter-spacing: .07em;
+  letter-spacing: 0;
 }
 
 .pageHeader h2 {
@@ -178,7 +213,7 @@
   font-family: var(--font-mono);
   font-size: 9px;
   font-weight: 700;
-  letter-spacing: .07em;
+  letter-spacing: 0;
 }
 
 .takeaway strong {
@@ -209,7 +244,7 @@
   color: #687b8d;
   font-family: var(--font-mono);
   font-size: 8px;
-  letter-spacing: .04em;
+  letter-spacing: 0;
 }
 
 .statusStrip,
@@ -280,9 +315,15 @@
 .kpi strong {
   color: #0c2d4a;
   font-family: var(--font-mono);
-  font-size: clamp(19px, 2vw, 27px);
+  font-size: 20px;
   font-weight: 600;
   line-height: 1.05;
+}
+
+@media (min-width: 1280px) {
+  .kpi strong {
+    font-size: 24px;
+  }
 }
 
 .keyPoints {
@@ -299,7 +340,7 @@
   color: #0f6f73;
   font-family: var(--font-mono);
   font-size: 9px;
-  letter-spacing: .07em;
+  letter-spacing: 0;
 }
 
 .keyPoints > div {
@@ -366,7 +407,7 @@
   font-family: var(--font-mono);
   font-size: 10px;
   font-weight: 700;
-  letter-spacing: .06em;
+  letter-spacing: 0;
 }
 
 .panel h3:not(:first-child),
@@ -687,7 +728,7 @@
   color: #506579;
   font-size: 8px;
   font-weight: 700;
-  letter-spacing: .03em;
+  letter-spacing: 0;
 }
 
 .rankingBlock th:nth-child(2),

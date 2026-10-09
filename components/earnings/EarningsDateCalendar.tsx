@@ -75,7 +75,7 @@ export function EarningsDateCalendar({
 
   if (!month) {
     return (
-      <div className="rounded-[10px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-4 py-6 text-center text-[13px] font-bold text-[var(--color-text-tertiary)]">
+      <div className="rounded-[6px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-4 py-6 text-center text-[13px] text-[var(--color-text-tertiary)]">
         決算日カレンダー用のデータがありません。
       </div>
     )
@@ -88,29 +88,27 @@ export function EarningsDateCalendar({
   const selectedCount = selectedDate ? countMap.get(selectedDate) ?? 0 : null
 
   return (
-    <section className="rounded-[10px] border border-[var(--color-border-default)] bg-white p-4 shadow-[var(--shadow-card)]">
-      <div className="mb-4 flex flex-wrap items-start justify-between gap-3 border-b-2 border-[var(--color-brand-700)] bg-[var(--color-surface-subtle)] px-3 py-2">
-        <div className="min-w-0 border-l-4 border-[var(--color-market-red)] pl-2">
-          <h2 className="text-[14px] font-bold text-[var(--color-brand-900)]">決算イベントカレンダー</h2>
-          <p className="mt-1 text-[11px] font-semibold text-[var(--color-text-tertiary)]">
-            日付の件数をクリックすると、その日を基準に決算予定・発表後の値動き・シグナルへ切り替わります。
-          </p>
+    <section className="panel" aria-labelledby="earnings-calendar-title">
+      <div className="panel-head">
+        <div className="min-w-0">
+          <h2 id="earnings-calendar-title">決算日カレンダー</h2>
+          <p>日付を選ぶと、その日を基準に決算予定・発表後の値動き・シグナルを表示します。</p>
         </div>
         <div className="flex items-center gap-2">
           <Link
             href={hrefFor({ month: addMonth(month, -1) })}
-            className="inline-flex h-8 w-8 items-center justify-center rounded-[5px] border border-[var(--color-border-default)] bg-white text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-subtle)]"
+            className="btn w-8 px-0"
             prefetch={false}
             aria-label="前の月"
           >
             <ChevronLeft size={16} />
           </Link>
-          <div className="min-w-[118px] text-center text-[14px] font-bold tabular-nums text-[var(--color-brand-900)]">
+          <div className="min-w-[110px] text-center text-[14px] font-bold tabular-nums text-[var(--color-text-primary)]">
             {monthLabel(month)}
           </div>
           <Link
             href={hrefFor({ month: addMonth(month, 1) })}
-            className="inline-flex h-8 w-8 items-center justify-center rounded-[5px] border border-[var(--color-border-default)] bg-white text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-subtle)]"
+            className="btn w-8 px-0"
             prefetch={false}
             aria-label="次の月"
           >
@@ -118,7 +116,7 @@ export function EarningsDateCalendar({
           </Link>
           <Link
             href="/earnings"
-            className="inline-flex h-8 items-center gap-1.5 rounded-[5px] border border-[var(--color-border-default)] bg-white px-2.5 text-[11px] font-bold text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-subtle)]"
+            className="btn"
             prefetch={false}
           >
             <RotateCcw size={13} />
@@ -127,33 +125,34 @@ export function EarningsDateCalendar({
         </div>
       </div>
 
-      <div className="mb-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
-        <div className="rounded-[8px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-3 py-2">
-          <div className="text-[10px] font-bold text-[var(--color-text-tertiary)]">表示月の決算件数</div>
-          <div className="mt-1 text-[18px] font-bold tabular-nums text-[var(--color-brand-900)]">{monthTotal.toLocaleString()}件</div>
+      <dl className="flex flex-wrap gap-x-6 gap-y-1 border-b border-[var(--color-border-soft)] px-4 py-2 text-[12px] tabular-nums">
+        <div className="flex items-baseline gap-2">
+          <dt className="text-[var(--color-text-tertiary)]">表示月の決算</dt>
+          <dd className="m-0 text-[16px] font-bold text-[var(--color-text-primary)]">{monthTotal.toLocaleString()}件</dd>
         </div>
-        <div className="rounded-[8px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-3 py-2">
-          <div className="text-[10px] font-bold text-[var(--color-text-tertiary)]">選択日</div>
-          <div className="mt-1 text-[18px] font-bold tabular-nums text-[var(--color-brand-900)]">{selectedDate ?? '最新基準'}</div>
+        <div className="flex items-baseline gap-2">
+          <dt className="text-[var(--color-text-tertiary)]">選択日</dt>
+          <dd className="m-0 font-bold text-[var(--color-text-primary)]">{selectedDate ?? '最新基準'}</dd>
         </div>
-        <div className="rounded-[8px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-3 py-2">
-          <div className="text-[10px] font-bold text-[var(--color-text-tertiary)]">選択日の決算件数</div>
-          <div className="mt-1 text-[18px] font-bold tabular-nums text-[var(--color-brand-900)]">
+        <div className="flex items-baseline gap-2">
+          <dt className="text-[var(--color-text-tertiary)]">選択日の決算</dt>
+          <dd className="m-0 text-[16px] font-bold text-[var(--color-text-primary)]">
             {selectedCount == null ? '---' : `${selectedCount.toLocaleString()}件`}
-          </div>
+          </dd>
         </div>
-      </div>
+      </dl>
 
+      <div className="p-3">
       <div className="grid grid-cols-7 gap-1 text-center text-[10px] font-bold text-[var(--color-text-tertiary)]">
         {WEEKDAYS.map((day) => <span key={day}>{day}</span>)}
       </div>
       <div className="mt-1 grid grid-cols-7 gap-1">
         {grid.map((date, index) => {
-          if (!date) return <span key={`blank-${index}`} className="min-h-[64px]" />
+          if (!date) return <span key={`blank-${index}`} className="min-h-[56px]" />
           const count = countMap.get(date) ?? 0
           const selected = isDate(selectedDate) && selectedDate === date
           const hasEvents = count > 0
-          const baseClass = `flex min-h-[64px] flex-col items-center justify-center rounded-[7px] border px-1.5 py-2 text-center transition-colors ${
+          const baseClass = `flex min-h-[56px] flex-col items-center justify-center rounded-[4px] border px-1 py-1.5 text-center transition-colors ${
             selected
               ? 'border-[var(--color-brand-800)] bg-[var(--color-brand-800)] text-white'
               : hasEvents
@@ -163,7 +162,7 @@ export function EarningsDateCalendar({
           const content = (
             <>
               <span className="text-[12px] font-bold tabular-nums">{Number(date.slice(8, 10))}</span>
-              <span className={`mt-1 rounded-full px-1.5 py-0.5 text-[10px] font-bold tabular-nums ${selected ? 'bg-white/15 text-white' : hasEvents ? 'bg-white text-[var(--color-brand-800)]' : 'bg-transparent'}`}>
+              <span className={`mt-1 rounded-[3px] px-1 py-0.5 text-[10px] font-bold tabular-nums ${selected ? 'bg-white/15 text-white' : hasEvents ? 'bg-white text-[var(--color-brand-800)]' : 'bg-transparent'}`}>
                 {hasEvents ? `${count}件` : '-'}
               </span>
             </>
@@ -184,6 +183,7 @@ export function EarningsDateCalendar({
             </span>
           )
         })}
+      </div>
       </div>
     </section>
   )

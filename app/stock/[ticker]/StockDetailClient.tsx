@@ -27,6 +27,7 @@ import { CandlestickChart } from '@/components/charts/CandlestickChart'
 import { PerformanceCard } from '@/components/stock/PerformanceCard'
 import { EarningsCard } from '@/components/stock/EarningsCard'
 import { WatchlistButton } from '@/components/ui/WatchlistButton'
+import { Notice } from '@/components/ui/EmptyState'
 import { StageTimeline, type StageTimelineSnapshot } from '@/components/stock/StageTimeline'
 import { StockMovePeriods } from '@/components/stock/StockMovePeriods'
 import { Ma25mMonitorSummary } from '@/components/stock/Ma25mMonitorSummary'
@@ -403,35 +404,25 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
   }, [analysisDate])
 
   return (
-    <div className="flex flex-col gap-3 p-3 sm:gap-4 sm:p-4">
+    <div className="flex min-w-0 flex-col gap-4">
 
-      <div className="stock-detail-sticky border border-[var(--color-border-default)] bg-white shadow-[0_2px_8px_rgba(16,32,52,0.12)]">
-        {/* ヘッダー */}
-        <div style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '12px',
-          padding: '10px 12px 8px',
-          flexWrap: 'wrap',
-        }}>
-          <div className="flex w-full min-w-0 flex-none flex-wrap items-center gap-x-3 gap-y-2.5 sm:w-auto sm:flex-1">
-            <span style={{ fontSize: '22px', lineHeight: 1 }}>
+      <div className="stock-detail-sticky border-b border-[var(--color-border-default)] bg-white">
+        {/* 銘柄の識別 (コード・名称・分類) と価格を 1 段に。狭い画面では価格が下段に回る */}
+        <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3 pb-3 pt-0.5">
+          <div className="flex min-w-0 flex-1 basis-[420px] flex-col gap-2">
+            <p className="m-0 text-[12px] font-bold leading-tight text-[var(--color-brand-700)]">個別銘柄</p>
+            <div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1.5">
               <WatchlistButton ticker={ticker} size="md" />
-            </span>
-            <h1 style={{ display: 'flex', minWidth: 0, alignItems: 'baseline', gap: '8px', margin: 0, flexWrap: 'wrap' }}>
-              <span style={{
-                fontFamily: 'var(--font-mono)',
-                fontSize: '22px',
-                fontWeight: 800,
-                color: 'var(--accent-primary)',
-              }}>
-                {displayCode}
-              </span>
+              <h1 className="m-0 flex min-w-0 flex-wrap items-baseline gap-x-2.5 gap-y-1">
+                <span className="font-mono text-[22px] font-bold leading-none tabular-nums text-[var(--color-brand-800)] sm:text-[24px]">
+                  {displayCode}
+                </span>
+                <span className="min-w-0 break-words text-[18px] font-bold leading-tight text-[var(--color-text-primary)] sm:text-[20px]">
+                  {name}
+                </span>
+              </h1>
               <MarketBadge />
-              <span className="min-w-0 text-[16px] font-bold leading-tight text-[var(--text-primary)] sm:text-[17px]">
-                {name}
-              </span>
-            </h1>
+            </div>
             <StockHeaderClassifications
               marketSegment={displayMarketSegment}
               sector17={displaySectorLarge}
@@ -442,20 +433,7 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
             />
           </div>
 
-          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <button
-              type="button"
-              onClick={() => setCompared(toggleComparedSymbol({ market: 'JP', ticker: displayCode, name }))}
-              className={`inline-flex h-8 items-center gap-1.5 border px-2.5 text-[11px] font-black ${
-                compared
-                  ? 'border-[var(--color-market-red)] bg-[var(--color-price-up-bg)] text-[var(--color-market-red)]'
-                  : 'border-[var(--color-border-default)] bg-white text-[var(--color-text-secondary)]'
-              }`}
-              title={compared ? '比較から外す' : '比較へ追加'}
-            >
-              <GitCompareArrows size={14} />
-              <span className="hidden sm:inline">{compared ? '比較中' : '比較'}</span>
-            </button>
+          <div className="flex shrink-0 items-end gap-3">
             {displayedQuote && (
               <div className="text-right">
                 <PriceDisplay
@@ -465,18 +443,31 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
                   currency={displayedQuote.currency}
                   size="lg"
                 />
-                <div className="mt-1 text-[9px] font-bold text-[var(--color-text-tertiary)]">
+                <div className="mt-1 font-mono text-[11px] font-medium tabular-nums text-[var(--color-text-tertiary)]">
                   {analysisDate ? `過去終値 ${displayedQuote.priceDate ?? analysisDate}` : displayedQuote.priceDate ? `価格日 ${displayedQuote.priceDate}` : '最新価格'}
                 </div>
               </div>
             )}
             {analysisParamsReady && analysisDate && !displayedQuote && (
               <div className="min-w-[112px] text-right" aria-label="過去終値を読み込み中">
-                <div className="font-mono text-lg font-black text-[var(--color-text-tertiary)]">—</div>
-                <div className="mt-1 text-[9px] font-bold text-[var(--color-text-tertiary)]">過去終値を読み込み中</div>
+                <div className="font-mono text-lg font-bold text-[var(--color-text-tertiary)]">—</div>
+                <div className="mt-1 text-[11px] font-medium text-[var(--color-text-tertiary)]">過去終値を読み込み中</div>
               </div>
             )}
-            {loading && <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>読込中...</span>}
+            {loading && !displayedQuote && !analysisDate && (
+              <span className="text-[12px] text-[var(--color-text-tertiary)]" role="status">価格を読み込み中…</span>
+            )}
+            <button
+              type="button"
+              onClick={() => setCompared(toggleComparedSymbol({ market: 'JP', ticker: displayCode, name }))}
+              className="btn"
+              data-variant={compared ? 'primary' : undefined}
+              aria-pressed={compared}
+              title={compared ? '比較から外す' : '比較へ追加'}
+            >
+              <GitCompareArrows size={14} aria-hidden="true" />
+              <span className="hidden sm:inline">{compared ? '比較中' : '比較に追加'}</span>
+            </button>
           </div>
         </div>
         <StockDetailTabs active={activeTab} onSelect={selectTab} />
@@ -589,7 +580,7 @@ function StockDetailTabs({
     { id: 'ml' as const, label: '類似・比較', icon: BrainCircuit },
   ]
   return (
-    <nav className="flex overflow-x-auto border-t border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-2" aria-label="個別銘柄分析">
+    <nav className="-mb-px flex gap-1 overflow-x-auto [scrollbar-width:none]" aria-label="個別銘柄分析">
       {tabs.map((tab) => {
         const Icon = tab.icon
         return (
@@ -598,14 +589,14 @@ function StockDetailTabs({
             ref={active === tab.id ? activeTabRef : undefined}
             type="button"
             onClick={() => onSelect(tab.id)}
-            className={`inline-flex h-11 shrink-0 items-center gap-1.5 border-b-2 px-3 text-[11px] font-black sm:h-9 ${
+            className={`inline-flex h-11 shrink-0 items-center gap-1.5 border-b-2 px-3 text-[13px] sm:h-9 ${
               active === tab.id
-                ? 'border-[var(--color-market-red)] bg-white text-[var(--color-brand-900)]'
-                : 'border-transparent text-[var(--color-text-secondary)] hover:bg-white'
+                ? 'border-[var(--color-brand-800)] font-bold text-[var(--color-text-primary)]'
+                : 'border-transparent font-semibold text-[var(--color-text-secondary)] hover:border-[var(--color-border-default)] hover:text-[var(--color-text-primary)]'
             }`}
             aria-current={active === tab.id ? 'page' : undefined}
           >
-            <Icon size={14} />
+            <Icon size={15} aria-hidden="true" className={active === tab.id ? 'text-[var(--color-brand-700)]' : undefined} />
             {tab.label}
           </button>
         )
@@ -705,7 +696,7 @@ function ChartWorkspace({
   // 読み順: 現在の状態(結論) → チャート → 根拠(MA・スコア・Stage) → Stage変遷 → 月足MA → Physical Momentum → 指標の見方
   return (
     <div className="space-y-3 pb-6 sm:space-y-4" aria-label="チャート・6ステージ分析">
-      <section className="border border-[var(--color-border-default)] bg-white" aria-labelledby="main-chart-title" data-section="Price &amp; moving averages">
+      <section className="overflow-hidden rounded-[var(--radius-card)] border border-[var(--color-border-default)] bg-white" aria-labelledby="main-chart-title" data-section="Price &amp; moving averages">
         <TechnicalChartSnapshot
           stage={stageSnapshot}
           momentum={momentumSnapshot}
@@ -872,7 +863,7 @@ function TechnicalStateHero({ color, title, description }: { color: string; titl
   const glyph = color === 'var(--price-up)' ? '↗' : color === 'var(--price-down)' ? '↘' : color === 'var(--text-secondary)' ? '→' : '—'
   return (
     <div
-      className="flex min-w-0 items-start gap-3 border border-[var(--color-border-soft)] bg-white px-3 py-2"
+      className="flex min-w-0 items-start gap-3 rounded-[var(--radius-card)] border border-[var(--color-border-soft)] bg-white px-3 py-2"
       style={{ borderLeftWidth: 3, borderLeftColor: color }}
       data-technical-current-state
     >
@@ -1300,7 +1291,7 @@ function TechnicalSnapshotGuide({ momentum }: { momentum: TechnicalMomentumSnaps
     },
   ]
   return (
-    <details className="border border-[var(--color-border-default)] bg-white">
+    <details className="rounded-[var(--radius-card)] border border-[var(--color-border-default)] bg-white">
       <summary className="flex min-h-11 cursor-pointer select-none items-center gap-2 px-3 text-[12px] font-bold text-[var(--color-text-secondary)] sm:min-h-9">
         <svg
           aria-hidden="true"
@@ -1351,32 +1342,29 @@ function FundamentalWorkspace({
   ]
 
   return (
-    <section className="space-y-4 bg-white pb-2" aria-labelledby="fundamental-workspace-title">
-      <div className="overflow-hidden border-y border-[var(--color-border-soft)] bg-white">
-        <header className="flex flex-wrap items-end justify-between gap-2 border-b border-[var(--color-border-soft)] px-4 py-3 sm:px-5">
-          <div>
-            <h2 id="fundamental-workspace-title" className="text-[15px] font-bold text-[var(--color-text-primary)]">ファンダメンタル</h2>
-            <p className="mt-1 text-[12px] font-medium text-[var(--color-text-secondary)]">現在地(サマリー) → 業績・財務の根拠 → 株価の位置 → 株主還元の順に確認</p>
+    <section className="flex min-w-0 flex-col gap-4 pb-2" aria-labelledby="fundamental-workspace-title">
+      <div className="flex flex-col gap-3">
+        <header className="flex flex-wrap items-end justify-between gap-x-4 gap-y-1">
+          <div className="min-w-0">
+            <h2 id="fundamental-workspace-title" className="text-[17px] font-bold text-[var(--color-text-primary)]">ファンダメンタル</h2>
+            <p className="mt-1 text-[12px] text-[var(--color-text-secondary)]">サマリーで現在地 → 業績・財務の根拠 → 株価の位置 → 株主還元の順に確認します。</p>
           </div>
-          <span className="font-mono text-[11px] font-semibold text-[var(--color-text-tertiary)]">基準日 {analysisDate ?? quote?.priceDate ?? '---'}</span>
+          <span className="font-mono text-[12px] tabular-nums text-[var(--color-text-tertiary)]">基準日 {analysisDate ?? quote?.priceDate ?? '---'}</span>
         </header>
-        <nav className="flex overflow-x-auto bg-white px-2 sm:px-3" aria-label="ファンダメンタル分析" role="tablist">
+        {/* 二段目のナビは segmented (ViewTabs と同じ見た目)。一段目の下線タブと役割を分ける */}
+        <nav className="view-tabs self-start" aria-label="ファンダメンタル分析" role="tablist">
           {tabs.map(({ id, label, icon: Icon }) => (
             <button
               key={id}
               ref={active === id ? activeTabRef : undefined}
               type="button"
               onClick={() => onSelect(id)}
-              className={`inline-flex h-11 shrink-0 items-center gap-1.5 border-b-2 px-3 text-[11px] font-bold sm:h-9 ${
-                active === id
-                  ? 'border-[var(--color-brand-700)] bg-white text-[var(--color-brand-900)]'
-                  : 'border-transparent text-[var(--color-text-secondary)] hover:bg-white'
-              }`}
+              className="view-tab h-11 sm:h-9"
               role="tab"
               aria-selected={active === id}
-              aria-current={active === id ? 'page' : undefined}
+              data-active={active === id}
             >
-              <Icon size={13} aria-hidden="true" />
+              <Icon size={14} aria-hidden="true" />
               {label}
             </button>
           ))}
@@ -1464,9 +1452,9 @@ function OverviewWorkspace({
   return (
     <div className="space-y-4 md:space-y-6">
       {!loading && !quote && (
-        <div className="card" style={missingPriceNoticeStyle}>
-          J-Quants日足の価格データを取得できませんでした。
-        </div>
+        <Notice tone="warning" role="status" title="価格データを取得できませんでした">
+          J-Quants の日足が見つかりません。上場直後・コード変更・データ更新前の可能性があります。
+        </Notice>
       )}
       <OverviewBasicInfoPanel
         ticker={ticker}
@@ -1525,7 +1513,7 @@ function OverviewBasicInfoPanel({
 }) {
   return (
     <>
-      <section id="company-basic-info" className="scroll-mt-32 overflow-hidden border border-[var(--color-border-default)] bg-white shadow-[0_1px_3px_rgba(16,32,52,0.05)]" aria-labelledby="company-basic-info-title">
+      <section id="company-basic-info" className="scroll-mt-32 overflow-hidden rounded-[var(--radius-card)] border border-[var(--color-border-default)] bg-white" aria-labelledby="company-basic-info-title">
         <header className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--color-border-soft)] px-3 py-3 sm:gap-3 sm:px-4 sm:py-3.5">
           <div className="flex items-center gap-2.5">
             <LayoutDashboard size={16} className="text-[var(--color-brand-700)]" aria-hidden="true" />
@@ -1661,7 +1649,7 @@ function StockHeaderClassifications({
   })).filter((group) => group.items.length > 0)
   if (classificationGroups.length === 0) return null
   return (
-    <div className="flex w-full min-w-0 max-w-full flex-none flex-wrap items-center gap-x-3 gap-y-1.5 sm:w-auto sm:flex-initial" aria-label={`銘柄分類${analysisDate ? '（現在属性）' : ''}`}>
+    <div className="flex w-full min-w-0 max-w-full flex-wrap items-center gap-x-3 gap-y-1.5" aria-label={`銘柄分類${analysisDate ? '（現在属性）' : ''}`}>
       {classificationGroups.map((group) => (
         <span
           key={group.key}
@@ -1674,7 +1662,7 @@ function StockHeaderClassifications({
             <span
               key={label}
               title={`${label}: ${value}${analysisDate ? '（現在属性）' : ''}`}
-              className={`inline-flex max-w-full shrink-0 items-baseline gap-1.5 rounded-[4px] border px-2 py-1 leading-none ${
+              className={`inline-flex max-w-full shrink-0 items-baseline gap-1.5 rounded-[4px] border px-2 py-1 leading-tight ${
                 group.tone === 'market'
                   ? 'border-[var(--color-border-default)] bg-white'
                   : group.tone === 'official'
@@ -1682,6 +1670,7 @@ function StockHeaderClassifications({
                     : 'border-[var(--color-brand-100)] bg-[var(--color-brand-50)]'
               }`}
             >
+              {/* text-[9px]/[10px] は globals.css の互換ブリッジで 11px に揃う */}
               <span className="shrink-0 text-[9px] font-medium text-[var(--color-text-tertiary)]">{label}</span>
               <strong className={`min-w-0 whitespace-normal break-words text-[10px] font-bold ${
                 group.tone === 'custom' ? 'text-[var(--color-brand-900)]' : 'text-[var(--color-text-primary)]'
@@ -1690,7 +1679,7 @@ function StockHeaderClassifications({
           ))}
         </span>
       ))}
-      {analysisDate && <span className="text-[9px] font-medium text-[var(--color-text-tertiary)]">現在属性</span>}
+      {analysisDate && <span className="text-[11px] font-medium text-[var(--color-text-tertiary)]">現在属性</span>}
     </div>
   )
 }
@@ -2181,7 +2170,7 @@ function PhysicalMomentumSection({
 
           <button
             type="button"
-            className="mb-2 inline-flex min-h-11 w-full items-center justify-between border border-[var(--color-border-default)] bg-white px-3 text-left text-[12px] font-bold text-[var(--color-text-primary)] sm:hidden"
+            className="mb-2 inline-flex min-h-11 w-full items-center justify-between rounded-[4px] border border-[var(--color-border-default)] bg-white px-3 text-left text-[12px] font-bold text-[var(--color-text-primary)] sm:hidden"
             onClick={() => setMobileDetailsOpen((open) => !open)}
             aria-expanded={mobileDetailsOpen}
             aria-controls="physical-momentum-details"
@@ -2259,7 +2248,7 @@ function PhysicalStateSummary({
   ]
   return (
     <section
-      className="mb-3 grid gap-x-5 gap-y-1.5 border border-[var(--color-border-default)] bg-white px-3 py-2 md:grid-cols-[minmax(260px,1.3fr)_minmax(0,1fr)]"
+      className="mb-3 grid gap-x-5 gap-y-1.5 rounded-[var(--radius-card)] border border-[var(--color-border-default)] bg-white px-3 py-2 md:grid-cols-[minmax(260px,1.3fr)_minmax(0,1fr)]"
       aria-label="日足の運動状態"
       data-physical-state
     >
@@ -2315,7 +2304,7 @@ function PhysicalTimeframeConclusionPanel({ views }: { views: PhysicalMomentumTi
           : 'どの時間軸も向きは中立'
 
   return (
-    <section className="mb-3 min-w-0 border border-[var(--color-border-default)] bg-white" aria-labelledby="physical-timeframe-title">
+    <section className="mb-3 min-w-0 overflow-hidden rounded-[var(--radius-card)] border border-[var(--color-border-default)] bg-white" aria-labelledby="physical-timeframe-title">
       <header className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 border-b border-[var(--color-border-soft)] px-3 py-2">
         <h3 id="physical-timeframe-title" className="m-0 text-[12px] font-bold text-[var(--color-text-primary)]">時間軸の整合 <span className="font-medium text-[var(--color-text-secondary)]">{alignment}</span></h3>
         <span className="font-mono text-[11px] font-medium text-[var(--color-text-tertiary)]">
@@ -2472,7 +2461,7 @@ function PhysicalMomentumSparkline({ history, breakdown }: { history: PhysicalMo
 
   if (!chart) {
     return (
-      <section className="mb-3 border border-[var(--color-border-default)] bg-white p-3" aria-label="PMS推移と内訳">
+      <section className="mb-3 rounded-[var(--radius-card)] border border-[var(--color-border-default)] bg-white p-3" aria-label="PMS推移と内訳">
         <div className="grid items-start gap-3 lg:grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)]">
           <div style={physicalSparklineEmptyStyle}>PMS時系列はまだ不足しています。</div>
           {breakdown}
@@ -2489,7 +2478,7 @@ function PhysicalMomentumSparkline({ history, breakdown }: { history: PhysicalMo
   const latestLabelAnchor = chart.latestX > chart.width - 96 ? 'end' : 'start'
 
   return (
-    <section className="mb-3 border border-[var(--color-border-default)] bg-white p-3" aria-label="PMS推移と内訳">
+    <section className="mb-3 rounded-[var(--radius-card)] border border-[var(--color-border-default)] bg-white p-3" aria-label="PMS推移と内訳">
      <div className="grid items-start gap-x-5 gap-y-3 lg:grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)]">
       <div className="min-w-0" ref={setPlotBox}>
       <div style={physicalSparklineHeaderStyle}>
@@ -2657,7 +2646,7 @@ function PhysicalTradePlanCards({
   error: string
   plan: PhysicalPlanResponse | null
 }) {
-  const panelClass = 'min-w-0 border border-[var(--color-border-default)] bg-white'
+  const panelClass = 'min-w-0 rounded-[var(--radius-card)] border border-[var(--color-border-default)] bg-white'
   const headerClass = 'flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 px-3 py-2'
   const titleClass = 'm-0 text-[12px] font-bold text-[var(--color-text-primary)]'
   const metaClass = 'text-[11px] font-medium text-[var(--color-text-tertiary)]'
@@ -3609,7 +3598,7 @@ function CompanyDataTable({
   return (
     <div>
       <div className="mb-2 text-[9px] font-bold text-[var(--color-text-tertiary)]">{meta}</div>
-      <div className="overflow-x-auto border border-[var(--color-border-default)]">
+      <div className="overflow-x-auto rounded-[var(--radius-card)] border border-[var(--color-border-default)]">
         <table className="w-full min-w-[620px] border-collapse text-[10px]">
           <thead className="bg-[var(--color-surface-subtle)] text-[var(--color-text-secondary)]">
             <tr>
@@ -3777,7 +3766,7 @@ function MarketSnapshotCard({
 
 function CurrentOnlyDataNotice({ label, compact = false }: { label: string; compact?: boolean }) {
   return (
-    <div className={`border border-dashed border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-3 py-2 text-[10px] font-bold leading-5 text-[var(--color-text-secondary)] ${compact ? 'mt-1' : ''}`}>
+    <div className={`rounded-[4px] border border-dashed border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-3 py-2 text-[12px] font-medium leading-5 text-[var(--color-text-secondary)] ${compact ? 'mt-1' : ''}`}>
       {label}
     </div>
   )
@@ -4668,16 +4657,6 @@ const basicStageCellStyle: CSSProperties = {
   display: 'grid',
   justifyItems: 'center',
   gap: '1px',
-}
-
-const missingPriceNoticeStyle: CSSProperties = {
-  padding: '10px 12px',
-  borderColor: 'rgba(245, 158, 11, 0.34)',
-  background: 'rgba(245, 158, 11, 0.10)',
-  color: '#92400e',
-  fontSize: '12px',
-  fontWeight: 700,
-  lineHeight: 1.6,
 }
 
 const basicStageCellLabelStyle: CSSProperties = {

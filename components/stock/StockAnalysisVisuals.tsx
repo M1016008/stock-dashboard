@@ -333,7 +333,7 @@ export function PeerPositionRow({
       <span className="relative block h-7" role="img" aria-label={`${label} ${summary}`}>
         <span className="absolute inset-x-0 top-1/2 h-px bg-[var(--color-border-default)]" />
         <span className="absolute top-2 h-3 bg-[var(--color-brand-100)]" style={{ left: '25%', width: '50%' }} />
-        <span className="absolute top-1.5 h-4 w-px bg-[var(--color-brand-900)]" style={{ left: `${medianAt.left}%` }} />
+        <span className="absolute top-1.5 h-4 w-px bg-[var(--color-text-secondary)]" style={{ left: `${medianAt.left}%` }} />
         {peers.map((peer) => {
           const at = peerPosition(peer.value, p25, p75)
           if (!at) return null
@@ -347,19 +347,19 @@ export function PeerPositionRow({
           )
         })}
         <span
-          className="absolute top-0 z-[1] h-7 w-[3px] -translate-x-1/2 bg-[var(--color-market-red)]"
+          className="absolute top-0.5 z-[1] h-6 w-[5px] -translate-x-1/2 border border-white bg-[var(--color-brand-900)]"
           style={{ left: `${targetAt.left}%` }}
           title={`対象 ${target.label} ${target.text}`}
         />
         {targetAt.clipped && (
           <span
-            className={`absolute top-1/2 z-[1] -translate-y-1/2 font-mono text-[9px] font-black text-[var(--color-market-red)] ${targetAt.clipped === 'left' ? 'left-[calc(2%+4px)]' : 'right-[calc(2%+4px)]'}`}
+            className={`absolute top-1/2 z-[1] -translate-y-1/2 font-mono text-[9px] font-black text-[var(--color-brand-900)] ${targetAt.clipped === 'left' ? 'left-[calc(2%+4px)]' : 'right-[calc(2%+4px)]'}`}
             aria-hidden="true"
           >{targetAt.clipped === 'left' ? '◀' : '▶'}</span>
         )}
       </span>
       <span className="min-w-0 text-right">
-        <strong className="block truncate font-mono text-[11px] font-black text-[var(--color-market-red)]">{target.text}</strong>
+        <strong className="block truncate font-mono text-[11px] font-black text-[var(--color-brand-900)]">{target.text}</strong>
         <span className="block truncate text-[8px] font-bold leading-3 text-[var(--color-text-tertiary)]">{PEER_ZONE_LABELS[zone]}</span>
       </span>
     </div>

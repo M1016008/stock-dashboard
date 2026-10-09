@@ -1087,7 +1087,7 @@ export function HistoricalAnalogExplorer({
                       href={market === 'US'
                         ? `/us/stock/${encodeURIComponent(selected.ticker)}?date=${selected.caseEndDate}`
                         : `/stock/${encodeURIComponent(selected.ticker)}?date=${selected.caseEndDate}`}
-                      className="min-w-0 truncate text-[11px] font-black text-[var(--color-brand-700)] hover:text-[var(--color-market-red)]"
+                      className="min-w-0 truncate text-[11px] font-black text-[var(--color-brand-700)] hover:underline"
                     >
                       類似 {tickerNameLabel(market, selected.ticker, selected.name)}
                     </Link>

@@ -634,30 +634,28 @@ export function IntegratedScreener() {
   const selectedCompareTicker = [...compared][0] ?? response?.rows[0]?.ticker ?? null
   const pageCount = response ? Math.max(1, Math.ceil(response.total / response.limit)) : 1
 
-  return <div className="sb-page">
-    <div className="sb-page-title">
-      <h1>統合スクリーナー</h1>
-      <p>Fundamental × Valuation × 株主還元 × 市場構造 × テクニカルを同じ基準日で横断検索</p>
-    </div>
-    <div className="flex flex-col gap-3 px-4 pb-5 pt-3 max-[640px]:px-2.5">
-      <section className="border border-[var(--color-border-default)] bg-white">
-        <div className="border-b border-[var(--color-border-default)] bg-[var(--color-surface-muted)] px-3 py-2">
-          <h2 className="text-[13px] font-black text-[var(--color-brand-900)]">何を探しますか</h2>
-          <p className="mt-0.5 text-[10px] text-[var(--color-text-muted)]">自然文またはプリセットから条件候補を作り、確認してから検索します。</p>
+  return <div className="flex min-w-0 flex-col">
+    <div className="flex min-w-0 flex-col gap-4">
+      <section className="panel" aria-labelledby="integrated-screener-intent">
+        <div className="panel-head">
+          <div>
+            <h2 id="integrated-screener-intent">何を探しますか</h2>
+            <p>自然文またはプリセットから条件候補を作り、確認してから検索します。</p>
+          </div>
         </div>
         <form onSubmit={(event) => { event.preventDefault(); void generateNaturalProposal() }} className="border-b border-[var(--color-border-default)] px-3 py-2.5">
-          <label htmlFor="natural-screener-query" className="mb-1.5 flex items-center gap-1 text-[11px] font-black text-[var(--color-brand-900)]"><Sparkles size={13} />どんな銘柄を探しますか？</label>
+          <label htmlFor="natural-screener-query" className="mb-1.5 flex items-center gap-1 text-[12px] font-bold text-[var(--color-text-primary)]"><Sparkles size={13} className="text-[var(--color-brand-700)]" />どんな銘柄を探しますか？</label>
           <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-1.5">
             <input id="natural-screener-query" value={naturalQuery} onChange={(event) => setNaturalQuery(event.target.value)} maxLength={500}
               placeholder="例：ROEが高くて、割安で、週足構造が上向きの大型株"
-              className="h-9 min-w-0 border border-[var(--color-border-default)] bg-white px-2.5 text-[11px] outline-none focus:border-[var(--color-brand-600)]" />
-            <button type="submit" disabled={!naturalQuery.trim() || naturalLoading} className="inline-flex h-9 items-center gap-1 border border-[var(--color-brand-700)] bg-[var(--color-brand-700)] px-3 text-[11px] font-black text-white disabled:opacity-40">
+              className="h-10 min-w-0 px-3 text-[13px]" />
+            <button type="submit" disabled={!naturalQuery.trim() || naturalLoading} className="btn" data-variant="primary" data-size="lg">
               {naturalLoading ? <LoaderCircle size={13} className="animate-spin" /> : <Sparkles size={13} />}<span className="max-[480px]:hidden">条件候補を作る</span><span className="hidden max-[480px]:inline">候補化</span>
             </button>
           </div>
           {naturalError && <p className="mt-1.5 text-[10px] font-bold text-rose-700">{naturalError}</p>}
         </form>
-        {naturalProposal && <div className="relative border-b border-[var(--color-border-default)] bg-sky-50/40 px-3 py-2.5" data-natural-language-proposal>
+        {naturalProposal && <div className="relative border-b border-[var(--color-border-soft)] bg-[var(--color-brand-50)] px-3 py-3" data-natural-language-proposal>
           <div className="flex items-start gap-2 pr-9">
             <div>
               <div className="flex items-center gap-1.5">
@@ -685,51 +683,51 @@ export function IntegratedScreener() {
           {naturalProposal.clarificationQuestions.length > 0 && <div className="mt-2 border-l-2 border-[var(--color-border-strong)] pl-2">
             {naturalProposal.clarificationQuestions.map((question) => <p key={question} className="text-[10px] leading-5 text-[var(--color-text-secondary)]">確認：{question}</p>)}
           </div>}
-          {naturalProposal.validationErrors.length > 0 && <p className="mt-2 text-[9px] font-bold text-amber-800">schema validationで不正な候補 {naturalProposal.validationErrors.length}件を除外しました。</p>}
+          {naturalProposal.validationErrors.length > 0 && <p className="mt-2 text-[9px] font-bold text-amber-800">形式が正しくない候補 {naturalProposal.validationErrors.length}件を除外しました。</p>}
           {naturalEditing && naturalProposal.conditions.length > 0 && <div className="mt-2 grid gap-2 border-t border-[var(--color-border-default)] pt-2 lg:grid-cols-2">
             {naturalProposal.conditions.map((condition) => <ConditionEditor key={condition.id} condition={condition} response={response}
               onChange={(next) => setNaturalProposal((current) => current ? { ...current, conditions: current.conditions.map((item) => item.id === next.id ? next : item) } : current)}
               onRemove={() => setNaturalProposal((current) => current ? { ...current, conditions: current.conditions.filter((item) => item.id !== condition.id) } : current)} />)}
           </div>}
           <div className="mt-2 flex flex-wrap items-center gap-1.5">
-            <button type="button" onClick={applyNaturalProposal} disabled={naturalProposal.conditions.length === 0 || !naturalProposal.conditions.every(isCompleteScreeningCondition)} className="inline-flex h-8 items-center gap-1 border border-[var(--color-brand-700)] bg-[var(--color-brand-700)] px-2.5 text-[11px] font-black text-white disabled:opacity-35"><Search size={12} />この条件で検索</button>
-            {naturalProposal.conditions.length > 0 && <button type="button" onClick={() => setNaturalEditing((current) => !current)} className="inline-flex h-8 items-center gap-1 border border-[var(--color-border-default)] bg-white px-2.5 text-[11px] font-bold"><SlidersHorizontal size={12} />{naturalEditing ? '編集を閉じる' : '条件を編集'}</button>}
+            <button type="button" onClick={applyNaturalProposal} disabled={naturalProposal.conditions.length === 0 || !naturalProposal.conditions.every(isCompleteScreeningCondition)} className="btn" data-variant="primary"><Search size={12} />この条件で検索</button>
+            {naturalProposal.conditions.length > 0 && <button type="button" onClick={() => setNaturalEditing((current) => !current)} className="btn"><SlidersHorizontal size={12} />{naturalEditing ? '編集を閉じる' : '条件を編集'}</button>}
             <span className="ml-auto text-[9px] text-[var(--color-text-muted)]">候補生成 {naturalProposal.elapsedMs}ms</span>
           </div>
         </div>}
-        <div className="grid grid-cols-5 gap-px bg-[var(--color-border-default)] max-[900px]:grid-cols-3 max-[520px]:grid-cols-2">
-          {SCREENING_PRESETS.map((preset) => <button key={preset.id} type="button" onClick={() => applyPreset(preset.id)} className="min-h-[54px] bg-white px-2.5 py-2 text-left hover:bg-sky-50">
-            <span className="block text-[11px] font-black text-[var(--color-brand-800)]">{preset.label}</span>
+        <div className="grid grid-cols-5 gap-px bg-[var(--color-border-soft)] max-[900px]:grid-cols-3 max-[520px]:grid-cols-2">
+          {SCREENING_PRESETS.map((preset) => <button key={preset.id} type="button" onClick={() => applyPreset(preset.id)} className="min-h-[56px] bg-white px-3 py-2 text-left hover:bg-[var(--color-brand-50)]">
+            <span className="block text-[12px] font-bold text-[var(--color-brand-800)]">{preset.label}</span>
             <span className="mt-0.5 block text-[9px] leading-4 text-[var(--color-text-muted)]">{preset.description}</span>
           </button>)}
         </div>
       </section>
 
-      <section className="border border-[var(--color-border-default)] bg-white">
-        <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2">
+      <section className="panel" aria-label="検索条件">
+        <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5">
           <div className="flex min-w-0 items-center gap-2">
             <SlidersHorizontal size={15} className="shrink-0 text-[var(--color-brand-700)]" />
-            <div>
-              <div className="text-[12px] font-black text-[var(--color-brand-900)]">条件 {state.conditions.length}件</div>
+            <div className="min-w-0">
+              <div className="text-[13px] font-bold text-[var(--color-text-primary)]">条件 {state.conditions.length}件</div>
               <div className="line-clamp-1 text-[10px] text-[var(--color-text-muted)]">{state.conditions.length > 0 ? state.conditions.map(conditionSummary).join(' / ') : '全銘柄から検索'}</div>
             </div>
           </div>
           <div className="flex items-center gap-1.5">
-            <label className="flex h-8 items-center gap-1 border border-[var(--color-border-default)] px-2 text-[10px] font-bold">
-              基準日<input type="date" value={state.asOf} onChange={(event) => setState((current) => ({ ...current, asOf: event.target.value, page: 0 }))} className="min-w-0 bg-transparent text-[11px]" />
+            <label className="flex h-8 items-center gap-1.5 text-[11px] font-semibold text-[var(--color-text-secondary)]">
+              基準日<input type="date" value={state.asOf} onChange={(event) => setState((current) => ({ ...current, asOf: event.target.value, page: 0 }))} className="h-8 min-w-0 px-1.5 text-[12px] tabular-nums" />
             </label>
-            <button type="button" onClick={() => setState(defaultState)} className="inline-flex h-8 w-8 items-center justify-center border border-[var(--color-border-default)]" title="条件をリセット"><RotateCcw size={13} /></button>
-            <button type="button" onClick={() => setConditionsOpen((current) => !current)} className={`inline-flex h-8 items-center gap-1 border px-2.5 text-[11px] font-black ${conditionsOpen ? 'border-[var(--color-brand-700)] bg-[var(--color-brand-700)] text-white' : 'border-[var(--color-border-default)]'}`}><Filter size={13} />条件を編集<ChevronDown size={12} /></button>
+            <button type="button" onClick={() => setState(defaultState)} className="btn w-8 px-0" title="条件をリセット" aria-label="条件をリセット"><RotateCcw size={13} /></button>
+            <button type="button" onClick={() => setConditionsOpen((current) => !current)} aria-expanded={conditionsOpen} className="btn" data-variant={conditionsOpen ? 'primary' : undefined}><Filter size={13} />条件を編集<ChevronDown size={12} className={conditionsOpen ? 'rotate-180' : ''} /></button>
           </div>
         </div>
-        {conditionsOpen && <div className="border-t border-[var(--color-border-default)] bg-[var(--color-surface-muted)] p-2.5">
+        {conditionsOpen && <div className="border-t border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] p-3">
           <div className="grid gap-2 lg:grid-cols-2">
             {state.conditions.map((condition) => <ConditionEditor key={condition.id} condition={condition} response={response}
               onChange={(next) => setState((current) => ({ ...current, page: 0, conditions: current.conditions.map((item) => item.id === next.id ? next : item) }))}
               onRemove={() => setState((current) => ({ ...current, page: 0, conditions: current.conditions.filter((item) => item.id !== condition.id) }))} />)}
           </div>
           <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
-            <button type="button" onClick={() => addCondition()} className="inline-flex h-8 items-center gap-1 border border-[var(--color-brand-500)] bg-white px-2.5 text-[11px] font-black text-[var(--color-brand-800)]"><Plus size={13} />条件を追加</button>
+            <button type="button" onClick={() => addCondition()} className="btn"><Plus size={13} />条件を追加</button>
             <div className="flex items-center gap-1">
               <select onChange={(event) => {
                 const screen = saved.find((item) => item.id === event.target.value)
@@ -745,13 +743,13 @@ export function IntegratedScreener() {
         </div>}
       </section>
 
-      <section className="border border-[var(--color-border-default)] bg-white" data-saved-screen-evaluations>
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--color-border-default)] px-3 py-2">
+      <section className="panel" data-saved-screen-evaluations>
+        <div className="panel-head">
           <div className="flex items-center gap-2">
             <History size={14} className="text-[var(--color-brand-700)]" />
             <div>
-              <h2 className="text-[12px] font-black text-[var(--color-brand-900)]">保存条件の変化</h2>
-              <p className="text-[9px] text-[var(--color-text-muted)]">日次更新後のPIT再評価 / 初回は基準作成としてSTAY</p>
+              <h2>保存条件の変化</h2>
+              <p>日次更新後に当時の条件で再評価。初回は基準作成として「継続（STAY）」扱い</p>
             </div>
           </div>
           {savedLoading && <span className="inline-flex items-center gap-1 text-[10px] text-[var(--color-text-muted)]"><LoaderCircle size={12} className="animate-spin" />更新中</span>}
@@ -835,34 +833,35 @@ export function IntegratedScreener() {
         })()}
       </section>
 
-      <section className="border border-[var(--color-border-default)] bg-white">
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--color-border-default)] px-3 py-2">
-          <div className="flex items-baseline gap-2">
-            <h2 className="text-[13px] font-black text-[var(--color-brand-900)]">検索結果</h2>
-            <span className="font-mono text-[18px] font-black text-[var(--color-brand-800)]">{loading ? '—' : (response?.total ?? 0).toLocaleString('ja-JP')}</span>
-            <span className="text-[10px] text-[var(--color-text-muted)]">銘柄 / 母数 {response?.universe.toLocaleString('ja-JP') ?? '—'}</span>
+      <section className="panel" aria-labelledby="integrated-screener-results">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-3 py-2">
+          <div className="flex items-baseline gap-2" aria-live="polite">
+            <h2 id="integrated-screener-results" className="text-[13px] font-bold text-[var(--color-text-primary)]">検索結果</h2>
+            <span className="text-[22px] font-bold leading-none tabular-nums text-[var(--color-text-primary)]">{loading ? '—' : (response?.total ?? 0).toLocaleString('ja-JP')}</span>
+            <span className="text-[11px] text-[var(--color-text-muted)]">銘柄 / 母数 {response?.universe.toLocaleString('ja-JP') ?? '—'}</span>
+            {loading && response && <LoaderCircle size={13} className="animate-spin text-[var(--color-text-tertiary)]" aria-label="更新中" />}
           </div>
           <div className="flex items-center gap-1.5">
             <span className="hidden text-[10px] text-[var(--color-text-muted)] sm:inline">基準 {response?.asOf ?? '—'} / 構造 {response?.snapshotDate ?? '—'}</span>
-            {selectedCompareTicker && compared.size > 0 && <Link href={`/stock/${selectedCompareTicker}#ml`} className="inline-flex h-8 items-center gap-1 border border-[var(--color-brand-600)] px-2 text-[11px] font-black text-[var(--color-brand-800)]"><GitCompareArrows size={13} />比較 {compared.size}</Link>}
-            <button type="button" onClick={() => setColumnsOpen((current) => !current)} className="inline-flex h-8 items-center gap-1 border border-[var(--color-border-default)] px-2 text-[11px] font-bold"><Columns3 size={13} />列</button>
+            {selectedCompareTicker && compared.size > 0 && <Link href={`/stock/${selectedCompareTicker}#ml`} className="btn"><GitCompareArrows size={13} />比較 {compared.size}</Link>}
+            <button type="button" onClick={() => setColumnsOpen((current) => !current)} aria-expanded={columnsOpen} className="btn" data-variant={columnsOpen ? 'primary' : undefined}><Columns3 size={13} />表示列</button>
           </div>
         </div>
-        {columnsOpen && <div className="flex flex-wrap gap-1.5 border-b border-[var(--color-border-default)] bg-[var(--color-surface-muted)] p-2">
+        {columnsOpen && <div className="flex flex-wrap gap-1.5 border-b border-[var(--color-border-soft)] bg-white p-3">
           {SCREENING_METRICS.filter((metric) => ['company', 'growth', 'quality', 'valuation', 'shareholder', 'structure'].includes(metric.category)).map((metric) => {
             const selected = state.columns.includes(metric.key)
-            return <label key={metric.key} className={`inline-flex h-7 items-center gap-1 border px-2 text-[10px] ${selected ? 'border-[var(--color-brand-500)] bg-white font-bold text-[var(--color-brand-800)]' : 'border-[var(--color-border-default)] text-[var(--color-text-muted)]'}`}>
+            return <label key={metric.key} className={`inline-flex h-7 cursor-pointer items-center gap-1 rounded-[4px] border px-2 text-[11px] ${selected ? 'border-[var(--color-brand-300)] bg-[var(--color-brand-50)] font-bold text-[var(--color-brand-800)]' : 'border-[var(--color-border-default)] bg-white text-[var(--color-text-muted)]'}`}>
               <input type="checkbox" checked={selected} onChange={() => setState((current) => ({ ...current, columns: selected ? current.columns.filter((key) => key !== metric.key) : [...current.columns, metric.key] }))} />{metric.label}
             </label>
           })}
         </div>}
-        {error && <div className="m-3 border border-rose-200 bg-rose-50 p-3 text-[11px] text-rose-800">{error}</div>}
+        {error && <div role="alert" className="m-3 rounded-[6px] border border-[#f0b8b8] bg-[var(--color-price-up-bg)] p-3 text-[12px] text-[var(--color-price-up-strong)]">{error}</div>}
         <div className="overflow-x-auto" data-integrated-screener-table>
           <table className="w-full min-w-[980px] border-collapse text-[11px]">
-            <thead className="sticky top-0 z-10 bg-[var(--color-surface-muted)] text-[10px] text-[var(--color-text-secondary)]">
+            <thead className="sticky top-0 z-10 text-[11px] text-[var(--color-text-secondary)]">
               <tr>
-                <th className="sticky left-0 z-20 w-9 border-b border-r border-[var(--color-border-default)] bg-[var(--color-surface-muted)] p-2">比較</th>
-                <th className="sticky left-9 z-20 min-w-[180px] border-b border-r border-[var(--color-border-default)] bg-[var(--color-surface-muted)] p-2 text-left">銘柄</th>
+                <th className="sticky left-0 z-20 w-9 border-b border-r border-[var(--color-border-default)] p-2">比較</th>
+                <th className="sticky left-9 z-20 min-w-[180px] border-b border-r border-[var(--color-border-default)] p-2 text-left">銘柄</th>
                 <th className="border-b border-[var(--color-border-default)] p-2 text-right">株価</th>
                 {visibleColumns.map((key) => <th key={key} className="whitespace-nowrap border-b border-[var(--color-border-default)] p-2 text-right">
                   <button type="button" onClick={() => setState((current) => ({ ...current, page: 0, sort: key, direction: current.sort === key && current.direction === 'desc' ? 'asc' : 'desc' }))} className="font-bold hover:text-[var(--color-brand-700)]">
@@ -872,16 +871,16 @@ export function IntegratedScreener() {
               </tr>
             </thead>
             <tbody>
-              {loading && !response && <tr><td colSpan={visibleColumns.length + 3} className="h-28 text-center text-[var(--color-text-muted)]">Servingデータを準備しています…</td></tr>}
+              {loading && !response && <tr><td colSpan={visibleColumns.length + 3} className="h-28 text-center text-[var(--color-text-muted)]"><span className="inline-flex items-center gap-1.5"><LoaderCircle size={14} className="animate-spin" />検索しています…</span></td></tr>}
               {response?.rows.map((row) => {
                 const reasonKey = reasonKeyFor(row.ticker)
                 const reasonOpen = openReasonKey === reasonKey
                 return <Fragment key={row.ticker}>
-                  <tr className={`border-b border-[var(--color-border-subtle)] hover:bg-sky-50/60 ${reasonOpen ? 'bg-sky-50/70' : ''}`}>
+                  <tr className={`border-b border-[var(--color-border-subtle)] hover:bg-[#fff8e6] ${reasonOpen ? 'bg-[var(--color-brand-50)]' : ''}`}>
                     <td className="sticky left-0 z-[2] border-r border-[var(--color-border-default)] bg-white p-2 text-center"><input type="checkbox" checked={compared.has(row.ticker)} onChange={() => toggleCompare(row)} disabled={!compared.has(row.ticker) && compared.size >= MAX_COMPARE} aria-label={`${row.ticker}を比較`} /></td>
                     <td className="sticky left-9 z-[2] border-r border-[var(--color-border-default)] bg-white p-2">
                       <div className="flex min-w-0 items-center gap-1">
-                        <Link href={`/stock/${row.ticker}#overview`} onClick={() => window.sessionStorage.setItem(SCROLL_KEY, String(window.scrollY))} className="min-w-0 truncate font-black text-[var(--color-brand-800)] hover:underline">{row.ticker} {row.name}</Link>
+                        <Link href={`/stock/${row.ticker}#overview`} onClick={() => window.sessionStorage.setItem(SCROLL_KEY, String(window.scrollY))} className="min-w-0 truncate font-bold text-[var(--color-brand-700)] hover:underline"><span className="font-mono">{row.ticker}</span> <span className="text-[var(--color-text-primary)]">{row.name}</span></Link>
                         <StockPreviewTrigger ticker={row.ticker} analysisDate={response.asOf} context="screener" />
                       </div>
                       <div className="mt-0.5 flex items-center gap-1 text-[9px] text-[var(--color-text-muted)]">
@@ -900,17 +899,17 @@ export function IntegratedScreener() {
             </tbody>
           </table>
         </div>
-        {response && response.total > response.limit && <div className="flex items-center justify-between border-t border-[var(--color-border-default)] px-3 py-2 text-[10px]">
-          <span className="text-[var(--color-text-muted)]">{response.offset + 1}〜{Math.min(response.offset + response.rows.length, response.total)}件 / {response.total.toLocaleString('ja-JP')}件</span>
+        {response && response.total > response.limit && <nav aria-label="ページ送り" className="flex items-center justify-between border-t border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-3 py-2 text-[12px]">
+          <span className="tabular-nums text-[var(--color-text-muted)]">{response.offset + 1}〜{Math.min(response.offset + response.rows.length, response.total)}件 / {response.total.toLocaleString('ja-JP')}件</span>
           <div className="flex items-center gap-1.5">
-            <button type="button" disabled={state.page <= 0 || loading} onClick={() => setState((current) => ({ ...current, page: Math.max(0, current.page - 1) }))} className="h-7 border border-[var(--color-border-default)] px-2 font-bold disabled:opacity-35">前へ</button>
-            <span className="min-w-14 text-center font-mono">{Math.min(state.page + 1, pageCount)} / {pageCount}</span>
-            <button type="button" disabled={state.page >= pageCount - 1 || loading} onClick={() => setState((current) => ({ ...current, page: Math.min(pageCount - 1, current.page + 1) }))} className="h-7 border border-[var(--color-border-default)] px-2 font-bold disabled:opacity-35">次へ</button>
+            <button type="button" disabled={state.page <= 0 || loading} onClick={() => setState((current) => ({ ...current, page: Math.max(0, current.page - 1) }))} className="btn" data-size="sm">前へ</button>
+            <span className="min-w-14 text-center font-mono tabular-nums">{Math.min(state.page + 1, pageCount)} / {pageCount}</span>
+            <button type="button" disabled={state.page >= pageCount - 1 || loading} onClick={() => setState((current) => ({ ...current, page: Math.min(pageCount - 1, current.page + 1) }))} className="btn" data-size="sm">次へ</button>
           </div>
-        </div>}
-        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--color-border-default)] px-3 py-2 text-[10px] text-[var(--color-text-muted)]">
+        </nav>}
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--color-border-soft)] px-3 py-2 text-[11px] text-[var(--color-text-muted)]">
           <span>欠損・N/A・N/Mは0へ置き換えず、数値条件の対象外です。</span>
-          <span>API {response?.elapsedMs ?? '—'}ms{response?.cacheHit ? ' / cache' : ''}</span>
+          <span className="tabular-nums">応答 {response?.elapsedMs ?? '—'}ms{response?.cacheHit ? '（キャッシュ）' : ''}</span>
         </div>
       </section>
     </div>

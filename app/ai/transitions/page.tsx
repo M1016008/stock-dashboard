@@ -1,14 +1,17 @@
 // app/ai/transitions/page.tsx
-// モック準拠 (stockboard_pattern_transitions_mock):
-//   - 検索バー + 「上位パターンから選択」
-//   - ヒーローカード (sb-card-pad-lg, bg #fafaf9): 26px パターンコード + 6 ステージタグ + 過去出現
-//   - 4 ホライゾン KPI (30/60/90/180 日)
-//   - 2 列: 60日後リターン分布 (9 バーヒストグラム + 25/中央/75) / 業種別出現分布 (横バー)
+// 過去パターン遷移:
+//   - 見出し + パターン検索 (上位パターンから選択)
+//   - 選択中パターンの帯: 6 桁コード + 6 ステージタグ + 過去出現
+//   - 4 ホライゾンの中央値リターン (StatStrip)
+//   - 2 列: リターン分布 (ヒストグラム + 25/中央/75) / 業種別出現分布 (横バー)
 //   - 過去のサンプルケース テーブル
 
 import type { Metadata } from 'next'
 import Link from 'next/link'
 import { PatternSearchMock } from '@/components/ai/PatternSearchMock'
+import { PageTitle } from '@/components/layout/PageTitle'
+import { SectionHeader } from '@/components/ui/SectionHeader'
+import { StatStrip } from '@/components/ui/StatStrip'
 import {
   getDefaultPatternCode,
   getPatternMeta,
@@ -21,7 +24,7 @@ import {
 import { getUniverseFilterMeta, parseUniverseFilter } from '@/lib/market-universe'
 
 export const metadata: Metadata = {
-  title: 'パターン遷移分析 — StockBoard',
+  title: '過去パターン遷移 — StockBoard',
   description: '6 タイムスケールの組み合わせから過去の類似ケースを統計的に観察',
 }
 
@@ -65,231 +68,177 @@ export default async function TransitionsPage({
   const sectorMax = sectors.reduce((m, s) => Math.max(m, s.count), 0)
   const distMax = dist.bins.reduce((m, b) => Math.max(m, b.count), 0)
 
+  const tone = (v: number | null) =>
+    v == null || v === 0 ? undefined : v > 0 ? 'up' as const : 'down' as const
+
   return (
-    <div className="sb-page">
-      <div className="sb-page-title">
-        <h1>パターン遷移分析</h1>
-        <p>
-          6 タイムスケールの組み合わせから過去の類似ケースを統計的に観察します
-          {universeMeta ? `（${universeMeta.shortLabel}フィルター中）` : ''}
-        </p>
-        <div style={{ marginTop: 10 }}>
+    <div className="flex min-w-0 flex-col gap-6">
+      <PageTitle
+        eyebrow="分析・AI"
+        title="過去パターン遷移"
+        subtitle="6つの時間軸のステージの組み合わせから、過去に同じ並びが出た後の値動きを統計で確認します。"
+        badge={universeMeta?.shortLabel}
+      >
+        <div className="w-full">
           <PatternSearchMock currentCode={code} topPatterns={top} />
         </div>
-      </div>
+      </PageTitle>
 
-      {/* ヒーローカード */}
-      <div className="sb-section">
-        <div
-          className="sb-card sb-card-pad-lg"
-          style={{ background: 'var(--color-surface-subtle)' }}
-        >
-          <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 14 }}>
+      <section aria-label="選択中パターン" className="flex flex-wrap items-end justify-between gap-x-8 gap-y-3 border-b border-[var(--color-border-soft)] pb-4">
+        <div className="min-w-0">
+          <div className="text-[12px] text-[var(--color-text-tertiary)]">選択中パターン</div>
+          <div className="mt-1 flex flex-wrap items-center gap-3">
+            <span className="font-mono text-[26px] font-bold leading-none tabular-nums text-[var(--color-text-primary)]">{code}</span>
+            <span className="flex gap-0.5">
+              {stages.map((s, i) => (
+                <span key={i} className={`sb-ts sb-s${s}`} title={STAGE_LABEL[i]}>{s}</span>
+              ))}
+            </span>
+          </div>
+          <div className="mt-1.5 text-[11px] text-[var(--color-text-tertiary)]">
+            左から {STAGE_LABEL.join(' · ')} の現在ステージ
+          </div>
+        </div>
+        <dl className="flex gap-6 text-right tabular-nums">
+          <div>
+            <dt className="text-[12px] text-[var(--color-text-tertiary)]">過去出現</dt>
+            <dd className="m-0 text-[22px] font-bold text-[var(--color-text-primary)]">{meta?.count_60d.toLocaleString() ?? '—'}回</dd>
+          </div>
+          {meta?.lastDate && (
             <div>
-              <div className="sb-t" style={{ fontSize: 11, marginBottom: 4 }}>選択中パターン</div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-                <div style={{ fontSize: 26, fontWeight: 500, fontVariantNumeric: 'tabular-nums', letterSpacing: '0.08em' }}>
-                  {code}
-                </div>
-                <div style={{ display: 'flex', gap: 2 }}>
-                  {stages.map((s, i) => (
-                    <span key={i} className={`sb-ts sb-s${s}`}>{s}</span>
-                  ))}
-                </div>
-              </div>
-              <div className="sb-t" style={{ fontSize: 10, marginTop: 4, letterSpacing: 0.5 }}>
-                {STAGE_LABEL.join(' · ')}
-              </div>
+              <dt className="text-[12px] text-[var(--color-text-tertiary)]">直近の出現</dt>
+              <dd className="m-0 text-[15px] font-semibold text-[var(--color-text-primary)]">{meta.lastDate}</dd>
             </div>
-            <div style={{ textAlign: 'right' }}>
-              <div className="sb-t" style={{ fontSize: 11 }}>過去出現</div>
-              <div style={{ fontSize: 22, fontWeight: 500, fontVariantNumeric: 'tabular-nums', letterSpacing: 0 }}>
-                {meta?.count_60d.toLocaleString() ?? '—'} 回
-              </div>
-              {meta?.lastDate && (
-                <div className="sb-t" style={{ fontSize: 10, marginTop: 2 }}>
-                  直近: {meta.lastDate}
-                </div>
-              )}
-            </div>
-          </div>
-          <div
-            style={{
-              fontSize: 11,
-              color: 'var(--color-text-secondary)',
-              lineHeight: 1.5,
-              paddingTop: 12,
-              borderTop: '0.5px solid var(--color-border-soft)',
-            }}
-          >
-            特徴: 6 桁のステージ並びは <span style={{ fontWeight: 500 }}>{code}</span>。
-            横軸は日足A / 日足B / 週足A / 週足B / 月足A / 月足B の現在ステージを表します。
-          </div>
-        </div>
-      </div>
+          )}
+        </dl>
+      </section>
 
-      {/* 4 ホライゾン KPI */}
-      <div className="sb-section">
-        <div className="sb-hd">
-          <h2>フォワードリターン (出現後)</h2>
-          <span>n={meta?.count_60d.toLocaleString() ?? '—'} · 中央値</span>
-        </div>
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-          {[30, 60, 90, 180].map(h => {
-            const r = horizonRows.find(x => x.horizon_days === h)
-            return (
-              <div key={h} className="sb-card sb-card-pad">
-                <div className="sb-kpi">
-                  <span className="sb-kpi-lbl">{h}日後</span>
-                  <span className={`sb-kpi-v ${toneClass(r?.p50 ?? null)}`}>
-                    {r?.p50 == null ? '—' : (r.p50 > 0 ? '+' : '') + r.p50.toFixed(1) + '%'}
-                  </span>
-                  <span className="sb-kpi-sub">
-                    勝率 {r ? (r.winRate * 100).toFixed(0) : '—'}% · n={r?.count.toLocaleString() ?? '—'}
-                  </span>
-                </div>
-              </div>
-            )
+      <section className="flex min-w-0 flex-col gap-3">
+        <SectionHeader
+          level={1}
+          title="出現後のリターン"
+          description={`中央値 · 統計対象 ${meta?.count_60d.toLocaleString() ?? '—'}件`}
+        />
+        <StatStrip
+          label="期間別の中央値リターン"
+          items={[30, 60, 90, 180].map((h) => {
+            const r = horizonRows.find((x) => x.horizon_days === h)
+            return {
+              label: `${h}日後`,
+              value: r?.p50 == null ? '—' : (r.p50 > 0 ? '+' : '') + r.p50.toFixed(1) + '%',
+              tone: tone(r?.p50 ?? null),
+              sub: `勝率 ${r ? (r.winRate * 100).toFixed(0) : '—'}% · ${r?.count.toLocaleString() ?? '—'}件`,
+            }
           })}
-        </div>
-      </div>
+        />
+      </section>
 
-      {/* 2 列: 分布 + 業種分布 */}
-      <div className="sb-section grid grid-cols-1 gap-3.5 md:grid-cols-2">
-        <div>
-          <div className="sb-hd">
-            <h2>{horizonDays}日後リターン分布</h2>
-            <span>n={dist.total.toLocaleString()}</span>
-          </div>
-          <div className="sb-card sb-card-pad">
-            <div style={{ display: 'flex', alignItems: 'flex-end', gap: 3, height: 80, fontVariantNumeric: 'tabular-nums' }}>
+      <div className="grid min-w-0 grid-cols-1 gap-6 lg:grid-cols-2">
+        <section className="flex min-w-0 flex-col gap-3">
+          <SectionHeader
+            title={`${horizonDays}日後のリターン分布`}
+            actions={<span className="text-[12px] tabular-nums text-[var(--color-text-tertiary)]">{dist.total.toLocaleString()}件</span>}
+          />
+          <div>
+            <div className="flex h-[96px] items-end gap-[3px] tabular-nums" role="img" aria-label={`${horizonDays}日後リターンの分布`}>
               {dist.bins.map((b, i) => {
                 const h = distMax > 0 ? (b.count / distMax) * 100 : 0
                 const isNeg = b.upper <= 0
-                const isPos = b.lower >= 10
+                const strong = isNeg ? b.upper <= -10 : b.lower >= 10
                 const bg = isNeg
-                  ? (b.upper <= -10 ? '#dbeafe' : '#fee2e2')  // < -10 青系、-10〜0 薄赤
-                  : isPos
-                  ? '#dcfce7'   // +10 以上 緑系
-                  : '#fee2e2'   // 0〜+10 薄赤
+                  ? (strong ? 'var(--color-price-down)' : 'color-mix(in srgb, var(--color-price-down) 35%, white)')
+                  : (strong ? 'var(--color-price-up)' : 'color-mix(in srgb, var(--color-price-up) 35%, white)')
                 return (
                   <div
                     key={i}
-                    style={{
-                      flex: 1,
-                      background: bg,
-                      height: `${Math.max(2, h)}%`,
-                      borderRadius: '2px 2px 0 0',
-                    }}
+                    className="flex-1 rounded-t-[2px]"
+                    style={{ background: bg, height: `${Math.max(2, h)}%` }}
                     title={`${b.lower}〜${b.upper}%: ${b.count}`}
                   />
                 )
               })}
             </div>
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                marginTop: 6,
-                fontSize: 10,
-                color: 'var(--color-text-tertiary)',
-                fontVariantNumeric: 'tabular-nums',
-              }}
-            >
+            <div className="mt-1.5 flex justify-between text-[11px] tabular-nums text-[var(--color-text-tertiary)]">
               <span>-30%</span><span>-20%</span><span>-10%</span><span>0</span><span>+10%</span><span>+20%</span><span>+30%</span>
             </div>
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                marginTop: 10,
-                paddingTop: 10,
-                borderTop: '0.5px solid var(--color-border-soft)',
-                fontSize: 11,
-                fontVariantNumeric: 'tabular-nums',
-              }}
-            >
-              <span>
-                <span className="sb-t" style={{ fontSize: 10 }}>25%分位</span>{' '}
-                <span style={{ fontWeight: 500 }}>{fmtPct(dist.p25, 2)}%</span>
-              </span>
-              <span>
-                <span className="sb-t" style={{ fontSize: 10 }}>中央値</span>{' '}
-                <span style={{ fontWeight: 500 }} className={toneClass(dist.p50)}>{fmtPct(dist.p50, 2)}%</span>
-              </span>
-              <span>
-                <span className="sb-t" style={{ fontSize: 10 }}>75%分位</span>{' '}
-                <span style={{ fontWeight: 500 }}>{fmtPct(dist.p75, 2)}%</span>
-              </span>
-            </div>
+            <dl className="mt-3 flex justify-between border-t border-[var(--color-border-soft)] pt-2.5 text-[12px] tabular-nums">
+              <div className="flex items-baseline gap-1.5">
+                <dt className="text-[var(--color-text-tertiary)]">25%分位</dt>
+                <dd className="m-0 font-semibold">{fmtPct(dist.p25, 2)}%</dd>
+              </div>
+              <div className="flex items-baseline gap-1.5">
+                <dt className="text-[var(--color-text-tertiary)]">中央値</dt>
+                <dd className={`m-0 font-bold ${toneClass(dist.p50)}`}>{fmtPct(dist.p50, 2)}%</dd>
+              </div>
+              <div className="flex items-baseline gap-1.5">
+                <dt className="text-[var(--color-text-tertiary)]">75%分位</dt>
+                <dd className="m-0 font-semibold">{fmtPct(dist.p75, 2)}%</dd>
+              </div>
+            </dl>
           </div>
-        </div>
+        </section>
 
-        <div>
-          <div className="sb-hd">
-            <h2>業種別出現分布</h2>
-            <span>n={sectors.reduce((a, s) => a + s.count, 0).toLocaleString()}</span>
-          </div>
-          <div className="sb-card" style={{ padding: '12px 14px' }}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 11, fontVariantNumeric: 'tabular-nums' }}>
-              {sectors.map(s => {
-                const widthPct = sectorMax > 0 ? (s.count / sectorMax) * 100 : 0
-                return (
-                  <div key={s.sector_name} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span
-                      style={{
-                        width: 110,
-                        color: 'var(--color-text-secondary)',
-                        whiteSpace: 'nowrap',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                      }}
-                      title={s.sector_name}
-                    >
-                      {s.sector_name}
-                    </span>
-                    <div
-                      style={{
-                        flex: 1,
-                        height: 6,
-                        background: 'var(--color-surface-subtle)',
-                        borderRadius: 3,
-                        overflow: 'hidden',
-                      }}
-                    >
-                      <div style={{ width: `${widthPct}%`, height: '100%', background: '#0e7490' }} />
-                    </div>
-                    <span style={{ width: 32, textAlign: 'right', fontWeight: 500 }}>{s.count.toLocaleString()}</span>
-                  </div>
-                )
-              })}
-              {sectors.length === 0 && (
-                <div style={{ textAlign: 'center', padding: 14, color: 'var(--color-text-tertiary)' }}>データなし</div>
-              )}
-            </div>
-          </div>
-        </div>
+        <section className="flex min-w-0 flex-col gap-3">
+          <SectionHeader
+            title="業種別の出現数"
+            actions={<span className="text-[12px] tabular-nums text-[var(--color-text-tertiary)]">{sectors.reduce((a, s) => a + s.count, 0).toLocaleString()}件</span>}
+          />
+          <ul className="flex flex-col gap-2 text-[12px] tabular-nums">
+            {sectors.map((s) => {
+              const widthPct = sectorMax > 0 ? (s.count / sectorMax) * 100 : 0
+              return (
+                <li key={s.sector_name} className="grid grid-cols-[minmax(84px,128px)_minmax(0,1fr)_40px] items-center gap-2">
+                  <span className="truncate text-[var(--color-text-secondary)]" title={s.sector_name}>{s.sector_name}</span>
+                  <span className="h-2 overflow-hidden rounded-[2px] bg-[var(--color-surface-muted)]">
+                    <span className="block h-full rounded-[2px] bg-[var(--color-brand-700)]" style={{ width: `${widthPct}%` }} />
+                  </span>
+                  <span className="text-right font-semibold">{s.count.toLocaleString()}</span>
+                </li>
+              )
+            })}
+            {sectors.length === 0 && (
+              <li className="py-4 text-center text-[var(--color-text-tertiary)]">データなし</li>
+            )}
+          </ul>
+        </section>
       </div>
 
-      {/* サンプルケース */}
-      <div className="sb-section">
-        <div className="sb-hd">
-          <h2>過去のサンプルケース</h2>
-          <span>+180日まで計算済み {samples.length} 件 · 統計対象 {meta?.count_60d.toLocaleString() ?? '—'} 件</span>
-        </div>
-        <div className="sb-card">
-          <div className="overflow-x-auto">
-          <table className="sb-tbl" style={{ minWidth: 600 }}>
+      <section className="flex min-w-0 flex-col gap-3">
+        <SectionHeader
+          level={1}
+          title="過去のサンプルケース"
+          description={`180日後まで確定した ${samples.length}件 · 統計対象 ${meta?.count_60d.toLocaleString() ?? '—'}件`}
+        />
+        <ul className="divide-y divide-[var(--color-border-soft)] rounded-[6px] border border-[var(--color-border-soft)] sm:hidden">
+          {samples.map((r) => (
+            <li key={r.ticker + r.date} className="px-3 py-2.5">
+              <div className="flex items-baseline justify-between gap-2">
+                <Link href={`/stock/${r.ticker}`} className="min-w-0 truncate text-[13px] font-semibold text-[var(--color-text-primary)] hover:underline">
+                  <span className="mr-1.5 font-mono text-[var(--color-brand-800)]">{r.ticker}</span>{r.name ?? r.ticker}
+                </Link>
+                <span className="shrink-0 text-[11px] tabular-nums text-[var(--color-text-tertiary)]">{r.date}</span>
+              </div>
+              <div className="mt-1 grid grid-cols-4 gap-1 text-[11px] tabular-nums">
+                {([['30日', r.r30], ['60日', r.r60], ['90日', r.r90], ['180日', r.r180]] as const).map(([label, v]) => (
+                  <span key={label}><span className="text-[var(--color-text-tertiary)]">{label} </span><span className={`font-semibold ${toneClass(v)}`}>{fmtPct(v, 1)}</span></span>
+                ))}
+              </div>
+            </li>
+          ))}
+          {samples.length === 0 && <li className="py-4 text-center text-[12px] text-[var(--color-text-tertiary)]">サンプルケースなし</li>}
+        </ul>
+        <div className="table-scroll hidden rounded-[6px] border border-[var(--color-border-soft)] sm:block">
+          <table className="sb-tbl" style={{ minWidth: 640 }}>
             <thead>
               <tr>
-                <th style={{ width: 80 }}>出現日</th>
-                <th style={{ width: 44 }}>コード</th>
+                <th style={{ width: 96 }}>出現日</th>
+                <th style={{ width: 56 }}>コード</th>
                 <th>銘柄</th>
-                <th className="sb-t" style={{ fontSize: 11, width: 100 }}>業種</th>
-                <th style={{ textAlign: 'right', width: 54 }}>+30日</th>
-                <th style={{ textAlign: 'right', width: 54 }}>+60日</th>
-                <th style={{ textAlign: 'right', width: 54 }}>+90日</th>
-                <th style={{ textAlign: 'right', width: 58 }}>+180日</th>
+                <th style={{ width: 120 }}>業種</th>
+                <th style={{ textAlign: 'right', width: 64 }}>+30日</th>
+                <th style={{ textAlign: 'right', width: 64 }}>+60日</th>
+                <th style={{ textAlign: 'right', width: 64 }}>+90日</th>
+                <th style={{ textAlign: 'right', width: 68 }}>+180日</th>
               </tr>
             </thead>
             <tbody>
@@ -298,11 +247,11 @@ export default async function TransitionsPage({
                   <td className="sb-t">{r.date}</td>
                   <td className="sb-t">{r.ticker}</td>
                   <td>
-                    <Link href={`/stock/${r.ticker}`} style={{ color: 'inherit' }}>
+                    <Link href={`/stock/${r.ticker}`} className="text-[var(--color-brand-800)] hover:underline">
                       {r.name ?? r.ticker}
                     </Link>
                   </td>
-                  <td className="sb-t" style={{ fontSize: 11 }}>{r.sector ?? '—'}</td>
+                  <td className="sb-t">{r.sector ?? '—'}</td>
                   <td className={`right ${toneClass(r.r30)}`}>{fmtPct(r.r30, 1)}</td>
                   <td className={`right ${toneClass(r.r60)}`}>{fmtPct(r.r60, 1)}</td>
                   <td className={`right ${toneClass(r.r90)}`}>{fmtPct(r.r90, 1)}</td>
@@ -318,14 +267,13 @@ export default async function TransitionsPage({
               )}
             </tbody>
           </table>
-          </div>
         </div>
         {meta && meta.count_60d > samples.length && (
-          <div style={{ marginTop: 8, fontSize: 11, color: 'var(--color-text-tertiary)', textAlign: 'right' }}>
+          <p className="text-right text-[11px] text-[var(--color-text-tertiary)]">
             上表はリターンが確定済みの代表ケースです
-          </div>
+          </p>
         )}
-      </div>
+      </section>
     </div>
   )
 }

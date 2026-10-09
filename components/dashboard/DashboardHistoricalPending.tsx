@@ -22,9 +22,11 @@ function targetLabel(target: string | null) {
 export function DashboardHistoricalPendingHeader({ target }: { target: string | null }) {
   return (
     <PageTitle
+      eyebrow="日本株"
       title="ダッシュボード"
       subtitle={`${targetLabel(target)}の大引け情報を確認しています`}
       badge="切り替え中"
+      badgeTone="neutral"
     />
   )
 }

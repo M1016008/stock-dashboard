@@ -1116,7 +1116,7 @@ export function TriggerDiscoveryClient({ options }: Props) {
   return (
     <div className="w-full pb-16">
       <header className="border-b border-[var(--color-border)] pb-4 pt-1">
-        <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--color-brand-600)]">Trigger Discovery</p>
+        <p className="text-[12px] font-bold text-[var(--color-brand-700)]">監視</p>
         <div className="mt-1 flex flex-wrap items-end justify-between gap-3">
           <div>
             <h1 className="text-[24px] font-semibold leading-tight text-[var(--color-text-primary)]">条件トリガー</h1>
@@ -1619,7 +1619,7 @@ export function TriggerDiscoveryClient({ options }: Props) {
                     <th data-column="stock" aria-sort={sortAria('ticker')} className="sticky left-0 z-40 w-[168px] bg-[var(--color-surface-muted)] px-2 py-1 text-left shadow-[4px_0_7px_-7px_rgba(15,23,42,.28)]"><SortButton label="銘柄" sortKey="ticker" activeSort={activeSort} onSort={changeSort} /></th>
                     <th data-column="status" aria-sort={sortAria('triggerStatus')} className="w-[82px] px-2 py-1 text-left"><SortButton label="Status" sortKey="triggerStatus" activeSort={activeSort} onSort={changeSort} /></th>
                     <th data-column="score" aria-sort={sortAria('triggerScore')} className="w-[64px] px-1 py-1 text-center"><SortButton label="Score" ariaLabel="Trigger Score" sortKey="triggerScore" activeSort={activeSort} onSort={changeSort} align="center" /></th>
-                    <th data-column="chart" className="w-[168px] px-2 py-1 text-center text-[10px] font-semibold tracking-[0.04em]">MINI CHART</th>
+                    <th data-column="chart" className="w-[168px] px-2 py-1 text-center text-[10px] font-semibold">ミニチャート</th>
                     <th data-column="price" data-group-start aria-sort={sortAria('price')} className="w-[78px] border-l border-[var(--color-border)] px-2 py-1 text-right"><SortButton label="株価" sortKey="price" activeSort={activeSort} onSort={changeSort} align="end" /></th>
                     <th data-column="market" className="w-[84px] px-2 py-1 text-left">市場</th>
                     <th data-column="zone" aria-sort={sortAria('zoneDistance')} className="w-[92px] px-2 py-1 text-right"><SortButton label="Zone距離" sortKey="zoneDistance" activeSort={activeSort} onSort={changeSort} align="end" /></th>
@@ -1629,7 +1629,7 @@ export function TriggerDiscoveryClient({ options }: Props) {
                     <th data-column="trading-value" data-group-start aria-sort={sortAria('averageTradingValue')} className="w-[112px] border-l border-[var(--color-border)] px-2 py-1 text-right"><SortButton label="平均売買代金" sortKey="averageTradingValue" activeSort={activeSort} onSort={changeSort} align="end" /></th>
                     <th data-column="volume" aria-sort={sortAria('averageVolume')} className="w-[102px] px-2 py-1 text-right"><SortButton label="平均出来高" sortKey="averageVolume" activeSort={activeSort} onSort={changeSort} align="end" /></th>
                     <th data-column="stage" data-group-start className="w-[188px] border-l border-[var(--color-border)] px-2 py-1 text-center">
-                      <span className="block text-[9px] font-semibold tracking-[0.06em]">6 STAGE</span>
+                      <span className="block text-[9px] font-semibold">6ステージ</span>
                       <span className="mt-0.5 grid grid-cols-6 gap-1">
                         {TRIGGER_DISCOVERY_STAGE_AXES.map((axis) => (
                           <SortButton key={axis} label={STAGE_AXIS_LABELS[axis]} sortKey={axis} activeSort={activeSort} onSort={changeSort} align="center" />

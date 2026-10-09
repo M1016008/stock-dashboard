@@ -13,6 +13,9 @@ import { HexSectorSelector } from '@/components/hex/HexSectorSelector'
 import { StageTransitionScanner } from '@/components/hex/StageTransitionScanner'
 import { DashboardHistoricalUnavailable } from '@/components/dashboard/DashboardHistoricalUnavailable'
 import { TabRow } from '@/components/ui/TabRow'
+import { PageTitle } from '@/components/layout/PageTitle'
+import { ViewTabs } from '@/components/ui/ViewTabs'
+import { SectionHeader } from '@/components/ui/SectionHeader'
 import { getHexDateOptions, type Timescale, type Period } from '@/lib/queries/hex'
 import { getDashboardAsOfState } from '@/lib/queries/dashboard-as-of'
 import { getHexSelectorCandidates } from '@/lib/queries/hex-selector'
@@ -91,20 +94,44 @@ const PERIOD_TABS: { key: Period; label: string }[] = [
 function Loading({ h = 100 }: { h?: number }) {
   return (
     <div
-      style={{
-        height: h,
-        background: 'var(--color-surface-subtle)',
-        borderRadius: 6,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        color: 'var(--color-text-tertiary)',
-        fontSize: 11,
-      }}
+      role="status"
+      aria-busy="true"
+      className="flex animate-pulse items-center justify-center rounded-[6px] bg-[var(--color-surface-subtle)] text-[12px] text-[var(--color-text-tertiary)]"
+      style={{ height: h }}
     >
-      読込中...
+      読み込み中…
     </div>
   )
+}
+
+function StageViewTabs({
+  current,
+  marketHref,
+  selectorHref,
+  scannerHref,
+}: {
+  current: HexStageView
+  marketHref: string
+  selectorHref: string
+  scannerHref: string
+}) {
+  return (
+    <ViewTabs
+      label="6ステージ分析の表示"
+      current={current}
+      items={[
+        { key: 'market', label: <>市場循環</>, href: marketHref },
+        { key: 'selector', label: <>業種から選ぶ</>, href: selectorHref },
+        { key: 'scanner', label: <>遷移スキャナー</>, href: scannerHref },
+      ]}
+    />
+  )
+}
+
+const VIEW_HINT: Record<HexStageView, string> = {
+  market: '市場全体の分布と遷移を確認',
+  selector: '業種比較から銘柄候補を選別',
+  scanner: '直前の実観測から当日への変化を検索',
 }
 
 export default async function HexStagePage({
@@ -164,22 +191,15 @@ export default async function HexStagePage({
     const selectorHref = buildViewHref('selector', { universe: universeFilter })
     return (
       <div className="sb-page">
-        <div className="sb-page-title">
-          <h1>HEX ステージ分析</h1>
-          <p>
-            実観測された6桁ステージの変化を、期間・業種・流動性条件で検索します
-            {universeMeta ? ` · ${universeMeta.shortLabel}に絞り込み中` : ''}
-          </p>
-        </div>
-
-        <div className="sb-section-bd flex items-center gap-1 py-2">
-          <Link href={marketHref} className="sb-tab">市場循環</Link>
-          <Link href={selectorHref} className="sb-tab">業種から選ぶ</Link>
-          <Link href="/hex-stage?view=scanner" className="sb-tab sb-on">遷移スキャナー</Link>
-          <span className="ml-auto hidden text-[10px] font-semibold text-[var(--color-text-tertiary)] sm:inline">
-            直前の実観測から当日への変化を検索
-          </span>
-        </div>
+        <PageTitle
+          eyebrow="分析・AI"
+          title="市場6ステージ"
+          subtitle="実観測された6桁ステージの変化を、期間・業種・流動性の条件で検索します。"
+          badge={universeMeta ? `${universeMeta.shortLabel}に絞り込み中` : undefined}
+        >
+          <StageViewTabs current="scanner" marketHref={marketHref} selectorHref={selectorHref} scannerHref="/hex-stage?view=scanner" />
+          <span className="text-[12px] text-[var(--color-text-tertiary)]">{VIEW_HINT.scanner}</span>
+        </PageTitle>
 
         <StageTransitionScanner initialParams={flattenSearchParams(sp)} />
       </div>
@@ -194,14 +214,15 @@ export default async function HexStagePage({
   if (asOf.mode === 'unavailable') {
     return (
       <div className="sb-page">
-        <div className="sb-page-title">
-          <h1>HEX ステージ分析</h1>
-          <p>指定した分析基準日のデータは表示できません</p>
-        </div>
+        <PageTitle
+          eyebrow="分析・AI"
+          title="市場6ステージ"
+          subtitle="指定した分析基準日のデータは表示できません。"
+          badge="表示できません"
+          badgeTone="danger"
+          rightSlot={<Link href="/hex-stage" className="btn">最新日へ戻る</Link>}
+        />
         <DashboardHistoricalUnavailable state={asOf} />
-        <div className="mt-3 flex justify-end">
-          <Link href="/hex-stage" className="sb-tab">最新日へ戻る</Link>
-        </div>
       </div>
     )
   }
@@ -276,23 +297,16 @@ export default async function HexStagePage({
 
   return (
     <div className="sb-page">
-      <div className="sb-page-title">
-        <h1>HEX ステージ分析</h1>
-        <p>
-          市場全体の循環を確認し、業種構造から候補銘柄まで絞り込みます
-          {universeMeta ? ` · ${universeMeta.shortLabel}に絞り込み中` : ''}
-          {selectedDate ? ` · ${selectedDate}時点` : latestDate ? ` · 最新 ${latestDate}` : ''}
-        </p>
-      </div>
-
-      <div className="sb-section-bd flex items-center gap-1 py-2">
-        <Link href={marketHref} className={`sb-tab ${view === 'market' ? 'sb-on' : ''}`}>市場循環</Link>
-        <Link href={selectorHref} className={`sb-tab ${view === 'selector' ? 'sb-on' : ''}`}>業種から選ぶ</Link>
-        <Link href={scannerHref} className="sb-tab">遷移スキャナー</Link>
-        <span className="ml-auto hidden text-[10px] font-semibold text-[var(--color-text-tertiary)] sm:inline">
-          {view === 'market' ? '市場全体の分布・遷移を確認' : '業種比較から銘柄候補を選別'}
-        </span>
-      </div>
+      <PageTitle
+        eyebrow="分析・AI"
+        title="市場6ステージ"
+        subtitle="市場全体の循環を確認し、業種構造から候補銘柄まで絞り込みます。"
+        badge={universeMeta ? `${universeMeta.shortLabel}に絞り込み中` : undefined}
+        meta={<span>{selectedDate ? `${selectedDate} 時点` : latestDate ? `最新 ${latestDate}` : '基準日なし'}</span>}
+      >
+        <StageViewTabs current={view} marketHref={marketHref} selectorHref={selectorHref} scannerHref={scannerHref} />
+        <span className="text-[12px] text-[var(--color-text-tertiary)]">{VIEW_HINT[view]}</span>
+      </PageTitle>
 
       <HexDateSelector
         dates={initialDates}
@@ -312,42 +326,36 @@ export default async function HexStagePage({
         />
       ) : (
         <>
-          <div className="sb-section-bd" style={{ display: 'flex', alignItems: 'center', gap: 4, paddingTop: 0 }}>
-            <TabRow basePath="/hex-stage" paramKey="ts" current={ts} tabs={TS_TABS} keepKeys={['period', UNIVERSE_FILTER_PARAM, 'date']} />
-          </div>
-
-          <div className="sb-section">
-            <div className="sb-hd">
-              <h2>6 ステージの循環</h2>
-              <span>1 → 2 → 3 → 4 → 5 → 6 → 1 のサイクル</span>
-            </div>
+          <section className="sb-section" aria-label="6ステージの循環">
+            <SectionHeader
+              level={1}
+              title="6ステージの循環"
+              description="1 → 2 → 3 → 4 → 5 → 6 → 1 のサイクル"
+              actions={<TabRow basePath="/hex-stage" paramKey="ts" current={ts} tabs={TS_TABS} keepKeys={['period', UNIVERSE_FILTER_PARAM, 'date']} label="時間軸" />}
+            />
             <Suspense fallback={<Loading h={130} />}>
               <SixStageCircleMock timescale={ts} universe={universeFilter} asOfDate={targetDate} />
             </Suspense>
-          </div>
+          </section>
 
-          <div className="sb-section" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-            <h2 style={{ margin: '0 12px 0 0', fontSize: 14, fontWeight: 500 }}>ステージ変化サマリー</h2>
-            <TabRow basePath="/hex-stage" paramKey="period" current={period} tabs={PERIOD_TABS} keepKeys={['ts', UNIVERSE_FILTER_PARAM, 'date']} />
-          </div>
-
-          <div className="sb-section">
+          <section className="sb-section flex flex-col gap-4" aria-label="ステージ変化サマリー">
+            <SectionHeader
+              level={1}
+              title="ステージ変化サマリー"
+              description="期間内に起きたステージ遷移の件数と内訳"
+              actions={<TabRow basePath="/hex-stage" paramKey="period" current={period} tabs={PERIOD_TABS} keepKeys={['ts', UNIVERSE_FILTER_PARAM, 'date']} label="期間" />}
+            />
             <Suspense fallback={<Loading h={300} />}>
               <TransitionMatrixMock timescale={ts} period={period} universe={universeFilter} asOfDate={targetDate} />
             </Suspense>
-          </div>
-
-          <div className="sb-section">
             <Suspense fallback={<Loading h={300} />}>
               <TransitionDetailTableMock timescale={ts} period={period} universe={universeFilter} asOfDate={targetDate} />
             </Suspense>
-          </div>
+          </section>
 
-          <div style={{ borderTop: '0.5px solid var(--color-border-soft)' }}>
-            <div className="sb-section" style={{ paddingTop: 14 }}>
-              <HexStageMapView />
-            </div>
-          </div>
+          <section className="sb-section" aria-label="ステージマップ">
+            <HexStageMapView />
+          </section>
         </>
       )}
     </div>

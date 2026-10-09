@@ -25,9 +25,9 @@ export default function MtfCloseCalendarPage() {
   return (
     <div className="flex w-full flex-col gap-5">
       <PageTitle
-        title="MTF Close Calendar"
-        subtitle="日・週・月のローソク足が同時に確定する市場営業日"
-        badge="JP / Market Sessions"
+        eyebrow="市場・業種"
+        title="MTF確定日"
+        subtitle="日足・2週足・週足・月足などのローソク足が、どの営業日に同時に確定するかを月単位で確認します。"
       />
       <MtfCloseCalendarClient initialMonth={today.slice(0, 7)} today={today} />
     </div>

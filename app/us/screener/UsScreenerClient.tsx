@@ -6,6 +6,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { ArrowDownAZ, ArrowUpAZ, CircleHelp, Columns3, Filter, GitCompareArrows, RotateCcw } from 'lucide-react'
 import { StageTag } from '@/components/ui/StageTag'
 import { SavedViewManager } from '@/components/ui/SavedViewManager'
+import { PageTitle } from '@/components/layout/PageTitle'
+import { UsAnalysisNav } from '@/components/us/UsAnalysisNav'
 import { getCompareSymbols, toggleComparedSymbol } from '@/lib/client/stock-workspace'
 import { replaceCurrentUrlFilters } from '@/lib/client/url-filter-state'
 import { formatShortTermStrength } from '@/lib/short-term-check'
@@ -630,35 +632,39 @@ export function UsScreenerClient() {
   const hasMarketCapData = rows.some((row) => row.market_cap != null)
 
   return (
-    <div className="sb-page">
-      <div className="sb-page-title">
-        <h1>USスクリーナー（マルチ軸ステージフィルタ）</h1>
-        <p>Tiingo由来の株価と最新スナップショットを表示。価格基準の移行状況はデータ鮮度で確認できます。HEXステージで絞り込み（複数系統は AND）</p>
-      </div>
-      <div className="rounded-[var(--radius-card)] border border-[var(--color-border-default)] bg-white shadow-[var(--shadow-card)]">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-4 py-3">
-        <div>
-          <div className="text-[14px] font-bold text-[var(--color-brand-900)]">検索条件と結果</div>
-          <div className="mt-1 text-[11px] font-semibold text-[var(--color-text-tertiary)]">
-            基準日 {date ?? '-'} / {loading ? '更新中' : `${rows.length.toLocaleString('ja-JP')}件表示${hasMore ? '・続きあり' : ''}`}
+    <div className="flex w-full min-w-0 flex-col gap-5">
+      <PageTitle
+        eyebrow="米国株"
+        title="USスクリーナー"
+        subtitle="Tiingo由来の株価と最新スナップショットを、HEXステージ(複数系統は AND)・業種・流動性・物理指標で絞り込みます。価格基準の移行状況はデータ鮮度で確認できます。"
+        meta={<span>基準日 {date ?? '-'}</span>}
+      >
+        <UsAnalysisNav current="/us/screener" />
+      </PageTitle>
+      <div className="min-w-0 overflow-hidden rounded-[var(--radius-card)] border border-[var(--color-border-default)] bg-white">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-4 py-2.5">
+        <div className="min-w-0" role="status" aria-live="polite">
+          <div className="text-[14px] font-bold text-[var(--color-text-primary)]">
+            {loading ? '検索中…' : `${rows.length.toLocaleString('ja-JP')}件`}
+            {!loading && hasMore && <span className="ml-1.5 text-[12px] font-medium text-[var(--color-text-tertiary)]">続きあり</span>}
+          </div>
+          <div className="mt-0.5 text-[12px] text-[var(--color-text-tertiary)]">
+            条件 {activeFilters.length}件 ・ 並び順 {dir === 'asc' ? '昇順' : '降順'}
           </div>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="toolbar">
           {selected.size > 0 && (
-            <button
-              type="button"
-              onClick={addSelectedToComparison}
-              className="inline-flex h-8 items-center gap-1.5 border border-[var(--color-brand-700)] bg-[var(--color-brand-700)] px-2.5 text-[11px] font-black text-white"
-            >
-              <GitCompareArrows size={14} />
+            <button type="button" onClick={addSelectedToComparison} className="btn" data-variant="primary">
+              <GitCompareArrows size={14} aria-hidden />
               {selected.size}銘柄を比較
             </button>
           )}
-          <div className="inline-flex h-8 border border-[var(--color-border-default)] bg-white" aria-label="表示列">
+          <div className="view-tabs" role="group" aria-label="表示列">
             <button
               type="button"
               onClick={() => updateColumnMode('core')}
-              className={`px-2.5 text-[11px] font-black ${columnMode === 'core' ? 'bg-[var(--color-brand-700)] text-white' : 'text-[var(--color-text-secondary)]'}`}
+              className="view-tab"
+              data-active={columnMode === 'core'}
               aria-pressed={columnMode === 'core'}
             >
               主要列
@@ -666,10 +672,11 @@ export function UsScreenerClient() {
             <button
               type="button"
               onClick={() => updateColumnMode('all')}
-              className={`inline-flex items-center gap-1 px-2.5 text-[11px] font-black ${columnMode === 'all' ? 'bg-[var(--color-brand-700)] text-white' : 'text-[var(--color-text-secondary)]'}`}
+              className="view-tab"
+              data-active={columnMode === 'all'}
               aria-pressed={columnMode === 'all'}
             >
-              <Columns3 size={13} />
+              <Columns3 size={13} aria-hidden />
               全列
             </button>
           </div>
@@ -681,32 +688,31 @@ export function UsScreenerClient() {
           <button
             type="button"
             onClick={resetFilters}
-            className="inline-flex h-8 w-8 items-center justify-center border border-[var(--color-border-default)] bg-white text-[var(--color-text-secondary)]"
+            className="btn"
+            style={{ width: 32, padding: 0 }}
             title="条件をリセット"
             aria-label="条件をリセット"
           >
-            <RotateCcw size={14} />
+            <RotateCcw size={14} aria-hidden />
           </button>
           <button
             type="button"
             onClick={() => setFiltersOpen((current) => !current)}
-            className={`inline-flex h-8 items-center gap-1.5 border px-2.5 text-[11px] font-black ${
-              filtersOpen
-                ? 'border-[var(--color-brand-700)] bg-[var(--color-brand-700)] text-white'
-                : 'border-[var(--color-border-default)] bg-white text-[var(--color-text-secondary)]'
-            }`}
+            className="btn"
+            data-variant={filtersOpen ? 'primary' : undefined}
             aria-expanded={filtersOpen}
           >
-            <Filter size={14} />
-            条件 {activeFilters.length > 0 ? `(${activeFilters.length})` : ''}
+            <Filter size={14} aria-hidden />
+            条件{activeFilters.length > 0 ? ` (${activeFilters.length})` : ''}
           </button>
         </div>
       </div>
 
       {activeFilters.length > 0 && (
-        <div className="flex flex-wrap gap-1.5 border-b border-[var(--color-border-soft)] px-4 py-2">
+        <div className="flex flex-wrap items-center gap-1.5 border-b border-[var(--color-border-soft)] px-4 py-2">
+          <span className="mr-1 text-[11px] font-semibold text-[var(--color-text-tertiary)]">適用中</span>
           {activeFilters.map((filter) => (
-            <span key={filter} className="border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-2 py-1 text-[10px] font-bold text-[var(--color-text-secondary)]">
+            <span key={filter} className="sb-chip">
               {filter}
             </span>
           ))}
@@ -714,10 +720,10 @@ export function UsScreenerClient() {
       )}
 
       {filtersOpen && (
-        <div className="flex flex-col gap-3 border-b border-[var(--color-border-default)] bg-white px-4 py-4">
+        <div className="flex flex-col gap-4 border-b border-[var(--color-border-default)] bg-white px-4 py-4">
           <div className="grid gap-2 md:grid-cols-[minmax(220px,1fr)_minmax(180px,280px)_auto]">
-            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="銘柄コード・企業名を検索（AAPL / Microsoft）" className="h-8 min-w-0 border border-[var(--color-border-default)] px-3 text-[12px] font-semibold" />
-            <select value={sort} onChange={(event) => setSort(event.target.value)} className="h-8 min-w-0 border border-[var(--color-border-default)] px-2 text-[12px] font-bold" aria-label="並び順">
+            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="銘柄コード・企業名を検索（AAPL / Microsoft）" aria-label="銘柄コード・企業名" className="h-9 min-w-0 px-3 text-[13px]" />
+            <select value={sort} onChange={(event) => setSort(event.target.value)} className="h-9 min-w-0 px-2 text-[13px] font-semibold" aria-label="並び順">
               <option value="marketCap">時価総額</option>
               <option value="ticker">コード</option>
               <option value="exchange">取引所</option>
@@ -737,7 +743,7 @@ export function UsScreenerClient() {
               <option value="acceleration">Acceleration</option>
               <option value="force">Force</option>
             </select>
-            <button type="button" onClick={() => setDir(dir === 'asc' ? 'desc' : 'asc')} className="inline-flex h-8 items-center justify-center gap-1.5 border border-[var(--color-border-default)] bg-white px-3 text-[12px] font-bold">
+            <button type="button" onClick={() => setDir(dir === 'asc' ? 'desc' : 'asc')} className="btn h-9">
               {dir === 'asc' ? <ArrowUpAZ size={14} /> : <ArrowDownAZ size={14} />}
               {dir === 'asc' ? '昇順' : '降順'}
             </button>
@@ -1054,7 +1060,7 @@ export function UsScreenerClient() {
                     <div className="flex items-center gap-2">
                       <Link
                         href={`/us/stock/${row.ticker}`}
-                        className="font-mono text-[13px] font-black text-[var(--color-brand-900)] hover:text-[var(--color-market-red)]"
+                        className="font-mono text-[13px] font-black text-[var(--color-brand-900)] hover:text-[var(--color-brand-700)] hover:underline"
                       >
                         {row.ticker}
                       </Link>
@@ -1251,7 +1257,7 @@ export function UsScreenerClient() {
             <button
               type="button"
               onClick={() => setResultLimit(resultLimit < 500 ? 500 : 1000)}
-              className="inline-flex h-8 items-center border border-[var(--color-brand-700)] bg-white px-3 text-[11px] font-black text-[var(--color-brand-800)] hover:bg-blue-50"
+              className="btn"
             >
               {resultLimit < 500 ? '500件まで表示' : '1,000件まで表示'}
             </button>
@@ -1269,14 +1275,14 @@ export function UsScreenerClient() {
 
 function Section({ step, label, children }: { step: number; label: string; children: React.ReactNode }) {
   return (
-    <section>
+    <section className="min-w-0 border-t border-[var(--color-border-soft)] pt-3 first:border-t-0 first:pt-0">
       <div className="mb-2 flex items-center gap-2">
-        <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[var(--color-brand-700)] text-[11px] font-black text-white">
+        <span className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-[4px] bg-[var(--color-surface-muted)] px-1 font-mono text-[11px] font-semibold text-[var(--color-text-secondary)]">
           {step}
         </span>
-        <h2 className="text-[12px] font-bold text-[var(--color-text-primary)]">{label}</h2>
+        <h2 className="text-[13px] font-bold text-[var(--color-text-primary)]">{label}</h2>
       </div>
-      <div className="pl-7">{children}</div>
+      <div className="min-w-0 sm:pl-7">{children}</div>
     </section>
   )
 }
@@ -1297,10 +1303,11 @@ function Chip({
       type="button"
       disabled={disabled}
       onClick={onClick}
-      className={`min-h-7 border px-2.5 py-1 text-[11px] font-bold transition-colors ${
+      aria-pressed={active}
+      className={`min-h-8 rounded-[4px] border px-2.5 py-1 text-[12px] font-semibold transition-colors ${
         active
-          ? 'border-[var(--color-brand-700)] bg-[var(--color-brand-700)] text-white'
-          : 'border-[var(--color-border-default)] bg-white text-[var(--color-text-secondary)] hover:border-[var(--color-brand-500)]'
+          ? 'border-[var(--color-brand-800)] bg-[var(--color-brand-800)] text-white'
+          : 'border-[var(--color-border-default)] bg-white text-[var(--color-text-secondary)] hover:border-[var(--color-border-strong)] hover:text-[var(--color-text-primary)]'
       } disabled:cursor-not-allowed disabled:opacity-40`}
     >
       {children}
@@ -1326,7 +1333,7 @@ function NumberFilter({
         value={value}
         onChange={(event) => onChange(event.target.value)}
         placeholder="例: 1.0"
-        className="h-8 min-w-0 flex-1 border border-[var(--color-border-default)] px-2 text-[12px] font-semibold"
+        className="h-8 min-w-0 flex-1 px-2 font-mono text-[13px]"
       />
     </label>
   )
@@ -1344,7 +1351,7 @@ function AxisCard({
   onClear: () => void
 }) {
   return (
-    <div className="flex min-w-0 items-center gap-1.5 border border-[var(--color-border-default)] bg-white p-1.5">
+    <div className="flex min-w-0 items-center gap-1.5 rounded-[var(--radius-card)] border border-[var(--color-border-default)] bg-white p-1.5">
       <div className="flex min-w-[58px] items-center gap-1.5">
         <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: axis.color }} />
         <span className="whitespace-nowrap text-[12px] font-bold">{axis.label}</span>
@@ -1357,7 +1364,7 @@ function AxisCard({
               key={stage}
               type="button"
               onClick={() => onToggle(stage)}
-              className="h-7 min-w-0 flex-1 border text-[11px] font-black"
+              className="h-7 min-w-0 flex-1 rounded-[3px] border font-mono text-[12px] font-bold"
               style={{
                 background: active ? axis.color : 'var(--color-surface-subtle)',
                 color: active ? '#fff' : 'var(--color-text-secondary)',
@@ -1372,7 +1379,7 @@ function AxisCard({
         })}
       </div>
       {selected.length > 0 && (
-        <button type="button" onClick={onClear} className="h-7 border border-[var(--color-border-default)] px-1.5 text-[10px] font-bold text-[var(--color-text-tertiary)]" aria-label={`${axis.label}をクリア`}>
+        <button type="button" onClick={onClear} className="h-7 rounded-[3px] border border-[var(--color-border-default)] px-1.5 text-[11px] font-semibold text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)]" aria-label={`${axis.label}をクリア`}>
           ×
         </button>
       )}

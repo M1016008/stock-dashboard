@@ -74,7 +74,7 @@ export function InvestorDetailClient({ id }: { id: string }) {
         <span className="text-[12px] text-[var(--color-text-secondary)]">直近開示ベース</span>
       </div><AsOfLine meta={data} /></div>
 
-      <section className="border-y border-[var(--border-subtle)] py-4">
+      <section className="border-y border-[var(--color-border-soft)] py-4">
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
           <Metric label="所有等ベース推定時価" value={yen(data.portfolioSummary.ownershipEstimatedValue)}
             title={exactYen(data.portfolioSummary.ownershipEstimatedValue)} primary />
@@ -90,7 +90,7 @@ export function InvestorDetailClient({ id }: { id: string }) {
       </section>
 
       <section className="min-w-0 space-y-3"><div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-[17px] font-semibold">保有明細</h2>
+        <h2 className="text-[17px] font-bold text-[var(--color-text-primary)]">保有明細</h2>
         {data.identity.investorClass === 'INSTITUTIONAL' && <Segmented label="保有評価基準" value={basis}
           options={[{ value: 'OWNERSHIP', label: '所有等ベース' }, { value: 'INVESTMENT_AUTHORITY', label: '運用権限ベース' }]}
           onChange={setBasis} />}
@@ -101,39 +101,39 @@ export function InvestorDetailClient({ id }: { id: string }) {
             openDoc={setSelectedDoc} />)}</tbody></table></TableScroll>
       </section>
 
-      <section className="grid gap-8 border-t border-[var(--border-subtle)] pt-5 lg:grid-cols-[minmax(0,2fr)_minmax(240px,1fr)]">
-        <div><div className="flex flex-wrap items-center justify-between gap-2"><h2 className="text-[17px] font-semibold">業種構成</h2>
+      <section className="grid gap-8 border-t border-[var(--color-border-soft)] pt-5 lg:grid-cols-[minmax(0,2fr)_minmax(240px,1fr)]">
+        <div><div className="flex flex-wrap items-center justify-between gap-2"><h2 className="text-[17px] font-bold text-[var(--color-text-primary)]">業種構成</h2>
           <Segmented label="業種体系" value={taxonomy} options={[{ value: '17', label: '17業種' }, { value: '33', label: '33業種' }]} onChange={setTaxonomy} />
         </div><p className="mb-3 text-[12px] text-[var(--color-text-secondary)]">算定可能Positionのみ · {basis === 'OWNERSHIP' ? '所有等ベース' : '運用権限ベース'}</p>
           {sectorRows.length === 0 ? <p className="text-[13px] text-[var(--color-text-secondary)]">この基準で算定可能なPositionはありません。</p>
             : <div className="space-y-2">{sectorRows.map(([sector, value]) => <div key={sector} className="grid grid-cols-[minmax(120px,1fr)_minmax(70px,2fr)_auto] items-center gap-2 text-[13px]">
-              <span className="truncate" title={sector}>{sector}</span><div className="h-2 bg-slate-100"><div className="h-full bg-[var(--color-brand-600)]" style={{ width: `${selectedTotal ? value / selectedTotal * 100 : 0}%` }} /></div>
+              <span className="truncate" title={sector}>{sector}</span><div className="h-2 rounded-[2px] bg-[var(--color-surface-muted)]"><div className="h-full rounded-[2px] bg-[var(--color-brand-700)]" style={{ width: `${selectedTotal ? value / selectedTotal * 100 : 0}%` }} /></div>
               <span className="min-w-20 text-right tabular-nums">{yen(value)}</span>
             </div>)}</div>}
         </div>
-        <div><h2 className="text-[17px] font-semibold">集中度</h2><p className="mb-3 text-[12px] text-[var(--color-text-secondary)]">算定可能分内の推定時価構成比 · {basis === 'OWNERSHIP' ? '所有等' : '運用権限'}</p>
-          <dl className="space-y-2 text-[13px]">{[[1, 'Top 1'], [3, 'Top 3'], [5, 'Top 5']].map(([count, label]) => <div key={label} className="flex justify-between border-b border-[var(--border-subtle)] pb-1"><dt>{label}</dt><dd className="font-semibold tabular-nums">{concentration(Number(count))}</dd></div>)}</dl>
+        <div><h2 className="text-[17px] font-bold text-[var(--color-text-primary)]">集中度</h2><p className="mb-3 text-[12px] text-[var(--color-text-secondary)]">算定可能分内の推定時価構成比 · {basis === 'OWNERSHIP' ? '所有等' : '運用権限'}</p>
+          <dl className="space-y-2 text-[13px]">{[[1, 'Top 1'], [3, 'Top 3'], [5, 'Top 5']].map(([count, label]) => <div key={label} className="flex justify-between border-b border-[var(--color-border-soft)] pb-1"><dt>{label}</dt><dd className="font-semibold tabular-nums">{concentration(Number(count))}</dd></div>)}</dl>
         </div>
       </section>
 
-      <section className="space-y-3 border-t border-[var(--border-subtle)] pt-5"><h2 className="text-[17px] font-semibold">保有変化</h2>
+      <section className="space-y-3 border-t border-[var(--color-border-soft)] pt-5"><h2 className="text-[17px] font-bold text-[var(--color-text-primary)]">保有変化</h2>
         {data.recentActivities.length === 0 ? <p className="text-[13px] text-[var(--color-text-secondary)]">認定可能な変化はありません。</p>
           : <TableScroll><table className="min-w-[660px] w-full"><thead><tr>{['義務日', '変化', '銘柄', '保有比率', '数量差', '現在時価換算', '開示'].map((label) => <th key={label} className={th}>{label}</th>)}</tr></thead>
             <tbody>{data.recentActivities.map((event) => <tr key={`${event.documentId}:${event.ticker}:${event.eventType}`}>
               <td className={td}>{date(event.obligationDate)}</td><td className={td}>{EVENT_LABEL[event.eventType]}</td>
-              <td className={td}><Link href={`/stock/${event.ticker}`} className="text-[var(--color-brand-600)]">{event.ticker} {event.issuerName}</Link></td>
+              <td className={td}><Link href={`/stock/${event.ticker}`} className="text-[var(--color-brand-700)]">{event.ticker} {event.issuerName}</Link></td>
               <td className={`${td} ${numeric}`}>{pct(event.reportedHoldingPct)}</td><td className={`${td} ${numeric}`}>{positionUnits(event.sharesDelta, event)}</td>
               <td className={`${td} ${numeric}`}>{yen(event.currentValueEquivalent)}</td>
-              <td className={td}><button type="button" onClick={() => setSelectedDoc(event.documentId)} className="text-[var(--color-brand-600)] hover:underline">{event.documentId}</button></td>
+              <td className={td}><button type="button" onClick={() => setSelectedDoc(event.documentId)} className="text-[var(--color-brand-700)] hover:underline">{event.documentId}</button></td>
             </tr>)}</tbody></table></TableScroll>}
       </section>
 
-      <section className="space-y-3 border-t border-[var(--border-subtle)] pt-5"><h2 className="text-[17px] font-semibold">提出書類履歴</h2>
+      <section className="space-y-3 border-t border-[var(--color-border-soft)] pt-5"><h2 className="text-[17px] font-bold text-[var(--color-text-primary)]">提出書類履歴</h2>
         <TableScroll><table className="min-w-[580px] w-full"><thead><tr>{['提出日', '種別', '銘柄', '報告義務日', 'EDINET'].map((label) => <th key={label} className={th}>{label}</th>)}</tr></thead>
           <tbody>{data.filingTimeline.map((filing) => <tr key={filing.documentId}><td className={td}>{date(filing.filingDate)}</td>
             <td className={td}>{filing.isCorrection ? '訂正' : filing.filingType === 'INITIAL' ? '大量保有' : '変更'}</td>
             <td className={td}>{filing.ticker ?? '—'} {filing.issuerName}</td><td className={td}>{date(filing.obligationDate)}</td>
-            <td className={td}><button type="button" onClick={() => setSelectedDoc(filing.documentId)} className="text-[var(--color-brand-600)] hover:underline">{filing.documentId}</button></td>
+            <td className={td}><button type="button" onClick={() => setSelectedDoc(filing.documentId)} className="text-[var(--color-brand-700)] hover:underline">{filing.documentId}</button></td>
           </tr>)}</tbody></table></TableScroll>
       </section>
       <HolderDisclaimer />
@@ -149,7 +149,7 @@ export function InvestorDetailClient({ id }: { id: string }) {
             <SourceDatum label="情報源" value={doc.evidence.authority} />
             <SourceDatum label="証拠状態" value={doc.evidence.hashStatus === 'VERIFIED_AT_SNAPSHOT_BUILD' ? '原本照合済み' : '未照合'} />
             <SourceDatum label="原本SHA-256" value={doc.evidence.sourceSha256 ?? '—'} />
-            <a href={doc.evidence.officialReference} target="_blank" rel="noopener noreferrer" className="inline-block text-[var(--color-brand-600)] hover:underline">EDINET原本を開く ↗</a>
+            <a href={doc.evidence.officialReference} target="_blank" rel="noopener noreferrer" className="inline-block text-[var(--color-brand-700)] hover:underline">EDINET原本を開く ↗</a>
           </dl>}
       </aside>
     </div>}
@@ -158,13 +158,13 @@ export function InvestorDetailClient({ id }: { id: string }) {
 
 function HoldingRow({ position, latest, openDoc }: { position: RankedPosition;
   latest?: HolderActivity; openDoc: (docId: string) => void }) {
-  return <tr className="hover:bg-slate-50"><td className={td}><Link href={`/stock/${position.ticker}`} className="font-medium text-[var(--color-brand-600)]">{position.ticker} {position.issuerName}</Link></td>
+  return <tr className="hover:bg-[#fff8e6]"><td className={td}><Link href={`/stock/${position.ticker}`} className="font-medium text-[var(--color-brand-700)]">{position.ticker} {position.issuerName}</Link></td>
     <td className={td}>{position.market ?? '—'}</td><td className={td}>{position.industry17 ?? '—'}</td><td className={td}>{position.industry33 ?? '—'}</td>
     <td className={`${td} ${numeric}`}>{pct(position.reportedHoldingPct)}</td><td className={`${td} ${numeric}`}>{positionUnits(position.certifiedUnits ?? position.reportedShares, position)}</td>
     <td className={`${td} ${numeric}`} title={exactYen(position.estimatedCurrentValue)}>{yen(position.estimatedCurrentValue)}</td>
     <td className={td}>{position.holdingBasis === 'OWNERSHIP' ? '所有等' : position.holdingBasis === 'INVESTMENT_AUTHORITY' ? '運用権限' : position.holdingBasis === 'VOTING_AUTHORITY' ? '議決権等' : 'その他'}</td>
     <td className={td}>{latest ? `${EVENT_LABEL[latest.eventType]} · ${pct(latest.previousHoldingPct)} → ${pct(latest.reportedHoldingPct)}` : '—'}</td>
-    <td className={td}>{date(position.filingDate)}</td><td className={td}><button type="button" onClick={() => openDoc(position.documentId)} className="text-[var(--color-brand-600)] hover:underline">{position.documentId}</button></td>
+    <td className={td}>{date(position.filingDate)}</td><td className={td}><button type="button" onClick={() => openDoc(position.documentId)} className="text-[var(--color-brand-700)] hover:underline">{position.documentId}</button></td>
   </tr>
 }
 function Metric({ label, value, title, primary }: { label: string; value: string; title?: string; primary?: boolean }) {

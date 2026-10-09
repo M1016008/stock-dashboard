@@ -11,6 +11,10 @@ import {
   Star,
   Trash2,
 } from 'lucide-react'
+import { PageTitle } from '@/components/layout/PageTitle'
+import { EmptyState } from '@/components/ui/EmptyState'
+import { SectionHeader } from '@/components/ui/SectionHeader'
+import { StatStrip } from '@/components/ui/StatStrip'
 import { WatchlistButton } from '@/components/ui/WatchlistButton'
 import { StockPreviewTrigger } from '@/components/stock-preview/StockPreviewTrigger'
 import { useWatchlistStore } from '@/lib/watchlist-store'
@@ -168,66 +172,55 @@ export default function WatchlistPage() {
   const savedCount = tickers.length + usTickers.length
 
   return (
-    <main className="flex w-full flex-col gap-4 px-3 py-4 sm:px-4">
-      <header className="flex flex-wrap items-start justify-between gap-3 border-b border-[var(--border-subtle)] pb-3">
-        <div>
-          <h1 className="flex items-center gap-2 font-[var(--font-display)] text-[18px] font-bold text-[var(--text-primary)]">
-            <Star size={18} fill="currentColor" className="text-[var(--color-brand-600)]" />
-            ウォッチワークスペース
-          </h1>
-          <p className="mt-1 text-[11px] font-semibold text-[var(--text-muted)]">
-            JP・USの監視、急変確認、銘柄比較を一か所で管理します。価格は60秒ごとに自動更新されます。
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={() => void fetchQuotes()}
-          disabled={loading}
-          className="inline-flex h-8 items-center gap-1.5 rounded-[4px] border border-[var(--border-base)] bg-white px-3 text-[11px] font-bold text-[var(--text-secondary)] disabled:opacity-50"
-        >
-          <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
-          {loading ? '更新中' : '今すぐ更新'}
-        </button>
-      </header>
+    <div className="flex w-full min-w-0 flex-col gap-5">
+      <PageTitle
+        eyebrow="監視"
+        title="ウォッチリスト"
+        subtitle="日本株・米国株の監視銘柄、急変の確認、銘柄比較をまとめて扱います。価格は60秒ごとに自動更新します。"
+        badge={activeUniverseMeta?.shortLabel}
+        rightSlot={
+          <button type="button" onClick={() => void fetchQuotes()} disabled={loading} className="btn">
+            <RefreshCw size={14} className={loading ? 'animate-spin' : ''} aria-hidden />
+            {loading ? '更新中' : '今すぐ更新'}
+          </button>
+        }
+      />
 
-      <section className="grid grid-cols-2 gap-2 sm:grid-cols-4" aria-label="ウォッチリスト集計">
-        <SummaryMetric label="登録銘柄" value={`${savedCount}`} unit="銘柄" />
-        <SummaryMetric label="日本株" value={`${tickers.length}`} unit="銘柄" />
-        <SummaryMetric label="米国株" value={`${usTickers.length}`} unit="銘柄" />
-        <SummaryMetric label="要確認" value={`${alertCount}`} unit="件" warning={alertCount > 0} />
-      </section>
+      <StatStrip
+        label="ウォッチリスト集計"
+        items={[
+          { label: '登録銘柄', value: `${savedCount}銘柄` },
+          { label: '日本株', value: `${tickers.length}銘柄` },
+          { label: '米国株', value: `${usTickers.length}銘柄` },
+          { label: '要確認', value: <span className={alertCount > 0 ? 'text-amber-700' : undefined}>{alertCount}件</span>, sub: '取得失敗・品質注意・±5%以上' },
+        ]}
+      />
 
-      <div className="flex flex-wrap items-center justify-between gap-2 border-y border-[var(--border-subtle)] py-2">
-        <div className="inline-flex rounded-[4px] border border-[var(--border-base)] bg-[var(--bg-elevated)] p-0.5">
+      <div className="toolbar flex flex-wrap items-center justify-between gap-2">
+        <div className="view-tabs" role="group" aria-label="市場の切替">
           {([
-            ['ALL', `すべて ${savedCount}`],
-            ['JP', `JP ${tickers.length}`],
-            ['US', `US ${usTickers.length}`],
-          ] as const).map(([value, label]) => (
+            ['ALL', 'すべて', savedCount],
+            ['JP', '日本株', tickers.length],
+            ['US', '米国株', usTickers.length],
+          ] as const).map(([value, label, count]) => (
             <button
               key={value}
               type="button"
               onClick={() => setMarketView(value)}
-              className={`h-7 rounded-[3px] px-3 text-[11px] font-bold ${
-                marketView === value
-                  ? 'bg-white text-[var(--color-brand-700)] shadow-sm'
-                  : 'text-[var(--text-muted)]'
-              }`}
+              className="view-tab"
+              data-active={marketView === value}
               aria-pressed={marketView === value}
             >
               {label}
+              <span className="view-tab__count">{count}</span>
             </button>
           ))}
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
           {selected.size > 0 && (
-            <button
-              type="button"
-              onClick={addSelectedToComparison}
-              className="inline-flex h-8 items-center gap-1.5 rounded-[4px] border border-[var(--color-brand-600)] bg-[var(--color-brand-600)] px-3 text-[11px] font-bold text-white"
-            >
-              <GitCompareArrows size={14} />
+            <button type="button" onClick={addSelectedToComparison} className="btn" data-variant="primary">
+              <GitCompareArrows size={14} aria-hidden />
               {selected.size}銘柄を比較
             </button>
           )}
@@ -235,11 +228,11 @@ export default function WatchlistPage() {
             <button
               type="button"
               onClick={downloadTvWatchlist}
-              className="inline-flex h-8 items-center gap-1.5 rounded-[4px] border border-[var(--border-base)] bg-white px-3 text-[11px] font-bold text-[var(--text-secondary)]"
-              title="JP銘柄をTradingView形式でダウンロード"
+              className="btn"
+              title="日本株をTradingView形式でダウンロード"
             >
-              <Download size={14} />
-              JP TVリスト
+              <Download size={14} aria-hidden />
+              TradingView用に保存
             </button>
           )}
           {savedCount > 0 && (
@@ -248,9 +241,10 @@ export default function WatchlistPage() {
               onClick={() => {
                 if (window.confirm('JP・USのウォッチリストを全て削除しますか？')) clearAll()
               }}
-              className="inline-flex h-8 items-center gap-1.5 rounded-[4px] border border-[var(--border-base)] bg-white px-3 text-[11px] font-bold text-[var(--text-secondary)]"
+              className="btn"
+              data-variant="ghost"
             >
-              <Trash2 size={14} />
+              <Trash2 size={14} aria-hidden />
               全クリア
             </button>
           )}
@@ -258,11 +252,12 @@ export default function WatchlistPage() {
       </div>
 
       {!mounted ? (
-        <EmptyState title="ウォッチリストを読み込んでいます" detail="保存済み銘柄を確認中です。" />
+        <EmptyState title="ウォッチリストを読み込んでいます" description="保存済み銘柄を確認中です。" icon={<RefreshCw size={20} className="animate-spin" aria-hidden />} />
       ) : savedCount === 0 ? (
         <EmptyState
           title="ウォッチリストは空です"
-          detail="JP・USの個別銘柄ページやスクリーナーにある星ボタンから追加できます。"
+          description="個別銘柄ページやスクリーナーの星ボタンから追加できます。"
+          icon={<Star size={20} aria-hidden />}
         />
       ) : (
         <>
@@ -273,11 +268,11 @@ export default function WatchlistPage() {
               selected={selected}
               onToggleSelection={toggleSelection}
               note={activeUniverseMeta
-                ? `${activeUniverseMeta.shortLabel}表示中 / 保存済みJP ${tickers.length}銘柄`
+                ? `${activeUniverseMeta.shortLabel}表示中 · 保存済み ${tickers.length}銘柄`
                 : 'J-Quants日次データ'}
               emptyDetail={activeUniverseMeta
-                ? `${activeUniverseMeta.shortLabel}に該当するJPウォッチ銘柄はありません。`
-                : 'JP個別銘柄ページから追加できます。'}
+                ? `${activeUniverseMeta.shortLabel}に該当する日本株はありません。`
+                : '日本株の個別銘柄ページから追加できます。'}
             />
           )}
           {showUs && (
@@ -286,34 +281,12 @@ export default function WatchlistPage() {
               rows={allRows.filter((row) => row.market === 'US')}
               selected={selected}
               onToggleSelection={toggleSelection}
-              note="US日次データ"
-              emptyDetail="US個別銘柄ページから追加できます。"
+              note="米国株日次データ"
+              emptyDetail="米国株の個別銘柄ページから追加できます。"
             />
           )}
         </>
       )}
-    </main>
-  )
-}
-
-function SummaryMetric({
-  label,
-  value,
-  unit,
-  warning = false,
-}: {
-  label: string
-  value: string
-  unit: string
-  warning?: boolean
-}) {
-  return (
-    <div className="border border-[var(--border-subtle)] bg-white px-3 py-2.5">
-      <div className="text-[10px] font-bold text-[var(--text-muted)]">{label}</div>
-      <div className={`mt-1 font-[var(--font-mono)] text-[18px] font-bold ${warning ? 'text-amber-700' : 'text-[var(--text-primary)]'}`}>
-        {value}
-        <span className="ml-1 text-[10px] font-semibold text-[var(--text-muted)]">{unit}</span>
-      </div>
     </div>
   )
 }
@@ -333,57 +306,83 @@ function WatchSection({
   note: string
   emptyDetail: string
 }) {
+  const items = rows.map((row) => {
+    const key = `${row.market}:${row.ticker}`
+    const quote = row.quote
+    const href = row.market === 'US'
+      ? `/us/stock/${encodeURIComponent(row.ticker)}`
+      : `/stock/${encodeURIComponent(row.ticker)}`
+    const name = quote?.name ?? (row.market === 'JP' ? findTicker(row.ticker)?.name : null) ?? '取得待ち'
+    return { row, key, quote, href, name, alertLabel: getAlertLabel(quote) }
+  })
   return (
-    <section className="overflow-hidden border border-[var(--border-subtle)] bg-white">
-      <div className="flex items-center justify-between gap-2 border-b border-[var(--border-subtle)] px-3 py-2">
-        <div className="flex items-center gap-2">
-          <span className={`rounded-[3px] px-2 py-1 text-[10px] font-black ${
-            market === 'US'
-              ? 'bg-sky-50 text-sky-700'
-              : 'bg-rose-50 text-rose-700'
-          }`}>
-            {market}
-          </span>
-          <h2 className="text-[13px] font-bold text-[var(--text-primary)]">
-            {market === 'US' ? '米国株' : '日本株'}
-          </h2>
-          <span className="font-[var(--font-mono)] text-[11px] text-[var(--text-muted)]">{rows.length}銘柄</span>
-        </div>
-        <span className="text-[10px] font-semibold text-[var(--text-muted)]">{note}</span>
-      </div>
+    <section className="flex min-w-0 flex-col gap-2">
+      <SectionHeader
+        title={market === 'US' ? '米国株' : '日本株'}
+        description={note}
+        actions={<span className="text-[12px] tabular-nums text-[var(--color-text-tertiary)]">{rows.length}銘柄</span>}
+      />
 
       {rows.length === 0 ? (
-        <div className="px-4 py-8 text-center text-[11px] font-semibold text-[var(--text-muted)]">
-          {emptyDetail}
-        </div>
+        <p className="py-6 text-center text-[12px] text-[var(--color-text-tertiary)]">{emptyDetail}</p>
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[840px] border-collapse text-[12px]">
-            <thead>
-              <tr className="border-b border-[var(--border-subtle)] bg-[var(--bg-elevated)]">
-                <th scope="col" style={{ ...th, width: 38 }} aria-label="比較選択" />
-                <th scope="col" style={{ ...th, width: 38 }} aria-label="ウォッチ操作" />
-                <th scope="col" style={th}>銘柄</th>
-                <th scope="col" style={th}>名称</th>
-                <th scope="col" style={thR}>価格</th>
-                <th scope="col" style={thR}>変化額</th>
-                <th scope="col" style={thR}>変化率</th>
-                <th scope="col" style={thR}>出来高</th>
-                <th scope="col" style={th}>価格日</th>
-                <th scope="col" style={th}>確認</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row) => {
-                const key = `${row.market}:${row.ticker}`
-                const quote = row.quote
-                const href = row.market === 'US'
-                  ? `/us/stock/${encodeURIComponent(row.ticker)}`
-                  : `/stock/${encodeURIComponent(row.ticker)}`
-                const name = quote?.name ?? (row.market === 'JP' ? findTicker(row.ticker)?.name : null) ?? '取得待ち'
-                const alertLabel = getAlertLabel(quote)
-                return (
-                  <tr key={key} className="border-b border-[var(--border-subtle)] last:border-b-0 hover:bg-[var(--bg-elevated)]">
+        <>
+          <ul className="divide-y divide-[var(--color-border-soft)] rounded-[6px] border border-[var(--color-border-soft)] bg-white md:hidden">
+            {items.map(({ row, key, quote, href, name, alertLabel }) => (
+              <li key={key} className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-x-2 px-3 py-2.5">
+                <div className="flex flex-col items-center gap-1 pt-0.5">
+                  <WatchlistButton ticker={row.ticker} market={row.market} size="sm" />
+                  <input
+                    type="checkbox"
+                    checked={selected.has(key)}
+                    onChange={() => onToggleSelection(row.market, row.ticker)}
+                    aria-label={`${row.ticker}を比較対象に選択`}
+                    disabled={!selected.has(key) && selected.size >= 4}
+                    className="h-4 w-4 accent-[var(--color-brand-700)]"
+                  />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex min-w-0 items-center gap-1.5">
+                    <Link href={href} prefetch={false} className="shrink-0 font-mono text-[13px] font-bold text-[var(--color-brand-800)] hover:underline">
+                      {row.ticker}
+                    </Link>
+                    <span className="min-w-0 truncate text-[13px] text-[var(--color-text-primary)]">{name}</span>
+                    <StockPreviewTrigger ticker={row.ticker} market={row.market} context="watchlist" />
+                  </div>
+                  <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] tabular-nums text-[var(--color-text-tertiary)]">
+                    <span>出来高 {formatNumber(quote?.volume)}</span>
+                    <span>{quote?.priceDate ?? '-'}</span>
+                    <AlertCell quote={quote} alertLabel={alertLabel} />
+                  </div>
+                </div>
+                <div className="text-right font-mono tabular-nums">
+                  <div className="text-[14px] font-bold text-[var(--color-text-primary)]">{formatPrice(quote?.price, row.market)}</div>
+                  <div className="text-[11px] font-semibold" style={{ color: percentColor(quote?.changePercent) }}>
+                    {formatPercent(quote?.changePercent)}
+                  </div>
+                </div>
+              </li>
+            ))}
+          </ul>
+          <div className="table-scroll hidden rounded-[6px] border border-[var(--color-border-soft)] bg-white md:block">
+            <table className="w-full min-w-[840px] border-collapse text-[12px]">
+              <thead>
+                <tr className="border-b border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)]">
+                  <th scope="col" style={{ ...th, width: 38 }} aria-label="比較選択" />
+                  <th scope="col" style={{ ...th, width: 38 }} aria-label="ウォッチ操作" />
+                  <th scope="col" style={th}>コード</th>
+                  <th scope="col" style={th}>銘柄名</th>
+                  <th scope="col" style={thR}>価格</th>
+                  <th scope="col" style={thR}>変化額</th>
+                  <th scope="col" style={thR}>変化率</th>
+                  <th scope="col" style={thR}>出来高</th>
+                  <th scope="col" style={th}>価格日</th>
+                  <th scope="col" style={th}>確認</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map(({ row, key, quote, href, name, alertLabel }) => (
+                  <tr key={key} className="border-b border-[var(--color-border-soft)] last:border-b-0 hover:bg-[#fff8e6]">
                     <td style={td}>
                       <input
                         type="checkbox"
@@ -391,7 +390,7 @@ function WatchSection({
                         onChange={() => onToggleSelection(row.market, row.ticker)}
                         aria-label={`${row.ticker}を比較対象に選択`}
                         disabled={!selected.has(key) && selected.size >= 4}
-                        className="h-3.5 w-3.5 accent-[var(--color-brand-600)]"
+                        className="h-3.5 w-3.5 accent-[var(--color-brand-700)]"
                       />
                     </td>
                     <td style={td}>
@@ -402,7 +401,7 @@ function WatchSection({
                         <Link
                           href={href}
                           prefetch={false}
-                          className="font-[var(--font-mono)] font-bold text-[var(--color-brand-700)] no-underline hover:text-[var(--color-market-red)]"
+                          className="font-mono font-bold text-[var(--color-brand-800)] no-underline hover:underline"
                         >
                           {row.ticker}
                         </Link>
@@ -419,36 +418,31 @@ function WatchSection({
                     </td>
                     <td style={tdR}>{formatNumber(quote?.volume)}</td>
                     <td style={td}>{quote?.priceDate ?? '-'}</td>
-                    <td style={td}>
-                      {quote === undefined ? (
-                        <span className="text-[10px] font-semibold text-[var(--text-muted)]">更新中</span>
-                      ) : alertLabel ? (
-                        <span className="inline-flex items-center gap-1 rounded-[3px] bg-amber-50 px-2 py-1 text-[10px] font-bold text-amber-800">
-                          <AlertTriangle size={12} />
-                          {alertLabel}
-                        </span>
-                      ) : (
-                        <span className="text-[10px] font-semibold text-emerald-700">平常</span>
-                      )}
-                    </td>
+                    <td style={td}><AlertCell quote={quote} alertLabel={alertLabel} /></td>
                   </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        </div>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
     </section>
   )
 }
 
-function EmptyState({ title, detail }: { title: string; detail: string }) {
-  return (
-    <div className="border border-[var(--border-subtle)] bg-white px-4 py-10 text-center">
-      <div className="text-[13px] font-bold text-[var(--text-secondary)]">{title}</div>
-      <div className="mt-2 text-[11px] font-semibold text-[var(--text-muted)]">{detail}</div>
-    </div>
-  )
+function AlertCell({ quote, alertLabel }: { quote: StockQuote | null | undefined; alertLabel: string | null }) {
+  if (quote === undefined) {
+    return <span className="text-[11px] text-[var(--color-text-tertiary)]">更新中</span>
+  }
+  if (alertLabel) {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-[3px] bg-amber-50 px-1.5 py-0.5 text-[11px] font-semibold text-amber-800">
+        <AlertTriangle size={12} aria-hidden />
+        {alertLabel}
+      </span>
+    )
+  }
+  return <span className="text-[11px] text-[var(--color-text-tertiary)]">平常</span>
 }
 
 function getAlertLabel(quote: StockQuote | null | undefined): string | null {
@@ -489,25 +483,24 @@ function formatNumber(value: number | undefined): string {
 }
 
 function percentColor(value: number | undefined): string {
-  if (value == null || !Number.isFinite(value)) return 'var(--text-muted)'
-  if (value > 0) return 'var(--price-up, #16a34a)'
-  if (value < 0) return 'var(--price-down, #dc2626)'
-  return 'var(--text-secondary)'
+  if (value == null || !Number.isFinite(value)) return 'var(--color-text-tertiary)'
+  if (value > 0) return 'var(--color-price-up)'
+  if (value < 0) return 'var(--color-price-down)'
+  return 'var(--color-text-secondary)'
 }
 
 const th: CSSProperties = {
   padding: '8px 10px',
   textAlign: 'left',
-  fontFamily: 'var(--font-mono)',
   fontWeight: 600,
-  color: 'var(--text-muted)',
-  fontSize: '10px',
+  color: 'var(--color-text-secondary)',
+  fontSize: '11px',
   whiteSpace: 'nowrap',
 }
 const thR: CSSProperties = { ...th, textAlign: 'right' }
 const td: CSSProperties = {
   padding: '8px 10px',
-  color: 'var(--text-primary)',
+  color: 'var(--color-text-primary)',
   whiteSpace: 'nowrap',
 }
 const tdR: CSSProperties = {

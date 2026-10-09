@@ -5,6 +5,7 @@ import { useMemo, useState } from 'react'
 import { ChevronDown, ExternalLink } from 'lucide-react'
 import type { MlSectorCandidate, MlSectorRanking } from '@/lib/queries/ml-insights'
 import { StageTag } from '@/components/ui/StageTag'
+import { SectionHeader } from '@/components/ui/SectionHeader'
 
 type CandidateResponse = {
   asOfDate: string | null
@@ -141,33 +142,26 @@ export function MlSectorRankingBoard({
   }
 
   return (
-    <section className="rounded-[8px] border border-[var(--color-border-default)] bg-white p-4 shadow-[var(--shadow-card)]">
-      <div className="mb-3 border-b-2 border-[var(--color-brand-700)] bg-[var(--color-surface-subtle)] px-3 py-2">
-        <div className="border-l-4 border-[var(--color-market-red)] pl-2">
-          <h2 className="text-[14px] font-bold text-[var(--color-brand-900)]">ML業種候補ランキング</h2>
-          <p className="mt-1 text-[11px] font-semibold leading-relaxed text-[var(--color-text-tertiary)]">
-            MLが抽出した上昇候補/下落警戒がどの業種に偏っているかを見るテーマ発見用の集計です。行をクリックすると該当候補銘柄を展開します。
-          </p>
-          {asOfDate && (
-            <p className="mt-1 text-[10px] font-bold text-[var(--color-text-tertiary)]">
-              ML基準日: {asOfDate}
-            </p>
-          )}
-        </div>
-      </div>
-      <div className="space-y-4">
+    <section className="min-w-0">
+      <SectionHeader
+        level={1}
+        title="ML業種候補ランキング"
+        description="上昇候補・下落警戒がどの業種に偏っているか。行を開くと候補銘柄を表示します。"
+        actions={asOfDate ? <span className="text-[11px] tabular-nums text-[var(--color-text-tertiary)]">ML基準日 {asOfDate}</span> : undefined}
+      />
+      <div className="space-y-6">
         {sections.map((section) => (
           <div key={section.title} className="space-y-2">
-            <div>
-              <div className="text-[13px] font-bold text-[var(--color-brand-900)]">{section.title}</div>
-              <p className="mt-0.5 text-[11px] font-semibold text-[var(--color-text-tertiary)]">{section.body}</p>
+            <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
+              <h3 className="text-[14px] font-bold text-[var(--color-text-primary)]">{section.title}</h3>
+              <p className="text-[11px] text-[var(--color-text-tertiary)]">{section.body}</p>
             </div>
             <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
               {section.blocks.map((block) => (
-                <div key={`${section.title}-${block.title}`} className="overflow-hidden rounded-[8px] border border-[var(--color-border-soft)]">
-                  <div className="border-b border-[var(--color-border-soft)] px-3 py-2 text-[13px] font-bold text-[var(--color-text-primary)]">
+                <div key={`${section.title}-${block.title}`} className="panel">
+                  <div className="border-b border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-3 py-2 text-[13px] font-bold text-[var(--color-text-primary)]">
                     <span className="inline-flex items-center gap-2">
-                      <span className={`h-4 w-1 rounded-full ${block.title.includes('下落') ? 'bg-[rgba(37,99,235,0.72)]' : 'bg-[rgba(220,38,38,0.72)]'}`} />
+                      <span className={`h-3.5 w-1 rounded-[1px] ${block.title.includes('下落') ? 'bg-[rgba(37,99,235,0.72)]' : 'bg-[rgba(220,38,38,0.72)]'}`} />
                       {block.title}
                     </span>
                   </div>
@@ -253,7 +247,7 @@ export function MlSectorRankingBoard({
                                                 <Link
                                                   href={`/stock/${candidate.ticker}`}
                                                   prefetch={false}
-                                                  className="inline-flex items-center gap-1 font-bold text-[var(--color-brand-900)] hover:text-[var(--color-market-red)]"
+                                                  className="inline-flex items-center gap-1 font-bold text-[var(--color-brand-900)] hover:text-[var(--color-brand-900)]"
                                                 >
                                                   <span className="font-mono">{candidate.ticker}</span>
                                                   <span className="max-w-[180px] truncate">{candidate.name ?? ''}</span>

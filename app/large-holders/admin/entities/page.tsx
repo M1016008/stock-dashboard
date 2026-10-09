@@ -3,6 +3,7 @@
 import { useCallback, useState } from 'react'
 import { AlertTriangle, ExternalLink } from 'lucide-react'
 import type { ReviewDecision } from '@/lib/large-holders/entity-review'
+import { PageTitle } from '@/components/layout/PageTitle'
 
 type QueueRow = { investorEntityId: string; displayName: string; investorClass: string;
   investorType: string; aliases: string[]; reasons: string[]; possibleMatches: string[];
@@ -84,12 +85,10 @@ export default function LargeHolderEntityAdmin() {
     await reload(token)
   }
 
-  return <main className="page-wide mx-auto px-4 py-6 text-[var(--color-text-primary)]">
-    <div className="flex flex-wrap items-end justify-between gap-3 border-b border-[var(--color-border-default)] pb-4">
-      <div><h1 className="text-xl font-bold">大口保有 Entity審査</h1>
-        <p className="mt-1 text-sm text-[var(--color-text-secondary)]">公式原資料を根拠に確認。未分類は推測で確定しません。</p></div>
-      <span className="text-xs text-[var(--color-text-tertiary)]">Snapshot {state?.snapshotId.slice(0, 12) ?? '—'}</span>
-    </div>
+  return <div className="flex w-full min-w-0 flex-col text-[var(--color-text-primary)]">
+    <PageTitle eyebrow="管理" title="大口投資家の名寄せ審査"
+      subtitle="公式原資料を根拠に確認します。未分類は推測で確定しません。"
+      meta={<span>Snapshot <span className="font-mono">{state?.snapshotId.slice(0, 12) ?? '—'}</span></span>} />
     {state && <div className="mt-4 flex flex-wrap gap-x-6 gap-y-1 text-sm" data-review-coverage>
       {['INDIVIDUAL', 'INSTITUTIONAL', 'OTHER', 'UNCLASSIFIED'].map((type) =>
         <span key={type}>{labels[type]} <strong>{state.counts[type] ?? 0}</strong></span>)}
@@ -113,7 +112,7 @@ export default function LargeHolderEntityAdmin() {
       </div>
     </section>}
     {health && health.source.sourceQualityReview.length > 0 && <section className="mt-4" aria-label="原資料品質審査">
-      <h2 className="text-base font-semibold">Source Quality Review</h2>
+      <h2 className="text-base font-semibold">原資料の品質確認</h2>
       <p className="mt-1 text-sm text-[var(--color-text-secondary)]">隔離は原資料内の不整合を示します。保有者数や保有額の推測補正は行いません。</p>
       <div className="mt-2 divide-y divide-[var(--color-border-soft)] border-y border-[var(--color-border-soft)]">
         {health.source.sourceQualityReview.map((item) => <details key={item.documentId} className="py-2 text-sm">
@@ -147,33 +146,33 @@ export default function LargeHolderEntityAdmin() {
       <section className="min-w-0 border-t border-[var(--color-border-soft)] pt-4 lg:border-t-0 lg:pt-0">
         <h2 className="border-b border-[var(--color-border-soft)] pb-2 text-base font-semibold">証拠付き操作</h2>
         <div className="mt-3 space-y-3 text-sm">
-          <label className="block">管理トークン<input type="password" autoComplete="off" value={token} onChange={(e) => setToken(e.target.value)} className="mt-1 w-full rounded border px-2 py-2" /></label>
-          <button type="button" onClick={() => void reload(token).then(() => setMessage('')).catch((error) => setMessage(String(error)))} className="rounded border border-[var(--color-border-default)] px-3 py-2">審査データを読む</button>
-          <label className="block">操作<select value={kind} onChange={(e) => { setKind(e.target.value as typeof kind); setPreview(null) }} className="mt-1 w-full rounded border px-2 py-2">
+          <label className="block">管理トークン<input type="password" autoComplete="off" value={token} onChange={(e) => setToken(e.target.value)} className="mt-1 w-full rounded-[4px] border border-[var(--color-border-default)] bg-white px-2 py-2" /></label>
+          <button type="button" onClick={() => void reload(token).then(() => setMessage('')).catch((error) => setMessage(String(error)))} className="btn">審査データを読む</button>
+          <label className="block">操作<select value={kind} onChange={(e) => { setKind(e.target.value as typeof kind); setPreview(null) }} className="mt-1 w-full rounded-[4px] border border-[var(--color-border-default)] bg-white px-2 py-2">
             <option value="CLASSIFY">分類</option><option value="MERGE">統合</option><option value="UNDO">取り消し</option>
           </select></label>
-          {kind !== 'UNDO' && <label className="block">対象Entity ID<input value={entityId} onChange={(e) => { setEntityId(e.target.value); setPreview(null) }} className="mt-1 w-full rounded border px-2 py-2" /></label>}
-          {kind === 'CLASSIFY' && <label className="block">分類<select value={category} onChange={(e) => setCategory(e.target.value)} className="mt-1 w-full rounded border px-2 py-2">
+          {kind !== 'UNDO' && <label className="block">対象Entity ID<input value={entityId} onChange={(e) => { setEntityId(e.target.value); setPreview(null) }} className="mt-1 w-full rounded-[4px] border border-[var(--color-border-default)] bg-white px-2 py-2" /></label>}
+          {kind === 'CLASSIFY' && <label className="block">分類<select value={category} onChange={(e) => setCategory(e.target.value)} className="mt-1 w-full rounded-[4px] border border-[var(--color-border-default)] bg-white px-2 py-2">
             {['INDIVIDUAL', 'DOMESTIC_ASSET_MANAGER', 'FOREIGN_ASSET_MANAGER', 'FUND', 'FINANCIAL_INSTITUTION', 'OPERATING_COMPANY', 'OTHER_CORPORATION'].map((name) => <option key={name}>{name}</option>)}
           </select></label>}
-          {kind === 'MERGE' && <label className="block">統合先Entity ID<input value={targetId} onChange={(e) => { setTargetId(e.target.value); setPreview(null) }} className="mt-1 w-full rounded border px-2 py-2" /></label>}
+          {kind === 'MERGE' && <label className="block">統合先Entity ID<input value={targetId} onChange={(e) => { setTargetId(e.target.value); setPreview(null) }} className="mt-1 w-full rounded-[4px] border border-[var(--color-border-default)] bg-white px-2 py-2" /></label>}
           {kind !== 'UNDO' && <>
-            <label className="block">根拠書類<select value={documentId} onChange={(e) => { setDocumentId(e.target.value); setPreview(null) }} className="mt-1 w-full rounded border px-2 py-2">
+            <label className="block">根拠書類<select value={documentId} onChange={(e) => { setDocumentId(e.target.value); setPreview(null) }} className="mt-1 w-full rounded-[4px] border border-[var(--color-border-default)] bg-white px-2 py-2">
               <option value="">選択してください</option>{related.map((doc) => <option key={doc.documentId} value={doc.documentId}>{doc.documentId} / {doc.filingDate}</option>)}
             </select></label>
             {selectedDocument && <a className="inline-flex items-center gap-1 text-[var(--color-brand-700)]" href={selectedDocument.sourceUrl} target="_blank" rel="noopener noreferrer">EDINET原資料 <ExternalLink size={13} /></a>}
-            <label className="block">判断根拠<input value={note} onChange={(e) => setNote(e.target.value)} className="mt-1 w-full rounded border px-2 py-2" /></label>
+            <label className="block">判断根拠<input value={note} onChange={(e) => setNote(e.target.value)} className="mt-1 w-full rounded-[4px] border border-[var(--color-border-default)] bg-white px-2 py-2" /></label>
           </>}
-          {kind === 'UNDO' && <label className="block">取り消すDecision ID<select value={undoId} onChange={(e) => setUndoId(e.target.value)} className="mt-1 w-full rounded border px-2 py-2">
+          {kind === 'UNDO' && <label className="block">取り消すDecision ID<select value={undoId} onChange={(e) => setUndoId(e.target.value)} className="mt-1 w-full rounded-[4px] border border-[var(--color-border-default)] bg-white px-2 py-2">
             <option value="">選択してください</option>{state?.history.filter((row) => row.kind !== 'UNDO').map((row) => <option key={row.id} value={row.id}>{row.kind} / {row.id}</option>)}
           </select></label>}
-          {kind === 'UNDO' && <label className="block">取り消し理由<input value={note} onChange={(e) => setNote(e.target.value)} className="mt-1 w-full rounded border px-2 py-2" /></label>}
-          <button type="button" onClick={() => void submit('preview')} className="rounded border border-[var(--color-border-default)] px-3 py-2">変更をプレビュー</button>
-          {preview != null && <><pre className="overflow-auto bg-[var(--color-surface-subtle)] p-2 text-xs">{JSON.stringify(preview, null, 2)}</pre>
-            <button type="button" onClick={() => void submit('commit')} className="rounded bg-[var(--color-brand-700)] px-3 py-2 text-white">審査履歴へ保存</button></>}
+          {kind === 'UNDO' && <label className="block">取り消し理由<input value={note} onChange={(e) => setNote(e.target.value)} className="mt-1 w-full rounded-[4px] border border-[var(--color-border-default)] bg-white px-2 py-2" /></label>}
+          <button type="button" onClick={() => void submit('preview')} className="btn">変更をプレビュー</button>
+          {preview != null && <><pre className="max-h-[360px] overflow-auto rounded-[4px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] p-2 text-xs">{JSON.stringify(preview, null, 2)}</pre>
+            <button type="button" onClick={() => void submit('commit')} className="btn" data-variant="primary">審査履歴へ保存</button></>}
           {message && <p role="status" className="text-sm">{message}</p>}
         </div>
       </section>
     </div>
-  </main>
+  </div>
 }
