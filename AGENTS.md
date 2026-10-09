@@ -34,3 +34,19 @@ J-Quants v2 の **API キー方式** (`x-api-key` ヘッダ) を使う。
   Phase 3 以降の重いデータは Turso クォータ超過のためローカル運用。
 
 バッチスクリプトは `USE_LOCAL_DB=1` でローカル DB を強制する (詳細は `lib/db/client.ts`)。
+
+## 開発完了・統合確認・Worktree整理
+
+CodexとClaude Codeは `docs/development-completion-workflow.md` を共通の正本として使う。
+
+- Node 22.x / npm 10.9.9を使う。完了報告前に `npm run workflow:verify -- --select-tests` を実行する。このCLIは
+  diff check、TypeScript、既存違反baselineに対する新規ESLint違反、必須・変更領域別回帰テスト、production buildを実行し、署名付き検証証跡をGit共通dirへ記録する。
+- Claude Codeで開発完了を報告する最終応答には`[stockboard-development-complete]`を含める。通常応答の`Stop`はブロックせず、このmarker付き完了報告と`TaskCompleted`だけを検証証跡でgateする。
+- PR、CI、main統合は `npm run workflow:integration` で確認する。このコマンドはfetchしない。
+- Worktree判定はデフォルトdry-runの `npm run worktree:audit` を使う。
+- mainへのmerge、push、本番deploy、Worktree削除は利用者の明示承認なしに実行しない。
+- Worktree削除はmacOS厳格監査とGitHub統合証明後に、利用者が信頼済みterminalで`worktree:approve`を実行して期限付き・一回限り承認を発行し、別の対話的`worktree:remove`でのみ行う。agentは承認発行・削除を代行しない。
+- local terminal確認は本人認証ではない。同一OS user権限を持つ攻撃者からは保護できないため、非対話の自動削除は禁止する。
+- `rm -rf`、`git clean`、強制Worktree削除、暗黙のbranch削除、暗黙のpruneは禁止する。
+- `.env*`、credential、OAuth token、DB、outbox、既存stashをGitへ追加せず、値をログへ出さない。
+- 稼働プロセス、LaunchAgent、外部symlink、Git外資産、未統合commit、未commit変更が1つでもあれば削除しない。

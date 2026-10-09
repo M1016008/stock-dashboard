@@ -2,7 +2,22 @@
   "name": "stock-dashboard",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": "22.x",
+    "npm": "10.9.9"
+  },
+  "packageManager": "npm@10.9.9",
   "scripts": {
+    "workflow:verify": "tsx scripts/development-workflow.ts verify",
+    "workflow:lint-baseline": "tsx scripts/development-workflow.ts lint-baseline",
+    "workflow:integration": "tsx scripts/development-workflow.ts integration",
+    "workflow:hook": "tsx scripts/development-workflow.ts hook",
+    "worktree:audit": "tsx scripts/development-workflow.ts audit",
+    "worktree:approve": "tsx scripts/development-workflow.ts approve",
+    "worktree:remove": "tsx scripts/development-workflow.ts remove",
+    "test:development-workflow": "tsx scripts/test-development-workflow.ts",
+    "typecheck": "tsc --noEmit --incremental false",
+    "lint": "eslint .",
     "dev": "ulimit -n 65536 2>/dev/null || true; NEXT_DIST_DIR=.next-dev next dev --webpack -H 127.0.0.1 -p 3001",
     "dev:3000": "ulimit -n 65536 2>/dev/null || true; NEXT_DIST_DIR=.next-dev next dev --webpack -H 127.0.0.1 -p 3000",
     "dev:check": "tsx scripts/check-local-dev.ts",
@@ -393,6 +408,8 @@
     "@types/react-dom": "^19",
     "d3": "^7.9.0",
     "drizzle-kit": "^0.31.10",
+    "eslint": "9.39.5",
+    "eslint-config-next": "16.3.0",
     "tailwindcss": "^4",
     "tsx": "^4.21.0",
     "typescript": "^5"

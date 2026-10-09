@@ -1,0 +1,62 @@
+{
+  "schemaVersion": 1,
+  "mandatory": [
+    "test:development-workflow",
+    "test:timeframes",
+    "test:stage-classification"
+  ],
+  "ignored": [
+    "docs/**",
+    "AGENTS.md",
+    "CLAUDE.md"
+  ],
+  "rules": [
+    {
+      "name": "development-completion-workflow",
+      "paths": [
+        "scripts/development-workflow.ts",
+        "scripts/test-development-workflow.ts",
+        ".claude/hooks/**/*.mjs",
+        ".claude/settings.json",
+        ".github/workflows/development-completion.yml",
+        "config/development-completion-tests.json",
+        "eslint.config.mjs"
+      ],
+      "tests": [
+        "test:development-workflow"
+      ]
+    },
+    {
+      "name": "timeframes",
+      "paths": [
+        "lib/timeframes.ts",
+        "lib/trigger-discovery-timeframe.ts",
+        "scripts/test-timeframes.ts"
+      ],
+      "tests": [
+        "test:timeframes"
+      ]
+    },
+    {
+      "name": "stage-classification",
+      "paths": [
+        "lib/hex-stage.ts",
+        "lib/stage-history-window.ts",
+        "lib/stage-transition-scanner.ts",
+        "lib/queries/stage-transition-scanner.ts",
+        "components/hex/stage-screener/**",
+        "app/hex-stage/**",
+        "app/stage-screener/**",
+        "app/us/stage-screener/**",
+        "scripts/test-stage-classification.ts",
+        "scripts/test-stage-transition-scanner.ts",
+        "scripts/test-stage-transition-scanner-ui.ts"
+      ],
+      "tests": [
+        "test:stage-classification",
+        "test:stage-transition-scanner",
+        "test:stage-transition-scanner-ui"
+      ]
+    }
+  ]
+}
