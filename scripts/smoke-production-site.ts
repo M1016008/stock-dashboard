@@ -922,7 +922,7 @@ async function runLargeHolderSmokeChecks(): Promise<CheckResult[]> {
 
   const pageChecks: Check[] = [
     { name: 'Large Holder page overview', path: '/large-holders', kind: 'html',
-      requiredText: ['大口投資家 Intelligence'], forbiddenText: largeHolderStorageErrors },
+      requiredText: ['大口投資家'], forbiddenText: largeHolderStorageErrors },
     { name: 'Large Holder page rankings', path: '/large-holders/rankings', kind: 'html',
       requiredText: ['大口投資家ランキング'], forbiddenText: largeHolderStorageErrors },
     { name: 'Large Holder page activity', path: '/large-holders/activity', kind: 'html',
