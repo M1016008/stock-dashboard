@@ -216,7 +216,7 @@ function SummaryList({
             <li key={row.metric.key} className="grid grid-cols-[minmax(0,1fr)_auto] items-baseline gap-2 text-[10px] leading-4">
               <span className="truncate font-bold text-[var(--color-text-primary)]">{row.metric.label}</span>
               <span className="whitespace-nowrap font-mono">
-                <b className="text-[var(--color-market-red)]">{row.target.text}</b>
+                <b className="text-[var(--color-brand-800)]">{row.target.text}</b>
                 <span className="ml-1 text-[9px] font-semibold text-[var(--color-text-tertiary)]">中央 {fmtNumber(row.median, row.metric.format, true)}</span>
               </span>
             </li>
@@ -430,7 +430,7 @@ export function SimilarityComparisonDetail({ ticker, analysisDate = null }: Simi
             <h2 id="similarity-comparison-title" className="text-[13px] font-black text-[var(--color-brand-900)]">① 同業・財務の比較</h2>
             {baseCompany && (
               <p className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[10px] font-bold text-[var(--color-text-secondary)]">
-                <span className="inline-flex h-5 items-center bg-[var(--color-market-red)] px-1.5 text-[9px] font-black text-white">対象</span>
+                <span className="inline-flex h-5 items-center bg-[var(--color-brand-800)] px-1.5 text-[9px] font-black text-white">対象</span>
                 <span className="font-mono font-black text-[var(--color-text-primary)]">{baseCompany.ticker}</span>
                 <span>{baseCompany.name}</span>
                 <span className="text-[var(--color-text-tertiary)]">／ 33業種 {model?.sectorDistribution.groupName ?? '分類なし'}の分布と比較</span>
@@ -458,7 +458,7 @@ export function SimilarityComparisonDetail({ ticker, analysisDate = null }: Simi
               <SummaryList title="業種内で高い側(P75超)" tone="var(--color-brand-700)" rows={positionSummary.high} empty="P75を超える指標はありません" />
               <SummaryList title="業種内で低い側(P25未満)" tone="var(--color-text-secondary)" rows={positionSummary.low} empty="P25を下回る指標はありません" />
               <SummaryList title="業種並み(中央値に近い順)" tone="var(--color-border-default)" rows={positionSummary.typical} empty="P25–P75内の指標はありません" />
-              <div className="min-w-0 border-t-2 border-[var(--color-market-red)] bg-white px-2.5 py-2">
+              <div className="min-w-0 border-t-2 border-[var(--color-brand-800)] bg-white px-2.5 py-2">
                 <div className="text-[10px] font-black text-[var(--color-text-secondary)]">近い銘柄 <span className="font-semibold text-[var(--color-text-tertiary)]">{closestGroup?.label ?? ''}</span></div>
                 {closestPeers.length === 0 ? (
                   <div className="mt-1 text-[10px] font-semibold text-[var(--color-text-tertiary)]">候補はありません</div>
@@ -498,7 +498,7 @@ export function SimilarityComparisonDetail({ ticker, analysisDate = null }: Simi
                 指標ごとの位置 <span className="font-semibold text-[var(--color-text-tertiary)]">{model.sectorDistribution.groupName ?? '分類なし'}</span>
               </h3>
               <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[9px] font-semibold text-[var(--color-text-tertiary)]" aria-label="凡例">
-                <span className="inline-flex items-center gap-1"><i className="inline-block h-3 w-[3px] bg-[var(--color-market-red)]" />対象 {baseCompany?.ticker ?? ticker.replace('.T', '')}</span>
+                <span className="inline-flex items-center gap-1"><i className="inline-block h-3 w-[3px] bg-[var(--color-brand-800)]" />対象 {baseCompany?.ticker ?? ticker.replace('.T', '')}</span>
                 <span className="inline-flex items-center gap-1"><i className="inline-block h-2.5 w-4 bg-[var(--color-brand-100)]" />P25–P75</span>
                 <span className="inline-flex items-center gap-1"><i className="inline-block h-3 w-px bg-[var(--color-brand-900)]" />中央値</span>
                 <span className="inline-flex items-center gap-1"><i className="inline-block h-2 w-2 rounded-full bg-[var(--color-text-tertiary)]" />比較銘柄</span>
@@ -575,8 +575,8 @@ export function SimilarityComparisonDetail({ ticker, analysisDate = null }: Simi
             <div className="flex items-center gap-1.5 overflow-x-auto">
               <span className="shrink-0 text-[9px] font-black text-[var(--color-text-tertiary)]">比較中</span>
               {model.companies.map((company) => (
-                <span key={company.ticker} className={`inline-flex h-7 shrink-0 items-center gap-1 border px-2 text-[9px] font-bold ${company.isBase ? 'border-[var(--color-market-red)] bg-white text-[var(--color-text-primary)]' : 'border-[var(--color-border-default)] bg-white text-[var(--color-text-secondary)]'}`}>
-                  {company.isBase && <span className="bg-[var(--color-market-red)] px-1 text-[8px] font-black text-white">対象</span>}
+                <span key={company.ticker} className={`inline-flex h-7 shrink-0 items-center gap-1 border px-2 text-[9px] font-bold ${company.isBase ? 'border-[var(--color-brand-800)] bg-white text-[var(--color-text-primary)]' : 'border-[var(--color-border-default)] bg-white text-[var(--color-text-secondary)]'}`}>
+                  {company.isBase && <span className="bg-[var(--color-brand-800)] px-1 text-[8px] font-black text-white">対象</span>}
                   <span className="font-mono font-black">{company.ticker}</span>
                   <span className="max-w-24 truncate">{company.name}</span>
                   {!company.isBase && stageMatchByTicker.has(company.ticker) && (
@@ -610,8 +610,8 @@ export function SimilarityComparisonDetail({ ticker, analysisDate = null }: Simi
                 <tr>
                   <th className="sticky left-0 z-20 min-w-32 border-b border-r border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-3 py-2 text-left text-[9px] font-black text-[var(--color-text-secondary)]">比較指標</th>
                   {model.companies.map((company) => (
-                    <th key={company.ticker} className={`min-w-36 border-b border-r border-[var(--color-border-default)] px-3 py-2 text-center ${company.isBase ? 'border-t-[3px] border-t-[var(--color-market-red)] bg-[var(--color-brand-50)]' : 'bg-white'}`}>
-                      {company.isBase && <span className="mb-0.5 inline-block bg-[var(--color-market-red)] px-1 text-[8px] font-black text-white">対象</span>}
+                    <th key={company.ticker} className={`min-w-36 border-b border-r border-[var(--color-border-default)] px-3 py-2 text-center ${company.isBase ? 'border-t-[3px] border-t-[var(--color-brand-800)] bg-[var(--color-brand-50)]' : 'bg-white'}`}>
+                      {company.isBase && <span className="mb-0.5 inline-block bg-[var(--color-brand-800)] px-1 text-[8px] font-black text-white">対象</span>}
                       <Link href={`/stock/${company.ticker}${analysisDate ? `?date=${encodeURIComponent(analysisDate)}` : ''}#ml`} className="font-mono text-[11px] font-black text-[var(--color-brand-800)] hover:underline">
                         {company.ticker} <ChevronRight size={10} className="inline" />
                       </Link>
@@ -676,7 +676,7 @@ export function SimilarityComparisonDetail({ ticker, analysisDate = null }: Simi
                       <YAxis type="number" dataKey="y" name={scatterOption.yLabel} domain={scatterDomains.y} allowDataOverflow={false} tick={{ fontSize: 9 }} tickFormatter={(value) => fmtNumber(Number(value), scatterOption.yFormat, true)} width={58} />
                       <Tooltip cursor={{ strokeDasharray: '3 3' }} formatter={(value, name) => fmtNumber(Number(value), name === 'x' ? scatterOption.xFormat : scatterOption.yFormat, true)} labelFormatter={(_, payload) => payload?.[0]?.payload?.name ?? ''} />
                       <Scatter data={scatterData}>
-                        {scatterData.map((point) => <Cell key={point.ticker} fill={point.isBase ? 'var(--color-market-red)' : 'var(--color-text-tertiary)'} stroke={point.isBase ? 'var(--color-market-red)' : 'white'} strokeWidth={point.isBase ? 4 : 1.5} />)}
+                        {scatterData.map((point) => <Cell key={point.ticker} fill={point.isBase ? 'var(--color-brand-800)' : 'var(--color-text-tertiary)'} stroke={point.isBase ? 'var(--color-brand-800)' : 'white'} strokeWidth={point.isBase ? 4 : 1.5} />)}
                         <LabelList dataKey="ticker" position="top" fontSize={9} fontWeight={800} fill="var(--color-text-secondary)" />
                       </Scatter>
                     </ScatterChart>

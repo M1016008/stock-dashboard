@@ -20,16 +20,16 @@ import {
 
 const WEEKDAYS = ['日', '月', '火', '水', '木', '金', '土']
 const CLOSE_FILTERS: Array<{ value: CloseCountFilter; label: string }> = [
-  { value: 0, label: 'All' },
-  { value: 2, label: '2+ Closes' },
-  { value: 3, label: '3+ Closes' },
-  { value: 4, label: '4+ Closes' },
-  { value: 5, label: '5+ Closes' },
+  { value: 0, label: 'すべて' },
+  { value: 2, label: '2本以上' },
+  { value: 3, label: '3本以上' },
+  { value: 4, label: '4本以上' },
+  { value: 5, label: '5本以上' },
 ]
 const TIMEFRAME_GROUPS: Array<{ unit: TimeframeUnit; label: string }> = [
-  { unit: 'day', label: 'DAILY' },
-  { unit: 'week', label: 'WEEKLY' },
-  { unit: 'month', label: 'MONTHLY' },
+  { unit: 'day', label: '日' },
+  { unit: 'week', label: '週' },
+  { unit: 'month', label: '月' },
 ]
 
 function addMonths(month: string, delta: number): string {
@@ -157,20 +157,20 @@ export function MtfCloseCalendarClient({ initialMonth, today }: { initialMonth: 
 
   return (
     <div className="flex min-w-0 flex-col gap-4">
-      <section className="border border-[var(--color-border-default)] bg-white shadow-[var(--shadow-card)]">
+      <section className="overflow-hidden rounded-[6px] border border-[var(--color-border-default)] bg-white">
         <div className="flex flex-col gap-3 border-b border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-3 py-3 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex items-center gap-2">
             <CalendarRange size={18} className="text-[var(--color-brand-700)]" />
             <div>
-              <h2 className="text-[14px] font-bold text-[var(--color-brand-900)]">{monthLabel(month)}</h2>
-              <p className="text-[11px] font-semibold text-[var(--color-text-tertiary)]">該当 {matchingDays}営業日</p>
+              <h2 className="text-[15px] font-bold text-[var(--color-text-primary)]">{monthLabel(month)}</h2>
+              <p className="text-[11px] tabular-nums text-[var(--color-text-tertiary)]">条件に該当 {matchingDays}営業日</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
             <button
               type="button"
               onClick={() => setMonth((value) => addMonths(value, -1))}
-              className="inline-flex h-8 w-8 items-center justify-center border border-[var(--color-border-default)] bg-white text-[var(--color-text-secondary)] hover:bg-[var(--color-brand-50)]"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-[4px] border border-[var(--color-border-default)] bg-white text-[var(--color-text-secondary)] hover:bg-[var(--color-brand-50)]"
               aria-label="前の月"
               title="前の月"
             >
@@ -179,7 +179,7 @@ export function MtfCloseCalendarClient({ initialMonth, today }: { initialMonth: 
             <button
               type="button"
               onClick={() => setMonth(initialMonth)}
-              className="inline-flex h-8 items-center gap-1.5 border border-[var(--color-border-default)] bg-white px-2.5 text-[11px] font-bold text-[var(--color-text-secondary)] hover:bg-[var(--color-brand-50)]"
+              className="inline-flex h-8 items-center gap-1.5 rounded-[4px] border border-[var(--color-border-default)] bg-white px-2.5 text-[11px] font-bold text-[var(--color-text-secondary)] hover:bg-[var(--color-brand-50)]"
             >
               <RotateCcw size={13} />
               今月
@@ -187,7 +187,7 @@ export function MtfCloseCalendarClient({ initialMonth, today }: { initialMonth: 
             <button
               type="button"
               onClick={() => setMonth((value) => addMonths(value, 1))}
-              className="inline-flex h-8 w-8 items-center justify-center border border-[var(--color-border-default)] bg-white text-[var(--color-text-secondary)] hover:bg-[var(--color-brand-50)]"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-[4px] border border-[var(--color-border-default)] bg-white text-[var(--color-text-secondary)] hover:bg-[var(--color-brand-50)]"
               aria-label="次の月"
               title="次の月"
             >
@@ -197,14 +197,15 @@ export function MtfCloseCalendarClient({ initialMonth, today }: { initialMonth: 
         </div>
 
         <div className="grid gap-3 border-b border-[var(--color-border-soft)] px-3 py-3 xl:grid-cols-[auto_minmax(0,1fr)] xl:items-start">
-          <div className="flex min-w-0 flex-wrap gap-1.5" aria-label="Close Countフィルター">
+          <div className="flex min-w-0 flex-wrap items-center gap-1.5" aria-label="同時に確定する本数で絞り込み">
+            <span className="mr-1 text-[11px] font-bold text-[var(--color-text-secondary)]">同時確定</span>
             {CLOSE_FILTERS.map((filter) => (
               <button
                 key={filter.value}
                 type="button"
                 onClick={() => setMinimumCloses(filter.value)}
                 aria-pressed={minimumCloses === filter.value}
-                className={`h-8 border px-2.5 text-[11px] font-bold ${
+                className={`h-8 rounded-[4px] border px-2.5 text-[11px] font-bold ${
                   minimumCloses === filter.value
                     ? 'border-[var(--color-brand-700)] bg-[var(--color-brand-800)] text-white'
                     : 'border-[var(--color-border-default)] bg-white text-[var(--color-text-secondary)] hover:bg-[var(--color-brand-50)]'
@@ -217,7 +218,7 @@ export function MtfCloseCalendarClient({ initialMonth, today }: { initialMonth: 
           <div className="flex min-w-0 flex-wrap gap-x-3 gap-y-2 xl:justify-end" aria-label="時間足フィルター">
             {TIMEFRAME_GROUPS.map((group) => (
               <div key={group.unit} className="flex items-center gap-1">
-                <span className="mr-0.5 text-[10px] font-bold text-[var(--color-text-tertiary)]">{group.label}</span>
+                <span className="mr-0.5 text-[10px] font-bold text-[var(--color-text-tertiary)]">{group.label}足</span>
                 {timeframeGroup(group.unit).map((timeframe) => {
                   const checked = enabledSet.has(timeframe)
                   return (
@@ -253,8 +254,9 @@ export function MtfCloseCalendarClient({ initialMonth, today }: { initialMonth: 
             <button
               type="button"
               onClick={() => setRequestVersion((value) => value + 1)}
-              className="h-9 border border-[var(--color-border-default)] bg-white px-3 text-[12px] font-bold text-[var(--color-brand-800)]"
+              className="btn"
             >
+              <RotateCcw size={13} aria-hidden />
               再読み込み
             </button>
           </div>
@@ -292,7 +294,7 @@ export function MtfCloseCalendarClient({ initialMonth, today }: { initialMonth: 
                         <span className={`text-[11px] font-bold tabular-nums sm:text-[12px] ${current ? 'text-[var(--color-market-red)]' : 'text-[var(--color-text-primary)]'}`}>
                           {Number(day.date.slice(8, 10))}
                         </span>
-                        {current && <span className="hidden text-[9px] font-bold text-[var(--color-market-red)] sm:inline">TODAY</span>}
+                        {current && <span className="hidden text-[9px] font-bold text-[var(--color-market-red)] sm:inline">今日</span>}
                       </span>
                       {day.isTradingDay && matches ? (
                         <>
@@ -304,7 +306,7 @@ export function MtfCloseCalendarClient({ initialMonth, today }: { initialMonth: 
                             ))}
                           </span>
                           <span className="mt-auto pt-1 text-[9px] font-bold tabular-nums text-[var(--color-text-secondary)] sm:text-[10px]">
-                            {visible.length} CLOSE
+                            {visible.length}本確定
                           </span>
                         </>
                       ) : (
@@ -324,15 +326,15 @@ export function MtfCloseCalendarClient({ initialMonth, today }: { initialMonth: 
             </div>
 
             <aside className="min-w-0 border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)]">
-              <div className="border-b-2 border-[var(--color-brand-700)] px-3 py-3">
-                <div className="text-[10px] font-bold text-[var(--color-text-tertiary)]">SELECTED DATE</div>
-                <div className="mt-1 text-[15px] font-bold text-[var(--color-brand-900)]">
+              <div className="border-b border-[var(--color-border-default)] px-3 py-3">
+                <div className="text-[11px] font-bold text-[var(--color-text-tertiary)]">選択日</div>
+                <div className="mt-1 text-[15px] font-bold text-[var(--color-text-primary)]">
                   {selectedDay ? dateLabel(selectedDay.date) : '—'}
                 </div>
                 <div className="mt-2 flex items-end justify-between gap-3">
                   <div>
-                    <div className="text-[10px] font-bold text-[var(--color-text-tertiary)]">TF CLOSE COUNT</div>
-                    <div className="text-[24px] font-bold tabular-nums text-[var(--color-brand-900)]">{selectedVisibleTimeframes.length}</div>
+                    <div className="text-[11px] font-bold text-[var(--color-text-tertiary)]">確定する時間足</div>
+                    <div className="text-[24px] font-bold tabular-nums text-[var(--color-text-primary)]">{selectedVisibleTimeframes.length}<span className="ml-0.5 text-[12px] font-semibold text-[var(--color-text-secondary)]">本</span></div>
                   </div>
                   <div className="text-right text-[10px] font-semibold text-[var(--color-text-tertiary)]">
                     {selectedDay?.isTradingDay ? `次回 ${selectedDay.nextTradingDate ?? '未確定'}` : '市場休場日'}
@@ -342,7 +344,7 @@ export function MtfCloseCalendarClient({ initialMonth, today }: { initialMonth: 
               <div className="divide-y divide-[var(--color-border-soft)] bg-white">
                 {TIMEFRAME_GROUPS.map((group) => (
                   <div key={group.unit} className="px-3 py-2.5">
-                    <div className="mb-1.5 text-[10px] font-bold text-[var(--color-text-tertiary)]">{group.label}</div>
+                    <div className="mb-1.5 text-[11px] font-bold text-[var(--color-text-tertiary)]">{group.label}足</div>
                     <div className="grid grid-cols-4 gap-1">
                       {timeframeGroup(group.unit).map((timeframe) => {
                         const closed = selectedDay?.closeTimeframes.includes(timeframe) ?? false
@@ -357,8 +359,8 @@ export function MtfCloseCalendarClient({ initialMonth, today }: { initialMonth: 
                   </div>
                 ))}
               </div>
-              <div className="border-t-2 border-[var(--color-brand-700)] bg-white px-3 py-3">
-                <h3 className="text-[13px] font-bold text-[var(--color-brand-900)]">Upcoming TF Closes</h3>
+              <div className="border-t border-[var(--color-border-default)] bg-white px-3 py-3">
+                <h3 className="text-[13px] font-bold text-[var(--color-text-primary)]">この先の確定日</h3>
                 <div className="mt-2 divide-y divide-[var(--color-border-soft)]">
                   {upcoming.length > 0 ? upcoming.map((day) => (
                     <button
@@ -384,8 +386,8 @@ export function MtfCloseCalendarClient({ initialMonth, today }: { initialMonth: 
         )}
 
         <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--color-border-soft)] px-3 py-2 text-[10px] font-semibold text-[var(--color-text-tertiary)]">
-          <span>Session anchor: {result?.sessionAnchorDate ?? '—'}</span>
-          <span>Actual OHLCV: {result?.sessionCoverageFrom ?? '—'} – {result?.sessionCoverageTo ?? '—'}</span>
+          <span className="tabular-nums">営業日の起点 {result?.sessionAnchorDate ?? '—'}</span>
+          <span className="tabular-nums">実データの範囲 {result?.sessionCoverageFrom ?? '—'} – {result?.sessionCoverageTo ?? '—'}</span>
         </div>
       </section>
     </div>

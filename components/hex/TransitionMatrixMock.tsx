@@ -5,6 +5,7 @@ import { STAGE_BG_COLORS, STAGE_BORDER_COLORS, STAGE_LABELS } from '@/lib/hex-st
 import { STAGE_DIRECTION_META, getStageTransitionInfo, type StageTransitionDirection } from '@/lib/hex-stage'
 import { getTransitionMatrix, type Timescale, type Period } from '@/lib/queries/hex'
 import type { UniverseFilterValue } from '@/lib/market-universe'
+import { StatStrip } from '@/components/ui/StatStrip'
 
 const STAGES = [1, 2, 3, 4, 5, 6] as const
 
@@ -114,32 +115,30 @@ export async function TransitionMatrixMock({
         </span>
       </div>
 
-      <div className="mb-3 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
-        <SummaryTile
-          label="集計対象"
-          value={`${PERIOD_LABEL[period]}の変化`}
-          detail="同じステージに留まった銘柄は除外"
-        />
-        <SummaryTile
-          label="最多ルート"
-          value={top ? `${top.from_stage} → ${top.to_stage}` : 'なし'}
-          detail={top ? `${top.count.toLocaleString()}件 / ${formatPct(top.count, total)}` : '遷移なし'}
-        />
-        <SummaryTile
-          label={RELATION_META.improve.label}
-          value={`${totals.improve.toLocaleString()}件`}
-          detail={RELATION_META.improve.note}
-          tone="improve"
-        />
-        <SummaryTile
-          label={RELATION_META.deteriorate.label}
-          value={`${totals.deteriorate.toLocaleString()}件`}
-          detail={RELATION_META.deteriorate.note}
-          tone="deteriorate"
-        />
-      </div>
+      <StatStrip
+        className="mb-3"
+        label="遷移の要約"
+        items={[
+          { label: '集計対象', value: `${PERIOD_LABEL[period]}の変化`, sub: '同じステージに留まった銘柄は除外' },
+          {
+            label: '最多ルート',
+            value: top ? `${top.from_stage} → ${top.to_stage}` : 'なし',
+            sub: top ? `${top.count.toLocaleString()}件 / ${formatPct(top.count, total)}` : '遷移なし',
+          },
+          {
+            label: RELATION_META.improve.label,
+            value: <span style={{ color: RELATION_META.improve.text }}>{totals.improve.toLocaleString()}件</span>,
+            sub: RELATION_META.improve.note,
+          },
+          {
+            label: RELATION_META.deteriorate.label,
+            value: <span style={{ color: RELATION_META.deteriorate.text }}>{totals.deteriorate.toLocaleString()}件</span>,
+            sub: RELATION_META.deteriorate.note,
+          },
+        ]}
+      />
 
-      <div className="sb-card">
+      <div className="sb-card sb-card-pad">
         <div className="mb-3 flex flex-wrap items-center gap-2 text-[11px] text-[var(--color-text-secondary)]">
           <span>行が移動前、列が移動先です。</span>
           <span>色が濃いほど件数が多く、色味で遷移の種類を分けています。</span>
@@ -164,8 +163,8 @@ export async function TransitionMatrixMock({
           </div>
         </div>
 
-      <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-[1fr_1.35fr]">
-        <div className="rounded-[6px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] p-3">
+      <div className="mt-4 grid grid-cols-1 gap-x-6 gap-y-4 border-t border-[var(--color-border-soft)] pt-3 lg:grid-cols-[1fr_1.35fr]">
+        <div className="min-w-0">
             <div className="mb-2 text-[11px] font-semibold text-[var(--color-text-primary)]">色の読み方</div>
             <div className="flex flex-wrap gap-2">
               {(Object.keys(RELATION_META) as Array<Exclude<Relation, 'stable' | 'invalid'>>).map((key) => {
@@ -173,7 +172,7 @@ export async function TransitionMatrixMock({
                 return (
                   <span
                     key={key}
-                    className="inline-flex items-center gap-1.5 rounded-full border px-2 py-1 text-[10px] font-medium"
+                    className="inline-flex items-center gap-1.5 rounded-[4px] border px-2 py-1 text-[10px] font-medium"
                     style={{
                       borderColor: `rgba(${meta.rgb}, 0.35)`,
                       background: `rgba(${meta.rgb}, 0.10)`,
@@ -191,7 +190,7 @@ export async function TransitionMatrixMock({
             </div>
           </div>
 
-          <div className="rounded-[6px] border border-[var(--color-border-soft)] bg-white p-3">
+          <div className="min-w-0">
             <div className="mb-2 text-[11px] font-semibold text-[var(--color-text-primary)]">
               件数の多い遷移
             </div>
@@ -306,33 +305,6 @@ function StageHeader({
         {suffix}
       </span>
       <span className="mt-0.5 max-w-full truncate text-[9px] font-medium opacity-80">{STAGE_LABELS[stage]}</span>
-    </div>
-  )
-}
-
-function SummaryTile({
-  label,
-  value,
-  detail,
-  tone,
-}: {
-  label: string
-  value: string
-  detail: string
-  tone?: Relation
-}) {
-  const meta = tone ? RELATION_META[tone] : null
-  return (
-    <div
-      className="rounded-[6px] border p-3"
-      style={{
-        borderColor: meta ? `rgba(${meta.rgb}, 0.28)` : 'var(--color-border-soft)',
-        background: meta ? `rgba(${meta.rgb}, 0.07)` : 'var(--color-surface-subtle)',
-      }}
-    >
-      <div className="text-[10px] font-semibold text-[var(--color-text-tertiary)]">{label}</div>
-      <div className="mt-1 text-[17px] font-semibold tabular-nums text-[var(--color-text-primary)]">{value}</div>
-      <div className="mt-1 text-[10px] leading-4 text-[var(--color-text-secondary)]">{detail}</div>
     </div>
   )
 }

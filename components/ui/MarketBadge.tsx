@@ -4,7 +4,7 @@ export function MarketBadge() {
     <span style={{
       fontFamily: 'var(--font-mono)',
       fontSize: '10px',
-      letterSpacing: '0.05em',
+      letterSpacing: 0,
       color: '#f5a623',
       border: '1px solid #f5a623',
       borderRadius: '2px',

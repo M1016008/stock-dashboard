@@ -70,9 +70,11 @@ export default async function DashboardPage({
 
   const header = (
     <PageTitle
+      eyebrow="日本株"
       title="ダッシュボード"
       subtitle={subtitle}
       badge={universeMeta ? `${universeMeta.shortLabel} / ${badgeLabel}` : badgeLabel}
+      badgeTone={mode === 'unavailable' ? 'danger' : mode === 'historical' ? 'warning' : 'positive'}
     />
   )
   const selector = (

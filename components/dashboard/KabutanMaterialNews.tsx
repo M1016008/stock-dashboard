@@ -1,7 +1,9 @@
 import Link from 'next/link'
-import { ArrowUpRight } from 'lucide-react'
+import { ArrowUpRight, ChevronDown, ExternalLink } from 'lucide-react'
+import { StatusTag } from '@/components/layout/PageTitle'
 import { StockPreviewTrigger } from '@/components/stock-preview/StockPreviewTrigger'
-import { Card, CardHeader } from '@/components/ui/Card'
+import { EmptyState, Notice } from '@/components/ui/EmptyState'
+import { SectionHeader } from '@/components/ui/SectionHeader'
 import {
   getKabutanGoodBadDisclosureNews,
   getKabutanMaterialNews,
@@ -34,11 +36,10 @@ function formatRunTime(value: number | null | undefined): string {
   }).format(new Date(value * 1000))
 }
 
-function runTone(status: string | null | undefined): string {
-  if (status === 'success') return 'border-emerald-200 bg-emerald-50 text-emerald-700'
-  if (status === 'partial') return 'border-amber-200 bg-amber-50 text-amber-700'
-  if (status === 'failed') return 'border-sky-200 bg-sky-50 text-sky-700'
-  return 'border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] text-[var(--color-text-tertiary)]'
+function runTone(status: string | null | undefined): 'positive' | 'warning' | 'neutral' {
+  if (status === 'success') return 'positive'
+  if (status === 'partial' || status === 'failed') return 'warning'
+  return 'neutral'
 }
 
 function displayUrl(value: string): string {
@@ -68,23 +69,23 @@ function formatVolume(value: number | null | undefined): string {
 
 function changeTone(value: string | null): string {
   if (!value) return 'text-[var(--color-text-tertiary)]'
-  if (value.startsWith('+')) return 'text-red-600'
-  if (value.startsWith('-')) return 'text-blue-600'
+  if (value.startsWith('+')) return 'text-[var(--color-price-up)]'
+  if (value.startsWith('-')) return 'text-[var(--color-price-down)]'
   return 'text-[var(--color-text-secondary)]'
 }
 
 function shortTermTone(label: string | null | undefined): string {
-  if (label === '強気優勢') return 'border-red-200 bg-red-50 text-red-700'
-  if (label === '好転候補') return 'border-rose-200 bg-rose-50 text-rose-700'
-  if (label === '下落警戒') return 'border-blue-200 bg-blue-50 text-blue-700'
-  if (label === '弱含み注意') return 'border-sky-200 bg-sky-50 text-sky-700'
-  return 'border-slate-200 bg-slate-50 text-slate-600'
+  if (label === '強気優勢') return 'border-transparent bg-[var(--color-price-up-bg)] text-[var(--color-price-up)]'
+  if (label === '好転候補') return 'border-[var(--color-price-up-bg)] bg-white text-[var(--color-price-up)]'
+  if (label === '下落警戒') return 'border-transparent bg-[var(--color-price-down-bg)] text-[var(--color-price-down)]'
+  if (label === '弱含み注意') return 'border-[var(--color-price-down-bg)] bg-white text-[var(--color-price-down)]'
+  return 'border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] text-[var(--color-text-secondary)]'
 }
 
 function materialToneClass(tone: string | null | undefined): string {
-  if (tone === 'good') return 'border-red-200 bg-red-50 text-red-700'
-  if (tone === 'bad') return 'border-blue-200 bg-blue-50 text-blue-700'
-  return 'border-slate-200 bg-slate-50 text-slate-600'
+  if (tone === 'good') return 'border-transparent bg-[var(--color-price-up-bg)] text-[var(--color-price-up)]'
+  if (tone === 'bad') return 'border-transparent bg-[var(--color-price-down-bg)] text-[var(--color-price-down)]'
+  return 'border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] text-[var(--color-text-secondary)]'
 }
 
 function materialToneLabel(tone: string | null | undefined): string {
@@ -106,15 +107,15 @@ function StageChip({ label, value }: { label: string; value: number | null | und
   const stage = value == null || !Number.isFinite(value) ? null : Math.round(value)
   return (
     <span
-      className="inline-grid min-w-[38px] gap-0.5 rounded-[6px] border px-1.5 py-1 text-center leading-none"
+      className="inline-grid min-w-[36px] gap-0.5 rounded-[4px] border px-1 py-1 text-center leading-none"
       style={{
         backgroundColor: stage ? `var(--color-stage-${stage}-bg)` : 'var(--color-surface-subtle)',
         borderColor: stage ? `var(--color-stage-${stage}-border, var(--color-border-soft))` : 'var(--color-border-soft)',
         color: stage ? `var(--color-stage-${stage}-text)` : 'var(--color-text-tertiary)',
       }}
     >
-      <span className="text-[9px] font-black">{label}</span>
-      <span className="font-mono text-[13px] font-black">{stage ?? '-'}</span>
+      <span className="text-[9px] font-bold">{label}</span>
+      <span className="font-mono text-[13px] font-bold">{stage ?? '-'}</span>
     </span>
   )
 }
@@ -145,7 +146,7 @@ function StageStrip({ stock }: { stock: ReturnType<typeof articleStockRows>[numb
           <StageChip key={key} label={label} value={info.stages[key]} />
         ))}
       </div>
-      <div className="font-mono text-[10px] font-black text-[var(--color-text-tertiary)]">6軸 {info.stageCode}</div>
+      <div className="font-mono text-[10px] font-bold text-[var(--color-text-tertiary)]">6軸 {info.stageCode}</div>
     </div>
   )
 }
@@ -155,7 +156,7 @@ function ShortTermCell({ stock }: { stock: ReturnType<typeof articleStockRows>[n
   if (!info) return <span className="text-[11px] font-bold text-[var(--color-text-tertiary)]">判定未取得</span>
   return (
     <div className="grid min-w-[132px] gap-1">
-      <span className={`w-fit rounded-full border px-2 py-1 text-[11px] font-black ${shortTermTone(info.shortTermCheckLabel)}`}>
+      <span className={`w-fit rounded-full border px-2 py-1 text-[11px] font-bold ${shortTermTone(info.shortTermCheckLabel)}`}>
         {info.shortTermCheckLabel}
       </span>
       <span className="text-[10px] font-bold text-[var(--color-text-tertiary)]">{info.shortTermCheckStrength}</span>
@@ -197,22 +198,73 @@ function ArticleStockTable({
   const rows = allRows.slice(0, maxStocks)
   if (allRows.length === 0) {
     return (
-      <div className="rounded-[8px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-4 py-5 text-center text-[12px] font-bold text-[var(--color-text-tertiary)]">
+      <p className="py-4 text-center text-[12px] text-[var(--color-text-tertiary)]">
         銘柄コードを読み取れませんでした。原文リンクで確認してください。
-      </div>
+      </p>
     )
   }
 
   return (
-    <div className="grid max-w-full gap-2">
+    <div className="grid min-w-0 max-w-full gap-2">
       {allRows.length > rows.length && (
-        <div className="rounded-[6px] border border-[var(--color-border-soft)] bg-white px-3 py-2 text-[10px] font-bold text-[var(--color-text-tertiary)]">
+        <p className="text-[11px] text-[var(--color-text-tertiary)]">
           関連 {allRows.length.toLocaleString()} 銘柄のうち、記事掲載順の先頭 {rows.length.toLocaleString()} 銘柄を表示しています。残りは原文で確認できます。
-        </div>
+        </p>
       )}
-      <div className="max-w-full overflow-x-auto rounded-[8px] border border-[var(--color-border-soft)] bg-white">
-        <table className="w-full min-w-[1540px] border-collapse text-left">
-        <thead className="bg-[var(--color-surface-subtle)] text-[10px] font-black tracking-wide text-[var(--color-text-tertiary)]">
+      <ul className="divide-y divide-[var(--color-border-soft)] rounded-[6px] border border-[var(--color-border-soft)] bg-white xl:hidden">
+        {rows.map((row) => (
+          <li key={`${article.articleId}-${row.ticker}`} className="grid gap-2 px-3 py-2.5">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="flex min-w-0 items-center gap-1.5">
+                  <Link
+                    href={`/stock/${encodeURIComponent(row.ticker)}`}
+                    prefetch={false}
+                    className="shrink-0 font-mono text-[13px] font-bold text-[var(--color-brand-800)] hover:underline"
+                  >
+                    {row.ticker}
+                  </Link>
+                  <span className="min-w-0 truncate text-[13px] font-semibold text-[var(--color-text-primary)]">{row.name}</span>
+                  <StockPreviewTrigger ticker={row.ticker} context="home" />
+                </div>
+                <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-[var(--color-text-tertiary)]">
+                  <span className={`rounded-[3px] border px-1.5 py-0.5 text-[10px] font-bold ${materialToneClass(row.materialTone)}`}>
+                    {materialToneLabel(row.materialTone)}
+                  </span>
+                  {row.screener && (
+                    <span className={`rounded-[3px] border px-1.5 py-0.5 text-[10px] font-bold ${shortTermTone(row.screener.shortTermCheckLabel)}`}>
+                      {row.screener.shortTermCheckLabel}
+                    </span>
+                  )}
+                  <span>{row.screener?.marketSegment || row.marketText || '市場---'}</span>
+                </div>
+              </div>
+              <div className="shrink-0 text-right font-mono tabular-nums">
+                <div className="text-[13px] font-bold text-[var(--color-text-primary)]">
+                  {row.screener ? `¥${formatNumber(row.screener.price, 1)}` : (row.closeText ?? '---')}
+                </div>
+                <div className={`text-[11px] font-bold ${changeTone(row.changeText)}`}>記事時 {row.changeText ?? '---'}</div>
+              </div>
+            </div>
+            {row.comment && (
+              <p className="text-[12px] leading-5 text-[var(--color-text-secondary)]">{row.comment}</p>
+            )}
+            {row.screener && (
+              <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+                <div className="flex gap-1 overflow-hidden">
+                  {STAGE_LABELS.map(([label, key]) => (
+                    <StageChip key={key} label={label} value={row.screener?.stages[key]} />
+                  ))}
+                </div>
+                <span className="font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]">出来高 {formatVolume(row.screener.volume)}</span>
+              </div>
+            )}
+          </li>
+        ))}
+      </ul>
+      <div className="table-scroll hidden rounded-[6px] border border-[var(--color-border-soft)] bg-white xl:block">
+        <table className="w-full min-w-[1440px] border-collapse text-left">
+        <thead className="bg-[var(--color-surface-subtle)] text-[11px] font-bold text-[var(--color-text-secondary)]">
           <tr>
             <th className="w-[90px] border-b border-[var(--color-border-soft)] px-3 py-2">コード</th>
             <th className="w-[180px] border-b border-[var(--color-border-soft)] px-3 py-2">銘柄名</th>
@@ -224,17 +276,16 @@ function ArticleStockTable({
             <th className="w-[150px] border-b border-[var(--color-border-soft)] px-3 py-2">短期チェック</th>
             <th className="w-[170px] border-b border-[var(--color-border-soft)] px-3 py-2">市場/業種</th>
             <th className="w-[150px] border-b border-[var(--color-border-soft)] px-3 py-2">出来高/属性</th>
-            <th className="w-[86px] border-b border-[var(--color-border-soft)] px-3 py-2">詳細</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-[var(--color-border-soft)]">
           {rows.map((row) => (
-            <tr key={`${article.articleId}-${row.ticker}`} className="align-top hover:bg-[var(--color-surface-subtle)]">
+            <tr key={`${article.articleId}-${row.ticker}`} className="align-top hover:bg-[#fff8e6]">
               <td className="px-3 py-2">
                 <Link
                   href={`/stock/${encodeURIComponent(row.ticker)}`}
                   prefetch={false}
-                  className="font-mono text-[12px] font-black text-[var(--color-brand-800)] hover:text-[var(--color-market-red)]"
+                  className="font-mono text-[12px] font-bold text-[var(--color-brand-800)] hover:underline"
                 >
                   {row.ticker}
                 </Link>
@@ -242,37 +293,28 @@ function ArticleStockTable({
               <td className="px-3 py-2">
                 <div className="grid gap-1">
                   <span className="flex min-w-0 items-center gap-1">
-                    <span className="min-w-0 truncate text-[12px] font-black text-[var(--color-brand-900)]">{row.name}</span>
+                    <span className="min-w-0 truncate text-[12px] font-bold text-[var(--color-text-primary)]">{row.name}</span>
                     <StockPreviewTrigger ticker={row.ticker} context="home" />
                   </span>
-                  <span className={`w-fit rounded-full border px-2 py-0.5 text-[10px] font-black ${materialToneClass(row.materialTone)}`}>
+                  <span className={`w-fit rounded-[3px] border px-1.5 py-0.5 text-[10px] font-bold ${materialToneClass(row.materialTone)}`}>
                     {materialToneLabel(row.materialTone)}
                   </span>
                 </div>
               </td>
-              <td className="px-3 py-2 text-right font-mono text-[11px] font-bold text-[var(--color-text-secondary)]">{row.closeText ?? '---'}</td>
-              <td className={`px-3 py-2 text-right font-mono text-[11px] font-black ${changeTone(row.changeText)}`}>{row.changeText ?? '---'}</td>
-              <td className="px-3 py-2 text-[11px] font-semibold leading-5 text-[var(--color-text-secondary)]">
+              <td className="px-3 py-2 text-right font-mono text-[11px] font-semibold text-[var(--color-text-secondary)]">{row.closeText ?? '---'}</td>
+              <td className={`px-3 py-2 text-right font-mono text-[11px] font-bold ${changeTone(row.changeText)}`}>{row.changeText ?? '---'}</td>
+              <td className="px-3 py-2 text-[11px] leading-5 text-[var(--color-text-secondary)]">
                 {row.comment ?? (
                   <span className="text-[var(--color-text-tertiary)]">コメントは原文で確認</span>
                 )}
               </td>
-              <td className="px-3 py-2 text-right font-mono text-[12px] font-black text-[var(--color-brand-900)]">
+              <td className="px-3 py-2 text-right font-mono text-[12px] font-bold text-[var(--color-text-primary)]">
                 {row.screener ? `¥${formatNumber(row.screener.price, 1)}` : '---'}
               </td>
               <td className="px-3 py-2"><StageStrip stock={row} /></td>
               <td className="px-3 py-2"><ShortTermCell stock={row} /></td>
               <td className="px-3 py-2"><MarketCell stock={row} /></td>
               <td className="px-3 py-2"><LiquidityCell stock={row} /></td>
-              <td className="px-3 py-2">
-                <Link
-                  href={`/stock/${encodeURIComponent(row.ticker)}`}
-                  prefetch={false}
-                  className="rounded-full border border-[var(--color-border-soft)] bg-white px-2 py-1 text-[10px] font-black text-[var(--color-text-secondary)] hover:border-[var(--color-market-red)] hover:text-[var(--color-market-red)]"
-                >
-                  開く
-                </Link>
-              </td>
             </tr>
           ))}
         </tbody>
@@ -294,55 +336,53 @@ function ArticleDisclosure({
   const rows = articleStockRows(article)
   const preview = rows.slice(0, 3).map((row) => row.name).join(' / ')
   return (
-    <details open={defaultOpen} className="group min-w-0 max-w-full rounded-[8px] border border-[var(--color-border-soft)] bg-white shadow-[0_1px_0_rgba(15,23,42,0.03)]">
-      <summary className="grid min-w-0 cursor-pointer list-none gap-3 px-3 py-3 hover:bg-[var(--color-surface-subtle)] lg:grid-cols-[112px_minmax(0,1fr)_120px_112px] lg:items-center">
-        <div className="flex items-center gap-2">
-          <span className="flex h-6 w-6 items-center justify-center rounded-full border border-rose-200 bg-rose-50 text-[11px] font-black text-rose-700 group-open:bg-rose-100 group-open:rotate-180">
-            ▾
-          </span>
-          <time className="font-mono text-[11px] font-black text-[var(--color-text-secondary)]" dateTime={article.publishedAt}>
+    <li className="min-w-0">
+      <details open={defaultOpen} className="group min-w-0 max-w-full">
+        <summary className="grid min-w-0 cursor-pointer list-none grid-cols-[20px_minmax(0,1fr)] gap-x-3 gap-y-1 py-3 hover:bg-[var(--color-surface-subtle)] md:grid-cols-[20px_96px_minmax(0,1fr)_auto] md:items-center">
+          <ChevronDown size={16} aria-hidden className="mt-0.5 text-[var(--color-text-tertiary)] transition-transform group-open:rotate-180 md:mt-0" />
+          <time className="font-mono text-[11px] font-semibold tabular-nums text-[var(--color-text-tertiary)] md:order-none" dateTime={article.publishedAt}>
             {formatDateTime(article.publishedAt)}
           </time>
-        </div>
-        <div className="min-w-0">
-          <div className="truncate text-[13px] font-black text-[var(--color-brand-900)] group-hover:text-[var(--color-market-red)]">
-            {article.title}
-          </div>
-          <a
-            href={article.url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="mt-1 block truncate font-mono text-[10px] font-bold text-[var(--color-market-red)] hover:underline"
-          >
-            {displayUrl(article.url)}
-          </a>
-          {preview && (
-            <div className="mt-1 truncate text-[11px] font-bold text-[var(--color-text-tertiary)]">
-              読み取り銘柄: {preview}{rows.length > 3 ? ` ほか${rows.length - 3}件` : ''}
+          <div className="col-start-2 min-w-0 md:col-start-auto">
+            <div className="line-clamp-2 text-[13px] font-bold leading-snug text-[var(--color-text-primary)] md:truncate">
+              {article.title}
             </div>
-          )}
+            {preview && (
+              <div className="mt-0.5 truncate text-[11px] text-[var(--color-text-tertiary)]">
+                {preview}{rows.length > 3 ? ` ほか${rows.length - 3}件` : ''}
+              </div>
+            )}
+          </div>
+          <div className="col-start-2 flex items-center gap-2 md:col-start-auto">
+            <span className="text-[12px] font-semibold tabular-nums text-[var(--color-text-secondary)]">{rows.length}銘柄</span>
+            <StatusTag tone={article.parseStatus === 'ok' ? 'neutral' : 'warning'}>
+              {article.parseStatus === 'ok' ? '取得済' : '一覧のみ'}
+            </StatusTag>
+          </div>
+        </summary>
+        <div className="grid min-w-0 gap-3 pb-4 md:pl-[32px]">
+          <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
+            {article.snippet && (
+              <p className="min-w-0 max-w-[880px] flex-1 border-l-2 border-[var(--color-border-default)] pl-3 text-[12px] leading-5 text-[var(--color-text-secondary)]">
+                {article.snippet}
+              </p>
+            )}
+            <a
+              href={article.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="btn"
+              data-size="sm"
+              title={displayUrl(article.url)}
+            >
+              原文を開く
+              <ExternalLink size={13} aria-hidden />
+            </a>
+          </div>
+          <ArticleStockTable article={article} maxStocks={maxStocks} />
         </div>
-        <div className="flex items-center gap-2">
-          <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-black text-slate-700">
-            {rows.length}銘柄
-          </span>
-          <span className={`rounded-full border px-2 py-1 text-[10px] font-black ${article.parseStatus === 'ok' ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-amber-200 bg-amber-50 text-amber-700'}`}>
-            {article.parseStatus === 'ok' ? '取得済' : '一覧のみ'}
-          </span>
-        </div>
-        <div className="text-[11px] font-black text-[var(--color-text-tertiary)] group-open:text-[var(--color-brand-900)]">
-          銘柄表を開く/閉じる
-        </div>
-      </summary>
-      <div className="min-w-0 border-t border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] p-3">
-        {article.snippet && (
-          <p className="mb-3 rounded-[6px] border border-[var(--color-border-soft)] bg-white px-3 py-2 text-[11px] font-semibold leading-5 text-[var(--color-text-secondary)]">
-            {article.snippet}
-          </p>
-        )}
-        <ArticleStockTable article={article} maxStocks={maxStocks} />
-      </div>
-    </details>
+      </details>
+    </li>
   )
 }
 
@@ -354,11 +394,11 @@ function NewsTable({
   maxStocks: number
 }) {
   return (
-    <div className="grid min-w-0 gap-3">
+    <ol className="min-w-0 divide-y divide-[var(--color-border-soft)] border-b border-[var(--color-border-soft)]">
       {articles.map((article, index) => (
         <ArticleDisclosure key={article.articleId} article={article} defaultOpen={index === 0} maxStocks={maxStocks} />
       ))}
-    </div>
+    </ol>
   )
 }
 
@@ -374,25 +414,20 @@ function NewsSection({
   maxStocks: number
 }) {
   return (
-    <section className="grid min-w-0 gap-3">
-      <div className="flex flex-wrap items-end justify-between gap-2">
-        <div>
-          <h3 className="text-[14px] font-black text-[var(--color-brand-900)]">{title}</h3>
-          <p className="mt-1 text-[11px] font-bold leading-5 text-[var(--color-text-tertiary)]">{description}</p>
-        </div>
-        <span className="rounded-full border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-2.5 py-1 text-[10px] font-black text-[var(--color-text-secondary)]">
-          {articles.length}記事
-        </span>
-      </div>
+    <section className="grid min-w-0 gap-1">
+      <SectionHeader
+        level={1}
+        title={title}
+        description={description}
+        actions={<span className="text-[12px] tabular-nums text-[var(--color-text-tertiary)]">{articles.length}記事</span>}
+      />
       {articles.length > 0 ? (
         <NewsTable articles={articles} maxStocks={maxStocks} />
       ) : (
-        <div className="rounded-[8px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-4 py-6 text-center">
-          <div className="text-[12px] font-black text-[var(--color-brand-900)]">保存済み記事はまだありません</div>
-          <p className="mt-2 text-[11px] font-semibold leading-5 text-[var(--color-text-tertiary)]">
-            `npm run batch:kabutan-material-news` を実行すると、取得できた対象記事がここに表示されます。
-          </p>
-        </div>
+        <EmptyState
+          title="保存済みの記事はまだありません"
+          description="次回のニュース取得後に、対象記事と関連銘柄がここに表示されます。"
+        />
       )}
     </section>
   )
@@ -526,60 +561,44 @@ export async function KabutanMaterialNews({ compact = false }: { compact?: boole
   }
 
   return (
-    <Card size="lg" className="p-0">
-      <CardHeader
-        title="株探ニュース"
-        hint={compact ? '投資判断に関係する最新見出しと主要銘柄を確認します。' : '前日に動いた銘柄と、明日の好悪材料を銘柄単位の表で確認します。'}
-        action={
-          <Link
-            href={compact ? '/materials' : 'https://kabutan.jp/news/marketnews/?category=2'}
-            target={compact ? undefined : '_blank'}
-            rel={compact ? undefined : 'noopener noreferrer'}
-            className="rounded-full border border-current/25 bg-white px-2.5 py-1 text-[10px] font-black hover:bg-[var(--color-surface-subtle)]"
+    <div className="flex min-w-0 flex-col gap-6">
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-[var(--color-border-soft)] pb-3 text-[12px] text-[var(--color-text-tertiary)]">
+        <span>出典: 株探。本文は転載せず、記事へのリンクと短い抜粋だけを表示します。</span>
+        <span className="flex flex-wrap items-center gap-2 tabular-nums">
+          <span>最終取得 {formatRunTime(lastRun?.finishedAt ?? lastRun?.startedAt)}</span>
+          <StatusTag tone={runTone(status)}>{compactRunText(status).label}</StatusTag>
+          {lastRun && <span>表示 {movers.articles.length + goodBad.articles.length}件</span>}
+          <a
+            href="https://kabutan.jp/news/marketnews/?category=2"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="btn"
+            data-size="sm"
           >
-            {compact ? '材料をすべて見る' : '株探を開く'}
-          </Link>
-        }
-      />
-      <div className="px-4 pb-4">
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <div className="text-[11px] font-bold leading-5 text-[var(--color-text-tertiary)]">
-            出典: 株探 / Kabutan。本文全文は転載せず、記事URLと短い抜粋だけを表示します。
-          </div>
-          <div className={`rounded-full border px-2.5 py-1 text-[10px] font-black ${runTone(status)}`}>
-            最終取得 {formatRunTime(lastRun?.finishedAt ?? lastRun?.startedAt)}
-            {lastRun ? ` / 表示 ${movers.articles.length + goodBad.articles.length}件` : ''}
-          </div>
-        </div>
-
-        {hasError && lastRun?.errorSummary && (
-          <p className="mb-3 rounded-[6px] border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] font-bold leading-5 text-amber-800">
-            最新取得に一部問題があります。保存済みニュースを表示しています: {lastRun.errorSummary}
-          </p>
-        )}
-
-        {compact ? (
-          <div className="grid gap-5 lg:grid-cols-2">
-            <CompactNewsList title="前日に動いた銘柄" articles={movers.articles} />
-            <CompactNewsList title="明日の好悪材料" articles={goodBad.articles} />
-          </div>
-        ) : (
-          <div className="grid gap-5">
-            <NewsSection
-              title="前日に動いた銘柄"
-              description="市場ニュース「材料」の最新6記事から、記事内の材料コメントとStockBoard側のスクリーナー情報を並べます。"
-              articles={movers.articles}
-              maxStocks={12}
-            />
-            <NewsSection
-              title="明日の好悪材料"
-              description="市場ニュース「注目」の最新3記事を、好材料/悪材料別に銘柄単位で表示します。"
-              articles={goodBad.articles}
-              maxStocks={12}
-            />
-          </div>
-        )}
+            株探を開く
+            <ExternalLink size={13} aria-hidden />
+          </a>
+        </span>
       </div>
-    </Card>
+
+      {hasError && lastRun?.errorSummary && (
+        <Notice tone="warning">
+          最新の取得で一部問題がありました。保存済みのニュースを表示しています: {lastRun.errorSummary}
+        </Notice>
+      )}
+
+      <NewsSection
+        title="前日に動いた銘柄"
+        description="株探「材料」の最新6記事から、材料コメントとステージ・短期チェックを並べます。"
+        articles={movers.articles}
+        maxStocks={12}
+      />
+      <NewsSection
+        title="明日の好悪材料"
+        description="株探「注目」の最新3記事を、好材料・悪材料ごとに銘柄単位で表示します。"
+        articles={goodBad.articles}
+        maxStocks={12}
+      />
+    </div>
   )
 }

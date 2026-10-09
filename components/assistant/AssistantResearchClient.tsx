@@ -3,7 +3,6 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { usePathname, useSearchParams } from 'next/navigation'
 import {
-  Bot,
   CalendarDays,
   Database,
   History,
@@ -16,6 +15,8 @@ import {
   Target,
 } from 'lucide-react'
 import { AssistantResponseCard, assistantStatusText } from '@/components/assistant/AssistantDrawer'
+import { PageTitle } from '@/components/layout/PageTitle'
+import { EmptyState, Notice } from '@/components/ui/EmptyState'
 import type {
   AssistantChatResponse,
   AssistantConversationMessage,
@@ -361,7 +362,7 @@ function formatSavedAt(value: number): string {
 function AssistantMessage({ item, onRun }: { item: AssistantChatEntry; onRun: (message: string) => void }) {
   if (item.role === 'user') {
     return (
-      <div className="ml-auto max-w-[820px] rounded-[6px] border border-[var(--color-brand-200)] bg-white px-4 py-3 text-[13px] font-bold leading-relaxed text-[var(--color-text-primary)] shadow-sm">
+      <div className="ml-auto max-w-[820px] rounded-[6px] border border-[var(--color-brand-200)] bg-white px-4 py-3 text-[13px] font-bold leading-relaxed text-[var(--color-text-primary)] ">
         {item.content}
       </div>
     )
@@ -641,92 +642,62 @@ export function AssistantResearchClient() {
   }
 
   return (
-    <div className="space-y-5">
-      <section className="overflow-hidden rounded-[8px] border border-[var(--color-border-strong)] bg-white">
-        <div className="grid gap-0 lg:grid-cols-[1fr_360px]">
-          <div className="border-b border-[var(--color-border-default)] bg-[var(--color-brand-800)] p-5 text-white lg:border-b-0 lg:border-r">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="inline-flex h-9 w-9 items-center justify-center rounded-[5px] border border-white/25 bg-white/10">
-                <Bot size={20} />
-              </span>
-              <div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <h1 className="text-[22px] font-black tracking-normal">AI銘柄リサーチ</h1>
-                  <span className="rounded-[3px] border border-white/30 bg-white/10 px-2 py-0.5 text-[10px] font-black">
-                    {researchMarket === 'US' ? '米国株' : researchMarket === 'COMMODITY' ? '商品' : '日本株'}
-                  </span>
-                </div>
-                <p className="mt-1 text-[12px] font-bold text-white/75">
-                  {isUsResearch
-                    ? '米国株専用DBの検索とML分析を、自然言語の相談へつなぎます。'
-                    : '自然言語の相談を、StockBoard内のDB検索と分析機能へつなぎます。'}
-                </p>
-              </div>
-            </div>
-            <div className="mt-5 grid gap-2 sm:grid-cols-3">
-              <div className="rounded-[6px] border border-white/20 bg-white/10 p-3">
-                <div className="flex items-center gap-2 text-[11px] font-black text-white">
-                  <MessageSquareText size={14} />
-                  聞き返し
-                </div>
-                <p className="mt-1 text-[11px] leading-relaxed text-white/72">
-                  条件が曖昧なときは、期間・市場・方向性を確認します。
-                </p>
-              </div>
-              <div className="rounded-[6px] border border-white/20 bg-white/10 p-3">
-                <div className="flex items-center gap-2 text-[11px] font-black text-white">
-                  <Database size={14} />
-                  DB根拠
-                </div>
-                <p className="mt-1 text-[11px] leading-relaxed text-white/72">
-                  {isUsResearch
-                    ? '6ステージ、PMS、物理ML、ML類似候補などの米国株データを参照します。'
-                    : '6ステージ、PMS、決算、ML類似候補などの既存データを参照します。'}
-                </p>
-              </div>
-              <div className="rounded-[6px] border border-white/20 bg-white/10 p-3">
-                <div className="flex items-center gap-2 text-[11px] font-black text-white">
-                  <ShieldCheck size={14} />
-                  読み取り専用
-                </div>
-                <p className="mt-1 text-[11px] leading-relaxed text-white/72">
-                  注文・DB更新・管理操作は行わず、候補抽出だけに限定します。
-                </p>
-              </div>
-            </div>
-          </div>
-          <aside className="bg-[var(--color-surface-subtle)] p-5">
-            <div className="rounded-[6px] border border-[var(--color-border-default)] bg-white p-3">
-              <div className="mb-2 flex items-center gap-2 text-[12px] font-black text-[var(--color-text-primary)]">
-                <Sparkles size={15} />
-                接続状態
-              </div>
-              <p className="text-[11px] font-bold leading-relaxed text-[var(--color-text-secondary)]">
-                {assistantStatusText(assistantStatus)}
-              </p>
-            </div>
-            <div className="mt-3 rounded-[6px] border border-[var(--color-border-default)] bg-white p-3">
-              <div className="mb-2 text-[12px] font-black text-[var(--color-text-primary)]">使い方</div>
-              <div className="space-y-2 text-[11px] font-semibold leading-relaxed text-[var(--color-text-secondary)]">
-                <p>まずは抽象的に相談しても大丈夫です。必要ならAIが条件を聞き返します。</p>
-                <p>候補が出たら、銘柄カードから個別ページやスクリーナーへ移動できます。</p>
-              </div>
-            </div>
-          </aside>
-        </div>
-      </section>
+    <div className="flex min-w-0 flex-col gap-5">
+      <PageTitle
+        eyebrow="銘柄探索"
+        title="AI銘柄リサーチ"
+        badge={researchMarket === 'US' ? '米国株' : researchMarket === 'COMMODITY' ? '商品' : '日本株'}
+        subtitle={isUsResearch
+          ? '米国株のDB検索とML分析を、自然言語の相談から使えます。条件が曖昧なときはAIが聞き返します。'
+          : '自然言語の相談から、StockBoard内のDB検索と分析機能を使えます。条件が曖昧なときはAIが聞き返します。'}
+        meta={
+          <>
+            <span><Database size={13} aria-hidden />{isUsResearch ? '6ステージ・PMS・物理ML・ML類似候補を参照' : '6ステージ・PMS・決算・ML類似候補を参照'}</span>
+            <span><ShieldCheck size={13} aria-hidden />読み取り専用（注文・DB更新は行いません）</span>
+            <span><Sparkles size={13} aria-hidden />{assistantStatusText(assistantStatus)}</span>
+          </>
+        }
+      />
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
-        <section className="rounded-[8px] border border-[var(--color-border-strong)] bg-[var(--color-surface-subtle)]">
-          <div className="border-b border-[var(--color-border-default)] bg-white p-4">
+        <section className="min-w-0 overflow-hidden rounded-[var(--radius-card)] border border-[var(--color-border-default)] bg-white" aria-label="リサーチ会話">
+          <div className="border-b border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] p-3 sm:p-4">
             <form onSubmit={onSubmit} className="space-y-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex items-center gap-2 text-[13px] font-black text-[var(--color-text-primary)]">
-                  <Search size={16} />
-                  探したい条件を入力
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-[10px] font-bold text-[var(--color-text-tertiary)]">
+                {researchMarket === 'JP' ? (
+                  <div className="view-tabs" role="group" aria-label="検索モード">
+                    <button
+                      type="button"
+                      onClick={() => setResearchMode('chat')}
+                      className="view-tab"
+                      data-active={researchMode === 'chat'}
+                      aria-pressed={researchMode === 'chat'}
+                      title="自由文で相談し、必要ならAIが条件を聞き返します。"
+                    >
+                      <MessageSquareText size={14} aria-hidden />
+                      通常会話
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setResearchMode('historicalAnchor')}
+                      className="view-tab"
+                      data-active={researchMode === 'historicalAnchor'}
+                      aria-pressed={researchMode === 'historicalAnchor'}
+                      title="特定銘柄の過去局面に、今まさに近い銘柄を探します。"
+                    >
+                      <History size={14} aria-hidden />
+                      過去アンカー類似
+                    </button>
+                  </div>
+                ) : (
+                  <span className="inline-flex items-center gap-1.5 text-[13px] font-bold text-[var(--color-text-primary)]">
+                    <ShieldCheck size={15} aria-hidden className="text-[var(--color-brand-700)]" />
+                    米国株専用リサーチ
+                    <span className="font-normal text-[12px] text-[var(--color-text-tertiary)]">日本株の結果は混在させません</span>
+                  </span>
+                )}
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-[12px] text-[var(--color-text-tertiary)]">
                     会話はこのブラウザに自動保存
                   </span>
                   {messages.length > 0 && (
@@ -735,7 +706,8 @@ export function AssistantResearchClient() {
                         type="button"
                         onClick={saveCurrentConversation}
                         title="今の会話を保存して、あとから開けるようにします"
-                        className="rounded-[4px] border border-[var(--color-brand-600)] bg-white px-2 py-1 text-[10px] font-black text-[var(--color-brand-800)] transition-colors hover:bg-[var(--color-surface-subtle)]"
+                        className="btn"
+                        data-size="sm"
                       >
                         {activeSavedConversationId ? '保存を更新' : 'この会話を保存'}
                       </button>
@@ -743,7 +715,9 @@ export function AssistantResearchClient() {
                         type="button"
                         onClick={clearConversation}
                         title="この画面の会話履歴だけを消して、新しい相談を始めます"
-                        className="rounded-[4px] border border-[var(--color-border-default)] bg-white px-2 py-1 text-[10px] font-black text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-subtle)]"
+                        className="btn"
+                        data-size="sm"
+                        data-variant="ghost"
                       >
                         新しい会話
                       </button>
@@ -751,58 +725,15 @@ export function AssistantResearchClient() {
                   )}
                 </div>
               </div>
-              {researchMarket === 'JP' ? (
-                <div className="grid gap-2 sm:grid-cols-2">
-                  <button
-                    type="button"
-                    onClick={() => setResearchMode('chat')}
-                    className={`rounded-[6px] border px-3 py-2 text-left transition-colors ${
-                      researchMode === 'chat'
-                        ? 'border-[var(--color-brand-700)] bg-[var(--color-brand-50)]'
-                        : 'border-[var(--color-border-default)] bg-white hover:bg-[var(--color-surface-subtle)]'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2 text-[12px] font-black text-[var(--color-text-primary)]">
-                      <MessageSquareText size={15} />
-                      通常会話
-                    </div>
-                    <p className="mt-1 text-[10px] font-semibold leading-relaxed text-[var(--color-text-secondary)]">
-                      自由文で相談し、必要ならAIが条件を聞き返します。
-                    </p>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setResearchMode('historicalAnchor')}
-                    className={`rounded-[6px] border px-3 py-2 text-left transition-colors ${
-                      researchMode === 'historicalAnchor'
-                        ? 'border-[var(--color-brand-700)] bg-[var(--color-brand-50)]'
-                        : 'border-[var(--color-border-default)] bg-white hover:bg-[var(--color-surface-subtle)]'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2 text-[12px] font-black text-[var(--color-text-primary)]">
-                      <History size={15} />
-                      過去アンカー類似
-                    </div>
-                    <p className="mt-1 text-[10px] font-semibold leading-relaxed text-[var(--color-text-secondary)]">
-                      特定銘柄の過去局面に、今まさに近い銘柄を探します。
-                    </p>
-                  </button>
-                </div>
-              ) : (
-                <div className="rounded-[6px] border border-[var(--color-brand-200)] bg-[var(--color-brand-50)] px-3 py-2">
-                  <div className="flex items-center gap-2 text-[12px] font-black text-[var(--color-brand-800)]">
-                    <ShieldCheck size={15} />
-                    米国株専用リサーチ
-                  </div>
-                  <p className="mt-1 text-[10px] font-semibold leading-relaxed text-[var(--color-text-secondary)]">
-                    検索・候補抽出・保存会話は米国株だけで完結し、日本株の結果を混在させません。
-                  </p>
-                </div>
+              {researchMarket === 'JP' && (
+                <p className="m-0 text-[12px] text-[var(--color-text-secondary)]">
+                  {researchMode === 'chat'
+                    ? '自由文で相談し、必要ならAIが条件を聞き返します。'
+                    : '特定銘柄の過去局面に、今まさに近い銘柄を探します。'}
+                </p>
               )}
               {saveNotice && (
-                <div className="rounded-[4px] border border-[var(--color-brand-200)] bg-[var(--color-brand-50)] px-2.5 py-1.5 text-[11px] font-bold text-[var(--color-brand-800)]">
-                  {saveNotice}
-                </div>
+                <Notice tone="info" role="status">{saveNotice}</Notice>
               )}
               {researchMarket !== 'JP' || researchMode === 'chat' ? (
                 <div className="flex flex-col gap-2 md:flex-row md:items-end">
@@ -812,34 +743,38 @@ export function AssistantResearchClient() {
                     placeholder={isUsResearch
                       ? '例: 米国株で物理ML上昇候補を、PMSと出来高も含めて10件探して'
                       : '例: 日経225で初動があり、貸借で、PMSと6ステージが強い候補を10件探して'}
-                    className="min-h-[78px] flex-1 resize-none rounded-[6px] border border-[var(--color-border-default)] px-3 py-2 text-[13px] font-semibold leading-relaxed outline-none focus:border-[var(--color-brand-600)]"
+                    aria-label="探したい条件"
+                    className="min-h-[78px] flex-1 resize-none rounded-[6px] border border-[var(--color-border-default)] bg-white px-3 py-2 text-[14px] leading-relaxed outline-none focus:border-[var(--color-brand-600)]"
                     rows={3}
                   />
                   <button
                     type="submit"
                     disabled={loading || !input.trim()}
-                    className="inline-flex h-11 shrink-0 items-center justify-center gap-2 rounded-[6px] bg-[var(--color-brand-800)] px-5 text-[13px] font-black text-white transition-colors hover:bg-[var(--color-brand-900)] disabled:cursor-not-allowed disabled:opacity-45"
+                    className="btn shrink-0"
+                    data-variant="primary"
+                    data-size="lg"
                   >
-                    {loading ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
+                    {loading ? <Loader2 size={16} className="animate-spin" aria-hidden /> : <Send size={16} aria-hidden />}
                     送信
                   </button>
                 </div>
               ) : (
-                <div className="rounded-[8px] border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] p-3">
+                <fieldset className="m-0 min-w-0 border-0 border-t border-[var(--color-border-soft)] p-0 pt-3" aria-labelledby="anchor-search-title">
                   <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                    <div>
-                      <div className="flex items-center gap-2 text-[13px] font-black text-[var(--color-text-primary)]">
-                        <Target size={16} />
+                    <div className="min-w-0">
+                      <h2 id="anchor-search-title" className="flex items-center gap-2 text-[13px] font-bold text-[var(--color-text-primary)]">
+                        <Target size={15} aria-hidden />
                         過去アンカー類似検索
-                      </div>
-                      <p className="mt-1 text-[11px] font-semibold leading-relaxed text-[var(--color-text-secondary)]">
+                      </h2>
+                      <p className="m-0 mt-1 text-[12px] leading-relaxed text-[var(--color-text-secondary)]">
                         アンカー期間全体の物理特徴量を平均し、現在の銘柄形状と比較します。
                       </p>
                     </div>
                     <button
                       type="button"
                       onClick={useAnchorPreset7003}
-                      className="rounded-[4px] border border-[var(--color-border-default)] bg-white px-2.5 py-1.5 text-[10px] font-black text-[var(--color-brand-800)] hover:bg-[var(--color-surface-subtle)]"
+                      className="btn"
+                      data-size="sm"
                     >
                       7003下落前プリセット
                     </button>
@@ -921,49 +856,42 @@ export function AssistantResearchClient() {
                       type="button"
                       onClick={runHistoricalAnchorSearch}
                       disabled={loading || !anchorForm.anchorTicker.trim() || !anchorForm.anchorEndDate}
-                      className="inline-flex h-10 items-center justify-center gap-2 rounded-[6px] bg-[var(--color-brand-800)] px-4 text-[13px] font-black text-white transition-colors hover:bg-[var(--color-brand-900)] disabled:cursor-not-allowed disabled:opacity-45"
+                      className="btn h-10"
+                      data-variant="primary"
                     >
-                      {loading ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />}
+                      {loading ? <Loader2 size={16} className="animate-spin" aria-hidden /> : <Search size={16} aria-hidden />}
                       この条件で検索
                     </button>
                   </div>
-                  <div className="mt-3 rounded-[5px] border border-[var(--color-border-default)] bg-white px-3 py-2 text-[11px] font-semibold leading-relaxed text-[var(--color-text-secondary)]">
-                    <span className="font-black text-[var(--color-text-primary)]">解釈:</span>{' '}
+                  <p className="m-0 mt-3 border-l-2 border-[var(--color-brand-300)] pl-3 text-[12px] leading-relaxed text-[var(--color-text-secondary)]">
+                    <span className="font-bold text-[var(--color-text-primary)]">解釈:</span>{' '}
                     {anchorForm.anchorTicker || DEFAULT_ANCHOR_TICKER} の {anchorForm.anchorEndDate || DEFAULT_ANCHOR_END_DATE} 以前
                     約{anchorForm.lookbackTradingDays || DEFAULT_ANCHOR_LOOKBACK_DAYS}営業日の
                     {anchorForm.patternDirection === 'up' ? '上昇前形状' : '下落前形状'}に、今まさに近い銘柄を形状類似優先で探します。
-                  </div>
-                </div>
+                  </p>
+                </fieldset>
               )}
             </form>
           </div>
 
-          <div className="min-h-[420px] p-4">
+          <div className="min-h-[420px] p-3 sm:p-4">
             {messages.length === 0 && !loading && (
-              <div className="rounded-[6px] border border-dashed border-[var(--color-border-default)] bg-white p-6 text-center">
-                <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-[6px] border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] text-[var(--color-brand-800)]">
-                  <MessageSquareText size={22} />
-                </div>
-                <div className="mt-3 text-[14px] font-black text-[var(--color-text-primary)]">
-                  会話しながら候補を絞り込みます
-                </div>
-                <p className="mx-auto mt-2 max-w-[620px] text-[12px] font-semibold leading-relaxed text-[var(--color-text-secondary)]">
-                  「良さそうな銘柄」のような曖昧な相談でも、AIが条件を聞き返し、StockBoardのDBにある根拠から候補を返します。
-                </p>
-              </div>
+              <EmptyState
+                icon={<MessageSquareText size={22} aria-hidden />}
+                title="会話しながら候補を絞り込みます"
+                description="「良さそうな銘柄」のような曖昧な相談でも、AIが条件を聞き返し、StockBoardのDBにある根拠から候補を返します。"
+              />
             )}
 
             {loading && (
-              <div className="mb-3 flex items-center gap-2 rounded-[6px] border border-[var(--color-border-default)] bg-white p-3 text-[12px] font-bold text-[var(--color-text-secondary)]">
-                <Loader2 size={15} className="animate-spin" />
+              <div className="mb-3 flex items-center gap-2 text-[13px] text-[var(--color-text-secondary)]" role="status" aria-live="polite">
+                <Loader2 size={15} className="animate-spin" aria-hidden />
                 AIが条件を整理し、必要なDB検索を実行しています。
               </div>
             )}
 
             {error && (
-              <div className="mb-3 rounded-[6px] border border-[var(--color-price-down)] bg-white p-3 text-[12px] font-bold text-[var(--color-price-down)]">
-                {error}
-              </div>
+              <Notice tone="error" role="alert" className="mb-3">{error}</Notice>
             )}
 
             <div className="space-y-4">
@@ -976,129 +904,125 @@ export function AssistantResearchClient() {
 
         <aside className="space-y-4">
           {researchMarket === 'JP' && (
-            <section className="rounded-[8px] border border-[var(--color-brand-200)] bg-white p-4">
-              <div className="flex items-start gap-2">
-                <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-[5px] border border-[var(--color-brand-200)] bg-[var(--color-brand-50)] text-[var(--color-brand-800)]">
-                  <History size={16} />
-                </span>
-                <div>
-                  <h2 className="text-[13px] font-black text-[var(--color-text-primary)]">過去アンカー類似モード</h2>
-                  <p className="mt-1 text-[11px] font-semibold leading-relaxed text-[var(--color-text-secondary)]">
-                    「あの銘柄があの時期に崩れる直前の形」に、今まさに近い銘柄を探す専用検索です。
-                  </p>
+            <section className="panel" aria-labelledby="anchor-mode-title">
+              <div className="panel-head">
+                <div className="flex min-w-0 items-center gap-2">
+                  <History size={15} aria-hidden className="shrink-0 text-[var(--color-brand-700)]" />
+                  <h2 id="anchor-mode-title">過去アンカー類似モード</h2>
                 </div>
               </div>
-              <div className="mt-3 grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={useAnchorPreset7003}
-                  className="rounded-[5px] border border-[var(--color-brand-600)] bg-[var(--color-brand-800)] px-3 py-2 text-left text-[11px] font-black leading-relaxed text-white transition-colors hover:bg-[var(--color-brand-900)]"
-                >
-                  7003下落前を型にする
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setResearchMode('historicalAnchor')
-                    setAnchorForm((prev) => ({ ...prev, patternDirection: 'up' }))
-                  }}
-                  className="rounded-[5px] border border-[var(--color-border-default)] bg-white px-3 py-2 text-left text-[11px] font-black leading-relaxed text-[var(--color-brand-800)] transition-colors hover:bg-[var(--color-surface-subtle)]"
-                >
-                  上昇前形状で探す
-                </button>
+              <div className="p-3">
+                <p className="m-0 text-[12px] leading-relaxed text-[var(--color-text-secondary)]">
+                  「あの銘柄があの時期に崩れる直前の形」に、今まさに近い銘柄を探す専用検索です。
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button type="button" onClick={useAnchorPreset7003} className="btn" data-size="sm" data-variant="primary">
+                    7003下落前を型にする
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setResearchMode('historicalAnchor')
+                      setAnchorForm((prev) => ({ ...prev, patternDirection: 'up' }))
+                    }}
+                    className="btn"
+                    data-size="sm"
+                  >
+                    上昇前形状で探す
+                  </button>
+                </div>
+                <p className="m-0 mt-3 text-[12px] leading-relaxed text-[var(--color-text-tertiary)]">
+                  ランキングは形状類似を主軸にし、PMS/PFS・物理ML・過去検証は補助根拠として表示します。
+                </p>
               </div>
-              <p className="mt-3 text-[10px] font-bold leading-relaxed text-[var(--color-text-tertiary)]">
-                ランキングは形状類似を主軸にし、PMS/PFS・物理ML・過去検証は補助根拠として表示します。
-              </p>
             </section>
           )}
 
-          <section className="rounded-[8px] border border-[var(--color-border-strong)] bg-white p-4">
-            <div className="flex items-center justify-between gap-2">
-              <h2 className="text-[13px] font-black text-[var(--color-text-primary)]">保存した会話</h2>
-              <span className="rounded-[3px] border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-2 py-1 text-[10px] font-black text-[var(--color-text-tertiary)]">
-                {savedConversations.length}件
-              </span>
+          <section className="panel" aria-labelledby="saved-conversations-title">
+            <div className="panel-head">
+              <h2 id="saved-conversations-title">保存した会話</h2>
+              <span className="text-[12px] tabular-nums text-[var(--color-text-tertiary)]">{savedConversations.length}件</span>
             </div>
             {savedConversations.length === 0 ? (
-              <p className="mt-3 text-[11px] font-semibold leading-relaxed text-[var(--color-text-secondary)]">
+              <p className="m-0 p-3 text-[12px] leading-relaxed text-[var(--color-text-secondary)]">
                 気に入った結果が出たら「この会話を保存」を押すと、ここから後で開けます。
               </p>
             ) : (
-              <div className="mt-3 max-h-[320px] space-y-2 overflow-auto pr-1">
-                {savedConversations.map((conversation) => (
-                  <div
-                    key={conversation.id}
-                    className={`rounded-[6px] border bg-white p-2 ${
-                      conversation.id === activeSavedConversationId
-                        ? 'border-[var(--color-brand-600)]'
-                        : 'border-[var(--color-border-default)]'
-                    }`}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => loadSavedConversation(conversation.id)}
-                      className="block w-full text-left"
+              <ul className="max-h-[320px] divide-y divide-[var(--color-border-soft)] overflow-auto">
+                {savedConversations.map((conversation) => {
+                  const active = conversation.id === activeSavedConversationId
+                  return (
+                    <li
+                      key={conversation.id}
+                      className={`px-3 py-2 ${active ? 'bg-[var(--color-brand-50)] shadow-[inset_3px_0_0_var(--color-brand-700)]' : ''}`}
                     >
-                      <div className="line-clamp-2 text-[12px] font-black leading-relaxed text-[var(--color-brand-800)]">
-                        {conversation.title}
-                      </div>
-                      <div className="mt-1 text-[10px] font-bold text-[var(--color-text-tertiary)]">
-                        更新 {formatSavedAt(conversation.updatedAt)} / {conversation.messages.length}件
-                      </div>
-                    </button>
-                    <div className="mt-2 flex items-center justify-between gap-2">
-                      <span className="line-clamp-1 text-[10px] font-semibold text-[var(--color-text-tertiary)]">
-                        {conversation.firstUserMessage ?? '会話メモ'}
-                      </span>
                       <button
                         type="button"
-                        onClick={() => deleteSavedConversation(conversation.id)}
-                        className="shrink-0 rounded-[4px] border border-[var(--color-border-default)] px-2 py-1 text-[10px] font-black text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-subtle)]"
+                        onClick={() => loadSavedConversation(conversation.id)}
+                        className="block w-full text-left"
+                        aria-current={active ? 'true' : undefined}
                       >
-                        削除
+                        <span className="line-clamp-2 text-[13px] font-semibold leading-relaxed text-[var(--color-brand-800)] hover:underline">
+                          {conversation.title}
+                        </span>
+                        <span className="mt-0.5 block text-[11px] tabular-nums text-[var(--color-text-tertiary)]">
+                          更新 {formatSavedAt(conversation.updatedAt)} / {conversation.messages.length}件
+                        </span>
                       </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
+                      <div className="mt-1 flex items-center justify-between gap-2">
+                        <span className="line-clamp-1 text-[11px] text-[var(--color-text-tertiary)]">
+                          {conversation.firstUserMessage ?? '会話メモ'}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => deleteSavedConversation(conversation.id)}
+                          className="btn shrink-0"
+                          data-size="sm"
+                          data-variant="ghost"
+                        >
+                          削除
+                        </button>
+                      </div>
+                    </li>
+                  )
+                })}
+              </ul>
             )}
           </section>
 
           {promptGroups.map((group) => (
-            <section key={group.title} className="rounded-[8px] border border-[var(--color-border-strong)] bg-white p-4">
-              <h2 className="text-[13px] font-black text-[var(--color-text-primary)]">{group.title}</h2>
-              <div className="mt-3 space-y-2">
+            <section key={group.title} className="panel" aria-label={group.title}>
+              <div className="panel-head"><h2>{group.title}</h2></div>
+              <ul className="divide-y divide-[var(--color-border-soft)]">
                 {group.prompts.map((prompt) => (
-                  <button
-                    key={prompt}
-                    type="button"
-                    onClick={() => void run(prompt)}
-                    className="block w-full rounded-[6px] border border-[var(--color-border-default)] bg-white px-3 py-2 text-left text-[12px] font-bold leading-relaxed text-[var(--color-brand-800)] transition-colors hover:bg-[var(--color-surface-subtle)] disabled:opacity-50"
-                    disabled={loading}
-                  >
-                    {prompt}
-                  </button>
+                  <li key={prompt}>
+                    <button
+                      type="button"
+                      onClick={() => void run(prompt)}
+                      className="flex w-full items-start gap-2 px-3 py-2 text-left text-[13px] leading-relaxed text-[var(--color-brand-800)] transition-colors hover:bg-[var(--color-surface-subtle)] disabled:opacity-50"
+                      disabled={loading}
+                    >
+                      <Send size={12} aria-hidden className="mt-1.5 shrink-0 text-[var(--color-text-tertiary)]" />
+                      {prompt}
+                    </button>
+                  </li>
                 ))}
-              </div>
+              </ul>
             </section>
           ))}
 
-          <section className="rounded-[8px] border border-[var(--color-border-default)] bg-white p-4">
-            <h2 className="text-[13px] font-black text-[var(--color-text-primary)]">参照できる主な情報</h2>
-            <div className="mt-3 flex flex-wrap gap-2">
-              {referenceItems.map((item) => (
-                <span
-                  key={item}
-                  className="rounded-[3px] border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-2 py-1 text-[10px] font-black text-[var(--color-text-secondary)]"
-                >
-                  {item}
-                </span>
-              ))}
+          <section className="panel" aria-labelledby="reference-items-title">
+            <div className="panel-head"><h2 id="reference-items-title">参照できる主な情報</h2></div>
+            <div className="p-3">
+              <div className="flex flex-wrap gap-1.5">
+                {referenceItems.map((item) => (
+                  <span key={item} className="status-tag">{item}</span>
+                ))}
+              </div>
+              <p className="m-0 mt-3 text-[12px] leading-relaxed text-[var(--color-text-tertiary)]">
+                返答はStockBoard内のデータ検索結果を前提にします。データが不足している条件は、追加条件の確認または候補なしとして扱います。
+              </p>
             </div>
-            <p className="mt-3 text-[11px] font-semibold leading-relaxed text-[var(--color-text-tertiary)]">
-              返答はStockBoard内のデータ検索結果を前提にします。データが不足している条件は、追加条件の確認または候補なしとして扱います。
-            </p>
           </section>
         </aside>
       </div>

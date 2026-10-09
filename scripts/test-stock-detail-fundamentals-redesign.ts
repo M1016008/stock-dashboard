@@ -177,7 +177,8 @@ assert.match(summary, /if \(variant === 'overview'\) \{\s+getJson<StockSectorCon
 assert.equal(count(summary, /urls\.sector/g), 1)
 assert.match(summary, /<MetricLadder title=\{group\.ladderTitle\}/)
 assert.match(summary, /grid gap-x-6 gap-y-5 px-4 py-4 sm:grid-cols-2 sm:px-5 xl:grid-cols-4/)
-assert.match(summary, /overflow-hidden border border-\[var\(--color-border-default\)\] bg-white shadow-\[0_1px_3px_rgba\(16,32,52,0\.05\)\]/)
+assert.match(summary, /overflow-hidden rounded-\[var\(--radius-card\)\] border border-\[var\(--color-border-default\)\] bg-white/)
+assert.doesNotMatch(summary, /shadow-\[0_1px_3px_rgba\(16,32,52,0\.05\)\]/)
 assert.match(summary, /配当性向\(実績\) 利益に対する配当の割合/)
 {
   const overviewJsx = summary.slice(summary.indexOf('return (\n    <div className="space-y-4 md:space-y-6">'))

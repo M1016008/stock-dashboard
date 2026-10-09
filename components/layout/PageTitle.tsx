@@ -1,35 +1,68 @@
 // components/layout/PageTitle.tsx
 //
-// Kabutan 調: ページ先頭に置く、高密度な市況パネル型タイトル。
+// ページ先頭の見出し帯。枠やグラデーションを持たず、下罫線 1 本で本文と区切る。
+// - eyebrow: 所属する機能群 (例: 市場・業種)。英字の装飾ラベルは使わない
+// - badge:   現在の表示状態 (例: 日経225 / 過去日表示)
+// - meta:    基準日・件数など、ページ全体に効く事実
+// - rightSlot: ページ単位の操作
+// - children: ローカルナビ (ViewTabs) など、見出しと一体で読む帯
+
+type StatusTone = 'neutral' | 'brand' | 'positive' | 'warning' | 'danger'
 
 interface PageTitleProps {
   title: string
-  subtitle?: string
+  subtitle?: React.ReactNode
+  eyebrow?: string
   badge?: string
+  badgeTone?: StatusTone
+  meta?: React.ReactNode
   rightSlot?: React.ReactNode
+  children?: React.ReactNode
 }
 
-export function PageTitle({ title, subtitle, badge, rightSlot }: PageTitleProps) {
+export function PageTitle({
+  title,
+  subtitle,
+  eyebrow,
+  badge,
+  badgeTone = 'brand',
+  meta,
+  rightSlot,
+  children,
+}: PageTitleProps) {
   return (
-    <div className="overflow-hidden rounded-[var(--radius-card)] border border-[var(--color-border-default)] bg-white shadow-[var(--shadow-card)]">
-      <div className="relative border-t-[3px] border-t-[var(--color-brand-700)] bg-[linear-gradient(90deg,var(--color-brand-50),#fff_72%)] px-4 py-3 before:absolute before:left-0 before:top-[-3px] before:h-[3px] before:w-[124px] before:bg-[var(--color-market-red)]">
-        <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
-          <div className="min-w-0">
-            <h1 className="text-[22px] font-bold leading-tight text-[var(--color-brand-900)] sm:text-[24px]">{title}</h1>
-            {subtitle && (
-              <div className="mt-1 text-[12px] font-semibold text-[var(--color-text-secondary)]">{subtitle}</div>
-            )}
+    <header className="page-header">
+      <div className="page-header__row">
+        <div className="page-header__copy">
+          {eyebrow && <p className="page-header__eyebrow">{eyebrow}</p>}
+          <div className="page-header__title">
+            <h1>{title}</h1>
+            {badge && <StatusTag tone={badgeTone}>{badge}</StatusTag>}
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            {rightSlot}
-            {badge && (
-              <span className="inline-flex h-7 items-center rounded-[3px] border border-[var(--color-border-default)] bg-white px-2.5 text-[11px] font-bold text-[var(--color-brand-800)] shadow-[inset_3px_0_0_var(--color-market-red)]">
-                {badge}
-              </span>
-            )}
-          </div>
+          {subtitle && <p className="page-header__desc">{subtitle}</p>}
+          {meta && <div className="page-header__meta">{meta}</div>}
         </div>
+        {rightSlot && <div className="page-header__aside">{rightSlot}</div>}
       </div>
-    </div>
+      {children && <div className="page-header__nav">{children}</div>}
+    </header>
+  )
+}
+
+export const PageHeader = PageTitle
+
+export function StatusTag({
+  tone = 'neutral',
+  children,
+  className = '',
+}: {
+  tone?: StatusTone
+  children: React.ReactNode
+  className?: string
+}) {
+  return (
+    <span className={`status-tag ${className}`} data-tone={tone}>
+      {children}
+    </span>
   )
 }

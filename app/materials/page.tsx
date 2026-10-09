@@ -13,7 +13,7 @@ export const metadata: Metadata = {
 
 function MaterialNewsFallback() {
   return (
-    <div className="h-[420px] animate-pulse border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)]" aria-label="材料ニュースを読み込み中" />
+    <div className="h-[420px] animate-pulse rounded-[6px] bg-[var(--color-surface-subtle)]" aria-label="材料ニュースを読み込み中" />
   )
 }
 
@@ -21,9 +21,9 @@ export default function MaterialsPage() {
   return (
     <div className="flex w-full flex-col gap-5">
       <PageTitle
+        eyebrow="市場・業種"
         title="材料ニュース"
-        subtitle="材料を見出しで終わらせず、関連銘柄の6ステージ・短期チェック・流動性まで同じ画面で確認します。"
-        badge="Materials"
+        subtitle="材料ニュースの関連銘柄を、6ステージ・短期チェック・出来高と合わせて確認します。"
       />
       <Suspense fallback={<MaterialNewsFallback />}>
         <KabutanMaterialNews />

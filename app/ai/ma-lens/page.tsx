@@ -3,7 +3,9 @@ import Link from 'next/link'
 import { Suspense } from 'react'
 import { PageTitle } from '@/components/layout/PageTitle'
 import { PhysicsMlCandidatesPanel } from '@/components/ml/PhysicsMlCandidatesPanel'
-import { Card, CardHeader } from '@/components/ui/Card'
+import { Card } from '@/components/ui/Card'
+import { PageSection, SectionHeader } from '@/components/ui/SectionHeader'
+import { StatStrip } from '@/components/ui/StatStrip'
 import { HistoricalPatternSearchPanel } from '@/components/ai/HistoricalPatternSearchPanel'
 import { PatternStatsTop } from '@/components/dashboard/PatternStatsTop'
 import { execAll, execGet } from '@/lib/db/client'
@@ -562,16 +564,6 @@ function StageCode({ code }: { code: string | null | undefined }) {
   )
 }
 
-function StatTile({ label, value, sub }: { label: string; value: string; sub?: string }) {
-  return (
-    <div className="rounded-[4px] border border-[var(--color-border-default)] bg-white px-3 py-2 shadow-sm">
-      <div className="text-[10px] font-bold text-[var(--color-text-tertiary)]">{label}</div>
-      <div className="mt-1 text-[17px] font-bold tabular-nums text-[var(--color-brand-900)]">{value}</div>
-      {sub && <div className="mt-1 text-[11px] font-semibold text-[var(--color-text-secondary)]">{sub}</div>}
-    </div>
-  )
-}
-
 function Pill({ children, tone = 'neutral' }: { children: React.ReactNode; tone?: 'red' | 'blue' | 'neutral' }) {
   const cls =
     tone === 'red'
@@ -633,14 +625,14 @@ function physicsStrength(row: ParsedPhysicsFlowRow): number {
 function PhysicsFlowMiniCard({ row }: { row: ParsedPhysicsFlowRow }) {
   const m = row.analysis.metrics
   return (
-    <div className="rounded-[4px] border border-[var(--color-border-default)] bg-white p-3 shadow-sm">
+    <div className="rounded-[4px] border border-[var(--color-border-default)] bg-white p-3 ">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <PhysicsBadge status={row.analysis.physicsStatus}>{row.analysis.physicsStatus}</PhysicsBadge>
             <PhysicsBadge status={row.analysis.pullbackVerdict}>{row.analysis.pullbackVerdict}</PhysicsBadge>
           </div>
-          <Link href={`/stock/${row.ticker}`} prefetch={false} className="mt-2 inline-flex text-[15px] font-bold text-[var(--color-brand-900)] hover:text-[var(--color-market-red)]">
+          <Link href={`/stock/${row.ticker}`} prefetch={false} className="mt-2 inline-flex text-[15px] font-bold text-[var(--color-brand-900)] hover:text-[var(--color-brand-900)]">
             {row.ticker} {row.name ?? ''}
           </Link>
           <div className="mt-1 text-[11px] font-semibold text-[var(--color-text-tertiary)]">{row.sector_large ?? '業種未設定'} / {fmtDate(row.date)}</div>
@@ -1173,7 +1165,7 @@ function CandidateCard({ candidate }: { candidate: ParsedCandidate }) {
             <Pill tone={tone}>{directionLabel(candidate.direction)}</Pill>
             <span className="text-[11px] font-bold text-[var(--color-text-tertiary)]">#{candidate.rank}</span>
           </div>
-          <Link href={`/stock/${candidate.ticker}`} prefetch={false} className="mt-2 inline-flex text-[17px] font-bold text-[var(--color-brand-900)] hover:text-[var(--color-market-red)]">
+          <Link href={`/stock/${candidate.ticker}`} prefetch={false} className="mt-2 inline-flex text-[17px] font-bold text-[var(--color-brand-900)] hover:text-[var(--color-brand-900)]">
             {candidate.ticker} {candidate.name ?? ''}
           </Link>
           <div className="mt-1 text-[11px] font-semibold text-[var(--color-text-tertiary)]">{candidate.sector_large ?? '業種未設定'}</div>
@@ -1250,7 +1242,7 @@ function PullbackLensCard({ row }: { row: PullbackLensRow }) {
               {pullbackVerdictLabel(row.verdict)}
             </span>
           </div>
-          <Link href={`/stock/${row.ticker}`} prefetch={false} className="mt-2 inline-flex text-[17px] font-bold text-[var(--color-brand-900)] hover:text-[var(--color-market-red)]">
+          <Link href={`/stock/${row.ticker}`} prefetch={false} className="mt-2 inline-flex text-[17px] font-bold text-[var(--color-brand-900)] hover:text-[var(--color-brand-900)]">
             {row.ticker} {row.name ?? ''}
           </Link>
           <div className="mt-1 text-[11px] font-semibold text-[var(--color-text-tertiary)]">{row.sector_large ?? '業種未設定'} / 基準日 {fmtDate(row.date)}</div>
@@ -1308,23 +1300,17 @@ function PullbackLensPanel({ rows }: { rows: PullbackLensRow[] }) {
   const fallingRows = rows.filter((row) => row.kind === 'falling')
   if (rows.length === 0) {
     return (
-      <Card size="lg">
-        <CardHeader
-          title="押し目 Lens"
-          hint="最新日の全銘柄から、押し目に見えるMA形状を探します。"
-        />
+      <PageSection title="押し目 Lens"
+          hint="最新日の全銘柄から、押し目に見えるMA形状を探します。">
         <div className="text-[12px] font-semibold text-[var(--color-text-tertiary)]">
           最新特徴量からは、押し目候補として十分なMA形状がまだ見つかっていません。
         </div>
-      </Card>
+      </PageSection>
     )
   }
   return (
-    <Card size="lg">
-      <CardHeader
-        title="押し目 Lens"
-        hint="最新日の全銘柄を対象に、MAの角度・並び・距離・株価位置から、押し目に見える形を上昇寄り/下落寄りに仕分けします。"
-      />
+    <PageSection title="押し目 Lens"
+        hint="最新日の全銘柄を対象に、MAの角度・並び・距離・株価位置から、押し目に見える形を上昇寄り/下落寄りに仕分けします。">
       <div className="grid gap-4 xl:grid-cols-2">
         <div className="space-y-3">
           <div>
@@ -1349,7 +1335,7 @@ function PullbackLensPanel({ rows }: { rows: PullbackLensRow[] }) {
           </div>
         </div>
       </div>
-    </Card>
+    </PageSection>
   )
 }
 
@@ -1377,7 +1363,7 @@ function EdgeMeter({ label, value, tone }: { label: string; value: number; tone:
 function DecisionMiniCard({ row, mode }: { row: LongShortDecisionRow; mode: 'expectation' | 'entry' | 'exit' | 'squeeze' }) {
   const direction: Direction = row.decision === 'short' || mode === 'squeeze' ? 'down' : 'up'
   return (
-    <div className="rounded-[4px] border border-[var(--color-border-default)] bg-white p-3 shadow-sm">
+    <div className="rounded-[4px] border border-[var(--color-border-default)] bg-white p-3 ">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
@@ -1394,7 +1380,7 @@ function DecisionMiniCard({ row, mode }: { row: LongShortDecisionRow; mode: 'exp
               </span>
             )}
           </div>
-          <Link href={`/stock/${row.ticker}`} prefetch={false} className="mt-2 inline-flex text-[15px] font-bold text-[var(--color-brand-900)] hover:text-[var(--color-market-red)]">
+          <Link href={`/stock/${row.ticker}`} prefetch={false} className="mt-2 inline-flex text-[15px] font-bold text-[var(--color-brand-900)] hover:text-[var(--color-brand-900)]">
             {row.ticker} {row.name ?? ''}
           </Link>
           <div className="mt-1 text-[11px] font-semibold text-[var(--color-text-tertiary)]">{row.sector_large ?? '業種未設定'}</div>
@@ -1440,11 +1426,8 @@ function ExpectedValuePanel({ rows }: { rows: LongShortDecisionRow[] }) {
   const longRows = rows.filter((row) => row.decision === 'long').sort((a, b) => b.longEdge - a.longEdge).slice(0, 6)
   const shortRows = rows.filter((row) => row.decision === 'short').sort((a, b) => b.shortEdge - a.shortEdge).slice(0, 6)
   return (
-    <Card size="lg">
-      <CardHeader
-        title="期待値ランキング"
-        hint="上昇候補と下落警戒を同じ土俵で比較し、勝率だけでなく逆方向リスクとMA形状を含めて並べます。"
-      />
+    <PageSection title="期待値ランキング"
+        hint="上昇候補と下落警戒を同じ土俵で比較し、勝率だけでなく逆方向リスクとMA形状を含めて並べます。">
       <div className="grid gap-4 xl:grid-cols-2">
         <div>
           <div className="mb-2 text-[14px] font-bold text-red-700">買い期待値 上位</div>
@@ -1463,7 +1446,7 @@ function ExpectedValuePanel({ rows }: { rows: LongShortDecisionRow[] }) {
           </div>
         </div>
       </div>
-    </Card>
+    </PageSection>
   )
 }
 
@@ -1473,15 +1456,12 @@ function EntryWaitPanel({ rows }: { rows: LongShortDecisionRow[] }) {
     .sort((a, b) => Math.max(b.longEdge, b.shortEdge) - Math.max(a.longEdge, a.shortEdge))
     .slice(0, 8)
   return (
-    <Card size="lg">
-      <CardHeader
-        title="エントリー待ち条件"
-        hint="候補をすぐ売買するのではなく、5日/25日MAと直近高値・安値の条件成立を待つための確認リストです。"
-      />
+    <PageSection title="エントリー待ち条件"
+        hint="候補をすぐ売買するのではなく、5日/25日MAと直近高値・安値の条件成立を待つための確認リストです。">
       <div className="grid gap-2 lg:grid-cols-2">
         {selected.map((row) => <DecisionMiniCard key={`entry-${row.ticker}`} row={row} mode="entry" />)}
       </div>
-    </Card>
+    </PageSection>
   )
 }
 
@@ -1491,15 +1471,12 @@ function ExitOptimizerPanel({ rows }: { rows: LongShortDecisionRow[] }) {
     .sort((a, b) => Math.max(b.longEdge, b.shortEdge) - Math.max(a.longEdge, a.shortEdge))
     .slice(0, 8)
   return (
-    <Card size="lg">
-      <CardHeader
-        title="利確・損切り最適化"
-        hint="過去ML候補の方向性に対して、直近高値・主要MAを使った出口条件を明示します。"
-      />
+    <PageSection title="利確・損切り最適化"
+        hint="過去ML候補の方向性に対して、直近高値・主要MAを使った出口条件を明示します。">
       <div className="grid gap-2 lg:grid-cols-2">
         {selected.map((row) => <DecisionMiniCard key={`exit-${row.ticker}`} row={row} mode="exit" />)}
       </div>
-    </Card>
+    </PageSection>
   )
 }
 
@@ -1512,26 +1489,20 @@ function SqueezeRiskPanel({ rows }: { rows: LongShortDecisionRow[] }) {
     })
     .slice(0, 8)
   return (
-    <Card size="lg">
-      <CardHeader
-        title="踏み上げリスク判定"
-        hint="空売り候補に対し、売残の偏りと短期MA回復を組み合わせ、急反発リスクを分けて表示します。"
-      />
+    <PageSection title="踏み上げリスク判定"
+        hint="空売り候補に対し、売残の偏りと短期MA回復を組み合わせ、急反発リスクを分けて表示します。">
       <div className="grid gap-2 lg:grid-cols-2">
         {selected.map((row) => <DecisionMiniCard key={`squeeze-${row.ticker}`} row={row} mode="squeeze" />)}
       </div>
-    </Card>
+    </PageSection>
   )
 }
 
 function LongShortComparisonPanel({ rows }: { rows: LongShortDecisionRow[] }) {
   const selected = rows.slice(0, 16)
   return (
-    <Card size="lg">
-      <CardHeader
-        title="ロング / ショート比較"
-        hint="同一銘柄を買い目線・売り目線の両方で評価し、買い優勢・売り優勢・見送りに分けます。"
-      />
+    <PageSection title="ロング / ショート比較"
+        hint="同一銘柄を買い目線・売り目線の両方で評価し、買い優勢・売り優勢・見送りに分けます。">
       <div className="overflow-x-auto">
         <table className="min-w-[880px] w-full border-collapse text-left text-[12px]">
           <thead>
@@ -1549,7 +1520,7 @@ function LongShortComparisonPanel({ rows }: { rows: LongShortDecisionRow[] }) {
             {selected.map((row) => (
               <tr key={`ls-${row.ticker}`} className="border-b border-[var(--color-border-subtle)] align-top">
                 <td className="px-3 py-2">
-                  <Link href={`/stock/${row.ticker}`} prefetch={false} className="font-bold text-[var(--color-brand-900)] hover:text-[var(--color-market-red)]">
+                  <Link href={`/stock/${row.ticker}`} prefetch={false} className="font-bold text-[var(--color-brand-900)] hover:text-[var(--color-brand-900)]">
                     {row.ticker} {row.name ?? ''}
                   </Link>
                   <div className="mt-1 text-[11px] font-semibold text-[var(--color-text-tertiary)]">{row.sector_large ?? '業種未設定'}</div>
@@ -1567,7 +1538,7 @@ function LongShortComparisonPanel({ rows }: { rows: LongShortDecisionRow[] }) {
           </tbody>
         </table>
       </div>
-    </Card>
+    </PageSection>
   )
 }
 
@@ -1607,11 +1578,8 @@ function topRowsForStatus(rows: ParsedPhysicsFlowRow[], status: PhysicsStatusLab
 function PhysicsFlowMapPanel({ rows }: { rows: ParsedPhysicsFlowRow[] }) {
   const total = rows.length
   return (
-    <Card size="lg">
-      <CardHeader
-        title="MA Flow Map"
-        hint="最新日の全銘柄を、SMAの速度・加速度・距離変化・6桁ステージから物理状態へ分類します。"
-      />
+    <PageSection title="MA Flow Map"
+        hint="最新日の全銘柄を、SMAの速度・加速度・距離変化・6桁ステージから物理状態へ分類します。">
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
         {PHYSICS_STATUS_ORDER.map((status) => {
           const count = rows.filter((row) => row.analysis.physicsStatus === status).length
@@ -1647,7 +1615,7 @@ function PhysicsFlowMapPanel({ rows }: { rows: ParsedPhysicsFlowRow[] }) {
           )
         })}
       </div>
-    </Card>
+    </PageSection>
   )
 }
 
@@ -1661,11 +1629,8 @@ function PhysicsPullbackQualityPanel({ rows }: { rows: ParsedPhysicsFlowRow[] })
     .sort((a, b) => physicsStrength(a) - physicsStrength(b))
     .slice(0, 8)
   return (
-    <Card size="lg">
-      <CardHeader
-        title="押し目の本物/偽物判定"
-        hint="押し目に見える形を、25日SMAの向き、5日SMAの再加速、MA距離の縮小/再拡大から分けます。"
-      />
+    <PageSection title="押し目の本物/偽物判定"
+        hint="押し目に見える形を、25日SMAの向き、5日SMAの再加速、MA距離の縮小/再拡大から分けます。">
       <div className="grid gap-4 xl:grid-cols-2">
         <div>
           <div className="mb-2 text-[14px] font-bold text-red-700">本物の押し目に近い</div>
@@ -1684,7 +1649,7 @@ function PhysicsPullbackQualityPanel({ rows }: { rows: ParsedPhysicsFlowRow[] })
           </div>
         </div>
       </div>
-    </Card>
+    </PageSection>
   )
 }
 
@@ -1698,11 +1663,8 @@ function PhysicsAccelerationPanel({ rows }: { rows: ParsedPhysicsFlowRow[] }) {
     .sort((a, b) => physicsStrength(a) - physicsStrength(b))
     .slice(0, 10)
   return (
-    <Card size="lg">
-      <CardHeader
-        title="加速度・失速ランキング"
-        hint="短期SMAの急な角度変化とMA距離の拡大/縮小から、流れが強まった銘柄と弱まった銘柄を並べます。"
-      />
+    <PageSection title="加速度・失速ランキング"
+        hint="短期SMAの急な角度変化とMA距離の拡大/縮小から、流れが強まった銘柄と弱まった銘柄を並べます。">
       <div className="grid gap-4 xl:grid-cols-2">
         <div className="space-y-2">
           <div className="text-[14px] font-bold text-red-700">上向き加速</div>
@@ -1713,7 +1675,7 @@ function PhysicsAccelerationPanel({ rows }: { rows: ParsedPhysicsFlowRow[] }) {
           {down.map((row) => <PhysicsFlowMiniCard key={`accel-down-${row.ticker}`} row={row} />)}
         </div>
       </div>
-    </Card>
+    </PageSection>
   )
 }
 
@@ -1728,28 +1690,22 @@ function PhysicsDistanceRiskPanel({ rows }: { rows: ParsedPhysicsFlowRow[] }) {
     .slice(0, 6)
   return (
     <section className="grid gap-5 xl:grid-cols-2">
-      <Card size="lg">
-        <CardHeader
-          title="過熱・反落リスク"
-          hint="5日SMAと25日SMAの距離が広がりすぎ、距離変化が急な銘柄を先に確認します。"
-        />
+      <PageSection title="過熱・反落リスク"
+          hint="5日SMAと25日SMAの距離が広がりすぎ、距離変化が急な銘柄を先に確認します。">
         <div className="grid gap-2">
           {overheat.length > 0 ? overheat.map((row) => <PhysicsFlowMiniCard key={`overheat-${row.ticker}`} row={row} />) : (
             <div className="text-[12px] font-semibold text-[var(--color-text-tertiary)]">過熱注意に該当する銘柄はありません。</div>
           )}
         </div>
-      </Card>
-      <Card size="lg">
-        <CardHeader
-          title="見送り・条件待ち"
-          hint="方向感が弱い、またはSMA距離が収束中で、無理に候補化しない方がよい銘柄です。"
-        />
+      </PageSection>
+      <PageSection title="見送り・条件待ち"
+          hint="方向感が弱い、またはSMA距離が収束中で、無理に候補化しない方がよい銘柄です。">
         <div className="grid gap-2">
           {wait.length > 0 ? wait.map((row) => <PhysicsFlowMiniCard key={`wait-${row.ticker}`} row={row} />) : (
             <div className="text-[12px] font-semibold text-[var(--color-text-tertiary)]">見送り分類の銘柄はありません。</div>
           )}
         </div>
-      </Card>
+      </PageSection>
     </section>
   )
 }
@@ -1765,11 +1721,8 @@ function PhysicsLearningGuidePanel() {
     ['次の行動', '候補は売買指示ではなく、5日SMA維持、25日SMAの向き、距離の再拡大/急縮小を確認するための優先順位です。'],
   ] as const
   return (
-    <Card size="lg">
-      <CardHeader
-        title="AIが学習しているチャート物理"
-        hint="予測結果だけではなく、なぜその形を候補・警戒・見送りに分けたのかを7つの軸で確認します。"
-      />
+    <PageSection title="AIが学習しているチャート物理"
+        hint="予測結果だけではなく、なぜその形を候補・警戒・見送りに分けたのかを7つの軸で確認します。">
       <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-7">
         {items.map(([title, body], index) => (
           <div key={title} className="rounded-[4px] border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] p-3">
@@ -1779,7 +1732,7 @@ function PhysicsLearningGuidePanel() {
           </div>
         ))}
       </div>
-    </Card>
+    </PageSection>
   )
 }
 
@@ -1877,10 +1830,9 @@ function EvaluationTable({ rows }: { rows: EvaluationRow[] }) {
 function ModelMonitoringPanel({ rows }: { rows: EvaluationRow[] }) {
   if (rows.length === 0) {
     return (
-      <Card size="lg">
-        <CardHeader title="モデル精度の時系列モニタリング" hint="日次予測の答え合わせを蓄積し、モデル劣化を検知します。" />
+      <PageSection title="モデル精度の時系列モニタリング" hint="日次予測の答え合わせを蓄積し、モデル劣化を検知します。">
         <div className="text-[12px] font-semibold text-[var(--color-text-tertiary)]">評価履歴はまだ生成されていません。</div>
-      </Card>
+      </PageSection>
     )
   }
   const dates = Array.from(new Set(rows.map((row) => row.evaluation_date)))
@@ -1889,11 +1841,8 @@ function ModelMonitoringPanel({ rows }: { rows: EvaluationRow[] }) {
   const latestRows = rows.filter((row) => row.evaluation_date === latestDate)
   const priorRows = rows.filter((row) => row.evaluation_date !== latestDate)
   return (
-    <Card size="lg">
-      <CardHeader
-        title="モデル精度の時系列モニタリング"
-        hint="買いモデルと空売りモデルを別々に答え合わせし、精度低下時は候補の信頼度を下げて扱います。"
-      />
+    <PageSection title="モデル精度の時系列モニタリング"
+        hint="買いモデルと空売りモデルを別々に答え合わせし、精度低下時は候補の信頼度を下げて扱います。">
       <div className="grid gap-3 lg:grid-cols-3">
         {latestRows.map((row) => (
           <div key={`monitor-${row.evaluation_date}-${row.direction}-${row.horizon_days}`} className="rounded-[4px] border border-[var(--color-border-default)] bg-white p-3">
@@ -1931,7 +1880,7 @@ function ModelMonitoringPanel({ rows }: { rows: EvaluationRow[] }) {
       <div className="mt-3">
         <EvaluationTable rows={rows.slice(0, 12)} />
       </div>
-    </Card>
+    </PageSection>
   )
 }
 
@@ -1969,12 +1918,11 @@ function SimilarPanel({ rows }: { rows: SimilarRow[] }) {
 
 function LazySectionFallback({ title }: { title: string }) {
   return (
-    <Card size="lg">
-      <CardHeader title={title} hint="表示に必要なデータを分割して読み込んでいます。" />
+    <PageSection title={title} hint="表示に必要なデータを分割して読み込んでいます。">
       <div className="rounded-[4px] border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] p-4 text-[12px] font-semibold text-[var(--color-text-secondary)]">
         読み込み中...
       </div>
-    </Card>
+    </PageSection>
   )
 }
 
@@ -2017,23 +1965,17 @@ async function ModelKnowledgeSection({ universe = null }: { universe?: UniverseF
   const fallbackModels = focusModels.length > 0 ? focusModels : models.slice(0, 2)
   return (
     <>
-      <Card size="lg">
-        <CardHeader
-          title="モデルが重視している特徴"
-          hint="ロジスティック回帰モデルの重みから、上昇候補・下落警戒の判定で効いている特徴を表示します。"
-        />
+      <PageSection title="モデルが重視している特徴"
+          hint="ロジスティック回帰モデルの重みから、上昇候補・下落警戒の判定で効いている特徴を表示します。">
         <div className="grid gap-3 lg:grid-cols-2">
           {fallbackModels.map((model) => <ModelCard key={model.model_name} model={model} />)}
         </div>
-      </Card>
+      </PageSection>
 
-      <Card size="lg">
-        <CardHeader
-          title="現在のMA形状が近い銘柄"
-          hint="最新日の候補銘柄同士を、6桁ステージ・MA角度・MA距離・株価位置の特徴量距離で比較します。"
-        />
+      <PageSection title="現在のMA形状が近い銘柄"
+          hint="最新日の候補銘柄同士を、6桁ステージ・MA角度・MA距離・株価位置の特徴量距離で比較します。">
         <SimilarPanel rows={scopedSimilars} />
-      </Card>
+      </PageSection>
 
       <ModelMonitoringPanel rows={evaluationTimeline.length > 0 ? evaluationTimeline : evaluations} />
     </>
@@ -2062,48 +2004,47 @@ export default async function MaLensPage({
   const downCandidates = candidates.filter((candidate) => candidate.direction === 'down').slice(0, 8)
 
   return (
-    <div className="space-y-5">
+    <div className="flex min-w-0 flex-col gap-6">
       <PageTitle
-        title="AI Lens"
-        subtitle="6桁ステージと移動平均線の角度・距離・位置を、機械学習がどう読んでいるかを可視化します。"
-        badge={`${universeMeta ? `${universeMeta.shortLabel} / ` : ''}ML基準日 ${fmtDate(status.latestCandidateDate ?? status.latestFeatureDate)}`}
+        eyebrow="分析・AI"
+        title="MA・類似分析"
+        subtitle="6桁ステージと移動平均線の角度・距離・位置を、機械学習がどう読んでいるかを確認します。"
+        badge={universeMeta?.shortLabel}
+        meta={<span>ML基準日 {fmtDate(status.latestCandidateDate ?? status.latestFeatureDate)}</span>}
+        rightSlot={
+          <Link href="#historical-pattern-search" className="btn">過去パターン検索へ</Link>
+        }
       />
 
-      <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
-        <StatTile label="特徴量期間" value={`${fmtDate(status.firstFeatureDate)}〜${fmtDate(status.latestFeatureDate)}`} sub="2008年以降のML入力" />
-        <StatTile label="最新特徴量" value={fmtCount(status.featureRowsLatest)} sub="最新日に生成済みの銘柄数" />
-        <StatTile label="物理特徴量" value={fmtCount(physicsStatus.rowsLatest)} sub={`${ML_PHYSICS_FEATURE_SET} ${fmtDate(physicsStatus.latestDate)}`} />
-        <StatTile label="教師ラベル" value={fmtDate(status.latestLabelDate)} sub={`${fmtCount(status.labelRowsLatest)}件 / 40営業日`} />
-        <StatTile label="最新候補" value={fmtCount(status.candidateRowsLatest)} sub="上昇候補・下落警戒" />
-        <StatTile label="モデル世代" value={fmtCount(status.modelCount)} sub="保存済みモデル数" />
-      </section>
+      <StatStrip
+        label="学習データの状況"
+        items={[
+          { label: '特徴量期間', value: `${fmtDate(status.firstFeatureDate)}〜${fmtDate(status.latestFeatureDate)}`, sub: '2008年以降の入力' },
+          { label: '最新特徴量', value: fmtCount(status.featureRowsLatest), sub: '最新日に生成済みの銘柄数' },
+          { label: '物理特徴量', value: fmtCount(physicsStatus.rowsLatest), sub: `${ML_PHYSICS_FEATURE_SET} ${fmtDate(physicsStatus.latestDate)}` },
+          { label: '教師ラベル', value: fmtDate(status.latestLabelDate), sub: `${fmtCount(status.labelRowsLatest)}件 / 40営業日` },
+          { label: '最新候補', value: fmtCount(status.candidateRowsLatest), sub: '上昇候補・下落警戒' },
+          { label: 'モデル世代', value: fmtCount(status.modelCount), sub: '保存済みモデル数' },
+        ]}
+      />
 
-      <Card size="lg">
-        <CardHeader
-          title="AIが見ている入力データ"
-          hint="一時点の価格だけではなく、MAの角度・距離・株価位置を時系列の流れとして特徴量化します。"
-        />
+      <PageSection title="AIが見ている入力データ"
+          hint="一時点の価格だけではなく、MAの角度・距離・株価位置を時系列の流れとして特徴量化します。">
         <FeatureInputGrid />
-      </Card>
+      </PageSection>
 
-      <Card id="historical-pattern-search" size="lg" className="scroll-mt-28">
-        <CardHeader
-          title="過去パターン検索"
-          hint="任意期間のMA形状と6桁ステージの流れを基準に、現在市場の類似銘柄を探します。"
-        />
+      <PageSection id="historical-pattern-search" className="scroll-mt-28" title="過去パターン検索"
+          hint="任意期間のMA形状と6桁ステージの流れを基準に、現在市場の類似銘柄を探します。">
         <HistoricalPatternSearchPanel latestFeatureDate={physicsStatus.latestDate} />
-      </Card>
+      </PageSection>
 
       <Suspense fallback={<LazySectionFallback title="パターン統計" />}>
         <PatternStatsTop />
       </Suspense>
 
       {!detailMode && (
-        <Card size="lg">
-          <CardHeader
-            title="詳細分析を開く"
-            hint="初期表示を軽くするため、全銘柄フロー・押し目Lens・期待値詳細・モデル知識は必要な時に読み込みます。"
-          />
+        <PageSection title="詳細分析を開く"
+            hint="初期表示を軽くするため、全銘柄フロー・押し目Lens・期待値詳細・モデル知識は必要な時に読み込みます。">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <p className="max-w-[760px] text-[12px] font-semibold leading-relaxed text-[var(--color-text-secondary)]">
               この画面の基本情報と最新候補はすぐ確認できます。全銘柄を横断する重い分析を確認する場合だけ、詳細モードに切り替えてください。
@@ -2111,12 +2052,13 @@ export default async function MaLensPage({
             <Link
               href={addUniverseToHref('/ai/ma-lens?deep=1', universeFilter)}
               prefetch={false}
-              className="rounded-full border border-[var(--color-border-soft)] bg-white px-4 py-2 text-[12px] font-bold text-[var(--color-brand-900)] hover:bg-[var(--color-surface-subtle)]"
+              className="btn"
+              data-variant="primary"
             >
               詳細分析を表示
             </Link>
           </div>
-        </Card>
+        </PageSection>
       )}
 
       {detailMode && (
@@ -2142,13 +2084,13 @@ export default async function MaLensPage({
       {detailMode && (
         <section className="grid gap-5 xl:grid-cols-2">
           <div className="space-y-3">
-            <CardHeader title="現在の上昇候補" hint="最新データ上で、MA形状と6桁ステージが上向き候補として抽出された銘柄です。" />
+            <SectionHeader level={1} title="現在の上昇候補" description="最新データ上で、MA形状と6桁ステージが上向き候補として抽出された銘柄です。" />
             <div className="grid gap-3">
               {upCandidates.map((candidate) => <CandidateCard key={`${candidate.direction}-${candidate.ticker}`} candidate={candidate} />)}
             </div>
           </div>
           <div className="space-y-3">
-            <CardHeader title="現在の下落警戒" hint="短期線の崩れ、MA距離の縮小、株価位置の弱さなどを含めて抽出された銘柄です。" />
+            <SectionHeader level={1} title="現在の下落警戒" description="短期線の崩れ、MA距離の縮小、株価位置の弱さなどを含めて抽出された銘柄です。" />
             <div className="grid gap-3">
               {downCandidates.map((candidate) => <CandidateCard key={`${candidate.direction}-${candidate.ticker}`} candidate={candidate} />)}
             </div>

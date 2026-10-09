@@ -44,7 +44,7 @@ export function PatternSearchMock({ currentCode, topPatterns }: Props) {
             outline: 'none',
             fontSize: 12,
             fontVariantNumeric: 'tabular-nums',
-            letterSpacing: '0.05em',
+            letterSpacing: 0,
             color: 'var(--color-text-primary)',
             minWidth: 140,
           }}
@@ -89,7 +89,7 @@ export function PatternSearchMock({ currentCode, topPatterns }: Props) {
                     padding: '4px 8px',
                     fontSize: 11,
                     fontVariantNumeric: 'tabular-nums',
-                    letterSpacing: '0.05em',
+                    letterSpacing: 0,
                     color: 'var(--color-text-primary)',
                     textDecoration: 'none',
                     borderRadius: 4,

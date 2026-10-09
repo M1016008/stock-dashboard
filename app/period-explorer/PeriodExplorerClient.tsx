@@ -18,6 +18,7 @@ import {
 } from 'lucide-react'
 import { StageTag } from '@/components/ui/StageTag'
 import { StockPreviewTrigger } from '@/components/stock-preview/StockPreviewTrigger'
+import { PageTitle } from '@/components/layout/PageTitle'
 import {
   PERIOD_EXPLORER_AXIS_KEYS,
   PERIOD_EXPLORER_AXIS_LABELS,
@@ -376,33 +377,31 @@ export function PeriodExplorerClient({ calendarDates, defaultFrom, defaultTo }: 
   const duplicateReturn = ranking === 'return_up' || ranking === 'return_down'
 
   return (
-    <div className="space-y-4">
-      <header className="flex flex-wrap items-end justify-between gap-3 border-b border-[var(--color-border-strong)] pb-3">
-        <div>
-          <p className="text-[10px] font-black uppercase tracking-[0.12em] text-[var(--color-brand-700)]">Period Explorer</p>
-          <h1 className="mt-0.5 text-[24px] font-black tracking-normal text-[var(--color-brand-950)] sm:text-[28px]">期間分析</h1>
-          <p className="mt-1 text-[12px] font-semibold text-[var(--color-text-secondary)]">期間中に起きた値動き・構造変化・流動性から候補を発見</p>
-        </div>
-        {response && <div className="text-right text-[10px] font-semibold text-[var(--color-text-tertiary)]">
-          <div>価格: 調整後 / Stage: PIT</div>
-          <div>業種・市場・貸借区分: 現在属性</div>
-        </div>}
-      </header>
+    <div className="flex w-full min-w-0 flex-col gap-4">
+      <PageTitle
+        eyebrow="銘柄探索"
+        title="期間ランキング"
+        subtitle="任意の期間に起きた値動き・構造変化・流動性から、銘柄と業種を順位づけして候補を見つけます。"
+        meta={<>
+          <span>価格は調整後、ステージは当時の記録（PIT）</span>
+          <span>業種・市場・貸借区分は現在の属性</span>
+        </>}
+      />
 
-      <section className="border-y border-[var(--color-border-default)] bg-white px-3 py-3">
+      <section className="border-b border-[var(--color-border-soft)] pb-3" aria-label="期間">
         <div className="flex flex-wrap items-end gap-2">
-          <label className="min-w-[145px] text-[10px] font-black text-[var(--color-text-tertiary)]">開始日
-            <input type="date" value={draftFrom} min={calendarDates[0]} max={draftTo || defaultTo} onChange={(event) => setDraftFrom(event.target.value)} className="mt-1 h-9 w-full border border-[var(--color-border-default)] bg-white px-2 text-[12px] font-bold tabular-nums" />
+          <label className="min-w-[150px] text-[11px] font-semibold text-[var(--color-text-secondary)]">開始日
+            <input type="date" value={draftFrom} min={calendarDates[0]} max={draftTo || defaultTo} onChange={(event) => setDraftFrom(event.target.value)} className="mt-1 h-9 w-full px-2 text-[13px] tabular-nums" />
           </label>
           <span className="mb-2 text-[12px] text-[var(--color-text-tertiary)]">→</span>
-          <label className="min-w-[145px] text-[10px] font-black text-[var(--color-text-tertiary)]">終了日
-            <input type="date" value={draftTo} min={draftFrom || calendarDates[0]} max={defaultTo} onChange={(event) => setDraftTo(event.target.value)} className="mt-1 h-9 w-full border border-[var(--color-border-default)] bg-white px-2 text-[12px] font-bold tabular-nums" />
+          <label className="min-w-[150px] text-[11px] font-semibold text-[var(--color-text-secondary)]">終了日
+            <input type="date" value={draftTo} min={draftFrom || calendarDates[0]} max={defaultTo} onChange={(event) => setDraftTo(event.target.value)} className="mt-1 h-9 w-full px-2 text-[13px] tabular-nums" />
           </label>
-          <button type="button" onClick={applyDates} disabled={!draftFrom || !draftTo || draftFrom > draftTo} className="inline-flex h-9 shrink-0 items-center gap-1 border border-[var(--color-brand-800)] bg-[var(--color-brand-800)] px-3 text-[11px] font-black text-white disabled:opacity-40"><Search size={13} />適用</button>
-          <button type="button" onClick={() => clearFilters(true)} className="inline-flex h-9 shrink-0 items-center gap-1 border border-[var(--color-border-default)] bg-white px-3 text-[11px] font-bold text-[var(--color-text-secondary)]"><RotateCcw size={13} />リセット</button>
-        </div>
-        <div className="mt-2 flex gap-1 overflow-x-auto pb-1">
-          {QUICK_RANGES.map((option) => <button key={option.key} type="button" onClick={() => applyQuickRange(option)} className="shrink-0 border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-2 py-1 text-[10px] font-bold text-[var(--color-text-secondary)] hover:border-[var(--color-brand-300)]">{option.label}</button>)}
+          <button type="button" onClick={applyDates} disabled={!draftFrom || !draftTo || draftFrom > draftTo} className="btn h-9" data-variant="primary"><Search size={13} />適用</button>
+          <button type="button" onClick={() => clearFilters(true)} className="btn h-9"><RotateCcw size={13} />リセット</button>
+          <div className="flex min-w-0 basis-full gap-1 overflow-x-auto pb-0.5 lg:ml-2 lg:basis-auto">
+            {QUICK_RANGES.map((option) => <button key={option.key} type="button" onClick={() => applyQuickRange(option)} className="btn shrink-0" data-size="sm">{option.label}</button>)}
+          </div>
         </div>
         {response && <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] font-semibold text-[var(--color-text-tertiary)]">
           <span className="inline-flex items-center gap-1"><CalendarRange size={11} />採用期間 {fmtDate(response.range.adoptedFrom)} ～ {fmtDate(response.range.adoptedTo)}</span>
@@ -412,21 +411,21 @@ export function PeriodExplorerClient({ calendarDates, defaultFrom, defaultTo }: 
         </div>}
       </section>
 
-      <section className="border-b border-[var(--color-border-default)] pb-3">
-        <div className="flex gap-1 overflow-x-auto pb-2" role="tablist" aria-label="ランキングカテゴリ">
-          {CATEGORY_META.map((item) => <button key={item.key} type="button" role="tab" aria-selected={category === item.key} onClick={() => chooseCategory(item.key)} className={`h-8 shrink-0 border px-3 text-[10px] font-black ${category === item.key ? 'border-[var(--color-brand-800)] bg-[var(--color-brand-800)] text-white' : 'border-[var(--color-border-default)] bg-white text-[var(--color-text-secondary)]'}`}>{item.label}</button>)}
+      <section className="flex flex-col gap-2 border-b border-[var(--color-border-soft)] pb-3">
+        <div className="view-tabs self-start" role="tablist" aria-label="ランキングカテゴリ">
+          {CATEGORY_META.map((item) => <button key={item.key} type="button" role="tab" aria-selected={category === item.key} onClick={() => chooseCategory(item.key)} className="view-tab">{item.label}</button>)}
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <select value={ranking} onChange={(event) => setSimpleParam('ranking', event.target.value)} className="h-9 w-full border border-[var(--color-border-strong)] bg-white px-2 text-[12px] font-black text-[var(--color-brand-950)] sm:w-auto sm:min-w-[210px]">
+          <select value={ranking} onChange={(event) => setSimpleParam('ranking', event.target.value)} className="h-9 w-full px-2 text-[13px] font-bold text-[var(--color-text-primary)] sm:w-auto sm:min-w-[220px]">
             {categoryRankings.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}
           </select>
           <span className="inline-flex min-w-0 flex-1 items-center gap-1 truncate text-[10px] font-semibold text-[var(--color-text-tertiary)]" title={definition.description}><CircleHelp size={12} className="shrink-0" /><span className="truncate">{definition.description}</span></span>
         </div>
       </section>
 
-      <section className="max-w-full overflow-visible border-y border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-3 py-2" aria-label="銘柄絞り込み">
+      <section className="max-w-full overflow-visible rounded-[6px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-3 py-2" aria-label="銘柄絞り込み">
         <div className="flex w-full min-w-0 items-center gap-2">
-          <span className="hidden shrink-0 text-[10px] font-black text-[var(--color-brand-950)] sm:block">銘柄絞り込み</span>
+          <span className="hidden shrink-0 text-[12px] font-bold text-[var(--color-text-secondary)] sm:block">絞り込み</span>
           <div className="hidden min-w-0 flex-1 items-center gap-1.5 sm:flex">
             <MarketFilterMenu
               options={response?.options.markets ?? []}
@@ -443,9 +442,9 @@ export function PeriodExplorerClient({ calendarDates, defaultFrom, defaultTo }: 
         </div>
       </section>
 
-      {filtersOpen && <section className="border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] p-3">
+      {filtersOpen && <section className="rounded-[6px] border border-[var(--color-border-default)] bg-white p-3">
         <div className="flex items-center justify-between border-b border-[var(--color-border-soft)] pb-2">
-          <h2 className="inline-flex items-center gap-1 text-[12px] font-black text-[var(--color-brand-950)]"><SlidersHorizontal size={14} />絞り込み条件</h2>
+          <h2 className="inline-flex items-center gap-1 text-[13px] font-bold text-[var(--color-text-primary)]"><SlidersHorizontal size={14} />絞り込み条件</h2>
           <button type="button" onClick={() => clearFilters(false)} className="text-[10px] font-bold text-[var(--color-brand-700)]">期間を残して全解除</button>
         </div>
         <div className="mt-3 border-b border-[var(--color-border-soft)] pb-3 sm:hidden">
@@ -487,19 +486,19 @@ export function PeriodExplorerClient({ calendarDates, defaultFrom, defaultTo }: 
         <button type="button" onClick={() => clearFilters(false)} className="ml-auto whitespace-nowrap text-[10px] font-bold text-[var(--color-brand-700)]">条件をクリア</button>
       </div>}
 
-      <section className="min-h-[360px] border-t border-[var(--color-border-strong)] bg-white">
-        <div className="flex flex-wrap items-center gap-2 border-b border-[var(--color-border-default)] px-3 py-2">
+      <section className="panel min-h-[360px]">
+        <div className="flex flex-wrap items-center gap-2 border-b border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-3 py-2">
           <div>
-            <h2 className="text-[13px] font-black text-[var(--color-brand-950)]">{definition.label}ランキング</h2>
-            <p className="text-[9px] font-semibold text-[var(--color-text-tertiary)]">{response ? `${response.total.toLocaleString('ja-JP')} / ${response.universeTotal.toLocaleString('ja-JP')}${response.resultKind === 'stocks' ? '銘柄' : '業種'}` : '集計中'} ｜ {fmtDate(response?.range.adoptedFrom ?? draftFrom)} ～ {fmtDate(response?.range.adoptedTo ?? draftTo)}</p>
+            <h2 className="text-[14px] font-bold text-[var(--color-text-primary)]">{definition.label}ランキング</h2>
+            <p className="text-[11px] tabular-nums text-[var(--color-text-tertiary)]">{response ? `${response.total.toLocaleString('ja-JP')} / ${response.universeTotal.toLocaleString('ja-JP')}${response.resultKind === 'stocks' ? '銘柄' : '業種'}` : '集計中'} ｜ {fmtDate(response?.range.adoptedFrom ?? draftFrom)} ～ {fmtDate(response?.range.adoptedTo ?? draftTo)}</p>
           </div>
           <label className="ml-auto flex items-center gap-1 text-[10px] font-bold text-[var(--color-text-tertiary)]">表示
             <select value={limit} onChange={(event) => setSimpleParam('limit', event.target.value)} className="h-7 border border-[var(--color-border-default)] bg-white px-1 text-[10px] font-bold">{[50, 100, 200, 500].map((value) => <option key={value} value={value}>{value}</option>)}</select>
           </label>
-          {response && <span className="text-[9px] text-[var(--color-text-tertiary)]">API {response.elapsedMs}ms{response.cacheHit ? ' / cache' : ''}</span>}
+          {response && <span className="text-[10px] tabular-nums text-[var(--color-text-tertiary)]">応答 {response.elapsedMs}ms{response.cacheHit ? '（キャッシュ）' : ''}</span>}
         </div>
 
-        {error && <div className="m-3 border border-rose-200 bg-rose-50 p-3 text-[11px] font-bold text-rose-800">{error}</div>}
+        {error && <div role="alert" className="m-3 rounded-[6px] border border-[#f0b8b8] bg-[var(--color-price-up-bg)] p-3 text-[12px] font-semibold text-[var(--color-price-up-strong)]">{error}</div>}
         {!error && loading && !response && <div className="flex h-72 items-center justify-center gap-2 text-[11px] font-bold text-[var(--color-text-tertiary)]"><LoaderCircle size={15} className="animate-spin" />期間データを集計しています</div>}
         {!error && response && <div className={loading ? 'pointer-events-none opacity-55' : ''} aria-busy={loading}>
           {response.total === 0 ? <div className="flex h-64 flex-col items-center justify-center gap-2 text-center"><p className="text-[12px] font-black text-[var(--color-text-secondary)]">条件に一致する銘柄がありません</p><button type="button" onClick={() => clearFilters(false)} className="text-[11px] font-bold text-[var(--color-brand-700)]">期間を残して条件を解除</button></div>
@@ -507,11 +506,11 @@ export function PeriodExplorerClient({ calendarDates, defaultFrom, defaultTo }: 
               : <SectorResults rows={sectorRows} taxonomy={taxonomy} ranking={ranking} onFilter={(sector) => setSimpleParam('sector', sector)} />}
         </div>}
 
-        {response && response.total > limit && <div className="flex items-center justify-between border-t border-[var(--color-border-default)] px-3 py-2">
-          <button type="button" disabled={offset <= 0 || loading} onClick={() => setSimpleParam('offset', String(Math.max(0, offset - limit)))} className="inline-flex h-8 items-center gap-1 border border-[var(--color-border-default)] bg-white px-3 text-[10px] font-bold disabled:opacity-35"><ChevronLeft size={12} />前へ</button>
-          <span className="text-[10px] font-semibold tabular-nums text-[var(--color-text-tertiary)]">{offset + 1}–{Math.min(offset + limit, response.total)} / {response.total}</span>
-          <button type="button" disabled={offset + limit >= response.total || loading} onClick={() => setSimpleParam('offset', String(offset + limit))} className="inline-flex h-8 items-center gap-1 border border-[var(--color-border-default)] bg-white px-3 text-[10px] font-bold disabled:opacity-35">次へ<ChevronRight size={12} /></button>
-        </div>}
+        {response && response.total > limit && <nav aria-label="ページ送り" className="flex items-center justify-between border-t border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-3 py-2">
+          <button type="button" disabled={offset <= 0 || loading} onClick={() => setSimpleParam('offset', String(Math.max(0, offset - limit)))} className="btn"><ChevronLeft size={13} />前へ</button>
+          <span className="text-[12px] tabular-nums text-[var(--color-text-secondary)]">{offset + 1}–{Math.min(offset + limit, response.total)} / {response.total}</span>
+          <button type="button" disabled={offset + limit >= response.total || loading} onClick={() => setSimpleParam('offset', String(offset + limit))} className="btn">次へ<ChevronRight size={13} /></button>
+        </nav>}
       </section>
 
       {response && <p className="text-[9px] leading-5 text-[var(--color-text-tertiary)]">開始・終了価格のない銘柄 {response.excluded.missingEndpoints.toLocaleString('ja-JP')}件、ランキング値不足 {response.excluded.missingRankingValue.toLocaleString('ja-JP')}件。時価総額の株式数がPIT未収録の場合のみ現在株式数を使用し、行上で区別しています。</p>}
@@ -592,9 +591,9 @@ function StockResults({ rows, ranking, duplicateReturn, adoptedTo, onSort }: { r
           <col className="w-[44px]" /><col className="w-[238px]" /><col className="w-[104px]" /><col className="w-[205px]" /><col className="w-[86px]" />
           {!duplicateReturn && <col className="w-[82px]" />}<col className="w-[150px]" /><col className="w-[96px]" /><col className="hidden w-[64px] min-[1360px]:table-column" /><col className="w-[102px]" /><col className="w-[108px]" /><col className="hidden w-[104px] min-[1360px]:table-column" />
         </colgroup>
-        <thead className="sticky top-0 z-10 bg-[var(--color-surface-subtle)] text-[9px] font-black text-[var(--color-text-tertiary)]">
+        <thead className="sticky top-0 z-10 text-[11px] font-bold">
           <tr className="border-b border-[var(--color-border-default)]">
-            <th className="whitespace-nowrap px-1.5 py-2 text-right">Rank</th><th className="whitespace-nowrap px-2 py-2 text-left">銘柄</th>
+            <th className="whitespace-nowrap px-1.5 py-2 text-right">順位</th><th className="whitespace-nowrap px-2 py-2 text-left">銘柄</th>
             <th className="whitespace-nowrap px-2 py-2 text-right"><SortButton sortKey="ranking" onSort={onSort} align="right">ランキング値</SortButton></th>
             <th className="whitespace-nowrap px-2 py-2 text-left">6軸Stage</th><th className="whitespace-nowrap px-2 py-2 text-right"><SortButton sortKey="price" onSort={onSort} align="right">株価</SortButton></th>
             {!duplicateReturn && <th className="whitespace-nowrap px-2 py-2 text-right"><SortButton sortKey="periodReturn" onSort={onSort} align="right">期間騰落率</SortButton></th>}
@@ -605,7 +604,7 @@ function StockResults({ rows, ranking, duplicateReturn, adoptedTo, onSort }: { r
           </tr>
         </thead>
         <tbody className="divide-y divide-[var(--color-border-subtle)]">
-          {rows.map((row) => <tr key={row.ticker} className="h-[58px] hover:bg-[var(--color-surface-subtle)]">
+          {rows.map((row) => <tr key={row.ticker} className="h-[58px] hover:bg-[#fff8e6]">
             <td className="whitespace-nowrap px-1.5 py-2 text-right font-black tabular-nums text-[var(--color-text-tertiary)]">{row.rank}</td>
             <td className="overflow-hidden px-2 py-2 text-left"><span className="flex min-w-0 items-center gap-1.5"><Link href={`/stock/${encodeURIComponent(row.ticker)}?date=${encodeURIComponent(adoptedTo)}#overview`} className="flex min-w-0 items-baseline gap-2 text-[var(--color-brand-950)] hover:text-[var(--color-brand-700)] hover:underline"><span className="shrink-0 font-mono text-[10px] font-bold text-[var(--color-brand-800)]">{row.ticker}</span><span className="truncate font-black">{row.name}</span></Link><StockPreviewTrigger ticker={row.ticker} analysisDate={adoptedTo} context="periodExplorer" />{row.historicalOnly && <span className="shrink-0 border border-[var(--color-border-soft)] px-1 py-0.5 text-[8px] font-bold text-[var(--color-text-tertiary)]">履歴</span>}</span></td>
             <td className={`whitespace-nowrap px-2 py-2 text-right font-black tabular-nums ${tone(row.rankingValue)}`}>{rankingText(row.rankingValue, ranking)}</td>
@@ -632,5 +631,5 @@ function StockResults({ rows, ranking, duplicateReturn, adoptedTo, onSort }: { r
 }
 
 function SectorResults({ rows, taxonomy, ranking, onFilter }: { rows: PeriodExplorerSectorRow[]; taxonomy: PeriodExplorerTaxonomy; ranking: PeriodExplorerRankingKey; onFilter: (sector: string) => void }) {
-  return <div className="overflow-x-auto"><table className="min-w-[760px] w-full border-collapse text-[11px]"><thead className="bg-[var(--color-surface-subtle)] text-[9px] font-black text-[var(--color-text-tertiary)]"><tr className="border-b border-[var(--color-border-default)]"><th className="w-12 px-3 py-2 text-right">Rank</th><th className="px-3 py-2 text-left">{TAXONOMIES.find((item) => item.value === taxonomy)?.label}</th><th className="w-32 px-3 py-2 text-right">ランキング値</th><th className="w-24 px-3 py-2 text-right">銘柄数</th><th className="w-28 px-3 py-2 text-right">平均騰落率</th><th className="w-28 px-3 py-2 text-right">中央値</th><th className="w-28 px-3 py-2 text-right">上昇比率</th><th className="w-32 px-3 py-2 text-right">Stage改善比率</th></tr></thead><tbody className="divide-y divide-[var(--color-border-subtle)]">{rows.map((row) => <tr key={row.sector} className="hover:bg-[var(--color-surface-subtle)]"><td className="px-3 py-2.5 text-right font-black tabular-nums text-[var(--color-text-tertiary)]">{row.rank}</td><td className="px-3 py-2.5 text-left"><button type="button" onClick={() => onFilter(row.sector)} className="font-black text-[var(--color-brand-900)] hover:underline">{row.sector}</button></td><td className={`px-3 py-2.5 text-right font-black tabular-nums ${tone(row.rankingValue)}`}>{rankingText(row.rankingValue, ranking)}</td><td className="px-3 py-2.5 text-right font-bold tabular-nums">{row.stocks}</td><td className={`px-3 py-2.5 text-right font-bold tabular-nums ${tone(row.avgReturnPct)}`}>{fmtPercent(row.avgReturnPct)}</td><td className={`px-3 py-2.5 text-right font-bold tabular-nums ${tone(row.medianReturnPct)}`}>{fmtPercent(row.medianReturnPct)}</td><td className="px-3 py-2.5 text-right font-bold tabular-nums">{fmtPercent(row.advancingRatePct)}</td><td className="px-3 py-2.5 text-right font-bold tabular-nums">{fmtPercent(row.stageImproveRatePct)}</td></tr>)}</tbody></table></div>
+  return <div className="overflow-x-auto"><table className="min-w-[760px] w-full border-collapse text-[11px]"><thead className="text-[11px] font-bold"><tr className="border-b border-[var(--color-border-default)]"><th className="w-12 px-3 py-2 text-right">順位</th><th className="px-3 py-2 text-left">{TAXONOMIES.find((item) => item.value === taxonomy)?.label}</th><th className="w-32 px-3 py-2 text-right">ランキング値</th><th className="w-24 px-3 py-2 text-right">銘柄数</th><th className="w-28 px-3 py-2 text-right">平均騰落率</th><th className="w-28 px-3 py-2 text-right">中央値</th><th className="w-28 px-3 py-2 text-right">上昇比率</th><th className="w-32 px-3 py-2 text-right">Stage改善比率</th></tr></thead><tbody className="divide-y divide-[var(--color-border-subtle)]">{rows.map((row) => <tr key={row.sector} className="hover:bg-[var(--color-surface-subtle)]"><td className="px-3 py-2.5 text-right font-black tabular-nums text-[var(--color-text-tertiary)]">{row.rank}</td><td className="px-3 py-2.5 text-left"><button type="button" onClick={() => onFilter(row.sector)} className="font-black text-[var(--color-brand-900)] hover:underline">{row.sector}</button></td><td className={`px-3 py-2.5 text-right font-black tabular-nums ${tone(row.rankingValue)}`}>{rankingText(row.rankingValue, ranking)}</td><td className="px-3 py-2.5 text-right font-bold tabular-nums">{row.stocks}</td><td className={`px-3 py-2.5 text-right font-bold tabular-nums ${tone(row.avgReturnPct)}`}>{fmtPercent(row.avgReturnPct)}</td><td className={`px-3 py-2.5 text-right font-bold tabular-nums ${tone(row.medianReturnPct)}`}>{fmtPercent(row.medianReturnPct)}</td><td className="px-3 py-2.5 text-right font-bold tabular-nums">{fmtPercent(row.advancingRatePct)}</td><td className="px-3 py-2.5 text-right font-bold tabular-nums">{fmtPercent(row.stageImproveRatePct)}</td></tr>)}</tbody></table></div>
 }

@@ -8,7 +8,8 @@ type Props = {
   ticker: string
   name: string | null
   announceDate: string
-  colSpan: number
+  /** テーブル行として描画する場合の列数。省略時はブロック要素として描画する (スマホのカード一覧用) */
+  colSpan?: number
 }
 
 const TABS: Array<{ interval: TvInterval; label: string; hint: string }> = [
@@ -22,14 +23,12 @@ export function EarningsStockChartDisclosure({ ticker, name, announceDate, colSp
   const [interval, setInterval] = useState<TvInterval>('W')
   const activeTab = TABS.find((tab) => tab.interval === interval) ?? TABS[1]
 
-  return (
-    <tr className="bg-white">
-      <td colSpan={colSpan} className="px-2 pb-3">
-        <div className="rounded-[7px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)]">
+  const body = (
+        <div className="rounded-[6px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)]">
           <button
             type="button"
             onClick={() => setOpen((value) => !value)}
-            className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-[12px] font-bold text-[var(--color-text-secondary)] hover:bg-white"
+            className="flex min-h-9 w-full items-center justify-between gap-3 px-3 py-1.5 text-left text-[12px] font-semibold text-[var(--color-text-secondary)] hover:bg-white"
             aria-expanded={open}
           >
             <span className="inline-flex min-w-0 items-center gap-2">
@@ -37,7 +36,7 @@ export function EarningsStockChartDisclosure({ ticker, name, announceDate, colSp
               <span className="truncate">
                 {ticker} {name ?? ''} の日足・週足・月足チャート
               </span>
-              <span className="hidden shrink-0 rounded-full bg-white px-2 py-0.5 text-[10px] font-bold text-[var(--color-text-tertiary)] sm:inline-flex">
+              <span className="hidden shrink-0 rounded-[3px] bg-white px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-[var(--color-text-tertiary)] sm:inline-flex">
                 決算日 {announceDate}
               </span>
             </span>
@@ -58,17 +57,15 @@ export function EarningsStockChartDisclosure({ ticker, name, announceDate, colSp
                     {activeTab.hint}を確認します。MAは必要に応じて切り替えできます。
                   </div>
                 </div>
-                <div className="inline-flex rounded-[6px] border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] p-1">
+                <div className="view-tabs" role="group" aria-label="時間足">
                   {TABS.map((tab) => (
                     <button
                       key={tab.interval}
                       type="button"
                       onClick={() => setInterval(tab.interval)}
-                      className={`h-8 rounded-[4px] px-3 text-[12px] font-bold ${
-                        interval === tab.interval
-                          ? 'bg-white text-[var(--color-brand-800)] shadow-sm'
-                          : 'text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)]'
-                      }`}
+                      aria-pressed={interval === tab.interval}
+                      data-active={interval === tab.interval}
+                      className="view-tab"
                     >
                       {tab.label}
                     </button>
@@ -84,6 +81,13 @@ export function EarningsStockChartDisclosure({ ticker, name, announceDate, colSp
             </div>
           )}
         </div>
+  )
+
+  if (colSpan == null) return body
+  return (
+    <tr className="bg-white">
+      <td colSpan={colSpan} className="px-2 pb-3">
+        {body}
       </td>
     </tr>
   )

@@ -1,5 +1,6 @@
 // components/ui/TabRow.tsx
-// モック準拠の sb-tab (URL クエリ ?paramKey= で連動)。keepKeys は他のパラメータを保持する。
+// URL クエリ ?paramKey= で連動する表示切替。keepKeys は他のパラメータを保持する。
+// 見た目は ViewTabs と共通 (.view-tabs / .view-tab)。
 
 'use client'
 
@@ -12,12 +13,13 @@ interface Props<T extends string> {
   current: T
   tabs: { key: T; label: string }[]
   keepKeys?: string[]
+  label?: string
 }
 
-export function TabRow<T extends string>({ basePath, paramKey, current, tabs, keepKeys = [] }: Props<T>) {
+export function TabRow<T extends string>({ basePath, paramKey, current, tabs, keepKeys = [], label }: Props<T>) {
   const search = useSearchParams()
   return (
-    <>
+    <nav aria-label={label ?? paramKey} className="view-tabs">
       {tabs.map(t => {
         const params = new URLSearchParams()
         for (const k of keepKeys) {
@@ -28,11 +30,11 @@ export function TabRow<T extends string>({ basePath, paramKey, current, tabs, ke
         const href = `${basePath}?${params.toString()}`
         const on = current === t.key
         return (
-          <Link key={t.key} href={href} className={`sb-tab${on ? ' sb-on' : ''}`}>
+          <Link key={t.key} href={href} aria-current={on ? 'page' : undefined} className="view-tab">
             {t.label}
           </Link>
         )
       })}
-    </>
+    </nav>
   )
 }

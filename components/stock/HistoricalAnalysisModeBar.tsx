@@ -153,10 +153,10 @@ export function HistoricalAnalysisModeBar({
 
   return (
     <section
-      className={`border px-3 py-2 shadow-[0_1px_3px_rgba(16,32,52,0.08)] ${
+      className={`rounded-[var(--radius-card)] border px-3 py-2 ${
         analysisDate
           ? 'border-amber-300 bg-amber-50'
-          : 'border-[var(--color-border-default)] bg-white'
+          : 'border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)]'
       }`}
       aria-label="過去時点で再分析"
     >
@@ -164,7 +164,7 @@ export function HistoricalAnalysisModeBar({
         <div className="flex min-w-[220px] flex-1 items-center gap-2">
           <CalendarClock className={analysisDate ? 'text-amber-700' : 'text-[var(--color-brand-700)]'} size={16} />
           <div>
-            <div className="text-[12px] font-black text-[var(--color-brand-900)]">
+            <div className="text-[12px] font-bold text-[var(--color-text-primary)]">
               {analysisDate ? '過去分析モード' : '過去時点で再分析'}
             </div>
             <p className="text-[10px] font-semibold leading-4 text-[var(--color-text-secondary)]">

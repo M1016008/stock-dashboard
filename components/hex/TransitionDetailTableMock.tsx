@@ -475,9 +475,9 @@ export async function TransitionDetailTableMock({
         <h2>{PERIOD_LABEL[period]}のステージ変化 詳細</h2>
         <span>{timescale} · 物理ML {getPhysicsHorizonForPeriod(period)}営業日 · 最大 {total.toLocaleString()} 銘柄表示</span>
       </div>
-      <div className="sb-card">
-        <div className="overflow-x-auto">
-          <table className="sb-tbl" style={{ minWidth: 1480 }}>
+      <div className="sb-card hidden xl:block">
+        <div className="table-scroll">
+          <table className="sb-tbl" style={{ minWidth: 1360 }}>
             <thead>
               <tr>
                 <th style={{ width: 82 }}>コード</th>
@@ -505,15 +505,17 @@ export async function TransitionDetailTableMock({
                 const tone = r.changePct == null ? '' : r.changePct > 0 ? 'sb-r' : r.changePct < 0 ? 'sb-b' : ''
                 return (
                   <tr key={r.ticker} style={{ verticalAlign: 'top' }}>
-                    <td className="sb-t" style={{ paddingTop: 13 }}>{r.ticker}</td>
+                    <td style={{ paddingTop: 13 }}>
+                      <Link href={`/stock/${r.ticker}`} className="font-mono font-bold text-[var(--color-brand-700)] hover:underline">{r.ticker}</Link>
+                    </td>
                     <td style={{ paddingTop: 12 }}>
-                      <Link href={`/stock/${r.ticker}`} style={{ color: 'inherit', fontWeight: 600 }}>
+                      <Link href={`/stock/${r.ticker}`} className="font-semibold text-[var(--color-text-primary)] hover:text-[var(--color-brand-700)] hover:underline">
                         {r.name ?? r.ticker}
                       </Link>
                       {analysis.labels.length > 0 && (
                         <div className="mt-1 flex flex-wrap gap-1">
                           {analysis.labels.map((label) => (
-                            <span key={label} className="rounded-full border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-1.5 py-[1px] text-[10px] text-[var(--color-text-secondary)]">
+                            <span key={label} className="rounded-[3px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-1.5 py-[1px] text-[10px] text-[var(--color-text-secondary)]">
                               {label}
                             </span>
                           ))}
@@ -551,7 +553,7 @@ export async function TransitionDetailTableMock({
                     </td>
                     <td style={{ paddingTop: 10 }}>
                       <div className="flex flex-col gap-1.5">
-                        <span className="w-fit rounded-full border border-[var(--color-border-default)] bg-white px-2 py-[2px] text-[10px] font-semibold text-[var(--color-text-primary)]">
+                        <span className="w-fit rounded-[3px] border border-[var(--color-border-default)] bg-white px-1.5 py-[2px] text-[10px] font-semibold text-[var(--color-text-primary)]">
                           {analysis.mlTitle}
                         </span>
                         <div className="text-[11px] leading-5 text-[var(--color-text-primary)]">{analysis.insight}</div>
@@ -577,6 +579,42 @@ export async function TransitionDetailTableMock({
           </table>
         </div>
       </div>
+
+      <ul className="sb-card m-0 list-none divide-y divide-[var(--color-border-soft)] p-0 xl:hidden" aria-label="ステージ変化の銘柄">
+        {rows.map((r) => {
+          const analysis = buildAnalysis(r)
+          const tone = r.changePct == null ? '' : r.changePct > 0 ? 'sb-r' : r.changePct < 0 ? 'sb-b' : ''
+          return (
+            <li key={`${r.ticker}-m`} className="px-3 py-3">
+              <div className="flex items-start justify-between gap-3">
+                <Link href={`/stock/${r.ticker}`} className="min-w-0">
+                  <span className="font-mono text-[13px] font-bold text-[var(--color-brand-700)]">{r.ticker}</span>
+                  <span className="block truncate text-[13px] font-semibold text-[var(--color-text-primary)]">{r.name ?? r.ticker}</span>
+                </Link>
+                <div className="shrink-0 text-right tabular-nums">
+                  <div className="text-[13px] font-semibold">{r.price?.toLocaleString() ?? '-'}</div>
+                  <div className={`text-[12px] ${tone}`}>{r.changePct == null ? '-' : (r.changePct > 0 ? '+' : '') + r.changePct.toFixed(2)}</div>
+                </div>
+              </div>
+              <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2">
+                <span className="inline-flex items-center gap-1">
+                  <span className={`sb-tag ${r.from_stage ? `sb-s${r.from_stage}` : ''}`} style={{ fontSize: 12, width: 'auto', height: 'auto', padding: '2px 6px' }}>{r.from_stage ?? '-'}</span>
+                  <span className="text-[var(--color-text-tertiary)]">→</span>
+                  <span className={`sb-tag ${r.to_stage ? `sb-s${r.to_stage}` : ''}`} style={{ fontSize: 12, width: 'auto', height: 'auto', padding: '2px 6px' }}>{r.to_stage ?? '-'}</span>
+                </span>
+                <AssessmentBadge label={analysis.label} tone={analysis.tone} />
+                <span className="text-[11px] text-[var(--color-text-tertiary)]">出来高 {fmtVol(r.volume)}</span>
+              </div>
+              <div className="mt-2 overflow-x-auto"><StageStrip row={r} selected={timescale} /></div>
+              <p className="mt-1.5 text-[12px] leading-5 text-[var(--color-text-primary)]">{analysis.insight}</p>
+              <p className="text-[11px] leading-4 text-[var(--color-text-secondary)]">次に見る点: {analysis.watchPoint}</p>
+            </li>
+          )
+        })}
+        {total === 0 && (
+          <li className="px-3 py-6 text-center text-[12px] text-[var(--color-text-tertiary)]">該当銘柄なし</li>
+        )}
+      </ul>
     </div>
   )
 }
@@ -591,7 +629,7 @@ function StageStrip({ row, selected }: { row: TransitionDetailRow; selected: Tim
         return (
           <span
             key={axis.key}
-            className={`inline-flex min-w-[31px] flex-col items-center rounded-[6px] border px-1.5 py-1 text-center ${cls}`}
+            className={`inline-flex min-w-[31px] flex-col items-center rounded-[4px] border px-1.5 py-1 text-center ${cls}`}
             style={{
               borderColor: isSelected ? 'var(--color-text-primary)' : 'var(--color-border-soft)',
               boxShadow: isSelected ? 'inset 0 0 0 1px var(--color-text-primary)' : undefined,
@@ -608,13 +646,13 @@ function StageStrip({ row, selected }: { row: TransitionDetailRow; selected: Tim
 
 function AssessmentBadge({ label, tone }: { label: string; tone: 'up' | 'down' | 'neutral' | 'watch' }) {
   const style: Record<typeof tone, string> = {
-    up: 'border-green-200 bg-green-50 text-green-700',
-    down: 'border-red-200 bg-red-50 text-red-700',
-    watch: 'border-amber-200 bg-amber-50 text-amber-700',
-    neutral: 'border-gray-200 bg-gray-50 text-gray-600',
+    up: 'border-[#f0b8b8] bg-[var(--color-price-up-bg)] text-[var(--color-price-up-mid)]',
+    down: 'border-[#b9d3f0] bg-[var(--color-price-down-bg)] text-[var(--color-price-down-mid)]',
+    watch: 'border-[#efd28f] bg-[#fff8e6] text-[#7a4d00]',
+    neutral: 'border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] text-[var(--color-text-secondary)]',
   }
   return (
-    <span className={`inline-flex rounded-full border px-2 py-1 text-[11px] font-bold ${style[tone]}`}>
+    <span className={`inline-flex rounded-[4px] border px-1.5 py-0.5 text-[11px] font-bold ${style[tone]}`}>
       {label}
     </span>
   )
@@ -632,12 +670,12 @@ function FlowChip({
   value: number | null
 }) {
   const style: Record<typeof tone, string> = {
-    up: 'border-green-200 bg-green-50 text-green-700',
-    down: 'border-red-200 bg-red-50 text-red-700',
-    neutral: 'border-gray-200 bg-gray-50 text-gray-600',
+    up: 'border-[#f0b8b8] bg-[var(--color-price-up-bg)] text-[var(--color-price-up-mid)]',
+    down: 'border-[#b9d3f0] bg-[var(--color-price-down-bg)] text-[var(--color-price-down-mid)]',
+    neutral: 'border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] text-[var(--color-text-secondary)]',
   }
   return (
-    <span className={`rounded-[6px] border px-2 py-1 text-[10px] leading-4 ${style[tone]}`} title={`${name}MA変化率 ${fmtPct(value, 2)}`}>
+    <span className={`rounded-[4px] border px-2 py-1 text-[10px] leading-4 ${style[tone]}`} title={`${name}MA変化率 ${fmtPct(value, 2)}`}>
       <b>{name}</b> {label}
     </span>
   )

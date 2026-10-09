@@ -15,7 +15,7 @@ import {
 import { getUniverseFilterMeta, parseUniverseFilter } from '@/lib/market-universe'
 
 export const metadata: Metadata = {
-  title: '決算 — StockBoard',
+  title: '決算カレンダー — StockBoard',
   description: '決算発表予定・発表後の値動き・テクニカルシグナルを確認',
 }
 
@@ -25,8 +25,8 @@ export const fetchCache = 'force-no-store'
 
 function EarningsFallback() {
   return (
-    <div className="rounded-[8px] border border-[var(--color-border-soft)] bg-[var(--color-surface-raised)] px-4 py-10 text-center text-[13px] font-bold text-[var(--color-text-tertiary)]">
-      決算データを読込中...
+    <div className="empty-state" role="status">
+      <p className="empty-state__desc">決算データを読み込んでいます…</p>
     </div>
   )
 }
@@ -137,16 +137,20 @@ export default async function EarningsPage({
     getEarningsDateCounts(),
   ])
   const panelDate = selectedDate ?? latest
-  const subtitle = panelDate
-    ? `${panelDate} 基準 / 決算発表予定・発表後2週間の値動き`
-    : 'データ未取り込み'
 
   return (
     <div className="flex w-full flex-col gap-5">
       <PageTitle
-        title="決算"
-        subtitle={subtitle}
-        badge={universeMeta ? `${universeMeta.shortLabel} / JPX公式 + J-Quants` : 'JPX公式 + J-Quants'}
+        eyebrow="市場・業種"
+        title="決算カレンダー"
+        subtitle="決算発表の予定と、発表後2週間の値動き・テクニカルシグナルを確認します。"
+        badge={universeMeta?.shortLabel}
+        meta={
+          <>
+            <span>{panelDate ? `${panelDate} 基準` : 'データ未取り込み'}</span>
+            <span>出典 JPX公式 + J-Quants</span>
+          </>
+        }
       />
       <EarningsDateCalendar
         counts={counts}

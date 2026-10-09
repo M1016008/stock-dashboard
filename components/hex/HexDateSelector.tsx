@@ -52,23 +52,29 @@ export function HexDateSelector({ dates, requestedDate, selectedDate, latestDate
   )
 
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 rounded-[8px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-3 py-3">
-      <div>
-        <div className="text-[12px] font-bold text-[var(--color-text-secondary)]">分析基準日</div>
-        <div className="mt-1 text-[11px] font-semibold text-[var(--color-text-tertiary)]">
+    <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-y border-[var(--color-border-soft)] py-2">
+      <div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-3 gap-y-0.5">
+        <span className="text-[11px] font-bold text-[var(--color-text-secondary)]">分析基準日</span>
+        <span className={`text-[12px] tabular-nums ${isHistorical ? 'font-semibold text-[#92400e]' : 'text-[var(--color-text-primary)]'}`}>
           {isHistorical
             ? adjustedToPriorSession
-              ? `指定日 ${requestedDate} は取引データがないため、直前の営業日 ${targetDate} を表示中。`
-              : `${targetDate}時点のステージを表示中。期間タブの「現在まで」で最新日 ${latestDate ?? '-'} への遷移を確認できます。`
-            : `最新日 ${latestDate ?? '-'} 基準で表示中。過去日を選ぶと、その時点のHEX分析へ切り替わります。`}
-        </div>
+              ? `指定日 ${requestedDate} は休場のため、直前の営業日 ${targetDate} を表示中`
+              : `${targetDate} 時点を表示中`
+            : `最新 ${latestDate ?? '-'} を表示中`}
+        </span>
+        <span className="text-[11px] text-[var(--color-text-tertiary)]">
+          {isHistorical
+            ? `期間「現在まで」で最新日 ${latestDate ?? '-'} までの遷移を確認できます。`
+            : '過去日を選ぶと、その時点の分析に切り替わります。'}
+        </span>
       </div>
       <MarketDateCalendar
         dates={loadedDates}
         value={selectedDate}
         onChange={updateDate}
-        label="HEX日付"
+        label="基準日を選ぶ"
         align="right"
+        compact
         loading={loading}
         onOpen={loadAllDates}
       />

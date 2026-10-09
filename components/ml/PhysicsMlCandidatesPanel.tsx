@@ -177,7 +177,7 @@ function PhysicsCandidateCard({
           <Link
             href={href}
             prefetch={false}
-            className="mt-2 inline-flex text-[16px] font-bold text-[var(--color-brand-900)] hover:text-[var(--color-market-red)]"
+            className="mt-2 inline-flex text-[16px] font-bold text-[var(--color-brand-900)] hover:text-[var(--color-brand-900)]"
           >
             {candidate.ticker} {candidate.name ?? ''}
           </Link>

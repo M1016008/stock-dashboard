@@ -16,6 +16,7 @@ import {
   Sigma,
   Target,
 } from 'lucide-react'
+import { PageTitle } from '@/components/layout/PageTitle'
 import { IndustryBadges } from '@/components/ui/IndustryBadges'
 import { MarginBadges } from '@/components/ui/MarginBadges'
 import { StageDots } from '@/components/ui/StageDots'
@@ -657,10 +658,11 @@ export default function BacktestPage() {
 
   return (
     <div className="sb-page">
-      <div className="sb-page-title">
-        <h1>過去検証・シグナル分析</h1>
-        <p>6桁ステージと移動平均線の形から、過去検証と現在の候補銘柄をつなげて確認します。</p>
-      </div>
+      <PageTitle
+        eyebrow="分析・AI"
+        title="過去検証"
+        subtitle="6桁ステージと移動平均線の形から、過去のシグナルの成績と現在の候補銘柄をつなげて確認します。"
+      />
 
       <div className="backtest-shell">
         <section className="backtest-toolbar calendar-mode">

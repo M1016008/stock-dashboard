@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import { CalendarDays, Download, RefreshCw } from 'lucide-react'
+import { CalendarDays, Download, Loader2, RefreshCw } from 'lucide-react'
 import { useWatchlistStore } from '@/lib/watchlist-store'
 import type { DailyCloseReport } from '@/lib/daily-close-report'
 import { DailyCloseReportView } from '@/components/reports/DailyCloseReportView'
@@ -52,9 +52,9 @@ export function DailyCloseReportClient({ requestedDate }: { requestedDate: strin
     <div className={styles.workspace}>
       <div className={styles.toolbar}>
         <div>
-          <div className={styles.toolbarEyebrow}>STOCKBOARD RESEARCH</div>
+          <div className={styles.toolbarEyebrow}>市場レポート</div>
           <h1>Daily Close Report</h1>
-          <p>確定済み日本株終値を基準にしたInstitutional Daily Market Brief</p>
+          <p>確定済み日本株終値を基準にした日次マーケットブリーフ（全11ページ・A4横で印刷できます）</p>
         </div>
         <div className={styles.toolbarActions}>
           <label className={styles.dateField}>
@@ -62,12 +62,28 @@ export function DailyCloseReportClient({ requestedDate }: { requestedDate: strin
             <span className="sr-only">基準日</span>
             <input type="date" value={requestedDate ?? ''} onChange={(event) => changeDate(event.target.value)} />
           </label>
-          <button type="button" title="再生成" aria-label="レポートを再生成" onClick={() => setReloadKey((value) => value + 1)}><RefreshCw size={16} /></button>
-          <button type="button" title="印刷・PDF" aria-label="印刷・PDFとして保存" onClick={() => window.print()}><Download size={16} /></button>
+          <button type="button" title="再生成" aria-label="レポートを再生成" onClick={() => setReloadKey((value) => value + 1)}><RefreshCw size={16} aria-hidden="true" /></button>
+          <button type="button" title="印刷・PDF" aria-label="印刷・PDFとして保存" onClick={() => window.print()} className={styles.toolbarPrimary}>
+            <Download size={16} aria-hidden="true" /><span>印刷・PDF</span>
+          </button>
         </div>
       </div>
-      {!hydrated || (!data && !error) ? <div className={styles.state}>Report Datasetを生成しています...</div> : null}
-      {error ? <div className={`${styles.state} ${styles.error}`} role="alert">{error}</div> : null}
+      {!hydrated || (!data && !error) ? (
+        <div className={styles.state} role="status" aria-live="polite">
+          <span className={styles.stateInner}><Loader2 size={16} className="animate-spin" aria-hidden="true" />{requestedDate ? `${requestedDate} の` : '最新営業日の'}レポートを生成しています…</span>
+        </div>
+      ) : null}
+      {error ? (
+        <div className={`${styles.state} ${styles.error}`} role="alert">
+          <span className={styles.stateInner}>
+            <strong>レポートを生成できませんでした</strong>
+            <span>{error}</span>
+            <button type="button" className="btn" data-size="sm" onClick={() => setReloadKey((value) => value + 1)}>
+              <RefreshCw size={13} aria-hidden="true" />再試行
+            </button>
+          </span>
+        </div>
+      ) : null}
       {data ? <DailyCloseReportView report={data} /> : null}
     </div>
   )

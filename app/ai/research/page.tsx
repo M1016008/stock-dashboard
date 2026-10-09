@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 import { Suspense } from 'react'
 import { AssistantResearchClient } from '@/components/assistant/AssistantResearchClient'
+import { PageLoadingSkeleton } from '@/components/ui/PageLoadingSkeleton'
 
 export const metadata: Metadata = {
   title: 'AI銘柄リサーチ — StockBoard',
@@ -12,7 +13,7 @@ export const revalidate = 0
 
 export default function AssistantResearchPage() {
   return (
-    <Suspense fallback={<div className="rounded-[8px] border border-[var(--color-border-default)] bg-white p-5 text-[13px] font-bold text-[var(--color-text-secondary)]">AI銘柄リサーチを読み込んでいます...</div>}>
+    <Suspense fallback={<PageLoadingSkeleton title="AI銘柄リサーチを読み込んでいます" sections={2} />}>
       <AssistantResearchClient />
     </Suspense>
   )

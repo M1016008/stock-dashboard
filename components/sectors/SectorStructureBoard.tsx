@@ -185,7 +185,7 @@ function MarketEnvironmentStrip({ board }: { board: SectorStructureBoardData }) 
         <Activity size={17} className="shrink-0 text-[var(--color-brand-700)]" />
         <div className="min-w-0">
           <div className="text-[9px] font-bold text-[var(--color-text-tertiary)]">市場環境</div>
-          <div className="mt-0.5 flex flex-wrap items-center gap-2"><span className={`inline-flex rounded-[4px] border bg-white px-2 py-1 text-[12px] font-bold ${tone}`}>{environment.label}</span><Link href="/market-momentum" className="inline-flex items-center gap-0.5 text-[9px] font-bold text-[var(--color-brand-700)] hover:text-[var(--color-market-red)]">市場詳細<ChevronRight size={11} /></Link></div>
+          <div className="mt-0.5 flex flex-wrap items-center gap-2"><span className={`inline-flex rounded-[4px] border bg-white px-2 py-1 text-[12px] font-bold ${tone}`}>{environment.label}</span><Link href="/market-momentum" className="inline-flex items-center gap-0.5 text-[9px] font-bold text-[var(--color-brand-700)] hover:text-[var(--color-brand-900)]">市場詳細<ChevronRight size={11} /></Link></div>
           <div className="mt-1 text-[8px] font-semibold tabular-nums text-[var(--color-text-tertiary)]">
             {environment.pmsDate ? `PMS/PFS ${environment.pmsDate} / ${environment.sampleCount}銘柄` : 'PMS/PFS 算出待ち'}
           </div>
@@ -773,7 +773,7 @@ function SectorConstituentExplorer({
             <tbody className="divide-y divide-[var(--color-border-soft)]">
               {page.items.map((item: SectorFilteredConstituent) => (
                 <tr key={item.ticker} className="hover:bg-[var(--color-surface-subtle)]">
-                  <td className="px-4 py-2.5"><div className="flex min-w-0 items-center gap-1"><div className="min-w-0 flex-1"><Link href={sectorStockHref(item.ticker, board, selectedRow)} className="block text-[11px] font-bold tabular-nums text-[var(--color-brand-800)] hover:text-[var(--color-market-red)]">{item.ticker}</Link><Link href={sectorStockHref(item.ticker, board, selectedRow)} className="mt-0.5 block truncate text-[10px] font-semibold text-[var(--color-text-primary)]">{item.name ?? '名称未登録'}</Link></div><StockPreviewTrigger ticker={item.ticker} analysisDate={board.requestedDate ? board.latestDate : null} context="industry" /></div></td>
+                  <td className="px-4 py-2.5"><div className="flex min-w-0 items-center gap-1"><div className="min-w-0 flex-1"><Link href={sectorStockHref(item.ticker, board, selectedRow)} className="block text-[11px] font-bold tabular-nums text-[var(--color-brand-800)] hover:text-[var(--color-brand-900)]">{item.ticker}</Link><Link href={sectorStockHref(item.ticker, board, selectedRow)} className="mt-0.5 block truncate text-[10px] font-semibold text-[var(--color-text-primary)]">{item.name ?? '名称未登録'}</Link></div><StockPreviewTrigger ticker={item.ticker} analysisDate={board.requestedDate ? board.latestDate : null} context="industry" /></div></td>
                   <td className="px-2 py-2.5"><span className="inline-flex rounded-[4px] border border-[var(--color-brand-700)] bg-white px-2 py-1 text-[10px] font-bold text-[var(--color-brand-900)]">{item.strategyEvaluation.label} {item.strategyEvaluation.matchCount}/5</span><span className="mt-1 block"><TrendStructureBadge score={item.trendStructureScore} compact /></span></td>
                   <td className="px-2 py-2.5 text-[9px] font-semibold leading-relaxed text-[var(--color-text-secondary)]">{item.strategyEvaluation.reasons.length > 0 ? item.strategyEvaluation.reasons.map((reason) => <span key={reason} className="block">・{reason}</span>) : <span className="text-[var(--color-text-tertiary)]">一致条件なし</span>}</td>
                   <td className="px-2 py-2.5 text-[9px] font-semibold leading-relaxed text-[var(--color-text-secondary)]">{item.strategyEvaluation.primaryRisk}</td>
@@ -1237,7 +1237,7 @@ export function SectorStructureBoard({ board }: { board: SectorStructureBoardDat
               <div className="flex min-w-0 items-center gap-2">
                 <h3 className="truncate font-bold text-[var(--color-brand-900)]">{selectedRow.groupName}</h3>
                 <TrendStructureBadge score={selectedRow.trendStructureScore} />
-                <Link href={`/screener?${screenerParams.toString()}`} prefetch={false} title="スクリーナーで開く" className="shrink-0 text-[var(--color-brand-700)] hover:text-[var(--color-market-red)]"><ExternalLink size={14} /></Link>
+                <Link href={`/screener?${screenerParams.toString()}`} prefetch={false} title="スクリーナーで開く" className="shrink-0 text-[var(--color-brand-700)] hover:text-[var(--color-brand-900)]"><ExternalLink size={14} /></Link>
               </div>
               <div className="mt-2"><TrendStructureMeter score={selectedRow.trendStructureScore} /></div>
               <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[10px] font-semibold text-[var(--color-text-tertiary)]">

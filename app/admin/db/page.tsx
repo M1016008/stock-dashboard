@@ -2,6 +2,9 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
+import { FolderOpen, RefreshCw, Search } from 'lucide-react'
+import { PageTitle } from '@/components/layout/PageTitle'
+import { Notice } from '@/components/ui/EmptyState'
 
 interface TableStat {
   name: string
@@ -115,27 +118,34 @@ export default function AdminDbPage() {
 
   const filteredUniverse = universeFilter.trim() ? (universe?.items ?? []) : []
 
+  const runningCount = runs.filter((run) => run.status === 'running').length
+  const failedCount = runs.filter((run) => run.status === 'failed').length
+
   return (
-    <div className="min-w-0 max-w-full" style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-      <div style={headerRow}>
-        <div>
-          <h1 style={{ fontFamily: 'var(--font-display)', fontSize: '16px', fontWeight: 700 }}>運用ステータス</h1>
-          <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
-            データベース状態 / バッチ履歴 / 銘柄ユニバース確認（読み取り専用）
-          </p>
-        </div>
-        <button onClick={loadAll} style={refreshBtn} disabled={loading}>
-          {loading ? '更新中...' : '⟳ 更新'}
-        </button>
-      </div>
+    <div className="flex w-full min-w-0 max-w-full flex-col gap-5">
+      <PageTitle
+        eyebrow="管理"
+        title="運用ステータス"
+        subtitle="データベース状態・バッチ履歴・銘柄ユニバースを確認します。この画面からの書き込み操作はありません。"
+        badge="読み取り専用"
+        badgeTone="neutral"
+        meta={runningCount > 0 || failedCount > 0 ? <>
+          {runningCount > 0 && <span className="text-[var(--color-pattern-700)]">実行中 {runningCount}件 ・ 5秒ごとに自動更新</span>}
+          {failedCount > 0 && <span className="text-[var(--color-price-up-strong)]">直近の失敗 {failedCount}件</span>}
+        </> : undefined}
+        rightSlot={(
+          <button type="button" onClick={loadAll} className="btn" disabled={loading} aria-busy={loading}>
+            <RefreshCw size={14} aria-hidden className={loading ? 'animate-spin' : undefined} />
+            {loading ? '更新中…' : '再読み込み'}
+          </button>
+        )}
+      />
 
       {error && (
-        <div className="card" style={{ padding: '12px', borderLeft: '3px solid var(--price-down)' }}>
-          <p style={{ fontSize: '12px', color: 'var(--price-down)', margin: 0 }}>エラー: {error}</p>
-        </div>
+        <Notice tone="error" role="alert" title="読み込みに失敗しました">{error}</Notice>
       )}
 
-      {/* サマリーカード */}
+      {/* サマリー: 狭い画面では縦積み、sm 以上で 3 列 */}
       <div className="grid min-w-0 grid-cols-1 gap-2 sm:grid-cols-3">
         <SummaryCard
           label="総レコード数"
@@ -143,24 +153,24 @@ export default function AdminDbPage() {
           unit={stats?.totalRecordsEstimated ? '件 (概算含む)' : '件'}
         />
         <SummaryCard label="DB容量" value={stats?.dbSizeMB ?? '---'} unit="MB" />
-        <SummaryCard label="ユニバース" value={universe ? String(universe.active) : '---'} unit={`/ ${universe?.total ?? 0} active`} />
+        <SummaryCard label="ユニバース (active)" value={universe ? universe.active.toLocaleString() : '---'} unit={`/ ${(universe?.total ?? 0).toLocaleString()}`} />
       </div>
 
       {/* データ更新バッチ */}
-      <section className="card" style={{ overflow: 'hidden' }}>
-        <div style={{ ...sectionHead }}>
-          <span style={{ fontSize: '12px', fontWeight: 600 }}>データ更新バッチ</span>
-          <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
-            起動操作はCLI/定期バッチに集約
-          </span>
-        </div>
-        <div style={{ padding: '12px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-          <div style={readOnlyNoteStyle}>
-            手動実行ボタンは誤操作防止のため停止しました。J-Quants更新、スナップショット計算、ML更新は定期ジョブまたはCLIから実行してください。
+      <section className="panel" aria-labelledby="admin-batch-title">
+        <div className="panel-head">
+          <div className="min-w-0">
+            <h2 id="admin-batch-title">データ更新バッチ</h2>
+            <p>起動操作はCLI/定期バッチに集約しています</p>
           </div>
+        </div>
+        <div className="flex flex-col gap-3 p-3 sm:p-4">
+          <Notice tone="neutral">
+            手動実行ボタンは誤操作防止のため停止しました。J-Quants更新、スナップショット計算、ML更新は定期ジョブまたはCLIから実行してください。
+          </Notice>
 
           <div className="min-w-0 max-w-full overflow-x-auto">
-            <table style={{ width: '100%', minWidth: '560px', borderCollapse: 'collapse', fontSize: '11px' }}>
+            <table style={{ width: '100%', minWidth: '560px', borderCollapse: 'collapse', fontSize: '12px' }}>
               <thead>
                 <tr style={{ background: 'var(--bg-elevated)', borderBottom: '1px solid var(--border-dim)' }}>
                   <th style={headStyle}>#</th>
@@ -200,29 +210,35 @@ export default function AdminDbPage() {
       </section>
 
       {/* 銘柄ユニバース管理 */}
-      <section className="card" style={{ overflow: 'hidden' }}>
-        <div style={sectionHead}>
-          <span style={{ fontSize: '12px', fontWeight: 600 }}>銘柄ユニバース ({universe?.total.toLocaleString() ?? '-'} 件 / active {universe?.active.toLocaleString() ?? '-'})</span>
-          <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>読み取り専用</span>
-        </div>
-        <div style={{ padding: '12px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-          <div style={readOnlyNoteStyle}>
-            銘柄の追加・active切替は画面から停止しました。正規マスターはJ-Quants銘柄マスターと定期バッチで管理します。
+      <section className="panel" aria-labelledby="admin-universe-title">
+        <div className="panel-head">
+          <div className="min-w-0">
+            <h2 id="admin-universe-title">銘柄ユニバース</h2>
+            <p>{universe?.total.toLocaleString() ?? '-'}件 / active {universe?.active.toLocaleString() ?? '-'}件</p>
           </div>
+        </div>
+        <div className="flex flex-col gap-3 p-3 sm:p-4">
+          <Notice tone="neutral">
+            銘柄の追加・active切替は画面から停止しました。正規マスターはJ-Quants銘柄マスターと定期バッチで管理します。
+          </Notice>
 
           <div>
-            <input
-              type="text"
-              value={universeFilter}
-              onChange={(e) => setUniverseFilter(e.target.value)}
-              placeholder="銘柄コード or 名前で検索 (空欄時は表示しない、最大50件)"
-              style={inputStyle}
-            />
+            <label className="relative block max-w-[520px]">
+              <span className="sr-only">銘柄コードまたは名前で検索</span>
+              <Search size={14} aria-hidden className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--color-text-tertiary)]" />
+              <input
+                type="text"
+                value={universeFilter}
+                onChange={(e) => setUniverseFilter(e.target.value)}
+                placeholder="銘柄コード or 名前で検索 (最大50件)"
+                style={inputStyle}
+              />
+            </label>
             {universeLoading && (
-              <div style={{ marginTop: '6px', fontSize: '10px', color: 'var(--text-muted)' }}>検索中...</div>
+              <div role="status" style={{ marginTop: '6px', fontSize: '12px', color: 'var(--text-muted)' }}>検索中…</div>
             )}
             <div className="min-w-0 max-w-full overflow-x-auto">
-              <table style={{ width: '100%', minWidth: '420px', borderCollapse: 'collapse', fontSize: '11px', marginTop: '8px' }}>
+              <table style={{ width: '100%', minWidth: '420px', borderCollapse: 'collapse', fontSize: '12px', marginTop: '8px' }}>
               <thead>
                 <tr style={{ background: 'var(--bg-elevated)', borderBottom: '1px solid var(--border-dim)' }}>
                   <th style={headStyle}>ticker</th>
@@ -242,12 +258,8 @@ export default function AdminDbPage() {
                     <td style={{ ...cellStyle, color: 'var(--color-brand-700)' }}>{it.ticker}</td>
                     <td style={cellStyle}>{it.name ?? '-'}</td>
                     <td style={cellStyleR}>
-                      <span style={{
-                        ...toggleBtn,
-                        color: it.active ? 'var(--color-brand-600)' : 'var(--text-muted)',
-                        borderColor: it.active ? 'var(--color-brand-600)' : 'var(--border-base)',
-                      }}>
-                        {it.active ? '● ON' : '○ OFF'}
+                      <span className="status-tag" data-tone={it.active ? 'positive' : undefined}>
+                        {it.active ? 'active' : 'inactive'}
                       </span>
                     </td>
                   </tr>
@@ -256,7 +268,7 @@ export default function AdminDbPage() {
               </table>
             </div>
             {universeFilter && !universeLoading && (universe?.matched ?? 0) > filteredUniverse.length && (
-              <div style={{ marginTop: '6px', fontSize: '10px', color: 'var(--text-muted)', textAlign: 'right' }}>
+              <div style={{ marginTop: '6px', fontSize: '12px', color: 'var(--text-muted)', textAlign: 'right' }}>
                 該当 {(universe?.matched ?? 0).toLocaleString()} 件のうち先頭 {filteredUniverse.length.toLocaleString()} 件
               </div>
             )}
@@ -265,12 +277,13 @@ export default function AdminDbPage() {
       </section>
 
       {/* テーブル別レコード数 (既存) */}
-      <div className="card" style={{ overflow: 'hidden' }}>
-        <div style={sectionHead}>
-          <span style={{ fontSize: '12px', fontWeight: 600 }}>テーブル別レコード数</span>
-          <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
-            大規模テーブルはANALYZE統計の概算値を表示
-          </span>
+      <section className="panel" aria-labelledby="admin-tables-title">
+        <div className="panel-head">
+          <div className="min-w-0">
+            <h2 id="admin-tables-title">テーブル別レコード数</h2>
+            <p>大規模テーブルはANALYZE統計の概算値を表示</p>
+          </div>
+          <span className="text-[12px] tabular-nums text-[var(--color-text-tertiary)]">{stats ? `${stats.tables.length}テーブル` : ''}</span>
         </div>
         <div className="min-w-0 max-w-full overflow-x-auto">
           <table style={{ width: '100%', minWidth: '460px', borderCollapse: 'collapse', fontSize: '12px' }}>
@@ -292,20 +305,22 @@ export default function AdminDbPage() {
                 <td style={{ ...cellStyleR, color: 'var(--text-muted)' }}>{t.latestDate ?? '---'}</td>
               </tr>
             ))}
+            {!stats && loading && (
+              <tr><td colSpan={3} style={{ ...cellStyle, textAlign: 'center', color: 'var(--text-muted)' }}>読み込み中…</td></tr>
+            )}
             {!stats && !loading && (
               <tr><td colSpan={3} style={{ ...cellStyle, textAlign: 'center', color: 'var(--text-muted)' }}>データなし</td></tr>
             )}
           </tbody>
           </table>
         </div>
-      </div>
+      </section>
 
       {/* 補足 */}
-      <div className="card" style={{ padding: '12px', fontSize: '11px', color: 'var(--text-muted)', lineHeight: 1.6 }}>
-        <p style={{ margin: 0, overflowWrap: 'anywhere' }}>
-          📁 DB パス: <code>{stats?.dbPath ?? '---'}</code>
-        </p>
-      </div>
+      <p className="m-0 flex items-start gap-2 text-[12px] leading-5 text-[var(--color-text-tertiary)]" style={{ overflowWrap: 'anywhere' }}>
+        <FolderOpen size={14} aria-hidden className="mt-0.5 shrink-0" />
+        <span>DB パス: <code className="font-mono text-[var(--color-text-secondary)]">{stats?.dbPath ?? '---'}</code></span>
+      </p>
     </div>
   )
 }
@@ -313,32 +328,22 @@ export default function AdminDbPage() {
 // ─── 補助コンポーネント ───
 
 function StatusBadge({ status }: { status: string }) {
-  const map: Record<string, { color: string; bg: string; label: string }> = {
-    running: { color: '#0e7490', bg: 'var(--color-pattern-50)', label: '実行中' },
-    success: { color: '#15803d', bg: '#dcfce7', label: '完了' },
-    partial: { color: '#a16207', bg: '#fef3c7', label: '一部完了' },
-    failed:  { color: '#b91c1c', bg: '#fee2e2', label: '失敗' },
+  const map: Record<string, { tone?: 'brand' | 'positive' | 'warning' | 'danger'; label: string }> = {
+    running: { tone: 'brand', label: '実行中' },
+    success: { tone: 'positive', label: '完了' },
+    partial: { tone: 'warning', label: '一部完了' },
+    failed:  { tone: 'danger', label: '失敗' },
   }
-  const s = map[status] ?? { color: 'var(--text-muted)', bg: 'var(--bg-elevated)', label: status }
-  return (
-    <span style={{
-      display: 'inline-block',
-      padding: '1px 6px',
-      borderRadius: '3px',
-      fontSize: '10px',
-      fontWeight: 500,
-      color: s.color,
-      background: s.bg,
-    }}>{s.label}</span>
-  )
+  const s = map[status] ?? { label: status }
+  return <span className="status-tag" data-tone={s.tone}>{s.label}</span>
 }
 
 function SummaryCard({ label, value, unit }: { label: string; value: string; unit: string }) {
   return (
-    <div className="card min-w-0" style={{ padding: '12px' }}>
-      <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '4px' }}>{label}</div>
-      <div style={{ fontFamily: 'var(--font-mono)', fontSize: '20px', fontWeight: 600 }}>
-        {value} <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{unit}</span>
+    <div className="min-w-0 rounded-[var(--radius-card)] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-4 py-3">
+      <div className="text-[12px] font-semibold text-[var(--color-text-tertiary)]">{label}</div>
+      <div className="mt-1 truncate font-mono text-[20px] font-bold tabular-nums text-[var(--color-text-primary)]">
+        {value} <span className="font-sans text-[12px] font-normal text-[var(--color-text-tertiary)]">{unit}</span>
       </div>
     </div>
   )
@@ -379,91 +384,45 @@ function fmtDuration(start: number | string | null, end: number | string | null)
 
 // ─── スタイル ───
 
-const headerRow: React.CSSProperties = {
-  display: 'flex',
-  justifyContent: 'space-between',
-  alignItems: 'flex-end',
-  borderBottom: '1px solid var(--border-subtle)',
-  paddingBottom: '12px',
-}
-
-const sectionHead: React.CSSProperties = {
-  padding: '8px 12px',
-  borderBottom: '1px solid var(--border-subtle)',
-  display: 'flex',
-  justifyContent: 'space-between',
-  alignItems: 'center',
-  background: 'var(--bg-elevated)',
-}
-
-const refreshBtn: React.CSSProperties = {
-  padding: '6px 14px',
-  background: 'transparent',
-  border: '1px solid var(--border-base)',
-  borderRadius: 'var(--radius-sm)',
-  fontSize: '12px',
-  fontFamily: 'var(--font-mono)',
-  cursor: 'pointer',
-  color: 'var(--text-secondary)',
-}
-
-const toggleBtn: React.CSSProperties = {
-  padding: '2px 8px',
-  background: 'transparent',
-  border: '1px solid',
-  borderRadius: 'var(--radius-sm)',
-  fontSize: '10px',
-  fontFamily: 'var(--font-mono)',
-}
-
-const readOnlyNoteStyle: React.CSSProperties = {
-  padding: '8px 10px',
-  border: '1px solid var(--color-border-soft)',
-  borderRadius: 'var(--radius-sm)',
-  background: 'var(--color-surface-subtle)',
-  color: 'var(--text-secondary)',
-  fontSize: '11px',
-  lineHeight: 1.6,
-}
-
+// 運用表は等幅で桁を揃え、見出しは表の地色 (surface-subtle) で本文と分ける
 const headStyle: React.CSSProperties = {
   padding: '8px 12px',
   textAlign: 'left',
-  fontFamily: 'var(--font-mono)',
-  fontWeight: 500,
-  color: 'var(--text-muted)',
-  fontSize: '11px',
+  fontWeight: 600,
+  color: 'var(--color-text-tertiary)',
+  background: 'var(--color-surface-subtle)',
+  borderBottom: '1px solid var(--color-border-default)',
+  fontSize: '12px',
+  whiteSpace: 'nowrap',
 }
 
 const headStyleR: React.CSSProperties = { ...headStyle, textAlign: 'right' }
 
 const cellStyle: React.CSSProperties = {
-  padding: '6px 12px',
+  padding: '7px 12px',
   fontFamily: 'var(--font-mono)',
-  fontSize: '11px',
+  fontSize: '12px',
   color: 'var(--text-primary)',
+  fontVariantNumeric: 'tabular-nums',
 }
 
 const cellStyleR: React.CSSProperties = { ...cellStyle, textAlign: 'right' }
 
 const inputStyle: React.CSSProperties = {
   width: '100%',
+  height: '36px',
   fontFamily: 'var(--font-mono)',
-  fontSize: '12px',
-  padding: '6px 8px',
-  border: '1px solid var(--border-base)',
-  borderRadius: 'var(--radius-sm)',
-  background: 'var(--bg-base)',
-  color: 'var(--text-primary)',
+  fontSize: '13px',
+  padding: '0 10px 0 30px',
 }
 
 const estimateBadge: React.CSSProperties = {
   display: 'inline-block',
   marginLeft: '6px',
-  padding: '1px 5px',
+  padding: '0 5px',
   borderRadius: '3px',
-  border: '1px solid var(--border-base)',
-  color: 'var(--text-muted)',
-  fontSize: '10px',
+  border: '1px solid var(--color-border-default)',
+  color: 'var(--color-text-tertiary)',
+  fontSize: '11px',
   fontFamily: 'var(--font-sans)',
 }

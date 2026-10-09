@@ -280,13 +280,13 @@ export function ChartDrillClient() {
   return (
     <div className="sb-page">
       <PageTitle
+        eyebrow="分析・AI"
         title="チャートドリル"
-        subtitle="過去時点までのチャートだけを見て、上昇・下落・見送りを反復練習します。"
-        badge="初動察知トレーニング"
+        subtitle="過去のある時点までのチャートだけを見て、上昇・下落・見送りの判断を繰り返し練習します。"
         rightSlot={
           <Link
             href="/backtest"
-            className="inline-flex h-7 items-center rounded-[3px] border border-[var(--color-border-default)] bg-white px-2.5 text-[11px] font-black text-[var(--color-brand-800)] hover:border-[var(--color-market-red)] hover:text-[var(--color-market-red)]"
+            className="btn"
           >
             過去検証へ
           </Link>
@@ -442,7 +442,7 @@ export function ChartDrillClient() {
               {question && (
                 <Link
                   href={question.market === 'US' ? `/us/stock/${question.ticker}` : `/stock/${question.ticker}`}
-                  className="inline-flex h-8 items-center gap-1.5 rounded-[3px] border border-[var(--color-border-default)] bg-white px-2.5 text-[12px] font-black text-[var(--color-brand-800)] hover:border-[var(--color-market-red)] hover:text-[var(--color-market-red)]"
+                  className="inline-flex h-8 items-center gap-1.5 rounded-[3px] border border-[var(--color-border-default)] bg-white px-2.5 text-[12px] font-black text-[var(--color-brand-800)] hover:border-[var(--color-brand-400)] hover:text-[var(--color-brand-900)]"
                 >
                   銘柄詳細
                   <ArrowUpRight size={14} />

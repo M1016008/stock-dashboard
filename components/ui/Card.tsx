@@ -1,5 +1,6 @@
 // components/ui/Card.tsx
-// 共通カード: Kabutan 風の白い情報パネル、強めの罫線、コンパクトな情報密度。
+// 共通カード: 繰り返しレコードや枠が意味を持つ分析ツールにだけ使う。
+// 1px の罫線と 6px の角丸のみ。影・ホバー時の枠色変化は付けない。
 
 import { cn } from '@/lib/util/cn'
 
@@ -14,7 +15,7 @@ export function Card({ className, size = 'md', inset, ...rest }: CardProps) {
     <div
       {...rest}
       className={cn(
-        'rounded-[var(--radius-card)] border border-[var(--color-border-default)] bg-white shadow-[var(--shadow-card)] transition-colors duration-150 hover:border-[var(--color-border-strong)]',
+        'min-w-0 rounded-[var(--radius-card)] border border-[var(--color-border-default)] bg-white',
         pad,
         className,
       )}
@@ -24,12 +25,12 @@ export function Card({ className, size = 'md', inset, ...rest }: CardProps) {
 
 export function CardHeader({ title, action, hint }: { title: string; action?: React.ReactNode; hint?: string }) {
   return (
-    <div className="mb-4 flex items-start justify-between gap-4 border-b-2 border-[var(--color-brand-700)] bg-[var(--color-surface-subtle)] px-3 py-2">
-      <div className="min-w-0 border-l-4 border-[var(--color-market-red)] pl-2">
-        <h2 className="text-[14px] font-bold leading-tight text-[var(--color-brand-900)]">{title}</h2>
-        {hint && <div className="mt-1 text-[11px] font-semibold leading-none text-[var(--color-text-tertiary)]">{hint}</div>}
+    <div className="mb-3 flex min-w-0 flex-wrap items-start justify-between gap-x-4 gap-y-1 border-b border-[var(--color-border-soft)] pb-2.5">
+      <div className="min-w-0">
+        <h2 className="text-[14px] font-bold leading-tight text-[var(--color-text-primary)]">{title}</h2>
+        {hint && <div className="mt-1 text-[11px] leading-snug text-[var(--color-text-tertiary)]">{hint}</div>}
       </div>
-      {action && <div className="shrink-0 text-[11px] font-bold text-[var(--color-market-red)]">{action}</div>}
+      {action && <div className="shrink-0 text-[11px] font-bold text-[var(--color-brand-700)]">{action}</div>}
     </div>
   )
 }

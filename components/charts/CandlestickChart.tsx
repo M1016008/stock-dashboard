@@ -633,7 +633,7 @@ export function CandlestickChart({
           )
         ) : (
           <>
-            {!compact && <span style={{ fontSize: '10px', color: 'var(--text-muted)', letterSpacing: '0.08em' }}>MA:</span>}
+            {!compact && <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>MA:</span>}
             {maToggles}
           </>
         )}
@@ -1243,7 +1243,7 @@ const summaryBarStyle: React.CSSProperties = {
   padding: '10px',
   border: '1px solid var(--border-base)',
   borderRadius: 'var(--radius-sm)',
-  background: 'linear-gradient(180deg, #fff 0%, var(--bg-surface) 100%)',
+  background: '#fff',
   color: 'var(--text-secondary)',
   fontSize: '12px',
   fontWeight: 700,
@@ -1401,7 +1401,7 @@ function summaryTonePalette(tone: SummaryTone): SummaryTonePalette {
     return {
       accent: '#dc2626',
       border: 'rgba(220, 38, 38, 0.24)',
-      bg: 'linear-gradient(180deg, rgba(254, 242, 242, 0.98) 0%, rgba(255, 255, 255, 0.86) 100%)',
+      bg: 'var(--color-price-up-bg)',
       text: '#991b1b',
       label: '#b91c1c',
     }
@@ -1410,7 +1410,7 @@ function summaryTonePalette(tone: SummaryTone): SummaryTonePalette {
     return {
       accent: '#2563eb',
       border: 'rgba(37, 99, 235, 0.24)',
-      bg: 'linear-gradient(180deg, rgba(239, 246, 255, 0.98) 0%, rgba(255, 255, 255, 0.86) 100%)',
+      bg: 'var(--color-price-down-bg)',
       text: '#1d4ed8',
       label: '#2563eb',
     }
@@ -1419,7 +1419,7 @@ function summaryTonePalette(tone: SummaryTone): SummaryTonePalette {
     return {
       accent: '#d97706',
       border: 'rgba(217, 119, 6, 0.28)',
-      bg: 'linear-gradient(180deg, rgba(255, 251, 235, 0.98) 0%, rgba(255, 255, 255, 0.86) 100%)',
+      bg: '#fffbeb',
       text: '#92400e',
       label: '#b45309',
     }

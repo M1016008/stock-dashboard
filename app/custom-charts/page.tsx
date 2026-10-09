@@ -14,9 +14,9 @@ export default function CustomChartsPage() {
   return (
     <div className="w-full min-w-0 max-w-full space-y-4">
       <PageTitle
+        eyebrow="分析・AI"
         title="合成チャート"
-        subtitle="複数銘柄のOHLCVを数式で合成し、独自のライン/ロウソク足チャートとして表示します。"
-        badge="Synthetic OHLC"
+        subtitle="複数銘柄の株価・出来高を数式で合成し、ラインまたはロウソク足で表示します。"
       />
       <CustomChartsClient />
     </div>

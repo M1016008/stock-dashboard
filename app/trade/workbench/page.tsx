@@ -94,10 +94,10 @@ function makeHref(current: Record<string, string | string[] | undefined>, update
 
 function StatTile({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
-    <div className="rounded-[4px] border border-[var(--color-border-default)] bg-white p-3 shadow-[var(--shadow-card)]">
-      <div className="text-[11px] font-bold text-[var(--color-text-tertiary)]">{label}</div>
-      <div className="mt-1 text-[20px] font-black tabular-nums text-[var(--color-brand-900)]">{value}</div>
-      {hint && <div className="mt-1 text-[11px] font-semibold text-[var(--color-text-secondary)]">{hint}</div>}
+    <div>
+      <dt>{label}</dt>
+      <dd>{value}</dd>
+      {hint && <small>{hint}</small>}
     </div>
   )
 }
@@ -242,7 +242,7 @@ function CandidateCard({ candidate }: { candidate: TradeWorkbenchCandidate }) {
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
-                <Link href={`/stock/${candidate.ticker}`} className="text-[18px] font-black text-[var(--color-brand-900)] hover:text-[var(--color-market-red)]">
+                <Link href={`/stock/${candidate.ticker}`} className="text-[18px] font-black text-[var(--color-brand-900)] hover:text-[var(--color-brand-900)]">
                   {candidate.ticker}
                 </Link>
                 <span className="text-[13px] font-bold text-[var(--color-text-secondary)]">{candidate.name ?? '-'}</span>
@@ -263,7 +263,7 @@ function CandidateCard({ candidate }: { candidate: TradeWorkbenchCandidate }) {
             </div>
             <Link
               href={`/stock/${candidate.ticker}`}
-              className="inline-flex h-8 items-center gap-1.5 rounded-[3px] border border-[var(--color-border-default)] bg-white px-2.5 text-[12px] font-black text-[var(--color-brand-800)] hover:border-[var(--color-market-red)] hover:text-[var(--color-market-red)]"
+              className="inline-flex h-8 items-center gap-1.5 rounded-[3px] border border-[var(--color-border-default)] bg-white px-2.5 text-[12px] font-black text-[var(--color-brand-800)] hover:border-[var(--color-brand-400)] hover:text-[var(--color-brand-900)]"
             >
               銘柄詳細
               <ArrowUpRight size={14} />
@@ -363,20 +363,22 @@ export default async function TradeWorkbenchPage({
   return (
     <div className="sb-page">
       <PageTitle
-        title="売買候補ワークベンチ"
-        subtitle="既存の6ステージ、MA、シグナル、強化版ML検証を統合し、注文案の「なぜ」を確認します。実発注は行いません。"
-        badge={`${data.params.horizonDays}営業日 / 注文案下書き`}
+        eyebrow="分析・AI"
+        title="売買候補"
+        subtitle="6ステージ・MA・シグナル・ML検証をまとめ、注文案の根拠を確認します。実際の発注は行いません。"
+        badge="注文案の下書き"
+        meta={<span>{data.params.horizonDays}営業日で評価</span>}
         rightSlot={
           <Link
             href="/backtest"
-            className="inline-flex h-7 items-center rounded-[3px] border border-[var(--color-border-default)] bg-white px-2.5 text-[11px] font-black text-[var(--color-brand-800)] hover:border-[var(--color-market-red)] hover:text-[var(--color-market-red)]"
+            className="btn"
           >
             過去検証へ
           </Link>
         }
       />
 
-      <div className="sb-section grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
+      <dl className="stat-strip" aria-label="候補の集計">
         <StatTile label="候補総数" value={summary.total.toLocaleString()} hint={`データ ${summary.latestDataDate ?? '-'}`} />
         <StatTile label="買い候補" value={summary.buyCandidates.toLocaleString()} hint="上昇根拠が揃う候補" />
         <StatTile label="空売り候補" value={summary.shortCandidates.toLocaleString()} hint="貸借かつ下落根拠" />
@@ -387,10 +389,10 @@ export default async function TradeWorkbenchPage({
           value={summary.marketContext.regime === 'bull' ? '強気' : summary.marketContext.regime === 'bear' ? '弱気' : summary.marketContext.regime === 'neutral' ? '中立' : '不明'}
           hint={`20日 ${fmtPct(summary.marketContext.marketReturn20)} / MA25上 ${fmtRate(summary.marketContext.marketAboveSma25Rate)}`}
         />
-      </div>
+      </dl>
 
       <Card className="sb-section">
-        <CardHeader title="条件" hint="horizonと仮予算を切り替えて、注文案の作られ方を確認します。" />
+        <CardHeader title="条件" hint="評価期間と仮の予算を切り替えて、注文案の作られ方を確認します。" />
         <div className="flex flex-wrap gap-2">
           {HORIZONS.map((horizon) => (
             <Link

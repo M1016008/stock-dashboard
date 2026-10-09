@@ -15,8 +15,8 @@ export const fetchCache = 'force-no-store'
 
 function LoadingStageMap() {
   return (
-    <div className="flex min-h-[360px] items-center justify-center rounded-[8px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] text-[12px] font-semibold text-[var(--color-text-tertiary)]">
-      読込中...
+    <div role="status" aria-busy="true" className="flex min-h-[360px] animate-pulse items-center justify-center rounded-[6px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] text-[12px] text-[var(--color-text-tertiary)]">
+      ステージ行列を読み込み中…
     </div>
   )
 }
@@ -33,9 +33,10 @@ export default async function StageScreenerPage({
   return (
     <div className="sb-page">
       <PageTitle
+        eyebrow="銘柄探索"
         title="ステージスクリーナー"
         subtitle="日足・週足・月足のB×Aステージ行列から、市場全体の銘柄をクリックで絞り込みます。"
-        badge={activeUniverseMeta ? `${activeUniverseMeta.shortLabel} / HEX` : 'HEX'}
+        badge={activeUniverseMeta ? `${activeUniverseMeta.shortLabel}に絞り込み中` : undefined}
       />
 
       <div className="sb-section">

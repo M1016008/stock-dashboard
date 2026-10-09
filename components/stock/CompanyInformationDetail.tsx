@@ -559,27 +559,25 @@ export function CompanyInformationDetail({ ticker, analysisDate }: CompanyInform
   }, [model, tab])
 
   if (loading) {
-    return <div className="border border-[var(--color-border-default)] bg-white px-4 py-10 text-center text-[10px] font-bold text-[var(--color-text-tertiary)]">企業情報を読み込んでいます…</div>
+    return <div className="rounded-[var(--radius-card)] border border-[var(--color-border-default)] bg-white px-4 py-10 text-center text-[12px] text-[var(--color-text-tertiary)]" role="status">企業情報を読み込んでいます…</div>
   }
   if (error || !model) {
-    return <div className="border border-[var(--color-border-default)] bg-white px-4 py-10 text-center text-[10px] font-bold text-[var(--color-text-tertiary)]">{error ?? '企業情報がありません。'}</div>
+    return <div className="rounded-[var(--radius-card)] border border-dashed border-[var(--color-border-default)] bg-white px-4 py-10 text-center text-[12px] text-[var(--color-text-secondary)]">{error ?? '企業情報がありません。'}</div>
   }
 
   return (
     <div className="space-y-3">
-      <header className="border border-[var(--color-border-default)] bg-[var(--color-brand-50)] px-4 py-3">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <div className="flex items-center gap-2"><Building2 size={17} className="text-[var(--color-brand-700)]" /><h2 className="text-[14px] font-black text-[var(--color-brand-900)]">企業情報</h2></div>
-            <p className="mt-0.5 text-[8px] font-semibold text-[var(--color-text-secondary)]">EDINET法定開示 / 最新有報を基準</p>
-          </div>
-          <div className="text-right text-[7px] font-semibold text-[var(--color-text-tertiary)]"><div>分析基準日 {model.asOf}</div><div>有報 {model.snapshot.periodEnd ?? '—'}</div></div>
+      <header className="flex flex-wrap items-end justify-between gap-3 border-b border-[var(--color-border-soft)] pb-2">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2"><Building2 size={16} aria-hidden className="text-[var(--color-brand-700)]" /><h2 className="text-[15px] font-bold text-[var(--color-text-primary)]">企業情報</h2></div>
+          <p className="mt-0.5 text-[12px] text-[var(--color-text-secondary)]">EDINET法定開示 / 最新有報を基準</p>
         </div>
+        <div className="text-right font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]"><div>分析基準日 {model.asOf}</div><div>有報 {model.snapshot.periodEnd ?? '—'}</div></div>
       </header>
-      <nav className="flex overflow-x-auto border border-[var(--color-border-default)] bg-white" aria-label="企業情報の表示切替">
+      <nav className="view-tabs" aria-label="企業情報の表示切替">
         {SUB_TABS.map((item) => {
           const Icon = item.icon
-          return <button key={item.id} type="button" onClick={() => setTab(item.id)} className={`inline-flex h-9 shrink-0 items-center gap-1.5 border-b-2 px-3 text-[9px] font-black ${tab === item.id ? 'border-[var(--color-market-red)] bg-[var(--color-surface-subtle)] text-[var(--color-brand-900)]' : 'border-transparent text-[var(--color-text-secondary)]'}`} aria-pressed={tab === item.id}><Icon size={12} />{item.label}</button>
+          return <button key={item.id} type="button" onClick={() => setTab(item.id)} className="view-tab" data-active={tab === item.id} aria-pressed={tab === item.id}><Icon size={13} aria-hidden />{item.label}</button>
         })}
       </nav>
       {currentContent}

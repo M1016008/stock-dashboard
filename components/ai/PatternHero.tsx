@@ -20,7 +20,7 @@ export function PatternHero({ meta }: { meta: PatternMeta | null }) {
       <div className="flex flex-wrap items-end justify-between gap-6">
         <div>
           <div className="text-[11px] text-[var(--color-text-tertiary)]">選択中パターン</div>
-          <div className="mt-1 font-mono text-[26px] tabular-nums tracking-[0.08em]">
+          <div className="mt-1 font-mono text-[26px] tabular-nums">
             {meta.pattern_code}
           </div>
           <div className="mt-2 flex flex-wrap items-center gap-2">

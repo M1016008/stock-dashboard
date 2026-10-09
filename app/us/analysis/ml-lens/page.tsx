@@ -3,6 +3,9 @@ import Link from 'next/link'
 import { Database, Network } from 'lucide-react'
 import { PhysicsMlCandidatesPanel } from '@/components/ml/PhysicsMlCandidatesPanel'
 import { UsAnalysisNav } from '@/components/us/UsAnalysisNav'
+import { PageTitle } from '@/components/layout/PageTitle'
+import { StatStrip } from '@/components/ui/StatStrip'
+import { Notice } from '@/components/ui/EmptyState'
 import {
   loadUsAnalysisStatus,
   loadUsCurrentSimilars,
@@ -35,32 +38,37 @@ export default async function UsMlLensPage() {
     && status.analogPriceBasis === US_ADJUSTED_PRICE_BASIS
 
   return (
-    <div className="sb-page">
-      <div className="sb-page-title">
-        <h1>US AI Lens</h1>
-        <p>US分析DBのMA構造・物理特徴量・ML候補・類似局面だけを横断表示します。</p>
-      </div>
-      <UsAnalysisNav current="/us/analysis/ml-lens" />
+    <div className="flex w-full min-w-0 flex-col gap-5">
+      <PageTitle
+        eyebrow="米国株"
+        title="US AI Lens"
+        subtitle="US分析DBのMA構造・物理特徴量・ML候補・類似局面だけを横断表示します。JPの統計は混在させません。"
+        badge={generationReady ? undefined : '世代移行中'}
+        badgeTone="warning"
+      >
+        <UsAnalysisNav current="/us/analysis/ml-lens" />
+      </PageTitle>
 
-      <section className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
-        {[
+      {/* 各レイヤーの基準日。日付がずれているレイヤーは結果の読み方に注意する */}
+      <StatStrip
+        label="データ基準日"
+        items={[
           ['US価格', status.priceDate],
           ['物理特徴量', status.featureDate],
           ['物理ML候補', status.candidateDate],
           ['検証区間終端', status.evaluationDate],
           ['類似局面', status.analogDate],
-        ].map(([label, value]) => (
-          <div key={label} className="border border-[var(--color-border-default)] bg-white p-3">
-            <div className="text-[10px] font-bold text-[var(--color-text-tertiary)]">{label}</div>
-            <div className="mt-1 text-[15px] font-black text-[var(--color-brand-900)]">{value ?? '未生成'}</div>
-          </div>
-        ))}
-      </section>
+        ].map(([label, value]) => ({
+          label,
+          value: <span className="font-mono text-[17px]">{value ?? '未生成'}</span>,
+          tone: value ? undefined : 'muted' as const,
+        }))}
+      />
 
       {!generationReady && (
-        <div className="border-l-4 border-amber-500 bg-amber-50 px-4 py-3 text-[12px] font-bold text-amber-950">
-          調整後価格・派生特徴量・類似局面インデックスの世代移行中です。完了済みのUS結果は閲覧できますが、新世代の確定公開は品質検証後に行います。
-        </div>
+        <Notice tone="warning" title="調整後価格・派生特徴量・類似局面インデックスの世代移行中です">
+          完了済みのUS結果は閲覧できますが、新世代の確定公開は品質検証後に行います。
+        </Notice>
       )}
 
       <PhysicsMlCandidatesPanel
@@ -87,33 +95,41 @@ export default async function UsMlLensPage() {
         }))}
       />
 
-      <section className="grid gap-4 lg:grid-cols-2">
-        <div>
-          <div className="sb-hd">
-            <h2>モデル評価</h2>
-            <span className="inline-flex items-center gap-1 text-[10px] font-bold text-[var(--color-text-tertiary)]">
-              <Database size={15} />
-              年次ウォークフォワード検証 / 終端 {status.evaluationDate ?? '未生成'}
-            </span>
+      <div className="grid min-w-0 gap-4 lg:grid-cols-2">
+        <section className="panel" aria-labelledby="us-model-eval-title">
+          <div className="panel-head">
+            <div className="flex min-w-0 items-center gap-2">
+              <Database size={15} aria-hidden className="text-[var(--color-text-tertiary)]" />
+              <div className="min-w-0">
+                <h2 id="us-model-eval-title">モデル評価</h2>
+                <p>年次ウォークフォワード検証 / 終端 {status.evaluationDate ?? '未生成'}</p>
+              </div>
+            </div>
           </div>
-          <div className="overflow-x-auto border border-[var(--color-border-default)] bg-white">
-            <table className="w-full min-w-[560px] text-left text-[11px]">
-              <thead className="bg-[var(--color-surface-subtle)] text-[10px] font-black text-[var(--color-text-tertiary)]">
-                <tr><th className="px-3 py-2">方向</th><th className="px-3 py-2">期間</th><th className="px-3 py-2">標本</th><th className="px-3 py-2">P@20</th><th className="px-3 py-2">勝率</th></tr>
+          <div className="table-scroll">
+            <table className="w-full min-w-[480px] text-left text-[12px]">
+              <thead className="text-[11px] text-[var(--color-text-tertiary)]">
+                <tr className="border-b border-[var(--color-border-default)]">
+                  <th className="px-4 py-2 font-semibold">方向</th>
+                  <th className="px-3 py-2 font-semibold">期間</th>
+                  <th className="px-3 py-2 text-right font-semibold">標本</th>
+                  <th className="px-3 py-2 text-right font-semibold">P@20</th>
+                  <th className="px-4 py-2 text-right font-semibold">勝率</th>
+                </tr>
               </thead>
               <tbody className="divide-y divide-[var(--color-border-soft)]">
                 {evaluations.slice(0, 12).map((row) => (
-                  <tr key={`${row.modelType}-${row.direction}-${row.horizonDays}`}>
-                    <td className="px-3 py-2 font-bold">{row.direction}</td>
-                    <td className="px-3 py-2">{row.horizonDays}日</td>
-                    <td className="px-3 py-2 tabular-nums">{row.sampleCount.toLocaleString()}</td>
-                    <td className="px-3 py-2 tabular-nums">{pct(row.precisionAt20)}</td>
-                    <td className="px-3 py-2 tabular-nums">{pct(row.hitRate)}</td>
+                  <tr key={`${row.modelType}-${row.direction}-${row.horizonDays}`} className="hover:bg-[var(--color-surface-subtle)]">
+                    <td className="px-4 py-2 font-semibold">{row.direction}</td>
+                    <td className="px-3 py-2 tabular-nums">{row.horizonDays}日</td>
+                    <td className="px-3 py-2 text-right font-mono tabular-nums">{row.sampleCount.toLocaleString()}</td>
+                    <td className="px-3 py-2 text-right font-mono tabular-nums">{pct(row.precisionAt20)}</td>
+                    <td className="px-4 py-2 text-right font-mono font-semibold tabular-nums">{pct(row.hitRate)}</td>
                   </tr>
                 ))}
                 {evaluations.length === 0 && (
                   <tr>
-                    <td colSpan={5} className="px-3 py-5 text-center font-semibold text-[var(--color-text-secondary)]">
+                    <td colSpan={5} className="px-4 py-8 text-center text-[var(--color-text-secondary)]">
                       価格基準日以前のUSモデル評価を生成中です。
                     </td>
                   </tr>
@@ -121,26 +137,34 @@ export default async function UsMlLensPage() {
               </tbody>
             </table>
           </div>
-        </div>
+        </section>
 
-        <div>
-          <div className="sb-hd">
-            <h2>現在の類似銘柄ペア</h2>
-            <Network size={15} />
-          </div>
-          <div className="divide-y divide-[var(--color-border-soft)] border border-[var(--color-border-default)] bg-white">
-            {similars.slice(0, 12).map((row) => (
-              <div key={`${row.baseTicker}-${row.similarTicker}`} className="grid grid-cols-[1fr_auto_1fr_auto] items-center gap-2 px-3 py-2 text-[12px]">
-                <Link href={`/us/stock/${encodeURIComponent(row.baseTicker)}#ml`} className="font-black text-[var(--color-brand-800)]">{row.baseTicker}</Link>
-                <span className="text-[var(--color-text-tertiary)]">→</span>
-                <Link href={`/us/stock/${encodeURIComponent(row.similarTicker)}#ml`} className="font-black text-[var(--color-brand-800)]">{row.similarTicker}</Link>
-                <span className="font-mono font-black tabular-nums">{row.similarityScore.toFixed(3)}</span>
+        <section className="panel" aria-labelledby="us-similar-pairs-title">
+          <div className="panel-head">
+            <div className="flex min-w-0 items-center gap-2">
+              <Network size={15} aria-hidden className="text-[var(--color-text-tertiary)]" />
+              <div className="min-w-0">
+                <h2 id="us-similar-pairs-title">現在の類似銘柄ペア</h2>
+                <p>類似度の高い順 / 上位12組</p>
               </div>
-            ))}
-            {similars.length === 0 && <div className="p-5 text-[12px] font-semibold text-[var(--color-text-secondary)]">US類似局面インデックスを生成中です。</div>}
+            </div>
           </div>
-        </div>
-      </section>
+          {similars.length === 0 ? (
+            <p className="px-4 py-8 text-center text-[13px] text-[var(--color-text-secondary)]">US類似局面インデックスを生成中です。</p>
+          ) : (
+            <ol className="divide-y divide-[var(--color-border-soft)]">
+              {similars.slice(0, 12).map((row) => (
+                <li key={`${row.baseTicker}-${row.similarTicker}`} className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)_auto] items-center gap-3 px-4 py-2 text-[13px] hover:bg-[var(--color-surface-subtle)]">
+                  <Link href={`/us/stock/${encodeURIComponent(row.baseTicker)}#ml`} prefetch={false} className="truncate font-mono font-bold text-[var(--color-brand-800)] hover:underline">{row.baseTicker}</Link>
+                  <span className="text-[var(--color-text-tertiary)]" aria-label="に類似">→</span>
+                  <Link href={`/us/stock/${encodeURIComponent(row.similarTicker)}#ml`} prefetch={false} className="truncate font-mono font-bold text-[var(--color-brand-800)] hover:underline">{row.similarTicker}</Link>
+                  <span className="font-mono font-semibold tabular-nums text-[var(--color-text-primary)]">{row.similarityScore.toFixed(3)}</span>
+                </li>
+              ))}
+            </ol>
+          )}
+        </section>
+      </div>
     </div>
   )
 }
