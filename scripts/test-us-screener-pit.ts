@@ -52,5 +52,7 @@ assert.match(route, /imported_at < CAST\(strftime/)
 assert.match(route, /pit\.mode === 'HISTORICAL'/)
 assert.match(route, /WHEN '\$\{pit\.mode\}' = 'LATEST'/)
 assert.doesNotMatch(route, /AND u\.active = 1/)
+assert.doesNotMatch(route, /MAX\(CASE WHEN/)
+assert.match(route, /WHERE market = 'US' AND date <= \?/)
 
 console.log('US screener PIT contract tests: ok')

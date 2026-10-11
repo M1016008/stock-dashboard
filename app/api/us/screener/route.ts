@@ -232,15 +232,20 @@ export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
     const requestedDate = parseUsScreenerRequestedDate(searchParams.get('date'))
-    const availableDates = await execGet<{ latestDate: string | null; resolvedDate: string | null }>(
-      `SELECT
-         MAX(date) AS latestDate,
-         MAX(CASE WHEN ? IS NULL OR date <= ? THEN date END) AS resolvedDate
+    const latestDate = (await execGet<{ date: string | null }>(
+      `SELECT MAX(date) AS date
        FROM market_daily_snapshots
        WHERE market = 'US'`,
-      [requestedDate, requestedDate],
-    )
-    const date = requestedDate ? availableDates?.resolvedDate : availableDates?.latestDate
+    ))?.date ?? null
+    const resolvedDate = requestedDate
+      ? (await execGet<{ date: string | null }>(
+          `SELECT MAX(date) AS date
+           FROM market_daily_snapshots
+           WHERE market = 'US' AND date <= ?`,
+          [requestedDate],
+        ))?.date ?? null
+      : latestDate
+    const date = resolvedDate
     if (!date) {
       return NextResponse.json({
         market: 'US',
@@ -255,7 +260,7 @@ export async function GET(request: NextRequest) {
     const pit = createUsScreenerPitContract({
       requestedDate,
       resolvedDate: date,
-      latestDate: availableDates?.latestDate ?? date,
+      latestDate: latestDate ?? date,
     })
     const limit = Math.min(1000, Math.max(1, Number(searchParams.get('limit') ?? 100)))
     const sort = SORT_KEYS.has(searchParams.get('sort') ?? '') ? searchParams.get('sort')! : 'ticker'
