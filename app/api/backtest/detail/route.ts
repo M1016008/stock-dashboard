@@ -473,8 +473,11 @@ export async function GET(request: NextRequest) {
         candidates,
       })
       : null
+    const friendReadonly = request.headers.get('x-stockboard-access-mode') === 'friend-read-only'
     const aiComment = fallbackComment
-      ? await analysisComment({
+      ? friendReadonly
+        ? fallbackComment
+        : await analysisComment({
         ticker,
         basisDate: date,
         horizonDays: horizon,
@@ -482,7 +485,7 @@ export async function GET(request: NextRequest) {
         stagePath: selectedStagePath,
         maAnalysis,
         maCandidateAnalysis: candidates,
-      }, fallbackComment)
+        }, fallbackComment)
       : null
 
     return NextResponse.json({

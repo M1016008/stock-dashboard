@@ -55,6 +55,8 @@ assert.throws(
 )
 
 const smoke = readFileSync('scripts/smoke-production-site.ts', 'utf8')
+assert.match(smoke, /STOCKBOARD_SMOKE_READ_ONLY/)
+assert.match(smoke, /if \(!readOnly\)/)
 const suite = smoke.slice(smoke.indexOf('async function runLargeHolderSmokeChecks'),
   smoke.indexOf('async function runSavedEvaluationCheck'))
 for (const name of [

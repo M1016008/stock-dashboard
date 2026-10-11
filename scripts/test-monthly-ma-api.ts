@@ -115,7 +115,18 @@ async function main(): Promise<void> {
   const tickerSearch = await list('period=all&q=7003')
   assert.ok(tickerSearch.rows.length > 0)
   assert.ok(tickerSearch.rows.every((row) => row.ticker === '7003'))
-  assert.ok(tickerSearch.rows.every((row) => row.stageCode === '435241'))
+  assert.ok(tickerSearch.rows.every((row) => {
+    const stages = [
+      row.dailyAStage,
+      row.dailyBStage,
+      row.weeklyAStage,
+      row.weeklyBStage,
+      row.monthlyAStage,
+      row.monthlyBStage,
+    ]
+    return stages.every((stage) => stage != null)
+      && row.stageCode === stages.join('')
+  }))
   // Volume is live market data, so assert the API contract rather than a
   // historical point value that changes after every daily refresh.
   assert.ok(tickerSearch.rows.every((row) => row.currentVolume != null && row.currentVolume >= 0))
