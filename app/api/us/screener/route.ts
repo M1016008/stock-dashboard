@@ -6,6 +6,13 @@ import { findUsAliasTickers, getUsDisplayName } from '@/lib/us-symbol-aliases'
 import { usInvestableSymbolSql } from '@/lib/us-symbol-quality'
 import { buildShortTermCheck } from '@/lib/short-term-check'
 import { readServingCache, stableCacheKey, writeServingCache } from '@/lib/api/serving-cache'
+import {
+  assertUsScreenerHistoricalFilters,
+  createUsScreenerPitContract,
+  parseUsScreenerRequestedDate,
+  UsScreenerPitError,
+  type UsScreenerPitContract,
+} from '@/lib/us-screener-pit'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -40,8 +47,8 @@ const SORT_KEYS = new Set([
   'earningsDays',
 ])
 
-const US_SCREENER_CACHE_NAMESPACE = 'us-screener-v7'
-const US_SCREENER_FACETS_CACHE_NAMESPACE = 'us-screener-facets-v1'
+const US_SCREENER_CACHE_NAMESPACE = 'us-screener-v8'
+const US_SCREENER_FACETS_CACHE_NAMESPACE = 'us-screener-facets-v2'
 const EARNINGS_WINDOWS = new Set([14, 30, 60, 90, 180])
 const EARNINGS_TIME_BUCKETS = new Set(['before_open', 'market_hours', 'after_close', 'unknown'])
 const STAGE_AXES = [
@@ -69,6 +76,7 @@ type UsScreenerPayload = {
   quality: 'standard' | 'all'
   source: 'tiingo'
   mlSource: 'us_analytics' | 'main'
+  pit: UsScreenerPitContract
   earnings: {
     source: 'finnhub'
     updatedAt: string | null
@@ -134,19 +142,12 @@ function screenerCacheTtlMs(): number {
   return Number.isFinite(value) && value >= 60_000 ? value : 15 * 60 * 1_000
 }
 
-function todayInNewYork(): string {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'America/New_York',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).formatToParts(new Date())
-  const value = (type: string) => parts.find((part) => part.type === type)?.value ?? ''
-  return `${value('year')}-${value('month')}-${value('day')}`
-}
-
-async function loadFacets(date: string, taxonomy: string): Promise<UsScreenerFacets> {
-  const cacheKey = stableCacheKey({ date, taxonomy })
+async function loadFacets(
+  date: string,
+  taxonomy: string,
+  pit: UsScreenerPitContract,
+): Promise<UsScreenerFacets> {
+  const cacheKey = stableCacheKey({ date, taxonomy, pitMode: pit.mode })
   const cacheTtlMs = 24 * 60 * 60 * 1_000
   const cached = await readServingCache<UsScreenerFacets>(
     US_SCREENER_FACETS_CACHE_NAMESPACE,
@@ -155,29 +156,32 @@ async function loadFacets(date: string, taxonomy: string): Promise<UsScreenerFac
   ).catch(() => null)
   if (cached) return cached.payload
 
+  const classificationColumns = pit.mode === 'HISTORICAL'
+    ? 'NULL AS sector, NULL AS industry_code, NULL AS industry'
+    : 'COALESCE(c.sector_name, u.sector) AS sector, c.industry_code, COALESCE(c.industry_name, u.industry) AS industry'
+  const classificationJoin = pit.mode === 'HISTORICAL'
+    ? ''
+    : `LEFT JOIN market_classifications c
+      ON c.market = s.market
+     AND c.ticker = s.ticker
+     AND c.taxonomy = ?
+     AND c.effective_from = '0000-01-01'`
   const facetRows = await execAll<UsScreenerFacetRow>(
     `
     SELECT DISTINCT
       u.exchange,
       u.asset_type,
-      COALESCE(c.sector_name, u.sector) AS sector,
-      c.industry_code,
-      COALESCE(c.industry_name, u.industry) AS industry
+      ${classificationColumns}
     FROM market_daily_snapshots s INDEXED BY market_snapshots_market_date_ticker_idx
     INNER JOIN market_universe u
       ON u.market = s.market
      AND u.ticker = s.ticker
-     AND u.active = 1
-    LEFT JOIN market_classifications c
-      ON c.market = s.market
-     AND c.ticker = s.ticker
-     AND c.taxonomy = ?
-     AND c.effective_from = '0000-01-01'
+    ${classificationJoin}
     WHERE s.market = 'US'
       AND s.date = ?
       AND ${usInvestableSymbolSql('s.ticker')}
     `,
-    [taxonomy, date],
+    pit.mode === 'HISTORICAL' ? [date] : [taxonomy, date],
   )
   const industryGroupMap = new Map<string, { sector: string | null; code: string; name: string }>()
   for (const row of facetRows) {
@@ -227,12 +231,32 @@ async function loadFacets(date: string, taxonomy: string): Promise<UsScreenerFac
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
-    const date = searchParams.get('date') ?? (await execGet<{ date: string | null }>(
-      `SELECT MAX(date) AS date FROM market_daily_snapshots WHERE market = 'US'`,
-    ))?.date
+    const requestedDate = parseUsScreenerRequestedDate(searchParams.get('date'))
+    const availableDates = await execGet<{ latestDate: string | null; resolvedDate: string | null }>(
+      `SELECT
+         MAX(date) AS latestDate,
+         MAX(CASE WHEN ? IS NULL OR date <= ? THEN date END) AS resolvedDate
+       FROM market_daily_snapshots
+       WHERE market = 'US'`,
+      [requestedDate, requestedDate],
+    )
+    const date = requestedDate ? availableDates?.resolvedDate : availableDates?.latestDate
     if (!date) {
-      return NextResponse.json({ market: 'US', date: null, rows: [], count: 0, message: 'US snapshots are not generated yet.' })
+      return NextResponse.json({
+        market: 'US',
+        date: null,
+        rows: [],
+        count: 0,
+        message: requestedDate
+          ? `No US snapshot is available on or before ${requestedDate}.`
+          : 'US snapshots are not generated yet.',
+      })
     }
+    const pit = createUsScreenerPitContract({
+      requestedDate,
+      resolvedDate: date,
+      latestDate: availableDates?.latestDate ?? date,
+    })
     const limit = Math.min(1000, Math.max(1, Number(searchParams.get('limit') ?? 100)))
     const sort = SORT_KEYS.has(searchParams.get('sort') ?? '') ? searchParams.get('sort')! : 'ticker'
     const dir = searchParams.get('dir') === 'desc' ? 'desc' : 'asc'
@@ -274,7 +298,7 @@ export async function GET(request: NextRequest) {
     const earningsTimeBucket = EARNINGS_TIME_BUCKETS.has(earningsTimeBucketValue)
       ? earningsTimeBucketValue
       : ''
-    const earningsToday = todayInNewYork()
+    const earningsAnchorDate = date
     const avgVolumeMinParam = searchParams.get('avgVolumeMin')?.trim()
     const priceMinParam = searchParams.get('priceMin')?.trim()
     const priceMaxParam = searchParams.get('priceMax')?.trim()
@@ -312,7 +336,8 @@ export async function GET(request: NextRequest) {
       physicalStatus,
       earningsWindowDays,
       earningsTimeBucket,
-      earningsToday,
+      earningsAnchorDate,
+      pitMode: pit.mode,
       avgVolumeMin: avgVolumeMin != null && Number.isFinite(avgVolumeMin) ? avgVolumeMin : null,
       priceMin: priceMin != null && Number.isFinite(priceMin) ? priceMin : null,
       priceMax: priceMax != null && Number.isFinite(priceMax) ? priceMax : null,
@@ -328,7 +353,15 @@ export async function GET(request: NextRequest) {
         cache: { status: 'hit', generatedAt: cached.generatedAt },
       })
     }
-    const facets = await loadFacets(date, taxonomy)
+    assertUsScreenerHistoricalFilters(pit, {
+      sector,
+      industryGroup,
+      industry,
+      marketCapMin,
+      marketCapMax,
+      sort,
+    })
+    const facets = await loadFacets(date, taxonomy, pit)
     const qAliasTickers = q ? findUsAliasTickers(q) : []
     const qAliasPlaceholders = qAliasTickers.map(() => '?').join(',')
     const physicalSort = sort === 'pms' || sort === 'pfs' || sort === 'pes'
@@ -518,10 +551,10 @@ export async function GET(request: NextRequest) {
         : ma200Direction === 'flat'
           ? 'AND s.ma_200_prev > 0 AND ABS(s.ma_200 - s.ma_200_prev) / s.ma_200_prev <= 0.0005'
           : ''
-    const whereMarketCapMin = marketCapMin != null
+    const whereMarketCapMin = marketCapMin != null && pit.mode === 'LATEST'
       ? 'AND u.shares_outstanding * COALESCE(cur.adj_close, cur.close) >= ?'
       : ''
-    const whereMarketCapMax = marketCapMax != null
+    const whereMarketCapMax = marketCapMax != null && pit.mode === 'LATEST'
       ? 'AND u.shares_outstanding * COALESCE(cur.adj_close, cur.close) < ?'
       : ''
     const whereEarningsWindow = earningsWindowDays != null
@@ -533,7 +566,28 @@ export async function GET(request: NextRequest) {
     const whereKnownEarnings = sort === 'earningsNextDate' || sort === 'earningsDays'
       ? 'AND earnings.report_date IS NOT NULL'
       : ''
-    const args: Array<string | number> = [earningsToday, taxonomy, date, date]
+    const classificationColumns = pit.mode === 'HISTORICAL'
+      ? `NULL AS sector,
+         NULL AS industry,
+         NULL AS classification_taxonomy,
+         NULL AS classification_source`
+      : `COALESCE(c.sector_name, u.sector) AS sector,
+         COALESCE(c.industry_name, u.industry) AS industry,
+         c.taxonomy AS classification_taxonomy,
+         c.source AS classification_source`
+    const classificationJoin = pit.mode === 'HISTORICAL'
+      ? ''
+      : `LEFT JOIN market_classifications c
+        ON c.market = s.market
+       AND c.ticker = s.ticker
+       AND c.taxonomy = ?
+       AND c.effective_from = '0000-01-01'`
+    const earningsImportCutoff = pit.mode === 'HISTORICAL'
+      ? `AND imported_at < CAST(strftime('%s', date((SELECT today FROM earnings_clock), '+1 day')) AS INTEGER)`
+      : ''
+    const args: Array<string | number> = [earningsAnchorDate]
+    if (pit.mode === 'LATEST') args.push(taxonomy)
+    args.push(date, date)
     if (q) args.push(`%${q}%`, `%${q.toUpperCase()}%`, ...qAliasTickers)
     if (sector) args.push(sector)
     if (industryGroup) args.push(industryGroup)
@@ -548,8 +602,8 @@ export async function GET(request: NextRequest) {
     if (avgVolumeFilter) args.push(avgVolumeFilter)
     if (priceMin != null && Number.isFinite(priceMin)) args.push(priceMin)
     if (priceMax != null && Number.isFinite(priceMax)) args.push(priceMax)
-    if (marketCapMin != null) args.push(marketCapMin)
-    if (marketCapMax != null) args.push(marketCapMax)
+    if (marketCapMin != null && pit.mode === 'LATEST') args.push(marketCapMin)
+    if (marketCapMax != null && pit.mode === 'LATEST') args.push(marketCapMax)
     if (earningsTimeBucket) args.push(earningsTimeBucket)
     if (topMetricTickers.length > 0) args.push(...topMetricTickers)
     args.push(sqlLimit)
@@ -592,6 +646,7 @@ export async function GET(request: NextRequest) {
         FROM market_earnings_calendar INDEXED BY market_earnings_market_date_idx
         WHERE market = 'US'
           AND report_date >= (SELECT today FROM earnings_clock)
+          ${earningsImportCutoff}
         GROUP BY ticker
       )
       SELECT
@@ -599,10 +654,7 @@ export async function GET(request: NextRequest) {
         COALESCE(u.name, s.ticker) AS name,
         u.exchange,
         u.asset_type,
-        COALESCE(c.sector_name, u.sector) AS sector,
-        COALESCE(c.industry_name, u.industry) AS industry,
-        c.taxonomy AS classification_taxonomy,
-        c.source AS classification_source,
+        ${classificationColumns},
         COALESCE(cur.adj_close, cur.close) AS price,
         COALESCE(cur.adj_volume, cur.volume) AS volume,
         s.avg_volume_20,
@@ -618,7 +670,12 @@ export async function GET(request: NextRequest) {
         END AS ma_200_angle,
         s.ma_200_observations,
         CASE WHEN s.ma_200 > 0 THEN 100.0 * (COALESCE(cur.adj_close, cur.close) - s.ma_200) / s.ma_200 END AS ma_200_gap_pct,
-        CASE WHEN u.shares_outstanding IS NOT NULL AND COALESCE(cur.adj_close, cur.close) IS NOT NULL THEN u.shares_outstanding * COALESCE(cur.adj_close, cur.close) END AS market_cap,
+        CASE
+          WHEN '${pit.mode}' = 'LATEST'
+           AND u.shares_outstanding IS NOT NULL
+           AND COALESCE(cur.adj_close, cur.close) IS NOT NULL
+          THEN u.shares_outstanding * COALESCE(cur.adj_close, cur.close)
+        END AS market_cap,
         s.daily_a_stage || s.daily_b_stage || s.weekly_a_stage || s.weekly_b_stage || s.monthly_a_stage || s.monthly_b_stage AS stage_code,
         s.daily_a_stage,
         s.daily_b_stage,
@@ -646,11 +703,7 @@ export async function GET(request: NextRequest) {
         ${physicalMetricColumns}
       FROM market_daily_snapshots s INDEXED BY market_snapshots_market_date_ticker_idx
       LEFT JOIN market_universe u ON u.market = s.market AND u.ticker = s.ticker
-      LEFT JOIN market_classifications c
-        ON c.market = s.market
-       AND c.ticker = s.ticker
-       AND c.taxonomy = ?
-       AND c.effective_from = '0000-01-01'
+      ${classificationJoin}
       LEFT JOIN market_ohlcv_daily cur INDEXED BY market_ohlcv_market_ticker_date_idx
         ON cur.market = 'US'
        AND cur.ticker = s.ticker
@@ -663,7 +716,7 @@ export async function GET(request: NextRequest) {
        AND earnings.report_date = next_earnings.report_date
       ${physicalMetricJoin}
       WHERE s.market = 'US' AND s.date = ?
-        AND u.active = 1
+        AND (${pit.mode === 'LATEST' ? 'COALESCE(u.active, 1) = 1' : '1 = 1'})
         AND ${usInvestableSymbolSql('s.ticker')}
         ${whereQ}
         ${whereSector}
@@ -857,6 +910,7 @@ export async function GET(request: NextRequest) {
       quality,
       source: 'tiingo',
       mlSource: hasUsAnalyticsDb() ? 'us_analytics' : 'main',
+      pit,
       earnings: {
         source: 'finnhub',
         updatedAt: earningsSync?.value
@@ -887,6 +941,12 @@ export async function GET(request: NextRequest) {
       cache: { status: 'miss', generatedAt },
     })
   } catch (error) {
+    if (error instanceof UsScreenerPitError) {
+      return NextResponse.json(
+        { error: 'US screener PIT contract rejected the request', message: error.message },
+        { status: error.status },
+      )
+    }
     console.error('US screener API error:', error)
     return NextResponse.json(
       { error: 'US screener failed', message: (error as Error).message },
