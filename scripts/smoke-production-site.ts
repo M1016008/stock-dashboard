@@ -32,6 +32,7 @@ type CheckResult = {
 
 const baseUrl = (process.env.STOCKBOARD_SMOKE_BASE_URL ?? 'http://127.0.0.1:3000').replace(/\/+$/, '')
 const timeoutMs = Math.max(5_000, Number(process.env.STOCKBOARD_SMOKE_TIMEOUT_MS ?? 45_000))
+const readOnly = process.env.STOCKBOARD_SMOKE_READ_ONLY === '1'
 const supportDir = path.join(os.homedir(), 'Library', 'Application Support', 'StockBoard')
 const reportPath = process.env.STOCKBOARD_SMOKE_REPORT_PATH
   ?? path.join(supportDir, 'production-smoke-latest.json')
@@ -1066,10 +1067,14 @@ async function main(): Promise<void> {
     console.log(`${marker.padEnd(4)} ${String(result.elapsedMs).padStart(6)}ms ${check.name}`)
     if (result.error) console.error(`     ${result.error}`)
   }
-  const savedEvaluationResult = await runSavedEvaluationCheck()
-  results.push(savedEvaluationResult)
-  console.log(`${(savedEvaluationResult.ok ? 'ok' : 'FAIL').padEnd(4)} ${String(savedEvaluationResult.elapsedMs).padStart(6)}ms ${savedEvaluationResult.name}`)
-  if (savedEvaluationResult.error) console.error(`     ${savedEvaluationResult.error}`)
+  if (!readOnly) {
+    const savedEvaluationResult = await runSavedEvaluationCheck()
+    results.push(savedEvaluationResult)
+    console.log(`${(savedEvaluationResult.ok ? 'ok' : 'FAIL').padEnd(4)} ${String(savedEvaluationResult.elapsedMs).padStart(6)}ms ${savedEvaluationResult.name}`)
+    if (savedEvaluationResult.error) console.error(`     ${savedEvaluationResult.error}`)
+  } else {
+    console.log('skip      Phase 13 saved screening evaluation PIT (read-only smoke)')
+  }
 
   const largeHolderResults = await runLargeHolderSmokeChecks()
   for (const result of largeHolderResults) {
@@ -1084,6 +1089,7 @@ async function main(): Promise<void> {
     checkedAt: new Date().toISOString(),
     baseUrl,
     timeoutMs,
+    readOnly,
     totals: {
       checks: results.length,
       passed: results.length - failed.length,

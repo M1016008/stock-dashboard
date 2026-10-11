@@ -165,7 +165,10 @@ export async function GET(request: NextRequest, context: RouteContext) {
     const limit = parsePositiveInt(request.nextUrl.searchParams.get('limit'), 8, 8)
     const asOfDate = parseAsOfDate(request.nextUrl.searchParams.get('date'))
     const includeRealized = asOfDate != null && request.nextUrl.searchParams.get('actual') === '1'
-    const llmEnabled = request.nextUrl.searchParams.get('llm') !== '0' && process.env.SCENARIO_PROJECTION_LLM_ENABLED !== '0'
+    const friendReadonly = request.headers.get('x-stockboard-access-mode') === 'friend-read-only'
+    const llmEnabled = !friendReadonly
+      && request.nextUrl.searchParams.get('llm') !== '0'
+      && process.env.SCENARIO_PROJECTION_LLM_ENABLED !== '0'
     const projection = await buildStockScenarioProjection({
       ticker,
       market,

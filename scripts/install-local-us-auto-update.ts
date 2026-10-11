@@ -14,6 +14,9 @@ const home = os.homedir()
 const launchAgentsDir = path.join(home, 'Library', 'LaunchAgents')
 const plistPath = path.join(launchAgentsDir, `${label}.plist`)
 const logDir = path.join(home, 'Library', 'Logs', 'StockBoard')
+const configDir = path.join(home, 'Library', 'Application Support', 'StockBoard', 'config')
+const runtimeEnvPath = path.join(configDir, 'runtime.env')
+const productionEnvPath = path.join(configDir, 'production.env')
 const uid = typeof process.getuid === 'function' ? process.getuid() : Number(process.env.UID)
 const pathEnv = [
   '/opt/homebrew/bin',
@@ -98,7 +101,12 @@ const command = [
   'export US_ML_DAILY_REFRESH_RL=${US_ML_DAILY_REFRESH_RL:-0}',
   'export US_ML_DAILY_REFRESH_STATUS=${US_ML_DAILY_REFRESH_STATUS:-0}',
   'export US_ML_DAILY_ACCURACY_HEALTH=${US_ML_DAILY_ACCURACY_HEALTH:-0}',
-  'npm run batch:us-update-latest',
+  [
+    JSON.stringify(process.execPath),
+    `--env-file=${JSON.stringify(runtimeEnvPath)}`,
+    `--env-file=${JSON.stringify(productionEnvPath)}`,
+    '--import tsx scripts/update-us-latest.ts',
+  ].join(' '),
 ].join(' && ')
 
 const plist = `<?xml version="1.0" encoding="UTF-8"?>

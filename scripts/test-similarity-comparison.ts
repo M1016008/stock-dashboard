@@ -4,8 +4,34 @@ import { getValuationDetailReadModel } from '@/lib/server/valuation-detail-read-
 
 const TICKERS = ['7203', '7003', '8306', '4755', '4502', '7974'] as const
 const FINANCIAL_PATTERN = /銀行|保険|証券|金融/
+const CANONICAL_STORAGE_KEYS = [
+  'EXTERNAL_STORAGE_REQUIRED',
+  'STOCKBOARD_DB_PATH',
+  'STOCK_DATA_MOUNT_PATH',
+  'STOCK_DATA_VOLUME_UUID',
+  'STOCK_DATA_MIN_FREE_BYTES',
+  'STOCK_DATA_MIN_FREE_PERCENT',
+] as const
+
+function assertCanonicalStorageEnvironment(): void {
+  const dbPath = process.env.STOCKBOARD_DB_PATH?.trim() ?? ''
+  if (!dbPath.startsWith('/Volumes/')) return
+
+  const missing = CANONICAL_STORAGE_KEYS.filter((key) => !process.env[key]?.trim())
+  if (missing.length > 0) {
+    throw new Error(
+      `External DB integration test refused before database access: missing canonical storage environment (${missing.join(', ')})`,
+    )
+  }
+
+  const mountPath = process.env.STOCK_DATA_MOUNT_PATH!.replace(/\/$/, '')
+  if (process.env.EXTERNAL_STORAGE_REQUIRED !== 'true' || !dbPath.startsWith(`${mountPath}/`)) {
+    throw new Error('External DB integration test refused before database access: storage identity contract mismatch')
+  }
+}
 
 async function main() {
+assertCanonicalStorageEnvironment()
 for (const ticker of TICKERS) {
   const startedAt = Date.now()
   const model = await getSimilarityComparisonReadModel(ticker)
