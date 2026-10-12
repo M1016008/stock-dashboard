@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process'
-import { rm } from 'node:fs/promises'
+import { mkdir, rm, writeFile } from 'node:fs/promises'
+import { basename, join } from 'node:path'
 import process from 'node:process'
 
 type CdpMessage = {
@@ -37,6 +38,7 @@ type PageAudit = {
   duplicates: Array<{ request: string; count: number }>
   consoleErrors: string[]
   layout: { viewportWidth: number; scrollWidth: number; overflowCount: number }
+  screenshotPath?: string
 }
 
 const chromePath = process.env.CHROME_PATH ?? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
@@ -47,6 +49,7 @@ if (urls.length === 0) {
 
 const port = 9300 + (process.pid % 300)
 const profileDir = `/tmp/stockboard-performance-${process.pid}`
+const screenshotDir = process.env.SCREENSHOT_DIR?.trim() || null
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -187,17 +190,42 @@ async function auditPage(client: CdpClient, url: string, mode: 'cold' | 'warm'):
   const layoutResult = await client.send<{ result?: { value?: { viewportWidth?: number; scrollWidth?: number; overflowCount?: number } } }>('Runtime.evaluate', {
     expression: `(() => {
       const viewportWidth = window.innerWidth;
+      const isIntentionallyClipped = (element) => {
+        let parent = element.parentElement;
+        while (parent && parent !== document.body) {
+          const style = getComputedStyle(parent);
+          if (['auto', 'scroll', 'hidden', 'clip'].includes(style.overflowX)) return true;
+          if (style.position === 'fixed' || style.position === 'sticky') return true;
+          parent = parent.parentElement;
+        }
+        return false;
+      };
       const offenders = Array.from(document.querySelectorAll('body *')).filter((element) => {
         const style = getComputedStyle(element);
         if (style.position === 'fixed' || style.position === 'sticky') return false;
         const rect = element.getBoundingClientRect();
-        return rect.width > 0 && (rect.right > viewportWidth + 1 || rect.left < -1);
+        return rect.width > 0 && (rect.right > viewportWidth + 1 || rect.left < -1) && !isIntentionallyClipped(element);
       });
       return { viewportWidth, scrollWidth: document.documentElement.scrollWidth, overflowCount: offenders.length };
     })()`,
     returnByValue: true,
   }).catch(() => ({ result: { value: { viewportWidth: 0, scrollWidth: 0, overflowCount: -1 } } }))
   const layout = layoutResult.result?.value ?? { viewportWidth: 0, scrollWidth: 0, overflowCount: -1 }
+  let screenshotPath: string | undefined
+  if (screenshotDir) {
+    const parsed = new URL(url)
+    const slug = `${parsed.hostname}-${parsed.port || 'default'}-${parsed.pathname}-${parsed.search}-${parsed.hash.slice(1) || 'page'}`
+      .replace(/[^a-zA-Z0-9]+/g, '-')
+      .replace(/^-|-$/g, '') || 'page'
+    const screenshot = await client.send<{ data: string }>('Page.captureScreenshot', {
+      format: 'png',
+      captureBeyondViewport: false,
+      fromSurface: true,
+    })
+    screenshotPath = join(screenshotDir, `${basename(slug)}-${mode}.png`)
+    await mkdir(screenshotDir, { recursive: true })
+    await writeFile(screenshotPath, Buffer.from(screenshot.data, 'base64'))
+  }
 
   removeRequest()
   removeResponse()
@@ -245,6 +273,7 @@ async function auditPage(client: CdpClient, url: string, mode: 'cold' | 'warm'):
       scrollWidth: Number(layout.scrollWidth ?? 0),
       overflowCount: Number(layout.overflowCount ?? -1),
     },
+    ...(screenshotPath ? { screenshotPath } : {}),
   }
 }
 
