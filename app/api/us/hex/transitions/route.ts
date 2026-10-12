@@ -57,8 +57,14 @@ export async function GET(request: NextRequest) {
   const startedAt = performance.now()
   try {
     const input = searchInput(request.nextUrl.searchParams)
+    if (input.period !== 'today' && (input.industry33 || input.marketSegment)) {
+      throw new StageTransitionInputError(
+        'historical_classification_filter_unavailable',
+        'Industry / Exchange は現在情報のため、本日以外の遷移検索には使用できません。',
+      )
+    }
     const [result, options] = await Promise.all([
-      searchStageTransitions(input, usStageTransitionExecutor),
+      searchStageTransitions(input, usStageTransitionExecutor, { requireActiveTicker: false }),
       getStageTransitionFilterOptions(usStageTransitionExecutor),
     ])
     return NextResponse.json({
@@ -75,6 +81,7 @@ export async function GET(request: NextRequest) {
         market: 'US',
         pit: true,
         classificationBasis: 'CURRENT_US_TICKER_UNIVERSE',
+        classificationFilterAvailability: 'CURRENT_DATE_ONLY',
         stageCodeOrder: STAGE_CODE_AXES,
         averageSessions: STAGE_TRANSITION_AVERAGE_SESSIONS,
         missingStagePolicy: 'EXCLUDE_AND_DO_NOT_BRIDGE',

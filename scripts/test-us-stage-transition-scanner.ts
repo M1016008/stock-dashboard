@@ -16,6 +16,9 @@ assert.match(route, /value == null \|\| value\.trim\(\) === ''/, 'Omitted pagina
 assert.match(route, /universeFilter: null/, 'JP-only universe filters must not leak into the US query')
 assert.match(route, /usStageTransitionExecutor/, 'US route must use the isolated US analytics database')
 assert.match(route, /CURRENT_US_TICKER_UNIVERSE/, 'US classification basis must be explicit')
+assert.match(route, /CURRENT_DATE_ONLY/, 'Current-only US classification filters must be limited to today')
+assert.match(route, /historical_classification_filter_unavailable/, 'Historical US classification filters must fail closed')
+assert.match(route, /requireActiveTicker: false/, 'Historical US transitions must not be filtered by the current active universe')
 assert.match(route, /Cache-Control': 'no-store'/, 'PIT scanner results must not use a stale shared cache')
 
 assert.match(executor, /execUsAnalyticsAll/, 'US executor must use US analytics reads')
@@ -30,7 +33,9 @@ assert.match(scanner, /marketLabel: 'Exchange'/, 'US exchange metadata must not 
 assert.match(scanner, /priceLabel: '株価（USD）'/, 'US prices must disclose USD units')
 assert.match(scanner, /tickerSortLabel: 'ティッカー'/, 'US sort controls must use ticker terminology')
 assert.match(scanner, /priceFractionDigits: \{ min: 2, max: 2 \}/, 'US results must retain cent precision')
-assert.match(scanner, /現在の米国株ティッカーユニバースの分類/, 'Current-only US classification labels must be disclosed')
+assert.match(scanner, /現在の米国株ティッカーユニバースに基づきます/, 'Current-only US classification labels must be disclosed')
+assert.match(scanner, /classificationFiltersCurrentOnly: true/, 'US classification filters must be current-date-only')
+assert.match(scanner, /過去のIndustry \/ Exchange履歴は未収録/, 'Historical classification limitation must be visible')
 assert.doesNotMatch(scanner, /priceLabel\.includes\('USD'\)/, 'Currency behavior must use explicit market configuration')
 assert.doesNotMatch(scanner, /https?:\/\/(localhost|127\.0\.0\.1)/, 'Browser reads must remain same-origin')
 

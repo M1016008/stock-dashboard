@@ -129,8 +129,12 @@ interface StageTransitionMarketConfig {
   priceFractionDigits: { min: number; max: number }
   turnoverLabel: string
   turnoverSummaryUnit: string
-  /** 判定の前提に追記する市場固有の注記 */
+  /** 結果概要に常時表示する市場固有の注記 */
   pitNote: string | null
+  /** 変化軸の内訳表示と、モバイルの高密度リスト (単位見出し1回・日付見出し) を使う */
+  changeFocusedResults: boolean
+  /** Current-only classification must never filter historical transition rows. */
+  classificationFiltersCurrentOnly: boolean
 }
 
 const MARKET_CONFIG: Record<StageTransitionMarket, StageTransitionMarketConfig> = {
@@ -147,6 +151,8 @@ const MARKET_CONFIG: Record<StageTransitionMarket, StageTransitionMarketConfig> 
     turnoverLabel: '20日平均売買代金（百万円）',
     turnoverSummaryUnit: '百万円',
     pitNote: null,
+    changeFocusedResults: false,
+    classificationFiltersCurrentOnly: false,
   },
   US: {
     apiPath: '/api/us/hex/transitions',
@@ -160,7 +166,9 @@ const MARKET_CONFIG: Record<StageTransitionMarket, StageTransitionMarketConfig> 
     priceFractionDigits: { min: 2, max: 2 },
     turnoverLabel: '20日平均売買代金（百万USD）',
     turnoverSummaryUnit: '百万USD',
-    pitNote: 'Industry / Exchange の表示と絞り込みは、遷移日時点ではなく現在の米国株ティッカーユニバースの分類に基づきます。',
+    pitNote: 'Industry / Exchange の表示は現在の米国株ティッカーユニバースに基づきます。現在情報を過去へ混ぜないため、絞り込みは「本日」のみ利用できます。',
+    changeFocusedResults: true,
+    classificationFiltersCurrentOnly: true,
   },
 }
 
@@ -289,7 +297,11 @@ function queryToDraft(query: ScanQuery): Draft {
   }
 }
 
-function draftToQuery(draft: Draft, base: ScanQuery): { query: ScanQuery } | { error: string } {
+function draftToQuery(
+  draft: Draft,
+  base: ScanQuery,
+  config: StageTransitionMarketConfig,
+): { query: ScanQuery } | { error: string } {
   const from = draft.fromAny ? STAGE_TRANSITION_ANY_CODE : draft.from.join('')
   const to = draft.toAny ? STAGE_TRANSITION_ANY_CODE : draft.to.join('')
   if (!isStageCodeFilter(from) || !isStageCodeFilter(to)) return { error: '6桁すべてに1〜6の数字を入力するか、Anyを指定してください。' }
@@ -323,8 +335,8 @@ function draftToQuery(draft: Draft, base: ScanQuery): { query: ScanQuery } | { e
       period: draft.period,
       dateFrom: draft.period === 'custom' ? draft.dateFrom : '',
       dateTo: draft.period === 'custom' ? draft.dateTo : '',
-      industry33: draft.industry33,
-      marketSegment: draft.marketSegment,
+      industry33: config.classificationFiltersCurrentOnly && draft.period !== 'today' ? '' : draft.industry33,
+      marketSegment: config.classificationFiltersCurrentOnly && draft.period !== 'today' ? '' : draft.marketSegment,
       minPrice: ranges[0].min ?? '',
       maxPrice: ranges[0].max ?? '',
       minAvgVolume: ranges[1].min ?? '',
@@ -393,8 +405,9 @@ function parseInitialQuery(params: Record<string, string>, market: StageTransiti
       query.period = 'today'
     }
   }
-  query.industry33 = (params.industry33 ?? '').slice(0, 120)
-  query.marketSegment = (params.marketSegment ?? '').slice(0, 120)
+  const classificationAllowed = !MARKET_CONFIG[market].classificationFiltersCurrentOnly || query.period === 'today'
+  query.industry33 = classificationAllowed ? (params.industry33 ?? '').slice(0, 120) : ''
+  query.marketSegment = classificationAllowed ? (params.marketSegment ?? '').slice(0, 120) : ''
   query.minPrice = normalizeNumber(params.minPrice ?? '') ?? ''
   query.maxPrice = normalizeNumber(params.maxPrice ?? '') ?? ''
   query.minAvgVolume = normalizeNumber(params.minAvgVolume ?? '') ?? ''
@@ -559,7 +572,7 @@ export function StageTransitionScanner({
     window.history.replaceState(window.history.state, '', `${window.location.pathname}?${params.toString()}`)
   }, [queryString])
 
-  const parsedDraft = useMemo(() => draftToQuery(draft, applied), [draft, applied])
+  const parsedDraft = useMemo(() => draftToQuery(draft, applied, config), [draft, applied, config])
   const dirty = 'error' in parsedDraft || conditionSignature(parsedDraft.query) !== conditionSignature(applied)
   const draftFrom = draft.fromAny ? STAGE_TRANSITION_ANY_CODE : draft.from.join('')
   const draftTo = draft.toAny ? STAGE_TRANSITION_ANY_CODE : draft.to.join('')
@@ -635,7 +648,7 @@ export function StageTransitionScanner({
 
   const submitSearch = (event?: FormEvent) => {
     event?.preventDefault()
-    const parsed = draftToQuery(draft, applied)
+    const parsed = draftToQuery(draft, applied, config)
     if ('error' in parsed) {
       setFormError(parsed.error)
       return
@@ -793,7 +806,12 @@ export function StageTransitionScanner({
                     key={option.key}
                     type="button"
                     aria-pressed={draft.period === option.key}
-                    onClick={() => updateDraft({ period: option.key })}
+                    onClick={() => updateDraft({
+                      period: option.key,
+                      ...(config.classificationFiltersCurrentOnly && option.key !== 'today'
+                        ? { industry33: '', marketSegment: '' }
+                        : {}),
+                    })}
                     className={`sb-tab${draft.period === option.key ? ' sb-on' : ''} ${FOCUS_RING}`}
                     style={SEGMENT_STYLE}
                   >
@@ -860,10 +878,13 @@ export function StageTransitionScanner({
         {filtersOpen ? (
           <div id="scanner-secondary-filters" className="mt-3 grid grid-cols-1 gap-3 border-t border-[var(--color-border-soft)] pt-3 sm:grid-cols-2 lg:grid-cols-3">
             <label className="block min-w-0">
-              <span className={LABEL_TEXT}>{config.industryLabel}</span>
+              <span className={LABEL_TEXT}>
+                {config.industryLabel}{config.classificationFiltersCurrentOnly ? '（本日のみ）' : ''}
+              </span>
               <select
                 value={draft.industry33}
                 onChange={(event) => updateDraft({ industry33: event.target.value })}
+                disabled={config.classificationFiltersCurrentOnly && draft.period !== 'today'}
                 className={`mt-0.5 ${TEXT_FIELD}`}
                 style={FIELD_STYLE}
               >
@@ -874,10 +895,13 @@ export function StageTransitionScanner({
               </select>
             </label>
             <label className="block min-w-0">
-              <span className={LABEL_TEXT}>{config.marketLabel}</span>
+              <span className={LABEL_TEXT}>
+                {config.marketLabel}{config.classificationFiltersCurrentOnly ? '（本日のみ）' : ''}
+              </span>
               <select
                 value={draft.marketSegment}
                 onChange={(event) => updateDraft({ marketSegment: event.target.value })}
+                disabled={config.classificationFiltersCurrentOnly && draft.period !== 'today'}
                 className={`mt-0.5 ${TEXT_FIELD}`}
                 style={FIELD_STYLE}
               >
@@ -887,7 +911,13 @@ export function StageTransitionScanner({
                 ))}
               </select>
             </label>
+            {config.classificationFiltersCurrentOnly && draft.period !== 'today' ? (
+              <p className="m-0 self-end text-[10px] leading-4 text-[var(--color-text-tertiary)] sm:col-span-2 lg:col-span-1">
+                過去のIndustry / Exchange履歴は未収録のため、現在分類では絞り込みません。
+              </p>
+            ) : (
             <div className="hidden lg:block" aria-hidden />
+            )}
             <RangeField
               label={config.priceLabel}
               minValue={draft.minPrice}
@@ -1224,6 +1254,13 @@ function ResultView({
   const sameRange = range.startDate === range.endDate
   const adjusted =
     range.requestedStartDate !== range.startDate || range.requestedEndDate !== range.endDate
+  // Any 検索では変化軸が行ごとに異なるため、表示中の行について軸別の件数を示す
+  const axisTally = config.changeFocusedResults && anyMode
+    ? STAGE_CODE_AXES.map((axis) => ({
+        axis,
+        count: data.filter((row) => row.changedAxes.some((change) => change.key === axis.key)).length,
+      })).filter((entry) => entry.count > 0)
+    : []
 
   return (
     <div className="space-y-3">
@@ -1241,6 +1278,22 @@ function ResultView({
         {anyMode ? (
           <div className="mt-1 text-[12px] leading-5 text-[var(--color-text-secondary)]">
             変化した桁・軸は行ごとに異なります。各行に実際のコードと変化軸を表示します。
+            {axisTally.length > 0 ? (
+              <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1">
+                <span className="tabular-nums">表示中 {first.toLocaleString('ja-JP')}–{last.toLocaleString('ja-JP')} 件の変化軸</span>
+                <ul className="m-0 flex list-none flex-wrap gap-1 p-0" aria-label="表示中の行で変化した軸と件数">
+                  {axisTally.map(({ axis, count }) => (
+                    <li
+                      key={axis.key}
+                      className="inline-flex items-center gap-1 rounded-[3px] border border-[var(--color-border-default)] bg-white px-1.5 text-[11px] leading-5 tabular-nums"
+                    >
+                      <span className="font-semibold text-[var(--color-brand-800)]">{axis.label}</span>
+                      <span className="text-[var(--color-text-primary)]">{count}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
           </div>
         ) : showConditions ? (
           // 条件要約が出ている間は要約側に同じチップがあるため、フォーム展開時だけ結果側に出す
@@ -1256,6 +1309,9 @@ function ResultView({
         ) : null}
         {showConditions && filters.length > 0 ? (
           <div className="mt-0.5 text-[11px] text-[var(--color-text-secondary)]">絞り込み: {filters.join(' / ')}</div>
+        ) : null}
+        {config.pitNote ? (
+          <p className="m-0 mt-1.5 text-[11px] leading-4 text-[var(--color-text-secondary)]">{config.pitNote}</p>
         ) : null}
         <details className="group mt-1">
           <summary className="inline-flex min-h-11 cursor-pointer list-none items-center gap-1.5 text-[11px] font-medium text-[var(--color-text-tertiary)] marker:hidden">
@@ -1276,7 +1332,6 @@ function ResultView({
                 : ''}
               株価は遷移日の終値、{meta.averageSessions}日平均は遷移日までの{meta.averageSessions}営業日で算出しています。同じ銘柄が複数日に該当する場合は、それぞれ1件として数えます。
             </p>
-            {config.pitNote ? <p className="m-0">{config.pitNote}</p> : null}
           </div>
         </details>
       </section>
@@ -1336,7 +1391,11 @@ function ResultView({
         ) : (
           <>
             <DesktopTable rows={data} sort={applied.sort} direction={applied.direction} onSort={onSort} config={config} />
-            <MobileList rows={data} config={config} />
+            {config.changeFocusedResults ? (
+              <CompactMobileList rows={data} config={config} groupByDate={applied.sort === 'date'} />
+            ) : (
+              <MobileList rows={data} config={config} />
+            )}
           </>
         )}
 
@@ -1524,6 +1583,99 @@ function MobileStat({ label, value }: { label: string; value: string }) {
   )
 }
 
+/**
+ * 高密度リスト: 単位つき列見出しを1回だけ出し、各行は 銘柄+分類 / 遷移 / 数値 の3段に収める。
+ * 遷移日順のときは日付を見出しにまとめ、行ごとの日付の繰り返しを省く。
+ */
+function CompactMobileList({
+  rows,
+  config,
+  groupByDate,
+}: {
+  rows: StageTransitionRow[]
+  config: StageTransitionMarketConfig
+  groupByDate: boolean
+}) {
+  const groups: Array<{ date: string | null; rows: StageTransitionRow[] }> = []
+  for (const row of rows) {
+    const date = groupByDate ? row.transitionDate : null
+    const last = groups[groups.length - 1]
+    if (last && last.date === date) last.rows.push(row)
+    else groups.push({ date, rows: [row] })
+  }
+  const priceLabel = `遷移日終値（${config.priceUnit}）`
+  const volumeLabel = '20日平均出来高（株）'
+  return (
+    <div className="xl:hidden">
+      <div
+        className="grid grid-cols-3 gap-2 border-b border-[var(--color-border-soft)] px-3 py-1.5 text-right text-[10px] leading-3 text-[var(--color-text-tertiary)]"
+        aria-hidden
+      >
+        <span>{priceLabel}</span>
+        <span>{volumeLabel}</span>
+        <span>{config.turnoverLabel}</span>
+      </div>
+      {groups.map((group, groupIndex) => (
+        <section key={`${group.date ?? 'all'}-${groupIndex}`} aria-label={group.date ? `遷移日 ${group.date}` : undefined}>
+          {group.date ? (
+            <div className="flex items-baseline justify-between border-b border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-3 py-1 text-[11px] tabular-nums">
+              <span className="font-bold text-[var(--color-text-primary)]">{group.date}</span>
+              <span className="text-[var(--color-text-tertiary)]">表示中 {group.rows.length}件</span>
+            </div>
+          ) : null}
+          <ul className="m-0 list-none p-0">
+            {group.rows.map((row) => (
+              <li
+                key={`${row.ticker}-${row.transitionDate}`}
+                className={`border-b border-[var(--color-border-soft)] px-3 pb-2 pt-0.5${groupIndex === groups.length - 1 ? ' last:border-b-0' : ''}`}
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <Link
+                    href={`${config.stockHrefPrefix}/${encodeURIComponent(row.ticker)}`}
+                    className={`flex min-h-11 min-w-0 flex-1 flex-col justify-center no-underline hover:underline ${FOCUS_RING}`}
+                  >
+                    <span className="flex min-w-0 items-baseline gap-1.5">
+                      <span className="shrink-0 font-bold tabular-nums text-[var(--color-brand-700)]">{row.ticker}</span>
+                      {row.name && row.name !== row.ticker ? (
+                        <span className="truncate text-[12px] font-medium text-[var(--color-text-primary)]">{row.name}</span>
+                      ) : null}
+                    </span>
+                    <span className="truncate text-[11px] text-[var(--color-text-secondary)]">
+                      {row.marketSegment ?? '—'}
+                      <span className="text-[var(--color-text-tertiary)]"> · {row.sector33 ?? '—'}</span>
+                    </span>
+                  </Link>
+                  {group.date ? null : (
+                    <span className="shrink-0 text-[11px] tabular-nums text-[var(--color-text-tertiary)]">{row.transitionDate}</span>
+                  )}
+                </div>
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <CodePair from={row.fromCode} to={row.toCode} size="sm" />
+                  <StageTransitionAxisChips fromCode={row.fromCode} toCode={row.toCode} />
+                </div>
+                <dl className="m-0 mt-1 grid grid-cols-3 gap-2 text-right text-[13px] font-medium tabular-nums text-[var(--color-text-primary)]">
+                  <div className="min-w-0">
+                    <dt className="sr-only">{priceLabel}</dt>
+                    <dd className="m-0 truncate">{formatPrice(row.price, config)}</dd>
+                  </div>
+                  <div className="min-w-0">
+                    <dt className="sr-only">{volumeLabel}</dt>
+                    <dd className="m-0 truncate">{formatNumber(row.averageVolume20)}</dd>
+                  </div>
+                  <div className="min-w-0">
+                    <dt className="sr-only">{config.turnoverLabel}</dt>
+                    <dd className="m-0 truncate">{formatTurnoverMillion(row.averageTurnover20)}</dd>
+                  </div>
+                </dl>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ))}
+    </div>
+  )
+}
+
 function TickerLink({ row, config }: { row: StageTransitionRow; config: StageTransitionMarketConfig }) {
   return (
     <Link
@@ -1531,7 +1683,10 @@ function TickerLink({ row, config }: { row: StageTransitionRow; config: StageTra
       className={`flex min-h-11 min-w-0 flex-col justify-center text-[var(--color-brand-700)] hover:underline ${FOCUS_RING}`}
     >
       <span className="font-bold tabular-nums">{row.ticker}</span>
-      <span className="truncate text-[12px] font-medium text-[var(--color-text-primary)]">{row.name}</span>
+      {/* US では名称未取得のティッカーが名称=ティッカーになるため重複表示しない */}
+      {row.name && row.name !== row.ticker ? (
+        <span className="truncate text-[12px] font-medium text-[var(--color-text-primary)]">{row.name}</span>
+      ) : null}
     </Link>
   )
 }
