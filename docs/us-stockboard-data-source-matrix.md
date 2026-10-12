@@ -23,7 +23,7 @@ Updated: 2026-10-12
 | Insider activity | None approved for serving | 0 | SEC filing acceptance timestamp required | DATA MISSING | Consider Form 4 after ownership scope |
 | Short interest | None approved | 0 | Publication date required | DATA MISSING | Approved/licensed source required |
 | US sector hierarchy | SEC SIC | Partial | Current-only until effective dating exists | DATA SUBSTITUTE | Preserve taxonomy label; do not call it GICS |
-| Friend access | Cloudflare Access + read-only gateway | JP live; US unverified | Same-origin reads; mutations blocked by route semantics | UNVERIFIED | Full US route smoke and write-bypass audit |
+| Friend access | Cloudflare Access + read-only gateway | JP live; authenticated US Dashboard and Screener live | Same-origin reads; mutations, admin routes and protocol upgrades fail closed by route semantics | DATA PARTIAL | Complete the authenticated US stock-detail route inventory and external mobile matrix |
 
 ## Rules
 
@@ -46,3 +46,5 @@ Updated: 2026-10-12
 - US Screener current and historical requests passed at 1440, 1024, 768, and 390 pixels with no body overflow, console error, failed request, or HTTP error. Historical current-only exchange, asset-type, SIC, and market-cap controls were removed before the analytical request, and no HTTP 422 occurred.
 - Candidate browser timings on the warm local Production build were 0.58s for latest Dashboard, 0.42s for historical Dashboard, 1.37s for a 200-row uncached current Screener query, and 0.01s for the cached historical Screener query.
 - Stock preview cross-check passed for AAPL, MSFT, NVDA, TSLA, and BRK-B. All had a 2026-10-09 price/stage date and six populated stage axes; BRK.B normalized to BRK-B in Screener search.
+- Main commit `ba722f3cad9e7a8cb0237be055ac77019846d18d` was deployed as build `MLW5-_svrKcq3zQxHNNF6`. Canonical Storage Guard checks passed, both candidate and Production read-only smoke passed 160/160, and Production health/storage remained healthy/available.
+- Authenticated `stock.marketframe.jp/us` and `/us/screener` loaded current US data through Cloudflare Access and the read-only gateway. The Screener returned 200 rows for 2026-10-09; the gateway regression confirmed safe reads are forwarded while writes, admin routes, and upgrades fail closed.

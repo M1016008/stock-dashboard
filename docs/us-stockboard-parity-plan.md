@@ -49,4 +49,18 @@ performance, or historical-price parity work.
   1440, 1024, 768 and 390 px; page overflow, console errors, failed requests and duplicate ML
   status requests were all zero in the final run.
 - Dedicated Stock Detail parity tests, relevant shared regressions, typecheck and production build
-  passed. Production and friend-access verification remain the W1 release gate.
+  passed. The W1 implementation is live in Production; authenticated friend-access stock-detail
+  coverage remains tracked by the global access matrix.
+
+### W2 - Dashboard, Screener, Preview, Search and Historical Date
+
+- Main and Production code: `ba722f3cad9e7a8cb0237be055ac77019846d18d`; Production build:
+  `MLW5-_svrKcq3zQxHNNF6`.
+- Canonical Storage Guard preflight passed. Candidate and Production read-only smoke each passed
+  160/160, with health healthy and storage available after the switch.
+- Latest and historical Dashboard/Screener views passed at 1440, 1024, 768 and 390 px with no
+  body overflow, console error, failed request or date leakage. Search and preview checks covered
+  AAPL, MSFT, NVDA, TSLA and BRK-B, including BRK.B alias normalization.
+- Authenticated friend access loaded current US Dashboard and 200-row Screener data through
+  Cloudflare Access. Gateway regression passed for safe read forwarding and fail-closed writes,
+  admin routes and upgrades; the full stock-detail and external mobile route matrix remains open.
