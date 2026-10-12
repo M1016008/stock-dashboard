@@ -228,7 +228,8 @@ export async function getStockPreview(input: {
   let shares = market === 'JP' ? await loadPitShares(ticker, latest.date) : null
   let marketCapBasis: StockPreviewData['marketCapBasis'] = shares != null ? 'pit' : 'missing'
   const currentShares = market === 'JP' ? finiteNumber(jpProfile?.shares_outstanding) : finiteNumber(usProfile?.shares_outstanding)
-  if (shares == null && currentShares != null) {
+  const mayUseCurrentShares = market === 'JP' || asOf == null
+  if (shares == null && currentShares != null && mayUseCurrentShares) {
     shares = currentShares
     marketCapBasis = 'current'
   }

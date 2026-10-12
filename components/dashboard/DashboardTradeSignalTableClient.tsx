@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { useSearchParams } from 'next/navigation'
+import { usePathname, useSearchParams } from 'next/navigation'
 import { useEffect, useId, useMemo, useState } from 'react'
 import { ChevronDown } from 'lucide-react'
 import { StockPreviewTrigger } from '@/components/stock-preview/StockPreviewTrigger'
@@ -70,11 +70,36 @@ const HIT_AREA_Y = "relative after:absolute after:inset-x-0 after:-inset-y-2 aft
 const EVIDENCE_PREVIEW = 5
 const DECISION_PREVIEW = 3
 
-function scenarioHref(currentSearch: string, interval: DashboardScenarioInterval): string {
+/** 同じページ (日本株は /、米国株は /us) のまま期間だけを切り替える */
+function scenarioHref(pathname: string, currentSearch: string, interval: DashboardScenarioInterval): string {
   const params = new URLSearchParams(currentSearch)
   params.set('scenarioInterval', interval)
   const query = params.toString()
-  return `/${query ? `?${query}` : ''}#trade-signals`
+  return `${pathname || '/'}${query ? `?${query}` : ''}#trade-signals`
+}
+
+const MARKET_ORDER: readonly MarketFilter[] = ['JP', 'US']
+const MARKET_NAMES: Record<MarketFilter, string> = { JP: '日本株', US: '米国株' }
+const UNCLASSIFIED = '未分類'
+
+/** 米国株の業種は SEC SIC のセクター / 詳細産業。日本株は東証 17 / 33 業種 */
+function industryLevelLabel(market: MarketFilter, level: IndustryLevel): string {
+  if (market === 'US') return level === '17' ? 'セクター' : '詳細産業'
+  return `${level}業種`
+}
+
+/**
+ * 受け取った候補に含まれる市場。行がないときは取得した市場の基準日で判断する
+ * (米国株だけを取得した Dashboard で、空の日本株一覧を出さないため)。
+ */
+function presentMarkets(data: DashboardTradeSignalResult): MarketFilter[] {
+  const present = new Set(data.rows.map((row) => row.market))
+  if (present.size === 0) {
+    if (data.jpDate == null && data.usDate != null) return ['US']
+    if (data.usDate == null && data.jpDate != null) return ['JP']
+    return [...MARKET_ORDER]
+  }
+  return MARKET_ORDER.filter((market) => present.has(market))
 }
 
 function fmtNumber(value: number | null | undefined, digits = 2): string {
@@ -245,7 +270,12 @@ type SortBasis = {
   hiddenFrom: 'md' | 'lg' | 'xl'
 }
 
-function sortBasis(row: DashboardTradeSignalRow, sort: SortKey, industryLevel: IndustryLevel): SortBasis | null {
+function sortBasis(
+  row: DashboardTradeSignalRow,
+  sort: SortKey,
+  industryLevel: IndustryLevel,
+  industryLabel: string,
+): SortBasis | null {
   switch (sort) {
     case 'avgVolume':
       // 出来高列は lg から
@@ -260,7 +290,7 @@ function sortBasis(row: DashboardTradeSignalRow, sort: SortKey, industryLevel: I
       return {
         label: '業種',
         value: <span className="min-w-0 truncate">{industryValue(row, industryLevel)}</span>,
-        title: `${industryLevel}業種: ${industryValue(row, industryLevel)}`,
+        title: `${industryLabel}: ${industryValue(row, industryLevel)}`,
         hiddenFrom: 'md',
       }
     case 'physicalStatus':
@@ -323,8 +353,23 @@ const SORT_TAG_MD_VISIBILITY: Record<SortBasis['hiddenFrom'], string> = {
   xl: 'hidden md:inline-flex xl:hidden',
 }
 
-function IdentityCell({ row, industryLevel, sort }: { row: DashboardTradeSignalRow; industryLevel: IndustryLevel; sort: SortKey }) {
-  const basis = sortBasis(row, sort, industryLevel)
+function IdentityCell({
+  row,
+  industryLevel,
+  industryLabel,
+  showIndustry,
+  sort,
+  previewAnalysisDate,
+}: {
+  row: DashboardTradeSignalRow
+  industryLevel: IndustryLevel
+  industryLabel: string
+  /** 分類データがない一覧 (米国株の過去日) では「未分類」を並べず取引所だけを出す */
+  showIndustry: boolean
+  sort: SortKey
+  previewAnalysisDate?: string | null
+}) {
+  const basis = sortBasis(row, sort, industryLevel, industryLabel)
   return (
     <div className={`${SIGNAL_AREA.id} grid min-w-0 grid-cols-[auto_auto_minmax(0,1fr)] items-center gap-x-1.5 md:grid-cols-[auto_minmax(0,1fr)_auto]`}>
       <Link
@@ -345,7 +390,7 @@ function IdentityCell({ row, industryLevel, sort }: { row: DashboardTradeSignalR
       <StockPreviewTrigger
         ticker={row.ticker}
         market={row.market}
-        analysisDate={row.date}
+        analysisDate={previewAnalysisDate === undefined ? row.date : previewAnalysisDate}
         context="home"
         className="col-start-2 row-start-1 justify-self-start md:col-start-3 md:justify-self-end"
       />
@@ -355,8 +400,14 @@ function IdentityCell({ row, industryLevel, sort }: { row: DashboardTradeSignalR
       )}
       <div className="hidden min-w-0 items-baseline gap-1.5 text-[10px] font-semibold leading-4 text-[var(--color-text-tertiary)] md:col-span-3 md:row-start-2 md:flex">
         <span className="min-w-0 truncate">
-          {industryValue(row, industryLevel)}
-          {row.marketSegment && <span> · {row.marketSegment}</span>}
+          {showIndustry ? (
+            <>
+              {industryValue(row, industryLevel)}
+              {row.marketSegment && <span> · {row.marketSegment}</span>}
+            </>
+          ) : (
+            row.marketSegment ?? row.market
+          )}
         </span>
         {/* md〜: 業種行の右端。列が出る幅になったら消す */}
         {basis && (
@@ -591,12 +642,14 @@ function SignalDetail({
   open,
   evidence,
   points,
+  showIndustry,
 }: {
   row: DashboardTradeSignalRow
   id: string
   open: boolean
   evidence: SignalEvidence
   points: string[]
+  showIndustry: boolean
 }) {
   const scenario = row.scenario
   const hasDownside = Boolean(scenario?.invalidation) || evidence.risks.length > 0
@@ -672,12 +725,19 @@ function SignalDetail({
       <div className="flex min-w-0 flex-wrap gap-x-1.5 gap-y-0.5 text-[10px] font-semibold text-[var(--color-text-tertiary)] md:col-span-2 lg:col-span-3">
         <span className="font-mono tabular-nums">{row.market} · {row.date ?? '日付なし'}</span>
         <span aria-hidden="true">·</span>
-        <span>{row.marketSegment ?? '市場未分類'}</span>
-        {row.marginType && <><span aria-hidden="true">·</span><span>{row.marginType}</span></>}
+        <span>{row.marketSegment ?? (row.market === 'US' ? '取引所未登録' : '市場未分類')}</span>
+        {/* 信用区分は日本株だけの属性 */}
+        {row.market === 'JP' && row.marginType && <><span aria-hidden="true">·</span><span>{row.marginType}</span></>}
         <span aria-hidden="true">·</span>
-        <span>{row.industry17}</span>
-        <span aria-hidden="true">·</span>
-        <span className="text-[var(--color-text-secondary)]">{row.industry33}</span>
+        {showIndustry ? (
+          <>
+            <span>{row.industry17}</span>
+            <span aria-hidden="true">·</span>
+            <span className="text-[var(--color-text-secondary)]">{row.industry33}</span>
+          </>
+        ) : (
+          <span>当時の業種分類なし</span>
+        )}
         <span aria-hidden="true">·</span>
         <span>平均出来高 <span className="font-mono tabular-nums">{fmtCompact(row.avgVolume)}</span> ({row.avgVolumeLabel})</span>
       </div>
@@ -691,14 +751,20 @@ function SignalRow({
   open,
   onToggle,
   industryLevel,
+  industryLabel,
+  showIndustry,
   sort,
+  previewAnalysisDate,
 }: {
   row: DashboardTradeSignalRow
   rank: number
   open: boolean
   onToggle: (id: string) => void
   industryLevel: IndustryLevel
+  industryLabel: string
+  showIndustry: boolean
   sort: SortKey
+  previewAnalysisDate?: string | null
 }) {
   const evidence = shapeEvidence(row)
   const points = decisionPoints(row)
@@ -714,7 +780,14 @@ function SignalRow({
     <li className={`px-2 py-2.5 transition-colors md:py-2 ${open ? 'bg-[var(--color-surface-subtle)]' : 'hover:bg-[var(--color-surface-subtle)]'}`}>
       <div className={`grid ${SIGNAL_ROW_GRID}`}>
         <RankScoreCell row={row} rank={rank} />
-        <IdentityCell row={row} industryLevel={industryLevel} sort={sort} />
+        <IdentityCell
+          row={row}
+          industryLevel={industryLevel}
+          industryLabel={industryLabel}
+          showIndustry={showIndustry}
+          sort={sort}
+          previewAnalysisDate={previewAnalysisDate}
+        />
         <PriceCell row={row} />
         <ScenarioCell row={row} />
         <WeightCell row={row} />
@@ -743,7 +816,7 @@ function SignalRow({
           <ChevronDown size={14} aria-hidden="true" className={`shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
         </button>
       </div>
-      <SignalDetail row={row} id={detailId} open={open} evidence={evidence} points={points} />
+      <SignalDetail row={row} id={detailId} open={open} evidence={evidence} points={points} showIndustry={showIndustry} />
     </li>
   )
 }
@@ -757,11 +830,12 @@ function sortMark(active: boolean, ascending = false) {
 
 function SignalColumnHeader({
   scenarioLabel,
-  industryLevel,
+  industryLabel,
   sort,
 }: {
   scenarioLabel: string
-  industryLevel: IndustryLevel
+  /** 銘柄列 2 段目の中身 (17業種 / セクター / 分類がないときは取引所) */
+  industryLabel: string
   sort: SortKey
 }) {
   const on = (active: boolean) => (active ? 'text-[var(--color-brand-800)]' : '')
@@ -775,7 +849,7 @@ function SignalColumnHeader({
         <span className={on(sort === 'confidence')}>確度{sortMark(sort === 'confidence')}</span>
       </div>
       <div className={`${SIGNAL_AREA.id} truncate ${on(sort === 'industry')}`}>
-        銘柄 · {industryLevel}業種{sortMark(sort === 'industry', true)}
+        銘柄 · {industryLabel}{sortMark(sort === 'industry', true)}
       </div>
       <div className={`${SIGNAL_AREA.px} text-right ${on(sort === 'changePct')}`}>
         価格 / 前日比{sortMark(sort === 'changePct')}
@@ -864,10 +938,22 @@ function FilterField({ label, children }: { label: string; children: React.React
 
 type RowGroup = { key: string; band: 'high' | 'candidate' | null; start: number; rows: DashboardTradeSignalRow[] }
 
-export function DashboardTradeSignalTableClient({ data }: { data: DashboardTradeSignalResult }) {
+export function DashboardTradeSignalTableClient({
+  data,
+  usHistorical = false,
+  previewAnalysisDate,
+}: {
+  data: DashboardTradeSignalResult
+  usHistorical?: boolean
+  previewAnalysisDate?: string | null
+}) {
   const searchParams = useSearchParams()
+  const pathname = usePathname()
+  const markets = useMemo(() => presentMarkets(data), [data])
   const [side, setSide] = useState<SideFilter>('buy')
-  const [market, setMarket] = useState<MarketFilter>('JP')
+  // 日本株を含むときは従来どおり JP から。米国株だけのデータなら US から始める
+  const [selectedMarket, setMarket] = useState<MarketFilter>(() => (markets.includes('JP') ? 'JP' : markets[0] ?? 'JP'))
+  const market: MarketFilter = markets.includes(selectedMarket) ? selectedMarket : markets[0] ?? selectedMarket
   const [industryLevel, setIndustryLevel] = useState<IndustryLevel>('17')
   const [industry, setIndustry] = useState('all')
   const [minVolume, setMinVolume] = useState('0')
@@ -878,6 +964,16 @@ export function DashboardTradeSignalTableClient({ data }: { data: DashboardTrade
   const industries = useMemo(() => {
     return dashboardIndustryOptions(data.rows, market, side, industryLevel)
   }, [data.rows, industryLevel, market, side])
+  /*
+   * 米国株の過去日は業種分類を持たない (当時の分類データがないため、全行「未分類」で届く)。
+   * そのときは分類での絞り込み・並び替えを止め、「未分類」を並べない。日本株は従来どおり。
+   */
+  const classificationAvailable = market !== 'US' || !usHistorical
+  const industryLabel = classificationAvailable ? industryLevelLabel(market, industryLevel) : '取引所'
+  const effectiveSort: SortKey = !classificationAvailable && sort === 'industry' ? 'confidence' : sort
+  /* 米国株だけの Dashboard などで市場が 1 つなら、選べない市場切替は出さない */
+  const singleMarket = markets.length === 1
+  const marketDate = market === 'US' ? data.usDate : data.jpDate
 
   useEffect(() => {
     setIndustry('all')
@@ -885,24 +981,24 @@ export function DashboardTradeSignalTableClient({ data }: { data: DashboardTrade
 
   useEffect(() => {
     setLimit(PAGE_ROWS)
-  }, [industry, industryLevel, market, minVolume, side, sort])
+  }, [industry, industryLevel, market, minVolume, side, effectiveSort])
 
   const filteredRows = useMemo(() => {
     const min = Number(minVolume)
     return data.rows
       .filter((row) => row.side === side)
       .filter((row) => row.market === market)
-      .filter((row) => industry === 'all' || industryValue(row, industryLevel) === industry)
+      .filter((row) => !classificationAvailable || industry === 'all' || industryValue(row, industryLevel) === industry)
       .filter((row) => !Number.isFinite(min) || min <= 0 || (row.avgVolume ?? 0) >= min)
-      .sort((a, b) => compareRows(a, b, sort, industryLevel))
-  }, [data.rows, industry, industryLevel, market, minVolume, side, sort])
+      .sort((a, b) => compareRows(a, b, effectiveSort, industryLevel))
+  }, [classificationAvailable, data.rows, effectiveSort, industry, industryLevel, market, minVolume, side])
   const cappedRows = filteredRows.slice(0, MAX_ROWS)
   const visibleRows = cappedRows.slice(0, limit)
   const hiddenCount = cappedRows.length - visibleRows.length
 
   /* 確度順のときだけ、高確度/候補の境目に区切りを入れる (並び・順位は変えない) */
   const groups = useMemo<RowGroup[]>(() => {
-    if (sort !== 'confidence') return [{ key: 'all', band: null, start: 0, rows: visibleRows }]
+    if (effectiveSort !== 'confidence') return [{ key: 'all', band: null, start: 0, rows: visibleRows }]
     const result: RowGroup[] = []
     visibleRows.forEach((row, index) => {
       const last = result[result.length - 1]
@@ -910,7 +1006,7 @@ export function DashboardTradeSignalTableClient({ data }: { data: DashboardTrade
       else result.push({ key: `${row.confidenceBand}-${index}`, band: row.confidenceBand, start: index, rows: [row] })
     })
     return result
-  }, [sort, visibleRows])
+  }, [effectiveSort, visibleRows])
   /* 確度帯ごとの件数。total は件数行の「候補 N件」と同じ母数 (絞り込み後) */
   const bandCounts = {
     high: {
@@ -985,7 +1081,7 @@ export function DashboardTradeSignalTableClient({ data }: { data: DashboardTrade
               return (
                 <Link
                   key={option.value}
-                  href={scenarioHref(search, option.value)}
+                  href={scenarioHref(pathname, search, option.value)}
                   prefetch={false}
                   scroll={false}
                   aria-current={active ? 'true' : undefined}
@@ -1000,27 +1096,42 @@ export function DashboardTradeSignalTableClient({ data }: { data: DashboardTrade
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-x-3 gap-y-2 border-b border-[var(--color-border-soft)] py-3 sm:grid-cols-3 lg:grid-cols-[repeat(2,minmax(0,7rem))_repeat(3,minmax(0,1fr))]">
-        <FilterField label="市場">
-          <select value={market} onChange={(event) => setMarket(event.target.value as MarketFilter)} className={selectClass}>
-            <option value="JP">JP</option>
-            <option value="US">US</option>
-          </select>
-        </FilterField>
-        <FilterField label="業種分類">
-          <select value={industryLevel} onChange={(event) => setIndustryLevel(event.target.value as IndustryLevel)} className={selectClass}>
-            <option value="17">17業種</option>
-            <option value="33">33業種</option>
-          </select>
-        </FilterField>
-        <FilterField label="業種">
-          <select value={industry} onChange={(event) => setIndustry(event.target.value)} className={selectClass}>
-            <option value="all">すべて</option>
-            {industries.map((value) => (
-              <option key={value} value={value}>{value}</option>
-            ))}
-          </select>
-        </FilterField>
+      <div className={`grid grid-cols-2 gap-x-3 gap-y-2 border-b border-[var(--color-border-soft)] py-3 sm:grid-cols-3 ${singleMarket ? 'lg:grid-cols-[minmax(0,9rem)_repeat(3,minmax(0,1fr))]' : 'lg:grid-cols-[repeat(2,minmax(0,7rem))_repeat(3,minmax(0,1fr))]'}`}>
+        {!singleMarket && (
+          <FilterField label="市場">
+            <select value={market} onChange={(event) => setMarket(event.target.value as MarketFilter)} className={selectClass}>
+              {markets.map((value) => (
+                <option key={value} value={value}>{MARKET_NAMES[value]}</option>
+              ))}
+            </select>
+          </FilterField>
+        )}
+        {classificationAvailable ? (
+          <>
+            <FilterField label={market === 'US' ? '業種分類 (SEC SIC)' : '業種分類'}>
+              <select value={industryLevel} onChange={(event) => setIndustryLevel(event.target.value as IndustryLevel)} className={selectClass}>
+                <option value="17">{industryLevelLabel(market, '17')}</option>
+                <option value="33">{industryLevelLabel(market, '33')}</option>
+              </select>
+            </FilterField>
+            <FilterField label={industryLevelLabel(market, industryLevel)}>
+              <select value={industry} onChange={(event) => setIndustry(event.target.value)} className={selectClass}>
+                <option value="all">すべて</option>
+                {industries.map((value) => (
+                  <option key={value} value={value}>{value}</option>
+                ))}
+              </select>
+            </FilterField>
+          </>
+        ) : (
+          /* 過去日の米国株: 当時の分類がないため選択肢を出さず、理由を同じ場所に書く */
+          <div role="note" className="col-span-2 grid min-w-0 content-start gap-0.5 text-[10px] font-semibold text-[var(--color-text-tertiary)]">
+            業種分類
+            <p className="flex min-h-8 items-center rounded-[4px] border border-dashed border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-2 text-[11px] font-semibold leading-snug text-[var(--color-text-secondary)]">
+              この日付は当時の分類データがないため、業種での絞り込み・並び替えは使えません
+            </p>
+          </div>
+        )}
         <FilterField label="平均出来高下限">
           <select value={minVolume} onChange={(event) => setMinVolume(event.target.value)} className={selectClass}>
             <option value="0">指定なし</option>
@@ -1031,8 +1142,8 @@ export function DashboardTradeSignalTableClient({ data }: { data: DashboardTrade
           </select>
         </FilterField>
         <FilterField label="並び替え">
-          <select value={sort} onChange={(event) => setSort(event.target.value as SortKey)} className={selectClass}>
-            {SORT_OPTIONS.map((option) => (
+          <select value={effectiveSort} onChange={(event) => setSort(event.target.value as SortKey)} className={selectClass}>
+            {SORT_OPTIONS.filter((option) => classificationAvailable || option.value !== 'industry').map((option) => (
               <option key={option.value} value={option.value}>{option.label}</option>
             ))}
           </select>
@@ -1045,8 +1156,12 @@ export function DashboardTradeSignalTableClient({ data }: { data: DashboardTrade
           {' '}· 表示 <span className="font-mono font-bold text-[var(--color-text-primary)]">{visibleRows.length.toLocaleString('ja-JP')}</span>件
           {' '}/ 候補 <span className="font-mono font-bold text-[var(--color-text-primary)]">{filteredRows.length.toLocaleString('ja-JP')}</span>件
           {filteredRows.length > MAX_ROWS ? `（上位${MAX_ROWS}件まで）` : ''}
-          {' '}· JP <span className="font-mono">{data.jpDate ?? '-'}</span> · US <span className="font-mono">{data.usDate ?? '-'}</span>
-          {' '}· {market} / {industryLevel}業種
+          {singleMarket ? (
+            <>{' '}· 基準日 <span className="font-mono">{marketDate ?? '-'}</span></>
+          ) : (
+            <>{' '}· JP <span className="font-mono">{data.jpDate ?? '-'}</span> · US <span className="font-mono">{data.usDate ?? '-'}</span></>
+          )}
+          {' '}· {singleMarket ? '' : `${market} / `}{classificationAvailable ? industryLevelLabel(market, industryLevel) : '業種分類なし（過去日）'}
         </span>
         {visibleRows.length > 0 && (
           <button
@@ -1063,7 +1178,7 @@ export function DashboardTradeSignalTableClient({ data }: { data: DashboardTrade
       </div>
 
       <div className={`border-y border-l-2 border-y-[var(--color-border-default)] ${sideRuleClass(side)}`}>
-        <SignalColumnHeader scenarioLabel={data.scenarioIntervalLabel} industryLevel={industryLevel} sort={sort} />
+        <SignalColumnHeader scenarioLabel={data.scenarioIntervalLabel} industryLabel={industryLabel} sort={effectiveSort} />
         {groups.map((group, groupIndex) => (
           <div key={group.key}>
             {group.band && (
@@ -1083,7 +1198,10 @@ export function DashboardTradeSignalTableClient({ data }: { data: DashboardTrade
                   open={openIds.has(row.id)}
                   onToggle={toggleRow}
                   industryLevel={industryLevel}
-                  sort={sort}
+                  industryLabel={industryLabel}
+                  showIndustry={classificationAvailable}
+                  sort={effectiveSort}
+                  previewAnalysisDate={previewAnalysisDate}
                 />
               ))}
             </ol>

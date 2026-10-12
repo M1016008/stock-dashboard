@@ -159,6 +159,14 @@ async function loadFacets(
   const classificationColumns = pit.mode === 'HISTORICAL'
     ? 'NULL AS sector, NULL AS industry_code, NULL AS industry'
     : 'COALESCE(c.sector_name, u.sector) AS sector, c.industry_code, COALESCE(c.industry_name, u.industry) AS industry'
+  const referenceColumns = pit.mode === 'HISTORICAL'
+    ? 'NULL AS exchange, NULL AS asset_type'
+    : 'u.exchange, u.asset_type'
+  const referenceJoin = pit.mode === 'HISTORICAL'
+    ? ''
+    : `INNER JOIN market_universe u
+      ON u.market = s.market
+     AND u.ticker = s.ticker`
   const classificationJoin = pit.mode === 'HISTORICAL'
     ? ''
     : `LEFT JOIN market_classifications c
@@ -169,13 +177,10 @@ async function loadFacets(
   const facetRows = await execAll<UsScreenerFacetRow>(
     `
     SELECT DISTINCT
-      u.exchange,
-      u.asset_type,
+      ${referenceColumns},
       ${classificationColumns}
     FROM market_daily_snapshots s INDEXED BY market_snapshots_market_date_ticker_idx
-    INNER JOIN market_universe u
-      ON u.market = s.market
-     AND u.ticker = s.ticker
+    ${referenceJoin}
     ${classificationJoin}
     WHERE s.market = 'US'
       AND s.date = ?
@@ -311,8 +316,19 @@ export async function GET(request: NextRequest) {
     const avgVolumeFilter = avgVolumeMin != null && Number.isFinite(avgVolumeMin) && avgVolumeMin > 0 ? avgVolumeMin : null
     const priceMin = priceMinParam ? Number(priceMinParam) : null
     const priceMax = priceMaxParam ? Number(priceMaxParam) : null
+    assertUsScreenerHistoricalFilters(pit, {
+      sector,
+      industryGroup,
+      industry,
+      exchange,
+      assetType,
+      marketCapMin,
+      marketCapMax,
+      sort,
+    })
     const cacheTtlMs = screenerCacheTtlMs()
     const cacheKey = stableCacheKey({
+      requestedDate,
       date,
       limit,
       sort,
@@ -358,14 +374,6 @@ export async function GET(request: NextRequest) {
         cache: { status: 'hit', generatedAt: cached.generatedAt },
       })
     }
-    assertUsScreenerHistoricalFilters(pit, {
-      sector,
-      industryGroup,
-      industry,
-      marketCapMin,
-      marketCapMax,
-      sort,
-    })
     const facets = await loadFacets(date, taxonomy, pit)
     const qAliasTickers = q ? findUsAliasTickers(q) : []
     const qAliasPlaceholders = qAliasTickers.map(() => '?').join(',')
@@ -494,8 +502,8 @@ export async function GET(request: NextRequest) {
        AND pm.symbol = s.ticker
        AND pm.date = s.date
       `
-    const whereExchange = exchange ? `AND u.exchange = ?` : ''
-    const whereAssetType = assetType ? `AND COALESCE(u.asset_type, '') = ?` : ''
+    const whereExchange = exchange && pit.mode === 'LATEST' ? `AND u.exchange = ?` : ''
+    const whereAssetType = assetType && pit.mode === 'LATEST' ? `AND COALESCE(u.asset_type, '') = ?` : ''
     const whereQ = q
       ? `AND (s.ticker LIKE ? OR UPPER(COALESCE(u.name, '')) LIKE ?${qAliasTickers.length ? ` OR s.ticker IN (${qAliasPlaceholders})` : ''})`
       : ''
@@ -514,12 +522,13 @@ export async function GET(request: NextRequest) {
     const whereAvgVolume = avgVolumeFilter ? `AND COALESCE(s.avg_volume_20, 0) >= ?` : ''
     const wherePriceMin = priceMin != null && Number.isFinite(priceMin) ? `AND COALESCE(cur.adj_close, cur.close) >= ?` : ''
     const wherePriceMax = priceMax != null && Number.isFinite(priceMax) ? `AND COALESCE(cur.adj_close, cur.close) <= ?` : ''
+    const volumeQualityClause = pit.mode === 'HISTORICAL'
+      ? 'COALESCE(cur.adj_volume, cur.volume) > 0'
+      : `(COALESCE(u.asset_type, 'Stock') = 'Mutual Fund'
+           OR COALESCE(cur.adj_volume, cur.volume) > 0)`
     const whereQuality = quality === 'standard'
       ? `AND COALESCE(cur.adj_close, cur.close) >= 0.1
-         AND (
-           COALESCE(u.asset_type, 'Stock') = 'Mutual Fund'
-           OR COALESCE(cur.adj_volume, cur.volume) > 0
-         )
+         AND ${volumeQualityClause}
          AND s.prev_close > 0
          AND ABS(100.0 * (COALESCE(cur.adj_close, cur.close) - s.prev_close) / s.prev_close) <= 100`
          + `
@@ -597,8 +606,8 @@ export async function GET(request: NextRequest) {
     if (sector) args.push(sector)
     if (industryGroup) args.push(industryGroup)
     if (industry) args.push(industry)
-    if (exchange) args.push(exchange)
-    if (assetType) args.push(assetType)
+    if (exchange && pit.mode === 'LATEST') args.push(exchange)
+    if (assetType && pit.mode === 'LATEST') args.push(assetType)
     if (stageCode) args.push(`${stageCode}%`)
     for (const axis of STAGE_AXES) {
       const values = stages[axis]

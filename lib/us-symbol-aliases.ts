@@ -9,7 +9,8 @@ const US_PRIMARY_NAMES: Record<string, string> = {
   GOGL: 'Golden Ocean Group Ltd',
   TSLA: 'Tesla, Inc.',
   AVGO: 'Broadcom Inc.',
-  BRK_B: 'Berkshire Hathaway Inc. Class B',
+  'BRK-A': 'Berkshire Hathaway Inc. Class A',
+  'BRK-B': 'Berkshire Hathaway Inc. Class B',
   BRK: 'Berkshire Hathaway Inc.',
   JPM: 'JPMorgan Chase & Co.',
   LLY: 'Eli Lilly and Company',
@@ -31,13 +32,18 @@ const US_SEARCH_ALIASES: Record<string, string[]> = {
   AMZN: ['AMAZON'],
   META: ['META', 'FACEBOOK', 'INSTAGRAM'],
   TSLA: ['TESLA'],
-  BRK_B: ['BERKSHIRE', 'BUFFETT', 'BERKSHIRE HATHAWAY'],
+  'BRK-A': ['BERKSHIRE', 'BUFFETT', 'BERKSHIRE HATHAWAY', 'BERKSHIRE CLASS A'],
+  'BRK-B': ['BERKSHIRE', 'BUFFETT', 'BERKSHIRE HATHAWAY', 'BERKSHIRE CLASS B'],
   BRK: ['BERKSHIRE', 'BUFFETT', 'BERKSHIRE HATHAWAY'],
   JPM: ['JPMORGAN', 'JP MORGAN'],
 }
 
 function normalizeQuery(value: string): string {
   return value.trim().toUpperCase().replace(/\s+/g, ' ')
+}
+
+function normalizeSymbolQuery(value: string): string {
+  return normalizeQuery(value).replace(/[._/\\-]+/g, '-')
 }
 
 export function getUsDisplayName(ticker: string, rawName?: string | null): string {
@@ -55,10 +61,14 @@ export function getUsSecondaryName(ticker: string, rawName?: string | null): str
 
 export function findUsAliasTickers(query: string): string[] {
   const normalized = normalizeQuery(query)
+  const normalizedSymbol = normalizeSymbolQuery(query)
   if (!normalized) return []
   const matches = new Set<string>()
   for (const [ticker, aliases] of Object.entries(US_SEARCH_ALIASES)) {
-    if (ticker.includes(normalized) || aliases.some((alias) => normalizeQuery(alias).includes(normalized) || normalized.includes(normalizeQuery(alias)))) {
+    if (
+      normalizeSymbolQuery(ticker).includes(normalizedSymbol)
+      || aliases.some((alias) => normalizeQuery(alias).includes(normalized) || normalized.includes(normalizeQuery(alias)))
+    ) {
       matches.add(ticker)
     }
   }

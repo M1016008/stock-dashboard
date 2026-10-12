@@ -86,6 +86,8 @@ export function assertUsScreenerHistoricalFilters(
     sector?: string | null
     industryGroup?: string | null
     industry?: string | null
+    exchange?: string | null
+    assetType?: string | null
     marketCapMin?: number | null
     marketCapMax?: number | null
     sort?: string | null
@@ -95,6 +97,12 @@ export function assertUsScreenerHistoricalFilters(
   if (input.sector || input.industryGroup || input.industry) {
     throw new UsScreenerPitError(
       'Historical US classification filters require effective-dated classification coverage.',
+      422,
+    )
+  }
+  if (input.exchange || input.assetType || input.sort === 'exchange') {
+    throw new UsScreenerPitError(
+      'Historical US exchange and asset-type filters require effective-dated reference metadata.',
       422,
     )
   }

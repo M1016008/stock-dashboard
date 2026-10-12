@@ -3,7 +3,8 @@
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { useEffect, useMemo, useState } from 'react'
-import { ArrowDownAZ, ArrowUpAZ, CircleHelp, Columns3, Filter, GitCompareArrows, RotateCcw } from 'lucide-react'
+import { ArrowDownAZ, ArrowUpAZ, CalendarDays, CircleHelp, Columns3, Filter, GitCompareArrows, RotateCcw } from 'lucide-react'
+import { StockPreviewTrigger } from '@/components/stock-preview/StockPreviewTrigger'
 import { StageTag } from '@/components/ui/StageTag'
 import { SavedViewManager } from '@/components/ui/SavedViewManager'
 import { PageTitle } from '@/components/layout/PageTitle'
@@ -120,6 +121,42 @@ type EarningsMeta = {
   } | null
 }
 
+/** API が返す PIT 契約のうち、画面で使う部分 (lib/us-screener-pit.ts) */
+type ScreenerPit = {
+  requestedDate: string | null
+  resolvedDate: string
+  latestDate: string
+  mode: 'LATEST' | 'HISTORICAL'
+}
+
+type InitialScreenerAsOf = {
+  requestedDate: string | null
+  resolvedDate: string | null
+  latestDate: string | null
+  mode: ScreenerPit['mode'] | null
+}
+
+/**
+ * 過去日では当時の値がない並び替え。取引所・時価総額は API が 422 で拒否し、
+ * セクター・詳細産業は全行が空になるため、確定的なコード順へ切り替える。
+ */
+const HISTORICAL_BLOCKED_SORTS = new Set(['exchange', 'marketCap', 'sector', 'industry'])
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
+/** 日付入力の途中 (年を 1 桁ずつ打っている間など) に古すぎる日付で検索しないための下限 */
+const MIN_INPUT_DATE = '1990-01-01'
+
+function parseUrlDate(value: string | null): string | null {
+  const normalized = value?.trim() ?? ''
+  if (!ISO_DATE.test(normalized)) return null
+  const parsed = new Date(`${normalized}T00:00:00Z`)
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== normalized) return null
+  return normalized
+}
+
+function usStockHref(ticker: string, date: string | null): string {
+  return `/us/stock/${encodeURIComponent(ticker)}${date ? `?date=${encodeURIComponent(date)}` : ''}`
+}
+
 const SORT_VALUES = new Set(['ticker', 'exchange', 'sector', 'industry', 'price', 'changePct', 'return5d', 'return20d', 'return60d', 'return120d', 'ma200Gap', 'ma200Angle', 'volume', 'avgVolume20', 'marketCap', 'stageCode', 'pms', 'pfs', 'pes', 'acceleration', 'force', 'shortTermCheckScore', 'shortTermCheckLabel', 'earningsNextDate', 'earningsDays'])
 const COLUMN_MODE_KEY = 'stockboard_us_screener_columns_v1'
 const AXES: { key: AxisKey; label: string; color: string }[] = [
@@ -219,6 +256,10 @@ function displayMessage(message: string | null, hasScreeningConditions: boolean)
   if (message.includes('snapshots are not generated')) {
     return 'USステージデータが未生成です。更新ジョブの完了後に再読み込みしてください。'
   }
+  const noSnapshot = message.match(/No US snapshot is available on or before (\d{4}-\d{2}-\d{2})/)
+  if (noSnapshot) {
+    return `${noSnapshot[1]} 以前の米国データはありません。より新しい日付を選ぶか、最新に戻してください。`
+  }
   return message
 }
 
@@ -256,7 +297,7 @@ function shortTermClass(label: string | null | undefined) {
   return 'border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] text-[var(--color-text-secondary)]'
 }
 
-export function UsScreenerClient() {
+export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreenerAsOf }) {
   const searchParams = useSearchParams()
   const sortParam = searchParams.get('sort') || 'ticker'
   const initialSort = SORT_VALUES.has(sortParam) ? sortParam : 'ticker'
@@ -325,11 +366,38 @@ export function UsScreenerClient() {
   const [filtersOpen, setFiltersOpen] = useState(true)
   const [columnMode, setColumnMode] = useState<ColumnMode>('core')
   const [selected, setSelected] = useState<Set<string>>(new Set())
-  const sicClassificationEnabled = supportsUsSicClassification(assetType)
+  // 基準日。null は最新。API の date 契約 (YYYY-MM-DD、休場日は直前の取引日へ解決) をそのまま使う
+  const [requestedDate, setRequestedDate] = useState<string | null>(() => parseUrlDate(searchParams.get('date')))
+  const [pit, setPit] = useState<ScreenerPit | null>(() => (
+    initialAsOf.mode && initialAsOf.resolvedDate && initialAsOf.latestDate
+      ? {
+          requestedDate: initialAsOf.requestedDate,
+          resolvedDate: initialAsOf.resolvedDate,
+          latestDate: initialAsOf.latestDate,
+          mode: initialAsOf.mode,
+        }
+      : null
+  ))
+  const [latestDate, setLatestDate] = useState<string | null>(initialAsOf.latestDate)
+  const [clearedForHistorical, setClearedForHistorical] = useState<string[]>([])
+  // いま指定している日付に対する応答だけを採用する (別の日付の結果を新しい日付のラベルで見せない)
+  const confirmedPit = pit && pit.requestedDate === requestedDate ? pit : null
+  const historical = confirmedPit?.mode === 'HISTORICAL'
+  /*
+   * 日付指定中は、最新と確定するまで現在値しかない条件 (取引所・資産種別・業種分類・時価総額) を送らない。
+   * 確認中に送ると、過去日だった場合に API が 422 で拒否するため。
+   */
+  const historicalLocked = requestedDate != null
+    && (latestDate == null ? confirmedPit?.mode !== 'LATEST' : requestedDate !== latestDate)
+  // 銘柄リンク・クイックプレビューへ引き継ぐ日付 (過去日のときだけ、解決後の取引日)
+  const linkDate = confirmedPit?.mode === 'HISTORICAL' ? confirmedPit.resolvedDate : null
+  const effectiveSort = historicalLocked && HISTORICAL_BLOCKED_SORTS.has(sort) ? 'ticker' : sort
+  const sicClassificationEnabled = supportsUsSicClassification(assetType) && !historicalLocked
   const params = useMemo(() => {
-    const sp = new URLSearchParams({ limit: String(resultLimit), sort, dir })
+    const sp = new URLSearchParams({ limit: String(resultLimit), sort: effectiveSort, dir })
+    if (requestedDate) sp.set('date', requestedDate)
     if (query.trim()) sp.set('q', query.trim())
-    if (exchange.trim()) sp.set('exchange', exchange.trim())
+    if (!historicalLocked && exchange.trim()) sp.set('exchange', exchange.trim())
     if (sicClassificationEnabled && sector.trim()) sp.set('sector', sector.trim())
     if (sicClassificationEnabled && industryGroup.trim()) sp.set('industryGroup', industryGroup.trim())
     if (sicClassificationEnabled && industry.trim()) sp.set('industry', industry.trim())
@@ -341,7 +409,7 @@ export function UsScreenerClient() {
     if (avgVolumeMin.trim()) sp.set('avgVolumeMin', avgVolumeMin.trim())
     if (priceMin.trim()) sp.set('priceMin', priceMin.trim())
     if (priceMax.trim()) sp.set('priceMax', priceMax.trim())
-    if (assetType.trim()) sp.set('assetType', assetType.trim())
+    if (!historicalLocked && assetType.trim()) sp.set('assetType', assetType.trim())
     sp.set('quality', quality)
     if (ma200Trend) sp.set('ma200Trend', ma200Trend)
     if (ma200Direction) sp.set('ma200Direction', ma200Direction)
@@ -355,17 +423,50 @@ export function UsScreenerClient() {
     if (physicalStatus) sp.set('physicalStatus', physicalStatus)
     if (earningsWindowDays) sp.set('earningsWindowDays', earningsWindowDays)
     if (earningsTimeBucket) sp.set('earningsTimeBucket', earningsTimeBucket)
-    const capBin = MCAP_BINS.find((bin) => bin.key === marketCapBin)
+    const capBin = historicalLocked ? null : MCAP_BINS.find((bin) => bin.key === marketCapBin)
     if (capBin?.min != null) sp.set('marketCapMin', String(capBin.min))
     if (capBin?.max != null) sp.set('marketCapMax', String(capBin.max))
     return sp.toString()
-  }, [query, exchange, sector, industryGroup, industry, stageCode, stages, avgVolumeMin, priceMin, priceMax, assetType, sicClassificationEnabled, quality, ma200Trend, ma200Direction, pmsMin, pfsMin, pesMin, accelerationPositive, forcePositive, stage23Candidate, shortTermCheck, physicalStatus, marketCapBin, earningsWindowDays, earningsTimeBucket, sort, dir, resultLimit])
+  }, [requestedDate, historicalLocked, query, exchange, sector, industryGroup, industry, stageCode, stages, avgVolumeMin, priceMin, priceMax, assetType, sicClassificationEnabled, quality, ma200Trend, ma200Direction, pmsMin, pfsMin, pesMin, accelerationPositive, forcePositive, stage23Candidate, shortTermCheck, physicalStatus, marketCapBin, earningsWindowDays, earningsTimeBucket, effectiveSort, dir, resultLimit])
+
+  // 過去日では使えない条件は、送らないだけでなく画面の状態からも外し、外したことを表示する
+  useEffect(() => {
+    if (!historicalLocked) return
+    const cleared: string[] = []
+    if (exchange) {
+      cleared.push('取引所')
+      setExchange('')
+    }
+    if (assetType) {
+      cleared.push('資産種別')
+      setAssetType('')
+    }
+    if (sector || industryGroup || industry) cleared.push('業種分類')
+    if (marketCapBin) {
+      cleared.push('時価総額')
+      setMarketCapBin('')
+    }
+    if (HISTORICAL_BLOCKED_SORTS.has(sort)) {
+      cleared.push('並び順（コード順に変更）')
+      setSort('ticker')
+      setDir('asc')
+    }
+    if (cleared.length > 0) {
+      setClearedForHistorical((current) => Array.from(new Set([...current, ...cleared])))
+    }
+  }, [historicalLocked, exchange, assetType, sector, industryGroup, industry, marketCapBin, sort])
+
+  const changeRequestedDate = (next: string | null) => {
+    setClearedForHistorical([])
+    setSelected(new Set())
+    setRequestedDate(next)
+  }
 
   useEffect(() => {
     const apiParams = new URLSearchParams(params)
     const updates: Record<string, string | null> = {}
     const ownedKeys = [
-      'limit', 'sort', 'dir', 'q', 'exchange', 'sector', 'industryGroup', 'industry', 'stageCode',
+      'date', 'limit', 'sort', 'dir', 'q', 'exchange', 'sector', 'industryGroup', 'industry', 'stageCode',
       ...AXES.map((axis) => axis.key),
       'avgVolumeMin', 'priceMin', 'priceMax', 'assetType', 'quality', 'ma200Trend', 'ma200Direction',
       'pmsMin', 'pfsMin', 'pesMin', 'accelerationPositive', 'forcePositive', 'stage23Candidate',
@@ -396,6 +497,9 @@ export function UsScreenerClient() {
         .then(async (res) => {
           const data = await res.json().catch(() => ({}))
           if (!res.ok) {
+            if (res.status === 422) {
+              throw new Error('過去日では使えない条件（取引所・資産種別・業種分類・時価総額）が含まれています。条件を外して再検索してください。')
+            }
             throw new Error(
               typeof data.message === 'string'
                 ? data.message
@@ -408,6 +512,18 @@ export function UsScreenerClient() {
           if (cancelled) return
           setRows(Array.isArray(data.rows) ? data.rows : [])
           setDate(data.date ?? null)
+          const nextPit = data.pit
+          if (nextPit && typeof nextPit.resolvedDate === 'string' && (nextPit.mode === 'LATEST' || nextPit.mode === 'HISTORICAL')) {
+            setPit({
+              requestedDate: typeof nextPit.requestedDate === 'string' ? nextPit.requestedDate : null,
+              resolvedDate: nextPit.resolvedDate,
+              latestDate: typeof nextPit.latestDate === 'string' ? nextPit.latestDate : nextPit.resolvedDate,
+              mode: nextPit.mode,
+            })
+            if (typeof nextPit.latestDate === 'string') setLatestDate(nextPit.latestDate)
+          } else {
+            setPit(null)
+          }
           setHasMore(Boolean(data.hasMore))
           setFacets({
             exchanges: Array.isArray(data.facets?.exchanges) ? data.facets.exchanges : [],
@@ -630,18 +746,92 @@ export function UsScreenerClient() {
   )).sort()
   const hasAnyStage = AXES.some((axis) => Boolean(stages[axis.key]?.length))
   const hasMarketCapData = rows.some((row) => row.market_cap != null)
+  const asOfDate = confirmedPit?.resolvedDate ?? (requestedDate ? null : date)
+  const adjustedToPriorSession = confirmedPit?.requestedDate != null && confirmedPit.requestedDate !== confirmedPit.resolvedDate
+  const dateUnavailable = requestedDate != null && !loading && confirmedPit == null
+  const modeLabel = historical
+    ? '過去日表示'
+    : confirmedPit?.mode === 'LATEST' || (!requestedDate && date)
+      ? '最新データ'
+      : dateUnavailable
+        ? 'データなし'
+        : '確認中'
+  const modeClass = historical
+    ? 'border-amber-300 bg-amber-50 text-[#92400e]'
+    : modeLabel === '最新データ'
+      ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+      : 'border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] text-[var(--color-text-secondary)]'
+  const lockReason = historical ? '過去日は使えません · 当時の値がないため' : '基準日を確認中'
 
   return (
     <div className="flex w-full min-w-0 flex-col gap-5">
       <PageTitle
         eyebrow="米国株"
         title="USスクリーナー"
-        subtitle="Tiingo由来の株価と最新スナップショットを、HEXステージ(複数系統は AND)・業種・流動性・物理指標で絞り込みます。価格基準の移行状況はデータ鮮度で確認できます。"
-        meta={<span>基準日 {date ?? '-'}</span>}
+        subtitle="Tiingo由来の株価と日次スナップショットを、HEXステージ(複数系統は AND)・業種・流動性・物理指標で絞り込みます。価格基準の移行状況はデータ鮮度で確認できます。"
+        badge={historical ? '過去日表示' : undefined}
+        badgeTone="warning"
+        meta={<span>AS OF {asOfDate ?? '-'} 米国終値</span>}
       >
         <UsAnalysisNav current="/us/screener" />
       </PageTitle>
       <div className="min-w-0 overflow-hidden rounded-[var(--radius-card)] border border-[var(--color-border-default)] bg-white">
+      <div className={`flex flex-wrap items-center gap-x-4 gap-y-2 border-b px-4 py-2 ${historical ? 'border-amber-200 bg-amber-50/40' : 'border-[var(--color-border-default)]'}`}>
+        <label className="flex items-center gap-2 text-[12px] font-bold text-[var(--color-text-secondary)]">
+          <CalendarDays size={14} aria-hidden="true" className="text-[var(--color-brand-700)]" />
+          基準日
+          <input
+            type="date"
+            value={requestedDate ?? date ?? ''}
+            min={MIN_INPUT_DATE}
+            max={latestDate ?? undefined}
+            onChange={(event) => {
+              // 入力途中 (一部の欄を消した状態) は空文字になる。最新へ戻すのはボタンだけにする
+              const next = parseUrlDate(event.target.value)
+              if (next && next >= MIN_INPUT_DATE && next !== requestedDate) changeRequestedDate(next)
+            }}
+            aria-describedby="us-screener-as-of"
+            className="h-8 w-[9.5rem] px-2 font-mono text-[12px] font-semibold tabular-nums"
+          />
+        </label>
+        <button
+          type="button"
+          onClick={() => changeRequestedDate(null)}
+          disabled={!requestedDate}
+          className="btn"
+          data-size="sm"
+        >
+          最新に戻す
+        </button>
+        <div
+          id="us-screener-as-of"
+          role="status"
+          aria-live="polite"
+          className="flex min-w-0 flex-wrap items-baseline gap-x-2.5 gap-y-1 text-[11px] font-semibold text-[var(--color-text-tertiary)]"
+        >
+          <span>
+            AS OF <span className="font-mono font-bold tabular-nums text-[var(--color-text-primary)]">{asOfDate ?? '---'}</span> 米国終値
+          </span>
+          <span className={`inline-flex items-center border px-1.5 py-px text-[10px] font-bold ${modeClass}`}>{modeLabel}</span>
+          {adjustedToPriorSession && confirmedPit && (
+            <span className="text-[#92400e]">
+              指定日 <span className="font-mono tabular-nums">{confirmedPit.requestedDate}</span> は米国の取引データがないため、直前の取引日 <span className="font-mono font-bold tabular-nums">{confirmedPit.resolvedDate}</span> を表示
+            </span>
+          )}
+          {historical && latestDate && (
+            <span>最新データ日 <span className="font-mono tabular-nums">{latestDate}</span></span>
+          )}
+        </div>
+      </div>
+      {historical && (
+        <div role="note" className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-[11px] font-semibold leading-relaxed text-[#92400e]">
+          株価・6ステージ・物理指標は {linkDate} 終値時点、次回決算はその日までに取り込まれた予定です。
+          取引所・資産種別・業種分類・時価総額は当時の値がないため、絞り込み・並び替えに使えません（銘柄名・取引所の表示は現在の登録値）。
+          {clearedForHistorical.length > 0 && (
+            <span className="font-bold"> 解除した条件: {clearedForHistorical.join('・')}</span>
+          )}
+        </div>
+      )}
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-4 py-2.5">
         <div className="min-w-0" role="status" aria-live="polite">
           <div className="text-[14px] font-bold text-[var(--color-text-primary)]">
@@ -723,12 +913,12 @@ export function UsScreenerClient() {
         <div className="flex flex-col gap-4 border-b border-[var(--color-border-default)] bg-white px-4 py-4">
           <div className="grid gap-2 md:grid-cols-[minmax(220px,1fr)_minmax(180px,280px)_auto]">
             <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="銘柄コード・企業名を検索（AAPL / Microsoft）" aria-label="銘柄コード・企業名" className="h-9 min-w-0 px-3 text-[13px]" />
-            <select value={sort} onChange={(event) => setSort(event.target.value)} className="h-9 min-w-0 px-2 text-[13px] font-semibold" aria-label="並び順">
-              <option value="marketCap">時価総額</option>
+            <select value={effectiveSort} onChange={(event) => setSort(event.target.value)} className="h-9 min-w-0 px-2 text-[13px] font-semibold" aria-label="並び順">
+              <option value="marketCap" disabled={historicalLocked}>時価総額{historicalLocked ? '（過去日は不可）' : ''}</option>
               <option value="ticker">コード</option>
-              <option value="exchange">取引所</option>
-              <option value="sector">セクター</option>
-              <option value="industry">詳細産業</option>
+              <option value="exchange" disabled={historicalLocked}>取引所{historicalLocked ? '（過去日は不可）' : ''}</option>
+              <option value="sector" disabled={historicalLocked}>セクター{historicalLocked ? '（過去日は不可）' : ''}</option>
+              <option value="industry" disabled={historicalLocked}>詳細産業{historicalLocked ? '（過去日は不可）' : ''}</option>
               <option value="price">株価</option>
               <option value="changePct">騰落率</option>
               <option value="return20d">1か月騰落率</option>
@@ -749,14 +939,14 @@ export function UsScreenerClient() {
             </button>
           </div>
 
-          <Section step={1} label="取引所で絞り込み（任意）">
+          <Section step={1} label="取引所で絞り込み（任意）" locked={historicalLocked ? lockReason : undefined}>
             <div className="flex flex-wrap gap-1.5">
               <Chip active={!exchange} onClick={() => setExchange('')}>全て</Chip>
-              {exchangeOptions.map((value) => <Chip key={value} active={exchange === value} onClick={() => setExchange(exchange === value ? '' : value)}>{value}</Chip>)}
+              {exchangeOptions.map((value) => <Chip key={value} active={exchange === value} disabled={historicalLocked} onClick={() => setExchange(exchange === value ? '' : value)}>{value}</Chip>)}
             </div>
           </Section>
 
-          <Section step={2} label="業種で絞り込み（株式）">
+          <Section step={2} label="業種で絞り込み（株式）" locked={historicalLocked ? lockReason : undefined}>
             <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-[minmax(180px,0.8fr)_minmax(240px,1fr)_minmax(280px,1.2fr)_auto]">
               <label className="flex min-w-0 flex-col gap-1 text-[11px] font-bold text-[var(--color-text-secondary)]">
                 セクター
@@ -816,7 +1006,9 @@ export function UsScreenerClient() {
               )}
               {!sicClassificationEnabled && (
                 <div className="border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-2.5 py-2 text-[10px] font-bold text-[var(--color-text-tertiary)] md:col-span-2 xl:col-span-4">
-                  セクター・業種グループ・詳細産業は米国株式のSEC SIC分類です。ETF・投資信託には適用されません。
+                  {historical
+                    ? 'SEC SIC分類は現在の登録値のみで、日付別の分類データがありません。過去日では業種での絞り込みを使えません。'
+                    : 'セクター・業種グループ・詳細産業は米国株式のSEC SIC分類です。ETF・投資信託には適用されません。'}
                 </div>
               )}
             </div>
@@ -833,6 +1025,7 @@ export function UsScreenerClient() {
                 <Chip
                   key={option.value || 'all'}
                   active={assetType === option.value}
+                  disabled={historicalLocked && Boolean(option.value)}
                   onClick={() => {
                     const normalizedClassification = normalizeUsClassificationFilters({
                       assetType: option.value,
@@ -852,6 +1045,11 @@ export function UsScreenerClient() {
               <Chip active={quality === 'standard'} onClick={() => setQuality('standard')}>異常値を除外</Chip>
               <Chip active={quality === 'all'} onClick={() => setQuality('all')}>要確認データも表示</Chip>
             </div>
+            {historical && (
+              <div className="mt-1.5 text-[10px] font-bold text-[#92400e]">
+                資産種別は現在の登録値のみのため、過去日では選べません（価格データ品質の設定は使えます）。
+              </div>
+            )}
             <div className="mt-2 flex items-start gap-2 border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-2.5 py-2">
               <CircleHelp size={14} className="mt-0.5 shrink-0 text-[var(--color-brand-700)]" aria-hidden="true" />
               <div className="min-w-0 text-[10px] font-semibold leading-5 text-[var(--color-text-secondary)]">
@@ -929,6 +1127,7 @@ export function UsScreenerClient() {
               {earningsMeta?.updatedAt
                 ? `正式ソース: Finnhub / 最終同期 ${fmtSyncTime(earningsMeta.updatedAt)} / 推定日は表示していません。`
                 : 'Finnhub決算予定は同期待ちです。APIキー設定後の日次同期で有効になります。推定日は表示しません。'}
+              {historical && ` 過去日では ${linkDate} までに取り込まれた予定だけを使い、日数はその日から数えます。`}
             </div>
           </Section>
 
@@ -946,11 +1145,16 @@ export function UsScreenerClient() {
             </div>
           </Section>
 
-          <Section step={7} label="時価総額で絞り込み（任意）">
+          <Section step={7} label="時価総額で絞り込み（任意）" locked={historicalLocked ? lockReason : undefined}>
             <div className="flex flex-wrap gap-1.5">
-              {MCAP_BINS.map((bin) => <Chip key={bin.key || 'all'} active={marketCapBin === bin.key} disabled={Boolean(bin.key) && !hasMarketCapData} onClick={() => setMarketCapBin(bin.key)}>{bin.label}</Chip>)}
+              {MCAP_BINS.map((bin) => <Chip key={bin.key || 'all'} active={marketCapBin === bin.key} disabled={Boolean(bin.key) && (historicalLocked || !hasMarketCapData)} onClick={() => setMarketCapBin(bin.key)}>{bin.label}</Chip>)}
             </div>
-            {!hasMarketCapData && rows.length > 0 && (
+            {historical && (
+              <div className="mt-2 text-[10px] font-bold text-[#92400e]">
+                当時の発行済株式数がないため、過去日では時価総額を算出しません。
+              </div>
+            )}
+            {!historicalLocked && !hasMarketCapData && rows.length > 0 && (
               <div className="mt-2 text-[10px] font-bold text-amber-800">
                 発行済株式数が未連携のため、時価総額フィルターは無効です。価格・ステージ等の検索には影響しません。
               </div>
@@ -1057,13 +1261,15 @@ export function UsScreenerClient() {
                     />
                   </td>
                   <td className={`sticky left-9 z-[4] w-[220px] min-w-[220px] px-3 py-3 ${selected.has(row.ticker) ? 'bg-blue-50' : 'bg-white group-hover:bg-blue-50'}`}>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-1.5">
                       <Link
-                        href={`/us/stock/${row.ticker}`}
+                        href={usStockHref(row.ticker, linkDate)}
+                        prefetch={false}
                         className="font-mono text-[13px] font-black text-[var(--color-brand-900)] hover:text-[var(--color-brand-700)] hover:underline"
                       >
                         {row.ticker}
                       </Link>
+                      <StockPreviewTrigger ticker={row.ticker} market="US" analysisDate={linkDate} context="screener" />
                       {row.asset_type && row.asset_type !== 'Stock' && (
                         <span className="border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-1.5 py-0.5 text-[9px] font-black text-[var(--color-text-tertiary)]">
                           {row.asset_type === 'Mutual Fund' ? '投資信託' : row.asset_type}
@@ -1080,9 +1286,15 @@ export function UsScreenerClient() {
                     </div>
                   </td>
                   <td className="px-3 py-3 font-semibold">
-                    <div className="line-clamp-2 text-[11px] font-black leading-4 text-[var(--color-text-primary)]" title={row.sector ?? undefined}>
-                      {row.sector ?? '-'}
-                    </div>
+                    {historical ? (
+                      <div className="text-[10px] font-bold leading-4 text-[var(--color-text-tertiary)]" title="過去日の業種分類データはありません">
+                        当時の分類なし
+                      </div>
+                    ) : (
+                      <div className="line-clamp-2 text-[11px] font-black leading-4 text-[var(--color-text-primary)]" title={row.sector ?? undefined}>
+                        {row.sector ?? '-'}
+                      </div>
+                    )}
                     {row.industry && (
                       <div className="mt-1 line-clamp-2 text-[10px] leading-4 text-[var(--color-text-tertiary)]" title={row.industry}>
                         {row.industry}
@@ -1207,7 +1419,11 @@ export function UsScreenerClient() {
                   </td>
                   {columnMode === 'all' && (
                     <td className="px-3 py-3 text-right">
-                      <div className="font-mono text-[12px] font-black text-[var(--color-text-primary)]">{fmtCap(row.market_cap)}</div>
+                      {historical ? (
+                        <div className="text-[10px] font-bold text-[var(--color-text-tertiary)]" title="当時の発行済株式数がないため算出しません">過去日は算出なし</div>
+                      ) : (
+                        <div className="font-mono text-[12px] font-black text-[var(--color-text-primary)]">{fmtCap(row.market_cap)}</div>
+                      )}
                       <div className="mt-1 text-[9px] font-bold text-[var(--color-text-tertiary)]">
                         {row.asset_type === 'Stock' || !row.asset_type ? '株式' : row.asset_type === 'Mutual Fund' ? '投資信託' : row.asset_type}
                       </div>
@@ -1273,14 +1489,30 @@ export function UsScreenerClient() {
   )
 }
 
-function Section({ step, label, children }: { step: number; label: string; children: React.ReactNode }) {
+function Section({
+  step,
+  label,
+  locked,
+  children,
+}: {
+  step: number
+  label: string
+  /** 過去日で使えないときの理由。指定時は見出しの横に小さく示す */
+  locked?: string
+  children: React.ReactNode
+}) {
   return (
     <section className="min-w-0 border-t border-[var(--color-border-soft)] pt-3 first:border-t-0 first:pt-0">
-      <div className="mb-2 flex items-center gap-2">
+      <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1">
         <span className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-[4px] bg-[var(--color-surface-muted)] px-1 font-mono text-[11px] font-semibold text-[var(--color-text-secondary)]">
           {step}
         </span>
-        <h2 className="text-[13px] font-bold text-[var(--color-text-primary)]">{label}</h2>
+        <h2 className={`text-[13px] font-bold ${locked ? 'text-[var(--color-text-tertiary)]' : 'text-[var(--color-text-primary)]'}`}>{label}</h2>
+        {locked && (
+          <span className="border border-amber-200 bg-amber-50 px-1.5 py-px text-[10px] font-bold text-[#92400e]">
+            {locked}
+          </span>
+        )}
       </div>
       <div className="min-w-0 sm:pl-7">{children}</div>
     </section>

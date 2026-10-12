@@ -115,6 +115,75 @@ const readDashboardAsOf = cache(async (requestedDate: string | null): Promise<Da
   })
 })
 
+const readUsDashboardAsOf = cache(async (requestedDate: string | null): Promise<DashboardAsOfState> => {
+  const emptyCoverage = {
+    earliestDate: null,
+    latestDate: null,
+    resolvedDate: null,
+  }
+  if (requestedDate && !isValidDashboardDate(requestedDate)) {
+    const coverage = await execGet<DashboardCoverageRow>(
+      `SELECT
+         (
+           SELECT date
+           FROM market_daily_snapshots INDEXED BY market_snapshots_market_date_idx
+           WHERE market = 'US'
+           ORDER BY date ASC
+           LIMIT 1
+         ) AS earliestDate,
+         (
+           SELECT date
+           FROM market_daily_snapshots INDEXED BY market_snapshots_market_date_idx
+           WHERE market = 'US'
+           ORDER BY date DESC
+           LIMIT 1
+         ) AS latestDate,
+         NULL AS resolvedDate`,
+    )
+    return buildDashboardAsOfState(requestedDate, coverage ?? emptyCoverage)
+  }
+
+  const coverage = await execGet<DashboardCoverageRow>(
+    `
+      SELECT
+        (
+          SELECT date
+          FROM market_daily_snapshots INDEXED BY market_snapshots_market_date_idx
+          WHERE market = 'US'
+          ORDER BY date ASC
+          LIMIT 1
+        ) AS earliestDate,
+        (
+          SELECT date
+          FROM market_daily_snapshots INDEXED BY market_snapshots_market_date_idx
+          WHERE market = 'US'
+          ORDER BY date DESC
+          LIMIT 1
+        ) AS latestDate,
+        CASE
+          WHEN ? IS NULL THEN (
+            SELECT date
+            FROM market_daily_snapshots INDEXED BY market_snapshots_market_date_idx
+            WHERE market = 'US'
+            ORDER BY date DESC
+            LIMIT 1
+          )
+          ELSE (
+            SELECT MAX(date)
+            FROM market_daily_snapshots INDEXED BY market_snapshots_market_date_idx
+            WHERE market = 'US' AND date <= ?
+          )
+        END AS resolvedDate
+    `,
+    [requestedDate, requestedDate],
+  )
+  return buildDashboardAsOfState(requestedDate, coverage ?? emptyCoverage)
+})
+
 export async function getDashboardAsOfState(requestedDate?: string | null): Promise<DashboardAsOfState> {
   return readDashboardAsOf(requestedDate ?? null)
+}
+
+export async function getUsDashboardAsOfState(requestedDate?: string | null): Promise<DashboardAsOfState> {
+  return readUsDashboardAsOf(requestedDate ?? null)
 }

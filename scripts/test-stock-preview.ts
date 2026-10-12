@@ -1,9 +1,7 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
-import { execGet } from '@/lib/db/client'
-import { getStockPreview } from '@/lib/server/stock-preview-read-model'
-import { STOCK_PREVIEW_STAGE_ORDER } from '@/lib/stock-preview'
 
 type DirectPrice = { date: string; close: number }
 type DirectStages = {
@@ -16,6 +14,17 @@ type DirectStages = {
 }
 
 async function main() {
+  // A failed local probe must never create or mutate Production's global incident latch.
+  const incidentDir = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'stockboard-stock-preview-incidents-'),
+  )
+  process.env.STOCK_DATA_INCIDENT_DIR = incidentDir
+  process.once('exit', () => fs.rmSync(incidentDir, { recursive: true, force: true }))
+  const [{ execGet }, { getStockPreview }, { STOCK_PREVIEW_STAGE_ORDER }] = await Promise.all([
+    import('@/lib/db/client'),
+    import('@/lib/server/stock-preview-read-model'),
+    import('@/lib/stock-preview'),
+  ])
   const ticker = '7203'
   const pitDate = '2025-08-25'
   const [latest, pit, usLatest, directPitPrice, directPitStages] = await Promise.all([
@@ -59,6 +68,17 @@ async function main() {
   assert.equal(usLatest.chart?.at(-1)?.date, usLatest.priceDate)
   assert.equal(usLatest.stageDate, usLatest.priceDate)
 
+  const usPit = await getStockPreview({
+    ticker: 'AAPL',
+    market: 'US',
+    asOf: usLatest.priceDate,
+  })
+  assert.ok(usPit, 'US PIT preview must exist')
+  assert.equal(usPit.requestedAsOf, usLatest.priceDate)
+  assert.equal(usPit.priceDate, usLatest.priceDate)
+  assert.equal(usPit.marketCap, null, 'US PIT preview must not combine historical price with current shares')
+  assert.equal(usPit.marketCapBasis, 'missing')
+
   const hookSource = fs.readFileSync(path.join(process.cwd(), 'lib/client/use-stock-preview-data.ts'), 'utf8')
   assert.match(hookSource, /if \(!input\.enabled\) return/, 'preview must remain lazy until opened')
   assert.match(hookSource, /controller\.abort\(\)/, 'stale requests must be aborted')
@@ -86,6 +106,17 @@ async function main() {
   }
   const stockDetailSource = fs.readFileSync(path.join(process.cwd(), 'app/stock/[ticker]/StockDetailClient.tsx'), 'utf8')
   assert.doesNotMatch(stockDetailSource, /StockPreviewTrigger/, 'individual stock pages must not mount quick previews')
+  const previewSource = fs.readFileSync(path.join(process.cwd(), 'components/stock-preview/StockPreviewTrigger.tsx'), 'utf8')
+  assert.match(
+    previewSource,
+    /us \? \([\s\S]*label="52週レンジ"[\s\S]*\) : \([\s\S]*label="信用区分"/,
+    'US preview must replace the JP-only margin classification with a US-relevant price range',
+  )
+  assert.match(
+    previewSource,
+    /株価・ステージ・出来高は基準日（米国時間の終値）時点/,
+    'US dated preview must explain which values are point-in-time',
+  )
 
   console.log(JSON.stringify({
     ok: true,
@@ -104,6 +135,8 @@ async function main() {
       ticker: usLatest.ticker,
       name: usLatest.name,
       priceDate: usLatest.priceDate,
+      pitMarketCap: usPit.marketCap,
+      pitMarketCapBasis: usPit.marketCapBasis,
       chartRows: usLatest.chart?.length ?? 0,
       stages: usLatest.stages,
       elapsedMs: usLatest.elapsedMs,
