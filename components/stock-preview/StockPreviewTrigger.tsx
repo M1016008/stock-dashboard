@@ -206,18 +206,26 @@ function PreviewHeader({
 
 function StockQuickView({ data }: { data: StockPreviewData }) {
   const changeTone = data.change == null ? 'var(--color-text-secondary)' : data.change >= 0 ? 'var(--price-up)' : 'var(--price-down)'
+  const us = data.market === 'US'
+  // 米国株の業種・取引所は日付別の値がない。基準日指定時は「現在の登録値」と明記する
+  const usDated = us && data.requestedAsOf != null
+  const industryText = data.sector ?? data.sector17 ?? '業種未登録'
   return (
     <div className="space-y-3">
       <section className="flex items-end justify-between gap-3">
         <div>
-          <div className="font-mono text-xl font-semibold tabular-nums text-[var(--color-text-primary)]">{formatPrice(data.price, data.market)}</div>
+          <div className="font-mono text-xl font-semibold tabular-nums text-[var(--color-text-primary)]">
+            {formatPrice(data.price, data.market)}
+            {us && <span className="ml-1 font-sans text-[10px] font-semibold text-[var(--color-text-tertiary)]">USD</span>}
+          </div>
           <div className="mt-0.5 font-mono text-[11px] font-semibold tabular-nums" style={{ color: changeTone }}>
             {data.change == null ? '前日比 —' : `${formatSigned(data.change, data.market)} (${formatSignedPercent(data.changePercent)})`}
           </div>
         </div>
-        <div className="text-right text-[10px] leading-4 text-[var(--color-text-tertiary)]">
-          <div>{data.marketSegment ?? data.market}</div>
-          <div className="max-w-48 truncate">{data.sector ?? data.sector17 ?? '業種未登録'}</div>
+        <div className="min-w-0 text-right text-[10px] leading-4 text-[var(--color-text-tertiary)]">
+          <div>{us ? data.marketSegment ?? '取引所未登録' : data.marketSegment ?? data.market}</div>
+          <div className="max-w-48 truncate" title={industryText}>{industryText}</div>
+          {usDated && <div className="text-[9px]">現在の登録値</div>}
         </div>
       </section>
 
@@ -241,11 +249,24 @@ function StockQuickView({ data }: { data: StockPreviewData }) {
       </section>
 
       <section className="grid grid-cols-2 gap-x-4 gap-y-2 text-[11px]">
-        <QuickMetric label="時価総額" value={formatLargeMoney(data.marketCap, data.market)} note={data.marketCapBasis === 'current' && data.requestedAsOf ? '株数は現在値' : undefined} />
+        <QuickMetric
+          label="時価総額"
+          value={formatLargeMoney(data.marketCap, data.market)}
+          note={marketCapNote(data)}
+        />
         <QuickMetric label="20日平均売買代金" value={formatLargeMoney(data.avgTradingValue20, data.market)} />
         <QuickMetric label="52週高値比" value={formatSignedPercent(data.high52DistancePercent)} />
         <QuickMetric label="52週安値比" value={formatSignedPercent(data.low52DistancePercent)} />
-        <QuickMetric label="信用区分" value={data.marginType ?? '—'} />
+        {us ? (
+          <QuickMetric
+            label="52週レンジ"
+            value={data.low52 != null && data.high52 != null
+              ? `${formatPrice(data.low52, data.market)} – ${formatPrice(data.high52, data.market)}`
+              : '—'}
+          />
+        ) : (
+          <QuickMetric label="信用区分" value={data.marginType ?? '—'} />
+        )}
         <QuickMetric label="20日平均出来高" value={formatCompactNumber(data.avgVolume20)} />
       </section>
 
@@ -256,7 +277,9 @@ function StockQuickView({ data }: { data: StockPreviewData }) {
       )}
       {data.requestedAsOf && (
         <p className="text-[9px] leading-4 text-[var(--color-text-tertiary)]">
-          株価・ステージは基準日時点。市場区分・業種・信用区分・企業説明は現在登録値です。
+          {us
+            ? '株価・ステージ・出来高は基準日（米国時間の終値）時点。銘柄名・取引所・業種は現在の登録値で、当時と異なる場合があります。'
+            : '株価・ステージは基準日時点。市場区分・業種・信用区分・企業説明は現在登録値です。'}
         </p>
       )}
     </div>
@@ -282,6 +305,14 @@ function StockQuickChart({ data }: { data: StockPreviewData }) {
       </div>
     </div>
   )
+}
+
+function marketCapNote(data: StockPreviewData): string | undefined {
+  if (!data.requestedAsOf) return undefined
+  if (data.marketCapBasis === 'current') return '株数は現在値'
+  // 米国株は日付別の発行済株式数がないため、基準日を指定したときは算出しない
+  if (data.market === 'US' && data.marketCap == null) return '基準日指定時は算出なし'
+  return undefined
 }
 
 function QuickMetric({ label, value, note }: { label: string; value: string; note?: string }) {

@@ -280,17 +280,21 @@ function cacheUniverseKey(universe: UniverseFilterValue): string {
   return universe ?? 'all'
 }
 
-async function resolveTradeSignalCacheDates(date: string | null, includeUs: boolean): Promise<TradeSignalCacheDateRow> {
+async function resolveTradeSignalCacheDates(
+  date: string | null,
+  includeJp: boolean,
+  includeUs: boolean,
+): Promise<TradeSignalCacheDateRow> {
   const requested = date ?? '9999-12-31'
   const [jp, us] = await Promise.all([
-    execGet<{ date: string | null }>(
+    includeJp ? execGet<{ date: string | null }>(
       `
         SELECT MAX(date) AS date
         FROM daily_snapshots
         WHERE date <= ?
       `,
       [requested],
-    ),
+    ) : Promise.resolve({ date: null }),
     includeUs
       ? execGet<{ date: string | null }>(
         `
@@ -1278,6 +1282,17 @@ async function loadUsRows(date: string | null): Promise<{ rows: RawSignalRow[]; 
   const tickers = Array.from(tickerSet).slice(0, 1300)
   if (tickers.length === 0) return { rows: [], date: targetDate }
   const placeholders = tickers.map(() => '?').join(',')
+  const historical = date != null
+  const classificationColumns = historical
+    ? 'NULL AS sector, NULL AS industry'
+    : 'COALESCE(c.sector_name, u.sector) AS sector, COALESCE(c.industry_name, u.industry) AS industry'
+  const classificationJoin = historical
+    ? ''
+    : `LEFT JOIN market_classifications c
+      ON c.market = 'US'
+     AND c.ticker = s.ticker
+     AND c.taxonomy = ?
+     AND c.effective_from = '0000-01-01'`
   const rows = await execAll<RawSignalRow>(
     `
     WITH prev_date AS (
@@ -1311,8 +1326,7 @@ async function loadUsRows(date: string | null): Promise<{ rows: RawSignalRow[]; 
       NULL AS market_segment,
       NULL AS margin_type,
       u.exchange,
-      COALESCE(c.sector_name, u.sector) AS sector,
-      COALESCE(c.industry_name, u.industry) AS industry,
+      ${classificationColumns},
       s.daily_a_stage,
       s.daily_b_stage,
       s.weekly_a_stage,
@@ -1329,11 +1343,7 @@ async function loadUsRows(date: string | null): Promise<{ rows: RawSignalRow[]; 
       NULL AS classic_down_rank
     FROM market_daily_snapshots s INDEXED BY market_snapshots_market_date_ticker_idx
     LEFT JOIN market_universe u ON u.market = 'US' AND u.ticker = s.ticker
-    LEFT JOIN market_classifications c
-      ON c.market = 'US'
-     AND c.ticker = s.ticker
-     AND c.taxonomy = ?
-     AND c.effective_from = '0000-01-01'
+    ${classificationJoin}
     LEFT JOIN market_ohlcv_daily cur INDEXED BY market_ohlcv_market_ticker_date_idx
       ON cur.market = 'US'
      AND cur.ticker = s.ticker
@@ -1349,7 +1359,9 @@ async function loadUsRows(date: string | null): Promise<{ rows: RawSignalRow[]; 
     ORDER BY avg_volume DESC NULLS LAST, s.ticker ASC
     LIMIT ?
     `,
-    [targetDate, US_SEC_SIC_TAXONOMY, targetDate, ...tickers, US_QUERY_LIMIT],
+    historical
+      ? [targetDate, targetDate, ...tickers, US_QUERY_LIMIT]
+      : [targetDate, US_SEC_SIC_TAXONOMY, targetDate, ...tickers, US_QUERY_LIMIT],
   )
 
   for (const row of rows) {
@@ -1372,13 +1384,17 @@ export async function getDashboardTradeSignals(params: {
   universe?: UniverseFilterValue
   scenarioInterval?: string | null
   forceRefresh?: boolean
+  market?: DashboardTradeSignalMarket | 'ALL'
 } = {}): Promise<DashboardTradeSignalResult> {
   const scenarioInterval = normalizeProjectionInterval(params.scenarioInterval)
   const scenarioHorizonDays = defaultProjectionHorizon(scenarioInterval)
-  const includeUs = !params.universe
-  const cacheDates = await resolveTradeSignalCacheDates(params.date ?? null, includeUs)
+  const market = params.market ?? 'ALL'
+  const includeJp = market !== 'US'
+  const includeUs = market !== 'JP' && !params.universe
+  const cacheDates = await resolveTradeSignalCacheDates(params.date ?? null, includeJp, includeUs)
   const cacheKey = [
-    'v4',
+    'v5',
+    `m:${market}`,
     `jp:${cacheDates.jpDate ?? 'none'}`,
     `us:${cacheDates.usDate ?? 'none'}`,
     `u:${cacheUniverseKey(params.universe ?? null)}`,
@@ -1395,7 +1411,9 @@ export async function getDashboardTradeSignals(params: {
     }
   }
   const [jp, us] = await Promise.all([
-    loadJpRows(params.date ?? null, params.universe ?? null),
+    includeJp
+      ? loadJpRows(params.date ?? null, params.universe ?? null)
+      : Promise.resolve({ rows: [] as RawSignalRow[], date: null }),
     includeUs ? loadUsRows(params.date ?? null) : Promise.resolve({ rows: [] as RawSignalRow[], date: null }),
   ])
 

@@ -67,6 +67,72 @@ assert.doesNotMatch(
   /SELECT COALESCE\([\s\S]{0,180}MAX\(date\)[\s\S]{0,180}MAX\(date\)/,
   'Trade signals must not use a latest-date fallback when no observation exists on or before the request',
 )
+assert.match(
+  signalSource,
+  /market\?: DashboardTradeSignalMarket \| 'ALL'/,
+  'Dashboard trade candidates must support an explicit JP/US market scope',
+)
+assert.match(
+  signalSource,
+  /const historical = date != null/,
+  'US trade candidates must distinguish historical requests from latest requests',
+)
+assert.match(
+  signalSource,
+  /historical[\s\S]{0,240}\? 'NULL AS sector, NULL AS industry'/,
+  'Historical US trade candidates must not reuse current classifications',
+)
+assert.match(
+  signalSource,
+  /href: `\$\{row\.href\}\$\{separator\}date=\$\{encodeURIComponent\(row\.date\)\}`/,
+  'Historical trade-candidate links must preserve the resolved observation date',
+)
+
+const asOfSource = fs.readFileSync(path.join(repoRoot, 'lib/queries/dashboard-as-of.ts'), 'utf8')
+assert.match(
+  asOfSource,
+  /export async function getUsDashboardAsOfState/,
+  'US dashboard must expose the same explicit as-of state contract as JP',
+)
+assert.match(
+  asOfSource,
+  /FROM market_daily_snapshots INDEXED BY market_snapshots_market_date_idx[\s\S]{0,100}WHERE market = 'US'/,
+  'US dashboard as-of coverage must come from US snapshots only',
+)
+assert.doesNotMatch(
+  asOfSource.slice(asOfSource.indexOf('const readUsDashboardAsOf')),
+  /SELECT MIN\(date\)|SELECT MAX\(date\)[\s\S]{0,80}AS latestDate/,
+  'US coverage boundaries must use indexed first/last lookups instead of scanning aggregate pairs',
+)
+
+const signalTableSource = fs.readFileSync(
+  path.join(repoRoot, 'components/dashboard/DashboardTradeSignalTable.tsx'),
+  'utf8',
+)
+const signalClientSource = fs.readFileSync(
+  path.join(repoRoot, 'components/dashboard/DashboardTradeSignalTableClient.tsx'),
+  'utf8',
+)
+assert.match(
+  signalTableSource,
+  /usHistorical=\{market === 'US' && date != null\}/,
+  'US historical classification availability must be an explicit server contract',
+)
+assert.match(
+  signalTableSource,
+  /previewAnalysisDate=\{market === 'US' \? date : undefined\}/,
+  'Latest US dashboard previews must not be mislabeled as historical merely because rows have dates',
+)
+assert.match(
+  signalClientSource,
+  /const classificationAvailable = market !== 'US' \|\| !usHistorical/,
+  'US classification availability must not be inferred from row contents',
+)
+assert.match(
+  signalClientSource,
+  /analysisDate=\{previewAnalysisDate === undefined \? row\.date : previewAnalysisDate\}/,
+  'The dashboard must pass its explicit preview date contract through each candidate row',
+)
 
 const hexSource = fs.readFileSync(path.join(repoRoot, 'lib/queries/hex.ts'), 'utf8')
 assert.match(

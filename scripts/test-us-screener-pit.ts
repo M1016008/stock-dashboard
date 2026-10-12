@@ -43,6 +43,18 @@ assert.throws(
   () => assertUsScreenerHistoricalFilters(historical, { marketCapMin: 1_000_000 }),
   (error) => error instanceof UsScreenerPitError && error.status === 422,
 )
+assert.throws(
+  () => assertUsScreenerHistoricalFilters(historical, { exchange: 'NASDAQ' }),
+  (error) => error instanceof UsScreenerPitError && error.status === 422,
+)
+assert.throws(
+  () => assertUsScreenerHistoricalFilters(historical, { assetType: 'Stock' }),
+  (error) => error instanceof UsScreenerPitError && error.status === 422,
+)
+assert.throws(
+  () => assertUsScreenerHistoricalFilters(historical, { sort: 'exchange' }),
+  (error) => error instanceof UsScreenerPitError && error.status === 422,
+)
 assert.doesNotThrow(() => assertUsScreenerHistoricalFilters(historical, { sort: 'ticker' }))
 
 const route = fs.readFileSync('app/api/us/screener/route.ts', 'utf8')
@@ -54,5 +66,38 @@ assert.match(route, /WHEN '\$\{pit\.mode\}' = 'LATEST'/)
 assert.doesNotMatch(route, /AND u\.active = 1/)
 assert.doesNotMatch(route, /MAX\(CASE WHEN/)
 assert.match(route, /WHERE market = 'US' AND date <= \?/)
+
+const page = fs.readFileSync('app/us/screener/page.tsx', 'utf8')
+const client = fs.readFileSync('app/us/screener/UsScreenerClient.tsx', 'utf8')
+assert.match(
+  page,
+  /getUsDashboardAsOfState\(requestedDate\)/,
+  'US screener must resolve its initial PIT mode on the server before rendering client filters',
+)
+assert.match(
+  page,
+  /initialAsOf=\{\{/,
+  'US screener must pass the resolved initial PIT contract to its client',
+)
+assert.match(
+  client,
+  /if \(requestedDate\) sp\.set\('date', requestedDate\)/,
+  'US screener must propagate its selected date to the API request',
+)
+assert.match(
+  client,
+  /requestedDate !== latestDate/,
+  'Selecting the latest known date must not clear current-only filters',
+)
+assert.match(
+  client,
+  /href=\{usStockHref\(row\.ticker, linkDate\)\}/,
+  'Historical screener result links must preserve the resolved trading date',
+)
+assert.match(
+  client,
+  /analysisDate=\{linkDate\}/,
+  'Historical screener previews must preserve the resolved trading date',
+)
 
 console.log('US screener PIT contract tests: ok')

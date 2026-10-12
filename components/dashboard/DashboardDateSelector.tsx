@@ -3,7 +3,10 @@
 import { useCallback, useEffect, useRef, useState, useTransition } from 'react'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { MarketDateCalendar, type MarketDateOption } from '@/components/ui/MarketDateCalendar'
-import { useDashboardHistoricalPending } from '@/components/dashboard/DashboardHistoricalShell'
+import {
+  useDashboardHistoricalPending,
+  type DashboardPendingTarget,
+} from '@/components/dashboard/DashboardHistoricalShell'
 
 interface Props {
   /** カレンダーの初期候補 (最新日 + 表示中の営業日)。全件は開いたときに取得する */
@@ -15,24 +18,53 @@ interface Props {
   latestDate: string | null
   earliestDate: string | null
   mode: 'latest' | 'historical' | 'unavailable'
+  /** カレンダーを開いたときに全営業日を取る先。既定は日本株 (daily_snapshots) */
+  datesEndpoint?: string
+  /** 表示基準の呼び方。日本株は「大引け」、米国株は「米国終値」 */
+  sessionLabel?: string
 }
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
+const DEFAULT_DATES_ENDPOINT = '/api/dashboard/dates?limit=10000'
 
 const buttonClass =
   'inline-flex h-8 items-center justify-center rounded-[6px] border border-[var(--color-border-default)] bg-white px-2.5 text-[12px] font-bold text-[var(--color-text-secondary)] transition-colors hover:border-[var(--color-brand-500)] hover:text-[var(--color-brand-800)] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-[var(--color-border-default)] disabled:hover:text-[var(--color-text-secondary)] focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--color-brand-500)]'
 
-function statusText({ mode, latestDate, resolvedDate }: Pick<Props, 'mode' | 'latestDate' | 'resolvedDate'>) {
-  if (mode === 'historical' && resolvedDate) return `過去日を表示中（${resolvedDate} 大引け）`
+function statusText({
+  mode,
+  latestDate,
+  resolvedDate,
+  sessionLabel,
+}: Pick<Props, 'mode' | 'latestDate' | 'resolvedDate'> & { sessionLabel: string }) {
+  if (mode === 'historical' && resolvedDate) return `過去日を表示中（${resolvedDate} ${sessionLabel}）`
   if (mode === 'unavailable') return '指定した日付は表示できません'
-  return latestDate ? `最新の大引けを表示中（${latestDate}）` : 'データ未取り込み'
+  return latestDate ? `最新の${sessionLabel}を表示中（${latestDate}）` : 'データ未取り込み'
 }
 
-export function DashboardDateSelector({ dates, requestedDate, resolvedDate, latestDate, earliestDate, mode }: Props) {
+/** 日本株 Dashboard 用。切替中ビューは DashboardHistoricalShell が持つ */
+export function DashboardDateSelector(props: Props) {
+  const { setPending } = useDashboardHistoricalPending()
+  return <DashboardDateSelectorControl {...props} onPendingChange={setPending} />
+}
+
+/**
+ * 切替中ビューの持ち主を呼び出し側が渡す版 (米国株 Dashboard など)。
+ * 日付の解決・入力・カレンダーの挙動は DashboardDateSelector と同じ。
+ */
+export function DashboardDateSelectorControl({
+  dates,
+  requestedDate,
+  resolvedDate,
+  latestDate,
+  earliestDate,
+  mode,
+  datesEndpoint = DEFAULT_DATES_ENDPOINT,
+  sessionLabel = '大引け',
+  onPendingChange: setPending,
+}: Props & { onPendingChange: (target: DashboardPendingTarget | null) => void }) {
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
-  const { setPending } = useDashboardHistoricalPending()
   const [isPending, startTransition] = useTransition()
 
   const [allDates, setAllDates] = useState<MarketDateOption[] | null>(null)
@@ -63,7 +95,7 @@ export function DashboardDateSelector({ dates, requestedDate, resolvedDate, late
     abortRef.current = controller
     setLoadingDates(true)
     try {
-      const res = await fetch('/api/dashboard/dates?limit=10000', { cache: 'no-store', signal: controller.signal })
+      const res = await fetch(datesEndpoint, { cache: 'no-store', signal: controller.signal })
       if (!res.ok) throw new Error(`dashboard dates failed: ${res.status}`)
       const json = await res.json() as { dates?: MarketDateOption[] }
       // 古い応答・中断済みの応答は捨てる
@@ -78,7 +110,7 @@ export function DashboardDateSelector({ dates, requestedDate, resolvedDate, late
         setLoadingDates(false)
       }
     }
-  }, [allDates])
+  }, [allDates, datesEndpoint])
 
   const currentTarget = requestedDate && requestedDate === latestDate ? null : requestedDate
 
@@ -106,7 +138,7 @@ export function DashboardDateSelector({ dates, requestedDate, resolvedDate, late
       <div className="flex min-w-[200px] flex-1 items-baseline gap-3">
         <span className="text-[11px] font-bold text-[var(--color-text-secondary)]">表示基準日</span>
         <span className={`text-[12px] font-semibold tabular-nums ${mode === 'latest' ? 'text-[var(--color-text-primary)]' : mode === 'historical' ? 'text-[#92400e]' : 'text-[var(--color-market-red-dark)]'}`}>
-          {statusText({ mode, latestDate, resolvedDate })}
+          {statusText({ mode, latestDate, resolvedDate, sessionLabel })}
         </span>
       </div>
 
