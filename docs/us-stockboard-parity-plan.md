@@ -116,3 +116,21 @@ performance, or historical-price parity work.
 - Main `058a3843f2a2ab924377a21b5b0ca33838342bf9` is live as build
   `9tgwUia7mtxi-MoyTi8AS`. Storage Guard/runtime audit passed and Production smoke passed 165/165
   with health healthy and storage available.
+
+### W3D - MTF Close Calendar
+
+- `/us/mtf-close-calendar` now serves all 12 daily, weekly and monthly close boundaries using
+  observed US regular-session dates from 2000-01-04 through 2026-10-09, with future dates shown as
+  distinct holiday-rule projections in `America/New_York` market time.
+- Source anomalies on weekends and regular exchange holidays are filtered before bucket creation.
+  The shared bucket engine and JP route remain unchanged; the JP TradingView fixture still passes
+  5,100 comparisons with zero mismatches.
+- US-specific TradingView Oracle validation is intentionally not claimed. Exporting a US Oracle
+  CSV/fixture and requiring zero mismatches is the only remaining MTF parity item.
+- Claude Opus 5.5 (`claude.ai`, firstParty, Pro) implemented and reviewed the local presentation
+  and completed one mobile label revision. Codex tests, typecheck, build, multi-viewport browser QA
+  and candidate read-only smoke passed 167/167.
+- Main `164ecaa8d6f64d457b37b3c1f047ff66cdf56b11` is live as build
+  `FivzkmcEB1yyMKBYEru1r`. Storage Guard/runtime audit passed, Production smoke passed 168/168,
+  local Production browser QA passed at 1440 and 390 px, and the read-only gateway served both the
+  page and API while mutation routes remained fail closed.

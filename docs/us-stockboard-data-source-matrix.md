@@ -13,6 +13,7 @@ Updated: 2026-10-12
 | Market momentum | US analytics `physical_momentum`, `daily_snapshots`, `ohlcv_daily` plus primary DB identity | 5,950 investable PMS rows on 2026-10-09; 5,936 with 6 Stage | Price, Stage and PMS/PFS/PES resolve on the requested date; current exchange and SIC metadata are omitted from historical views rather than backfilled | DATA READY | Production is live; retain the current fail-closed historical classification boundary |
 | Sector and industry analysis | Primary DB current `US_SEC_SIC` classification joined to latest US analytics | 5,506 classified momentum rows; 10 broad groups including SIC-unknown; 388 four-digit SIC industries on 2026-10-09 | Latest date only; a selected historical date does not display, aggregate or filter by current classifications | DATA SUBSTITUTE | Add effective-dated SEC SIC history before historical sector/industry analysis |
 | Trigger discovery | Deterministic US price/Stage/PMS serving with current universe identity | Current and single-date search across 1D/2D/3D/5D/1W/2W/3W/5W/1M/2M/3M/5M; result mini charts use the same requested date | Search and chart anchors resolve on or before the requested date; current Exchange/SIC metadata is not used as historical evidence | DATA READY | Add market-scoped saved/evaluation/notification persistence and period scans; add effective-dated classification filters; optimize cold searches |
+| MTF close calendar | Observed US dates in `market_ohlcv_daily` plus deterministic US exchange holiday rules | 6,754 regular-session dates from 2000-01-04 through 2026-10-09; all 12 D/W/M close boundaries and future projections are served | Observed rows are used only inside their coverage; future dates are labeled projections, unscheduled closures are not invented, and anomalous holiday/weekend rows are excluded | DATA READY | Export a US TradingView Oracle CSV/fixture and require zero mismatches before marking US-specific parity complete |
 | PMS / PFS / PES | US analytics DB | 11,970 symbols on 2026-10-09 | Latest row on or before requested date | DATA READY | Per-symbol missing reason |
 | ML feature vectors | US analytics DB | 10,391 tickers on 2026-10-09 | `as_of_date <= selected date` | DATA READY | UI and acceptance-metric parity |
 | ML candidates | US analytics DB | 1,270 tickers on 2026-10-09 | `as_of_date <= selected date` | DATA READY | Broaden discovery wiring |
@@ -39,6 +40,25 @@ Updated: 2026-10-12
 5. Paid, licensed, or legally ambiguous sources remain blocked until the user approves the source.
 
 ## W3 runtime evidence
+
+- `/us/mtf-close-calendar` serves all 12 D/W/M close boundaries from observed US regular-session
+  dates and extends beyond the data watermark with explicitly dashed holiday-rule projections.
+  The page uses `America/New_York`, excludes extended hours, names observed coverage, and states
+  that unscheduled closures and US-specific TradingView Oracle validation remain open.
+- The US session loader starts at the shared 2000-01-04 bucket anchor, uses an indexed date walk,
+  and filters anomalous weekend/regular-holiday source rows before building buckets. Current
+  coverage contains 6,754 regular sessions through 2026-10-09.
+- Shared JP bucket semantics remain unchanged. The existing JP Oracle fixture still passes 425
+  dates x 12 timeframes = 5,100 comparisons with zero mismatches; this evidence is not presented
+  as US-specific TradingView parity.
+- Claude Opus 5.5 (`claude.ai`, firstParty, Pro) implemented and reviewed the market-local
+  presentation and completed one bounded mobile count-label revision. Codex tests, typecheck,
+  build, 1440/1024/768/390 browser QA and candidate read-only smoke passed 167/167.
+- Main `164ecaa8d6f64d457b37b3c1f047ff66cdf56b11` was deployed as build
+  `FivzkmcEB1yyMKBYEru1r`. Storage Guard/runtime audit passed, Production smoke passed 168/168,
+  and Production browser QA passed at 1440 and 390 px without overflow, console errors or failed
+  requests. The read-only gateway served the page/API with HTTP 200, rejected a mutation route,
+  and Cloudflare Access continued to gate unauthenticated external traffic.
 
 - `/us/trigger-discovery` provides current and explicit single-date deterministic Trigger search,
   12 timeframes, Stage/status/MA-spread conditions, result filtering, sorting, pagination and
