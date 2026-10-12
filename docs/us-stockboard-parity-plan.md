@@ -76,3 +76,7 @@ performance, or historical-price parity work.
 - Claude Opus 5.5 (`claude.ai`, firstParty, Pro) completed implementation and screenshot self-review.
   Codex PIT, API, multi-viewport and performance QA passed, including one Production-mode request
   per scanner load and 160/160 candidate read-only smoke.
+- Main `b3d49be88d7c7885fc5f23bfb5c3a7ff3611435a` is live as build
+  `g_ZGu4KOOKQSHow0h0AXl`. Promoted-candidate and Production read-only smoke each passed 160/160;
+  Production health/storage are healthy/available, and authenticated friend access loaded the
+  overview and dated scanner data while the read-only gateway continued to fail closed on writes.
