@@ -77,6 +77,7 @@ const pages: Check[] = [
   '/us/sectors',
   '/us/stage-screener',
   '/us/stock/AAPL',
+  '/us/trigger-discovery',
   '/watchlist',
 ].map((pagePath) => ({ name: `page ${pagePath}`, path: pagePath, kind: 'html' }))
 
@@ -655,6 +656,13 @@ const apiChecks: Check[] = [
   { name: 'trade overview', path: '/api/trade/scenarios/overview?limit=5', kind: 'json' },
   { name: 'trade candidates', path: '/api/trade/workbench-candidates?horizon=20&limit=5', kind: 'json' },
   { name: 'US status', path: '/api/us/status', kind: 'json' },
+  {
+    name: 'US trigger discovery options',
+    path: '/api/us/trigger-discovery/options',
+    kind: 'json',
+    requiredPaths: ['latestAsOf', 'activeCount', 'supportedTimeframes', 'exchanges'],
+    expectedValues: { contractVersion: 'us-trigger-discovery-options-v1', market: 'US', currency: 'USD' },
+  },
   { name: 'US quote', path: '/api/us/quote/AAPL', kind: 'json' },
   { name: 'US history', path: '/api/us/history/AAPL?period=1y&meta=1', kind: 'json' },
   { name: 'US search', path: '/api/us/search?q=AAPL', kind: 'json' },
