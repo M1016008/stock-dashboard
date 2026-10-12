@@ -12,6 +12,7 @@ Updated: 2026-10-12
 | Stage transition scanner | US analytics `daily_snapshots` + `ohlcv_daily` + current `ticker_universe` labels | 49,409,559 snapshots; 1,193 changed tickers on 2026-10-09 | Transitions and liquidity are evaluated at each event date; missing stages are excluded without bridging; current active membership never filters history; Industry/Exchange filters are allowed only for the latest date | DATA READY | Production and authenticated friend access are verified; add effective-dated classification history before historical classification filters |
 | Market momentum | US analytics `physical_momentum`, `daily_snapshots`, `ohlcv_daily` plus primary DB identity | 5,950 investable PMS rows on 2026-10-09; 5,936 with 6 Stage | Price, Stage and PMS/PFS/PES resolve on the requested date; current exchange and SIC metadata are omitted from historical views rather than backfilled | DATA READY | Production is live; retain the current fail-closed historical classification boundary |
 | Sector and industry analysis | Primary DB current `US_SEC_SIC` classification joined to latest US analytics | 5,506 classified momentum rows; 10 broad groups including SIC-unknown; 388 four-digit SIC industries on 2026-10-09 | Latest date only; a selected historical date does not display, aggregate or filter by current classifications | DATA SUBSTITUTE | Add effective-dated SEC SIC history before historical sector/industry analysis |
+| Trigger discovery | Deterministic US price/Stage/PMS serving with current universe identity | Current and single-date search across 1D/2D/3D/5D/1W/2W/3W/5W/1M/2M/3M/5M; result mini charts use the same requested date | Search and chart anchors resolve on or before the requested date; current Exchange/SIC metadata is not used as historical evidence | DATA READY | Add market-scoped saved/evaluation/notification persistence and period scans; add effective-dated classification filters; optimize cold searches |
 | PMS / PFS / PES | US analytics DB | 11,970 symbols on 2026-10-09 | Latest row on or before requested date | DATA READY | Per-symbol missing reason |
 | ML feature vectors | US analytics DB | 10,391 tickers on 2026-10-09 | `as_of_date <= selected date` | DATA READY | UI and acceptance-metric parity |
 | ML candidates | US analytics DB | 1,270 tickers on 2026-10-09 | `as_of_date <= selected date` | DATA READY | Broaden discovery wiring |
@@ -38,6 +39,20 @@ Updated: 2026-10-12
 5. Paid, licensed, or legally ambiguous sources remain blocked until the user approves the source.
 
 ## W3 runtime evidence
+
+- `/us/trigger-discovery` provides current and explicit single-date deterministic Trigger search,
+  12 timeframes, Stage/status/MA-spread conditions, result filtering, sorting, pagination and
+  same-date mini charts. Current classifications are never projected into historical queries.
+- Market-scoped saved definitions, evaluations, notifications and period scans remain explicitly
+  unavailable because the existing persistence contract is JP-only and requires a deliberate DB
+  migration. The current search path is therefore complete without silently reusing JP records.
+- Claude Opus 5.5 (`claude.ai`, firstParty, Pro) implemented and reviewed the US-local information
+  hierarchy. Codex deterministic/API/UI tests, typecheck, build and multi-viewport browser QA
+  passed. Candidate read-only smoke passed 164/164 after the canonical Large Holder state returned
+  to CURRENT.
+- Main `058a3843f2a2ab924377a21b5b0ca33838342bf9` was deployed as build
+  `9tgwUia7mtxi-MoyTi8AS`. Canonical Storage Guard and runtime environment audit passed for every
+  Production process; Production smoke passed 165/165 with health/storage healthy/available.
 
 - `/us/market-momentum` reads price, 6 Stage and PMS/PFS/PES from the fresh US analytics DB, while identity and current SEC SIC context come from the primary DB. The 2026-10-09 latest view covers 5,950 investable rows and separates market pulse, breadth, Exchange, SEC broad sector and four deterministic momentum lanes.
 - `/us/sectors` exposes the current SEC SIC taxonomy explicitly as a GICS substitute: 5,506 of 5,950 momentum rows are classified, with 138 SIC-unknown rows and 444 unmatched rows kept visible as coverage states. The current view ranks 9 named broad sectors and 388 four-digit SIC industries; small samples remain marked rather than silently dropped.

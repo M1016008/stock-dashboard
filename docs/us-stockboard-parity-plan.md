@@ -101,3 +101,18 @@ performance, or historical-price parity work.
   162/162, and Production browser QA passed at 1440 and 390 px. Cloudflare Access still gates the
   public host; the read-only gateway serves both routes and rejects writes with
   `READ_ONLY_ACCESS`.
+
+### W3C - Trigger Discovery
+
+- `/us/trigger-discovery` now exposes deterministic current and single-date Trigger search across
+  all 12 supported timeframes, with Stage/status/MA-spread conditions, result filtering, sorting,
+  pagination and requested-date mini charts.
+- Historical Exchange/SIC filtering remains fail closed because the available classification rows
+  are current-only. Saved Trigger definitions, evaluations, notifications and period scans remain
+  unavailable until the JP-only persistence schema receives an explicit market-scoped migration.
+- Claude Opus 5.5 (`claude.ai`, firstParty, Pro) implemented and reviewed the US-local hierarchy.
+  Codex dedicated tests, typecheck, build and 1440/1024/768/390 browser QA passed; candidate
+  read-only smoke passed 164/164.
+- Main `058a3843f2a2ab924377a21b5b0ca33838342bf9` is live as build
+  `9tgwUia7mtxi-MoyTi8AS`. Storage Guard/runtime audit passed and Production smoke passed 165/165
+  with health healthy and storage available.
