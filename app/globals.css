@@ -1431,6 +1431,24 @@ main td {
   white-space: nowrap;
 }
 
+@media (max-width: 639px) {
+  .stat-strip.stat-strip-wrap-mobile dt,
+  .stat-strip.stat-strip-wrap-mobile dd,
+  .stat-strip.stat-strip-wrap-mobile small {
+    text-overflow: clip;
+    white-space: normal;
+  }
+}
+
+@media (max-width: 1279px) {
+  .stat-strip.stat-strip-wrap-compact dt,
+  .stat-strip.stat-strip-wrap-compact dd,
+  .stat-strip.stat-strip-wrap-compact small {
+    text-overflow: clip;
+    white-space: normal;
+  }
+}
+
 .empty-state {
   display: flex;
   flex-direction: column;

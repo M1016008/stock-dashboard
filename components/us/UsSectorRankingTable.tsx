@@ -1,0 +1,240 @@
+// components/us/UsSectorRankingTable.tsx
+//
+// SEC broad sector / SIC industry の比較表。列見出しで並び順 (指標) を切り替える。
+// - md 以上: 表 (1W / 1M / PES は xl 以上で列を足す)
+// - md 未満: 2 段のリスト
+// 値は UsMarketGroup のまま。並べ替えは呼び出し側 (sortUsGroups) で済ませた順に描く。
+
+import Link from 'next/link'
+import { ListFilter } from 'lucide-react'
+import { MeterBar } from '@/components/dashboard/DashboardPrimitives'
+import type { UsMarketGroup } from '@/lib/server/us-market-intelligence'
+import {
+  fmtCount,
+  fmtPct,
+  fmtRatio,
+  fmtScore,
+  signedClass,
+} from '@/components/us/UsMarketMomentumParts'
+import {
+  US_SECTOR_METRICS,
+  US_SECTOR_SMALL_SAMPLE,
+  fmtMetric,
+  metricTextClass,
+  type UsSectorMetric,
+} from '@/components/us/UsSectorShared'
+
+export type UsGroupRowView = {
+  group: UsMarketGroup
+  /** 主ラベル */
+  title: string
+  /** title 属性に出す元の名称 (表示用に整形したとき) */
+  rawTitle?: string
+  /** 補足 (正式名・SIC コードなど) */
+  subtitle?: React.ReactNode
+  /** 親階層 (industry 表で sector を出す) */
+  parent?: string | null
+  /** 同ページ内で下の階層へ */
+  drillHref?: string | null
+  drillLabel?: string
+  screenerHref: string
+  muted?: boolean
+}
+
+const COLUMNS: Array<{ metric: UsSectorMetric; className: string }> = [
+  { metric: '1d', className: '' },
+  { metric: '1w', className: 'hidden xl:table-cell' },
+  { metric: '1m', className: 'hidden xl:table-cell' },
+  { metric: 'pms', className: '' },
+  { metric: 'pfs', className: '' },
+  { metric: 'pes', className: 'hidden xl:table-cell' },
+]
+
+function SortHeader({
+  metric,
+  active,
+  hrefFor,
+  className = '',
+  align = 'right',
+  children,
+}: {
+  metric: UsSectorMetric
+  active: UsSectorMetric
+  hrefFor: (metric: UsSectorMetric) => string
+  className?: string
+  align?: 'left' | 'right'
+  children?: React.ReactNode
+}) {
+  const isActive = metric === active
+  return (
+    <th className={`px-2 py-2 font-bold ${align === 'right' ? 'text-right' : 'text-left'} ${className}`} aria-sort={isActive ? 'descending' : undefined}>
+      <Link
+        href={hrefFor(metric)}
+        prefetch={false}
+        scroll={false}
+        className={`inline-flex items-center gap-0.5 whitespace-nowrap hover:text-[var(--color-brand-900)] ${isActive ? 'text-[var(--color-brand-900)] underline decoration-2 underline-offset-4' : ''}`}
+        title={`${US_SECTOR_METRICS[metric].label}の高い順に並べる`}
+      >
+        {children ?? US_SECTOR_METRICS[metric].short}
+        {isActive && <span aria-hidden className="text-[10px]">↓</span>}
+      </Link>
+    </th>
+  )
+}
+
+function SampleMark({ count }: { count: number }) {
+  if (count >= US_SECTOR_SMALL_SAMPLE) return null
+  return <span className="ml-1 text-[9px] font-bold text-[#b45309]" title={`銘柄数 ${count}。平均が少数銘柄に左右されます`}>少数</span>
+}
+
+export function UsSectorRankingTable({
+  rows,
+  metric,
+  hrefFor,
+  firstLabel,
+  showParent = false,
+  parentLabel = 'Sector',
+  emptyLabel,
+  ariaLabel,
+}: {
+  rows: UsGroupRowView[]
+  metric: UsSectorMetric
+  hrefFor: (metric: UsSectorMetric) => string
+  firstLabel: string
+  showParent?: boolean
+  parentLabel?: string
+  emptyLabel: string
+  ariaLabel: string
+}) {
+  return (
+    <>
+      <div className="panel hidden md:block">
+        <div className="table-scroll">
+          <table className="w-full min-w-[720px] border-collapse text-[12px] xl:min-w-[980px]" aria-label={ariaLabel}>
+            <thead className="text-[11px]">
+              <tr>
+                <th className="w-9 py-2 pl-3 pr-1 text-right font-bold">#</th>
+                <th className="px-2 py-2 text-left font-bold">{firstLabel}</th>
+                {showParent && <th className="hidden px-2 py-2 text-left font-bold lg:table-cell">{parentLabel}</th>}
+                <th className="px-2 py-2 text-right font-bold">銘柄</th>
+                {COLUMNS.map((column) => (
+                  <SortHeader key={column.metric} metric={column.metric} active={metric} hrefFor={hrefFor} className={column.className} />
+                ))}
+                <SortHeader metric="breadth" active={metric} hrefFor={hrefFor} align="left" className="w-[6.5rem]">PMS+比率</SortHeader>
+                <SortHeader metric="stage1" active={metric} hrefFor={hrefFor}>日A S1</SortHeader>
+                <th className="py-2 pl-2 pr-3 text-right font-bold"><span className="sr-only">操作</span></th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-[var(--color-border-soft)]">
+              {rows.map((row, index) => {
+                const { group } = row
+                return (
+                  <tr key={group.key} className={`hover:bg-[var(--color-surface-subtle)] ${row.muted ? 'text-[var(--color-text-tertiary)]' : ''}`}>
+                    <td className="py-1.5 pl-3 pr-1 text-right font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]">{index + 1}</td>
+                    <td className="max-w-[300px] px-2 py-1.5">
+                      <div className="flex min-w-0 items-baseline">
+                        {row.drillHref ? (
+                          <Link href={row.drillHref} prefetch={false} className="truncate font-semibold text-[var(--color-brand-700)] hover:underline" title={row.drillLabel}>
+                            {row.title}
+                          </Link>
+                        ) : (
+                          <span className="truncate font-semibold text-[var(--color-text-primary)]" title={row.rawTitle ?? row.title}>{row.title}</span>
+                        )}
+                        <SampleMark count={group.count} />
+                      </div>
+                      {row.subtitle && <div className="mt-0.5 truncate text-[10px] text-[var(--color-text-tertiary)]">{row.subtitle}</div>}
+                      {showParent && row.parent && <div className="mt-0.5 truncate text-[10px] text-[var(--color-text-tertiary)] lg:hidden">{row.parent}</div>}
+                    </td>
+                    {showParent && <td className="hidden max-w-[160px] truncate px-2 py-1.5 text-[11px] text-[var(--color-text-secondary)] lg:table-cell">{row.parent ?? '—'}</td>}
+                    <td className="px-2 py-1.5 text-right font-mono tabular-nums text-[var(--color-text-secondary)]">{fmtCount(group.count)}</td>
+                    {COLUMNS.map((column) => {
+                      const value = US_SECTOR_METRICS[column.metric].value(group)
+                      const active = column.metric === metric
+                      return (
+                        <td
+                          key={column.metric}
+                          className={`px-2 py-1.5 text-right font-mono tabular-nums ${signedClass(value)} ${active ? 'bg-[var(--color-surface-subtle)] font-bold' : 'font-semibold'} ${column.className}`}
+                        >
+                          {fmtMetric(column.metric, value)}
+                        </td>
+                      )
+                    })}
+                    <td className={`px-2 py-1.5 ${metric === 'breadth' ? 'bg-[var(--color-surface-subtle)]' : ''}`}>
+                      <span className={`block font-mono text-[11px] tabular-nums ${metricTextClass('breadth', group.positivePmsPct)} ${metric === 'breadth' ? 'font-bold' : 'font-semibold'}`}>{fmtRatio(group.positivePmsPct)}</span>
+                      <MeterBar value={group.positivePmsPct} tone={(group.positivePmsPct ?? 0) >= 50 ? 'up' : 'down'} midTick className="mt-0.5" />
+                    </td>
+                    <td className={`px-2 py-1.5 text-right font-mono tabular-nums text-[var(--color-text-secondary)] ${metric === 'stage1' ? 'bg-[var(--color-surface-subtle)] font-bold text-[var(--color-text-primary)]' : ''}`}>
+                      {fmtRatio(group.stage1Pct)}
+                    </td>
+                    <td className="py-1.5 pl-2 pr-3 text-right">
+                      <Link
+                        href={row.screenerHref}
+                        prefetch={false}
+                        className="inline-flex min-h-7 items-center gap-1 whitespace-nowrap text-[11px] font-semibold text-[var(--color-brand-700)] hover:underline"
+                        title={`${row.title} の銘柄をスクリーナーで開く`}
+                      >
+                        <ListFilter size={12} aria-hidden />
+                        銘柄
+                      </Link>
+                    </td>
+                  </tr>
+                )
+              })}
+              {rows.length === 0 && (
+                <tr>
+                  <td colSpan={14} className="px-3 py-8 text-center text-[12px] text-[var(--color-text-tertiary)]">{emptyLabel}</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <ol className="panel m-0 list-none divide-y divide-[var(--color-border-soft)] p-0 md:hidden" aria-label={ariaLabel}>
+        {rows.map((row, index) => {
+          const { group } = row
+          const value = US_SECTOR_METRICS[metric].value(group)
+          return (
+            <li key={group.key} className="grid grid-cols-[1.5rem_minmax(0,1fr)_auto] gap-x-2 px-3 py-2">
+              <span className="pt-0.5 font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]">{index + 1}</span>
+              <div className="min-w-0">
+                {/* SIC industry 名は識別に必要なため、1 行 ellipsis にせず最大 2 行まで出す */}
+                <div className="flex min-w-0 items-baseline">
+                  {row.drillHref ? (
+                    <Link href={row.drillHref} prefetch={false} className="line-clamp-2 min-w-0 break-words text-[13px] font-semibold leading-snug text-[var(--color-brand-700)]" title={row.drillLabel}>{row.title}</Link>
+                  ) : (
+                    <span className="line-clamp-2 min-w-0 break-words text-[13px] font-semibold leading-snug text-[var(--color-text-primary)]" title={row.rawTitle ?? row.title}>{row.title}</span>
+                  )}
+                  <SampleMark count={group.count} />
+                </div>
+                <div className="truncate text-[10px] text-[var(--color-text-tertiary)]">
+                  {fmtCount(group.count)}銘柄{showParent && row.parent ? ` · ${row.parent}` : ''}
+                </div>
+                <div className="mt-1 flex flex-wrap gap-x-2.5 gap-y-0.5 font-mono text-[11px] tabular-nums">
+                  <span className={signedClass(group.avgChangePct)}>1D {fmtPct(group.avgChangePct)}</span>
+                  <span className={signedClass(group.avgReturn1w)}>1W {fmtPct(group.avgReturn1w)}</span>
+                  <span className={signedClass(group.avgReturn1m)}>1M {fmtPct(group.avgReturn1m)}</span>
+                  <span className={signedClass(group.avgPms)}>PMS {fmtScore(group.avgPms)}</span>
+                  <span className={signedClass(group.avgPfs)}>PFS {fmtScore(group.avgPfs)}</span>
+                  <span className={signedClass(group.avgPes)}>PES {fmtScore(group.avgPes)}</span>
+                  <span className="text-[var(--color-text-secondary)]">PMS+ {fmtRatio(group.positivePmsPct)}</span>
+                  <span className="text-[var(--color-text-secondary)]">S1 {fmtRatio(group.stage1Pct)}</span>
+                </div>
+              </div>
+              <div className="flex flex-col items-end justify-between gap-1 text-right">
+                <span className={`font-mono text-[14px] font-bold tabular-nums ${metricTextClass(metric, value)}`}>{fmtMetric(metric, value)}</span>
+                <Link href={row.screenerHref} prefetch={false} className="inline-flex min-h-7 items-center gap-1 text-[11px] font-semibold text-[var(--color-brand-700)]">
+                  <ListFilter size={12} aria-hidden />
+                  銘柄
+                </Link>
+              </div>
+            </li>
+          )
+        })}
+        {rows.length === 0 && (
+          <li className="px-3 py-8 text-center text-[12px] text-[var(--color-text-tertiary)]">{emptyLabel}</li>
+        )}
+      </ol>
+    </>
+  )
+}

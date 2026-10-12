@@ -28,8 +28,8 @@ assert.deepEqual(
 )
 assert.deepEqual(
   NAVIGATION_BY_AREA.us.map((entry) => entry.label),
-  ['ホーム', '銘柄探索', '分析・AI', '監視'],
-  'US navigation must use the same task vocabulary without an empty market category.',
+  ['ホーム', '市場・業種', '銘柄探索', '分析・AI', '監視'],
+  'US navigation must expose the same task vocabulary once market analysis is available.',
 )
 assert.deepEqual(
   NAVIGATION_BY_AREA.commodities.map((entry) => entry.label),
@@ -52,6 +52,8 @@ assert.equal(PAGE_CATALOG.sectorStructure.href, '/sectors?view=structure')
 assert.equal(PAGE_CATALOG.historicalPatterns.href, '/ai/ma-lens#historical-pattern-search')
 assert.equal(PAGE_CATALOG.usAiResearch.href, '/ai/research?market=US')
 assert.equal(PAGE_CATALOG.usChartDrill.href, '/chart-drill?market=US')
+assert.equal(PAGE_CATALOG.usMarketMomentum.href, '/us/market-momentum')
+assert.equal(PAGE_CATALOG.usSectors.href, '/us/sectors')
 
 assert.ok(navPageIds('jp').includes('sectors'), 'Industry analysis must remain under Market & Industry.')
 assert.ok(navPageIds('jp').includes('periodExplorer'), 'Period Explorer must be available under stock discovery.')
@@ -60,6 +62,8 @@ assert.ok(navPageIds('jp').includes('ma25mMonitor'), 'Monthly MA monitoring must
 assert.ok(navPageIds('jp').includes('customCharts'), 'Synthetic charts must move to Analysis & AI.')
 assert.ok(!navPageIds('jp').includes('historicalPatterns'), 'Historical pattern search must not duplicate MA Lens in navigation.')
 assert.ok(!navPageIds('jp').includes('sectorStructure'), 'Sector structure must stay a view inside sector analysis.')
+assert.ok(navPageIds('us').includes('usMarketMomentum'), 'US market momentum must be available under Market & Industry.')
+assert.ok(navPageIds('us').includes('usSectors'), 'US sector analysis must be available under Market & Industry.')
 
 const commodityHrefs = navPageIds('commodities').map((pageId) => PAGE_CATALOG[pageId].href)
 assert.ok(!commodityHrefs.some((href) => /^\/commodities\/(jp|us)\//.test(href)), 'Specific commodity instruments must not be top-level navigation entries.')
