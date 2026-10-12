@@ -18,6 +18,44 @@ import {
   type TimeframeUnit,
 } from '@/lib/timeframes'
 
+export type CloseCalendarMarket = CloseCalendarResult['market']
+
+// 市場ごとに変わるのは文言と「実データ／予定」の見せ方だけ。足の確定判定・API の意味は共通。
+// JP は TradingView 検証済みの既存表示をそのまま保つため、予定日の表示は US だけで有効にする。
+type MarketCopy = {
+  showDataSource: boolean
+  todayContext: string | null
+  currentMonthTitle: string | undefined
+  coverageLabel: string
+  rulesOnlyNotice: string | null
+  sourceLabels: Record<DaySource, string>
+}
+
+type DaySource = 'observed' | 'next-projected' | 'projected'
+
+const MARKET_COPY: Record<CloseCalendarMarket, MarketCopy> = {
+  JP: {
+    showDataSource: false,
+    todayContext: null,
+    currentMonthTitle: undefined,
+    coverageLabel: '実データの範囲',
+    rulesOnlyNotice: null,
+    sourceLabels: { observed: '', 'next-projected': '', projected: '' },
+  },
+  US: {
+    showDataSource: true,
+    todayContext: 'NY',
+    currentMonthTitle: 'America/New_York の今月',
+    coverageLabel: '実データ（US日足）',
+    rulesOnlyNotice: 'US日足の取引日を取得できなかったため、すべて米国取引所の休日ルールによる予定日で表示しています。',
+    sourceLabels: {
+      observed: '実データ（US日足）',
+      'next-projected': '当日は実データ・翌営業日は予定',
+      projected: '予定（米国休日ルール）',
+    },
+  },
+}
+
 const WEEKDAYS = ['日', '月', '火', '水', '木', '金', '土']
 const CLOSE_FILTERS: Array<{ value: CloseCountFilter; label: string }> = [
   { value: 0, label: 'すべて' },
@@ -90,7 +128,26 @@ function timeframeGroup(unit: TimeframeUnit): CloseTimeframe[] {
   return CLOSE_TIMEFRAMES.filter((timeframe) => intervalToSpec(timeframe).timeframe === unit)
 }
 
-export function MtfCloseCalendarClient({ initialMonth, today }: { initialMonth: string; today: string }) {
+// 実データ範囲外の日付は休日ルールによる予定。確定判定は翌営業日にも依存するため、翌営業日が予定なら区別する。
+function daySource(day: CloseCalendarDay, result: CloseCalendarResult | null): DaySource {
+  const from = result?.sessionCoverageFrom ?? null
+  const to = result?.sessionCoverageTo ?? null
+  const observed = (date: string | null) => date != null && from != null && to != null && date >= from && date <= to
+  if (!observed(day.date)) return 'projected'
+  if (day.isTradingDay && !observed(day.nextTradingDate)) return 'next-projected'
+  return 'observed'
+}
+
+export function MtfCloseCalendarClient({
+  market,
+  initialMonth,
+  today,
+}: {
+  market: CloseCalendarMarket
+  initialMonth: string
+  today: string
+}) {
+  const copy = MARKET_COPY[market]
   const [month, setMonth] = useState(initialMonth)
   const [result, setResult] = useState<CloseCalendarResult | null>(null)
   const [selectedDate, setSelectedDate] = useState<string | null>(today)
@@ -108,7 +165,7 @@ export function MtfCloseCalendarClient({ initialMonth, today }: { initialMonth: 
     setLoading(true)
     setError(null)
     const query = new URLSearchParams({
-      market: 'JP',
+      market,
       from: visibleFrom,
       to: addIsoDays(visibleTo, 70),
     })
@@ -122,7 +179,7 @@ export function MtfCloseCalendarClient({ initialMonth, today }: { initialMonth: 
       return payload.days.find((day) => day.date.startsWith(month) && day.isTradingDay)?.date ?? `${month}-01`
     })
     setLoading(false)
-  }, [month, today, visibleFrom, visibleTo])
+  }, [market, month, today, visibleFrom, visibleTo])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -142,6 +199,8 @@ export function MtfCloseCalendarClient({ initialMonth, today }: { initialMonth: 
   const blanks = useMemo(() => Array.from({ length: firstWeekday(month) }, (_, index) => `blank-${index}`), [month])
   const selectedDay = selectedDate ? dayMap.get(selectedDate) ?? null : null
   const selectedVisibleTimeframes = selectedDay ? visibleCloseTimeframes(selectedDay, enabledSet) : []
+  const selectedSource = selectedDay ? daySource(selectedDay, result) : null
+  const rulesOnly = copy.rulesOnlyNotice != null && (result?.calendarSource.endsWith('_HOLIDAY_RULES_ONLY') ?? false)
   const upcomingStart = month < today.slice(0, 7) ? visibleFrom : today > visibleFrom ? today : visibleFrom
   const upcoming = useMemo(
     () => getUpcomingCloseDays(result?.days ?? [], enabledSet, upcomingStart),
@@ -163,7 +222,10 @@ export function MtfCloseCalendarClient({ initialMonth, today }: { initialMonth: 
             <CalendarRange size={18} className="text-[var(--color-brand-700)]" />
             <div>
               <h2 className="text-[15px] font-bold text-[var(--color-text-primary)]">{monthLabel(month)}</h2>
-              <p className="text-[11px] tabular-nums text-[var(--color-text-tertiary)]">条件に該当 {matchingDays}営業日</p>
+              <p className="text-[11px] tabular-nums text-[var(--color-text-tertiary)]">
+                条件に該当 {matchingDays}営業日
+                {copy.todayContext && <span className="ml-2 whitespace-nowrap">今日 {today}（{copy.todayContext}）</span>}
+              </p>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -179,6 +241,7 @@ export function MtfCloseCalendarClient({ initialMonth, today }: { initialMonth: 
             <button
               type="button"
               onClick={() => setMonth(initialMonth)}
+              title={copy.currentMonthTitle}
               className="inline-flex h-8 items-center gap-1.5 rounded-[4px] border border-[var(--color-border-default)] bg-white px-2.5 text-[11px] font-bold text-[var(--color-text-secondary)] hover:bg-[var(--color-brand-50)]"
             >
               <RotateCcw size={13} />
@@ -248,6 +311,12 @@ export function MtfCloseCalendarClient({ initialMonth, today }: { initialMonth: 
           </div>
         </div>
 
+        {rulesOnly && !error && (
+          <p role="status" className="border-b border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-3 py-2 text-[11px] font-semibold text-[var(--color-text-secondary)]">
+            {copy.rulesOnlyNotice}
+          </p>
+        )}
+
         {error ? (
           <div className="flex min-h-[360px] flex-col items-center justify-center gap-3 px-4 text-center">
             <p className="text-[13px] font-bold text-[var(--color-market-red-dark)]">{error}</p>
@@ -277,18 +346,19 @@ export function MtfCloseCalendarClient({ initialMonth, today }: { initialMonth: 
                   const matches = passesCloseCountFilter(day, enabledSet, minimumCloses)
                   const selected = day.date === selectedDate
                   const current = day.date === today
+                  const projected = copy.showDataSource && day.isTradingDay && daySource(day, result) === 'projected'
                   return (
                     <button
                       key={day.date}
                       type="button"
                       onClick={() => setSelectedDate(day.date)}
                       aria-pressed={selected}
-                      aria-label={`${day.date}、${day.isTradingDay ? `${visible.length}時間足確定` : '休場日'}`}
+                      aria-label={`${day.date}、${day.isTradingDay ? `${visible.length}時間足確定` : '休場日'}${projected ? '、予定' : ''}`}
                       className={`relative flex min-h-[94px] min-w-0 flex-col items-stretch overflow-hidden border p-1 text-left transition-colors sm:min-h-[118px] sm:p-1.5 ${
                         selected
                           ? 'border-[var(--color-brand-800)] ring-1 ring-[var(--color-brand-700)]'
                           : countCellClass(visible.length)
-                      } ${!day.isTradingDay || !matches ? 'bg-[var(--color-surface-subtle)] opacity-55' : 'hover:border-[var(--color-brand-500)]'} `}
+                      } ${!day.isTradingDay || !matches ? 'bg-[var(--color-surface-subtle)] opacity-55' : 'hover:border-[var(--color-brand-500)]'} ${projected ? 'border-dashed' : ''}`}
                     >
                       <span className="flex items-center justify-between gap-1">
                         <span className={`text-[11px] font-bold tabular-nums sm:text-[12px] ${current ? 'text-[var(--color-market-red)]' : 'text-[var(--color-text-primary)]'}`}>
@@ -305,8 +375,8 @@ export function MtfCloseCalendarClient({ initialMonth, today }: { initialMonth: 
                               </span>
                             ))}
                           </span>
-                          <span className="mt-auto pt-1 text-[9px] font-bold tabular-nums text-[var(--color-text-secondary)] sm:text-[10px]">
-                            {visible.length}本確定
+                          <span className="mt-auto whitespace-nowrap pt-1 text-[9px] font-bold tabular-nums text-[var(--color-text-secondary)] sm:text-[10px]">
+                            {visible.length}本<span className="hidden sm:inline">確定</span>
                           </span>
                         </>
                       ) : (
@@ -340,6 +410,14 @@ export function MtfCloseCalendarClient({ initialMonth, today }: { initialMonth: 
                     {selectedDay?.isTradingDay ? `次回 ${selectedDay.nextTradingDate ?? '未確定'}` : '市場休場日'}
                   </div>
                 </div>
+                {copy.showDataSource && selectedSource && (
+                  <div className="mt-2 flex items-center justify-between gap-3 border-t border-[var(--color-border-soft)] pt-2 text-[10px] font-semibold">
+                    <span className="text-[var(--color-text-tertiary)]">日付の根拠</span>
+                    <span className={selectedSource === 'observed' ? 'text-[var(--color-text-secondary)]' : 'text-[var(--color-brand-800)]'}>
+                      {copy.sourceLabels[selectedSource]}
+                    </span>
+                  </div>
+                )}
               </div>
               <div className="divide-y divide-[var(--color-border-soft)] bg-white">
                 {TIMEFRAME_GROUPS.map((group) => (
@@ -387,7 +465,13 @@ export function MtfCloseCalendarClient({ initialMonth, today }: { initialMonth: 
 
         <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--color-border-soft)] px-3 py-2 text-[10px] font-semibold text-[var(--color-text-tertiary)]">
           <span className="tabular-nums">営業日の起点 {result?.sessionAnchorDate ?? '—'}</span>
-          <span className="tabular-nums">実データの範囲 {result?.sessionCoverageFrom ?? '—'} – {result?.sessionCoverageTo ?? '—'}</span>
+          {copy.showDataSource && (
+            <span className="inline-flex items-center gap-1.5">
+              <span className="inline-block h-3 w-4 border border-dashed border-[var(--color-text-tertiary)]" aria-hidden />
+              破線枠は休日ルールによる予定日
+            </span>
+          )}
+          <span className="tabular-nums">{copy.coverageLabel} {result?.sessionCoverageFrom ?? '—'} – {result?.sessionCoverageTo ?? '—'}</span>
         </div>
       </section>
     </div>

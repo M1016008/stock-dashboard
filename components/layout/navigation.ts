@@ -283,6 +283,15 @@ export const PAGE_CATALOG = {
     commandBadge: 'US市場',
     searchTerms: '米国株 SEC SIC sector industry 業種',
   },
+  usMtfCloseCalendar: {
+    href: '/us/mtf-close-calendar',
+    label: 'US MTF確定日',
+    description: '米国通常取引日で複数時間足の確定日を月間表示',
+    icon: CalendarRange,
+    commandVerb: '確認',
+    commandBadge: 'US市場',
+    searchTerms: '米国株 MTF Close Calendar ローソク足 確定日 NYSE Nasdaq',
+  },
   usScreener: {
     href: '/us/screener',
     label: 'USスクリーナー',
@@ -462,6 +471,7 @@ export const NAVIGATION_BY_AREA = {
       sections: [
         { id: 'us-market-pulse', label: '市場を読む', pageIds: ['usMarketMomentum'], column: 1 },
         { id: 'us-industry-map', label: '分類を比較', pageIds: ['usSectors'], column: 2 },
+        { id: 'us-events', label: 'イベント', pageIds: ['usMtfCloseCalendar'], column: 1 },
       ],
     },
     {

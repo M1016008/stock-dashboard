@@ -6,6 +6,7 @@ import {
   type CloseCalendarResult,
 } from '@/lib/mtf-close-calendar'
 import { getJpTradingDates } from '@/lib/server/jp-market-calendar'
+import { getUsTradingDates, isUsMarketTradingDate } from '@/lib/server/us-data-freshness'
 
 const CACHE_TTL_MS = 5 * 60 * 1000
 const SESSION_ANCHOR = '2000-01-04'
@@ -30,7 +31,9 @@ export class MtfCloseCalendarRequestError extends Error {
   }
 }
 
-let sessionCache: { loadedAt: number; dates: string[] } | null = null
+type CloseCalendarMarket = 'JP' | 'US'
+
+const sessionCache = new Map<CloseCalendarMarket, { loadedAt: number; dates: string[] }>()
 
 function daysBetween(from: string, to: string): number {
   return Math.floor((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000)
@@ -53,51 +56,79 @@ function validateRange(from: string, to: string, maxRangeDays: number | null = M
   }
 }
 
-async function loadActualMarketDates(): Promise<string[]> {
+async function loadActualMarketDates(market: CloseCalendarMarket): Promise<string[]> {
   const now = Date.now()
-  if (sessionCache && now - sessionCache.loadedAt < CACHE_TTL_MS) return sessionCache.dates
-  const rows = await execAll<DateRow>(
-    `SELECT DISTINCT date
+  const cached = sessionCache.get(market)
+  if (cached && now - cached.loadedAt < CACHE_TTL_MS) return cached.dates
+  const rows = market === 'JP'
+    ? await execAll<DateRow>(`SELECT DISTINCT date
        FROM ohlcv_daily
       WHERE date IS NOT NULL
-      ORDER BY date ASC`,
-  )
-  const dates = rows.map((row) => row.date).filter(isIsoDate)
-  sessionCache = { loadedAt: now, dates }
+      ORDER BY date ASC`)
+    : await execAll<DateRow>(`WITH RECURSIVE trading_dates(date) AS (
+         SELECT MIN(date)
+           FROM market_ohlcv_daily INDEXED BY market_ohlcv_market_date_idx
+          WHERE market = 'US' AND date >= '${SESSION_ANCHOR}'
+         UNION ALL
+         SELECT (
+           SELECT MIN(date)
+             FROM market_ohlcv_daily INDEXED BY market_ohlcv_market_date_idx
+            WHERE market = 'US' AND date > trading_dates.date
+         )
+           FROM trading_dates
+          WHERE date IS NOT NULL
+       )
+       SELECT date
+         FROM trading_dates
+        WHERE date IS NOT NULL
+        ORDER BY date ASC`)
+  const dates = rows
+    .map((row) => row.date)
+    .filter((date) => isIsoDate(date) && (market === 'JP' || isUsMarketTradingDate(date)))
+  sessionCache.set(market, { loadedAt: now, dates })
   return dates
 }
 
-async function loadJpMarketSessionCoverageInternal(from: string, to: string): Promise<MarketSessionCoverage> {
+async function loadMarketSessionCoverageInternal(
+  market: CloseCalendarMarket,
+  from: string,
+  to: string,
+): Promise<MarketSessionCoverage> {
   const through = addIsoDays(to, 14)
+  const projectedDates = market === 'JP' ? getJpTradingDates : getUsTradingDates
+  const hybridSource = market === 'JP'
+    ? 'MARKET_OHLCV_AND_JP_HOLIDAY_RULES'
+    : 'MARKET_OHLCV_AND_US_HOLIDAY_RULES'
+  const fallbackSource = market === 'JP' ? 'JP_HOLIDAY_RULES_ONLY' : 'US_HOLIDAY_RULES_ONLY'
 
   try {
-    const actualDates = await loadActualMarketDates()
-    if (actualDates.length === 0) throw new Error('ohlcv_daily has no market dates')
+    const actualDates = await loadActualMarketDates(market)
+    if (actualDates.length === 0) throw new Error(`${market} OHLCV has no market dates`)
     const actualFrom = actualDates[0]
     const actualTo = actualDates.at(-1) ?? actualFrom
     const prefix = actualFrom > SESSION_ANCHOR
-      ? getJpTradingDates(SESSION_ANCHOR, addIsoDays(actualFrom, -1))
+      ? projectedDates(SESSION_ANCHOR, addIsoDays(actualFrom, -1))
       : []
     const suffix = through > actualTo
-      ? getJpTradingDates(addIsoDays(actualTo, 1), through)
+      ? projectedDates(addIsoDays(actualTo, 1), through)
       : []
 
     return {
       tradingDates: [...prefix, ...actualDates, ...suffix],
       actualCoverageFrom: actualFrom,
       actualCoverageTo: actualTo,
-      calendarSource: 'MARKET_OHLCV_AND_JP_HOLIDAY_RULES',
+      calendarSource: hybridSource,
       warnings: [],
     }
   } catch (error) {
-    console.warn('MTF close calendar: market OHLCV dates unavailable; using JP calendar rules.', {
+    console.warn(`MTF close calendar: ${market} OHLCV dates unavailable; using holiday rules.`, {
       errorClass: error instanceof Error ? error.name : 'UnknownError',
     })
     return {
-      tradingDates: getJpTradingDates(SESSION_ANCHOR, through),
+      tradingDates: projectedDates(SESSION_ANCHOR, through),
       actualCoverageFrom: null,
       actualCoverageTo: null,
-      calendarSource: 'JP_HOLIDAY_RULES_ONLY',
+      calendarSource: fallbackSource,
       warnings: ['MARKET_OHLCV_DATES_UNAVAILABLE'],
     }
   }
@@ -105,7 +136,12 @@ async function loadJpMarketSessionCoverageInternal(from: string, to: string): Pr
 
 export async function loadJpMarketSessionCoverage(from: string, to: string): Promise<MarketSessionCoverage> {
   validateRange(from, to)
-  return loadJpMarketSessionCoverageInternal(from, to)
+  return loadMarketSessionCoverageInternal('JP', from, to)
+}
+
+export async function loadUsMarketSessionCoverage(from: string, to: string): Promise<MarketSessionCoverage> {
+  validateRange(from, to)
+  return loadMarketSessionCoverageInternal('US', from, to)
 }
 
 export async function loadJpMarketSessionCoverageForValidation(
@@ -113,27 +149,29 @@ export async function loadJpMarketSessionCoverageForValidation(
   to: string,
 ): Promise<MarketSessionCoverage> {
   validateRange(from, to, null)
-  return loadJpMarketSessionCoverageInternal(from, to)
+  return loadMarketSessionCoverageInternal('JP', from, to)
 }
 
 export function parseMtfCloseCalendarQuery(searchParams: URLSearchParams): {
-  market: 'JP'
+  market: CloseCalendarMarket
   from: string
   to: string
 } {
   const market = (searchParams.get('market') ?? 'JP').toUpperCase()
   const from = searchParams.get('from') ?? ''
   const to = searchParams.get('to') ?? ''
-  if (market !== 'JP') {
-    throw new MtfCloseCalendarRequestError('Unsupported market. MTF Close Calendar currently supports JP.')
+  if (market !== 'JP' && market !== 'US') {
+    throw new MtfCloseCalendarRequestError('Unsupported market. Use JP or US.')
   }
   validateRange(from, to)
-  return { market: 'JP', from, to }
+  return { market, from, to }
 }
 
 export async function getMtfCloseCalendar(
-  input: { market: 'JP'; from: string; to: string },
-  loadSessions: MarketSessionLoader = loadJpMarketSessionCoverage,
+  input: { market: CloseCalendarMarket; from: string; to: string },
+  loadSessions: MarketSessionLoader = input.market === 'JP'
+    ? loadJpMarketSessionCoverage
+    : loadUsMarketSessionCoverage,
 ): Promise<CloseCalendarResult> {
   validateRange(input.from, input.to)
   const coverage = await loadSessions(input.from, input.to)

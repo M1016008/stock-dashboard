@@ -17,6 +17,12 @@ import {
   isJpMarketTradingDate,
 } from '@/lib/server/jp-market-calendar'
 import {
+  getNextUsTradingDate,
+  getPreviousUsTradingDate,
+  getUsTradingDates,
+  isUsMarketTradingDate,
+} from '@/lib/server/us-data-freshness'
+import {
   CLOSE_TIMEFRAMES,
   createTimeframeBucketContext,
   getTimeframeBucketKey,
@@ -41,6 +47,7 @@ import type { OHLCV } from '@/types/stock'
 
 async function main() {
 const sessions = getJpTradingDates('2000-01-04', '2027-01-15')
+const usSessions = getUsTradingDates('2000-01-04', '2027-01-15')
 const context = createTimeframeBucketContext(sessions)
 
 assert.equal(isJpMarketTradingDate('2026-10-09'), true)
@@ -51,6 +58,28 @@ assert.equal(getPreviousJpTradingDate('2026-10-13'), '2026-10-09')
 assert.equal(getNextJpTradingDate('2026-12-30'), '2027-01-04')
 assert.equal(getNextTradingDay('2026-10-09', sessions), '2026-10-13')
 assert.equal(getPreviousTradingDay('2026-10-13', sessions), '2026-10-09')
+assert.equal(isUsMarketTradingDate('2026-11-25'), true)
+assert.equal(isUsMarketTradingDate('2026-11-26'), false)
+assert.equal(isUsMarketTradingDate('2026-02-16'), false)
+assert.equal(isUsMarketTradingDate('2026-04-03'), false)
+assert.equal(isUsMarketTradingDate('2026-05-25'), false)
+assert.equal(getNextUsTradingDate('2026-11-25'), '2026-11-27')
+assert.equal(getPreviousUsTradingDate('2026-11-27'), '2026-11-25')
+assert.equal(getNextTradingDay('2026-11-25', usSessions), '2026-11-27')
+
+const usContext = createTimeframeBucketContext(usSessions)
+assert.deepEqual(
+  getCloseTimeframes('2026-11-25', getNextTradingDay('2026-11-25', usSessions)!, usContext),
+  ['D'],
+)
+assert.deepEqual(
+  getCloseTimeframes('2026-11-27', getNextTradingDay('2026-11-27', usSessions)!, usContext),
+  ['D', '2D', '3D', 'W'],
+)
+assert.deepEqual(
+  getCloseTimeframes('2026-12-31', getNextTradingDay('2026-12-31', usSessions)!, usContext),
+  [...CLOSE_TIMEFRAMES],
+)
 
 for (const timeframe of CLOSE_TIMEFRAMES) {
   assert.ok(getTimeframeBucketKey('2026-10-09', intervalToSpec(timeframe), context))
@@ -131,8 +160,26 @@ assert.equal(apiResult.days.length, 31)
 assert.equal(apiResult.days.find((day) => day.date === '2026-10-30')?.closeCount, 6)
 assert.equal(apiResult.sessionCoverageTo, '2026-09-30')
 
+const usCoverage: MarketSessionCoverage = {
+  tradingDates: usSessions,
+  actualCoverageFrom: '2000-01-04',
+  actualCoverageTo: '2026-10-09',
+  calendarSource: 'MARKET_OHLCV_AND_US_HOLIDAY_RULES',
+  warnings: [],
+}
+const usInput = parseMtfCloseCalendarQuery(new URLSearchParams({
+  market: 'US',
+  from: '2026-11-01',
+  to: '2026-11-30',
+}))
+const usResult = await getMtfCloseCalendar(usInput, async () => usCoverage)
+assert.equal(usResult.market, 'US')
+assert.equal(usResult.days.find((day) => day.date === '2026-11-26')?.isTradingDay, false)
+assert.equal(usResult.days.find((day) => day.date === '2026-11-25')?.nextTradingDate, '2026-11-27')
+assert.equal(usResult.calendarSource, 'MARKET_OHLCV_AND_US_HOLIDAY_RULES')
+
 assert.throws(
-  () => parseMtfCloseCalendarQuery(new URLSearchParams({ market: 'US', from: '2026-10-01', to: '2026-10-31' })),
+  () => parseMtfCloseCalendarQuery(new URLSearchParams({ market: 'UK', from: '2026-10-01', to: '2026-10-31' })),
   (error) => error instanceof MtfCloseCalendarRequestError && error.status === 400,
 )
 assert.throws(
