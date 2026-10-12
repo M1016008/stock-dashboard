@@ -95,5 +95,9 @@ performance, or historical-price parity work.
   effective-dated classification source exists.
 - Claude Opus 5.5 (`claude.ai`, firstParty, Pro) designed and implemented the local hierarchy and
   completed screenshot-led mobile refinement. Codex typecheck, deterministic data/UI contracts,
-  navigation regression and 1440/1024/768/390/1920 browser QA pass; Production promotion remains
-  the final gate for this wave.
+  navigation regression and 1440/1024/768/390/1920 browser QA pass.
+- Main `34e65a469a3c34460da1139765c4592bf8b734d7` is live as build
+  `f1Dx19LuuJj40tU6R3HKv`. Canonical Storage Guard passed, Production read-only smoke passed
+  162/162, and Production browser QA passed at 1440 and 390 px. Cloudflare Access still gates the
+  public host; the read-only gateway serves both routes and rejects writes with
+  `READ_ONLY_ACCESS`.
