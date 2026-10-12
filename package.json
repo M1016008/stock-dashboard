@@ -159,6 +159,7 @@
     "test:us-screener-period-metrics": "tsx scripts/test-us-screener-period-metrics.ts",
     "test:us-screener-pit": "tsx scripts/test-us-screener-pit.ts",
     "test:us-screener-api-pit": "tsx scripts/test-us-screener-api-pit.ts",
+    "test:us-stock-detail-parity": "tsx scripts/test-us-stock-detail-parity.ts",
     "audit:us-jp-parity": "tsx scripts/audit-us-jp-parity.ts",
     "test:safe-spreadsheet": "tsx scripts/test-safe-spreadsheet.ts",
     "test:classification-source": "tsx scripts/test-classification-source.ts",

@@ -757,7 +757,7 @@ export function HistoricalAnalogExplorer({
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <ScanSearch size={17} className="shrink-0 text-teal-700" aria-hidden="true" />
-            <h2 className="text-[14px] font-black text-[var(--color-text-primary)]">② 過去の近い局面</h2>
+            <h2 className="text-[14px] font-black text-[var(--color-text-primary)]">{market === 'US' ? '過去の近い局面' : '② 過去の近い局面'}</h2>
           </div>
           <p className="mt-1 text-[10px] font-bold text-[var(--color-text-tertiary)]">
             指定期間の日足〜年足を照合し、似た形だった過去を14時間軸のチャートで並べて確認
@@ -767,7 +767,7 @@ export function HistoricalAnalogExplorer({
           type="button"
           onClick={() => void runSearch()}
           disabled={busy}
-          className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-[4px] bg-teal-700 px-3 text-[12px] font-black text-white hover:bg-teal-800 disabled:cursor-wait disabled:opacity-60"
+          className={`inline-flex ${market === 'US' ? 'min-h-11 sm:h-9 sm:min-h-0' : 'h-9'} shrink-0 items-center justify-center gap-2 rounded-[4px] bg-teal-700 px-3 text-[12px] font-black text-white hover:bg-teal-800 disabled:cursor-wait disabled:opacity-60`}
         >
           {started ? <RefreshCw size={14} className={busy ? 'animate-spin' : ''} /> : <ScanSearch size={14} />}
           {loading ? '精密検索中' : loadingMore ? '候補を追加中' : started ? '条件を反映して再検索' : '過去の近い局面を検索'}

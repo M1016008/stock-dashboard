@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react'
 import { StageTag } from '@/components/ui/StageTag'
 import { BacktestHighlightChart, type HighlightChartPoint, type StageMarkerPoint } from '@/components/charts/BacktestHighlightChart'
 import { MlReliabilityStrip } from '@/components/ml/MlReliabilityStrip'
+import { loadUsMlStatus } from '@/components/us/stock-detail/usMlStatusResource'
 import { assessMlReliability } from '@/lib/ml/reliability'
 import type { PhysicsAnalysis, PhysicsStatus } from '@/lib/ml/physics-analysis'
 
@@ -597,10 +598,13 @@ export function StockMlInsights({
     const statusEndpoint = market === 'US'
       ? `/api/us/ml-status/${encodeURIComponent(code)}${analysisDate ? `?date=${encodeURIComponent(analysisDate)}` : ''}`
       : `/api/ml/reliability-status${analysisDate ? `?date=${encodeURIComponent(analysisDate)}` : ''}`
+    const statusRequest = market === 'US'
+      ? loadUsMlStatus<MlBackendStatus>(statusEndpoint)
+      : optionalJson<MlBackendStatus>(statusEndpoint)
     Promise.all([
       requiredJson<Partial<ApiResponse>>(`${similarEndpoint}?${similarParams.toString()}`),
       historyRequest,
-      optionalJson<MlBackendStatus>(statusEndpoint),
+      statusRequest,
     ])
       .then(([similarJson, historyJson, statusJson]) => {
         if (!cancelled) {
@@ -648,7 +652,7 @@ export function StockMlInsights({
     const noModel = data.availabilityReason === 'no_model_as_of'
     return (
       <div className="card" style={{ padding: 12 }}>
-        <div className="section-header" style={{ marginBottom: 8 }}>③ 値動きの近い銘柄</div>
+        <div className="section-header" style={{ marginBottom: 8 }}>{market === 'US' ? '値動きの近い銘柄' : '③ 値動きの近い銘柄'}</div>
         <div className="border border-amber-200 bg-amber-50 px-3 py-3 text-[12px] font-bold text-amber-900">
           {noModel ? '当時利用可能なモデルなし' : '当時利用可能なML結果を確認できません。'}
           <div className="mt-1 text-[10px] font-semibold text-amber-800">
@@ -680,7 +684,7 @@ export function StockMlInsights({
   return (
     <div className="card" style={{ padding: 12 }}>
       <div className="section-header" style={{ marginBottom: 4 }}>
-        ③ 値動きの近い銘柄
+        {market === 'US' ? '値動きの近い銘柄' : '③ 値動きの近い銘柄'}
       </div>
       <p style={{ margin: '0 0 10px', fontSize: 12, fontWeight: 600, color: 'var(--text-muted)', lineHeight: 1.6 }}>
         {analysisDate ? `${analysisDate}以前のデータで` : '最新データで'}、6桁ステージと5/25/75/200日MAの角度・距離が近い順。
@@ -775,9 +779,12 @@ export function StockMlInsights({
                   }}>
                     {band.label}
                   </span>
-                  <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)' }}>
-                    {row.payload.similar?.sector17Name ?? '業種なし'}
-                  </span>
+                  {/* US は業種マスタが無いため、値が無いときは「業種なし」を出さずに省く */}
+                  {(market !== 'US' || row.payload.similar?.sector17Name) && (
+                    <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)' }}>
+                      {row.payload.similar?.sector17Name ?? '業種なし'}
+                    </span>
+                  )}
                 </div>
               </div>
               <SimilarReasonBlock reason={row.reason} />
