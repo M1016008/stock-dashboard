@@ -64,3 +64,15 @@ performance, or historical-price parity work.
 - Authenticated friend access loaded current US Dashboard and 200-row Screener data through
   Cloudflare Access. Gateway regression passed for safe read forwarding and fail-closed writes,
   admin routes and upgrades; the full stock-detail and external mobile route matrix remains open.
+
+### W3A - Stage Screener Serving and Transition Scanner
+
+- Stage Screener serving now uses an indexed price-anchor pivot and a compact response contract.
+  Candidate cold time is about 4.0 seconds for 12,437 rows; its roughly 10 MB plain payload remains
+  a tracked performance residual rather than a closed parity claim.
+- The US Transition Scanner now searches dated observed transitions without bridging missing Stage
+  rows. It supports exact and Any paths, periods, liquidity filters, sorting, pagination and US
+  ticker drill-down; current Industry/Exchange filters are fail-closed outside the latest date.
+- Claude Opus 5.5 (`claude.ai`, firstParty, Pro) completed implementation and screenshot self-review.
+  Codex PIT, API, multi-viewport and performance QA passed, including one Production-mode request
+  per scanner load and 160/160 candidate read-only smoke.

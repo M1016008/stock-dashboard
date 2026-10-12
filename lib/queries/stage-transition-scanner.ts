@@ -48,6 +48,11 @@ export interface StageTransitionSearchResult {
   range: StageTransitionResolvedRange
 }
 
+export interface StageTransitionSearchOptions {
+  /** JP defaults to its current investable universe; US PIT searches keep historical inactive tickers. */
+  requireActiveTicker?: boolean
+}
+
 type RawTransitionRow = {
   ticker: string
   name: string | null
@@ -212,6 +217,7 @@ function assertSearchInput(input: StageTransitionSearchInput) {
 export function buildStageTransitionSearchSql(
   input: StageTransitionSearchInput,
   range: StageTransitionResolvedRange,
+  options: StageTransitionSearchOptions = {},
 ): { sql: string; args: unknown[] } {
   const toIsExact = isStageCode(input.toCode)
   const fromIsExact = isStageCode(input.fromCode)
@@ -311,7 +317,7 @@ export function buildStageTransitionSearchSql(
       LEFT JOIN ohlcv_daily AS event_price
         ON event_price.ticker = transitions.ticker
        AND event_price.date = transitions.transition_date
-      WHERE ticker_universe.active = 1
+      ${options.requireActiveTicker === false ? '' : 'WHERE ticker_universe.active = 1'}
     ),
     filtered AS (
       SELECT *
@@ -329,10 +335,11 @@ export function buildStageTransitionSearchSql(
 export async function searchStageTransitions(
   input: StageTransitionSearchInput,
   executor: StageTransitionQueryExecutor = defaultExecutor,
+  options: StageTransitionSearchOptions = {},
 ): Promise<StageTransitionSearchResult> {
   assertSearchInput(input)
   const range = await resolveStageTransitionRange(input, executor)
-  const query = buildStageTransitionSearchSql(input, range)
+  const query = buildStageTransitionSearchSql(input, range, options)
   const rows = await executor.all<RawTransitionRow>(query.sql, query.args)
   let total = Number(rows[0]?.total_count ?? 0)
 
@@ -343,6 +350,7 @@ export async function searchStageTransitions(
     const countCarrierQuery = buildStageTransitionSearchSql(
       { ...input, page: 1, pageSize: 25 },
       range,
+      options,
     )
     const countCarrier = await executor.all<RawTransitionRow>(countCarrierQuery.sql, countCarrierQuery.args)
     total = Number(countCarrier[0]?.total_count ?? 0)

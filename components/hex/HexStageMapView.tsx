@@ -139,6 +139,7 @@ export default function HexStageMapView({ market = 'JP' }: { market?: 'JP' | 'US
     setLoading(true)
     setError(null)
     const params = new URLSearchParams({ timeframe })
+    if (isUs) params.set('compact', '1')
     if (activeUniverse) params.set(UNIVERSE_FILTER_PARAM, activeUniverse)
     if (selectedDate) params.set('date', selectedDate)
 

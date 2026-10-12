@@ -5,7 +5,9 @@ import path from 'node:path'
 // @ts-expect-error The pinned Node types predate Node 24's built-in SQLite module.
 import { DatabaseSync } from 'node:sqlite'
 import {
+  buildStageTransitionSearchSql,
   StageTransitionInputError,
+  resolveStageTransitionRange,
   searchStageTransitions,
   type StageTransitionQueryExecutor,
 } from '@/lib/queries/stage-transition-scanner'
@@ -186,6 +188,12 @@ async function run() {
   assert.equal(week.rows.some((row) => row.ticker === 'C001'), false, 'missing Stage observation must break the transition chain')
   assert.equal(week.rows.some((row) => row.ticker === 'E001'), true, 'ticker-specific predecessor is used when the shared prior session is absent')
   assert.equal(new Set(week.rows.map((row) => `${row.ticker}:${row.transitionDate}`)).size, week.rows.length)
+
+  const weekRange = await resolveStageTransitionRange(base, executor)
+  const defaultUniverseSql = buildStageTransitionSearchSql(base, weekRange).sql
+  const historicalUniverseSql = buildStageTransitionSearchSql(base, weekRange, { requireActiveTicker: false }).sql
+  assert.match(defaultUniverseSql, /ticker_universe\.active = 1/, 'JP default remains limited to the active universe')
+  assert.doesNotMatch(historicalUniverseSql, /ticker_universe\.active = 1/, 'US history must not use current active membership')
 
   const noTransition = await searchStageTransitions({ ...base, fromCode: '111111', toCode: '111112' }, executor)
   assert.equal(noTransition.total, 0)

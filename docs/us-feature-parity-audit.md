@@ -76,7 +76,7 @@
 | HEX/ステージ専用スクリーナー | 実装済み | `/us/stage-screener`へJP同等の専用UIを実装済み | snapshots | なし | A / 可 | JP/US共通の操作・表示回帰テストを継続 | P2 | S |
 | 市場モメンタム詳細 | 日本株全体/市場区分/日経225 | 未実装 | PMS、JPユニバース | USユニバース分類と品質フィルタ | B+E | NYSE/Nasdaq/AMEX、SEC sector、ETF除外を選択可能にする | P1 | M |
 | 業種ページ | 17/33業種を実装 | 未実装 | JP: J-Quants / US: SEC SIC | GICS相当の正式分類 | B+C+E | 当面SEC SICで実装し、分類taxonomyを差替可能に維持 | P2 | L |
-| 6ステージ遷移分析 | 日本株向けページあり | 未実装 | snapshots、stage transitions | US用集計/serving | B | market列対応、US集計ジョブと画面切替 | P2 | M |
+| 6ステージ遷移分析 | 日本株向けページあり | US専用PIT scanner、Industry/Exchange/流動性filter、銘柄drill-downを実装 | US analytics snapshots、OHLCV、current universe labels | Production/friend-access確認のみ | A+B | 共通遷移engineをUS read-only executorへ接続。分類はcurrent-onlyと明示 | P2 | S |
 | MAレンズ | 日本株向け | 未実装 | JP snapshots、margin、sector | US固有分類、信用代替 | B+E | market共通化。信用条件はUSでは非表示またはshort interestへ置換 | P2 | L |
 | 過去検証・バックテスト | JP画面あり。ただし一部serving表示は未作成 | 未実装、US DBの関連テーブルは0件 | technical signals、forward extrema、serving | US technical signals、signal stats、serving summaries | B+D | まずJP表示欠損を整合。その後US DBで別バッチ・別market集計 | P1 | XL |
 | トレードワークベンチ | 日本株向け | 未実装 | JP snapshots、scenario、margin、sector | US用候補クエリと分類 | B+E | 通貨、取引所、short情報を抽象化してmarket共通化 | P2 | L |
