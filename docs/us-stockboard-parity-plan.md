@@ -80,3 +80,20 @@ performance, or historical-price parity work.
   `g_ZGu4KOOKQSHow0h0AXl`. Promoted-candidate and Production read-only smoke each passed 160/160;
   Production health/storage are healthy/available, and authenticated friend access loaded the
   overview and dated scanner data while the read-only gateway continued to fail closed on writes.
+
+### W3B - Market Momentum and SEC SIC Analysis
+
+- A shared deterministic read model now combines fresh US analytics price, Stage and PMS/PFS/PES
+  with primary-DB identity and latest SEC SIC metadata. Indexed date anchors keep the latest live
+  read near two seconds instead of scanning the full analytics history.
+- `/us/market-momentum` provides market pulse, breadth, Exchange and SEC broad-sector context,
+  deterministic initial/continuation/stall/drop lanes, a compact comparison table and historical
+  date mode. Current classifications never leak into historical aggregation or filtering.
+- `/us/sectors` reads from SEC broad sector to four-digit SIC industry with coverage states,
+  metric switching, map/ranking views and Screener drill-down. The UI names SEC SIC explicitly and
+  does not present it as GICS; historical sector/industry analysis fails closed until an
+  effective-dated classification source exists.
+- Claude Opus 5.5 (`claude.ai`, firstParty, Pro) designed and implemented the local hierarchy and
+  completed screenshot-led mobile refinement. Codex typecheck, deterministic data/UI contracts,
+  navigation regression and 1440/1024/768/390/1920 browser QA pass; Production promotion remains
+  the final gate for this wave.

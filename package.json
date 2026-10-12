@@ -100,6 +100,8 @@
     "test:stage-transition-scanner": "tsx scripts/test-stage-transition-scanner.ts",
     "test:stage-transition-scanner-ui": "tsx scripts/test-stage-transition-scanner-ui.ts",
     "test:us-stage-transition-scanner": "tsx scripts/test-us-stage-transition-scanner.ts",
+    "test:us-market-intelligence": "tsx scripts/test-us-market-intelligence.ts",
+    "test:us-market-momentum-sector-ui": "tsx scripts/test-us-market-momentum-sector-ui.ts",
     "test:stage-history-range": "tsx scripts/test-stage-history-range.ts",
     "test:us-hex-serving": "tsx scripts/test-us-hex-serving.ts",
     "test:storage-paths": "tsx scripts/test-storage-paths.ts",

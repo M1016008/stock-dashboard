@@ -265,6 +265,24 @@ export const PAGE_CATALOG = {
     commandBadge: 'US',
     searchTerms: 'US ホーム 市場概要',
   },
+  usMarketMomentum: {
+    href: '/us/market-momentum',
+    label: 'US市場モメンタム',
+    description: '米国市場の初動・継続・失速を確認',
+    icon: BarChart3,
+    commandVerb: '市場',
+    commandBadge: 'US市場',
+    searchTerms: '米国株 PMS PFS PES breadth momentum',
+  },
+  usSectors: {
+    href: '/us/sectors',
+    label: 'USセクター分析',
+    description: 'SEC SICでセクターと産業の強弱を比較',
+    icon: Building2,
+    commandVerb: '市場',
+    commandBadge: 'US市場',
+    searchTerms: '米国株 SEC SIC sector industry 業種',
+  },
   usScreener: {
     href: '/us/screener',
     label: 'USスクリーナー',
@@ -428,6 +446,17 @@ export const NAVIGATION_BY_AREA = {
     { kind: 'link', pageId: 'usDashboard', label: 'ホーム', shortLabel: 'ホーム', icon: LayoutDashboard },
     {
       kind: 'menu',
+      id: 'us-market',
+      label: '市場・業種',
+      shortLabel: '市場',
+      icon: BarChart3,
+      sections: [
+        { id: 'us-market-pulse', label: '市場を読む', pageIds: ['usMarketMomentum'], column: 1 },
+        { id: 'us-industry-map', label: '分類を比較', pageIds: ['usSectors'], column: 2 },
+      ],
+    },
+    {
+      kind: 'menu',
       id: 'us-explore',
       label: '銘柄探索',
       shortLabel: '探索',
@@ -471,6 +500,6 @@ export const PAGE_CATALOG_ENTRIES = Object.entries(PAGE_CATALOG) as Array<
 
 export const QUICK_COMMAND_PAGE_IDS_BY_AREA = {
   jp: ['dashboard', 'marketMomentum', 'screener', 'maLens', 'watchlist'],
-  us: ['usDashboard', 'usScreener', 'usMlLens', 'usAiResearch', 'watchlist'],
+  us: ['usDashboard', 'usMarketMomentum', 'usScreener', 'usMlLens', 'usAiResearch', 'watchlist'],
   commodities: ['commoditiesDashboard', 'commoditiesScreener'],
 } as const satisfies Record<HeaderArea, readonly PageId[]>
