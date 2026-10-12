@@ -7,12 +7,14 @@ export type AccumulationKind = 'STANDALONE' | 'YTD' | 'FY' | 'LTM' | 'INSTANT'
 export type FinancialValueKind = 'duration' | 'instant'
 export type ForecastScope = 'current_fy' | 'next_fy'
 export type ForecastPeriod = 'FY' | 'H1'
+export type FinancialFactSource = 'jquants' | 'sec_companyfacts' | 'calculated'
+export type FinancialDisclosureSource = Exclude<FinancialFactSource, 'calculated'>
 
 export interface FinancialDisclosureEvent {
   eventId: string
   ticker: string
   publishedAt: string
-  source: 'jquants'
+  source: FinancialDisclosureSource
   disclosureId: string
   documentType: string | null
   accountingStandard: AccountingStandard
@@ -40,7 +42,7 @@ export interface NormalizedFinancialFact {
   consolidationScope: ConsolidationScope
   accountingStandard: AccountingStandard
   correctionStatus: string
-  source: 'jquants' | 'calculated'
+  source: FinancialFactSource
   sourceField: string | null
   disclosureId: string
   isDerived: boolean

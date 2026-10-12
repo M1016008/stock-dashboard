@@ -5,6 +5,7 @@ import {
   normalizeJQuantsFinancialRows,
   selectForecastsAsOf,
   type FinancialForecastSnapshot,
+  type NormalizedFinancialDataset,
   type NormalizedFinancialFact,
 } from '@/lib/financial-foundation'
 import { calculateFinancialMetrics, type CalculatedFinancialMetric } from '@/lib/financial-metrics'
@@ -313,13 +314,11 @@ export async function rebuildFinancialFoundationForTicker(
   }
 }
 
-export async function upsertFinancialFoundationRows(
-  rows: JFinsSummaryRow[],
+export async function upsertNormalizedFinancialDataset(
+  normalized: NormalizedFinancialDataset,
   importedAt = Math.floor(Date.now() / 1000),
   options: FinancialFoundationWriteOptions = {},
 ): Promise<FinancialFoundationWriteResult> {
-  const normalized = normalizeJQuantsFinancialRows(rows)
-
   await writeChunks(normalized.disclosures.map((event) => ({
     sql: `
       INSERT INTO financial_disclosures (
@@ -384,4 +383,16 @@ export async function upsertFinancialFoundationRows(
     forecasts: normalized.forecasts.length,
     calculatedMetrics,
   }
+}
+
+export async function upsertFinancialFoundationRows(
+  rows: JFinsSummaryRow[],
+  importedAt = Math.floor(Date.now() / 1000),
+  options: FinancialFoundationWriteOptions = {},
+): Promise<FinancialFoundationWriteResult> {
+  return upsertNormalizedFinancialDataset(
+    normalizeJQuantsFinancialRows(rows),
+    importedAt,
+    options,
+  )
 }

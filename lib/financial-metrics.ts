@@ -372,8 +372,16 @@ function marketSharesForPeriod(
   facts: NormalizedFinancialFact[],
   periodEnd: string,
 ): { value: number; facts: NormalizedFinancialFact[] } | null {
-  const issued = latestFact(facts, 'shares_outstanding', undefined, periodEnd)
+  const latestSecOutstanding = preferredFacts(facts, 'shares_outstanding')
+    .filter((fact) => fact.source === 'sec_companyfacts')
+    .at(-1)
+  const issued = latestSecOutstanding ?? latestFact(facts, 'shares_outstanding', undefined, periodEnd)
   if (!issued) return null
+  // SEC EntityCommonStockSharesOutstanding is already net outstanding shares.
+  // J-Quants ShOutFY is issued shares and therefore still requires treasury shares.
+  if (issued.source === 'sec_companyfacts') {
+    return issued.value > 0 ? { value: issued.value, facts: [issued] } : null
+  }
   const treasury = latestFact(facts, 'treasury_shares', undefined, periodEnd)
   if (!treasury) return null
   const value = issued.value - treasury.value
@@ -437,10 +445,12 @@ export function calculateFinancialMetrics(context: MetricCalculationContext): Ca
     : marketSharesForPeriod(facts, '9999-12-31')
   const ltmEps = ltmNet && weightedShares?.value ? ltmNet.value / weightedShares.value : null
   const completedFiscalYear = latestCompletedFiscalYear(facts)
+  const statementCurrency = ltmNet?.currency ?? ltmRevenue?.currency ?? 'JPY'
+  const perShareUnit = `${statementCurrency}_PER_SHARE`
 
-  if (ltmNet && weightedShares) addMetric(output, context, 'eps', ltmEps, 'JPY_PER_SHARE', [ltmNet, weightedShares], ltmNet)
+  if (ltmNet && weightedShares) addMetric(output, context, 'eps', ltmEps, perShareUnit, [ltmNet, weightedShares], ltmNet)
   const bps = latestFact(facts, 'bps')
-  if (bps) addMetric(output, context, 'bps', bps.value, 'JPY_PER_SHARE', [bps], bps, 'latest_reported_bps')
+  if (bps) addMetric(output, context, 'bps', bps.value, bps.unit, [bps], bps, 'latest_reported_bps')
   if (price && ltmEps != null && ltmEps > 0 && ltmNet && weightedShares) {
     addMetric(output, context, 'per', price.value / ltmEps, 'MULTIPLE', [price, ltmNet, weightedShares], ltmNet)
   }
@@ -510,7 +520,7 @@ export function calculateFinancialMetrics(context: MetricCalculationContext): Ca
       && cfo.consolidationScope === cfi.consolidationScope
       && cfo.accountingStandard === cfi.accountingStandard
     ) {
-      addMetric(output, context, 'simple_fcf', cfo.value + cfi.value, 'JPY', [cfo, cfi], cfo)
+      addMetric(output, context, 'simple_fcf', cfo.value + cfi.value, cfo.unit, [cfo, cfi], cfo)
     }
   }
   return output
