@@ -25,6 +25,7 @@ function stringParam(params: URLSearchParams, key: string): string | null {
 }
 
 function integerParam(value: string | null, fallback: number): number {
+  if (value == null || value.trim() === '') return fallback
   const parsed = Number(value)
   return Number.isInteger(parsed) ? parsed : fallback
 }

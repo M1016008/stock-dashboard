@@ -9,7 +9,8 @@ assert.match(page, /view === 'scanner'/, 'Market 6 Stage must render the scanner
 assert.match(page, />遷移スキャナー</, 'Market 6 Stage local navigation must expose the scanner')
 assert.match(page, /<StageTransitionScanner/, 'The scanner component must be mounted in the production render tree')
 
-assert.match(scanner, /fetch\(`\/api\/hex\/transitions\?\$\{queryString\}`/, 'Scanner reads must stay same-origin')
+assert.match(scanner, /apiPath: '\/api\/hex\/transitions'/, 'JP scanner must retain its same-origin endpoint')
+assert.match(scanner, /fetch\(`\$\{config\.apiPath\}\?\$\{queryString\}`/, 'Scanner reads must stay same-origin')
 assert.doesNotMatch(scanner, /https?:\/\/(localhost|127\.0\.0\.1)/, 'Browser code must not hard-code a local origin')
 assert.match(scanner, /function ResultSkeleton/, 'Loading state must remain explicit')
 assert.match(scanner, /条件に一致する遷移はありません/, 'Empty search results must have a dedicated state')
@@ -21,6 +22,7 @@ assert.match(scanner, /20日平均売買代金/, 'Average-turnover filtering mus
 
 assert.match(route, /export async function GET/, 'Transition search must use a read-only GET route')
 assert.doesNotMatch(route, /export async function (POST|PUT|PATCH|DELETE)/, 'Transition search must not expose a mutation method')
+assert.match(route, /value == null \|\| value\.trim\(\) === ''/, 'Omitted pagination must use the documented defaults')
 assert.match(route, /Cache-Control': 'no-store'/, 'Live transition responses must not be served from a stale shared cache')
 
 console.log('stage transition scanner UI contract tests passed')
