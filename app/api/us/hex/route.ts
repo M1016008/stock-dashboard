@@ -2,7 +2,7 @@ import { gzipSync } from 'node:zlib'
 import { NextRequest, NextResponse } from 'next/server'
 import { execAll, execGet } from '@/lib/db/client'
 import { execUsAnalyticsAll, hasUsAnalyticsDb } from '@/lib/db/us-analytics'
-import { US_SEC_SIC_TAXONOMY } from '@/lib/us-classification'
+import { US_HEX_ROWS_SQL, usHexRowsParams, type UsHexRawRow } from '@/lib/server/us-hex-serving'
 import { getUsDisplayName } from '@/lib/us-symbol-aliases'
 import { usInvestableSymbolSql, usTestSymbolExclusionSql } from '@/lib/us-symbol-quality'
 
@@ -18,8 +18,8 @@ type UsHexRow = {
   name: string
   sector_large: string
   sector_small: string | null
-  sector17_name: string | null
-  sector33_name: string | null
+  sector17_name?: string | null
+  sector33_name?: string | null
   market_segment: string | null
   margin_type: string | null
   market_cap: number
@@ -50,46 +50,10 @@ type UsHexRow = {
     sma75: number | null
     sma300: number | null
   }
-  ml_candidate_direction: 'up' | 'down' | null
-  ml_candidate_rank: number | null
-  ml_candidate_summary: string | null
+  ml_candidate_direction?: 'up' | 'down' | null
+  ml_candidate_rank?: number | null
+  ml_candidate_summary?: string | null
   physical_momentum_score: number | null
-}
-
-type RawRow = {
-  ticker: string
-  snapshot_ticker: string | null
-  name: string | null
-  exchange: string | null
-  asset_type: string | null
-  sector: string | null
-  industry: string | null
-  shares_outstanding: number | null
-  price: number | null
-  perf_1d: number | null
-  perf_1w: number | null
-  perf_1m: number | null
-  perf_3m: number | null
-  perf_6m: number | null
-  perf_ytd: number | null
-  daily_a_stage: number | null
-  daily_b_stage: number | null
-  weekly_a_stage: number | null
-  weekly_b_stage: number | null
-  monthly_a_stage: number | null
-  monthly_b_stage: number | null
-  ma_5: number | null
-  ma_25: number | null
-  ma_75: number | null
-  ma_300: number | null
-  prev_ma_5: number | null
-  prev_ma_25: number | null
-  prev_ma_75: number | null
-  prev_ma_300: number | null
-  prev2_ma_5: number | null
-  prev2_ma_25: number | null
-  prev2_ma_75: number | null
-  prev2_ma_300: number | null
 }
 
 type CacheValue = {
@@ -171,6 +135,16 @@ function jsonResponse(request: NextRequest, payload: unknown): NextResponse {
   return serializedJsonResponse(request, serializeJson(payload))
 }
 
+function compactUsHexRow(row: UsHexRow): UsHexRow {
+  const compact = { ...row }
+  delete compact.sector17_name
+  delete compact.sector33_name
+  delete compact.ml_candidate_direction
+  delete compact.ml_candidate_rank
+  delete compact.ml_candidate_summary
+  return compact
+}
+
 async function resolveDate(requested: string | null): Promise<string | null> {
   if (requested && /^\d{4}-\d{2}-\d{2}$/.test(requested)) {
     const row = await execGet<{ date: string | null }>(
@@ -206,7 +180,7 @@ async function loadPhysicalMomentum(date: string): Promise<Map<string, number | 
   return new Map(rows.map((row) => [row.symbol, numeric(row.physical_momentum_score)]))
 }
 
-function stageForTimeframe(row: RawRow, timeframe: Timeframe): number | null {
+function stageForTimeframe(row: UsHexRawRow, timeframe: Timeframe): number | null {
   if (timeframe === 'weekly') return numeric(row.weekly_a_stage)
   if (timeframe === 'monthly') return numeric(row.monthly_a_stage)
   return numeric(row.daily_a_stage)
@@ -216,6 +190,7 @@ export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
     const requestedDate = searchParams.get('date')
+    const compact = searchParams.get('compact') === '1'
     const timeframe: Timeframe = searchParams.get('timeframe') === 'weekly'
       ? 'weekly'
       : searchParams.get('timeframe') === 'monthly'
@@ -236,7 +211,7 @@ export async function GET(request: NextRequest) {
       })
     }
 
-    const cacheKey = `all-investable-v2:${date}:${timeframe}`
+    const cacheKey = `all-investable-v3:${date}:${timeframe}:${compact ? 'compact-v1' : 'legacy-v1'}`
     const cached = cache.get(cacheKey)
     if (cached && cached.expiresAt > Date.now()) {
       cached.hitResponse ??= serializeJson({ ...cached.payload, cache: 'hit' })
@@ -244,102 +219,7 @@ export async function GET(request: NextRequest) {
     }
 
     const [rows, physicalMomentum, universe] = await Promise.all([
-      execAll<RawRow>(
-        `
-        WITH anchors AS (
-          SELECT
-            (SELECT MAX(date) FROM market_daily_snapshots WHERE market = 'US' AND date < ?) AS prev_snapshot,
-            (SELECT MAX(date) FROM market_daily_snapshots
-              WHERE market = 'US'
-                AND date < (SELECT MAX(date) FROM market_daily_snapshots WHERE market = 'US' AND date < ?)
-            ) AS prev2_snapshot,
-            (SELECT MAX(date) FROM market_ohlcv_daily WHERE market = 'US' AND date < ?) AS day_1,
-            (SELECT MAX(date) FROM market_ohlcv_daily WHERE market = 'US' AND date <= date(?, '-7 days')) AS week_1,
-            (SELECT MAX(date) FROM market_ohlcv_daily WHERE market = 'US' AND date <= date(?, '-1 month')) AS month_1,
-            (SELECT MAX(date) FROM market_ohlcv_daily WHERE market = 'US' AND date <= date(?, '-3 months')) AS month_3,
-            (SELECT MAX(date) FROM market_ohlcv_daily WHERE market = 'US' AND date <= date(?, '-6 months')) AS month_6,
-            (SELECT MAX(date) FROM market_ohlcv_daily WHERE market = 'US' AND date <= substr(?, 1, 4) || '-01-01') AS year_start
-        )
-        SELECT
-          u.ticker,
-          s.ticker AS snapshot_ticker,
-          u.name,
-          u.exchange,
-          u.asset_type,
-          COALESCE(c.sector_name, u.sector, 'Unclassified') AS sector,
-          COALESCE(c.industry_name, u.industry) AS industry,
-          u.shares_outstanding,
-          COALESCE(cur.adj_close, cur.close) AS price,
-          CASE WHEN COALESCE(p1.adj_close, p1.close) > 0
-            THEN 100.0 * (COALESCE(cur.adj_close, cur.close) - COALESCE(p1.adj_close, p1.close)) / COALESCE(p1.adj_close, p1.close)
-          END AS perf_1d,
-          CASE WHEN COALESCE(w1.adj_close, w1.close) > 0
-            THEN 100.0 * (COALESCE(cur.adj_close, cur.close) - COALESCE(w1.adj_close, w1.close)) / COALESCE(w1.adj_close, w1.close)
-          END AS perf_1w,
-          CASE WHEN COALESCE(m1.adj_close, m1.close) > 0
-            THEN 100.0 * (COALESCE(cur.adj_close, cur.close) - COALESCE(m1.adj_close, m1.close)) / COALESCE(m1.adj_close, m1.close)
-          END AS perf_1m,
-          CASE WHEN COALESCE(m3.adj_close, m3.close) > 0
-            THEN 100.0 * (COALESCE(cur.adj_close, cur.close) - COALESCE(m3.adj_close, m3.close)) / COALESCE(m3.adj_close, m3.close)
-          END AS perf_3m,
-          CASE WHEN COALESCE(m6.adj_close, m6.close) > 0
-            THEN 100.0 * (COALESCE(cur.adj_close, cur.close) - COALESCE(m6.adj_close, m6.close)) / COALESCE(m6.adj_close, m6.close)
-          END AS perf_6m,
-          CASE WHEN COALESCE(ytd.adj_close, ytd.close) > 0
-            THEN 100.0 * (COALESCE(cur.adj_close, cur.close) - COALESCE(ytd.adj_close, ytd.close)) / COALESCE(ytd.adj_close, ytd.close)
-          END AS perf_ytd,
-          s.daily_a_stage,
-          s.daily_b_stage,
-          s.weekly_a_stage,
-          s.weekly_b_stage,
-          s.monthly_a_stage,
-          s.monthly_b_stage,
-          s.ma_5,
-          s.ma_25,
-          s.ma_75,
-          s.ma_300,
-          prev.ma_5 AS prev_ma_5,
-          prev.ma_25 AS prev_ma_25,
-          prev.ma_75 AS prev_ma_75,
-          prev.ma_300 AS prev_ma_300,
-          prev2.ma_5 AS prev2_ma_5,
-          prev2.ma_25 AS prev2_ma_25,
-          prev2.ma_75 AS prev2_ma_75,
-          prev2.ma_300 AS prev2_ma_300
-        FROM market_universe u INDEXED BY market_universe_market_active_idx
-        CROSS JOIN anchors
-        LEFT JOIN market_daily_snapshots s INDEXED BY market_snapshots_market_date_ticker_idx
-          ON s.market = 'US' AND s.ticker = u.ticker AND s.date = ?
-        LEFT JOIN market_classifications c
-          ON c.market = 'US'
-         AND c.ticker = u.ticker
-         AND c.taxonomy = ?
-         AND c.effective_from = '0000-01-01'
-        LEFT JOIN market_daily_snapshots prev
-          ON prev.market = 'US' AND prev.ticker = u.ticker AND prev.date = anchors.prev_snapshot
-        LEFT JOIN market_daily_snapshots prev2
-          ON prev2.market = 'US' AND prev2.ticker = u.ticker AND prev2.date = anchors.prev2_snapshot
-        LEFT JOIN market_ohlcv_daily cur
-          ON cur.market = 'US' AND cur.ticker = u.ticker AND cur.date = ?
-        LEFT JOIN market_ohlcv_daily p1
-          ON p1.market = 'US' AND p1.ticker = u.ticker AND p1.date = anchors.day_1
-        LEFT JOIN market_ohlcv_daily w1
-          ON w1.market = 'US' AND w1.ticker = u.ticker AND w1.date = anchors.week_1
-        LEFT JOIN market_ohlcv_daily m1
-          ON m1.market = 'US' AND m1.ticker = u.ticker AND m1.date = anchors.month_1
-        LEFT JOIN market_ohlcv_daily m3
-          ON m3.market = 'US' AND m3.ticker = u.ticker AND m3.date = anchors.month_3
-        LEFT JOIN market_ohlcv_daily m6
-          ON m6.market = 'US' AND m6.ticker = u.ticker AND m6.date = anchors.month_6
-        LEFT JOIN market_ohlcv_daily ytd
-          ON ytd.market = 'US' AND ytd.ticker = u.ticker AND ytd.date = anchors.year_start
-        WHERE u.market = 'US'
-          AND u.active = 1
-          AND ${usInvestableSymbolSql('u.ticker')}
-        ORDER BY u.ticker
-        `,
-        [date, date, date, date, date, date, date, date, date, US_SEC_SIC_TAXONOMY, date],
-      ),
+      execAll<UsHexRawRow>(US_HEX_ROWS_SQL, usHexRowsParams(date)),
       loadPhysicalMomentum(date),
       execGet<UsHexUniverse>(
         `SELECT
@@ -419,7 +299,7 @@ export async function GET(request: NextRequest) {
 
     const payload: CacheValue['payload'] = {
       success: true,
-      data,
+      data: compact ? data.map(compactUsHexRow) : data,
       count: data.length,
       date,
       timeframe,

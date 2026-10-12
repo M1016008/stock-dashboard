@@ -100,6 +100,7 @@
     "test:stage-transition-scanner": "tsx scripts/test-stage-transition-scanner.ts",
     "test:stage-transition-scanner-ui": "tsx scripts/test-stage-transition-scanner-ui.ts",
     "test:stage-history-range": "tsx scripts/test-stage-history-range.ts",
+    "test:us-hex-serving": "tsx scripts/test-us-hex-serving.ts",
     "test:storage-paths": "tsx scripts/test-storage-paths.ts",
     "test:jquants-adjustments": "tsx scripts/test-jquants-adjustments.ts",
     "test:financial-foundation": "tsx scripts/test-financial-foundation.ts",
