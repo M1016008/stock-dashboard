@@ -24,7 +24,7 @@ import {
 import type { OHLCV } from '@/types/stock'
 
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/
-const TICKER_PATTERN = /^[0-9A-Z]{4,8}$/
+const TICKER_PATTERN = /^(?=.{1,12}$)[0-9A-Z]+(?:[.-][0-9A-Z]+)*$/
 const MIN_DISPLAY_POINTS = 12
 const MAX_DISPLAY_POINTS = 60
 const HISTORY_BUFFER_MONTHS = 2

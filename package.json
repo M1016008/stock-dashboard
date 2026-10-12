@@ -68,6 +68,7 @@
     "test:trigger-discovery-ui": "tsx scripts/test-trigger-discovery-ui.ts",
     "test:trigger-discovery-navigation-restore": "tsx scripts/test-trigger-discovery-navigation-restore.ts",
     "test:trigger-discovery-mini-charts": "tsx scripts/test-trigger-discovery-mini-charts.ts",
+    "test:us-trigger-discovery": "tsx scripts/test-us-trigger-discovery.ts",
     "test:trigger-discovery-mini-charts:integration": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/test-trigger-discovery-mini-charts-integration.ts",
     "test:trigger-discovery-historical": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/test-trigger-discovery-historical.ts",
     "test:trigger-discovery-historical-scan": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/test-trigger-discovery-historical-scan.ts",
