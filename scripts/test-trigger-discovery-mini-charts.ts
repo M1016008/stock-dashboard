@@ -103,6 +103,15 @@ async function main() {
     tickers: ['1001', ' 1001 ', '617a'], requestedAsOf: '2026-09-06', ma1Period: 20, ma2Period: 25,
   })
   assert.deepEqual(duplicate.tickers, ['1001', '617A'])
+  const usSymbols = parseTriggerDiscoveryMiniChartsRequest({
+    tickers: ['F', 'BRK.B', 'BRK-B'], requestedAsOf: '2026-09-06', ma1Period: 20, ma2Period: 25,
+  })
+  assert.deepEqual(usSymbols.tickers, ['F', 'BRK.B', 'BRK-B'])
+  for (const invalidTicker of ['.ABC', 'ABC.', 'A..B', 'A--B']) {
+    assert.throws(() => parseTriggerDiscoveryMiniChartsRequest({
+      tickers: [invalidTicker], requestedAsOf: '2026-09-06', ma1Period: 20, ma2Period: 25,
+    }), TriggerDiscoveryMiniChartInputError)
+  }
 
   const source = new FixtureSource()
   const result = await getTriggerDiscoveryMiniCharts({

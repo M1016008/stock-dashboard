@@ -301,6 +301,15 @@ export const PAGE_CATALOG = {
     commandBadge: 'US探索',
     searchTerms: '米国株 HEX 6ステージ',
   },
+  usTriggerDiscovery: {
+    href: '/us/trigger-discovery',
+    label: 'US条件トリガー',
+    description: '上向きの月足MAへ接近する米国株を探索',
+    icon: Crosshair,
+    commandVerb: '探す',
+    commandBadge: 'US探索',
+    searchTerms: '米国株 Trigger Discovery 月足 MA 接近 条件',
+  },
   usAiResearch: {
     href: '/ai/research?market=US',
     label: 'US AI銘柄リサーチ',
@@ -462,7 +471,7 @@ export const NAVIGATION_BY_AREA = {
       shortLabel: '探索',
       icon: Search,
       sections: [
-        { id: 'us-filters', label: '条件から探す', pageIds: ['usScreener', 'usStageScreener'], column: 1 },
+        { id: 'us-filters', label: '条件から探す', pageIds: ['usScreener', 'usStageScreener', 'usTriggerDiscovery'], column: 1 },
         { id: 'us-conversation', label: '対話で探す', pageIds: ['usAiResearch'], column: 2 },
       ],
     },

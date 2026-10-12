@@ -1,4 +1,4 @@
-import { Activity, FlaskConical, Gauge, GitCompareArrows, Hexagon, Layers, LayoutDashboard, ListFilter } from 'lucide-react'
+import { Activity, Crosshair, FlaskConical, Gauge, GitCompareArrows, Hexagon, Layers, LayoutDashboard, ListFilter } from 'lucide-react'
 import { ViewTabs } from '@/components/ui/ViewTabs'
 
 // 米国株エリアの兄弟ページ。各ページの PageTitle 直下に置き、現在地を aria-current で示す。
@@ -9,6 +9,7 @@ const ITEMS = [
   { href: '/us/sectors', label: 'セクター', icon: Layers },
   { href: '/us/screener', label: 'スクリーナー', icon: ListFilter },
   { href: '/us/stage-screener', label: 'ステージスクリーナー', icon: Hexagon },
+  { href: '/us/trigger-discovery', label: '条件トリガー', icon: Crosshair },
   { href: '/us/analysis/ml-lens', label: 'US AI Lens', icon: Activity },
   { href: '/us/analysis/transitions', label: 'ステージ遷移', icon: GitCompareArrows },
   { href: '/us/analysis/backtest', label: '過去検証', icon: FlaskConical },
