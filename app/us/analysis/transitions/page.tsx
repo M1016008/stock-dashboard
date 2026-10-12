@@ -4,6 +4,8 @@ import { PageTitle } from '@/components/layout/PageTitle'
 import { SectionHeader } from '@/components/ui/SectionHeader'
 import { StageTag } from '@/components/ui/StageTag'
 import { EmptyState, Notice } from '@/components/ui/EmptyState'
+import { ViewTabs } from '@/components/ui/ViewTabs'
+import { StageTransitionScanner } from '@/components/hex/StageTransitionScanner'
 import { loadUsTransitionAnalysis } from '@/lib/server/us-analysis-dashboard'
 
 export const metadata: Metadata = {
@@ -44,7 +46,50 @@ function returnTone(value: number | null): string {
   return value > 0 ? 'text-[var(--color-price-up)]' : 'text-[var(--color-price-down)]'
 }
 
-export default async function UsTransitionsPage() {
+function firstParam(value: string | string[] | undefined): string | null {
+  return Array.isArray(value) ? value[0] ?? null : value ?? null
+}
+
+function flattenSearchParams(values: Record<string, string | string[] | undefined>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(values).flatMap(([key, value]) => {
+      const first = firstParam(value)
+      return first == null ? [] : [[key, first]]
+    }),
+  )
+}
+
+export default async function UsTransitionsPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>
+}) {
+  const sp = await searchParams
+  const scannerView = firstParam(sp.view) === 'scanner'
+
+  if (scannerView) {
+    return (
+      <div className="flex w-full min-w-0 flex-col gap-5">
+        <PageTitle
+          eyebrow="米国株"
+          title="USステージ遷移"
+          subtitle="実観測された6桁ステージの変化を、期間・Industry・流動性の条件で検索します。"
+        >
+          <UsAnalysisNav current="/us/analysis/transitions" />
+          <ViewTabs
+            label="USステージ遷移の表示"
+            current="scanner"
+            items={[
+              { key: 'overview', href: '/us/analysis/transitions', label: '市場概況' },
+              { key: 'scanner', href: '/us/analysis/transitions?view=scanner', label: '遷移スキャナー' },
+            ]}
+          />
+        </PageTitle>
+        <StageTransitionScanner initialParams={flattenSearchParams(sp)} market="US" />
+      </div>
+    )
+  }
+
   const analysis = await loadUsTransitionAnalysis()
   return (
     <div className="flex w-full min-w-0 flex-col gap-5">
@@ -55,6 +100,14 @@ export default async function UsTransitionsPage() {
         meta={<span>基準日 {analysis.date ?? '未生成'}</span>}
       >
         <UsAnalysisNav current="/us/analysis/transitions" />
+        <ViewTabs
+          label="USステージ遷移の表示"
+          current="overview"
+          items={[
+            { key: 'overview', href: '/us/analysis/transitions', label: '市場概況' },
+            { key: 'scanner', href: '/us/analysis/transitions?view=scanner', label: '遷移スキャナー' },
+          ]}
+        />
       </PageTitle>
 
       <section aria-labelledby="us-pattern-dist-title" className="flex min-w-0 flex-col gap-3">

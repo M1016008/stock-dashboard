@@ -66,7 +66,7 @@ interface ScanQuery {
   maxPrice: string
   minAvgVolume: string
   maxAvgVolume: string
-  /** 円 (API 契約どおり)。UI 入力は百万円で、境界でのみ換算する */
+  /** 基準通貨単位 (API契約どおり)。UI入力は百万単位で、境界でのみ換算する */
   minAvgTurnover: string
   maxAvgTurnover: string
   sort: StageTransitionSort
@@ -89,7 +89,7 @@ interface Draft {
   maxPrice: string
   minAvgVolume: string
   maxAvgVolume: string
-  /** 百万円 */
+  /** 基準通貨の百万単位 */
   minTurnoverM: string
   maxTurnoverM: string
 }
@@ -114,6 +114,56 @@ interface ScanPayload {
   options?: { industries33?: string[]; marketSegments?: string[] }
 }
 
+export type StageTransitionMarket = 'JP' | 'US'
+
+interface StageTransitionMarketConfig {
+  apiPath: string
+  overviewHref: string
+  stockHrefPrefix: string
+  industryLabel: string
+  marketLabel: string
+  tickerSortLabel: string
+  priceLabel: string
+  priceUnit: string
+  /** 結果一覧の株価表示桁数 (min〜max) */
+  priceFractionDigits: { min: number; max: number }
+  turnoverLabel: string
+  turnoverSummaryUnit: string
+  /** 判定の前提に追記する市場固有の注記 */
+  pitNote: string | null
+}
+
+const MARKET_CONFIG: Record<StageTransitionMarket, StageTransitionMarketConfig> = {
+  JP: {
+    apiPath: '/api/hex/transitions',
+    overviewHref: '/hex-stage',
+    stockHrefPrefix: '/stock',
+    industryLabel: '33業種',
+    marketLabel: '市場区分',
+    tickerSortLabel: '銘柄コード',
+    priceLabel: '株価（円）',
+    priceUnit: '円',
+    priceFractionDigits: { min: 0, max: 1 },
+    turnoverLabel: '20日平均売買代金（百万円）',
+    turnoverSummaryUnit: '百万円',
+    pitNote: null,
+  },
+  US: {
+    apiPath: '/api/us/hex/transitions',
+    overviewHref: '/us/analysis/transitions',
+    stockHrefPrefix: '/us/stock',
+    industryLabel: 'Industry',
+    marketLabel: 'Exchange',
+    tickerSortLabel: 'ティッカー',
+    priceLabel: '株価（USD）',
+    priceUnit: 'USD',
+    priceFractionDigits: { min: 2, max: 2 },
+    turnoverLabel: '20日平均売買代金（百万USD）',
+    turnoverSummaryUnit: '百万USD',
+    pitNote: 'Industry / Exchange の表示と絞り込みは、遷移日時点ではなく現在の米国株ティッカーユニバースの分類に基づきます。',
+  },
+}
+
 type Outcome =
   | { key: string; ok: true; payload: ScanPayload }
   | { key: string; ok: false; message: string }
@@ -121,7 +171,7 @@ type Outcome =
 const DEFAULT_FROM = '211111'
 const DEFAULT_TO = '111111'
 const PAGE_SIZES = [25, 50, 100] as const
-const YEN_PER_MILLION = 1_000_000
+const BASE_UNITS_PER_MILLION = 1_000_000
 
 const PERIOD_OPTIONS: { key: StageTransitionPeriod; label: string }[] = [
   { key: 'today', label: '本日' },
@@ -206,17 +256,17 @@ function normalizeNumber(raw: string): string | null {
   return Number.isFinite(value) ? String(value) : null
 }
 
-function millionToYen(raw: string): string | null {
+function millionToBaseUnits(raw: string): string | null {
   const normalized = normalizeNumber(raw)
   if (normalized == null) return null
   if (normalized === '') return ''
-  return String(Math.round(Number(normalized) * YEN_PER_MILLION))
+  return String(Math.round(Number(normalized) * BASE_UNITS_PER_MILLION))
 }
 
-function yenToMillion(yen: string): string {
-  if (yen === '') return ''
-  const value = Number(yen)
-  return Number.isFinite(value) ? String(Number((value / YEN_PER_MILLION).toFixed(6))) : ''
+function baseUnitsToMillion(raw: string): string {
+  if (raw === '') return ''
+  const value = Number(raw)
+  return Number.isFinite(value) ? String(Number((value / BASE_UNITS_PER_MILLION).toFixed(6))) : ''
 }
 
 function queryToDraft(query: ScanQuery): Draft {
@@ -234,8 +284,8 @@ function queryToDraft(query: ScanQuery): Draft {
     maxPrice: query.maxPrice,
     minAvgVolume: query.minAvgVolume,
     maxAvgVolume: query.maxAvgVolume,
-    minTurnoverM: yenToMillion(query.minAvgTurnover),
-    maxTurnoverM: yenToMillion(query.maxAvgTurnover),
+    minTurnoverM: baseUnitsToMillion(query.minAvgTurnover),
+    maxTurnoverM: baseUnitsToMillion(query.maxAvgTurnover),
   }
 }
 
@@ -256,7 +306,7 @@ function draftToQuery(draft: Draft, base: ScanQuery): { query: ScanQuery } | { e
   const ranges: Array<{ label: string; min: string | null; max: string | null }> = [
     { label: '株価', min: normalizeNumber(draft.minPrice), max: normalizeNumber(draft.maxPrice) },
     { label: '20日平均出来高', min: normalizeNumber(draft.minAvgVolume), max: normalizeNumber(draft.maxAvgVolume) },
-    { label: '20日平均売買代金', min: millionToYen(draft.minTurnoverM), max: millionToYen(draft.maxTurnoverM) },
+    { label: '20日平均売買代金', min: millionToBaseUnits(draft.minTurnoverM), max: millionToBaseUnits(draft.maxTurnoverM) },
   ]
   for (const { label, min, max } of ranges) {
     if (min == null || max == null) return { error: `${label}には0以上の数値を入力してください。` }
@@ -324,7 +374,7 @@ function buildSearchParams(query: ScanQuery): URLSearchParams {
   return params
 }
 
-function parseInitialQuery(params: Record<string, string>): ScanQuery {
+function parseInitialQuery(params: Record<string, string>, market: StageTransitionMarket): ScanQuery {
   const query: ScanQuery = { ...DEFAULT_QUERY }
   const from = (params.from ?? '').toLowerCase()
   const to = (params.to ?? '').toLowerCase()
@@ -332,7 +382,7 @@ function parseInitialQuery(params: Record<string, string>): ScanQuery {
     query.from = from
     query.to = to
   }
-  query.universe = params.universe === 'nikkei225' ? 'nikkei225' : ''
+  query.universe = market === 'JP' && params.universe === 'nikkei225' ? 'nikkei225' : ''
   const period = PERIOD_OPTIONS.find((option) => option.key === params.period)?.key
   if (period) query.period = period
   if (query.period === 'custom') {
@@ -370,25 +420,33 @@ function formatNumber(value: number | null | undefined, maximumFractionDigits = 
   return value.toLocaleString('ja-JP', { maximumFractionDigits })
 }
 
-function formatTurnoverMillion(yen: number | null | undefined): string {
-  if (yen == null || !Number.isFinite(yen)) return '—'
-  const million = yen / YEN_PER_MILLION
+function formatPrice(value: number | null | undefined, config: StageTransitionMarketConfig): string {
+  if (value == null || !Number.isFinite(value)) return '—'
+  return value.toLocaleString('ja-JP', {
+    minimumFractionDigits: config.priceFractionDigits.min,
+    maximumFractionDigits: config.priceFractionDigits.max,
+  })
+}
+
+function formatTurnoverMillion(raw: number | null | undefined): string {
+  if (raw == null || !Number.isFinite(raw)) return '—'
+  const million = raw / BASE_UNITS_PER_MILLION
   return million.toLocaleString('ja-JP', { maximumFractionDigits: Math.abs(million) >= 100 ? 0 : 1 })
 }
 
-function describeFilters(query: ScanQuery): string[] {
+function describeFilters(query: ScanQuery, config: StageTransitionMarketConfig): string[] {
   const parts: string[] = []
   if (query.universe === 'nikkei225') parts.push('ユニバース 日経225')
-  if (query.industry33) parts.push(`33業種 ${query.industry33}`)
-  if (query.marketSegment) parts.push(`市場 ${query.marketSegment}`)
+  if (query.industry33) parts.push(`${config.industryLabel} ${query.industry33}`)
+  if (query.marketSegment) parts.push(`${config.marketLabel} ${query.marketSegment}`)
   const range = (label: string, min: string, max: string, unit: string, convert: (v: string) => string) => {
     if (min === '' && max === '') return
     parts.push(`${label} ${min !== '' ? convert(min) : ''}〜${max !== '' ? convert(max) : ''}${unit}`)
   }
   const asNumber = (value: string) => formatNumber(Number(value), 2)
-  range('株価', query.minPrice, query.maxPrice, '円', asNumber)
+  range('株価', query.minPrice, query.maxPrice, config.priceUnit, asNumber)
   range('20日平均出来高', query.minAvgVolume, query.maxAvgVolume, '株', asNumber)
-  range('20日平均売買代金', query.minAvgTurnover, query.maxAvgTurnover, '百万円', (v) => asNumber(yenToMillion(v)))
+  range('20日平均売買代金', query.minAvgTurnover, query.maxAvgTurnover, config.turnoverSummaryUnit, (v) => asNumber(baseUnitsToMillion(v)))
   return parts
 }
 
@@ -422,10 +480,17 @@ function countActiveFilters(draft: Draft): number {
 
 // ───────────────────────── 本体 ─────────────────────────
 
-export function StageTransitionScanner({ initialParams = {} }: { initialParams?: Record<string, string> }) {
-  const [applied, setApplied] = useState<ScanQuery>(() => parseInitialQuery(initialParams))
-  const [draft, setDraft] = useState<Draft>(() => queryToDraft(parseInitialQuery(initialParams)))
-  const [filtersOpen, setFiltersOpen] = useState(() => countActiveFilters(queryToDraft(parseInitialQuery(initialParams))) > 0)
+export function StageTransitionScanner({
+  initialParams = {},
+  market = 'JP',
+}: {
+  initialParams?: Record<string, string>
+  market?: StageTransitionMarket
+}) {
+  const config = MARKET_CONFIG[market]
+  const [applied, setApplied] = useState<ScanQuery>(() => parseInitialQuery(initialParams, market))
+  const [draft, setDraft] = useState<Draft>(() => queryToDraft(parseInitialQuery(initialParams, market)))
+  const [filtersOpen, setFiltersOpen] = useState(() => countActiveFilters(queryToDraft(parseInitialQuery(initialParams, market))) > 0)
   // 条件つきで到着した場合のみ初期折りたたみ。直接訪問時は検索フォームを開いたままにする
   const [formOpen, setFormOpen] = useState(() => !hasExplicitCondition(initialParams))
   const [formError, setFormError] = useState<string | null>(null)
@@ -451,7 +516,7 @@ export function StageTransitionScanner({ initialParams = {} }: { initialParams?:
     }
     const run = async () => {
       try {
-        const response = await fetch(`/api/hex/transitions?${queryString}`, {
+        const response = await fetch(`${config.apiPath}?${queryString}`, {
           cache: 'no-store',
           signal: controller.signal,
         })
@@ -485,7 +550,7 @@ export function StageTransitionScanner({ initialParams = {} }: { initialParams?:
     }
     void run()
     return () => controller.abort()
-  }, [queryString, seq])
+  }, [config.apiPath, queryString, seq])
 
   // 確定した検索条件を URL に反映 (共有・再読込用。サーバー再描画はしない)
   useEffect(() => {
@@ -611,7 +676,7 @@ export function StageTransitionScanner({ initialParams = {} }: { initialParams?:
 
   return (
     <div className="space-y-3">
-      {!formOpen ? <ConditionSummary query={applied} onEdit={() => setFormOpen(true)} /> : null}
+      {!formOpen ? <ConditionSummary query={applied} config={config} onEdit={() => setFormOpen(true)} /> : null}
       <form
         id="scanner-search-form"
         onSubmit={submitSearch}
@@ -795,7 +860,7 @@ export function StageTransitionScanner({ initialParams = {} }: { initialParams?:
         {filtersOpen ? (
           <div id="scanner-secondary-filters" className="mt-3 grid grid-cols-1 gap-3 border-t border-[var(--color-border-soft)] pt-3 sm:grid-cols-2 lg:grid-cols-3">
             <label className="block min-w-0">
-              <span className={LABEL_TEXT}>33業種</span>
+              <span className={LABEL_TEXT}>{config.industryLabel}</span>
               <select
                 value={draft.industry33}
                 onChange={(event) => updateDraft({ industry33: event.target.value })}
@@ -809,7 +874,7 @@ export function StageTransitionScanner({ initialParams = {} }: { initialParams?:
               </select>
             </label>
             <label className="block min-w-0">
-              <span className={LABEL_TEXT}>市場区分</span>
+              <span className={LABEL_TEXT}>{config.marketLabel}</span>
               <select
                 value={draft.marketSegment}
                 onChange={(event) => updateDraft({ marketSegment: event.target.value })}
@@ -824,7 +889,7 @@ export function StageTransitionScanner({ initialParams = {} }: { initialParams?:
             </label>
             <div className="hidden lg:block" aria-hidden />
             <RangeField
-              label="株価（円）"
+              label={config.priceLabel}
               minValue={draft.minPrice}
               maxValue={draft.maxPrice}
               onMin={(value) => updateDraft({ minPrice: value })}
@@ -838,7 +903,7 @@ export function StageTransitionScanner({ initialParams = {} }: { initialParams?:
               onMax={(value) => updateDraft({ maxAvgVolume: value })}
             />
             <RangeField
-              label="20日平均売買代金（百万円）"
+              label={config.turnoverLabel}
               minValue={draft.minTurnoverM}
               maxValue={draft.maxTurnoverM}
               onMin={(value) => updateDraft({ minTurnoverM: value })}
@@ -908,6 +973,7 @@ export function StageTransitionScanner({ initialParams = {} }: { initialParams?:
           onSort={changeSort}
           onPage={changePage}
           onPageSize={changePageSize}
+          config={config}
         />
       )}
     </div>
@@ -919,8 +985,16 @@ function withCurrent(values: string[], current: string): string[] {
 }
 
 /** 検索フォームを畳んだ状態で、確定済みの検索条件を1ブロックで示す */
-function ConditionSummary({ query, onEdit }: { query: ScanQuery; onEdit: () => void }) {
-  const filters = describeFilters(query)
+function ConditionSummary({
+  query,
+  config,
+  onEdit,
+}: {
+  query: ScanQuery
+  config: StageTransitionMarketConfig
+  onEdit: () => void
+}) {
+  const filters = describeFilters(query, config)
   const direction = describeDirection(query)
   return (
     <section className="sb-card sb-card-pad" aria-label="現在の検索条件">
@@ -942,7 +1016,7 @@ function ConditionSummary({ query, onEdit }: { query: ScanQuery; onEdit: () => v
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Link
-            href={query.universe ? `/hex-stage?universe=${encodeURIComponent(query.universe)}` : '/hex-stage'}
+            href={query.universe ? `${config.overviewHref}?universe=${encodeURIComponent(query.universe)}` : config.overviewHref}
             className={`inline-flex h-11 items-center gap-1.5 px-3 text-[12px] font-semibold text-[var(--color-brand-800)] no-underline ${FOCUS_RING}`}
             style={BUTTON_STYLE}
           >
@@ -1129,6 +1203,7 @@ function ResultView({
   onSort,
   onPage,
   onPageSize,
+  config,
 }: {
   payload: ScanPayload
   applied: ScanQuery
@@ -1137,12 +1212,13 @@ function ResultView({
   onSort: (key: StageTransitionSort) => void
   onPage: (page: number) => void
   onPageSize: (pageSize: number) => void
+  config: StageTransitionMarketConfig
 }) {
   const { data, pagination, meta } = payload
   const range = meta.range
   const anyMode = applied.from === STAGE_TRANSITION_ANY_CODE || applied.to === STAGE_TRANSITION_ANY_CODE
   const changedAxes = anyMode ? [] : data[0]?.changedAxes ?? changedStageCodeAxes(applied.from, applied.to)
-  const filters = describeFilters(applied)
+  const filters = describeFilters(applied, config)
   const first = pagination.total === 0 ? 0 : (pagination.page - 1) * pagination.pageSize + 1
   const last = Math.min(pagination.total, (pagination.page - 1) * pagination.pageSize + data.length)
   const sameRange = range.startDate === range.endDate
@@ -1200,6 +1276,7 @@ function ResultView({
                 : ''}
               株価は遷移日の終値、{meta.averageSessions}日平均は遷移日までの{meta.averageSessions}営業日で算出しています。同じ銘柄が複数日に該当する場合は、それぞれ1件として数えます。
             </p>
+            {config.pitNote ? <p className="m-0">{config.pitNote}</p> : null}
           </div>
         </details>
       </section>
@@ -1222,7 +1299,9 @@ function ResultView({
                 style={FIELD_STYLE}
               >
                 {SORT_OPTIONS.map((option) => (
-                  <option key={option.key} value={option.key}>{option.label}</option>
+                  <option key={option.key} value={option.key}>
+                    {option.key === 'industry' ? config.industryLabel : option.key === 'ticker' ? config.tickerSortLabel : option.label}
+                  </option>
                 ))}
               </select>
               <button
@@ -1256,8 +1335,8 @@ function ResultView({
           <EmptyState outOfRange={pagination.total > 0} onFirstPage={() => onPage(1)} />
         ) : (
           <>
-            <DesktopTable rows={data} sort={applied.sort} direction={applied.direction} onSort={onSort} />
-            <MobileList rows={data} />
+            <DesktopTable rows={data} sort={applied.sort} direction={applied.direction} onSort={onSort} config={config} />
+            <MobileList rows={data} config={config} />
           </>
         )}
 
@@ -1306,7 +1385,7 @@ function EmptyState({ outOfRange, onFirstPage }: { outOfRange: boolean; onFirstP
   )
 }
 
-const TABLE_COLUMNS: Array<({
+function tableColumns(config: StageTransitionMarketConfig): Array<({
   key: StageTransitionSort
   sortable: true
 } | {
@@ -1315,33 +1394,38 @@ const TABLE_COLUMNS: Array<({
 }) & {
   label: string
   align: 'left' | 'right'
-}> = [
+}> {
+  return [
   { key: 'date', sortable: true, label: '遷移日', align: 'left' },
   { key: 'ticker', sortable: true, label: '銘柄', align: 'left' },
   { key: 'transition', sortable: false, label: '遷移前 → 遷移後 / 変化した軸', align: 'left' },
-  { key: 'industry', sortable: true, label: '33業種 / 市場', align: 'left' },
-  { key: 'price', sortable: true, label: '遷移日終値（円）', align: 'right' },
+  { key: 'industry', sortable: true, label: `${config.industryLabel} / ${config.marketLabel}`, align: 'left' },
+  { key: 'price', sortable: true, label: `遷移日終値（${config.priceUnit}）`, align: 'right' },
   { key: 'avgVolume', sortable: true, label: '20日平均出来高（株）', align: 'right' },
-  { key: 'avgTurnover', sortable: true, label: '20日平均売買代金（百万円）', align: 'right' },
-]
+  { key: 'avgTurnover', sortable: true, label: config.turnoverLabel, align: 'right' },
+  ]
+}
 
 function DesktopTable({
   rows,
   sort,
   direction,
   onSort,
+  config,
 }: {
   rows: StageTransitionRow[]
   sort: StageTransitionSort
   direction: StageTransitionSortDirection
   onSort: (key: StageTransitionSort) => void
+  config: StageTransitionMarketConfig
 }) {
+  const columns = tableColumns(config)
   return (
     <div className="hidden overflow-x-auto xl:block">
       <table className="w-full min-w-[1020px] border-collapse text-[13px] tabular-nums">
         <thead>
           <tr className="bg-[var(--color-surface-muted)]">
-            {TABLE_COLUMNS.map((column) => {
+            {columns.map((column) => {
               const active = column.sortable && sort === column.key
               return (
                 <th
@@ -1380,7 +1464,7 @@ function DesktopTable({
             <tr key={`${row.ticker}-${row.transitionDate}`} className="border-b border-[var(--color-border-soft)] last:border-b-0 hover:bg-[#fff8e6]">
               <td className="whitespace-nowrap px-3 py-2.5 text-[var(--color-text-secondary)]">{row.transitionDate}</td>
               <td className="max-w-[240px] px-3 py-2.5">
-                <TickerLink row={row} />
+                <TickerLink row={row} config={config} />
               </td>
               <td className="min-w-[270px] px-3 py-2.5">
                 <CodePair from={row.fromCode} to={row.toCode} size="sm" />
@@ -1390,7 +1474,7 @@ function DesktopTable({
                 <div className="truncate text-[var(--color-text-primary)]">{row.sector33 ?? '—'}</div>
                 <div className="truncate text-[11px] text-[var(--color-text-tertiary)]">{row.marketSegment ?? '—'}</div>
               </td>
-              <td className="whitespace-nowrap px-3 py-2.5 text-right">{formatNumber(row.price, 1)}</td>
+              <td className="whitespace-nowrap px-3 py-2.5 text-right">{formatPrice(row.price, config)}</td>
               <td className="whitespace-nowrap px-3 py-2.5 text-right">{formatNumber(row.averageVolume20)}</td>
               <td className="whitespace-nowrap px-3 py-2.5 text-right">{formatTurnoverMillion(row.averageTurnover20)}</td>
             </tr>
@@ -1401,14 +1485,14 @@ function DesktopTable({
   )
 }
 
-function MobileList({ rows }: { rows: StageTransitionRow[] }) {
+function MobileList({ rows, config }: { rows: StageTransitionRow[]; config: StageTransitionMarketConfig }) {
   return (
     <ul className="m-0 list-none p-0 xl:hidden">
       {rows.map((row) => (
         <li key={`${row.ticker}-${row.transitionDate}`} className="border-b border-[var(--color-border-soft)] px-3 py-3 last:border-b-0">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
-              <TickerLink row={row} />
+              <TickerLink row={row} config={config} />
             </div>
             <span className="shrink-0 pt-0.5 text-[11px] tabular-nums text-[var(--color-text-tertiary)]">{row.transitionDate}</span>
           </div>
@@ -1421,9 +1505,9 @@ function MobileList({ rows }: { rows: StageTransitionRow[] }) {
             <StageTransitionAxisChips fromCode={row.fromCode} toCode={row.toCode} />
           </div>
           <dl className="mt-2 grid grid-cols-3 gap-2 text-[11px] tabular-nums">
-            <MobileStat label="遷移日終値（円）" value={formatNumber(row.price, 1)} />
+            <MobileStat label={`遷移日終値（${config.priceUnit}）`} value={formatPrice(row.price, config)} />
             <MobileStat label="20日平均出来高（株）" value={formatNumber(row.averageVolume20)} />
-            <MobileStat label="20日平均売買代金（百万円）" value={formatTurnoverMillion(row.averageTurnover20)} />
+            <MobileStat label={config.turnoverLabel} value={formatTurnoverMillion(row.averageTurnover20)} />
           </dl>
         </li>
       ))}
@@ -1440,10 +1524,10 @@ function MobileStat({ label, value }: { label: string; value: string }) {
   )
 }
 
-function TickerLink({ row }: { row: StageTransitionRow }) {
+function TickerLink({ row, config }: { row: StageTransitionRow; config: StageTransitionMarketConfig }) {
   return (
     <Link
-      href={`/stock/${encodeURIComponent(row.ticker)}`}
+      href={`${config.stockHrefPrefix}/${encodeURIComponent(row.ticker)}`}
       className={`flex min-h-11 min-w-0 flex-col justify-center text-[var(--color-brand-700)] hover:underline ${FOCUS_RING}`}
     >
       <span className="font-bold tabular-nums">{row.ticker}</span>
