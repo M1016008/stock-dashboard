@@ -18,14 +18,18 @@ export interface CloseCalendarDay {
 }
 
 export interface CloseCalendarResult {
-  market: 'JP'
+  market: 'JP' | 'US'
   from: string
   to: string
   days: CloseCalendarDay[]
   sessionAnchorDate: string | null
   sessionCoverageFrom: string | null
   sessionCoverageTo: string | null
-  calendarSource: 'MARKET_OHLCV_AND_JP_HOLIDAY_RULES' | 'JP_HOLIDAY_RULES_ONLY'
+  calendarSource:
+    | 'MARKET_OHLCV_AND_JP_HOLIDAY_RULES'
+    | 'JP_HOLIDAY_RULES_ONLY'
+    | 'MARKET_OHLCV_AND_US_HOLIDAY_RULES'
+    | 'US_HOLIDAY_RULES_ONLY'
   warnings: string[]
 }
 
@@ -80,7 +84,7 @@ export function getCloseTimeframes(
 }
 
 export function buildCloseCalendar(args: {
-  market: 'JP'
+  market: 'JP' | 'US'
   from: string
   to: string
   tradingDates: readonly string[]

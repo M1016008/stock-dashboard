@@ -7,6 +7,7 @@ import {
   PAGE_CATALOG_ENTRIES,
   QUICK_COMMAND_PAGE_IDS_BY_AREA,
   type HeaderArea,
+  type NavigationEntry,
   type PageId,
 } from '../components/layout/navigation'
 
@@ -54,6 +55,8 @@ assert.equal(PAGE_CATALOG.usAiResearch.href, '/ai/research?market=US')
 assert.equal(PAGE_CATALOG.usChartDrill.href, '/chart-drill?market=US')
 assert.equal(PAGE_CATALOG.usMarketMomentum.href, '/us/market-momentum')
 assert.equal(PAGE_CATALOG.usSectors.href, '/us/sectors')
+assert.equal(PAGE_CATALOG.mtfCloseCalendar.href, '/mtf-close-calendar')
+assert.equal(PAGE_CATALOG.usMtfCloseCalendar.href, '/us/mtf-close-calendar')
 
 assert.ok(navPageIds('jp').includes('sectors'), 'Industry analysis must remain under Market & Industry.')
 assert.ok(navPageIds('jp').includes('periodExplorer'), 'Period Explorer must be available under stock discovery.')
@@ -64,6 +67,18 @@ assert.ok(!navPageIds('jp').includes('historicalPatterns'), 'Historical pattern 
 assert.ok(!navPageIds('jp').includes('sectorStructure'), 'Sector structure must stay a view inside sector analysis.')
 assert.ok(navPageIds('us').includes('usMarketMomentum'), 'US market momentum must be available under Market & Industry.')
 assert.ok(navPageIds('us').includes('usSectors'), 'US sector analysis must be available under Market & Industry.')
+
+function menuPageIds(area: HeaderArea, menuId: string): PageId[] {
+  const entries: readonly NavigationEntry[] = NAVIGATION_BY_AREA[area]
+  const entry = entries.find((item) => item.kind === 'menu' && item.id === menuId)
+  assert.ok(entry && entry.kind === 'menu', `${area}:${menuId} menu must exist.`)
+  return entry.sections.flatMap((section) => [...section.pageIds])
+}
+
+assert.ok(menuPageIds('jp', 'market').includes('mtfCloseCalendar'), 'JP MTF Close Calendar must stay under JP Market & Industry.')
+assert.ok(menuPageIds('us', 'us-market').includes('usMtfCloseCalendar'), 'US MTF Close Calendar must live under US Market & Industry.')
+assert.ok(!navPageIds('us').includes('mtfCloseCalendar'), 'US navigation must not link the JP-session calendar.')
+assert.ok(!navPageIds('jp').includes('usMtfCloseCalendar'), 'JP navigation must not link the US-session calendar.')
 
 const commodityHrefs = navPageIds('commodities').map((pageId) => PAGE_CATALOG[pageId].href)
 assert.ok(!commodityHrefs.some((href) => /^\/commodities\/(jp|us)\//.test(href)), 'Specific commodity instruments must not be top-level navigation entries.')

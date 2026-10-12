@@ -29,7 +29,7 @@ export default function MtfCloseCalendarPage() {
         title="MTF確定日"
         subtitle="日足・2週足・週足・月足などのローソク足が、どの営業日に同時に確定するかを月単位で確認します。"
       />
-      <MtfCloseCalendarClient initialMonth={today.slice(0, 7)} today={today} />
+      <MtfCloseCalendarClient market="JP" initialMonth={today.slice(0, 7)} today={today} />
     </div>
   )
 }

@@ -98,6 +98,43 @@ export function usMarketClosureReason(date: string): string | null {
   return null
 }
 
+export function isUsMarketTradingDate(date: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}$/.test(date) && usMarketClosureReason(date) === null
+}
+
+export function getNextUsTradingDate(date: string, maxLookaheadDays = 14): string | null {
+  let value = new Date(dateFromYmd(date).getTime() + MS_PER_DAY)
+  for (let offset = 0; offset < maxLookaheadDays; offset += 1) {
+    const candidate = formatDate(value)
+    if (isUsMarketTradingDate(candidate)) return candidate
+    value = new Date(value.getTime() + MS_PER_DAY)
+  }
+  return null
+}
+
+export function getPreviousUsTradingDate(date: string, maxLookbackDays = 14): string | null {
+  let value = new Date(dateFromYmd(date).getTime() - MS_PER_DAY)
+  for (let offset = 0; offset < maxLookbackDays; offset += 1) {
+    const candidate = formatDate(value)
+    if (isUsMarketTradingDate(candidate)) return candidate
+    value = new Date(value.getTime() - MS_PER_DAY)
+  }
+  return null
+}
+
+export function getUsTradingDates(from: string, to: string): string[] {
+  const start = dateFromYmd(from)
+  const end = dateFromYmd(to)
+  if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || start > end) return []
+
+  const dates: string[] = []
+  for (let time = start.getTime(); time <= end.getTime(); time += MS_PER_DAY) {
+    const date = formatDate(new Date(time))
+    if (isUsMarketTradingDate(date)) dates.push(date)
+  }
+  return dates
+}
+
 export function rollBackToUsTradingDate(date: Date): Date {
   const value = new Date(date)
   while (usMarketClosureReason(formatDate(value))) {
