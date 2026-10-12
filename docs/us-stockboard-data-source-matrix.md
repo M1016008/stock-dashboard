@@ -6,6 +6,7 @@ Updated: 2026-10-12
 |---|---|---:|---|---|---|
 | Daily price and volume | Tiingo EOD in `market_ohlcv_daily` | 11,970 tickers on 2026-10-09 | Date-keyed; adjusted-price generation must remain generation-consistent | DATA READY | Keep quality and corporate-action gates |
 | Daily 6 Stage snapshots | Deterministic StockBoard engine in `market_daily_snapshots` | 11,946 tickers on 2026-10-09 | Date-keyed | DATA READY | Cross-market semantic regression |
+| Stage screener serving | Indexed price-anchor pivot plus dated Stage snapshots | 12,437 investable rows on 2026-10-09 | Requested date resolves to latest snapshot on or before that date | CODE READY | Candidate cold response 4.29s; compact payload 10.04MB plain / 2.15MB gzip; continue performance work |
 | PMS / PFS / PES | US analytics DB | 11,970 symbols on 2026-10-09 | Latest row on or before requested date | DATA READY | Per-symbol missing reason |
 | ML feature vectors | US analytics DB | 10,391 tickers on 2026-10-09 | `as_of_date <= selected date` | DATA READY | UI and acceptance-metric parity |
 | ML candidates | US analytics DB | 1,270 tickers on 2026-10-09 | `as_of_date <= selected date` | DATA READY | Broaden discovery wiring |
