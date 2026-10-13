@@ -166,6 +166,12 @@ const US_REFERENCE_ITEMS = [
   '出来高',
 ] as const
 
+const US_UNSUPPORTED_TAGS = [
+  '決算予定: 米国株未対応',
+  '過去アンカー類似: 米国株未対応',
+  '日本株データで代替しません',
+] as const
+
 function marketFromContext(pathname: string, marketParam: string | null): ResearchMarket {
   if (marketParam === 'US' || marketParam === 'JP' || marketParam === 'COMMODITY') {
     return marketParam
@@ -690,10 +696,12 @@ export function AssistantResearchClient() {
                     </button>
                   </div>
                 ) : (
-                  <span className="inline-flex items-center gap-1.5 text-[13px] font-bold text-[var(--color-text-primary)]">
-                    <ShieldCheck size={15} aria-hidden className="text-[var(--color-brand-700)]" />
-                    米国株専用リサーチ
-                    <span className="font-normal text-[12px] text-[var(--color-text-tertiary)]">日本株の結果は混在させません</span>
+                  <span className="flex min-w-0 flex-col gap-0.5 sm:flex-row sm:items-center sm:gap-1.5">
+                    <span className="inline-flex items-center gap-1.5 whitespace-nowrap text-[13px] font-bold leading-snug text-[var(--color-text-primary)]">
+                      <ShieldCheck size={15} aria-hidden className="shrink-0 text-[var(--color-brand-700)]" />
+                      米国株専用リサーチ
+                    </span>
+                    <span className="whitespace-nowrap pl-[21px] text-[12px] font-normal leading-snug text-[var(--color-text-tertiary)] sm:pl-0">日本株の結果は混在させません</span>
                   </span>
                 )}
                 <div className="flex flex-wrap items-center gap-2">
@@ -731,6 +739,18 @@ export function AssistantResearchClient() {
                     ? '自由文で相談し、必要ならAIが条件を聞き返します。'
                     : '特定銘柄の過去局面に、今まさに近い銘柄を探します。'}
                 </p>
+              )}
+              {isUsResearch && (
+                <div className="flex flex-wrap gap-1.5" aria-label="米国株リサーチの対応範囲">
+                  {US_UNSUPPORTED_TAGS.map((tag) => (
+                    <span key={tag} className="status-tag" data-tone="warning">{tag}</span>
+                  ))}
+                </div>
+              )}
+              {isUsResearch && searchParams.get('mode') === 'historical-anchor' && (
+                <Notice tone="info" role="status">
+                  過去アンカー類似は米国株では未対応です。日本株データで代替せず、通常会話で米国株データのみを検索します。
+                </Notice>
               )}
               {saveNotice && (
                 <Notice tone="info" role="status">{saveNotice}</Notice>

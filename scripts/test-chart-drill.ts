@@ -11,6 +11,7 @@ import {
   movingAverage,
 } from '../lib/chart-drill/scoring'
 import type { DrillCandle } from '../lib/chart-drill/types'
+import { toAdjustedUsOhlcvRows } from '../lib/us-adjusted-ohlcv'
 
 function candle(date: string, close: number, high = close, low = close): DrillCandle {
   return {
@@ -93,6 +94,42 @@ const passOutcome = computeOutcome({
 assert.equal(passOutcome.actual, 'pass')
 assert.equal(passOutcome.thresholdHit, false)
 assert.equal(answerIsCorrect('pass', passOutcome), true)
+
+const splitAdjusted = toAdjustedUsOhlcvRows([
+  {
+    date: '2024-06-07',
+    open: 1200,
+    high: 1210,
+    low: 1180,
+    close: 1200,
+    volume: 1_000,
+    adjustedOpen: 120,
+    adjustedHigh: 121,
+    adjustedLow: 118,
+    adjustedClose: 120,
+    adjustedVolume: 10_000,
+  },
+  {
+    date: '2024-06-10',
+    open: 121,
+    high: 123,
+    low: 119,
+    close: 122,
+    volume: 10_500,
+    adjustedOpen: 121,
+    adjustedHigh: 123,
+    adjustedLow: 119,
+    adjustedClose: 122,
+    adjustedVolume: 10_500,
+  },
+])
+const splitOutcome = computeOutcome({
+  base: candle(splitAdjusted[0].date, splitAdjusted[0].close, splitAdjusted[0].high, splitAdjusted[0].low),
+  future: [candle(splitAdjusted[1].date, splitAdjusted[1].close, splitAdjusted[1].high, splitAdjusted[1].low)],
+  thresholdPct: 5,
+})
+assert.equal(splitOutcome.actual, 'pass')
+assert.ok(splitOutcome.maxDownPct > -5)
 
 const validProblemPayload = {
   v: 1,

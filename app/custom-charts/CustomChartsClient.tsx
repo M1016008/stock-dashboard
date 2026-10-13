@@ -47,6 +47,8 @@ type SavedChart = StoredCustomChart & {
 }
 
 const LOCAL_STORAGE_KEY = 'stockboard-custom-charts-v1'
+const DEFAULT_CHART_NAME = '保有株ポートフォリオ'
+const DEFAULT_FORMULA = '7203 * 100 + 6758 * 200'
 
 const MODE_OPTIONS: Array<{ value: CustomChartMode; label: string }> = [
   { value: 'valuation', label: '評価額' },
@@ -92,7 +94,9 @@ const OPERATOR_BUTTONS = [
   { token: '/ 3', label: '÷3' },
 ]
 
-const QUICK_TEMPLATES: Array<{
+type TemplateMarket = 'JP' | 'US'
+
+type QuickTemplate = {
   id: string
   label: string
   badge: string
@@ -101,7 +105,14 @@ const QUICK_TEMPLATES: Array<{
   mode: CustomChartMode
   displayCurrency: CustomChartCurrency
   missingPolicy: CustomChartMissingPolicy
-}> = [
+}
+
+const TEMPLATE_MARKET_OPTIONS: Array<{ value: TemplateMarket; label: string }> = [
+  { value: 'JP', label: '日本株' },
+  { value: 'US', label: '米国株' },
+]
+
+const QUICK_TEMPLATES: QuickTemplate[] = [
   {
     id: 'portfolio',
     label: '保有株評価額',
@@ -144,6 +155,57 @@ const QUICK_TEMPLATES: Array<{
   },
 ]
 
+const US_QUICK_TEMPLATES: QuickTemplate[] = [
+  {
+    id: 'us-portfolio',
+    label: '米国株評価額',
+    badge: '評価額',
+    name: '米国株ポートフォリオ',
+    formula: 'US:AAPL * 10 + US:MSFT * 5',
+    mode: 'valuation',
+    displayCurrency: 'USD',
+    missingPolicy: 'intersection',
+  },
+  {
+    id: 'us-ratio',
+    label: '銘柄レシオ',
+    badge: '比率',
+    name: 'NVDA/AMD レシオ',
+    formula: 'US:NVDA / US:AMD',
+    mode: 'comparison',
+    displayCurrency: 'LOCAL',
+    missingPolicy: 'intersection',
+  },
+  {
+    id: 'us-spread',
+    label: '価格差',
+    badge: '差分',
+    name: 'AAPL-MSFT 価格差',
+    formula: 'US:AAPL - US:MSFT',
+    mode: 'comparison',
+    displayCurrency: 'LOCAL',
+    missingPolicy: 'intersection',
+  },
+  {
+    id: 'us-average',
+    label: '3銘柄平均',
+    badge: '平均',
+    name: '米国大型3銘柄平均',
+    formula: '(US:AAPL + US:MSFT + US:NVDA) / 3',
+    mode: 'normalized',
+    displayCurrency: 'LOCAL',
+    missingPolicy: 'intersection',
+  },
+]
+
+function templateMarketFromFormula(value: string | null): TemplateMarket {
+  return value && /\bUS:/i.test(value) ? 'US' : 'JP'
+}
+
+function assetMarket(asset: CustomChartEvaluation['assets'][number]): 'JP' | 'US' {
+  return asset.kind === 'CMD' ? asset.market : asset.kind
+}
+
 const DEFAULT_INDICATORS: CustomChartIndicatorConfig = {
   ma: [5, 25, 75],
   bollinger: true,
@@ -168,6 +230,14 @@ function emptyChart(name = '保有株ポートフォリオ'): StoredCustomChart 
     createdAt: now,
     updatedAt: now,
   }
+}
+
+function modeFromSearch(value: string | null): CustomChartMode {
+  return value === 'comparison' || value === 'normalized' ? value : 'valuation'
+}
+
+function currencyFromSearch(value: string | null): CustomChartCurrency {
+  return value === 'JPY' || value === 'USD' ? value : 'LOCAL'
 }
 
 async function readJson<T>(response: Response): Promise<T> {
@@ -300,16 +370,18 @@ function SavedChartList({
 
 export function CustomChartsClient() {
   const searchParams = useSearchParams()
+  const searchParamsKey = searchParams.toString()
   const formulaRef = useRef<HTMLTextAreaElement>(null)
-  const [name, setName] = useState('保有株ポートフォリオ')
+  const lastAppliedSearchRef = useRef<string | null>(null)
+  const [name, setName] = useState(() => searchParams.get('name')?.trim().slice(0, 120) || DEFAULT_CHART_NAME)
   const [formula, setFormula] = useState(() => (
-    searchParams.get('formula')?.trim().slice(0, 500) || '7203 * 100 + 6758 * 200'
+    searchParams.get('formula')?.trim().slice(0, 500) || DEFAULT_FORMULA
   ))
-  const [mode, setMode] = useState<CustomChartMode>('valuation')
+  const [mode, setMode] = useState<CustomChartMode>(() => modeFromSearch(searchParams.get('mode')))
   const [chartType, setChartType] = useState<'line' | 'candlestick'>('line')
   const [period, setPeriod] = useState<PeriodCode>('1y')
   const [interval, setInterval] = useState<ChartIntervalCode>('D')
-  const [displayCurrency, setDisplayCurrency] = useState<CustomChartCurrency>('LOCAL')
+  const [displayCurrency, setDisplayCurrency] = useState<CustomChartCurrency>(() => currencyFromSearch(searchParams.get('currency')))
   const [missingPolicy, setMissingPolicy] = useState<CustomChartMissingPolicy>('intersection')
   const [baseDate, setBaseDate] = useState('')
   const [indicators, setIndicators] = useState<CustomChartIndicatorConfig>(DEFAULT_INDICATORS)
@@ -327,6 +399,7 @@ export function CustomChartsClient() {
   const [libraryTab, setLibraryTab] = useState<'shared' | 'local'>('shared')
   const [savedFilter, setSavedFilter] = useState('')
   const [showFxPanel, setShowFxPanel] = useState(false)
+  const [templateMarket, setTemplateMarket] = useState<TemplateMarket>(() => templateMarketFromFormula(searchParams.get('formula')))
 
   const requestPayload = useMemo<CustomChartRequest>(() => ({
     formula,
@@ -388,8 +461,26 @@ export function CustomChartsClient() {
   }, [refreshFxStatus, refreshSharedCharts])
 
   useEffect(() => {
-    void evaluate()
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+    if (lastAppliedSearchRef.current === searchParamsKey) return
+    lastAppliedSearchRef.current = searchParamsKey
+    const nextFormula = searchParams.get('formula')?.trim().slice(0, 500) || DEFAULT_FORMULA
+    const nextName = searchParams.get('name')?.trim().slice(0, 120) || DEFAULT_CHART_NAME
+    const nextMode = modeFromSearch(searchParams.get('mode'))
+    const nextCurrency = currencyFromSearch(searchParams.get('currency'))
+    setFormula(nextFormula)
+    setName(nextName)
+    setMode(nextMode)
+    setDisplayCurrency(nextCurrency)
+    setTemplateMarket(templateMarketFromFormula(nextFormula))
+    setBaseDate('')
+    setActiveChart(null)
+    void evaluate({
+      formula: nextFormula,
+      mode: nextMode,
+      displayCurrency: nextCurrency,
+      baseDate: null,
+    })
+  }, [evaluate, searchParams, searchParamsKey])
 
   useEffect(() => {
     const q = query.trim()
@@ -473,7 +564,7 @@ export function CustomChartsClient() {
     })
   }
 
-  const applyTemplate = (template: (typeof QUICK_TEMPLATES)[number]) => {
+  const applyTemplate = (template: QuickTemplate) => {
     setName(template.name)
     setFormula(template.formula)
     setMode(template.mode)
@@ -645,6 +736,11 @@ export function CustomChartsClient() {
     if (!savedQuery) return true
     return `${chart.name} ${chart.formula}`.toLowerCase().includes(savedQuery)
   })
+  const visibleTemplates = templateMarket === 'US' ? US_QUICK_TEMPLATES : QUICK_TEMPLATES
+  const hasCrossMarketAssets = Boolean(
+    evaluation?.assets.some((asset) => assetMarket(asset) === 'JP')
+    && evaluation.assets.some((asset) => assetMarket(asset) === 'US'),
+  )
 
   return (
     <div className="grid min-w-0 max-w-full gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
@@ -656,8 +752,24 @@ export function CustomChartsClient() {
             action={evaluation ? `${evaluation.series.length.toLocaleString('ja-JP')} points` : null}
           />
           <div className="space-y-4">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[11px] font-black text-[var(--color-text-tertiary)]">テンプレート</span>
+              <div role="group" aria-label="テンプレート市場" className="inline-flex rounded-[3px] border border-[var(--color-border-default)] bg-white p-0.5">
+                {TEMPLATE_MARKET_OPTIONS.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    aria-pressed={templateMarket === option.value}
+                    onClick={() => setTemplateMarket(option.value)}
+                    className={`min-h-8 rounded-[2px] px-3 py-1 text-[11px] font-black ${templateMarket === option.value ? 'bg-[var(--color-brand-800)] text-white' : 'text-[var(--color-brand-800)]'}`}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
             <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
-              {QUICK_TEMPLATES.map((template) => (
+              {visibleTemplates.map((template) => (
                 <button
                   key={template.id}
                   type="button"
@@ -694,7 +806,7 @@ export function CustomChartsClient() {
                   <input
                     value={query}
                     onChange={(event) => setQuery(event.target.value)}
-                    placeholder="コード/社名"
+                    placeholder="コード/ティッカー/社名"
                     className="h-10 w-full rounded-[4px] border border-[var(--color-border-default)] bg-white py-2 pl-8 pr-3 text-[13px] font-bold text-[var(--color-text-primary)] outline-none focus:border-[var(--color-brand-700)]"
                   />
                 </div>
@@ -918,6 +1030,11 @@ export function CustomChartsClient() {
             hint={evaluation?.description ?? '合成後系列に対して、チャートと指標を表示します。'}
             action={evaluation?.effectiveCurrency ?? null}
           />
+          {hasCrossMarketAssets && (
+            <div className="mb-3 rounded-[4px] border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-3 py-2 text-[12px] font-bold text-[var(--color-text-secondary)]">
+              日米混在: 同一暦日の終値で整列しています。FX {fxStatus ? `${fxStatus.pair} 最新 ${fxStatus.latestDate ?? '-'} / ${fxStatus.count}件` : '未確認'}
+            </div>
+          )}
           <CustomFormulaChart evaluation={evaluation} loading={loading} chartType={chartType} />
         </Card>
       </div>

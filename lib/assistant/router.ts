@@ -32,6 +32,10 @@ const TOOL_NAMES: AssistantToolName[] = [
   'get_earnings_candidates',
 ]
 
+const TICKER_STOP_WORDS = new Set([
+  'AI', 'ETF', 'EPS', 'MA', 'MACD', 'ML', 'PES', 'PFS', 'PMS', 'RSI', 'SEC', 'US',
+])
+
 function extractOutputText(payload: unknown): string | null {
   if (!payload || typeof payload !== 'object') return null
   const root = payload as { output_text?: unknown; output?: Array<{ content?: Array<{ type?: string; text?: string }> }> }
@@ -47,7 +51,16 @@ function extractOutputText(payload: unknown): string | null {
 function normalizeTicker(value: unknown): string | null {
   if (typeof value !== 'string') return null
   const ticker = value.trim().toUpperCase().replace(/\.T$/i, '')
-  return /^[0-9A-Z]{1,8}$/.test(ticker) ? ticker : null
+  return /^[0-9A-Z.-]{1,10}$/.test(ticker) ? ticker : null
+}
+
+export function explicitTickerFromText(text: string): string | null {
+  const candidates = text.match(/\b(?:[0-9]{4}|[0-9]{3}A|[A-Z][A-Z0-9.-]{0,9})\b/gi) ?? []
+  for (const candidate of candidates) {
+    const normalized = normalizeTicker(candidate)
+    if (normalized && !TICKER_STOP_WORDS.has(normalized)) return normalized
+  }
+  return null
 }
 
 function tickerFromContext(context: AssistantPageContext): string | null {
@@ -119,7 +132,7 @@ function lookbackTradingDaysFromText(text: string): number {
 
 function anchorTickerFromText(text: string, context: AssistantPageContext): string | null {
   if (/三井\s*(?:E|Ｅ)\s*[&＆]\s*(?:S|Ｓ)|三井\s*Ｅ＆Ｓ|三井\s*E&S/i.test(text)) return '7003'
-  return normalizeTicker(text.match(/\b([0-9]{4}|[0-9]{3}A|[A-Z]{1,5})\b/i)?.[1]) ?? tickerFromContext(context)
+  return explicitTickerFromText(text) ?? tickerFromContext(context)
 }
 
 function shortTextList(value: unknown, maxItems: number): string[] {
@@ -220,17 +233,16 @@ function buildHistoricalAnchorSimilarPlan(message: string, context: AssistantPag
   }
 }
 
-function fallbackPlan(message: string, context: AssistantPageContext): AssistantPlan {
+export function fallbackPlan(message: string, context: AssistantPageContext): AssistantPlan {
   const historicalAnchorPlan = buildHistoricalAnchorSimilarPlan(message, context)
   if (historicalAnchorPlan) return historicalAnchorPlan
 
   const weeklyBearishPlan = buildWeeklyBearishMaBreakPlan(message, context)
   if (weeklyBearishPlan) return weeklyBearishPlan
 
-  const lower = message.toLowerCase()
   const market: 'JP' | 'US' = /米国株|\bUS(?:株)?\b/i.test(message) ? 'US' : marketFromContext(context)
   const contextTicker = tickerFromContext(context)
-  const explicitTicker = normalizeTicker(message.match(/\b([0-9]{4}|[0-9]{3}A|[A-Z]{1,5})\b/i)?.[1])
+  const explicitTicker = explicitTickerFromText(message)
   const ticker = explicitTicker ?? contextTicker
   const wantsSimilar = /似た|類似|同じ形|近い/.test(message)
   const wantsEarnings = /決算|発表/.test(message)
@@ -239,8 +251,8 @@ function fallbackPlan(message: string, context: AssistantPageContext): Assistant
   const wantsSearch = /探して|検索|どこ|銘柄/.test(message)
   const wantsMomentum = /PMS|PFS|PES|物理|初動|動き出し|勢い|モメンタム/i.test(message)
   const wantsShortTerm = /短期|強気優勢|好転候補|下落警戒/.test(message)
-  const universe = /日経\s*225|nikkei|n225/i.test(message) || context.universe === 'nikkei225' ? 'nikkei225' : null
-  const marginType = /貸借/.test(message) ? '貸借' : /信用/.test(message) ? '信用' : null
+  const universe = market === 'JP' && (/日経\s*225|nikkei|n225/i.test(message) || context.universe === 'nikkei225') ? 'nikkei225' : null
+  const marginType = market === 'JP' ? (/貸借/.test(message) ? '貸借' : /信用/.test(message) ? '信用' : null) : null
   const minAvgVolume = volumeThresholdFromText(message)
   const limit = numberFromText(message, [/([0-9]{1,2})\s*件/]) ?? 10
   const calls: AssistantPlannedToolCall[] = []
@@ -257,11 +269,17 @@ function fallbackPlan(message: string, context: AssistantPageContext): Assistant
   ) {
     return buildClarificationPlan(
       '銘柄候補を出すには、まず探し方を少しだけ具体化した方がデータに基づいた結果になります。',
-      [
-        '上昇候補、下落警戒、初動、決算前、どの観点で探しますか？',
-        '対象は全市場、日経225、貸借銘柄、特定業種のどれにしますか？',
-        '短期なら20営業日、中期なら60営業日のどちらを重視しますか？',
-      ],
+      market === 'US'
+        ? [
+          '上昇候補、下落警戒、初動、どの観点で探しますか？',
+          '取引所、SEC業種、出来高のどれで絞りますか？',
+          '短期なら20営業日、中期なら60営業日のどちらを重視しますか？',
+        ]
+        : [
+          '上昇候補、下落警戒、初動、決算前、どの観点で探しますか？',
+          '対象は全市場、日経225、貸借銘柄、特定業種のどれにしますか？',
+          '短期なら20営業日、中期なら60営業日のどちらを重視しますか？',
+        ],
     )
   }
 
@@ -294,9 +312,7 @@ function fallbackPlan(message: string, context: AssistantPageContext): Assistant
   return {
     intent: market === 'US'
       ? '米国株専用DBから、他市場を混ぜずに読み取り専用ツールを選択しました。'
-      : lower.includes('us')
-        ? '米国株専用DBから、他市場を混ぜずに読み取り専用ツールを選択しました。'
-        : '自然文から読み取り専用ツールを選択しました。',
+      : '自然文から読み取り専用ツールを選択しました。',
     responseType: 'results',
     interpretedConditions,
     toolCalls: calls.slice(0, 4),

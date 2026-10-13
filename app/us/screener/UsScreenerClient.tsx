@@ -569,14 +569,16 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
   }
 
   const addSelectedToComparison = () => {
-    const compared = new Set(getCompareSymbols().map((symbol) => `${symbol.market}:${symbol.ticker}`))
-    rows
-      .filter((row) => selected.has(row.ticker))
-      .forEach((row) => {
-        if (!compared.has(`US:${row.ticker}`)) {
-          toggleComparedSymbol({ market: 'US', ticker: row.ticker, name: row.name })
-        }
-      })
+    const current = getCompareSymbols()
+    const compared = new Set(current.map((symbol) => `${symbol.market}:${symbol.ticker}`))
+    let slots = Math.max(0, 4 - current.length)
+    for (const row of rows.filter((item) => selected.has(item.ticker))) {
+      if (!compared.has(`US:${row.ticker}`) && slots > 0) {
+        toggleComparedSymbol({ market: 'US', ticker: row.ticker, name: row.name })
+        compared.add(`US:${row.ticker}`)
+        slots -= 1
+      }
+    }
     setSelected(new Set())
   }
 

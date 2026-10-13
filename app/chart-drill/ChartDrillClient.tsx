@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import Link from 'next/link'
+import { useSearchParams } from 'next/navigation'
 import {
   ArrowDownRight,
   ArrowUpRight,
@@ -138,12 +139,22 @@ const DIFFICULTY_LABELS: Record<DrillDifficulty, string> = {
 }
 
 export function ChartDrillClient() {
+  const searchParams = useSearchParams()
+  const isUsEntry = searchParams.get('market')?.toUpperCase() === 'US'
   const watchlistTickers = useWatchlistStore((state) => state.tickers)
+  const presets = useMemo(() => (
+    isUsEntry
+      ? PRESETS.map((preset) => ({
+        ...preset,
+        target: preset.target === 'jp' || preset.target === 'all' ? 'us' as const : preset.target,
+      }))
+      : PRESETS
+  ), [isUsEntry])
   const [presetId, setPresetId] = useState<PresetId>('starter')
   const [horizonDays, setHorizonDays] = useState(10)
   const [thresholdPct, setThresholdPct] = useState(5)
   const [direction, setDirection] = useState<DrillDirection>('up')
-  const [target, setTarget] = useState<DrillTarget>('jp')
+  const [target, setTarget] = useState<DrillTarget>(isUsEntry ? 'us' : 'jp')
   const [difficulty, setDifficulty] = useState<DrillDifficulty>('intermediate')
   const [questionCount, setQuestionCount] = useState(10)
   const [showIdentity, setShowIdentity] = useState(true)
@@ -168,6 +179,14 @@ export function ChartDrillClient() {
       // Ignore corrupted local history.
     }
   }, [])
+
+  useEffect(() => {
+    setTarget(isUsEntry ? 'us' : 'jp')
+    setPresetId('starter')
+    setQuestion(null)
+    setResult(null)
+    setError(null)
+  }, [isUsEntry])
 
   useEffect(() => {
     try {
@@ -203,7 +222,9 @@ export function ChartDrillClient() {
     setMemo('')
     try {
       if (target === 'watchlist' && watchlistTickers.length === 0) {
-        throw new Error('監視銘柄が空です。銘柄詳細ページで☆を押してから試してください。')
+        throw new Error(isUsEntry
+          ? '日本株の監視銘柄が空です。米国株の監視出題は現在未対応です。'
+          : '監視銘柄が空です。銘柄詳細ページで☆を押してから試してください。')
       }
       const params = new URLSearchParams({
         horizonDays: String(horizonDays),
@@ -282,10 +303,11 @@ export function ChartDrillClient() {
       <PageTitle
         eyebrow="分析・AI"
         title="チャートドリル"
+        badge={isUsEntry ? '米国株' : undefined}
         subtitle="過去のある時点までのチャートだけを見て、上昇・下落・見送りの判断を繰り返し練習します。"
         rightSlot={
           <Link
-            href="/backtest"
+            href={isUsEntry ? '/us/analysis/backtest' : '/backtest'}
             className="btn"
           >
             過去検証へ
@@ -293,12 +315,25 @@ export function ChartDrillClient() {
         }
       />
 
+      {isUsEntry && (
+        <div className="sb-section">
+          <div className="rounded-[4px] border border-[var(--color-brand-200)] bg-[var(--color-brand-50)] px-3 py-2.5 text-[12px] font-bold leading-[1.7] text-[var(--color-brand-900)]">
+            米国株モード: 出題対象の初期値は米国株（USD・米国営業日の日足）です。監視銘柄からの出題は日本株のみ対応です。
+          </div>
+        </div>
+      )}
+
       <div className="sb-section grid gap-3 lg:grid-cols-[360px_1fr]">
         <div className="space-y-3">
           <Card size="lg">
-            <CardHeader title="出題条件" hint="プリセットから始め、必要なら条件を調整します。" />
+            <CardHeader
+              title="出題条件"
+              hint={isUsEntry
+                ? '米国株プリセットから始めます。期間は米国営業日、変動率はUSD終値基準です。'
+                : 'プリセットから始め、必要なら条件を調整します。'}
+            />
             <div className="grid gap-2">
-              {PRESETS.map((preset) => (
+              {presets.map((preset) => (
                 <button
                   key={preset.id}
                   type="button"
@@ -364,7 +399,7 @@ export function ChartDrillClient() {
                   ['us', '米国株'],
                   ['etf', 'ETF'],
                   ['commodity', '商品ETF'],
-                  ['watchlist', '監視'],
+                  ['watchlist', isUsEntry ? '監視（日本株のみ）' : '監視'],
                   ['all', '全体'],
                 ]}
                 value={target}
@@ -458,7 +493,7 @@ export function ChartDrillClient() {
 
             <div className="mt-4">
               {loading ? (
-                <div className="flex h-[420px] items-center justify-center rounded-[4px] border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] text-[13px] font-bold text-[var(--color-text-secondary)]">
+                <div className="flex h-[220px] items-center justify-center rounded-[4px] border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] text-[13px] font-bold text-[var(--color-text-secondary)] sm:h-[420px]">
                   問題を作成中…
                 </div>
               ) : activeChart.length > 0 ? (
@@ -469,7 +504,7 @@ export function ChartDrillClient() {
                   horizonDays={question?.horizonDays ?? horizonDays}
                 />
               ) : (
-                <div className="flex h-[420px] items-center justify-center rounded-[4px] border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] text-[13px] font-bold text-[var(--color-text-secondary)]">
+                <div className="flex h-[220px] items-center justify-center rounded-[4px] border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] text-[13px] font-bold text-[var(--color-text-secondary)] sm:h-[420px]">
                   まだ問題がありません。
                 </div>
               )}
@@ -589,7 +624,7 @@ function NumberField({
   return (
     <label className="grid grid-cols-[1fr_auto] items-center gap-2 text-[11px] font-black text-[var(--color-brand-900)]">
       <span>{label}</span>
-      <span className="flex items-center gap-1">
+      <span className="flex items-center gap-1.5">
         <input
           type="number"
           min={min}
@@ -602,7 +637,7 @@ function NumberField({
           }}
           className="h-8 w-24 rounded-[3px] border border-[var(--color-border-default)] px-2 text-right text-[12px] font-black tabular-nums outline-none focus:border-[var(--color-market-red)]"
         />
-        <span className="text-[11px] text-[var(--color-text-tertiary)]">{suffix}</span>
+        <span className="w-10 shrink-0 whitespace-nowrap text-left text-[11px] text-[var(--color-text-tertiary)]">{suffix}</span>
       </span>
     </label>
   )
@@ -837,7 +872,7 @@ function DrillSvgChart({
 }) {
   const chart = useMemo(() => buildChartGeometry(candles, asOfDate), [candles, asOfDate])
   if (!chart) {
-    return <div className="flex h-[420px] items-center justify-center rounded-[4px] border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)]">チャートデータが不足しています。</div>
+    return <div className="flex h-[220px] items-center justify-center rounded-[4px] border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] sm:h-[420px]">チャートデータが不足しています。</div>
   }
   return (
     <div className="rounded-[4px] border border-[var(--color-border-default)] bg-white p-2">
@@ -845,7 +880,7 @@ function DrillSvgChart({
         <span>{candles[0]?.date} → {candles.at(-1)?.date}</span>
         <span>{revealed ? `未来${horizonDays}営業日を開示` : '未来足は非表示'}</span>
       </div>
-      <svg viewBox={`0 0 ${chart.width} ${chart.height}`} role="img" aria-label="チャートドリル ローソク足" className="h-[420px] w-full max-w-full">
+      <svg viewBox={`0 0 ${chart.width} ${chart.height}`} role="img" aria-label="チャートドリル ローソク足" className="h-auto w-full max-w-full sm:h-[420px]">
         <rect x="0" y="0" width={chart.width} height={chart.height} fill="#fff" />
         {chart.revealX != null && (
           <>

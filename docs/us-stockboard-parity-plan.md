@@ -1,6 +1,6 @@
 # US StockBoard JP Parity Program
 
-Updated: 2026-10-12
+Updated: 2026-10-13
 
 The machine-readable source of truth is `docs/us-stockboard-parity-board.json`. Run
 `npm run audit:us-jp-parity` after every wave. The data contract is maintained in
@@ -134,3 +134,20 @@ performance, or historical-price parity work.
   `FivzkmcEB1yyMKBYEru1r`. Storage Guard/runtime audit passed, Production smoke passed 168/168,
   local Production browser QA passed at 1440 and 390 px, and the read-only gateway served both the
   page and API while mutation routes remained fail closed.
+
+### W3E - Shared Watchlist, Comparison, Charts, Drill and AI Research
+
+- Watchlist rows preserve JP/US market labels, dates and currencies, pause polling in hidden tabs,
+  batch quote reads and do not turn corporate-action discontinuities into false daily returns.
+- The shared comparison dock has one deterministic four-symbol limit across both markets. Same-market
+  custom formulas use canonical JP prices or adjusted US OHLCV; mixed-market arithmetic fails closed
+  until dated USD/JPY data exists.
+- Chart Drill now supports an explicit US mode and builds questions from one adjusted OHLCV generation.
+  The US header, presets, exercise copy, selected candle and answer history remain market-local.
+- AI Research recognizes dotted and dashed US tickers, reports the available US analytical tools and
+  rejects JP-only universe filters. Missing US fundamentals, earnings and historical anchors remain
+  explicit limitations rather than JP fallback or invented evidence.
+- Claude Opus 5.5 (`claude.ai`, firstParty, Pro) completed implementation review and one screenshot-led
+  refinement. Dedicated/shared regressions, typecheck and build pass; browser QA at 1440, 1024, 768
+  and 390 px found no page-level overflow, failed request, console error or fixed-dock occlusion.
+- Git integration, Production candidate smoke and friend-access verification remain the W3E release gate.
