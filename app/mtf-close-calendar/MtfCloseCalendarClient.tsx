@@ -154,7 +154,8 @@ export function MtfCloseCalendarClient({
   const [enabledTimeframes, setEnabledTimeframes] = useState<CloseTimeframe[]>([...CLOSE_TIMEFRAMES])
   const [minimumCloses, setMinimumCloses] = useState<CloseCountFilter>(0)
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  // 失敗したかどうかだけを持つ。API の message や例外文は画面に出さない
+  const [error, setError] = useState(false)
   const [requestVersion, setRequestVersion] = useState(0)
 
   const enabledSet = useMemo(() => new Set(enabledTimeframes), [enabledTimeframes])
@@ -163,15 +164,15 @@ export function MtfCloseCalendarClient({
 
   const loadCalendar = useCallback(async (signal: AbortSignal) => {
     setLoading(true)
-    setError(null)
+    setError(false)
     const query = new URLSearchParams({
       market,
       from: visibleFrom,
       to: addIsoDays(visibleTo, 70),
     })
     const response = await fetch(`/api/mtf-close-calendar?${query}`, { cache: 'no-store', signal })
-    const payload = await response.json() as CloseCalendarResult & { message?: string }
-    if (!response.ok) throw new Error(payload.message ?? `HTTP ${response.status}`)
+    const payload = await response.json() as CloseCalendarResult
+    if (!response.ok) throw new Error(`HTTP ${response.status}`)
     setResult(payload)
     setSelectedDate((current) => {
       if (current && current.startsWith(month) && payload.days.some((day) => day.date === current)) return current
@@ -183,9 +184,9 @@ export function MtfCloseCalendarClient({
 
   useEffect(() => {
     const controller = new AbortController()
-    loadCalendar(controller.signal).catch((loadError) => {
+    loadCalendar(controller.signal).catch(() => {
       if (controller.signal.aborted) return
-      setError(loadError instanceof Error ? loadError.message : 'カレンダーを取得できませんでした。')
+      setError(true)
       setLoading(false)
     })
     return () => controller.abort()
@@ -223,7 +224,8 @@ export function MtfCloseCalendarClient({
             <div>
               <h2 className="text-[15px] font-bold text-[var(--color-text-primary)]">{monthLabel(month)}</h2>
               <p className="text-[11px] tabular-nums text-[var(--color-text-tertiary)]">
-                条件に該当 {matchingDays}営業日
+                {/* 読み込み中・失敗中は該当日数が未確定。0営業日と見せない */}
+                条件に該当 {loading ? '確認中' : error ? '取得失敗' : `${matchingDays}営業日`}
                 {copy.todayContext && <span className="ml-2 whitespace-nowrap">今日 {today}（{copy.todayContext}）</span>}
               </p>
             </div>
@@ -258,6 +260,21 @@ export function MtfCloseCalendarClient({
             </button>
           </div>
         </div>
+
+        {/* 390px でもスクロールせずに見えるよう、絞り込み欄より上に置く (失敗表示はここ 1 か所だけ) */}
+        {error && (
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--color-border-soft)] px-3 py-3">
+            <p role="alert" className="min-w-0 text-[13px] font-bold text-[var(--color-market-red-dark)]">カレンダーを取得できませんでした。再読み込みしてください。</p>
+            <button
+              type="button"
+              onClick={() => setRequestVersion((value) => value + 1)}
+              className="btn"
+            >
+              <RotateCcw size={13} aria-hidden />
+              再読み込み
+            </button>
+          </div>
+        )}
 
         <div className="grid gap-3 border-b border-[var(--color-border-soft)] px-3 py-3 xl:grid-cols-[auto_minmax(0,1fr)] xl:items-start">
           <div className="flex min-w-0 flex-wrap items-center gap-1.5" aria-label="同時に確定する本数で絞り込み">
@@ -317,19 +334,8 @@ export function MtfCloseCalendarClient({
           </p>
         )}
 
-        {error ? (
-          <div className="flex min-h-[360px] flex-col items-center justify-center gap-3 px-4 text-center">
-            <p className="text-[13px] font-bold text-[var(--color-market-red-dark)]">{error}</p>
-            <button
-              type="button"
-              onClick={() => setRequestVersion((value) => value + 1)}
-              className="btn"
-            >
-              <RotateCcw size={13} aria-hidden />
-              再読み込み
-            </button>
-          </div>
-        ) : (
+        {/* 失敗時はカレンダー本体を出さない (前月の結果や 0 本を確定値として見せない) */}
+        {error ? null : (
           <div className="grid min-w-0 gap-4 p-2 sm:p-3 xl:grid-cols-[minmax(0,1fr)_320px]">
             <div className="min-w-0">
               <div className="grid grid-cols-7 gap-0.5 border-b border-[var(--color-border-default)] pb-1 text-center text-[10px] font-bold text-[var(--color-text-tertiary)] sm:gap-1">
