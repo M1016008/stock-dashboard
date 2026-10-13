@@ -150,4 +150,10 @@ performance, or historical-price parity work.
 - Claude Opus 5.5 (`claude.ai`, firstParty, Pro) completed implementation review and one screenshot-led
   refinement. Dedicated/shared regressions, typecheck and build pass; browser QA at 1440, 1024, 768
   and 390 px found no page-level overflow, failed request, console error or fixed-dock occlusion.
-- Git integration, Production candidate smoke and friend-access verification remain the W3E release gate.
+- Feature `dbe70d1a292fa0f2cf96ef1dcf2726e39b51ea22` was merged without conflict and pushed to
+  main as `83df80507149c2f6300182f89d00f7089f5067f8`. Merge-head typecheck, dedicated/shared
+  regressions, parity audit and Production build passed.
+- Production switch is intentionally pending. Canonical mount, UUID, DB and free-space checks pass,
+  but the pre-existing Storage Guard incident `f17df02e-9e3f-4bb7-9f50-ffa66e50220e` remains latched
+  after a `DISKUTIL_INFO` probe failure. No candidate or service switch was attempted; formal
+  `storage:recover` review is required before deployment resumes.
