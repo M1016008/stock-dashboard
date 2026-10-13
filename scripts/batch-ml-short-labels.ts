@@ -9,6 +9,12 @@ const HORIZONS = (process.env.ML_SHORT_HORIZONS ?? ML_PHYSICS_DEFAULT_HORIZON_LI
   .split(',')
   .map((value) => Number(value.trim()))
   .filter((value) => Number.isFinite(value) && value > 0)
+const TICKERS = [...new Set(
+  (process.env.TICKERS ?? '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean),
+)]
 const START_DATE = process.env.ML_SHORT_LABEL_START_DATE?.trim() || null
 const END_DATE = process.env.ML_SHORT_LABEL_END_DATE?.trim() || null
 const RECENT_DAYS = Number(process.env.ML_SHORT_LABEL_RECENT_DAYS ?? 0)
@@ -20,6 +26,16 @@ const SKIP_LABEL_SYNC = process.env.ML_SHORT_SKIP_LABEL_SYNC === '1'
 
 function horizonPlaceholders(): string {
   return HORIZONS.map(() => '?').join(', ')
+}
+
+function addTickerFilter(
+  where: string[],
+  args: Array<string | number>,
+  column: string,
+): void {
+  if (TICKERS.length === 0) return
+  where.push(`${column} IN (${TICKERS.map(() => '?').join(', ')})`)
+  args.push(...TICKERS)
 }
 
 function addDays(date: string, days: number): string {
@@ -52,6 +68,7 @@ async function deleteOrphanLabels(startDate: string | null, endDate: string | nu
     orphanWhere.push('labels.date <= ?')
     orphanArgs.push(endDate)
   }
+  addTickerFilter(orphanWhere, orphanArgs, 'labels.ticker')
 
   await execRun(
     `
@@ -80,6 +97,7 @@ async function syncLabelsForRange(startDate: string | null, endDate: string | nu
     where.push('fe.date <= ?')
     args.push(endDate)
   }
+  addTickerFilter(where, args, 'fe.ticker')
 
   await execRun(
     `
@@ -187,6 +205,7 @@ async function labelDateBounds(startDate: string | null, endDate: string | null)
     where.push('date <= ?')
     args.push(endDate)
   }
+  addTickerFilter(where, args, 'ticker')
   const whereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : ''
   const minRows = await execAll<{ date: string | null }>(
     `SELECT date FROM forward_extrema INDEXED BY fext_date_horizon_idx ${whereSql} ORDER BY date ASC LIMIT 1`,
@@ -204,17 +223,21 @@ async function labelDateBounds(startDate: string | null, endDate: string | null)
 
 async function recentStartDate(): Promise<string | null> {
   if (!Number.isFinite(RECENT_DAYS) || RECENT_DAYS <= 0) return null
+  const tickerWhere = TICKERS.length > 0
+    ? `WHERE ticker IN (${TICKERS.map(() => '?').join(', ')})`
+    : ''
   const rows = await execAll<{ date: string | null }>(
     `
     SELECT MIN(date) AS date
     FROM (
       SELECT DISTINCT date
       FROM forward_extrema INDEXED BY fext_date_horizon_idx
+      ${tickerWhere}
       ORDER BY date DESC
       LIMIT ?
     )
     `,
-    [RECENT_DAYS],
+    [...TICKERS, RECENT_DAYS],
   )
   return rows[0]?.date ?? null
 }
@@ -230,6 +253,7 @@ async function existingLabelDateBounds(startDate: string | null, endDate: string
     where.push('date <= ?')
     args.push(endDate)
   }
+  addTickerFilter(where, args, 'ticker')
   const whereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : ''
   const minRows = await execAll<{ date: string | null }>(
     `SELECT date FROM ml_short_labels ${whereSql} ORDER BY date ASC LIMIT 1`,
@@ -246,12 +270,21 @@ async function existingLabelDateBounds(startDate: string | null, endDate: string
 }
 
 async function deleteOrphanRlStates(startDate: string | null, endDate: string | null): Promise<void> {
+  const where = [`states.horizon_days IN (${horizonPlaceholders()})`]
+  const args: Array<string | number> = [...HORIZONS]
+  if (startDate) {
+    where.push('states.date >= ?')
+    args.push(startDate)
+  }
+  if (endDate) {
+    where.push('states.date <= ?')
+    args.push(endDate)
+  }
+  addTickerFilter(where, args, 'states.ticker')
   await execRun(
     `
     DELETE FROM rl_training_states_v2 AS states
-    WHERE states.horizon_days IN (${horizonPlaceholders()})
-      ${startDate ? 'AND states.date >= ?' : ''}
-      ${endDate ? 'AND states.date <= ?' : ''}
+    WHERE ${where.join(' AND ')}
       AND NOT EXISTS (
         SELECT 1
         FROM ml_short_labels labels
@@ -260,15 +293,14 @@ async function deleteOrphanRlStates(startDate: string | null, endDate: string | 
           AND labels.horizon_days = states.horizon_days
       )
     `,
-    [
-      ...HORIZONS,
-      ...(startDate ? [startDate] : []),
-      ...(endDate ? [endDate] : []),
-    ],
+    args,
   )
 }
 
 async function syncRlStatesForRange(startDate: string | null, endDate: string | null): Promise<void> {
+  const tickerWhere = TICKERS.length > 0
+    ? `AND l.ticker IN (${TICKERS.map(() => '?').join(', ')})`
+    : ''
   await execRun(
     `
     INSERT OR REPLACE INTO rl_training_states_v2
@@ -298,12 +330,14 @@ async function syncRlStatesForRange(startDate: string | null, endDate: string | 
     INNER JOIN ml_short_labels l ON l.ticker = f.ticker AND l.date = f.date
     CROSS JOIN actions
     WHERE f.feature_set = ? AND l.horizon_days IN (${horizonPlaceholders()})
+      ${tickerWhere}
       ${startDate ? 'AND l.date >= ? AND f.date >= ?' : ''}
       ${endDate ? 'AND l.date <= ? AND f.date <= ?' : ''}
     `,
     [
       ML_PHYSICS_FEATURE_SET,
       ...HORIZONS,
+      ...TICKERS,
       ...(startDate ? [startDate, startDate] : []),
       ...(endDate ? [endDate, endDate] : []),
     ],
@@ -349,7 +383,7 @@ async function main() {
       : 0
 
   console.log(
-    `ml short labels start: horizons=${HORIZONS.join('/')}, start=${effectiveStartDate ?? '-'}, requested_start=${START_DATE ?? '-'}, recent_start=${recentStart ?? '-'}, end=${effectiveEndDate ?? '-'}, recent_days=${RECENT_DAYS || '-'}, label_chunk_days=${labelChunkDays || '-'}, rl_chunk_days=${RL_DATE_CHUNK_DAYS || '-'}, skip_labels=${SKIP_LABEL_SYNC ? '1' : '0'}, rl_states=${WRITE_RL_STATES ? 'on' : 'off'}`,
+    `ml short labels start: horizons=${HORIZONS.join('/')}, tickers=${TICKERS.length || 'all'}, start=${effectiveStartDate ?? '-'}, requested_start=${START_DATE ?? '-'}, recent_start=${recentStart ?? '-'}, end=${effectiveEndDate ?? '-'}, recent_days=${RECENT_DAYS || '-'}, label_chunk_days=${labelChunkDays || '-'}, rl_chunk_days=${RL_DATE_CHUNK_DAYS || '-'}, skip_labels=${SKIP_LABEL_SYNC ? '1' : '0'}, rl_states=${WRITE_RL_STATES ? 'on' : 'off'}`,
   )
 
   let labelChunks = 0
