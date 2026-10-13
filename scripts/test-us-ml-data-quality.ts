@@ -291,10 +291,23 @@ async function testOrphanCleanup(): Promise<void> {
         VALUES ('ORPHAN', '2019-01-01', 5, 'wait', '{}')`,
       args: [],
     },
+    {
+      sql: `INSERT INTO ml_short_labels
+        (ticker, date, horizon_days, label_json)
+        VALUES ('UNRELATED', '2018-01-01', 5, '{}')`,
+      args: [],
+    },
+    {
+      sql: `INSERT INTO rl_training_states_v2
+        (ticker, date, horizon_days, action, state_json)
+        VALUES ('UNRELATED', '2018-01-01', 5, 'wait', '{}')`,
+      args: [],
+    },
   ], 'write')
   client.close()
 
   const result = runScript('scripts/batch-ml-short-labels.ts', databasePath, {
+    TICKERS: 'VALID,ORPHAN',
     ML_SHORT_HORIZONS: '5',
     ML_SHORT_LABEL_RECENT_DAYS: '0',
     ML_SHORT_WRITE_RL_STATES: '1',
@@ -308,6 +321,8 @@ async function testOrphanCleanup(): Promise<void> {
   assert.equal(await countRows(verify, "SELECT COUNT(*) AS count FROM rl_training_states_v2 WHERE ticker = 'ORPHAN'"), 0)
   assert.equal(await countRows(verify, "SELECT COUNT(*) AS count FROM ml_short_labels WHERE ticker = 'VALID'"), 1)
   assert.equal(await countRows(verify, "SELECT COUNT(*) AS count FROM rl_training_states_v2 WHERE ticker = 'VALID'"), 3)
+  assert.equal(await countRows(verify, "SELECT COUNT(*) AS count FROM ml_short_labels WHERE ticker = 'UNRELATED'"), 1)
+  assert.equal(await countRows(verify, "SELECT COUNT(*) AS count FROM rl_training_states_v2 WHERE ticker = 'UNRELATED'"), 1)
   verify.close()
 }
 
