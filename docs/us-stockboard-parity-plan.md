@@ -180,6 +180,9 @@ performance, or historical-price parity work.
   one screenshot-led 768px context-bar revision. Codex fixture/API/PIT tests, stock-detail regression,
   typecheck, production build and 1440/1024/768/390 browser QA pass with no page-level overflow,
   clipping, stuck loading state or application console error.
+- Feature `e5015a5aabb18a520111a1f2acbfcf69a5fcfabb` was merged without conflict and pushed to
+  main as `4f3cb53fe61b17647000f90d5ff7be8101e507c2`. Merge-head dedicated/shared regressions,
+  parity audit, typecheck and Production build passed.
 - Production activation remains pending. The historical explorer itself is QA-complete, but stale
   serving coverage, empty similarity evaluations and pre-existing extreme secondary model/RL values
   require source-pipeline review before a candidate can be promoted.
