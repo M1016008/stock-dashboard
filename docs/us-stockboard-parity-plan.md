@@ -24,9 +24,6 @@ The machine-readable source of truth is `docs/us-stockboard-parity-board.json`. 
 - Institutional ownership scope requires a product choice between 13F, 13D/G, and insider Form 4 views.
 - Live historical market cap activation requires SEC Companyfacts ingestion; the point-in-time shares contract is implemented but the machine-local SEC operator contact is not configured.
 - Historical classification filters require effective-dated classification history.
-- The current main candidate cannot serve the JP integrated Screener for 2026-10-14 because no
-  Valuation Serving snapshot is available on or before that date. Production remains healthy;
-  promotion is held until the candidate data gate is restored.
 
 These blockers do not stop technical, discovery, chart, Stage, scenario, ML, responsive,
 performance, or historical-price parity work.
@@ -65,8 +62,9 @@ performance, or historical-price parity work.
 - Codex verified all 13 routing cases, keyboard focus, and JP-US-JP browser navigation. Browser QA
   passed at 1440, 1024, 768 and 390 px with one switch, one active market, zero body overflow and
   no Header-originated console or HTTP errors.
-- Production promotion remains pending because the latest main candidate's JP integrated Screener
-  is blocked by the separate Valuation Serving availability gate documented above.
+- A 2026-10-14 recheck confirmed JP Valuation Serving through 2026-10-13 (4,201 tickers) and a
+  completed 4,634-row Integrated Screener serving date. Production promotion remains pending only
+  because the latest main line also contains the shared W3F source-data gate documented below.
 
 ### W2 - Dashboard, Screener, Preview, Search and Historical Date
 
