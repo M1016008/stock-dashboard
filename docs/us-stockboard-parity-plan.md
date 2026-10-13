@@ -179,6 +179,7 @@ performance, or historical-price parity work.
   one semantic revision. Codex SEC normalization/PIT, calculation, UI-contract, JP timeline
   regression, typecheck, production build and 1440/1024/768/390 browser QA passed, including loss,
   negative cash flow, zero dividend and partial-coverage fixtures.
-- The implementation is ready for a Git checkpoint, but live activation remains data-blocked:
+- Feature `27b6ec3e2a925446fdd44a2dce3f645379ae1272` was merged without conflict and pushed to
+  main as `084d296502da11f1c4baab02988117588d7dc742`. Live activation remains data-blocked:
   Production contains no verified US Companyfacts rows and `SEC_USER_AGENT` is not configured.
   Forecast consensus still requires a separately approved source. No Production deploy is claimed.
