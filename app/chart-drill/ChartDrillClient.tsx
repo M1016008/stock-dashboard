@@ -324,7 +324,7 @@ export function ChartDrillClient() {
       )}
 
       <div className="sb-section grid gap-3 lg:grid-cols-[360px_1fr]">
-        <div className="space-y-3">
+        <div className="min-w-0 space-y-3">
           <Card size="lg">
             <CardHeader
               title="出題条件"
@@ -453,7 +453,7 @@ export function ChartDrillClient() {
           <ScorePanel stats={stats} sessionAnswered={sessionAnswered} questionCount={questionCount} />
         </div>
 
-        <div className="space-y-3">
+        <div className="min-w-0 space-y-3">
           <Card size="lg">
             <div className="flex flex-col gap-3 border-b border-[var(--color-border-soft)] pb-3 md:flex-row md:items-start md:justify-between">
               <div>
