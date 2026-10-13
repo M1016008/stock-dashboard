@@ -251,11 +251,11 @@ performance, or historical-price parity work.
   explorer whose serving data quality gate is still open, so the currently healthy Production build
   remains unchanged.
 
-### W0 - Loading, empty and error state contracts (worktree, PASS)
+### W0 - Loading, empty and error state contracts (main, PASS)
 
-- Status: implemented and verified in the `codex/us-parity-w0-route-states` worktree and not yet
-  committed, merged or deployed. The board row is `IMPLEMENTED` with Codex QA `PASS`; Git remains
-  `WORKTREE` and Production remains `PENDING` behind the shared W3F source-data gate.
+- Status: implemented and verified on `codex/us-parity-w0-route-states`, then merged normally to
+  main. The board row is `IMPLEMENTED` with Codex QA `PASS` and Git `MAIN`; Production remains
+  `PENDING` behind the shared W3F source-data gate.
 - Blocking findings from the visual review (scope of the final bounded revision):
   - Stage map (US and the shared JP component): during loading or error, the header count, the six
     Stage summary cells, the `未算出` cell and the `全投資対象（0）` option showed `0`, which looked
