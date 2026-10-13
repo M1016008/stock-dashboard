@@ -162,6 +162,28 @@ performance, or historical-price parity work.
   Chart Drill grid auto-minimum-width issue found during Production QA was fixed and protected by
   a regression assertion before the final deploy.
 
+### W3F - Historical Outcome Explorer
+
+- `/us/analysis/backtest` now starts with an interactive historical outcome explorer backed only by
+  dated `serving_backtest_results`. It supports seven completed-outcome horizons, regular-session
+  date selection, exact Stage and signal filters, outcome/return filters, deterministic summaries,
+  pagination and expanded price/Stage/evidence detail. The existing model, physics, RL and similar-
+  evaluation tables remain secondary and are not mixed into the explorer result set.
+- Historical Exchange, sector and industry filters remain deliberately omitted because the available
+  classification metadata is not effective-dated. Missing outcomes remain unavailable, observed zero
+  remains zero, and no generated narrative or current-classification fallback is added.
+- US holiday rows are excluded with the canonical market calendar. Explicit holiday queries fail
+  closed, and implicit latest-date selection skips anomalous holiday rows. The 40-session view exposes
+  224 regular-session dates from 2025-07-25 through 2026-06-15; the underlying market watermark is
+  2026-10-12, so serving refresh remains a data gate rather than a UI parity gap.
+- Claude Opus (`claude.ai`, firstParty, Pro) designed and implemented the local hierarchy and completed
+  one screenshot-led 768px context-bar revision. Codex fixture/API/PIT tests, stock-detail regression,
+  typecheck, production build and 1440/1024/768/390 browser QA pass with no page-level overflow,
+  clipping, stuck loading state or application console error.
+- Production activation remains pending. The historical explorer itself is QA-complete, but stale
+  serving coverage, empty similarity evaluations and pre-existing extreme secondary model/RL values
+  require source-pipeline review before a candidate can be promoted.
+
 ### W4 - Fundamentals, Valuation and Shareholder Return
 
 - SEC Companyfacts now maps approved US-GAAP concepts into the shared normalized financial fact
