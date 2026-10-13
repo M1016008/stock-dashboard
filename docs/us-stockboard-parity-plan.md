@@ -208,3 +208,26 @@ performance, or historical-price parity work.
   main as `084d296502da11f1c4baab02988117588d7dc742`. Live activation remains data-blocked:
   Production contains no verified US Companyfacts rows and `SEC_USER_AGENT` is not configured.
   Forecast consensus still requires a separately approved source. No Production deploy is claimed.
+
+### W0F - Global acceptance matrix
+
+- The current US route inventory was exercised at 1440, 1024, 768 and 390 px: Dashboard,
+  Screener, Stage Screener, Transition Scanner, Historical Outcome Explorer, Market Momentum,
+  Sector Analysis, Trigger Discovery, MTF Close Calendar, AI Lens and the AAPL Stock Detail
+  overview/fundamentals/chart entry states. The 52 route-width checks finished without a fatal
+  render, stuck loading state or application console error.
+- Claude Opus (`claude.ai`, firstParty, Pro) completed two bounded presentation reviews. The US
+  sector tables now keep numeric columns stable, show long SIC names on at most two lines and fit
+  the 768 px content boundary. The Dashboard breadth labels and ML reference date no longer clip.
+  Codex re-measured all four widths; whole-document horizontal overflow is zero.
+- The friend read-only gateway now recognizes the two US Trigger Discovery JSON POST endpoints as
+  read transports. Search and Mini Chart reads are forwarded, while saved definitions, mutations,
+  private/admin paths and protocol upgrades remain fail closed. Gateway, UI-policy and US Trigger
+  regression tests pass.
+- Direct Production and the loopback gateway returned HTTP 200 for health, `/us` and
+  `/us/stock/AAPL`; the public hostname redirected an unauthenticated request to Cloudflare Access
+  as required. The authenticated external stock-detail/mobile route matrix remains open because the
+  browser Access session had expired; authentication was not bypassed or re-created by the audit.
+- Production promotion is not claimed in this wave. The latest main line also contains the W3F
+  explorer whose serving data quality gate is still open, so the currently healthy Production build
+  remains unchanged.
