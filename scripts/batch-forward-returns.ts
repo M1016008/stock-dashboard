@@ -9,6 +9,7 @@
 
 import { db, client } from '@/lib/db/client'
 import { tickerUniverse, batchRuns } from '@/lib/db/schema'
+import { forwardReturnsProjectionSql } from '@/lib/backtest/forward-returns'
 import { eq } from 'drizzle-orm'
 
 const DEFAULT_HORIZONS = [2, 3, 4, 5, 10, 15, 30, 60, 90, 180, 200]
@@ -49,11 +50,19 @@ async function computeForwardReturnsForHorizon(horizon: number, tickers: string[
   const tickerWhere = tickers?.length
     ? `WHERE ticker IN (${tickers.map(() => '?').join(', ')})`
     : ''
-  const args: Array<string | number> = [horizon, horizon, horizon, horizon, ...(tickers ?? [])]
+  const deleteTickerWhere = tickers?.length
+    ? `AND ticker IN (${tickers.map(() => '?').join(', ')})`
+    : ''
+  const projectionArgs: Array<string | number> = [...(tickers ?? []), horizon, horizon, horizon]
 
-  const result = await client.execute({
-    sql: `
-      INSERT OR IGNORE INTO forward_returns
+  const results = await client.batch([
+    {
+      sql: `DELETE FROM forward_returns WHERE horizon_days = ? ${deleteTickerWhere}`,
+      args: [horizon, ...(tickers ?? [])],
+    },
+    {
+      sql: `
+      INSERT INTO forward_returns
         (ticker, date, horizon_days, return_pct, return_category, end_date)
       SELECT
         ticker,
@@ -69,25 +78,18 @@ async function computeForwardReturnsForHorizon(horizon: number, tickers: string[
         END AS return_category,
         future_date AS end_date
       FROM (
-        SELECT
-          ticker,
-          date,
-          close,
-          LEAD(date, ?) OVER (PARTITION BY ticker ORDER BY date) AS future_date,
-          LEAD(close, ?) OVER (PARTITION BY ticker ORDER BY date) AS future_close,
-          100.0 * (LEAD(close, ?) OVER (PARTITION BY ticker ORDER BY date) - close) / close AS return_pct
-        FROM ohlcv_daily
-        ${tickerWhere}
+        ${forwardReturnsProjectionSql(tickerWhere)}
       )
       WHERE close > 0
         AND future_close > 0
         AND future_date IS NOT NULL
         AND return_pct IS NOT NULL
     `,
-    args,
-  })
+      args: [horizon, ...projectionArgs],
+    },
+  ], 'write')
 
-  return Number(result.rowsAffected ?? 0)
+  return Number(results[1]?.rowsAffected ?? 0)
 }
 
 async function main() {
@@ -170,6 +172,9 @@ async function main() {
     .where(eq(batchRuns.id, runId))
 
   console.log(`完了: ${succeeded} 成功 / ${failed} 失敗 / 計 ${rowsInserted} 行 / ${finalStatus}`)
+  if (failed > 0) {
+    throw new Error(`forward returns failed for ${failed}/${HORIZONS.length} horizons`)
+  }
 }
 
 main().catch(err => {

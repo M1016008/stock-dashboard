@@ -344,33 +344,62 @@ function appendInsertStatements(
   ticker: string,
   rows: ExtremaRow[],
 ): void {
-  if (rows.length === 0) return
   const horizonPlaceholders = HORIZONS.map(() => '?').join(', ')
-  const minDate = rows[0].date
-  const maxDate = rows[rows.length - 1].date
 
   if (!INCREMENTAL_UPSERT) {
-    statements.push({
-      sql: `
+    if (RECENT_DAYS === 0) {
+      statements.push({
+        sql: `
+        DELETE FROM forward_extrema
+        WHERE ticker = ?
+          AND horizon_days IN (${horizonPlaceholders})
+          ${START_DATE ? 'AND date >= ?' : ''}
+          ${END_DATE ? 'AND date <= ?' : ''}
+      `,
+        args: [ticker, ...HORIZONS, ...(START_DATE ? [START_DATE] : []), ...(END_DATE ? [END_DATE] : [])],
+      })
+    } else if (rows.length > 0) {
+      const minDate = rows[0].date
+      const maxDate = rows[rows.length - 1].date
+      statements.push({
+        sql: `
         DELETE FROM forward_extrema
         WHERE ticker = ?
           AND horizon_days IN (${horizonPlaceholders})
           AND date BETWEEN ? AND ?
       `,
-      args: [ticker, ...HORIZONS, minDate, maxDate],
-    })
+        args: [ticker, ...HORIZONS, minDate, maxDate],
+      })
+    }
   }
   if (WRITE_MODEL_LABELS) {
-    statements.push({
-      sql: `
+    if (RECENT_DAYS === 0) {
+      statements.push({
+        sql: `
+        DELETE FROM model_labels
+        WHERE ticker = ?
+          AND horizon_days IN (${horizonPlaceholders})
+          ${START_DATE ? 'AND date >= ?' : ''}
+          ${END_DATE ? 'AND date <= ?' : ''}
+      `,
+        args: [ticker, ...HORIZONS, ...(START_DATE ? [START_DATE] : []), ...(END_DATE ? [END_DATE] : [])],
+      })
+    } else if (rows.length > 0) {
+      const minDate = rows[0].date
+      const maxDate = rows[rows.length - 1].date
+      statements.push({
+        sql: `
         DELETE FROM model_labels
         WHERE ticker = ?
           AND horizon_days IN (${horizonPlaceholders})
           AND date BETWEEN ? AND ?
       `,
-      args: [ticker, ...HORIZONS, minDate, maxDate],
-    })
+        args: [ticker, ...HORIZONS, minDate, maxDate],
+      })
+    }
   }
+
+  if (rows.length === 0) return
 
   for (let i = 0; i < rows.length; i += CHUNK) {
     const chunk = rows.slice(i, i + CHUNK)
