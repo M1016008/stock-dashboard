@@ -9,6 +9,8 @@ export const FRIEND_READ_ONLY_JSON_POST_PATHS = new Set([
   '/api/trigger-discovery/mini-charts',
   '/api/trigger-discovery/outcome-segment-comparisons',
   '/api/trigger-discovery/search',
+  '/api/us/trigger-discovery/mini-charts',
+  '/api/us/trigger-discovery/search',
 ])
 
 export const FRIEND_PRIVATE_PATH_PREFIXES = [

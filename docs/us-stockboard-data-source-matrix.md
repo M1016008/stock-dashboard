@@ -33,7 +33,7 @@ Updated: 2026-10-13
 | Insider activity | None approved for serving | 0 | SEC filing acceptance timestamp required | DATA MISSING | Consider Form 4 after ownership scope |
 | Short interest | None approved | 0 | Publication date required | DATA MISSING | Approved/licensed source required |
 | US sector hierarchy | SEC SIC | 5,506 / 5,950 latest momentum rows classified (92.5%); 9 named broad sectors and 388 four-digit industries | Current-only until effective dating exists | DATA SUBSTITUTE | Preserve taxonomy label; do not call it GICS; keep historical grouping fail-closed |
-| Friend access | Cloudflare Access + read-only gateway | JP live; authenticated US Dashboard, Screener and Stage Transition views live | Same-origin reads; mutations, admin routes and protocol upgrades fail closed by route semantics | DATA PARTIAL | Complete the authenticated US stock-detail route inventory and external mobile matrix |
+| Friend access | Cloudflare Access + read-only gateway | JP live; authenticated US Dashboard, Screener and Stage Transition views live; US Trigger search and Mini Chart read transports are allowlisted | Same-origin GET/HEAD and explicit read-only JSON POST routes; mutations, admin routes and protocol upgrades fail closed by route semantics | DATA PARTIAL | Renew an authorized browser session and complete the authenticated US stock-detail route inventory and external mobile matrix |
 
 ## Rules
 

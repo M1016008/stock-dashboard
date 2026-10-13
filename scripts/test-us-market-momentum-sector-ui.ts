@@ -6,6 +6,7 @@ const files = {
   sectors: fs.readFileSync('app/us/sectors/page.tsx', 'utf8'),
   parts: fs.readFileSync('components/us/UsMarketMomentumParts.tsx', 'utf8'),
   sectorPit: fs.readFileSync('components/us/UsSectorPitUnavailable.tsx', 'utf8'),
+  sectorTable: fs.readFileSync('components/us/UsSectorRankingTable.tsx', 'utf8'),
   nav: fs.readFileSync('components/us/UsAnalysisNav.tsx', 'utf8'),
   globalNav: fs.readFileSync('components/layout/navigation.ts', 'utf8'),
 }
@@ -29,6 +30,10 @@ assert.match(files.sectors, /sampleMode === 'small'/, 'small-sample industries m
 assert.match(files.sectors, /IndustryPagination/, 'industry ranking must expose deterministic server pagination')
 assert.doesNotMatch(files.sectors, /<details[\s>]/, 'collapsed sections must not serialize every small-sample row into the initial response')
 assert.doesNotMatch(files.sectors, /exec(?:All|Get)|execUsAnalytics/, 'sector presentation must not bypass the read model')
+assert.match(files.sectorTable, /table-fixed/, 'desktop sector tables must keep numeric columns stable')
+assert.match(files.sectorTable, /line-clamp-2/, 'long SIC labels must remain readable without widening the document')
+assert.match(files.sectorTable, /min-w-\[704px\]/, 'tablet table width must fit the bounded content area')
+assert.doesNotMatch(files.sectorTable, /min-w-\[720px\]/, 'the previous 768px overflow width must not return')
 
 assert.match(files.parts, /SEC SIC current classification/)
 assert.match(files.parts, /GICS ではなく/)

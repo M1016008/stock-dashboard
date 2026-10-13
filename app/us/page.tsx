@@ -461,7 +461,7 @@ async function UsMarketState({ date, linkDate, historical }: { date: string; lin
 
         <dl className="mt-3 grid gap-y-[7px]">
           {breadth.map((item) => (
-            <div key={item.label} className="grid grid-cols-[7.25rem_minmax(0,1fr)_3.25rem_4.75rem] items-center gap-x-3 max-sm:gap-x-2">
+            <div key={item.label} className="grid grid-cols-[8.25rem_minmax(0,1fr)_3.25rem_4.75rem] items-center gap-x-3 max-sm:gap-x-2">
               <dt className="min-w-0 truncate text-[11px] font-semibold text-[var(--color-text-secondary)]">
                 {item.label}
                 <span className="ml-1 font-mono text-[9px] text-[var(--color-text-tertiary)]">{item.hint}</span>
@@ -627,9 +627,9 @@ function AgendaCell({
   return (
     <div className={`min-w-0 px-4 py-2.5 ${bordered ? 'border-t border-[var(--color-border-soft)] md:border-l md:border-t-0' : ''}`}>
       <div className="flex items-baseline justify-between gap-2">
-        <div className="flex min-w-0 items-baseline gap-2">
+        <div className="flex min-w-0 flex-wrap items-baseline gap-x-2">
           <span className="shrink-0 text-[12px] font-bold text-[var(--color-brand-900)]">{title}</span>
-          {meta != null && <span className="truncate text-[10px] font-semibold text-[var(--color-text-tertiary)]">{meta}</span>}
+          {meta != null && <span className="min-w-0 truncate text-[10px] font-semibold text-[var(--color-text-tertiary)]">{meta}</span>}
         </div>
         {href && linkLabel && (
           <a href={href} className="inline-flex shrink-0 items-center gap-0.5 text-[10px] font-bold text-[var(--color-brand-700)] hover:underline">

@@ -151,7 +151,7 @@ function industryRow(group: UsMarketGroup, parent: UsIndustryParent | undefined)
     group,
     title: displaySicName(group.label),
     rawTitle: group.label,
-    subtitle: <>SIC {group.key}{major ? <> · 業種グループ {major.code} {major.name}</> : null}</>,
+    subtitle: `SIC ${group.key}${major ? ` · 業種グループ ${major.code} ${major.name}` : ''}`,
     parent: parent ? secSectorShort(parent.sectorCode, parent.sectorLabel) : null,
     screenerHref: usIndustryScreenerHref(group, parent),
   }

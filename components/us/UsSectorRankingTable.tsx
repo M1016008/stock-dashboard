@@ -2,6 +2,8 @@
 //
 // SEC broad sector / SIC industry の比較表。列見出しで並び順 (指標) を切り替える。
 // - md 以上: 表 (1W / 1M / PES は xl 以上で列を足す)
+//   table-fixed で数値列の幅を固定し、残りを名称列に回す。名称は最大 2 行で折り返し、全文は title で読む。
+//   min-width は各ブレークポイントの本文幅に収まる値にしてあり、横スクロールは本文がさらに狭いときの保険。
 // - md 未満: 2 段のリスト
 // 値は UsMarketGroup のまま。並べ替えは呼び出し側 (sortUsGroups) で済ませた順に描く。
 
@@ -30,8 +32,8 @@ export type UsGroupRowView = {
   title: string
   /** title 属性に出す元の名称 (表示用に整形したとき) */
   rawTitle?: string
-  /** 補足 (正式名・SIC コードなど) */
-  subtitle?: React.ReactNode
+  /** 補足 (正式名・SIC コードなど)。省略表示されても title で全文を読めるよう文字列で受ける */
+  subtitle?: string
   /** 親階層 (industry 表で sector を出す) */
   parent?: string | null
   /** 同ページ内で下の階層へ */
@@ -41,13 +43,17 @@ export type UsGroupRowView = {
   muted?: boolean
 }
 
-const COLUMNS: Array<{ metric: UsSectorMetric; className: string }> = [
-  { metric: '1d', className: '' },
-  { metric: '1w', className: 'hidden xl:table-cell' },
-  { metric: '1m', className: 'hidden xl:table-cell' },
-  { metric: 'pms', className: '' },
-  { metric: 'pfs', className: '' },
-  { metric: 'pes', className: 'hidden xl:table-cell' },
+// 幅は 12px mono の想定最大桁 (騰落率 "-123.45%"、スコア "+0.85") + 左右 padding
+const RETURN_COL = 'w-[4.75rem]'
+const SCORE_COL = 'w-14'
+
+const COLUMNS: Array<{ metric: UsSectorMetric; className: string; width: string }> = [
+  { metric: '1d', className: '', width: RETURN_COL },
+  { metric: '1w', className: 'hidden xl:table-cell', width: RETURN_COL },
+  { metric: '1m', className: 'hidden xl:table-cell', width: RETURN_COL },
+  { metric: 'pms', className: '', width: SCORE_COL },
+  { metric: 'pfs', className: '', width: SCORE_COL },
+  { metric: 'pes', className: 'hidden xl:table-cell', width: SCORE_COL },
 ]
 
 function SortHeader({
@@ -84,7 +90,7 @@ function SortHeader({
 
 function SampleMark({ count }: { count: number }) {
   if (count >= US_SECTOR_SMALL_SAMPLE) return null
-  return <span className="ml-1 text-[9px] font-bold text-[#b45309]" title={`銘柄数 ${count}。平均が少数銘柄に左右されます`}>少数</span>
+  return <span className="ml-1 shrink-0 whitespace-nowrap text-[9px] font-bold text-[#b45309]" title={`銘柄数 ${count}。平均が少数銘柄に左右されます`}>少数</span>
 }
 
 export function UsSectorRankingTable({
@@ -106,23 +112,27 @@ export function UsSectorRankingTable({
   emptyLabel: string
   ariaLabel: string
 }) {
+  // 固定列の合計 + 名称列の最低 200px。768px 時の本文幅 (約 720px) / 1024px / 1280px で横スクロールが出ない値
+  const minWidth = showParent
+    ? 'min-w-[704px] lg:min-w-[856px] xl:min-w-[1064px]'
+    : 'min-w-[704px] xl:min-w-[912px]'
   return (
     <>
       <div className="panel hidden md:block">
         <div className="table-scroll">
-          <table className="w-full min-w-[720px] border-collapse text-[12px] xl:min-w-[980px]" aria-label={ariaLabel}>
+          <table className={`w-full table-fixed border-collapse text-[12px] ${minWidth}`} aria-label={ariaLabel}>
             <thead className="text-[11px]">
               <tr>
                 <th className="w-9 py-2 pl-3 pr-1 text-right font-bold">#</th>
                 <th className="px-2 py-2 text-left font-bold">{firstLabel}</th>
-                {showParent && <th className="hidden px-2 py-2 text-left font-bold lg:table-cell">{parentLabel}</th>}
-                <th className="px-2 py-2 text-right font-bold">銘柄</th>
+                {showParent && <th className="hidden w-[9.5rem] px-2 py-2 text-left font-bold lg:table-cell">{parentLabel}</th>}
+                <th className="w-14 px-2 py-2 text-right font-bold">銘柄</th>
                 {COLUMNS.map((column) => (
-                  <SortHeader key={column.metric} metric={column.metric} active={metric} hrefFor={hrefFor} className={column.className} />
+                  <SortHeader key={column.metric} metric={column.metric} active={metric} hrefFor={hrefFor} className={`${column.width} ${column.className}`} />
                 ))}
-                <SortHeader metric="breadth" active={metric} hrefFor={hrefFor} align="left" className="w-[6.5rem]">PMS+比率</SortHeader>
-                <SortHeader metric="stage1" active={metric} hrefFor={hrefFor}>日A S1</SortHeader>
-                <th className="py-2 pl-2 pr-3 text-right font-bold"><span className="sr-only">操作</span></th>
+                <SortHeader metric="breadth" active={metric} hrefFor={hrefFor} align="left" className="w-24">PMS+比率</SortHeader>
+                <SortHeader metric="stage1" active={metric} hrefFor={hrefFor} className="w-16">日A S1</SortHeader>
+                <th className="w-16 py-2 pl-2 pr-3 text-right font-bold"><span className="sr-only">操作</span></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[var(--color-border-soft)]">
@@ -131,21 +141,27 @@ export function UsSectorRankingTable({
                 return (
                   <tr key={group.key} className={`hover:bg-[var(--color-surface-subtle)] ${row.muted ? 'text-[var(--color-text-tertiary)]' : ''}`}>
                     <td className="py-1.5 pl-3 pr-1 text-right font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]">{index + 1}</td>
-                    <td className="max-w-[300px] px-2 py-1.5">
+                    <td className="px-2 py-1.5">
+                      {/* 名称は識別に必要なため 1 行 ellipsis にせず最大 2 行まで出す (モバイルのリストと同じ扱い) */}
                       <div className="flex min-w-0 items-baseline">
                         {row.drillHref ? (
-                          <Link href={row.drillHref} prefetch={false} className="truncate font-semibold text-[var(--color-brand-700)] hover:underline" title={row.drillLabel}>
+                          <Link href={row.drillHref} prefetch={false} className="line-clamp-2 min-w-0 break-words font-semibold leading-snug text-[var(--color-brand-700)] hover:underline" title={row.drillLabel}>
                             {row.title}
                           </Link>
                         ) : (
-                          <span className="truncate font-semibold text-[var(--color-text-primary)]" title={row.rawTitle ?? row.title}>{row.title}</span>
+                          <span className="line-clamp-2 min-w-0 break-words font-semibold leading-snug text-[var(--color-text-primary)]" title={row.rawTitle ?? row.title}>{row.title}</span>
                         )}
                         <SampleMark count={group.count} />
                       </div>
-                      {row.subtitle && <div className="mt-0.5 truncate text-[10px] text-[var(--color-text-tertiary)]">{row.subtitle}</div>}
-                      {showParent && row.parent && <div className="mt-0.5 truncate text-[10px] text-[var(--color-text-tertiary)] lg:hidden">{row.parent}</div>}
+                      {/* lg 未満は親セクター列を出さないので補足行の頭に付ける */}
+                      {(row.subtitle || (showParent && row.parent)) && (
+                        <div className="mt-0.5 truncate text-[10px] text-[var(--color-text-tertiary)]" title={[showParent ? row.parent : null, row.subtitle].filter(Boolean).join(' · ')}>
+                          {showParent && row.parent && <span className="lg:hidden">{row.parent}{row.subtitle ? ' · ' : ''}</span>}
+                          {row.subtitle}
+                        </div>
+                      )}
                     </td>
-                    {showParent && <td className="hidden max-w-[160px] truncate px-2 py-1.5 text-[11px] text-[var(--color-text-secondary)] lg:table-cell">{row.parent ?? '—'}</td>}
+                    {showParent && <td className="hidden truncate px-2 py-1.5 text-[11px] text-[var(--color-text-secondary)] lg:table-cell" title={row.parent ?? undefined}>{row.parent ?? '—'}</td>}
                     <td className="px-2 py-1.5 text-right font-mono tabular-nums text-[var(--color-text-secondary)]">{fmtCount(group.count)}</td>
                     {COLUMNS.map((column) => {
                       const value = US_SECTOR_METRICS[column.metric].value(group)
