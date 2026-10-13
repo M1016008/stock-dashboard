@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-10-13",
+  "updatedAt": "2026-10-14",
   "benchmark": "JP StockBoard",
   "target": "US StockBoard",
   "statusDefinitions": {
@@ -12,7 +12,7 @@
     "UNVERIFIED": "実装はあるが受入検証が未完了"
   },
   "features": [
-    { "wave": "W1", "feature": "Global navigation and US market switching", "jp": "IMPLEMENTED", "us": "IMPLEMENTED", "functional": "IMPLEMENTED", "visual": "PARTIAL", "data": "IMPLEMENTED", "historical": "NOT_APPLICABLE", "responsive": "UNVERIFIED", "performance": "UNVERIFIED", "claude": "AUDITED", "codexQa": "PENDING", "git": "BASELINE", "production": "LIVE", "remaining": "Cross-market navigation and responsive browser QA" },
+    { "wave": "W1", "feature": "Global navigation and US market switching", "jp": "IMPLEMENTED", "us": "IMPLEMENTED", "functional": "IMPLEMENTED", "visual": "IMPLEMENTED", "data": "IMPLEMENTED", "historical": "NOT_APPLICABLE", "responsive": "IMPLEMENTED", "performance": "IMPLEMENTED", "claude": "BUILT_AND_REVIEWED", "codexQa": "PASS", "git": "MAIN", "production": "PENDING", "remaining": "Header QA is complete; Production promotion is held until the current main candidate's JP Valuation Serving gate is healthy" },
     { "wave": "W2", "feature": "Market dashboard", "jp": "IMPLEMENTED", "us": "IMPLEMENTED", "functional": "IMPLEMENTED", "visual": "IMPLEMENTED", "data": "PARTIAL", "historical": "IMPLEMENTED", "responsive": "IMPLEMENTED", "performance": "IMPLEMENTED", "claude": "BUILT_AND_REVIEWED", "codexQa": "PASS", "git": "MAIN", "production": "LIVE", "remaining": "Earnings/event panels remain data-blocked until approved Finnhub coverage is configured; current market, movers, candidates and physical-ML views are complete" },
     { "wave": "W2", "feature": "Dashboard trade candidates", "jp": "IMPLEMENTED", "us": "IMPLEMENTED", "functional": "IMPLEMENTED", "visual": "IMPLEMENTED", "data": "IMPLEMENTED", "historical": "IMPLEMENTED", "responsive": "IMPLEMENTED", "performance": "IMPLEMENTED", "claude": "BUILT_AND_REVIEWED", "codexQa": "PASS", "git": "MAIN", "production": "LIVE", "remaining": "None for the current deterministic candidate contract" },
     { "wave": "W2", "feature": "Stock preview from discovery surfaces", "jp": "IMPLEMENTED", "us": "IMPLEMENTED", "functional": "IMPLEMENTED", "visual": "IMPLEMENTED", "data": "IMPLEMENTED", "historical": "IMPLEMENTED", "responsive": "IMPLEMENTED", "performance": "IMPLEMENTED", "claude": "BUILT_AND_REVIEWED", "codexQa": "PASS", "git": "MAIN", "production": "LIVE", "remaining": "Some US symbols lack registered display names; preview semantics and date propagation are complete" },
