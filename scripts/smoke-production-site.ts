@@ -698,6 +698,7 @@ const apiChecks: Check[] = [
   { name: 'US ML status', path: '/api/us/ml-status/AAPL', kind: 'json' },
   { name: 'US hex dates', path: '/api/us/hex/available-dates?limit=5', kind: 'json', nonEmptyPaths: ['dates'] },
   { name: 'US hex', path: '/api/us/hex?timeframe=daily', kind: 'json' },
+  { name: 'US hex columnar wire', path: '/api/us/hex?timeframe=daily&wire=us-hex-columnar.v1', kind: 'json' },
 ]
 
 function getPath(value: unknown, dottedPath: string): unknown {

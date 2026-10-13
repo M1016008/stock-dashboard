@@ -1,4 +1,6 @@
 import { US_SEC_SIC_TAXONOMY } from '@/lib/us-classification'
+import type { UsHexTimeframe, UsHexWireRow } from '@/lib/us-hex-wire'
+import { getUsDisplayName } from '@/lib/us-symbol-aliases'
 import { usInvestableSymbolSql } from '@/lib/us-symbol-quality'
 
 export type UsHexRawRow = {
@@ -139,4 +141,107 @@ ORDER BY u.ticker
 
 export function usHexRowsParams(date: string): string[] {
   return [date, date, date, date, date, date, date, date, date, US_SEC_SIC_TAXONOMY]
+}
+
+/** 旧 (legacy-v1) レスポンスの行。compact-v1 と columnar wire はこの行から派生する。 */
+export type UsHexRow = UsHexWireRow & {
+  sector17_name?: string | null
+  sector33_name?: string | null
+  ml_candidate_direction?: 'up' | 'down' | null
+  ml_candidate_rank?: number | null
+  ml_candidate_summary?: string | null
+}
+
+export function numeric(value: unknown): number | null {
+  if (value == null || value === '') return null
+  const parsed = typeof value === 'number' ? value : Number(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+function percentChange(current: number | null, previous: number | null): number | null {
+  if (current == null || previous == null || previous <= 0) return null
+  return 100 * (current - previous) / previous
+}
+
+function stageForTimeframe(row: UsHexRawRow, timeframe: UsHexTimeframe): number | null {
+  if (timeframe === 'weekly') return numeric(row.weekly_a_stage)
+  if (timeframe === 'monthly') return numeric(row.monthly_a_stage)
+  return numeric(row.daily_a_stage)
+}
+
+export function buildUsHexRow(
+  row: UsHexRawRow,
+  timeframe: UsHexTimeframe,
+  physicalMomentum: Map<string, number | null>,
+): UsHexRow {
+  const price = numeric(row.price)
+  const sector = row.sector || 'Unclassified'
+  const stages = [
+    row.daily_a_stage,
+    row.daily_b_stage,
+    row.weekly_a_stage,
+    row.weekly_b_stage,
+    row.monthly_a_stage,
+    row.monthly_b_stage,
+  ]
+  const dataStatus: UsHexRow['data_status'] = price == null
+    ? 'price_pending'
+    : row.snapshot_ticker == null
+      ? 'snapshot_pending'
+      : stages.some((value) => numeric(value) == null)
+        ? 'partial_stage'
+        : 'ready'
+  return {
+    code: row.ticker,
+    name: getUsDisplayName(row.ticker, row.name),
+    sector_large: sector,
+    sector_small: row.industry,
+    sector17_name: sector,
+    sector33_name: row.industry,
+    market_segment: row.exchange,
+    margin_type: row.asset_type || 'Stock',
+    market_cap: row.shares_outstanding && price != null && price > 0 ? row.shares_outstanding * price : 0,
+    price,
+    daily_change: numeric(row.perf_1d),
+    weekly_change: numeric(row.perf_1w),
+    monthly_change: numeric(row.perf_1m),
+    months3_change: numeric(row.perf_3m),
+    months6_change: numeric(row.perf_6m),
+    ytd_change: numeric(row.perf_ytd),
+    data_status: dataStatus,
+    stage: stageForTimeframe(row, timeframe),
+    daily_a_stage: numeric(row.daily_a_stage),
+    daily_b_stage: numeric(row.daily_b_stage),
+    weekly_a_stage: numeric(row.weekly_a_stage),
+    weekly_b_stage: numeric(row.weekly_b_stage),
+    monthly_a_stage: numeric(row.monthly_a_stage),
+    monthly_b_stage: numeric(row.monthly_b_stage),
+    sma_angles: {
+      sma5: percentChange(numeric(row.ma_5), numeric(row.prev_ma_5)),
+      sma25: percentChange(numeric(row.ma_25), numeric(row.prev_ma_25)),
+      sma75: percentChange(numeric(row.ma_75), numeric(row.prev_ma_75)),
+      sma300: percentChange(numeric(row.ma_300), numeric(row.prev_ma_300)),
+    },
+    prev_sma_angles: {
+      sma5: percentChange(numeric(row.prev_ma_5), numeric(row.prev2_ma_5)),
+      sma25: percentChange(numeric(row.prev_ma_25), numeric(row.prev2_ma_25)),
+      sma75: percentChange(numeric(row.prev_ma_75), numeric(row.prev2_ma_75)),
+      sma300: percentChange(numeric(row.prev_ma_300), numeric(row.prev2_ma_300)),
+    },
+    ml_candidate_direction: null,
+    ml_candidate_rank: null,
+    ml_candidate_summary: null,
+    physical_momentum_score: physicalMomentum.get(row.ticker) ?? null,
+  }
+}
+
+/** compact=1: 常に null の ML 列と sector エイリアスを落とした行。columnar wire もこの形を運ぶ。 */
+export function compactUsHexRow(row: UsHexRow): UsHexRow {
+  const compact = { ...row }
+  delete compact.sector17_name
+  delete compact.sector33_name
+  delete compact.ml_candidate_direction
+  delete compact.ml_candidate_rank
+  delete compact.ml_candidate_summary
+  return compact
 }

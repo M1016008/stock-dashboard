@@ -14,6 +14,7 @@ import { MarketDateCalendar } from '@/components/ui/MarketDateCalendar'
 import { replaceCurrentUrlFilters } from '@/lib/client/url-filter-state'
 import { STAGE_BG_COLORS, STAGE_BORDER_COLORS, STAGE_LABELS } from '@/lib/hex-stage'
 import { getUniverseFilterMeta, parseUniverseFilter, UNIVERSE_FILTER_PARAM } from '@/lib/market-universe'
+import { decodeUsHexColumnar, US_HEX_WIRE_PARAM, US_HEX_WIRE_REQUEST } from '@/lib/us-hex-wire'
 
 interface Stock {
   code: string
@@ -139,7 +140,8 @@ export default function HexStageMapView({ market = 'JP' }: { market?: 'JP' | 'US
     setLoading(true)
     setError(null)
     const params = new URLSearchParams({ timeframe })
-    if (isUs) params.set('compact', '1')
+    // US は列指向 wire (明示 version) で受け取り、旧 compact 行と同じ形へ復元する。不正な wire は例外 → エラー表示
+    if (isUs) params.set(US_HEX_WIRE_PARAM, US_HEX_WIRE_REQUEST)
     if (activeUniverse) params.set(UNIVERSE_FILTER_PARAM, activeUniverse)
     if (selectedDate) params.set('date', selectedDate)
 
@@ -148,12 +150,30 @@ export default function HexStageMapView({ market = 'JP' }: { market?: 'JP' | 'US
         const json = await res.json()
         if (!res.ok) throw new Error(json.error ?? json.message ?? 'failed')
         if (cancelled) return
+        if (isUs) {
+          const decoded = decodeUsHexColumnar(json)
+          setData(decoded.rows)
+          setDate(decoded.date)
+          setUsUniverse(decoded.universe)
+          setUsCoverage(decoded.coverage)
+          return
+        }
         setData(json.data ?? [])
         setDate(json.date ?? null)
-        setUsUniverse(isUs ? json.universe ?? null : null)
-        setUsCoverage(isUs ? json.coverage ?? null : null)
+        setUsUniverse(null)
+        setUsCoverage(null)
       })
-      .catch((e) => { if (!cancelled) setError((e as Error).message) })
+      .catch((e) => {
+        if (cancelled) return
+        setError((e as Error).message)
+        // US は前回日付の行・件数を残さない (wire 不正時も別日付の集計を表示しない)
+        if (isUs) {
+          setData([])
+          setDate(null)
+          setUsUniverse(null)
+          setUsCoverage(null)
+        }
+      })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
   }, [timeframe, selectedDate, activeUniverse, isUs])
