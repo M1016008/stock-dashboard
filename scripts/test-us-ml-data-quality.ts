@@ -13,8 +13,9 @@ function runScript(
   script: string,
   databasePath: string,
   extraEnv: Record<string, string> = {},
+  scriptArgs: string[] = [],
 ): SpawnSyncReturns<string> {
-  return spawnSync(tsx, [script], {
+  return spawnSync(tsx, [script, ...scriptArgs], {
     cwd: root,
     env: {
       ...process.env,
@@ -31,6 +32,84 @@ function runScript(
     timeout: 120_000,
     maxBuffer: 10 * 1024 * 1024,
   })
+}
+
+async function testContinuityRepairRunner(): Promise<void> {
+  const databasePath = path.join(temporaryDirectory, 'continuity-repair.db')
+  const client = createClient({ url: `file:${databasePath}` })
+  await executeAll(client, [
+    `CREATE TABLE ohlcv_daily (
+      ticker TEXT NOT NULL,
+      date TEXT NOT NULL,
+      close REAL NOT NULL,
+      PRIMARY KEY (ticker, date)
+    )`,
+    `CREATE TABLE forward_extrema (
+      ticker TEXT NOT NULL,
+      date TEXT NOT NULL,
+      horizon_days INTEGER NOT NULL,
+      end_date TEXT,
+      PRIMARY KEY (ticker, date, horizon_days)
+    )`,
+    `CREATE TABLE forward_returns (
+      ticker TEXT NOT NULL,
+      date TEXT NOT NULL,
+      horizon_days INTEGER NOT NULL,
+      end_date TEXT NOT NULL,
+      PRIMARY KEY (ticker, date, horizon_days)
+    )`,
+    `CREATE TABLE ml_short_labels (
+      ticker TEXT NOT NULL,
+      date TEXT NOT NULL,
+      horizon_days INTEGER NOT NULL,
+      PRIMARY KEY (ticker, date, horizon_days)
+    )`,
+    `CREATE TABLE rl_training_states_v2 (
+      ticker TEXT NOT NULL,
+      date TEXT NOT NULL,
+      horizon_days INTEGER NOT NULL,
+      action TEXT NOT NULL,
+      PRIMARY KEY (ticker, date, horizon_days, action)
+    )`,
+  ])
+  await client.batch([
+    { sql: "INSERT INTO ohlcv_daily VALUES ('REUSED', '2019-03-01', 0.000001)", args: [] },
+    { sql: "INSERT INTO ohlcv_daily VALUES ('REUSED', '2019-03-02', 0.0000011)", args: [] },
+    { sql: "INSERT INTO ohlcv_daily VALUES ('REUSED', '2026-06-01', 90)", args: [] },
+    { sql: "INSERT INTO ohlcv_daily VALUES ('REUSED', '2026-06-02', 91)", args: [] },
+    { sql: "INSERT INTO forward_extrema VALUES ('REUSED', '2019-03-01', 5, '2026-06-01')", args: [] },
+    { sql: "INSERT INTO forward_extrema VALUES ('REUSED', '2026-06-01', 1, '2026-06-02')", args: [] },
+    { sql: "INSERT INTO forward_returns VALUES ('REUSED', '2019-03-01', 5, '2026-06-01')", args: [] },
+    { sql: "INSERT INTO forward_returns VALUES ('REUSED', '2026-06-01', 1, '2026-06-02')", args: [] },
+    { sql: "INSERT INTO ml_short_labels VALUES ('REUSED', '2019-03-01', 5)", args: [] },
+    { sql: "INSERT INTO rl_training_states_v2 VALUES ('REUSED', '2019-03-01', 5, 'wait')", args: [] },
+  ], 'write')
+  client.close()
+
+  const repairEnv = {
+    STOCKBOARD_DB_ROLE: 'us-analytics',
+    US_ANALYTICS_DB_PATH: databasePath,
+  }
+  const dryRun = runScript('scripts/repair-us-ml-continuity.ts', databasePath, repairEnv)
+  assert.equal(dryRun.status, 0, commandOutput(dryRun))
+  assert.match(commandOutput(dryRun), /"mode": "DRY_RUN"/)
+  assert.match(commandOutput(dryRun), /"invalidExtrema": 1/)
+  assert.match(commandOutput(dryRun), /"invalidReturns": 1/)
+
+  const beforeApply = createClient({ url: `file:${databasePath}` })
+  assert.equal(await countRows(beforeApply, 'SELECT COUNT(*) AS count FROM forward_extrema'), 2)
+  beforeApply.close()
+
+  const apply = runScript('scripts/repair-us-ml-continuity.ts', databasePath, repairEnv, ['--apply'])
+  assert.equal(apply.status, 0, commandOutput(apply))
+  assert.match(commandOutput(apply), /"mode": "APPLY"/)
+
+  const verify = createClient({ url: `file:${databasePath}` })
+  assert.equal(await countRows(verify, 'SELECT COUNT(*) AS count FROM forward_extrema'), 1)
+  assert.equal(await countRows(verify, 'SELECT COUNT(*) AS count FROM forward_returns'), 1)
+  assert.equal(await countRows(verify, 'SELECT COUNT(*) AS count FROM ml_short_labels'), 0)
+  assert.equal(await countRows(verify, 'SELECT COUNT(*) AS count FROM rl_training_states_v2'), 0)
+  verify.close()
 }
 
 function commandOutput(result: SpawnSyncReturns<string>): string {
@@ -417,6 +496,7 @@ async function main(): Promise<void> {
     await testEmptyExtremaCleanup()
     await testOrphanCleanup()
     await testSimilarityStrictGate()
+    await testContinuityRepairRunner()
     console.log('US ML data-quality regression passed')
   } finally {
     rmSync(temporaryDirectory, { recursive: true, force: true })
