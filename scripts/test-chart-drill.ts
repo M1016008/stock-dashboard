@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { NextRequest } from 'next/server'
 import { POST } from '../app/api/chart-drill/answer/route'
 import { chartDrillAnswerErrorResponse } from '../lib/chart-drill/http'
@@ -147,6 +148,21 @@ assert.deepEqual(decodeProblemId(validProblemId), validProblemPayload)
 assert.throws(
   () => decodeProblemId('not-base64'),
   (error: unknown) => error instanceof ChartDrillProblemError && error.code === 'INVALID_PROBLEM_ID',
+)
+
+const chartDrillClientSource = readFileSync(
+  new URL('../app/chart-drill/ChartDrillClient.tsx', import.meta.url),
+  'utf8',
+)
+assert.equal(
+  chartDrillClientSource.match(/<div className="min-w-0 space-y-3">/g)?.length,
+  2,
+  'Chart Drill grid columns must remain shrinkable on narrow viewports',
+)
+assert.doesNotMatch(
+  chartDrillClientSource,
+  /<div className="space-y-3">/,
+  'Chart Drill grid columns must not restore the CSS Grid auto minimum width',
 )
 
 async function testAnswerApiErrors() {
