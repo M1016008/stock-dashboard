@@ -7,12 +7,12 @@ type TableRow = { name: string }
 
 const APPLY = process.argv.includes('--apply') || process.env.US_ML_CONTINUITY_APPLY === '1'
 const DIRECT_DEPENDENCIES = [
-  'model_labels',
-  'ml_training_labels',
-  'ml_short_labels',
-  'rl_training_states',
-  'rl_training_states_v2',
-  'ml_prediction_outcomes',
+  { table: 'model_labels', dateColumn: 'date' },
+  { table: 'ml_training_labels', dateColumn: 'date' },
+  { table: 'ml_short_labels', dateColumn: 'date' },
+  { table: 'rl_training_states', dateColumn: 'date' },
+  { table: 'rl_training_states_v2', dateColumn: 'date' },
+  { table: 'ml_prediction_outcomes', dateColumn: 'as_of_date' },
 ] as const
 
 async function tableExists(name: string): Promise<boolean> {
@@ -122,7 +122,7 @@ async function buildRepairPlan(): Promise<void> {
 
 async function applyRepair(): Promise<void> {
   const statements: Parameters<typeof execBatch>[0] = []
-  for (const table of DIRECT_DEPENDENCIES) {
+  for (const { table, dateColumn } of DIRECT_DEPENDENCIES) {
     if (!await tableExists(table)) continue
     statements.push({
       sql: `
@@ -131,7 +131,7 @@ async function applyRepair(): Promise<void> {
           SELECT 1
           FROM continuity_invalid_extrema invalid
           WHERE invalid.ticker = ${table}.ticker
-            AND invalid.date = ${table}.date
+            AND invalid.date = ${table}.${dateColumn}
             AND invalid.horizon_days = ${table}.horizon_days
         )
       `,
