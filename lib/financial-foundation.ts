@@ -7,12 +7,14 @@ export type AccumulationKind = 'STANDALONE' | 'YTD' | 'FY' | 'LTM' | 'INSTANT'
 export type FinancialValueKind = 'duration' | 'instant'
 export type ForecastScope = 'current_fy' | 'next_fy'
 export type ForecastPeriod = 'FY' | 'H1'
+export type FinancialFactSource = 'jquants' | 'sec_companyfacts' | 'calculated'
+export type FinancialDisclosureSource = 'jquants' | 'sec_companyfacts'
 
 export interface FinancialDisclosureEvent {
   eventId: string
   ticker: string
   publishedAt: string
-  source: 'jquants'
+  source: FinancialDisclosureSource
   disclosureId: string
   documentType: string | null
   accountingStandard: AccountingStandard
@@ -40,7 +42,7 @@ export interface NormalizedFinancialFact {
   consolidationScope: ConsolidationScope
   accountingStandard: AccountingStandard
   correctionStatus: string
-  source: 'jquants' | 'calculated'
+  source: FinancialFactSource
   sourceField: string | null
   disclosureId: string
   isDerived: boolean
@@ -138,6 +140,9 @@ const ADDITIVE_DURATION_METRICS = new Set([
   'operating_cash_flow',
   'investing_cash_flow',
   'financing_cash_flow',
+  'capex',
+  'share_repurchases',
+  'cash_dividends_paid',
 ])
 
 function rawRecord(row: JFinsSummaryRow): Record<string, unknown> {
@@ -451,7 +456,17 @@ function latestEligibleFact(
       candidate.periodKind === period
       && candidate.publishedAt <= target.publishedAt
       && candidate.periodEnd < target.periodEnd
-      && derivationGroup(candidate) === derivationGroup(target)
+      && derivationGroup(candidate, false) === derivationGroup(target, false)
+      && (
+        candidate.targetFiscalYear == null
+        || target.targetFiscalYear == null
+        || candidate.targetFiscalYear === target.targetFiscalYear
+      )
+      && (
+        candidate.fiscalYearStart == null
+        || target.fiscalYearStart == null
+        || candidate.fiscalYearStart === target.fiscalYearStart
+      )
     ))
     .sort((a, b) => b.publishedAt.localeCompare(a.publishedAt))[0]
 }
@@ -724,12 +739,15 @@ export function deriveFallbackLtmFacts(
 export function deriveFinancialFacts(facts: NormalizedFinancialFact[]): NormalizedFinancialFact[] {
   const standalone = deriveStandaloneQuarterFacts(facts)
   const standaloneShares = deriveStandaloneWeightedAverageShareFacts(facts)
-  const ltm = deriveLtmFacts(standalone)
+  const sourceStandalone = facts.filter((fact) => !fact.isDerived && fact.accumulationKind === 'STANDALONE')
+  const allStandalone = [...sourceStandalone, ...standalone]
+  const allStandaloneShares = [...sourceStandalone.filter((fact) => fact.metric === 'weighted_average_shares'), ...standaloneShares]
+  const ltm = deriveLtmFacts(allStandalone)
   return [
     ...standalone,
     ...standaloneShares,
     ...ltm,
     ...deriveFallbackLtmFacts(facts, ltm),
-    ...deriveLtmWeightedAverageShareFacts(standaloneShares),
+    ...deriveLtmWeightedAverageShareFacts(allStandaloneShares),
   ]
 }

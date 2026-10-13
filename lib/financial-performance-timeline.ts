@@ -1,6 +1,7 @@
 import type {
   AccountingStandard,
   ConsolidationScope,
+  FinancialFactSource,
   FinancialPeriodKind,
   ForecastScope,
 } from '@/lib/financial-foundation'
@@ -25,7 +26,7 @@ export interface FinancialTimelineValue {
   value: number
   unit: string
   publishedAt: string
-  source: 'jquants' | 'calculated'
+  source: FinancialFactSource
   inputIds: string[]
   definitionVersion: string | null
   yoyPercent: number | null
