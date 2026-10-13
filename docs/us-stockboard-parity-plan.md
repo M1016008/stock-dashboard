@@ -96,6 +96,11 @@ performance, or historical-price parity work.
   `g_ZGu4KOOKQSHow0h0AXl`. Promoted-candidate and Production read-only smoke each passed 160/160;
   Production health/storage are healthy/available, and authenticated friend access loaded the
   overview and dated scanner data while the read-only gateway continued to fail closed on writes.
+- The Stage Screener client now requests the explicit `us-hex-columnar.v1` transport while the
+  legacy and `compact=1` row contracts remain intact. On the 12,451-row live dataset, decoded JSON
+  fell from 10.05 MB to 3.90 MB (61.1%) and gzip transfer from 2.15 MB to 1.61 MB (25.1%).
+  Legacy-versus-decoded rows matched exactly, including null, zero and negative values. Browser QA
+  at 1440, 1024, 768 and 390 px passed with one data request and no overflow or runtime errors.
 
 ### W3B - Market Momentum and SEC SIC Analysis
 

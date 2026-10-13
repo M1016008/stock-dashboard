@@ -2,8 +2,24 @@ import { gzipSync } from 'node:zlib'
 import { NextRequest, NextResponse } from 'next/server'
 import { execAll, execGet } from '@/lib/db/client'
 import { execUsAnalyticsAll, hasUsAnalyticsDb } from '@/lib/db/us-analytics'
-import { US_HEX_ROWS_SQL, usHexRowsParams, type UsHexRawRow } from '@/lib/server/us-hex-serving'
-import { getUsDisplayName } from '@/lib/us-symbol-aliases'
+import {
+  US_HEX_ROWS_SQL,
+  buildUsHexRow,
+  compactUsHexRow,
+  numeric,
+  usHexRowsParams,
+  type UsHexRawRow,
+  type UsHexRow,
+} from '@/lib/server/us-hex-serving'
+import {
+  US_HEX_WIRE_PARAM,
+  US_HEX_WIRE_REQUEST,
+  encodeUsHexColumnar,
+  type UsHexColumnarBody,
+  type UsHexCoverage,
+  type UsHexTimeframe,
+  type UsHexUniverse,
+} from '@/lib/us-hex-wire'
 import { usInvestableSymbolSql, usTestSymbolExclusionSql } from '@/lib/us-symbol-quality'
 
 export const dynamic = 'force-dynamic'
@@ -11,83 +27,23 @@ export const revalidate = 0
 export const fetchCache = 'force-no-store'
 export const maxDuration = 60
 
-type Timeframe = 'daily' | 'weekly' | 'monthly'
+type Timeframe = UsHexTimeframe
 
-type UsHexRow = {
-  code: string
-  name: string
-  sector_large: string
-  sector_small: string | null
-  sector17_name?: string | null
-  sector33_name?: string | null
-  market_segment: string | null
-  margin_type: string | null
-  market_cap: number
-  price: number | null
-  daily_change: number | null
-  weekly_change: number | null
-  monthly_change: number | null
-  months3_change: number | null
-  months6_change: number | null
-  ytd_change: number | null
-  data_status: 'ready' | 'partial_stage' | 'snapshot_pending' | 'price_pending'
-  stage: number | null
-  daily_a_stage: number | null
-  daily_b_stage: number | null
-  weekly_a_stage: number | null
-  weekly_b_stage: number | null
-  monthly_a_stage: number | null
-  monthly_b_stage: number | null
-  sma_angles: {
-    sma5: number | null
-    sma25: number | null
-    sma75: number | null
-    sma300: number | null
-  }
-  prev_sma_angles: {
-    sma5: number | null
-    sma25: number | null
-    sma75: number | null
-    sma300: number | null
-  }
-  ml_candidate_direction?: 'up' | 'down' | null
-  ml_candidate_rank?: number | null
-  ml_candidate_summary?: string | null
-  physical_momentum_score: number | null
-}
+// legacy-v1: 既定 / compact-v1: ?compact=1 / columnar-v1: ?wire=us-hex-columnar.v1 (US Stage Screener 専用)
+type ResponseFormat = 'legacy-v1' | 'compact-v1' | 'columnar-v1'
 
 type CacheValue = {
   expiresAt: number
   hitResponse?: SerializedJson
   payload: {
     success: true
-    data: UsHexRow[]
     count: number
     date: string
     timeframe: Timeframe
     source: 'tiingo'
     universe: UsHexUniverse
     coverage: UsHexCoverage
-  }
-}
-
-type UsHexUniverse = {
-  activeAll: number
-  productionActive: number
-  stocks: number
-  etfs: number
-  mutualFunds: number
-  testSymbols: number
-  excludedArtifacts: number
-}
-
-type UsHexCoverage = {
-  prices: number
-  snapshots: number
-  dailyAStage: number
-  dailyStage: number
-  weeklyStage: number
-  monthlyStage: number
+  } & ({ data: UsHexRow[] } | UsHexColumnarBody)
 }
 
 const CACHE_TTL_MS = 15 * 60 * 1_000
@@ -100,17 +56,6 @@ globalForUsHex.usHexCache = cache
 type SerializedJson = {
   plain: string
   gzip: Uint8Array<ArrayBuffer> | null
-}
-
-function numeric(value: unknown): number | null {
-  if (value == null || value === '') return null
-  const parsed = typeof value === 'number' ? value : Number(value)
-  return Number.isFinite(parsed) ? parsed : null
-}
-
-function percentChange(current: number | null, previous: number | null): number | null {
-  if (current == null || previous == null || previous <= 0) return null
-  return 100 * (current - previous) / previous
 }
 
 function serializeJson(payload: unknown): SerializedJson {
@@ -133,16 +78,6 @@ function serializedJsonResponse(request: NextRequest, serialized: SerializedJson
 
 function jsonResponse(request: NextRequest, payload: unknown): NextResponse {
   return serializedJsonResponse(request, serializeJson(payload))
-}
-
-function compactUsHexRow(row: UsHexRow): UsHexRow {
-  const compact = { ...row }
-  delete compact.sector17_name
-  delete compact.sector33_name
-  delete compact.ml_candidate_direction
-  delete compact.ml_candidate_rank
-  delete compact.ml_candidate_summary
-  return compact
 }
 
 async function resolveDate(requested: string | null): Promise<string | null> {
@@ -180,17 +115,20 @@ async function loadPhysicalMomentum(date: string): Promise<Map<string, number | 
   return new Map(rows.map((row) => [row.symbol, numeric(row.physical_momentum_score)]))
 }
 
-function stageForTimeframe(row: UsHexRawRow, timeframe: Timeframe): number | null {
-  if (timeframe === 'weekly') return numeric(row.weekly_a_stage)
-  if (timeframe === 'monthly') return numeric(row.monthly_a_stage)
-  return numeric(row.daily_a_stage)
-}
-
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
     const requestedDate = searchParams.get('date')
     const compact = searchParams.get('compact') === '1'
+    const wire = searchParams.get(US_HEX_WIRE_PARAM)
+    if (wire != null && wire !== US_HEX_WIRE_REQUEST) {
+      // 未知の wire version は旧形式へ黙ってフォールバックせず、クライアントを fail closed させる
+      return NextResponse.json(
+        { error: 'Unsupported US HEX wire format', supported: [US_HEX_WIRE_REQUEST] },
+        { status: 400 },
+      )
+    }
+    const format: ResponseFormat = wire != null ? 'columnar-v1' : compact ? 'compact-v1' : 'legacy-v1'
     const timeframe: Timeframe = searchParams.get('timeframe') === 'weekly'
       ? 'weekly'
       : searchParams.get('timeframe') === 'monthly'
@@ -200,7 +138,7 @@ export async function GET(request: NextRequest) {
     if (!date) {
       return jsonResponse(request, {
         success: true,
-        data: [],
+        ...(format === 'columnar-v1' ? encodeUsHexColumnar([]) : { data: [] }),
         count: 0,
         date: null,
         timeframe,
@@ -211,7 +149,7 @@ export async function GET(request: NextRequest) {
       })
     }
 
-    const cacheKey = `all-investable-v3:${date}:${timeframe}:${compact ? 'compact-v1' : 'legacy-v1'}`
+    const cacheKey = `all-investable-v3:${date}:${timeframe}:${format}`
     const cached = cache.get(cacheKey)
     if (cached && cached.expiresAt > Date.now()) {
       cached.hitResponse ??= serializeJson({ ...cached.payload, cache: 'hit' })
@@ -235,71 +173,13 @@ export async function GET(request: NextRequest) {
       ),
     ])
 
-    const data: UsHexRow[] = rows.map((row) => {
-      const price = numeric(row.price)
-      const sector = row.sector || 'Unclassified'
-      const stages = [
-        row.daily_a_stage,
-        row.daily_b_stage,
-        row.weekly_a_stage,
-        row.weekly_b_stage,
-        row.monthly_a_stage,
-        row.monthly_b_stage,
-      ]
-      const dataStatus: UsHexRow['data_status'] = price == null
-        ? 'price_pending'
-        : row.snapshot_ticker == null
-          ? 'snapshot_pending'
-          : stages.some((value) => numeric(value) == null)
-            ? 'partial_stage'
-            : 'ready'
-      return {
-        code: row.ticker,
-        name: getUsDisplayName(row.ticker, row.name),
-        sector_large: sector,
-        sector_small: row.industry,
-        sector17_name: sector,
-        sector33_name: row.industry,
-        market_segment: row.exchange,
-        margin_type: row.asset_type || 'Stock',
-        market_cap: row.shares_outstanding && price != null && price > 0 ? row.shares_outstanding * price : 0,
-        price,
-        daily_change: numeric(row.perf_1d),
-        weekly_change: numeric(row.perf_1w),
-        monthly_change: numeric(row.perf_1m),
-        months3_change: numeric(row.perf_3m),
-        months6_change: numeric(row.perf_6m),
-        ytd_change: numeric(row.perf_ytd),
-        data_status: dataStatus,
-        stage: stageForTimeframe(row, timeframe),
-        daily_a_stage: numeric(row.daily_a_stage),
-        daily_b_stage: numeric(row.daily_b_stage),
-        weekly_a_stage: numeric(row.weekly_a_stage),
-        weekly_b_stage: numeric(row.weekly_b_stage),
-        monthly_a_stage: numeric(row.monthly_a_stage),
-        monthly_b_stage: numeric(row.monthly_b_stage),
-        sma_angles: {
-          sma5: percentChange(numeric(row.ma_5), numeric(row.prev_ma_5)),
-          sma25: percentChange(numeric(row.ma_25), numeric(row.prev_ma_25)),
-          sma75: percentChange(numeric(row.ma_75), numeric(row.prev_ma_75)),
-          sma300: percentChange(numeric(row.ma_300), numeric(row.prev_ma_300)),
-        },
-        prev_sma_angles: {
-          sma5: percentChange(numeric(row.prev_ma_5), numeric(row.prev2_ma_5)),
-          sma25: percentChange(numeric(row.prev_ma_25), numeric(row.prev2_ma_25)),
-          sma75: percentChange(numeric(row.prev_ma_75), numeric(row.prev2_ma_75)),
-          sma300: percentChange(numeric(row.prev_ma_300), numeric(row.prev2_ma_300)),
-        },
-        ml_candidate_direction: null,
-        ml_candidate_rank: null,
-        ml_candidate_summary: null,
-        physical_momentum_score: physicalMomentum.get(row.ticker) ?? null,
-      }
-    })
+    const data: UsHexRow[] = rows.map((row) => buildUsHexRow(row, timeframe, physicalMomentum))
 
     const payload: CacheValue['payload'] = {
       success: true,
-      data: compact ? data.map(compactUsHexRow) : data,
+      ...(format === 'columnar-v1'
+        ? encodeUsHexColumnar(data)
+        : { data: format === 'compact-v1' ? data.map(compactUsHexRow) : data }),
       count: data.length,
       date,
       timeframe,

@@ -2,7 +2,14 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 // @ts-expect-error Node 22+ provides node:sqlite; the installed @types/node version predates it.
 import { DatabaseSync } from 'node:sqlite'
-import { US_HEX_ROWS_SQL, usHexRowsParams, type UsHexRawRow } from '@/lib/server/us-hex-serving'
+import {
+  US_HEX_ROWS_SQL,
+  buildUsHexRow,
+  compactUsHexRow,
+  usHexRowsParams,
+  type UsHexRawRow,
+} from '@/lib/server/us-hex-serving'
+import { decodeUsHexColumnar, encodeUsHexColumnar } from '@/lib/us-hex-wire'
 
 const db = new DatabaseSync(':memory:')
 db.exec(`
@@ -125,11 +132,36 @@ assert.equal((US_HEX_ROWS_SQL.match(/JOIN market_ohlcv_daily/g) ?? []).length, 1
 assert.match(US_HEX_ROWS_SQL, /INDEXED BY market_ohlcv_market_date_ticker_idx/)
 assert.doesNotMatch(US_HEX_ROWS_SQL, /LEFT JOIN market_ohlcv_daily/)
 
+// SQL fixture → route と同じ行構築 → columnar wire → decode が compact 行と一致すること
+const momentum = new Map<string, number | null>([['AAA', -1.25]])
+const built = rows.map((row) => buildUsHexRow(row, 'weekly', momentum))
+assert.equal(built[0].stage, 2, 'weekly stage must follow weekly_a_stage')
+assert.equal(built[0].data_status, 'ready')
+assert.equal(built[0].physical_momentum_score, -1.25)
+assert.equal(built[0].sma_angles.sma5, 10)
+assert.ok(Math.abs((built[0].prev_sma_angles.sma5 ?? 0) - 11.1111111111) < 1e-8)
+assert.equal(built[1].data_status, 'price_pending')
+assert.equal(built[1].market_cap, 0)
+assert.equal(built[1].physical_momentum_score, null)
+const compactRows = JSON.parse(JSON.stringify(built.map(compactUsHexRow)))
+const wireBody = JSON.parse(JSON.stringify({
+  success: true,
+  ...encodeUsHexColumnar(built.map(compactUsHexRow)),
+  count: built.length,
+  date: '2026-10-09',
+  timeframe: 'weekly',
+  source: 'tiingo',
+}))
+assert.deepStrictEqual(decodeUsHexColumnar(wireBody).rows, compactRows)
+
 const routeSource = readFileSync('app/api/us/hex/route.ts', 'utf8')
+const servingSource = readFileSync('lib/server/us-hex-serving.ts', 'utf8')
 const viewSource = readFileSync('components/hex/HexStageMapView.tsx', 'utf8')
 assert.match(routeSource, /compact-v1/)
-assert.match(routeSource, /delete compact\.ml_candidate_direction/)
-assert.match(viewSource, /params\.set\('compact', '1'\)/)
+assert.match(routeSource, /columnar-v1/)
+assert.match(servingSource, /delete compact\.ml_candidate_direction/)
+assert.match(viewSource, /params\.set\(US_HEX_WIRE_PARAM, US_HEX_WIRE_REQUEST\)/)
+assert.doesNotMatch(viewSource, /params\.set\('compact', '1'\)/)
 
 db.close()
 console.log('US HEX serving query tests: PASS')
