@@ -153,7 +153,11 @@ performance, or historical-price parity work.
 - Feature `dbe70d1a292fa0f2cf96ef1dcf2726e39b51ea22` was merged without conflict and pushed to
   main as `83df80507149c2f6300182f89d00f7089f5067f8`. Merge-head typecheck, dedicated/shared
   regressions, parity audit and Production build passed.
-- Production switch is intentionally pending. Canonical mount, UUID, DB and free-space checks pass,
-  but the pre-existing Storage Guard incident `f17df02e-9e3f-4bb7-9f50-ffa66e50220e` remains latched
-  after a `DISKUTIL_INFO` probe failure. No candidate or service switch was attempted; formal
-  `storage:recover` review is required before deployment resumes.
+- The pre-existing Storage Guard incident `f17df02e-9e3f-4bb7-9f50-ffa66e50220e` was formally
+  reviewed and resolved after 21 stable identity observations. JP daily serving and the certified
+  Large Holder snapshot were advanced to 2026-10-13 before the Production switch.
+- W3E is live on main `b3f8624995bbac54a5147a573826a20005068c08` as build
+  `I6Vw12p7dc0aYGzyP6Z1o`. Runtime topology and Storage Guard passed, Production smoke passed
+  168/168, and browser QA found no page-level overflow or console error at 1440 and 390 px. A
+  Chart Drill grid auto-minimum-width issue found during Production QA was fixed and protected by
+  a regression assertion before the final deploy.
