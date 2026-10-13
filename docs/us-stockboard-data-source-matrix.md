@@ -24,11 +24,11 @@ Updated: 2026-10-13
 | Current similars | US analytics DB | 10,391 bases / 51,955 rows on 2026-10-09 | `as_of_date <= selected date` | DATA READY | US quality caveats |
 | Universe identity | Tiingo metadata plus observed snapshots | 12,439 active; 21,973 total | Historical membership comes from dated snapshots, not current `active`; current exchange / asset-type metadata may be shown only as reference and cannot filter historical results | DATA PARTIAL | Add effective-dated exchange, asset-type, and delisting history before enabling those historical filters |
 | SEC SIC classification | SEC submissions-derived `market_classifications` | 7,363 tickers; 6,888 active sector / 6,422 active industry | Current rows use sentinel `0000-01-01` and are not historical evidence | DATA PARTIAL | Add effective-dated history before historical filters |
-| Shares outstanding | Current `market_universe.shares_outstanding` | Partial | Current-only; prohibited for historical market cap | DATA PARTIAL | SEC XBRL instant facts with publication timestamps |
+| Shares outstanding | SEC Companyfacts `dei:EntityCommonStockSharesOutstanding` normalized in `normalized_financial_facts` | Normalizer and PIT-serving contract implemented; live US facts are not ingested yet | Filing date is stored conservatively at end-of-day UTC, so a date-only JST query can use the fact only from the following day | DATA PARTIAL | Configure the machine-local SEC operator contact and validate live coverage before replacing current-only universe shares |
 | Earnings calendar | `market_earnings_calendar`, Finnhub contract | Finnhub approved as the source on 2026-10-12; 0 US rows; machine-local credential not configured; scheduler absent | Historical query contract uses `imported_at` cutoff at the selected date and is fixture-tested | DATA MISSING | Configure the approved Finnhub credential outside Git, then validate ingestion and event UI before any Production scheduling |
-| Financial statements | Intended `normalized_financial_facts` | No verified US rows | Filing publication time must be on or before selected date | DATA MISSING | SEC Companyfacts ingestion |
+| Financial statements | SEC Companyfacts normalized in `normalized_financial_facts` | Normalizer, idempotent importer, derived-quarter/LTM facts, API and five-view UI are implemented; Production has 0 verified US fact rows because `SEC_USER_AGENT` is not configured | Companyfacts has a filing date but no exact acceptance time; facts are deliberately unavailable on the filing date and become eligible the following JST date. Amendments retain their later filing boundary | DATA PARTIAL | Configure a machine-local SEC operator contact, run bounded ingestion, then audit US-GAAP/IFRS coverage before Production activation |
 | Forecasts | Intended `financial_forecast_snapshots` | No verified US rows | Forecast publication time must be on or before selected date | DATA MISSING | Requires approved forecast source |
-| Dividends / splits | Existing market data storage | Stored foundation, UI coverage unverified | Event announcement/effective dates must be separate | DATA PARTIAL | Audit and wire shareholder return |
+| Dividends / splits | Tiingo EOD dividend records plus SEC Companyfacts cash-dividend and repurchase facts | Trailing dividend, observed zero, payout and buyback presentation are implemented and fixture-QA'd; live SEC repurchase coverage awaits ingestion | Price-date dividend history is used only through the selected date; a zero dividend is shown only when the EOD coverage spans the complete trailing year | DATA PARTIAL | Validate live Tiingo coverage and SEC repurchase facts after Companyfacts ingestion; split event semantics remain separate |
 | Institutional ownership | None approved for serving | 0 | Filing publication timestamp required | DATA MISSING | Decide SEC 13F and 13D/G product scope |
 | Insider activity | None approved for serving | 0 | SEC filing acceptance timestamp required | DATA MISSING | Consider Form 4 after ownership scope |
 | Short interest | None approved | 0 | Publication date required | DATA MISSING | Approved/licensed source required |
@@ -42,6 +42,31 @@ Updated: 2026-10-13
 3. Missing data remains unavailable; Claude and deterministic presentation code do not invent values.
 4. US equivalents preserve the JP feature's analytical intent, not necessarily its Japanese regulatory label.
 5. Paid, licensed, or legally ambiguous sources remain blocked until the user approves the source.
+
+## W4 worktree evidence
+
+- SEC Companyfacts is normalized into the shared financial fact contract without adding a schema
+  migration. Approved US-GAAP concepts cover revenue, profit, EPS, balance sheet, cash flow,
+  shares, dividends, repurchases and capex. Overlapping fallback concepts are deduplicated by
+  filing context while non-overlapping history is retained.
+- The PIT policy is intentionally conservative because Companyfacts exposes `filed` but not the
+  exact EDGAR acceptance timestamp: a date-only JST analysis cannot see a filing until the next
+  date. Amendment facts retain their own later filing boundary, and future filings are excluded.
+- The US Stock Detail fundamentals workspace provides Summary, Performance, Financials,
+  Valuation and Shareholder Return views. Forecasts, peer distributions and historical valuation
+  ranges are explicitly unavailable; the UI makes no cheap/expensive or strength/weakness claim
+  without an approved comparison basis.
+- Missing, not meaningful and observed zero remain distinct. Negative earnings produce N/M rather
+  than a zero PER; zero dividends are shown only after a complete trailing-year EOD coverage check.
+  FCF combines matching-period cash flow and capex, and ROE uses LTM net income over average opening
+  and closing equity.
+- Claude Opus 5.5 (`claude.ai`, firstParty, Pro) implemented the local information hierarchy and
+  completed one semantic revision. Codex fixture, PIT, calculation, UI-contract, JP financial
+  timeline regression, typecheck, production build and 1440/1024/768/390 browser QA passed without
+  page overflow, console error, failed request or duplicate fundamentals request.
+- Live ingestion remains blocked only by the absent machine-local `SEC_USER_AGENT` operator contact.
+  The batch fails before network or DB access when it is missing. No contact, credential, API key,
+  SEC payload, fixture or Production DB row is stored in Git.
 
 ## W3 runtime evidence
 

@@ -7,6 +7,7 @@ import {
   BrainCircuit,
   ChartCandlestick,
   GitCompareArrows,
+  Landmark,
   LayoutDashboard,
   Loader2,
   NotebookPen,
@@ -27,6 +28,10 @@ import {
 import { UsOverviewWorkspace } from '@/components/us/stock-detail/UsOverviewWorkspace'
 import { UsChartWorkspace } from '@/components/us/stock-detail/UsChartWorkspace'
 import { UsMlDataStatus } from '@/components/us/stock-detail/UsMlDataStatus'
+import {
+  UsFundamentalsWorkspace,
+  type UsFundamentalView,
+} from '@/components/us/stock-detail/UsFundamentalsWorkspace'
 import { useUsPhysicalMomentum } from '@/components/us/stock-detail/useUsPhysicalMomentum'
 import type { StockQuote } from '@/types/stock'
 import type { NextUsEarnings } from '@/lib/queries/us-earnings'
@@ -38,7 +43,15 @@ import {
 } from '@/lib/client/stock-workspace'
 
 type Status = 'idle' | 'loading' | 'ready' | 'error'
-type UsStockDetailTab = 'overview' | 'chart' | 'scenario' | 'ml'
+type UsStockDetailTab = 'overview' | 'chart' | 'fundamental' | 'scenario' | 'ml'
+
+// JP と同じハッシュ: #fundamental はサマリー、それ以外のサブビューは個別ハッシュ
+const US_FUNDAMENTAL_HASHES: Record<Exclude<UsFundamentalView, 'summary'>, string> = {
+  performance: 'performance',
+  financial: 'financial',
+  valuation: 'valuation',
+  returns: 'returns',
+}
 
 export function UsStockDetailClient({
   ticker,
@@ -61,6 +74,7 @@ export function UsStockDetailClient({
   const [showActual, setShowActual] = useState(false)
   const [analysisReview, setAnalysisReview] = useState<StockAnalysisReview | null>(null)
   const [activeTab, setActiveTab] = useState<UsStockDetailTab>('overview')
+  const [fundamentalView, setFundamentalView] = useState<UsFundamentalView>('summary')
   const [compared, setCompared] = useState(false)
 
   useEffect(() => {
@@ -163,6 +177,12 @@ export function UsStockDetailClient({
       const hash = window.location.hash.replace('#', '')
       if (hash === 'chart' || hash === 'scenario' || hash === 'ml' || hash === 'overview') {
         setActiveTab(hash)
+      } else if (hash === 'fundamental') {
+        setActiveTab('fundamental')
+        setFundamentalView('summary')
+      } else if (hash === 'performance' || hash === 'financial' || hash === 'valuation' || hash === 'returns') {
+        setActiveTab('fundamental')
+        setFundamentalView(hash)
       }
     }
     const syncCompared = () => setCompared(isComparedSymbol('US', quote.ticker))
@@ -179,8 +199,17 @@ export function UsStockDetailClient({
 
   const selectTab = (tab: UsStockDetailTab) => {
     setActiveTab(tab)
+    if (tab === 'fundamental') setFundamentalView('summary')
     const url = new URL(window.location.href)
     url.hash = tab
+    window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`)
+  }
+
+  const selectFundamentalView = (view: UsFundamentalView) => {
+    setActiveTab('fundamental')
+    setFundamentalView(view)
+    const url = new URL(window.location.href)
+    url.hash = view === 'summary' ? 'fundamental' : US_FUNDAMENTAL_HASHES[view]
     window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`)
   }
 
@@ -315,6 +344,15 @@ export function UsStockDetailClient({
         />
       )}
 
+      {analysisParamsReady && activeTab === 'fundamental' && (
+        <UsFundamentalsWorkspace
+          ticker={quote.ticker}
+          analysisDate={analysisDate}
+          view={fundamentalView}
+          onViewChange={selectFundamentalView}
+        />
+      )}
+
       {/* 読み順: 価格の見通し(投影) → 値動きの区間 → 自分のメモ → AI */}
       {analysisParamsReady && activeTab === 'scenario' && (
         <>
@@ -370,6 +408,7 @@ function UsStockDetailTabs({
   const tabs = [
     { id: 'overview' as const, label: '概要', icon: LayoutDashboard },
     { id: 'chart' as const, label: 'チャート・6ステージ', icon: ChartCandlestick },
+    { id: 'fundamental' as const, label: 'ファンダメンタル', icon: Landmark },
     { id: 'scenario' as const, label: 'シナリオ', icon: NotebookPen },
     { id: 'ml' as const, label: '類似・ML', icon: BrainCircuit },
   ]

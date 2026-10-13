@@ -5,6 +5,7 @@ import {
   normalizeJQuantsFinancialRows,
   selectForecastsAsOf,
   type FinancialForecastSnapshot,
+  type NormalizedFinancialDataset,
   type NormalizedFinancialFact,
 } from '@/lib/financial-foundation'
 import { calculateFinancialMetrics, type CalculatedFinancialMetric } from '@/lib/financial-metrics'
@@ -23,6 +24,77 @@ export interface FinancialFoundationWriteResult {
 
 export interface FinancialFoundationWriteOptions {
   deferDerivedAndMetrics?: boolean
+}
+
+async function upsertNormalizedDatasetRows(
+  normalized: NormalizedFinancialDataset,
+  importedAt: number,
+): Promise<void> {
+  await writeChunks(normalized.disclosures.map((event) => ({
+    sql: `
+      INSERT INTO financial_disclosures (
+        event_id, ticker, published_at, source, disclosure_id, document_type,
+        accounting_standard, correction_status, metadata_json, imported_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(event_id) DO UPDATE SET
+        published_at = excluded.published_at,
+        document_type = excluded.document_type,
+        accounting_standard = excluded.accounting_standard,
+        correction_status = excluded.correction_status,
+        metadata_json = excluded.metadata_json,
+        imported_at = excluded.imported_at
+    `,
+    args: [
+      event.eventId, event.ticker, event.publishedAt, event.source, event.disclosureId,
+      event.documentType, event.accountingStandard, event.correctionStatus,
+      event.metadataJson, importedAt,
+    ],
+  })))
+  await writeChunks(normalized.facts.map((fact) => factInsert(fact, importedAt)))
+  await writeChunks(normalized.forecasts.map((snapshot) => ({
+    sql: `
+      INSERT INTO financial_forecast_snapshots (
+        snapshot_id, event_id, ticker, published_at, target_fiscal_year,
+        target_period_start, target_period_end, forecast_scope, forecast_period,
+        metric, value, unit, currency, consolidation_scope, accounting_standard,
+        source, source_field, disclosure_id, imported_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(snapshot_id) DO UPDATE SET
+        published_at = excluded.published_at,
+        value = excluded.value,
+        target_period_start = excluded.target_period_start,
+        target_period_end = excluded.target_period_end,
+        accounting_standard = excluded.accounting_standard,
+        imported_at = excluded.imported_at
+    `,
+    args: [
+      snapshot.snapshotId, snapshot.eventId, snapshot.ticker, snapshot.publishedAt,
+      snapshot.targetFiscalYear, snapshot.targetPeriodStart, snapshot.targetPeriodEnd,
+      snapshot.forecastScope, snapshot.forecastPeriod, snapshot.metric, snapshot.value,
+      snapshot.unit, snapshot.currency, snapshot.consolidationScope,
+      snapshot.accountingStandard, snapshot.source, snapshot.sourceField,
+      snapshot.disclosureId, importedAt,
+    ],
+  })))
+}
+
+export async function upsertNormalizedFinancialDataset(
+  normalized: NormalizedFinancialDataset,
+  importedAt = Math.floor(Date.now() / 1000),
+  options: { includeDerivedFacts?: boolean } = {},
+): Promise<FinancialFoundationWriteResult> {
+  const derived = options.includeDerivedFacts ? deriveFinancialFacts(normalized.facts) : []
+  await upsertNormalizedDatasetRows(
+    { ...normalized, facts: [...normalized.facts, ...derived] },
+    importedAt,
+  )
+  return {
+    disclosures: normalized.disclosures.length,
+    facts: normalized.facts.length,
+    derivedFacts: derived.length,
+    forecasts: normalized.forecasts.length,
+    calculatedMetrics: 0,
+  }
 }
 
 export interface FinancialFoundationRebuildResult {
@@ -319,53 +391,7 @@ export async function upsertFinancialFoundationRows(
   options: FinancialFoundationWriteOptions = {},
 ): Promise<FinancialFoundationWriteResult> {
   const normalized = normalizeJQuantsFinancialRows(rows)
-
-  await writeChunks(normalized.disclosures.map((event) => ({
-    sql: `
-      INSERT INTO financial_disclosures (
-        event_id, ticker, published_at, source, disclosure_id, document_type,
-        accounting_standard, correction_status, metadata_json, imported_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(event_id) DO UPDATE SET
-        published_at = excluded.published_at,
-        document_type = excluded.document_type,
-        accounting_standard = excluded.accounting_standard,
-        correction_status = excluded.correction_status,
-        metadata_json = excluded.metadata_json,
-        imported_at = excluded.imported_at
-    `,
-    args: [
-      event.eventId, event.ticker, event.publishedAt, event.source, event.disclosureId,
-      event.documentType, event.accountingStandard, event.correctionStatus,
-      event.metadataJson, importedAt,
-    ],
-  })))
-  await writeChunks(normalized.facts.map((fact) => factInsert(fact, importedAt)))
-  await writeChunks(normalized.forecasts.map((snapshot) => ({
-    sql: `
-      INSERT INTO financial_forecast_snapshots (
-        snapshot_id, event_id, ticker, published_at, target_fiscal_year,
-        target_period_start, target_period_end, forecast_scope, forecast_period,
-        metric, value, unit, currency, consolidation_scope, accounting_standard,
-        source, source_field, disclosure_id, imported_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(snapshot_id) DO UPDATE SET
-        published_at = excluded.published_at,
-        value = excluded.value,
-        target_period_start = excluded.target_period_start,
-        target_period_end = excluded.target_period_end,
-        accounting_standard = excluded.accounting_standard,
-        imported_at = excluded.imported_at
-    `,
-    args: [
-      snapshot.snapshotId, snapshot.eventId, snapshot.ticker, snapshot.publishedAt,
-      snapshot.targetFiscalYear, snapshot.targetPeriodStart, snapshot.targetPeriodEnd,
-      snapshot.forecastScope, snapshot.forecastPeriod, snapshot.metric, snapshot.value,
-      snapshot.unit, snapshot.currency, snapshot.consolidationScope,
-      snapshot.accountingStandard, snapshot.source, snapshot.sourceField,
-      snapshot.disclosureId, importedAt,
-    ],
-  })))
+  await upsertNormalizedDatasetRows(normalized, importedAt)
 
   let derivedFacts = 0
   let calculatedMetrics = 0

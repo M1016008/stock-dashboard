@@ -22,7 +22,7 @@ The machine-readable source of truth is `docs/us-stockboard-parity-board.json`. 
 - Forecast consensus requires an approved source.
 - Short-interest serving requires an approved/licensed source.
 - Institutional ownership scope requires a product choice between 13F, 13D/G, and insider Form 4 views.
-- Historical market cap requires point-in-time shares outstanding.
+- Live historical market cap activation requires SEC Companyfacts ingestion; the point-in-time shares contract is implemented but the machine-local SEC operator contact is not configured.
 - Historical classification filters require effective-dated classification history.
 
 These blockers do not stop technical, discovery, chart, Stage, scenario, ML, responsive,
@@ -161,3 +161,24 @@ performance, or historical-price parity work.
   168/168, and browser QA found no page-level overflow or console error at 1440 and 390 px. A
   Chart Drill grid auto-minimum-width issue found during Production QA was fixed and protected by
   a regression assertion before the final deploy.
+
+### W4 - Fundamentals, Valuation and Shareholder Return
+
+- SEC Companyfacts now maps approved US-GAAP concepts into the shared normalized financial fact
+  contract and reuses the existing quarter/LTM derivation engine without a schema migration. The
+  importer is bounded, rate-limited and requires a machine-local operator contact before any SEC
+  request or DB access.
+- Historical serving is fail closed. Companyfacts lacks an exact EDGAR acceptance time, so filing
+  dates are conservatively eligible only from the following JST date; later amendments keep their
+  own publication boundary. Current-only universe shares are not used as historical valuation
+  evidence.
+- US Stock Detail now has five fundamentals views: Summary, Performance, Financials, Valuation and
+  Shareholder Return. Missing, N/M, N/A and observed zero are distinct; forecasts, peer valuation
+  and historical valuation ranges remain visibly unavailable instead of being inferred.
+- Claude Opus 5.5 (`claude.ai`, firstParty, Pro) implemented the local presentation and completed
+  one semantic revision. Codex SEC normalization/PIT, calculation, UI-contract, JP timeline
+  regression, typecheck, production build and 1440/1024/768/390 browser QA passed, including loss,
+  negative cash flow, zero dividend and partial-coverage fixtures.
+- The implementation is ready for a Git checkpoint, but live activation remains data-blocked:
+  Production contains no verified US Companyfacts rows and `SEC_USER_AGENT` is not configured.
+  Forecast consensus still requires a separately approved source. No Production deploy is claimed.
