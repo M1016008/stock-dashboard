@@ -1,6 +1,6 @@
 # US StockBoard JP Parity Program
 
-Updated: 2026-10-13
+Updated: 2026-10-14
 
 The machine-readable source of truth is `docs/us-stockboard-parity-board.json`. Run
 `npm run audit:us-jp-parity` after every wave. The data contract is maintained in
@@ -24,6 +24,9 @@ The machine-readable source of truth is `docs/us-stockboard-parity-board.json`. 
 - Institutional ownership scope requires a product choice between 13F, 13D/G, and insider Form 4 views.
 - Live historical market cap activation requires SEC Companyfacts ingestion; the point-in-time shares contract is implemented but the machine-local SEC operator contact is not configured.
 - Historical classification filters require effective-dated classification history.
+- The current main candidate cannot serve the JP integrated Screener for 2026-10-14 because no
+  Valuation Serving snapshot is available on or before that date. Production remains healthy;
+  promotion is held until the candidate data gate is restored.
 
 These blockers do not stop technical, discovery, chart, Stage, scenario, ML, responsive,
 performance, or historical-price parity work.
@@ -51,6 +54,19 @@ performance, or historical-price parity work.
 - Dedicated Stock Detail parity tests, relevant shared regressions, typecheck and production build
   passed. The W1 implementation is live in Production; authenticated friend-access stock-detail
   coverage remains tracked by the global access matrix.
+
+### W1 - Global navigation and market switching closure
+
+- Claude Opus 5.5 (`claude.ai`, firstParty, Pro) consolidated JP, US and commodity switching into
+  one explicit route contract without mapping ticker identities across markets.
+- Counterpart routes cover dashboards, momentum, sectors, MTF, screeners, Stage screeners,
+  Trigger Discovery, AI research, MA Lens, transitions, backtests and chart drill. Shared and
+  market-only routes fail conservatively to the target market home.
+- Codex verified all 13 routing cases, keyboard focus, and JP-US-JP browser navigation. Browser QA
+  passed at 1440, 1024, 768 and 390 px with one switch, one active market, zero body overflow and
+  no Header-originated console or HTTP errors.
+- Production promotion remains pending because the latest main candidate's JP integrated Screener
+  is blocked by the separate Valuation Serving availability gate documented above.
 
 ### W2 - Dashboard, Screener, Preview, Search and Historical Date
 

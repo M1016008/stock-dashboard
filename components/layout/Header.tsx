@@ -38,6 +38,12 @@ import {
   type NavigationEntry,
   type PageId,
 } from '@/components/layout/navigation'
+import {
+  buildMarketSwitchLinks,
+  hrefPath,
+  resolveHeaderArea,
+  type MarketSwitchLink,
+} from '@/components/layout/market-switch'
 
 interface ClockData {
   date: string
@@ -125,7 +131,7 @@ function getNyseStatus(): 'open' | 'closed' {
 
 function ClockChip({ label, time }: { label: string; time: string }) {
   return (
-    <span className="inline-flex h-6 items-center gap-1.5 rounded-[3px] border border-[var(--color-border-default)] bg-white px-2 tabular-nums">
+    <span className="inline-flex h-full items-center gap-1.5 px-2 tabular-nums">
       <span className="text-[10px] font-bold text-[var(--color-brand-700)]">{label}</span>
       <span
         className="text-[11px] font-semibold text-[var(--color-text-primary)]"
@@ -134,6 +140,49 @@ function ClockChip({ label, time }: { label: string; time: string }) {
         {time || '--:--:--'}
       </span>
     </span>
+  )
+}
+
+function ClockGroup({ clocks }: { clocks: ClockData }) {
+  return (
+    <span className="inline-flex h-6 items-center divide-x divide-[var(--color-border-default)] rounded-[3px] border border-[var(--color-border-default)] bg-white">
+      <ClockChip label="TYO" time={clocks.jst} />
+      <ClockChip label="LDN" time={clocks.ldn} />
+      <ClockChip label="NYC" time={clocks.nyc} />
+    </span>
+  )
+}
+
+function MarketSwitch({ links }: { links: readonly MarketSwitchLink[] }) {
+  return (
+    <nav
+      aria-label="市場切替"
+      className="header-market-switcher shrink-0 items-center gap-0.5 rounded-[4px] border border-[var(--color-border-default)] bg-white p-0.5"
+    >
+      <Globe2 size={13} aria-hidden="true" className="header-market-switch-icon ml-1 mr-0.5 text-[var(--color-text-tertiary)]" />
+      {links.map((link) => (
+        <Link
+          key={link.area}
+          href={link.href}
+          prefetch={false}
+          aria-current={link.active ? 'true' : undefined}
+          title={link.title}
+          data-market-switch={link.area}
+          data-market-switch-destination={link.destination}
+          className={`inline-flex h-7 min-w-[30px] items-center justify-center rounded-[3px] px-1.5 text-[11px] font-bold leading-none transition-colors lg:px-2.5 ${
+            link.active
+              ? 'bg-[var(--color-brand-800)] text-white shadow-[inset_0_-2px_0_rgba(0,0,0,0.18)]'
+              : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-subtle)] hover:text-[var(--color-brand-800)]'
+          }`}
+        >
+          <span className="header-market-switch-long whitespace-nowrap">{link.label}</span>
+          <span className="header-market-switch-short whitespace-nowrap">
+            {link.shortLabel}
+            <span className="sr-only"> {link.label}</span>
+          </span>
+        </Link>
+      ))}
+    </nav>
   )
 }
 
@@ -149,10 +198,6 @@ function NavIcon({ icon: Icon, active }: { icon: LucideIcon; active: boolean }) 
       <Icon size={14} strokeWidth={2.25} />
     </span>
   )
-}
-
-function hrefPath(href: string): string {
-  return href.split(/[?#]/)[0] || '/'
 }
 
 type SearchApiResult = {
@@ -602,14 +647,7 @@ export function Header() {
   const pathname = usePathname()
   const searchParams = useSearchParams()
   const requestedMarket = searchParams.get('market')
-  const area = pathname.startsWith('/commodities')
-    || (pathname.startsWith('/ai/') && requestedMarket === 'COMMODITY')
-    ? 'commodities'
-    : pathname.startsWith('/us')
-      || (pathname.startsWith('/ai/') && requestedMarket === 'US')
-      || (pathname === '/chart-drill' && requestedMarket?.toUpperCase() === 'US')
-      ? 'us'
-      : 'jp'
+  const area = resolveHeaderArea(pathname, requestedMarket)
   const isUsArea = area === 'us'
   const isCommodityArea = area === 'commodities'
   const navItems: readonly NavigationEntry[] = NAVIGATION_BY_AREA[area]
@@ -622,6 +660,7 @@ export function Header() {
   const clocks = useClocks()
   const activeUniverse = area === 'jp' ? parseUniverseFilter(searchParams.get(UNIVERSE_FILTER_PARAM)) : null
   const activeUniverseMeta = getUniverseFilterMeta(activeUniverse)
+  const marketSwitchLinks = buildMarketSwitchLinks({ pathname, marketParam: requestedMarket, universe: activeUniverse })
 
   useEffect(() => {
     const getStatus = () => {
@@ -777,7 +816,7 @@ export function Header() {
   return (
     <header className="relative z-30 border-b border-[var(--color-border-strong)] bg-white shadow-[0_1px_3px_rgba(16,32,52,0.12)]">
       <div className="border-b border-[var(--color-border-default)] bg-[var(--color-surface-subtle)]">
-        <div className="header-top-row page-wide flex min-h-10 flex-wrap items-center justify-between gap-2 py-1 sm:py-1.5">
+        <div className="header-top-row page-wide flex min-h-10 flex-wrap items-center justify-between gap-1.5 py-0.5 sm:gap-2 sm:py-1.5">
           <Link
             href={isCommodityArea ? '/commodities' : isUsArea ? '/us' : scopedHref('/')}
             prefetch={false}
@@ -795,30 +834,7 @@ export function Header() {
             </div>
           </Link>
 
-          <div className="header-market-switcher shrink-0 items-center gap-1 rounded-[4px] border border-[var(--color-border-default)] bg-white p-1">
-            <Globe2 size={13} className="ml-1 text-[var(--color-text-tertiary)]" />
-            <Link
-              href={scopedHref('/')}
-              prefetch={false}
-              className={`rounded-[3px] px-2 py-1 text-[11px] font-bold ${area === 'jp' ? 'bg-[var(--color-brand-800)] text-white' : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-subtle)]'}`}
-            >
-              日本株
-            </Link>
-            <Link
-              href="/us"
-              prefetch={false}
-              className={`rounded-[3px] px-2 py-1 text-[11px] font-bold ${isUsArea ? 'bg-[var(--color-brand-800)] text-white' : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-subtle)]'}`}
-            >
-              米国株
-            </Link>
-            <Link
-              href="/commodities"
-              prefetch={false}
-              className={`rounded-[3px] px-2 py-1 text-[11px] font-bold ${isCommodityArea ? 'bg-[var(--color-brand-800)] text-white' : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-subtle)]'}`}
-            >
-              コモディティ
-            </Link>
-          </div>
+          <MarketSwitch links={marketSwitchLinks} />
 
           <TickerQuickSearch area={area} />
 
@@ -838,45 +854,6 @@ export function Header() {
               <span>{activeUniverseMeta?.shortLabel ?? '日経225'}</span>
             </Link>
           )}
-
-          <div className="header-market-switcher-compact shrink-0 items-center gap-0.5 rounded-[4px] border border-[var(--color-border-default)] bg-white p-0.5 sm:gap-1 sm:p-1">
-            <Link
-              href={scopedHref('/')}
-              prefetch={false}
-              className={`rounded-[3px] px-1.5 py-1 text-[11px] font-bold sm:px-2 ${area === 'jp' ? 'bg-[var(--color-brand-800)] text-white' : 'text-[var(--color-text-secondary)]'}`}
-            >
-              JP
-            </Link>
-            {area === 'jp' && (
-              <Link
-                href={universeToggleHref('nikkei225')}
-                prefetch={false}
-                aria-pressed={activeUniverse === 'nikkei225'}
-                className={`hidden rounded-[3px] px-2 py-1 text-[11px] font-bold ${
-                  activeUniverse === 'nikkei225'
-                    ? 'bg-[var(--color-market-red)] text-white'
-                    : 'text-[var(--color-text-secondary)]'
-                }`}
-                title={activeUniverseMeta ? `${activeUniverseMeta.label}フィルターを解除` : '日経225採用銘柄だけに絞り込み'}
-              >
-                N225
-              </Link>
-            )}
-            <Link
-              href="/us"
-              prefetch={false}
-              className={`rounded-[3px] px-1.5 py-1 text-[11px] font-bold sm:px-2 ${isUsArea ? 'bg-[var(--color-brand-800)] text-white' : 'text-[var(--color-text-secondary)]'}`}
-            >
-              US
-            </Link>
-            <Link
-              href="/commodities"
-              prefetch={false}
-              className={`rounded-[3px] px-1.5 py-1 text-[11px] font-bold sm:px-2 ${isCommodityArea ? 'bg-[var(--color-brand-800)] text-white' : 'text-[var(--color-text-secondary)]'}`}
-            >
-              COM
-            </Link>
-          </div>
 
           <div ref={clockRef} className="header-market-context relative shrink-0 items-center gap-1.5">
             <span className="inline-flex h-6 items-center gap-1 rounded-[3px] border border-[var(--color-border-default)] bg-white px-1.5 text-[10px] font-bold text-[var(--color-text-secondary)] sm:gap-1.5 sm:px-2 sm:text-[11px]">
@@ -901,10 +878,8 @@ export function Header() {
               <span className="header-market-short-label">{clocks.shortDate || '--/--'}</span>
               <span className="header-market-long-label">{clocks.date || '----/--/--'}</span>
             </span>
-            <div className="header-clock-inline items-center gap-1.5">
-              <ClockChip label="TYO" time={clocks.jst} />
-              <ClockChip label="LDN" time={clocks.ldn} />
-              <ClockChip label="NYC" time={clocks.nyc} />
+            <div className="header-clock-inline items-center">
+              <ClockGroup clocks={clocks} />
             </div>
             <button
               type="button"
@@ -916,10 +891,8 @@ export function Header() {
               <Clock3 size={12} />
             </button>
             {clocksOpen && (
-              <div className="header-clock-popover absolute right-0 top-[calc(100%+5px)] z-[75] items-center gap-1.5 rounded-[4px] border border-[var(--color-border-strong)] bg-white p-2 shadow-[0_12px_28px_rgba(16,32,52,0.22)]">
-                <ClockChip label="TYO" time={clocks.jst} />
-                <ClockChip label="LDN" time={clocks.ldn} />
-                <ClockChip label="NYC" time={clocks.nyc} />
+              <div className="header-clock-popover absolute right-0 top-[calc(100%+5px)] z-[75] items-center rounded-[4px] border border-[var(--color-border-strong)] bg-white p-2 shadow-[0_12px_28px_rgba(16,32,52,0.22)]">
+                <ClockGroup clocks={clocks} />
               </div>
             )}
           </div>
