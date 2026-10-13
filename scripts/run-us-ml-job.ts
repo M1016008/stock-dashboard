@@ -598,6 +598,14 @@ async function runFullHistory(
       ML_SHORT_WRITE_RL_STATES: '1',
     })
   }
+  if (env.US_ML_SKIP_SIMILARITY_EVAL === '1') {
+    console.log('US ML full-history: skipping similarity evaluation by US_ML_SKIP_SIMILARITY_EVAL=1')
+  } else {
+    await runNpm('batch:ml-similarity-evaluate', env, {
+      ML_SIMILARITY_EVAL_HORIZONS: horizons,
+      ML_SIMILARITY_EVAL_STRICT: '1',
+    })
+  }
   await runNpm('batch:ml-rl-policy', env, {
     ML_RL_HORIZONS: horizons,
     ML_RL_RECENT_DAYS: env.US_ML_RL_RECENT_DAYS ?? weeklyRecentDays,

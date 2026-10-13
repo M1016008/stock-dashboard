@@ -41,6 +41,34 @@ function laterDate(a: string | null, b: string | null): string | null {
   return a ?? b
 }
 
+async function deleteOrphanLabels(startDate: string | null, endDate: string | null): Promise<void> {
+  const orphanWhere = [`labels.horizon_days IN (${horizonPlaceholders()})`]
+  const orphanArgs: Array<string | number> = [...HORIZONS]
+  if (startDate) {
+    orphanWhere.push('labels.date >= ?')
+    orphanArgs.push(startDate)
+  }
+  if (endDate) {
+    orphanWhere.push('labels.date <= ?')
+    orphanArgs.push(endDate)
+  }
+
+  await execRun(
+    `
+    DELETE FROM ml_short_labels AS labels
+    WHERE ${orphanWhere.join(' AND ')}
+      AND NOT EXISTS (
+        SELECT 1
+        FROM forward_extrema fe
+        WHERE fe.ticker = labels.ticker
+          AND fe.date = labels.date
+          AND fe.horizon_days = labels.horizon_days
+      )
+    `,
+    orphanArgs,
+  )
+}
+
 async function syncLabelsForRange(startDate: string | null, endDate: string | null): Promise<void> {
   const where = [`fe.horizon_days IN (${horizonPlaceholders()})`]
   const args: Array<string | number> = [...HORIZONS]
@@ -217,6 +245,29 @@ async function existingLabelDateBounds(startDate: string | null, endDate: string
   return { minDate, maxDate }
 }
 
+async function deleteOrphanRlStates(startDate: string | null, endDate: string | null): Promise<void> {
+  await execRun(
+    `
+    DELETE FROM rl_training_states_v2 AS states
+    WHERE states.horizon_days IN (${horizonPlaceholders()})
+      ${startDate ? 'AND states.date >= ?' : ''}
+      ${endDate ? 'AND states.date <= ?' : ''}
+      AND NOT EXISTS (
+        SELECT 1
+        FROM ml_short_labels labels
+        WHERE labels.ticker = states.ticker
+          AND labels.date = states.date
+          AND labels.horizon_days = states.horizon_days
+      )
+    `,
+    [
+      ...HORIZONS,
+      ...(startDate ? [startDate] : []),
+      ...(endDate ? [endDate] : []),
+    ],
+  )
+}
+
 async function syncRlStatesForRange(startDate: string | null, endDate: string | null): Promise<void> {
   await execRun(
     `
@@ -304,29 +355,33 @@ async function main() {
   let labelChunks = 0
   if (SKIP_LABEL_SYNC) {
     console.log(`ml short labels: label sync skipped, using existing labels for horizons=${HORIZONS.join('/')}`)
-  } else if (labelChunkDays > 0) {
-    const bounds = await labelDateBounds(effectiveStartDate, effectiveEndDate)
-    if (!bounds) {
-      console.log('ml short labels: no forward_extrema rows')
-      return
-    }
-    let cursor = bounds.minDate
-    let chunks = 0
-    while (cursor <= bounds.maxDate) {
-      const chunkEnd = minDate(addDays(cursor, labelChunkDays - 1), bounds.maxDate)
-      console.log(`ml short labels chunk ${chunks + 1} start: horizons=${HORIZONS.join('/')}, start=${cursor}, end=${chunkEnd}`)
-      await syncLabelsForRange(cursor, chunkEnd)
-      chunks += 1
-      console.log(`ml short labels chunk ${chunks} done: horizons=${HORIZONS.join('/')}, start=${cursor}, end=${chunkEnd}`)
-      cursor = addDays(chunkEnd, 1)
-    }
-    labelChunks = chunks
   } else {
-    await syncLabelsForRange(effectiveStartDate, effectiveEndDate)
-    labelChunks = 1
+    await deleteOrphanLabels(effectiveStartDate, effectiveEndDate)
+    if (labelChunkDays > 0) {
+      const bounds = await labelDateBounds(effectiveStartDate, effectiveEndDate)
+      if (!bounds) {
+        console.log('ml short labels: no forward_extrema rows')
+      } else {
+        let cursor = bounds.minDate
+        let chunks = 0
+        while (cursor <= bounds.maxDate) {
+          const chunkEnd = minDate(addDays(cursor, labelChunkDays - 1), bounds.maxDate)
+          console.log(`ml short labels chunk ${chunks + 1} start: horizons=${HORIZONS.join('/')}, start=${cursor}, end=${chunkEnd}`)
+          await syncLabelsForRange(cursor, chunkEnd)
+          chunks += 1
+          console.log(`ml short labels chunk ${chunks} done: horizons=${HORIZONS.join('/')}, start=${cursor}, end=${chunkEnd}`)
+          cursor = addDays(chunkEnd, 1)
+        }
+        labelChunks = chunks
+      }
+    } else {
+      await syncLabelsForRange(effectiveStartDate, effectiveEndDate)
+      labelChunks = 1
+    }
   }
 
   if (WRITE_RL_STATES) {
+    await deleteOrphanRlStates(effectiveStartDate, effectiveEndDate)
     const rlChunks = await syncRlStates(effectiveStartDate, effectiveEndDate)
     console.log(`ml short rl states synced: horizons=${HORIZONS.join('/')}, chunks=${rlChunks}`)
   }

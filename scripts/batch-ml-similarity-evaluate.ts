@@ -21,6 +21,13 @@ const HORIZONS = (process.env.ML_SIMILARITY_EVAL_HORIZONS ?? '5,10,15')
   .map((value) => Number(value.trim()))
   .filter((value) => Number.isFinite(value) && value > 0)
 const SOURCE = 'serving_current_similars_v2'
+const STRICT = process.env.ML_SIMILARITY_EVAL_STRICT === '1'
+
+type SimilarityCoverage = {
+  matureThrough: string | null
+  latestLabelDate: string | null
+  maturePairCount: number
+}
 
 function median(values: number[]): number | null {
   if (values.length === 0) return null
@@ -36,6 +43,39 @@ function round(value: number | null | undefined, digits = 4): number | null {
 }
 
 async function evaluateHorizon(horizon: number) {
+  const coverageRows = await execAll<SimilarityCoverage>(
+    `
+    WITH mature_session AS (
+      SELECT MIN(date) AS matureThrough
+      FROM (
+        SELECT DISTINCT date
+        FROM ohlcv_daily
+        ORDER BY date DESC
+        LIMIT ?
+      )
+    ),
+    label_watermark AS (
+      SELECT MAX(date) AS latestLabelDate
+      FROM ml_short_labels
+      WHERE horizon_days = ?
+    )
+    SELECT
+      mature_session.matureThrough,
+      label_watermark.latestLabelDate,
+      COUNT(s.similar_ticker) AS maturePairCount
+    FROM mature_session
+    CROSS JOIN label_watermark
+    LEFT JOIN serving_current_similars s
+      ON mature_session.matureThrough IS NOT NULL
+     AND s.as_of_date <= mature_session.matureThrough
+    `,
+    [horizon + 1, horizon],
+  )
+  const coverage = coverageRows[0] ?? {
+    matureThrough: null,
+    latestLabelDate: null,
+    maturePairCount: 0,
+  }
   const rows = await execAll<EvalRow>(
     `
     SELECT
@@ -57,6 +97,18 @@ async function evaluateHorizon(horizon: number) {
     `,
     [horizon, Number(process.env.ML_SIMILARITY_EVAL_TOP_RANK ?? 5)],
   )
+  if (STRICT && coverage.maturePairCount > 0) {
+    if (!coverage.latestLabelDate || (coverage.matureThrough && coverage.latestLabelDate < coverage.matureThrough)) {
+      throw new Error(
+        `similarity labels stale for horizon=${horizon}: latest_label=${coverage.latestLabelDate ?? '-'}, mature_through=${coverage.matureThrough ?? '-'}, mature_pairs=${coverage.maturePairCount}`,
+      )
+    }
+    if (rows.length === 0) {
+      throw new Error(
+        `similarity evaluation has no joined pairs for horizon=${horizon}: latest_label=${coverage.latestLabelDate}, mature_through=${coverage.matureThrough}, mature_pairs=${coverage.maturePairCount}`,
+      )
+    }
+  }
   const groups = new Map<string, EvalRow[]>()
   for (const row of rows) {
     const current = groups.get(row.as_of_date) ?? []
@@ -100,7 +152,7 @@ async function main() {
   const statements = []
   for (const horizon of HORIZONS) statements.push(...await evaluateHorizon(horizon))
   if (statements.length > 0) await execBatch(statements)
-  console.log(`ml similarity evaluation complete: horizons=${HORIZONS.join('/')}, rows=${statements.length}`)
+  console.log(`ml similarity evaluation complete: horizons=${HORIZONS.join('/')}, rows=${statements.length}, strict=${STRICT ? 'on' : 'off'}`)
 }
 
 main()

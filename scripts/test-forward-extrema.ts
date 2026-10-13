@@ -1,12 +1,16 @@
 import assert from 'node:assert/strict'
+import { createClient } from '@libsql/client'
 import {
+  MAX_CONTIGUOUS_BAR_GAP_DAYS,
   computeForwardExtremaRows,
   computeRecentForwardExtremaRows,
+  contiguousForwardExtremaSegments,
   exactForwardExtremaRecomputeBars,
   recentForwardExtremaLoadBars,
   type ForwardExtremaBar,
   type ForwardExtremaRow,
 } from '@/lib/backtest/forward-extrema'
+import { forwardReturnsProjectionSql } from '@/lib/backtest/forward-returns'
 
 function naive(ticker: string, bars: ForwardExtremaBar[], horizons: readonly number[], startIndex: number): ForwardExtremaRow[] {
   const horizonSet = new Set(horizons)
@@ -133,6 +137,78 @@ const boundedRecentRows = computeRecentForwardExtremaRows({
 assert.ok(boundedRecentRows.length > 0)
 assert.ok(boundedRecentRows.every((row) => row.date >= recentRows[Math.floor(recentRows.length / 2)].date))
 
-console.log(
-  `forward extrema optimization parity passed: rows=${actual.length}, exact_recompute_bars=${exactRecomputeBars}, recent_load_bars=${recentLoadBars}`,
-)
+const thresholdBars: ForwardExtremaBar[] = [
+  { date: '2026-01-01', close: 100, high: 101, low: 99 },
+  { date: `2026-01-${String(1 + MAX_CONTIGUOUS_BAR_GAP_DAYS).padStart(2, '0')}`, close: 101, high: 102, low: 100 },
+  { date: `2026-01-${String(2 + MAX_CONTIGUOUS_BAR_GAP_DAYS * 2).padStart(2, '0')}`, close: 102, high: 103, low: 101 },
+]
+assert.deepEqual(contiguousForwardExtremaSegments(thresholdBars), [
+  { start: 0, end: 2 },
+  { start: 2, end: 3 },
+])
+
+const gapBars: ForwardExtremaBar[] = [
+  ...Array.from({ length: 6 }, (_, index) => ({
+    date: `2019-03-${String(index + 1).padStart(2, '0')}`,
+    close: 0.000001 + index * 0.00000001,
+    high: 0.00000102 + index * 0.00000001,
+    low: 0.00000098 + index * 0.00000001,
+  })),
+  ...Array.from({ length: 6 }, (_, index) => ({
+    date: `2026-06-${String(index + 1).padStart(2, '0')}`,
+    close: 90 + index,
+    high: 91 + index,
+    low: 89 + index,
+  })),
+]
+const gapRows = computeForwardExtremaRows({ ticker: 'REUSED', bars: gapBars, horizons: [5] })
+assert.equal(gapRows.length, 2)
+assert.deepEqual(gapRows.map((row) => [row.date, row.end_date]), [
+  ['2019-03-01', '2019-03-06'],
+  ['2026-06-01', '2026-06-06'],
+])
+assert.equal(gapRows[0].hit_10, 0, 'a later ticker incarnation must not satisfy an earlier hit target')
+
+async function testForwardReturnsContinuity(): Promise<void> {
+  const sqlClient = createClient({ url: 'file::memory:' })
+  try {
+    await sqlClient.execute(`
+      CREATE TABLE ohlcv_daily (
+        ticker TEXT NOT NULL,
+        date TEXT NOT NULL,
+        close REAL NOT NULL,
+        PRIMARY KEY (ticker, date)
+      )
+    `)
+    await sqlClient.batch(gapBars.map((bar) => ({
+      sql: 'INSERT INTO ohlcv_daily (ticker, date, close) VALUES (?, ?, ?)',
+      args: ['REUSED', bar.date, bar.close],
+    })), 'write')
+    const projection = await sqlClient.execute({
+      sql: `
+        SELECT ticker, date, future_date
+        FROM (${forwardReturnsProjectionSql()})
+        WHERE future_date IS NOT NULL
+        ORDER BY date
+      `,
+      args: [5, 5, 5],
+    })
+    assert.deepEqual(projection.rows.map((row) => [String(row.date), String(row.future_date)]), [
+      ['2019-03-01', '2019-03-06'],
+      ['2026-06-01', '2026-06-06'],
+    ])
+  } finally {
+    sqlClient.close()
+  }
+}
+
+testForwardReturnsContinuity()
+  .then(() => {
+    console.log(
+      `forward extrema continuity parity passed: rows=${actual.length}, gap_rows=${gapRows.length}, exact_recompute_bars=${exactRecomputeBars}, recent_load_bars=${recentLoadBars}`,
+    )
+  })
+  .catch((error) => {
+    console.error(error)
+    process.exit(1)
+  })

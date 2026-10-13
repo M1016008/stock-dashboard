@@ -25,6 +25,39 @@ export type ForwardExtremaRow = {
   days_to_40: number | null
 }
 
+// A trading series with a longer calendar gap is treated as a new continuity
+// segment. This prevents ticker reuse or long data outages from becoming a
+// synthetic multi-year "next N sessions" outcome.
+export const MAX_CONTIGUOUS_BAR_GAP_DAYS = 10
+
+export type ForwardExtremaSegment = {
+  start: number
+  end: number
+}
+
+function calendarDayDistance(left: string, right: string): number {
+  const leftTime = Date.parse(`${left}T00:00:00Z`)
+  const rightTime = Date.parse(`${right}T00:00:00Z`)
+  if (!Number.isFinite(leftTime) || !Number.isFinite(rightTime)) return Number.POSITIVE_INFINITY
+  return Math.round((rightTime - leftTime) / 86_400_000)
+}
+
+export function contiguousForwardExtremaSegments(
+  bars: readonly ForwardExtremaBar[],
+  maxGapDays = MAX_CONTIGUOUS_BAR_GAP_DAYS,
+): ForwardExtremaSegment[] {
+  if (bars.length === 0) return []
+  const segments: ForwardExtremaSegment[] = []
+  let start = 0
+  for (let index = 1; index < bars.length; index += 1) {
+    if (calendarDayDistance(bars[index - 1].date, bars[index].date) <= maxGapDays) continue
+    segments.push({ start, end: index })
+    start = index
+  }
+  segments.push({ start, end: bars.length })
+  return segments
+}
+
 export function exactForwardExtremaRecomputeBars(horizons: readonly number[]): number {
   const validHorizons = horizons.filter((horizon) => Number.isInteger(horizon) && horizon > 0)
   if (validHorizons.length === 0) return 0
@@ -88,7 +121,7 @@ function futureTargetDays(bars: ForwardExtremaBar[], startIndex: number, maxHori
   return result
 }
 
-export function computeForwardExtremaRows(input: {
+function computeContiguousForwardExtremaRows(input: {
   ticker: string
   bars: ForwardExtremaBar[]
   horizons: readonly number[]
@@ -155,6 +188,28 @@ export function computeForwardExtremaRows(input: {
     }
   }
 
+  return rows.sort((a, b) => a.date.localeCompare(b.date) || a.horizon_days - b.horizon_days)
+}
+
+export function computeForwardExtremaRows(input: {
+  ticker: string
+  bars: ForwardExtremaBar[]
+  horizons: readonly number[]
+  startIndex?: number
+  endDate?: string | null
+}): ForwardExtremaRow[] {
+  const startIndex = Math.max(0, input.startIndex ?? 0)
+  const rows = contiguousForwardExtremaSegments(input.bars).flatMap((segment) => {
+    if (segment.end <= startIndex) return []
+    const bars = input.bars.slice(segment.start, segment.end)
+    return computeContiguousForwardExtremaRows({
+      ticker: input.ticker,
+      bars,
+      horizons: input.horizons,
+      startIndex: Math.max(0, startIndex - segment.start),
+      endDate: input.endDate,
+    })
+  })
   return rows.sort((a, b) => a.date.localeCompare(b.date) || a.horizon_days - b.horizon_days)
 }
 
