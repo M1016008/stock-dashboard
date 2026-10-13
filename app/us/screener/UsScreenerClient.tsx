@@ -246,21 +246,34 @@ function physicalStatusClass(label: string | null | undefined) {
   return 'border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] text-[var(--color-text-secondary)]'
 }
 
-function displayMessage(message: string | null, hasScreeningConditions: boolean) {
-  if (!message) {
-    if (hasScreeningConditions) {
-      return '指定した条件に該当する銘柄はありません。条件を変更して再検索してください。'
-    }
-    return 'USデータが未取得です。データ更新状況を確認してください。'
+/** 取得に失敗した理由。空結果 (0 件・未生成) とは別の状態として持つ */
+type ScreenerErrorKind = 'pit' | 'failed'
+
+// API の message は内部情報を含みうるため画面に出さない。理由ごとに決まった文言だけを使う
+const SCREENER_ERROR_COPY: Record<ScreenerErrorKind, string> = {
+  pit: '過去日では使えない条件（取引所・資産種別・業種分類・時価総額）が含まれています。条件を外して再検索してください。',
+  failed: 'USスクリーナーの結果を取得できませんでした。時間をおいて再試行してください。',
+}
+
+class ScreenerRequestError extends Error {
+  constructor(readonly kind: ScreenerErrorKind) {
+    super(kind)
   }
-  if (message.includes('snapshots are not generated')) {
+}
+
+// 成功応答 (0 件) の説明。既知の「未生成」「指定日以前なし」以外の API 文言はそのまま出さない
+function displayMessage(message: string | null, hasScreeningConditions: boolean) {
+  if (message?.includes('snapshots are not generated')) {
     return 'USステージデータが未生成です。更新ジョブの完了後に再読み込みしてください。'
   }
-  const noSnapshot = message.match(/No US snapshot is available on or before (\d{4}-\d{2}-\d{2})/)
+  const noSnapshot = message?.match(/No US snapshot is available on or before (\d{4}-\d{2}-\d{2})/)
   if (noSnapshot) {
     return `${noSnapshot[1]} 以前の米国データはありません。より新しい日付を選ぶか、最新に戻してください。`
   }
-  return message
+  if (hasScreeningConditions) {
+    return '指定した条件に該当する銘柄はありません。条件を変更して再検索してください。'
+  }
+  return 'USデータが未取得です。データ更新状況を確認してください。'
 }
 
 function parseUrlLimit(value: string | null): number {
@@ -363,6 +376,8 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
   const [dir, setDir] = useState<'asc' | 'desc'>(initialDir)
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
+  const [fetchError, setFetchError] = useState<ScreenerErrorKind | null>(null)
+  const [retryVersion, setRetryVersion] = useState(0)
   const [filtersOpen, setFiltersOpen] = useState(true)
   const [columnMode, setColumnMode] = useState<ColumnMode>('core')
   const [selected, setSelected] = useState<Set<string>>(new Set())
@@ -492,20 +507,12 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
     setRows([])
     setHasMore(false)
     setMessage(null)
+    setFetchError(null)
     const timer = window.setTimeout(() => {
       fetch(`/api/us/screener?${params}`, { cache: 'no-store', signal: controller.signal })
         .then(async (res) => {
           const data = await res.json().catch(() => ({}))
-          if (!res.ok) {
-            if (res.status === 422) {
-              throw new Error('過去日では使えない条件（取引所・資産種別・業種分類・時価総額）が含まれています。条件を外して再検索してください。')
-            }
-            throw new Error(
-              typeof data.message === 'string'
-                ? data.message
-                : `USスクリーナーAPIの取得に失敗しました（HTTP ${res.status}）。`,
-            )
-          }
+          if (!res.ok) throw new ScreenerRequestError(res.status === 422 ? 'pit' : 'failed')
           return data
         })
         .then((data) => {
@@ -538,7 +545,7 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
           if (cancelled || (error instanceof DOMException && error.name === 'AbortError')) return
           setRows([])
           setHasMore(false)
-          setMessage(error instanceof Error ? error.message : 'USスクリーナーAPIの取得に失敗しました。')
+          setFetchError(error instanceof ScreenerRequestError ? error.kind : 'failed')
         })
         .finally(() => { if (!cancelled) setLoading(false) })
     }, 180)
@@ -547,7 +554,7 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
       controller.abort()
       window.clearTimeout(timer)
     }
-  }, [params])
+  }, [params, retryVersion])
 
   useEffect(() => {
     const saved = window.localStorage.getItem(COLUMN_MODE_KEY)
@@ -750,19 +757,25 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
   const hasMarketCapData = rows.some((row) => row.market_cap != null)
   const asOfDate = confirmedPit?.resolvedDate ?? (requestedDate ? null : date)
   const adjustedToPriorSession = confirmedPit?.requestedDate != null && confirmedPit.requestedDate !== confirmedPit.resolvedDate
-  const dateUnavailable = requestedDate != null && !loading && confirmedPit == null
-  const modeLabel = historical
-    ? '過去日表示'
-    : confirmedPit?.mode === 'LATEST' || (!requestedDate && date)
-      ? '最新データ'
-      : dateUnavailable
-        ? 'データなし'
-        : '確認中'
-  const modeClass = historical
-    ? 'border-amber-300 bg-amber-50 text-[#92400e]'
-    : modeLabel === '最新データ'
-      ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
-      : 'border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] text-[var(--color-text-secondary)]'
+  // 取得失敗は「データなし」と言わない (日付にデータが無いのか確認できていないため)
+  const dateUnavailable = requestedDate != null && !loading && !fetchError && confirmedPit == null
+  // 取得失敗を最優先にする。AS OF の日付は文脈として残すが、「最新データ」等の成功表示とは並べない
+  const modeLabel = fetchError
+    ? '取得失敗'
+    : historical
+      ? '過去日表示'
+      : confirmedPit?.mode === 'LATEST' || (!requestedDate && date)
+        ? '最新データ'
+        : dateUnavailable
+          ? 'データなし'
+          : '確認中'
+  const modeClass = fetchError
+    ? 'border-red-200 bg-red-50 text-[var(--color-market-red-dark)]'
+    : historical
+      ? 'border-amber-300 bg-amber-50 text-[#92400e]'
+      : modeLabel === '最新データ'
+        ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+        : 'border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] text-[var(--color-text-secondary)]'
   const lockReason = historical ? '過去日は使えません · 当時の値がないため' : '基準日を確認中'
 
   return (
@@ -837,7 +850,7 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-4 py-2.5">
         <div className="min-w-0" role="status" aria-live="polite">
           <div className="text-[14px] font-bold text-[var(--color-text-primary)]">
-            {loading ? '検索中…' : `${rows.length.toLocaleString('ja-JP')}件`}
+            {loading ? '検索中…' : fetchError ? '取得失敗' : `${rows.length.toLocaleString('ja-JP')}件`}
             {!loading && hasMore && <span className="ml-1.5 text-[12px] font-medium text-[var(--color-text-tertiary)]">続きあり</span>}
           </div>
           <div className="mt-0.5 text-[12px] text-[var(--color-text-tertiary)]">
@@ -899,6 +912,17 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
           </button>
         </div>
       </div>
+
+      {/* 件数表示のすぐ下に置き、開いた条件パネルや横スクロールの表を越えなくても見えるようにする */}
+      {fetchError && (
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-4 py-3">
+          <p role="alert" className="min-w-0 text-[12px] font-bold text-[var(--color-market-red-dark)]">{SCREENER_ERROR_COPY[fetchError]}</p>
+          <button type="button" onClick={() => setRetryVersion((value) => value + 1)} className="btn" data-size="sm">
+            <RotateCcw size={13} aria-hidden />
+            再試行
+          </button>
+        </div>
+      )}
 
       {activeFilters.length > 0 && (
         <div className="flex flex-wrap items-center gap-1.5 border-b border-[var(--color-border-soft)] px-4 py-2">
@@ -1457,7 +1481,7 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
                 </tr>
               )
             })}
-            {rows.length === 0 && (
+            {rows.length === 0 && !fetchError && (
               <tr>
                 <td colSpan={columnMode === 'all' ? 14 : 11} className="px-3 py-8 text-center text-[12px] font-bold text-[var(--color-text-tertiary)]">
                   {loading

@@ -250,3 +250,140 @@ performance, or historical-price parity work.
 - Production promotion is not claimed in this wave. The latest main line also contains the W3F
   explorer whose serving data quality gate is still open, so the currently healthy Production build
   remains unchanged.
+
+### W0 - Loading, empty and error state contracts (worktree, PASS)
+
+- Status: implemented and verified in the `codex/us-parity-w0-route-states` worktree and not yet
+  committed, merged or deployed. The board row is `IMPLEMENTED` with Codex QA `PASS`; Git remains
+  `WORKTREE` and Production remains `PENDING` behind the shared W3F source-data gate.
+- Blocking findings from the visual review (scope of the final bounded revision):
+  - Stage map (US and the shared JP component): during loading or error, the header count, the six
+    Stage summary cells, the `未算出` cell and the `全投資対象（0）` option showed `0`, which looked
+    like a real result. The error alert sat below the summary grid, filter bar and legend, so it
+    was below the fold at 390 px. There was no retry.
+  - MTF calendar: `条件に該当 0営業日` was shown while loading or failed. The alert sat in the body
+    below the filter rows.
+  - US Screener: the alert sat below the expanded filter panel, and the as-of badge still read a
+    green `最新データ` next to the failure.
+- Revision (display only; fetching, wire formats, filters, Stage/PMS semantics, PIT/422 behavior
+  and normal-state counts are unchanged):
+  - Stage map: `countsReady = !loading && !error`. While not ready, the header reads
+    `件数を確認中` / `件数を取得できませんでした`. Stage cell counts, average PMS, the `未算出` count
+    and every select option count show `—`, the `未算出` caption shows `確認中` / `取得失敗`, and the
+    US universe/coverage footnote is hidden. The alert now sits directly under the heading, above
+    the summary grid. It has a `再試行` button that bumps `retryVersion`, which re-runs the same
+    fetch effect once per click. Loading, error and empty stay mutually exclusive.
+  - MTF calendar: the header reads `条件に該当 確認中` / `条件に該当 取得失敗`. The single alert and
+    the `再読み込み` button moved directly under the month header, above the filter rows, and the
+    body is not rendered on error, so there is no duplicate. The rules-only notice and normal
+    layout are unchanged.
+  - US Screener: the alert and `再試行` moved directly under the result-count status row, above the
+    applied-filter chips and the expanded filter panel. `fetchError` now takes precedence in the
+    as-of badge (`取得失敗`, red), and the resolved AS OF date stays visible as context.
+  - Browser audit: the empty-date case waits until the loading copy and `aria-busy` are gone and
+    the empty text is actually rendered, then rechecks after 400 ms. Stage/MTF failure cases assert
+    that the alert is fully inside the viewport, that no `0 投資対象`, `全投資対象（0）`,
+    `条件に該当 0` or bare `0` appears in visible `main` text, and that the non-numeric state label is
+    visible. The Screener case asserts that the alert sits above the filter panel's search input
+    and that `最新データ` is not shown. All retry cases (now including both Stage maps) require
+    exactly one additional request with the same URL per click. The Stage cases pass the
+    `available-dates` request through, so only the map request is counted. The audit still uses
+    only CDP response replacement, with no product fixture or query switch.
+  - Source contract: `test:us-route-states` enforces the placeholders, the retry wiring, the
+    failure-first badge, a single `role="alert"` per component, and the source order (alert before
+    the Stage summary grid, before the MTF filter rows, and before the Screener filter panel and
+    table). It also forbids the raw count expressions that produced the false zeros.
+- `app/us/error.tsx` is now the shared Error Boundary for uncaught failures under `/us`. Before
+  this, those failures fell through to `app/error.tsx`, whose only link returned to the JP
+  dashboard. The boundary keeps the global header and navigation, replaces only the page body,
+  and renders `components/us/UsRouteErrorState.tsx`. That component takes only a digest and a
+  retry callback, so exception messages and stacks cannot reach the DOM. A digest is shown only
+  if it is 1-64 alphanumeric/`_`/`-` characters. The only action is one native `再試行` button,
+  which calls Next 16's `retry()` (re-fetch and re-render). There are no links, query-string
+  switches, environment branches or fixtures. The boundary logs only through
+  `logUsRouteError(error.digest)`, which writes a fixed `[us-route-error]` label and the safe digest
+  (or `no-digest`) to the console. It never logs the exception object, message or stack.
+- State contract decisions:
+  - Loading uses `role="status"` / `aria-busy`. `app/us/loading.tsx` covers the whole subtree,
+    and route-level skeletons or in-page indicators are more specific. The Stage map's in-page
+    `読み込み中…` block now has the same status semantics.
+  - Empty and unavailable stay explanatory (`EmptyState`, `未生成`, `未取得`, PIT-unavailable
+    notices) and never use `role="alert"`. Missing values still render as `-`, `未取得` or
+    `Number.NaN`, never as zero.
+  - Expected failures are handled on screen with `role="alert"` and fixed copy, with a retry action
+    where the route has one (Dashboard sections, Market Momentum, Sectors, Trigger Discovery,
+    Transition Scanner, Historical Outcome Explorer, Stock Detail fundamentals, Screener, MTF
+    calendar). API messages and exception text are not rendered.
+  - Unexpected or uncaught failures go to the shared boundary. These cover Dashboard and Screener
+    as-of resolution, Transition overview, Backtest evaluations, AI Lens (boundary only) and the
+    Stock Detail quote/earnings preload.
+- Shared-component fixes from Codex review, before the visual-review revision above (these affect
+  JP and US only through error/loading accessibility and safe copy):
+  - Stage map (`components/hex/HexStageMapView.tsx`): the error block is `role="alert"` with the
+    fixed text `トレンドステージマップを取得できませんでした。…`. The fetched error string is kept in
+    state only as a failure flag and is never rendered. The loading block is `role="status"`
+    with `aria-busy`. Loading, empty and error stay mutually exclusive as before.
+  - MTF calendar (`app/mtf-close-calendar/MtfCloseCalendarClient.tsx`): the error state is now a
+    boolean. The message is a `role="alert"` paragraph with fixed copy, and the existing
+    `再読み込み` retry and the US rules-only notice (`rulesOnly && !error`) are unchanged.
+  - US Screener (`app/us/screener/UsScreenerClient.tsx`): API failures go into a separate
+    `fetchError` state (`pit` for HTTP 422, otherwise `failed`) instead of the no-results
+    `message`. A `role="alert"` with fixed copy and a `再試行` button renders above the
+    horizontally scrolling table, so it stays reachable at 390 px. The no-results cell is
+    hidden while the error shows, the result count reads `取得失敗` instead of `0件`, and the
+    as-of badge reads `取得失敗` instead of `データなし`. The 422 copy and the PIT filter
+    locking are unchanged. Successful zero-row responses still map only the two known API
+    messages (snapshots not generated, no snapshot on or before the date) to Japanese copy. Any
+    other message falls back to the standard no-results text and is not shown verbatim.
+- Stock Detail correction: the earlier residual ("quote failure shown as not found") was wrong.
+  `getUsQuote` exceptions in `app/us/stock/[ticker]/page.tsx` are not caught there, so they
+  reach `app/us/error.tsx`. A `null` quote means there is no daily data yet, which is a real
+  no-data state. The page then passes only fixed copy as `initialError`. The page always passes
+  `initialQuote` or `initialError`, so the client-side quote refetch never runs on this route.
+  The test now checks this as part of the empty contract. Stock Detail code is unchanged.
+- `npm run test:us-route-states` lists all 13 entrypoints and fails if any `app/us/**/page.tsx` is
+  missing from the inventory. It checks each entrypoint's loading, empty and error branches, and
+  it checks forbidden patterns that would render raw failure text in the Stage map, MTF
+  calendar and Screener. It rejects error boundaries under `/us` that read
+  `error.message`/`stack`/`cause`, log the error object, or use environment or query switches. It
+  also renders the boundary with a secret-bearing exception to prove no raw text, exactly one
+  keyboard-operable retry button, an alert region and no navigation link. It spies on the console
+  to show that only the fixed label and a safe digest are logged. It needs no DB, network or
+  browser. Mutation checks confirmed that each of these fails the test: logging the error
+  object, rendering the raw Stage map or MTF error, dropping any of the three new alert roles or
+  the Stage map loading status, showing the Screener no-results cell during an error, unwiring
+  Screener retry, and echoing an unknown Screener API message. Earlier mutations (rendering the
+  message, an unsanitized digest, deleting the boundary) still fail it as well.
+- Deterministic verification: `test:us-route-states`, the full TypeScript typecheck
+  (`tsc --noEmit`), `test:us-screener-pit`, `test:us-screener-filters`,
+  `test:us-stock-detail-parity`, `test:us-hex-serving`, `test:mtf-close-calendar`,
+  `scripts/test-us-stage-screener-transport.ts` and `scripts/test-us-mtf-close-calendar-ui.ts`
+  pass. The webpack Production build also passes with the canonical read-only storage contract.
+- Final deterministic verification after the bounded revision: `test:us-route-states`, the full
+  TypeScript typecheck (`tsc --noEmit`), `test:us-screener-pit`, `test:us-screener-filters`,
+  `test:us-stock-detail-parity`, `test:us-hex-serving`, `test:mtf-close-calendar`,
+  `scripts/test-us-stage-screener-transport.ts` and `scripts/test-us-mtf-close-calendar-ui.ts`
+  all pass. The webpack Production build also passes with the canonical read-only storage
+  contract.
+- `npm run audit:us-route-states-browser` uses Chrome DevTools Protocol and a loopback candidate;
+  it does not add a product query switch or fixture route. It replaces only the selected browser
+  API response with a 503 payload containing a sentinel secret and verifies that the sentinel
+  never reaches the page or console. The final run passed 12 browser cases:
+  - US Screener, US Stage Screener and US MTF Calendar at 1440 and 390 px;
+  - the shared JP Stage Screener and JP MTF Calendar at 1440 px;
+  - a real Screener no-data date at 1440 and 390 px, with no alert semantics;
+  - the shared US Error Boundary at 1440 and 390 px against an isolated invalid US analytics DB.
+  Error/empty states were mutually exclusive, document overflow was zero, and each Screener,
+  Stage-map and MTF retry issued exactly one additional request to the same URL. No raw API
+  message or DB path appeared. The boundary exposed one retry action, no navigation link, and
+  keyboard focus produced a solid 3 px outline. Its screenshot is captured before keyboard
+  traversal so the global search popover cannot obscure the boundary; reachability is asserted
+  separately after capture.
+- Normal candidate browsing of US Screener, US/JP Stage Screener and US/JP MTF Calendar passed
+  cold and warm runs (10 audits total): HTTP/request failures, duplicate application requests,
+  console errors and layout overflow were all zero. The healthy Production service was not
+  changed during this QA.
+- Claude Opus 5.5 performed the final read-only visual review of the revised 1440/390 screenshots.
+  Its initial FAIL was traced to the audit's post-Tab screenshot ordering, not the product UI; after
+  capture was moved before keyboard traversal, the clean boundary screenshot received `PASS` with
+  no remaining visual blocker.

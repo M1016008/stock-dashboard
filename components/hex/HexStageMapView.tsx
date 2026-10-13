@@ -98,6 +98,8 @@ export default function HexStageMapView({ market = 'JP' }: { market?: 'JP' | 'US
   const [date, setDate] = useState<string | null>(null)
   const [usUniverse, setUsUniverse] = useState<UsUniverseScope | null>(null)
   const [usCoverage, setUsCoverage] = useState<UsCoverage | null>(null)
+  // 再試行ボタン 1 回につき同じ条件の取得を 1 回だけやり直す
+  const [retryVersion, setRetryVersion] = useState(0)
 
   // 3 タイムフレームのマトリクスを縦に積んで全部表示するため固定
   const timeframe: Timeframe = 'daily'
@@ -176,7 +178,7 @@ export default function HexStageMapView({ market = 'JP' }: { market?: 'JP' | 'US
       })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [timeframe, selectedDate, activeUniverse, isUs])
+  }, [timeframe, selectedDate, activeUniverse, isUs, retryVersion])
 
   const categoryStats = useMemo(() => {
     const large: Record<string, number> = {}
@@ -247,15 +249,30 @@ export default function HexStageMapView({ market = 'JP' }: { market?: 'JP' | 'US
       return a.localeCompare(b)
     })
   }, [assetTypeStats])
+  // 読み込み中・失敗中は件数が未確定。0 や前回の値を実数のように見せず「—」で置く
+  const countsReady = !loading && !error
+  const countText = (n: number) => (countsReady ? n.toLocaleString() : '—')
 
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-baseline justify-between gap-3 pt-2">
         <h2>トレンドステージマップ</h2>
         <span className="text-[11px] text-[var(--color-text-tertiary)] tabular-nums">
-          {filteredData.length.toLocaleString()} 投資対象{hasFilter ? ` / 全体 ${data.length.toLocaleString()}` : ''}{isUs && usCoverage ? ` / 日足A ${usCoverage.dailyAStage.toLocaleString()}` : ''}{isUs && usUniverse ? ` / 稼働全資産 ${usUniverse.activeAll.toLocaleString()}` : ''}{activeUniverseMeta ? ` · ${activeUniverseMeta.shortLabel}` : ''}{date ? ` · ${date}` : ''}
+          {!countsReady ? (loading ? '件数を確認中' : '件数を取得できませんでした') : <>{filteredData.length.toLocaleString()} 投資対象{hasFilter ? ` / 全体 ${data.length.toLocaleString()}` : ''}{isUs && usCoverage ? ` / 日足A ${usCoverage.dailyAStage.toLocaleString()}` : ''}{isUs && usUniverse ? ` / 稼働全資産 ${usUniverse.activeAll.toLocaleString()}` : ''}{activeUniverseMeta ? ` · ${activeUniverseMeta.shortLabel}` : ''}{date ? ` · ${date}` : ''}</>}
         </span>
       </div>
+
+      {/* ── 状態表示 (失敗) ────────────── */}
+      {/* 390px でもスクロールせずに見えるよう、件数サマリーより上に置く。 */}
+      {/* error の中身 (API 文言・例外文) は内部情報を含みうるため表示せず、失敗したことだけを固定文言で伝える */}
+      {error && !loading && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-[8px] border-l-2 border-[var(--color-price-down)] bg-[var(--color-surface-subtle)] p-3">
+          <p role="alert" className="min-w-0 text-[12px] text-[var(--color-price-down)]">トレンドステージマップを取得できませんでした。時間をおいて再読み込みしてください。</p>
+          <button type="button" onClick={() => setRetryVersion((value) => value + 1)} className="btn" data-size="sm">
+            再試行
+          </button>
+        </div>
+      )}
 
       {/* Stage 別サマリー: 1 本の帯に 6 区画。色は左端の Stage バーだけに使い、値の色は PMS の符号に限定 */}
       <div className="grid grid-cols-2 overflow-hidden rounded-[8px] border border-[var(--color-border-soft)] bg-white sm:grid-cols-3 xl:grid-cols-[repeat(auto-fit,minmax(150px,1fr))]">
@@ -263,18 +280,18 @@ export default function HexStageMapView({ market = 'JP' }: { market?: 'JP' | 'US
           <div
             key={stage}
             className="relative border-b border-r border-[var(--color-border-soft)] py-2 pl-4 pr-3 xl:border-b-0"
-            title={`Stage ${stage}: ${count.toLocaleString()}銘柄 / PMS算出済み ${scoredCount.toLocaleString()}銘柄`}
+            title={countsReady ? `Stage ${stage}: ${count.toLocaleString()}銘柄 / PMS算出済み ${scoredCount.toLocaleString()}銘柄` : `Stage ${stage}: ${loading ? '確認中' : '取得失敗'}`}
           >
             <span aria-hidden className="absolute bottom-2 left-1.5 top-2 w-[3px] rounded-full" style={{ background: STAGE_BORDER_COLORS[stage] }} />
             <div className="flex items-baseline justify-between gap-2">
               <span className="truncate text-[11px] text-[var(--color-text-tertiary)]">
                 <strong className="font-semibold text-[var(--color-text-primary)]">Stage {stage}</strong> {STAGE_LABELS[stage]}
               </span>
-              <span className="font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]">{count.toLocaleString()}</span>
+              <span className="font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]">{countText(count)}</span>
             </div>
-            <div className="mt-0.5 font-mono text-[14px] font-bold tabular-nums" style={{ color: avg == null ? 'var(--color-text-tertiary)' : avg >= 0 ? 'var(--color-market-red)' : 'var(--color-market-blue)' }}>
+            <div className="mt-0.5 font-mono text-[14px] font-bold tabular-nums" style={{ color: !countsReady || avg == null ? 'var(--color-text-tertiary)' : avg >= 0 ? 'var(--color-market-red)' : 'var(--color-market-blue)' }}>
               <span className="mr-1 font-sans text-[11px] font-normal text-[var(--color-text-tertiary)]">平均PMS</span>
-              {avg == null ? '-' : avg.toFixed(2)}
+              {!countsReady ? '—' : avg == null ? '-' : avg.toFixed(2)}
             </div>
           </div>
         ))}
@@ -285,10 +302,10 @@ export default function HexStageMapView({ market = 'JP' }: { market?: 'JP' | 'US
           >
             <div className="flex items-baseline justify-between gap-2">
               <span className="text-[11px] font-semibold text-[var(--color-text-tertiary)]">未算出</span>
-              <span className="font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]">{unclassifiedCount}</span>
+              <span className="font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]">{countText(unclassifiedCount)}</span>
             </div>
             <div className="mt-0.5 text-[13px] font-bold text-[var(--color-text-tertiary)]">
-              価格・履歴を更新中
+              {countsReady ? '価格・履歴を更新中' : loading ? '確認中' : '取得失敗'}
             </div>
           </div>
         )}
@@ -313,10 +330,10 @@ export default function HexStageMapView({ market = 'JP' }: { market?: 'JP' | 'US
               onChange={(e) => setSelectedAssetType(e.target.value)}
               style={selectInputStyle}
             >
-              <option value="">全投資対象（{data.length}）</option>
+              <option value="">全投資対象（{countText(data.length)}）</option>
               {assetTypeOptions.map(([assetType, count]) => (
                 <option key={assetType} value={assetType}>
-                  {assetType === 'Mutual Fund' ? '投資信託' : assetType}（{count}）
+                  {assetType === 'Mutual Fund' ? '投資信託' : assetType}（{countText(count)}）
                 </option>
               ))}
             </select>
@@ -332,9 +349,9 @@ export default function HexStageMapView({ market = 'JP' }: { market?: 'JP' | 'US
             }}
             style={selectInputStyle}
           >
-            <option value="">全投資対象（{data.length}）</option>
+            <option value="">全投資対象（{countText(data.length)}）</option>
             {largeOptions.map(([cat, n]) => (
-              <option key={cat} value={cat}>{cat}（{n}）</option>
+              <option key={cat} value={cat}>{cat}（{countText(n)}）</option>
             ))}
           </select>
         </FilterField>
@@ -346,9 +363,9 @@ export default function HexStageMapView({ market = 'JP' }: { market?: 'JP' | 'US
             disabled={!selectedCategory || smallOptions.length === 0}
             style={{ ...selectInputStyle, opacity: !selectedCategory ? 0.5 : 1 }}
           >
-            <option value="">全て{selectedCategory ? `（${categoryStats.large[selectedCategory] ?? 0}）` : ''}</option>
+            <option value="">全て{selectedCategory ? `（${countText(categoryStats.large[selectedCategory] ?? 0)}）` : ''}</option>
             {smallOptions.map(([cat, n]) => (
-              <option key={cat} value={cat}>{cat}（{n}）</option>
+              <option key={cat} value={cat}>{cat}（{countText(n)}）</option>
             ))}
           </select>
         </FilterField>
@@ -370,11 +387,11 @@ export default function HexStageMapView({ market = 'JP' }: { market?: 'JP' | 'US
 
       {isUs && (
         <div className="text-[10px] leading-relaxed text-[var(--color-text-tertiary)]">
-          {usUniverse
+          {usUniverse && countsReady
             ? `稼働全資産 ${usUniverse.activeAll.toLocaleString()}件（運用対象 ${usUniverse.productionActive.toLocaleString()}件: Stock ${usUniverse.stocks.toLocaleString()} / ETF ${usUniverse.etfs.toLocaleString()} / 投信 ${usUniverse.mutualFunds.toLocaleString()}、テスト ${usUniverse.testSymbols.toLocaleString()}件・非銘柄データ ${usUniverse.excludedArtifacts.toLocaleString()}件を除外）。`
             : ''}
           全運用対象を一覧に含め、当日価格や必要な履歴がない銘柄も除外せず「未算出」として表示します。
-          {usCoverage
+          {usCoverage && countsReady
             ? ` 価格 ${usCoverage.prices.toLocaleString()} / スナップショット ${usCoverage.snapshots.toLocaleString()} / A×B行列 日 ${usCoverage.dailyStage.toLocaleString()}・週 ${usCoverage.weeklyStage.toLocaleString()}・月 ${usCoverage.monthlyStage.toLocaleString()}。`
             : ''}
           Stage行列は各時間軸の算出済み銘柄だけを分類します。
@@ -439,15 +456,10 @@ export default function HexStageMapView({ market = 'JP' }: { market?: 'JP' | 'US
         )}
       </div>
 
-      {/* ── 状態表示 ────────────── */}
-      {error && (
-        <div className="rounded-[8px] border-l-2 border-[var(--color-price-down)] bg-[var(--color-surface-subtle)] p-3 text-[12px] text-[var(--color-price-down)]">
-          エラー: {error}
-        </div>
-      )}
-
+      {/* ── 状態表示 (読み込み中・空) ────────────── */}
+      {/* 失敗は上部に表示済み。読み込み中・失敗・空は同時に出さない */}
       {loading && (
-        <div className="rounded-[8px] border border-[var(--color-border-soft)] p-12 text-center text-[12px] text-[var(--color-text-tertiary)]">
+        <div role="status" aria-live="polite" aria-busy="true" className="rounded-[8px] border border-[var(--color-border-soft)] p-12 text-center text-[12px] text-[var(--color-text-tertiary)]">
           読み込み中…
         </div>
       )}
