@@ -71,6 +71,13 @@ async function testContinuityRepairRunner(): Promise<void> {
       action TEXT NOT NULL,
       PRIMARY KEY (ticker, date, horizon_days, action)
     )`,
+    `CREATE TABLE ml_prediction_outcomes (
+      as_of_date TEXT NOT NULL,
+      horizon_days INTEGER NOT NULL,
+      direction TEXT NOT NULL,
+      ticker TEXT NOT NULL,
+      PRIMARY KEY (as_of_date, horizon_days, direction, ticker)
+    )`,
   ])
   await client.batch([
     { sql: "INSERT INTO ohlcv_daily VALUES ('REUSED', '2019-03-01', 0.000001)", args: [] },
@@ -83,6 +90,7 @@ async function testContinuityRepairRunner(): Promise<void> {
     { sql: "INSERT INTO forward_returns VALUES ('REUSED', '2026-06-01', 1, '2026-06-02')", args: [] },
     { sql: "INSERT INTO ml_short_labels VALUES ('REUSED', '2019-03-01', 5)", args: [] },
     { sql: "INSERT INTO rl_training_states_v2 VALUES ('REUSED', '2019-03-01', 5, 'wait')", args: [] },
+    { sql: "INSERT INTO ml_prediction_outcomes VALUES ('2019-03-01', 5, 'long', 'REUSED')", args: [] },
   ], 'write')
   client.close()
 
@@ -109,6 +117,7 @@ async function testContinuityRepairRunner(): Promise<void> {
   assert.equal(await countRows(verify, 'SELECT COUNT(*) AS count FROM forward_returns'), 1)
   assert.equal(await countRows(verify, 'SELECT COUNT(*) AS count FROM ml_short_labels'), 0)
   assert.equal(await countRows(verify, 'SELECT COUNT(*) AS count FROM rl_training_states_v2'), 0)
+  assert.equal(await countRows(verify, 'SELECT COUNT(*) AS count FROM ml_prediction_outcomes'), 0)
   verify.close()
 }
 
