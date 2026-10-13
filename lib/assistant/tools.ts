@@ -872,6 +872,15 @@ export async function getStockOverview(call: AssistantPlannedToolCall): Promise<
 }
 
 async function screenUsStocks(call: AssistantPlannedToolCall): Promise<AssistantToolResult> {
+  if (call.universe || call.marginType) {
+    return {
+      tool: 'screen_jp_stocks',
+      title: '米国株スクリーニング',
+      summary: '日経225・貸借区分は米国株に適用できません。条件を置き換えず、結果を返していません。',
+      rows: [],
+      meta: { market: 'US', unsupported: true },
+    }
+  }
   if (!hasUsAnalyticsDb()) {
     return { tool: 'screen_jp_stocks', title: '米国株スクリーニング', summary: 'US分析DBを利用できません。', rows: [] }
   }

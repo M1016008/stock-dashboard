@@ -24,6 +24,7 @@ import type {
 } from '@/lib/custom-charts/types'
 import type { OHLCV } from '@/types/stock'
 import { intervalToSpec, resampleOhlcv, smaSeries } from '@/lib/timeframes'
+import { toAdjustedUsOhlcvRows, type UsRawOhlcvRow } from '@/lib/us-adjusted-ohlcv'
 
 type PriceRow = {
   date: string
@@ -32,6 +33,10 @@ type PriceRow = {
   low: number
   close: number
   adjClose?: number | null
+  adjOpen?: number | null
+  adjHigh?: number | null
+  adjLow?: number | null
+  adjVolume?: number | null
   volume: number
 }
 
@@ -237,7 +242,13 @@ async function loadUsAsset(ref: Extract<CustomAssetRef, { kind: 'US' }>, period:
     ),
     execAll<PriceRow>(
       `
-        SELECT date, open, high, low, close, adj_close AS adjClose, volume
+        SELECT
+          date, open, high, low, close, volume,
+          adj_open AS adjOpen,
+          adj_high AS adjHigh,
+          adj_low AS adjLow,
+          adj_close AS adjClose,
+          adj_volume AS adjVolume
         FROM market_ohlcv_daily
         WHERE market = 'US' AND ticker = ?
           ${period === 'all' ? '' : `AND date >= date((SELECT MAX(date) FROM market_ohlcv_daily WHERE market = 'US' AND ticker = ?), '-' || ? || ' days')`}
@@ -255,8 +266,31 @@ async function loadUsAsset(ref: Extract<CustomAssetRef, { kind: 'US' }>, period:
       currency: meta?.currency === 'JPY' ? 'JPY' : 'USD',
       priceBasis: hasAdjusted ? 'adj_close' : 'close',
     },
-    rows: priceRowsToMap(rows, true),
+    rows: adjustedUsPriceRowsToMap(rows),
   }
+}
+
+function adjustedUsPriceRowsToMap(rows: PriceRow[]): Map<string, AssetCandle> {
+  const adjusted = toAdjustedUsOhlcvRows(rows.map((row): UsRawOhlcvRow => ({
+    date: row.date,
+    open: row.open,
+    high: row.high,
+    low: row.low,
+    close: row.close,
+    volume: row.volume,
+    adjustedOpen: row.adjOpen,
+    adjustedHigh: row.adjHigh,
+    adjustedLow: row.adjLow,
+    adjustedClose: row.adjClose,
+    adjustedVolume: row.adjVolume,
+  })))
+  return new Map(adjusted.map((row) => [row.date, {
+    open: row.open,
+    high: row.high,
+    low: row.low,
+    close: row.close,
+    volume: row.volume,
+  }]))
 }
 
 async function loadCommodityAsset(ref: Extract<CustomAssetRef, { kind: 'CMD' }>, period: CustomChartRequest['period']): Promise<LoadedAsset> {

@@ -93,19 +93,23 @@ export default function WatchlistPage() {
 
     setLoading(true)
     try {
-      const entries = await Promise.all(symbols.map(async (symbol) => {
-        const key = `${symbol.market}:${symbol.ticker}`
-        const endpoint = symbol.market === 'US'
-          ? `/api/us/quote/${encodeURIComponent(symbol.ticker)}`
-          : `/api/quote/${encodeURIComponent(symbol.ticker)}`
-        try {
-          const response = await fetch(endpoint, { cache: 'no-store' })
-          if (!response.ok) return [key, null] as const
-          return [key, await response.json() as StockQuote] as const
-        } catch {
-          return [key, null] as const
-        }
-      }))
+      const entries: Array<readonly [string, StockQuote | null]> = []
+      for (let index = 0; index < symbols.length; index += 6) {
+        const batch = symbols.slice(index, index + 6)
+        entries.push(...await Promise.all(batch.map(async (symbol) => {
+          const key = `${symbol.market}:${symbol.ticker}`
+          const endpoint = symbol.market === 'US'
+            ? `/api/us/quote/${encodeURIComponent(symbol.ticker)}`
+            : `/api/quote/${encodeURIComponent(symbol.ticker)}`
+          try {
+            const response = await fetch(endpoint, { cache: 'no-store' })
+            if (!response.ok) return [key, null] as const
+            return [key, await response.json() as StockQuote] as const
+          } catch {
+            return [key, null] as const
+          }
+        })))
+      }
       setQuotes(Object.fromEntries(entries))
     } finally {
       setLoading(false)
@@ -113,9 +117,16 @@ export default function WatchlistPage() {
   }, [mounted, usTickers, visibleJpTickers])
 
   useEffect(() => {
-    void fetchQuotes()
-    const intervalId = window.setInterval(() => void fetchQuotes(), 60_000)
-    return () => window.clearInterval(intervalId)
+    const refreshIfVisible = () => {
+      if (document.visibilityState === 'visible') void fetchQuotes()
+    }
+    refreshIfVisible()
+    const intervalId = window.setInterval(refreshIfVisible, 60_000)
+    document.addEventListener('visibilitychange', refreshIfVisible)
+    return () => {
+      window.clearInterval(intervalId)
+      document.removeEventListener('visibilitychange', refreshIfVisible)
+    }
   }, [fetchQuotes])
 
   const toggleSelection = (market: WorkspaceMarket, ticker: string) => {
@@ -176,7 +187,7 @@ export default function WatchlistPage() {
       <PageTitle
         eyebrow="監視"
         title="ウォッチリスト"
-        subtitle="日本株・米国株の監視銘柄、急変の確認、銘柄比較をまとめて扱います。価格は60秒ごとに自動更新します。"
+        subtitle="日本株・米国株の監視銘柄、急変の確認、銘柄比較をまとめて扱います。日次終値データを60秒ごとに再確認します。"
         badge={activeUniverseMeta?.shortLabel}
         rightSlot={
           <button type="button" onClick={() => void fetchQuotes()} disabled={loading} className="btn">
@@ -192,9 +203,13 @@ export default function WatchlistPage() {
           { label: '登録銘柄', value: `${savedCount}銘柄` },
           { label: '日本株', value: `${tickers.length}銘柄` },
           { label: '米国株', value: `${usTickers.length}銘柄` },
-          { label: '要確認', value: <span className={alertCount > 0 ? 'text-amber-700' : undefined}>{alertCount}件</span>, sub: '取得失敗・品質注意・±5%以上' },
+          { label: '要確認', value: <span className={alertCount > 0 ? 'text-amber-700' : undefined}>{alertCount}件</span>, sub: '取得失敗・品質注意・価格不連続・±5%以上' },
         ]}
       />
+
+      <p className="text-[11px] leading-relaxed text-[var(--color-text-tertiary)]">
+        価格は日次終値（EOD）です。米国株は分割・配当調整後の価格です。価格不連続の銘柄は変化額・変化率を表示せず、品質注意はアイコンにカーソルを合わせると詳細を確認できます。
+      </p>
 
       <div className="toolbar flex flex-wrap items-center justify-between gap-2">
         <div className="view-tabs" role="group" aria-label="市場の切替">
@@ -232,7 +247,7 @@ export default function WatchlistPage() {
               title="日本株をTradingView形式でダウンロード"
             >
               <Download size={14} aria-hidden />
-              TradingView用に保存
+              日本株をTradingView用に保存
             </button>
           )}
           {savedCount > 0 && (
@@ -281,7 +296,9 @@ export default function WatchlistPage() {
               rows={allRows.filter((row) => row.market === 'US')}
               selected={selected}
               onToggleSelection={toggleSelection}
-              note="米国株日次データ"
+              note={activeUniverseMeta
+                ? '米国株 日次EOD（調整後） · ユニバース絞り込みは日本株のみ'
+                : '米国株 日次EOD（調整後）'}
               emptyDetail="米国株の個別銘柄ページから追加できます。"
             />
           )}
@@ -329,7 +346,7 @@ function WatchSection({
         <>
           <ul className="divide-y divide-[var(--color-border-soft)] rounded-[6px] border border-[var(--color-border-soft)] bg-white md:hidden">
             {items.map(({ row, key, quote, href, name, alertLabel }) => (
-              <li key={key} className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-x-2 px-3 py-2.5">
+              <li key={key} className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-x-3 px-3 py-2.5">
                 <div className="flex flex-col items-center gap-1 pt-0.5">
                   <WatchlistButton ticker={row.ticker} market={row.market} size="sm" />
                   <input
@@ -346,8 +363,10 @@ function WatchSection({
                     <Link href={href} prefetch={false} className="shrink-0 font-mono text-[13px] font-bold text-[var(--color-brand-800)] hover:underline">
                       {row.ticker}
                     </Link>
-                    <span className="min-w-0 truncate text-[13px] text-[var(--color-text-primary)]">{name}</span>
-                    <StockPreviewTrigger ticker={row.ticker} market={row.market} context="watchlist" />
+                    <span className="min-w-0 truncate text-[13px] text-[var(--color-text-primary)]" title={name}>{name}</span>
+                    <span className="shrink-0">
+                      <StockPreviewTrigger ticker={row.ticker} market={row.market} context="watchlist" />
+                    </span>
                   </div>
                   <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] tabular-nums text-[var(--color-text-tertiary)]">
                     <span>出来高 {formatNumber(quote?.volume)}</span>
@@ -355,10 +374,10 @@ function WatchSection({
                     <AlertCell quote={quote} alertLabel={alertLabel} />
                   </div>
                 </div>
-                <div className="text-right font-mono tabular-nums">
+                <div className="shrink-0 whitespace-nowrap text-right font-mono tabular-nums">
                   <div className="text-[14px] font-bold text-[var(--color-text-primary)]">{formatPrice(quote?.price, row.market)}</div>
-                  <div className="text-[11px] font-semibold" style={{ color: percentColor(quote?.changePercent) }}>
-                    {formatPercent(quote?.changePercent)}
+                  <div className="text-[11px] font-semibold" style={{ color: percentColor(quote?.isPriceDiscontinuous ? undefined : quote?.changePercent) }}>
+                    {formatPercent(quote?.isPriceDiscontinuous ? undefined : quote?.changePercent)}
                   </div>
                 </div>
               </li>
@@ -410,11 +429,11 @@ function WatchSection({
                     </td>
                     <td style={td} className="max-w-[240px] truncate">{name}</td>
                     <td style={tdR}>{formatPrice(quote?.price, row.market)}</td>
-                    <td style={{ ...tdR, color: percentColor(quote?.change) }}>
-                      {formatChange(quote?.change, row.market)}
+                    <td style={{ ...tdR, color: percentColor(quote?.isPriceDiscontinuous ? undefined : quote?.change) }}>
+                      {formatChange(quote?.isPriceDiscontinuous ? undefined : quote?.change, row.market)}
                     </td>
-                    <td style={{ ...tdR, color: percentColor(quote?.changePercent) }}>
-                      {formatPercent(quote?.changePercent)}
+                    <td style={{ ...tdR, color: percentColor(quote?.isPriceDiscontinuous ? undefined : quote?.changePercent) }}>
+                      {formatPercent(quote?.isPriceDiscontinuous ? undefined : quote?.changePercent)}
                     </td>
                     <td style={tdR}>{formatNumber(quote?.volume)}</td>
                     <td style={td}>{quote?.priceDate ?? '-'}</td>
@@ -435,9 +454,13 @@ function AlertCell({ quote, alertLabel }: { quote: StockQuote | null | undefined
     return <span className="text-[11px] text-[var(--color-text-tertiary)]">更新中</span>
   }
   if (alertLabel) {
+    const detail = quote?.priceQualityWarning ?? (quote?.isPriceDiscontinuous ? '分割・併合等で前日比較ができないため変化率を表示しません' : undefined)
     return (
-      <span className="inline-flex items-center gap-1 rounded-[3px] bg-amber-50 px-1.5 py-0.5 text-[11px] font-semibold text-amber-800">
-        <AlertTriangle size={12} aria-hidden />
+      <span
+        className="inline-flex max-w-full items-center gap-1 whitespace-nowrap rounded-[3px] bg-amber-50 px-1.5 py-0.5 text-[11px] font-semibold text-amber-800"
+        title={detail}
+      >
+        <AlertTriangle size={12} aria-hidden className="shrink-0" />
         {alertLabel}
       </span>
     )
@@ -448,6 +471,7 @@ function AlertCell({ quote, alertLabel }: { quote: StockQuote | null | undefined
 function getAlertLabel(quote: StockQuote | null | undefined): string | null {
   if (quote === undefined) return null
   if (!quote) return '取得失敗'
+  if (quote.isPriceDiscontinuous) return '価格不連続'
   if (quote.priceQualityWarning) return '品質注意'
   if (quote.changePercent >= 5) return '上昇急変'
   if (quote.changePercent <= -5) return '下落急変'

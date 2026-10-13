@@ -2,6 +2,13 @@ import { execAll } from '@/lib/db/client'
 import { COMMODITY_INSTRUMENTS } from '@/lib/commodities'
 import { SECTOR_ETF_TICKERS } from '@/lib/sector-etfs'
 import {
+  US_ADJUSTED_CLOSE_SQL,
+  US_ADJUSTED_HIGH_SQL,
+  US_ADJUSTED_LOW_SQL,
+  US_ADJUSTED_OPEN_SQL,
+  US_ADJUSTED_VOLUME_SQL,
+} from '@/lib/us-adjusted-ohlcv'
+import {
   answerIsCorrect,
   buildAnswerExplanation,
   buildHintSummary,
@@ -469,10 +476,17 @@ async function loadSeries(
   ticker: string,
   anchorDate?: string,
 ): Promise<Array<DrillCandle & Partial<RawSeriesRow>>> {
+  const priceColumns = market === 'US'
+    ? `${US_ADJUSTED_OPEN_SQL} AS open,
+       ${US_ADJUSTED_HIGH_SQL} AS high,
+       ${US_ADJUSTED_LOW_SQL} AS low,
+       ${US_ADJUSTED_CLOSE_SQL} AS close,
+       ${US_ADJUSTED_VOLUME_SQL} AS volume`
+    : 'open, high, low, close, volume'
   const sourceRowsSql = anchorDate
     ? `
       SELECT * FROM (
-        SELECT date, open, high, low, close, volume
+        SELECT date, ${priceColumns}
         FROM ${market === 'US' ? 'market_ohlcv_daily' : 'ohlcv_daily'}
         WHERE ${market === 'US' ? "market = 'US' AND " : ''}ticker = ? AND date <= ?
         ORDER BY date DESC
@@ -480,7 +494,7 @@ async function loadSeries(
       )
       UNION ALL
       SELECT * FROM (
-        SELECT date, open, high, low, close, volume
+        SELECT date, ${priceColumns}
         FROM ${market === 'US' ? 'market_ohlcv_daily' : 'ohlcv_daily'}
         WHERE ${market === 'US' ? "market = 'US' AND " : ''}ticker = ? AND date > ?
         ORDER BY date ASC
@@ -488,7 +502,7 @@ async function loadSeries(
       )
     `
     : `
-      SELECT date, open, high, low, close, volume
+      SELECT date, ${priceColumns}
       FROM ${market === 'US' ? 'market_ohlcv_daily' : 'ohlcv_daily'}
       WHERE ${market === 'US' ? "market = 'US' AND " : ''}ticker = ?
       ORDER BY date DESC
@@ -532,11 +546,18 @@ async function loadSeries(
       `,
       [...sourceArgs, ticker, ticker, ticker],
     )
-  return enrichRawSeriesRows(rows)
+  return enrichRawSeriesRows(rows, market === 'US')
 }
 
-function enrichRawSeriesRows(rows: RawSeriesRow[]): Array<DrillCandle & Partial<RawSeriesRow>> {
-  const enriched = enrichCandlesWithMa(rows.map((row) => ({
+function enrichRawSeriesRows(rows: RawSeriesRow[], normalizeOhlc = false): Array<DrillCandle & Partial<RawSeriesRow>> {
+  const normalizedRows = normalizeOhlc
+    ? rows.map((row) => ({
+      ...row,
+      high: Math.max(row.open, row.high, row.low, row.close),
+      low: Math.min(row.open, row.high, row.low, row.close),
+    }))
+    : rows
+  const enriched = enrichCandlesWithMa(normalizedRows.map((row) => ({
     date: row.date,
     open: row.open,
     high: row.high,
@@ -544,7 +565,7 @@ function enrichRawSeriesRows(rows: RawSeriesRow[]): Array<DrillCandle & Partial<
     close: row.close,
     volume: row.volume,
   })))
-  return enriched.map((row, index) => ({ ...row, ...rows[index] }))
+  return enriched.map((row, index) => ({ ...row, ...normalizedRows[index] }))
 }
 
 async function loadUniverse(target: DrillTarget, watchlistTickers: string[]): Promise<UniverseItem[]> {

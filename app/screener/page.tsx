@@ -577,15 +577,17 @@ function LegacyScreenerPage() {
   }
 
   const addSelectedToComparison = () => {
-    const compared = new Set(getCompareSymbols().map((symbol) => `${symbol.market}:${symbol.ticker}`))
-    results
-      .filter((row) => selectedForComparison.has(row.ticker))
-      .forEach((row) => {
-        const ticker = row.ticker.replace(/\.T$/i, '')
-        if (!compared.has(`JP:${ticker}`)) {
-          toggleComparedSymbol({ market: 'JP', ticker, name: row.name })
-        }
-      })
+    const current = getCompareSymbols()
+    const compared = new Set(current.map((symbol) => `${symbol.market}:${symbol.ticker}`))
+    let slots = Math.max(0, 4 - current.length)
+    for (const row of results.filter((item) => selectedForComparison.has(item.ticker))) {
+      const ticker = row.ticker.replace(/\.T$/i, '')
+      if (!compared.has(`JP:${ticker}`) && slots > 0) {
+        toggleComparedSymbol({ market: 'JP', ticker, name: row.name })
+        compared.add(`JP:${ticker}`)
+        slots -= 1
+      }
+    }
     setSelectedForComparison(new Set())
   }
 

@@ -607,6 +607,7 @@ export function Header() {
     ? 'commodities'
     : pathname.startsWith('/us')
       || (pathname.startsWith('/ai/') && requestedMarket === 'US')
+      || (pathname === '/chart-drill' && requestedMarket?.toUpperCase() === 'US')
       ? 'us'
       : 'jp'
   const isUsArea = area === 'us'

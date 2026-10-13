@@ -132,7 +132,7 @@ function ResultRowCard({
             )}
             {row.avgVolume20d != null && <span>20日平均出来高 {formatNumber(row.avgVolume20d)}</span>}
             {row.avgVolume20d == null && row.avgVolume30d != null && <span>平均出来高 {formatNumber(row.avgVolume30d)}</span>}
-            {row.marginType && <span>{row.marginType}</span>}
+            {row.marginType && market !== 'US' && <span>{row.marginType}</span>}
             {row.rank != null && <span>#{row.rank}</span>}
             {row.physicalMomentumScore != null && <span>PMS {formatScore(row.physicalMomentumScore)}</span>}
             {row.physicalForceScore != null && <span>PFS {formatScore(row.physicalForceScore)}</span>}
@@ -182,6 +182,9 @@ function ResultRowCard({
 }
 
 export function AssistantResponseCard({ response, onRun }: { response: AssistantChatResponse; onRun: (message: string) => void }) {
+  const hasUsResults = response.context.market === 'US'
+    || response.sections.some((section) => section.meta?.market === 'US')
+
   return (
     <div className="space-y-3">
       <div className="rounded-[6px] border border-[var(--color-border-default)] bg-white p-3">
@@ -206,6 +209,11 @@ export function AssistantResponseCard({ response, onRun }: { response: Assistant
         <div className="mt-2 text-[10px] font-bold text-[var(--color-text-tertiary)]">
           {openAiStatusLabel(response)}
         </div>
+        {hasUsResults && (
+          <div className="mt-1 text-[10px] font-bold text-[var(--color-text-tertiary)]">
+            米国株は米国データのみで回答します。未対応の条件（決算予定・過去アンカー類似など）は日本株データで代替せず、候補なしとして扱います。
+          </div>
+        )}
       </div>
 
       {response.clarificationQuestions.length > 0 && (
@@ -255,7 +263,9 @@ export function AssistantResponseCard({ response, onRun }: { response: Assistant
               <ResultRowCard
                 key={`${section.tool}-${row.ticker ?? index}-${index}`}
                 row={row}
-                market={response.context.market}
+                market={section.meta?.market === 'US' || section.meta?.market === 'JP'
+                  ? section.meta.market
+                  : response.context.market}
               />
             ))}
             {section.rows.length === 0 && (
@@ -495,7 +505,9 @@ export function AssistantDrawer() {
               <textarea
                 value={input}
                 onChange={(event) => setInput(event.target.value)}
-                placeholder="例: 最近動き出しそうな貸借銘柄をPMSと6ステージ重視で探して"
+                placeholder={context.market === 'US'
+                  ? '例: 米国株でPMSと出来高が強い初動候補を探して'
+                  : '例: 最近動き出しそうな貸借銘柄をPMSと6ステージ重視で探して'}
                 className="min-h-[46px] flex-1 resize-none rounded-[6px] border border-[var(--color-border-default)] px-3 py-2 text-[12px] font-semibold leading-relaxed outline-none focus:border-[var(--color-brand-600)]"
                 rows={2}
               />

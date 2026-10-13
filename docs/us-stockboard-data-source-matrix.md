@@ -1,6 +1,6 @@
 # US StockBoard Data Source Matrix
 
-Updated: 2026-10-12
+Updated: 2026-10-13
 
 | Domain | Canonical source | Current coverage | PIT contract | Status | Remaining action |
 |---|---|---:|---|---|---|
@@ -14,6 +14,10 @@ Updated: 2026-10-12
 | Sector and industry analysis | Primary DB current `US_SEC_SIC` classification joined to latest US analytics | 5,506 classified momentum rows; 10 broad groups including SIC-unknown; 388 four-digit SIC industries on 2026-10-09 | Latest date only; a selected historical date does not display, aggregate or filter by current classifications | DATA SUBSTITUTE | Add effective-dated SEC SIC history before historical sector/industry analysis |
 | Trigger discovery | Deterministic US price/Stage/PMS serving with current universe identity | Current and single-date search across 1D/2D/3D/5D/1W/2W/3W/5W/1M/2M/3M/5M; result mini charts use the same requested date | Search and chart anchors resolve on or before the requested date; current Exchange/SIC metadata is not used as historical evidence | DATA READY | Add market-scoped saved/evaluation/notification persistence and period scans; add effective-dated classification filters; optimize cold searches |
 | MTF close calendar | Observed US dates in `market_ohlcv_daily` plus deterministic US exchange holiday rules | 6,754 regular-session dates from 2000-01-04 through 2026-10-09; all 12 D/W/M close boundaries and future projections are served | Observed rows are used only inside their coverage; future dates are labeled projections, unscheduled closures are not invented, and anomalous holiday/weekend rows are excluded | DATA READY | Export a US TradingView Oracle CSV/fixture and require zero mismatches before marking US-specific parity complete |
+| Watchlist quotes | Market-local quote APIs backed by canonical JP and US EOD stores | JP and US symbols can coexist in one current-market list; US rows expose adjusted-EOD semantics and USD | Quotes retain their own market date and currency; price discontinuities are not presented as daily returns | DATA READY | Current-market feature; no historical watchlist contract |
+| Comparison and composite charts | Canonical JP daily OHLCV and adjusted US daily OHLCV | Up to four JP/US symbols in the comparison dock; same-market formulas and normalized comparison series | Each series preserves its market and corporate-action generation; mixed-market arithmetic fails closed without dated FX | DATA READY | Import daily USD/JPY before enabling mixed JP/US arithmetic |
+| Chart drill | Canonical adjusted US daily OHLCV | US ticker presets and generated questions use adjusted open/high/low/close/volume | The selected candle and context window come from one adjusted generation with no current-data substitution | DATA READY | None for the current deterministic exercise contract |
+| AI research | US price, Stage, PMS/PFS/PES, physical ML, similarity, universe identity and SEC SIC | Market-aware US research prompts and results; unsupported fundamentals, earnings and historical-anchor conditions remain visible | Router and tools reject JP-only filters and do not reuse JP data for a US request | DATA PARTIAL | Add approved PIT fundamentals and earnings sources before enabling those tools |
 | PMS / PFS / PES | US analytics DB | 11,970 symbols on 2026-10-09 | Latest row on or before requested date | DATA READY | Per-symbol missing reason |
 | ML feature vectors | US analytics DB | 10,391 tickers on 2026-10-09 | `as_of_date <= selected date` | DATA READY | UI and acceptance-metric parity |
 | ML candidates | US analytics DB | 1,270 tickers on 2026-10-09 | `as_of_date <= selected date` | DATA READY | Broaden discovery wiring |
@@ -40,6 +44,21 @@ Updated: 2026-10-12
 5. Paid, licensed, or legally ambiguous sources remain blocked until the user approves the source.
 
 ## W3 runtime evidence
+
+- The shared Watchlist now keeps JP and US quote semantics distinct, batches refreshes, pauses polling
+  while hidden, and suppresses false daily returns around detected price discontinuities. The comparison
+  dock enforces one global four-symbol limit without silently evicting an existing selection.
+- US custom/composite charts and Chart Drill use adjusted OHLCV consistently, including adjusted
+  intraday bounds and volume for split-sensitive exercises. US-only formulas are live; mixed-market
+  arithmetic returns an explicit data-contract error because the current database has no daily USD/JPY
+  rows, rather than combining incomparable JPY and USD values.
+- AI Research recognizes US ticker syntax and market context, exposes supported price/Stage/momentum/
+  similarity/SEC-SIC capabilities, and fails closed for JP-only filters, earnings, fundamentals and
+  historical anchors. It never silently runs a US question against the JP universe.
+- Claude Opus 5.5 (`claude.ai`, firstParty, Pro) reviewed the shared-tool presentation and completed
+  one bounded revision for dock clearance, mobile headings, Chart Drill context and control alignment.
+  Codex dedicated tests, shared regressions, typecheck, build and 1440/1024/768/390 browser QA passed
+  with no page-level overflow, console error, failed request or fixed-dock content occlusion.
 
 - `/us/mtf-close-calendar` serves all 12 D/W/M close boundaries from observed US regular-session
   dates and extends beyond the data watermark with explicitly dashed holiday-rule projections.
