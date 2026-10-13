@@ -15,6 +15,9 @@ const home = os.homedir()
 const launchAgentsDir = path.join(home, 'Library', 'LaunchAgents')
 const plistPath = path.join(launchAgentsDir, `${label}.plist`)
 const logDir = path.join(home, 'Library', 'Logs', 'StockBoard')
+const configDir = path.join(home, 'Library', 'Application Support', 'StockBoard', 'config')
+const runtimeEnvPath = path.join(configDir, 'runtime.env')
+const productionEnvPath = path.join(configDir, 'production.env')
 const uid = typeof process.getuid === 'function' ? process.getuid() : Number(process.env.UID)
 const pathEnv = [
   '/opt/homebrew/bin',
@@ -82,6 +85,16 @@ function bootstrap(attempts = 6): void {
 fs.mkdirSync(launchAgentsDir, { recursive: true })
 fs.mkdirSync(logDir, { recursive: true })
 
+for (const envPath of [runtimeEnvPath, productionEnvPath]) {
+  if (!fs.existsSync(envPath)) throw new Error(`Canonical machine env is missing: ${envPath}`)
+  if ((fs.statSync(envPath).mode & 0o077) !== 0) {
+    throw new Error(`Canonical machine env must be owner-only: ${envPath}`)
+  }
+}
+if (!/^JQUANTS_API_KEY=.+$/m.test(fs.readFileSync(runtimeEnvPath, 'utf8'))) {
+  throw new Error('Canonical runtime env is missing JQUANTS_API_KEY')
+}
+
 const command = [
   `cd ${JSON.stringify(cwd)}`,
   `export PATH=${JSON.stringify(pathEnv)}`,
@@ -117,7 +130,12 @@ const command = [
   'export ML_CONTEXT_DAILY_RECENT_DAYS=${ML_CONTEXT_DAILY_RECENT_DAYS:-5}',
   'export ML_PHYSICS_DAILY_RECENT_DAYS=${ML_PHYSICS_DAILY_RECENT_DAYS:-5}',
   'export ML_PHYSICS_DAILY_MIN_HISTORY_DAYS=${ML_PHYSICS_DAILY_MIN_HISTORY_DAYS:-220}',
-  'npm run batch:update-latest',
+  [
+    JSON.stringify(process.execPath),
+    `--env-file=${JSON.stringify(runtimeEnvPath)}`,
+    `--env-file=${JSON.stringify(productionEnvPath)}`,
+    '--import tsx scripts/update-latest.ts',
+  ].join(' '),
 ].join(' && ')
 
 const plist = `<?xml version="1.0" encoding="UTF-8"?>
