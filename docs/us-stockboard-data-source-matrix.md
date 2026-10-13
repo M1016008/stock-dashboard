@@ -7,7 +7,7 @@ Updated: 2026-10-13
 | Daily price and volume | Tiingo EOD in `market_ohlcv_daily` | 11,970 tickers on 2026-10-09 | Date-keyed; adjusted-price generation must remain generation-consistent | DATA READY | Keep quality and corporate-action gates |
 | Daily 6 Stage snapshots | Deterministic StockBoard engine in `market_daily_snapshots` | 11,946 tickers on 2026-10-09 | Date-keyed | DATA READY | Cross-market semantic regression |
 | Stage transition aggregate | US analytics `stage_transitions` and `pattern_stats` | 216 transition cells; 169,547 horizon-pattern rows; six axes present | Aggregate tables power the overview only; dated scanner events are derived from adjacent observed snapshots | DATA READY | Keep aggregate and dated-event semantics separated |
-| Backtest evaluation | US analytics evaluation and serving tables | Model evaluation 39 rows; physics 168; RL 63; similarity 0; serving coverage ends 2026-08-05 | Evaluation queries exclude rows after the current US price watermark; no selected-date query contract yet | DATA PARTIAL | Refresh serving coverage, add selected-date contract, and generate similarity evaluations |
+| Backtest evaluation | US analytics `serving_backtest_results`, evidence and evaluation tables | Seven outcome horizons; 5-day has 259 regular-session dates through 2026-08-05, 40-day has 224 through 2026-06-15, 200-day has 66 through 2025-10-28; model 39 rows, physics 168, RL 63, similarity 0 | Selected date and detail reads use dated serving rows only; canonical US holidays are excluded and rejected; current classifications are omitted because no effective-dated history exists | DATA PARTIAL | Refresh serving outcomes to the 2026-10-12 price watermark, generate similarity evaluations, and audit extreme secondary model/RL values before Production activation |
 | Stage screener serving | Indexed price-anchor pivot plus dated Stage snapshots | 12,437 investable rows on 2026-10-09 | Requested date resolves to latest snapshot on or before that date | DATA READY | Production is live; cold response and compact-payload reduction remain performance work |
 | Stage transition scanner | US analytics `daily_snapshots` + `ohlcv_daily` + current `ticker_universe` labels | 49,409,559 snapshots; 1,193 changed tickers on 2026-10-09 | Transitions and liquidity are evaluated at each event date; missing stages are excluded without bridging; current active membership never filters history; Industry/Exchange filters are allowed only for the latest date | DATA READY | Production and authenticated friend access are verified; add effective-dated classification history before historical classification filters |
 | Market momentum | US analytics `physical_momentum`, `daily_snapshots`, `ohlcv_daily` plus primary DB identity | 5,950 investable PMS rows on 2026-10-09; 5,936 with 6 Stage | Price, Stage and PMS/PFS/PES resolve on the requested date; current exchange and SIC metadata are omitted from historical views rather than backfilled | DATA READY | Production is live; retain the current fail-closed historical classification boundary |
@@ -69,6 +69,25 @@ Updated: 2026-10-13
   SEC payload, fixture or Production DB row is stored in Git.
 
 ## W3 runtime evidence
+
+- `/us/analysis/backtest` now provides a dated Historical Outcome Explorer ahead of the existing
+  evaluation tables. It supports 5/10/20/40/60/90/200-session horizons, date stepping, ticker/name,
+  exact Stage/signal, target and return-range filters, deterministic summary rates, pagination and
+  expanded up/down outcome detail with price/Stage/evidence context.
+- The explorer does not join current universe classifications into history. Exchange, SEC SIC sector
+  and industry controls are omitted and rejected by the API. Missing outcomes stay unavailable,
+  observed zero stays zero, null returns sort last, and generated narrative remains disabled.
+- Canonical US market-calendar checks remove anomalous regular-holiday rows from coverage. Explicit
+  holiday requests fail closed; implicit latest-date resolution also skips holiday rows. Live reads
+  covered AAPL, JPM, CAT, XOM, JNJ, TSLA and RIVN, and a query plus full filtered summary completed in
+  roughly 0.06 seconds against the 417 GB analytics database.
+- Claude Opus (`claude.ai`, firstParty, Pro) implemented the product hierarchy and completed one
+  screenshot-led responsive revision. Codex fixture/API/PIT tests, stock-detail regression, typecheck,
+  production build and 1440/1024/768/390 browser QA passed with no page overflow, clipped context value,
+  stuck loading state or application console error.
+- Production remains pending: outcome serving trails the 2026-10-12 market watermark, similarity
+  evaluations are empty, and pre-existing extreme values in secondary model/RL aggregates need a
+  source-pipeline audit. These are data-quality gates; the interactive explorer contract is complete.
 
 - The shared Watchlist now keeps JP and US quote semantics distinct, batches refreshes, pauses polling
   while hidden, and suppresses false daily returns around detected price discontinuities. The comparison
@@ -132,7 +151,9 @@ Updated: 2026-10-13
 - Claude Opus 5.5 (`claude.ai`, firstParty, Pro) implemented and reviewed the change-focused hierarchy, off-diagonal matrix scale and compact mobile result list. Candidate browser QA passed at 1440, 1024, 768 and 390 px with no body overflow, console/HTTP error or stuck loading state; candidate read-only smoke passed 160/160.
 - Main `b3d49be88d7c7885fc5f23bfb5c3a7ff3611435a` was deployed as build `g_ZGu4KOOKQSHow0h0AXl`. Canonical Storage Guard preflight passed; promoted-candidate and Production read-only smoke each passed 160/160, and Production health/storage remained healthy/available.
 - Authenticated `stock.marketframe.jp/us/analysis/transitions` loaded both the 30-pattern overview and the 32-row current transition result through Cloudflare Access. Gateway regression confirmed safe reads while writes, admin routes and upgrades remain fail closed.
-- `/us/analysis/backtest`: summary tables render, but serving coverage ends 2026-08-05 and `ml_similarity_evaluations` has 0 rows; it is not yet equivalent to the JP interactive date/horizon/filter/detail workflow.
+- `/us/analysis/backtest`: the interactive date/horizon/filter/detail workflow is implemented and QA'd;
+  serving freshness, empty similarity evaluations and extreme secondary aggregate values remain
+  explicit Production data gates.
 
 ## W2 runtime evidence
 

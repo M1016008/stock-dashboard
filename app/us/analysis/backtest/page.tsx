@@ -3,11 +3,13 @@ import { PageTitle } from '@/components/layout/PageTitle'
 import { SectionHeader } from '@/components/ui/SectionHeader'
 import { Notice } from '@/components/ui/EmptyState'
 import { UsAnalysisNav } from '@/components/us/UsAnalysisNav'
+import { UsBacktestExplorer } from '@/components/us/backtest/UsBacktestExplorer'
 import { loadUsBacktestAnalysis } from '@/lib/server/us-analysis-dashboard'
+import { US_BACKTEST_HORIZONS } from '@/lib/server/us-backtest'
 
 export const metadata: Metadata = {
   title: 'US過去検証 — StockBoard',
-  description: '米国株ML、物理状態、RL、類似局面のアウトオブサンプル評価',
+  description: '米国株の基準日別の事後成績と、ML・物理状態・RL・類似局面のアウトオブサンプル評価',
 }
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -46,11 +48,22 @@ export default async function UsBacktestPage() {
       <PageTitle
         eyebrow="米国株"
         title="US過去検証"
-        subtitle="US分析DBのモデル評価、物理状態、RL方策、類似局面の事後成績を分離して検証します。"
+        subtitle="基準日ごとの状態とその後の実績を検証し、モデル評価・物理状態・RL方策・類似局面の事後成績を分離して確認します。"
         meta={<span>サービング統計 {analysis.servingDate ?? '生成中'}</span>}
       >
         <UsAnalysisNav current="/us/analysis/backtest" />
       </PageTitle>
+
+      <UsBacktestExplorer horizons={US_BACKTEST_HORIZONS} defaultHorizon={40} />
+
+      {/* 以下は Explorer とは別集計の参考セクション (h3 で Explorer より一段下げる) */}
+      <SectionHeader
+        id="us-bt-evaluations-title"
+        level={1}
+        className="mt-3"
+        title="モデル・方策の評価"
+        description="上の結果一覧とは別に集計された、モデル・状態・方策ごとの評価です。"
+      />
 
       {!analysis.servingDate && (
         <Notice tone="warning" title="USシグナル別サービング統計は全履歴生成中です">
@@ -61,7 +74,7 @@ export default async function UsBacktestPage() {
       <section aria-labelledby="us-bt-model-title" className="flex min-w-0 flex-col gap-3">
         <SectionHeader
           id="us-bt-model-title"
-          level={1}
+          as="h3"
           title="MLモデル評価"
           description={`評価日 ${analysis.modelEvaluations[0]?.evaluationDate ?? '未生成'}`}
         />
@@ -97,7 +110,7 @@ export default async function UsBacktestPage() {
       <section aria-labelledby="us-bt-physics-title" className="flex min-w-0 flex-col gap-3">
         <SectionHeader
           id="us-bt-physics-title"
-          level={1}
+          as="h3"
           title="物理状態別の事後成績"
           description={`評価日 ${analysis.physicsStatus[0]?.evaluationDate ?? '未生成'} / Lift = 命中率 ÷ 基準率`}
         />
@@ -136,7 +149,7 @@ export default async function UsBacktestPage() {
         <section className="panel" aria-labelledby="us-bt-rl-title">
           <div className="panel-head">
             <div className="min-w-0">
-              <h2 id="us-bt-rl-title">RL方策評価</h2>
+              <h3 id="us-bt-rl-title">RL方策評価</h3>
               <p>評価日 {analysis.rlEvaluations[0]?.evaluationDate ?? '未生成'}</p>
             </div>
           </div>
@@ -164,7 +177,7 @@ export default async function UsBacktestPage() {
         <section className="panel" aria-labelledby="us-bt-similar-title">
           <div className="panel-head">
             <div className="min-w-0">
-              <h2 id="us-bt-similar-title">類似局面評価</h2>
+              <h3 id="us-bt-similar-title">類似局面評価</h3>
               <p>基準日 {analysis.similarityEvaluations[0]?.asOfDate ?? '未生成'}</p>
             </div>
           </div>

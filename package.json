@@ -172,6 +172,8 @@
     "test:us-symbol-aliases": "tsx scripts/test-us-symbol-aliases.ts",
     "test:us-search-api": "tsx scripts/test-us-search-api.ts",
     "test:us-stock-detail-parity": "tsx scripts/test-us-stock-detail-parity.ts",
+    "test:us-backtest": "tsx scripts/test-us-backtest.ts",
+    "test:us-backtest-ui": "tsx scripts/test-us-backtest-ui.ts",
     "audit:us-jp-parity": "tsx scripts/audit-us-jp-parity.ts",
     "test:safe-spreadsheet": "tsx scripts/test-safe-spreadsheet.ts",
     "test:classification-source": "tsx scripts/test-classification-source.ts",
