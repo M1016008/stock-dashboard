@@ -64,7 +64,7 @@ performance, or historical-price parity work.
   no Header-originated console or HTTP errors.
 - A 2026-10-14 recheck confirmed JP Valuation Serving through 2026-10-13 (4,201 tickers) and a
   completed 4,634-row Integrated Screener serving date. Production promotion remains pending only
-  because the latest main line also contains the shared W3F source-data gate documented below.
+  because the latest main line also requires the W3J analytical cleanup, rebuild and candidate gate.
 
 ### W2 - Dashboard, Screener, Preview, Search and Historical Date
 
@@ -160,7 +160,7 @@ performance, or historical-price parity work.
 - Claude Opus 5.5 (`claude.ai`, firstParty, Pro) audited, implemented and completed a final read-only
   review. Codex verified fixture and canonical-data parity, error-path fallback, query plans, dedicated
   regressions, typecheck and build. No schema, source data, calculation, API or persistence change was
-  introduced. Production promotion remains pending behind the shared W3F RGC/QMMM source-policy gate.
+  introduced. Production promotion follows the W3J analytical cleanup, rebuild and candidate gate.
 
 ### W3D - MTF Close Calendar
 
@@ -198,7 +198,7 @@ performance, or historical-price parity work.
   `UNVERIFIED` status with the exact validated scope, kept the existing component structure, and
   pinned the disclosed scope to the US fixture in the UI regressions. Feature commit `4a61d12a`
   was merged normally as `682ac7c6` and pushed to main. Production promotion remains pending
-  behind the shared W3F source-policy gate.
+  behind the W3J analytical cleanup, rebuild and candidate gate.
 
 ### W3E - Shared Watchlist, Comparison, Charts, Drill and AI Research
 
@@ -266,18 +266,40 @@ performance, or historical-price parity work.
   one-time full-history run while continuing to validate current model coverage, feature dates, feature
   set and adjusted-price basis. This removes the false failure that required every later rolling model
   to retain the 1990 baseline start date. A regression covers rolling models and missing baseline proof.
-- No clipping or winsorization was introduced. Current-active audit still identifies genuine/provider
-  edge cases: RGC has a Tiingo adjusted-price discontinuity around its corporate-action history, and
-  QMMM has a very large observed move followed by zero-volume repeated quotes. These rows match the
-  primary source and analytics copy, so changing or quarantining them is a source-of-truth policy
-  decision rather than a calculation repair. Historical Explorer Production activation therefore
-  remains pending even though stale serving coverage, empty similarity evaluation, and scheduler-path
-  defects are resolved.
+- No clipping or winsorization was introduced. The current-active audit isolated two source events:
+  RGC's 2025-06-16 post-split market session and QMMM's zero-volume repeated quotes beginning with the
+  2025-09-29 SEC suspension and continuing under the subsequent Nasdaq halt. W3J resolves their policy
+  without rewriting the primary source: RGC remains observed and QMMM halt carries are excluded only
+  from the analytical copy. Historical Explorer Production activation now depends on applying that
+  versioned policy, rebuilding dependent analytics and passing the candidate gate.
 - Data-quality feature `78fda1f4f24cbb533c9a192fdc24ddcf20a5d5dd` was merged without conflict as
   `3a0c1209f93ad47f9b73be7db54f37c5a853e755` and pushed to main after dedicated data-quality,
   pipeline-generation, automation, backtest, analytics, market-intelligence and status-health tests,
-  TypeScript, diff checks and the Production build passed. Production remains intentionally pending
-  on the RGC/QMMM source-quality policy rather than a code, freshness or serving-coverage failure.
+  TypeScript, diff checks and the Production build passed. W3J subsequently resolved the source policy;
+  Production now waits on its versioned analytical cleanup, rebuild and candidate gate.
+
+### W3J - Official-event analytical price policy
+
+- Official evidence resolves both W3F edge cases. Regencell stated that RGC would begin trading on a
+  38-for-1 split-adjusted basis at the 2025-06-16 open, and its SEC-filed release confirms the split.
+  The observed 2025-06-16 volume and price move therefore remain analytical evidence. They are not
+  clipped, winsorized or recast as a corporate-action error.
+- The SEC suspended QMMM from 2025-09-29 through 2025-10-10. Nasdaq then announced that the halt would
+  continue until its information request was satisfied; its 2026 delisting notice still described the
+  security as halted. Tiingo's 262 zero-volume, unchanged rows from 2025-09-29 through 2026-10-13 are
+  retained in raw `market_ohlcv_daily` but are not observed analytical sessions. A later positive-volume
+  row is eligible automatically, so the rule does not manufacture a permanent end date.
+- `lib/us-market-data-quality.ts` is the versioned policy registry. `build-us-analytics-db.ts` filters
+  the US analytical OHLCV and Stage copy and removes prior ineligible base rows. The one-shot
+  `maintenance:us-market-data-quality:{dry-run,apply}` task is US-analytics-role guarded, defaults to
+  dry-run, preserves the primary database and clears only QMMM-derived analytical rows so the full
+  model/evaluation/serving chain can be rebuilt from eligible observations.
+- Focused unit, SQL-selection, temporary primary-to-analytics copy and maintenance apply regressions
+  cover the RGC acceptance, QMMM exclusion, positive-volume recovery, raw-source immutability and
+  dependent-row cleanup. The 2026-10-15 real analytics dry-run found 262 ineligible OHLCV rows,
+  262 matching Stage snapshots and 25,316 total base/derived rows to replace, with raw-source writes 0.
+  Production remains pending until the approved apply, full dependent rebuild, candidate QA and normal
+  deployment sequence complete.
 
 ### W3G - Point-in-time ML prediction history
 
@@ -305,8 +327,8 @@ performance, or historical-price parity work.
   responsive checks with no component overflow or application console error.
 - Functional and historical presentation parity is complete for the available prediction records, but
   source coverage remains `PARTIAL`: only one 40-session model horizon and ranked candidates are stored,
-  rather than the full model/horizon depth of the JP experience. Production promotion remains pending
-  behind the shared W3F RGC/QMMM source-quality policy gate; no Production deploy is claimed by W3G.
+  rather than the full model/horizon depth of the JP experience. Production promotion follows the W3J
+  analytical cleanup, rebuild and candidate gate; no Production deploy is claimed by W3G.
 - Feature `416b63c0d4f0bc47089bdc2b82806cdafeb255f9` was merged without conflict as
   `18e39f9df71292671f9f2c3c2873636558d58a5c`. Merge-head dedicated/shared regressions,
   parity audit, typecheck, diff checks and the Production build passed before the main push.
@@ -378,7 +400,7 @@ performance, or historical-price parity work.
   covered all 11 routes at 1440 px and the shared/Stock Detail placements at 1440, 1024, 768 and
   390 px with zero whole-document horizontal overflow and zero application console warnings/errors.
   Ten warm/candidate `/api/us/status` requests returned HTTP 200 in 0.27-1.46 seconds.
-- Production promotion remains pending behind the shared W3F RGC/QMMM source-quality policy gate.
+- Production promotion follows the W3J analytical cleanup, rebuild and candidate gate.
   The currently healthy Production build is unchanged; no DB schema, DB write, source value or
   business calculation changed in this wave.
 - Git: feature commit `0bc4d029c06bf5cba772b2bcf54656ade05fe3a6`; normal merge commit
@@ -411,7 +433,7 @@ performance, or historical-price parity work.
   bounded source changes. Codex corrected ambiguous-empty reversal and interrupted-run reason
   handling, then verified the pure state machine, temporary SQLite migration/store/SLA integration,
   automation contracts, coverage APIs, route states, typecheck and Production build.
-- Production activation remains pending behind the shared W3F RGC/QMMM source-policy gate. The
+- Production activation follows the W3J analytical cleanup, rebuild and candidate gate. The
   additive table must be created by the approved deployment path before a `SKIP_SCHEMA_ENSURE=1`
   runtime starts the new runner. No Production DB write or source reclassification occurred in this
   wave.
@@ -420,7 +442,7 @@ performance, or historical-price parity work.
 
 - Status: implemented and verified on `codex/us-parity-w0-route-states`, then merged normally to
   main. The board row is `IMPLEMENTED` with Codex QA `PASS` and Git `MAIN`; Production remains
-  `PENDING` behind the shared W3F source-data gate.
+  `PENDING` behind the W3J analytical cleanup, rebuild and candidate gate.
 - Blocking findings from the visual review (scope of the final bounded revision):
   - Stage map (US and the shared JP component): during loading or error, the header count, the six
     Stage summary cells, the `未算出` cell and the `全投資対象（0）` option showed `0`, which looked
