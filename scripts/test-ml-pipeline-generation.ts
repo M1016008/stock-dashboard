@@ -93,6 +93,33 @@ async function main(): Promise<void> {
     assert.ok(payload.latestDelta)
     assert.equal(hasAuditedFullHistoryBaseline(updated), true)
 
+    for (const horizon of ML_PRIMARY_HORIZONS) {
+      await client.batch([
+        ...['up', 'down'].map((direction) => ({
+          sql: 'INSERT INTO ml_models VALUES (?, ?, ?, ?, ?)',
+          args: ['logistic_regression_v1', direction, horizon, JSON.stringify({ mode: 'recent', trainStartDate: '2024-01-01' }), 2],
+        })),
+        ...['up', 'down', 'wait'].map((direction) => ({
+          sql: 'INSERT INTO ml_models VALUES (?, ?, ?, ?, ?)',
+          args: [ML_PHYSICS_MODEL_TYPE, direction, horizon, JSON.stringify({ mode: 'recent', trainStartDate: '2024-01-01' }), 2],
+        })),
+      ])
+    }
+    const verifiedAfterRollingRetrain = await verifyOrAdoptMlPipelineBaseline(client, 'US')
+    assert.equal(verifiedAfterRollingRetrain.adopted, false)
+    assert.equal(hasAuditedFullHistoryBaseline(verifiedAfterRollingRetrain.state), true)
+    const rollingEvidence = await inspectMlPipelineEvidence(client, 'US')
+    assert.equal(rollingEvidence.fullHistoryModelReady, false)
+
+    await client.execute({
+      sql: 'UPDATE ml_pipeline_generations SET payload_json = ? WHERE market = ? AND pipeline = ?',
+      args: [JSON.stringify({ baseline: { fullHistoryModelReady: false } }), 'US', ML_PIPELINE_NAME],
+    })
+    await assert.rejects(
+      () => verifyOrAdoptMlPipelineBaseline(client, 'US'),
+      /missing audited full-history model proof/,
+    )
+
     await client.execute({
       sql: 'UPDATE ml_pipeline_generations SET generation_version = ? WHERE market = ? AND pipeline = ?',
       args: ['incompatible', 'US', ML_PIPELINE_NAME],

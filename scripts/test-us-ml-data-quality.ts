@@ -4,10 +4,25 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { createClient, type Client } from '@libsql/client'
+import {
+  isUsUniverseActive,
+  shouldReconcileUsUniverse,
+  usUniverseActivityCutoff,
+} from '@/lib/us-universe-activity'
 
 const root = process.cwd()
 const tsx = path.join(root, 'node_modules', '.bin', 'tsx')
 const temporaryDirectory = mkdtempSync(path.join(os.tmpdir(), 'stockboard-us-ml-quality-'))
+
+assert.equal(usUniverseActivityCutoff(new Date('2026-10-14T00:00:00Z')), '2026-09-30')
+assert.equal(usUniverseActivityCutoff(new Date('2026-10-14T23:59:00Z')), '2026-10-01')
+assert.equal(isUsUniverseActive('2026-10-01', '2026-10-01'), true)
+assert.equal(isUsUniverseActive('2026-09-30', '2026-10-01'), false)
+assert.equal(isUsUniverseActive(null, '2026-10-01'), false)
+assert.equal(shouldReconcileUsUniverse({ targeted: false, limit: 0, failed: 0 }), true)
+assert.equal(shouldReconcileUsUniverse({ targeted: true, limit: 0, failed: 0 }), false)
+assert.equal(shouldReconcileUsUniverse({ targeted: false, limit: 10, failed: 0 }), false)
+assert.equal(shouldReconcileUsUniverse({ targeted: false, limit: 0, failed: 1 }), false)
 
 function runScript(
   script: string,
@@ -419,6 +434,10 @@ async function testSimilarityStrictGate(): Promise<void> {
   const client = createClient({ url: `file:${databasePath}` })
   await executeAll(client, [
     'CREATE TABLE ohlcv_daily (ticker TEXT NOT NULL, date TEXT NOT NULL, close REAL NOT NULL)',
+    `CREATE TABLE ticker_universe (
+      ticker TEXT PRIMARY KEY,
+      active INTEGER NOT NULL
+    )`,
     `CREATE TABLE ml_short_labels (
       ticker TEXT NOT NULL,
       date TEXT NOT NULL,
@@ -455,6 +474,9 @@ async function testSimilarityStrictGate(): Promise<void> {
     )`,
   ])
   await client.batch([
+    { sql: "INSERT INTO ticker_universe VALUES ('BASE', 1)", args: [] },
+    { sql: "INSERT INTO ticker_universe VALUES ('SIM', 1)", args: [] },
+    { sql: "INSERT INTO ticker_universe VALUES ('INACTIVE', 0)", args: [] },
     ...Array.from({ length: 7 }, (_, index) => ({
       sql: 'INSERT INTO ohlcv_daily (ticker, date, close) VALUES (?, ?, ?)',
       args: ['BASE', `2026-01-${String(index + 1).padStart(2, '0')}`, 100 + index],
@@ -466,9 +488,21 @@ async function testSimilarityStrictGate(): Promise<void> {
       args: [],
     },
     {
+      sql: `INSERT INTO serving_current_similars
+        (as_of_date, base_ticker, rank, similar_ticker, similarity_score)
+        VALUES ('2026-01-02', 'BASE', 2, 'INACTIVE', 0.94)`,
+      args: [],
+    },
+    {
       sql: `INSERT INTO ml_short_labels
         (ticker, date, horizon_days, return_pct, max_return_pct, min_return_pct, up_label, down_label)
         VALUES ('SIM', '2026-01-01', 5, 3, 5, -1, 1, 0)`,
+      args: [],
+    },
+    {
+      sql: `INSERT INTO ml_short_labels
+        (ticker, date, horizon_days, return_pct, max_return_pct, min_return_pct, up_label, down_label)
+        VALUES ('INACTIVE', '2026-01-02', 5, 9999999, 9999999, -9999999, 1, 0)`,
       args: [],
     },
   ], 'write')
@@ -496,6 +530,10 @@ async function testSimilarityStrictGate(): Promise<void> {
   assert.equal(current.status, 0, commandOutput(current))
   const verify = createClient({ url: `file:${databasePath}` })
   assert.equal(await countRows(verify, 'SELECT COUNT(*) AS count FROM ml_similarity_evaluations'), 1)
+  assert.equal(await countRows(verify, 'SELECT pair_count AS count FROM ml_similarity_evaluations'), 1)
+  const evaluation = await verify.execute('SELECT avg_return_pct, payload_json FROM ml_similarity_evaluations')
+  assert.equal(Number(evaluation.rows[0]?.avg_return_pct), 4)
+  assert.equal(JSON.parse(String(evaluation.rows[0]?.payload_json)).universeScope, 'current_active')
   verify.close()
 }
 

@@ -812,10 +812,19 @@ async function main(): Promise<void> {
   if (!acquireUsMlProcessLock(mode)) return
 
   try {
+    const configuredStockboardDbPath = process.env.STOCKBOARD_DB_PATH?.trim()
+    const sourceDbPath = process.env.STOCKBOARD_SOURCE_DB_PATH?.trim()
+      || (
+        configuredStockboardDbPath
+        && path.resolve(configuredStockboardDbPath) !== usAnalyticsDbPath
+          ? configuredStockboardDbPath
+          : undefined
+      )
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       USE_LOCAL_DB: '1',
       STOCKBOARD_DB_ROLE: 'us-analytics',
+      STOCKBOARD_SOURCE_DB_PATH: sourceDbPath,
       STOCKBOARD_DB_PATH: usAnalyticsDbPath,
       US_ANALYTICS_DB_PATH: usAnalyticsDbPath,
       SQLITE_BUSY_RETRIES: process.env.SQLITE_BUSY_RETRIES ?? '12',

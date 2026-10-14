@@ -3,7 +3,12 @@
 import { db, ensureReady } from '@/lib/db/client'
 import { marketDataRuns, marketUniverse } from '@/lib/db/schema'
 import { fetchTiingoSupportedTickers } from '@/lib/tiingo'
-import { isUsInvestableSymbol } from '@/lib/us-symbol-quality'
+import { isUsInvestableSymbol, usInvestableSymbolSql } from '@/lib/us-symbol-quality'
+import {
+  isUsUniverseActive,
+  shouldReconcileUsUniverse,
+  usUniverseActivityCutoff,
+} from '@/lib/us-universe-activity'
 import { eq, sql } from 'drizzle-orm'
 
 const MARKET = 'US'
@@ -18,13 +23,6 @@ const STRICT_SYMBOLS = process.env.US_STRICT_SYMBOLS !== '0'
 const LIMIT = Number(process.env.US_UNIVERSE_LIMIT ?? 0)
 const TICKERS = process.env.TICKERS?.split(',').map((value) => value.trim().toUpperCase()).filter(Boolean)
 
-function isActive(endDate: string | null | undefined): boolean {
-  if (!endDate) return false
-  const latest = new Date(`${endDate}T00:00:00Z`).getTime()
-  const today = Date.now()
-  return Number.isFinite(latest) && latest >= today - 14 * 24 * 60 * 60 * 1000
-}
-
 function looksLikeTradableSymbol(ticker: string): boolean {
   if (!STRICT_SYMBOLS) return true
   return /^[A-Z][A-Z0-9.-]{0,14}$/.test(ticker)
@@ -32,6 +30,7 @@ function looksLikeTradableSymbol(ticker: string): boolean {
 
 async function main() {
   await ensureReady()
+  const activityCutoff = usUniverseActivityCutoff()
   const [run] = await db.insert(marketDataRuns).values({
     market: MARKET,
     jobType: 'tiingo_universe',
@@ -68,7 +67,7 @@ async function main() {
           market: MARKET,
           ticker: row.ticker,
           name: row.name ?? row.ticker,
-          active: isUsInvestableSymbol(row.ticker) && isActive(row.endDate),
+          active: isUsInvestableSymbol(row.ticker) && isUsUniverseActive(row.endDate, activityCutoff),
           exchange: row.exchange ?? null,
           currency: row.priceCurrency ?? 'USD',
           assetType: row.assetType ?? null,
@@ -96,6 +95,18 @@ async function main() {
         failed += chunk.length
         console.error(`universe chunk failed ${i}:`, error)
       }
+    }
+
+    if (shouldReconcileUsUniverse({ targeted: Boolean(TICKERS?.length), limit: LIMIT, failed })) {
+      await db.update(marketUniverse).set({
+        active: sql`CASE
+          WHEN ${marketUniverse.endDate} IS NOT NULL
+           AND ${marketUniverse.endDate} >= ${activityCutoff}
+           AND ${sql.raw(usInvestableSymbolSql('ticker'))}
+          THEN 1 ELSE 0 END`,
+        updatedAt: sql`unixepoch()`,
+      }).where(eq(marketUniverse.market, MARKET))
+      console.log(`US universe activity reconciled: cutoff=${activityCutoff}`)
     }
 
     await db.update(marketDataRuns).set({

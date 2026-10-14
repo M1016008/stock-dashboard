@@ -248,6 +248,7 @@ function steps(): Step[] {
       env: {
         ...baseEnv,
         STOCKBOARD_DB_ROLE: 'us-analytics',
+        STOCKBOARD_SOURCE_DB_PATH: jpDbPath,
         STOCKBOARD_DB_PATH: usDbPath,
       },
       modelDbPath: usDbPath,

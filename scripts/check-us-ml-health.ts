@@ -10,9 +10,13 @@ import { openExistingGuardedClient } from '@/lib/storage/guarded-libsql-client'
 import path from 'path'
 import { ML_PHYSICS_FEATURE_SET } from '@/lib/backtest/ml-physics'
 import { ML_PRIMARY_HORIZONS } from '@/lib/backtest/ml-horizons'
+import { usInvestableSymbolSql } from '@/lib/us-symbol-quality'
+import { usUniverseActivityCutoff } from '@/lib/us-universe-activity'
 
 const stockboardDbPath = process.env.STOCKBOARD_DB_PATH?.trim()
 const stockboardDbLooksUs = stockboardDbPath != null && /stockboard-us\.db$/i.test(stockboardDbPath)
+const sourceDbPath = process.env.STOCKBOARD_SOURCE_DB_PATH?.trim()
+  || (!stockboardDbLooksUs ? stockboardDbPath : undefined)
 const dbPath = path.resolve(
   process.env.US_ANALYTICS_DB_PATH?.trim()
   || (stockboardDbLooksUs ? stockboardDbPath : undefined)
@@ -34,6 +38,9 @@ type HealthRow = {
 }
 
 const client: Client = openExistingGuardedClient(dbPath, 'us-ml-health')
+const sourceClient: Client | null = sourceDbPath
+  ? openExistingGuardedClient(path.resolve(sourceDbPath), 'us-ml-health-source')
+  : null
 
 function profileQuery(sql: string, startedAt: number): void {
   if (!PROFILE_QUERIES) return
@@ -55,6 +62,14 @@ async function all<T = Record<string, unknown>>(sql: string, args: Args = []): P
   return res.rows.map((row) => ({ ...row } as unknown as T))
 }
 
+async function sourceGet<T = Record<string, unknown>>(sql: string, args: Args = []): Promise<T | undefined> {
+  if (!sourceClient) return undefined
+  const startedAt = Date.now()
+  const res = await sourceClient.execute({ sql, args: args as InValue[] })
+  profileQuery(sql, startedAt)
+  return res.rows[0] ? ({ ...res.rows[0] } as unknown as T) : undefined
+}
+
 async function run(sql: string, args: Args = []): Promise<void> {
   const startedAt = Date.now()
   await client.execute({ sql, args: args as InValue[] })
@@ -63,6 +78,22 @@ async function run(sql: string, args: Args = []): Promise<void> {
 
 async function maxDate(table: string, column = 'date', where = '', args: Args = []): Promise<string | null> {
   const row = await get<{ date: string | null }>(`SELECT MAX(${column}) AS date FROM ${table} ${where}`, args)
+  return row?.date ?? null
+}
+
+async function maxActiveTickerDate(
+  table: string,
+  column = 'date',
+  where = '',
+  args: Args = [],
+): Promise<string | null> {
+  const row = await get<{ date: string | null }>(
+    `SELECT MAX(t.${column}) AS date
+     FROM ${table} t
+     INNER JOIN ticker_universe u ON u.ticker = t.ticker AND u.active = 1
+     ${where}`,
+    args,
+  )
   return row?.date ?? null
 }
 
@@ -116,6 +147,79 @@ async function main() {
   const latestSnapshotDate = await maxDate('daily_snapshots')
   const snapshotLatestCount = await countRows('daily_snapshots', 'date', latestSnapshotDate)
   const checks: HealthRow[] = []
+  const activityCutoff = usUniverseActivityCutoff()
+  const analyticsUniverseQuality = await get<{
+    activeCount: number
+    nonInvestableActiveCount: number
+  }>(
+    `
+      SELECT
+        COUNT(*) AS activeCount,
+        SUM(CASE WHEN NOT ${usInvestableSymbolSql('u.ticker')} THEN 1 ELSE 0 END) AS nonInvestableActiveCount
+      FROM ticker_universe u
+      WHERE u.active = 1
+    `,
+  )
+  const nonInvestableActiveCount = Number(analyticsUniverseQuality?.nonInvestableActiveCount ?? 0)
+
+  checks.push({
+    key: 'us_ticker_universe_symbol_quality',
+    expectedDate: activityCutoff,
+    actualDate: activityCutoff,
+    expectedCount: 0,
+    actualCount: nonInvestableActiveCount,
+    payload: {
+      qualityOk: nonInvestableActiveCount === 0,
+      universeScope: 'current_active',
+      activityCutoff,
+      activeCount: Number(analyticsUniverseQuality?.activeCount ?? 0),
+      nonInvestableActiveCount,
+    },
+  })
+
+  if (sourceClient) {
+    const sourceUniverseActivity = await sourceGet<{
+      activeCount: number
+      staleActiveCount: number
+      nonInvestableActiveCount: number
+      violatingActiveCount: number
+    }>(
+      `
+        SELECT
+          COUNT(*) AS activeCount,
+          SUM(CASE WHEN u.end_date IS NULL OR u.end_date < ? THEN 1 ELSE 0 END) AS staleActiveCount,
+          SUM(CASE WHEN NOT ${usInvestableSymbolSql('u.ticker')} THEN 1 ELSE 0 END) AS nonInvestableActiveCount,
+          SUM(
+            CASE
+              WHEN u.end_date IS NULL
+                OR u.end_date < ?
+                OR NOT ${usInvestableSymbolSql('u.ticker')}
+              THEN 1 ELSE 0
+            END
+          ) AS violatingActiveCount
+        FROM market_universe u
+        WHERE u.market = 'US'
+          AND u.active = 1
+      `,
+      [activityCutoff, activityCutoff],
+    )
+    const violatingActiveCount = Number(sourceUniverseActivity?.violatingActiveCount ?? 0)
+    checks.push({
+      key: 'us_source_universe_activity',
+      expectedDate: activityCutoff,
+      actualDate: activityCutoff,
+      expectedCount: 0,
+      actualCount: violatingActiveCount,
+      payload: {
+        qualityOk: violatingActiveCount === 0,
+        universeScope: 'current_active',
+        activityCutoff,
+        activeCount: Number(sourceUniverseActivity?.activeCount ?? 0),
+        staleActiveCount: Number(sourceUniverseActivity?.staleActiveCount ?? 0),
+        nonInvestableActiveCount: Number(sourceUniverseActivity?.nonInvestableActiveCount ?? 0),
+      },
+    })
+  }
 
   checks.push({
     key: 'us_daily_snapshots',
@@ -282,8 +386,8 @@ async function main() {
     payload: { metric: 'distinct base_ticker' },
   })
 
-  const shortLabelDate = await maxDate('ml_short_labels')
-  const rlStateDate = await maxDate('rl_training_states_v2')
+  const shortLabelDate = await maxActiveTickerDate('ml_short_labels')
+  const rlStateDate = await maxActiveTickerDate('rl_training_states_v2')
   checks.push({
     key: 'us_rl_training_states_v2',
     expectedDate: shortLabelDate,
@@ -335,10 +439,10 @@ async function main() {
   )
 
   for (const horizon of ML_PRIMARY_HORIZONS) {
-    const latestPhysicsStatusLabelDate = await maxDate(
+    const latestPhysicsStatusLabelDate = await maxActiveTickerDate(
       'ml_short_labels',
       'date',
-      'WHERE horizon_days = ?',
+      'WHERE t.horizon_days = ?',
       [horizon],
     )
     const status = physicsStatusByHorizon.get(horizon)

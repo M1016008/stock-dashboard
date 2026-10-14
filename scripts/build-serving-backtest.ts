@@ -172,7 +172,11 @@ function scoreSignals(row: LatestFeature): number {
 }
 
 async function latestDate(): Promise<string | null> {
-  return (await execGet<{ date: string | null }>(`SELECT MAX(date) AS date FROM model_features`))?.date ?? null
+  return (await execGet<{ date: string | null }>(`
+    SELECT MAX(mf.date) AS date
+    FROM model_features mf
+    INNER JOIN ticker_universe u ON u.ticker = mf.ticker AND u.active = 1
+  `))?.date ?? null
 }
 
 async function buildLatestSignals(date: string): Promise<void> {
@@ -185,7 +189,7 @@ async function buildLatestSignals(date: string): Promise<void> {
       mf.close, mf.volume, mf.volume_ratio_20, mf.range_pct, mf.atr20_pct,
       mf.ma25_pos_pct, mf.pattern_code, mf.signal_codes
     FROM model_features mf
-    LEFT JOIN ticker_universe u ON u.ticker = mf.ticker
+    INNER JOIN ticker_universe u ON u.ticker = mf.ticker AND u.active = 1
     LEFT JOIN sector_master sm ON sm.ticker = mf.ticker
     WHERE mf.date = ? AND mf.signal_codes IS NOT NULL AND mf.signal_codes <> ''
     `,
@@ -284,6 +288,7 @@ async function buildBacktestDates(): Promise<string[]> {
       COUNT(*) AS total_tickers,
       SUM(CASE WHEN mf.signal_codes IS NOT NULL AND mf.signal_codes <> '' THEN 1 ELSE 0 END) AS signal_tickers
     FROM model_features mf
+    INNER JOIN ticker_universe u ON u.ticker = mf.ticker AND u.active = 1
     WHERE EXISTS (
       SELECT 1
       FROM forward_extrema fe
@@ -448,6 +453,7 @@ async function loadSummaryChunk(dates: string[]): Promise<SummaryAggregateRow[]>
       SUM(CASE WHEN mf.signal_codes IS NOT NULL AND mf.signal_codes <> '' THEN COALESCE(fe.days_to_max, 0) ELSE 0 END) AS signal_days_to_max_sum,
       SUM(CASE WHEN mf.signal_codes IS NOT NULL AND mf.signal_codes <> '' AND fe.days_to_max IS NOT NULL THEN 1 ELSE 0 END) AS signal_days_to_max_count
     FROM model_features mf
+    INNER JOIN ticker_universe u ON u.ticker = mf.ticker AND u.active = 1
     INNER JOIN forward_extrema fe ON fe.ticker = mf.ticker AND fe.date = mf.date
     WHERE mf.date IN (${dates.map(() => '?').join(', ')})
     GROUP BY mf.date, fe.horizon_days
@@ -563,7 +569,7 @@ async function buildBacktestResults(dates: string[]): Promise<void> {
       FROM model_features mf
       INNER JOIN forward_extrema fe ON fe.ticker = mf.ticker AND fe.date = mf.date
       LEFT JOIN ohlcv_daily o ON o.ticker = mf.ticker AND o.date = mf.date
-      LEFT JOIN ticker_universe u ON u.ticker = mf.ticker
+      INNER JOIN ticker_universe u ON u.ticker = mf.ticker AND u.active = 1
       LEFT JOIN sector_master sm ON sm.ticker = mf.ticker
       WHERE mf.date IN (${chunkDates.map(() => '?').join(', ')})
       `,
@@ -600,10 +606,11 @@ async function buildSignalEvidence(dates: string[]): Promise<void> {
       }
       const rows = await execAll<TechnicalSignalRow>(
       `
-      SELECT ticker, date, timescale, ma_period, signal_code, signal_strength,
-             direction, label, score_component, value_json
-      FROM technical_signals
-      WHERE date IN (${chunkDates.map(() => '?').join(', ')})
+      SELECT ts.ticker, ts.date, ts.timescale, ts.ma_period, ts.signal_code, ts.signal_strength,
+             ts.direction, ts.label, ts.score_component, ts.value_json
+      FROM technical_signals ts
+      INNER JOIN ticker_universe u ON u.ticker = ts.ticker AND u.active = 1
+      WHERE ts.date IN (${chunkDates.map(() => '?').join(', ')})
       `,
         chunkDates,
       )
