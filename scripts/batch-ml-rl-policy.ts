@@ -266,17 +266,20 @@ function pushEvaluation(result: PolicyResult, state: State, action: Action) {
 async function cutoffDate(): Promise<string | null> {
   if (RECENT_DAYS <= 0) return START_DATE
   const latest = END_DATE ?? (await execGet<{ date: string | null }>(
-    `SELECT MAX(date) AS date FROM rl_training_states_v2`,
+    `SELECT MAX(s.date) AS date
+     FROM rl_training_states_v2 s
+     INNER JOIN ticker_universe u ON u.ticker = s.ticker AND u.active = 1`,
   ))?.date ?? null
   if (!latest) return null
   const recentStart = (await execGet<{ date: string | null }>(
     `
     SELECT MIN(date) AS date
     FROM (
-      SELECT DISTINCT date
-      FROM rl_training_states_v2
-      WHERE date <= ?
-      ORDER BY date DESC
+      SELECT DISTINCT s.date
+      FROM rl_training_states_v2 s
+      INNER JOIN ticker_universe u ON u.ticker = s.ticker AND u.active = 1
+      WHERE s.date <= ?
+      ORDER BY s.date DESC
       LIMIT ?
     )
     `,
@@ -479,6 +482,7 @@ async function loadStates(horizon: number, startDate: string | null): Promise<St
       l.min_return_pct,
       f.feature_json
     FROM rl_training_states_v2 s
+    INNER JOIN ticker_universe u ON u.ticker = s.ticker AND u.active = 1
     INNER JOIN ml_feature_vectors_v2 f
       ON f.ticker = s.ticker
      AND f.date = s.date
@@ -539,6 +543,7 @@ function metrics(result: PolicyResult): Record<string, unknown> {
   const sampleCount = result.sampleCount
   return {
     featureSet: ML_PHYSICS_FEATURE_SET,
+    universeScope: 'current_active',
     recentDays: RECENT_DAYS,
     sampleCount,
     winRate: sampleCount ? round(result.positiveCount / sampleCount, 4) : null,
@@ -601,24 +606,25 @@ function stateFromLabelRow(row: LabelStateRow): State | null {
 }
 
 async function loadDateBatch(horizon: number, startDate: string | null, beforeDate: string | null): Promise<string[]> {
-  const where = ['horizon_days = ?']
+  const where = ['l.horizon_days = ?']
   const args: Array<string | number> = [horizon]
   if (startDate) {
-    where.push('date >= ?')
+    where.push('l.date >= ?')
     args.push(startDate)
   }
   if (END_DATE) {
-    where.push('date <= ?')
+    where.push('l.date <= ?')
     args.push(END_DATE)
   }
   if (beforeDate) {
-    where.push('date < ?')
+    where.push('l.date < ?')
     args.push(beforeDate)
   }
   const rows = await execAll<{ date: string }>(
     `
-    SELECT DISTINCT date
-    FROM ml_short_labels
+    SELECT DISTINCT l.date
+    FROM ml_short_labels l
+    INNER JOIN ticker_universe u ON u.ticker = l.ticker AND u.active = 1
     WHERE ${where.join(' AND ')}
     ORDER BY date DESC
     LIMIT ?
@@ -630,24 +636,25 @@ async function loadDateBatch(horizon: number, startDate: string | null, beforeDa
 
 async function loadMultiHorizonDateBatch(horizons: number[], startDate: string | null, beforeDate: string | null): Promise<string[]> {
   const horizonPlaceholders = horizons.map(() => '?').join(', ')
-  const where = [`horizon_days IN (${horizonPlaceholders})`]
+  const where = [`l.horizon_days IN (${horizonPlaceholders})`]
   const args: Array<string | number> = [...horizons]
   if (startDate) {
-    where.push('date >= ?')
+    where.push('l.date >= ?')
     args.push(startDate)
   }
   if (END_DATE) {
-    where.push('date <= ?')
+    where.push('l.date <= ?')
     args.push(END_DATE)
   }
   if (beforeDate) {
-    where.push('date < ?')
+    where.push('l.date < ?')
     args.push(beforeDate)
   }
   const rows = await execAll<{ date: string }>(
     `
-    SELECT DISTINCT date
-    FROM ml_short_labels
+    SELECT DISTINCT l.date
+    FROM ml_short_labels l
+    INNER JOIN ticker_universe u ON u.ticker = l.ticker AND u.active = 1
     WHERE ${where.join(' AND ')}
     ORDER BY date DESC
     LIMIT ?
@@ -675,6 +682,7 @@ async function loadLabelStates(horizon: number, dates: string[]): Promise<LabelS
       c.policy_action,
       c.state_bucket
     FROM ml_short_labels l
+    INNER JOIN ticker_universe u ON u.ticker = l.ticker AND u.active = 1
     INNER JOIN ml_physics_feature_policy_cache c
       ON c.ticker = l.ticker
      AND c.date = l.date
@@ -764,6 +772,7 @@ async function aggregateSqlPolicyBatch(horizons: number[], dates: string[]): Pro
           ELSE 'wait'
         END AS oracle_action
       FROM ml_short_labels l
+      INNER JOIN ticker_universe u ON u.ticker = l.ticker AND u.active = 1
       INNER JOIN ml_physics_feature_policy_cache c
         ON c.ticker = l.ticker
        AND c.date = l.date

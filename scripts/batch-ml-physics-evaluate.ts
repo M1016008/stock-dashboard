@@ -82,7 +82,10 @@ function train(rows: Array<{ vector: number[]; label: number }>) {
 
 async function maxLabelYear(horizon: number): Promise<number | null> {
   const date = (await execGet<{ date: string | null }>(
-    `SELECT MAX(date) AS date FROM ml_short_labels WHERE horizon_days = ?`,
+    `SELECT MAX(l.date) AS date
+     FROM ml_short_labels l
+     INNER JOIN ticker_universe u ON u.ticker = l.ticker AND u.active = 1
+     WHERE l.horizon_days = ?`,
     [horizon],
   ))?.date
   return date ? Number(date.slice(0, 4)) : null
@@ -95,6 +98,7 @@ async function loadRows(horizon: number, from: string, to: string, limit: number
            l.return_pct, l.max_return_pct, l.min_return_pct
     FROM ml_feature_vectors_v2 f
     INNER JOIN ml_short_labels l ON l.ticker = f.ticker AND l.date = f.date
+    INNER JOIN ticker_universe u ON u.ticker = f.ticker AND u.active = 1
     WHERE f.feature_set = ?
       AND l.horizon_days = ?
       AND f.date >= ?
@@ -203,6 +207,7 @@ async function evaluateFold(horizon: number, year: number): Promise<Array<{ sql:
         round(summary.maxDrawdownPct, 4),
         JSON.stringify({
           mode: 'walk_forward',
+          universeScope: 'current_active',
           featureSet: ML_PHYSICS_FEATURE_SET,
           horizon,
           direction,

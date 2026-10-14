@@ -486,8 +486,15 @@ export async function verifyOrAdoptMlPipelineBaseline(
         `${market} ML baseline price basis is incompatible: actual=${existing.priceBasis ?? '-'}, expected=${US_ADJUSTED_PRICE_BASIS}`,
       )
     }
+    if (!hasAuditedFullHistoryBaseline(existing)) {
+      throw new Error(`${market} ML baseline generation is missing audited full-history model proof`)
+    }
     await inspectMlPipelineEvidence(client, market, {
-      requireFullHistoryModels: true,
+      // The immutable generation payload is the proof that the one-time
+      // full-history baseline completed. Newer weekly models intentionally use
+      // rolling windows, so requiring the latest model rows to retain the
+      // baseline start date would permanently block every subsequent delta.
+      requireFullHistoryModels: false,
       sourceDate: existing.baselineSourceDate,
     })
     return { state: existing, adopted: false }

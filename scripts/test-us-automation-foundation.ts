@@ -13,6 +13,11 @@ import {
   usInvestableSymbolSql,
   usTestSymbolExclusionSql,
 } from '@/lib/us-symbol-quality'
+import {
+  isUsUniverseActive,
+  shouldReconcileUsUniverse,
+  usUniverseActivityCutoff,
+} from '@/lib/us-universe-activity'
 
 const adjusted = toAdjustedUsOhlcv({
   date: '2026-01-02',
@@ -61,6 +66,11 @@ assert.equal(getUsSecondaryName('AAPL', 'AAPL'), 'Apple Inc.')
 assert.equal(getUsSecondaryName('DBGI', 'DBGI'), null)
 assert.match(usTestSymbolExclusionSql('s.ticker'), /ATEST/)
 assert.match(usInvestableSymbolSql('s.ticker'), /A-Z0-9/)
+assert.equal(usUniverseActivityCutoff(new Date('2026-10-14T00:00:00Z')), '2026-09-30')
+assert.equal(usUniverseActivityCutoff(new Date('2026-10-14T12:00:00Z')), '2026-10-01')
+assert.equal(isUsUniverseActive('2026-10-01', '2026-10-01'), true)
+assert.equal(isUsUniverseActive('2026-09-30', '2026-10-01'), false)
+assert.equal(shouldReconcileUsUniverse({ targeted: false, limit: 0, failed: 0 }), true)
 
 const read = (file: string) => fs.readFileSync(path.join(process.cwd(), file), 'utf8')
 const ingestion = read('scripts/batch-us-ohlcv.ts')
@@ -79,7 +89,9 @@ assert.match(tiingoClient, /AbortSignal\.timeout\(TIINGO_REQUEST_TIMEOUT_MS\)/)
 assert.match(tiingoClient, /408, 425, 500, 502, 503, 504/)
 
 const universeIngestion = read('scripts/batch-us-universe.ts')
-assert.match(universeIngestion, /isUsInvestableSymbol\(row\.ticker\) && isActive\(row\.endDate\)/)
+assert.match(universeIngestion, /isUsInvestableSymbol\(row\.ticker\) && isUsUniverseActive\(row\.endDate, activityCutoff\)/)
+assert.match(universeIngestion, /shouldReconcileUsUniverse/)
+assert.match(universeIngestion, /usInvestableSymbolSql\('ticker'\)/)
 
 const updater = read('scripts/update-us-latest.ts')
 assert.match(updater, /US_DAILY_MIN_PRICE_COVERAGE_PCT/)
@@ -333,11 +345,15 @@ assert.match(adjustedFoundation, /!currentFamilyPids\.has\(row\.pid\)/)
 const weeklyMl = read('scripts/run-us-ml-weekly-efficient.ts')
 assert.match(weeklyMl, /databaseRole: 'source' \| 'us-analytics'/)
 assert.match(weeklyMl, /STOCKBOARD_DB_PATH: databaseRole === 'source' \? sourceDbPath : usAnalyticsDbPath/)
+assert.match(weeklyMl, /STOCKBOARD_SOURCE_DB_PATH\?\.trim\(\)/)
 assert.match(weeklyMl, /runNpm\('batch:us-adjusted-foundation', \{\}, 'source'\)/)
+const weeklyMlInstaller = read('scripts/install-local-us-ml-weekly.ts')
+assert.match(weeklyMlInstaller, /launchAgentStorageEnvironmentXml/)
 assert.match(weeklyMl, /derivedDate === priceDate/)
 assert.match(weeklyMl, /analogDate === priceDate/)
 assert.match(weeklyMl, /analogGenerationIsCurrent\(priceDate\)/)
 const weeklyOptimizationPipeline = read('scripts/run-weekly-optimization.ts')
+assert.match(weeklyOptimizationPipeline, /STOCKBOARD_SOURCE_DB_PATH: jpDbPath/)
 assert.doesNotMatch(weeklyOptimizationPipeline, /jp-ma-trajectory-shadow/)
 assert.doesNotMatch(weeklyOptimizationPipeline, /run-ma-trajectory-shadow/)
 assert.match(adjustedFoundation, /adjustedShadowDbPath/)
@@ -382,7 +398,37 @@ assert.doesNotMatch(
 const servingBacktest = read('scripts/build-serving-backtest.ts')
 assert.match(servingBacktest, /SERVING_ONLY_SIMILAR/)
 assert.match(servingBacktest, /FROM serving_backtest_results result/)
+assert.match(servingBacktest, /INNER JOIN ticker_universe u ON u\.ticker = mf\.ticker AND u\.active = 1/)
 assert.doesNotMatch(servingBacktest, /FROM model_features mf[\s\S]*?LIMIT 8/)
+
+const usMlHealthSource = read('scripts/check-us-ml-health.ts')
+assert.match(usMlHealthSource, /us_ticker_universe_symbol_quality/)
+assert.match(usMlHealthSource, /us_source_universe_activity/)
+assert.match(usMlHealthSource, /usUniverseActivityCutoff/)
+assert.match(usMlHealthSource, /STOCKBOARD_SOURCE_DB_PATH/)
+assert.match(usMlHealthSource, /maxActiveTickerDate\('ml_short_labels'\)/)
+assert.match(usMlHealthSource, /qualityOk: violatingActiveCount === 0/)
+
+const usMlJob = read('scripts/run-us-ml-job.ts')
+assert.match(usMlJob, /STOCKBOARD_SOURCE_DB_PATH:/)
+assert.match(usMlJob, /process\.env\.STOCKBOARD_DB_PATH\?\.trim\(\)/)
+
+const usLatestSourcePathUpdate = read('scripts/update-us-latest.ts')
+assert.match(usLatestSourcePathUpdate, /STOCKBOARD_SOURCE_DB_PATH:/)
+assert.match(usLatestSourcePathUpdate, /process\.env\.STOCKBOARD_SOURCE_DB_PATH\?\.trim\(\)/)
+
+for (const evaluatorPath of [
+  'scripts/batch-ml-evaluate.ts',
+  'scripts/batch-ml-physics-evaluate.ts',
+  'scripts/batch-ml-physics-status-evaluate.ts',
+  'scripts/batch-ml-rl-policy.ts',
+  'scripts/batch-ml-similarity-evaluate.ts',
+]) {
+  const evaluator = read(evaluatorPath)
+  assert.match(evaluator, /ticker_universe/)
+  assert.match(evaluator, /active = 1/)
+  assert.match(evaluator, /universeScope: 'current_active'/)
+}
 
 const freshnessGuard = read('scripts/guard-data-freshness.ts')
 assert.match(freshnessGuard, /cliArgs\.has\(['"]--dry-run['"]\)/)

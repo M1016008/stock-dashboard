@@ -56,8 +56,9 @@ async function evaluateHorizon(horizon: number) {
     ),
     label_watermark AS (
       SELECT MAX(date) AS latestLabelDate
-      FROM ml_short_labels
-      WHERE horizon_days = ?
+      FROM ml_short_labels l
+      INNER JOIN ticker_universe u ON u.ticker = l.ticker AND u.active = 1
+      WHERE l.horizon_days = ?
     )
     SELECT
       mature_session.matureThrough,
@@ -68,6 +69,9 @@ async function evaluateHorizon(horizon: number) {
     LEFT JOIN serving_current_similars s
       ON mature_session.matureThrough IS NOT NULL
      AND s.as_of_date <= mature_session.matureThrough
+    LEFT JOIN ticker_universe base_u ON base_u.ticker = s.base_ticker AND base_u.active = 1
+    LEFT JOIN ticker_universe similar_u ON similar_u.ticker = s.similar_ticker AND similar_u.active = 1
+    WHERE s.similar_ticker IS NULL OR (base_u.ticker IS NOT NULL AND similar_u.ticker IS NOT NULL)
     `,
     [horizon + 1, horizon],
   )
@@ -89,6 +93,8 @@ async function evaluateHorizon(horizon: number) {
       l.up_label,
       l.down_label
     FROM serving_current_similars s
+    INNER JOIN ticker_universe base_u ON base_u.ticker = s.base_ticker AND base_u.active = 1
+    INNER JOIN ticker_universe similar_u ON similar_u.ticker = s.similar_ticker AND similar_u.active = 1
     INNER JOIN ml_short_labels l
       ON l.ticker = s.similar_ticker
      AND l.date = s.as_of_date
@@ -140,6 +146,7 @@ async function evaluateHorizon(horizon: number) {
         round(drawdowns.length ? Math.min(...drawdowns) : null),
         JSON.stringify({
           source: SOURCE,
+          universeScope: 'current_active',
           topRank: Number(process.env.ML_SIMILARITY_EVAL_TOP_RANK ?? 5),
           avgSimilarity: round(group.reduce((sum, row) => sum + Number(row.similarity_score ?? 0), 0) / Math.max(1, group.length)),
         }),

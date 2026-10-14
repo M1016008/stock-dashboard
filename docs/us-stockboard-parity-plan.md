@@ -192,9 +192,11 @@ performance, or historical-price parity work.
   classification metadata is not effective-dated. Missing outcomes remain unavailable, observed zero
   remains zero, and no generated narrative or current-classification fallback is added.
 - US holiday rows are excluded with the canonical market calendar. Explicit holiday queries fail
-  closed, and implicit latest-date selection skips anomalous holiday rows. The 40-session view exposes
-  224 regular-session dates from 2025-07-25 through 2026-06-15; the underlying market watermark is
-  2026-10-12, so serving refresh remains a data gate rather than a UI parity gap.
+  closed, and implicit latest-date selection skips anomalous holiday rows. The 2026-10-14 full replay
+  rebuilt all seven completed-outcome horizons against the current active universe: mature-through
+  dates are 2026-10-05 (5), 2026-09-28 (10), 2026-09-14 (20), 2026-08-14 (40), 2026-07-17 (60),
+  2026-06-03 (90), and 2025-12-23 (200). Similarity evaluation now contains 101 dated rows across
+  the 5/10/20/40-session horizons instead of an empty table.
 - Claude Opus (`claude.ai`, firstParty, Pro) designed and implemented the local hierarchy and completed
   one screenshot-led 768px context-bar revision. Codex fixture/API/PIT tests, stock-detail regression,
   typecheck, production build and 1440/1024/768/390 browser QA pass with no page-level overflow,
@@ -202,9 +204,29 @@ performance, or historical-price parity work.
 - Feature `e5015a5aabb18a520111a1f2acbfcf69a5fcfabb` was merged without conflict and pushed to
   main as `4f3cb53fe61b17647000f90d5ff7be8101e507c2`. Merge-head dedicated/shared regressions,
   parity audit, typecheck and Production build passed.
-- Production activation remains pending. The historical explorer itself is QA-complete, but stale
-  serving coverage, empty similarity evaluations and pre-existing extreme secondary model/RL values
-  require source-pipeline review before a candidate can be promoted.
+- The source-pipeline audit found two separate causes behind the former extreme aggregates. Expired
+  and test symbols remained active because a successful Tiingo refresh only upserted returned rows;
+  full successful refreshes now reconcile the complete US universe with the existing 14-day activity
+  and investable-symbol contract. Operational model, physics, RL, similarity and serving evaluation
+  queries are explicitly scoped to `current_active`, while raw historical price and label rows remain
+  untouched. The weekly optimizer also preserves the primary StockBoard DB as
+  `STOCKBOARD_SOURCE_DB_PATH` when child ML jobs switch `STOCKBOARD_DB_PATH` to the US analytics DB.
+- The final 2026-10-14 universe reconciliation leaves 12,004 current-active rows out of 21,981 total,
+  with zero stale-active and zero non-investable-active violations. The 2026-10-13 serving delta now
+  contains 10,366 regular feature bases, 10,219 current-active physics feature rows, 2,520 physics
+  candidates and 51,830 similar rows; the pipeline generation watermark is also 2026-10-13.
+- Weekly rolling physics retraining intentionally starts from its bounded evaluation window. Baseline
+  verification now treats the recorded generation payload as the immutable proof of the completed
+  one-time full-history run while continuing to validate current model coverage, feature dates, feature
+  set and adjusted-price basis. This removes the false failure that required every later rolling model
+  to retain the 1990 baseline start date. A regression covers rolling models and missing baseline proof.
+- No clipping or winsorization was introduced. Current-active audit still identifies genuine/provider
+  edge cases: RGC has a Tiingo adjusted-price discontinuity around its corporate-action history, and
+  QMMM has a very large observed move followed by zero-volume repeated quotes. These rows match the
+  primary source and analytics copy, so changing or quarantining them is a source-of-truth policy
+  decision rather than a calculation repair. Historical Explorer Production activation therefore
+  remains pending even though stale serving coverage, empty similarity evaluation, and scheduler-path
+  defects are resolved.
 
 ### W4 - Fundamentals, Valuation and Shareholder Return
 

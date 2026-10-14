@@ -13,7 +13,8 @@ const usAnalyticsDbPath = resolveConfiguredStoragePath(path.resolve(
   process.env.US_ANALYTICS_DB_PATH?.trim()
   || '/Volumes/OWC Express 1M2 80G/stockboard-data/us/stockboard-us.db',
 ))
-const sourceDbPath = process.env.STOCKBOARD_DB_PATH?.trim()
+const sourceDbPath = process.env.STOCKBOARD_SOURCE_DB_PATH?.trim()
+  || process.env.STOCKBOARD_DB_PATH?.trim()
   || process.env.LOCAL_DB_PATH?.trim()
   || 'data/stockboard.db'
 const usAnalogDbPath = process.env.ANALOG_US_DB_PATH?.trim()

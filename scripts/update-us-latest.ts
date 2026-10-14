@@ -452,6 +452,9 @@ async function main() {
       console.log('US daily ML skipped (US_SKIP_DAILY_ML=1)')
     } else {
       await runNpm('batch:us-ml-daily', {
+        STOCKBOARD_SOURCE_DB_PATH:
+          process.env.STOCKBOARD_SOURCE_DB_PATH?.trim()
+          || process.env.STOCKBOARD_DB_PATH?.trim(),
         STOCKBOARD_DB_PATH: usAnalyticsDbPath,
         ML_DAILY_TRAIN_LIMIT: process.env.US_ML_DAILY_TRAIN_LIMIT ?? '80000',
         ML_PHYSICS_DAILY_TRAIN_LIMIT: process.env.US_ML_PHYSICS_DAILY_TRAIN_LIMIT ?? '120000',

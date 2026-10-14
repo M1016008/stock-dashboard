@@ -441,7 +441,10 @@ async function populateStatusCache(startDate: string | null): Promise<void> {
 async function cutoffDate(horizon: number): Promise<string | null> {
   if (RECENT_DAYS <= 0) return START_DATE
   const latest = END_DATE ?? (await execGet<{ date: string | null }>(
-    `SELECT MAX(date) AS date FROM ml_short_labels WHERE horizon_days = ?`,
+    `SELECT MAX(l.date) AS date
+     FROM ml_short_labels l
+     INNER JOIN ticker_universe u ON u.ticker = l.ticker AND u.active = 1
+     WHERE l.horizon_days = ?`,
     [horizon],
   ))?.date ?? null
   if (!latest) return null
@@ -449,11 +452,12 @@ async function cutoffDate(horizon: number): Promise<string | null> {
     `
     SELECT MIN(date) AS date
     FROM (
-      SELECT DISTINCT date
-      FROM ml_short_labels
-      WHERE horizon_days = ?
-        AND date <= ?
-      ORDER BY date DESC
+      SELECT DISTINCT l.date
+      FROM ml_short_labels l
+      INNER JOIN ticker_universe u ON u.ticker = l.ticker AND u.active = 1
+      WHERE l.horizon_days = ?
+        AND l.date <= ?
+      ORDER BY l.date DESC
       LIMIT ?
     )
     `,
@@ -464,24 +468,25 @@ async function cutoffDate(horizon: number): Promise<string | null> {
 }
 
 async function loadDateBatch(horizon: number, startDate: string | null, beforeDate: string | null): Promise<string[]> {
-  const where = ['horizon_days = ?']
+  const where = ['l.horizon_days = ?']
   const args: Array<string | number> = [horizon]
   if (startDate) {
-    where.push('date >= ?')
+    where.push('l.date >= ?')
     args.push(startDate)
   }
   if (END_DATE) {
-    where.push('date <= ?')
+    where.push('l.date <= ?')
     args.push(END_DATE)
   }
   if (beforeDate) {
-    where.push('date < ?')
+    where.push('l.date < ?')
     args.push(beforeDate)
   }
   const rows = await execAll<{ date: string }>(
     `
-    SELECT DISTINCT date
-    FROM ml_short_labels
+    SELECT DISTINCT l.date
+    FROM ml_short_labels l
+    INNER JOIN ticker_universe u ON u.ticker = l.ticker AND u.active = 1
     WHERE ${where.join(' AND ')}
     ORDER BY date DESC
     LIMIT ?
@@ -511,6 +516,7 @@ async function loadRows(horizon: number, dates: string[]): Promise<LabelRow[]> {
       l.reward_wait,
       s.status_label
     FROM ml_short_labels l
+    INNER JOIN ticker_universe u ON u.ticker = l.ticker AND u.active = 1
     INNER JOIN ml_physics_feature_statuses s
       ON s.ticker = l.ticker
      AND s.date = l.date
@@ -528,6 +534,7 @@ function metricsFor(aggregate: Aggregate, global: GlobalAggregate): Record<strin
   const lift = hitRate != null && baseRate != null && baseRate > 0 ? hitRate / baseRate : null
   return {
     featureSet: ML_PHYSICS_FEATURE_SET,
+    universeScope: 'current_active',
     statusLabel: aggregate.statusLabel,
     targetDirection: aggregate.targetDirection,
     horizonDays: aggregate.horizonDays,
@@ -671,6 +678,7 @@ async function evaluateHorizonSql(
         SUM(CASE WHEN l.down_label = 1 THEN 1 ELSE 0 END) AS global_down_hit_count,
         SUM(CASE WHEN l.wait_label = 1 THEN 1 ELSE 0 END) AS global_wait_hit_count
       FROM ml_short_labels l INDEXED BY ml_short_labels_horizon_date_ticker_idx
+      INNER JOIN ticker_universe u ON u.ticker = l.ticker AND u.active = 1
       INNER JOIN ml_physics_feature_statuses s
         ON s.ticker = l.ticker
        AND s.date = l.date
