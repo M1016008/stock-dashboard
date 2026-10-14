@@ -227,6 +227,11 @@ performance, or historical-price parity work.
   decision rather than a calculation repair. Historical Explorer Production activation therefore
   remains pending even though stale serving coverage, empty similarity evaluation, and scheduler-path
   defects are resolved.
+- Data-quality feature `78fda1f4f24cbb533c9a192fdc24ddcf20a5d5dd` was merged without conflict as
+  `3a0c1209f93ad47f9b73be7db54f37c5a853e755` and pushed to main after dedicated data-quality,
+  pipeline-generation, automation, backtest, analytics, market-intelligence and status-health tests,
+  TypeScript, diff checks and the Production build passed. Production remains intentionally pending
+  on the RGC/QMMM source-quality policy rather than a code, freshness or serving-coverage failure.
 
 ### W4 - Fundamentals, Valuation and Shareholder Return
 
