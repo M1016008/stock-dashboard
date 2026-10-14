@@ -261,6 +261,9 @@ performance, or historical-price parity work.
   source coverage remains `PARTIAL`: only one 40-session model horizon and ranked candidates are stored,
   rather than the full model/horizon depth of the JP experience. Production promotion remains pending
   behind the shared W3F RGC/QMMM source-quality policy gate; no Production deploy is claimed by W3G.
+- Feature `416b63c0d4f0bc47089bdc2b82806cdafeb255f9` was merged without conflict as
+  `18e39f9df71292671f9f2c3c2873636558d58a5c`. Merge-head dedicated/shared regressions,
+  parity audit, typecheck, diff checks and the Production build passed before the main push.
 
 ### W4 - Fundamentals, Valuation and Shareholder Return
 
