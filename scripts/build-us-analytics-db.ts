@@ -12,6 +12,12 @@ import { resolveConfiguredStoragePath } from '@/lib/storage-paths'
 import { assertWritableTargetPath, guardForDatabase, isStorageIoError, requiresExternalStorageGuard } from '@/lib/storage/external-storage-guard'
 import { US_SEC_SIC_TAXONOMY } from '@/lib/us-classification'
 import { US_ADJUSTED_PRICE_BASIS } from '@/lib/us-adjusted-ohlcv'
+import {
+  US_ANALYTICAL_PRICE_ROW_EXCLUSIONS,
+  usAnalyticalPricePolicyWindowSql,
+  usAnalyticsPriceIneligibleSql,
+  usSourceAnalyticalPriceEligibleSql,
+} from '@/lib/us-market-data-quality'
 import { isUsInvestableSymbol } from '@/lib/us-symbol-quality'
 
 const configuredTargetPath = process.env.US_ANALYTICS_DB_PATH?.trim()
@@ -47,6 +53,10 @@ const SOURCE_WRITER_POLL_MS = Math.max(
 const SOURCE_WRITER_JOB_TO_IGNORE = process.env.US_ANALYTICS_SOURCE_WRITER_JOB_TO_IGNORE?.trim() || null
 const NATIVE_SYNC_RECENT_DAYS = Math.max(1, Number(process.env.US_ANALYTICS_SYNC_RECENT_DAYS ?? 45))
 const REBUILD_PRICE_BASIS = process.env.US_ANALYTICS_REBUILD_PRICE_BASIS === '1'
+const SOURCE_PRICE_ELIGIBLE_SQL = usSourceAnalyticalPriceEligibleSql('m')
+const SOURCE_SNAPSHOT_PRICE_ELIGIBLE_SQL = usSourceAnalyticalPriceEligibleSql('p')
+const TARGET_PRICE_INELIGIBLE_SQL = usAnalyticsPriceIneligibleSql('ohlcv_daily')
+const TARGET_SNAPSHOT_POLICY_WINDOW_SQL = usAnalyticalPricePolicyWindowSql('daily_snapshots')
 
 async function run(client: Client, sql: string, args: Array<string | number | null> = []) {
   await client.execute({ sql, args })
@@ -174,7 +184,8 @@ INSERT OR REPLACE INTO ohlcv_daily (ticker, date, open, high, low, close, volume
   FROM copy_tickers t
   JOIN src.market_ohlcv_daily m INDEXED BY market_ohlcv_market_ticker_date_idx
     ON m.market = 'US'
-   AND m.ticker = t.ticker;
+   AND m.ticker = t.ticker
+  WHERE ${SOURCE_PRICE_ELIGIBLE_SQL};
 INSERT OR REPLACE INTO daily_snapshots (
   ticker, date, ma_5, ma_25, ma_75, ma_150, ma_300,
   weekly_ma_5, weekly_ma_13, weekly_ma_25, weekly_ma_50, weekly_ma_100,
@@ -191,7 +202,12 @@ INSERT OR REPLACE INTO daily_snapshots (
   FROM copy_tickers t
   JOIN src.market_daily_snapshots m INDEXED BY sqlite_autoindex_market_daily_snapshots_1
     ON m.market = 'US'
-   AND m.ticker = t.ticker;
+   AND m.ticker = t.ticker
+  JOIN src.market_ohlcv_daily p INDEXED BY market_ohlcv_market_ticker_date_idx
+    ON p.market = m.market
+   AND p.ticker = m.ticker
+   AND p.date = m.date
+   AND ${SOURCE_SNAPSHOT_PRICE_ELIGIBLE_SQL};
 INSERT OR REPLACE INTO us_analytics_copy_state (ticker, status, ohlcv_rows, snapshot_rows, price_basis, updated_at)
   SELECT
     t.ticker,
@@ -286,6 +302,7 @@ INSERT OR REPLACE INTO ohlcv_daily (ticker, date, open, high, low, close, volume
     m.split_factor
   FROM src.market_ohlcv_daily m
   WHERE m.market = 'US'
+    AND ${SOURCE_PRICE_ELIGIBLE_SQL}
     AND (
       (
         (SELECT ohlcv_after FROM sync_bounds) IS NOT NULL
@@ -310,6 +327,11 @@ INSERT OR REPLACE INTO daily_snapshots (
     m.daily_a_stage, m.daily_b_stage, m.weekly_a_stage, m.weekly_b_stage, m.monthly_a_stage, m.monthly_b_stage,
     unixepoch()
   FROM src.market_daily_snapshots m
+  JOIN src.market_ohlcv_daily p INDEXED BY market_ohlcv_market_ticker_date_idx
+    ON p.market = m.market
+   AND p.ticker = m.ticker
+   AND p.date = m.date
+   AND ${SOURCE_SNAPSHOT_PRICE_ELIGIBLE_SQL}
   WHERE m.market = 'US'
     AND (
       (
@@ -397,6 +419,30 @@ async function ensureTarget(client: Client) {
   )`)
 }
 
+async function pruneIneligibleAnalyticalRows(client: Client): Promise<void> {
+  await run(client, `DELETE FROM ohlcv_daily WHERE ${TARGET_PRICE_INELIGIBLE_SQL}`)
+  await run(
+    client,
+    `DELETE FROM daily_snapshots
+     WHERE (${TARGET_SNAPSHOT_POLICY_WINDOW_SQL})
+       AND NOT EXISTS (
+         SELECT 1
+         FROM ohlcv_daily observed
+         WHERE observed.ticker = daily_snapshots.ticker
+           AND observed.date = daily_snapshots.date
+       )`,
+  )
+  await run(
+    client,
+    `UPDATE us_analytics_copy_state
+     SET ohlcv_rows = (SELECT COUNT(*) FROM ohlcv_daily o WHERE o.ticker = us_analytics_copy_state.ticker),
+         snapshot_rows = (SELECT COUNT(*) FROM daily_snapshots d WHERE d.ticker = us_analytics_copy_state.ticker),
+         updated_at = unixepoch()
+     WHERE ticker IN (${US_ANALYTICAL_PRICE_ROW_EXCLUSIONS.map(() => '?').join(', ')})`,
+    US_ANALYTICAL_PRICE_ROW_EXCLUSIONS.map((policy) => policy.ticker),
+  )
+}
+
 async function markPriceBasisIfComplete(client: Client, expectedCount: number): Promise<void> {
   const result = await client.execute({
     sql: `SELECT COUNT(*) AS count
@@ -426,6 +472,7 @@ async function main() {
   let target = openGuardedWritableTargetClient(TARGET_PATH, 'us-analytics-build')
   await ensureTarget(target)
   await ensureSchema(target)
+  await pruneIneligibleAnalyticalRows(target)
 
   const universe = await execAll<{
     ticker: string
@@ -540,7 +587,9 @@ async function main() {
         COALESCE(adj_volume, volume) AS volume,
         split_factor AS splitFactor
       FROM market_ohlcv_daily
-      WHERE market = 'US' AND ticker IN (${placeholders})
+      WHERE market = 'US'
+        AND ticker IN (${placeholders})
+        AND ${usSourceAnalyticalPriceEligibleSql('market_ohlcv_daily')}
       ORDER BY ticker, date
       `,
       chunk,
@@ -587,13 +636,19 @@ async function main() {
       monthly_b_stage: number | null
     }>(
       `
-      SELECT ticker, date, ma_5, ma_25, ma_75, ma_150, ma_300,
-             weekly_ma_5, weekly_ma_13, weekly_ma_25, weekly_ma_50, weekly_ma_100,
-             monthly_ma_3, monthly_ma_5, monthly_ma_10, monthly_ma_20, monthly_ma_25,
-             daily_a_stage, daily_b_stage, weekly_a_stage, weekly_b_stage, monthly_a_stage, monthly_b_stage
-      FROM market_daily_snapshots
-      WHERE market = 'US' AND ticker IN (${placeholders})
-      ORDER BY ticker, date
+      SELECT s.ticker, s.date, s.ma_5, s.ma_25, s.ma_75, s.ma_150, s.ma_300,
+             s.weekly_ma_5, s.weekly_ma_13, s.weekly_ma_25, s.weekly_ma_50, s.weekly_ma_100,
+             s.monthly_ma_3, s.monthly_ma_5, s.monthly_ma_10, s.monthly_ma_20, s.monthly_ma_25,
+             s.daily_a_stage, s.daily_b_stage, s.weekly_a_stage, s.weekly_b_stage,
+             s.monthly_a_stage, s.monthly_b_stage
+      FROM market_daily_snapshots s
+      JOIN market_ohlcv_daily p
+        ON p.market = s.market
+       AND p.ticker = s.ticker
+       AND p.date = s.date
+       AND ${SOURCE_SNAPSHOT_PRICE_ELIGIBLE_SQL}
+      WHERE s.market = 'US' AND s.ticker IN (${placeholders})
+      ORDER BY s.ticker, s.date
       `,
       chunk,
     )
