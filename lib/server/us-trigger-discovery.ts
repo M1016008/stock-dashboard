@@ -7,7 +7,11 @@ import {
   type TriggerDiscoveryStageSnapshot,
 } from '@/lib/server/trigger-discovery-read-model'
 import type { TriggerDiscoveryMiniChartDataSource } from '@/lib/server/trigger-discovery-mini-charts'
-import { buildContinuousMonthlyMaSeries } from '@/lib/snapshots/continuous-ma'
+import {
+  MAX_CONTINUOUS_HISTORY_GAP_DAYS,
+  buildContinuousMonthlyMaSeries,
+  daysBetween,
+} from '@/lib/snapshots/continuous-ma'
 import { buildContinuousBiweeklyMaSeriesFromWeekly } from '@/lib/trigger-discovery-timeframe'
 import type { TriggerDiscoveryMiniChartPoint } from '@/lib/trigger-discovery-contract'
 import type { MaZoneTriggerObservation } from '@/lib/trigger-discovery-engine'
@@ -17,7 +21,7 @@ import type { OHLCV } from '@/types/stock'
 const GENERIC_WARMUP_CALENDAR_DAYS = 160
 const GENERIC_SESSION_CALENDAR_MULTIPLIER = 4
 const BIWEEKLY_HISTORY_BUFFER_WEEKS = 10
-// SQLite on the production runtime accepts more than 16k bound values. Keeping the
+// SQLite on the production runtime accepts more than 20k bound values. Keeping the
 // current US stock universe in one CTE avoids rescanning the same date range per chunk.
 const QUERY_TICKER_CHUNK_SIZE = 10_000
 
@@ -107,6 +111,360 @@ function normalizedOhlcv(row: GenericRow | WeeklyRow): OHLCV {
     low: Number(row.low),
     close: Number(row.close),
     volume: Number(row.volume),
+  }
+}
+
+export type UsGenericMaQuery = <T>(sql: string, args: Array<string | number>) => Promise<T[]>
+
+export type UsGenericMaWindow = { historyStart: string; recentStart: string }
+
+export type UsGenericMaRowGroup = { byDate: Map<string, OHLCV>; recentDates: Set<string> }
+
+export type UsMarketMonthEndLookup = { monthKey: string; fromDate: string; throughDate: string }
+
+export type UsMarketMonthEnd = { monthKey: string; date: string | null }
+
+/** Derived once from the full candidate set; month-end and fallback queries both reuse it. */
+export function usGenericMaWindow(
+  candidates: readonly Pick<TriggerDiscoveryFilteredCandidate, 'priceDate'>[],
+  maximumPeriod: number,
+  requiredObservations: number,
+): UsGenericMaWindow {
+  const historyCalendarDays = maximumPeriod * 32
+    + GENERIC_WARMUP_CALENDAR_DAYS
+    + requiredObservations * GENERIC_SESSION_CALENDAR_MULTIPLIER
+  const oldestPriceDate = candidates.reduce(
+    (oldest, candidate) => candidate.priceDate < oldest ? candidate.priceDate : oldest,
+    candidates[0].priceDate,
+  )
+  return {
+    historyStart: dateDaysBefore(oldestPriceDate, historyCalendarDays),
+    recentStart: dateDaysBefore(
+      oldestPriceDate,
+      requiredObservations * GENERIC_SESSION_CALENDAR_MULTIPLIER + 30,
+    ),
+  }
+}
+
+function nextMonthKey(monthKey: string): string {
+  const year = Number(monthKey.slice(0, 4))
+  const month = Number(monthKey.slice(5, 7))
+  return month === 12 ? `${year + 1}-01` : `${year}-${String(month + 1).padStart(2, '0')}`
+}
+
+/**
+ * Calendar months from historyStart's month through the month before the newest
+ * price date. The first month is clipped to historyStart so it matches the legacy
+ * month_edges window exactly.
+ */
+export function usMarketMonthEndLookups(
+  historyStart: string,
+  newestPriceDate: string,
+): UsMarketMonthEndLookup[] {
+  const lookups: UsMarketMonthEndLookup[] = []
+  const newestMonth = newestPriceDate.slice(0, 7)
+  for (let monthKey = historyStart.slice(0, 7); monthKey < newestMonth; monthKey = nextMonthKey(monthKey)) {
+    lookups.push({
+      monthKey,
+      fromDate: lookups.length === 0 ? historyStart : `${monthKey}-01`,
+      throughDate: `${monthKey}-31`,
+    })
+  }
+  return lookups
+}
+
+export function usMarketMonthEndQuery(
+  lookups: readonly UsMarketMonthEndLookup[],
+): { sql: string; args: string[] } {
+  return {
+    sql: `
+      WITH months(month_key, from_date, through_date) AS (VALUES ${lookups.map(() => '(?, ?, ?)').join(', ')})
+      SELECT months.month_key,
+             (
+               SELECT MAX(o.date)
+               FROM market_ohlcv_daily AS o INDEXED BY market_ohlcv_market_date_idx
+               WHERE o.market = 'US'
+                 AND o.date BETWEEN months.from_date AND months.through_date
+             ) AS date
+      FROM months
+      ORDER BY months.month_key
+    `,
+    args: lookups.flatMap((lookup) => [lookup.monthKey, lookup.fromDate, lookup.throughDate]),
+  }
+}
+
+/** Prior generic algorithm: first/last session per ticker month plus recent sessions. */
+export function usLegacyGenericMaQuery(
+  candidates: readonly TriggerDiscoveryFilteredCandidate[],
+  window: UsGenericMaWindow,
+  requiredObservations: number,
+): { sql: string; args: Array<string | number> } {
+  const cte = candidateValuesCte(candidates)
+  return {
+    sql: `
+      WITH candidates(ticker, price_date) AS (VALUES ${cte.sql}), month_edges AS (
+        SELECT o.ticker,
+               substr(o.date, 1, 7) AS month_key,
+               MIN(o.date) AS first_date,
+               MAX(o.date) AS last_date
+        FROM candidates AS c
+        INNER JOIN market_ohlcv_daily AS o INDEXED BY market_ohlcv_market_ticker_date_idx
+          ON o.market = 'US'
+         AND o.ticker = c.ticker
+         AND o.date BETWEEN ? AND c.price_date
+        GROUP BY o.ticker, month_key
+      ), monthly_rows AS (
+        SELECT o.ticker,
+               o.date,
+               COALESCE(o.adj_open, o.open) AS open,
+               COALESCE(o.adj_high, o.high) AS high,
+               COALESCE(o.adj_low, o.low) AS low,
+               COALESCE(o.adj_close, o.close) AS close,
+               COALESCE(o.adj_volume, o.volume) AS volume,
+               0 AS is_recent
+        FROM month_edges AS edges
+        INNER JOIN market_ohlcv_daily AS o INDEXED BY market_ohlcv_market_ticker_date_idx
+          ON o.market = 'US'
+         AND o.ticker = edges.ticker
+         AND o.date IN (edges.first_date, edges.last_date)
+      ), recent_ranked AS (
+        SELECT o.ticker,
+               o.date,
+               COALESCE(o.adj_open, o.open) AS open,
+               COALESCE(o.adj_high, o.high) AS high,
+               COALESCE(o.adj_low, o.low) AS low,
+               COALESCE(o.adj_close, o.close) AS close,
+               COALESCE(o.adj_volume, o.volume) AS volume,
+               ROW_NUMBER() OVER (PARTITION BY o.ticker ORDER BY o.date DESC) AS recent_rank
+        FROM candidates AS c
+        INNER JOIN market_ohlcv_daily AS o INDEXED BY market_ohlcv_market_ticker_date_idx
+          ON o.market = 'US'
+         AND o.ticker = c.ticker
+         AND o.date BETWEEN ? AND c.price_date
+      )
+      SELECT ticker, date, open, high, low, close, volume, is_recent FROM monthly_rows
+      UNION ALL
+      SELECT ticker, date, open, high, low, close, volume, 1 AS is_recent
+      FROM recent_ranked
+      WHERE recent_rank <= ?
+      ORDER BY ticker, date
+    `,
+    args: [...cte.args, window.historyStart, window.recentStart, requiredObservations],
+  }
+}
+
+/**
+ * Exact market month-end point lookups plus the same recent sessions as the legacy
+ * query. Only completed months before each candidate's own price_date month are joined.
+ */
+export function usMonthEndGenericMaQuery(
+  candidates: readonly TriggerDiscoveryFilteredCandidate[],
+  monthEndDates: readonly { monthKey: string; date: string }[],
+  window: UsGenericMaWindow,
+  requiredObservations: number,
+): { sql: string; args: Array<string | number> } {
+  const cte = candidateValuesCte(candidates)
+  return {
+    sql: `
+      WITH candidates(ticker, price_date) AS (VALUES ${cte.sql}),
+      month_ends(month_key, date) AS (VALUES ${monthEndDates.map(() => '(?, ?)').join(', ')}),
+      monthly_rows AS (
+        SELECT o.ticker,
+               o.date,
+               COALESCE(o.adj_open, o.open) AS open,
+               COALESCE(o.adj_high, o.high) AS high,
+               COALESCE(o.adj_low, o.low) AS low,
+               COALESCE(o.adj_close, o.close) AS close,
+               COALESCE(o.adj_volume, o.volume) AS volume,
+               0 AS is_recent
+        FROM candidates AS c
+        INNER JOIN month_ends AS m
+          ON m.month_key < substr(c.price_date, 1, 7)
+        INNER JOIN market_ohlcv_daily AS o INDEXED BY market_ohlcv_market_date_ticker_idx
+          ON o.market = 'US'
+         AND o.ticker = c.ticker
+         AND o.date = m.date
+      ), recent_ranked AS (
+        SELECT o.ticker,
+               o.date,
+               COALESCE(o.adj_open, o.open) AS open,
+               COALESCE(o.adj_high, o.high) AS high,
+               COALESCE(o.adj_low, o.low) AS low,
+               COALESCE(o.adj_close, o.close) AS close,
+               COALESCE(o.adj_volume, o.volume) AS volume,
+               ROW_NUMBER() OVER (PARTITION BY o.ticker ORDER BY o.date DESC) AS recent_rank
+        FROM candidates AS c
+        INNER JOIN market_ohlcv_daily AS o INDEXED BY market_ohlcv_market_ticker_date_idx
+          ON o.market = 'US'
+         AND o.ticker = c.ticker
+         AND o.date BETWEEN ? AND c.price_date
+      )
+      SELECT ticker, date, open, high, low, close, volume, is_recent FROM monthly_rows
+      UNION ALL
+      SELECT ticker, date, open, high, low, close, volume, 1 AS is_recent
+      FROM recent_ranked
+      WHERE recent_rank <= ?
+      ORDER BY ticker, date
+    `,
+    args: [
+      ...cte.args,
+      ...monthEndDates.flatMap((monthEnd) => [monthEnd.monthKey, monthEnd.date]),
+      window.recentStart,
+      requiredObservations,
+    ],
+  }
+}
+
+/** Groups rows by ticker; month-end and recent rows on the same date collapse to one row. */
+export function groupUsGenericRows(
+  rows: readonly GenericRow[],
+  grouped = new Map<string, UsGenericMaRowGroup>(),
+): Map<string, UsGenericMaRowGroup> {
+  for (const row of rows) {
+    const group = grouped.get(row.ticker) ?? { byDate: new Map(), recentDates: new Set() }
+    group.byDate.set(row.date, normalizedOhlcv(row))
+    if (Number(row.is_recent) === 1) group.recentDates.add(row.date)
+    grouped.set(row.ticker, group)
+  }
+  return grouped
+}
+
+/**
+ * True only when month-end rows reproduce the legacy month_edges result for this
+ * candidate: every market month-end of each completed month before price_date is
+ * present, the latest recent row is price_date itself, and no gap exceeds the
+ * continuous-history threshold. Anything else must use the legacy query.
+ */
+export function usMonthEndGroupMatchesGeneric(
+  group: UsGenericMaRowGroup | undefined,
+  priceDate: string,
+  marketMonthEnds: readonly UsMarketMonthEnd[],
+): boolean {
+  if (!group || group.recentDates.size === 0) return false
+  if ([...group.recentDates].sort().at(-1) !== priceDate) return false
+  const priceMonth = priceDate.slice(0, 7)
+  for (const monthEnd of marketMonthEnds) {
+    if (monthEnd.monthKey >= priceMonth || monthEnd.date == null) continue
+    if (!group.byDate.has(monthEnd.date)) return false
+  }
+  const dates = [...group.byDate.keys()].sort()
+  for (let index = 1; index < dates.length; index += 1) {
+    if (daysBetween(dates[index - 1], dates[index]) > MAX_CONTINUOUS_HISTORY_GAP_DAYS) return false
+  }
+  return true
+}
+
+export function buildUsGenericMaObservations(
+  group: UsGenericMaRowGroup,
+  ma1Period: number,
+  ma2Period: number,
+  requiredObservations: number,
+): MaZoneTriggerObservation[] {
+  const recentDateSet = new Set([...group.recentDates].sort().slice(-requiredObservations))
+  const series = buildContinuousMonthlyMaSeries(
+    [...group.byDate.values()].sort((left, right) => left.date.localeCompare(right.date)),
+    [ma1Period, ma2Period],
+    { adjustSplits: false },
+  )
+  return series.flatMap((point) => {
+    if (!recentDateSet.has(point.date)) return []
+    const ma1 = point.values.get(ma1Period)
+    const ma2 = point.values.get(ma2Period)
+    return ma1 == null || ma2 == null
+      ? []
+      : [{ date: point.date, price: point.close, ma1, ma2 }]
+  })
+}
+
+export async function loadUsGenericMaObservations(
+  { candidates, ma1Period, ma2Period, requiredObservations }: {
+    candidates: TriggerDiscoveryFilteredCandidate[]
+    ma1Period: number
+    ma2Period: number
+    requiredObservations: number
+  },
+  query: UsGenericMaQuery,
+  options: { legacyOnly?: boolean } = {},
+): Promise<{
+  value: Map<string, MaZoneTriggerObservation[]>
+  queryCount: number
+  queryMs: number
+  preparationMs: number
+  fallbackTickers: string[]
+}> {
+  if (candidates.length === 0) {
+    return { value: new Map(), queryCount: 0, queryMs: 0, preparationMs: 0, fallbackTickers: [] }
+  }
+  const window = usGenericMaWindow(candidates, Math.max(ma1Period, ma2Period), requiredObservations)
+  const grouped = new Map<string, UsGenericMaRowGroup>()
+  let fallbackCandidates = candidates
+  let queryCount = 0
+  let queryMs = 0
+
+  if (!options.legacyOnly) {
+    const newestPriceDate = candidates.reduce(
+      (newest, candidate) => candidate.priceDate > newest ? candidate.priceDate : newest,
+      candidates[0].priceDate,
+    )
+    const lookups = usMarketMonthEndLookups(window.historyStart, newestPriceDate)
+    let marketMonthEnds: UsMarketMonthEnd[] = []
+    if (lookups.length > 0) {
+      const monthEndQuery = usMarketMonthEndQuery(lookups)
+      const queryStartedAt = performance.now()
+      const rows = await query<{ month_key: string; date: string | null }>(monthEndQuery.sql, monthEndQuery.args)
+      queryMs += elapsedMs(queryStartedAt)
+      queryCount += 1
+      marketMonthEnds = rows.map((row) => ({ monthKey: row.month_key, date: row.date ?? null }))
+    }
+    const monthEndDates = marketMonthEnds.flatMap((monthEnd) => (
+      monthEnd.date == null ? [] : [{ monthKey: monthEnd.monthKey, date: monthEnd.date }]
+    ))
+    if (monthEndDates.length > 0) {
+      fallbackCandidates = []
+      for (const candidateChunk of chunks(candidates)) {
+        const monthEndQuery = usMonthEndGenericMaQuery(
+          candidateChunk,
+          monthEndDates,
+          window,
+          requiredObservations,
+        )
+        const queryStartedAt = performance.now()
+        const rows = await query<GenericRow>(monthEndQuery.sql, monthEndQuery.args)
+        queryMs += elapsedMs(queryStartedAt)
+        queryCount += 1
+        const chunkGroups = groupUsGenericRows(rows)
+        for (const candidate of candidateChunk) {
+          const group = chunkGroups.get(candidate.ticker)
+          if (usMonthEndGroupMatchesGeneric(group, candidate.priceDate, marketMonthEnds)) {
+            grouped.set(candidate.ticker, group!)
+          } else {
+            fallbackCandidates.push(candidate)
+          }
+        }
+      }
+    }
+  }
+
+  for (const candidateChunk of chunks(fallbackCandidates)) {
+    const legacyQuery = usLegacyGenericMaQuery(candidateChunk, window, requiredObservations)
+    const queryStartedAt = performance.now()
+    const rows = await query<GenericRow>(legacyQuery.sql, legacyQuery.args)
+    queryMs += elapsedMs(queryStartedAt)
+    queryCount += 1
+    groupUsGenericRows(rows, grouped)
+  }
+
+  const preparationStartedAt = performance.now()
+  const value = new Map<string, MaZoneTriggerObservation[]>()
+  for (const [ticker, group] of grouped) {
+    value.set(ticker, buildUsGenericMaObservations(group, ma1Period, ma2Period, requiredObservations))
+  }
+  return {
+    value,
+    queryCount,
+    queryMs,
+    preparationMs: elapsedMs(preparationStartedAt),
+    fallbackTickers: options.legacyOnly ? [] : fallbackCandidates.map((candidate) => candidate.ticker),
   }
 }
 
@@ -268,105 +626,9 @@ export function createUsTriggerDiscoveryDataSource(): TriggerDiscoveryDataSource
       return { value: new Map(), queryCount: 0, queryMs: 0, preparationMs: 0 }
     },
 
-    async loadGenericMaObservations({ candidates, ma1Period, ma2Period, requiredObservations }) {
-      if (candidates.length === 0) return { value: new Map(), queryCount: 0, queryMs: 0, preparationMs: 0 }
-      const maximumPeriod = Math.max(ma1Period, ma2Period)
-      const historyCalendarDays = maximumPeriod * 32
-        + GENERIC_WARMUP_CALENDAR_DAYS
-        + requiredObservations * GENERIC_SESSION_CALENDAR_MULTIPLIER
-      const oldestPriceDate = candidates.reduce(
-        (oldest, candidate) => candidate.priceDate < oldest ? candidate.priceDate : oldest,
-        candidates[0].priceDate,
-      )
-      const historyStart = dateDaysBefore(oldestPriceDate, historyCalendarDays)
-      const recentStart = dateDaysBefore(
-        oldestPriceDate,
-        requiredObservations * GENERIC_SESSION_CALENDAR_MULTIPLIER + 30,
-      )
-      const grouped = new Map<string, { byDate: Map<string, OHLCV>; recentDates: Set<string> }>()
-      let queryCount = 0
-      let queryMs = 0
-
-      for (const candidateChunk of chunks(candidates)) {
-        const cte = candidateValuesCte(candidateChunk)
-        const queryStartedAt = performance.now()
-        const rows = await execAll<GenericRow>(`
-          WITH candidates(ticker, price_date) AS (VALUES ${cte.sql}), month_edges AS (
-            SELECT o.ticker,
-                   substr(o.date, 1, 7) AS month_key,
-                   MIN(o.date) AS first_date,
-                   MAX(o.date) AS last_date
-            FROM candidates AS c
-            INNER JOIN market_ohlcv_daily AS o INDEXED BY market_ohlcv_market_ticker_date_idx
-              ON o.market = 'US'
-             AND o.ticker = c.ticker
-             AND o.date BETWEEN ? AND c.price_date
-            GROUP BY o.ticker, month_key
-          ), monthly_rows AS (
-            SELECT o.ticker,
-                   o.date,
-                   COALESCE(o.adj_open, o.open) AS open,
-                   COALESCE(o.adj_high, o.high) AS high,
-                   COALESCE(o.adj_low, o.low) AS low,
-                   COALESCE(o.adj_close, o.close) AS close,
-                   COALESCE(o.adj_volume, o.volume) AS volume,
-                   0 AS is_recent
-            FROM month_edges AS edges
-            INNER JOIN market_ohlcv_daily AS o INDEXED BY market_ohlcv_market_ticker_date_idx
-              ON o.market = 'US'
-             AND o.ticker = edges.ticker
-             AND o.date IN (edges.first_date, edges.last_date)
-          ), recent_ranked AS (
-            SELECT o.ticker,
-                   o.date,
-                   COALESCE(o.adj_open, o.open) AS open,
-                   COALESCE(o.adj_high, o.high) AS high,
-                   COALESCE(o.adj_low, o.low) AS low,
-                   COALESCE(o.adj_close, o.close) AS close,
-                   COALESCE(o.adj_volume, o.volume) AS volume,
-                   ROW_NUMBER() OVER (PARTITION BY o.ticker ORDER BY o.date DESC) AS recent_rank
-            FROM candidates AS c
-            INNER JOIN market_ohlcv_daily AS o INDEXED BY market_ohlcv_market_ticker_date_idx
-              ON o.market = 'US'
-             AND o.ticker = c.ticker
-             AND o.date BETWEEN ? AND c.price_date
-          )
-          SELECT ticker, date, open, high, low, close, volume, is_recent FROM monthly_rows
-          UNION ALL
-          SELECT ticker, date, open, high, low, close, volume, 1 AS is_recent
-          FROM recent_ranked
-          WHERE recent_rank <= ?
-          ORDER BY ticker, date
-        `, [...cte.args, historyStart, recentStart, requiredObservations])
-        queryMs += elapsedMs(queryStartedAt)
-        queryCount += 1
-        for (const row of rows) {
-          const group = grouped.get(row.ticker) ?? { byDate: new Map(), recentDates: new Set() }
-          group.byDate.set(row.date, normalizedOhlcv(row))
-          if (Number(row.is_recent) === 1) group.recentDates.add(row.date)
-          grouped.set(row.ticker, group)
-        }
-      }
-
-      const preparationStartedAt = performance.now()
-      const value = new Map<string, MaZoneTriggerObservation[]>()
-      for (const [ticker, group] of grouped) {
-        const recentDateSet = new Set([...group.recentDates].sort().slice(-requiredObservations))
-        const series = buildContinuousMonthlyMaSeries(
-          [...group.byDate.values()].sort((left, right) => left.date.localeCompare(right.date)),
-          [ma1Period, ma2Period],
-          { adjustSplits: false },
-        )
-        value.set(ticker, series.flatMap((point) => {
-          if (!recentDateSet.has(point.date)) return []
-          const ma1 = point.values.get(ma1Period)
-          const ma2 = point.values.get(ma2Period)
-          return ma1 == null || ma2 == null
-            ? []
-            : [{ date: point.date, price: point.close, ma1, ma2 }]
-        }))
-      }
-      return { value, queryCount, queryMs, preparationMs: elapsedMs(preparationStartedAt) }
+    async loadGenericMaObservations(input) {
+      const { value, queryCount, queryMs, preparationMs } = await loadUsGenericMaObservations(input, execAll)
+      return { value, queryCount, queryMs, preparationMs }
     },
 
     async loadBiweeklyMaObservations({ candidates, ma1Period, ma2Period, requiredObservations }) {

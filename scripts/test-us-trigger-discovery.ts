@@ -9,6 +9,7 @@ import {
   usMiniChartKey,
 } from '@/components/us/trigger-discovery/usTriggerDiscoveryShared'
 import { parseTriggerDiscoveryMiniChartsRequest } from '@/lib/server/trigger-discovery-mini-charts'
+import { runUsTriggerDiscoveryMaParityTests } from './test-us-trigger-discovery-ma-parity'
 
 const LATEST_AS_OF = '2026-10-09'
 
@@ -113,6 +114,11 @@ assert.match(serverSource, /json_extract\(raw_json, '\$\.submission\.name'\)/)
 assert.match(serverSource, /LEFT JOIN current_company_names ON current_company_names\.ticker = u\.ticker/)
 assert.match(serverSource, /buildContinuousBiweeklyMaSeriesFromWeekly/)
 assert.doesNotMatch(serverSource, /weekly_ohlcv/)
+assert.doesNotMatch(serverSource, /monthly_ma_/, 'generic MA must not read materialized monthly MA values')
+assert.match(serverSource, /month_edges AS \(/, 'legacy generic SQL remains as the per-candidate fallback')
+assert.match(serverSource, /INDEXED BY market_ohlcv_market_date_idx\s+WHERE o\.market = 'US'\s+AND o\.date BETWEEN months\.from_date AND months\.through_date/)
+assert.match(serverSource, /INDEXED BY market_ohlcv_market_date_ticker_idx\s+ON o\.market = 'US'\s+AND o\.ticker = c\.ticker\s+AND o\.date = m\.date/)
+assert.match(serverSource, /\[ma1Period, ma2Period\],\s+\{ adjustSplits: false \}/)
 
 assert.match(clientSource, /fetch\('\/api\/us\/trigger-discovery\/search'/)
 assert.match(clientSource, /fetch\('\/api\/us\/trigger-discovery\/mini-charts'/)
@@ -133,4 +139,9 @@ assert.match(navigationSource, /href: '\/us\/trigger-discovery'/)
 assert.match(navigationSource, /'usScreener', 'usStageScreener', 'usTriggerDiscovery'/)
 assert.match(usNavigationSource, /href: '\/us\/trigger-discovery'/)
 
-console.log('US Trigger Discovery contract tests passed')
+runUsTriggerDiscoveryMaParityTests()
+  .then(() => console.log('US Trigger Discovery contract tests passed'))
+  .catch((error) => {
+    console.error(error)
+    process.exitCode = 1
+  })
