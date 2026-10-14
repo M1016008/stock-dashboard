@@ -196,8 +196,9 @@ performance, or historical-price parity work.
   claimed.
 - Claude Opus 5.5 (`claude.ai`, firstParty, Pro) replaced the US page notice and coverage-strip
   `UNVERIFIED` status with the exact validated scope, kept the existing component structure, and
-  pinned the disclosed scope to the US fixture in the UI regressions. Merge and Production
-  deployment of this wave are not claimed here.
+  pinned the disclosed scope to the US fixture in the UI regressions. Feature commit `4a61d12a`
+  was merged normally as `682ac7c6` and pushed to main. Production promotion remains pending
+  behind the shared W3F source-policy gate.
 
 ### W3E - Shared Watchlist, Comparison, Charts, Drill and AI Research
 
