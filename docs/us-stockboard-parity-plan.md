@@ -136,6 +136,32 @@ performance, or historical-price parity work.
   `9tgwUia7mtxi-MoyTi8AS`. Storage Guard/runtime audit passed and Production smoke passed 165/165
   with health healthy and storage available.
 
+### W3H - Trigger Discovery cold-query optimization
+
+- Monthly Trigger searches now resolve exact market month-end observations once, then build the same
+  adjusted/raw close series with the existing deterministic MA engine. A candidate uses the optimized
+  path only when every expected completed market month is present, the latest row matches its candidate
+  price date, and no observation gap exceeds 60 days; otherwise it falls back to the unchanged legacy
+  query. The public route contract, `maPath: generic`, Stage semantics, mini charts and cache behavior
+  remain unchanged.
+- Using `market_daily_snapshots` was explicitly rejected: its split heuristic and missing close column
+  cannot prove bit-identical parity with the existing Trigger series. The chosen lookup remains grounded
+  in canonical `market_ohlcv`, and the exact lookup uses the existing `(market, date, ticker)` index.
+- Read-only canonical-data parity passed for 2026-10-13 MA20/25, 2026-10-01 MA15/20,
+  2026-09-30 MA5/10 and 2024-03-01 MA3/25. The latest run compared 2,769 candidate observation maps,
+  including 293 strict fallbacks, and reproduced all 109 matches, rejection counts and result ordering.
+  A dedicated fixture also covers incomplete month ends, 60/61-day gaps, recent listings, stale anchors,
+  null adjusted prices, empty rows, de-duplication and multiple MA-period pairs.
+- Five fresh-process current searches completed in 5.846, 3.699, 3.786, 3.666 and 3.680 seconds
+  (median 3.680 seconds), down from the original 9.852-second cold baseline. Warm route-cache behavior
+  remains unchanged. EXPLAIN confirms the exact month-end lookup uses
+  `market_ohlcv_market_date_ticker_idx` and the recent range uses
+  `market_ohlcv_market_ticker_date_idx`.
+- Claude Opus 5.5 (`claude.ai`, firstParty, Pro) audited, implemented and completed a final read-only
+  review. Codex verified fixture and canonical-data parity, error-path fallback, query plans, dedicated
+  regressions, typecheck and build. No schema, source data, calculation, API or persistence change was
+  introduced. Production promotion remains pending behind the shared W3F RGC/QMMM source-policy gate.
+
 ### W3D - MTF Close Calendar
 
 - `/us/mtf-close-calendar` now serves all 12 daily, weekly and monthly close boundaries using
