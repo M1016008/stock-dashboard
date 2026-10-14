@@ -80,6 +80,14 @@ assert.deepEqual(
   getCloseTimeframes('2026-12-31', getNextTradingDay('2026-12-31', usSessions)!, usContext),
   [...CLOSE_TIMEFRAMES],
 )
+assert.deepEqual(
+  getCloseTimeframes('2025-12-31', getNextTradingDay('2025-12-31', usSessions)!, usContext),
+  ['D', '2D', '3D', '5D', 'M', '2M', '3M', '5M'],
+)
+assert.deepEqual(
+  getCloseTimeframes('2026-01-02', getNextTradingDay('2026-01-02', usSessions)!, usContext),
+  ['D', 'W', '2W', '3W', '5W'],
+)
 
 for (const timeframe of CLOSE_TIMEFRAMES) {
   assert.ok(getTimeframeBucketKey('2026-10-09', intervalToSpec(timeframe), context))
@@ -203,6 +211,20 @@ assert.equal(fixtureReport.totalDatesCompared, 425)
 assert.equal(fixtureReport.totalTfDateComparisons, 5_100)
 assert.equal(fixtureReport.totalMismatches, 0)
 
+const usParityFixture = JSON.parse(fs.readFileSync(
+  path.join(process.cwd(), 'fixtures/mtf-close-calendar/tradingview-close-dates-us.json'),
+  'utf8',
+)) as TradingViewMtfFixture
+assert.equal(usParityFixture.schemaVersion, 2)
+assert.equal(usParityFixture.status, 'PASS')
+assert.equal(usParityFixture.oracle?.market, 'US')
+assert.equal(usParityFixture.oracle?.exchangeTimezone, 'America/New_York')
+const usFixtureReport = compareTradingViewMtfFixture(usParityFixture)
+assert.equal(usFixtureReport.result, 'PASS')
+assert.equal(usFixtureReport.totalDatesCompared, 446)
+assert.equal(usFixtureReport.totalTfDateComparisons, 5_352)
+assert.equal(usFixtureReport.totalMismatches, 0)
+
 const emptyFixture: TradingViewMtfFixture = {
   schemaVersion: 2,
   status: 'NOT_VALIDATED',
@@ -234,6 +256,8 @@ const oracleImport = importTradingViewOracleRows(oracleRows, {
   from: '2026-10-01',
   to: '2026-10-31',
 })
+assert.equal(oracleImport.market, 'JP')
+assert.equal(oracleImport.exchangeTimezone, 'Asia/Tokyo')
 const generatedFixture = buildTradingViewMtfFixture({
   oracle: oracleImport,
   tradingDates: sessions,
@@ -248,6 +272,15 @@ assert.equal(passReport.totalDatesCompared, 2)
 assert.equal(passReport.totalTfDateComparisons, 24)
 assert.equal(passReport.totalMismatches, 0)
 assert.equal(passReport.october30.status, 'COMPARED')
+
+const usOracleImport = importTradingViewOracleRows(oracleRows, {
+  symbol: 'NASDAQ:AAPL',
+  market: 'US',
+  from: '2026-10-01',
+  to: '2026-10-31',
+})
+assert.equal(usOracleImport.market, 'US')
+assert.equal(usOracleImport.exchangeTimezone, 'America/New_York')
 
 const mismatchedFixture = structuredClone(generatedFixture)
 mismatchedFixture.observations[0].expectedCloseTimeframes = mismatchedFixture.observations[0]

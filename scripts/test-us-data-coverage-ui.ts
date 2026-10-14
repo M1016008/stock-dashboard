@@ -208,7 +208,7 @@ const ROUTE_COPY: Record<UsDataCoverageScope, RegExp[]> = {
   transitions: [/イベント日は画面上の表示を正/, /historical classification/],
   backtest: [/RGC・QMMM/, /source-quality/, /方針は未決/, /clip \/ winsorize/, /activation pending/],
   stock: [/個別系列/, /SEC Companyfacts の実績値のみ/, /会社予想/, /current-only/],
-  'mtf-calendar': [/観測された US 取引日/, /休日ルール/, /TradingView 照合は未完了/, /UNVERIFIED/],
+  'mtf-calendar': [/観測された US 取引日/, /休日ルール/, /TradingView の US 1 銘柄（通常取引の日足）/, /12 本の足すべてで確定日が一致/, /ページ上の説明を正/, /TradingView で直接確認したものではありません/, /US の他の銘柄では照合していません/],
 }
 for (const scope of ALL_SCOPES) {
   const { details } = render(scope, ready(fixture()), scope === 'stock' ? 'TICKER-FIXTURE' : undefined)
@@ -241,9 +241,11 @@ assert.equal(US_DATA_COVERAGE_SCOPE_COPY.dashboard.primary, 'ohlcv', 'dashboard 
   assert.doesNotMatch(summary, /PARTIAL/, 'market-wide OHLCV coverage is not presented as the ticker status')
 }
 {
-  const { summary } = render('mtf-calendar', ready(fixture()))
-  assert.match(text(summary), /TradingView照合UNVERIFIED/)
+  const { summary, details } = render('mtf-calendar', ready(fixture()))
+  assert.match(text(summary), /TradingView照合1銘柄で一致/, 'MTF strip states the verified Oracle scope (one symbol)')
+  assert.doesNotMatch(summary, /UNVERIFIED|data-tone="warning"/, 'verified Oracle is neither UNVERIFIED nor a warning')
   assert.match(text(summary), /NYSE\/Nasdaq 通常取引日/)
+  assert.doesNotMatch(text(details), /照合は未完了|全銘柄|複数銘柄/, 'MTF strip must not keep pending wording or claim cross-symbol validation')
 }
 
 // ── 5. Shared resource: one fetch per screen ─────────────────────────

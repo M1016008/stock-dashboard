@@ -63,14 +63,33 @@ for (const fragment of [
   assert.ok(files.client.includes(fragment), `shared client must keep ${fragment}`)
 }
 
-// US copy: regular sessions, NY market dates, observed vs projected, pending Oracle validation.
+// US copy: regular sessions, NY market dates, observed vs projected, exact US Oracle scope.
 assert.match(files.usPage, /NYSE\/Nasdaq/, 'US copy must name NYSE/Nasdaq regular sessions')
 assert.match(files.usPage, /通常取引/, 'US copy must state regular-session coverage')
 assert.match(files.usPage, /America\/New_York/, 'US copy must state America/New_York market dates')
 assert.match(files.usPage, /US 日足/, 'US copy must state observed dates come from market OHLCV')
 assert.match(files.usPage, /休日ルール/, 'US copy must state future dates are holiday-rule projections')
-assert.match(files.usPage, /US 固有の TradingView 照合はまだ完了していません/, 'US page must disclose that US Oracle validation is pending')
-assert.doesNotMatch(files.usPage, /US[^。]*(?:照合|検証)済み/, 'US page must not claim US TradingView validation')
+
+// The disclosed Oracle scope must equal the committed PASS fixture, not a broader claim.
+const usOracle = JSON.parse(fs.readFileSync('fixtures/mtf-close-calendar/tradingview-close-dates-us.json', 'utf8')) as {
+  status: string
+  oracle: { symbol: string; chartTimeframe: string; exchangeTimezone: string; session: string; from: string; to: string }
+  observations: unknown[]
+}
+assert.equal(usOracle.status, 'PASS', 'US Oracle fixture must be PASS before the page claims a match')
+assert.deepEqual(
+  [usOracle.oracle.symbol, usOracle.oracle.chartTimeframe, usOracle.oracle.exchangeTimezone, usOracle.oracle.session],
+  ['NASDAQ:AAPL', '1D', 'America/New_York', 'regular'],
+)
+assert.equal(usOracle.observations.length, 446, 'US Oracle fixture covers 446 confirmed trading dates')
+assert.ok(files.usPage.includes(
+  `TradingView の ${usOracle.oracle.symbol} 日足（通常取引・${usOracle.oracle.exchangeTimezone}）で、${usOracle.oracle.from}〜${usOracle.oracle.to} の 446 取引日 × 12 足 = 5,352 件の確定日を照合し、不一致は 0 件でした。`,
+), 'US page must state the exact Oracle symbol, session, period, comparison count and zero mismatches')
+assert.equal(CLOSE_TIMEFRAMES.length * usOracle.observations.length, 5352, 'disclosed comparison count must equal dates x timeframes')
+assert.match(files.usPage, /照合した US 銘柄は AAPL のみです/, 'US page must limit the Oracle claim to AAPL')
+assert.match(files.usPage, /照合期間外の確定日は同じ足区切りルールを当てはめた結果で、TradingView で直接確認したものではありません/, 'US page must separate projections from observed Oracle evidence')
+assert.doesNotMatch(files.usPage, /UNVERIFIED|照合はまだ完了していません/, 'US page must not keep the pending-Oracle wording')
+assert.doesNotMatch(files.usPage, /全銘柄|複数銘柄|すべての銘柄|銘柄共通/, 'US page must not claim cross-symbol validation')
 assert.match(files.client, /US: \{\s*showDataSource: true/, 'US calendar must distinguish observed and projected dates')
 assert.match(files.client, /JP: \{\s*showDataSource: false/, 'JP calendar presentation must stay unchanged')
 assert.match(files.client, /予定（米国休日ルール）/, 'US selected-day detail must label projected dates')

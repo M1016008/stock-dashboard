@@ -42,7 +42,12 @@ export default function UsMtfCloseCalendarPage() {
       />
       <UsDataCoverageStrip scope="mtf-calendar" placement="standalone" />
       <Notice tone="info" title="日付の根拠と検証状況">
-        実データの範囲内は US 日足で確認できた取引日、範囲外は米国取引所の休日ルールで求めた予定日です（臨時休場は予定に反映されません）。足の区切りは TradingView で検証済みの JP 版と共通のルールですが、US 固有の TradingView 照合はまだ完了していません。
+        <p className="m-0">
+          TradingView の NASDAQ:AAPL 日足（通常取引・America/New_York）で、2025-01-02〜2026-10-13 の 446 取引日 × 12 足 = 5,352 件の確定日を照合し、不一致は 0 件でした。照合した US 銘柄は AAPL のみです。
+        </p>
+        <p className="m-0 mt-1">
+          実データの範囲内は US 日足で確認できた取引日、範囲外は米国取引所の休日ルールで求めた予定日です（臨時休場は予定に反映されません）。照合期間外の確定日は同じ足区切りルールを当てはめた結果で、TradingView で直接確認したものではありません。
+        </p>
       </Notice>
       <MtfCloseCalendarClient market="US" initialMonth={today.slice(0, 7)} today={today} />
     </div>
