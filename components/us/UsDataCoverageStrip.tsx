@@ -128,7 +128,8 @@ export const US_DATA_COVERAGE_SCOPE_COPY: Record<UsDataCoverageScope, ScopeCopy>
     primary: 'tradingview-oracle',
     constraints: [
       '実データの範囲内は観測された US 取引日、範囲外は米国取引所の休日ルールで求めた予定日です（臨時休場は反映されません）。',
-      'US 固有の TradingView 照合は未完了です（UNVERIFIED）。足の区切りは JP 版と共通のルールです。',
+      'TradingView の US 1 銘柄（通常取引の日足）と、照合期間内の全取引日・12 本の足すべてで確定日が一致しました。銘柄・期間・件数はページ上の説明を正とします。',
+      '照合期間外の確定日は同じ足区切りルールを当てはめた結果で、TradingView で直接確認したものではありません。US の他の銘柄では照合していません。',
     ],
   },
 }
@@ -235,11 +236,12 @@ function NaStatus({ label }: { label: string }) {
 }
 
 function PrimaryStatusValue({ data, primary }: { data: UsStatusSummary; primary: PrimaryStatus }) {
+  // 照合済みは COMPLETE と同じく警告 badge にしない。範囲 (1 銘柄) を必ず併記する。
   if (primary === 'tradingview-oracle') {
     return (
       <span className="inline-flex items-center gap-1.5">
         <span>TradingView照合</span>
-        <StatusTag>UNVERIFIED</StatusTag>
+        <span className="text-[var(--color-text-secondary)]">1銘柄で一致</span>
       </span>
     )
   }

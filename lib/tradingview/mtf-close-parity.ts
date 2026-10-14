@@ -16,6 +16,8 @@ export const TRADINGVIEW_ORACLE_COLUMNS = {
 } as const
 
 export type TradingViewParityStatus = 'PASS' | 'FAIL' | 'NOT_VALIDATED'
+export type TradingViewOracleMarket = 'JP' | 'US'
+export type TradingViewOracleTimezone = 'Asia/Tokyo' | 'America/New_York'
 
 export interface TradingViewOracleObservation {
   date: string
@@ -24,9 +26,9 @@ export interface TradingViewOracleObservation {
 
 export interface TradingViewOracleImport {
   symbol: string
-  market: 'JP'
+  market: TradingViewOracleMarket
   chartTimeframe: '1D'
-  exchangeTimezone: 'Asia/Tokyo'
+  exchangeTimezone: TradingViewOracleTimezone
   session: 'regular'
   from: string
   to: string
@@ -130,7 +132,7 @@ function parseExchangeDate(value: string, rowNumber: number): string {
 
 export function importTradingViewOracleRows(
   rows: readonly (readonly string[])[],
-  args: { symbol: string; from: string; to: string },
+  args: { symbol: string; from: string; to: string; market?: TradingViewOracleMarket },
 ): TradingViewOracleImport {
   const headers = rows[0]
   if (!headers) throw new Error('TradingView CSV has no header row.')
@@ -174,9 +176,9 @@ export function importTradingViewOracleRows(
 
   return {
     symbol: args.symbol,
-    market: 'JP',
+    market: args.market ?? 'JP',
     chartTimeframe: '1D',
-    exchangeTimezone: 'Asia/Tokyo',
+    exchangeTimezone: args.market === 'US' ? 'America/New_York' : 'Asia/Tokyo',
     session: 'regular',
     from: args.from,
     to: args.to,

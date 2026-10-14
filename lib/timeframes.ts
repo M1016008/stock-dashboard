@@ -161,7 +161,8 @@ export function getTimeframeBucketKey(
   }
 
   if (spec.timeframe === 'week' && multiplier > 1) {
-    return `week:${isoDate.slice(0, 4)}:${multiplier}:${tradingViewWeekBucketIndex(isoDate, multiplier)}`
+    const bucket = tradingViewWeekBucket(isoDate, multiplier)
+    return `week:${bucket.year}:${multiplier}:${bucket.index}`
   }
 
   if (spec.timeframe === 'month') {
@@ -271,25 +272,31 @@ export function calendarWeekBucket(isoDate: string): number {
 
 /**
  * TradingView multi-week bars restart from the exchange year's first trading
- * week. For the JP regular session that anchor is the week containing the
- * first weekday on or after January 4, independent of the first row loaded
- * for an individual symbol.
+ * week. A calendar week spanning New Year remains attached to the year in
+ * which its Monday falls, so US sessions on Dec 31 and Jan 2 stay in the same
+ * bar while a JP year-end followed by the next Monday still closes the bar.
  */
 export function tradingViewWeekBucketIndex(isoDate: string, multiplier = 1): number {
+  return tradingViewWeekBucket(isoDate, multiplier).index
+}
+
+function tradingViewWeekBucket(isoDate: string, multiplier = 1): { year: string; index: number } {
   const normalizedMultiplier = Math.max(1, Math.floor(multiplier))
-  const year = isoDate.slice(0, 4)
+  const weekStart = calendarWeekStart(isoDate)
+  const year = weekStart.slice(0, 4)
   const firstSession = new Date(`${year}-01-04T00:00:00Z`)
   if (firstSession.getUTCDay() === 6) firstSession.setUTCDate(firstSession.getUTCDate() + 2)
   if (firstSession.getUTCDay() === 0) firstSession.setUTCDate(firstSession.getUTCDate() + 1)
   const firstWeek = Date.parse(`${calendarWeekStart(firstSession.toISOString().slice(0, 10))}T00:00:00Z`)
-  const currentWeek = Date.parse(`${calendarWeekStart(isoDate)}T00:00:00Z`)
+  const currentWeek = Date.parse(`${weekStart}T00:00:00Z`)
   const weekIndex = Math.floor((currentWeek - firstWeek) / (7 * 86_400_000))
-  return Math.floor(weekIndex / normalizedMultiplier)
+  return { year, index: Math.floor(weekIndex / normalizedMultiplier) }
 }
 
 /** Monotonic numeric key for ordering TradingView-compatible multi-week bars. */
 export function tradingViewWeekBucketOrdinal(isoDate: string, multiplier = 1): number {
-  return Number(isoDate.slice(0, 4)) * 100 + tradingViewWeekBucketIndex(isoDate, multiplier)
+  const bucket = tradingViewWeekBucket(isoDate, multiplier)
+  return Number(bucket.year) * 100 + bucket.index
 }
 
 export function calendarWeekStart(isoDate: string): string {

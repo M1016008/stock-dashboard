@@ -170,8 +170,8 @@ performance, or historical-price parity work.
 - Source anomalies on weekends and regular exchange holidays are filtered before bucket creation.
   The shared bucket engine and JP route remain unchanged; the JP TradingView fixture still passes
   5,100 comparisons with zero mismatches.
-- US-specific TradingView Oracle validation is intentionally not claimed. Exporting a US Oracle
-  CSV/fixture and requiring zero mismatches is the only remaining MTF parity item.
+- US-specific TradingView Oracle validation was not claimed in W3D. It was completed in W3I
+  (below) for `NASDAQ:AAPL` only.
 - Claude Opus 5.5 (`claude.ai`, firstParty, Pro) implemented and reviewed the local presentation
   and completed one mobile label revision. Codex tests, typecheck, build, multi-viewport browser QA
   and candidate read-only smoke passed 167/167.
@@ -179,6 +179,25 @@ performance, or historical-price parity work.
   `FivzkmcEB1yyMKBYEru1r`. Storage Guard/runtime audit passed, Production smoke passed 168/168,
   local Production browser QA passed at 1440 and 390 px, and the read-only gateway served both the
   page and API while mutation routes remained fail closed.
+
+### W3I - US MTF TradingView Oracle
+
+- US Oracle: `NASDAQ:AAPL`, `1D`, regular exchange session, exchange timezone `America/New_York`.
+  The directly observed period is 2025-01-02 through 2026-10-13: 446 confirmed trading dates x 12
+  timeframes = 5,352 TF-date comparisons. D, 2D, 3D, 5D, W, 2W, 3W, 5W, M, 2M, 3M and 5M each have
+  zero mismatches (total 0). The committed fixture
+  `fixtures/mtf-close-calendar/tradingview-close-dates-us.json` is `PASS`.
+- The only engine correction is New-Year week ownership: a week spanning New Year stays attached to
+  the year in which its Monday falls. US Dec 31 -> Jan 2 therefore remains inside one multi-week bar,
+  while a JP year-end followed by the next Monday is still a close boundary. The JP `TSE:7203`
+  fixture still passes 425 dates x 12 timeframes = 5,100 comparisons with zero mismatches.
+- Dates outside each observed period are produced by the validated bucket rules and are labeled as
+  projections, not as directly observed Oracle results. No cross-symbol validation beyond AAPL is
+  claimed.
+- Claude Opus 5.5 (`claude.ai`, firstParty, Pro) replaced the US page notice and coverage-strip
+  `UNVERIFIED` status with the exact validated scope, kept the existing component structure, and
+  pinned the disclosed scope to the US fixture in the UI regressions. Merge and Production
+  deployment of this wave are not claimed here.
 
 ### W3E - Shared Watchlist, Comparison, Charts, Drill and AI Research
 
@@ -342,7 +361,9 @@ performance, or historical-price parity work.
   adjusted-price, classification and fundamentals source contracts. On 2026-10-13, OHLCV covers
   11,760 of 12,004 current-active investable symbols (97.97%, `PARTIAL`); 6 Stage covers all 11,741
   eligible symbols. Missing data remains `—`, specification-level non-applicability remains `N/A`,
-  and US TradingView parity remains `UNVERIFIED` rather than being inferred from the JP fixture.
+  and US TradingView parity was kept `UNVERIFIED` rather than being inferred from the JP fixture.
+  W3I later replaced that status with the `NASDAQ:AAPL` Oracle result (5,352 comparisons, zero
+  mismatches); the strip now states one-symbol scope and defers period and counts to the page.
 - Claude Opus 5.5 (`claude.ai`, firstParty, Pro) designed and implemented a compact disclosure strip
   across Dashboard, Market Momentum, Sectors, Screener, Stage Screener, Trigger Discovery, AI Lens,
   Transition Scanner, Historical Outcome Explorer, AAPL Stock Detail and MTF Close Calendar. The

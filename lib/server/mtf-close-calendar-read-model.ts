@@ -152,6 +152,14 @@ export async function loadJpMarketSessionCoverageForValidation(
   return loadMarketSessionCoverageInternal('JP', from, to)
 }
 
+export async function loadUsMarketSessionCoverageForValidation(
+  from: string,
+  to: string,
+): Promise<MarketSessionCoverage> {
+  validateRange(from, to, null)
+  return loadMarketSessionCoverageInternal('US', from, to)
+}
+
 export function parseMtfCloseCalendarQuery(searchParams: URLSearchParams): {
   market: CloseCalendarMarket
   from: string

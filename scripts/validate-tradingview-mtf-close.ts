@@ -1,19 +1,33 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { readSafeSpreadsheetFile } from '@/lib/safe-spreadsheet'
-import { loadJpMarketSessionCoverageForValidation } from '@/lib/server/mtf-close-calendar-read-model'
+import {
+  loadJpMarketSessionCoverageForValidation,
+  loadUsMarketSessionCoverageForValidation,
+} from '@/lib/server/mtf-close-calendar-read-model'
 import {
   buildTradingViewMtfFixture,
   compareTradingViewMtfFixture,
   importTradingViewOracleRows,
   type TradingViewMtfFixture,
+  type TradingViewOracleMarket,
   type TradingViewParityReport,
 } from '@/lib/tradingview/mtf-close-parity'
 
-const DEFAULT_FIXTURE = 'fixtures/mtf-close-calendar/tradingview-close-dates.json'
-const DEFAULT_SYMBOL = 'TSE:7203'
-const DEFAULT_FROM = '2025-01-01'
-const DEFAULT_TO = '2026-10-02'
+const MARKET_DEFAULTS = {
+  JP: {
+    fixture: 'fixtures/mtf-close-calendar/tradingview-close-dates.json',
+    symbol: 'TSE:7203',
+    from: '2025-01-01',
+    to: '2026-10-02',
+  },
+  US: {
+    fixture: 'fixtures/mtf-close-calendar/tradingview-close-dates-us.json',
+    symbol: 'NASDAQ:AAPL',
+    from: '2025-01-02',
+    to: '2026-10-13',
+  },
+} as const
 
 function option(name: string): string | null {
   const index = process.argv.indexOf(name)
@@ -57,17 +71,32 @@ function printReport(report: TradingViewParityReport): void {
   console.log(`RESULT: ${report.result}`)
 }
 
-async function importCsv(csvPath: string, fixturePath: string): Promise<TradingViewMtfFixture> {
-  const symbol = option('--symbol') ?? DEFAULT_SYMBOL
-  const from = option('--from') ?? DEFAULT_FROM
-  const to = option('--to') ?? DEFAULT_TO
+function requestedMarket(): TradingViewOracleMarket {
+  const market = (option('--market') ?? 'JP').toUpperCase()
+  if (market !== 'JP' && market !== 'US') {
+    throw new Error('TradingView market must be JP or US.')
+  }
+  return market
+}
+
+async function importCsv(
+  csvPath: string,
+  fixturePath: string,
+  market: TradingViewOracleMarket,
+): Promise<TradingViewMtfFixture> {
+  const defaults = MARKET_DEFAULTS[market]
+  const symbol = option('--symbol') ?? defaults.symbol
+  const from = option('--from') ?? defaults.from
+  const to = option('--to') ?? defaults.to
   const spreadsheet = await readSafeSpreadsheetFile(path.resolve(csvPath), {
     maxInputBytes: 16 * 1024 * 1024,
     maxRows: 20_000,
     maxColumns: 64,
   })
-  const oracle = importTradingViewOracleRows(spreadsheet.rows, { symbol, from, to })
-  const coverage = await loadJpMarketSessionCoverageForValidation(from, to)
+  const oracle = importTradingViewOracleRows(spreadsheet.rows, { symbol, from, to, market })
+  const coverage = market === 'JP'
+    ? await loadJpMarketSessionCoverageForValidation(from, to)
+    : await loadUsMarketSessionCoverageForValidation(from, to)
   const fixture = buildTradingViewMtfFixture({
     oracle,
     tradingDates: coverage.tradingDates,
@@ -91,10 +120,11 @@ async function loadFixture(fixturePath: string): Promise<TradingViewMtfFixture> 
 }
 
 async function main() {
-  const fixturePath = option('--fixture') ?? DEFAULT_FIXTURE
+  const market = requestedMarket()
+  const fixturePath = option('--fixture') ?? MARKET_DEFAULTS[market].fixture
   const csvPath = option('--csv')
   const fixture = csvPath
-    ? await importCsv(csvPath, fixturePath)
+    ? await importCsv(csvPath, fixturePath, market)
     : await loadFixture(fixturePath)
   const report = compareTradingViewMtfFixture(fixture)
   printReport(report)

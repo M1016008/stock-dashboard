@@ -25,6 +25,24 @@ Re-run the committed fixture check with:
 npm run test:mtf-close-calendar:tradingview
 ```
 
+For the US oracle, open `NASDAQ:AAPL` on the same regular-session `1D` chart,
+keep the timezone on the exchange timezone (`America/New_York`), and import the
+export into the separate US fixture:
+
+```bash
+npm run mtf:tradingview:import -- \
+  --market US \
+  --csv /absolute/path/to/tradingview-export.csv \
+  --symbol NASDAQ:AAPL \
+  --from 2025-01-02 \
+  --to 2026-10-13
+
+npm run test:mtf-close-calendar:tradingview -- --market US
+```
+
+The JP and US fixtures are independent. Importing one market never overwrites
+the other market's validation evidence.
+
 ## Validated scope
 
 - Symbol: `TSE:7203`
@@ -36,3 +54,14 @@ npm run test:mtf-close-calendar:tradingview
 Calendar dates after `2026-10-02` are projections produced by the validated
 bucket rules. They are not represented as directly observed TradingView oracle
 results until a later CSV export extends the committed fixture coverage.
+
+### US validated scope
+
+- Symbol: `NASDAQ:AAPL`
+- Chart/session: `1D`, regular exchange session, exchange timezone (`America/New_York`)
+- Period: `2025-01-02` through `2026-10-13`
+- Coverage: 446 trading dates x 12 timeframes = 5,352 timeframe/date comparisons
+- Result: 0 mismatches
+
+US calendar dates after `2026-10-13` remain projections produced by the same
+validated bucket rules and are not presented as directly observed Oracle rows.
