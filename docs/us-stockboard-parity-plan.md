@@ -278,6 +278,30 @@ performance, or historical-price parity work.
   explorer whose serving data quality gate is still open, so the currently healthy Production build
   remains unchanged.
 
+### W0F - Data freshness and coverage contract
+
+- `/api/us/status` now returns deterministic OHLCV and eligible 6 Stage coverage together with the
+  adjusted-price, classification and fundamentals source contracts. On 2026-10-13, OHLCV covers
+  11,760 of 12,004 current-active investable symbols (97.97%, `PARTIAL`); 6 Stage covers all 11,741
+  eligible symbols. Missing data remains `—`, specification-level non-applicability remains `N/A`,
+  and US TradingView parity remains `UNVERIFIED` rather than being inferred from the JP fixture.
+- Claude Opus 5.5 (`claude.ai`, firstParty, Pro) designed and implemented a compact disclosure strip
+  across Dashboard, Market Momentum, Sectors, Screener, Stage Screener, Trigger Discovery, AI Lens,
+  Transition Scanner, Historical Outcome Explorer, AAPL Stock Detail and MTF Close Calendar. The
+  strip reports source watermarks and accepted route limitations without replacing each route's
+  existing AS OF or analysis-date display.
+- A screenshot-led revision corrected the historical Screener explanation: current-only SIC,
+  Exchange, asset-type and market-cap attributes are disabled and omitted on historical dates; the
+  current values are not substituted. The existing client and API remain fail closed.
+- Codex dedicated coverage/UI tests, Screener PIT/API/filter regressions, route-state, market,
+  backtest, transition and Trigger regressions, typecheck and Production build pass. Browser QA
+  covered all 11 routes at 1440 px and the shared/Stock Detail placements at 1440, 1024, 768 and
+  390 px with zero whole-document horizontal overflow and zero application console warnings/errors.
+  Ten warm/candidate `/api/us/status` requests returned HTTP 200 in 0.27-1.46 seconds.
+- Production promotion remains pending behind the shared W3F RGC/QMMM source-quality policy gate.
+  The currently healthy Production build is unchanged; no DB schema, DB write, source value or
+  business calculation changed in this wave.
+
 ### W0 - Loading, empty and error state contracts (main, PASS)
 
 - Status: implemented and verified on `codex/us-parity-w0-route-states`, then merged normally to

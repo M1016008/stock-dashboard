@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 import { PageTitle } from '@/components/layout/PageTitle'
 import { Notice } from '@/components/ui/EmptyState'
+import { UsDataCoverageStrip } from '@/components/us/UsDataCoverageStrip'
 import { MtfCloseCalendarClient } from '../../mtf-close-calendar/MtfCloseCalendarClient'
 
 export const metadata: Metadata = {
@@ -39,6 +40,7 @@ export default function UsMtfCloseCalendarPage() {
           </>
         )}
       />
+      <UsDataCoverageStrip scope="mtf-calendar" placement="standalone" />
       <Notice tone="info" title="日付の根拠と検証状況">
         実データの範囲内は US 日足で確認できた取引日、範囲外は米国取引所の休日ルールで求めた予定日です（臨時休場は予定に反映されません）。足の区切りは TradingView で検証済みの JP 版と共通のルールですが、US 固有の TradingView 照合はまだ完了していません。
       </Notice>
