@@ -1,5 +1,7 @@
 import { execGet } from '@/lib/db/client'
+import { loadUsDailyCoverageSla } from '@/lib/server/us-source-availability-store'
 import { US_ADJUSTED_PRICE_BASIS } from '@/lib/us-adjusted-ohlcv'
+import { summarizeUsDailyCoverageSla, type UsDailyCoverageSla } from '@/lib/us-source-availability'
 import { usInvestableSymbolSql, usTestSymbolExclusionSql } from '@/lib/us-symbol-quality'
 
 type UsUniverseSummary = {
@@ -76,8 +78,11 @@ export type UsStatusSummary = {
     tickers: number
   }
   coverage: {
+    /** Raw latest-date coverage (covered / active investable universe). */
     ohlcv: UsCoverageSummary
     snapshots: UsCoverageSummary
+    /** Raw vs effective (confirmed permanent exclusions removed) coverage with missing buckets. */
+    ohlcvSla?: UsDailyCoverageSla
   }
   contracts: {
     priceBasis: typeof US_ADJUSTED_PRICE_BASIS
@@ -157,7 +162,7 @@ export async function getUsStatusSummary(): Promise<UsStatusSummary> {
   ])
 
   const snapshotLatest = snapshotLatestDate?.latestDate ?? null
-  const [snapshotCount, ohlcvCoverage, snapshotCoverage] = await Promise.all([
+  const [snapshotCount, ohlcvCoverage, snapshotCoverage, ohlcvSla] = await Promise.all([
     snapshotLatest
       ? execGet<UsSnapshotCount>(
         `SELECT COUNT(*) AS tickers
@@ -204,6 +209,9 @@ export async function getUsStatusSummary(): Promise<UsStatusSummary> {
         [snapshotLatest, snapshotLatest],
       )
       : Promise.resolve(null),
+    latestDate?.date
+      ? loadUsDailyCoverageSla(latestDate.date).catch(() => null)
+      : Promise.resolve(null),
   ])
 
   return {
@@ -232,6 +240,12 @@ export async function getUsStatusSummary(): Promise<UsStatusSummary> {
     coverage: {
       ohlcv: summarizeUsCoverage(latestDate?.date ?? null, ohlcvCoverage?.eligible, ohlcvCoverage?.covered),
       snapshots: summarizeUsCoverage(snapshotLatest, snapshotCoverage?.eligible, snapshotCoverage?.covered),
+      // Availability table unreadable: keep raw numbers and report every gap as unclassified.
+      ohlcvSla: ohlcvSla ?? summarizeUsDailyCoverageSla(
+        latestDate?.date ?? null,
+        { rawUniverse: ohlcvCoverage?.eligible, covered: ohlcvCoverage?.covered },
+        false,
+      ),
     },
     contracts: {
       priceBasis: US_ADJUSTED_PRICE_BASIS,

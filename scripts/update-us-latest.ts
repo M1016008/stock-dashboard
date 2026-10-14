@@ -10,6 +10,8 @@ import { execGet } from '@/lib/db/client'
 import { execUsAnalyticsGet } from '@/lib/db/us-analytics'
 import { acquireUsStockboardUpdateLock } from '@/lib/server/update-lock'
 import { expectedLatestUsTradingDate } from '@/lib/server/us-data-freshness'
+import { loadUsDailyCoverageSla } from '@/lib/server/us-source-availability-store'
+import { formatUsDailyCoverageSla, type UsDailyCoverageSla } from '@/lib/us-source-availability'
 import { waitForMemoryHeadroom, withMemoryGuardEnv } from '@/lib/system/memory-guard'
 import { resolveConfiguredStoragePath } from '@/lib/storage-paths'
 import { guardForDatabase, requiresExternalStorageGuard } from '@/lib/storage/external-storage-guard'
@@ -69,26 +71,11 @@ async function latestUsOhlcvDate(): Promise<string | null> {
   return row?.date ?? null
 }
 
-async function usOhlcvCoverage(date: string): Promise<{ universe: number; covered: number; coveragePct: number }> {
-  const row = await execGet<{ universe: number; covered: number }>(
-    `SELECT
-       COUNT(*) AS universe,
-       SUM(CASE WHEN o.ticker IS NOT NULL THEN 1 ELSE 0 END) AS covered
-     FROM market_universe u INDEXED BY market_universe_market_active_idx
-     LEFT JOIN market_ohlcv_daily o INDEXED BY market_ohlcv_market_date_ticker_idx
-       ON o.market = 'US' AND o.date = ? AND o.ticker = u.ticker
-     WHERE u.market = 'US'
-       AND u.active = 1
-       AND ${usInvestableSymbolSql('u.ticker')}`,
-    [date],
-  )
-  const universe = Number(row?.universe ?? 0)
-  const covered = Number(row?.covered ?? 0)
-  return {
-    universe,
-    covered,
-    coveragePct: universe > 0 ? 100 * covered / universe : 0,
-  }
+// Raw coverage stays visible; publication/retry gates use the effective percent, which only
+// excludes confirmed PERMANENTLY_UNAVAILABLE tickers. A missing percent fails closed as 0.
+async function usOhlcvCoverage(date: string): Promise<UsDailyCoverageSla & { coveragePct: number }> {
+  const sla = await loadUsDailyCoverageSla(date)
+  return { ...sla, coveragePct: sla.effectivePercent ?? 0 }
 }
 
 async function usSnapshotCoverage(date: string): Promise<{ universe: number; covered: number; coveragePct: number }> {
@@ -320,7 +307,8 @@ async function main() {
       if (pendingOhlcvRetry || coverageNeedsRetry) {
         console.log(
           `US OHLCV retry required: previousPartial=${pendingOhlcvRetry}, `
-          + `coverage=${coverageBeforeFetch?.coveragePct.toFixed(2) ?? '-'}%`,
+          + `effectiveCoverage=${coverageBeforeFetch?.coveragePct.toFixed(2) ?? '-'}%, `
+          + `rawCoverage=${coverageBeforeFetch?.rawPercent?.toFixed(2) ?? '-'}%`,
         )
       }
       await runNpm('batch:us-ohlcv', {
@@ -352,15 +340,15 @@ async function main() {
 
     const coverage = await usOhlcvCoverage(afterOhlcv)
     console.log(
-      `US source coverage: ${coverage.covered}/${coverage.universe} (${coverage.coveragePct.toFixed(2)}%), `
-      + `publication minimum=${minimumCoveragePct}%, retry target=${retryCoveragePct}%`,
+      `US source coverage: ${formatUsDailyCoverageSla(coverage)}, `
+      + `publication minimum=${minimumCoveragePct}% (effective), retry target=${retryCoveragePct}% (effective)`,
     )
     if (
       coverage.coveragePct < minimumCoveragePct
       && process.env.US_ALLOW_PARTIAL_DAILY_PUBLICATION !== '1'
     ) {
       console.log(
-        'US latest update deferred: price coverage is below the publication threshold; '
+        'US latest update deferred: effective price coverage is below the publication threshold; '
         + 'the next scheduled run will retry stale tickers before snapshots/ML are published',
       )
       return

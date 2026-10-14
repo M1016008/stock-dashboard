@@ -472,6 +472,31 @@ export const marketDataRuns = sqliteTable(
   }),
 )
 
+// 日次EODのソース可用性。PERMANENTLY_UNAVAILABLE は可逆 (後の非空レスポンスで解除)。
+// 分類ルールは lib/us-source-availability.ts。
+export const marketSourceAvailability = sqliteTable(
+  'market_source_availability',
+  {
+    market:                  text('market').notNull(),
+    ticker:                  text('ticker').notNull(),
+    source:                  text('source').notNull(),
+    status:                  text('status').notNull(),          // AVAILABLE | PENDING | TEMPORARILY_UNAVAILABLE | PERMANENTLY_UNAVAILABLE
+    statusReason:            text('status_reason').notNull(),
+    terminalEvidenceCount:   integer('terminal_evidence_count').notNull().default(0),
+    firstTerminalTargetDate: text('first_terminal_target_date'),
+    lastTerminalTargetDate:  text('last_terminal_target_date'),
+    lastTerminalRunId:       integer('last_terminal_run_id'),
+    lastObservationType:     text('last_observation_type').notNull(),
+    lastObservedTargetDate:  text('last_observed_target_date'),
+    lastSuccessDataDate:     text('last_success_data_date'),
+    lastHttpStatus:          integer('last_http_status'),
+    updatedAt:               integer('updated_at').notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.market, t.ticker, t.source] }),
+  }),
+)
+
 export const marketEarningsCalendar = sqliteTable(
   'market_earnings_calendar',
   {

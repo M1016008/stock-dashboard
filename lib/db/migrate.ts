@@ -382,6 +382,23 @@ const STATEMENTS = [
     payload_json TEXT NOT NULL DEFAULT '{}'
   )`,
   `CREATE INDEX IF NOT EXISTS market_data_runs_latest_idx ON market_data_runs(market, job_type, started_at)`,
+  `CREATE TABLE IF NOT EXISTS market_source_availability (
+    market TEXT NOT NULL,
+    ticker TEXT NOT NULL,
+    source TEXT NOT NULL,
+    status TEXT NOT NULL,
+    status_reason TEXT NOT NULL,
+    terminal_evidence_count INTEGER NOT NULL DEFAULT 0,
+    first_terminal_target_date TEXT,
+    last_terminal_target_date TEXT,
+    last_terminal_run_id INTEGER,
+    last_observation_type TEXT NOT NULL,
+    last_observed_target_date TEXT,
+    last_success_data_date TEXT,
+    last_http_status INTEGER,
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+    PRIMARY KEY (market, ticker, source)
+  )`,
   `CREATE TABLE IF NOT EXISTS market_earnings_calendar (
     market TEXT NOT NULL,
     ticker TEXT NOT NULL,
