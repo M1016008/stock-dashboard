@@ -1,4 +1,5 @@
 import { execGet } from '@/lib/db/client'
+import { US_ADJUSTED_PRICE_BASIS } from '@/lib/us-adjusted-ohlcv'
 import { usInvestableSymbolSql, usTestSymbolExclusionSql } from '@/lib/us-symbol-quality'
 
 type UsUniverseSummary = {
@@ -23,6 +24,21 @@ type UsSnapshotDate = {
 
 type UsSnapshotCount = {
   tickers: number
+}
+
+type UsCoverageCount = {
+  eligible: number
+  covered: number
+}
+
+export type UsCoverageState = 'COMPLETE' | 'PARTIAL' | 'UNAVAILABLE'
+
+export type UsCoverageSummary = {
+  date: string | null
+  eligible: number
+  covered: number
+  percent: number | null
+  status: UsCoverageState
 }
 
 export type UsLatestRun = {
@@ -59,7 +75,44 @@ export type UsStatusSummary = {
     latestDate: string | null
     tickers: number
   }
+  coverage: {
+    ohlcv: UsCoverageSummary
+    snapshots: UsCoverageSummary
+  }
+  contracts: {
+    priceBasis: typeof US_ADJUSTED_PRICE_BASIS
+    priceFrequency: 'EOD'
+    classification: {
+      taxonomy: 'SEC_SIC'
+      effectiveDating: 'CURRENT_ONLY'
+      historicalPitAvailable: false
+    }
+    fundamentals: {
+      source: 'SEC_COMPANYFACTS'
+      basis: 'ACTUAL_ONLY'
+      companyForecastsAvailable: false
+    }
+  }
   latestRun: UsLatestRun | null
+}
+
+export function summarizeUsCoverage(
+  date: string | null,
+  eligibleValue: number | null | undefined,
+  coveredValue: number | null | undefined,
+): UsCoverageSummary {
+  const eligible = Math.max(0, Number(eligibleValue ?? 0))
+  const covered = Math.max(0, Math.min(eligible, Number(coveredValue ?? 0)))
+  if (!date || eligible === 0) {
+    return { date, eligible, covered, percent: null, status: 'UNAVAILABLE' }
+  }
+  return {
+    date,
+    eligible,
+    covered,
+    percent: 100 * covered / eligible,
+    status: covered >= eligible ? 'COMPLETE' : 'PARTIAL',
+  }
 }
 
 export async function getUsStatusSummary(): Promise<UsStatusSummary> {
@@ -104,15 +157,54 @@ export async function getUsStatusSummary(): Promise<UsStatusSummary> {
   ])
 
   const snapshotLatest = snapshotLatestDate?.latestDate ?? null
-  const snapshotCount = snapshotLatest
-    ? await execGet<UsSnapshotCount>(
+  const [snapshotCount, ohlcvCoverage, snapshotCoverage] = await Promise.all([
+    snapshotLatest
+      ? execGet<UsSnapshotCount>(
         `SELECT COUNT(*) AS tickers
          FROM market_daily_snapshots INDEXED BY market_snapshots_market_date_idx
          WHERE market = 'US'
            AND date = ?`,
         [snapshotLatest],
       )
-    : null
+      : Promise.resolve(null),
+    latestDate?.date
+      ? execGet<UsCoverageCount>(
+        `SELECT
+           COUNT(*) AS eligible,
+           SUM(CASE WHEN o.ticker IS NOT NULL THEN 1 ELSE 0 END) AS covered
+         FROM market_universe u INDEXED BY market_universe_market_active_idx
+         LEFT JOIN market_ohlcv_daily o INDEXED BY market_ohlcv_market_date_ticker_idx
+           ON o.market = 'US' AND o.date = ? AND o.ticker = u.ticker
+         WHERE u.market = 'US'
+           AND u.active = 1
+           AND ${usInvestableSymbolSql('u.ticker')}`,
+        [latestDate.date],
+      )
+      : Promise.resolve(null),
+    snapshotLatest
+      ? execGet<UsCoverageCount>(
+        `SELECT
+           COUNT(*) AS eligible,
+           SUM(CASE WHEN s.ticker IS NOT NULL THEN 1 ELSE 0 END) AS covered
+         FROM market_universe u INDEXED BY market_universe_market_active_idx
+         INNER JOIN market_ohlcv_daily current INDEXED BY market_ohlcv_market_date_ticker_idx
+           ON current.market = 'US' AND current.date = ? AND current.ticker = u.ticker
+         LEFT JOIN market_daily_snapshots s INDEXED BY market_snapshots_market_date_ticker_idx
+           ON s.market = 'US' AND s.date = ? AND s.ticker = u.ticker
+         WHERE u.market = 'US'
+           AND u.active = 1
+           AND ${usInvestableSymbolSql('u.ticker')}
+           AND EXISTS (
+             SELECT 1
+             FROM market_ohlcv_daily history INDEXED BY market_ohlcv_market_ticker_date_idx
+             WHERE history.market = 'US' AND history.ticker = u.ticker
+             ORDER BY history.date DESC
+             LIMIT 1 OFFSET 4
+           )`,
+        [snapshotLatest, snapshotLatest],
+      )
+      : Promise.resolve(null),
+  ])
 
   return {
     market: 'US',
@@ -136,6 +228,24 @@ export async function getUsStatusSummary(): Promise<UsStatusSummary> {
     snapshots: {
       latestDate: snapshotLatest,
       tickers: Number(snapshotCount?.tickers ?? 0),
+    },
+    coverage: {
+      ohlcv: summarizeUsCoverage(latestDate?.date ?? null, ohlcvCoverage?.eligible, ohlcvCoverage?.covered),
+      snapshots: summarizeUsCoverage(snapshotLatest, snapshotCoverage?.eligible, snapshotCoverage?.covered),
+    },
+    contracts: {
+      priceBasis: US_ADJUSTED_PRICE_BASIS,
+      priceFrequency: 'EOD',
+      classification: {
+        taxonomy: 'SEC_SIC',
+        effectiveDating: 'CURRENT_ONLY',
+        historicalPitAvailable: false,
+      },
+      fundamentals: {
+        source: 'SEC_COMPANYFACTS',
+        basis: 'ACTUAL_ONLY',
+        companyForecastsAvailable: false,
+      },
     },
     latestRun: latestRun ?? null,
   }
