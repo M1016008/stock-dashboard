@@ -301,6 +301,8 @@ performance, or historical-price parity work.
 - Production promotion remains pending behind the shared W3F RGC/QMMM source-quality policy gate.
   The currently healthy Production build is unchanged; no DB schema, DB write, source value or
   business calculation changed in this wave.
+- Git: feature commit `0bc4d029c06bf5cba772b2bcf54656ade05fe3a6`; normal merge commit
+  `4efa85ebce7db4f3641c91d450202fa215e5322d` on the clean W0F integration worktree.
 
 ### W0 - Loading, empty and error state contracts (main, PASS)
 
