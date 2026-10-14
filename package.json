@@ -367,6 +367,7 @@
     "batch:us-screener-metrics": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/backfill-us-screener-metrics.ts",
     "batch:us-adjusted-foundation": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/ensure-us-adjusted-foundation.ts",
     "test:us-automation-foundation": "tsx --env-file=.env.local scripts/test-us-automation-foundation.ts",
+    "test:us-daily-coverage-sla": "tsx scripts/test-us-daily-coverage-sla.ts",
     "test:us-ml-data-quality": "tsx scripts/test-us-ml-data-quality.ts",
     "repair:us-ml-continuity": "tsx --env-file=.env.local scripts/repair-us-ml-continuity.ts",
     "test:ml-pipeline-generation": "tsx scripts/test-ml-pipeline-generation.ts",

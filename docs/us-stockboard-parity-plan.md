@@ -336,6 +336,38 @@ performance, or historical-price parity work.
 - Git: feature commit `0bc4d029c06bf5cba772b2bcf54656ade05fe3a6`; normal merge commit
   `4efa85ebce7db4f3641c91d450202fa215e5322d` on the clean W0F integration worktree.
 
+### W0G - Daily coverage SLA and reversible source availability
+
+- The Tiingo daily runner no longer treats HTTP 200 empty arrays as successful tickers. Its run
+  accounting distinguishes target-date coverage, empty responses, exact provider ticker-not-found
+  responses, transient failures and deferred work. Empty, target-missing, temporary-not-found and
+  blast-radius-held runs remain `partial`; only transient failures or deferred quota work make the
+  command exit non-zero for the orchestrator retry path.
+- The additive `market_source_availability` table records source status per US ticker. Only the
+  exact Tiingo ticker-not-found 404 may advance terminal evidence, and promotion requires three
+  chronologically increasing target dates in three increasing run IDs. Repeated attempts for the
+  same target date do not advance it. A later non-empty response reverses a permanent
+  classification; transient failures never erase it.
+- A fail-closed promotion guard prevents a single provider incident from shrinking the effective
+  denominator: by default, more than 25 newly eligible tickers or more than 0.25% of the active
+  investable universe promotes none of them and retains the evidence for review. The limits are
+  explicit environment overrides, not hidden constants in the scheduler.
+- Coverage is now reported as both raw (`covered / active investable universe`) and effective
+  (`covered / (raw universe - confirmed permanent exclusions)`) with permanent, pending,
+  temporary and unclassified missing buckets. Publication and retry thresholds use effective
+  coverage, while raw coverage remains observable in status and run telemetry.
+- The 2026-10-13 Production read-only baseline remains 11,760/12,004, or 97.97% raw coverage.
+  Production does not yet contain the availability table, so no historical payload was backfilled
+  and no ticker is pre-classified. The first approved live run must begin a new evidence history.
+- Claude Opus 5.5 (`claude.ai`, firstParty, Pro) audited the state contract and implemented the
+  bounded source changes. Codex corrected ambiguous-empty reversal and interrupted-run reason
+  handling, then verified the pure state machine, temporary SQLite migration/store/SLA integration,
+  automation contracts, coverage APIs, route states, typecheck and Production build.
+- Production activation remains pending behind the shared W3F RGC/QMMM source-policy gate. The
+  additive table must be created by the approved deployment path before a `SKIP_SCHEMA_ENSURE=1`
+  runtime starts the new runner. No Production DB write or source reclassification occurred in this
+  wave.
+
 ### W0 - Loading, empty and error state contracts (main, PASS)
 
 - Status: implemented and verified on `codex/us-parity-w0-route-states`, then merged normally to
