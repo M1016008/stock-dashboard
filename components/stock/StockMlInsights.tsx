@@ -8,6 +8,7 @@ import { MlReliabilityStrip } from '@/components/ml/MlReliabilityStrip'
 import { loadUsMlStatus } from '@/components/us/stock-detail/usMlStatusResource'
 import { assessMlReliability } from '@/lib/ml/reliability'
 import type { PhysicsAnalysis, PhysicsStatus } from '@/lib/ml/physics-analysis'
+import { selectUsPredictionHistoryRows } from '@/lib/us-ml-prediction-history-view'
 
 type SimilarInsight = {
   rank: number
@@ -94,6 +95,11 @@ type ApiResponse = {
       maxReturnPct: number | null
       minReturnPct: number | null
       hitLabel: boolean
+      missLabel?: boolean
+      payload?: {
+        observedSessions?: number | null
+        endDate?: string | null
+      } | null
     } | null
   }>
   availability?: 'available' | 'unavailable'
@@ -470,6 +476,114 @@ function MiniMetric({ label, value }: { label: string; value: string }) {
   )
 }
 
+type PredictionHistoryItem = ApiResponse['predictions'][number]
+
+function predictionResultTone(outcome: PredictionHistoryItem['outcome']) {
+  if (!outcome) return { label: '判定待ち', color: 'var(--text-muted)', border: 'var(--border-subtle)', background: 'white', borderStyle: 'dashed' }
+  if (outcome.hitLabel) return { label: '的中', color: '#0f766e', border: 'rgba(20, 184, 166, 0.34)', background: 'rgba(20, 184, 166, 0.08)', borderStyle: 'solid' }
+  if (outcome.missLabel) return { label: '外れ', color: '#be123c', border: 'rgba(225, 29, 72, 0.3)', background: 'rgba(225, 29, 72, 0.07)', borderStyle: 'solid' }
+  return { label: '未達', color: '#475569', border: 'rgba(100, 116, 139, 0.26)', background: 'rgba(100, 116, 139, 0.08)', borderStyle: 'solid' }
+}
+
+// US は想定方向・逆方向の閾値が同じ期間内に両方到達しうるため、到達状況をそのまま表示する
+function usPredictionThresholdTone(outcome: PredictionHistoryItem['outcome']) {
+  if (!outcome) return predictionResultTone(outcome)
+  const expectedReached = outcome.hitLabel
+  const oppositeReached = outcome.missLabel === true
+  if (expectedReached && oppositeReached) return { label: '両方向の閾値に到達', color: '#b45309', border: 'rgba(245, 158, 11, 0.34)', background: 'rgba(245, 158, 11, 0.1)', borderStyle: 'solid' }
+  if (expectedReached) return { label: '想定方向の閾値に到達', color: '#0f766e', border: 'rgba(20, 184, 166, 0.34)', background: 'rgba(20, 184, 166, 0.08)', borderStyle: 'solid' }
+  if (oppositeReached) return { label: '逆方向の閾値に到達', color: '#be123c', border: 'rgba(225, 29, 72, 0.3)', background: 'rgba(225, 29, 72, 0.07)', borderStyle: 'solid' }
+  return { label: 'いずれの閾値も未到達', color: '#475569', border: 'rgba(100, 116, 139, 0.26)', background: 'rgba(100, 116, 139, 0.08)', borderStyle: 'solid' }
+}
+
+const PREDICTION_HISTORY_VISIBLE_LIMIT = 4
+
+function predictionHistoryKey(row: PredictionHistoryItem) {
+  return `${row.asOfDate}-${row.horizonDays}-${row.direction}-${row.modelName ?? 'none'}-${row.rank}`
+}
+
+function PredictionHistoryRow({ row, market }: { row: PredictionHistoryItem; market: 'JP' | 'US' }) {
+  const outcome = row.outcome
+  const result = market === 'US' ? usPredictionThresholdTone(outcome) : predictionResultTone(outcome)
+  const isUp = row.direction === 'up'
+  const returnPct = outcome?.returnPct != null && Number.isFinite(outcome.returnPct) ? outcome.returnPct : null
+  const endDate = outcome?.payload?.endDate
+  const observedSessions = outcome?.payload?.observedSessions
+  const evaluationNote = market === 'US' && endDate
+    ? `評価終了 ${endDate}${observedSessions != null ? ` · ${observedSessions}セッション` : ''}`
+    : null
+  return (
+    <div style={{
+      border: `1px ${outcome ? 'solid' : 'dashed'} var(--border-subtle)`,
+      borderRadius: 8,
+      background: outcome ? 'white' : 'var(--surface-muted)',
+      padding: '7px 9px',
+      display: 'grid',
+      gap: 5,
+      minWidth: 0,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', minWidth: 0 }}>
+          <span style={{ fontSize: 12, fontWeight: 900, color: 'var(--text-primary)', fontVariantNumeric: 'tabular-nums' }}>
+            {row.asOfDate}
+          </span>
+          <span style={{
+            border: '1px solid var(--border-subtle)',
+            borderRadius: 999,
+            background: 'white',
+            padding: '2px 7px',
+            fontSize: 10,
+            fontWeight: 900,
+            color: isUp ? 'var(--price-up)' : 'var(--price-down)',
+            whiteSpace: 'nowrap',
+          }}>
+            {isUp ? '▲ 上昇候補' : '▼ 下落警戒'}
+          </span>
+          <span style={{ fontSize: 10, fontWeight: 800, color: 'var(--text-muted)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+            期間 {row.horizonDays}日 · 順位 #{row.rank}
+          </span>
+        </div>
+        <span style={{
+          border: `1px ${result.borderStyle} ${result.border}`,
+          borderRadius: 999,
+          background: result.background,
+          padding: '2px 8px',
+          fontSize: 10,
+          fontWeight: 900,
+          color: result.color,
+          whiteSpace: 'nowrap',
+        }}>
+          {result.label}
+        </span>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 6, flexWrap: 'wrap', fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)' }}>
+        <span>
+          リターン{' '}
+          {outcome
+            ? returnPct != null
+              ? (
+                <strong style={{
+                  fontSize: 12,
+                  fontWeight: 900,
+                  fontVariantNumeric: 'tabular-nums',
+                  color: returnPct > 0 ? 'var(--price-up)' : returnPct < 0 ? 'var(--price-down)' : 'var(--text-primary)',
+                }}>
+                  {fmtPct(returnPct)}
+                </strong>
+              )
+              : <span style={{ color: 'var(--text-muted)' }}>値なし</span>
+            : <span style={{ color: 'var(--text-muted)' }}>未確定</span>}
+        </span>
+        {evaluationNote && (
+          <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', fontVariantNumeric: 'tabular-nums', overflowWrap: 'anywhere' }}>
+            {evaluationNote}
+          </span>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function SimilarReasonBlock({ reason }: { reason: Record<string, string> }) {
   const sections = similarReasonSections(reason)
   if (sections.length === 0) return null
@@ -591,10 +705,9 @@ export function StockMlInsights({
       historyParams.set('date', analysisDate)
     }
     const similarEndpoint = market === 'US' ? '/api/us/ml-current-similars' : '/api/ml/current-similars'
-    const historyRequest = market === 'US'
-      ? Promise.resolve({ rows: [] })
-      : optionalJson<{ rows?: ApiResponse['predictions'] }>(`/api/ml/prediction-history?${historyParams.toString()}`)
-        .then((result) => result ?? { rows: [] })
+    const historyEndpoint = market === 'US' ? '/api/us/ml-prediction-history' : '/api/ml/prediction-history'
+    const historyRequest = optionalJson<{ rows?: ApiResponse['predictions'] }>(`${historyEndpoint}?${historyParams.toString()}`)
+      .then((result) => result ?? { rows: [] })
     const statusEndpoint = market === 'US'
       ? `/api/us/ml-status/${encodeURIComponent(code)}${analysisDate ? `?date=${encodeURIComponent(analysisDate)}` : ''}`
       : `/api/ml/reliability-status${analysisDate ? `?date=${encodeURIComponent(analysisDate)}` : ''}`
@@ -636,6 +749,10 @@ export function StockMlInsights({
   const mlReading = data ? buildMlReading(rows, data.physicsAnalysis) : null
   const reliabilityBackend = backendReliability(backendStatus, market)
   const completedPredictions = predictions.filter((prediction) => prediction.outcome != null)
+  const visiblePredictions = market === 'US'
+    ? selectUsPredictionHistoryRows(predictions, PREDICTION_HISTORY_VISIBLE_LIMIT)
+    : predictions.slice(0, PREDICTION_HISTORY_VISIBLE_LIMIT)
+  const visibleCompletedCount = visiblePredictions.filter((prediction) => prediction.outcome != null).length
   const reliability = data ? assessMlReliability({
     asOfDate: data.asOfDate,
     featureDate: data.featureAsOfDate,
@@ -919,31 +1036,27 @@ export function StockMlInsights({
         )}
         {predictions.length > 0 && (
           <div style={{ marginTop: 4, borderTop: '1px solid var(--border-subtle)', paddingTop: 10 }}>
-            <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text-primary)', marginBottom: 8 }}>
-              過去のML予測と実績
+            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap', marginBottom: market === 'US' ? 4 : 8 }}>
+              <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text-primary)' }}>
+                過去のML予測と実績
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', columnGap: 6, rowGap: 2, fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', fontVariantNumeric: 'tabular-nums' }}>
+                <span>表示 {visiblePredictions.length}件(判定済み {visibleCompletedCount} · 判定待ち {visiblePredictions.length - visibleCompletedCount})</span>
+                <span>/ 取得 {predictions.length}件(判定済み {completedPredictions.length} · 判定待ち {predictions.length - completedPredictions.length})</span>
+              </div>
             </div>
+            {market === 'US' && (
+              <p style={{ margin: '0 0 8px', fontSize: 10, lineHeight: 1.55, fontWeight: 700, color: 'var(--text-muted)' }}>
+                結果は完了済みのEODセッションから決定的に評価しています。バッジは期間内の終値が想定方向・逆方向の閾値に達したかを示します。
+              </p>
+            )}
             <div style={{ display: 'grid', gap: 6 }}>
-              {predictions.slice(0, 4).map((row) => (
-                <div
-                  key={`${row.asOfDate}-${row.horizonDays}-${row.direction}`}
-                  style={{
-                    display: 'grid',
-                    gridTemplateColumns: 'minmax(86px, 1fr) minmax(70px, auto) minmax(70px, auto)',
-                    gap: 8,
-                    alignItems: 'center',
-                    fontSize: 11,
-                    fontWeight: 700,
-                    color: 'var(--text-secondary)',
-                  }}
-                >
-                  <span>{row.asOfDate} / {row.horizonDays}日</span>
-                  <span>{row.direction === 'up' ? '上昇候補' : '下落警戒'} #{row.rank}</span>
-                  <span>
-                    {row.outcome
-                      ? `${row.outcome.hitLabel ? '的中' : '未達'} / ${fmtPct(row.outcome.returnPct)}`
-                      : '結果待ち'}
-                  </span>
-                </div>
+              {visiblePredictions.map((row) => (
+                <PredictionHistoryRow
+                  key={predictionHistoryKey(row)}
+                  row={row}
+                  market={market}
+                />
               ))}
             </div>
           </div>

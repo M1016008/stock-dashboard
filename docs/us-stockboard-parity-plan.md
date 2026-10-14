@@ -233,6 +233,35 @@ performance, or historical-price parity work.
   TypeScript, diff checks and the Production build passed. Production remains intentionally pending
   on the RGC/QMMM source-quality policy rather than a code, freshness or serving-coverage failure.
 
+### W3G - Point-in-time ML prediction history
+
+- US Stock Detail now reads prediction history from a market-specific, read-only endpoint instead of
+  presenting an empty history. Each completed outcome is derived deterministically from the prediction
+  date's adjusted close and the next requested number of observed US sessions; incomplete horizons stay
+  pending and no outcome row is persisted.
+- Historical requests are bounded by prediction date, prediction creation time, model training time and
+  the requested price date. They never fall back to the JP prediction reader or use prices after the
+  requested market date. The 2026-09-01 NIPG probe returned 23 eligible prediction rows and no completed
+  outcome because the 40-session horizon had not matured by that date.
+- The current analytics database contains 6,938 predictions across 43 dates and 783 tickers. All current
+  rows use a 40-session horizon, with 3,473 up rows across 530 tickers and 3,465 down rows across 631
+  tickers. `ml_prediction_outcomes` remains empty; completed cards are computed from read-only
+  `ohlcv_daily` evidence at request time.
+- Live evidence covered NIPG (65 rows: 5 completed, 60 pending), AEHL (56: 7 completed, 49 pending),
+  NXTT (57 pending) and AAPL (no prediction history). The compact view deliberately keeps both the newest
+  pending rows and the newest completed rows visible when both states exist, and reports expected-direction
+  and opposite-direction threshold reach independently instead of collapsing a volatile path into a
+  binary success label.
+- Claude Opus 5.5 (`claude.ai`, firstParty, Pro) implemented the compact analytical presentation and one
+  screenshot-led revision after Codex found that the first version hid matured outcomes. Dedicated PIT,
+  outcome, read-only and row-selection tests, US Stock Detail/shared ML regressions, typecheck, parity
+  audit and Production build pass. Browser QA covered NIPG, AEHL, NXTT and AAPL plus 1440/1024/768/390 px
+  responsive checks with no component overflow or application console error.
+- Functional and historical presentation parity is complete for the available prediction records, but
+  source coverage remains `PARTIAL`: only one 40-session model horizon and ranked candidates are stored,
+  rather than the full model/horizon depth of the JP experience. Production promotion remains pending
+  behind the shared W3F RGC/QMMM source-quality policy gate; no Production deploy is claimed by W3G.
+
 ### W4 - Fundamentals, Valuation and Shareholder Return
 
 - SEC Companyfacts now maps approved US-GAAP concepts into the shared normalized financial fact
