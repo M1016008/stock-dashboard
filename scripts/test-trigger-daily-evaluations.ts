@@ -66,6 +66,7 @@ function fakeResponse(
     evaluation: {
       id: randomUUID(),
       definitionId: definition.id,
+      market: definition.market,
       evaluationVersion: definition.evaluationVersion,
       engineVersion: definition.engineVersion,
       scoreVersion: definition.scoreVersion,

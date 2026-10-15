@@ -16,12 +16,14 @@ import {
   type ReactNode,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from 'react'
 import { ChevronLeft, ChevronRight, LoaderCircle, RefreshCw, Search } from 'lucide-react'
 import { EmptyState, Notice } from '@/components/ui/EmptyState'
 import { fmtCount, fmtUsd } from '@/components/us/UsMarketMomentumParts'
+import { UsSavedTriggerBar } from '@/components/us/trigger-discovery/UsSavedTriggerBar'
 import { UsTriggerConditionBuilder } from '@/components/us/trigger-discovery/UsTriggerConditionBuilder'
 import { FOCUS_RING } from '@/components/us/trigger-discovery/UsTriggerControls'
 import { UsTriggerResultCards } from '@/components/us/trigger-discovery/UsTriggerResultCards'
@@ -40,11 +42,17 @@ import {
   fmtUsdCompact,
   maPeriodCode,
   usMiniChartKey,
+  usTriggerStateFromRequest,
   type UsTriggerDraft,
   type UsTriggerPageSize,
   type UsTriggerStatusFilter,
   type UsTriggerViewConfig,
 } from '@/components/us/trigger-discovery/usTriggerDiscoveryShared'
+import {
+  savedTriggerConfigsFromSearchRequest,
+  searchRequestFromSavedTrigger,
+  type SavedTriggerDefinition,
+} from '@/lib/trigger-definition'
 import type {
   TriggerDiscoveryMiniChart,
   TriggerDiscoveryMiniChartsResponse,
@@ -84,6 +92,8 @@ interface ReturnSnapshot {
   lastRequest: TriggerDiscoverySearchRequest
   builderOpen: boolean
   scrollY: number
+  /** 読込・保存済みの US Trigger。古い snapshot には無い */
+  activeSavedId?: string | null
 }
 
 function messageFrom(body: unknown): string | null {
@@ -128,6 +138,7 @@ export function UsTriggerDiscoveryClient({ options }: { options: UsTriggerDiscov
   const [builderOpen, setBuilderOpen] = useState(true)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [activeSavedId, setActiveSavedId] = useState<string | null>(null)
   const requestSequence = useRef(0)
   const abortController = useRef<AbortController | null>(null)
   const resultsRef = useRef<HTMLElement | null>(null)
@@ -264,6 +275,29 @@ export function UsTriggerDiscoveryClient({ options }: { options: UsTriggerDiscov
     setDraft((current) => ({ ...defaultUsTriggerDraft(options.latestAsOf), asOf: current.asOf }))
   }
 
+  /* ---------- 保存済み Trigger ---------- */
+
+  // 保存・未保存変更の比較に使う設定値。基準日は保存しない契約のため、過去日を入力中でも
+  // 最新データ日の request として組む (過去日だと取引所の条件が request から外れ、保存内容が欠けるため)
+  const savedComparison = useMemo(() => {
+    try {
+      const draftForSave = { ...draft, asOf: options.latestAsOf ?? draft.asOf }
+      const configs = savedTriggerConfigsFromSearchRequest(buildUsTriggerRequest(draftForSave, view, options.latestAsOf))
+      return { configs, error: null }
+    } catch (configError) {
+      return { configs: null, error: configError instanceof Error ? configError.message : '検索条件を確認してください。' }
+    }
+  }, [draft, view, options.latestAsOf])
+
+  /** 保存済み定義を draft/view へ戻し、最新データ日で即時検索する (日付は保存しない) */
+  const loadSavedDefinition = (definition: SavedTriggerDefinition) => {
+    const request = searchRequestFromSavedTrigger(definition, options.latestAsOf ?? draft.asOf)
+    const state = usTriggerStateFromRequest(request, options.latestAsOf)
+    setDraft(state.draft)
+    setView(state.view)
+    void runSearch(request, { collapse: true })
+  }
+
   /* ---------- 銘柄詳細から戻ったときの復元 ---------- */
 
   const preserveBeforeStockNavigation = (event: ReactMouseEvent<HTMLAnchorElement>) => {
@@ -281,6 +315,7 @@ export function UsTriggerDiscoveryClient({ options }: { options: UsTriggerDiscov
         lastRequest,
         builderOpen,
         scrollY: window.scrollY,
+        activeSavedId,
       }
       window.sessionStorage.setItem(RETURN_STORAGE_KEY, JSON.stringify(snapshot))
       const historyState = typeof window.history.state === 'object' && window.history.state !== null
@@ -323,6 +358,7 @@ export function UsTriggerDiscoveryClient({ options }: { options: UsTriggerDiscov
       setResponse(snapshot.response)
       setLastRequest(snapshot.lastRequest)
       setBuilderOpen(snapshot.builderOpen)
+      setActiveSavedId(typeof snapshot.activeSavedId === 'string' ? snapshot.activeSavedId : null)
     } catch {
       // 壊れた snapshot は捨てて初期表示にする
     }
@@ -469,6 +505,16 @@ export function UsTriggerDiscoveryClient({ options }: { options: UsTriggerDiscov
           />
         )}
       </div>
+
+      {/* 検索フォームと結果の間。US 専用 API (/api/us/trigger-discovery/saved) だけを使う */}
+      <UsSavedTriggerBar
+        activeId={activeSavedId}
+        onActiveIdChange={setActiveSavedId}
+        currentConfigs={savedComparison.configs}
+        currentConfigsError={savedComparison.error}
+        latestAsOf={options.latestAsOf}
+        onLoad={loadSavedDefinition}
+      />
 
       {/* aria-busy の領域の外に置き、検索中の読み上げが抑止されないようにする */}
       <p className="sr-only" role="status" aria-live="polite">
@@ -669,7 +715,7 @@ export function UsTriggerDiscoveryClient({ options }: { options: UsTriggerDiscov
 
       <p className="border-t border-[var(--color-border-soft)] pt-3 text-[11px] leading-relaxed text-[var(--color-text-tertiary)]">
         株価は USD 終値（米国時間）、平均売買代金は USD、出来高は株数です。Status・Score・距離はサーバー側の判定エンジンの値をそのまま表示しています。
-        条件の保存・通知・期間検証は日本株のみ対応しています。
+        保存済みTriggerと通知設定は米国株専用で、日本株の保存条件とは共有しません。期間検証は日本株のみ対応しています。
         <Link href="/trigger-discovery" prefetch={false} className="ml-1 font-medium text-[var(--color-brand-700)] hover:underline">日本株の条件トリガー</Link>
       </p>
     </div>

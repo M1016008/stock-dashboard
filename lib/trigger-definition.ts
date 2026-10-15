@@ -17,6 +17,7 @@ import {
   DEFAULT_TRIGGER_DISCOVERY_TIMEFRAME,
   type TriggerDiscoveryTimeframe,
 } from '@/lib/trigger-discovery-timeframe'
+import type { MarketCode } from '@/lib/markets'
 
 export const SAVED_TRIGGER_CONTRACT_VERSION = 'saved-trigger-definition-v1'
 export const SAVED_TRIGGER_EVALUATION_CONFIG_VERSION = 2
@@ -69,6 +70,7 @@ export interface SavedTriggerViewConfig {
 
 export interface SavedTriggerDefinition {
   id: string
+  market: MarketCode
   name: string
   evaluationConfig: SavedTriggerEvaluationConfig
   viewConfig: SavedTriggerViewConfig

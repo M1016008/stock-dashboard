@@ -1307,6 +1307,7 @@ const STATEMENTS = [
     ON saved_screening_evaluation_members(evaluation_id, status, ticker)`,
   `CREATE TABLE IF NOT EXISTS trigger_definitions (
     id TEXT PRIMARY KEY,
+    market TEXT NOT NULL DEFAULT 'JP',
     name TEXT NOT NULL,
     evaluation_config_json TEXT NOT NULL,
     view_config_json TEXT NOT NULL,
@@ -1319,7 +1320,7 @@ const STATEMENTS = [
     archived_at INTEGER
   )`,
   `CREATE INDEX IF NOT EXISTS trigger_definitions_active_idx
-    ON trigger_definitions(archived_at, updated_at DESC)`,
+    ON trigger_definitions(market, archived_at, updated_at DESC)`,
   `CREATE TABLE IF NOT EXISTS historical_trigger_scan_jobs (
     id TEXT PRIMARY KEY,
     status TEXT NOT NULL,
@@ -1452,6 +1453,7 @@ const STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS trigger_evaluations (
     id TEXT PRIMARY KEY,
     definition_id TEXT NOT NULL,
+    market TEXT NOT NULL DEFAULT 'JP',
     evaluation_version INTEGER NOT NULL,
     engine_version INTEGER NOT NULL,
     score_version INTEGER NOT NULL,
@@ -1483,7 +1485,7 @@ const STATEMENTS = [
   `CREATE UNIQUE INDEX IF NOT EXISTS trigger_evaluations_run_signature_idx
     ON trigger_evaluations(run_signature)`,
   `CREATE INDEX IF NOT EXISTS trigger_evaluations_definition_date_idx
-    ON trigger_evaluations(definition_id, resolved_as_of DESC, created_at DESC)`,
+    ON trigger_evaluations(market, definition_id, resolved_as_of DESC, created_at DESC)`,
   `CREATE TABLE IF NOT EXISTS trigger_evaluation_members (
     evaluation_id TEXT NOT NULL,
     ticker TEXT NOT NULL,
@@ -2854,6 +2856,12 @@ const ADD_COLUMN_IF_MISSING: string[] = [
   `ALTER TABLE large_holder_filings ADD COLUMN withdrawn_at TEXT`,
   `ALTER TABLE trigger_evaluation_batch_items ADD COLUMN definition_name TEXT NOT NULL DEFAULT ''`,
   `ALTER TABLE trigger_evaluation_batch_items ADD COLUMN view_config_json TEXT NOT NULL DEFAULT '{"sort":null,"pageSize":50}'`,
+  `ALTER TABLE trigger_definitions ADD COLUMN market TEXT NOT NULL DEFAULT 'JP'`,
+  `ALTER TABLE trigger_evaluations ADD COLUMN market TEXT NOT NULL DEFAULT 'JP'`,
+  `CREATE INDEX IF NOT EXISTS trigger_definitions_market_active_idx
+    ON trigger_definitions(market, archived_at, updated_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS trigger_evaluations_market_definition_date_idx
+    ON trigger_evaluations(market, definition_id, resolved_as_of DESC, created_at DESC)`,
   `ALTER TABLE notification_outbox ADD COLUMN delivery_profile_id TEXT`,
   `ALTER TABLE notification_outbox ADD COLUMN delivery_provider TEXT`,
   `ALTER TABLE notification_outbox ADD COLUMN provider_message_id TEXT`,

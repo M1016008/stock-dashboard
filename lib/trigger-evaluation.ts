@@ -1,6 +1,7 @@
 import type { TriggerDiscoveryRow } from '@/lib/server/trigger-discovery-read-model'
 import type { SavedTriggerEvaluationConfig } from '@/lib/trigger-definition'
 import type { TriggerLifecycleSummary } from '@/lib/trigger-lifecycle'
+import type { MarketCode } from '@/lib/markets'
 
 export const TRIGGER_EVALUATION_CONTRACT_VERSION = 'trigger-evaluation-v1'
 export type TriggerEvaluationStatus = 'RUNNING' | 'COMPLETED' | 'FAILED'
@@ -8,6 +9,7 @@ export type TriggerEvaluationStatus = 'RUNNING' | 'COMPLETED' | 'FAILED'
 export interface TriggerEvaluationSummary {
   id: string
   definitionId: string
+  market: MarketCode
   evaluationVersion: number
   engineVersion: number
   scoreVersion: number

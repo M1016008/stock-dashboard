@@ -20,8 +20,12 @@ The machine-readable source of truth is `docs/us-stockboard-parity-board.json`. 
 ## Current blockers
 
 - Forecast consensus requires an approved source.
-- Short-interest serving requires an approved/licensed source.
-- Institutional ownership scope requires a product choice between 13F, 13D/G, and insider Form 4 views.
+- Short-interest serving requires licensed Nasdaq/NYSE exchange-product access; daily short-sale
+  volume and FINRA's OTC-only API are not accepted substitutes.
+- Institutional ownership is split into separate SEC 13F manager-position and Schedule 13D/G
+  beneficial-owner products. Production remains blocked by evidence-backed CUSIP mapping and the
+  machine-local SEC operator contact.
+- The approved Finnhub earnings source remains blocked by the absent machine-local credential.
 - Live historical market cap activation requires SEC Companyfacts ingestion; the point-in-time shares contract is implemented but the machine-local SEC operator contact is not configured.
 - Historical classification filters require effective-dated classification history.
 
@@ -333,6 +337,46 @@ performance, or historical-price parity work.
   `18e39f9df71292671f9f2c3c2873636558d58a5c`. Merge-head dedicated/shared regressions,
   parity audit, typecheck, diff checks and the Production build passed before the main push.
 
+### W3J - Official-event analytical policy Production closeout
+
+- Main `117c0af68d43df41266de3cd222d192131b30f51` is live as Production build
+  `wbMosR9BI03lHvCNH4Du-`. Canonical Storage Guard and runtime identity passed; the final
+  Production smoke passed 169/169 and the US route/API browser check had zero console errors.
+- `us_market_data_quality_v1` preserves raw evidence and changes only analytical eligibility.
+  Raw QMMM retains 562 rows including 263 zero-volume halt rows from 2025-09-29 onward. The
+  analytical copy has 299 observed sessions through 2025-09-26 and zero post-halt rows across
+  base price, snapshot, feature, label and RL tables. Future positive-volume QMMM trading remains
+  automatically eligible. The observed RGC 2025-06-16 split session is retained in both stores.
+- Targeted dependent regeneration restored QMMM weekly, technical, model, forward-outcome,
+  ML-v1, ML-v2, training-label and RL rows without recreating stale serving candidates. Dedicated
+  market-data, ML, analytics-generation, backtest, Stock Detail, route-state, automation, health,
+  parity and TypeScript regressions all passed.
+
+### W3K - Market-scoped Trigger persistence and regulatory source closeout
+
+- Saved Trigger definitions and evaluations now carry an explicit `market` column with a `JP`
+  default. The additive migration preserves every existing JP row and adds market-aware indexes;
+  JP and US API reads and writes are scoped independently. Existing JP evaluation and run
+  signatures deliberately remain unchanged because definition IDs are globally unique and market
+  separation is enforced at the persistence and route boundaries.
+- `/api/us/trigger-discovery/saved/**` now supports US definitions, rename, archive, explicit latest-
+  date evaluation, evaluation history and notification settings. Loading a saved definition runs
+  the ordinary latest-date search but never creates an evaluation automatically. The US UI keeps
+  the existing result table/card representation and Mini Charts while exposing save, overwrite,
+  save-as, rename, archive, evaluation history and notification controls.
+- Claude Opus 5.5 (`claude.ai`, firstParty, Pro) implemented and reviewed the US-local saved-trigger
+  workspace. Codex corrected render-time state synchronization, retained JP signature compatibility,
+  and verified market isolation, idempotent evaluation reuse, responsive behavior and application
+  console safety. Dedicated US persistence and Trigger tests, JP saved/evaluation/notification
+  regressions, TypeScript and Production build pass. Browser QA at 1440, 1024, 768 and 390 px
+  returned 122 candidates with Mini Charts and zero body overflow or application console errors.
+- Period scan remains a separate historical product and is not enabled for US. Historical
+  Exchange/SIC filters also remain fail closed until effective-dated classification metadata exists.
+- The W5 contract now selects official SEC Form 13F and Schedule 13D/G as separate ownership
+  products and official exchange-reported short interest as the short-interest product. Publication
+  remains fail closed under `BLOCKED_IDENTIFIER_MAPPING`, `BLOCKED_OPERATOR_CONTACT` or
+  `BLOCKED_LICENSE`; no zero, estimate, issuer-name match or daily-volume substitute is published.
+
 ### W4 - Fundamentals, Valuation and Shareholder Return
 
 - SEC Companyfacts now maps approved US-GAAP concepts into the shared normalized financial fact
@@ -371,9 +415,12 @@ performance, or historical-price parity work.
   private/admin paths and protocol upgrades remain fail closed. Gateway, UI-policy and US Trigger
   regression tests pass.
 - Direct Production and the loopback gateway returned HTTP 200 for health, `/us` and
-  `/us/stock/AAPL`; the public hostname redirected an unauthenticated request to Cloudflare Access
-  as required. The authenticated external stock-detail/mobile route matrix remains open because the
-  browser Access session had expired; authentication was not bypassed or re-created by the audit.
+  `/us/stock/AAPL`; the public hostname remains protected by Cloudflare Access. A renewed authorized
+  session completed the external matrix for Dashboard, AAPL Overview, Chart/6 Stage, Fundamentals,
+  Scenario, Similar/ML, Transition, Trigger, Backtest, AI Lens, Market Momentum and Sectors.
+  Desktop and 390px checks had no stuck loading state, page overflow, application error or console
+  error. Gateway and UI-policy regressions reconfirmed safe reads while writes, AI sends, admin
+  routes and protocol upgrades remain fail closed.
 - Production promotion is not claimed in this wave. The latest main line also contains the W3F
   explorer whose serving data quality gate is still open, so the currently healthy Production build
   remains unchanged.

@@ -391,7 +391,7 @@ export function UsTriggerConditionBuilder({
         <div className="min-w-0">
           <p className="break-words text-[11px] font-medium tabular-nums text-[var(--color-text-secondary)]">{draftSummary}</p>
           <p className="mt-0.5 text-[10px] leading-4 text-[var(--color-text-tertiary)]">
-            入力を変えても自動では検索しません。条件の保存・通知・期間検証は日本株のみ対応しています。
+            入力を変えても自動では検索しません。保存・通知は米国株専用、期間検証は日本株のみ対応しています。
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2 sm:shrink-0 sm:justify-end">
