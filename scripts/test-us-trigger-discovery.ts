@@ -7,8 +7,14 @@ import {
   isPastUsTriggerDate,
   usdFromMillions,
   usMiniChartKey,
+  usTriggerStateFromRequest,
+  type UsTriggerDraft,
 } from '@/components/us/trigger-discovery/usTriggerDiscoveryShared'
 import { parseTriggerDiscoveryMiniChartsRequest } from '@/lib/server/trigger-discovery-mini-charts'
+import {
+  savedTriggerConfigsFromSearchRequest,
+  searchRequestFromSavedTrigger,
+} from '@/lib/trigger-definition'
 import { runUsTriggerDiscoveryMaParityTests } from './test-us-trigger-discovery-ma-parity'
 
 const LATEST_AS_OF = '2026-10-09'
@@ -87,6 +93,61 @@ for (const ticker of ['.ABC', 'ABC.', 'A..B', 'A--B', 'A/B', 'A B', 'ABCDEFGHIJK
   }))
 }
 
+/* ---------- Saved US Trigger: date-free persistence round trip ---------- */
+
+const NEXT_LATEST_AS_OF = '2026-10-16'
+const savedViewDefaults = { sort: null, pageSize: US_TRIGGER_DEFAULTS.pageSize, statusFilter: null } as const
+const latestSaved = savedTriggerConfigsFromSearchRequest(latestRequest)
+assert.equal('requestedAsOf' in latestSaved.evaluationConfig, false, 'saved definitions must not persist the as-of date')
+assert.deepEqual(latestSaved.evaluationConfig.universe.markets, ['NASDAQ', 'NYSE'])
+assert.equal(latestSaved.evaluationConfig.universe.averageTradingValueMin, 5_000_000, 'USD amounts are saved as USD, not $M')
+
+const reloadedRequest = searchRequestFromSavedTrigger(latestSaved, NEXT_LATEST_AS_OF)
+assert.equal(reloadedRequest.requestedAsOf, NEXT_LATEST_AS_OF, 'saved triggers load at the latest date, not the save date')
+const reloadedState = usTriggerStateFromRequest(reloadedRequest, NEXT_LATEST_AS_OF)
+assert.equal(reloadedState.draft.asOf, NEXT_LATEST_AS_OF)
+assert.deepEqual(reloadedState.draft.exchanges, ['NASDAQ', 'NYSE'])
+assert.equal(reloadedState.draft.tradingValueMinM, '5')
+assert.deepEqual(
+  savedTriggerConfigsFromSearchRequest(buildUsTriggerRequest(reloadedState.draft, reloadedState.view, NEXT_LATEST_AS_OF)),
+  latestSaved,
+  'a freshly loaded US trigger must compare equal (no phantom unsaved changes)',
+)
+
+const richDraft: UsTriggerDraft = {
+  ...defaultUsTriggerDraft(LATEST_AS_OF),
+  timeframe: 'BIWEEKLY',
+  spreadExpansionEnabled: true,
+  belowZoneToleranceEnabled: true,
+  tradingValueMinM: '12.5',
+  volumeMax: '2500000',
+  exchanges: ['UNCLASSIFIED', 'NYSE'],
+  stageFilters: { monthAStage: [2, 1] },
+}
+const richSaved = savedTriggerConfigsFromSearchRequest(buildUsTriggerRequest(richDraft, {
+  sort: { key: 'triggerScore', direction: 'desc' },
+  pageSize: 25,
+  statusFilter: 'NEAR',
+}, LATEST_AS_OF))
+assert.deepEqual(richSaved.evaluationConfig.universe.markets, [null, 'NYSE'])
+assert.deepEqual(richSaved.viewConfig, { sort: { key: 'triggerScore', direction: 'desc' }, pageSize: 25, statusFilter: 'NEAR' })
+const richState = usTriggerStateFromRequest(searchRequestFromSavedTrigger(richSaved, NEXT_LATEST_AS_OF), NEXT_LATEST_AS_OF)
+assert.equal(richState.draft.timeframe, 'BIWEEKLY')
+assert.equal(richState.draft.tradingValueMinM, '12.5')
+assert.deepEqual(richState.view, { sort: { key: 'triggerScore', direction: 'desc' }, pageSize: 25, statusFilter: 'NEAR' })
+assert.deepEqual(
+  savedTriggerConfigsFromSearchRequest(buildUsTriggerRequest(richState.draft, richState.view, NEXT_LATEST_AS_OF)),
+  richSaved,
+)
+
+// 過去日を入力中でも、保存・比較は最新データ日の request で組む (取引所の条件を落とさない)
+const pastDraftWithExchanges: UsTriggerDraft = { ...latestDraft, asOf: '2025-12-31' }
+assert.equal(buildUsTriggerRequest(pastDraftWithExchanges, savedViewDefaults, LATEST_AS_OF).markets, undefined)
+assert.deepEqual(
+  savedTriggerConfigsFromSearchRequest(buildUsTriggerRequest({ ...pastDraftWithExchanges, asOf: LATEST_AS_OF }, savedViewDefaults, LATEST_AS_OF)),
+  latestSaved,
+)
+
 const searchRoute = readFileSync('app/api/us/trigger-discovery/search/route.ts', 'utf8')
 const miniRoute = readFileSync('app/api/us/trigger-discovery/mini-charts/route.ts', 'utf8')
 const serverSource = readFileSync('lib/server/us-trigger-discovery.ts', 'utf8')
@@ -94,6 +155,7 @@ const clientSource = readFileSync('app/us/trigger-discovery/UsTriggerDiscoveryCl
 const builderSource = readFileSync('components/us/trigger-discovery/UsTriggerConditionBuilder.tsx', 'utf8')
 const tableSource = readFileSync('components/us/trigger-discovery/UsTriggerResultsTable.tsx', 'utf8')
 const cardsSource = readFileSync('components/us/trigger-discovery/UsTriggerResultCards.tsx', 'utf8')
+const savedBarSource = readFileSync('components/us/trigger-discovery/UsSavedTriggerBar.tsx', 'utf8')
 const navigationSource = readFileSync('components/layout/navigation.ts', 'utf8')
 const usNavigationSource = readFileSync('components/us/UsAnalysisNav.tsx', 'utf8')
 
@@ -127,7 +189,38 @@ assert.match(clientSource, /extraCardSortOption/)
 assert.match(clientSource, /aria-controls="us-trigger-builder-region"/)
 assert.doesNotMatch(clientSource, /aria-current="page"/)
 assert.doesNotMatch(clientSource, /localhost|127\.0\.0\.1/)
-assert.doesNotMatch(clientSource, /\/api\/trigger-discovery\/saved|notification-settings|historical-scan/)
+assert.doesNotMatch(clientSource, /\/api\/trigger-discovery\/|notification-settings|historical-scan/, 'US client must not call JP Trigger APIs')
+
+// US 保存導線: 検索フォームと結果の間に置き、US 専用 API だけを使う
+assert.match(clientSource, /<UsSavedTriggerBar[\s\S]*?\/>\s*\n\s*\{\/\* aria-busy の領域の外/, 'saved bar sits between the builder and the results')
+assert.ok(
+  clientSource.indexOf('id="us-trigger-builder-region"') < clientSource.indexOf('<UsSavedTriggerBar')
+    && clientSource.indexOf('<UsSavedTriggerBar') < clientSource.indexOf('ref={resultsRef}'),
+  'saved bar order: builder → saved bar → results',
+)
+assert.match(clientSource, /searchRequestFromSavedTrigger\(definition, options\.latestAsOf \?\? draft\.asOf\)/, 'load uses the latest date, never a saved date')
+assert.match(clientSource, /usTriggerStateFromRequest\(request, options\.latestAsOf\)/)
+assert.match(clientSource, /void runSearch\(request, \{ collapse: true \}\)/, 'loading a saved trigger searches immediately')
+assert.match(clientSource, /savedTriggerConfigsFromSearchRequest\(buildUsTriggerRequest\(draftForSave, view, options\.latestAsOf\)\)/)
+assert.match(clientSource, /const draftForSave = \{ \.\.\.draft, asOf: options\.latestAsOf \?\? draft\.asOf \}/)
+assert.match(clientSource, /activeSavedId,\n\s+\}/, 'navigation snapshot keeps the active saved trigger')
+
+assert.match(savedBarSource, /US_SAVED_TRIGGER_API_BASE = '\/api\/us\/trigger-discovery\/saved'/)
+assert.doesNotMatch(savedBarSource, /['"`]\/api\/trigger-discovery\//, 'US saved bar must not call the JP saved Trigger API')
+assert.doesNotMatch(savedBarSource, /localhost|127\.0\.0\.1|gmail|sendMail/i)
+assert.match(savedBarSource, /fetch\(url, \{ cache: 'no-store', \.\.\.init \}\)/)
+assert.match(savedBarSource, /method: isRename \? 'PATCH' : 'POST'/, 'create / save-as / rename')
+assert.match(savedBarSource, /method: 'PATCH',\s+headers: \{ 'Content-Type': 'application\/json' \},\s+body: JSON\.stringify\(currentConfigs\)/, 'overwrite')
+assert.match(savedBarSource, /method: 'DELETE'/, 'archive')
+assert.match(savedBarSource, /\$\{US_SAVED_TRIGGER_API_BASE\}\/\$\{encodeURIComponent\(target\.id\)\}\/evaluate/)
+assert.match(savedBarSource, /body: JSON\.stringify\(\{ requestedAsOf: latestAsOf \}\)/)
+assert.match(savedBarSource, /onClick=\{\(\) => void evaluateLatest\(\)\}/, 'evaluation runs only from the explicit button')
+assert.doesNotMatch(savedBarSource, /useEffect\(\(\) => \{[^}]*evaluateLatest/, 'evaluation must never run automatically')
+assert.match(savedBarSource, /<TriggerNotificationSettingsPanel key=\{activeDefinition\.id\} definition=\{activeDefinition\} apiBase=\{US_SAVED_TRIGGER_API_BASE\} \/>/)
+assert.match(savedBarSource, /最新を評価/)
+assert.match(savedBarSource, /reused/)
+assert.match(savedBarSource, /role="status" aria-live="polite"/)
+assert.match(savedBarSource, /role="alert"/)
 assert.match(builderSource, /過去日は取引所で絞り込めません/)
 assert.match(builderSource, /\$M = 百万ドル/)
 assert.match(tableSource, /market="US"/)

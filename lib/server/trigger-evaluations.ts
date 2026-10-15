@@ -29,12 +29,14 @@ import {
   deriveAndPersistTriggerLifecycle,
   getPreviousEvaluationMemberTickers,
 } from '@/lib/server/trigger-lifecycle'
+import { createUsTriggerDiscoveryDataSource } from '@/lib/server/us-trigger-discovery'
 import {
   SavedTriggerValidationError,
   canonicalizeSavedTriggerEvaluationConfig,
   searchRequestFromSavedTrigger,
   type SavedTriggerDefinition,
 } from '@/lib/trigger-definition'
+import type { MarketCode } from '@/lib/markets'
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const ALL_CANDIDATES_LIMIT = 10_000
@@ -43,6 +45,7 @@ const MEMBER_WRITE_CHUNK = 20
 type EvaluationRow = {
   id: string
   definition_id: string
+  market: string
   evaluation_version: number
   engine_version: number
   score_version: number
@@ -150,6 +153,7 @@ export interface TriggerEvaluationDependencies {
   resolveAsOf?: (requestedAsOf: string) => Promise<string | null>
   discover?: (input: TriggerDiscoveryInput, options?: TriggerDiscoveryExecutionOptions) => Promise<TriggerDiscoveryResult>
   now?: () => number
+  market?: MarketCode
   expectedDefinitionIdentity?: TriggerEvaluationDefinitionIdentity
 }
 
@@ -166,7 +170,7 @@ function matchesExpectedDefinitionIdentity(
 }
 
 const EVALUATION_COLUMNS = `
-  id, definition_id, evaluation_version, engine_version, score_version,
+  id, definition_id, market, evaluation_version, engine_version, score_version,
   run_signature, evaluation_config_signature, evaluation_config_snapshot_json,
   requested_as_of, resolved_as_of, started_at, completed_at, status,
   pit_universe_count, current_price_count, stale_accepted_count,
@@ -188,9 +192,11 @@ function parseSnapshot(value: string): SavedTriggerDefinition['evaluationConfig'
 }
 
 function summary(row: EvaluationRow): TriggerEvaluationSummary {
+  if (row.market !== 'JP' && row.market !== 'US') throw new Error('trigger evaluation market is corrupted')
   return {
     id: row.id,
     definitionId: row.definition_id,
+    market: row.market,
     evaluationVersion: Number(row.evaluation_version),
     engineVersion: Number(row.engine_version),
     scoreVersion: Number(row.score_version),
@@ -283,7 +289,14 @@ function runSignature(definition: SavedTriggerDefinition, resolvedAsOf: string):
   })).digest('hex')
 }
 
-async function defaultResolveAsOf(requestedAsOf: string): Promise<string | null> {
+async function defaultResolveAsOf(requestedAsOf: string, market: MarketCode): Promise<string | null> {
+  if (market === 'US') {
+    const row = await execGet<{ date: string | null }>(
+      "SELECT MAX(date) AS date FROM market_ohlcv_daily WHERE market='US' AND date <= ?",
+      [requestedAsOf],
+    )
+    return row?.date ?? null
+  }
   const parsed = parseTriggerDiscoverySearchRequest({ requestedAsOf })
   const row = await execGet<{ date: string | null }>(
     'SELECT MAX(date) AS date FROM ohlcv_daily WHERE date <= ?',
@@ -305,7 +318,9 @@ function discoveryInput(definition: SavedTriggerDefinition, requestedAsOf: strin
       limit: ALL_CANDIDATES_LIMIT,
       offset: 0,
     },
-    options: { timeframe: parsed.timeframe },
+    options: definition.market === 'US'
+      ? { timeframe: parsed.timeframe, maPath: 'generic', dataSource: createUsTriggerDiscoveryDataSource() }
+      : { timeframe: parsed.timeframe },
   }
 }
 
@@ -322,9 +337,9 @@ async function evaluationByRunSignature(signature: string): Promise<EvaluationRo
   return execGet<EvaluationRow>(`SELECT ${EVALUATION_COLUMNS} FROM trigger_evaluations WHERE run_signature=?`, [signature])
 }
 
-async function evaluationById(id: string): Promise<EvaluationRow> {
+async function evaluationById(id: string, market: MarketCode = 'JP'): Promise<EvaluationRow> {
   if (!UUID_PATTERN.test(id)) throw new SavedTriggerValidationError('evaluationId must be a UUID')
-  const row = await execGet<EvaluationRow>(`SELECT ${EVALUATION_COLUMNS} FROM trigger_evaluations WHERE id=?`, [id])
+  const row = await execGet<EvaluationRow>(`SELECT ${EVALUATION_COLUMNS} FROM trigger_evaluations WHERE id=? AND market=?`, [id, market])
   if (!row) throw new TriggerEvaluationNotFoundError()
   return row
 }
@@ -447,12 +462,15 @@ export async function evaluateSavedTriggerDefinition(
   dependencies: TriggerEvaluationDependencies = {},
 ): Promise<TriggerEvaluationRunResponse> {
   const totalStartedAt = performance.now()
-  const definition = await getSavedTriggerDefinition(definitionId)
+  const market = dependencies.market ?? 'JP'
+  const definition = await getSavedTriggerDefinition(definitionId, market)
   if (!matchesExpectedDefinitionIdentity(definition, dependencies.expectedDefinitionIdentity)) {
     throw new TriggerEvaluationDefinitionChangedError()
   }
   const discovery = discoveryInput(definition, requestedAsOf)
-  const resolvedAsOf = await (dependencies.resolveAsOf ?? defaultResolveAsOf)(requestedAsOf)
+  const resolvedAsOf = dependencies.resolveAsOf
+    ? await dependencies.resolveAsOf(requestedAsOf)
+    : await defaultResolveAsOf(requestedAsOf, market)
   if (!resolvedAsOf) throw new TriggerDiscoveryInputError('requestedAsOf has no available market session')
   const signature = runSignature(definition, resolvedAsOf)
   const existing = await evaluationByRunSignature(signature)
@@ -476,11 +494,11 @@ export async function evaluateSavedTriggerDefinition(
       WHERE id=? AND status='FAILED'`, [nowSeconds, evaluationId])
   } else {
     await execRun(`INSERT OR IGNORE INTO trigger_evaluations (
-      id, definition_id, evaluation_version, engine_version, score_version,
+      id, definition_id, market, evaluation_version, engine_version, score_version,
       run_signature, evaluation_config_signature, evaluation_config_snapshot_json,
       requested_as_of, resolved_as_of, started_at, status, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'RUNNING', ?)`, [
-      evaluationId, definition.id, definition.evaluationVersion, definition.engineVersion,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'RUNNING', ?)`, [
+      evaluationId, definition.id, definition.market, definition.evaluationVersion, definition.engineVersion,
       definition.scoreVersion, signature, definition.evaluationSignature,
       JSON.stringify(definition.evaluationConfig), requestedAsOf, resolvedAsOf,
       nowSeconds, nowSeconds,
@@ -530,7 +548,7 @@ export async function evaluateSavedTriggerDefinition(
       discoveryMs,
       snapshotTransformMs,
     })
-    const completed = await evaluationById(evaluationId)
+    const completed = await evaluationById(evaluationId, market)
     return {
       contractVersion: TRIGGER_EVALUATION_CONTRACT_VERSION,
       evaluation: summary(completed),
@@ -549,24 +567,25 @@ export async function evaluateSavedTriggerDefinition(
   }
 }
 
-export async function listSavedTriggerEvaluations(definitionId: string): Promise<TriggerEvaluationSummary[]> {
-  await getSavedTriggerDefinitionForHistory(definitionId)
+export async function listSavedTriggerEvaluations(definitionId: string, market: MarketCode = 'JP'): Promise<TriggerEvaluationSummary[]> {
+  await getSavedTriggerDefinitionForHistory(definitionId, market)
   const rows = await execAll<EvaluationRow>(`
     SELECT ${EVALUATION_COLUMNS}
     FROM trigger_evaluations
-    WHERE definition_id=?
+    WHERE definition_id=? AND market=?
     ORDER BY resolved_as_of DESC, created_at DESC
     LIMIT 250
-  `, [definitionId])
+  `, [definitionId, market])
   return rows.map(summary)
 }
 
 export async function getTriggerEvaluationDetail(input: {
   evaluationId: string
+  market?: MarketCode
   limit?: number
   offset?: number
 }): Promise<TriggerEvaluationDetailResponse> {
-  const evaluation = await evaluationById(input.evaluationId)
+  const evaluation = await evaluationById(input.evaluationId, input.market ?? 'JP')
   const limit = input.limit ?? 100
   const offset = input.offset ?? 0
   if (!Number.isInteger(limit) || limit < 1 || limit > 500) {

@@ -13,11 +13,13 @@ import {
   type SavedTriggerViewConfig,
 } from '@/lib/trigger-definition'
 import { TRIGGER_ENGINE_VERSION } from '@/lib/trigger-discovery-engine'
+import type { MarketCode } from '@/lib/markets'
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
 type TriggerDefinitionRow = {
   id: string
+  market: string
   name: string
   evaluation_config_json: string
   view_config_json: string
@@ -74,13 +76,24 @@ function evaluationSignature(config: SavedTriggerEvaluationConfig): string {
   return createHash('sha256').update(canonicalPayload).digest('hex')
 }
 
-async function allowedMarkets(): Promise<Set<string | null>> {
-  const rows = await execAll<{ market: string | null }>(`
-    SELECT DISTINCT market_segment AS market
-    FROM ticker_universe
-    WHERE active=1
-  `)
+async function allowedMarkets(market: MarketCode): Promise<Set<string | null>> {
+  const rows = market === 'US'
+    ? await execAll<{ market: string | null }>(`
+        SELECT DISTINCT exchange AS market
+        FROM market_universe
+        WHERE market='US' AND active=1
+      `)
+    : await execAll<{ market: string | null }>(`
+        SELECT DISTINCT market_segment AS market
+        FROM ticker_universe
+        WHERE active=1
+      `)
   return new Set(rows.map((row) => row.market?.trim() || null))
+}
+
+function definitionMarket(value: string): MarketCode {
+  if (value === 'JP' || value === 'US') return value
+  throw new Error('trigger definition market is corrupted')
 }
 
 function rowToDefinition(row: TriggerDefinitionRow): SavedTriggerDefinition {
@@ -90,6 +103,7 @@ function rowToDefinition(row: TriggerDefinitionRow): SavedTriggerDefinition {
   )
   return {
     id: row.id,
+    market: definitionMarket(row.market),
     name: row.name,
     evaluationConfig,
     viewConfig: canonicalizeSavedTriggerViewConfig(
@@ -111,50 +125,52 @@ function rowToDefinition(row: TriggerDefinitionRow): SavedTriggerDefinition {
 }
 
 const SELECT_COLUMNS = `
-  id, name, evaluation_config_json, view_config_json, evaluation_signature,
+  id, market, name, evaluation_config_json, view_config_json, evaluation_signature,
   evaluation_version, engine_version, score_version, created_at, updated_at, archived_at
 `
 
-export async function listSavedTriggerDefinitions(): Promise<SavedTriggerDefinition[]> {
+export async function listSavedTriggerDefinitions(market: MarketCode = 'JP'): Promise<SavedTriggerDefinition[]> {
   const rows = await execAll<TriggerDefinitionRow>(`
     SELECT ${SELECT_COLUMNS}
     FROM trigger_definitions
-    WHERE archived_at IS NULL
+    WHERE market=? AND archived_at IS NULL
     ORDER BY updated_at DESC, name, id
-  `)
+  `, [market])
   return rows.map(rowToDefinition)
 }
 
-export async function getSavedTriggerDefinition(id: string): Promise<SavedTriggerDefinition> {
+export async function getSavedTriggerDefinition(id: string, market: MarketCode = 'JP'): Promise<SavedTriggerDefinition> {
   validateSavedTriggerId(id)
   const row = await execGet<TriggerDefinitionRow>(`
     SELECT ${SELECT_COLUMNS}
     FROM trigger_definitions
-    WHERE id=? AND archived_at IS NULL
-  `, [id])
+    WHERE id=? AND market=? AND archived_at IS NULL
+  `, [id, market])
   if (!row) throw new SavedTriggerNotFoundError()
   return rowToDefinition(row)
 }
 
-export async function getSavedTriggerDefinitionForHistory(id: string): Promise<SavedTriggerDefinition> {
+export async function getSavedTriggerDefinitionForHistory(id: string, market: MarketCode = 'JP'): Promise<SavedTriggerDefinition> {
   validateSavedTriggerId(id)
   const row = await execGet<TriggerDefinitionRow>(`
     SELECT ${SELECT_COLUMNS}
     FROM trigger_definitions
-    WHERE id=?
-  `, [id])
+    WHERE id=? AND market=?
+  `, [id, market])
   if (!row) throw new SavedTriggerNotFoundError()
   return rowToDefinition(row)
 }
 
 export async function createSavedTriggerDefinition(input: {
+  market?: MarketCode
   name: unknown
   evaluationConfig: unknown
   viewConfig: unknown
 }): Promise<SavedTriggerDefinition> {
+  const market = input.market ?? 'JP'
   const name = normalizeName(input.name)
   const evaluationConfig = canonicalizeSavedTriggerEvaluationConfig(input.evaluationConfig, {
-    allowedMarkets: await allowedMarkets(),
+    allowedMarkets: await allowedMarkets(market),
   })
   const viewConfig = canonicalizeSavedTriggerViewConfig(input.viewConfig)
   const signature = evaluationSignature(evaluationConfig)
@@ -162,11 +178,12 @@ export async function createSavedTriggerDefinition(input: {
   const id = randomUUID()
   await execRun(`
     INSERT INTO trigger_definitions (
-      id, name, evaluation_config_json, view_config_json, evaluation_signature,
+      id, market, name, evaluation_config_json, view_config_json, evaluation_signature,
       evaluation_version, engine_version, score_version, created_at, updated_at, archived_at
-    ) VALUES (?, ?, ?, ?, ?, 1, ?, ?, unixepoch(), unixepoch(), NULL)
+    ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, unixepoch(), unixepoch(), NULL)
   `, [
     id,
+    market,
     name,
     JSON.stringify(evaluationConfig),
     JSON.stringify(viewConfig),
@@ -174,20 +191,20 @@ export async function createSavedTriggerDefinition(input: {
     engineVersion,
     scoreVersion,
   ])
-  return getSavedTriggerDefinition(id)
+  return getSavedTriggerDefinition(id, market)
 }
 
 export async function updateSavedTriggerDefinition(id: string, input: {
   name?: unknown
   evaluationConfig?: unknown
   viewConfig?: unknown
-}): Promise<SavedTriggerDefinition> {
-  const existing = await getSavedTriggerDefinition(id)
+}, market: MarketCode = 'JP'): Promise<SavedTriggerDefinition> {
+  const existing = await getSavedTriggerDefinition(id, market)
   const name = input.name === undefined ? existing.name : normalizeName(input.name)
   const evaluationConfig = input.evaluationConfig === undefined
     ? existing.evaluationConfig
     : canonicalizeSavedTriggerEvaluationConfig(input.evaluationConfig, {
-        allowedMarkets: await allowedMarkets(),
+        allowedMarkets: await allowedMarkets(market),
       })
   const viewConfig = input.viewConfig === undefined
     ? existing.viewConfig
@@ -219,16 +236,16 @@ export async function updateSavedTriggerDefinition(id: string, input: {
       WHERE id=? AND archived_at IS NULL
     `, [name, JSON.stringify(viewConfig), id])
   }
-  return getSavedTriggerDefinition(id)
+  return getSavedTriggerDefinition(id, market)
 }
 
-export async function archiveSavedTriggerDefinition(id: string): Promise<void> {
-  await getSavedTriggerDefinition(id)
+export async function archiveSavedTriggerDefinition(id: string, market: MarketCode = 'JP'): Promise<void> {
+  await getSavedTriggerDefinition(id, market)
   await execRun(`
     UPDATE trigger_definitions
     SET archived_at=unixepoch(), updated_at=unixepoch()
-    WHERE id=? AND archived_at IS NULL
-  `, [id])
+    WHERE id=? AND market=? AND archived_at IS NULL
+  `, [id, market])
 }
 
 export const savedTriggerDefinitionContractVersion = SAVED_TRIGGER_CONTRACT_VERSION

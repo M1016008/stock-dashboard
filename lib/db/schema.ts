@@ -1729,6 +1729,7 @@ export const triggerDefinitions = sqliteTable(
   'trigger_definitions',
   {
     id: text('id').primaryKey(),
+    market: text('market').notNull().default('JP'),
     name: text('name').notNull(),
     evaluationConfigJson: text('evaluation_config_json').notNull(),
     viewConfigJson: text('view_config_json').notNull(),
@@ -1741,7 +1742,7 @@ export const triggerDefinitions = sqliteTable(
     archivedAt: integer('archived_at', { mode: 'timestamp' }),
   },
   (t) => ({
-    activeIdx: index('trigger_definitions_active_idx').on(t.archivedAt, t.updatedAt),
+    activeIdx: index('trigger_definitions_active_idx').on(t.market, t.archivedAt, t.updatedAt),
   }),
 )
 
@@ -1898,6 +1899,7 @@ export const triggerEvaluations = sqliteTable(
   {
     id: text('id').primaryKey(),
     definitionId: text('definition_id').notNull().references(() => triggerDefinitions.id),
+    market: text('market').notNull().default('JP'),
     evaluationVersion: integer('evaluation_version').notNull(),
     engineVersion: integer('engine_version').notNull(),
     scoreVersion: integer('score_version').notNull(),
@@ -1928,7 +1930,7 @@ export const triggerEvaluations = sqliteTable(
   (t) => ({
     runSignatureIdx: uniqueIndex('trigger_evaluations_run_signature_idx').on(t.runSignature),
     definitionDateIdx: index('trigger_evaluations_definition_date_idx')
-      .on(t.definitionId, t.resolvedAsOf, t.createdAt),
+      .on(t.market, t.definitionId, t.resolvedAsOf, t.createdAt),
   }),
 )
 

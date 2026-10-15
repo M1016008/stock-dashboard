@@ -69,6 +69,8 @@
     "test:trigger-discovery-navigation-restore": "tsx scripts/test-trigger-discovery-navigation-restore.ts",
     "test:trigger-discovery-mini-charts": "tsx scripts/test-trigger-discovery-mini-charts.ts",
     "test:us-trigger-discovery": "tsx scripts/test-us-trigger-discovery.ts",
+    "test:us-trigger-persistence": "NODE_ENV=test EXTERNAL_STORAGE_REQUIRED=false USE_LOCAL_DB=1 STOCKBOARD_DB_PATH=/tmp/stockboard-us-trigger-persistence-test.db tsx scripts/test-us-trigger-persistence.ts",
+    "test:us-regulatory-source-contract": "tsx scripts/test-us-regulatory-source-contract.ts",
     "test:trigger-discovery-mini-charts:integration": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/test-trigger-discovery-mini-charts-integration.ts",
     "test:trigger-discovery-historical": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/test-trigger-discovery-historical.ts",
     "test:trigger-discovery-historical-scan": "USE_LOCAL_DB=1 tsx --env-file=.env.local scripts/test-trigger-discovery-historical-scan.ts",

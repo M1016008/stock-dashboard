@@ -106,8 +106,9 @@ function EventCheckbox({ event, checked, disabled, onChange }: {
   )
 }
 
-export function TriggerNotificationSettingsPanel({ definition }: {
+export function TriggerNotificationSettingsPanel({ definition, apiBase = '/api/trigger-discovery/saved' }: {
   definition: SavedTriggerDefinition
+  apiBase?: string
 }) {
   const panelId = useId()
   const panelTitleId = `${panelId}-title`
@@ -160,7 +161,7 @@ export function TriggerNotificationSettingsPanel({ definition }: {
     setMessage(null)
     void (async () => {
       try {
-        const response = await fetch(`/api/trigger-discovery/saved/${definition.id}/notification-settings`, {
+        const response = await fetch(`${apiBase}/${definition.id}/notification-settings`, {
           cache: 'no-store',
           signal: controller.signal,
         })
@@ -184,7 +185,7 @@ export function TriggerNotificationSettingsPanel({ definition }: {
       }
     })()
     return () => controller.abort()
-  }, [definition.id, open, reloadToken])
+  }, [apiBase, definition.id, open, reloadToken])
 
   const updateBoolean = (key: Exclude<keyof NotificationDraft, 'maxCandidatesInDigest'>, value: boolean) => {
     setDraft((current) => current ? { ...current, [key]: value } : current)
@@ -207,7 +208,7 @@ export function TriggerNotificationSettingsPanel({ definition }: {
     setError(null)
     setMessage(null)
     try {
-      const response = await fetch(`/api/trigger-discovery/saved/${definition.id}/notification-settings`, {
+      const response = await fetch(`${apiBase}/${definition.id}/notification-settings`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(values),

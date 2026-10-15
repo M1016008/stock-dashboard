@@ -214,6 +214,50 @@ export function buildUsTriggerRequest(
   }
 }
 
+function inputNumber(value: number | null | undefined, divisor = 1): string {
+  return value == null ? '' : String(value / divisor)
+}
+
+/** 保存済み定義の決定的requestを、USフォームの表示単位へ戻す。数値の意味は再計算しない。 */
+export function usTriggerStateFromRequest(
+  request: TriggerDiscoverySearchRequest,
+  latestAsOf: string | null,
+): { draft: UsTriggerDraft; view: UsTriggerViewConfig } {
+  const base = defaultUsTriggerDraft(latestAsOf)
+  return {
+    draft: {
+      ...base,
+      asOf: request.requestedAsOf,
+      timeframe: request.timeframe ?? base.timeframe,
+      ma1Period: inputNumber(request.ma1Period ?? DEFAULT_MA_ZONE_TRIGGER_CONFIG.ma1Period),
+      ma2Period: inputNumber(request.ma2Period ?? DEFAULT_MA_ZONE_TRIGGER_CONFIG.ma2Period),
+      maxDistance: inputNumber(request.maxApproachDistancePct ?? DEFAULT_MA_ZONE_TRIGGER_CONFIG.maxApproachDistancePct),
+      nearDistance: inputNumber(request.nearDistancePct ?? DEFAULT_MA_ZONE_TRIGGER_CONFIG.nearDistancePct),
+      spreadExpansionEnabled: request.spreadExpansionEnabled ?? DEFAULT_MA_ZONE_TRIGGER_CONFIG.spreadExpansionEnabled,
+      spreadLookbackIntervals: inputNumber(request.spreadLookbackIntervals ?? DEFAULT_MA_ZONE_TRIGGER_CONFIG.spreadLookbackIntervals),
+      minExpansionRatioPct: inputNumber((request.minExpansionRatio ?? DEFAULT_MA_ZONE_TRIGGER_CONFIG.minExpansionRatio) * 100),
+      belowZoneToleranceEnabled: request.belowZoneToleranceEnabled ?? DEFAULT_MA_ZONE_TRIGGER_CONFIG.belowZoneToleranceEnabled,
+      maxBelowZonePct: inputNumber(request.maxBelowZonePct ?? DEFAULT_MA_ZONE_TRIGGER_CONFIG.maxBelowZonePct),
+      priceMin: inputNumber(request.priceMin),
+      priceMax: inputNumber(request.priceMax),
+      tradingValueMinM: inputNumber(request.averageTradingValueMin, 1_000_000),
+      tradingValueMaxM: inputNumber(request.averageTradingValueMax, 1_000_000),
+      volumeMin: inputNumber(request.averageVolumeMin),
+      volumeMax: inputNumber(request.averageVolumeMax),
+      liquidityLookbackSessions: inputNumber(request.liquidityLookbackSessions ?? US_TRIGGER_DEFAULTS.liquidityLookbackSessions),
+      exchanges: (request.markets ?? []).map((market) => market ?? 'UNCLASSIFIED'),
+      stageFilters: request.stageFilters ?? {},
+    },
+    view: {
+      sort: request.sort ?? null,
+      pageSize: US_TRIGGER_PAGE_SIZES.includes(request.pageSize as UsTriggerPageSize)
+        ? request.pageSize as UsTriggerPageSize
+        : US_TRIGGER_DEFAULTS.pageSize,
+      statusFilter: request.statusFilter ?? null,
+    },
+  }
+}
+
 /* ---------- 書式 ---------- */
 
 /** 金額の短縮表記 ($850K / $12.3M / $1.25B)。売買代金・条件サマリーで使う */

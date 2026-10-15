@@ -6,6 +6,7 @@ import {
   type TriggerNotificationSettings,
   type TriggerNotificationSettingsValues,
 } from '@/lib/trigger-notification'
+import type { MarketCode } from '@/lib/markets'
 
 type SettingsRow = {
   definition_id: string
@@ -72,18 +73,20 @@ async function storedSettings(definitionId: string): Promise<TriggerNotification
 
 export async function getTriggerNotificationSettings(
   definitionId: string,
+  market: MarketCode = 'JP',
 ): Promise<TriggerNotificationSettings> {
   validateSavedTriggerId(definitionId)
-  await getSavedTriggerDefinition(definitionId)
+  await getSavedTriggerDefinition(definitionId, market)
   return await storedSettings(definitionId) ?? defaultSettings(definitionId)
 }
 
 export async function updateTriggerNotificationSettings(
   definitionId: string,
   input: unknown,
+  market: MarketCode = 'JP',
 ): Promise<TriggerNotificationSettings> {
   validateSavedTriggerId(definitionId)
-  await getSavedTriggerDefinition(definitionId)
+  await getSavedTriggerDefinition(definitionId, market)
   const current = await storedSettings(definitionId)
   const values = mergeTriggerNotificationSettings(input, current ?? { ...DEFAULT_TRIGGER_NOTIFICATION_SETTINGS })
   await persistSettings(definitionId, values)
