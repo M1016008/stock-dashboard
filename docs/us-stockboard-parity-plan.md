@@ -164,7 +164,8 @@ performance, or historical-price parity work.
 - Claude Opus 5.5 (`claude.ai`, firstParty, Pro) audited, implemented and completed a final read-only
   review. Codex verified fixture and canonical-data parity, error-path fallback, query plans, dedicated
   regressions, typecheck and build. No schema, source data, calculation, API or persistence change was
-  introduced. Production promotion follows the W3J analytical cleanup, rebuild and candidate gate.
+  introduced. The later W3J closeout completed the analytical cleanup, rebuild and candidate gate and
+  promoted this path to Production.
 
 ### W3D - MTF Close Calendar
 
@@ -274,13 +275,13 @@ performance, or historical-price parity work.
   RGC's 2025-06-16 post-split market session and QMMM's zero-volume repeated quotes beginning with the
   2025-09-29 SEC suspension and continuing under the subsequent Nasdaq halt. W3J resolves their policy
   without rewriting the primary source: RGC remains observed and QMMM halt carries are excluded only
-  from the analytical copy. Historical Explorer Production activation now depends on applying that
-  versioned policy, rebuilding dependent analytics and passing the candidate gate.
+  from the analytical copy. The later W3J closeout applied that versioned policy, rebuilt dependent
+  analytics and passed the candidate gate for Production.
 - Data-quality feature `78fda1f4f24cbb533c9a192fdc24ddcf20a5d5dd` was merged without conflict as
   `3a0c1209f93ad47f9b73be7db54f37c5a853e755` and pushed to main after dedicated data-quality,
   pipeline-generation, automation, backtest, analytics, market-intelligence and status-health tests,
   TypeScript, diff checks and the Production build passed. W3J subsequently resolved the source policy;
-  Production now waits on its versioned analytical cleanup, rebuild and candidate gate.
+  its versioned analytical cleanup, rebuild and candidate gate subsequently completed in Production.
 
 ### W3J - Official-event analytical price policy
 
@@ -302,8 +303,8 @@ performance, or historical-price parity work.
   cover the RGC acceptance, QMMM exclusion, positive-volume recovery, raw-source immutability and
   dependent-row cleanup. The 2026-10-15 real analytics dry-run found 262 ineligible OHLCV rows,
   262 matching Stage snapshots and 25,316 total base/derived rows to replace, with raw-source writes 0.
-  Production remains pending until the approved apply, full dependent rebuild, candidate QA and normal
-  deployment sequence complete.
+  The approved apply, full dependent rebuild, candidate QA and normal deployment sequence subsequently
+  completed under the W3J Production closeout below.
 
 ### W3G - Point-in-time ML prediction history
 
@@ -331,8 +332,8 @@ performance, or historical-price parity work.
   responsive checks with no component overflow or application console error.
 - Functional and historical presentation parity is complete for the available prediction records, but
   source coverage remains `PARTIAL`: only one 40-session model horizon and ranked candidates are stored,
-  rather than the full model/horizon depth of the JP experience. Production promotion follows the W3J
-  analytical cleanup, rebuild and candidate gate; no Production deploy is claimed by W3G.
+  rather than the full model/horizon depth of the JP experience. W3G itself made no Production deploy;
+  the later W3J closeout completed the analytical gate and promoted the merged feature to Production.
 - Feature `416b63c0d4f0bc47089bdc2b82806cdafeb255f9` was merged without conflict as
   `18e39f9df71292671f9f2c3c2873636558d58a5c`. Merge-head dedicated/shared regressions,
   parity audit, typecheck, diff checks and the Production build passed before the main push.
@@ -397,7 +398,8 @@ performance, or historical-price parity work.
 - Feature `27b6ec3e2a925446fdd44a2dce3f645379ae1272` was merged without conflict and pushed to
   main as `084d296502da11f1c4baab02988117588d7dc742`. Live activation remains data-blocked:
   Production contains no verified US Companyfacts rows and `SEC_USER_AGENT` is not configured.
-  Forecast consensus still requires a separately approved source. No Production deploy is claimed.
+  Forecast consensus still requires a separately approved source. The fail-closed UI is included in the
+  later W3J Production build, but live Companyfacts and forecast data remain blocked.
 
 ### W0F - Global acceptance matrix
 
@@ -447,9 +449,9 @@ performance, or historical-price parity work.
   covered all 11 routes at 1440 px and the shared/Stock Detail placements at 1440, 1024, 768 and
   390 px with zero whole-document horizontal overflow and zero application console warnings/errors.
   Ten warm/candidate `/api/us/status` requests returned HTTP 200 in 0.27-1.46 seconds.
-- Production promotion follows the W3J analytical cleanup, rebuild and candidate gate.
-  The currently healthy Production build is unchanged; no DB schema, DB write, source value or
-  business calculation changed in this wave.
+- This wave did not change the then-current Production build. The later W3J closeout completed the
+  analytical cleanup, rebuild and candidate gate and promoted the merged acceptance surfaces. No source
+  value or business calculation changed in W0F.
 - Git: feature commit `0bc4d029c06bf5cba772b2bcf54656ade05fe3a6`; normal merge commit
   `4efa85ebce7db4f3641c91d450202fa215e5322d` on the clean W0F integration worktree.
 
@@ -473,23 +475,22 @@ performance, or historical-price parity work.
   (`covered / (raw universe - confirmed permanent exclusions)`) with permanent, pending,
   temporary and unclassified missing buckets. Publication and retry thresholds use effective
   coverage, while raw coverage remains observable in status and run telemetry.
-- The 2026-10-13 Production read-only baseline remains 11,760/12,004, or 97.97% raw coverage.
-  Production does not yet contain the availability table, so no historical payload was backfilled
-  and no ticker is pre-classified. The first approved live run must begin a new evidence history.
+- At W0G review time, the 2026-10-13 Production read-only baseline was 11,760/12,004, or 97.97% raw
+  coverage, and Production did not yet contain the availability table. The later W3J deployment created
+  the additive table without historical backfill; no ticker was pre-classified, so live runs begin the
+  evidence history from observed source responses.
 - Claude Opus 5.5 (`claude.ai`, firstParty, Pro) audited the state contract and implemented the
   bounded source changes. Codex corrected ambiguous-empty reversal and interrupted-run reason
   handling, then verified the pure state machine, temporary SQLite migration/store/SLA integration,
   automation contracts, coverage APIs, route states, typecheck and Production build.
-- Production activation follows the W3J analytical cleanup, rebuild and candidate gate. The
-  additive table must be created by the approved deployment path before a `SKIP_SCHEMA_ENSURE=1`
-  runtime starts the new runner. No Production DB write or source reclassification occurred in this
-  wave.
+- The later W3J closeout created the additive table through the approved deployment path and activated
+  the runner contract. W0G itself performed no Production DB write or source reclassification.
 
 ### W0 - Loading, empty and error state contracts (main, PASS)
 
 - Status: implemented and verified on `codex/us-parity-w0-route-states`, then merged normally to
-  main. The board row is `IMPLEMENTED` with Codex QA `PASS` and Git `MAIN`; Production remains
-  `PENDING` behind the W3J analytical cleanup, rebuild and candidate gate.
+  main. The board row is `IMPLEMENTED` with Codex QA `PASS` and Git `MAIN`; the later W3J closeout
+  completed the analytical cleanup, rebuild and candidate gate and promoted these states to Production.
 - Blocking findings from the visual review (scope of the final bounded revision):
   - Stage map (US and the shared JP component): during loading or error, the header count, the six
     Stage summary cells, the `未算出` cell and the `全投資対象（0）` option showed `0`, which looked

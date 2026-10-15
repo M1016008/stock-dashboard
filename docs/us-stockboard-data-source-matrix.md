@@ -116,8 +116,8 @@ W3J official-event evidence:
   stuck loading state or application console error.
 - W3J resolves the RGC/QMMM source-quality policy from official evidence. RGC remains an observed
   post-split market move; QMMM halt carries remain in raw Tiingo history but are not analytical sessions.
-  Production remains pending only while the versioned cleanup, dependent rebuild and candidate gate run.
-  No value is clipped, winsorized or rewritten.
+  The later W3J closeout completed the versioned cleanup, dependent rebuild and candidate gate and is
+  live in Production. No value is clipped, winsorized or rewritten.
 
 - The shared Watchlist now keeps JP and US quote semantics distinct, batches refreshes, pauses polling
   while hidden, and suppresses false daily returns around detected price discontinuities. The comparison
