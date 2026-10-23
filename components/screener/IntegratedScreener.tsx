@@ -741,6 +741,13 @@ export function IntegratedScreener() {
             </div>
           </div>
         </div>}
+        <div className="flex flex-wrap items-center gap-1.5 border-t border-[var(--color-border-soft)] bg-white px-3 py-2 text-[10px]">
+          <span className="font-bold text-[var(--color-text-secondary)]">24か月足 上昇終値ライン:</span>
+          <Link href="/screener?mode=legacy&twoYearLine=confirmed" className="btn" data-size="sm">確定ラインあり</Link>
+          <Link href="/screener?mode=legacy&twoYearLine=provisional" className="btn" data-size="sm">暫定ラインあり</Link>
+          <Link href="/screener?mode=legacy&twoYearLine=either" className="btn" data-size="sm">いずれか</Link>
+          <span className="text-[var(--color-text-muted)]">共通Line Registryで全銘柄をページ分割前に判定します。</span>
+        </div>
       </section>
 
       <section className="panel" data-saved-screen-evaluations>

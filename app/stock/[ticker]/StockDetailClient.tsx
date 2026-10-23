@@ -709,6 +709,7 @@ function ChartWorkspace({
                 interval="D"
                 height={chartHeight}
                 historyPeriod="all"
+                showTwoYearLines
                 showTimeframeSelector
                 toolbarVariant="segmented"
                 summaryVariant="strip"

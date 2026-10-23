@@ -7,11 +7,13 @@ import { ArrowDownAZ, ArrowUpAZ, CalendarDays, CircleHelp, Columns3, Filter, Git
 import { StockPreviewTrigger } from '@/components/stock-preview/StockPreviewTrigger'
 import { StageTag } from '@/components/ui/StageTag'
 import { SavedViewManager } from '@/components/ui/SavedViewManager'
+import { TwoYearLineFilterControl, TwoYearLineResultBadge } from '@/components/screener/TwoYearLineFilter'
 import { PageTitle } from '@/components/layout/PageTitle'
 import { UsAnalysisNav } from '@/components/us/UsAnalysisNav'
 import { getCompareSymbols, toggleComparedSymbol } from '@/lib/client/stock-workspace'
 import { replaceCurrentUrlFilters } from '@/lib/client/url-filter-state'
 import { formatShortTermStrength } from '@/lib/short-term-check'
+import { parseTwoYearLineFilter, parseTwoYearLinePatternFilter, type TwoYearLineFilter, type TwoYearLinePatternFilter } from '@/lib/two-year-line-registry'
 import {
   normalizeUsClassificationFilters,
   supportsUsSicClassification,
@@ -66,6 +68,16 @@ type Row = {
   next_earnings_revenue_estimate?: number | null
   next_earnings_source?: string | null
   earnings_days?: number | null
+  twoYearLineStatus?: 'confirmed' | 'provisional' | null
+  twoYearLinePattern?: 'three' | 'four' | null
+  twoYearLinePeriods?: readonly number[] | null
+  twoYearLineStartClose?: number | null
+  twoYearLineEndClose?: number | null
+  twoYearLineAngleDeg?: number | null
+  twoYearLineLastCandleRisePct?: number | null
+  twoYearLineConfirmedDistancePct?: number | null
+  twoYearLineAsOfDate?: string | null
+  twoYearLinePriceBasisVersion?: string | null
 }
 
 type AxisKey = 'daily_a' | 'daily_b' | 'weekly_a' | 'weekly_b' | 'monthly_a' | 'monthly_b'
@@ -97,6 +109,10 @@ type UsScreenerView = {
   marketCapBin: string
   earningsWindowDays: string
   earningsTimeBucket: string
+  twoYearLine: TwoYearLineFilter
+  twoYearPattern: TwoYearLinePatternFilter
+  twoYearAngleMin: string
+  twoYearAngleMax: string
   sort: string
   dir: 'asc' | 'desc'
 }
@@ -157,7 +173,7 @@ function usStockHref(ticker: string, date: string | null): string {
   return `/us/stock/${encodeURIComponent(ticker)}${date ? `?date=${encodeURIComponent(date)}` : ''}`
 }
 
-const SORT_VALUES = new Set(['ticker', 'exchange', 'sector', 'industry', 'price', 'changePct', 'return5d', 'return20d', 'return60d', 'return120d', 'ma200Gap', 'ma200Angle', 'volume', 'avgVolume20', 'marketCap', 'stageCode', 'pms', 'pfs', 'pes', 'acceleration', 'force', 'shortTermCheckScore', 'shortTermCheckLabel', 'earningsNextDate', 'earningsDays'])
+const SORT_VALUES = new Set(['ticker', 'exchange', 'sector', 'industry', 'price', 'changePct', 'return5d', 'return20d', 'return60d', 'return120d', 'ma200Gap', 'ma200Angle', 'volume', 'avgVolume20', 'marketCap', 'stageCode', 'pms', 'pfs', 'pes', 'acceleration', 'force', 'shortTermCheckScore', 'shortTermCheckLabel', 'earningsNextDate', 'earningsDays', 'twoYearLineAngleDeg', 'twoYearLineLastCandleRisePct', 'twoYearLineConfirmedDistancePriority'])
 const COLUMN_MODE_KEY = 'stockboard_us_screener_columns_v1'
 const AXES: { key: AxisKey; label: string; color: string }[] = [
   { key: 'daily_a', label: '日足A', color: '#ef4444' },
@@ -372,6 +388,10 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
   })
   const [earningsWindowDays, setEarningsWindowDays] = useState(searchParams.get('earningsWindowDays') || '')
   const [earningsTimeBucket, setEarningsTimeBucket] = useState(searchParams.get('earningsTimeBucket') || '')
+  const [twoYearLine, setTwoYearLine] = useState<TwoYearLineFilter>(() => parseTwoYearLineFilter(searchParams.get('twoYearLine')))
+  const [twoYearPattern, setTwoYearPattern] = useState<TwoYearLinePatternFilter>(() => parseTwoYearLinePatternFilter(searchParams.get('twoYearPattern')))
+  const [twoYearAngleMin, setTwoYearAngleMin] = useState(() => searchParams.get('twoYearAngleMin') ?? '')
+  const [twoYearAngleMax, setTwoYearAngleMax] = useState(() => searchParams.get('twoYearAngleMax') ?? '')
   const [sort, setSort] = useState(initialSort)
   const [dir, setDir] = useState<'asc' | 'desc'>(initialDir)
   const [loading, setLoading] = useState(false)
@@ -438,11 +458,17 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
     if (physicalStatus) sp.set('physicalStatus', physicalStatus)
     if (earningsWindowDays) sp.set('earningsWindowDays', earningsWindowDays)
     if (earningsTimeBucket) sp.set('earningsTimeBucket', earningsTimeBucket)
+    if (twoYearLine !== 'none') {
+      sp.set('twoYearLine', twoYearLine)
+      if (twoYearPattern !== 'either') sp.set('twoYearPattern', twoYearPattern)
+      if (twoYearAngleMin.trim()) sp.set('twoYearAngleMin', twoYearAngleMin.trim())
+      if (twoYearAngleMax.trim()) sp.set('twoYearAngleMax', twoYearAngleMax.trim())
+    }
     const capBin = historicalLocked ? null : MCAP_BINS.find((bin) => bin.key === marketCapBin)
     if (capBin?.min != null) sp.set('marketCapMin', String(capBin.min))
     if (capBin?.max != null) sp.set('marketCapMax', String(capBin.max))
     return sp.toString()
-  }, [requestedDate, historicalLocked, query, exchange, sector, industryGroup, industry, stageCode, stages, avgVolumeMin, priceMin, priceMax, assetType, sicClassificationEnabled, quality, ma200Trend, ma200Direction, pmsMin, pfsMin, pesMin, accelerationPositive, forcePositive, stage23Candidate, shortTermCheck, physicalStatus, marketCapBin, earningsWindowDays, earningsTimeBucket, effectiveSort, dir, resultLimit])
+  }, [requestedDate, historicalLocked, query, exchange, sector, industryGroup, industry, stageCode, stages, avgVolumeMin, priceMin, priceMax, assetType, sicClassificationEnabled, quality, ma200Trend, ma200Direction, pmsMin, pfsMin, pesMin, accelerationPositive, forcePositive, stage23Candidate, shortTermCheck, physicalStatus, marketCapBin, earningsWindowDays, earningsTimeBucket, twoYearLine, twoYearPattern, twoYearAngleMin, twoYearAngleMax, effectiveSort, dir, resultLimit])
 
   // 過去日では使えない条件は、送らないだけでなく画面の状態からも外し、外したことを表示する
   useEffect(() => {
@@ -486,7 +512,7 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
       'avgVolumeMin', 'priceMin', 'priceMax', 'assetType', 'quality', 'ma200Trend', 'ma200Direction',
       'pmsMin', 'pfsMin', 'pesMin', 'accelerationPositive', 'forcePositive', 'stage23Candidate',
       'shortTermCheck', 'physicalStatus', 'earningsWindowDays', 'earningsTimeBucket',
-      'marketCapMin', 'marketCapMax',
+      'marketCapMin', 'marketCapMax', 'twoYearLine', 'twoYearPattern', 'twoYearAngleMin', 'twoYearAngleMax',
     ]
     for (const key of ownedKeys) updates[key] = apiParams.get(key)
     updates.marketCapBin = marketCapBin || null
@@ -615,9 +641,13 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
     marketCapBin,
     earningsWindowDays,
     earningsTimeBucket,
+    twoYearLine,
+    twoYearPattern,
+    twoYearAngleMin,
+    twoYearAngleMax,
     sort,
     dir,
-  }), [query, exchange, sector, industryGroup, industry, stageCode, stages, avgVolumeMin, priceMin, priceMax, assetType, quality, ma200Trend, ma200Direction, pmsMin, pfsMin, pesMin, accelerationPositive, forcePositive, stage23Candidate, shortTermCheck, physicalStatus, marketCapBin, earningsWindowDays, earningsTimeBucket, sort, dir])
+  }), [query, exchange, sector, industryGroup, industry, stageCode, stages, avgVolumeMin, priceMin, priceMax, assetType, quality, ma200Trend, ma200Direction, pmsMin, pfsMin, pesMin, accelerationPositive, forcePositive, stage23Candidate, shortTermCheck, physicalStatus, marketCapBin, earningsWindowDays, earningsTimeBucket, twoYearLine, twoYearPattern, twoYearAngleMin, twoYearAngleMax, sort, dir])
 
   const applyView = (next: UsScreenerView) => {
     const normalizedClassification = normalizeUsClassificationFilters({
@@ -651,6 +681,10 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
     setMarketCapBin(next.marketCapBin ?? '')
     setEarningsWindowDays(next.earningsWindowDays ?? '')
     setEarningsTimeBucket(next.earningsTimeBucket ?? '')
+    setTwoYearLine(parseTwoYearLineFilter(next.twoYearLine))
+    setTwoYearPattern(parseTwoYearLinePatternFilter(next.twoYearPattern))
+    setTwoYearAngleMin(next.twoYearAngleMin ?? '')
+    setTwoYearAngleMax(next.twoYearAngleMax ?? '')
     setSort(SORT_VALUES.has(next.sort) ? next.sort : 'ticker')
     setDir(next.dir === 'desc' ? 'desc' : 'asc')
   }
@@ -681,6 +715,10 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
     setMarketCapBin('')
     setEarningsWindowDays('')
     setEarningsTimeBucket('')
+    setTwoYearLine('none')
+    setTwoYearPattern('either')
+    setTwoYearAngleMin('')
+    setTwoYearAngleMax('')
     setSort('ticker')
     setDir('asc')
     setResultLimit(200)
@@ -723,6 +761,9 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
     accelerationPositive ? 'Acceleration > 0' : '',
     forcePositive ? 'Force > 0' : '',
     stage23Candidate ? 'Stage2→3候補' : '',
+    twoYearLine !== 'none'
+      ? `24か月足: ${twoYearLine === 'confirmed' ? '確定ラインあり' : twoYearLine === 'provisional' ? '暫定ラインあり' : '確定・暫定'} / ${twoYearPattern === 'three' ? '3本型' : twoYearPattern === 'four' ? '4本型' : '両型'}${twoYearAngleMin.trim() || twoYearAngleMax.trim() ? ` / ${twoYearAngleMin.trim() || '0'}°〜${twoYearAngleMax.trim() || '90'}°` : ''}`
+      : '',
   ].filter(Boolean)
   const hasScreeningConditions = activeFilters.some((filter) => !filter.startsWith('データ品質:'))
   const exchangeOptions = Array.from(new Set([
@@ -939,7 +980,16 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
         <div className="flex flex-col gap-4 border-b border-[var(--color-border-default)] bg-white px-4 py-4">
           <div className="grid gap-2 md:grid-cols-[minmax(220px,1fr)_minmax(180px,280px)_auto]">
             <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="銘柄コード・企業名を検索（AAPL / Microsoft）" aria-label="銘柄コード・企業名" className="h-9 min-w-0 px-3 text-[13px]" />
-            <select value={effectiveSort} onChange={(event) => setSort(event.target.value)} className="h-9 min-w-0 px-2 text-[13px] font-semibold" aria-label="並び順">
+            <select
+              value={effectiveSort}
+              onChange={(event) => {
+                const nextSort = event.target.value
+                setSort(nextSort)
+                if (nextSort.startsWith('twoYearLine')) setDir('desc')
+              }}
+              className="h-9 min-w-0 px-2 text-[13px] font-semibold"
+              aria-label="並び順"
+            >
               <option value="marketCap" disabled={historicalLocked}>時価総額{historicalLocked ? '（過去日は不可）' : ''}</option>
               <option value="ticker">コード</option>
               <option value="exchange" disabled={historicalLocked}>取引所{historicalLocked ? '（過去日は不可）' : ''}</option>
@@ -958,6 +1008,9 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
               <option value="pes">PES</option>
               <option value="acceleration">Acceleration</option>
               <option value="force">Force</option>
+              <option value="twoYearLineAngleDeg" disabled={twoYearLine === 'none'}>24か月線 角度が大きい順</option>
+              <option value="twoYearLineLastCandleRisePct" disabled={twoYearLine === 'none'}>24か月線 最後の陽線上昇率</option>
+              <option value="twoYearLineConfirmedDistancePriority" disabled={twoYearLine === 'none'}>確定ライン下で近い順</option>
             </select>
             <button type="button" onClick={() => setDir(dir === 'asc' ? 'desc' : 'asc')} className="btn h-9">
               {dir === 'asc' ? <ArrowUpAZ size={14} /> : <ArrowDownAZ size={14} />}
@@ -1211,7 +1264,26 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
             </div>
           </Section>
 
-          <Section step={10} label="HEXステージで絞り込み（任意 / 複数系統 AND）">
+          <Section step={10} label="24か月足ラインで絞り込み（任意）">
+            <TwoYearLineFilterControl
+              value={twoYearLine}
+              onChange={(value) => {
+                setTwoYearLine(value)
+                if (value === 'none' && sort.startsWith('twoYearLine')) {
+                  setSort('ticker')
+                  setDir('asc')
+                }
+              }}
+              pattern={twoYearPattern}
+              onPatternChange={setTwoYearPattern}
+              angleMin={twoYearAngleMin}
+              angleMax={twoYearAngleMax}
+              onAngleMinChange={setTwoYearAngleMin}
+              onAngleMaxChange={setTwoYearAngleMax}
+            />
+          </Section>
+
+          <Section step={11} label="HEXステージで絞り込み（任意 / 複数系統 AND）">
             <div className="mb-2 flex justify-end">
               <Chip active={false} disabled={!hasAnyStage} onClick={() => setStages({})}>× 全てクリア</Chip>
             </div>
@@ -1296,6 +1368,18 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
                         {row.ticker}
                       </Link>
                       <StockPreviewTrigger ticker={row.ticker} market="US" analysisDate={linkDate} context="screener" />
+                      <TwoYearLineResultBadge
+                        status={row.twoYearLineStatus}
+                        pattern={row.twoYearLinePattern}
+                        periods={row.twoYearLinePeriods}
+                        startClose={row.twoYearLineStartClose}
+                        endClose={row.twoYearLineEndClose}
+                        angleDeg={row.twoYearLineAngleDeg}
+                        lastCandleRisePct={row.twoYearLineLastCandleRisePct}
+                        confirmedDistancePct={row.twoYearLineConfirmedDistancePct}
+                        asOfDate={row.twoYearLineAsOfDate}
+                        priceBasisVersion={row.twoYearLinePriceBasisVersion}
+                      />
                       {row.asset_type && row.asset_type !== 'Stock' && (
                         <span className="border border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-1.5 py-0.5 text-[9px] font-black text-[var(--color-text-tertiary)]">
                           {row.asset_type === 'Mutual Fund' ? '投資信託' : row.asset_type}

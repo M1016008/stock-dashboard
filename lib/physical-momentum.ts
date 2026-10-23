@@ -124,7 +124,7 @@ function averageFinite(values: Array<number | null>): number | null {
   return finite.reduce((sum, value) => sum + value, 0) / finite.length
 }
 
-function inferLikelySplitAdjustment(
+export function inferLikelySplitAdjustment(
   previous: PhysicalMomentumInputRow,
   current: PhysicalMomentumInputRow,
 ): number | null {

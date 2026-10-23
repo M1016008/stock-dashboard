@@ -13,7 +13,10 @@ import {
   LineSeries,
   HistogramSeries,
   ColorType,
+  LineStyle,
+  PriceScaleMode,
   type IChartApi,
+  type ISeriesApi,
   type UTCTimestamp,
 } from 'lightweight-charts'
 import type { OHLCV } from '@/types/stock'
@@ -32,6 +35,24 @@ import {
 } from '@/lib/timeframes'
 import { movingAverageColor } from '@/lib/chart-colors'
 import { STAGE_BORDER_COLORS } from '@/lib/hex-stage'
+import {
+  aggregateTwentyFourMonthCandles,
+  standardizedRisingCloseAngleDeg,
+  type RisingCloseLine,
+  type TwoYearCandle,
+} from '@/lib/two-year-candles'
+import {
+  resolveTwoYearLineDisplay,
+  resolveTwoYearLineDisplays,
+  type ResolvedTwoYearLineDisplay,
+  type TwoYearLineSlot,
+} from '@/lib/two-year-line-display'
+import { TwoYearLineSettings, useTwoYearLineDisplaySettings } from '@/components/charts/TwoYearLineSettings'
+import {
+  buildTwoYearLineRegistry,
+  projectRisingCloseLineToDates,
+  type TwoYearLineRegistry,
+} from '@/lib/two-year-line-registry'
 
 export type TvInterval = ChartIntervalCode
 
@@ -58,7 +79,11 @@ interface CandlestickChartProps {
   analysisDate?: string | null
   revealAfterAnalysis?: boolean
   historyData?: OHLCV[]
+  marketSessions?: readonly string[]
+  marketAsOfDate?: string
   compact?: boolean
+  /** Stock Detail と明示的なFixtureだけで24か月足ラインを有効にする。 */
+  showTwoYearLines?: boolean
   /** 'segmented': 主要4足+「その他の足」select、余白なしのツールバー(オプトイン。既定は従来の全タブ表示) */
   toolbarVariant?: 'default' | 'segmented'
   /** 'strip': 要約をチャート直下の1〜2行にまとめる(オプトイン。既定は従来のカード表示) */
@@ -68,6 +93,8 @@ interface CandlestickChartProps {
 
 // segmented ツールバーで常時表示する足。残りは「その他の足」にまとめる
 const PRIMARY_TIMEFRAMES: TvInterval[] = ['D', 'W', 'M', 'Y']
+
+const TWO_YEAR_LINE_HALO_COLOR = 'rgba(255, 255, 255, 0.72)'
 
 // 取得期間 (interval 別に必要 OHLCV 日数の目安)
 const PERIOD_BY_INTERVAL: Record<TvInterval, string> = {
@@ -119,12 +146,17 @@ export function CandlestickChart({
   analysisDate = null,
   revealAfterAnalysis = false,
   historyData,
+  marketSessions,
+  marketAsOfDate,
   compact = false,
+  showTwoYearLines = false,
   toolbarVariant = 'default',
   summaryVariant = 'cards',
   onVisibleRangeChange,
 }: CandlestickChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
+  const twoYearLineExtensionRef = useRef<SVGSVGElement>(null)
+  const paintTwoYearLineExtensionsRef = useRef<() => void>(() => {})
   const rangeHighlightRef = useRef<HTMLDivElement>(null)
   const dragSelectionRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
@@ -136,6 +168,14 @@ export function CandlestickChart({
   const dragStartXRef = useRef(0)
   const draggingRangeRef = useRef(false)
   const [data, setData] = useState<OHLCV[] | null>(null)
+  const [fetchedMarketSessions, setFetchedMarketSessions] = useState<readonly string[]>(marketSessions ?? [])
+  const [fetchedMarketAsOfDate, setFetchedMarketAsOfDate] = useState<string | null>(marketAsOfDate ?? null)
+  const [twoYearRegistry, setTwoYearRegistry] = useState<TwoYearLineRegistry | null>(null)
+  const [twoYearRegistryStatus, setTwoYearRegistryStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
+  const { settings: twoYearDisplaySettings, updateSlot: updateTwoYearSlot, reset: resetTwoYearDisplay } = useTwoYearLineDisplaySettings()
+  const twoYearDisplaysRef = useRef<ReadonlyMap<string, ResolvedTwoYearLineDisplay>>(new Map())
+  const twoYearSeriesEntriesRef = useRef<TwoYearSeriesEntry[]>([])
+  const [priceScaleMode, setPriceScaleMode] = useState<'normal' | 'logarithmic'>('normal')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [activeInterval, setActiveInterval] = useState<TvInterval>(interval)
@@ -145,6 +185,7 @@ export function CandlestickChart({
   const [rangeDragEnabled, setRangeDragEnabled] = useState(false)
   const maLinesKey = effectiveMaLines.join(',')
   const fetchPeriod = historyPeriod ?? PERIOD_BY_INTERVAL[effectiveInterval] ?? defaultPeriodForInterval(effectiveInterval)
+  const needsMarketCalendar = effectiveInterval === '2Y'
   const visiblePeriod = initialVisiblePeriod ?? initialVisiblePeriodForInterval(effectiveInterval)
   const canRangeDragSelect = Boolean(enableRangeDragSelect && onVisibleRangeChange)
 
@@ -172,19 +213,34 @@ export function CandlestickChart({
   useEffect(() => {
     if (historyData) {
       setData(historyData)
+      setFetchedMarketSessions(marketSessions ?? [])
+      setFetchedMarketAsOfDate(marketAsOfDate ?? marketSessions?.at(-1) ?? null)
       setLoading(false)
       setError(null)
       return
     }
     let cancelled = false
+    const controller = new AbortController()
     setLoading(true)
     setError(null)
     const basePath = market === 'US' ? '/api/us/history' : '/api/history'
-    fetch(`${basePath}/${encodeURIComponent(ticker)}?period=${fetchPeriod}`, { cache: 'no-store' })
+    const query = new URLSearchParams({ period: fetchPeriod })
+    if (needsMarketCalendar) {
+      query.set('meta', '1')
+      query.set('calendar', '1')
+    }
+    if (analysisDate && !revealAfterAnalysis) query.set('asOfDate', analysisDate)
+    fetch(`${basePath}/${encodeURIComponent(ticker)}?${query.toString()}`, {
+      cache: 'no-store',
+      signal: controller.signal,
+    })
       .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
-      .then((rows: OHLCV[]) => {
+      .then((payload: OHLCV[] | { rows: OHLCV[]; marketSessions?: string[]; marketAsOfDate?: string | null }) => {
         if (cancelled) return
+        const rows = Array.isArray(payload) ? payload : payload.rows
         setData(rows)
+        setFetchedMarketSessions(Array.isArray(payload) ? [] : payload.marketSessions ?? [])
+        setFetchedMarketAsOfDate(Array.isArray(payload) ? null : payload.marketAsOfDate ?? null)
         setLoading(false)
       })
       .catch(e => {
@@ -192,35 +248,140 @@ export function CandlestickChart({
         setError(e.message ?? 'fetch failed')
         setLoading(false)
       })
-    return () => { cancelled = true }
-  }, [ticker, fetchPeriod, historyData, market])
+    return () => {
+      cancelled = true
+      controller.abort()
+    }
+  }, [analysisDate, ticker, fetchPeriod, historyData, market, marketAsOfDate, marketSessions, needsMarketCalendar, revealAfterAnalysis])
+
+  // 24か月足の判定元は表示中の時間足から独立させる。
+  useEffect(() => {
+    if (compact || !showTwoYearLines) {
+      setTwoYearRegistry(null)
+      setTwoYearRegistryStatus('idle')
+      return
+    }
+    const requestedAsOfDate = analysisDate && !revealAfterAnalysis
+      ? [analysisDate, marketAsOfDate, marketSessions?.at(-1), historyData?.at(-1)?.date]
+          .filter((value): value is string => Boolean(value))
+          .sort()
+          .at(0)
+      : marketAsOfDate ?? marketSessions?.at(-1) ?? historyData?.at(-1)?.date
+    if (historyData) {
+      if (!requestedAsOfDate) {
+        setTwoYearRegistry(null)
+        setTwoYearRegistryStatus('error')
+        return
+      }
+      setTwoYearRegistry(buildTwoYearLineRegistry({
+        market,
+        securityKey: `fixture:${market}:${ticker}`,
+        asOfDate: requestedAsOfDate,
+        priceBasisVersion: 'fixture-v1',
+        history: historyData.filter((row) => row.date <= requestedAsOfDate),
+        exchangeSessions: (marketSessions ?? []).filter((date) => date <= requestedAsOfDate),
+      }))
+      setTwoYearRegistryStatus('ready')
+      return
+    }
+    let cancelled = false
+    const controller = new AbortController()
+    const basePath = market === 'US' ? '/api/us/history' : '/api/history'
+    setTwoYearRegistry(null)
+    setTwoYearRegistryStatus('loading')
+    const query = new URLSearchParams({ twoYearRegistry: '1' })
+    if (requestedAsOfDate) query.set('asOfDate', requestedAsOfDate)
+    fetch(`${basePath}/${encodeURIComponent(ticker)}?${query.toString()}`, {
+      cache: 'no-store',
+      signal: controller.signal,
+    })
+      .then((response) => response.ok ? response.json() : Promise.reject(new Error(`HTTP ${response.status}`)))
+      .then((registry: TwoYearLineRegistry) => {
+        if (cancelled) return
+        setTwoYearRegistry(registry)
+        setTwoYearRegistryStatus('ready')
+      })
+      .catch((registryError) => {
+        if (cancelled) return
+        if (registryError instanceof DOMException && registryError.name === 'AbortError') return
+        setTwoYearRegistry(null)
+        setTwoYearRegistryStatus('error')
+      })
+    return () => {
+      cancelled = true
+      controller.abort()
+    }
+  }, [analysisDate, compact, historyData, market, marketAsOfDate, marketSessions, revealAfterAnalysis, showTwoYearLines, ticker])
 
   // 日足 → 指定時間軸に集約 + MA 計算用に整形
-  const { grouped, candles, mas, resolvedAnalysisDate } = useMemo(() => {
+  const { grouped, candles, mas, resolvedAnalysisDate, twoYearCandles, risingCloseLines, projectedRisingCloseLines } = useMemo(() => {
     if (!data || data.length === 0) {
       return {
         grouped: [] as OHLCV[],
         candles: [],
         mas: {} as Record<number, { time: UTCTimestamp; value: number }[]>,
         resolvedAnalysisDate: null as string | null,
+        twoYearCandles: [] as TwoYearCandle[],
+        risingCloseLines: [] as RisingCloseLine[],
+        projectedRisingCloseLines: [] as Array<{ line: RisingCloseLine; points: Array<{ time: string; value: number }> }>,
       }
     }
 
     const analysisRows = analysisDate && !revealAfterAnalysis
       ? data.filter((row) => row.date <= analysisDate)
       : data
-    const grouped = resampleOhlcv(analysisRows, intervalToSpec(effectiveInterval))
+    const marketCalendarAsOfDate = analysisDate && !revealAfterAnalysis
+      ? [analysisDate, fetchedMarketAsOfDate, fetchedMarketSessions.at(-1)]
+          .filter((value): value is string => Boolean(value))
+          .sort()
+          .at(0) ?? null
+      : fetchedMarketAsOfDate ?? fetchedMarketSessions.at(-1) ?? null
+    const aggregationAsOfDate = marketCalendarAsOfDate ?? analysisRows.at(-1)?.date ?? null
+    const twoYearCandles = effectiveInterval === '2Y'
+      ? twoYearRegistry?.candles ?? (aggregationAsOfDate ? aggregateTwentyFourMonthCandles(analysisRows, {
+          market,
+          asOfDate: aggregationAsOfDate,
+          exchangeSessions: fetchedMarketSessions,
+        }) : [])
+      : []
+    const grouped = effectiveInterval === '2Y'
+      ? twoYearCandles.map(({ date, open, high, low, close, volume, adjustedClose }) => ({
+          date,
+          open,
+          high,
+          low,
+          close,
+          volume,
+          adjustedClose,
+        }))
+      : resampleOhlcv(analysisRows, intervalToSpec(effectiveInterval))
     const resolvedAnalysisDate = analysisDate
-      ? grouped.filter((row) => row.date <= analysisDate).at(-1)?.date ?? null
+      ? effectiveInterval === '2Y'
+        ? twoYearCandles.find((candle) => analysisDate >= candle.periodStart && analysisDate <= candle.periodEnd)?.date ?? null
+        : grouped.filter((row) => row.date <= analysisDate).at(-1)?.date ?? null
       : null
 
-    const candles = grouped.map(d => ({
-      time:  dateToTime(d.date),
-      open:  d.open,
-      high:  d.high,
-      low:   d.low,
-      close: d.close,
-    }))
+    const twoYearByDate = new Map(twoYearCandles.map((candle) => [candle.date, candle]))
+    const candles = grouped.map(d => {
+      const twoYear = twoYearByDate.get(d.date)
+      const incomplete = twoYear?.status === 'incomplete'
+      const forming = twoYear?.status === 'forming'
+      return {
+        time: dateToTime(d.date),
+        open: d.open,
+        high: d.high,
+        low: d.low,
+        close: d.close,
+        ...(incomplete ? {
+          color: 'rgba(148, 163, 184, 0.38)',
+          borderColor: '#94a3b8',
+          wickColor: '#94a3b8',
+        } : forming ? {
+          borderColor: '#d97706',
+          wickColor: '#d97706',
+        } : {}),
+      }
+    })
 
     // MA 計算 (SMA、各期間ぶん)
     const mas: Record<number, { time: UTCTimestamp; value: number }[]> = {}
@@ -235,8 +396,48 @@ export function CandlestickChart({
       mas[period] = series
     }
 
-    return { grouped, candles, mas, resolvedAnalysisDate }
-  }, [analysisDate, data, effectiveInterval, revealAfterAnalysis, selectedMAs])
+    // Fail closed while the canonical registry is loading or unavailable. This
+    // prevents a locally recomputed line from using a different price basis.
+    const risingCloseLines = showTwoYearLines && twoYearRegistryStatus === 'ready'
+      ? twoYearRegistry?.lines ?? []
+      : []
+    const projectedRisingCloseLines = risingCloseLines
+      .map((line) => ({ line, points: projectRisingCloseLineToDates(line, grouped.map((row) => row.date)) }))
+      .filter((entry) => entry.points.length >= 2)
+
+    return { grouped, candles, mas, resolvedAnalysisDate, twoYearCandles, risingCloseLines, projectedRisingCloseLines }
+  }, [analysisDate, data, effectiveInterval, fetchedMarketAsOfDate, fetchedMarketSessions, market, revealAfterAnalysis, selectedMAs, showTwoYearLines, twoYearRegistry, twoYearRegistryStatus])
+
+  const twoYearLineDisplays = useMemo(
+    () => resolveTwoYearLineDisplays(projectedRisingCloseLines.map((entry) => entry.line), twoYearDisplaySettings),
+    [projectedRisingCloseLines, twoYearDisplaySettings],
+  )
+  twoYearDisplaysRef.current = twoYearLineDisplays
+  const twoYearSlotDisplays = useMemo(() => {
+    const bySlot: Partial<Record<TwoYearLineSlot, ResolvedTwoYearLineDisplay>> = {}
+    for (const display of twoYearLineDisplays.values()) {
+      if (display.slot) bySlot[display.slot] = display
+    }
+    return bySlot
+  }, [twoYearLineDisplays])
+
+  // 設定変更はチャートを作り直さず、既存シリーズに即時反映する
+  useEffect(() => {
+    for (const entry of twoYearSeriesEntriesRef.current) {
+      const display = twoYearLineDisplays.get(entry.line.id)
+      if (!display) continue
+      Object.assign(entry, {
+        mainColor: display.color,
+        mainWidth: display.width,
+        lineStyle: lightweightLineStyle(display.style),
+        dashArray: display.dashArray,
+        slot: display.slot,
+      })
+      entry.haloSeries.applyOptions({ lineStyle: entry.lineStyle })
+      entry.series.applyOptions({ color: entry.mainColor, lineStyle: entry.lineStyle })
+    }
+    paintTwoYearLineExtensionsRef.current()
+  }, [twoYearLineDisplays])
 
   const candleDates = useMemo(() => grouped.map((row) => row.date), [grouped])
   const timeframeSummary = useMemo(
@@ -247,6 +448,7 @@ export function CandlestickChart({
   // チャート描画
   useEffect(() => {
     if (!containerRef.current || candles.length === 0) return
+    const chartContainer = containerRef.current
 
     // 既存チャート破棄
     if (chartRef.current) {
@@ -254,8 +456,8 @@ export function CandlestickChart({
       chartRef.current = null
     }
 
-    const chart = createChart(containerRef.current, {
-      width: containerRef.current.clientWidth,
+    const chart = createChart(chartContainer, {
+      width: chartContainer.clientWidth,
       height,
       layout: {
         background: { type: ColorType.Solid, color: '#ffffff' },
@@ -269,9 +471,11 @@ export function CandlestickChart({
       timeScale: {
         borderColor: 'rgba(0,0,0,0.10)',
         timeVisible: false,
+        rightOffset: showTwoYearLines && projectedRisingCloseLines.length > 0 ? 6 : 0,
       },
       rightPriceScale: {
         borderColor: 'rgba(0,0,0,0.10)',
+        mode: priceScaleMode === 'logarithmic' ? PriceScaleMode.Logarithmic : PriceScaleMode.Normal,
       },
       crosshair: { mode: 1 },
     })
@@ -292,7 +496,9 @@ export function CandlestickChart({
         position: 'aboveBar',
         color: '#b45309',
         shape: 'square',
-        text: revealAfterAnalysis ? '分析基準' : 'この日時点',
+        text: effectiveInterval === '2Y'
+          ? (revealAfterAnalysis ? '分析対象期間' : 'この期間')
+          : (revealAfterAnalysis ? '分析基準' : 'この日時点'),
       }])
     }
 
@@ -323,6 +529,110 @@ export function CandlestickChart({
       })
       series.setData(mas[period] ?? [])
     }
+
+    const twoYearLineSeries = projectedRisingCloseLines.map(({ line, points }) => {
+      const display = twoYearDisplaysRef.current.get(line.id) ?? resolveTwoYearLineDisplay(line.status, null, {})
+      const mainColor = display.color
+      const mainWidth = display.width
+      const lineStyle = lightweightLineStyle(display.style)
+      const data = points.map((point) => ({
+        time: dateToTime(point.time),
+        value: point.value,
+      }))
+      const haloSeries = chart.addSeries(LineSeries, {
+        color: TWO_YEAR_LINE_HALO_COLOR,
+        lineWidth: 4,
+        lineStyle,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        crosshairMarkerVisible: false,
+        autoscaleInfoProvider: () => null,
+      })
+      haloSeries.setData(data)
+      const series = chart.addSeries(LineSeries, {
+        color: mainColor,
+        lineWidth: mainWidth,
+        lineStyle,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        crosshairMarkerVisible: true,
+        autoscaleInfoProvider: () => null,
+      })
+      series.setData(data)
+      return {
+        line, points, series, haloSeries, mainColor, mainWidth, lineStyle,
+        dashArray: display.dashArray, slot: display.slot,
+      } satisfies TwoYearSeriesEntry
+    })
+    twoYearSeriesEntriesRef.current = twoYearLineSeries
+
+    const paintTwoYearLineExtensions = () => {
+      const layer = twoYearLineExtensionRef.current
+      const container = containerRef.current
+      if (!layer || !container) return
+      layer.replaceChildren()
+      const plotWidth = chart.timeScale().width()
+      const plotHeight = Math.max(0, container.clientHeight - chart.timeScale().height())
+      if (plotWidth <= 0 || plotHeight <= 0) return
+      layer.setAttribute('viewBox', `0 0 ${plotWidth} ${plotHeight}`)
+      layer.style.width = `${plotWidth}px`
+      layer.style.height = `${plotHeight}px`
+
+      for (const entry of twoYearLineSeries) {
+        const coordinates = entry.points
+          .map((point) => ({
+            x: chart.timeScale().timeToCoordinate(dateToTime(point.time)),
+            y: entry.series.priceToCoordinate(point.value),
+          }))
+          .flatMap((point) => point.x === null || point.y === null
+            ? []
+            : [{ x: Number(point.x), y: Number(point.y) }])
+        const end = coordinates.at(-1)
+        const previous = [...coordinates].reverse().find((point) => end && Math.abs(point.x - end.x) > 0.5)
+        if (!end || !previous) continue
+        const rightEdge = plotWidth - 1
+        if (end.x >= rightEdge) continue
+        const slope = (end.y - previous.y) / (end.x - previous.x)
+        if (!Number.isFinite(slope)) continue
+        const startX = Math.max(0, end.x)
+        const startY = end.y + slope * (startX - end.x)
+        const endY = end.y + slope * (rightEdge - end.x)
+        if (![startY, endY].every(Number.isFinite)) continue
+        appendTwoYearExtensionLine(layer, {
+          x1: startX,
+          y1: startY,
+          x2: rightEdge,
+          y2: endY,
+          color: TWO_YEAR_LINE_HALO_COLOR,
+          width: 4,
+          dashArray: entry.dashArray,
+          status: entry.line.status,
+          slot: entry.slot,
+          halo: true,
+        })
+        appendTwoYearExtensionLine(layer, {
+          x1: startX,
+          y1: startY,
+          x2: rightEdge,
+          y2: endY,
+          color: entry.mainColor,
+          width: entry.mainWidth,
+          dashArray: entry.dashArray,
+          status: entry.line.status,
+          slot: entry.slot,
+          halo: false,
+        })
+      }
+    }
+    let extensionPaintFrame: number | null = null
+    const scheduleTwoYearLineExtensionPaint = () => {
+      if (extensionPaintFrame !== null) window.cancelAnimationFrame(extensionPaintFrame)
+      extensionPaintFrame = window.requestAnimationFrame(() => {
+        extensionPaintFrame = null
+        paintTwoYearLineExtensions()
+      })
+    }
+    paintTwoYearLineExtensionsRef.current = paintTwoYearLineExtensions
 
     const paintSelectedRange = () => {
       const target = rangeHighlightRef.current
@@ -356,6 +666,7 @@ export function CandlestickChart({
 
     const emitVisibleRange = (rawRange: unknown) => {
       paintSelectedRange()
+      scheduleTwoYearLineExtensionPaint()
       if (!onVisibleRangeChangeRef.current || applyingRangeRef.current || !readyForVisibleEventsRef.current) return
       const visibleRange = visibleTimeRangeToDateRange(rawRange, candleDates)
       if (!visibleRange) return
@@ -366,6 +677,7 @@ export function CandlestickChart({
       lastEmittedRangeKeyRef.current = key
       onVisibleRangeChangeRef.current(visibleRange, effectiveInterval)
     }
+    const repaintTwoYearLineExtensions = () => scheduleTwoYearLineExtensionPaint()
 
     applyingRangeRef.current = true
     readyForVisibleEventsRef.current = false
@@ -378,7 +690,9 @@ export function CandlestickChart({
       setVisibleDateRange(chart, initialRange, candleDates)
     }
     paintSelectedRange()
+    paintTwoYearLineExtensions()
     chart.timeScale().subscribeVisibleTimeRangeChange(emitVisibleRange)
+    chart.timeScale().subscribeVisibleLogicalRangeChange(repaintTwoYearLineExtensions)
     chartRef.current = chart
     const readyTimer = window.setTimeout(() => {
       applyingRangeRef.current = false
@@ -390,14 +704,33 @@ export function CandlestickChart({
       if (containerRef.current && chartRef.current) {
         chartRef.current.applyOptions({ width: containerRef.current.clientWidth })
         paintSelectedRange()
+        scheduleTwoYearLineExtensionPaint()
       }
     }
+    const resizeObserver = new ResizeObserver(resize)
+    resizeObserver.observe(chartContainer)
     window.addEventListener('resize', resize)
+    chartContainer.addEventListener('wheel', scheduleTwoYearLineExtensionPaint, { passive: true })
+    chartContainer.addEventListener('pointermove', scheduleTwoYearLineExtensionPaint)
+    chartContainer.addEventListener('pointerup', scheduleTwoYearLineExtensionPaint)
+    chartContainer.addEventListener('pointercancel', scheduleTwoYearLineExtensionPaint)
+    chartContainer.addEventListener('dblclick', scheduleTwoYearLineExtensionPaint)
 
     return () => {
+      if (extensionPaintFrame !== null) window.cancelAnimationFrame(extensionPaintFrame)
+      resizeObserver.disconnect()
       window.removeEventListener('resize', resize)
+      chartContainer.removeEventListener('wheel', scheduleTwoYearLineExtensionPaint)
+      chartContainer.removeEventListener('pointermove', scheduleTwoYearLineExtensionPaint)
+      chartContainer.removeEventListener('pointerup', scheduleTwoYearLineExtensionPaint)
+      chartContainer.removeEventListener('pointercancel', scheduleTwoYearLineExtensionPaint)
+      chartContainer.removeEventListener('dblclick', scheduleTwoYearLineExtensionPaint)
       window.clearTimeout(readyTimer)
       chart.timeScale().unsubscribeVisibleTimeRangeChange(emitVisibleRange)
+      chart.timeScale().unsubscribeVisibleLogicalRangeChange(repaintTwoYearLineExtensions)
+      paintTwoYearLineExtensionsRef.current = () => {}
+      twoYearSeriesEntriesRef.current = []
+      twoYearLineExtensionRef.current?.replaceChildren()
       if (chartRef.current) {
         chartRef.current.remove()
         chartRef.current = null
@@ -413,10 +746,18 @@ export function CandlestickChart({
     mas,
     resolvedAnalysisDate,
     revealAfterAnalysis,
+    projectedRisingCloseLines,
     selectedMAs,
     syncSelectedRange,
     visiblePeriod,
   ])
+
+  useEffect(() => {
+    chartRef.current?.priceScale('right').applyOptions({
+      mode: priceScaleMode === 'logarithmic' ? PriceScaleMode.Logarithmic : PriceScaleMode.Normal,
+    })
+    window.requestAnimationFrame(() => paintTwoYearLineExtensionsRef.current())
+  }, [priceScaleMode])
 
   useEffect(() => {
     const chart = chartRef.current
@@ -563,7 +904,7 @@ export function CandlestickChart({
   ))
 
   return (
-    <div>
+    <div style={chartRootStyle}>
       {/* MA トグル */}
       <div style={segmented ? segmentedToolbarStyle : {
         display: 'flex',
@@ -656,11 +997,51 @@ export function CandlestickChart({
             )}
           </div>
         )}
+        {!compact && (
+          <div role="group" aria-label="価格スケール"style={priceScaleToggleStyle}>
+            <button
+              type="button"
+              onClick={() => setPriceScaleMode('normal')}
+              aria-pressed={priceScaleMode === 'normal'}
+              style={priceScaleButtonStyle(priceScaleMode === 'normal')}
+            >
+              通常
+            </button>
+            <button
+              type="button"
+              onClick={() => setPriceScaleMode('logarithmic')}
+              aria-pressed={priceScaleMode === 'logarithmic'}
+              style={priceScaleButtonStyle(priceScaleMode === 'logarithmic')}
+            >
+              対数
+            </button>
+          </div>
+        )}
+        {!compact && showTwoYearLines && (
+          <TwoYearLineSettings
+            settings={twoYearDisplaySettings}
+            displays={twoYearSlotDisplays}
+            onChange={updateTwoYearSlot}
+            onReset={resetTwoYearDisplay}
+          />
+        )}
       </div>
+      {!compact && showTwoYearLines && (
+        <TwoYearCandleLegend
+          candles={twoYearCandles}
+          lines={risingCloseLines}
+          status={twoYearRegistryStatus}
+          displays={twoYearLineDisplays}
+          calendarAvailable={twoYearRegistry
+            ? twoYearRegistry.availability === 'available'
+            : fetchedMarketSessions.length > 0 && Boolean(fetchedMarketAsOfDate)}
+          showCandleState={effectiveInterval === '2Y'}
+        />
+      )}
       {!compact && summaryVariant === 'cards' && <TimeframeSummaryBar summary={timeframeSummary} />}
 
       {/* チャートコンテナ */}
-      <div style={{ position: 'relative', height }}>
+      <div style={{ position: 'relative', width: '100%', maxWidth: '100%', minWidth: 0, height }}>
         {loading && (
           <div style={loadingOverlayStyle}>
             <span style={loadingTextStyle}>OHLCV 読込中... {ticker}</span>
@@ -678,7 +1059,13 @@ export function CandlestickChart({
             <span style={loadingTextStyle}>データなし</span>
           </div>
         )}
-        <div ref={containerRef} style={{ height, width: '100%' }} />
+        <div ref={containerRef} style={{ height, width: '100%', maxWidth: '100%', minWidth: 0 }} />
+        <svg
+          ref={twoYearLineExtensionRef}
+          data-two-year-line-extension-layer
+          style={twoYearLineExtensionLayerStyle}
+          aria-hidden="true"
+        />
         <div ref={rangeHighlightRef} style={rangeHighlightStyle} data-visible="false" />
         {canRangeDragSelect && (
           <>
@@ -702,6 +1089,53 @@ export function CandlestickChart({
 }
 
 // ─── ヘルパー ───
+
+type TwoYearSeriesEntry = {
+  line: RisingCloseLine
+  points: ReadonlyArray<{ time: string; value: number }>
+  series: ISeriesApi<'Line'>
+  haloSeries: ISeriesApi<'Line'>
+  mainColor: string
+  mainWidth: 2 | 3
+  lineStyle: LineStyle
+  dashArray: string | null
+  slot: TwoYearLineSlot | null
+}
+
+function lightweightLineStyle(style: ResolvedTwoYearLineDisplay['style']): LineStyle {
+  return style === 'dashed' ? LineStyle.Dashed : style === 'dotted' ? LineStyle.Dotted : LineStyle.Solid
+}
+
+function appendTwoYearExtensionLine(
+  layer: SVGSVGElement,
+  options: Readonly<{
+    x1: number
+    y1: number
+    x2: number
+    y2: number
+    color: string
+    width: number
+    dashArray: string | null
+    status: RisingCloseLine['status']
+    slot: TwoYearLineSlot | null
+    halo: boolean
+  }>,
+) {
+  const line = document.createElementNS('http://www.w3.org/2000/svg', 'line')
+  line.setAttribute('x1', String(options.x1))
+  line.setAttribute('y1', String(options.y1))
+  line.setAttribute('x2', String(options.x2))
+  line.setAttribute('y2', String(options.y2))
+  line.setAttribute('stroke', options.color)
+  line.setAttribute('stroke-width', String(options.width))
+  line.setAttribute('stroke-linecap', 'round')
+  line.setAttribute('vector-effect', 'non-scaling-stroke')
+  line.setAttribute('data-two-year-line-extension', options.status)
+  line.setAttribute('data-halo', options.halo ? 'true' : 'false')
+  if (options.slot) line.setAttribute('data-two-year-line-slot', options.slot)
+  if (options.dashArray) line.setAttribute('stroke-dasharray', options.dashArray)
+  layer.appendChild(line)
+}
 
 type TimeframeSummary = {
   intervalLabel: string
@@ -1039,6 +1473,68 @@ function TimeframeSummaryBar({ summary }: { summary: TimeframeSummary | null }) 
   )
 }
 
+function TwoYearCandleLegend({
+  candles,
+  lines,
+  status,
+  displays,
+  calendarAvailable,
+  showCandleState,
+}: {
+  candles: readonly TwoYearCandle[]
+  lines: readonly RisingCloseLine[]
+  status: 'idle' | 'loading' | 'ready' | 'error'
+  displays: ReadonlyMap<string, ResolvedTwoYearLineDisplay>
+  calendarAvailable: boolean
+  showCandleState: boolean
+}) {
+  const confirmedLine = lines.find((line) => line.status === 'confirmed') ?? null
+  const provisionalLine = lines.find((line) => line.status === 'provisional') ?? null
+  const confirmedDisplay = (confirmedLine && displays.get(confirmedLine.id)) || resolveTwoYearLineDisplay('confirmed', null, {})
+  const provisionalDisplay = (provisionalLine && displays.get(provisionalLine.id)) || resolveTwoYearLineDisplay('provisional', null, {})
+  const formingCandles = candles.filter((candle) => candle.status === 'forming').length
+  const incompleteCandles = candles.filter((candle) => candle.status === 'incomplete').length
+  const formingPeriods = candles
+    .filter((candle) => candle.status === 'forming')
+    .map((candle) => `${candle.startYear}–${candle.startYear + 1}`)
+    .join(', ')
+  return (
+    <div style={twoYearLegendStyle} data-two-year-chart-legend role="note" aria-live="polite" aria-label="2年足と上昇終値ラインの状態">
+      <strong style={twoYearLegendTitleStyle}>24か月足 上昇終値ライン</strong>
+      <span style={twoYearLegendItemStyle}>
+        <i
+          style={legendSwatchStyle(confirmedDisplay)}
+          data-two-year-legend-swatch="confirmed"
+          data-line-style={confirmedDisplay.style}
+          data-line-color={confirmedDisplay.color}
+          aria-hidden="true"
+        />
+        {confirmedLine ? `確定ライン・${confirmedLine.pattern === 'three' ? '3本型' : '4本型'} ${formatLineAngle(confirmedLine)}` : '確定ラインなし'}
+      </span>
+      <span style={twoYearLegendItemStyle}>
+        <i
+          style={legendSwatchStyle(provisionalDisplay)}
+          data-two-year-legend-swatch="provisional"
+          data-line-style={provisionalDisplay.style}
+          data-line-color={provisionalDisplay.color}
+          aria-hidden="true"
+        />
+        {provisionalLine ? `暫定ライン・${provisionalLine.pattern === 'three' ? '3本型' : '4本型'} ${formatLineAngle(provisionalLine)}` : '暫定ラインなし'}
+      </span>
+      {showCandleState && formingCandles > 0 && <span style={twoYearFormingBadgeStyle}>形成中 {formingPeriods || formingCandles}（橙枠）</span>}
+      {showCandleState && incompleteCandles > 0 && <span style={twoYearIncompleteBadgeStyle}>不完全足 {incompleteCandles}（灰色・判定外）</span>}
+      {status === 'loading' && <span style={twoYearIncompleteBadgeStyle}>ライン判定を確認中</span>}
+      {status === 'error' && <span style={twoYearIncompleteBadgeStyle}>ライン判定を取得できません</span>}
+      {status === 'ready' && !calendarAvailable && <span style={twoYearIncompleteBadgeStyle}>市場日カレンダー未確認（ライン判定停止）</span>}
+    </div>
+  )
+}
+
+function formatLineAngle(line: RisingCloseLine): string {
+  const angle = standardizedRisingCloseAngleDeg(line)
+  return angle === null ? '' : `${angle.toFixed(1)}°`
+}
+
 function SummaryChip({ label, main, sub, tone }: { label: string; main: string; sub?: string; tone: SummaryTone }) {
   const palette = summaryTonePalette(tone)
   return (
@@ -1208,6 +1704,21 @@ const loadingTextStyle: React.CSSProperties = {
   fontFamily: 'var(--font-mono)',
 }
 
+const twoYearLineExtensionLayerStyle: React.CSSProperties = {
+  position: 'absolute',
+  top: 0,
+  left: 0,
+  overflow: 'hidden',
+  pointerEvents: 'none',
+  zIndex: 1,
+}
+
+const chartRootStyle: React.CSSProperties = {
+  width: '100%',
+  maxWidth: '100%',
+  minWidth: 0,
+}
+
 const timeframeSelectorStyle: React.CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
@@ -1254,6 +1765,9 @@ const segmentedToolbarStyle: React.CSSProperties = {
   gap: '4px 12px',
   alignItems: 'center',
   flexWrap: 'wrap',
+  width: '100%',
+  maxWidth: '100%',
+  minWidth: 0,
   marginBottom: '8px',
 }
 
@@ -1261,7 +1775,9 @@ const segmentedGroupStyle: React.CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
   gap: '6px',
+  flexWrap: 'wrap',
   maxWidth: '100%',
+  minWidth: 0,
 }
 
 const segmentedTimeframesStyle: React.CSSProperties = {
@@ -1304,6 +1820,31 @@ const segmentedMaGroupStyle: React.CSSProperties = {
   alignItems: 'center',
   flexWrap: 'wrap',
   gap: '2px 12px',
+  maxWidth: '100%',
+  minWidth: 0,
+}
+
+const priceScaleToggleStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  marginLeft: 'auto',
+  border: '1px solid var(--color-border-default)',
+  borderRadius: 'var(--radius-sm)',
+  overflow: 'hidden',
+  background: '#fff',
+}
+
+function priceScaleButtonStyle(active: boolean): React.CSSProperties {
+  return {
+    minHeight: '40px',
+    border: 0,
+    borderLeft: '1px solid var(--color-border-soft)',
+    background: active ? 'var(--color-brand-900)' : '#fff',
+    color: active ? '#fff' : 'var(--text-secondary)',
+    fontSize: '11px',
+    fontWeight: 700,
+    padding: '0 9px',
+    cursor: 'pointer',
+  }
 }
 
 const summaryStripStyle: React.CSSProperties = {
@@ -1313,6 +1854,57 @@ const summaryStripStyle: React.CSSProperties = {
   paddingTop: '8px',
   borderTop: '1px solid var(--color-border-soft)',
   color: 'var(--text-secondary)',
+}
+
+const twoYearLegendStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  flexWrap: 'wrap',
+  gap: '6px 12px',
+  marginTop: '8px',
+  padding: '7px 9px',
+  border: '1px solid var(--color-border-soft)',
+  borderRadius: '6px',
+  background: 'var(--bg-subtle)',
+  color: 'var(--text-secondary)',
+  fontSize: '11px',
+  lineHeight: 1.4,
+}
+
+const twoYearLegendTitleStyle: React.CSSProperties = {
+  color: 'var(--text-primary)',
+  fontSize: '11px',
+}
+
+const twoYearLegendItemStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: '5px',
+  whiteSpace: 'nowrap',
+}
+
+function legendSwatchStyle(display: ResolvedTwoYearLineDisplay): React.CSSProperties {
+  return {
+    display: 'inline-block',
+    width: '22px',
+    borderTop: `${display.width}px ${display.style} ${display.color}`,
+  }
+}
+
+const twoYearFormingBadgeStyle: React.CSSProperties = {
+  border: '1px solid rgba(217, 119, 6, 0.32)',
+  borderRadius: '4px',
+  background: '#fffbeb',
+  color: '#92400e',
+  padding: '2px 5px',
+}
+
+const twoYearIncompleteBadgeStyle: React.CSSProperties = {
+  border: '1px solid rgba(100, 116, 139, 0.28)',
+  borderRadius: '4px',
+  background: '#f8fafc',
+  color: '#475569',
+  padding: '2px 5px',
 }
 
 const summaryStripBadgeStyle: React.CSSProperties = {

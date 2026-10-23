@@ -3,12 +3,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db/client'
 import { ohlcvDaily } from '@/lib/db/schema'
-import { and, asc, eq, gte } from 'drizzle-orm'
+import { and, asc, desc, eq, gte, lte } from 'drizzle-orm'
 import type { OHLCV } from '@/types/stock'
 import { parseTimeframeSpec, resampleOhlcv, specToIntervalCode } from '@/lib/timeframes'
 import { loadManualOhlcvRows } from '@/lib/manual-ohlcv'
 import { decodePathSegment } from '@/lib/url-path'
 import { adjustLikelySplitOhlcv } from '@/lib/physical-momentum'
+import { twoYearBlockStartYear, twoYearPeriod } from '@/lib/two-year-candles'
+import { buildTwoYearLineRegistry } from '@/lib/two-year-line-registry'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -33,7 +35,12 @@ export async function GET(
     const { ticker: rawTicker } = await params
     const ticker = decodePathSegment(rawTicker).replace(/\.T$/i, '')
     const { searchParams } = new URL(request.url)
-    const period = searchParams.get('period') ?? '1y'
+    const wantsTwoYearRegistry = searchParams.get('twoYearRegistry') === '1'
+    const requestedAsOfDate = parseAsOfDate(searchParams.get('asOfDate'))
+    if (searchParams.has('asOfDate') && !requestedAsOfDate) {
+      return NextResponse.json({ error: 'invalid_as_of_date' }, { status: 400 })
+    }
+    const period = wantsTwoYearRegistry ? 'all' : searchParams.get('period') ?? '1y'
     const timeframeSpec = parseTimeframeSpec({
       interval: searchParams.get('interval'),
       timeframe: searchParams.get('timeframe'),
@@ -57,16 +64,21 @@ export async function GET(
     }
     const safeDays = days ?? PERIOD_DAYS['1y']
 
+    const periodAnchor = requestedAsOfDate ? new Date(`${requestedAsOfDate}T00:00:00Z`).getTime() : Date.now()
     const fromDate = period === 'all'
       ? null
-      : new Date(Date.now() - safeDays * 86_400_000).toISOString().slice(0, 10)
+      : new Date(periodAnchor - safeDays * 86_400_000).toISOString().slice(0, 10)
     let source: 'jquants' | 'manual_ohlcv' = 'jquants'
     const rows = await db
       .select()
       .from(ohlcvDaily)
       .where(fromDate === null
-        ? eq(ohlcvDaily.ticker, ticker)
-        : and(eq(ohlcvDaily.ticker, ticker), gte(ohlcvDaily.date, fromDate)))
+        ? requestedAsOfDate
+          ? and(eq(ohlcvDaily.ticker, ticker), lte(ohlcvDaily.date, requestedAsOfDate))
+          : eq(ohlcvDaily.ticker, ticker)
+        : requestedAsOfDate
+          ? and(eq(ohlcvDaily.ticker, ticker), gte(ohlcvDaily.date, fromDate), lte(ohlcvDaily.date, requestedAsOfDate))
+          : and(eq(ohlcvDaily.ticker, ticker), gte(ohlcvDaily.date, fromDate)))
       .orderBy(asc(ohlcvDaily.date))
 
     let history: OHLCV[] = rows.map(r => ({
@@ -78,7 +90,7 @@ export async function GET(
       volume: r.volume,
     }))
     if (history.length === 0) {
-      history = await loadManualOhlcvRows(ticker, { fromDate })
+      history = await loadManualOhlcvRows(ticker, { fromDate, asOfDate: requestedAsOfDate })
       if (history.length > 0) {
         source = 'manual_ohlcv'
       }
@@ -87,7 +99,64 @@ export async function GET(
     const adjustedHistory = source === 'jquants' ? adjustLikelySplitOhlcv(history) : history
     const output = timeframeSpec ? resampleOhlcv(adjustedHistory, timeframeSpec) : adjustedHistory
 
+    if (wantsTwoYearRegistry) {
+      const calendarFromDate = adjustedHistory[0]
+        ? twoYearPeriod(twoYearBlockStartYear(adjustedHistory[0].date)).periodStart
+        : null
+      const marketRows = calendarFromDate
+        ? await db
+            .select({ date: ohlcvDaily.date })
+            .from(ohlcvDaily)
+            .where(requestedAsOfDate
+              ? and(eq(ohlcvDaily.ticker, '1306'), gte(ohlcvDaily.date, calendarFromDate), lte(ohlcvDaily.date, requestedAsOfDate))
+              : and(eq(ohlcvDaily.ticker, '1306'), gte(ohlcvDaily.date, calendarFromDate)))
+            .orderBy(asc(ohlcvDaily.date))
+        : []
+      const marketAsOfDate = (await db
+        .select({ date: ohlcvDaily.date })
+        .from(ohlcvDaily)
+        .where(requestedAsOfDate
+          ? and(eq(ohlcvDaily.ticker, '1306'), lte(ohlcvDaily.date, requestedAsOfDate))
+          : eq(ohlcvDaily.ticker, '1306'))
+        .orderBy(desc(ohlcvDaily.date))
+        .limit(1))[0]?.date ?? adjustedHistory.at(-1)?.date ?? null
+      if (!marketAsOfDate) {
+        return NextResponse.json({ error: 'two_year_registry_unavailable' }, { status: 404 })
+      }
+      return NextResponse.json(buildTwoYearLineRegistry({
+        market: 'JP',
+        securityKey: `JP:${ticker}`,
+        asOfDate: marketAsOfDate,
+        priceBasisVersion: source === 'jquants' ? 'jp-split-normalized-v1' : 'jp-manual-v1',
+        history: adjustedHistory,
+        exchangeSessions: marketRows.map((row) => row.date),
+      }))
+    }
+
     if (searchParams.get('meta') === '1') {
+      const wantsCalendar = searchParams.get('calendar') === '1'
+      const calendarFromDate = output[0]
+        ? twoYearPeriod(twoYearBlockStartYear(output[0].date)).periodStart
+        : fromDate
+      const marketRows = wantsCalendar && calendarFromDate
+        ? await db
+            .select({ date: ohlcvDaily.date })
+            .from(ohlcvDaily)
+            .where(requestedAsOfDate
+              ? and(eq(ohlcvDaily.ticker, '1306'), gte(ohlcvDaily.date, calendarFromDate), lte(ohlcvDaily.date, requestedAsOfDate))
+              : and(eq(ohlcvDaily.ticker, '1306'), gte(ohlcvDaily.date, calendarFromDate)))
+            .orderBy(asc(ohlcvDaily.date))
+        : []
+      const marketAsOfDate = wantsCalendar
+        ? (await db
+            .select({ date: ohlcvDaily.date })
+            .from(ohlcvDaily)
+            .where(requestedAsOfDate
+              ? and(eq(ohlcvDaily.ticker, '1306'), lte(ohlcvDaily.date, requestedAsOfDate))
+              : eq(ohlcvDaily.ticker, '1306'))
+            .orderBy(desc(ohlcvDaily.date))
+            .limit(1))[0]?.date ?? null
+        : undefined
       return NextResponse.json({
         ticker,
         period,
@@ -96,6 +165,7 @@ export async function GET(
         source,
         count: output.length,
         rows: output,
+        ...(wantsCalendar ? { marketSessions: marketRows.map((row) => row.date), marketAsOfDate } : {}),
       })
     }
 
@@ -107,4 +177,10 @@ export async function GET(
       { status: 500 },
     )
   }
+}
+
+function parseAsOfDate(value: string | null): string | null {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null
+  const parsed = new Date(`${value}T00:00:00Z`)
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value ? value : null
 }

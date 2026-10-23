@@ -119,7 +119,7 @@ export const PAGE_CATALOG = {
     icon: Search,
     commandVerb: '探す',
     commandBadge: '探索',
-    searchTerms: '日本株 条件検索',
+    searchTerms: '日本株 条件検索 24か月足 2年足 上昇終値ライン',
   },
   periodExplorer: {
     href: '/period-explorer',
@@ -299,7 +299,7 @@ export const PAGE_CATALOG = {
     icon: Search,
     commandVerb: '探す',
     commandBadge: 'US探索',
-    searchTerms: '米国株 条件検索',
+    searchTerms: '米国株 条件検索 24か月足 2年足 上昇終値ライン',
   },
   usStageScreener: {
     href: '/us/stage-screener',
