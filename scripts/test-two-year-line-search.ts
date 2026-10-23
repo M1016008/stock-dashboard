@@ -16,12 +16,15 @@ async function main(): Promise<void> {
       low REAL NOT NULL, close REAL NOT NULL, volume INTEGER NOT NULL,
       PRIMARY KEY (ticker, date)
     )` },
+    { sql: 'CREATE INDEX ohlcv_date_ticker_idx ON ohlcv_daily(date, ticker)' },
     { sql: `CREATE TABLE market_ohlcv_daily (
       market TEXT NOT NULL, ticker TEXT NOT NULL, date TEXT NOT NULL,
       open REAL NOT NULL, high REAL NOT NULL, low REAL NOT NULL, close REAL NOT NULL, volume INTEGER NOT NULL,
       adj_open REAL, adj_high REAL, adj_low REAL, adj_close REAL, adj_volume REAL,
       PRIMARY KEY (market, ticker, date)
     )` },
+    { sql: `CREATE INDEX market_ohlcv_market_date_ticker_idx
+      ON market_ohlcv_daily(market, date, ticker)` },
   ])
 
   const blocks = [
@@ -34,6 +37,13 @@ async function main(): Promise<void> {
     { startYear: 2026, open: 154, close: 176 },
   ]
   const statements: Array<{ sql: string; args: Array<string | number | null> }> = []
+  const fourCandleBlocks = new Map<number, readonly [number, number]>([
+    [2018, [100, 90]],
+    [2020, [90, 110]],
+    [2022, [110, 130]],
+    [2024, [130, 150]],
+    [2026, [150, 140]],
+  ])
   for (const block of blocks) {
     const sessions = [`${block.startYear}-01-03`, `${block.startYear + 1}-12-30`]
     for (const [index, date] of sessions.entries()) {
@@ -59,6 +69,21 @@ async function main(): Promise<void> {
           args: [ticker, date, open, open + 1, open - 1, close, 1000, open, open + 1, open - 1, close, 1000],
         })
       }
+      const four = fourCandleBlocks.get(block.startYear)
+      if (four) {
+        const value = index === 0 ? four[0] : four[1]
+        statements.push({
+          sql: 'INSERT INTO ohlcv_daily (ticker, date, open, high, low, close, volume) VALUES (?, ?, ?, ?, ?, ?, ?)',
+          args: ['JP-FOUR', date, value, value + 1, value - 1, value, 1000],
+        })
+        statements.push({
+          sql: `INSERT INTO market_ohlcv_daily (
+            market, ticker, date, open, high, low, close, volume,
+            adj_open, adj_high, adj_low, adj_close, adj_volume
+          ) VALUES ('US', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          args: ['US-FOUR', date, value, value + 1, value - 1, value, 1000, value, value + 1, value - 1, value, 1000],
+        })
+      }
     }
   }
   statements.push(
@@ -82,11 +107,27 @@ async function main(): Promise<void> {
   await fixtureClient.batch(statements)
   fixtureClient.close()
 
+  delete process.env.TURSO_DATABASE_URL
+  delete process.env.TURSO_AUTH_TOKEN
+  delete process.env.STOCKBOARD_DB_ROLE
+  delete process.env.US_ANALYTICS_DB_PATH
+  delete process.env.LOCAL_DB_PATH
   process.env.USE_LOCAL_DB = '1'
   process.env.STOCKBOARD_DB_PATH = databasePath
   process.env.STOCKBOARD_DB_READ_CONCURRENCY = '0'
 
-  const { loadTwoYearLineSearchEntries, selectTwoYearLineSummary } = await import('../lib/server/two-year-line-search')
+  const { localDbPath } = await import('../lib/db/client')
+  assert.equal(path.resolve(localDbPath), path.resolve(databasePath), 'test must resolve only to its fixture DB')
+
+  const {
+    loadTwoYearLineSearchEntries,
+    selectTwoYearLineSummary,
+    twoYearLineSearchHistoryStartDate,
+  } = await import('../lib/server/two-year-line-search')
+
+  assert.equal(twoYearLineSearchHistoryStartDate('2026-10-23'), '2018-01-01')
+  assert.equal(twoYearLineSearchHistoryStartDate('2027-12-30'), '2018-01-01')
+  assert.equal(twoYearLineSearchHistoryStartDate('2028-01-01'), '2020-01-01')
 
   for (const market of ['JP', 'US'] as const) {
     const ticker = market === 'JP' ? 'JP-LINE' : 'US-LINE'
@@ -113,10 +154,12 @@ async function main(): Promise<void> {
 
   const calendarClipped = await loadTwoYearLineSearchEntries({
     market: 'JP',
-    tickers: ['JP-LINE'],
+    tickers: ['JP-LINE', 'JP-FOUR'],
     asOfDate: '2028-01-05',
   })
   assert.equal(calendarClipped.metadata.asOfDate, '2027-12-30')
+  assert.equal(calendarClipped.entries.get('JP-FOUR')?.latestConfirmed?.pattern, 'four')
+  assert.equal(calendarClipped.entries.get('JP-FOUR')?.latestConfirmed?.sourcePeriods.join(','), '2018,2020,2022,2024')
 
   const gap = await loadTwoYearLineSearchEntries({ market: 'JP', tickers: ['JP-GAP'], asOfDate: '2027-12-30' })
   assert.equal(gap.entries.get('JP-GAP')?.hasConfirmed, false, 'a non-benchmark extra row must not conceal a missing benchmark session')

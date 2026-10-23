@@ -31,6 +31,7 @@
     "build": "next build --webpack",
     "test:timeframes": "tsx scripts/test-timeframes.ts",
     "test:two-year-chart": "tsx scripts/test-two-year-candles.ts && tsx scripts/test-two-year-line-registry.ts && tsx scripts/test-two-year-line-search.ts && tsx scripts/test-two-year-line-display.ts",
+    "benchmark:two-year-search": "tsx scripts/benchmark-two-year-line-search.ts",
     "test:mtf-close-calendar": "tsx scripts/test-mtf-close-calendar.ts",
     "test:mtf-close-calendar:tradingview": "tsx scripts/validate-tradingview-mtf-close.ts",
     "mtf:tradingview:import": "USE_LOCAL_DB=1 tsx --env-file-if-exists=.env.local scripts/validate-tradingview-mtf-close.ts",

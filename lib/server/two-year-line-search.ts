@@ -85,13 +85,14 @@ interface SplitEvent {
 }
 
 const globalCache = globalThis as typeof globalThis & {
-  __twoYearLineSearchCacheV3?: Map<string, SearchCacheEntry>
+  __twoYearLineSearchCacheV4?: Map<string, SearchCacheEntry>
 }
-globalCache.__twoYearLineSearchCacheV3 ??= new Map()
+globalCache.__twoYearLineSearchCacheV4 ??= new Map()
 
 const CACHE_TTL_MS = 5 * 60 * 1000
 const MAX_CACHE_KEYS = 4
-const CHUNK_SIZE = 400
+const CHUNK_SIZE = 500
+const SEARCH_BLOCK_COUNT = 5
 
 /**
  * Loads only two-year block boundaries/counts plus likely JP split events.
@@ -108,15 +109,16 @@ export async function loadTwoYearLineSearchEntries(options: Readonly<{
   const priceBasisVersion = options.market === 'JP' ? 'jp-split-normalized-v1' : US_ADJUSTED_PRICE_BASIS
   const cache = await getSearchCache(options.market, options.asOfDate, benchmark)
   const effectiveAsOfDate = cache.sessions.at(-1) ?? options.asOfDate
+  const historyStartDate = twoYearLineSearchHistoryStartDate(effectiveAsOfDate)
   const missing = tickers.filter((ticker) => !cache.entries.has(ticker))
 
   for (let offset = 0; offset < missing.length; offset += CHUNK_SIZE) {
     const chunk = missing.slice(offset, offset + CHUNK_SIZE)
     const blockRows = options.market === 'JP'
-      ? await loadJpCompactBlocks(chunk, effectiveAsOfDate)
-      : await loadUsCompactBlocks(chunk, effectiveAsOfDate)
+      ? await loadJpCompactBlocks(chunk, historyStartDate, effectiveAsOfDate)
+      : await loadUsCompactBlocks(chunk, historyStartDate, effectiveAsOfDate)
     const splitEvents = options.market === 'JP'
-      ? await loadJpSplitEvents(chunk, effectiveAsOfDate)
+      ? await loadJpSplitEvents(chunk, historyStartDate, effectiveAsOfDate)
       : new Map<string, SplitEvent[]>()
     const blocksByTicker = groupBlocks(blockRows)
 
@@ -149,6 +151,29 @@ export async function loadTwoYearLineSearchEntries(options: Readonly<{
   }
 }
 
+/**
+ * The registry can expose only the current provisional line and the line ending
+ * at the immediately preceding confirmed block. A four-candle line therefore
+ * needs the current block plus four preceding blocks, and no earlier prices.
+ */
+export function twoYearLineSearchHistoryStartDate(asOfDate: string): string {
+  const currentBlockStartYear = twoYearBlockStartYear(asOfDate)
+  return `${currentBlockStartYear - ((SEARCH_BLOCK_COUNT - 1) * 2)}-01-01`
+}
+
+export function twoYearLineSearchSqlForQa(
+  market: TwoYearMarket,
+  tickerCount: number,
+): Readonly<{ compactBlocks: string; splitEvents: string | null }> {
+  if (!Number.isInteger(tickerCount) || tickerCount < 1 || tickerCount > CHUNK_SIZE) {
+    throw new RangeError(`tickerCount must be between 1 and ${CHUNK_SIZE}`)
+  }
+  const placeholders = Array.from({ length: tickerCount }, () => '?').join(',')
+  return market === 'JP'
+    ? { compactBlocks: jpCompactBlocksSql(placeholders), splitEvents: jpSplitEventsSql(placeholders) }
+    : { compactBlocks: usCompactBlocksSql(placeholders), splitEvents: null }
+}
+
 export function selectTwoYearLineSummary(
   entry: TwoYearLineSearchEntry | undefined,
   filter: TwoYearLineFilter | TwoYearLineQuery,
@@ -174,79 +199,110 @@ async function getSearchCache(
 ): Promise<SearchCacheEntry> {
   const key = `${market}:${asOfDate}`
   const now = Date.now()
-  for (const [cacheKey, value] of globalCache.__twoYearLineSearchCacheV3!) {
-    if (value.expiresAt <= now) globalCache.__twoYearLineSearchCacheV3!.delete(cacheKey)
+  for (const [cacheKey, value] of globalCache.__twoYearLineSearchCacheV4!) {
+    if (value.expiresAt <= now) globalCache.__twoYearLineSearchCacheV4!.delete(cacheKey)
   }
-  const cached = globalCache.__twoYearLineSearchCacheV3!.get(key)
+  const cached = globalCache.__twoYearLineSearchCacheV4!.get(key)
   if (cached) return cached
 
-  const sessions = market === 'JP'
+  // The requested date may be beyond the latest confirmed market session and
+  // therefore in the next two-year block. Read one extra benchmark block, then
+  // trim after resolving the effective as-of date.
+  const sessionHistoryStartDate = `${twoYearBlockStartYear(asOfDate) - (SEARCH_BLOCK_COUNT * 2)}-01-01`
+  const candidateSessions = market === 'JP'
     ? (await execAll<{ date: string }>(
-        'SELECT date FROM ohlcv_daily WHERE ticker = ? AND date <= ? ORDER BY date',
-        [benchmark, asOfDate],
+        'SELECT date FROM ohlcv_daily WHERE ticker = ? AND date >= ? AND date <= ? ORDER BY date',
+        [benchmark, sessionHistoryStartDate, asOfDate],
       )).map((row) => row.date)
     : (await execAll<{ date: string }>(
-        "SELECT date FROM market_ohlcv_daily WHERE market = 'US' AND ticker = ? AND date <= ? ORDER BY date",
-        [benchmark, asOfDate],
+        "SELECT date FROM market_ohlcv_daily WHERE market = 'US' AND ticker = ? AND date >= ? AND date <= ? ORDER BY date",
+        [benchmark, sessionHistoryStartDate, asOfDate],
       )).map((row) => row.date)
+  const effectiveAsOfDate = candidateSessions.at(-1) ?? asOfDate
+  const historyStartDate = twoYearLineSearchHistoryStartDate(effectiveAsOfDate)
+  const sessions = candidateSessions.filter((date) => date >= historyStartDate)
   const created: SearchCacheEntry = {
     expiresAt: now + CACHE_TTL_MS,
     sessions,
     entries: new Map(),
   }
-  globalCache.__twoYearLineSearchCacheV3!.set(key, created)
-  while (globalCache.__twoYearLineSearchCacheV3!.size > MAX_CACHE_KEYS) {
-    const oldestKey = globalCache.__twoYearLineSearchCacheV3!.keys().next().value as string | undefined
+  globalCache.__twoYearLineSearchCacheV4!.set(key, created)
+  while (globalCache.__twoYearLineSearchCacheV4!.size > MAX_CACHE_KEYS) {
+    const oldestKey = globalCache.__twoYearLineSearchCacheV4!.keys().next().value as string | undefined
     if (!oldestKey) break
-    globalCache.__twoYearLineSearchCacheV3!.delete(oldestKey)
+    globalCache.__twoYearLineSearchCacheV4!.delete(oldestKey)
   }
   return created
 }
 
-async function loadJpCompactBlocks(tickers: readonly string[], asOfDate: string): Promise<CompactBlockRow[]> {
+async function loadJpCompactBlocks(
+  tickers: readonly string[],
+  historyStartDate: string,
+  asOfDate: string,
+): Promise<CompactBlockRow[]> {
   if (tickers.length === 0) return []
   const placeholders = tickers.map(() => '?').join(',')
   return execAll<CompactBlockRow>(
-    `WITH valid AS (
-       SELECT
-         ticker, date, open, close,
-         CAST(strftime('%Y', date) AS INTEGER) - (CAST(strftime('%Y', date) AS INTEGER) % 2) AS startYear
-       FROM ohlcv_daily
-       WHERE ticker IN (${placeholders}) AND date <= ?
-         AND open > 0 AND high > 0 AND low > 0 AND close > 0 AND volume >= 0
-         AND high >= MAX(open, close, low) AND low <= MIN(open, close, high)
-     ), ranked AS (
-       SELECT *,
-         ROW_NUMBER() OVER (PARTITION BY ticker, startYear ORDER BY date) AS firstRank,
-         ROW_NUMBER() OVER (PARTITION BY ticker, startYear ORDER BY date DESC) AS lastRank,
-         COUNT(*) OVER (PARTITION BY ticker, startYear) AS observedCount,
-         SUM(CASE WHEN EXISTS (
-           SELECT 1 FROM ohlcv_daily AS marketSession
-           WHERE marketSession.ticker = '1306' AND marketSession.date = valid.date
-         ) THEN 1 ELSE 0 END) OVER (PARTITION BY ticker, startYear) AS matchedSessionCount
-       FROM valid
-     )
-     SELECT
-       ticker,
-       startYear,
-       MAX(CASE WHEN firstRank = 1 THEN date END) AS firstSourceDate,
-       MAX(CASE WHEN lastRank = 1 THEN date END) AS lastSourceDate,
-       MAX(CASE WHEN firstRank = 1 THEN open END) AS rawOpen,
-       MAX(CASE WHEN lastRank = 1 THEN close END) AS rawClose,
-       MAX(observedCount) AS observedCount,
-       MAX(matchedSessionCount) AS matchedSessionCount
-     FROM ranked
-     GROUP BY ticker, startYear
-     ORDER BY ticker, startYear`,
-    [...tickers, asOfDate],
+    jpCompactBlocksSql(placeholders),
+    [...tickers, historyStartDate, asOfDate, historyStartDate, asOfDate],
   )
 }
 
-async function loadUsCompactBlocks(tickers: readonly string[], asOfDate: string): Promise<CompactBlockRow[]> {
+function jpCompactBlocksSql(placeholders: string): string {
+  return `WITH valid AS (
+       SELECT
+         ticker, date, open, close,
+         CAST(substr(date, 1, 4) AS INTEGER) - (CAST(substr(date, 1, 4) AS INTEGER) % 2) AS startYear
+       FROM ohlcv_daily
+       WHERE ticker IN (${placeholders}) AND date >= ? AND date <= ?
+         AND open > 0 AND high > 0 AND low > 0 AND close > 0 AND volume >= 0
+         AND high >= MAX(open, close, low) AND low <= MIN(open, close, high)
+     ), market_sessions AS MATERIALIZED (
+       SELECT date
+       FROM ohlcv_daily
+       WHERE ticker = '1306' AND date >= ? AND date <= ?
+     ), stats AS (
+       SELECT
+         valid.ticker,
+         valid.startYear,
+         MIN(valid.date) AS firstSourceDate,
+         MAX(valid.date) AS lastSourceDate,
+         COUNT(*) AS observedCount,
+         SUM(CASE WHEN valid.date IN (SELECT date FROM market_sessions) THEN 1 ELSE 0 END) AS matchedSessionCount
+       FROM valid
+       GROUP BY valid.ticker, valid.startYear
+     )
+     SELECT
+       stats.ticker,
+       stats.startYear,
+       stats.firstSourceDate,
+       stats.lastSourceDate,
+       (SELECT firstRow.open
+        FROM ohlcv_daily AS firstRow
+        WHERE firstRow.ticker = stats.ticker AND firstRow.date = stats.firstSourceDate) AS rawOpen,
+       (SELECT lastRow.close
+        FROM ohlcv_daily AS lastRow
+        WHERE lastRow.ticker = stats.ticker AND lastRow.date = stats.lastSourceDate) AS rawClose,
+       stats.observedCount,
+       stats.matchedSessionCount
+     FROM stats`
+}
+
+async function loadUsCompactBlocks(
+  tickers: readonly string[],
+  historyStartDate: string,
+  asOfDate: string,
+): Promise<CompactBlockRow[]> {
   if (tickers.length === 0) return []
   const placeholders = tickers.map(() => '?').join(',')
   return execAll<CompactBlockRow>(
-    `WITH priced AS (
+    usCompactBlocksSql(placeholders),
+    [...tickers, historyStartDate, asOfDate, historyStartDate, asOfDate],
+  )
+}
+
+function usCompactBlocksSql(placeholders: string): string {
+  return `WITH priced AS (
        SELECT
          ticker, date,
          ${US_ADJUSTED_OPEN_SQL} AS adjustedOpen,
@@ -255,67 +311,65 @@ async function loadUsCompactBlocks(tickers: readonly string[], asOfDate: string)
          ${US_ADJUSTED_CLOSE_SQL} AS adjustedClose,
          ${US_ADJUSTED_VOLUME_SQL} AS adjustedVolume
        FROM market_ohlcv_daily
-       WHERE market = 'US' AND ticker IN (${placeholders}) AND date <= ?
+       WHERE market = 'US' AND ticker IN (${placeholders}) AND date >= ? AND date <= ?
      ), valid AS (
        SELECT
          ticker, date, adjustedOpen, adjustedClose,
-         CAST(strftime('%Y', date) AS INTEGER) - (CAST(strftime('%Y', date) AS INTEGER) % 2) AS startYear
+         CAST(substr(date, 1, 4) AS INTEGER) - (CAST(substr(date, 1, 4) AS INTEGER) % 2) AS startYear
        FROM priced
        WHERE adjustedOpen > 0 AND adjustedHigh > 0 AND adjustedLow > 0 AND adjustedClose > 0 AND adjustedVolume >= 0
          AND adjustedHigh >= MAX(adjustedOpen, adjustedClose, adjustedLow)
          AND adjustedLow <= MIN(adjustedOpen, adjustedClose, adjustedHigh)
-     ), ranked AS (
-       SELECT *,
-         ROW_NUMBER() OVER (PARTITION BY ticker, startYear ORDER BY date) AS firstRank,
-         ROW_NUMBER() OVER (PARTITION BY ticker, startYear ORDER BY date DESC) AS lastRank,
-         COUNT(*) OVER (PARTITION BY ticker, startYear) AS observedCount,
-         SUM(CASE WHEN EXISTS (
-           SELECT 1 FROM market_ohlcv_daily AS marketSession
-           WHERE marketSession.market = 'US' AND marketSession.ticker = 'SPY'
-             AND marketSession.date = valid.date
-         ) THEN 1 ELSE 0 END) OVER (PARTITION BY ticker, startYear) AS matchedSessionCount
+     ), market_sessions AS MATERIALIZED (
+       SELECT date
+       FROM market_ohlcv_daily
+       WHERE market = 'US' AND ticker = 'SPY' AND date >= ? AND date <= ?
+     ), stats AS (
+       SELECT
+         valid.ticker,
+         valid.startYear,
+         MIN(valid.date) AS firstSourceDate,
+         MAX(valid.date) AS lastSourceDate,
+         COUNT(*) AS observedCount,
+         SUM(CASE WHEN valid.date IN (SELECT date FROM market_sessions) THEN 1 ELSE 0 END) AS matchedSessionCount
        FROM valid
+       GROUP BY valid.ticker, valid.startYear
      )
      SELECT
-       ticker,
-       startYear,
-       MAX(CASE WHEN firstRank = 1 THEN date END) AS firstSourceDate,
-       MAX(CASE WHEN lastRank = 1 THEN date END) AS lastSourceDate,
-       MAX(CASE WHEN firstRank = 1 THEN adjustedOpen END) AS rawOpen,
-       MAX(CASE WHEN lastRank = 1 THEN adjustedClose END) AS rawClose,
-       MAX(observedCount) AS observedCount,
-       MAX(matchedSessionCount) AS matchedSessionCount
-     FROM ranked
-     GROUP BY ticker, startYear
-     ORDER BY ticker, startYear`,
-    [...tickers, asOfDate],
+       stats.ticker,
+       stats.startYear,
+       stats.firstSourceDate,
+       stats.lastSourceDate,
+       (SELECT ${qualifiedUsSql(US_ADJUSTED_OPEN_SQL, 'firstRow')}
+        FROM market_ohlcv_daily AS firstRow
+        WHERE firstRow.market = 'US' AND firstRow.ticker = stats.ticker
+          AND firstRow.date = stats.firstSourceDate) AS rawOpen,
+       (SELECT ${qualifiedUsSql(US_ADJUSTED_CLOSE_SQL, 'lastRow')}
+        FROM market_ohlcv_daily AS lastRow
+        WHERE lastRow.market = 'US' AND lastRow.ticker = stats.ticker
+          AND lastRow.date = stats.lastSourceDate) AS rawClose,
+       stats.observedCount,
+       stats.matchedSessionCount
+     FROM stats`
+}
+
+function qualifiedUsSql(expression: string, alias: string): string {
+  return expression.replace(
+    /\b(adj_open|adj_high|adj_low|adj_close|adj_volume|open|high|low|close|volume)\b/g,
+    `${alias}.$1`,
   )
 }
 
-async function loadJpSplitEvents(tickers: readonly string[], asOfDate: string): Promise<Map<string, SplitEvent[]>> {
+async function loadJpSplitEvents(
+  tickers: readonly string[],
+  historyStartDate: string,
+  asOfDate: string,
+): Promise<Map<string, SplitEvent[]>> {
   if (tickers.length === 0) return new Map()
   const placeholders = tickers.map(() => '?').join(',')
   const candidates = await execAll<SplitCandidateRow>(
-    `WITH ordered AS (
-       SELECT
-         ticker,
-         LAG(date) OVER (PARTITION BY ticker ORDER BY date) AS previousDate,
-         date AS currentDate,
-         LAG(close) OVER (PARTITION BY ticker ORDER BY date) AS previousClose,
-         close AS currentClose,
-         LAG(volume) OVER (PARTITION BY ticker ORDER BY date) AS previousVolume,
-         volume AS currentVolume
-       FROM ohlcv_daily
-       WHERE ticker IN (${placeholders}) AND date <= ?
-     )
-     SELECT ticker, previousDate, currentDate, previousClose, currentClose, previousVolume, currentVolume
-     FROM ordered
-     WHERE previousDate IS NOT NULL
-       AND previousClose > 0 AND currentClose > 0
-       AND previousVolume > 0 AND currentVolume > 0
-       AND (currentClose / previousClose >= 2 OR currentClose / previousClose <= 0.5)
-     ORDER BY ticker, currentDate`,
-    [...tickers, asOfDate],
+    jpSplitEventsSql(placeholders),
+    [...tickers, historyStartDate, asOfDate],
   )
   const grouped = new Map<string, SplitEvent[]>()
   for (const row of candidates) {
@@ -330,6 +384,28 @@ async function loadJpSplitEvents(tickers: readonly string[], asOfDate: string): 
     grouped.set(ticker, bucket)
   }
   return grouped
+}
+
+function jpSplitEventsSql(placeholders: string): string {
+  return `WITH ordered AS (
+       SELECT
+         ticker,
+         LAG(date) OVER (PARTITION BY ticker ORDER BY date) AS previousDate,
+         date AS currentDate,
+         LAG(close) OVER (PARTITION BY ticker ORDER BY date) AS previousClose,
+         close AS currentClose,
+         LAG(volume) OVER (PARTITION BY ticker ORDER BY date) AS previousVolume,
+         volume AS currentVolume
+       FROM ohlcv_daily
+       WHERE ticker IN (${placeholders}) AND date >= ? AND date <= ?
+     )
+     SELECT ticker, previousDate, currentDate, previousClose, currentClose, previousVolume, currentVolume
+     FROM ordered
+     WHERE previousDate IS NOT NULL
+       AND previousClose > 0 AND currentClose > 0
+       AND previousVolume > 0 AND currentVolume > 0
+       AND (currentClose / previousClose >= 2 OR currentClose / previousClose <= 0.5)
+     ORDER BY ticker, currentDate`
 }
 
 function buildSearchEntry(options: Readonly<{
