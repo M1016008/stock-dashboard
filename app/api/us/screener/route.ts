@@ -6,6 +6,8 @@ import { findUsAliasTickers, getUsDisplayName } from '@/lib/us-symbol-aliases'
 import { usInvestableSymbolSql } from '@/lib/us-symbol-quality'
 import { buildShortTermCheck } from '@/lib/short-term-check'
 import { readServingCache, stableCacheKey, writeServingCache } from '@/lib/api/serving-cache'
+import { parseTwoYearLineFilter, parseTwoYearLinePatternFilter, twoYearConfirmedDistancePriority, type TwoYearLineQuery } from '@/lib/two-year-line-registry'
+import { loadTwoYearLineSearchEntries, matchesTwoYearLineSearchEntry, selectTwoYearLineSummary, type TwoYearLineSearchMetadata } from '@/lib/server/two-year-line-search'
 import {
   assertUsScreenerHistoricalFilters,
   createUsScreenerPitContract,
@@ -45,9 +47,12 @@ const SORT_KEYS = new Set([
   'force',
   'earningsNextDate',
   'earningsDays',
+  'twoYearLineAngleDeg',
+  'twoYearLineLastCandleRisePct',
+  'twoYearLineConfirmedDistancePriority',
 ])
 
-const US_SCREENER_CACHE_NAMESPACE = 'us-screener-v8'
+const US_SCREENER_CACHE_NAMESPACE = 'us-screener-v9'
 const US_SCREENER_FACETS_CACHE_NAMESPACE = 'us-screener-facets-v2'
 const EARNINGS_WINDOWS = new Set([14, 30, 60, 90, 180])
 const EARNINGS_TIME_BUCKETS = new Set(['before_open', 'market_hours', 'after_close', 'unknown'])
@@ -77,6 +82,7 @@ type UsScreenerPayload = {
   source: 'tiingo'
   mlSource: 'us_analytics' | 'main'
   pit: UsScreenerPitContract
+  twoYearLineRegistry?: TwoYearLineSearchMetadata | null
   earnings: {
     source: 'finnhub'
     updatedAt: string | null
@@ -109,6 +115,18 @@ function numericParam(searchParams: URLSearchParams, key: string): number | null
   if (!raw) return null
   const value = Number(raw)
   return Number.isFinite(value) ? value : null
+}
+
+function boundedAngleParam(searchParams: URLSearchParams, key: string): number | null {
+  const value = numericParam(searchParams, key)
+  return value !== null && value >= 0 && value <= 90 ? value : null
+}
+
+function invalidAngleParam(searchParams: URLSearchParams, key: string): boolean {
+  const raw = searchParams.get(key)?.trim()
+  if (!raw) return false
+  const value = Number(raw)
+  return !Number.isFinite(value) || value < 0 || value > 90
 }
 
 function stageParams(searchParams: URLSearchParams): Partial<Record<StageAxis, number[]>> {
@@ -302,6 +320,22 @@ export async function GET(request: NextRequest) {
     const stage23Candidate = searchParams.get('stage23Candidate') === '1'
     const shortTermCheck = searchParams.get('shortTermCheck')?.trim() ?? ''
     const physicalStatus = searchParams.get('physicalStatus')?.trim() ?? ''
+    const twoYearLine = parseTwoYearLineFilter(searchParams.get('twoYearLine'))
+    const twoYearPattern = parseTwoYearLinePatternFilter(searchParams.get('twoYearPattern'))
+    if (invalidAngleParam(searchParams, 'twoYearAngleMin') || invalidAngleParam(searchParams, 'twoYearAngleMax')) {
+      return NextResponse.json({ error: 'Invalid 24-month line angle' }, { status: 400 })
+    }
+    const twoYearAngleMin = boundedAngleParam(searchParams, 'twoYearAngleMin')
+    const twoYearAngleMax = boundedAngleParam(searchParams, 'twoYearAngleMax')
+    if (twoYearAngleMin !== null && twoYearAngleMax !== null && twoYearAngleMin > twoYearAngleMax) {
+      return NextResponse.json({ error: 'Invalid 24-month line angle range' }, { status: 400 })
+    }
+    const twoYearQuery: TwoYearLineQuery = {
+      status: twoYearLine,
+      pattern: twoYearLine === 'none' ? 'either' : twoYearPattern,
+      minAngleDeg: twoYearLine === 'none' ? null : twoYearAngleMin,
+      maxAngleDeg: twoYearLine === 'none' ? null : twoYearAngleMax,
+    }
     const earningsWindowValue = Number(searchParams.get('earningsWindowDays'))
     const earningsWindowDays = EARNINGS_WINDOWS.has(earningsWindowValue) ? earningsWindowValue : null
     const earningsTimeBucketValue = searchParams.get('earningsTimeBucket')?.trim() ?? ''
@@ -355,6 +389,10 @@ export async function GET(request: NextRequest) {
       stage23Candidate,
       shortTermCheck,
       physicalStatus,
+      twoYearLine,
+      twoYearPattern: twoYearQuery.pattern,
+      twoYearAngleMin: twoYearQuery.minAngleDeg,
+      twoYearAngleMax: twoYearQuery.maxAngleDeg,
       earningsWindowDays,
       earningsTimeBucket,
       earningsAnchorDate,
@@ -383,6 +421,9 @@ export async function GET(request: NextRequest) {
       || sort === 'shortTermCheckLabel'
       || sort === 'acceleration'
       || sort === 'force'
+      || sort === 'twoYearLineAngleDeg'
+      || sort === 'twoYearLineLastCandleRisePct'
+      || sort === 'twoYearLineConfirmedDistancePriority'
     )
     const hasStageFilters = Object.keys(stages).length > 0
     const hasComputedFilters = (
@@ -394,6 +435,7 @@ export async function GET(request: NextRequest) {
       || stage23Candidate
       || Boolean(shortTermCheck)
       || Boolean(physicalStatus)
+      || twoYearLine !== 'none'
     )
     const useAnalyticsMetricTop =
       physicalSort
@@ -465,8 +507,11 @@ export async function GET(request: NextRequest) {
       : []
     const topMetricTickers = topMetricRows.map((row) => row.symbol).filter(Boolean)
     const metricMap = new Map(topMetricRows.map((row) => [row.symbol, row]))
-    const sqlLimit = topMetricTickers.length > 0
+    const twoYearComputed = twoYearLine !== 'none'
+    const sqlLimit: number | null = topMetricTickers.length > 0
       ? topMetricTickers.length
+      : twoYearComputed
+        ? null
       : physicalSort || computedSort || hasComputedFilters
         ? Math.max(limit * 30, 5000)
         : limit + 1
@@ -620,7 +665,7 @@ export async function GET(request: NextRequest) {
     if (marketCapMax != null && pit.mode === 'LATEST') args.push(marketCapMax)
     if (earningsTimeBucket) args.push(earningsTimeBucket)
     if (topMetricTickers.length > 0) args.push(...topMetricTickers)
-    args.push(sqlLimit)
+    if (sqlLimit !== null) args.push(sqlLimit)
 
     const orderExpr: Record<string, string> = {
       ticker: 's.ticker',
@@ -647,6 +692,9 @@ export async function GET(request: NextRequest) {
       ma200Angle: 'ma_200_angle',
       acceleration: 's.ticker',
       force: 's.ticker',
+      twoYearLineAngleDeg: 's.ticker',
+      twoYearLineLastCandleRisePct: 's.ticker',
+      twoYearLineConfirmedDistancePriority: 's.ticker',
       earningsNextDate: 'earnings.report_date',
       earningsDays: 'earnings_days',
     }
@@ -753,7 +801,7 @@ export async function GET(request: NextRequest) {
         ${whereKnownEarnings}
         ${whereMetricTop}
       ORDER BY ${useAnalyticsMetricTop ? 's.ticker' : orderExpr[sort]} ${dir.toUpperCase()}, s.ticker ASC
-      LIMIT ?
+      ${sqlLimit === null ? '' : 'LIMIT ?'}
       `,
       args,
     )
@@ -863,11 +911,52 @@ export async function GET(request: NextRequest) {
     if (physicalStatus) {
       filteredRows = filteredRows.filter((row) => row.physicalStatusLabel === physicalStatus)
     }
+    let twoYearLineMetadata: TwoYearLineSearchMetadata | null = null
+    if (twoYearLine !== 'none') {
+      const searchResult = await loadTwoYearLineSearchEntries({
+        market: 'US',
+        tickers: filteredRows.map((row) => String(row.ticker ?? '')),
+        asOfDate: date,
+      })
+      const { entries } = searchResult
+      twoYearLineMetadata = searchResult.metadata
+      filteredRows = filteredRows
+        .map((row) => {
+          const entry = entries.get(String(row.ticker ?? '').toUpperCase())
+          const summary = selectTwoYearLineSummary(entry, twoYearQuery)
+          const confirmedDistance = entry?.latestConfirmed?.distancePct ?? null
+          return {
+            ...row,
+            ticker: String(row.ticker ?? ''),
+            twoYearLineStatus: summary?.status ?? null,
+            twoYearLinePattern: summary?.pattern ?? null,
+            twoYearLinePeriods: summary?.sourcePeriods ?? null,
+            twoYearLineStartClose: summary?.lineStartClose ?? null,
+            twoYearLineEndClose: summary?.lineEndClose ?? null,
+            twoYearLineAngleDeg: summary?.angleDeg ?? null,
+            twoYearLineLastCandleRisePct: summary?.lastCandleRisePct ?? null,
+            twoYearLineConfirmedDistancePct: confirmedDistance,
+            twoYearLineConfirmedDistancePriority: twoYearConfirmedDistancePriority(confirmedDistance),
+            twoYearLineAsOfDate: searchResult.metadata.asOfDate,
+            twoYearLinePriceBasisVersion: searchResult.metadata.priceBasisVersion,
+          }
+        })
+        .filter((row) => {
+          const entry = entries.get(String(row.ticker ?? '').toUpperCase())
+          return matchesTwoYearLineSearchEntry(entry, twoYearQuery)
+        })
+    }
 
     if (computedSort) {
       filteredRows.sort((a, b) => {
         const av = sort === 'shortTermCheckScore'
           ? numeric(a.shortTermCheckScore)
+          : sort === 'twoYearLineAngleDeg'
+            ? numeric(a.twoYearLineAngleDeg)
+            : sort === 'twoYearLineLastCandleRisePct'
+              ? numeric(a.twoYearLineLastCandleRisePct)
+              : sort === 'twoYearLineConfirmedDistancePriority'
+                ? numeric(a.twoYearLineConfirmedDistancePriority)
           : sort === 'acceleration'
             ? numeric(a.acceleration)
             : sort === 'force'
@@ -875,6 +964,12 @@ export async function GET(request: NextRequest) {
               : String(a.shortTermCheckLabel ?? '')
         const bv = sort === 'shortTermCheckScore'
           ? numeric(b.shortTermCheckScore)
+          : sort === 'twoYearLineAngleDeg'
+            ? numeric(b.twoYearLineAngleDeg)
+            : sort === 'twoYearLineLastCandleRisePct'
+              ? numeric(b.twoYearLineLastCandleRisePct)
+              : sort === 'twoYearLineConfirmedDistancePriority'
+                ? numeric(b.twoYearLineConfirmedDistancePriority)
           : sort === 'acceleration'
             ? numeric(b.acceleration)
             : sort === 'force'
@@ -890,7 +985,7 @@ export async function GET(request: NextRequest) {
       })
     }
 
-    const candidatesTruncated = topMetricTickers.length === 0 && rows.length >= sqlLimit
+    const candidatesTruncated = sqlLimit !== null && topMetricTickers.length === 0 && rows.length >= sqlLimit
     const [earningsSync, earningsRun] = await Promise.all([
       execGet<{ value: number | null }>(
         `SELECT MAX(imported_at) AS value
@@ -925,6 +1020,7 @@ export async function GET(request: NextRequest) {
       source: 'tiingo',
       mlSource: hasUsAnalyticsDb() ? 'us_analytics' : 'main',
       pit,
+      twoYearLineRegistry: twoYearLineMetadata,
       earnings: {
         source: 'finnhub',
         updatedAt: earningsSync?.value

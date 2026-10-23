@@ -3,7 +3,9 @@ import { execAll } from '@/lib/db/client'
 import { normalizeTickerForMarket } from '@/lib/markets'
 import type { OHLCV } from '@/types/stock'
 import { parseTimeframeSpec, resampleOhlcv, specToIntervalCode } from '@/lib/timeframes'
-import { toAdjustedUsOhlcvRows, type UsRawOhlcvRow } from '@/lib/us-adjusted-ohlcv'
+import { US_ADJUSTED_PRICE_BASIS, toAdjustedUsOhlcvRows, type UsRawOhlcvRow } from '@/lib/us-adjusted-ohlcv'
+import { twoYearBlockStartYear, twoYearPeriod } from '@/lib/two-year-candles'
+import { buildTwoYearLineRegistry } from '@/lib/two-year-line-registry'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -27,7 +29,12 @@ export async function GET(
     const { ticker: rawTicker } = await params
     const ticker = normalizeTickerForMarket(rawTicker, 'US')
     const { searchParams } = new URL(request.url)
-    const period = searchParams.get('period') ?? '1y'
+    const wantsTwoYearRegistry = searchParams.get('twoYearRegistry') === '1'
+    const requestedAsOfDate = parseAsOfDate(searchParams.get('asOfDate'))
+    if (searchParams.has('asOfDate') && !requestedAsOfDate) {
+      return NextResponse.json({ error: 'invalid_as_of_date' }, { status: 400 })
+    }
+    const period = wantsTwoYearRegistry ? 'all' : searchParams.get('period') ?? '1y'
     const timeframeSpec = parseTimeframeSpec({
       interval: searchParams.get('interval'),
       timeframe: searchParams.get('timeframe'),
@@ -47,6 +54,9 @@ export async function GET(
         { status: 400 },
       )
     }
+    const requestedFromDate = requestedAsOfDate && period !== 'all'
+      ? new Date(new Date(`${requestedAsOfDate}T00:00:00Z`).getTime() - days * 86_400_000).toISOString().slice(0, 10)
+      : null
     const rawRows = await execAll<UsRawOhlcvRow>(
       `
       SELECT
@@ -58,14 +68,65 @@ export async function GET(
         adj_volume AS adjustedVolume
       FROM market_ohlcv_daily
       WHERE market = 'US' AND ticker = ?
-        ${period === 'all' ? '' : `AND date >= date((SELECT MAX(date) FROM market_ohlcv_daily WHERE market = 'US' AND ticker = ?), '-' || ? || ' days')`}
+        ${period === 'all'
+          ? ''
+          : requestedFromDate
+            ? 'AND date >= ?'
+            : `AND date >= date((SELECT MAX(date) FROM market_ohlcv_daily WHERE market = 'US' AND ticker = ?), '-' || ? || ' days')`}
+        ${requestedAsOfDate ? 'AND date <= ?' : ''}
       ORDER BY date
       `,
-      period === 'all' ? [ticker] : [ticker, ticker, days],
+      [
+        ticker,
+        ...(period === 'all' ? [] : requestedFromDate ? [requestedFromDate] : [ticker, days]),
+        ...(requestedAsOfDate ? [requestedAsOfDate] : []),
+      ],
     )
     const rows: OHLCV[] = toAdjustedUsOhlcvRows(rawRows)
     const output = timeframeSpec ? resampleOhlcv(rows, timeframeSpec) : rows
+    if (wantsTwoYearRegistry) {
+      const calendarFromDate = rows[0]
+        ? twoYearPeriod(twoYearBlockStartYear(rows[0].date)).periodStart
+        : null
+      const marketSessions = calendarFromDate
+        ? (await execAll<{ date: string }>(
+            `SELECT date FROM market_ohlcv_daily WHERE market = 'US' AND ticker = 'SPY' AND date >= ? ${requestedAsOfDate ? 'AND date <= ?' : ''} ORDER BY date`,
+            [calendarFromDate, ...(requestedAsOfDate ? [requestedAsOfDate] : [])],
+          )).map((row) => row.date)
+        : []
+      const marketAsOfDate = (await execAll<{ date: string }>(
+        `SELECT date FROM market_ohlcv_daily WHERE market = 'US' AND ticker = 'SPY' ${requestedAsOfDate ? 'AND date <= ?' : ''} ORDER BY date DESC LIMIT 1`,
+        requestedAsOfDate ? [requestedAsOfDate] : [],
+      ))[0]?.date ?? rows.at(-1)?.date ?? null
+      if (!marketAsOfDate) {
+        return NextResponse.json({ error: 'two_year_registry_unavailable' }, { status: 404 })
+      }
+      return NextResponse.json(buildTwoYearLineRegistry({
+        market: 'US',
+        securityKey: `US:${ticker}`,
+        asOfDate: marketAsOfDate,
+        priceBasisVersion: US_ADJUSTED_PRICE_BASIS,
+        history: rows,
+        exchangeSessions: marketSessions,
+      }))
+    }
     if (searchParams.get('meta') === '1') {
+      const wantsCalendar = searchParams.get('calendar') === '1'
+      const calendarFromDate = output[0]
+        ? twoYearPeriod(twoYearBlockStartYear(output[0].date)).periodStart
+        : null
+      const marketSessions = wantsCalendar && calendarFromDate
+        ? (await execAll<{ date: string }>(
+            `SELECT date FROM market_ohlcv_daily WHERE market = 'US' AND ticker = 'SPY' AND date >= ? ${requestedAsOfDate ? 'AND date <= ?' : ''} ORDER BY date`,
+            [calendarFromDate, ...(requestedAsOfDate ? [requestedAsOfDate] : [])],
+          )).map((row) => row.date)
+        : []
+      const marketAsOfDate = wantsCalendar
+        ? (await execAll<{ date: string }>(
+            `SELECT date FROM market_ohlcv_daily WHERE market = 'US' AND ticker = 'SPY' ${requestedAsOfDate ? 'AND date <= ?' : ''} ORDER BY date DESC LIMIT 1`,
+            requestedAsOfDate ? [requestedAsOfDate] : [],
+          ))[0]?.date ?? null
+        : undefined
       return NextResponse.json({
         ticker,
         period,
@@ -73,6 +134,7 @@ export async function GET(
         interval: timeframeSpec ? specToIntervalCode(timeframeSpec) : 'D',
         count: output.length,
         rows: output,
+        ...(wantsCalendar ? { marketSessions, marketAsOfDate } : {}),
       })
     }
     return NextResponse.json(output)
@@ -83,4 +145,10 @@ export async function GET(
       { status: 500 },
     )
   }
+}
+
+function parseAsOfDate(value: string | null): string | null {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null
+  const parsed = new Date(`${value}T00:00:00Z`)
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value ? value : null
 }

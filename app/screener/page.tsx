@@ -13,12 +13,14 @@ import { MarketDateCalendar } from '@/components/ui/MarketDateCalendar'
 import { SavedViewManager } from '@/components/ui/SavedViewManager'
 import { getCompareSymbols, toggleComparedSymbol } from '@/lib/client/stock-workspace'
 import { IntegratedScreener } from '@/components/screener/IntegratedScreener'
+import { TwoYearLineFilterControl, TwoYearLineResultBadge } from '@/components/screener/TwoYearLineFilter'
 import { PageTitle } from '@/components/layout/PageTitle'
 import { ViewTabs } from '@/components/ui/ViewTabs'
 import { replaceCurrentUrlFilters } from '@/lib/client/url-filter-state'
 import { getUniverseFilterMeta, parseUniverseFilter, UNIVERSE_FILTER_PARAM } from '@/lib/market-universe'
 import { formatShortTermStrength, SHORT_TERM_CHECK_LABELS, type ShortTermCheckLabel } from '@/lib/short-term-check'
 import type { PhysicsStatus } from '@/lib/ml/physics-analysis'
+import { parseTwoYearLineFilter, parseTwoYearLinePatternFilter, type TwoYearLineFilter, type TwoYearLinePatternFilter } from '@/lib/two-year-line-registry'
 import {
   earningsTimeBucketLabel,
   type EarningsTimeBucket,
@@ -138,6 +140,17 @@ interface StockRow {
   sma25Angle?: number | null
   sma75Angle?: number | null
   sma200Angle?: number | null
+  twoYearLineStatus?: 'confirmed' | 'provisional' | null
+  twoYearLinePattern?: 'three' | 'four' | null
+  twoYearLinePeriods?: readonly number[] | null
+  twoYearLineStartClose?: number | null
+  twoYearLineEndClose?: number | null
+  twoYearLineAngleDeg?: number | null
+  twoYearLineLastCandleRisePct?: number | null
+  twoYearLineConfirmedDistancePct?: number | null
+  twoYearLineConfirmedDistancePriority?: number | null
+  twoYearLineAsOfDate?: string | null
+  twoYearLinePriceBasisVersion?: string | null
   earningsLastDate?: string | null
   earningsLastDateKind?: 'reported' | 'not_applicable' | 'not_collected' | 'unverified'
   earningsLastDateSource?: string | null
@@ -221,6 +234,9 @@ type SortKey =
   | 'earningsLastElapsedDays'
   | 'earningsNextDate'
   | 'earningsNextBusinessDays'
+  | 'twoYearLineAngleDeg'
+  | 'twoYearLineLastCandleRisePct'
+  | 'twoYearLineConfirmedDistancePriority'
 
 interface SortState {
   key: SortKey
@@ -251,6 +267,10 @@ interface JpScreenerView {
   stage23Candidate: boolean
   pmsTrend: string
   selectedPhysicalStatusHorizon: PhysicalStatusHorizon
+  selectedTwoYearLine?: TwoYearLineFilter
+  selectedTwoYearPattern?: TwoYearLinePatternFilter
+  twoYearAngleMin?: string
+  twoYearAngleMax?: string
   sort: SortState | null
 }
 
@@ -307,6 +327,9 @@ const SORT_KEY_VALUES: readonly SortKey[] = [
   'earningsLastElapsedDays',
   'earningsNextDate',
   'earningsNextBusinessDays',
+  'twoYearLineAngleDeg',
+  'twoYearLineLastCandleRisePct',
+  'twoYearLineConfirmedDistancePriority',
 ]
 
 const SORT_OPTIONS: Array<{ key: SortKey; label: string; descLabel?: string; ascLabel?: string }> = [
@@ -328,6 +351,9 @@ const SORT_OPTIONS: Array<{ key: SortKey; label: string; descLabel?: string; asc
   { key: 'sma200Angle', label: '200日線の向き', descLabel: '上向き順', ascLabel: '下向き順' },
   { key: 'physicalStatusConfidence', label: '物理状態 確度', descLabel: '高い順', ascLabel: '低い順' },
   { key: 'earningsNextBusinessDays', label: '次回決算まで', descLabel: '遠い順', ascLabel: '近い順' },
+  { key: 'twoYearLineAngleDeg', label: '24か月線 角度', descLabel: '大きい順', ascLabel: '小さい順' },
+  { key: 'twoYearLineLastCandleRisePct', label: '24か月線 最後の陽線', descLabel: '上昇率が大きい順', ascLabel: '上昇率が小さい順' },
+  { key: 'twoYearLineConfirmedDistancePriority', label: '24か月線 現在位置', descLabel: '確定ライン下で近い順', ascLabel: '優先度が低い順' },
   { key: 'ticker', label: 'コード', descLabel: '降順', ascLabel: '昇順' },
   { key: 'name', label: '銘柄名', descLabel: '降順', ascLabel: '昇順' },
 ]
@@ -475,6 +501,14 @@ function LegacyScreenerPage() {
   const [selectedPhysicalStatusHorizon, setSelectedPhysicalStatusHorizon] = useState<PhysicalStatusHorizon>(() => (
     parsePhysicalStatusHorizon(searchParams.get('physicalStatusHorizon'))
   ))
+  const [selectedTwoYearLine, setSelectedTwoYearLine] = useState<TwoYearLineFilter>(() => (
+    parseTwoYearLineFilter(searchParams.get('twoYearLine'))
+  ))
+  const [selectedTwoYearPattern, setSelectedTwoYearPattern] = useState<TwoYearLinePatternFilter>(() => (
+    parseTwoYearLinePatternFilter(searchParams.get('twoYearPattern'))
+  ))
+  const [twoYearAngleMin, setTwoYearAngleMin] = useState(() => searchParams.get('twoYearAngleMin') ?? '')
+  const [twoYearAngleMax, setTwoYearAngleMax] = useState(() => searchParams.get('twoYearAngleMax') ?? '')
   const [filtersExpanded, setFiltersExpanded] = useState(true)
   const [tableView, setTableView] = useState<TableView>('core')
   const [selectedForComparison, setSelectedForComparison] = useState<Set<string>>(new Set())
@@ -514,6 +548,10 @@ function LegacyScreenerPage() {
       stage23Candidate,
       pmsTrend,
       physicalStatusHorizon: selectedPhysicalStatusHorizon === 20 ? null : selectedPhysicalStatusHorizon,
+      twoYearLine: selectedTwoYearLine === 'none' ? null : selectedTwoYearLine,
+      twoYearPattern: selectedTwoYearLine === 'none' || selectedTwoYearPattern === 'either' ? null : selectedTwoYearPattern,
+      twoYearAngleMin: selectedTwoYearLine === 'none' ? null : twoYearAngleMin.trim(),
+      twoYearAngleMax: selectedTwoYearLine === 'none' ? null : twoYearAngleMax.trim(),
       sort: sort?.key,
       dir: sort?.dir,
     })
@@ -531,6 +569,10 @@ function LegacyScreenerPage() {
     selectedEarningsTimeBucket,
     selectedMa200Direction,
     selectedShortTermCheck,
+    selectedTwoYearLine,
+    selectedTwoYearPattern,
+    twoYearAngleMin,
+    twoYearAngleMax,
     selectedPhysicalStatus,
     selectedMcapBins,
     pmsMin,
@@ -605,6 +647,16 @@ function LegacyScreenerPage() {
     if (forcePositive) params.set('forcePositive', '1')
     if (stage23Candidate) params.set('stage23Candidate', '1')
     if (pmsTrend) params.set('pmsTrend', pmsTrend)
+    if (selectedTwoYearLine !== 'none') {
+      params.set('twoYearLine', selectedTwoYearLine)
+      if (selectedTwoYearPattern !== 'either') params.set('twoYearPattern', selectedTwoYearPattern)
+      if (twoYearAngleMin.trim()) params.set('twoYearAngleMin', twoYearAngleMin.trim())
+      if (twoYearAngleMax.trim()) params.set('twoYearAngleMax', twoYearAngleMax.trim())
+      if (sort?.key.startsWith('twoYearLine')) {
+        params.set('sort', sort.key)
+        params.set('dir', sort.dir)
+      }
+    }
     if (requestedLimit != null) params.set('limit', String(requestedLimit))
     params.set('physicalStatusHorizon', String(selectedPhysicalStatusHorizon))
     for (const [k, v] of Object.entries(stages)) {
@@ -630,7 +682,7 @@ function LegacyScreenerPage() {
         }
       })
     return () => { cancelled = true }
-  }, [stages, selectedDate, activeUniverse, pmsMin, pfsMin, pesMin, accelerationPositive, forcePositive, stage23Candidate, pmsTrend, selectedPhysicalStatusHorizon, requestedLimit])
+  }, [stages, selectedDate, activeUniverse, pmsMin, pfsMin, pesMin, accelerationPositive, forcePositive, stage23Candidate, pmsTrend, selectedPhysicalStatusHorizon, selectedTwoYearLine, selectedTwoYearPattern, twoYearAngleMin, twoYearAngleMax, sort, requestedLimit])
 
   const filterText = useMemo(() => {
     const parts: string[] = []
@@ -843,6 +895,15 @@ function LegacyScreenerPage() {
       chips.push({ key: 'mcapBins', label: '時価総額', value: labels.join(' / '), tone: 'purple' })
     }
     if (selectedShortTermCheck) chips.push({ key: 'shortTermCheck', label: '短期チェック', value: selectedShortTermCheck, tone: selectedShortTermCheck.includes('下落') || selectedShortTermCheck.includes('弱') ? 'blue' : 'red' })
+    if (selectedTwoYearLine !== 'none') {
+      const statusLabel = selectedTwoYearLine === 'confirmed' ? '確定ラインあり' : selectedTwoYearLine === 'provisional' ? '暫定ラインあり' : '確定・暫定'
+      const patternLabel = selectedTwoYearPattern === 'three' ? '3本型' : selectedTwoYearPattern === 'four' ? '4本型' : '両型'
+      const angleLabel = twoYearAngleMin.trim() || twoYearAngleMax.trim()
+        ? `${twoYearAngleMin.trim() || '0'}°〜${twoYearAngleMax.trim() || '90'}°`
+        : ''
+      const value = [statusLabel, patternLabel, angleLabel].filter(Boolean).join(' / ')
+      chips.push({ key: 'twoYearLine', label: '24か月足', value, tone: selectedTwoYearLine === 'provisional' ? 'amber' : 'green' })
+    }
     if (selectedPhysicalStatus) chips.push({ key: 'physicalStatus', label: '物理状態', value: selectedPhysicalStatus, tone: selectedPhysicalStatus.includes('下落') || selectedPhysicalStatus.includes('失速') ? 'blue' : 'red' })
     if (selectedPhysicalStatusHorizon !== 20) chips.push({ key: 'physicalStatusHorizon', label: '物理検証', value: `${selectedPhysicalStatusHorizon}営業日`, tone: 'neutral' })
     if (pmsMin.trim()) chips.push({ key: 'pmsMin', label: 'PMS', value: `${pmsMin.trim()}以上`, tone: 'red' })
@@ -881,9 +942,13 @@ function LegacyScreenerPage() {
     selectedSectorLarge,
     selectedSubIndustry,
     selectedShortTermCheck,
+    selectedTwoYearLine,
+    selectedTwoYearPattern,
     selectedVolumeMin,
     stage23Candidate,
     stages,
+    twoYearAngleMin,
+    twoYearAngleMax,
   ])
   const resultSummaryMetrics = useMemo<SummaryMetric[]>(() => {
     const count = filteredResults.length
@@ -999,6 +1064,10 @@ function LegacyScreenerPage() {
     setStage23Candidate(false)
     setPmsTrend('')
     setSelectedPhysicalStatusHorizon(20)
+    setSelectedTwoYearLine('none')
+    setSelectedTwoYearPattern('either')
+    setTwoYearAngleMin('')
+    setTwoYearAngleMax('')
     setSort({ key: 'marketCap', dir: 'desc' })
     router.replace('/screener')
   }
@@ -1106,6 +1175,13 @@ function LegacyScreenerPage() {
         setStage23Candidate(false)
         removeUrlParams('stage23Candidate')
         break
+      case 'twoYearLine':
+        setSelectedTwoYearLine('none')
+        setSelectedTwoYearPattern('either')
+        setTwoYearAngleMin('')
+        setTwoYearAngleMax('')
+        removeUrlParams('twoYearLine', 'twoYearPattern', 'twoYearAngleMin', 'twoYearAngleMax')
+        break
       default:
         if (AXES.some((axis) => axis.key === key)) {
           setStages((prev) => {
@@ -1143,6 +1219,10 @@ function LegacyScreenerPage() {
     stage23Candidate,
     pmsTrend,
     selectedPhysicalStatusHorizon,
+    selectedTwoYearLine,
+    selectedTwoYearPattern,
+    twoYearAngleMin,
+    twoYearAngleMax,
     sort,
   } satisfies JpScreenerView
 
@@ -1174,6 +1254,10 @@ function LegacyScreenerPage() {
         ? view.selectedPhysicalStatusHorizon
         : 20,
     )
+    setSelectedTwoYearLine(parseTwoYearLineFilter(view.selectedTwoYearLine))
+    setSelectedTwoYearPattern(parseTwoYearLinePatternFilter(view.selectedTwoYearPattern))
+    setTwoYearAngleMin(view.twoYearAngleMin ?? '')
+    setTwoYearAngleMax(view.twoYearAngleMax ?? '')
     setSort(view.sort && isSortKey(view.sort.key)
       ? { key: view.sort.key, dir: view.sort.dir === 'asc' ? 'asc' : 'desc' }
       : { key: 'marketCap', dir: 'desc' })
@@ -1647,8 +1731,24 @@ function LegacyScreenerPage() {
         </div>
       </Section>
 
+      <Section step={10} label="24か月足ラインで絞り込み（任意）">
+        <TwoYearLineFilterControl
+          value={selectedTwoYearLine}
+          onChange={(value) => {
+            setSelectedTwoYearLine(value)
+            if (value === 'none' && sort?.key.startsWith('twoYearLine')) setSort({ key: 'marketCap', dir: 'desc' })
+          }}
+          pattern={selectedTwoYearPattern}
+          onPatternChange={setSelectedTwoYearPattern}
+          angleMin={twoYearAngleMin}
+          angleMax={twoYearAngleMax}
+          onAngleMinChange={setTwoYearAngleMin}
+          onAngleMaxChange={setTwoYearAngleMax}
+        />
+      </Section>
+
       {/* HEXステージ（任意の絞り込み） */}
-      <Section step={10} label="HEXステージで絞り込み（任意 / 複数系統 AND）">
+      <Section step={11} label="HEXステージで絞り込み（任意 / 複数系統 AND）">
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '8px' }}>
           <button
             onClick={() => setStages({})}
@@ -1804,7 +1904,7 @@ function LegacyScreenerPage() {
                 >
                   <option value="">未指定</option>
                   {SORT_OPTIONS.map((option) => (
-                    <option key={option.key} value={option.key}>{option.label}</option>
+                    <option key={option.key} value={option.key} disabled={option.key.startsWith('twoYearLine') && selectedTwoYearLine === 'none'}>{option.label}</option>
                   ))}
                 </select>
               </label>
@@ -1982,6 +2082,18 @@ function LegacyScreenerPage() {
                             </Link>
                             <StockPreviewTrigger ticker={r.ticker} analysisDate={referenceDate} context="screener" />
                           </span>
+                          <TwoYearLineResultBadge
+                            status={r.twoYearLineStatus}
+                            pattern={r.twoYearLinePattern}
+                            periods={r.twoYearLinePeriods}
+                            startClose={r.twoYearLineStartClose}
+                            endClose={r.twoYearLineEndClose}
+                            angleDeg={r.twoYearLineAngleDeg}
+                            lastCandleRisePct={r.twoYearLineLastCandleRisePct}
+                            confirmedDistancePct={r.twoYearLineConfirmedDistancePct}
+                            asOfDate={r.twoYearLineAsOfDate}
+                            priceBasisVersion={r.twoYearLinePriceBasisVersion}
+                          />
                         </td>
                         <td style={td}>
                           <button
