@@ -7,6 +7,7 @@
 import { execFileSync, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
+import { assertLargeHolderReleaseConfiguration } from '@/lib/large-holders/release-preflight'
 
 const cwd = process.cwd()
 const liveName = '.next-live'
@@ -96,6 +97,8 @@ function assertLaunchAgentRunning(label: string): void {
   }
 }
 
+const largeHolderPreflight = assertLargeHolderReleaseConfiguration()
+console.log(`Large Holder release configuration preflight passed (${largeHolderPreflight.checkedKeys.length} paths)`)
 removeGenerated(stagePath)
 runNpm('test:layout-shell')
 runNpm('test:status-health')

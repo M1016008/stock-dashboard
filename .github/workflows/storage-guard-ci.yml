@@ -41,6 +41,12 @@ jobs:
       - name: Storage Guard regression
         run: npm run storage:guard-test
 
+      - name: Weekly backup policy and writer hold
+        run: npm run test:weekly-backup-policy && npm run test:weekly-writer-hold
+
+      - name: Large Holder release preflight
+        run: npm run test:large-holder-release-preflight
+
       - name: US analytics isolation regression
         run: npm run test:us-analytics-generation
 
