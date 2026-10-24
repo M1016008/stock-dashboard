@@ -249,8 +249,10 @@ async function testIntegratedScreener(asOf: string): Promise<{
   const storedTimeResponse = await queryIntegratedScreener({ asOf, sort: 'marketCap', limit: 3 })
   assert.equal(storedTimeResponse.servingBuiltAt, 1_234_567_890, 'response must return the stored build time')
 
+  queries = 0
   const warm = await queryIntegratedScreener({ asOf, sort: 'marketCap', limit: 3 })
   assert.equal(warm.cacheHit, true)
+  assert.equal(queries, 1, 'a warm response must retain one data_version probe and avoid metadata rereads')
   await execRun(`
     UPDATE stock_classification
     SET major_category='Changed Alpha', updated_at=300

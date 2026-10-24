@@ -18,6 +18,7 @@ import { KeyedSingleflight } from '@/lib/server/keyed-singleflight'
 export const SCREENING_SERVING_SOURCE_VERSION = 'integrated-screener-serving-v4'
 const BUILD_WRITE_CHUNK = 80
 const RESULT_CACHE_TTL_MS = 60_000
+const SERVING_METADATA_CACHE_LIMIT = 64
 const CERTIFIED_PIT_SOURCE_PREFIX = 'pit-v1:'
 const responseCache = new Map<string, { expiresAt: number; value: IntegratedScreeningResponse }>()
 const globalForIntegratedScreener = global as typeof globalThis & {
@@ -27,6 +28,11 @@ const globalForIntegratedScreener = global as typeof globalThis & {
     dataVersion: number
     mutationVersion: number
     value: ScreeningSourceState
+  }>
+  integratedScreenerServingResultCache?: Map<string, {
+    dataVersion: number
+    mutationVersion: number
+    value: Omit<ScreeningServingBuildResult, 'elapsedMs' | 'cacheHit'>
   }>
 }
 
@@ -126,10 +132,32 @@ async function readDataVersion(): Promise<number> {
   return value
 }
 
-async function readScreeningSourceState(asOf: string): Promise<ScreeningSourceState> {
+type DatabaseVersion = { dataVersion: number; mutationVersion: number }
+
+function setBoundedCache<K, V>(cache: Map<K, V>, key: K, value: V): void {
+  cache.delete(key)
+  cache.set(key, value)
+  while (cache.size > SERVING_METADATA_CACHE_LIMIT) {
+    const oldest = cache.keys().next()
+    if (oldest.done) break
+    cache.delete(oldest.value)
+  }
+}
+
+async function readDatabaseVersion(): Promise<DatabaseVersion> {
+  return {
+    dataVersion: await readDataVersion(),
+    mutationVersion: localDatabaseMutationVersion(),
+  }
+}
+
+async function readScreeningSourceState(
+  asOf: string,
+  observed?: DatabaseVersion,
+): Promise<ScreeningSourceState> {
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    const dataVersion = await readDataVersion()
-    const mutationVersion = localDatabaseMutationVersion()
+    const version = attempt === 0 && observed ? observed : await readDatabaseVersion()
+    const { dataVersion, mutationVersion } = version
     globalForIntegratedScreener.integratedScreenerSourceStateCache ??= new Map()
     const cached = globalForIntegratedScreener.integratedScreenerSourceStateCache.get(asOf)
     if (cached?.dataVersion === dataVersion && cached.mutationVersion === mutationVersion) return cached.value
@@ -150,6 +178,44 @@ async function readScreeningSourceState(asOf: string): Promise<ScreeningSourceSt
     }
   }
   throw new Error('Integrated screener source generation remained unstable after retry.')
+}
+
+function cachedServingResult(
+  asOf: string,
+  version: DatabaseVersion,
+  startedAt: number,
+): ScreeningServingBuildResult | null {
+  const cache = globalForIntegratedScreener.integratedScreenerServingResultCache
+  const cached = cache?.get(asOf)
+  if (!cached) return null
+  if (cached.dataVersion !== version.dataVersion || cached.mutationVersion !== version.mutationVersion) {
+    cache!.delete(asOf)
+    return null
+  }
+  return { ...cached.value, elapsedMs: Date.now() - startedAt, cacheHit: true }
+}
+
+async function rememberStableServingResult(
+  result: ScreeningServingBuildResult,
+  startingVersion: DatabaseVersion,
+): Promise<ScreeningServingBuildResult> {
+  const endingVersion = await readDatabaseVersion()
+  if (endingVersion.dataVersion === startingVersion.dataVersion
+    && endingVersion.mutationVersion === startingVersion.mutationVersion) {
+    globalForIntegratedScreener.integratedScreenerServingResultCache ??= new Map()
+    setBoundedCache(globalForIntegratedScreener.integratedScreenerServingResultCache, result.asOf, {
+      ...endingVersion,
+      value: {
+        asOf: result.asOf,
+        snapshotDate: result.snapshotDate,
+        valuationDate: result.valuationDate,
+        sourceVersion: result.sourceVersion,
+        calculatedAt: result.calculatedAt,
+        rows: result.rows,
+      },
+    })
+  }
+  return result
 }
 
 async function readScreeningSourceStateUncached(
@@ -207,7 +273,7 @@ async function readScreeningSourceStateUncached(
   if (endingDataVersion !== dataVersion || endingMutationVersion !== mutationVersion) {
     throw new Error('Integrated screener source generation changed while reading its watermark.')
   }
-  globalForIntegratedScreener.integratedScreenerSourceStateCache!.set(asOf, {
+  setBoundedCache(globalForIntegratedScreener.integratedScreenerSourceStateCache!, asOf, {
     dataVersion,
     mutationVersion,
     value,
@@ -629,6 +695,11 @@ async function replaceServingGeneration(input: {
 export async function buildScreeningServingDate(requestedAsOf?: string | null, force = false): Promise<ScreeningServingBuildResult> {
   const startedAt = Date.now()
   const asOf = isoDate(requestedAsOf)
+  const startingVersion = await readDatabaseVersion()
+  if (!force) {
+    const cached = cachedServingResult(asOf, startingVersion, startedAt)
+    if (cached) return cached
+  }
   type ExistingServing = {
     status: string
     row_count: number
@@ -661,11 +732,11 @@ export async function buildScreeningServingDate(requestedAsOf?: string | null, f
       && existing?.status === 'completed'
       && Number(existing.row_count) > 0
       && existing.source_version.startsWith(CERTIFIED_PIT_SOURCE_PREFIX)
-    if (certified) return asBuildResult(existing)
+    if (certified) return rememberStableServingResult(asBuildResult(existing), startingVersion)
     throw new Error(`Historical integrated screener data for ${asOf} is not backed by a certified point-in-time generation.`)
   }
 
-  const source = await readScreeningSourceState(asOf)
+  const source = await readScreeningSourceState(asOf, startingVersion)
   const isFresh = (candidate: ExistingServing | undefined) => !force
     && candidate?.status === 'completed'
     && candidate.source_version === source.sourceVersion
@@ -673,7 +744,7 @@ export async function buildScreeningServingDate(requestedAsOf?: string | null, f
     && candidate.valuation_date === source.valuationDate
     && Number(candidate.row_count) > 0
 
-  if (isFresh(existing)) return asBuildResult(existing!)
+  if (isFresh(existing)) return rememberStableServingResult(asBuildResult(existing!), startingVersion)
 
   globalForIntegratedScreener.integratedScreenerBuildSingleflight ??= new KeyedSingleflight(1)
   const result = await globalForIntegratedScreener.integratedScreenerBuildSingleflight.run(
@@ -738,7 +809,9 @@ export async function buildScreeningServingDate(requestedAsOf?: string | null, f
       }
     },
   )
-  return { ...result, elapsedMs: Date.now() - startedAt }
+  const completed = { ...result, elapsedMs: Date.now() - startedAt }
+  if (!result.cacheHit) return completed
+  return rememberStableServingResult(completed, startingVersion)
 }
 
 function conditionSql(condition: ScreeningCondition, args: Array<string | number>): string | null {
