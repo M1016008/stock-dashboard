@@ -149,11 +149,15 @@ try {
   assert.equal(requiredMissing.status, 'FAILED_SAFE', 'missing primary DB must remain fatal')
   assert.equal(fs.existsSync(path.join(requiredIncidentDir, 'FAILED_SAFE')), true)
   const originalNodeEnv = process.env.NODE_ENV
+  const originalExternalStorageRequired = process.env.EXTERNAL_STORAGE_REQUIRED
   Reflect.set(process.env, 'NODE_ENV', 'production')
+  process.env.EXTERNAL_STORAGE_REQUIRED = 'true'
   try { assert.equal(requiresExternalStorageGuard('/tmp/misconfigured-production.db'), true) }
   finally {
     if (originalNodeEnv === undefined) Reflect.deleteProperty(process.env, 'NODE_ENV')
     else Reflect.set(process.env, 'NODE_ENV', originalNodeEnv)
+    if (originalExternalStorageRequired === undefined) Reflect.deleteProperty(process.env, 'EXTERNAL_STORAGE_REQUIRED')
+    else process.env.EXTERNAL_STORAGE_REQUIRED = originalExternalStorageRequired
   }
   const guard = new ExternalStorageGuard(config, probe)
   let opens = 0

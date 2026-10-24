@@ -12,7 +12,6 @@ import {
 import { execAll, execGet } from '@/lib/db/client'
 import { readServingCache, stableCacheKey, writeServingCache } from '@/lib/api/serving-cache'
 import { NIKKEI225_TICKERS } from '@/lib/market-universe'
-import { KeyedSingleflight } from '@/lib/server/keyed-singleflight'
 
 export type PeriodExplorerTaxonomy = 'sector17' | 'sector33' | 'major' | 'subIndustry'
 export type PeriodExplorerSortKey = 'ranking' | 'periodReturn' | 'price' | 'marketCap' | 'avgTurnover' | 'avgVolume' | 'ticker'
@@ -165,19 +164,8 @@ export interface PeriodExplorerResponse {
 }
 
 type CalendarCache = { dates: string[]; expiresAt: number }
-type PeriodExplorerRangeCore = {
-  rows: PeriodExplorerStockRow[]
-  previousStats: RangeDbRow[]
-  eligibleCount: number
-}
-type RangeCoreCacheEntry = {
-  generatedAt: number
-  core: PeriodExplorerRangeCore
-}
 const globalForPeriodExplorer = global as typeof globalThis & {
   periodExplorerCalendar?: CalendarCache
-  periodExplorerRangeCores?: Map<string, RangeCoreCacheEntry>
-  periodExplorerRangeCoreSingleflight?: KeyedSingleflight
 }
 
 type BaseDbRow = Record<string, unknown> & {
@@ -267,9 +255,7 @@ type VolatilityDbRow = {
 
 const CALENDAR_TTL_MS = 5 * 60_000
 const RESPONSE_TTL_MS = 5 * 60_000
-const CACHE_VERSION = 7
-const CORE_CACHE_VERSION = 1
-const CORE_CACHE_MAX_ENTRIES = 6
+const CACHE_VERSION = 6
 const NIKKEI225_SET = new Set<string>(NIKKEI225_TICKERS)
 
 export class PeriodExplorerInputError extends Error {}
@@ -741,6 +727,19 @@ async function loadVolatilityStats(
   return result
 }
 
+function rangeStatsScopeForQuery(
+  ranking: PeriodExplorerRankingKey,
+  requiresRangeStats: boolean,
+  forceFull: boolean,
+): RangeStatsScope | null {
+  if (forceFull) return 'full'
+  if (!requiresRangeStats) return null
+  if (['max_rise', 'max_fall', 'drawdown_from_high', 'rebound_from_low', 'period_range'].includes(ranking)) return 'price'
+  if (['avg_volume', 'max_volume', 'volume_increase'].includes(ranking)) return 'volume'
+  if (['avg_turnover', 'total_turnover', 'turnover_increase'].includes(ranking)) return 'turnover'
+  return 'full'
+}
+
 function applyRangeStats(row: PeriodExplorerStockRow, current: RangeDbRow | undefined, previous?: RangeDbRow): void {
   if (!current) return
   row.periodHigh = asNumber(current.period_high)
@@ -779,154 +778,6 @@ function applyVolatility(row: PeriodExplorerStockRow, value: VolatilityDbRow | u
   }
   row.gapUpCount = asNumber(value.gap_up_count)
   row.gapDownCount = asNumber(value.gap_down_count)
-}
-
-function clearTechnicalData(row: PeriodExplorerStockRow): void {
-  const emptyStages = (): PeriodExplorerStageValues => ({
-    dailyA: null,
-    dailyB: null,
-    weeklyA: null,
-    weeklyB: null,
-    monthlyA: null,
-    monthlyB: null,
-  })
-  row.startStages = emptyStages()
-  row.endStages = emptyStages()
-  row.stageCode = null
-  row.stageSummary = summarizeStagePeriod(row.startStages, row.endStages)
-  row.ma25DeviationPct = null
-  row.ma75DeviationPct = null
-  row.maSpreadStartPct = null
-  row.maSpreadEndPct = null
-  row.maConvergencePct = null
-  row.maExpansionPct = null
-  row.goldenCross = false
-  row.deadCross = false
-}
-
-function rangeCoreCacheKey(range: PeriodExplorerDateRange): string {
-  return stableCacheKey({
-    version: CORE_CACHE_VERSION,
-    adoptedFrom: range.adoptedFrom,
-    adoptedTo: range.adoptedTo,
-    previousFrom: range.previousFrom,
-    previousTo: range.previousTo,
-  })
-}
-
-function rememberRangeCore(key: string, entry: RangeCoreCacheEntry): void {
-  globalForPeriodExplorer.periodExplorerRangeCores ??= new Map()
-  globalForPeriodExplorer.periodExplorerRangeCores.set(key, entry)
-  if (globalForPeriodExplorer.periodExplorerRangeCores.size <= CORE_CACHE_MAX_ENTRIES) return
-  const oldestKey = globalForPeriodExplorer.periodExplorerRangeCores.keys().next().value
-  if (oldestKey) globalForPeriodExplorer.periodExplorerRangeCores.delete(oldestKey)
-}
-
-async function buildPeriodExplorerRangeCore(
-  range: PeriodExplorerDateRange,
-): Promise<PeriodExplorerRangeCore> {
-  const rows = await loadBaseRows(range, 'sector33', true)
-  const [currentStats, previousStats, highLowStats, volatilityStats, eligible] = await Promise.all([
-    loadRangeStats(range.adoptedFrom, range.adoptedTo),
-    range.previousFrom && range.previousTo
-      ? loadRangeStats(range.previousFrom, range.previousTo)
-      : Promise.resolve(new Map<string, RangeDbRow>()),
-    load52WeekStats(range.adoptedFrom, range.adoptedTo),
-    loadVolatilityStats(range.adoptedFrom, range.adoptedTo, range.previousTo),
-    execGet<{ count: number }>(`
-      SELECT COUNT(*) AS count FROM historical_universe
-      WHERE first_trade_date <= ? AND last_trade_date >= ?
-    `, [range.adoptedTo, range.adoptedFrom]),
-  ])
-  for (const row of rows) {
-    applyRangeStats(row, currentStats.get(row.ticker))
-    apply52Week(row, highLowStats.get(row.ticker))
-    applyVolatility(row, volatilityStats.get(row.ticker))
-  }
-  await applyPitMarketCaps(rows, range.adoptedTo)
-  return {
-    rows,
-    previousStats: [...previousStats.values()],
-    eligibleCount: Number(eligible?.count ?? rows.length),
-  }
-}
-
-async function getPeriodExplorerRangeCore(
-  range: PeriodExplorerDateRange,
-): Promise<PeriodExplorerRangeCore> {
-  const key = rangeCoreCacheKey(range)
-  globalForPeriodExplorer.periodExplorerRangeCores ??= new Map()
-  const cached = globalForPeriodExplorer.periodExplorerRangeCores.get(key)
-  if (cached && Date.now() - cached.generatedAt < RESPONSE_TTL_MS) return cached.core
-  if (cached) globalForPeriodExplorer.periodExplorerRangeCores.delete(key)
-
-  globalForPeriodExplorer.periodExplorerRangeCoreSingleflight ??= new KeyedSingleflight(2)
-  await globalForPeriodExplorer.periodExplorerRangeCoreSingleflight.run(key, async () => {
-    const joined = globalForPeriodExplorer.periodExplorerRangeCores?.get(key)
-    if (joined && Date.now() - joined.generatedAt < RESPONSE_TTL_MS) return
-    const stored = await readServingCache<PeriodExplorerRangeCore>(
-      'period-explorer-range-core',
-      key,
-      RESPONSE_TTL_MS,
-    )
-    if (stored) {
-      rememberRangeCore(key, { generatedAt: stored.generatedAt, core: stored.payload })
-      return
-    }
-    const core = await buildPeriodExplorerRangeCore(range)
-    const generatedAt = Date.now()
-    rememberRangeCore(key, { generatedAt, core })
-    await writeServingCache(
-      'period-explorer-range-core',
-      key,
-      core,
-      RESPONSE_TTL_MS,
-      generatedAt,
-    ).catch(() => undefined)
-  })
-  const resolved = globalForPeriodExplorer.periodExplorerRangeCores.get(key)
-  if (!resolved) throw new Error('Period Explorer range core was not generated.')
-  return resolved.core
-}
-
-function materializeRangeCoreRows(
-  core: PeriodExplorerRangeCore,
-  taxonomy: PeriodExplorerTaxonomy,
-  options: {
-    includePrevious: boolean
-    include52Week: boolean
-    includeVolatility: boolean
-    includeTechnicalForSectors: boolean
-  },
-): PeriodExplorerStockRow[] {
-  const previousByTicker = new Map(core.previousStats.map((row) => [row.ticker, row]))
-  return core.rows.map((source) => {
-    const row: PeriodExplorerStockRow = {
-      ...source,
-      rank: 0,
-      rankingValue: null,
-      startStages: { ...source.startStages },
-      endStages: { ...source.endStages },
-      stageSummary: { ...source.stageSummary },
-    }
-    row.selectedSector = selectedSector(row, taxonomy)
-    const previous = options.includePrevious ? previousByTicker.get(row.ticker) : undefined
-    row.volumeIncreasePct = previous ? safeRatioPct(row.avgVolume, asNumber(previous.avg_volume)) : null
-    row.turnoverIncreasePct = previous ? safeRatioPct(row.avgTurnover, asNumber(previous.avg_turnover)) : null
-    if (!options.include52Week) {
-      row.high52 = null
-      row.low52 = null
-      row.high52DistancePct = null
-      row.low52DistancePct = null
-    }
-    if (!options.includeVolatility) {
-      row.realizedVolatilityPct = null
-      row.gapUpCount = null
-      row.gapDownCount = null
-    }
-    if (!options.includeTechnicalForSectors) clearTechnicalData(row)
-    return row
-  })
 }
 
 function rankingValue(row: PeriodExplorerStockRow, ranking: PeriodExplorerRankingKey): number | null {
@@ -1080,15 +931,40 @@ export async function queryPeriodExplorer(input: PeriodExplorerInput = {}): Prom
   const needAllTechnical = definition.category === 'technical'
     || normalized.ranking === 'sector_stage_improve'
     || technicalFiltersActive
-  const needAll52Week = Boolean(definition.requires52Week || normalized.filters.high52WithinPct != null || normalized.filters.low52WithinPct != null)
-  const core = await getPeriodExplorerRangeCore(range)
-  let rows = materializeRangeCoreRows(core, normalized.taxonomy, {
-    includePrevious: Boolean(definition.requiresPreviousRange),
-    include52Week: needAll52Week,
-    includeVolatility: Boolean(definition.requiresVolatility),
-    includeTechnicalForSectors: definition.resultKind !== 'sectors' || needAllTechnical,
-  })
+  let rows = await loadBaseRows(range, normalized.taxonomy, needAllTechnical)
   const optionRows = rows
+  const rangeFiltersActive = normalized.filters.avgVolumeMin != null || normalized.filters.avgVolumeMax != null
+    || normalized.filters.avgTurnoverMin != null || normalized.filters.avgTurnoverMax != null
+  const rangeSortActive = normalized.sort === 'avgVolume' || normalized.sort === 'avgTurnover'
+  const forceFullRangeStats = Boolean(rangeFiltersActive || rangeSortActive || definition.resultKind === 'sectors')
+  const rangeStatsScope = rangeStatsScopeForQuery(
+    normalized.ranking,
+    Boolean(definition.requiresRangeStats || definition.requiresPreviousRange),
+    forceFullRangeStats,
+  )
+  const needAll52Week = Boolean(definition.requires52Week || normalized.filters.high52WithinPct != null || normalized.filters.low52WithinPct != null)
+  const needAllPitShares = normalized.filters.marketCapMin != null || normalized.filters.marketCapMax != null || normalized.sort === 'marketCap'
+
+  let currentStats = new Map<string, RangeDbRow>()
+  let previousStats = new Map<string, RangeDbRow>()
+  if (rangeStatsScope) {
+    currentStats = await loadRangeStats(range.adoptedFrom, range.adoptedTo, undefined, rangeStatsScope)
+    if (definition.requiresPreviousRange && range.previousFrom && range.previousTo) {
+      previousStats = await loadRangeStats(range.previousFrom, range.previousTo, undefined, rangeStatsScope)
+    }
+    for (const row of rows) applyRangeStats(row, currentStats.get(row.ticker), previousStats.get(row.ticker))
+  }
+  if (needAll52Week) {
+    const stats = await load52WeekStats(range.adoptedFrom, range.adoptedTo)
+    for (const row of rows) apply52Week(row, stats.get(row.ticker))
+  }
+  if (definition.requiresVolatility) {
+    const stats = await loadVolatilityStats(range.adoptedFrom, range.adoptedTo, range.previousTo)
+    for (const row of rows) applyVolatility(row, stats.get(row.ticker))
+  }
+  if (needAllPitShares) {
+    await applyPitMarketCaps(rows, range.adoptedTo)
+  }
 
   let universeTotal = 0
   if (definition.resultKind === 'sectors') {
@@ -1108,7 +984,11 @@ export async function queryPeriodExplorer(input: PeriodExplorerInput = {}): Prom
     rows = rows.filter((row) => row.rankingValue != null && Number.isFinite(row.rankingValue))
   }
 
-  const missingEndpoints = Math.max(0, core.eligibleCount - optionRows.length)
+  const eligible = await execGet<{ count: number }>(`
+    SELECT COUNT(*) AS count FROM historical_universe
+    WHERE first_trade_date <= ? AND last_trade_date >= ?
+  `, [range.adoptedTo, range.adoptedFrom])
+  const missingEndpoints = Math.max(0, Number(eligible?.count ?? rows.length) - optionRows.length)
 
   let responseRows: Array<PeriodExplorerStockRow | PeriodExplorerSectorRow>
   let total: number
@@ -1129,6 +1009,17 @@ export async function queryPeriodExplorer(input: PeriodExplorerInput = {}): Prom
     rows.sort((a, b) => compareRows(a, b, normalized.sort, normalized.direction))
     total = rows.length
     const pageRows = rows.slice(normalized.offset, normalized.offset + normalized.limit)
+    if (!needAllTechnical && pageRows.length > 0) {
+      const technical = await loadTechnicalRows(range, pageRows.map((row) => row.ticker))
+      for (const row of pageRows) applyTechnicalData(row, technical.get(row.ticker))
+    }
+    if (!needAllPitShares && pageRows.length > 0) {
+      await applyPitMarketCaps(pageRows, range.adoptedTo)
+    }
+    if (rangeStatsScope !== 'full' && pageRows.length > 0) {
+      currentStats = await loadRangeStats(range.adoptedFrom, range.adoptedTo, pageRows.map((row) => row.ticker))
+      for (const row of pageRows) applyRangeStats(row, currentStats.get(row.ticker), previousStats.get(row.ticker))
+    }
     responseRows = pageRows
     responseRows.forEach((row, index) => { row.rank = normalized.offset + index + 1 })
   }

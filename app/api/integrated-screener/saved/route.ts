@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import {
   DEFAULT_SCREENING_COLUMNS,
   SCREENING_METRIC_MAP,
-  type ScreeningCondition,
+  ScreeningConditionValidationError,
+  parseScreeningConditions,
   type ScreeningMetricKey,
 } from '@/lib/integrated-screener'
 import type { SavedScreenStateContract } from '@/lib/screener-evaluation'
@@ -13,16 +14,6 @@ import {
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 120
-
-function parseConditions(value: unknown): ScreeningCondition[] {
-  if (!Array.isArray(value)) return []
-  return value.filter((item): item is ScreeningCondition => {
-    if (!item || typeof item !== 'object') return false
-    const condition = item as Partial<ScreeningCondition>
-    if (typeof condition.id !== 'string' || typeof condition.metric !== 'string' || typeof condition.operator !== 'string') return false
-    return Boolean(SCREENING_METRIC_MAP.get(condition.metric as ScreeningMetricKey)?.operators.includes(condition.operator as ScreeningCondition['operator']))
-  }).slice(0, 40)
-}
 
 function parseState(value: unknown): SavedScreenStateContract | null {
   if (!value || typeof value !== 'object') return null
@@ -35,7 +26,7 @@ function parseState(value: unknown): SavedScreenStateContract | null {
     : DEFAULT_SCREENING_COLUMNS
   return {
     asOf: typeof state.asOf === 'string' ? state.asOf : '',
-    conditions: parseConditions(state.conditions),
+    conditions: parseScreeningConditions(state.conditions),
     sort,
     direction: state.direction === 'asc' ? 'asc' : 'desc',
     columns: columns.length > 0 ? columns : DEFAULT_SCREENING_COLUMNS,
@@ -73,6 +64,9 @@ export async function POST(request: NextRequest) {
       headers: { 'Cache-Control': 'no-store', 'Server-Timing': `saved-screen;dur=${Date.now() - startedAt}` },
     })
   } catch (error) {
+    if (error instanceof ScreeningConditionValidationError) {
+      return NextResponse.json({ error: 'invalid_saved_screen', message: error.message }, { status: 400 })
+    }
     console.error('[saved-screening-save]', error)
     return NextResponse.json({ error: 'saved_screen_save_failed', message: error instanceof Error ? error.message : String(error) }, { status: 500 })
   }

@@ -62,7 +62,7 @@ async function benchmarkSingleflight() {
 }
 
 async function benchmarkPresentationBatching() {
-  const { loadPresentations } = await import('@/app/api/ml/historical-analogs/route')
+  const { loadPresentations } = await import('@/lib/server/historical-analog-presentations')
   const dates = Array.from({ length: 760 }, (_, index) =>
     new Date(Date.UTC(2023, 0, 1 + index)).toISOString().slice(0, 10)
   )

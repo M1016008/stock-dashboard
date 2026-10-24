@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url'
 import {
   ExternalStorageGuard,
   configForDatabase,
+  requiresExternalStorageGuard,
   type StorageProbe,
   type VolumeIdentity,
 } from '@/lib/storage/external-storage-guard'
@@ -78,7 +79,7 @@ const MUTATING_TEST_COMMANDS = [
 ] as const
 
 async function main(): Promise<void> {
-  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'stockboard-runtime-isolation-'))
+  const temporary = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'stockboard-runtime-isolation-')))
   const originalEnvironment = { ...process.env }
   try {
     const isolationRoot = path.join(temporary, 'isolated')
@@ -95,14 +96,81 @@ async function main(): Promise<void> {
       STOCK_DATA_INCIDENT_DIR: path.join(temporary, 'production-incidents'),
       JQUANTS_API_KEY: 'production-jquants-key',
       OPENAI_API_KEY: 'production-openai-key',
+      ANALOG_SEARCH_PROXY_URL: 'http://127.0.0.1:4111',
+      STOCKBOARD_UNKNOWN_SECRET: 'must-not-leak',
+      STOCKBOARD_UNKNOWN_PATH: '/Volumes/Production/unknown',
     }
     const isolated = createIsolatedRuntimeEnvironment('test', isolationRoot, poisoned)
+    const resolvedIsolationRoot = path.join(fs.realpathSync(temporary), 'isolated')
     assert.equal(assertIsolatedRuntimeEnvironment(isolated), 'test')
     assert.equal(isolated.NODE_ENV, 'test')
     assert.equal(isolated.USE_LOCAL_DB, '1')
-    assert.equal(isolated.STOCKBOARD_DB_PATH, path.join(isolationRoot, 'data', 'stockboard.db'))
-    assert.equal(isolated.STOCK_DATA_INCIDENT_DIR, path.join(isolationRoot, 'storage-incidents'))
+    assert.equal(isolated.STOCKBOARD_DB_PATH, path.join(resolvedIsolationRoot, 'data', 'stockboard.db'))
+    assert.equal(isolated.STOCK_DATA_INCIDENT_DIR, path.join(resolvedIsolationRoot, 'storage-incidents'))
     for (const name of SCRUBBED_RUNTIME_CREDENTIALS) assert.equal(isolated[name], '', `${name} must be scrubbed`)
+    assert.equal(isolated.ANALOG_SEARCH_PROXY_URL, undefined, 'unapproved proxy routes must not enter isolation')
+    assert.equal(isolated.STOCKBOARD_UNKNOWN_SECRET, undefined, 'unknown secrets must not enter isolation')
+    assert.equal(isolated.STOCKBOARD_UNKNOWN_PATH, undefined, 'unknown paths must not enter isolation')
+    assert.equal(isolated.HOME, path.join(resolvedIsolationRoot, 'home'))
+    assert.equal(isolated.TMPDIR, path.join(resolvedIsolationRoot, 'tmp'))
+    assert.equal(isolated.NEXT_TELEMETRY_DISABLED, '1')
+
+    fs.mkdirSync(resolvedIsolationRoot, { recursive: true })
+    const outsideIsolation = path.join(temporary, 'outside-isolation')
+    fs.mkdirSync(outsideIsolation)
+    const escapeLink = path.join(resolvedIsolationRoot, 'escape')
+    fs.symlinkSync(outsideIsolation, escapeLink, 'dir')
+    Object.assign(process.env, isolated)
+    assert.throws(
+      () => requiresExternalStorageGuard(path.join(escapeLink, 'escaped.db')),
+      (error: { storageCode?: string }) => error.storageCode === 'DB_OUTSIDE_EXPECTED_VOLUME',
+      'a symlink inside the isolation root must not escape to another filesystem location',
+    )
+    Object.assign(process.env, originalEnvironment)
+
+    const owcDevelopmentRoot = '/Volumes/OWC Express 1M2 80G/development/worktree/.stockboard-development'
+    const owcDevelopment = createIsolatedRuntimeEnvironment('development', owcDevelopmentRoot, {
+      NODE_ENV: 'development',
+    })
+    assert.equal(assertIsolatedRuntimeEnvironment(owcDevelopment), 'development')
+    Object.assign(process.env, owcDevelopment)
+    assert.equal(
+      requiresExternalStorageGuard(path.join(owcDevelopmentRoot, 'data', 'stockboard.db')),
+      false,
+      'the pinned OWC development database must not engage the Production volume guard',
+    )
+    assert.throws(
+      () => requiresExternalStorageGuard('/Volumes/OWC Express 1M2 80G/stockboard-data/stockboard.db'),
+      (error: { storageCode?: string }) => error.storageCode === 'DB_OUTSIDE_EXPECTED_VOLUME',
+      'an OWC Production path outside the isolated root must fail closed',
+    )
+    Object.assign(process.env, originalEnvironment)
+
+    const previewRoot = '/Volumes/OWC Express 1M2 80G/development/worktree/.stockboard-preview'
+    const preview = createIsolatedRuntimeEnvironment('preview', previewRoot, {
+      NODE_ENV: 'production',
+      NEXT_DIST_DIR: '.next-preview',
+    })
+    assert.equal(assertIsolatedRuntimeEnvironment(preview), 'preview')
+    assert.equal(preview.NODE_ENV, 'production')
+    assert.equal(preview.STOCKBOARD_DB_OPEN_FORBIDDEN, '0')
+    assert.equal(preview.NEXT_DIST_DIR, '.next-preview')
+    Object.assign(process.env, preview)
+    assert.equal(
+      requiresExternalStorageGuard(path.join(previewRoot, 'data', 'stockboard.db')),
+      false,
+      'the pinned OWC preview database must not engage the Production volume guard',
+    )
+    Object.assign(process.env, originalEnvironment)
+    assert.throws(
+      () => createIsolatedRuntimeEnvironment(
+        'development',
+        '/Volumes/OWC Express 1M2 80G/stockboard-data/.stockboard-development',
+        { NODE_ENV: 'development' },
+      ),
+      /absolute local directory/,
+      'Production data roots on the same OWC volume must remain forbidden',
+    )
 
     const invalid = { ...isolated, TURSO_DATABASE_URL: poisoned.TURSO_DATABASE_URL }
     assert.throws(
@@ -126,7 +194,21 @@ async function main(): Promise<void> {
     assert.equal(fs.existsSync(poisonedDbPath), false, 'refusal must happen before opening a DB')
 
     const buildRoot = path.join(temporary, 'build')
-    const buildEnvironment = createIsolatedRuntimeEnvironment('build', buildRoot, poisoned)
+    const buildEnvironment = createIsolatedRuntimeEnvironment('build', buildRoot, {
+      ...poisoned,
+      NEXT_DIST_DIR: '.next-release-stage',
+      STOCKBOARD_BUILD_CPUS: '1',
+    })
+    assert.equal(buildEnvironment.NEXT_DIST_DIR, '.next-release-stage')
+    assert.equal(buildEnvironment.STOCKBOARD_BUILD_CPUS, '1')
+    assert.throws(
+      () => createIsolatedRuntimeEnvironment('build', buildRoot, { ...poisoned, NEXT_DIST_DIR: '../escape' }),
+      /NEXT_DIST_DIR/,
+    )
+    assert.throws(
+      () => createIsolatedRuntimeEnvironment('build', buildRoot, { ...poisoned, STOCKBOARD_BUILD_CPUS: '0' }),
+      /STOCKBOARD_BUILD_CPUS/,
+    )
     const buildDbPath = buildEnvironment.STOCKBOARD_DB_PATH as string
     const blockedBuildOpen = spawnSync(process.execPath, ['--import', 'tsx', scriptPath, '--probe-db-open'], {
       cwd: process.cwd(),
@@ -150,7 +232,9 @@ async function main(): Promise<void> {
     for (const name of ['dev', 'dev:3000']) {
       assert.match(packageJson.scripts[name], /run-isolated-runtime\.ts development -- next dev/)
     }
-    assert.match(packageJson.scripts['build:isolated'], /run-isolated-runtime\.ts build -- next build/)
+    for (const name of ['build', 'build:isolated']) {
+      assert.match(packageJson.scripts[name], /run-isolated-runtime\.ts build -- next build/, `${name} must isolate build-time imports`)
+    }
     for (const name of MUTATING_TEST_COMMANDS) {
       const command = packageJson.scripts[name]
       assert.ok(command?.includes('scripts/run-isolated-runtime.ts test --'), `${name} must use test isolation`)

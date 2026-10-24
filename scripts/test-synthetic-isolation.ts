@@ -10,6 +10,7 @@ import {
   findIsolationViolations,
   internalTempRoot,
   isSyntheticPath,
+  OWC_DEVELOPMENT_ROOT,
   syntheticChildEnv,
 } from './lib/synthetic-isolation'
 
@@ -26,7 +27,13 @@ try {
     if (value) assert.ok(isSyntheticPath(value), `${name} must be bound to the runtime`)
   }
 
-  // Path classification: traversal, external volumes and symlink escapes are rejected.
+  // Path classification: only the dedicated OWC development tree is accepted;
+  // Production/external paths, traversal and symlink escapes remain rejected.
+  assert.equal(isSyntheticPath('/Volumes/OWC Express 1M2 80G/development/bench/runtime.db'), false)
+  assert.equal(
+    isSyntheticPath('/Volumes/OWC Express 1M2 80G/development/bench/runtime.db', OWC_DEVELOPMENT_ROOT),
+    true,
+  )
   assert.equal(isSyntheticPath('/Volumes/OWC Express 1M2 80G/stock-dashboard/stockboard.db'), false)
   assert.equal(isSyntheticPath('/Volumes/anything'), false)
   assert.equal(isSyntheticPath(path.join(runtime.root, '..', '..', 'etc', 'hosts')), false)

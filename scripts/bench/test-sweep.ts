@@ -42,6 +42,8 @@ import {
 } from '../lib/synthetic-isolation'
 
 type Status = 'PASS' | 'FAIL' | 'TIMEOUT' | 'ENV_BLOCKED' | 'NOT_TESTED'
+type ManualDisposition = 'ENV_BLOCKED' | 'NOT_TESTED'
+type TriageEntry = { status: ManualDisposition; reason: string }
 
 interface Options {
   root: string
@@ -397,11 +399,16 @@ async function runOne(
   const preloadPath = path.join(runtime.root, 'sweep-net-block.cjs')
   fs.writeFileSync(preloadPath, NET_BLOCK_PRELOAD)
   const netLog = path.join(runtime.root, 'sweep-net-attempts.ndjson')
+  const shortTempRoot = fs.mkdtempSync(path.join(fs.realpathSync('/tmp'), 'sb-sw-'))
+  const shortTemp = path.join(shortTempRoot, 't')
+  fs.symlinkSync(runtime.env.TMPDIR, shortTemp, 'dir')
   const env = syntheticChildEnv(runtime, {
     ...plan.carried,
     HOME: homeDir,
+    TMPDIR: shortTemp,
     NODE_OPTIONS: `--require=${preloadPath}`,
     SWEEP_NET_LOG: netLog,
+    STOCKBOARD_BASE_URL: 'http://127.0.0.1:9',
   }, plan.nodeEnv)
   assertSyntheticEnvironment(env)
 
@@ -411,6 +418,7 @@ async function runOne(
     let bytes = 0
     let truncated = false
     let timedOut = false
+    let finished = false
     const child = spawn(tsxBinary, [scriptPath, ...plan.args], {
       cwd: options.root,
       env,
@@ -431,6 +439,8 @@ async function runOne(
       setTimeout(() => killGroup(child, 'SIGKILL'), 5000).unref()
     }, options.timeoutMs)
     const finish = (exitCode: number | null, signal: NodeJS.Signals | null, spawnError?: Error) => {
+      if (finished) return
+      finished = true
       clearTimeout(timer)
       activeChildren.delete(child)
       // Reap any stragglers left in the process group.
@@ -441,6 +451,7 @@ async function runOne(
       } catch { /* no attempts logged */ }
       let output = chunks.join('')
       if (spawnError) output += `\n[sweep] spawn error: ${spawnError.message}\n`
+      fs.rmSync(shortTempRoot, { recursive: true, force: true })
       resolve({
         exitCode, signal, timedOut, output, truncated, bytes,
         durationMs: Date.now() - started, networkAttempts: attempts,
@@ -465,9 +476,16 @@ function classify(outcome: RunOutcome): { status: Status; reason: string } {
   return { status: 'FAIL', reason: hasAssertion ? `assertion failure (${why})` : `non-zero exit (${why})` }
 }
 
-function readTriage(file: string | null): Record<string, { status: Status; reason: string }> {
+function readTriage(file: string | null): Record<string, TriageEntry> {
   if (!file || !fs.existsSync(file)) return {}
-  return JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, { status: Status; reason: string }>
+  const entries = JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, TriageEntry>
+  for (const [name, entry] of Object.entries(entries)) {
+    if (entry.status !== 'ENV_BLOCKED' && entry.status !== 'NOT_TESTED') {
+      throw new Error(`triage ${name} may only declare ENV_BLOCKED or NOT_TESTED`)
+    }
+    if (!entry.reason?.trim()) throw new Error(`triage ${name} requires a reason`)
+  }
+  return entries
 }
 
 function atomicWrite(file: string, data: unknown): void {
@@ -477,10 +495,11 @@ function atomicWrite(file: string, data: unknown): void {
   fs.renameSync(tmp, file)
 }
 
-function applyTriage(result: TestResult, triage: Record<string, { status: Status; reason: string }>): void {
+function applyTriage(result: TestResult, triage: Record<string, TriageEntry>): void {
   const override = triage[result.name] ?? triage[result.script]
-  if (override) {
+  if (override && !result.executed) {
     result.status = override.status
+    result.statusAuto = override.status
     result.reason = override.reason
     result.triaged = true
   } else {
@@ -572,11 +591,12 @@ async function main(): Promise<void> {
     }
   }
 
-  const queue: Array<{ name: string; preDenied: string | null }> = []
+  const queue: Array<{ name: string; preDenied: string | null; disposition: TriageEntry | null }> = []
   for (const name of tsTests.filter(matches)) {
     const source = fs.readFileSync(path.join(scriptsDir, name), 'utf8')
     const denied = SAFETY_DENY.find((rule) => rule.test(source))
-    queue.push({ name, preDenied: denied ? denied.reason : null })
+    const key = name.replace(/\.ts$/, '')
+    queue.push({ name, preDenied: denied ? denied.reason : null, disposition: triage[key] ?? triage[name] ?? null })
   }
 
   for (const name of pyTests.filter(matches)) {
@@ -586,9 +606,10 @@ async function main(): Promise<void> {
   }
 
   if (options.list) {
-    const rows = queue.map(({ name, preDenied }) => {
+    const rows = queue.map(({ name, preDenied, disposition }) => {
       const result = baseResult(name, 'ts')
-      return { ...result, plannedAction: preDenied ? 'SKIP(ENV_BLOCKED)' : 'RUN', reason: preDenied ?? '' }
+      const plannedAction = preDenied ? 'SKIP(ENV_BLOCKED)' : disposition ? `SKIP(${disposition.status})` : 'RUN'
+      return { ...result, plannedAction, reason: preDenied ?? disposition?.reason ?? '' }
     })
     for (const row of rows) {
       const env = Object.entries(row.carriedEnv).map(([k, v]) => `${k}=${v}`).join(' ')
@@ -640,7 +661,7 @@ async function main(): Promise<void> {
       const index = cursor
       cursor += 1
       if (index >= total) return
-      const { name, preDenied } = queue[index]
+      const { name, preDenied, disposition } = queue[index]
       const prior = previous.get(name)
       if (prior && prior.statusAuto !== 'TIMEOUT') { applyTriage(prior, triage); results.push(prior); continue }
 
@@ -651,6 +672,11 @@ async function main(): Promise<void> {
         result.status = 'ENV_BLOCKED'
         result.statusAuto = 'ENV_BLOCKED'
         result.reason = preDenied
+      } else if (disposition) {
+        result.status = disposition.status
+        result.statusAuto = disposition.status
+        result.reason = disposition.reason
+        result.triaged = true
       } else {
         const runtime = createSyntheticRuntime(result.name)
         activeRuntimes.add(runtime)
@@ -683,7 +709,7 @@ async function main(): Promise<void> {
           activeRuntimes.delete(runtime)
         }
       }
-      applyTriage(result, triage)
+      if (!result.executed && !result.triaged) applyTriage(result, triage)
       results.push(result)
       flush()
       const marker = result.status === 'PASS' ? 'ok  ' : result.status.padEnd(4)

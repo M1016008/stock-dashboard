@@ -1,6 +1,10 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { OWC_DEVELOPMENT_ROOT, assertOwcDevelopmentVolume } from '../../lib/runtime/isolation'
+
+export { OWC_DEVELOPMENT_ROOT }
+const SYSTEM_TEMP_ROOT = fs.realpathSync(os.tmpdir())
 
 /**
  * Isolation envelope for synthetic-only harnesses (benchmarks, equivalence
@@ -79,7 +83,7 @@ export interface SyntheticRuntime {
 }
 
 export function internalTempRoot(): string {
-  return fs.realpathSync(os.tmpdir())
+  return SYSTEM_TEMP_ROOT
 }
 
 /**
@@ -116,20 +120,39 @@ export function isSyntheticPath(
   roots: string | readonly string[] = internalScratchRoots(),
 ): boolean {
   const resolved = resolveThroughExistingAncestor(candidate)
-  if (resolved === '/Volumes' || resolved.startsWith('/Volumes/')) return false
+  if ((resolved === '/Volumes' || resolved.startsWith('/Volumes/'))
+    && resolved !== OWC_DEVELOPMENT_ROOT
+    && !isInside(OWC_DEVELOPMENT_ROOT, resolved)) return false
   const allowed = typeof roots === 'string' ? [roots] : roots
   return allowed.some((root) => resolved === root || isInside(root, resolved))
 }
 
 export function createSyntheticRuntime(label: string): SyntheticRuntime {
-  const safeLabel = label.replace(/[^A-Za-z0-9_-]+/g, '-').slice(0, 48) || 'synthetic'
   const tempRoot = internalTempRoot()
   if (tempRoot === '/Volumes' || tempRoot.startsWith('/Volumes/')) {
     throw new Error(`Refusing synthetic runtime: temp root ${tempRoot} is on an external volume`)
   }
-  const root = fs.realpathSync(fs.mkdtempSync(path.join(tempRoot, `stockboard-${safeLabel}-`)))
+  return createRuntimeUnder(tempRoot, label)
+}
+
+/** Persistent/heavy benchmark workers may use only the dedicated OWC development tree. */
+export function createOwcDevelopmentRuntime(label: string, parent: string): SyntheticRuntime {
+  assertOwcDevelopmentVolume()
+  const resolvedParent = resolveThroughExistingAncestor(parent)
+  if (!isInside(OWC_DEVELOPMENT_ROOT, resolvedParent)) {
+    throw new Error(`Refusing OWC benchmark runtime outside ${OWC_DEVELOPMENT_ROOT}`)
+  }
+  fs.mkdirSync(resolvedParent, { recursive: true })
+  return createRuntimeUnder(resolvedParent, label)
+}
+
+function createRuntimeUnder(parent: string, label: string): SyntheticRuntime {
+  const safeLabel = label.replace(/[^A-Za-z0-9_-]+/g, '-').slice(0, 48) || 'synthetic'
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(parent, `stockboard-${safeLabel}-`)))
   const incidentDir = path.join(root, 'incidents')
+  const tempDir = path.join(root, 'tmp')
   fs.mkdirSync(incidentDir, { recursive: true })
+  fs.mkdirSync(tempDir, { recursive: true })
   const dbPath = path.join(root, 'stockboard.db')
   const servingCachePath = path.join(root, 'serving-cache.db')
   const usAnalyticsDbPath = path.join(root, 'stockboard-us.db')
@@ -154,12 +177,14 @@ export function createSyntheticRuntime(label: string): SyntheticRuntime {
     LARGE_HOLDER_OPERATIONS_DIR: path.join(root, 'large-holder-operations'),
     LARGE_HOLDER_EVIDENCE_DIR: path.join(root, 'large-holder-evidence'),
     STOCKBOARD_DB_READ_CONCURRENCY: '0',
-    TMPDIR: tempRoot,
+    // The driver exposes this OWC path to legacy workers through a short
+    // temporary symlink, so SQLite spills stay off the internal SSD too.
+    TMPDIR: tempDir,
   }
   return {
     root, dbPath, servingCachePath, usAnalyticsDbPath, incidentDir, env,
     cleanup() {
-      if (!isInside(tempRoot, root)) throw new Error(`Refusing to remove ${root}: outside ${tempRoot}`)
+      if (!isInside(parent, root)) throw new Error(`Refusing to remove ${root}: outside ${parent}`)
       fs.rmSync(root, { recursive: true, force: true })
     },
   }
@@ -219,7 +244,7 @@ export function applySyntheticEnvironment(
   delete process.env.STOCKBOARD_DB_ROLE
   delete process.env.LOCAL_DB_PATH
   Object.assign(process.env, { NODE_ENV: 'test' }, runtime.env, overrides)
-  assertSyntheticEnvironment(process.env)
+  assertSyntheticEnvironment(process.env, runtime.root)
 }
 
 /** Environment for a child process (tsx, next dev, headless browser driver). Allowlist based. */
@@ -234,6 +259,6 @@ export function syntheticChildEnv(
     if (value !== undefined) env[name] = value
   }
   Object.assign(env, { NODE_ENV: nodeEnv }, runtime.env, overrides)
-  assertSyntheticEnvironment(env)
+  assertSyntheticEnvironment(env, runtime.root)
   return env
 }

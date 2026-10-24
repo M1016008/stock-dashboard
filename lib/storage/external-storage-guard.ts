@@ -3,7 +3,11 @@ import { createHash, randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { nonProductionIncidentDirectory } from '../runtime/isolation'
+import {
+  assertIsolatedRuntimeEnvironment,
+  nonProductionIncidentDirectory,
+  resolveThroughExistingAncestor,
+} from '../runtime/isolation'
 
 const PROBE_COMMAND_TIMEOUT_MS = 8_000
 const PROBE_CERTIFICATION_CACHE_MS = 2_000
@@ -657,6 +661,15 @@ export function assertWritableTargetPath(targetPath: string, jobType?: string): 
 }
 
 export function requiresExternalStorageGuard(dbPath: string): boolean {
+  if (process.env.STOCKBOARD_RUNTIME_SCOPE === 'development'
+    || process.env.STOCKBOARD_RUNTIME_SCOPE === 'test'
+    || process.env.STOCKBOARD_RUNTIME_SCOPE === 'preview') {
+    assertIsolatedRuntimeEnvironment(process.env)
+    const isolationRoot = resolveThroughExistingAncestor(process.env.STOCKBOARD_ISOLATION_ROOT!)
+    const target = resolveThroughExistingAncestor(dbPath)
+    if (target === isolationRoot || contained(isolationRoot, target)) return false
+    fail('DB_OUTSIDE_EXPECTED_VOLUME', 'isolated runtime database path resolves outside its pinned root')
+  }
   if (process.env.NODE_ENV === 'production' && process.env.EXTERNAL_STORAGE_REQUIRED === 'false') {
     fail('MOUNT_IDENTITY_UNKNOWN', 'production cannot disable external storage protection')
   }

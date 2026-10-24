@@ -4,12 +4,9 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { execAll } from '@/lib/db/client'
+import { escapeSqlLikeLiteral } from '@/lib/server/search-query'
 
 export const revalidate = 0
-
-export function escapeSqlLikeLiteral(value: string): string {
-  return value.replace(/[\\%_]/g, (character) => `\\${character}`)
-}
 
 export async function GET(request: NextRequest) {
   try {

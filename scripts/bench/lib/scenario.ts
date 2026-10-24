@@ -51,14 +51,23 @@ export interface BenchScenario {
   readonly prepareKey?: string
   /** Tree-specific, untimed preparation (e.g. build a serving cache with the tree's own code). */
   prepare?(context: WorkerContext): Promise<void>
+  /**
+   * Per-worker, untimed setup for runtime-local sidecars (US analytics / analog index).
+   * This runs after the prepared primary DB is cloned and before any timed request.
+   */
+  setup?(context: WorkerContext): Promise<void>
   /** One logical request. Timed. Must be deterministic for a given iteration. */
   request(context: WorkerContext, iteration: number): Promise<RouteResponse>
+  /** Accepted HTTP statuses. Priority success-path scenarios should normally require 200. */
+  readonly expectedStatuses?: readonly number[]
   /** Concurrency levels for the in-process parallel matrix. Default [1, 4, 8]. */
   readonly concurrency?: readonly number[]
   /** Warm requests per cold process. Default 10. */
   readonly warmPerProcess?: number
   /** Number of fresh-process cold samples. Default 8. */
   readonly coldSamples?: number
+  /** Database that owns this scenario's dominant SQL shapes. Default primary. */
+  readonly planDatabase?: 'primary' | 'usAnalytics' | 'analogJp' | 'analogUs'
   /**
    * Remove fields that are volatile by construction (timestamps, elapsed times).
    * Every stripped path must be justified in `normalizeNotes`; nothing that

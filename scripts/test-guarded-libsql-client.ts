@@ -39,6 +39,10 @@ async function main(): Promise<void> {
 
     const absentMount = `/Volumes/stockboard-guarded-client-missing-${process.pid}`
     Reflect.set(process.env, 'NODE_ENV', 'production')
+    process.env.EXTERNAL_STORAGE_REQUIRED = 'true'
+    delete process.env.STOCKBOARD_RUNTIME_SCOPE
+    delete process.env.STOCKBOARD_ISOLATION_ROOT
+    delete process.env.STOCKBOARD_DB_OPEN_FORBIDDEN
     process.env.STOCK_DATA_MOUNT_PATH = absentMount
     process.env.STOCK_DATA_VOLUME_UUID = 'fixture-uuid'
     process.env.STOCK_DATA_INCIDENT_DIR = directory

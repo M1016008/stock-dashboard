@@ -497,8 +497,7 @@ export async function GET(request: NextRequest) {
           FROM physical_momentum_metrics
           WHERE market = 'US'
             AND date = (SELECT date FROM latest_date)
-            AND ${metricColumn} IS NOT NULL
-          ORDER BY ${metricColumn} ${dir.toUpperCase()}, symbol ASC
+          ORDER BY ${metricColumn} IS NULL ASC, ${metricColumn} ${dir.toUpperCase()}, symbol ASC
           `,
           [date],
         ).catch(() => [])

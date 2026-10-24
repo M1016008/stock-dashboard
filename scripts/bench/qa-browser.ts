@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from 'node:child_process'
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -44,6 +44,8 @@ interface PagePlan {
 }
 
 interface Plan {
+  /** Expected console text caused by the deliberately offline browser envelope. */
+  readonly allowConsole?: readonly string[]
   readonly pages: readonly PagePlan[]
 }
 
@@ -81,6 +83,7 @@ interface PageViewportResult {
   readonly failedRequests: Array<{ url: string; error: string }>
   readonly httpErrors: Array<{ url: string; status: number }>
   readonly externalBlocked: string[]
+  readonly externalSucceeded: string[]
   readonly overflow: { viewportWidth: number; scrollWidth: number; offenders: string[] }
   readonly steps: StepResult[]
   readonly screenshot?: string
@@ -168,18 +171,103 @@ function parseArgs(argv: string[]) {
   for (let index = 0; index < argv.length; index += 2) values.set(argv[index].replace(/^--/, ''), argv[index + 1])
   const base = values.get('base')
   const planFile = values.get('plan')
-  if (!base || !planFile) throw new Error('usage: qa-browser.ts --base <url> --plan <plan.json> [--out dir] [--viewports 1440,1024,768,390] [--only regex]')
+  const runtimeRoot = values.get('runtime-root')
+  if (!base || !planFile || !runtimeRoot) throw new Error('usage: qa-browser.ts --base <url> --plan <plan.json> --runtime-root <dir> [--out dir] [--viewports 1440,1024,768,390] [--only regex]')
   const baseUrl = new URL(base)
   if (!['127.0.0.1', 'localhost'].includes(baseUrl.hostname)) throw new Error('QA runs only against a loopback server')
   const out = path.resolve(values.get('out') ?? path.join('/tmp/sb-xcheck/qa', new Date().toISOString().replace(/[:.]/g, '-')))
   if (!isSyntheticPath(out)) assertDevelopmentArtifactRoot(out)
   return {
     base: baseUrl.origin,
+    basePort: Number(baseUrl.port || (baseUrl.protocol === 'https:' ? 443 : 80)),
+    runtimeRoot: fs.realpathSync(path.resolve(runtimeRoot)),
     plan: JSON.parse(fs.readFileSync(planFile, 'utf8')) as Plan,
     out,
     viewports: (values.get('viewports') ?? '1440,1024,768,390').split(',').map(Number),
     only: values.has('only') ? new RegExp(values.get('only')!) : null,
   }
+}
+
+function assertOwnedQaServer(port: number, runtimeRoot: string): { pid: number; cwd: string; ownerPid: number } {
+  const lines = execFileSync('/usr/sbin/lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-Fp'], {
+    encoding: 'utf8', timeout: 5_000,
+  }).split('\n')
+  const pids = [...new Set(lines.filter((line) => /^p\d+$/.test(line)).map((line) => Number(line.slice(1))))]
+  if (pids.length !== 1) throw new Error(`QA requires exactly one owned listener on port ${port}; found ${pids.join(',') || 'none'}`)
+  const pid = pids[0]
+  const cwdLine = execFileSync('/usr/sbin/lsof', ['-a', '-p', String(pid), '-d', 'cwd', '-Fn'], {
+    encoding: 'utf8', timeout: 5_000,
+  }).split('\n').find((line) => line.startsWith('n'))
+  const cwd = cwdLine ? fs.realpathSync(cwdLine.slice(1)) : ''
+  if (cwd !== fs.realpathSync(process.cwd())) {
+    throw new Error(`QA listener ${pid} belongs to ${cwd || 'unknown cwd'}, not ${process.cwd()}`)
+  }
+  let processPid = pid
+  let ownerPid = 0
+  const ancestry: number[] = []
+  for (let depth = 0; depth < 8 && processPid > 1; depth += 1) {
+    ancestry.push(processPid)
+    const command = execFileSync('/bin/ps', ['eww', '-p', String(processPid), '-o', 'command='], {
+      encoding: 'utf8', timeout: 5_000,
+    })
+    if ((command.includes('STOCKBOARD_RUNTIME_SCOPE=development') || command.includes('STOCKBOARD_RUNTIME_SCOPE=preview'))
+      && command.includes(`STOCKBOARD_ISOLATION_ROOT=${runtimeRoot}`)) {
+      ownerPid = processPid
+      break
+    }
+    const parent = Number(execFileSync('/bin/ps', ['-p', String(processPid), '-o', 'ppid='], {
+      encoding: 'utf8', timeout: 5_000,
+    }).trim())
+    if (!Number.isInteger(parent) || parent <= 1 || parent === processPid) break
+    processPid = parent
+  }
+  if (ownerPid === 0) {
+    try {
+      const marker = JSON.parse(fs.readFileSync(path.join(runtimeRoot, '.runtime-owner.json'), 'utf8')) as {
+        version?: number
+        kind?: string
+        root?: string
+        cwd?: string
+        launcherPid?: number
+      }
+      if (marker.version === 1
+        && (marker.kind === 'development' || marker.kind === 'preview')
+        && marker.root === runtimeRoot
+        && marker.cwd === cwd
+        && Number.isInteger(marker.launcherPid)
+        && ancestry.includes(marker.launcherPid!)) {
+        ownerPid = marker.launcherPid!
+      }
+    } catch {
+      // Missing, malformed, or stale ownership evidence must fail closed below.
+    }
+  }
+  if (ownerPid === 0) {
+    throw new Error(`QA listener ${pid} does not own the required isolated development runtime`)
+  }
+  return { pid, cwd, ownerPid }
+}
+
+function killProcessGroup(child: ChildProcess | null, signal: NodeJS.Signals): void {
+  if (!child?.pid) return
+  try { process.kill(-child.pid, signal) } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
+  }
+}
+
+async function waitForChildExit(child: ChildProcess | null, timeoutMs: number): Promise<boolean> {
+  if (!child || child.exitCode !== null || child.signalCode !== null) return true
+  return await new Promise<boolean>((resolve) => {
+    const timer = setTimeout(() => {
+      child.removeListener('close', onClose)
+      resolve(false)
+    }, timeoutMs)
+    const onClose = () => {
+      clearTimeout(timer)
+      resolve(true)
+    }
+    child.once('close', onClose)
+  })
 }
 
 const OVERFLOW_PROBE = `(() => {
@@ -210,10 +298,14 @@ const OVERFLOW_PROBE = `(() => {
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2))
+  const server = assertOwnedQaServer(args.basePort, args.runtimeRoot)
   fs.mkdirSync(args.out, { recursive: true })
   const profileDir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'stockboard-qa-chrome-'))
   const port = 9400 + (process.pid % 400)
   let chrome: ChildProcess | null = null
+  const stopChrome = () => killProcessGroup(chrome, 'SIGTERM')
+  process.once('SIGINT', stopChrome)
+  process.once('SIGTERM', stopChrome)
   const results: PageViewportResult[] = []
   try {
     chrome = spawn(chromePath, [
@@ -222,7 +314,7 @@ async function main(): Promise<void> {
       // Anything that is not loopback must fail fast: QA never reaches external hosts.
       '--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1 , EXCLUDE localhost',
       `--remote-debugging-port=${port}`, `--user-data-dir=${profileDir}`, 'about:blank',
-    ], { stdio: 'ignore' })
+    ], { stdio: 'ignore', detached: true })
     await waitForJson(`http://127.0.0.1:${port}/json/version`)
     const targets = await waitForJson<Array<{ type: string; webSocketDebuggerUrl?: string }>>(`http://127.0.0.1:${port}/json/list`)
     const target = targets.find((item) => item.type === 'page' && item.webSocketDebuggerUrl)
@@ -425,6 +517,9 @@ async function main(): Promise<void> {
         const isAllowed = (urlText: string) => (page.allowFailures ?? []).some((fragment) => urlText.includes(fragment))
         const isLocal = (urlText: string) => urlText.startsWith(args.base)
         const externalBlocked = all.filter((record) => !isLocal(record.url) && record.failed).map((record) => record.url.slice(0, 160))
+        const externalSucceeded = all
+          .filter((record) => !isLocal(record.url) && record.status !== null && record.status >= 200 && record.status < 400)
+          .map((record) => record.url.slice(0, 160))
         const failedRequests = all
           .filter((record) => record.failed && isLocal(record.url) && !record.failed.startsWith('canceled:') && !isAllowed(record.url))
           .map((record) => ({ url: record.url.slice(0, 200), error: record.failed! }))
@@ -440,7 +535,8 @@ async function main(): Promise<void> {
         }
         const duplicateRequests = [...counts.entries()].filter(([, count]) => count > 1)
           .map(([request, count]) => ({ request, count })).sort((a, b) => b.count - a.count)
-        const allowedConsole = (message: string) => (page.allowConsole ?? []).some((fragment) => message.includes(fragment))
+        const allowedConsole = (message: string) => [...(args.plan.allowConsole ?? []), ...(page.allowConsole ?? [])]
+          .some((fragment) => message.includes(fragment))
         const consoleFiltered = consoleMessages.filter((message) => !allowedConsole(message))
         const exceptionsFiltered = exceptions.filter((message) => !allowedConsole(message))
         if ((page.expectStatus ?? 200) !== documentStatus) reasons.push(`document status ${documentStatus} (expected ${page.expectStatus ?? 200})`)
@@ -448,6 +544,7 @@ async function main(): Promise<void> {
         if (consoleFiltered.length > 0) reasons.push(`${consoleFiltered.length} console error/warning message(s)`)
         if (failedRequests.length > 0) reasons.push(`${failedRequests.length} failed local request(s)`)
         if (httpErrors.length > 0) reasons.push(`${httpErrors.length} HTTP ≥ 400 response(s)`)
+        if (externalSucceeded.length > 0) reasons.push(`${externalSucceeded.length} successful external request(s)`)
         if (overflow.scrollWidth > overflow.viewportWidth + 1) reasons.push(`document overflow ${overflow.scrollWidth}px > ${overflow.viewportWidth}px`)
         if (overflow.offenders.length > 0) reasons.push(`${overflow.offenders.length} element(s) outside the viewport`)
         const shot = await client.send<{ data: string }>('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false, fromSurface: true })
@@ -457,7 +554,7 @@ async function main(): Promise<void> {
           id: page.id, viewport, url, status: reasons.length === 0 ? 'PASS' : 'FAIL', reasons,
           documentStatus, loadMs, requestCount: all.length, duplicateRequests,
           encodedKb: Math.round(all.reduce((sum, record) => sum + record.bytes, 0) / 102.4) / 10,
-          consoleMessages: consoleFiltered, exceptions: exceptionsFiltered, failedRequests, httpErrors, externalBlocked,
+          consoleMessages: consoleFiltered, exceptions: exceptionsFiltered, failedRequests, httpErrors, externalBlocked, externalSucceeded,
           overflow, steps, screenshot: shotFile,
         })
         console.error(`[qa] ${page.id} @${viewport}: ${reasons.length === 0 ? 'PASS' : `FAIL (${reasons.join('; ')})`}`)
@@ -465,13 +562,26 @@ async function main(): Promise<void> {
     }
     socket.close()
   } finally {
-    chrome?.kill('SIGTERM')
-    await sleep(300)
+    process.removeListener('SIGINT', stopChrome)
+    process.removeListener('SIGTERM', stopChrome)
+    killProcessGroup(chrome, 'SIGTERM')
+    if (!await waitForChildExit(chrome, 2_000)) {
+      killProcessGroup(chrome, 'SIGKILL')
+      if (!await waitForChildExit(chrome, 2_000)) throw new Error('Headless Chrome process group did not exit')
+    }
     fs.rmSync(profileDir, { recursive: true, force: true })
   }
 
   const pass = results.filter((item) => item.status === 'PASS').length
-  fs.writeFileSync(path.join(args.out, 'qa-results.json'), JSON.stringify({ base: args.base, finishedAt: new Date().toISOString(), pass, fail: results.length - pass, results }, null, 2))
+  fs.writeFileSync(path.join(args.out, 'qa-results.json'), JSON.stringify({
+    base: args.base,
+    runtimeRoot: args.runtimeRoot,
+    server,
+    finishedAt: new Date().toISOString(),
+    pass,
+    fail: results.length - pass,
+    results,
+  }, null, 2))
   const lines = ['# Browser QA (headless Chrome via CDP, automated — not human testing)', '', `PASS ${pass} / ${results.length}`, '',
     '| page | viewport | status | doc | load ms | requests | dup requests | KB | reasons |', '| --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | --- |']
   for (const item of results) {

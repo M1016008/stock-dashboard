@@ -42,7 +42,7 @@ let calls = 0
 let totalMs = 0
 
 function normalize(sql: string): string {
-  return sql.replace(/\s+/g, ' ').trim().slice(0, 600)
+  return sql.replace(/\s+/g, ' ').trim()
 }
 
 function statementOf(input: unknown): { sql: string; args: readonly unknown[] } {
@@ -161,6 +161,7 @@ export interface PlanFlag {
   readonly sql: string
   readonly plan: readonly string[]
   readonly flags: readonly string[]
+  readonly error?: string
 }
 
 interface SqliteStatement { all(...values: unknown[]): Array<Record<string, unknown>> }
@@ -202,8 +203,13 @@ export function explainShapes(
           for (const [flag, pattern] of PLAN_FLAG_PATTERNS) if (pattern.test(line)) flags.add(flag)
         }
         output.push({ sql: shape.sql, plan, flags: [...flags] })
-      } catch {
-        // Plans for statements that depend on temp state or have unbindable args are skipped.
+      } catch (error) {
+        output.push({
+          sql: shape.sql,
+          plan: [],
+          flags: ['PLAN_UNAVAILABLE'],
+          error: error instanceof Error ? error.message.slice(0, 600) : String(error).slice(0, 600),
+        })
       }
     }
   } finally {

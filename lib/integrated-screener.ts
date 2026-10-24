@@ -279,8 +279,8 @@ export function parseScreeningConditions(value: unknown): ScreeningCondition[] {
         id: condition.id,
         metric: definition.key,
         operator,
-        value: condition.value,
-        valueTo: condition.valueTo as number,
+        value: Math.min(condition.value as number, condition.valueTo as number),
+        valueTo: Math.max(condition.value as number, condition.valueTo as number),
       }
     }
     if (operator === 'in') {

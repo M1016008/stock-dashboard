@@ -1,9 +1,20 @@
 import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
+import { createRequire } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
-import { isSyntheticPath } from '../../lib/synthetic-isolation'
+import {
+  OWC_DEVELOPMENT_ROOT,
+  isSyntheticPath,
+} from '../../lib/synthetic-isolation'
+import {
+  assertOwcDevelopmentVolume,
+  resolveThroughExistingAncestor,
+} from '../../../lib/runtime/isolation'
+
+const BENCHMARK_ROOT = path.join(OWC_DEVELOPMENT_ROOT, 'stock-dashboard-benchmarks')
+const BENCHMARK_FIXTURE_ROOT = path.join(BENCHMARK_ROOT, 'fixtures')
 
 /**
  * Fixture plumbing shared by benchmark generators.
@@ -35,12 +46,25 @@ export function fixtureRoot(): string {
 
 /** Persistent benchmark artifacts may use only the dedicated OWC development tree. */
 export function assertDevelopmentArtifactRoot(candidate: string): void {
-  const allowed = '/Volumes/OWC Express 1M2 80G/development'
-  const resolved = path.resolve(candidate)
+  assertOwcDevelopmentVolume()
+  const allowed = fs.realpathSync(OWC_DEVELOPMENT_ROOT)
+  const resolved = resolveThroughExistingAncestor(candidate)
   const relative = path.relative(allowed, resolved)
   if (relative === '' || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
     throw new Error(`benchmark artifact root must be a child of ${allowed}`)
   }
+}
+
+export function assertDevelopmentFixtureSource(candidate: string): string {
+  assertOwcDevelopmentVolume()
+  const source = fs.realpathSync(candidate)
+  const root = fs.realpathSync(BENCHMARK_FIXTURE_ROOT)
+  const relative = path.relative(root, source)
+  if (relative === '' || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error(`benchmark fixture source must be a file below ${root}`)
+  }
+  if (!fs.statSync(source).isFile()) throw new Error('benchmark fixture source must be a regular file')
+  return source
 }
 
 export function stableStringify(value: unknown): string {
@@ -69,11 +93,13 @@ export function cloneDatabase(source: string, destination: string): void {
   const sourceIsSynthetic = isSyntheticPath(source)
   const sourceIsPersistentFixture = (() => {
     try {
-      const relative = path.relative(fixtureRoot(), path.resolve(source))
+      const relative = path.relative(fs.realpathSync(fixtureRoot()), fs.realpathSync(source))
       return relative !== '' && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)
     } catch { return false }
   })()
-  if ((!sourceIsSynthetic && !sourceIsPersistentFixture) || !isSyntheticPath(destination)) {
+  const destinationIsSynthetic = isSyntheticPath(destination)
+    || isSyntheticPath(destination, OWC_DEVELOPMENT_ROOT)
+  if ((!sourceIsSynthetic && !sourceIsPersistentFixture) || !destinationIsSynthetic) {
     throw new Error('refusing to clone outside the synthetic runtime or dedicated benchmark fixture root')
   }
   fs.mkdirSync(path.dirname(destination), { recursive: true })
@@ -103,4 +129,38 @@ export function seedFromString(value: string): number {
 
 export function fileSizeMb(file: string): number {
   return Math.round((fs.statSync(file).size / 1024 ** 2) * 10) / 10
+}
+
+export function fileSha256(file: string): string {
+  const digest = createHash('sha256')
+  const descriptor = fs.openSync(file, 'r')
+  const buffer = Buffer.allocUnsafe(8 * 1024 * 1024)
+  try {
+    for (;;) {
+      const bytes = fs.readSync(descriptor, buffer, 0, buffer.length, null)
+      if (bytes === 0) break
+      digest.update(buffer.subarray(0, bytes))
+    }
+  } finally {
+    fs.closeSync(descriptor)
+  }
+  return digest.digest('hex')
+}
+
+export function assertSqliteQuickCheck(file: string): void {
+  const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as {
+    DatabaseSync: new (file: string, options?: { readOnly?: boolean }) => {
+      prepare(sql: string): { all(): Array<{ quick_check?: unknown }> }
+      close(): void
+    }
+  }
+  const database = new DatabaseSync(file, { readOnly: true })
+  try {
+    const rows = database.prepare('PRAGMA quick_check').all() as Array<{ quick_check?: unknown }>
+    if (rows.length !== 1 || rows[0]?.quick_check !== 'ok') {
+      throw new Error(`fixture quick_check failed (${rows.length} row(s))`)
+    }
+  } finally {
+    database.close()
+  }
 }

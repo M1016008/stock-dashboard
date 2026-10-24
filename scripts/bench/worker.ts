@@ -30,7 +30,7 @@ export interface WorkerRuntimePaths {
 }
 
 export interface WorkerJob {
-  readonly mode: 'fixture' | 'prepare' | 'measure'
+  readonly mode: 'fixture' | 'prepare' | 'measure' | 'cold-concurrency'
   readonly tree: Tree
   readonly codeRoot: string
   readonly runtime: WorkerRuntimePaths
@@ -45,6 +45,7 @@ export interface WorkerJob {
   readonly warmPerProcess?: number
   readonly concurrency?: readonly number[]
   readonly concurrencyRounds?: number
+  readonly coldConcurrency?: number
   readonly capturePlans?: boolean
 }
 
@@ -100,6 +101,7 @@ export interface WorkerResult {
   }
   readonly warm?: readonly TimedSample[]
   readonly concurrency?: readonly ConcurrencyResult[]
+  readonly coldConcurrency?: ConcurrencyRound & { readonly c: number }
   readonly digests?: Record<string, DigestRecord>
   readonly digestStable?: boolean
   readonly plans?: readonly PlanFlag[]
@@ -130,11 +132,17 @@ function toRuntime(paths: WorkerRuntimePaths): SyntheticRuntime {
   return { ...paths, env: {}, cleanup() { /* the driver owns cleanup */ } }
 }
 
+function canonicalPath(candidate: string): string {
+  const absolute = path.resolve(candidate)
+  if (fs.existsSync(absolute)) return fs.realpathSync(absolute)
+  return path.join(fs.realpathSync(path.dirname(absolute)), path.basename(absolute))
+}
+
 async function main(): Promise<void> {
   const jobPath = process.argv[2]
   if (!jobPath) throw new Error('usage: worker.ts <job.json>')
   const job = JSON.parse(fs.readFileSync(jobPath, 'utf8')) as WorkerJob
-  assertSyntheticEnvironment()
+  assertSyntheticEnvironment(process.env, job.runtime.root)
   if (fs.realpathSync(process.cwd()) !== fs.realpathSync(job.codeRoot)) {
     throw new Error(`worker cwd ${process.cwd()} must equal the tree under test ${job.codeRoot}`)
   }
@@ -153,7 +161,7 @@ async function main(): Promise<void> {
       closeLocalClientBeforeExternalWriter?: () => Promise<void>
       localDbPath: string
     }>(job.codeRoot, 'lib/db/client.ts')
-    if (path.resolve(dbClient.localDbPath) !== path.resolve(runtime.dbPath)) {
+    if (canonicalPath(dbClient.localDbPath) !== canonicalPath(runtime.dbPath)) {
       throw new Error('tree resolved a database path different from the synthetic runtime')
     }
     result.importMs = performance.now() - importStarted
@@ -203,13 +211,23 @@ async function main(): Promise<void> {
     const ensureStarted = performance.now()
     await dbClient.ensureReady()
     result.ensureReadyMs = performance.now() - ensureStarted
+    await scenario.setup?.(context)
     // Pre-load the module graph so import cost is not charged to the cold request.
     resetSqlProbe()
 
     const digests = new Map<string, DigestRecord[]>()
     const bodies = new Map<string, string>()
-    const record = (response: RouteResponse, scenarioUnderTest: BenchScenario, captureBody: boolean): number => {
-      const key = response.key ?? 'default'
+    const assertExpectedStatus = (response: RouteResponse): void => {
+      const expected = scenario.expectedStatuses
+      if (!expected || expected.includes(response.status)) return
+      throw new Error(
+        `${scenario.id} returned HTTP ${response.status}; expected ${expected.join(', ')}: ${response.bodyText.slice(0, 800)}`,
+      )
+    }
+    const normalizeResponse = (
+      response: RouteResponse,
+      scenarioUnderTest: BenchScenario,
+    ): { bytes: number; normalizedText: string; described?: Record<string, unknown> } => {
       const bytes = Buffer.byteLength(response.bodyText)
       let normalizedText = response.bodyText
       let described: Record<string, unknown> | undefined
@@ -219,6 +237,12 @@ async function main(): Promise<void> {
         normalizedText = stableStringify(normalized)
         described = scenarioUnderTest.describe?.(parsed)
       } catch { /* non-JSON bodies are compared as raw text */ }
+      return { bytes, normalizedText, described }
+    }
+
+    const record = (response: RouteResponse, scenarioUnderTest: BenchScenario, captureBody: boolean): number => {
+      const key = response.key ?? 'default'
+      const { bytes, normalizedText, described } = normalizeResponse(response, scenarioUnderTest)
       const entry: DigestRecord = {
         status: response.status, bytes, rawSha: sha(response.bodyText), normSha: sha(normalizedText), described,
       }
@@ -233,16 +257,56 @@ async function main(): Promise<void> {
       resetSqlProbe()
       const started = performance.now()
       const response = await scenario.request(context, iteration)
+      assertExpectedStatus(response)
       const ms = performance.now() - started
       const snapshot = snapshotSqlProbe()
       const bytes = record(response, scenario, captureBody)
       return { ms, sqlMs: snapshot.totalMs, sqlStatements: snapshot.statements, bytes, status: response.status }
     }
 
+    if (job.mode === 'cold-concurrency') {
+      const c = job.coldConcurrency ?? 0
+      if (!Number.isInteger(c) || c < 2) throw new Error('cold-concurrency requires coldConcurrency >= 2')
+      resetSqlProbe()
+      const started = performance.now()
+      const latenciesMs: number[] = []
+      const responses = await Promise.all(Array.from({ length: c }, async (_, index) => {
+        const requestStarted = performance.now()
+        const response = await scenario.request(context, 50_000 + index)
+        assertExpectedStatus(response)
+        latenciesMs.push(performance.now() - requestStarted)
+        return response
+      }))
+      const snapshot = snapshotSqlProbe()
+      const byKey = new Map<string, Set<string>>()
+      for (const response of responses) {
+        const key = response.key ?? 'default'
+        const set = byKey.get(key) ?? new Set<string>()
+        set.add(sha(normalizeResponse(response, scenario).normalizedText))
+        byKey.set(key, set)
+        record(response, scenario, false)
+      }
+      result.coldConcurrency = {
+        c,
+        wallMs: performance.now() - started,
+        latenciesMs,
+        sqlStatements: snapshot.statements,
+        sqlMs: snapshot.totalMs,
+        consistent: [...byKey.values()].every((set) => set.size === 1),
+      }
+      result.digests = Object.fromEntries([...digests].map(([key, values]) => [key, values[0]]))
+      result.digestStable = [...digests.values()].every((values) => (
+        values.every((entry) => entry.normSha === values[0].normSha && entry.status === values[0].status)
+      ))
+      writeResult()
+      return
+    }
+
     const startRss = process.memoryUsage().rss
     resetSqlProbe()
     const coldStarted = performance.now()
     const coldResponse = await scenario.request(context, 0)
+    assertExpectedStatus(coldResponse)
     const coldMs = performance.now() - coldStarted
     const coldSnapshot = snapshotSqlProbe()
     const coldBytes = record(coldResponse, scenario, true)
@@ -270,6 +334,7 @@ async function main(): Promise<void> {
         const responses = await Promise.all(Array.from({ length: c }, async (_, index) => {
           const requestStarted = performance.now()
           const response = await scenario.request(context, 1000 + round * c + index)
+          assertExpectedStatus(response)
           latencies.push(performance.now() - requestStarted)
           return response
         }))
@@ -279,7 +344,7 @@ async function main(): Promise<void> {
         for (const response of responses) {
           const key = response.key ?? 'default'
           const set = byKey.get(key) ?? new Set<string>()
-          set.add(sha(response.bodyText))
+          set.add(sha(normalizeResponse(response, scenario).normalizedText))
           byKey.set(key, set)
           record(response, scenario, false)
         }
@@ -306,7 +371,14 @@ async function main(): Promise<void> {
     }
 
     if (job.capturePlans) {
-      result.plans = explainShapes(runtime.dbPath, coldSnapshot)
+      const planPath = scenario.planDatabase === 'usAnalytics'
+        ? runtime.usAnalyticsDbPath
+        : scenario.planDatabase === 'analogJp'
+          ? path.join(runtime.root, 'analog-jp.db')
+          : scenario.planDatabase === 'analogUs'
+            ? path.join(runtime.root, 'analog-us.db')
+            : runtime.dbPath
+      result.plans = fs.existsSync(planPath) ? explainShapes(planPath, coldSnapshot) : []
     }
     if (job.bodyPath && bodies.size > 0) {
       fs.writeFileSync(job.bodyPath, JSON.stringify(Object.fromEntries(bodies)))

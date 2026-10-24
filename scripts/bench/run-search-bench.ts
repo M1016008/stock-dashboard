@@ -1,14 +1,16 @@
-import { spawn } from 'node:child_process'
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { pathToFileURL } from 'node:url'
 import {
-  assertSyntheticEnvironment, createSyntheticRuntime, syntheticChildEnv, type SyntheticRuntime,
+  assertSyntheticEnvironment, createOwcDevelopmentRuntime, syntheticChildEnv, type SyntheticRuntime,
 } from '../lib/synthetic-isolation'
 import {
-  assertDevelopmentArtifactRoot, cloneDatabase, fileSizeMb, fixtureKey, fixtureRoot, masterFixturePath, type FixtureSpec,
+  assertDevelopmentArtifactRoot, assertSqliteQuickCheck, cloneDatabase, fileSha256, fileSizeMb,
+  fixtureKey, fixtureRoot, masterFixturePath, stableStringify, type FixtureSpec,
 } from './lib/fixture-utils'
 import type { BenchScenario, ScenarioModule, Tree } from './lib/scenario'
 import { round, summarize, type Summary } from './lib/stats'
@@ -28,6 +30,25 @@ import type { DigestRecord, WorkerJob, WorkerResult } from './worker'
 
 const workerFile = path.resolve(__dirname, 'worker.ts')
 const defaultAfterRoot = path.resolve(__dirname, '..', '..')
+const activeWorkers = new Set<ChildProcess>()
+
+function killProcessGroup(child: ChildProcess, signal: NodeJS.Signals): void {
+  if (!child.pid) return
+  try { process.kill(-child.pid, signal) } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
+  }
+}
+
+function stopActiveWorkers(): void {
+  for (const child of activeWorkers) killProcessGroup(child, 'SIGTERM')
+  const timer = setTimeout(() => {
+    for (const child of activeWorkers) killProcessGroup(child, 'SIGKILL')
+  }, 5_000)
+  timer.unref()
+}
+
+process.once('SIGINT', stopActiveWorkers)
+process.once('SIGTERM', stopActiveWorkers)
 
 interface Args {
   scenarioFiles: string[]
@@ -102,6 +123,10 @@ function rootOf(args: Args, tree: Tree): string {
   return tree === 'baseline' ? args.baselineRoot : args.afterRoot
 }
 
+function createBenchRuntime(args: Args, label: string): SyntheticRuntime {
+  return createOwcDevelopmentRuntime(label, path.join(args.out, '.runtime'))
+}
+
 async function runWorker(
   args: Args,
   job: Omit<WorkerJob, 'runtime' | 'resultPath' | 'codeRoot'>,
@@ -120,25 +145,82 @@ async function runWorker(
     },
   }
   fs.writeFileSync(jobPath, JSON.stringify(fullJob))
-  const env = syntheticChildEnv(runtime, { NODE_OPTIONS: '--max-old-space-size=8192' }, 'test')
-  assertSyntheticEnvironment(env)
+  let pathAliasRoot: string | null = null
+  let pathAlias: string | null = null
+  const pathOverrides: Record<string, string> = {}
+  if (runtime.root.startsWith('/Volumes/')) {
+    pathAliasRoot = fs.mkdtempSync(path.join(fs.realpathSync('/tmp'), 'sb-bench-'))
+    pathAlias = path.join(pathAliasRoot, 'runtime')
+    fs.symlinkSync(runtime.root, pathAlias, 'dir')
+    for (const [name, value] of Object.entries(runtime.env)) {
+      if (value === runtime.root || value.startsWith(`${runtime.root}${path.sep}`)) {
+        pathOverrides[name] = path.join(pathAlias, path.relative(runtime.root, value))
+      }
+    }
+  }
+  const env = syntheticChildEnv(runtime, {
+    ...pathOverrides,
+    NODE_OPTIONS: '--max-old-space-size=8192',
+    STOCKBOARD_BENCH_FIXTURE_PARAMS: JSON.stringify(job.fixtureParams ?? {}),
+  }, 'test')
+  assertSyntheticEnvironment(env, runtime.root)
   const tsx = path.join(codeRoot, 'node_modules', '.bin', 'tsx')
-  const child = spawn(tsx, ['--tsconfig', path.join(codeRoot, 'tsconfig.json'), workerFile, jobPath], {
-    cwd: codeRoot, env, stdio: ['ignore', 'pipe', 'pipe'],
-  })
   let stdout = ''
   let stderr = ''
-  child.stdout.on('data', (chunk: Buffer) => { stdout = (stdout + chunk.toString()).slice(-8_000) })
-  child.stderr.on('data', (chunk: Buffer) => { stderr = (stderr + chunk.toString()).slice(-8_000) })
-  const timer = setTimeout(() => child.kill('SIGTERM'), args.workerTimeoutMs)
-  const exitCode = await new Promise<number | null>((resolve) => child.on('close', resolve))
-  clearTimeout(timer)
-  if (!fs.existsSync(resultPath)) {
-    throw new Error(`worker (${job.mode}/${job.tree}) produced no result; exit=${exitCode}\n${stderr.slice(-2_000)}`)
+  try {
+    const child = spawn(tsx, ['--tsconfig', path.join(codeRoot, 'tsconfig.json'), workerFile, jobPath], {
+      cwd: codeRoot, env, stdio: ['ignore', 'pipe', 'pipe'], detached: true,
+    })
+    activeWorkers.add(child)
+    child.stdout.on('data', (chunk: Buffer) => { stdout = (stdout + chunk.toString()).slice(-8_000) })
+    child.stderr.on('data', (chunk: Buffer) => { stderr = (stderr + chunk.toString()).slice(-8_000) })
+    let killTimer: NodeJS.Timeout | null = null
+    const timer = setTimeout(() => {
+      killProcessGroup(child, 'SIGTERM')
+      killTimer = setTimeout(() => killProcessGroup(child, 'SIGKILL'), 5_000)
+      killTimer.unref()
+    }, args.workerTimeoutMs)
+    const exitCode = await new Promise<number | null>((resolve) => child.on('close', resolve))
+    activeWorkers.delete(child)
+    clearTimeout(timer)
+    if (killTimer) clearTimeout(killTimer)
+    if (!fs.existsSync(resultPath)) {
+      throw new Error(`worker (${job.mode}/${job.tree}) produced no result; exit=${exitCode}\n${stderr.slice(-2_000)}`)
+    }
+    const result = JSON.parse(fs.readFileSync(resultPath, 'utf8')) as WorkerResult
+    if (result.error) throw new Error(`worker (${job.mode}/${job.tree}) failed: ${result.error}\n${stderr.slice(-1_500)}`)
+    return { result, stdout, stderr, exitCode }
+  } finally {
+    for (const child of [...activeWorkers]) {
+      if (child.exitCode !== null || child.signalCode !== null) activeWorkers.delete(child)
+    }
+    if (pathAliasRoot) fs.rmSync(pathAliasRoot, { recursive: true, force: true })
   }
-  const result = JSON.parse(fs.readFileSync(resultPath, 'utf8')) as WorkerResult
-  if (result.error) throw new Error(`worker (${job.mode}/${job.tree}) failed: ${result.error}\n${stderr.slice(-1_500)}`)
-  return { result, stdout, stderr, exitCode }
+}
+
+function command(root: string, args: string[]): string {
+  return execFileSync('/usr/bin/git', ['-C', root, ...args], { encoding: 'utf8', timeout: 20_000 })
+}
+
+function treeFingerprint(root: string): Record<string, unknown> {
+  const head = command(root, ['rev-parse', 'HEAD']).trim()
+  const status = command(root, ['status', '--porcelain=v1', '--untracked-files=all'])
+  const hash = createHash('sha256')
+  hash.update(command(root, ['diff', '--binary', 'HEAD', '--']))
+  const untracked = command(root, ['ls-files', '--others', '--exclude-standard']).split('\n').filter(Boolean).sort()
+  for (const relative of untracked) {
+    hash.update(`\0${relative}\0`)
+    const file = path.join(root, relative)
+    if (fs.statSync(file).isFile()) hash.update(fs.readFileSync(file))
+  }
+  return {
+    root,
+    head,
+    dirty: status.length > 0,
+    statusSha256: createHash('sha256').update(status).digest('hex'),
+    contentDiffSha256: hash.digest('hex'),
+    changedPaths: status.split('\n').filter(Boolean).length,
+  }
 }
 
 interface LoadedScenario {
@@ -171,13 +253,29 @@ async function generatorOf(spec: FixtureSpec): Promise<{ modulePath: string; ver
 async function ensureFixture(args: Args, spec: FixtureSpec): Promise<string> {
   const { modulePath, version } = await generatorOf(spec)
   const master = masterFixturePath(spec, version)
+  const metaPath = path.join(path.dirname(master), 'meta.json')
   if (fs.existsSync(master)) {
+    if (!fs.existsSync(metaPath)) throw new Error(`fixture ${master} has no integrity metadata; refuse reuse`)
+    const metadata = JSON.parse(fs.readFileSync(metaPath, 'utf8')) as {
+      spec?: FixtureSpec; version?: number; bytes?: number; sha256?: string; quickCheck?: string
+    }
+    if (metadata.version !== version || stableStringify(metadata.spec) !== stableStringify(spec)) {
+      throw new Error(`fixture ${master} metadata does not match the requested generator contract`)
+    }
+    const bytes = fs.statSync(master).size
+    if (metadata.bytes !== undefined && metadata.bytes !== bytes) throw new Error(`fixture ${master} size mismatch`)
+    assertSqliteQuickCheck(master)
+    const sha256 = fileSha256(master)
+    if (metadata.sha256 && metadata.sha256 !== sha256) throw new Error(`fixture ${master} SHA-256 mismatch`)
+    if (!metadata.sha256 || metadata.quickCheck !== 'ok' || metadata.bytes !== bytes) {
+      fs.writeFileSync(metaPath, `${JSON.stringify({ ...metadata, spec, version, bytes, sha256, quickCheck: 'ok' }, null, 2)}\n`)
+    }
     log(`fixture ${fixtureKey(spec, version)} reused (${fileSizeMb(master)} MB)`)
     return master
   }
   log(`fixture ${fixtureKey(spec, version)} building…`)
   const started = performance.now()
-  const runtime = createSyntheticRuntime('fixture')
+  const runtime = createBenchRuntime(args, 'fixture')
   try {
     await runWorker(args, {
       mode: 'fixture', tree: 'baseline', fixtureModule: modulePath, fixtureParams: { ...spec.params },
@@ -185,11 +283,19 @@ async function ensureFixture(args: Args, spec: FixtureSpec): Promise<string> {
     for (const suffix of ['-wal', '-shm']) fs.rmSync(`${runtime.dbPath}${suffix}`, { force: true })
     fs.mkdirSync(path.dirname(master), { recursive: true })
     const staging = `${master}.partial`
-    moveAcrossVolumes(runtime.dbPath, staging)
-    fs.renameSync(staging, master)
-    fs.writeFileSync(path.join(path.dirname(master), 'meta.json'), JSON.stringify({
-      spec, version, builtAt: new Date().toISOString(), buildMs: Math.round(performance.now() - started), sizeMb: fileSizeMb(master),
-    }, null, 2))
+    try {
+      moveAcrossVolumes(runtime.dbPath, staging)
+      assertSqliteQuickCheck(staging)
+      const bytes = fs.statSync(staging).size
+      const sha256 = fileSha256(staging)
+      fs.renameSync(staging, master)
+      fs.writeFileSync(metaPath, `${JSON.stringify({
+      spec, version, builtAt: new Date().toISOString(), buildMs: Math.round(performance.now() - started),
+        sizeMb: fileSizeMb(master), bytes, sha256, quickCheck: 'ok',
+      }, null, 2)}\n`)
+    } finally {
+      fs.rmSync(staging, { force: true })
+    }
   } finally {
     runtime.cleanup()
   }
@@ -212,10 +318,13 @@ async function ensurePrepared(
   if (existing) return existing
   log(`prepare ${tree} :: ${scenario.prepareKey ?? 'default'}`)
   const started = performance.now()
-  const runtime = createSyntheticRuntime('prepare')
+  const runtime = createBenchRuntime(args, 'prepare')
   try {
     cloneDatabase(master, runtime.dbPath)
-    await runWorker(args, { mode: 'prepare', tree, scenarioFile: file, scenarioId: scenario.id }, runtime)
+    await runWorker(args, {
+      mode: 'prepare', tree, scenarioFile: file, scenarioId: scenario.id,
+      fixtureParams: { ...scenario.fixture.params },
+    }, runtime)
     for (const suffix of ['-wal', '-shm']) fs.rmSync(`${runtime.dbPath}${suffix}`, { force: true })
     fs.mkdirSync(preparedDir, { recursive: true })
     const target = path.join(preparedDir, `${prepared.size}-${tree}.db`)
@@ -244,6 +353,13 @@ interface TreeAggregate {
   rssAfterColdMb: Summary
   rssMaxMb: number
   concurrency: Array<{
+    c: number
+    wallMs: Summary
+    latencyMs: Summary
+    sqlStatements: Summary
+    consistent: boolean
+  }>
+  coldConcurrency: Array<{
     c: number
     wallMs: Summary
     latencyMs: Summary
@@ -279,6 +395,18 @@ function aggregate(tree: Tree, results: WorkerResult[], bodies: Record<string, s
       consistent: entry.rounds.every((round) => round.consistent),
     })
   }
+  const coldConcurrency: TreeAggregate['coldConcurrency'] = []
+  const coldLevels = [...new Set(results.map((item) => item.coldConcurrency?.c).filter((value): value is number => value !== undefined))]
+  for (const c of coldLevels) {
+    const rounds = results.map((item) => item.coldConcurrency).filter((item): item is NonNullable<WorkerResult['coldConcurrency']> => item?.c === c)
+    coldConcurrency.push({
+      c,
+      wallMs: summarize(rounds.map((round) => round.wallMs)),
+      latencyMs: summarize(rounds.flatMap((round) => [...round.latenciesMs])),
+      sqlStatements: summarize(rounds.map((round) => round.sqlStatements)),
+      consistent: rounds.every((round) => round.consistent),
+    })
+  }
   return {
     tree,
     processes: results.length,
@@ -295,6 +423,7 @@ function aggregate(tree: Tree, results: WorkerResult[], bodies: Record<string, s
     rssAfterColdMb: summarize(results.map((item) => item.rss?.afterColdMb ?? Number.NaN).filter(Number.isFinite)),
     rssMaxMb: Math.max(...results.map((item) => item.rss?.maxMb ?? 0)),
     concurrency,
+    coldConcurrency,
     plans: full.plans,
     topShapes: full.cold?.topShapes ?? null,
     digests: full.digests ?? {},
@@ -351,6 +480,8 @@ interface ScenarioReport {
   trees: Partial<Record<Tree, TreeAggregate>>
   equivalence?: {
     status: 'EQUAL' | 'DIFFERENT' | 'NOT_COMPARED'
+    stableBaseline?: boolean
+    stableAfter?: boolean
     keys: Array<{ key: string; baselineSha?: string; afterSha?: string; equal: boolean; statusBaseline?: number; statusAfter?: number; differences?: Difference[] }>
   }
   notes?: string
@@ -384,18 +515,26 @@ function treeDigestsEqual(report: ScenarioReport, baselineBodies: Record<string,
     }
     entries.push(entry)
   }
-  return { status: entries.every((entry) => entry.equal) ? 'EQUAL' : 'DIFFERENT', keys: entries }
+  const stable = baseline.digestsStableWithinTree && after.digestsStableWithinTree
+  return {
+    status: stable && entries.length > 0 && entries.every((entry) => entry.equal) ? 'EQUAL' : 'DIFFERENT',
+    stableBaseline: baseline.digestsStableWithinTree,
+    stableAfter: after.digestsStableWithinTree,
+    keys: entries,
+  }
 }
 
 function fmt(summary: Summary | undefined, digits = 1): string {
   if (!summary || summary.n === 0) return '-'
-  return `${round(summary.p50, digits)}/${round(summary.p95, digits)}/${round(summary.p99, digits)}`
+  const p95 = summary.n >= 20 ? String(round(summary.p95, digits)) : 'N/A'
+  const p99 = summary.n >= 100 ? String(round(summary.p99, digits)) : 'N/A'
+  return `${round(summary.p50, digits)}/${p95}/${p99}`
 }
 
 function markdown(reports: ScenarioReport[], meta: Record<string, unknown>): string {
   const lines: string[] = []
   lines.push('# Search benchmark results', '', '```json', JSON.stringify(meta, null, 2), '```', '')
-  lines.push('Percentiles are nearest-rank (p50/p95/p99, ms). Cold = fresh process, DB ready, application caches empty, OS page cache not purged.', '')
+  lines.push('Percentiles are nearest-rank (p50/p95/p99, ms). p95 requires n>=20 and p99 requires n>=100; smaller samples are reported as N/A. Cold = fresh process, DB ready, application caches empty, OS page cache not purged.', '')
   lines.push('| scenario | pri | tree | n cold | cold p50/p95/p99 | n warm | warm p50/p95/p99 | cold SQL ms p50 | cold SQL stmts | payload KB | RSS MB (after cold) | status | equivalence |')
   lines.push('| --- | --- | --- | ---: | --- | ---: | --- | ---: | ---: | ---: | ---: | --- | --- |')
   for (const report of reports) {
@@ -419,6 +558,13 @@ function markdown(reports: ScenarioReport[], meta: Record<string, unknown>): str
       lines.push('')
     }
     for (const tree of ['baseline', 'after'] as const) {
+      const item = report.trees[tree]
+      if (!item || item.coldConcurrency.length === 0) continue
+      lines.push(`Cold-miss concurrency (${tree}, one fresh process per sample): ` + item.coldConcurrency.map((entry) =>
+        `c=${entry.c} wall p50/p95/p99 ${fmt(entry.wallMs)}, latency p50/p95/p99 ${fmt(entry.latencyMs)}, SQL stmts p50 ${round(entry.sqlStatements.p50, 0)}${entry.consistent ? '' : ' INCONSISTENT'}`).join(' | '))
+      lines.push('')
+    }
+    for (const tree of ['baseline', 'after'] as const) {
       const flagged = (report.trees[tree]?.plans ?? []).filter((plan) => plan.flags.length > 0)
       if (flagged.length === 0) continue
       lines.push(`Plan flags (${tree}):`)
@@ -427,6 +573,9 @@ function markdown(reports: ScenarioReport[], meta: Record<string, unknown>): str
     }
     if (report.equivalence?.status === 'DIFFERENT') {
       lines.push('**EQUIVALENCE DIFFERENCES**', '')
+      if (report.equivalence.stableBaseline === false || report.equivalence.stableAfter === false) {
+        lines.push(`- output instability: baseline=${report.equivalence.stableBaseline}, after=${report.equivalence.stableAfter}`)
+      }
       for (const entry of report.equivalence.keys.filter((item) => !item.equal)) {
         lines.push(`- key \`${entry.key}\`: status ${entry.statusBaseline}→${entry.statusAfter}`)
         for (const difference of entry.differences ?? []) lines.push(`  - ${difference.path}: ${JSON.stringify(difference.baseline)} → ${JSON.stringify(difference.after)}`)
@@ -439,12 +588,10 @@ function markdown(reports: ScenarioReport[], meta: Record<string, unknown>): str
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2))
-  if (process.env.STOCKBOARD_BENCH_RESULTS_ROOT?.trim()) {
-    assertDevelopmentArtifactRoot(process.env.STOCKBOARD_BENCH_RESULTS_ROOT)
-  }
-  if (process.env.STOCKBOARD_BENCH_FIXTURE_ROOT?.trim()) {
-    assertDevelopmentArtifactRoot(process.env.STOCKBOARD_BENCH_FIXTURE_ROOT)
-  }
+  const fixtureDirectory = process.env.STOCKBOARD_BENCH_FIXTURE_ROOT?.trim()
+  if (!fixtureDirectory) throw new Error('STOCKBOARD_BENCH_FIXTURE_ROOT must pin the OWC benchmark fixture directory')
+  assertDevelopmentArtifactRoot(fixtureDirectory)
+  assertDevelopmentArtifactRoot(args.out)
   assertSyntheticEnvironment({ ...process.env, NODE_ENV: 'test' } as NodeJS.ProcessEnv)
   const scenarios = await loadScenarios(args)
   if (args.list) {
@@ -481,17 +628,34 @@ async function main(): Promise<void> {
       for (let round = 0; round < coldSamples; round += 1) {
         const order = round % 2 === 0 ? args.trees : [...args.trees].reverse()
         for (const tree of order) {
-          const runtime = createSyntheticRuntime('measure')
+          const runtime = createBenchRuntime(args, 'measure')
           try {
             cloneDatabase(preparedByTree.get(tree)!, runtime.dbPath)
             const bodyPath = path.join(runtime.root, 'bodies.json')
             const { result } = await runWorker(args, {
               mode: 'measure', tree, scenarioFile: file, scenarioId: scenario.id, warmPerProcess,
+              fixtureParams: { ...scenario.fixture.params },
               concurrency: round === 0 ? concurrency : [], concurrencyRounds: 3,
               capturePlans: round === 0 && args.plans, bodyPath: round === 0 ? bodyPath : undefined,
             }, runtime)
             results.get(tree)!.push(result)
             if (round === 0 && fs.existsSync(bodyPath)) bodies.set(tree, JSON.parse(fs.readFileSync(bodyPath, 'utf8')) as Record<string, string>)
+          } finally {
+            runtime.cleanup()
+          }
+        }
+      }
+
+      for (const c of concurrency.filter((value) => value > 1)) {
+        for (const tree of args.trees) {
+          const runtime = createBenchRuntime(args, 'cold-concurrency')
+          try {
+            cloneDatabase(preparedByTree.get(tree)!, runtime.dbPath)
+            const { result } = await runWorker(args, {
+              mode: 'cold-concurrency', tree, scenarioFile: file, scenarioId: scenario.id,
+              fixtureParams: { ...scenario.fixture.params }, coldConcurrency: c,
+            }, runtime)
+            results.get(tree)!.push(result)
           } finally {
             runtime.cleanup()
           }
@@ -517,10 +681,29 @@ async function main(): Promise<void> {
     if (!args.keepPrepared) fs.rmSync(preparedDir, { recursive: true, force: true })
   }
 
+  const fixtureContracts = await Promise.all([...new Map(reports.map((report) => [
+    stableStringify(report.fixture), report.fixture,
+  ])).values()].map(async (spec) => {
+    const generator = await generatorOf(spec)
+    const master = masterFixturePath(spec, generator.version)
+    const metadataPath = path.join(path.dirname(master), 'meta.json')
+    return {
+      spec,
+      generatorVersion: generator.version,
+      generatorPath: generator.modulePath,
+      generatorSha256: fileSha256(generator.modulePath),
+      fixturePath: master,
+      fixtureSha256: fileSha256(master),
+      fixtureMetadataSha256: fileSha256(metadataPath),
+    }
+  }))
   const meta = {
     startedAt, finishedAt: new Date().toISOString(), node: process.version, platform: `${os.platform()} ${os.release()}`,
     cpus: os.cpus().length, memoryGb: Math.round(os.totalmem() / 1024 ** 3),
-    trees: Object.fromEntries(args.trees.map((tree) => [tree, rootOf(args, tree)])),
+    argv: process.argv.slice(2),
+    trees: Object.fromEntries(args.trees.map((tree) => [tree, treeFingerprint(rootOf(args, tree))])),
+    scenarioFiles: args.scenarioFiles.map((file) => ({ path: file, sha256: fileSha256(file) })),
+    fixtureContracts,
     scenarios: reports.length,
   }
   fs.writeFileSync(path.join(args.out, 'results.json'), JSON.stringify({ meta, reports }, null, 2))
