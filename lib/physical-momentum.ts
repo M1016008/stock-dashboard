@@ -53,6 +53,8 @@ export type PhysicalMomentumNormalizationStats = {
   upper: number | null
 }
 
+export type PhysicalMomentumPriceBasis = 'raw' | 'split_adjusted'
+
 const SPLIT_ADJUSTMENT_FACTORS = [
   0.005,
   0.01,
@@ -200,6 +202,16 @@ export function adjustLikelySplitDiscontinuities(
   return output
 }
 
+export function normalizePhysicalMomentumInputRows(
+  rows: PhysicalMomentumInputRow[],
+  priceBasis: PhysicalMomentumPriceBasis = 'raw',
+): PhysicalMomentumInputRow[] {
+  const sorted = [...rows].sort((a, b) => a.date.localeCompare(b.date))
+  return priceBasis === 'split_adjusted'
+    ? sorted.map((row) => ({ ...row }))
+    : adjustLikelySplitDiscontinuities(sorted)
+}
+
 export function adjustLikelySplitOhlcv(rows: OHLCV[]): OHLCV[] {
   const adjusted = adjustLikelySplitDiscontinuities(rows)
 
@@ -224,10 +236,9 @@ export function adjustLikelySplitOhlcv(rows: OHLCV[]): OHLCV[] {
 export function computePhysicalMomentumRawRows(
   rows: PhysicalMomentumInputRow[],
   lookback = PHYSICAL_MOMENTUM_LOOKBACK_DAYS,
+  options: Readonly<{ priceBasis?: PhysicalMomentumPriceBasis }> = {},
 ): PhysicalMomentumRawRow[] {
-  const sorted = adjustLikelySplitDiscontinuities(
-    [...rows].sort((a, b) => a.date.localeCompare(b.date)),
-  )
+  const sorted = normalizePhysicalMomentumInputRows(rows, options.priceBasis)
   const closes = sorted.map((row) => row.close)
   const volumes = sorted.map((row) => row.volume)
   const ma5 = rollingSma(closes, 5)

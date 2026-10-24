@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict'
 // @ts-expect-error Node 22 provides node:sqlite; the installed @types/node version predates it.
 import { DatabaseSync } from 'node:sqlite'
-import { calculateStageFromThreeMa, buildMaValuesFromOhlcv } from '@/lib/hex-stage'
+import {
+  STAGE_COMPARISON_RELATIVE_EPSILON,
+  calculateStageFromThreeMa,
+  buildMaValuesFromOhlcv,
+} from '@/lib/hex-stage'
+import { stageFromThreeMa } from '@/lib/timeframes'
+import { stageCodeAt, type MaSequenceFrame, type MaSequencePrepared } from '@/lib/ml/ma-sequence'
 import { activeCalendarPeriodCounts, sampleCalendarPeriodEnds } from '@/lib/snapshots/calendar-periods'
 import {
   buildCalendarStageBackfillStatements,
@@ -9,6 +15,32 @@ import {
 } from '@/lib/snapshots/calendar-backfill-sql'
 import { buildSnapshotCalculations } from '@/lib/snapshots/continuous-ma'
 import type { OHLCV } from '@/types/stock'
+
+function mlStageFromThree(a: number, b: number, c: number): number | null {
+  const frame: MaSequenceFrame = {
+    step: 1,
+    periods: [1, 2, 3],
+    mas: [[a], [b], [c]],
+    bucketKeys: ['test'],
+    velocityIndexes: [-1],
+  }
+  const prepared: MaSequencePrepared = {
+    rows: [{ date: '2026-01-05', close: 1 }],
+    stage: frame,
+    daily: frame,
+    weekly: frame,
+    monthly: frame,
+    yearly: frame,
+  }
+  const code = stageCodeAt(prepared, 0)
+  return code == null ? null : Number(code)
+}
+
+const classifiers = [
+  ['snapshot', calculateStageFromThreeMa],
+  ['chart', stageFromThreeMa],
+  ['ml', mlStageFromThree],
+] as const
 
 const permutations: Array<[number, number, number, number]> = [
   [3, 2, 1, 1],
@@ -19,11 +51,43 @@ const permutations: Array<[number, number, number, number]> = [
   [3, 1, 2, 6],
 ]
 for (const [shortMa, middleMa, longMa, expected] of permutations) {
-  assert.equal(calculateStageFromThreeMa(shortMa, middleMa, longMa), expected)
+  for (const [label, classify] of classifiers) {
+    assert.equal(classify(shortMa, middleMa, longMa), expected, `${label} permutation ${shortMa}/${middleMa}/${longMa}`)
+  }
 }
-assert.equal(calculateStageFromThreeMa(1, 1, 0), null)
-assert.equal(calculateStageFromThreeMa(1 + 1e-12, 1, 0), null)
-assert.equal(calculateStageFromThreeMa(1 + 1e-8, 1, 0), 1)
+
+for (const first of [0, 1, 2]) {
+  for (const second of [0, 1, 2]) {
+    for (const third of [0, 1, 2]) {
+      if (new Set([first, second, third]).size === 3) continue
+      for (const [label, classify] of classifiers) {
+        assert.equal(classify(first, second, third), null, `${label} exact tie ${first}/${second}/${third}`)
+      }
+    }
+  }
+}
+
+for (const scale of [1, 1_000_000]) {
+  const near = STAGE_COMPARISON_RELATIVE_EPSILON * Math.max(1, scale) * 0.5
+  const low = scale * 0.5
+  const nearTieCases: Array<[number, number, number]> = [
+    [scale + near, scale, low],
+    [scale, scale + near, low],
+    [scale + near, low, scale],
+    [scale, low, scale + near],
+    [low, scale + near, scale],
+    [low, scale, scale + near],
+  ]
+  for (const values of nearTieCases) {
+    for (const [label, classify] of classifiers) {
+      assert.equal(classify(...values), null, `${label} near tie ${values.join('/')}`)
+    }
+  }
+}
+
+for (const [label, classify] of classifiers) {
+  assert.equal(classify(1 + 1e-8, 1, 0), 1, `${label} resolves values outside tolerance`)
+}
 assert.equal(calculateStageFromThreeMa(null, 1, 0), null)
 
 function buildWeekdays(start: string, count: number): OHLCV[] {

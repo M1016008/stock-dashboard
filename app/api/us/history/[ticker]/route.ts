@@ -2,7 +2,13 @@ import { NextRequest, NextResponse } from 'next/server'
 import { execAll } from '@/lib/db/client'
 import { normalizeTickerForMarket } from '@/lib/markets'
 import type { OHLCV } from '@/types/stock'
-import { parseTimeframeSpec, resampleOhlcv, specToIntervalCode } from '@/lib/timeframes'
+import {
+  parseTimeframeSpec,
+  requiresTradingSessionCalendar,
+  resampleOhlcv,
+  resampleOhlcvWithTradingSessions,
+  specToIntervalCode,
+} from '@/lib/timeframes'
 import { US_ADJUSTED_PRICE_BASIS, toAdjustedUsOhlcvRows, type UsRawOhlcvRow } from '@/lib/us-adjusted-ohlcv'
 import { twoYearBlockStartYear, twoYearPeriod } from '@/lib/two-year-candles'
 import { buildTwoYearLineRegistry } from '@/lib/two-year-line-registry'
@@ -83,7 +89,20 @@ export async function GET(
       ],
     )
     const rows: OHLCV[] = toAdjustedUsOhlcvRows(rawRows)
-    const output = timeframeSpec ? resampleOhlcv(rows, timeframeSpec) : rows
+    const timeframeCalendarFromDate = rows[0] ? `${rows[0].date.slice(0, 4)}-01-01` : null
+    const timeframeMarketSessions = timeframeSpec
+      && requiresTradingSessionCalendar(timeframeSpec)
+      && timeframeCalendarFromDate
+      ? (await execAll<{ date: string }>(
+          `SELECT date FROM market_ohlcv_daily WHERE market = 'US' AND ticker = 'SPY' AND date >= ? ${requestedAsOfDate ? 'AND date <= ?' : ''} ORDER BY date`,
+          [timeframeCalendarFromDate, ...(requestedAsOfDate ? [requestedAsOfDate] : [])],
+        )).map((row) => row.date)
+      : []
+    const output = timeframeSpec
+      ? requiresTradingSessionCalendar(timeframeSpec)
+        ? resampleOhlcvWithTradingSessions(rows, timeframeSpec, timeframeMarketSessions)
+        : resampleOhlcv(rows, timeframeSpec)
+      : rows
     if (wantsTwoYearRegistry) {
       const calendarFromDate = rows[0]
         ? twoYearPeriod(twoYearBlockStartYear(rows[0].date)).periodStart

@@ -23,6 +23,8 @@ __pycache__/
 /.next-live/
 /.next-live-next/
 /.next-live-prev/
+/.stockboard-development/
+/.stockboard-runtime/
 /out/
 
 # production

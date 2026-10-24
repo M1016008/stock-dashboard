@@ -1,4 +1,4 @@
-import { execAll, execBatch, execGet, execRun } from '@/lib/db/client'
+import { client, execAll, execGet, localDatabaseMutationVersion } from '@/lib/db/client'
 import { buildShortTermCheck } from '@/lib/short-term-check'
 import { todayInTokyo } from '@/lib/date-time'
 import { evaluateEvEbitda, METRIC_DEFINITION_REGISTRY } from '@/lib/financial-metrics'
@@ -12,11 +12,23 @@ import {
   type ScreeningOperator,
 } from '@/lib/integrated-screener'
 import type { IntegratedScreeningEvaluationSet } from '@/lib/screener-evaluation'
+import { stableCacheKey } from '@/lib/api/serving-cache'
+import { KeyedSingleflight } from '@/lib/server/keyed-singleflight'
 
-export const SCREENING_SERVING_SOURCE_VERSION = 'integrated-screener-serving-v3'
+export const SCREENING_SERVING_SOURCE_VERSION = 'integrated-screener-serving-v4'
 const BUILD_WRITE_CHUNK = 80
 const RESULT_CACHE_TTL_MS = 60_000
+const CERTIFIED_PIT_SOURCE_PREFIX = 'pit-v1:'
 const responseCache = new Map<string, { expiresAt: number; value: IntegratedScreeningResponse }>()
+const globalForIntegratedScreener = global as typeof globalThis & {
+  integratedScreenerBuildSingleflight?: KeyedSingleflight
+  integratedScreenerSourceStateSingleflight?: KeyedSingleflight
+  integratedScreenerSourceStateCache?: Map<string, {
+    dataVersion: number
+    mutationVersion: number
+    value: ScreeningSourceState
+  }>
+}
 
 type RawBaseRow = Record<string, unknown> & { ticker: string; name: string }
 type MetricRow = { ticker: string; metric: string; value: number }
@@ -35,9 +47,18 @@ export interface ScreeningServingBuildResult {
   asOf: string
   snapshotDate: string
   valuationDate: string | null
+  sourceVersion: string
+  calculatedAt: number
   rows: number
   elapsedMs: number
   cacheHit: boolean
+}
+
+type ScreeningSourceState = {
+  asOf: string
+  snapshotDate: string
+  valuationDate: string
+  sourceVersion: string
 }
 
 export interface IntegratedScreeningReasonData {
@@ -96,6 +117,117 @@ function isoDate(value: string | null | undefined): string {
   const clean = value?.trim().slice(0, 10)
   if (clean && /^\d{4}-\d{2}-\d{2}$/.test(clean)) return clean
   return todayInTokyo()
+}
+
+async function readDataVersion(): Promise<number> {
+  const row = await execGet<Record<string, unknown>>('PRAGMA data_version')
+  const value = Number(row?.data_version ?? Object.values(row ?? {})[0])
+  if (!Number.isInteger(value) || value < 0) throw new Error('SQLite data_version is unavailable for the integrated screener.')
+  return value
+}
+
+async function readScreeningSourceState(asOf: string): Promise<ScreeningSourceState> {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const dataVersion = await readDataVersion()
+    const mutationVersion = localDatabaseMutationVersion()
+    globalForIntegratedScreener.integratedScreenerSourceStateCache ??= new Map()
+    const cached = globalForIntegratedScreener.integratedScreenerSourceStateCache.get(asOf)
+    if (cached?.dataVersion === dataVersion && cached.mutationVersion === mutationVersion) return cached.value
+
+    globalForIntegratedScreener.integratedScreenerSourceStateSingleflight ??= new KeyedSingleflight(1)
+    try {
+      return await globalForIntegratedScreener.integratedScreenerSourceStateSingleflight.run(
+        `${asOf}:${dataVersion}:${mutationVersion}`,
+        async () => {
+          const joined = globalForIntegratedScreener.integratedScreenerSourceStateCache!.get(asOf)
+          if (joined?.dataVersion === dataVersion && joined.mutationVersion === mutationVersion) return joined.value
+          return readScreeningSourceStateUncached(asOf, dataVersion, mutationVersion)
+        },
+      )
+    } catch (error) {
+      if (attempt === 0 && error instanceof Error && /source generation changed/.test(error.message)) continue
+      throw error
+    }
+  }
+  throw new Error('Integrated screener source generation remained unstable after retry.')
+}
+
+async function readScreeningSourceStateUncached(
+  asOf: string,
+  dataVersion: number,
+  mutationVersion: number,
+): Promise<ScreeningSourceState> {
+  const cutoff = `${asOf}T23:59:59+09:00`
+  const row = await execGet<Record<string, unknown>>(`
+    SELECT
+      (SELECT MAX(date) FROM daily_snapshots WHERE date <= ?) AS snapshot_date,
+      (SELECT MAX(valuation_date) FROM valuation_daily_serving WHERE valuation_date <= ?) AS valuation_date,
+      (SELECT MAX(computed_at) FROM daily_snapshots
+        WHERE date = (SELECT MAX(date) FROM daily_snapshots WHERE date <= ?)) AS snapshot_generation,
+      (SELECT MAX(calculated_at) FROM valuation_daily_serving
+        WHERE valuation_date = (SELECT MAX(valuation_date) FROM valuation_daily_serving WHERE valuation_date <= ?)) AS valuation_generation,
+      (SELECT MAX(computed_at) FROM calculated_financial_metrics WHERE as_of <= ?) AS metric_generation,
+      (SELECT MAX(imported_at) FROM normalized_financial_facts WHERE published_at <= ?) AS fact_generation,
+      (SELECT MAX(imported_at) FROM financial_forecast_snapshots WHERE published_at <= ?) AS forecast_generation,
+      (SELECT MAX(updated_at) FROM stock_classification) AS classification_generation,
+      (SELECT MAX(COALESCE(shares_updated_at, added_at)) FROM ticker_universe) AS universe_generation,
+      (SELECT MAX(updated_at) FROM physical_momentum_metrics WHERE market = 'JP' AND date <= ?) AS momentum_generation,
+      (SELECT MAX(imported_at) FROM weekly_margin_interest WHERE date <= ?) AS margin_generation,
+      (SELECT MAX(computed_at) FROM sector_structure_daily WHERE taxonomy = '33' AND date <= ?) AS sector_generation
+  `, [asOf, asOf, asOf, asOf, asOf, cutoff, cutoff, asOf, asOf, asOf])
+  const snapshotDate = asString(row?.snapshot_date)
+  const valuationDate = asString(row?.valuation_date)
+  if (!snapshotDate) throw new Error(`No daily snapshot is available on or before ${asOf}`)
+  if (!valuationDate) throw new Error(`No Valuation Serving is available on or before ${asOf}`)
+  if (valuationDate !== snapshotDate) {
+    throw new Error(`Valuation Serving is stale: quote/snapshot=${snapshotDate}, valuation=${valuationDate}`)
+  }
+  const token = stableCacheKey({
+    snapshotDate,
+    valuationDate,
+    snapshotGeneration: row?.snapshot_generation ?? null,
+    valuationGeneration: row?.valuation_generation ?? null,
+    metricGeneration: row?.metric_generation ?? null,
+    factGeneration: row?.fact_generation ?? null,
+    forecastGeneration: row?.forecast_generation ?? null,
+    classificationGeneration: row?.classification_generation ?? null,
+    universeGeneration: row?.universe_generation ?? null,
+    momentumGeneration: row?.momentum_generation ?? null,
+    marginGeneration: row?.margin_generation ?? null,
+    sectorGeneration: row?.sector_generation ?? null,
+  })
+  const value = {
+    asOf,
+    snapshotDate,
+    valuationDate,
+    sourceVersion: `${CERTIFIED_PIT_SOURCE_PREFIX}${SCREENING_SERVING_SOURCE_VERSION}:${token.slice(0, 24)}`,
+  }
+  const endingDataVersion = await readDataVersion()
+  const endingMutationVersion = localDatabaseMutationVersion()
+  if (endingDataVersion !== dataVersion || endingMutationVersion !== mutationVersion) {
+    throw new Error('Integrated screener source generation changed while reading its watermark.')
+  }
+  globalForIntegratedScreener.integratedScreenerSourceStateCache!.set(asOf, {
+    dataVersion,
+    mutationVersion,
+    value,
+  })
+  return value
+}
+
+function retainSourceStateAfterServingWrite(
+  source: ScreeningSourceState,
+  mutationBefore: number,
+  expectedOwnMutations: number,
+): void {
+  const cached = globalForIntegratedScreener.integratedScreenerSourceStateCache?.get(source.asOf)
+  if (!cached || cached.value.sourceVersion !== source.sourceVersion) return
+  const mutationAfter = localDatabaseMutationVersion()
+  if (mutationAfter - mutationBefore === expectedOwnMutations) {
+    cached.mutationVersion = mutationAfter
+  } else {
+    globalForIntegratedScreener.integratedScreenerSourceStateCache?.delete(source.asOf)
+  }
 }
 
 function subtractYears(date: string, years: number): string {
@@ -371,6 +503,7 @@ function mapServingRow(
   asOf: string,
   snapshotDate: string,
   valuationDate: string | null,
+  sourceVersion: string,
   metrics: Map<string, number>,
   ltmFacts: Map<string, FactRow>,
   fyFacts: Map<string, FactRow>,
@@ -434,7 +567,7 @@ function mapServingRow(
     short_term_check: shortTerm.label, short_term_score: shortTerm.score,
     credit_ratio: asNumber(base.credit_ratio), long_margin: asNumber(base.long_margin), short_margin: asNumber(base.short_margin),
     long_margin_change: asNumber(base.long_change), short_margin_change: asNumber(base.short_change),
-    source_version: SCREENING_SERVING_SOURCE_VERSION, calculated_at: Math.floor(Date.now() / 1000),
+    source_version: sourceVersion, calculated_at: Math.floor(Date.now() / 1000),
   }
 }
 
@@ -451,82 +584,161 @@ function applySectorPercentiles(rows: Record<string, unknown>[]): void {
   }
 }
 
-async function writeServingRows(rows: Record<string, unknown>[]): Promise<void> {
-  if (rows.length === 0) return
+async function replaceServingGeneration(input: {
+  rows: Record<string, unknown>[]
+  asOf: string
+  snapshotDate: string
+  valuationDate: string | null
+  sourceVersion: string
+  calculatedAt: number
+}): Promise<{ mutationBefore: number; expectedOwnMutations: number }> {
+  if (input.rows.length === 0) throw new Error('Integrated screener generation cannot publish zero rows.')
+  const rows = input.rows
   const columns = Object.keys(rows[0])
   const placeholders = columns.map(() => '?').join(',')
-  const updates = columns.filter((column) => column !== 'ticker' && column !== 'as_of')
-    .map((column) => `${column}=excluded.${column}`).join(',')
-  for (let index = 0; index < rows.length; index += BUILD_WRITE_CHUNK) {
-    const chunk = rows.slice(index, index + BUILD_WRITE_CHUNK)
-    await execBatch(chunk.map((row) => ({
-      sql: `INSERT INTO stock_screening_serving (${columns.join(',')}) VALUES (${placeholders})
-        ON CONFLICT(ticker, as_of) DO UPDATE SET ${updates}`,
-      args: columns.map((column) => row[column] == null ? null : row[column] as string | number),
-    })))
+  const mutationBefore = localDatabaseMutationVersion()
+  const expectedOwnMutations = 2 + Math.ceil(rows.length / BUILD_WRITE_CHUNK)
+  const transaction = await client.transaction('write')
+  try {
+    await transaction.execute({ sql: 'DELETE FROM stock_screening_serving WHERE as_of=?', args: [input.asOf] })
+    for (let index = 0; index < rows.length; index += BUILD_WRITE_CHUNK) {
+      const chunk = rows.slice(index, index + BUILD_WRITE_CHUNK)
+      await transaction.batch(chunk.map((row) => ({
+        sql: `INSERT INTO stock_screening_serving (${columns.join(',')}) VALUES (${placeholders})`,
+        args: columns.map((column) => row[column] == null ? null : row[column] as string | number),
+      })))
+    }
+    await transaction.execute({
+      sql: `INSERT INTO stock_screening_serving_dates(
+          as_of, snapshot_date, valuation_date, row_count, source_version, status, error_message, calculated_at
+        ) VALUES (?, ?, ?, ?, ?, 'completed', NULL, ?)
+        ON CONFLICT(as_of) DO UPDATE SET
+          snapshot_date=excluded.snapshot_date, valuation_date=excluded.valuation_date,
+          row_count=excluded.row_count, source_version=excluded.source_version,
+          status='completed', error_message=NULL, calculated_at=excluded.calculated_at`,
+      args: [input.asOf, input.snapshotDate, input.valuationDate, rows.length, input.sourceVersion, input.calculatedAt],
+    })
+    await transaction.commit()
+    return { mutationBefore, expectedOwnMutations }
+  } catch (error) {
+    await transaction.rollback().catch(() => undefined)
+    throw error
   }
 }
 
 export async function buildScreeningServingDate(requestedAsOf?: string | null, force = false): Promise<ScreeningServingBuildResult> {
   const startedAt = Date.now()
   const asOf = isoDate(requestedAsOf)
-  const existing = await execGet<{ status: string; row_count: number; snapshot_date: string; valuation_date: string | null; source_version: string }>(`
-    SELECT status, row_count, snapshot_date, valuation_date, source_version
+  type ExistingServing = {
+    status: string
+    row_count: number
+    snapshot_date: string
+    valuation_date: string | null
+    source_version: string
+    calculated_at: number
+  }
+  const readExisting = () => execGet<ExistingServing>(`
+    SELECT status, row_count, snapshot_date, valuation_date, source_version, calculated_at
     FROM stock_screening_serving_dates WHERE as_of = ?
   `, [asOf])
-  if (!force && existing?.status === 'completed' && existing.source_version === SCREENING_SERVING_SOURCE_VERSION && Number(existing.row_count) > 0) {
-    return { asOf, snapshotDate: existing.snapshot_date, valuationDate: existing.valuation_date, rows: Number(existing.row_count), elapsedMs: Date.now() - startedAt, cacheHit: true }
+  const asBuildResult = (existing: ExistingServing): ScreeningServingBuildResult => ({
+    asOf,
+    snapshotDate: existing.snapshot_date,
+    valuationDate: existing.valuation_date,
+    sourceVersion: existing.source_version,
+    calculatedAt: Number(existing.calculated_at),
+    rows: Number(existing.row_count),
+    elapsedMs: Date.now() - startedAt,
+    cacheHit: true,
+  })
+  const latest = await execGet<{ date: string | null }>('SELECT MAX(date) AS date FROM daily_snapshots')
+  const latestSnapshotDate = asString(latest?.date)
+  if (!latestSnapshotDate) throw new Error('No daily snapshot is available.')
+  const existing = await readExisting()
+  const immutableHistorical = asOf < latestSnapshotDate
+  if (immutableHistorical) {
+    const certified = !force
+      && existing?.status === 'completed'
+      && Number(existing.row_count) > 0
+      && existing.source_version.startsWith(CERTIFIED_PIT_SOURCE_PREFIX)
+    if (certified) return asBuildResult(existing)
+    throw new Error(`Historical integrated screener data for ${asOf} is not backed by a certified point-in-time generation.`)
   }
-  const dates = await execGet<{ snapshot_date: string | null; valuation_date: string | null }>(`
-    SELECT
-      (SELECT MAX(date) FROM daily_snapshots WHERE date <= ?) AS snapshot_date,
-      (SELECT MAX(valuation_date) FROM valuation_daily_serving WHERE valuation_date <= ?) AS valuation_date
-  `, [asOf, asOf])
-  if (!dates?.snapshot_date) throw new Error(`No daily snapshot is available on or before ${asOf}`)
-  if (!dates.valuation_date) throw new Error(`No Valuation Serving is available on or before ${asOf}`)
-  if (dates.valuation_date !== dates.snapshot_date) {
-    throw new Error(`Valuation Serving is stale: quote/snapshot=${dates.snapshot_date}, valuation=${dates.valuation_date}`)
-  }
-  await execRun(`
-    INSERT INTO stock_screening_serving_dates(as_of, snapshot_date, valuation_date, row_count, source_version, status, calculated_at)
-    VALUES (?, ?, ?, 0, ?, 'building', unixepoch())
-    ON CONFLICT(as_of) DO UPDATE SET snapshot_date=excluded.snapshot_date, valuation_date=excluded.valuation_date,
-      source_version=excluded.source_version, status='building', error_message=NULL, calculated_at=unixepoch()
-  `, [asOf, dates.snapshot_date, dates.valuation_date, SCREENING_SERVING_SOURCE_VERSION])
-  try {
-    const baseRows = await loadBaseRows(dates.snapshot_date, dates.valuation_date, asOf)
-    const tickers = baseRows.map((row) => row.ticker)
-    const metricRows = await loadLatestMetrics(asOf)
-    const ltmRows = await loadLatestLtmFacts(asOf, tickers)
-    const fyData = await loadLatestFyFacts(asOf, tickers)
-    const forecastRows = await loadLatestForecasts(asOf, tickers)
-    const valuationPercentiles = await loadValuationPercentiles(asOf, dates.valuation_date)
-    const sectorStructures = await loadSectorStructures(asOf)
-    const metrics = metricMap(metricRows)
-    const ltmFacts = latestFactMap(ltmRows)
-    const latestFyFacts = latestFactMap(fyData.latest)
-    const forecasts = forecastMap(forecastRows)
-    const dividends = dividendStats(fyData.dividends)
-    const rows = baseRows.map((base) => mapServingRow(
-      base, asOf, dates.snapshot_date!, dates.valuation_date,
-      metrics.get(base.ticker) ?? new Map(), ltmFacts.get(base.ticker) ?? new Map(), latestFyFacts.get(base.ticker) ?? new Map(),
-      forecasts.get(base.ticker) ?? new Map(), dividends.get(base.ticker), valuationPercentiles.get(base.ticker),
-      sectorStructures.get(asString(base.sector33_name) ?? ''),
-    ))
-    applySectorPercentiles(rows)
-    await writeServingRows(rows)
-    await execRun(`
-      UPDATE stock_screening_serving_dates SET row_count=?, status='completed', error_message=NULL, calculated_at=unixepoch()
-      WHERE as_of=?
-    `, [rows.length, asOf])
-    for (const key of responseCache.keys()) {
-      if (key.includes(`"asOf":"${asOf}"`)) responseCache.delete(key)
-    }
-    return { asOf, snapshotDate: dates.snapshot_date, valuationDate: dates.valuation_date, rows: rows.length, elapsedMs: Date.now() - startedAt, cacheHit: false }
-  } catch (error) {
-    await execRun(`UPDATE stock_screening_serving_dates SET status='error', error_message=?, calculated_at=unixepoch() WHERE as_of=?`, [error instanceof Error ? error.message.slice(0, 1000) : String(error).slice(0, 1000), asOf])
-    throw error
-  }
+
+  const source = await readScreeningSourceState(asOf)
+  const isFresh = (candidate: ExistingServing | undefined) => !force
+    && candidate?.status === 'completed'
+    && candidate.source_version === source.sourceVersion
+    && candidate.snapshot_date === source.snapshotDate
+    && candidate.valuation_date === source.valuationDate
+    && Number(candidate.row_count) > 0
+
+  if (isFresh(existing)) return asBuildResult(existing!)
+
+  globalForIntegratedScreener.integratedScreenerBuildSingleflight ??= new KeyedSingleflight(1)
+  const result = await globalForIntegratedScreener.integratedScreenerBuildSingleflight.run(
+    `${asOf}:${source.sourceVersion}`,
+    async (): Promise<ScreeningServingBuildResult> => {
+      const joinedExisting = await readExisting()
+      if (isFresh(joinedExisting)) return asBuildResult(joinedExisting!)
+      const currentSource = await readScreeningSourceState(asOf)
+      if (currentSource.sourceVersion !== source.sourceVersion) {
+        throw new Error('Integrated screener source generation changed before the build started.')
+      }
+      try {
+        const baseRows = await loadBaseRows(source.snapshotDate, source.valuationDate, asOf)
+        const tickers = baseRows.map((row) => row.ticker)
+        const metricRows = await loadLatestMetrics(asOf)
+        const ltmRows = await loadLatestLtmFacts(asOf, tickers)
+        const fyData = await loadLatestFyFacts(asOf, tickers)
+        const forecastRows = await loadLatestForecasts(asOf, tickers)
+        const valuationPercentiles = await loadValuationPercentiles(asOf, source.valuationDate)
+        const sectorStructures = await loadSectorStructures(asOf)
+        const metrics = metricMap(metricRows)
+        const ltmFacts = latestFactMap(ltmRows)
+        const latestFyFacts = latestFactMap(fyData.latest)
+        const forecasts = forecastMap(forecastRows)
+        const dividends = dividendStats(fyData.dividends)
+        const rows = baseRows.map((base) => mapServingRow(
+          base, asOf, source.snapshotDate, source.valuationDate, source.sourceVersion,
+          metrics.get(base.ticker) ?? new Map(), ltmFacts.get(base.ticker) ?? new Map(), latestFyFacts.get(base.ticker) ?? new Map(),
+          forecasts.get(base.ticker) ?? new Map(), dividends.get(base.ticker), valuationPercentiles.get(base.ticker),
+          sectorStructures.get(asString(base.sector33_name) ?? ''),
+        ))
+        applySectorPercentiles(rows)
+        const completedSource = await readScreeningSourceState(asOf)
+        if (completedSource.sourceVersion !== source.sourceVersion) {
+          throw new Error('Integrated screener source generation changed during the build.')
+        }
+        const calculatedAt = Math.floor(Date.now() / 1000)
+        const published = await replaceServingGeneration({
+          rows,
+          asOf,
+          snapshotDate: source.snapshotDate,
+          valuationDate: source.valuationDate,
+          sourceVersion: source.sourceVersion,
+          calculatedAt,
+        })
+        retainSourceStateAfterServingWrite(source, published.mutationBefore, published.expectedOwnMutations)
+        for (const key of responseCache.keys()) {
+          if (key.includes(`"asOf":"${asOf}"`)) responseCache.delete(key)
+        }
+        return {
+          asOf,
+          snapshotDate: source.snapshotDate,
+          valuationDate: source.valuationDate,
+          sourceVersion: source.sourceVersion,
+          calculatedAt,
+          rows: rows.length,
+          elapsedMs: Date.now() - startedAt,
+          cacheHit: false,
+        }
+      } catch (error) {
+        throw error
+      }
+    },
+  )
+  return { ...result, elapsedMs: Date.now() - startedAt }
 }
 
 function conditionSql(condition: ScreeningCondition, args: Array<string | number>): string | null {
@@ -571,16 +783,27 @@ function rowFromDb(row: Record<string, unknown>): IntegratedScreeningRow {
   return output
 }
 
+async function servingGenerationMatches(serving: ScreeningServingBuildResult): Promise<boolean> {
+  const published = await execGet<{ source_version: string; calculated_at: number; row_count: number }>(`
+    SELECT source_version, calculated_at, row_count
+    FROM stock_screening_serving_dates
+    WHERE as_of = ? AND status = 'completed'
+  `, [serving.asOf])
+  return published?.source_version === serving.sourceVersion
+    && Number(published?.calculated_at) === serving.calculatedAt
+    && Number(published?.row_count) === serving.rows
+}
+
 export async function evaluateIntegratedScreeningSet(input: {
   asOf?: string | null
   conditions: ScreeningCondition[]
-}): Promise<IntegratedScreeningEvaluationSet> {
+}, generationRetry = 0): Promise<IntegratedScreeningEvaluationSet> {
   const startedAt = Date.now()
   const serving = await buildScreeningServingDate(input.asOf)
-  const args: Array<string | number> = [serving.asOf]
+  const args: Array<string | number> = [serving.asOf, serving.sourceVersion]
   const where = [
     's.as_of = ?',
-    'EXISTS (SELECT 1 FROM ticker_universe u WHERE u.ticker=s.ticker AND u.active=1)',
+    's.source_version = ?',
   ]
   for (const condition of input.conditions.slice(0, 40)) {
     const sql = conditionSql(condition, args)
@@ -590,6 +813,10 @@ export async function evaluateIntegratedScreeningSet(input: {
     SELECT ${SELECT_COLUMNS} FROM stock_screening_serving s
     WHERE ${where.join(' AND ')} ORDER BY s.ticker
   `, args)
+  if (!(await servingGenerationMatches(serving))) {
+    if (generationRetry >= 1) throw new Error('Integrated screener generation changed while evaluating the saved condition set.')
+    return evaluateIntegratedScreeningSet(input, generationRetry + 1)
+  }
   return {
     asOf: serving.asOf,
     snapshotDate: serving.snapshotDate,
@@ -601,17 +828,23 @@ export async function evaluateIntegratedScreeningSet(input: {
 export async function getIntegratedScreeningRowsAtDate(
   asOf: string,
   tickers: string[],
+  generationRetry = 0,
 ): Promise<Map<string, IntegratedScreeningRow>> {
   const output = new Map<string, IntegratedScreeningRow>()
   const unique = [...new Set(tickers.map((ticker) => ticker.trim()).filter(Boolean))]
+  if (unique.length === 0) return output
+  const serving = await buildScreeningServingDate(asOf)
   for (let index = 0; index < unique.length; index += 400) {
     const chunk = unique.slice(index, index + 400)
     const rows = await execAll<Record<string, unknown>>(`
       SELECT ${SELECT_COLUMNS} FROM stock_screening_serving s
-      WHERE s.as_of = ? AND s.ticker IN (${chunk.map(() => '?').join(',')})
-        AND EXISTS (SELECT 1 FROM ticker_universe u WHERE u.ticker=s.ticker AND u.active=1)
-    `, [asOf, ...chunk])
+      WHERE s.as_of = ? AND s.source_version = ? AND s.ticker IN (${chunk.map(() => '?').join(',')})
+    `, [asOf, serving.sourceVersion, ...chunk])
     for (const row of rows.map(rowFromDb)) output.set(row.ticker, row)
+  }
+  if (!(await servingGenerationMatches(serving))) {
+    if (generationRetry >= 1) throw new Error('Integrated screener generation changed while loading evaluation rows.')
+    return getIntegratedScreeningRowsAtDate(asOf, tickers, generationRetry + 1)
   }
   return output
 }
@@ -619,32 +852,41 @@ export async function getIntegratedScreeningRowsAtDate(
 export async function getIntegratedScreeningReasonData(
   ticker: string,
   requestedAsOf?: string | null,
+  generationRetry = 0,
 ): Promise<IntegratedScreeningReasonData | null> {
   const serving = await buildScreeningServingDate(requestedAsOf)
   const rowRecord = await execGet<Record<string, unknown>>(`
     SELECT ${SELECT_COLUMNS} FROM stock_screening_serving s
-    WHERE s.as_of = ? AND s.ticker = ?
-      AND EXISTS (SELECT 1 FROM ticker_universe u WHERE u.ticker=s.ticker AND u.active=1)
+    WHERE s.as_of = ? AND s.source_version = ? AND s.ticker = ?
     LIMIT 1
-  `, [serving.asOf, ticker])
-  if (!rowRecord) return null
+  `, [serving.asOf, serving.sourceVersion, ticker])
+  if (!rowRecord) {
+    if (!(await servingGenerationMatches(serving))) {
+      if (generationRetry >= 1) throw new Error('Integrated screener generation changed while loading reason data.')
+      return getIntegratedScreeningReasonData(ticker, requestedAsOf, generationRetry + 1)
+    }
+    return null
+  }
   const row = rowFromDb(rowRecord)
   const [peerRecords, sectorCountRow] = await Promise.all([
     execAll<Record<string, unknown>>(`
       SELECT ${SELECT_COLUMNS} FROM stock_screening_serving s
-      WHERE s.as_of = ?
-        AND EXISTS (SELECT 1 FROM ticker_universe u WHERE u.ticker=s.ticker AND u.active=1)
+      WHERE s.as_of = ? AND s.source_version = ?
         AND (
           (? IS NOT NULL AND s.sector33 = ?)
           OR (? IS NOT NULL AND s.major_category = ?)
         )
       ORDER BY s.ticker
-    `, [serving.asOf, row.sector33, row.sector33, row.majorCategory, row.majorCategory]),
+    `, [serving.asOf, serving.sourceVersion, row.sector33, row.sector33, row.majorCategory, row.majorCategory]),
     execGet<{ count: number }>(`
       SELECT COUNT(DISTINCT sector33) AS count FROM stock_screening_serving
-      WHERE as_of = ? AND sector33 IS NOT NULL AND sector33 <> ''
-    `, [serving.asOf]),
+      WHERE as_of = ? AND source_version = ? AND sector33 IS NOT NULL AND sector33 <> ''
+    `, [serving.asOf, serving.sourceVersion]),
   ])
+  if (!(await servingGenerationMatches(serving))) {
+    if (generationRetry >= 1) throw new Error('Integrated screener generation changed while loading reason data.')
+    return getIntegratedScreeningReasonData(ticker, requestedAsOf, generationRetry + 1)
+  }
   const peers = peerRecords.map(rowFromDb)
   return {
     serving,
@@ -655,25 +897,25 @@ export async function getIntegratedScreeningReasonData(
   }
 }
 
-async function loadCoverage(asOf: string, universe: number): Promise<ScreeningCoverage[]> {
+async function loadCoverage(asOf: string, sourceVersion: string, universe: number): Promise<ScreeningCoverage[]> {
   const metrics = [...SCREENING_METRIC_MAP.keys()]
   const expressions = metrics.map((metric) => `COUNT(${COLUMN_BY_METRIC[metric]}) AS ${COLUMN_BY_METRIC[metric]}`).join(',')
-  const row = await execGet<Record<string, unknown>>(`SELECT ${expressions} FROM stock_screening_serving WHERE as_of = ?`, [asOf])
+  const row = await execGet<Record<string, unknown>>(`SELECT ${expressions} FROM stock_screening_serving WHERE as_of = ? AND source_version = ?`, [asOf, sourceVersion])
   return metrics.map((metric) => {
     const available = Number(row?.[COLUMN_BY_METRIC[metric]] ?? 0)
     return { metric, available, universe, percent: universe > 0 ? 100 * available / universe : 0 }
   })
 }
 
-async function loadOptions(asOf: string): Promise<IntegratedScreeningResponse['options']> {
+async function loadOptions(asOf: string, sourceVersion: string): Promise<IntegratedScreeningResponse['options']> {
   const keys: ScreeningMetricKey[] = ['marketSegment', 'sector17', 'sector33', 'majorCategory', 'subIndustry', 'maStructure', 'shortTermCheck']
   const output: IntegratedScreeningResponse['options'] = {}
   for (const key of keys) {
     const column = COLUMN_BY_METRIC[key]
     const rows = await execAll<{ value: string; count: number }>(`
       SELECT ${column} AS value, COUNT(*) AS count FROM stock_screening_serving
-      WHERE as_of = ? AND ${column} IS NOT NULL AND ${column} <> '' GROUP BY ${column} ORDER BY count DESC, value LIMIT 600
-    `, [asOf])
+      WHERE as_of = ? AND source_version = ? AND ${column} IS NOT NULL AND ${column} <> '' GROUP BY ${column} ORDER BY count DESC, value LIMIT 600
+    `, [asOf, sourceVersion])
     output[key] = rows.map((row) => ({ value: row.value, count: Number(row.count) }))
   }
   return output
@@ -686,18 +928,29 @@ export async function queryIntegratedScreener(input: {
   direction?: 'asc' | 'desc'
   limit?: number
   offset?: number
-}): Promise<IntegratedScreeningResponse> {
+}, generationRetry = 0): Promise<IntegratedScreeningResponse> {
   const startedAt = Date.now()
   const serving = await buildScreeningServingDate(input.asOf)
   const limit = Math.max(1, Math.min(500, Math.floor(input.limit ?? 100)))
   const offset = Math.max(0, Math.floor(input.offset ?? 0))
   const direction = input.direction === 'asc' ? 'asc' : 'desc'
   const conditions = (input.conditions ?? []).slice(0, 40)
-  const cacheKey = JSON.stringify({ asOf: serving.asOf, conditions, sort: input.sort ?? null, direction, limit, offset })
+  const cacheKey = JSON.stringify({
+    asOf: serving.asOf,
+    snapshotDate: serving.snapshotDate,
+    valuationDate: serving.valuationDate,
+    sourceVersion: serving.sourceVersion,
+    calculatedAt: serving.calculatedAt,
+    conditions,
+    sort: input.sort ?? null,
+    direction,
+    limit,
+    offset,
+  })
   const cached = responseCache.get(cacheKey)
   if (cached && cached.expiresAt > Date.now()) return { ...cached.value, elapsedMs: Date.now() - startedAt, cacheHit: true }
-  const args: Array<string | number> = [serving.asOf]
-  const where = ['s.as_of = ?', 'EXISTS (SELECT 1 FROM ticker_universe u WHERE u.ticker=s.ticker AND u.active=1)']
+  const args: Array<string | number> = [serving.asOf, serving.sourceVersion]
+  const where = ['s.as_of = ?', 's.source_version = ?']
   for (const condition of conditions) {
     const sql = conditionSql(condition, args)
     if (sql) where.push(sql)
@@ -711,10 +964,17 @@ export async function queryIntegratedScreener(input: {
     WHERE ${whereSql} ORDER BY ${sortSql(input.sort, direction)} LIMIT ? OFFSET ?
   `, [...args, limit, offset])
   const universe = serving.rows
-  const [coverage, options] = await Promise.all([loadCoverage(serving.asOf, universe), loadOptions(serving.asOf)])
+  const [coverage, options] = await Promise.all([
+    loadCoverage(serving.asOf, serving.sourceVersion, universe),
+    loadOptions(serving.asOf, serving.sourceVersion),
+  ])
+  if (!(await servingGenerationMatches(serving))) {
+    if (generationRetry >= 1) throw new Error('Integrated screener generation changed while reading the result.')
+    return queryIntegratedScreener(input, generationRetry + 1)
+  }
   const response: IntegratedScreeningResponse = {
     contractVersion: 'integrated-screener-v1', asOf: serving.asOf, snapshotDate: serving.snapshotDate,
-    servingBuiltAt: Math.floor(Date.now() / 1000), total: Number(count?.total ?? 0), universe,
+    servingBuiltAt: serving.calculatedAt, total: Number(count?.total ?? 0), universe,
     rows: rows.map(rowFromDb), coverage, options, limit, offset, elapsedMs: Date.now() - startedAt, cacheHit: false,
   }
   responseCache.set(cacheKey, { expiresAt: Date.now() + RESULT_CACHE_TTL_MS, value: response })

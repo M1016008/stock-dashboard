@@ -18,6 +18,10 @@ import { resolveConfiguredStoragePath } from '../storage-paths'
 import path from 'path'
 import fs from 'fs'
 import { guardForDatabase, isStorageIoError, requiresExternalStorageGuard, type ExternalStorageGuard } from '../storage/external-storage-guard'
+import { assertDatabaseOpenAllowed, assertIsolatedRuntimeEnvironment } from '../runtime/isolation'
+import { sqlStatementMayMutate } from './sql-mutation'
+
+if (process.env.STOCKBOARD_RUNTIME_SCOPE) assertIsolatedRuntimeEnvironment()
 
 const TURSO_URL = process.env.TURSO_DATABASE_URL
 const TURSO_TOKEN = process.env.TURSO_AUTH_TOKEN
@@ -46,10 +50,54 @@ const globalForDb = global as unknown as {
   libsql?: Client
   schemaReady?: Promise<void>
   sqlitePragmasReady?: Promise<void>
+  mutationVersion?: number
   readQueue?: {
     active: number
     waiters: Array<() => void>
   }
+}
+
+function sqlText(value: unknown): string | null {
+  if (typeof value === 'string') return value
+  if (value && typeof value === 'object' && 'sql' in value) {
+    const sql = (value as { sql?: unknown }).sql
+    return typeof sql === 'string' ? sql : null
+  }
+  return null
+}
+
+function statementMayMutate(value: unknown): boolean {
+  const sql = sqlText(value)
+  if (!sql) return true
+  return sqlStatementMayMutate(sql)
+}
+
+function operationMayMutate(property: PropertyKey, args: unknown[]): boolean {
+  if (property === 'execute') return statementMayMutate(args[0])
+  if (property === 'batch') {
+    return !Array.isArray(args[0]) || args[0].some((statement) => statementMayMutate(statement))
+  }
+  return false
+}
+
+function recordMutation(): void {
+  globalForDb.mutationVersion = (globalForDb.mutationVersion ?? 0) + 1
+}
+
+export function localDatabaseMutationVersion(): number {
+  return globalForDb.mutationVersion ?? 0
+}
+
+function recordSuccessfulMutation<T>(value: T, shouldRecord: boolean): T {
+  if (!shouldRecord) return value
+  if (value && typeof (value as unknown as Promise<unknown>).then === 'function') {
+    return (value as unknown as Promise<unknown>).then((result) => {
+      recordMutation()
+      return result
+    }) as T
+  }
+  recordMutation()
+  return value
 }
 
 function storageGuard(): ExternalStorageGuard | null {
@@ -59,6 +107,7 @@ function storageGuard(): ExternalStorageGuard | null {
 }
 
 function realClient(): Client {
+  assertDatabaseOpenAllowed()
   const guard = storageGuard()
   guard?.assertWritable()
   if (!globalForDb.libsql) {
@@ -97,7 +146,10 @@ function guardedTransaction<T extends object>(transaction: T, guard: ExternalSto
         if (property === 'execute' || property === 'batch')
           (globalThis as { __phase16dQaSqlQuery?: (count?: number) => void })
             .__phase16dQaSqlQuery?.(property === 'batch' && Array.isArray(args[0]) ? args[0].length : 1)
-        try { return guardedResult(Reflect.apply(member, target, args), guard) }
+        try {
+          const result = guardedResult(Reflect.apply(member, target, args), guard)
+          return recordSuccessfulMutation(result, operationMayMutate(property, args))
+        }
         catch (error) {
           if (guard && isStorageIoError(error)) guard.classify(error)
           throw error
@@ -128,7 +180,7 @@ export const client: Client = new Proxy({ __libsqlProxy: true } as unknown as Cl
         if (property === 'transaction') {
           return (result as Promise<object>).then((transaction) => guardedTransaction(transaction, guard))
         }
-        return result
+        return recordSuccessfulMutation(result, operationMayMutate(property, args))
       } catch (error) {
         if (guard && isStorageIoError(error)) guard.classify(error)
         throw error

@@ -28,7 +28,9 @@ import {
   initialVisiblePeriodForInterval,
   intervalLabel,
   intervalToSpec,
+  requiresTradingSessionCalendar,
   resampleOhlcv,
+  resampleOhlcvWithTradingSessions,
   smaSeries as calcSmaSeries,
   stageFromThreeMa,
   type ChartIntervalCode,
@@ -185,7 +187,8 @@ export function CandlestickChart({
   const [rangeDragEnabled, setRangeDragEnabled] = useState(false)
   const maLinesKey = effectiveMaLines.join(',')
   const fetchPeriod = historyPeriod ?? PERIOD_BY_INTERVAL[effectiveInterval] ?? defaultPeriodForInterval(effectiveInterval)
-  const needsMarketCalendar = effectiveInterval === '2Y'
+  const effectiveSpec = intervalToSpec(effectiveInterval)
+  const needsMarketCalendar = effectiveInterval === '2Y' || requiresTradingSessionCalendar(effectiveSpec)
   const visiblePeriod = initialVisiblePeriod ?? initialVisiblePeriodForInterval(effectiveInterval)
   const canRangeDragSelect = Boolean(enableRangeDragSelect && onVisibleRangeChange)
 
@@ -354,7 +357,11 @@ export function CandlestickChart({
           volume,
           adjustedClose,
         }))
-      : resampleOhlcv(analysisRows, intervalToSpec(effectiveInterval))
+      : requiresTradingSessionCalendar(effectiveSpec)
+        ? fetchedMarketSessions.length > 0
+          ? resampleOhlcvWithTradingSessions(analysisRows, effectiveSpec, fetchedMarketSessions)
+          : []
+        : resampleOhlcv(analysisRows, effectiveSpec)
     const resolvedAnalysisDate = analysisDate
       ? effectiveInterval === '2Y'
         ? twoYearCandles.find((candle) => analysisDate >= candle.periodStart && analysisDate <= candle.periodEnd)?.date ?? null
@@ -406,7 +413,7 @@ export function CandlestickChart({
       .filter((entry) => entry.points.length >= 2)
 
     return { grouped, candles, mas, resolvedAnalysisDate, twoYearCandles, risingCloseLines, projectedRisingCloseLines }
-  }, [analysisDate, data, effectiveInterval, fetchedMarketAsOfDate, fetchedMarketSessions, market, revealAfterAnalysis, selectedMAs, showTwoYearLines, twoYearRegistry, twoYearRegistryStatus])
+  }, [analysisDate, data, effectiveInterval, effectiveSpec, fetchedMarketAsOfDate, fetchedMarketSessions, market, revealAfterAnalysis, selectedMAs, showTwoYearLines, twoYearRegistry, twoYearRegistryStatus])
 
   const twoYearLineDisplays = useMemo(
     () => resolveTwoYearLineDisplays(projectedRisingCloseLines.map((entry) => entry.line), twoYearDisplaySettings),

@@ -20,6 +20,11 @@
 
 import type { OHLCV } from '@/types/stock'
 import { resampleOhlcv, smaAt } from './timeframes'
+export {
+  calculateStageFromThreeMa,
+  STAGE_COMPARISON_RELATIVE_EPSILON,
+} from './stage-classification'
+import { calculateStageFromThreeMa } from './stage-classification'
 
 export type StageLevel = 1 | 2 | 3 | 4 | 5 | 6
 
@@ -230,8 +235,6 @@ export function getStageTransitionTone(
   }
 }
 
-export const STAGE_COMPARISON_RELATIVE_EPSILON = 1e-10
-
 export interface MaValues {
   ma_5: number | null
   ma_25: number | null
@@ -257,32 +260,6 @@ export interface StageResult {
   weekly_b_stage: number | null
   monthly_a_stage: number | null
   monthly_b_stage: number | null
-}
-
-/**
- * 3本の移動平均線（ma1, ma2, ma3）の並び順からステージを判定
- */
-export function calculateStageFromThreeMa(
-  ma1: number | null,
-  ma2: number | null,
-  ma3: number | null,
-): number | null {
-  if (ma1 === null || ma2 === null || ma3 === null) return null
-
-  const greaterThan = (left: number, right: number): boolean => {
-    const tolerance = STAGE_COMPARISON_RELATIVE_EPSILON * Math.max(1, Math.abs(left), Math.abs(right))
-    return left - right > tolerance
-  }
-
-  if (greaterThan(ma1, ma2) && greaterThan(ma2, ma3)) return 1
-  if (greaterThan(ma2, ma1) && greaterThan(ma1, ma3)) return 2
-  if (greaterThan(ma2, ma3) && greaterThan(ma3, ma1)) return 3
-  if (greaterThan(ma3, ma2) && greaterThan(ma2, ma1)) return 4
-  if (greaterThan(ma3, ma1) && greaterThan(ma1, ma2)) return 5
-  if (greaterThan(ma1, ma3) && greaterThan(ma3, ma2)) return 6
-
-  // 等しい値がある場合は判定不能
-  return null
 }
 
 function calculateDailyAStage(ma: MaValues) {

@@ -238,15 +238,18 @@ const STAGE_PARAM_MAP: Record<string, typeof STAGE_KEYS[number]> = {
 const PHYSICAL_STATUS_HORIZONS = [5, 10, 20, 40, 60, 90, 200] as const
 const JP_TICKER_MASTER_MAP = new Map(getTickersByMarket('JP').map((ticker) => [ticker.ticker, ticker]))
 const SCREENER_BUILT_ROWS_CACHE_TTL_MS = Number(process.env.SCREENER_BUILT_ROWS_CACHE_TTL_MS ?? 6 * 60 * 60 * 1000)
-const SCREENER_BUILT_ROWS_CACHE_NAMESPACE = 'screener_built_rows_v2'
-const SCREENER_BUILT_ROWS_LOGIC_VERSION = 'short-term-physics-risk-cap-classification-v3'
+const SCREENER_BUILT_ROWS_CACHE_NAMESPACE = 'screener_built_rows_v3'
+const SCREENER_BUILT_ROWS_LOGIC_VERSION = 'short-term-physics-risk-cap-classification-v4'
 
 async function latestSnapshotDate(): Promise<string | null> {
   const row = await execGet<{ d: string | null }>(`SELECT MAX(date) AS d FROM daily_snapshots`)
   return row?.d ?? null
 }
 
-async function loadSnapshotByDate(date: string): Promise<SnapshotRow[]> {
+async function loadSnapshotByDate(
+  date: string,
+  mlSummarySourceDate: string | null,
+): Promise<SnapshotRow[]> {
   const baseRows = await loadBaseSnapshotRows(date)
   if (baseRows.length === 0) return []
 
@@ -254,7 +257,7 @@ async function loadSnapshotByDate(date: string): Promise<SnapshotRow[]> {
   const [pmsMap, physicsFeatureMap, mlSummaryMap] = await Promise.all([
     loadPmsMetricsByDate(date, previousDate),
     loadLatestPhysicsFeaturesByDate(date),
-    loadMlSummaryMap(),
+    loadMlSummaryMap(mlSummarySourceDate),
   ])
 
   return baseRows.map((row) => {
@@ -582,7 +585,18 @@ async function loadLatestPhysicsFeaturesByDate(date: string): Promise<Map<string
   return map
 }
 
-async function loadMlSummaryMap(): Promise<Map<string, MlSummaryEntry>> {
+async function resolveMlSummarySourceDate(date: string): Promise<string | null> {
+  const row = await execGet<{ date: string | null }>(
+    `SELECT MAX(as_of_date) AS date
+     FROM serving_current_similars
+     WHERE as_of_date <= ?`,
+    [date],
+  )
+  return row?.date ?? null
+}
+
+async function loadMlSummaryMap(sourceDate: string | null): Promise<Map<string, MlSummaryEntry>> {
+  if (!sourceDate) return new Map()
   const rows = await execAll<{
     base_ticker: string
     ml_up_count: number | null
@@ -591,10 +605,6 @@ async function loadMlSummaryMap(): Promise<Map<string, MlSummaryEntry>> {
     ml_top_similarity: number | null
   }>(
     `
-    WITH latest_similar_date AS (
-      SELECT MAX(as_of_date) AS d
-      FROM serving_current_similars
-    )
     SELECT
       base_ticker,
       SUM(CASE WHEN similar_direction = 'up' THEN 1 ELSE 0 END) AS ml_up_count,
@@ -602,9 +612,10 @@ async function loadMlSummaryMap(): Promise<Map<string, MlSummaryEntry>> {
       COUNT(*) AS ml_similar_count,
       MAX(similarity_score) AS ml_top_similarity
     FROM serving_current_similars
-    WHERE as_of_date = (SELECT d FROM latest_similar_date)
+    WHERE as_of_date = ?
     GROUP BY base_ticker
     `,
+    [sourceDate],
   )
 
   const map = new Map<string, MlSummaryEntry>()
@@ -1181,12 +1192,14 @@ function compareNullable(a: unknown, b: unknown, dir: 1 | -1): number {
 type BuiltRowsCacheEntry = {
   rows: ScreenerStockRow[]
   universe: number
+  mlSummarySourceDate: string | null
   createdAt: number
 }
 
 type BuiltRowsStoredPayload = {
   rows: ScreenerStockRow[]
   universe: number
+  mlSummarySourceDate: string | null
 }
 
 type BuiltRowsResult = BuiltRowsCacheEntry & {
@@ -1211,7 +1224,8 @@ async function loadBuiltRows(
   classificationVersion: string,
 ): Promise<BuiltRowsResult> {
   const cache = getBuiltRowsCache()
-  const key = `${date}:${physicalStatusHorizon}:${ML_PHYSICS_FEATURE_SET}:${SCREENER_BUILT_ROWS_LOGIC_VERSION}:${classificationVersion}`
+  const mlSummarySourceDate = await resolveMlSummarySourceDate(date)
+  const key = `${date}:${mlSummarySourceDate ?? 'none'}:${physicalStatusHorizon}:${ML_PHYSICS_FEATURE_SET}:${SCREENER_BUILT_ROWS_LOGIC_VERSION}:${classificationVersion}`
   const now = Date.now()
   const cached = cache.get(key)
   if (cached && now - cached.createdAt <= SCREENER_BUILT_ROWS_CACHE_TTL_MS) {
@@ -1226,6 +1240,7 @@ async function loadBuiltRows(
     date,
     physicalStatusHorizon,
     featureSet: ML_PHYSICS_FEATURE_SET,
+    mlSummarySourceDate,
     logicVersion: SCREENER_BUILT_ROWS_LOGIC_VERSION,
     classificationVersion,
   })
@@ -1238,6 +1253,7 @@ async function loadBuiltRows(
     const entry: BuiltRowsCacheEntry = {
       rows: stored.payload.rows,
       universe: stored.payload.universe,
+      mlSummarySourceDate: stored.payload.mlSummarySourceDate,
       createdAt: stored.generatedAt,
     }
     cache.set(key, entry)
@@ -1249,7 +1265,7 @@ async function loadBuiltRows(
   }
 
   const [snapshots, sectorMap, classificationMap, physicsStatusCalibration] = await Promise.all([
-    loadSnapshotByDate(date),
+    loadSnapshotByDate(date, mlSummarySourceDate),
     loadSectorMap(),
     loadClassificationMap(),
     loadPhysicsStatusCalibration(physicalStatusHorizon, date),
@@ -1260,13 +1276,14 @@ async function loadBuiltRows(
   const entry: BuiltRowsCacheEntry = {
     rows,
     universe: snapshots.length,
+    mlSummarySourceDate,
     createdAt: now,
   }
   cache.set(key, entry)
   writeServingCache(
     SCREENER_BUILT_ROWS_CACHE_NAMESPACE,
     storedKey,
-    { rows, universe: snapshots.length },
+    { rows, universe: snapshots.length, mlSummarySourceDate },
     SCREENER_BUILT_ROWS_CACHE_TTL_MS,
     now,
   ).catch((error) => {
@@ -1472,6 +1489,7 @@ export async function GET(request: NextRequest) {
         hit: builtRows.cacheHit,
         ageMs: builtRows.cacheAgeMs,
         ttlMs: SCREENER_BUILT_ROWS_CACHE_TTL_MS,
+        mlSummarySourceDate: builtRows.mlSummarySourceDate,
       },
       source: 'jquants',
       filters: {

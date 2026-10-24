@@ -1,0 +1,134 @@
+{
+  "test-company-information": {
+    "status": "NOT_TESTED",
+    "reason": "requires populated JP company-information fixtures; the isolated empty database intentionally has none"
+  },
+  "test-daily-close-report": {
+    "status": "NOT_TESTED",
+    "reason": "requires populated daily price/report fixtures; the isolated empty database has no report date"
+  },
+  "test-detailed-financial-foundation": {
+    "status": "NOT_TESTED",
+    "reason": "requires populated detailed financial facts for known JP tickers"
+  },
+  "test-financial-detail": {
+    "status": "NOT_TESTED",
+    "reason": "requires populated financial facts for known JP tickers"
+  },
+  "test-financial-overview-read-model": {
+    "status": "NOT_TESTED",
+    "reason": "requires populated financial overview and coverage fixtures"
+  },
+  "test-financial-performance-detail": {
+    "status": "NOT_TESTED",
+    "reason": "requires populated financial performance facts for known JP tickers"
+  },
+  "test-financial-performance-timeline": {
+    "status": "NOT_TESTED",
+    "reason": "requires populated financial timeline facts for known JP tickers"
+  },
+  "test-historical-sector-universe": {
+    "status": "NOT_TESTED",
+    "reason": "requires a populated historical sector universe"
+  },
+  "test-integrated-screener-reasons": {
+    "status": "NOT_TESTED",
+    "reason": "requires populated daily snapshots and integrated screener source rows"
+  },
+  "test-integrated-screener": {
+    "status": "NOT_TESTED",
+    "reason": "requires populated daily snapshots and integrated screener source rows"
+  },
+  "test-jquants": {
+    "status": "ENV_BLOCKED",
+    "reason": "requires J-Quants credentials and network access, both intentionally removed from the isolated sweep"
+  },
+  "test-large-holder-rankings": {
+    "status": "NOT_TESTED",
+    "reason": "requires explicit snapshot, database, and manifest fixture paths"
+  },
+  "test-monthly-ma-api": {
+    "status": "NOT_TESTED",
+    "reason": "requires an explicitly owned populated HTTP fixture server; the isolated sweep pins its base URL to a closed loopback port"
+  },
+  "test-period-explorer": {
+    "status": "NOT_TESTED",
+    "reason": "requires a populated long trading calendar; synthetic route benchmarks cover the read-model contract separately"
+  },
+  "test-release-fix-2": {
+    "status": "NOT_TESTED",
+    "reason": "requires populated release verification price dates"
+  },
+  "test-saved-screening-evaluations": {
+    "status": "NOT_TESTED",
+    "reason": "requires populated historical screener snapshots"
+  },
+  "test-saved-trigger-definitions": {
+    "status": "NOT_TESTED",
+    "reason": "requires persisted trigger definitions spanning multiple market values"
+  },
+  "test-saved-trigger-search-equivalence": {
+    "status": "NOT_TESTED",
+    "reason": "requires populated trigger discovery dates and persisted searches"
+  },
+  "test-sector-constituent-filters": {
+    "status": "NOT_TESTED",
+    "reason": "requires populated sector constituent fixtures"
+  },
+  "test-sector-structure-universe": {
+    "status": "NOT_TESTED",
+    "reason": "requires populated sector structure snapshots"
+  },
+  "test-shareholder-returns": {
+    "status": "NOT_TESTED",
+    "reason": "requires populated normalized financial facts"
+  },
+  "test-similarity-comparison": {
+    "status": "NOT_TESTED",
+    "reason": "requires populated active ticker and similarity fixtures"
+  },
+  "test-stock-preview": {
+    "status": "NOT_TESTED",
+    "reason": "requires populated latest stock preview rows"
+  },
+  "test-stock-sector-context": {
+    "status": "NOT_TESTED",
+    "reason": "requires populated stock-sector classification fixtures"
+  },
+  "test-trigger-below-zone-integration": {
+    "status": "NOT_TESTED",
+    "reason": "requires populated latest price and trigger fixtures"
+  },
+  "test-trigger-discovery-historical-scan": {
+    "status": "NOT_TESTED",
+    "reason": "requires the established multi-year trigger discovery fixture calendar and candidates"
+  },
+  "test-trigger-discovery-historical": {
+    "status": "NOT_TESTED",
+    "reason": "requires the established historical trigger discovery dataset"
+  },
+  "test-trigger-discovery-mini-charts-integration": {
+    "status": "NOT_TESTED",
+    "reason": "requires the established 100-candidate trigger fixture date"
+  },
+  "test-trigger-evaluation-integration": {
+    "status": "NOT_TESTED",
+    "reason": "requires populated trigger evaluation source data"
+  },
+  "test-trigger-lifecycle-real-integration": {
+    "status": "NOT_TESTED",
+    "reason": "requires populated market sessions and persisted trigger lifecycle data"
+  },
+  "test-us-dashboard-pit": {
+    "status": "NOT_TESTED",
+    "reason": "requires populated US dashboard PIT snapshots"
+  },
+  "test-valuation-detail": {
+    "status": "NOT_TESTED",
+    "reason": "requires populated price, financial, forecast, and peer fixtures for known JP tickers"
+  },
+  "test-valuation-serving": {
+    "status": "NOT_TESTED",
+    "reason": "requires populated valuation serving, price, financial, and forecast fixtures"
+  }
+}
