@@ -568,6 +568,12 @@ function contained(mountPath: string, dbPath: string): boolean {
   return relative !== '' && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)
 }
 
+function assertStorageIdentityConfigured(config: GuardConfig): void {
+  if (!config.mountPath || !path.isAbsolute(config.mountPath) || !config.volumeUuid) {
+    fail('MOUNT_IDENTITY_UNKNOWN', 'mount identity is not configured')
+  }
+}
+
 type IdentityRequirement = 'REQUIRED_WRITABLE' | 'OPTIONAL_READ'
 
 function verifiedVolume(config: GuardConfig, probe: StorageProbe, requirement: IdentityRequirement = 'REQUIRED_WRITABLE'): {
@@ -934,6 +940,9 @@ export class ExternalStorageGuard {
       this.fatal = new StorageUnavailableError('FATAL_STORAGE_IO', 'storage incident requires manual review before restarting writers')
       throw this.fatal
     }
+    // Missing process configuration is not evidence that the mounted volume
+    // changed. Reject before any probe or shared FAILED_SAFE incident is created.
+    assertStorageIdentityConfigured(this.config)
     const markers = uncertainMarkers(this.config)
     if (markers.length) {
       for (const marker of markers) {

@@ -737,9 +737,10 @@ assert.match(webInstaller, /<key>US_ANALYTICS_DB_PATH<\/key>/)
 assert.match(webInstaller, /stockboard-data\/us\/stockboard-us\.db/)
 
 const usAnalyticsDb = read('lib/db/us-analytics.ts')
-assert.match(usAnalyticsDb, /EXTERNAL_US_ANALYTICS_PATH/)
-assert.match(usAnalyticsDb, /CURRENT_STORAGE_ROOT/)
-assert.match(usAnalyticsDb, /fs\.existsSync\(localPath\)/)
+assert.doesNotMatch(usAnalyticsDb, /EXTERNAL_US_ANALYTICS_PATH/)
+assert.doesNotMatch(usAnalyticsDb, /CURRENT_STORAGE_ROOT/)
+assert.match(usAnalyticsDb, /External production storage is explicit-only/)
+assert.match(usAnalyticsDb, /process\.env\.US_ANALYTICS_DB_PATH/)
 
 const usMlHealth = read('scripts/check-us-ml-health.ts')
 assert.match(usMlHealth, /US_ML_HEALTH_ALLOW_NON_OK/)
