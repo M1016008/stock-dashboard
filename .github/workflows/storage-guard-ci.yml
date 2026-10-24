@@ -7,6 +7,10 @@ on:
       - '.github/workflows/storage-guard-ci.yml'
       - 'lib/db/us-analytics.ts'
       - 'lib/storage/**'
+      - 'lib/large-holders/release-preflight.ts'
+      - 'scripts/install-local-web-server.ts'
+      - 'scripts/lib/launchagent-large-holder-environment.ts'
+      - 'scripts/test-large-holder-release-preflight.ts'
       - 'scripts/test-storage-*.ts'
       - 'scripts/test-us-automation-foundation.ts'
       - 'package.json'
@@ -40,6 +44,12 @@ jobs:
 
       - name: Storage Guard regression
         run: npm run storage:guard-test
+
+      - name: Weekly backup policy and writer hold
+        run: npm run test:weekly-backup-policy && npm run test:weekly-writer-hold && npm run test:weekly-backup-runner
+
+      - name: Large Holder release preflight
+        run: npm run test:large-holder-release-preflight
 
       - name: US analytics isolation regression
         run: npm run test:us-analytics-generation
