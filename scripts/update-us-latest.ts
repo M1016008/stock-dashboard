@@ -6,7 +6,7 @@
 import { execFileSync, spawn } from 'node:child_process'
 import path from 'node:path'
 import { openExistingGuardedClient } from '@/lib/storage/guarded-libsql-client'
-import { execGet } from '@/lib/db/client'
+import { execGet, localDbPath } from '@/lib/db/client'
 import { execUsAnalyticsGet } from '@/lib/db/us-analytics'
 import { acquireUsStockboardUpdateLock } from '@/lib/server/update-lock'
 import { expectedLatestUsTradingDate } from '@/lib/server/us-data-freshness'
@@ -395,6 +395,23 @@ async function main() {
       )
       return
     }
+
+    const sourceDbPath = process.env.STOCKBOARD_SOURCE_DB_PATH?.trim()
+      || process.env.STOCKBOARD_DB_PATH?.trim()
+      || localDbPath
+    try {
+      await runNpm('batch:two-year-line-serving', {
+        TWO_YEAR_LINE_SERVING_MARKET: 'US',
+        STOCKBOARD_DB_ROLE: 'primary',
+        STOCKBOARD_DB_PATH: sourceDbPath,
+        UPDATE_CHILD_TIMEOUT_MINUTES: process.env.US_TWO_YEAR_LINE_SERVING_TIMEOUT_MINUTES ?? '45',
+      }, heartbeat)
+    } catch (error) {
+      console.error(
+        `US 24-month screener serving build failed closed; other daily publication will continue: ${errorMessage(error)}`,
+      )
+    }
+    await lock.heartbeat()
 
     if (hasActiveHeavyMlProcess()) {
       console.log(

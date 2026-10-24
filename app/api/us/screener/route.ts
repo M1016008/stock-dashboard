@@ -7,7 +7,7 @@ import { usInvestableSymbolSql } from '@/lib/us-symbol-quality'
 import { buildShortTermCheck } from '@/lib/short-term-check'
 import { readServingCache, stableCacheKey, writeServingCache } from '@/lib/api/serving-cache'
 import { parseTwoYearLineFilter, parseTwoYearLinePatternFilter, twoYearConfirmedDistancePriority, type TwoYearLineQuery } from '@/lib/two-year-line-registry'
-import { loadTwoYearLineSearchEntries, matchesTwoYearLineSearchEntry, selectTwoYearLineSummary, type TwoYearLineSearchMetadata } from '@/lib/server/two-year-line-search'
+import { loadTwoYearLineSearchEntries, matchesTwoYearLineSearchEntry, selectTwoYearLineSummary, TwoYearLineServingUnavailableError, type TwoYearLineSearchMetadata } from '@/lib/server/two-year-line-search'
 import {
   assertUsScreenerHistoricalFilters,
   createUsScreenerPitContract,
@@ -1051,6 +1051,12 @@ export async function GET(request: NextRequest) {
       cache: { status: 'miss', generatedAt },
     })
   } catch (error) {
+    if (error instanceof TwoYearLineServingUnavailableError) {
+      return NextResponse.json(
+        { error: '24-month screener serving cache unavailable', message: error.message },
+        { status: error.status },
+      )
+    }
     if (error instanceof UsScreenerPitError) {
       return NextResponse.json(
         { error: 'US screener PIT contract rejected the request', message: error.message },

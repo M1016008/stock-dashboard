@@ -258,6 +258,18 @@ async function main() {
       throw new Error('Critical market data refresh did not reach the expected trading date')
     }
 
+    const twoYearServingError = await runOptional(
+      'two-year-line-serving',
+      'scripts/build-two-year-line-serving.ts',
+      {
+        TWO_YEAR_LINE_SERVING_MARKET: 'JP',
+        UPDATE_CHILD_TIMEOUT_MINUTES: process.env.UPDATE_TWO_YEAR_LINE_SERVING_TIMEOUT_MINUTES ?? '30',
+      },
+      heartbeat,
+    )
+    if (twoYearServingError) optionalErrors.push(twoYearServingError)
+    await lock.heartbeat()
+
     // Price publication and Valuation/Screening Serving form one release unit.
     // These steps must run even when the optional heavy-refresh window is closed.
     await runRequired('scripts/backfill-valuation-serving.ts', {
@@ -269,7 +281,6 @@ async function main() {
       INTEGRATED_SCREENER_FORCE: '1',
     }, heartbeat)
     await lock.heartbeat()
-
     // Keep serving ML in lockstep with the newly published JP price date. The
     // full retraining/governance path remains weekly; this is a bounded delta
     // refresh that must finish before candidates are shown as current.

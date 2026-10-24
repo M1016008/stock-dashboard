@@ -63,12 +63,26 @@ The shared Stock Detail chart exposes `D`, `2D`, `3D`, `W`, `2W`, `3W`, `M`, `2M
 - Angle lower/upper bounds are validated in the inclusive 0–90 degree range and fail closed on invalid or reversed bounds.
 - The search and chart both call the same strict `detectRisingCloseLines` implementation.
 - JP uses `jp-split-normalized-v1`; US declares the existing Tiingo adjusted OHLC ratio basis as `tiingo_adj_ohlc_ratio_v1`. The older misleading `split-only` label is not used.
-- Search loads compact two-year block boundaries/counts and likely JP split events instead of materializing every daily row in Node. Its versioned cache is bounded to four market/as-of keys and expires after five minutes.
+- Daily publication precomputes the full JP/US universe from bounded two-year block boundaries/counts and likely JP split events. Request-time search reads one exact, versioned row from the existing `dashboard_trade_signal_cache`; it never aggregates full-universe OHLC on demand.
+- Serving keys are isolated under `two-year-line-serving:v1` and include market, effective as-of date, price basis, definition version, and immutable source generation. A single SQLite upsert publishes one generation atomically. Missing, stale, corrupt, mismatched, or in-progress generations return an explicit feature-local 503 rather than falling back to an older result.
 - Completeness compares the exact benchmark-session intersection, so a ticker-only extra row cannot conceal a missing 1306/SPY session. The reported as-of date is the actual benchmark calendar endpoint.
 - Candidate filtering is performed on the full post-filter universe before line sorting and pagination. The US path removes its ordinary candidate cap whenever the two-year-line filter/sort is active. Existing conditions combine with the line filter by AND.
 - The representative row is selected for the requested status. A confirmed search never displays a newer provisional line as its evidence.
 - Results expose status, pattern, source periods, anchor closes, standardized angle, endpoint-candle rise, confirmed-line distance, as-of date, and price-basis version. Sorts are available for angle, endpoint-candle rise, and confirmed-line approach from below. Calendar/history unavailable entries fail closed.
-- Real-universe latency and numerical parity remain a Production-read validation item; this local phase uses only synthetic SQLite and browser fixtures.
+- Real-universe numerical parity remains a Production-read validation item. Production-isolated synthetic SQLite at 500 sessions per two-year block measured request-time cold search at 95 ms for 4,200 JP symbols and 202 ms for 10,000 US symbols; update-time precomputation measured 49.874 s and 101.993 s respectively.
+
+## Initial serving-cache release gate
+
+The first release containing the precomputed screener must publish both market caches before switching the public Web build. This is a deployment gate, not an API fallback:
+
+1. Keep the current Web build live. In an approved maintenance window, hold JP/US daily writers so the completed source generation cannot change during cache publication. Confirm Storage Guard is healthy before opening the existing guarded clients.
+2. Build the new application in the normal isolated staging directory. Do not promote it yet.
+3. From the staged release checkout, run the builder once for JP and once for US. Both invocations must set `STOCKBOARD_DB_ROLE=primary` and the explicitly approved primary `STOCKBOARD_DB_PATH`; set `TWO_YEAR_LINE_SERVING_MARKET=JP` or `US` respectively. Never rely on the staged checkout's relative default DB path, and do not point the US build at the analytics database.
+4. Require both commands to report the expected market, approved primary database path, latest snapshot/effective as-of date, full snapshot ticker count, terminal source generation, elapsed time, and a `two-year-line-serving:v1` cache key. Any path mismatch, missing cache, generation change, coverage mismatch, or non-terminal source run aborts the release while the old Web build remains live.
+5. Start the staged build on its private smoke-test port and require JP and US 24-month screener requests to return HTTP 200 from the precomputed rows. Only then atomically promote the staged build with the existing `web:deploy` rollback flow.
+6. Resume held daily jobs only after ordinary health and screener smoke tests pass. Daily JP/US update chains rebuild their own market cache after source/snapshot quality gates. A later source generation invalidates the old key immediately; until that market's new publication succeeds, only the 24-month screener fails closed with 503. Operators should retry only the bounded market-specific builder after the source run is terminal and its quality gates pass; they must not restore an older generation or bypass the fail-closed state.
+
+The old Web version ignores this namespaced cache, so prepublication is backward-compatible. If staged smoke or promotion fails, keep or restore the prior build; do not delete the last cache generation as part of rollback.
 
 ## Time and price basis
 
