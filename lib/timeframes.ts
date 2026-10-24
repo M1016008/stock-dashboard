@@ -1,4 +1,5 @@
 import type { OHLCV } from '@/types/stock'
+import { calculateStageFromThreeMa } from '@/lib/stage-classification'
 
 export type TimeframeUnit = 'day' | 'week' | 'month' | 'year'
 export type ChartIntervalCode =
@@ -144,6 +145,25 @@ export function createTimeframeBucketContext(tradingDates: readonly string[]): T
   }
 }
 
+export function requiresTradingSessionCalendar(spec: TimeframeSpec): boolean {
+  return spec.timeframe === 'day' && Math.max(1, Math.floor(spec.multiplier)) > 1
+}
+
+/**
+ * Multi-session daily candles are anchored to the exchange calendar. A sparse
+ * symbol history cannot define where a 2D/3D block begins.
+ */
+export function resampleOhlcvWithTradingSessions(
+  rows: OHLCV[],
+  spec: TimeframeSpec,
+  tradingDates: readonly string[],
+): OHLCV[] {
+  if (!requiresTradingSessionCalendar(spec)) return resampleOhlcv(rows, spec)
+  if (rows.length === 0) return []
+  if (tradingDates.length === 0) throw new Error('market_trading_sessions_required')
+  return resampleOhlcv(rows, spec, createTimeframeBucketContext(tradingDates))
+}
+
 export function getTimeframeBucketKey(
   isoDate: string,
   spec: TimeframeSpec,
@@ -235,14 +255,7 @@ export function smaSeries(rows: OHLCV[], period: number): Array<number | null> {
 }
 
 export function stageFromThreeMa(ma1: number | null, ma2: number | null, ma3: number | null): number | null {
-  if (ma1 == null || ma2 == null || ma3 == null) return null
-  if (ma1 > ma2 && ma2 > ma3) return 1
-  if (ma2 > ma1 && ma1 > ma3) return 2
-  if (ma2 > ma3 && ma3 > ma1) return 3
-  if (ma3 > ma2 && ma2 > ma1) return 4
-  if (ma3 > ma1 && ma1 > ma2) return 5
-  if (ma1 > ma3 && ma3 > ma2) return 6
-  return null
+  return calculateStageFromThreeMa(ma1, ma2, ma3)
 }
 
 export function angleDeg(current: number | null | undefined, previous: number | null | undefined, bars: number): number | null {

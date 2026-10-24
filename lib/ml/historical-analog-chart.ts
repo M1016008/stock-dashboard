@@ -2,7 +2,9 @@ import type { OHLCV } from '@/types/stock'
 import {
   type ChartIntervalCode,
   intervalToSpec,
+  requiresTradingSessionCalendar,
   resampleOhlcv,
+  resampleOhlcvWithTradingSessions,
   smaSeries,
 } from '@/lib/timeframes'
 
@@ -99,8 +101,13 @@ function normalizeRows(rows: OHLCV[]): OHLCV[] {
 function aggregateRows(
   rows: OHLCV[],
   interval: HistoricalAnalogChartInterval,
+  marketSessions: readonly string[],
 ): AggregateRow[] {
-  const grouped = resampleOhlcv(rows, intervalToSpec(interval))
+  const spec = intervalToSpec(interval)
+  if (requiresTradingSessionCalendar(spec) && marketSessions.length === 0) return []
+  const grouped = requiresTradingSessionCalendar(spec)
+    ? resampleOhlcvWithTradingSessions(rows, spec, marketSessions)
+    : resampleOhlcv(rows, spec)
   let sourceCursor = 0
 
   return grouped.map((row) => {
@@ -156,9 +163,10 @@ export function buildHistoricalAnalogChartSeries(
   interval: HistoricalAnalogChartInterval,
   startDate: string,
   endDate: string,
+  marketSessions: readonly string[] = [],
 ): HistoricalAnalogChartSeries | null {
   const normalized = normalizeRows(rows)
-  const grouped = aggregateRows(normalized, interval)
+  const grouped = aggregateRows(normalized, interval, marketSessions)
   const indexes = rangeIndexes(grouped, startDate, endDate)
   if (!indexes) return null
 

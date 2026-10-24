@@ -159,6 +159,30 @@ const lateCalendarProxy = aggregateTwentyFourMonthCandles([
 })
 assert.equal(lateCalendarProxy[0].status, 'incomplete', 'a calendar proxy that starts after source data cannot prove completeness')
 
+const jointlyTruncatedBlock = aggregateTwentyFourMonthCandles([
+  row('2024-06-03', 100, 105, 98, 103),
+  row('2025-12-30', 103, 120, 100, 118),
+], {
+  market: 'JP',
+  asOfDate: '2026-01-05',
+  exchangeSessions: ['2024-06-03', '2025-12-30', '2026-01-05'],
+})
+assert.equal(
+  jointlyTruncatedBlock[0].status,
+  'incomplete',
+  'a calendar and price history that both start mid-block cannot prove completeness',
+)
+
+const januaryTruncatedBlock = aggregateTwentyFourMonthCandles([
+  row('2024-01-15', 100, 105, 98, 103),
+  row('2025-12-30', 103, 120, 100, 118),
+], {
+  market: 'US',
+  asOfDate: '2026-01-05',
+  exchangeSessions: ['2024-01-15', '2025-12-30', '2026-01-05'],
+})
+assert.equal(januaryTruncatedBlock[0].status, 'incomplete', 'a late-January calendar start is still truncated')
+
 const confirmedRows = [
   ...rows.slice(0, 8),
   row('2026-01-05', 124, 130, 120, 128),

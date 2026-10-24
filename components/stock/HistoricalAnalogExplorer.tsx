@@ -442,6 +442,7 @@ function AnalogPeriodChart({
   const [historyState, setHistoryState] = useState<{
     key: string
     rows: OHLCV[]
+    marketSessions: string[]
   } | null>(null)
   const [historyLoading, setHistoryLoading] = useState(false)
   const [historyError, setHistoryError] = useState('')
@@ -455,16 +456,16 @@ function AnalogPeriodChart({
     const basePath = market === 'US' ? '/api/us/history' : '/api/history'
     setHistoryLoading(true)
     setHistoryError('')
-    fetch(`${basePath}/${encodeURIComponent(ticker)}?period=all`, {
+    fetch(`${basePath}/${encodeURIComponent(ticker)}?period=all&meta=1&calendar=1`, {
       cache: 'no-store',
       signal: controller.signal,
     })
       .then(async (response) => {
         const json = await response.json()
-        if (!response.ok || !Array.isArray(json)) {
+        if (!response.ok || !Array.isArray(json?.rows) || !Array.isArray(json?.marketSessions)) {
           throw new Error(json?.error ?? `HTTP ${response.status}`)
         }
-        setHistoryState({ key: historyKey, rows: json as OHLCV[] })
+        setHistoryState({ key: historyKey, rows: json.rows as OHLCV[], marketSessions: json.marketSessions as string[] })
       })
       .catch((fetchError) => {
         if (controller.signal.aborted) return
@@ -500,8 +501,9 @@ function AnalogPeriodChart({
       interval,
       startDate,
       endDate,
+      historyState?.key === historyKey ? historyState.marketSessions : [],
     )
-  }, [endDate, history, interval, points, startDate])
+  }, [endDate, history, historyKey, historyState, interval, points, startDate])
 
   if (!chartSeries) {
     return (

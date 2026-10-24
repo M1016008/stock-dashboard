@@ -5,6 +5,7 @@ import {
   composePhysicalMomentumScores,
   computePhysicalMomentumRawRows,
   meanAndStd,
+  normalizePhysicalMomentumInputRows,
   rollingSma,
   winsorizedMeanAndStd,
   winsorizedZScore,
@@ -95,6 +96,28 @@ function testSplitAdjustment(): void {
     { date: '2025-03-03', close: 100, volume: 800_000 },
   ])
   approx(longSuspension[0].close, 800)
+
+  const alreadyAdjusted = Array.from({ length: 30 }, (_, index) => ({
+    date: new Date(Date.UTC(2026, 0, 2 + index)).toISOString().slice(0, 10),
+    close: 100 + index,
+    volume: 1_000 + index * 10,
+    splitFactor: index === 12 ? 0.5 : null,
+  }))
+  assert.deepEqual(
+    normalizePhysicalMomentumInputRows(alreadyAdjusted, 'split_adjusted'),
+    alreadyAdjusted,
+    'an adjusted US row must retain its price and volume even when split_factor remains present',
+  )
+  const adjustedMetrics = computePhysicalMomentumRawRows(alreadyAdjusted, 5, { priceBasis: 'split_adjusted' })
+  const factorFreeMetrics = computePhysicalMomentumRawRows(
+    alreadyAdjusted.map(({ splitFactor: _splitFactor, ...row }) => row),
+    5,
+    { priceBasis: 'split_adjusted' },
+  )
+  assert.deepEqual(adjustedMetrics, factorFreeMetrics, 'adjusted US PMS inputs must not apply split_factor twice')
+
+  const rawWithSplit = normalizePhysicalMomentumInputRows(alreadyAdjusted, 'raw')
+  assert.notEqual(rawWithSplit[0].close, alreadyAdjusted[0].close, 'raw input keeps provider split adjustment behavior')
 }
 
 function testPriceScaleIndependentMaAngle(): void {
