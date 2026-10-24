@@ -1,4 +1,4 @@
-import { execAll } from '@/lib/db/client'
+import { execAll, execGet, execRun } from '@/lib/db/client'
 import { inferLikelySplitAdjustment } from '@/lib/physical-momentum'
 import {
   US_ADJUSTED_CLOSE_SQL,
@@ -58,6 +58,52 @@ interface SearchCacheEntry {
   entries: Map<string, TwoYearLineSearchEntry>
 }
 
+interface SourceGenerationState {
+  latestRunId: number
+  latestPublishableRunId: number
+  runningCount: number
+}
+
+interface PersistedServingPayload {
+  schemaVersion: 1
+  definitionVersion: string
+  market: TwoYearMarket
+  asOfDate: string
+  priceBasisVersion: string
+  calendarProxy: '1306' | 'SPY'
+  calendarAvailable: boolean
+  sourceGeneration: number
+  generatedAt: number
+  entries: TwoYearLineSearchEntry[]
+}
+
+interface PersistedServingRow {
+  payloadJson: string
+  computedAt: number
+}
+
+interface ServingMemoEntry {
+  computedAt: number
+  payload: PersistedServingPayload
+}
+
+export interface TwoYearLineServingBuildResult {
+  cacheKey: string
+  sourceGeneration: number
+  generatedAt: number
+  elapsedMs: number
+  result: TwoYearLineSearchResult
+}
+
+export class TwoYearLineServingUnavailableError extends Error {
+  readonly status = 503
+
+  constructor(message: string) {
+    super(message)
+    this.name = 'TwoYearLineServingUnavailableError'
+  }
+}
+
 interface CompactBlockRow {
   ticker: string
   startYear: number
@@ -86,19 +132,22 @@ interface SplitEvent {
 
 const globalCache = globalThis as typeof globalThis & {
   __twoYearLineSearchCacheV4?: Map<string, SearchCacheEntry>
+  __twoYearLineServingMemoV1?: Map<string, ServingMemoEntry>
 }
 globalCache.__twoYearLineSearchCacheV4 ??= new Map()
+globalCache.__twoYearLineServingMemoV1 ??= new Map()
 
 const CACHE_TTL_MS = 5 * 60 * 1000
 const MAX_CACHE_KEYS = 4
 const CHUNK_SIZE = 500
 const SEARCH_BLOCK_COUNT = 5
+const SERVING_SCHEMA_VERSION = 1 as const
+const SERVING_CACHE_PREFIX = 'two-year-line-serving:v1'
+const SERVING_CACHE_RETAIN_PER_MARKET = 8
+const SERVING_MEMO_MAX_KEYS = 4
+export const TWO_YEAR_LINE_SERVING_DEFINITION_VERSION = 'patterns-v1+angle-v1+jp-split-inference-v1'
 
-/**
- * Loads only two-year block boundaries/counts plus likely JP split events.
- * It intentionally avoids materializing every daily row for every screener
- * candidate in Node. Results are cached per market/as-of and filled by ticker.
- */
+/** Reads only a precomputed, generation-matched serving payload. */
 export async function loadTwoYearLineSearchEntries(options: Readonly<{
   market: TwoYearMarket
   tickers: readonly string[]
@@ -106,8 +155,78 @@ export async function loadTwoYearLineSearchEntries(options: Readonly<{
 }>): Promise<TwoYearLineSearchResult> {
   const tickers = [...new Set(options.tickers.map(normalizeTicker).filter(Boolean))].sort()
   const benchmark = options.market === 'JP' ? '1306' : 'SPY'
-  const priceBasisVersion = options.market === 'JP' ? 'jp-split-normalized-v1' : US_ADJUSTED_PRICE_BASIS
-  const cache = await getSearchCache(options.market, options.asOfDate, benchmark)
+  const priceBasisVersion = priceBasisVersionForMarket(options.market)
+  const effectiveAsOfDate = await resolveEffectiveAsOfDate(options.market, options.asOfDate, benchmark)
+  const source = await readSourceGeneration(options.market)
+  assertSafeSourceGeneration(options.market, source)
+  const cacheKey = servingCacheKey({
+    market: options.market,
+    asOfDate: effectiveAsOfDate,
+    priceBasisVersion,
+    sourceGeneration: source.latestRunId,
+  })
+  const payload = await readServingPayload(cacheKey)
+  if (!payload) {
+    throw new TwoYearLineServingUnavailableError(
+      `${options.market} 24-month screener serving cache is unavailable for ${effectiveAsOfDate}`,
+    )
+  }
+  assertServingPayload(payload, {
+    market: options.market,
+    asOfDate: effectiveAsOfDate,
+    priceBasisVersion,
+    sourceGeneration: source.latestRunId,
+  })
+  const allEntries = new Map(payload.entries.map((entry) => [entry.ticker, entry]))
+  const missing = tickers.filter((ticker) => !allEntries.has(ticker))
+  if (missing.length > 0) {
+    throw new TwoYearLineServingUnavailableError(
+      `${options.market} 24-month screener cache does not cover ${missing.length} requested ticker(s)`,
+    )
+  }
+  const entries = new Map(tickers.map((ticker) => [ticker, allEntries.get(ticker)!]))
+  const sourceAfter = await readSourceGeneration(options.market)
+  assertSafeSourceGeneration(options.market, sourceAfter)
+  if (sourceAfter.latestRunId !== source.latestRunId) {
+    throw new TwoYearLineServingUnavailableError(
+      `${options.market} source generation changed while reading the 24-month serving cache`,
+    )
+  }
+  const availableTickerCount = [...entries.values()].filter((entry) => entry.availability === 'available').length
+  return {
+    entries,
+    metadata: {
+      market: options.market,
+      asOfDate: effectiveAsOfDate,
+      priceBasisVersion,
+      calendarProxy: benchmark,
+      calendarAvailable: payload.calendarAvailable,
+      requestedTickerCount: tickers.length,
+      availableTickerCount,
+      unavailableTickerCount: tickers.length - availableTickerCount,
+    },
+  }
+}
+
+/**
+ * Computes the registry from bounded historical rows. This is intentionally
+ * exported for the update-time builder and parity tests, never for API fallback.
+ */
+export async function computeTwoYearLineSearchEntries(options: Readonly<{
+  market: TwoYearMarket
+  tickers: readonly string[]
+  asOfDate: string
+  sourceGeneration?: number
+}>): Promise<TwoYearLineSearchResult> {
+  const tickers = [...new Set(options.tickers.map(normalizeTicker).filter(Boolean))].sort()
+  const benchmark = options.market === 'JP' ? '1306' : 'SPY'
+  const priceBasisVersion = priceBasisVersionForMarket(options.market)
+  const cache = await getSearchCache(
+    options.market,
+    options.asOfDate,
+    benchmark,
+    options.sourceGeneration ?? 0,
+  )
   const effectiveAsOfDate = cache.sessions.at(-1) ?? options.asOfDate
   const historyStartDate = twoYearLineSearchHistoryStartDate(effectiveAsOfDate)
   const missing = tickers.filter((ticker) => !cache.entries.has(ticker))
@@ -151,6 +270,75 @@ export async function loadTwoYearLineSearchEntries(options: Readonly<{
   }
 }
 
+export async function buildTwoYearLineServingCache(options: Readonly<{
+  market: TwoYearMarket
+  tickers: readonly string[]
+  asOfDate: string
+  beforePersistForQa?: () => Promise<void>
+}>): Promise<TwoYearLineServingBuildResult> {
+  const startedAt = Date.now()
+  const sourceBefore = await readSourceGeneration(options.market)
+  assertSafeSourceGeneration(options.market, sourceBefore)
+  const result = await computeTwoYearLineSearchEntries({
+    ...options,
+    sourceGeneration: sourceBefore.latestRunId,
+  })
+  await options.beforePersistForQa?.()
+  const sourceAfter = await readSourceGeneration(options.market)
+  assertSafeSourceGeneration(options.market, sourceAfter)
+  if (sourceBefore.latestRunId !== sourceAfter.latestRunId) {
+    throw new TwoYearLineServingUnavailableError(
+      `${options.market} source generation changed during 24-month serving build`,
+    )
+  }
+
+  const generatedAt = Date.now()
+  const payload: PersistedServingPayload = {
+    schemaVersion: SERVING_SCHEMA_VERSION,
+    definitionVersion: TWO_YEAR_LINE_SERVING_DEFINITION_VERSION,
+    market: options.market,
+    asOfDate: result.metadata.asOfDate,
+    priceBasisVersion: result.metadata.priceBasisVersion,
+    calendarProxy: result.metadata.calendarProxy,
+    calendarAvailable: result.metadata.calendarAvailable,
+    sourceGeneration: sourceAfter.latestRunId,
+    generatedAt,
+    entries: [...result.entries.values()],
+  }
+  const cacheKey = servingCacheKey({
+    market: options.market,
+    asOfDate: payload.asOfDate,
+    priceBasisVersion: payload.priceBasisVersion,
+    sourceGeneration: payload.sourceGeneration,
+  })
+  await execRun(
+    `INSERT INTO dashboard_trade_signal_cache (cache_key, payload_json, computed_at)
+     VALUES (?, ?, ?)
+     ON CONFLICT(cache_key) DO UPDATE SET
+       payload_json = excluded.payload_json,
+       computed_at = excluded.computed_at`,
+    [cacheKey, JSON.stringify(payload), generatedAt],
+  )
+  setServingMemo(cacheKey, { computedAt: generatedAt, payload })
+  await pruneServingCache(options.market, payload.sourceGeneration)
+  return {
+    cacheKey,
+    sourceGeneration: payload.sourceGeneration,
+    generatedAt,
+    elapsedMs: Date.now() - startedAt,
+    result,
+  }
+}
+
+export function clearTwoYearLineSearchCachesForQa(): void {
+  globalCache.__twoYearLineSearchCacheV4!.clear()
+  globalCache.__twoYearLineServingMemoV1!.clear()
+}
+
+export function twoYearLineServingCacheSqlForQa(): string {
+  return 'SELECT payload_json AS payloadJson, computed_at AS computedAt FROM dashboard_trade_signal_cache WHERE cache_key = ?'
+}
+
 /**
  * The registry can expose only the current provisional line and the line ending
  * at the immediately preceding confirmed block. A four-candle line therefore
@@ -192,12 +380,331 @@ export function matchesTwoYearLineSearchEntry(
   return Boolean(entry && entry.availability === 'available' && matchesTwoYearLineQuery(entry.summaries, query))
 }
 
+async function resolveEffectiveAsOfDate(
+  market: TwoYearMarket,
+  asOfDate: string,
+  benchmark: '1306' | 'SPY',
+): Promise<string> {
+  const row = market === 'JP'
+    ? await execGet<{ date: string | null }>(
+        'SELECT MAX(date) AS date FROM ohlcv_daily WHERE ticker = ? AND date <= ?',
+        [benchmark, asOfDate],
+      )
+    : await execGet<{ date: string | null }>(
+        "SELECT MAX(date) AS date FROM market_ohlcv_daily WHERE market = 'US' AND ticker = ? AND date <= ?",
+        [benchmark, asOfDate],
+      )
+  return row?.date ?? asOfDate
+}
+
+async function readSourceGeneration(market: TwoYearMarket): Promise<SourceGenerationState> {
+  const row = market === 'JP'
+    ? await execGet<Record<string, unknown>>(
+        `WITH relevant AS (
+           SELECT id, status
+           FROM batch_runs
+           WHERE job_type = 'ohlcv_fetch:jquants'
+         ), latest AS (
+           SELECT id, status FROM relevant ORDER BY id DESC LIMIT 1
+         )
+         SELECT
+           COALESCE((SELECT id FROM latest), 0) AS latestRunId,
+           COALESCE((SELECT MAX(id) FROM relevant WHERE status IN ('success', 'partial')), 0) AS latestPublishableRunId,
+           CASE WHEN (SELECT status FROM latest) = 'running' THEN 1 ELSE 0 END AS runningCount`,
+      )
+    : await execGet<Record<string, unknown>>(
+        `WITH relevant AS (
+           SELECT id, status
+           FROM market_data_runs
+           WHERE market = 'US' AND job_type = 'tiingo_ohlcv'
+         ), latest AS (
+           SELECT id, status FROM relevant ORDER BY id DESC LIMIT 1
+         )
+         SELECT
+           COALESCE((SELECT id FROM latest), 0) AS latestRunId,
+           COALESCE((SELECT MAX(id) FROM relevant WHERE status IN ('success', 'partial')), 0) AS latestPublishableRunId,
+           CASE WHEN (SELECT status FROM latest) = 'running' THEN 1 ELSE 0 END AS runningCount`,
+      )
+  return {
+    latestRunId: numberValue(row?.latestRunId),
+    latestPublishableRunId: numberValue(row?.latestPublishableRunId),
+    runningCount: numberValue(row?.runningCount),
+  }
+}
+
+function assertSafeSourceGeneration(market: TwoYearMarket, source: SourceGenerationState): void {
+  if (
+    source.latestRunId <= 0
+    || source.latestPublishableRunId !== source.latestRunId
+    || source.runningCount !== 0
+  ) {
+    throw new TwoYearLineServingUnavailableError(
+      `${market} 24-month serving source is not a completed immutable generation`,
+    )
+  }
+}
+
+function priceBasisVersionForMarket(market: TwoYearMarket): string {
+  return market === 'JP' ? 'jp-split-normalized-v1' : US_ADJUSTED_PRICE_BASIS
+}
+
+function servingCacheKey(options: Readonly<{
+  market: TwoYearMarket
+  asOfDate: string
+  priceBasisVersion: string
+  sourceGeneration: number
+}>): string {
+  return [
+    SERVING_CACHE_PREFIX,
+    options.market,
+    options.asOfDate,
+    options.priceBasisVersion,
+    TWO_YEAR_LINE_SERVING_DEFINITION_VERSION,
+    String(options.sourceGeneration),
+  ].map(encodeURIComponent).join(':')
+}
+
+async function readServingPayload(cacheKey: string): Promise<PersistedServingPayload | null> {
+  const row = await execGet<PersistedServingRow>(twoYearLineServingCacheSqlForQa(), [cacheKey])
+  if (!row) return null
+  const computedAt = numberValue(row.computedAt)
+  const memo = globalCache.__twoYearLineServingMemoV1!.get(cacheKey)
+  if (memo?.computedAt === computedAt) return memo.payload
+  let candidate: unknown
+  try {
+    candidate = JSON.parse(row.payloadJson)
+  } catch {
+    throw new TwoYearLineServingUnavailableError('24-month screener cache payload is not valid JSON')
+  }
+  const payload = parseServingPayload(candidate)
+  setServingMemo(cacheKey, { computedAt, payload })
+  return payload
+}
+
+function setServingMemo(cacheKey: string, value: ServingMemoEntry): void {
+  const memo = globalCache.__twoYearLineServingMemoV1!
+  memo.delete(cacheKey)
+  memo.set(cacheKey, value)
+  while (memo.size > SERVING_MEMO_MAX_KEYS) {
+    const oldestKey = memo.keys().next().value as string | undefined
+    if (!oldestKey) break
+    memo.delete(oldestKey)
+  }
+}
+
+function assertServingPayload(
+  payload: PersistedServingPayload,
+  expected: Readonly<{
+    market: TwoYearMarket
+    asOfDate: string
+    priceBasisVersion: string
+    sourceGeneration: number
+  }>,
+): void {
+  if (
+    payload.schemaVersion !== SERVING_SCHEMA_VERSION
+    || payload.definitionVersion !== TWO_YEAR_LINE_SERVING_DEFINITION_VERSION
+    || payload.market !== expected.market
+    || payload.asOfDate !== expected.asOfDate
+    || payload.priceBasisVersion !== expected.priceBasisVersion
+    || payload.sourceGeneration !== expected.sourceGeneration
+  ) {
+    throw new TwoYearLineServingUnavailableError('24-month screener cache metadata does not match the request')
+  }
+}
+
+function parseServingPayload(value: unknown): PersistedServingPayload {
+  if (!isRecord(value) || !Array.isArray(value.entries)) {
+    throw new TwoYearLineServingUnavailableError('24-month screener cache payload has an invalid shape')
+  }
+  const entries = value.entries.map(parseServingEntry)
+  const tickers = new Set(entries.map((entry) => entry.ticker))
+  if (tickers.size !== entries.length) {
+    throw new TwoYearLineServingUnavailableError('24-month screener cache contains duplicate tickers')
+  }
+  if (
+    value.schemaVersion !== SERVING_SCHEMA_VERSION
+    || value.definitionVersion !== TWO_YEAR_LINE_SERVING_DEFINITION_VERSION
+    || (value.market !== 'JP' && value.market !== 'US')
+    || typeof value.asOfDate !== 'string'
+    || typeof value.priceBasisVersion !== 'string'
+    || (value.calendarProxy !== '1306' && value.calendarProxy !== 'SPY')
+    || typeof value.calendarAvailable !== 'boolean'
+    || !isPositiveInteger(value.sourceGeneration)
+    || !isNonNegativeFiniteNumber(value.generatedAt)
+  ) {
+    throw new TwoYearLineServingUnavailableError('24-month screener cache metadata is invalid')
+  }
+  if (!value.calendarAvailable && entries.some((entry) => entry.availability === 'available')) {
+    throw new TwoYearLineServingUnavailableError('24-month screener cache calendar state is inconsistent')
+  }
+  return {
+    schemaVersion: SERVING_SCHEMA_VERSION,
+    definitionVersion: TWO_YEAR_LINE_SERVING_DEFINITION_VERSION,
+    market: value.market,
+    asOfDate: value.asOfDate,
+    priceBasisVersion: value.priceBasisVersion,
+    calendarProxy: value.calendarProxy,
+    calendarAvailable: value.calendarAvailable,
+    sourceGeneration: value.sourceGeneration,
+    generatedAt: value.generatedAt,
+    entries,
+  }
+}
+
+function parseServingEntry(value: unknown): TwoYearLineSearchEntry {
+  if (!isRecord(value) || typeof value.ticker !== 'string' || normalizeTicker(value.ticker) !== value.ticker) {
+    throw new TwoYearLineServingUnavailableError('24-month screener cache contains an invalid ticker entry')
+  }
+  if (
+    !Array.isArray(value.summaries)
+    || typeof value.hasConfirmed !== 'boolean'
+    || typeof value.hasProvisional !== 'boolean'
+    || !isRegistryAvailability(value.availability)
+  ) {
+    throw new TwoYearLineServingUnavailableError('24-month screener cache contains an invalid search entry')
+  }
+  const summaries = value.summaries.map(parseLineSummary)
+  const byId = new Map(summaries.map((summary) => [summary.lineId, summary]))
+  const parsed: TwoYearLineSearchEntry = {
+    ticker: value.ticker,
+    summaries,
+    hasConfirmed: value.hasConfirmed,
+    hasProvisional: value.hasProvisional,
+    latest: parseSummaryReference(value.latest, byId),
+    latestConfirmed: parseSummaryReference(value.latestConfirmed, byId),
+    latestProvisional: parseSummaryReference(value.latestProvisional, byId),
+    availability: value.availability,
+  }
+  if (
+    parsed.hasConfirmed !== summaries.some((summary) => summary.status === 'confirmed')
+    || parsed.hasProvisional !== summaries.some((summary) => summary.status === 'provisional')
+    || (parsed.latestConfirmed !== null && parsed.latestConfirmed.status !== 'confirmed')
+    || (parsed.latestProvisional !== null && parsed.latestProvisional.status !== 'provisional')
+    || (parsed.availability !== 'available' && summaries.length > 0)
+  ) {
+    throw new TwoYearLineServingUnavailableError('24-month screener cache entry flags are inconsistent')
+  }
+  return parsed
+}
+
+function parseLineSummary(value: unknown): TwoYearLineSummary {
+  if (
+    !isRecord(value)
+    || typeof value.lineId !== 'string'
+    || (value.pattern !== 'three' && value.pattern !== 'four')
+    || (value.status !== 'confirmed' && value.status !== 'provisional')
+    || !Array.isArray(value.sourcePeriods)
+    || !value.sourcePeriods.every(isInteger)
+    || value.sourcePeriods.length !== (value.pattern === 'three' ? 3 : 4)
+    || !Array.isArray(value.anchorDates)
+    || value.anchorDates.length !== 2
+    || !value.anchorDates.every((date) => typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date))
+  ) {
+    throw new TwoYearLineServingUnavailableError('24-month screener cache contains an invalid line summary')
+  }
+  for (const key of [
+    'lineStartClose', 'lineEndClose', 'lastCandleOpen', 'lastCandleClose', 'lastCandleRisePct', 'angleDeg',
+  ] as const) {
+    if (!isFiniteNumber(value[key])) {
+      throw new TwoYearLineServingUnavailableError(`24-month screener cache has invalid ${key}`)
+    }
+  }
+  if (
+    numberValue(value.lineStartClose) <= 0
+    || numberValue(value.lineEndClose) <= 0
+    || numberValue(value.lastCandleOpen) <= 0
+    || numberValue(value.lastCandleClose) <= 0
+  ) {
+    throw new TwoYearLineServingUnavailableError('24-month screener cache has non-positive line prices')
+  }
+  for (const key of ['linePriceAsOf', 'currentConfirmedClose', 'distancePct'] as const) {
+    if (value[key] !== null && !isFiniteNumber(value[key])) {
+      throw new TwoYearLineServingUnavailableError(`24-month screener cache has invalid ${key}`)
+    }
+  }
+  return value as unknown as TwoYearLineSummary
+}
+
+function parseSummaryReference(
+  value: unknown,
+  summaries: ReadonlyMap<string, TwoYearLineSummary>,
+): TwoYearLineSummary | null {
+  if (value === null) return null
+  const parsed = parseLineSummary(value)
+  const canonical = summaries.get(parsed.lineId)
+  if (!canonical || JSON.stringify(canonical) !== JSON.stringify(parsed)) {
+    throw new TwoYearLineServingUnavailableError('24-month screener cache has an invalid line reference')
+  }
+  return canonical
+}
+
+async function pruneServingCache(market: TwoYearMarket, sourceGeneration: number): Promise<void> {
+  const prefix = `${[SERVING_CACHE_PREFIX, market].map(encodeURIComponent).join(':')}:%`
+  const rows = await execAll<{ cacheKey: string }>(
+    `SELECT cache_key AS cacheKey
+     FROM dashboard_trade_signal_cache
+     WHERE cache_key LIKE ?
+     ORDER BY computed_at DESC, cache_key DESC`,
+    [prefix],
+  )
+  const currentGenerationKeys = rows
+    .map((row) => ({ cacheKey: row.cacheKey, parts: servingCacheKeyParts(row.cacheKey) }))
+    .filter((row) => row.parts?.sourceGeneration === sourceGeneration)
+    .sort((left, right) => right.parts!.asOfDate.localeCompare(left.parts!.asOfDate))
+  const protectedCurrentKey = currentGenerationKeys[0]?.cacheKey
+  const retained = new Set<string>()
+  if (protectedCurrentKey) retained.add(protectedCurrentKey)
+  for (const row of rows) {
+    if (retained.size >= SERVING_CACHE_RETAIN_PER_MARKET) break
+    retained.add(row.cacheKey)
+  }
+  const staleKeys = rows.filter((row) => !retained.has(row.cacheKey)).map((row) => row.cacheKey)
+  for (const cacheKey of staleKeys) {
+    await execRun('DELETE FROM dashboard_trade_signal_cache WHERE cache_key = ?', [cacheKey])
+    globalCache.__twoYearLineServingMemoV1!.delete(cacheKey)
+  }
+}
+
+function servingCacheKeyParts(cacheKey: string): { asOfDate: string; sourceGeneration: number } | null {
+  const parts = cacheKey.split(':')
+  if (parts.length !== 6 || decodeURIComponent(parts[0]) !== SERVING_CACHE_PREFIX) return null
+  const sourceGeneration = Number(parts[5])
+  if (!Number.isInteger(sourceGeneration) || sourceGeneration <= 0) return null
+  return { asOfDate: decodeURIComponent(parts[2]), sourceGeneration }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function isRegistryAvailability(value: unknown): value is TwoYearRegistryAvailability {
+  return value === 'available' || value === 'calendar_unavailable' || value === 'history_unavailable'
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value)
+}
+
+function isNonNegativeFiniteNumber(value: unknown): value is number {
+  return isFiniteNumber(value) && value >= 0
+}
+
+function isInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value)
+}
+
+function isPositiveInteger(value: unknown): value is number {
+  return isInteger(value) && value > 0
+}
+
 async function getSearchCache(
   market: TwoYearMarket,
   asOfDate: string,
   benchmark: '1306' | 'SPY',
+  sourceGeneration: number,
 ): Promise<SearchCacheEntry> {
-  const key = `${market}:${asOfDate}`
+  const key = `${market}:${asOfDate}:${sourceGeneration}`
   const now = Date.now()
   for (const [cacheKey, value] of globalCache.__twoYearLineSearchCacheV4!) {
     if (value.expiresAt <= now) globalCache.__twoYearLineSearchCacheV4!.delete(cacheKey)

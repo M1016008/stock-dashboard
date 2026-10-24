@@ -20,7 +20,7 @@ import { analyzePhysicsProfile, type PhysicsStatus } from '@/lib/ml/physics-anal
 import { loadPhysicsStatusCalibration, type PhysicsStatusCalibration } from '@/lib/queries/physics-status-calibration'
 import { readServingCache, stableCacheKey, writeServingCache } from '@/lib/api/serving-cache'
 import { parseTwoYearLineFilter, parseTwoYearLinePatternFilter, twoYearConfirmedDistancePriority, type TwoYearLineQuery } from '@/lib/two-year-line-registry'
-import { loadTwoYearLineSearchEntries, matchesTwoYearLineSearchEntry, selectTwoYearLineSummary, type TwoYearLineSearchMetadata } from '@/lib/server/two-year-line-search'
+import { loadTwoYearLineSearchEntries, matchesTwoYearLineSearchEntry, selectTwoYearLineSummary, TwoYearLineServingUnavailableError, type TwoYearLineSearchMetadata } from '@/lib/server/two-year-line-search'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
@@ -1510,6 +1510,12 @@ export async function GET(request: NextRequest) {
       },
     })
   } catch (error) {
+    if (error instanceof TwoYearLineServingUnavailableError) {
+      return NextResponse.json(
+        { error: '24-month screener serving cache unavailable', message: error.message },
+        { status: error.status },
+      )
+    }
     console.error('Screener API error:', error)
     return NextResponse.json(
       { error: 'Screener failed', message: (error as Error).message },

@@ -24,8 +24,9 @@ const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as Sqlite
 
 type Market = 'JP' | 'US'
 
-const jpTickerCount = positiveIntegerEnv('TWO_YEAR_BENCH_JP_TICKERS', 4_200)
-const usTickerCount = positiveIntegerEnv('TWO_YEAR_BENCH_US_TICKERS', 10_000)
+const benchmarkMarket = parseBenchmarkMarket()
+const jpTickerCount = benchmarkMarket === 'US' ? 0 : positiveIntegerEnv('TWO_YEAR_BENCH_JP_TICKERS', 4_200)
+const usTickerCount = benchmarkMarket === 'JP' ? 0 : positiveIntegerEnv('TWO_YEAR_BENCH_US_TICKERS', 10_000)
 // One hundred sessions per two-year block keeps the fixture bounded while
 // exercising 7.1 million daily rows at the default JP/US universe sizes.
 const sessionsPerBlock = positiveIntegerEnv('TWO_YEAR_BENCH_SESSIONS_PER_BLOCK', 100)
@@ -33,6 +34,12 @@ const coldLimitMs = positiveIntegerEnv('TWO_YEAR_BENCH_COLD_LIMIT_MS', 30_000)
 const warmLimitMs = positiveIntegerEnv('TWO_YEAR_BENCH_WARM_LIMIT_MS', 5_000)
 const asOfDate = '2027-12-30'
 const blockYears = [2018, 2020, 2022, 2024, 2026] as const
+
+function parseBenchmarkMarket(): Market | 'BOTH' {
+  const value = process.env.TWO_YEAR_BENCH_MARKET?.trim().toUpperCase() || 'BOTH'
+  if (value === 'JP' || value === 'US' || value === 'BOTH') return value
+  throw new Error('TWO_YEAR_BENCH_MARKET must be JP, US, or BOTH')
+}
 
 function positiveIntegerEnv(name: string, fallback: number): number {
   const value = Number(process.env[name])
@@ -89,6 +96,25 @@ function createFixture(databasePath: string): { jpTickers: string[]; usTickers: 
       ON market_ohlcv_daily(market, ticker, date);
     CREATE INDEX market_ohlcv_market_date_ticker_idx
       ON market_ohlcv_daily(market, date, ticker);
+    CREATE TABLE dashboard_trade_signal_cache (
+      cache_key TEXT PRIMARY KEY, payload_json TEXT NOT NULL, computed_at INTEGER NOT NULL
+    );
+    CREATE TABLE batch_runs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, job_type TEXT NOT NULL, started_at INTEGER NOT NULL,
+      finished_at INTEGER, status TEXT NOT NULL, total_tickers INTEGER, succeeded INTEGER DEFAULT 0,
+      failed INTEGER DEFAULT 0, rows_inserted INTEGER DEFAULT 0, error_summary TEXT
+    );
+    CREATE TABLE market_data_runs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, market TEXT NOT NULL, job_type TEXT NOT NULL,
+      status TEXT NOT NULL, started_at INTEGER NOT NULL, finished_at INTEGER,
+      total_tickers INTEGER NOT NULL DEFAULT 0, succeeded INTEGER NOT NULL DEFAULT 0,
+      failed INTEGER NOT NULL DEFAULT 0, rows_inserted INTEGER NOT NULL DEFAULT 0,
+      error_summary TEXT, payload_json TEXT NOT NULL DEFAULT '{}'
+    );
+    INSERT INTO batch_runs (job_type, started_at, finished_at, status)
+      VALUES ('ohlcv_fetch:jquants', 1, 2, 'success');
+    INSERT INTO market_data_runs (market, job_type, status, started_at, finished_at)
+      VALUES ('US', 'tiingo_ohlcv', 'success', 1, 2);
   `)
   const insertJp = db.prepare(`
     INSERT INTO ohlcv_daily (ticker, date, open, high, low, close, volume)
@@ -151,26 +177,61 @@ function createFixture(databasePath: string): { jpTickers: string[]; usTickers: 
 async function measure(
   market: Market,
   tickers: readonly string[],
+  build: (options: { market: Market; tickers: readonly string[]; asOfDate: string }) => Promise<{
+    cacheKey: string
+    elapsedMs: number
+    result: { entries: Map<string, { hasConfirmed: boolean; hasProvisional: boolean }> }
+  }>,
   load: (options: { market: Market; tickers: readonly string[]; asOfDate: string }) => Promise<{
     entries: Map<string, { hasConfirmed: boolean; hasProvisional: boolean }>
   }>,
-): Promise<{ coldMs: number; warmMs: number; confirmed: number; provisional: number; rssDeltaMb: number }> {
+  clearCaches: () => void,
+): Promise<{
+  precomputeMs: number
+  coldMs: number
+  warmMs: number
+  filterSortPageMs: number
+  confirmed: number
+  provisional: number
+  rssDeltaMb: number
+  cacheKey: string
+}> {
   const rssBefore = process.memoryUsage().rss
+  const precomputeStarted = performance.now()
+  const built = await build({ market, tickers, asOfDate })
+  const precomputeMs = performance.now() - precomputeStarted
+  assert.equal(built.result.entries.size, tickers.length)
+  clearCaches()
   const coldStarted = performance.now()
   const cold = await load({ market, tickers, asOfDate })
   const coldMs = performance.now() - coldStarted
   const warmStarted = performance.now()
   const warm = await load({ market, tickers, asOfDate })
   const warmMs = performance.now() - warmStarted
+  const filterSortPageStarted = performance.now()
+  const firstPage = [...cold.entries.entries()]
+    .filter(([, entry]) => entry.hasConfirmed || entry.hasProvisional)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .slice(0, 100)
+  const filterSortPageMs = performance.now() - filterSortPageStarted
   const rssDeltaMb = (process.memoryUsage().rss - rssBefore) / 1024 ** 2
   assert.equal(cold.entries.size, tickers.length)
   assert.equal(warm.entries.size, tickers.length)
+  assert.deepEqual(
+    [...cold.entries.entries()],
+    [...built.result.entries.entries()],
+    `${market} cached search output must match the precomputed registry exactly`,
+  )
+  assert.ok(firstPage.length <= 100)
   return {
+    precomputeMs,
     coldMs,
     warmMs,
+    filterSortPageMs,
     confirmed: [...cold.entries.values()].filter((entry) => entry.hasConfirmed).length,
     provisional: [...cold.entries.values()].filter((entry) => entry.hasProvisional).length,
     rssDeltaMb,
+    cacheKey: built.cacheKey,
   }
 }
 
@@ -199,23 +260,39 @@ async function main(): Promise<void> {
     const { localDbPath } = await import('../lib/db/client')
     assert.equal(path.resolve(localDbPath), path.resolve(databasePath), 'benchmark must resolve only to its fixture DB')
     const {
+      buildTwoYearLineServingCache,
+      clearTwoYearLineSearchCachesForQa,
       loadTwoYearLineSearchEntries,
       twoYearLineSearchHistoryStartDate,
+      twoYearLineServingCacheSqlForQa,
       twoYearLineSearchSqlForQa,
     } = await import('../lib/server/two-year-line-search')
-    const jp = await measure('JP', fixture.jpTickers, loadTwoYearLineSearchEntries)
-    const us = await measure('US', fixture.usTickers, loadTwoYearLineSearchEntries)
-    const sqlQa = measureSqlAndPlans({
+    const marketInputs = [
+      ...(fixture.jpTickers.length > 0 ? [{ market: 'JP' as const, tickers: fixture.jpTickers }] : []),
+      ...(fixture.usTickers.length > 0 ? [{ market: 'US' as const, tickers: fixture.usTickers }] : []),
+    ]
+    const metrics = {} as Partial<Record<Market, Awaited<ReturnType<typeof measure>>>>
+    for (const item of marketInputs) {
+      metrics[item.market] = await measure(
+        item.market,
+        item.tickers,
+        buildTwoYearLineServingCache,
+        loadTwoYearLineSearchEntries,
+        clearTwoYearLineSearchCachesForQa,
+      )
+    }
+    const sqlQa = measureSqlPlans({
       databasePath,
       historyStartDate: twoYearLineSearchHistoryStartDate(asOfDate),
       buildSql: twoYearLineSearchSqlForQa,
-      markets: [
-        { market: 'JP', tickers: fixture.jpTickers },
-        { market: 'US', tickers: fixture.usTickers },
-      ],
+      markets: marketInputs,
     })
-    assertIndexedPlan('JP', sqlQa.JP.queryPlan)
-    assertIndexedPlan('US', sqlQa.US.queryPlan)
+    for (const item of marketInputs) assertIndexedPlan(item.market, sqlQa[item.market]!.queryPlan)
+    const cacheQueryPlans = measureCacheQueryPlans({
+      databasePath,
+      sql: twoYearLineServingCacheSqlForQa(),
+      metrics,
+    })
     const result = {
       isolation: {
         databasePath,
@@ -233,16 +310,18 @@ async function main(): Promise<void> {
         createMs: Math.round(fixtureMs),
       },
       limits: { coldMs: coldLimitMs, warmMs: warmLimitMs },
-      JP: roundMetrics(jp),
-      US: roundMetrics(us),
+      JP: metrics.JP ? roundMetrics(metrics.JP) : null,
+      US: metrics.US ? roundMetrics(metrics.US) : null,
       sqlQa,
+      cacheQueryPlans,
       maxRssMb: maxRssMb(),
     }
     console.log(JSON.stringify(result, null, 2))
-    assert.ok(jp.coldMs <= coldLimitMs, `JP cold cache ${Math.round(jp.coldMs)}ms exceeds ${coldLimitMs}ms`)
-    assert.ok(us.coldMs <= coldLimitMs, `US cold cache ${Math.round(us.coldMs)}ms exceeds ${coldLimitMs}ms`)
-    assert.ok(jp.warmMs <= warmLimitMs, `JP warm cache ${Math.round(jp.warmMs)}ms exceeds ${warmLimitMs}ms`)
-    assert.ok(us.warmMs <= warmLimitMs, `US warm cache ${Math.round(us.warmMs)}ms exceeds ${warmLimitMs}ms`)
+    for (const item of marketInputs) {
+      const measured = metrics[item.market]!
+      assert.ok(measured.coldMs <= coldLimitMs, `${item.market} cold cache ${Math.round(measured.coldMs)}ms exceeds ${coldLimitMs}ms`)
+      assert.ok(measured.warmMs <= warmLimitMs, `${item.market} warm cache ${Math.round(measured.warmMs)}ms exceeds ${warmLimitMs}ms`)
+    }
   } finally {
     await rm(directory, { recursive: true, force: true })
   }
@@ -267,7 +346,7 @@ function assertIndexedPlan(market: Market, plan: readonly string[]): void {
 
 const CHUNK_SIZE = 500
 
-function measureSqlAndPlans(options: Readonly<{
+function measureSqlPlans(options: Readonly<{
   databasePath: string
   historyStartDate: string
   buildSql: (market: Market, tickerCount: number) => Readonly<{
@@ -278,23 +357,11 @@ function measureSqlAndPlans(options: Readonly<{
     market: Market
     tickers: readonly string[]
   }>
-}>): Record<Market, { executionMs: number; resultRows: number; queryPlan: string[] }> {
+}>): Partial<Record<Market, { queryPlan: string[] }>> {
   const db = new DatabaseSync(options.databasePath, { readOnly: true })
-  const output = {} as Record<Market, { executionMs: number; resultRows: number; queryPlan: string[] }>
+  const output: Partial<Record<Market, { queryPlan: string[] }>> = {}
   try {
     for (const item of options.markets) {
-      let resultRows = 0
-      const started = performance.now()
-      for (let offset = 0; offset < item.tickers.length; offset += CHUNK_SIZE) {
-        const chunk = item.tickers.slice(offset, offset + CHUNK_SIZE)
-        const sql = options.buildSql(item.market, chunk.length)
-        resultRows += db.prepare(sql.compactBlocks)
-          .all(...chunk, options.historyStartDate, asOfDate, options.historyStartDate, asOfDate).length
-        if (sql.splitEvents) {
-          resultRows += db.prepare(sql.splitEvents)
-            .all(...chunk, options.historyStartDate, asOfDate).length
-        }
-      }
       const planTickers = item.tickers.slice(0, CHUNK_SIZE)
       const compactPlanArgs = [
         ...planTickers,
@@ -308,10 +375,32 @@ function measureSqlAndPlans(options: Readonly<{
       const queryPlan = explain(db, planSql.compactBlocks, compactPlanArgs)
       if (planSql.splitEvents) queryPlan.push(...explain(db, planSql.splitEvents, splitPlanArgs))
       output[item.market] = {
-        executionMs: Math.round(performance.now() - started),
-        resultRows,
         queryPlan: [...new Set(queryPlan)],
       }
+    }
+  } finally {
+    db.close()
+  }
+  return output
+}
+
+function measureCacheQueryPlans(options: Readonly<{
+  databasePath: string
+  sql: string
+  metrics: Partial<Record<Market, { cacheKey: string }>>
+}>): Partial<Record<Market, string[]>> {
+  const db = new DatabaseSync(options.databasePath, { readOnly: true })
+  const output: Partial<Record<Market, string[]>> = {}
+  try {
+    for (const market of ['JP', 'US'] as const) {
+      const cacheKey = options.metrics[market]?.cacheKey
+      if (!cacheKey) continue
+      const plan = explain(db, options.sql, [cacheKey])
+      assert.ok(
+        plan.some((detail) => detail.includes('dashboard_trade_signal_cache') && detail.includes('cache_key=?')),
+        `${market} serving lookup must use the cache primary key`,
+      )
+      output[market] = plan
     }
   } finally {
     db.close()
@@ -331,8 +420,10 @@ function maxRssMb(): number {
 
 function roundMetrics(metrics: Awaited<ReturnType<typeof measure>>) {
   return {
+    precomputeMs: Math.round(metrics.precomputeMs),
     coldMs: Math.round(metrics.coldMs),
     warmMs: Math.round(metrics.warmMs),
+    filterSortPageMs: Math.round(metrics.filterSortPageMs),
     confirmed: metrics.confirmed,
     provisional: metrics.provisional,
     rssDeltaMb: Math.round(metrics.rssDeltaMb),
