@@ -183,10 +183,10 @@ async function run() {
   const week = await searchStageTransitions(base, executor)
   assert.equal(week.range.startDate, '2026-09-28')
   assert.equal(week.range.previousMarketDate, '2026-09-25')
-  assert.equal(week.total, 36, 'week includes Friday-to-Monday transitions and keeps repeated events')
+  assert.equal(week.total, 35, 'week includes Friday-to-Monday transitions and keeps repeated events')
   assert.equal(week.rows.filter((row) => row.ticker === 'D001').length, 2, 'multiple exact events for one ticker are retained')
   assert.equal(week.rows.some((row) => row.ticker === 'C001'), false, 'missing Stage observation must break the transition chain')
-  assert.equal(week.rows.some((row) => row.ticker === 'E001'), true, 'ticker-specific predecessor is used when the shared prior session is absent')
+  assert.equal(week.rows.some((row) => row.ticker === 'E001'), false, 'a missing immediately previous market snapshot must not be bridged')
   assert.equal(new Set(week.rows.map((row) => `${row.ticker}:${row.transitionDate}`)).size, week.rows.length)
 
   const weekRange = await resolveStageTransitionRange(base, executor)
@@ -213,14 +213,14 @@ async function run() {
   )
 
   const anyArrival = await searchStageTransitions({ ...base, fromCode: 'any', toCode: '211111' }, executor)
-  assert.equal(anyArrival.total, 37, 'Any to exact includes every actual source code')
+  assert.equal(anyArrival.total, 36, 'Any to exact includes every actual source code')
   assert.equal(anyArrival.rows.some((row) => row.ticker === 'H001' && row.fromCode === '311111'), true)
 
   const anyDeparture = await searchStageTransitions({ ...base, fromCode: '111111', toCode: 'any' }, executor)
-  assert.equal(anyDeparture.total, 36, 'exact to Any includes every changed destination code')
+  assert.equal(anyDeparture.total, 35, 'exact to Any includes every changed destination code')
 
   const anyChange = await searchStageTransitions({ ...base, fromCode: 'any', toCode: 'any' }, executor)
-  assert.equal(anyChange.total, 39, 'Any to Any includes changed states and excludes stable rows')
+  assert.equal(anyChange.total, 38, 'Any to Any includes changed states and excludes stable rows')
   assert.equal(anyChange.rows.some((row) => row.fromCode === row.toCode), false)
 
   const industry = await searchStageTransitions({ ...base, industry33: '電気・ガス業' }, executor)
@@ -248,13 +248,13 @@ async function run() {
   const pageOne = await searchStageTransitions({ ...base, pageSize: 25 }, executor)
   const pageTwo = await searchStageTransitions({ ...base, pageSize: 25, page: 2 }, executor)
   assert.equal(pageOne.rows.length, 25)
-  assert.equal(pageTwo.rows.length, 11)
-  assert.equal(pageTwo.total, 36)
-  assert.equal(new Set([...pageOne.rows, ...pageTwo.rows].map((row) => `${row.ticker}:${row.transitionDate}`)).size, 36)
+  assert.equal(pageTwo.rows.length, 10)
+  assert.equal(pageTwo.total, 35)
+  assert.equal(new Set([...pageOne.rows, ...pageTwo.rows].map((row) => `${row.ticker}:${row.transitionDate}`)).size, 35)
 
   const pageOutOfRange = await searchStageTransitions({ ...base, pageSize: 25, page: 99 }, executor)
   assert.equal(pageOutOfRange.rows.length, 0)
-  assert.equal(pageOutOfRange.total, 36)
+  assert.equal(pageOutOfRange.total, 35)
   assert.equal(pageOutOfRange.totalPages, 2)
 
   const month = await searchStageTransitions({ ...base, period: 'month' }, executor)

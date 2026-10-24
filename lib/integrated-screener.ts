@@ -219,6 +219,96 @@ export const SCREENING_METRICS: ScreeningMetricDefinition[] = [
 
 export const SCREENING_METRIC_MAP = new Map(SCREENING_METRICS.map((metric) => [metric.key, metric]))
 
+export class ScreeningConditionValidationError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'ScreeningConditionValidationError'
+  }
+}
+
+function isValidConditionValue(
+  definition: ScreeningMetricDefinition,
+  value: unknown,
+): value is number | string | boolean {
+  const validType = definition.valueType === 'boolean'
+    ? typeof value === 'boolean'
+    : definition.valueType === 'text'
+      ? typeof value === 'string' && value.trim().length > 0
+      : definition.valueType === 'stage'
+        ? typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 6
+        : typeof value === 'number' && Number.isFinite(value)
+  if (!validType) return false
+  return !definition.options
+    || definition.options.some((option) => option.value === value)
+}
+
+export function parseScreeningConditions(value: unknown): ScreeningCondition[] {
+  if (value == null) return []
+  if (!Array.isArray(value)) {
+    throw new ScreeningConditionValidationError('conditions must be an array')
+  }
+
+  const conditions = value.map((item, index): ScreeningCondition => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      throw new ScreeningConditionValidationError(`conditions[${index}] must be an object`)
+    }
+    const condition = item as Record<string, unknown>
+    if (typeof condition.id !== 'string') {
+      throw new ScreeningConditionValidationError(`conditions[${index}].id must be a string`)
+    }
+    if (typeof condition.metric !== 'string') {
+      throw new ScreeningConditionValidationError(`conditions[${index}].metric must be a string`)
+    }
+    const definition = SCREENING_METRIC_MAP.get(condition.metric as ScreeningMetricKey)
+    if (!definition) {
+      throw new ScreeningConditionValidationError(`conditions[${index}].metric is unsupported`)
+    }
+    if (typeof condition.operator !== 'string' || !definition.operators.includes(condition.operator as ScreeningOperator)) {
+      throw new ScreeningConditionValidationError(`conditions[${index}].operator is unsupported for ${definition.key}`)
+    }
+    const operator = condition.operator as ScreeningOperator
+    if (operator === 'has_data') {
+      return { id: condition.id, metric: definition.key, operator }
+    }
+    if (operator === 'between') {
+      if (!isValidConditionValue(definition, condition.value)
+        || !isValidConditionValue(definition, condition.valueTo)) {
+        throw new ScreeningConditionValidationError(`conditions[${index}] requires valid between bounds`)
+      }
+      return {
+        id: condition.id,
+        metric: definition.key,
+        operator,
+        value: condition.value,
+        valueTo: condition.valueTo as number,
+      }
+    }
+    if (operator === 'in') {
+      if (!Array.isArray(condition.value) || condition.value.length === 0
+        || condition.value.some((entry) => !isValidConditionValue(definition, entry))) {
+        throw new ScreeningConditionValidationError(`conditions[${index}].value must be a non-empty array of valid values`)
+      }
+      return {
+        id: condition.id,
+        metric: definition.key,
+        operator,
+        value: condition.value as Array<number | string>,
+      }
+    }
+    if (!isValidConditionValue(definition, condition.value)) {
+      throw new ScreeningConditionValidationError(`conditions[${index}].value has an invalid type or value`)
+    }
+    return {
+      id: condition.id,
+      metric: definition.key,
+      operator,
+      value: condition.value,
+    }
+  })
+
+  return conditions.slice(0, 40)
+}
+
 const c = (metric: ScreeningMetricKey, operator: ScreeningOperator, value?: ScreeningCondition['value']): Omit<ScreeningCondition, 'id'> => ({ metric, operator, value })
 
 export const SCREENING_PRESETS: ScreeningPreset[] = [

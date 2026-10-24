@@ -275,8 +275,7 @@ export function buildStageTransitionSearchSql(
        AND previous.date = (
          SELECT MAX(prior.date)
          FROM daily_snapshots AS prior
-         WHERE prior.ticker = current.ticker
-           AND prior.date < current.transition_date
+         WHERE prior.date < current.transition_date
        )
       WHERE ${previousConditions.join('\n        AND ')}
         AND ${stageCodeSql('previous')} <> current.to_code

@@ -52,7 +52,7 @@ const SORT_KEYS = new Set([
   'twoYearLineConfirmedDistancePriority',
 ])
 
-const US_SCREENER_CACHE_NAMESPACE = 'us-screener-v9'
+const US_SCREENER_CACHE_NAMESPACE = 'us-screener-v10'
 const US_SCREENER_FACETS_CACHE_NAMESPACE = 'us-screener-facets-v2'
 const EARNINGS_WINDOWS = new Set([14, 30, 60, 90, 180])
 const EARNINGS_TIME_BUCKETS = new Set(['before_open', 'market_hours', 'after_close', 'unknown'])
@@ -463,8 +463,7 @@ export async function GET(request: NextRequest) {
       sort === 'pms' ? 'physical_momentum_score'
         : sort === 'pfs' ? 'physical_force_score'
           : 'physical_energy_score'
-    const metricTopLimit = Math.max(limit * 2, 50)
-    const topMetricRows = useAnalyticsMetricTop
+    const analyticsMetricRows = useAnalyticsMetricTop
       ? await execUsAnalyticsAll<{
           symbol: string
           physical_momentum_score: number | null
@@ -500,22 +499,18 @@ export async function GET(request: NextRequest) {
             AND date = (SELECT date FROM latest_date)
             AND ${metricColumn} IS NOT NULL
           ORDER BY ${metricColumn} ${dir.toUpperCase()}, symbol ASC
-          LIMIT ?
           `,
-          [date, metricTopLimit],
+          [date],
         ).catch(() => [])
       : []
-    const topMetricTickers = topMetricRows.map((row) => row.symbol).filter(Boolean)
-    const metricMap = new Map(topMetricRows.map((row) => [row.symbol, row]))
+    const metricMap = new Map(analyticsMetricRows.map((row) => [row.symbol, row]))
     const twoYearComputed = twoYearLine !== 'none'
-    const sqlLimit: number | null = topMetricTickers.length > 0
-      ? topMetricTickers.length
-      : twoYearComputed
+    const sqlLimit: number | null = twoYearComputed
+      || physicalSort
+      || computedSort
+      || hasComputedFilters
         ? null
-      : physicalSort || computedSort || hasComputedFilters
-        ? Math.max(limit * 30, 5000)
         : limit + 1
-    const whereMetricTop = topMetricTickers.length > 0 ? `AND s.ticker IN (${topMetricTickers.map(() => '?').join(',')})` : ''
     const physicalMetricColumns = useAnalyticsMetricTop
       ? `
         NULL AS physical_momentum_score,
@@ -664,7 +659,6 @@ export async function GET(request: NextRequest) {
     if (marketCapMin != null && pit.mode === 'LATEST') args.push(marketCapMin)
     if (marketCapMax != null && pit.mode === 'LATEST') args.push(marketCapMax)
     if (earningsTimeBucket) args.push(earningsTimeBucket)
-    if (topMetricTickers.length > 0) args.push(...topMetricTickers)
     if (sqlLimit !== null) args.push(sqlLimit)
 
     const orderExpr: Record<string, string> = {
@@ -799,13 +793,12 @@ export async function GET(request: NextRequest) {
         ${whereEarningsWindow}
         ${whereEarningsBucket}
         ${whereKnownEarnings}
-        ${whereMetricTop}
       ORDER BY ${useAnalyticsMetricTop ? 's.ticker' : orderExpr[sort]} ${dir.toUpperCase()}, s.ticker ASC
       ${sqlLimit === null ? '' : 'LIMIT ?'}
       `,
       args,
     )
-    if (topMetricRows.length > 0) {
+    if (analyticsMetricRows.length > 0) {
       for (const row of rows) {
         const metric = metricMap.get(String(row.ticker))
         if (!metric) continue
@@ -985,7 +978,7 @@ export async function GET(request: NextRequest) {
       })
     }
 
-    const candidatesTruncated = sqlLimit !== null && topMetricTickers.length === 0 && rows.length >= sqlLimit
+    const candidatesTruncated = sqlLimit !== null && rows.length >= sqlLimit
     const [earningsSync, earningsRun] = await Promise.all([
       execGet<{ value: number | null }>(
         `SELECT MAX(imported_at) AS value
