@@ -47,6 +47,7 @@ import {
   type HistoricalAnalogSort,
 } from '@/lib/ml/historical-analogs'
 import { isValidTickerForMarket } from '@/lib/markets'
+import { KeyedSingleflight } from '@/lib/server/keyed-singleflight'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
@@ -76,6 +77,7 @@ const PRESENTATION_CONTEXT_AFTER = 18
 const CACHE_MAX_ENTRIES = 80
 const CORE_CACHE_MAX_ENTRIES = 8
 const DAY_MS = 86_400_000
+const SEARCH_CONCURRENCY = boundedEnv('ANALOG_SEARCH_CONCURRENCY', 2, 1, 4)
 
 const responseCache = new Map<string, { generatedAt: number; payload: Record<string, unknown> }>()
 const coreSearchCache = new Map<string, {
@@ -84,8 +86,7 @@ const coreSearchCache = new Map<string, {
   search: SearchDiagnostics
 }>()
 const globalForHistoricalAnalogs = global as unknown as {
-  historicalAnalogSearchTail?: Promise<void>
-  historicalAnalogSearchDepth?: number
+  historicalAnalogCoreSingleflight?: KeyedSingleflight
 }
 
 type Market = AnalogSequenceMarket
@@ -134,7 +135,7 @@ type ScoreComponent = {
   available: boolean
 }
 
-type ExactCandidate = {
+export type ExactCandidate = {
   ticker: string
   startDate: string
   middleDate: string
@@ -305,28 +306,10 @@ function logSearchPhase(
   return completedAt
 }
 
-async function acquireSearchSlot(): Promise<() => void> {
-  const prior = globalForHistoricalAnalogs.historicalAnalogSearchTail ?? Promise.resolve()
-  let releaseCurrent!: () => void
-  const current = new Promise<void>((resolve) => {
-    releaseCurrent = resolve
-  })
-  globalForHistoricalAnalogs.historicalAnalogSearchTail = prior
-    .catch(() => undefined)
-    .then(() => current)
-  globalForHistoricalAnalogs.historicalAnalogSearchDepth =
-    (globalForHistoricalAnalogs.historicalAnalogSearchDepth ?? 0) + 1
-  await prior.catch(() => undefined)
-  let released = false
-  return () => {
-    if (released) return
-    released = true
-    globalForHistoricalAnalogs.historicalAnalogSearchDepth = Math.max(
-      0,
-      (globalForHistoricalAnalogs.historicalAnalogSearchDepth ?? 1) - 1,
-    )
-    releaseCurrent()
-  }
+function analogCoreSingleflight(): KeyedSingleflight {
+  globalForHistoricalAnalogs.historicalAnalogCoreSingleflight ??=
+    new KeyedSingleflight(SEARCH_CONCURRENCY)
+  return globalForHistoricalAnalogs.historicalAnalogCoreSingleflight
 }
 
 function normalizePriceRows(rows: PriceRow[]): PriceRow[] {
@@ -596,6 +579,29 @@ function boundedRequestNumber(
   return integer ? Math.floor(bounded) : bounded
 }
 
+export function historicalAnalogResponseCacheKey(input: {
+  market: Market
+  ticker: string
+  requestedStartDate: string
+  requestedEndDate: string
+  latestMarketDate: string
+  indexSourceDate: string | null
+  indexUpdatedAt: string | null
+  profile: string
+  recency: string
+  sort: string
+  minScore: number
+  limit: number
+  offset: number
+}): string {
+  return stableCacheKey({
+    ...input,
+    version: MA_SEQUENCE_VERSION,
+    scoreVersion: MA_SEQUENCE_SCORE_VERSION,
+    mlRerankWeight: ML_RERANK_WEIGHT,
+  })
+}
+
 async function loadVectorScores(
   db: ReturnType<typeof createDbAdapter>,
   baseTicker: string,
@@ -687,7 +693,7 @@ async function loadTickerMetadata(
   return new Map(rows.map((row) => [row.ticker, row]))
 }
 
-async function loadPresentations(
+export async function loadPresentations(
   db: ReturnType<typeof createDbAdapter>,
   rows: ExactCandidate[],
 ) {
@@ -705,27 +711,35 @@ async function loadPresentations(
     tickerRows.push(row)
     byTicker.set(row.ticker, tickerRows)
   }
-  for (const [ticker, tickerRows] of byTicker) {
-    const fromDate = subtractCalendarDays(
+  const ranges = [...byTicker.entries()].map(([ticker, tickerRows]) => ({
+    ticker,
+    fromDate: subtractCalendarDays(
       tickerRows.map((row) => row.startDate).sort()[0],
       520,
-    )
-    const toDate = addCalendarDays(
+    ),
+    toDate: addCalendarDays(
       tickerRows.map((row) => row.endDate).sort().at(-1)!,
       45,
-    )
-    const prices = normalizePriceRows(await db.all<PriceRow>(
-      `
+    ),
+  }))
+  if (ranges.length === 0) return output
+  const prices = normalizePriceRows(await db.all<PriceRow>(
+    `
       SELECT ticker, date, open, high, low, close, volume
       FROM ohlcv_daily
-      WHERE ticker = ?
-        AND date >= ?
-        AND date <= ?
-      ORDER BY date
-      `,
-      [ticker, fromDate, toDate],
-    ))
-    const segments = buildPreparedSegments(prices)
+      WHERE ${ranges.map(() => '(ticker = ? AND date >= ? AND date <= ?)').join(' OR ')}
+      ORDER BY ticker, date
+    `,
+    ranges.flatMap((range) => [range.ticker, range.fromDate, range.toDate]),
+  ))
+  const pricesByTicker = new Map<string, PriceRow[]>()
+  for (const price of prices) {
+    const tickerPrices = pricesByTicker.get(price.ticker) ?? []
+    tickerPrices.push(price)
+    pricesByTicker.set(price.ticker, tickerPrices)
+  }
+  for (const [ticker, tickerRows] of byTicker) {
+    const segments = buildPreparedSegments(pricesByTicker.get(ticker) ?? [])
     for (const row of tickerRows) {
       const located = findPreparedSegment(segments, row.endDate)
       if (!located) continue
@@ -859,18 +873,9 @@ export async function GET(request: NextRequest) {
       )
     }
     const db = createDbAdapter(market)
-    const [indexMeta, latestRow, basePriceRows] = await Promise.all([
+    const [indexMeta, latestRow] = await Promise.all([
       assertAnalogSequenceIndexReady(market),
       db.get<DateRow>('SELECT MAX(date) AS date FROM ohlcv_daily'),
-      db.all<PriceRow>(
-        `
-        SELECT ticker, date, open, high, low, close, volume
-        FROM ohlcv_daily
-        WHERE ticker = ?
-        ORDER BY date
-        `,
-        [ticker],
-      ),
     ])
     const latestMarketDate = latestRow?.date
     if (!latestMarketDate) {
@@ -885,6 +890,50 @@ export async function GET(request: NextRequest) {
       )
     }
 
+    const cacheKey = historicalAnalogResponseCacheKey({
+      market,
+      ticker,
+      requestedStartDate,
+      requestedEndDate,
+      latestMarketDate,
+      indexSourceDate: indexMeta.sourceDate,
+      indexUpdatedAt: indexMeta.updatedAt,
+      profile,
+      recency,
+      sort,
+      minScore,
+      limit,
+      offset,
+    })
+    const memoryCached = responseCache.get(cacheKey)
+    if (memoryCached && Date.now() - memoryCached.generatedAt < CACHE_TTL_MS) {
+      return NextResponse.json({
+        ...memoryCached.payload,
+        cache: { hit: true, generatedAt: new Date(memoryCached.generatedAt).toISOString() },
+      })
+    }
+    const stored = await readServingCache<Record<string, unknown>>(
+      CACHE_NAMESPACE,
+      cacheKey,
+      CACHE_TTL_MS,
+    )
+    if (stored) {
+      responseCache.set(cacheKey, stored)
+      return NextResponse.json({
+        ...stored.payload,
+        cache: { hit: true, generatedAt: new Date(stored.generatedAt).toISOString() },
+      })
+    }
+
+    const basePriceRows = await db.all<PriceRow>(
+      `
+      SELECT ticker, date, open, high, low, close, volume
+      FROM ohlcv_daily
+      WHERE ticker = ?
+      ORDER BY date
+      `,
+      [ticker],
+    )
     const baseRows = normalizePriceRows(basePriceRows)
     const baseSegments = buildPreparedSegments(baseRows)
     const locatedEnd = findPreparedSegmentAtOrBefore(baseSegments, requestedEndDate)
@@ -969,43 +1018,6 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    const cacheKey = stableCacheKey({
-      market,
-      ticker,
-      baseStartDate,
-      baseEndDate,
-      latestMarketDate,
-      indexSourceDate: indexMeta.sourceDate,
-      version: MA_SEQUENCE_VERSION,
-      scoreVersion: MA_SEQUENCE_SCORE_VERSION,
-      profile,
-      recency,
-      sort,
-      minScore,
-      limit,
-      offset,
-      mlRerankWeight: ML_RERANK_WEIGHT,
-    })
-    const memoryCached = responseCache.get(cacheKey)
-    if (memoryCached && Date.now() - memoryCached.generatedAt < CACHE_TTL_MS) {
-      return NextResponse.json({
-        ...memoryCached.payload,
-        cache: { hit: true, generatedAt: new Date(memoryCached.generatedAt).toISOString() },
-      })
-    }
-    const stored = await readServingCache<Record<string, unknown>>(
-      CACHE_NAMESPACE,
-      cacheKey,
-      CACHE_TTL_MS,
-    )
-    if (stored) {
-      responseCache.set(cacheKey, stored)
-      return NextResponse.json({
-        ...stored.payload,
-        cache: { hit: true, generatedAt: new Date(stored.generatedAt).toISOString() },
-      })
-    }
-
     const coreCacheKey = stableCacheKey({
       market,
       ticker,
@@ -1013,6 +1025,7 @@ export async function GET(request: NextRequest) {
       baseEndDate,
       latestMarketDate,
       indexSourceDate: indexMeta.sourceDate,
+      indexUpdatedAt: indexMeta.updatedAt,
       version: MA_SEQUENCE_VERSION,
       scoreVersion: MA_SEQUENCE_SCORE_VERSION,
       profile,
@@ -1021,17 +1034,17 @@ export async function GET(request: NextRequest) {
       recencyShortlistLimit: RECENCY_SHORTLIST_LIMIT,
       mlRerankWeight: ML_RERANK_WEIGHT,
     })
-    const releaseSearchSlot = await acquireSearchSlot()
-    try {
-      const cachedCore = coreSearchCache.get(coreCacheKey)
-      const freshCore = cachedCore && Date.now() - cachedCore.generatedAt < CACHE_TTL_MS
-        ? cachedCore
-        : null
-      if (cachedCore && !freshCore) coreSearchCache.delete(coreCacheKey)
-      let exactCore = freshCore?.exactRanked ?? null
-      let searchDiagnostics = freshCore?.search ?? null
-
-      if (!exactCore || !searchDiagnostics) {
+    const cachedCore = coreSearchCache.get(coreCacheKey)
+    const freshCore = cachedCore && Date.now() - cachedCore.generatedAt < CACHE_TTL_MS
+      ? cachedCore
+      : null
+    if (cachedCore && !freshCore) coreSearchCache.delete(coreCacheKey)
+    if (!freshCore) {
+      await analogCoreSingleflight().run(coreCacheKey, async () => {
+        const joinedCore = coreSearchCache.get(coreCacheKey)
+        if (joinedCore && Date.now() - joinedCore.generatedAt < CACHE_TTL_MS) return
+        let exactCore: ExactCandidate[] = []
+        let searchDiagnostics: SearchDiagnostics
         let phaseStartedAt = Date.now()
         const beforeDate = addCalendarDays(latestMarketDate, 1)
         const indexedByKey = new Map<string, IndexedAnchor>()
@@ -1367,12 +1380,16 @@ export async function GET(request: NextRequest) {
           const oldestKey = coreSearchCache.keys().next().value
           if (oldestKey) coreSearchCache.delete(oldestKey)
         }
-      }
+      })
+    }
 
-      if (!exactCore || !searchDiagnostics) {
-        throw new Error('類似局面の精密検索結果を生成できませんでした。')
-      }
-      const filtered = exactCore.filter((row) =>
+    const resolvedCore = coreSearchCache.get(coreCacheKey)
+    if (!resolvedCore || Date.now() - resolvedCore.generatedAt >= CACHE_TTL_MS) {
+      throw new Error('類似局面の精密検索結果を生成できませんでした。')
+    }
+    const exactCore = resolvedCore.exactRanked
+    const searchDiagnostics = resolvedCore.search
+    const filtered = exactCore.filter((row) =>
         row.score >= minScore
         && isWithinHistoricalAnalogRecency(row.endDate, latestMarketDate, recency),
       )
@@ -1474,10 +1491,7 @@ export async function GET(request: NextRequest) {
       writeServingCache(CACHE_NAMESPACE, cacheKey, payload, CACHE_TTL_MS, generatedAt).catch((error) => {
         console.warn('historical analog period cache write failed:', error)
       })
-      return NextResponse.json(payload)
-    } finally {
-      releaseSearchSlot()
-    }
+    return NextResponse.json(payload)
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     console.error('historical analog period search failed:', error)

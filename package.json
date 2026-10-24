@@ -163,6 +163,8 @@
     "test:us-stock-fundamentals-ui": "tsx scripts/test-us-stock-fundamentals-ui.ts",
     "test:trade-scenarios": "tsx scripts/test-trade-scenarios.ts",
     "test:historical-analogs": "tsx scripts/test-historical-analogs.ts",
+    "test:search-performance": "tsx scripts/test-search-performance-regressions.ts",
+    "benchmark:search-performance": "tsx scripts/benchmark-search-performance.ts",
     "test:data-freshness": "tsx scripts/test-data-freshness.ts",
     "test:status-health": "tsx scripts/test-status-health.ts",
     "test:ml-reliability": "tsx scripts/test-ml-reliability.ts",

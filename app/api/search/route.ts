@@ -3,11 +3,13 @@
 // ローカル ticker_universe と四季報分類を横断検索する。
 
 import { NextRequest, NextResponse } from 'next/server'
-import { db, ensureReady } from '@/lib/db/client'
-import { stockClassification, tickerUniverse } from '@/lib/db/schema'
-import { and, eq, like, or } from 'drizzle-orm'
+import { execAll } from '@/lib/db/client'
 
 export const revalidate = 0
+
+export function escapeSqlLikeLiteral(value: string): string {
+  return value.replace(/[\\%_]/g, (character) => `\\${character}`)
+}
 
 export async function GET(request: NextRequest) {
   try {
@@ -17,33 +19,53 @@ export async function GET(request: NextRequest) {
       return NextResponse.json([])
     }
 
-    const escaped = q.replace(/[%_]/g, m => '\\' + m)
-    const pattern = `%${escaped}%`
-    await ensureReady()
-
-    const rows = await db
-      .select({
-        ticker: tickerUniverse.ticker,
-        name:   tickerUniverse.name,
-        sector17Name: tickerUniverse.sector17_name,
-        sector33Name: tickerUniverse.sector33_name,
-        marketSegment: tickerUniverse.market_segment,
-        marginType: tickerUniverse.margin_type,
-        majorCategory: stockClassification.majorCategory,
-        subIndustry: stockClassification.subIndustry,
-      })
-      .from(tickerUniverse)
-      .leftJoin(stockClassification, eq(stockClassification.ticker, tickerUniverse.ticker))
-      .where(and(
-        eq(tickerUniverse.active, true),
-        or(
-          like(tickerUniverse.ticker, pattern),
-          like(tickerUniverse.name, pattern),
-          like(stockClassification.majorCategory, pattern),
-          like(stockClassification.subIndustry, pattern),
-        ),
-      ))
-      .limit(10)
+    const escaped = escapeSqlLikeLiteral(q)
+    const rows = await execAll<{
+      ticker: string
+      name: string | null
+      sector17Name: string | null
+      sector33Name: string | null
+      marketSegment: string | null
+      marginType: string | null
+      majorCategory: string | null
+      subIndustry: string | null
+    }>(`
+      WITH search_query(q, prefix_pattern, contains_pattern) AS (VALUES (?, ?, ?))
+      SELECT
+        u.ticker,
+        u.name,
+        u.sector17_name AS sector17Name,
+        u.sector33_name AS sector33Name,
+        u.market_segment AS marketSegment,
+        u.margin_type AS marginType,
+        c.major_category AS majorCategory,
+        c.sub_industry AS subIndustry
+      FROM ticker_universe u
+      LEFT JOIN stock_classification c ON c.ticker = u.ticker
+      CROSS JOIN search_query
+      WHERE u.active = 1
+        AND (
+          u.ticker LIKE search_query.contains_pattern ESCAPE '\\'
+          OR COALESCE(u.name, '') LIKE search_query.contains_pattern ESCAPE '\\'
+          OR COALESCE(c.major_category, '') LIKE search_query.contains_pattern ESCAPE '\\'
+          OR COALESCE(c.sub_industry, '') LIKE search_query.contains_pattern ESCAPE '\\'
+        )
+      ORDER BY
+        CASE
+          WHEN u.ticker = search_query.q COLLATE NOCASE THEN 0
+          WHEN COALESCE(u.name, '') = search_query.q COLLATE NOCASE THEN 1
+          WHEN COALESCE(c.major_category, '') = search_query.q COLLATE NOCASE THEN 2
+          WHEN COALESCE(c.sub_industry, '') = search_query.q COLLATE NOCASE THEN 3
+          WHEN u.ticker LIKE search_query.prefix_pattern ESCAPE '\\' THEN 4
+          WHEN COALESCE(u.name, '') LIKE search_query.prefix_pattern ESCAPE '\\' THEN 5
+          WHEN COALESCE(c.major_category, '') LIKE search_query.prefix_pattern ESCAPE '\\' THEN 6
+          WHEN COALESCE(c.sub_industry, '') LIKE search_query.prefix_pattern ESCAPE '\\' THEN 7
+          ELSE 8
+        END,
+        u.ticker COLLATE NOCASE,
+        u.ticker
+      LIMIT 10
+    `, [q, `${escaped}%`, `%${escaped}%`])
 
     return NextResponse.json(
       rows.map(r => ({
