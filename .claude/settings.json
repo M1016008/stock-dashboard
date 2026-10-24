@@ -1,0 +1,28 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/development-completion-reminder.mjs\"",
+            "timeout": 30,
+            "statusMessage": "Checking StockBoard completion evidence"
+          }
+        ]
+      }
+    ],
+    "TaskCompleted": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/development-completion-reminder.mjs\"",
+            "timeout": 30,
+            "statusMessage": "Checking StockBoard task completion evidence"
+          }
+        ]
+      }
+    ]
+  }
+}
