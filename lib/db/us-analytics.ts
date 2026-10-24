@@ -2,16 +2,10 @@ import { type Client, type InValue } from '@libsql/client'
 import { openExistingGuardedClient } from '@/lib/storage/guarded-libsql-client'
 import fs from 'fs'
 import path from 'path'
-import { CURRENT_STORAGE_ROOT, resolveConfiguredStoragePath } from '@/lib/storage-paths'
+import { resolveConfiguredStoragePath } from '@/lib/storage-paths'
 import { guardForDatabase, isStorageIoError, requiresExternalStorageGuard } from '@/lib/storage/external-storage-guard'
 
 const DEFAULT_US_ANALYTICS_PATH = 'data/stockboard-us.db'
-const EXTERNAL_US_ANALYTICS_PATH = path.join(
-  CURRENT_STORAGE_ROOT,
-  'stockboard-data',
-  'us',
-  'stockboard-us.db',
-)
 
 type UsAnalyticsGeneration = {
   client: Client
@@ -30,9 +24,9 @@ export function resolveUsAnalyticsDbPath(): string {
   const configured = process.env.US_ANALYTICS_DB_PATH?.trim()
   if (configured) return resolveConfiguredStoragePath(path.resolve(configured))
 
-  const localPath = path.join(/* turbopackIgnore: true */ process.cwd(), DEFAULT_US_ANALYTICS_PATH)
-  if (fs.existsSync(localPath)) return localPath
-  return fs.existsSync(EXTERNAL_US_ANALYTICS_PATH) ? EXTERNAL_US_ANALYTICS_PATH : localPath
+  // External production storage is explicit-only. A development process without
+  // identity configuration must never discover and open the live US database.
+  return path.join(/* turbopackIgnore: true */ process.cwd(), DEFAULT_US_ANALYTICS_PATH)
 }
 
 export function hasUsAnalyticsDb(): boolean {
