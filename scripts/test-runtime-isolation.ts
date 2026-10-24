@@ -12,6 +12,7 @@ import {
   type VolumeIdentity,
 } from '@/lib/storage/external-storage-guard'
 import {
+  OWC_DEVELOPMENT_MOUNT,
   SCRUBBED_RUNTIME_CREDENTIALS,
   assertIsolatedRuntimeEnvironment,
   createIsolatedRuntimeEnvironment,
@@ -129,15 +130,25 @@ async function main(): Promise<void> {
     Object.assign(process.env, originalEnvironment)
 
     const owcDevelopmentRoot = '/Volumes/OWC Express 1M2 80G/development/worktree/.stockboard-development'
-    const owcDevelopment = createIsolatedRuntimeEnvironment('development', owcDevelopmentRoot, {
+    const developmentRuntimeRoot = fs.existsSync(OWC_DEVELOPMENT_MOUNT)
+      ? owcDevelopmentRoot
+      : path.join(temporary, 'owc-development-fixture')
+    if (!fs.existsSync(OWC_DEVELOPMENT_MOUNT)) {
+      assert.throws(
+        () => createIsolatedRuntimeEnvironment('development', owcDevelopmentRoot, { NODE_ENV: 'development' }),
+        /OWC development volume is not mounted/,
+        'a missing OWC volume must fail closed on generic CI runners',
+      )
+    }
+    const owcDevelopment = createIsolatedRuntimeEnvironment('development', developmentRuntimeRoot, {
       NODE_ENV: 'development',
     })
     assert.equal(assertIsolatedRuntimeEnvironment(owcDevelopment), 'development')
     Object.assign(process.env, owcDevelopment)
     assert.equal(
-      requiresExternalStorageGuard(path.join(owcDevelopmentRoot, 'data', 'stockboard.db')),
+      requiresExternalStorageGuard(path.join(developmentRuntimeRoot, 'data', 'stockboard.db')),
       false,
-      'the pinned OWC development database must not engage the Production volume guard',
+      'the pinned development database must not engage the Production volume guard',
     )
     assert.throws(
       () => requiresExternalStorageGuard('/Volumes/OWC Express 1M2 80G/stockboard-data/stockboard.db'),
@@ -146,7 +157,9 @@ async function main(): Promise<void> {
     )
     Object.assign(process.env, originalEnvironment)
 
-    const previewRoot = '/Volumes/OWC Express 1M2 80G/development/worktree/.stockboard-preview'
+    const previewRoot = fs.existsSync(OWC_DEVELOPMENT_MOUNT)
+      ? '/Volumes/OWC Express 1M2 80G/development/worktree/.stockboard-preview'
+      : path.join(temporary, 'owc-preview-fixture')
     const preview = createIsolatedRuntimeEnvironment('preview', previewRoot, {
       NODE_ENV: 'production',
       NEXT_DIST_DIR: '.next-preview',
