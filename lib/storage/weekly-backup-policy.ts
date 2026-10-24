@@ -97,6 +97,9 @@ export type WeeklyBackupObservation = {
   sqliteToolsArchiveSha3: string
 }
 
+export type WeeklyBackupDynamicObservation = Omit<WeeklyBackupObservation,
+  'existingCandidatePath' | 'existingCompleteManifest'>
+
 export type MarketVerification = {
   market: Market
   generationId: string
@@ -166,6 +169,13 @@ export function stableJson(value: unknown): string {
 
 export function weeklyBackupPlanSha256(plan: WeeklyBackupPlan): string {
   return createHash('sha256').update(stableJson(plan)).digest('hex')
+}
+
+export function assertWeeklyBackupPlanSha256(plan: WeeklyBackupPlan, expectedSha256: string): string {
+  if (!/^[a-f0-9]{64}$/.test(expectedSha256)) throw new Error('INVALID_APPROVED_PLAN_SHA256')
+  const actualSha256 = weeklyBackupPlanSha256(plan)
+  if (actualSha256 !== expectedSha256) throw new Error('WEEKLY_BACKUP_PLAN_SHA256_MISMATCH')
+  return actualSha256
 }
 
 function assertFiniteNonNegative(name: string, value: number): void {
@@ -273,6 +283,17 @@ export function assertWeeklyBackupPreflight(plan: WeeklyBackupPlan, observed: We
   if (!Number.isFinite(now) || now < Date.parse(plan.startsAt) || now >= Date.parse(plan.mustStartBefore)) {
     throw new Error('OUTSIDE_APPROVED_START_WINDOW')
   }
+  assertWeeklyBackupDynamicGate(plan, observed)
+  if (observed.existingCandidatePath || observed.existingCompleteManifest) throw new Error('RUN_ID_COLLISION')
+}
+
+export function assertWeeklyBackupDynamicGate(
+  plan: WeeklyBackupPlan,
+  observed: WeeklyBackupDynamicObservation,
+): void {
+  validateWeeklyBackupPlan(plan)
+  const now = Date.parse(observed.now)
+  if (!Number.isFinite(now)) throw new Error('INVALID_OBSERVATION_TIME')
   if (now + plan.maximumWriterHoldMs + plan.maximumVerificationMs > Date.parse(plan.mustFinishBefore)) {
     throw new Error('REMAINING_EXECUTION_WINDOW_TOO_SHORT')
   }
@@ -301,7 +322,6 @@ export function assertWeeklyBackupPreflight(plan: WeeklyBackupPlan, observed: We
   if (observed.writerLockOwners.length > 0) throw new Error('ACTIVE_WRITER_LOCK')
   if (observed.updateWindowConflict) throw new Error('DAILY_UPDATE_WINDOW_CONFLICT')
   if (!observed.webHealthy || !observed.analogHealthy) throw new Error('READ_SERVICE_NOT_HEALTHY')
-  if (observed.existingCandidatePath || observed.existingCompleteManifest) throw new Error('RUN_ID_COLLISION')
   const active = new Set(observed.activeWriterLabels)
   for (const label of active) {
     if (!plan.writerLabels.includes(label)) throw new Error(`UNAPPROVED_ACTIVE_WRITER:${label}`)

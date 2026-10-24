@@ -9,6 +9,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { configForDatabase, inspectStorage } from '../lib/storage/external-storage-guard'
+import { launchAgentLargeHolderEnvironmentXml } from './lib/launchagent-large-holder-environment'
 
 const webLabel = 'com.stockboard.web'
 const analogLabel = 'com.stockboard.analog-search'
@@ -55,6 +56,7 @@ const storageEnvironment = `
     <key>STOCK_DATA_VOLUME_UUID</key><string>${xmlEscape(storageConfig.volumeUuid)}</string>
     <key>STOCK_DATA_MIN_FREE_BYTES</key><string>${storageConfig.minFreeBytes}</string>
     <key>STOCK_DATA_MIN_FREE_PERCENT</key><string>${storageConfig.minFreePercent}</string>`
+const largeHolderEnvironment = launchAgentLargeHolderEnvironmentXml()
 const healthIntervalSeconds = integerEnv('STOCKBOARD_WEB_HEALTH_INTERVAL_SECONDS', 60, 30, 3600)
 const healthTimeoutSeconds = integerEnv('STOCKBOARD_WEB_HEALTH_TIMEOUT_SECONDS', 20, 5, 120)
 const healthFailureThreshold = integerEnv('STOCKBOARD_WEB_HEALTH_FAILURE_THRESHOLD', 3, 2, 10)
@@ -164,6 +166,7 @@ const webPlist = `<?xml version="1.0" encoding="UTF-8"?>
     <key>US_SQLITE_BUSY_RETRIES</key><string>3</string>
     <key>US_ANALYTICS_DB_PATH</key><string>${xmlEscape(usAnalyticsDbPath)}</string>
     <key>USE_LOCAL_DB</key><string>1</string>
+    ${largeHolderEnvironment}
     ${storageEnvironment}
   </dict>
   <key>RunAtLoad</key>
@@ -224,6 +227,7 @@ const analogPlist = `<?xml version="1.0" encoding="UTF-8"?>
     <key>US_SQLITE_BUSY_RETRIES</key><string>3</string>
     <key>US_ANALYTICS_DB_PATH</key><string>${xmlEscape(usAnalyticsDbPath)}</string>
     <key>USE_LOCAL_DB</key><string>1</string>
+    ${largeHolderEnvironment}
     ${storageEnvironment}
   </dict>
   <key>RunAtLoad</key>

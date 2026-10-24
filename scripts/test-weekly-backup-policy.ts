@@ -6,6 +6,7 @@ import {
   WEEKLY_BACKUP_READER_LABELS,
   WEEKLY_BACKUP_SCHEMA_VERSION,
   WEEKLY_BACKUP_WRITER_LABELS,
+  assertWeeklyBackupPlanSha256,
   assertWeeklyBackupPreflight,
   availableCandidateGrowthBytes,
   buildWeeklyBackupCompleteManifest,
@@ -132,6 +133,11 @@ const initialPlanHash = weeklyBackupPlanSha256(initialPlan)
 const frozenPlanHash = fs.readFileSync(
   'docs/production-weekly-backup-initial-plan-20261101.sha256', 'utf8').trim().split(/\s+/)[0]
 assert.equal(initialPlanHash, frozenPlanHash)
+assert.equal(assertWeeklyBackupPlanSha256(initialPlan, frozenPlanHash), frozenPlanHash)
+assert.throws(() => assertWeeklyBackupPlanSha256(initialPlan, '0'.repeat(64)),
+  /WEEKLY_BACKUP_PLAN_SHA256_MISMATCH/)
+assert.throws(() => assertWeeklyBackupPlanSha256(initialPlan, 'not-a-sha'),
+  /INVALID_APPROVED_PLAN_SHA256/)
 assert.equal(initialPlan.runbookSha256, createHash('sha256')
   .update(fs.readFileSync('docs/production-weekly-backup-runbook.md')).digest('hex'))
 

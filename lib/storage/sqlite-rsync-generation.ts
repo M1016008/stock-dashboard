@@ -123,6 +123,7 @@ export async function runMonitoredSqliteRsync(args: {
   candidateDatabasePath: string
   limits: RsyncMonitorLimits
   assertRuntimeIdentity: () => void
+  readDestinationFreeBytes?: () => number
   onProgress?: (progress: RsyncProgress) => void
 }): Promise<{ elapsedMs: number; sourceWalGrowthBytes: number; stderr: string }> {
   assertRegularFile(args.sqliteRsyncBinary)
@@ -146,7 +147,7 @@ export async function runMonitoredSqliteRsync(args: {
     }
     const currentWalBytes = walBytes(args.limits.sourceWalPath)
     const growth = Math.abs(currentWalBytes - args.limits.sourceWalBytesAtStart)
-    const available = freeBytes(args.limits.destinationMount)
+    const available = args.readDestinationFreeBytes?.() ?? freeBytes(args.limits.destinationMount)
     const candidateGrowth = Math.max(0, args.limits.destinationFreeBytesAtStart - available)
     const sourceStat = fs.lstatSync(args.sourceDatabasePath)
     peakWalGrowthBytes = Math.max(peakWalGrowthBytes, growth)

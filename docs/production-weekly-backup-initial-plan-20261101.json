@@ -52,7 +52,7 @@
     "com.stockboard.friend-readonly-gateway",
     "com.stockboard.web-health"
   ],
-  "runbookSha256": "4d5c19041191ddea805b0ab581818883873da31b4548620928831f6c3a2972ab",
+  "runbookSha256": "9ef83ea866f4da88ed5376309a79065c8a1fa34d0ec0d59563d08a2b2a667bfa",
   "priorManifestPath": "/Volumes/StockBoard Backup/stockboard-production-backups/stockboard-offline-acquisition-20261023-v1/BACKUP_ACQUIRED_WITH_LIMITATIONS.manifest.json",
   "priorManifestSha256": "eaefec017376a0a94d2929f95aceb4b0dd5f251be8b189fdf2f8bb3032947e64",
   "sqliteVersion": "3.54.1",

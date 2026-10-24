@@ -112,6 +112,7 @@ try {
     sourceDatabasePath: capacityOrigin,
     candidateDatabasePath: capacityCandidate,
     assertRuntimeIdentity: () => undefined,
+    readDestinationFreeBytes: () => tmpFree,
     limits: {
       deadlineMs: Date.now() + 60_000,
       destinationMount: os.tmpdir(),

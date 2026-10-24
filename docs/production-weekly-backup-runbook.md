@@ -9,6 +9,9 @@ weekly scheduling are not authorized by this document.
    serial, APFS volume UUID, mount, and canonical path.
 2. Require a one-shot plan whose SHA-256, run ID, start window, source paths,
    prior generation, tool identity, limits, and operator approval all match.
+   The preflight command requires the approved digest as
+   `--expected-plan-sha256`; calculating and printing a new digest is not an
+   approval substitute.
 3. Keep Web, Analog Search, Friend Gateway, and Web Health online. Temporarily
    boot out only the complete approved writer/coordinator allowlist. Preserve
    each label's prior loaded/disabled state.
@@ -33,6 +36,12 @@ weekly scheduling are not authorized by this document.
    overall execution window.
 9. Recheck both market generation IDs and all checkpoint hashes. Publish a new
    `COMPLETE.manifest.json` atomically only after every check passes.
+
+`runWeeklyBackupGeneration` is the only acquisition/promotion orchestrator. It
+enforces the approved plan digest before writing, verifies the frozen runbook,
+prior manifest, and SQLite tool binaries, applies one Writer Hold around the JP
+then US syncs, restores writers, and only then starts the shared destination-only
+verification deadline. A failure leaves the candidate unpublished.
 
 ## Existing generation
 
@@ -88,6 +97,9 @@ upstream archive SHA3-256. No binary is discovered from `PATH` at execution.
   growth cap, absolute WAL cap, and zero WAL-growth cap;
 - approval for the backup-only Production SQLite read connections, temporary
   writer/coordinator hold, and new candidate writes on SanDisk;
+- the approved plan SHA-256 supplied unchanged to both preflight and execution,
+  plus the canonical LaunchAgent definition hashes and executable paths used by
+  the Writer Hold driver;
 - the operator responsible for abort and restoration of the prior LaunchAgent
   state.
 
@@ -96,6 +108,7 @@ generation completes successfully. The first run does not authorize automatic
 deletion, rotation, Production schema changes, Storage Guard changes, or
 research access.
 
-The two optional SanDisk hardware-fixture scripts are separately gated by the
-exact `STOCKBOARD_WEEKLY_BACKUP_HARDWARE_QA` confirmation phrase in their source.
-Normal CI and ordinary npm invocation cannot write those fixtures.
+The two optional SanDisk hardware-fixture scripts are separately gated by
+`STOCKBOARD_WEEKLY_BACKUP_HARDWARE_QA` having the exact value
+`WRITE_ISOLATED_WEEKLY_BACKUP_FIXTURE_TO_APPROVED_SANDISK`. Normal CI and
+ordinary npm invocation cannot write those fixtures.
