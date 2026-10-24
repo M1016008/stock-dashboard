@@ -18,6 +18,9 @@ import { resolveConfiguredStoragePath } from '../storage-paths'
 import path from 'path'
 import fs from 'fs'
 import { guardForDatabase, isStorageIoError, requiresExternalStorageGuard, type ExternalStorageGuard } from '../storage/external-storage-guard'
+import { assertDatabaseOpenAllowed, assertIsolatedRuntimeEnvironment } from '../runtime/isolation'
+
+if (process.env.STOCKBOARD_RUNTIME_SCOPE) assertIsolatedRuntimeEnvironment()
 
 const TURSO_URL = process.env.TURSO_DATABASE_URL
 const TURSO_TOKEN = process.env.TURSO_AUTH_TOKEN
@@ -59,6 +62,7 @@ function storageGuard(): ExternalStorageGuard | null {
 }
 
 function realClient(): Client {
+  assertDatabaseOpenAllowed()
   const guard = storageGuard()
   guard?.assertWritable()
   if (!globalForDb.libsql) {

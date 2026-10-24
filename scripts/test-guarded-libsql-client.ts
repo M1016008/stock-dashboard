@@ -38,6 +38,7 @@ async function main(): Promise<void> {
     assert.equal(fs.existsSync(missingAnalogPath), false, 'an optional analog read must not create its artifact')
 
     const absentMount = `/Volumes/stockboard-guarded-client-missing-${process.pid}`
+    Reflect.set(process.env, 'NODE_ENV', 'production')
     process.env.STOCK_DATA_MOUNT_PATH = absentMount
     process.env.STOCK_DATA_VOLUME_UUID = 'fixture-uuid'
     process.env.STOCK_DATA_INCIDENT_DIR = directory
