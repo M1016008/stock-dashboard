@@ -13,6 +13,7 @@ import {
 } from '@/lib/storage/external-storage-guard'
 import {
   OWC_DEVELOPMENT_MOUNT,
+  OWC_WORKTREE_ROOT,
   SCRUBBED_RUNTIME_CREDENTIALS,
   assertIsolatedRuntimeEnvironment,
   createIsolatedRuntimeEnvironment,
@@ -115,6 +116,17 @@ async function main(): Promise<void> {
     assert.equal(isolated.HOME, path.join(resolvedIsolationRoot, 'home'))
     assert.equal(isolated.TMPDIR, path.join(resolvedIsolationRoot, 'tmp'))
     assert.equal(isolated.NEXT_TELEMETRY_DISABLED, '1')
+    assert.equal(isolated.SIX_STAGE_REAL_RESEARCH_ONLY, undefined)
+    assert.equal(isolated.STOCKBOARD_FIXTURE_ONLY, undefined)
+
+    const researchTest = createIsolatedRuntimeEnvironment('test', path.join(temporary, 'research-test'), {
+      ...poisoned,
+      SIX_STAGE_REAL_RESEARCH_ONLY: '1',
+      STOCKBOARD_FIXTURE_ONLY: '1',
+    })
+    assert.equal(assertIsolatedRuntimeEnvironment(researchTest), 'test')
+    assert.equal(researchTest.SIX_STAGE_REAL_RESEARCH_ONLY, '1')
+    assert.equal(researchTest.STOCKBOARD_FIXTURE_ONLY, '1')
 
     fs.mkdirSync(resolvedIsolationRoot, { recursive: true })
     const outsideIsolation = path.join(temporary, 'outside-isolation')
@@ -168,6 +180,8 @@ async function main(): Promise<void> {
     assert.equal(preview.NODE_ENV, 'production')
     assert.equal(preview.STOCKBOARD_DB_OPEN_FORBIDDEN, '0')
     assert.equal(preview.NEXT_DIST_DIR, '.next-preview')
+    assert.equal(preview.SIX_STAGE_REAL_RESEARCH_ONLY, undefined)
+    assert.equal(preview.STOCKBOARD_FIXTURE_ONLY, undefined)
     Object.assign(process.env, preview)
     assert.equal(
       requiresExternalStorageGuard(path.join(previewRoot, 'data', 'stockboard.db')),
@@ -175,6 +189,15 @@ async function main(): Promise<void> {
       'the pinned OWC preview database must not engage the Production volume guard',
     )
     Object.assign(process.env, originalEnvironment)
+    if (fs.existsSync(OWC_DEVELOPMENT_MOUNT)) {
+      const migratedWorktree = createIsolatedRuntimeEnvironment(
+        'development',
+        path.join(OWC_WORKTREE_ROOT, 'git-worktrees', 'fixture', '.stockboard-development'),
+        { NODE_ENV: 'development', SIX_STAGE_REAL_RESEARCH_ONLY: '1' },
+      )
+      assert.equal(assertIsolatedRuntimeEnvironment(migratedWorktree), 'development')
+      assert.equal(migratedWorktree.SIX_STAGE_REAL_RESEARCH_ONLY, '1')
+    }
     assert.throws(
       () => createIsolatedRuntimeEnvironment(
         'development',
