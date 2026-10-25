@@ -27,6 +27,11 @@ import {
   currentServingProjectionRunnerInvocation,
   runAttestedCurrentServingProjection,
 } from '@/lib/research/six-stage-current-serving-runner-process'
+import {
+  currentServingQueryOnlyQuery,
+  enforceCurrentServingQueryOnly,
+  resolveCurrentServingProjectionDatabasePaths,
+} from '@/lib/research/six-stage-current-serving-guarded-query'
 
 const DATES = ['2026-10-19', '2026-10-20', '2026-10-21', '2026-10-22', '2026-10-23']
 
@@ -268,6 +273,44 @@ await import(pathToFileURL(process.argv.at(-1)).href)
     const jpClient = await fixtureDatabase(path.join(temporary, 'jp.sqlite'), 'JP')
     const usClient = await fixtureDatabase(path.join(temporary, 'us.sqlite'), 'US')
     clients.push(jpClient, usClient)
+    const readOnlyClient = createClient({ url: `file:${path.join(temporary, 'jp.sqlite')}` })
+    clients.push(readOnlyClient)
+    await enforceCurrentServingQueryOnly(readOnlyClient)
+    const guardedQuery = currentServingQueryOnlyQuery(readOnlyClient)
+    assert.equal((await guardedQuery<{ ticker: string }>(
+      `SELECT ticker FROM ticker_universe WHERE ticker = ?`, ['AAA'],
+    ))[0]?.ticker, 'AAA')
+    await assert.rejects(
+      () => guardedQuery(`UPDATE ticker_universe SET name = 'Changed' WHERE ticker = 'AAA'`),
+      /MUTATING_SQL_REJECTED/,
+    )
+    await assert.rejects(
+      () => readOnlyClient.execute(`DELETE FROM ticker_universe WHERE ticker = 'AAA'`),
+      /read.?only|SQLITE_READONLY/i,
+    )
+    assert.deepEqual(resolveCurrentServingProjectionDatabasePaths('JP', {
+      STOCKBOARD_DB_PATH: path.join(temporary, 'jp.sqlite'),
+    }), {
+      jp: path.join(temporary, 'jp.sqlite'),
+      source: path.join(temporary, 'jp.sqlite'),
+    })
+    assert.deepEqual(resolveCurrentServingProjectionDatabasePaths('US', {
+      STOCKBOARD_SOURCE_DB_PATH: path.join(temporary, 'jp.sqlite'),
+      STOCKBOARD_DB_PATH: path.join(temporary, 'jp.sqlite'),
+      US_ANALYTICS_DB_PATH: path.join(temporary, 'us.sqlite'),
+    }), {
+      jp: path.join(temporary, 'jp.sqlite'),
+      source: path.join(temporary, 'us.sqlite'),
+    })
+    assert.throws(() => resolveCurrentServingProjectionDatabasePaths('US', {
+      STOCKBOARD_SOURCE_DB_PATH: path.join(temporary, 'not-primary.sqlite'),
+      STOCKBOARD_DB_PATH: path.join(temporary, 'jp.sqlite'),
+      US_ANALYTICS_DB_PATH: path.join(temporary, 'us.sqlite'),
+    }), /PRIMARY_DATABASE_PATH_CONFLICT/)
+    assert.throws(() => resolveCurrentServingProjectionDatabasePaths('US', {
+      STOCKBOARD_DB_PATH: path.join(temporary, 'jp.sqlite'),
+      US_ANALYTICS_DB_PATH: path.join(temporary, 'jp.sqlite'),
+    }), /MARKET_DATABASES_NOT_ISOLATED/)
     const deadlineMs = Date.now() + 60_000
     await assertCurrentServingProjectionUpdateLock({
       market: 'JP', owner: 'update_latest:123:fixture', query: query(jpClient),
@@ -525,6 +568,8 @@ await import(pathToFileURL(process.argv.at(-1)).href)
       processGroupDeadlineEnforced: true,
       pinnedRunnerAttestation: true,
       updateLockAttested: true,
+      independentGuardedQueryOnlyReaders: true,
+      mutatingSqlRejected: true,
       boundedQueryPlan: true,
     }, null, 2))
   } finally {

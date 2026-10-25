@@ -2,14 +2,12 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { ML_PHYSICS_FEATURE_SET } from '@/lib/backtest/ml-physics'
-import { execAll } from '@/lib/db/client'
-import { execUsAnalyticsAll } from '@/lib/db/us-analytics'
 import {
   assertCurrentServingProjectionUpdateLock,
   CURRENT_SERVING_PRICE_BASIS,
   loadCurrentServingMarketProjection,
-  type CurrentServingQuery,
 } from '@/lib/research/six-stage-current-serving-adapter'
+import { openCurrentServingProjectionReaders } from '@/lib/research/six-stage-current-serving-guarded-query'
 import { CURRENT_SERVING_PROJECTION_DEFINITION_VERSION } from '@/lib/research/six-stage-current-serving-projection'
 import {
   publishCurrentServingProjectionFromStages,
@@ -100,12 +98,6 @@ function assertOutputRoot(root: string): void {
   }
 }
 
-function queryFor(selectedMarket: 'JP' | 'US'): CurrentServingQuery {
-  return selectedMarket === 'JP'
-    ? ((sql, args = []) => execAll(sql, args))
-    : ((sql, args = []) => execUsAnalyticsAll(sql, args))
-}
-
 function stageAlreadySelected(root: string, stage: CurrentServingMarketStage): boolean {
   try {
     const current = readCurrentServingMarketStage({ root, market: stage.market })
@@ -192,57 +184,62 @@ async function main(): Promise<void> {
   const deadlineMs = startedAt + MAX_RUNTIME_MS
   const root = resolveSixStageCurrentProjectionRoot(required('CURRENT_SERVING_PROJECTION_ROOT'))
   assertOutputRoot(root)
-  await assertCurrentServingProjectionUpdateLock({
-    market: selectedMarket,
-    owner: required('CURRENT_SERVING_PROJECTION_UPDATE_LOCK_OWNER'),
-    query: (sql, args = []) => execAll(sql, args),
-  })
-  const loaded = await loadCurrentServingMarketProjection({
-    market: selectedMarket,
-    query: queryFor(selectedMarket),
-    priceBasis: CURRENT_SERVING_PRICE_BASIS[selectedMarket],
-    featureSet: ML_PHYSICS_FEATURE_SET,
-    deadlineMs,
-    minRows: requiredPositiveInteger(`CURRENT_SERVING_PROJECTION_${selectedMarket}_MIN_ROWS`),
-    minAuxiliaryCoverage: requiredRatio('CURRENT_SERVING_PROJECTION_MIN_AUXILIARY_COVERAGE'),
-  })
-  const stage: CurrentServingMarketStage = {
-    kind: 'stockboard-six-stage-current-serving-market-stage',
-    status: 'COMPLETE',
-    market: selectedMarket,
-    stagedAt: new Date().toISOString(),
-    definitionVersion: CURRENT_SERVING_PROJECTION_DEFINITION_VERSION,
-    watermark: {
+  const readers = await openCurrentServingProjectionReaders(selectedMarket)
+  try {
+    await assertCurrentServingProjectionUpdateLock({
+      market: selectedMarket,
+      owner: required('CURRENT_SERVING_PROJECTION_UPDATE_LOCK_OWNER'),
+      query: readers.lockQuery,
+    })
+    const loaded = await loadCurrentServingMarketProjection({
+      market: selectedMarket,
+      query: readers.sourceQuery,
+      priceBasis: CURRENT_SERVING_PRICE_BASIS[selectedMarket],
+      featureSet: ML_PHYSICS_FEATURE_SET,
+      deadlineMs,
+      minRows: requiredPositiveInteger(`CURRENT_SERVING_PROJECTION_${selectedMarket}_MIN_ROWS`),
+      minAuxiliaryCoverage: requiredRatio('CURRENT_SERVING_PROJECTION_MIN_AUXILIARY_COVERAGE'),
+    })
+    const stage: CurrentServingMarketStage = {
+      kind: 'stockboard-six-stage-current-serving-market-stage',
+      status: 'COMPLETE',
+      market: selectedMarket,
+      stagedAt: new Date().toISOString(),
+      definitionVersion: CURRENT_SERVING_PROJECTION_DEFINITION_VERSION,
+      watermark: {
+        asOfTradingDate: loaded.watermark.asOfTradingDate,
+        sourceGeneration: loaded.watermark.sourceGeneration,
+        priceBasis: loaded.watermark.priceBasis,
+        featureSet: loaded.watermark.featureSet,
+        rows: loaded.rows.length,
+        coverage: {
+          snapshotRows: loaded.watermark.snapshotRows,
+          eligibleRows: loaded.watermark.eligibleRows,
+          universeRows: loaded.watermark.universeRows,
+          universeIdentityRows: loaded.watermark.universeIdentityRows,
+          closeRows: loaded.watermark.closeRows,
+          mlRows: loaded.watermark.mlRows,
+          smaRows: loaded.watermark.smaRows,
+          physicalRows: loaded.watermark.physicalRows,
+        },
+      },
+      rows: loaded.rows,
+    }
+    if (!stageAlreadySelected(root, stage)) stageCurrentServingMarket({ root, stage })
+    if (Date.now() >= deadlineMs) throw new Error('CURRENT_PROJECTION_DEADLINE_EXCEEDED')
+    const publication = combineIfReady(root)
+    console.log(JSON.stringify({
+      status: 'PASS',
+      market: selectedMarket,
       asOfTradingDate: loaded.watermark.asOfTradingDate,
       sourceGeneration: loaded.watermark.sourceGeneration,
-      priceBasis: loaded.watermark.priceBasis,
-      featureSet: loaded.watermark.featureSet,
       rows: loaded.rows.length,
-      coverage: {
-        snapshotRows: loaded.watermark.snapshotRows,
-        eligibleRows: loaded.watermark.eligibleRows,
-        universeRows: loaded.watermark.universeRows,
-        universeIdentityRows: loaded.watermark.universeIdentityRows,
-        closeRows: loaded.watermark.closeRows,
-        mlRows: loaded.watermark.mlRows,
-        smaRows: loaded.watermark.smaRows,
-        physicalRows: loaded.watermark.physicalRows,
-      },
-    },
-    rows: loaded.rows,
+      publication,
+      elapsedMs: Date.now() - startedAt,
+    }))
+  } finally {
+    readers.close()
   }
-  if (!stageAlreadySelected(root, stage)) stageCurrentServingMarket({ root, stage })
-  if (Date.now() >= deadlineMs) throw new Error('CURRENT_PROJECTION_DEADLINE_EXCEEDED')
-  const publication = combineIfReady(root)
-  console.log(JSON.stringify({
-    status: 'PASS',
-    market: selectedMarket,
-    asOfTradingDate: loaded.watermark.asOfTradingDate,
-    sourceGeneration: loaded.watermark.sourceGeneration,
-    rows: loaded.rows.length,
-    publication,
-    elapsedMs: Date.now() - startedAt,
-  }))
 }
 
 main().catch((error) => {
