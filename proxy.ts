@@ -97,6 +97,25 @@ function isAuthorized(req: NextRequest): boolean {
 
 export function proxy(req: NextRequest) {
   const pathname = req.nextUrl.pathname
+  if (process.env.SIX_STAGE_REAL_RESEARCH_ONLY === '1') {
+    const loopback = req.nextUrl.hostname === '127.0.0.1' || req.nextUrl.hostname === 'localhost' || req.nextUrl.hostname === '::1' || req.nextUrl.hostname === '[::1]'
+    const allowed = pathname === '/dev/six-stage-event-paths'
+      || pathname === '/dev/six-stage-event-matching'
+      || pathname === '/api/research/six-stage/event-paths'
+    if (!loopback || !allowed) return new NextResponse('Not Found', { status: 404 })
+    const researchResponse = NextResponse.next()
+    researchResponse.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
+    return researchResponse
+  }
+  if (process.env.STOCKBOARD_FIXTURE_ONLY === '1') {
+    const loopback = req.nextUrl.hostname === '127.0.0.1' || req.nextUrl.hostname === 'localhost' || req.nextUrl.hostname === '::1' || req.nextUrl.hostname === '[::1]'
+    const allowed = pathname === '/dev/six-stage-event-paths'
+      || pathname === '/dev/six-stage-event-matching'
+    if (!loopback || !allowed) return new NextResponse('Not Found', { status: 404 })
+    const fixtureResponse = NextResponse.next()
+    fixtureResponse.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
+    return fixtureResponse
+  }
   // Health reports storage degradation without hiding the running web process.
   if (pathname === '/api/health') return NextResponse.next()
   if (anyStorageFatal() || anyStorageUncertain()) return unavailable('STORAGE_UNAVAILABLE')
