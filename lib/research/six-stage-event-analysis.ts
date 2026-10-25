@@ -20,7 +20,7 @@ export const EVENT_SMA_INDEPENDENT_SIMILARITY_FEATURES = EVENT_SMA_SIMILARITY_FE
 
 // SMA-derived angles/order are deliberately absent here to avoid double-counting.
 export const EVENT_PHYSICAL_SIMILARITY_FEATURES = [
-  'velocity', 'acceleration', 'momentum', 'force', 'pms', 'pfs', 'pes',
+  'velocity', 'acceleration', 'momentum', 'force', 'energy', 'pms', 'pfs', 'pes',
 ] as const
 
 export type EventSmaSimilarityFeature = typeof EVENT_SMA_SIMILARITY_FEATURES[number]
@@ -32,7 +32,7 @@ export type EventSimilarityVector = {
   ticker: string
   signalDate: string
   sequenceKey: string
-  cAge: number
+  cAge: number | null
   sma: Partial<Record<EventSmaSimilarityFeature, number | null>>
   physical: Partial<Record<EventPhysicalSimilarityFeature, number | null>>
 }
@@ -129,8 +129,17 @@ export function compareEventSimilarity(input: {
     if (!(Number(weight) >= 0) || !Number.isFinite(Number(weight))) throw new Error(`invalid layer weight: ${key}`)
   }
   const exactSequence = input.base.sequenceKey === input.candidate.sequenceKey ? 1 : 0
-  const ageScore = Math.exp(-Math.abs(input.base.cAge - input.candidate.cAge) / 10)
-  const transition = { score: (exactSequence * 3 + ageScore) / 4, coverage: 1 }
+  const baseAge = input.base.cAge
+  const candidateAge = input.candidate.cAge
+  const ageAvailable = finite(baseAge) && finite(candidateAge)
+  const transitionWeight = ageAvailable ? 4 : 3
+  const ageScore = ageAvailable
+    ? Math.exp(-Math.abs(baseAge - candidateAge) / 10)
+    : 0
+  const transition = {
+    score: (exactSequence * 3 + ageScore) / transitionWeight,
+    coverage: transitionWeight / 4,
+  }
   const sma = numericLayer({
     base: input.base.sma,
     candidate: input.candidate.sma,

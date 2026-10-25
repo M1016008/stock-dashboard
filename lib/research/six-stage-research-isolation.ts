@@ -81,8 +81,12 @@ export function isSixStageResearchPath(pathname: string): boolean {
   return pathname === '/dev/six-stage-event-paths'
     || pathname === '/dev/six-stage-event-matching'
     || pathname === '/api/research/six-stage/event-paths'
+    || pathname === '/api/research/six-stage/current-projection'
 }
 
 export function requiredSixStageResearchMode(pathname: string): SixStageResearchMode {
-  return pathname === '/dev/six-stage-event-matching' ? 'fixture' : 'real'
+  return pathname === '/dev/six-stage-event-matching'
+    || pathname === '/api/research/six-stage/current-projection'
+    ? 'fixture'
+    : 'real'
 }
