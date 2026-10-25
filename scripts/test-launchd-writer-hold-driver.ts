@@ -33,10 +33,11 @@ try {
   const disabledWriter = identity('writer.disabled.fixture', '/approved/disabled-writer')
   const reader = identity('reader.fixture', '/approved/reader')
   const loaded = new Set([writer.label, reader.label])
+  const liveProcessGroups = new Set([202])
   let lsof: CommandResult = {
     status: 0,
     signal: null,
-    stdout: 'p101\ncreader\nn/fixture/stockboard.db\np4242\ncworker\nn/fixture/stockboard.db-wal\n',
+    stdout: 'p101\ncreader\nn/fixture/stockboard.db\np4242\ncworker\nn/fixture/stockboard.db-wal\np303\ncwriter\nn/fixture/stockboard.db-shm\n',
     stderr: '',
   }
   let lsofArguments: readonly string[] = []
@@ -63,13 +64,25 @@ try {
       return { status: 0, signal: null, stdout: `state = running\npid = ${pid}\n`, stderr: '' }
     }
     if (file === '/bin/launchctl' && args[0] === 'bootout') {
-      loaded.delete(args[1].split('/').at(-1)!)
+      const label = args[1].split('/').at(-1)!
+      loaded.delete(label)
+      if (label === writer.label) liveProcessGroups.delete(202)
       return { status: 0, signal: null, stdout: '', stderr: '' }
     }
     if (file === '/bin/launchctl' && args[0] === 'bootstrap') {
       const definition = [...definitions.values()].find((value) => value.plistPath === args[2])!
       loaded.add(definition.label)
+      if (definition.label === writer.label) liveProcessGroups.add(202)
       return { status: 0, signal: null, stdout: '', stderr: '' }
+    }
+    if (file === '/bin/ps' && args[0] === '-o') {
+      const pid = Number(args.at(-1))
+      return pid === 101 || pid === 202
+        ? { status: 0, signal: null, stdout: `${pid}\n`, stderr: '' }
+        : { status: 1, signal: null, stdout: '', stderr: '' }
+    }
+    if (file === '/bin/ps' && args[0] === '-axo') {
+      return { status: 0, signal: null, stdout: [...liveProcessGroups].join('\n'), stderr: '' }
     }
     if (file === '/usr/sbin/lsof') {
       lsofArguments = args
@@ -87,9 +100,14 @@ try {
     loaded: false,
     disabled: true,
     instances: 0,
+    pid: null,
+    processGroupId: null,
   })
+  assert.equal((await driver.observe(writer.label)).processGroupId, 202)
+  assert.equal(await driver.processGroupAlive(202), true)
   await driver.bootout(writer.label)
   assert.equal((await driver.observe(writer.label)).loaded, false)
+  assert.equal(await driver.processGroupAlive(202), false)
   await driver.bootstrap(writer.label)
   assert.equal((await driver.observe(writer.label)).loaded, true)
 
@@ -97,12 +115,13 @@ try {
     databasePath: '/fixture/stockboard.db',
     approvedReaders: [reader],
     workerPid: 4242,
+    additionallyApprovedPids: [303],
     timeoutMs: 1_000,
     run,
     uid: 501,
     exists: () => true,
   })
-  assert.deepEqual(accepted.map((handle) => handle.pid), [101, 4242])
+  assert.deepEqual(accepted.map((handle) => handle.pid), [101, 4242, 303])
 
   lsof = { status: 1, signal: null, stdout: '', stderr: '' }
   assert.deepEqual(assertNoUnauthorizedDatabaseHandles({

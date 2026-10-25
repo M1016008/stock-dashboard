@@ -77,6 +77,24 @@ function launchdPrint(label: string, run: CommandRunner, uid: number): CommandRe
   return run('/bin/launchctl', ['print', `gui/${uid}/${label}`], 5_000)
 }
 
+function processGroupId(pid: number, run: CommandRunner): number | null {
+  const result = run('/bin/ps', ['-o', 'pgid=', '-p', String(pid)], 5_000)
+  if (result.status !== 0) {
+    if (result.status === 1 && !result.stdout.trim() && !result.stderr.trim()
+      && !result.error && !result.signal) return null
+    commandFailure('PROCESS_GROUP_PROBE', result)
+  }
+  const value = Number(result.stdout.trim())
+  if (!Number.isInteger(value) || value <= 0) throw new Error(`PROCESS_GROUP_PROBE_AMBIGUOUS:${pid}`)
+  return value
+}
+
+function processGroupAlive(processGroup: number, run: CommandRunner): boolean {
+  const result = run('/bin/ps', ['-axo', 'pgid='], 5_000)
+  if (result.status !== 0) commandFailure('PROCESS_GROUP_LIST', result)
+  return result.stdout.split(/\s+/).some((value) => Number(value) === processGroup)
+}
+
 function isMissingLaunchdJob(result: CommandResult): boolean {
   return result.status !== 0
     && /could not find service|service not found|no such process/i.test(`${result.stdout}\n${result.stderr}`)
@@ -109,7 +127,12 @@ export function launchdJobPid(label: string, options: {
 
 export function createLaunchdWriterHoldDriver(
   approved: readonly LaunchdRuntimeIdentity[],
-  options: { run?: CommandRunner; uid?: number; now?: () => number } = {},
+  options: {
+    run?: CommandRunner
+    uid?: number
+    now?: () => number
+    sleep?: (milliseconds: number) => Promise<void>
+  } = {},
 ): WriterHoldDriver {
   const run = options.run ?? systemCommandRunner
   const uid = options.uid ?? process.getuid?.()
@@ -123,6 +146,8 @@ export function createLaunchdWriterHoldDriver(
     const result = launchdPrint(label, run, uid as number)
     const loaded = result.status === 0
     if (!loaded && !isMissingLaunchdJob(result)) commandFailure('LAUNCHCTL_PRINT', result)
+    const pidMatch = loaded ? result.stdout.match(/^\s*pid\s*=\s*(\d+)\s*$/m) : null
+    const pid = pidMatch ? Number(pidMatch[1]) : null
     return {
       label,
       definitionSha256: identity.definitionSha256,
@@ -130,6 +155,8 @@ export function createLaunchdWriterHoldDriver(
       loaded,
       disabled: isDisabled(label, run, uid as number),
       instances: loaded ? 1 : 0,
+      pid,
+      processGroupId: pid === null ? null : processGroupId(pid, run),
     }
   }
 
@@ -147,6 +174,10 @@ export function createLaunchdWriterHoldDriver(
       const result = run('/bin/launchctl', ['bootstrap', `gui/${uid}`, identity.plistPath], 10_000)
       if (result.status !== 0) commandFailure('LAUNCHCTL_BOOTSTRAP', result)
     },
+    async processGroupAlive(value) {
+      return processGroupAlive(value, run)
+    },
+    sleep: options.sleep ?? ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds))),
     now: options.now ?? Date.now,
   }
 }
@@ -175,6 +206,7 @@ export function assertNoUnauthorizedDatabaseHandles(args: {
   databasePath: string
   approvedReaders: readonly LaunchdRuntimeIdentity[]
   workerPid?: number
+  additionallyApprovedPids?: readonly number[]
   timeoutMs: number
   run?: CommandRunner
   uid?: number
@@ -191,6 +223,10 @@ export function assertNoUnauthorizedDatabaseHandles(args: {
     if (pid !== null) allowedPids.add(pid)
   }
   if (args.workerPid !== undefined) allowedPids.add(args.workerPid)
+  for (const pid of args.additionallyApprovedPids ?? []) {
+    if (!Number.isInteger(pid) || pid <= 0) throw new Error(`APPROVED_DATABASE_HANDLE_PID_INVALID:${pid}`)
+    allowedPids.add(pid)
+  }
   if (!exists(args.databasePath)) throw new Error('DATABASE_HANDLE_SOURCE_MISSING')
   const files = [args.databasePath, `${args.databasePath}-wal`, `${args.databasePath}-shm`]
     .filter((file) => exists(file))

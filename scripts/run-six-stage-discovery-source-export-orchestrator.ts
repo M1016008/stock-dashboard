@@ -17,6 +17,7 @@ import {
   assertNoUnauthorizedDatabaseHandles,
   createLaunchdWriterHoldDriver,
 } from '@/lib/storage/launchd-writer-hold-driver'
+import { WriterHoldError } from '@/lib/storage/weekly-writer-hold'
 
 const planPath = process.argv[2]
 const expectedPlanHash = process.argv[3]
@@ -134,6 +135,7 @@ async function main(): Promise<void> {
       abortSignal: controller.signal,
       limits: {
         maximumWriterHoldMs: plan.writerAndHealthIsolation.maximumWriterHoldSeconds * 1_000,
+        maximumHandleDrainMs: plan.writerAndHealthIsolation.handleProbeTimeoutSeconds * 1_000,
         maximumSourceReadMs: Math.min(
           plan.resourceLimits.maximumSourceReadSeconds * 1_000,
           (plan.writerAndHealthIsolation.maximumWriterHoldSeconds
@@ -153,11 +155,12 @@ async function main(): Promise<void> {
         ].some((directory) => fs.existsSync(path.join(directory, 'SOURCE_READ_COMPLETE.json'))),
         outputBytes: () => directoryBytes(plan.writeOnceDestination.incompleteDirectory)
           + directoryBytes(plan.writeOnceDestination.finalDirectory),
-        assertHandlePolicy: async (workerPid) => {
+        assertHandlePolicy: async (workerPid, additionallyApprovedPids) => {
           assertNoUnauthorizedDatabaseHandles({
             databasePath: prepared.sourcePath,
             approvedReaders: plan.writerAndHealthIsolation.approvedReaders as SixStageLaunchdIdentity[],
             workerPid,
+            additionallyApprovedPids,
             timeoutMs: plan.writerAndHealthIsolation.handleProbeTimeoutSeconds * 1_000,
           })
         },
@@ -174,7 +177,20 @@ async function main(): Promise<void> {
   }
 }
 
+function serializeError(error: unknown): { name: string; message: string; stack?: string } {
+  if (error instanceof Error) return { name: error.name, message: error.message, stack: error.stack }
+  return { name: 'UnknownError', message: String(error) }
+}
+
 main().catch((error) => {
-  console.error(error)
+  const record = error instanceof WriterHoldError
+    ? {
+        status: 'FAIL',
+        failure: 'WRITER_HOLD',
+        primaryError: error.primaryError === null ? null : serializeError(error.primaryError),
+        restoreErrors: error.restoreErrors.map(serializeError),
+      }
+    : { status: 'FAIL', failure: 'EXECUTION', error: serializeError(error) }
+  process.stderr.write(`${JSON.stringify(record, null, 2)}\n`)
   process.exitCode = 1
 })

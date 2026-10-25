@@ -22,11 +22,12 @@ export type DiscoveryExecutionDriver = Readonly<{
   startWorker: () => DiscoveryWorker
   sourceReadComplete: () => boolean
   outputBytes: () => number
-  assertHandlePolicy: (workerPid?: number) => Promise<void>
+  assertHandlePolicy: (workerPid?: number, additionallyApprovedPids?: readonly number[]) => Promise<void>
 }>
 
 export type DiscoveryExecutionLimits = Readonly<{
   maximumWriterHoldMs: number
+  maximumHandleDrainMs: number
   maximumSourceReadMs: number
   maximumTotalRunMs: number
   maximumOutputBytes: number
@@ -84,17 +85,35 @@ export async function runSixStageDiscoveryExecution(args: {
     if (worker && !workerSettled) await worker.terminate()
   }
 
+  const waitForInitialHandleDrain = async (assertHoldValid: () => Promise<void>) => {
+    const deadline = args.executionDriver.now() + args.limits.maximumHandleDrainMs
+    for (;;) {
+      try {
+        await args.executionDriver.assertHandlePolicy()
+        return
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        if (!message.startsWith('UNAUTHORIZED_DATABASE_HANDLE:')
+          || args.executionDriver.now() >= deadline) throw error
+        assertCommon()
+        await assertHoldValid()
+        await args.executionDriver.sleep(Math.min(args.limits.monitorIntervalMs, 1_000))
+      }
+    }
+  }
+
   let held: { result: DiscoveryWorker; receipt: WriterHoldReceipt }
   try {
     held = await withWeeklyWriterHold({
       approved: args.approvedWriters,
       maximumHoldMs: args.limits.maximumWriterHoldMs,
       driver: args.writerDriver,
+      assertRestoreSafe: async (writerPids) => args.executionDriver.assertHandlePolicy(undefined, writerPids),
       operation: async (assertHoldValid) => {
         try {
           assertCommon()
           await assertHoldValid()
-          await args.executionDriver.assertHandlePolicy()
+          await waitForInitialHandleDrain(assertHoldValid)
           worker = args.executionDriver.startWorker()
           worker.completion.then((result) => {
             workerResult = result
