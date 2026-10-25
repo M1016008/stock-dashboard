@@ -708,16 +708,30 @@ export function inspectStorage(config: GuardConfig, probe: StorageProbe = system
   return volume
 }
 
-function errorCode(error: unknown): string | null {
+function errorCode(error: unknown, seen = new Set<object>()): string | null {
   if (!error || typeof error !== 'object') return null
+  if (seen.has(error)) return null
+  seen.add(error)
   const candidate = error as { code?: unknown; rawCode?: unknown; cause?: unknown }
   return typeof candidate.code === 'string' ? candidate.code
     : typeof candidate.rawCode === 'string' ? candidate.rawCode
-    : candidate.cause ? errorCode(candidate.cause) : null
+    : candidate.cause ? errorCode(candidate.cause, seen) : null
+}
+
+function sqlitePrimaryErrorCode(error: unknown, seen = new Set<object>()): number | null {
+  if (!error || typeof error !== 'object') return null
+  if (seen.has(error)) return null
+  seen.add(error)
+  const candidate = error as { errcode?: unknown; cause?: unknown }
+  if (typeof candidate.errcode === 'number' && Number.isInteger(candidate.errcode)) {
+    return candidate.errcode & 0xff
+  }
+  return candidate.cause ? sqlitePrimaryErrorCode(candidate.cause, seen) : null
 }
 
 export function isStorageIoError(error: unknown): boolean {
   if (error instanceof StorageUnavailableError) return error.storageCode !== 'PROBE_FAILED'
+  if ([8, 10, 13, 14].includes(sqlitePrimaryErrorCode(error) ?? -1)) return true
   const code = errorCode(error)
   if (code && /^(SQLITE_IOERR(?:_\w+)?|SQLITE_CANTOPEN(?:_\w+)?|SQLITE_READONLY(?:_\w+)?|SQLITE_FULL|EIO|ENODEV|ENOENT|EROFS|ENOSPC)$/.test(code)) return true
   const message = error instanceof Error ? error.message : ''
