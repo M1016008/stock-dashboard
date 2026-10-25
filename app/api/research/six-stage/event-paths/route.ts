@@ -10,6 +10,7 @@ import {
   type SixStageResearchDirection,
 } from "@/lib/server/six-stage-real-research-store";
 import type { SixStageRealMarket } from "@/lib/research/six-stage-real-data-contract";
+import { isSixStageResearchRequestAllowed } from "@/lib/research/six-stage-research-isolation";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -64,7 +65,11 @@ function rankingWeights(request: NextRequest): Partial<SixStageRankingWeights> {
 }
 
 export async function GET(request: NextRequest) {
-  if (process.env.SIX_STAGE_REAL_RESEARCH_ONLY !== "1") {
+  if (!isSixStageResearchRequestAllowed({
+    mode: "real",
+    hostname: request.nextUrl.hostname,
+    headers: request.headers,
+  })) {
     return new NextResponse("Not Found", { status: 404 });
   }
   try {
