@@ -1,20 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { SCREENING_METRIC_MAP, type ScreeningCondition, type ScreeningMetricKey } from '@/lib/integrated-screener'
+import { ScreeningConditionValidationError, parseScreeningConditions } from '@/lib/integrated-screener'
 import { getScreenerReason } from '@/lib/server/integrated-screener-reason'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 30
-
-function parseConditions(value: unknown): ScreeningCondition[] {
-  if (!Array.isArray(value)) return []
-  return value.filter((item): item is ScreeningCondition => {
-    if (!item || typeof item !== 'object') return false
-    const condition = item as Partial<ScreeningCondition>
-    if (typeof condition.id !== 'string' || typeof condition.metric !== 'string' || typeof condition.operator !== 'string') return false
-    const definition = SCREENING_METRIC_MAP.get(condition.metric as ScreeningMetricKey)
-    return Boolean(definition?.operators.includes(condition.operator as ScreeningCondition['operator']))
-  }).slice(0, 40)
-}
 
 export async function POST(request: NextRequest) {
   const startedAt = Date.now()
@@ -27,7 +16,7 @@ export async function POST(request: NextRequest) {
     const result = await getScreenerReason({
       ticker,
       asOf: typeof body.asOf === 'string' ? body.asOf : null,
-      conditions: parseConditions(body.conditions),
+      conditions: parseScreeningConditions(body.conditions),
     })
     if (!result) return NextResponse.json({ error: 'Not found', message: '対象銘柄のServingデータが見つかりません。' }, { status: 404 })
     return NextResponse.json(result, {
@@ -37,6 +26,9 @@ export async function POST(request: NextRequest) {
       },
     })
   } catch (error) {
+    if (error instanceof ScreeningConditionValidationError) {
+      return NextResponse.json({ error: 'Invalid screening conditions', message: error.message }, { status: 400 })
+    }
     console.error('[integrated-screener-reason]', error)
     return NextResponse.json({ error: 'Reason generation failed', message: error instanceof Error ? error.message : String(error) }, { status: 500 })
   }

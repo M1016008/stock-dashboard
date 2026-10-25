@@ -3,15 +3,20 @@ import { execAll, execGet } from '@/lib/db/client'
 import { execUsAnalyticsAll, execUsAnalyticsGet, hasUsAnalyticsDb } from '@/lib/db/us-analytics'
 import {
   PHYSICAL_MOMENTUM_LOOKBACK_DAYS,
-  adjustLikelySplitDiscontinuities,
   composePhysicalMomentumScores,
   computePhysicalMomentumRawRows,
+  normalizePhysicalMomentumInputRows,
   winsorizedMeanAndStd,
   winsorizedZScore,
   type PhysicalMomentumNormalizationStats,
   type PhysicalMomentumRawKey,
 } from '@/lib/physical-momentum'
-import { intervalToSpec, resampleOhlcv, type ChartIntervalCode } from '@/lib/timeframes'
+import {
+  intervalToSpec,
+  resampleOhlcv,
+  resampleOhlcvWithTradingSessions,
+  type ChartIntervalCode,
+} from '@/lib/timeframes'
 import type { OHLCV } from '@/types/stock'
 
 export const runtime = 'nodejs'
@@ -270,6 +275,7 @@ function localTimeframeView(
       volume: row.volume,
     })),
     PHYSICAL_MOMENTUM_LOOKBACK_DAYS,
+    { priceBasis: 'split_adjusted' },
   )
   const scoredRows = rawRows.filter((row) => RAW_KEYS.some((key) => row[key] != null && Number.isFinite(row[key])))
   if (scoredRows.length === 0) {
@@ -379,7 +385,8 @@ async function loadPriceRowsForTimeframes(
       splitFactor: row.splitFactor == null ? null : Number(row.splitFactor),
     }))
     .filter((row) => row.date && [row.open, row.high, row.low, row.close].every(Number.isFinite))
-  const adjusted = adjustLikelySplitDiscontinuities(cleaned)
+  const priceBasis = usesAnalyticsUsTable || dbMarket !== 'JP' ? 'split_adjusted' : 'raw'
+  const adjusted = normalizePhysicalMomentumInputRows(cleaned, priceBasis)
   return cleaned.map((row, index) => {
     const adjustedRow = adjusted[index]
     const priceFactor =
@@ -397,6 +404,32 @@ async function loadPriceRowsForTimeframes(
   })
 }
 
+async function loadMarketSessionsForTimeframes(
+  all: AllFn,
+  dbMarket: string,
+  fromDate: string,
+  asOfDate: string | null,
+): Promise<string[]> {
+  const dateFilter = asOfDate ? 'AND date <= ?' : ''
+  const usesAnalyticsUsTable = dbMarket === 'US' && all === (execUsAnalyticsAll as AllFn)
+  if (usesAnalyticsUsTable) {
+    return (await all<{ date: string }>(
+      `SELECT date FROM ohlcv_daily WHERE ticker = 'SPY' AND date >= ? ${dateFilter} ORDER BY date`,
+      asOfDate ? [fromDate, asOfDate] : [fromDate],
+    )).map((row) => row.date)
+  }
+  if (dbMarket === 'JP') {
+    return (await all<{ date: string }>(
+      `SELECT date FROM ohlcv_daily WHERE ticker = '1306' AND date >= ? ${dateFilter} ORDER BY date`,
+      asOfDate ? [fromDate, asOfDate] : [fromDate],
+    )).map((row) => row.date)
+  }
+  return (await all<{ date: string }>(
+    `SELECT date FROM market_ohlcv_daily WHERE market = ? AND ticker = 'SPY' AND date >= ? ${dateFilter} ORDER BY date`,
+    asOfDate ? [dbMarket, fromDate, asOfDate] : [dbMarket, fromDate],
+  )).map((row) => row.date)
+}
+
 async function buildTimeframeViews(
   all: AllFn,
   dbMarket: string,
@@ -412,8 +445,28 @@ async function buildTimeframeViews(
   }
   if (prices.length === 0) return views
 
+  const calendarFromDate = `${prices[0].date.slice(0, 4)}-01-01`
+  let marketSessions = await loadMarketSessionsForTimeframes(
+    all,
+    dbMarket,
+    calendarFromDate,
+    asOfDate,
+  ).catch(() => [])
+  if (marketSessions.length === 0 && dbMarket !== 'JP' && all !== (execAll as AllFn)) {
+    marketSessions = await loadMarketSessionsForTimeframes(
+      execAll as AllFn,
+      dbMarket,
+      calendarFromDate,
+      asOfDate,
+    ).catch(() => [])
+  }
+
   for (const interval of ['2D', 'W', 'M'] as const) {
-    const candles = resampleOhlcv(prices, intervalToSpec(interval as ChartIntervalCode))
+    if (interval === '2D' && marketSessions.length === 0) continue
+    const spec = intervalToSpec(interval as ChartIntervalCode)
+    const candles = interval === '2D'
+      ? resampleOhlcvWithTradingSessions(prices, spec, marketSessions)
+      : resampleOhlcv(prices, spec)
     const view = localTimeframeView(interval, candles)
     if (view) views.push(view)
   }

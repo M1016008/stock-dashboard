@@ -534,7 +534,9 @@ async function processMarket(market: Market): Promise<{ totalTickers: number; su
     for (const [index, symbol] of tickers.entries()) {
       try {
         const prices = await priceRowsForTicker(market, symbol, endDate, warmupStartDate)
-        const rawRows = computePhysicalMomentumRawRows(prices, LOOKBACK_DAYS)
+        const rawRows = computePhysicalMomentumRawRows(prices, LOOKBACK_DAYS, {
+          priceBasis: outputMarketFor(market) === 'US' ? 'split_adjusted' : 'raw',
+        })
           .filter((row) => row.date >= startDate && row.date <= endDate)
           .map((row) => ({ ...row, symbol }))
 

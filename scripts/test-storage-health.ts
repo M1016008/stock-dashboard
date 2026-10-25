@@ -8,6 +8,7 @@ async function main() {
   const incidentDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'stockboard-health-'))
   const mount = `/Volumes/stockboard-health-missing-${process.pid}`
   try {
+    Reflect.set(process.env, 'NODE_ENV', 'production')
     process.env.STOCKBOARD_DB_PATH = `${mount}/stockboard.db`
     process.env.STOCK_DATA_MOUNT_PATH = mount
     process.env.STOCK_DATA_VOLUME_UUID = 'fixture-uuid'

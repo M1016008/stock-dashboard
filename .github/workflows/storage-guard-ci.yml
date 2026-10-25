@@ -5,11 +5,17 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/storage-guard-ci.yml'
+      - 'app/**'
+      - 'lib/db/client.ts'
       - 'lib/db/us-analytics.ts'
+      - 'lib/runtime/**'
       - 'lib/storage/**'
       - 'lib/large-holders/release-preflight.ts'
-      - 'scripts/install-local-web-server.ts'
-      - 'scripts/lib/launchagent-large-holder-environment.ts'
+      - 'proxy.ts'
+      - 'scripts/install-*.ts'
+      - 'scripts/lib/launchagent-*.ts'
+      - 'scripts/run-isolated-runtime.ts'
+      - 'scripts/test-runtime-isolation.ts'
       - 'scripts/test-large-holder-release-preflight.ts'
       - 'scripts/test-storage-*.ts'
       - 'scripts/test-us-automation-foundation.ts'
@@ -45,6 +51,9 @@ jobs:
       - name: Storage Guard regression
         run: npm run storage:guard-test
 
+      - name: Development and test isolation regression
+        run: npm run test:runtime-isolation
+
       - name: Weekly backup policy and writer hold
         run: npm run test:weekly-backup-policy && npm run test:weekly-writer-hold && npm run test:weekly-backup-runner
 
@@ -60,10 +69,20 @@ jobs:
       - name: TypeScript
         run: npx tsc --noEmit
 
-      - name: Production build
-        run: npm run build
+      - name: Poisoned isolated build
+        run: npm run build:isolated
         env:
           STOCKBOARD_BUILD_CPUS: '1'
+          TURSO_DATABASE_URL: 'libsql://production.invalid'
+          TURSO_AUTH_TOKEN: 'poison-production-token'
+          STOCKBOARD_DB_PATH: '/Volumes/Production/stockboard.db'
+          LOCAL_DB_PATH: '/Volumes/Production/stockboard.db'
+          US_ANALYTICS_DB_PATH: '/Volumes/Production/stockboard-us.db'
+          STOCK_DATA_MOUNT_PATH: '/Volumes/Production'
+          STOCK_DATA_VOLUME_UUID: 'poison-production-volume'
+          STOCK_DATA_INCIDENT_DIR: '/tmp/stockboard-production-incidents-poison'
+          JQUANTS_API_KEY: 'poison-production-jquants-key'
+          OPENAI_API_KEY: 'poison-production-openai-key'
 
       - name: Diff whitespace check
         run: git diff --check

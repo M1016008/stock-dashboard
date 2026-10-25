@@ -394,6 +394,12 @@ export function IntegratedScreener() {
     const params = new URLSearchParams(window.location.search)
     params.set('screen', encoded)
     router.replace(`/screener?${params.toString()}`, { scroll: false })
+    if (!state.conditions.every(isCompleteScreeningCondition)) {
+      setLoading(false)
+      setResponse(null)
+      setError('条件の値を入力すると検索を実行します。')
+      return
+    }
     const controller = new AbortController()
     const timer = window.setTimeout(() => {
       setLoading(true)
@@ -468,7 +474,7 @@ export function IntegratedScreener() {
 
   const saveCurrent = async () => {
     const name = saveName.trim()
-    if (!name || saving) return
+    if (!name || saving || !state.conditions.every(isCompleteScreeningCondition)) return
     setSaving(true)
     setSavedError(null)
     try {
@@ -737,7 +743,7 @@ export function IntegratedScreener() {
                 <option value="">保存条件を開く</option>{saved.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
               </select>
               <input value={saveName} onChange={(event) => setSaveName(event.target.value)} placeholder="条件名" className="h-8 w-32 border border-[var(--color-border-default)] bg-white px-2 text-[11px]" />
-              <button type="button" onClick={() => void saveCurrent()} disabled={!saveName.trim() || saving} className="inline-flex h-8 items-center gap-1 border border-[var(--color-border-default)] bg-white px-2 text-[11px] font-bold disabled:opacity-40">{saving ? <LoaderCircle size={12} className="animate-spin" /> : <Save size={12} />}保存</button>
+              <button type="button" onClick={() => void saveCurrent()} disabled={!saveName.trim() || saving || !state.conditions.every(isCompleteScreeningCondition)} className="inline-flex h-8 items-center gap-1 border border-[var(--color-border-default)] bg-white px-2 text-[11px] font-bold disabled:opacity-40">{saving ? <LoaderCircle size={12} className="animate-spin" /> : <Save size={12} />}保存</button>
             </div>
           </div>
         </div>}

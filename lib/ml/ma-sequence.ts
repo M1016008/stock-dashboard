@@ -1,4 +1,6 @@
-export const MA_SEQUENCE_VERSION = 2
+import { calculateStageFromThreeMa } from '@/lib/stage-classification'
+
+export const MA_SEQUENCE_VERSION = 3
 export const MA_SEQUENCE_SCORE_VERSION = 10
 export const MA_SEQUENCE_PERIODS = [5, 25, 75, 200] as const
 export const MA_SEQUENCE_STAGE_PERIODS = [5, 10, 20, 40, 60, 90, 200] as const
@@ -320,14 +322,7 @@ function frameStructure(
 }
 
 function stageFromThree(a: number | null, b: number | null, c: number | null): number {
-  if (!finite(a) || !finite(b) || !finite(c)) return 0
-  if (a > b && b > c) return 1
-  if (b > a && a > c) return 2
-  if (b > c && c > a) return 3
-  if (c > b && b > a) return 4
-  if (c > a && a > b) return 5
-  if (a > c && c > b) return 6
-  return 0
+  return calculateStageFromThreeMa(a, b, c) ?? 0
 }
 
 function frameStages(frame: MaSequenceFrame, index: number): number[] {

@@ -1,21 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { queryIntegratedScreener } from '@/lib/server/integrated-screener-serving'
-import { SCREENING_METRIC_MAP, type ScreeningCondition, type ScreeningMetricKey } from '@/lib/integrated-screener'
+import {
+  SCREENING_METRIC_MAP,
+  ScreeningConditionValidationError,
+  parseScreeningConditions,
+  type ScreeningMetricKey,
+} from '@/lib/integrated-screener'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 120
 
-function parseConditions(value: unknown): ScreeningCondition[] {
-  if (!Array.isArray(value)) return []
-  return value.filter((item): item is ScreeningCondition => {
-    if (!item || typeof item !== 'object') return false
-    const condition = item as Partial<ScreeningCondition>
-    return typeof condition.id === 'string'
-      && typeof condition.metric === 'string'
-      && SCREENING_METRIC_MAP.has(condition.metric as ScreeningMetricKey)
-      && typeof condition.operator === 'string'
-  }).slice(0, 40)
-}
 export async function POST(request: NextRequest) {
   const startedAt = Date.now()
   try {
@@ -25,7 +19,7 @@ export async function POST(request: NextRequest) {
       : null
     const result = await queryIntegratedScreener({
       asOf: typeof body.asOf === 'string' ? body.asOf : null,
-      conditions: parseConditions(body.conditions),
+      conditions: parseScreeningConditions(body.conditions),
       sort,
       direction: body.direction === 'asc' ? 'asc' : 'desc',
       limit: Number(body.limit ?? 100),
@@ -38,6 +32,12 @@ export async function POST(request: NextRequest) {
       },
     })
   } catch (error) {
+    if (error instanceof ScreeningConditionValidationError) {
+      return NextResponse.json(
+        { error: 'Invalid screening conditions', message: error.message },
+        { status: 400 },
+      )
+    }
     console.error('[integrated-screener]', error)
     return NextResponse.json({ error: 'Integrated screener failed', message: error instanceof Error ? error.message : String(error) }, { status: 500 })
   }

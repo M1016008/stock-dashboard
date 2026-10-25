@@ -3,6 +3,11 @@ import { createHash, randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import {
+  assertIsolatedRuntimeEnvironment,
+  nonProductionIncidentDirectory,
+  resolveThroughExistingAncestor,
+} from '../runtime/isolation'
 
 const PROBE_COMMAND_TIMEOUT_MS = 8_000
 const PROBE_CERTIFICATION_CACHE_MS = 2_000
@@ -160,8 +165,12 @@ const globalForProbeCoordination = globalThis as typeof globalThis & {
 
 function probeCoordinationDirectory(configured?: string): string {
   const fallback = path.join(os.homedir(), 'Library', 'Application Support', 'StockBoard', 'storage-incidents')
-  const candidate = path.resolve(/* turbopackIgnore: true */ configured?.trim() || process.env.STOCK_DATA_INCIDENT_DIR?.trim() || fallback)
-  return candidate.startsWith('/Volumes/') ? fallback : candidate
+  const runtimeDirectory = nonProductionIncidentDirectory()
+  const candidate = path.resolve(/* turbopackIgnore: true */ configured?.trim()
+    || runtimeDirectory
+    || process.env.STOCK_DATA_INCIDENT_DIR?.trim()
+    || fallback)
+  return candidate.startsWith('/Volumes/') ? runtimeDirectory ?? fallback : candidate
 }
 
 function canonicalMountPath(mountPath: string): string {
@@ -559,7 +568,8 @@ export function configForDatabase(dbPath: string, jobType?: string): GuardConfig
   return {
     dbPath, mountPath, volumeUuid, minFreeBytes: minBytes, minFreePercent: minPercent,
     jobType,
-    incidentDir: process.env.STOCK_DATA_INCIDENT_DIR?.trim(),
+    incidentDir: nonProductionIncidentDirectory()
+      ?? process.env.STOCK_DATA_INCIDENT_DIR?.trim(),
   }
 }
 
@@ -651,6 +661,15 @@ export function assertWritableTargetPath(targetPath: string, jobType?: string): 
 }
 
 export function requiresExternalStorageGuard(dbPath: string): boolean {
+  if (process.env.STOCKBOARD_RUNTIME_SCOPE === 'development'
+    || process.env.STOCKBOARD_RUNTIME_SCOPE === 'test'
+    || process.env.STOCKBOARD_RUNTIME_SCOPE === 'preview') {
+    assertIsolatedRuntimeEnvironment(process.env)
+    const isolationRoot = resolveThroughExistingAncestor(process.env.STOCKBOARD_ISOLATION_ROOT!)
+    const target = resolveThroughExistingAncestor(dbPath)
+    if (target === isolationRoot || contained(isolationRoot, target)) return false
+    fail('DB_OUTSIDE_EXPECTED_VOLUME', 'isolated runtime database path resolves outside its pinned root')
+  }
   if (process.env.NODE_ENV === 'production' && process.env.EXTERNAL_STORAGE_REQUIRED === 'false') {
     fail('MOUNT_IDENTITY_UNKNOWN', 'production cannot disable external storage protection')
   }
@@ -736,12 +755,13 @@ function safeErrorMessage(error: unknown): string {
 
 function internalIncidentDir(config: GuardConfig): string {
   const fallback = path.join(os.homedir(), 'Library', 'Application Support', 'StockBoard', 'storage-incidents')
-  if (!config.incidentDir) return fallback
+  const runtimeDirectory = nonProductionIncidentDirectory()
+  if (!config.incidentDir) return runtimeDirectory ?? fallback
   const candidate = path.resolve(config.incidentDir)
   try {
-    if (candidate.startsWith('/Volumes/') || fs.realpathSync(candidate).startsWith('/Volumes/')) return fallback
+    if (candidate.startsWith('/Volumes/') || fs.realpathSync(candidate).startsWith('/Volumes/')) return runtimeDirectory ?? fallback
   } catch {
-    if (candidate.startsWith('/Volumes/')) return fallback
+    if (candidate.startsWith('/Volumes/')) return runtimeDirectory ?? fallback
   }
   return candidate
 }

@@ -17,6 +17,7 @@
 import { db, execAll, execGet } from '@/lib/db/client'
 import { featureSnapshots, batchRuns, computeState } from '@/lib/db/schema'
 import * as F from '@/lib/features'
+import { NativePeriodFeatureSampler } from '@/lib/feature-native-period-sampler'
 import { eq, sql } from 'drizzle-orm'
 
 type Timescale = 'daily' | 'weekly' | 'monthly'
@@ -28,7 +29,7 @@ const QUADRATIC_WINDOW: Record<Timescale, number> = {
   monthly: 12,
 }
 
-// 拡散率の歴史的分位を取る lookback (営業日)
+// 拡散率の歴史的分位を取る lookback (timescale ごとの期間)
 const HISTORICAL_PERCENTILE_LOOKBACK = 250
 
 const PROGRESS_EVERY = 50
@@ -146,30 +147,29 @@ async function computeFeaturesForTicker(ticker: string): Promise<number> {
     const maCols = MA_COLUMNS[timescale]
     const stageCols = STAGE_COLUMNS[timescale]
 
-    // 各 MA の時系列 (履歴に合わせて累積)
-    const maSeries: number[][] = [[], [], [], [], []]
-    const divergenceHistoryA: number[] = []
-    const divergenceHistoryB: number[] = []
-
-    // ステージ滞在トラッカー
-    let stageARun: { stage: number | null; startIdx: number } = { stage: null, startIdx: 0 }
-    let stageBRun: { stage: number | null; startIdx: number } = { stage: null, startIdx: 0 }
+    const nativePeriodSampler = new NativePeriodFeatureSampler(
+      timescale,
+      window,
+      HISTORICAL_PERCENTILE_LOOKBACK,
+    )
 
     for (let i = 0; i < snapshots.length; i++) {
       const snap = snapshots[i]
       const mas: (number | null)[] = maCols.map(col => snap[col] as number | null)
 
-      // 系列に追加 (null なら追加せず — 古いデータが計算可能性を持つよう、indexは進める)
-      for (let k = 0; k < 5; k++) {
-        if (mas[k] != null) maSeries[k].push(mas[k]!)
-      }
-
-      // 5 本すべて揃ってないとこの日の特徴量は計算不能
-      if (mas.some(v => v == null)) continue
-
-      const [m1, m2, m3, m4, m5] = mas as number[]
       const stageA = snap[stageCols.a] as number | null
       const stageB = snap[stageCols.b] as number | null
+      const sampled = nativePeriodSampler.sample({
+        date: snap.date as string,
+        mas,
+        stageA,
+        stageB,
+      })
+
+      // 5 本すべて揃ってないとこの日の特徴量は計算不能
+      if (!sampled) continue
+
+      const [m1, m2, m3, m4, m5] = mas as number[]
 
       // バイナリ順序 (Period A: ma1/ma2/ma3, Period B: ma3/ma4/ma5)
       const binOrderA12 = m1 > m2 ? 1 : 0
@@ -188,36 +188,17 @@ async function computeFeaturesForTicker(ticker: string): Promise<number> {
       const relDistB23 = ((m4 - m5) / m5) * 100
 
       // 拡散率
-      const divA = F.divergenceRate(m1, m2, m3)
-      const divB = F.divergenceRate(m3, m4, m5)
-
-      // delta (5 期間前との差)
-      const divAPrev = divergenceHistoryA[divergenceHistoryA.length - 5]
-      const divBPrev = divergenceHistoryB[divergenceHistoryB.length - 5]
-      const divADelta = divAPrev != null ? divA - divAPrev : 0
-      const divBDelta = divBPrev != null ? divB - divBPrev : 0
-
-      divergenceHistoryA.push(divA)
-      divergenceHistoryB.push(divB)
+      const divA = sampled.divergenceA
+      const divB = sampled.divergenceB
 
       // fan uniformity (Period A)
       const fanUni = F.fanUniformity(m1, m2, m3)
 
       // 拡散率の歴史的分位 (Period A の lookback 内)
-      const lookback = Math.min(HISTORICAL_PERCENTILE_LOOKBACK, divergenceHistoryA.length - 1)
-      const divHistory = divergenceHistoryA.slice(-lookback - 1, -1)
-      const divPercentile = divHistory.length > 0
-        ? F.historicalPercentile(divA, divHistory)
-        : 0.5
-
-      // ステージ滞在期間
-      if (stageA !== stageARun.stage) stageARun = { stage: stageA, startIdx: i }
-      if (stageB !== stageBRun.stage) stageBRun = { stage: stageB, startIdx: i }
-      const stageAAge = stageA != null ? i - stageARun.startIdx : null
-      const stageBAge = stageB != null ? i - stageBRun.startIdx : null
-
-      // 二次回帰 (5 本の MA)
-      const trends = maSeries.map(s => F.quadraticTrend(s, window))
+      const divPercentile = sampled.divergencePercentile
+      const stageAAge = sampled.stageAAge
+      const stageBAge = sampled.stageBAge
+      const trends = sampled.trends
 
       // 角度同期
       const synchrony = F.angleSynchrony(trends.map(t => t?.slope ?? null))
@@ -251,8 +232,8 @@ async function computeFeaturesForTicker(ticker: string): Promise<number> {
         rel_dist_b_23: relDistB23,
         divergence_a: divA,
         divergence_b: divB,
-        divergence_a_delta: divADelta,
-        divergence_b_delta: divBDelta,
+        divergence_a_delta: sampled.divergenceADelta,
+        divergence_b_delta: sampled.divergenceBDelta,
         fan_uniformity: fanUni,
         divergence_percentile: divPercentile,
         stage_a_age: stageAAge,

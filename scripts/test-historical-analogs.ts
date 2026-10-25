@@ -318,6 +318,7 @@ const chartsByInterval = new Map(
       option.code,
       chartStartDate,
       chartEndDate,
+      chartRows.map((row) => row.date),
     )
     assert.ok(chart, `${option.label}の比較チャートを生成できること`)
     assert.ok(chart.points.length > 0, `${option.label}に表示点があること`)
@@ -327,6 +328,22 @@ const chartsByInterval = new Map(
   }),
 )
 assert.equal(chartsByInterval.size, 14)
+const sparseChartRows = chartRows.filter((_, index) => index % 7 !== 2)
+for (const interval of ['2D', '3D'] as const) {
+  const sparseChart = buildHistoricalAnalogChartSeries(
+    sparseChartRows,
+    interval,
+    chartStartDate,
+    chartEndDate,
+    chartRows.map((row) => row.date),
+  )
+  assert.ok(sparseChart, `${interval} sparse chart uses the full market calendar`)
+  assert.equal(
+    buildHistoricalAnalogChartSeries(sparseChartRows, interval, chartStartDate, chartEndDate),
+    null,
+    `${interval} chart preparation must fail closed without market sessions`,
+  )
+}
 const weeklyChart = chartsByInterval.get('W')!
 const monthlyChart = chartsByInterval.get('M')!
 const yearlyChart = chartsByInterval.get('Y')!

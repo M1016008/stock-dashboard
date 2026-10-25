@@ -96,8 +96,12 @@ export function aggregateTwentyFourMonthCandles(
       const observed = new Set(bucket.map((row) => row.date))
       const missingSessionCount = expectedSessions.filter((date) => !observed.has(date)).length
       const calendarCoverageAvailable = expectedSessions.length > 0
+      const calendarCoversPeriodStart = expectedSessions[0] <= `${startYear}-01-10`
       const calendarStartsNoLaterThanData = calendarCoverageAvailable && expectedSessions[0] <= first.date
-      const coverageComplete = calendarCoverageAvailable && calendarStartsNoLaterThanData && missingSessionCount === 0
+      const coverageComplete = calendarCoverageAvailable
+        && calendarCoversPeriodStart
+        && calendarStartsNoLaterThanData
+        && missingSessionCount === 0
       const isCurrentBlock = startYear === asOfBlock
       const status: TwoYearCandleStatus = coverageComplete
         ? (isCurrentBlock ? 'forming' : 'confirmed')

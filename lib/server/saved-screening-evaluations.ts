@@ -3,6 +3,7 @@ import { execAll, execBatch, execGet, execRun } from '@/lib/db/client'
 import {
   DEFAULT_SCREENING_COLUMNS,
   SCREENING_METRIC_MAP,
+  parseScreeningConditions,
   type IntegratedScreeningRow,
   type ScreeningCondition,
   type ScreeningMetricKey,
@@ -86,10 +87,7 @@ function parseJson<T>(value: string, fallback: T): T {
 }
 
 function normalizeState(input: SavedScreenStateContract): SavedScreenStateContract {
-  const conditions = input.conditions.filter((condition) => {
-    const definition = SCREENING_METRIC_MAP.get(condition.metric)
-    return Boolean(definition?.operators.includes(condition.operator))
-  }).slice(0, 40)
+  const conditions = parseScreeningConditions(input.conditions)
   const columns = input.columns.filter((metric) => SCREENING_METRIC_MAP.has(metric))
   return {
     asOf: typeof input.asOf === 'string' ? input.asOf : '',
@@ -319,7 +317,7 @@ export async function evaluateSavedScreeningDefinition(
   const startedAt = Date.now()
   const definition = await execGet<DefinitionRow>('SELECT * FROM saved_screening_definitions WHERE id=? AND active=1', [definitionId])
   if (!definition) throw new Error('保存条件が見つかりません。')
-  const conditions = parseJson<ScreeningCondition[]>(definition.conditions_json, [])
+  const conditions = parseScreeningConditions(parseJson<ScreeningCondition[]>(definition.conditions_json, []))
   const current = await evaluateIntegratedScreeningSet({ asOf: requestedAsOf, conditions })
   const evaluationId = `${definition.id}:v${definition.definition_version}:${current.asOf}`
   const previous = await execGet<EvaluationRow>(`
@@ -477,7 +475,7 @@ export async function getSavedScreeningChangeReason(input: {
     execGet<MemberRow>('SELECT ticker, name, status, previous_values_json, current_values_json, changes_json FROM saved_screening_evaluation_members WHERE evaluation_id=? AND ticker=?', [input.evaluationId, input.ticker]),
   ])
   if (!evaluation || !member || member.status === 'STAY') return null
-  const conditions = parseJson<ScreeningCondition[]>(evaluation.conditions_json, [])
+  const conditions = parseScreeningConditions(parseJson<ScreeningCondition[]>(evaluation.conditions_json, []))
   const previousValues = parseJson<Record<string, ScreeningSnapshotValue>>(member.previous_values_json ?? '{}', {})
   const currentValues = parseJson<Record<string, ScreeningSnapshotValue>>(member.current_values_json ?? '{}', {})
   const stored = buildTransitions({

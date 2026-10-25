@@ -56,18 +56,18 @@ const STAGE_PARAMS: Record<string, string> = {
 }
 
 const SORTS: Record<string, string> = {
-  maxReturn: 'fe.max_return_pct DESC',
-  return: 'fe.return_pct DESC',
-  drawdown: 'fe.min_return_pct ASC',
-  volume: 'mf.volume_ratio_20 DESC',
+  maxReturn: 'fe.max_return_pct DESC, mf.ticker ASC',
+  return: 'fe.return_pct DESC, mf.ticker ASC',
+  drawdown: 'fe.min_return_pct ASC, mf.ticker ASC',
+  volume: 'mf.volume_ratio_20 DESC, mf.ticker ASC',
   ticker: 'mf.ticker ASC',
 }
 
 const SERVING_SORTS: Record<string, string> = {
-  maxReturn: 'sr.max_return_pct DESC',
-  return: 'sr.return_pct DESC',
-  drawdown: 'sr.min_return_pct ASC',
-  volume: 'sr.volume_ratio_20 DESC',
+  maxReturn: 'sr.max_return_pct DESC, sr.ticker ASC',
+  return: 'sr.return_pct DESC, sr.ticker ASC',
+  drawdown: 'sr.min_return_pct ASC, sr.ticker ASC',
+  volume: 'sr.volume_ratio_20 DESC, sr.ticker ASC',
   ticker: 'sr.ticker ASC',
 }
 
@@ -131,6 +131,22 @@ function summarize(rows: BacktestRow[]) {
     avgMaxReturnPct: avg(valid.map((row) => Number(row.max_return_pct))),
     avgMinReturnPct: avg(valid.map((row) => Number(row.min_return_pct))),
     avgDaysToMax: avg(valid.map((row) => Number(row.days_to_max)).filter(Number.isFinite)),
+  }
+}
+
+type BacktestSummaryRow = ReturnType<typeof summarize>
+
+function summaryFromQuery(row: Partial<BacktestSummaryRow> | undefined): BacktestSummaryRow {
+  const nullableNumber = (value: number | null | undefined) => value == null ? null : Number(value)
+  return {
+    count: Number(row?.count ?? 0),
+    withOutcome: Number(row?.withOutcome ?? 0),
+    hit10Rate: nullableNumber(row?.hit10Rate),
+    hit20Rate: nullableNumber(row?.hit20Rate),
+    hit40Rate: nullableNumber(row?.hit40Rate),
+    avgMaxReturnPct: nullableNumber(row?.avgMaxReturnPct),
+    avgMinReturnPct: nullableNumber(row?.avgMinReturnPct),
+    avgDaysToMax: nullableNumber(row?.avgDaysToMax),
   }
 }
 
@@ -252,8 +268,8 @@ export async function GET(request: NextRequest) {
         ;(servingArgs as unknown[]).push(`%,${signal},%`)
       }
 
-      const rows = await execAll<BacktestRow>(
-        `
+      const [rows, summaryRow] = await Promise.all([
+        execAll<BacktestRow>(`
         SELECT
           sr.date,
           sr.ticker,
@@ -301,7 +317,22 @@ export async function GET(request: NextRequest) {
         LIMIT ?
         `,
         [...servingArgs, limit],
-      )
+        ),
+        execGet<BacktestSummaryRow>(`
+          SELECT
+            COUNT(*) AS count,
+            SUM(CASE WHEN sr.max_return_pct IS NOT NULL THEN 1 ELSE 0 END) AS withOutcome,
+            AVG(CASE WHEN sr.max_return_pct IS NOT NULL THEN CASE WHEN sr.hit_10 <> 0 THEN 1.0 ELSE 0.0 END END) AS hit10Rate,
+            AVG(CASE WHEN sr.max_return_pct IS NOT NULL THEN CASE WHEN sr.hit_20 <> 0 THEN 1.0 ELSE 0.0 END END) AS hit20Rate,
+            AVG(CASE WHEN sr.max_return_pct IS NOT NULL THEN CASE WHEN sr.hit_40 <> 0 THEN 1.0 ELSE 0.0 END END) AS hit40Rate,
+            AVG(CASE WHEN sr.max_return_pct IS NOT NULL THEN sr.max_return_pct END) AS avgMaxReturnPct,
+            AVG(CASE WHEN sr.max_return_pct IS NOT NULL THEN COALESCE(sr.min_return_pct, 0) END) AS avgMinReturnPct,
+            AVG(CASE WHEN sr.max_return_pct IS NOT NULL THEN COALESCE(sr.days_to_max, 0) END) AS avgDaysToMax
+          FROM serving_backtest_results sr
+          LEFT JOIN ticker_universe u ON u.ticker = sr.ticker
+          WHERE ${servingWhere.join(' AND ')}
+        `, servingArgs),
+      ])
 
       return NextResponse.json({
         date,
@@ -311,7 +342,7 @@ export async function GET(request: NextRequest) {
           ...row,
           signal_codes: compactSignals(row.signal_codes),
         })),
-        summary: summarize(rows),
+        summary: summaryFromQuery(summaryRow),
         filters: {
           returnMin,
           returnMax,
@@ -325,8 +356,8 @@ export async function GET(request: NextRequest) {
       })
     }
 
-    const rows = await execAll<BacktestRow>(
-      `
+    const [rows, summaryRow] = await Promise.all([
+      execAll<BacktestRow>(`
       SELECT
         mf.date,
         mf.ticker,
@@ -377,7 +408,25 @@ export async function GET(request: NextRequest) {
       LIMIT ?
       `,
       [...args, limit],
-    )
+      ),
+      execGet<BacktestSummaryRow>(`
+        SELECT
+          COUNT(*) AS count,
+          SUM(CASE WHEN fe.max_return_pct IS NOT NULL THEN 1 ELSE 0 END) AS withOutcome,
+          AVG(CASE WHEN fe.max_return_pct IS NOT NULL THEN CASE WHEN fe.hit_10 <> 0 THEN 1.0 ELSE 0.0 END END) AS hit10Rate,
+          AVG(CASE WHEN fe.max_return_pct IS NOT NULL THEN CASE WHEN fe.hit_20 <> 0 THEN 1.0 ELSE 0.0 END END) AS hit20Rate,
+          AVG(CASE WHEN fe.max_return_pct IS NOT NULL THEN CASE WHEN fe.hit_40 <> 0 THEN 1.0 ELSE 0.0 END END) AS hit40Rate,
+          AVG(CASE WHEN fe.max_return_pct IS NOT NULL THEN fe.max_return_pct END) AS avgMaxReturnPct,
+          AVG(CASE WHEN fe.max_return_pct IS NOT NULL THEN COALESCE(fe.min_return_pct, 0) END) AS avgMinReturnPct,
+          AVG(CASE WHEN fe.max_return_pct IS NOT NULL THEN COALESCE(fe.days_to_max, 0) END) AS avgDaysToMax
+        FROM model_features mf
+        INNER JOIN forward_extrema fe ON fe.ticker = mf.ticker AND fe.date = mf.date
+        LEFT JOIN ohlcv_daily o ON o.ticker = mf.ticker AND o.date = mf.date
+        LEFT JOIN ticker_universe u ON u.ticker = mf.ticker
+        LEFT JOIN sector_master sm ON sm.ticker = mf.ticker
+        WHERE ${where.join(' AND ')}
+      `, args),
+    ])
 
     return NextResponse.json({
       date,
@@ -386,7 +435,7 @@ export async function GET(request: NextRequest) {
         ...row,
         signal_codes: compactSignals(row.signal_codes),
       })),
-      summary: summarize(rows),
+      summary: summaryFromQuery(summaryRow),
       filters: {
         returnMin,
         returnMax,

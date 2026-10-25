@@ -10,7 +10,8 @@ async function main() {
   const dir = await mkdtemp(join(tmpdir(), 'stockboard-env-parser-'))
   const marker = join(dir, 'executed')
   try {
-    const envFile = join(dir, '.env.local')
+    const envFileName = process.env.NODE_ENV === 'test' ? '.env.test.local' : '.env.local'
+    const envFile = join(dir, envFileName)
     await writeFile(envFile, [
       `SHELL_SUBSTITUTION="$(touch ${marker})"`,
       `BACKTICK_VALUE='\`touch ${marker}\`'`,
@@ -20,14 +21,16 @@ async function main() {
       'LITERAL_TEXT=ordinary-value',
       '',
     ].join('\n'))
-    const loaded = loadEnvConfig(dir)
+    // Exercise the development env-file contract even when the isolated sweep
+    // intentionally runs tests with NODE_ENV=test.
+    const loaded = loadEnvConfig(dir, true)
     assert.equal(existsSync(marker), false)
     assert.equal(process.env.SHELL_SUBSTITUTION, `$(touch ${marker})`)
     assert.equal(process.env.BACKTICK_VALUE, `\`touch ${marker}\``)
     assert.equal(process.env.QUOTED_SPACES, 'two words')
     assert.equal(process.env.SINGLE_QUOTED, 'three words')
     assert.equal(process.env.SHELL_METACHARACTERS, 'a;b|c&d>e')
-    assert.ok(loaded.loadedEnvFiles.some((file) => file.path === '.env.local'))
+    assert.ok(loaded.loadedEnvFiles.some((file) => file.path === envFileName))
 
     const child = spawnSync(process.execPath, [
       `--env-file=${envFile}`, '-e',

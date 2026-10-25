@@ -5,6 +5,7 @@ const page = fs.readFileSync('app/us/analysis/transitions/page.tsx', 'utf8')
 const route = fs.readFileSync('app/api/us/hex/transitions/route.ts', 'utf8')
 const scanner = fs.readFileSync('components/hex/StageTransitionScanner.tsx', 'utf8')
 const executor = fs.readFileSync('lib/server/us-stage-transition-scanner.ts', 'utf8')
+const sharedQuery = fs.readFileSync('lib/queries/stage-transition-scanner.ts', 'utf8')
 
 assert.match(page, /firstParam\(sp\.view\) === 'scanner'/, 'US transitions must expose a scanner view')
 assert.match(page, /<StageTransitionScanner[^>]+market="US"/, 'US scanner must select US presentation and transport')
@@ -24,6 +25,8 @@ assert.match(route, /Cache-Control': 'no-store'/, 'PIT scanner results must not 
 assert.match(executor, /execUsAnalyticsAll/, 'US executor must use US analytics reads')
 assert.match(executor, /execUsAnalyticsGet/, 'US executor must use US analytics point reads')
 assert.doesNotMatch(executor, /@\/lib\/db\/client/, 'US executor must never fall back to the JP database')
+assert.match(sharedQuery, /SELECT MAX\(prior\.date\)[\s\S]*?WHERE prior\.date < current\.transition_date/, 'US transitions must use the immediately previous global market snapshot')
+assert.doesNotMatch(sharedQuery, /WHERE prior\.ticker = current\.ticker/, 'US transitions must not bridge a ticker across a missing market snapshot')
 
 assert.match(scanner, /apiPath: '\/api\/hex\/transitions'/, 'JP API transport must remain the default')
 assert.match(scanner, /apiPath: '\/api\/us\/hex\/transitions'/, 'US API transport must be same-origin and isolated')
