@@ -4,15 +4,31 @@ import crypto from 'node:crypto'
 import { execFileSync } from 'node:child_process'
 import { DatabaseSync } from 'node:sqlite'
 import storagePreflightModule from '../lib/research/six-stage-discovery-storage-preflight.ts'
+import sourceRateLimitModule from '../lib/research/six-stage-source-rate-limit.ts'
 
 const {
   certifySixStageDiscoveryStoragePreflight,
   prepareSixStageDiscoveryStoragePreflight,
 } = storagePreflightModule
+const { sourceReadThrottleDelayMs } = sourceRateLimitModule
 
 const planPath = process.argv[2]
 const expectedPlanHash = process.argv[3]
 if (!planPath || !expectedPlanHash) throw new Error('usage: node script plan.json expected-plan-sha256')
+let orchestratorAttestation
+try {
+  const encoded = fs.readFileSync(3, { encoding: 'utf8' })
+  if (Buffer.byteLength(encoded) > 4_096) throw new Error('attestation too large')
+  orchestratorAttestation = JSON.parse(encoded)
+} catch {
+  throw new Error('trusted research execution orchestrator attestation is required')
+}
+if (!/^[a-f0-9]{64}$/.test(orchestratorAttestation.token ?? '')
+  || orchestratorAttestation.planHash !== expectedPlanHash
+  || Number(orchestratorAttestation.orchestratorPid) !== process.ppid) {
+  throw new Error('research execution orchestrator attestation mismatch')
+}
+const orchestratorPid = Number(orchestratorAttestation.orchestratorPid)
 
 const sha256 = (value) => crypto.createHash('sha256').update(value).digest('hex')
 const fileSha256 = (file) => {
@@ -37,12 +53,28 @@ const log = (message, data = undefined) => {
   if (logFile) fs.appendFileSync(logFile, `${line}\n`)
 }
 const fail = (message) => { throw new Error(message) }
+const assertOrchestratorAlive = () => {
+  if (process.ppid !== orchestratorPid) fail('research execution orchestrator parent changed')
+  try {
+    process.kill(orchestratorPid, 0)
+  } catch {
+    fail('research execution orchestrator is not alive')
+  }
+}
 const queryScalar = (db, sql, key) => db.prepare(sql).get()?.[key]
 const statIdentity = (file) => {
   const s = fs.statSync(file)
   return { dev: s.dev, ino: s.ino, size: s.size, mtimeMs: s.mtimeMs }
 }
 const freeBytes = (target) => Number(execFileSync('df', ['-k', target], { encoding: 'utf8' }).trim().split('\n').at(-1).trim().split(/\s+/)[3]) * 1024
+const directoryBytes = (target) => {
+  if (!fs.existsSync(target)) return 0
+  const stat = fs.lstatSync(target)
+  if (stat.isSymbolicLink()) fail('output symlink rejected')
+  if (stat.isFile()) return stat.size
+  if (!stat.isDirectory()) return 0
+  return fs.readdirSync(target).reduce((total, entry) => total + directoryBytes(path.join(target, entry)), 0)
+}
 const health = async (url) => {
   const response = await fetch(url, { signal: AbortSignal.timeout(10_000), cache: 'no-store' })
   if (!response.ok) fail(`health HTTP ${response.status}: ${url}`)
@@ -53,8 +85,13 @@ const health = async (url) => {
 }
 const rowsHash = (rows, columns) => {
   const hash = crypto.createHash('sha256')
-  for (const row of rows) hash.update(`${columns.map((name) => row[name] === null ? '\\N' : String(row[name])).join('\t')}\n`)
-  return hash.digest('hex')
+  let bytes = 0
+  for (const row of rows) {
+    const encoded = `${columns.map((name) => row[name] === null ? '\\N' : String(row[name])).join('\t')}\n`
+    bytes += Buffer.byteLength(encoded)
+    hash.update(encoded)
+  }
+  return { sha256: hash.digest('hex'), bytes }
 }
 
 const rawPlan = fs.readFileSync(planPath)
@@ -86,6 +123,8 @@ let sourceReadFinishedAt = null
 let baseline = null
 let walBaseline = null
 let lastHealthAt = 0
+let sourceLogicalBytes = 0
+const sourceThrottleStartedAtMs = Date.now()
 
 const assertDeadline = (sourcePhase = false) => {
   const now = Date.now()
@@ -101,11 +140,26 @@ const assertSourceStable = () => sourceRead(() => {
   if (walSize > plan.resourceLimits.maximumWalBytesAtStart) fail('WAL exceeds absolute limit')
   if (walSize - walBaseline.size > plan.resourceLimits.maximumWalGrowthBytes) fail('WAL growth limit exceeded')
 })
+const assertOutputBudget = () => {
+  const bytes = directoryBytes(currentIncomplete)
+  if (bytes > plan.resourceLimits.maximumOutputBytes) fail(`maximum output bytes exceeded: ${bytes}`)
+  return bytes
+}
+const throttleSourceRead = async (newBytes) => {
+  sourceLogicalBytes += newBytes
+  const remainingMs = sourceReadThrottleDelayMs({
+    logicalBytesRead: sourceLogicalBytes,
+    elapsedMs: Date.now() - sourceThrottleStartedAtMs,
+    maximumBytesPerSecond: plan.resourceLimits.maximumSourceReadBytesPerSecond,
+  })
+  if (remainingMs > 0) await new Promise((resolve) => setTimeout(resolve, remainingMs))
+}
 const periodicHealth = async (force = false) => {
+  assertOrchestratorAlive()
   storageGuard.assertReadableVolumeIdentity(force)
   if (!force && Date.now() - lastHealthAt < plan.writerAndHealthIsolation.healthIntervalSeconds * 1000) return
-  await health(plan.writerAndHealthIsolation.webHealth.match(/https?:\/\/[^ ]+/)[0])
-  await health(plan.writerAndHealthIsolation.analogHealth.match(/https?:\/\/[^ ]+/)[0])
+  await health(plan.writerAndHealthIsolation.webHealth)
+  await health(plan.writerAndHealthIsolation.analogHealth)
   lastHealthAt = Date.now()
 }
 const checkpointFile = (market) => path.join(currentIncomplete, `${market.toLowerCase()}-checkpoint.json`)
@@ -173,7 +227,7 @@ const copyMarket = async (market) => {
       if (dvBefore !== baseline.dataVersion || svBefore !== baseline.schemaVersion) fail('source SQLite generation changed before chunk')
       const rows = sourceRead(() => select.all(cursorTicker, cursorTicker, cursorDate))
       if (!rows.length) break
-      const chunkHash = rowsHash(rows, columns)
+      const chunkDigest = rowsHash(rows, columns)
       db.exec('BEGIN IMMEDIATE')
       try {
         for (const row of rows) insert.run(...columns.map((name) => row[name]))
@@ -195,8 +249,11 @@ const copyMarket = async (market) => {
       const dvAfter = Number(sourceRead(() => queryScalar(source, 'PRAGMA data_version', 'data_version')))
       const svAfter = Number(sourceRead(() => queryScalar(source, 'PRAGMA schema_version', 'schema_version')))
       if (dvAfter !== baseline.dataVersion || svAfter !== baseline.schemaVersion) fail('source SQLite generation changed after chunk')
-      ledger.push({ chunk, rows: rows.length, cursorTicker, cursorDate, sha256: chunkHash })
+      await throttleSourceRead(chunkDigest.bytes)
+      assertDeadline(true)
+      ledger.push({ chunk, rows: rows.length, cursorTicker, cursorDate, sha256: chunkDigest.sha256, logicalBytes: chunkDigest.bytes })
       persistCheckpoint(market, { status: 'COPYING', market, started, updatedAt: iso(), rows: count, chunks: chunk, cursorTicker, cursorDate, minDate, maxDate, chunkLedgerRootSha256: sha256(JSON.stringify(ledger)) })
+      assertOutputBudget()
       if (chunk % 20 === 0) log(`${market} progress`, { rows: count, chunks: chunk, cursorTicker, cursorDate })
       if (freeBytes(destination.root) < plan.resourceLimits.minimumFreeBytesAfterCompletion) fail('destination free-space floor breached')
       await new Promise((resolve) => setTimeout(resolve, plan.chunkContract.sleepBetweenChunksMs))
@@ -244,6 +301,7 @@ try {
   fs.mkdirSync(currentIncomplete, { recursive: false })
   logFile = path.join(currentIncomplete, 'execution.jsonl')
   fs.writeFileSync(logFile, '')
+  assertOutputBudget()
   await periodicHealth(true)
   source = sourceRead(() => new DatabaseSync(sourcePath, { readOnly: true }))
   sourceRead(() => source.exec('PRAGMA query_only=ON; PRAGMA trusted_schema=OFF; PRAGMA temp_store=MEMORY; PRAGMA busy_timeout=5000;'))
@@ -257,12 +315,14 @@ try {
   sourceRead(() => source.close())
   source = null
   fs.writeFileSync(path.join(currentIncomplete, 'SOURCE_READ_COMPLETE.json'), `${JSON.stringify({ at: sourceReadFinishedAt, source: baseline, wal: { size: walBaseline.size, mtimeMs: walBaseline.mtimeMs } }, null, 2)}\n`)
+  assertOutputBudget()
   log('SOURCE_READ_COMPLETE', { sourceReadFinishedAt })
   const verified = {}
   for (const market of plan.chunkContract.marketOrder) {
     verified[market] = verifyOutput(market, copied[market])
     copied[market].sha256 = fileSha256(copied[market].outputPath)
     log(`${market} verification complete`, { verification: verified[market], sha256: copied[market].sha256 })
+    assertOutputBudget()
   }
   await periodicHealth(true)
   const manifest = {

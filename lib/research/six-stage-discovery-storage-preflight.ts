@@ -7,12 +7,27 @@ import {
   type StorageProbe,
   systemStorageProbe,
 } from '@/lib/storage/external-storage-guard'
+import {
+  WEEKLY_BACKUP_READER_LABELS,
+  WEEKLY_BACKUP_WRITER_LABELS,
+} from '@/lib/storage/weekly-backup-policy'
+import {
+  LAUNCHD_RESTORE_RESERVE_BASE_MS,
+  LAUNCHD_RESTORE_RESERVE_PER_WRITER_MS,
+} from '@/lib/storage/launchd-writer-hold-driver'
 import { resolveThroughExistingAncestor } from '@/lib/runtime/isolation'
 
 export const SIX_STAGE_DISCOVERY_SCOPE = 'six-stage-discovery-source-export'
 export const SIX_STAGE_DISCOVERY_PLAN_ID = 'SIX_STAGE_DISCOVERY_SOURCE_EXTRACTION_ONE_SHOT_V2'
 
 export type SixStageStoragePreflightMode = 'LOCAL_FIXTURE' | 'AUTHORIZED_PRODUCTION_READ'
+
+export type SixStageLaunchdIdentity = Readonly<{
+  label: string
+  definitionSha256: string
+  program: string
+  plistPath: string
+}>
 
 export type SixStageDiscoveryStoragePlan = Readonly<{
   planId: string
@@ -42,9 +57,22 @@ export type SixStageDiscoveryStoragePlan = Readonly<{
     minimumFreeBytesAfterCompletion: number
     maximumWalBytesAtStart: number
     maximumWalGrowthBytes: number
+    maximumSourceReadBytesPerSecond: number
   }>
   writerAndHealthIsolation: Readonly<{
+    webHealth: string
+    analogHealth: string
     healthIntervalSeconds: number
+    handleProbeIntervalSeconds: number
+    handleProbeTimeoutSeconds: number
+    maximumWriterHoldSeconds: number
+    writerRestoreReserveSeconds: number
+    approvedWriters: readonly SixStageLaunchdIdentity[]
+    approvedReaders: readonly SixStageLaunchdIdentity[]
+  }>
+  chunkContract: Readonly<{
+    rowsPerChunk: number
+    sleepBetweenChunksMs: number
   }>
   storageGuard: Readonly<{
     executionScope: string
@@ -119,14 +147,47 @@ function productionIncidentDirectory(): string {
   return path.join(os.homedir(), 'Library', 'Application Support', 'StockBoard', 'storage-incidents')
 }
 
-function positiveFinite(value: number, name: string): number {
-  if (!Number.isFinite(value) || value <= 0) noGo(`${name} must be finite and positive`)
+function positiveSafeInteger(value: number, name: string): number {
+  if (!Number.isSafeInteger(value) || value <= 0) noGo(`${name} must be a positive safe integer`)
   return value
 }
 
-function nonNegativeFinite(value: number, name: string): number {
-  if (!Number.isFinite(value) || value < 0) noGo(`${name} must be finite and non-negative`)
+function nonNegativeSafeInteger(value: number, name: string): number {
+  if (!Number.isSafeInteger(value) || value < 0) noGo(`${name} must be a non-negative safe integer`)
   return value
+}
+
+function healthUrl(value: string, name: string): string {
+  const normalized = required(value, name)
+  let parsed: URL
+  try {
+    parsed = new URL(normalized)
+  } catch {
+    noGo(`${name} must be a valid HTTP URL`)
+  }
+  if (!['http:', 'https:'].includes(parsed.protocol)) noGo(`${name} must be a valid HTTP URL`)
+  return normalized
+}
+
+function assertLaunchdIdentities(
+  identities: readonly SixStageLaunchdIdentity[],
+  expectedLabels: readonly string[],
+  name: string,
+): void {
+  if (!Array.isArray(identities)) noGo(`${name} must be an array`)
+  const labels = identities.map((identity) => identity?.label)
+  if (new Set(labels).size !== labels.length
+    || JSON.stringify([...labels].sort()) !== JSON.stringify([...expectedLabels].sort())) {
+    noGo(`${name} does not match the approved runtime inventory`)
+  }
+  for (const identity of identities) {
+    required(identity.label, `${name}.label`)
+    if (!/^[a-f0-9]{64}$/.test(required(identity.definitionSha256, `${name}.definitionSha256`))) {
+      noGo(`${name}.definitionSha256 must be lowercase SHA-256`)
+    }
+    exactPath(required(identity.program, `${name}.program`), `${name}.program`)
+    exactPath(required(identity.plistPath, `${name}.plistPath`), `${name}.plistPath`)
+  }
 }
 
 export function prepareSixStageDiscoveryStoragePreflight(
@@ -145,7 +206,8 @@ export function prepareSixStageDiscoveryStoragePreflight(
     || !plan.storageGuard || typeof plan.storageGuard !== 'object'
     || !plan.writeOnceDestination || typeof plan.writeOnceDestination !== 'object'
     || !plan.resourceLimits || typeof plan.resourceLimits !== 'object'
-    || !plan.writerAndHealthIsolation || typeof plan.writerAndHealthIsolation !== 'object') {
+    || !plan.writerAndHealthIsolation || typeof plan.writerAndHealthIsolation !== 'object'
+    || !plan.chunkContract || typeof plan.chunkContract !== 'object') {
     noGo('extraction plan is missing the Storage Guard contract')
   }
   if (!plan.authorization.oneShot
@@ -197,22 +259,64 @@ export function prepareSixStageDiscoveryStoragePreflight(
     || startNotBefore > startNoLaterThan || startNoLaterThan > endNoLaterThan) {
     noGo('approved execution window is invalid')
   }
-  const maximumTotalRunSeconds = positiveFinite(executionWindow.maximumTotalRunSeconds, 'maximumTotalRunSeconds')
-  const maximumSourceReadSeconds = positiveFinite(executionWindow.maximumSourceReadSeconds, 'maximumSourceReadSeconds')
+  const maximumTotalRunSeconds = positiveSafeInteger(executionWindow.maximumTotalRunSeconds, 'maximumTotalRunSeconds')
+  const maximumSourceReadSeconds = positiveSafeInteger(executionWindow.maximumSourceReadSeconds, 'maximumSourceReadSeconds')
   if (maximumSourceReadSeconds > maximumTotalRunSeconds) noGo('source-read limit exceeds total runtime limit')
-  if (positiveFinite(plan.resourceLimits.maximumTotalRunSeconds, 'resourceLimits.maximumTotalRunSeconds') !== maximumTotalRunSeconds
-    || positiveFinite(plan.resourceLimits.maximumSourceReadSeconds, 'resourceLimits.maximumSourceReadSeconds') !== maximumSourceReadSeconds) {
+  if (positiveSafeInteger(plan.resourceLimits.maximumTotalRunSeconds, 'resourceLimits.maximumTotalRunSeconds') !== maximumTotalRunSeconds
+    || positiveSafeInteger(plan.resourceLimits.maximumSourceReadSeconds, 'resourceLimits.maximumSourceReadSeconds') !== maximumSourceReadSeconds) {
     noGo('resource limits differ from the approved execution window')
   }
-  positiveFinite(plan.resourceLimits.maximumOutputBytes, 'resourceLimits.maximumOutputBytes')
-  nonNegativeFinite(plan.resourceLimits.minimumFreeBytesBeforeStart, 'resourceLimits.minimumFreeBytesBeforeStart')
-  nonNegativeFinite(plan.resourceLimits.minimumFreeBytesAfterCompletion, 'resourceLimits.minimumFreeBytesAfterCompletion')
-  nonNegativeFinite(plan.resourceLimits.maximumWalBytesAtStart, 'resourceLimits.maximumWalBytesAtStart')
-  nonNegativeFinite(plan.resourceLimits.maximumWalGrowthBytes, 'resourceLimits.maximumWalGrowthBytes')
+  positiveSafeInteger(plan.resourceLimits.maximumOutputBytes, 'resourceLimits.maximumOutputBytes')
+  nonNegativeSafeInteger(plan.resourceLimits.minimumFreeBytesBeforeStart, 'resourceLimits.minimumFreeBytesBeforeStart')
+  nonNegativeSafeInteger(plan.resourceLimits.minimumFreeBytesAfterCompletion, 'resourceLimits.minimumFreeBytesAfterCompletion')
+  nonNegativeSafeInteger(plan.resourceLimits.maximumWalBytesAtStart, 'resourceLimits.maximumWalBytesAtStart')
+  nonNegativeSafeInteger(plan.resourceLimits.maximumWalGrowthBytes, 'resourceLimits.maximumWalGrowthBytes')
+  positiveSafeInteger(plan.resourceLimits.maximumSourceReadBytesPerSecond, 'resourceLimits.maximumSourceReadBytesPerSecond')
   if (plan.resourceLimits.minimumFreeBytesAfterCompletion > plan.resourceLimits.minimumFreeBytesBeforeStart) {
     noGo('post-run free-space floor exceeds the start requirement')
   }
-  positiveFinite(plan.writerAndHealthIsolation.healthIntervalSeconds, 'writerAndHealthIsolation.healthIntervalSeconds')
+  healthUrl(plan.writerAndHealthIsolation.webHealth, 'writerAndHealthIsolation.webHealth')
+  healthUrl(plan.writerAndHealthIsolation.analogHealth, 'writerAndHealthIsolation.analogHealth')
+  positiveSafeInteger(plan.writerAndHealthIsolation.healthIntervalSeconds, 'writerAndHealthIsolation.healthIntervalSeconds')
+  positiveSafeInteger(plan.writerAndHealthIsolation.handleProbeIntervalSeconds, 'writerAndHealthIsolation.handleProbeIntervalSeconds')
+  const handleProbeTimeoutSeconds = positiveSafeInteger(
+    plan.writerAndHealthIsolation.handleProbeTimeoutSeconds,
+    'writerAndHealthIsolation.handleProbeTimeoutSeconds',
+  )
+  if (handleProbeTimeoutSeconds > 60) noGo('handle probe timeout exceeds 60 seconds')
+  const maximumWriterHoldSeconds = positiveSafeInteger(
+    plan.writerAndHealthIsolation.maximumWriterHoldSeconds,
+    'writerAndHealthIsolation.maximumWriterHoldSeconds',
+  )
+  const writerRestoreReserveSeconds = positiveSafeInteger(
+    plan.writerAndHealthIsolation.writerRestoreReserveSeconds,
+    'writerAndHealthIsolation.writerRestoreReserveSeconds',
+  )
+  const minimumWriterRestoreReserveSeconds = Math.ceil((
+    LAUNCHD_RESTORE_RESERVE_BASE_MS
+      + WEEKLY_BACKUP_WRITER_LABELS.length * LAUNCHD_RESTORE_RESERVE_PER_WRITER_MS
+  ) / 1_000)
+  if (maximumWriterHoldSeconds > 3 * 60 * 60 || maximumWriterHoldSeconds > maximumTotalRunSeconds
+    || maximumSourceReadSeconds > maximumWriterHoldSeconds - writerRestoreReserveSeconds
+    || writerRestoreReserveSeconds < minimumWriterRestoreReserveSeconds
+    || maximumWriterHoldSeconds <= writerRestoreReserveSeconds) {
+    noGo('Writer Hold limit is outside the approved source-read boundary')
+  }
+  if (plan.writerAndHealthIsolation.handleProbeIntervalSeconds > 5) {
+    noGo('handle probe interval exceeds five seconds')
+  }
+  assertLaunchdIdentities(
+    plan.writerAndHealthIsolation.approvedWriters,
+    WEEKLY_BACKUP_WRITER_LABELS,
+    'writerAndHealthIsolation.approvedWriters',
+  )
+  assertLaunchdIdentities(
+    plan.writerAndHealthIsolation.approvedReaders,
+    WEEKLY_BACKUP_READER_LABELS,
+    'writerAndHealthIsolation.approvedReaders',
+  )
+  if (plan.chunkContract.rowsPerChunk !== 25_000) noGo('rowsPerChunk must remain fixed at 25,000')
+  nonNegativeSafeInteger(plan.chunkContract.sleepBetweenChunksMs, 'chunkContract.sleepBetweenChunksMs')
 
   let incidentDirectory: string
   if (options.mode === 'AUTHORIZED_PRODUCTION_READ') {

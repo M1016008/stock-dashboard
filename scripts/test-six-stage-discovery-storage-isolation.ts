@@ -18,6 +18,10 @@ import {
   type StorageProbe,
   type VolumeIdentity,
 } from '@/lib/storage/external-storage-guard'
+import {
+  WEEKLY_BACKUP_READER_LABELS,
+  WEEKLY_BACKUP_WRITER_LABELS,
+} from '@/lib/storage/weekly-backup-policy'
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'stockboard-six-stage-storage-isolation-'))
 const productionIncidents = path.join(root, 'production-incidents')
@@ -28,6 +32,15 @@ const databasePath = `${mountPath}/stock-dashboard/stockboard.db`
 const volumeUuid = 'FIXTURE-OWC-UUID'
 const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as {
   DatabaseSync: new (file: string, options?: { readOnly?: boolean }) => { close(): void }
+}
+
+function launchdIdentity(label: string, index: number) {
+  return {
+    label,
+    definitionSha256: (index % 10).toString().repeat(64),
+    program: `/approved/${label}`,
+    plistPath: `/approved/${label}.plist`,
+  }
 }
 
 function plan(mode: 'LOCAL_FIXTURE' | 'AUTHORIZED_PRODUCTION_READ'): SixStageDiscoveryStoragePlan {
@@ -42,8 +55,8 @@ function plan(mode: 'LOCAL_FIXTURE' | 'AUTHORIZED_PRODUCTION_READ'): SixStageDis
         startNotBefore: new Date(now - 60_000).toISOString(),
         startNoLaterThan: new Date(now + 60_000).toISOString(),
         endNoLaterThan: new Date(now + 600_000).toISOString(),
-        maximumTotalRunSeconds: 600,
-        maximumSourceReadSeconds: 300,
+        maximumTotalRunSeconds: 1_800,
+        maximumSourceReadSeconds: 230,
       },
     },
     sourceDatabase: { path: databasePath },
@@ -53,15 +66,27 @@ function plan(mode: 'LOCAL_FIXTURE' | 'AUTHORIZED_PRODUCTION_READ'): SixStageDis
       finalDirectory: `${mountPath}/research/run`,
     },
     resourceLimits: {
-      maximumSourceReadSeconds: 300,
-      maximumTotalRunSeconds: 600,
+      maximumSourceReadSeconds: 230,
+      maximumTotalRunSeconds: 1_800,
       maximumOutputBytes: 1_000_000,
       minimumFreeBytesBeforeStart: 1_000,
       minimumFreeBytesAfterCompletion: 500,
       maximumWalBytesAtStart: 1_000_000,
       maximumWalGrowthBytes: 100_000,
+      maximumSourceReadBytesPerSecond: 1_000_000,
     },
-    writerAndHealthIsolation: { healthIntervalSeconds: 60 },
+    writerAndHealthIsolation: {
+      webHealth: 'http://127.0.0.1:3000/api/health',
+      analogHealth: 'http://127.0.0.1:4100/health',
+      healthIntervalSeconds: 60,
+      handleProbeIntervalSeconds: 1,
+      handleProbeTimeoutSeconds: 15,
+      maximumWriterHoldSeconds: 900,
+      writerRestoreReserveSeconds: 670,
+      approvedWriters: WEEKLY_BACKUP_WRITER_LABELS.map(launchdIdentity),
+      approvedReaders: WEEKLY_BACKUP_READER_LABELS.map((label, index) => launchdIdentity(label, index + 20)),
+    },
+    chunkContract: { rowsPerChunk: 25_000, sleepBetweenChunksMs: 1 },
     storageGuard: {
       executionScope: SIX_STAGE_DISCOVERY_SCOPE,
       mode,
@@ -165,6 +190,38 @@ try {
     productionIncidentDirectory: productionIncidents,
   }))
   assert.equal(fs.existsSync(sharedLatch), false)
+
+  for (const invalidPlan of [
+    {
+      ...plan('AUTHORIZED_PRODUCTION_READ'),
+      resourceLimits: { ...plan('AUTHORIZED_PRODUCTION_READ').resourceLimits, maximumOutputBytes: 0 },
+    },
+    {
+      ...plan('AUTHORIZED_PRODUCTION_READ'),
+      resourceLimits: { ...plan('AUTHORIZED_PRODUCTION_READ').resourceLimits, maximumSourceReadBytesPerSecond: 0 },
+    },
+    {
+      ...plan('AUTHORIZED_PRODUCTION_READ'),
+      writerAndHealthIsolation: {
+        ...plan('AUTHORIZED_PRODUCTION_READ').writerAndHealthIsolation,
+        maximumWriterHoldSeconds: 899,
+      },
+    },
+    {
+      ...plan('AUTHORIZED_PRODUCTION_READ'),
+      writerAndHealthIsolation: {
+        ...plan('AUTHORIZED_PRODUCTION_READ').writerAndHealthIsolation,
+        approvedWriters: plan('AUTHORIZED_PRODUCTION_READ').writerAndHealthIsolation.approvedWriters.slice(1),
+      },
+    },
+  ]) {
+    expectNoGo(() => prepareSixStageDiscoveryStoragePreflight(invalidPlan, {
+      mode: 'AUTHORIZED_PRODUCTION_READ',
+      environment: environment('AUTHORIZED_PRODUCTION_READ'),
+      productionIncidentDirectory: productionIncidents,
+    }))
+    assert.equal(fs.existsSync(sharedLatch), false)
+  }
 
   const wrongProductionIncident = environment('AUTHORIZED_PRODUCTION_READ')
   wrongProductionIncident.STOCK_DATA_INCIDENT_DIR = path.join(root, 'wrong-production-incidents')
@@ -306,6 +363,16 @@ try {
   assert.deepEqual(effects, { databaseConnections: 0, writerHolds: 0, outputs: 0 })
 
   const runnerSource = fs.readFileSync('scripts/run-six-stage-discovery-source-export.mjs', 'utf8')
+  const orchestratorSource = fs.readFileSync('scripts/run-six-stage-discovery-source-export-orchestrator.ts', 'utf8')
+  const packageJson = JSON.parse(fs.readFileSync('package.json', 'utf8'))
+  assert.equal(packageJson.scripts['research:six-stage:discovery-source-export'],
+    'tsx scripts/run-six-stage-discovery-source-export-orchestrator.ts')
+  assert.match(runnerSource, /fs\.readFileSync\(3/,
+    'the extraction worker must require the formal orchestrator attestation channel')
+  assert.match(runnerSource, /process\.ppid !== orchestratorPid/,
+    'the extraction worker must fail closed when its formal orchestrator exits')
+  assert.match(orchestratorSource, /runSixStageDiscoveryExecution/)
+  assert.match(orchestratorSource, /assertNoUnauthorizedDatabaseHandles/)
   const prepareOffset = runnerSource.indexOf('prepareSixStageDiscoveryStoragePreflight(plan')
   const certifyOffset = runnerSource.indexOf('certifySixStageDiscoveryStoragePreflight(storagePreflight)')
   const outputOffset = runnerSource.indexOf('fs.mkdirSync(currentIncomplete')
@@ -350,13 +417,39 @@ try {
   const runnerPlanBytes = `${JSON.stringify(runnerPlan, null, 2)}\n`
   fs.writeFileSync(runnerPlanPath, runnerPlanBytes)
   const childHome = path.join(root, 'runner-home')
-  const runner = spawnSync(path.resolve('node_modules/.bin/tsx'), [
+  const directRunner = spawnSync(process.execPath, [
+    '--import',
+    'tsx',
     'scripts/run-six-stage-discovery-source-export.mjs',
     runnerPlanPath,
     crypto.createHash('sha256').update(runnerPlanBytes).digest('hex'),
   ], {
     cwd: process.cwd(),
     encoding: 'utf8',
+    env: { PATH: process.env.PATH, HOME: childHome, NODE_ENV: 'production' },
+  })
+  assert.equal(directRunner.status, 1)
+  assert.match(`${directRunner.stdout}\n${directRunner.stderr}`, /trusted research execution orchestrator attestation is required/)
+  assert.equal(fs.existsSync(runnerOutput), false)
+
+  const runnerPlanHash = crypto.createHash('sha256').update(runnerPlanBytes).digest('hex')
+  const attestationPath = path.join(root, 'runner-attestation.json')
+  fs.writeFileSync(attestationPath, JSON.stringify({
+    token: 'a'.repeat(64),
+    planHash: runnerPlanHash,
+    orchestratorPid: process.pid,
+  }))
+  const attestationFd = fs.openSync(attestationPath, 'r')
+  const runner = spawnSync(process.execPath, [
+    '--import',
+    'tsx',
+    'scripts/run-six-stage-discovery-source-export.mjs',
+    runnerPlanPath,
+    runnerPlanHash,
+  ], {
+    cwd: process.cwd(),
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe', attestationFd],
     env: {
       PATH: process.env.PATH,
       HOME: childHome,
@@ -365,6 +458,7 @@ try {
       STOCKBOARD_RESEARCH_PREFLIGHT_MODE: 'AUTHORIZED_PRODUCTION_READ',
     },
   })
+  fs.closeSync(attestationFd)
   assert.equal(runner.status, 1)
   assert.match(`${runner.stdout}\n${runner.stderr}`, /STOCK_DATA_MOUNT_PATH is required/)
   assert.equal(fs.existsSync(runnerOutput), false)
