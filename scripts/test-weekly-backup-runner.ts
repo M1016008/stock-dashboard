@@ -121,6 +121,8 @@ async function main(): Promise<void> {
         const state = writerState.get(label)!
         writerState.set(label, { ...state, loaded: true, instances: 1 })
       },
+      processGroupAlive: async () => false,
+      sleep: async (milliseconds) => { clock += milliseconds },
       now: () => ++clock,
     }
     const observation: WeeklyBackupObservation = {
