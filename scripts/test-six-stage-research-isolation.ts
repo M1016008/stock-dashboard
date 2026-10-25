@@ -52,6 +52,8 @@ try {
   assert.equal(response({ path: realPath, environment: { ...realEnvironment, STOCK_DATA_VOLUME_UUID: 'spoofed' } }).status, 404)
   assert.equal(response({ path: realPath, environment: { ...realEnvironment, NODE_ENV: 'production' } }).status, 404)
   assert.equal(response({ path: '/dev/six-stage-event-matching', environment: fixtureEnvironment }).status, 200)
+  assert.equal(response({ path: '/api/research/six-stage/current-projection', environment: fixtureEnvironment }).status, 200)
+  assert.equal(response({ path: '/api/research/six-stage/current-projection', hostname: 'stock.marketframe.jp', environment: fixtureEnvironment }).status, 404)
   assert.equal(response({ path: realPath, environment: fixtureEnvironment }).status, 404)
 
   const packageJson = JSON.parse(fs.readFileSync('package.json', 'utf8')) as { scripts: Record<string, string> }

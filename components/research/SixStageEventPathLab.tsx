@@ -32,6 +32,10 @@ import {
   type FixtureMarket,
 } from '@/lib/research/six-stage-event-lab-fixture'
 import {
+  currentProjectionRowToSimilarityVector,
+  type CurrentServingProjectionRow,
+} from '@/lib/research/six-stage-current-serving-projection'
+import {
   evaluateFirstPassage,
   summarizeDistribution,
   summarizeFirstPassage,
@@ -43,7 +47,23 @@ const fixture = buildSixStageEventLabFixture()
 const INITIAL_EVENT_ID = fixture.events.find((event) => (
   event.market === 'JP' && event.vector.sequenceKey === FIXTURE_SEQUENCE_KEYS[0]
 ))?.vector.eventId ?? ''
-const INITIAL_CURRENT_ID = fixture.currentCandidates.find((candidate) => candidate.market === 'JP')?.vector.eventId ?? ''
+const CURRENT_PROJECTION_PAGE_SIZE = 200
+
+type CurrentProjectionResponse = {
+  fixture: boolean
+  generationId: string
+  generatedAt: string
+  definitionVersion: string
+  market: FixtureMarket
+  watermark: { asOfTradingDate: string; sourceGeneration: string; rows: number }
+  total: number
+  rows: CurrentServingProjectionRow[]
+}
+
+type CurrentProjectionState =
+  | { status: 'loading' }
+  | { status: 'error'; message: string }
+  | { status: 'ready'; data: CurrentProjectionResponse }
 const HORIZONS: FixtureHorizon[] = [5, 10, 15, 20]
 const FEATURE_OPTIONS: Array<{ value: EventNumericFeature; label: string }> = [
   { value: 'sma5Angle', label: 'SMA5 角度' },
@@ -56,6 +76,7 @@ const FEATURE_OPTIONS: Array<{ value: EventNumericFeature; label: string }> = [
   { value: 'acceleration', label: '加速度' },
   { value: 'momentum', label: 'Momentum' },
   { value: 'force', label: 'Force' },
+  { value: 'energy', label: 'Energy' },
 ]
 const FEATURE_SCALES = Object.fromEntries([
   ...EVENT_SMA_SIMILARITY_FEATURES.map((feature) => [feature, feature.includes('Angle') ? 20 : feature.includes('Curvature') ? 0.5 : 0.05]),
@@ -126,6 +147,13 @@ function featureValue(vector: EventSimilarityVector, feature: EventNumericFeatur
     : vector.physical[feature as keyof EventSimilarityVector['physical']]
 }
 
+function isProjectionResponse(value: unknown): value is CurrentProjectionResponse {
+  const body = value as Partial<CurrentProjectionResponse> | null
+  return !!body && typeof body.generationId === 'string' && typeof body.definitionVersion === 'string'
+    && !!body.watermark && typeof body.watermark.asOfTradingDate === 'string'
+    && typeof body.watermark.sourceGeneration === 'string' && Array.isArray(body.rows)
+}
+
 function Metric({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
     <div className="min-w-0 border-r border-[var(--color-border-soft)] px-4 py-3 last:border-r-0">
@@ -178,16 +206,42 @@ export function SixStageEventPathLab() {
   const [angleMinimum, setAngleMinimum] = useState(-90)
   const [angleMaximum, setAngleMaximum] = useState(90)
   const [baseEventId, setBaseEventId] = useState(INITIAL_EVENT_ID)
-  const [currentBaseId, setCurrentBaseId] = useState(INITIAL_CURRENT_ID)
+  const [currentBaseId, setCurrentBaseId] = useState('')
+  const [projection, setProjection] = useState<CurrentProjectionState>({ status: 'loading' })
 
   const favorablePct = thresholdPercent(favorableInput, 5)
   const adversePct = thresholdPercent(adverseInput, 5)
   const events = useMemo(() => fixture.events.filter((event) => (
     event.market === market && event.vector.sequenceKey === sequenceKey
   )), [market, sequenceKey])
+  useEffect(() => {
+    const controller = new AbortController()
+    setProjection({ status: 'loading' })
+    fetch(`/api/research/six-stage/current-projection?market=${market}&pageSize=${CURRENT_PROJECTION_PAGE_SIZE}`, {
+      cache: 'no-store',
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`)
+        const body: unknown = await response.json()
+        if (!isProjectionResponse(body)) throw new Error('レスポンス形式が不正です')
+        setProjection({ status: 'ready', data: body })
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return
+        setProjection({ status: 'error', message: error instanceof Error ? error.message : '取得に失敗しました' })
+      })
+    return () => controller.abort()
+  }, [market])
+  const projectionRows = projection.status === 'ready' ? projection.data.rows : null
   const currentMarketCandidates = useMemo(
-    () => fixture.currentCandidates.filter((candidate) => candidate.market === market),
-    [market],
+    () => (projectionRows ?? []).filter((row) => row.market === market).map((row) => ({
+      market: row.market,
+      companyName: row.companyName,
+      row,
+      vector: currentProjectionRowToSimilarityVector(row),
+    })),
+    [projectionRows, market],
   )
   useEffect(() => {
     if (!events.some((event) => event.vector.eventId === baseEventId)) {
@@ -301,13 +355,28 @@ export function SixStageEventPathLab() {
           <div className="flex flex-wrap items-center gap-2 text-[11px] font-semibold text-[var(--color-text-secondary)]">
             <span className="rounded bg-amber-50 px-2 py-1 text-amber-800">合成Fixture</span>
             <span>Discovery上限 2022-12-30</span>
-            <span>現在データ未接続</span>
+            <span>現在候補: 合成Serving Projection API</span>
           </div>
           <h1 className="mt-2 text-2xl font-bold text-[var(--color-text-primary)] sm:text-3xl">6ステージ 経路・SMA・物理状態ラボ</h1>
           <p className="mt-1 max-w-4xl text-[13px] leading-6 text-[var(--color-text-secondary)]">全観測結果を残したまま、値動きの分布、SMA形状、Physical Momentum、現在候補との近さを別々に比較します。順位は観測値であり、採択や売買推奨ではありません。</p>
         </div>
         <div className="flex items-center gap-2 text-[12px] text-[var(--color-text-secondary)]"><Database size={16} aria-hidden /> Production通信 0</div>
       </header>
+
+      <section className="min-w-0 border-b border-[var(--color-border-default)] pb-3 text-[11px] text-[var(--color-text-secondary)]" aria-label="現在候補Projectionの状態" aria-live="polite">
+        {projection.status === 'loading' && <p>現在候補Projectionを読み込み中…</p>}
+        {projection.status === 'error' && <p role="alert" className="font-semibold text-red-700">現在候補Projectionの取得に失敗: {projection.message}。現在候補は0件で表示しています（過去Fixtureの分析は影響を受けません）。</p>}
+        {projection.status === 'ready' && (
+          <dl className="flex min-w-0 flex-wrap gap-x-4 gap-y-1">
+            <div className="flex min-w-0 gap-1"><dt className="shrink-0 font-semibold">generationId</dt><dd className="min-w-0 break-all font-mono">{projection.data.generationId}</dd></div>
+            <div className="flex min-w-0 gap-1"><dt className="shrink-0 font-semibold">as-of</dt><dd className="min-w-0 break-all font-mono">{projection.data.watermark.asOfTradingDate}</dd></div>
+            <div className="flex min-w-0 gap-1"><dt className="shrink-0 font-semibold">sourceGeneration</dt><dd className="min-w-0 break-all font-mono">{projection.data.watermark.sourceGeneration}</dd></div>
+            <div className="flex min-w-0 gap-1"><dt className="shrink-0 font-semibold">definitionVersion</dt><dd className="min-w-0 break-all font-mono">{projection.data.definitionVersion}</dd></div>
+            <div className="flex min-w-0 gap-1"><dt className="shrink-0 font-semibold">取得</dt><dd className="min-w-0 break-all font-mono">{projection.data.rows.length}/{projection.data.total}件{projection.data.total > projection.data.rows.length ? '（上限200件で打切り）' : ''}</dd></div>
+            <div className="font-semibold text-amber-800">合成Fixture · Production通信 0 · PMS/PFS/PESがnull(—)でも正常</div>
+          </dl>
+        )}
+      </section>
 
       <section className="grid gap-3 border-b border-[var(--color-border-default)] pb-4 lg:grid-cols-[auto_auto_minmax(220px,1fr)_auto] lg:items-end" aria-label="研究条件">
         <Segment value={market} onChange={setMarket} label="市場" options={[{ value: 'JP', label: 'JP' }, { value: 'US', label: 'US' }]} />
@@ -399,7 +468,7 @@ export function SixStageEventPathLab() {
           <h2 id="candidate-heading" className="text-[15px] font-bold text-[var(--color-text-primary)]">現在候補との双方向類似検索</h2>
         </div>
         <p className="mt-1 text-[12px] text-[var(--color-text-secondary)]">
-          現在側も過去側も合成Fixtureです。類似度は固定尺度による近さであり、確率や推奨ではありません。
+          現在側(合成Serving Projection API)も過去側も合成Fixtureです。類似度は固定尺度による近さであり、確率や推奨ではありません。PMS/PFS/PESがnullの特徴はcoverageに反映されます。
         </p>
 
         <div className="mt-3 grid gap-4 border-y border-[var(--color-border-default)] py-4 lg:grid-cols-2">
@@ -412,6 +481,7 @@ export function SixStageEventPathLab() {
           <label className="text-[12px] font-semibold">
             現在→過去の比較基準銘柄
             <select value={currentBaseId} onChange={(event) => setCurrentBaseId(event.target.value)} className="mt-1 min-h-11 w-full border bg-white px-2">
+              {currentMarketCandidates.length === 0 && <option value="">{projection.status === 'loading' ? '読み込み中…' : '現在候補なし'}</option>}
               {currentMarketCandidates.map((candidate) => <option key={candidate.vector.eventId} value={candidate.vector.eventId}>{candidate.vector.ticker} / {candidate.companyName}</option>)}
             </select>
           </label>
@@ -461,7 +531,7 @@ export function SixStageEventPathLab() {
       </section>
 
       <footer className="border-t border-[var(--color-border-default)] pt-3 text-[11px] leading-5 text-[var(--color-text-tertiary)]">
-        合成Fixtureのため現在銘柄・類似イベントとも実市場データではありません。過去のDiscovery Storeは別画面の固定入力として採択済みですが、現在銘柄Servingは未接続です。Validation/HoldoutおよびProductionには接続しません。
+        合成Fixtureのため現在銘柄・類似イベントとも実市場データではありません。現在銘柄は同一オリジンの合成Serving Projection APIから取得し、過去のDiscovery Storeは別画面の固定入力です。Validation/HoldoutおよびProductionには接続しません。
       </footer>
     </main>
   )

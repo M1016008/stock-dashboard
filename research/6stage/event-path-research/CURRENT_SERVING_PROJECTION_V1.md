@@ -1,6 +1,8 @@
 # Current Serving Projection V1
 
-Status: `DESIGNED_NOT_CONNECTED`
+Plan ID: `SIX_STAGE_CURRENT_SERVING_PROJECTION_CONNECTION_V1`
+
+Status: `FIXTURE_IMPLEMENTED_PRODUCTION_NOT_CONNECTED`
 
 The current-stock matcher remains isolated on synthetic fixtures. This contract is the minimum read-only boundary required for a later, separately approved Serving connection.
 
@@ -8,7 +10,7 @@ The current-stock matcher remains isolated on synthetic fixtures. This contract 
 
 - `market`: `JP | US`
 - `ticker`, `asOfTradingDate`, `sourceGeneration`, `definitionVersion`
-- `sequenceKey`, `transitionLength`, `cAge`
+- `sequenceKey`, `transitionLength`, nullable `cAge`
 - SMA fields computed from data available on or before `asOfTradingDate`
 - raw Physical Momentum fields and market-date normalized `pms`, `pfs`, `pes`
 - per-field availability flags; missing values remain `null`
@@ -21,6 +23,74 @@ The current-stock matcher remains isolated on synthetic fixtures. This contract 
 - A generation mismatch, stale `asOfTradingDate`, definition mismatch, or missing market-date normalization fails closed.
 - Current rows may be compared to frozen Discovery vectors, but cannot be added to Discovery distributions or used to select past hypotheses.
 
+## Implemented fixture boundary
+
+- `six_stage_current_serving_projection_v1` validates every row, both market watermarks, source generations, availability flags, and forbidden forward/outcome fields.
+- A generation is written into a new directory, hashed, completed with a manifest, and only then selected through an atomic `CURRENT.json` pointer replacement. A failed build cannot replace the active generation.
+- The fixture API is bounded to 200 rows per request and 20,000 rows / 64 MiB per generation.
+- The fixture API and UI require the isolated runtime launcher, fixture mode, loopback listening, and loopback request headers. Production, preview, share mode, Cloudflare headers, or public forwarded hosts return 404.
+- Official PMS/PFS/PES remain `null` unless their official definition is available. Raw Momentum/Force/Energy remain separate fields.
+- The current vector is a query only. It is never persisted into the frozen Discovery Store or its distributions.
+
+## Production connection plan V1
+
+This plan is not approved or active. It is the complete scope for the later connection approval.
+
+### Source and columns
+
+The existing JP and US daily Serving update chains pass their already-computed, current-generation rows to a market adapter after their existing quality gate succeeds. The adapter is the only component allowed to use the already-guarded connection owned by that update process. The artifact publisher accepts normalized rows and must not open a Production database itself. A research request never starts either component.
+
+The adapter uses bounded, indexed current-generation reads only:
+
+- `daily_snapshots` or the US current snapshot equivalent supplies the current six-stage state and available SMA values.
+- `feature_snapshots` and `ml_feature_vectors_v2` supply existing slopes, accelerations, SMA200 data, exact stage age, and Physical fields when their date and definition match the market watermark.
+- `physical_momentum_metrics` supplies existing raw and official Physical fields only when its market/date generation is current.
+- `ticker_universe` supplies the existing Serving identity and company name.
+- The last three current snapshot states may be read through the existing `(ticker,date)` or `(date,ticker)` indexes to form two-state and three-state identities. No unbounded history scan is permitted.
+
+Unavailable source columns, short-history values, an absent exact stage age, or an unavailable official score remain `null` with reduced coverage. They are never recomputed from future rows, capped, approximated, or filled with zero. A row with a missing current six-stage state, ticker identity, market watermark, or definition version fails the generation.
+
+- Identity: `market`, `ticker`, company name, market trading date, source generation, definition version.
+- Transition: current six-stage state, last two-state and three-state identities, and exact C-state age in trading sessions when already available; otherwise `null`.
+- SMA: 5/25/75/150/200/300 value, close gap, slope, normalized angle, curvature, price position, order, pair distance, and convergence.
+- Physical: raw velocity, acceleration, Momentum, Force, and Energy.
+- Official score fields: PMS/PFS/PES only when the existing official market-date normalization has completed; otherwise `null` plus `available=false`.
+- Explicitly forbidden: future OHLC, realized returns, MFE/MAE, labels, targets, Validation/Holdout outcomes, and recommendation fields.
+
+### Generation and cadence
+
+- Refresh a market staging artifact once after that market's normal daily Serving generation completes; never on a research request.
+- JP and US retain independent `asOfTradingDate` and `sourceGeneration` watermarks inside one projection generation.
+- A combiner publishes only when both market staging artifacts are `COMPLETE`, hashes match, source generations are unchanged, and their definition versions agree. One combined generation therefore never contains a partially updated market.
+- Publication requires non-empty JP and US rows, stable source generations, exact definition version, unique market/ticker identities, and all row/byte limits.
+- A partially generated or stale artifact is not selected. The prior `CURRENT.json` generation remains readable.
+- Initial rollout retains the active and prior generation. No automatic deletion is enabled by this change.
+
+### Limits and read path
+
+- Maximum 20,000 rows and 64 MiB per immutable generation.
+- Projection build deadline: 5 minutes after the normal Serving rows are available. Source reader concurrency is 1. The adapter may read only current rows plus the indexed states needed for the two/three-state identity; no explicit long transaction, full-history scan, or full-table research query is permitted.
+- Timeout, more than 20,000 rows, more than 64 MiB, a source-generation change during extraction, a stale or incomplete market, or any Storage Guard error leaves the prior generation active and does not publish a partial result.
+- Research reads only the immutable projection artifact; it never opens JP/US Production SQLite.
+- Maximum API page size 200, proposed rate limit 2 requests/second per loopback research process, and no public route.
+- A generation, definition, watermark, hash, or freshness mismatch fails closed. No fallback to direct Production queries is permitted.
+
+### Release isolation, Storage Guard, and rollback
+
+- Production DB access remains owned by the already-guarded daily Serving update. The market adapter may use only that process's existing guarded client; it cannot open an independent connection. The artifact publisher receives normalized rows and performs no DB connection.
+- Artifact output requires a separately approved OWC research-projection root and write permission. The research reader receives read-only permission to that root only.
+- The integration is released from a clean, fixed-commit checkout into a dedicated versioned runner directory. It does not switch `.next-live` or `.next-live-prev`, run `web:deploy`, migrate a schema, or deploy all currently undeployed changes from PRs #12-#16.
+- The only Production code wiring is an explicitly approved post-success call from `update-latest.ts` and `update-us-latest.ts` to the fixed runner. No new scheduler is installed. Existing LaunchAgent schedules and enabled/disabled states remain unchanged.
+- The call is disabled by default. Enabling requires an approved environment flag, exact runner path/hash, OWC root/UUID, row/byte/time limits, and freshness policy in both existing update LaunchAgents.
+- A projection failure records a bounded error and leaves the prior generation active. It must not convert a successful price update into a retry loop or expose partial projection data.
+- Disable by returning the integration flag to off. Roll back the runner path/hash and environment to the recorded prior LaunchAgent definitions; the daily price update continues without projection publication.
+- Roll back by atomically selecting the previous verified generation or disabling current matching. Never rebuild Discovery data and never query Production from the research route.
+- No schema migration, Storage Guard exception, LaunchAgent enablement, or Production deploy is included in the fixture implementation.
+
+### Initial activation gates
+
+Before the first real generation, the separately approved operation must verify the exact Production baseline commit and LaunchAgent hashes, OWC mount path/UUID/physical identity, projection root ownership and free space, current JP/US source generations and freshness, Storage Guard health, and absence of a concurrent daily update. It then runs one bounded generation under the normal guarded update context, validates both market hashes/manifests and loopback reads, and only then enables the post-success calls. Any mismatch leaves the integration flag off and the Web/runtime unchanged.
+
 ## Matching semantics
 
 - Exact matching and similarity ranking are separate response tiers.
@@ -31,4 +101,4 @@ The current-stock matcher remains isolated on synthetic fixtures. This contract 
 
 ## Separate approval required
 
-Approval must name the Serving source, generation/read-only API, projected columns, refresh cadence, maximum rows/bytes, request rate, and rollback/disable procedure. This repository change does not access or modify Production.
+Approval must explicitly cover: the exact fixed integration commit and runner hashes; the two post-success hook changes; the exact OWC artifact root, UUID, ownership, and permissions; the 20,000-row/64-MiB/5-minute/source-reader-one limits; the once-per-completed-generation cadence; the 200-row and 2-request/second loopback read limits; freshness policy; the two LaunchAgent environment diffs without schedule or enabled-state changes; one initial bounded generation; and the rollback/disable procedure. It does not authorize `web:deploy`, a research-side Production DB connection, a schema change, a new scheduler, or use of Validation/Holdout outcomes.

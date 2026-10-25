@@ -86,6 +86,7 @@ function createVector(input: {
       acceleration: round(Math.cos(index * 0.29) * 0.8),
       momentum: round(wave * 0.9 + slow * 0.5),
       force: round((wave + trend) * 0.7),
+      energy: round(0.5 * (wave * 1.4 + trend * 0.3) ** 2),
       // Synthetic z-composites use the same centered scale as the production
       // PMS/PFS/PES definition. They are fixture values, not market scores.
       pms: round(wave * 1.1 + slow * 0.35 + trend * 0.2),
