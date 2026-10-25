@@ -4,17 +4,18 @@ Plan ID: `SIX_STAGE_CURRENT_SERVING_PROJECTION_CONNECTION_V2`
 
 Status: `READY_FOR_EXPLICIT_PRODUCTION_APPROVAL`
 
-Supersedes plan SHA-256 `c900fad1f280a4a23514f088e75739a6ad7eb9234f4bf41c93e2197ce05881b6`.
+Supersedes plan SHA-256 `d5f28404621e50e6229c0df746033bf29c07a28b1a8219e9c00c8d166062875c`.
 The prior plan and any prior approval are not reusable.
 
 This plan connects current JP/US Serving features to the already-frozen Discovery research without adding current outcomes to Discovery. It does not authorize execution by itself.
 
 ## Fixed implementation
 
-- Integration commit: `1e6538c926aaab3a6da890ef9b6c514e50f6534e`
+- Integration commit: `a1f54ef40263c9795754ccc63a72063ca5b79d89`
 - Production baseline that may receive the selective hook only: `034310b72f57163ee4607c05d1057310277a787d`
 - Runner: `scripts/build-six-stage-current-serving-projection.ts`
-- Runner SHA-256: `895de1a3dd740e5ad2d7c41e9bc2a7bf93f14395a5b3a1cb573153accad66d01`
+- Runner SHA-256: `fc7e34375b7af9954ece45c1dfe6d3e52fec7ac65fd08dea5b8a215a2c3fac1d`
+- Guarded query-only reader SHA-256: `dd9e37eac89c249013db2fa11993f8054350ad23bd3f1926c760df5159d8f760`
 - Runner process SHA-256: `52e3c7749b8410f8e47ee87c2a14d8f817066a005fd7787cf21a9bded30c6875`
 - Runner attestation SHA-256: `86ee65dcdea9aed412c7454e1396e7125619296e31b8cd5730ec4a6eefc55b13`
 - `tsx` CLI SHA-256: `8690135061bc49d187143493b82d26a09b7fb71d6dd817d2242cc9dc52506de9`
@@ -27,7 +28,16 @@ The integration checkout must be a clean, dedicated OWC checkout at the exact in
 
 ## Source and semantics
 
-The adapter runs only as an opt-in post-success step while the existing JP or US daily update lock is still held. It reuses the guarded Serving clients already owned by that update process. A research API request cannot start the adapter and cannot open either Production database.
+The adapter runs only as an opt-in post-success step while the existing JP or US daily update lock is still held. The parent update process starts a pinned, detached child process; it does not share the parent's SQLite client. The child must open dedicated guarded query-only connections through `openExistingGuardedClient`, enable and verify `PRAGMA query_only=ON`, and reject every exposed statement classified as mutating by `sqlStatementMayMutate`. It does not call generic JP/US readiness helpers and therefore does not run schema ensure, `journal_mode`, `wal_checkpoint`, or `synchronous` configuration. A research API request cannot start the adapter and cannot open either Production database.
+
+The fixed Production source paths are:
+
+- JP lock and JP source: `/Volumes/OWC Express 1M2 80G/stock-dashboard/stockboard.db`, supplied by the existing trusted `STOCKBOARD_DB_PATH` environment.
+- US source: `/Volumes/OWC Express 1M2 80G/stockboard-data/us/stockboard-us.db`, supplied by the existing trusted `US_ANALYTICS_DB_PATH` environment.
+
+Both paths must require the external Storage Guard and must pass its mount, UUID, file identity, companion WAL/SHM, writable-volume, free-space, and fatal-I/O checks before a SQLite connection is opened. A configured `STOCKBOARD_SOURCE_DB_PATH` must resolve to the same JP primary path, and the JP and US database paths must be distinct. A missing, local-fallback, conflicting, or unguarded path is `NO-GO` before source SQL. The only database-side state permitted is SQLite's unavoidable read connection/WAL-index management and the connection-local `query_only` setting.
+
+The child verifies the exact update-lock owner, market job type, `running` state, and unexpired lease from the JP primary database before reading market rows. For US, the lock check remains on the JP primary lock table while source rows are read from the guarded US database. Source Generation is read before the bounded source query and again afterward through the same market reader; any watermark, row-count, date, computed-at, price-basis, or coverage change fails closed and no market stage is published.
 
 Per market, the adapter reads only current indexed rows from:
 
@@ -57,7 +67,7 @@ No outcome, forward price, realized return, MFE/MAE, target, label, Validation/H
 - Maximum combined rows: 20,000.
 - Maximum immutable generation size: 64 MiB.
 - Maximum adapter wall time per market: 5 minutes.
-- Source reader concurrency: 1.
+- Source reader concurrency: 1, using one dedicated guarded query-only client per required database.
 - Auxiliary coverage floor: 95% for ML, SMA, and Physical rows.
 - Freshness: each market as-of date no older than 8 days at publish and read time.
 - JP/US as-of skew: at most 4 days.
@@ -95,9 +105,9 @@ Only the existing JP and US daily update LaunchAgents may receive these environm
 
 - `CURRENT_SERVING_PROJECTION_ENABLED=1`
 - `CURRENT_SERVING_PROJECTION_INTEGRATION_ROOT=<dedicated OWC checkout>`
-- `CURRENT_SERVING_PROJECTION_INTEGRATION_COMMIT=1e6538c926aaab3a6da890ef9b6c514e50f6534e`
+- `CURRENT_SERVING_PROJECTION_INTEGRATION_COMMIT=a1f54ef40263c9795754ccc63a72063ca5b79d89`
 - `CURRENT_SERVING_PROJECTION_RUNNER_PATH=<integration root>/scripts/build-six-stage-current-serving-projection.ts`
-- `CURRENT_SERVING_PROJECTION_RUNNER_SHA256=895de1a3dd740e5ad2d7c41e9bc2a7bf93f14395a5b3a1cb573153accad66d01`
+- `CURRENT_SERVING_PROJECTION_RUNNER_SHA256=fc7e34375b7af9954ece45c1dfe6d3e52fec7ac65fd08dea5b8a215a2c3fac1d`
 - `CURRENT_SERVING_PROJECTION_TSX_SHA256=8690135061bc49d187143493b82d26a09b7fb71d6dd817d2242cc9dc52506de9`
 - `CURRENT_SERVING_PROJECTION_TSCONFIG_SHA256=8bfad791bc4b05646d03aaf269e2af7040657275ebb4fa5daa798b1e09380dbf`
 - `CURRENT_SERVING_PROJECTION_PACKAGE_LOCK_SHA256=82df6d57da29984a1ee3e939aaef0efbbefc27f3ae996a502e25bcaf45a4faec`
@@ -115,10 +125,10 @@ The two minimum-row values must be recorded from the latest previously successfu
 
 After separate approval, execute once in this order:
 
-1. Verify Production baseline commit and the four-file selective diff; verify the dedicated OWC integration checkout, hashes, OWC identity, permissions, capacity, Storage Guard health, and current Web/Analog health.
+1. Verify Production baseline commit and the four-file selective diff; verify the dedicated OWC integration checkout, hashes (including the guarded query-only reader), exact JP/US database paths, OWC identity, permissions, capacity, Storage Guard health, and current Web/Analog health.
 2. Record both daily LaunchAgent definitions and states. Apply only the approved environment additions without changing labels, schedules, programs, or disabled states.
-3. Run the existing JP daily update entry point once through its normal guarded path, or allow its next already-scheduled successful run. The adapter must observe the exact JP update lock, complete within 5 minutes, and stage JP without selecting a combined generation.
-4. Repeat for US through its normal guarded path. US source metadata must attest `tiingo_adj_ohlc_ratio_v1`.
+3. Run the existing JP daily update entry point once through its normal guarded path, or allow its next already-scheduled successful run. The detached adapter must independently pass the Production Storage Guard, enable and verify query-only mode, observe the exact JP update lock, preserve the before/after Source Generation, complete within 5 minutes, and stage JP without selecting a combined generation.
+4. Repeat for US through its normal guarded path. The JP lock reader and US source reader must independently pass the Production Storage Guard; US source metadata must attest `tiingo_adj_ohlc_ratio_v1` and its Source Generation must remain unchanged across the read.
 5. Publish only after both market stages pass. Validate generation and file hashes, manifests, row/byte limits, market dates, source generations, null/coverage semantics, loopback API page/rate limits, and exact/similarity fixture parity.
 6. Confirm the normal JP/US updates succeeded independently of projection publication and that Web/Analog/Storage Guard remain healthy.
 
@@ -142,7 +152,7 @@ Rollback does not run `web:deploy`, switch Web builds, restore a database, alter
 
 ## Verified QA
 
-- Adapter fixture: PASS, including exact Universe/identity/close coverage, auxiliary coverage, source-date and price-basis mismatch, C-age parity, invalid/gapped regime boundaries, update-lock ownership, process-group timeout, and interruption recovery.
+- Adapter fixture: PASS, including exact Universe/identity/close coverage, auxiliary coverage, source-date and price-basis mismatch, C-age parity, invalid/gapped regime boundaries, update-lock ownership, independent query-only readers, mutating-SQL rejection, process-group timeout, and interruption recovery.
 - Projection fixture/API: PASS, 36 JP/US rows, atomic publication, old-generation protection, public-route rejection, page/rate limits.
 - Frozen real research Store regression: PASS, 11,179,679 events unchanged.
 - Storage Guard regression suite: PASS.
