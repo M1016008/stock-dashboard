@@ -187,6 +187,15 @@ async function main(): Promise<void> {
     assert.equal(body.total, 18)
     assert.equal(body.rows.length, 18)
 
+    const generationMismatch = await withEnvironment(runtime, () => GET(new NextRequest(
+      'http://127.0.0.1:3001/api/research/six-stage/current-projection?market=JP&generation=wrong',
+    )))
+    assert.equal(generationMismatch.status, 409)
+    const rateLimited = await withEnvironment(runtime, () => GET(new NextRequest(
+      'http://127.0.0.1:3001/api/research/six-stage/current-projection?market=JP',
+    )))
+    assert.equal(rateLimited.status, 429)
+
     const publicResponse = await withEnvironment(runtime, () => GET(new NextRequest(
       'http://stock.marketframe.jp/api/research/six-stage/current-projection?market=JP',
       { headers: { 'cf-ray': 'fixture' } },
@@ -199,6 +208,7 @@ async function main(): Promise<void> {
       officialScores: 'NULL_WHEN_UNAVAILABLE',
       oldGenerationProtected: true,
       apiPublicRouteRejected: true,
+      apiRateLimitEnforced: true,
     }, null, 2))
   } finally {
     fs.rmSync(temporary, { recursive: true, force: true })

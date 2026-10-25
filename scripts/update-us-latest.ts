@@ -17,6 +17,7 @@ import { resolveConfiguredStoragePath } from '@/lib/storage-paths'
 import { guardForDatabase, requiresExternalStorageGuard } from '@/lib/storage/external-storage-guard'
 import { US_ADJUSTED_PRICE_BASIS } from '@/lib/us-adjusted-ohlcv'
 import { usInvestableSymbolSql } from '@/lib/us-symbol-quality'
+import { runAttestedCurrentServingProjection } from '@/lib/research/six-stage-current-serving-runner-process'
 
 type RunResult = {
   code: number | null
@@ -482,6 +483,32 @@ async function main() {
       UPDATE_CHILD_TIMEOUT_MINUTES: process.env.US_DASHBOARD_CACHE_TIMEOUT_MINUTES ?? '30',
     }, heartbeat)
     await lock.heartbeat()
+
+    if (process.env.CURRENT_SERVING_PROJECTION_ENABLED === '1') {
+      try {
+        await waitForMemoryHeadroom({ label: 'six-stage-current-serving-projection-us' })
+        const projection = await runAttestedCurrentServingProjection({
+          environment: withMemoryGuardEnv({
+            ...process.env,
+            CURRENT_SERVING_PROJECTION_MARKET: 'US',
+            CURRENT_SERVING_PROJECTION_UPDATE_CONTEXT: 'US',
+            CURRENT_SERVING_PROJECTION_UPDATE_LOCK_OWNER: lock.owner,
+            SKIP_SCHEMA_ENSURE: '1',
+          }),
+          timeoutMs: 5 * 60_000,
+        })
+        if (projection.code !== 0) {
+          throw new Error(
+            `current Serving projection failed: code=${projection.code}, signal=${projection.signal ?? 'none'}`,
+          )
+        }
+      } catch (error) {
+        console.error(
+          `Current Serving projection remains on its prior generation: ${errorMessage(error)}`,
+        )
+      }
+      await lock.heartbeat()
+    }
 
     const finalOhlcv = await latestUsOhlcvDate()
     const finalSnapshots = await latestUsSnapshotDate()

@@ -13,6 +13,7 @@ import {
   EXCLUSIVE_UPDATE_JOB_TYPES,
 } from '@/lib/server/update-lock'
 import { waitForMemoryHeadroom, withMemoryGuardEnv } from '@/lib/system/memory-guard'
+import { runAttestedCurrentServingProjection } from '@/lib/research/six-stage-current-serving-runner-process'
 
 type RunResult = {
   code: number | null
@@ -436,6 +437,30 @@ async function main() {
 
     await runRequired('scripts/build-dashboard-cache.ts', {}, heartbeat)
     await lock.heartbeat()
+
+    if (process.env.CURRENT_SERVING_PROJECTION_ENABLED === '1') {
+      try {
+        await waitForMemoryHeadroom({ label: 'six-stage-current-serving-projection-jp' })
+        const projection = await runAttestedCurrentServingProjection({
+          environment: withMemoryGuardEnv({
+            ...process.env,
+            CURRENT_SERVING_PROJECTION_MARKET: 'JP',
+            CURRENT_SERVING_PROJECTION_UPDATE_CONTEXT: 'JP',
+            CURRENT_SERVING_PROJECTION_UPDATE_LOCK_OWNER: lock.owner,
+            SKIP_SCHEMA_ENSURE: '1',
+          }),
+          timeoutMs: 5 * 60_000,
+        })
+        if (projection.code !== 0) {
+          throw new Error(
+            `current Serving projection failed: code=${projection.code}, signal=${projection.signal ?? 'none'}`,
+          )
+        }
+      } catch (error) {
+        console.error(`Current Serving projection remains on its prior generation: ${errorMessage(error)}`)
+      }
+      await lock.heartbeat()
+    }
 
     const after = await getDataFreshness()
     console.log('Freshness after:', after)

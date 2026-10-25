@@ -1,9 +1,30 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { buildFixtureCurrentServingProjection } from '@/lib/research/six-stage-current-serving-projection-fixture'
+import {
+  assertCurrentServingProjectionFreshness,
+  readCurrentServingProjection,
+} from '@/lib/research/six-stage-current-serving-projection-store'
 import { isSixStageResearchRequestAllowed } from '@/lib/research/six-stage-research-isolation'
+import { resolveSixStageCurrentProjectionRoot } from '@/lib/runtime/isolation'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
+
+const globalForRateLimit = globalThis as typeof globalThis & {
+  sixStageCurrentProjectionRequests?: number[]
+}
+
+function allowRequest(now = Date.now()): boolean {
+  const recent = (globalForRateLimit.sixStageCurrentProjectionRequests ?? [])
+    .filter((timestamp) => now - timestamp < 1_000)
+  if (recent.length >= 2) {
+    globalForRateLimit.sixStageCurrentProjectionRequests = recent
+    return false
+  }
+  recent.push(now)
+  globalForRateLimit.sixStageCurrentProjectionRequests = recent
+  return true
+}
 
 function integer(value: string | null, fallback: number): number {
   if (value == null || value === '') return fallback
@@ -13,11 +34,19 @@ function integer(value: string | null, fallback: number): number {
 }
 
 export async function GET(request: NextRequest) {
+  const artifactRoot = process.env.SIX_STAGE_CURRENT_SERVING_PROJECTION_ROOT?.trim()
+  const mode = artifactRoot ? 'real' : 'fixture'
   if (!isSixStageResearchRequestAllowed({
-    mode: 'fixture',
+    mode,
     hostname: request.nextUrl.hostname,
     headers: request.headers,
   })) return new NextResponse('Not Found', { status: 404 })
+  if (!allowRequest()) {
+    return NextResponse.json({ error: 'current_projection_rate_limited' }, {
+      status: 429,
+      headers: { 'Cache-Control': 'no-store', 'Retry-After': '1' },
+    })
+  }
 
   try {
     const market = request.nextUrl.searchParams.get('market')?.toUpperCase()
@@ -26,7 +55,10 @@ export async function GET(request: NextRequest) {
     const pageSize = integer(request.nextUrl.searchParams.get('pageSize'), 100)
     if (page < 1 || pageSize < 1 || pageSize > 200) throw new Error('invalid_pagination')
     const ticker = request.nextUrl.searchParams.get('ticker')?.trim().toUpperCase() ?? ''
-    const payload = buildFixtureCurrentServingProjection()
+    const payload = artifactRoot
+      ? readCurrentServingProjection({ root: resolveSixStageCurrentProjectionRoot(artifactRoot) })
+      : buildFixtureCurrentServingProjection()
+    if (artifactRoot) assertCurrentServingProjectionFreshness(payload)
     const requestedGeneration = request.nextUrl.searchParams.get('generation')
     if (requestedGeneration && requestedGeneration !== payload.generationId) {
       return NextResponse.json({ error: 'current_projection_generation_mismatch' }, {
@@ -38,7 +70,7 @@ export async function GET(request: NextRequest) {
     const offset = (page - 1) * pageSize
     return NextResponse.json({
       kind: payload.kind,
-      fixture: true,
+      fixture: !artifactRoot,
       generationId: payload.generationId,
       generatedAt: payload.generatedAt,
       definitionVersion: payload.definitionVersion,
