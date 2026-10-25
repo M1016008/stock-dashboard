@@ -29,7 +29,7 @@ function smaFeature(input: {
   const value = input.closeGap === null || input.closeGap <= -0.99
     ? null
     : rounded(input.close / (1 + input.closeGap))
-  const slope = input.angle === null ? null : rounded(Math.tan(input.angle * Math.PI / 180) / 100)
+  const slope = input.angle === null ? null : rounded(Math.tan(input.angle * Math.PI / 180))
   const position = input.closeGap === null ? null : Math.abs(input.closeGap) < 0.001 ? 'TOUCH' : input.closeGap > 0 ? 'ABOVE' : 'BELOW'
   return {
     value,
@@ -126,8 +126,40 @@ export function buildFixtureCurrentServingProjection(): CurrentServingProjection
     definitionVersion: CURRENT_SERVING_PROJECTION_DEFINITION_VERSION,
     source: 'SYNTHETIC_SERVING_UPDATE_CHAIN_FIXTURE',
     marketWatermarks: {
-      JP: { asOfTradingDate: AS_OF, sourceGeneration: GENERATIONS.JP, rows: rows.filter((row) => row.market === 'JP').length },
-      US: { asOfTradingDate: AS_OF, sourceGeneration: GENERATIONS.US, rows: rows.filter((row) => row.market === 'US').length },
+      JP: {
+        asOfTradingDate: AS_OF,
+        sourceGeneration: GENERATIONS.JP,
+        priceBasis: 'FIXTURE_JP_PREFIX_ONLY',
+        featureSet: 'ma_physics_v4',
+        rows: rows.filter((row) => row.market === 'JP').length,
+        coverage: {
+          snapshotRows: rows.filter((row) => row.market === 'JP').length,
+          eligibleRows: rows.filter((row) => row.market === 'JP').length,
+          universeRows: rows.filter((row) => row.market === 'JP').length,
+          universeIdentityRows: rows.filter((row) => row.market === 'JP').length,
+          closeRows: rows.filter((row) => row.market === 'JP').length,
+          mlRows: rows.filter((row) => row.market === 'JP').length,
+          smaRows: rows.filter((row) => row.market === 'JP').length,
+          physicalRows: rows.filter((row) => row.market === 'JP').length,
+        },
+      },
+      US: {
+        asOfTradingDate: AS_OF,
+        sourceGeneration: GENERATIONS.US,
+        priceBasis: 'FIXTURE_US_ADJUSTED_PREFIX_ONLY',
+        featureSet: 'ma_physics_v4',
+        rows: rows.filter((row) => row.market === 'US').length,
+        coverage: {
+          snapshotRows: rows.filter((row) => row.market === 'US').length,
+          eligibleRows: rows.filter((row) => row.market === 'US').length,
+          universeRows: rows.filter((row) => row.market === 'US').length,
+          universeIdentityRows: rows.filter((row) => row.market === 'US').length,
+          closeRows: rows.filter((row) => row.market === 'US').length,
+          mlRows: rows.filter((row) => row.market === 'US').length,
+          smaRows: rows.filter((row) => row.market === 'US').length,
+          physicalRows: rows.filter((row) => row.market === 'US').length,
+        },
+      },
     },
     rows,
   }

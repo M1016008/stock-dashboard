@@ -6,6 +6,7 @@ import {
 export const CURRENT_SERVING_PROJECTION_DEFINITION_VERSION = 'six_stage_current_serving_projection_v1'
 export const CURRENT_SERVING_PROJECTION_MAX_ROWS = 20_000
 export const CURRENT_SERVING_PROJECTION_MAX_BYTES = 64 * 1024 * 1024
+export const CURRENT_SERVING_PROJECTION_MIN_AUXILIARY_COVERAGE = 0.95
 export const CURRENT_SERVING_SMA_PERIODS = [5, 25, 75, 150, 200, 300] as const
 
 export type CurrentServingMarket = 'JP' | 'US'
@@ -95,7 +96,19 @@ export type CurrentServingProjectionPayload = {
   marketWatermarks: Record<CurrentServingMarket, {
     asOfTradingDate: string
     sourceGeneration: string
+    priceBasis: string
+    featureSet: string
     rows: number
+    coverage: {
+      snapshotRows: number
+      eligibleRows: number
+      universeRows: number
+      universeIdentityRows: number
+      closeRows: number
+      mlRows: number
+      smaRows: number
+      physicalRows: number
+    }
   }>
   rows: CurrentServingProjectionRow[]
 }
@@ -112,7 +125,12 @@ function finiteOrNull(value: unknown): value is number | null {
 function assertSequence(value: string | null, length: 2 | 3, current: string): void {
   if (value === null) return
   const states = value.split('>')
-  if (states.length !== length || states.some((state) => !STAGE.test(state)) || states.at(-1) !== current) {
+  if (
+    states.length !== length
+    || states.some((state) => !STAGE.test(state))
+    || states.some((state, index) => index > 0 && state === states[index - 1])
+    || states.at(-1) !== current
+  ) {
     throw new Error(`CURRENT_PROJECTION_INVALID_SEQUENCE_${length}`)
   }
 }
@@ -145,12 +163,15 @@ function assertRow(row: CurrentServingProjectionRow): void {
   }
   if (
     !STAGE.test(row.stage.current)
-    || (row.stage.cAge !== null && (!Number.isInteger(row.stage.cAge) || row.stage.cAge < 0))
+    || (row.stage.cAge !== null && (!Number.isInteger(row.stage.cAge) || row.stage.cAge < 1))
   ) {
     throw new Error('CURRENT_PROJECTION_INVALID_STAGE')
   }
   assertSequence(row.stage.sequence2, 2, row.stage.current)
   assertSequence(row.stage.sequence3, 3, row.stage.current)
+  if (row.stage.sequence3 !== null && row.stage.sequence2 !== row.stage.sequence3.split('>').slice(-2).join('>')) {
+    throw new Error('CURRENT_PROJECTION_SEQUENCE_MISMATCH')
+  }
   if (!finiteOrNull(row.close)) throw new Error('CURRENT_PROJECTION_INVALID_CLOSE')
 
   for (const period of CURRENT_SERVING_SMA_PERIODS) {
@@ -214,11 +235,38 @@ export function assertCurrentServingProjectionPayload(
   }
   for (const market of ['JP', 'US'] as const) {
     const watermark = payload.marketWatermarks[market]
-    if (!ISO_DATE.test(watermark.asOfTradingDate) || !GENERATION.test(watermark.sourceGeneration)) {
+    if (
+      !ISO_DATE.test(watermark.asOfTradingDate)
+      || !GENERATION.test(watermark.sourceGeneration)
+      || !watermark.priceBasis.trim()
+      || !watermark.featureSet.trim()
+    ) {
       throw new Error('CURRENT_PROJECTION_INVALID_WATERMARK')
     }
     if (payload.rows.filter((row) => row.market === market).length !== watermark.rows || watermark.rows < 1) {
       throw new Error('CURRENT_PROJECTION_MARKET_ROW_MISMATCH')
+    }
+    const coverage = watermark.coverage
+    if (
+      !coverage
+      || !Number.isSafeInteger(coverage.snapshotRows)
+      || !Number.isSafeInteger(coverage.eligibleRows)
+      || !Number.isSafeInteger(coverage.universeRows)
+      || !Number.isSafeInteger(coverage.universeIdentityRows)
+      || !Number.isSafeInteger(coverage.closeRows)
+      || !Number.isSafeInteger(coverage.mlRows)
+      || !Number.isSafeInteger(coverage.smaRows)
+      || !Number.isSafeInteger(coverage.physicalRows)
+      || coverage.snapshotRows < coverage.eligibleRows
+      || coverage.eligibleRows !== watermark.rows
+      || coverage.universeRows !== coverage.eligibleRows
+      || coverage.universeIdentityRows !== coverage.eligibleRows
+      || coverage.closeRows !== coverage.eligibleRows
+      || coverage.mlRows < Math.ceil(coverage.eligibleRows * CURRENT_SERVING_PROJECTION_MIN_AUXILIARY_COVERAGE)
+      || coverage.smaRows < Math.ceil(coverage.eligibleRows * CURRENT_SERVING_PROJECTION_MIN_AUXILIARY_COVERAGE)
+      || coverage.physicalRows < Math.ceil(coverage.eligibleRows * CURRENT_SERVING_PROJECTION_MIN_AUXILIARY_COVERAGE)
+    ) {
+      throw new Error('CURRENT_PROJECTION_INVALID_COVERAGE')
     }
   }
 }

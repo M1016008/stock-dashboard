@@ -46,6 +46,22 @@ const ISOLATED_RESEARCH_FLAGS = [
   'STOCKBOARD_FIXTURE_ONLY',
 ] as const
 
+export const SIX_STAGE_CURRENT_PROJECTION_ROOT =
+  `${OWC_DEVELOPMENT_MOUNT}/stockboard-research/six-stage/current-serving-projection`
+
+export function resolveSixStageCurrentProjectionRoot(root: string): string {
+  const resolved = resolveThroughExistingAncestor(root)
+  const relative = path.relative(SIX_STAGE_CURRENT_PROJECTION_ROOT, resolved)
+  if (
+    resolved !== SIX_STAGE_CURRENT_PROJECTION_ROOT
+    && (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative))
+  ) {
+    throw new Error('Current Serving projection root must stay inside the approved OWC research namespace')
+  }
+  assertOwcDevelopmentVolume()
+  return resolved
+}
+
 type VerifiedOwcMount = {
   realPath: string
   device: number
@@ -194,6 +210,10 @@ export function createIsolatedRuntimeEnvironment(
   if (kind === 'development' || kind === 'test') {
     for (const name of ISOLATED_RESEARCH_FLAGS) {
       if (inherited[name] === '1') isolated[name] = '1'
+    }
+    const projectionRoot = inherited.SIX_STAGE_CURRENT_SERVING_PROJECTION_ROOT?.trim()
+    if (projectionRoot) {
+      isolated.SIX_STAGE_CURRENT_SERVING_PROJECTION_ROOT = resolveSixStageCurrentProjectionRoot(projectionRoot)
     }
   }
   return isolated
