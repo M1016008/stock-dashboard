@@ -7,6 +7,7 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import path from 'node:path'
 import { anyStorageFatal, anyStorageUncertain, guardForDatabase, requiresExternalStorageGuard } from './lib/storage/external-storage-guard'
+import { isSixStageResearchPath, isSixStageResearchRequestAllowed, requiredSixStageResearchMode } from './lib/research/six-stage-research-isolation'
 import { resolveConfiguredStoragePath } from './lib/storage-paths'
 
 const SHARE_AUTH_REALM = 'StockBoard shared preview'
@@ -97,6 +98,17 @@ function isAuthorized(req: NextRequest): boolean {
 
 export function proxy(req: NextRequest) {
   const pathname = req.nextUrl.pathname
+  if (isSixStageResearchPath(pathname)) {
+    const allowed = isSixStageResearchRequestAllowed({
+      mode: requiredSixStageResearchMode(pathname),
+      hostname: req.nextUrl.hostname,
+      headers: req.headers,
+    })
+    if (!allowed) return new NextResponse('Not Found', { status: 404 })
+    const researchResponse = NextResponse.next()
+    researchResponse.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
+    return researchResponse
+  }
   // Health reports storage degradation without hiding the running web process.
   if (pathname === '/api/health') return NextResponse.next()
   if (anyStorageFatal() || anyStorageUncertain()) return unavailable('STORAGE_UNAVAILABLE')

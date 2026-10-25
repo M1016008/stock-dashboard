@@ -6,6 +6,7 @@ export type IsolatedRuntimeKind = 'development' | 'test' | 'build' | 'preview'
 
 export const OWC_DEVELOPMENT_MOUNT = '/Volumes/OWC Express 1M2 80G'
 export const OWC_DEVELOPMENT_ROOT = `${OWC_DEVELOPMENT_MOUNT}/development`
+export const OWC_WORKTREE_ROOT = `${OWC_DEVELOPMENT_MOUNT}/StockBoard Development`
 export const OWC_DEVELOPMENT_VOLUME_UUID = '11FDA3F5-D89E-414D-9B95-C2069FF0B204'
 
 export const SCRUBBED_RUNTIME_CREDENTIALS = [
@@ -38,6 +39,11 @@ const PASSTHROUGH_RUNTIME_ENVIRONMENT = [
   'NO_COLOR',
   'FORCE_COLOR',
   'NEXT_TELEMETRY_DISABLED',
+] as const
+
+const ISOLATED_RESEARCH_FLAGS = [
+  'SIX_STAGE_REAL_RESEARCH_ONLY',
+  'STOCKBOARD_FIXTURE_ONLY',
 ] as const
 
 type VerifiedOwcMount = {
@@ -125,11 +131,13 @@ function copyBuildEnvironment(
 
 function resolvedIsolationRoot(root: string): string {
   const resolved = resolveThroughExistingAncestor(root)
-  const relativeToOwcDevelopment = path.relative(OWC_DEVELOPMENT_ROOT, resolved)
-  const isOwcDevelopmentChild = relativeToOwcDevelopment !== ''
-    && relativeToOwcDevelopment !== '..'
-    && !relativeToOwcDevelopment.startsWith(`..${path.sep}`)
-    && !path.isAbsolute(relativeToOwcDevelopment)
+  const isOwcDevelopmentChild = [OWC_DEVELOPMENT_ROOT, OWC_WORKTREE_ROOT].some((allowedRoot) => {
+    const relative = path.relative(allowedRoot, resolved)
+    return relative !== ''
+      && relative !== '..'
+      && !relative.startsWith(`..${path.sep}`)
+      && !path.isAbsolute(relative)
+  })
   if (isOwcDevelopmentChild) assertOwcDevelopmentVolume()
   if (!path.isAbsolute(root)
     || resolved === path.parse(resolved).root
@@ -143,6 +151,7 @@ function expectedEnvironment(kind: IsolatedRuntimeKind, root: string): Record<st
   const expected: Record<string, string> = {
     NODE_ENV: kind === 'build' || kind === 'preview' ? 'production' : kind,
     STOCKBOARD_RUNTIME_SCOPE: kind,
+    STOCKBOARD_ISOLATION_ATTESTED: '1',
     STOCKBOARD_ISOLATION_ROOT: root,
     USE_LOCAL_DB: '1',
     STOCKBOARD_DB_ROLE: '',
@@ -181,7 +190,13 @@ export function createIsolatedRuntimeEnvironment(
   environment.HOME = path.join(resolvedRoot, 'home')
   environment.TMPDIR = path.join(resolvedRoot, 'tmp')
   environment.XDG_CACHE_HOME = path.join(resolvedRoot, 'cache')
-  return { ...environment, ...expectedEnvironment(kind, resolvedRoot) }
+  const isolated = { ...environment, ...expectedEnvironment(kind, resolvedRoot) }
+  if (kind === 'development' || kind === 'test') {
+    for (const name of ISOLATED_RESEARCH_FLAGS) {
+      if (inherited[name] === '1') isolated[name] = '1'
+    }
+  }
+  return isolated
 }
 
 export function assertIsolatedRuntimeEnvironment(environment: NodeJS.ProcessEnv = process.env): IsolatedRuntimeKind {
@@ -195,6 +210,15 @@ export function assertIsolatedRuntimeEnvironment(environment: NodeJS.ProcessEnv 
   for (const [name, value] of Object.entries(expected)) {
     if ((environment[name] ?? '') !== value) {
       throw new Error(`Unsafe isolated runtime environment: ${name} must be pinned by the isolation launcher`)
+    }
+  }
+  for (const name of ISOLATED_RESEARCH_FLAGS) {
+    const value = environment[name]
+    if (value !== undefined && value !== '1') {
+      throw new Error(`Unsafe isolated runtime environment: ${name} must be unset or 1`)
+    }
+    if (value === '1' && kind !== 'development' && kind !== 'test') {
+      throw new Error(`Unsafe isolated runtime environment: ${name} is forbidden for ${kind}`)
     }
   }
   return kind
