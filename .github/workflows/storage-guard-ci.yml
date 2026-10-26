@@ -54,6 +54,9 @@ jobs:
       - name: Development and test isolation regression
         run: npm run test:runtime-isolation
 
+      - name: SMA Dynamics preview isolation
+        run: npm run test:sma-dynamics-preview-isolation
+
       - name: Weekly backup policy and writer hold
         run: npm run test:weekly-backup-policy && npm run test:weekly-writer-hold && npm run test:weekly-backup-runner
 

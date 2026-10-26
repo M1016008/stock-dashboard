@@ -383,8 +383,11 @@ const CONTROL_BUTTONS = SMA_LAB_TIMEFRAMES.length + SMA_LAB_PERIODS.length + 8 +
   }
   // The bypass is exact-path, non-production and never in share mode; other /dev pages keep the guard.
   const proxy = read('proxy.ts')
-  const devBypass = proxy.indexOf("isSmaDynamicsFixturePreviewPath(pathname) && process.env.NODE_ENV !== 'production' && !isShareMode()")
-  assert.ok(devBypass >= 0 && devBypass < proxy.indexOf('anyStorageFatal() || anyStorageUncertain()'), 'dev preview bypasses storage state before latch checks')
+  const previewBranch = proxy.indexOf('if (isSmaDynamicsFixturePreviewPath(pathname))')
+  const explicitRejection = proxy.indexOf("if (process.env.NODE_ENV === 'production' || isShareMode())", previewBranch)
+  const explicit404 = proxy.indexOf("status: 404", explicitRejection)
+  assert.ok(previewBranch >= 0 && previewBranch < proxy.indexOf('anyStorageFatal() || anyStorageUncertain()'), 'preview is classified before storage latch checks')
+  assert.ok(explicitRejection > previewBranch && explicit404 > explicitRejection, 'production/share preview returns an explicit HTTP 404')
   assert.doesNotMatch(proxy, /startsWith\('\/dev\/'\)/, 'no blanket /dev/ bypass')
   for (const file of ['components/layout/Header.tsx', 'components/layout/DataStatusBar.tsx', 'components/assistant/AssistantDrawer.tsx']) {
     assert.doesNotMatch(read(file), /startsWith\('\/dev\/'\)/, `${file} has no blanket /dev/ exemption`)

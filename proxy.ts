@@ -110,9 +110,17 @@ export function proxy(req: NextRequest) {
     researchResponse.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
     return researchResponse
   }
-  // The SMA Dynamics preview renders fixtures only and reads no storage, so it stays
-  // reachable while storage is degraded. Exact path, development only, never in share mode.
-  if (isSmaDynamicsFixturePreviewPath(pathname) && process.env.NODE_ENV !== 'production' && !isShareMode()) {
+  // Resolve the exact fixture-preview path before rendering. In production/share mode an
+  // explicit response is required because a streamed page-level notFound() can retain 200.
+  if (isSmaDynamicsFixturePreviewPath(pathname)) {
+    if (process.env.NODE_ENV === 'production' || isShareMode()) {
+      return new NextResponse('Not Found', {
+        status: 404,
+        headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0' },
+      })
+    }
+    // The preview renders fixtures only and reads no storage, so local development remains
+    // available while isolated fixture storage is degraded.
     const previewResponse = NextResponse.next()
     previewResponse.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
     return previewResponse
