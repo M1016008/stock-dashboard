@@ -125,7 +125,7 @@ function validateCrossFieldInvariants(feature: Feature, featureName: string, iss
   }
   if (us === 'IMPLEMENTED') {
     for (const [field, value] of details) {
-      if (['MISSING', 'BLOCKED', 'UNVERIFIED', 'IN_PROGRESS'].includes(value)) {
+      if (['PARTIAL', 'MISSING', 'BLOCKED', 'UNVERIFIED', 'IN_PROGRESS'].includes(value)) {
         issues.push({ code: 'STATUS_INVARIANT', feature: featureName, field, message: `us=IMPLEMENTED is incompatible with ${field}=${value}` })
       }
     }
@@ -343,6 +343,12 @@ function selfTest(): void {
     invalidStatus.remaining = 'None'
     invalidStatus.evidence = { ...invalidStatus.evidence!, claims: STATUS_FIELDS.filter((field) => field !== 'functional') }
     assertCodes('cross-field invariant', makeBoard(invalidStatus), ['STATUS_INVARIANT'])
+
+    const understatedPartial = makeFeature()
+    understatedPartial.data = 'PARTIAL'
+    understatedPartial.remaining = 'Data coverage is partial.'
+    understatedPartial.evidence = { ...understatedPartial.evidence!, claims: STATUS_FIELDS.filter((field) => field !== 'data') }
+    assertCodes('partial detail requires partial overall status', makeBoard(understatedPartial), ['STATUS_INVARIANT'])
 
     fs.writeFileSync(path.join(root, 'src', 'feature.ts'), 'export const feature = false\n')
     git(root, ['add', '.'])

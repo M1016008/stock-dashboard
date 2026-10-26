@@ -374,8 +374,10 @@ export function PeriodExplorerClient({ market = 'JP', calendarDates, defaultFrom
   }
 
   function applyQuickRange(option: (typeof QUICK_RANGES)[number]) {
+    if (!hasCalendarData) return
     const endIndex = lastIndexAtOrBefore(calendarDates, draftTo || defaultTo)
     const end = calendarDates[endIndex]
+    if (endIndex < 0 || !end) return
     let startIndex = endIndex
     if ('tradingDays' in option) startIndex = Math.max(0, endIndex - option.tradingDays + 1)
     else if ('months' in option) startIndex = firstIndexAtOrAfter(calendarDates, subtractMonths(end, option.months))
@@ -482,7 +484,7 @@ export function PeriodExplorerClient({ market = 'JP', calendarDates, defaultFrom
           <button type="button" onClick={applyDates} disabled={!draftFrom || !draftTo || draftFrom > draftTo} className="btn h-9" data-variant="primary"><Search size={13} />適用</button>
           <button type="button" onClick={() => clearFilters(true)} className="btn h-9"><RotateCcw size={13} />リセット</button>
           <div className="flex min-w-0 basis-full gap-1 overflow-x-auto pb-0.5 lg:ml-2 lg:basis-auto">
-            {QUICK_RANGES.map((option) => <button key={option.key} type="button" onClick={() => applyQuickRange(option)} className="btn shrink-0" data-size="sm">{option.label}</button>)}
+            {QUICK_RANGES.map((option) => <button key={option.key} type="button" disabled={!hasCalendarData} onClick={() => applyQuickRange(option)} className="btn shrink-0" data-size="sm">{option.label}</button>)}
           </div>
         </div>
         {response && <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] font-semibold text-[var(--color-text-tertiary)]">
@@ -573,7 +575,7 @@ export function PeriodExplorerClient({ market = 'JP', calendarDates, defaultFrom
         <div className="flex flex-wrap items-center gap-2 border-b border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-3 py-2">
           <div>
             <h2 className="text-[14px] font-bold text-[var(--color-text-primary)]">{definition.label}ランキング</h2>
-            <p className="text-[11px] tabular-nums text-[var(--color-text-tertiary)]">{response ? `${response.total.toLocaleString('ja-JP')} / ${response.universeTotal.toLocaleString('ja-JP')}${response.resultKind === 'stocks' ? '銘柄' : '業種'}` : '集計中'} ｜ {fmtDate(response?.range.adoptedFrom ?? draftFrom)} ～ {fmtDate(response?.range.adoptedTo ?? draftTo)}</p>
+            <p className="text-[11px] tabular-nums text-[var(--color-text-tertiary)]">{response ? `${response.total.toLocaleString('ja-JP')} / ${response.universeTotal.toLocaleString('ja-JP')}${response.resultKind === 'stocks' ? '銘柄' : '業種'}` : hasCalendarData ? '集計中' : '期間なし'} ｜ {fmtDate(response?.range.adoptedFrom ?? draftFrom)} ～ {fmtDate(response?.range.adoptedTo ?? draftTo)}</p>
           </div>
           <label className="ml-auto flex items-center gap-1 text-[10px] font-bold text-[var(--color-text-tertiary)]">表示
             <select value={limit} onChange={(event) => setSimpleParam('limit', event.target.value)} className="h-7 border border-[var(--color-border-default)] bg-white px-1 text-[10px] font-bold">{[50, 100, 200, 500].map((value) => <option key={value} value={value}>{value}</option>)}</select>

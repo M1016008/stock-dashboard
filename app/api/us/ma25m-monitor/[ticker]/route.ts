@@ -10,6 +10,10 @@ import {
 } from '@/lib/us-adjusted-ohlcv'
 import { getUsDisplayName } from '@/lib/us-symbol-aliases'
 import {
+  attestUsMonthlyMaGeneration,
+  type UsMonthlyMaGenerationRun,
+} from '@/lib/server/us-monthly-ma-generation'
+import {
   US_MONTHLY_MA_DEFINITION_VERSION,
   US_MONTHLY_MA_DETAIL_HISTORY_SESSIONS,
   US_MONTHLY_MA_MONITOR_PERIODS,
@@ -38,8 +42,6 @@ function stableErrorStatus(error: unknown): number {
   return /SQLITE_BUSY|database is locked|no such table|STORAGE_|FAILED_SAFE/i.test(message) ? 503 : 500
 }
 
-type SourceRunRow = { id: number; status: string; payloadJson: string }
-
 function oneParam(params: URLSearchParams, name: 'date' | 'period' | 'limit'): string | null {
   const values = params.getAll(name)
   if (values.length > 1) throw new Error(`INVALID_QUERY_${name.toUpperCase()}`)
@@ -54,16 +56,6 @@ function strictHistoryLimit(value: string | null): number {
     throw new Error('INVALID_QUERY_LIMIT')
   }
   return parsed
-}
-
-function generationPriceBasis(run: SourceRunRow | undefined): string | null {
-  if (!run?.payloadJson) return null
-  try {
-    const parsed = JSON.parse(run.payloadJson) as { priceBasis?: unknown }
-    return typeof parsed.priceBasis === 'string' ? parsed.priceBasis : null
-  } catch {
-    return null
-  }
 }
 
 export async function GET(
@@ -89,22 +81,27 @@ export async function GET(
     const period: UsMonthlyMaPeriod = parsedPeriod === 'all' ? 25 : parsedPeriod
     const historyLimit = strictHistoryLimit(oneParam(params, 'limit'))
 
-    const sourceRun = await execGet<SourceRunRow>(
-      `SELECT id, status, payload_json AS payloadJson
+    const sourceRun = await execGet<UsMonthlyMaGenerationRun>(
+      `SELECT id, status, payload_json AS payloadJson,
+         total_tickers AS totalTickers, succeeded, failed, finished_at AS finishedAt,
+         (SELECT MAX(computed_at) FROM market_daily_snapshots WHERE market = 'US') AS snapshotMaxComputedAt
        FROM market_data_runs
        WHERE market = 'US' AND job_type = 'snapshot_compute' AND status = 'success'
        ORDER BY id DESC LIMIT 1`,
     )
-    const sourcePriceBasis = generationPriceBasis(sourceRun)
-    if (!sourceRun || !sourcePriceBasis) {
+    const generation = attestUsMonthlyMaGeneration(sourceRun)
+    if (!generation.ok && generation.reason === 'unavailable') {
       return NextResponse.json({ error: 'us_monthly_ma_generation_unavailable' }, { status: 503 })
     }
-    if (sourcePriceBasis !== US_MONTHLY_MA_PRICE_BASIS) {
+    if (!generation.ok && generation.reason === 'price_basis_mismatch') {
       return NextResponse.json({
         error: 'us_monthly_ma_price_basis_mismatch',
         expected: US_MONTHLY_MA_PRICE_BASIS,
-        actual: sourcePriceBasis,
+        actual: generation.actualPriceBasis,
       }, { status: 503 })
+    }
+    if (!generation.ok) {
+      return NextResponse.json({ error: 'us_monthly_ma_generation_unattested' }, { status: 503 })
     }
 
     const rows = await execAll<UsMonthlyMaSourceRow>(
@@ -220,8 +217,8 @@ export async function GET(
       source: {
         definitionVersion: US_MONTHLY_MA_DEFINITION_VERSION,
         priceBasis: US_MONTHLY_MA_PRICE_BASIS,
-        sourceGeneration: sourceRun.id,
-        sourceGenerationStatus: sourceRun.status,
+        sourceGeneration: generation.generation,
+        sourceGenerationStatus: 'attested',
         calendar: 'US:SPY_TRADING_SESSIONS',
         snapshots: 'market_daily_snapshots',
         prices: 'market_ohlcv_daily',

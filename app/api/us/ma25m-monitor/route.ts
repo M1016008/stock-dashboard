@@ -10,6 +10,10 @@ import {
 import { getUsDisplayName } from '@/lib/us-symbol-aliases'
 import { usInvestableSymbolSql } from '@/lib/us-symbol-quality'
 import {
+  attestUsMonthlyMaGeneration,
+  type UsMonthlyMaGenerationRun,
+} from '@/lib/server/us-monthly-ma-generation'
+import {
   US_MONTHLY_MA_DEFINITION_VERSION,
   US_MONTHLY_MA_LIST_HISTORY_SESSIONS,
   US_MONTHLY_MA_MONITOR_PERIODS,
@@ -29,17 +33,6 @@ import {
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
 export const fetchCache = 'force-no-store'
-
-type SourceRunRow = {
-  id: number
-  status: string
-  payloadJson: string
-  totalTickers: number
-  succeeded: number
-  failed: number
-  finishedAt: number | null
-  snapshotMaxComputedAt: number | null
-}
 
 type SourceNameRow = { source: string }
 
@@ -79,33 +72,6 @@ function boundedText(value: string | null, maximum: number): string {
 function stableErrorStatus(error: unknown): number {
   const message = error instanceof Error ? error.message : String(error)
   return /SQLITE_BUSY|database is locked|no such table|STORAGE_|FAILED_SAFE/i.test(message) ? 503 : 500
-}
-
-function generationPriceBasis(run: SourceRunRow | undefined): string | null {
-  if (!run?.payloadJson) return null
-  try {
-    const parsed = JSON.parse(run.payloadJson) as { priceBasis?: unknown }
-    return typeof parsed.priceBasis === 'string' ? parsed.priceBasis : null
-  } catch {
-    return null
-  }
-}
-
-function generationAttested(run: SourceRunRow | undefined): boolean {
-  if (!run || run.status !== 'success' || run.finishedAt == null || run.totalTickers <= 0
-    || run.succeeded !== run.totalTickers || run.failed !== 0
-    || (run.snapshotMaxComputedAt != null && run.snapshotMaxComputedAt > run.finishedAt)) return false
-  try {
-    const payload = JSON.parse(run.payloadJson) as Record<string, unknown>
-    return payload.stage === 'complete'
-      && payload.priceBasis === US_MONTHLY_MA_PRICE_BASIS
-      && payload.tickerStart == null
-      && payload.tickerEnd == null
-      && payload.limit == null
-      && payload.tickers == null
-  } catch {
-    return false
-  }
 }
 
 export async function GET(request: NextRequest) {
@@ -151,7 +117,7 @@ export async function GET(request: NextRequest) {
              WHERE calendar.market = 'US' AND calendar.ticker = 'SPY' AND calendar.date = s.date
            )`,
       ),
-      execGet<SourceRunRow>(
+      execGet<UsMonthlyMaGenerationRun>(
         `SELECT id, status, payload_json AS payloadJson,
            total_tickers AS totalTickers, succeeded, failed, finished_at AS finishedAt,
            (SELECT MAX(computed_at) FROM market_daily_snapshots WHERE market = 'US') AS snapshotMaxComputedAt
@@ -166,20 +132,22 @@ export async function GET(request: NextRequest) {
         message: 'US snapshot and SPY trading-session sources have no common as-of date.',
       }, { status: 503 })
     }
-    const sourcePriceBasis = generationPriceBasis(sourceRun)
-    if (!sourceRun || !sourcePriceBasis) {
+    const generation = attestUsMonthlyMaGeneration(sourceRun)
+    if (!generation.ok && generation.reason === 'unavailable') {
       return NextResponse.json({
         error: 'us_monthly_ma_generation_unavailable',
       }, { status: 503 })
     }
-    if (sourcePriceBasis !== US_MONTHLY_MA_PRICE_BASIS) {
+    if (!generation.ok && generation.reason === 'price_basis_mismatch') {
       return NextResponse.json({
         error: 'us_monthly_ma_price_basis_mismatch',
         expected: US_MONTHLY_MA_PRICE_BASIS,
-        actual: sourcePriceBasis,
+        actual: generation.actualPriceBasis,
       }, { status: 503 })
     }
-    const sourceGenerationAttested = generationAttested(sourceRun)
+    if (!generation.ok) {
+      return NextResponse.json({ error: 'us_monthly_ma_generation_unattested' }, { status: 503 })
+    }
 
     const sourceSql = `WITH sessions AS (
       SELECT date
@@ -320,8 +288,8 @@ export async function GET(request: NextRequest) {
       source: {
         definitionVersion: US_MONTHLY_MA_DEFINITION_VERSION,
         priceBasis: US_MONTHLY_MA_PRICE_BASIS,
-        sourceGeneration: sourceGenerationAttested ? sourceRun.id : null,
-        sourceGenerationStatus: sourceGenerationAttested ? 'attested' : 'unattested',
+        sourceGeneration: generation.generation,
+        sourceGenerationStatus: 'attested',
         sourceNames: sourceNames.map((row) => row.source),
         calendar: 'US:SPY_TRADING_SESSIONS',
         snapshots: 'market_daily_snapshots',

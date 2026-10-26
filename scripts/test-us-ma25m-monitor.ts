@@ -14,6 +14,7 @@ import {
   usMonthlyMaLimitations,
   type UsMonthlyMaSourceRow,
 } from '@/lib/us-ma25m-monitor'
+import { attestUsMonthlyMaGeneration } from '@/lib/server/us-monthly-ma-generation'
 import { US_ADJUSTED_PRICE_BASIS } from '@/lib/us-adjusted-ohlcv'
 import { NextRequest } from 'next/server'
 import { GET as getMonitorList } from '@/app/api/us/ma25m-monitor/route'
@@ -181,6 +182,27 @@ assert.match(usMonthlyMaLimitations(31).join(' '), /当月は形成中/)
 assert.match(usMonthlyMaLimitations(31).join(' '), /補完せず未計算/)
 assert.match(usMonthlyMaLimitations(31).join(' '), /未観測/)
 
+const attestedRun = {
+  id: 42,
+  status: 'success',
+  payloadJson: JSON.stringify({ stage: 'complete', priceBasis: US_MONTHLY_MA_PRICE_BASIS }),
+  totalTickers: 2,
+  succeeded: 2,
+  failed: 0,
+  finishedAt: 1_000,
+  snapshotMaxComputedAt: 999,
+}
+assert.deepEqual(attestUsMonthlyMaGeneration(attestedRun), {
+  ok: true,
+  generation: 42,
+  priceBasis: US_MONTHLY_MA_PRICE_BASIS,
+})
+assert.equal(attestUsMonthlyMaGeneration({ ...attestedRun, succeeded: 1 }).ok, false)
+assert.equal(attestUsMonthlyMaGeneration({ ...attestedRun, snapshotMaxComputedAt: 1_001 }).ok, false)
+assert.equal(attestUsMonthlyMaGeneration({ ...attestedRun, payloadJson: JSON.stringify({
+  stage: 'complete', priceBasis: US_MONTHLY_MA_PRICE_BASIS, tickerStart: 'AAPL',
+}) }).ok, false)
+
 const listRoute = fs.readFileSync(path.join(root, 'app/api/us/ma25m-monitor/route.ts'), 'utf8')
 const detailRoute = fs.readFileSync(path.join(root, 'app/api/us/ma25m-monitor/[ticker]/route.ts'), 'utf8')
 const page = fs.readFileSync(path.join(root, 'app/us/ma25m-monitor/page.tsx'), 'utf8')
@@ -197,12 +219,12 @@ for (const route of [listRoute, detailRoute]) {
   assert.match(route, /monthlyMa15BridgeDate/)
   assert.doesNotMatch(route, /STOCKBOARD_DB_PATH|\/Volumes\//, 'route must use the guarded serving contract')
 }
-assert.match(listRoute, /sourceGeneration/)
-assert.match(listRoute, /sourceGenerationAttested \? sourceRun\.id : null/)
-assert.match(listRoute, /payload\.stage === 'complete'/)
-assert.match(listRoute, /run\.succeeded !== run\.totalTickers/)
-assert.match(listRoute, /snapshotMaxComputedAt > run\.finishedAt/)
-assert.match(listRoute, /price_basis_mismatch/)
+for (const route of [listRoute, detailRoute]) {
+  assert.match(route, /attestUsMonthlyMaGeneration/)
+  assert.match(route, /us_monthly_ma_generation_unattested/)
+  assert.match(route, /sourceGenerationStatus: 'attested'/)
+  assert.match(route, /price_basis_mismatch/)
+}
 assert.match(page, /\/api\/us\/ma25m-monitor/)
 assert.match(page, /\/us\/stock\//)
 assert.match(page, /3・5・10・15・20・25か月線/)
