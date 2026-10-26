@@ -48,7 +48,7 @@ export function dailyScenarioStatusText(evaluation: DailyScenarioEvaluation): st
     return '未入力です。営業日ごとの終値を入力するか、例から始めてください。未入力の日は補完しません。'
   }
   const parts = [`入力 ${evaluation.filled}/${total}営業日`]
-  if (evaluation.enteredThrough < evaluation.filled) parts.push(`T+${evaluation.enteredThrough + 1} が未入力のため、その先の入力は確定に使いません`)
+  if (evaluation.enteredThrough < evaluation.filled) parts.push(`T+${evaluation.enteredThrough + 1} が未入力のため、その先は仮定・入力完了として扱いません`)
   else if (evaluation.missingK.length > 0) parts.push(`未入力 ${list(evaluation.missingK)}`)
   if (evaluation.invalidK.length > 0) parts.push(`使用できない入力 ${list(evaluation.invalidK)} (数値でない・0以下)`)
   return parts.join(' ・ ')
@@ -58,9 +58,9 @@ export function dailyScenarioStatusText(evaluation: DailyScenarioEvaluation): st
 function barSummaryText(tf: Extract<DailyTimeframeProjection, { status: 'available' }>): string {
   const provisional = tf.provisionalIndex == null ? null : tf.bars[tf.provisionalIndex]
   const parts: string[] = []
-  if (tf.confirmedBars > 0) parts.push(`確定 ${tf.confirmedBars}本`)
-  if (provisional) parts.push(`暫定 ${provisional.enteredSessions}/${provisional.requiredSessions}日`)
-  return parts.length > 0 ? parts.join(' ・ ') : '未確定'
+  if (tf.confirmedBars > 0) parts.push(`仮定・入力完了 ${tf.confirmedBars}本`)
+  if (provisional) parts.push(`仮定・暫定 ${provisional.enteredSessions}/${provisional.requiredSessions}日`)
+  return parts.length > 0 ? parts.join(' ・ ') : '入力待ち'
 }
 
 function barTitle(bars: ReadonlyArray<DailyProjectedBar>): string {
@@ -89,7 +89,7 @@ export function DailyTimeframeTable({
             <th scope="col" className="py-1 pr-2 font-bold">時間足</th>
             <th scope="col" className="py-1 pr-2 font-bold">足の状態</th>
             <th scope="col" className="py-1 pr-2 text-right font-bold">SMA{period}</th>
-            <th scope="col" className="py-1 text-right font-bold">基準日比</th>
+            <th scope="col" className="py-1 text-right font-bold">履歴比</th>
           </tr>
         </thead>
         <tbody>
@@ -107,9 +107,11 @@ export function DailyTimeframeTable({
               )
             }
             const summary = tf.periods.find((item) => item.period === period)
+            const anchor = summary?.anchor ?? null
             const confirmed = summary?.latestConfirmed ?? null
             const provisional = summary?.provisional ?? null
-            const shownPct = provisional != null ? summary?.provisionalPct ?? null : summary?.latestConfirmedPct ?? null
+            const hasEnteredFuture = tf.confirmedBars > 0 || tf.provisionalIndex != null
+            const missingReason = hasEnteredFuture ? '履歴不足' : '入力待ち'
             return (
               <tr
                 key={tf.timeframe}
@@ -117,6 +119,7 @@ export function DailyTimeframeTable({
                 data-timeframe={tf.timeframe}
                 data-selected={isSelected || undefined}
                 data-confirmed-bars={tf.confirmedBars}
+                data-value-kind={provisional != null ? 'provisional' : confirmed != null ? 'confirmed' : hasEnteredFuture ? 'history-insufficient' : 'input-wait'}
                 title={barTitle(tf.bars)}
               >
                 <th scope="row" className="py-0.5 pr-2 text-left font-bold">
@@ -133,9 +136,17 @@ export function DailyTimeframeTable({
                 </th>
                 <td className="py-0.5 pr-2 text-[11px] text-[var(--color-text-secondary)]">{barSummaryText(tf)}</td>
                 <td className="py-0.5 pr-2 text-right font-mono tabular-nums">
-                  {provisional != null ? <span className="text-[var(--color-text-tertiary)]">暫定 {fmt(provisional)}</span> : confirmed != null ? fmt(confirmed) : '—'}
+                  {anchor != null && <span className="block text-[var(--color-text-tertiary)]" data-sma-value-kind="anchor">履歴 {fmt(anchor)}</span>}
+                  {confirmed != null && <span className="block" data-sma-value-kind="confirmed">仮定・入力完了 {fmt(confirmed)}</span>}
+                  {provisional != null && <span className="block text-amber-700" data-sma-value-kind="provisional">仮定・暫定 {fmt(provisional)}</span>}
+                  {confirmed == null && provisional == null && <span className="text-[var(--color-text-tertiary)]" data-sma-value-kind={hasEnteredFuture ? 'history-insufficient' : 'input-wait'}>{missingReason}</span>}
                 </td>
-                <td className="py-0.5 text-right font-mono tabular-nums">{formatPct(shownPct)}</td>
+                <td className="py-0.5 text-right font-mono tabular-nums">
+                  {anchor != null && <span className="block text-[var(--color-text-tertiary)]" data-sma-pct-kind="anchor">基準 0.00%</span>}
+                  {confirmed != null && <span className="block" data-sma-pct-kind="confirmed">入力完了 {formatPct(summary?.latestConfirmedPct ?? null)}</span>}
+                  {provisional != null && <span className="block text-amber-700" data-sma-pct-kind="provisional">暫定 {formatPct(summary?.provisionalPct ?? null)}</span>}
+                  {confirmed == null && provisional == null && <span className="text-[var(--color-text-tertiary)]">—</span>}
+                </td>
               </tr>
             )
           })}
@@ -188,7 +199,7 @@ export function DailyScenarioPanel({
 
   const sessionOptions = useMemo(() => Array.from({ length: DAILY_SCENARIO_MAX_SESSIONS }, (_, i) => i + 1), [])
   const exampleButton = 'inline-flex min-h-11 items-center gap-1 rounded-[var(--radius-sm)] border border-[var(--color-border-default)] bg-white px-2.5 text-[12px] font-bold text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-subtle)] disabled:cursor-not-allowed disabled:opacity-45 sm:min-h-8'
-  const miniInput = 'h-11 w-16 rounded-[var(--radius-sm)] border border-[var(--color-border-default)] bg-white px-1.5 text-right font-mono text-[13px] sm:h-8'
+  const miniInput = 'h-11 w-24 rounded-[var(--radius-sm)] border border-[var(--color-border-default)] bg-white px-1.5 text-right font-mono text-[16px] sm:h-8 sm:w-16 sm:text-[13px]'
 
   if (!projection) {
     return (
@@ -221,7 +232,7 @@ export function DailyScenarioPanel({
       <p className="m-0 text-[11px] font-medium leading-4 text-[var(--color-text-tertiary)]" data-sma-daily-premise>
         基準日 {asOfDate}（終値 {fmt(anchorClose)}）の<strong className="font-bold text-[var(--color-text-secondary)]">次の営業日から</strong>の終値を日次で入力します。
         同じ日次の経路が15の時間足すべてに反映され、時間足を切り替えても入力は残ります。
-        足は最終営業日まで入力が揃うと確定し、途中までは暫定SMAです。未入力の日は補完しません。
+        足は最終営業日まで入力が揃うと仮定・入力完了となり、途中までは仮定・暫定SMAです。未入力の日は補完しません。
       </p>
 
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
@@ -250,7 +261,8 @@ export function DailyScenarioPanel({
           <input
             aria-label="目標の変化 (現値比 %)"
             className={`${miniInput} pr-5`}
-            inputMode="decimal"
+            inputMode="text"
+            enterKeyHint="done"
             value={targetText}
             onChange={(event) => setTargetText(event.target.value)}
             data-sma-daily-target-input
@@ -294,7 +306,7 @@ export function DailyScenarioPanel({
         </button>
       </div>
 
-      <div ref={gridRef} className="grid max-h-[232px] min-w-0 grid-cols-[repeat(auto-fill,minmax(104px,1fr))] gap-1.5 overflow-y-auto pr-0.5" data-sma-daily-inputs>
+      <div ref={gridRef} className="grid min-w-0 grid-cols-2 gap-1.5 pr-0.5 sm:max-h-[232px] sm:grid-cols-[repeat(auto-fill,minmax(104px,1fr))] sm:overflow-y-auto" data-sma-daily-inputs>
         {evaluation.cells.map((cell) => {
           const rejected = cell.status === 'invalid' || cell.status === 'non_positive'
           const converted = rejected ? (cell.status === 'invalid' ? '数値でない' : '0以下') : draft.unit === 'pct' ? fmt(cell.close) : formatPct(cell.pctFromAnchor)
@@ -309,7 +321,9 @@ export function DailyScenarioPanel({
                   id={`${id}-k${cell.k}`}
                   data-k={cell.k}
                   type="text"
-                  inputMode="decimal"
+                  inputMode={draft.unit === 'pct' ? 'text' : 'decimal'}
+                  pattern={draft.unit === 'pct' ? undefined : '[0-9.,]*'}
+                  enterKeyHint={cell.k < evaluation.cells.length ? 'next' : 'done'}
                   autoComplete="off"
                   spellCheck={false}
                   aria-label={`${cell.date} (T+${cell.k}営業日) の終値 (${unitMeta.label})`}
@@ -318,7 +332,7 @@ export function DailyScenarioPanel({
                   value={cell.raw}
                   onChange={(event) => onChange(setDailyInput(draft, cell.k, event.target.value))}
                   onKeyDown={(event) => onKeyDown(event, cell.k)}
-                  className={`h-11 w-full min-w-0 rounded-[var(--radius-sm)] border bg-white py-0 pl-1.5 text-right font-mono text-[13px] tabular-nums placeholder:font-sans placeholder:text-[11px] placeholder:text-[var(--color-text-tertiary)] sm:h-8 ${draft.unit === 'pct' ? 'pr-5' : 'pr-1.5'} ${
+                  className={`h-11 w-full min-w-0 rounded-[var(--radius-sm)] border bg-white py-0 pl-1.5 text-right font-mono text-[16px] tabular-nums placeholder:font-sans placeholder:text-[11px] placeholder:text-[var(--color-text-tertiary)] sm:h-8 sm:text-[13px] ${draft.unit === 'pct' ? 'pr-5' : 'pr-1.5'} ${
                     rejected ? 'border-rose-400 bg-rose-50' : cell.status === 'missing' ? 'border-dashed border-[var(--color-border-strong)]' : 'border-[var(--color-border-default)]'
                   }`}
                 />
@@ -357,7 +371,7 @@ export function DailyScenarioPanel({
         </div>
         <DailyTimeframeTable projection={projection} period={tablePeriod} selected={selected} fmt={fmt} onSelect={onSelectTimeframe} />
         <p className="m-0 text-[11px] font-medium leading-4 text-[var(--color-text-tertiary)]">
-          確定 = その足の最終営業日までの終値をすべて入力済み。暫定 = 入力済みの最新終値で仮に計算したSMA（確定した終値ではなく、次の足の計算には使いません）。基準日比は基準日時点の確定SMAからの変化です。
+          履歴 = 基準日以前の最終確定足のSMA。仮定・入力完了 = 足の最終営業日まで入力済み。仮定・暫定 = 入力途中の参考SMAで、次の足には使いません。入力待ちと履歴不足は別表示です。将来値はすべて入力シナリオによる仮定で、履歴比はその履歴SMAからの変化です。
         </p>
       </div>
 
@@ -378,7 +392,7 @@ export function DailyScenarioPanel({
         </div>
         <p className="m-0 text-[11px] font-medium leading-4 text-[var(--color-text-tertiary)]">
           {adaptation
-            ? `${describeDailyAdaptation(adaptation, selectedName)}。反映すると、この足の価格シナリオ・グラフ・SMA逆算の比較は確定した足の終値だけを使います。`
+            ? `${describeDailyAdaptation(adaptation, selectedName)}。反映すると、この足の価格シナリオ・グラフ・SMA逆算の比較は仮定・入力完了となった足の終値だけを使います。`
             : 'この時間足は価格履歴が不足しているため反映できません。'}
         </p>
       </div>

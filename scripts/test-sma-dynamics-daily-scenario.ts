@@ -9,6 +9,7 @@ import { readFileSync } from 'node:fs'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { SMA_DYNAMICS_DEFAULT_SETTINGS, SmaDynamicsView } from '@/components/stock/sma-dynamics/SmaDynamicsView'
+import { DailyTimeframeTable } from '@/components/stock/sma-dynamics/SmaDailyScenarioPanel'
 import { findSmaDynamicsFixture } from '@/lib/sma-dynamics-fixtures'
 import type { OHLCV } from '@/types/stock'
 import {
@@ -508,7 +509,7 @@ for (const s of ALL) {
       const text = describeDailyAdaptation(adaptation, item.barNoun)
       assert.match(text, /日次シナリオから導出/)
       assert.match(text, new RegExp(`${adaptation.confirmedK.length}/${base.horizon}本`))
-      if (adaptation.provisional.length > 0) assert.match(text, /暫定の足/)
+      if (adaptation.provisional.length > 0) assert.match(text, /仮定・暫定の足/)
     }
   }
   // Deterministic: the same daily entries always adapt to the same draft; a different path changes it.
@@ -599,6 +600,9 @@ for (const s of ALL) {
   for (const item of SMA_LAB_TIMEFRAMES) assert.match(scenarioView, new RegExp(`data-timeframe="${item.id}"`))
   assert.match(scenarioView, /data-sma-daily-apply-button/)
   assert.match(scenarioView, /未入力の日は補完しません/)
+  assert.match(scenarioView, /将来値はすべて入力シナリオによる仮定/)
+  assert.match(scenarioView, /仮定・入力完了となった足の終値だけを使います/)
+  assert.doesNotMatch(scenarioView, /確定した足の終値だけを使います/)
   assert.match(scenarioView, /data-sma-scenario-editor/, 'the selected-timeframe editor stays available')
   // The shared scenario is the same for any selected timeframe: only the selected row and apply target change.
   const weekly = view('scenario', '1W')
@@ -611,6 +615,33 @@ for (const s of ALL) {
   const panelSource = readFileSync('components/stock/sma-dynamics/SmaDailyScenarioPanel.tsx', 'utf8')
   assert.doesNotMatch(panelSource, /rounded-\[var\(--radius-(md|lg)\)\][^"`]*border[^"`]*shadow|shadow-/, 'no card chrome inside the panel')
   assert.match(panelSource, /overflow-x-auto/, 'comparison table scrolls instead of overflowing at 390px')
+  assert.match(panelSource, /grid-cols-2[^"`]*sm:max-h-\[232px\][^"`]*sm:overflow-y-auto/, 'mobile inputs use page scroll; nested scrolling starts at sm')
+  assert.match(panelSource, /inputMode=\{draft\.unit === 'pct' \? 'text' : 'decimal'\}/, 'signed percentage input uses a keyboard mode that exposes minus on mobile')
+  assert.match(panelSource, /enterKeyHint=\{cell\.k < evaluation\.cells\.length \? 'next' : 'done'\}/, 'mobile keyboard action advances through the path')
+  assert.match(panelSource, /text-\[16px\][^"`]*sm:text-\[13px\]/, 'mobile inputs avoid iOS focus zoom')
+
+  const entered = project(JP_MID, evenMinus10(JP_MID))
+  const table = renderToStaticMarkup(createElement(DailyTimeframeTable, {
+    projection: entered,
+    period: 5,
+    selected: '1D',
+    fmt: (value: number | null | undefined) => value == null ? '—' : value.toFixed(2),
+  }))
+  assert.match(table, /SMA5/, 'the comparison table names the selected SMA')
+  assert.match(table, /仮定・入力完了/, 'fully entered future bars are labelled as assumptions')
+  assert.match(table, /仮定・暫定/, 'partially entered bars are labelled provisional assumptions')
+  assert.match(table, /data-sma-value-kind="anchor">履歴 [0-9]/, 'the historical anchor is visible beside hypothetical values')
+  assert.match(table, /data-sma-value-kind="confirmed">仮定・入力完了 [0-9]/, 'confirmed hypothetical SMA remains visible when a later provisional bar exists')
+  assert.match(table, /data-sma-value-kind="provisional">仮定・暫定 [0-9]/, 'provisional hypothetical SMA is separately visible')
+  assert.match(table, /data-sma-pct-kind="confirmed">入力完了 [^<]+/, 'confirmed and provisional percentages are not collapsed into one value')
+  assert.match(table, /data-sma-pct-kind="provisional">暫定 [^<]+/)
+  const emptyTable = renderToStaticMarkup(createElement(DailyTimeframeTable, {
+    projection: project(JP_MID, emptyDailyScenario(3)),
+    period: 5,
+    selected: '1D',
+    fmt: (value: number | null | undefined) => value == null ? '—' : value.toFixed(2),
+  }))
+  assert.match(emptyTable, /data-sma-value-kind="input-wait">入力待ち/, 'an empty scenario is not confused with a calculation failure')
 }
 
 console.log('test-sma-dynamics-daily-scenario: ok')

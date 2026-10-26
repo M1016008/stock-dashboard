@@ -96,8 +96,8 @@ export function addSmaLabPeriodsFromText(selected: ReadonlyArray<SmaLabPeriod>, 
 }
 
 /**
- * Lab palette. 5/25/75/150/200/300 and 3 match lib/chart-colors; 13 gets its own
- * color here because the shared map gives 13 the same red as 5.
+ * Lab-owned palette. Existing shared-chart colors stay unchanged; the Lab gives
+ * long periods such as 150/300 stable colors without changing legacy charts.
  */
 export const SMA_LAB_COLORS: Record<number, string> = {
   3: '#ec4899',

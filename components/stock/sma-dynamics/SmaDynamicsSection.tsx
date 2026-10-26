@@ -3,7 +3,7 @@
 // Stock-detail integration shared by every JP and US security page. Nothing is
 // fetched until the user opens the lab; the history adapter is injectable so the
 // dev preview runs the same component on fixtures without any network access.
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ChevronDown, Maximize2 } from 'lucide-react'
 import type { SmaDynamicsMarket } from '@/lib/sma-dynamics'
 import type { SmaLabRawRow } from '@/lib/sma-dynamics-timeframes'
@@ -23,9 +23,21 @@ import {
 // Long SMAs on weekly/monthly/quarterly bars and past analysis dates need the full
 // history, so read it all once (same route and price basis as the main chart).
 export const SMA_DYNAMICS_HISTORY_PERIOD = 'all'
-export const SMA_DYNAMICS_OPEN_PREF_KEY = 'stockboard:sma-dynamics-lab:open'
+export const SMA_DYNAMICS_OPEN_PREF_KEY_PREFIX = 'stockboard:sma-dynamics-lab:open'
 const CACHE_TTL_MS = 10 * 60 * 1000
 const CACHE_MAX_ENTRIES = 6
+
+export function smaDynamicsOpenPreferenceKey(market: SmaDynamicsMarket): string {
+  return `${SMA_DYNAMICS_OPEN_PREF_KEY_PREFIX}:${market.toLowerCase()}`
+}
+
+export function readSmaDynamicsOpenPreference(storage: Pick<Storage, 'getItem'>, key: string): boolean {
+  return storage.getItem(key) === '1'
+}
+
+export function writeSmaDynamicsOpenPreference(storage: Pick<Storage, 'setItem'>, key: string, open: boolean): void {
+  storage.setItem(key, open ? '1' : '0')
+}
 
 /** What identifies a price history: the display name is deliberately not part of it. */
 export type SmaHistoryIdentity = Pick<SmaDynamicsSecurity, 'market' | 'ticker'>
@@ -128,6 +140,7 @@ export function SmaDynamicsSection({
   analysisDate,
   source = STOCK_HISTORY_API_SOURCE,
   defaultOpen = false,
+  persistOpenPreference = true,
   defaultMaximized = false,
   initialSettings = SMA_DYNAMICS_DEFAULT_SETTINGS,
   externalScenarios,
@@ -140,6 +153,8 @@ export function SmaDynamicsSection({
   /** null renders the explicit "not connected" state. */
   source?: SmaDynamicsHistorySource | null
   defaultOpen?: boolean
+  /** Fixture previews disable persistence so they cannot change stock-detail behaviour. */
+  persistOpenPreference?: boolean
   defaultMaximized?: boolean
   initialSettings?: SmaDynamicsSettings
   /** Phase 3B scenario evidence; supplied only by the dev fixture preview for now. */
@@ -151,7 +166,9 @@ export function SmaDynamicsSection({
   const [startMaximized, setStartMaximized] = useState(defaultMaximized)
   // View settings carry over between securities; loaded rows and results never do.
   const [settings, setSettings] = useState<SmaDynamicsSettings>(initialSettings)
+  const sectionRef = useRef<HTMLElement>(null)
   const security: SmaDynamicsSecurity = { market, ticker, name }
+  const openPreferenceKey = persistOpenPreference ? smaDynamicsOpenPreferenceKey(market) : null
 
   // A link opens the lab once per distinct request, with the settings it names layered on the current ones.
   const linkKey = linkIntent ? JSON.stringify(linkIntent) : null
@@ -164,28 +181,43 @@ export function SmaDynamicsSection({
   }, [linkKey])
 
   useEffect(() => {
-    if (defaultOpen) return
+    if (!linkKey || !open) return
+    const frame = window.requestAnimationFrame(() => {
+      const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      sectionRef.current?.scrollIntoView({ behavior: reducedMotion ? 'auto' : 'smooth', block: 'start' })
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [linkKey, open])
+
+  useEffect(() => {
+    if (defaultOpen || linkKey || !openPreferenceKey) return
     try {
-      if (window.localStorage.getItem(SMA_DYNAMICS_OPEN_PREF_KEY) === '1') setOpen(true)
+      setOpen(readSmaDynamicsOpenPreference(window.localStorage, openPreferenceKey))
     } catch {
       // Storage may be unavailable (private mode); the launcher stays closed.
     }
-  }, [defaultOpen])
+    // A removed deep-link query does not overwrite the state it just opened.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [defaultOpen, openPreferenceKey])
 
   const setOpenPreference = (next: boolean, maximize = false) => {
     setOpen(next)
     setStartMaximized(maximize)
-    try {
-      window.localStorage.setItem(SMA_DYNAMICS_OPEN_PREF_KEY, next ? '1' : '0')
-    } catch {
-      // Preference only.
+    if (openPreferenceKey) {
+      try {
+        writeSmaDynamicsOpenPreference(window.localStorage, openPreferenceKey, next)
+      } catch {
+        // Preference only.
+      }
     }
   }
 
   if (!open) {
     return (
       <section
-        className="rounded-[var(--radius-card)] border border-[var(--color-border-default)] bg-white"
+        id="sma-dynamics-lab"
+        ref={sectionRef}
+        className="scroll-mt-28 rounded-[var(--radius-card)] border border-[var(--color-border-default)] bg-white"
         aria-label={`${SMA_DYNAMICS_TITLE} ${securityLabel(security)}`}
         data-section="SMA dynamics"
         data-sma-dynamics-launcher
@@ -194,7 +226,7 @@ export function SmaDynamicsSection({
           <div className="min-w-0">
             <h2 className="m-0 text-[14px] font-bold text-[var(--color-text-primary)]">{SMA_DYNAMICS_TITLE}</h2>
             <p className="m-0 mt-0.5 text-[11px] font-medium text-[var(--color-text-tertiary)]">
-              {SMA_DYNAMICS_LAUNCHER_SUBTITLE}。1D〜3Mのローソク足・SMA3〜300・価格固定/シナリオ/逆算。
+              {SMA_DYNAMICS_LAUNCHER_SUBTITLE}。1D〜5Yの15時間足・SMA3〜300・価格固定/シナリオ/逆算。
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
@@ -213,18 +245,20 @@ export function SmaDynamicsSection({
   }
 
   return (
-    <SmaDynamicsLoader
-      key={`${source ? smaHistoryCacheKey(source, security) : `none|${market}|${ticker}`}|${linkKey ?? ''}`}
-      security={security}
-      analysisDate={analysisDate}
-      source={source}
-      settings={settings}
-      onSettingsChange={setSettings}
-      initialMaximized={startMaximized}
-      onCollapse={() => setOpenPreference(false)}
-      externalScenarios={externalScenarios}
-      linkIntent={linkIntent}
-    />
+    <section id="sma-dynamics-lab" ref={sectionRef} className="scroll-mt-28" aria-label={`${SMA_DYNAMICS_TITLE} ${securityLabel(security)}`}>
+      <SmaDynamicsLoader
+        key={`${source ? smaHistoryCacheKey(source, security) : `none|${market}|${ticker}`}|${linkKey ?? ''}`}
+        security={security}
+        analysisDate={analysisDate}
+        source={source}
+        settings={settings}
+        onSettingsChange={setSettings}
+        initialMaximized={startMaximized}
+        onCollapse={() => setOpenPreference(false)}
+        externalScenarios={externalScenarios}
+        linkIntent={linkIntent}
+      />
+    </section>
   )
 }
 

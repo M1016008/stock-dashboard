@@ -19,10 +19,13 @@ import {
 } from '@/components/stock/sma-dynamics/SmaDynamicsView'
 import {
   clearSmaHistoryCache,
+  readSmaDynamicsOpenPreference,
+  smaDynamicsOpenPreferenceKey,
   SmaDynamicsSection,
   smaHistoryCacheKey,
   STOCK_HISTORY_API_SOURCE,
   subscribeSmaHistory,
+  writeSmaDynamicsOpenPreference,
   type SmaDynamicsHistorySource,
 } from '@/components/stock/sma-dynamics/SmaDynamicsSection'
 import { parsePreviewQuery } from '@/app/dev/sma-dynamics/SmaDynamicsPreviewClient'
@@ -37,6 +40,26 @@ assert.equal(SMA_DYNAMICS_TITLE, 'SMA Dynamics Lab')
 assert.equal(SMA_MODE_SUBTITLE.freeze, '株価が今のままなら、移動平均線はどう動く？')
 assert.match(SMA_DYNAMICS_PREMISE, /基準日の終値が将来も変わらないと仮定/)
 assert.match(SMA_DYNAMICS_PREMISE, /現在の傾きの延長ではなく、株価予測でもありません/)
+
+// Open preferences follow the user-facing surface: JP and US do not affect one
+// another, while securities inside the same market retain the user's choice.
+{
+  const values = new Map<string, string>()
+  const storage = {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => { values.set(key, value) },
+  }
+  const jp = smaDynamicsOpenPreferenceKey('JP')
+  const us = smaDynamicsOpenPreferenceKey('US')
+  assert.notEqual(jp, us)
+  values.set('stockboard:sma-dynamics-lab:open', '1')
+  assert.equal(readSmaDynamicsOpenPreference(storage, jp), false, 'the legacy shared preference is ignored')
+  writeSmaDynamicsOpenPreference(storage, jp, true)
+  assert.equal(readSmaDynamicsOpenPreference(storage, jp), true)
+  assert.equal(readSmaDynamicsOpenPreference(storage, us), false)
+  writeSmaDynamicsOpenPreference(storage, jp, false)
+  assert.equal(readSmaDynamicsOpenPreference(storage, jp), false)
+}
 
 // ---------------------------------------------------------------------------
 // Placement and identity: right after "価格と移動平均", before StageTimeline, in both markets.
@@ -89,6 +112,10 @@ assert.match(SMA_DYNAMICS_PREMISE, /現在の傾きの延長ではなく、株�
   const section = read('components/stock/sma-dynamics/SmaDynamicsSection.tsx')
   assert.match(section, /security\.market === 'US' \? '\/api\/us\/history' : '\/api\/history'/)
   assert.match(section, /SMA_DYNAMICS_HISTORY_PERIOD = 'all'/)
+  assert.match(section, /scrollIntoView\(\{ behavior: reducedMotion \? 'auto' : 'smooth', block: 'start' \}\)/, 'deep links move the opened lab into view')
+  assert.match(section, /prefers-reduced-motion: reduce/, 'deep-link scrolling respects reduced motion')
+  assert.match(section, /id="sma-dynamics-lab"/, 'the expanded and collapsed surfaces have one stable destination')
+  assert.match(section, /scroll-mt-28/, 'deep-link destination clears the stock-detail sticky header')
   assert.equal((section.match(/fetch\(/g) ?? []).length, 1, 'single fetch inside the API adapter')
   assert.match(section, /key=\{`\$\{source \? smaHistoryCacheKey\(source, security\)/, 'loader keyed per source + market + ticker (+ link)')
   for (const file of ['SmaDynamicsView.tsx', 'SmaDynamicsChart.tsx', 'SmaDynamicsControls.tsx', 'SmaDynamicsPanels.tsx']) {
@@ -334,6 +361,7 @@ const CONTROL_BUTTONS = SMA_LAB_TIMEFRAMES.length + SMA_LAB_PERIODS.length + 8 +
   assert.match(launcher, /data-sma-dynamics-launcher="true"/)
   assert.match(launcher, /aria-label="SMA Dynamics Lab US AAPL Apple Inc\."/, 'identity in the launcher')
   assert.ok(launcher.includes('開く') && launcher.includes('最大化で開く'))
+  assert.match(launcher, /1D〜5Yの15時間足/)
   assert.doesNotMatch(launcher, /data-sma-dynamics-controls/, 'lab body not mounted (no history request) until opened')
   const opened = renderToStaticMarkup(createElement(SmaDynamicsSection, { market: 'JP', ticker: '7203', name: null, analysisDate: null, source: null, defaultOpen: true }))
   assert.match(opened, /data-sma-dynamics-controls/)
@@ -351,6 +379,7 @@ const CONTROL_BUTTONS = SMA_LAB_TIMEFRAMES.length + SMA_LAB_PERIODS.length + 8 +
   const preview = read('app/dev/sma-dynamics/SmaDynamicsPreviewClient.tsx')
   assert.doesNotMatch(preview, /fetch\(|\/api\/|STOCK_HISTORY_API_SOURCE/, 'preview never touches the API adapter')
   assert.match(preview, /source=\{FIXTURE_SOURCES\[mode\]\}/, 'real Section with an injected fixture adapter')
+  assert.match(preview, /persistOpenPreference=\{false\}/, 'the fixture preview cannot change stock-detail open preferences')
   const panel = preview.slice(preview.indexOf('<details'), preview.indexOf('</details>'))
   assert.match(panel, /data-preview-developer-panel/)
   assert.match(panel, /<select/, 'fixture selector lives in the developer panel')

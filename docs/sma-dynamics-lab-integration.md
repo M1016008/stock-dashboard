@@ -1,7 +1,12 @@
-# SMA Dynamics Lab — development integration
+# SMA Dynamics Lab — application integration
 
-Development-only integration of the SMA Dynamics Lab (Phase 1–3B) into the stock detail pages.
-Nothing here reads Production data, adds a server route, or changes stage / trigger logic.
+Phase 1–3B is integrated in the repository's JP/US stock-detail chart tabs. Those pages reuse their
+existing history APIs; the Lab adds no database connection, schema, scheduler, stage or trigger logic.
+Merging this code does not itself deploy it. As of 2026-10-26, the integrated Lab has not been released
+to Production.
+
+`/dev/sma-dynamics` is different: it is a development-only, synthetic-Fixture preview. It performs no
+API or database read and returns HTTP 404 in Production and Share Mode.
 
 ## Where it lives
 
@@ -10,7 +15,7 @@ Nothing here reads Production data, adds a server route, or changes stage / trig
 | JP stock detail → チャート tab | `app/stock/[ticker]/StockDetailClient.tsx` (`SmaDynamicsSection`, `market="JP"`) |
 | US stock detail → チャート tab | `components/us/stock-detail/UsChartWorkspace.tsx` (`market="US"`) |
 | Fixture-only preview | `/dev/sma-dynamics` (404 in production and share mode) |
-| Six-stage current candidates | link column in `components/research/SixStageEventPathLab.tsx` |
+| Six-stage current candidates | desktop link column / mobile ticker cell in `components/research/SixStageEventPathLab.tsx` |
 
 History comes from the existing `/api/history/[ticker]` and `/api/us/history/[ticker]` routes
 (same rows and price basis as the main chart). The preview injects fixtures instead.
@@ -24,10 +29,11 @@ History comes from the existing `/api/history/[ticker]` and `/api/us/history/[ti
 * **Shared daily scenario** (`lib/sma-dynamics-daily-scenario.ts`, `SmaDailyScenarioPanel`): one path of future **daily
   session closes** per market + ticker + analysis date (default 3 sessions, up to 60) drives **all 15 timeframes** at once.
   Per bar of each timeframe:
-  * **confirmed** — every session through the bar's last session is explicitly entered; its close is the last session's close
-    and it enters the SMA window (same `projectSmaPath` engine as everything else);
+  * **confirmed by input** — every session through the bar's last session is explicitly entered; its close is the last session's
+    assumed close and it enters the SMA window (same `projectSmaPath` engine as everything else). The UI labels it
+    `仮定・入力完了`, never as market-observed data;
   * **provisional** — the entries (contiguous from T+1) reach into the bar but not to its end; a provisional SMA uses the
-    latest entered close, is labelled 暫定 and never feeds a later bar;
+    latest entered close, is labelled `仮定・暫定` and never feeds a later bar;
   * **unentered** — nothing contiguous reaches it. A missing / invalid session is never filled and blocks confirmation of every
     later bar (entries behind a gap are counted but unused).
   Presets: a target move over the entered sessions (e.g. −10%) as **even** (straight line, ends on target), **all on the first
@@ -35,8 +41,8 @@ History comes from the existing `/api/history/[ticker]` and `/api/us/history/[ti
   (SMA picker, one row per timeframe, tap a row to select that timeframe) shows confirmed bars, provisional entries and the
   SMA change versus the as-of SMA. The daily scenario lives next to the per-timeframe drafts in the simulation state, so
   switching timeframes keeps it; another security or analysis date starts empty.
-  **Daily → selected timeframe** is an explicit button: only confirmed bars get their exact close (price unit), provisional or
-  unreached bars stay empty, and the panel states `確定 n/m本`. The existing selected-timeframe editor, price scenario and
+  **Daily → selected timeframe** is an explicit button: only bars labelled `仮定・入力完了` get their exact close (price unit), provisional or
+  unreached bars stay empty, and the panel states `仮定・入力完了 n/m本`. The existing selected-timeframe editor, price scenario and
   inverse solver then work on that draft unchanged (verified: forward SMAs and solver direction checks agree with the
   daily projection).
 * **Inverse solving**
@@ -88,16 +94,19 @@ preselected. A **synthetic** projection (`fixture: true`) only ever links to the
 stock page. On arrival the lab names the origin and warns if the candidate's `asOf` differs from the loaded
 history's latest bar; all numbers still come from the page's own price history.
 
+The collapsed/open preference is separate for JP and US stock-detail surfaces. The synthetic Fixture preview never reads or
+writes either preference, and the former shared key is intentionally ignored to prevent cross-surface state leakage.
+
 ## Tests
 
-`npm run test:sma-dynamics:all` (14 scripts; `test-sma-dynamics-daily-scenario.ts` covers one 3-session path across all 15
+`npm run test:sma-dynamics:all` (15 scripts; CI runs the whole chain. `test-sma-dynamics-daily-scenario.ts` covers one 3-session path across all 15
 timeframes at JP / US year ends, Thanksgiving week and mid-period, even / first / final-day / flat / rise / fall / shock paths,
 gaps and invalid input, chart-resampler parity, timeframe switching and Forward / Inverse consistency). `test-sma-dynamics-crossing.ts` checks the solver against an
 independent forward recomputation on 24 deterministic histories (400+ feasible bars, both sides of each boundary).
 
 ## Known gaps
 
-* Browser QA covers the fixture chart, mode/scenario controls, desktop and 390px layout. Hover and pinch gestures remain manual-device checks.
+* Browser QA covers the fixture chart, mode/scenario controls, desktop and 390px layout. Physical-device hover, pinch and the iOS keyboard remain NOT_TESTED manual-device checks.
 * Touch / cross answers are conditional on the stated earlier path; they are not "minimum over all paths".
 * Shock is one jump; compound events (gap then drift) are built by typing or by combining with the bulk tools.
 * The lab loads full daily history (`period=all`) on first open; very long histories on 1D are the heaviest case (~0.1 s compute).
