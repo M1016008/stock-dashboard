@@ -12,7 +12,9 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
+import Link from 'next/link'
 import { Database, Gauge, Search, SlidersHorizontal } from 'lucide-react'
+import { buildSmaDynamicsLink, sixStageCandidateLinkRequest } from '@/lib/sma-dynamics-link'
 import {
   EVENT_PHYSICAL_SIMILARITY_FEATURES,
   EVENT_SMA_SIMILARITY_FEATURES,
@@ -152,6 +154,19 @@ function isProjectionResponse(value: unknown): value is CurrentProjectionRespons
   return !!body && typeof body.generationId === 'string' && typeof body.definitionVersion === 'string'
     && !!body.watermark && typeof body.watermark.asOfTradingDate === 'string'
     && typeof body.watermark.sourceGeneration === 'string' && Array.isArray(body.rows)
+}
+
+/** Synthetic projections never link to a real stock page: they open the fixture-only SMA preview. */
+const SMA_LAB_PREVIEW_FIXTURE: Record<'JP' | 'US', string> = { JP: 'jp-rising', US: 'us-falling' }
+
+function SmaLabCandidateLink({ row, fixture }: { row: CurrentServingProjectionRow; fixture: boolean }) {
+  const link = buildSmaDynamicsLink(sixStageCandidateLinkRequest(row, fixture ? { fixtureId: SMA_LAB_PREVIEW_FIXTURE[row.market] } : {}))
+  if (!link.ok) return <span className="text-[var(--color-text-tertiary)]">—</span>
+  return (
+    <Link href={link.href} className="inline-flex min-h-11 items-center font-semibold text-[var(--color-brand-700)] underline underline-offset-2" data-sma-lab-link={link.target}>
+      {fixture ? 'SMA Lab (合成データ)' : 'SMA Labで見る'}
+    </Link>
+  )
 }
 
 function Metric({ label, value, sub }: { label: string; value: string; sub?: string }) {
@@ -514,8 +529,8 @@ export function SixStageEventPathLab() {
         <div className="mt-2 overflow-x-auto">
           <table className="w-full min-w-[1050px] text-left text-[12px]">
             <caption className="sr-only">過去イベントから現在Fixture候補への類似検索</caption>
-            <thead><tr className="border-y"><th scope="col" className="px-3 py-2">tier</th><th scope="col" className="px-3 py-2">銘柄</th><th scope="col" className="px-3 py-2">現在遷移</th><th scope="col" className="px-3 py-2 text-right">総合</th><th scope="col" className="px-3 py-2 text-right">遷移 score / coverage</th><th scope="col" className="px-3 py-2 text-right">SMA score / coverage</th><th scope="col" className="px-3 py-2 text-right">Physical score / coverage</th></tr></thead>
-            <tbody>{visibleCandidates.map((candidate) => <tr key={candidate.vector.eventId} className="border-b"><td className="px-3 py-2 font-semibold">{candidate.vector.sequenceKey === sequenceKey ? '完全一致' : '類似'}</td><td className="px-3 py-2"><strong>FIXTURE {candidate.vector.ticker}</strong><span className="ml-2 text-[var(--color-text-tertiary)]">{candidate.companyName}</span></td><td className="px-3 py-2 font-mono">{candidate.vector.sequenceKey}</td><td className="px-3 py-2 text-right font-mono font-bold">{score(candidate.similarity.combined)}</td><td className="px-3 py-2 text-right font-mono">{score(candidate.similarity.transition.score)} / {score(candidate.similarity.transition.coverage)}</td><td className="px-3 py-2 text-right font-mono">{score(candidate.similarity.sma.score)} / {score(candidate.similarity.sma.coverage)}</td><td className="px-3 py-2 text-right font-mono">{score(candidate.similarity.physical.score)} / {score(candidate.similarity.physical.coverage)}</td></tr>)}</tbody>
+            <thead><tr className="border-y"><th scope="col" className="px-3 py-2">tier</th><th scope="col" className="px-3 py-2">銘柄</th><th scope="col" className="px-3 py-2">現在遷移</th><th scope="col" className="px-3 py-2 text-right">総合</th><th scope="col" className="px-3 py-2 text-right">遷移 score / coverage</th><th scope="col" className="px-3 py-2 text-right">SMA score / coverage</th><th scope="col" className="px-3 py-2 text-right">Physical score / coverage</th><th scope="col" className="px-3 py-2">SMA Lab</th></tr></thead>
+            <tbody>{visibleCandidates.map((candidate) => <tr key={candidate.vector.eventId} className="border-b"><td className="px-3 py-2 font-semibold">{candidate.vector.sequenceKey === sequenceKey ? '完全一致' : '類似'}</td><td className="px-3 py-2"><strong>FIXTURE {candidate.vector.ticker}</strong><span className="ml-2 text-[var(--color-text-tertiary)]">{candidate.companyName}</span></td><td className="px-3 py-2 font-mono">{candidate.vector.sequenceKey}</td><td className="px-3 py-2 text-right font-mono font-bold">{score(candidate.similarity.combined)}</td><td className="px-3 py-2 text-right font-mono">{score(candidate.similarity.transition.score)} / {score(candidate.similarity.transition.coverage)}</td><td className="px-3 py-2 text-right font-mono">{score(candidate.similarity.sma.score)} / {score(candidate.similarity.sma.coverage)}</td><td className="px-3 py-2 text-right font-mono">{score(candidate.similarity.physical.score)} / {score(candidate.similarity.physical.coverage)}</td><td className="px-3 py-2"><SmaLabCandidateLink row={candidate.row} fixture={projection.status === 'ready' ? projection.data.fixture !== false : true} /></td></tr>)}</tbody>
           </table>
         </div>
 

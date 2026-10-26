@@ -1,11 +1,13 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
+import { usePathname } from 'next/navigation'
 import { Activity, CheckCircle2, Database, Maximize2, Minimize2, RefreshCw, TriangleAlert } from 'lucide-react'
 import {
   marketPriceCoverageNeedsAttention,
   supplementalSourceNeedsAttention,
 } from '@/lib/status-health'
+import { isSmaDynamicsFixturePreviewPath } from '@/lib/sma-dynamics-preview-path'
 
 type MarketStatus = {
   expected: string
@@ -158,6 +160,8 @@ function jobLabel(job: RunningJobStatus) {
 }
 
 export function DataStatusBar() {
+  const pathname = usePathname()
+  const fixtureOnlyPreview = isSmaDynamicsFixturePreviewPath(pathname)
   const [payload, setPayload] = useState<StatusPayload | null>(null)
   const [loading, setLoading] = useState(false)
   const [open, setOpen] = useState(false)
@@ -185,10 +189,11 @@ export function DataStatusBar() {
     const initial: Density = saved === 'compact' ? 'compact' : 'comfortable'
     setDensity(initial)
     document.body.dataset.density = initial
+    if (fixtureOnlyPreview) return
     void load()
     const timer = window.setInterval(() => void load(), 5 * 60 * 1_000)
     return () => window.clearInterval(timer)
-  }, [load])
+  }, [fixtureOnlyPreview, load])
 
   const toggleDensity = () => {
     const next: Density = density === 'compact' ? 'comfortable' : 'compact'
@@ -207,6 +212,8 @@ export function DataStatusBar() {
     job.market === 'US'
     && (job.jobType === 'snapshot_compute' || job.jobType.startsWith('us_adjusted_foundation'))
   ))
+
+  if (fixtureOnlyPreview) return null
 
   return (
     <div className="border-b border-[var(--color-border-soft)] bg-white">

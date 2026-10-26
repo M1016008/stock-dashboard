@@ -29,6 +29,8 @@ import { EarningsCard } from '@/components/stock/EarningsCard'
 import { WatchlistButton } from '@/components/ui/WatchlistButton'
 import { Notice } from '@/components/ui/EmptyState'
 import { StageTimeline, type StageTimelineSnapshot } from '@/components/stock/StageTimeline'
+import { SmaDynamicsSection } from '@/components/stock/sma-dynamics/SmaDynamicsSection'
+import { useSmaLinkIntent } from '@/components/stock/sma-dynamics/useSmaLinkIntent'
 import { StockMovePeriods } from '@/components/stock/StockMovePeriods'
 import { Ma25mMonitorSummary } from '@/components/stock/Ma25mMonitorSummary'
 import { StockMlInsights } from '@/components/stock/StockMlInsights'
@@ -508,6 +510,7 @@ export function StockDetailClient({ ticker }: StockDetailClientProps) {
       {activeTab === 'chart' && (
         <ChartWorkspace
           ticker={ticker}
+          companyName={name === '---' ? null : name}
           analysisDate={analysisDate}
           showActual={showActual}
         />
@@ -641,10 +644,12 @@ const STAGE_TIMEFRAME_LABELS = ['日足', '週足', '月足'] as const
 
 function ChartWorkspace({
   ticker,
+  companyName,
   analysisDate,
   showActual,
 }: {
   ticker: string
+  companyName: string | null
   analysisDate: string | null
   showActual: boolean
 }) {
@@ -692,8 +697,9 @@ function ChartWorkspace({
   }, [analysisDate, ticker])
 
   const chartHeight = useChartHeight()
+  const smaLinkIntent = useSmaLinkIntent(`JP:${ticker}`)
 
-  // 読み順: 現在の状態(結論) → チャート → 根拠(MA・スコア・Stage) → Stage変遷 → 月足MA → Physical Momentum → 指標の見方
+  // 読み順: 現在の状態(結論) → チャート → 根拠(MA・スコア・Stage) → SMAダイナミクス → Stage変遷 → 月足MA → Physical Momentum → 指標の見方
   return (
     <div className="space-y-3 pb-6 sm:space-y-4" aria-label="チャート・6ステージ分析">
       <section className="overflow-hidden rounded-[var(--radius-card)] border border-[var(--color-border-default)] bg-white" aria-labelledby="main-chart-title" data-section="Price &amp; moving averages">
@@ -721,6 +727,8 @@ function ChartWorkspace({
           )}
         />
       </section>
+
+      <SmaDynamicsSection market="JP" ticker={ticker.replace('.T', '')} name={companyName} analysisDate={analysisDate} linkIntent={smaLinkIntent} />
 
       <StageTimeline
         ticker={ticker}

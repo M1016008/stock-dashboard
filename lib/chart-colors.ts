@@ -9,7 +9,9 @@ export const MOVING_AVERAGE_COLORS: Record<number, string> = {
   52: '#16a34a',
   60: '#16a34a',
   75: '#16a34a', // green
+  150: '#7c3aed', // violet
   200: '#f97316', // orange
+  300: '#0e7490', // cyan
 }
 
 const MOVING_AVERAGE_FALLBACK_COLORS = ['#64748b', '#7c3aed', '#0f766e', '#b45309']

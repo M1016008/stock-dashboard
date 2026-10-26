@@ -6,6 +6,7 @@ import { FormEvent, useEffect, useMemo, useState } from 'react'
 import { Bot, ChevronRight, Loader2, MessageSquareText, Send, Sparkles, X } from 'lucide-react'
 import type { AssistantChatResponse, AssistantConversationMessage, AssistantPageContext, AssistantResultRow } from '@/lib/assistant/types'
 import { decodePathSegment } from '@/lib/url-path'
+import { isSmaDynamicsFixturePreviewPath } from '@/lib/sma-dynamics-preview-path'
 
 interface AssistantStatusResponse {
   enabled: boolean
@@ -400,7 +401,7 @@ export function AssistantDrawer() {
     void run(input)
   }
 
-  if (pathname.startsWith('/ai/research')) return null
+  if (pathname.startsWith('/ai/research') || isSmaDynamicsFixturePreviewPath(pathname)) return null
 
   return (
     <>

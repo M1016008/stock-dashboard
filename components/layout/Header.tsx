@@ -29,6 +29,7 @@ import {
   type UniverseFilterId,
 } from '@/lib/market-universe'
 import { isValidTickerForMarket } from '@/lib/markets'
+import { isSmaDynamicsFixturePreviewPath } from '@/lib/sma-dynamics-preview-path'
 import {
   NAVIGATION_BY_AREA,
   PAGE_CATALOG,
@@ -645,6 +646,7 @@ function TickerQuickSearch({ area }: { area: HeaderArea }) {
 
 export function Header() {
   const pathname = usePathname()
+  const fixtureOnlyPreview = isSmaDynamicsFixturePreviewPath(pathname)
   const searchParams = useSearchParams()
   const requestedMarket = searchParams.get('market')
   const area = resolveHeaderArea(pathname, requestedMarket)
@@ -812,6 +814,8 @@ export function Header() {
     else if (event.key === 'ArrowDown') items[(current + 1 + items.length) % items.length].focus()
     else items[(current - 1 + items.length) % items.length].focus()
   }
+
+  if (fixtureOnlyPreview) return null
 
   return (
     <header className="relative z-30 border-b border-[var(--color-border-strong)] bg-white shadow-[0_1px_3px_rgba(16,32,52,0.12)]">

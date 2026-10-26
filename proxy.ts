@@ -8,6 +8,7 @@ import { NextResponse, type NextRequest } from 'next/server'
 import path from 'node:path'
 import { anyStorageFatal, anyStorageUncertain, guardForDatabase, requiresExternalStorageGuard } from './lib/storage/external-storage-guard'
 import { isSixStageResearchPath, isSixStageResearchRequestAllowed, requiredSixStageResearchMode } from './lib/research/six-stage-research-isolation'
+import { isSmaDynamicsFixturePreviewPath } from './lib/sma-dynamics-preview-path'
 import { resolveConfiguredStoragePath } from './lib/storage-paths'
 
 const SHARE_AUTH_REALM = 'StockBoard shared preview'
@@ -108,6 +109,13 @@ export function proxy(req: NextRequest) {
     const researchResponse = NextResponse.next()
     researchResponse.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
     return researchResponse
+  }
+  // The SMA Dynamics preview renders fixtures only and reads no storage, so it stays
+  // reachable while storage is degraded. Exact path, development only, never in share mode.
+  if (isSmaDynamicsFixturePreviewPath(pathname) && process.env.NODE_ENV !== 'production' && !isShareMode()) {
+    const previewResponse = NextResponse.next()
+    previewResponse.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
+    return previewResponse
   }
   // Health reports storage degradation without hiding the running web process.
   if (pathname === '/api/health') return NextResponse.next()
