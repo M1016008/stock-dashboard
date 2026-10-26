@@ -51,11 +51,10 @@ globalForUsMonthlyMa.usMonthlyMaSourceCache = sourceCache
 async function readSourceIdentity(): Promise<{
   latestDate: string | null
   priceMaxImportedAt: number | null
-  universeMaxUpdatedAt: number | null
   sourceRun: UsMonthlyMaGenerationRun | undefined
 }> {
   const [latest, sourceRun] = await Promise.all([
-    execGet<{ date: string | null; priceMaxImportedAt: number | null; universeMaxUpdatedAt: number | null }>(
+    execGet<{ date: string | null; priceMaxImportedAt: number | null }>(
       `WITH latest AS (
          SELECT MAX(s.date) AS date
          FROM market_daily_snapshots s
@@ -68,10 +67,7 @@ async function readSourceIdentity(): Promise<{
        SELECT latest.date,
          (SELECT MAX(prices.imported_at)
           FROM market_ohlcv_daily prices
-          WHERE prices.market = 'US' AND prices.date <= latest.date) AS priceMaxImportedAt,
-         (SELECT MAX(universe.updated_at)
-          FROM market_universe universe
-          WHERE universe.market = 'US') AS universeMaxUpdatedAt
+          WHERE prices.market = 'US' AND prices.date <= latest.date) AS priceMaxImportedAt
        FROM latest`,
     ),
     execGet<UsMonthlyMaGenerationRun>(
@@ -86,7 +82,6 @@ async function readSourceIdentity(): Promise<{
   return {
     latestDate: latest?.date ?? null,
     priceMaxImportedAt: latest?.priceMaxImportedAt ?? null,
-    universeMaxUpdatedAt: latest?.universeMaxUpdatedAt ?? null,
     sourceRun,
   }
 }
@@ -275,7 +270,7 @@ export async function GET(request: NextRequest) {
      AND anchor_snapshot.date = ma15_boundary_dates.anchorDate
     ORDER BY base.ticker, base.date`
 
-    const sourceCacheKey = `${sourceIdentity.latestDate}:${sourceIdentity.priceMaxImportedAt ?? 'null'}:${sourceIdentity.universeMaxUpdatedAt ?? 'null'}:${generation.generation}`
+    const sourceCacheKey = `${sourceIdentity.latestDate}:${sourceIdentity.priceMaxImportedAt ?? 'null'}:${generation.generation}`
     let sourceBundle = sourceCache.get(sourceCacheKey)
     if (!sourceBundle) {
       sourceBundle = (async (): Promise<MonthlyMaSourceBundle> => {
@@ -298,7 +293,6 @@ export async function GET(request: NextRequest) {
         if (
           completedIdentity.latestDate !== sourceIdentity.latestDate
           || completedIdentity.priceMaxImportedAt !== sourceIdentity.priceMaxImportedAt
-          || completedIdentity.universeMaxUpdatedAt !== sourceIdentity.universeMaxUpdatedAt
           || !completedGeneration.ok
           || completedGeneration.generation !== generation.generation
         ) {
@@ -325,7 +319,6 @@ export async function GET(request: NextRequest) {
     if (
       responseIdentity.latestDate !== sourceIdentity.latestDate
       || responseIdentity.priceMaxImportedAt !== sourceIdentity.priceMaxImportedAt
-      || responseIdentity.universeMaxUpdatedAt !== sourceIdentity.universeMaxUpdatedAt
       || !responseGeneration.ok
       || responseGeneration.generation !== generation.generation
     ) {
