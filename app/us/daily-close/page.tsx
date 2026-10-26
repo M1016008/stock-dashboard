@@ -127,7 +127,12 @@ export default async function UsDailyClosePage({
       </form>
 
       {invalidQuery && <Notice role="alert" tone="error" title="クエリを読み取れません">実在する日付をYYYY-MM-DDで1つだけ指定してください。未知の条件や重複値は受け付けません。</Notice>}
-      {loadFailed && <Notice role="alert" tone="error" title="US Daily Closeを読み込めません">既存Servingデータを確認できませんでした。別ソースや推定値へフォールバックしません。<div className="mt-2"><Link className="btn" data-size="sm" href={date ? `/us/daily-close?date=${encodeURIComponent(date)}` : '/us/daily-close'} prefetch={false}>再試行</Link></div></Notice>}
+      {loadFailed && <Notice
+        role="alert"
+        tone="error"
+        title="US Daily Closeを読み込めません"
+        action={<Link className="btn" data-size="sm" href={date ? `/us/daily-close?date=${encodeURIComponent(date)}` : '/us/daily-close'} prefetch={false}>再試行</Link>}
+      >既存Servingデータを確認できませんでした。別ソースや推定値へフォールバックしません。</Notice>}
       {!invalidQuery && !loadFailed && report?.status === 'empty' && <EmptyState title="対象日のUS市場データがありません" description="別日へ自動置換せず、空結果として表示しています。" />}
 
       {report?.status === 'ready' && <>
@@ -163,8 +168,8 @@ export default async function UsDailyClosePage({
         </section>
 
         <section>
-          <SectionHeader level={1} title="セクター・ローテーション" description={report.current ? 'SEC SICから導出したStockBoard SIC divisionの現行参照分類です。過去日の分類履歴ではありません。' : '過去日の業種分類は当時の履歴を保存していないため、集計を行いません。'} />
-          {report.sectors.length ? <Card size="lg" className="overflow-hidden p-0"><div className="overflow-x-auto"><table className="w-full min-w-[620px] text-[12px]"><thead className="bg-[var(--color-surface-subtle)] text-[10px] text-[var(--color-text-tertiary)]"><tr><th className="px-3 py-2 text-left">StockBoard SIC division</th><th className="px-3 py-2 text-right">1D</th><th className="px-3 py-2 text-right">5D</th><th className="px-3 py-2 text-right">順位変化</th><th className="px-3 py-2 text-right">Coverage</th></tr></thead><tbody>{report.sectors.map((row) => <tr key={row.name} className="border-t border-[var(--color-border-soft)]"><td className="px-3 py-2 font-semibold">{row.name}</td><td className={`px-3 py-2 text-right font-mono ${tone(row.return1D)}`}>{percent(row.return1D)}</td><td className={`px-3 py-2 text-right font-mono ${tone(row.return5D)}`}>{percent(row.return5D)}</td><td className="px-3 py-2 text-right font-mono">{row.rankChange == null ? '---' : `${row.rankChange > 0 ? '+' : ''}${row.rankChange}`}</td><td className="px-3 py-2 text-right font-mono">{row.eligibleCount}/{row.totalCount}</td></tr>)}</tbody></table></div></Card> : <EmptyState title={report.current ? '分類済みのセクター集計はありません' : '過去日のセクター分類は利用できません'} description={report.current ? '分類済み銘柄が不足しているため、推定で補完していません。' : '現在の分類を過去日へ当てはめると当時と異なる結果になるため、別日の分類で補完せず集計を停止しています。'} />}
+          <SectionHeader level={1} title="セクター・ローテーション" description={report.current ? 'SEC SICから導出したStockBoard業種区分（SIC）の現行参照分類です。過去日の分類履歴ではありません。' : '過去日の業種分類は当時の履歴を保存していないため、集計を行いません。'} />
+          {report.sectors.length ? <Card size="lg" className="overflow-hidden p-0"><div className="overflow-x-auto"><table className="w-full min-w-[620px] text-[12px]"><thead className="bg-[var(--color-surface-subtle)] text-[10px] text-[var(--color-text-tertiary)]"><tr><th className="px-3 py-2 text-left">業種区分（SIC）</th><th className="px-3 py-2 text-right">1D</th><th className="px-3 py-2 text-right">5D</th><th className="px-3 py-2 text-right">順位変化</th><th className="px-3 py-2 text-right">Coverage</th></tr></thead><tbody>{report.sectors.map((row) => <tr key={row.name} className="border-t border-[var(--color-border-soft)]"><td className="px-3 py-2 font-semibold">{row.name}</td><td className={`px-3 py-2 text-right font-mono ${tone(row.return1D)}`}>{percent(row.return1D)}</td><td className={`px-3 py-2 text-right font-mono ${tone(row.return5D)}`}>{percent(row.return5D)}</td><td className="px-3 py-2 text-right font-mono">{row.rankChange == null ? '---' : `${row.rankChange > 0 ? '+' : ''}${row.rankChange}`}</td><td className="px-3 py-2 text-right font-mono">{row.eligibleCount}/{row.totalCount}</td></tr>)}</tbody></table></div></Card> : <EmptyState title={report.current ? '分類済みのセクター集計はありません' : '過去日のセクター分類は利用できません'} description={report.current ? '分類済み銘柄が不足しているため、推定で補完していません。' : '現在の分類を過去日へ当てはめると当時と異なる結果になるため、別日の分類で補完せず集計を停止しています。'} />}
         </section>
 
         <section>

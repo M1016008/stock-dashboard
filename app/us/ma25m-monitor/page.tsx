@@ -206,6 +206,7 @@ function SignalBadges({ row, contactThreshold }: { row: MonitorRow; contactThres
 
 const MA_ERROR_MESSAGES: Record<string, string> = {
   us_monthly_ma_source_unavailable: '月足MAの元データを確認できません。しばらくしてから再試行してください。',
+  us_monthly_ma_source_generation_changed: 'データ更新中に元データの世代が切り替わったため表示を停止しました。更新完了後に再試行してください。',
   us_monthly_ma_generation_unavailable: 'データ更新の切り替え中です。更新が完了するまで表示できません。しばらくしてから再試行してください。',
   us_monthly_ma_price_basis_mismatch: '価格データの基準が一致していないため表示を停止しています。データ更新の完了後に再試行してください。',
   us_monthly_ma_generation_unattested: 'データ更新の整合確認が完了していないため表示を停止しています。しばらくしてから再試行してください。',

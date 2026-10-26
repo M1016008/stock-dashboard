@@ -106,6 +106,7 @@ assert.match(screenerClient, /if \(!earningsUnavailable\) return[\s\S]*setEarnin
 assert.match(screenerClient, /const \[clearedForEarnings, setClearedForEarnings\] = useState<string\[\]>\(\[\]\)/)
 assert.match(screenerClient, /if \(!earningsUnavailable\) return[\s\S]*cleared\.push\('次回決算までの期間'\)[\s\S]*cleared\.push\('決算の発表時間'\)[\s\S]*cleared\.push\('並び順（コード順に変更）'\)[\s\S]*setClearedForEarnings\(/)
 assert.match(screenerClient, /setClearedForHistorical\(\[\]\)\s*setClearedForEarnings\(\[\]\)/)
+assert.match(screenerClient, /const changeRequestedDate = \(next: string \| null\) => \{[\s\S]*setEarningsMeta\(null\)/)
 assert.match(screenerClient, /!historical && clearedForEarnings\.length > 0 && \([\s\S]*role="note"[\s\S]*解除した条件: \{clearedForEarnings\.join\('・'\)\}/)
 assert.match(screenerClient, /\[earningsUnavailable, earningsWindowDays, earningsTimeBucket, sort\]/)
 assert.match(screenerClient, /!historicalLocked && row\.next_earnings_date/)
@@ -137,7 +138,7 @@ assert.match(screenerClient, /const resetFilters = \(\) => \{\s*setClearedForEar
 assert.match(overview, /次回決算日は確認できません/)
 assert.doesNotMatch(overview, /予定未取得/)
 
-assert.match(dailyClose, /StockBoard SIC division<\/th>/)
+assert.match(dailyClose, /業種区分（SIC）<\/th>/)
 assert.doesNotMatch(dailyClose, />Sector<\/th>/)
 assert.match(dailyClose, /report\.sectors\.length \?/)
 assert.match(dailyClose, /過去日のセクター分類は利用できません/)

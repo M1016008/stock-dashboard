@@ -553,6 +553,7 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
   const changeRequestedDate = (next: string | null) => {
     setClearedForHistorical([])
     setClearedForEarnings([])
+    setEarningsMeta(null)
     setSelected(new Set())
     setUnavailableDateReason(
       next && initialAsOf.earliestDate && next < initialAsOf.earliestDate

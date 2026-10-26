@@ -129,6 +129,12 @@ function stableErrorStatus(error: unknown): number {
   return /SQLITE_BUSY|database is locked|no such table|STORAGE_|FAILED_SAFE|SOURCE_GENERATION_CHANGED/i.test(message) ? 503 : 500
 }
 
+function stableErrorCode(error: unknown, status: number): string {
+  const message = error instanceof Error ? error.message : String(error)
+  if (/SOURCE_GENERATION_CHANGED/i.test(message)) return 'us_monthly_ma_source_generation_changed'
+  return status === 503 ? 'us_monthly_ma_source_unavailable' : 'us_monthly_ma_failed'
+}
+
 export async function GET(request: NextRequest) {
   try {
     const params = request.nextUrl.searchParams
@@ -379,7 +385,7 @@ export async function GET(request: NextRequest) {
     console.error('US monthly MA monitor API error:', error)
     const status = stableErrorStatus(error)
     return NextResponse.json({
-      error: status === 503 ? 'us_monthly_ma_source_unavailable' : 'us_monthly_ma_failed',
+      error: stableErrorCode(error, status),
     }, { status })
   }
 }

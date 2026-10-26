@@ -225,6 +225,7 @@ for (const route of [listRoute, detailRoute]) {
   assert.match(route, /sourceGenerationStatus: 'attested'/)
   assert.match(route, /price_basis_mismatch/)
   assert.match(route, /US_MONTHLY_MA_SOURCE_GENERATION_CHANGED/, 'source generation must be rechecked after the data query')
+  assert.match(route, /us_monthly_ma_source_generation_changed/, 'generation changes need a distinct stable API error')
 }
 assert.match(listRoute, /sourceCache\.clear\(\)/, 'the list cache must retain only one attested generation')
 assert.match(listRoute, /completedIdentity\.latestDate !== sourceIdentity\.latestDate/)
@@ -237,6 +238,7 @@ assert.match(page, /\/us\/stock\//)
 assert.match(page, /3・5・10・15・20・25か月線/)
 assert.match(page, /10か月前の完了月末Snapshot/)
 assert.match(page, /当月は形成中/)
+assert.match(page, /us_monthly_ma_source_generation_changed:[\s\S]*世代が切り替わった/)
 
 async function verifyInvalidQueries(): Promise<void> {
   const invalidListCases = [

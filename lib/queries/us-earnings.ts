@@ -280,7 +280,7 @@ export async function getUsEarningsCalendar(input: UsEarningsCalendarInput): Pro
 export async function getNextUsEarnings(ticker: string): Promise<NextUsEarnings | null> {
   const today = todayInNewYork()
   const coverageRun = await loadUsEarningsCoverageRun().catch(() => undefined)
-  if (!evaluateUsEarningsCoverage(coverageRun, { from: today, to: today }).ok) return null
+  if (!evaluateUsEarningsCoverage(coverageRun, { from: today, to: addCalendarDays(today, 180) }).ok) return null
   const row = await execGet<{
     ticker: string
     reportDate: string
