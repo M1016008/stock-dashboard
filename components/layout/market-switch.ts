@@ -26,6 +26,7 @@ export const MARKET_COUNTERPARTS = [
   { jp: 'dashboard', us: 'usDashboard', commodities: 'commoditiesDashboard' },
   { jp: 'marketMomentum', us: 'usMarketMomentum' },
   { jp: 'sectors', us: 'usSectors' },
+  { jp: 'sectorEtfs', us: 'usSectorEtfs' },
   { jp: 'earnings', us: 'usEarnings' },
   { jp: 'mtfCloseCalendar', us: 'usMtfCloseCalendar' },
   { jp: 'screener', us: 'usScreener', commodities: 'commoditiesScreener' },
@@ -36,18 +37,17 @@ export const MARKET_COUNTERPARTS = [
   { jp: 'maLens', us: 'usMlLens' },
   { jp: 'transitions', us: 'usTransitions' },
   { jp: 'backtest', us: 'usBacktest' },
+  { jp: 'tradeWorkbench', us: 'usTradeWorkbench' },
   { jp: 'chartDrill', us: 'usChartDrill' },
+  { jp: 'ma25mMonitor', us: 'usMa25mMonitor' },
 ] as const satisfies readonly MarketCounterpart[]
 
 /** Navigation pages that intentionally have no equivalent in another market. */
 export const MARKET_SPECIFIC_PAGE_IDS = {
   jp: [
-    'sectorEtfs',
     'themes',
     'materials',
     'hexStage',
-    'tradeWorkbench',
-    'ma25mMonitor',
     'largeHolders',
   ],
   us: [],
