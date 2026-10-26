@@ -6,6 +6,7 @@ import {
   type SectorRotationRow,
   type StageSet,
 } from '@/lib/daily-close-report'
+import { getUsEarningsCalendar } from '@/lib/queries/us-earnings'
 import { US_SEC_SIC_TAXONOMY } from '@/lib/us-classification'
 import { usInvestableSymbolSql } from '@/lib/us-symbol-quality'
 
@@ -191,7 +192,6 @@ export function buildUsDailyCloseReport(input: {
   }
   const current = input.dates.asOfDate != null
     && input.dates.asOfDate === input.dates.latestDate
-    && input.dates.snapshotDate === input.dates.asOfDate
   const effectiveRows = current
     ? input.rows
     : input.rows.map((row) => ({ ...row, sector: null }))
@@ -289,7 +289,9 @@ export function buildUsDailyCloseReport(input: {
         ? '分類は現行SEC SIC参照です。StockBoard派生SectorでありGICSではありません。'
         : '過去日の有効時点分類を証明できないためSectorを表示・集計しません。',
       input.earningsStatus === 'unavailable'
-        ? '過去日の決算予定は、その時点で既知だったimported_atを証明できないため表示しません。'
+        ? current
+          ? '決算予定の同期範囲または鮮度を確認できないため、予定なしとは扱わず表示を停止します。'
+          : '過去日の決算予定は、その時点で既知だったimported_atを証明できないため表示しません。'
         : '決算は正式に同期済みのFinnhub行だけを表示し、未同期日を推定しません。',
       'US Trigger Discoveryはユーザー定義条件であり、単一の認定済み日次評価がないため本レポートへ混在させません。',
       '所有・Short Interest・材料ニュースは対応Source未接続のためUNAVAILABLEです。',
@@ -394,18 +396,30 @@ async function loadBenchmarks(asOfDate: string | null): Promise<UsDailyCloseBenc
   `, [asOfDate])
 }
 
-async function loadEarnings(asOfDate: string | null): Promise<UsDailyCloseEarningsRow[]> {
-  if (!asOfDate) return []
-  return execAll<UsDailyCloseEarningsRow>(`
-    SELECT e.ticker,COALESCE(u.name,e.ticker) name,e.report_date reportDate,
-      CASE WHEN e.time_bucket IN ('before_open','market_hours','after_close')
-        THEN e.time_bucket ELSE 'unknown' END timeBucket,e.source
-    FROM market_earnings_calendar e
-    LEFT JOIN market_universe u ON u.market='US' AND u.ticker=e.ticker
-    WHERE e.market='US' AND e.source='finnhub'
-      AND e.report_date BETWEEN ? AND date(?, '+14 day')
-    ORDER BY e.report_date,e.ticker LIMIT ${US_DAILY_CLOSE_EARNINGS_LIMIT}
-  `, [asOfDate, asOfDate])
+async function loadEarningsState(asOfDate: string | null): Promise<{
+  status: 'available' | 'empty' | 'unavailable'
+  rows: UsDailyCloseEarningsRow[]
+}> {
+  if (!asOfDate) return { status: 'unavailable', rows: [] }
+  const end = new Date(`${asOfDate}T00:00:00Z`)
+  end.setUTCDate(end.getUTCDate() + 14)
+  const calendar = await getUsEarningsCalendar({
+    from: asOfDate,
+    to: end.toISOString().slice(0, 10),
+    limit: US_DAILY_CLOSE_EARNINGS_LIMIT,
+    offset: 0,
+  })
+  const validTimeBuckets = new Set(['before_open', 'market_hours', 'after_close', 'unknown'])
+  return {
+    status: calendar.status === 'ok' ? 'available' : calendar.status,
+    rows: calendar.rows.map((row) => ({
+      ticker: row.ticker,
+      name: row.name,
+      reportDate: row.reportDate,
+      timeBucket: validTimeBuckets.has(row.timeBucket) ? row.timeBucket : 'unknown',
+      source: row.source,
+    })),
+  }
 }
 
 export async function loadUsDailyCloseReport(requestedDate: string | null): Promise<UsDailyCloseReport> {
@@ -415,14 +429,16 @@ export async function loadUsDailyCloseReport(requestedDate: string | null): Prom
   const [rows, benchmarks, earnings] = await Promise.all([
     loadServingRows(dates, currentPriceDate),
     loadBenchmarks(dates.asOfDate),
-    currentPriceDate ? loadEarnings(dates.asOfDate) : Promise.resolve([]),
+    currentPriceDate
+      ? loadEarningsState(dates.asOfDate)
+      : Promise.resolve({ status: 'unavailable' as const, rows: [] }),
   ])
   return buildUsDailyCloseReport({
     requestedDate,
     dates,
     rows,
     benchmarks,
-    earnings,
-    earningsStatus: currentPriceDate ? undefined : 'unavailable',
+    earnings: earnings.rows,
+    earningsStatus: earnings.status,
   })
 }

@@ -99,6 +99,33 @@ assert.equal(report.unavailable.news.status, 'UNAVAILABLE')
 assert.match(report.unavailable.news.reason, /推測しません/)
 assert.ok(report.limitations.some((item) => item.includes('StockBoard派生Sector')))
 
+const staleEarnings = buildUsDailyCloseReport({
+  requestedDate: null,
+  dates: {
+    latestDate: '2026-10-26', asOfDate: '2026-10-26', previousDate: '2026-10-23',
+    snapshotDate: '2026-10-26', previousSnapshotDate: '2026-10-23',
+  },
+  rows,
+  earnings: [],
+  earningsStatus: 'unavailable',
+})
+assert.equal(staleEarnings.current, true)
+assert.equal(staleEarnings.earnings.status, 'unavailable')
+assert.ok(staleEarnings.limitations.some((item) => item.includes('同期範囲または鮮度')))
+
+const laggingSnapshot = buildUsDailyCloseReport({
+  requestedDate: null,
+  dates: {
+    latestDate: '2026-10-26', asOfDate: '2026-10-26', previousDate: '2026-10-23',
+    snapshotDate: '2026-10-23', previousSnapshotDate: '2026-10-22',
+  },
+  rows,
+})
+assert.equal(laggingSnapshot.current, true, 'latest price date remains current even when Stage snapshot is older')
+assert.equal(laggingSnapshot.classificationBasis, 'CURRENT_REFERENCE')
+assert.equal(laggingSnapshot.coverage.classifiedRows, 3)
+assert.equal(laggingSnapshot.snapshotDate, '2026-10-23')
+
 const empty = buildUsDailyCloseReport({
   requestedDate: '2020-01-01',
   dates: { latestDate: '2026-10-26', asOfDate: null, previousDate: null, snapshotDate: null, previousSnapshotDate: null },
@@ -134,12 +161,13 @@ assert.throws(() => buildUsDailyCloseReport({
 }), /us_daily_close_universe_limit_exceeded/)
 
 assert.match(serverSource, /LIMIT \$\{US_DAILY_CLOSE_MAX_UNIVERSE \+ 1\}/)
-assert.match(serverSource, /LIMIT \$\{US_DAILY_CLOSE_EARNINGS_LIMIT\}/)
+assert.match(serverSource, /limit: US_DAILY_CLOSE_EARNINGS_LIMIT/)
 assert.match(serverSource, /COALESCE\(o\.adj_close,o\.close\)/)
 assert.match(serverSource, /market='US'/)
 assert.match(serverSource, /ticker='SPY'/, 'US report calendar must be anchored to SPY sessions')
 assert.match(serverSource, /SELECT date FROM market_ohlcv_daily\s+WHERE market='US' AND ticker='SPY' AND date<=\?/)
-assert.match(serverSource, /currentPriceDate \? loadEarnings/)
+assert.match(serverSource, /currentPriceDate\s+\? loadEarningsState/)
+assert.match(serverSource, /getUsEarningsCalendar/)
 assert.match(serverSource, /'CURRENT_REFERENCE' : 'UNAVAILABLE_HISTORICAL'/)
 assert.match(serverSource, /includeCurrentClassification/)
 assert.doesNotMatch(serverSource, /FROM\s+(?:large_holder|large_holders|news|materials)\b/i)
@@ -150,6 +178,8 @@ assert.match(pageSource, /StockBoard SIC division/)
 assert.doesNotMatch(pageSource, />Sector<\/th>/)
 assert.match(pageSource, /report\.sectors\.length \? <Card/)
 assert.match(pageSource, /過去日のセクター分類は利用できません/)
+assert.match(pageSource, /決算予定を利用できません/)
+assert.match(pageSource, /予定なしとして扱わず/)
 assert.match(routeSource, /params\.getAll\('date'\)/)
 assert.match(routeSource, /unknown\.length > 0/)
 assert.match(routeSource, /status: 400/)

@@ -383,7 +383,7 @@ export default function UsMonthlyMaMonitorPage() {
       )}
 
       {!error && <section className="panel" aria-label="米国株月足MA監視結果">
-        <div className="flex min-h-11 items-center justify-between gap-2 border-b border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-3 py-2 text-[12px] text-[var(--color-text-secondary)]" aria-live="polite">
+        <div role="status" aria-live="polite" aria-atomic="true" className="flex min-h-11 items-center justify-between gap-2 border-b border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-3 py-2 text-[12px] text-[var(--color-text-secondary)]">
           <span className="inline-flex items-center gap-1.5">
             {busy && <LoaderCircle size={14} className="animate-spin" aria-hidden />}
             {busy ? '更新中…' : total ? `${offset + 1}–${Math.min(offset + limit, total)} / ${total.toLocaleString()}件` : '0件'}
@@ -448,7 +448,7 @@ export default function UsMonthlyMaMonitorPage() {
         </ul>
 
         {loading && rows.length === 0 && (
-          <div role="status" className="flex min-h-[240px] items-center justify-center gap-2 text-[12px] text-[var(--color-text-secondary)]">
+          <div className="flex min-h-[240px] items-center justify-center gap-2 text-[12px] text-[var(--color-text-secondary)]">
             <LoaderCircle size={16} className="animate-spin" aria-hidden />
             米国株の月足MAを読み込んでいます…
           </div>

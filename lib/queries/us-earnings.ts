@@ -70,6 +70,7 @@ export type UsEarningsCalendarResult = {
     latestImportedAt: string | null
   }
   status: 'ok' | 'empty' | 'unavailable'
+  unavailableReason: Exclude<UsEarningsCoverageResult['reason'], 'ready'> | 'read_failed' | null
   message: string | null
 }
 
@@ -88,10 +89,9 @@ export type UsEarningsCoverageRun = {
   finishedAt: number | null
 }
 
-export type UsEarningsCoverageResult = {
-  ok: boolean
-  reason: 'ready' | 'no_successful_run' | 'range_uncovered' | 'stale'
-}
+export type UsEarningsCoverageResult =
+  | { ok: true; reason: 'ready' }
+  | { ok: false; reason: 'no_successful_run' | 'range_uncovered' | 'stale' }
 
 export function isUsEarningsDate(value: unknown): value is string {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
@@ -228,6 +228,7 @@ export async function getUsEarningsCalendar(input: UsEarningsCalendarInput): Pro
           latestImportedAt: isoFromEpoch(coverage?.latestImportedAt),
         },
         status: 'unavailable',
+        unavailableReason: coverageStatus.reason,
         message: `Finnhub決算予定の同期範囲または鮮度を確認できません（${coverageStatus.reason}）。空結果として扱いません。`,
       }
     }
@@ -255,6 +256,7 @@ export async function getUsEarningsCalendar(input: UsEarningsCalendarInput): Pro
         latestImportedAt: isoFromEpoch(coverage?.latestImportedAt),
       },
       status: normalized.length > 0 ? 'ok' : hasCoverage ? 'empty' : 'unavailable',
+      unavailableReason: null,
       message: normalized.length > 0
         ? null
         : hasCoverage
@@ -269,6 +271,7 @@ export async function getUsEarningsCalendar(input: UsEarningsCalendarInput): Pro
       to: input.to,
       coverage: { from: null, to: null, latestImportedAt: null },
       status: 'unavailable',
+      unavailableReason: 'read_failed',
       message: 'US決算カレンダーを読み取れません。価格・Stageデータでの代替は行いません。',
     }
   }

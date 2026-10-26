@@ -433,6 +433,8 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
   ))
   const [latestDate, setLatestDate] = useState<string | null>(initialAsOf.latestDate)
   const [clearedForHistorical, setClearedForHistorical] = useState<string[]>([])
+  // 最新日で決算予定が利用不可になり解除した条件。再取得でエラー表示が消えても確認できるよう保持する
+  const [clearedForEarnings, setClearedForEarnings] = useState<string[]>([])
   // いま指定している日付に対する応答だけを採用する (別の日付の結果を新しい日付のラベルで見せない)
   const confirmedPit = pit && pit.requestedDate === requestedDate ? pit : null
   const historical = confirmedPit?.mode === 'HISTORICAL'
@@ -529,16 +531,28 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
   // 保存済み条件の読込み後に同期不備が判明した場合も、503の再試行ループにせず決算条件だけを外す。
   useEffect(() => {
     if (!earningsUnavailable) return
-    if (earningsWindowDays) setEarningsWindowDays('')
-    if (earningsTimeBucket) setEarningsTimeBucket('')
+    const cleared: string[] = []
+    if (earningsWindowDays) {
+      cleared.push('次回決算までの期間')
+      setEarningsWindowDays('')
+    }
+    if (earningsTimeBucket) {
+      cleared.push('決算の発表時間')
+      setEarningsTimeBucket('')
+    }
     if (HISTORICAL_EARNINGS_SORTS.has(sort)) {
+      cleared.push('並び順（コード順に変更）')
       setSort('ticker')
       setDir('asc')
+    }
+    if (cleared.length > 0) {
+      setClearedForEarnings((current) => Array.from(new Set([...current, ...cleared])))
     }
   }, [earningsUnavailable, earningsWindowDays, earningsTimeBucket, sort])
 
   const changeRequestedDate = (next: string | null) => {
     setClearedForHistorical([])
+    setClearedForEarnings([])
     setSelected(new Set())
     setUnavailableDateReason(
       next && initialAsOf.earliestDate && next < initialAsOf.earliestDate
@@ -720,6 +734,7 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
   }), [query, exchange, sector, industryGroup, industry, stageCode, stages, avgVolumeMin, priceMin, priceMax, assetType, quality, ma200Trend, ma200Direction, pmsMin, pfsMin, pesMin, accelerationPositive, forcePositive, stage23Candidate, shortTermCheck, physicalStatus, marketCapBin, earningsWindowDays, earningsTimeBucket, twoYearLine, twoYearPattern, twoYearAngleMin, twoYearAngleMax, sort, dir])
 
   const applyView = (next: UsScreenerView) => {
+    setClearedForEarnings([])
     const normalizedClassification = normalizeUsClassificationFilters({
       assetType: next.assetType ?? '',
       sector: next.sector ?? '',
@@ -760,6 +775,7 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
   }
 
   const resetFilters = () => {
+    setClearedForEarnings([])
     setQuery('')
     setExchange('')
     setSector('')
@@ -974,6 +990,12 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
           {clearedForHistorical.length > 0 && (
             <span className="font-bold"> 解除した条件: {clearedForHistorical.join('・')}</span>
           )}
+        </div>
+      )}
+      {!historical && clearedForEarnings.length > 0 && (
+        <div role="note" data-testid="earnings-cleared-note" className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-[11px] font-semibold leading-relaxed text-[#92400e]">
+          決算予定を利用できないため、決算に関する条件を解除しました。現在の結果は元の条件では絞り込まれていません。
+          <span className="font-bold"> 解除した条件: {clearedForEarnings.join('・')}</span>
         </div>
       )}
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-4 py-2.5">
@@ -1301,7 +1323,7 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
                   ? 'Finnhub決算予定は現在利用できないか、同期が古い状態です（未取得・期間未カバー・更新遅延）。決算条件と並び替えは使えません。推定日は表示しません。'
                   : earningsMeta?.updatedAt
                   ? `正式ソース: Finnhub / 最終同期 ${fmtSyncTime(earningsMeta.updatedAt)} / 推定日は表示していません。`
-                  : 'Finnhub決算予定の利用状態を確認できません。決算条件と並び替えは使えません。推定日は表示しません。'}
+                  : 'Finnhub決算予定の最終同期時刻を確認できません。決算条件と並び替えは選べますが、予定が古い可能性があります。推定日は表示しません。'}
             </div>
           </Section>
 

@@ -103,7 +103,7 @@ function Header({ data }: { data: UsMarketIntelligence | null }) {
     <PageTitle
       eyebrow="米国株"
       title="USセクター分析"
-      subtitle="SEC SIC industryをStockBoard独自の区分に集約し、1D/1W/1M・PMS/PFS/PES・広がりで比較します。SEC公式Sectorでも GICS ではありません。"
+      subtitle="SECのSIC（標準産業分類）をStockBoard独自の業種区分に集約し、1D/1W/1M・PMS/PFS/PES・広がりで比較します。GICS（世界産業分類基準）とは異なる区分です。"
       badge={data?.date ? (data.isLatest ? 'SIC区分・最新日のみ' : '過去日は集計外') : undefined}
       badgeTone={data?.date && !data.isLatest ? 'warning' : 'brand'}
       meta={data?.date ? (
@@ -301,7 +301,7 @@ export default async function UsSectorsPage({
         <SectionHeader
           id="us-sector-map-title"
           level={1}
-          title="StockBoard SIC division market map"
+          title="業種区分（SIC）マップ"
           description={`${metricMeta.label}の高い順。色は${metric === 'breadth' ? '50%基準の' : metric === 'stage1' ? '比率の' : '符号と'}強さ、右上は銘柄数。選ぶと下の業種を絞り込みます。`}
         />
         {sectors.length === 0 ? (
@@ -314,7 +314,7 @@ export default async function UsSectorsPage({
       <section id="us-sector-ranking" aria-labelledby="us-sector-ranking-title" className="flex min-w-0 scroll-mt-36 flex-col gap-3">
         <SectionHeader
           id="us-sector-ranking-title"
-          title="StockBoard SIC division ranking"
+          title="業種区分（SIC）ランキング"
           description="列見出しで並べ替え。平均は単純平均、PMS+比率は PMS > 0 の割合、日A S1 は日足A が Stage 1 の割合です。"
         />
         <UsSectorRankingTable
@@ -331,7 +331,7 @@ export default async function UsSectorsPage({
         <SectionHeader
           id="us-industries-title"
           level={1}
-          title={selectedGroup ? `${secSectorShort(selectedGroup.key, selectedGroup.label)} の SIC industry` : 'SIC industry ranking'}
+          title={selectedGroup ? `${secSectorShort(selectedGroup.key, selectedGroup.label)} の詳細産業（SIC）` : '詳細産業（SIC）ランキング'}
           description={`4桁 SIC（スクリーナーの「詳細産業」）ごとの集計。${US_SECTOR_SMALL_SAMPLE}銘柄未満は少数サンプルとして分離し、50件ずつ表示します。`}
           actions={selectedGroup ? (
             <Link href={usSectorScreenerHref(selectedGroup.label)} prefetch={false} className="btn" data-size="sm">

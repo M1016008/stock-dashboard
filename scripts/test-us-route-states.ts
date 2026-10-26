@@ -148,7 +148,7 @@ const ENTRYPOINTS: Entry[] = [
     id: 'ma25m-monitor',
     path: '/us/ma25m-monitor',
     pages: ['app/us/ma25m-monitor/page.tsx'],
-    loading: [{ file: 'app/us/ma25m-monitor/page.tsx', patterns: [/aria-live="polite"/, /更新中…/] }],
+    loading: [{ file: 'app/us/ma25m-monitor/page.tsx', patterns: [/role="status"/, /米国株の月足MAを読み込んでいます…/] }],
     empty: [{ file: 'app/us/ma25m-monitor/page.tsx', patterns: [/rows\.length === 0/, /該当銘柄はありません/] }],
     error: [{ file: 'app/us/ma25m-monitor/page.tsx', patterns: [/role="alert"/, /米国株MAデータを読み込めませんでした/] }],
     sharedBoundary: [],

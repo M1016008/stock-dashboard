@@ -42,6 +42,13 @@ const SCHEDULE_STATUS: Record<UsEarningsScheduleStatus, { label: string; title: 
   },
 }
 
+const UNAVAILABLE_REASON_COPY = {
+  no_successful_run: '決算予定の正常な同期履歴を確認できません。',
+  range_uncovered: '指定期間が同期済みの範囲に含まれていません。',
+  stale: '決算予定の同期が古いため表示を停止しています。',
+  read_failed: '決算予定を読み取れませんでした。',
+} as const
+
 function single(value: string | string[] | undefined): { valid: boolean; value: string | null } {
   return Array.isArray(value)
     ? { valid: false, value: null }
@@ -137,7 +144,7 @@ export default async function UsEarningsPage({
         </Notice>
       )}
 
-      {result && result.status !== 'unavailable' && (
+      {result && (
         <div className="rounded-[4px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-3 py-2 text-[11px] font-semibold text-[var(--color-text-secondary)]">
           Coverage {result.coverage.from ?? '-'} - {result.coverage.to ?? '-'} / 最終同期 {result.coverage.latestImportedAt ?? '-'} / 予想EPS・売上は提供元の値で、StockBoardによる予測ではありません。「予定日（未確認）」は提供元の予定日で、企業発表による確認状態は不明です。実績は報告済みの行のみ表示します。
         </div>
@@ -145,7 +152,7 @@ export default async function UsEarningsPage({
 
       {result?.status === 'unavailable' ? (
         <Notice role="alert" tone="error" title="決算予定を利用できません">
-          {result.message}
+          {result.unavailableReason ? UNAVAILABLE_REASON_COPY[result.unavailableReason] : '決算予定の利用状態を確認できません。'} 推定日では補完しません。同期範囲を確認して再読み込みしてください。
         </Notice>
       ) : result && result.rows.length === 0 ? (
         <div className="empty-state" role="status">
@@ -177,6 +184,7 @@ export default async function UsEarningsPage({
                           data-schedule-status={row.scheduleStatus}
                         >
                           {SCHEDULE_STATUS[row.scheduleStatus].label}
+                          <span className="sr-only">。{SCHEDULE_STATUS[row.scheduleStatus].title}</span>
                         </span>
                       </div>
                     </td>
