@@ -38,6 +38,18 @@ evidence is maintained in `docs/us-stockboard-parity-board.json`.
   exchange, asset type, and SEC classification are not projected backward;
   filters and rankings that require unavailable historical attributes fail
   closed.
+- SEC Companyfacts now covers performance, financial position, cash flow,
+  capital, valuation and shareholder-return presentation. Ratios use
+  same-period balance-sheet facts, later filings are excluded by the selected
+  as-of date, and conflicting rewrites of an existing SEC fact identity fail
+  closed. Live Companyfacts coverage is still not claimed.
+- Finnhub earnings rows distinguish reported actuals from provider schedules
+  whose enterprise-confirmation state is unknown. Historical earnings filters,
+  sort, and cell values fail closed until append-only schedule observations
+  exist; `imported_at` is not treated as historical provider-state evidence.
+- Monthly-MA and HEX responses use bounded, generation-aware caches. Source
+  generation and OHLCV import identity are rechecked before serving a result;
+  Production-scale latency and memory remain `NOT_TESTED`.
 - JP real-data period-explorer parity remains `NOT_TESTED` in this isolated
   checkout because Storage Guard correctly refused a run without an injected
   trusted mount identity. The guard was not bypassed.
@@ -105,12 +117,12 @@ evidence is maintained in `docs/us-stockboard-parity-board.json`.
 | Item | Finding |
 |---|---|
 | JP capability | Calendar and event timing are populated from approved JP sources. |
-| US residual | The US calendar API/UI and PIT contract exist, but live future coverage depends on the approved Finnhub credential and synchronization job. No missing event is synthesized. |
+| US residual | The US calendar API/UI and current-reference contract exist, but live future coverage depends on the approved Finnhub credential and synchronization job. Provider dates without actuals are labelled unverified schedules. Historical schedules are unavailable rather than reconstructed from the mutable current table. |
 | Why parity is incomplete | Code parity does not prove live data coverage. The credential is machine-local and must not be committed or printed. |
-| Missing input | Configured credential, successful read-only provider smoke, initial synchronization, coverage/SLA review. |
+| Missing input | Configured credential, successful read-only provider smoke, initial synchronization, coverage/SLA review, and an append-only schedule-observation model if historical calendar filtering is required. |
 | Barrier | `API`, `SECURITY`, `EXTERNAL` |
 | Paid service required | Depends on the already approved account tier; no new purchase is authorized by this work. |
-| Resolution | Configure the secret through the established local secret mechanism, run the separately approved ingestion, and verify pre/post-market timing. |
+| Resolution | Configure the secret through the established local secret mechanism, run the separately approved bounded ingestion, verify range/freshness and pre/post-market timing, and keep historical filters disabled until append-only observations exist. |
 | Approval required | Yes: secret configuration and live ingestion execution. |
 | Priority | P1 data activation. |
 
@@ -133,7 +145,7 @@ evidence is maintained in `docs/us-stockboard-parity-board.json`.
 | Item | Finding |
 |---|---|
 | JP capability | Actual and forecast fundamentals support richer forward valuation context. |
-| US residual | SEC Companyfacts can support actuals, but no approved consensus forecast source exists. Peer distributions are incomplete until actuals coverage and taxonomy quality are sufficient. |
+| US residual | SEC Companyfacts actuals, trailing valuation, cash flow, capital and shareholder-return UI are implemented with explicit section coverage. No approved consensus forecast source exists, and live peer distributions remain incomplete until actuals coverage and taxonomy quality are sufficient. |
 | Why parity is incomplete | SEC filings do not contain market consensus forecasts. Fabricating forecasts from trends would alter semantics. |
 | Missing input | Approved forecast/estimate source, estimate timestamp, analyst count, revision history, and redistribution rights. |
 | Barrier | `DATA`, `API`, `EXTERNAL` |
@@ -142,7 +154,21 @@ evidence is maintained in `docs/us-stockboard-parity-board.json`.
 | Approval required | Yes: vendor/cost decision. |
 | Priority | P2. |
 
-### R8. Mixed JP/US arithmetic
+### R8. Supplemental commercial fundamentals provider
+
+| Item | Finding |
+|---|---|
+| JP capability | Approved sources can provide a combined actual/forecast/calendar experience under their own contracts. |
+| US residual | An FMP earnings/profile adapter, normalizers and fixtures exist only in disconnected form. SEC remains the actual-fundamentals source and Finnhub remains the approved current earnings-calendar contract. |
+| Why parity is incomplete | An FMP API subscription does not by itself establish Friend Access display or redistribution rights. FMP profile sector/industry is a custom classification guided by GICS, not official GICS, and current profiles are not historical PIT evidence. |
+| Missing input | Approved FMP plan, written display/redistribution rights, machine-local credential, endpoint/history entitlement, rate/bandwidth envelope, and source-specific lineage/freshness acceptance. |
+| Barrier | `API`, `SECURITY`, `EXTERNAL`, `DECISION` |
+| Paid service required | Possibly. Official pricing includes a free Basic tier and paid Starter/Premium/Ultimate tiers, but the intended endpoints and display rights must be contracted separately. No purchase is authorized. |
+| Resolution | Keep the adapter disconnected until contractual approval; then run a bounded provider comparison without replacing SEC lineage or relabelling FMP taxonomy as GICS. |
+| Approval required | Yes: plan/cost, display rights, Credential, Production configuration and scheduling. |
+| Priority | P2; it is not required for the implemented SEC actuals contract. |
+
+### R9. Mixed JP/US arithmetic
 
 | Item | Finding |
 |---|---|
@@ -156,7 +182,7 @@ evidence is maintained in `docs/us-stockboard-parity-board.json`.
 | Approval required | Yes: source and fixing convention. |
 | Priority | P2. |
 
-### R9. Sector ETF holdings and contribution
+### R10. Sector ETF holdings and contribution
 
 | Item | Finding |
 |---|---|
@@ -170,7 +196,7 @@ evidence is maintained in `docs/us-stockboard-parity-board.json`.
 | Approval required | Yes: source terms and ingestion schedule. |
 | Priority | P2; core ETF price analytics are independent. |
 
-### R10. Friend-access runtime acceptance
+### R11. Friend-access runtime acceptance
 
 | Item | Finding |
 |---|---|
@@ -184,7 +210,7 @@ evidence is maintained in `docs/us-stockboard-parity-board.json`.
 | Approval required | Yes: Production deploy and smoke authorization. |
 | Priority | Release gate, not a code-parity blocker. |
 
-### R11. Physical-device interaction QA
+### R12. Physical-device interaction QA
 
 | Item | Finding |
 |---|---|
@@ -197,6 +223,20 @@ evidence is maintained in `docs/us-stockboard-parity-board.json`.
 | Resolution | Run the existing mobile checklist on a physical device and preserve device/browser/version evidence. |
 | Approval required | No code approval; device access is required. |
 | Priority | P2. |
+
+### R13. Framework security release ordering
+
+| Item | Finding |
+|---|---|
+| JP capability | JP and US are shipped by the same Next.js runtime, so framework security is a shared release prerequisite rather than a market-specific feature. |
+| US residual | PR #21 inherits `next@16.3.0`. A 2026-10-26 production-dependency audit reports 1 critical, 3 high, and 1 moderate package findings; npm currently proposes `next@16.4.3` for the direct Next.js advisory set. |
+| Why parity is incomplete | The parity implementation must not silently bundle a framework upgrade, and the existing isolated SMA Release Candidate is separately controlled. |
+| Missing input | A dedicated main-based Security PR, lockfile diff, current official advisory review, audit, TypeScript, isolated build, proxy/route regression, Storage Guard regression, and final integration test with PR #21. |
+| Barrier | `SECURITY`, `ARCHITECTURE` |
+| Paid service required | No. |
+| Resolution | Land the independently reviewed Security PR first or rebase both changes onto a jointly verified revision; never release PR #21 against an unaudited dependency graph. |
+| Approval required | Yes: separate Security PR merge and any Production release. |
+| Priority | P1 release gate; it does not reduce the 51-capability parity count. |
 
 ## Rational market-specific differences
 

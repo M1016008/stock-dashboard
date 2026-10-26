@@ -1,15 +1,66 @@
 # US StockBoard parity validation — 2026-10-26
 
-Implementation evidence revision: `72dcde54d9358ffdca14c43b71f2f1abbdfa44f1`
+Implementation evidence revision: `e0452cad500a1659aa3b6826d010ac406ba11e28`
 
-## Isolated build and browser QA
+## Current-revision deterministic verification
+
+- The complete deterministic feature chain through the parity-auditor
+  self-test: PASS at the evidence revision above. This includes UI contracts,
+  route states, Period Explorer, Daily Close, Trade Workbench, Monthly MA,
+  earnings, sector ETF, SEC Companyfacts, fundamentals, screener PIT/API PIT,
+  HEX, friend read-only, SEC EDGAR, and the disconnected FMP adapter. The final
+  board audit is run after the generated board is sealed to a later commit.
+- `npm exec -- tsc --noEmit --pretty false`: PASS.
+- Storage Guard fixture regression: PASS. No Production connection or state
+  change was used.
+- Claude Code final static review and focused re-review: P0 0 / P1 0. Claude
+  confirmed the fail-closed earnings, Monthly-MA generation, Daily Close, and
+  HEX contracts. Browser and physical-device behavior were not inferred from
+  this static review.
+- Parity board audit: PASS; 29 `IMPLEMENTED`, 14 `PARTIAL`, 7 `BLOCKED`,
+  0 `MISSING`, 0 `UNVERIFIED`, and 1 `NOT_APPLICABLE` across 51 capabilities.
+- Isolated Production build at this revision: PENDING. It is intentionally
+  deferred while the Production weekly optimization process is active.
+- Browser QA at this revision: PENDING for the same resource-safety reason.
+  Prior-revision evidence below is retained as regression context and is not
+  promoted to current-revision proof.
+
+## Remaining engineering P2 / NOT_TESTED
+
+- Monthly-MA list metadata follows the attested price/Snapshot generation.
+  Universe-only name or active-count changes can remain cached until that
+  generation changes. Per-row Universe timestamps were evaluated and rejected
+  because SEC classification refreshes update them continuously and would
+  cause repeated safe 503 responses during a normal long-running batch.
+- US HEX generation attestation still performs its source-identity aggregate
+  reads per request. This is correct and fail-closed, but Production-scale
+  latency should be measured before introducing a separate identity cache.
+- Current-revision isolated Production build and browser QA remain `NOT_TESTED`
+  while the normal Production weekly optimization process is active.
+- Physical-device hover, pinch, and mobile keyboard behavior remain
+  `NOT_TESTED`.
+
+## Dependency security release gate
+
+- The branch still inherits `next@16.3.0`; PR #21 does not change framework
+  dependencies.
+- A 2026-10-26 `npm audit --omit=dev --json` reported 1 critical, 3 high, and
+  1 moderate package findings. The direct Next.js finding covers 16.0.0 through
+  16.4.0 and npm currently offers `next@16.4.3` as the non-major remediation.
+- The Next.js/security update must be delivered by a separate Security PR,
+  with its own lockfile review, audit, TypeScript, build, route/proxy, Storage
+  Guard, and parity regressions. PR #21 must be rebased or re-tested against
+  that exact security revision before either change is released.
+
+## Retained isolated build and browser QA (`72dcde54d9358ffdca14c43b71f2f1abbdfa44f1`)
 
 - Production build: PASS (`next build --webpack`) under the isolated OWC runtime; Build ID `LfPPbwO_xr1tV1EtTala6`.
 - Latest browser plan: 76/76 PASS across 19 US/shared routes at 1440, 1024, 768, and 390 px. Period Explorer's empty-calendar state is explicitly asserted on both markets.
 - The complete 55-route plan produced 208/220 PASS. The 12 failures are the three JP real-data-dependent routes (`screener-jp`, `stock-jp`, and `daily-close-report`) at four widths in a deliberately empty isolated runtime; these results are NOT_TESTED for real data, not parity PASS.
 - The 76 US/shared runs had no document-level horizontal overflow. Repeated navigation requests were observed for prefetchable pages and the favicon, so duplicate-request absence is not claimed.
 - Cold browser navigation, 76 US/shared runs: p50 1,146 ms, p95 1,453 ms, p99 1,651 ms. Encoded payload p50 1,073.8 KiB, p95/p99 1,967 KiB. These measurements use an empty isolated runtime and are not Production-data performance claims.
-- Physical-device hover, pinch, and mobile keyboard behavior: NOT_TESTED.
+- Physical-device hover, pinch, and mobile keyboard behavior: NOT_TESTED at
+  both the retained and current revisions.
 
 Latest artifacts are retained outside Git under `/Volumes/OWC Express 1M2 80G/development/us-jp-parity-browser-qa-20261026-final`.
 

@@ -1,6 +1,6 @@
 # US StockBoard Data Source Matrix
 
-Updated: 2026-10-15
+Updated: 2026-10-26
 
 | Domain | Canonical source | Current coverage | PIT contract | Status | Remaining action |
 |---|---|---:|---|---|---|
@@ -27,7 +27,8 @@ Updated: 2026-10-15
 | Universe identity | Tiingo metadata plus observed snapshots | 12,004 active; 21,981 total after the 2026-10-14 cutoff reconciliation; stale-active and non-investable-active violations both 0 | Historical membership comes from dated snapshots, not current `active`; current exchange / asset-type metadata may be shown only as reference and cannot filter historical results | DATA PARTIAL | Full successful universe refreshes now reconcile disappeared symbols and test-symbol exclusions. Add effective-dated exchange, asset-type, and delisting history before enabling historical metadata filters |
 | SEC SIC classification | SEC submissions-derived `market_classifications` | 7,363 tickers; 6,888 active sector / 6,422 active industry | Current rows use sentinel `0000-01-01` and are not historical evidence | DATA PARTIAL | Add effective-dated history before historical filters |
 | Shares outstanding | SEC Companyfacts `dei:EntityCommonStockSharesOutstanding` normalized in `normalized_financial_facts` | Normalizer and PIT-serving contract implemented; live US facts are not ingested yet | Filing date is stored conservatively at end-of-day UTC, so a date-only JST query can use the fact only from the following day | DATA PARTIAL | Configure the machine-local SEC operator contact and validate live coverage before replacing current-only universe shares |
-| Earnings calendar | `market_earnings_calendar`, approved Finnhub contract | 0 US rows; machine-local credential not configured; scheduler absent | Historical query contract uses `imported_at` cutoff at the selected date and is fixture-tested | DATA BLOCKED | Configure the approved Finnhub credential outside Git, then validate ingestion and event UI before any Production scheduling |
+| Earnings calendar | `market_earnings_calendar`, approved Finnhub contract | Fixture API/UI implemented; live US row count is not inspected in this isolated branch; machine-local credential and scheduler state are not claimed | Current results require a successful range-covering, fresh sync. Rows without actuals are `provider_scheduled_unverified`. The mutable current table is never reconstructed as historical provider state; historical display, filter and sort fail closed until append-only observations exist | DATA BLOCKED | Configure the approved Finnhub credential outside Git, run bounded ingestion under separate approval, and validate live range/freshness/time-bucket coverage |
+| FMP supplemental adapter | Disconnected `lib/fmp.ts` adapter and fixtures only | Earnings/profile normalization, 90-day request bound, 4,000-row truncation guard and license gate are implemented; no Credential, network activation, DB write or Serving use | Current FMP profiles are never treated as historical PIT. FMP classification is labelled `FMP_CUSTOM`, not GICS | DATA BLOCKED | Approve plan/endpoints and written Friend Access display rights before setting a machine-local Credential or enabling any network path |
 
 W3J official-event evidence:
 
