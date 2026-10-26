@@ -80,6 +80,8 @@ import {
 import { SmaDynamicsChart, ZOOM_IN_FACTOR, ZOOM_OUT_FACTOR, type SmaDynamicsChartHandle } from './SmaDynamicsChart'
 import { ControlRow, CustomPeriodInput, periodStatusText, SegmentedControl, SmaPeriodPicker } from './SmaDynamicsControls'
 import { ChartLegend, formatPct, FutureValuesDetails, IssuesBand, priceFormatter, SlotReadout, SummaryTable, type ReadoutLayer } from './SmaDynamicsPanels'
+import { adaptationApplied, adaptDailyScenarioToTimeframe, projectDailyScenario } from '@/lib/sma-dynamics-daily-scenario'
+import { DailyScenarioPanel } from './SmaDailyScenarioPanel'
 import { ScenarioDetails, ScenarioEditor } from './SmaScenarioPanel'
 import { DirectionBadge, hitHighlight, SolverAdvanced, SolverConclusion, SolverDetails, solverFirstHit, solverPeriodOptions, solverWording, type SolverViewModel } from './SmaSolverPanel'
 import { CurrentDirectionCard, SolverDirectionPicker, SolverKindPicker, SolverScopePicker, SolverTimingPicker } from './SmaSolverSteps'
@@ -146,7 +148,7 @@ export const SMA_DYNAMICS_PREMISE = '点線は、基準日の終値が将来も�
 export const SMA_DYNAMICS_SCENARIO_PREMISE = '破線は、入力した将来の終値 (選択した足の確定終値) で実際のローリング窓を再計算したSMAです。入力のない足は補完せず、その足を含む計算窓のSMAは表示しません。仮定に基づく計算で、将来の株価を示すものではありません。'
 export const SMA_DYNAMICS_SOLVER_PREMISE = '目標とするSMAの向きが成立するための終値の数学的な条件です。条件を満たす価格経路は一般に無数にあり、表示する経路は明示した補助条件のもとでの一例です。将来の株価を示すものではありません。'
 export const SCENARIO_WITHHELD_PREMISE = '選択中のシナリオは表示できないため、将来の終値とそのSMAは描いていません。あなたの入力も、このシナリオの代わりには表示しません。'
-export const SMA_DYNAMICS_GROUPING_NOTE = '2D/3D/5D は2000年最初の営業日を起点に市場の営業日を連続して区切り、1W/2W/3W は暦週、1M〜6M は暦月・四半期・半期、1Y〜5Y は暦年 (多年足は1970年起点) で区切ります。2D/3D/2W/3W の境界はメインチャート (年初から数え直す) と異なる場合があります。表示期間を変えても足の境界とSMAの値は変わりません。'
+export const SMA_DYNAMICS_GROUPING_NOTE = '2D/3D は各市場年の最初の営業日から、1W/2W/3W は暦週から区切り、既存チャートと同じ境界で計算します。5D はLab専用で、2D/3Dと同じ市場年内の営業日方式を5営業日に拡張します。1M〜6Mは暦月、1Y〜5Yは暦年の境界です。表示期間を変えても足の境界とSMAの値は変わりません。'
 
 export interface SmaDynamicsSecurity {
   market: SmaDynamicsMarket
@@ -438,6 +440,28 @@ export function SmaDynamicsView({
     setSimulationState({ ...simulation, scenarios: { ...simulation.scenarios, [currentScenarioKey]: draft } })
     setHoverSlot(null)
   }
+
+  // Shared daily scenario: one path of future DAILY closes for this security + analysis date, projected onto
+  // all 15 timeframes. It lives beside the per-timeframe drafts, so switching timeframes never changes it.
+  const dailyDraft = simulation.daily
+  const setDailyDraft = (daily: typeof dailyDraft) => setSimulationState({ ...simulation, daily })
+  const dailyProjection = useMemo(() => {
+    if (!available || load.status !== 'ready' || mode !== 'scenario') return null
+    const labFor = (id: SmaLabTimeframeId): SmaLabResult => {
+      const key = `${id}:1:${extraPeriodsKey}`
+      const cached = cache.get(key)
+      if (cached) return cached
+      const computed = computeSmaLab({ rows: load.rows, market: security.market, timeframe: id, horizon: 1, analysisDate, periods: extraPeriods })
+      cache.set(key, computed)
+      return computed
+    }
+    return projectDailyScenario({ market: security.market, asOf: available.asOf, draft: dailyDraft, labFor })
+  }, [analysisDate, available, cache, dailyDraft, extraPeriods, extraPeriodsKey, load, mode, security.market])
+  const dailyAdaptation = useMemo(() => {
+    const selectedProjection = dailyProjection?.timeframes.find((item) => item.timeframe === settings.timeframe)
+    return selectedProjection && base ? adaptDailyScenarioToTimeframe(selectedProjection, base.horizon) : null
+  }, [base, dailyProjection, settings.timeframe])
+  const dailyApplied = dailyAdaptation != null && base != null && scenarioDraft != null && adaptationApplied(dailyAdaptation, base, scenarioDraft)
 
   // Mode C
   const solverDraft = simulation.solver
@@ -1031,7 +1055,24 @@ export function SmaDynamicsView({
       {available && base && mode === 'scenario' && showsUserDraftEditor(presentation) && scenario && scenarioDraft && (
         <div className="border-t border-[var(--color-border-soft)] px-3 py-3 sm:px-4" data-sma-dynamics-mode-panel="scenario">
           {handoff && handoffPath && <ScenarioHandoffNote record={handoff} path={handoffPath} />}
-          <h3 className="m-0 mb-1.5 text-[12px] font-bold text-[var(--color-text-primary)]">将来の終値を入力 <span className="font-medium text-[var(--color-text-tertiary)]">基準日の終値 {fmt(available.asOf.close)} からの {timeframe.barNoun}ごとの価格</span></h3>
+          <h3 className="m-0 mb-1.5 text-[12px] font-bold text-[var(--color-text-primary)]">日次シナリオ <span className="font-medium text-[var(--color-text-tertiary)]">全時間足に共通。営業日ごとの終値を1回入力するだけ</span></h3>
+          <DailyScenarioPanel
+            projection={dailyProjection}
+            draft={dailyDraft}
+            selected={settings.timeframe}
+            periods={periods}
+            fmt={fmt}
+            displayUnit={displayUnit(security.market)}
+            asOfDate={available.asOf.date}
+            anchorClose={available.asOf.close}
+            adaptation={dailyAdaptation}
+            applied={dailyApplied}
+            selectedName={timeframe.barNoun}
+            onChange={setDailyDraft}
+            onApply={() => dailyAdaptation && setScenarioDraft(dailyAdaptation.draft)}
+            onSelectTimeframe={selectTimeframe}
+          />
+          <h3 className="m-0 mb-1.5 mt-3 border-t border-[var(--color-border-soft)] pt-3 text-[12px] font-bold text-[var(--color-text-primary)]">将来の終値を入力 <span className="font-medium text-[var(--color-text-tertiary)]">選択中の{timeframe.barNoun}ごとの価格を個別に入力（基準日の終値 {fmt(available.asOf.close)} から）</span></h3>
           <ScenarioEditor result={available} base={base} draft={scenarioDraft} evaluation={scenario} fmt={fmt} displayUnit={displayUnit(security.market)} onChange={setScenarioDraft} />
         </div>
       )}

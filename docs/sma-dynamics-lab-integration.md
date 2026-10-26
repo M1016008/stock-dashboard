@@ -21,6 +21,24 @@ History comes from the existing `/api/history/[ticker]` and `/api/us/history/[ti
   Price freeze, user-typed closes per bar, constant-rate (rise / fall), linear, **shock**
   (one-off jump at T+k, held or walking back) and solver example paths all feed the same rolling-window math.
 * **SMA periods 3–300**: 11 presets plus any integer typed in the period box (max 12 lines at once).
+* **Shared daily scenario** (`lib/sma-dynamics-daily-scenario.ts`, `SmaDailyScenarioPanel`): one path of future **daily
+  session closes** per market + ticker + analysis date (default 3 sessions, up to 60) drives **all 15 timeframes** at once.
+  Per bar of each timeframe:
+  * **confirmed** — every session through the bar's last session is explicitly entered; its close is the last session's close
+    and it enters the SMA window (same `projectSmaPath` engine as everything else);
+  * **provisional** — the entries (contiguous from T+1) reach into the bar but not to its end; a provisional SMA uses the
+    latest entered close, is labelled 暫定 and never feeds a later bar;
+  * **unentered** — nothing contiguous reaches it. A missing / invalid session is never filled and blocks confirmation of every
+    later bar (entries behind a gap are counted but unused).
+  Presets: a target move over the entered sessions (e.g. −10%) as **even** (straight line, ends on target), **all on the first
+  session** (held) or **all on the final session**; plus flat, ±0.5%/session, ±10% shock. The all-timeframe table
+  (SMA picker, one row per timeframe, tap a row to select that timeframe) shows confirmed bars, provisional entries and the
+  SMA change versus the as-of SMA. The daily scenario lives next to the per-timeframe drafts in the simulation state, so
+  switching timeframes keeps it; another security or analysis date starts empty.
+  **Daily → selected timeframe** is an explicit button: only confirmed bars get their exact close (price unit), provisional or
+  unreached bars stay empty, and the panel states `確定 n/m本`. The existing selected-timeframe editor, price scenario and
+  inverse solver then work on that draft unchanged (verified: forward SMAs and solver direction checks agree with the
+  daily projection).
 * **Inverse solving**
   * slope direction / within N / throughout N / reversal / level versus the anchor SMA (Phase 2)
   * **touch / cross / relative position** (`lib/sma-dynamics-crossing.ts`): the close or an SMA against another SMA.
@@ -35,10 +53,16 @@ History comes from the existing `/api/history/[ticker]` and `/api/us/history/[ti
 
 | Id | Bar | Boundary vs main chart |
 | --- | --- | --- |
-| 1D 2D 3D 5D | 1/2/3/5 market sessions | 1D same; 2D/3D/5D numbered continuously from the first 2000 session (the chart restarts each exchange year; 5D is not a chart interval) |
-| 1W 2W 3W | calendar weeks (Mon–Sun) | 1W same; 2W/3W continuous from 1970-01-05 (chart restarts each year) |
-| 1M 2M 3M 6M | calendar months / quarters / halves | same as chart (verified in `test-sma-dynamics-timeframes.ts`) |
-| 1Y 2Y 3Y 5Y | calendar years, multi-year blocks counted from 1970 | same as chart |
+| 1D 2D 3D | 1/2/3 market sessions | **Identical to the chart.** Bucket membership comes from `lib/timeframes` `getTimeframeBucketKey`: sessions are numbered per exchange year from that year's first market session, bar `b` holds indices `[b·n, b·n+n−1]`. No bar spans New Year; a year's last bar may be short. |
+| 5D | 5 market sessions | **Lab-only** (no 5D chart interval). Same engine and rule as 2D/3D with n = 5: five consecutive sessions counted from the year's first session, the last bar of the year may be short. |
+| 1W 2W 3W | calendar weeks (Mon–Sun) | **Identical to the chart.** 1W is the calendar week. 2W/3W follow the TradingView reset: a week belongs to the year of its Monday, week 0 is the week containing Jan 4 (Jan 4 on a weekend → the next Monday), bar `b` holds weeks `[b·n, b·n+n−1]` of that year. A week spanning New Year stays in the year of its Monday (US 01-02 stays in the December bar; a JP year-end is closed by the next Monday). |
+| 1M 2M 3M 6M | calendar months / quarters / halves | same as chart |
+| 1Y 2Y 3Y 5Y | calendar years, multi-year blocks counted from 1970 | same as chart (2Y = 2026–2027, 3Y = 2024–2026, 5Y = 2025–2029) |
+
+There is **no fixed-epoch mode** any more (continuous session / week numbering independent of the year). It disagreed
+with the chart for 2D/3D/2W/3W, so the Lab path always uses the chart's boundaries; `test-sma-dynamics-timeframes.ts` checks
+that every Lab bar holds exactly the sessions the chart's resampler groups (JP and US, 1996–2033) and
+`test-sma-dynamics-daily-scenario.ts` checks that Lab and chart SMA values match for identical history.
 
 Bars hold only sessions of the market calendar (JP: TSE incl. documented extra closures; US: NYSE).
 The deterministic calendar range is 1990–2099; the lab fails closed outside it because pre-1990 TSE
@@ -66,7 +90,9 @@ history's latest bar; all numbers still come from the page's own price history.
 
 ## Tests
 
-`npm run test:sma-dynamics:all` (13 scripts). `test-sma-dynamics-crossing.ts` checks the solver against an
+`npm run test:sma-dynamics:all` (14 scripts; `test-sma-dynamics-daily-scenario.ts` covers one 3-session path across all 15
+timeframes at JP / US year ends, Thanksgiving week and mid-period, even / first / final-day / flat / rise / fall / shock paths,
+gaps and invalid input, chart-resampler parity, timeframe switching and Forward / Inverse consistency). `test-sma-dynamics-crossing.ts` checks the solver against an
 independent forward recomputation on 24 deterministic histories (400+ feasible bars, both sides of each boundary).
 
 ## Known gaps

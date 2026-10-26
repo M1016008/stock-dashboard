@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { isJpMarketTradingDate } from '@/lib/server/jp-market-calendar'
-import { CHART_INTERVAL_OPTIONS, getTimeframeBucketKey } from '@/lib/timeframes'
+import { CHART_INTERVAL_OPTIONS, createTimeframeBucketContext, getTimeframeBucketKey } from '@/lib/timeframes'
 import { isUsMarketTradingDate } from '@/lib/server/us-data-freshness'
 import {
   addCalendarDays,
@@ -14,11 +14,9 @@ import {
   futureBuckets,
   nextBucket,
   normalizeSmaLabHistory,
-  sessionOrdinal,
   sessionsBetween,
   shiftSession,
   SMA_LAB_CALENDAR_OVERRIDES,
-  SMA_LAB_SESSION_EPOCH_YEAR,
   SMA_LAB_TIMEFRAMES,
   smaLabCalendar,
   type SmaLabRawRow,
@@ -61,35 +59,76 @@ assert.deepEqual(SMA_LAB_TIMEFRAMES.map((item) => [item.id, item.spec.unit, item
 ])
 assert.deepEqual(SMA_LAB_TIMEFRAMES.filter((item) => item.core).map((item) => item.id), ['1D', '2D', '3D', '5D', '1W', '2W', '1M', '3M'])
 
-// Boundary parity with the main chart (lib/timeframes). Where the catalogue says `same`, the lab
-// must cut bars at exactly the dates the chart does; `fixed_epoch` entries are allowed to differ.
+// Boundary parity with the main chart (lib/timeframes). Every chart-linked timeframe, including
+// 2D/3D/2W/3W (exchange-year session numbering, TradingView multi-week reset), holds exactly the
+// sessions the chart's own bucket function puts in one bar. 5D is Lab-only and uses the same rule.
 {
   const chartSpec = (code: string) => {
     const option = CHART_INTERVAL_OPTIONS.find((item) => item.code === code)
     assert.ok(option, `chart interval ${code} exists`)
     return option.spec
   }
-  for (const item of SMA_LAB_TIMEFRAMES) {
-    if (item.chartAlignment === 'lab_only') {
-      assert.equal(item.chartCode, null, `${item.id}: lab-only has no chart code`)
-      continue
-    }
-    assert.ok(CHART_INTERVAL_OPTIONS.some((option) => option.code === item.chartCode), `${item.id}: chart code ${item.chartCode} is a real chart interval`)
-    if (item.chartAlignment !== 'same') continue
-    const spec = chartSpec(item.chartCode)
-    let previousLab: string | null = null
-    let previousChart: string | null = null
-    for (let date = '1995-01-01'; date <= '2034-12-31'; date = addCalendarDays(date, 3)) {
-      if (!JP.isSession(date)) continue
-      const labKey: string = bucketForDate(JP, item.spec, date).key
-      const chartKey: string = getTimeframeBucketKey(date, spec)
-      if (previousLab != null) {
-        assert.equal(labKey !== previousLab, chartKey !== previousChart, `${item.id} vs chart ${item.chartCode}: same bar boundary at ${date}`)
+  assert.deepEqual(SMA_LAB_TIMEFRAMES.filter((item) => item.chartAlignment === 'lab_only').map((item) => item.id), ['5D'])
+  for (const calendar of [JP, US]) {
+    const allSessions = sessionsBetween(calendar, '1994-01-01', '2035-12-31')
+    const context = createTimeframeBucketContext(allSessions)
+    for (const item of SMA_LAB_TIMEFRAMES) {
+      const spec = item.chartAlignment === 'lab_only'
+        ? ({ timeframe: 'day', multiplier: 5 } as const)
+        : chartSpec(item.chartCode!)
+      if (item.chartAlignment === 'lab_only') assert.equal(item.chartCode, null, `${item.id}: lab-only has no chart code`)
+      else assert.ok(CHART_INTERVAL_OPTIONS.some((option) => option.code === item.chartCode), `${item.id}: chart code ${item.chartCode} is a real chart interval`)
+      // Reference groups: sessions sharing a chart bucket key, straight from lib/timeframes.
+      const groups = new Map<string, string[]>()
+      for (const date of allSessions) {
+        const key = getTimeframeBucketKey(date, spec, context)
+        const list = groups.get(key) ?? []
+        list.push(date)
+        groups.set(key, list)
       }
-      previousLab = labKey
-      previousChart = chartKey
+      for (const sessions of groups.values()) {
+        if (sessions[0] < '1996-01-01' || sessions.at(-1)! > '2033-12-31') continue
+        // Long month/year bars: probe both ends; session and week bars: every session.
+        const probes = item.spec.unit === 'month' ? [sessions[0], sessions.at(-1)!] : sessions
+        for (const date of probes) {
+          const bucket = bucketForDate(calendar, item.spec, date)
+          assert.deepEqual(bucket.sessions, sessions, `${calendar.market} ${item.id} @${date}: same sessions as the chart bar`)
+        }
+      }
     }
   }
+}
+
+// Concrete chart-boundary facts (independent of the implementation).
+{
+  const bucket = (calendar: typeof JP, spec: SmaLabTimeframeSpec, date: string) => bucketForDate(calendar, spec, date)
+  const D = (count: number): SmaLabTimeframeSpec => ({ unit: 'session', count })
+  const W = (count: number): SmaLabTimeframeSpec => ({ unit: 'week', count })
+  // 2D/3D restart every exchange year: JP 2026 opens 01-05 (01-01..03 closed); the year's first 2D bar is 01-05 + 01-06.
+  assert.deepEqual(bucket(JP, D(2), '2026-01-06').sessions, ['2026-01-05', '2026-01-06'])
+  assert.deepEqual(bucket(US, D(2), '2026-01-05').sessions, ['2026-01-02', '2026-01-05'], 'US 2026 opens 01-02')
+  assert.deepEqual(bucket(JP, D(3), '2026-01-06').sessions, ['2026-01-05', '2026-01-06', '2026-01-07'])
+  assert.deepEqual(bucket(JP, D(3), '2026-01-09').sessions, ['2026-01-08', '2026-01-09', '2026-01-13'], 'Coming of Age Day 01-12 is not a session')
+  // No bar spans New Year; the last bar of a year may be short.
+  const jpYearEnd = bucket(JP, D(3), '2026-12-30')
+  assert.ok(jpYearEnd.sessions.length <= 3 && jpYearEnd.sessions.every((date) => date.startsWith('2026')))
+  assert.equal(bucket(JP, D(3), '2027-01-04').sessions[0], '2027-01-04', 'first 2027 session starts a new 3D bar')
+  // 5D: same rule with n = 5, first bar of 2026 = first five sessions of the year.
+  assert.deepEqual(bucket(JP, D(5), '2026-01-05').sessions, ['2026-01-05', '2026-01-06', '2026-01-07', '2026-01-08', '2026-01-09'])
+  // TradingView multi-week reset: 2W/3W bars restart at each year's first trading week.
+  const span = (calendar: typeof JP, spec: SmaLabTimeframeSpec, date: string) => [bucket(calendar, spec, date).periodStart, bucket(calendar, spec, date).periodEnd]
+  // 2026: Jan 4 is a Sunday, so the first trading week starts Monday 01-05.
+  assert.deepEqual(span(JP, W(2), '2026-01-05'), ['2026-01-05', '2026-01-18'])
+  assert.deepEqual(span(JP, W(2), '2026-01-19'), ['2026-01-19', '2026-02-01'])
+  // 2025 (Jan 4 = Saturday, first week Mon 01-06): the last 2025 2W bar is 12-22..01-04 and keeps the US 01-02 session;
+  // the JP year-end 12-30 is followed by 2026-01-05, a new bar.
+  assert.deepEqual(span(US, W(2), '2026-01-02'), ['2025-12-22', '2026-01-04'])
+  assert.ok(bucket(US, W(2), '2026-01-02').sessions.includes('2025-12-31') && bucket(US, W(2), '2026-01-02').sessions.includes('2026-01-02'))
+  assert.deepEqual(bucket(JP, W(2), '2025-12-30').sessions.slice(-2), ['2025-12-29', '2025-12-30'])
+  assert.notEqual(bucket(JP, W(2), '2025-12-30').key, bucket(JP, W(2), '2026-01-05').key)
+  // 2024 (first week Mon 01-01): the week of 12-30 is index 52, so the year's last 3W bar holds only two weeks (12-23..01-05).
+  assert.deepEqual(span(US, W(3), '2025-01-02'), ['2024-12-23', '2025-01-05'])
+  assert.deepEqual(span(US, W(3), '2025-01-06'), ['2025-01-06', '2025-01-26'])
 }
 
 // Extended month-based bars: calendar halves, years and multi-year blocks counted from 1970.
@@ -181,44 +220,44 @@ for (let date = '2026-01-01'; date <= '2027-11-30'; date = addCalendarDays(date,
 }
 
 // ---------------------------------------------------------------------------
-// Continuous session ordinals from the fixed epoch.
+// Session shifting and the supported range.
 {
-  assert.equal(SMA_LAB_SESSION_EPOCH_YEAR, 2000)
-  assert.equal(sessionOrdinal(JP, '2000-01-04'), 0, 'JP epoch session')
-  assert.equal(sessionOrdinal(US, '2000-01-03'), 0, 'US epoch session')
-  assert.equal(sessionOrdinal(JP, shiftSession(JP, '2000-01-04', -1)), -1, 'sessions before the epoch are negative')
   for (const [calendar, date] of [[JP, '2026-12-30'], [US, '2026-12-31'], [JP, '1999-12-30'], [US, '2019-04-29']] as const) {
     for (const delta of [-260, -7, -1, 1, 3, 400]) {
       const shifted = shiftSession(calendar, date, delta)
       assert.ok(calendar.isSession(shifted))
-      assert.equal(sessionOrdinal(calendar, shifted) - sessionOrdinal(calendar, date), delta, `${calendar.market} ${date} ${delta}`)
       assert.equal(sessionsBetween(calendar, delta > 0 ? date : shifted, delta > 0 ? shifted : date).length, Math.abs(delta) + 1)
     }
   }
   assert.deepEqual(sessionsBetween(JP, '2019-04-26', '2019-05-08'), ['2019-04-26', '2019-05-07', '2019-05-08'], 'JP 2019 accession holidays closed')
-  assert.throws(() => sessionOrdinal(JP, '2026-10-17'), RangeError, 'weekend is not a session')
+  assert.throws(() => bucketForDate(JP, { unit: 'session', count: 2 }, '2026-10-17'), RangeError, 'weekend is not a session')
 }
 
 // ---------------------------------------------------------------------------
-// Fixed multi-session boundaries.
+// Multi-session boundaries follow the chart: exchange-year numbering, nothing spans New Year.
 for (const [calendar, n] of [[JP, 2], [JP, 3], [JP, 5], [US, 2], [US, 3], [US, 5]] as const) {
   const spec: SmaLabTimeframeSpec = { unit: 'session', count: n }
   for (const date of sessionsBetween(calendar, '2025-11-01', '2026-02-28')) {
     const bucket = bucketForDate(calendar, spec, date)
-    assert.equal(bucket.sessions.length, n)
+    assert.ok(bucket.sessions.length >= 1 && bucket.sessions.length <= n)
     assert.ok(bucket.sessions.includes(date))
-    assert.equal(((sessionOrdinal(calendar, bucket.sessions[0]) % n) + n) % n, 0, 'bucket starts on a multiple of n')
-    assert.equal(sessionOrdinal(calendar, bucket.sessions[n - 1]) - sessionOrdinal(calendar, bucket.sessions[0]), n - 1, 'consecutive sessions')
-    assert.equal(bucket.key, `S${n}:${Math.floor(sessionOrdinal(calendar, date) / n)}`)
+    assert.ok(bucket.sessions.every((session) => session.slice(0, 4) === date.slice(0, 4)), 'a multi-session bar stays inside its exchange year')
+    const yearSessionsList = sessionsBetween(calendar, `${date.slice(0, 4)}-01-01`, `${date.slice(0, 4)}-12-31`)
+    assert.equal(yearSessionsList.indexOf(bucket.sessions[0]) % n, 0, 'bucket starts at a multiple of n inside the year')
   }
-  // Boundaries do not restart each year: at least one bucket spans New Year for some n.
 }
 {
-  const spans = [2, 3, 5].some((n) => {
-    const bucket = bucketForDate(JP, { unit: 'session', count: n }, '2026-12-30')
-    return bucket.sessions.some((date) => date.startsWith('2027'))
-  })
-  assert.ok(spans, 'multi-session buckets continue across the year end')
+  // The year's first and last bars: new year always starts a new bar, the old year's last bar may be short.
+  for (const n of [2, 3, 5]) {
+    const lastJp = bucketForDate(JP, { unit: 'session', count: n }, '2026-12-30')
+    assert.ok(!lastJp.sessions.some((date) => date.startsWith('2027')), `${n}D does not continue into the next year`)
+    assert.equal(bucketForDate(JP, { unit: 'session', count: n }, '2027-01-04').sessions[0], '2027-01-04')
+  }
+  // JP 2026 has 242 sessions (261 weekdays - 19 holidays): 242 = 2*121 = 3*80 + 2 = 5*48 + 2.
+  assert.equal(sessionsBetween(JP, '2026-01-01', '2026-12-31').length, 242)
+  assert.equal(bucketForDate(JP, { unit: 'session', count: 2 }, '2026-12-30').sessions.length, 2)
+  assert.equal(bucketForDate(JP, { unit: 'session', count: 3 }, '2026-12-30').sessions.length, 2, 'short last 3D bar of the year')
+  assert.equal(bucketForDate(JP, { unit: 'session', count: 5 }, '2026-12-30').sessions.length, 2, 'short last 5D bar of the year')
 }
 
 // ---------------------------------------------------------------------------
@@ -232,13 +271,14 @@ for (const [calendar, n] of [[JP, 2], [JP, 3], [JP, 5], [US, 2], [US, 3], [US, 5
   const thanksgiving = bucketForDate(US, { unit: 'week', count: 1 }, '2026-11-25')
   assert.deepEqual(thanksgiving.sessions, ['2026-11-23', '2026-11-24', '2026-11-25', '2026-11-27'], 'US Thanksgiving closed; half-day Friday is a session')
 
-  for (const date of ['2026-01-05', '2026-06-17', '2026-12-31']) {
+  for (const date of ['2026-01-05', '2026-06-17', '2026-12-28']) {
     const two = bucketForDate(JP, { unit: 'week', count: 2 }, date)
     assert.equal(weekday(two.periodStart), 1)
-    assert.equal(addCalendarDays(two.periodStart, 13), two.periodEnd)
-    const weeksSinceEpoch = (Date.parse(`${two.periodStart}T00:00:00Z`) - Date.parse('1970-01-05T00:00:00Z')) / (7 * 86_400_000)
-    assert.equal(weeksSinceEpoch % 2, 0, '2W buckets aligned to the fixed 1970-01-05 epoch')
+    assert.equal(weekday(two.periodEnd), 0)
     assert.ok(two.periodStart <= date && date <= two.periodEnd)
+    // Aligned to the exchange year's first trading week (2026: Monday 01-05), not to a 1970 epoch.
+    const weeksFromYearStart = (Date.parse(`${two.periodStart}T00:00:00Z`) - Date.parse('2026-01-05T00:00:00Z')) / (7 * 86_400_000)
+    assert.equal(weeksFromYearStart % 2, 0, '2W buckets aligned to the year\'s first trading week')
   }
   assert.equal(nextBucket(JP, { unit: 'week', count: 2 }, bucketForDate(JP, { unit: 'week', count: 2 }, '2026-06-17')).periodStart, addCalendarDays(bucketForDate(JP, { unit: 'week', count: 2 }, '2026-06-17').periodStart, 14))
 
@@ -271,7 +311,7 @@ for (const [calendar, n] of [[JP, 2], [JP, 3], [JP, 5], [US, 2], [US, 3], [US, 5
   assert.deepEqual(quarters.map((bucket) => bucket.sessions.at(-1)), ['2026-12-30', '2027-03-31', '2027-06-30', '2027-09-30'])
   const twoDay = futureBuckets(US, { unit: 'session', count: 2 }, '2026-11-25', 5)
   for (const bucket of twoDay) assert.equal(bucket.sessions.length, 2)
-  for (let i = 1; i < twoDay.length; i += 1) assert.equal(sessionOrdinal(US, twoDay[i].sessions[0]) - sessionOrdinal(US, twoDay[i - 1].sessions[1]), 1)
+  for (let i = 1; i < twoDay.length; i += 1) assert.equal(sessionsBetween(US, twoDay[i - 1].sessions[1], twoDay[i].sessions[0]).length, 2, 'consecutive US sessions')
   const daily = futureBuckets(JP, { unit: 'session', count: 1 }, '2026-04-28', 5)
   assert.deepEqual(daily.map((bucket) => bucket.sessions[0]), ['2026-04-30', '2026-05-01', '2026-05-07', '2026-05-08', '2026-05-11'])
 }

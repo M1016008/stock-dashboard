@@ -1343,10 +1343,30 @@ export function applySolverDraftPatch(draft: SolverDraft, patch: Partial<SolverD
   return next
 }
 
+/** Default / longest number of future daily sessions the shared daily scenario covers. */
+export const DAILY_SCENARIO_DEFAULT_SESSIONS = 3
+export const DAILY_SCENARIO_MAX_SESSIONS = 60
+
+/**
+ * One shared scenario of future DAILY session closes (T+1 … T+sessions are market sessions, not bars of
+ * the selected timeframe). It drives every timeframe at once (lib/sma-dynamics-daily-scenario) and is
+ * independent of the selected timeframe, so switching timeframes never touches it.
+ */
+export interface DailyScenarioDraft extends ScenarioDraft {
+  /** Sessions in scope; inputs beyond it are kept so shortening loses nothing. */
+  sessions: number
+}
+
+export function emptyDailyScenario(sessions = DAILY_SCENARIO_DEFAULT_SESSIONS, unit: ScenarioUnit = 'pct'): DailyScenarioDraft {
+  return { unit, sessions, inputs: Array<string>(sessions).fill('') }
+}
+
 export interface SmaSimulationState {
   identity: string
   /** Scenario drafts per timeframe and as-of date: T+k means a different bar on each timeframe. */
   scenarios: Record<string, ScenarioDraft>
+  /** The shared daily scenario of this security + analysis date (same for every timeframe). */
+  daily: DailyScenarioDraft
   solver: SolverDraft
 }
 
@@ -1355,7 +1375,7 @@ export function simulationIdentity(market: string, ticker: string, analysisDate:
 }
 
 export function freshSimulationState(identity: string): SmaSimulationState {
-  return { identity, scenarios: {}, solver: DEFAULT_SOLVER_DRAFT }
+  return { identity, scenarios: {}, daily: emptyDailyScenario(), solver: DEFAULT_SOLVER_DRAFT }
 }
 
 /** State belonging to another security is never returned. */

@@ -1,22 +1,35 @@
-// Fixed-boundary OHLCV aggregation for SMA Dynamics Lab only.
+// Chart-parity OHLCV aggregation for SMA Dynamics Lab only.
 //
-// Independent of the 6-stage resampler (lib/timeframes resampleOhlcv), which is
-// TradingView-compatible and restarts multi-day buckets every year from the
-// first row it sees. Nothing here feeds Stage/Trigger calculations.
+// Bar boundaries are NOT re-implemented here: the lab asks lib/timeframes
+// getTimeframeBucketKey which sessions / weeks share a bar, so a lab bar and the
+// same-named main-chart bar always hold the same sessions (TradingView semantics).
+// Nothing here feeds Stage/Trigger calculations.
 //
 // Grouping rules (documented contract, see scripts/test-sma-dynamics-timeframes.ts):
-// - nD (session × n): market sessions are numbered continuously from the first
-//   session of SMA_LAB_SESSION_EPOCH_YEAR (ordinal 0; earlier sessions are
-//   negative). Bucket b holds ordinals [b·n, b·n + n − 1]. Boundaries never depend
-//   on the first row of the fetched history or on the display range.
-// - nW: calendar weeks (Mon–Sun) numbered from CALENDAR_WEEK_ANCHOR_MONDAY
-//   (1970-01-05); bucket b holds weeks [b·n, b·n + n − 1].
-// - nM: calendar months numbered from 1970-01; bucket b holds months
-//   [b·n, b·n + n − 1], so 3M buckets are calendar quarters, 12M calendar years and
-//   24M/36M/60M multi-year bars counted from 1970 (the same boundaries as the chart).
-// - Only sessions of the market calendar belong to a bucket. Missing rows never
-//   shift a boundary; they are reported and the bar is flagged instead.
-import { CALENDAR_WEEK_ANCHOR_MONDAY, calendarMonthBucket, calendarWeekBucket } from '@/lib/timeframes'
+// - nD (session × n): sessions are numbered inside each exchange year starting at that
+//   year's first market session (the chart's trading-year session index); bucket b holds
+//   indices [b·n, b·n + n − 1]. A bar never spans New Year, so a year's last bar may be short.
+//   2D and 3D are chart intervals. 5D is Lab-only: same engine, same rule with n = 5
+//   (there is no 5D chart interval to compare with).
+// - nW: calendar weeks (Mon–Sun). 1W is the calendar week. For n > 1 the TradingView rule
+//   applies: a week belongs to the year of its Monday, a year's first week is the week
+//   containing Jan 4 (moved to Monday when Jan 4 is a weekend) and bucket b holds weeks
+//   [b·n, b·n + n − 1] of that year, so multi-week bars restart every year.
+// - nM: calendar months numbered from 1970-01; bucket b holds months [b·n, b·n + n − 1], so
+//   3M buckets are calendar quarters, 12M calendar years and 24M/36M/60M multi-year bars
+//   counted from 1970 (the same boundaries as the chart's month / year intervals).
+// - Only sessions of the market calendar belong to a bucket. Missing rows never shift a
+//   boundary; they are reported and the bar is flagged instead.
+// There is deliberately no fixed-epoch mode (continuous numbering independent of the year):
+// it disagrees with the chart for 2D/3D/2W/3W and the lab must show the chart's bars.
+import {
+  calendarMonthBucket,
+  calendarWeekStart,
+  createTimeframeBucketContext,
+  getTimeframeBucketKey,
+  tradingViewWeekBucketOrdinal,
+  type TimeframeBucketContext,
+} from '@/lib/timeframes'
 import {
   isIsoCalendarDate,
   normalizeSmaHistory,
@@ -34,22 +47,20 @@ export interface SmaLabTimeframeSpec {
 
 /**
  * How a lab bar relates to the same-named main-chart interval (lib/timeframes):
- * - same: identical bucket boundaries (calendar weeks, calendar months/quarters/years since 1970)
- * - fixed_epoch: the lab numbers sessions / weeks continuously from a fixed epoch so a bar's
- *   boundaries never depend on the fetched history; the chart restarts multi-session and
- *   multi-week bars every exchange year (TradingView style), so boundaries can differ
- * - lab_only: no main-chart interval with that length exists
+ * - same: boundaries come from the chart's own bucket function (getTimeframeBucketKey)
+ * - lab_only: no main-chart interval with that length exists (5D); it follows the chart's
+ *   multi-session rule (exchange-year session numbering) with n = 5
  */
-export type SmaLabChartAlignment = 'same' | 'fixed_epoch' | 'lab_only'
+export type SmaLabChartAlignment = 'same' | 'lab_only'
 
 export const SMA_LAB_TIMEFRAMES = [
   { id: '1D', label: '1D', name: '日足', barNoun: '日足', spec: { unit: 'session', count: 1 }, core: true, chartCode: 'D', chartAlignment: 'same' },
-  { id: '2D', label: '2D', name: '2営業日足', barNoun: '2営業日足', spec: { unit: 'session', count: 2 }, core: true, chartCode: '2D', chartAlignment: 'fixed_epoch' },
-  { id: '3D', label: '3D', name: '3営業日足', barNoun: '3営業日足', spec: { unit: 'session', count: 3 }, core: true, chartCode: '3D', chartAlignment: 'fixed_epoch' },
+  { id: '2D', label: '2D', name: '2営業日足', barNoun: '2営業日足', spec: { unit: 'session', count: 2 }, core: true, chartCode: '2D', chartAlignment: 'same' },
+  { id: '3D', label: '3D', name: '3営業日足', barNoun: '3営業日足', spec: { unit: 'session', count: 3 }, core: true, chartCode: '3D', chartAlignment: 'same' },
   { id: '5D', label: '5D', name: '5営業日足', barNoun: '5営業日足', spec: { unit: 'session', count: 5 }, core: true, chartCode: null, chartAlignment: 'lab_only' },
   { id: '1W', label: '1W', name: '週足', barNoun: '週足', spec: { unit: 'week', count: 1 }, core: true, chartCode: 'W', chartAlignment: 'same' },
-  { id: '2W', label: '2W', name: '2週足', barNoun: '2週足', spec: { unit: 'week', count: 2 }, core: true, chartCode: '2W', chartAlignment: 'fixed_epoch' },
-  { id: '3W', label: '3W', name: '3週足', barNoun: '3週足', spec: { unit: 'week', count: 3 }, core: false, chartCode: '3W', chartAlignment: 'fixed_epoch' },
+  { id: '2W', label: '2W', name: '2週足', barNoun: '2週足', spec: { unit: 'week', count: 2 }, core: true, chartCode: '2W', chartAlignment: 'same' },
+  { id: '3W', label: '3W', name: '3週足', barNoun: '3週足', spec: { unit: 'week', count: 3 }, core: false, chartCode: '3W', chartAlignment: 'same' },
   { id: '1M', label: '1M', name: '月足', barNoun: '月足', spec: { unit: 'month', count: 1 }, core: true, chartCode: 'M', chartAlignment: 'same' },
   { id: '2M', label: '2M', name: '2か月足', barNoun: '2か月足', spec: { unit: 'month', count: 2 }, core: false, chartCode: '2M', chartAlignment: 'same' },
   { id: '3M', label: '3M', name: '四半期足', barNoun: '四半期足', spec: { unit: 'month', count: 3 }, core: true, chartCode: '3M', chartAlignment: 'same' },
@@ -84,7 +95,6 @@ export function isSmaLabTimeframeId(value: unknown): value is SmaLabTimeframeId 
 // ---------------------------------------------------------------------------
 // Market calendars
 
-export const SMA_LAB_SESSION_EPOCH_YEAR = 2000
 // TSE still traded some Saturdays before 1989. The app has no authoritative
 // pre-1990 exchange-session artifact, so the lab fails closed outside this range
 // instead of presenting a weekday/holiday approximation as exact.
@@ -317,7 +327,17 @@ interface YearSessions {
 }
 
 const yearSessionCache = new Map<string, YearSessions>()
-const firstOrdinalCache = new Map<string, number>()
+const yearContextCache = new Map<string, TimeframeBucketContext>()
+
+/** The chart's bucket context for one exchange year (trading-year session index of the market calendar). */
+function yearContext(calendar: SmaLabCalendar, year: number): TimeframeBucketContext {
+  const key = `${calendar.id}:${year}`
+  const cached = yearContextCache.get(key)
+  if (cached) return cached
+  const context = createTimeframeBucketContext(yearSessions(calendar, year).dates)
+  yearContextCache.set(key, context)
+  return context
+}
 
 function yearSessions(calendar: SmaLabCalendar, year: number): YearSessions {
   assertSupportedYear(year)
@@ -338,28 +358,6 @@ function assertSupportedYear(year: number) {
   if (year < Number(SMA_LAB_MIN_DATE.slice(0, 4)) || year > Number(SMA_LAB_MAX_DATE.slice(0, 4))) {
     throw new RangeError(`SMA lab calendar supports ${SMA_LAB_MIN_DATE}..${SMA_LAB_MAX_DATE}: ${year}`)
   }
-}
-
-/** Ordinal of the first session of `year` (epoch year starts at 0). */
-function firstOrdinalOfYear(calendar: SmaLabCalendar, year: number): number {
-  assertSupportedYear(year)
-  const key = `${calendar.id}:${year}`
-  const cached = firstOrdinalCache.get(key)
-  if (cached != null) return cached
-  let value: number
-  if (year === SMA_LAB_SESSION_EPOCH_YEAR) value = 0
-  else if (year > SMA_LAB_SESSION_EPOCH_YEAR) value = firstOrdinalOfYear(calendar, year - 1) + yearSessions(calendar, year - 1).dates.length
-  else value = firstOrdinalOfYear(calendar, year + 1) - yearSessions(calendar, year).dates.length
-  firstOrdinalCache.set(key, value)
-  return value
-}
-
-/** Continuous session number from the fixed epoch. Throws for non-sessions. */
-export function sessionOrdinal(calendar: SmaLabCalendar, date: string): number {
-  const year = Number(date.slice(0, 4))
-  const index = yearSessions(calendar, year).index.get(date)
-  if (index == null) throw new RangeError(`${date} is not a ${calendar.market} session`)
-  return firstOrdinalOfYear(calendar, year) + index
 }
 
 /** Session `delta` sessions away from `date` (which must be a session). */
@@ -414,7 +412,7 @@ export function nextSessionAfter(calendar: SmaLabCalendar, date: string): string
 // Buckets
 
 export interface SmaLabBucket {
-  /** Stable identity, e.g. "S2:4710", "W1:2910", "M3:226". */
+  /** Stable identity: the chart bucket key for sessions / weeks (e.g. "day:2026:2:5", "week:2026:2:3"), "M3:226" for months. */
   key: string
   /** Monotonic bucket number within the spec. */
   ordinal: number
@@ -450,18 +448,30 @@ export function bucketForDate(calendar: SmaLabCalendar, spec: SmaLabTimeframeSpe
   }
   const n = spec.count
   if (spec.unit === 'session') {
-    const ordinal = sessionOrdinal(calendar, date)
-    const bucket = floorDiv(ordinal, n)
-    const first = shiftSession(calendar, date, bucket * n - ordinal)
-    const sessions = [first]
-    for (let i = 1; i < n; i += 1) sessions.push(shiftSession(calendar, first, i))
-    return { key: `S${n}:${bucket}`, ordinal: bucket, periodStart: sessions[0], periodEnd: sessions[n - 1], sessions }
+    // Membership is decided by the chart's own bucket function over the exchange year's sessions.
+    const year = Number(date.slice(0, 4))
+    const { dates, index } = yearSessions(calendar, year)
+    const at = index.get(date)
+    if (at == null) throw new RangeError(`${date} is not a ${calendar.market} session`)
+    const chartSpec = { timeframe: 'day', multiplier: n } as const
+    const context = yearContext(calendar, year)
+    const key = getTimeframeBucketKey(date, chartSpec, context)
+    let first = at
+    let last = at
+    while (first > 0 && getTimeframeBucketKey(dates[first - 1], chartSpec, context) === key) first -= 1
+    while (last < dates.length - 1 && getTimeframeBucketKey(dates[last + 1], chartSpec, context) === key) last += 1
+    const sessions = dates.slice(first, last + 1)
+    return { key, ordinal: year * 1000 + Math.floor(first / n), periodStart: sessions[0], periodEnd: sessions.at(-1)!, sessions }
   }
   if (spec.unit === 'week') {
-    const bucket = floorDiv(calendarWeekBucket(date), n)
-    const periodStart = addCalendarDays(CALENDAR_WEEK_ANCHOR_MONDAY, bucket * n * 7)
-    const periodEnd = addCalendarDays(periodStart, n * 7 - 1)
-    return { key: `W${n}:${bucket}`, ordinal: bucket, periodStart, periodEnd, sessions: sessionsBetween(calendar, periodStart, periodEnd) }
+    const chartSpec = { timeframe: 'week', multiplier: n } as const
+    const key = getTimeframeBucketKey(date, chartSpec)
+    let periodStart = calendarWeekStart(date)
+    let periodEnd = addCalendarDays(periodStart, 6)
+    // Multi-week bars restart each exchange year; walk whole weeks while the chart keeps them in this bar.
+    while (getTimeframeBucketKey(addCalendarDays(periodStart, -7), chartSpec) === key) periodStart = addCalendarDays(periodStart, -7)
+    while (getTimeframeBucketKey(addCalendarDays(periodEnd, 1), chartSpec) === key) periodEnd = addCalendarDays(periodEnd, 7)
+    return { key, ordinal: tradingViewWeekBucketOrdinal(date, n), periodStart, periodEnd, sessions: sessionsBetween(calendar, periodStart, periodEnd) }
   }
   const bucket = floorDiv(calendarMonthBucket(date), n)
   const periodStart = monthStart(bucket * n)

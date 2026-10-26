@@ -25,6 +25,7 @@ import {
   type SmaLabAvailable,
   type SmaLabResult,
 } from '@/lib/sma-dynamics-lab'
+import { createTimeframeBucketContext, getTimeframeBucketKey } from '@/lib/timeframes'
 import { buildSmaLabChartModel } from '@/lib/sma-dynamics-chart-model'
 import { addCalendarDays, SMA_LAB_TIMEFRAMES, smaLabCalendar, type SmaLabTimeframeId } from '@/lib/sma-dynamics-timeframes'
 import { findSmaDynamicsFixture, fixtureSessionDates, SMA_DYNAMICS_FIXTURES } from '@/lib/sma-dynamics-fixtures'
@@ -128,33 +129,22 @@ function referenceBars(id: string, timeframe: SmaLabTimeframeId) {
   const closes = new Map(item.rows.map((row) => [row.date as string, row.close as number]))
   const dates = [...closes.keys()].sort()
   const asOf = dates.at(-1)!
-  const ordinal = new Map<string, number>()
-  let counter = 0
+  // Naive grouping straight from the main chart's bucket function (lib/timeframes), fed the market's
+  // full session list: 2D/3D/5D number sessions per exchange year, 2W/3W restart each year (TradingView).
+  const allSessions: string[] = []
   for (let date = `${dates[0].slice(0, 4)}-01-01`; date <= addCalendarDays(asOf, 400); date = addCalendarDays(date, 1)) {
-    if (calendar.isSession(date)) ordinal.set(date, counter++)
+    if (calendar.isSession(date)) allSessions.push(date)
   }
-  const epochOffset = (() => {
-    // Ordinal 0 must be the first session of 2000; count sessions between the first counted date and 2000.
-    let count = 0
-    if (dates[0] >= '2000-01-01') {
-      for (let date = '2000-01-01'; date < `${dates[0].slice(0, 4)}-01-01`; date = addCalendarDays(date, 1)) if (calendar.isSession(date)) count += 1
-      return count
-    }
-    for (let date = `${dates[0].slice(0, 4)}-01-01`; date < '2000-01-01'; date = addCalendarDays(date, 1)) if (calendar.isSession(date)) count -= 1
-    return count
-  })()
+  const chartContext = createTimeframeBucketContext(allSessions)
   const keyOf = (date: string): string => {
     const n = tf.spec.count
-    if (tf.spec.unit === 'session') return `s${Math.floor((ordinal.get(date)! + epochOffset) / n)}`
-    if (tf.spec.unit === 'week') {
-      const days = (Date.parse(`${date}T00:00:00Z`) - Date.parse('1970-01-05T00:00:00Z')) / 86_400_000
-      return `w${Math.floor(Math.floor(days / 7) / n)}`
-    }
+    if (tf.spec.unit === 'session') return getTimeframeBucketKey(date, { timeframe: 'day', multiplier: n }, chartContext)
+    if (tf.spec.unit === 'week') return getTimeframeBucketKey(date, { timeframe: 'week', multiplier: n })
     const months = (Number(date.slice(0, 4)) - 1970) * 12 + Number(date.slice(5, 7)) - 1
     return `m${Math.floor(months / n)}`
   }
   const groups = new Map<string, string[]>()
-  for (const date of ordinal.keys()) {
+  for (const date of allSessions) {
     if (date < dates[0]) continue
     const key = keyOf(date)
     const list = groups.get(key) ?? []
