@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 const root = process.cwd()
-const evidenceRevision = 'd85e78a9d3719daf810de489356b78c977e4ae8f'
+const evidenceRevision = 'f56ef642f2ca8e99eaa22c06218794add45ed0b5'
 const statusFields = ['jp', 'us', 'functional', 'visual', 'data', 'historical', 'responsive', 'performance'] as const
 type Status = 'IMPLEMENTED' | 'PARTIAL' | 'MISSING' | 'NOT_APPLICABLE' | 'BLOCKED' | 'UNVERIFIED'
 type StatusField = (typeof statusFields)[number]
@@ -70,7 +70,7 @@ const rows: Row[] = [
   row('W2', 'Short-interest equivalent', { ...complete, us: 'BLOCKED', functional: 'MISSING', visual: 'MISSING', data: 'BLOCKED', historical: 'BLOCKED', responsive: 'MISSING', performance: 'NOT_APPLICABLE' }, ['docs/us-stockboard-parity-residual-audit.md'], ['scripts/test-us-runtime-capabilities.ts'], 'Daily short-sale volume is not substituted for exchange-reported short interest.', 'API: Nasdaq/NYSE listed-universe short-interest license and usage rights are absent.', 'Acquire an approved exchange product or retain the explicit unavailable state.'),
 
   row('W3', 'Integrated screener', { ...complete, data: 'PARTIAL', historical: 'PARTIAL' }, ['app/us/screener/UsScreenerClient.tsx', 'app/api/us/screener/route.ts'], ['scripts/test-us-screener-filters.ts', 'scripts/test-us-screener-pit.ts'], 'Price, Stage, Physical and current classification filters are complete; historical classifications and forecast filters remain unavailable.', 'DATA: effective-dated classifications and approved forecasts are missing.', 'Keep unsupported historical filters fail-closed until their sources exist.'),
-  row('W3', 'Period explorer and rankings', complete, ['app/us/period-explorer/page.tsx', 'lib/server/period-explorer-read-model.ts'], ['scripts/test-us-period-explorer.ts']),
+  row('W3', 'Period explorer and rankings', { ...complete, us: 'PARTIAL', data: 'PARTIAL', historical: 'PARTIAL' }, ['app/us/period-explorer/page.tsx', 'lib/server/period-explorer-read-model.ts'], ['scripts/test-us-period-explorer.ts'], 'US price, Stage, liquidity and exact-date rankings are implemented; historical classification filters and PIT share-count market cap remain unavailable.', 'DATA: approved effective-dated US classifications and share-count history are absent.', 'Retain the explicit historical limitations until both source families are available.'),
   row('W3', 'Stage screener', complete, ['app/us/stage-screener/page.tsx', 'app/api/us/hex/route.ts'], ['scripts/test-us-stage-screener-transport.ts', 'scripts/test-us-hex-serving.ts']),
   row('W3', 'Stage transition scanner', complete, ['app/us/analysis/transitions/page.tsx', 'app/api/us/hex/transitions/route.ts'], ['scripts/test-us-stage-transition-scanner.ts']),
   row('W3', 'Trigger discovery and saved settings', { ...complete, historical: 'PARTIAL' }, ['app/us/trigger-discovery/page.tsx', 'app/api/us/trigger-discovery/search/route.ts'], ['scripts/test-us-trigger-discovery.ts', 'scripts/test-us-trigger-persistence.ts'], 'Current and single-date searches and market-scoped persistence are implemented; period scans using historical classifications remain unavailable.', 'DATA: effective-dated US classifications are absent.', 'Retain explicit limitations until classification history is approved.'),
