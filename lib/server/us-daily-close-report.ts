@@ -79,7 +79,7 @@ export type UsDailyCloseReport = {
   generatedAt: string
   current: boolean
   priceBasis: 'COALESCE(adj_close, close)'
-  classificationBasis: 'CURRENT_REFERENCE'
+  classificationBasis: 'CURRENT_REFERENCE' | 'UNAVAILABLE_HISTORICAL'
   coverage: {
     observedRows: number
     pricedRows: number
@@ -189,7 +189,13 @@ export function buildUsDailyCloseReport(input: {
   if (input.rows.length > US_DAILY_CLOSE_MAX_UNIVERSE) {
     throw new Error('us_daily_close_universe_limit_exceeded')
   }
-  const stocks = input.rows.map(view)
+  const current = input.dates.asOfDate != null
+    && input.dates.asOfDate === input.dates.latestDate
+    && input.dates.snapshotDate === input.dates.asOfDate
+  const effectiveRows = current
+    ? input.rows
+    : input.rows.map((row) => ({ ...row, sector: null }))
+  const stocks = effectiveRows.map(view)
   const breadth = stocks.reduce((result, row) => {
     if (row.dailyReturn == null) result.unobserved += 1
     else if (row.dailyReturn > 0) result.advances += 1
@@ -201,7 +207,7 @@ export function buildUsDailyCloseReport(input: {
   for (const row of stocks) {
     if (row.stages.dayA != null) stageCounts.set(row.stages.dayA, (stageCounts.get(row.stages.dayA) ?? 0) + 1)
   }
-  const sectors = aggregateSectorRotation(input.rows.flatMap((row) => row.sector ? [{
+  const sectors = aggregateSectorRotation(effectiveRows.flatMap((row) => row.sector ? [{
     name: row.sector,
     return1: percentage(finite(row.close0), finite(row.close1)),
     previousReturn1: percentage(finite(row.close1), finite(row.close2)),
@@ -227,11 +233,9 @@ export function buildUsDailyCloseReport(input: {
     previousDate: input.dates.previousDate,
     snapshotDate: input.dates.snapshotDate,
     generatedAt: input.generatedAt ?? new Date().toISOString(),
-    current: input.dates.asOfDate != null
-      && input.dates.asOfDate === input.dates.latestDate
-      && input.dates.snapshotDate === input.dates.asOfDate,
+    current,
     priceBasis: 'COALESCE(adj_close, close)',
-    classificationBasis: 'CURRENT_REFERENCE',
+    classificationBasis: current ? 'CURRENT_REFERENCE' : 'UNAVAILABLE_HISTORICAL',
     coverage: {
       observedRows: stocks.length,
       pricedRows: stocks.filter((row) => row.price != null).length,
@@ -240,7 +244,7 @@ export function buildUsDailyCloseReport(input: {
     },
     market: {
       ...breadth,
-      adjustedTurnoverUsd: input.rows.reduce((sum, row) => {
+      adjustedTurnoverUsd: effectiveRows.reduce((sum, row) => {
         const price = finite(row.close0)
         const volume = finite(row.currentVolume)
         return sum + (price != null && volume != null ? price * volume : 0)
@@ -276,12 +280,14 @@ export function buildUsDailyCloseReport(input: {
       'market_ohlcv_daily',
       'market_daily_snapshots',
       'market_universe',
-      'market_classifications:US_SEC_SIC',
+      ...(current ? ['market_classifications:US_SEC_SIC'] : []),
       'market_earnings_calendar:finnhub',
     ],
     limitations: [
       '価格と騰落率は調整済み価格を優先し、欠損時だけ未調整価格を使用します。',
-      '過去日でも企業名・SEC SIC分類は現行参照です。分類履歴として扱いません。',
+      current
+        ? '分類は現行SEC SIC参照です。StockBoard派生SectorでありGICSではありません。'
+        : '過去日の有効時点分類を証明できないためSectorを表示・集計しません。',
       input.earningsStatus === 'unavailable'
         ? '過去日の決算予定は、その時点で既知だったimported_atを証明できないため表示しません。'
         : '決算は正式に同期済みのFinnhub行だけを表示し、未同期日を推定しません。',
@@ -311,8 +317,18 @@ async function resolveDates(requestedDate: string | null): Promise<UsDailyCloseD
   return row ?? { latestDate: null, asOfDate: null, previousDate: null, snapshotDate: null, previousSnapshotDate: null }
 }
 
-async function loadServingRows(dates: UsDailyCloseDates): Promise<UsDailyCloseServingRow[]> {
+async function loadServingRows(
+  dates: UsDailyCloseDates,
+  includeCurrentClassification: boolean,
+): Promise<UsDailyCloseServingRow[]> {
   if (!dates.asOfDate) return []
+  const classificationColumn = includeCurrentClassification
+    ? 'COALESCE(c.sector_name,u.sector) sector'
+    : 'NULL sector'
+  const classificationJoin = includeCurrentClassification
+    ? `LEFT JOIN market_classifications c ON c.market='US' AND c.ticker=p.ticker
+      AND c.taxonomy=? AND c.effective_from='0000-01-01'`
+    : ''
   const rows = await execAll<UsDailyCloseServingRow>(`
     WITH recent_dates AS (
       SELECT date, ROW_NUMBER() OVER (ORDER BY date DESC) AS rn
@@ -340,7 +356,7 @@ async function loadServingRows(dates: UsDailyCloseDates): Promise<UsDailyCloseSe
       FROM prices GROUP BY ticker HAVING close0 IS NOT NULL
     )
     SELECT p.ticker,COALESCE(u.name,p.ticker) name,
-      COALESCE(c.sector_name,u.sector) sector,
+      ${classificationColumn},
       p.close0,p.close1,p.close2,p.close5,p.close10,p.close20,p.currentVolume,p.avgVolume20,
       s.daily_a_stage dayA,s.daily_b_stage dayB,s.weekly_a_stage weekA,s.weekly_b_stage weekB,
       s.monthly_a_stage monthA,s.monthly_b_stage monthB,
@@ -349,12 +365,16 @@ async function loadServingRows(dates: UsDailyCloseDates): Promise<UsDailyCloseSe
       prev.monthly_a_stage prevMonthA,prev.monthly_b_stage prevMonthB
     FROM pivot p
     LEFT JOIN market_universe u ON u.market='US' AND u.ticker=p.ticker
-    LEFT JOIN market_classifications c ON c.market='US' AND c.ticker=p.ticker
-      AND c.taxonomy=? AND c.effective_from='0000-01-01'
+    ${classificationJoin}
     LEFT JOIN market_daily_snapshots s ON s.market='US' AND s.ticker=p.ticker AND s.date=?
     LEFT JOIN market_daily_snapshots prev ON prev.market='US' AND prev.ticker=p.ticker AND prev.date=?
     ORDER BY p.ticker LIMIT ${US_DAILY_CLOSE_MAX_UNIVERSE + 1}
-  `, [dates.asOfDate, US_SEC_SIC_TAXONOMY, dates.snapshotDate, dates.previousSnapshotDate])
+  `, [
+    dates.asOfDate,
+    ...(includeCurrentClassification ? [US_SEC_SIC_TAXONOMY] : []),
+    dates.snapshotDate,
+    dates.previousSnapshotDate,
+  ])
   if (rows.length > US_DAILY_CLOSE_MAX_UNIVERSE) throw new Error('us_daily_close_universe_limit_exceeded')
   return rows
 }
@@ -393,7 +413,7 @@ export async function loadUsDailyCloseReport(requestedDate: string | null): Prom
   const dates = await resolveDates(requestedDate)
   const currentPriceDate = dates.asOfDate != null && dates.asOfDate === dates.latestDate
   const [rows, benchmarks, earnings] = await Promise.all([
-    loadServingRows(dates),
+    loadServingRows(dates, currentPriceDate),
     loadBenchmarks(dates.asOfDate),
     currentPriceDate ? loadEarnings(dates.asOfDate) : Promise.resolve([]),
   ])

@@ -229,7 +229,12 @@ export default async function UsTradeWorkbenchPage({
           badge="検証用下書き"
           rightSlot={<Link href="/us/analysis/backtest" className="btn">US過去検証へ</Link>}
         />
-        <Notice role="alert" tone="error" title="クエリを読み取れません">
+        <Notice
+          role="alert"
+          tone="error"
+          title="クエリを読み取れません"
+          action={<Link href="/us/trade/workbench" prefetch={false} className="btn">既定の条件に戻す</Link>}
+        >
           horizonは5・10・20・40・60・90・200のいずれか、budgetUsdは100〜1,000,000、limitは1〜120の整数を1つだけ指定してください。
         </Notice>
       </div>
@@ -269,13 +274,13 @@ export default async function UsTradeWorkbenchPage({
             <CardHeader title="条件とSource Coverage" hint="候補集合を減らして正常に見せず、除外件数と利用不可Evidenceを表示します。" />
             <div className="flex flex-wrap gap-2">
               {HORIZONS.map((horizon) => (
-                <Link key={horizon} href={makeHref(sp, { horizon })} className={`inline-flex h-8 items-center rounded-[3px] border px-3 text-[12px] font-black ${data.params.horizonDays === horizon ? 'border-[var(--color-market-red)] bg-red-50 text-red-700' : 'border-[var(--color-border-default)] bg-white text-[var(--color-brand-800)]'}`}>
+                <Link key={horizon} href={makeHref(sp, { horizon })} aria-current={data.params.horizonDays === horizon ? 'true' : undefined} className={`inline-flex h-8 items-center rounded-[3px] border px-3 text-[12px] font-black ${data.params.horizonDays === horizon ? 'border-[var(--color-market-red)] bg-red-50 text-red-700' : 'border-[var(--color-border-default)] bg-white text-[var(--color-brand-800)]'}`}>
                   {horizon}営業日
                 </Link>
               ))}
-              <span className="mx-1 h-8 border-l border-[var(--color-border-default)]" />
+              <span className="mx-1 hidden h-8 border-l border-[var(--color-border-default)] sm:inline-block" aria-hidden />
               {BUDGETS.map((budget) => (
-                <Link key={budget} href={makeHref(sp, { budgetUsd: budget })} className={`inline-flex h-8 items-center rounded-[3px] border px-3 text-[12px] font-black ${data.params.budgetUsd === budget ? 'border-[var(--color-brand-700)] bg-[var(--color-surface-subtle)] text-[var(--color-brand-900)]' : 'border-[var(--color-border-default)] bg-white text-[var(--color-brand-800)]'}`}>
+                <Link key={budget} href={makeHref(sp, { budgetUsd: budget })} aria-current={data.params.budgetUsd === budget ? 'true' : undefined} className={`inline-flex h-8 items-center rounded-[3px] border px-3 text-[12px] font-black ${data.params.budgetUsd === budget ? 'border-[var(--color-brand-700)] bg-[var(--color-surface-subtle)] text-[var(--color-brand-900)]' : 'border-[var(--color-border-default)] bg-white text-[var(--color-brand-800)]'}`}>
                   仮予算 {fmtUsd(budget)}
                 </Link>
               ))}

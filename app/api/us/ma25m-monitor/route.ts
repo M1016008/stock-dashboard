@@ -36,6 +36,61 @@ export const fetchCache = 'force-no-store'
 
 type SourceNameRow = { source: string }
 
+type MonthlyMaSourceBundle = {
+  built: ReturnType<typeof buildUsMonthlyMaMonitorRows>
+  activeUniverse: number
+  sourceNames: string[]
+}
+
+const globalForUsMonthlyMa = globalThis as typeof globalThis & {
+  usMonthlyMaSourceCache?: Map<string, Promise<MonthlyMaSourceBundle>>
+}
+const sourceCache = globalForUsMonthlyMa.usMonthlyMaSourceCache ?? new Map<string, Promise<MonthlyMaSourceBundle>>()
+globalForUsMonthlyMa.usMonthlyMaSourceCache = sourceCache
+
+async function readSourceIdentity(): Promise<{
+  latestDate: string | null
+  priceMaxImportedAt: number | null
+  sourceRun: UsMonthlyMaGenerationRun | undefined
+}> {
+  const [latest, sourceRun] = await Promise.all([
+    execGet<{ date: string | null; priceMaxImportedAt: number | null }>(
+      `WITH latest AS (
+         SELECT MAX(s.date) AS date
+         FROM market_daily_snapshots s
+         WHERE s.market = 'US'
+           AND EXISTS (
+             SELECT 1 FROM market_ohlcv_daily calendar
+             WHERE calendar.market = 'US' AND calendar.ticker = 'SPY' AND calendar.date = s.date
+           )
+       )
+       SELECT latest.date,
+         (SELECT MAX(prices.imported_at)
+          FROM market_ohlcv_daily prices
+          WHERE prices.market = 'US' AND prices.date <= latest.date) AS priceMaxImportedAt
+       FROM latest`,
+    ),
+    execGet<UsMonthlyMaGenerationRun>(
+      `SELECT id, status, payload_json AS payloadJson,
+         total_tickers AS totalTickers, succeeded, failed, finished_at AS finishedAt,
+         (SELECT MAX(computed_at) FROM market_daily_snapshots WHERE market = 'US') AS snapshotMaxComputedAt
+       FROM market_data_runs
+       WHERE market = 'US' AND job_type = 'snapshot_compute' AND status = 'success'
+       ORDER BY id DESC LIMIT 1`,
+    ),
+  ])
+  return {
+    latestDate: latest?.date ?? null,
+    priceMaxImportedAt: latest?.priceMaxImportedAt ?? null,
+    sourceRun,
+  }
+}
+
+function rememberSource(key: string, value: Promise<MonthlyMaSourceBundle>): void {
+  sourceCache.clear()
+  sourceCache.set(key, value)
+}
+
 const QUERY_NAMES = [
   'period', 'status', 'sort', 'dir', 'contactPct', 'maxDistance', 'minScore',
   'limit', 'offset', 'q', 'exchange', 'sector',
@@ -71,7 +126,7 @@ function boundedText(value: string | null, maximum: number): string {
 
 function stableErrorStatus(error: unknown): number {
   const message = error instanceof Error ? error.message : String(error)
-  return /SQLITE_BUSY|database is locked|no such table|STORAGE_|FAILED_SAFE/i.test(message) ? 503 : 500
+  return /SQLITE_BUSY|database is locked|no such table|STORAGE_|FAILED_SAFE|SOURCE_GENERATION_CHANGED/i.test(message) ? 503 : 500
 }
 
 export async function GET(request: NextRequest) {
@@ -107,32 +162,14 @@ export async function GET(request: NextRequest) {
     const exchange = boundedText(values.exchange, 40) || null
     const sector = boundedText(values.sector, 100) || null
 
-    const [latest, sourceRun] = await Promise.all([
-      execGet<{ date: string | null }>(
-        `SELECT MAX(s.date) AS date
-         FROM market_daily_snapshots s
-         WHERE s.market = 'US'
-           AND EXISTS (
-             SELECT 1 FROM market_ohlcv_daily calendar
-             WHERE calendar.market = 'US' AND calendar.ticker = 'SPY' AND calendar.date = s.date
-           )`,
-      ),
-      execGet<UsMonthlyMaGenerationRun>(
-        `SELECT id, status, payload_json AS payloadJson,
-           total_tickers AS totalTickers, succeeded, failed, finished_at AS finishedAt,
-           (SELECT MAX(computed_at) FROM market_daily_snapshots WHERE market = 'US') AS snapshotMaxComputedAt
-         FROM market_data_runs
-         WHERE market = 'US' AND job_type = 'snapshot_compute' AND status = 'success'
-         ORDER BY id DESC LIMIT 1`,
-      ),
-    ])
-    if (!latest?.date) {
+    const sourceIdentity = await readSourceIdentity()
+    if (!sourceIdentity.latestDate) {
       return NextResponse.json({
         error: 'us_monthly_ma_source_unavailable',
         message: 'US snapshot and SPY trading-session sources have no common as-of date.',
       }, { status: 503 })
     }
-    const generation = attestUsMonthlyMaGeneration(sourceRun)
+    const generation = attestUsMonthlyMaGeneration(sourceIdentity.sourceRun)
     if (!generation.ok && generation.reason === 'unavailable') {
       return NextResponse.json({
         error: 'us_monthly_ma_generation_unavailable',
@@ -227,26 +264,60 @@ export async function GET(request: NextRequest) {
      AND anchor_snapshot.date = ma15_boundary_dates.anchorDate
     ORDER BY base.ticker, base.date`
 
-    const [sourceRows, activeUniverse, sourceNames] = await Promise.all([
-      execAll<UsMonthlyMaSourceRow>(sourceSql, [latest.date, US_MONTHLY_MA_LIST_HISTORY_SESSIONS]),
-      execGet<{ count: number }>(
-        `SELECT COUNT(*) AS count FROM market_universe u
-         WHERE u.market = 'US' AND u.active = 1 AND ${usInvestableSymbolSql('u.ticker')}`,
-      ),
-      execAll<SourceNameRow>(
-        `SELECT DISTINCT source
-         FROM market_ohlcv_daily
-         WHERE market = 'US' AND date = ?
-         ORDER BY source`,
-        [latest.date],
-      ),
-    ])
-
-    const normalizedSource = sourceRows.map((row) => ({
-      ...row,
-      name: getUsDisplayName(row.ticker, row.name),
-    }))
-    const built = buildUsMonthlyMaMonitorRows(normalizedSource, latest.date, { historyTruncated: true })
+    const sourceCacheKey = `${sourceIdentity.latestDate}:${sourceIdentity.priceMaxImportedAt ?? 'null'}:${generation.generation}`
+    let sourceBundle = sourceCache.get(sourceCacheKey)
+    if (!sourceBundle) {
+      sourceBundle = (async (): Promise<MonthlyMaSourceBundle> => {
+        const [sourceRows, activeUniverse, sourceNames] = await Promise.all([
+          execAll<UsMonthlyMaSourceRow>(sourceSql, [sourceIdentity.latestDate!, US_MONTHLY_MA_LIST_HISTORY_SESSIONS]),
+          execGet<{ count: number }>(
+            `SELECT COUNT(*) AS count FROM market_universe u
+             WHERE u.market = 'US' AND u.active = 1 AND ${usInvestableSymbolSql('u.ticker')}`,
+          ),
+          execAll<SourceNameRow>(
+            `SELECT DISTINCT source
+             FROM market_ohlcv_daily
+             WHERE market = 'US' AND date = ?
+             ORDER BY source`,
+            [sourceIdentity.latestDate!],
+          ),
+        ])
+        const completedIdentity = await readSourceIdentity()
+        const completedGeneration = attestUsMonthlyMaGeneration(completedIdentity.sourceRun)
+        if (
+          completedIdentity.latestDate !== sourceIdentity.latestDate
+          || completedIdentity.priceMaxImportedAt !== sourceIdentity.priceMaxImportedAt
+          || !completedGeneration.ok
+          || completedGeneration.generation !== generation.generation
+        ) {
+          throw new Error('US_MONTHLY_MA_SOURCE_GENERATION_CHANGED')
+        }
+        const normalizedSource = sourceRows.map((row) => ({
+          ...row,
+          name: getUsDisplayName(row.ticker, row.name),
+        }))
+        return {
+          built: buildUsMonthlyMaMonitorRows(normalizedSource, sourceIdentity.latestDate!, { historyTruncated: true }),
+          activeUniverse: Number(activeUniverse?.count ?? 0),
+          sourceNames: sourceNames.map((row) => row.source),
+        }
+      })()
+      rememberSource(sourceCacheKey, sourceBundle)
+      sourceBundle.catch(() => {
+        if (sourceCache.get(sourceCacheKey) === sourceBundle) sourceCache.delete(sourceCacheKey)
+      })
+    }
+    const { built, activeUniverse, sourceNames } = await sourceBundle
+    const responseIdentity = await readSourceIdentity()
+    const responseGeneration = attestUsMonthlyMaGeneration(responseIdentity.sourceRun)
+    if (
+      responseIdentity.latestDate !== sourceIdentity.latestDate
+      || responseIdentity.priceMaxImportedAt !== sourceIdentity.priceMaxImportedAt
+      || !responseGeneration.ok
+      || responseGeneration.generation !== generation.generation
+    ) {
+      throw new Error('US_MONTHLY_MA_SOURCE_GENERATION_CHANGED')
+    }
     const filtered = filterUsMonthlyMaRows(built.rows, {
       period,
       status,
@@ -265,7 +336,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({
       market: 'US',
-      date: latest.date,
+      date: sourceIdentity.latestDate,
       period,
       periods: US_MONTHLY_MA_MONITOR_PERIODS,
       unavailablePeriods: US_MONTHLY_MA_UNAVAILABLE_PERIODS,
@@ -277,10 +348,10 @@ export async function GET(request: NextRequest) {
       summary: summarizeUsMonthlyMaRows(built.rows, contactThreshold),
       filterOptions: usMonthlyMaFilterOptions(built.rows),
       coverage: {
-        activeUniverse: Number(activeUniverse?.count ?? 0),
+        activeUniverse,
         sourceTickers: built.sourceTickers,
         eligibleTickers: built.eligibleTickers,
-        missingTickers: Math.max(0, Number(activeUniverse?.count ?? 0) - built.eligibleTickers),
+        missingTickers: Math.max(0, activeUniverse - built.eligibleTickers),
         missingByPeriod: built.missingByPeriod,
         historyStartDate: built.historyStartDate,
         historySessions: US_MONTHLY_MA_LIST_HISTORY_SESSIONS,
@@ -290,7 +361,7 @@ export async function GET(request: NextRequest) {
         priceBasis: US_MONTHLY_MA_PRICE_BASIS,
         sourceGeneration: generation.generation,
         sourceGenerationStatus: 'attested',
-        sourceNames: sourceNames.map((row) => row.source),
+        sourceNames,
         calendar: 'US:SPY_TRADING_SESSIONS',
         snapshots: 'market_daily_snapshots',
         prices: 'market_ohlcv_daily',

@@ -131,7 +131,29 @@ export default async function UsSectorEtfDetailPage({ params, searchParams }: Pa
   const requestedDate = parseRequestedDate(rawSearchParams)
   if (tickerResolution.status !== 'valid' || requestedDate === undefined) notFound()
 
-  const detail = await loadUsSectorEtfDetail(tickerResolution.ticker, requestedDate)
+  let detail = null
+  let loadFailed = false
+  try {
+    detail = await loadUsSectorEtfDetail(tickerResolution.ticker, requestedDate)
+  } catch (error) {
+    console.error('[us/sector-etfs/detail] failed to load sector ETF detail', error)
+    loadFailed = true
+  }
+  if (loadFailed) {
+    return (
+      <div className="sb-page">
+        <PageTitle
+          eyebrow="US Sector ETF"
+          title={`${tickerResolution.ticker} ${tickerResolution.catalog.shortName}`}
+          subtitle={tickerResolution.catalog.description}
+          rightSlot={<Link href="/us/sector-etfs" className="btn"><ArrowLeft size={13} aria-hidden /> 一覧へ</Link>}
+        />
+        <Notice tone="error" role="alert" title="USセクターETFの詳細を読み込めませんでした">
+          既存のUS価格・ステージデータを確認できませんでした。別のデータを推測表示しません。
+        </Notice>
+      </div>
+    )
+  }
   if (!detail) {
     return (
       <div className="sb-page">

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { deriveFinancialFacts, normalizeAsOf } from '@/lib/financial-foundation'
+import { secCompanyfactsRewriteConflict } from '@/lib/server/financial-foundation-store'
 import { normalizeSecCompanyFacts, type SecCompanyFacts } from '@/lib/us-sec-companyfacts'
 
 const payload: SecCompanyFacts = {
@@ -71,6 +72,18 @@ const payload: SecCompanyFacts = {
 }
 
 const normalized = normalizeSecCompanyFacts('aapl', payload)
+const conflictingPayload = structuredClone(payload)
+conflictingPayload.facts['us-gaap']!.RevenueFromContractWithCustomerExcludingAssessedTax!.units.USD!.push({
+  start: '2024-09-29', end: '2025-09-27', val: 401, accn: '0001', fy: 2025, fp: 'FY', form: '10-K', filed: '2025-10-31', frame: 'CY2025',
+})
+assert.throws(
+  () => normalizeSecCompanyFacts('aapl', conflictingPayload),
+  /SEC_COMPANYFACTS_DUPLICATE_CONTEXT_CONFLICT/,
+  'conflicting values for the same SEC filing context must fail closed',
+)
+const immutableFact = normalized.facts[0]!
+assert.equal(secCompanyfactsRewriteConflict(immutableFact, { ...immutableFact }), false)
+assert.equal(secCompanyfactsRewriteConflict(immutableFact, { ...immutableFact, value: immutableFact.value + 1 }), true)
 assert.equal(normalized.forecasts.length, 0, 'SEC facts must not be presented as company forecasts')
 assert.ok(normalized.disclosures.every((row) => row.source === 'sec_companyfacts'))
 assert.ok(normalized.facts.every((row) => row.ticker === 'AAPL' && row.source === 'sec_companyfacts'))

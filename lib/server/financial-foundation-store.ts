@@ -78,11 +78,60 @@ async function upsertNormalizedDatasetRows(
   })))
 }
 
+function immutableSecFactSignature(fact: NormalizedFinancialFact): string {
+  return JSON.stringify({
+    eventId: fact.eventId,
+    ticker: fact.ticker,
+    publishedAt: fact.publishedAt,
+    periodStart: fact.periodStart,
+    periodEnd: fact.periodEnd,
+    metric: fact.metric,
+    value: fact.value,
+    unit: fact.unit,
+    currency: fact.currency,
+    sourceField: fact.sourceField,
+    disclosureId: fact.disclosureId,
+  })
+}
+
+export function secCompanyfactsRewriteConflict(
+  existing: NormalizedFinancialFact,
+  incoming: NormalizedFinancialFact,
+): boolean {
+  return existing.source === 'sec_companyfacts'
+    && incoming.source === 'sec_companyfacts'
+    && existing.factId === incoming.factId
+    && immutableSecFactSignature(existing) !== immutableSecFactSignature(incoming)
+}
+
+async function assertNoSecCompanyfactsRewrite(facts: NormalizedFinancialFact[]): Promise<void> {
+  const incoming = new Map(
+    facts.filter((fact) => fact.source === 'sec_companyfacts' && !fact.isDerived)
+      .map((fact) => [fact.factId, fact]),
+  )
+  const ids = [...incoming.keys()]
+  for (let offset = 0; offset < ids.length; offset += READ_CHUNK) {
+    const chunk = ids.slice(offset, offset + READ_CHUNK)
+    const rows = await execAll<Record<string, unknown>>(`
+      SELECT * FROM normalized_financial_facts
+      WHERE fact_id IN (${chunk.map(() => '?').join(',')})
+    `, chunk)
+    for (const row of rows) {
+      const existing = normalizedFactFromRow(row)
+      const candidate = incoming.get(existing.factId)
+      if (candidate && secCompanyfactsRewriteConflict(existing, candidate)) {
+        throw new Error(`SEC_COMPANYFACTS_IMMUTABLE_CONFLICT:${existing.factId}`)
+      }
+    }
+  }
+}
+
 export async function upsertNormalizedFinancialDataset(
   normalized: NormalizedFinancialDataset,
   importedAt = Math.floor(Date.now() / 1000),
   options: { includeDerivedFacts?: boolean } = {},
 ): Promise<FinancialFoundationWriteResult> {
+  await assertNoSecCompanyfactsRewrite(normalized.facts)
   const derived = options.includeDerivedFacts ? deriveFinancialFacts(normalized.facts) : []
   await upsertNormalizedDatasetRows(
     { ...normalized, facts: [...normalized.facts, ...derived] },

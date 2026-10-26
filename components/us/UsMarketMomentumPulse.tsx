@@ -211,8 +211,8 @@ export function UsMarketMomentumSectorContext({ groups }: { groups: UsMarketGrou
     <section className="panel flex min-w-0 flex-col" aria-labelledby="us-mm-sector">
       <div className="panel-head">
         <div className="min-w-0">
-          <h2 id="us-mm-sector">SEC broad sector別</h2>
-          <p>最新日 · SEC SIC current classification · 平均PMS順</p>
+          <h2 id="us-mm-sector">StockBoard SIC division別</h2>
+          <p>最新日 · SEC SIC industry + StockBoard独自区分 · 平均PMS順</p>
         </div>
       </div>
       {groups.length === 0 ? (

@@ -97,7 +97,7 @@ export function usScreenerHref(params: Record<string, string | null | undefined>
   return `/us/screener${query ? `?${query}` : ''}`
 }
 
-/* ---------- SEC broad sector の短縮名 (表示専用) ---------- */
+/* ---------- StockBoard SIC division の短縮名 (表示専用) ---------- */
 
 const SEC_SECTOR_SHORT: Record<string, string> = {
   AGR: 'Agriculture',
@@ -151,8 +151,8 @@ export function UsSecSicDisclosure({ className = '' }: { className?: string }) {
     <p
       className={`text-[11px] leading-relaxed text-[var(--color-text-tertiary)] ${className}`}
     >
-      <strong className="font-semibold text-[var(--color-text-secondary)]">SEC SIC current classification</strong>
-      ：SEC EDGAR に登録された現在の SIC コードによる分類です。GICS ではなく、過去時点の分類（historical PIT）でもないため、最新日のみ集計します。
+      <strong className="font-semibold text-[var(--color-text-secondary)]">SEC SIC industry + StockBoard SIC division</strong>
+      ：SEC EDGARの現在SICをStockBoard独自の範囲区分へ集約しています。SEC公式SectorやGICS ではなく、過去時点の分類（historical PIT）でもないため、最新日のみ集計します。
     </p>
   )
 }

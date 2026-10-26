@@ -1,6 +1,6 @@
 // components/us/UsSectorMap.tsx
 //
-// SEC broad sector の market map。選択中の指標で並べ、色は指標の方向と強さ (比率は 50% 基準)。
+// StockBoard SIC division の market map。選択中の指標で並べ、色は指標の方向と強さ (比率は 50% 基準)。
 // タイルを選ぶと、同じページの SIC industry ランキングをそのセクターに絞る。
 
 import Link from 'next/link'

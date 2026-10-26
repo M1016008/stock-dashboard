@@ -97,8 +97,13 @@ US_SKIP_DAILY_ML=1 npm run batch:us-update-latest
 - `/us`: USデータ状態
 - `/us/screener`: USスクリーナー
 - `/us/stock/AAPL`: US個別銘柄ページ
+- `/us/earnings`: Finnhub由来の決算予定・実績カレンダー
 
-US向けの決算、貸借/信用、J-Quants固有の業種分類は現時点では対象外です。米国株の追加データソースを使う場合は、別途方針確認してから導入します。
+USの実績財務はSEC Companyfactsを正規化し、個別銘柄ページの業績・財務・実績バリュエーション・株主還元へ表示します。決算カレンダーはFinnhubの提供日を使い、実績値がない予定日は「提供元予定日・企業確認状態不明」として扱います。推測で確定日へ昇格しません。いずれもCredential、取得ジョブ、Production反映は別管理です。
+
+FMPは比較用の未接続AdapterとFixtureだけを保持します。API契約とは別にFriend Accessへの表示・再配信権が承認され、`FMP_DISPLAY_LICENSE_APPROVED=1`が明示されない限りネットワーク取得もServing利用も行いません。詳細は `docs/us-fmp-provider-assessment.md` を参照してください。
+
+米国の貸株在庫・locate cost、正式なGICS、アナリストConsensusは承認済みSourceがないため提供しません。SEC SICやFMP独自分類をGICSと表示せず、欠損値を推測補完しません。
 
 ## US業種分類
 

@@ -9,6 +9,7 @@ import {
   getUsEarningsCalendar,
   isUsEarningsDate,
   todayInNewYork,
+  type UsEarningsScheduleStatus,
   type UsEarningsTimeBucket,
 } from '@/lib/queries/us-earnings'
 
@@ -26,6 +27,19 @@ const BUCKET_LABELS: Record<UsEarningsTimeBucket, string> = {
   market_hours: '取引時間中',
   after_close: '引け後',
   unknown: '時刻不明',
+}
+
+const SCHEDULE_STATUS: Record<UsEarningsScheduleStatus, { label: string; title: string; className: string }> = {
+  reported: {
+    label: '実績あり',
+    title: '提供元に報告済みのEPS・売上実績があります。',
+    className: 'border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] text-[var(--color-text-secondary)]',
+  },
+  provider_scheduled_unverified: {
+    label: '予定日（未確認）',
+    title: '提供元の予定日です。企業発表による確認状態は不明で、実績は未報告です。',
+    className: 'border-amber-300 bg-amber-50 text-amber-900',
+  },
 }
 
 function single(value: string | string[] | undefined): { valid: boolean; value: string | null } {
@@ -110,7 +124,10 @@ export default async function UsEarningsPage({
               {Object.entries(BUCKET_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
             </select>
           </label>
-          <button className="h-10 self-end rounded-[4px] bg-[var(--color-brand-900)] px-4 text-[13px] font-black text-white" type="submit">表示</button>
+          <div className="flex items-end gap-2 sm:col-span-2 lg:col-span-1">
+            <button className="btn h-10" data-variant="primary" type="submit">表示</button>
+            {(invalidQuery || fromParam.value || toParam.value || query || bucket) && <Link className="btn h-10" href="/us/earnings" prefetch={false}>条件をクリア</Link>}
+          </div>
         </form>
       </Card>
 
@@ -122,7 +139,7 @@ export default async function UsEarningsPage({
 
       {result && (
         <div className="rounded-[4px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-3 py-2 text-[11px] font-semibold text-[var(--color-text-secondary)]">
-          Coverage {result.coverage.from ?? '-'} - {result.coverage.to ?? '-'} / 最終同期 {result.coverage.latestImportedAt ?? '-'} / 予想EPS・売上は提供元の値で、StockBoardによる予測ではありません。
+          Coverage {result.coverage.from ?? '-'} - {result.coverage.to ?? '-'} / 最終同期 {result.coverage.latestImportedAt ?? '-'} / 予想EPS・売上は提供元の値で、StockBoardによる予測ではありません。「予定日（未確認）」は提供元の予定日で、企業発表による確認状態は不明です。実績は報告済みの行のみ表示します。
         </div>
       )}
 
@@ -151,7 +168,18 @@ export default async function UsEarningsPage({
               <tbody>
                 {result.rows.map((row) => (
                   <tr key={`${row.ticker}-${row.reportDate}`} className="border-t border-[var(--color-border-soft)]">
-                    <td className="px-3 py-2 tabular-nums">{row.reportDate}</td>
+                    <td className="px-3 py-2 tabular-nums">
+                      {row.reportDate}
+                      <div>
+                        <span
+                          className={`mt-0.5 inline-block whitespace-nowrap rounded-[4px] border px-1.5 py-px text-[10px] font-bold ${SCHEDULE_STATUS[row.scheduleStatus].className}`}
+                          title={SCHEDULE_STATUS[row.scheduleStatus].title}
+                          data-schedule-status={row.scheduleStatus}
+                        >
+                          {SCHEDULE_STATUS[row.scheduleStatus].label}
+                        </span>
+                      </div>
+                    </td>
                     <td className="px-3 py-2"><Link className="font-black text-[var(--color-brand-900)]" href={`/us/stock/${encodeURIComponent(row.ticker)}`}>{row.ticker}</Link><div className="max-w-[220px] truncate text-[11px] text-[var(--color-text-tertiary)]">{row.name ?? '-'}</div></td>
                     <td className="px-3 py-2">{BUCKET_LABELS[row.timeBucket]}</td>
                     <td className="px-3 py-2 text-right tabular-nums">{row.fiscalYear ?? '-'} / {row.fiscalQuarter ? `Q${row.fiscalQuarter}` : '-'}</td>

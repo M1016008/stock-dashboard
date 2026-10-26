@@ -39,7 +39,30 @@ function validIsoDate(value: string | null): value is string {
 
 function stableErrorStatus(error: unknown): number {
   const message = error instanceof Error ? error.message : String(error)
-  return /SQLITE_BUSY|database is locked|no such table|STORAGE_|FAILED_SAFE/i.test(message) ? 503 : 500
+  return /SQLITE_BUSY|database is locked|no such table|STORAGE_|FAILED_SAFE|SOURCE_GENERATION_CHANGED/i.test(message) ? 503 : 500
+}
+
+async function readSourceIdentity(cutoffDate: string | null): Promise<{
+  sourceRun: UsMonthlyMaGenerationRun | undefined
+  priceMaxImportedAt: number | null
+}> {
+  const [sourceRun, price] = await Promise.all([
+    execGet<UsMonthlyMaGenerationRun>(
+      `SELECT id, status, payload_json AS payloadJson,
+         total_tickers AS totalTickers, succeeded, failed, finished_at AS finishedAt,
+         (SELECT MAX(computed_at) FROM market_daily_snapshots WHERE market = 'US') AS snapshotMaxComputedAt
+       FROM market_data_runs
+       WHERE market = 'US' AND job_type = 'snapshot_compute' AND status = 'success'
+       ORDER BY id DESC LIMIT 1`,
+    ),
+    execGet<{ priceMaxImportedAt: number | null }>(
+      `SELECT MAX(imported_at) AS priceMaxImportedAt
+       FROM market_ohlcv_daily
+       WHERE market = 'US' AND (? IS NULL OR date <= ?)`,
+      [cutoffDate, cutoffDate],
+    ),
+  ])
+  return { sourceRun, priceMaxImportedAt: price?.priceMaxImportedAt ?? null }
 }
 
 function oneParam(params: URLSearchParams, name: 'date' | 'period' | 'limit'): string | null {
@@ -81,15 +104,8 @@ export async function GET(
     const period: UsMonthlyMaPeriod = parsedPeriod === 'all' ? 25 : parsedPeriod
     const historyLimit = strictHistoryLimit(oneParam(params, 'limit'))
 
-    const sourceRun = await execGet<UsMonthlyMaGenerationRun>(
-      `SELECT id, status, payload_json AS payloadJson,
-         total_tickers AS totalTickers, succeeded, failed, finished_at AS finishedAt,
-         (SELECT MAX(computed_at) FROM market_daily_snapshots WHERE market = 'US') AS snapshotMaxComputedAt
-       FROM market_data_runs
-       WHERE market = 'US' AND job_type = 'snapshot_compute' AND status = 'success'
-       ORDER BY id DESC LIMIT 1`,
-    )
-    const generation = attestUsMonthlyMaGeneration(sourceRun)
+    const sourceIdentity = await readSourceIdentity(requestedDate)
+    const generation = attestUsMonthlyMaGeneration(sourceIdentity.sourceRun)
     if (!generation.ok && generation.reason === 'unavailable') {
       return NextResponse.json({ error: 'us_monthly_ma_generation_unavailable' }, { status: 503 })
     }
@@ -189,6 +205,16 @@ export async function GET(
         error: 'us_monthly_ma_ticker_unavailable',
         ticker,
       }, { status: 404 })
+    }
+
+    const completedIdentity = await readSourceIdentity(requestedDate)
+    const completedGeneration = attestUsMonthlyMaGeneration(completedIdentity.sourceRun)
+    if (
+      completedIdentity.priceMaxImportedAt !== sourceIdentity.priceMaxImportedAt
+      || !completedGeneration.ok
+      || completedGeneration.generation !== generation.generation
+    ) {
+      throw new Error('US_MONTHLY_MA_SOURCE_GENERATION_CHANGED')
     }
 
     const normalized = rows.map((row) => ({

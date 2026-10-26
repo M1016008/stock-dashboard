@@ -34,7 +34,7 @@ assert.equal(historical.fields.price, 'POINT_IN_TIME')
 assert.equal(historical.fields.stages, 'POINT_IN_TIME')
 assert.equal(historical.fields.marketCap, 'UNAVAILABLE')
 assert.equal(historical.fields.classification, 'UNAVAILABLE')
-assert.equal(historical.fields.earnings, 'AS_OF_IMPORT_CUTOFF')
+assert.equal(historical.fields.earnings, 'UNAVAILABLE')
 assert.throws(
   () => assertUsScreenerHistoricalFilters(historical, { sector: 'Technology' }),
   (error) => error instanceof UsScreenerPitError && error.status === 422,
@@ -55,12 +55,20 @@ assert.throws(
   () => assertUsScreenerHistoricalFilters(historical, { sort: 'exchange' }),
   (error) => error instanceof UsScreenerPitError && error.status === 422,
 )
+assert.throws(
+  () => assertUsScreenerHistoricalFilters(historical, { earningsWindowDays: 30 }),
+  (error) => error instanceof UsScreenerPitError && error.status === 422,
+)
+assert.throws(
+  () => assertUsScreenerHistoricalFilters(historical, { sort: 'earningsNextDate' }),
+  (error) => error instanceof UsScreenerPitError && error.status === 422,
+)
 assert.doesNotThrow(() => assertUsScreenerHistoricalFilters(historical, { sort: 'ticker' }))
 
 const route = fs.readFileSync('app/api/us/screener/route.ts', 'utf8')
 assert.doesNotMatch(route, /todayInNewYork/)
 assert.match(route, /earningsImportCutoff/)
-assert.match(route, /imported_at < CAST\(strftime/)
+assert.match(route, /pit\.mode === 'HISTORICAL' \? 'AND 1 = 0'/)
 assert.match(route, /pit\.mode === 'HISTORICAL'/)
 assert.match(route, /WHEN '\$\{pit\.mode\}' = 'LATEST'/)
 assert.doesNotMatch(route, /AND u\.active = 1/)

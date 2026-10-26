@@ -91,7 +91,7 @@ function IndustryPagination({
 
 export const metadata: Metadata = {
   title: 'USセクター — StockBoard',
-  description: 'SEC SIC current classification による米国株の broad sector と SIC industry の強弱を比較',
+  description: 'SEC SIC industryとStockBoard SIC divisionによる米国株の強弱を比較',
 }
 
 export const dynamic = 'force-dynamic'
@@ -103,8 +103,8 @@ function Header({ data }: { data: UsMarketIntelligence | null }) {
     <PageTitle
       eyebrow="米国株"
       title="USセクター分析"
-      subtitle="SEC broad sector から SIC industry へ読み下し、強弱を 1D/1W/1M・PMS/PFS/PES・広がりで比較します。分類は SEC SIC current classification（GICS ではありません）。"
-      badge={data?.date ? (data.isLatest ? 'SEC SIC · 最新日のみ' : '過去日は集計しません') : undefined}
+      subtitle="SEC SIC industryを、StockBoard独自のSIC範囲区分へ集約し、強弱を1D/1W/1M・PMS/PFS/PES・広がりで比較します。区分はSEC公式Sectorではなく、GICS ではありません。"
+      badge={data?.date ? (data.isLatest ? 'SEC SIC + StockBoard区分 · 最新日のみ' : '過去日は集計しません') : undefined}
       badgeTone={data?.date && !data.isLatest ? 'warning' : 'brand'}
       meta={data?.date ? (
         <>
@@ -301,7 +301,7 @@ export default async function UsSectorsPage({
         <SectionHeader
           id="us-sector-map-title"
           level={1}
-          title="SEC broad sector market map"
+          title="StockBoard SIC division market map"
           description={`${metricMeta.label}の高い順。色は${metric === 'breadth' ? '50%を基準にした' : metric === 'stage1' ? '比率の' : '符号と'}強さ、右上は銘柄数。タイルを選ぶと下の SIC industry をそのセクターに絞ります。`}
         />
         {sectors.length === 0 ? (
@@ -321,9 +321,9 @@ export default async function UsSectorsPage({
           rows={[...sectors, ...(unknownGroup ? [unknownGroup] : [])].map((group) => sectorRow(group, metric))}
           metric={metric}
           hrefFor={(key) => usSectorsHref({ metric: key, sector: selected }, '#us-sector-ranking')}
-          firstLabel="SEC broad sector"
+          firstLabel="StockBoard SIC division"
           emptyLabel="SEC SIC 分類のある銘柄がありません"
-          ariaLabel="SEC broad sector ランキング"
+          ariaLabel="StockBoard SIC division ランキング"
         />
       </section>
 

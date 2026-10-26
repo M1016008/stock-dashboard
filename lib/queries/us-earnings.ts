@@ -2,13 +2,17 @@ import { execAll, execGet } from '@/lib/db/client'
 
 export type NextUsEarnings = {
   ticker: string
+  providerDate: string
   reportDate: string
+  scheduledDate: string | null
+  actualReportDate: string | null
   hour: 'bmo' | 'dmh' | 'amc' | null
   timeBucket: 'before_open' | 'market_hours' | 'after_close' | 'unknown'
   fiscalYear: number | null
   fiscalQuarter: number | null
   epsEstimate: number | null
   revenueEstimate: number | null
+  scheduleStatus: UsEarningsScheduleStatus
   source: 'finnhub'
   importedAt: string
 }
@@ -25,11 +29,22 @@ export function todayInNewYork(): string {
 }
 
 export type UsEarningsTimeBucket = 'before_open' | 'market_hours' | 'after_close' | 'unknown'
+export type UsEarningsScheduleStatus = 'reported' | 'provider_scheduled_unverified'
+
+export function usEarningsScheduleStatus(
+  epsActual: number | null,
+  revenueActual: number | null,
+): UsEarningsScheduleStatus {
+  return epsActual != null || revenueActual != null ? 'reported' : 'provider_scheduled_unverified'
+}
 
 export type UsEarningsCalendarRow = {
   ticker: string
   name: string | null
+  providerDate: string
   reportDate: string
+  scheduledDate: string | null
+  actualReportDate: string | null
   hour: 'bmo' | 'dmh' | 'amc' | null
   timeBucket: UsEarningsTimeBucket
   fiscalYear: number | null
@@ -38,6 +53,7 @@ export type UsEarningsCalendarRow = {
   epsActual: number | null
   revenueEstimate: number | null
   revenueActual: number | null
+  scheduleStatus: UsEarningsScheduleStatus
   source: 'finnhub'
   sourceUrl: string | null
   importedAt: string
@@ -66,6 +82,17 @@ export type UsEarningsCalendarInput = {
   offset?: number
 }
 
+export type UsEarningsCoverageRun = {
+  fromDate: string | null
+  toDate: string | null
+  finishedAt: number | null
+}
+
+export type UsEarningsCoverageResult = {
+  ok: boolean
+  reason: 'ready' | 'no_successful_run' | 'range_uncovered' | 'stale'
+}
+
 export function isUsEarningsDate(value: unknown): value is string {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
   const parsed = new Date(`${value}T00:00:00Z`)
@@ -82,6 +109,41 @@ function isoFromEpoch(value: number | null | undefined): string | null {
   return typeof value === 'number' && Number.isFinite(value)
     ? new Date(value * 1000).toISOString()
     : null
+}
+
+function earningsMaxStalenessDays(): number {
+  const configured = Number(process.env.FINNHUB_EARNINGS_MAX_STALENESS_DAYS ?? 7)
+  return Number.isFinite(configured) ? Math.max(1, Math.min(30, Math.trunc(configured))) : 7
+}
+
+export function evaluateUsEarningsCoverage(
+  run: UsEarningsCoverageRun | null | undefined,
+  input: { from: string; to: string },
+  nowEpochSeconds = Math.floor(Date.now() / 1000),
+  maxStalenessDays = earningsMaxStalenessDays(),
+): UsEarningsCoverageResult {
+  if (!run?.fromDate || !run.toDate || run.finishedAt == null) {
+    return { ok: false, reason: 'no_successful_run' }
+  }
+  if (run.fromDate > input.from || run.toDate < input.to) {
+    return { ok: false, reason: 'range_uncovered' }
+  }
+  if (run.finishedAt < nowEpochSeconds - maxStalenessDays * 86_400) {
+    return { ok: false, reason: 'stale' }
+  }
+  return { ok: true, reason: 'ready' }
+}
+
+async function loadUsEarningsCoverageRun(): Promise<UsEarningsCoverageRun | undefined> {
+  return execGet<UsEarningsCoverageRun>(`
+    SELECT
+      json_extract(payload_json, '$.from') AS fromDate,
+      json_extract(payload_json, '$.to') AS toDate,
+      finished_at AS finishedAt
+    FROM market_data_runs
+    WHERE market = 'US' AND job_type = 'finnhub_earnings' AND status = 'success'
+    ORDER BY id DESC LIMIT 1
+  `)
 }
 
 export async function getUsEarningsCalendar(input: UsEarningsCalendarInput): Promise<UsEarningsCalendarResult> {
@@ -109,7 +171,7 @@ export async function getUsEarningsCalendar(input: UsEarningsCalendarInput): Pro
   }
 
   try {
-    const [rows, summary, coverage] = await Promise.all([
+    const [rows, summary, coverage, coverageRun] = await Promise.all([
       execAll<{
         ticker: string
         name: string | null
@@ -150,12 +212,34 @@ export async function getUsEarningsCalendar(input: UsEarningsCalendarInput): Pro
         FROM market_earnings_calendar
         WHERE market = 'US' AND source = 'finnhub'
       `),
+      loadUsEarningsCoverageRun(),
     ])
+
+    const coverageStatus = evaluateUsEarningsCoverage(coverageRun, input)
+    if (!coverageStatus.ok) {
+      return {
+        rows: [],
+        total: 0,
+        from: input.from,
+        to: input.to,
+        coverage: {
+          from: coverageRun?.fromDate ?? coverage?.fromDate ?? null,
+          to: coverageRun?.toDate ?? coverage?.toDate ?? null,
+          latestImportedAt: isoFromEpoch(coverage?.latestImportedAt),
+        },
+        status: 'unavailable',
+        message: `Finnhub決算予定の同期範囲または鮮度を確認できません（${coverageStatus.reason}）。空結果として扱いません。`,
+      }
+    }
 
     const normalized = rows.flatMap((row): UsEarningsCalendarRow[] => row.source === 'finnhub' ? [{
       ...row,
+      providerDate: row.reportDate,
       source: 'finnhub',
       timeBucket: row.timeBucket ?? 'unknown',
+      scheduleStatus: usEarningsScheduleStatus(row.epsActual, row.revenueActual),
+      scheduledDate: usEarningsScheduleStatus(row.epsActual, row.revenueActual) === 'reported' ? null : row.reportDate,
+      actualReportDate: usEarningsScheduleStatus(row.epsActual, row.revenueActual) === 'reported' ? row.reportDate : null,
       importedAt: isoFromEpoch(row.importedAt) ?? '',
     }] : [])
     const total = Number(summary?.total ?? 0)
@@ -191,6 +275,9 @@ export async function getUsEarningsCalendar(input: UsEarningsCalendarInput): Pro
 }
 
 export async function getNextUsEarnings(ticker: string): Promise<NextUsEarnings | null> {
+  const today = todayInNewYork()
+  const coverageRun = await loadUsEarningsCoverageRun().catch(() => undefined)
+  if (!evaluateUsEarningsCoverage(coverageRun, { from: today, to: today }).ok) return null
   const row = await execGet<{
     ticker: string
     reportDate: string
@@ -200,6 +287,8 @@ export async function getNextUsEarnings(ticker: string): Promise<NextUsEarnings 
     fiscalQuarter: number | null
     epsEstimate: number | null
     revenueEstimate: number | null
+    epsActual: number | null
+    revenueActual: number | null
     source: string
     importedAt: number
   }>(
@@ -213,6 +302,8 @@ export async function getNextUsEarnings(ticker: string): Promise<NextUsEarnings 
         fiscal_quarter AS fiscalQuarter,
         eps_estimate AS epsEstimate,
         revenue_estimate AS revenueEstimate,
+        eps_actual AS epsActual,
+        revenue_actual AS revenueActual,
         source,
         imported_at AS importedAt
       FROM market_earnings_calendar
@@ -223,14 +314,25 @@ export async function getNextUsEarnings(ticker: string): Promise<NextUsEarnings 
       ORDER BY report_date ASC
       LIMIT 1
     `,
-    [ticker.trim().toUpperCase(), todayInNewYork()],
+    [ticker.trim().toUpperCase(), today],
   ).catch(() => undefined)
 
   if (!row || row.source !== 'finnhub') return null
+  const scheduleStatus = usEarningsScheduleStatus(row.epsActual, row.revenueActual)
   return {
-    ...row,
-    source: 'finnhub',
+    ticker: row.ticker,
+    providerDate: row.reportDate,
+    reportDate: row.reportDate,
+    scheduledDate: scheduleStatus === 'reported' ? null : row.reportDate,
+    actualReportDate: scheduleStatus === 'reported' ? row.reportDate : null,
+    hour: row.hour,
     timeBucket: row.timeBucket ?? 'unknown',
+    fiscalYear: row.fiscalYear,
+    fiscalQuarter: row.fiscalQuarter,
+    epsEstimate: row.epsEstimate,
+    revenueEstimate: row.revenueEstimate,
+    scheduleStatus,
+    source: 'finnhub',
     importedAt: new Date(row.importedAt * 1000).toISOString(),
   }
 }

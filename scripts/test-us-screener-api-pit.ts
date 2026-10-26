@@ -99,7 +99,7 @@ for (const row of historical.data.rows) {
   assert.equal(row.industry, null)
 }
 assert.deepEqual(historical.data.facets.exchanges, [])
-assert.equal(historical.data.rows.find((row: { ticker: string }) => row.ticker === 'AAPL').next_earnings_date, '2025-02-01')
+assert.equal(historical.data.rows.find((row: { ticker: string }) => row.ticker === 'AAPL').next_earnings_date, null)
 assert.equal(historical.data.rows.find((row: { ticker: string }) => row.ticker === 'MSFT').next_earnings_date, null)
 
 const blockedMarketCap = await request('date=2025-01-03&marketCapMin=1')
@@ -112,6 +112,8 @@ const blockedAssetType = await request('date=2025-01-03&assetType=Stock')
 assert.equal(blockedAssetType.response.status, 422)
 const blockedExchangeSort = await request('date=2025-01-03&sort=exchange')
 assert.equal(blockedExchangeSort.response.status, 422)
+const blockedEarnings = await request('date=2025-01-03&earningsWindowDays=30')
+assert.equal(blockedEarnings.response.status, 422)
 const invalidDate = await request('date=2025%2F01%2F03')
 assert.equal(invalidDate.response.status, 400)
 const impossibleDate = await request('date=2025-02-30')

@@ -358,6 +358,8 @@ export async function GET(request: NextRequest) {
       assetType,
       marketCapMin,
       marketCapMax,
+      earningsWindowDays,
+      earningsTimeBucket,
       sort,
     })
     const cacheTtlMs = screenerCacheTtlMs()
@@ -635,9 +637,9 @@ export async function GET(request: NextRequest) {
        AND c.ticker = s.ticker
        AND c.taxonomy = ?
        AND c.effective_from = '0000-01-01'`
-    const earningsImportCutoff = pit.mode === 'HISTORICAL'
-      ? `AND imported_at < CAST(strftime('%s', date((SELECT today FROM earnings_clock), '+1 day')) AS INTEGER)`
-      : ''
+    // The current projection is mutable. Until append-only schedule observations exist,
+    // historical queries must not treat imported_at as proof of the provider state at that date.
+    const earningsImportCutoff = pit.mode === 'HISTORICAL' ? 'AND 1 = 0' : ''
     const args: Array<string | number> = [earningsAnchorDate]
     if (pit.mode === 'LATEST') args.push(taxonomy)
     args.push(date, date)

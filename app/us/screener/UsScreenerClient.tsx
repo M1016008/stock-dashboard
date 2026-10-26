@@ -161,6 +161,7 @@ type UnavailableDateReason = Exclude<InitialScreenerAsOf['availability'], 'avail
  * セクター・詳細産業は全行が空になるため、確定的なコード順へ切り替える。
  */
 const HISTORICAL_BLOCKED_SORTS = new Set(['exchange', 'marketCap', 'sector', 'industry'])
+const HISTORICAL_EARNINGS_SORTS = new Set(['earningsNextDate', 'earningsDays'])
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
 /** 日付入力の途中 (年を 1 桁ずつ打っている間など) に古すぎる日付で検索しないための下限 */
 const MIN_INPUT_DATE = '1990-01-01'
@@ -437,7 +438,7 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
     && (latestDate == null ? confirmedPit?.mode !== 'LATEST' : requestedDate !== latestDate)
   // 銘柄リンク・クイックプレビューへ引き継ぐ日付 (過去日のときだけ、解決後の取引日)
   const linkDate = confirmedPit?.mode === 'HISTORICAL' ? confirmedPit.resolvedDate : null
-  const effectiveSort = historicalLocked && HISTORICAL_BLOCKED_SORTS.has(sort) ? 'ticker' : sort
+  const effectiveSort = historicalLocked && (HISTORICAL_BLOCKED_SORTS.has(sort) || HISTORICAL_EARNINGS_SORTS.has(sort)) ? 'ticker' : sort
   const sicClassificationEnabled = supportsUsSicClassification(assetType) && !historicalLocked
   const params = useMemo(() => {
     const sp = new URLSearchParams({ limit: String(resultLimit), sort: effectiveSort, dir })
@@ -467,8 +468,8 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
     if (stage23Candidate) sp.set('stage23Candidate', '1')
     if (shortTermCheck) sp.set('shortTermCheck', shortTermCheck)
     if (physicalStatus) sp.set('physicalStatus', physicalStatus)
-    if (earningsWindowDays) sp.set('earningsWindowDays', earningsWindowDays)
-    if (earningsTimeBucket) sp.set('earningsTimeBucket', earningsTimeBucket)
+    if (!historicalLocked && earningsWindowDays) sp.set('earningsWindowDays', earningsWindowDays)
+    if (!historicalLocked && earningsTimeBucket) sp.set('earningsTimeBucket', earningsTimeBucket)
     if (twoYearLine !== 'none') {
       sp.set('twoYearLine', twoYearLine)
       if (twoYearPattern !== 'either') sp.set('twoYearPattern', twoYearPattern)
@@ -498,7 +499,15 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
       cleared.push('時価総額')
       setMarketCapBin('')
     }
-    if (HISTORICAL_BLOCKED_SORTS.has(sort)) {
+    if (earningsWindowDays) {
+      cleared.push('次回決算までの期間')
+      setEarningsWindowDays('')
+    }
+    if (earningsTimeBucket) {
+      cleared.push('決算の発表時間')
+      setEarningsTimeBucket('')
+    }
+    if (HISTORICAL_BLOCKED_SORTS.has(sort) || HISTORICAL_EARNINGS_SORTS.has(sort)) {
       cleared.push('並び順（コード順に変更）')
       setSort('ticker')
       setDir('asc')
@@ -506,7 +515,7 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
     if (cleared.length > 0) {
       setClearedForHistorical((current) => Array.from(new Set([...current, ...cleared])))
     }
-  }, [historicalLocked, exchange, assetType, sector, industryGroup, industry, marketCapBin, sort])
+  }, [historicalLocked, exchange, assetType, sector, industryGroup, industry, marketCapBin, earningsWindowDays, earningsTimeBucket, sort])
 
   const changeRequestedDate = (next: string | null) => {
     setClearedForHistorical([])
@@ -771,8 +780,8 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
     ma200Trend === 'above' ? '200日線より上' : ma200Trend === 'below' ? '200日線より下' : '',
     ma200Direction ? `200日線: ${ma200Direction === 'up' ? '上向き' : ma200Direction === 'down' ? '下向き' : '横ばい'}` : '',
     marketCapBin ? `時価総額: ${MCAP_BINS.find((bin) => bin.key === marketCapBin)?.label}` : '',
-    earningsWindowDays ? `次回決算: ${earningsWindowDays}日以内` : '',
-    earningsTimeBucket
+    !historicalLocked && earningsWindowDays ? `次回決算: ${earningsWindowDays}日以内` : '',
+    !historicalLocked && earningsTimeBucket
       ? `決算時間: ${
           earningsTimeBucket === 'before_open' ? '寄付前'
             : earningsTimeBucket === 'market_hours' ? '取引時間中'
@@ -926,8 +935,8 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
       )}
       {historical && (
         <div role="note" className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-[11px] font-semibold leading-relaxed text-[#92400e]">
-          株価・6ステージ・物理指標は {linkDate} 終値時点、次回決算はその日までに取り込まれた予定です。
-          取引所・資産種別・業種分類・時価総額は当時の値がないため、絞り込み・並び替えに使えません（銘柄名・取引所の表示は現在の登録値）。
+          株価・6ステージ・物理指標は {linkDate} 終値時点の値です。
+          取引所・資産種別・業種分類・時価総額・次回決算は当時の値を保存していないため、絞り込み・並び替えに使えません（銘柄名・取引所の表示は現在の登録値）。
           {clearedForHistorical.length > 0 && (
             <span className="font-bold"> 解除した条件: {clearedForHistorical.join('・')}</span>
           )}
@@ -1046,7 +1055,7 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
               <option value="ma200Angle">200日線の角度</option>
               <option value="volume">出来高</option>
               <option value="avgVolume20">20日平均出来高</option>
-              <option value="earningsNextDate">次回決算日</option>
+              <option value="earningsNextDate" disabled={historicalLocked}>次回決算日{historicalLocked ? '（過去日は不可）' : ''}</option>
               <option value="shortTermCheckScore">短期チェック</option>
               <option value="pms">PMS</option>
               <option value="pfs">PFS</option>
@@ -1196,7 +1205,7 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
             </div>
           </Section>
 
-          <Section step={5} label="次回決算までで絞り込み・並び替え">
+          <Section step={5} label="次回決算までで絞り込み・並び替え" locked={historicalLocked ? '過去日は使えません · 当時の決算予定を保存していないため' : undefined}>
             <div className="flex flex-wrap gap-1.5">
               {[
                 ['', '全て'],
@@ -1208,6 +1217,7 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
                 <Chip
                   key={value || 'all'}
                   active={earningsWindowDays === value}
+                  disabled={historicalLocked}
                   onClick={() => setEarningsWindowDays(value)}
                 >
                   {label}
@@ -1215,12 +1225,14 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
               ))}
               <Chip
                 active={sort === 'earningsNextDate' && dir === 'asc'}
+                disabled={historicalLocked}
                 onClick={() => { setSort('earningsNextDate'); setDir('asc') }}
               >
                 決算が近い順
               </Chip>
               <Chip
                 active={sort === 'earningsNextDate' && dir === 'desc'}
+                disabled={historicalLocked}
                 onClick={() => { setSort('earningsNextDate'); setDir('desc') }}
               >
                 決算が遠い順
@@ -1237,6 +1249,7 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
                 <Chip
                   key={value || 'all'}
                   active={earningsTimeBucket === value}
+                  disabled={historicalLocked}
                   onClick={() => setEarningsTimeBucket(value)}
                 >
                   {label}
@@ -1244,14 +1257,15 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
               ))}
             </div>
             <div className={`mt-2 border px-3 py-2 text-[10px] font-bold leading-5 ${
-              earningsMeta?.updatedAt
-                ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
-                : 'border-amber-200 bg-amber-50 text-amber-900'
+              historicalLocked || !earningsMeta?.updatedAt
+                ? 'border-amber-200 bg-amber-50 text-amber-900'
+                : 'border-emerald-200 bg-emerald-50 text-emerald-900'
             }`}>
-              {earningsMeta?.updatedAt
-                ? `正式ソース: Finnhub / 最終同期 ${fmtSyncTime(earningsMeta.updatedAt)} / 推定日は表示していません。`
-                : 'Finnhub決算予定は同期待ちです。APIキー設定後の日次同期で有効になります。推定日は表示しません。'}
-              {historical && ` 過去日では ${linkDate} までに取り込まれた予定だけを使い、日数はその日から数えます。`}
+              {historicalLocked
+                ? '過去日の決算予定は保存していないため、表示・絞り込み・並び替えに使用しません。'
+                : earningsMeta?.updatedAt
+                  ? `正式ソース: Finnhub / 最終同期 ${fmtSyncTime(earningsMeta.updatedAt)} / 推定日は表示していません。`
+                  : 'Finnhub決算予定は同期待ちです。APIキー設定後の日次同期で有効になります。推定日は表示しません。'}
             </div>
           </Section>
 
@@ -1476,7 +1490,7 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
                     )}
                   </td>
                   <td className="px-3 py-3">
-                    {row.next_earnings_date ? (
+                    {!historicalLocked && row.next_earnings_date ? (
                       <>
                         <div className="font-mono text-[11px] font-black text-[var(--color-brand-900)]">
                           {row.next_earnings_date}
@@ -1502,7 +1516,7 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
                       </>
                     ) : (
                       <span className="text-[10px] font-bold text-[var(--color-text-tertiary)]">
-                        予定未取得
+                        {historicalLocked ? '過去値なし' : '予定未取得'}
                       </span>
                     )}
                   </td>

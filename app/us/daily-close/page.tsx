@@ -59,14 +59,14 @@ function LeaderTable({ title, rows, metric }: {
     <Card size="lg" className="overflow-hidden p-0">
       <div className="border-b border-[var(--color-border-soft)] px-3 py-2 text-[12px] font-black">{title}</div>
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[420px] text-[12px]">
+        <table className="w-full min-w-[340px] text-[12px]">
           <thead className="bg-[var(--color-surface-subtle)] text-[10px] text-[var(--color-text-tertiary)]">
             <tr><th className="px-3 py-2 text-left">銘柄</th><th className="px-3 py-2 text-right">価格</th><th className="px-3 py-2 text-right">{metric === 'volumeRatio' ? '出来高倍率' : '日次'}</th></tr>
           </thead>
           <tbody>
             {rows.map((row) => (
               <tr key={row.ticker} className="border-t border-[var(--color-border-soft)]">
-                <td className="px-3 py-2"><Link className="font-black text-[var(--color-brand-800)] hover:underline" href={`/us/stock/${encodeURIComponent(row.ticker)}`}>{row.ticker}</Link><div className="max-w-[220px] truncate text-[10px] text-[var(--color-text-tertiary)]">{row.name}</div></td>
+                <td className="px-3 py-2"><Link className="font-black text-[var(--color-brand-800)] hover:underline" href={`/us/stock/${encodeURIComponent(row.ticker)}`}>{row.ticker}</Link><div className="max-w-[170px] truncate text-[10px] text-[var(--color-text-tertiary)]">{row.name}</div></td>
                 <td className="px-3 py-2 text-right font-mono tabular-nums">{money(row.price)}</td>
                 <td className={`px-3 py-2 text-right font-mono font-bold tabular-nums ${metric === 'dailyReturn' ? tone(row.dailyReturn) : ''}`}>{metric === 'volumeRatio' ? (row.volumeRatio == null ? '---' : `${row.volumeRatio.toFixed(2)}x`) : percent(row.dailyReturn)}</td>
               </tr>

@@ -140,6 +140,13 @@ function age(value: number | null): string {
   return value === 0 ? '本日' : `${value}営業日前`
 }
 
+// 再取得中も選択中の値が <select> から消えて「すべて」に見えないよう、現在値を必ず候補に含める
+function withSelected(options: string[], selected: string): string[] {
+  return selected && !options.includes(selected) ? [selected, ...options] : options
+}
+
+const EMPTY_FILTER_OPTIONS: MonitorResponse['filterOptions'] = { exchanges: [], sectors: [] }
+
 function SelectField({
   label,
   value,
@@ -204,6 +211,9 @@ export default function UsMonthlyMaMonitorPage() {
   const [data, setData] = useState<MonitorResponse | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
+  // 行・集計は再取得のたびに破棄するが、絞り込み候補だけは直近の応答を保持して select を安定させる
+  const [filterOptions, setFilterOptions] = useState(EMPTY_FILTER_OPTIONS)
+  const [retryVersion, setRetryVersion] = useState(0)
   const [pending, startTransition] = useTransition()
   const requestSequence = useRef(0)
   const queryString = searchParams.toString()
@@ -230,7 +240,9 @@ export default function UsMonthlyMaMonitorPage() {
         return payload as MonitorResponse
       })
       .then((payload) => {
-        if (sequence === requestSequence.current) setData(payload)
+        if (sequence !== requestSequence.current) return
+        setData(payload)
+        setFilterOptions(payload.filterOptions)
       })
       .catch((reason) => {
         if (controller.signal.aborted || sequence !== requestSequence.current) return
@@ -241,7 +253,7 @@ export default function UsMonthlyMaMonitorPage() {
         if (!controller.signal.aborted && sequence === requestSequence.current) setLoading(false)
       })
     return () => controller.abort()
-  }, [queryString])
+  }, [queryString, retryVersion])
 
   const update = (changes: Record<string, string | null>, resetOffset = true) => {
     const next = new URLSearchParams(searchParams.toString())
@@ -267,7 +279,7 @@ export default function UsMonthlyMaMonitorPage() {
   const busy = loading || pending
 
   return (
-    <div className="page-shell section-stack">
+    <div className="flex w-full min-w-0 flex-col gap-4">
       <PageTitle
         eyebrow="米国株・テクニカル"
         title="月足MAモニター"
@@ -285,10 +297,10 @@ export default function UsMonthlyMaMonitorPage() {
 
       <section className="panel p-3" aria-label="絞り込み">
         <form
-          className="grid gap-3 lg:grid-cols-[minmax(180px,1.4fr)_110px_150px_150px_180px_auto]"
+          className="grid gap-3 sm:grid-cols-2 lg:grid-cols-[minmax(180px,1.4fr)_110px_150px_150px_180px_auto]"
           onSubmit={(event) => { event.preventDefault(); update({ q: queryDraft }) }}
         >
-          <label className="grid gap-1 text-[11px] font-semibold text-[var(--color-text-secondary)]">
+          <label className="grid gap-1 text-[11px] font-semibold text-[var(--color-text-secondary)] sm:col-span-2 lg:col-span-1">
             Ticker・社名
             <input value={queryDraft} onChange={(event) => setQueryDraft(event.target.value)} placeholder="AAPL / Apple" className="h-9 px-2 text-[12px]" />
           </label>
@@ -300,14 +312,14 @@ export default function UsMonthlyMaMonitorPage() {
           </SelectField>
           <SelectField label="取引所" value={exchange} onChange={(value) => update({ exchange: value })}>
             <option value="">すべて</option>
-            {(data?.filterOptions.exchanges ?? []).map((value) => <option key={value} value={value}>{value}</option>)}
+            {withSelected(filterOptions.exchanges, exchange).map((value) => <option key={value} value={value}>{value}</option>)}
           </SelectField>
           <SelectField label="Sector" value={sector} onChange={(value) => update({ sector: value })}>
             <option value="">すべて</option>
-            {(data?.filterOptions.sectors ?? []).map((value) => <option key={value} value={value}>{value}</option>)}
+            {withSelected(filterOptions.sectors, sector).map((value) => <option key={value} value={value}>{value}</option>)}
           </SelectField>
-          <div className="flex items-end gap-2">
-            <button type="submit" className="btn btn-primary">検索</button>
+          <div className="flex items-end gap-2 sm:col-span-2 lg:col-span-1">
+            <button type="submit" className="btn" data-variant="primary">検索</button>
             <button type="button" className="btn" onClick={() => { setQueryDraft(''); update({ q: null, period: null, status: null, exchange: null, sector: null, sort: null }) }} aria-label="条件をリセット">
               <RotateCcw size={14} aria-hidden />
             </button>
@@ -320,7 +332,16 @@ export default function UsMonthlyMaMonitorPage() {
         </div>
       </section>
 
-      {error && <Notice tone="error" role="alert" title="米国株MAデータを読み込めませんでした">{error}</Notice>}
+      {error && (
+        <Notice
+          tone="error"
+          role="alert"
+          title="米国株MAデータを読み込めませんでした"
+          action={<button type="button" className="btn" onClick={() => setRetryVersion((value) => value + 1)}><RotateCcw size={14} aria-hidden />再試行</button>}
+        >
+          {error}
+        </Notice>
+      )}
 
       {!error && <section className="panel" aria-label="米国株月足MA監視結果">
         <div className="flex min-h-11 items-center justify-between gap-2 border-b border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-3 py-2 text-[12px] text-[var(--color-text-secondary)]" aria-live="polite">
@@ -387,6 +408,12 @@ export default function UsMonthlyMaMonitorPage() {
           ))}
         </ul>
 
+        {loading && rows.length === 0 && (
+          <div role="status" className="flex min-h-[240px] items-center justify-center gap-2 text-[12px] text-[var(--color-text-secondary)]">
+            <LoaderCircle size={16} className="animate-spin" aria-hidden />
+            米国株の月足MAを読み込んでいます…
+          </div>
+        )}
         {!busy && rows.length === 0 && <EmptyState title="該当銘柄はありません" description="状態や月足MAの条件を変更してください。" />}
         <nav aria-label="ページ送り" className="flex items-center justify-between border-t border-[var(--color-border-soft)] px-3 py-2">
           <button type="button" className="btn" disabled={offset <= 0} onClick={() => update({ offset: String(Math.max(0, offset - limit)) }, false)}><ChevronLeft size={14} aria-hidden />前へ</button>

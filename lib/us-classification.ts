@@ -1,4 +1,5 @@
 export const US_SEC_SIC_TAXONOMY = 'US_SEC_SIC'
+export const US_STOCKBOARD_SIC_DIVISION_TAXONOMY = 'STOCKBOARD_SIC_DIVISION_V1'
 
 const SIC_MAJOR_GROUP_NAMES: Record<string, string> = {
   '01': 'Agricultural Production - Crops',

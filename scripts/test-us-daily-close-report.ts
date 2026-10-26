@@ -97,7 +97,7 @@ assert.equal(report.unavailable.ownership.status, 'UNAVAILABLE')
 assert.match(report.unavailable.ownership.reason, /代替しません/)
 assert.equal(report.unavailable.news.status, 'UNAVAILABLE')
 assert.match(report.unavailable.news.reason, /推測しません/)
-assert.ok(report.limitations.some((item) => item.includes('分類履歴として扱いません')))
+assert.ok(report.limitations.some((item) => item.includes('StockBoard派生Sector')))
 
 const empty = buildUsDailyCloseReport({
   requestedDate: '2020-01-01',
@@ -121,6 +121,10 @@ const historical = buildUsDailyCloseReport({
 })
 assert.equal(historical.earnings.status, 'unavailable')
 assert.equal(historical.earnings.rows.length, 0)
+assert.equal(historical.classificationBasis, 'UNAVAILABLE_HISTORICAL')
+assert.equal(historical.coverage.classifiedRows, 0)
+assert.equal(historical.sectors.length, 0)
+assert.ok(historical.leaders.gainers.every((row) => row.sector == null))
 assert.ok(historical.limitations.some((item) => item.includes('imported_at')))
 
 assert.throws(() => buildUsDailyCloseReport({
@@ -136,7 +140,8 @@ assert.match(serverSource, /market='US'/)
 assert.match(serverSource, /ticker='SPY'/, 'US report calendar must be anchored to SPY sessions')
 assert.match(serverSource, /SELECT date FROM market_ohlcv_daily\s+WHERE market='US' AND ticker='SPY' AND date<=\?/)
 assert.match(serverSource, /currentPriceDate \? loadEarnings/)
-assert.match(serverSource, /classificationBasis: 'CURRENT_REFERENCE'/)
+assert.match(serverSource, /'CURRENT_REFERENCE' : 'UNAVAILABLE_HISTORICAL'/)
+assert.match(serverSource, /includeCurrentClassification/)
 assert.doesNotMatch(serverSource, /FROM\s+(?:large_holder|large_holders|news|materials)\b/i)
 assert.match(pageSource, /US Ownership: UNAVAILABLE/)
 assert.match(pageSource, /US Materials \/ News: UNAVAILABLE/)
