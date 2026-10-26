@@ -403,4 +403,3 @@ export default function UsMonthlyMaMonitorPage() {
     </div>
   )
 }
-
