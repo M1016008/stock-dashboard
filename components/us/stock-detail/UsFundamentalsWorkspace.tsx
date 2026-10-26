@@ -485,7 +485,7 @@ const MISSING_METRIC_LABEL: Record<string, string> = {
   revenue: '売上高',
   operating_profit: '営業利益',
   net_income: '純利益',
-  eps: 'EPS',
+  eps: '基本EPS',
   assets: '総資産',
   liabilities: '負債合計',
   equity: '純資産',
@@ -500,7 +500,7 @@ const MISSING_METRIC_LABEL: Record<string, string> = {
   capital_expenditure: '設備投資',
   shares_outstanding: '発行済株式数',
   weighted_average_shares: '加重平均株式数',
-  diluted_eps: '希薄化EPS',
+  diluted_eps: '希薄化後EPS',
   cash_dividends_paid: '現金配当支払',
   share_repurchases: '自社株買い',
 }
@@ -589,11 +589,11 @@ function CoverageStrip({ model }: { model: UsFundamentalsModel }) {
       )}
       {model.coverage.sourceFacts === 0 ? (
         <Notice tone="warning" className="m-3 sm:mx-4">
-          基準日時点で使える SEC Companyfacts の財務factがありません。業績・財務・倍率は「データなし」とし、Tiingo EOD の株価・配当由来の値だけを表示します。
+          基準日時点で使える SEC Companyfacts の財務factがありません（未報告または未取得で、0や取得エラーとは区別します）。業績・財務・倍率は「データなし」とし、Tiingo EOD の株価・配当由来の値だけを表示します。
         </Notice>
       ) : model.coverage.status === 'PARTIAL' ? (
         <Notice tone="info" className="m-3 sm:mx-4">
-          一部の区分でSEC factが未取得です。区分別の取得状況で欠損項目を確認してください。依存する指標は「データなし」になります。
+          一部の区分でSEC factが未報告または未取得です。0の値ではなく、取得エラーとも限りません。区分別の取得状況で欠損項目を確認してください。依存する指標は「データなし」になります。
         </Notice>
       ) : null}
     </section>
@@ -843,7 +843,7 @@ const PERFORMANCE_ROWS: Array<{ key: PerformanceMetric; label: string; signed?: 
   { key: 'operatingProfit', label: '営業利益' },
   { key: 'operatingMargin', label: '営業利益率' },
   { key: 'netIncome', label: '純利益' },
-  { key: 'eps', label: 'EPS(基本)' },
+  { key: 'eps', label: '基本EPS' },
 ]
 
 function PerformanceView({ model }: { model: UsFundamentalsModel }) {
@@ -994,7 +994,7 @@ function FinancialView({ model }: { model: UsFundamentalsModel }) {
           </div>
         </PanelSection>
 
-        <PanelSection icon={Banknote} id="us-fundamental-cashflow" title="キャッシュフロー" lead="LTM、なければ直近FY。0線の右がプラス、左がマイナス。設備投資は取得支出を負の値に正規化(FCF = 営業CF + 設備投資)。">
+        <PanelSection icon={Banknote} id="us-fundamental-cashflow" title="キャッシュフロー" lead="LTM、なければ直近FY。0線の右がプラス、左がマイナス。FCF = 営業CF + 正規化後の設備投資(負値)、つまり営業CF − 設備投資の現金流出額。">
           <BarRows
             label="キャッシュフロー"
             mode="signed"
@@ -1007,7 +1007,7 @@ function FinancialView({ model }: { model: UsFundamentalsModel }) {
                 value: financials.freeCashFlow,
                 tip: (
                   <DefinitionTip term="FCF(フリーキャッシュフロー)">
-                    営業CF + 設備投資。設備投資はSECの有形固定資産の取得支出を負のキャッシュフロー値に正規化したもので、引き算はしません。どちらかのSEC factがなければデータなし。
+                    営業CF + 正規化後の設備投資(負値)。同じ値は営業CF − 設備投資の現金流出額(正の額)とも表せます。設備投資はSECの有形固定資産の取得支出を負のキャッシュフロー値に正規化したものです。どちらかのSEC factが未報告・未取得ならデータなし(0ではありません)。
                   </DefinitionTip>
                 ),
               },
@@ -1020,7 +1020,7 @@ function FinancialView({ model }: { model: UsFundamentalsModel }) {
                 value: financials.capitalExpenditure,
                 tip: (
                   <DefinitionTip term="設備投資(正規化後の符号)">
-                    SECの有形固定資産の取得支出(流出)を、キャッシュフローとして負の値に正規化して表示します。FCFは営業CFにこの負の値を足して求めます。
+                    SECの有形固定資産の取得支出(流出)を、キャッシュフローとして負の値に正規化して表示します。FCFは営業CFにこの負の値を足して求めます(営業CFから流出額を引くのと同じです)。
                   </DefinitionTip>
                 ),
               },
@@ -1029,7 +1029,7 @@ function FinancialView({ model }: { model: UsFundamentalsModel }) {
         </PanelSection>
       </div>
 
-      <PanelSection icon={FileText} id="us-fundamental-capital" title="株式・資本" lead="SEC開示の株式数と希薄化後EPS。基準日までの最新値です。" bleed>
+      <PanelSection icon={FileText} id="us-fundamental-capital" title="株式・資本" lead="SEC開示の株式数と希薄化後EPS(業績タブの基本EPSとは別の値)。基準日までの最新値です。" bleed>
         <MetricGrid columns="md:grid-cols-3">
           <MetricCell label="発行済株式数" basis="直近開示(株)" value={capital.sharesOutstanding} />
           <MetricCell label="加重平均株式数" basis="直近開示(株)" value={capital.weightedAverageShares} />

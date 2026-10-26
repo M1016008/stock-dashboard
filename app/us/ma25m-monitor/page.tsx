@@ -204,12 +204,47 @@ function SignalBadges({ row, contactThreshold }: { row: MonitorRow; contactThres
   )
 }
 
+const MA_ERROR_MESSAGES: Record<string, string> = {
+  us_monthly_ma_source_unavailable: '月足MAの元データを確認できません。しばらくしてから再試行してください。',
+  us_monthly_ma_generation_unavailable: 'データ更新の切り替え中です。更新が完了するまで表示できません。しばらくしてから再試行してください。',
+  us_monthly_ma_price_basis_mismatch: '価格データの基準が一致していないため表示を停止しています。データ更新の完了後に再試行してください。',
+  us_monthly_ma_generation_unattested: 'データ更新の整合確認が完了していないため表示を停止しています。しばらくしてから再試行してください。',
+  us_monthly_ma_failed: '米国株MAデータの処理中にエラーが発生しました。再試行してください。',
+  invalid_query_parameters: '絞り込み条件を読み取れませんでした。条件を見直してください。',
+  invalid_period: '期間の指定が正しくありません。条件を見直してください。',
+  invalid_status: '状態の指定が正しくありません。条件を見直してください。',
+  invalid_sort: '並び順の指定が正しくありません。条件を見直してください。',
+  invalid_direction: '並び方向の指定が正しくありません。条件を見直してください。',
+}
+
+class MaMonitorRequestError extends Error {
+  constructor(readonly code: string, readonly httpStatus: number) {
+    super(code)
+  }
+}
+
+function friendlyMaError(reason: unknown): { message: string; detail: string | null } {
+  if (reason instanceof MaMonitorRequestError) {
+    const known = MA_ERROR_MESSAGES[reason.code]
+    const message = known
+      ?? (reason.httpStatus === 503
+        ? 'データ更新の切り替え中か、元データを確認できません。しばらくしてから再試行してください。'
+        : '米国株MAデータを取得できませんでした。再試行してください。')
+    return { message, detail: `${reason.code} (HTTP ${reason.httpStatus})` }
+  }
+  return {
+    message: '通信に失敗しました。接続を確認して再試行してください。',
+    detail: reason instanceof Error ? reason.message : String(reason),
+  }
+}
+
 export default function UsMonthlyMaMonitorPage() {
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
   const [data, setData] = useState<MonitorResponse | null>(null)
   const [error, setError] = useState('')
+  const [errorDetail, setErrorDetail] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   // 行・集計は再取得のたびに破棄するが、絞り込み候補だけは直近の応答を保持して select を安定させる
   const [filterOptions, setFilterOptions] = useState(EMPTY_FILTER_OPTIONS)
@@ -232,11 +267,12 @@ export default function UsMonthlyMaMonitorPage() {
     const sequence = ++requestSequence.current
     setLoading(true)
     setError('')
+    setErrorDetail(null)
     setData(null)
     fetch(`/api/us/ma25m-monitor?${queryString}`, { cache: 'no-store', signal: controller.signal })
       .then(async (response) => {
-        const payload = await response.json()
-        if (!response.ok) throw new Error(payload.error ?? `HTTP ${response.status}`)
+        const payload = await response.json().catch(() => ({}))
+        if (!response.ok) throw new MaMonitorRequestError(typeof payload.error === 'string' ? payload.error : `http_${response.status}`, response.status)
         return payload as MonitorResponse
       })
       .then((payload) => {
@@ -247,7 +283,9 @@ export default function UsMonthlyMaMonitorPage() {
       .catch((reason) => {
         if (controller.signal.aborted || sequence !== requestSequence.current) return
         setData(null)
-        setError(reason instanceof Error ? reason.message : String(reason))
+        const friendly = friendlyMaError(reason)
+        setError(friendly.message)
+        setErrorDetail(process.env.NODE_ENV !== 'production' ? friendly.detail : null)
       })
       .finally(() => {
         if (!controller.signal.aborted && sequence === requestSequence.current) setLoading(false)
@@ -340,6 +378,7 @@ export default function UsMonthlyMaMonitorPage() {
           action={<button type="button" className="btn" onClick={() => setRetryVersion((value) => value + 1)}><RotateCcw size={14} aria-hidden />再試行</button>}
         >
           {error}
+          {errorDetail && <div className="mt-1 font-mono text-[10px] opacity-70">detail: {errorDetail}</div>}
         </Notice>
       )}
 

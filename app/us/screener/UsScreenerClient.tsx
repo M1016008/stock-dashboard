@@ -128,6 +128,8 @@ type ScreenerFacets = {
 
 type EarningsMeta = {
   source: 'finnhub'
+  available?: boolean
+  reason?: 'ready' | 'no_successful_run' | 'range_uncovered' | 'stale' | 'historical_unavailable'
   updatedAt: string | null
   latestRun: {
     status: string
@@ -1257,15 +1259,17 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
               ))}
             </div>
             <div className={`mt-2 border px-3 py-2 text-[10px] font-bold leading-5 ${
-              historicalLocked || !earningsMeta?.updatedAt
+              historicalLocked || earningsMeta?.available === false || !earningsMeta?.updatedAt
                 ? 'border-amber-200 bg-amber-50 text-amber-900'
                 : 'border-emerald-200 bg-emerald-50 text-emerald-900'
             }`}>
               {historicalLocked
                 ? '過去日の決算予定は保存していないため、表示・絞り込み・並び替えに使用しません。'
-                : earningsMeta?.updatedAt
+                : earningsMeta?.available === false
+                  ? 'Finnhub決算予定は現在利用できないか、同期が古い状態です（未取得・期間未カバー・更新遅延）。決算条件と並び替えは使えません。推定日は表示しません。'
+                  : earningsMeta?.updatedAt
                   ? `正式ソース: Finnhub / 最終同期 ${fmtSyncTime(earningsMeta.updatedAt)} / 推定日は表示していません。`
-                  : 'Finnhub決算予定は同期待ちです。APIキー設定後の日次同期で有効になります。推定日は表示しません。'}
+                  : 'Finnhub決算予定の利用状態を確認できません。決算条件と並び替えは使えません。推定日は表示しません。'}
             </div>
           </Section>
 
@@ -1516,7 +1520,7 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
                       </>
                     ) : (
                       <span className="text-[10px] font-bold text-[var(--color-text-tertiary)]">
-                        {historicalLocked ? '過去値なし' : '予定未取得'}
+                        {historicalLocked ? '過去値なし' : '予定を確認できません'}
                       </span>
                     )}
                   </td>

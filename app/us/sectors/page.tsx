@@ -103,8 +103,8 @@ function Header({ data }: { data: UsMarketIntelligence | null }) {
     <PageTitle
       eyebrow="米国株"
       title="USセクター分析"
-      subtitle="SEC SIC industryを、StockBoard独自のSIC範囲区分へ集約し、強弱を1D/1W/1M・PMS/PFS/PES・広がりで比較します。区分はSEC公式Sectorではなく、GICS ではありません。"
-      badge={data?.date ? (data.isLatest ? 'SEC SIC + StockBoard区分 · 最新日のみ' : '過去日は集計しません') : undefined}
+      subtitle="SEC SIC industryをStockBoard独自の区分に集約し、1D/1W/1M・PMS/PFS/PES・広がりで比較します。SEC公式Sectorでも GICS ではありません。"
+      badge={data?.date ? (data.isLatest ? 'SIC区分・最新日のみ' : '過去日は集計外') : undefined}
       badgeTone={data?.date && !data.isLatest ? 'warning' : 'brand'}
       meta={data?.date ? (
         <>
@@ -302,7 +302,7 @@ export default async function UsSectorsPage({
           id="us-sector-map-title"
           level={1}
           title="StockBoard SIC division market map"
-          description={`${metricMeta.label}の高い順。色は${metric === 'breadth' ? '50%を基準にした' : metric === 'stage1' ? '比率の' : '符号と'}強さ、右上は銘柄数。タイルを選ぶと下の SIC industry をそのセクターに絞ります。`}
+          description={`${metricMeta.label}の高い順。色は${metric === 'breadth' ? '50%基準の' : metric === 'stage1' ? '比率の' : '符号と'}強さ、右上は銘柄数。選ぶと下の業種を絞り込みます。`}
         />
         {sectors.length === 0 ? (
           <EmptyState title="SEC SIC 分類のある銘柄がありません" description="SEC 分類の取り込み後に表示されます。" />
@@ -315,7 +315,7 @@ export default async function UsSectorsPage({
         <SectionHeader
           id="us-sector-ranking-title"
           title="Sector ranking"
-          description="列見出しで並び順を変更。平均は各セクター内の単純平均、PMS+比率は PMS > 0 の銘柄割合、日A S1 は日足A が Stage 1 の割合です。"
+          description="列見出しで並べ替え。平均は単純平均、PMS+比率は PMS > 0 の割合、日A S1 は日足A が Stage 1 の割合です。"
         />
         <UsSectorRankingTable
           rows={[...sectors, ...(unknownGroup ? [unknownGroup] : [])].map((group) => sectorRow(group, metric))}

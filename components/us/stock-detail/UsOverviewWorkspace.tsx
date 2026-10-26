@@ -388,7 +388,7 @@ export function UsOverviewWorkspace({
                 </p>
               </div>
             ) : (
-              <p className="m-0 text-[12px] font-medium text-[var(--color-text-tertiary)]">予定未取得</p>
+              <p className="m-0 text-[12px] font-medium text-[var(--color-text-tertiary)]">次回決算日は確認できません（予定がないとは限りません）</p>
             )}
           </SheetRow>
 

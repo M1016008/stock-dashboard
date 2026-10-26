@@ -137,7 +137,7 @@ export default async function UsEarningsPage({
         </Notice>
       )}
 
-      {result && (
+      {result && result.status !== 'unavailable' && (
         <div className="rounded-[4px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-3 py-2 text-[11px] font-semibold text-[var(--color-text-secondary)]">
           Coverage {result.coverage.from ?? '-'} - {result.coverage.to ?? '-'} / 最終同期 {result.coverage.latestImportedAt ?? '-'} / 予想EPS・売上は提供元の値で、StockBoardによる予測ではありません。「予定日（未確認）」は提供元の予定日で、企業発表による確認状態は不明です。実績は報告済みの行のみ表示します。
         </div>

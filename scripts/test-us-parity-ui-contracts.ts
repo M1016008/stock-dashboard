@@ -93,8 +93,27 @@ assert.match(screenerClient, /label="次回決算までで絞り込み・並び�
 assert.match(screenerClient, /<option value="earningsNextDate" disabled=\{historicalLocked\}>/)
 assert.equal((screenerClient.match(/active=\{(?:earningsWindowDays === value|earningsTimeBucket === value|sort === 'earningsNextDate' && dir === '(?:asc|desc)')\}\s+disabled=\{historicalLocked\}/g) ?? []).length, 4)
 assert.match(screenerClient, /!historicalLocked && row\.next_earnings_date/)
-assert.match(screenerClient, /historicalLocked \? '過去値なし' : '予定未取得'/)
+assert.match(screenerClient, /historicalLocked \? '過去値なし' : '予定を確認できません'/)
 assert.match(screenerClient, /historicalLocked\s*\? '過去日の決算予定は保存していないため/)
 assert.doesNotMatch(screenerClient, /までに取り込まれた予定/)
+// Latest metadata: earnings.available === false is unavailable/stale, not "waiting for sync".
+assert.match(screenerClient, /earningsMeta\?\.available === false/)
+assert.match(screenerClient, /現在利用できないか、同期が古い状態/)
+assert.doesNotMatch(screenerClient, /同期待ち/)
+
+assert.match(maMonitor, /us_monthly_ma_generation_unavailable:\s*'データ更新の切り替え中/)
+assert.match(maMonitor, /httpStatus === 503/)
+assert.match(maMonitor, /process\.env\.NODE_ENV !== 'production' \? friendly\.detail : null/)
+assert.doesNotMatch(maMonitor, /setError\(reason instanceof Error \? reason\.message/)
+
+assert.match(earnings, /result && result\.status !== 'unavailable' && \(/)
+
+assert.match(overview, /次回決算日は確認できません/)
+assert.doesNotMatch(overview, /予定未取得/)
+
+assert.match(dailyClose, /StockBoard SIC division<\/th>/)
+assert.doesNotMatch(dailyClose, />Sector<\/th>/)
+assert.match(dailyClose, /report\.sectors\.length \?/)
+assert.match(dailyClose, /過去日のセクター分類は利用できません/)
 
 console.log('US parity UI contracts: PASS')

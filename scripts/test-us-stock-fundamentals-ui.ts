@@ -81,6 +81,14 @@ async function main() {
   assert.match(workspace, /0は観測値/)
   assert.match(workspace, /model\.coverage\.sourceFacts === 0/)
 
+  // ---- EPS labels and FCF explanation ----
+  assert.match(workspace, /label: '基本EPS'/)
+  assert.match(workspace, /label="希薄化後EPS"/)
+  assert.doesNotMatch(workspace, /EPS\(基本\)|'希薄化EPS'/, 'basic/diluted EPS labels must stay consistent')
+  assert.match(workspace, /営業CF \+ 正規化後の設備投資\(負値\)/)
+  assert.match(workspace, /営業CF − 設備投資の現金流出額/)
+  assert.match(workspace, /未報告または未取得/)
+
   // ---- Summary: neutral observed facts, no unsupported value judgment ----
   assert.match(workspace, /title="観測事実"/)
   assert.match(workspace, /title="確認事項"/)

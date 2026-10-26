@@ -66,9 +66,10 @@ assert.throws(
 assert.doesNotThrow(() => assertUsScreenerHistoricalFilters(historical, { sort: 'ticker' }))
 
 const route = fs.readFileSync('app/api/us/screener/route.ts', 'utf8')
-assert.doesNotMatch(route, /todayInNewYork/)
+assert.match(route, /const earningsAnchorDate = pit\.mode === 'LATEST' \? todayInNewYork\(\) : date/)
 assert.match(route, /earningsImportCutoff/)
-assert.match(route, /pit\.mode === 'HISTORICAL' \? 'AND 1 = 0'/)
+assert.match(route, /const earningsImportCutoff = earningsCoverage\.ok \? '' : 'AND 1 = 0'/)
+assert.match(route, /pit\.mode === 'LATEST'[\s\S]*historical_unavailable/)
 assert.match(route, /pit\.mode === 'HISTORICAL'/)
 assert.match(route, /WHEN '\$\{pit\.mode\}' = 'LATEST'/)
 assert.doesNotMatch(route, /AND u\.active = 1/)
