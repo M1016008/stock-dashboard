@@ -5,7 +5,13 @@ import { db } from '@/lib/db/client'
 import { ohlcvDaily } from '@/lib/db/schema'
 import { and, asc, desc, eq, gte, lte } from 'drizzle-orm'
 import type { OHLCV } from '@/types/stock'
-import { parseTimeframeSpec, resampleOhlcv, specToIntervalCode } from '@/lib/timeframes'
+import {
+  parseTimeframeSpec,
+  requiresTradingSessionCalendar,
+  resampleOhlcv,
+  resampleOhlcvWithTradingSessions,
+  specToIntervalCode,
+} from '@/lib/timeframes'
 import { loadManualOhlcvRows } from '@/lib/manual-ohlcv'
 import { decodePathSegment } from '@/lib/url-path'
 import { adjustLikelySplitOhlcv } from '@/lib/physical-momentum'
@@ -97,7 +103,25 @@ export async function GET(
     }
 
     const adjustedHistory = source === 'jquants' ? adjustLikelySplitOhlcv(history) : history
-    const output = timeframeSpec ? resampleOhlcv(adjustedHistory, timeframeSpec) : adjustedHistory
+    const timeframeCalendarFromDate = adjustedHistory[0]
+      ? `${adjustedHistory[0].date.slice(0, 4)}-01-01`
+      : null
+    const timeframeMarketRows = timeframeSpec
+      && requiresTradingSessionCalendar(timeframeSpec)
+      && timeframeCalendarFromDate
+      ? await db
+          .select({ date: ohlcvDaily.date })
+          .from(ohlcvDaily)
+          .where(requestedAsOfDate
+            ? and(eq(ohlcvDaily.ticker, '1306'), gte(ohlcvDaily.date, timeframeCalendarFromDate), lte(ohlcvDaily.date, requestedAsOfDate))
+            : and(eq(ohlcvDaily.ticker, '1306'), gte(ohlcvDaily.date, timeframeCalendarFromDate)))
+          .orderBy(asc(ohlcvDaily.date))
+      : []
+    const output = timeframeSpec
+      ? requiresTradingSessionCalendar(timeframeSpec)
+        ? resampleOhlcvWithTradingSessions(adjustedHistory, timeframeSpec, timeframeMarketRows.map((row) => row.date))
+        : resampleOhlcv(adjustedHistory, timeframeSpec)
+      : adjustedHistory
 
     if (wantsTwoYearRegistry) {
       const calendarFromDate = adjustedHistory[0]

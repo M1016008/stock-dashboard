@@ -7,6 +7,12 @@ on:
       - '.github/workflows/storage-guard-ci.yml'
       - 'lib/db/us-analytics.ts'
       - 'lib/storage/**'
+      - 'app/dev/sma-dynamics/**'
+      - 'components/stock/sma-dynamics/**'
+      - 'lib/sma-dynamics*.ts'
+      - 'scripts/deploy-web-analog-only.ts'
+      - 'scripts/test-sma-dynamics*.ts'
+      - 'scripts/test-web-analog-release.ts'
       - 'scripts/test-storage-*.ts'
       - 'scripts/test-us-automation-foundation.ts'
       - 'package.json'
@@ -40,6 +46,12 @@ jobs:
 
       - name: Storage Guard regression
         run: npm run storage:guard-test
+
+      - name: SMA Dynamics regression
+        run: npm run test:sma-dynamics:all
+
+      - name: Web and Analog release isolation
+        run: npm run test:web-analog-release
 
       - name: US analytics isolation regression
         run: npm run test:us-analytics-generation

@@ -14,6 +14,9 @@ __pycache__/
 
 # testing
 /coverage
+/.release-fixture/
+/.release-runtime/
+/.release-dev-runtime/
 
 # next.js
 /.next/

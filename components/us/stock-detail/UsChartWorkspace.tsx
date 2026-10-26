@@ -5,6 +5,8 @@ import type { ReactNode } from 'react'
 import { ChevronRight } from 'lucide-react'
 import { CandlestickChart } from '@/components/charts/CandlestickChart'
 import { StageTimeline, type StageTimelineSnapshot } from '@/components/stock/StageTimeline'
+import { SmaDynamicsSection } from '@/components/stock/sma-dynamics/SmaDynamicsSection'
+import { useSmaLinkIntent } from '@/components/stock/sma-dynamics/useSmaLinkIntent'
 import { STAGE_BG_COLORS, STAGE_BORDER_COLORS, STAGE_LABELS } from '@/lib/hex-stage'
 import { describePhysicalScore } from '@/lib/physical-momentum-view'
 import { formatTechnicalSnapshotDateLabel } from '@/lib/stock-decision-summary'
@@ -41,11 +43,13 @@ const LOADING_STAGE: StageTimelineSnapshot = { status: 'loading', date: null, st
 
 export function UsChartWorkspace({
   ticker,
+  companyName = null,
   analysisDate,
   showActual,
   momentum,
 }: {
   ticker: string
+  companyName?: string | null
   analysisDate: string | null
   showActual: boolean
   momentum: UsPhysicalMomentumState
@@ -60,6 +64,7 @@ export function UsChartWorkspace({
     [momentum.data, momentum.error, momentum.status],
   )
   const chartHeight = useChartHeight()
+  const smaLinkIntent = useSmaLinkIntent(`US:${ticker}`)
 
   // 読み順: 現在の状態(結論) → チャート → 根拠(MA・3スコア・6ステージ) → ステージ変遷 → Physical Momentum・観察プラン → 指標の見方
   return (
@@ -89,6 +94,8 @@ export function UsChartWorkspace({
           )}
         />
       </section>
+
+      <SmaDynamicsSection market="US" ticker={ticker} name={companyName} analysisDate={analysisDate} linkIntent={smaLinkIntent} />
 
       <StageTimeline
         ticker={ticker}

@@ -144,6 +144,22 @@ export function createTimeframeBucketContext(tradingDates: readonly string[]): T
   }
 }
 
+export function requiresTradingSessionCalendar(spec: TimeframeSpec): boolean {
+  return spec.timeframe === 'day' && Math.max(1, Math.floor(spec.multiplier)) > 1
+}
+
+/** Multi-session candles use the exchange calendar, never a sparse symbol history. */
+export function resampleOhlcvWithTradingSessions(
+  rows: OHLCV[],
+  spec: TimeframeSpec,
+  tradingDates: readonly string[],
+): OHLCV[] {
+  if (!requiresTradingSessionCalendar(spec)) return resampleOhlcv(rows, spec)
+  if (rows.length === 0) return []
+  if (tradingDates.length === 0) throw new Error('market_trading_sessions_required')
+  return resampleOhlcv(rows, spec, createTimeframeBucketContext(tradingDates))
+}
+
 export function getTimeframeBucketKey(
   isoDate: string,
   spec: TimeframeSpec,

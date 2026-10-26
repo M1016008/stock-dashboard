@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict'
 import {
+  CHART_INTERVAL_OPTIONS,
   createTimeframeBucketContext,
   defaultMaLinesForInterval,
   intervalLabel,
   parseInterval,
+  requiresTradingSessionCalendar,
   resampleOhlcv,
+  resampleOhlcvWithTradingSessions,
   specToIntervalCode,
 } from '@/lib/timeframes'
 import { getJpTradingDates } from '@/lib/server/jp-market-calendar'
@@ -21,6 +24,7 @@ const rows: OHLCV[] = [
   { date: '2026-03-02', open: 122, high: 140, low: 119, close: 136, volume: 8_000 },
 ]
 const tradingViewContext = createTimeframeBucketContext(getJpTradingDates('2026-01-01', '2026-12-31'))
+const marketSessions = getJpTradingDates('2026-01-01', '2026-12-31')
 
 function candleKey(row: OHLCV) {
   return {
@@ -40,6 +44,13 @@ assert.deepEqual(twoDay[1], { date: '2026-02-02', open: 106, high: 120, low: 101
 const threeDay = resampleOhlcv(rows, { timeframe: 'day', multiplier: 3 }, tradingViewContext).map(candleKey)
 assert.deepEqual(threeDay[0], { date: '2026-01-29', open: 100, high: 110, low: 95, close: 105, volume: 1_000 })
 assert.deepEqual(threeDay[1], { date: '2026-02-03', open: 106, high: 120, low: 101, close: 113, volume: 9_000 })
+
+for (const interval of ['2D', '3D'] as const) {
+  const spec = CHART_INTERVAL_OPTIONS.find((option) => option.code === interval)!.spec
+  assert.equal(requiresTradingSessionCalendar(spec), true)
+  assert.deepEqual(resampleOhlcvWithTradingSessions(rows, spec, marketSessions), resampleOhlcv(rows, spec, tradingViewContext))
+  assert.notDeepEqual(resampleOhlcv(rows, spec), resampleOhlcvWithTradingSessions(rows, spec, marketSessions))
+}
 
 const fiveDay = resampleOhlcv(rows, { timeframe: 'day', multiplier: 5 }, tradingViewContext).map(candleKey)
 assert.deepEqual(fiveDay[0], { date: '2026-02-02', open: 100, high: 120, low: 95, close: 118, volume: 6_000 })

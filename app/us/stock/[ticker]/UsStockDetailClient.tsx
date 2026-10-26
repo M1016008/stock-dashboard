@@ -338,6 +338,7 @@ export function UsStockDetailClient({
       {analysisParamsReady && activeTab === 'chart' && (
         <UsChartWorkspace
           ticker={quote.ticker}
+          companyName={quote.name ?? null}
           analysisDate={analysisDate}
           showActual={showActual}
           momentum={momentum}
