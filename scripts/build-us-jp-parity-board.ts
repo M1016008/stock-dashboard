@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 const root = process.cwd()
-const evidenceRevision = 'f56ef642f2ca8e99eaa22c06218794add45ed0b5'
+const evidenceRevision = '433e02f07f347de7bb78f9113389fb01784e5664'
 const statusFields = ['jp', 'us', 'functional', 'visual', 'data', 'historical', 'responsive', 'performance'] as const
 type Status = 'IMPLEMENTED' | 'PARTIAL' | 'MISSING' | 'NOT_APPLICABLE' | 'BLOCKED' | 'UNVERIFIED'
 type StatusField = (typeof statusFields)[number]
@@ -42,8 +42,8 @@ const rows: Row[] = [
   row('W0', 'PIT date and future-leakage guards', { ...complete, visual: 'NOT_APPLICABLE', responsive: 'NOT_APPLICABLE' }, ['lib/server/period-explorer-read-model.ts', 'app/api/us/hex/route.ts'], ['scripts/test-us-screener-pit.ts', 'scripts/test-us-dashboard-pit.ts']),
   row('W0', 'Data freshness and coverage disclosure', complete, ['lib/us-status.ts', 'app/api/us/status/route.ts'], ['scripts/test-us-data-coverage-ui.ts', 'scripts/test-data-freshness.ts']),
   row('W0', 'Friend read-only access parity', { ...technical, us: 'PARTIAL', responsive: 'UNVERIFIED' }, ['proxy.ts'], ['scripts/test-remote-access.ts'], 'Code contract exists, but this branch was not deployed and authenticated friend-path browser QA was not run.', 'SECURITY: Production deployment and authenticated runtime access require separate approval.', 'Run the approved friend-access route matrix after a future deployment.'),
-  row('W0', 'Responsive route coverage', { ...technical, us: 'PARTIAL', responsive: 'UNVERIFIED' }, ['app/us/loading.tsx', 'components/layout/Header.tsx'], ['scripts/test-layout-shell.ts', 'scripts/test-us-route-states.ts'], 'Static responsive contracts pass; new pages still require isolated 390/768/1024/1440 browser evidence.', 'TECHNICAL: high-load isolated build/browser QA waits for the active weekly Production job to finish.', 'Run the four-viewpoint browser plan against the isolated build.'),
-  row('W0', 'Search performance governance', { ...technical, us: 'PARTIAL', performance: 'UNVERIFIED' }, ['scripts/audit-browser-performance.ts', 'scripts/benchmark-search-performance.ts'], ['scripts/test-search-performance-regressions.ts'], 'Existing search regressions are retained; new parity pages have no fresh cold/warm browser baseline.', 'TECHNICAL: performance sampling is deferred while the weekly Production workload is active.', 'Measure cold/warm request count, payload and layout after the safe build window opens.'),
+  row('W0', 'Responsive route coverage', technical, ['app/us/loading.tsx', 'components/layout/Header.tsx'], ['scripts/test-layout-shell.ts', 'scripts/test-us-route-states.ts', 'scripts/bench/browser-plan.json', 'docs/us-stockboard-parity-validation-20261026.md']),
+  row('W0', 'Search performance governance', technical, ['scripts/audit-browser-performance.ts', 'scripts/benchmark-search-performance.ts'], ['scripts/test-search-performance-regressions.ts', 'scripts/bench/scenarios/priority-search.ts', 'docs/us-stockboard-parity-validation-20261026.md']),
 
   row('W1', 'Market dashboard', complete, ['app/us/page.tsx'], ['scripts/test-us-dashboard-pit.ts']),
   row('W1', 'Daily close market report', complete, ['app/us/daily-close/page.tsx', 'lib/server/us-daily-close-report.ts'], ['scripts/test-us-daily-close-report.ts']),
