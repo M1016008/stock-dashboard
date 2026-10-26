@@ -107,7 +107,7 @@ export default async function UsDailyClosePage({
         eyebrow="米国株・引け後"
         title="US Daily Close"
         subtitle="既存US Servingデータだけで、市場内部・6ステージ変化・セクター・決算予定を同じ基準日へ揃えます。"
-        badge={report?.current ? '最新データ' : report?.asOfDate ? '指定日' : undefined}
+        badge={report?.current ? '最新価格' : report?.asOfDate ? '指定日' : undefined}
         badgeTone={report?.current ? 'positive' : 'warning'}
         meta={report?.asOfDate ? <>
           <span>基準日 <strong>{report.asOfDate}</strong></span>

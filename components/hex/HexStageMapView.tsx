@@ -271,6 +271,9 @@ export default function HexStageMapView({ market = 'JP' }: { market?: 'JP' | 'US
   // 読み込み中・失敗中は件数が未確定。0 や前回の値を実数のように見せず「—」で置く
   const countsReady = !loading && !error
   const countText = (n: number) => (countsReady ? n.toLocaleString() : '—')
+  const errorMessage = error === 'us_hex_generation_changed'
+    ? 'データ更新中に元データの世代が切り替わりました。更新完了後に再読み込みしてください。'
+    : 'トレンドステージマップを取得できませんでした。時間をおいて再読み込みしてください。'
 
   return (
     <div className="flex flex-col gap-3">
@@ -286,7 +289,7 @@ export default function HexStageMapView({ market = 'JP' }: { market?: 'JP' | 'US
       {/* error の中身 (API 文言・例外文) は内部情報を含みうるため表示せず、失敗したことだけを固定文言で伝える */}
       {error && !loading && (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-[8px] border-l-2 border-[var(--color-price-down)] bg-[var(--color-surface-subtle)] p-3">
-          <p role="alert" className="min-w-0 text-[12px] text-[var(--color-price-down)]">トレンドステージマップを取得できませんでした。時間をおいて再読み込みしてください。</p>
+          <p role="alert" className="min-w-0 text-[12px] text-[var(--color-price-down)]">{errorMessage}</p>
           <button type="button" onClick={() => setRetryVersion((value) => value + 1)} className="btn" data-size="sm">
             再試行
           </button>

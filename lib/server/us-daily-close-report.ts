@@ -6,7 +6,7 @@ import {
   type SectorRotationRow,
   type StageSet,
 } from '@/lib/daily-close-report'
-import { getUsEarningsCalendar } from '@/lib/queries/us-earnings'
+import { getUsEarningsCalendar, todayInNewYork } from '@/lib/queries/us-earnings'
 import { US_SEC_SIC_TAXONOMY } from '@/lib/us-classification'
 import { usInvestableSymbolSql } from '@/lib/us-symbol-quality'
 
@@ -396,15 +396,17 @@ async function loadBenchmarks(asOfDate: string | null): Promise<UsDailyCloseBenc
   `, [asOfDate])
 }
 
-async function loadEarningsState(asOfDate: string | null): Promise<{
+async function loadEarningsState(latestPriceDate: string | null): Promise<{
   status: 'available' | 'empty' | 'unavailable'
   rows: UsDailyCloseEarningsRow[]
 }> {
-  if (!asOfDate) return { status: 'unavailable', rows: [] }
-  const end = new Date(`${asOfDate}T00:00:00Z`)
+  if (!latestPriceDate) return { status: 'unavailable', rows: [] }
+  const today = todayInNewYork()
+  const from = latestPriceDate > today ? latestPriceDate : today
+  const end = new Date(`${from}T00:00:00Z`)
   end.setUTCDate(end.getUTCDate() + 14)
   const calendar = await getUsEarningsCalendar({
-    from: asOfDate,
+    from,
     to: end.toISOString().slice(0, 10),
     limit: US_DAILY_CLOSE_EARNINGS_LIMIT,
     offset: 0,

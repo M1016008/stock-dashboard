@@ -185,6 +185,7 @@ assert.match(routeSource, /setBoundedCache\(cacheKey/)
 assert.match(servingSource, /delete compact\.ml_candidate_direction/)
 assert.match(viewSource, /params\.set\(US_HEX_WIRE_PARAM, US_HEX_WIRE_REQUEST\)/)
 assert.doesNotMatch(viewSource, /params\.set\('compact', '1'\)/)
+assert.match(viewSource, /error === 'us_hex_generation_changed'[\s\S]*元データの世代が切り替わりました/)
 
 db.close()
 console.log('US HEX serving query tests: PASS')
