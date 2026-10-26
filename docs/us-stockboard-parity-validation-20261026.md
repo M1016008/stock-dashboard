@@ -2,6 +2,8 @@
 
 Implementation evidence revision: `e0452cad500a1659aa3b6826d010ac406ba11e28`
 
+Framework integration revision: `47991a1b069800fe6c3c332e548f46fcc3735f4e`
+
 ## Current-revision deterministic verification
 
 - The complete deterministic feature chain through the parity-auditor
@@ -19,8 +21,10 @@ Implementation evidence revision: `e0452cad500a1659aa3b6826d010ac406ba11e28`
   this static review.
 - Parity board audit: PASS; 29 `IMPLEMENTED`, 14 `PARTIAL`, 7 `BLOCKED`,
   0 `MISSING`, 0 `UNVERIFIED`, and 1 `NOT_APPLICABLE` across 51 capabilities.
-- Isolated Production build at this revision: PENDING. It is intentionally
-  deferred while the Production weekly optimization process is active.
+- Isolated Production build at the framework integration revision: PASS in
+  GitHub Storage Guard CI run `40328106223`. The poisoned-environment build,
+  TypeScript, Storage Guard, SMA Dynamics, US automation, and JP/US parity
+  contracts all passed against the exact revision.
 - Browser QA at this revision: PENDING for the same resource-safety reason.
   Prior-revision evidence below is retained as regression context and is not
   promoted to current-revision proof.
@@ -35,22 +39,21 @@ Implementation evidence revision: `e0452cad500a1659aa3b6826d010ac406ba11e28`
 - US HEX generation attestation still performs its source-identity aggregate
   reads per request. This is correct and fail-closed, but Production-scale
   latency should be measured before introducing a separate identity cache.
-- Current-revision isolated Production build and browser QA remain `NOT_TESTED`
-  while the normal Production weekly optimization process is active.
+- Current-revision browser QA remains `NOT_TESTED` while the normal Production
+  weekly optimization process is active.
 - Physical-device hover, pinch, and mobile keyboard behavior remain
   `NOT_TESTED`.
 
 ## Dependency security release gate
 
-- The branch still inherits `next@16.3.0`; PR #21 does not change framework
-  dependencies.
-- A 2026-10-26 `npm audit --omit=dev --json` reported 1 critical, 3 high, and
-  1 moderate package findings. The direct Next.js finding covers 16.0.0 through
-  16.4.0 and npm currently offers `next@16.4.3` as the non-major remediation.
-- The Next.js/security update must be delivered by a separate Security PR,
-  with its own lockfile review, audit, TypeScript, build, route/proxy, Storage
-  Guard, and parity regressions. PR #21 must be rebased or re-tested against
-  that exact security revision before either change is released.
+- Security PR #22 updated main to `next@16.4.3` and merged as
+  `dc0fbb686e7d4640498737f219b5dd8242f14aea` after an exact-SHA CI pass and an
+  `npm audit` result of zero known findings.
+- Updated main was merged into PR #21 without rebasing or force-pushing. The
+  exact integration revision passed lockfile installation, TypeScript, the
+  poisoned isolated build, route/isolation contracts, Storage Guard, SMA
+  Dynamics, and parity regressions in run `40328106223`.
+- Production deployment remains separately controlled and was not performed.
 
 ## Retained isolated build and browser QA (`72dcde54d9358ffdca14c43b71f2f1abbdfa44f1`)
 

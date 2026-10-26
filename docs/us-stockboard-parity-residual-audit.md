@@ -229,14 +229,14 @@ evidence is maintained in `docs/us-stockboard-parity-board.json`.
 | Item | Finding |
 |---|---|
 | JP capability | JP and US are shipped by the same Next.js runtime, so framework security is a shared release prerequisite rather than a market-specific feature. |
-| US residual | PR #21 inherits `next@16.3.0`. A 2026-10-26 production-dependency audit reports 1 critical, 3 high, and 1 moderate package findings; npm currently proposes `next@16.4.3` for the direct Next.js advisory set. |
-| Why parity is incomplete | The parity implementation must not silently bundle a framework upgrade, and the existing isolated SMA Release Candidate is separately controlled. |
-| Missing input | A dedicated main-based Security PR, lockfile diff, current official advisory review, audit, TypeScript, isolated build, proxy/route regression, Storage Guard regression, and final integration test with PR #21. |
-| Barrier | `SECURITY`, `ARCHITECTURE` |
+| US residual | Closed for this branch. Security PR #22 updated main to `next@16.4.3`, merged as `dc0fbb686e7d4640498737f219b5dd8242f14aea`, and was merged into PR #21 at `47991a1b069800fe6c3c332e548f46fcc3735f4e`. |
+| Why parity is incomplete | No framework-version parity residual remains. Production release authorization and current-revision browser QA remain separate gates. |
+| Missing input | None for framework integration. Exact-revision browser QA is still pending while Production weekly optimization is active. |
+| Barrier | `CLOSED` |
 | Paid service required | No. |
-| Resolution | Land the independently reviewed Security PR first or rebase both changes onto a jointly verified revision; never release PR #21 against an unaudited dependency graph. |
-| Approval required | Yes: separate Security PR merge and any Production release. |
-| Priority | P1 release gate; it does not reduce the 51-capability parity count. |
+| Resolution | Exact integration revision passed GitHub Storage Guard CI run `40328106223`, including lockfile install, TypeScript, poisoned isolated build, Storage Guard, SMA Dynamics, and JP/US parity contracts. |
+| Approval required | Production release remains separately controlled. |
+| Priority | Closed release gate; it does not change the 51-capability parity count. |
 
 ## Rational market-specific differences
 
