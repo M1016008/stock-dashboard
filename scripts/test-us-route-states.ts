@@ -61,12 +61,14 @@ const ENTRYPOINTS: Entry[] = [
       file: 'app/us/screener/UsScreenerClient.tsx',
       patterns: [/指定した条件に該当する銘柄はありません/, /USデータが未取得です/, /USステージデータが未生成です/, /\{rows\.length === 0 && !fetchError && \(/],
     }],
-    // 取得失敗は空結果と別の状態として持ち、表の外の alert と再試行で伝える。422 (過去日で使えない条件) は専用の文言
+    // 取得失敗は空結果と別の状態として持ち、表の外の alert と再試行で伝える。422 と決算鮮度 503 は専用状態
     error: [{
       file: 'app/us/screener/UsScreenerClient.tsx',
       patterns: [
         /const \[fetchError, setFetchError\] = useState<ScreenerErrorKind \| null>\(null\)/,
-        /if \(!res\.ok\) throw new ScreenerRequestError\(res\.status === 422 \? 'pit' : 'failed'\)/,
+        /res\.status === 503 && data\.error === 'us_earnings_unavailable'/,
+        /throw new ScreenerRequestError\('earnings', data\.reason\)/,
+        /throw new ScreenerRequestError\(res\.status === 422 \? 'pit' : 'failed'\)/,
         /setFetchError\(error instanceof ScreenerRequestError \? error\.kind : 'failed'\)/,
         /pit: '過去日では使えない条件（取引所・資産種別・業種分類・時価総額）が含まれています。/,
         /failed: 'USスクリーナーの結果を取得できませんでした。/,
