@@ -4,12 +4,12 @@ import {
 } from '@/lib/monthly-ma-monitor'
 import { US_ADJUSTED_PRICE_BASIS } from '@/lib/us-adjusted-ohlcv'
 
-export const US_MONTHLY_MA_MONITOR_PERIODS = [3, 5, 10, 20, 25] as const
-export const US_MONTHLY_MA_UNAVAILABLE_PERIODS = [15] as const
+export const US_MONTHLY_MA_MONITOR_PERIODS = [3, 5, 10, 15, 20, 25] as const
+export const US_MONTHLY_MA_UNAVAILABLE_PERIODS = [] as const
 export const US_MONTHLY_MA_LIST_HISTORY_SESSIONS = 31
 export const US_MONTHLY_MA_DETAIL_HISTORY_SESSIONS = 320
 export const US_MONTHLY_MA_PRICE_BASIS = US_ADJUSTED_PRICE_BASIS
-export const US_MONTHLY_MA_DEFINITION_VERSION = 'us-monthly-ma-monitor-v1'
+export const US_MONTHLY_MA_DEFINITION_VERSION = 'us-monthly-ma-monitor-v2'
 
 export type UsMonthlyMaPeriod = (typeof US_MONTHLY_MA_MONITOR_PERIODS)[number]
 export type UsMonthlyMaStatus =
@@ -47,6 +47,9 @@ export type UsMonthlyMaSourceRow = {
   monthlyMa3: number | null
   monthlyMa5: number | null
   monthlyMa10: number | null
+  monthlyMa15AnchorDate: string | null
+  monthlyMa15BridgeDate: string | null
+  monthlyMa15AnchorMa5: number | null
   monthlyMa20: number | null
   monthlyMa25: number | null
 }
@@ -108,13 +111,13 @@ export type UsMonthlyMaSummary = {
   rapid: number
 }
 
-const PERIOD_FIELD: Record<UsMonthlyMaPeriod, keyof UsMonthlyMaSourceRow> = {
+const SNAPSHOT_PERIOD_FIELD = {
   3: 'monthlyMa3',
   5: 'monthlyMa5',
   10: 'monthlyMa10',
   20: 'monthlyMa20',
   25: 'monthlyMa25',
-}
+} as const satisfies Record<Exclude<UsMonthlyMaPeriod, 15>, keyof UsMonthlyMaSourceRow>
 
 function finiteNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
@@ -161,9 +164,8 @@ export function buildUsMonthlyMaMonitorRows(
     if (historyStartDate == null || firstDate < historyStartDate) historyStartDate = firstDate
 
     for (const period of US_MONTHLY_MA_MONITOR_PERIODS) {
-      const field = PERIOD_FIELD[period]
       const observations = rows.flatMap((row) => {
-        const targetValue = finiteNumber(row[field])
+        const targetValue = monthlyMaSourceValue(row, period)
         if (targetValue == null || targetValue <= 0) return []
         return [{
           date: row.date,
@@ -297,7 +299,9 @@ export function usMonthlyMaFilterOptions(rows: UsMonthlyMaMonitorRow[]): {
 
 export function usMonthlyMaLimitations(historySessions: number): string[] {
   return [
-    '15か月線は現行US Snapshot契約にないため表示しません。欠損値の補完は行いません。',
+    '15か月線は、当日Snapshotの10か月線と10か月前の完了月末Snapshotの5か月線から決定論的に算出します。どちらかが欠ける場合は補完せず未計算にします。',
+    '当月は形成中として当日の調整終値を含み、翌月に入った時点で直前月が完了月になります。基準日より後の価格は使用しません。',
+    '15か月線の追加読取りは対象月ごとに10か月前の月末1点と翌月初1点へ限定し、全銘柄の日次履歴走査は行いません。連続性が確認できない境界は未計算にします。',
     `接触・クロスの履歴は直近${historySessions}米国営業日の読取り範囲内です。範囲以前のイベントは「未観測」であり「未発生」ではありません。`,
     'JP版の事前計算MAクラスターはUS契約にないため、この画面では単線シグナルのみを表示します。',
     'Exchange・Sector・Industryは現在参照属性で、過去時点属性ではありません。',
@@ -335,8 +339,61 @@ export function boundedUsMonthlyNumber(
   return Number.isFinite(parsed) ? Math.min(maximum, Math.max(minimum, parsed)) : fallback
 }
 
+function calendarMonthIndex(date: string): number | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null
+  const year = Number(date.slice(0, 4))
+  const month = Number(date.slice(5, 7))
+  if (!Number.isInteger(year) || !Number.isInteger(month) || month < 1 || month > 12) return null
+  return year * 12 + month - 1
+}
+
+function calendarDaysBetween(fromDate: string, toDate: string): number | null {
+  const from = Date.parse(`${fromDate}T00:00:00Z`)
+  const to = Date.parse(`${toDate}T00:00:00Z`)
+  if (!Number.isFinite(from) || !Number.isFinite(to)) return null
+  return (to - from) / 86_400_000
+}
+
+/**
+ * Snapshot MA10 at the current/forming month contains the adjusted close for the
+ * source date plus the prior nine completed month closes. The MA5 snapshot at
+ * the end of month -10 contains completed months -10 through -14. Their weighted
+ * sum is therefore the exact 15-month SMA under the existing snapshot contract.
+ */
+export function deriveUsMonthlyMa15Value(row: UsMonthlyMaSourceRow): number | null {
+  const currentMa10 = finiteNumber(row.monthlyMa10)
+  const completedTailMa5 = finiteNumber(row.monthlyMa15AnchorMa5)
+  const sourceMonth = calendarMonthIndex(row.date)
+  const anchorMonth = row.monthlyMa15AnchorDate == null
+    ? null
+    : calendarMonthIndex(row.monthlyMa15AnchorDate)
+  const bridgeMonth = row.monthlyMa15BridgeDate == null
+    ? null
+    : calendarMonthIndex(row.monthlyMa15BridgeDate)
+  const boundaryGapDays = row.monthlyMa15AnchorDate == null || row.monthlyMa15BridgeDate == null
+    ? null
+    : calendarDaysBetween(row.monthlyMa15AnchorDate, row.monthlyMa15BridgeDate)
+  if (
+    currentMa10 == null
+    || currentMa10 <= 0
+    || completedTailMa5 == null
+    || completedTailMa5 <= 0
+    || sourceMonth == null
+    || anchorMonth == null
+    || bridgeMonth == null
+    || sourceMonth - anchorMonth !== 10
+    || sourceMonth - bridgeMonth !== 9
+    || boundaryGapDays == null
+    || boundaryGapDays <= 0
+    || boundaryGapDays > 60
+    || row.monthlyMa15BridgeDate! >= row.date
+  ) return null
+  return ((currentMa10 * 10) + (completedTailMa5 * 5)) / 15
+}
+
 export function monthlyMaSourceValue(row: UsMonthlyMaSourceRow, period: UsMonthlyMaPeriod): number | null {
-  return finiteNumber(row[PERIOD_FIELD[period]])
+  if (period === 15) return deriveUsMonthlyMa15Value(row)
+  return finiteNumber(row[SNAPSHOT_PERIOD_FIELD[period]])
 }
 
 export function buildUsMonthlyMaHistory(

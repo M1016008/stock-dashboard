@@ -162,8 +162,8 @@ export async function GET(request: NextRequest) {
       WHERE market = 'US' AND ticker = 'SPY' AND date <= ?
       ORDER BY date DESC
       LIMIT ?
-    )
-    SELECT
+    ), base AS (
+      SELECT
       s.ticker,
       u.name,
       u.exchange,
@@ -188,15 +188,51 @@ export async function GET(request: NextRequest) {
       s.monthly_ma_10 AS monthlyMa10,
       s.monthly_ma_20 AS monthlyMa20,
       s.monthly_ma_25 AS monthlyMa25
-    FROM sessions calendar
-    JOIN market_daily_snapshots s
-      ON s.market = 'US' AND s.date = calendar.date
-    JOIN market_universe u
-      ON u.market = s.market AND u.ticker = s.ticker AND u.active = 1
-    JOIN market_ohlcv_daily o
-      ON o.market = s.market AND o.ticker = s.ticker AND o.date = s.date
-    WHERE ${usInvestableSymbolSql('s.ticker')}
-    ORDER BY s.ticker, s.date`
+      FROM sessions calendar
+      JOIN market_daily_snapshots s
+        ON s.market = 'US' AND s.date = calendar.date
+      JOIN market_universe u
+        ON u.market = s.market AND u.ticker = s.ticker AND u.active = 1
+      JOIN market_ohlcv_daily o
+        ON o.market = s.market AND o.ticker = s.ticker AND o.date = s.date
+      WHERE ${usInvestableSymbolSql('s.ticker')}
+    ), source_months AS (
+      SELECT DISTINCT ticker, substr(date, 1, 7) AS monthKey
+      FROM base
+    ), ma15_boundary_dates AS (
+      SELECT
+        source_months.ticker,
+        source_months.monthKey,
+        MAX(CASE
+          WHEN boundary.date < date(source_months.monthKey || '-01', '-9 months')
+          THEN boundary.date
+        END) AS anchorDate,
+        MIN(CASE
+          WHEN boundary.date >= date(source_months.monthKey || '-01', '-9 months')
+          THEN boundary.date
+        END) AS bridgeDate
+      FROM source_months
+      LEFT JOIN market_daily_snapshots boundary
+        ON boundary.market = 'US'
+       AND boundary.ticker = source_months.ticker
+       AND boundary.date >= date(source_months.monthKey || '-01', '-10 months')
+       AND boundary.date < date(source_months.monthKey || '-01', '-8 months')
+      GROUP BY source_months.ticker, source_months.monthKey
+    )
+    SELECT
+      base.*,
+      ma15_boundary_dates.anchorDate AS monthlyMa15AnchorDate,
+      ma15_boundary_dates.bridgeDate AS monthlyMa15BridgeDate,
+      anchor_snapshot.monthly_ma_5 AS monthlyMa15AnchorMa5
+    FROM base
+    LEFT JOIN ma15_boundary_dates
+      ON ma15_boundary_dates.ticker = base.ticker
+     AND ma15_boundary_dates.monthKey = substr(base.date, 1, 7)
+    LEFT JOIN market_daily_snapshots anchor_snapshot
+      ON anchor_snapshot.market = 'US'
+     AND anchor_snapshot.ticker = base.ticker
+     AND anchor_snapshot.date = ma15_boundary_dates.anchorDate
+    ORDER BY base.ticker, base.date`
 
     const [sourceRows, activeUniverse, sourceNames] = await Promise.all([
       execAll<UsMonthlyMaSourceRow>(sourceSql, [latest.date, US_MONTHLY_MA_LIST_HISTORY_SESSIONS]),
@@ -265,6 +301,9 @@ export async function GET(request: NextRequest) {
         calendar: 'US:SPY_TRADING_SESSIONS',
         snapshots: 'market_daily_snapshots',
         prices: 'market_ohlcv_daily',
+        ma15Basis: 'CURRENT_MA10_PLUS_COMPLETED_MONTH_MINUS_10_MA5',
+        formingMonth: 'INCLUDES_AS_OF_ADJUSTED_CLOSE',
+        ma15LookupScope: 'MONTH_MINUS_10_END_AND_MONTH_MINUS_9_START',
         classificationBasis: 'CURRENT_REFERENCE',
       },
       limitations,

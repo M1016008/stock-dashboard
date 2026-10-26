@@ -7,6 +7,7 @@ import {
   US_MONTHLY_MA_UNAVAILABLE_PERIODS,
   buildUsMonthlyMaHistory,
   buildUsMonthlyMaMonitorRows,
+  deriveUsMonthlyMa15Value,
   filterUsMonthlyMaRows,
   parseUsMonthlyPeriod,
   summarizeUsMonthlyMaRows,
@@ -36,6 +37,9 @@ const dates = weekdaySessions(35)
 function sourceRow(ticker: string, index: number): UsMonthlyMaSourceRow {
   const close = ticker === 'AAPL' ? 112 - index * 0.35 : 95.95 + index * 0.3
   const common = 100
+  const sourceMonth = dates[index].slice(0, 7)
+  const monthlyMa15AnchorDate = sourceMonth === '2026-08' ? '2025-10-31' : '2025-11-28'
+  const monthlyMa15BridgeDate = sourceMonth === '2026-08' ? '2025-11-03' : '2025-12-01'
   return {
     ticker,
     name: ticker === 'AAPL' ? 'Apple Inc.' : 'Example Energy Corp.',
@@ -59,6 +63,9 @@ function sourceRow(ticker: string, index: number): UsMonthlyMaSourceRow {
     monthlyMa3: common,
     monthlyMa5: common + 1,
     monthlyMa10: common + 2,
+    monthlyMa15AnchorDate,
+    monthlyMa15BridgeDate,
+    monthlyMa15AnchorMa5: common - 4,
     monthlyMa20: common + 3,
     monthlyMa25: ticker === 'AAPL' && index === dates.length - 1 ? null : common + 4,
   }
@@ -68,16 +75,17 @@ const source = ['AAPL', 'XEC'].flatMap((ticker) => dates.map((_, index) => sourc
 const asOfDate = dates.at(-1)!
 const built = buildUsMonthlyMaMonitorRows(source, asOfDate)
 
-assert.deepEqual(US_MONTHLY_MA_MONITOR_PERIODS, [3, 5, 10, 20, 25])
-assert.deepEqual(US_MONTHLY_MA_UNAVAILABLE_PERIODS, [15])
+assert.deepEqual(US_MONTHLY_MA_MONITOR_PERIODS, [3, 5, 10, 15, 20, 25])
+assert.deepEqual(US_MONTHLY_MA_UNAVAILABLE_PERIODS, [])
 assert.equal(US_MONTHLY_MA_PRICE_BASIS, US_ADJUSTED_PRICE_BASIS)
 assert.ok(built.rows.every((row) => row.date === asOfDate))
-assert.ok(!new Set<number>(built.rows.map((row) => row.period)).has(15), '15M must not be synthesized')
+assert.ok(new Set<number>(built.rows.map((row) => row.period)).has(15), '15M must be derived from snapshot month boundaries')
 assert.equal(built.sourceTickers, 2)
 assert.equal(built.eligibleTickers, 2)
 assert.equal(built.missingByPeriod[25], 1, 'missing latest 25M must remain missing')
-assert.equal(built.rows.filter((row) => row.ticker === 'AAPL').length, 4)
-assert.equal(built.rows.filter((row) => row.ticker === 'XEC').length, 5)
+assert.equal(built.missingByPeriod[15], 0)
+assert.equal(built.rows.filter((row) => row.ticker === 'AAPL').length, 5)
+assert.equal(built.rows.filter((row) => row.ticker === 'XEC').length, 6)
 
 const aapl3 = built.rows.find((row) => row.ticker === 'AAPL' && row.period === 3)
 assert.ok(aapl3)
@@ -86,6 +94,39 @@ assert.equal(aapl3.historyWindowSessions, 35)
 assert.equal(aapl3.dailyAStage, 1)
 assert.ok(Number.isFinite(aapl3.distancePct))
 assert.ok(Number.isFinite(aapl3.approachScore))
+
+const aapl15 = built.rows.find((row) => row.ticker === 'AAPL' && row.period === 15)
+assert.ok(aapl15)
+assert.equal(aapl15.maValue, 100, '15M = (current/forming MA10 * 10 + completed month -10 MA5 * 5) / 15')
+
+const formingMonthRow = sourceRow('AAPL', dates.length - 1)
+const completedTailCloses = [92, 94, 96, 98, 100]
+const recentCompletedAndFormingCloses = Array.from({ length: 10 }, () => 102)
+const directFifteenMonthMean = [...completedTailCloses, ...recentCompletedAndFormingCloses]
+  .reduce((sum, value) => sum + value, 0) / 15
+assert.equal(directFifteenMonthMean, 100)
+assert.equal(formingMonthRow.date.slice(0, 7), '2026-09')
+assert.equal(formingMonthRow.monthlyMa15AnchorDate, '2025-11-28',
+  'the completed five-month tail must be anchored at month -10')
+assert.equal(formingMonthRow.monthlyMa15BridgeDate, '2025-12-01',
+  'the month -9 first observation proves the completed tail joins the current continuous segment')
+assert.equal(deriveUsMonthlyMa15Value(formingMonthRow), directFifteenMonthMean,
+  'the weighted derivation must equal 14 completed month closes plus the current forming close')
+assert.equal(deriveUsMonthlyMa15Value({ ...formingMonthRow, monthlyMa10: 105 }), 102,
+  'the forming month must use the source-date MA10 without future close substitution')
+assert.equal(deriveUsMonthlyMa15Value({ ...formingMonthRow, monthlyMa15AnchorMa5: null }), null,
+  'missing completed-month anchor must remain missing')
+assert.equal(deriveUsMonthlyMa15Value({ ...formingMonthRow, monthlyMa15BridgeDate: null }), null,
+  'an unverified continuity boundary must remain missing')
+assert.equal(deriveUsMonthlyMa15Value({ ...formingMonthRow, monthlyMa15AnchorDate: '2025-12-31' }), null,
+  'an anchor from the wrong month must fail closed')
+
+const missing15Source = source
+  .filter((row) => row.ticker === 'AAPL')
+  .map((row) => row.date === asOfDate ? { ...row, monthlyMa15AnchorMa5: null } : row)
+const missing15Built = buildUsMonthlyMaMonitorRows(missing15Source, asOfDate)
+assert.equal(missing15Built.missingByPeriod[15], 1)
+assert.equal(missing15Built.rows.some((row) => row.period === 15), false)
 
 const history = buildUsMonthlyMaHistory(
   source.filter((row) => row.ticker === 'XEC'),
@@ -127,15 +168,17 @@ const paged = filterUsMonthlyMaRows(built.rows, {
   offset: 2,
   limit: 3,
 })
-assert.equal(paged.total, 9)
+assert.equal(paged.total, 11)
 assert.equal(paged.rows.length, 3)
 
 const summary = summarizeUsMonthlyMaRows(built.rows, 2)
 assert.equal(summary.monitored, 2)
 assert.ok(summary.signals >= 0)
-assert.equal(parseUsMonthlyPeriod('15'), 'all', 'unsupported 15M parameter must not become a synthetic period')
+assert.equal(parseUsMonthlyPeriod('15'), 15)
 assert.equal(parseUsMonthlyPeriod('25'), 25)
-assert.match(usMonthlyMaLimitations(31).join(' '), /15か月線/)
+assert.match(usMonthlyMaLimitations(31).join(' '), /10か月前の完了月末Snapshot/)
+assert.match(usMonthlyMaLimitations(31).join(' '), /当月は形成中/)
+assert.match(usMonthlyMaLimitations(31).join(' '), /補完せず未計算/)
 assert.match(usMonthlyMaLimitations(31).join(' '), /未観測/)
 
 const listRoute = fs.readFileSync(path.join(root, 'app/api/us/ma25m-monitor/route.ts'), 'utf8')
@@ -147,18 +190,24 @@ for (const route of [listRoute, detailRoute]) {
   assert.match(route, /market_ohlcv_daily/)
   assert.match(route, /ticker = 'SPY'/, 'US trading sessions must be anchored to SPY')
   assert.match(route, /US_ADJUSTED_(?:OPEN|CLOSE)_SQL/)
+  assert.match(route, /ma15_boundary_dates/)
+  assert.match(route, /'-10 months'/)
+  assert.match(route, /'-8 months'/)
+  assert.match(route, /monthlyMa15AnchorMa5/)
+  assert.match(route, /monthlyMa15BridgeDate/)
   assert.doesNotMatch(route, /STOCKBOARD_DB_PATH|\/Volumes\//, 'route must use the guarded serving contract')
 }
 assert.match(listRoute, /sourceGeneration/)
 assert.match(listRoute, /price_basis_mismatch/)
 assert.match(page, /\/api\/us\/ma25m-monitor/)
 assert.match(page, /\/us\/stock\//)
-assert.match(page, /15か月線/)
-assert.match(page, /補完しません/)
+assert.match(page, /3・5・10・15・20・25か月線/)
+assert.match(page, /10か月前の完了月末Snapshot/)
+assert.match(page, /当月は形成中/)
 
 async function verifyInvalidQueries(): Promise<void> {
   const invalidListCases = [
-    'period=15',
+    'period=17',
     'status=unknown',
     'sort=unknown',
     'dir=sideways',
@@ -175,7 +224,7 @@ async function verifyInvalidQueries(): Promise<void> {
 
   const invalidDetailCases = [
     'date=2026-02-30',
-    'period=15',
+    'period=17',
     'period=all',
     'limit=19',
     'limit=20.5',

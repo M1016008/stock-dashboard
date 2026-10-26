@@ -93,6 +93,7 @@ const PERIODS = [
   ['3', '3M'],
   ['5', '5M'],
   ['10', '10M'],
+  ['15', '15M'],
   ['20', '20M'],
   ['25', '25M'],
 ] as const
@@ -269,8 +270,8 @@ export default function UsMonthlyMaMonitorPage() {
         rightSlot={<Link href="/ma25m-monitor" className="btn">日本株版</Link>}
       />
 
-      <Notice tone="warning" title="USデータ契約の範囲">
-        3・5・10・20・25か月線を表示します。15か月線と事前計算MAクラスターは現行US Snapshotにないため補完しません。接触・クロス履歴は表示された読取り期間内のみです。
+      <Notice tone="neutral" title="15か月線の計算基準">
+        3・5・10・15・20・25か月線を表示します。15か月線は当日Snapshotの10か月線と10か月前の完了月末Snapshotの5か月線から算出します。当月は形成中として当日の調整終値を含み、必要な値が欠ける場合は補完せず未計算にします。
       </Notice>
 
       <StatStrip items={summary} label="月足MA監視サマリー" />

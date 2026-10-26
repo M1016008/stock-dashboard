@@ -108,7 +108,7 @@ export async function GET(
     }
 
     const rows = await execAll<UsMonthlyMaSourceRow>(
-      `WITH selected AS (
+      `WITH selected_base AS (
         SELECT
           s.ticker,
           u.name,
@@ -147,6 +147,42 @@ export async function GET(
           )
         ORDER BY s.date DESC
         LIMIT ?
+      ), source_months AS (
+        SELECT DISTINCT ticker, substr(date, 1, 7) AS monthKey
+        FROM selected_base
+      ), ma15_boundary_dates AS (
+        SELECT
+          source_months.ticker,
+          source_months.monthKey,
+          MAX(CASE
+            WHEN boundary.date < date(source_months.monthKey || '-01', '-9 months')
+            THEN boundary.date
+          END) AS anchorDate,
+          MIN(CASE
+            WHEN boundary.date >= date(source_months.monthKey || '-01', '-9 months')
+            THEN boundary.date
+          END) AS bridgeDate
+        FROM source_months
+        LEFT JOIN market_daily_snapshots boundary
+          ON boundary.market = 'US'
+         AND boundary.ticker = source_months.ticker
+         AND boundary.date >= date(source_months.monthKey || '-01', '-10 months')
+         AND boundary.date < date(source_months.monthKey || '-01', '-8 months')
+        GROUP BY source_months.ticker, source_months.monthKey
+      ), selected AS (
+        SELECT
+          selected_base.*,
+          ma15_boundary_dates.anchorDate AS monthlyMa15AnchorDate,
+          ma15_boundary_dates.bridgeDate AS monthlyMa15BridgeDate,
+          anchor_snapshot.monthly_ma_5 AS monthlyMa15AnchorMa5
+        FROM selected_base
+        LEFT JOIN ma15_boundary_dates
+          ON ma15_boundary_dates.ticker = selected_base.ticker
+         AND ma15_boundary_dates.monthKey = substr(selected_base.date, 1, 7)
+        LEFT JOIN market_daily_snapshots anchor_snapshot
+          ON anchor_snapshot.market = 'US'
+         AND anchor_snapshot.ticker = selected_base.ticker
+         AND anchor_snapshot.date = ma15_boundary_dates.anchorDate
       )
       SELECT * FROM selected ORDER BY date`,
       [ticker, ...(requestedDate ? [requestedDate] : []), historyLimit],
@@ -189,6 +225,9 @@ export async function GET(
         calendar: 'US:SPY_TRADING_SESSIONS',
         snapshots: 'market_daily_snapshots',
         prices: 'market_ohlcv_daily',
+        ma15Basis: 'CURRENT_MA10_PLUS_COMPLETED_MONTH_MINUS_10_MA5',
+        formingMonth: 'INCLUDES_AS_OF_ADJUSTED_CLOSE',
+        ma15LookupScope: 'MONTH_MINUS_10_END_AND_MONTH_MINUS_9_START',
         classificationBasis: 'CURRENT_REFERENCE',
       },
       coverage: {
