@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { execAll, execGet } from '@/lib/db/client'
 import { execUsAnalyticsAll, hasUsAnalyticsDb } from '@/lib/db/us-analytics'
 import {
+  US_HEX_HISTORICAL_ROWS_SQL,
   US_HEX_ROWS_SQL,
   buildUsHexRow,
   compactUsHexRow,
@@ -16,6 +17,7 @@ import {
   US_HEX_WIRE_REQUEST,
   encodeUsHexColumnar,
   type UsHexColumnarBody,
+  type UsHexAttributeBasis,
   type UsHexCoverage,
   type UsHexTimeframe,
   type UsHexUniverse,
@@ -29,7 +31,7 @@ export const maxDuration = 60
 
 type Timeframe = UsHexTimeframe
 
-// legacy-v1: 既定 / compact-v1: ?compact=1 / columnar-v1: ?wire=us-hex-columnar.v1 (US Stage Screener 専用)
+// legacy-v1: 既定 / compact-v1: ?compact=1 / columnar-v1: versioned wire (US Stage Screener 専用)
 type ResponseFormat = 'legacy-v1' | 'compact-v1' | 'columnar-v1'
 
 type CacheValue = {
@@ -41,8 +43,10 @@ type CacheValue = {
     date: string
     timeframe: Timeframe
     source: 'tiingo'
-    universe: UsHexUniverse
+    universe: UsHexUniverse | null
     coverage: UsHexCoverage
+    attributeBasis: UsHexAttributeBasis
+    notice?: string
   } & ({ data: UsHexRow[] } | UsHexColumnarBody)
 }
 
@@ -96,6 +100,15 @@ async function resolveDate(requested: string | null): Promise<string | null> {
   return row?.date ?? null
 }
 
+function isCalendarDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
+  const [year, month, day] = value.split('-').map(Number)
+  const parsed = new Date(Date.UTC(year, month - 1, day))
+  return parsed.getUTCFullYear() === year
+    && parsed.getUTCMonth() === month - 1
+    && parsed.getUTCDate() === day
+}
+
 async function loadPhysicalMomentum(date: string): Promise<Map<string, number | null>> {
   if (!hasUsAnalyticsDb()) return new Map()
   const rows = await execUsAnalyticsAll<{ symbol: string; physical_momentum_score: number | null }>(
@@ -118,7 +131,11 @@ async function loadPhysicalMomentum(date: string): Promise<Map<string, number | 
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
-    const requestedDate = searchParams.get('date')
+    const requestedDates = searchParams.getAll('date')
+    if (requestedDates.length > 1 || (requestedDates[0] != null && !isCalendarDate(requestedDates[0]))) {
+      return NextResponse.json({ error: 'invalid_date' }, { status: 400 })
+    }
+    const requestedDate = requestedDates[0] ?? null
     const compact = searchParams.get('compact') === '1'
     const wire = searchParams.get(US_HEX_WIRE_PARAM)
     if (wire != null && wire !== US_HEX_WIRE_REQUEST) {
@@ -136,30 +153,36 @@ export async function GET(request: NextRequest) {
         : 'daily'
     const date = await resolveDate(requestedDate)
     if (!date) {
-      return jsonResponse(request, {
-        success: true,
-        ...(format === 'columnar-v1' ? encodeUsHexColumnar([]) : { data: [] }),
-        count: 0,
-        date: null,
-        timeframe,
-        source: 'tiingo',
-        notice: requestedDate
-          ? 'No US market data is available on or before the requested date.'
-          : 'USステージスナップショットが未生成です。',
-      })
+      return NextResponse.json(
+        {
+          error: requestedDate ? 'unavailable_date' : 'snapshot_unavailable',
+          notice: requestedDate
+            ? 'No US market data is available on or before the requested date.'
+            : 'USステージスナップショットが未生成です。',
+        },
+        { status: 404 },
+      )
     }
 
-    const cacheKey = `all-investable-v3:${date}:${timeframe}:${format}`
+    const latest = await execGet<{ date: string | null }>(
+      `SELECT MAX(date) AS date FROM market_daily_snapshots WHERE market = 'US'`,
+    )
+    const historical = latest?.date != null && date !== latest.date
+
+    const cacheKey = `all-investable-v4:${historical ? 'historical' : 'current'}:${date}:${timeframe}:${format}`
     const cached = cache.get(cacheKey)
     if (cached && cached.expiresAt > Date.now()) {
       cached.hitResponse ??= serializeJson({ ...cached.payload, cache: 'hit' })
       return serializedJsonResponse(request, cached.hitResponse)
     }
 
-    const [rows, physicalMomentum, universe] = await Promise.all([
-      execAll<UsHexRawRow>(US_HEX_ROWS_SQL, usHexRowsParams(date)),
+    const [rows, physicalMomentum, currentUniverse] = await Promise.all([
+      execAll<UsHexRawRow>(
+        historical ? US_HEX_HISTORICAL_ROWS_SQL : US_HEX_ROWS_SQL,
+        usHexRowsParams(date, historical),
+      ),
       loadPhysicalMomentum(date),
-      execGet<UsHexUniverse>(
+      historical ? Promise.resolve(null) : execGet<UsHexUniverse>(
         `SELECT
            SUM(CASE WHEN active = 1 THEN 1 ELSE 0 END) AS activeAll,
            SUM(CASE WHEN active = 1 AND ${usInvestableSymbolSql('ticker')} THEN 1 ELSE 0 END) AS productionActive,
@@ -174,6 +197,19 @@ export async function GET(request: NextRequest) {
     ])
 
     const data: UsHexRow[] = rows.map((row) => buildUsHexRow(row, timeframe, physicalMomentum))
+    const attributeBasis: UsHexAttributeBasis = historical
+      ? {
+          membership: 'SNAPSHOT_DATE',
+          profiles: 'CURRENT_REFERENCE',
+          classifications: 'UNAVAILABLE',
+          shares: 'UNAVAILABLE',
+        }
+      : {
+          membership: 'CURRENT_UNIVERSE',
+          profiles: 'CURRENT_REFERENCE',
+          classifications: 'CURRENT_REFERENCE',
+          shares: 'CURRENT_REFERENCE',
+        }
 
     const payload: CacheValue['payload'] = {
       success: true,
@@ -184,15 +220,19 @@ export async function GET(request: NextRequest) {
       date,
       timeframe,
       source: 'tiingo',
-      universe: {
-        activeAll: Number(universe?.activeAll ?? 0),
-        productionActive: Number(universe?.productionActive ?? 0),
-        stocks: Number(universe?.stocks ?? 0),
-        etfs: Number(universe?.etfs ?? 0),
-        mutualFunds: Number(universe?.mutualFunds ?? 0),
-        testSymbols: Number(universe?.testSymbols ?? 0),
-        excludedArtifacts: Number(universe?.excludedArtifacts ?? 0),
+      universe: currentUniverse == null ? null : {
+        activeAll: Number(currentUniverse.activeAll ?? 0),
+        productionActive: Number(currentUniverse.productionActive ?? 0),
+        stocks: Number(currentUniverse.stocks ?? 0),
+        etfs: Number(currentUniverse.etfs ?? 0),
+        mutualFunds: Number(currentUniverse.mutualFunds ?? 0),
+        testSymbols: Number(currentUniverse.testSymbols ?? 0),
+        excludedArtifacts: Number(currentUniverse.excludedArtifacts ?? 0),
       },
+      attributeBasis,
+      ...(historical
+        ? { notice: 'Historical membership uses the requested Stage snapshot. Historical classifications and shares are unavailable.' }
+        : {}),
       coverage: {
         prices: data.filter((row) => row.price != null).length,
         snapshots: data.filter((row) => row.data_status !== 'price_pending' && row.data_status !== 'snapshot_pending').length,
@@ -207,7 +247,7 @@ export async function GET(request: NextRequest) {
   } catch (error) {
     console.error('US HEX API error:', error)
     return NextResponse.json(
-      { error: 'US HEX map fetch failed', message: error instanceof Error ? error.message : String(error) },
+      { error: 'us_hex_failed' },
       { status: 500 },
     )
   }

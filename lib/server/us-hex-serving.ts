@@ -39,7 +39,46 @@ export type UsHexRawRow = {
   prev2_ma_300: number | null
 }
 
-export const US_HEX_ROWS_SQL = `
+function buildUsHexRowsSql(historical: boolean): string {
+  const baseTicker = historical ? 's.ticker' : 'u.ticker'
+  const identityColumns = historical
+    ? `s.ticker,
+  s.ticker AS snapshot_ticker,
+  COALESCE(u.name, s.ticker) AS name,
+  NULL AS exchange,
+  NULL AS asset_type,
+  'Unclassified' AS sector,
+  NULL AS industry,
+  NULL AS shares_outstanding`
+    : `u.ticker,
+  s.ticker AS snapshot_ticker,
+  u.name,
+  u.exchange,
+  u.asset_type,
+  COALESCE(c.sector_name, u.sector, 'Unclassified') AS sector,
+  COALESCE(c.industry_name, u.industry) AS industry,
+  u.shares_outstanding`
+  const source = historical
+    ? `FROM anchors a
+JOIN market_daily_snapshots s INDEXED BY market_snapshots_market_date_ticker_idx
+  ON s.market = 'US' AND s.date = a.current_date
+LEFT JOIN market_universe u ON u.market = 'US' AND u.ticker = s.ticker`
+    : `FROM market_universe u INDEXED BY market_universe_market_active_idx
+CROSS JOIN anchors a
+LEFT JOIN market_daily_snapshots s INDEXED BY market_snapshots_market_date_ticker_idx
+  ON s.market = 'US' AND s.ticker = u.ticker AND s.date = a.current_date
+LEFT JOIN market_classifications c
+  ON c.market = 'US'
+ AND c.ticker = u.ticker
+ AND c.taxonomy = ?
+ AND c.effective_from = '0000-01-01'`
+  const where = historical
+    ? `WHERE ${usInvestableSymbolSql('s.ticker')}`
+    : `WHERE u.market = 'US'
+  AND u.active = 1
+  AND ${usInvestableSymbolSql('u.ticker')}`
+
+  return `
 WITH anchors AS (
   SELECT
     ? AS current_date,
@@ -86,14 +125,7 @@ prices AS (
   GROUP BY p.ticker
 )
 SELECT
-  u.ticker,
-  s.ticker AS snapshot_ticker,
-  u.name,
-  u.exchange,
-  u.asset_type,
-  COALESCE(c.sector_name, u.sector, 'Unclassified') AS sector,
-  COALESCE(c.industry_name, u.industry) AS industry,
-  u.shares_outstanding,
+  ${identityColumns},
   px.price,
   CASE WHEN px.price_1d > 0 THEN 100.0 * (px.price - px.price_1d) / px.price_1d END AS perf_1d,
   CASE WHEN px.price_1w > 0 THEN 100.0 * (px.price - px.price_1w) / px.price_1w END AS perf_1w,
@@ -119,28 +151,23 @@ SELECT
   prev2.ma_25 AS prev2_ma_25,
   prev2.ma_75 AS prev2_ma_75,
   prev2.ma_300 AS prev2_ma_300
-FROM market_universe u INDEXED BY market_universe_market_active_idx
-CROSS JOIN anchors a
-LEFT JOIN market_daily_snapshots s INDEXED BY market_snapshots_market_date_ticker_idx
-  ON s.market = 'US' AND s.ticker = u.ticker AND s.date = a.current_date
-LEFT JOIN market_classifications c
-  ON c.market = 'US'
- AND c.ticker = u.ticker
- AND c.taxonomy = ?
- AND c.effective_from = '0000-01-01'
+${source}
 LEFT JOIN market_daily_snapshots prev
-  ON prev.market = 'US' AND prev.ticker = u.ticker AND prev.date = a.prev_snapshot
+  ON prev.market = 'US' AND prev.ticker = ${baseTicker} AND prev.date = a.prev_snapshot
 LEFT JOIN market_daily_snapshots prev2
-  ON prev2.market = 'US' AND prev2.ticker = u.ticker AND prev2.date = a.prev2_snapshot
-LEFT JOIN prices px ON px.ticker = u.ticker
-WHERE u.market = 'US'
-  AND u.active = 1
-  AND ${usInvestableSymbolSql('u.ticker')}
-ORDER BY u.ticker
+  ON prev2.market = 'US' AND prev2.ticker = ${baseTicker} AND prev2.date = a.prev2_snapshot
+LEFT JOIN prices px ON px.ticker = ${baseTicker}
+${where}
+ORDER BY ${baseTicker}
 `
+}
 
-export function usHexRowsParams(date: string): string[] {
-  return [date, date, date, date, date, date, date, date, date, US_SEC_SIC_TAXONOMY]
+export const US_HEX_ROWS_SQL = buildUsHexRowsSql(false)
+export const US_HEX_HISTORICAL_ROWS_SQL = buildUsHexRowsSql(true)
+
+export function usHexRowsParams(date: string, historical = false): string[] {
+  const params = [date, date, date, date, date, date, date, date, date]
+  return historical ? params : [...params, US_SEC_SIC_TAXONOMY]
 }
 
 /** 旧 (legacy-v1) レスポンスの行。compact-v1 と columnar wire はこの行から派生する。 */
@@ -199,8 +226,8 @@ export function buildUsHexRow(
     sector17_name: sector,
     sector33_name: row.industry,
     market_segment: row.exchange,
-    margin_type: row.asset_type || 'Stock',
-    market_cap: row.shares_outstanding && price != null && price > 0 ? row.shares_outstanding * price : 0,
+    margin_type: row.asset_type,
+    market_cap: row.shares_outstanding && price != null && price > 0 ? row.shares_outstanding * price : null,
     price,
     daily_change: numeric(row.perf_1d),
     weekly_change: numeric(row.perf_1w),

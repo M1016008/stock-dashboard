@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 // @ts-expect-error Node 22+ provides node:sqlite; the installed @types/node version predates it.
 import { DatabaseSync } from 'node:sqlite'
 import {
+  US_HEX_HISTORICAL_ROWS_SQL,
   US_HEX_ROWS_SQL,
   buildUsHexRow,
   compactUsHexRow,
@@ -67,11 +68,12 @@ db.exec(`
 const insertUniverse = db.prepare(`
   INSERT INTO market_universe
     (market, ticker, name, exchange, asset_type, sector, industry, shares_outstanding, active)
-  VALUES ('US', ?, ?, 'NASDAQ', 'Stock', ?, ?, ?, 1)
+  VALUES ('US', ?, ?, 'NASDAQ', 'Stock', ?, ?, ?, ?)
 `)
-insertUniverse.run('AAA', 'Alpha', 'Fallback sector', 'Fallback industry', 1000)
-insertUniverse.run('BBB', 'Beta', 'Fallback sector', null, 2000)
-insertUniverse.run('ATEST', 'Test artifact', 'Ignored', null, 1)
+insertUniverse.run('AAA', 'Alpha', 'Fallback sector', 'Fallback industry', 1000, 1)
+insertUniverse.run('BBB', 'Beta', 'Fallback sector', null, 2000, 1)
+insertUniverse.run('ATEST', 'Test artifact', 'Ignored', null, 1, 1)
+insertUniverse.run('OLD', 'Old Co.', 'Historical sector', 'Historical industry', 3000, 0)
 
 db.prepare(`
   INSERT INTO market_classifications
@@ -83,11 +85,12 @@ const insertSnapshot = db.prepare(`
   INSERT INTO market_daily_snapshots
     (market, ticker, date, daily_a_stage, daily_b_stage, weekly_a_stage, weekly_b_stage,
      monthly_a_stage, monthly_b_stage, ma_5, ma_25, ma_75, ma_300)
-  VALUES ('US', 'AAA', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  VALUES ('US', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `)
-insertSnapshot.run('2026-10-07', 2, 2, 3, 3, 4, 4, 90, 80, 70, 60)
-insertSnapshot.run('2026-10-08', 1, 2, 3, 4, 5, 6, 100, 90, 80, 70)
-insertSnapshot.run('2026-10-09', 1, 1, 2, 2, 3, 3, 110, 100, 90, 80)
+insertSnapshot.run('AAA', '2026-10-07', 2, 2, 3, 3, 4, 4, 90, 80, 70, 60)
+insertSnapshot.run('AAA', '2026-10-08', 1, 2, 3, 4, 5, 6, 100, 90, 80, 70)
+insertSnapshot.run('AAA', '2026-10-09', 1, 1, 2, 2, 3, 3, 110, 100, 90, 80)
+insertSnapshot.run('OLD', '2026-10-08', 6, 5, 4, 3, 2, 1, 20, 21, 22, 23)
 
 const insertPrice = db.prepare(`
   INSERT INTO market_ohlcv_daily (market, ticker, date, close, adj_close)
@@ -128,6 +131,19 @@ assert.equal(beta.price, null)
 assert.equal(beta.perf_1d, null)
 assert.equal(beta.sector, 'Fallback sector')
 
+const historicalRows = db.prepare(US_HEX_HISTORICAL_ROWS_SQL)
+  .all(...usHexRowsParams('2026-10-08', true)) as unknown as UsHexRawRow[]
+assert.deepEqual(historicalRows.map((row) => row.ticker), ['AAA', 'OLD'])
+const historicalOld = historicalRows[1]
+assert.equal(historicalOld.snapshot_ticker, 'OLD')
+assert.equal(historicalOld.name, 'Old Co.')
+assert.equal(historicalOld.exchange, null)
+assert.equal(historicalOld.asset_type, null)
+assert.equal(historicalOld.sector, 'Unclassified')
+assert.equal(historicalOld.industry, null)
+assert.equal(historicalOld.shares_outstanding, null)
+assert.equal(buildUsHexRow(historicalOld, 'daily', new Map()).market_cap, null)
+
 assert.equal((US_HEX_ROWS_SQL.match(/JOIN market_ohlcv_daily/g) ?? []).length, 1)
 assert.match(US_HEX_ROWS_SQL, /INDEXED BY market_ohlcv_market_date_ticker_idx/)
 assert.doesNotMatch(US_HEX_ROWS_SQL, /LEFT JOIN market_ohlcv_daily/)
@@ -141,7 +157,7 @@ assert.equal(built[0].physical_momentum_score, -1.25)
 assert.equal(built[0].sma_angles.sma5, 10)
 assert.ok(Math.abs((built[0].prev_sma_angles.sma5 ?? 0) - 11.1111111111) < 1e-8)
 assert.equal(built[1].data_status, 'price_pending')
-assert.equal(built[1].market_cap, 0)
+assert.equal(built[1].market_cap, null)
 assert.equal(built[1].physical_momentum_score, null)
 const compactRows = JSON.parse(JSON.stringify(built.map(compactUsHexRow)))
 const wireBody = JSON.parse(JSON.stringify({
@@ -159,6 +175,9 @@ const servingSource = readFileSync('lib/server/us-hex-serving.ts', 'utf8')
 const viewSource = readFileSync('components/hex/HexStageMapView.tsx', 'utf8')
 assert.match(routeSource, /compact-v1/)
 assert.match(routeSource, /columnar-v1/)
+assert.match(routeSource, /US_HEX_HISTORICAL_ROWS_SQL/)
+assert.match(routeSource, /membership: 'SNAPSHOT_DATE'/)
+assert.match(routeSource, /requestedDates\.length > 1/)
 assert.match(servingSource, /delete compact\.ml_candidate_direction/)
 assert.match(viewSource, /params\.set\(US_HEX_WIRE_PARAM, US_HEX_WIRE_REQUEST\)/)
 assert.doesNotMatch(viewSource, /params\.set\('compact', '1'\)/)

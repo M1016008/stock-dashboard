@@ -4,7 +4,12 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { summarizeUsCoverage, type UsStatusSummary } from '@/lib/us-status'
 import { US_ADJUSTED_PRICE_BASIS } from '@/lib/us-adjusted-ohlcv'
-import { US_ANALYSIS_NAV_HREFS, usDataCoverageScopeForRoute } from '@/components/us/UsAnalysisNav'
+import {
+  US_ANALYSIS_DATE_CONTEXT_HREFS,
+  US_ANALYSIS_NAV_HREFS,
+  usAnalysisNavHref,
+  usDataCoverageScopeForRoute,
+} from '@/components/us/UsAnalysisNav'
 import {
   US_DATA_COVERAGE_SCOPE_COPY,
   UsDataCoverageStripView,
@@ -34,6 +39,27 @@ for (const href of US_ANALYSIS_NAV_HREFS) {
   navScopes.add(scope)
 }
 assert.equal(usDataCoverageScopeForRoute('/us/unknown'), null, 'unknown routes must not guess a scope')
+
+// A single valid historical date follows only pages that implement the shared
+// as-of contract. Deep analysis routes keep their exact, independent semantics.
+for (const href of US_ANALYSIS_DATE_CONTEXT_HREFS) {
+  assert.equal(
+    usAnalysisNavHref(href, '2026-10-09'),
+    `${href}?date=2026-10-09`,
+    `${href} must preserve the historical date context`,
+  )
+}
+for (const href of [
+  '/us/trigger-discovery',
+  '/us/analysis/ml-lens',
+  '/us/analysis/transitions',
+  '/us/analysis/backtest',
+]) {
+  assert.equal(usAnalysisNavHref(href, '2026-10-09'), href, `${href} must keep its independent route semantics`)
+}
+assert.equal(usAnalysisNavHref('/us/screener', '2026-02-29'), '/us/screener', 'invalid calendar dates must not propagate')
+assert.equal(usAnalysisNavHref('/us/screener', null), '/us/screener', 'latest mode must keep the canonical URL')
+assert.equal(usAnalysisNavHref('/us/screener/extra', '2026-10-09'), '/us/screener/extra', 'route matching must be exact')
 
 // 各ページの UsAnalysisNav current が nav の route と一致し、scope が引けること。
 const NAV_PAGES = [
@@ -75,6 +101,10 @@ assert.deepEqual([...usedScopes].sort(), [...ALL_SCOPES].sort(), 'every scope mu
 // 既存 ViewTabs を壊さない。
 assert.match(src.nav, /<ViewTabs\s+label="米国株"\s+current=\{current\}/, 'UsAnalysisNav must keep its ViewTabs')
 assert.match(src.nav, /aria-hidden/, 'nav icons stay decorative')
+assert.match(src.nav, /searchParams\.getAll\('date'\)/, 'duplicate date parameters must not be silently collapsed')
+assert.match(src.nav, /requestedDates\.length === 1/, 'only one unambiguous date may be propagated')
+assert.match(src.nav, /scrollIntoView\(\{ block: 'nearest', inline: 'center' \}\)/, 'the active deep tab must be brought into view')
+assert.match(src.nav, /sm:hidden[^>]*>[\s\S]*横にスワイプして全9機能を表示/, '390px navigation must disclose the horizontal tab set')
 
 // 既存の route 固有 as-of / 日付表示を削除しない。
 const EXISTING_FACTS: Array<[string, RegExp]> = [
@@ -134,6 +164,14 @@ function fixture(overrides: { ohlcv?: [number, number] | null; snapshots?: [numb
       priceFrequency: 'EOD',
       classification: { taxonomy: 'SEC_SIC', effectiveDating: 'CURRENT_ONLY', historicalPitAvailable: false },
       fundamentals: { source: 'SEC_COMPANYFACTS', basis: 'ACTUAL_ONLY', companyForecastsAvailable: false },
+    },
+    capabilities: {
+      analytics: { configured: true, available: true },
+      historicalAnalog: { mode: 'PROXY' },
+      earningsCalendar: { source: 'FINNHUB', configured: false },
+      scenarioNarratives: { enabled: false, configured: false },
+      dailyMl: { enabled: true },
+      publicationOverrides: { allowStale: false, allowPartial: false },
     },
     latestRun: null,
   }

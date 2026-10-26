@@ -16,7 +16,7 @@ export async function GET(
     const quote = await getUsQuote(ticker)
     if (!quote) {
       return NextResponse.json(
-        { error: 'No data', message: `US ticker ${ticker} not found in market_ohlcv_daily` },
+        { error: 'us_quote_not_found', ticker },
         { status: 404 },
       )
     }
@@ -24,7 +24,7 @@ export async function GET(
   } catch (error) {
     console.error('US quote API error:', error)
     return NextResponse.json(
-      { error: 'Failed to fetch US quote', message: (error as Error).message },
+      { error: 'us_quote_failed' },
       { status: 500 },
     )
   }

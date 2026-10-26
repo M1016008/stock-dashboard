@@ -180,7 +180,7 @@ function PreviewHeader({
 }) {
   const normalizedTicker = ticker.replace(/\.T$/i, '')
   const detailHref = market === 'US'
-    ? `/us/stock/${encodeURIComponent(normalizedTicker)}${analysisDate ? `?date=${encodeURIComponent(analysisDate)}` : ''}`
+    ? `/us/stock/${encodeURIComponent(normalizedTicker)}${analysisDate ? `?date=${encodeURIComponent(analysisDate)}` : ''}${mode === 'chart' ? '#chart' : ''}`
     : `/stock/${encodeURIComponent(normalizedTicker)}${analysisDate ? `?date=${encodeURIComponent(analysisDate)}` : ''}${mode === 'chart' ? '#chart' : '#overview'}`
   return (
     <div className="flex min-h-12 items-center gap-2 border-b border-[var(--color-border-soft)] bg-[var(--color-surface-muted)] px-3 pr-10">

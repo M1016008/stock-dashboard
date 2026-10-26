@@ -65,7 +65,7 @@ export function matchesExtra(s: HexMapStock, f: ExtraFilters): boolean {
 
 function sortValue(s: HexMapStock, key: SortKey): number | string | null {
   switch (key) {
-    case 'cap': return s.market_cap > 0 ? s.market_cap : null
+    case 'cap': return (s.market_cap ?? 0) > 0 ? s.market_cap : null
     case 'price': return s.price
     case 'daily': return s.daily_change ?? null
     case 'weekly': return s.weekly_change ?? null

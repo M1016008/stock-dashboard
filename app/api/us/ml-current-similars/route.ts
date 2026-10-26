@@ -7,6 +7,7 @@ import {
 } from '@/lib/db/us-analytics'
 import { analyzePhysicsProfile } from '@/lib/ml/physics-analysis'
 import { MIN_DISPLAY_SIMILARITY_SCORE } from '@/lib/ml/similarity-threshold'
+import { isIsoDate } from '@/lib/mtf-close-calendar'
 import { getUsSecondaryName } from '@/lib/us-symbol-aliases'
 
 export const dynamic = 'force-dynamic'
@@ -33,7 +34,10 @@ function parseJson<T>(value: string | null | undefined, fallback: T): T {
   }
 }
 
-function emptyResponse() {
+function emptyResponse(
+  availability: 'ready' | 'unavailable' = 'ready',
+  availabilityReason: string | null = null,
+) {
   return {
     asOfDate: null,
     featureAsOfDate: null,
@@ -41,21 +45,36 @@ function emptyResponse() {
     physicsAnalysis: null,
     similars: [],
     caseStudies: [],
+    availability,
+    availabilityReason,
   }
 }
 
 export async function GET(request: NextRequest) {
-  const ticker = request.nextUrl.searchParams.get('ticker')?.trim().toUpperCase() ?? ''
-  const requestedDate = request.nextUrl.searchParams.get('date')?.trim() ?? ''
-  const limit = Math.min(12, Math.max(1, Number(request.nextUrl.searchParams.get('limit') ?? 6)))
+  const params = request.nextUrl.searchParams
+  for (const name of ['ticker', 'date', 'limit']) {
+    if (params.getAll(name).length > 1) {
+      return NextResponse.json({ ...emptyResponse(), error: `duplicate_${name}` }, { status: 400 })
+    }
+  }
+  const ticker = params.get('ticker')?.trim().toUpperCase() ?? ''
+  const requestedDate = params.get('date')?.trim() ?? ''
+  const rawLimit = params.get('limit')
+  const parsedLimit = rawLimit == null ? 6 : Number(rawLimit)
 
   if (!/^[A-Z0-9.^=-]{1,24}$/.test(ticker)) {
     return NextResponse.json({ ...emptyResponse(), error: '有効なUS銘柄を指定してください。' }, { status: 400 })
   }
-  if (requestedDate && !/^\d{4}-\d{2}-\d{2}$/.test(requestedDate)) {
+  if (requestedDate && !isIsoDate(requestedDate)) {
     return NextResponse.json({ ...emptyResponse(), error: '日付はYYYY-MM-DD形式で指定してください。' }, { status: 400 })
   }
-  if (!hasUsAnalyticsDb()) return NextResponse.json(emptyResponse())
+  if (!Number.isInteger(parsedLimit) || parsedLimit < 1 || parsedLimit > 12) {
+    return NextResponse.json({ ...emptyResponse(), error: 'limitは1〜12の整数で指定してください。' }, { status: 400 })
+  }
+  const limit = parsedLimit
+  if (!hasUsAnalyticsDb()) {
+    return NextResponse.json(emptyResponse('unavailable', 'us_analytics_not_configured'), { status: 503 })
+  }
 
   try {
     const asOfDate = (await execUsAnalyticsGet<{ date: string | null }>(
@@ -158,11 +177,16 @@ export async function GET(request: NextRequest) {
       physicsAnalysis: analyzePhysicsProfile(profile),
       similars,
       caseStudies: [],
+      availability: 'ready',
+      availabilityReason: null,
     })
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     if (/SQLITE_BUSY|database is locked|no such table/i.test(message)) {
-      return NextResponse.json(emptyResponse())
+      return NextResponse.json(
+        emptyResponse('unavailable', /no such table/i.test(message) ? 'schema_unavailable' : 'database_busy'),
+        { status: 503 },
+      )
     }
     console.error('[api/us/ml-current-similars]', error)
     return NextResponse.json({ ...emptyResponse(), error: 'US類似候補の取得に失敗しました。' }, { status: 500 })

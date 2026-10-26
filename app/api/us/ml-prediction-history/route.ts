@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { hasUsAnalyticsDb } from '@/lib/db/us-analytics'
 import { getUsMlPredictionHistory } from '@/lib/server/us-ml-prediction-history'
+import { isIsoDate } from '@/lib/mtf-close-calendar'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -17,13 +18,17 @@ function empty(ticker: string, reason: string) {
 }
 
 export async function GET(request: NextRequest) {
-  const ticker = request.nextUrl.searchParams.get('ticker')?.trim().toUpperCase() ?? ''
-  const rawDate = request.nextUrl.searchParams.get('date')?.trim() ?? ''
-  const date = rawDate && /^\d{4}-\d{2}-\d{2}$/.test(rawDate) ? rawDate : null
-  const requestedLimit = Number(request.nextUrl.searchParams.get('limit') ?? 80)
-  const limit = Number.isFinite(requestedLimit)
-    ? Math.min(300, Math.max(1, Math.trunc(requestedLimit)))
-    : 80
+  const params = request.nextUrl.searchParams
+  for (const name of ['ticker', 'date', 'limit']) {
+    if (params.getAll(name).length > 1) {
+      return NextResponse.json({ error: `duplicate_${name}` }, { status: 400 })
+    }
+  }
+  const ticker = params.get('ticker')?.trim().toUpperCase() ?? ''
+  const rawDate = params.get('date')?.trim() ?? ''
+  const date = rawDate && isIsoDate(rawDate) ? rawDate : null
+  const rawLimit = params.get('limit')
+  const requestedLimit = rawLimit == null ? 80 : Number(rawLimit)
 
   if (!/^[A-Z0-9.^=-]{1,24}$/.test(ticker)) {
     return NextResponse.json({ error: '有効なUS銘柄を指定してください。' }, { status: 400 })
@@ -31,6 +36,10 @@ export async function GET(request: NextRequest) {
   if (rawDate && !date) {
     return NextResponse.json({ error: '日付はYYYY-MM-DD形式で指定してください。' }, { status: 400 })
   }
+  if (!Number.isInteger(requestedLimit) || requestedLimit < 1 || requestedLimit > 300) {
+    return NextResponse.json({ error: 'limitは1〜300の整数で指定してください。' }, { status: 400 })
+  }
+  const limit = requestedLimit
   if (!hasUsAnalyticsDb()) return NextResponse.json(empty(ticker, 'us_analytics_not_configured'))
 
   try {

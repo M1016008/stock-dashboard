@@ -148,9 +148,13 @@ type ScreenerPit = {
 type InitialScreenerAsOf = {
   requestedDate: string | null
   resolvedDate: string | null
+  earliestDate: string | null
   latestDate: string | null
+  availability: 'available' | 'before_coverage' | 'invalid' | 'no_data'
   mode: ScreenerPit['mode'] | null
 }
+
+type UnavailableDateReason = Exclude<InitialScreenerAsOf['availability'], 'available'>
 
 /**
  * 過去日では当時の値がない並び替え。取引所・時価総額は API が 422 で拒否し、
@@ -402,7 +406,14 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
   const [columnMode, setColumnMode] = useState<ColumnMode>('core')
   const [selected, setSelected] = useState<Set<string>>(new Set())
   // 基準日。null は最新。API の date 契約 (YYYY-MM-DD、休場日は直前の取引日へ解決) をそのまま使う
-  const [requestedDate, setRequestedDate] = useState<string | null>(() => parseUrlDate(searchParams.get('date')))
+  const [requestedDate, setRequestedDate] = useState<string | null>(() => (
+    initialAsOf.availability === 'invalid' ? null : parseUrlDate(searchParams.get('date'))
+  ))
+  const [unavailableDateReason, setUnavailableDateReason] = useState<UnavailableDateReason | null>(() => (
+    initialAsOf.requestedDate && initialAsOf.mode === null && initialAsOf.availability !== 'available'
+      ? initialAsOf.availability
+      : null
+  ))
   const [pit, setPit] = useState<ScreenerPit | null>(() => (
     initialAsOf.mode && initialAsOf.resolvedDate && initialAsOf.latestDate
       ? {
@@ -500,10 +511,18 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
   const changeRequestedDate = (next: string | null) => {
     setClearedForHistorical([])
     setSelected(new Set())
+    setUnavailableDateReason(
+      next && initialAsOf.earliestDate && next < initialAsOf.earliestDate
+        ? 'before_coverage'
+        : next && !initialAsOf.earliestDate
+          ? 'no_data'
+          : null,
+    )
     setRequestedDate(next)
   }
 
   useEffect(() => {
+    if (unavailableDateReason) return
     const apiParams = new URLSearchParams(params)
     const updates: Record<string, string | null> = {}
     const ownedKeys = [
@@ -517,7 +536,7 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
     for (const key of ownedKeys) updates[key] = apiParams.get(key)
     updates.marketCapBin = marketCapBin || null
     replaceCurrentUrlFilters(updates)
-  }, [params, marketCapBin])
+  }, [params, marketCapBin, unavailableDateReason])
 
   useEffect(() => {
     if (sicClassificationEnabled || (!sector && !industryGroup && !industry)) return
@@ -527,6 +546,14 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
   }, [sicClassificationEnabled, sector, industryGroup, industry])
 
   useEffect(() => {
+    if (unavailableDateReason) {
+      setLoading(false)
+      setRows([])
+      setHasMore(false)
+      setMessage(null)
+      setFetchError(null)
+      return
+    }
     let cancelled = false
     const controller = new AbortController()
     setLoading(true)
@@ -580,7 +607,7 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
       controller.abort()
       window.clearTimeout(timer)
     }
-  }, [params, retryVersion])
+  }, [params, retryVersion, unavailableDateReason])
 
   useEffect(() => {
     const saved = window.localStorage.getItem(COLUMN_MODE_KEY)
@@ -796,10 +823,21 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
   )).sort()
   const hasAnyStage = AXES.some((axis) => Boolean(stages[axis.key]?.length))
   const hasMarketCapData = rows.some((row) => row.market_cap != null)
+  const unavailableRequestedDate = unavailableDateReason
+    ? requestedDate ?? initialAsOf.requestedDate
+    : null
   const asOfDate = confirmedPit?.resolvedDate ?? (requestedDate ? null : date)
   const adjustedToPriorSession = confirmedPit?.requestedDate != null && confirmedPit.requestedDate !== confirmedPit.resolvedDate
   // 取得失敗は「データなし」と言わない (日付にデータが無いのか確認できていないため)
-  const dateUnavailable = requestedDate != null && !loading && !fetchError && confirmedPit == null
+  const dateUnavailable = unavailableDateReason != null
+    || (requestedDate != null && !loading && !fetchError && confirmedPit == null)
+  const unavailableDateCopy = unavailableDateReason === 'invalid'
+    ? `「${(unavailableRequestedDate ?? '').slice(0, 32)}」は有効な日付ではありません。YYYY-MM-DD の形式で1つだけ指定してください。最新データは代わりに表示していません。`
+    : unavailableDateReason === 'before_coverage'
+      ? `${unavailableRequestedDate ?? '指定日'} のデータはありません。表示できる最初の日は ${initialAsOf.earliestDate ?? '未取得'} です。最新データは代わりに表示していません。`
+      : unavailableDateReason === 'no_data'
+        ? '表示できる米国株データがありません。最新データは代わりに表示していません。'
+        : null
   // 取得失敗を最優先にする。AS OF の日付は文脈として残すが、「最新データ」等の成功表示とは並べない
   const modeLabel = fetchError
     ? '取得失敗'
@@ -808,7 +846,7 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
       : confirmedPit?.mode === 'LATEST' || (!requestedDate && date)
         ? '最新データ'
         : dateUnavailable
-          ? 'データなし'
+          ? '表示不可'
           : '確認中'
   const modeClass = fetchError
     ? 'border-red-200 bg-red-50 text-[var(--color-market-red-dark)]'
@@ -816,7 +854,9 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
       ? 'border-amber-300 bg-amber-50 text-[#92400e]'
       : modeLabel === '最新データ'
         ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
-        : 'border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] text-[var(--color-text-secondary)]'
+        : dateUnavailable
+          ? 'border-red-200 bg-red-50 text-[var(--color-market-red-dark)]'
+          : 'border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] text-[var(--color-text-secondary)]'
   const lockReason = historical ? '過去日は使えません · 当時の値がないため' : '基準日を確認中'
 
   return (
@@ -827,7 +867,7 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
         subtitle="Tiingo由来の株価と日次スナップショットを、HEXステージ(複数系統は AND)・業種・流動性・物理指標で絞り込みます。価格基準の移行状況はデータ鮮度で確認できます。"
         badge={historical ? '過去日表示' : undefined}
         badgeTone="warning"
-        meta={<span>AS OF {asOfDate ?? '-'} 米国終値</span>}
+        meta={<span>AS OF {asOfDate ?? unavailableRequestedDate ?? '-'} 米国終値</span>}
       >
         <UsAnalysisNav current="/us/screener" />
       </PageTitle>
@@ -853,7 +893,7 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
         <button
           type="button"
           onClick={() => changeRequestedDate(null)}
-          disabled={!requestedDate}
+          disabled={!requestedDate && !unavailableDateReason}
           className="btn"
           data-size="sm"
         >
@@ -866,7 +906,7 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
           className="flex min-w-0 flex-wrap items-baseline gap-x-2.5 gap-y-1 text-[11px] font-semibold text-[var(--color-text-tertiary)]"
         >
           <span>
-            AS OF <span className="font-mono font-bold tabular-nums text-[var(--color-text-primary)]">{asOfDate ?? '---'}</span> 米国終値
+            AS OF <span className="font-mono font-bold tabular-nums text-[var(--color-text-primary)]">{asOfDate ?? unavailableRequestedDate ?? '---'}</span> 米国終値
           </span>
           <span className={`inline-flex items-center border px-1.5 py-px text-[10px] font-bold ${modeClass}`}>{modeLabel}</span>
           {adjustedToPriorSession && confirmedPit && (
@@ -879,6 +919,11 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
           )}
         </div>
       </div>
+      {unavailableDateCopy && (
+        <div role="alert" className="border-b border-red-200 bg-red-50 px-4 py-3 text-[12px] font-bold leading-relaxed text-[var(--color-market-red-dark)]">
+          {unavailableDateCopy}
+        </div>
+      )}
       {historical && (
         <div role="note" className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-[11px] font-semibold leading-relaxed text-[#92400e]">
           株価・6ステージ・物理指標は {linkDate} 終値時点、次回決算はその日までに取り込まれた予定です。
@@ -891,7 +936,7 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--color-border-default)] bg-[var(--color-surface-subtle)] px-4 py-2.5">
         <div className="min-w-0" role="status" aria-live="polite">
           <div className="text-[14px] font-bold text-[var(--color-text-primary)]">
-            {loading ? '検索中…' : fetchError ? '取得失敗' : `${rows.length.toLocaleString('ja-JP')}件`}
+            {loading ? '検索中…' : fetchError ? '取得失敗' : dateUnavailable ? '表示不可' : `${rows.length.toLocaleString('ja-JP')}件`}
             {!loading && hasMore && <span className="ml-1.5 text-[12px] font-medium text-[var(--color-text-tertiary)]">続きあり</span>}
           </div>
           <div className="mt-0.5 text-[12px] text-[var(--color-text-tertiary)]">
@@ -1570,7 +1615,7 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
                 <td colSpan={columnMode === 'all' ? 14 : 11} className="px-3 py-8 text-center text-[12px] font-bold text-[var(--color-text-tertiary)]">
                   {loading
                     ? 'USデータを確認しています...'
-                    : displayMessage(message, hasScreeningConditions)}
+                    : unavailableDateCopy ?? displayMessage(message, hasScreeningConditions)}
                 </td>
               </tr>
             )}

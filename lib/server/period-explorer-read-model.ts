@@ -12,8 +12,10 @@ import {
 import { execAll, execGet } from '@/lib/db/client'
 import { readServingCache, stableCacheKey, writeServingCache } from '@/lib/api/serving-cache'
 import { NIKKEI225_TICKERS } from '@/lib/market-universe'
+import { usInvestableSymbolSql } from '@/lib/us-symbol-quality'
 
 export type PeriodExplorerTaxonomy = 'sector17' | 'sector33' | 'major' | 'subIndustry'
+export type PeriodExplorerMarket = 'JP' | 'US'
 export type PeriodExplorerSortKey = 'ranking' | 'periodReturn' | 'price' | 'marketCap' | 'avgTurnover' | 'avgVolume' | 'ticker'
 
 export interface PeriodExplorerFilters {
@@ -37,6 +39,7 @@ export interface PeriodExplorerFilters {
 }
 
 export interface PeriodExplorerInput {
+  market?: PeriodExplorerMarket
   from?: string | null
   to?: string | null
   ranking?: PeriodExplorerRankingKey | null
@@ -129,6 +132,7 @@ export interface PeriodExplorerSectorRow {
 
 export interface PeriodExplorerResponse {
   success: true
+  market: PeriodExplorerMarket
   ranking: PeriodExplorerRankingKey
   rankingLabel: string
   rankingDescription: string
@@ -154,7 +158,7 @@ export interface PeriodExplorerResponse {
   dataBasis: {
     prices: 'adjusted_ohlcv'
     stages: 'daily_snapshot_pit'
-    shares: 'pit_with_current_fallback'
+    shares: 'pit_with_current_fallback' | 'current_only'
     classifications: 'current'
     market: 'current'
     marginType: 'current'
@@ -165,7 +169,7 @@ export interface PeriodExplorerResponse {
 
 type CalendarCache = { dates: string[]; expiresAt: number }
 const globalForPeriodExplorer = global as typeof globalThis & {
-  periodExplorerCalendar?: CalendarCache
+  periodExplorerCalendars?: Partial<Record<PeriodExplorerMarket, CalendarCache>>
 }
 
 type BaseDbRow = Record<string, unknown> & {
@@ -255,7 +259,7 @@ type VolatilityDbRow = {
 
 const CALENDAR_TTL_MS = 5 * 60_000
 const RESPONSE_TTL_MS = 5 * 60_000
-const CACHE_VERSION = 6
+const CACHE_VERSION = 7
 const NIKKEI225_SET = new Set<string>(NIKKEI225_TICKERS)
 
 export class PeriodExplorerInputError extends Error {}
@@ -391,15 +395,18 @@ function applyTechnicalData(row: PeriodExplorerStockRow, value: TechnicalDbRow |
     && startMa25 >= startMa75 && endMa25 < endMa75
 }
 
-export async function getPeriodExplorerCalendar(): Promise<string[]> {
-  const cached = globalForPeriodExplorer.periodExplorerCalendar
+export async function getPeriodExplorerCalendar(market: PeriodExplorerMarket = 'JP'): Promise<string[]> {
+  const cached = globalForPeriodExplorer.periodExplorerCalendars?.[market]
   if (cached && cached.expiresAt > Date.now()) return cached.dates
-  let rows = await execAll<{ date: string }>('SELECT date FROM serving_daily_snapshot_dates ORDER BY date ASC').catch(() => [])
-  if (rows.length === 0) {
-    rows = await execAll<{ date: string }>('SELECT DISTINCT date FROM ohlcv_daily ORDER BY date ASC')
-  }
+  let rows = market === 'US'
+    ? await execAll<{ date: string }>("SELECT DISTINCT date FROM market_ohlcv_daily WHERE market = 'US' ORDER BY date ASC")
+    : await execAll<{ date: string }>('SELECT date FROM serving_daily_snapshot_dates ORDER BY date ASC').catch(() => [])
+  if (market === 'JP' && rows.length === 0) rows = await execAll<{ date: string }>('SELECT DISTINCT date FROM ohlcv_daily ORDER BY date ASC')
   const dates = rows.map((row) => String(row.date)).filter(validIsoDate)
-  globalForPeriodExplorer.periodExplorerCalendar = { dates, expiresAt: Date.now() + CALENDAR_TTL_MS }
+  globalForPeriodExplorer.periodExplorerCalendars = {
+    ...globalForPeriodExplorer.periodExplorerCalendars,
+    [market]: { dates, expiresAt: Date.now() + CALENDAR_TTL_MS },
+  }
   return dates
 }
 
@@ -425,8 +432,8 @@ function upperBound(values: string[], target: string): number {
   return low
 }
 
-export async function resolvePeriodExplorerDateRange(from?: string | null, to?: string | null): Promise<PeriodExplorerDateRange> {
-  const dates = await getPeriodExplorerCalendar()
+export async function resolvePeriodExplorerDateRange(from?: string | null, to?: string | null, market: PeriodExplorerMarket = 'JP'): Promise<PeriodExplorerDateRange> {
+  const dates = await getPeriodExplorerCalendar(market)
   if (dates.length === 0) throw new PeriodExplorerInputError('取引日データがありません。')
   if (from && !validIsoDate(from)) throw new PeriodExplorerInputError('開始日はYYYY-MM-DD形式で指定してください。')
   if (to && !validIsoDate(to)) throw new PeriodExplorerInputError('終了日はYYYY-MM-DD形式で指定してください。')
@@ -457,6 +464,7 @@ export async function resolvePeriodExplorerDateRange(from?: string | null, to?: 
 async function loadTechnicalRows(
   range: PeriodExplorerDateRange,
   tickers?: string[],
+  market: PeriodExplorerMarket = 'JP',
 ): Promise<Map<string, TechnicalDbRow>> {
   const result = new Map<string, TechnicalDbRow>()
   const chunks = tickers?.length
@@ -464,7 +472,21 @@ async function loadTechnicalRows(
     : [null]
   for (const chunk of chunks) {
     const tickerWhere = chunk ? `AND ss.ticker IN (${chunk.map(() => '?').join(',')})` : ''
-    const rows = await execAll<TechnicalDbRow>(`
+    const rows = await execAll<TechnicalDbRow>(market === 'US' ? `
+      SELECT ss.ticker,
+             ss.ma_25 AS start_ma25, ss.ma_75 AS start_ma75,
+             es.ma_25 AS end_ma25, es.ma_75 AS end_ma75,
+             ss.daily_a_stage AS start_daily_a, ss.daily_b_stage AS start_daily_b,
+             ss.weekly_a_stage AS start_weekly_a, ss.weekly_b_stage AS start_weekly_b,
+             ss.monthly_a_stage AS start_monthly_a, ss.monthly_b_stage AS start_monthly_b,
+             es.daily_a_stage AS end_daily_a, es.daily_b_stage AS end_daily_b,
+             es.weekly_a_stage AS end_weekly_a, es.weekly_b_stage AS end_weekly_b,
+             es.monthly_a_stage AS end_monthly_a, es.monthly_b_stage AS end_monthly_b
+      FROM market_daily_snapshots ss
+      INNER JOIN market_daily_snapshots es
+        ON es.market = ss.market AND es.ticker = ss.ticker AND es.date = ?
+      WHERE ss.market = 'US' AND ss.date = ? ${tickerWhere}
+    ` : `
       SELECT ss.ticker,
              ss.ma_25 AS start_ma25, ss.ma_75 AS start_ma75,
              es.ma_25 AS end_ma25, es.ma_75 AS end_ma75,
@@ -487,15 +509,51 @@ async function loadBaseRows(
   range: PeriodExplorerDateRange,
   taxonomy: PeriodExplorerTaxonomy,
   includeAllTechnical: boolean,
+  market: PeriodExplorerMarket,
 ): Promise<PeriodExplorerStockRow[]> {
   const [endpoints, profiles, technical] = await Promise.all([
-    execAll<EndpointDbRow>(`
+    execAll<EndpointDbRow>(market === 'US' ? `
+      SELECT e.ticker,
+             COALESCE(s.adj_close, s.close) AS start_close,
+             COALESCE(e.adj_close, e.close) AS end_close
+      FROM market_ohlcv_daily s
+      INNER JOIN market_ohlcv_daily e
+        ON e.market = s.market AND e.ticker = s.ticker AND e.date = ?
+      WHERE s.market = 'US' AND s.date = ?
+        AND COALESCE(s.adj_close, s.close) > 0
+        AND COALESCE(e.adj_close, e.close) > 0
+        AND ${usInvestableSymbolSql('s.ticker')}
+    ` : `
       SELECT e.ticker, s.close AS start_close, e.close AS end_close
       FROM ohlcv_daily s
       INNER JOIN ohlcv_daily e ON e.ticker = s.ticker AND e.date = ?
       WHERE s.date = ? AND s.close > 0 AND e.close > 0
     `, [range.adoptedTo, range.adoptedFrom]),
-    execAll<ProfileDbRow>(`
+    execAll<ProfileDbRow>(market === 'US' ? `
+      WITH classification AS (
+        SELECT ticker, sector_name, industry_name
+        FROM (
+          SELECT ticker, sector_name, industry_name,
+                 ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY effective_from DESC, updated_at DESC) AS rn
+          FROM market_classifications
+          WHERE market = 'US' AND taxonomy = 'US_SEC_SIC'
+        )
+        WHERE rn = 1
+      )
+      SELECT u.ticker,
+             COALESCE(u.name, u.ticker) AS name,
+             u.shares_outstanding AS current_shares,
+             u.exchange AS market_segment,
+             NULL AS margin_type,
+             COALESCE(c.sector_name, u.sector) AS sector17,
+             COALESCE(c.industry_name, u.industry) AS sector33,
+             COALESCE(c.sector_name, u.sector) AS major_category,
+             COALESCE(c.industry_name, u.industry) AS sub_industry,
+             CASE WHEN u.active = 1 THEN NULL ELSE 'historical_only' END AS historical_status
+      FROM market_universe u
+      LEFT JOIN classification c ON c.ticker = u.ticker
+      WHERE u.market = 'US' AND ${usInvestableSymbolSql('u.ticker')}
+    ` : `
       SELECT source.ticker,
              COALESCE(u.name, h.name, source.ticker) AS name,
              u.shares_outstanding AS current_shares,
@@ -513,7 +571,7 @@ async function loadBaseRows(
       LEFT JOIN ticker_universe u ON u.ticker = source.ticker
       LEFT JOIN stock_classification sc ON sc.ticker = source.ticker
     `),
-    includeAllTechnical ? loadTechnicalRows(range) : Promise.resolve(new Map<string, TechnicalDbRow>()),
+    includeAllTechnical ? loadTechnicalRows(range, undefined, market) : Promise.resolve(new Map<string, TechnicalDbRow>()),
   ])
   const profilesByTicker = new Map(profiles.map((row) => [String(row.ticker), row]))
   return endpoints.map((endpoint) => {
@@ -619,23 +677,27 @@ function shortCalendarRange(from: string, to: string): boolean {
   return Number.isFinite(fromMs) && Number.isFinite(toMs) && toMs - fromMs <= 180 * 86_400_000
 }
 
-function rangeStatsSelect(scope: RangeStatsScope): string {
+function rangeStatsSelect(scope: RangeStatsScope, market: PeriodExplorerMarket): string {
+  const high = market === 'US' ? 'COALESCE(adj_high, high)' : 'high'
+  const low = market === 'US' ? 'COALESCE(adj_low, low)' : 'low'
+  const close = market === 'US' ? 'COALESCE(adj_close, close)' : 'close'
+  const volume = market === 'US' ? 'COALESCE(adj_volume, volume)' : 'volume'
   if (scope === 'price') {
-    return `MAX(high) AS period_high, MIN(low) AS period_low,
+    return `MAX(${high}) AS period_high, MIN(${low}) AS period_low,
             NULL AS avg_volume, NULL AS max_volume, NULL AS avg_turnover, NULL AS total_turnover`
   }
   if (scope === 'volume') {
     return `NULL AS period_high, NULL AS period_low,
-            AVG(volume) AS avg_volume, MAX(volume) AS max_volume,
+            AVG(${volume}) AS avg_volume, MAX(${volume}) AS max_volume,
             NULL AS avg_turnover, NULL AS total_turnover`
   }
   if (scope === 'turnover') {
     return `NULL AS period_high, NULL AS period_low, NULL AS avg_volume, NULL AS max_volume,
-            AVG(close * volume) AS avg_turnover, SUM(close * volume) AS total_turnover`
+            AVG(${close} * ${volume}) AS avg_turnover, SUM(${close} * ${volume}) AS total_turnover`
   }
-  return `MAX(high) AS period_high, MIN(low) AS period_low,
-          AVG(volume) AS avg_volume, MAX(volume) AS max_volume,
-          AVG(close * volume) AS avg_turnover, SUM(close * volume) AS total_turnover`
+  return `MAX(${high}) AS period_high, MIN(${low}) AS period_low,
+          AVG(${volume}) AS avg_volume, MAX(${volume}) AS max_volume,
+          AVG(${close} * ${volume}) AS avg_turnover, SUM(${close} * ${volume}) AS total_turnover`
 }
 
 async function loadRangeStats(
@@ -643,6 +705,7 @@ async function loadRangeStats(
   to: string,
   tickers?: string[],
   scope: RangeStatsScope = 'full',
+  market: PeriodExplorerMarket = 'JP',
 ): Promise<Map<string, RangeDbRow>> {
   const result = new Map<string, RangeDbRow>()
   const chunks = tickers && tickers.length > 0
@@ -652,11 +715,13 @@ async function loadRangeStats(
     const tickerWhere = chunk ? `AND ticker IN (${chunk.map(() => '?').join(',')})` : ''
     // SQLiteは短期全銘柄集計でも(ticker,date)主キーのskip-scanを選ぶことがある。
     // 短期だけ(date,ticker)を指定し、長期や銘柄限定ではGROUP BYに有利な既定計画へ任せる。
-    const indexHint = !chunk && shortCalendarRange(from, to) ? 'INDEXED BY ohlcv_date_ticker_idx' : ''
+    const indexHint = market === 'JP' && !chunk && shortCalendarRange(from, to) ? 'INDEXED BY ohlcv_date_ticker_idx' : ''
+    const table = market === 'US' ? 'market_ohlcv_daily' : 'ohlcv_daily'
+    const marketWhere = market === 'US' ? "market = 'US' AND" : ''
     const rows = await execAll<RangeDbRow>(`
-      SELECT ticker, ${rangeStatsSelect(scope)}
-      FROM ohlcv_daily ${indexHint}
-      WHERE date BETWEEN ? AND ? ${tickerWhere}
+      SELECT ticker, ${rangeStatsSelect(scope, market)}
+      FROM ${table} ${indexHint}
+      WHERE ${marketWhere} date BETWEEN ? AND ? ${tickerWhere}
       GROUP BY ticker
     `, [from, to, ...(chunk ?? [])])
     for (const row of rows) result.set(String(row.ticker), row)
@@ -664,9 +729,9 @@ async function loadRangeStats(
   return result
 }
 
-async function load52WeekStats(from: string, to: string, tickers?: string[]): Promise<Map<string, { high: number | null; low: number | null }>> {
-  const range = await resolvePeriodExplorerDateRange(from, to)
-  const dates = await getPeriodExplorerCalendar()
+async function load52WeekStats(from: string, to: string, tickers?: string[], market: PeriodExplorerMarket = 'JP'): Promise<Map<string, { high: number | null; low: number | null }>> {
+  const range = await resolvePeriodExplorerDateRange(from, to, market)
+  const dates = await getPeriodExplorerCalendar(market)
   const endIndex = dates.indexOf(range.adoptedTo)
   const start = dates[Math.max(0, endIndex - 249)]
   const result = new Map<string, { high: number | null; low: number | null }>()
@@ -675,10 +740,14 @@ async function load52WeekStats(from: string, to: string, tickers?: string[]): Pr
     : [null]
   for (const chunk of chunks) {
     const tickerWhere = chunk ? `AND ticker IN (${chunk.map(() => '?').join(',')})` : ''
+    const table = market === 'US' ? 'market_ohlcv_daily' : 'ohlcv_daily'
+    const high = market === 'US' ? 'COALESCE(adj_high, high)' : 'high'
+    const low = market === 'US' ? 'COALESCE(adj_low, low)' : 'low'
+    const marketWhere = market === 'US' ? "market = 'US' AND" : ''
     const rows = await execAll<{ ticker: string; high_52: number | null; low_52: number | null }>(`
-      SELECT ticker, MAX(high) AS high_52, MIN(low) AS low_52
-      FROM ohlcv_daily
-      WHERE date BETWEEN ? AND ? ${tickerWhere}
+      SELECT ticker, MAX(${high}) AS high_52, MIN(${low}) AS low_52
+      FROM ${table}
+      WHERE ${marketWhere} date BETWEEN ? AND ? ${tickerWhere}
       GROUP BY ticker
     `, [start, range.adoptedTo, ...(chunk ?? [])])
     for (const row of rows) result.set(String(row.ticker), { high: asNumber(row.high_52), low: asNumber(row.low_52) })
@@ -691,6 +760,7 @@ async function loadVolatilityStats(
   to: string,
   previousTradingDate: string | null,
   tickers?: string[],
+  market: PeriodExplorerMarket = 'JP',
 ): Promise<Map<string, VolatilityDbRow>> {
   const result = new Map<string, VolatilityDbRow>()
   const chunks = tickers && tickers.length > 0
@@ -699,15 +769,21 @@ async function loadVolatilityStats(
   for (const chunk of chunks) {
     const tickerWhere = chunk ? `AND ticker IN (${chunk.map(() => '?').join(',')})` : ''
     const calculationFrom = previousTradingDate ?? from
-    const indexHint = !chunk && shortCalendarRange(calculationFrom, to) ? 'INDEXED BY ohlcv_date_ticker_idx' : ''
+    const indexHint = market === 'JP' && !chunk && shortCalendarRange(calculationFrom, to) ? 'INDEXED BY ohlcv_date_ticker_idx' : ''
+    const table = market === 'US' ? 'market_ohlcv_daily' : 'ohlcv_daily'
+    const marketWhere = market === 'US' ? "market = 'US' AND" : ''
+    const open = market === 'US' ? 'COALESCE(adj_open, open)' : 'open'
+    const high = market === 'US' ? 'COALESCE(adj_high, high)' : 'high'
+    const low = market === 'US' ? 'COALESCE(adj_low, low)' : 'low'
+    const close = market === 'US' ? 'COALESCE(adj_close, close)' : 'close'
     const rows = await execAll<VolatilityDbRow>(`
       WITH ordered AS (
-        SELECT ticker, date, open, high, low, close,
-               LAG(close) OVER (PARTITION BY ticker ORDER BY date) AS previous_close,
-               LAG(high) OVER (PARTITION BY ticker ORDER BY date) AS previous_high,
-               LAG(low) OVER (PARTITION BY ticker ORDER BY date) AS previous_low
-        FROM ohlcv_daily ${indexHint}
-        WHERE date BETWEEN ? AND ? ${tickerWhere}
+        SELECT ticker, date, ${open} AS open, ${high} AS high, ${low} AS low, ${close} AS close,
+               LAG(${close}) OVER (PARTITION BY ticker ORDER BY date) AS previous_close,
+               LAG(${high}) OVER (PARTITION BY ticker ORDER BY date) AS previous_high,
+               LAG(${low}) OVER (PARTITION BY ticker ORDER BY date) AS previous_low
+        FROM ${table} ${indexHint}
+        WHERE ${marketWhere} date BETWEEN ? AND ? ${tickerWhere}
       ), returns AS (
         SELECT ticker, date, open, previous_high, previous_low,
                CASE WHEN previous_close > 0 THEN (close / previous_close - 1.0) * 100.0 ELSE NULL END AS daily_return
@@ -821,11 +897,12 @@ function inRange(value: number | null, min?: number | null, max?: number | null)
   return true
 }
 
-function matchesFilters(row: PeriodExplorerStockRow, filters: PeriodExplorerFilters): boolean {
+function matchesFilters(row: PeriodExplorerStockRow, filters: PeriodExplorerFilters, market: PeriodExplorerMarket): boolean {
   if (filters.markets?.length && (!row.marketSegment || !filters.markets.includes(row.marketSegment))) return false
   if (filters.sectors?.length && (!row.selectedSector || !filters.sectors.includes(row.selectedSector))) return false
   if (filters.marginTypes?.length && (!row.marginType || !filters.marginTypes.includes(row.marginType))) return false
-  if ((filters.marketCapMin != null || filters.marketCapMax != null) && row.marketCapBasis !== 'pit') return false
+  if ((filters.marketCapMin != null || filters.marketCapMax != null)
+    && (market === 'JP' ? row.marketCapBasis !== 'pit' : row.marketCapBasis === 'missing')) return false
   if (!inRange(row.marketCap, filters.marketCapMin, filters.marketCapMax)) return false
   if (!inRange(row.avgVolume, filters.avgVolumeMin, filters.avgVolumeMax)) return false
   if (!inRange(row.avgTurnover, filters.avgTurnoverMin, filters.avgTurnoverMax)) return false
@@ -900,12 +977,13 @@ function buildSectorRows(rows: PeriodExplorerStockRow[], ranking: PeriodExplorer
   return result
 }
 
-function normalizedInput(input: PeriodExplorerInput): Required<Pick<PeriodExplorerInput, 'taxonomy' | 'filters' | 'sort' | 'direction' | 'limit' | 'offset'>> & { ranking: PeriodExplorerRankingKey; from: string | null; to: string | null } {
+function normalizedInput(input: PeriodExplorerInput): Required<Pick<PeriodExplorerInput, 'market' | 'taxonomy' | 'filters' | 'sort' | 'direction' | 'limit' | 'offset'>> & { ranking: PeriodExplorerRankingKey; from: string | null; to: string | null } {
   const ranking = input.ranking && isPeriodExplorerRankingKey(input.ranking) ? input.ranking : 'return_up'
   const definition = PERIOD_EXPLORER_RANKING_MAP.get(ranking)!
   return {
     from: input.from ?? null,
     to: input.to ?? null,
+    market: input.market === 'US' ? 'US' : 'JP',
     ranking,
     taxonomy: input.taxonomy ?? 'sector33',
     filters: input.filters ?? {},
@@ -919,7 +997,7 @@ function normalizedInput(input: PeriodExplorerInput): Required<Pick<PeriodExplor
 export async function queryPeriodExplorer(input: PeriodExplorerInput = {}): Promise<PeriodExplorerResponse> {
   const startedAt = Date.now()
   const normalized = normalizedInput(input)
-  const range = await resolvePeriodExplorerDateRange(normalized.from, normalized.to)
+  const range = await resolvePeriodExplorerDateRange(normalized.from, normalized.to, normalized.market)
   const cacheKey = stableCacheKey({ version: CACHE_VERSION, normalized, range })
   const cached = await readServingCache<PeriodExplorerResponse>('period-explorer', cacheKey, RESPONSE_TTL_MS)
   if (cached) return { ...cached.payload, cacheHit: true, elapsedMs: Date.now() - startedAt }
@@ -931,7 +1009,7 @@ export async function queryPeriodExplorer(input: PeriodExplorerInput = {}): Prom
   const needAllTechnical = definition.category === 'technical'
     || normalized.ranking === 'sector_stage_improve'
     || technicalFiltersActive
-  let rows = await loadBaseRows(range, normalized.taxonomy, needAllTechnical)
+  let rows = await loadBaseRows(range, normalized.taxonomy, needAllTechnical, normalized.market)
   const optionRows = rows
   const rangeFiltersActive = normalized.filters.avgVolumeMin != null || normalized.filters.avgVolumeMax != null
     || normalized.filters.avgTurnoverMin != null || normalized.filters.avgTurnoverMax != null
@@ -948,21 +1026,21 @@ export async function queryPeriodExplorer(input: PeriodExplorerInput = {}): Prom
   let currentStats = new Map<string, RangeDbRow>()
   let previousStats = new Map<string, RangeDbRow>()
   if (rangeStatsScope) {
-    currentStats = await loadRangeStats(range.adoptedFrom, range.adoptedTo, undefined, rangeStatsScope)
+    currentStats = await loadRangeStats(range.adoptedFrom, range.adoptedTo, undefined, rangeStatsScope, normalized.market)
     if (definition.requiresPreviousRange && range.previousFrom && range.previousTo) {
-      previousStats = await loadRangeStats(range.previousFrom, range.previousTo, undefined, rangeStatsScope)
+      previousStats = await loadRangeStats(range.previousFrom, range.previousTo, undefined, rangeStatsScope, normalized.market)
     }
     for (const row of rows) applyRangeStats(row, currentStats.get(row.ticker), previousStats.get(row.ticker))
   }
   if (needAll52Week) {
-    const stats = await load52WeekStats(range.adoptedFrom, range.adoptedTo)
+    const stats = await load52WeekStats(range.adoptedFrom, range.adoptedTo, undefined, normalized.market)
     for (const row of rows) apply52Week(row, stats.get(row.ticker))
   }
   if (definition.requiresVolatility) {
-    const stats = await loadVolatilityStats(range.adoptedFrom, range.adoptedTo, range.previousTo)
+    const stats = await loadVolatilityStats(range.adoptedFrom, range.adoptedTo, range.previousTo, undefined, normalized.market)
     for (const row of rows) applyVolatility(row, stats.get(row.ticker))
   }
-  if (needAllPitShares) {
+  if (needAllPitShares && normalized.market === 'JP') {
     await applyPitMarketCaps(rows, range.adoptedTo)
   }
 
@@ -975,7 +1053,7 @@ export async function queryPeriodExplorer(input: PeriodExplorerInput = {}): Prom
     universeTotal = rows.filter((row) => row.rankingValue != null && Number.isFinite(row.rankingValue)).length
   }
 
-  rows = rows.filter((row) => matchesFilters(row, normalized.filters))
+  rows = rows.filter((row) => matchesFilters(row, normalized.filters, normalized.market))
   const matchedFilterCount = rows.length
   let missingRankingValue = 0
   if (definition.resultKind !== 'sectors') {
@@ -984,10 +1062,18 @@ export async function queryPeriodExplorer(input: PeriodExplorerInput = {}): Prom
     rows = rows.filter((row) => row.rankingValue != null && Number.isFinite(row.rankingValue))
   }
 
-  const eligible = await execGet<{ count: number }>(`
-    SELECT COUNT(*) AS count FROM historical_universe
-    WHERE first_trade_date <= ? AND last_trade_date >= ?
-  `, [range.adoptedTo, range.adoptedFrom])
+  const eligible = normalized.market === 'US'
+    ? await execGet<{ count: number }>(`
+        SELECT COUNT(*) AS count FROM market_universe
+        WHERE market = 'US'
+          AND COALESCE(start_date, '0000-01-01') <= ?
+          AND COALESCE(end_date, '9999-12-31') >= ?
+          AND ${usInvestableSymbolSql('ticker')}
+      `, [range.adoptedTo, range.adoptedFrom])
+    : await execGet<{ count: number }>(`
+        SELECT COUNT(*) AS count FROM historical_universe
+        WHERE first_trade_date <= ? AND last_trade_date >= ?
+      `, [range.adoptedTo, range.adoptedFrom])
   const missingEndpoints = Math.max(0, Number(eligible?.count ?? rows.length) - optionRows.length)
 
   let responseRows: Array<PeriodExplorerStockRow | PeriodExplorerSectorRow>
@@ -1010,14 +1096,14 @@ export async function queryPeriodExplorer(input: PeriodExplorerInput = {}): Prom
     total = rows.length
     const pageRows = rows.slice(normalized.offset, normalized.offset + normalized.limit)
     if (!needAllTechnical && pageRows.length > 0) {
-      const technical = await loadTechnicalRows(range, pageRows.map((row) => row.ticker))
+      const technical = await loadTechnicalRows(range, pageRows.map((row) => row.ticker), normalized.market)
       for (const row of pageRows) applyTechnicalData(row, technical.get(row.ticker))
     }
-    if (!needAllPitShares && pageRows.length > 0) {
+    if (normalized.market === 'JP' && !needAllPitShares && pageRows.length > 0) {
       await applyPitMarketCaps(pageRows, range.adoptedTo)
     }
     if (rangeStatsScope !== 'full' && pageRows.length > 0) {
-      currentStats = await loadRangeStats(range.adoptedFrom, range.adoptedTo, pageRows.map((row) => row.ticker))
+      currentStats = await loadRangeStats(range.adoptedFrom, range.adoptedTo, pageRows.map((row) => row.ticker), 'full', normalized.market)
       for (const row of pageRows) applyRangeStats(row, currentStats.get(row.ticker), previousStats.get(row.ticker))
     }
     responseRows = pageRows
@@ -1026,6 +1112,7 @@ export async function queryPeriodExplorer(input: PeriodExplorerInput = {}): Prom
 
   const response: PeriodExplorerResponse = {
     success: true,
+    market: normalized.market,
     ranking: normalized.ranking,
     rankingLabel: definition.label,
     rankingDescription: definition.description,
@@ -1049,7 +1136,8 @@ export async function queryPeriodExplorer(input: PeriodExplorerInput = {}): Prom
       marginTypes: countOptions(optionRows.map((row) => row.marginType)),
     },
     dataBasis: {
-      prices: 'adjusted_ohlcv', stages: 'daily_snapshot_pit', shares: 'pit_with_current_fallback',
+      prices: 'adjusted_ohlcv', stages: 'daily_snapshot_pit',
+      shares: normalized.market === 'US' ? 'current_only' : 'pit_with_current_fallback',
       classifications: 'current', market: 'current', marginType: 'current',
     },
     cacheHit: false,

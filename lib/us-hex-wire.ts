@@ -9,7 +9,7 @@
 // US_HEX_WIRE_VERSION を上げること (古いクライアントは version 不一致で fail closed する)。
 
 export const US_HEX_WIRE_FORMAT = 'us-hex-columnar'
-export const US_HEX_WIRE_VERSION = 1
+export const US_HEX_WIRE_VERSION = 2
 /** クライアントが明示的に要求するクエリパラメータ。未指定なら旧レスポンス。 */
 export const US_HEX_WIRE_PARAM = 'wire'
 export const US_HEX_WIRE_REQUEST = `${US_HEX_WIRE_FORMAT}.v${US_HEX_WIRE_VERSION}`
@@ -34,7 +34,7 @@ export type UsHexWireRow = {
   sector_small: string | null
   market_segment: string | null
   margin_type: string | null
-  market_cap: number
+  market_cap: number | null
   price: number | null
   daily_change: number | null
   weekly_change: number | null
@@ -66,7 +66,7 @@ export const US_HEX_WIRE_COLUMNS = [
   ['sector_small', 'dict?'],
   ['market_segment', 'dict?'],
   ['margin_type', 'dict?'],
-  ['market_cap', 'num'],
+  ['market_cap', 'num?'],
   ['price', 'num?'],
   ['daily_change', 'num?'],
   ['weekly_change', 'num?'],
@@ -116,6 +116,13 @@ export type UsHexCoverage = {
   dailyStage: number
   weeklyStage: number
   monthlyStage: number
+}
+
+export type UsHexAttributeBasis = {
+  membership: 'CURRENT_UNIVERSE' | 'SNAPSHOT_DATE'
+  profiles: 'CURRENT_REFERENCE' | 'UNAVAILABLE'
+  classifications: 'CURRENT_REFERENCE' | 'UNAVAILABLE'
+  shares: 'CURRENT_REFERENCE' | 'UNAVAILABLE'
 }
 
 const UNIVERSE_KEYS = ['activeAll', 'productionActive', 'stocks', 'etfs', 'mutualFunds', 'testSymbols', 'excludedArtifacts'] as const satisfies readonly (keyof UsHexUniverse)[]
@@ -215,11 +222,33 @@ export type UsHexDecodedResponse = {
   coverage: UsHexCoverage | null
   cache: 'hit' | 'miss' | null
   notice: string | null
+  attributeBasis: UsHexAttributeBasis | null
+}
+
+function decodeAttributeBasis(value: unknown): UsHexAttributeBasis | null {
+  if (value === undefined) return null
+  if (value == null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new UsHexWireError('attributeBasis must be an object')
+  }
+  const basis = value as Record<string, unknown>
+  if (basis.membership !== 'CURRENT_UNIVERSE' && basis.membership !== 'SNAPSHOT_DATE') {
+    throw new UsHexWireError('attributeBasis.membership is invalid')
+  }
+  if (basis.profiles !== 'CURRENT_REFERENCE' && basis.profiles !== 'UNAVAILABLE') {
+    throw new UsHexWireError('attributeBasis.profiles is invalid')
+  }
+  if (basis.classifications !== 'CURRENT_REFERENCE' && basis.classifications !== 'UNAVAILABLE') {
+    throw new UsHexWireError('attributeBasis.classifications is invalid')
+  }
+  if (basis.shares !== 'CURRENT_REFERENCE' && basis.shares !== 'UNAVAILABLE') {
+    throw new UsHexWireError('attributeBasis.shares is invalid')
+  }
+  return basis as UsHexAttributeBasis
 }
 
 function decodeCounts<K extends string>(value: unknown, keys: readonly K[], label: string): Record<K, number> | null {
-  if (value === undefined) return null
-  if (value == null || typeof value !== 'object' || Array.isArray(value)) throw new UsHexWireError(`${label} must be an object`)
+  if (value == null) return null
+  if (typeof value !== 'object' || Array.isArray(value)) throw new UsHexWireError(`${label} must be an object`)
   const record = value as Record<string, unknown>
   const out = {} as Record<K, number>
   for (const key of keys) {
@@ -264,6 +293,7 @@ export function decodeUsHexColumnar(payload: unknown): UsHexDecodedResponse {
   if (notice !== null && typeof notice !== 'string') throw new UsHexWireError('notice is invalid')
   const universe = decodeCounts(body.universe, UNIVERSE_KEYS, 'universe')
   const coverage = decodeCounts(body.coverage, COVERAGE_KEYS, 'coverage')
+  const attributeBasis = decodeAttributeBasis(body.attributeBasis)
 
   const columns = body.columns
   if (!Array.isArray(columns) || columns.length !== US_HEX_WIRE_COLUMNS.length) throw new UsHexWireError('columns length mismatch')
@@ -303,7 +333,6 @@ export function decodeUsHexColumnar(payload: unknown): UsHexDecodedResponse {
 
   const text = (name: UsHexWireColumnName) => decoded.get(name) as string[]
   const nullableText = (name: UsHexWireColumnName) => decoded.get(name) as (string | null)[]
-  const num = (name: UsHexWireColumnName) => decoded.get(name) as number[]
   const nullableNum = (name: UsHexWireColumnName) => decoded.get(name) as (number | null)[]
 
   const code = text('code')
@@ -312,7 +341,7 @@ export function decodeUsHexColumnar(payload: unknown): UsHexDecodedResponse {
   const sectorSmall = nullableText('sector_small')
   const marketSegment = nullableText('market_segment')
   const marginType = nullableText('margin_type')
-  const marketCap = num('market_cap')
+  const marketCap = nullableNum('market_cap')
   const price = nullableNum('price')
   const dailyChange = nullableNum('daily_change')
   const weeklyChange = nullableNum('weekly_change')
@@ -379,5 +408,6 @@ export function decodeUsHexColumnar(payload: unknown): UsHexDecodedResponse {
     coverage: coverage as UsHexCoverage | null,
     cache: cache as 'hit' | 'miss' | null,
     notice: notice as string | null,
+    attributeBasis,
   }
 }

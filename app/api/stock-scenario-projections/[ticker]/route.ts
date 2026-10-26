@@ -7,6 +7,7 @@ import {
 } from '@/lib/stock-scenarios/projections'
 import { getAssistantOpenAIConfig } from '@/lib/assistant/config'
 import { normalizeMarket } from '@/lib/markets'
+import { isIsoDate } from '@/lib/mtf-close-calendar'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -32,7 +33,7 @@ function parsePositiveInt(value: string | null, fallback: number, max: number): 
 function parseAsOfDate(value: string | null): string | null {
   if (!value) return null
   const trimmed = value.trim()
-  return /^\d{4}-\d{2}-\d{2}$/.test(trimmed) ? trimmed : null
+  return isIsoDate(trimmed) ? trimmed : null
 }
 
 function extractOutputText(payload: unknown): string | null {
@@ -149,9 +150,8 @@ async function withLlmNarratives(
       },
       status: { attempted: true, used: true, model: config.model },
     }
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error)
-    return { projection, status: { attempted: true, used: false, model: config.model, reason } }
+  } catch {
+    return { projection, status: { attempted: true, used: false, model: config.model, reason: 'request_failed' } }
   }
 }
 
@@ -164,6 +164,9 @@ export async function GET(request: NextRequest, context: RouteContext) {
     const horizonDays = parsePositiveInt(request.nextUrl.searchParams.get('horizonDays'), defaultHorizon, 200)
     const limit = parsePositiveInt(request.nextUrl.searchParams.get('limit'), 8, 8)
     const asOfDate = parseAsOfDate(request.nextUrl.searchParams.get('date'))
+    if (request.nextUrl.searchParams.has('date') && !asOfDate) {
+      return NextResponse.json({ ok: false, error: 'invalid_date' }, { status: 400 })
+    }
     const includeRealized = asOfDate != null && request.nextUrl.searchParams.get('actual') === '1'
     const friendReadonly = request.headers.get('x-stockboard-access-mode') === 'friend-read-only'
     const llmEnabled = !friendReadonly
@@ -179,7 +182,16 @@ export async function GET(request: NextRequest, context: RouteContext) {
       includeRealized,
     })
     if (!projection) {
-      return NextResponse.json({ ok: true, ticker, interval, horizonDays, scenarios: [], message: 'J-Quants/手動補完の価格データがありません。' })
+      return NextResponse.json({
+        ok: true,
+        ticker,
+        interval,
+        horizonDays,
+        scenarios: [],
+        message: market === 'US'
+          ? 'Tiingo由来の調整後価格データがありません。'
+          : 'J-Quants/手動補完の価格データがありません。',
+      })
     }
     const enriched = await withLlmNarratives(projection, llmEnabled)
     return NextResponse.json({
@@ -189,7 +201,7 @@ export async function GET(request: NextRequest, context: RouteContext) {
   } catch (error) {
     console.error('stock scenario projections API error:', error)
     return NextResponse.json(
-      { ok: false, error: 'stock_scenario_projections_failed', message: (error as Error).message },
+      { ok: false, error: 'stock_scenario_projections_failed' },
       { status: 500 },
     )
   }

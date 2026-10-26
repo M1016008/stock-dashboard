@@ -7,6 +7,7 @@ import {
 } from '@/lib/db/us-analytics'
 import { getUsSecondaryName } from '@/lib/us-symbol-aliases'
 import { usInvestableSymbolSql } from '@/lib/us-symbol-quality'
+import { isIsoDate } from '@/lib/mtf-close-calendar'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -45,26 +46,6 @@ function normalizeTicker(value: string | null): string | null {
   return ticker && /^[A-Z0-9.-]{1,20}$/.test(ticker) ? ticker : null
 }
 
-function normalizeDate(value: string | null): string | null {
-  const date = value?.trim()
-  return date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : null
-}
-
-function normalizeHorizon(value: string | null): number {
-  const horizon = Number(value)
-  return HORIZONS.has(horizon) ? horizon : 20
-}
-
-function normalizeDirection(value: string | null): Direction {
-  return DIRECTIONS.has(value ?? '') ? value as Direction : 'up'
-}
-
-function normalizeLimit(value: string | null): number {
-  const limit = Number(value)
-  if (!Number.isFinite(limit)) return 20
-  return Math.min(120, Math.max(1, Math.trunc(limit)))
-}
-
 function toCandidate(row: CandidateRow) {
   const feature = parseJson<Record<string, unknown>>(row.featureJson, {})
   const reason = parseJson<Record<string, unknown>>(row.reasonJson, {})
@@ -97,11 +78,37 @@ function toCandidate(row: CandidateRow) {
 
 export async function GET(request: NextRequest) {
   try {
-    const horizonDays = normalizeHorizon(request.nextUrl.searchParams.get('horizon'))
-    const direction = normalizeDirection(request.nextUrl.searchParams.get('direction'))
-    const limit = normalizeLimit(request.nextUrl.searchParams.get('limit'))
-    const ticker = normalizeTicker(request.nextUrl.searchParams.get('ticker'))
-    const requestedDate = normalizeDate(request.nextUrl.searchParams.get('date'))
+    const params = request.nextUrl.searchParams
+    for (const name of ['horizon', 'direction', 'limit', 'ticker', 'date']) {
+      if (params.getAll(name).length > 1) {
+        return NextResponse.json({ error: `duplicate_${name}` }, { status: 400 })
+      }
+    }
+    const rawHorizon = params.get('horizon')
+    const rawDirection = params.get('direction')
+    const rawLimit = params.get('limit')
+    const rawTicker = params.get('ticker')
+    const rawDate = params.get('date')?.trim() ?? ''
+    const horizonDays = rawHorizon == null ? 20 : Number(rawHorizon)
+    const direction = rawDirection == null ? 'up' : rawDirection
+    const limit = rawLimit == null ? 20 : Number(rawLimit)
+    const ticker = rawTicker == null ? null : normalizeTicker(rawTicker)
+    const requestedDate = rawDate || null
+    if (!HORIZONS.has(horizonDays)) {
+      return NextResponse.json({ error: 'invalid_horizon' }, { status: 400 })
+    }
+    if (!DIRECTIONS.has(direction)) {
+      return NextResponse.json({ error: 'invalid_direction' }, { status: 400 })
+    }
+    if (!Number.isInteger(limit) || limit < 1 || limit > 120) {
+      return NextResponse.json({ error: 'invalid_limit' }, { status: 400 })
+    }
+    if (rawTicker != null && ticker == null) {
+      return NextResponse.json({ error: 'invalid_ticker' }, { status: 400 })
+    }
+    if (requestedDate != null && !isIsoDate(requestedDate)) {
+      return NextResponse.json({ error: 'invalid_date' }, { status: 400 })
+    }
 
     if (!hasUsAnalyticsDb()) {
       return NextResponse.json({

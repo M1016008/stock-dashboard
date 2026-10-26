@@ -292,6 +292,15 @@ export const PAGE_CATALOG = {
     commandBadge: 'US市場',
     searchTerms: '米国株 MTF Close Calendar ローソク足 確定日 NYSE Nasdaq',
   },
+  usEarnings: {
+    href: '/us/earnings',
+    label: 'US決算カレンダー',
+    description: '正式同期済みの米国株決算予定を確認',
+    icon: CalendarDays,
+    commandVerb: '確認',
+    commandBadge: 'USイベント',
+    searchTerms: '米国株 earnings calendar Finnhub 決算 発表',
+  },
   usScreener: {
     href: '/us/screener',
     label: 'USスクリーナー',
@@ -300,6 +309,15 @@ export const PAGE_CATALOG = {
     commandVerb: '探す',
     commandBadge: 'US探索',
     searchTerms: '米国株 条件検索 24か月足 2年足 上昇終値ライン',
+  },
+  usPeriodExplorer: {
+    href: '/us/period-explorer',
+    label: 'US期間ランキング',
+    description: '任意期間の値動き・Stage・流動性から米国株を探索',
+    icon: CalendarRange,
+    commandVerb: '探す',
+    commandBadge: 'US探索',
+    searchTerms: '米国株 期間分析 騰落率 出来高 SEC 業種ランキング',
   },
   usStageScreener: {
     href: '/us/stage-screener',
@@ -471,7 +489,7 @@ export const NAVIGATION_BY_AREA = {
       sections: [
         { id: 'us-market-pulse', label: '市場を読む', pageIds: ['usMarketMomentum'], column: 1 },
         { id: 'us-industry-map', label: '分類を比較', pageIds: ['usSectors'], column: 2 },
-        { id: 'us-events', label: 'イベント', pageIds: ['usMtfCloseCalendar'], column: 1 },
+        { id: 'us-events', label: 'イベント', pageIds: ['usEarnings', 'usMtfCloseCalendar'], column: 1 },
       ],
     },
     {
@@ -481,7 +499,7 @@ export const NAVIGATION_BY_AREA = {
       shortLabel: '探索',
       icon: Search,
       sections: [
-        { id: 'us-filters', label: '条件から探す', pageIds: ['usScreener', 'usStageScreener', 'usTriggerDiscovery'], column: 1 },
+        { id: 'us-filters', label: '条件から探す', pageIds: ['usScreener', 'usPeriodExplorer', 'usStageScreener', 'usTriggerDiscovery'], column: 1 },
         { id: 'us-conversation', label: '対話で探す', pageIds: ['usAiResearch'], column: 2 },
       ],
     },

@@ -76,8 +76,25 @@ assert.match(
 )
 assert.match(
   page,
+  /Array\.isArray\(params\.date\) \? params\.date\.join\(','\)/,
+  'Duplicate date parameters must remain invalid instead of collapsing to latest',
+)
+assert.match(
+  page,
   /initialAsOf=\{\{/,
   'US screener must pass the resolved initial PIT contract to its client',
+)
+assert.match(page, /availability: asOf\.availability/)
+assert.match(page, /earliestDate: asOf\.earliestDate/)
+assert.match(
+  client,
+  /if \(unavailableDateReason\) \{[\s\S]*?setLoading\(false\)[\s\S]*?return[\s\S]*?let cancelled = false/,
+  'Malformed and out-of-coverage dates must stop the screener request instead of fetching latest',
+)
+assert.match(
+  client,
+  /最新データは代わりに表示していません/,
+  'Unavailable date states must explicitly disclose that latest data was not substituted',
 )
 assert.match(
   client,

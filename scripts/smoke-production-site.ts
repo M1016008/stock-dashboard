@@ -73,8 +73,10 @@ const pages: Check[] = [
   '/us/analysis/backtest',
   '/us/analysis/ml-lens',
   '/us/analysis/transitions',
+  '/us/earnings',
   '/us/market-momentum',
   '/us/mtf-close-calendar',
+  '/us/period-explorer',
   '/us/screener',
   '/us/sectors',
   '/us/stage-screener',
@@ -698,7 +700,7 @@ const apiChecks: Check[] = [
   { name: 'US ML status', path: '/api/us/ml-status/AAPL', kind: 'json' },
   { name: 'US hex dates', path: '/api/us/hex/available-dates?limit=5', kind: 'json', nonEmptyPaths: ['dates'] },
   { name: 'US hex', path: '/api/us/hex?timeframe=daily', kind: 'json' },
-  { name: 'US hex columnar wire', path: '/api/us/hex?timeframe=daily&wire=us-hex-columnar.v1', kind: 'json' },
+  { name: 'US hex columnar wire', path: '/api/us/hex?timeframe=daily&wire=us-hex-columnar.v2', kind: 'json' },
 ]
 
 function getPath(value: unknown, dottedPath: string): unknown {

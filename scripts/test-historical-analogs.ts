@@ -425,4 +425,33 @@ assert.match(
   '本質類似局面画面は次の候補を追加表示できること',
 )
 
+const analogPageIndex = historicalAnalogRouteSource.indexOf(
+  'const page = paginateHistoricalAnalogRows(diversified, offset, limit)',
+)
+const metadataLoadIndex = historicalAnalogRouteSource.indexOf(
+  'loadTickerMetadata(db, [ticker, ...selected.map((row) => row.ticker)])',
+)
+assert.ok(analogPageIndex >= 0 && metadataLoadIndex > analogPageIndex,
+  '現在参照の銘柄分類はランキング・ページング確定後にのみ取得すること')
+assert.match(
+  historicalAnalogRouteSource,
+  /basis:\s*'CURRENT_REFERENCE'[\s\S]*?usage:\s*'DISPLAY_AND_LOADED_PAGE_FILTER_ONLY'[\s\S]*?affectsSimilarityRanking:\s*false[\s\S]*?affectsMatchCount:\s*false/,
+  'APIは現在参照メタデータが順位・該当件数に影響しない契約を返すこと',
+)
+assert.match(
+  historicalAnalogRouteSource,
+  /matchCount:\s*diversified\.length/,
+  '該当件数は現在分類ではなく類似候補集合から計算すること',
+)
+assert.match(
+  historicalAnalogExplorerSource,
+  /CURRENT_REFERENCE[\s\S]*?類似順位・類似度・該当件数の計算には使用しません/,
+  '画面は現在参照分類の用途制限を明示すること',
+)
+assert.match(
+  historicalAnalogExplorerSource,
+  /市場（現在参照）[\s\S]*?17業種（現在参照）[\s\S]*?33業種（現在参照）[\s\S]*?貸借・信用（現在参照）/,
+  '現在参照の分類フィルターを明示的にラベル付けすること',
+)
+
 console.log('historical analog period tests passed')

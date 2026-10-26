@@ -30,15 +30,15 @@ import {
 
 // ── 1. schema snapshot: 列の追加・削除・並べ替え・型変更はここで落ちる (変更時は version を上げる) ──
 assert.equal(US_HEX_WIRE_FORMAT, 'us-hex-columnar')
-assert.equal(US_HEX_WIRE_VERSION, 1)
+assert.equal(US_HEX_WIRE_VERSION, 2)
 assert.equal(US_HEX_WIRE_PARAM, 'wire')
-assert.equal(US_HEX_WIRE_REQUEST, 'us-hex-columnar.v1')
+assert.equal(US_HEX_WIRE_REQUEST, 'us-hex-columnar.v2')
 assert.deepStrictEqual(
   US_HEX_WIRE_COLUMNS.map(([name, kind]) => `${name}:${kind}`),
   [
     'code:text', 'name:text',
     'sector_large:dict', 'sector_small:dict?', 'market_segment:dict?', 'margin_type:dict?',
-    'market_cap:num', 'price:num?',
+    'market_cap:num?', 'price:num?',
     'daily_change:num?', 'weekly_change:num?', 'monthly_change:num?',
     'months3_change:num?', 'months6_change:num?', 'ytd_change:num?',
     'data_status:dict', 'stage:num?',
@@ -162,6 +162,12 @@ const meta = {
   universe: { activeAll: 13002, productionActive: 12451, stocks: 8700, etfs: 3100, mutualFunds: 651, testSymbols: 12, excludedArtifacts: 539 },
   coverage: { prices: 12000, snapshots: 11800, dailyAStage: 11000, dailyStage: 10500, weeklyStage: 10000, monthlyStage: 9000 },
   cache: 'miss' as const,
+  attributeBasis: {
+    membership: 'CURRENT_UNIVERSE' as const,
+    profiles: 'CURRENT_REFERENCE' as const,
+    classifications: 'CURRENT_REFERENCE' as const,
+    shares: 'CURRENT_REFERENCE' as const,
+  },
 }
 const compactJson = JSON.stringify({ success: true, data: compactRows, ...meta })
 const wireJson = JSON.stringify({ success: true, ...encodeUsHexColumnar(compactRows), ...meta })
@@ -177,6 +183,7 @@ assert.equal(decoded.source, meta.source)
 assert.deepStrictEqual(decoded.universe, meta.universe)
 assert.deepStrictEqual(decoded.coverage, meta.coverage)
 assert.equal(decoded.cache, 'miss')
+assert.deepStrictEqual(decoded.attributeBasis, meta.attributeBasis)
 
 // 数値は bit 単位で同一 (丸めない)
 compactRows.forEach((row, i) => {
@@ -199,9 +206,10 @@ const nullOut = decoded.rows.find((row) => row.code === 'ZZNULL')
 const edgeOut = decoded.rows.find((row) => row.code === 'ZZZERO')
 assert.ok(nullOut && edgeOut)
 assert.equal(nullOut.price, null)
+assert.equal(nullOut.market_cap, null)
 assert.equal(nullOut.sector_small, null)
 assert.equal(nullOut.market_segment, null)
-assert.equal(nullOut.margin_type, 'Stock')
+assert.equal(nullOut.margin_type, null)
 assert.equal(nullOut.sector_large, 'Unclassified')
 assert.equal(nullOut.daily_change, null)
 assert.equal(nullOut.stage, null)
@@ -209,7 +217,7 @@ assert.equal(nullOut.physical_momentum_score, null)
 assert.deepStrictEqual(nullOut.sma_angles, { sma5: null, sma25: null, sma75: null, sma300: null })
 assert.equal(nullOut.data_status, 'price_pending')
 assert.equal(edgeOut.price, 0)
-assert.equal(edgeOut.market_cap, 0)
+assert.equal(edgeOut.market_cap, null)
 assert.equal(edgeOut.daily_change, 0)
 assert.equal(edgeOut.weekly_change, 0, '-0 serializes as 0 in both legacy JSON and wire')
 assert.equal(edgeOut.monthly_change, -12.5)
@@ -246,7 +254,7 @@ rejects('legacy compact payload', () => JSON.parse(compactJson))
 rejects('success false', (b) => { b.success = false })
 rejects('missing wire', (b) => { delete b.wire })
 rejects('wrong format', (b) => { b.wire.format = 'us-hex-rows' })
-rejects('future version', (b) => { b.wire.version = 2 })
+rejects('future version', (b) => { b.wire.version = 3 })
 rejects('string version', (b) => { b.wire.version = '1' })
 rejects('reordered columns', (b) => { [b.wire.columns[8], b.wire.columns[9]] = [b.wire.columns[9], b.wire.columns[8]] })
 rejects('missing column name', (b) => { b.wire.columns.pop() })
@@ -258,7 +266,7 @@ rejects('negative count', (b) => { b.count = -1 })
 rejects('null in non-null text', (b) => { b.columns[col('code')][0] = null })
 rejects('number in text', (b) => { b.columns[col('name')][0] = 1 })
 rejects('string in number', (b) => { b.columns[col('price')][0] = '12.5' })
-rejects('null in non-null number', (b) => { b.columns[col('market_cap')][0] = null })
+rejects('string in nullable number', (b) => { b.columns[col('market_cap')][0] = 'unknown' })
 rejects('non-finite number', (b) => { b.columns[col('daily_change')][0] = Number.POSITIVE_INFINITY })
 rejects('dict index out of range', (b) => { b.columns[col('sector_large')][0] = b.dictionaries.sector_large.length })
 rejects('fractional dict index', (b) => { b.columns[col('sector_large')][0] = 0.5 })
@@ -272,6 +280,7 @@ rejects('invalid source', (b) => { b.source = 'yahoo' })
 rejects('invalid coverage', (b) => { b.coverage.prices = null })
 rejects('invalid universe', (b) => { b.universe = [] })
 rejects('invalid cache', (b) => { b.cache = 'stale' })
+rejects('invalid attribute basis', (b) => { b.attributeBasis.shares = 'INFERRED' })
 assert.throws(() => encodeUsHexColumnar([{ ...compactRows[0], sector_large: null as never }]), UsHexWireError)
 
 // ── 4. payload 削減量 (決定的 fixture。閾値を割ったら transport の後退) ──
@@ -293,7 +302,7 @@ assert.ok(gzipReduction >= 0.2, `gzip payload must shrink by >= 20% (got ${(gzip
 const routeSource = readFileSync('app/api/us/hex/route.ts', 'utf8')
 const viewSource = readFileSync('components/hex/HexStageMapView.tsx', 'utf8')
 const smokeSource = readFileSync('scripts/smoke-production-site.ts', 'utf8')
-assert.match(routeSource, /const cacheKey = `all-investable-v3:\$\{date\}:\$\{timeframe\}:\$\{format\}`/, 'route cache must be keyed by format')
+assert.match(routeSource, /const cacheKey = `all-investable-v4:\$\{historical \? 'historical' : 'current'\}:\$\{date\}:\$\{timeframe\}:\$\{format\}`/, 'route cache must be keyed by basis and format')
 assert.match(routeSource, /wire != null \? 'columnar-v1' : compact \? 'compact-v1' : 'legacy-v1'/, 'legacy and compact responses must remain')
 assert.match(routeSource, /wire != null && wire !== US_HEX_WIRE_REQUEST[\s\S]{0,300}status: 400/, 'unknown wire versions must be rejected')
 assert.match(routeSource, /content-encoding', 'gzip'/)
@@ -309,7 +318,7 @@ assert.match(
 )
 assert.match(
   smokeSource,
-  /\/api\/us\/hex\?timeframe=daily&wire=us-hex-columnar\.v1/,
+  /\/api\/us\/hex\?timeframe=daily&wire=us-hex-columnar\.v2/,
   'Production smoke must exercise the transport used by the US Stage Screener client.',
 )
 

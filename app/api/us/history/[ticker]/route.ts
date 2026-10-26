@@ -160,7 +160,7 @@ export async function GET(
   } catch (error) {
     console.error('US history API error:', error)
     return NextResponse.json(
-      { error: 'Failed to fetch US history', message: (error as Error).message },
+      { error: 'us_history_failed' },
       { status: 500 },
     )
   }
