@@ -85,7 +85,6 @@ function Metric({ label, value, hint }: { label: string; value: string; hint?: s
     </div>
   )
 }
-
 function MiniMetric({ label, value }: { label: string; value: string }) {
   return (
     <div className="min-w-0 rounded-[4px] border border-[var(--color-border-soft)] bg-white px-2 py-2">

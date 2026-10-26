@@ -33,4 +33,3 @@ Artifacts are retained outside Git under `/Volumes/OWC Express 1M2 80G/developme
 - Production, Friend Access runtime, live credentials, and protected datasets.
 - JP valuation and shareholder-return real-data integrations.
 - Physical mobile devices and assistive-technology hardware.
-

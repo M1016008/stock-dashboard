@@ -178,7 +178,6 @@ function StageCell({ row }: { row: MonitorRow }) {
     </div>
   )
 }
-
 function SignalBadges({ row, contactThreshold }: { row: MonitorRow; contactThreshold: number }) {
   const badges: string[] = []
   if (row.crossAgeSessions === 0) badges.push(row.lastCrossDirection === 'up' ? '上抜け' : '下抜け')
