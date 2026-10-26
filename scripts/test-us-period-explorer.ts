@@ -196,6 +196,8 @@ async function main(): Promise<void> {
   const serverSource = fs.readFileSync(path.join(process.cwd(), 'lib/server/period-explorer-read-model.ts'), 'utf8')
   assert.match(clientSource, /historicalUs/)
   assert.match(clientSource, /stripUnavailableHistoricalUsParams/)
+  assert.match(clientSource, /if \(!hasCalendarData\)/)
+  assert.match(clientSource, /取引データがありません/)
   assert.match(clientSource, /turnoverObservations/)
   assert.match(clientSource, /observations == null \? '—' : `\$\{observations\}\/\$\{tradingDays\}日`/)
   assert.doesNotMatch(clientSource, /turnoverObservations \?\? 0/)

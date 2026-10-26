@@ -287,6 +287,7 @@ export function PeriodExplorerClient({ market = 'JP', calendarDates, defaultFrom
   const [filtersOpen, setFiltersOpen] = useState(false)
   const requestSequence = useRef(0)
   const isUs = market === 'US'
+  const hasCalendarData = calendarDates.length > 0 && Boolean(defaultFrom) && Boolean(defaultTo)
   const requestedHistoricalUs = isUs && (searchParams.get('to') ?? defaultTo) < defaultTo
   const historicalUs = requestedHistoricalUs || (isUs && response?.dataBasis.classifications === 'unavailable_historical')
   const taxonomies = isUs ? US_TAXONOMIES : JP_TAXONOMIES
@@ -311,6 +312,13 @@ export function PeriodExplorerClient({ market = 'JP', calendarDates, defaultFrom
   }, [defaultFrom, defaultTo, query, searchParams])
 
   useEffect(() => {
+    if (!hasCalendarData) {
+      requestSequence.current += 1
+      setResponse(null)
+      setError(null)
+      setLoading(false)
+      return
+    }
     const params = new URLSearchParams(query)
     if (!params.get('from')) params.set('from', defaultFrom)
     if (!params.get('to')) params.set('to', defaultTo)
@@ -344,7 +352,7 @@ export function PeriodExplorerClient({ market = 'JP', calendarDates, defaultFrom
         if (!controller.signal.aborted && sequence === requestSequence.current) setLoading(false)
       })
     return () => controller.abort()
-  }, [defaultFrom, defaultTo, limit, market, query, ranking, router, taxonomy])
+  }, [defaultFrom, defaultTo, hasCalendarData, limit, market, query, ranking, router, taxonomy])
 
   const category = definition.category
   const categoryRankings = PERIOD_EXPLORER_RANKINGS.filter((item) => item.category === category)
@@ -575,6 +583,7 @@ export function PeriodExplorerClient({ market = 'JP', calendarDates, defaultFrom
 
         {error && <div role="alert" className="m-3 rounded-[6px] border border-[#f0b8b8] bg-[var(--color-price-up-bg)] p-3 text-[12px] font-semibold text-[var(--color-price-up-strong)]">{error}</div>}
         {!error && loading && !response && <div className="flex h-72 items-center justify-center gap-2 text-[11px] font-bold text-[var(--color-text-tertiary)]"><LoaderCircle size={15} className="animate-spin" />期間データを集計しています</div>}
+        {!error && !loading && !response && !hasCalendarData && <div className="flex h-64 items-center justify-center px-4 text-center text-[12px] font-black text-[var(--color-text-secondary)]">取引データがありません</div>}
         {!error && response && <div className={loading ? 'pointer-events-none opacity-55' : ''} aria-busy={loading}>
           {response.total === 0 ? <div className="flex h-64 flex-col items-center justify-center gap-2 text-center"><p className="text-[12px] font-black text-[var(--color-text-secondary)]">条件に一致する銘柄がありません</p><button type="button" onClick={() => clearFilters(false)} className="text-[11px] font-bold text-[var(--color-brand-700)]">期間を残して条件を解除</button></div>
             : response.resultKind === 'stocks' ? <StockResults market={market} rows={stockRows} ranking={ranking} duplicateReturn={duplicateReturn} adoptedTo={response.range.adoptedTo} tradingDays={response.range.tradingDays} historicalUs={historicalUs} onSort={sortBy} />
