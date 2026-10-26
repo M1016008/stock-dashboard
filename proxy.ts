@@ -8,6 +8,7 @@ import { NextResponse, type NextRequest } from 'next/server'
 import path from 'node:path'
 import { anyStorageFatal, anyStorageUncertain, guardForDatabase, requiresExternalStorageGuard } from './lib/storage/external-storage-guard'
 import { isSixStageResearchPath, isSixStageResearchRequestAllowed, requiredSixStageResearchMode } from './lib/research/six-stage-research-isolation'
+import { isSmaDynamicsFixturePreviewPath } from './lib/sma-dynamics-preview-path'
 import { resolveConfiguredStoragePath } from './lib/storage-paths'
 
 const SHARE_AUTH_REALM = 'StockBoard shared preview'
@@ -108,6 +109,21 @@ export function proxy(req: NextRequest) {
     const researchResponse = NextResponse.next()
     researchResponse.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
     return researchResponse
+  }
+  // Resolve the exact fixture-preview path before rendering. In production/share mode an
+  // explicit response is required because a streamed page-level notFound() can retain 200.
+  if (isSmaDynamicsFixturePreviewPath(pathname)) {
+    if (process.env.NODE_ENV === 'production' || isShareMode()) {
+      return new NextResponse('Not Found', {
+        status: 404,
+        headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0' },
+      })
+    }
+    // The preview renders fixtures only and reads no storage, so local development remains
+    // available while isolated fixture storage is degraded.
+    const previewResponse = NextResponse.next()
+    previewResponse.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
+    return previewResponse
   }
   // Health reports storage degradation without hiding the running web process.
   if (pathname === '/api/health') return NextResponse.next()
