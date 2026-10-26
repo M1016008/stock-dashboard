@@ -72,7 +72,11 @@ assert.equal(SMA_LAB_DEFAULT_RANGE, '6m')
 {
   const colors = SMA_LAB_PERIODS.map((period) => SMA_LAB_COLORS[period])
   assert.equal(new Set(colors).size, colors.length, 'every SMA period has its own color')
-  for (const period of [3, 5, 25, 75, 150, 200, 300] as const) assert.equal(SMA_LAB_COLORS[period], MOVING_AVERAGE_COLORS[period], `SMA${period} matches the shared palette`)
+  for (const period of [3, 5, 25, 75, 200] as const) assert.equal(SMA_LAB_COLORS[period], MOVING_AVERAGE_COLORS[period], `SMA${period} matches the legacy shared palette`)
+  assert.equal(MOVING_AVERAGE_COLORS[150], undefined, 'SMA150 keeps the pre-Lab shared-chart fallback')
+  assert.equal(MOVING_AVERAGE_COLORS[300], undefined, 'SMA300 keeps the pre-Lab shared-chart fallback')
+  assert.equal(SMA_LAB_COLORS[150], '#7c3aed', 'the Lab owns its SMA150 color')
+  assert.equal(SMA_LAB_COLORS[300], '#0e7490', 'the Lab owns its SMA300 color')
   assert.equal(MOVING_AVERAGE_COLORS[13], '#dc2626', 'shared palette untouched')
 }
 

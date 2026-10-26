@@ -452,27 +452,27 @@ export function adaptationApplied(adaptation: DailyAdaptation, base: ForwardBase
 // Copy (shared by the UI and tests)
 
 export const DAILY_PHASE_LABEL: Record<DailyBarPhase, string> = {
-  confirmed: '確定',
-  provisional: '暫定',
-  unentered: '未入力',
+  confirmed: '仮定・入力完了',
+  provisional: '仮定・暫定',
+  unentered: '入力待ち',
 }
 
 export function describeDailyBar(bar: DailyProjectedBar): string {
-  if (bar.phase === 'confirmed') return `確定: ${bar.requiredSessions}営業日すべて入力済み`
-  if (bar.phase === 'provisional') return `暫定: ${bar.enteredSessions}/${bar.requiredSessions}営業日まで入力。最終営業日まで入力すると確定します`
+  if (bar.phase === 'confirmed') return `仮定・入力完了: ${bar.requiredSessions}営業日すべて入力済み`
+  if (bar.phase === 'provisional') return `仮定・暫定: ${bar.enteredSessions}/${bar.requiredSessions}営業日まで入力。最終営業日まで入力すると仮定・入力完了になります`
   return bar.isolatedSessions > 0
-    ? `未確定: 途中の営業日が未入力のため、先の入力 ${bar.isolatedSessions}日分は使いません`
-    : `未入力: 必要な営業日 ${bar.requiredSessions}日が入力されていません`
+    ? `入力待ち: 途中の営業日が未入力のため、先の入力 ${bar.isolatedSessions}日分は使いません`
+    : `入力待ち: 必要な営業日 ${bar.requiredSessions}日が入力されていません`
 }
 
 export function describeDailyAdaptation(adaptation: DailyAdaptation, barNoun: string): string {
   const list = (ks: number[]) => ks.slice(0, 6).map((k) => `T+${k}`).join(', ') + (ks.length > 6 ? ' ほか' : '')
-  const parts = [`日次シナリオから導出: 確定した${barNoun} ${adaptation.confirmedK.length}/${adaptation.horizon}本${adaptation.confirmedK.length > 0 ? ` (${list(adaptation.confirmedK)})` : ''}`]
+  const parts = [`日次シナリオから導出: 仮定・入力完了の${barNoun} ${adaptation.confirmedK.length}/${adaptation.horizon}本${adaptation.confirmedK.length > 0 ? ` (${list(adaptation.confirmedK)})` : ''}`]
   if (adaptation.provisional.length > 0) {
-    parts.push(`暫定の足 ${list(adaptation.provisional.map((item) => item.k))} は営業日が揃うまで空欄 (補完しません)`)
+    parts.push(`仮定・暫定の足 ${list(adaptation.provisional.map((item) => item.k))} は営業日が揃うまで空欄 (補完しません)`)
   }
   const unreached = adaptation.emptyK.filter((k) => !adaptation.provisional.some((item) => item.k === k))
   if (unreached.length > 0) parts.push(`日次の入力が届かない足 ${list(unreached)} は空欄`)
-  if (adaptation.complete) parts.push('すべて確定済みなので完全なシナリオです')
+  if (adaptation.complete) parts.push('すべて仮定・入力完了なので完全なシナリオです')
   return parts.join(' ・ ')
 }

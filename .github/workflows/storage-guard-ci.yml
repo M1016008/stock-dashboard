@@ -6,10 +6,20 @@ on:
     paths:
       - '.github/workflows/storage-guard-ci.yml'
       - 'app/**'
+      - 'components/research/SixStageEventPathLab.tsx'
+      - 'components/stock/sma-dynamics/**'
+      - 'components/us/stock-detail/UsChartWorkspace.tsx'
+      - 'lib/chart-colors.ts'
       - 'lib/db/client.ts'
       - 'lib/db/us-analytics.ts'
+      - 'lib/markets.ts'
+      - 'lib/research/six-stage-current-serving-projection-fixture.ts'
       - 'lib/runtime/**'
+      - 'lib/server/jp-market-calendar.ts'
+      - 'lib/server/us-data-freshness.ts'
+      - 'lib/sma-dynamics*.ts'
       - 'lib/storage/**'
+      - 'lib/timeframes.ts'
       - 'lib/large-holders/release-preflight.ts'
       - 'proxy.ts'
       - 'scripts/install-*.ts'
@@ -17,8 +27,10 @@ on:
       - 'scripts/run-isolated-runtime.ts'
       - 'scripts/test-runtime-isolation.ts'
       - 'scripts/test-large-holder-release-preflight.ts'
+      - 'scripts/test-sma-dynamics*.ts'
       - 'scripts/test-storage-*.ts'
       - 'scripts/test-us-automation-foundation.ts'
+      - 'types/stock.ts'
       - 'package.json'
       - 'package-lock.json'
   workflow_dispatch:
@@ -54,8 +66,8 @@ jobs:
       - name: Development and test isolation regression
         run: npm run test:runtime-isolation
 
-      - name: SMA Dynamics preview isolation
-        run: npm run test:sma-dynamics-preview-isolation
+      - name: SMA Dynamics regression
+        run: npm run test:sma-dynamics:all
 
       - name: Weekly backup policy and writer hold
         run: npm run test:weekly-backup-policy && npm run test:weekly-writer-hold && npm run test:weekly-backup-runner

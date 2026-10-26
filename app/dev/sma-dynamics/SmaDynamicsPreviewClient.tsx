@@ -143,6 +143,7 @@ function PreviewBody({ query }: { query: PreviewQuery }) {
         analysisDate={fixture.analysisDate}
         source={FIXTURE_SOURCES[mode]}
         defaultOpen
+        persistOpenPreference={false}
         defaultMaximized={query.maximized}
         initialSettings={query.settings}
         externalScenarios={externalScenarios}
