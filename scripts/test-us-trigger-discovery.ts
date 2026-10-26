@@ -229,7 +229,8 @@ assert.match(tableSource, /sortAria\(activeSort, 'averageTradingValue'\) \?\? so
 assert.match(cardsSource, /market="US"/)
 assert.match(miniRoute, /createUsTriggerDiscoveryMiniChartDataSource/)
 assert.match(navigationSource, /href: '\/us\/trigger-discovery'/)
-assert.match(navigationSource, /'usScreener', 'usStageScreener', 'usTriggerDiscovery'/)
+assert.match(navigationSource, /'usScreener', 'usPeriodExplorer', 'usStageScreener'/)
+assert.match(navigationSource, /'watchlist', 'usMa25mMonitor', 'usTriggerDiscovery'/)
 assert.match(usNavigationSource, /href: '\/us\/trigger-discovery'/)
 
 runUsTriggerDiscoveryMaParityTests()

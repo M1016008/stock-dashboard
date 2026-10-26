@@ -66,7 +66,7 @@ import {
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
 
-const CACHE_NAMESPACE = 'historical_analogs_period_v13'
+export const HISTORICAL_ANALOG_CACHE_NAMESPACE = 'historical_analogs_period_v13'
 const CACHE_TTL_MS = boundedEnv(
   'HISTORICAL_ANALOG_CACHE_TTL_MS',
   24 * 60 * 60 * 1_000,
@@ -683,7 +683,7 @@ export async function GET(request: NextRequest) {
       })
     }
     const stored = await readServingCache<Record<string, unknown>>(
-      CACHE_NAMESPACE,
+      HISTORICAL_ANALOG_CACHE_NAMESPACE,
       cacheKey,
       CACHE_TTL_MS,
     )
@@ -1262,7 +1262,7 @@ export async function GET(request: NextRequest) {
         const oldestKey = responseCache.keys().next().value
         if (oldestKey) responseCache.delete(oldestKey)
       }
-      writeServingCache(CACHE_NAMESPACE, cacheKey, payload, CACHE_TTL_MS, generatedAt).catch((error) => {
+      writeServingCache(HISTORICAL_ANALOG_CACHE_NAMESPACE, cacheKey, payload, CACHE_TTL_MS, generatedAt).catch((error) => {
         console.warn('historical analog period cache write failed:', error)
       })
     return NextResponse.json(payload)

@@ -417,7 +417,7 @@ async function testAnalogEarlyCache(dates: string[]): Promise<number> {
     offset: 0,
   })
   await writeServingCache(
-    'historical_analogs_period_v12',
+    route.HISTORICAL_ANALOG_CACHE_NAMESPACE,
     key,
     { marker: 'early-cache' },
     60_000,

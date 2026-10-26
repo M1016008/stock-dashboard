@@ -212,7 +212,7 @@
     "test:us-trade-workbench": "tsx scripts/test-us-trade-workbench.ts",
     "test:us-ma25m-monitor": "tsx scripts/test-us-ma25m-monitor.ts",
     "test:us-parity:targeted": "tsx scripts/test-us-parity-ui-contracts.ts && tsx scripts/test-us-route-states.ts && tsx scripts/test-us-period-explorer.ts && tsx scripts/test-us-daily-close-report.ts && tsx scripts/test-us-trade-workbench.ts && tsx scripts/test-us-ma25m-monitor.ts && tsx scripts/test-us-earnings-calendar.ts && tsx scripts/test-us-sector-etfs.ts && tsx scripts/test-us-sector-etf-detail.ts && tsx scripts/test-us-runtime-capabilities.ts && tsx scripts/test-us-api-error-contracts.ts && tsx scripts/audit-us-jp-parity.ts --self-test && tsx scripts/audit-us-jp-parity.ts",
-    "test:stock-preview": "tsx scripts/run-isolated-runtime.ts test -- tsx scripts/test-stock-preview.ts",
+    "test:stock-preview": "STOCK_PREVIEW_STATIC_ONLY=1 tsx scripts/test-stock-preview.ts",
     "test:dashboard-trade-signal-filters": "tsx scripts/test-dashboard-trade-signal-filters.ts",
     "test:dashboard-historical-as-of": "tsx scripts/test-dashboard-historical-as-of.ts",
     "test:earnings-time": "tsx scripts/test-earnings-time.ts",

@@ -142,6 +142,14 @@ function fmtVolume(value: number | null): string {
   return `${Math.round(value).toLocaleString('ja-JP')}株`
 }
 
+function observationCoverage(observations: number | null, tradingDays: number): string {
+  return observations == null ? '—' : `${observations}/${tradingDays}日`
+}
+
+function observationCoverageTitle(label: string, observations: number | null, tradingDays: number): string {
+  return observations == null ? `${label}の観測 未計算` : `${label}の観測 ${observations}/${tradingDays}取引日`
+}
+
 function tone(value: number | null): string {
   if (value == null || value === 0) return 'text-[var(--color-text-secondary)]'
   return value > 0 ? 'text-[var(--color-price-up)]' : 'text-[var(--color-price-down)]'
@@ -683,7 +691,7 @@ function StockResults({ market, rows, ranking, duplicateReturn, adoptedTo, tradi
             <td className="truncate px-2 py-2 text-left font-semibold" title={row.selectedSector ?? ''}>{row.selectedSector ?? '未分類'}</td>
             <td className="px-2 py-2 text-left"><span className="inline-flex max-w-full whitespace-nowrap border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-1.5 py-0.5 text-[9px] font-bold [word-break:keep-all]">{row.marketSegment ?? '未設定'}</span></td><td className="hidden whitespace-nowrap px-2 py-2 text-left text-[10px] font-semibold [word-break:keep-all] min-[1360px]:table-cell">{row.marginType ?? '未設定'}</td>
             <td className="whitespace-nowrap px-2 py-2 text-right font-bold tabular-nums" title={row.marketCapBasis === 'pit' ? '終了日時点で公表済みの株式数' : row.marketCapBasis === 'current' ? '現在株式数による参考値' : '株式数未取得'}>{fmtCurrency(row.marketCap, market)}{row.marketCapBasis === 'current' && <sup className="ml-0.5 text-[8px] text-amber-700">現</sup>}</td>
-            <td className="whitespace-nowrap px-2 py-2 text-right font-bold tabular-nums" title={`売買代金の観測 ${row.turnoverObservations ?? 0}/${tradingDays}取引日`}>{fmtCurrency(row.avgTurnover, market)}<span className="block text-[8px] font-semibold text-[var(--color-text-tertiary)]">{row.turnoverObservations ?? 0}/{tradingDays}日</span></td><td className="hidden whitespace-nowrap px-2 py-2 text-right font-bold tabular-nums min-[1360px]:table-cell" title={`出来高の観測 ${row.volumeObservations ?? 0}/${tradingDays}取引日`}>{fmtVolume(row.avgVolume)}<span className="block text-[8px] font-semibold text-[var(--color-text-tertiary)]">{row.volumeObservations ?? 0}/{tradingDays}日</span></td>
+            <td className="whitespace-nowrap px-2 py-2 text-right font-bold tabular-nums" title={observationCoverageTitle('売買代金', row.turnoverObservations, tradingDays)}>{fmtCurrency(row.avgTurnover, market)}<span className="block text-[8px] font-semibold text-[var(--color-text-tertiary)]">{observationCoverage(row.turnoverObservations, tradingDays)}</span></td><td className="hidden whitespace-nowrap px-2 py-2 text-right font-bold tabular-nums min-[1360px]:table-cell" title={observationCoverageTitle('出来高', row.volumeObservations, tradingDays)}>{fmtVolume(row.avgVolume)}<span className="block text-[8px] font-semibold text-[var(--color-text-tertiary)]">{observationCoverage(row.volumeObservations, tradingDays)}</span></td>
           </tr>)}
         </tbody>
       </table>
@@ -693,7 +701,7 @@ function StockResults({ market, rows, ranking, duplicateReturn, adoptedTo, tradi
         <div className="flex items-start gap-2"><span className="w-7 shrink-0 text-right text-[11px] font-black tabular-nums text-[var(--color-text-tertiary)]">{row.rank}</span><div className="min-w-0 flex-1"><div className="flex min-w-0 items-center gap-1"><Link href={stockHref(row.ticker)} className="min-w-0 flex-1 truncate text-[13px] font-black text-[var(--color-brand-950)]"><span className="mr-1.5 font-mono text-[11px] text-[var(--color-brand-700)]">{row.ticker}</span>{row.name}</Link><StockPreviewTrigger ticker={row.ticker} market={market} analysisDate={adoptedTo} context="periodExplorer" /></div><p className={`mt-1 text-[20px] font-black tabular-nums ${tone(row.rankingValue)}`}>{rankingText(row.rankingValue, ranking, market)}</p></div></div>
         <div className="mt-2 overflow-x-auto pl-9"><GroupedStageCode row={row} /></div>
         <p className="mt-2 pl-9 text-[10px] font-semibold text-[var(--color-text-secondary)]">{row.selectedSector ?? '未分類'} ｜ {row.marketSegment ?? '未設定'} ｜ {row.marginType ?? '未設定'}</p>
-        <div className="mt-1 grid grid-cols-2 gap-x-3 gap-y-1 pl-9 text-[10px] font-semibold text-[var(--color-text-tertiary)]"><span>株価 <b className="text-[var(--color-text-primary)]">{isUs ? '$' : ''}{fmtNumber(row.endClose, isUs ? 2 : 1)}{isUs ? '' : '円'}</b></span>{!duplicateReturn && <span>騰落 <b className={tone(row.periodReturnPct)}>{fmtPercent(row.periodReturnPct)}</b></span>}<span>時価総額 <b className="text-[var(--color-text-primary)]">{fmtCurrency(row.marketCap, market)}</b></span><span>売買代金 <b className="text-[var(--color-text-primary)]">{fmtCurrency(row.avgTurnover, market)}</b> <small>{row.turnoverObservations ?? 0}/{tradingDays}日</small></span></div>
+        <div className="mt-1 grid grid-cols-2 gap-x-3 gap-y-1 pl-9 text-[10px] font-semibold text-[var(--color-text-tertiary)]"><span>株価 <b className="text-[var(--color-text-primary)]">{isUs ? '$' : ''}{fmtNumber(row.endClose, isUs ? 2 : 1)}{isUs ? '' : '円'}</b></span>{!duplicateReturn && <span>騰落 <b className={tone(row.periodReturnPct)}>{fmtPercent(row.periodReturnPct)}</b></span>}<span>時価総額 <b className="text-[var(--color-text-primary)]">{fmtCurrency(row.marketCap, market)}</b></span><span>売買代金 <b className="text-[var(--color-text-primary)]">{fmtCurrency(row.avgTurnover, market)}</b> <small>{observationCoverage(row.turnoverObservations, tradingDays)}</small></span></div>
       </article>)}
     </div>
   </>
