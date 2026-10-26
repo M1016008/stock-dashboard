@@ -323,7 +323,7 @@ export default function UsMonthlyMaMonitorPage() {
 
       {error && <Notice tone="error" role="alert" title="米国株MAデータを読み込めませんでした">{error}</Notice>}
 
-      <section className="panel" aria-label="米国株月足MA監視結果">
+      {!error && <section className="panel" aria-label="米国株月足MA監視結果">
         <div className="flex min-h-11 items-center justify-between gap-2 border-b border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-3 py-2 text-[12px] text-[var(--color-text-secondary)]" aria-live="polite">
           <span className="inline-flex items-center gap-1.5">
             {busy && <LoaderCircle size={14} className="animate-spin" aria-hidden />}
@@ -394,7 +394,7 @@ export default function UsMonthlyMaMonitorPage() {
           <span className="font-mono text-[12px]">{total ? `${offset + 1}–${Math.min(offset + limit, total)} / ${total}` : '0件'}</span>
           <button type="button" className="btn" disabled={offset + limit >= total} onClick={() => update({ offset: String(offset + limit) }, false)}>次へ<ChevronRight size={14} aria-hidden /></button>
         </nav>
-      </section>
+      </section>}
 
       {data && (
         <Notice tone="neutral" title="Coverage・Lineage">

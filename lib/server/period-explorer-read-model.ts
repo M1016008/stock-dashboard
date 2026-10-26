@@ -81,9 +81,11 @@ export interface PeriodExplorerStockRow {
   reboundFromLowPct: number | null
   periodRangePct: number | null
   avgVolume: number | null
+  volumeObservations: number | null
   maxVolume: number | null
   volumeIncreasePct: number | null
   avgTurnover: number | null
+  turnoverObservations: number | null
   totalTurnover: number | null
   turnoverIncreasePct: number | null
   realizedVolatilityPct: number | null
@@ -242,8 +244,10 @@ type RangeDbRow = {
   period_high: number | null
   period_low: number | null
   avg_volume: number | null
+  volume_observations: number | null
   max_volume: number | null
   avg_turnover: number | null
+  turnover_observations: number | null
   total_turnover: number | null
 }
 
@@ -260,7 +264,7 @@ type VolatilityDbRow = {
 
 const CALENDAR_TTL_MS = 5 * 60_000
 const RESPONSE_TTL_MS = 5 * 60_000
-const CACHE_VERSION = 8
+const CACHE_VERSION = 9
 export const PERIOD_EXPLORER_MAX_TRADING_DAYS = 500
 const NIKKEI225_SET = new Set<string>(NIKKEI225_TICKERS)
 
@@ -346,8 +350,8 @@ function emptyStockRow(row: BaseDbRow, taxonomy: PeriodExplorerTaxonomy): Period
     rowType: 'stock', rank: 0, ticker: String(row.ticker), name: String(row.name ?? row.ticker), rankingValue: null,
     startClose, endClose, periodReturnPct: safeRatioPct(endClose, startClose),
     periodHigh: null, periodLow: null, maxRisePct: null, maxFallPct: null, drawdownFromHighPct: null,
-    reboundFromLowPct: null, periodRangePct: null, avgVolume: null, maxVolume: null, volumeIncreasePct: null,
-    avgTurnover: null, totalTurnover: null, turnoverIncreasePct: null, realizedVolatilityPct: null,
+    reboundFromLowPct: null, periodRangePct: null, avgVolume: null, volumeObservations: null, maxVolume: null, volumeIncreasePct: null,
+    avgTurnover: null, turnoverObservations: null, totalTurnover: null, turnoverIncreasePct: null, realizedVolatilityPct: null,
     gapUpCount: null, gapDownCount: null, high52: null, low52: null, high52DistancePct: null,
     low52DistancePct: null, marketCap: shares != null ? endClose * shares : null, marketCapBasis,
     marketSegment: row.market_segment ? String(row.market_segment) : null,
@@ -403,7 +407,7 @@ export async function getPeriodExplorerCalendar(market: PeriodExplorerMarket = '
   const cached = globalForPeriodExplorer.periodExplorerCalendars?.[market]
   if (cached && cached.expiresAt > Date.now()) return cached.dates
   let rows = market === 'US'
-    ? await execAll<{ date: string }>("SELECT DISTINCT date FROM market_ohlcv_daily WHERE market = 'US' ORDER BY date ASC")
+    ? await execAll<{ date: string }>("SELECT date FROM market_ohlcv_daily WHERE market = 'US' AND ticker = 'SPY' ORDER BY date ASC")
     : await execAll<{ date: string }>('SELECT date FROM serving_daily_snapshot_dates ORDER BY date ASC').catch(() => [])
   if (market === 'JP' && rows.length === 0) rows = await execAll<{ date: string }>('SELECT DISTINCT date FROM ohlcv_daily ORDER BY date ASC')
   const dates = rows.map((row) => String(row.date)).filter(validIsoDate)
@@ -693,20 +697,23 @@ function rangeStatsSelect(scope: RangeStatsScope, market: PeriodExplorerMarket):
   const volume = market === 'US' ? 'adj_volume' : 'volume'
   if (scope === 'price') {
     return `MAX(${high}) AS period_high, MIN(${low}) AS period_low,
-            NULL AS avg_volume, NULL AS max_volume, NULL AS avg_turnover, NULL AS total_turnover`
+            NULL AS avg_volume, NULL AS volume_observations, NULL AS max_volume,
+            NULL AS avg_turnover, NULL AS turnover_observations, NULL AS total_turnover`
   }
   if (scope === 'volume') {
     return `NULL AS period_high, NULL AS period_low,
-            AVG(${volume}) AS avg_volume, MAX(${volume}) AS max_volume,
-            NULL AS avg_turnover, NULL AS total_turnover`
+            AVG(${volume}) AS avg_volume, COUNT(${volume}) AS volume_observations, MAX(${volume}) AS max_volume,
+            NULL AS avg_turnover, NULL AS turnover_observations, NULL AS total_turnover`
   }
   if (scope === 'turnover') {
-    return `NULL AS period_high, NULL AS period_low, NULL AS avg_volume, NULL AS max_volume,
-            AVG(${close} * ${volume}) AS avg_turnover, SUM(${close} * ${volume}) AS total_turnover`
+    return `NULL AS period_high, NULL AS period_low, NULL AS avg_volume, NULL AS volume_observations, NULL AS max_volume,
+            AVG(${close} * ${volume}) AS avg_turnover, COUNT(${close} * ${volume}) AS turnover_observations,
+            SUM(${close} * ${volume}) AS total_turnover`
   }
   return `MAX(${high}) AS period_high, MIN(${low}) AS period_low,
-          AVG(${volume}) AS avg_volume, MAX(${volume}) AS max_volume,
-          AVG(${close} * ${volume}) AS avg_turnover, SUM(${close} * ${volume}) AS total_turnover`
+          AVG(${volume}) AS avg_volume, COUNT(${volume}) AS volume_observations, MAX(${volume}) AS max_volume,
+          AVG(${close} * ${volume}) AS avg_turnover, COUNT(${close} * ${volume}) AS turnover_observations,
+          SUM(${close} * ${volume}) AS total_turnover`
 }
 
 async function loadRangeStats(
@@ -830,8 +837,10 @@ function applyRangeStats(row: PeriodExplorerStockRow, current: RangeDbRow | unde
   row.periodHigh = asNumber(current.period_high)
   row.periodLow = asNumber(current.period_low)
   row.avgVolume = asNumber(current.avg_volume)
+  row.volumeObservations = asNumber(current.volume_observations)
   row.maxVolume = asNumber(current.max_volume)
   row.avgTurnover = asNumber(current.avg_turnover)
+  row.turnoverObservations = asNumber(current.turnover_observations)
   row.totalTurnover = asNumber(current.total_turnover)
   const prices = calculatePeriodPriceMetrics({
     startClose: row.startClose,

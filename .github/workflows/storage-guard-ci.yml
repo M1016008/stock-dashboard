@@ -16,7 +16,11 @@ on:
       - 'lib/research/six-stage-current-serving-projection-fixture.ts'
       - 'lib/runtime/**'
       - 'lib/server/jp-market-calendar.ts'
+      - 'lib/server/period-explorer-read-model.ts'
+      - 'lib/server/us-*.ts'
       - 'lib/server/us-data-freshness.ts'
+      - 'lib/queries/us-*.ts'
+      - 'lib/us-*.ts'
       - 'lib/sma-dynamics*.ts'
       - 'lib/storage/**'
       - 'lib/timeframes.ts'
@@ -29,7 +33,11 @@ on:
       - 'scripts/test-large-holder-release-preflight.ts'
       - 'scripts/test-sma-dynamics*.ts'
       - 'scripts/test-storage-*.ts'
+      - 'scripts/test-us-*.ts'
+      - 'scripts/audit-us-jp-parity.ts'
+      - 'scripts/build-us-jp-parity-board.ts'
       - 'scripts/test-us-automation-foundation.ts'
+      - 'docs/us-stockboard-parity-*'
       - 'types/stock.ts'
       - 'package.json'
       - 'package-lock.json'
@@ -80,6 +88,9 @@ jobs:
 
       - name: US automation contract
         run: npx tsx scripts/test-us-automation-foundation.ts
+
+      - name: US and JP parity contracts
+        run: npm run test:us-parity:targeted
 
       - name: TypeScript
         run: npx tsc --noEmit

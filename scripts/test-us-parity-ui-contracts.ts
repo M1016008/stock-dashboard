@@ -11,6 +11,7 @@ assert.match(maMonitor, /const sequence = \+\+requestSequence\.current/)
 assert.match(maMonitor, /setData\(null\)/)
 assert.match(maMonitor, /sequence === requestSequence\.current/)
 assert.match(maMonitor, /!controller\.signal\.aborted && sequence === requestSequence\.current/)
+assert.match(maMonitor, /\{!error && <section className="panel"/)
 
 const earnings = source('app/us/earnings/page.tsx')
 assert.match(earnings, /Array\.isArray\(value\)[\s\S]*valid: false/)
@@ -35,6 +36,7 @@ assert.match(dailyClose, /before_open: '寄付前'/)
 assert.match(dailyClose, /EARNINGS_TIME_LABELS\[row\.timeBucket\]/)
 assert.match(dailyClose, /report\.earnings\.status === 'unavailable'/)
 assert.match(dailyClose, /履歴時点の決算予定は利用できません/)
+assert.match(dailyClose, /調整済み優先: 終値 × 出来高/)
 
 const tradeWorkbench = source('app/us/trade/workbench/page.tsx')
 assert.match(tradeWorkbench, /Array\.isArray\(sp\.horizon\)/)
@@ -42,6 +44,12 @@ assert.match(tradeWorkbench, /boundedInteger\(first\(sp\.budgetUsd\), 5_000, 100
 assert.match(tradeWorkbench, /boundedInteger\(first\(sp\.limit\), 40, 1, 120\)/)
 assert.match(tradeWorkbench, /!HORIZONS\.some/)
 assert.match(tradeWorkbench, /role="alert"/)
+
+const periodExplorer = source('app/period-explorer/PeriodExplorerClient.tsx')
+assert.match(periodExplorer, /stripUnavailableHistoricalUsParams/)
+assert.match(periodExplorer, /disabled=\{historicalUs && item\.key === 'industry'\}/)
+assert.match(periodExplorer, /!historicalUs && <MarketFilterMenu/)
+assert.match(periodExplorer, /turnoverObservations/)
 
 const loading = source('app/us/loading.tsx')
 assert.match(loading, /米国株ページを読み込んでいます/)

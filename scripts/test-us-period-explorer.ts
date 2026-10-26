@@ -72,8 +72,11 @@ for (const date of earlierSessions) {
   insertPrice.run('SPY', date, 100, 101, 99, 100, 100, 101, 99, 100, 1_000, 1_000)
 }
 for (const row of [
+  ['SPY', '2026-10-20', 500, 502, 498, 501, 500, 502, 498, 501, 10000, 10000],
+  ['SPY', '2026-10-21', 501, 504, 500, 503, 501, 504, 500, 503, 11000, 11000],
+  ['SPY', '2026-10-22', 503, 506, 502, 505, 503, 506, 502, 505, 12000, 12000],
   ['AAA', '2026-10-20', 99, 102, 98, 100, 49.5, 51, 49, 50, 1000, 2000],
-  ['AAA', '2026-10-21', 101, 112, 100, 110, 50.5, 56, 50, 55, 1200, 2400],
+  ['AAA', '2026-10-21', 101, 112, 100, 110, 50.5, 56, 50, 55, 1200, null],
   ['AAA', '2026-10-22', 111, 122, 110, 120, 55.5, 61, 55, 60, 1400, 2800],
   ['BBB', '2026-10-20', 20, 21, 19, 20, null, null, null, null, 500, null],
   ['BBB', '2026-10-21', 20, 22, 20, 21, null, null, null, null, 600, null],
@@ -92,6 +95,11 @@ insertSnapshot.run('AAA', '2026-10-20', 48, 45, 2, 2, 3, 3, 4, 4)
 insertSnapshot.run('AAA', '2026-10-22', 54, 47, 1, 2, 2, 3, 3, 4)
 insertSnapshot.run('BBB', '2026-10-20', 19, 18, 4, 4, 4, 4, 4, 4)
 insertSnapshot.run('BBB', '2026-10-22', 21, 19, 4, 4, 4, 4, 4, 4)
+const calendarPlan = db.prepare("EXPLAIN QUERY PLAN SELECT date FROM market_ohlcv_daily WHERE market = 'US' AND ticker = 'SPY' ORDER BY date ASC").all()
+  .map((row) => String((row as { detail?: unknown }).detail ?? ''))
+  .join(' ')
+assert.match(calendarPlan, /(?:COVERING )?INDEX .*\(market=\? AND ticker=\?\)/)
+assert.doesNotMatch(calendarPlan, /USE TEMP B-TREE|SCAN market_ohlcv_daily/)
 db.close()
 
 process.env.USE_LOCAL_DB = '1'
@@ -129,7 +137,11 @@ async function main(): Promise<void> {
   })
   assert.equal(response.market, 'US')
   assert.equal(response.dataBasis.shares, 'current_only')
-  assert.equal(response.rows.length, 1, 'rows without adjusted endpoints and test symbols must be excluded')
+  assert.deepEqual(
+    response.rows.map((row) => row.rowType === 'stock' ? row.ticker : '').sort(),
+    ['AAA', 'SPY'],
+    'rows without adjusted endpoints and test symbols must be excluded while the SPY calendar row remains eligible',
+  )
   const alpha = response.rows.find((row) => row.rowType === 'stock' && row.ticker === 'AAA')
   assert.ok(alpha && alpha.rowType === 'stock')
   assert.equal(alpha.startClose, 50, 'adjusted close must be the endpoint basis')
@@ -138,6 +150,15 @@ async function main(): Promise<void> {
   assert.equal(alpha.selectedSector, 'Technology')
   assert.equal(alpha.marketCap, 60_000_000)
   assert.equal(alpha.marketCapBasis, 'current')
+
+  const volume = await queryPeriodExplorer({
+    market: 'US', from: range.adoptedFrom, to: range.adoptedTo,
+    ranking: 'avg_volume', taxonomy: 'sector17', limit: 20,
+  })
+  const volumeAlpha = volume.rows.find((row) => row.rowType === 'stock' && row.ticker === 'AAA')
+  assert.ok(volumeAlpha && volumeAlpha.rowType === 'stock')
+  assert.equal(volumeAlpha.volumeObservations, 2)
+  assert.equal(volumeAlpha.turnoverObservations, 2)
 
   const technical = await queryPeriodExplorer({
     market: 'US', from: range.adoptedFrom, to: range.adoptedTo,
@@ -172,8 +193,13 @@ async function main(): Promise<void> {
     (error: unknown) => error instanceof PeriodExplorerInputError && /PIT分類/.test(error.message),
   )
   const clientSource = fs.readFileSync(path.join(process.cwd(), 'app/period-explorer/PeriodExplorerClient.tsx'), 'utf8')
+  const serverSource = fs.readFileSync(path.join(process.cwd(), 'lib/server/period-explorer-read-model.ts'), 'utf8')
   assert.match(clientSource, /historicalUs/)
+  assert.match(clientSource, /stripUnavailableHistoricalUsParams/)
+  assert.match(clientSource, /turnoverObservations/)
   assert.match(clientSource, /現行参照を混入させない/)
+  assert.match(serverSource, /ticker = 'SPY'/)
+  assert.doesNotMatch(serverSource, /SELECT DISTINCT date FROM market_ohlcv_daily WHERE market = 'US'/)
     console.log('US Period Explorer fixture tests: PASS')
   } finally {
     fs.rmSync(root, { recursive: true, force: true })

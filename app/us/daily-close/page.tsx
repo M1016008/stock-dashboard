@@ -138,7 +138,7 @@ export default async function UsDailyClosePage({
           { label: '前日値欠損', value: report.market.unobserved.toLocaleString(), sub: '騰落率は未算定' },
           { label: '価格Coverage', value: `${report.coverage.pricedRows.toLocaleString()} / ${report.coverage.observedRows.toLocaleString()}` },
           { label: 'Stage完備', value: report.coverage.stagedRows.toLocaleString() },
-          { label: '売買代金', value: compactUsd(report.market.adjustedTurnoverUsd), sub: '調整済み終値 × 調整済み出来高' },
+          { label: '売買代金', value: compactUsd(report.market.adjustedTurnoverUsd), sub: '調整済み優先: 終値 × 出来高' },
         ]} />
 
         <section>

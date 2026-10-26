@@ -278,7 +278,19 @@ LEFT JOIN ohlcv_daily previous_price
 LEFT JOIN daily_snapshots previous_snapshot
   ON previous_snapshot.ticker = r.ticker
  AND previous_snapshot.date = (SELECT date FROM previous_snapshot_date)
-WHERE ${usInvestableSymbolSql('r.ticker')}
+WHERE p.close > 0
+  AND s.daily_a_stage BETWEEN 1 AND 6
+  AND s.daily_b_stage BETWEEN 1 AND 6
+  AND s.weekly_a_stage BETWEEN 1 AND 6
+  AND s.weekly_b_stage BETWEEN 1 AND 6
+  AND s.monthly_a_stage BETWEEN 1 AND 6
+  AND s.monthly_b_stage BETWEEN 1 AND 6
+  AND s.ma_5 IS NOT NULL
+  AND s.ma_25 IS NOT NULL
+  AND s.ma_75 IS NOT NULL
+  AND previous_snapshot.ma_5 IS NOT NULL
+  AND previous_snapshot.ma_25 IS NOT NULL
+  AND ${usInvestableSymbolSql('r.ticker')}
 ORDER BY
   MIN(COALESCE(r.up_rank, 999999), COALESCE(r.down_rank, 999999), COALESCE(r.wait_rank, 999999)),
   r.ticker

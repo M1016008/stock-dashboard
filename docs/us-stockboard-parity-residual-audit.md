@@ -19,6 +19,29 @@ evidence is maintained in `docs/us-stockboard-parity-board.json`.
 - Physical-device hover, pinch, and mobile keyboard behavior remains
   `NOT_TESTED` unless a physical device is used.
 
+## Implemented closing scope
+
+- The current inventory snapshot contains 58 page files, 168 API route files,
+  141 component files, 108 calculation modules, 221 job/script units, and 1,005
+  statically identified controls. These counts describe scope; they are not a
+  blanket PASS claim for every runtime combination.
+- The parity board contains 51 product-capability rows. Implemented rows are
+  tied to immutable Git evidence and targeted deterministic tests. Partial and
+  blocked rows remain visible and are not promoted by the presence of a route
+  or an empty UI shell.
+- The final US contracts cover dashboard and daily-close analysis, stock
+  detail, charts and SMA Dynamics, Stage/transition analysis, screeners,
+  period exploration, backtest, trade planning, monthly-MA monitoring,
+  earnings-calendar states, sector ETFs, shared discovery tools, and market
+  navigation.
+- Historical US price analytics use adjusted prices only. Current shares,
+  exchange, asset type, and SEC classification are not projected backward;
+  filters and rankings that require unavailable historical attributes fail
+  closed.
+- JP real-data period-explorer parity remains `NOT_TESTED` in this isolated
+  checkout because Storage Guard correctly refused a run without an injected
+  trusted mount identity. The guard was not bypassed.
+
 ## Residual barriers
 
 ### R1. Institutional ownership and beneficial ownership
@@ -96,7 +119,7 @@ evidence is maintained in `docs/us-stockboard-parity-board.json`.
 | Item | Finding |
 |---|---|
 | JP capability | Historical filters can use data sources whose effective date is represented in the JP model. |
-| US residual | Historical screener events are now selected from dated snapshots without current-active membership leakage, but exchange, SEC SIC, asset type, and shares/market-cap remain current-reference attributes when no dated source exists. Historical filters fail closed. |
+| US residual | Historical US price events are selected from dated adjusted-price snapshots. Exchange, SEC SIC, asset type, shares, and market cap are removed from historical period rows when no dated source exists; filters, sector rankings, and market-cap sorting that need them fail closed. Current-only surfaces label those attributes as current reference. |
 | Why parity is incomplete | Projecting today's classification or shares backward would introduce survivorship and PIT leakage. |
 | Missing input | Effective-dated exchange/security type, SIC/industry history, corporate actions, and shares-outstanding history. |
 | Barrier | `DATA`, `ARCHITECTURE` |
@@ -146,6 +169,34 @@ evidence is maintained in `docs/us-stockboard-parity-board.json`.
 | Resolution | Add a separately versioned holdings ingestion and preserve unavailable states for missing dates. |
 | Approval required | Yes: source terms and ingestion schedule. |
 | Priority | P2; core ETF price analytics are independent. |
+
+### R10. Friend-access runtime acceptance
+
+| Item | Finding |
+|---|---|
+| JP capability | The deployed site can be exercised through its authenticated friend-access path. |
+| US residual | Code-level read-only and route-isolation contracts exist, but this branch is not deployed and no authenticated Production browser matrix was run. |
+| Why parity is incomplete | Production deployment, Cloudflare authentication, and live route checks are separately controlled operations. Local fixture results cannot prove the deployed path. |
+| Missing input | Approved deployment, authenticated test identity, route matrix, and rollback observation. |
+| Barrier | `SECURITY`, `EXTERNAL` |
+| Paid service required | No new service is required. |
+| Resolution | After a separately approved release, run low-rate authenticated JP/US navigation and read-only API smoke checks. |
+| Approval required | Yes: Production deploy and smoke authorization. |
+| Priority | Release gate, not a code-parity blocker. |
+
+### R11. Physical-device interaction QA
+
+| Item | Finding |
+|---|---|
+| JP capability | Desktop and mobile layouts support pointer and touch interaction. |
+| US residual | Responsive browser automation can cover layout and standard input, but physical hover, pinch, and iOS keyboard behavior has not been observed in this session. |
+| Why parity is incomplete | Device emulation does not prove hardware/browser gesture behavior. |
+| Missing input | A physical iOS/Android device session and an interaction checklist. |
+| Barrier | `EXTERNAL` |
+| Paid service required | No. |
+| Resolution | Run the existing mobile checklist on a physical device and preserve device/browser/version evidence. |
+| Approval required | No code approval; device access is required. |
+| Priority | P2. |
 
 ## Rational market-specific differences
 

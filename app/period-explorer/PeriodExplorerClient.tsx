@@ -233,6 +233,29 @@ function activeFilterEntries(params: URLSearchParams): Array<{ key: string; valu
   })
 }
 
+function stripUnavailableHistoricalUsParams(params: URLSearchParams): boolean {
+  let changed = false
+  for (const key of ['market', 'sector', 'marketCapMin', 'marketCapMax']) {
+    if (!params.has(key)) continue
+    params.delete(key)
+    changed = true
+  }
+  if (params.get('sort') === 'marketCap') {
+    params.delete('sort')
+    params.delete('direction')
+    changed = true
+  }
+  const ranking = params.get('ranking')
+  if (ranking && isPeriodExplorerRankingKey(ranking) && PERIOD_EXPLORER_RANKING_MAP.get(ranking)?.category === 'industry') {
+    params.set('ranking', 'return_up')
+    params.delete('sort')
+    params.delete('direction')
+    changed = true
+  }
+  if (changed) params.delete('offset')
+  return changed
+}
+
 export function PeriodExplorerClient({ market = 'JP', calendarDates, defaultFrom, defaultTo }: Props) {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -256,7 +279,8 @@ export function PeriodExplorerClient({ market = 'JP', calendarDates, defaultFrom
   const [filtersOpen, setFiltersOpen] = useState(false)
   const requestSequence = useRef(0)
   const isUs = market === 'US'
-  const historicalUs = isUs && response?.dataBasis.classifications === 'unavailable_historical'
+  const requestedHistoricalUs = isUs && (searchParams.get('to') ?? defaultTo) < defaultTo
+  const historicalUs = requestedHistoricalUs || (isUs && response?.dataBasis.classifications === 'unavailable_historical')
   const taxonomies = isUs ? US_TAXONOMIES : JP_TAXONOMIES
   const marketCapPresets = isUs ? [
     { value: '1000000000', label: '$1B以上' },
@@ -279,14 +303,18 @@ export function PeriodExplorerClient({ market = 'JP', calendarDates, defaultFrom
   }, [defaultFrom, defaultTo, query, searchParams])
 
   useEffect(() => {
-    const controller = new AbortController()
-    const sequence = ++requestSequence.current
     const params = new URLSearchParams(query)
     if (!params.get('from')) params.set('from', defaultFrom)
     if (!params.get('to')) params.set('to', defaultTo)
     if (!params.get('ranking')) params.set('ranking', ranking)
     if (!params.get('taxonomy')) params.set('taxonomy', taxonomy)
     if (!params.get('limit')) params.set('limit', String(limit))
+    if (market === 'US' && (params.get('to') ?? defaultTo) < defaultTo && stripUnavailableHistoricalUsParams(params)) {
+      router.replace(`/us/period-explorer?${params.toString()}`, { scroll: false })
+      return
+    }
+    const controller = new AbortController()
+    const sequence = ++requestSequence.current
     params.set('marketCode', market)
     setLoading(true)
     setError(null)
@@ -308,7 +336,7 @@ export function PeriodExplorerClient({ market = 'JP', calendarDates, defaultFrom
         if (!controller.signal.aborted && sequence === requestSequence.current) setLoading(false)
       })
     return () => controller.abort()
-  }, [defaultFrom, defaultTo, limit, market, query, ranking, taxonomy])
+  }, [defaultFrom, defaultTo, limit, market, query, ranking, router, taxonomy])
 
   const category = definition.category
   const categoryRankings = PERIOD_EXPLORER_RANKINGS.filter((item) => item.category === category)
@@ -452,7 +480,7 @@ export function PeriodExplorerClient({ market = 'JP', calendarDates, defaultFrom
 
       <section className="flex flex-col gap-2 border-b border-[var(--color-border-soft)] pb-3">
         <div className="view-tabs self-start" role="tablist" aria-label="ランキングカテゴリ">
-          {CATEGORY_META.map((item) => <button key={item.key} type="button" role="tab" aria-selected={category === item.key} onClick={() => chooseCategory(item.key)} className="view-tab">{item.label}</button>)}
+          {CATEGORY_META.map((item) => <button key={item.key} type="button" role="tab" aria-selected={category === item.key} disabled={historicalUs && item.key === 'industry'} title={historicalUs && item.key === 'industry' ? '過去USではPIT業種分類が未接続です' : undefined} onClick={() => chooseCategory(item.key)} className="view-tab disabled:cursor-not-allowed disabled:opacity-45">{item.label}</button>)}
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <select value={ranking} onChange={(event) => setSimpleParam('ranking', event.target.value)} className="h-9 w-full px-2 text-[13px] font-bold text-[var(--color-text-primary)] sm:w-auto sm:min-w-[220px]">
@@ -466,13 +494,13 @@ export function PeriodExplorerClient({ market = 'JP', calendarDates, defaultFrom
         <div className="flex w-full min-w-0 items-center gap-2">
           <span className="hidden shrink-0 text-[12px] font-bold text-[var(--color-text-secondary)] sm:block">絞り込み</span>
           <div className="hidden min-w-0 flex-1 items-center gap-1.5 sm:flex">
-            <MarketFilterMenu
+            {!historicalUs && <MarketFilterMenu
               options={response?.options.markets ?? []}
               selected={(searchParams.get('market') ?? '').split(',').filter(Boolean)}
               onToggle={(value) => toggleListParam('market', value)}
               onClear={() => setSimpleParam('market', '')}
-            />
-            <CompactPresetSelect label="時価総額" value={searchParams.get('marketCapMin') ?? ''} presets={marketCapPresets} onChange={(value) => setSimpleParam('marketCapMin', value)} />
+            />}
+            {!historicalUs && <CompactPresetSelect label="時価総額" value={searchParams.get('marketCapMin') ?? ''} presets={marketCapPresets} onChange={(value) => setSimpleParam('marketCapMin', value)} />}
             <CompactPresetSelect label="売買代金" value={searchParams.get('avgTurnoverMin') ?? ''} presets={turnoverPresets} onChange={(value) => setSimpleParam('avgTurnoverMin', value)} />
             <CompactPresetSelect label="出来高" value={searchParams.get('avgVolumeMin') ?? ''} presets={VOLUME_PRESETS} onChange={(value) => setSimpleParam('avgVolumeMin', value)} />
             <StageFilterMenu params={searchParams} onToggle={toggleStage} />
@@ -486,18 +514,18 @@ export function PeriodExplorerClient({ market = 'JP', calendarDates, defaultFrom
           <h2 className="inline-flex items-center gap-1 text-[13px] font-bold text-[var(--color-text-primary)]"><SlidersHorizontal size={14} />絞り込み条件</h2>
           <button type="button" onClick={() => clearFilters(false)} className="text-[10px] font-bold text-[var(--color-brand-700)]">期間を残して全解除</button>
         </div>
-        <div className="mt-3 border-b border-[var(--color-border-soft)] pb-3 sm:hidden">
+        {!historicalUs && <div className="mt-3 border-b border-[var(--color-border-soft)] pb-3 sm:hidden">
           <p className="mb-1.5 text-[9px] font-black text-[var(--color-text-tertiary)]">市場（複数選択可）</p>
           <MarketOptionButtons options={response?.options.markets ?? []} selected={(searchParams.get('market') ?? '').split(',').filter(Boolean)} onToggle={(value) => toggleListParam('market', value)} />
-        </div>
+        </div>}
         <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
-          <FilterSelect label="分類" value={taxonomy} onChange={(value) => setSimpleParam('taxonomy', value)} options={taxonomies} />
-          <FilterSelect label="業種" value={searchParams.get('sector') ?? ''} onChange={(value) => setSimpleParam('sector', value)} options={[{ value: '', label: 'すべて' }, ...(response?.options.sectors ?? []).map((item) => ({ value: item.value, label: `${item.value} (${item.count})` }))]} />
+          {!historicalUs && <FilterSelect label="分類" value={taxonomy} onChange={(value) => setSimpleParam('taxonomy', value)} options={taxonomies} />}
+          {!historicalUs && <FilterSelect label="業種" value={searchParams.get('sector') ?? ''} onChange={(value) => setSimpleParam('sector', value)} options={[{ value: '', label: 'すべて' }, ...(response?.options.sectors ?? []).map((item) => ({ value: item.value, label: `${item.value} (${item.count})` }))]} />}
           {!isUs && <FilterSelect label="貸借 / 信用" value={searchParams.get('margin') ?? ''} onChange={(value) => setSimpleParam('margin', value)} options={[{ value: '', label: 'すべて' }, ...(response?.options.marginTypes ?? []).map((item) => ({ value: item.value, label: `${item.value} (${item.count})` }))]} />}
           {!isUs && <FilterSelect label="指数" value={searchParams.get('universe') ?? ''} onChange={(value) => setSimpleParam('universe', value)} options={[{ value: '', label: '全銘柄' }, { value: 'nikkei225', label: '日経225 (現在構成)' }]} />}
           <FilterSelect label="25MA位置" value={searchParams.get('ma25') ?? ''} onChange={(value) => setSimpleParam('ma25', value)} options={[{ value: '', label: '指定なし' }, { value: 'above', label: '株価が上' }, { value: 'below', label: '株価が下' }]} />
-          <FilterNumber label="時価総額下限" value={searchParams.get('marketCapMin') ?? ''} placeholder={isUs ? 'USD' : '円'} onApply={(value) => setSimpleParam('marketCapMin', value)} />
-          <FilterNumber label="時価総額上限" value={searchParams.get('marketCapMax') ?? ''} placeholder={isUs ? 'USD' : '円'} onApply={(value) => setSimpleParam('marketCapMax', value)} />
+          {!historicalUs && <FilterNumber label="時価総額下限" value={searchParams.get('marketCapMin') ?? ''} placeholder={isUs ? 'USD' : '円'} onApply={(value) => setSimpleParam('marketCapMin', value)} />}
+          {!historicalUs && <FilterNumber label="時価総額上限" value={searchParams.get('marketCapMax') ?? ''} placeholder={isUs ? 'USD' : '円'} onApply={(value) => setSimpleParam('marketCapMax', value)} />}
           <FilterNumber label="平均売買代金下限" value={searchParams.get('avgTurnoverMin') ?? ''} placeholder={isUs ? 'USD' : '円'} onApply={(value) => setSimpleParam('avgTurnoverMin', value)} />
           <FilterNumber label="平均売買代金上限" value={searchParams.get('avgTurnoverMax') ?? ''} placeholder={isUs ? 'USD' : '円'} onApply={(value) => setSimpleParam('avgTurnoverMax', value)} />
           <FilterNumber label="平均出来高下限" value={searchParams.get('avgVolumeMin') ?? ''} placeholder="株" onApply={(value) => setSimpleParam('avgVolumeMin', value)} />
@@ -541,7 +569,7 @@ export function PeriodExplorerClient({ market = 'JP', calendarDates, defaultFrom
         {!error && loading && !response && <div className="flex h-72 items-center justify-center gap-2 text-[11px] font-bold text-[var(--color-text-tertiary)]"><LoaderCircle size={15} className="animate-spin" />期間データを集計しています</div>}
         {!error && response && <div className={loading ? 'pointer-events-none opacity-55' : ''} aria-busy={loading}>
           {response.total === 0 ? <div className="flex h-64 flex-col items-center justify-center gap-2 text-center"><p className="text-[12px] font-black text-[var(--color-text-secondary)]">条件に一致する銘柄がありません</p><button type="button" onClick={() => clearFilters(false)} className="text-[11px] font-bold text-[var(--color-brand-700)]">期間を残して条件を解除</button></div>
-            : response.resultKind === 'stocks' ? <StockResults market={market} rows={stockRows} ranking={ranking} duplicateReturn={duplicateReturn} adoptedTo={response.range.adoptedTo} onSort={sortBy} />
+            : response.resultKind === 'stocks' ? <StockResults market={market} rows={stockRows} ranking={ranking} duplicateReturn={duplicateReturn} adoptedTo={response.range.adoptedTo} tradingDays={response.range.tradingDays} historicalUs={historicalUs} onSort={sortBy} />
               : <SectorResults market={market} taxonomies={taxonomies} rows={sectorRows} taxonomy={taxonomy} ranking={ranking} onFilter={(sector) => setSimpleParam('sector', sector)} />}
         </div>}
 
@@ -622,7 +650,7 @@ function SortButton({ children, sortKey, onSort, align = 'left' }: { children: R
   return <button type="button" onClick={() => onSort(sortKey)} className={`w-full whitespace-nowrap font-inherit hover:text-[var(--color-brand-800)] ${align === 'right' ? 'text-right' : 'text-left'}`}>{children}</button>
 }
 
-function StockResults({ market, rows, ranking, duplicateReturn, adoptedTo, onSort }: { market: PeriodExplorerMarket; rows: PeriodExplorerStockRow[]; ranking: PeriodExplorerRankingKey; duplicateReturn: boolean; adoptedTo: string; onSort: (key: string) => void }) {
+function StockResults({ market, rows, ranking, duplicateReturn, adoptedTo, tradingDays, historicalUs, onSort }: { market: PeriodExplorerMarket; rows: PeriodExplorerStockRow[]; ranking: PeriodExplorerRankingKey; duplicateReturn: boolean; adoptedTo: string; tradingDays: number; historicalUs: boolean; onSort: (key: string) => void }) {
   const isUs = market === 'US'
   const stockHref = (ticker: string) => `${isUs ? '/us/stock' : '/stock'}/${encodeURIComponent(ticker)}?date=${encodeURIComponent(adoptedTo)}#overview`
   return <>
@@ -639,7 +667,7 @@ function StockResults({ market, rows, ranking, duplicateReturn, adoptedTo, onSor
             <th className="whitespace-nowrap px-2 py-2 text-left">6軸Stage</th><th className="whitespace-nowrap px-2 py-2 text-right"><SortButton sortKey="price" onSort={onSort} align="right">株価</SortButton></th>
             {!duplicateReturn && <th className="whitespace-nowrap px-2 py-2 text-right"><SortButton sortKey="periodReturn" onSort={onSort} align="right">期間騰落率</SortButton></th>}
             <th className="whitespace-nowrap px-2 py-2 text-left">業種</th><th className="whitespace-nowrap px-2 py-2 text-left [word-break:keep-all]">市場</th><th className="hidden whitespace-nowrap px-2 py-2 text-left [word-break:keep-all] min-[1360px]:table-cell">貸/信</th>
-            <th className="whitespace-nowrap px-2 py-2 text-right"><SortButton sortKey="marketCap" onSort={onSort} align="right">時価総額</SortButton></th>
+            <th className="whitespace-nowrap px-2 py-2 text-right">{historicalUs ? '時価総額' : <SortButton sortKey="marketCap" onSort={onSort} align="right">時価総額</SortButton>}</th>
             <th className="whitespace-nowrap px-2 py-2 text-right"><SortButton sortKey="avgTurnover" onSort={onSort} align="right">平均売買代金</SortButton></th>
             <th className="hidden whitespace-nowrap px-2 py-2 text-right min-[1360px]:table-cell"><SortButton sortKey="avgVolume" onSort={onSort} align="right">平均出来高</SortButton></th>
           </tr>
@@ -655,7 +683,7 @@ function StockResults({ market, rows, ranking, duplicateReturn, adoptedTo, onSor
             <td className="truncate px-2 py-2 text-left font-semibold" title={row.selectedSector ?? ''}>{row.selectedSector ?? '未分類'}</td>
             <td className="px-2 py-2 text-left"><span className="inline-flex max-w-full whitespace-nowrap border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-1.5 py-0.5 text-[9px] font-bold [word-break:keep-all]">{row.marketSegment ?? '未設定'}</span></td><td className="hidden whitespace-nowrap px-2 py-2 text-left text-[10px] font-semibold [word-break:keep-all] min-[1360px]:table-cell">{row.marginType ?? '未設定'}</td>
             <td className="whitespace-nowrap px-2 py-2 text-right font-bold tabular-nums" title={row.marketCapBasis === 'pit' ? '終了日時点で公表済みの株式数' : row.marketCapBasis === 'current' ? '現在株式数による参考値' : '株式数未取得'}>{fmtCurrency(row.marketCap, market)}{row.marketCapBasis === 'current' && <sup className="ml-0.5 text-[8px] text-amber-700">現</sup>}</td>
-            <td className="whitespace-nowrap px-2 py-2 text-right font-bold tabular-nums">{fmtCurrency(row.avgTurnover, market)}</td><td className="hidden whitespace-nowrap px-2 py-2 text-right font-bold tabular-nums min-[1360px]:table-cell">{fmtVolume(row.avgVolume)}</td>
+            <td className="whitespace-nowrap px-2 py-2 text-right font-bold tabular-nums" title={`売買代金の観測 ${row.turnoverObservations ?? 0}/${tradingDays}取引日`}>{fmtCurrency(row.avgTurnover, market)}<span className="block text-[8px] font-semibold text-[var(--color-text-tertiary)]">{row.turnoverObservations ?? 0}/{tradingDays}日</span></td><td className="hidden whitespace-nowrap px-2 py-2 text-right font-bold tabular-nums min-[1360px]:table-cell" title={`出来高の観測 ${row.volumeObservations ?? 0}/${tradingDays}取引日`}>{fmtVolume(row.avgVolume)}<span className="block text-[8px] font-semibold text-[var(--color-text-tertiary)]">{row.volumeObservations ?? 0}/{tradingDays}日</span></td>
           </tr>)}
         </tbody>
       </table>
@@ -665,7 +693,7 @@ function StockResults({ market, rows, ranking, duplicateReturn, adoptedTo, onSor
         <div className="flex items-start gap-2"><span className="w-7 shrink-0 text-right text-[11px] font-black tabular-nums text-[var(--color-text-tertiary)]">{row.rank}</span><div className="min-w-0 flex-1"><div className="flex min-w-0 items-center gap-1"><Link href={stockHref(row.ticker)} className="min-w-0 flex-1 truncate text-[13px] font-black text-[var(--color-brand-950)]"><span className="mr-1.5 font-mono text-[11px] text-[var(--color-brand-700)]">{row.ticker}</span>{row.name}</Link><StockPreviewTrigger ticker={row.ticker} market={market} analysisDate={adoptedTo} context="periodExplorer" /></div><p className={`mt-1 text-[20px] font-black tabular-nums ${tone(row.rankingValue)}`}>{rankingText(row.rankingValue, ranking, market)}</p></div></div>
         <div className="mt-2 overflow-x-auto pl-9"><GroupedStageCode row={row} /></div>
         <p className="mt-2 pl-9 text-[10px] font-semibold text-[var(--color-text-secondary)]">{row.selectedSector ?? '未分類'} ｜ {row.marketSegment ?? '未設定'} ｜ {row.marginType ?? '未設定'}</p>
-        <div className="mt-1 grid grid-cols-2 gap-x-3 gap-y-1 pl-9 text-[10px] font-semibold text-[var(--color-text-tertiary)]"><span>株価 <b className="text-[var(--color-text-primary)]">{isUs ? '$' : ''}{fmtNumber(row.endClose, isUs ? 2 : 1)}{isUs ? '' : '円'}</b></span>{!duplicateReturn && <span>騰落 <b className={tone(row.periodReturnPct)}>{fmtPercent(row.periodReturnPct)}</b></span>}<span>時価総額 <b className="text-[var(--color-text-primary)]">{fmtCurrency(row.marketCap, market)}</b></span><span>売買代金 <b className="text-[var(--color-text-primary)]">{fmtCurrency(row.avgTurnover, market)}</b></span></div>
+        <div className="mt-1 grid grid-cols-2 gap-x-3 gap-y-1 pl-9 text-[10px] font-semibold text-[var(--color-text-tertiary)]"><span>株価 <b className="text-[var(--color-text-primary)]">{isUs ? '$' : ''}{fmtNumber(row.endClose, isUs ? 2 : 1)}{isUs ? '' : '円'}</b></span>{!duplicateReturn && <span>騰落 <b className={tone(row.periodReturnPct)}>{fmtPercent(row.periodReturnPct)}</b></span>}<span>時価総額 <b className="text-[var(--color-text-primary)]">{fmtCurrency(row.marketCap, market)}</b></span><span>売買代金 <b className="text-[var(--color-text-primary)]">{fmtCurrency(row.avgTurnover, market)}</b> <small>{row.turnoverObservations ?? 0}/{tradingDays}日</small></span></div>
       </article>)}
     </div>
   </>
