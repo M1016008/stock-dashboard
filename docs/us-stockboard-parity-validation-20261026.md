@@ -1,16 +1,17 @@
 # US StockBoard parity validation — 2026-10-26
 
-Evidence revision: `7ae161833c2b2ee5b9077c0e1c69aab0607eff1e`
+Implementation evidence revision: `72dcde54d9358ffdca14c43b71f2f1abbdfa44f1`
 
 ## Isolated build and browser QA
 
-- Production build: PASS (`next build --webpack`) under the isolated OWC runtime.
-- Browser plan: 76/76 PASS across 19 US/shared routes at 1440, 1024, 768, and 390 px.
-- No document-level horizontal overflow, successful external request, or duplicate application request was observed. Expected empty-fixture API failures were accepted only when the corresponding fail-closed or error-state copy was asserted.
-- Cold browser navigation, 76 runs: p50 1,146 ms, p95 1,455 ms, p99 2,018 ms. Encoded payload p50 1,073.8 KiB, p95 1,967 KiB. These measurements use an empty isolated runtime and are not Production-data performance claims.
+- Production build: PASS (`next build --webpack`) under the isolated OWC runtime; Build ID `LfPPbwO_xr1tV1EtTala6`.
+- Latest browser plan: 76/76 PASS across 19 US/shared routes at 1440, 1024, 768, and 390 px. Period Explorer's empty-calendar state is explicitly asserted on both markets.
+- The complete 55-route plan produced 208/220 PASS. The 12 failures are the three JP real-data-dependent routes (`screener-jp`, `stock-jp`, and `daily-close-report`) at four widths in a deliberately empty isolated runtime; these results are NOT_TESTED for real data, not parity PASS.
+- The 76 US/shared runs had no document-level horizontal overflow. Repeated navigation requests were observed for prefetchable pages and the favicon, so duplicate-request absence is not claimed.
+- Cold browser navigation, 76 US/shared runs: p50 1,146 ms, p95 1,453 ms, p99 1,651 ms. Encoded payload p50 1,073.8 KiB, p95/p99 1,967 KiB. These measurements use an empty isolated runtime and are not Production-data performance claims.
 - Physical-device hover, pinch, and mobile keyboard behavior: NOT_TESTED.
 
-Artifacts are retained outside Git under `/Volumes/OWC Express 1M2 80G/development/us-jp-parity-browser-qa-20261026-r2`.
+Latest artifacts are retained outside Git under `/Volumes/OWC Express 1M2 80G/development/us-jp-parity-browser-qa-20261026-final`.
 
 ## Synthetic search benchmark
 
@@ -32,4 +33,6 @@ Artifacts are retained outside Git under `/Volumes/OWC Express 1M2 80G/developme
 
 - Production, Friend Access runtime, live credentials, and protected datasets.
 - JP valuation and shareholder-return real-data integrations.
+- US Monthly MA monitor Production-equivalent full-universe p95/p99, memory, and concurrency behavior.
+- External API credentials, contracts, redistribution rights, and source availability recorded as blockers.
 - Physical mobile devices and assistive-technology hardware.
