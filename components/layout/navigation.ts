@@ -103,6 +103,15 @@ export const PAGE_CATALOG = {
     commandBadge: 'イベント',
     searchTerms: '業績 発表',
   },
+  dailyClose: {
+    href: '/reports/daily-close',
+    label: '大引け概況',
+    description: '市場の騰落・売買代金・決算予定を日次確認',
+    icon: BarChart3,
+    commandVerb: '確認',
+    commandBadge: '市場',
+    searchTerms: '大引け 日次 市況 値上がり 値下がり 売買代金',
+  },
   mtfCloseCalendar: {
     href: '/mtf-close-calendar',
     label: 'MTF確定日',
@@ -310,6 +319,15 @@ export const PAGE_CATALOG = {
     commandBadge: 'USイベント',
     searchTerms: '米国株 earnings calendar Finnhub 決算 発表',
   },
+  usDailyClose: {
+    href: '/us/daily-close',
+    label: 'US大引け概況',
+    description: '米国市場の騰落・売買代金・決算予定を日次確認',
+    icon: BarChart3,
+    commandVerb: '確認',
+    commandBadge: 'US市場',
+    searchTerms: '米国株 大引け 日次 市況 breadth movers volume earnings',
+  },
   usScreener: {
     href: '/us/screener',
     label: 'USスクリーナー',
@@ -467,7 +485,7 @@ export const NAVIGATION_BY_AREA = {
       sections: [
         { id: 'market-overview', label: '市場全体', pageIds: ['marketMomentum'], column: 1 },
         { id: 'industries', label: '業種・テーマ', pageIds: ['sectors', 'sectorEtfs', 'themes'], column: 2 },
-        { id: 'events', label: 'イベント', pageIds: ['earnings', 'mtfCloseCalendar', 'materials'], column: 1 },
+        { id: 'events', label: 'イベント', pageIds: ['dailyClose', 'earnings', 'mtfCloseCalendar', 'materials'], column: 1 },
       ],
     },
     {
@@ -516,7 +534,7 @@ export const NAVIGATION_BY_AREA = {
       sections: [
         { id: 'us-market-pulse', label: '市場を読む', pageIds: ['usMarketMomentum'], column: 1 },
         { id: 'us-industry-map', label: '分類を比較', pageIds: ['usSectors', 'usSectorEtfs'], column: 2 },
-        { id: 'us-events', label: 'イベント', pageIds: ['usEarnings', 'usMtfCloseCalendar'], column: 1 },
+        { id: 'us-events', label: 'イベント', pageIds: ['usDailyClose', 'usEarnings', 'usMtfCloseCalendar'], column: 1 },
       ],
     },
     {

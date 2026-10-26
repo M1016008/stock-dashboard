@@ -1,7 +1,7 @@
-// US ルート入口 13 件の Loading / Empty / Error 契約テスト。
+// US ルート入口 20 件の Loading / Empty / Error 契約テスト。
 // DB・ブラウザ・ネットワークを使わず、ソース契約と静的レンダリングだけで検証する。
 //
-// - 13 入口の棚卸し: app/us 配下の page.tsx と過不足なく一致すること
+// - 20 入口の棚卸し: app/us 配下の page.tsx と過不足なく一致すること
 // - 共有 Error Boundary (app/us/error.tsx): 例外文を出さず、再試行だけを提示すること
 // - 各入口: 読み込み中・空/未生成・失敗の表示が区別されて存在すること
 //   (失敗を画面内で扱わない入口は、共有 Boundary が受けることを明示する)
@@ -71,8 +71,8 @@ const ENTRYPOINTS: Entry[] = [
         /pit: '過去日では使えない条件（取引所・資産種別・業種分類・時価総額）が含まれています。/,
         /failed: 'USスクリーナーの結果を取得できませんでした。/,
         /\{fetchError && \(\s*<div[^>]*>\s*<p role="alert"[^>]*>\{SCREENER_ERROR_COPY\[fetchError\]\}<\/p>\s*<button type="button" onClick=\{\(\) => setRetryVersion\(\(value\) => value \+ 1\)\}/,
-        /\}, \[params, retryVersion\]\)/,
-        /fetchError \? '取得失敗' : `\$\{rows\.length/,
+        /\}, \[params, retryVersion, unavailableDateReason\]\)/,
+        /loading \? '検索中…' : fetchError \? '取得失敗' : dateUnavailable \? '表示不可' : `\$\{rows\.length/,
         // 失敗は「最新データ」等の成功バッジより優先する (AS OF の日付は文脈として残す)
         /const modeLabel = fetchError\s*\? '取得失敗'/,
         /const modeClass = fetchError\s*\? 'border-red-200 bg-red-50 text-\[var\(--color-market-red-dark\)\]'/,
@@ -84,6 +84,72 @@ const ENTRYPOINTS: Entry[] = [
       // 失敗時に API の message や例外文を表示へ流さない。成功応答の message も既知の 2 種以外はそのまま出さない
       patterns: [/setMessage\(error/, /error\.message/, /throw new Error\(/, /^\s*return message\s*$/m, /\{message\}/],
     }],
+  },
+  {
+    id: 'earnings',
+    path: '/us/earnings',
+    pages: ['app/us/earnings/page.tsx'],
+    loading: [routeSkeleton('app/us/loading.tsx')],
+    empty: [{ file: 'app/us/earnings/page.tsx', patterns: [/result\.rows\.length === 0/, /決算予定を表示できません/] }],
+    error: [],
+    sharedBoundary: [{ file: 'app/us/earnings/page.tsx', patterns: [/await getUsEarningsCalendar\(/] }],
+  },
+  {
+    id: 'daily-close',
+    path: '/us/daily-close',
+    pages: ['app/us/daily-close/page.tsx'],
+    loading: [routeSkeleton('app/us/loading.tsx')],
+    empty: [{ file: 'app/us/daily-close/page.tsx', patterns: [/report\?\.status === 'empty'/, /対象日のUS市場データがありません/] }],
+    error: [{ file: 'app/us/daily-close/page.tsx', patterns: [/role="alert"/, /US Daily Closeを読み込めません/] }],
+    sharedBoundary: [],
+  },
+  {
+    id: 'period-explorer',
+    path: '/us/period-explorer',
+    pages: ['app/us/period-explorer/page.tsx'],
+    loading: [
+      { file: 'app/us/period-explorer/page.tsx', patterns: [/<Suspense fallback=\{<PageLoadingSkeleton/] },
+      { file: 'app/period-explorer/PeriodExplorerClient.tsx', patterns: [/期間データを集計しています/] },
+    ],
+    empty: [{ file: 'app/period-explorer/PeriodExplorerClient.tsx', patterns: [/response\.total === 0/, /条件に一致する銘柄がありません/] }],
+    error: [{ file: 'app/period-explorer/PeriodExplorerClient.tsx', patterns: [/role="alert"/, /\{error\}/] }],
+    sharedBoundary: [{ file: 'app/us/period-explorer/page.tsx', patterns: [/await getPeriodExplorerCalendar\('US'\)/] }],
+  },
+  {
+    id: 'sector-etfs',
+    path: '/us/sector-etfs',
+    pages: ['app/us/sector-etfs/page.tsx'],
+    loading: [routeSkeleton('app/us/loading.tsx')],
+    empty: [{ file: 'app/us/sector-etfs/page.tsx', patterns: [/board\?\.status === 'empty'/, /USセクターETFデータがまだありません/] }],
+    error: [{ file: 'app/us/sector-etfs/page.tsx', patterns: [/role="alert"/, /USセクターETFを読み込めませんでした/] }],
+    sharedBoundary: [],
+  },
+  {
+    id: 'sector-etf-detail',
+    path: '/us/sector-etfs/[ticker]',
+    pages: ['app/us/sector-etfs/[ticker]/page.tsx'],
+    loading: [routeSkeleton('app/us/loading.tsx')],
+    empty: [{ file: 'app/us/sector-etfs/[ticker]/page.tsx', patterns: [/notFound\(\)/, /構成銘柄・組入比率は利用できません/] }],
+    error: [],
+    sharedBoundary: [{ file: 'app/us/sector-etfs/[ticker]/page.tsx', patterns: [/await loadUsSectorEtfDetail\(/] }],
+  },
+  {
+    id: 'trade-workbench',
+    path: '/us/trade/workbench',
+    pages: ['app/us/trade/workbench/page.tsx'],
+    loading: [routeSkeleton('app/us/loading.tsx')],
+    empty: [{ file: 'app/us/trade/workbench/page.tsx', patterns: [/data\.candidates\.length === 0/, /条件を満たすUS候補はありません/] }],
+    error: [{ file: 'app/us/trade/workbench/page.tsx', patterns: [/role="alert"/, /Servingデータを利用できません/] }],
+    sharedBoundary: [{ file: 'app/us/trade/workbench/page.tsx', patterns: [/await getUsTradeWorkbench\(/] }],
+  },
+  {
+    id: 'ma25m-monitor',
+    path: '/us/ma25m-monitor',
+    pages: ['app/us/ma25m-monitor/page.tsx'],
+    loading: [{ file: 'app/us/ma25m-monitor/page.tsx', patterns: [/aria-live="polite"/, /更新中…/] }],
+    empty: [{ file: 'app/us/ma25m-monitor/page.tsx', patterns: [/rows\.length === 0/, /該当銘柄はありません/] }],
+    error: [{ file: 'app/us/ma25m-monitor/page.tsx', patterns: [/role="alert"/, /米国株MAデータを読み込めませんでした/] }],
+    sharedBoundary: [],
   },
   {
     id: 'stage-screener',
@@ -281,8 +347,8 @@ const BROWSER_ONLY_CHECKS = [
 
 /* ---------- 1. 棚卸し ---------- */
 
-assert.equal(ENTRYPOINTS.length, 13, 'US parity tracks exactly 13 route entrypoints')
-assert.equal(new Set(ENTRYPOINTS.map((entry) => entry.id)).size, 13, 'entrypoint ids must be unique')
+assert.equal(ENTRYPOINTS.length, 20, 'US parity tracks exactly 20 route entrypoints')
+assert.equal(new Set(ENTRYPOINTS.map((entry) => entry.id)).size, 20, 'entrypoint ids must be unique')
 
 function listPages(dir: string): string[] {
   return fs.readdirSync(path.join(root, dir), { withFileTypes: true }).flatMap((dirent) => {
@@ -492,10 +558,10 @@ assertBefore(MTF, '{error && (', 'aria-label="同時に確定する本数で絞�
 assert.equal((read(MTF).match(/role="alert"/g) ?? []).length, 1, 'MTF calendar shows the failure in exactly one place')
 
 const SCREENER = 'app/us/screener/UsScreenerClient.tsx'
-assertBefore(SCREENER, "fetchError ? '取得失敗' : `${rows.length", '{fetchError && (', 'screener alert follows the result status')
+assertBefore(SCREENER, "loading ? '検索中…' : fetchError ? '取得失敗'", '{fetchError && (', 'screener alert follows the result status')
 assertBefore(SCREENER, '{fetchError && (', '{filtersOpen && (', 'screener alert must render above the expanded filter panel')
 assertBefore(SCREENER, '{fetchError && (', '<table', 'screener alert must render outside/above the scrolling table')
-assert.equal((read(SCREENER).match(/role="alert"/g) ?? []).length, 1, 'screener shows the failure in exactly one place')
+assert.equal((read(SCREENER).match(/role="alert"/g) ?? []).length, 2, 'screener keeps unavailable-date and fetch failures as two distinct, mutually exclusive alert states')
 
 // 欠損は 0 ではない: 代表的な欠損表記がゼロ埋めに置き換わっていないこと
 assert.match(read('app/us/analysis/backtest/page.tsx'), /if \(value == null\) return '-'/)

@@ -27,6 +27,7 @@ export const MARKET_COUNTERPARTS = [
   { jp: 'marketMomentum', us: 'usMarketMomentum' },
   { jp: 'sectors', us: 'usSectors' },
   { jp: 'sectorEtfs', us: 'usSectorEtfs' },
+  { jp: 'dailyClose', us: 'usDailyClose' },
   { jp: 'earnings', us: 'usEarnings' },
   { jp: 'mtfCloseCalendar', us: 'usMtfCloseCalendar' },
   { jp: 'screener', us: 'usScreener', commodities: 'commoditiesScreener' },

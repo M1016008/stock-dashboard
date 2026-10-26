@@ -207,6 +207,8 @@
     "test:us-runtime-capabilities": "tsx scripts/test-us-runtime-capabilities.ts",
     "test:us-earnings-calendar": "tsx scripts/test-us-earnings-calendar.ts",
     "test:us-sector-etfs": "tsx scripts/test-us-sector-etfs.ts",
+    "test:us-sector-etf-detail": "tsx scripts/test-us-sector-etf-detail.ts",
+    "test:us-daily-close-report": "tsx scripts/test-us-daily-close-report.ts",
     "test:us-trade-workbench": "tsx scripts/test-us-trade-workbench.ts",
     "test:us-ma25m-monitor": "tsx scripts/test-us-ma25m-monitor.ts",
     "test:stock-preview": "tsx scripts/run-isolated-runtime.ts test -- tsx scripts/test-stock-preview.ts",
