@@ -3,6 +3,7 @@ import Link from 'next/link'
 import { AlertTriangle, ArrowDownRight, ArrowUpRight, CheckCircle2, Eye, ShieldAlert } from 'lucide-react'
 import { PageTitle } from '@/components/layout/PageTitle'
 import { Card, CardHeader } from '@/components/ui/Card'
+import { EmptyState } from '@/components/ui/EmptyState'
 import { StageDots } from '@/components/ui/StageDots'
 import {
   getUsTradeWorkbench,
@@ -235,7 +236,7 @@ export default async function UsTradeWorkbenchPage({
       </dl>
 
       {data.coverage.availability === 'unavailable' ? (
-        <Card className="sb-section border-red-300 bg-red-50">
+        <Card className="sb-section border-red-300 bg-red-50" role="alert">
           <CardHeader title="Servingデータを利用できません" hint="候補を最新値へフォールバックせず、Fail-Closedで停止しています。" />
           <p className="text-[13px] font-bold text-red-900">理由: {data.coverage.reason ?? 'UNKNOWN'}</p>
           <p className="mt-2 text-[12px] font-semibold text-red-900">Price / Snapshot / ML候補のGenerationと価格basisが同一になるまで候補は表示しません。</p>
@@ -274,9 +275,16 @@ export default async function UsTradeWorkbenchPage({
             </p>
           </Card>
 
-          <div className="sb-section space-y-4">
-            {data.candidates.map((candidate) => <CandidateCard key={candidate.ticker} candidate={candidate} />)}
-          </div>
+          {data.candidates.length === 0 ? (
+            <EmptyState
+              title="条件を満たすUS候補はありません"
+              description="Serving母集団や条件を推測で緩めず、観測された0件を表示しています。"
+            />
+          ) : (
+            <div className="sb-section space-y-4">
+              {data.candidates.map((candidate) => <CandidateCard key={candidate.ticker} candidate={candidate} />)}
+            </div>
+          )}
         </>
       )}
     </div>
