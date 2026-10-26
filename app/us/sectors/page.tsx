@@ -314,7 +314,7 @@ export default async function UsSectorsPage({
       <section id="us-sector-ranking" aria-labelledby="us-sector-ranking-title" className="flex min-w-0 scroll-mt-36 flex-col gap-3">
         <SectionHeader
           id="us-sector-ranking-title"
-          title="Sector ranking"
+          title="StockBoard SIC division ranking"
           description="列見出しで並べ替え。平均は単純平均、PMS+比率は PMS > 0 の割合、日A S1 は日足A が Stage 1 の割合です。"
         />
         <UsSectorRankingTable

@@ -140,6 +140,7 @@ export default async function UsSectorEtfDetailPage({ params, searchParams }: Pa
     loadFailed = true
   }
   if (loadFailed) {
+    const retryHref = `/us/sector-etfs/${encodeURIComponent(tickerResolution.ticker)}${requestedDate ? `?date=${encodeURIComponent(requestedDate)}` : ''}`
     return (
       <div className="sb-page">
         <PageTitle
@@ -148,7 +149,12 @@ export default async function UsSectorEtfDetailPage({ params, searchParams }: Pa
           subtitle={tickerResolution.catalog.description}
           rightSlot={<Link href="/us/sector-etfs" className="btn"><ArrowLeft size={13} aria-hidden /> 一覧へ</Link>}
         />
-        <Notice tone="error" role="alert" title="USセクターETFの詳細を読み込めませんでした">
+        <Notice
+          tone="error"
+          role="alert"
+          title="USセクターETFの詳細を読み込めませんでした"
+          action={<Link href={retryHref} prefetch={false} className="btn" data-size="sm">再読み込み</Link>}
+        >
           既存のUS価格・ステージデータを確認できませんでした。別のデータを推測表示しません。
         </Notice>
       </div>

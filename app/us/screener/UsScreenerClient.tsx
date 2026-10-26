@@ -270,16 +270,20 @@ function physicalStatusClass(label: string | null | undefined) {
 }
 
 /** 取得に失敗した理由。空結果 (0 件・未生成) とは別の状態として持つ */
-type ScreenerErrorKind = 'pit' | 'failed'
+type ScreenerErrorKind = 'pit' | 'earnings' | 'failed'
 
 // API の message は内部情報を含みうるため画面に出さない。理由ごとに決まった文言だけを使う
 const SCREENER_ERROR_COPY: Record<ScreenerErrorKind, string> = {
   pit: '過去日では使えない条件（取引所・資産種別・業種分類・時価総額）が含まれています。条件を外して再検索してください。',
+  earnings: '決算予定の同期範囲または鮮度を確認できないため、決算条件を解除しました。通常の検索結果を再取得します。',
   failed: 'USスクリーナーの結果を取得できませんでした。時間をおいて再試行してください。',
 }
 
 class ScreenerRequestError extends Error {
-  constructor(readonly kind: ScreenerErrorKind) {
+  constructor(
+    readonly kind: ScreenerErrorKind,
+    readonly earningsReason?: EarningsMeta['reason'],
+  ) {
     super(kind)
   }
 }
@@ -440,7 +444,10 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
     && (latestDate == null ? confirmedPit?.mode !== 'LATEST' : requestedDate !== latestDate)
   // 銘柄リンク・クイックプレビューへ引き継ぐ日付 (過去日のときだけ、解決後の取引日)
   const linkDate = confirmedPit?.mode === 'HISTORICAL' ? confirmedPit.resolvedDate : null
-  const effectiveSort = historicalLocked && (HISTORICAL_BLOCKED_SORTS.has(sort) || HISTORICAL_EARNINGS_SORTS.has(sort)) ? 'ticker' : sort
+  // 最新日でも決算予定が明示的に利用不可なら、決算条件・並び替えを過去日と同様に使えなくする
+  const earningsUnavailable = !historicalLocked && earningsMeta?.available === false
+  const earningsLocked = historicalLocked || earningsUnavailable
+  const effectiveSort = (historicalLocked && HISTORICAL_BLOCKED_SORTS.has(sort)) || (earningsLocked && HISTORICAL_EARNINGS_SORTS.has(sort)) ? 'ticker' : sort
   const sicClassificationEnabled = supportsUsSicClassification(assetType) && !historicalLocked
   const params = useMemo(() => {
     const sp = new URLSearchParams({ limit: String(resultLimit), sort: effectiveSort, dir })
@@ -470,8 +477,8 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
     if (stage23Candidate) sp.set('stage23Candidate', '1')
     if (shortTermCheck) sp.set('shortTermCheck', shortTermCheck)
     if (physicalStatus) sp.set('physicalStatus', physicalStatus)
-    if (!historicalLocked && earningsWindowDays) sp.set('earningsWindowDays', earningsWindowDays)
-    if (!historicalLocked && earningsTimeBucket) sp.set('earningsTimeBucket', earningsTimeBucket)
+    if (!earningsLocked && earningsWindowDays) sp.set('earningsWindowDays', earningsWindowDays)
+    if (!earningsLocked && earningsTimeBucket) sp.set('earningsTimeBucket', earningsTimeBucket)
     if (twoYearLine !== 'none') {
       sp.set('twoYearLine', twoYearLine)
       if (twoYearPattern !== 'either') sp.set('twoYearPattern', twoYearPattern)
@@ -482,7 +489,7 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
     if (capBin?.min != null) sp.set('marketCapMin', String(capBin.min))
     if (capBin?.max != null) sp.set('marketCapMax', String(capBin.max))
     return sp.toString()
-  }, [requestedDate, historicalLocked, query, exchange, sector, industryGroup, industry, stageCode, stages, avgVolumeMin, priceMin, priceMax, assetType, sicClassificationEnabled, quality, ma200Trend, ma200Direction, pmsMin, pfsMin, pesMin, accelerationPositive, forcePositive, stage23Candidate, shortTermCheck, physicalStatus, marketCapBin, earningsWindowDays, earningsTimeBucket, twoYearLine, twoYearPattern, twoYearAngleMin, twoYearAngleMax, effectiveSort, dir, resultLimit])
+  }, [requestedDate, historicalLocked, earningsLocked, query, exchange, sector, industryGroup, industry, stageCode, stages, avgVolumeMin, priceMin, priceMax, assetType, sicClassificationEnabled, quality, ma200Trend, ma200Direction, pmsMin, pfsMin, pesMin, accelerationPositive, forcePositive, stage23Candidate, shortTermCheck, physicalStatus, marketCapBin, earningsWindowDays, earningsTimeBucket, twoYearLine, twoYearPattern, twoYearAngleMin, twoYearAngleMax, effectiveSort, dir, resultLimit])
 
   // 過去日では使えない条件は、送らないだけでなく画面の状態からも外し、外したことを表示する
   useEffect(() => {
@@ -518,6 +525,17 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
       setClearedForHistorical((current) => Array.from(new Set([...current, ...cleared])))
     }
   }, [historicalLocked, exchange, assetType, sector, industryGroup, industry, marketCapBin, earningsWindowDays, earningsTimeBucket, sort])
+
+  // 保存済み条件の読込み後に同期不備が判明した場合も、503の再試行ループにせず決算条件だけを外す。
+  useEffect(() => {
+    if (!earningsUnavailable) return
+    if (earningsWindowDays) setEarningsWindowDays('')
+    if (earningsTimeBucket) setEarningsTimeBucket('')
+    if (HISTORICAL_EARNINGS_SORTS.has(sort)) {
+      setSort('ticker')
+      setDir('asc')
+    }
+  }, [earningsUnavailable, earningsWindowDays, earningsTimeBucket, sort])
 
   const changeRequestedDate = (next: string | null) => {
     setClearedForHistorical([])
@@ -576,7 +594,12 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
       fetch(`/api/us/screener?${params}`, { cache: 'no-store', signal: controller.signal })
         .then(async (res) => {
           const data = await res.json().catch(() => ({}))
-          if (!res.ok) throw new ScreenerRequestError(res.status === 422 ? 'pit' : 'failed')
+          if (!res.ok) {
+            if (res.status === 503 && data.error === 'us_earnings_unavailable') {
+              throw new ScreenerRequestError('earnings', data.reason)
+            }
+            throw new ScreenerRequestError(res.status === 422 ? 'pit' : 'failed')
+          }
           return data
         })
         .then((data) => {
@@ -609,6 +632,15 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
           if (cancelled || (error instanceof DOMException && error.name === 'AbortError')) return
           setRows([])
           setHasMore(false)
+          if (error instanceof ScreenerRequestError && error.kind === 'earnings') {
+            setEarningsMeta({
+              source: 'finnhub',
+              available: false,
+              reason: error.earningsReason,
+              updatedAt: null,
+              latestRun: null,
+            })
+          }
           setFetchError(error instanceof ScreenerRequestError ? error.kind : 'failed')
         })
         .finally(() => { if (!cancelled) setLoading(false) })
@@ -1057,7 +1089,7 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
               <option value="ma200Angle">200日線の角度</option>
               <option value="volume">出来高</option>
               <option value="avgVolume20">20日平均出来高</option>
-              <option value="earningsNextDate" disabled={historicalLocked}>次回決算日{historicalLocked ? '（過去日は不可）' : ''}</option>
+              <option value="earningsNextDate" disabled={earningsLocked}>次回決算日{historicalLocked ? '（過去日は不可）' : earningsUnavailable ? '（決算予定が利用不可）' : ''}</option>
               <option value="shortTermCheckScore">短期チェック</option>
               <option value="pms">PMS</option>
               <option value="pfs">PFS</option>
@@ -1207,7 +1239,7 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
             </div>
           </Section>
 
-          <Section step={5} label="次回決算までで絞り込み・並び替え" locked={historicalLocked ? '過去日は使えません · 当時の決算予定を保存していないため' : undefined}>
+          <Section step={5} label="次回決算までで絞り込み・並び替え" locked={historicalLocked ? '過去日は使えません · 当時の決算予定を保存していないため' : earningsUnavailable ? '現在は使えません · 決算予定を利用できないため' : undefined}>
             <div className="flex flex-wrap gap-1.5">
               {[
                 ['', '全て'],
@@ -1219,7 +1251,7 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
                 <Chip
                   key={value || 'all'}
                   active={earningsWindowDays === value}
-                  disabled={historicalLocked}
+                  disabled={earningsLocked}
                   onClick={() => setEarningsWindowDays(value)}
                 >
                   {label}
@@ -1227,14 +1259,14 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
               ))}
               <Chip
                 active={sort === 'earningsNextDate' && dir === 'asc'}
-                disabled={historicalLocked}
+                disabled={earningsLocked}
                 onClick={() => { setSort('earningsNextDate'); setDir('asc') }}
               >
                 決算が近い順
               </Chip>
               <Chip
                 active={sort === 'earningsNextDate' && dir === 'desc'}
-                disabled={historicalLocked}
+                disabled={earningsLocked}
                 onClick={() => { setSort('earningsNextDate'); setDir('desc') }}
               >
                 決算が遠い順
@@ -1251,7 +1283,7 @@ export function UsScreenerClient({ initialAsOf }: { initialAsOf: InitialScreener
                 <Chip
                   key={value || 'all'}
                   active={earningsTimeBucket === value}
-                  disabled={historicalLocked}
+                  disabled={earningsLocked}
                   onClick={() => setEarningsTimeBucket(value)}
                 >
                   {label}
