@@ -3,7 +3,7 @@
   "updatedAt": "2026-10-26",
   "benchmark": "JP StockBoard",
   "target": "US StockBoard",
-  "evidenceRevision": "06886e48d2711dbb2e347d04b6eabd2e25559cf5",
+  "evidenceRevision": "a543f84bc065f60fd429a6c4bc9f57103ae59370",
   "productionState": "NOT_DEPLOYED_THIS_BRANCH",
   "inventorySnapshot": {
     "pages": 58,
@@ -34,9 +34,9 @@
       "responsive": "IMPLEMENTED",
       "performance": "IMPLEMENTED",
       "remaining": "None within the implemented contract.",
-      "claude": "NOT_AVAILABLE_THIS_SESSION",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
       "codexQa": "TARGETED_PASS",
-      "git": "06886e48d2711dbb2e347d04b6eabd2e25559cf5",
+      "git": "a543f84bc065f60fd429a6c4bc9f57103ae59370",
       "production": "NOT_DEPLOYED_THIS_BRANCH",
       "evidence": {
         "claims": [
@@ -69,9 +69,9 @@
       "responsive": "IMPLEMENTED",
       "performance": "IMPLEMENTED",
       "remaining": "None within the implemented contract.",
-      "claude": "NOT_AVAILABLE_THIS_SESSION",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
       "codexQa": "TARGETED_PASS",
-      "git": "06886e48d2711dbb2e347d04b6eabd2e25559cf5",
+      "git": "a543f84bc065f60fd429a6c4bc9f57103ae59370",
       "production": "NOT_DEPLOYED_THIS_BRANCH",
       "evidence": {
         "claims": [
@@ -104,9 +104,9 @@
       "responsive": "IMPLEMENTED",
       "performance": "IMPLEMENTED",
       "remaining": "None within the implemented contract.",
-      "claude": "NOT_AVAILABLE_THIS_SESSION",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
       "codexQa": "TARGETED_PASS",
-      "git": "06886e48d2711dbb2e347d04b6eabd2e25559cf5",
+      "git": "a543f84bc065f60fd429a6c4bc9f57103ae59370",
       "production": "NOT_DEPLOYED_THIS_BRANCH",
       "evidence": {
         "claims": [
@@ -139,9 +139,9 @@
       "responsive": "NOT_APPLICABLE",
       "performance": "IMPLEMENTED",
       "remaining": "None within the implemented contract.",
-      "claude": "NOT_AVAILABLE_THIS_SESSION",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
       "codexQa": "TARGETED_PASS",
-      "git": "06886e48d2711dbb2e347d04b6eabd2e25559cf5",
+      "git": "a543f84bc065f60fd429a6c4bc9f57103ae59370",
       "production": "NOT_DEPLOYED_THIS_BRANCH",
       "evidence": {
         "claims": [
@@ -174,9 +174,9 @@
       "responsive": "IMPLEMENTED",
       "performance": "IMPLEMENTED",
       "remaining": "None within the implemented contract.",
-      "claude": "NOT_AVAILABLE_THIS_SESSION",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
       "codexQa": "TARGETED_PASS",
-      "git": "06886e48d2711dbb2e347d04b6eabd2e25559cf5",
+      "git": "a543f84bc065f60fd429a6c4bc9f57103ae59370",
       "production": "NOT_DEPLOYED_THIS_BRANCH",
       "evidence": {
         "claims": [
@@ -210,10 +210,10 @@
       "historical": "NOT_APPLICABLE",
       "responsive": "UNVERIFIED",
       "performance": "IMPLEMENTED",
-      "remaining": "Code contract exists, but this branch was not deployed and authenticated friend-path browser QA was not run.",
-      "claude": "NOT_AVAILABLE_THIS_SESSION",
+      "remaining": "Code contract and isolated gateway/UI regressions exist, but this branch was not deployed and authenticated friend-path browser QA was not run.",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
       "codexQa": "TARGETED_OR_HISTORICAL_EVIDENCE",
-      "git": "06886e48d2711dbb2e347d04b6eabd2e25559cf5",
+      "git": "a543f84bc065f60fd429a6c4bc9f57103ae59370",
       "production": "NOT_DEPLOYED_THIS_BRANCH",
       "blocker": "SECURITY: Production deployment and authenticated runtime access require separate approval.",
       "nextAction": "Run the approved friend-access route matrix after a future deployment.",
@@ -229,7 +229,9 @@
           "proxy.ts"
         ],
         "testPaths": [
-          "scripts/test-remote-access.ts"
+          "scripts/test-remote-access.ts",
+          "scripts/test-friend-readonly-gateway.ts",
+          "scripts/test-friend-readonly-ui.ts"
         ]
       }
     },
@@ -245,9 +247,9 @@
       "responsive": "IMPLEMENTED",
       "performance": "IMPLEMENTED",
       "remaining": "None within the implemented contract.",
-      "claude": "NOT_AVAILABLE_THIS_SESSION",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
       "codexQa": "TARGETED_PASS",
-      "git": "06886e48d2711dbb2e347d04b6eabd2e25559cf5",
+      "git": "a543f84bc065f60fd429a6c4bc9f57103ae59370",
       "production": "NOT_DEPLOYED_THIS_BRANCH",
       "evidence": {
         "claims": [
@@ -283,9 +285,9 @@
       "responsive": "IMPLEMENTED",
       "performance": "IMPLEMENTED",
       "remaining": "None within the implemented contract.",
-      "claude": "NOT_AVAILABLE_THIS_SESSION",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
       "codexQa": "TARGETED_PASS",
-      "git": "06886e48d2711dbb2e347d04b6eabd2e25559cf5",
+      "git": "a543f84bc065f60fd429a6c4bc9f57103ae59370",
       "production": "NOT_DEPLOYED_THIS_BRANCH",
       "evidence": {
         "claims": [
@@ -320,9 +322,9 @@
       "responsive": "IMPLEMENTED",
       "performance": "IMPLEMENTED",
       "remaining": "None within the implemented contract.",
-      "claude": "NOT_AVAILABLE_THIS_SESSION",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
       "codexQa": "TARGETED_PASS",
-      "git": "06886e48d2711dbb2e347d04b6eabd2e25559cf5",
+      "git": "a543f84bc065f60fd429a6c4bc9f57103ae59370",
       "production": "NOT_DEPLOYED_THIS_BRANCH",
       "evidence": {
         "claims": [
@@ -355,9 +357,9 @@
       "responsive": "IMPLEMENTED",
       "performance": "IMPLEMENTED",
       "remaining": "None within the implemented contract.",
-      "claude": "NOT_AVAILABLE_THIS_SESSION",
+      "claude": "STATIC_REVIEWED_BROWSER_PENDING",
       "codexQa": "TARGETED_PASS",
-      "git": "06886e48d2711dbb2e347d04b6eabd2e25559cf5",
+      "git": "a543f84bc065f60fd429a6c4bc9f57103ae59370",
       "production": "NOT_DEPLOYED_THIS_BRANCH",
       "evidence": {
         "claims": [
@@ -391,9 +393,9 @@
       "responsive": "IMPLEMENTED",
       "performance": "IMPLEMENTED",
       "remaining": "None within the implemented contract.",
-      "claude": "NOT_AVAILABLE_THIS_SESSION",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
       "codexQa": "TARGETED_PASS",
-      "git": "06886e48d2711dbb2e347d04b6eabd2e25559cf5",
+      "git": "a543f84bc065f60fd429a6c4bc9f57103ae59370",
       "production": "NOT_DEPLOYED_THIS_BRANCH",
       "evidence": {
         "claims": [
@@ -426,9 +428,9 @@
       "responsive": "IMPLEMENTED",
       "performance": "IMPLEMENTED",
       "remaining": "Current SEC SIC analysis is implemented; effective-dated historical classifications are unavailable.",
-      "claude": "NOT_AVAILABLE_THIS_SESSION",
+      "claude": "STATIC_REVIEWED_BROWSER_PENDING",
       "codexQa": "TARGETED_OR_HISTORICAL_EVIDENCE",
-      "git": "06886e48d2711dbb2e347d04b6eabd2e25559cf5",
+      "git": "a543f84bc065f60fd429a6c4bc9f57103ae59370",
       "production": "NOT_DEPLOYED_THIS_BRANCH",
       "blocker": "DATA: no approved effective-dated US sector/industry source.",
       "nextAction": "Ingest an approved effective-dated taxonomy before enabling historical classification filters.",
@@ -460,9 +462,9 @@
       "responsive": "IMPLEMENTED",
       "performance": "IMPLEMENTED",
       "remaining": "None within the implemented contract.",
-      "claude": "NOT_AVAILABLE_THIS_SESSION",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
       "codexQa": "TARGETED_PASS",
-      "git": "06886e48d2711dbb2e347d04b6eabd2e25559cf5",
+      "git": "a543f84bc065f60fd429a6c4bc9f57103ae59370",
       "production": "NOT_DEPLOYED_THIS_BRANCH",
       "evidence": {
         "claims": [
@@ -496,9 +498,9 @@
       "responsive": "IMPLEMENTED",
       "performance": "IMPLEMENTED",
       "remaining": "Adjusted price, Stage and SMA analysis are complete; constituent holdings and weights remain unavailable.",
-      "claude": "NOT_AVAILABLE_THIS_SESSION",
+      "claude": "STATIC_REVIEWED_BROWSER_PENDING",
       "codexQa": "TARGETED_OR_HISTORICAL_EVIDENCE",
-      "git": "06886e48d2711dbb2e347d04b6eabd2e25559cf5",
+      "git": "a543f84bc065f60fd429a6c4bc9f57103ae59370",
       "production": "NOT_DEPLOYED_THIS_BRANCH",
       "blocker": "DATA: no approved ETF holdings source with redistribution rights.",
       "nextAction": "Connect an approved holdings source and preserve source date and weight lineage.",
@@ -524,20 +526,20 @@
       "wave": "W1",
       "feature": "Earnings calendar",
       "jp": "IMPLEMENTED",
-      "us": "BLOCKED",
+      "us": "PARTIAL",
       "functional": "IMPLEMENTED",
       "visual": "IMPLEMENTED",
       "data": "BLOCKED",
-      "historical": "PARTIAL",
+      "historical": "BLOCKED",
       "responsive": "IMPLEMENTED",
       "performance": "IMPLEMENTED",
-      "remaining": "UI, PIT contract and fixtures are complete; live rows require the approved provider credential.",
-      "claude": "NOT_AVAILABLE_THIS_SESSION",
-      "codexQa": "BLOCKER_DOCUMENTED_EXTERNAL_EVIDENCE_NOT_TESTED",
-      "git": "06886e48d2711dbb2e347d04b6eabd2e25559cf5",
+      "remaining": "Fixture UI and current-reference semantics are implemented. Provider dates without actuals remain unverified schedules; historical schedules fail closed because append-only observations do not exist. Live rows require the approved Finnhub credential.",
+      "claude": "STATIC_REVIEWED_BROWSER_PENDING",
+      "codexQa": "TARGETED_OR_HISTORICAL_EVIDENCE",
+      "git": "a543f84bc065f60fd429a6c4bc9f57103ae59370",
       "production": "NOT_DEPLOYED_THIS_BRANCH",
-      "blocker": "API: machine-local Finnhub credential and live ingestion approval are absent.",
-      "nextAction": "Configure the credential outside Git, ingest, and validate as-of/time-bucket coverage.",
+      "blocker": "API: machine-local Finnhub credential, live ingestion approval, and append-only schedule observations are absent.",
+      "nextAction": "Configure the credential outside Git, ingest a bounded current calendar, then design append-only observations before enabling historical filters.",
       "evidence": {
         "claims": [
           "jp",
@@ -548,10 +550,13 @@
         ],
         "implementationPaths": [
           "app/us/earnings/page.tsx",
-          "lib/queries/us-earnings.ts"
+          "lib/queries/us-earnings.ts",
+          "app/us/screener/UsScreenerClient.tsx"
         ],
         "testPaths": [
-          "scripts/test-us-earnings-calendar.ts"
+          "scripts/test-us-earnings-calendar.ts",
+          "scripts/test-us-screener-pit.ts",
+          "scripts/test-us-parity-ui-contracts.ts"
         ]
       }
     },
@@ -567,9 +572,9 @@
       "responsive": "IMPLEMENTED",
       "performance": "IMPLEMENTED",
       "remaining": "None within the implemented contract.",
-      "claude": "NOT_AVAILABLE_THIS_SESSION",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
       "codexQa": "TARGETED_PASS",
-      "git": "06886e48d2711dbb2e347d04b6eabd2e25559cf5",
+      "git": "a543f84bc065f60fd429a6c4bc9f57103ae59370",
       "production": "NOT_DEPLOYED_THIS_BRANCH",
       "evidence": {
         "claims": [
@@ -602,9 +607,9 @@
       "responsive": "IMPLEMENTED",
       "performance": "IMPLEMENTED",
       "remaining": "None within the implemented contract.",
-      "claude": "NOT_AVAILABLE_THIS_SESSION",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
       "codexQa": "TARGETED_PASS",
-      "git": "06886e48d2711dbb2e347d04b6eabd2e25559cf5",
+      "git": "a543f84bc065f60fd429a6c4bc9f57103ae59370",
       "production": "NOT_DEPLOYED_THIS_BRANCH",
       "evidence": {
         "claims": [
@@ -638,9 +643,9 @@
       "responsive": "IMPLEMENTED",
       "performance": "IMPLEMENTED",
       "remaining": "None within the implemented contract.",
-      "claude": "NOT_AVAILABLE_THIS_SESSION",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
       "codexQa": "TARGETED_PASS",
-      "git": "06886e48d2711dbb2e347d04b6eabd2e25559cf5",
+      "git": "a543f84bc065f60fd429a6c4bc9f57103ae59370",
       "production": "NOT_DEPLOYED_THIS_BRANCH",
       "evidence": {
         "claims": [
@@ -674,9 +679,9 @@
       "responsive": "IMPLEMENTED",
       "performance": "IMPLEMENTED",
       "remaining": "None within the implemented contract.",
-      "claude": "NOT_AVAILABLE_THIS_SESSION",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
       "codexQa": "TARGETED_PASS",
-      "git": "06886e48d2711dbb2e347d04b6eabd2e25559cf5",
+      "git": "a543f84bc065f60fd429a6c4bc9f57103ae59370",
       "production": "NOT_DEPLOYED_THIS_BRANCH",
       "evidence": {
         "claims": [
@@ -711,9 +716,9 @@
       "responsive": "IMPLEMENTED",
       "performance": "IMPLEMENTED",
       "remaining": "None within the implemented contract.",
-      "claude": "NOT_AVAILABLE_THIS_SESSION",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
       "codexQa": "TARGETED_PASS",
-      "git": "06886e48d2711dbb2e347d04b6eabd2e25559cf5",
+      "git": "a543f84bc065f60fd429a6c4bc9f57103ae59370",
       "production": "NOT_DEPLOYED_THIS_BRANCH",
       "evidence": {
         "claims": [
@@ -748,9 +753,9 @@
       "responsive": "IMPLEMENTED",
       "performance": "IMPLEMENTED",
       "remaining": "None within the implemented contract.",
-      "claude": "NOT_AVAILABLE_THIS_SESSION",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
       "codexQa": "TARGETED_PASS",
-      "git": "06886e48d2711dbb2e347d04b6eabd2e25559cf5",
+      "git": "a543f84bc065f60fd429a6c4bc9f57103ae59370",
       "production": "NOT_DEPLOYED_THIS_BRANCH",
       "evidence": {
         "claims": [
@@ -783,9 +788,9 @@
       "responsive": "IMPLEMENTED",
       "performance": "IMPLEMENTED",
       "remaining": "None within the implemented contract.",
-      "claude": "NOT_AVAILABLE_THIS_SESSION",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
       "codexQa": "TARGETED_PASS",
-      "git": "06886e48d2711dbb2e347d04b6eabd2e25559cf5",
+      "git": "a543f84bc065f60fd429a6c4bc9f57103ae59370",
       "production": "NOT_DEPLOYED_THIS_BRANCH",
       "evidence": {
         "claims": [
@@ -819,9 +824,9 @@
       "responsive": "IMPLEMENTED",
       "performance": "IMPLEMENTED",
       "remaining": "None within the implemented contract.",
-      "claude": "NOT_AVAILABLE_THIS_SESSION",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
       "codexQa": "TARGETED_PASS",
-      "git": "06886e48d2711dbb2e347d04b6eabd2e25559cf5",
+      "git": "a543f84bc065f60fd429a6c4bc9f57103ae59370",
       "production": "NOT_DEPLOYED_THIS_BRANCH",
       "evidence": {
         "claims": [
@@ -856,9 +861,9 @@
       "responsive": "IMPLEMENTED",
       "performance": "IMPLEMENTED",
       "remaining": "None within the implemented contract.",
-      "claude": "NOT_AVAILABLE_THIS_SESSION",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
       "codexQa": "TARGETED_PASS",
-      "git": "06886e48d2711dbb2e347d04b6eabd2e25559cf5",
+      "git": "a543f84bc065f60fd429a6c4bc9f57103ae59370",
       "production": "NOT_DEPLOYED_THIS_BRANCH",
       "evidence": {
         "claims": [
@@ -891,13 +896,13 @@
       "historical": "PARTIAL",
       "responsive": "IMPLEMENTED",
       "performance": "IMPLEMENTED",
-      "remaining": "SEC normalization and UI are implemented; live Companyfacts coverage is not activated in this branch.",
-      "claude": "NOT_AVAILABLE_THIS_SESSION",
+      "remaining": "SEC normalization, immutable-fact conflict detection, section coverage, and five-view UI are implemented; live Companyfacts coverage is not activated in this branch.",
+      "claude": "STATIC_REVIEWED_BROWSER_PENDING",
       "codexQa": "TARGETED_OR_HISTORICAL_EVIDENCE",
-      "git": "06886e48d2711dbb2e347d04b6eabd2e25559cf5",
+      "git": "a543f84bc065f60fd429a6c4bc9f57103ae59370",
       "production": "NOT_DEPLOYED_THIS_BRANCH",
       "blocker": "API: SEC operator contact and Production ingestion are separately controlled.",
-      "nextAction": "Configure the operator identity and audit live fact coverage before activation.",
+      "nextAction": "Configure the operator identity and audit live US-GAAP/IFRS concept coverage before activation.",
       "evidence": {
         "claims": [
           "jp",
@@ -908,9 +913,12 @@
         ],
         "implementationPaths": [
           "lib/server/us-fundamentals.ts",
-          "app/api/us/fundamentals/[ticker]/route.ts"
+          "lib/us-fundamentals.ts",
+          "app/api/us/fundamentals/[ticker]/route.ts",
+          "components/us/stock-detail/UsFundamentalsWorkspace.tsx"
         ],
         "testPaths": [
+          "scripts/test-us-sec-companyfacts.ts",
           "scripts/test-us-fundamentals.ts",
           "scripts/test-us-stock-fundamentals-ui.ts"
         ]
@@ -927,13 +935,13 @@
       "historical": "PARTIAL",
       "responsive": "IMPLEMENTED",
       "performance": "IMPLEMENTED",
-      "remaining": "PIT valuation contracts exist; peer and historical ranges depend on sufficient SEC shares coverage.",
-      "claude": "NOT_AVAILABLE_THIS_SESSION",
+      "remaining": "Trailing PER, PBR, PSR and market capitalization use PIT-eligible SEC facts and adjusted price fixtures; peer distributions and live historical ranges remain unavailable.",
+      "claude": "STATIC_REVIEWED_BROWSER_PENDING",
       "codexQa": "TARGETED_OR_HISTORICAL_EVIDENCE",
-      "git": "06886e48d2711dbb2e347d04b6eabd2e25559cf5",
+      "git": "a543f84bc065f60fd429a6c4bc9f57103ae59370",
       "production": "NOT_DEPLOYED_THIS_BRANCH",
-      "blocker": "DATA: historical shares and facts coverage are incomplete.",
-      "nextAction": "Activate only after effective-date coverage and split-basis parity pass.",
+      "blocker": "DATA: live historical shares/facts coverage and an approved peer taxonomy are incomplete.",
+      "nextAction": "Activate only after live effective-date coverage and split-basis parity pass.",
       "evidence": {
         "claims": [
           "jp",
@@ -943,12 +951,12 @@
           "performance"
         ],
         "implementationPaths": [
-          "lib/valuation-detail.ts",
-          "lib/server/valuation-serving.ts"
+          "lib/us-fundamentals.ts",
+          "components/us/stock-detail/UsFundamentalsWorkspace.tsx"
         ],
         "testPaths": [
-          "scripts/test-valuation-detail.ts",
-          "scripts/test-valuation-serving.ts"
+          "scripts/test-us-fundamentals.ts",
+          "scripts/test-us-stock-fundamentals-ui.ts"
         ]
       }
     },
@@ -960,31 +968,31 @@
       "functional": "IMPLEMENTED",
       "visual": "IMPLEMENTED",
       "data": "PARTIAL",
-      "historical": "IMPLEMENTED",
+      "historical": "PARTIAL",
       "responsive": "IMPLEMENTED",
       "performance": "IMPLEMENTED",
-      "remaining": "Dividend and repurchase contracts exist; live trailing coverage remains unverified.",
-      "claude": "NOT_AVAILABLE_THIS_SESSION",
+      "remaining": "Trailing dividend, payout and buyback presentation distinguish observed zero, missing and not meaningful values; live Tiingo/SEC coverage remains unverified.",
+      "claude": "STATIC_REVIEWED_BROWSER_PENDING",
       "codexQa": "TARGETED_OR_HISTORICAL_EVIDENCE",
-      "git": "06886e48d2711dbb2e347d04b6eabd2e25559cf5",
+      "git": "a543f84bc065f60fd429a6c4bc9f57103ae59370",
       "production": "NOT_DEPLOYED_THIS_BRANCH",
       "blocker": "DATA: Production provider coverage is outside this isolated run.",
-      "nextAction": "Validate dividend and repurchase coverage without substituting missing values.",
+      "nextAction": "Validate full trailing dividend and repurchase coverage without substituting missing values.",
       "evidence": {
         "claims": [
           "jp",
           "functional",
           "visual",
-          "historical",
           "responsive",
           "performance"
         ],
         "implementationPaths": [
-          "lib/shareholder-returns.ts",
-          "lib/server/shareholder-returns-read-model.ts"
+          "lib/us-fundamentals.ts",
+          "components/us/stock-detail/UsFundamentalsWorkspace.tsx"
         ],
         "testPaths": [
-          "scripts/test-shareholder-returns.ts"
+          "scripts/test-us-fundamentals.ts",
+          "scripts/test-us-stock-fundamentals-ui.ts"
         ]
       }
     },
@@ -1000,9 +1008,9 @@
       "responsive": "NOT_APPLICABLE",
       "performance": "NOT_APPLICABLE",
       "remaining": "No approved US analyst-consensus source exists; estimates are not fabricated.",
-      "claude": "NOT_AVAILABLE_THIS_SESSION",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
       "codexQa": "BLOCKER_DOCUMENTED_EXTERNAL_EVIDENCE_NOT_TESTED",
-      "git": "06886e48d2711dbb2e347d04b6eabd2e25559cf5",
+      "git": "a543f84bc065f60fd429a6c4bc9f57103ae59370",
       "production": "NOT_DEPLOYED_THIS_BRANCH",
       "blocker": "API: an approved consensus/forecast provider or contract is required.",
       "nextAction": "Select a source, define as-of revision semantics, then implement ingestion and UI.",
@@ -1031,9 +1039,9 @@
       "responsive": "MISSING",
       "performance": "NOT_APPLICABLE",
       "remaining": "SEC 13F and Schedule 13D/G are designed as separate products but have no approved complete ticker mapping pipeline.",
-      "claude": "NOT_AVAILABLE_THIS_SESSION",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
       "codexQa": "BLOCKER_DOCUMENTED_EXTERNAL_EVIDENCE_NOT_TESTED",
-      "git": "06886e48d2711dbb2e347d04b6eabd2e25559cf5",
+      "git": "a543f84bc065f60fd429a6c4bc9f57103ae59370",
       "production": "NOT_DEPLOYED_THIS_BRANCH",
       "blocker": "DATA: evidence-backed CUSIP mapping and SEC operator contact are missing.",
       "nextAction": "Approve and implement separate 13F manager-position and 13D/G beneficial-owner lineages.",
@@ -1062,9 +1070,9 @@
       "responsive": "MISSING",
       "performance": "NOT_APPLICABLE",
       "remaining": "Daily short-sale volume is not substituted for exchange-reported short interest.",
-      "claude": "NOT_AVAILABLE_THIS_SESSION",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
       "codexQa": "BLOCKER_DOCUMENTED_EXTERNAL_EVIDENCE_NOT_TESTED",
-      "git": "06886e48d2711dbb2e347d04b6eabd2e25559cf5",
+      "git": "a543f84bc065f60fd429a6c4bc9f57103ae59370",
       "production": "NOT_DEPLOYED_THIS_BRANCH",
       "blocker": "API: Nasdaq/NYSE listed-universe short-interest license and usage rights are absent.",
       "nextAction": "Acquire an approved exchange product or retain the explicit unavailable state.",
@@ -1092,9 +1100,9 @@
       "responsive": "IMPLEMENTED",
       "performance": "IMPLEMENTED",
       "remaining": "Price, Stage, Physical and current classification filters are complete; historical classifications and forecast filters remain unavailable.",
-      "claude": "NOT_AVAILABLE_THIS_SESSION",
+      "claude": "STATIC_REVIEWED_BROWSER_PENDING",
       "codexQa": "TARGETED_OR_HISTORICAL_EVIDENCE",
-      "git": "06886e48d2711dbb2e347d04b6eabd2e25559cf5",
+      "git": "a543f84bc065f60fd429a6c4bc9f57103ae59370",
       "production": "NOT_DEPLOYED_THIS_BRANCH",
       "blocker": "DATA: effective-dated classifications and approved forecasts are missing.",
       "nextAction": "Keep unsupported historical filters fail-closed until their sources exist.",
@@ -1128,9 +1136,9 @@
       "responsive": "IMPLEMENTED",
       "performance": "IMPLEMENTED",
       "remaining": "US price, Stage, liquidity and exact-date rankings are implemented; historical classification filters and PIT share-count market cap remain unavailable.",
-      "claude": "NOT_AVAILABLE_THIS_SESSION",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
       "codexQa": "TARGETED_OR_HISTORICAL_EVIDENCE",
-      "git": "06886e48d2711dbb2e347d04b6eabd2e25559cf5",
+      "git": "a543f84bc065f60fd429a6c4bc9f57103ae59370",
       "production": "NOT_DEPLOYED_THIS_BRANCH",
       "blocker": "DATA: approved effective-dated US classifications and share-count history are absent.",
       "nextAction": "Retain the explicit historical limitations until both source families are available.",
@@ -1163,9 +1171,9 @@
       "responsive": "IMPLEMENTED",
       "performance": "IMPLEMENTED",
       "remaining": "None within the implemented contract.",
-      "claude": "NOT_AVAILABLE_THIS_SESSION",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
       "codexQa": "TARGETED_PASS",
-      "git": "06886e48d2711dbb2e347d04b6eabd2e25559cf5",
+      "git": "a543f84bc065f60fd429a6c4bc9f57103ae59370",
       "production": "NOT_DEPLOYED_THIS_BRANCH",
       "evidence": {
         "claims": [
@@ -1200,9 +1208,9 @@
       "responsive": "IMPLEMENTED",
       "performance": "IMPLEMENTED",
       "remaining": "None within the implemented contract.",
-      "claude": "NOT_AVAILABLE_THIS_SESSION",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
       "codexQa": "TARGETED_PASS",
-      "git": "06886e48d2711dbb2e347d04b6eabd2e25559cf5",
+      "git": "a543f84bc065f60fd429a6c4bc9f57103ae59370",
       "production": "NOT_DEPLOYED_THIS_BRANCH",
       "evidence": {
         "claims": [
@@ -1236,9 +1244,9 @@
       "responsive": "IMPLEMENTED",
       "performance": "IMPLEMENTED",
       "remaining": "Current and single-date searches and market-scoped persistence are implemented; period scans using historical classifications remain unavailable.",
-      "claude": "NOT_AVAILABLE_THIS_SESSION",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
       "codexQa": "TARGETED_OR_HISTORICAL_EVIDENCE",
-      "git": "06886e48d2711dbb2e347d04b6eabd2e25559cf5",
+      "git": "a543f84bc065f60fd429a6c4bc9f57103ae59370",
       "production": "NOT_DEPLOYED_THIS_BRANCH",
       "blocker": "DATA: effective-dated US classifications are absent.",
       "nextAction": "Retain explicit limitations until classification history is approved.",
@@ -1273,9 +1281,9 @@
       "responsive": "IMPLEMENTED",
       "performance": "IMPLEMENTED",
       "remaining": "None within the implemented contract.",
-      "claude": "NOT_AVAILABLE_THIS_SESSION",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
       "codexQa": "TARGETED_PASS",
-      "git": "06886e48d2711dbb2e347d04b6eabd2e25559cf5",
+      "git": "a543f84bc065f60fd429a6c4bc9f57103ae59370",
       "production": "NOT_DEPLOYED_THIS_BRANCH",
       "evidence": {
         "claims": [
@@ -1310,9 +1318,9 @@
       "responsive": "IMPLEMENTED",
       "performance": "IMPLEMENTED",
       "remaining": "None within the implemented contract.",
-      "claude": "NOT_AVAILABLE_THIS_SESSION",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
       "codexQa": "TARGETED_PASS",
-      "git": "06886e48d2711dbb2e347d04b6eabd2e25559cf5",
+      "git": "a543f84bc065f60fd429a6c4bc9f57103ae59370",
       "production": "NOT_DEPLOYED_THIS_BRANCH",
       "evidence": {
         "claims": [
@@ -1346,9 +1354,9 @@
       "responsive": "IMPLEMENTED",
       "performance": "IMPLEMENTED",
       "remaining": "US price, Stage, physical and similarity tools are isolated; forecasts, ownership and event history remain unavailable.",
-      "claude": "NOT_AVAILABLE_THIS_SESSION",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
       "codexQa": "TARGETED_OR_HISTORICAL_EVIDENCE",
-      "git": "06886e48d2711dbb2e347d04b6eabd2e25559cf5",
+      "git": "a543f84bc065f60fd429a6c4bc9f57103ae59370",
       "production": "NOT_DEPLOYED_THIS_BRANCH",
       "blocker": "DATA: the blocked source families are not passed through JP fallback.",
       "nextAction": "Add only approved US-native tools as their source contracts become available.",
@@ -1374,25 +1382,23 @@
       "feature": "Trade workbench",
       "jp": "IMPLEMENTED",
       "us": "PARTIAL",
-      "functional": "IMPLEMENTED",
+      "functional": "PARTIAL",
       "visual": "IMPLEMENTED",
       "data": "PARTIAL",
-      "historical": "IMPLEMENTED",
+      "historical": "PARTIAL",
       "responsive": "IMPLEMENTED",
       "performance": "IMPLEMENTED",
-      "remaining": "Long entry drafts and downside watch are implemented; borrow availability is explicitly unavailable.",
-      "claude": "NOT_AVAILABLE_THIS_SESSION",
+      "remaining": "Long entry drafts and downside watch are implemented; executable short orders and broker-specific historical borrow evidence are unavailable.",
+      "claude": "STATIC_REVIEWED_BROWSER_PENDING",
       "codexQa": "TARGETED_OR_HISTORICAL_EVIDENCE",
-      "git": "06886e48d2711dbb2e347d04b6eabd2e25559cf5",
+      "git": "a543f84bc065f60fd429a6c4bc9f57103ae59370",
       "production": "NOT_DEPLOYED_THIS_BRANCH",
-      "blocker": "DATA: broker borrow inventory and locate cost are not available.",
-      "nextAction": "Connect an approved broker source before presenting executable short orders.",
+      "blocker": "DATA: broker borrow inventory, locate cost, and historical availability are not available.",
+      "nextAction": "Connect an approved broker source before presenting executable or historical short orders.",
       "evidence": {
         "claims": [
           "jp",
-          "functional",
           "visual",
-          "historical",
           "responsive",
           "performance"
         ],
@@ -1401,7 +1407,8 @@
           "lib/queries/us-trade-workbench.ts"
         ],
         "testPaths": [
-          "scripts/test-us-trade-workbench.ts"
+          "scripts/test-us-trade-workbench.ts",
+          "scripts/test-us-parity-ui-contracts.ts"
         ]
       }
     },
@@ -1416,13 +1423,13 @@
       "historical": "IMPLEMENTED",
       "responsive": "IMPLEMENTED",
       "performance": "PARTIAL",
-      "remaining": "Calculation, lineage attestation and UI contracts are implemented; Production-scale p95, memory and concurrency remain unverified.",
-      "claude": "NOT_AVAILABLE_THIS_SESSION",
+      "remaining": "Calculation, lineage attestation, generation-scoped single-flight cache, retry/loading UI, and source-change fail-closed checks are implemented; Production-scale p95, memory and concurrency remain unverified.",
+      "claude": "STATIC_REVIEWED_BROWSER_PENDING",
       "codexQa": "TARGETED_OR_HISTORICAL_EVIDENCE",
-      "git": "06886e48d2711dbb2e347d04b6eabd2e25559cf5",
+      "git": "a543f84bc065f60fd429a6c4bc9f57103ae59370",
       "production": "NOT_DEPLOYED_THIS_BRANCH",
       "blocker": "TECHNICAL: Production-equivalent full-universe load testing is prohibited in this isolated branch.",
-      "nextAction": "Run the approved read-only performance gate before Production release, then add generation-scoped serving cache only if measured.",
+      "nextAction": "Run the approved read-only performance gate before Production release and retain the bounded generation contract.",
       "evidence": {
         "claims": [
           "jp",
@@ -1434,11 +1441,14 @@
         ],
         "implementationPaths": [
           "app/us/ma25m-monitor/page.tsx",
+          "app/api/us/ma25m-monitor/route.ts",
+          "app/api/us/ma25m-monitor/[ticker]/route.ts",
           "lib/us-ma25m-monitor.ts",
           "lib/server/us-monthly-ma-generation.ts"
         ],
         "testPaths": [
-          "scripts/test-us-ma25m-monitor.ts"
+          "scripts/test-us-ma25m-monitor.ts",
+          "scripts/test-us-parity-ui-contracts.ts"
         ]
       }
     },
@@ -1454,9 +1464,9 @@
       "responsive": "IMPLEMENTED",
       "performance": "IMPLEMENTED",
       "remaining": "None within the implemented contract.",
-      "claude": "NOT_AVAILABLE_THIS_SESSION",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
       "codexQa": "TARGETED_PASS",
-      "git": "06886e48d2711dbb2e347d04b6eabd2e25559cf5",
+      "git": "a543f84bc065f60fd429a6c4bc9f57103ae59370",
       "production": "NOT_DEPLOYED_THIS_BRANCH",
       "evidence": {
         "claims": [
@@ -1490,9 +1500,9 @@
       "responsive": "IMPLEMENTED",
       "performance": "IMPLEMENTED",
       "remaining": "None within the implemented contract.",
-      "claude": "NOT_AVAILABLE_THIS_SESSION",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
       "codexQa": "TARGETED_PASS",
-      "git": "06886e48d2711dbb2e347d04b6eabd2e25559cf5",
+      "git": "a543f84bc065f60fd429a6c4bc9f57103ae59370",
       "production": "NOT_DEPLOYED_THIS_BRANCH",
       "evidence": {
         "claims": [
@@ -1526,9 +1536,9 @@
       "responsive": "IMPLEMENTED",
       "performance": "IMPLEMENTED",
       "remaining": "US-only formulas are implemented; mixed-market formulas require date-aligned USD/JPY.",
-      "claude": "NOT_AVAILABLE_THIS_SESSION",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
       "codexQa": "TARGETED_OR_HISTORICAL_EVIDENCE",
-      "git": "06886e48d2711dbb2e347d04b6eabd2e25559cf5",
+      "git": "a543f84bc065f60fd429a6c4bc9f57103ae59370",
       "production": "NOT_DEPLOYED_THIS_BRANCH",
       "blocker": "DATA: approved daily FX lineage is absent.",
       "nextAction": "Import an approved PIT FX series before enabling mixed JP/US formulas.",
@@ -1562,9 +1572,9 @@
       "responsive": "IMPLEMENTED",
       "performance": "IMPLEMENTED",
       "remaining": "None within the implemented contract.",
-      "claude": "NOT_AVAILABLE_THIS_SESSION",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
       "codexQa": "TARGETED_PASS",
-      "git": "06886e48d2711dbb2e347d04b6eabd2e25559cf5",
+      "git": "a543f84bc065f60fd429a6c4bc9f57103ae59370",
       "production": "NOT_DEPLOYED_THIS_BRANCH",
       "evidence": {
         "claims": [
@@ -1598,9 +1608,9 @@
       "responsive": "IMPLEMENTED",
       "performance": "IMPLEMENTED",
       "remaining": "None within the implemented contract.",
-      "claude": "NOT_AVAILABLE_THIS_SESSION",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
       "codexQa": "TARGETED_PASS",
-      "git": "06886e48d2711dbb2e347d04b6eabd2e25559cf5",
+      "git": "a543f84bc065f60fd429a6c4bc9f57103ae59370",
       "production": "NOT_DEPLOYED_THIS_BRANCH",
       "evidence": {
         "claims": [
@@ -1633,9 +1643,9 @@
       "responsive": "MISSING",
       "performance": "NOT_APPLICABLE",
       "remaining": "No approved US theme taxonomy with membership history exists; sector ETFs are not mislabeled as themes.",
-      "claude": "NOT_AVAILABLE_THIS_SESSION",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
       "codexQa": "BLOCKER_DOCUMENTED_EXTERNAL_EVIDENCE_NOT_TESTED",
-      "git": "06886e48d2711dbb2e347d04b6eabd2e25559cf5",
+      "git": "a543f84bc065f60fd429a6c4bc9f57103ae59370",
       "production": "NOT_DEPLOYED_THIS_BRANCH",
       "blocker": "DATA: theme membership, effective dates and redistribution terms are missing.",
       "nextAction": "Approve a theme taxonomy or build a governed ETF-derived taxonomy with explicit effective dates.",
@@ -1664,9 +1674,9 @@
       "responsive": "MISSING",
       "performance": "NOT_APPLICABLE",
       "remaining": "No approved US news/materials feed with ticker links and redistribution terms exists.",
-      "claude": "NOT_AVAILABLE_THIS_SESSION",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
       "codexQa": "BLOCKER_DOCUMENTED_EXTERNAL_EVIDENCE_NOT_TESTED",
-      "git": "06886e48d2711dbb2e347d04b6eabd2e25559cf5",
+      "git": "a543f84bc065f60fd429a6c4bc9f57103ae59370",
       "production": "NOT_DEPLOYED_THIS_BRANCH",
       "blocker": "API: a licensed filing/news source and retention contract are required.",
       "nextAction": "Approve a source, define ticker mapping and PIT retention, then implement.",
@@ -1695,9 +1705,9 @@
       "responsive": "NOT_APPLICABLE",
       "performance": "NOT_APPLICABLE",
       "remaining": "US has no direct policy-shareholding analogue; institutional ownership is tracked separately.",
-      "claude": "NOT_AVAILABLE_THIS_SESSION",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
       "codexQa": "TARGETED_PASS",
-      "git": "06886e48d2711dbb2e347d04b6eabd2e25559cf5",
+      "git": "a543f84bc065f60fd429a6c4bc9f57103ae59370",
       "production": "NOT_DEPLOYED_THIS_BRANCH",
       "blocker": "REGULATORY: the JP concept is market-specific.",
       "nextAction": "None; use the separate 13F and 13D/G product definitions.",
@@ -1725,9 +1735,9 @@
       "responsive": "NOT_APPLICABLE",
       "performance": "IMPLEMENTED",
       "remaining": "None within the implemented contract.",
-      "claude": "NOT_AVAILABLE_THIS_SESSION",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
       "codexQa": "TARGETED_PASS",
-      "git": "06886e48d2711dbb2e347d04b6eabd2e25559cf5",
+      "git": "a543f84bc065f60fd429a6c4bc9f57103ae59370",
       "production": "NOT_DEPLOYED_THIS_BRANCH",
       "evidence": {
         "claims": [
@@ -1759,9 +1769,9 @@
       "responsive": "IMPLEMENTED",
       "performance": "IMPLEMENTED",
       "remaining": "Current-reference SEC SIC is retained and labeled; historical classification-dependent views fail closed.",
-      "claude": "NOT_AVAILABLE_THIS_SESSION",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
       "codexQa": "BLOCKER_DOCUMENTED_EXTERNAL_EVIDENCE_NOT_TESTED",
-      "git": "06886e48d2711dbb2e347d04b6eabd2e25559cf5",
+      "git": "a543f84bc065f60fd429a6c4bc9f57103ae59370",
       "production": "NOT_DEPLOYED_THIS_BRANCH",
       "blocker": "DATA: no effective-dated classification history is approved.",
       "nextAction": "Ingest classification change history before enabling historical aggregates.",
@@ -1792,9 +1802,9 @@
       "responsive": "IMPLEMENTED",
       "performance": "IMPLEMENTED",
       "remaining": "ETF price, Stage and SMA detail is complete; holdings remain visibly unavailable.",
-      "claude": "NOT_AVAILABLE_THIS_SESSION",
+      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
       "codexQa": "BLOCKER_DOCUMENTED_EXTERNAL_EVIDENCE_NOT_TESTED",
-      "git": "06886e48d2711dbb2e347d04b6eabd2e25559cf5",
+      "git": "a543f84bc065f60fd429a6c4bc9f57103ae59370",
       "production": "NOT_DEPLOYED_THIS_BRANCH",
       "blocker": "DATA: an approved holdings feed with as-of dates is absent.",
       "nextAction": "Connect an approved issuer or licensed holdings source.",
