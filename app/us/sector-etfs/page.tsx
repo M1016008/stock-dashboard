@@ -42,7 +42,7 @@ function tone(value: number | null): string {
   return value > 0 ? 'text-[var(--color-price-up)]' : 'text-[var(--color-price-down)]'
 }
 
-function EtfCard({ metric }: { metric: UsSectorEtfMetric }) {
+function EtfCard({ metric, asOfDate }: { metric: UsSectorEtfMetric; asOfDate: string | null }) {
   const stages = [
     metric.stages.dailyA,
     metric.stages.dailyB,
@@ -80,11 +80,22 @@ function EtfCard({ metric }: { metric: UsSectorEtfMetric }) {
             <div className="font-mono text-[var(--color-text-tertiary)]">{metric.stageCode ?? '------'}</div>
           </div>
         </div>
-        <div className="mt-2 flex items-center justify-between gap-2 text-[10px] text-[var(--color-text-tertiary)]">
+        <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[10px] text-[var(--color-text-tertiary)]">
           <span>{metric.dataStatus === 'ready' ? '価格・ステージ完備' : metric.dataStatus === 'price_missing' ? '調整価格なし' : 'ステージ一部欠損'}</span>
-          <Link href={metric.sourceUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 hover:text-[var(--color-brand-700)]">
-            ETF情報 <ExternalLink size={11} aria-hidden />
-          </Link>
+          <span className="inline-flex items-center gap-2">
+            <Link
+              href={asOfDate
+                ? `/us/sector-etfs/${encodeURIComponent(metric.ticker)}?date=${encodeURIComponent(asOfDate)}`
+                : `/us/sector-etfs/${encodeURIComponent(metric.ticker)}`}
+              prefetch={false}
+              className="font-bold text-[var(--color-brand-700)] hover:underline"
+            >
+              詳細分析
+            </Link>
+            <Link href={metric.sourceUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 hover:text-[var(--color-brand-700)]">
+              ETF情報 <ExternalLink size={11} aria-hidden />
+            </Link>
+          </span>
         </div>
       </div>
     </article>
@@ -179,7 +190,9 @@ export default async function UsSectorEtfsPage({
               actions={<span className="text-[12px] tabular-nums text-[var(--color-text-tertiary)]">Source {board.lineage.sources.join(', ') || '不明'}</span>}
             />
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
-              {board.metrics.map((metric) => <EtfCard key={metric.ticker} metric={metric} />)}
+              {board.metrics.map((metric) => (
+                <EtfCard key={metric.ticker} metric={metric} asOfDate={board.asOfDate} />
+              ))}
             </div>
           </section>
 
