@@ -198,6 +198,10 @@ for (const route of [listRoute, detailRoute]) {
   assert.doesNotMatch(route, /STOCKBOARD_DB_PATH|\/Volumes\//, 'route must use the guarded serving contract')
 }
 assert.match(listRoute, /sourceGeneration/)
+assert.match(listRoute, /sourceGenerationAttested \? sourceRun\.id : null/)
+assert.match(listRoute, /payload\.stage === 'complete'/)
+assert.match(listRoute, /run\.succeeded !== run\.totalTickers/)
+assert.match(listRoute, /snapshotMaxComputedAt > run\.finishedAt/)
 assert.match(listRoute, /price_basis_mismatch/)
 assert.match(page, /\/api\/us\/ma25m-monitor/)
 assert.match(page, /\/us\/stock\//)

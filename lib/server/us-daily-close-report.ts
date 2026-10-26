@@ -90,6 +90,7 @@ export type UsDailyCloseReport = {
     advances: number
     declines: number
     unchanged: number
+    unobserved: number
     adjustedTurnoverUsd: number
     stageDistribution: Array<{ stage: number; count: number }>
   }
@@ -102,7 +103,7 @@ export type UsDailyCloseReport = {
     stageImproving: Array<UsDailyCloseTickerRow & { changes: string[] }>
   }
   earnings: {
-    status: 'available' | 'empty'
+    status: 'available' | 'empty' | 'unavailable'
     rows: UsDailyCloseEarningsRow[]
   }
   unavailable: {
@@ -182,6 +183,7 @@ export function buildUsDailyCloseReport(input: {
   rows: UsDailyCloseServingRow[]
   benchmarks?: UsDailyCloseBenchmarkRow[]
   earnings?: UsDailyCloseEarningsRow[]
+  earningsStatus?: 'available' | 'empty' | 'unavailable'
   generatedAt?: string
 }): UsDailyCloseReport {
   if (input.rows.length > US_DAILY_CLOSE_MAX_UNIVERSE) {
@@ -189,11 +191,12 @@ export function buildUsDailyCloseReport(input: {
   }
   const stocks = input.rows.map(view)
   const breadth = stocks.reduce((result, row) => {
-    if ((row.dailyReturn ?? 0) > 0) result.advances += 1
-    else if ((row.dailyReturn ?? 0) < 0) result.declines += 1
+    if (row.dailyReturn == null) result.unobserved += 1
+    else if (row.dailyReturn > 0) result.advances += 1
+    else if (row.dailyReturn < 0) result.declines += 1
     else result.unchanged += 1
     return result
-  }, { advances: 0, declines: 0, unchanged: 0 })
+  }, { advances: 0, declines: 0, unchanged: 0, unobserved: 0 })
   const stageCounts = new Map<number, number>()
   for (const row of stocks) {
     if (row.stages.dayA != null) stageCounts.set(row.stages.dayA, (stageCounts.get(row.stages.dayA) ?? 0) + 1)
@@ -256,7 +259,7 @@ export function buildUsDailyCloseReport(input: {
       stageImproving,
     },
     earnings: {
-      status: input.earnings?.length ? 'available' : 'empty',
+      status: input.earningsStatus ?? (input.earnings?.length ? 'available' : 'empty'),
       rows: [...(input.earnings ?? [])].sort((a, b) => a.reportDate.localeCompare(b.reportDate) || a.ticker.localeCompare(b.ticker)),
     },
     unavailable: {
@@ -279,7 +282,9 @@ export function buildUsDailyCloseReport(input: {
     limitations: [
       '価格と騰落率は調整済み価格を優先し、欠損時だけ未調整価格を使用します。',
       '過去日でも企業名・SEC SIC分類は現行参照です。分類履歴として扱いません。',
-      '決算は正式に同期済みのFinnhub行だけを表示し、未同期日を推定しません。',
+      input.earningsStatus === 'unavailable'
+        ? '過去日の決算予定は、その時点で既知だったimported_atを証明できないため表示しません。'
+        : '決算は正式に同期済みのFinnhub行だけを表示し、未同期日を推定しません。',
       'US Trigger Discoveryはユーザー定義条件であり、単一の認定済み日次評価がないため本レポートへ混在させません。',
       '所有・Short Interest・材料ニュースは対応Source未接続のためUNAVAILABLEです。',
     ],
@@ -312,8 +317,8 @@ async function loadServingRows(dates: UsDailyCloseDates): Promise<UsDailyCloseSe
     WITH recent_dates AS (
       SELECT date, ROW_NUMBER() OVER (ORDER BY date DESC) AS rn
       FROM (
-        SELECT DISTINCT date FROM market_ohlcv_daily
-        WHERE market='US' AND date<=?
+        SELECT date FROM market_ohlcv_daily
+        WHERE market='US' AND ticker='SPY' AND date<=?
         ORDER BY date DESC LIMIT 21
       )
     ), prices AS (
@@ -386,10 +391,18 @@ async function loadEarnings(asOfDate: string | null): Promise<UsDailyCloseEarnin
 export async function loadUsDailyCloseReport(requestedDate: string | null): Promise<UsDailyCloseReport> {
   if (requestedDate != null && !isUsDailyCloseDate(requestedDate)) throw new Error('invalid_us_daily_close_date')
   const dates = await resolveDates(requestedDate)
+  const currentPriceDate = dates.asOfDate != null && dates.asOfDate === dates.latestDate
   const [rows, benchmarks, earnings] = await Promise.all([
     loadServingRows(dates),
     loadBenchmarks(dates.asOfDate),
-    loadEarnings(dates.asOfDate),
+    currentPriceDate ? loadEarnings(dates.asOfDate) : Promise.resolve([]),
   ])
-  return buildUsDailyCloseReport({ requestedDate, dates, rows, benchmarks, earnings })
+  return buildUsDailyCloseReport({
+    requestedDate,
+    dates,
+    rows,
+    benchmarks,
+    earnings,
+    earningsStatus: currentPriceDate ? undefined : 'unavailable',
+  })
 }

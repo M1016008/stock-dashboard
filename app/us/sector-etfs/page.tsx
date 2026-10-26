@@ -83,15 +83,21 @@ function EtfCard({ metric, asOfDate }: { metric: UsSectorEtfMetric; asOfDate: st
         <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[10px] text-[var(--color-text-tertiary)]">
           <span>{metric.dataStatus === 'ready' ? '価格・ステージ完備' : metric.dataStatus === 'price_missing' ? '調整価格なし' : 'ステージ一部欠損'}</span>
           <span className="inline-flex items-center gap-2">
-            <Link
-              href={asOfDate
-                ? `/us/sector-etfs/${encodeURIComponent(metric.ticker)}?date=${encodeURIComponent(asOfDate)}`
-                : `/us/sector-etfs/${encodeURIComponent(metric.ticker)}`}
-              prefetch={false}
-              className="font-bold text-[var(--color-brand-700)] hover:underline"
-            >
-              詳細分析
-            </Link>
+            {metric.dataStatus === 'price_missing' ? (
+              <span aria-disabled="true" className="font-semibold text-[var(--color-text-tertiary)]" title="指定日の調整済み価格がないため詳細分析を表示できません">
+                詳細データなし
+              </span>
+            ) : (
+              <Link
+                href={asOfDate
+                  ? `/us/sector-etfs/${encodeURIComponent(metric.ticker)}?date=${encodeURIComponent(asOfDate)}`
+                  : `/us/sector-etfs/${encodeURIComponent(metric.ticker)}`}
+                prefetch={false}
+                className="font-bold text-[var(--color-brand-700)] hover:underline"
+              >
+                詳細分析
+              </Link>
+            )}
             <Link href={metric.sourceUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 hover:text-[var(--color-brand-700)]">
               ETF情報 <ExternalLink size={11} aria-hidden />
             </Link>

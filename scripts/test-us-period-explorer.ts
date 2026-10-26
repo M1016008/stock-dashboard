@@ -61,6 +61,16 @@ const insertPrice = db.prepare(`
      volume, adj_volume, source, imported_at)
   VALUES ('US', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'fixture', 1)
 `)
+const earlierSessions: string[] = []
+const earlierCursor = new Date('2024-10-01T00:00:00.000Z')
+while (earlierSessions.length < 499) {
+  const day = earlierCursor.getUTCDay()
+  if (day !== 0 && day !== 6) earlierSessions.push(earlierCursor.toISOString().slice(0, 10))
+  earlierCursor.setUTCDate(earlierCursor.getUTCDate() + 1)
+}
+for (const date of earlierSessions) {
+  insertPrice.run('SPY', date, 100, 101, 99, 100, 100, 101, 99, 100, 1_000, 1_000)
+}
 for (const row of [
   ['AAA', '2026-10-20', 99, 102, 98, 100, 49.5, 51, 49, 50, 1000, 2000],
   ['AAA', '2026-10-21', 101, 112, 100, 110, 50.5, 56, 50, 55, 1200, 2400],
@@ -92,6 +102,8 @@ delete process.env.TURSO_AUTH_TOKEN
 
 async function main(): Promise<void> {
   const {
+    PERIOD_EXPLORER_MAX_TRADING_DAYS,
+    PeriodExplorerInputError,
     getPeriodExplorerCalendar,
     queryPeriodExplorer,
     resolvePeriodExplorerDateRange,
@@ -99,9 +111,17 @@ async function main(): Promise<void> {
 
   try {
   const calendar = await getPeriodExplorerCalendar('US')
-  assert.deepEqual(calendar, ['2026-10-20', '2026-10-21', '2026-10-22'])
+  assert.equal(calendar.length, 502)
+  assert.deepEqual(calendar.slice(-3), ['2026-10-20', '2026-10-21', '2026-10-22'])
+  assert.equal(PERIOD_EXPLORER_MAX_TRADING_DAYS, 500)
+  await assert.rejects(
+    resolvePeriodExplorerDateRange(calendar[0], calendar.at(-1), 'US'),
+    (error: unknown) => error instanceof PeriodExplorerInputError && /最大500取引日/.test(error.message),
+  )
+  await assert.rejects(resolvePeriodExplorerDateRange('2026-02-30', '2026-10-22', 'US'), PeriodExplorerInputError)
   const range = await resolvePeriodExplorerDateRange('2026-10-20', '2026-10-22', 'US')
   assert.equal(range.tradingDays, 3)
+  assert.equal(range.current, true)
 
   const response = await queryPeriodExplorer({
     market: 'US', from: range.adoptedFrom, to: range.adoptedTo,
@@ -109,7 +129,7 @@ async function main(): Promise<void> {
   })
   assert.equal(response.market, 'US')
   assert.equal(response.dataBasis.shares, 'current_only')
-  assert.equal(response.rows.length, 2, 'test symbols must be excluded')
+  assert.equal(response.rows.length, 1, 'rows without adjusted endpoints and test symbols must be excluded')
   const alpha = response.rows.find((row) => row.rowType === 'stock' && row.ticker === 'AAA')
   assert.ok(alpha && alpha.rowType === 'stock')
   assert.equal(alpha.startClose, 50, 'adjusted close must be the endpoint basis')
@@ -132,6 +152,28 @@ async function main(): Promise<void> {
     ranking: 'return_up', filters: { marketCapMin: 50_000_000 }, limit: 20,
   })
   assert.deepEqual(marketCapFiltered.rows.map((row) => row.rowType === 'stock' ? row.ticker : ''), ['AAA'])
+
+  const historical = await queryPeriodExplorer({
+    market: 'US', from: '2026-10-20', to: '2026-10-21', ranking: 'return_up', limit: 20,
+  })
+  assert.equal(historical.range.current, false)
+  assert.equal(historical.dataBasis.shares, 'unavailable_historical')
+  assert.equal(historical.dataBasis.classifications, 'unavailable_historical')
+  assert.deepEqual(historical.options, { markets: [], sectors: [], marginTypes: [] })
+  const historicalAlpha = historical.rows.find((row) => row.rowType === 'stock' && row.ticker === 'AAA')
+  assert.ok(historicalAlpha && historicalAlpha.rowType === 'stock')
+  assert.equal(historicalAlpha.marketCap, null)
+  assert.equal(historicalAlpha.selectedSector, null)
+  await assert.rejects(
+    queryPeriodExplorer({
+      market: 'US', from: '2026-10-20', to: '2026-10-21', ranking: 'return_up',
+      filters: { marketCapMin: 1 },
+    }),
+    (error: unknown) => error instanceof PeriodExplorerInputError && /PIT分類/.test(error.message),
+  )
+  const clientSource = fs.readFileSync(path.join(process.cwd(), 'app/period-explorer/PeriodExplorerClient.tsx'), 'utf8')
+  assert.match(clientSource, /historicalUs/)
+  assert.match(clientSource, /現行参照を混入させない/)
     console.log('US Period Explorer fixture tests: PASS')
   } finally {
     fs.rmSync(root, { recursive: true, force: true })

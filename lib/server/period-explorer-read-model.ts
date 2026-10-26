@@ -57,6 +57,7 @@ export interface PeriodExplorerDateRange {
   adoptedFrom: string
   adoptedTo: string
   tradingDays: number
+  current: boolean
   previousFrom: string | null
   previousTo: string | null
 }
@@ -158,10 +159,10 @@ export interface PeriodExplorerResponse {
   dataBasis: {
     prices: 'adjusted_ohlcv'
     stages: 'daily_snapshot_pit'
-    shares: 'pit_with_current_fallback' | 'current_only'
-    classifications: 'current'
-    market: 'current'
-    marginType: 'current'
+    shares: 'pit_with_current_fallback' | 'current_only' | 'unavailable_historical'
+    classifications: 'current' | 'unavailable_historical'
+    market: 'current' | 'unavailable_historical'
+    marginType: 'current' | 'unavailable_historical'
   }
   cacheHit: boolean
   elapsedMs: number
@@ -259,7 +260,8 @@ type VolatilityDbRow = {
 
 const CALENDAR_TTL_MS = 5 * 60_000
 const RESPONSE_TTL_MS = 5 * 60_000
-const CACHE_VERSION = 7
+const CACHE_VERSION = 8
+export const PERIOD_EXPLORER_MAX_TRADING_DAYS = 500
 const NIKKEI225_SET = new Set<string>(NIKKEI225_TICKERS)
 
 export class PeriodExplorerInputError extends Error {}
@@ -276,7 +278,9 @@ function safeRatioPct(numerator: number | null, denominator: number | null): num
 }
 
 function validIsoDate(value: string | null | undefined): value is string {
-  return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
+  const parsed = new Date(`${value}T00:00:00.000Z`)
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value
 }
 
 function nextUtcDate(date: string): string {
@@ -448,6 +452,9 @@ export async function resolvePeriodExplorerDateRange(from?: string | null, to?: 
   if (startIndex >= dates.length || startIndex > endIndex) throw new PeriodExplorerInputError('指定期間内に取引日がありません。')
 
   const tradingDays = endIndex - startIndex + 1
+  if (tradingDays > PERIOD_EXPLORER_MAX_TRADING_DAYS) {
+    throw new PeriodExplorerInputError(`期間は最大${PERIOD_EXPLORER_MAX_TRADING_DAYS}取引日まで指定できます。`)
+  }
   const previousEndIndex = startIndex - 1
   const previousStartIndex = Math.max(0, previousEndIndex - tradingDays + 1)
   return {
@@ -456,6 +463,7 @@ export async function resolvePeriodExplorerDateRange(from?: string | null, to?: 
     adoptedFrom: dates[startIndex],
     adoptedTo: dates[endIndex],
     tradingDays,
+    current: endIndex === dates.length - 1,
     previousFrom: previousEndIndex >= 0 ? dates[previousStartIndex] : null,
     previousTo: previousEndIndex >= 0 ? dates[previousEndIndex] : null,
   }
@@ -514,14 +522,14 @@ async function loadBaseRows(
   const [endpoints, profiles, technical] = await Promise.all([
     execAll<EndpointDbRow>(market === 'US' ? `
       SELECT e.ticker,
-             COALESCE(s.adj_close, s.close) AS start_close,
-             COALESCE(e.adj_close, e.close) AS end_close
+             s.adj_close AS start_close,
+             e.adj_close AS end_close
       FROM market_ohlcv_daily s
       INNER JOIN market_ohlcv_daily e
         ON e.market = s.market AND e.ticker = s.ticker AND e.date = ?
       WHERE s.market = 'US' AND s.date = ?
-        AND COALESCE(s.adj_close, s.close) > 0
-        AND COALESCE(e.adj_close, e.close) > 0
+        AND s.adj_close > 0
+        AND e.adj_close > 0
         AND ${usInvestableSymbolSql('s.ticker')}
     ` : `
       SELECT e.ticker, s.close AS start_close, e.close AS end_close
@@ -574,20 +582,21 @@ async function loadBaseRows(
     includeAllTechnical ? loadTechnicalRows(range, undefined, market) : Promise.resolve(new Map<string, TechnicalDbRow>()),
   ])
   const profilesByTicker = new Map(profiles.map((row) => [String(row.ticker), row]))
+  const allowCurrentReference = market !== 'US' || range.current
   return endpoints.map((endpoint) => {
     const profile = profilesByTicker.get(String(endpoint.ticker))
     const technicalRow = technical.get(String(endpoint.ticker))
     const source = {
       ...endpoint,
       name: profile?.name ?? endpoint.ticker,
-      current_shares: profile?.current_shares ?? null,
-      market_segment: profile?.market_segment ?? null,
-      margin_type: profile?.margin_type ?? null,
-      sector17: profile?.sector17 ?? null,
-      sector33: profile?.sector33 ?? null,
-      major_category: profile?.major_category ?? null,
-      sub_industry: profile?.sub_industry ?? null,
-      historical_status: profile?.historical_status ?? null,
+      current_shares: allowCurrentReference ? profile?.current_shares ?? null : null,
+      market_segment: allowCurrentReference ? profile?.market_segment ?? null : null,
+      margin_type: allowCurrentReference ? profile?.margin_type ?? null : null,
+      sector17: allowCurrentReference ? profile?.sector17 ?? null : null,
+      sector33: allowCurrentReference ? profile?.sector33 ?? null : null,
+      major_category: allowCurrentReference ? profile?.major_category ?? null : null,
+      sub_industry: allowCurrentReference ? profile?.sub_industry ?? null : null,
+      historical_status: allowCurrentReference ? profile?.historical_status ?? null : null,
       start_ma25: technicalRow?.start_ma25 ?? null,
       start_ma75: technicalRow?.start_ma75 ?? null,
       end_ma25: technicalRow?.end_ma25 ?? null,
@@ -678,10 +687,10 @@ function shortCalendarRange(from: string, to: string): boolean {
 }
 
 function rangeStatsSelect(scope: RangeStatsScope, market: PeriodExplorerMarket): string {
-  const high = market === 'US' ? 'COALESCE(adj_high, high)' : 'high'
-  const low = market === 'US' ? 'COALESCE(adj_low, low)' : 'low'
-  const close = market === 'US' ? 'COALESCE(adj_close, close)' : 'close'
-  const volume = market === 'US' ? 'COALESCE(adj_volume, volume)' : 'volume'
+  const high = market === 'US' ? 'adj_high' : 'high'
+  const low = market === 'US' ? 'adj_low' : 'low'
+  const close = market === 'US' ? 'adj_close' : 'close'
+  const volume = market === 'US' ? 'adj_volume' : 'volume'
   if (scope === 'price') {
     return `MAX(${high}) AS period_high, MIN(${low}) AS period_low,
             NULL AS avg_volume, NULL AS max_volume, NULL AS avg_turnover, NULL AS total_turnover`
@@ -741,8 +750,8 @@ async function load52WeekStats(from: string, to: string, tickers?: string[], mar
   for (const chunk of chunks) {
     const tickerWhere = chunk ? `AND ticker IN (${chunk.map(() => '?').join(',')})` : ''
     const table = market === 'US' ? 'market_ohlcv_daily' : 'ohlcv_daily'
-    const high = market === 'US' ? 'COALESCE(adj_high, high)' : 'high'
-    const low = market === 'US' ? 'COALESCE(adj_low, low)' : 'low'
+    const high = market === 'US' ? 'adj_high' : 'high'
+    const low = market === 'US' ? 'adj_low' : 'low'
     const marketWhere = market === 'US' ? "market = 'US' AND" : ''
     const rows = await execAll<{ ticker: string; high_52: number | null; low_52: number | null }>(`
       SELECT ticker, MAX(${high}) AS high_52, MIN(${low}) AS low_52
@@ -772,10 +781,10 @@ async function loadVolatilityStats(
     const indexHint = market === 'JP' && !chunk && shortCalendarRange(calculationFrom, to) ? 'INDEXED BY ohlcv_date_ticker_idx' : ''
     const table = market === 'US' ? 'market_ohlcv_daily' : 'ohlcv_daily'
     const marketWhere = market === 'US' ? "market = 'US' AND" : ''
-    const open = market === 'US' ? 'COALESCE(adj_open, open)' : 'open'
-    const high = market === 'US' ? 'COALESCE(adj_high, high)' : 'high'
-    const low = market === 'US' ? 'COALESCE(adj_low, low)' : 'low'
-    const close = market === 'US' ? 'COALESCE(adj_close, close)' : 'close'
+    const open = market === 'US' ? 'adj_open' : 'open'
+    const high = market === 'US' ? 'adj_high' : 'high'
+    const low = market === 'US' ? 'adj_low' : 'low'
+    const close = market === 'US' ? 'adj_close' : 'close'
     const rows = await execAll<VolatilityDbRow>(`
       WITH ordered AS (
         SELECT ticker, date, ${open} AS open, ${high} AS high, ${low} AS low, ${close} AS close,
@@ -1003,6 +1012,19 @@ export async function queryPeriodExplorer(input: PeriodExplorerInput = {}): Prom
   if (cached) return { ...cached.payload, cacheHit: true, elapsedMs: Date.now() - startedAt }
 
   const definition = PERIOD_EXPLORER_RANKING_MAP.get(normalized.ranking)!
+  const historicalUs = normalized.market === 'US' && !range.current
+  const currentReferenceRequested = Boolean(
+    normalized.filters.markets?.length
+    || normalized.filters.sectors?.length
+    || normalized.filters.marginTypes?.length
+    || normalized.filters.marketCapMin != null
+    || normalized.filters.marketCapMax != null
+    || normalized.sort === 'marketCap'
+    || definition.resultKind === 'sectors',
+  )
+  if (historicalUs && currentReferenceRequested) {
+    throw new PeriodExplorerInputError('過去のUS期間ではPIT分類・市場・株数が未接続のため、現行参照による絞り込み・業種集計・時価総額順位を使用できません。')
+  }
   const technicalFiltersActive = PERIOD_EXPLORER_AXIS_KEYS.some((axis) => Boolean(normalized.filters.stages?.[axis]?.length))
     || normalized.filters.ma25Position != null
     || normalized.filters.ma75Position != null
@@ -1131,14 +1153,16 @@ export async function queryPeriodExplorer(input: PeriodExplorerInput = {}): Prom
       filteredOut: Math.max(0, optionRows.length - matchedFilterCount),
     },
     options: {
-      markets: countOptions(optionRows.map((row) => row.marketSegment)),
-      sectors: countOptions(optionRows.map((row) => selectedSector(row, normalized.taxonomy))),
-      marginTypes: countOptions(optionRows.map((row) => row.marginType)),
+      markets: historicalUs ? [] : countOptions(optionRows.map((row) => row.marketSegment)),
+      sectors: historicalUs ? [] : countOptions(optionRows.map((row) => selectedSector(row, normalized.taxonomy))),
+      marginTypes: historicalUs ? [] : countOptions(optionRows.map((row) => row.marginType)),
     },
     dataBasis: {
       prices: 'adjusted_ohlcv', stages: 'daily_snapshot_pit',
-      shares: normalized.market === 'US' ? 'current_only' : 'pit_with_current_fallback',
-      classifications: 'current', market: 'current', marginType: 'current',
+      shares: historicalUs ? 'unavailable_historical' : normalized.market === 'US' ? 'current_only' : 'pit_with_current_fallback',
+      classifications: historicalUs ? 'unavailable_historical' : 'current',
+      market: historicalUs ? 'unavailable_historical' : 'current',
+      marginType: historicalUs ? 'unavailable_historical' : 'current',
     },
     cacheHit: false,
     elapsedMs: Date.now() - startedAt,

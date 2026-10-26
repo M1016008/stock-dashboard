@@ -159,6 +159,8 @@ WITH candidate_date AS (
   FROM serving_ml_physics_candidates
   WHERE horizon_days = ?
     AND direction IN ('up', 'down', 'wait')
+), previous_snapshot_date AS (
+  SELECT MAX(date) AS date FROM daily_snapshots WHERE date < (SELECT date FROM candidate_date)
 )
 SELECT
   candidate_date.date AS as_of_date,
@@ -184,9 +186,24 @@ SELECT
     INNER JOIN daily_snapshots s
       ON s.ticker = c.ticker
      AND s.date = candidate_date.date
+    LEFT JOIN daily_snapshots previous_snapshot
+      ON previous_snapshot.ticker = c.ticker
+     AND previous_snapshot.date = (SELECT date FROM previous_snapshot_date)
     WHERE c.as_of_date = candidate_date.date
       AND c.horizon_days = ?
       AND c.direction IN ('up', 'down', 'wait')
+      AND p.close > 0
+      AND s.daily_a_stage BETWEEN 1 AND 6
+      AND s.daily_b_stage BETWEEN 1 AND 6
+      AND s.weekly_a_stage BETWEEN 1 AND 6
+      AND s.weekly_b_stage BETWEEN 1 AND 6
+      AND s.monthly_a_stage BETWEEN 1 AND 6
+      AND s.monthly_b_stage BETWEEN 1 AND 6
+      AND s.ma_5 IS NOT NULL
+      AND s.ma_25 IS NOT NULL
+      AND s.ma_75 IS NOT NULL
+      AND previous_snapshot.ma_5 IS NOT NULL
+      AND previous_snapshot.ma_25 IS NOT NULL
       AND ${usInvestableSymbolSql('c.ticker')}
   ) AS complete_candidate_count
 FROM candidate_date
@@ -374,6 +391,28 @@ function makeDecision(
   stages: Array<number | null>,
   ma: UsTradeWorkbenchCandidate['maState'],
 ): UsTradeWorkbenchCandidate['decision'] {
+  const missingInputs: string[] = []
+  if (numberOrNull(row.close) == null || Number(row.close) <= 0) missingInputs.push('有効な終値')
+  if (!stages.every((stage) => stage != null && Number.isInteger(stage) && stage >= 1 && stage <= 6)) {
+    missingInputs.push('6ステージ')
+  }
+  if (ma.order === 'UNAVAILABLE') missingInputs.push('SMA並び順')
+  if (ma.angle === 'UNAVAILABLE') missingInputs.push('SMA傾き')
+  if (missingInputs.length > 0) {
+    return {
+      action: 'watch',
+      label: 'データ不足',
+      score: 0,
+      confidence: '低',
+      summary: '注文下書きに必要な現在特徴が不足しているため、候補順位が高くても売買候補へ分類しません。',
+      why: [`未算出: ${missingInputs.join('、')}`],
+      riskNotes: [
+        '欠損特徴を0や中立値へ補完していません。',
+        'この判定は現在のServing特徴のみを比較し、将来Outcomeラベルを使用していません。',
+      ],
+      nextChecks: ['Serving世代で欠損特徴が算出された後に再確認する'],
+    }
+  }
   const upRank = numberOrNull(row.up_rank)
   const downRank = numberOrNull(row.down_rank)
   const waitRank = numberOrNull(row.wait_rank)

@@ -3,7 +3,7 @@ import Link from 'next/link'
 import { AlertTriangle, ArrowDownRight, ArrowUpRight, CheckCircle2, Eye, ShieldAlert } from 'lucide-react'
 import { PageTitle } from '@/components/layout/PageTitle'
 import { Card, CardHeader } from '@/components/ui/Card'
-import { EmptyState } from '@/components/ui/EmptyState'
+import { EmptyState, Notice } from '@/components/ui/EmptyState'
 import { StageDots } from '@/components/ui/StageDots'
 import {
   getUsTradeWorkbench,
@@ -24,14 +24,14 @@ const HORIZONS = [5, 10, 20, 40, 60, 90, 200]
 const BUDGETS = [1_000, 5_000, 10_000]
 
 function first(value: string | string[] | undefined): string | null {
-  return Array.isArray(value) ? value[0] ?? null : value ?? null
+  return Array.isArray(value) ? null : value ?? null
 }
 
-function positiveInteger(value: string | string[] | undefined): number | null {
-  const raw = first(value)
-  if (!raw || !/^\d+$/.test(raw)) return null
-  const parsed = Number(raw)
-  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null
+function boundedInteger(value: string | null, fallback: number, min: number, max: number): number | null {
+  if (value == null) return fallback
+  if (!/^\d+$/.test(value)) return null
+  const parsed = Number(value)
+  return Number.isSafeInteger(parsed) && parsed >= min && parsed <= max ? parsed : null
 }
 
 function fmtUsd(value: number | null | undefined): string {
@@ -210,9 +210,32 @@ export default async function UsTradeWorkbenchPage({
   searchParams?: Promise<Record<string, string | string[] | undefined>>
 }) {
   const sp = searchParams ? await searchParams : {}
-  const horizonDays = positiveInteger(sp.horizon) ?? 20
-  const budgetUsd = positiveInteger(sp.budgetUsd) ?? 5_000
-  const limit = positiveInteger(sp.limit) ?? 40
+  const horizonDays = boundedInteger(first(sp.horizon), 20, 5, 200)
+  const budgetUsd = boundedInteger(first(sp.budgetUsd), 5_000, 100, 1_000_000)
+  const limit = boundedInteger(first(sp.limit), 40, 1, 120)
+  const invalidQuery = Array.isArray(sp.horizon)
+    || Array.isArray(sp.budgetUsd)
+    || Array.isArray(sp.limit)
+    || horizonDays == null
+    || !HORIZONS.some((value) => value === horizonDays)
+    || budgetUsd == null
+    || limit == null
+  if (invalidQuery || horizonDays == null || budgetUsd == null || limit == null) {
+    return (
+      <div className="sb-page">
+        <PageTitle
+          eyebrow="US分析・AI"
+          title="米国株 売買候補"
+          subtitle="現行ServingのPhysical ML、6ステージ、SMAを同一as-of日で照合します。過去Outcomeや借株可否は使いません。"
+          badge="検証用下書き"
+          rightSlot={<Link href="/us/analysis/backtest" className="btn">US過去検証へ</Link>}
+        />
+        <Notice role="alert" tone="error" title="クエリを読み取れません">
+          horizonは5・10・20・40・60・90・200のいずれか、budgetUsdは100〜1,000,000、limitは1〜120の整数を1つだけ指定してください。
+        </Notice>
+      </div>
+    )
+  }
   const data = await getUsTradeWorkbench({ horizonDays, budgetUsd, limit })
 
   return (

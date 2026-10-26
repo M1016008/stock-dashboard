@@ -4,7 +4,7 @@ import { notFound } from 'next/navigation'
 import { ArrowLeft, ExternalLink } from 'lucide-react'
 import { CandlestickChart } from '@/components/charts/CandlestickChart'
 import { PageTitle } from '@/components/layout/PageTitle'
-import { Notice } from '@/components/ui/EmptyState'
+import { EmptyState, Notice } from '@/components/ui/EmptyState'
 import { SectionHeader } from '@/components/ui/SectionHeader'
 import { StageDots } from '@/components/ui/StageDots'
 import { StatStrip } from '@/components/ui/StatStrip'
@@ -132,7 +132,24 @@ export default async function UsSectorEtfDetailPage({ params, searchParams }: Pa
   if (tickerResolution.status !== 'valid' || requestedDate === undefined) notFound()
 
   const detail = await loadUsSectorEtfDetail(tickerResolution.ticker, requestedDate)
-  if (!detail) notFound()
+  if (!detail) {
+    return (
+      <div className="sb-page">
+        <PageTitle
+          eyebrow="US Sector ETF"
+          title={`${tickerResolution.ticker} ${tickerResolution.catalog.shortName}`}
+          subtitle={tickerResolution.catalog.description}
+          rightSlot={<Link href="/us/sector-etfs" className="btn"><ArrowLeft size={13} aria-hidden /> 一覧へ</Link>}
+        />
+        <EmptyState
+          title="価格データがありません"
+          description={requestedDate
+            ? `${requestedDate}時点の調整済み価格を確認できないため、詳細分析を表示していません。`
+            : '調整済み価格を確認できないため、詳細分析を表示していません。'}
+        />
+      </div>
+    )
+  }
 
   const stageValues = [
     detail.stages.dailyA,

@@ -25,6 +25,22 @@ function money(value: number | null): string {
   return value == null ? '---' : `$${value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 }
 
+function compactUsd(value: number): string {
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    notation: 'compact',
+    maximumFractionDigits: 2,
+  }).format(value)
+}
+
+const EARNINGS_TIME_LABELS = {
+  before_open: '寄付前',
+  market_hours: '取引時間中',
+  after_close: '引け後',
+  unknown: '時刻不明',
+} as const
+
 function percent(value: number | null): string {
   return value == null ? '---' : `${value > 0 ? '+' : ''}${value.toFixed(2)}%`
 }
@@ -118,9 +134,11 @@ export default async function UsDailyClosePage({
         <StatStrip label="US市場内部" items={[
           { label: '上昇', value: report.market.advances.toLocaleString(), tone: 'up' },
           { label: '下落', value: report.market.declines.toLocaleString(), tone: 'down' },
-          { label: '変わらず/算定外', value: report.market.unchanged.toLocaleString() },
+          { label: '変わらず', value: report.market.unchanged.toLocaleString() },
+          { label: '前日値欠損', value: report.market.unobserved.toLocaleString(), sub: '騰落率は未算定' },
           { label: '価格Coverage', value: `${report.coverage.pricedRows.toLocaleString()} / ${report.coverage.observedRows.toLocaleString()}` },
           { label: 'Stage完備', value: report.coverage.stagedRows.toLocaleString() },
+          { label: '売買代金', value: compactUsd(report.market.adjustedTurnoverUsd), sub: '調整済み終値 × 調整済み出来高' },
         ]} />
 
         <section>
@@ -151,7 +169,11 @@ export default async function UsDailyClosePage({
 
         <section>
           <SectionHeader level={1} title="今後14日間の決算" description="正式に同期済みのFinnhub行だけを表示します。" />
-          {report.earnings.rows.length ? <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">{report.earnings.rows.map((row) => <Card key={`${row.ticker}-${row.reportDate}`} size="sm"><div className="flex items-center justify-between gap-2"><Link className="font-black text-[var(--color-brand-800)]" href={`/us/stock/${encodeURIComponent(row.ticker)}`}>{row.ticker}</Link><span className="font-mono text-[11px]">{row.reportDate}</span></div><div className="mt-1 truncate text-[10px] text-[var(--color-text-tertiary)]">{row.name ?? row.ticker} / {row.timeBucket}</div></Card>)}</div> : <EmptyState icon={<CalendarDays size={22} />} title="同期済み決算予定はありません" description="予定を推定して補完しません。" />}
+          {report.earnings.status === 'unavailable' ? (
+            <Notice tone="warning" title="履歴時点の決算予定は利用できません">
+              過去日時点で既知だったimported_atを証明できないため、現在の予定で補完せず表示を停止しています。
+            </Notice>
+          ) : report.earnings.rows.length ? <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">{report.earnings.rows.map((row) => <Card key={`${row.ticker}-${row.reportDate}`} size="sm"><div className="flex items-center justify-between gap-2"><Link className="font-black text-[var(--color-brand-800)]" href={`/us/stock/${encodeURIComponent(row.ticker)}`}>{row.ticker}</Link><span className="font-mono text-[11px]">{row.reportDate}</span></div><div className="mt-1 truncate text-[10px] text-[var(--color-text-tertiary)]">{row.name ?? row.ticker} / {EARNINGS_TIME_LABELS[row.timeBucket]}</div></Card>)}</div> : <EmptyState icon={<CalendarDays size={22} />} title="同期済み決算予定はありません" description="予定を推定して補完しません。" />}
         </section>
 
         <div className="grid gap-3 md:grid-cols-2">

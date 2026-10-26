@@ -34,6 +34,11 @@ type SourceRunRow = {
   id: number
   status: string
   payloadJson: string
+  totalTickers: number
+  succeeded: number
+  failed: number
+  finishedAt: number | null
+  snapshotMaxComputedAt: number | null
 }
 
 type SourceNameRow = { source: string }
@@ -86,6 +91,23 @@ function generationPriceBasis(run: SourceRunRow | undefined): string | null {
   }
 }
 
+function generationAttested(run: SourceRunRow | undefined): boolean {
+  if (!run || run.status !== 'success' || run.finishedAt == null || run.totalTickers <= 0
+    || run.succeeded !== run.totalTickers || run.failed !== 0
+    || (run.snapshotMaxComputedAt != null && run.snapshotMaxComputedAt > run.finishedAt)) return false
+  try {
+    const payload = JSON.parse(run.payloadJson) as Record<string, unknown>
+    return payload.stage === 'complete'
+      && payload.priceBasis === US_MONTHLY_MA_PRICE_BASIS
+      && payload.tickerStart == null
+      && payload.tickerEnd == null
+      && payload.limit == null
+      && payload.tickers == null
+  } catch {
+    return false
+  }
+}
+
 export async function GET(request: NextRequest) {
   try {
     const params = request.nextUrl.searchParams
@@ -130,7 +152,9 @@ export async function GET(request: NextRequest) {
            )`,
       ),
       execGet<SourceRunRow>(
-        `SELECT id, status, payload_json AS payloadJson
+        `SELECT id, status, payload_json AS payloadJson,
+           total_tickers AS totalTickers, succeeded, failed, finished_at AS finishedAt,
+           (SELECT MAX(computed_at) FROM market_daily_snapshots WHERE market = 'US') AS snapshotMaxComputedAt
          FROM market_data_runs
          WHERE market = 'US' AND job_type = 'snapshot_compute' AND status = 'success'
          ORDER BY id DESC LIMIT 1`,
@@ -155,6 +179,7 @@ export async function GET(request: NextRequest) {
         actual: sourcePriceBasis,
       }, { status: 503 })
     }
+    const sourceGenerationAttested = generationAttested(sourceRun)
 
     const sourceSql = `WITH sessions AS (
       SELECT date
@@ -295,8 +320,8 @@ export async function GET(request: NextRequest) {
       source: {
         definitionVersion: US_MONTHLY_MA_DEFINITION_VERSION,
         priceBasis: US_MONTHLY_MA_PRICE_BASIS,
-        sourceGeneration: sourceRun.id,
-        sourceGenerationStatus: sourceRun.status,
+        sourceGeneration: sourceGenerationAttested ? sourceRun.id : null,
+        sourceGenerationStatus: sourceGenerationAttested ? 'attested' : 'unattested',
         sourceNames: sourceNames.map((row) => row.source),
         calendar: 'US:SPY_TRADING_SESSIONS',
         snapshots: 'market_daily_snapshots',

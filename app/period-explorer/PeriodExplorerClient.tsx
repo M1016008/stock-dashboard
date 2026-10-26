@@ -256,6 +256,7 @@ export function PeriodExplorerClient({ market = 'JP', calendarDates, defaultFrom
   const [filtersOpen, setFiltersOpen] = useState(false)
   const requestSequence = useRef(0)
   const isUs = market === 'US'
+  const historicalUs = isUs && response?.dataBasis.classifications === 'unavailable_historical'
   const taxonomies = isUs ? US_TAXONOMIES : JP_TAXONOMIES
   const marketCapPresets = isUs ? [
     { value: '1000000000', label: '$1B以上' },
@@ -446,6 +447,7 @@ export function PeriodExplorerClient({ market = 'JP', calendarDates, defaultFrom
           {(response.range.requestedFrom && response.range.requestedFrom !== response.range.adoptedFrom) || (response.range.requestedTo && response.range.requestedTo !== response.range.adoptedTo)
             ? <span className="font-bold text-amber-700">非取引日を実取引日へ補正</span> : null}
         </div>}
+        {historicalUs && <p className="mt-2 text-[10px] font-semibold text-amber-800">USの過去期間ではPIT分類・市場・株数が未接続です。現行参照を混入させないため、業種集計・市場/業種絞り込み・時価総額条件は利用できません。</p>}
       </section>
 
       <section className="flex flex-col gap-2 border-b border-[var(--color-border-soft)] pb-3">
@@ -550,7 +552,7 @@ export function PeriodExplorerClient({ market = 'JP', calendarDates, defaultFrom
         </nav>}
       </section>
 
-      {response && <p className="text-[9px] leading-5 text-[var(--color-text-tertiary)]">開始・終了価格のない銘柄 {response.excluded.missingEndpoints.toLocaleString('ja-JP')}件、ランキング値不足 {response.excluded.missingRankingValue.toLocaleString('ja-JP')}件。{isUs ? '時価総額は現在の発行済株式数による参考値で、過去時点のPIT値ではありません。SEC分類も現在参照です。' : '時価総額の株式数がPIT未収録の場合のみ現在株式数を使用し、行上で区別しています。'}</p>}
+      {response && <p className="text-[9px] leading-5 text-[var(--color-text-tertiary)]">開始・終了価格のない銘柄 {response.excluded.missingEndpoints.toLocaleString('ja-JP')}件、ランキング値不足 {response.excluded.missingRankingValue.toLocaleString('ja-JP')}件。{historicalUs ? 'USのPIT分類・市場・株数は未接続のため表示・集計に使用していません。' : isUs ? '最新期間の時価総額は現在の発行済株式数による参考値です。SEC分類も現在参照です。' : '時価総額の株式数がPIT未収録の場合のみ現在株式数を使用し、行上で区別しています。'}</p>}
     </div>
   )
 }

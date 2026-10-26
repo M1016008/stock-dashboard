@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState, useTransition } from 'react'
+import { useEffect, useMemo, useRef, useState, useTransition } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { ArrowDownToLine, ArrowUpFromLine, ChevronLeft, ChevronRight, LoaderCircle, RotateCcw } from 'lucide-react'
@@ -206,6 +206,7 @@ export default function UsMonthlyMaMonitorPage() {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
   const [pending, startTransition] = useTransition()
+  const requestSequence = useRef(0)
   const queryString = searchParams.toString()
   const period = PERIODS.some(([value]) => value === searchParams.get('period')) ? searchParams.get('period')! : 'all'
   const status = STATUSES.some(([value]) => value === searchParams.get('status')) ? searchParams.get('status')! : 'signals'
@@ -219,20 +220,27 @@ export default function UsMonthlyMaMonitorPage() {
   useEffect(() => setQueryDraft(q), [q])
   useEffect(() => {
     const controller = new AbortController()
+    const sequence = ++requestSequence.current
     setLoading(true)
     setError('')
+    setData(null)
     fetch(`/api/us/ma25m-monitor?${queryString}`, { cache: 'no-store', signal: controller.signal })
       .then(async (response) => {
         const payload = await response.json()
         if (!response.ok) throw new Error(payload.error ?? `HTTP ${response.status}`)
         return payload as MonitorResponse
       })
-      .then(setData)
+      .then((payload) => {
+        if (sequence === requestSequence.current) setData(payload)
+      })
       .catch((reason) => {
-        if (reason instanceof DOMException && reason.name === 'AbortError') return
+        if (controller.signal.aborted || sequence !== requestSequence.current) return
+        setData(null)
         setError(reason instanceof Error ? reason.message : String(reason))
       })
-      .finally(() => setLoading(false))
+      .finally(() => {
+        if (!controller.signal.aborted && sequence === requestSequence.current) setLoading(false)
+      })
     return () => controller.abort()
   }, [queryString])
 

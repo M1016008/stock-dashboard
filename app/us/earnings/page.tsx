@@ -3,6 +3,7 @@ import Link from 'next/link'
 import { CalendarDays } from 'lucide-react'
 import { PageTitle } from '@/components/layout/PageTitle'
 import { Card } from '@/components/ui/Card'
+import { Notice } from '@/components/ui/EmptyState'
 import {
   addCalendarDays,
   getUsEarningsCalendar,
@@ -27,8 +28,10 @@ const BUCKET_LABELS: Record<UsEarningsTimeBucket, string> = {
   unknown: '時刻不明',
 }
 
-function first(value: string | string[] | undefined): string | null {
-  return Array.isArray(value) ? value[0] ?? null : value ?? null
+function single(value: string | string[] | undefined): { valid: boolean; value: string | null } {
+  return Array.isArray(value)
+    ? { valid: false, value: null }
+    : { valid: true, value: value ?? null }
 }
 
 function money(value: number | null): string {
@@ -48,16 +51,28 @@ export default async function UsEarningsPage({
 }) {
   const params = searchParams ? await searchParams : {}
   const today = todayInNewYork()
-  const fromParam = first(params.from)
-  const toParam = first(params.to)
-  const from = isUsEarningsDate(fromParam) ? fromParam : today
-  const to = isUsEarningsDate(toParam) && toParam >= from ? toParam : addCalendarDays(from, 30)
-  const query = first(params.q)?.trim() ?? ''
-  const bucketParam = first(params.timeBucket)
-  const bucket = bucketParam && bucketParam in BUCKET_LABELS
-    ? bucketParam as UsEarningsTimeBucket
+  const fromParam = single(params.from)
+  const toParam = single(params.to)
+  const queryParam = single(params.q)
+  const bucketParam = single(params.timeBucket)
+  const normalizedBucket = bucketParam.value === '' ? null : bucketParam.value
+  const from = isUsEarningsDate(fromParam.value) ? fromParam.value : today
+  const to = isUsEarningsDate(toParam.value) ? toParam.value : addCalendarDays(from, 30)
+  const query = queryParam.value?.trim() ?? ''
+  const bucket = normalizedBucket && normalizedBucket in BUCKET_LABELS
+    ? normalizedBucket as UsEarningsTimeBucket
     : null
-  const result = await getUsEarningsCalendar({ from, to, query, timeBucket: bucket, limit: 300 })
+  const invalidQuery = !fromParam.valid
+    || !toParam.valid
+    || !queryParam.valid
+    || !bucketParam.valid
+    || (fromParam.value != null && !isUsEarningsDate(fromParam.value))
+    || (toParam.value != null && !isUsEarningsDate(toParam.value))
+    || (normalizedBucket != null && !(normalizedBucket in BUCKET_LABELS))
+    || from > to
+  const result = invalidQuery
+    ? null
+    : await getUsEarningsCalendar({ from, to, query, timeBucket: bucket, limit: 300 })
 
   return (
     <div className="flex w-full flex-col gap-5">
@@ -68,7 +83,7 @@ export default async function UsEarningsPage({
         meta={
           <>
             <span>{from} - {to}</span>
-            <span>{result.total.toLocaleString('ja-JP')}件</span>
+            <span>{result ? `${result.total.toLocaleString('ja-JP')}件` : '入力エラー'}</span>
             <span>出典 Finnhub</span>
           </>
         }
@@ -99,17 +114,29 @@ export default async function UsEarningsPage({
         </form>
       </Card>
 
-      <div className="rounded-[4px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-3 py-2 text-[11px] font-semibold text-[var(--color-text-secondary)]">
-        Coverage {result.coverage.from ?? '-'} - {result.coverage.to ?? '-'} / 最終同期 {result.coverage.latestImportedAt ?? '-'} / 予想EPS・売上は提供元の値で、StockBoardによる予測ではありません。
-      </div>
+      {invalidQuery && (
+        <Notice role="alert" tone="error" title="クエリを読み取れません">
+          開始日・終了日は実在する日付を1つずつ指定し、開始日を終了日以前にしてください。発表時間も一覧の値だけを受け付けます。
+        </Notice>
+      )}
 
-      {result.rows.length === 0 ? (
+      {result && (
+        <div className="rounded-[4px] border border-[var(--color-border-soft)] bg-[var(--color-surface-subtle)] px-3 py-2 text-[11px] font-semibold text-[var(--color-text-secondary)]">
+          Coverage {result.coverage.from ?? '-'} - {result.coverage.to ?? '-'} / 最終同期 {result.coverage.latestImportedAt ?? '-'} / 予想EPS・売上は提供元の値で、StockBoardによる予測ではありません。
+        </div>
+      )}
+
+      {result?.status === 'unavailable' ? (
+        <Notice role="alert" tone="error" title="決算予定を利用できません">
+          {result.message}
+        </Notice>
+      ) : result && result.rows.length === 0 ? (
         <div className="empty-state" role="status">
           <CalendarDays size={24} aria-hidden="true" />
-          <p className="empty-state__title">決算予定を表示できません</p>
+          <p className="empty-state__title">決算予定を表示できません（該当なし）</p>
           <p className="empty-state__desc">{result.message}</p>
         </div>
-      ) : (
+      ) : result?.status === 'ok' ? (
         <Card size="lg" className="overflow-hidden p-0">
           <div className="overflow-x-auto">
             <table className="w-full min-w-[820px] text-[12px]">
@@ -138,7 +165,7 @@ export default async function UsEarningsPage({
             </table>
           </div>
         </Card>
-      )}
+      ) : null}
     </div>
   )
 }

@@ -683,6 +683,11 @@ const apiChecks: Check[] = [
   { name: 'US quote', path: '/api/us/quote/AAPL', kind: 'json' },
   { name: 'US history', path: '/api/us/history/AAPL?period=1y&meta=1', kind: 'json' },
   { name: 'US search', path: '/api/us/search?q=AAPL', kind: 'json' },
+  { name: 'US daily close', path: '/api/us/daily-close', kind: 'json', requiredPaths: ['success', 'data.status'] },
+  { name: 'US monthly MA monitor', path: '/api/us/ma25m-monitor?period=all&status=all&limit=5', kind: 'json', requiredPaths: ['market', 'date', 'periods'] },
+  { name: 'US sector ETFs', path: '/api/us/sector-etfs', kind: 'json', requiredPaths: ['success', 'data.status'] },
+  { name: 'US sector ETF detail', path: '/api/us/sector-etfs/XLK', kind: 'json', requiredPaths: ['success', 'data.status', 'data.catalog.ticker'] },
+  { name: 'US trade candidates', path: '/api/us/trade-workbench-candidates?horizon=20&limit=5', kind: 'json' },
   {
     name: 'US screener',
     path: '/api/us/screener?limit=5&quality=all',

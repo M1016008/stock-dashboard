@@ -44,6 +44,12 @@ const rows: UsDailyCloseServingRow[] = [
     currentVolume: 10, avgVolume20: 0,
     dayA: null, prevDayA: null, ...baseStages,
   },
+  {
+    ticker: 'DDD', name: 'Delta', sector: 'Industrials',
+    close0: 100, close1: null, close2: null, close5: null, close10: null, close20: null,
+    currentVolume: 20, avgVolume20: null,
+    dayA: 3, prevDayA: null, ...baseStages,
+  },
 ]
 
 const report = buildUsDailyCloseReport({
@@ -70,20 +76,20 @@ assert.equal(report.current, true)
 assert.equal(report.priceBasis, 'COALESCE(adj_close, close)')
 assert.equal(report.classificationBasis, 'CURRENT_REFERENCE')
 assert.deepEqual(
-  [report.market.advances, report.market.declines, report.market.unchanged],
-  [1, 1, 1],
+  [report.market.advances, report.market.declines, report.market.unchanged, report.market.unobserved],
+  [1, 1, 1, 1],
 )
-assert.equal(report.market.adjustedTurnoverUsd, 27_500)
-assert.equal(report.coverage.observedRows, 3)
-assert.equal(report.coverage.pricedRows, 3)
-assert.equal(report.coverage.classifiedRows, 2)
+assert.equal(report.market.adjustedTurnoverUsd, 29_500)
+assert.equal(report.coverage.observedRows, 4)
+assert.equal(report.coverage.pricedRows, 4)
+assert.equal(report.coverage.classifiedRows, 3)
 assert.equal(report.leaders.gainers[0]?.ticker, 'AAA')
 assert.equal(report.leaders.decliners[0]?.ticker, 'BBB')
 assert.equal(report.leaders.volumeSpikes[0]?.ticker, 'AAA')
 assert.equal(report.leaders.volumeSpikes[0]?.volumeRatio, 2)
 assert.equal(report.leaders.stageImproving[0]?.ticker, 'AAA')
 assert.deepEqual(report.leaders.stageImproving[0]?.changes, ['日A S4→S5'])
-assert.equal(report.sectors.length, 2)
+assert.equal(report.sectors.length, 3)
 assert.ok(Math.abs((report.benchmarks.find((row) => row.ticker === 'SPY')?.changePct ?? 0) - 1) < 1e-9)
 assert.equal(report.benchmarks.find((row) => row.ticker === 'DIA')?.price, null)
 assert.deepEqual(report.earnings.rows.map((row) => row.ticker), ['AAA', 'BBB'])
@@ -103,6 +109,20 @@ assert.equal(empty.status, 'empty')
 assert.equal(empty.asOfDate, null)
 assert.equal(empty.current, false)
 
+const historical = buildUsDailyCloseReport({
+  requestedDate: '2026-10-23',
+  dates: {
+    latestDate: '2026-10-26', asOfDate: '2026-10-23', previousDate: '2026-10-22',
+    snapshotDate: '2026-10-23', previousSnapshotDate: '2026-10-22',
+  },
+  rows,
+  earnings: [],
+  earningsStatus: 'unavailable',
+})
+assert.equal(historical.earnings.status, 'unavailable')
+assert.equal(historical.earnings.rows.length, 0)
+assert.ok(historical.limitations.some((item) => item.includes('imported_at')))
+
 assert.throws(() => buildUsDailyCloseReport({
   requestedDate: null,
   dates: { latestDate: null, asOfDate: null, previousDate: null, snapshotDate: null, previousSnapshotDate: null },
@@ -114,6 +134,8 @@ assert.match(serverSource, /LIMIT \$\{US_DAILY_CLOSE_EARNINGS_LIMIT\}/)
 assert.match(serverSource, /COALESCE\(o\.adj_close,o\.close\)/)
 assert.match(serverSource, /market='US'/)
 assert.match(serverSource, /ticker='SPY'/, 'US report calendar must be anchored to SPY sessions')
+assert.match(serverSource, /SELECT date FROM market_ohlcv_daily\s+WHERE market='US' AND ticker='SPY' AND date<=\?/)
+assert.match(serverSource, /currentPriceDate \? loadEarnings/)
 assert.match(serverSource, /classificationBasis: 'CURRENT_REFERENCE'/)
 assert.doesNotMatch(serverSource, /FROM\s+(?:large_holder|large_holders|news|materials)\b/i)
 assert.match(pageSource, /US Ownership: UNAVAILABLE/)

@@ -62,24 +62,30 @@ db.exec(`
   INSERT INTO ticker_universe VALUES
     ('AAPL', 'Apple Inc.', 1, 'NASDAQ', 'Technology', 'Consumer Electronics'),
     ('TSLA', 'Tesla, Inc.', 1, 'NASDAQ', 'Consumer Cyclical', 'Auto Manufacturers'),
+    ('GAP', 'Incomplete Inputs Inc.', 1, 'NYSE', 'Industrials', 'Machinery'),
     ('MISS', 'Missing Price Corp.', 1, 'NYSE', 'Industrials', 'Machinery'),
     ('ATEST', 'Fixture Artifact', 1, 'NASDAQ', 'Testing', 'Testing');
   INSERT INTO ohlcv_daily VALUES
     ('AAPL', '2026-10-08', 195, 202, 194, 200, 900000),
     ('AAPL', '2026-10-09', 202, 211, 201, 210, 1000000),
     ('TSLA', '2026-10-08', 310, 312, 298, 300, 700000),
-    ('TSLA', '2026-10-09', 296, 299, 278, 280, 800000);
+    ('TSLA', '2026-10-09', 296, 299, 278, 280, 800000),
+    ('GAP', '2026-10-08', 49, 51, 48, 50, 100000),
+    ('GAP', '2026-10-09', 54, 56, 53, 55, 120000);
   INSERT INTO daily_snapshots VALUES
     ('AAPL', '2026-10-08', 190, 180, 170, 1, 2, 1, 2, 6, 1),
     ('AAPL', '2026-10-09', 200, 185, 175, 1, 1, 1, 2, 6, 1),
     ('TSLA', '2026-10-08', 310, 320, 330, 4, 3, 4, 3, 4, 3),
-    ('TSLA', '2026-10-09', 295, 315, 325, 4, 4, 4, 3, 4, 3);
+    ('TSLA', '2026-10-09', 295, 315, 325, 4, 4, 4, 3, 4, 3),
+    ('GAP', '2026-10-08', 45, 44, 43, 1, 1, 1, 1, 1, 1),
+    ('GAP', '2026-10-09', NULL, NULL, NULL, NULL, 1, 1, 1, 1, 1);
   INSERT INTO serving_ml_physics_candidates VALUES
     ('2026-10-09', 'up', 20, 1, 'AAPL', 0.96, 'physics-v2'),
     ('2026-10-09', 'wait', 20, 80, 'AAPL', 0.20, 'physics-v2'),
     ('2026-10-09', 'down', 20, 1, 'TSLA', 0.97, 'physics-v2'),
     ('2026-10-09', 'up', 20, 110, 'TSLA', 0.10, 'physics-v2'),
     ('2026-10-09', 'up', 20, 2, 'MISS', 0.91, 'physics-v2'),
+    ('2026-10-09', 'up', 20, 1, 'GAP', 0.99, 'physics-v2'),
     ('2026-10-09', 'up', 20, 3, 'ATEST', 0.90, 'physics-v2');
 `)
 
@@ -100,11 +106,11 @@ assert.equal(result.coverage.asOfDate, '2026-10-09')
 assert.equal(result.coverage.snapshotDate, '2026-10-09')
 assert.equal(result.coverage.priceDate, '2026-10-09')
 assert.equal(result.coverage.priceBasis, US_ADJUSTED_PRICE_BASIS)
-assert.equal(result.coverage.rawCandidateCount, 4)
+assert.equal(result.coverage.rawCandidateCount, 5)
 assert.equal(result.coverage.completeCandidateCount, 2)
-assert.equal(result.coverage.excludedCandidateCount, 2, 'missing price and test symbols must remain visible in coverage')
-assert.equal(result.coverage.completeRate, 0.5)
-assert.deepEqual(result.candidates.map((candidate) => candidate.ticker), ['AAPL', 'TSLA'])
+assert.equal(result.coverage.excludedCandidateCount, 3, 'incomplete inputs, missing price, and test symbols must remain visible in coverage')
+assert.equal(result.coverage.completeRate, 0.4)
+assert.deepEqual(result.candidates.map((candidate) => candidate.ticker), ['AAPL', 'TSLA', 'GAP'])
 
 const apple = result.candidates.find((candidate) => candidate.ticker === 'AAPL')
 assert.ok(apple)
@@ -126,6 +132,14 @@ assert.equal(tesla.orderDraft.side, null, 'borrow availability is absent, so no 
 assert.ok(tesla.decision.riskNotes.some((note) => note.includes('借株可否')))
 assert.ok(result.coverage.unavailableEvidence.includes('VALIDATED_OUTCOME_EVIDENCE'))
 assert.ok(result.coverage.unavailableEvidence.includes('SIGNAL_RETURN_STATISTICS'))
+
+const incomplete = result.candidates.find((candidate) => candidate.ticker === 'GAP')
+assert.ok(incomplete)
+assert.equal(incomplete.decision.action, 'watch')
+assert.equal(incomplete.decision.label, 'データ不足')
+assert.equal(incomplete.orderDraft.valid, false)
+assert.equal(incomplete.orderDraft.side, null)
+assert.match(incomplete.decision.why.join(' '), /6ステージ|SMA/)
 
 db.prepare(`UPDATE us_analytics_metadata SET value = 'unknown_basis' WHERE key = 'ohlcv_price_basis'`).run()
 const badBasis = await getUsTradeWorkbench({ horizonDays: 20 }, executor)
