@@ -165,7 +165,8 @@ const ENTRYPOINTS: Entry[] = [
     error: [{
       file: 'components/hex/HexStageMapView.tsx',
       patterns: [
-        /\{error && !loading && \(\s*<div[^>]*>\s*<p role="alert"[^>]*>トレンドステージマップを取得できませんでした。時間をおいて再読み込みしてください。<\/p>\s*<button type="button" onClick=\{\(\) => setRetryVersion\(\(value\) => value \+ 1\)\}/,
+        /const errorMessage = error === 'us_hex_generation_changed'[\s\S]*元データの世代が切り替わりました[\s\S]*トレンドステージマップを取得できませんでした/,
+        /\{error && !loading && \(\s*<div[^>]*>\s*<p role="alert"[^>]*>\{errorMessage\}<\/p>\s*<button type="button" onClick=\{\(\) => setRetryVersion\(\(value\) => value \+ 1\)\}/,
         // 再試行は同じ条件の取得 effect を 1 回だけ再実行する
         /const \[retryVersion, setRetryVersion\] = useState\(0\)/,
         /\}, \[timeframe, selectedDate, activeUniverse, isUs, retryVersion\]\)/,
