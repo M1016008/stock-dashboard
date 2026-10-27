@@ -8,6 +8,19 @@ import { MA_SEQUENCE_VERSION } from '@/lib/ml/ma-sequence'
 import { waitForMemoryHeadroom, withMemoryGuardEnv } from '@/lib/system/memory-guard'
 import { resolveConfiguredStoragePath } from '@/lib/storage-paths'
 import { US_ADJUSTED_PRICE_BASIS } from '@/lib/us-adjusted-ohlcv'
+import { foundationGenerationChanged } from '@/lib/weekly-optimization-run-contract'
+import {
+  captureWeeklyUsSourceBoundary,
+  parseWeeklyUsSourceBoundary,
+  US_WEEKLY_SOURCE_BOUNDARY_ENV,
+} from '@/lib/weekly-us-source-boundary'
+import {
+  DEFERRED_EXECUTION_EXIT_CODE,
+  OPERATOR_ACTION_REQUIRED_EXIT_CODE,
+  DeferredExecutionError,
+  OperatorActionRequiredError,
+  operationalExitCode,
+} from '@/lib/operational-exit'
 
 const usAnalyticsDbPath = resolveConfiguredStoragePath(path.resolve(
   process.env.US_ANALYTICS_DB_PATH?.trim()
@@ -19,6 +32,7 @@ const sourceDbPath = process.env.STOCKBOARD_SOURCE_DB_PATH?.trim()
   || 'data/stockboard.db'
 const usAnalogDbPath = process.env.ANALOG_US_DB_PATH?.trim()
   || path.join(path.dirname(usAnalyticsDbPath), `analog-sequence-us-v${MA_SEQUENCE_VERSION}.db`)
+const FOUNDATION_SOURCE_LINEAGE_KEY = 'foundation_source_lineage_sha256'
 
 function nonNegativeInteger(value: string | undefined, fallback: number): number {
   const parsed = Number(value)
@@ -221,22 +235,54 @@ async function runNpm(
     child.on('error', reject)
     child.on('close', (code, signal) => {
       if (code === 0) resolve()
+      else if (code === DEFERRED_EXECUTION_EXIT_CODE) {
+        reject(new DeferredExecutionError(`npm run ${script} safely deferred`))
+      } else if (code === OPERATOR_ACTION_REQUIRED_EXIT_CODE) {
+        reject(new OperatorActionRequiredError(
+          `npm run ${script} requires operator review of its durable recovery journal`,
+        ))
+      }
       else reject(new Error(`npm run ${script} failed: code=${code}, signal=${signal ?? 'none'}`))
     })
   })
 }
 
 async function main(): Promise<void> {
-  const [foundationWasCurrent, auditedBaselineExists] = await Promise.all([
+  if (!process.env.WEEKLY_OPTIMIZATION_CONTRACT?.trim()) {
+    const boundary = process.env[US_WEEKLY_SOURCE_BOUNDARY_ENV]?.trim()
+      ? parseWeeklyUsSourceBoundary(process.env[US_WEEKLY_SOURCE_BOUNDARY_ENV]!)
+      : captureWeeklyUsSourceBoundary({
+          sourceDbPath: resolveConfiguredStoragePath(path.resolve(sourceDbPath)),
+          priceBasis: US_ADJUSTED_PRICE_BASIS,
+        })
+    process.env[US_WEEKLY_SOURCE_BOUNDARY_ENV] = JSON.stringify(boundary)
+    process.env.US_ANALYTICS_EXPECTED_DATE = boundary.expectedTradingDate
+  }
+  const [foundationWasCurrent, auditedBaselineExists, foundationLineageBefore] = await Promise.all([
     adjustedFoundationIsCurrent(),
     auditedFullHistoryBaselineExists(),
+    metadataValue(FOUNDATION_SOURCE_LINEAGE_KEY),
   ])
   await runNpm('batch:us-adjusted-foundation', {}, 'source')
   await runNpm('batch:us-analytics-validate')
+  const foundationLineageAfter = await metadataValue(FOUNDATION_SOURCE_LINEAGE_KEY)
+  if (!foundationLineageAfter) {
+    throw new Error('US weekly: Foundation completed without source-lineage metadata')
+  }
+  const foundationWasRebuilt = foundationGenerationChanged(
+    foundationLineageBefore,
+    foundationLineageAfter,
+  )
+  if (!foundationWasCurrent && !foundationWasRebuilt) {
+    console.warn(
+      'US weekly: Foundation repaired without changing source lineage; '
+      + 'weekly ML replay remains required',
+    )
+  }
 
-  if (foundationWasCurrent && auditedBaselineExists) {
+  if (!foundationWasRebuilt && auditedBaselineExists) {
     await runNpm('batch:us-ml-weekly-replay')
-  } else if (foundationWasCurrent) {
+  } else if (!foundationWasRebuilt) {
     console.log('US weekly: audited full-history baseline proof is missing; running one full-history baseline')
     await runNpm('batch:us-ml-full-history')
   } else {
@@ -261,5 +307,5 @@ async function main(): Promise<void> {
 
 main().catch((error) => {
   console.error('US weekly efficient update failed:', error)
-  process.exit(1)
+  process.exitCode = operationalExitCode(error)
 })

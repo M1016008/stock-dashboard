@@ -5,8 +5,8 @@
 // so a direct npm invocation cannot accidentally write US artifacts into the JP
 // stockboard database.
 
-import { execFileSync, spawn } from 'node:child_process'
-import { createHash } from 'node:crypto'
+import { execFileSync } from 'node:child_process'
+import { createHash, randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -15,76 +15,66 @@ import { ML_PRIMARY_HORIZON_LIST } from '@/lib/backtest/ml-horizons'
 import { waitForMemoryHeadroom, withMemoryGuardEnv } from '@/lib/system/memory-guard'
 import { resolveConfiguredStoragePath } from '@/lib/storage-paths'
 import { guardForDatabase, requiresExternalStorageGuard } from '@/lib/storage/external-storage-guard'
+import { openExistingGuardedClient } from '@/lib/storage/guarded-libsql-client'
+import { acquireUsMlProcessLock, type UsMlProcessLock } from '@/lib/us-ml-process-lock'
+import { acquirePidProcessLock, type PidProcessLock } from '@/lib/pid-process-lock'
+import { signalProcessGroup, waitForProcessGroupExit } from '@/lib/child-process-group'
+import {
+  assertNoIncompleteSqlitePromotion,
+  promotionRecoveryMessage,
+  removeSqlitePromotionJournal,
+  resolveSqlitePromotionJournalPath,
+  resolveWeeklyMlPromotionJournalPath,
+  type SqlitePromotionJournal,
+  type SqlitePromotionPlan,
+  writeSqlitePromotionJournal,
+} from '@/lib/sqlite-promotion-journal'
+import {
+  assertTruncateCheckpointComplete,
+  promoteSqliteGeneration,
+} from '@/lib/sqlite-generation-promotion'
+import {
+  quarantineSqliteGeneration,
+  recoverInterruptedSqliteQuarantine,
+} from '@/lib/sqlite-generation-quarantine'
+import { US_ADJUSTED_PRICE_BASIS } from '@/lib/us-adjusted-ohlcv'
+import {
+  DEFERRED_EXECUTION_EXIT_CODE,
+  OPERATOR_ACTION_REQUIRED_EXIT_CODE,
+  DeferredExecutionError,
+  OperatorActionRequiredError,
+  operationalExitCode,
+} from '@/lib/operational-exit'
+import { spawnLockedProcessGroup } from '@/lib/locked-process-spawn'
+import {
+  captureWeeklyUsSourceBoundary,
+  assessWeeklyUsSourceBoundary,
+  parseWeeklyUsSourceBoundary,
+  type WeeklyUsSourceBoundary,
+  US_WEEKLY_SOURCE_BOUNDARY_ENV,
+} from '@/lib/weekly-us-source-boundary'
+import {
+  assessWeeklySourceReadiness,
+  parseWeeklyOptimizationRunContract,
+  type WeeklyOptimizationRunContract,
+} from '@/lib/weekly-optimization-run-contract'
+import { readWeeklySourceObservation } from '@/lib/weekly-source-observation'
+import type { UpdateLockHandle } from '@/lib/server/update-lock'
 
 const DEFAULT_US_ANALYTICS_DB = '/Volumes/OWC Express 1M2 80G/stockboard-data/us/stockboard-us.db'
-const US_ML_LOCK_PATH = path.join(
-  os.homedir(),
-  'Library',
-  'Application Support',
-  'StockBoard',
-  'us-ml-job.lock',
-)
-
 type Mode = 'daily' | 'weekly' | 'full' | 'after-pms'
 type EnvOverrides = Record<string, string | undefined>
 
-const CHUNK_CHECKPOINT_VERSION = 1
+const CHUNK_CHECKPOINT_VERSION = 2
+let activeUsMlProcessLock: UsMlProcessLock | null = null
+let activeChildProcessGroupId: number | null = null
+let shutdownSignal: NodeJS.Signals | null = null
 
 type ChunkCheckpoint = {
   version: number
   signature: string
   completed: string[]
   updatedAt: string
-}
-
-let usMlLockOwned = false
-
-function pidExists(pid: number): boolean {
-  if (!Number.isInteger(pid) || pid <= 0) return false
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch {
-    return false
-  }
-}
-
-function acquireUsMlProcessLock(mode: Mode): boolean {
-  fs.mkdirSync(path.dirname(US_ML_LOCK_PATH), { recursive: true })
-  try {
-    const handle = fs.openSync(US_ML_LOCK_PATH, 'wx', 0o600)
-    fs.writeFileSync(handle, `${JSON.stringify({ pid: process.pid, mode, startedAt: new Date().toISOString() })}\n`)
-    fs.closeSync(handle)
-    usMlLockOwned = true
-    return true
-  } catch (error) {
-    if (!(error instanceof Error) || !('code' in error) || error.code !== 'EEXIST') throw error
-  }
-
-  try {
-    const value = JSON.parse(fs.readFileSync(US_ML_LOCK_PATH, 'utf8')) as { pid?: unknown; mode?: unknown }
-    const pid = Number(value.pid)
-    if (pidExists(pid)) {
-      console.log(`US ML ${mode} skipped: another US ML job is active (pid=${pid}, mode=${String(value.mode ?? '-')})`)
-      return false
-    }
-  } catch {
-    // An unreadable lock is treated as stale and replaced atomically below.
-  }
-
-  fs.unlinkSync(US_ML_LOCK_PATH)
-  return acquireUsMlProcessLock(mode)
-}
-
-function releaseUsMlProcessLock(): void {
-  if (!usMlLockOwned) return
-  try {
-    const value = JSON.parse(fs.readFileSync(US_ML_LOCK_PATH, 'utf8')) as { pid?: unknown }
-    if (Number(value.pid) === process.pid) fs.unlinkSync(US_ML_LOCK_PATH)
-  } catch {
-    // A missing stale lock is already released.
-  }
-  usMlLockOwned = false
 }
 
 function sleep(ms: number): Promise<void> {
@@ -106,19 +96,64 @@ function modeFromArg(value: string | undefined): Mode {
 }
 
 async function runNpmOnce(script: string, env: NodeJS.ProcessEnv, overrides: EnvOverrides = {}): Promise<void> {
+  if (shutdownSignal) {
+    throw new DeferredExecutionError(`US ML job interrupted by ${shutdownSignal}`)
+  }
   await waitForMemoryHeadroom({ label: `npm run ${script}` })
   return new Promise((resolve, reject) => {
-    const child = spawn('npm', ['run', script], {
+    if (!activeUsMlProcessLock) throw new Error('US ML process lock is not held')
+    const child = spawnLockedProcessGroup(activeUsMlProcessLock, 'npm', ['run', script], {
       cwd: process.cwd(),
       env: withMemoryGuardEnv({ ...env, ...overrides }),
       stdio: 'inherit',
     })
-    child.on('error', reject)
-    child.on('close', (code, signal) => {
-      if (code === 0) resolve()
-      else reject(new Error(`npm run ${script} failed: code=${code}, signal=${signal ?? 'none'}`))
+    activeChildProcessGroupId = child.pid ?? null
+    let processGroupRegistrationError: unknown = null
+    child.on('error', (error) => {
+      if (activeChildProcessGroupId === child.pid) activeChildProcessGroupId = null
+      reject(error)
     })
+    child.on('close', (code, signal) => {
+      const processGroupId = child.pid
+      void (async () => {
+        if (processGroupId) await waitForProcessGroupExit(processGroupId)
+        if (activeChildProcessGroupId === processGroupId) activeChildProcessGroupId = null
+        activeUsMlProcessLock?.setProcessGroup(null)
+        if (processGroupRegistrationError) reject(processGroupRegistrationError)
+        else if (shutdownSignal) {
+          reject(new DeferredExecutionError(`US ML job interrupted by ${shutdownSignal}`))
+        } else if (code === 0) resolve()
+        else if (code === DEFERRED_EXECUTION_EXIT_CODE) {
+          reject(new DeferredExecutionError(
+            `npm run ${script} deferred: code=${code}, signal=${signal ?? 'none'}`,
+          ))
+        } else if (code === OPERATOR_ACTION_REQUIRED_EXIT_CODE) {
+          reject(new OperatorActionRequiredError(
+            `npm run ${script} requires operator action: code=${code}, signal=${signal ?? 'none'}`,
+          ))
+        } else {
+          reject(new Error(`npm run ${script} failed: code=${code}, signal=${signal ?? 'none'}`))
+        }
+      })().catch(reject)
+    })
+    if (child.pid) {
+      try {
+        activeUsMlProcessLock?.setProcessGroup(child.pid)
+      } catch (error) {
+        processGroupRegistrationError = error
+        signalProcessGroup(child.pid, 'SIGTERM')
+      }
+    }
   })
+}
+
+function installSignalHandlers(): void {
+  const handler = (signal: NodeJS.Signals) => {
+    shutdownSignal ??= signal
+    if (activeChildProcessGroupId) signalProcessGroup(activeChildProcessGroupId, 'SIGTERM')
+  }
+  process.on('SIGINT', handler)
+  process.on('SIGTERM', handler)
 }
 
 function sqliteInt(dbPath: string, sql: string): number {
@@ -153,6 +188,12 @@ function chunkCheckpointSignature(
 ): string {
   const dbPath = env.STOCKBOARD_DB_PATH
   if (!dbPath) throw new Error('STOCKBOARD_DB_PATH is required to checkpoint US ML feature jobs')
+  const shadowGenerationId = env.US_ML_SHADOW_GENERATION_ID?.trim() || null
+  if (dbPath.endsWith('.weekly-ml.building') && !shadowGenerationId) {
+    throw new OperatorActionRequiredError(
+      'US weekly/full chunk checkpoints require a shadow generation identity',
+    )
+  }
   const latestDate = sqliteText(dbPath, 'SELECT MAX(date) FROM ohlcv_daily')
   const implementationHash = createHash('sha256')
     .update(fs.readFileSync(checkpointScriptPath(script)))
@@ -162,6 +203,7 @@ function chunkCheckpointSignature(
     version: CHUNK_CHECKPOINT_VERSION,
     script,
     database: path.resolve(dbPath),
+    shadowGenerationId,
     latestDate,
     implementationHash,
     chunkSize,
@@ -296,6 +338,7 @@ async function runFeatureJobInTickerChunks(
     completedChunks.add(chunkKey)
     writeChunkCheckpoint(checkpointFile, signature, completedChunks)
   }
+  fs.rmSync(checkpointFile, { force: true })
 }
 
 function physicsEvaluationWindow(env: NodeJS.ProcessEnv, recentDaysValue: string): {
@@ -415,6 +458,9 @@ async function runNpm(script: string, env: NodeJS.ProcessEnv, overrides: EnvOver
     } catch (error) {
       lastError = error
       console.error(`US ML step failed ${attempt}/${attempts}: npm run ${script}: ${errorMessage(error)}`)
+      if (error instanceof DeferredExecutionError || error instanceof OperatorActionRequiredError) {
+        throw error
+      }
       if (attempt >= attempts) break
       await sleep(retryDelaySeconds * 1000)
     }
@@ -800,6 +846,204 @@ async function runDailyServing(env: NodeJS.ProcessEnv): Promise<void> {
   }
 }
 
+type WeeklySourcePin = {
+  sourceDbPath: string
+  contract: WeeklyOptimizationRunContract | null
+  boundary: WeeklyUsSourceBoundary | null
+}
+
+function weeklySourcePin(sourceDbPath: string): WeeklySourcePin {
+  const rawContract = process.env.WEEKLY_OPTIMIZATION_CONTRACT?.trim()
+  const rawBoundary = process.env[US_WEEKLY_SOURCE_BOUNDARY_ENV]?.trim()
+  if (!rawContract && !rawBoundary) {
+    throw new OperatorActionRequiredError(
+      'US weekly/full history requires a pinned run contract or source boundary',
+    )
+  }
+  return {
+    sourceDbPath,
+    contract: rawContract ? parseWeeklyOptimizationRunContract(rawContract) : null,
+    boundary: rawBoundary ? parseWeeklyUsSourceBoundary(rawBoundary) : null,
+  }
+}
+
+function assertPinnedSourceCurrent(pin: WeeklySourcePin): void {
+  const priceBasis = pin.contract?.markets.US.priceBasis ?? pin.boundary!.priceBasis
+  const current = readWeeklySourceObservation('US', pin.sourceDbPath, priceBasis)
+  current.activeWriterLocks = current.activeWriterLocks.filter(
+    (entry) => !entry.startsWith('us_model_generation_promotion:'),
+  )
+  const assessment = pin.contract
+    ? assessWeeklySourceReadiness(pin.contract.markets.US, current)
+    : assessWeeklyUsSourceBoundary(pin.boundary!, current)
+  if (!assessment.ok) {
+    throw new OperatorActionRequiredError(
+      `US weekly/full promotion blocked by source lineage: ${assessment.issues.join(', ')}`,
+    )
+  }
+}
+
+async function acquirePinnedSourcePromotionLock(pin: WeeklySourcePin): Promise<UpdateLockHandle> {
+  process.env.STOCKBOARD_DB_PATH = pin.sourceDbPath
+  process.env.LOCAL_DB_PATH = pin.sourceDbPath
+  process.env.STOCKBOARD_DB_ROLE = 'source'
+  const { acquireUsStockboardUpdateLock } = await import('@/lib/server/update-lock')
+  const lock = await acquireUsStockboardUpdateLock('us_model_generation_promotion', 15 * 60)
+  if (!lock) {
+    throw new DeferredExecutionError(
+      'US weekly/full promotion deferred: source generation is changing',
+    )
+  }
+  try {
+    assertPinnedSourceCurrent(pin)
+    await lock.heartbeat()
+    return lock
+  } catch (error) {
+    await lock.release().catch(() => undefined)
+    throw error
+  }
+}
+
+async function checkpointDb(dbPath: string): Promise<void> {
+  if (!fs.existsSync(dbPath)) return
+  const client = openExistingGuardedClient(dbPath, 'us-ml-weekly-promotion')
+  try {
+    const result = await client.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+    assertTruncateCheckpointComplete(result, dbPath)
+  } finally {
+    client.close()
+  }
+}
+
+function cloneFile(source: string, target: string): void {
+  if (process.platform === 'darwin') {
+    execFileSync('/bin/cp', ['-c', source, target], { stdio: 'inherit' })
+    return
+  }
+  fs.copyFileSync(source, target, fs.constants.COPYFILE_FICLONE_FORCE)
+}
+
+function quarantineStaleWeeklyShadow(shadowPath: string): void {
+  recoverInterruptedSqliteQuarantine(shadowPath)
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
+  const quarantinePath = `${shadowPath}.stale-${timestamp}`
+  const quarantined = quarantineSqliteGeneration(shadowPath, quarantinePath)
+  if (!quarantined) return
+  console.warn(`US weekly/full history quarantined a stale shadow generation at ${quarantinePath}`)
+}
+
+async function seedWeeklyShadow(primaryPath: string, shadowPath: string): Promise<string> {
+  quarantineStaleWeeklyShadow(shadowPath)
+  await checkpointDb(primaryPath)
+  cloneFile(primaryPath, shadowPath)
+  fs.chmodSync(shadowPath, 0o600)
+  return randomUUID()
+}
+
+async function promoteWeeklyShadow(args: {
+  primaryPath: string
+  shadowPath: string
+  sourcePin: WeeklySourcePin
+}): Promise<void> {
+  const { primaryPath, shadowPath, sourcePin } = args
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
+  const plan: SqlitePromotionPlan = {
+    primaryPath,
+    shadowPath,
+    backupPath: `${primaryPath}.pre-weekly-ml-${timestamp}`,
+  }
+  const journalPath = resolveWeeklyMlPromotionJournalPath(primaryPath)
+  assertNoIncompleteSqlitePromotion(journalPath)
+  let lock: UpdateLockHandle | null = null
+  let heartbeat: ReturnType<typeof setInterval> | null = null
+  let heartbeatError: unknown = null
+  let promotionAttempted = false
+  let journal: SqlitePromotionJournal = {
+    version: 1,
+    transactionId: `weekly-ml-${process.pid}-${timestamp}`,
+    phase: 'prepared',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    analog: null,
+    analytics: plan,
+    error: null,
+  }
+  const assertLockOwned = async (): Promise<void> => {
+    if (!lock || heartbeatError) {
+      throw new OperatorActionRequiredError(
+        `US weekly/full promotion lost its source lock${heartbeatError ? `: ${errorMessage(heartbeatError)}` : ''}`,
+      )
+    }
+    try {
+      await lock.heartbeat()
+      assertPinnedSourceCurrent(sourcePin)
+    } catch (error) {
+      heartbeatError = error
+      throw new OperatorActionRequiredError(
+        `US weekly/full promotion could not retain its pinned source boundary: ${errorMessage(error)}`,
+      )
+    }
+  }
+  try {
+    lock = await acquirePinnedSourcePromotionLock(sourcePin)
+    heartbeat = setInterval(() => {
+      void lock?.heartbeat().catch((error) => {
+        heartbeatError = error
+      })
+    }, 60_000)
+    await assertLockOwned()
+    writeSqlitePromotionJournal(journalPath, journal)
+    try {
+      await promoteSqliteGeneration({
+        ...plan,
+        checkpoint: checkpointDb,
+        clone: cloneFile,
+        beforeReplace: async () => {
+          await assertLockOwned()
+          promotionAttempted = true
+        },
+      })
+      journal = {
+        ...journal,
+        phase: 'analytics-promoted',
+        updatedAt: new Date().toISOString(),
+      }
+      writeSqlitePromotionJournal(journalPath, journal)
+      removeSqlitePromotionJournal(journalPath)
+    } catch (error) {
+      if (!promotionAttempted) {
+        try {
+          removeSqlitePromotionJournal(journalPath)
+        } catch (journalError) {
+          throw new OperatorActionRequiredError(
+            `US weekly/full promotion did not begin, but its prepared journal could not be removed. `
+            + `${promotionRecoveryMessage(journalPath, journal)}`,
+            { cause: journalError },
+          )
+        }
+        throw error
+      }
+      journal = {
+        ...journal,
+        updatedAt: new Date().toISOString(),
+        error: errorMessage(error),
+      }
+      try {
+        writeSqlitePromotionJournal(journalPath, journal)
+      } catch {
+        // Preserve the original promotion failure and the existing durable journal if any.
+      }
+      throw new OperatorActionRequiredError(
+        `US weekly/full SQLite promotion is incomplete. ${promotionRecoveryMessage(journalPath, journal)}`,
+        { cause: error },
+      )
+    }
+  } finally {
+    if (heartbeat) clearInterval(heartbeat)
+    await lock?.release().catch(() => undefined)
+  }
+}
+
 async function main(): Promise<void> {
   const mode = modeFromArg(process.argv[2])
   const usAnalyticsDbPath = resolveConfiguredStoragePath(path.resolve(
@@ -809,7 +1053,22 @@ async function main(): Promise<void> {
   if (!fs.existsSync(usAnalyticsDbPath)) {
     throw new Error(`US analytics DB not found: ${usAnalyticsDbPath}`)
   }
-  if (!acquireUsMlProcessLock(mode)) return
+  const promotionJournalPath = resolveSqlitePromotionJournalPath(
+    usAnalyticsDbPath,
+    US_ADJUSTED_PRICE_BASIS,
+  )
+  assertNoIncompleteSqlitePromotion(promotionJournalPath)
+  const weeklyShadowPath = `${usAnalyticsDbPath}.weekly-ml.building`
+  const weeklyPromotionJournalPath = resolveWeeklyMlPromotionJournalPath(usAnalyticsDbPath)
+  assertNoIncompleteSqlitePromotion(weeklyPromotionJournalPath)
+  const usMlLock = acquireUsMlProcessLock(mode)
+  if (!usMlLock) {
+    throw new DeferredExecutionError(`US ML ${mode} deferred: another US ML job owns the lock`)
+  }
+  activeUsMlProcessLock = usMlLock
+  installSignalHandlers()
+  let primaryProcessLock: PidProcessLock | null = null
+  let shadowProcessLock: PidProcessLock | null = null
 
   try {
     const configuredStockboardDbPath = process.env.STOCKBOARD_DB_PATH?.trim()
@@ -820,21 +1079,73 @@ async function main(): Promise<void> {
           ? configuredStockboardDbPath
           : undefined
       )
+    if (mode !== 'daily' && !process.env.WEEKLY_OPTIMIZATION_CONTRACT?.trim()) {
+      if (!sourceDbPath) {
+        throw new OperatorActionRequiredError(
+          `US ML ${mode} requires STOCKBOARD_SOURCE_DB_PATH to pin its source generation`,
+        )
+      }
+      const boundary = process.env[US_WEEKLY_SOURCE_BOUNDARY_ENV]?.trim()
+        ? parseWeeklyUsSourceBoundary(process.env[US_WEEKLY_SOURCE_BOUNDARY_ENV]!)
+        : captureWeeklyUsSourceBoundary({
+            sourceDbPath: resolveConfiguredStoragePath(path.resolve(sourceDbPath)),
+            priceBasis: US_ADJUSTED_PRICE_BASIS,
+          })
+      process.env[US_WEEKLY_SOURCE_BOUNDARY_ENV] = JSON.stringify(boundary)
+      process.env.US_ANALYTICS_EXPECTED_DATE = boundary.expectedTradingDate
+    }
+    const resolvedSourceDbPath = sourceDbPath
+      ? resolveConfiguredStoragePath(path.resolve(sourceDbPath))
+      : null
+    if (mode !== 'daily' && !resolvedSourceDbPath) {
+      throw new OperatorActionRequiredError(
+        `US ML ${mode} requires STOCKBOARD_SOURCE_DB_PATH for its promotion boundary`,
+      )
+    }
+    const sourcePin = mode === 'daily'
+      ? null
+      : weeklySourcePin(resolvedSourceDbPath as string)
+    const workingDbPath = mode === 'daily' ? usAnalyticsDbPath : weeklyShadowPath
+    let shadowGenerationId: string | undefined
+    if (mode !== 'daily') {
+      primaryProcessLock = acquirePidProcessLock(
+        `${usAnalyticsDbPath}.process.lock`,
+        `US ML ${mode} primary generation`,
+      )
+      if (!primaryProcessLock) {
+        throw new DeferredExecutionError(
+          `US ML ${mode} deferred: the primary analytics generation is in use`,
+        )
+      }
+      shadowProcessLock = acquirePidProcessLock(
+        `${weeklyShadowPath}.process.lock`,
+        `US ML ${mode} shadow generation`,
+      )
+      if (!shadowProcessLock) {
+        throw new DeferredExecutionError(
+          `US ML ${mode} deferred: another shadow generation is active`,
+        )
+      }
+      assertPinnedSourceCurrent(sourcePin!)
+      shadowGenerationId = await seedWeeklyShadow(usAnalyticsDbPath, weeklyShadowPath)
+    }
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       USE_LOCAL_DB: '1',
       STOCKBOARD_DB_ROLE: 'us-analytics',
-      STOCKBOARD_SOURCE_DB_PATH: sourceDbPath,
-      STOCKBOARD_DB_PATH: usAnalyticsDbPath,
-      US_ANALYTICS_DB_PATH: usAnalyticsDbPath,
+      STOCKBOARD_SOURCE_DB_PATH: resolvedSourceDbPath ?? undefined,
+      STOCKBOARD_DB_PATH: workingDbPath,
+      US_ANALYTICS_DB_PATH: workingDbPath,
+      US_ML_SHADOW_GENERATION_ID: shadowGenerationId,
       SQLITE_BUSY_RETRIES: process.env.SQLITE_BUSY_RETRIES ?? '12',
       UPDATE_CHILD_TIMEOUT_MINUTES: process.env.UPDATE_CHILD_TIMEOUT_MINUTES ?? '2880',
       US_ML_FULL_START_DATE: process.env.US_ML_FULL_START_DATE ?? '1900-01-01',
       US_ML_STEP_MAX_ATTEMPTS: process.env.US_ML_STEP_MAX_ATTEMPTS ?? '3',
       US_ML_STEP_RETRY_DELAY_SECONDS: process.env.US_ML_STEP_RETRY_DELAY_SECONDS ?? '300',
+      ...(mode === 'daily' ? { US_ML_ALLOW_UNPINNED_DAILY_PROMOTION: '1' } : {}),
     }
 
-    console.log(`US ML ${mode} job: db=${usAnalyticsDbPath}`)
+    console.log(`US ML ${mode} job: db=${workingDbPath}${mode === 'daily' ? '' : ' (isolated shadow)'}`)
     if (mode === 'daily' || mode === 'weekly') {
       await runNpm('batch:ml-pipeline-state', env, {
         ML_PIPELINE_ACTION: 'verify-or-adopt',
@@ -851,12 +1162,22 @@ async function main(): Promise<void> {
       ML_PIPELINE_ACTION: mode === 'full' || mode === 'after-pms' ? 'mark-baseline' : 'mark-delta',
       ML_PIPELINE_MARKET: 'US',
     })
+    if (sourcePin) {
+      await promoteWeeklyShadow({
+        primaryPath: usAnalyticsDbPath,
+        shadowPath: weeklyShadowPath,
+        sourcePin,
+      })
+    }
   } finally {
-    releaseUsMlProcessLock()
+    shadowProcessLock?.release()
+    primaryProcessLock?.release()
+    usMlLock.release()
+    activeUsMlProcessLock = null
   }
 }
 
 main().catch((error) => {
   console.error(error)
-  process.exit(1)
+  process.exitCode = operationalExitCode(error)
 })

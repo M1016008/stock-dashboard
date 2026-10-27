@@ -15,7 +15,10 @@ function processGroupExists(pid: number): boolean {
     process.kill(-pid, 0)
     return true
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false
+    const code = (error as NodeJS.ErrnoException).code
+    // A child spawned by this process has the same uid. EPERM therefore means
+    // the numeric process-group id now belongs to an unrelated OS process.
+    if (code === 'ESRCH' || code === 'EPERM') return false
     throw error
   }
 }
@@ -24,7 +27,8 @@ function signalProcessGroup(pid: number, signal: NodeJS.Signals): void {
   try {
     process.kill(-pid, signal)
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
+    const code = (error as NodeJS.ErrnoException).code
+    if (code !== 'ESRCH' && code !== 'EPERM') throw error
   }
 }
 

@@ -6,6 +6,12 @@ import path from 'node:path'
 import { localDbPath } from '@/lib/db/client'
 import { resolveUsAnalyticsDbPath } from '@/lib/db/us-analytics'
 import {
+  assertNoIncompleteSqlitePromotion,
+  resolveSqlitePromotionJournalPath,
+  resolveWeeklyMlPromotionJournalPath,
+} from '@/lib/sqlite-promotion-journal'
+import { US_ADJUSTED_PRICE_BASIS } from '@/lib/us-adjusted-ohlcv'
+import {
   MA_SEQUENCE_BAND_COUNT,
   MA_SEQUENCE_VERSION,
   maSequenceBandNeighbors,
@@ -72,6 +78,7 @@ type RawMetaRow = {
 const globalForAnalogIndex = global as unknown as {
   analogSequenceClients?: Partial<Record<AnalogSequenceMarket, Client>>
   analogSequencePaths?: Partial<Record<AnalogSequenceMarket, string>>
+  analogSequenceIdentities?: Partial<Record<AnalogSequenceMarket, string>>
   analogSequenceReady?: Partial<Record<AnalogSequenceMarket, Promise<void>>>
 }
 
@@ -104,32 +111,115 @@ export function resolveAnalogSequenceIndexPath(market: AnalogSequenceMarket): st
     : path.join(realDirectory(localDbPath), `analog-sequence-jp-v${MA_SEQUENCE_VERSION}.db`)
 }
 
+export function assertAnalogSequenceGenerationReadable(market: AnalogSequenceMarket): void {
+  if (market !== 'US') return
+  const journalPath = resolveSqlitePromotionJournalPath(
+    resolveUsAnalyticsDbPath(),
+    US_ADJUSTED_PRICE_BASIS,
+  )
+  assertNoIncompleteSqlitePromotion(journalPath)
+  assertNoIncompleteSqlitePromotion(
+    resolveWeeklyMlPromotionJournalPath(resolveUsAnalyticsDbPath()),
+  )
+}
+
 export function hasAnalogSequenceIndex(market: AnalogSequenceMarket): boolean {
+  assertAnalogSequenceGenerationReadable(market)
   return fs.existsSync(resolveAnalogSequenceIndexPath(market))
 }
 
+function analogFileIdentity(dbPath: string): string | null {
+  const members = ['', '-wal', '-shm'].map((suffix) => {
+    const memberPath = `${dbPath}${suffix}`
+    try {
+      const stat = fs.statSync(memberPath, { bigint: true })
+      return {
+        suffix,
+        dev: stat.dev.toString(),
+        ino: stat.ino.toString(),
+        size: stat.size.toString(),
+        mtimeNs: stat.mtimeNs.toString(),
+        ctimeNs: stat.ctimeNs.toString(),
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { suffix, missing: true }
+      throw error
+    }
+  })
+  return 'missing' in members[0] ? null : JSON.stringify(members)
+}
+
+export function analogSequenceGenerationIdentity(market: AnalogSequenceMarket): string {
+  assertAnalogSequenceGenerationReadable(market)
+  const identity = analogFileIdentity(resolveAnalogSequenceIndexPath(market))
+  if (!identity) throw new Error('analog_sequence_index_unavailable')
+  return identity
+}
+
+function resetAnalogClient(market: AnalogSequenceMarket): void {
+  const client = globalForAnalogIndex.analogSequenceClients?.[market]
+  try { client?.close() } catch { /* stale read handle is already unusable */ }
+  if (globalForAnalogIndex.analogSequenceClients) delete globalForAnalogIndex.analogSequenceClients[market]
+  if (globalForAnalogIndex.analogSequencePaths) delete globalForAnalogIndex.analogSequencePaths[market]
+  if (globalForAnalogIndex.analogSequenceIdentities) delete globalForAnalogIndex.analogSequenceIdentities[market]
+  if (globalForAnalogIndex.analogSequenceReady) delete globalForAnalogIndex.analogSequenceReady[market]
+}
+
 function getClient(market: AnalogSequenceMarket): Client | null {
+  assertAnalogSequenceGenerationReadable(market)
   const dbPath = resolveAnalogSequenceIndexPath(market)
   globalForAnalogIndex.analogSequenceClients ??= {}
   globalForAnalogIndex.analogSequencePaths ??= {}
+  globalForAnalogIndex.analogSequenceIdentities ??= {}
+  const identityBeforeOpen = analogFileIdentity(dbPath)
+  if (!identityBeforeOpen) {
+    resetAnalogClient(market)
+    return null
+  }
   if (
     !globalForAnalogIndex.analogSequenceClients[market]
     || globalForAnalogIndex.analogSequencePaths[market] !== dbPath
+    || globalForAnalogIndex.analogSequenceIdentities[market] !== identityBeforeOpen
   ) {
+    resetAnalogClient(market)
     const client = openOptionalGuardedReadOnlyClient(dbPath, 'analog-sequence-read')
     if (!client) return null
+    const identityAfterOpen = analogFileIdentity(dbPath)
+    if (!identityAfterOpen || identityAfterOpen !== identityBeforeOpen) {
+      try { client.close() } catch { /* generation changed while opening */ }
+      throw new Error('analog_sequence_generation_changed')
+    }
     globalForAnalogIndex.analogSequenceClients[market] = client
     globalForAnalogIndex.analogSequencePaths[market] = dbPath
-    if (globalForAnalogIndex.analogSequenceReady) delete globalForAnalogIndex.analogSequenceReady[market]
+    globalForAnalogIndex.analogSequenceIdentities[market] = identityAfterOpen
   }
   return globalForAnalogIndex.analogSequenceClients[market]!
 }
 
-async function ensureReady(market: AnalogSequenceMarket): Promise<void> {
+function assertAnalogClientGenerationCurrent(
+  market: AnalogSequenceMarket,
+  client: Client,
+  identity: string | undefined,
+): void {
+  assertAnalogSequenceGenerationReadable(market)
+  const currentIdentity = analogFileIdentity(resolveAnalogSequenceIndexPath(market))
+  if (
+    !identity
+    || !currentIdentity
+    || currentIdentity !== identity
+    || globalForAnalogIndex.analogSequenceClients?.[market] !== client
+    || globalForAnalogIndex.analogSequenceIdentities?.[market] !== identity
+  ) {
+    resetAnalogClient(market)
+    throw new Error('analog_sequence_generation_changed')
+  }
+}
+
+async function ensureReady(market: AnalogSequenceMarket, attempt = 0): Promise<Client> {
   globalForAnalogIndex.analogSequenceReady ??= {}
+  const client = getClient(market)
+  if (!client) throw new Error('analog_sequence_index_unavailable')
   if (!globalForAnalogIndex.analogSequenceReady[market]) {
-    const client = getClient(market)
-    if (!client) throw new Error('analog_sequence_index_unavailable')
     globalForAnalogIndex.analogSequenceReady[market] = Promise.resolve()
       .then(async () => {
         await client.execute(`PRAGMA busy_timeout=${positiveInteger(process.env.SQLITE_BUSY_TIMEOUT_MS, 60_000)}`)
@@ -153,18 +243,34 @@ async function ensureReady(market: AnalogSequenceMarket): Promise<void> {
       })
   }
   await globalForAnalogIndex.analogSequenceReady[market]
+  const current = getClient(market)
+  if (!current) throw new Error('analog_sequence_index_unavailable')
+  if (current !== client) {
+    if (attempt >= 2) throw new Error('analog_sequence_generation_changed')
+    return ensureReady(market, attempt + 1)
+  }
+  return client
 }
 
 async function execute<T>(
   market: AnalogSequenceMarket,
   sql: string,
   args: readonly InValue[] = [],
+  expectedIdentity?: string,
 ): Promise<T[]> {
   try {
-    await ensureReady(market)
-    const client = getClient(market)
-    if (!client) throw new Error('analog_sequence_index_unavailable')
+    assertAnalogSequenceGenerationReadable(market)
+    const client = await ensureReady(market)
+    const identity = globalForAnalogIndex.analogSequenceIdentities?.[market]
+    if (expectedIdentity && identity !== expectedIdentity) {
+      throw new Error('analog_sequence_generation_changed')
+    }
+    assertAnalogClientGenerationCurrent(market, client, identity)
     const result = await client.execute({ sql, args: [...args] })
+    assertAnalogClientGenerationCurrent(market, client, identity)
+    if (expectedIdentity && identity !== expectedIdentity) {
+      throw new Error('analog_sequence_generation_changed')
+    }
     return result.rows.map((row) => ({ ...row })) as unknown as T[]
   } catch (error) {
     throw error
@@ -202,6 +308,7 @@ function searchWindowSpanYears(market: AnalogSequenceMarket): number {
 
 export async function readAnalogSequenceIndexMeta(
   market: AnalogSequenceMarket,
+  expectedIdentity?: string,
 ): Promise<AnalogSequenceIndexMeta | null> {
   if (!hasAnalogSequenceIndex(market)) return null
   try {
@@ -226,6 +333,8 @@ export async function readAnalogSequenceIndexMeta(
         'price_chunks_completed'
       )
       `,
+      [],
+      expectedIdentity,
     )
     const values = new Map(rows.map((row) => [row.key, row.value]))
     return {
@@ -247,7 +356,10 @@ export async function readAnalogSequenceIndexMeta(
       priceChunksCompleted: values.get('price_chunks_completed') === '1',
     }
   } catch (error) {
-    if (isStorageIoError(error)) throw error
+    if (
+      isStorageIoError(error)
+      || (error instanceof Error && error.message === 'analog_sequence_generation_changed')
+    ) throw error
     return null
   }
 }
@@ -332,12 +444,13 @@ export async function searchAnalogSequenceIndex(args: {
   maxBitDistance?: number
 }): Promise<AnalogSequenceIndexRow[]> {
   if (args.bands.length !== MA_SEQUENCE_BAND_COUNT) return []
+  const generationIdentity = analogSequenceGenerationIdentity(args.market)
   const perBandLimit = Math.min(
     50_000,
     Math.max(1_000, args.perBandLimit ?? positiveInteger(process.env.ANALOG_SEQUENCE_PER_BAND_LIMIT, 15_000)),
   )
   const maxBitDistance = Math.min(1, Math.max(0, args.maxBitDistance ?? 0))
-  const meta = await readAnalogSequenceIndexMeta(args.market)
+  const meta = await readAnalogSequenceIndexMeta(args.market, generationIdentity)
   const windows = yearWindows(
     meta?.coverageFrom || '1980-01-01',
     args.beforeDate,
@@ -368,6 +481,7 @@ export async function searchAnalogSequenceIndex(args: {
           ...(args.excludeTicker && args.excludeAfterDate ? [args.excludeTicker, args.excludeAfterDate] : []),
           perWindowLimit,
         ],
+        generationIdentity,
       )
       for (const row of rows) {
         const key = `${row.ticker}\u0000${row.date}`
@@ -387,6 +501,9 @@ export async function searchAnalogSequenceIndex(args: {
       }
     }
   }
+  if (analogSequenceGenerationIdentity(args.market) !== generationIdentity) {
+    throw new Error('analog_sequence_generation_changed')
+  }
   return [...byKey.values()]
 }
 
@@ -400,7 +517,8 @@ export async function searchAnalogSequenceIndexByStage(args: {
 }): Promise<AnalogSequenceIndexRow[]> {
   const stageCodes = [...new Set(args.stageCodes.filter((code) => /^[1-6]{5,6}$/.test(code)))]
   if (stageCodes.length === 0) return []
-  const meta = await readAnalogSequenceIndexMeta(args.market)
+  const generationIdentity = analogSequenceGenerationIdentity(args.market)
+  const meta = await readAnalogSequenceIndexMeta(args.market, generationIdentity)
   const windows = yearWindows(
     meta?.coverageFrom || '1980-01-01',
     args.beforeDate,
@@ -429,6 +547,7 @@ export async function searchAnalogSequenceIndexByStage(args: {
         ...(args.excludeTicker && args.excludeAfterDate ? [args.excludeTicker, args.excludeAfterDate] : []),
         limitPerWindow,
       ],
+      generationIdentity,
     )
     for (const row of rows) {
       const key = `${row.ticker}\u0000${row.date}`
@@ -442,6 +561,9 @@ export async function searchAnalogSequenceIndexByStage(args: {
         bandMatches: 0,
       })
     }
+  }
+  if (analogSequenceGenerationIdentity(args.market) !== generationIdentity) {
+    throw new Error('analog_sequence_generation_changed')
   }
   return [...byKey.values()]
 }

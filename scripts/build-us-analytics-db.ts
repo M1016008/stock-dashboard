@@ -19,6 +19,16 @@ import {
   usSourceAnalyticalPriceEligibleSql,
 } from '@/lib/us-market-data-quality'
 import { isUsInvestableSymbol } from '@/lib/us-symbol-quality'
+import { acquirePidProcessLock } from '@/lib/pid-process-lock'
+import {
+  assertNoIncompleteSqlitePromotion,
+  resolveSqlitePromotionJournalPath,
+  resolveWeeklyMlPromotionJournalPath,
+} from '@/lib/sqlite-promotion-journal'
+import {
+  DeferredExecutionError,
+  operationalExitCode,
+} from '@/lib/operational-exit'
 
 const configuredTargetPath = process.env.US_ANALYTICS_DB_PATH?.trim()
 const TARGET_PATH = configuredTargetPath
@@ -464,6 +474,23 @@ async function markPriceBasisIfComplete(client: Client, expectedCount: number): 
 async function main() {
   assertSafeTarget()
   assertWritableTargetPath(TARGET_PATH, 'us-analytics-build')
+  const promotionJournalPath = resolveSqlitePromotionJournalPath(
+    TARGET_PATH,
+    US_ADJUSTED_PRICE_BASIS,
+  )
+  assertNoIncompleteSqlitePromotion(promotionJournalPath)
+  assertNoIncompleteSqlitePromotion(resolveWeeklyMlPromotionJournalPath(TARGET_PATH))
+  const processLock = acquirePidProcessLock(
+    `${TARGET_PATH}.process.lock`,
+    `US analytics build for ${TARGET_PATH}`,
+  )
+  if (!processLock) {
+    if (process.env.STOCKBOARD_PROCESS_LOCK_REQUIRED === '1') {
+      throw new DeferredExecutionError(`US analytics process lock is active: ${TARGET_PATH}`)
+    }
+    return
+  }
+  process.once('exit', processLock.release)
   console.log(`US analytics target: ${TARGET_PATH}`)
   console.log(
     `US analytics chunks: tickers=${COPY_CHUNK}, statements=${BATCH_CHUNK}, native=${NATIVE_COPY ? NATIVE_COPY_CHUNK : 'off'}`,
@@ -749,5 +776,5 @@ async function main() {
 
 main().catch((error) => {
   console.error(error)
-  process.exit(1)
+  process.exitCode = operationalExitCode(error)
 })
