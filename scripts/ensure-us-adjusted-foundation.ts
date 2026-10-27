@@ -902,7 +902,7 @@ function cloneFile(source: string, target: string): void {
 
 async function promoteAdjustedShadow(
   backupPath: string,
-  beforeReplace?: () => void,
+  beforeReplace?: () => void | Promise<void>,
 ): Promise<SqliteGenerationPromotion> {
   return promoteSqliteGeneration({
     primaryPath: usAnalyticsDbPath,
@@ -931,7 +931,7 @@ async function seedAdjustedAnalogShadow(
 
 async function promoteAdjustedAnalogShadow(
   backupPath: string,
-  beforeReplace?: () => void,
+  beforeReplace?: () => void | Promise<void>,
 ): Promise<SqliteGenerationPromotion> {
   return promoteSqliteGeneration({
     primaryPath: usAnalogDbPath,
@@ -1284,6 +1284,7 @@ async function main(): Promise<void> {
         let promotionAnalyticsShadowProcessLock: PidProcessLock | null = null
         let promotionAnalogShadowProcessLock: PidProcessLock | null = null
         let promotionHeartbeat: ReturnType<typeof setInterval> | null = null
+        let promotionHeartbeatError: unknown = null
         try {
           promotionMlLock = acquireUsMlProcessLock('adjusted-foundation-promotion')
           if (!promotionMlLock) {
@@ -1331,12 +1332,35 @@ async function main(): Promise<void> {
           }
           promotionHeartbeat = setInterval(() => {
             void promotionLock?.heartbeat().catch((error) => {
+              promotionHeartbeatError = error
               console.warn(
                 `US adjusted foundation promotion heartbeat failed: `
                 + `${error instanceof Error ? error.message : String(error)}`,
               )
             })
           }, 60 * 1_000)
+          const assertPromotionLockOwned = async (): Promise<void> => {
+            if (!promotionLock) {
+              throw new OperatorActionRequiredError(
+                'US adjusted foundation promotion lost its source lock before replacement',
+              )
+            }
+            if (promotionHeartbeatError) {
+              throw new OperatorActionRequiredError(
+                `US adjusted foundation promotion lost its source lock: `
+                + `${promotionHeartbeatError instanceof Error ? promotionHeartbeatError.message : String(promotionHeartbeatError)}`,
+              )
+            }
+            try {
+              await promotionLock.heartbeat()
+            } catch (error) {
+              promotionHeartbeatError = error
+              throw new OperatorActionRequiredError(
+                `US adjusted foundation promotion could not renew its source lock: `
+                + `${error instanceof Error ? error.message : String(error)}`,
+              )
+            }
+          }
           if (heavyMlIsActive()) {
             throw new DeferredExecutionError('US adjusted foundation promotion deferred: an uncoordinated ML writer is active')
           }
@@ -1375,6 +1399,7 @@ async function main(): Promise<void> {
               `US adjusted foundation promotion cancelled by ${deferredPromotionSignal} before file replacement`,
             )
           }
+          await assertPromotionLockOwned()
           await setStage('promoting')
           const promotionTimestamp = new Date().toISOString().replace(/[:.]/g, '-')
           const analogPlan: SqlitePromotionPlan | null = analogPromotionRequired
@@ -1419,7 +1444,8 @@ async function main(): Promise<void> {
           try {
             if (analogPlan) {
               analogPromotionAttempted = true
-              analogPromotion = await promoteAdjustedAnalogShadow(analogPlan.backupPath, () => {
+              analogPromotion = await promoteAdjustedAnalogShadow(analogPlan.backupPath, async () => {
+                await assertPromotionLockOwned()
                 if (deferredPromotionSignal) {
                   throw new Error(`Analog promotion cancelled by ${deferredPromotionSignal}`)
                 }
@@ -1440,7 +1466,8 @@ async function main(): Promise<void> {
               }
             }
             analyticsPromotionAttempted = true
-            const analyticsPromotion = await promoteAdjustedShadow(analyticsPlan.backupPath, () => {
+            const analyticsPromotion = await promoteAdjustedShadow(analyticsPlan.backupPath, async () => {
+              await assertPromotionLockOwned()
               if (deferredPromotionSignal) {
                 throw new Error(`Analytics promotion cancelled by ${deferredPromotionSignal}`)
               }

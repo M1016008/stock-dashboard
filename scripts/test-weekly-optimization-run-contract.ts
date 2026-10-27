@@ -392,13 +392,19 @@ try {
   const backup = `${primary}.pre-fixture`
   fs.writeFileSync(primary, 'old-generation')
   fs.writeFileSync(shadow, 'new-generation')
+  let beforeReplaceCompleted = false
   const promoted = await promoteSqliteGeneration({
     primaryPath: primary,
     shadowPath: shadow,
     backupPath: backup,
     checkpoint: async () => undefined,
     clone: (source, target) => fs.copyFileSync(source, target),
+    beforeReplace: async () => {
+      await Promise.resolve()
+      beforeReplaceCompleted = true
+    },
   })
+  assert.equal(beforeReplaceCompleted, true, 'the ownership callback must complete before rename')
   assert.equal(fs.readFileSync(primary, 'utf8'), 'new-generation')
   assert.equal(fs.readFileSync(backup, 'utf8'), 'old-generation')
   await rollbackSqliteGeneration(promoted, async () => undefined)
@@ -801,7 +807,7 @@ assert.match(runner, /DEFERRED_EXECUTION_EXIT_CODE/)
 assert.match(runner, /operationalExitCode\(error\)/)
 assert.match(runner, /\['-readonly', '-json'/)
 const analogPromotionCall = foundation.lastIndexOf(
-  'analogPromotion = await promoteAdjustedAnalogShadow(analogPlan.backupPath, () => {',
+  'analogPromotion = await promoteAdjustedAnalogShadow(analogPlan.backupPath, async () => {',
 )
 const analogAdoptionMetadata = foundation.lastIndexOf("'analog_index_price_basis'")
 assert.ok(
@@ -818,13 +824,26 @@ assert.match(foundation, /deferring exit until child work and the atomic boundar
 assert.match(foundation, /the atomic boundary and journal removal completed/)
 assert.ok(
   foundation.lastIndexOf("assertWeeklyUsLineageUnchanged('promotion')")
-    < foundation.lastIndexOf('promoteAdjustedShadow(analyticsPlan.backupPath, () =>'),
+    < foundation.lastIndexOf('promoteAdjustedShadow(analyticsPlan.backupPath, async () =>'),
   'lineage must be rechecked immediately before analytics promotion',
 )
 assert.ok(
   foundation.lastIndexOf('acquireUpdateLock(')
     < foundation.lastIndexOf("assertWeeklyUsLineageUnchanged('promotion')"),
   'source lock must be acquired before the final lineage check',
+)
+assert.match(foundation, /promotionHeartbeatError = error/)
+assert.match(foundation, /await assertPromotionLockOwned\(\)/)
+assert.match(foundation, /promoteAdjustedShadow\(analyticsPlan\.backupPath, async \(\) => \{[\s\S]*await assertPromotionLockOwned\(\)/)
+assert.match(usMlJob, /weekly-ml\.building/)
+assert.match(usMlJob, /seedWeeklyShadow\(usAnalyticsDbPath, weeklyShadowPath\)/)
+assert.match(usMlJob, /promoteWeeklyShadow\(/)
+assert.match(usMlJob, /assertPinnedSourceCurrent\(sourcePin!\)/)
+assert.match(usMlJob, /acquireUsStockboardUpdateLock\('us_model_generation_promotion'/)
+assert.match(usMlJob, /beforeReplace: assertLockOwned/)
+assert.ok(
+  usMlJob.indexOf('await runFullHistory(env') < usMlJob.indexOf('await promoteWeeklyShadow({'),
+  'full-history work must finish in the shadow before promotion',
 )
 
   console.log('Weekly optimization run-contract regression: PASS')

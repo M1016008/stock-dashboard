@@ -1,4 +1,5 @@
 import fs from 'node:fs'
+import path from 'node:path'
 
 export type SqliteGenerationPromotion = {
   primaryPath: string
@@ -12,11 +13,29 @@ type PromoteOptions = {
   backupPath: string
   checkpoint: (dbPath: string) => Promise<void>
   clone: (source: string, target: string) => void
-  beforeReplace?: () => void
+  beforeReplace?: () => void | Promise<void>
 }
 
 function moveIfPresent(from: string, to: string): void {
   if (fs.existsSync(from)) fs.renameSync(from, to)
+}
+
+function assertSameFilesystem(paths: string[]): void {
+  const devices = new Set(paths.map((filePath) => fs.statSync(path.dirname(filePath)).dev))
+  if (devices.size !== 1) {
+    throw new Error(`SQLite promotion paths must share one filesystem: ${paths.join(', ')}`)
+  }
+}
+
+function fsyncDirectories(paths: string[]): void {
+  for (const directory of new Set(paths.map((filePath) => path.dirname(filePath)))) {
+    const descriptor = fs.openSync(directory, 'r')
+    try {
+      fs.fsyncSync(descriptor)
+    } finally {
+      fs.closeSync(descriptor)
+    }
+  }
 }
 
 export async function promoteSqliteGeneration(
@@ -26,12 +45,13 @@ export async function promoteSqliteGeneration(
   if (!fs.existsSync(shadowPath)) {
     throw new Error(`SQLite shadow generation not found: ${shadowPath}`)
   }
+  assertSameFilesystem([primaryPath, shadowPath, backupPath])
   if (fs.existsSync(primaryPath)) await checkpoint(primaryPath)
   await checkpoint(shadowPath)
 
   const retainedBackup = fs.existsSync(primaryPath) ? backupPath : null
   if (retainedBackup) clone(primaryPath, retainedBackup)
-  beforeReplace?.()
+  await beforeReplace?.()
   if (retainedBackup) {
     moveIfPresent(`${primaryPath}-wal`, `${retainedBackup}-wal`)
     moveIfPresent(`${primaryPath}-shm`, `${retainedBackup}-shm`)
@@ -39,6 +59,7 @@ export async function promoteSqliteGeneration(
   moveIfPresent(`${shadowPath}-wal`, `${backupPath}.promoted-shadow-wal`)
   moveIfPresent(`${shadowPath}-shm`, `${backupPath}.promoted-shadow-shm`)
   fs.renameSync(shadowPath, primaryPath)
+  fsyncDirectories([primaryPath, shadowPath, backupPath])
   return { primaryPath, shadowPath, backupPath: retainedBackup }
 }
 
@@ -53,12 +74,16 @@ export async function rollbackSqliteGeneration(
   if (fs.existsSync(shadowPath)) {
     throw new Error(`Cannot preserve failed promotion; shadow already exists: ${shadowPath}`)
   }
+  assertSameFilesystem([primaryPath, shadowPath, ...(backupPath ? [backupPath] : [])])
 
   await checkpoint(primaryPath)
   moveIfPresent(`${primaryPath}-wal`, `${shadowPath}-wal`)
   moveIfPresent(`${primaryPath}-shm`, `${shadowPath}-shm`)
   fs.renameSync(primaryPath, shadowPath)
-  if (!backupPath) return
+  if (!backupPath) {
+    fsyncDirectories([primaryPath, shadowPath])
+    return
+  }
 
   try {
     fs.renameSync(backupPath, primaryPath)
@@ -72,4 +97,5 @@ export async function rollbackSqliteGeneration(
     }
     throw error
   }
+  fsyncDirectories([primaryPath, shadowPath, backupPath])
 }
