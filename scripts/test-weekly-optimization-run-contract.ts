@@ -8,7 +8,11 @@ import {
   signalProcessGroup,
   waitForProcessGroupExit,
 } from '@/lib/child-process-group'
-import { promoteSqliteGeneration, rollbackSqliteGeneration } from '@/lib/sqlite-generation-promotion'
+import {
+  assertTruncateCheckpointComplete,
+  promoteSqliteGeneration,
+  rollbackSqliteGeneration,
+} from '@/lib/sqlite-generation-promotion'
 import {
   quarantineSqliteGeneration,
   recoverInterruptedSqliteQuarantine,
@@ -24,7 +28,10 @@ import {
 import { expectedLatestTradingDate } from '@/lib/server/data-freshness'
 import { expectedLatestUsTradingDate } from '@/lib/server/us-data-freshness'
 import { acquireUsMlProcessLock } from '@/lib/us-ml-process-lock'
-import { acquirePidProcessLock } from '@/lib/pid-process-lock'
+import {
+  acquirePidProcessLock,
+  quarantineObservedStalePidProcessLock,
+} from '@/lib/pid-process-lock'
 import { spawnLockedProcessGroup } from '@/lib/locked-process-spawn'
 import {
   DEFERRED_EXECUTION_EXIT_CODE,
@@ -648,6 +655,48 @@ try {
   const reclaimedBuilderLock = acquirePidProcessLock(publishingBuilderLockPath, 'fixture stale builder')
   assert.ok(reclaimedBuilderLock)
   reclaimedBuilderLock.release()
+
+  const replacementRaceLockPath = path.join(fixtureRoot, 'replacement-race.lock')
+  const staleOwnerRaw = '{"pid":999999,"owner":"stale"}\n'
+  const replacementOwnerRaw = `${JSON.stringify({
+    version: 2,
+    pid: process.pid,
+    pidStartedAt: execFileSync('ps', ['-p', String(process.pid), '-o', 'lstart='], { encoding: 'utf8' }).trim(),
+    processGroupId: null,
+    processGroupMarkerPath: null,
+    owner: 'replacement',
+    label: 'fixture replacement',
+    acquiredAt: new Date().toISOString(),
+  })}\n`
+  fs.writeFileSync(replacementRaceLockPath, staleOwnerRaw)
+  const staleEvidencePath = `${replacementRaceLockPath}.stale-evidence`
+  assert.equal(
+    quarantineObservedStalePidProcessLock(
+      replacementRaceLockPath,
+      staleEvidencePath,
+      staleOwnerRaw,
+      () => {
+        fs.unlinkSync(replacementRaceLockPath)
+        fs.writeFileSync(replacementRaceLockPath, replacementOwnerRaw)
+      },
+    ),
+    false,
+    'stale recovery must not unlink a replacement owner',
+  )
+  assert.equal(fs.readFileSync(replacementRaceLockPath, 'utf8'), replacementOwnerRaw)
+  assert.equal(fs.readFileSync(staleEvidencePath, 'utf8'), staleOwnerRaw)
+  fs.unlinkSync(replacementRaceLockPath)
+  fs.unlinkSync(staleEvidencePath)
+
+  assert.doesNotThrow(() => assertTruncateCheckpointComplete({
+    rows: [{ busy: 0, log: 0, checkpointed: 0 }],
+  }, 'fixture.db'))
+  assert.throws(
+    () => assertTruncateCheckpointComplete({
+      rows: [{ busy: 1, log: 12, checkpointed: 4 }],
+    }, 'fixture.db'),
+    /checkpoint incomplete.*busy=1, log=12, checkpointed=4/,
+  )
 
   const legacyLiveLockPath = path.join(fixtureRoot, 'legacy-live.lock')
   fs.writeFileSync(legacyLiveLockPath, `${process.pid}\n`)

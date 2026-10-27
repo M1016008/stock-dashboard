@@ -134,21 +134,45 @@ function ownerIsActive(owner: ReturnType<typeof parseOwner>): boolean {
 }
 
 function writeOwnedRecord(lockPath: string, ownerId: string, record: ProcessLockOwner): boolean {
-  let currentRaw = ''
+  let descriptor: number | null = null
   try {
-    currentRaw = fs.readFileSync(lockPath, 'utf8')
+    descriptor = fs.openSync(lockPath, 'r+')
+    const opened = fs.fstatSync(descriptor)
+    const currentRaw = fs.readFileSync(descriptor, 'utf8')
     if (parseOwner(currentRaw).owner !== ownerId) return false
+    const contents = `${JSON.stringify(record)}\n`
+    fs.ftruncateSync(descriptor, 0)
+    fs.writeSync(descriptor, contents, 0, 'utf8')
+    fs.fsyncSync(descriptor)
+    const current = fs.statSync(lockPath)
+    return current.dev === opened.dev
+      && current.ino === opened.ino
+      && parseOwner(fs.readFileSync(lockPath, 'utf8')).owner === ownerId
   } catch {
     return false
-  }
-  const temporaryPath = `${lockPath}.${ownerId}.tmp`
-  fs.writeFileSync(temporaryPath, `${JSON.stringify(record)}\n`, { flag: 'wx', mode: 0o600 })
-  try {
-    if (fs.readFileSync(lockPath, 'utf8') !== currentRaw) return false
-    fs.renameSync(temporaryPath, lockPath)
-    return true
   } finally {
-    fs.rmSync(temporaryPath, { force: true })
+    if (descriptor != null) fs.closeSync(descriptor)
+  }
+}
+
+export function quarantineObservedStalePidProcessLock(
+  lockPath: string,
+  stalePath: string,
+  expectedRaw: string,
+  beforeUnlink?: () => void,
+): boolean {
+  try {
+    fs.linkSync(lockPath, stalePath)
+    const observed = fs.statSync(stalePath)
+    if (fs.readFileSync(stalePath, 'utf8') !== expectedRaw) return false
+    beforeUnlink?.()
+    const current = fs.statSync(lockPath)
+    if (current.dev !== observed.dev || current.ino !== observed.ino) return false
+    if (fs.readFileSync(lockPath, 'utf8') !== expectedRaw) return false
+    fs.unlinkSync(lockPath)
+    return true
+  } catch {
+    return false
   }
 }
 
@@ -244,19 +268,13 @@ export function acquirePidProcessLock(
     }
 
     const stalePath = `${lockPath}.stale-owner-${Date.now()}-${process.pid}`
-    try {
-      fs.renameSync(lockPath, stalePath)
-      if (fs.readFileSync(stalePath, 'utf8') !== existingRaw) {
-        if (!fs.existsSync(lockPath)) fs.renameSync(stalePath, lockPath)
-        console.log(`${label} lock changed during stale-owner recovery; skipping duplicate.`)
-        return null
-      }
-      console.warn(`${label} quarantined stale owner record at ${stalePath}`)
-      if (existing.processGroupMarkerPath) {
-        fs.rmSync(existing.processGroupMarkerPath, { force: true })
-      }
-    } catch {
-      // Another contender changed or removed the stale lock; retry acquisition.
+    if (!quarantineObservedStalePidProcessLock(lockPath, stalePath, existingRaw)) {
+      console.log(`${label} lock changed during stale-owner recovery; skipping duplicate.`)
+      return null
+    }
+    console.warn(`${label} quarantined stale owner record at ${stalePath}`)
+    if (existing.processGroupMarkerPath) {
+      fs.rmSync(existing.processGroupMarkerPath, { force: true })
     }
   }
   console.log(`${label} lock could not be acquired after stale-owner recovery attempts; lock=${lockPath}.`)

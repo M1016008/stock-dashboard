@@ -18,6 +18,7 @@ import { MA_SEQUENCE_VERSION } from '@/lib/ml/ma-sequence'
 import { ML_PIPELINE_NAME } from '@/lib/ml/pipeline-generation'
 import { ML_PHYSICS_FEATURE_SET } from '@/lib/backtest/ml-physics'
 import {
+  assertTruncateCheckpointComplete,
   promoteSqliteGeneration,
   rollbackSqliteGeneration,
   type SqliteGenerationPromotion,
@@ -884,7 +885,8 @@ async function checkpointDb(dbPath: string): Promise<void> {
   if (!fs.existsSync(dbPath)) return
   const client = openExistingGuardedClient(dbPath, 'us-adjusted-foundation')
   try {
-    await client.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+    const result = await client.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+    assertTruncateCheckpointComplete(result, dbPath)
   } finally {
     client.close()
   }

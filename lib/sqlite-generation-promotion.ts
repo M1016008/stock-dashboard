@@ -16,6 +16,10 @@ type PromoteOptions = {
   beforeReplace?: () => void | Promise<void>
 }
 
+type CheckpointResult = {
+  rows?: readonly unknown[]
+}
+
 function moveIfPresent(from: string, to: string): void {
   if (fs.existsSync(from)) fs.renameSync(from, to)
 }
@@ -38,6 +42,36 @@ function fsyncDirectories(paths: string[]): void {
   }
 }
 
+function fsyncFile(filePath: string): void {
+  const descriptor = fs.openSync(filePath, 'r')
+  try {
+    fs.fsyncSync(descriptor)
+  } finally {
+    fs.closeSync(descriptor)
+  }
+}
+
+export function assertTruncateCheckpointComplete(result: CheckpointResult, dbPath: string): void {
+  const row = result.rows?.[0]
+  if (row == null || typeof row !== 'object') {
+    throw new Error(`SQLite TRUNCATE checkpoint returned no status for ${dbPath}`)
+  }
+  const values = Object.values(row)
+  const keyed = row as Record<string, unknown>
+  const busy = Number(keyed.busy ?? keyed[0] ?? values[0])
+  const logFrames = Number(keyed.log ?? keyed[1] ?? values[1])
+  const checkpointedFrames = Number(keyed.checkpointed ?? keyed[2] ?? values[2])
+  if (![busy, logFrames, checkpointedFrames].every(Number.isFinite)) {
+    throw new Error(`SQLite TRUNCATE checkpoint returned an invalid status for ${dbPath}`)
+  }
+  if (busy !== 0 || checkpointedFrames !== logFrames) {
+    throw new Error(
+      `SQLite TRUNCATE checkpoint incomplete for ${dbPath}: `
+      + `busy=${busy}, log=${logFrames}, checkpointed=${checkpointedFrames}`,
+    )
+  }
+}
+
 export async function promoteSqliteGeneration(
   options: PromoteOptions,
 ): Promise<SqliteGenerationPromotion> {
@@ -50,7 +84,11 @@ export async function promoteSqliteGeneration(
   await checkpoint(shadowPath)
 
   const retainedBackup = fs.existsSync(primaryPath) ? backupPath : null
-  if (retainedBackup) clone(primaryPath, retainedBackup)
+  if (retainedBackup) {
+    clone(primaryPath, retainedBackup)
+    fsyncFile(retainedBackup)
+  }
+  fsyncFile(shadowPath)
   await beforeReplace?.()
   if (retainedBackup) {
     moveIfPresent(`${primaryPath}-wal`, `${retainedBackup}-wal`)

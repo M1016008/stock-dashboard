@@ -29,7 +29,10 @@ import {
   type SqlitePromotionPlan,
   writeSqlitePromotionJournal,
 } from '@/lib/sqlite-promotion-journal'
-import { promoteSqliteGeneration } from '@/lib/sqlite-generation-promotion'
+import {
+  assertTruncateCheckpointComplete,
+  promoteSqliteGeneration,
+} from '@/lib/sqlite-generation-promotion'
 import {
   quarantineSqliteGeneration,
   recoverInterruptedSqliteQuarantine,
@@ -897,7 +900,8 @@ async function checkpointDb(dbPath: string): Promise<void> {
   if (!fs.existsSync(dbPath)) return
   const client = openExistingGuardedClient(dbPath, 'us-ml-weekly-promotion')
   try {
-    await client.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+    const result = await client.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+    assertTruncateCheckpointComplete(result, dbPath)
   } finally {
     client.close()
   }
