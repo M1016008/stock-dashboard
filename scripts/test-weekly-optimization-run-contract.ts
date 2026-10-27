@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { spawn } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -9,22 +9,53 @@ import {
   waitForProcessGroupExit,
 } from '@/lib/child-process-group'
 import { promoteSqliteGeneration, rollbackSqliteGeneration } from '@/lib/sqlite-generation-promotion'
+import {
+  quarantineSqliteGeneration,
+  recoverInterruptedSqliteQuarantine,
+  sqliteQuarantineJournalPath,
+} from '@/lib/sqlite-generation-quarantine'
+import {
+  assertNoIncompleteSqlitePromotion,
+  removeSqlitePromotionJournal,
+  resolveSqlitePromotionJournalPath,
+  writeSqlitePromotionJournal,
+} from '@/lib/sqlite-promotion-journal'
 import { expectedLatestTradingDate } from '@/lib/server/data-freshness'
 import { expectedLatestUsTradingDate } from '@/lib/server/us-data-freshness'
 import { acquireUsMlProcessLock } from '@/lib/us-ml-process-lock'
 import { acquirePidProcessLock } from '@/lib/pid-process-lock'
+import { spawnLockedProcessGroup } from '@/lib/locked-process-spawn'
+import {
+  DEFERRED_EXECUTION_EXIT_CODE,
+  OPERATOR_ACTION_REQUIRED_EXIT_CODE,
+  DeferredExecutionError,
+  OperatorActionRequiredError,
+  operationalExitCode,
+} from '@/lib/operational-exit'
 import { analogGenerationMetadataIsCurrent } from '@/lib/analog-generation-lineage'
+import {
+  analogSequenceGenerationIdentity,
+  assertAnalogSequenceGenerationReadable,
+  readAnalogSequenceIndexMeta,
+} from '@/lib/db/analog-sequence-index'
 import { isUsUniverseActive, usUniverseActivityCutoff } from '@/lib/us-universe-activity'
 import {
   assessWeeklyPromotionReadiness,
+  assessWeeklyServingOutput,
   createWeeklyOptimizationRunContract,
   foundationGenerationChanged,
   parseWeeklyOptimizationRunContract,
   resolvePinnedUsUniverseActivityCutoff,
   weeklyOptimizationContractEnv,
+  weeklyRunIdentitySha256,
   type WeeklyOptimizationContractInput,
   type WeeklyPromotionObservation,
 } from '@/lib/weekly-optimization-run-contract'
+import {
+  assessWeeklyUsSourceBoundary,
+  createWeeklyUsSourceBoundary,
+  parseWeeklyUsSourceBoundary,
+} from '@/lib/weekly-us-source-boundary'
 
 async function main(): Promise<void> {
 const referenceAt = '2026-10-26T00:53:00.000Z'
@@ -33,6 +64,11 @@ const initialExpectedUsDate = expectedLatestUsTradingDate(new Date(referenceAt))
 const postRolloverExpectedUsDate = expectedLatestUsTradingDate(new Date('2026-10-27T01:45:00.000Z'))
 assert.equal(initialExpectedUsDate, '2026-10-23')
 assert.equal(postRolloverExpectedUsDate, '2026-10-26')
+assert.equal(operationalExitCode(new DeferredExecutionError('fixture')), DEFERRED_EXECUTION_EXIT_CODE)
+assert.equal(
+  operationalExitCode(new OperatorActionRequiredError('fixture')),
+  OPERATOR_ACTION_REQUIRED_EXIT_CODE,
+)
 
 function input(): WeeklyOptimizationContractInput {
   return {
@@ -110,6 +146,44 @@ assert.equal(weeklyOptimizationContractEnv(contract).US_ANALYTICS_EXPECTED_DATE,
 assert.equal(weeklyOptimizationContractEnv(contract).US_ML_HEALTH_REFERENCE_AT, referenceAt)
 assert.equal(weeklyOptimizationContractEnv(contract).US_ML_HEALTH_ACTIVITY_CUTOFF, '2026-10-13')
 
+const sourceBoundary = createWeeklyUsSourceBoundary({
+  referenceAt,
+  capturedAt,
+  priceBasis: input().markets.US.priceBasis,
+  source: input().markets.US.source,
+})
+assert.deepEqual(parseWeeklyUsSourceBoundary(JSON.stringify(sourceBoundary)), sourceBoundary)
+assert.deepEqual(
+  assessWeeklyUsSourceBoundary(sourceBoundary, input().markets.US.source),
+  { ok: true, issues: [] },
+)
+const changedBoundarySource = {
+  ...input().markets.US.source,
+  latestRunId: input().markets.US.source.latestRunId + 1,
+}
+const changedBoundaryAssessment = assessWeeklyUsSourceBoundary(sourceBoundary, changedBoundarySource)
+assert.equal(changedBoundaryAssessment.ok, false)
+assert.ok(changedBoundaryAssessment.issues.includes('source_generation_changed'))
+const tamperedBoundary = structuredClone(sourceBoundary)
+tamperedBoundary.expectedTradingDate = '2026-10-26'
+assert.throws(
+  () => parseWeeklyUsSourceBoundary(JSON.stringify(tamperedBoundary)),
+  /failed its checksum/,
+)
+
+const servingAdvanced = structuredClone(contract)
+servingAdvanced.markets.US.serving.updatedAt += 1
+servingAdvanced.markets.US.serving.generationSha256 = 'changed-by-a-valid-weekly-step'
+assert.equal(
+  weeklyRunIdentitySha256(servingAdvanced),
+  weeklyRunIdentitySha256(contract),
+  'resume identity is stable when a completed step advances only its serving generation',
+)
+const sourceAdvanced = structuredClone(contract)
+sourceAdvanced.markets.US.source.latestRunId += 1
+sourceAdvanced.markets.US.source.generationSha256 = 'new-source'
+assert.notEqual(weeklyRunIdentitySha256(sourceAdvanced), weeklyRunIdentitySha256(contract))
+
 const unchanged: WeeklyPromotionObservation = {
   source: input().markets.US.source,
   serving: input().markets.US.serving,
@@ -118,6 +192,14 @@ assert.deepEqual(assessWeeklyPromotionReadiness(contract.markets.US, unchanged),
   ok: true,
   issues: [],
 })
+assert.deepEqual(assessWeeklyServingOutput(contract.markets.US, unchanged.serving), {
+  ok: true,
+  issues: [],
+})
+assert.equal(assessWeeklyServingOutput(contract.markets.US, {
+  ...unchanged.serving,
+  lastDeltaSourceDate: '2026-10-22',
+}).ok, false)
 assert.equal(foundationGenerationChanged('lineage-a', 'lineage-a'), false)
 assert.equal(foundationGenerationChanged('lineage-a', 'lineage-b'), true)
 assert.equal(foundationGenerationChanged(null, 'lineage-a'), true)
@@ -323,6 +405,181 @@ try {
   assert.equal(fs.readFileSync(primary, 'utf8'), 'old-generation')
   assert.equal(fs.readFileSync(shadow, 'utf8'), 'new-generation')
 
+  fs.rmSync(shadow)
+  const missingBackup = path.join(fixtureRoot, 'missing-backup.db')
+  await assert.rejects(
+    () => rollbackSqliteGeneration({
+      primaryPath: primary,
+      shadowPath: shadow,
+      backupPath: missingBackup,
+    }, async () => undefined),
+    /ENOENT/,
+  )
+  assert.equal(
+    fs.readFileSync(primary, 'utf8'),
+    'old-generation',
+    'a failed rollback must restore the promoted primary instead of leaving no serving DB',
+  )
+  assert.equal(fs.existsSync(shadow), false)
+
+  const stale = path.join(fixtureRoot, 'analytics.db.building')
+  const quarantine = `${stale}.stale-lineage-fixture`
+  fs.writeFileSync(stale, 'stale-db')
+  fs.writeFileSync(`${stale}-wal`, 'stale-wal')
+  fs.writeFileSync(`${stale}-shm`, 'stale-shm')
+  assert.equal(quarantineSqliteGeneration(stale, quarantine), quarantine)
+  for (const suffix of ['', '-wal', '-shm']) {
+    assert.equal(fs.existsSync(`${stale}${suffix}`), false)
+    assert.equal(fs.readFileSync(`${quarantine}${suffix}`, 'utf8'), `stale-${suffix ? suffix.slice(1) : 'db'}`)
+  }
+  assert.equal(quarantineSqliteGeneration(stale, `${quarantine}-unused`), null)
+
+  const interrupted = path.join(fixtureRoot, 'interrupted.db.building')
+  const interruptedQuarantine = `${interrupted}.stale-lineage-fixture`
+  for (const suffix of ['', '-wal', '-shm']) {
+    fs.writeFileSync(`${interrupted}${suffix}`, `interrupted-${suffix || 'db'}`)
+  }
+  const interruptedMembers = ['', '-wal', '-shm'].map((suffix) => ({
+    source: `${interrupted}${suffix}`,
+    destination: `${interruptedQuarantine}${suffix}`,
+  }))
+  fs.renameSync(interrupted, interruptedQuarantine)
+  fs.writeFileSync(sqliteQuarantineJournalPath(interrupted), `${JSON.stringify({
+    version: 1,
+    dbPath: interrupted,
+    quarantinePath: interruptedQuarantine,
+    createdAt: new Date().toISOString(),
+    members: interruptedMembers,
+  })}\n`)
+  recoverInterruptedSqliteQuarantine(interrupted)
+  for (const suffix of ['', '-wal', '-shm']) {
+    assert.equal(fs.existsSync(`${interrupted}${suffix}`), true)
+    assert.equal(fs.existsSync(`${interruptedQuarantine}${suffix}`), false)
+  }
+  assert.equal(fs.existsSync(sqliteQuarantineJournalPath(interrupted)), false)
+
+  const promotionJournalPath = path.join(fixtureRoot, 'promotion-journal.json')
+  const customShadowPath = path.join(fixtureRoot, 'custom-shadow.db')
+  assert.equal(
+    resolveSqlitePromotionJournalPath(primary, 'fixture-basis', {
+      US_ADJUSTED_FOUNDATION_SHADOW_PATH: customShadowPath,
+    }),
+    `${customShadowPath}.promotion-journal.json`,
+  )
+  writeSqlitePromotionJournal(promotionJournalPath, {
+    version: 1,
+    transactionId: 'fixture-transaction',
+    phase: 'analog-promoted',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    analog: { primaryPath: primary, shadowPath: shadow, backupPath: backup },
+    analytics: { primaryPath: primary, shadowPath: shadow, backupPath: backup },
+    error: null,
+  })
+  assert.throws(
+    () => assertNoIncompleteSqlitePromotion(promotionJournalPath),
+    /requires operator review.*phase=analog-promoted/,
+  )
+  const previousPromotionJournal = process.env.US_ADJUSTED_FOUNDATION_PROMOTION_JOURNAL_PATH
+  process.env.US_ADJUSTED_FOUNDATION_PROMOTION_JOURNAL_PATH = promotionJournalPath
+  assert.throws(
+    () => assertAnalogSequenceGenerationReadable('US'),
+    /requires operator review.*phase=analog-promoted/,
+    'US public analog reads must fail closed while a promotion journal exists',
+  )
+  assert.doesNotThrow(() => assertAnalogSequenceGenerationReadable('JP'))
+  if (previousPromotionJournal == null) {
+    delete process.env.US_ADJUSTED_FOUNDATION_PROMOTION_JOURNAL_PATH
+  } else {
+    process.env.US_ADJUSTED_FOUNDATION_PROMOTION_JOURNAL_PATH = previousPromotionJournal
+  }
+  removeSqlitePromotionJournal(promotionJournalPath)
+  assert.doesNotThrow(() => assertNoIncompleteSqlitePromotion(promotionJournalPath))
+  fs.writeFileSync(promotionJournalPath, '{"version":1,"phase":"prepared"}\n')
+  assert.throws(
+    () => assertNoIncompleteSqlitePromotion(promotionJournalPath),
+    (error: unknown) => error instanceof OperatorActionRequiredError,
+    'a wrong-shape promotion journal must fail with exit-74 semantics',
+  )
+  fs.unlinkSync(promotionJournalPath)
+
+  const analogReadPath = path.join(fixtureRoot, 'analog-read.db')
+  const analogReadBackup = `${analogReadPath}.old`
+  const createAnalogReadFixture = (sourceDate: string) => execFileSync('sqlite3', [
+    analogReadPath,
+    `CREATE TABLE analog_sequence_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);`
+      + `INSERT INTO analog_sequence_meta VALUES ('version', '3');`
+      + `INSERT INTO analog_sequence_meta VALUES ('source_date', '${sourceDate}');`
+      + `INSERT INTO analog_sequence_meta VALUES ('completed', '1');`,
+  ])
+  const previousAnalogPath = process.env.ANALOG_US_DB_PATH
+  const previousAnalyticsPath = process.env.US_ANALYTICS_DB_PATH
+  const previousReadJournal = process.env.US_ADJUSTED_FOUNDATION_PROMOTION_JOURNAL_PATH
+  process.env.ANALOG_US_DB_PATH = analogReadPath
+  process.env.US_ANALYTICS_DB_PATH = path.join(fixtureRoot, 'analytics-read.db')
+  process.env.US_ADJUSTED_FOUNDATION_PROMOTION_JOURNAL_PATH = path.join(fixtureRoot, 'read-journal.json')
+  try {
+    createAnalogReadFixture('2026-10-23')
+    assert.equal((await readAnalogSequenceIndexMeta('US'))?.sourceDate, '2026-10-23')
+    const firstAnalogGeneration = analogSequenceGenerationIdentity('US')
+    fs.renameSync(analogReadPath, analogReadBackup)
+    createAnalogReadFixture('2026-10-26')
+    await assert.rejects(
+      () => readAnalogSequenceIndexMeta('US', firstAnalogGeneration),
+      /analog_sequence_generation_changed/,
+      'a response must not mix Analog generations across multiple reads',
+    )
+    assert.equal(
+      (await readAnalogSequenceIndexMeta('US'))?.sourceDate,
+      '2026-10-26',
+      'a renamed Analog generation must reopen the path instead of reusing the old inode',
+    )
+  } finally {
+    if (previousAnalogPath == null) delete process.env.ANALOG_US_DB_PATH
+    else process.env.ANALOG_US_DB_PATH = previousAnalogPath
+    if (previousAnalyticsPath == null) delete process.env.US_ANALYTICS_DB_PATH
+    else process.env.US_ANALYTICS_DB_PATH = previousAnalyticsPath
+    if (previousReadJournal == null) delete process.env.US_ADJUSTED_FOUNDATION_PROMOTION_JOURNAL_PATH
+    else process.env.US_ADJUSTED_FOUNDATION_PROMOTION_JOURNAL_PATH = previousReadJournal
+  }
+
+  const malformedQuarantineDb = path.join(fixtureRoot, 'malformed-quarantine.db')
+  fs.writeFileSync(sqliteQuarantineJournalPath(malformedQuarantineDb), '{"version":1}\n')
+  assert.throws(
+    () => recoverInterruptedSqliteQuarantine(malformedQuarantineDb),
+    (error: unknown) => error instanceof OperatorActionRequiredError,
+    'a wrong-shape quarantine journal must fail with exit-74 semantics',
+  )
+  fs.unlinkSync(sqliteQuarantineJournalPath(malformedQuarantineDb))
+
+  const busyDbPath = path.join(fixtureRoot, 'busy.db')
+  const busyWriter = spawn('sqlite3', [busyDbPath], { stdio: ['pipe', 'pipe', 'pipe'] })
+  try {
+    const ready = new Promise<void>((resolve, reject) => {
+      busyWriter.once('error', reject)
+      busyWriter.stdout?.on('data', (chunk) => {
+        if (String(chunk).includes('READY')) resolve()
+      })
+    })
+    busyWriter.stdin?.write(
+      'CREATE TABLE fixture (value INTEGER); BEGIN EXCLUSIVE; INSERT INTO fixture VALUES (1);\n.print READY\n',
+    )
+    await ready
+    assert.throws(() => execFileSync(
+      'sqlite3',
+      ['-cmd', '.timeout 1', busyDbPath, 'INSERT INTO fixture VALUES (2)'],
+      { encoding: 'utf8', stdio: 'pipe' },
+    ), /database is locked|SQLITE_BUSY/i)
+    busyWriter.stdin?.end('ROLLBACK;\n.quit\n')
+    await new Promise<void>((resolve, reject) => {
+      busyWriter.once('close', () => resolve())
+      busyWriter.once('error', reject)
+    })
+    execFileSync('sqlite3', [busyDbPath, 'INSERT INTO fixture VALUES (2)'])
+  } finally {
+    if (busyWriter.exitCode == null) busyWriter.kill('SIGTERM')
+  }
+
   const lockPath = path.join(fixtureRoot, 'us-ml.lock')
   const firstLock = acquireUsMlProcessLock('fixture-first', lockPath)
   assert.ok(firstLock)
@@ -363,6 +620,70 @@ try {
   const reclaimedBuilderLock = acquirePidProcessLock(publishingBuilderLockPath, 'fixture stale builder')
   assert.ok(reclaimedBuilderLock)
   reclaimedBuilderLock.release()
+
+  const legacyLiveLockPath = path.join(fixtureRoot, 'legacy-live.lock')
+  fs.writeFileSync(legacyLiveLockPath, `${process.pid}\n`)
+  fs.utimesSync(legacyLiveLockPath, staleTime, staleTime)
+  assert.equal(
+    acquirePidProcessLock(legacyLiveLockPath, 'fixture legacy live owner'),
+    null,
+    'a live legacy PID lock must remain active during the format upgrade',
+  )
+  fs.unlinkSync(legacyLiveLockPath)
+
+  const orphan = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+    detached: true,
+    stdio: 'ignore',
+  })
+  assert.ok(orphan.pid)
+  const orphanLockPath = path.join(fixtureRoot, 'orphan-child.lock')
+  fs.writeFileSync(orphanLockPath, `${JSON.stringify({
+    version: 2,
+    pid: 999_999,
+    pidStartedAt: 'dead-parent',
+    processGroupId: orphan.pid,
+    owner: 'dead-parent-with-live-child',
+    label: 'fixture orphan child',
+    acquiredAt: new Date().toISOString(),
+  })}\n`)
+  assert.equal(
+    acquirePidProcessLock(orphanLockPath, 'fixture replacement while child lives'),
+    null,
+    'a live descendant process group keeps the parent lock fail-closed',
+  )
+  signalProcessGroup(orphan.pid, 'SIGTERM')
+  await waitForProcessGroupExit(orphan.pid, 10)
+  fs.utimesSync(orphanLockPath, staleTime, staleTime)
+  const afterOrphan = acquirePidProcessLock(orphanLockPath, 'fixture after child exit')
+  assert.ok(afterOrphan)
+  afterOrphan.release()
+
+  const markerLockPath = path.join(fixtureRoot, 'child-marker.lock')
+  const markerLock = acquirePidProcessLock(markerLockPath, 'fixture child marker')
+  assert.ok(markerLock)
+  const markerChild = spawnLockedProcessGroup(
+    markerLock,
+    process.execPath,
+    ['-e', 'setInterval(() => {}, 1000)'],
+    { stdio: 'ignore' },
+  )
+  assert.ok(markerChild.pid)
+  const markerOwner = JSON.parse(fs.readFileSync(markerLockPath, 'utf8')) as {
+    processGroupMarkerPath: string
+  }
+  for (let attempt = 0; attempt < 100 && !fs.existsSync(markerOwner.processGroupMarkerPath); attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+  assert.equal(
+    Number(fs.readFileSync(markerOwner.processGroupMarkerPath, 'utf8').trim()),
+    markerChild.pid,
+    'the child group publishes its own PGID before exec',
+  )
+  markerLock.setProcessGroup(markerChild.pid)
+  signalProcessGroup(markerChild.pid, 'SIGTERM')
+  await waitForProcessGroupExit(markerChild.pid, 10)
+  markerLock.setProcessGroup(null)
+  markerLock.release()
 } finally {
   fs.rmSync(fixtureRoot, { recursive: true, force: true })
 }
@@ -407,6 +728,12 @@ try {
 const read = (file: string) => fs.readFileSync(path.join(process.cwd(), file), 'utf8')
 const runner = read('scripts/run-weekly-optimization.ts')
 const foundation = read('scripts/ensure-us-adjusted-foundation.ts')
+const generationManager = read('scripts/manage-ml-pipeline-generation.ts')
+const analogReader = read('lib/db/analog-sequence-index.ts')
+const historicalAnalogRoute = read('app/api/ml/historical-analogs/route.ts')
+const historicalAnalogCache = read('lib/server/historical-analog-cache.ts')
+const weeklyWrapper = read('scripts/run-us-ml-weekly-efficient.ts')
+const usMlJob = read('scripts/run-us-ml-job.ts')
 const health = read('scripts/check-us-ml-health.ts')
 assert.match(runner, /contract = captureRunContract\(paths\)/)
 assert.match(runner, /weeklyOptimizationContractEnv\(contract\)/)
@@ -416,6 +743,8 @@ assert.match(health, /US_ML_HEALTH_REFERENCE_AT/)
 assert.match(health, /US_ML_HEALTH_ACTIVITY_CUTOFF/)
 assert.match(health, /resolvePinnedUsUniverseActivityCutoff/)
 assert.match(runner, /assertStepLineageUnchanged\(step, contract, paths\)/)
+assert.match(runner, /assertAllSourceLineageUnchanged\(contract, paths\)/)
+assert.match(runner, /assertServingOutputsCompatible\(contract, paths\)/)
 assert.match(runner, /JSON\.stringify\(first\) !== JSON\.stringify\(second\)/)
 assert.match(foundation, /acquireUsMlProcessLock\('adjusted-foundation-promotion'\)/)
 assert.match(foundation, /rollbackSqliteGeneration\(analogPromotion, checkpointDb\)/)
@@ -425,6 +754,10 @@ assert.match(foundation, /resumableAdjustedShadowExists\(expectedSourceLineageSh
 assert.match(foundation, /quarantineStaleAdjustedShadowLineage\(\)/)
 assert.match(foundation, /seedAdjustedAnalyticsShadow\(expectedSourceLineageSha256\)/)
 assert.match(foundation, /quarantineStaleSqliteGeneration\(adjustedAnalogShadowDbPath, 'analog shadow'\)/)
+assert.match(foundation, /quarantineSqliteGeneration\(dbPath, quarantinePath\)/)
+assert.match(foundation, /assertNoIncompleteSqlitePromotion\(promotionJournalPath\)/)
+assert.match(foundation, /writeSqlitePromotionJournal\(promotionJournalPath, promotionJournal\)/)
+assert.match(foundation, /removeSqlitePromotionJournal\(promotionJournalPath\)/)
 assert.match(foundation, /seedAdjustedAnalogShadow\(priceDate, expectedSourceLineageSha256\)/)
 assert.match(foundation, /US adjusted foundation promotion deferred: the analog builder is active/)
 const primaryGuard = foundation.indexOf(
@@ -435,16 +768,40 @@ assert.ok(
   primaryGuard >= 0 && foundationLock >= 0 && primaryGuard < foundationLock,
   'primary Storage Guard checks must precede foundation lock creation',
 )
-assert.match(foundation, /detached: true/)
+assert.match(foundation, /spawnLockedProcessGroup/)
 assert.match(foundation, /signalProcessGroup\(activeNpmProcessGroupId, 'SIGTERM'\)/)
 assert.match(foundation, /waitForProcessGroupExit\(processGroupId\)/)
+assert.match(foundation, /code === 75[\s\S]*DeferredExecutionError/)
+assert.match(foundation, /code === 74[\s\S]*OperatorActionRequiredError/)
+assert.match(foundation, /US_ANALYTICS_EXPECTED_DATE:[\s\S]*standaloneExpectedTradingDate/)
+assert.match(generationManager, /acquireUsStockboardUpdateLock\('us_model_generation_promotion'/)
+assert.match(generationManager, /assessWeeklySourceReadiness\(contract\.markets\.US, source\)/)
+assert.match(generationManager, /assessWeeklyUsSourceBoundary\(boundary!, source\)/)
+assert.match(generationManager, /parseWeeklyOptimizationRunContract[\s\S]*expectedTradingDate/)
+assert.match(weeklyWrapper, /captureWeeklyUsSourceBoundary/)
+assert.match(usMlJob, /captureWeeklyUsSourceBoundary/)
+assert.match(generationManager, /US generation promotion requires a weekly run contract or pinned source boundary/)
+assert.match(analogReader, /analogSequenceIdentities/)
+assert.match(analogReader, /assertAnalogClientGenerationCurrent\(market, client, identity\)/)
+assert.match(analogReader, /\['', '-wal', '-shm'\]/)
+assert.match(historicalAnalogCache, /\[filePath, `\$\{filePath\}-wal`, `\$\{filePath\}-shm`\]/)
+assert.match(historicalAnalogRoute, /assertHistoricalAnalogGeneration\(market, sourceGeneration\)/)
+assert.match(historicalAnalogRoute, /ANALOG_GENERATION_CHANGED/)
+assert.match(historicalAnalogRoute, /analog_sequence_generation_changed/)
+assert.match(historicalAnalogRoute, /ANALOG_GENERATION_PROMOTION_PENDING/)
+assert.doesNotMatch(historicalAnalogRoute, /\n\s+message,\n/)
 assert.match(runner, /acquirePidProcessLock\(lockPath, 'Weekly optimization'\)/)
+assert.match(runner, /spawnLockedProcessGroup/)
 assert.match(runner, /activeChildProcessGroupId = child\.pid \?\? null/)
 assert.match(runner, /signalProcessGroup\(activeChildProcessGroupId, 'SIGTERM'\)/)
 assert.match(runner, /waitForProcessGroupExit\(processGroupId\)/)
+assert.match(runner, /weeklyProcessLock\?\.setProcessGroup\(child\.pid\)/)
+assert.doesNotMatch(runner, /process\.once\('exit', releaseProcessLock\)/)
+assert.match(runner, /DEFERRED_EXECUTION_EXIT_CODE/)
+assert.match(runner, /operationalExitCode\(error\)/)
 assert.match(runner, /\['-readonly', '-json'/)
 const analogPromotionCall = foundation.lastIndexOf(
-  'analogPromotion = await promoteAdjustedAnalogShadow(() => {',
+  'analogPromotion = await promoteAdjustedAnalogShadow(analogPlan.backupPath, () => {',
 )
 const analogAdoptionMetadata = foundation.lastIndexOf("'analog_index_price_basis'")
 assert.ok(
@@ -454,11 +811,14 @@ assert.ok(
   'analytics metadata must not claim adoption before analog promotion succeeds',
 )
 assert.match(runner, /contract-capture-failed-/)
+assert.match(runner, /previousState[\s\S]*run-contract capture failed before any step started/)
+assert.match(runner, /resume contract is stale; no generation was modified/)
+assert.match(runner, /completed steps remain resumable/)
 assert.match(foundation, /deferring exit until child work and the atomic boundary are safe/)
-assert.match(foundation, /the atomic boundary completed before shutdown/)
+assert.match(foundation, /the atomic boundary and journal removal completed/)
 assert.ok(
   foundation.lastIndexOf("assertWeeklyUsLineageUnchanged('promotion')")
-    < foundation.lastIndexOf('promoteAdjustedShadow(() =>'),
+    < foundation.lastIndexOf('promoteAdjustedShadow(analyticsPlan.backupPath, () =>'),
   'lineage must be rechecked immediately before analytics promotion',
 )
 assert.ok(

@@ -9,6 +9,18 @@ import { waitForMemoryHeadroom, withMemoryGuardEnv } from '@/lib/system/memory-g
 import { resolveConfiguredStoragePath } from '@/lib/storage-paths'
 import { US_ADJUSTED_PRICE_BASIS } from '@/lib/us-adjusted-ohlcv'
 import { foundationGenerationChanged } from '@/lib/weekly-optimization-run-contract'
+import {
+  captureWeeklyUsSourceBoundary,
+  parseWeeklyUsSourceBoundary,
+  US_WEEKLY_SOURCE_BOUNDARY_ENV,
+} from '@/lib/weekly-us-source-boundary'
+import {
+  DEFERRED_EXECUTION_EXIT_CODE,
+  OPERATOR_ACTION_REQUIRED_EXIT_CODE,
+  DeferredExecutionError,
+  OperatorActionRequiredError,
+  operationalExitCode,
+} from '@/lib/operational-exit'
 
 const usAnalyticsDbPath = resolveConfiguredStoragePath(path.resolve(
   process.env.US_ANALYTICS_DB_PATH?.trim()
@@ -223,12 +235,29 @@ async function runNpm(
     child.on('error', reject)
     child.on('close', (code, signal) => {
       if (code === 0) resolve()
+      else if (code === DEFERRED_EXECUTION_EXIT_CODE) {
+        reject(new DeferredExecutionError(`npm run ${script} safely deferred`))
+      } else if (code === OPERATOR_ACTION_REQUIRED_EXIT_CODE) {
+        reject(new OperatorActionRequiredError(
+          `npm run ${script} requires operator review of its durable recovery journal`,
+        ))
+      }
       else reject(new Error(`npm run ${script} failed: code=${code}, signal=${signal ?? 'none'}`))
     })
   })
 }
 
 async function main(): Promise<void> {
+  if (!process.env.WEEKLY_OPTIMIZATION_CONTRACT?.trim()) {
+    const boundary = process.env[US_WEEKLY_SOURCE_BOUNDARY_ENV]?.trim()
+      ? parseWeeklyUsSourceBoundary(process.env[US_WEEKLY_SOURCE_BOUNDARY_ENV]!)
+      : captureWeeklyUsSourceBoundary({
+          sourceDbPath: resolveConfiguredStoragePath(path.resolve(sourceDbPath)),
+          priceBasis: US_ADJUSTED_PRICE_BASIS,
+        })
+    process.env[US_WEEKLY_SOURCE_BOUNDARY_ENV] = JSON.stringify(boundary)
+    process.env.US_ANALYTICS_EXPECTED_DATE = boundary.expectedTradingDate
+  }
   const [foundationWasCurrent, auditedBaselineExists, foundationLineageBefore] = await Promise.all([
     adjustedFoundationIsCurrent(),
     auditedFullHistoryBaselineExists(),
@@ -278,5 +307,5 @@ async function main(): Promise<void> {
 
 main().catch((error) => {
   console.error('US weekly efficient update failed:', error)
-  process.exit(1)
+  process.exitCode = operationalExitCode(error)
 })

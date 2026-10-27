@@ -5,7 +5,7 @@
 // so a direct npm invocation cannot accidentally write US artifacts into the JP
 // stockboard database.
 
-import { execFileSync, spawn } from 'node:child_process'
+import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -15,13 +15,35 @@ import { ML_PRIMARY_HORIZON_LIST } from '@/lib/backtest/ml-horizons'
 import { waitForMemoryHeadroom, withMemoryGuardEnv } from '@/lib/system/memory-guard'
 import { resolveConfiguredStoragePath } from '@/lib/storage-paths'
 import { guardForDatabase, requiresExternalStorageGuard } from '@/lib/storage/external-storage-guard'
-import { acquireUsMlProcessLock } from '@/lib/us-ml-process-lock'
+import { acquireUsMlProcessLock, type UsMlProcessLock } from '@/lib/us-ml-process-lock'
+import { signalProcessGroup, waitForProcessGroupExit } from '@/lib/child-process-group'
+import {
+  assertNoIncompleteSqlitePromotion,
+  resolveSqlitePromotionJournalPath,
+} from '@/lib/sqlite-promotion-journal'
+import { US_ADJUSTED_PRICE_BASIS } from '@/lib/us-adjusted-ohlcv'
+import {
+  DEFERRED_EXECUTION_EXIT_CODE,
+  OPERATOR_ACTION_REQUIRED_EXIT_CODE,
+  DeferredExecutionError,
+  OperatorActionRequiredError,
+  operationalExitCode,
+} from '@/lib/operational-exit'
+import { spawnLockedProcessGroup } from '@/lib/locked-process-spawn'
+import {
+  captureWeeklyUsSourceBoundary,
+  parseWeeklyUsSourceBoundary,
+  US_WEEKLY_SOURCE_BOUNDARY_ENV,
+} from '@/lib/weekly-us-source-boundary'
 
 const DEFAULT_US_ANALYTICS_DB = '/Volumes/OWC Express 1M2 80G/stockboard-data/us/stockboard-us.db'
 type Mode = 'daily' | 'weekly' | 'full' | 'after-pms'
 type EnvOverrides = Record<string, string | undefined>
 
 const CHUNK_CHECKPOINT_VERSION = 1
+let activeUsMlProcessLock: UsMlProcessLock | null = null
+let activeChildProcessGroupId: number | null = null
+let shutdownSignal: NodeJS.Signals | null = null
 
 type ChunkCheckpoint = {
   version: number
@@ -49,19 +71,64 @@ function modeFromArg(value: string | undefined): Mode {
 }
 
 async function runNpmOnce(script: string, env: NodeJS.ProcessEnv, overrides: EnvOverrides = {}): Promise<void> {
+  if (shutdownSignal) {
+    throw new DeferredExecutionError(`US ML job interrupted by ${shutdownSignal}`)
+  }
   await waitForMemoryHeadroom({ label: `npm run ${script}` })
   return new Promise((resolve, reject) => {
-    const child = spawn('npm', ['run', script], {
+    if (!activeUsMlProcessLock) throw new Error('US ML process lock is not held')
+    const child = spawnLockedProcessGroup(activeUsMlProcessLock, 'npm', ['run', script], {
       cwd: process.cwd(),
       env: withMemoryGuardEnv({ ...env, ...overrides }),
       stdio: 'inherit',
     })
-    child.on('error', reject)
-    child.on('close', (code, signal) => {
-      if (code === 0) resolve()
-      else reject(new Error(`npm run ${script} failed: code=${code}, signal=${signal ?? 'none'}`))
+    activeChildProcessGroupId = child.pid ?? null
+    let processGroupRegistrationError: unknown = null
+    child.on('error', (error) => {
+      if (activeChildProcessGroupId === child.pid) activeChildProcessGroupId = null
+      reject(error)
     })
+    child.on('close', (code, signal) => {
+      const processGroupId = child.pid
+      void (async () => {
+        if (processGroupId) await waitForProcessGroupExit(processGroupId)
+        if (activeChildProcessGroupId === processGroupId) activeChildProcessGroupId = null
+        activeUsMlProcessLock?.setProcessGroup(null)
+        if (processGroupRegistrationError) reject(processGroupRegistrationError)
+        else if (shutdownSignal) {
+          reject(new DeferredExecutionError(`US ML job interrupted by ${shutdownSignal}`))
+        } else if (code === 0) resolve()
+        else if (code === DEFERRED_EXECUTION_EXIT_CODE) {
+          reject(new DeferredExecutionError(
+            `npm run ${script} deferred: code=${code}, signal=${signal ?? 'none'}`,
+          ))
+        } else if (code === OPERATOR_ACTION_REQUIRED_EXIT_CODE) {
+          reject(new OperatorActionRequiredError(
+            `npm run ${script} requires operator action: code=${code}, signal=${signal ?? 'none'}`,
+          ))
+        } else {
+          reject(new Error(`npm run ${script} failed: code=${code}, signal=${signal ?? 'none'}`))
+        }
+      })().catch(reject)
+    })
+    if (child.pid) {
+      try {
+        activeUsMlProcessLock?.setProcessGroup(child.pid)
+      } catch (error) {
+        processGroupRegistrationError = error
+        signalProcessGroup(child.pid, 'SIGTERM')
+      }
+    }
   })
+}
+
+function installSignalHandlers(): void {
+  const handler = (signal: NodeJS.Signals) => {
+    shutdownSignal ??= signal
+    if (activeChildProcessGroupId) signalProcessGroup(activeChildProcessGroupId, 'SIGTERM')
+  }
+  process.on('SIGINT', handler)
+  process.on('SIGTERM', handler)
 }
 
 function sqliteInt(dbPath: string, sql: string): number {
@@ -358,6 +425,9 @@ async function runNpm(script: string, env: NodeJS.ProcessEnv, overrides: EnvOver
     } catch (error) {
       lastError = error
       console.error(`US ML step failed ${attempt}/${attempts}: npm run ${script}: ${errorMessage(error)}`)
+      if (error instanceof DeferredExecutionError || error instanceof OperatorActionRequiredError) {
+        throw error
+      }
       if (attempt >= attempts) break
       await sleep(retryDelaySeconds * 1000)
     }
@@ -752,8 +822,19 @@ async function main(): Promise<void> {
   if (!fs.existsSync(usAnalyticsDbPath)) {
     throw new Error(`US analytics DB not found: ${usAnalyticsDbPath}`)
   }
+  const promotionJournalPath = resolveSqlitePromotionJournalPath(
+    usAnalyticsDbPath,
+    US_ADJUSTED_PRICE_BASIS,
+  )
+  assertNoIncompleteSqlitePromotion(
+    promotionJournalPath,
+  )
   const usMlLock = acquireUsMlProcessLock(mode)
-  if (!usMlLock) return
+  if (!usMlLock) {
+    throw new DeferredExecutionError(`US ML ${mode} deferred: another US ML job owns the lock`)
+  }
+  activeUsMlProcessLock = usMlLock
+  installSignalHandlers()
 
   try {
     const configuredStockboardDbPath = process.env.STOCKBOARD_DB_PATH?.trim()
@@ -764,6 +845,21 @@ async function main(): Promise<void> {
           ? configuredStockboardDbPath
           : undefined
       )
+    if (mode !== 'daily' && !process.env.WEEKLY_OPTIMIZATION_CONTRACT?.trim()) {
+      if (!sourceDbPath) {
+        throw new OperatorActionRequiredError(
+          `US ML ${mode} requires STOCKBOARD_SOURCE_DB_PATH to pin its source generation`,
+        )
+      }
+      const boundary = process.env[US_WEEKLY_SOURCE_BOUNDARY_ENV]?.trim()
+        ? parseWeeklyUsSourceBoundary(process.env[US_WEEKLY_SOURCE_BOUNDARY_ENV]!)
+        : captureWeeklyUsSourceBoundary({
+            sourceDbPath: resolveConfiguredStoragePath(path.resolve(sourceDbPath)),
+            priceBasis: US_ADJUSTED_PRICE_BASIS,
+          })
+      process.env[US_WEEKLY_SOURCE_BOUNDARY_ENV] = JSON.stringify(boundary)
+      process.env.US_ANALYTICS_EXPECTED_DATE = boundary.expectedTradingDate
+    }
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       USE_LOCAL_DB: '1',
@@ -776,6 +872,7 @@ async function main(): Promise<void> {
       US_ML_FULL_START_DATE: process.env.US_ML_FULL_START_DATE ?? '1900-01-01',
       US_ML_STEP_MAX_ATTEMPTS: process.env.US_ML_STEP_MAX_ATTEMPTS ?? '3',
       US_ML_STEP_RETRY_DELAY_SECONDS: process.env.US_ML_STEP_RETRY_DELAY_SECONDS ?? '300',
+      ...(mode === 'daily' ? { US_ML_ALLOW_UNPINNED_DAILY_PROMOTION: '1' } : {}),
     }
 
     console.log(`US ML ${mode} job: db=${usAnalyticsDbPath}`)
@@ -797,10 +894,11 @@ async function main(): Promise<void> {
     })
   } finally {
     usMlLock.release()
+    activeUsMlProcessLock = null
   }
 }
 
 main().catch((error) => {
   console.error(error)
-  process.exit(1)
+  process.exitCode = operationalExitCode(error)
 })

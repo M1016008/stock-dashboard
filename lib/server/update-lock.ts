@@ -10,6 +10,7 @@ export const EXCLUSIVE_UPDATE_JOB_TYPES = [
   'us_update_latest',
   'us_adjusted_foundation',
   'us_adjusted_source_snapshots',
+  'us_model_generation_promotion',
   'earnings_refresh',
   'kabutan_material_news',
   'kabutan_themes',
@@ -40,6 +41,7 @@ export const US_ISOLATED_UPDATE_JOB_TYPES = [
   'us_update_latest',
   'us_adjusted_foundation',
   'us_adjusted_source_snapshots',
+  'us_model_generation_promotion',
   'calendar_stage_backfill_us',
 ] as const
 
@@ -335,7 +337,11 @@ export async function acquireUpdateLock(
       `,
       args: [leaseSeconds, jobType, owner],
     })
-      .then(() => undefined)
+      .then((result) => {
+        if (Number(result.rowsAffected ?? 0) !== 1) {
+          throw new Error(`Update lock ${jobType} ownership was lost before heartbeat`)
+        }
+      })
       .finally(() => {
         heartbeatInFlight = null
       })

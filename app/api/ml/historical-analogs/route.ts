@@ -90,6 +90,7 @@ const CACHE_MAX_ENTRIES = 80
 const CORE_CACHE_MAX_ENTRIES = 8
 const DAY_MS = 86_400_000
 const SEARCH_CONCURRENCY = boundedEnv('ANALOG_SEARCH_CONCURRENCY', 2, 1, 4)
+const ANALOG_GENERATION_CHANGED = 'historical_analog_generation_changed'
 
 const responseCache = new Map<string, { generatedAt: number; payload: Record<string, unknown> }>()
 const coreSearchCache = new Map<string, {
@@ -103,6 +104,15 @@ const globalForHistoricalAnalogs = global as unknown as {
 
 type Market = AnalogSequenceMarket
 type DbArgs = readonly (string | number | null)[]
+
+function assertHistoricalAnalogGeneration(
+  market: AnalogSequenceMarket,
+  expectedGeneration: string,
+): void {
+  if (historicalAnalogSourceGeneration(market) !== expectedGeneration) {
+    throw new Error(ANALOG_GENERATION_CHANGED)
+  }
+}
 
 type UniverseRow = {
   ticker: string
@@ -640,11 +650,13 @@ export async function GET(request: NextRequest) {
         { status: 400 },
       )
     }
+    const sourceGeneration = historicalAnalogSourceGeneration(market)
     const db = createDbAdapter(market)
     const [indexMeta, latestRow] = await Promise.all([
       assertAnalogSequenceIndexReady(market),
       db.get<DateRow>('SELECT MAX(date) AS date FROM ohlcv_daily'),
     ])
+    assertHistoricalAnalogGeneration(market, sourceGeneration)
     const latestMarketDate = latestRow?.date
     if (!latestMarketDate) {
       return NextResponse.json({ error: `${market}市場の価格データがありません。` }, { status: 404 })
@@ -658,7 +670,6 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    const sourceGeneration = historicalAnalogSourceGeneration(market)
     const cacheKey = historicalAnalogResponseCacheKey({
       market,
       ticker,
@@ -677,6 +688,7 @@ export async function GET(request: NextRequest) {
     })
     const memoryCached = responseCache.get(cacheKey)
     if (memoryCached && Date.now() - memoryCached.generatedAt < CACHE_TTL_MS) {
+      assertHistoricalAnalogGeneration(market, sourceGeneration)
       return NextResponse.json({
         ...memoryCached.payload,
         cache: { hit: true, generatedAt: new Date(memoryCached.generatedAt).toISOString() },
@@ -688,6 +700,7 @@ export async function GET(request: NextRequest) {
       CACHE_TTL_MS,
     )
     if (stored) {
+      assertHistoricalAnalogGeneration(market, sourceGeneration)
       responseCache.set(cacheKey, stored)
       return NextResponse.json({
         ...stored.payload,
@@ -1257,6 +1270,7 @@ export async function GET(request: NextRequest) {
         search: searchDiagnostics,
         cache: { hit: false, generatedAt: new Date(generatedAt).toISOString() },
       }
+      assertHistoricalAnalogGeneration(market, sourceGeneration)
       responseCache.set(cacheKey, { generatedAt, payload })
       if (responseCache.size > CACHE_MAX_ENTRIES) {
         const oldestKey = responseCache.keys().next().value
@@ -1270,10 +1284,27 @@ export async function GET(request: NextRequest) {
     const message = error instanceof Error ? error.message : String(error)
     console.error('historical analog period search failed:', error)
     const indexMissing = /局面検索索引が未構築/.test(message)
+    const generationChanged = message.includes(ANALOG_GENERATION_CHANGED)
+      || message.includes('analog_sequence_generation_changed')
+    const promotionPending = /promotion (?:journal|requires operator review)/i.test(message)
+    const retryable = generationChanged || promotionPending
     return NextResponse.json({
-      error: indexMissing ? message : '本質類似局面の検索に失敗しました。',
-      code: indexMissing ? 'ANALOG_SEQUENCE_INDEX_REQUIRED' : 'ANALOG_SEQUENCE_SEARCH_FAILED',
-      message,
-    }, { status: indexMissing ? 503 : 500 })
+      error: indexMissing
+        ? message
+        : retryable
+          ? '分析データが更新されたため、最新世代で検索をやり直してください。'
+          : '本質類似局面の検索に失敗しました。',
+      code: indexMissing
+        ? 'ANALOG_SEQUENCE_INDEX_REQUIRED'
+        : promotionPending
+          ? 'ANALOG_GENERATION_PROMOTION_PENDING'
+          : generationChanged
+          ? 'ANALOG_GENERATION_CHANGED'
+          : 'ANALOG_SEQUENCE_SEARCH_FAILED',
+      retryable,
+    }, {
+      status: indexMissing || retryable ? 503 : 500,
+      headers: retryable ? { 'Retry-After': '2' } : undefined,
+    })
   }
 }

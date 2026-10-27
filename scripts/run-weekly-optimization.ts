@@ -4,12 +4,13 @@
 // the two large SQLite databases never compete for memory or write bandwidth.
 
 import { createHash } from 'node:crypto'
-import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
+import { execFileSync, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { openExistingGuardedClient } from '@/lib/storage/guarded-libsql-client'
 import { ML_PIPELINE_NAME } from '@/lib/ml/pipeline-generation'
+import { MA_SEQUENCE_VERSION } from '@/lib/ml/ma-sequence'
 import { CURRENT_SERVING_PRICE_BASIS } from '@/lib/research/six-stage-current-serving-adapter'
 import { expectedLatestTradingDate } from '@/lib/server/data-freshness'
 import { expectedLatestUsTradingDate } from '@/lib/server/us-data-freshness'
@@ -17,18 +18,28 @@ import { resolveConfiguredStoragePath } from '@/lib/storage-paths'
 import { waitForMemoryHeadroom, withMemoryGuardEnv } from '@/lib/system/memory-guard'
 import { usUniverseActivityCutoff } from '@/lib/us-universe-activity'
 import { acquirePidProcessLock, type PidProcessLock } from '@/lib/pid-process-lock'
+import { readWeeklySourceObservation } from '@/lib/weekly-source-observation'
 import { signalProcessGroup, waitForProcessGroupExit } from '@/lib/child-process-group'
+import { spawnLockedProcessGroup } from '@/lib/locked-process-spawn'
+import {
+  DEFERRED_EXECUTION_EXIT_CODE,
+  OPERATOR_ACTION_REQUIRED_EXIT_CODE,
+  DeferredExecutionError,
+  operationalExitCode,
+} from '@/lib/operational-exit'
 import {
   assessWeeklyPromotionReadiness,
+  assessWeeklyServingOutput,
   assessWeeklySourceReadiness,
   createWeeklyOptimizationRunContract,
+  weeklyRunIdentitySha256,
+  weeklyServingGenerationSha256,
   weeklyOptimizationContractEnv,
   type WeeklyOptimizationRunContract,
   type WeeklyServingObservation,
-  type WeeklySourceObservation,
 } from '@/lib/weekly-optimization-run-contract'
 
-type StepStatus = 'pending' | 'running' | 'completed' | 'failed'
+type StepStatus = 'pending' | 'running' | 'completed' | 'deferred' | 'blocked' | 'failed'
 
 type Step = {
   id: string
@@ -48,6 +59,7 @@ type StepResult = {
   exitCode: number | null
   signal: NodeJS.Signals | null
   error: string | null
+  outputServingGenerationSha256?: string | null
 }
 
 type RunState = {
@@ -56,7 +68,7 @@ type RunState = {
   startedAt: string
   heartbeatAt: string
   finishedAt: string | null
-  status: 'running' | 'completed' | 'failed'
+  status: 'running' | 'completed' | 'deferred' | 'blocked' | 'failed'
   contract?: WeeklyOptimizationRunContract
   error?: string | null
   steps: StepResult[]
@@ -83,6 +95,13 @@ let activeChild: ChildProcess | null = null
 let activeChildProcessGroupId: number | null = null
 let weeklyProcessLock: PidProcessLock | null = null
 let shutdownSignal: NodeJS.Signals | null = null
+
+class WeeklyLineageChangedError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'WeeklyLineageChangedError'
+  }
+}
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -134,103 +153,6 @@ function databasePaths(): { jpDbPath: string; usDbPath: string } {
   }
 }
 
-function sourceObservation(
-  market: 'JP' | 'US',
-  jpDbPath: string,
-): WeeklySourceObservation {
-  const row = market === 'JP'
-    ? sqliteJsonRow<Record<string, unknown>>(jpDbPath, `
-        WITH relevant AS (
-          SELECT id, status, started_at, finished_at
-          FROM batch_runs
-          WHERE job_type = 'ohlcv_fetch:jquants'
-        ), latest AS (
-          SELECT * FROM relevant ORDER BY id DESC LIMIT 1
-        )
-        SELECT
-          COALESCE((SELECT id FROM latest), 0) AS latestRunId,
-          COALESCE((SELECT MAX(id) FROM relevant WHERE status IN ('success', 'partial')), 0) AS latestPublishableRunId,
-          COALESCE((SELECT status FROM latest), 'missing') AS latestRunStatus,
-          (SELECT COUNT(*) FROM relevant WHERE status = 'running') AS runningCount,
-          (SELECT started_at FROM latest) AS startedAt,
-          (SELECT finished_at FROM latest) AS finishedAt,
-          COALESCE((SELECT MAX(date) FROM ohlcv_daily), '') AS priceDate,
-          (SELECT finished_at FROM latest) AS maxImportedAt,
-          COALESCE((
-            SELECT GROUP_CONCAT(value, '|') FROM (
-              SELECT job_type || ':' || COALESCE(owner, '') AS value
-              FROM update_locks
-              WHERE status = 'running' AND lease_expires_at > unixepoch()
-              ORDER BY job_type, owner
-            )
-          ), '') AS activeWriterLocks
-      `)
-    : sqliteJsonRow<Record<string, unknown>>(jpDbPath, `
-        WITH relevant AS (
-          SELECT id, status, started_at, finished_at
-          FROM market_data_runs
-          WHERE market = 'US' AND job_type = 'tiingo_ohlcv'
-        ), latest AS (
-          SELECT * FROM relevant ORDER BY id DESC LIMIT 1
-        ), universe_relevant AS (
-          SELECT id, status, finished_at
-          FROM market_data_runs
-          WHERE market = 'US' AND job_type = 'tiingo_universe'
-        ), universe_latest AS (
-          SELECT * FROM universe_relevant ORDER BY id DESC LIMIT 1
-        )
-        SELECT
-          COALESCE((SELECT id FROM latest), 0) AS latestRunId,
-          COALESCE((SELECT MAX(id) FROM relevant WHERE status IN ('success', 'partial')), 0) AS latestPublishableRunId,
-          COALESCE((SELECT status FROM latest), 'missing') AS latestRunStatus,
-          (SELECT COUNT(*) FROM relevant WHERE status = 'running') AS runningCount,
-          (SELECT started_at FROM latest) AS startedAt,
-          (SELECT finished_at FROM latest) AS finishedAt,
-          COALESCE((SELECT MAX(date) FROM market_ohlcv_daily WHERE market = 'US'), '') AS priceDate,
-          (SELECT MAX(imported_at) FROM market_ohlcv_daily WHERE market = 'US') AS maxImportedAt,
-          COALESCE((
-            SELECT GROUP_CONCAT(value, '|') FROM (
-              SELECT job_type || ':' || COALESCE(owner, '') AS value
-              FROM update_locks
-              WHERE status = 'running' AND lease_expires_at > unixepoch()
-              ORDER BY job_type, owner
-            )
-          ), '') AS activeWriterLocks,
-          COALESCE((SELECT id FROM universe_latest), 0) AS universeLatestRunId,
-          COALESCE((SELECT MAX(id) FROM universe_relevant WHERE status IN ('success', 'partial')), 0)
-            AS universeLatestPublishableRunId,
-          COALESCE((SELECT status FROM universe_latest), 'missing') AS universeLatestRunStatus,
-          (SELECT COUNT(*) FROM universe_relevant WHERE status = 'running') AS universeRunningCount,
-          (SELECT finished_at FROM universe_latest) AS universeFinishedAt,
-          (SELECT MAX(updated_at) FROM market_universe WHERE market = 'US') AS universeMaxUpdatedAt,
-          (SELECT COUNT(*) FROM market_universe WHERE market = 'US' AND active = 1) AS universeActiveCount
-      `)
-  const numberOrNull = (value: unknown): number | null => value == null ? null : Number(value)
-  return {
-    latestRunId: Number(row.latestRunId ?? 0),
-    latestPublishableRunId: Number(row.latestPublishableRunId ?? 0),
-    latestRunStatus: String(row.latestRunStatus ?? 'missing'),
-    runningCount: Number(row.runningCount ?? 0),
-    startedAt: numberOrNull(row.startedAt),
-    finishedAt: numberOrNull(row.finishedAt),
-    priceDate: String(row.priceDate ?? ''),
-    maxImportedAt: numberOrNull(row.maxImportedAt),
-    priceBasis: CURRENT_SERVING_PRICE_BASIS[market],
-    activeWriterLocks: String(row.activeWriterLocks ?? '').split('|').filter(Boolean),
-    universeGeneration: market === 'US'
-      ? {
-          latestRunId: Number(row.universeLatestRunId ?? 0),
-          latestPublishableRunId: Number(row.universeLatestPublishableRunId ?? 0),
-          latestRunStatus: String(row.universeLatestRunStatus ?? 'missing'),
-          runningCount: Number(row.universeRunningCount ?? 0),
-          finishedAt: numberOrNull(row.universeFinishedAt),
-          maxUpdatedAt: numberOrNull(row.universeMaxUpdatedAt),
-          activeCount: Number(row.universeActiveCount ?? 0),
-        }
-      : null,
-  }
-}
-
 function servingObservation(
   market: 'JP' | 'US',
   dbPath: string,
@@ -262,11 +184,11 @@ function captureRunContract(paths: { jpDbPath: string; usDbPath: string }): Week
   const reference = new Date(referenceAt)
   const observe = () => ({
     JP: {
-      source: sourceObservation('JP', paths.jpDbPath),
+      source: readWeeklySourceObservation('JP', paths.jpDbPath, CURRENT_SERVING_PRICE_BASIS.JP),
       serving: servingObservation('JP', paths.jpDbPath),
     },
     US: {
-      source: sourceObservation('US', paths.jpDbPath),
+      source: readWeeklySourceObservation('US', paths.jpDbPath, CURRENT_SERVING_PRICE_BASIS.US),
       serving: servingObservation('US', paths.usDbPath),
     },
   })
@@ -311,7 +233,7 @@ function assertStepLineageUnchanged(
 ): void {
   const market = stepMarket(step)
   if (!market) return
-  const source = sourceObservation(market, paths.jpDbPath)
+  const source = readWeeklySourceObservation(market, paths.jpDbPath, CURRENT_SERVING_PRICE_BASIS[market])
   const strictServingGate = step.id === 'jp-features-models' || step.id === 'us-features-models'
   const assessment = strictServingGate
     ? assessWeeklyPromotionReadiness(contract.markets[market], {
@@ -320,8 +242,62 @@ function assertStepLineageUnchanged(
       })
     : assessWeeklySourceReadiness(contract.markets[market], source)
   if (!assessment.ok) {
-    throw new Error(`${step.id} pinned lineage gate failed: ${assessment.issues.join(', ')}`)
+    throw new WeeklyLineageChangedError(
+      `${step.id} pinned lineage gate failed: ${assessment.issues.join(', ')}`,
+    )
   }
+}
+
+function assertAllSourceLineageUnchanged(
+  contract: WeeklyOptimizationRunContract,
+  paths: { jpDbPath: string; usDbPath: string },
+): void {
+  for (const market of ['JP', 'US'] as const) {
+    const assessment = assessWeeklySourceReadiness(
+      contract.markets[market],
+      readWeeklySourceObservation(market, paths.jpDbPath, CURRENT_SERVING_PRICE_BASIS[market]),
+    )
+    if (!assessment.ok) {
+      throw new WeeklyLineageChangedError(
+        `${market} pinned source lineage gate failed: ${assessment.issues.join(', ')}`,
+      )
+    }
+  }
+}
+
+function assertServingOutputsCompatible(
+  contract: WeeklyOptimizationRunContract,
+  paths: { jpDbPath: string; usDbPath: string },
+  market?: 'JP' | 'US',
+): void {
+  const markets = market ? [market] : ['JP', 'US'] as const
+  for (const currentMarket of markets) {
+    const assessment = assessWeeklyServingOutput(
+      contract.markets[currentMarket],
+      servingObservation(
+        currentMarket,
+        currentMarket === 'JP' ? paths.jpDbPath : paths.usDbPath,
+      ),
+    )
+    if (!assessment.ok) {
+      throw new Error(
+        `${currentMarket} serving output gate failed: ${assessment.issues.join(', ')}`,
+      )
+    }
+  }
+}
+
+function servingOutputGenerationForStep(
+  step: Step,
+  paths: { jpDbPath: string; usDbPath: string },
+): string | null {
+  const market = stepMarket(step)
+  if (!market || (step.id !== 'jp-features-models' && step.id !== 'us-features-models')) {
+    return null
+  }
+  return weeklyServingGenerationSha256(
+    servingObservation(market, market === 'JP' ? paths.jpDbPath : paths.usDbPath),
+  )
 }
 
 function currentJstWeek(): string {
@@ -350,9 +326,16 @@ function implementationFingerprint(): string {
     'lib/backtest/forward-extrema.ts',
     'lib/analog-generation-lineage.ts',
     'lib/child-process-group.ts',
+    'lib/durable-json-file.ts',
+    'lib/locked-process-spawn.ts',
+    'lib/operational-exit.ts',
     'lib/pid-process-lock.ts',
+    'lib/sqlite-generation-quarantine.ts',
+    'lib/sqlite-promotion-journal.ts',
     'lib/sqlite-generation-promotion.ts',
     'lib/us-ml-process-lock.ts',
+    'lib/weekly-source-observation.ts',
+    'lib/weekly-us-source-boundary.ts',
     'lib/weekly-optimization-run-contract.ts',
   ]
   const hash = createHash('sha256')
@@ -369,9 +352,9 @@ function buildRunKey(
   contract: WeeklyOptimizationRunContract,
 ): string {
   const input = {
-    version: 4,
+    version: 5,
     week: currentJstWeek(),
-    lineage: contract.lineageSha256,
+    sourceLineage: weeklyRunIdentitySha256(contract),
     implementation: implementationFingerprint(),
     steps: configuredSteps.map((step) => ({ id: step.id, npmScript: step.npmScript })),
   }
@@ -575,14 +558,15 @@ async function runStep(step: Step): Promise<{
   await waitForMemoryHeadroom({ label: step.label })
   console.log(`\n[weekly-optimization] START ${step.id}: npm run ${step.npmScript}`)
   return new Promise((resolve, reject) => {
-    const child = spawn('npm', ['run', step.npmScript], {
+    if (!weeklyProcessLock) throw new Error('Weekly optimization process lock is not held')
+    const child = spawnLockedProcessGroup(weeklyProcessLock, 'npm', ['run', step.npmScript], {
       cwd: process.cwd(),
       env: withMemoryGuardEnv({ ...process.env, ...step.env }),
-      detached: true,
       stdio: 'inherit',
     })
     activeChild = child
     activeChildProcessGroupId = child.pid ?? null
+    let processGroupRegistrationError: unknown = null
     child.once('error', (error) => {
       if (activeChild === child) activeChild = null
       if (activeChildProcessGroupId === child.pid) activeChildProcessGroupId = null
@@ -594,9 +578,19 @@ async function runStep(step: Step): Promise<{
         if (processGroupId) await waitForProcessGroupExit(processGroupId)
         if (activeChild === child) activeChild = null
         if (activeChildProcessGroupId === processGroupId) activeChildProcessGroupId = null
-        resolve({ exitCode, signal })
+        weeklyProcessLock?.setProcessGroup(null)
+        if (processGroupRegistrationError) reject(processGroupRegistrationError)
+        else resolve({ exitCode, signal })
       })().catch(reject)
     })
+    if (child.pid) {
+      try {
+        weeklyProcessLock?.setProcessGroup(child.pid)
+      } catch (error) {
+        processGroupRegistrationError = error
+        signalProcessGroup(child.pid, 'SIGTERM')
+      }
+    }
   })
 }
 
@@ -629,7 +623,6 @@ function installSignalHandlers(): void {
   }
   process.on('SIGINT', handler)
   process.on('SIGTERM', handler)
-  process.once('exit', releaseProcessLock)
 }
 
 async function main(): Promise<void> {
@@ -644,60 +637,38 @@ async function main(): Promise<void> {
     return
   }
 
-  if (!acquireProcessLock()) return
+  if (!acquireProcessLock()) {
+    throw new DeferredExecutionError('Weekly optimization deferred: another run owns the process lock')
+  }
   installSignalHandlers()
 
   const captureStartedAt = isoNow()
+  const previousState = readState()
   let contract: WeeklyOptimizationRunContract
   try {
     contract = captureRunContract(paths)
   } catch (error) {
     const failure = errorMessage(error)
     const finishedAt = isoNow()
-    writeState({
-      pid: process.pid,
-      runKey: `contract-capture-failed-${createHash('sha256').update(failure).digest('hex').slice(0, 12)}`,
-      startedAt: captureStartedAt,
-      heartbeatAt: finishedAt,
-      finishedAt,
-      status: 'failed',
-      error: failure,
-      steps: steps(paths).map((step) => ({
-        id: step.id,
-        label: step.label,
-        status: 'pending',
-        startedAt: null,
-        finishedAt: null,
-        exitCode: null,
-        signal: null,
-        error: null,
-      })),
-    })
-    throw error
-  }
-  const configuredSteps = steps(paths, contract)
-  const runKey = buildRunKey(configuredSteps, contract)
-  const previousState = readState()
-  const reusableSteps = previousState?.runKey === runKey
-    ? new Map(
-        previousState.steps
-          .filter((step) => step.status === 'completed')
-          .map((step) => [step.id, step]),
-      )
-    : new Map<string, StepResult>()
-  const state: RunState = {
-    pid: process.pid,
-    runKey,
-    startedAt: isoNow(),
-    heartbeatAt: isoNow(),
-    finishedAt: null,
-    status: 'running',
-    contract,
-    steps: configuredSteps.map((step) => {
-      const reusable = reusableSteps.get(step.id)
-      return reusable
-        ? { ...reusable }
-        : {
+    writeState(previousState
+      ? {
+          ...previousState,
+          pid: process.pid,
+          startedAt: captureStartedAt,
+          heartbeatAt: finishedAt,
+          finishedAt,
+          status: 'failed',
+          error: `run-contract capture failed before any step started: ${failure}`,
+        }
+      : {
+          pid: process.pid,
+          runKey: `contract-capture-failed-${createHash('sha256').update(failure).digest('hex').slice(0, 12)}`,
+          startedAt: captureStartedAt,
+          heartbeatAt: finishedAt,
+          finishedAt,
+          status: 'failed',
+          error: failure,
+          steps: steps(paths).map((step) => ({
             id: step.id,
             label: step.label,
             status: 'pending',
@@ -706,16 +677,80 @@ async function main(): Promise<void> {
             exitCode: null,
             signal: null,
             error: null,
-          }
-    }),
+            outputServingGenerationSha256: null,
+          })),
+        })
+    throw error
+  }
+  const configuredSteps = steps(paths, contract)
+  const runKey = buildRunKey(configuredSteps, contract)
+  const reusableSteps = previousState?.runKey === runKey
+    ? new Map(
+        previousState.steps
+          .filter((step) => step.status === 'completed')
+          .map((step) => [step.id, step]),
+      )
+    : new Map<string, StepResult>()
+  let resumePrefixIsValid = previousState?.runKey === runKey
+  const restoredSteps = configuredSteps.map((step) => {
+    const reusable = resumePrefixIsValid ? reusableSteps.get(step.id) : undefined
+    if (reusable) {
+      const expectedOutput = servingOutputGenerationForStep(step, paths)
+      if (
+        expectedOutput != null
+        && reusable.outputServingGenerationSha256 !== expectedOutput
+      ) {
+        console.warn(
+          `[weekly-optimization] RESUME INVALIDATED ${step.id}: serving generation changed`,
+        )
+        resumePrefixIsValid = false
+      } else {
+        return { ...reusable }
+      }
+    } else {
+      resumePrefixIsValid = false
+    }
+    return {
+      id: step.id,
+      label: step.label,
+      status: 'pending' as const,
+      startedAt: null,
+      finishedAt: null,
+      exitCode: null,
+      signal: null,
+      error: null,
+      outputServingGenerationSha256: null,
+    }
+  })
+  const state: RunState = {
+    pid: process.pid,
+    runKey,
+    startedAt: isoNow(),
+    heartbeatAt: isoNow(),
+    finishedAt: null,
+    status: 'running',
+    contract,
+    steps: restoredSteps,
   }
   writeState(state)
+  let shutdownDeferred: string | null = null
 
   for (const [index, step] of configuredSteps.entries()) {
     const result = state.steps[index]
     if (result.status === 'completed') {
-      console.log(`[weekly-optimization] RESUME ${step.id}: same week, data dates, and implementation`)
-      continue
+      try {
+        assertAllSourceLineageUnchanged(contract, paths)
+        console.log(`[weekly-optimization] RESUME ${step.id}: same week, data dates, and implementation`)
+        continue
+      } catch (error) {
+        result.status = 'blocked'
+        result.finishedAt = isoNow()
+        result.error = `resume contract is stale; no generation was modified: ${errorMessage(error)}`
+        state.heartbeatAt = isoNow()
+        state.error = result.error
+        writeState(state)
+        break
+      }
     }
     result.status = 'running'
     result.startedAt = isoNow()
@@ -732,12 +767,32 @@ async function main(): Promise<void> {
       const completed = await runStep(step)
       result.exitCode = completed.exitCode
       result.signal = completed.signal
-      result.status = completed.exitCode === 0 ? 'completed' : 'failed'
-      if (completed.exitCode !== 0) {
+      result.status = completed.exitCode === 0
+        ? 'completed'
+        : completed.exitCode === DEFERRED_EXECUTION_EXIT_CODE
+          ? 'deferred'
+          : completed.exitCode === OPERATOR_ACTION_REQUIRED_EXIT_CODE
+            ? 'blocked'
+            : 'failed'
+      if (completed.exitCode === OPERATOR_ACTION_REQUIRED_EXIT_CODE) {
+        result.error = `operator action required in step=${step.id}; exit=${completed.exitCode}; `
+          + 'inspect the child log and any journal path it reported; do not retry, publish, '
+          + 'or adopt a generation until the reported primary/shadow/backup families are inspected'
+      } else if (completed.exitCode === DEFERRED_EXECUTION_EXIT_CODE) {
+        result.error = `safely deferred by a conflicting owner; exit=${completed.exitCode}; no rollback or publication retry was started`
+      } else if (completed.exitCode !== 0) {
         result.error = `exit=${completed.exitCode}, signal=${completed.signal ?? 'none'}`
       }
+      if (completed.exitCode === 0) {
+        assertAllSourceLineageUnchanged(contract, paths)
+        const market = stepMarket(step)
+        if (market && (step.id === 'jp-features-models' || step.id === 'us-features-models')) {
+          assertServingOutputsCompatible(contract, paths, market)
+          result.outputServingGenerationSha256 = servingOutputGenerationForStep(step, paths)
+        }
+      }
     } catch (error) {
-      result.status = 'failed'
+      result.status = error instanceof WeeklyLineageChangedError ? 'blocked' : 'failed'
       result.error = errorMessage(error)
     } finally {
       clearInterval(heartbeatTimer)
@@ -746,9 +801,20 @@ async function main(): Promise<void> {
       writeState(state)
     }
     if (shutdownSignal) {
-      result.status = 'failed'
-      result.error = `interrupted by ${shutdownSignal}`
+      shutdownDeferred = `gracefully interrupted by ${shutdownSignal}; completed steps remain resumable`
+      state.error = result.error ?? shutdownDeferred
       writeState(state)
+      break
+    }
+    if (result.status === 'deferred') {
+      console.warn(`[weekly-optimization] DEFERRED ${step.id}: downstream work was not started`)
+      break
+    }
+    if (result.status === 'blocked') {
+      console.error(
+        `[weekly-optimization] OPERATOR ACTION REQUIRED ${step.id}: `
+        + 'rollback and downstream publication were not started',
+      )
       break
     }
     if (result.status === 'failed') {
@@ -771,25 +837,74 @@ async function main(): Promise<void> {
     }
   }
 
+  const deferred = state.steps.filter((step) => step.status === 'deferred')
+  const blocked = state.steps.filter((step) => step.status === 'blocked')
+  let finalGateError: string | null = null
+  let finalGateBlocked: string | null = null
+  if (state.steps.every((step) => step.status === 'completed')) {
+    try {
+      assertAllSourceLineageUnchanged(contract, paths)
+    } catch (error) {
+      finalGateBlocked = errorMessage(error)
+      state.error = finalGateBlocked
+    }
+    try {
+      assertServingOutputsCompatible(contract, paths)
+    } catch (error) {
+      finalGateError = errorMessage(error)
+      state.error = finalGateError
+    }
+  }
   const failed = state.steps.filter((step) => step.status === 'failed')
+  state.error ??= failed[0]?.error
+    ?? blocked[0]?.error
+    ?? deferred[0]?.error
+    ?? shutdownDeferred
   state.heartbeatAt = isoNow()
   state.finishedAt = isoNow()
-  state.status = failed.length === 0 ? 'completed' : 'failed'
+  state.status = failed.length > 0 || finalGateError
+    ? 'failed'
+    : blocked.length > 0 || finalGateBlocked
+      ? 'blocked'
+      : deferred.length > 0 || shutdownDeferred
+        ? 'deferred'
+        : 'completed'
   writeState(state)
   releaseProcessLock()
 
   console.log(JSON.stringify({
     status: state.status,
     runKey: state.runKey,
+    referenceAt: contract.referenceAt,
+    expectedTradingDates: {
+      JP: contract.markets.JP.expectedTradingDate,
+      US: contract.markets.US.expectedTradingDate,
+    },
+    usUniverseActivityCutoff: contract.markets.US.universeActivityCutoff,
+    servingGenerationVersions: {
+      JP: contract.markets.JP.serving.generationVersion,
+      US: contract.markets.US.serving.generationVersion,
+    },
+    sourceLineageSha256: weeklyRunIdentitySha256(contract),
+    contractSha256: contract.contractSha256,
     startedAt: state.startedAt,
     finishedAt: state.finishedAt,
+    error: state.error,
     steps: state.steps,
   }, null, 2))
-  if (failed.length > 0) process.exitCode = 1
+  if (state.status === 'failed') process.exitCode = 1
+  if (state.status === 'blocked') process.exitCode = OPERATOR_ACTION_REQUIRED_EXIT_CODE
+  if (state.status === 'deferred') process.exitCode = DEFERRED_EXECUTION_EXIT_CODE
 }
 
 main().catch((error) => {
-  console.error('[weekly-optimization] failed:', error)
+  const exitCode = operationalExitCode(error)
+  const outcome = exitCode === DEFERRED_EXECUTION_EXIT_CODE
+    ? 'deferred'
+    : exitCode === OPERATOR_ACTION_REQUIRED_EXIT_CODE
+      ? 'blocked'
+      : 'failed'
+  console.error(`[weekly-optimization] ${outcome}:`, error)
   releaseProcessLock()
-  process.exitCode = 1
+  process.exitCode = exitCode
 })

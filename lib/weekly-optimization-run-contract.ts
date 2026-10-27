@@ -77,6 +77,11 @@ export type WeeklyPromotionAssessment = {
   issues: string[]
 }
 
+export type WeeklySourceContract = Pick<
+  WeeklyMarketRunContract,
+  'expectedTradingDate' | 'universeActivityCutoff' | 'priceBasis' | 'source'
+>
+
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
 
 function sha256(value: unknown): string {
@@ -118,7 +123,26 @@ export function foundationGenerationChanged(
   return lineageBefore == null || lineageAfter !== lineageBefore
 }
 
-function servingGenerationSha256(serving: WeeklyServingObservation): string {
+export function weeklyRunIdentitySha256(contract: WeeklyOptimizationRunContract): string {
+  return sha256({
+    version: contract.version,
+    referenceDates: {
+      JP: contract.markets.JP.expectedTradingDate,
+      US: contract.markets.US.expectedTradingDate,
+      usUniverseActivityCutoff: contract.markets.US.universeActivityCutoff,
+    },
+    priceBasis: {
+      JP: contract.markets.JP.priceBasis,
+      US: contract.markets.US.priceBasis,
+    },
+    source: {
+      JP: contract.markets.JP.source.generationSha256,
+      US: contract.markets.US.source.generationSha256,
+    },
+  })
+}
+
+export function weeklyServingGenerationSha256(serving: WeeklyServingObservation): string {
   return sha256(serving)
 }
 
@@ -254,7 +278,7 @@ export function createWeeklyOptimizationRunContract(
       },
       serving: {
         ...input.markets.JP.serving,
-        generationSha256: servingGenerationSha256(input.markets.JP.serving),
+        generationSha256: weeklyServingGenerationSha256(input.markets.JP.serving),
       },
     },
     US: {
@@ -265,7 +289,7 @@ export function createWeeklyOptimizationRunContract(
       },
       serving: {
         ...input.markets.US.serving,
-        generationSha256: servingGenerationSha256(input.markets.US.serving),
+        generationSha256: weeklyServingGenerationSha256(input.markets.US.serving),
       },
     },
   } satisfies WeeklyOptimizationRunContract['markets']
@@ -350,14 +374,35 @@ export function assessWeeklyPromotionReadiness(
   ) {
     issues.push('serving_generation_incompatible')
   }
-  if (servingGenerationSha256(current.serving) !== marketContract.serving.generationSha256) {
+  if (weeklyServingGenerationSha256(current.serving) !== marketContract.serving.generationSha256) {
     issues.push('serving_generation_changed')
   }
   return { ok: issues.length === 0, issues }
 }
 
-export function assessWeeklySourceReadiness(
+export function assessWeeklyServingOutput(
   marketContract: WeeklyMarketRunContract,
+  currentServing: WeeklyServingObservation,
+): WeeklyPromotionAssessment {
+  const issues: string[] = []
+  if (
+    currentServing.status !== 'complete'
+    || !currentServing.generationVersion
+    || currentServing.priceBasis !== marketContract.priceBasis
+    || currentServing.baselineSourceDate > currentServing.lastDeltaSourceDate
+  ) {
+    issues.push('serving_generation_incompatible')
+  }
+  if (currentServing.lastDeltaSourceDate !== marketContract.expectedTradingDate) {
+    issues.push(
+      `serving_not_fresh:${currentServing.lastDeltaSourceDate}->${marketContract.expectedTradingDate}`,
+    )
+  }
+  return { ok: issues.length === 0, issues }
+}
+
+export function assessWeeklySourceReadiness(
+  marketContract: WeeklySourceContract,
   currentSource: WeeklySourceObservation,
 ): WeeklyPromotionAssessment {
   const issues: string[] = []

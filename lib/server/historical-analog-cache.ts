@@ -1,7 +1,11 @@
 import fs from 'node:fs'
 import { stableCacheKey } from '@/lib/api/serving-cache'
 import { localDbPath } from '@/lib/db/client'
-import { resolveAnalogSequenceIndexPath, type AnalogSequenceMarket } from '@/lib/db/analog-sequence-index'
+import {
+  assertAnalogSequenceGenerationReadable,
+  resolveAnalogSequenceIndexPath,
+  type AnalogSequenceMarket,
+} from '@/lib/db/analog-sequence-index'
 import { resolveUsAnalyticsDbPath } from '@/lib/db/us-analytics'
 import { MA_SEQUENCE_SCORE_VERSION, MA_SEQUENCE_VERSION } from '@/lib/ml/ma-sequence'
 
@@ -32,7 +36,7 @@ export function historicalAnalogResponseCacheKey(input: {
 }
 
 export function historicalAnalogFileGeneration(paths: readonly string[]): string {
-  return stableCacheKey(paths.flatMap((filePath) => [filePath, `${filePath}-wal`].map((candidate) => {
+  return stableCacheKey(paths.flatMap((filePath) => [filePath, `${filePath}-wal`, `${filePath}-shm`].map((candidate) => {
     try {
       const stat = fs.statSync(candidate, { bigint: true })
       return {
@@ -51,6 +55,7 @@ export function historicalAnalogFileGeneration(paths: readonly string[]): string
 }
 
 export function historicalAnalogSourceGeneration(market: AnalogSequenceMarket): string {
+  assertAnalogSequenceGenerationReadable(market)
   return historicalAnalogFileGeneration([
     market === 'US' ? resolveUsAnalyticsDbPath() : localDbPath,
     resolveAnalogSequenceIndexPath(market),

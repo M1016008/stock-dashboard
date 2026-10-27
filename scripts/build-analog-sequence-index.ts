@@ -24,6 +24,12 @@ import {
 } from '@/lib/ml/ma-sequence'
 import { encodeAnalogPriceChunk } from '@/lib/ml/analog-price-chunks'
 import { acquirePidProcessLock } from '@/lib/pid-process-lock'
+import {
+  assertNoIncompleteSqlitePromotion,
+  resolveSqlitePromotionJournalPath,
+} from '@/lib/sqlite-promotion-journal'
+import { US_ADJUSTED_PRICE_BASIS } from '@/lib/us-adjusted-ohlcv'
+import { DeferredExecutionError, operationalExitCode } from '@/lib/operational-exit'
 
 type Market = 'JP' | 'US'
 type Mode = 'full' | 'incremental'
@@ -473,6 +479,10 @@ async function main(): Promise<void> {
   const mode = normalizeMode(process.argv[3] ?? process.env.ANALOG_INDEX_MODE)
   const source = sourcePath(market)
   const target = targetPath(market, source)
+  if (market === 'US') {
+    const journalPath = resolveSqlitePromotionJournalPath(source, US_ADJUSTED_PRICE_BASIS)
+    assertNoIncompleteSqlitePromotion(journalPath)
+  }
   if (!fs.existsSync(source)) throw new Error(`Source DB not found: ${source}`)
   assertWritableTargetPath(target, 'analog-sequence-build-target')
   fs.mkdirSync(path.dirname(target), { recursive: true })
@@ -482,7 +492,7 @@ async function main(): Promise<void> {
   )
   if (!processLock) {
     if (process.env.STOCKBOARD_PROCESS_LOCK_REQUIRED === '1') {
-      throw new Error(`Analog index process lock is required: ${target}`)
+      throw new DeferredExecutionError(`Analog index process lock is active: ${target}`)
     }
     return
   }
@@ -859,5 +869,5 @@ main()
   .then(() => process.exit(0))
   .catch((error) => {
     console.error('[analog-sequence-index] failed:', error instanceof Error ? error.stack : String(error))
-    process.exit(1)
+    process.exitCode = operationalExitCode(error)
   })
