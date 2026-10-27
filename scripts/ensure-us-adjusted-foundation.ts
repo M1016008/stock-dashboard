@@ -32,6 +32,7 @@ import {
   promotionRecoveryMessage,
   removeSqlitePromotionJournal,
   resolveSqlitePromotionJournalPath,
+  resolveWeeklyMlPromotionJournalPath,
   writeSqlitePromotionJournal,
   type SqlitePromotionJournal,
   type SqlitePromotionPlan,
@@ -1131,6 +1132,7 @@ async function main(): Promise<void> {
   assertWritableTargetPath(adjustedShadowDbPath, 'us-adjusted-shadow')
   assertWritableTargetPath(adjustedAnalogShadowDbPath, 'us-adjusted-analog-shadow')
   assertNoIncompleteSqlitePromotion(promotionJournalPath)
+  assertNoIncompleteSqlitePromotion(resolveWeeklyMlPromotionJournalPath(usAnalyticsDbPath))
   await ensureReady()
   const expectedSourceLineageSha256 = await expectedFoundationSourceLineageSha256()
   await assertWeeklyUsLineageUnchanged('start')

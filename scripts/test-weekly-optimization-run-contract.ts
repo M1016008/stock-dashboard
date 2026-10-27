@@ -714,6 +714,45 @@ try {
   fs.unlinkSync(replacementRaceLockPath)
   fs.unlinkSync(staleEvidencePath)
 
+  const serializedRecoveryLockPath = path.join(fixtureRoot, 'serialized-recovery.lock')
+  fs.writeFileSync(serializedRecoveryLockPath, staleOwnerRaw)
+  const serializedEvidencePath = `${serializedRecoveryLockPath}.stale-evidence`
+  let concurrentRecovery = true
+  assert.equal(
+    quarantineObservedStalePidProcessLock(
+      serializedRecoveryLockPath,
+      serializedEvidencePath,
+      staleOwnerRaw,
+      () => {
+        concurrentRecovery = quarantineObservedStalePidProcessLock(
+          serializedRecoveryLockPath,
+          `${serializedRecoveryLockPath}.concurrent-evidence`,
+          staleOwnerRaw,
+        )
+      },
+    ),
+    true,
+    'one stale recovery contender may unlink the observed inode',
+  )
+  assert.equal(concurrentRecovery, false, 'a concurrent stale recovery contender must be serialized')
+  assert.equal(fs.existsSync(serializedRecoveryLockPath), false)
+  assert.equal(fs.readFileSync(serializedEvidencePath, 'utf8'), staleOwnerRaw)
+  fs.unlinkSync(serializedEvidencePath)
+
+  const sidecarOnlyDbPath = path.join(fixtureRoot, 'sidecar-only.db')
+  const sidecarOnlyQuarantinePath = `${sidecarOnlyDbPath}.stale`
+  fs.writeFileSync(`${sidecarOnlyDbPath}-wal`, 'stale-wal')
+  fs.writeFileSync(`${sidecarOnlyDbPath}-shm`, 'stale-shm')
+  assert.equal(
+    quarantineSqliteGeneration(sidecarOnlyDbPath, sidecarOnlyQuarantinePath),
+    sidecarOnlyQuarantinePath,
+    'a sidecar-only SQLite generation must still be quarantined',
+  )
+  assert.equal(fs.existsSync(`${sidecarOnlyDbPath}-wal`), false)
+  assert.equal(fs.existsSync(`${sidecarOnlyDbPath}-shm`), false)
+  assert.equal(fs.readFileSync(`${sidecarOnlyQuarantinePath}-wal`, 'utf8'), 'stale-wal')
+  assert.equal(fs.readFileSync(`${sidecarOnlyQuarantinePath}-shm`, 'utf8'), 'stale-shm')
+
   assert.doesNotThrow(() => assertTruncateCheckpointComplete({
     rows: [{ busy: 0, log: 0, checkpointed: 0 }],
   }, 'fixture.db'))
@@ -839,6 +878,9 @@ const historicalAnalogCache = read('lib/server/historical-analog-cache.ts')
 const weeklyWrapper = read('scripts/run-us-ml-weekly-efficient.ts')
 const usMlJob = read('scripts/run-us-ml-job.ts')
 const health = read('scripts/check-us-ml-health.ts')
+const pidProcessLock = read('lib/pid-process-lock.ts')
+const usAnalyticsBuilder = read('scripts/build-us-analytics-db.ts')
+const analogIndexBuilder = read('scripts/build-analog-sequence-index.ts')
 assert.match(runner, /contract = captureRunContract\(paths\)/)
 assert.match(runner, /weeklyOptimizationContractEnv\(contract\)/)
 assert.match(runner, /restoreValidatedModels/)
@@ -862,6 +904,7 @@ assert.match(foundation, /seedAdjustedAnalyticsShadow\(expectedSourceLineageSha2
 assert.match(foundation, /quarantineStaleSqliteGeneration\(adjustedAnalogShadowDbPath, 'analog shadow'\)/)
 assert.match(foundation, /quarantineSqliteGeneration\(dbPath, quarantinePath\)/)
 assert.match(foundation, /assertNoIncompleteSqlitePromotion\(promotionJournalPath\)/)
+assert.match(foundation, /assertNoIncompleteSqlitePromotion\(resolveWeeklyMlPromotionJournalPath\(usAnalyticsDbPath\)\)/)
 assert.match(foundation, /writeSqlitePromotionJournal\(promotionJournalPath, promotionJournal\)/)
 assert.match(foundation, /removeSqlitePromotionJournal\(promotionJournalPath\)/)
 assert.match(foundation, /seedAdjustedAnalogShadow\(priceDate, expectedSourceLineageSha256\)/)
@@ -887,6 +930,15 @@ assert.match(generationManager, /parseWeeklyOptimizationRunContract[\s\S]*expect
 assert.match(weeklyWrapper, /captureWeeklyUsSourceBoundary/)
 assert.match(usMlJob, /captureWeeklyUsSourceBoundary/)
 assert.match(usMlJob, /if \(!promotionAttempted\)[\s\S]*removeSqlitePromotionJournal\(journalPath\)[\s\S]*throw error/)
+assert.match(usMlJob, /shadowGenerationId = await seedWeeklyShadow/)
+assert.match(usMlJob, /shadowGenerationId,[\s\S]*latestDate/)
+assert.match(usMlJob, /fs\.rmSync\(checkpointFile, \{ force: true \}\)/)
+assert.match(usMlJob, /const quarantined = quarantineSqliteGeneration\(shadowPath, quarantinePath\)[\s\S]*if \(!quarantined\) return/)
+assert.match(usMlJob, /assertNoIncompleteSqlitePromotion\(weeklyPromotionJournalPath\)/)
+assert.doesNotMatch(usMlJob, /if \(mode !== 'daily'\) assertNoIncompleteSqlitePromotion\(weeklyPromotionJournalPath\)/)
+assert.match(usAnalyticsBuilder, /assertNoIncompleteSqlitePromotion\(resolveWeeklyMlPromotionJournalPath\(TARGET_PATH\)\)/)
+assert.match(analogIndexBuilder, /assertNoIncompleteSqlitePromotion\(resolveWeeklyMlPromotionJournalPath\(source\)\)/)
+assert.match(pidProcessLock, /fs\.mkdirSync\(recoveryPath\)[\s\S]*fs\.linkSync\(lockPath, stalePath\)/)
 assert.match(generationManager, /US generation promotion requires a weekly run contract or pinned source boundary/)
 assert.match(analogReader, /analogSequenceIdentities/)
 assert.match(analogReader, /assertAnalogClientGenerationCurrent\(market, client, identity\)/)

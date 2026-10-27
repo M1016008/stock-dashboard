@@ -23,6 +23,7 @@ import { acquirePidProcessLock } from '@/lib/pid-process-lock'
 import {
   assertNoIncompleteSqlitePromotion,
   resolveSqlitePromotionJournalPath,
+  resolveWeeklyMlPromotionJournalPath,
 } from '@/lib/sqlite-promotion-journal'
 import {
   DeferredExecutionError,
@@ -478,6 +479,7 @@ async function main() {
     US_ADJUSTED_PRICE_BASIS,
   )
   assertNoIncompleteSqlitePromotion(promotionJournalPath)
+  assertNoIncompleteSqlitePromotion(resolveWeeklyMlPromotionJournalPath(TARGET_PATH))
   const processLock = acquirePidProcessLock(
     `${TARGET_PATH}.process.lock`,
     `US analytics build for ${TARGET_PATH}`,

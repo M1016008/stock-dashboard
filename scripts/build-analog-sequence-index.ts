@@ -27,6 +27,7 @@ import { acquirePidProcessLock } from '@/lib/pid-process-lock'
 import {
   assertNoIncompleteSqlitePromotion,
   resolveSqlitePromotionJournalPath,
+  resolveWeeklyMlPromotionJournalPath,
 } from '@/lib/sqlite-promotion-journal'
 import { US_ADJUSTED_PRICE_BASIS } from '@/lib/us-adjusted-ohlcv'
 import { DeferredExecutionError, operationalExitCode } from '@/lib/operational-exit'
@@ -482,6 +483,7 @@ async function main(): Promise<void> {
   if (market === 'US') {
     const journalPath = resolveSqlitePromotionJournalPath(source, US_ADJUSTED_PRICE_BASIS)
     assertNoIncompleteSqlitePromotion(journalPath)
+    assertNoIncompleteSqlitePromotion(resolveWeeklyMlPromotionJournalPath(source))
   }
   if (!fs.existsSync(source)) throw new Error(`Source DB not found: ${source}`)
   assertWritableTargetPath(target, 'analog-sequence-build-target')

@@ -161,6 +161,13 @@ export function quarantineObservedStalePidProcessLock(
   expectedRaw: string,
   beforeUnlink?: () => void,
 ): boolean {
+  const recoveryPath = `${lockPath}.stale-recovery`
+  try {
+    fs.mkdirSync(recoveryPath)
+  } catch {
+    // Only one contender may validate and unlink a stale pathname at a time.
+    return false
+  }
   try {
     fs.linkSync(lockPath, stalePath)
     const observed = fs.statSync(stalePath)
@@ -173,6 +180,12 @@ export function quarantineObservedStalePidProcessLock(
     return true
   } catch {
     return false
+  } finally {
+    try {
+      fs.rmdirSync(recoveryPath)
+    } catch {
+      // A retained recovery marker fails closed on later stale reclamation.
+    }
   }
 }
 

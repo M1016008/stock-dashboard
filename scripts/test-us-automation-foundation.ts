@@ -501,6 +501,7 @@ assert.match(statusOverviewRoute, /latestUsSourceJobs/)
 
 const usAnalyticsBuilder = read('scripts/build-us-analytics-db.ts')
 assert.match(usAnalyticsBuilder, /assertNoIncompleteSqlitePromotion\(promotionJournalPath\)/)
+assert.match(usAnalyticsBuilder, /assertNoIncompleteSqlitePromotion\(resolveWeeklyMlPromotionJournalPath\(TARGET_PATH\)\)/)
 assert.match(usAnalyticsBuilder, /throw new DeferredExecutionError/)
 assert.match(usAnalyticsBuilder, /operationalExitCode\(error\)/)
 assert.match(usAnalyticsBuilder, /US_ANALYTICS_NATIVE_BUSY_RETRIES/)

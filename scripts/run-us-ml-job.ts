@@ -6,7 +6,7 @@
 // stockboard database.
 
 import { execFileSync } from 'node:child_process'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -65,7 +65,7 @@ const DEFAULT_US_ANALYTICS_DB = '/Volumes/OWC Express 1M2 80G/stockboard-data/us
 type Mode = 'daily' | 'weekly' | 'full' | 'after-pms'
 type EnvOverrides = Record<string, string | undefined>
 
-const CHUNK_CHECKPOINT_VERSION = 1
+const CHUNK_CHECKPOINT_VERSION = 2
 let activeUsMlProcessLock: UsMlProcessLock | null = null
 let activeChildProcessGroupId: number | null = null
 let shutdownSignal: NodeJS.Signals | null = null
@@ -188,6 +188,12 @@ function chunkCheckpointSignature(
 ): string {
   const dbPath = env.STOCKBOARD_DB_PATH
   if (!dbPath) throw new Error('STOCKBOARD_DB_PATH is required to checkpoint US ML feature jobs')
+  const shadowGenerationId = env.US_ML_SHADOW_GENERATION_ID?.trim() || null
+  if (dbPath.endsWith('.weekly-ml.building') && !shadowGenerationId) {
+    throw new OperatorActionRequiredError(
+      'US weekly/full chunk checkpoints require a shadow generation identity',
+    )
+  }
   const latestDate = sqliteText(dbPath, 'SELECT MAX(date) FROM ohlcv_daily')
   const implementationHash = createHash('sha256')
     .update(fs.readFileSync(checkpointScriptPath(script)))
@@ -197,6 +203,7 @@ function chunkCheckpointSignature(
     version: CHUNK_CHECKPOINT_VERSION,
     script,
     database: path.resolve(dbPath),
+    shadowGenerationId,
     latestDate,
     implementationHash,
     chunkSize,
@@ -331,6 +338,7 @@ async function runFeatureJobInTickerChunks(
     completedChunks.add(chunkKey)
     writeChunkCheckpoint(checkpointFile, signature, completedChunks)
   }
+  fs.rmSync(checkpointFile, { force: true })
 }
 
 function physicsEvaluationWindow(env: NodeJS.ProcessEnv, recentDaysValue: string): {
@@ -917,18 +925,19 @@ function cloneFile(source: string, target: string): void {
 
 function quarantineStaleWeeklyShadow(shadowPath: string): void {
   recoverInterruptedSqliteQuarantine(shadowPath)
-  if (!fs.existsSync(shadowPath)) return
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
   const quarantinePath = `${shadowPath}.stale-${timestamp}`
-  quarantineSqliteGeneration(shadowPath, quarantinePath)
+  const quarantined = quarantineSqliteGeneration(shadowPath, quarantinePath)
+  if (!quarantined) return
   console.warn(`US weekly/full history quarantined a stale shadow generation at ${quarantinePath}`)
 }
 
-async function seedWeeklyShadow(primaryPath: string, shadowPath: string): Promise<void> {
+async function seedWeeklyShadow(primaryPath: string, shadowPath: string): Promise<string> {
   quarantineStaleWeeklyShadow(shadowPath)
   await checkpointDb(primaryPath)
   cloneFile(primaryPath, shadowPath)
   fs.chmodSync(shadowPath, 0o600)
+  return randomUUID()
 }
 
 async function promoteWeeklyShadow(args: {
@@ -1051,7 +1060,7 @@ async function main(): Promise<void> {
   assertNoIncompleteSqlitePromotion(promotionJournalPath)
   const weeklyShadowPath = `${usAnalyticsDbPath}.weekly-ml.building`
   const weeklyPromotionJournalPath = resolveWeeklyMlPromotionJournalPath(usAnalyticsDbPath)
-  if (mode !== 'daily') assertNoIncompleteSqlitePromotion(weeklyPromotionJournalPath)
+  assertNoIncompleteSqlitePromotion(weeklyPromotionJournalPath)
   const usMlLock = acquireUsMlProcessLock(mode)
   if (!usMlLock) {
     throw new DeferredExecutionError(`US ML ${mode} deferred: another US ML job owns the lock`)
@@ -1097,6 +1106,7 @@ async function main(): Promise<void> {
       ? null
       : weeklySourcePin(resolvedSourceDbPath as string)
     const workingDbPath = mode === 'daily' ? usAnalyticsDbPath : weeklyShadowPath
+    let shadowGenerationId: string | undefined
     if (mode !== 'daily') {
       primaryProcessLock = acquirePidProcessLock(
         `${usAnalyticsDbPath}.process.lock`,
@@ -1117,7 +1127,7 @@ async function main(): Promise<void> {
         )
       }
       assertPinnedSourceCurrent(sourcePin!)
-      await seedWeeklyShadow(usAnalyticsDbPath, weeklyShadowPath)
+      shadowGenerationId = await seedWeeklyShadow(usAnalyticsDbPath, weeklyShadowPath)
     }
     const env: NodeJS.ProcessEnv = {
       ...process.env,
@@ -1126,6 +1136,7 @@ async function main(): Promise<void> {
       STOCKBOARD_SOURCE_DB_PATH: resolvedSourceDbPath ?? undefined,
       STOCKBOARD_DB_PATH: workingDbPath,
       US_ANALYTICS_DB_PATH: workingDbPath,
+      US_ML_SHADOW_GENERATION_ID: shadowGenerationId,
       SQLITE_BUSY_RETRIES: process.env.SQLITE_BUSY_RETRIES ?? '12',
       UPDATE_CHILD_TIMEOUT_MINUTES: process.env.UPDATE_CHILD_TIMEOUT_MINUTES ?? '2880',
       US_ML_FULL_START_DATE: process.env.US_ML_FULL_START_DATE ?? '1900-01-01',
