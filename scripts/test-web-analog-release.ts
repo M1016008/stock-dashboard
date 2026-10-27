@@ -7,6 +7,7 @@ import {
   PRODUCTION_AGENT_INVENTORY,
   WEB_ANALOG_TARGETS,
   assertReleaseLaunchAgentDefinition,
+  recoverReleaseWithBestEffortSignals,
   runWebAnalogRelease,
   type AgentSnapshot,
   type ProductionAgentLabel,
@@ -57,6 +58,32 @@ function fixture(options: { candidateHealthFails?: boolean; rollbackFails?: bool
 }
 
 async function main(): Promise<void> {
+{
+  const calls: string[] = []
+  const recovery = recoverReleaseWithBestEffortSignals({
+    freezeRequired: true,
+    signal: (signal) => {
+      calls.push(signal)
+      return signal === 'SIGSTOP'
+        ? { signaled: 1, errors: ['SIGSTOP:fixture:missing_process'] }
+        : { signaled: 1, errors: [] }
+    },
+    rollback: () => { calls.push('rollback'); return false },
+  })
+  assert.deepEqual(calls, ['SIGSTOP', 'rollback', 'SIGCONT'])
+  assert.equal(recovery.restartRequired, true, 'signal failure must force a supervised restart')
+}
+
+{
+  const calls: string[] = []
+  assert.throws(() => recoverReleaseWithBestEffortSignals({
+    freezeRequired: true,
+    signal: (signal) => { calls.push(signal); return { signaled: 2, errors: [] } },
+    rollback: () => { calls.push('rollback'); throw new Error('fixture_rollback_failed') },
+  }), /release_rollback_failed_hold/)
+  assert.deepEqual(calls, ['SIGSTOP', 'rollback'], 'an unverified generation must remain fail-closed')
+}
+
 {
   const releaseRoot = '/fixture/stock-dashboard'
   const definition = (label: (typeof WEB_ANALOG_TARGETS)[number]): ReleaseLaunchAgentDefinition => ({
@@ -116,6 +143,50 @@ async function main(): Promise<void> {
   )
 }
 
+// A partial promote must be recovered even when promote() throws before it returns.
+{
+  const before = snapshot()
+  let uncertain = false
+  let restored = false
+  const calls: string[] = []
+  const adapter: WebAnalogReleaseAdapter = {
+    snapshotAgents: () => clone(before),
+    assertHealthy: () => { calls.push('health') },
+    promote: () => {
+      calls.push('promote')
+      uncertain = true
+      throw new Error('crash_during_promote')
+    },
+    needsRecovery: () => uncertain,
+    restore: () => {
+      calls.push('restore')
+      uncertain = false
+      restored = true
+      return false
+    },
+    kickstart: (label) => { calls.push(`kickstart:${label}`) },
+  }
+  await assert.rejects(() => runWebAnalogRelease(adapter), /rolled_back_or_held/)
+  assert.equal(restored, true)
+  assert.equal(calls.some((call) => call.startsWith('kickstart:')), false)
+}
+
+// A foreign journal or lock must fail closed without touching services or attempting rollback.
+{
+  const before = snapshot()
+  let restoreCalled = false
+  const adapter: WebAnalogReleaseAdapter = {
+    snapshotAgents: () => clone(before),
+    assertHealthy: () => undefined,
+    promote: () => { throw new Error('foreign_release_transaction_present') },
+    needsRecovery: () => false,
+    restore: () => { restoreCalled = true },
+    kickstart: () => undefined,
+  }
+  await assert.rejects(() => runWebAnalogRelease(adapter), /web_analog_release_preflight_failed/)
+  assert.equal(restoreCalled, false)
+}
+
 // The rehearsal uses real directory renames while all service operations remain synthetic.
 {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'web-analog-release-'))
@@ -162,6 +233,14 @@ async function main(): Promise<void> {
   assert.match(source, /STOCKBOARD_EXPECTED_WEB_PLIST_SHA256/)
   assert.match(source, /STOCKBOARD_EXPECTED_ANALOG_PLIST_SHA256/)
   assert.match(source, /STOCKBOARD_EXPECTED_RELEASE_ROOT_REALPATH/)
+  assert.match(source, /STOCKBOARD_PREFLIGHT_PROOF_SHA256/)
+  assert.match(source, /STOCKBOARD_EXPECTED_RUNTIME_IDENTITY_SHA256/)
+  assert.match(source, /STOCKBOARD_RELEASE_STATE_DIR/)
+  assert.match(source, /SIGSTOP/)
+  assert.match(source, /WebAnalogReleaseTransaction/)
+  assert.ok(source.indexOf('const proof = verifySmaReleasePreflightProof') < source.indexOf('const transaction = new WebAnalogReleaseTransaction'))
+  assert.ok(source.match(/verifySmaReleasePreflightProof\(proofOptions\)/g)!.length >= 3,
+    'proof must be checked initially, after staging, and immediately before activation')
   assert.match(source, /WEB_ANALOG_TARGETS/)
   const contract = readFileSync('lib/release/web-analog-only.ts', 'utf8')
   for (const label of WEB_ANALOG_TARGETS) assert.match(contract, new RegExp(label.replaceAll('.', '\\.')))
