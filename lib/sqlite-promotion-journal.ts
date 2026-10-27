@@ -63,7 +63,7 @@ export function promotionRecoveryMessage(
     .filter((plan): plan is SqlitePromotionPlan => plan != null)
     .map((plan) => `primary=${plan.primaryPath}, shadow=${plan.shadowPath}, backup=${plan.backupPath}`)
     .join(' | ')
-  return `US adjusted foundation promotion requires operator review; `
+  return `SQLite promotion requires operator review; `
     + `journal=${journalPath}, transaction=${journal.transactionId}, phase=${journal.phase} `
     + `(${phaseMeaning[journal.phase]}), error=${journal.error ?? 'none'}, ${plans}. `
     + 'Inspect every primary/shadow/backup DB/WAL/SHM member read-only and obtain explicit recovery '
@@ -108,7 +108,8 @@ export function assertNoIncompleteSqlitePromotion(journalPath: string): void {
     journal = parsePromotionJournal(fs.readFileSync(journalPath, 'utf8'))
   } catch (error) {
     throw new OperatorActionRequiredError(
-      `US adjusted foundation promotion journal is unreadable; journal=${journalPath}. `
+      `SQLite promotion journal is unreadable; journal=${journalPath}, `
+      + `parseError=${error instanceof Error ? error.message : String(error)}. `
       + 'Do not publish or delete any primary, shadow, or backup generation.',
       { cause: error },
     )

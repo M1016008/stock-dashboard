@@ -25,8 +25,13 @@ import {
   DEFERRED_EXECUTION_EXIT_CODE,
   OPERATOR_ACTION_REQUIRED_EXIT_CODE,
   DeferredExecutionError,
+  OperatorActionRequiredError,
   operationalExitCode,
 } from '@/lib/operational-exit'
+import {
+  WeeklyModelRecoveryBlockedError,
+  withWeeklyModelRecoveryGuard,
+} from '@/lib/weekly-model-recovery-guard'
 import {
   assessWeeklyPromotionReadiness,
   assessWeeklyServingOutput,
@@ -336,6 +341,7 @@ function implementationFingerprint(): string {
     'lib/us-ml-process-lock.ts',
     'lib/weekly-source-observation.ts',
     'lib/weekly-us-source-boundary.ts',
+    'lib/weekly-model-recovery-guard.ts',
     'lib/weekly-optimization-run-contract.ts',
   ]
   const hash = createHash('sha256')
@@ -781,7 +787,8 @@ async function main(): Promise<void> {
       } else if (completed.exitCode === DEFERRED_EXECUTION_EXIT_CODE) {
         result.error = `safely deferred by a conflicting owner; exit=${completed.exitCode}; no rollback or publication retry was started`
       } else if (completed.exitCode !== 0) {
-        result.error = `exit=${completed.exitCode}, signal=${completed.signal ?? 'none'}`
+        result.error = `child npm script failed; script=${step.npmScript}, exit=${completed.exitCode}, `
+          + `signal=${completed.signal ?? 'none'}; inspect inherited child stdout/stderr for the original cause`
       }
       if (completed.exitCode === 0) {
         assertAllSourceLineageUnchanged(contract, paths)
@@ -820,16 +827,41 @@ async function main(): Promise<void> {
     if (result.status === 'failed') {
       if (step.modelDbPath && modelSnapshot && modelSnapshot.length > 0) {
         try {
-          const demoted = await restoreValidatedModels(step.modelDbPath, modelSnapshot)
-          console.warn(
-            `[weekly-optimization] ROLLBACK ${step.id}: restored validated model generation; demoted=${demoted}`,
-          )
-          await republishValidatedModels(step)
+          await withWeeklyModelRecoveryGuard({
+            stepId: step.id,
+            market: stepMarket(step),
+            modelDbPath: step.modelDbPath,
+            priceBasis: CURRENT_SERVING_PRICE_BASIS[stepMarket(step) ?? 'JP'],
+            originalFailure: result.error ?? 'step failed without an error message',
+            env: step.env,
+          }, async () => {
+            const demoted = await restoreValidatedModels(step.modelDbPath!, modelSnapshot!)
+            console.warn(
+              `[weekly-optimization] ROLLBACK ${step.id}: restored validated model generation; demoted=${demoted}`,
+            )
+            await republishValidatedModels(step)
+          })
         } catch (error) {
           const rollbackError = errorMessage(error)
-          result.error = `${result.error ?? 'step failed'}; rollback failed: ${rollbackError}`
+          const originalFailure = result.error ?? 'step failed'
+          if (error instanceof WeeklyModelRecoveryBlockedError) {
+            result.status = 'blocked'
+            result.error = rollbackError
+            state.error = result.error
+            console.error(`[weekly-optimization] RECOVERY HOLD BEFORE MUTATION ${step.id}: ${rollbackError}`)
+          } else if (error instanceof OperatorActionRequiredError) {
+            result.status = 'blocked'
+            result.error = `${originalFailure}; parent recovery stopped after it began: ${rollbackError}; `
+              + `the validated-model restore may already have completed; protectedDbFamily=${step.modelDbPath},`
+              + `${step.modelDbPath}-wal,${step.modelDbPath}-shm; do not modify, republish, promote, `
+              + 'delete, or adopt this family before read-only operator inspection and explicit recovery approval'
+            state.error = result.error
+            console.error(`[weekly-optimization] RECOVERY HOLD AFTER START ${step.id}: ${result.error}`)
+          } else {
+            result.error = `${originalFailure}; rollback failed: ${rollbackError}`
+            console.error(`[weekly-optimization] ROLLBACK FAILED ${step.id}: ${rollbackError}`)
+          }
           writeState(state)
-          console.error(`[weekly-optimization] ROLLBACK FAILED ${step.id}: ${rollbackError}`)
         }
       }
       console.error(`[weekly-optimization] STOP ${step.id}: downstream publication was not started`)

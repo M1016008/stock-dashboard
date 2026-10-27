@@ -41,6 +41,7 @@ on:
       - 'lib/weekly-optimization-run-contract.ts'
       - 'lib/weekly-source-observation.ts'
       - 'lib/weekly-us-source-boundary.ts'
+      - 'lib/weekly-model-recovery-guard.ts'
       - 'lib/large-holders/release-preflight.ts'
       - 'proxy.ts'
       - 'scripts/install-*.ts'

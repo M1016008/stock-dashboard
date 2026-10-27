@@ -28,6 +28,7 @@ import {
 import { expectedLatestTradingDate } from '@/lib/server/data-freshness'
 import { expectedLatestUsTradingDate } from '@/lib/server/us-data-freshness'
 import { acquireUsMlProcessLock } from '@/lib/us-ml-process-lock'
+import { withWeeklyModelRecoveryGuard } from '@/lib/weekly-model-recovery-guard'
 import {
   acquirePidProcessLock,
   quarantineObservedStalePidProcessLock,
@@ -543,6 +544,195 @@ try {
   )
   fs.unlinkSync(promotionJournalPath)
 
+  const recoveryPrimary = path.join(fixtureRoot, 'recovery-primary.db')
+  const recoveryShadow = `${recoveryPrimary}.fixture-basis.building`
+  const recoveryBackup = `${recoveryPrimary}.backup`
+  const recoveryLockPath = path.join(fixtureRoot, 'parent-recovery.lock')
+  const recoveryJournalPath = resolveSqlitePromotionJournalPath(
+    recoveryPrimary,
+    'fixture-basis',
+    { US_ADJUSTED_FOUNDATION_SHADOW_PATH: recoveryShadow },
+  )
+  const weeklyRecoveryJournalPath = resolveWeeklyMlPromotionJournalPath(recoveryPrimary)
+  const recoveryArtifacts = [recoveryPrimary, recoveryShadow, recoveryBackup]
+  const artifactHashes = () => Object.fromEntries(recoveryArtifacts.map((artifact) => [
+    artifact,
+    fs.existsSync(artifact)
+      ? execFileSync('shasum', ['-a', '256', artifact], { encoding: 'utf8' }).split(/\s+/)[0]
+      : null,
+  ]))
+  const seedRecoveryArtifacts = (primary: string, shadow: string, backup: string) => {
+    fs.writeFileSync(recoveryPrimary, primary)
+    fs.writeFileSync(recoveryShadow, shadow)
+    fs.writeFileSync(recoveryBackup, backup)
+  }
+  const recoveryJournal = (
+    phase: 'prepared' | 'analog-promoted' | 'analytics-promoted' | 'compensation-failed',
+  ) => ({
+    version: 1 as const,
+    transactionId: `fixture-${phase}`,
+    phase,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    analog: null,
+    analytics: {
+      primaryPath: recoveryPrimary,
+      shadowPath: recoveryShadow,
+      backupPath: recoveryBackup,
+    },
+    error: phase === 'compensation-failed' ? 'fixture compensation failed' : null,
+  })
+  const assertRecoveryBlockedWithoutMutation = async (
+    journalPath: string,
+    phase: 'prepared' | 'analog-promoted' | 'analytics-promoted' | 'compensation-failed',
+    label: string,
+  ) => {
+    seedRecoveryArtifacts(`${label}-primary`, `${label}-shadow`, `${label}-backup`)
+    writeSqlitePromotionJournal(journalPath, recoveryJournal(phase))
+    const before = artifactHashes()
+    let recoveryStarted = false
+    await assert.rejects(
+      () => withWeeklyModelRecoveryGuard({
+        stepId: 'us-features-models',
+        market: 'US',
+        modelDbPath: recoveryPrimary,
+        priceBasis: 'fixture-basis',
+        originalFailure: `${label} original child failure`,
+        env: { US_ADJUSTED_FOUNDATION_SHADOW_PATH: recoveryShadow },
+        usMlLockPath: recoveryLockPath,
+      }, async () => {
+        recoveryStarted = true
+        fs.writeFileSync(recoveryPrimary, 'unsafe-parent-restore')
+        fs.writeFileSync(recoveryShadow, 'unsafe-parent-republish')
+      }),
+      (error: unknown) => error instanceof OperatorActionRequiredError
+        && error.message.includes(`${label} original child failure`)
+        && error.message.includes(journalPath)
+        && error.message.includes(
+          `blockingJournalKind=${journalPath === weeklyRecoveryJournalPath ? 'weekly-ml' : 'adjusted-foundation'}`,
+        )
+        && error.message.includes('generation=unknown'),
+      `${label} must require operator action with the original failure and journal evidence`,
+    )
+    assert.equal(recoveryStarted, false, `${label} must stop before restore or republish begins`)
+    assert.deepEqual(artifactHashes(), before, `${label} must preserve every generation byte-for-byte`)
+    removeSqlitePromotionJournal(journalPath)
+  }
+
+  await assertRecoveryBlockedWithoutMutation(
+    recoveryJournalPath,
+    'prepared',
+    'journal-created-before-primary-switch',
+  )
+  await assertRecoveryBlockedWithoutMutation(
+    recoveryJournalPath,
+    'prepared',
+    'sigkill-during-primary-switch',
+  )
+  await assertRecoveryBlockedWithoutMutation(
+    recoveryJournalPath,
+    'analytics-promoted',
+    'promotion-finished-before-journal-removal',
+  )
+  await assertRecoveryBlockedWithoutMutation(
+    recoveryJournalPath,
+    'compensation-failed',
+    'rollback-partially-failed',
+  )
+  await assertRecoveryBlockedWithoutMutation(
+    weeklyRecoveryJournalPath,
+    'prepared',
+    'weekly-model-journal-left-by-sigkill',
+  )
+
+  seedRecoveryArtifacts('corrupt-primary', 'corrupt-shadow', 'corrupt-backup')
+  fs.writeFileSync(recoveryJournalPath, '{"version":1,"phase":"prepared"}\n')
+  const corruptBefore = artifactHashes()
+  for (const restartAttempt of [1, 2]) {
+    let recoveryStarted = false
+    await assert.rejects(
+      () => withWeeklyModelRecoveryGuard({
+        stepId: 'us-features-models',
+        market: 'US',
+        modelDbPath: recoveryPrimary,
+        priceBasis: 'fixture-basis',
+        originalFailure: `parent restart ${restartAttempt}`,
+        env: { US_ADJUSTED_FOUNDATION_SHADOW_PATH: recoveryShadow },
+        usMlLockPath: recoveryLockPath,
+      }, async () => {
+        recoveryStarted = true
+        fs.writeFileSync(recoveryPrimary, 'unsafe-restart-restore')
+      }),
+      (error: unknown) => error instanceof OperatorActionRequiredError
+        && error.message.includes('blockingJournalKind=adjusted-foundation')
+        && error.message.includes('parseError=journal schema is invalid'),
+    )
+    assert.equal(recoveryStarted, false, 'a corrupt journal must block every parent restart')
+    assert.deepEqual(artifactHashes(), corruptBefore)
+  }
+  fs.unlinkSync(recoveryJournalPath)
+
+  seedRecoveryArtifacts('pre-promotion-old', 'pre-promotion-shadow', 'pre-promotion-backup')
+  let safeRecoveryStarted = false
+  await withWeeklyModelRecoveryGuard({
+    stepId: 'us-features-models',
+    market: 'US',
+    modelDbPath: recoveryPrimary,
+    priceBasis: 'fixture-basis',
+    originalFailure: 'child failed before promotion journal creation',
+    env: { US_ADJUSTED_FOUNDATION_SHADOW_PATH: recoveryShadow },
+    usMlLockPath: recoveryLockPath,
+  }, async () => {
+    safeRecoveryStarted = true
+    fs.writeFileSync(recoveryPrimary, 'validated-parent-restore')
+  })
+  assert.equal(safeRecoveryStarted, true, 'pre-promotion failure may use the validated parent snapshot')
+  assert.equal(fs.readFileSync(recoveryPrimary, 'utf8'), 'validated-parent-restore')
+
+  const concurrentRecoveryLock = acquireUsMlProcessLock('fixture-concurrent-recovery', recoveryLockPath)
+  assert.ok(concurrentRecoveryLock)
+  const concurrentBefore = artifactHashes()
+  let concurrentRecoveryStarted = false
+  await assert.rejects(
+    () => withWeeklyModelRecoveryGuard({
+      stepId: 'us-features-models',
+      market: 'US',
+      modelDbPath: recoveryPrimary,
+      priceBasis: 'fixture-basis',
+      originalFailure: 'child failed while another US ML owner started',
+      env: { US_ADJUSTED_FOUNDATION_SHADOW_PATH: recoveryShadow },
+      usMlLockPath: recoveryLockPath,
+    }, async () => {
+      concurrentRecoveryStarted = true
+      fs.writeFileSync(recoveryPrimary, 'unsafe-concurrent-restore')
+    }),
+    /blocked by a concurrent US ML owner/,
+  )
+  concurrentRecoveryLock.release()
+  assert.equal(concurrentRecoveryStarted, false)
+  assert.deepEqual(artifactHashes(), concurrentBefore)
+
+  await assert.rejects(
+    () => withWeeklyModelRecoveryGuard({
+      stepId: 'us-features-models',
+      market: 'US',
+      modelDbPath: recoveryPrimary,
+      priceBasis: 'fixture-basis',
+      originalFailure: 'child failed before a parent rollback failure',
+      env: { US_ADJUSTED_FOUNDATION_SHADOW_PATH: recoveryShadow },
+      usMlLockPath: recoveryLockPath,
+    }, async () => {
+      throw new Error('fixture parent rollback failed')
+    }),
+    /fixture parent rollback failed/,
+  )
+  const lockAfterRollbackFailure = acquireUsMlProcessLock(
+    'fixture-after-parent-rollback-failure',
+    recoveryLockPath,
+  )
+  assert.ok(lockAfterRollbackFailure, 'the recovery lock must be released after parent rollback fails')
+  lockAfterRollbackFailure.release()
+
   const analogReadPath = path.join(fixtureRoot, 'analog-read.db')
   const analogReadBackup = `${analogReadPath}.old`
   const createAnalogReadFixture = (sourceDate: string) => execFileSync('sqlite3', [
@@ -965,6 +1155,10 @@ assert.match(runner, /activeChildProcessGroupId = child\.pid \?\? null/)
 assert.match(runner, /signalProcessGroup\(activeChildProcessGroupId, 'SIGTERM'\)/)
 assert.match(runner, /waitForProcessGroupExit\(processGroupId\)/)
 assert.match(runner, /weeklyProcessLock\?\.setProcessGroup\(child\.pid\)/)
+assert.match(runner, /withWeeklyModelRecoveryGuard/)
+assert.match(runner, /result\.status = 'blocked'/)
+assert.match(runner, /RECOVERY HOLD BEFORE MUTATION/)
+assert.match(runner, /RECOVERY HOLD AFTER START/)
 assert.doesNotMatch(runner, /process\.once\('exit', releaseProcessLock\)/)
 assert.match(runner, /DEFERRED_EXECUTION_EXIT_CODE/)
 assert.match(runner, /operationalExitCode\(error\)/)
