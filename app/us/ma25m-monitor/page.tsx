@@ -324,7 +324,7 @@ export default function UsMonthlyMaMonitorPage() {
         title="月足MAモニター"
         subtitle="調整済み日足と米国営業日列から、月足MAへの接近・接触・クロスを確認します。"
         badge="US"
-        meta={data ? `基準日 ${data.date} · Generation ${data.source.sourceGeneration ?? '未確認'} · ${data.source.priceBasis}` : '読込中'}
+        meta={data ? `基準日 ${data.date} · Generation ${data.source.sourceGeneration ?? '未確認'} · ${data.source.priceBasis}` : error ? '利用不可' : '読込中'}
         rightSlot={<Link href="/ma25m-monitor" className="btn">日本株版</Link>}
       />
 
@@ -444,6 +444,12 @@ export default function UsMonthlyMaMonitorPage() {
               </div>
               <div className="mt-2"><StageCell row={row} /></div>
               <div className="mt-2"><SignalBadges row={row} contactThreshold={data?.contactThreshold ?? 2} /></div>
+              <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 border-t border-[var(--color-border-soft)] pt-2 text-[10px] text-[var(--color-text-secondary)]">
+                <div className="flex justify-between gap-2"><dt>5日 / 10日乖離</dt><dd className="font-mono">{pct(row.distance5dPct)} / {pct(row.distance10dPct)}</dd></div>
+                <div className="flex justify-between gap-2"><dt>接近速度</dt><dd className="font-mono">{pct(row.approachSpeedPctPerDay, 3)}/日</dd></div>
+                <div className="flex justify-between gap-2"><dt>出来高比</dt><dd className="font-mono">{row.volumeRatio20 == null ? '—' : `${row.volumeRatio20.toFixed(2)}倍`}</dd></div>
+                <div className="flex justify-between gap-2"><dt>タッチ / クロス</dt><dd>{age(row.touchAgeSessions)} / {age(row.crossAgeSessions)}</dd></div>
+              </dl>
             </li>
           ))}
         </ul>

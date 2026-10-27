@@ -49,6 +49,32 @@ function fmtRate(value: number | null | undefined): string {
   return `${(value * 100).toFixed(1)}%`
 }
 
+const COVERAGE_REASON_LABELS: Record<string, string> = {
+  US_ANALYTICS_DB_MISSING: '分析データベースを利用できません',
+  US_SERVING_SCHEMA_UNAVAILABLE: '配信用データの構成を確認できません',
+  US_SERVING_CANDIDATES_MISSING: '配信用の候補データがありません',
+  US_PRICE_BASIS_MISMATCH: '価格の計算基準が一致していません',
+  US_SERVING_GENERATION_MISMATCH: '価格・Snapshot・候補の基準日が一致していません',
+  US_SERVING_QUERY_FAILED: '配信用データの読み込みに失敗しました',
+  US_COMPLETE_CANDIDATES_MISSING: '同一基準日で照合できる候補がありません',
+}
+
+const UNAVAILABLE_EVIDENCE_LABELS: Record<string, string> = {
+  BORROW_AVAILABILITY: '借株可否',
+  VALIDATED_OUTCOME_EVIDENCE: '検証済みOutcome',
+  SIGNAL_RETURN_STATISTICS: 'シグナル収益統計',
+  EARNINGS_CALENDAR: '決算カレンダー',
+}
+
+function coverageReasonLabel(reason: string | null): string {
+  if (!reason) return '原因を確認できません'
+  return COVERAGE_REASON_LABELS[reason] ?? '配信用データの整合性を確認できません'
+}
+
+function unavailableEvidenceLabel(item: string): string {
+  return UNAVAILABLE_EVIDENCE_LABELS[item] ?? '追加の検証データ'
+}
+
 function actionClasses(action: UsTradeWorkbenchAction): string {
   if (action === 'buy_candidate') return 'border-emerald-300 bg-emerald-50 text-emerald-800'
   if (action === 'downside_watch') return 'border-blue-300 bg-blue-50 text-blue-800'
@@ -249,7 +275,7 @@ export default async function UsTradeWorkbenchPage({
         title="米国株 売買候補"
         subtitle="現行ServingのPhysical ML、6ステージ、SMAを同一as-of日で照合します。過去Outcomeや借株可否は使いません。"
         badge="検証用下書き"
-        meta={<span>{data.params.horizonDays}営業日 / {data.coverage.asOfDate ?? 'Source unavailable'}</span>}
+        meta={<span>{data.params.horizonDays}営業日 / {data.coverage.asOfDate ?? '基準日未確認'}</span>}
         rightSlot={<Link href="/us/analysis/backtest" className="btn">US過去検証へ</Link>}
       />
 
@@ -263,14 +289,14 @@ export default async function UsTradeWorkbenchPage({
       </dl>
 
       {data.coverage.availability === 'unavailable' ? (
-        <Card className="sb-section border-red-300 bg-red-50" role="alert">
+        <Card className="border-red-300 bg-red-50" role="alert">
           <CardHeader title="Servingデータを利用できません" hint="候補を最新値へフォールバックせず、Fail-Closedで停止しています。" />
-          <p className="text-[13px] font-bold text-red-900">理由: {data.coverage.reason ?? 'UNKNOWN'}</p>
+          <p className="text-[13px] font-bold text-red-900">理由: {coverageReasonLabel(data.coverage.reason)}</p>
           <p className="mt-2 text-[12px] font-semibold text-red-900">Price / Snapshot / ML候補のGenerationと価格basisが同一になるまで候補は表示しません。</p>
         </Card>
       ) : (
         <>
-          <Card className="sb-section">
+          <Card>
             <CardHeader title="条件とSource Coverage" hint="候補集合を減らして正常に見せず、除外件数と利用不可Evidenceを表示します。" />
             <div className="flex flex-wrap gap-2">
               {HORIZONS.map((horizon) => (
@@ -298,7 +324,7 @@ export default async function UsTradeWorkbenchPage({
               </div>
             )}
             <p className="mt-3 text-[11px] font-semibold text-[var(--color-text-tertiary)]">
-              利用不可: {data.coverage.unavailableEvidence.join(' / ')}
+              利用不可: {data.coverage.unavailableEvidence.map(unavailableEvidenceLabel).join(' / ')}
             </p>
           </Card>
 

@@ -391,7 +391,7 @@ export default async function TradeWorkbenchPage({
         />
       </dl>
 
-      <Card className="sb-section">
+      <Card>
         <CardHeader title="条件" hint="評価期間と仮の予算を切り替えて、注文案の作られ方を確認します。" />
         <div className="flex flex-wrap gap-2">
           {HORIZONS.map((horizon) => (
