@@ -31,7 +31,7 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
-function protectedArtifactSummary(
+export function weeklyModelRecoveryProtectedState(
   modelDbPath: string,
   priceBasis: string,
   env: Readonly<Record<string, string | undefined>>,
@@ -57,6 +57,23 @@ function protectedArtifactSummary(
   }
 }
 
+export function weeklyModelRecoveryHoldAfterStartMessage(
+  input: WeeklyModelRecoveryGuardInput,
+  recoveryFailure: string,
+): string {
+  const protectedState = weeklyModelRecoveryProtectedState(
+    input.modelDbPath,
+    input.priceBasis,
+    input.env ?? process.env,
+  )
+  return `${input.originalFailure}; parent recovery stopped after it began: ${recoveryFailure}; `
+    + `generation=unknown, journals=${protectedState.journalPaths.join(',')}, `
+    + `protectedArtifacts=${protectedState.artifacts.join(',')}. `
+    + 'The validated-model restore may already have completed and rollback publication is not confirmed. '
+    + 'Do not modify, restore, republish, promote, delete, or adopt these artifacts before read-only '
+    + 'operator inspection and explicit recovery approval.'
+}
+
 export async function withWeeklyModelRecoveryGuard<T>(
   input: WeeklyModelRecoveryGuardInput,
   recover: () => Promise<T>,
@@ -65,7 +82,7 @@ export async function withWeeklyModelRecoveryGuard<T>(
 
   const env = input.env ?? process.env
   const lockPath = input.usMlLockPath ?? US_ML_PROCESS_LOCK_PATH
-  const protectedState = protectedArtifactSummary(input.modelDbPath, input.priceBasis, env)
+  const protectedState = weeklyModelRecoveryProtectedState(input.modelDbPath, input.priceBasis, env)
   const lock = acquireUsMlProcessLock(`parent-recovery-${input.stepId}`, lockPath)
   if (!lock) {
     throw new WeeklyModelRecoveryBlockedError(

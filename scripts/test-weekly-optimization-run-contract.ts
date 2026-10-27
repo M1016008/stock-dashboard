@@ -28,7 +28,10 @@ import {
 import { expectedLatestTradingDate } from '@/lib/server/data-freshness'
 import { expectedLatestUsTradingDate } from '@/lib/server/us-data-freshness'
 import { acquireUsMlProcessLock } from '@/lib/us-ml-process-lock'
-import { withWeeklyModelRecoveryGuard } from '@/lib/weekly-model-recovery-guard'
+import {
+  weeklyModelRecoveryHoldAfterStartMessage,
+  withWeeklyModelRecoveryGuard,
+} from '@/lib/weekly-model-recovery-guard'
 import {
   acquirePidProcessLock,
   quarantineObservedStalePidProcessLock,
@@ -711,6 +714,23 @@ try {
   concurrentRecoveryLock.release()
   assert.equal(concurrentRecoveryStarted, false)
   assert.deepEqual(artifactHashes(), concurrentBefore)
+
+  const afterStartMessage = weeklyModelRecoveryHoldAfterStartMessage({
+    stepId: 'fixture-post-start',
+    market: 'US',
+    modelDbPath: recoveryPrimary,
+    priceBasis: 'fixture-basis',
+    originalFailure: 'child exited by SIGKILL',
+    env: { US_ADJUSTED_FOUNDATION_SHADOW_PATH: recoveryShadow },
+  }, 'rollback publisher requested operator action')
+  assert.match(afterStartMessage, /child exited by SIGKILL/)
+  assert.match(afterStartMessage, /rollback publisher requested operator action/)
+  assert.match(afterStartMessage, /generation=unknown/)
+  assert.match(afterStartMessage, /promotion-journal/)
+  assert.match(afterStartMessage, /weekly-ml\.building/)
+  assert.match(afterStartMessage, /pre-weekly-ml-\*/)
+  assert.match(afterStartMessage, /restore may already have completed/i)
+  assert.match(afterStartMessage, /publication is not confirmed/i)
 
   await assert.rejects(
     () => withWeeklyModelRecoveryGuard({

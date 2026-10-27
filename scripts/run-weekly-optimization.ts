@@ -30,6 +30,7 @@ import {
 } from '@/lib/operational-exit'
 import {
   WeeklyModelRecoveryBlockedError,
+  weeklyModelRecoveryHoldAfterStartMessage,
   withWeeklyModelRecoveryGuard,
 } from '@/lib/weekly-model-recovery-guard'
 import {
@@ -610,8 +611,9 @@ async function republishValidatedModels(step: Step): Promise<void> {
     }
     const result = await runStep(recoveryStep)
     if (result.exitCode !== 0) {
-      throw new Error(
-        `rollback publication failed: npm run ${npmScript}, exit=${result.exitCode}, signal=${result.signal ?? 'none'}`,
+      throw new OperatorActionRequiredError(
+        `rollback publication did not complete: npm run ${npmScript}, exit=${result.exitCode}, `
+        + `signal=${result.signal ?? 'none'}; restore may already have completed and publication state is unconfirmed`,
       )
     }
   }
@@ -849,17 +851,18 @@ async function main(): Promise<void> {
             result.error = rollbackError
             state.error = result.error
             console.error(`[weekly-optimization] RECOVERY HOLD BEFORE MUTATION ${step.id}: ${rollbackError}`)
-          } else if (error instanceof OperatorActionRequiredError) {
+          } else {
             result.status = 'blocked'
-            result.error = `${originalFailure}; parent recovery stopped after it began: ${rollbackError}; `
-              + `the validated-model restore may already have completed; protectedDbFamily=${step.modelDbPath},`
-              + `${step.modelDbPath}-wal,${step.modelDbPath}-shm; do not modify, republish, promote, `
-              + 'delete, or adopt this family before read-only operator inspection and explicit recovery approval'
+            result.error = weeklyModelRecoveryHoldAfterStartMessage({
+              stepId: step.id,
+              market: stepMarket(step),
+              modelDbPath: step.modelDbPath,
+              priceBasis: CURRENT_SERVING_PRICE_BASIS[stepMarket(step) ?? 'JP'],
+              originalFailure,
+              env: step.env,
+            }, rollbackError)
             state.error = result.error
             console.error(`[weekly-optimization] RECOVERY HOLD AFTER START ${step.id}: ${result.error}`)
-          } else {
-            result.error = `${originalFailure}; rollback failed: ${rollbackError}`
-            console.error(`[weekly-optimization] ROLLBACK FAILED ${step.id}: ${rollbackError}`)
           }
           writeState(state)
         }
