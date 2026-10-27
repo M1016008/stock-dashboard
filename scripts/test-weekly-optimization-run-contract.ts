@@ -903,8 +903,16 @@ assert.match(foundation, /quarantineStaleAdjustedShadowLineage\(\)/)
 assert.match(foundation, /seedAdjustedAnalyticsShadow\(expectedSourceLineageSha256\)/)
 assert.match(foundation, /quarantineStaleSqliteGeneration\(adjustedAnalogShadowDbPath, 'analog shadow'\)/)
 assert.match(foundation, /quarantineSqliteGeneration\(dbPath, quarantinePath\)/)
-assert.match(foundation, /assertNoIncompleteSqlitePromotion\(promotionJournalPath\)/)
-assert.match(foundation, /assertNoIncompleteSqlitePromotion\(resolveWeeklyMlPromotionJournalPath\(usAnalyticsDbPath\)\)/)
+assert.match(foundation, /function assertNoIncompletePromotionJournals\(\): void \{[\s\S]*assertNoIncompleteSqlitePromotion\(promotionJournalPath\)[\s\S]*assertNoIncompleteSqlitePromotion\(weeklyPromotionJournalPath\)/)
+assert.ok(
+  (foundation.match(/\n\s+assertNoIncompletePromotionJournals\(\)/g) ?? []).length >= 4,
+  'foundation must recheck both journals at startup, after lock acquisition, and at promotion boundaries',
+)
+assert.ok(
+  foundation.indexOf('lock = await acquireUsStockboardUpdateLock(')
+    < foundation.indexOf('assertNoIncompletePromotionJournals()', foundation.indexOf('lock = await acquireUsStockboardUpdateLock(')),
+  'foundation must recheck promotion journals after acquiring its conflicting update lock',
+)
 assert.match(foundation, /writeSqlitePromotionJournal\(promotionJournalPath, promotionJournal\)/)
 assert.match(foundation, /removeSqlitePromotionJournal\(promotionJournalPath\)/)
 assert.match(foundation, /seedAdjustedAnalogShadow\(priceDate, expectedSourceLineageSha256\)/)

@@ -85,6 +85,7 @@ const promotionJournalPath = resolveSqlitePromotionJournalPath(
   usAnalyticsDbPath,
   US_ADJUSTED_PRICE_BASIS,
 )
+const weeklyPromotionJournalPath = resolveWeeklyMlPromotionJournalPath(usAnalyticsDbPath)
 const SOURCE_SNAPSHOT_LOCK_JOB = 'us_adjusted_source_snapshots'
 const SOURCE_SNAPSHOT_CONFLICTS = EXCLUSIVE_UPDATE_JOB_TYPES.filter(
   (jobType) => jobType !== 'us_adjusted_foundation',
@@ -106,6 +107,11 @@ const FOUNDATION_IMPLEMENTATION_FINGERPRINT =
 let activeNpmChild: ChildProcess | null = null
 let activeNpmProcessGroupId: number | null = null
 let foundationProcessLock: PidProcessLock | null = null
+
+function assertNoIncompletePromotionJournals(): void {
+  assertNoIncompleteSqlitePromotion(promotionJournalPath)
+  assertNoIncompleteSqlitePromotion(weeklyPromotionJournalPath)
+}
 
 function acquireFoundationProcessLock(): PidProcessLock {
   const lock = acquirePidProcessLock(
@@ -1131,8 +1137,7 @@ async function main(): Promise<void> {
   assertWritableTargetPath(usAnalogDbPath, 'us-adjusted-analog-primary')
   assertWritableTargetPath(adjustedShadowDbPath, 'us-adjusted-shadow')
   assertWritableTargetPath(adjustedAnalogShadowDbPath, 'us-adjusted-analog-shadow')
-  assertNoIncompleteSqlitePromotion(promotionJournalPath)
-  assertNoIncompleteSqlitePromotion(resolveWeeklyMlPromotionJournalPath(usAnalyticsDbPath))
+  assertNoIncompletePromotionJournals()
   await ensureReady()
   const expectedSourceLineageSha256 = await expectedFoundationSourceLineageSha256()
   await assertWeeklyUsLineageUnchanged('start')
@@ -1197,6 +1202,7 @@ async function main(): Promise<void> {
     return current
   }
   try {
+    assertNoIncompletePromotionJournals()
     const recoveredAt = new Date()
     await db.update(marketDataRuns).set({
       status: 'failed',
@@ -1368,6 +1374,7 @@ async function main(): Promise<void> {
           if (heavyMlIsActive()) {
             throw new DeferredExecutionError('US adjusted foundation promotion deferred: an uncoordinated ML writer is active')
           }
+          assertNoIncompletePromotionJournals()
           await runNpm('batch:us-analytics-validate', {
             US_ANALYTICS_DB_PATH: adjustedShadowDbPath,
             US_ANALYTICS_REQUIRE_DERIVED_BASIS: '1',
@@ -1405,6 +1412,7 @@ async function main(): Promise<void> {
           }
           await assertPromotionLockOwned()
           await setStage('promoting')
+          assertNoIncompletePromotionJournals()
           const promotionTimestamp = new Date().toISOString().replace(/[:.]/g, '-')
           const analogPlan: SqlitePromotionPlan | null = analogPromotionRequired
             ? {
