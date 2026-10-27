@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-10-26",
+  "updatedAt": "2026-10-27",
   "benchmark": "JP StockBoard",
   "target": "US StockBoard",
   "evidenceRevision": "9d5a95bb054d2ad4b2b37ed9a49768976a8e9919",
@@ -69,9 +69,9 @@
       "responsive": "IMPLEMENTED",
       "performance": "IMPLEMENTED",
       "remaining": "None within the implemented contract.",
-      "claude": "PRIOR_EVIDENCE_REUSED_NOT_REVIEWED_THIS_REVISION",
-      "codexQa": "TARGETED_PASS",
-      "git": "9d5a95bb054d2ad4b2b37ed9a49768976a8e9919",
+      "claude": "REVIEWED",
+      "codexQa": "PASS",
+      "git": "c5ebfa9947f42998b5aade109bf5c918dcba595b",
       "production": "NOT_DEPLOYED_THIS_BRANCH",
       "evidence": {
         "claims": [
@@ -85,10 +85,14 @@
         ],
         "implementationPaths": [
           "app/us/error.tsx",
-          "components/us/UsRouteErrorState.tsx"
+          "components/us/UsRouteErrorState.tsx",
+          "app/us/trade/workbench/page.tsx",
+          "app/us/ma25m-monitor/page.tsx"
         ],
         "testPaths": [
-          "scripts/test-us-route-states.ts"
+          "scripts/test-us-route-states.ts",
+          "scripts/test-us-trade-workbench.ts",
+          "scripts/test-us-ma25m-monitor.ts"
         ]
       }
     },
@@ -1389,9 +1393,9 @@
       "responsive": "IMPLEMENTED",
       "performance": "IMPLEMENTED",
       "remaining": "Long entry drafts and downside watch are implemented; executable short orders and broker-specific historical borrow evidence are unavailable.",
-      "claude": "STATIC_REVIEWED_BROWSER_PENDING",
-      "codexQa": "TARGETED_OR_HISTORICAL_EVIDENCE",
-      "git": "9d5a95bb054d2ad4b2b37ed9a49768976a8e9919",
+      "claude": "REVIEWED",
+      "codexQa": "PASS",
+      "git": "c5ebfa9947f42998b5aade109bf5c918dcba595b",
       "production": "NOT_DEPLOYED_THIS_BRANCH",
       "blocker": "DATA: broker borrow inventory, locate cost, and historical availability are not available.",
       "nextAction": "Connect an approved broker source before presenting executable or historical short orders.",
@@ -1424,9 +1428,9 @@
       "responsive": "IMPLEMENTED",
       "performance": "PARTIAL",
       "remaining": "Calculation, lineage attestation, generation-scoped single-flight cache, retry/loading UI, and source-change fail-closed checks are implemented; Production-scale p95, memory and concurrency remain unverified.",
-      "claude": "STATIC_REVIEWED_BROWSER_PENDING",
-      "codexQa": "TARGETED_OR_HISTORICAL_EVIDENCE",
-      "git": "9d5a95bb054d2ad4b2b37ed9a49768976a8e9919",
+      "claude": "REVIEWED",
+      "codexQa": "PASS",
+      "git": "c5ebfa9947f42998b5aade109bf5c918dcba595b",
       "production": "NOT_DEPLOYED_THIS_BRANCH",
       "blocker": "TECHNICAL: Production-equivalent full-universe load testing is prohibited in this isolated branch.",
       "nextAction": "Run the approved read-only performance gate before Production release and retain the bounded generation contract.",

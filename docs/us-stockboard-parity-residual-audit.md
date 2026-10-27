@@ -1,6 +1,6 @@
 # US StockBoard parity residual audit
 
-Updated: 2026-10-26
+Updated: 2026-10-27
 
 This document records only the gaps that remain after the autonomous JP/US
 parity implementation. It does not treat a route name, an empty panel, or a
@@ -229,12 +229,12 @@ evidence is maintained in `docs/us-stockboard-parity-board.json`.
 | Item | Finding |
 |---|---|
 | JP capability | JP and US are shipped by the same Next.js runtime, so framework security is a shared release prerequisite rather than a market-specific feature. |
-| US residual | Closed for this branch. Security PR #22 updated main to `next@16.4.3`, merged as `dc0fbb686e7d4640498737f219b5dd8242f14aea`, and was merged into PR #21 at `47991a1b069800fe6c3c332e548f46fcc3735f4e`. |
-| Why parity is incomplete | No framework-version parity residual remains. Production release authorization and current-revision browser QA remain separate gates. |
-| Missing input | None for framework integration. Exact-revision browser QA is still pending while Production weekly optimization is active. |
+| US residual | Closed for this branch. Security PR #22 updated main to `next@16.4.3`, merged as `dc0fbb686e7d4640498737f219b5dd8242f14aea`, and the updated main is present in PR #21 at `68d7ec2ac1e18311fad3443c159b29498b67d838`. |
+| Why parity is incomplete | No framework-version or browser-QA residual remains. Production release authorization remains a separate gate. |
+| Missing input | None for framework integration. Production and physical-device acceptance remain separately controlled and are recorded elsewhere. |
 | Barrier | `CLOSED` |
 | Paid service required | No. |
-| Resolution | Exact integration revision passed GitHub Storage Guard CI run `40328106223`, including lockfile install, TypeScript, poisoned isolated build, Storage Guard, SMA Dynamics, and JP/US parity contracts. |
+| Resolution | Exact integration revision passed GitHub Storage Guard CI run `40329714561`, including lockfile install, TypeScript, poisoned isolated build, Storage Guard, SMA Dynamics, and JP/US parity contracts. The final UI evidence revision `c5ebfa9947f42998b5aade109bf5c918dcba595b` then passed isolated build, four-width error/empty QA, and four-width synthetic normal-data QA. |
 | Approval required | Production release remains separately controlled. |
 | Priority | Closed release gate; it does not change the 51-capability parity count. |
 

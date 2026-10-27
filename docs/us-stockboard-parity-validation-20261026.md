@@ -1,8 +1,8 @@
 # US StockBoard parity validation — 2026-10-26
 
-Implementation evidence revision: `e0452cad500a1659aa3b6826d010ac406ba11e28`
+Implementation evidence revision: `c5ebfa9947f42998b5aade109bf5c918dcba595b`
 
-Framework integration revision: `47991a1b069800fe6c3c332e548f46fcc3735f4e`
+Framework integration revision: `68d7ec2ac1e18311fad3443c159b29498b67d838`
 
 ## Current-revision deterministic verification
 
@@ -15,19 +15,29 @@ Framework integration revision: `47991a1b069800fe6c3c332e548f46fcc3735f4e`
 - `npm exec -- tsc --noEmit --pretty false`: PASS.
 - Storage Guard fixture regression: PASS. No Production connection or state
   change was used.
-- Claude Code final static review and focused re-review: P0 0 / P1 0. Claude
-  confirmed the fail-closed earnings, Monthly-MA generation, Daily Close, and
-  HEX contracts. Browser and physical-device behavior were not inferred from
-  this static review.
+- Claude Code final static review, focused re-review, and screenshot-led UI
+  closeout: P0 0 / P1 0. The final revision removes the Card padding conflict,
+  presents Trade Workbench failure reasons without internal codes, distinguishes
+  Monthly-MA loading from failure, and restores the compact mobile metrics that
+  remain visible in the desktop table.
 - Parity board audit: PASS; 29 `IMPLEMENTED`, 14 `PARTIAL`, 7 `BLOCKED`,
   0 `MISSING`, 0 `UNVERIFIED`, and 1 `NOT_APPLICABLE` across 51 capabilities.
 - Isolated Production build at the framework integration revision: PASS in
-  GitHub Storage Guard CI run `40328106223`. The poisoned-environment build,
+  GitHub Storage Guard CI run `40329714561`. The poisoned-environment build,
   TypeScript, Storage Guard, SMA Dynamics, US automation, and JP/US parity
   contracts all passed against the exact revision.
-- Browser QA at this revision: PENDING for the same resource-safety reason.
-  Prior-revision evidence below is retained as regression context and is not
-  promoted to current-revision proof.
+- Final local regression at the implementation evidence revision: PASS for
+  `test:us-parity:targeted`, all 15 SMA Dynamics suites, Storage Guard fixtures,
+  TypeScript, and an isolated Next.js 16.4.3 Production build.
+- Browser QA at the framework integration revision covered 55 routes at 1440,
+  1024, 768, and 390 px: 208/220 PASS. The 12 non-passes are three JP
+  real-data-dependent routes at four widths in an empty isolated runtime and
+  remain `NOT_TESTED`, not failed parity claims. All US/shared routes required
+  for PR #21 passed without document-level horizontal overflow.
+- Focused browser QA after the final UI revision passed 12/12 in the empty/error
+  runtime. A separate synthetic normal-data runtime passed 8/8 across all four
+  widths plus 2/2 scrolled mobile checks for Monthly MA rows and Trade Workbench
+  candidates. No Production database or protected dataset was used.
 
 ## Remaining engineering P2 / NOT_TESTED
 
@@ -39,10 +49,10 @@ Framework integration revision: `47991a1b069800fe6c3c332e548f46fcc3735f4e`
 - US HEX generation attestation still performs its source-identity aggregate
   reads per request. This is correct and fail-closed, but Production-scale
   latency should be measured before introducing a separate identity cache.
-- Current-revision browser QA remains `NOT_TESTED` while the normal Production
-  weekly optimization process is active.
 - Physical-device hover, pinch, and mobile keyboard behavior remain
   `NOT_TESTED`.
+- Production-data visual coverage, full-universe Monthly-MA p95/p99 and
+  assistive-technology hardware remain `NOT_TESTED`.
 
 ## Dependency security release gate
 
@@ -52,7 +62,7 @@ Framework integration revision: `47991a1b069800fe6c3c332e548f46fcc3735f4e`
 - Updated main was merged into PR #21 without rebasing or force-pushing. The
   exact integration revision passed lockfile installation, TypeScript, the
   poisoned isolated build, route/isolation contracts, Storage Guard, SMA
-  Dynamics, and parity regressions in run `40328106223`.
+  Dynamics, and parity regressions in run `40329714561`.
 - Production deployment remains separately controlled and was not performed.
 
 ## Retained isolated build and browser QA (`72dcde54d9358ffdca14c43b71f2f1abbdfa44f1`)
