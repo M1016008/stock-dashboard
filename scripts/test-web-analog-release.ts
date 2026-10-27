@@ -238,6 +238,8 @@ async function main(): Promise<void> {
   assert.match(source, /STOCKBOARD_RELEASE_STATE_DIR/)
   assert.match(source, /SIGSTOP/)
   assert.match(source, /WebAnalogReleaseTransaction/)
+  assert.match(source, /\{ \.\.\.process\.env, NODE_ENV: 'production' \}/,
+    'runtime dependency identity must use the same production npm environment as runtime construction')
   assert.ok(source.indexOf('const proof = verifySmaReleasePreflightProof') < source.indexOf('const transaction = new WebAnalogReleaseTransaction'))
   assert.ok(source.match(/verifySmaReleasePreflightProof\(proofOptions\)/g)!.length >= 3,
     'proof must be checked initially, after staging, and immediately before activation')

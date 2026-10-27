@@ -34,8 +34,8 @@ const webOrigin = `http://127.0.0.1:${process.env.STOCKBOARD_WEB_PORT || '3000'}
 const analogOrigin = `http://127.0.0.1:${process.env.STOCKBOARD_ANALOG_PORT || '3105'}`
 const healthUrls = [`${webOrigin}/api/health`, `${analogOrigin}/api/health`] as const
 
-function command(commandName: string, args: string[], cwd?: string): string {
-  const result = spawnSync(commandName, args, { cwd, encoding: 'utf8' })
+function command(commandName: string, args: string[], cwd?: string, env?: NodeJS.ProcessEnv): string {
+  const result = spawnSync(commandName, args, { cwd, encoding: 'utf8', ...(env ? { env } : {}) })
   if (result.error) throw new Error(`command_spawn_failed:${commandName}:${result.error.message}`)
   if (result.status !== 0) throw new Error(`command_failed:${commandName}:${args.join(':')}:${(result.stderr || '').trim()}`)
   return result.stdout.trim()
@@ -178,7 +178,12 @@ function verifyRuntime(runtimeDirectory: string, expectedIdentity: string, expec
   const manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8')) as RuntimeManifest
   const npmBinary = path.join(path.dirname(process.execPath), 'npm')
   if (!fs.existsSync(npmBinary)) throw new Error(`release_runtime_npm_missing:${npmBinary}`)
-  const dependencyTree = JSON.parse(command(npmBinary, ['ls', '--all', '--json'], runtimeDirectory)) as unknown
+  const dependencyTree = JSON.parse(command(
+    npmBinary,
+    ['ls', '--all', '--json'],
+    runtimeDirectory,
+    { ...process.env, NODE_ENV: 'production' },
+  )) as unknown
   const dependencyTreeSha256 = hashJson(sanitizeDependencyTree(dependencyTree))
   const nativeCandidates = [
     'node_modules/@esbuild/darwin-arm64/bin/esbuild',
